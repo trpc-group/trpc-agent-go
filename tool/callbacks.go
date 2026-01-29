@@ -64,6 +64,10 @@ type BeforeToolArgs struct {
 	Declaration *Declaration
 	// Arguments is the tool arguments in JSON bytes (can be modified).
 	Arguments []byte
+	// ResumeValue is the value of the resume.
+	ResumeValue any
+	// ResumeMap is the map of resume values.
+	ResumeMap map[string]any
 }
 
 // BeforeToolResult contains the return value for before tool callback.
@@ -255,6 +259,9 @@ func (c *Callbacks) RegisterBeforeTool(cb any) *Callbacks {
 			// Call old signature
 			customResult, err := callback(ctx, args.ToolName, args.Declaration, &args.Arguments)
 			if err != nil {
+				if customResult != nil {
+					return &BeforeToolResult{CustomResult: customResult}, err
+				}
 				return nil, err
 			}
 			if customResult != nil {
@@ -281,6 +288,9 @@ func (c *Callbacks) RegisterAfterTool(cb any) *Callbacks {
 			// Call old signature
 			customResult, err := callback(ctx, args.ToolName, args.Declaration, args.Arguments, args.Result, args.Error)
 			if err != nil {
+				if customResult != nil {
+					return &AfterToolResult{CustomResult: customResult}, err
+				}
 				return nil, err
 			}
 			if customResult != nil {
@@ -417,7 +427,7 @@ func (c *Callbacks) RunBeforeTool(
 		result, err := c.runBeforeToolCallback(ctx, cb, args)
 
 		if c.handleCallbackError(err, &firstErr) {
-			return nil, err
+			return result, err
 		}
 
 		if c.processBeforeToolResult(result, &ctx, args, &lastResult) {
@@ -516,7 +526,7 @@ func (c *Callbacks) RunAfterTool(
 		result, err := c.runAfterToolCallback(ctx, cb, args)
 
 		if c.handleCallbackError(err, &firstErr) {
-			return nil, err
+			return result, err
 		}
 
 		if c.processAfterToolResult(result, &ctx, &lastResult) {

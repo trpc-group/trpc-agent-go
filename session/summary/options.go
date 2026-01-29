@@ -135,3 +135,39 @@ func WithSummaryHookAbortOnError(abort bool) Option {
 		s.hookAbortOnError = abort
 	}
 }
+
+// WithToolCallFormatter sets a custom formatter for tool calls in the summary input.
+// The formatter receives a ToolCall and returns a formatted string.
+// Return empty string to exclude the tool call from the summary.
+//
+// Example:
+//
+//	WithToolCallFormatter(func(tc model.ToolCall) string {
+//	    // Only include tool name, exclude arguments.
+//	    return fmt.Sprintf("[Called tool: %s]", tc.Function.Name)
+//	})
+func WithToolCallFormatter(f ToolCallFormatter) Option {
+	return func(s *sessionSummarizer) {
+		s.toolCallFormatter = f
+	}
+}
+
+// WithToolResultFormatter sets a custom formatter for tool results in the summary input.
+// The formatter receives the Message containing the tool result and returns a formatted string.
+// Return empty string to exclude the tool result from the summary.
+//
+// Example:
+//
+//	WithToolResultFormatter(func(msg model.Message) string {
+//	    // Truncate long results.
+//	    content := msg.Content
+//	    if len(content) > 200 {
+//	        content = content[:200] + "..."
+//	    }
+//	    return fmt.Sprintf("[%s: %s]", msg.ToolName, content)
+//	})
+func WithToolResultFormatter(f ToolResultFormatter) Option {
+	return func(s *sessionSummarizer) {
+		s.toolResultFormatter = f
+	}
+}

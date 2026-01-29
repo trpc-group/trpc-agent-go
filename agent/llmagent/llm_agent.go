@@ -141,7 +141,12 @@ func New(name string, opts ...Option) *LLMAgent {
 		responseProcessors = append(responseProcessors, planningResponseProcessor)
 	}
 
-	responseProcessors = append(responseProcessors, processor.NewCodeExecutionResponseProcessor())
+	if options.EnableCodeExecutionResponseProcessor {
+		responseProcessors = append(
+			responseProcessors,
+			processor.NewCodeExecutionResponseProcessor(),
+		)
+	}
 
 	// Add output response processor if output_key or output_schema is configured or structured output is requested.
 	if options.OutputKey != "" || options.OutputSchema != nil || options.StructuredOutput != nil {
@@ -236,17 +241,7 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		requestProcessors = append(requestProcessors, identityProcessor)
 	}
 
-	// 5. Time processor - adds current time information if enabled.
-	if options.AddCurrentTime {
-		timeProcessor := processor.NewTimeRequestProcessor(
-			processor.WithAddCurrentTime(true),
-			processor.WithTimezone(options.Timezone),
-			processor.WithTimeFormat(options.TimeFormat),
-		)
-		requestProcessors = append(requestProcessors, timeProcessor)
-	}
-
-	// 6. Skills processor - injects skill overview and loaded contents
+	// 5. Skills processor - injects skill overview and loaded contents
 	// when a skills repository is configured. This ensures the model
 	// sees available skills (names/descriptions) and any loaded
 	// SKILL.md/doc texts before deciding on tool calls.
@@ -260,6 +255,10 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 				),
 			)
 		}
+		skillsOpts = append(
+			skillsOpts,
+			processor.WithSkillLoadMode(options.SkillLoadMode),
+		)
 		skillsProcessor := processor.NewSkillsRequestProcessor(
 			options.skillsRepository,
 			skillsOpts...,
@@ -267,7 +266,7 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		requestProcessors = append(requestProcessors, skillsProcessor)
 	}
 
-	// 7. Content processor - appends conversation/context history.
+	// 6. Content processor - appends conversation/context history.
 	contentOpts := []processor.ContentOption{
 		processor.WithAddContextPrefix(options.AddContextPrefix),
 		processor.WithAddSessionSummary(options.AddSessionSummary),
@@ -287,6 +286,19 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	}
 	contentProcessor := processor.NewContentRequestProcessor(contentOpts...)
 	requestProcessors = append(requestProcessors, contentProcessor)
+
+	// 7. Time processor - adds current time information if enabled.
+	// Moved after content processor to avoid invalidating system message cache.
+	// Time information changes frequently, so placing it last allows previous
+	// stable content (instructions, identity, skills, history) to be cached.
+	if options.AddCurrentTime {
+		timeProcessor := processor.NewTimeRequestProcessor(
+			processor.WithAddCurrentTime(true),
+			processor.WithTimezone(options.Timezone),
+			processor.WithTimeFormat(options.TimeFormat),
+		)
+		requestProcessors = append(requestProcessors, timeProcessor)
+	}
 
 	return requestProcessors
 }
@@ -491,7 +503,7 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 		}
 		// Handle actual errors
 		span.SetStatus(codes.Error, err.Error())
-		span.SetAttributes(attribute.String(itelemetry.KeyErrorType, itelemetry.ValueDefaultErrorType))
+		span.SetAttributes(attribute.String(itelemetry.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeRunError)))
 		span.End()
 		return nil, err
 	}

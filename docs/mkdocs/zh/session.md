@@ -415,7 +415,7 @@ tRPC-Agent-Go 提供五种会话存储后端，满足不同场景需求：
 - **`WithSummarizer(s summary.SessionSummarizer)`**：注入会话摘要器。
 - **`WithAsyncSummaryNum(num int)`**：设置摘要处理 worker 数量。默认值为 3。
 - **`WithSummaryQueueSize(size int)`**：设置摘要任务队列大小。默认值为 100。
-- **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 30 秒。
+- **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 60 秒。
 
 ### 基础配置示例
 
@@ -466,7 +466,7 @@ sessionService := inmemory.NewSessionService(
     inmemory.WithSummarizer(summarizer),
     inmemory.WithAsyncSummaryNum(2),
     inmemory.WithSummaryQueueSize(100),
-    inmemory.WithSummaryJobTimeout(30*time.Second),
+    inmemory.WithSummaryJobTimeout(60*time.Second),
 )
 ```
 
@@ -487,7 +487,8 @@ sessionService := inmemory.NewSessionService(
 - **`WithSummarizer(s summary.SessionSummarizer)`**：注入会话摘要器。
 - **`WithAsyncSummaryNum(num int)`**：设置摘要处理 worker 数量。默认值为 3。
 - **`WithSummaryQueueSize(size int)`**：设置摘要任务队列大小。默认值为 100。
-- **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 30 秒。
+- **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 60 秒。
+- **`WithKeyPrefix(prefix string)`**：设置 Redis key 前缀。所有 key 将以 `prefix:` 开头。默认无前缀。
 - **`WithExtraOptions(extraOptions ...interface{})`**：为 Redis 客户端设置额外选项。
 
 ### 基础配置示例
@@ -620,7 +621,7 @@ summary:{appName}:{userID}:{sessionID}:{filterKey} -> String (JSON)
 - **`WithSummarizer(s summary.SessionSummarizer)`**：注入会话摘要器。
 - **`WithAsyncSummaryNum(num int)`**：摘要处理 worker 数量。默认值为 3。
 - **`WithSummaryQueueSize(size int)`**：摘要任务队列大小。默认值为 100。
-- **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 30 秒。
+- **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 60 秒。
 
 **Schema 和表配置：**
 
@@ -811,7 +812,7 @@ sessionService, err := postgres.NewService(
 - **`WithSummarizer(s summary.SessionSummarizer)`**：注入会话摘要器。
 - **`WithAsyncSummaryNum(num int)`**：摘要处理 worker 数量。默认值为 3。
 - **`WithSummaryQueueSize(size int)`**：摘要任务队列大小。默认值为 100。
-- **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 30 秒。
+- **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 60 秒。
 
 **表配置：**
 
@@ -1481,7 +1482,7 @@ sessionService := inmemory.NewSessionService(
     inmemory.WithSummarizer(summarizer),
     inmemory.WithAsyncSummaryNum(2),                // 2 个异步 worker
     inmemory.WithSummaryQueueSize(100),             // 队列大小 100
-    inmemory.WithSummaryJobTimeout(30*time.Second), // 单个任务超时 30 秒
+    inmemory.WithSummaryJobTimeout(60*time.Second), // 单个任务超时 60 秒
 )
 
 // Redis 存储（生产环境）
@@ -1738,6 +1739,61 @@ llmagent.WithMaxHistoryRuns(10)  // 限制历史轮次
 - **`WithPrompt(prompt string)`**：提供自定义摘要提示词。提示词必须包含占位符 `{conversation_text}`，它会被对话内容替换。可选包含 `{max_summary_words}` 用于字数限制指令。
 - **`WithSkipRecent(skipFunc SkipRecentFunc)`**：通过自定义函数在摘要时跳过**最近**事件。函数接收所有事件并返回应跳过的尾部事件数量，返回 0 表示不跳过。适合避免总结最近、可能不完整的对话，或实现基于时间/内容的跳过策略。
 
+**工具调用格式化：**
+
+默认情况下，摘要器会将工具调用和工具结果包含在发送给 LLM 进行总结的对话文本中。默认格式为：
+
+- 工具调用：`[Called tool: toolName with args: {"arg": "value"}]`
+- 工具结果：`[toolName returned: result content]`
+
+你可以使用以下选项自定义工具调用和结果的格式化方式：
+
+- **`WithToolCallFormatter(f ToolCallFormatter)`**：自定义工具调用在摘要输入中的格式。格式化器接收 `model.ToolCall` 并返回格式化字符串。返回空字符串可排除该工具调用。
+- **`WithToolResultFormatter(f ToolResultFormatter)`**：自定义工具结果在摘要输入中的格式。格式化器接收包含工具结果的 `model.Message` 并返回格式化字符串。返回空字符串可排除该结果。
+
+**自定义工具格式化器示例：**
+
+```go
+// 截断过长的工具参数
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithToolCallFormatter(func(tc model.ToolCall) string {
+        name := tc.Function.Name
+        if name == "" {
+            return ""
+        }
+        args := string(tc.Function.Arguments)
+        const maxLen = 100
+        if len(args) > maxLen {
+            args = args[:maxLen] + "...(已截断)"
+        }
+        return fmt.Sprintf("[工具: %s, 参数: %s]", name, args)
+    }),
+    summary.WithEventThreshold(20),
+)
+
+// 从摘要中排除工具结果
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithToolResultFormatter(func(msg model.Message) string {
+        return "" // 返回空字符串以排除工具结果。
+    }),
+    summary.WithEventThreshold(20),
+)
+
+// 仅包含工具名称，排除参数
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithToolCallFormatter(func(tc model.ToolCall) string {
+        if tc.Function.Name == "" {
+            return ""
+        }
+        return fmt.Sprintf("[使用工具: %s]", tc.Function.Name)
+    }),
+    summary.WithEventThreshold(20),
+)
+```
+
 **自定义提示词示例：**
 
 ```go
@@ -1806,9 +1862,9 @@ summarizer := summary.NewSummarizer(
 在会话服务中配置异步摘要处理：
 
 - **`WithSummarizer(s summary.SessionSummarizer)`**：将摘要器注入到会话服务中。
-- **`WithAsyncSummaryNum(num int)`**：设置用于摘要处理的异步 worker goroutine 数量。默认为 2。更多 worker 允许更高并发但消耗更多资源。
+- **`WithAsyncSummaryNum(num int)`**：设置用于摘要处理的异步 worker goroutine 数量。默认为 3。更多 worker 允许更高并发但消耗更多资源。
 - **`WithSummaryQueueSize(size int)`**：设置摘要任务队列的大小。默认为 100。更大的队列允许更多待处理任务但消耗更多内存。
-- **`WithSummaryJobTimeout(timeout time.Duration)`**：设置处理单个摘要任务的超时时间。默认为 30 秒。
+- **`WithSummaryJobTimeout(timeout time.Duration)`**：设置处理单个摘要任务的超时时间。默认为 60 秒。
 
 ### 手动触发摘要
 
@@ -2016,7 +2072,7 @@ func main() {
         inmemory.WithSummarizer(summarizer),
         inmemory.WithAsyncSummaryNum(2),
         inmemory.WithSummaryQueueSize(100),
-        inmemory.WithSummaryJobTimeout(30*time.Second),
+        inmemory.WithSummaryJobTimeout(60*time.Second),
     )
 
     // 创建启用摘要注入的 agent

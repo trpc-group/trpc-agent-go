@@ -223,6 +223,62 @@ func TestDocumentProcessingWorkflow(t *testing.T) {
 	})
 }
 
+func TestExecutor_NodeStartEvent_UsesCustomUserInputKey(t *testing.T) {
+	const (
+		testNodeID         = "llm"
+		testCustomInputKey = "custom_input"
+		testCustomInput    = "from-custom"
+	)
+
+	schema := MessagesStateSchema()
+	sg := NewStateGraph(schema)
+	sg.AddLLMNode(
+		testNodeID,
+		&MockModel{responses: map[string]string{}},
+		"inst",
+		nil,
+		WithUserInputKey(testCustomInputKey),
+	)
+	sg.SetEntryPoint(testNodeID)
+	sg.SetFinishPoint(testNodeID)
+
+	g, err := sg.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	initialState := State{
+		StateKeyUserInput:  "from-user",
+		testCustomInputKey: testCustomInput,
+	}
+	invocation := &agent.Invocation{InvocationID: "inv-node-start"}
+	eventChan, err := exec.Execute(
+		context.Background(),
+		initialState,
+		invocation,
+	)
+	require.NoError(t, err)
+
+	var got string
+	for ev := range eventChan {
+		if ev == nil || ev.Object != ObjectTypeGraphNodeStart {
+			continue
+		}
+		raw, ok := ev.StateDelta[MetadataKeyNode]
+		if !ok {
+			continue
+		}
+		var meta NodeExecutionMetadata
+		require.NoError(t, json.Unmarshal(raw, &meta))
+		if meta.NodeID != testNodeID {
+			continue
+		}
+		got = meta.ModelInput
+	}
+	require.Equal(t, testCustomInput, got)
+}
+
 // Ensure handleInterrupt still emits the interrupt event even when
 // the provided context is canceled, because it uses a fresh background
 // context with a timeout for emission.
@@ -237,7 +293,7 @@ func TestHandleInterrupt_EmitsEvent_WithCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := exec.handleInterrupt(ctx, inv, execCtx, intr, 7, nil)
+	err := exec.handleInterrupt(ctx, inv, execCtx, intr, 7, nil, nil)
 	require.True(t, IsInterruptError(err))
 	// Same interrupt should be propagated.
 	require.Same(t, intr, err)
@@ -258,6 +314,38 @@ func TestHandleInterrupt_EmitsEvent_WithCanceledContext(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatalf("expected interrupt event emission")
 	}
+}
+
+func TestExecutor_EvaluateRetryDecision_SetsTaskIDOnInterrupt(t *testing.T) {
+	t.Parallel()
+
+	const (
+		nodeID  = "node_1"
+		prompt  = "ask"
+		stepNum = 7
+	)
+
+	exec := &Executor{}
+	task := &Task{NodeID: nodeID}
+	intr := NewInterruptError(prompt)
+	retryCtx := &retryContext{err: intr}
+
+	shouldRetry, err := exec.evaluateRetryDecision(
+		context.Background(),
+		nil,
+		nil,
+		task,
+		stepNum,
+		nil,
+		retryCtx,
+	)
+
+	require.False(t, shouldRetry)
+	require.Same(t, intr, err)
+	require.Equal(t, nodeID, intr.NodeID)
+	require.Equal(t, nodeID, intr.TaskID)
+	require.Equal(t, stepNum, intr.Step)
+	require.Equal(t, prompt, intr.Value)
 }
 
 // Cover empty WithDefaultRetryPolicy branch ensuring no defaults are set.
@@ -2257,6 +2345,56 @@ func TestProcessConditionalEdges_Multi_SkipEmpty(t *testing.T) {
 	require.False(t, okEmpty, "expected no channel for empty branch key")
 }
 
+func TestExecutor_ConditionalUnknownTarget_ReturnsError(t *testing.T) {
+	const (
+		nodeStart    = "start"
+		unknownRoute = "missing_node"
+		invID        = "inv-unknown-target"
+	)
+
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode(nodeStart, func(ctx context.Context, s State) (any, error) {
+		return s, nil
+	})
+	sg.SetEntryPoint(nodeStart)
+	sg.AddConditionalEdges(
+		nodeStart,
+		func(ctx context.Context, s State) (string, error) {
+			return unknownRoute, nil
+		},
+		nil,
+	)
+
+	g, err := sg.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	events, err := exec.Execute(
+		context.Background(),
+		State{},
+		&agent.Invocation{InvocationID: invID},
+	)
+	require.NoError(t, err)
+
+	var gotErr *model.ResponseError
+	for ev := range events {
+		if ev.Error != nil {
+			gotErr = ev.Error
+		}
+	}
+	require.NotNil(t, gotErr)
+	require.Contains(t, gotErr.Message, unknownRoute)
+
+	channelName := ChannelBranchPrefix + unknownRoute
+	_, channelExists := g.getChannel(channelName)
+	require.False(t, channelExists)
+	triggerToNodes := g.getTriggerToNodes()
+	_, triggerExists := triggerToNodes[channelName]
+	require.False(t, triggerExists)
+}
+
 // minimalNoopNode returns a trivial node function for building test graphs.
 func minimalNoopNode(_ context.Context, _ State) (any, error) { return nil, nil }
 
@@ -2605,4 +2743,451 @@ func TestExecutor_JoinEdge_WaitsForAll(t *testing.T) {
 	require.Equal(t, 0, iStart)
 	require.Greater(t, iJoin, iB)
 	require.Greater(t, iJoin, iC)
+}
+
+// TestExecutor_NodeCallbacksNotOverwriteStateCallbacks ensures that when a
+// node doesn't configure tool/model callbacks, the executor doesn't inject
+// nil values that would override state-level callbacks.
+func TestExecutor_NodeCallbacksNotOverwriteStateCallbacks(t *testing.T) {
+	// State-level tool callback that should be preserved.
+	stateToolCallbacks := tool.NewCallbacks()
+	stateToolCallbacks.RegisterAfterTool(
+		func(ctx context.Context, args *tool.AfterToolArgs) (
+			*tool.AfterToolResult, error) {
+			return nil, nil
+		},
+	)
+
+	// State-level model callback that should be preserved.
+	stateModelCallbacks := model.NewCallbacks()
+	stateModelCallbacks.RegisterBeforeModel(
+		func(ctx context.Context, args *model.BeforeModelArgs) (
+			*model.BeforeModelResult, error) {
+			return nil, nil
+		},
+	)
+
+	// Create a graph with a node that doesn't configure its own callbacks.
+	builder := NewStateGraph(NewStateSchema())
+	builder.AddNode("llm_node", func(ctx context.Context, state State) (
+		any, error) {
+		// Verify state-level callbacks are still present in node input.
+		toolCbs, hasToolCbs := state[StateKeyToolCallbacks]
+		require.True(t, hasToolCbs, "StateKeyToolCallbacks should be present")
+		require.NotNil(t, toolCbs,
+			"StateKeyToolCallbacks should not be nil")
+
+		modelCbs, hasModelCbs := state[StateKeyModelCallbacks]
+		require.True(t, hasModelCbs,
+			"StateKeyModelCallbacks should be present")
+		require.NotNil(t, modelCbs,
+			"StateKeyModelCallbacks should not be nil")
+
+		return State{"result": "done"}, nil
+	})
+	builder.SetEntryPoint("llm_node")
+	builder.SetFinishPoint("llm_node")
+
+	g, err := builder.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	// Initial state with callbacks configured at state level.
+	initialState := State{
+		StateKeyToolCallbacks:  stateToolCallbacks,
+		StateKeyModelCallbacks: stateModelCallbacks,
+	}
+
+	inv := &agent.Invocation{InvocationID: "inv-callback-test"}
+	ch, err := exec.Execute(context.Background(), initialState, inv)
+	require.NoError(t, err)
+
+	for range ch {
+		// Drain events.
+	}
+
+	// If node-level nil callbacks overwrite state-level callbacks, the
+	// state-level callbacks would be lost and this would fail.
+	// With the fix, state-level callbacks should remain accessible.
+}
+
+// TestExecutor_NodeCallbacksOverrideStateCallbacks ensures that when a node
+// configures its own callbacks, they override state-level callbacks.
+func TestExecutor_NodeCallbacksOverrideStateCallbacks(t *testing.T) {
+	// State-level callbacks.
+	stateToolCallbacks := tool.NewCallbacks()
+	stateCallbackInvoked := false
+	stateToolCallbacks.RegisterAfterTool(
+		func(ctx context.Context, args *tool.AfterToolArgs) (
+			*tool.AfterToolResult, error) {
+			stateCallbackInvoked = true
+			return nil, nil
+		},
+	)
+
+	// Node-level callbacks that should override state-level.
+	nodeToolCallbacks := tool.NewCallbacks()
+	nodeCallbackInvoked := false
+	nodeToolCallbacks.RegisterAfterTool(
+		func(ctx context.Context, args *tool.AfterToolArgs) (
+			*tool.AfterToolResult, error) {
+			nodeCallbackInvoked = true
+			return nil, nil
+		},
+	)
+
+	// Create a graph with a node that configures its own callbacks.
+	builder := NewStateGraph(NewStateSchema())
+	builder.AddNode("llm_node", func(ctx context.Context, state State) (
+		any, error) {
+		// Verify node-level callbacks override state-level.
+		toolCbs := state[StateKeyToolCallbacks]
+		require.NotNil(t, toolCbs)
+		require.Equal(t, nodeToolCallbacks, toolCbs,
+			"Node callbacks should override state callbacks")
+
+		return State{"result": "done"}, nil
+	}, WithToolCallbacks(nodeToolCallbacks))
+	builder.SetEntryPoint("llm_node")
+	builder.SetFinishPoint("llm_node")
+
+	g, err := builder.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	// Initial state with state-level callbacks.
+	initialState := State{
+		StateKeyToolCallbacks: stateToolCallbacks,
+	}
+
+	inv := &agent.Invocation{InvocationID: "inv-callback-override-test"}
+	ch, err := exec.Execute(context.Background(), initialState, inv)
+	require.NoError(t, err)
+
+	for range ch {
+		// Drain events.
+	}
+
+	// Node-level callbacks should override, so state callback should not
+	// be invoked (in this test, both would be invoked only if tools were
+	// actually called, but the important part is that the right callback
+	// object is in State).
+	require.False(t, stateCallbackInvoked,
+		"State callback should not be used when node callback exists")
+	require.False(t, nodeCallbackInvoked,
+		"Node callback should not be invoked without tool calls")
+}
+
+// TestExecutor_NodeModelCallbacksOverrideStateCallbacks ensures that when a
+// node configures only model callbacks, they override state-level model
+// callbacks.
+func TestExecutor_NodeModelCallbacksOverrideStateCallbacks(t *testing.T) {
+	// State-level model callbacks.
+	stateModelCallbacks := model.NewCallbacks()
+	stateModelCallbacks.RegisterBeforeModel(
+		func(ctx context.Context, args *model.BeforeModelArgs) (
+			*model.BeforeModelResult, error) {
+			return nil, nil
+		},
+	)
+
+	// Node-level model callbacks that should override state-level.
+	nodeModelCallbacks := model.NewCallbacks()
+	nodeModelCallbacks.RegisterBeforeModel(
+		func(ctx context.Context, args *model.BeforeModelArgs) (
+			*model.BeforeModelResult, error) {
+			return nil, nil
+		},
+	)
+
+	// Create a graph with a node that configures only model callbacks.
+	builder := NewStateGraph(NewStateSchema())
+	builder.AddNode("llm_node", func(ctx context.Context, state State) (
+		any, error) {
+		// Verify node-level model callbacks override state-level.
+		modelCbs := state[StateKeyModelCallbacks]
+		require.NotNil(t, modelCbs)
+		require.Equal(t, nodeModelCallbacks, modelCbs,
+			"Node model callbacks should override state model callbacks")
+
+		return State{"result": "done"}, nil
+	}, WithModelCallbacks(nodeModelCallbacks))
+	builder.SetEntryPoint("llm_node")
+	builder.SetFinishPoint("llm_node")
+
+	g, err := builder.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	// Initial state with state-level model callbacks.
+	initialState := State{
+		StateKeyModelCallbacks: stateModelCallbacks,
+	}
+
+	inv := &agent.Invocation{InvocationID: "inv-model-callback-override"}
+	ch, err := exec.Execute(context.Background(), initialState, inv)
+	require.NoError(t, err)
+
+	for range ch {
+		// Drain events.
+	}
+}
+
+// TestExecutor_NodeBothCallbacksOverrideState ensures that when a node
+// configures both tool and model callbacks, both override state-level
+// callbacks.
+func TestExecutor_NodeBothCallbacksOverrideState(t *testing.T) {
+	// State-level callbacks.
+	stateToolCallbacks := tool.NewCallbacks()
+	stateModelCallbacks := model.NewCallbacks()
+
+	// Node-level callbacks.
+	nodeToolCallbacks := tool.NewCallbacks()
+	nodeModelCallbacks := model.NewCallbacks()
+
+	builder := NewStateGraph(NewStateSchema())
+	builder.AddNode("llm_node", func(ctx context.Context, state State) (
+		any, error) {
+		// Verify both node-level callbacks override state-level.
+		toolCbs := state[StateKeyToolCallbacks]
+		require.NotNil(t, toolCbs)
+		require.Equal(t, nodeToolCallbacks, toolCbs,
+			"Node tool callbacks should override state callbacks")
+
+		modelCbs := state[StateKeyModelCallbacks]
+		require.NotNil(t, modelCbs)
+		require.Equal(t, nodeModelCallbacks, modelCbs,
+			"Node model callbacks should override state callbacks")
+
+		return State{"result": "done"}, nil
+	}, WithToolCallbacks(nodeToolCallbacks), WithModelCallbacks(nodeModelCallbacks))
+	builder.SetEntryPoint("llm_node")
+	builder.SetFinishPoint("llm_node")
+
+	g, err := builder.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	// Initial state with both state-level callbacks.
+	initialState := State{
+		StateKeyToolCallbacks:  stateToolCallbacks,
+		StateKeyModelCallbacks: stateModelCallbacks,
+	}
+
+	inv := &agent.Invocation{InvocationID: "inv-both-callbacks-override"}
+	ch, err := exec.Execute(context.Background(), initialState, inv)
+	require.NoError(t, err)
+
+	for range ch {
+		// Drain events.
+	}
+}
+
+func TestExecutor_WithMaxConcurrency(t *testing.T) {
+	const (
+		nodeRoot       = "root"
+		nodeCount      = 12
+		maxConcurrency = 3
+		waitTimeout    = 2 * time.Second
+	)
+
+	stateGraph := NewStateGraph(NewStateSchema())
+	stateGraph.AddNode(nodeRoot, func(context.Context, State) (any, error) {
+		return nil, nil
+	})
+	stateGraph.SetEntryPoint(nodeRoot)
+
+	var active atomic.Int64
+	var maxActive atomic.Int64
+	started := make(chan struct{}, nodeCount)
+	unblock := make(chan struct{})
+
+	worker := func(ctx context.Context, state State) (any, error) {
+		cur := active.Add(1)
+		updateMaxInt64(&maxActive, cur)
+		started <- struct{}{}
+		<-unblock
+		active.Add(-1)
+		return nil, nil
+	}
+
+	for i := 0; i < nodeCount; i++ {
+		nodeID := fmt.Sprintf("w%d", i)
+		stateGraph.AddNode(nodeID, worker)
+		stateGraph.AddEdge(nodeRoot, nodeID)
+	}
+
+	g, err := stateGraph.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g, WithMaxConcurrency(maxConcurrency))
+	require.NoError(t, err)
+
+	inv := &agent.Invocation{InvocationID: "inv-max-concurrency"}
+	events, err := exec.Execute(context.Background(), State{}, inv)
+	require.NoError(t, err)
+
+	done := make(chan struct{})
+	go func() {
+		for range events {
+		}
+		close(done)
+	}()
+
+	waitForNSignals(t, started, maxConcurrency, waitTimeout)
+
+	select {
+	case <-started:
+		t.Fatalf("expected at most %d tasks to start", maxConcurrency)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(unblock)
+
+	select {
+	case <-done:
+	case <-time.After(waitTimeout):
+		t.Fatal("timeout waiting for executor to complete")
+	}
+
+	require.LessOrEqual(t, maxActive.Load(), int64(maxConcurrency))
+}
+
+func TestNewExecutor_MaxConcurrency_DefaultOnNonPositive(t *testing.T) {
+	const nodeID = "n"
+
+	stateGraph := NewStateGraph(NewStateSchema())
+	stateGraph.AddNode(
+		nodeID,
+		func(context.Context, State) (any, error) {
+			return nil, nil
+		},
+	)
+
+	g, err := stateGraph.
+		SetEntryPoint(nodeID).
+		SetFinishPoint(nodeID).
+		Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g, WithMaxConcurrency(0))
+	require.NoError(t, err)
+
+	require.Equal(t, defaultMaxConcurrency(), exec.maxConcurrency)
+}
+
+func TestExecutor_workerCount_CoversBranches(t *testing.T) {
+	exec := &Executor{maxConcurrency: 4}
+	require.Equal(t, 0, exec.workerCount(0))
+
+	exec.maxConcurrency = 0
+	require.Equal(t, 5, exec.workerCount(5))
+
+	exec.maxConcurrency = 10
+	require.Equal(t, 5, exec.workerCount(5))
+
+	exec.maxConcurrency = 3
+	require.Equal(t, 3, exec.workerCount(10))
+}
+
+func TestExecutor_taskInvocationContext_CoversBranches(t *testing.T) {
+	type ctxKey string
+
+	const (
+		testKey      ctxKey = "k"
+		testValue           = "v"
+		invocationID        = "inv"
+		parentBranch        = "parent"
+		nodeID              = "child"
+	)
+
+	ctx := context.WithValue(context.Background(), testKey, testValue)
+	exec := &Executor{}
+	task := &Task{NodeID: nodeID}
+
+	gotInv, gotCtx := exec.taskInvocationContext(ctx, nil, task)
+	require.Nil(t, gotInv)
+	require.Same(t, ctx, gotCtx)
+
+	inv := &agent.Invocation{InvocationID: invocationID}
+	gotInv, gotCtx = exec.taskInvocationContext(ctx, inv, nil)
+	require.Same(t, inv, gotInv)
+	require.Same(t, ctx, gotCtx)
+
+	gotInv, gotCtx = exec.taskInvocationContext(ctx, inv, task)
+	require.NotNil(t, gotInv)
+	require.NotNil(t, gotCtx)
+	require.Equal(t, nodeID, gotInv.Branch)
+
+	inv.Branch = parentBranch
+	gotInv, gotCtx = exec.taskInvocationContext(ctx, inv, task)
+	require.NotNil(t, gotInv)
+	require.NotNil(t, gotCtx)
+	require.Equal(
+		t,
+		parentBranch+agent.BranchDelimiter+nodeID,
+		gotInv.Branch,
+	)
+}
+
+func TestExecutor_executeStepTask_RecoversFromPanic(t *testing.T) {
+	const (
+		invocationID = "inv"
+		nodeID       = "n"
+		step         = 1
+	)
+
+	exec := &Executor{}
+	task := &Task{NodeID: nodeID}
+
+	err := exec.executeStepTask(
+		context.Background(),
+		&agent.Invocation{InvocationID: invocationID},
+		nil,
+		task,
+		step,
+		nil,
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "task panic")
+}
+
+func updateMaxInt64(max *atomic.Int64, value int64) {
+	for {
+		current := max.Load()
+		if value <= current {
+			return
+		}
+		if max.CompareAndSwap(current, value) {
+			return
+		}
+	}
+}
+
+func waitForNSignals(
+	t *testing.T,
+	ch <-chan struct{},
+	n int,
+	timeout time.Duration,
+) {
+	t.Helper()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	for i := 0; i < n; i++ {
+		select {
+		case <-ch:
+		case <-timer.C:
+			t.Fatalf("timeout waiting for %d signals", n)
+		}
+	}
 }

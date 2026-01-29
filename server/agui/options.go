@@ -114,10 +114,17 @@ func WithTimeout(d time.Duration) Option {
 	}
 }
 
-// WithGraphNodeStartActivityEnabled controls whether the AG-UI server emits graph node start activity events.
-func WithGraphNodeStartActivityEnabled(enabled bool) Option {
+// WithFlushInterval sets how often buffered AG-UI events are flushed for a session.
+func WithFlushInterval(d time.Duration) Option {
 	return func(o *options) {
-		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithGraphNodeStartActivityEnabled(enabled))
+		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithFlushInterval(d))
+	}
+}
+
+// WithGraphNodeLifecycleActivityEnabled controls whether the AG-UI server emits graph node lifecycle activity events.
+func WithGraphNodeLifecycleActivityEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithGraphNodeLifecycleActivityEnabled(enabled))
 	}
 }
 
@@ -125,6 +132,13 @@ func WithGraphNodeStartActivityEnabled(enabled bool) Option {
 func WithGraphNodeInterruptActivityEnabled(enabled bool) Option {
 	return func(o *options) {
 		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithGraphNodeInterruptActivityEnabled(enabled))
+	}
+}
+
+// WithGraphNodeInterruptActivityTopLevelOnly controls whether the AG-UI server only emits graph interrupt activity events for the top-level invocation.
+func WithGraphNodeInterruptActivityTopLevelOnly(enabled bool) Option {
+	return func(o *options) {
+		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithGraphNodeInterruptActivityTopLevelOnly(enabled))
 	}
 }
 
@@ -139,6 +153,20 @@ func WithMessagesSnapshotPath(p string) Option {
 func WithMessagesSnapshotEnabled(e bool) Option {
 	return func(o *options) {
 		o.messagesSnapshotEnabled = e
+	}
+}
+
+// WithMessagesSnapshotFollowEnabled controls whether the messages snapshot handler tails persisted track events.
+func WithMessagesSnapshotFollowEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithMessagesSnapshotFollowEnabled(enabled))
+	}
+}
+
+// WithMessagesSnapshotFollowMaxDuration sets the maximum duration for messages snapshot tailing.
+func WithMessagesSnapshotFollowMaxDuration(d time.Duration) Option {
+	return func(o *options) {
+		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithMessagesSnapshotFollowMaxDuration(d))
 	}
 }
 

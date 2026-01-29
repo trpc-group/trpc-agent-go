@@ -47,6 +47,7 @@ agentEvaluator, err := evaluation.New(
 if err != nil {
 	log.Fatalf("create evaluator: %v", err)
 }
+defer agentEvaluator.Close()
 // 执行评估
 result, err := agentEvaluator.Evaluate(context.Background(), evalSetID)
 if err != nil {
@@ -311,6 +312,7 @@ agentEvaluator, err := evaluation.New(
 if err != nil {
 	log.Fatalf("create evaluator: %v", err)
 }
+defer agentEvaluator.Close()
 // 执行评估
 result, err := agentEvaluator.Evaluate(ctx, evalSetID)
 if err != nil {
@@ -421,7 +423,7 @@ metricManager.Add(ctx, appName, evalSetID, evalMetric)
 - 评估器 Evaluator 负责对比实际会话结果与预期会话结果，计算具体得分，并依据评估指标阈值判断评估状态。
 - 评估器注册中心 Registry 维护评估指标名称与对应评估器的映射关系，支持动态注册与查找评估器。
 - 评估服务 Service 作为核心组件，整合了待评估的 Agent、评估集 EvalSet、评估指标 Metric、评估器注册中心 Registry 以及评估结果 EvalResult Registry。评估流程分为两个阶段：
-  - 推理阶段 Inference：从评估集提取用户输入，调用 Agent 执行推理，将 Agent 的实际输出与预期输出组合形成推理结果。
+  - 推理阶段 Inference：默认模式下从评估集提取用户输入并调用 Agent 执行推理，将 Agent 的实际输出与预期输出组合形成推理结果；trace 模式下直接将评估集 `conversation` 作为实际 trace 输出，跳过 Runner 推理。
   - 结果评估阶段 Evaluate：根据评估指标名称 Metric Name 从注册中心获取相应的评估器，并使用多个评估器对推理结果进行多维度评估，最终生成评估结果  EvalResult。
 - Agent Evaluator 为降低 Agent 输出的偶然性，评估服务会被调用 NumRuns 次，并聚合多次结果，以获得更稳定的评估结果。
 
@@ -431,17 +433,30 @@ EvalSet 是一组 EvalCase 的集合，通过唯一的 EvalSetID 进行标识，
 
 而 EvalCase 表示同一 Session 下的一组评估用例，包含唯一标识符 EvalID、对话内容、可选的 `contextMessages` 以及 Session 初始化信息。
 
-对话数据包括三类内容：
+对话数据包括四类内容：
 
 - 用户输入
 - Agent 最终响应
 - 工具调用与结果
 - 中间响应信息
 
+EvalCase 支持通过 `evalMode` 配置评估模式：
+
+- 默认模式（`evalMode` 省略或空字符串）：`conversation` 作为预期输出，评估过程会调用 Runner/Agent 生成实际输出。
+- trace 模式（`evalMode` 为 `"trace"`）：`conversation` 作为实际输出 trace，评估过程不会调用 Runner/Agent 执行推理。
+
 ```go
 import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+// EvalMode 表示评估模式类型
+type EvalMode string
+
+const (
+	EvalModeDefault EvalMode = ""      // EvalModeDefault 表示默认模式
+	EvalModeTrace   EvalMode = "trace" // EvalModeTrace 表示 Trace 评估模式
 )
 
 // EvalSet 表示一个评估集
@@ -456,6 +471,7 @@ type EvalSet struct {
 // EvalCase 表示单个评估用例
 type EvalCase struct {
 	EvalID            string               // 用例唯一标识
+	EvalMode          EvalMode             // 评估模式
 	ContextMessages   []*model.Message     // 用于在每次推理时注入上下文消息。
 	Conversation      []*Invocation        // 对话序列
 	SessionInput      *SessionInput        // Session 初始化数据
@@ -465,6 +481,7 @@ type EvalCase struct {
 // Invocation 表示一次用户与 Agent 的交互
 type Invocation struct {
 	InvocationID          string
+	ContextMessages       []*model.Message     // 推理时注入的上下文消息。
 	UserContent           *model.Message       // 用户输入
 	FinalResponse         *model.Message       // Agent 最终响应
 	Tools                 []*Tool              // 工具调用与工具执行结果
@@ -474,10 +491,10 @@ type Invocation struct {
 
 // Tool 表示一次工具调用和工具执行结果
 type Tool struct {
-	ID        string         // 工具调用 ID
-	Name      string         // 工具名
-	Arguments map[string]any // 工具调用输入参数
-	Result    map[string]any // 工具执行结果
+	ID        string // 工具调用 ID
+	Name      string // 工具名
+	Arguments any    // 工具调用输入参数
+	Result    any    // 工具执行结果
 }
 
 // SessionInput 表示 Session 初始化输入
@@ -652,6 +669,7 @@ type Registry interface {
 框架默认注册了以下评估器：
 
 - `tool_trajectory_avg_score` 工具轨迹一致性评估器，需要配置预期输出。
+ - `final_response_avg_score` 最终响应评估器，不需要 LLM，需要配置预期输出。
 - `llm_final_response` LLM 最终响应评估器，需要配置预期输出。
 - `llm_rubric_response` LLM rubric 响应评估器，需要评估集提供会话输入并配置 LLMJudge/rubrics。
 - `llm_rubric_knowledge_recall` LLM rubric 知识召回评估器，需要评估集提供会话输入并配置 LLMJudge/rubrics。
@@ -772,7 +790,7 @@ Service 是评估服务，用于整合以下模块：
 - 评估指标 Metric
 - 评估器注册中心 Registry
 - 评估器 Evaluator
-- 评估结果 EvalSetResult
+- 评估结果 EvalSetRunResult
 
 Service 接口定义了完整的评测流程，包括推理（Inference）和评估（Evaluate）两个阶段，接口定义如下：
 
@@ -783,8 +801,8 @@ import "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 type Service interface {
 	// Inference 执行推理，调用 Agent 处理指定的评测用例，并返回推理结果。
 	Inference(ctx context.Context, request *InferenceRequest) ([]*InferenceResult, error)
-	// Evaluate 对推理结果进行评估，生成并持久化评测结果。
-	Evaluate(ctx context.Context, request *EvaluateRequest) (*evalresult.EvalSetResult, error)
+	// Evaluate 对推理结果进行评估，生成评测结果
+	Evaluate(ctx context.Context, request *EvaluateRequest) (*EvalSetRunResult, error)
 }
 ```
 
@@ -863,10 +881,12 @@ type EvaluateConfig struct {
 `AgentEvaluator` 用于根据配置的评估集 EvalSetID 对 Agent 进行评估。
 
 ```go
-// AgentEvaluator 根据评估集评估 Agent
+// AgentEvaluator evaluates an agent based on an evaluation set.
 type AgentEvaluator interface {
-	// Evaluate 对指定的评估集执行评估
+	// Evaluate evaluates the specified evaluation set.
 	Evaluate(ctx context.Context, evalSetID string) (*EvaluationResult, error)
+	// Close closes the evaluator and releases owned resources.
+	Close() error
 }
 ```
 
@@ -906,6 +926,10 @@ type EvaluationCaseResult struct {
 
 ```go
 agentEvaluator, err := evaluation.New(appName, runner, evaluation.WithNumRuns(numRuns))
+if err != nil {
+	panic(err)
+}
+defer agentEvaluator.Close()
 ```
 
 由于 Agent 的运行过程可能存不确定性，`evaluation.WithNumRuns` 提供了多次评估运行的机制，用于降低单次运行带来的偶然性。
@@ -913,6 +937,21 @@ agentEvaluator, err := evaluation.New(appName, runner, evaluation.WithNumRuns(nu
 - 默认运行次数为 1 次；
 - 通过指定 `evaluation.WithNumRuns(n)`，可对每个评估用例运行多次；
 - 最终结果将基于多次运行的综合统计结果得出，默认统计方法是多次运行评估得分的平均值。
+
+对于较大的评估集，为了加速 inference 阶段，可以开启 EvalCase 级别的并发推理：
+
+- `evaluation.WithEvalCaseParallelInferenceEnabled(true)`：开启 eval case 并发推理，默认关闭。
+- `evaluation.WithEvalCaseParallelism(n)`：设置最大并发数，默认值为 `runtime.GOMAXPROCS(0)`。
+
+```go
+agentEvaluator, err := evaluation.New(
+	appName,
+	runner,
+	evaluation.WithEvalCaseParallelInferenceEnabled(true),
+	evaluation.WithEvalCaseParallelism(runtime.GOMAXPROCS(0)),
+)
+defer agentEvaluator.Close()
+```
 
 ## 使用指南
 
@@ -939,6 +978,10 @@ import (
 
 evalSetManager := evalsetlocal.New(evalset.WithBaseDir("<BaseDir>"))
 agentEvaluator, err := evaluation.New(appName, runner, evaluation.WithEvalSetManager(evalSetManager))
+if err != nil {
+	panic(err)
+}
+defer agentEvaluator.Close()
 ```
 
 此外，若默认路径结构不满足需求，可通过实现 `Locator` 接口自定义文件路径规则，接口定义如下：
@@ -964,6 +1007,10 @@ import (
 
 evalSetManager := evalsetlocal.New(evalset.WithLocator(&customLocator{}))
 agentEvaluator, err := evaluation.New(appName, runner, evaluation.WithEvalSetManager(evalSetManager))
+if err != nil {
+	panic(err)
+}
+defer agentEvaluator.Close()
 
 type customLocator struct {
 }
@@ -1013,6 +1060,10 @@ import (
 
 metricManager := metriclocal.New(metric.WithBaseDir("<BaseDir>"))
 agentEvaluator, err := evaluation.New(appName, runner, evaluation.WithMetricManager(metricManager))
+if err != nil {
+	panic(err)
+}
+defer agentEvaluator.Close()
 ```
 
 此外，若默认路径结构不满足需求，可通过实现 `Locator` 接口自定义文件路径规则，接口定义如下：
@@ -1036,6 +1087,10 @@ import (
 
 metricManager := metriclocal.New(metric.WithLocator(&customLocator{}))
 agentEvaluator, err := evaluation.New(appName, runner, evaluation.WithMetricManager(metricManager))
+if err != nil {
+	panic(err)
+}
+defer agentEvaluator.Close()
 
 type customLocator struct {
 }
@@ -1061,6 +1116,10 @@ import (
 
 evalResultManager := evalresultlocal.New(evalresult.WithBaseDir("<BaseDir>"))
 agentEvaluator, err := evaluation.New(appName, runner, evaluation.WithEvalResultManager(evalResultManager))
+if err != nil {
+	panic(err)
+}
+defer agentEvaluator.Close()
 ```
 
 此外，若默认路径结构不满足需求，可通过实现 `Locator` 接口自定义文件路径规则，接口定义如下：
@@ -1086,6 +1145,10 @@ import (
 
 evalResultManager := evalresultlocal.New(evalresult.WithLocator(&customLocator{}))
 agentEvaluator, err := evaluation.New(appName, runner, evaluation.WithEvalResultManager(evalResultManager))
+if err != nil {
+	panic(err)
+}
+defer agentEvaluator.Close()
 
 type customLocator struct {
 }
@@ -1119,6 +1182,62 @@ func (l *customLocator) List(baseDir, appName string) ([]string, error) {
 	return results, nil
 }
 ```
+
+### Trace 评估模式
+
+Trace 评估模式用于评估离线采集到的 Trace 执行轨迹，评估过程中不会调用 Runner 执行推理。
+
+在 EvalSet 的 evalCase 中设置 `evalMode: "trace"`，并将 `conversation` 填写为实际输出的 invocation 序列，例如 `userContent`、`finalResponse`、`tools`、`intermediateResponses`。由于 trace 模式不提供预期输出，建议选择不依赖预期输出的 Metric，例如 `llm_rubric_response`。
+
+```json
+{
+  "evalSetId": "trace-basic",
+  "name": "trace-basic",
+  "evalCases": [
+    {
+      "evalId": "trace_calc_add",
+      "evalMode": "trace",
+      "conversation": [
+        {
+          "invocationId": "trace_calc_add-1",
+          "userContent": {
+            "role": "user",
+            "content": "calc add 123 456"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "calc result: 579"
+          },
+          "tools": [
+            {
+              "id": "call_00_example",
+              "name": "calculator",
+              "arguments": {
+                "a": 123,
+                "b": 456,
+                "operation": "add"
+              },
+              "result": {
+                "a": 123,
+                "b": 456,
+                "operation": "add",
+                "result": 579
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "trace-eval-app",
+        "userId": "demo-user"
+      }
+    }
+  ]
+}
+```
+
+
+完整示例参见 [examples/evaluation/trace](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/trace)。
 
 ### 评估准则
 
@@ -1562,6 +1681,66 @@ evalMetric := &metric.EvalMetric{
 
 完整示例参见 [examples/evaluation/tooltrajectory](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/tooltrajectory)。
 
+#### 最终响应评估器
+
+最终响应评估器对应的指标名称为 `final_response_avg_score`，不依赖 LLM，用于基于确定性规则对比 Agent 的最终回答与预期输出，适用于需要静态规则匹配文本或 JSON 输出的场景。
+
+评估逻辑：
+
+- 使用 `FinalResponseCriterion` 对每轮对话的 `Invocation.FinalResponse.Content` 进行对比；匹配得 1 分，不匹配得 0 分。
+- 多次会话场景下对所有会话的得分取平均值，并与 `EvalMetric.Threshold` 比较得到通过/未通过判定。
+
+`FinalResponseCriterion` 支持两类准则：
+
+- `text`：使用 `TextCriterion` 按 `exact/contains/regex` 等策略比较文本，详细介绍可见 [TextCriterion](#textcriterion)。
+- `json`：将 `FinalResponse.Content` 解析为 JSON 后使用 `JSONCriterion` 进行匹配。可配置 `ignoreTree`、`numberTolerance` 等参数，详细介绍可见 [JsonCriterion](#jsoncriterion)。
+
+代码示例如下：
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	cfinalresponse "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/finalresponse"
+	cjson "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
+	ctext "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
+)
+
+evalMetric := &metric.EvalMetric{
+	MetricName: "final_response_avg_score",
+	Threshold:  1.0,
+	Criterion: criterion.New(
+		criterion.WithFinalResponse(
+			cfinalresponse.New(
+				cfinalresponse.WithJSONCriterion(cjson.New()),
+				cfinalresponse.WithTextCriterion(ctext.New()),
+			),
+		),
+	),
+}
+```
+
+对应的指标配置文件写法示例
+
+```json
+[
+  {
+    "metricName": "final_response_avg_score",
+    "threshold": 1,
+    "criterion": {
+      "finalResponse": {
+        "text": {
+          "matchStrategy": "exact"
+        },
+        "json": {
+          "matchStrategy": "exact"
+        }
+      }
+    }
+  }
+]
+```
+
 #### LLM 最终响应评估器
 
 LLM 最终响应评估器对应的指标名称为 `llm_final_response`，通过评估模型判定 Agent 的最终回答是否有效。评估提示词会包含用户输入、参考答案与 Agent 的最终回答，适用于自动化校验最终文本输出。
@@ -1830,6 +2009,82 @@ evalMetric := &metric.EvalMetric{
 ```
 
 该评估器要求 Agent 的工具调用返回检索结果，完整示例参见 [examples/evaluation/llm/knowledgerecall](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/llm/knowledgerecall)。
+
+### Callback 回调
+
+Evaluation 支持在评估流程的关键节点注册回调，用于观测/埋点、上下文传递以及调整请求参数。
+
+通过 `service.NewCallbacks()` 创建回调注册表，注册回调组件后在创建 `AgentEvaluator` 时使用 `evaluation.WithCallbacks` 传入，代码示例如下。
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
+)
+
+callbacks := service.NewCallbacks()
+callbacks.Register("noop", &service.Callback{
+	BeforeInferenceSet: func(ctx context.Context, args *service.BeforeInferenceSetArgs) (*service.BeforeInferenceSetResult, error) {
+		return nil, nil
+	},
+	AfterInferenceSet: func(ctx context.Context, args *service.AfterInferenceSetArgs) (*service.AfterInferenceSetResult, error) {
+		return nil, nil
+	},
+	BeforeInferenceCase: func(ctx context.Context, args *service.BeforeInferenceCaseArgs) (*service.BeforeInferenceCaseResult, error) {
+		return nil, nil
+	},
+	AfterInferenceCase: func(ctx context.Context, args *service.AfterInferenceCaseArgs) (*service.AfterInferenceCaseResult, error) {
+		return nil, nil
+	},
+	BeforeEvaluateSet: func(ctx context.Context, args *service.BeforeEvaluateSetArgs) (*service.BeforeEvaluateSetResult, error) {
+		return nil, nil
+	},
+	AfterEvaluateSet: func(ctx context.Context, args *service.AfterEvaluateSetArgs) (*service.AfterEvaluateSetResult, error) {
+		return nil, nil
+	},
+	BeforeEvaluateCase: func(ctx context.Context, args *service.BeforeEvaluateCaseArgs) (*service.BeforeEvaluateCaseResult, error) {
+		return nil, nil
+	},
+	AfterEvaluateCase: func(ctx context.Context, args *service.AfterEvaluateCaseArgs) (*service.AfterEvaluateCaseResult, error) {
+		return nil, nil
+	},
+})
+
+agentEvaluator, err := evaluation.New(
+	appName,
+	runner,
+	evaluation.WithCallbacks(callbacks),
+)
+```
+
+如果只需要注册单个回调点，也可以使用对应回调点的注册方法，例如 `callbacks.RegisterBeforeInferenceSet(name, fn)`。
+
+完整示例参见 [examples/evaluation/callbacks](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/callbacks)。
+
+回调点说明如下表所示。
+
+| 回调点 | 触发时机 |
+| --- | --- |
+| `BeforeInferenceSet` | Inference 阶段开始前，每个 EvalSet 触发一次 |
+| `AfterInferenceSet` | Inference 阶段结束后，每个 EvalSet 触发一次 |
+| `BeforeInferenceCase` | 单个 EvalCase 推理开始前，每个 EvalCase 触发一次 |
+| `AfterInferenceCase` | 单个 EvalCase 推理结束后，每个 EvalCase 触发一次 |
+| `BeforeEvaluateSet` | Evaluate 阶段开始前，每个 EvalSet 触发一次 |
+| `AfterEvaluateSet` | Evaluate 阶段结束后，每个 EvalSet 触发一次 |
+| `BeforeEvaluateCase` | 单个 EvalCase 评估开始前，每个 EvalCase 触发一次 |
+| `AfterEvaluateCase` | 单个 EvalCase 评估结束后，每个 EvalCase 触发一次 |
+
+同一回调点的多个回调会按注册顺序依次执行。任一回调返回 `error` 会立即中断该回调点，错误信息会携带回调点、序号与组件名。
+
+回调的返回值由 `Result` 与 `error` 两部分组成。`Result` 是可选的，用于在同一回调点内以及后续阶段传递更新后的 `Context`；`error` 用于中断流程并向上返回。常见返回形式含义如下：
+
+- `return nil, nil`：继续沿用当前 `ctx` 执行后续回调；如果同一回调点内前序回调已经通过 `Result.Context` 更新过 `ctx`，该返回方式不会覆盖它。
+- `return result, nil`：将 `ctx` 更新为 `result.Context`，后续回调与后续阶段使用更新后的 `ctx`。
+- `return nil, err`：中断当前回调点并向上返回错误。
+
+通过 `evaluation.WithEvalCaseParallelInferenceEnabled(true)` 开启并行推理后，case 级回调可能并发执行，由于 `args.Request` 指向同一份 `*InferenceRequest`，因此建议只读；如需改写请求，可以在 set 级回调中完成。
+
+单个 EvalCase 的推理或评估失败通常不会通过 `error` 向上传递，而是写入 `Result.Status` 与 `Result.ErrorMessage`，因此 `After*CaseArgs.Error` 不用于承载单个用例失败原因，需要判断失败可以查看 `args.Result.Status` 与 `args.Result.ErrorMessage`。
 
 ## 最佳实践
 

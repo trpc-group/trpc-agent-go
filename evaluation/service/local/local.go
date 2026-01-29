@@ -15,20 +15,20 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"slices"
 	"strings"
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime"
+	"github.com/panjf2000/ants/v2"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/callback"
 	istatus "trpc.group/trpc-go/trpc-agent-go/evaluation/internal/status"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/service/internal/inference"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
+	evalstatus "trpc.group/trpc-go/trpc-agent-go/evaluation/status"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
@@ -36,95 +36,134 @@ const reasonSeparator = ";"
 
 // local is a local implementation of service.Service.
 type local struct {
-	runner            runner.Runner
-	evalSetManager    evalset.Manager
-	evalResultManager evalresult.Manager
-	registry          registry.Registry
-	sessionIDSupplier func(ctx context.Context) string
+	runner                           runner.Runner
+	evalSetManager                   evalset.Manager
+	evalResultManager                evalresult.Manager
+	registry                         registry.Registry
+	sessionIDSupplier                func(ctx context.Context) string
+	callbacks                        *service.Callbacks
+	evalCaseParallelism              int
+	evalCaseParallelInferenceEnabled bool
+	evalCaseInferencePool            *ants.PoolWithFunc
 }
 
 // New returns a new local evaluation service.
 // If no service.Option is provided, the service will use the default options.
 func New(runner runner.Runner, opt ...service.Option) (service.Service, error) {
+	if runner == nil {
+		return nil, errors.New("runner is nil")
+	}
 	opts := service.NewOptions(opt...)
+	if opts.EvalCaseParallelInferenceEnabled && opts.EvalCaseParallelism <= 0 {
+		return nil, errors.New("eval case parallelism must be greater than 0")
+	}
+	if opts.EvalSetManager == nil {
+		return nil, errors.New("eval set manager is nil")
+	}
+	if opts.EvalResultManager == nil {
+		return nil, errors.New("eval result manager is nil")
+	}
+	if opts.Registry == nil {
+		return nil, errors.New("registry is nil")
+	}
+	if opts.SessionIDSupplier == nil {
+		return nil, errors.New("session id supplier is nil")
+	}
 	service := &local{
-		runner:            runner,
-		evalSetManager:    opts.EvalSetManager,
-		evalResultManager: opts.EvalResultManager,
-		registry:          opts.Registry,
-		sessionIDSupplier: opts.SessionIDSupplier,
+		runner:                           runner,
+		evalSetManager:                   opts.EvalSetManager,
+		evalResultManager:                opts.EvalResultManager,
+		registry:                         opts.Registry,
+		sessionIDSupplier:                opts.SessionIDSupplier,
+		callbacks:                        opts.Callbacks,
+		evalCaseParallelism:              opts.EvalCaseParallelism,
+		evalCaseParallelInferenceEnabled: opts.EvalCaseParallelInferenceEnabled,
+	}
+	if service.evalCaseParallelInferenceEnabled {
+		pool, err := createEvalCaseInferencePool(service.evalCaseParallelism)
+		if err != nil {
+			return nil, fmt.Errorf("create eval case inference pool: %w", err)
+		}
+		service.evalCaseInferencePool = pool
 	}
 	return service, nil
 }
 
-// Inference runs the agent for the requested eval cases and returns the inference results for each case.
-func (s *local) Inference(ctx context.Context, req *service.InferenceRequest) ([]*service.InferenceResult, error) {
-	if req == nil {
-		return nil, errors.New("inference request is nil")
+// Close closes the eval service and releases owned resources.
+func (s *local) Close() error {
+	if s.evalCaseInferencePool != nil {
+		s.evalCaseInferencePool.Release()
 	}
-	if req.AppName == "" {
-		return nil, errors.New("app name is empty")
-	}
-	if req.EvalSetID == "" {
-		return nil, errors.New("eval set id is empty")
-	}
-	// Get the eval set.
-	evalSet, err := s.evalSetManager.Get(ctx, req.AppName, req.EvalSetID)
-	if err != nil {
-		return nil, fmt.Errorf("get eval set: %w", err)
-	}
-	// If eval case IDs are provided, filter the eval cases to only include the specified eval case IDs.
-	// Otherwise, use all eval cases in the eval set.
-	evalCases := evalSet.EvalCases
-	if len(req.EvalCaseIDs) > 0 {
-		filteredEvalCases := evalCases[:0]
-		for _, evalCase := range evalCases {
-			if slices.Contains(req.EvalCaseIDs, evalCase.EvalID) {
-				filteredEvalCases = append(filteredEvalCases, evalCase)
-			}
-		}
-		evalCases = filteredEvalCases
-	}
-	// Run the agent for the requested eval cases and return the inference results for each case.
-	inferenceResults := make([]*service.InferenceResult, 0, len(evalCases))
-	for _, evalCase := range evalCases {
-		inference, err := s.inferenceEvalCase(ctx, req.EvalSetID, evalCase)
-		if err != nil {
-			return nil, fmt.Errorf("run inference for eval case %s: %w", evalCase.EvalID, err)
-		}
-		inferenceResults = append(inferenceResults, inference)
-	}
-	return inferenceResults, nil
+	return nil
 }
 
-// inferenceEvalCase runs the agent for a single eval case and returns the inference result.
-func (s *local) inferenceEvalCase(ctx context.Context, evalSetID string,
-	evalCase *evalset.EvalCase) (*service.InferenceResult, error) {
-	sessionID := s.sessionIDSupplier(ctx)
-	inferenceResult := &service.InferenceResult{
-		AppName:    evalCase.SessionInput.AppName,
-		EvalSetID:  evalSetID,
-		EvalCaseID: evalCase.EvalID,
-		SessionID:  sessionID,
+func (s *local) runBeforeEvaluateSetCallbacks(ctx context.Context, req *service.EvaluateRequest) (context.Context, error) {
+	result, err := callback.RunBeforeEvaluateSet(ctx, s.callbacks, &service.BeforeEvaluateSetArgs{Request: req})
+	if result != nil && result.Context != nil {
+		ctx = result.Context
 	}
-	inferences, err := inference.Inference(
-		ctx,
-		s.runner,
-		evalCase.Conversation,
-		evalCase.SessionInput,
-		sessionID,
-		evalCase.ContextMessages,
-	)
 	if err != nil {
-		return nil, fmt.Errorf("inference: %w", err)
+		return ctx, fmt.Errorf("run before evaluate set callbacks (app=%s, evalSetID=%s): %w", req.AppName, req.EvalSetID, err)
 	}
-	inferenceResult.Status = status.EvalStatusPassed
-	inferenceResult.Inferences = inferences
-	return inferenceResult, nil
+	return ctx, nil
 }
 
-// Evaluate runs the evaluation on the inference results and returns the persisted eval set result.
-func (s *local) Evaluate(ctx context.Context, req *service.EvaluateRequest) (*evalresult.EvalSetResult, error) {
+func (s *local) runAfterEvaluateSetCallbacks(ctx context.Context, req *service.EvaluateRequest, result *service.EvalSetRunResult, err error, startTime time.Time) error {
+	_, err = callback.RunAfterEvaluateSet(ctx, s.callbacks, &service.AfterEvaluateSetArgs{
+		Request:   req,
+		Result:    result,
+		Error:     err,
+		StartTime: startTime,
+	})
+	if err != nil {
+		return fmt.Errorf("run after evaluate set callbacks (app=%s, evalSetID=%s): %w", req.AppName, req.EvalSetID, err)
+	}
+	return nil
+}
+
+func (s *local) runBeforeEvaluateCaseCallbacks(ctx context.Context, req *service.EvaluateRequest, evalCaseID string) (context.Context, error) {
+	result, err := callback.RunBeforeEvaluateCase(ctx, s.callbacks, &service.BeforeEvaluateCaseArgs{
+		Request:    req,
+		EvalCaseID: evalCaseID,
+	})
+	if result != nil && result.Context != nil {
+		ctx = result.Context
+	}
+	if err != nil {
+		return ctx, fmt.Errorf("run before evaluate case callbacks (app=%s, evalSetID=%s, evalCaseID=%s): %w",
+			req.AppName, req.EvalSetID, evalCaseID, err)
+	}
+	return ctx, nil
+}
+
+func (s *local) runAfterEvaluateCaseCallbacks(
+	ctx context.Context,
+	req *service.EvaluateRequest,
+	inferenceResult *service.InferenceResult,
+	result *evalresult.EvalCaseResult,
+	err error,
+	startTime time.Time,
+) error {
+	_, err = callback.RunAfterEvaluateCase(ctx, s.callbacks, &service.AfterEvaluateCaseArgs{
+		Request:         req,
+		InferenceResult: inferenceResult,
+		Result:          result,
+		Error:           err,
+		StartTime:       startTime,
+	})
+	if err != nil {
+		evalCaseID := ""
+		if inferenceResult != nil {
+			evalCaseID = inferenceResult.EvalCaseID
+		}
+		return fmt.Errorf("run after evaluate case callbacks (app=%s, evalSetID=%s, evalCaseID=%s): %w",
+			req.AppName, req.EvalSetID, evalCaseID, err)
+	}
+	return nil
+}
+
+// Evaluate runs the evaluation on the inference results and returns the eval set run result.
+func (s *local) Evaluate(ctx context.Context, req *service.EvaluateRequest) (runResult *service.EvalSetRunResult, err error) {
 	if req == nil {
 		return nil, errors.New("evaluate request is nil")
 	}
@@ -134,27 +173,81 @@ func (s *local) Evaluate(ctx context.Context, req *service.EvaluateRequest) (*ev
 	if req.EvalSetID == "" {
 		return nil, errors.New("eval set id is empty")
 	}
+	if req.EvaluateConfig == nil {
+		return nil, errors.New("evaluate config is nil")
+	}
+	ctx, err = s.runBeforeEvaluateSetCallbacks(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("run before evaluate set callbacks (app=%s, evalSetID=%s): %w",
+			req.AppName, req.EvalSetID, err)
+	}
+	setStartTime := time.Now()
+	defer func() {
+		afterErr := s.runAfterEvaluateSetCallbacks(ctx, req, runResult, err, setStartTime)
+		if afterErr != nil {
+			runResult = nil
+			err = afterErr
+		}
+	}()
 	evalCaseResults := make([]*evalresult.EvalCaseResult, 0, len(req.InferenceResults))
 	for _, inferenceResult := range req.InferenceResults {
-		// Run the evaluation on the inference result and return the case evaluation result.
-		result, err := s.evaluatePerCase(ctx, inferenceResult, req.EvaluateConfig)
+		caseResult, err := s.evaluateCase(ctx, req, inferenceResult)
 		if err != nil {
-			return nil, fmt.Errorf("evaluate inference result for eval case %s: %w", inferenceResult.EvalCaseID, err)
+			evalCaseID := ""
+			if inferenceResult != nil {
+				evalCaseID = inferenceResult.EvalCaseID
+			}
+			return nil, fmt.Errorf("evaluate case (app=%s, evalSetID=%s, evalCaseID=%s): %w",
+				req.AppName, req.EvalSetID, evalCaseID, err)
 		}
-		evalCaseResults = append(evalCaseResults, result)
+		evalCaseResults = append(evalCaseResults, caseResult)
 	}
-	evalSetResult := &evalresult.EvalSetResult{
-		EvalSetID:         req.EvalSetID,
-		EvalCaseResults:   evalCaseResults,
-		CreationTimestamp: &epochtime.EpochTime{Time: time.Now()},
+	runResult = &service.EvalSetRunResult{
+		AppName:         req.AppName,
+		EvalSetID:       req.EvalSetID,
+		EvalCaseResults: evalCaseResults,
 	}
-	evalSetResultID, err := s.evalResultManager.Save(ctx, req.AppName, evalSetResult)
+	return runResult, nil
+}
+
+func (s *local) evaluateCase(ctx context.Context, req *service.EvaluateRequest, inferenceResult *service.InferenceResult) (result *evalresult.EvalCaseResult, err error) {
+	if inferenceResult == nil {
+		return nil, errors.New("inference result is nil")
+	}
+	ctx, err = s.runBeforeEvaluateCaseCallbacks(ctx, req, inferenceResult.EvalCaseID)
 	if err != nil {
-		return nil, fmt.Errorf("save eval set result: %w", err)
+		return nil, fmt.Errorf("run before evaluate case callbacks (app=%s, evalSetID=%s, evalCaseID=%s): %w",
+			req.AppName, req.EvalSetID, inferenceResult.EvalCaseID, err)
 	}
-	evalSetResult.EvalSetResultID = evalSetResultID
-	evalSetResult.EvalSetResultName = evalSetResultID
-	return evalSetResult, nil
+	caseStartTime := time.Now()
+	defer func() {
+		afterErr := s.runAfterEvaluateCaseCallbacks(ctx, req, inferenceResult, result, err, caseStartTime)
+		if afterErr != nil {
+			result = nil
+			err = afterErr
+		}
+	}()
+	if inferenceResult.Status != evalstatus.EvalStatusPassed {
+		result = s.failedEvalCaseResult(req.EvalSetID, inferenceResult, inferenceResult.ErrorMessage)
+		return result, nil
+	}
+	caseResult, err := s.evaluatePerCase(ctx, inferenceResult, req.EvaluateConfig)
+	if err != nil {
+		result = s.failedEvalCaseResult(req.EvalSetID, inferenceResult, err.Error())
+		return result, nil
+	}
+	return caseResult, nil
+}
+
+func (s *local) failedEvalCaseResult(evalSetID string, inferenceResult *service.InferenceResult, errorMessage string) *evalresult.EvalCaseResult {
+	return &evalresult.EvalCaseResult{
+		EvalSetID:       evalSetID,
+		EvalID:          inferenceResult.EvalCaseID,
+		FinalEvalStatus: evalstatus.EvalStatusFailed,
+		ErrorMessage:    errorMessage,
+		SessionID:       inferenceResult.SessionID,
+		UserID:          inferenceResult.UserID,
+	}
 }
 
 // evaluatePerCase runs the evaluation on the inference result and returns the case evaluation result.
@@ -164,7 +257,7 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 		return nil, errors.New("inference result is nil")
 	}
 	if evaluateConfig == nil {
-		return nil, errors.New("evaluate config is nil")
+		return nil, fmt.Errorf("evaluate per case (evalCaseID=%s): evaluate config is nil", inferenceResult.EvalCaseID)
 	}
 	evalCase, err := s.evalSetManager.GetCase(ctx,
 		inferenceResult.AppName,
@@ -172,31 +265,31 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 		inferenceResult.EvalCaseID,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("get eval case: %w", err)
+		return nil, fmt.Errorf(
+			"get eval case (app=%s, evalSetID=%s, evalCaseID=%s): %w",
+			inferenceResult.AppName,
+			inferenceResult.EvalSetID,
+			inferenceResult.EvalCaseID,
+			err,
+		)
 	}
-	if evalCase == nil || len(evalCase.Conversation) == 0 || evalCase.SessionInput == nil {
-		return nil, errors.New("invalid eval case")
-	}
-	// If the inference count does not match the expected conversation length, return an error.
-	if len(inferenceResult.Inferences) != len(evalCase.Conversation) {
-		return nil, fmt.Errorf("inference count %d does not match expected conversation length %d",
-			len(inferenceResult.Inferences), len(evalCase.Conversation))
+	inputs, err := prepareCaseEvaluationInputs(inferenceResult, evalCase)
+	if err != nil {
+		return nil, fmt.Errorf("prepare case evaluation inputs (evalCaseID=%s): %w", inferenceResult.EvalCaseID, err)
 	}
 	// overallMetricResults collects the metric results for the entire eval case.
 	overallMetricResults := make([]*evalresult.EvalMetricResult, 0, len(evaluateConfig.EvalMetrics))
-	// perInvocation collects the metric results for each invocation.
-	perInvocation := make([]*evalresult.EvalMetricResultPerInvocation, 0, len(inferenceResult.Inferences))
-	// Prepare a per-invocation container to hold metric results for each step of the conversation.
-	for i := range len(inferenceResult.Inferences) {
-		perInvocation = append(perInvocation, &evalresult.EvalMetricResultPerInvocation{
-			ActualInvocation:   inferenceResult.Inferences[i],
-			ExpectedInvocation: evalCase.Conversation[i],
+	perInvocation := make([]*evalresult.EvalMetricResultPerInvocation, len(inputs.actuals))
+	for i, actual := range inputs.actuals {
+		perInvocation[i] = &evalresult.EvalMetricResultPerInvocation{
+			ActualInvocation:   actual,
+			ExpectedInvocation: inputs.expecteds[i],
 			EvalMetricResults:  make([]*evalresult.EvalMetricResult, 0, len(evaluateConfig.EvalMetrics)),
-		})
+		}
 	}
 	// Iterate through every configured metric and run the evaluation.
 	for _, evalMetric := range evaluateConfig.EvalMetrics {
-		result, err := s.evaluateMetric(ctx, evalMetric, inferenceResult.Inferences, evalCase.Conversation)
+		result, err := s.evaluateMetric(ctx, evalMetric, inputs.actuals, inputs.expecteds)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				// Skip metrics whose evaluator or artifacts are intentionally absent.
@@ -255,17 +348,77 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 		OverallEvalMetricResults:      overallMetricResults,
 		EvalMetricResultPerInvocation: perInvocation,
 		SessionID:                     inferenceResult.SessionID,
-		UserID:                        evalCase.SessionInput.UserID,
+		UserID:                        inputs.userID,
 	}, nil
 }
 
 // evaluateMetric locates the evaluator registered for the metric and runs the evaluation.
 func (s *local) evaluateMetric(ctx context.Context, evalMetric *metric.EvalMetric,
-	actualInvocations, expectedInvocations []*evalset.Invocation) (*evaluator.EvaluateResult, error) {
+	actuals, expecteds []*evalset.Invocation) (*evaluator.EvaluateResult, error) {
 	metricEvaluator, err := s.registry.Get(evalMetric.MetricName)
 	if err != nil {
 		return nil, fmt.Errorf("get evaluator for metric %s: %w", evalMetric.MetricName, err)
 	}
 	// Run the evaluation on the actual and expected invocations and return the evaluation result.
-	return metricEvaluator.Evaluate(ctx, actualInvocations, expectedInvocations, evalMetric)
+	return metricEvaluator.Evaluate(ctx, actuals, expecteds, evalMetric)
+}
+
+type caseEvaluationInputs struct {
+	actuals   []*evalset.Invocation
+	expecteds []*evalset.Invocation
+	userID    string
+}
+
+func prepareCaseEvaluationInputs(inferenceResult *service.InferenceResult, evalCase *evalset.EvalCase) (*caseEvaluationInputs, error) {
+	if len(evalCase.Conversation) == 0 {
+		return nil, errors.New("invalid eval case")
+	}
+	if evalCase.SessionInput == nil {
+		return nil, errors.New("session input is nil")
+	}
+	evalMode := evalCase.EvalMode
+	actuals := inferenceResult.Inferences
+	expecteds := evalCase.Conversation
+	if evalMode == evalset.EvalModeTrace {
+		expecteds = traceExpectedsForEval(evalCase.Conversation)
+	}
+	if len(actuals) != len(expecteds) {
+		return nil, fmt.Errorf("inference count %d does not match expected conversation length %d",
+			len(actuals), len(expecteds))
+	}
+	attachContextMessages(actuals, evalCase.ContextMessages)
+	attachContextMessages(expecteds, evalCase.ContextMessages)
+	return &caseEvaluationInputs{
+		actuals:   actuals,
+		expecteds: expecteds,
+		userID:    evalCase.SessionInput.UserID,
+	}, nil
+}
+
+func attachContextMessages(invocations []*evalset.Invocation, contextMessages []*model.Message) {
+	if len(invocations) == 0 || len(contextMessages) == 0 {
+		return
+	}
+	for _, invocation := range invocations {
+		if invocation == nil {
+			continue
+		}
+		if len(invocation.ContextMessages) != 0 {
+			continue
+		}
+		invocation.ContextMessages = contextMessages
+	}
+}
+
+// traceExpectedsForEval builds placeholder expected invocations that only preserve user inputs.
+// This whitelist prevents trace outputs from being treated as reference answers and stays correct when Invocation gains new fields.
+func traceExpectedsForEval(conversation []*evalset.Invocation) []*evalset.Invocation {
+	expecteds := make([]*evalset.Invocation, len(conversation))
+	for i, invocation := range conversation {
+		expecteds[i] = &evalset.Invocation{
+			InvocationID: invocation.InvocationID,
+			UserContent:  invocation.UserContent,
+		}
+	}
+	return expecteds
 }

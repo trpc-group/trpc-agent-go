@@ -40,6 +40,16 @@ Agent Skills 把可复用的任务封装为“技能目录”，用 `SKILL.md`
      内容注入；脚本不会被内联到提示词，而是在工作区中执行，并
      回传结果与输出文件。
 
+### Token 成本（为什么要渐进披露）
+
+如果把一个技能仓库的全部内容（所有 `SKILL.md` 正文与 docs）
+一股脑塞进提示词，往往会让 prompt token 占用变得非常高，甚至
+直接超过模型上下文窗口。
+
+想要**可复现、基于真实运行**的 token 对比（渐进披露 vs 全量注入），
+可参考 `benchmark/anthropic_skills/README.md`，并按其中说明运行
+`token-report` 套件。
+
 ### 目录结构
 
 ```
@@ -102,6 +112,10 @@ agent := llmagent.New(
 - 工具自动注册：开启 `WithSkills` 后，`skill_load`、
   `skill_select_docs`、`skill_list_docs` 与 `skill_run`
   会自动出现在工具列表中，无需手动添加。
+- 注意：当你同时设置了 `WithCodeExecutor` 时，LLMAgent 默认会尝试执行
+  模型回复里的 Markdown 围栏代码块。如果你只是为了给 `skill_run` 提供运行时，
+  不希望自动执行代码块，可以加上
+  `llmagent.WithEnableCodeExecutionResponseProcessor(false)`。
 - 默认提示指引：框架会在系统消息里，在 `Available skills:` 列表后追加一段
   `Tooling and workspace guidance:` 指引文本。
   - 关闭该指引（减少提示词占用）：`llmagent.WithSkillsToolingGuidance("")`。
@@ -123,6 +137,28 @@ export OPENAI_API_KEY="your-api-key"
 go run . -executor local
 # 或容器执行器（需 Docker）
 go run . -executor container
+```
+
+GAIA 基准示例（技能 + 文件工具）：
+[examples/skill/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skill/README.md)
+
+该示例包含数据集下载脚本，以及 `whisper`（音频）/`ocr`（图片）等
+技能的 Python 依赖准备说明。
+
+SkillLoadMode 演示（无需 API key）：
+[examples/skillloadmode/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillloadmode/README.md)
+
+快速开始（下载数据集 JSON 到 `examples/skill/data/`）：
+
+```bash
+export HF_TOKEN="hf_..."
+python3 examples/skill/scripts/download_gaia_2023_level1_validation.py
+```
+
+如需同时下载引用到的附件文件：
+
+```bash
+python3 examples/skill/scripts/download_gaia_2023_level1_validation.py --with-files
 ```
 
 示例技能（节选）：
@@ -180,12 +216,32 @@ https://github.com/anthropics/skills
 - `include_all_docs`（可选）：为 true 时包含所有文档
 
 行为：
-- 写入临时会话键（本轮有效）：
+- 写入会话临时键（生命周期由 `SkillLoadMode` 控制）：
   - `temp:skill:loaded:<name>` = "1"
   - `temp:skill:docs:<name>` = "*" 或 JSON 字符串数组
 - 请求处理器读取这些键，把 `SKILL.md` 正文与文档注入到系统消息
 
-说明：可多次调用以新增或替换文档。
+说明：
+- 建议采用“渐进式披露”：默认只传 `skill` 加载正文；需要文档时先
+  `skill_list_docs` 再 `skill_select_docs`，只选必要文档；除非确
+  实需要全部（或用户明确要求），避免 `include_all_docs=true`。
+- 可多次调用以新增或替换文档。
+- 工具会写入 session state，但**正文/文档在提示词里驻留多久**取决
+  于 `SkillLoadMode`：
+  - `turn`（默认）：在当前一次 `Runner.Run`（处理一条用户消息）
+    的所有模型请求中驻留；下一次运行开始前自动清空。
+  - `once`：只在**下一次**模型请求中注入一次，随后自动 offload
+    并清空对应 state。
+  - `session`（兼容旧行为）：跨多轮对话保留，直到手动清除或会话过期。
+- 在 agent 上配置：
+
+```go
+agent := llmagent.New(
+    "skills-assistant",
+    llmagent.WithSkills(repo),
+    llmagent.WithSkillLoadMode(llmagent.SkillLoadModeTurn),
+)
+```
 
 ### `skill_select_docs`（选择文档）
 
@@ -219,7 +275,7 @@ https://github.com/anthropics/skills
 
 输入：
 - `skill`（必填）：技能名
-- `command`（必填）：Shell 命令（默认通过 `bash -lc` 执行）
+- `command`（必填）：Shell 命令（默认通过 `bash -c` 执行）
 - `cwd`（可选）：相对技能根目录的工作路径
 - `env`（可选）：环境变量映射
 - `output_files`（可选，传统收集方式）：通配符列表
@@ -246,18 +302,31 @@ https://github.com/anthropics/skills
   - `name_template`：保存为制品时的文件名前缀（如 `pref/`）。
   - `max_files`（默认 100）、`max_file_bytes`（默认 4 MiB/文件）、
     `max_total_bytes`（默认 64 MiB）：上限控制。
+  - 说明：`outputs` 同时兼容 snake_case（推荐）与旧版 Go 风格字段名
+    （例如 `MaxFiles`）
 
 - `timeout`（可选）：超时秒数（执行器有默认值）
 - `save_as_artifacts`（可选，传统收集路径）：把通过
   `output_files` 收集到的文件保存为制品，并在结果中返回
   `artifact_files`。
-- `omit_inline_content`（可选）：与 `save_as_artifacts` 配合，
-  为 true 时不返回文件内容，仅保留文件名/MIME 信息。
+- `omit_inline_content`（可选）：为 true 时不返回
+  `output_files[*].content` 与 `primary_output.content`（只返回元信息）。
+  非文本输出的 `content` 也会始终为空。需要文本内容时，可用
+  `output_files[*].ref` 配合 `read_file` 按需读取。
 - `artifact_prefix`（可选）：与 `save_as_artifacts` 配合的前缀。
+  - 若未配置制品服务（Artifact service），`skill_run` 会继续
+    返回 `output_files`，并在 `warnings` 中给出提示。
+
+建议：
+- 建议 `skill_run` 尽量只用于执行 Skill 文档里描述的流程
+  （例如 `SKILL.md` 明确要求的命令）。
+- 不建议用 `skill_run` 做通用的 Shell 探索。
+- 优先使用 `skill_list_docs` / `skill_select_docs` 读取 Skill 文档，
+  再用文件工具按需查看选中的内容。
 
 可选的安全限制（白名单）：
 - 环境变量 `TRPC_AGENT_SKILL_RUN_ALLOWED_COMMANDS`：
-  - 逗号/空格分隔的命令名列表（如 `ls,cat,ifconfig`）
+  - 逗号/空格分隔的命令名列表（如 `python3,ffmpeg`）
   - 启用后 `skill_run` 会拒绝管道/重定向/分号等 Shell 语法，
     并仅允许执行白名单中的“单条命令”
   - 因为不再经过 Shell 解析，诸如 `> out/x.txt`、heredoc、
@@ -274,7 +343,19 @@ https://github.com/anthropics/skills
 
 输出：
 - `stdout`、`stderr`、`exit_code`、`timed_out`、`duration_ms`
-- `output_files`：文件列表（`name`、`content`、`mime_type`）
+- `primary_output`（可选）：包含 `name`、`ref`、`content`、`mime_type`、
+  `size_bytes`、`truncated`
+  - 便捷字段：指向“最合适的”小型文本输出文件（若存在）。当只有一个主要输出时
+    优先使用它。
+- `output_files`：文件列表（`name`、`ref`、`content`、`mime_type`、
+  `size_bytes`、`truncated`）
+  - `ref` 是稳定的 `workspace://<name>` 引用，可传给其它工具使用
+  - 非文本文件的 `content` 始终为空。
+  - 当 `omit_inline_content=true` 时，所有文件的 `content` 为空。可用
+    `ref` 配合 `read_file` 按需读取文本内容。
+  - `size_bytes` 表示磁盘上的文件大小；`truncated=true` 表示收集内容触发了
+    内部上限（例如 4 MiB/文件）。
+- `warnings`（可选）：非致命提示（例如制品保存被跳过）
 - `artifact_files`：制品引用（`name`、`version`）。两种途径：
   - 传统路径：设置了 `save_as_artifacts` 时由工具保存并返回
   - 清单路径：`outputs.save=true` 时由执行器保存并附加到结果
@@ -286,15 +367,66 @@ https://github.com/anthropics/skills
    - 声明式：用 `outputs` 统一控制收集/内联/保存
    - 如需把上游文件带入，可用 `inputs` 先行映射
 
+示例：
+
+元信息输出（避免把上下文塞满）：
+
+```json
+{
+  "skill": "demo",
+  "command": "mkdir -p out; echo hi > out/a.txt",
+  "output_files": ["out/*.txt"],
+  "omit_inline_content": true
+}
+```
+
+该调用会返回 `output_files[*].ref`（如 `workspace://out/a.txt`），
+`content=""`，并包含 `size_bytes` 与 `truncated`。
+
+需要内容时再读取：
+
+```json
+{
+  "file_name": "workspace://out/a.txt",
+  "start_line": 1,
+  "num_lines": 20
+}
+```
+
+大文件建议保存为制品（不内联内容）：
+
+```json
+{
+  "skill": "demo",
+  "command": "mkdir -p out; echo report > out/report.txt",
+  "outputs": {
+    "globs": ["$OUTPUT_DIR/report.txt"],
+    "inline": false,
+    "save": true,
+    "max_files": 5
+  }
+}
+```
+
+保存成功后，`skill_run` 会返回 `artifact_files`（`name`、`version`），
+并可用 `artifact://<name>[@<version>]` 作为文件引用传给 `read_file` 等工具。
+
 运行环境与工作目录：
 - 未提供 `cwd` 时，默认在技能根目录运行：`/skills/<name>`
 - 相对 `cwd` 会被解析为技能根目录下的子路径
+- `cwd` 也可以以 `$WORK_DIR`、`$OUTPUT_DIR`、`$SKILLS_DIR`、
+  `$WORKSPACE_DIR`、`$RUN_DIR`（或 `${...}`）开头，
+  工具会将其规范化为工作区内的相对目录
 - 运行时注入环境变量：
   - `WORKSPACE_DIR`、`SKILLS_DIR`、`WORK_DIR`、`OUTPUT_DIR`、
     `RUN_DIR`（由执行器注入）
   - `SKILL_NAME`（由工具注入）
 - 便捷符号链接：在技能根目录下自动创建 `out/`、`work/`、
   `inputs/` 链接到工作区对应目录，方便按文档中的相对路径使用。
+- `.venv/`：技能根目录下的可写目录，用于安装技能依赖
+  （例如 `python -m venv .venv` + `pip install ...`）。
+- 文件工具在 base directory 下不存在真实 `inputs/` 目录时，会将
+  `inputs/<path>` 视为 `<path>` 的别名
 
 ## 执行器
 
@@ -314,6 +446,7 @@ https://github.com/anthropics/skills
 安全与资源：
 - 本地/容器均限制读取与写入在工作区内
 - 可通过超时、脚本权限（如只读挂载技能树）降低风险
+- `stdout`/`stderr` 可能会被截断（见 `warnings`）
 - 输出文件读取大小有限制，避免过大文件影响
 
 ## 事件与追踪
@@ -333,8 +466,8 @@ https://github.com/anthropics/skills
   提示词既昂贵又易泄漏。三层信息模型让“知道有何能力”与“在
   需要时获得细节/执行脚本”解耦，从而减少上下文开销并提升安全。
 - 注入与状态：通过事件中的 `StateDelta` 将加载选择以键值形式
-  写入临时会话，下一轮请求处理器据此拼接系统消息，形成“概览 →
-  正文/文档”的渐进式上下文。
+  写入会话状态的 `temp:*` 命名空间，后续每轮请求处理器据此拼接
+  系统消息，形成“概览 → 正文/文档”的渐进式上下文。
 - 执行隔离：脚本以工作区为边界，输出文件由通配符精确收集，避免
   将脚本源码或非必要文件带入模型上下文。
 

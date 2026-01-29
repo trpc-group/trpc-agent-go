@@ -10,6 +10,7 @@
 package criterion
 
 import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/finalresponse"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory"
 )
@@ -18,6 +19,8 @@ import (
 type options struct {
 	// ToolTrajectory sets the default tool trajectory criterion.
 	toolTrajectory *tooltrajectory.ToolTrajectoryCriterion
+	// finalResponse sets the final response criterion.
+	finalResponse *finalresponse.FinalResponseCriterion
 	// llmJudge sets the LLM judge criterion.
 	llmJudge *llm.LLMCriterion
 }
@@ -40,6 +43,13 @@ type Option func(*options)
 func WithToolTrajectory(toolTrajectory *tooltrajectory.ToolTrajectoryCriterion) Option {
 	return func(o *options) {
 		o.toolTrajectory = toolTrajectory
+	}
+}
+
+// WithFinalResponse sets the final response criterion.
+func WithFinalResponse(finalResponse *finalresponse.FinalResponseCriterion) Option {
+	return func(o *options) {
+		o.finalResponse = finalResponse
 	}
 }
 

@@ -1,5 +1,6 @@
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -16,6 +17,10 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolcache"
 )
 
 func TestFileTool_listFile(t *testing.T) {
@@ -147,4 +152,102 @@ func TestFileTool_listFile_IsFile(t *testing.T) {
 	req := &listFileRequest{Path: "file.txt"}
 	_, err = fileToolSet.listFile(context.Background(), req)
 	assert.Error(t, err)
+}
+
+func TestFileTool_listFile_WorkspaceRef(t *testing.T) {
+	tempDir := t.TempDir()
+	set, err := NewToolSet(WithBaseDir(tempDir))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	toolcache.StoreSkillRunOutputFiles(inv, []codeexecutor.File{
+		{
+			Name:     ".",
+			Content:  "ignored",
+			MIMEType: "text/plain",
+		},
+		{
+			Name:     "root.txt",
+			Content:  "root",
+			MIMEType: "text/plain",
+		},
+		{
+			Name:     "out/a.txt",
+			Content:  "a",
+			MIMEType: "text/plain",
+		},
+		{
+			Name:     "out/sub/b.txt",
+			Content:  "b",
+			MIMEType: "text/plain",
+		},
+	})
+
+	rsp, err := fts.listFile(ctx, &listFileRequest{
+		Path: "workspace://",
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, "workspace://", rsp.Path)
+	assert.ElementsMatch(t, []string{"workspace://root.txt"}, rsp.Files)
+	assert.ElementsMatch(t, []string{"workspace://out"}, rsp.Folders)
+
+	rsp, err = fts.listFile(ctx, &listFileRequest{
+		Path: "workspace://out",
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, "workspace://out", rsp.Path)
+	assert.ElementsMatch(t, []string{"workspace://out/a.txt"}, rsp.Files)
+	assert.ElementsMatch(t, []string{"workspace://out/sub"}, rsp.Folders)
+}
+
+func TestFileTool_listFile_ArtifactUnsupported(t *testing.T) {
+	set, err := NewToolSet(WithBaseDir(t.TempDir()))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	_, err = fts.listFile(context.Background(), &listFileRequest{
+		Path: "artifact://x.txt",
+	})
+	assert.Error(t, err)
+}
+
+func TestFileTool_listFile_ParseError(t *testing.T) {
+	set, err := NewToolSet(WithBaseDir(t.TempDir()))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	_, err = fts.listFile(context.Background(), &listFileRequest{
+		Path: "unknown://x",
+	})
+	assert.Error(t, err)
+}
+
+func TestFileTool_listFile_FallbackToWorkspaceCache(t *testing.T) {
+	tempDir := t.TempDir()
+	set, err := NewToolSet(WithBaseDir(tempDir))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	toolcache.StoreSkillRunOutputFiles(inv, []codeexecutor.File{
+		{
+			Name:     "out/a.txt",
+			Content:  "a",
+			MIMEType: "text/plain",
+		},
+		{
+			Name:     "out/sub/b.txt",
+			Content:  "b",
+			MIMEType: "text/plain",
+		},
+	})
+
+	rsp, err := fts.listFile(ctx, &listFileRequest{Path: "out"})
+	assert.NoError(t, err)
+	assert.Equal(t, "workspace://out", rsp.Path)
+	assert.ElementsMatch(t, []string{"workspace://out/a.txt"}, rsp.Files)
+	assert.ElementsMatch(t, []string{"workspace://out/sub"}, rsp.Folders)
 }

@@ -47,6 +47,7 @@ agentEvaluator, err := evaluation.New(
 if err != nil {
 	log.Fatalf("create evaluator: %v", err)
 }
+defer agentEvaluator.Close()
 // Perform Evaluation.
 result, err := agentEvaluator.Evaluate(context.Background(), evalSetID)
 if err != nil {
@@ -311,6 +312,7 @@ agentEvaluator, err := evaluation.New(
 if err != nil {
 	log.Fatalf("create evaluator: %v", err)
 }
+defer agentEvaluator.Close()
 // Perform Evaluation.
 result, err := agentEvaluator.Evaluate(ctx, evalSetID)
 if err != nil {
@@ -421,7 +423,7 @@ metricManager.Add(ctx, appName, evalSetID, evalMetric)
 - The Evaluator compares the actual session results with the expected session results, calculates the specific score, and determines the evaluation status based on the metric threshold.
 - The Evaluator Registry maintains the mapping between metric names and corresponding evaluators and supports dynamic registration and search of evaluators.
 - The Evaluation Service, as a core component, integrates the Agent to be evaluated, the EvalSet, the Metric, the Evaluator Registry, and the EvalResult Registry. The evaluation process is divided into two phases:
-  - Inference: Extracting user input from the EvalSet, invoking the Agent to perform inference, and combining the Agent's actual output with the expected output to form the inference result. 
+  - Inference: In default mode, extract user input from the EvalSet, invoke the Agent to perform inference, and combine the Agent's actual output with the expected output to form the inference result; in trace mode, treat the EvalSet `conversation` as the actual output trace and skip runner inference.
   - Result Evaluation Phase: Evaluate retrieves the corresponding evaluator from the registry based on the evaluation metric name. Multiple evaluators are used to perform a multi-dimensional evaluation of the inference results, ultimately generating the evaluation result, EvalResult.
 - Agent Evaluator: To reduce the randomness of the agent's output, the evaluation service is called NumRuns times and aggregates the results to obtain a more stable evaluation result.
 
@@ -431,17 +433,30 @@ An EvalSet is a collection of EvalCase instances, identified by a unique EvalSet
 
 An EvalCase represents a set of evaluation cases within the same Session and includes a unique identifier (EvalID), the conversation content, optional `contextMessages`, and session initialization information.
 
-Conversation data includes three types of content:
+Conversation data includes four types of content:
 
 - User input
 - Agent final response
 - Tool invocation and result
 - Intermediate response information
 
+EvalCase supports configuring the evaluation mode via `evalMode`:
+
+- Default mode (`evalMode` omitted or empty string): `conversation` is treated as the expected output, and evaluation invokes the Runner/Agent to generate the actual output.
+- Trace mode (`evalMode` is `"trace"`): `conversation` is treated as the actual output trace, and evaluation does not invoke the Runner/Agent for inference.
+
 ```go
 import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+// EvalMode represents the evaluation mode type.
+type EvalMode string
+
+const (
+	EvalModeDefault EvalMode = ""      // EvalModeDefault indicates the default mode.
+	EvalModeTrace   EvalMode = "trace" // EvalModeTrace indicates the trace evaluation mode.
 )
 
 // EvalSet represents an evaluation set.
@@ -456,6 +471,7 @@ type EvalSet struct {
 // EvalCase represents a single evaluation case.
 type EvalCase struct {
 	EvalID            string               // Unique identifier of the case.
+	EvalMode          EvalMode             // Evaluation mode.
 	ContextMessages   []*model.Message     // Context messages injected into each inference run.
 	Conversation      []*Invocation        // Conversation sequence.
 	SessionInput      *SessionInput        // Session initialization data.
@@ -465,6 +481,7 @@ type EvalCase struct {
 // Invocation represents a user-agent interaction.
 type Invocation struct {
 	InvocationID          string
+	ContextMessages       []*model.Message     // Context messages injected into this invocation run.
 	UserContent           *model.Message       // User input.
 	FinalResponse         *model.Message       // Agent final response.
 	Tools                 []*Tool              // Tool calls and results.
@@ -474,10 +491,10 @@ type Invocation struct {
 
 // Tool represents a single tool invocation and its execution result.
 type Tool struct {
-	ID        string         // Tool invocation ID.
-	Name      string         // Tool name.
-	Arguments map[string]any // Tool invocation parameters.
-	Result    map[string]any // Tool execution result.
+	ID        string // Tool invocation ID.
+	Name      string // Tool name.
+	Arguments any    // Tool invocation parameters.
+	Result    any    // Tool execution result.
 }
 
 // SessionInput represents session initialization input.
@@ -665,6 +682,7 @@ type Registry interface {
 The framework registers the following evaluators by default:
 
 - `tool_trajectory_avg_score` tool trajectory consistency evaluator, requires expected outputs.
+- `final_response_avg_score` final response evaluator, does not require an LLM, and requires expected outputs.
 - `llm_final_response` LLM final response evaluator, requires expected outputs.
 - `llm_rubric_response` LLM rubric response evaluator, requires EvalSet to provide conversation input and configure LLMJudge/rubrics.
 - `llm_rubric_knowledge_recall` LLM rubric knowledge recall evaluator, requires EvalSet to provide conversation input and configure LLMJudge/rubrics.
@@ -784,7 +802,7 @@ Service is an evaluation service that integrates the following modules:
 - Metric
 - Registry
 - Evaluator
-- EvalSetResult
+- EvalSetRunResult
 
 The Service interface defines the complete evaluation process, including the inference and evaluation phases. The interface definition is as follows:
 
@@ -796,8 +814,8 @@ type Service interface {
 	// Inference performs inference, calls the Agent to process the specified evaluation case, 
 	// and returns the inference result.
 	Inference(ctx context.Context, request *InferenceRequest) ([]*InferenceResult, error)
-	// Evaluate evaluates the inference result, generates and persists the evaluation result.
-	Evaluate(ctx context.Context, request *EvaluateRequest) (*evalresult.EvalSetResult, error)
+	// Evaluate evaluates the inference result and generates the evaluation result.
+	Evaluate(ctx context.Context, request *EvaluateRequest) (*EvalSetRunResult, error)
 }
 ```
 
@@ -881,6 +899,8 @@ Description:
 type AgentEvaluator interface {
 	// Evaluate evaluates the specified evaluation set.
 	Evaluate(ctx context.Context, evalSetID string) (*EvaluationResult, error)
+	// Close closes the evaluator and releases owned resources.
+	Close() error
 }
 ```
 
@@ -922,6 +942,10 @@ An `AgentEvaluator` instance can be created using `evaluation.New`. By default, 
 import "trpc.group/trpc-go/trpc-agent-go/evaluation"
 
 agentEvaluator, err := evaluation.New(appName, runner, evaluation.WithNumRuns(numRuns))
+if err != nil {
+	panic(err)
+}
+defer agentEvaluator.Close()
 ```
 
 Because the Agent's execution process may be uncertain, `evaluation.WithNumRuns` provides a mechanism for multiple evaluation runs to reduce the randomness of a single run.
@@ -929,6 +953,21 @@ Because the Agent's execution process may be uncertain, `evaluation.WithNumRuns`
 - The default number of runs is 1;
 - By specifying `evaluation.WithNumRuns(n)`, each evaluation case can be run multiple times;
 - The final result is based on the combined statistical results of multiple runs. The default statistical method is the average of the evaluation scores of multiple runs.
+
+To accelerate the inference phase for large evaluation sets, parallel inference across evaluation cases can be enabled.
+
+- `evaluation.WithEvalCaseParallelInferenceEnabled(true)` enables parallel inference across eval cases. It is disabled by default.
+- `evaluation.WithEvalCaseParallelism(n)` sets the maximum number of eval cases inferred in parallel. The default value is `runtime.GOMAXPROCS(0)`.
+
+```go
+agentEvaluator, err := evaluation.New(
+	appName,
+	runner,
+	evaluation.WithEvalCaseParallelInferenceEnabled(true),
+	evaluation.WithEvalCaseParallelism(runtime.GOMAXPROCS(0)),
+)
+defer agentEvaluator.Close()
+```
 
 ## Usage Guide
 
@@ -954,6 +993,10 @@ import (
 
 evalSetManager := evalsetlocal.New(evalset.WithBaseDir("<BaseDir>"))
 agentEvaluator, err := evaluation.New(appName, runner, evaluation.WithEvalSetManager(evalSetManager))
+if err != nil {
+	panic(err)
+}
+defer agentEvaluator.Close()
 ```
 
 In addition, if the default path structure does not meet your requirements, you can customize the file path rules by implementing the `Locator` interface. The interface definition is as follows:
@@ -979,6 +1022,10 @@ import (
 
 evalSetManager := evalsetlocal.New(evalset.WithLocator(&customLocator{}))
 agentEvaluator, err := evaluation.New(appName, runner, evaluation.WithEvalSetManager(evalSetManager))
+if err != nil {
+	panic(err)
+}
+defer agentEvaluator.Close()
 
 type customLocator struct {
 }
@@ -1028,6 +1075,10 @@ import (
 
 metricManager := metriclocal.New(metric.WithBaseDir("<BaseDir>"))
 agentEvaluator, err := evaluation.New(appName, runner, evaluation.WithMetricManager(metricManager))
+if err != nil {
+	panic(err)
+}
+defer agentEvaluator.Close()
 ```
 
 In addition, if the default path structure does not meet your requirements, you can customize the file path rules by implementing the `Locator` interface. The interface definition is as follows:
@@ -1051,6 +1102,10 @@ import (
 
 metricManager := metriclocal.New(metric.WithLocator(&customLocator{}))
 agentEvaluator, err := evaluation.New(appName, runner, evaluation.WithMetricManager(metricManager))
+if err != nil {
+	panic(err)
+}
+defer agentEvaluator.Close()
 
 type customLocator struct {
 }
@@ -1076,6 +1131,10 @@ import (
 
 evalResultManager := evalresultlocal.New(evalresult.WithBaseDir("<BaseDir>"))
 agentEvaluator, err := evaluation.New(appName, runner, evaluation.WithEvalResultManager(evalResultManager))
+if err != nil {
+	panic(err)
+}
+defer agentEvaluator.Close()
 ```
 
 In addition, if the default path structure does not meet your requirements, you can customize the file path rules by implementing the `Locator` interface. The interface definition is as follows:
@@ -1101,6 +1160,10 @@ import (
 
 evalResultManager := evalresultlocal.New(evalresult.WithLocator(&customLocator{}))
 agentEvaluator, err := evaluation.New(appName, runner, evaluation.WithEvalResultManager(evalResultManager))
+if err != nil {
+	panic(err)
+}
+defer agentEvaluator.Close()
 
 type customLocator struct {
 }
@@ -1134,6 +1197,63 @@ func (l *customLocator) List(baseDir, appName string) ([]string, error) {
 	return results, nil
 }
 ```
+
+### Trace evaluation mode
+
+Trace evaluation mode is used to evaluate an offline-collected execution trace, and evaluation does not invoke the Runner for inference.
+
+Set `evalMode: "trace"` in the target evalCase of the EvalSet, and fill `conversation` with the actual output invocation sequence, such as `userContent`, `finalResponse`, `tools`, and `intermediateResponses`. Since trace mode does not provide expected outputs, choose metrics that do not depend on expected outputs, such as `llm_rubric_response`.
+
+```json
+{
+  "evalSetId": "trace-basic",
+  "name": "trace-basic",
+  "evalCases": [
+    {
+      "evalId": "trace_calc_add",
+      "evalMode": "trace",
+      "conversation": [
+        {
+          "invocationId": "trace_calc_add-1",
+          "userContent": {
+            "role": "user",
+            "content": "calc add 123 456"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "calc result: 579"
+          },
+          "tools": [
+            {
+              "id": "call_00_example",
+              "name": "calculator",
+              "arguments": {
+                "a": 123,
+                "b": 456,
+                "operation": "add"
+              },
+              "result": {
+                "a": 123,
+                "b": 456,
+                "operation": "add",
+                "result": 579
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "trace-eval-app",
+        "userId": "demo-user"
+      }
+    }
+  ]
+}
+```
+
+For a complete example, see [examples/evaluation/trace][trace-eval-example].
+
+[trace-eval-example]: https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/trace
 
 ### Evaluation Criterion
 
@@ -1573,6 +1693,66 @@ An example of the corresponding metric config file:
 
 For a complete example, see [examples/evaluation/tooltrajectory](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/tooltrajectory).
 
+#### Final Response Evaluator
+
+The metric name corresponding to the final response evaluator is `final_response_avg_score`. It does not require an LLM and compares the Agent’s final response with the expected output using deterministic rules. It is suitable for cases where you need strict text or JSON output validation.
+
+Evaluation logic:
+
+- Use `FinalResponseCriterion` to compare `Invocation.FinalResponse.Content` for each invocation; a match scores 1, otherwise 0.
+- For multiple runs, take the average score across invocations and compare it with `EvalMetric.Threshold` to determine pass/fail.
+
+`FinalResponseCriterion` supports two criteria:
+
+- `text`: Compare plain text using `TextCriterion` with strategies like `exact/contains/regex`. For details, see [TextCriterion](#textcriterion).
+- `json`: Parse `FinalResponse.Content` as JSON and compare using `JSONCriterion`. You can configure `ignoreTree`, `numberTolerance`, and more. For details, see [JSONCriterion](#jsoncriterion).
+
+Code example:
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	cfinalresponse "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/finalresponse"
+	cjson "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
+	ctext "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
+)
+
+evalMetric := &metric.EvalMetric{
+	MetricName: "final_response_avg_score",
+	Threshold:  1.0,
+	Criterion: criterion.New(
+		criterion.WithFinalResponse(
+			cfinalresponse.New(
+				cfinalresponse.WithJSONCriterion(cjson.New()),
+				cfinalresponse.WithTextCriterion(ctext.New()),
+			),
+		),
+	),
+}
+```
+
+An example metric config file
+
+```json
+[
+  {
+    "metricName": "final_response_avg_score",
+    "threshold": 1,
+    "criterion": {
+      "finalResponse": {
+        "text": {
+          "matchStrategy": "exact"
+        },
+        "json": {
+          "matchStrategy": "exact"
+        }
+      }
+    }
+  }
+]
+```
+
 #### LLM Final Response Evaluator
 
 The metric name for the LLM final response evaluator is `llm_final_response`. It uses a judge model to determine whether the Agent’s final answer is valid. The judge prompt includes the user input, reference answer, and the Agent’s final answer, making it suitable for automatically checking the final text output.
@@ -1841,6 +2021,83 @@ An example metric config file:
 ```
 
 This evaluator requires the Agent’s tool calls to return retrieval results. See the complete example at [examples/evaluation/llm/knowledgerecall](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/llm/knowledgerecall).
+
+### Callback
+
+Evaluation supports registering callbacks at key points in the evaluation flow. Callbacks can be used for observability and instrumentation, passing `Context`, and adjusting request parameters.
+
+Create a callback registry with `service.NewCallbacks()`, register callback components, then pass it into `evaluation.New` using `evaluation.WithCallbacks`:
+
+```go
+import (
+	"context"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
+)
+
+callbacks := service.NewCallbacks()
+callbacks.Register("noop", &service.Callback{
+	BeforeInferenceSet: func(ctx context.Context, args *service.BeforeInferenceSetArgs) (*service.BeforeInferenceSetResult, error) {
+		return nil, nil
+	},
+	AfterInferenceSet: func(ctx context.Context, args *service.AfterInferenceSetArgs) (*service.AfterInferenceSetResult, error) {
+		return nil, nil
+	},
+	BeforeInferenceCase: func(ctx context.Context, args *service.BeforeInferenceCaseArgs) (*service.BeforeInferenceCaseResult, error) {
+		return nil, nil
+	},
+	AfterInferenceCase: func(ctx context.Context, args *service.AfterInferenceCaseArgs) (*service.AfterInferenceCaseResult, error) {
+		return nil, nil
+	},
+	BeforeEvaluateSet: func(ctx context.Context, args *service.BeforeEvaluateSetArgs) (*service.BeforeEvaluateSetResult, error) {
+		return nil, nil
+	},
+	AfterEvaluateSet: func(ctx context.Context, args *service.AfterEvaluateSetArgs) (*service.AfterEvaluateSetResult, error) {
+		return nil, nil
+	},
+	BeforeEvaluateCase: func(ctx context.Context, args *service.BeforeEvaluateCaseArgs) (*service.BeforeEvaluateCaseResult, error) {
+		return nil, nil
+	},
+	AfterEvaluateCase: func(ctx context.Context, args *service.AfterEvaluateCaseArgs) (*service.AfterEvaluateCaseResult, error) {
+		return nil, nil
+	},
+})
+
+agentEvaluator, err := evaluation.New(
+	appName,
+	runner,
+	evaluation.WithCallbacks(callbacks),
+)
+```
+
+For registering a single callback point, you can also use point-specific registration methods such as `callbacks.RegisterBeforeInferenceSet(name, fn)`.
+
+For a complete example, see [examples/evaluation/callbacks](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/callbacks).
+
+Callback points are described in the table below.
+
+| Callback | When |
+| --- | --- |
+| `BeforeInferenceSet` | Before the inference phase starts; runs once per EvalSet |
+| `AfterInferenceSet` | After the inference phase ends; runs once per EvalSet |
+| `BeforeInferenceCase` | Before a single EvalCase inference starts; runs once per EvalCase |
+| `AfterInferenceCase` | After a single EvalCase inference ends; runs once per EvalCase |
+| `BeforeEvaluateSet` | Before the evaluation phase starts; runs once per EvalSet |
+| `AfterEvaluateSet` | After the evaluation phase ends; runs once per EvalSet |
+| `BeforeEvaluateCase` | Before a single EvalCase evaluation starts; runs once per EvalCase |
+| `AfterEvaluateCase` | After a single EvalCase evaluation ends; runs once per EvalCase |
+
+Callbacks at the same point run in registration order. If any callback returns an `error`, execution aborts at that point. The error is wrapped with callback point, index, and component name.
+
+A callback returns `Result` and `error`. `Result` is optional and is used to pass an updated `Context` within the same callback point and to later stages; `error` aborts the flow and is returned. Common return forms include:
+
+- `return nil, nil`: continue using the current `ctx` for subsequent callbacks. If a previous callback at the same point has already updated `ctx` via `Result.Context`, this return form does not overwrite it.
+- `return result, nil`: update `ctx` to `result.Context`. Subsequent callbacks and later stages use the updated `ctx`.
+- `return nil, err`: abort the current callback point and return the error.
+
+When parallel inference is enabled with `evaluation.WithEvalCaseParallelInferenceEnabled(true)`, case-level callbacks may run concurrently. Since `args.Request` points to the same `*InferenceRequest`, treat it as read-only. If you need to mutate requests, do it in set-level callbacks.
+
+Per-case inference or evaluation failures usually are not propagated via `error`; they are written into `Result.Status` and `Result.ErrorMessage`. `After*CaseArgs.Error` is not used to carry per-case failure reasons. To determine whether a case failed, check `args.Result.Status` and `args.Result.ErrorMessage`.
 
 ## Best Practices
 

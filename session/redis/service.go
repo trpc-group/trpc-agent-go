@@ -35,6 +35,11 @@ var (
 	_ session.TrackService = (*Service)(nil)
 )
 
+const (
+	// trimScanBatchSize controls how many recent events are scanned per Redis call when trimming.
+	trimScanBatchSize int64 = 32
+)
+
 // SessionState is the state of a session.
 type SessionState struct {
 	ID        string           `json:"id"`
@@ -49,6 +54,7 @@ type SessionState struct {
 // UserState: appName + userId -> hash [key -> value(json)]
 // SessionState: appName + userId -> hash [sessionId -> SessionState(json)]
 // Event: appName + userId + sessionId -> sorted set [value: Event(json) score: timestamp]
+// TrackEvent: appName + userId + sessionId + trackName -> sorted set [value: TrackEvent(json) score: timestamp]
 type Service struct {
 	opts            ServiceOpts
 	redisClient     redis.UniversalClient
@@ -67,6 +73,24 @@ type sessionEventPair struct {
 type trackEventPair struct {
 	key   session.Key
 	event *session.TrackEvent
+}
+
+// trimEventOptions defines trimming behavior.
+type trimEventOptions struct {
+	// ConversationCount is the number of recent conversations to trim.
+	// A conversation is defined as all events sharing the same RequestID.
+	ConversationCount int
+}
+
+// TrimConversationOption customizes trimming.
+type TrimConversationOption func(*trimEventOptions)
+
+// WithCount sets the number of conversations to trim.
+// Each conversation is a group of events with the same RequestID.
+func WithCount(n int) TrimConversationOption {
+	return func(o *trimEventOptions) {
+		o.ConversationCount = n
+	}
 }
 
 // NewService creates a new redis session service.
@@ -147,9 +171,9 @@ func (s *Service) CreateSession(
 	}
 
 	// Use pipeline to store session and query states
-	sessKey := getSessionStateKey(key)
-	userStateKey := getUserStateKey(key)
-	appStateKey := getAppStateKey(key.AppName)
+	sessKey := s.getSessionStateKey(key)
+	userStateKey := s.getUserStateKey(key)
+	appStateKey := s.getAppStateKey(key.AppName)
 
 	sessBytes, err := json.Marshal(sessState)
 	if err != nil {
@@ -258,7 +282,7 @@ func (s *Service) UpdateAppState(ctx context.Context, appName string, state sess
 	}
 
 	pipe := s.redisClient.TxPipeline()
-	appStateKey := getAppStateKey(appName)
+	appStateKey := s.getAppStateKey(appName)
 	for k, v := range state {
 		k = strings.TrimPrefix(k, session.StateAppPrefix)
 		pipe.HSet(ctx, appStateKey, k, v)
@@ -281,7 +305,7 @@ func (s *Service) ListAppStates(ctx context.Context, appName string) (session.St
 		return nil, session.ErrAppNameRequired
 	}
 
-	appState, err := s.redisClient.HGetAll(ctx, getAppStateKey(appName)).Result()
+	appState, err := s.redisClient.HGetAll(ctx, s.getAppStateKey(appName)).Result()
 	// key not found, return empty state map
 	if err == redis.Nil {
 		return make(session.StateMap), nil
@@ -306,7 +330,7 @@ func (s *Service) DeleteAppState(ctx context.Context, appName string, key string
 	}
 
 	pipe := s.redisClient.TxPipeline()
-	pipe.HDel(ctx, getAppStateKey(appName), key)
+	pipe.HDel(ctx, s.getAppStateKey(appName), key)
 
 	// should not return redis.Nil error
 	if _, err := pipe.Exec(ctx); err != nil {
@@ -321,7 +345,7 @@ func (s *Service) UpdateUserState(ctx context.Context, userKey session.UserKey, 
 		return err
 	}
 	pipe := s.redisClient.TxPipeline()
-	userStateKey := getUserStateKey(session.Key{
+	userStateKey := s.getUserStateKey(session.Key{
 		AppName: userKey.AppName,
 		UserID:  userKey.UserID,
 	})
@@ -346,7 +370,7 @@ func (s *Service) ListUserStates(ctx context.Context, userKey session.UserKey) (
 	if err := userKey.CheckUserKey(); err != nil {
 		return nil, err
 	}
-	userState, err := s.redisClient.HGetAll(ctx, getUserStateKey(session.Key{
+	userState, err := s.redisClient.HGetAll(ctx, s.getUserStateKey(session.Key{
 		AppName: userKey.AppName,
 		UserID:  userKey.UserID,
 	})).Result()
@@ -384,7 +408,7 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 	}
 
 	// Get current session state
-	stateBytes, err := s.redisClient.HGet(ctx, getSessionStateKey(key), key.SessionID).Bytes()
+	stateBytes, err := s.redisClient.HGet(ctx, s.getSessionStateKey(key), key.SessionID).Bytes()
 	if err == redis.Nil {
 		return fmt.Errorf("redis session service update session state failed: session not found")
 	}
@@ -425,11 +449,11 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 
 	// Update session state in Redis
 	pipe := s.redisClient.TxPipeline()
-	pipe.HSet(ctx, getSessionStateKey(key), key.SessionID, string(updatedStateBytes))
+	pipe.HSet(ctx, s.getSessionStateKey(key), key.SessionID, string(updatedStateBytes))
 
 	// Refresh TTL if configured
 	if s.opts.sessionTTL > 0 {
-		pipe.Expire(ctx, getSessionStateKey(key), s.opts.sessionTTL)
+		pipe.Expire(ctx, s.getSessionStateKey(key), s.opts.sessionTTL)
 	}
 
 	if _, err := pipe.Exec(ctx); err != nil {
@@ -449,7 +473,7 @@ func (s *Service) DeleteUserState(ctx context.Context, userKey session.UserKey, 
 	}
 
 	pipe := s.redisClient.TxPipeline()
-	pipe.HDel(ctx, getUserStateKey(session.Key{
+	pipe.HDel(ctx, s.getUserStateKey(session.Key{
 		AppName: userKey.AppName,
 		UserID:  userKey.UserID,
 	}), key)
@@ -584,14 +608,102 @@ func (s *Service) AppendTrackEvent(
 	return nil
 }
 
+// TrimConversations trims recent conversations and returns the deleted events.
+// A conversation is defined as all events sharing the same RequestID.
+// By default, it trims 1 conversation.
+func (s *Service) TrimConversations(
+	ctx context.Context,
+	key session.Key,
+	options ...TrimConversationOption,
+) ([]event.Event, error) {
+	if err := key.CheckSessionKey(); err != nil {
+		return nil, err
+	}
+	opt := &trimEventOptions{
+		ConversationCount: 1,
+	}
+	for _, o := range options {
+		o(opt)
+	}
+	if opt.ConversationCount <= 0 {
+		opt.ConversationCount = 1
+	}
+
+	eventKey := s.getEventKey(key)
+	targetReqIDs := make(map[string]struct{})
+	var toDelete []any
+	var deletedEvents []event.Event
+	var offset int64
+	stop := false
+
+	for !stop {
+		batch, err := s.redisClient.ZRevRange(
+			ctx,
+			eventKey,
+			offset,
+			offset+trimScanBatchSize-1,
+		).Result()
+		if err != nil && err != redis.Nil {
+			return nil, fmt.Errorf("trim events: load events: %w", err)
+		}
+		if len(batch) == 0 {
+			break
+		}
+
+		for _, raw := range batch {
+			var evt event.Event
+			if err := json.Unmarshal([]byte(raw), &evt); err != nil {
+				return nil, fmt.Errorf("trim events: unmarshal event: %w", err)
+			}
+			if evt.RequestID == "" {
+				continue
+			}
+
+			if _, ok := targetReqIDs[evt.RequestID]; !ok {
+				if len(targetReqIDs) >= opt.ConversationCount {
+					stop = true
+					break
+				}
+				targetReqIDs[evt.RequestID] = struct{}{}
+			}
+
+			toDelete = append(toDelete, raw)
+			deletedEvents = append(deletedEvents, evt)
+		}
+
+		if stop {
+			break
+		}
+		offset += trimScanBatchSize
+	}
+
+	if len(toDelete) == 0 {
+		return nil, nil
+	}
+
+	// Batch remove from ZSet.
+	pipe := s.redisClient.TxPipeline()
+	pipe.ZRem(ctx, eventKey, toDelete...)
+	// Refresh TTL for all session-related keys to keep them consistent.
+	sessKey := s.getSessionStateKey(key)
+	sumKey := s.getSessionSummaryKey(key)
+	appStateKey := s.getAppStateKey(key.AppName)
+	userStateKey := s.getUserStateKey(key)
+	s.appendSessionTTL(ctx, pipe, key, sessKey, sumKey, appStateKey, userStateKey)
+	if _, err := pipe.Exec(ctx); err != nil {
+		return nil, fmt.Errorf("trim events: remove events: %w", err)
+	}
+
+	// Reverse to return events in chronological order.
+	for i, j := 0, len(deletedEvents)-1; i < j; i, j = i+1, j-1 {
+		deletedEvents[i], deletedEvents[j] = deletedEvents[j], deletedEvents[i]
+	}
+	return deletedEvents, nil
+}
+
 // Close closes the service.
 func (s *Service) Close() error {
 	s.once.Do(func() {
-		// Close redis connection.
-		if s.redisClient != nil {
-			s.redisClient.Close()
-		}
-
 		// Close event pair channels and wait for persist workers.
 		for _, ch := range s.eventPairChans {
 			close(ch)
@@ -606,43 +718,57 @@ func (s *Service) Close() error {
 		if s.asyncWorker != nil {
 			s.asyncWorker.Stop()
 		}
+
+		// Close redis connection after all workers are stopped.
+		if s.redisClient != nil {
+			s.redisClient.Close()
+		}
 	})
 
 	return nil
 }
 
-func getAppStateKey(appName string) string {
-	return fmt.Sprintf("appstate:{%s}", appName)
+// prefixedKey adds the configured key prefix to the given base key.
+// If no prefix is configured, returns the base key unchanged.
+func (s *Service) prefixedKey(base string) string {
+	if s.opts.keyPrefix != "" {
+		return s.opts.keyPrefix + ":" + base
+	}
+	return base
 }
 
-func getUserStateKey(key session.Key) string {
-	return fmt.Sprintf("userstate:{%s}:%s", key.AppName, key.UserID)
+func (s *Service) getAppStateKey(appName string) string {
+	return s.prefixedKey(fmt.Sprintf("appstate:{%s}", appName))
 }
 
-func getEventKey(key session.Key) string {
-	return fmt.Sprintf("event:{%s}:%s:%s", key.AppName, key.UserID, key.SessionID)
+func (s *Service) getUserStateKey(key session.Key) string {
+	return s.prefixedKey(fmt.Sprintf("userstate:{%s}:%s", key.AppName, key.UserID))
 }
 
-func getTrackKey(key session.Key, track session.Track) string {
-	return fmt.Sprintf("track:{%s}:%s:%s:%s", key.AppName, key.UserID, key.SessionID, track)
+func (s *Service) getEventKey(key session.Key) string {
+	return s.prefixedKey(fmt.Sprintf("event:{%s}:%s:%s", key.AppName, key.UserID, key.SessionID))
 }
 
-func getSessionStateKey(key session.Key) string {
-	return fmt.Sprintf("sess:{%s}:%s", key.AppName, key.UserID)
+func (s *Service) getTrackKey(key session.Key, track session.Track) string {
+	return s.prefixedKey(fmt.Sprintf("track:{%s}:%s:%s:%s", key.AppName, key.UserID, key.SessionID, track))
 }
 
-func getSessionSummaryKey(key session.Key) string {
-	return fmt.Sprintf("sesssum:{%s}:%s", key.AppName, key.UserID)
+func (s *Service) getSessionStateKey(key session.Key) string {
+	return s.prefixedKey(fmt.Sprintf("sess:{%s}:%s", key.AppName, key.UserID))
+}
+
+func (s *Service) getSessionSummaryKey(key session.Key) string {
+	return s.prefixedKey(fmt.Sprintf("sesssum:{%s}:%s", key.AppName, key.UserID))
 }
 
 func (s *Service) fetchSessionMeta(
 	ctx context.Context,
 	key session.Key,
 ) (*SessionState, *redis.StringCmd, session.StateMap, session.StateMap, error) {
-	sessKey := getSessionStateKey(key)
-	userStateKey := getUserStateKey(key)
-	appStateKey := getAppStateKey(key.AppName)
-	sessSummaryKey := getSessionSummaryKey(key)
+	sessKey := s.getSessionStateKey(key)
+	userStateKey := s.getUserStateKey(key)
+	appStateKey := s.getAppStateKey(key.AppName)
+	sessSummaryKey := s.getSessionSummaryKey(key)
 
 	pipe := s.redisClient.Pipeline()
 	userStateCmd := pipe.HGetAll(ctx, userStateKey)
@@ -685,7 +811,7 @@ func (s *Service) appendSessionTTL(
 ) {
 	if s.opts.sessionTTL > 0 {
 		pipe.Expire(ctx, sessKey, s.opts.sessionTTL)
-		pipe.Expire(ctx, getEventKey(key), s.opts.sessionTTL)
+		pipe.Expire(ctx, s.getEventKey(key), s.opts.sessionTTL)
 		pipe.Expire(ctx, sessSummaryKey, s.opts.sessionTTL)
 	}
 	if s.opts.appStateTTL > 0 {
@@ -781,9 +907,9 @@ func (s *Service) listSessions(
 		AppName: key.AppName,
 		UserID:  key.UserID,
 	}
-	userStateCmd := pipe.HGetAll(ctx, getUserStateKey(sessKey))
-	appStateCmd := pipe.HGetAll(ctx, getAppStateKey(sessKey.AppName))
-	sessStatesCmd := pipe.HGetAll(ctx, getSessionStateKey(sessKey))
+	userStateCmd := pipe.HGetAll(ctx, s.getUserStateKey(sessKey))
+	appStateCmd := pipe.HGetAll(ctx, s.getAppStateKey(sessKey.AppName))
+	sessStatesCmd := pipe.HGetAll(ctx, s.getSessionStateKey(sessKey))
 	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
 		return nil, fmt.Errorf("get session state failed: %w", err)
 	}
@@ -862,7 +988,7 @@ func (s *Service) getEventsList(
 ) ([][]event.Event, error) {
 	pipe := s.redisClient.Pipeline()
 	for _, key := range sessionKeys {
-		pipe.ZRange(ctx, getEventKey(key), 0, -1)
+		pipe.ZRange(ctx, s.getEventKey(key), 0, -1)
 	}
 	cmds, err := pipe.Exec(ctx)
 	if err != nil && err != redis.Nil {
@@ -938,7 +1064,7 @@ func (s *Service) buildTrackQueries(
 	for i, key := range sessionKeys {
 		tracks := trackLists[i]
 		for _, track := range tracks {
-			trackKey := getTrackKey(key, track)
+			trackKey := s.getTrackKey(key, track)
 			zrangeBy := &redis.ZRangeBy{
 				Min: minScore,
 				Max: maxScore,
@@ -1125,7 +1251,7 @@ func processEventCmd(
 }
 
 func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Event) error {
-	stateBytes, err := s.redisClient.HGet(ctx, getSessionStateKey(key), key.SessionID).Bytes()
+	stateBytes, err := s.redisClient.HGet(ctx, s.getSessionStateKey(key), key.SessionID).Bytes()
 	if err != nil {
 		return fmt.Errorf("get session state failed: %w", err)
 	}
@@ -1152,21 +1278,21 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 	txPipe := s.redisClient.TxPipeline()
 
 	// update session state
-	txPipe.HSet(ctx, getSessionStateKey(key), key.SessionID, string(updatedStateBytes))
+	txPipe.HSet(ctx, s.getSessionStateKey(key), key.SessionID, string(updatedStateBytes))
 	// Set TTL for session state and event list if configured
 	if s.opts.sessionTTL > 0 {
-		txPipe.Expire(ctx, getSessionStateKey(key), s.opts.sessionTTL)
+		txPipe.Expire(ctx, s.getSessionStateKey(key), s.opts.sessionTTL)
 	}
 
 	// update event list if the event has response and is not partial
 	if event.Response != nil && !event.IsPartial && event.IsValidContent() {
-		txPipe.ZAdd(ctx, getEventKey(key), redis.Z{
+		txPipe.ZAdd(ctx, s.getEventKey(key), redis.Z{
 			Score:  float64(event.Timestamp.UnixNano()),
 			Member: eventBytes,
 		})
 		// Set TTL for session state and event list if configured
 		if s.opts.sessionTTL > 0 {
-			txPipe.Expire(ctx, getEventKey(key), s.opts.sessionTTL)
+			txPipe.Expire(ctx, s.getEventKey(key), s.opts.sessionTTL)
 		}
 	}
 
@@ -1177,7 +1303,7 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 }
 
 func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent *session.TrackEvent) error {
-	stateBytes, err := s.redisClient.HGet(ctx, getSessionStateKey(key), key.SessionID).Bytes()
+	stateBytes, err := s.redisClient.HGet(ctx, s.getSessionStateKey(key), key.SessionID).Bytes()
 	if err != nil {
 		return fmt.Errorf("get session state failed: %w", err)
 	}
@@ -1211,14 +1337,14 @@ func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent
 	txPipe := s.redisClient.TxPipeline()
 
 	// Update session state.
-	txPipe.HSet(ctx, getSessionStateKey(key), key.SessionID, string(updatedStateBytes))
+	txPipe.HSet(ctx, s.getSessionStateKey(key), key.SessionID, string(updatedStateBytes))
 	// Set TTL for session state if configured.
 	if s.opts.sessionTTL > 0 {
-		txPipe.Expire(ctx, getSessionStateKey(key), s.opts.sessionTTL)
+		txPipe.Expire(ctx, s.getSessionStateKey(key), s.opts.sessionTTL)
 	}
 
 	// Update track event list.
-	trackKey := getTrackKey(key, trackEvent.Track)
+	trackKey := s.getTrackKey(key, trackEvent.Track)
 	txPipe.ZAdd(ctx, trackKey, redis.Z{
 		Score:  float64(trackEvent.Timestamp.UnixNano()),
 		Member: eventBytes,
@@ -1235,7 +1361,7 @@ func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent
 }
 
 func (s *Service) listTracksForSession(ctx context.Context, key session.Key) ([]session.Track, error) {
-	bytes, err := s.redisClient.HGet(ctx, getSessionStateKey(key), key.SessionID).Bytes()
+	bytes, err := s.redisClient.HGet(ctx, s.getSessionStateKey(key), key.SessionID).Bytes()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
 			return nil, nil
@@ -1251,15 +1377,15 @@ func (s *Service) listTracksForSession(ctx context.Context, key session.Key) ([]
 
 func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error {
 	txPipe := s.redisClient.TxPipeline()
-	txPipe.HDel(ctx, getSessionStateKey(key), key.SessionID)
-	txPipe.HDel(ctx, getSessionSummaryKey(key), key.SessionID)
-	txPipe.Del(ctx, getEventKey(key))
+	txPipe.HDel(ctx, s.getSessionStateKey(key), key.SessionID)
+	txPipe.HDel(ctx, s.getSessionSummaryKey(key), key.SessionID)
+	txPipe.Del(ctx, s.getEventKey(key))
 	tracks, err := s.listTracksForSession(ctx, key)
 	if err != nil {
 		return fmt.Errorf("list session tracks: %w", err)
 	}
 	for _, track := range tracks {
-		txPipe.Del(ctx, getTrackKey(key, track))
+		txPipe.Del(ctx, s.getTrackKey(key, track))
 	}
 	if _, err := txPipe.Exec(ctx); err != nil && err != redis.Nil {
 		return fmt.Errorf("redis session service delete session state failed: %w", err)
@@ -1297,7 +1423,7 @@ func (s *Service) startAsyncPersistWorker() {
 						"session key:%s",
 					cap(eventPairChan),
 					len(eventPairChan),
-					getSessionStateKey(eventPair.key),
+					s.getSessionStateKey(eventPair.key),
 				)
 				if err := s.addEvent(ctx, eventPair.key, eventPair.event); err != nil {
 					log.ErrorfContext(
@@ -1327,8 +1453,8 @@ func (s *Service) startAsyncPersistWorker() {
 						"session key:%s, track key:%s",
 					cap(trackEventChan),
 					len(trackEventChan),
-					getSessionStateKey(trackEvent.key),
-					getTrackKey(
+					s.getSessionStateKey(trackEvent.key),
+					s.getTrackKey(
 						trackEvent.key,
 						trackEvent.event.Track,
 					),

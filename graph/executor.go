@@ -1,5 +1,6 @@
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -16,6 +17,7 @@ import (
 	"fmt"
 	"maps"
 	"reflect"
+	"runtime"
 	"runtime/debug"
 	"sort"
 	"strings"
@@ -45,6 +47,14 @@ var (
 	defaultBarrierWaitTimeout    = 5 * time.Second  // Default timeout for barrier completion waits.
 )
 
+func defaultMaxConcurrency() int {
+	maxConcurrency := runtime.GOMAXPROCS(0)
+	if maxConcurrency <= 0 {
+		return 1
+	}
+	return maxConcurrency
+}
+
 // Executor executes a graph with the given initial state using Pregel-style BSP execution.
 //
 // Runtime isolation principle:
@@ -59,6 +69,7 @@ type Executor struct {
 	graph                 *Graph
 	channelBufferSize     int
 	maxSteps              int
+	maxConcurrency        int
 	stepTimeout           time.Duration
 	nodeTimeout           time.Duration
 	checkpointSaveTimeout time.Duration
@@ -78,6 +89,10 @@ type ExecutorOptions struct {
 	ChannelBufferSize int
 	// MaxSteps is the maximum number of steps for graph execution.
 	MaxSteps int
+	// MaxConcurrency is the maximum number of tasks executed in parallel.
+	//
+	// When <= 0, it defaults to runtime.GOMAXPROCS(0).
+	MaxConcurrency int
 	// StepTimeout is the timeout for each step (default: 0 = no timeout).
 	StepTimeout time.Duration
 	// NodeTimeout is the timeout for individual node execution
@@ -102,6 +117,15 @@ func WithChannelBufferSize(size int) ExecutorOption {
 func WithMaxSteps(maxSteps int) ExecutorOption {
 	return func(opts *ExecutorOptions) {
 		opts.MaxSteps = maxSteps
+	}
+}
+
+// WithMaxConcurrency sets the maximum number of tasks executed in parallel.
+//
+// When max <= 0, it uses the default value (runtime.GOMAXPROCS(0)).
+func WithMaxConcurrency(max int) ExecutorOption {
+	return func(opts *ExecutorOptions) {
+		opts.MaxConcurrency = max
 	}
 }
 
@@ -152,12 +176,17 @@ func NewExecutor(graph *Graph, opts ...ExecutorOption) (*Executor, error) {
 	options := ExecutorOptions{
 		ChannelBufferSize:     defaultChannelBufferSize,
 		MaxSteps:              defaultMaxSteps,
+		MaxConcurrency:        defaultMaxConcurrency(),
 		StepTimeout:           defaultStepTimeout,
 		CheckpointSaveTimeout: defaultCheckpointSaveTimeout,
 	}
 	// Apply function options.
 	for _, opt := range opts {
 		opt(&options)
+	}
+	maxConcurrency := options.MaxConcurrency
+	if maxConcurrency <= 0 {
+		maxConcurrency = defaultMaxConcurrency()
 	}
 	// Calculate node timeout: use provided value or derive from step timeout if step timeout is set.
 	nodeTimeout := options.NodeTimeout
@@ -170,6 +199,7 @@ func NewExecutor(graph *Graph, opts ...ExecutorOption) (*Executor, error) {
 		graph:                 graph,
 		channelBufferSize:     options.ChannelBufferSize,
 		maxSteps:              options.MaxSteps,
+		maxConcurrency:        maxConcurrency,
 		stepTimeout:           options.StepTimeout,
 		nodeTimeout:           nodeTimeout,
 		checkpointSaveTimeout: options.CheckpointSaveTimeout,
@@ -270,8 +300,21 @@ func (e *Executor) executeGraph(
 	eventChan chan<- *event.Event,
 	startTime time.Time,
 ) error {
-	execState, checkpointConfig, resumed, resumedStep, lastCkpt, restoredPending :=
-		e.prepareCheckpointAndState(ctx, initialState, invocation)
+	interruptState := graphInterruptFromContext(ctx)
+	ctx, extInterrupt := newExternalInterruptWatcher(ctx, interruptState)
+	if extInterrupt != nil {
+		defer extInterrupt.stop()
+	}
+
+	execState, checkpointConfig, resumed, resumedStep, lastCkpt,
+		restoredPending, prepErr := e.prepareCheckpointAndState(
+		ctx,
+		initialState,
+		invocation,
+	)
+	if prepErr != nil {
+		return prepErr
+	}
 
 	execState = e.processResumeCommand(execState, initialState)
 
@@ -317,7 +360,14 @@ func (e *Executor) executeGraph(
 		startStep = resumedStep + 1
 	}
 
-	stepsExecuted, err := e.runBspLoop(ctx, invocation, execCtx, &checkpointConfig, startStep)
+	stepsExecuted, err := e.runBspLoop(
+		ctx,
+		invocation,
+		execCtx,
+		&checkpointConfig,
+		startStep,
+		extInterrupt,
+	)
 	if err != nil {
 		return err
 	}
@@ -331,10 +381,10 @@ func (e *Executor) prepareCheckpointAndState(
 	ctx context.Context,
 	initialState State,
 	invocation *agent.Invocation,
-) (State, map[string]any, bool, int, *Checkpoint, []PendingWrite) {
+) (State, map[string]any, bool, int, *Checkpoint, []PendingWrite, error) {
 	if e.checkpointSaver == nil {
 		execState := e.initializeState(initialState)
-		return execState, nil, false, 0, nil, nil
+		return execState, nil, false, 0, nil, nil, nil
 	}
 	return e.resumeOrInitWithSaver(ctx, initialState, invocation)
 }
@@ -344,7 +394,7 @@ func (e *Executor) resumeOrInitWithSaver(
 	ctx context.Context,
 	initialState State,
 	invocation *agent.Invocation,
-) (State, map[string]any, bool, int, *Checkpoint, []PendingWrite) {
+) (State, map[string]any, bool, int, *Checkpoint, []PendingWrite, error) {
 	var lineageID string
 	if id, ok := initialState[CfgKeyLineageID].(string); ok && id != "" {
 		lineageID = id
@@ -362,6 +412,7 @@ func (e *Executor) resumeOrInitWithSaver(
 	if ns, ok := initialState[CfgKeyCheckpointNS].(string); ok {
 		namespace = ns
 	}
+	_, resumeRequested := initialState[CfgKeyCheckpointID]
 	if id, ok := initialState[CfgKeyCheckpointID].(string); ok {
 		checkpointID = id
 		log.DebugfContext(
@@ -380,10 +431,37 @@ func (e *Executor) resumeOrInitWithSaver(
 	)
 
 	tuple, err := e.checkpointSaver.GetTuple(ctx, checkpointConfig)
-	if err != nil || tuple == nil || tuple.Checkpoint == nil {
+	if err != nil {
+		if resumeRequested {
+			return nil, nil, false, 0, nil, nil, fmt.Errorf(
+				"get checkpoint tuple (ln=%s ns=%s ck=%s): %w",
+				lineageID,
+				namespace,
+				checkpointID,
+				err,
+			)
+		}
+		log.DebugfContext(
+			ctx,
+			"Failed to load checkpoint, starting fresh: %v",
+			err,
+		)
+		execState := e.initializeState(initialState)
+		return execState, checkpointConfig, false, 0, nil, nil, nil
+	}
+	if tuple == nil || tuple.Checkpoint == nil {
+		if resumeRequested {
+			return nil, nil, false, 0, nil, nil, fmt.Errorf(
+				"%w: lineage=%s checkpoint_id=%s namespace=%s",
+				ErrCheckpointNotFound,
+				lineageID,
+				checkpointID,
+				namespace,
+			)
+		}
 		log.DebugContext(ctx, "No checkpoint found, starting fresh")
 		execState := e.initializeState(initialState)
-		return execState, checkpointConfig, false, 0, nil, nil
+		return execState, checkpointConfig, false, 0, nil, nil, nil
 	}
 
 	log.DebugfContext(
@@ -417,7 +495,9 @@ func (e *Executor) resumeOrInitWithSaver(
 		tuple.Checkpoint.NextChannels,
 	)
 	e.applyExecutableNextNodes(restored, tuple)
-	return restored, checkpointConfig, true, resumedStep, lastCheckpoint, pending
+	e.applyGraphInterruptInputs(restored, tuple)
+	return restored, checkpointConfig, true, resumedStep, lastCheckpoint,
+		pending, nil
 }
 
 // restoreStateFromCheckpoint converts checkpoint channel values back into state.
@@ -428,6 +508,11 @@ func (e *Executor) restoreStateFromCheckpoint(tuple *CheckpointTuple) State {
 	restored := make(State)
 	for k, v := range tuple.Checkpoint.ChannelValues {
 		restored[k] = v
+	}
+	if raw, ok := restored[StateKeyOneShotMessages]; ok {
+		if msgs, err := decodeMessages(raw); err == nil {
+			restored[StateKeyOneShotMessages] = msgs
+		}
 	}
 	if e.graph.Schema() == nil {
 		return restored
@@ -456,7 +541,10 @@ func (e *Executor) restoreStateFromCheckpoint(tuple *CheckpointTuple) State {
 // not internal (do not start with "_") and not already present in restored.
 // This preserves the previous behavior where pre-populated inputs could be
 // respected when resuming from checkpoints.
-func (e *Executor) mergeInitialStateNonInternal(restored, initial State) State {
+func (e *Executor) mergeInitialStateNonInternal(
+	restored,
+	initial State,
+) State {
 	for key, value := range initial {
 		if _, exists := restored[key]; !exists && !strings.HasPrefix(key, "_") {
 			restored[key] = value
@@ -468,7 +556,10 @@ func (e *Executor) mergeInitialStateNonInternal(restored, initial State) State {
 // applyExecutableNextNodes sets StateKeyNextNodes when suitable.
 // This is important for initial checkpoints (step -1) that have the entry
 // point set, so a forked resume can continue from the beginning.
-func (e *Executor) applyExecutableNextNodes(restored State, tuple *CheckpointTuple) {
+func (e *Executor) applyExecutableNextNodes(
+	restored State,
+	tuple *CheckpointTuple,
+) {
 	if len(tuple.PendingWrites) != 0 || len(tuple.Checkpoint.NextNodes) == 0 {
 		return
 	}
@@ -478,6 +569,129 @@ func (e *Executor) applyExecutableNextNodes(restored State, tuple *CheckpointTup
 			return
 		}
 	}
+}
+
+func (e *Executor) applyGraphInterruptInputs(
+	restored State,
+	tuple *CheckpointTuple,
+) {
+	if restored == nil || tuple == nil || tuple.Metadata == nil {
+		return
+	}
+	if tuple.Metadata.Extra == nil {
+		return
+	}
+	raw, ok := tuple.Metadata.Extra[CheckpointMetaKeyGraphInterruptInputs]
+	if !ok || raw == nil {
+		return
+	}
+
+	switch m := raw.(type) {
+	case map[string]State:
+		copied := copyGraphInterruptInputsState(m)
+		if len(copied) > 0 {
+			restored[StateKeyGraphInterruptInputs] = copied
+		}
+	case map[string]any:
+		copied := copyGraphInterruptInputsAny(m)
+		if len(copied) > 0 {
+			restored[StateKeyGraphInterruptInputs] = copied
+		}
+	case map[string][]any:
+		copied := copyGraphInterruptInputsAnySlice(m)
+		if len(copied) > 0 {
+			restored[StateKeyGraphInterruptInputs] = copied
+		}
+	case map[string][]State:
+		copied := copyGraphInterruptInputsStateSlice(m)
+		if len(copied) > 0 {
+			restored[StateKeyGraphInterruptInputs] = copied
+		}
+	}
+}
+
+func copyGraphInterruptInputsState(
+	inputs map[string]State,
+) map[string]State {
+	if len(inputs) == 0 {
+		return nil
+	}
+
+	copied := make(map[string]State, len(inputs))
+	for nodeID, input := range inputs {
+		if nodeID == "" || input == nil {
+			continue
+		}
+		copied[nodeID] = input
+	}
+	return copied
+}
+
+func copyGraphInterruptInputsAny(inputs map[string]any) map[string]any {
+	if len(inputs) == 0 {
+		return nil
+	}
+
+	copied := make(map[string]any, len(inputs))
+	for nodeID, input := range inputs {
+		if nodeID == "" || input == nil {
+			continue
+		}
+		copied[nodeID] = input
+	}
+	return copied
+}
+
+func copyGraphInterruptInputsAnySlice(
+	inputs map[string][]any,
+) map[string]any {
+	if len(inputs) == 0 {
+		return nil
+	}
+
+	copied := make(map[string]any, len(inputs))
+	for nodeID, values := range inputs {
+		if nodeID == "" || len(values) == 0 {
+			continue
+		}
+		cleaned := make([]any, 0, len(values))
+		for _, input := range values {
+			if input == nil {
+				continue
+			}
+			cleaned = append(cleaned, input)
+		}
+		if len(cleaned) > 0 {
+			copied[nodeID] = cleaned
+		}
+	}
+	return copied
+}
+
+func copyGraphInterruptInputsStateSlice(
+	inputs map[string][]State,
+) map[string]any {
+	if len(inputs) == 0 {
+		return nil
+	}
+
+	copied := make(map[string]any, len(inputs))
+	for nodeID, values := range inputs {
+		if nodeID == "" || len(values) == 0 {
+			continue
+		}
+		cleaned := make([]any, 0, len(values))
+		for _, input := range values {
+			if input == nil {
+				continue
+			}
+			cleaned = append(cleaned, input)
+		}
+		if len(cleaned) > 0 {
+			copied[nodeID] = cleaned
+		}
+	}
+	return copied
 }
 
 // processResumeCommand applies resume-related fields from the initial state.
@@ -491,11 +705,22 @@ func (e *Executor) processResumeCommand(execState, initialState State) State {
 			execState[StateKeyResumeMap] = cmd.ResumeMap
 		}
 		delete(execState, StateKeyCommand)
+		return execState
+	}
+	if cmd, ok := initialState[StateKeyCommand].(*ResumeCommand); ok {
+		if cmd.Resume != nil {
+			execState[ResumeChannel] = cmd.Resume
+		}
+		if cmd.ResumeMap != nil {
+			execState[StateKeyResumeMap] = cmd.ResumeMap
+		}
+		delete(execState, StateKeyCommand)
 	}
 	return execState
 }
 
-// restoreVersionsSeen restores per-node versionsSeen from the last checkpoint.
+// restoreVersionsSeen restores per-node versionsSeen from the last
+// checkpoint.
 func (e *Executor) restoreVersionsSeen(
 	resumed bool,
 	lastCheckpoint *Checkpoint,
@@ -620,69 +845,581 @@ func (e *Executor) runBspLoop(
 	execCtx *ExecutionContext,
 	checkpointConfig *map[string]any,
 	startStep int,
+	extInterrupt *externalInterruptWatcher,
 ) (int, error) {
 	var stepsExecuted int
 	for step := startStep; step < e.maxSteps; step++ {
-		var stepCtx context.Context
-		var stepCancel context.CancelFunc
-		if e.stepTimeout > 0 {
-			stepCtx, stepCancel = context.WithTimeout(ctx, e.stepTimeout)
-		} else {
-			stepCtx, stepCancel = context.WithCancel(ctx)
-		}
-		var tasks []*Task
-		var err error
-		if step == 0 && execCtx.resumed && startStep > 0 {
-			tasks = e.planBasedOnChannelTriggers(execCtx, step)
-		} else {
-			tasks, err = e.planStep(ctx, invocation, execCtx, step)
-		}
+		stop, executed, err := e.runBspStep(
+			ctx,
+			invocation,
+			execCtx,
+			checkpointConfig,
+			startStep,
+			step,
+			extInterrupt,
+		)
 		if err != nil {
-			stepCancel()
-			return stepsExecuted, fmt.Errorf("planning failed at step %d: %w", step, err)
+			return stepsExecuted, err
 		}
-		if len(tasks) == 0 {
-			stepCancel()
+		if stop {
 			break
 		}
-		if err := e.executeStep(stepCtx, invocation, execCtx, tasks, step); err != nil {
-			if interrupt, ok := GetInterruptError(err); ok {
-				stepCancel()
-				return stepsExecuted, e.handleInterrupt(stepCtx, invocation, execCtx, interrupt, step, *checkpointConfig)
-			}
-			stepCancel()
-			return stepsExecuted, fmt.Errorf("execution failed at step %d: %w", step, err)
+		if executed {
+			stepsExecuted++
 		}
-		if err := e.updateChannels(stepCtx, invocation, execCtx, step); err != nil {
-			stepCancel()
-			return stepsExecuted, fmt.Errorf("update failed at step %d: %w", step, err)
-		}
-		if e.checkpointSaver != nil && *checkpointConfig != nil {
-			log.DebugfContext(
-				ctx,
-				"Creating checkpoint at step %d",
-				step,
-			)
-			if err := e.createCheckpointAndSave(
-				ctx,
-				invocation,
-				checkpointConfig,
-				CheckpointSourceLoop,
-				step,
-				execCtx,
-			); err != nil {
-				log.DebugfContext(
-					ctx,
-					"Failed to create checkpoint at step %d: %v",
-					step,
-					err,
-				)
-			}
-		}
-		stepCancel()
-		stepsExecuted++
 	}
 	return stepsExecuted, nil
+}
+
+func (e *Executor) runBspStep(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	execCtx *ExecutionContext,
+	checkpointConfig *map[string]any,
+	startStep int,
+	step int,
+	extInterrupt *externalInterruptWatcher,
+) (stop bool, executed bool, err error) {
+	stepCtx, stepCancel := e.stepContext(ctx)
+	defer stepCancel()
+
+	tasks, err := e.planTasksForBspStep(
+		ctx,
+		invocation,
+		execCtx,
+		startStep,
+		step,
+	)
+	if err != nil {
+		return false, false, err
+	}
+	if len(tasks) == 0 {
+		return true, false, nil
+	}
+
+	if handled, err := e.maybeHandleExternalInterruptBeforeStep(
+		ctx,
+		stepCtx,
+		invocation,
+		execCtx,
+		tasks,
+		step,
+		checkpointConfig,
+		extInterrupt,
+	); handled || err != nil {
+		return false, false, err
+	}
+	if handled, err := e.maybeHandleStaticInterruptBeforeStep(
+		stepCtx,
+		invocation,
+		execCtx,
+		tasks,
+		step,
+		checkpointConfig,
+	); handled || err != nil {
+		return false, false, err
+	}
+
+	report := e.newStepExecutionReportIfNeeded(extInterrupt)
+	if err := e.executeStepWithInterruptHandling(
+		stepCtx,
+		ctx,
+		invocation,
+		execCtx,
+		tasks,
+		step,
+		checkpointConfig,
+		report,
+		extInterrupt,
+	); err != nil {
+		return false, false, err
+	}
+
+	if err := e.updateChannelsForStep(
+		stepCtx,
+		invocation,
+		execCtx,
+		step,
+	); err != nil {
+		return false, false, err
+	}
+	if handled, err := e.maybeHandleStaticInterruptAfterStep(
+		stepCtx,
+		invocation,
+		execCtx,
+		tasks,
+		step,
+		checkpointConfig,
+	); handled || err != nil {
+		return false, false, err
+	}
+
+	e.maybeCreateLoopCheckpoint(
+		ctx,
+		invocation,
+		execCtx,
+		checkpointConfig,
+		step,
+	)
+	return false, true, nil
+}
+
+func (e *Executor) stepContext(
+	ctx context.Context,
+) (context.Context, context.CancelFunc) {
+	if e.stepTimeout > 0 {
+		return context.WithTimeout(ctx, e.stepTimeout)
+	}
+	return context.WithCancel(ctx)
+}
+
+func (e *Executor) planTasksForBspStep(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	execCtx *ExecutionContext,
+	startStep int,
+	step int,
+) ([]*Task, error) {
+	if step == 0 && execCtx.resumed && startStep > 0 {
+		return e.planBasedOnChannelTriggers(execCtx, step), nil
+	}
+	tasks, err := e.planStep(ctx, invocation, execCtx, step)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"planning failed at step %d: %w",
+			step,
+			err,
+		)
+	}
+	return tasks, nil
+}
+
+func nextNodesFromTasks(tasks []*Task) []string {
+	if len(tasks) == 0 {
+		return nil
+	}
+	next := make([]string, 0, len(tasks))
+	for _, task := range tasks {
+		if task == nil || task.NodeID == "" || task.NodeID == End {
+			continue
+		}
+		next = append(next, task.NodeID)
+	}
+	return next
+}
+
+func (e *Executor) metaExtraForPlannedExternalInterrupt(
+	tasks []*Task,
+) map[string]any {
+	if len(tasks) == 0 {
+		return nil
+	}
+	fields := e.stateFields()
+	inputs := make(map[string][]any)
+	for _, task := range tasks {
+		if task == nil || task.NodeID == "" {
+			continue
+		}
+		in, ok := stateFromAny(task.Input)
+		if !ok || in == nil {
+			continue
+		}
+		snapshot := in.deepCopy(false, fields)
+		if snapshot == nil {
+			continue
+		}
+		inputs[task.NodeID] = append(inputs[task.NodeID], snapshot)
+	}
+	if len(inputs) == 0 {
+		return nil
+	}
+	return map[string]any{
+		CheckpointMetaKeyGraphInterruptInputs: inputs,
+	}
+}
+
+func (e *Executor) stateFields() map[string]StateField {
+	if e.graph == nil {
+		return nil
+	}
+	schema := e.graph.Schema()
+	if schema == nil {
+		return nil
+	}
+	return schema.Fields
+}
+
+func stateFromAny(v any) (State, bool) {
+	if v == nil {
+		return nil, false
+	}
+	if st, ok := v.(State); ok && st != nil {
+		return st, true
+	}
+	if st, ok := v.(map[string]any); ok && st != nil {
+		return State(st), true
+	}
+	return nil, false
+}
+
+func (e *Executor) maybeHandleExternalInterruptBeforeStep(
+	ctx context.Context,
+	stepCtx context.Context,
+	invocation *agent.Invocation,
+	execCtx *ExecutionContext,
+	tasks []*Task,
+	step int,
+	checkpointConfig *map[string]any,
+	extInterrupt *externalInterruptWatcher,
+) (bool, error) {
+	if extInterrupt == nil || !extInterrupt.requested() {
+		return false, nil
+	}
+
+	config := map[string]any(nil)
+	if checkpointConfig != nil {
+		config = *checkpointConfig
+	}
+
+	interrupt := newExternalInterruptError(extInterrupt.forced(ctx))
+	interrupt.NextNodes = nextNodesFromTasks(tasks)
+	metaExtra := e.metaExtraForPlannedExternalInterrupt(tasks)
+	return true, e.handleInterrupt(
+		stepCtx,
+		invocation,
+		execCtx,
+		interrupt,
+		step-1,
+		config,
+		metaExtra,
+	)
+}
+
+func (e *Executor) maybeHandleStaticInterruptBeforeStep(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	execCtx *ExecutionContext,
+	tasks []*Task,
+	step int,
+	checkpointConfig *map[string]any,
+) (bool, error) {
+	interrupt := e.maybeStaticInterruptBefore(execCtx, tasks, step)
+	if interrupt == nil {
+		return false, nil
+	}
+
+	config := map[string]any(nil)
+	if checkpointConfig != nil {
+		config = *checkpointConfig
+	}
+	return true, e.handleInterrupt(
+		ctx,
+		invocation,
+		execCtx,
+		interrupt,
+		step,
+		config,
+		nil,
+	)
+}
+
+func (e *Executor) newStepExecutionReportIfNeeded(
+	extInterrupt *externalInterruptWatcher,
+) *stepExecutionReport {
+	if extInterrupt == nil {
+		return nil
+	}
+	var fields map[string]StateField
+	if e.graph != nil && e.graph.Schema() != nil {
+		fields = e.graph.Schema().Fields
+	}
+	return newStepExecutionReport(fields)
+}
+
+func (e *Executor) executeStepWithInterruptHandling(
+	stepCtx context.Context,
+	ctx context.Context,
+	invocation *agent.Invocation,
+	execCtx *ExecutionContext,
+	tasks []*Task,
+	step int,
+	checkpointConfig *map[string]any,
+	report *stepExecutionReport,
+	extInterrupt *externalInterruptWatcher,
+) error {
+	err := e.executeStep(
+		stepCtx,
+		invocation,
+		execCtx,
+		tasks,
+		step,
+		report,
+	)
+	if err == nil {
+		return nil
+	}
+
+	config := map[string]any(nil)
+	if checkpointConfig != nil {
+		config = *checkpointConfig
+	}
+	return e.handleExecuteStepError(
+		stepCtx,
+		ctx,
+		invocation,
+		execCtx,
+		tasks,
+		step,
+		config,
+		report,
+		extInterrupt,
+		err,
+	)
+}
+
+func (e *Executor) handleExecuteStepError(
+	stepCtx context.Context,
+	ctx context.Context,
+	invocation *agent.Invocation,
+	execCtx *ExecutionContext,
+	tasks []*Task,
+	step int,
+	checkpointConfig map[string]any,
+	report *stepExecutionReport,
+	extInterrupt *externalInterruptWatcher,
+	stepErr error,
+) error {
+	if interrupt, ok := GetInterruptError(stepErr); ok {
+		return e.handleInterrupt(
+			stepCtx,
+			invocation,
+			execCtx,
+			interrupt,
+			step,
+			checkpointConfig,
+			nil,
+		)
+	}
+	if e.shouldForceExternalInterrupt(
+		extInterrupt,
+		ctx,
+		stepErr,
+	) {
+		return e.handleForcedExternalInterrupt(
+			stepCtx,
+			invocation,
+			execCtx,
+			tasks,
+			step,
+			checkpointConfig,
+			report,
+		)
+	}
+	return fmt.Errorf(
+		"execution failed at step %d: %w",
+		step,
+		stepErr,
+	)
+}
+
+func (e *Executor) shouldForceExternalInterrupt(
+	extInterrupt *externalInterruptWatcher,
+	ctx context.Context,
+	stepErr error,
+) bool {
+	if extInterrupt == nil {
+		return false
+	}
+	if !extInterrupt.forced(ctx) {
+		return false
+	}
+	if stepErr == nil {
+		return false
+	}
+	if errors.Is(stepErr, context.Canceled) {
+		return true
+	}
+	return errors.Is(stepErr, context.DeadlineExceeded)
+}
+
+func (e *Executor) handleForcedExternalInterrupt(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	execCtx *ExecutionContext,
+	tasks []*Task,
+	step int,
+	checkpointConfig map[string]any,
+	report *stepExecutionReport,
+) error {
+	rerun := e.tasksToRerun(tasks, report)
+	nextNodes := e.nextNodesForForcedInterrupt(execCtx, rerun)
+	metaExtra := e.metaExtraForForcedInterrupt(report, rerun)
+
+	interrupt := newExternalInterruptError(true)
+	interrupt.NextNodes = nextNodes
+	return e.handleInterrupt(
+		ctx,
+		invocation,
+		execCtx,
+		interrupt,
+		step,
+		checkpointConfig,
+		metaExtra,
+	)
+}
+
+func (e *Executor) tasksToRerun(
+	tasks []*Task,
+	report *stepExecutionReport,
+) []*Task {
+	if len(tasks) == 0 {
+		return nil
+	}
+
+	rerun := make([]*Task, 0, len(tasks))
+	for _, task := range tasks {
+		if task == nil || task.NodeID == "" {
+			continue
+		}
+		if report != nil && report.isCompleted(task) {
+			continue
+		}
+		rerun = append(rerun, task)
+	}
+	return rerun
+}
+
+func (e *Executor) nextNodesForForcedInterrupt(
+	execCtx *ExecutionContext,
+	rerun []*Task,
+) []string {
+	var nextNodes []string
+	seen := make(map[string]struct{})
+	for _, task := range rerun {
+		if task == nil || task.NodeID == "" || task.NodeID == End {
+			continue
+		}
+		nextNodes = append(nextNodes, task.NodeID)
+		seen[task.NodeID] = struct{}{}
+	}
+
+	for _, nodeID := range e.getNextNodes(execCtx) {
+		if nodeID == "" || nodeID == End {
+			continue
+		}
+		if _, ok := seen[nodeID]; ok {
+			continue
+		}
+		nextNodes = append(nextNodes, nodeID)
+	}
+	return nextNodes
+}
+
+func (e *Executor) metaExtraForForcedInterrupt(
+	report *stepExecutionReport,
+	rerun []*Task,
+) map[string]any {
+	if report == nil || len(rerun) == 0 {
+		return nil
+	}
+
+	fields := e.stateFields()
+	inputs := make(map[string][]any)
+	for _, task := range rerun {
+		if task == nil || task.NodeID == "" {
+			continue
+		}
+		input, ok := report.inputFor(task)
+		if !ok || input == nil {
+			fallback, ok := stateFromAny(task.Input)
+			if !ok || fallback == nil {
+				continue
+			}
+			input = fallback.deepCopy(false, fields)
+			if input == nil {
+				continue
+			}
+		}
+		inputs[task.NodeID] = append(inputs[task.NodeID], input)
+	}
+	if len(inputs) == 0 {
+		return nil
+	}
+
+	return map[string]any{
+		CheckpointMetaKeyGraphInterruptInputs: inputs,
+	}
+}
+
+func (e *Executor) updateChannelsForStep(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	execCtx *ExecutionContext,
+	step int,
+) error {
+	if err := e.updateChannels(ctx, invocation, execCtx, step); err != nil {
+		return fmt.Errorf("update failed at step %d: %w", step, err)
+	}
+	return nil
+}
+
+func (e *Executor) maybeHandleStaticInterruptAfterStep(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	execCtx *ExecutionContext,
+	tasks []*Task,
+	step int,
+	checkpointConfig *map[string]any,
+) (bool, error) {
+	interrupt := e.maybeStaticInterruptAfter(tasks, step)
+	if interrupt == nil {
+		return false, nil
+	}
+
+	config := map[string]any(nil)
+	if checkpointConfig != nil {
+		config = *checkpointConfig
+	}
+	return true, e.handleInterrupt(
+		ctx,
+		invocation,
+		execCtx,
+		interrupt,
+		step,
+		config,
+		nil,
+	)
+}
+
+func (e *Executor) maybeCreateLoopCheckpoint(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	execCtx *ExecutionContext,
+	checkpointConfig *map[string]any,
+	step int,
+) {
+	if e.checkpointSaver == nil || checkpointConfig == nil {
+		return
+	}
+	if *checkpointConfig == nil {
+		return
+	}
+	log.DebugfContext(ctx, "Creating checkpoint at step %d", step)
+	if err := e.createCheckpointAndSave(
+		ctx,
+		invocation,
+		checkpointConfig,
+		CheckpointSourceLoop,
+		step,
+		execCtx,
+	); err != nil {
+		log.DebugfContext(
+			ctx,
+			"Failed to create checkpoint at step %d: %v",
+			step,
+			err,
+		)
+	}
 }
 
 // buildCompletionEvent prepares the completion event with a state snapshot.
@@ -769,8 +1506,10 @@ func (e *Executor) createCheckpointAndSave(
 		}
 	}
 
-	// Set channel versions in checkpoint for version semantics.
-	checkpoint.ChannelVersions = newVersions
+	// Persist all per-run channel versions for correct resume semantics.
+	// Version-based triggering relies on monotonic channel versions even when a
+	// channel is not currently "available" (it may have been acknowledged).
+	checkpoint.ChannelVersions = e.collectChannelVersions(execCtx)
 
 	// Set next nodes and channels for recovery.
 	if source == CheckpointSourceInput && step == -1 {
@@ -879,7 +1618,10 @@ func (e *Executor) applyPendingWrites(ctx context.Context, invocation *agent.Inv
 	})
 	for _, w := range sortedWrites {
 		if ch, ok := execCtx.channels.GetChannel(w.Channel); ok && ch != nil {
-			ch.Update([]any{w.Value}, -1)
+			ch.Update(
+				[]any{w.Value},
+				channel.StepUnmarked,
+			)
 			// Emit channel update event to mirror live execution behavior.
 			e.emitChannelUpdateEvent(ctx, invocation, execCtx, w.Channel, ch.Behavior, e.getTriggeredNodes(w.Channel))
 		}
@@ -927,7 +1669,10 @@ func (e *Executor) initializeChannels(execCtx *ExecutionContext, state State, up
 		execCtx.channels.AddChannel(channelName, channel.BehaviorLastValue)
 		if updateChannels {
 			if ch, ok := execCtx.channels.GetChannel(channelName); ok && ch != nil {
-				ch.Update([]any{val}, -1)
+				ch.Update(
+					[]any{val},
+					channel.StepUnmarked,
+				)
 			}
 		}
 	}
@@ -1156,48 +1901,181 @@ func (e *Executor) createTask(nodeID string, state State, step int) *Task {
 		return nil
 	}
 
-	log.Debugf(
-		"🔧 createTask: creating task for nodeID='%s', step=%d",
-		nodeID,
-		step,
-	)
-	stateKeys := make([]string, 0, len(state))
-	for k := range state {
-		stateKeys = append(stateKeys, k)
-	}
-	log.Debugf(
-		"🔧 createTask: state has %d keys: %v",
-		len(state),
-		stateKeys,
-	)
-
-	// Log key state values that we're interested in tracking
-	// State prepared for task
-
-	if stepCountVal, exists := state[StateFieldStepCount]; exists {
-		log.Debugf(
-			"🔧 createTask: state contains step_count=%v (type: %T)",
-			stepCountVal,
-			stepCountVal,
-		)
-	}
-
-	// Special logging for final node to track the counter issue
-	if nodeID == "final" {
-		log.Debugf(
-			"🔧 createTask: FINAL NODE - counter=%v, step_count=%v",
-			state[StateFieldCounter],
-			state[StateFieldStepCount],
-		)
+	input := any(state)
+	if override, ok := consumeGraphInterruptInput(state, nodeID); ok {
+		input = override
 	}
 
 	return &Task{
 		NodeID:   nodeID,
-		Input:    state,
+		Input:    input,
 		Writes:   node.writers,
 		Triggers: node.triggers,
 		TaskID:   fmt.Sprintf("%s-%d", nodeID, step),
 		TaskPath: []string{nodeID},
+	}
+}
+
+func consumeGraphInterruptInput(state State, nodeID string) (State, bool) {
+	if state == nil || nodeID == "" {
+		return nil, false
+	}
+	raw, ok := state[StateKeyGraphInterruptInputs]
+	if !ok || raw == nil {
+		return nil, false
+	}
+	switch m := raw.(type) {
+	case map[string]State:
+		return consumeGraphInterruptInputState(state, m, nodeID)
+	case map[string][]State:
+		return consumeGraphInterruptInputStates(state, m, nodeID)
+	case map[string]any:
+		return consumeGraphInterruptInputAny(state, m, nodeID)
+	case map[string][]any:
+		return consumeGraphInterruptInputAnySlice(state, m, nodeID)
+	default:
+		return nil, false
+	}
+}
+
+func consumeGraphInterruptInputState(
+	state State,
+	inputs map[string]State,
+	nodeID string,
+) (State, bool) {
+	input := inputs[nodeID]
+	if input == nil {
+		return nil, false
+	}
+	delete(inputs, nodeID)
+	if len(inputs) == 0 {
+		delete(state, StateKeyGraphInterruptInputs)
+	}
+	return input, true
+}
+
+func consumeGraphInterruptInputStates(
+	state State,
+	inputs map[string][]State,
+	nodeID string,
+) (State, bool) {
+	values, ok := inputs[nodeID]
+	if !ok || len(values) == 0 {
+		return nil, false
+	}
+	input := values[0]
+	if input == nil {
+		return nil, false
+	}
+	if len(values) == 1 {
+		delete(inputs, nodeID)
+	} else {
+		inputs[nodeID] = values[1:]
+	}
+	if len(inputs) == 0 {
+		delete(state, StateKeyGraphInterruptInputs)
+	}
+	return input, true
+}
+
+func consumeGraphInterruptInputAny(
+	state State,
+	inputs map[string]any,
+	nodeID string,
+) (State, bool) {
+	value, ok := inputs[nodeID]
+	if !ok || value == nil {
+		return nil, false
+	}
+
+	switch v := value.(type) {
+	case State:
+		if v == nil {
+			return nil, false
+		}
+		delete(inputs, nodeID)
+		cleanupGraphInterruptInputs(state, inputs)
+		return v, true
+	case map[string]any:
+		if v == nil {
+			return nil, false
+		}
+		delete(inputs, nodeID)
+		cleanupGraphInterruptInputs(state, inputs)
+		return State(v), true
+	case []State:
+		input, ok := consumeStateFromStateSlice(v)
+		if !ok {
+			return nil, false
+		}
+		if len(v) == 1 {
+			delete(inputs, nodeID)
+		} else {
+			inputs[nodeID] = v[1:]
+		}
+		cleanupGraphInterruptInputs(state, inputs)
+		return input, true
+	case []any:
+		input, ok := consumeStateFromAnySlice(v)
+		if !ok {
+			return nil, false
+		}
+		if len(v) == 1 {
+			delete(inputs, nodeID)
+		} else {
+			inputs[nodeID] = v[1:]
+		}
+		cleanupGraphInterruptInputs(state, inputs)
+		return input, true
+	default:
+		return nil, false
+	}
+}
+
+func consumeGraphInterruptInputAnySlice(
+	state State,
+	inputs map[string][]any,
+	nodeID string,
+) (State, bool) {
+	values, ok := inputs[nodeID]
+	if !ok || len(values) == 0 {
+		return nil, false
+	}
+	input, ok := consumeStateFromAnySlice(values)
+	if !ok {
+		return nil, false
+	}
+	if len(values) == 1 {
+		delete(inputs, nodeID)
+	} else {
+		inputs[nodeID] = values[1:]
+	}
+	if len(inputs) == 0 {
+		delete(state, StateKeyGraphInterruptInputs)
+	}
+	return input, true
+}
+
+func consumeStateFromStateSlice(values []State) (State, bool) {
+	if len(values) == 0 {
+		return nil, false
+	}
+	if values[0] == nil {
+		return nil, false
+	}
+	return values[0], true
+}
+
+func consumeStateFromAnySlice(values []any) (State, bool) {
+	if len(values) == 0 {
+		return nil, false
+	}
+	return stateFromAny(values[0])
+}
+
+func cleanupGraphInterruptInputs(state State, inputs map[string]any) {
+	if len(inputs) == 0 {
+		delete(state, StateKeyGraphInterruptInputs)
 	}
 }
 
@@ -1208,63 +2086,128 @@ func (e *Executor) executeStep(
 	execCtx *ExecutionContext,
 	tasks []*Task,
 	step int,
+	report *stepExecutionReport,
 ) error {
 	// Emit execution step event.
 	e.emitExecutionStepEvent(ctx, invocation, execCtx, tasks, step)
-	// Execute tasks concurrently.
-	var wg sync.WaitGroup
+	workerCount := e.workerCount(len(tasks))
+	tasksCh := make(chan *Task, workerCount)
 	results := make(chan error, len(tasks))
 
-	for _, t := range tasks {
-		runCtx := agent.CloneContext(ctx)
+	var wg sync.WaitGroup
+	for i := 0; i < workerCount; i++ {
 		wg.Add(1)
-		go func(ctx context.Context, t *Task) {
+		go func() {
 			defer wg.Done()
-			defer func() {
-				if r := recover(); r != nil {
-					log.ErrorfContext(
-						ctx,
-						"panic executing task %s: %v\n%s",
-						t.NodeID,
-						r,
-						string(debug.Stack()),
-					)
-					results <- fmt.Errorf("task panic: %v", r)
-				}
-			}()
-			// create a new invocation for each task, if parent invocation is not nil.
-			taskInvocation, taskCtx := invocation, ctx
-			if invocation != nil {
-				branch := t.NodeID
-				if invocation.Branch != "" {
-					branch = invocation.Branch + agent.BranchDelimiter + t.NodeID
-				}
-				taskInvocation = invocation.Clone(
-					agent.WithInvocationAgent(invocation.Agent),
-					agent.WithInvocationBranch(branch),
+			for t := range tasksCh {
+				err := e.executeStepTask(
+					ctx,
+					invocation,
+					execCtx,
+					t,
+					step,
+					report,
 				)
-				// set new context for each task.
-				taskCtx = agent.NewInvocationContext(ctx, taskInvocation)
+				if err != nil {
+					results <- err
+				}
 			}
-
-			if err := e.executeSingleTask(taskCtx, taskInvocation, execCtx, t, step); err != nil {
-				results <- err
-			}
-		}(runCtx, t)
+		}()
 	}
 
-	// Wait for all tasks to complete.
+	e.dispatchTasks(tasksCh, tasks)
+	close(tasksCh)
+
 	wg.Wait()
 	close(results)
 
-	// Check for errors.
 	for err := range results {
 		if err != nil {
 			return err
 		}
 	}
-
 	return nil
+}
+
+func (e *Executor) workerCount(taskCount int) int {
+	if taskCount <= 0 {
+		return 0
+	}
+	if e.maxConcurrency <= 0 {
+		return taskCount
+	}
+	if taskCount < e.maxConcurrency {
+		return taskCount
+	}
+	return e.maxConcurrency
+}
+
+func (e *Executor) dispatchTasks(tasksCh chan<- *Task, tasks []*Task) {
+	for _, t := range tasks {
+		tasksCh <- t
+	}
+}
+
+func (e *Executor) executeStepTask(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	execCtx *ExecutionContext,
+	t *Task,
+	step int,
+	report *stepExecutionReport,
+) (err error) {
+	runCtx := agent.CloneContext(ctx)
+	defer func() {
+		if r := recover(); r != nil {
+			log.ErrorfContext(
+				runCtx,
+				"panic executing task %s: %v\n%s",
+				t.NodeID,
+				r,
+				string(debug.Stack()),
+			)
+			err = fmt.Errorf("task panic: %v", r)
+		}
+	}()
+
+	taskInvocation, taskCtx := e.taskInvocationContext(
+		runCtx,
+		invocation,
+		t,
+	)
+	err = e.executeSingleTask(
+		taskCtx,
+		taskInvocation,
+		execCtx,
+		t,
+		step,
+		report,
+	)
+	if err == nil && report != nil && t != nil {
+		report.markCompleted(t)
+	}
+	return err
+}
+
+func (e *Executor) taskInvocationContext(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	t *Task,
+) (*agent.Invocation, context.Context) {
+	if invocation == nil || t == nil {
+		return invocation, ctx
+	}
+
+	branch := t.NodeID
+	if invocation.Branch != "" {
+		branch = invocation.Branch + agent.BranchDelimiter + t.NodeID
+	}
+	taskInvocation := invocation.Clone(
+		agent.WithInvocationAgent(invocation.Agent),
+		agent.WithInvocationBranch(branch),
+	)
+	taskCtx := agent.NewInvocationContext(ctx, taskInvocation)
+	return taskInvocation, taskCtx
 }
 
 // emitExecutionStepEvent emits the execution step event.
@@ -1346,9 +2289,13 @@ func (e *Executor) executeSingleTask(
 	execCtx *ExecutionContext,
 	t *Task,
 	step int,
+	report *stepExecutionReport,
 ) error {
 	// Initialize node execution context with retry policies and metadata.
 	nodeCtx := e.initializeNodeContext(ctx, invocation, execCtx, t, step)
+	if report != nil && nodeCtx != nil && t != nil {
+		report.recordInput(t, nodeCtx.stateCopy)
+	}
 
 	// Run before node callbacks.
 	if handled, err := e.runBeforeCallbacks(
@@ -1367,7 +2314,15 @@ func (e *Executor) executeSingleTask(
 
 	// Attempt cache lookup; if hit, handle cached result and return.
 	if cacheHit, result := e.attemptCacheLookup(t); cacheHit {
-		return e.handleCachedResult(ctx, invocation, execCtx, t, result, step, nodeCtx)
+		return e.handleCachedResult(
+			ctx,
+			invocation,
+			execCtx,
+			t,
+			result,
+			step,
+			nodeCtx,
+		)
 	}
 
 	// Execute with retry logic (emits completion event downstream on success).
@@ -1451,10 +2406,8 @@ func (e *Executor) attemptCacheLookup(t *Task) (bool, any) {
 	sanitized := sanitizeForCacheKey(t.Input)
 
 	// Apply optional cache key selector (node-level) to focus on relevant inputs.
-	if node, ok := e.graph.Node(t.NodeID); ok && node != nil && node.cacheKeySelector != nil {
-		if m, ok2 := sanitized.(map[string]any); ok2 {
-			sanitized = node.cacheKeySelector(m)
-		}
+	if node, ok := e.graph.Node(t.NodeID); ok && node != nil {
+		sanitized = applyCacheKeySelector(node.cacheKeySelector, sanitized)
 	}
 
 	keyBytes, kerr := pol.KeyFunc(sanitized)
@@ -1467,6 +2420,23 @@ func (e *Executor) attemptCacheLookup(t *Task) (bool, any) {
 		return true, cached
 	}
 	return false, nil
+}
+
+func applyCacheKeySelector(
+	selector func(map[string]any) any,
+	input any,
+) any {
+	if selector == nil {
+		return input
+	}
+	switch m := input.(type) {
+	case State:
+		return selector(m)
+	case map[string]any:
+		return selector(m)
+	default:
+		return input
+	}
 }
 
 // handleCachedResult processes a cache hit by running callbacks and handling
@@ -1492,7 +2462,14 @@ func (e *Executor) handleCachedResult(
 	e.syncResumeState(execCtx, nodeCtx.stateCopy)
 
 	// Handle result and process channel writes.
-	routed, herr := e.handleNodeResult(ctx, invocation, execCtx, t, result)
+	routed, herr := e.handleNodeResult(
+		ctx,
+		invocation,
+		execCtx,
+		t,
+		result,
+		step,
+	)
 	if herr != nil {
 		return herr
 	}
@@ -1597,7 +2574,14 @@ func (e *Executor) finalizeSuccessfulExecution(
 	e.syncResumeState(execCtx, nodeCtx.stateCopy)
 
 	// Handle result and process channel writes.
-	routed, herr := e.handleNodeResult(ctx, invocation, execCtx, t, result)
+	routed, herr := e.handleNodeResult(
+		ctx,
+		invocation,
+		execCtx,
+		t,
+		result,
+		step,
+	)
 	if herr != nil {
 		return herr
 	}
@@ -1607,10 +2591,11 @@ func (e *Executor) finalizeSuccessfulExecution(
 		if pol := e.getEffectiveCachePolicy(t.NodeID); pol != nil && pol.KeyFunc != nil {
 			// Use the same sanitized input used for lookup (post-callback state copy).
 			sanitized := sanitizeForCacheKey(nodeCtx.stateCopy)
-			if node, ok := e.graph.Node(t.NodeID); ok && node != nil && node.cacheKeySelector != nil {
-				if m, ok2 := sanitized.(map[string]any); ok2 {
-					sanitized = node.cacheKeySelector(m)
-				}
+			if node, ok := e.graph.Node(t.NodeID); ok && node != nil {
+				sanitized = applyCacheKeySelector(
+					node.cacheKeySelector,
+					sanitized,
+				)
 			}
 			if keyBytes, kerr := pol.KeyFunc(sanitized); kerr == nil {
 				ns := e.graph.cacheNamespace(t.NodeID)
@@ -1658,7 +2643,9 @@ func (e *Executor) evaluateRetryDecision(
 	if IsInterruptError(retryCtx.err) {
 		if interrupt, ok := GetInterruptError(retryCtx.err); ok {
 			interrupt.NodeID = t.NodeID
-			interrupt.TaskID = t.NodeID
+			if interrupt.TaskID == "" {
+				interrupt.TaskID = t.NodeID
+			}
 			interrupt.Step = step
 		}
 		return false, retryCtx.err
@@ -1905,7 +2892,14 @@ func (e *Executor) runBeforeCallbacks(
 		return false, nil
 	}
 	e.syncResumeState(execCtx, stateCopy)
-	routed, err := e.handleNodeResult(ctx, invocation, execCtx, t, customResult)
+	routed, err := e.handleNodeResult(
+		ctx,
+		invocation,
+		execCtx,
+		t,
+		customResult,
+		step,
+	)
 	if err != nil {
 		return true, err
 	}
@@ -2001,13 +2995,22 @@ func (e *Executor) emitNodeStartEvent(
 		return
 	}
 
+	inputKey := StateKeyUserInput
+	if nodeType == NodeTypeLLM {
+		if node, ok := e.graph.Node(nodeID); ok && node != nil {
+			if node.userInputKey != "" {
+				inputKey = node.userInputKey
+			}
+		}
+	}
+
 	execCtx.stateMutex.RLock()
 	inputKeys := extractStateKeys(execCtx.State)
 
 	// Extract model input for LLM nodes.
 	var modelInput string
 	if nodeType == NodeTypeLLM {
-		if userInput, exists := execCtx.State[StateKeyUserInput]; exists {
+		if userInput, exists := execCtx.State[inputKey]; exists {
 			if input, ok := userInput.(string); ok {
 				modelInput = input
 			}
@@ -2083,8 +3086,14 @@ func (e *Executor) executeNodeFunction(
 		tmp[StateKeyCurrentNodeID] = nodeID
 		input = tmp
 	}
-	input[StateKeyToolCallbacks] = node.toolCallbacks
-	input[StateKeyModelCallbacks] = node.modelCallbacks
+	// Only inject node-level callbacks if configured to avoid overwriting
+	// state-level callbacks with nil.
+	if node.toolCallbacks != nil {
+		input[StateKeyToolCallbacks] = node.toolCallbacks
+	}
+	if node.modelCallbacks != nil {
+		input[StateKeyModelCallbacks] = node.modelCallbacks
+	}
 
 	return node.Function(ctx, input)
 }
@@ -2119,8 +3128,14 @@ func (e *Executor) emitNodeErrorEvent(
 }
 
 // handleNodeResult handles the result from node execution.
-func (e *Executor) handleNodeResult(ctx context.Context, invocation *agent.Invocation,
-	execCtx *ExecutionContext, t *Task, result any) (bool, error) {
+func (e *Executor) handleNodeResult(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	execCtx *ExecutionContext,
+	t *Task,
+	result any,
+	step int,
+) (bool, error) {
 	// Even if result is nil, static edge writes should still occur so that
 	// downstream nodes can be triggered. Only skip static writes when we
 	// have explicit routing (Command with GoTo) or fan-out ([]*Command).
@@ -2140,7 +3155,14 @@ func (e *Executor) handleNodeResult(ctx context.Context, invocation *agent.Invoc
 						v.GoTo = resolved
 					}
 				}
-				if err := e.handleCommandResult(ctx, invocation, execCtx, v); err != nil {
+				if err := e.handleCommandResult(
+					ctx,
+					invocation,
+					execCtx,
+					v,
+					step,
+					t.TaskID,
+				); err != nil {
 					return false, err
 				}
 				// If the command explicitly routes via GoTo, avoid also writing to
@@ -2170,7 +3192,14 @@ func (e *Executor) handleNodeResult(ctx context.Context, invocation *agent.Invoc
 	// nodes with nil results (e.g., pure routing/start nodes) still trigger
 	// their outgoing static edges.
 	if !routed && len(t.Writes) > 0 {
-		e.processChannelWrites(ctx, invocation, execCtx, t.TaskID, t.Writes)
+		e.processChannelWrites(
+			ctx,
+			invocation,
+			execCtx,
+			t.TaskID,
+			t.Writes,
+			step,
+		)
 	}
 
 	return routed, nil
@@ -2292,6 +3321,7 @@ func (e *Executor) syncResumeState(execCtx *ExecutionContext, source State) {
 	syncResumeKey(execCtx.State, source, ResumeChannel)
 	syncResumeKey(execCtx.State, source, StateKeyResumeMap)
 	syncResumeKey(execCtx.State, source, StateKeyUsedInterrupts)
+	syncResumeKey(execCtx.State, source, StateKeySubgraphInterrupt)
 }
 
 // syncResumeKey applies a specific resume key mutation from the node state.
@@ -2308,8 +3338,14 @@ func syncResumeKey(target, source State, key string) {
 }
 
 // handleCommandResult handles a Command result from node execution.
-func (e *Executor) handleCommandResult(ctx context.Context, invocation *agent.Invocation,
-	execCtx *ExecutionContext, cmdResult *Command) error {
+func (e *Executor) handleCommandResult(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	execCtx *ExecutionContext,
+	cmdResult *Command,
+	step int,
+	taskID string,
+) error {
 	// Update state with command updates.
 	if cmdResult.Update != nil {
 		e.updateStateFromResult(execCtx, cmdResult.Update)
@@ -2317,33 +3353,62 @@ func (e *Executor) handleCommandResult(ctx context.Context, invocation *agent.In
 
 	// Handle GoTo routing.
 	if cmdResult.GoTo != "" {
-		e.handleCommandRouting(ctx, invocation, execCtx, cmdResult.GoTo)
+		e.handleCommandRouting(
+			ctx,
+			invocation,
+			execCtx,
+			taskID,
+			cmdResult.GoTo,
+			step,
+		)
 	}
 
 	return nil
 }
 
 // handleCommandRouting handles the routing specified by a Command.
-func (e *Executor) handleCommandRouting(ctx context.Context, invocation *agent.Invocation,
-	execCtx *ExecutionContext, targetNode string) {
+func (e *Executor) handleCommandRouting(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	execCtx *ExecutionContext,
+	taskID string,
+	targetNode string,
+	step int,
+) {
 	// Create trigger channel for the target node (including self).
 	triggerChannel := fmt.Sprintf("%s%s", ChannelTriggerPrefix, targetNode)
+	e.graph.addChannel(triggerChannel, channel.BehaviorLastValue)
 	e.graph.addNodeTrigger(triggerChannel, targetNode)
 	if execCtx != nil && execCtx.channels != nil {
 		// Ensure the per-execution channel exists and write to it.
 		execCtx.channels.AddChannel(triggerChannel, channel.BehaviorLastValue)
 		if ch, ok := execCtx.channels.GetChannel(triggerChannel); ok && ch != nil {
-			ch.Update([]any{channelUpdateMarker}, -1)
+			ch.Update([]any{channelUpdateMarker}, step)
+			execCtx.pendingMu.Lock()
+			execCtx.pendingWrites = append(execCtx.pendingWrites, PendingWrite{
+				Channel:  triggerChannel,
+				Value:    channelUpdateMarker,
+				TaskID:   taskID,
+				Sequence: execCtx.seq.Add(1),
+			})
+			execCtx.pendingMu.Unlock()
 		}
 	}
 
 	// Emit channel update event.
-	e.emitChannelUpdateEvent(ctx, invocation, execCtx, triggerChannel, channel.BehaviorLastValue, []string{targetNode})
+	e.emitChannelUpdateEvent(
+		ctx,
+		invocation,
+		execCtx,
+		triggerChannel,
+		channel.BehaviorLastValue,
+		[]string{targetNode},
+	)
 }
 
 // processChannelWrites processes the channel writes for a task.
 func (e *Executor) processChannelWrites(ctx context.Context, invocation *agent.Invocation,
-	execCtx *ExecutionContext, taskID string, writes []channelWriteEntry) {
+	execCtx *ExecutionContext, taskID string, writes []channelWriteEntry, step int) {
 	if execCtx == nil || execCtx.channels == nil {
 		return
 	}
@@ -2352,7 +3417,7 @@ func (e *Executor) processChannelWrites(ctx context.Context, invocation *agent.I
 		if !ok || ch == nil {
 			continue
 		}
-		ch.Update([]any{write.Value}, -1)
+		ch.Update([]any{write.Value}, step)
 
 		// Emit channel update event.
 		e.emitChannelUpdateEvent(ctx, invocation, execCtx, write.Channel, ch.Behavior, e.getTriggeredNodes(write.Channel))
@@ -2620,6 +3685,18 @@ func (e *Executor) processConditionalResult(
 		}
 	}
 
+	if target != End {
+		if _, exists := e.graph.Node(target); !exists {
+			return fmt.Errorf(
+				"conditional edge from %s returned %q; "+
+					"target node %q does not exist",
+				condEdge.From,
+				result,
+				target,
+			)
+		}
+	}
+
 	// Create and trigger the target channel.
 	channelName := fmt.Sprintf("%s%s", ChannelBranchPrefix, target)
 	e.graph.addChannel(channelName, channel.BehaviorLastValue)
@@ -2629,7 +3706,7 @@ func (e *Executor) processConditionalResult(
 	if execCtx != nil && execCtx.channels != nil {
 		execCtx.channels.AddChannel(channelName, channel.BehaviorLastValue)
 		if ch, ok := execCtx.channels.GetChannel(channelName); ok && ch != nil {
-			ch.Update([]any{channelUpdateMarker}, -1)
+			ch.Update([]any{channelUpdateMarker}, step)
 			e.emitChannelUpdateEvent(ctx, invocation, execCtx, channelName,
 				channel.BehaviorLastValue, []string{target})
 			execCtx.pendingMu.Lock()
@@ -2660,6 +3737,7 @@ func (e *Executor) handleInterrupt(
 	interrupt *InterruptError,
 	step int,
 	checkpointConfig map[string]any,
+	metaExtra map[string]any,
 ) error {
 	var (
 		interruptCheckpointID  string
@@ -2671,8 +3749,10 @@ func (e *Executor) handleInterrupt(
 		// Set interrupt state in the checkpoint.
 		checkpoint := e.createCheckpointFromState(execCtx.State, step, execCtx)
 
-		// IMPORTANT: Set parent checkpoint ID from current config to maintain proper tree structure
-		if parentCheckpointID := GetCheckpointID(checkpointConfig); parentCheckpointID != "" {
+		// IMPORTANT: Set parent checkpoint ID from current config to maintain
+		// proper tree structure.
+		parentCheckpointID := GetCheckpointID(checkpointConfig)
+		if parentCheckpointID != "" {
 			checkpoint.ParentCheckpointID = parentCheckpointID
 			// Setting parent checkpoint ID for interrupt
 		}
@@ -2688,23 +3768,37 @@ func (e *Executor) handleInterrupt(
 		// Create metadata for the interrupt checkpoint.
 		metadata := NewCheckpointMetadata(CheckpointSourceInterrupt, step)
 		metadata.IsResuming = false
-
-		// Set next nodes for recovery
-		// IMPORTANT: For internal interrupts (from graph.Interrupt within a node),
-		// the interrupted node needs to be re-executed to complete its work.
-		// We must include it in NextNodes.
-		nextNodes := e.getNextNodes(execCtx)
-
-		// Ensure the interrupted node is included
-		hasNode := false
-		for _, nodeID := range nextNodes {
-			if nodeID == interrupt.NodeID {
-				hasNode = true
-				break
+		if len(metaExtra) > 0 {
+			for k, v := range metaExtra {
+				metadata.Extra[k] = v
 			}
 		}
-		if !hasNode && interrupt.NodeID != "" {
-			nextNodes = append([]string{interrupt.NodeID}, nextNodes...)
+
+		// Set next nodes for recovery
+		// IMPORTANT:
+		// - For internal interrupts (from graph.Interrupt within a node), the
+		//   interrupted node needs to be re-executed to complete its work, so we
+		//   include it in NextNodes.
+		// - For static interrupts before a step executes, channel-based frontier
+		//   discovery is unavailable; callers may provide NextNodes explicitly.
+		var nextNodes []string
+		if len(interrupt.NextNodes) > 0 {
+			nextNodes = append([]string(nil), interrupt.NextNodes...)
+		} else {
+			nextNodes = e.getNextNodes(execCtx)
+		}
+
+		if !interrupt.SkipRerun {
+			hasNode := false
+			for _, nodeID := range nextNodes {
+				if nodeID == interrupt.NodeID {
+					hasNode = true
+					break
+				}
+			}
+			if !hasNode && interrupt.NodeID != "" {
+				nextNodes = append([]string{interrupt.NodeID}, nextNodes...)
+			}
 		}
 		checkpoint.NextNodes = nextNodes
 		checkpoint.NextChannels = e.getNextChannels(execCtx)
@@ -2753,25 +3847,26 @@ func (e *Executor) handleInterrupt(
 		defaultEmitTimeout)
 	defer cancel()
 
-	if interruptCheckpointOK &&
-		shouldEmitCheckpointLifecycleEvents(invocation) &&
-		execCtx != nil && execCtx.EventChan != nil {
-		evt := NewCheckpointInterruptEvent(
-			WithCheckpointEventInvocationID(execCtx.InvocationID),
-			WithCheckpointEventCheckpointID(interruptCheckpointID),
-			WithCheckpointEventSource(CheckpointSourceInterrupt),
-			WithCheckpointEventStep(step),
-			WithCheckpointEventDuration(interruptCheckpointDur),
-		)
-		agent.EmitEvent(eventCtx, invocation, execCtx.EventChan, evt)
-	}
+	e.maybeEmitCheckpointInterruptEvent(
+		eventCtx,
+		invocation,
+		execCtx,
+		interruptCheckpointID,
+		step,
+		interruptCheckpointDur,
+		interruptCheckpointOK,
+	)
 
 	// Emit interrupt event.
+	interruptKey := interrupt.Key
+	if interruptKey == "" {
+		interruptKey = interrupt.TaskID
+	}
 	interruptEvent := NewPregelInterruptEvent(
 		WithPregelEventInvocationID(execCtx.InvocationID),
 		WithPregelEventStepNumber(step),
 		WithPregelEventNodeID(interrupt.NodeID),
-		WithPregelEventInterruptKey(interrupt.Key),
+		WithPregelEventInterruptKey(interruptKey),
 		WithPregelEventInterruptValue(interrupt.Value),
 		WithPregelEventLineageID(GetLineageID(checkpointConfig)),
 		WithPregelEventCheckpointID(GetCheckpointID(checkpointConfig)),
@@ -2781,6 +3876,35 @@ func (e *Executor) handleInterrupt(
 
 	// Return the interrupt error to propagate it to the caller.
 	return interrupt
+}
+
+func (e *Executor) maybeEmitCheckpointInterruptEvent(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	execCtx *ExecutionContext,
+	checkpointID string,
+	step int,
+	duration time.Duration,
+	ok bool,
+) {
+	if !ok {
+		return
+	}
+	if !shouldEmitCheckpointLifecycleEvents(invocation) {
+		return
+	}
+	if execCtx == nil || execCtx.EventChan == nil {
+		return
+	}
+
+	evt := NewCheckpointInterruptEvent(
+		WithCheckpointEventInvocationID(execCtx.InvocationID),
+		WithCheckpointEventCheckpointID(checkpointID),
+		WithCheckpointEventSource(CheckpointSourceInterrupt),
+		WithCheckpointEventStep(step),
+		WithCheckpointEventDuration(duration),
+	)
+	agent.EmitEvent(ctx, invocation, execCtx.EventChan, evt)
 }
 
 // createCheckpointFromState creates a checkpoint from the current execution state.
@@ -2804,15 +3928,7 @@ func (e *Executor) createCheckpointFromState(state State, step int, execCtx *Exe
 		}
 	}
 
-	// Create channel versions from current channel states (per execution).
-	channelVersions := make(map[string]int64)
-	if execCtx != nil && execCtx.channels != nil {
-		for channelName, ch := range execCtx.channels.GetAllChannels() {
-			if ch.IsAvailable() {
-				channelVersions[channelName] = ch.Version
-			}
-		}
-	}
+	channelVersions := e.collectChannelVersions(execCtx)
 
 	// Create versions seen from execution context.
 	versionsSeen := make(map[string]map[string]int64)
@@ -2840,6 +3956,24 @@ func (e *Executor) createCheckpointFromState(state State, step int, execCtx *Exe
 		checkpoint.UpdatedChannels = e.getUpdatedChannels(execCtx)
 	}
 	return checkpoint
+}
+
+func (e *Executor) collectChannelVersions(
+	execCtx *ExecutionContext,
+) map[string]int64 {
+	channelVersions := make(map[string]int64)
+	if execCtx == nil || execCtx.channels == nil {
+		return channelVersions
+	}
+
+	for name, ch := range execCtx.channels.GetAllChannels() {
+		if ch == nil {
+			continue
+		}
+		channelVersions[name] = ch.Version
+	}
+
+	return channelVersions
 }
 
 // getNextNodes determines which nodes should be executed next based on the current state.

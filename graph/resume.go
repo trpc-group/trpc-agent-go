@@ -55,6 +55,7 @@ func Interrupt(ctx context.Context, state State, key string, prompt any) (any, e
 	// Not resuming, so interrupt with the prompt.
 	interrupt := NewInterruptError(prompt)
 	interrupt.Key = key
+	interrupt.TaskID = key
 	return nil, interrupt
 }
 

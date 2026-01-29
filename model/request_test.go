@@ -277,6 +277,66 @@ func TestContentPartWithFile(t *testing.T) {
 	}
 }
 
+func TestApplyGenerationConfigPatch(t *testing.T) {
+	base := GenerationConfig{
+		MaxTokens:        IntPtr(10),
+		Temperature:      Float64Ptr(0.2),
+		TopP:             Float64Ptr(0.3),
+		Stream:           true,
+		Stop:             []string{"STOP"},
+		PresencePenalty:  Float64Ptr(0.1),
+		FrequencyPenalty: Float64Ptr(0.2),
+		ReasoningEffort:  StringPtr("low"),
+		ThinkingEnabled:  BoolPtr(true),
+		ThinkingTokens:   IntPtr(100),
+	}
+	patch := GenerationConfigPatch{
+		MaxTokens:        IntPtr(20),
+		Temperature:      Float64Ptr(0.7),
+		TopP:             Float64Ptr(0.9),
+		Stream:           BoolPtr(false),
+		Stop:             []string{"X"},
+		PresencePenalty:  Float64Ptr(1.1),
+		FrequencyPenalty: Float64Ptr(1.2),
+		ReasoningEffort:  StringPtr("high"),
+		ThinkingEnabled:  BoolPtr(false),
+		ThinkingTokens:   IntPtr(200),
+	}
+	got := ApplyGenerationConfigPatch(base, patch)
+	require.NotNil(t, got.MaxTokens)
+	require.Equal(t, 20, *got.MaxTokens)
+	require.NotNil(t, got.Temperature)
+	require.Equal(t, 0.7, *got.Temperature)
+	require.NotNil(t, got.TopP)
+	require.Equal(t, 0.9, *got.TopP)
+	require.False(t, got.Stream)
+	require.Equal(t, []string{"X"}, got.Stop)
+	require.NotNil(t, got.PresencePenalty)
+	require.Equal(t, 1.1, *got.PresencePenalty)
+	require.NotNil(t, got.FrequencyPenalty)
+	require.Equal(t, 1.2, *got.FrequencyPenalty)
+	require.NotNil(t, got.ReasoningEffort)
+	require.Equal(t, "high", *got.ReasoningEffort)
+	require.NotNil(t, got.ThinkingEnabled)
+	require.False(t, *got.ThinkingEnabled)
+	require.NotNil(t, got.ThinkingTokens)
+	require.Equal(t, 200, *got.ThinkingTokens)
+
+	patch.Stop[0] = "Y"
+	require.Equal(t, []string{"X"}, got.Stop)
+
+	patch2 := GenerationConfigPatch{Stop: []string{}}
+	got2 := ApplyGenerationConfigPatch(base, patch2)
+	require.Equal(t, []string{}, got2.Stop)
+}
+
+func TestPtrHelpers(t *testing.T) {
+	require.Equal(t, 1, *IntPtr(1))
+	require.Equal(t, 1.5, *Float64Ptr(1.5))
+	require.True(t, *BoolPtr(true))
+	require.Equal(t, "x", *StringPtr("x"))
+}
+
 func TestMessage_WithReasoningContent(t *testing.T) {
 	// Test message with ReasoningContent field
 	msg := Message{

@@ -112,6 +112,10 @@ type Node struct {
 	Function    NodeFunc
 	Type        NodeType // Type of the node (function, llm, tool, etc.)
 
+	// userInputKey is the state key used as one-shot input for LLM and
+	// Agent nodes. When empty, StateKeyUserInput is used.
+	userInputKey string
+
 	toolSets             []tool.ToolSet
 	refreshToolSetsOnRun bool
 	// Per-node callbacks for fine-grained control
@@ -159,6 +163,11 @@ type Node struct {
 	// llmGenerationConfig stores per-node generation configuration for LLM nodes.
 	// If set, AddLLMNode forwards it to the underlying LLM runner.
 	llmGenerationConfig *model.GenerationConfig
+
+	// interruptBefore pauses execution before this node runs.
+	interruptBefore bool
+	// interruptAfter pauses execution after this node runs.
+	interruptAfter bool
 
 	// Subgraph (agent node) options
 	agentInputMapper      SubgraphInputMapper

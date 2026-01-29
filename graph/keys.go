@@ -1,5 +1,6 @@
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -29,6 +30,25 @@ const (
 	StateKeyResumeMap      = "__resume_map__"
 	StateKeyNextNodes      = "__next_nodes__"
 	StateKeyUsedInterrupts = "__used_interrupts__"
+
+	StateKeyStaticInterruptSkips = "__static_interrupt_skips__"
+
+	// StateKeySubgraphInterrupt stores metadata needed to resume a child
+	// GraphAgent (subgraph) after it interrupts within an agent node.
+	StateKeySubgraphInterrupt = "__subgraph_interrupt__"
+
+	// StateKeyGraphInterruptInputs stores per-node input snapshots used to
+	// re-run canceled nodes after an external interrupt timeout.
+	StateKeyGraphInterruptInputs = "__graph_interrupt_inputs__"
+)
+
+const (
+	subgraphInterruptKeyParentNodeID      = "parent_node_id"
+	subgraphInterruptKeyChildAgentName    = "child_agent_name"
+	subgraphInterruptKeyChildCheckpointID = "child_checkpoint_id"
+	subgraphInterruptKeyChildCheckpointNS = "child_checkpoint_ns"
+	subgraphInterruptKeyChildLineageID    = "child_lineage_id"
+	subgraphInterruptKeyChildTaskID       = "child_task_id"
 )
 
 // Checkpoint Metadata.Source enumeration values
@@ -73,7 +93,8 @@ func isUnsafeStateKey(key string) bool {
 		StateKeyModelCallbacks,
 		StateKeyAgentCallbacks,
 		StateKeyCurrentNodeID,
-		StateKeySession:
+		StateKeySession,
+		StateKeyGraphInterruptInputs:
 		return true
 	default:
 		return false

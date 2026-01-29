@@ -660,3 +660,152 @@ func TestOCRExtractorPropagation(t *testing.T) {
 		}
 	})
 }
+
+// TestWithFileReaderType verifies the WithFileReaderType option.
+func TestWithFileReaderType(t *testing.T) {
+	tests := []struct {
+		name           string
+		fileReaderType source.FileReaderType
+	}{
+		{
+			name:           "markdown_reader_type",
+			fileReaderType: source.FileReaderTypeMarkdown,
+		},
+		{
+			name:           "json_reader_type",
+			fileReaderType: source.FileReaderTypeJSON,
+		},
+		{
+			name:           "text_reader_type",
+			fileReaderType: source.FileReaderTypeText,
+		},
+		{
+			name:           "csv_reader_type",
+			fileReaderType: source.FileReaderTypeCSV,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			src := New([]string{"test content"}, WithFileReaderType(tt.fileReaderType))
+
+			if src.fileReaderType != tt.fileReaderType {
+				t.Errorf("fileReaderType = %s, want %s", src.fileReaderType, tt.fileReaderType)
+			}
+			if src.textReader == nil {
+				t.Error("textReader should be initialized")
+			}
+		})
+	}
+}
+
+// TestFileReaderTypeOverridesDefaultReader verifies that WithFileReaderType overrides the default text reader.
+func TestFileReaderTypeOverridesDefaultReader(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("markdown_content_with_markdown_reader", func(t *testing.T) {
+		markdownContent := "# Title\n\nThis is a paragraph.\n\n## Section\n\nMore content."
+		src := New([]string{markdownContent}, WithFileReaderType(source.FileReaderTypeMarkdown))
+
+		docs, err := src.ReadDocuments(ctx)
+		if err != nil {
+			t.Fatalf("ReadDocuments failed: %v", err)
+		}
+		if len(docs) == 0 {
+			t.Fatal("expected at least one document")
+		}
+	})
+
+	t.Run("json_content_with_json_reader", func(t *testing.T) {
+		jsonContent := `{"key": "value", "nested": {"inner": "data"}}`
+		src := New([]string{jsonContent}, WithFileReaderType(source.FileReaderTypeJSON))
+
+		docs, err := src.ReadDocuments(ctx)
+		if err != nil {
+			t.Fatalf("ReadDocuments failed: %v", err)
+		}
+		if len(docs) == 0 {
+			t.Fatal("expected at least one document")
+		}
+	})
+
+	t.Run("default_reader_without_file_type", func(t *testing.T) {
+		content := "plain text content"
+		src := New([]string{content})
+
+		if src.fileReaderType != "" {
+			t.Error("fileReaderType should be empty by default")
+		}
+
+		docs, err := src.ReadDocuments(ctx)
+		if err != nil {
+			t.Fatalf("ReadDocuments failed: %v", err)
+		}
+		if len(docs) == 0 {
+			t.Fatal("expected at least one document")
+		}
+	})
+}
+
+// TestInitializeReadersWithFileReaderType verifies reader initialization with fileReaderType.
+func TestInitializeReadersWithFileReaderType(t *testing.T) {
+	tests := []struct {
+		name           string
+		fileReaderType source.FileReaderType
+		chunkSize      int
+	}{
+		{
+			name:           "markdown_with_chunk_size",
+			fileReaderType: source.FileReaderTypeMarkdown,
+			chunkSize:      100,
+		},
+		{
+			name:           "json_with_default_chunk",
+			fileReaderType: source.FileReaderTypeJSON,
+			chunkSize:      0,
+		},
+		{
+			name:           "empty_type_uses_text_reader",
+			fileReaderType: "",
+			chunkSize:      50,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var opts []Option
+			if tt.fileReaderType != "" {
+				opts = append(opts, WithFileReaderType(tt.fileReaderType))
+			}
+			if tt.chunkSize > 0 {
+				opts = append(opts, WithChunkSize(tt.chunkSize))
+			}
+
+			src := New([]string{"test"}, opts...)
+
+			if src.fileReaderType != tt.fileReaderType {
+				t.Errorf("fileReaderType = %s, want %s", src.fileReaderType, tt.fileReaderType)
+			}
+			if tt.chunkSize > 0 && src.chunkSize != tt.chunkSize {
+				t.Errorf("chunkSize = %d, want %d", src.chunkSize, tt.chunkSize)
+			}
+			if src.textReader == nil {
+				t.Error("textReader should be initialized")
+			}
+		})
+	}
+}
+
+// TestFileReaderTypeWithInvalidType verifies behavior with invalid file reader type.
+func TestFileReaderTypeWithInvalidType(t *testing.T) {
+	// Using an invalid/unknown type should fallback to text reader
+	src := New([]string{"test content"}, WithFileReaderType(source.FileReaderType("nonexistent")))
+
+	if src.fileReaderType != "nonexistent" {
+		t.Errorf("fileReaderType should be set to 'nonexistent', got %s", src.fileReaderType)
+	}
+	// textReader should still be initialized (fallback to text.New)
+	if src.textReader == nil {
+		t.Error("textReader should be initialized even with invalid type")
+	}
+}

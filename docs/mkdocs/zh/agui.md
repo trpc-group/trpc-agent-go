@@ -37,7 +37,10 @@ if err := http.ListenAndServe("127.0.0.1:8080", server.Handler()); err != nil {
 
 Runner 全面的使用方法参见 [runner](./runner.md)。
 
-在前端侧，可以配合 [CopilotKit](https://github.com/CopilotKit/CopilotKit) 等支持 AG-UI 协议的客户端框架，它提供 React/Next.js 组件并内置 SSE 订阅能力。[examples/agui/client/copilotkit](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/copilotkit) 使用 CopilotKit 搭建了 Web UI 界面，通过 AG-UI 协议与 Agent 通信，效果如下图所示。
+在前端侧，可以配合 [CopilotKit](https://github.com/CopilotKit/CopilotKit) 和 [TDesign Chat](https://tdesign.tencent.com/react-chat/overview) 等支持 AG-UI 协议的客户端框架，它提供 React/Next.js 组件并内置 SSE 订阅能力。仓库内提供两个可运行的 Web UI 示例：
+
+- [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat)：基于 Vite + React + TDesign 的客户端，演示自定义事件、Graph interrupt 审批、消息快照加载以及报告侧边栏等能力。
+- [examples/agui/client/copilotkit](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/copilotkit)：基于 CopilotKit 搭建的 Next.js 客户端。
 
 ![copilotkit](../assets/img/agui/copilotkit.png)
 
@@ -96,6 +99,39 @@ type RunAgentInput struct {
 
 取消路由的请求体与实时对话请求一致，要成功取消，需要传入与实时对话路由相同的 `SessionKey`(`AppName`+`userID`+`sessionID`)。
 
+#### 取消路由到底会停止什么？
+
+取消路由会停止同一 `SessionKey` 下正在运行的后端 **run**（同一 `AppName`、解析
+出来的 `userID`、以及相同的 `threadId`）。
+
+它通常用于：
+
+- 前端有“停止生成”按钮，需要中断后端执行。
+- SSE 连接断开了，但仍希望停止后端（避免白白消耗模型/工具资源）。
+- 你希望做服务端预算控制（时间/成本），及时中断异常 run。
+
+#### 最小取消请求
+
+大多数情况下，你只需要：
+
+- `threadId`（映射到 `sessionID`）
+- 以及 `UserIDResolver` 需要读取的字段（通常是 `forwardedProps.userId`）
+
+当然，你也可以直接把实时对话请求的 JSON 原样再发一遍。
+
+示例：
+
+```bash
+curl -X POST http://localhost:8080/cancel \
+  -H 'Content-Type: application/json' \
+  -d '{"threadId":"thread-id","runId":"run-id","forwardedProps":{"userId":"alice"}}'
+```
+
+典型返回：
+
+- `200 OK`：取消成功
+- `404 Not Found`：没有找到对应 `SessionKey` 的运行中任务（可能已结束，或标识不匹配）
+
 ### 消息快照路由
 
 消息快照用于在页面初始化或断线重连时恢复历史对话，通过 `agui.WithMessagesSnapshotEnabled(true)` 控制功能是否开启，默认关闭。该路由默认是 `/history`， 可通过 `WithMessagesSnapshotPath` 自定义，负责返回 `RUN_STARTED → MESSAGES_SNAPSHOT → RUN_FINISHED` 的事件流。
@@ -110,7 +146,7 @@ type RunAgentInput struct {
 - `agui.WithSessionService(service)` 注入 `session.Service` 用于查询历史事件；
 - `aguirunner.WithUserIDResolver(resolver)` 自定义 `userID` 解析逻辑，默认恒为 `"user"`。
 
-框架在处理消息快照请求时会从 AG-UI 请求体 `RunAgentInput` 中解析 `threadId` 作为 `SessionID`，结合自定义 `UserIDResolver` 得到 `userID`，再与 `appName` 组装得到 `session.Key`，然后通过 `session.Service` 查询 `Session`。将 `Session` 中存储的事件 `Session.Events` 转换为 AG-UI 消息并封装成 `MESSAGES_SNAPSHOT` 事件，同时发送配套的 `RUN_STARTED`、`RUN_FINISHED` 事件。
+框架在处理消息快照请求时会从 AG-UI 请求体 `RunAgentInput` 中解析 `threadId` 作为 `SessionID`，结合自定义 `UserIDResolver` 得到 `userID`，再与 `appName` 组装得到 `session.Key`，并从会话存储中读取已持久化的事件，将其还原为 `MessagesSnapshot` 所需的消息列表，封装成 `MESSAGES_SNAPSHOT` 事件，同时发送配套的 `RUN_STARTED`、`RUN_FINISHED` 事件。
 
 代码示例如下：
 
@@ -134,7 +170,7 @@ resolver := func(ctx context.Context, input *adapter.RunAgentInput) (string, err
     return user, nil
 }
 
-sessionService := inmemory.NewService(context.Background())
+sessionService := inmemory.NewSessionService()
 server, err := agui.New(
     runner,
     agui.WithPath("/chat"),                    // 自定义实时对话路由，默认为 "/"
@@ -537,10 +573,10 @@ server, err := agui.New(
     agui.WithMessagesSnapshotEnabled(true),
     agui.WithAppName(appName),
     agui.WithSessionService(sessionService),
+    agui.WithFlushInterval(time.Second), // 设置事件聚合结果的定时刷新间隔，默认 1 秒
     agui.WithAGUIRunnerOptions(
         aguirunner.WithUserIDResolver(userIDResolver),
         aguirunner.WithAggregationOption(aggregator.WithEnabled(true)), // 开启事件聚合，默认开启
-        aguirunner.WithFlushInterval(time.Second),                      // 设置事件聚合结果的定时刷新间隔，默认 1 秒
     ),
 )
 ```
@@ -657,6 +693,48 @@ server, err := agui.New(
 )
 ```
 
+### 消息快照续传
+
+默认情况下，消息快照路由只返回一次性快照并立即结束连接。当用户在一次实时对话的中途刷新或重连时，仅靠快照可能无法覆盖快照边界之后继续产生的事件。如需在快照之后继续流式接收后续 AG-UI 事件，需要使用消息快照续传功能。
+
+开启续传后，服务端会在发送 `MESSAGES_SNAPSHOT` 后继续通过同一条 SSE 连接续传后续事件，直到读到 `RUN_FINISHED` 或 `RUN_ERROR`。返回序列变为：
+
+`RUN_STARTED → MESSAGES_SNAPSHOT → ...events... → RUN_FINISHED/RUN_ERROR`
+
+消息快照续传功能有以下配置参数：
+
+- `agui.WithMessagesSnapshotFollowEnabled(bool)`：控制是否启用消息快照续传功能
+- `agui.WithMessagesSnapshotFollowMaxDuration(time.Duration)`：限制续传最长时间，避免无限等待
+- `agui.WithFlushInterval(time.Duration)`：控制历史事件落库频率，续传的轮询间隔会复用该值
+
+代码示例如下。
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui"
+	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+)
+
+runner := runner.NewRunner(agent.Info().Name, agent)
+sessionService := inmemory.NewSessionService()
+
+server, err := agui.New(
+    runner,
+    agui.WithAppName(appName),
+    agui.WithSessionService(sessionService),
+    agui.WithMessagesSnapshotEnabled(true),
+    agui.WithMessagesSnapshotFollowEnabled(true),
+    agui.WithMessagesSnapshotFollowMaxDuration(30*time.Second),
+    agui.WithFlushInterval(50*time.Millisecond),
+)
+```
+
+完整示例可参考 [examples/agui/server/follow](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/follow)，前端可参考 [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat)。
+
+多实例部署时，不同实例需要共享同一个 `SessionService`，否则消息快照路由无法读取其他实例写入的历史事件。
+
 ### 设置路由前缀 BasePath
 
 `agui.WithBasePath` 设置 AG-UI 服务的基础路由前缀，默认值为 `/`，用于在统一前缀下挂载实时对话路由、消息快照路由以及取消路由（若启用），避免与现有服务冲突.
@@ -666,6 +744,8 @@ server, err := agui.New(
 使用示例如下所示
 
 ```go
+import "trpc.group/trpc-go/trpc-agent-go/server/agui"
+
 server, err := agui.New(
     runner,
     agui.WithBasePath("/agui"),                // 设置 AG-UI 前缀路由
@@ -684,33 +764,38 @@ if err != nil {
 
 ### GraphAgent 节点活动事件
 
-在 `GraphAgent` 场景下，一个 run 通常会按图执行多个节点。为了让前端能持续展示“当前正在执行哪个节点”，并在 Human-in-the-Loop 场景中渲染中断提示，框架支持额外发送两类 `ACTIVITY_DELTA` 事件。该能力默认关闭，可在创建 AG-UI Server 时按需开启。
+在 `GraphAgent` 场景下，一个 run 通常会按图执行多个节点。为了让前端能持续展示“当前正在执行哪个节点”，并在 Human-in-the-Loop 场景中渲染中断提示，框架支持额外发送节点生命周期与中断相关的 `ACTIVITY_DELTA` 事件。该能力默认关闭，可在创建 AG-UI Server 时按需开启。
 
 `ACTIVITY_DELTA` 事件格式可参考 [AG-UI 官方文档](https://docs.ag-ui.com/concepts/events#activitydelta)
 
-#### 节点开始（`graph.node.start`）
+#### 节点生命周期（`graph.node.lifecycle`）
 
-该事件默认关闭，可在创建 AG-UI Server 时通过 `agui.WithGraphNodeStartActivityEnabled(true)` 开启。
+该事件默认关闭，可在创建 AG-UI Server 时通过 `agui.WithGraphNodeLifecycleActivityEnabled(true)` 开启。
 
 ```go
+import "trpc.group/trpc-go/trpc-agent-go/server/agui"
+
 server, err := agui.New(
 	runner,
-	agui.WithGraphNodeStartActivityEnabled(true),
+	agui.WithGraphNodeLifecycleActivityEnabled(true),
 )
 ```
 
-`activityType` 为 `graph.node.start`，在节点执行前发出，并通过 `add /node` 写入当前节点信息：
+启用后，节点在 `start` / `complete` / `error` 三个阶段都会发送 `ACTIVITY_DELTA`，且 `activityType` 均为 `graph.node.lifecycle`，通过 `/node.phase` 区分具体阶段。
+
+节点开始阶段（`phase=start`）在节点执行前发出，并通过 `add /node` 写入当前节点信息：
 
 ```json
 {
   "type": "ACTIVITY_DELTA",
-  "activityType": "graph.node.start",
+  "activityType": "graph.node.lifecycle",
   "patch": [
     {
       "op": "add",
       "path": "/node",
       "value": {
-        "nodeId": "plan_llm_node"
+        "nodeId": "plan_llm_node",
+        "phase": "start"
       }
     }
   ]
@@ -719,11 +804,52 @@ server, err := agui.New(
 
 该事件用于前端展示进度。前端可将 `/node.nodeId` 作为当前正在执行的节点，用于高亮或展示节点执行过程。
 
+节点成功结束阶段（`phase=complete`）在节点执行结束后发出，并通过 `add /node` 写入本次结束的节点信息：
+
+```json
+{
+  "type": "ACTIVITY_DELTA",
+  "activityType": "graph.node.lifecycle",
+  "patch": [
+    {
+      "op": "add",
+      "path": "/node",
+      "value": {
+        "nodeId": "plan_llm_node",
+        "phase": "complete"
+      }
+    }
+  ]
+}
+```
+
+节点失败结束阶段（`phase=error`）会在 `/node` 中携带错误信息：
+
+```json
+{
+  "type": "ACTIVITY_DELTA",
+  "activityType": "graph.node.lifecycle",
+  "patch": [
+    {
+      "op": "add",
+      "path": "/node",
+      "value": {
+        "nodeId": "plan_llm_node",
+        "phase": "error",
+        "error": "node execution failed"
+      }
+    }
+  ]
+}
+```
+
 #### 中断提示（`graph.node.interrupt`）
 
 该事件默认关闭，可在创建 AG-UI Server 时通过 `agui.WithGraphNodeInterruptActivityEnabled(true)` 开启。
 
 ```go
+import "trpc.group/trpc-go/trpc-agent-go/server/agui"
+
 server, err := agui.New(
 	runner,
 	agui.WithGraphNodeInterruptActivityEnabled(true),
@@ -754,9 +880,21 @@ server, err := agui.New(
 
 该事件表示执行在该节点暂停。前端可使用 `/interrupt.prompt` 渲染中断提示，并用 `/interrupt.key` 选择需要提供的恢复值。`checkpointId` 与 `lineageId` 可用于定位需要恢复的 checkpoint 并关联多次 run。
 
+如果使用多级 GraphAgent，子图中断会向上冒泡，事件流中默认可能出现多条 `graph.node.interrupt`。如果前端只希望保留用于恢复的最外层中断，可额外开启 `agui.WithGraphNodeInterruptActivityTopLevelOnly(true)`，开启后仅发送最外层中断事件。
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/server/agui"
+
+server, err := agui.New(
+	runner,
+	agui.WithGraphNodeInterruptActivityEnabled(true),
+	agui.WithGraphNodeInterruptActivityTopLevelOnly(true),
+)
+```
+
 #### 恢复回执（`graph.node.interrupt`）
 
-当新的 run 携带 resume 输入发起恢复时，AG-UI Server 会在该 run 的事件流开始处额外发送一条 `ACTIVITY_DELTA`，并且会先于任何 `graph.node.start` 事件发送。该事件同样使用 `activityType: graph.node.interrupt`，先将 `/interrupt` 置为 `null`，再通过 `add /resume` 写入本次恢复输入。`/resume` 包含 `resumeMap` 或 `resume`，并可包含 `checkpointId` 与 `lineageId`：
+当新的 run 携带 resume 输入发起恢复时，AG-UI Server 会在该 run 的事件流开始处额外发送一条 `ACTIVITY_DELTA`，并且会先于任何 `graph.node.lifecycle` 事件发送。该事件同样使用 `activityType: graph.node.interrupt`，先将 `/interrupt` 置为 `null`，再通过 `add /resume` 写入本次恢复输入。`/resume` 包含 `resumeMap` 或 `resume`，并可包含 `checkpointId` 与 `lineageId`：
 
 ```json
 {
@@ -785,7 +923,7 @@ server, err := agui.New(
 }
 ```
 
-完整示例可参考 [examples/agui/server/graph](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/graph)。
+完整示例可参考 [examples/agui/server/graph](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/graph)，前端渲染与审批交互可参考 [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat)。
 
 ## 最佳实践
 
@@ -830,6 +968,78 @@ server, err := agui.New(
    - 当捕捉到 `open_report_document` 工具事件时：创建文档面板，并将其后的文本消息内容写入该文档面板；
    - 当捕捉到 `close_report_document` 工具事件时：关闭文档面板（或将其标记为生成完成）。
 
-实际效果如下图所示，完整示例可参考 [examples/agui/server/report](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/report)。
+实际效果如下图所示，完整示例可参考 [examples/agui/server/report](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/report)，前端实现可参考 [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat)。
 
 ![report](../assets/gif/agui/report.gif)
+
+### 外部工具
+
+当工具必须在客户端或业务侧执行时，可以采用外部工具模式。后端只生成工具调用并在工具节点触发中断，前端执行工具并回传结果，后端从中断点恢复继续运行。该模式要求工具结果进入 LLM 上下文，并写入会话历史，便于后续通过消息快照回放完整对话。
+
+建议在服务端开启 `agui.WithGraphNodeInterruptActivityEnabled(true)`，用于在 `graph.node.interrupt` 事件中携带 `lineageId` 与 `checkpointId`，以便前端定位恢复点并发起下一次请求。
+
+一次外部工具调用对应两次请求。第一次请求使用 `role=user`，当 LLM 触发工具调用时，事件流会输出 `TOOL_CALL_START`、`TOOL_CALL_ARGS`、`TOOL_CALL_END`，随后在工具节点输出 `ACTIVITY_DELTA graph.node.interrupt` 并结束本次 SSE。前端在事件流中获取 `toolCallId` 与参数，并从中断事件获取 `lineageId`。
+
+第二次请求使用 `role=tool`，把工具执行结果回传给后端。`toolCallId` 必须与第一次请求一致，`content` 为工具输出字符串，同时在 `forwardedProps.lineage_id` 填入第一次中断事件返回的 `lineageId`。服务端会先把该 tool message 翻译为 `TOOL_CALL_RESULT` 并写入会话，再从对应 checkpoint 恢复继续生成最终回复。
+
+如果第一次请求中 LLM 未触发任何工具调用，则不会出现中断事件，也不需要发起第二次请求。
+
+两次请求需要保持 `threadId` 一致，每次请求使用新的 `runId`。当前框架仅处理 `messages` 的最后一条消息，且只支持 `role=user` 或 `role=tool`，`content` 仅支持字符串。
+
+请求示例如下：
+
+第一次请求：
+
+```json
+{
+  "threadId": "demo-thread",
+  "runId": "demo-run-1",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Search and answer my question."
+    }
+  ]
+}
+```
+
+第二次请求：
+
+```json
+{
+  "threadId": "demo-thread",
+  "runId": "demo-run-2",
+  "forwardedProps": {
+    "lineage_id": "lineage-from-graph-node-interrupt"
+  },
+  "messages": [
+    {
+      "id": "tool-result-<toolCallId>",
+      "role": "tool",
+      "toolCallId": "<toolCallId>",
+      "name": "external_search",
+      "content": "external tool output as string"
+    }
+  ]
+}
+```
+
+事件流示例如下：
+
+```text
+第一次请求 role=user
+  → RUN_STARTED
+  → TOOL_CALL_START
+  → TOOL_CALL_ARGS
+  → TOOL_CALL_END
+  → ACTIVITY_DELTA graph.node.interrupt
+  → RUN_FINISHED
+
+第二次请求 role=tool
+  → RUN_STARTED
+  → TOOL_CALL_RESULT 由输入的 tool message 生成
+  → TEXT_MESSAGE_* 恢复后继续生成
+  → RUN_FINISHED
+```
+
+完整示例可参考 [examples/agui/server/externaltool](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/externaltool)，前端实现可参考 [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat)。

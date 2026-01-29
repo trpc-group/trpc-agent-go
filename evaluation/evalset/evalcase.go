@@ -14,10 +14,22 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
+// EvalMode determines how an eval case conversation should be interpreted during evaluation.
+type EvalMode string
+
+const (
+	// EvalModeDefault indicates the eval case uses the default evaluation mode.
+	EvalModeDefault EvalMode = ""
+	// EvalModeTrace indicates the eval case conversation already contains the actual trace output.
+	EvalModeTrace EvalMode = "trace"
+)
+
 // EvalCase represents a single evaluation case.
 type EvalCase struct {
 	// EvalID uniquely identifies this evaluation case.
 	EvalID string `json:"evalId,omitempty"`
+	// EvalMode controls how the eval case conversation is interpreted.
+	EvalMode EvalMode `json:"evalMode,omitempty"`
 	// ContextMessages contains per-case context messages injected into each inference run.
 	ContextMessages []*model.Message `json:"contextMessages,omitempty"`
 	// Conversation contains the sequence of invocations.
@@ -32,6 +44,8 @@ type EvalCase struct {
 type Invocation struct {
 	// InvocationID uniquely identifies this invocation.
 	InvocationID string `json:"invocationId,omitempty"`
+	// ContextMessages contains per-case context messages for this invocation.
+	ContextMessages []*model.Message `json:"contextMessages,omitempty"`
 	// UserContent represents the user's input.
 	UserContent *model.Message `json:"userContent,omitempty"`
 	// FinalResponse represents the agent's final response.
@@ -46,10 +60,10 @@ type Invocation struct {
 
 // Tool represents a single tool invocation and its execution result.
 type Tool struct {
-	ID        string         `json:"id,omitempty"`        // Tool call ID.
-	Name      string         `json:"name,omitempty"`      // Tool name.
-	Arguments map[string]any `json:"arguments,omitempty"` // Tool call parameters.
-	Result    map[string]any `json:"result,omitempty"`    // Tool execution result.
+	ID        string `json:"id,omitempty"`        // Tool call ID.
+	Name      string `json:"name,omitempty"`      // Tool name.
+	Arguments any    `json:"arguments,omitempty"` // Tool call parameters.
+	Result    any    `json:"result,omitempty"`    // Tool execution result.
 }
 
 // SessionInput represents values that help initialize a session.

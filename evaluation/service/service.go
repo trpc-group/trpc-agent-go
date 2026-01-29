@@ -25,8 +25,10 @@ import (
 type Service interface {
 	// Inference runs the agent for the requested eval cases and returns the inference results for each case.
 	Inference(ctx context.Context, request *InferenceRequest) ([]*InferenceResult, error)
-	// Evaluate runs the evaluation on the inference results and returns the persisted eval set result.
-	Evaluate(ctx context.Context, request *EvaluateRequest) (*evalresult.EvalSetResult, error)
+	// Evaluate runs the evaluation on the inference results and returns the eval set run result.
+	Evaluate(ctx context.Context, request *EvaluateRequest) (*EvalSetRunResult, error)
+	// Close releases resources owned by the service.
+	Close() error
 }
 
 // InferenceRequest represents a request for running the agent inference on an eval set.
@@ -48,10 +50,14 @@ type InferenceResult struct {
 	EvalSetID string `json:"evalSetId,omitempty"`
 	// EvalCaseID is the ID of the eval case.
 	EvalCaseID string `json:"evalCaseId,omitempty"`
+	// EvalMode is the evaluation mode for this case.
+	EvalMode evalset.EvalMode `json:"evalMode,omitempty"`
 	// Inferences are the inference results.
 	Inferences []*evalset.Invocation `json:"inferences,omitempty"`
 	// SessionID is the ID of the inference session.
 	SessionID string `json:"sessionId,omitempty"`
+	// UserID is the user id used during inferencing stage of the eval.
+	UserID string `json:"userId,omitempty"`
 	// Status is the status of the inference.
 	Status status.EvalStatus `json:"status,omitempty"`
 	// ErrorMessage contains the error message if inference failed.
@@ -74,4 +80,14 @@ type EvaluateRequest struct {
 type EvaluateConfig struct {
 	// EvalMetrics contains the metrics to be evaluated.
 	EvalMetrics []*metric.EvalMetric `json:"evalMetrics,omitempty"`
+}
+
+// EvalSetRunResult represents the evaluation output of a single eval set run.
+type EvalSetRunResult struct {
+	// AppName is the name of the app.
+	AppName string `json:"appName,omitempty"`
+	// EvalSetID is the ID of the eval set.
+	EvalSetID string `json:"evalSetId,omitempty"`
+	// EvalCaseResults are the evaluation results produced in this run.
+	EvalCaseResults []*evalresult.EvalCaseResult `json:"evalCaseResults,omitempty"`
 }

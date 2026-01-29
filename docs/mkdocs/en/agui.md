@@ -37,7 +37,10 @@ A complete version of this example lives in [examples/agui/server/default](https
 
 For an in-depth guide to Runners, refer to the [runner](./runner.md) documentation.
 
-On the client side you can pair the server with frameworks that understand the AG-UI protocol, such as [CopilotKit](https://github.com/CopilotKit/CopilotKit). It provides React/Next.js components with built-in SSE subscriptions. The sample at [examples/agui/client/copilotkit](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/copilotkit) builds a web UI that communicates with the agent through AG-UI, as shown below.
+On the client side you can pair the server with frameworks that understand the AG-UI protocol, such as [CopilotKit](https://github.com/CopilotKit/CopilotKit). It provides React/Next.js components with built-in SSE subscriptions. This repository ships with two runnable web UI samples:
+
+- [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat): a Vite + React client built with TDesign that demonstrates custom events, graph interrupt approvals (human-in-the-loop), message snapshot loading, and report side panels.
+- [examples/agui/client/copilotkit](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/copilotkit): a Next.js client built with CopilotKit.
 
 ![copilotkit](../assets/img/agui/copilotkit.png)
 
@@ -96,6 +99,41 @@ If you want to interrupt a running real-time conversation, enable the cancel rou
 
 The cancel route uses the same request body as the real-time conversation route. To cancel successfully, you must provide the same `SessionKey` (`AppName` + `userID` + `sessionID`) as the corresponding real-time conversation request.
 
+#### What does cancel actually stop?
+
+Cancel stops the backend **run** that is currently executing for the same
+`SessionKey` (same `AppName`, resolved `userID`, and `threadId`).
+
+This is useful when:
+
+- The user clicks a “Stop” button in the UI.
+- The SSE connection drops but you still want to stop the backend.
+- You want to enforce server-side budgets (time, cost) and interrupt runaway
+  runs.
+
+#### Minimal cancel request
+
+In most setups, you only need:
+
+- `threadId` (maps to `sessionID`)
+- Whatever fields your `UserIDResolver` reads (often `forwardedProps.userId`)
+
+You can also just resend the same JSON payload you used for the real-time run.
+
+Example:
+
+```bash
+curl -X POST http://localhost:8080/cancel \
+  -H 'Content-Type: application/json' \
+  -d '{"threadId":"thread-id","runId":"run-id","forwardedProps":{"userId":"alice"}}'
+```
+
+Typical responses:
+
+- `200 OK`: cancelled
+- `404 Not Found`: no running run found for that `SessionKey` (already finished
+  or wrong identifiers)
+
 ### Message Snapshot route
 
 Message snapshots restore conversation history when a page is initialised or after a reconnect. The feature is controlled by `agui.WithMessagesSnapshotEnabled(true)` and is disabled by default. The default route is `/history`, can be customised with `WithMessagesSnapshotPath`, and returns the event stream `RUN_STARTED → MESSAGES_SNAPSHOT → RUN_FINISHED`.
@@ -110,7 +148,7 @@ To enable message snapshots, configure the following options:
 - `agui.WithSessionService(service)` injects the `session.Service` used to look up historical events;
 - `aguirunner.WithUserIDResolver(resolver)` customises how `userID` is resolved, defaulting to `"user"`.
 
-When handling a message snapshot request, the framework extracts `threadId` as the `SessionID` from the AG-UI request body `RunAgentInput`, resolves `userID` using the custom `UserIDResolver`, and then builds `session.Key` with `appName`. It then queries the `Session` via `session.Service`, converts the stored events `Session.Events` into AG-UI messages, wraps them in a `MESSAGES_SNAPSHOT` event, and sends matching `RUN_STARTED` and `RUN_FINISHED` events.
+When handling a message snapshot request, the framework extracts `threadId` as the `SessionID` from the AG-UI request body `RunAgentInput`, resolves `userID` using the custom `UserIDResolver`, builds `session.Key` with `appName`, reads the persisted events from session storage, reconstructs the message list required by `MessagesSnapshot`, wraps it into a `MESSAGES_SNAPSHOT` event, and sends matching `RUN_STARTED` and `RUN_FINISHED` events.
 
 Example:
 
@@ -134,7 +172,7 @@ resolver := func(ctx context.Context, input *adapter.RunAgentInput) (string, err
     return user, nil
 }
 
-sessionService := inmemory.NewService(context.Background())
+sessionService := inmemory.NewSessionService()
 server, err := agui.New(
     runner,
     agui.WithPath("/chat"),                    // Customise the real-time conversation route, defaults to "/".
@@ -534,10 +572,10 @@ server, err := agui.New(
     agui.WithMessagesSnapshotEnabled(true),
     agui.WithAppName(appName),
     agui.WithSessionService(sessionService),
+    agui.WithFlushInterval(time.Second), // Set the periodic flush interval for aggregation results, default is 1 second.
     agui.WithAGUIRunnerOptions(
         aguirunner.WithUserIDResolver(userIDResolver),
         aguirunner.WithAggregationOption(aggregator.WithEnabled(true)), // Enable event aggregation, enabled by default.
-        aguirunner.WithFlushInterval(time.Second),                      // Set the periodic flush interval for aggregation results, default is 1 second.
     ),
 )
 ```
@@ -654,6 +692,40 @@ server, err := agui.New(
 )
 ```
 
+### Message Snapshot Continuation
+
+By default, `/history` (the message snapshot route) returns a one-shot snapshot and closes the connection immediately. When a user refreshes or reconnects in the middle of a real-time conversation (run), or opens the page in a new tab, the snapshot alone may not cover the events that continue to be produced after the snapshot boundary. If you want to keep streaming subsequent AG-UI events after the snapshot, enable message snapshot continuation.
+
+When enabled, after sending `MESSAGES_SNAPSHOT` the server continues streaming subsequent events over the same SSE connection until it reads `RUN_FINISHED` or `RUN_ERROR` (or reaches the continuation duration limit). The sequence becomes:
+
+`RUN_STARTED → MESSAGES_SNAPSHOT → ...events... → RUN_FINISHED/RUN_ERROR`
+
+Message snapshot continuation provides the following configuration options:
+
+- `agui.WithMessagesSnapshotFollowEnabled(true)`: enables message snapshot continuation (disabled by default);
+- `agui.WithMessagesSnapshotFollowMaxDuration(d)`: limits the maximum continuation duration to avoid waiting indefinitely;
+- `agui.WithFlushInterval(d)`: controls how often historical events are flushed; the continuation polling interval reuses this value.
+
+Example:
+
+```go
+import "time"
+
+server, err := agui.New(
+    runner,
+    agui.WithAppName(appName),
+    agui.WithSessionService(sessionService),
+    agui.WithMessagesSnapshotEnabled(true),
+    agui.WithMessagesSnapshotFollowEnabled(true),
+    agui.WithMessagesSnapshotFollowMaxDuration(30*time.Second),
+    agui.WithFlushInterval(50*time.Millisecond),
+)
+```
+
+A complete example can be found at [examples/agui/server/follow](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/follow), and the frontend can refer to [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat).
+
+In a multi-instance deployment, instances must share the same `SessionService`; otherwise `/history` cannot read historical events written by other instances.
+
 ### Setting the BasePath for Routes
 
 `agui.WithBasePath` sets the base route prefix for the AG-UI service. The default value is `/`, and it is used to mount the real-time conversation route, message snapshot route, and the cancel route (when enabled) under a unified prefix, avoiding conflicts with existing services.
@@ -663,6 +735,8 @@ server, err := agui.New(
 Here’s an example of usage:
 
 ```go
+import "trpc.group/trpc-go/trpc-agent-go/server/agui"
+
 server, err := agui.New(
     runner,
     agui.WithBasePath("/agui"),                // Set the AG-UI prefix route.
@@ -681,31 +755,36 @@ In this case, the real-time conversation route will be `/agui/chat`, the cancel 
 
 ### GraphAgent Node Activity Events
 
-With `GraphAgent`, a single run typically executes multiple nodes along the graph. To help the frontend highlight the active node and render Human-in-the-Loop prompts, the framework can emit two additional `ACTIVITY_DELTA` events. For the event format, see the [AG-UI official docs](https://docs.ag-ui.com/concepts/events#activitydelta). They are disabled by default and can be enabled when constructing the AG-UI server.
+With `GraphAgent`, a single run typically executes multiple nodes along the graph. To help the frontend highlight the active node and render Human-in-the-Loop prompts, the framework can emit node lifecycle and interrupt-related `ACTIVITY_DELTA` events. For the event format, see the [AG-UI official docs](https://docs.ag-ui.com/concepts/events#activitydelta). They are disabled by default and can be enabled when constructing the AG-UI server.
 
-#### Node start (`graph.node.start`)
+#### Node lifecycle (`graph.node.lifecycle`)
 
-This event is disabled by default; enable it via `agui.WithGraphNodeStartActivityEnabled(true)` when constructing the AG-UI server.
+This event is disabled by default; enable it via `agui.WithGraphNodeLifecycleActivityEnabled(true)` when constructing the AG-UI server.
 
 ```go
+import "trpc.group/trpc-go/trpc-agent-go/server/agui"
+
 server, err := agui.New(
 	runner,
-	agui.WithGraphNodeStartActivityEnabled(true),
+	agui.WithGraphNodeLifecycleActivityEnabled(true),
 )
 ```
 
-`activityType` is `graph.node.start`. It is emitted before a node runs and writes the current node to `/node` via `add /node`:
+When enabled, the server emits `ACTIVITY_DELTA` for `start` / `complete` / `error` phases with the same `activityType: graph.node.lifecycle`, and uses `/node.phase` to distinguish the phase.
+
+For the node start phase (`phase=start`), it is emitted before a node runs and writes the current node to `/node` via `add /node`:
 
 ```json
 {
   "type": "ACTIVITY_DELTA",
-  "activityType": "graph.node.start",
+  "activityType": "graph.node.lifecycle",
   "patch": [
     {
       "op": "add",
       "path": "/node",
       "value": {
-        "nodeId": "plan_llm_node"
+        "nodeId": "plan_llm_node",
+        "phase": "start"
       }
     }
   ]
@@ -714,11 +793,52 @@ server, err := agui.New(
 
 This event helps the frontend track progress. The frontend can treat `/node.nodeId` as the currently active node and use it to highlight the graph execution.
 
+For the node success end phase (`phase=complete`), it is emitted after a node finishes successfully and writes the node result to `/node` via `add /node`:
+
+```json
+{
+  "type": "ACTIVITY_DELTA",
+  "activityType": "graph.node.lifecycle",
+  "patch": [
+    {
+      "op": "add",
+      "path": "/node",
+      "value": {
+        "nodeId": "plan_llm_node",
+        "phase": "complete"
+      }
+    }
+  ]
+}
+```
+
+For the node failure end phase (`phase=error`, non-interrupt), it includes an error message in `/node`:
+
+```json
+{
+  "type": "ACTIVITY_DELTA",
+  "activityType": "graph.node.lifecycle",
+  "patch": [
+    {
+      "op": "add",
+      "path": "/node",
+      "value": {
+        "nodeId": "plan_llm_node",
+        "phase": "error",
+        "error": "node execution failed"
+      }
+    }
+  ]
+}
+```
+
 #### Interrupt (`graph.node.interrupt`)
 
 This event is disabled by default; enable it via `agui.WithGraphNodeInterruptActivityEnabled(true)` when constructing the AG-UI server.
 
 ```go
+import "trpc.group/trpc-go/trpc-agent-go/server/agui"
+
 server, err := agui.New(
 	runner,
 	agui.WithGraphNodeInterruptActivityEnabled(true),
@@ -749,9 +869,21 @@ server, err := agui.New(
 
 This event indicates the run is paused at the node. The frontend can render `/interrupt.prompt` as the interrupt UI and use `/interrupt.key` to decide which resume value to provide. `checkpointId` and `lineageId` can be used to resume from the correct checkpoint and correlate runs.
 
+In multi-level GraphAgent setups, subgraph interrupts bubble up and the stream may contain multiple `graph.node.interrupt` events by default. If the client only wants to keep the outermost interrupt used for resuming, enable `agui.WithGraphNodeInterruptActivityTopLevelOnly(true)`; when enabled, only the outermost interrupt event is emitted.
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/server/agui"
+
+server, err := agui.New(
+	runner,
+	agui.WithGraphNodeInterruptActivityEnabled(true),
+	agui.WithGraphNodeInterruptActivityTopLevelOnly(true),
+)
+```
+
 #### Resume ack (`graph.node.interrupt`)
 
-When a run starts with resume input, the AG-UI server emits an extra `ACTIVITY_DELTA` at the beginning of the run, before any `graph.node.start` events. It uses `activityType: graph.node.interrupt`, clears the previous interrupt state by setting `/interrupt` to `null`, and writes the resume input to `/resume`. `/resume` contains `resumeMap` or `resume` plus optional `checkpointId` and `lineageId`:
+When a run starts with resume input, the AG-UI server emits an extra `ACTIVITY_DELTA` at the beginning of the run, before any `graph.node.lifecycle` events. It uses `activityType: graph.node.interrupt`, clears the previous interrupt state by setting `/interrupt` to `null`, and writes the resume input to `/resume`. `/resume` contains `resumeMap` or `resume` plus optional `checkpointId` and `lineageId`:
 
 ```json
 {
@@ -780,7 +912,7 @@ When a run starts with resume input, the AG-UI server emits an extra `ACTIVITY_D
 }
 ```
 
-For a complete example, see [examples/agui/server/graph](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/graph).
+For a complete example, see [examples/agui/server/graph](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/graph). For a client implementation, see [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat).
 
 ## Best Practices
 
@@ -826,6 +958,78 @@ If a long-form document is inserted directly into the main conversation, it can 
    * When a `close_report_document` tool event is captured: close the document panel (or mark it as completed).
 
 The effect is shown below. For a full example, refer to
-[examples/agui/server/report](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/report).
+[examples/agui/server/report](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/report). The corresponding client implementation lives in [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat).
 
 ![report](../assets/gif/agui/report.gif)
+
+### External Tools
+
+When a tool must be executed on the client side or within business services, you can use the external tool pattern. The backend only generates the tool call and interrupts execution at the tool node. The frontend runs the tool and sends the result back. The backend then resumes from the interrupt point and continues the run. This pattern requires the tool result to be included in the LLM context and persisted to session history so that a Message Snapshot can replay a complete conversation later.
+
+It is recommended to enable `agui.WithGraphNodeInterruptActivityEnabled(true)` on the server. This allows `lineageId` and `checkpointId` to be carried in the `graph.node.interrupt` event so the client can locate the resume point and initiate the next request.
+
+A single external tool invocation corresponds to two requests. The first request uses `role=user`. When the LLM triggers a tool call, the event stream emits `TOOL_CALL_START`, `TOOL_CALL_ARGS`, and `TOOL_CALL_END`, then emits `ACTIVITY_DELTA graph.node.interrupt` at the tool node and closes the SSE stream. The client reads `toolCallId` and the tool arguments from the tool call events, and reads `lineageId` from the interrupt event.
+
+The second request uses `role=tool` to send the tool result back to the server. The `toolCallId` must match the first request, `content` is the tool output string, and `forwardedProps.lineage_id` must be set to the `lineageId` returned by the interrupt event. The server first translates this tool message into a `TOOL_CALL_RESULT` event and persists it to the session, then resumes from the corresponding checkpoint and continues generating the final answer.
+
+If the LLM does not trigger any tool call in the first request, no interrupt event will be emitted and a second request is not required.
+
+Both requests must use the same `threadId`, and each request should use a new `runId`. The framework only processes the last message in `messages`. Only `role=user` and `role=tool` are supported, and `content` must be a string.
+
+Request examples:
+
+First request:
+
+```json
+{
+  "threadId": "demo-thread",
+  "runId": "demo-run-1",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Search and answer my question."
+    }
+  ]
+}
+```
+
+Second request:
+
+```json
+{
+  "threadId": "demo-thread",
+  "runId": "demo-run-2",
+  "forwardedProps": {
+    "lineage_id": "lineage-from-graph-node-interrupt"
+  },
+  "messages": [
+    {
+      "id": "tool-result-<toolCallId>",
+      "role": "tool",
+      "toolCallId": "<toolCallId>",
+      "name": "external_search",
+      "content": "external tool output as string"
+    }
+  ]
+}
+```
+
+Example event stream:
+
+```text
+First request role=user
+  → RUN_STARTED
+  → TOOL_CALL_START
+  → TOOL_CALL_ARGS
+  → TOOL_CALL_END
+  → ACTIVITY_DELTA graph.node.interrupt
+  → RUN_FINISHED
+
+Second request role=tool
+  → RUN_STARTED
+  → TOOL_CALL_RESULT generated from the tool message input
+  → TEXT_MESSAGE_* generated after resuming
+  → RUN_FINISHED
+```
+
+For a complete example, see [examples/agui/server/externaltool](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/externaltool). For a frontend implementation, see [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat).

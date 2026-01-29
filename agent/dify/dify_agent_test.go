@@ -92,24 +92,42 @@ func TestDifyAgent_SubAgents(t *testing.T) {
 func TestDifyAgent_Streaming(t *testing.T) {
 	t.Run("shouldUseStreaming with explicit true", func(t *testing.T) {
 		enableStreaming := true
-		agent := &DifyAgent{enableStreaming: &enableStreaming}
-		if !agent.shouldUseStreaming() {
+		difyAgt := &DifyAgent{enableStreaming: &enableStreaming}
+		if !difyAgt.shouldUseStreaming(&agent.Invocation{}) {
 			t.Error("should use streaming when explicitly enabled")
 		}
 	})
 
 	t.Run("shouldUseStreaming with explicit false", func(t *testing.T) {
 		enableStreaming := false
-		agent := &DifyAgent{enableStreaming: &enableStreaming}
-		if agent.shouldUseStreaming() {
+		difyAgt := &DifyAgent{enableStreaming: &enableStreaming}
+		if difyAgt.shouldUseStreaming(&agent.Invocation{}) {
 			t.Error("should not use streaming when explicitly disabled")
 		}
 	})
 
 	t.Run("shouldUseStreaming with nil defaults to false", func(t *testing.T) {
-		agent := &DifyAgent{enableStreaming: nil}
-		if agent.shouldUseStreaming() {
+		difyAgt := &DifyAgent{enableStreaming: nil}
+		if difyAgt.shouldUseStreaming(&agent.Invocation{}) {
 			t.Error("should default to non-streaming")
+		}
+	})
+
+	t.Run("shouldUseStreaming per-run override true wins", func(t *testing.T) {
+		enableStreaming := false
+		difyAgt := &DifyAgent{enableStreaming: &enableStreaming}
+		inv := &agent.Invocation{RunOptions: agent.RunOptions{Stream: boolPtr(true)}}
+		if !difyAgt.shouldUseStreaming(inv) {
+			t.Error("should use streaming when overridden per-run")
+		}
+	})
+
+	t.Run("shouldUseStreaming per-run override false wins", func(t *testing.T) {
+		enableStreaming := true
+		difyAgt := &DifyAgent{enableStreaming: &enableStreaming}
+		inv := &agent.Invocation{RunOptions: agent.RunOptions{Stream: boolPtr(false)}}
+		if difyAgt.shouldUseStreaming(inv) {
+			t.Error("should not use streaming when overridden per-run")
 		}
 	})
 }
@@ -948,7 +966,7 @@ func TestDifyAgent_HelperFunctions(t *testing.T) {
 		difyAgent := createMockDifyAgent(t, mockServer)
 		difyAgent.enableStreaming = &streaming
 
-		if !difyAgent.shouldUseStreaming() {
+		if !difyAgent.shouldUseStreaming(&agent.Invocation{}) {
 			t.Error("Expected streaming to be enabled")
 		}
 	})
@@ -958,7 +976,7 @@ func TestDifyAgent_HelperFunctions(t *testing.T) {
 		difyAgent := createMockDifyAgent(t, mockServer)
 		difyAgent.enableStreaming = &streaming
 
-		if difyAgent.shouldUseStreaming() {
+		if difyAgent.shouldUseStreaming(&agent.Invocation{}) {
 			t.Error("Expected streaming to be disabled")
 		}
 	})
@@ -966,7 +984,7 @@ func TestDifyAgent_HelperFunctions(t *testing.T) {
 	t.Run("shouldUseStreaming - default behavior", func(t *testing.T) {
 		difyAgent := createMockDifyAgent(t, mockServer)
 
-		if difyAgent.shouldUseStreaming() {
+		if difyAgent.shouldUseStreaming(&agent.Invocation{}) {
 			t.Error("Expected default streaming to be false")
 		}
 	})
@@ -1542,3 +1560,5 @@ func (e *errorWorkflowConverter) ConvertToWorkflowRequest(
 ) (dify.WorkflowRequest, error) {
 	return dify.WorkflowRequest{}, fmt.Errorf("workflow converter error")
 }
+
+func boolPtr(b bool) *bool { return &b }

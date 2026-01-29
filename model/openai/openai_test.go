@@ -2990,6 +2990,42 @@ func TestBuildChatRequest_EdgeCases(t *testing.T) {
 		chatReq, _ := m.buildChatRequest(req)
 		assert.NotEmpty(t, chatReq.Tools, "expected tools to be present")
 	})
+
+	t.Run("structured output disables parallel tool calls", func(t *testing.T) {
+		schema := map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		}
+		tools := map[string]tool.Tool{
+			"test_tool": stubTool{
+				decl: &tool.Declaration{
+					Name:        "test_tool",
+					Description: "A test tool",
+					InputSchema: &tool.Schema{Type: "object"},
+				},
+			},
+		}
+		req := &model.Request{
+			Messages: []model.Message{
+				model.NewUserMessage("test"),
+			},
+			Tools: tools,
+			StructuredOutput: &model.StructuredOutput{
+				Type: model.StructuredOutputJSONSchema,
+				JSONSchema: &model.JSONSchemaConfig{
+					Name:   "output",
+					Schema: schema,
+					Strict: true,
+				},
+			},
+		}
+
+		chatReq, _ := m.buildChatRequest(req)
+		if !chatReq.ParallelToolCalls.Valid() {
+			t.Fatalf("expected parallel_tool_calls to be set")
+		}
+		assert.False(t, chatReq.ParallelToolCalls.Value)
+	})
 }
 
 // TestConvertUserMessageContent_WithImage tests image content conversion.
@@ -4923,6 +4959,223 @@ func TestFixToolCallIndices_ParallelToolCallsWithZeroIndex(t *testing.T) {
 		assert.Equal(t, 2, nextIndex)
 	})
 
+	t.Run("fix indices for repeated chunks of the same tool call ID", func(t *testing.T) {
+		// This test covers providers that keep returning index 0 for subsequent chunks of a later tool call, which would otherwise corrupt the accumulator state.
+		idToIndexMap := make(map[string]int)
+		nextIndex := 0
+		// Prepare streaming chunks.
+		chunk1 := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
+							{
+								Index: 0,
+								ID:    "call_1",
+								Type:  "function",
+								Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
+									Name:      "tool_a",
+									Arguments: `{"arg":"v1_part1"}`,
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		chunk2 := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
+							{
+								Index: 0,
+								ID:    "call_1",
+								Type:  "function",
+								Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
+									Arguments: `{"arg":"v1_part2"}`,
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		chunk3 := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
+							{
+								Index: 0,
+								ID:    "call_2",
+								Type:  "function",
+								Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
+									Name:      "tool_b",
+									Arguments: `{"arg":"v2_part1"}`,
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		chunk4 := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
+							{
+								Index: 0,
+								ID:    "call_2",
+								Type:  "function",
+								Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
+									Arguments: `{"arg":"v2_part2"}`,
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		// Apply index fixing per chunk.
+		fixed1 := fixToolCallIndices(chunk1, idToIndexMap, &nextIndex)
+		fixed2 := fixToolCallIndices(chunk2, idToIndexMap, &nextIndex)
+		fixed3 := fixToolCallIndices(chunk3, idToIndexMap, &nextIndex)
+		fixed4 := fixToolCallIndices(chunk4, idToIndexMap, &nextIndex)
+		// Verify fixed indices and mapping.
+		assert.Equal(t, int64(0), fixed1.Choices[0].Delta.ToolCalls[0].Index)
+		assert.Equal(t, int64(0), fixed2.Choices[0].Delta.ToolCalls[0].Index)
+		assert.Equal(t, int64(1), fixed3.Choices[0].Delta.ToolCalls[0].Index)
+		assert.Equal(t, int64(1), fixed4.Choices[0].Delta.ToolCalls[0].Index)
+		assert.Equal(t, map[string]int{"call_1": 0, "call_2": 1}, idToIndexMap)
+		assert.Equal(t, 2, nextIndex)
+		// Feed fixed chunks into the accumulator.
+		acc := openai.ChatCompletionAccumulator{}
+		acc.AddChunk(fixed1)
+		acc.AddChunk(fixed2)
+		acc.AddChunk(fixed3)
+		acc.AddChunk(fixed4)
+		// Verify the accumulator keeps tool calls separated.
+		assert.Len(t, acc.Choices, 1)
+		assert.Len(t, acc.Choices[0].Message.ToolCalls, 2)
+		assert.Equal(t, "call_1", acc.Choices[0].Message.ToolCalls[0].ID)
+		assert.Equal(t, "call_2", acc.Choices[0].Message.ToolCalls[1].ID)
+		assert.Equal(t, "tool_a", acc.Choices[0].Message.ToolCalls[0].Function.Name)
+		assert.Equal(t, "tool_b", acc.Choices[0].Message.ToolCalls[1].Function.Name)
+		assert.Equal(t, `{"arg":"v1_part1"}{"arg":"v1_part2"}`, acc.Choices[0].Message.ToolCalls[0].Function.Arguments)
+		assert.Equal(t, `{"arg":"v2_part1"}{"arg":"v2_part2"}`, acc.Choices[0].Message.ToolCalls[1].Function.Arguments)
+	})
+
+	t.Run("fix indices for multiple tool calls in a single chunk with same index 0", func(t *testing.T) {
+		// This test covers providers that emit multiple tool calls in a single chunk with all indices set to 0.
+		idToIndexMap := make(map[string]int)
+		nextIndex := 0
+		// Prepare a chunk containing two tool calls.
+		chunk := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
+							{
+								Index: 0,
+								ID:    "call_1",
+								Type:  "function",
+								Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
+									Name:      "tool_a",
+									Arguments: `{"arg":"value1"}`,
+								},
+							},
+							{
+								Index: 0,
+								ID:    "call_2",
+								Type:  "function",
+								Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
+									Name:      "tool_b",
+									Arguments: `{"arg":"value2"}`,
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		// Apply index fixing and verify mapping.
+		fixed := fixToolCallIndices(chunk, idToIndexMap, &nextIndex)
+		assert.Equal(t, int64(0), fixed.Choices[0].Delta.ToolCalls[0].Index)
+		assert.Equal(t, int64(1), fixed.Choices[0].Delta.ToolCalls[1].Index)
+		assert.Equal(t, map[string]int{"call_1": 0, "call_2": 1}, idToIndexMap)
+		assert.Equal(t, 2, nextIndex)
+		// Verify accumulator output.
+		acc := openai.ChatCompletionAccumulator{}
+		acc.AddChunk(fixed)
+		require.Len(t, acc.Choices, 1)
+		require.Len(t, acc.Choices[0].Message.ToolCalls, 2)
+		assert.Equal(t, "call_1", acc.Choices[0].Message.ToolCalls[0].ID)
+		assert.Equal(t, "call_2", acc.Choices[0].Message.ToolCalls[1].ID)
+		assert.Equal(t, "tool_a", acc.Choices[0].Message.ToolCalls[0].Function.Name)
+		assert.Equal(t, "tool_b", acc.Choices[0].Message.ToolCalls[1].Function.Name)
+		assert.Equal(t, `{"arg":"value1"}`, acc.Choices[0].Message.ToolCalls[0].Function.Arguments)
+		assert.Equal(t, `{"arg":"value2"}`, acc.Choices[0].Message.ToolCalls[1].Function.Arguments)
+	})
+
+	t.Run("fix indices for multiple tool calls in a single chunk with colliding non-zero index", func(t *testing.T) {
+		// This test covers providers that emit multiple tool calls sharing a non-zero index in the same chunk.
+		idToIndexMap := make(map[string]int)
+		nextIndex := 0
+		// Prepare a chunk containing two tool calls that both claim the same non-zero index.
+		chunk := openai.ChatCompletionChunk{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
+							{
+								Index: 5,
+								ID:    "call_1",
+								Type:  "function",
+								Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
+									Name:      "tool_a",
+									Arguments: `{"arg":"value1"}`,
+								},
+							},
+							{
+								Index: 5,
+								ID:    "call_2",
+								Type:  "function",
+								Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
+									Name:      "tool_b",
+									Arguments: `{"arg":"value2"}`,
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		// Apply index fixing and verify both tool calls end up with distinct indices.
+		fixed := fixToolCallIndices(chunk, idToIndexMap, &nextIndex)
+		idx1 := int(fixed.Choices[0].Delta.ToolCalls[0].Index)
+		idx2 := int(fixed.Choices[0].Delta.ToolCalls[1].Index)
+		require.NotEqual(t, idx1, idx2)
+		assert.Equal(t, idx1, idToIndexMap["call_1"])
+		assert.Equal(t, idx2, idToIndexMap["call_2"])
+		// Verify accumulator output uses separate slots for both tool calls.
+		acc := openai.ChatCompletionAccumulator{}
+		acc.AddChunk(fixed)
+		require.Len(t, acc.Choices, 1)
+		maxIndex := idx1
+		if idx2 > maxIndex {
+			maxIndex = idx2
+		}
+		require.GreaterOrEqual(t, len(acc.Choices[0].Message.ToolCalls), maxIndex+1)
+		assert.Equal(t, "call_1", acc.Choices[0].Message.ToolCalls[idx1].ID)
+		assert.Equal(t, "call_2", acc.Choices[0].Message.ToolCalls[idx2].ID)
+		assert.Equal(t, "tool_a", acc.Choices[0].Message.ToolCalls[idx1].Function.Name)
+		assert.Equal(t, "tool_b", acc.Choices[0].Message.ToolCalls[idx2].Function.Name)
+		assert.Equal(t, `{"arg":"value1"}`, acc.Choices[0].Message.ToolCalls[idx1].Function.Arguments)
+		assert.Equal(t, `{"arg":"value2"}`, acc.Choices[0].Message.ToolCalls[idx2].Function.Arguments)
+	})
+
 	t.Run("preserve correct indices when provider sets them properly", func(t *testing.T) {
 		idToIndexMap := make(map[string]int)
 		nextIndex := 0
@@ -5866,4 +6119,281 @@ func TestModel_StreamingResponse_ContextCancellation(t *testing.T) {
 
 	// Should have received at least 2 responses before cancellation.
 	assert.GreaterOrEqual(t, len(responses), 2, "Expected at least 2 responses before cancellation")
+}
+
+// TestWithOptimizeForCache tests the WithOptimizeForCache option.
+func TestWithOptimizeForCache(t *testing.T) {
+	tests := []struct {
+		name     string
+		optimize bool
+		expected bool
+	}{
+		{
+			name:     "enable cache optimization",
+			optimize: true,
+			expected: true,
+		},
+		{
+			name:     "disable cache optimization",
+			optimize: false,
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := &options{}
+			WithOptimizeForCache(tt.optimize)(opts)
+			assert.Equal(t, tt.expected, opts.OptimizeForCache)
+		})
+	}
+}
+
+// TestOptimizeForCache_DefaultEnabled_OpenAI tests the default for OpenAI.
+func TestOptimizeForCache_DefaultEnabled_OpenAI(t *testing.T) {
+	m := New("gpt-4o", WithAPIKey("test-key"))
+	assert.True(t, m.optimizeForCache, "cache optimization should be enabled by default")
+}
+
+func TestOptimizeForCache_DefaultDisabled_NonOpenAI(t *testing.T) {
+	m := New(
+		"deepseek-chat",
+		WithAPIKey("test-key"),
+		WithVariant(VariantDeepSeek),
+	)
+	require.False(
+		t,
+		m.optimizeForCache,
+		"cache optimization should be disabled by default",
+	)
+}
+
+// TestOptimizeMessagesForCache tests the optimizeMessagesForCache function.
+func TestOptimizeMessagesForCache(t *testing.T) {
+	tests := []struct {
+		name     string
+		messages []model.Message
+		expected []model.Message
+	}{
+		{
+			name:     "empty messages",
+			messages: []model.Message{},
+			expected: []model.Message{},
+		},
+		{
+			name: "no system messages - no reordering",
+			messages: []model.Message{
+				{Role: model.RoleUser, Content: "Hello"},
+				{Role: model.RoleAssistant, Content: "Hi"},
+			},
+			expected: []model.Message{
+				{Role: model.RoleUser, Content: "Hello"},
+				{Role: model.RoleAssistant, Content: "Hi"},
+			},
+		},
+		{
+			name: "system message already first - no change",
+			messages: []model.Message{
+				{Role: model.RoleSystem, Content: "You are helpful"},
+				{Role: model.RoleUser, Content: "Hello"},
+			},
+			expected: []model.Message{
+				{Role: model.RoleSystem, Content: "You are helpful"},
+				{Role: model.RoleUser, Content: "Hello"},
+			},
+		},
+		{
+			name: "system message in middle - move to front",
+			messages: []model.Message{
+				{Role: model.RoleUser, Content: "Hello"},
+				{Role: model.RoleSystem, Content: "You are helpful"},
+				{Role: model.RoleAssistant, Content: "Hi"},
+			},
+			expected: []model.Message{
+				{Role: model.RoleSystem, Content: "You are helpful"},
+				{Role: model.RoleUser, Content: "Hello"},
+				{Role: model.RoleAssistant, Content: "Hi"},
+			},
+		},
+		{
+			name: "multiple system messages - all move to front",
+			messages: []model.Message{
+				{Role: model.RoleUser, Content: "Hello"},
+				{Role: model.RoleSystem, Content: "System 1"},
+				{Role: model.RoleAssistant, Content: "Hi"},
+				{Role: model.RoleSystem, Content: "System 2"},
+			},
+			expected: []model.Message{
+				{Role: model.RoleSystem, Content: "System 1"},
+				{Role: model.RoleSystem, Content: "System 2"},
+				{Role: model.RoleUser, Content: "Hello"},
+				{Role: model.RoleAssistant, Content: "Hi"},
+			},
+		},
+		{
+			name: "only system messages",
+			messages: []model.Message{
+				{Role: model.RoleSystem, Content: "System 1"},
+				{Role: model.RoleSystem, Content: "System 2"},
+			},
+			expected: []model.Message{
+				{Role: model.RoleSystem, Content: "System 1"},
+				{Role: model.RoleSystem, Content: "System 2"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := New("gpt-4o", WithAPIKey("test-key"))
+			result := m.optimizeMessagesForCache(tt.messages)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestGenerateContent_OptimizeForCache tests that messages are optimized when cache is enabled.
+func TestGenerateContent_OptimizeForCache(t *testing.T) {
+	var capturedRoles []string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+
+		body, _ := io.ReadAll(r.Body)
+		var req struct {
+			Messages []json.RawMessage `json:"messages"`
+		}
+		json.Unmarshal(body, &req)
+
+		// Parse message roles
+		capturedRoles = nil
+		for _, msg := range req.Messages {
+			var m struct {
+				Role string `json:"role"`
+			}
+			json.Unmarshal(msg, &m)
+			capturedRoles = append(capturedRoles, m.Role)
+		}
+
+		// Verify system messages come first
+		nonSystemSeen := false
+		for _, role := range capturedRoles {
+			if role != "system" {
+				nonSystemSeen = true
+			} else if nonSystemSeen {
+				assert.Fail(t, "system messages should be at the front")
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":      "test-id",
+			"object":  "chat.completion",
+			"created": 1699200000,
+			"model":   "gpt-4o",
+			"choices": []map[string]any{
+				{
+					"index":         0,
+					"message":       map[string]any{"role": "assistant", "content": "Hello!"},
+					"finish_reason": "stop",
+				},
+			},
+			"usage": map[string]any{
+				"prompt_tokens":     100,
+				"completion_tokens": 10,
+				"total_tokens":      110,
+			},
+		})
+	}))
+	defer server.Close()
+
+	// Test with cache optimization enabled (default for OpenAI)
+	m := New("gpt-4o", WithBaseURL(server.URL), WithAPIKey("test-key"))
+
+	req := &model.Request{
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "Hello"},
+			{Role: model.RoleSystem, Content: "You are helpful"},
+			{Role: model.RoleAssistant, Content: "Hi"},
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, req)
+	require.NoError(t, err)
+
+	for range responseChan {
+		// Drain the channel
+	}
+
+	// Verify system message was moved to front
+	assert.Equal(t, []string{"system", "user", "assistant"}, capturedRoles)
+}
+
+// TestGenerateContent_OptimizeForCache_Disabled tests that messages are not reordered when disabled.
+func TestGenerateContent_OptimizeForCache_Disabled(t *testing.T) {
+	var capturedRoles []string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+
+		body, _ := io.ReadAll(r.Body)
+		var req struct {
+			Messages []json.RawMessage `json:"messages"`
+		}
+		json.Unmarshal(body, &req)
+
+		capturedRoles = nil
+		for _, msg := range req.Messages {
+			var m struct {
+				Role string `json:"role"`
+			}
+			json.Unmarshal(msg, &m)
+			capturedRoles = append(capturedRoles, m.Role)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":      "test-id",
+			"object":  "chat.completion",
+			"created": 1699200000,
+			"model":   "gpt-4o",
+			"choices": []map[string]any{
+				{
+					"index":         0,
+					"message":       map[string]any{"role": "assistant", "content": "Hello!"},
+					"finish_reason": "stop",
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	// Test with cache optimization disabled
+	m := New("gpt-4o", WithBaseURL(server.URL), WithAPIKey("test-key"), WithOptimizeForCache(false))
+
+	req := &model.Request{
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "Hello"},
+			{Role: model.RoleSystem, Content: "You are helpful"},
+			{Role: model.RoleAssistant, Content: "Hi"},
+		},
+	}
+
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, req)
+	require.NoError(t, err)
+
+	for range responseChan {
+		// Drain the channel
+	}
+
+	// Verify original order is preserved (user, system, assistant)
+	assert.Equal(t, []string{"user", "system", "assistant"}, capturedRoles)
 }

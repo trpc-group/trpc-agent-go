@@ -40,6 +40,16 @@ Background references:
    - Docs are included only when requested; scripts are not inlined but
      executed inside a workspace, returning results and output files.
 
+### Token Cost (Why Progressive Disclosure Matters)
+
+If you inline a full skills repo (all `SKILL.md` bodies and docs) into
+the prompt up-front, it can dominate your prompt-token budget and even
+exceed the model context window.
+
+For a reproducible, **runtime** token comparison (progressive disclosure
+vs full injection), see `benchmark/anthropic_skills/README.md` and run
+the `token-report` suite described there.
+
 ### File Layout
 
 ```
@@ -102,6 +112,10 @@ Key points:
 - Tools are auto‑registered with `WithSkills`: `skill_load`,
   `skill_select_docs`, `skill_list_docs`, and `skill_run` show up
   automatically; no manual wiring required.
+- Note: when `WithCodeExecutor` is set, LLMAgent will (by default) try to
+  execute Markdown fenced code blocks in model responses. If you only need
+  the executor for `skill_run`, disable this behavior with
+  `llmagent.WithEnableCodeExecutionResponseProcessor(false)`.
 - By default, the framework appends a small `Tooling and workspace guidance:`
   block after the `Available skills:` list in the system message.
   - Disable it (to save prompt tokens): `llmagent.WithSkillsToolingGuidance("")`.
@@ -120,6 +134,28 @@ Interactive demo:
 cd examples/skillrun
 export OPENAI_API_KEY="your-api-key"
 go run . -executor local     # or: -executor container
+```
+
+GAIA benchmark demo (skills + file tools):
+[examples/skill/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skill/README.md)
+
+It includes a dataset downloader script and notes on Python dependencies
+for skills like `whisper` (audio) and `ocr` (images).
+
+SkillLoadMode demo (no API key required):
+[examples/skillloadmode/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillloadmode/README.md)
+
+Quick start (download dataset JSON into `examples/skill/data/`):
+
+```bash
+export HF_TOKEN="hf_..."
+python3 examples/skill/scripts/download_gaia_2023_level1_validation.py
+```
+
+To also download referenced attachment files:
+
+```bash
+python3 examples/skill/scripts/download_gaia_2023_level1_validation.py --with-files
 ```
 
 Sample skill (excerpt):
@@ -173,13 +209,34 @@ Input:
 - `include_all_docs` (optional bool)
 
 Behavior:
-- Writes ephemeral session keys (per turn):
+- Writes session-scoped `temp:*` keys:
   - `temp:skill:loaded:<name>` = "1"
   - `temp:skill:docs:<name>` = "*" or JSON array
 - Request processor injects `SKILL.md` body and docs into system message
 
 Notes:
+- Prefer progressive disclosure: load only the body first, then list and
+  select only the docs you need. Avoid `include_all_docs` unless you
+  truly need every doc (or the user explicitly asks).
 - Safe to call multiple times to add or replace docs.
+- The tools write session state, but **how long the loaded content stays
+  in the prompt** depends on `SkillLoadMode`:
+  - `turn` (default): loaded bodies/docs stay for the current
+    `Runner.Run` call (one user message) and are cleared automatically
+    before the next run starts.
+  - `once`: loaded bodies/docs are injected for the **next** model
+    request only, then offloaded (cleared) from session state.
+  - `session` (legacy): loaded bodies/docs persist across turns until
+    cleared or the session expires.
+- Configure it on the agent:
+
+```go
+agent := llmagent.New(
+    "skills-assistant",
+    llmagent.WithSkills(repo),
+    llmagent.WithSkillLoadMode(llmagent.SkillLoadModeTurn),
+)
+```
 
 ### `skill_select_docs`
 
@@ -215,7 +272,7 @@ Declaration: [tool/skill/run.go](https://github.com/trpc-group/trpc-agent-go/blo
 
 Input:
 - `skill` (required)
-- `command` (required; by default runs via `bash -lc`)
+- `command` (required; by default runs via `bash -c`)
 - `cwd`, `env` (optional)
 - `output_files` (optional, legacy collection): glob patterns (e.g.,
   `out/*.txt`). Patterns are workspace‑relative; env‑style prefixes
@@ -241,17 +298,30 @@ Input:
   - `name_template` prefix for artifact names (e.g., `pref/`)
   - Limits: `max_files` (default 100), `max_file_bytes` (default
     4 MiB/file), `max_total_bytes` (default 64 MiB)
+  - Note: `outputs` accepts both snake_case keys (recommended) and
+    legacy Go-style keys like `MaxFiles`
 
 - `timeout` (optional seconds)
 - `save_as_artifacts` (optional, legacy path): persist files collected
   via `output_files` and return `artifact_files` in the result
-- `omit_inline_content` (optional): with `save_as_artifacts`, omit
-  `output_files[*].content` and return metadata only
+- `omit_inline_content` (optional): omit `output_files[*].content` and
+  `primary_output.content` (metadata only). Non-text outputs never
+  inline content. Use `output_files[*].ref` with `read_file` when you
+  need text content later.
 - `artifact_prefix` (optional): prefix for the legacy artifact path
+  - If the Artifact service is not configured, `skill_run` keeps
+    returning `output_files` and reports a `warnings` entry.
+
+Guidance:
+- Prefer using `skill_run` only for commands explicitly required by the
+  selected skill docs (for example, `SKILL.md`).
+- Avoid using `skill_run` for generic shell exploration.
+- Prefer using `skill_list_docs` and `skill_select_docs` to inspect
+  skill docs, then use file tools to read the selected content.
 
 Optional safety restriction (allowlist):
 - Env var `TRPC_AGENT_SKILL_RUN_ALLOWED_COMMANDS`:
-  - Comma/space-separated command names (for example, `ls,cat,ifconfig`)
+  - Comma/space-separated command names (for example, `python3,ffmpeg`)
   - When set, `skill_run` rejects shell syntax (pipes/redirections/
     separators) and only allows a single allowlisted command
   - Because the command is no longer parsed by a shell, patterns like
@@ -270,7 +340,21 @@ Optional safety restriction (denylist):
 
 Output:
 - `stdout`, `stderr`, `exit_code`, `timed_out`, `duration_ms`
-- `output_files` with `name`, `content`, `mime_type`
+- `primary_output` (optional) with `name`, `ref`, `content`, `mime_type`,
+  `size_bytes`, `truncated`
+  - Convenience pointer to the "best" small text output file (when one
+    exists). Prefer this when there is a single main output.
+- `output_files` with `name`, `ref`, `content`, `mime_type`, `size_bytes`,
+  `truncated`
+  - `ref` is a stable `workspace://<name>` reference that can be passed
+    to other tools
+  - For non-text files, `content` is always empty.
+  - When `omit_inline_content=true`, `content` is empty for all files.
+    Use `ref` with `read_file` to fetch text content on demand.
+  - `size_bytes` is the file size on disk; `truncated=true` means the
+    collected content hit internal caps (for example, 4 MiB/file).
+- `warnings` (optional): non-fatal notes (for example, when artifact
+  saving is skipped)
 - `artifact_files` with `name`, `version` appears in two cases:
   - Legacy path: when `save_as_artifacts` is set
   - Manifest path: when `outputs.save=true` (executor persists files)
@@ -282,13 +366,65 @@ Typical flow:
    - Declarative: use `outputs` to drive collect/inline/save
    - Use `inputs` to stage upstream files when needed
 
+Examples:
+
+Metadata-only outputs (avoid filling context):
+
+```json
+{
+  "skill": "demo",
+  "command": "mkdir -p out; echo hi > out/a.txt",
+  "output_files": ["out/*.txt"],
+  "omit_inline_content": true
+}
+```
+
+The tool returns `output_files[*].ref` like `workspace://out/a.txt`
+with `content=""`, plus `size_bytes` and `truncated`.
+
+To read the content later:
+
+```json
+{
+  "file_name": "workspace://out/a.txt",
+  "start_line": 1,
+  "num_lines": 20
+}
+```
+
+Persist large outputs as artifacts (no inline content):
+
+```json
+{
+  "skill": "demo",
+  "command": "mkdir -p out; echo report > out/report.txt",
+  "outputs": {
+    "globs": ["$OUTPUT_DIR/report.txt"],
+    "inline": false,
+    "save": true,
+    "max_files": 5
+  }
+}
+```
+
+When saved, `skill_run` returns `artifact_files` with `name` and
+`version`. You can reference an artifact as `artifact://<name>[@<version>]`
+in tools like `read_file`.
+
 Environment and CWD:
 - When `cwd` is omitted, runs at the skill root: `/skills/<name>`
 - A relative `cwd` is resolved under the skill root
+- `cwd` may start with `$WORK_DIR`, `$OUTPUT_DIR`, `$SKILLS_DIR`,
+  `$WORKSPACE_DIR`, `$RUN_DIR` (or `${...}`) and will be normalized to
+  workspace‑relative directories
 - Runtime injects env vars: `WORKSPACE_DIR`, `SKILLS_DIR`, `WORK_DIR`,
   `OUTPUT_DIR`, `RUN_DIR`; the tool injects `SKILL_NAME`
 - Convenience symlinks are created under the skill root: `out/`,
   `work/`, and `inputs/` point to workspace‑level dirs
+- `.venv/` is a writable directory under the skill root for per-skill
+  dependencies (for example, `python -m venv .venv` + `pip install ...`)
+- File tools accept `inputs/<path>` as an alias to `<path>` when the
+  configured base directory does not contain a real `inputs/` folder
 
 ## Executor
 
@@ -308,6 +444,7 @@ Container notes:
 Security & limits:
 - Reads/writes confined to the workspace
 - Timeouts and read‑only skill trees reduce risk
+- `stdout`/`stderr` may be truncated (see `warnings`)
 - Output file read size is capped to prevent oversized payloads
 
 ## Events and Tracing

@@ -14,19 +14,27 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	oteltrace "go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/session/summary"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -107,6 +115,142 @@ func TestGraphAgentWithOptions(t *testing.T) {
 	info := graphAgent.Info()
 	if info.Description != "Test agent description" {
 		t.Errorf("Expected description to be set")
+	}
+}
+
+func TestGraphAgentRun_NilInvocation(t *testing.T) {
+	const nodeNoop = "noop"
+
+	stateGraph := graph.NewStateGraph(graph.NewStateSchema())
+	stateGraph.AddNode(
+		nodeNoop,
+		func(context.Context, graph.State) (any, error) {
+			return nil, nil
+		},
+	)
+	stateGraph.SetEntryPoint(nodeNoop)
+	stateGraph.SetFinishPoint(nodeNoop)
+
+	g, err := stateGraph.Compile()
+	require.NoError(t, err)
+
+	graphAgent, err := New("test-agent", g)
+	require.NoError(t, err)
+
+	eventCh, err := graphAgent.Run(context.Background(), nil)
+	require.Error(t, err)
+	require.Nil(t, eventCh)
+	require.Equal(t, invocationNilErrMsg, err.Error())
+}
+
+func TestGraphAgent_WithMaxConcurrency(t *testing.T) {
+	const (
+		nodeRoot       = "root"
+		nodeCount      = 12
+		maxConcurrency = 3
+		waitTimeout    = 2 * time.Second
+	)
+
+	stateGraph := graph.NewStateGraph(graph.NewStateSchema())
+	stateGraph.AddNode(nodeRoot, func(context.Context, graph.State) (any, error) {
+		return nil, nil
+	})
+	stateGraph.SetEntryPoint(nodeRoot)
+
+	var active atomic.Int64
+	var maxActive atomic.Int64
+	started := make(chan struct{}, nodeCount)
+	unblock := make(chan struct{})
+
+	worker := func(ctx context.Context, state graph.State) (any, error) {
+		cur := active.Add(1)
+		updateMaxInt64(&maxActive, cur)
+		started <- struct{}{}
+		<-unblock
+		active.Add(-1)
+		return nil, nil
+	}
+
+	for i := 0; i < nodeCount; i++ {
+		nodeID := fmt.Sprintf("w%d", i)
+		stateGraph.AddNode(nodeID, worker)
+		stateGraph.AddEdge(nodeRoot, nodeID)
+	}
+
+	g, err := stateGraph.Compile()
+	require.NoError(t, err)
+
+	graphAgent, err := New(
+		"test-agent",
+		g,
+		WithMaxConcurrency(maxConcurrency),
+	)
+	require.NoError(t, err)
+
+	invocation := &agent.Invocation{
+		Agent:        graphAgent,
+		AgentName:    "test-agent",
+		InvocationID: "inv-max-concurrency",
+	}
+
+	events, err := graphAgent.Run(context.Background(), invocation)
+	require.NoError(t, err)
+
+	done := make(chan struct{})
+	go func() {
+		for range events {
+		}
+		close(done)
+	}()
+
+	waitForNSignals(t, started, maxConcurrency, waitTimeout)
+
+	select {
+	case <-started:
+		t.Fatalf("expected at most %d tasks to start", maxConcurrency)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(unblock)
+
+	select {
+	case <-done:
+	case <-time.After(waitTimeout):
+		t.Fatal("timeout waiting for graphagent to complete")
+	}
+
+	require.LessOrEqual(t, maxActive.Load(), int64(maxConcurrency))
+}
+
+func updateMaxInt64(max *atomic.Int64, value int64) {
+	for {
+		current := max.Load()
+		if value <= current {
+			return
+		}
+		if max.CompareAndSwap(current, value) {
+			return
+		}
+	}
+}
+
+func waitForNSignals(
+	t *testing.T,
+	ch <-chan struct{},
+	n int,
+	timeout time.Duration,
+) {
+	t.Helper()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	for i := 0; i < n; i++ {
+		select {
+		case <-ch:
+		case <-timer.C:
+			t.Fatalf("timeout waiting for %d signals", n)
+		}
 	}
 }
 
@@ -865,6 +1009,58 @@ func TestGraphAgent_CreateInitialStateWithResume(t *testing.T) {
 	}
 }
 
+func TestGraphAgent_CreateInitialStateWithToolMessageDoesNotSetUserInput(t *testing.T) {
+	schema := graph.NewStateSchema().
+		AddField("messages", graph.StateField{
+			Type:    reflect.TypeOf([]model.Message{}),
+			Reducer: graph.DefaultReducer,
+		}).
+		AddField(graph.StateKeyUserInput, graph.StateField{
+			Type:    reflect.TypeOf(""),
+			Reducer: graph.DefaultReducer,
+		})
+
+	g, err := graph.NewStateGraph(schema).
+		AddNode("process", func(ctx context.Context, state graph.State) (any, error) {
+			return state, nil
+		}).
+		SetEntryPoint("process").
+		SetFinishPoint("process").
+		Compile()
+	require.NoError(t, err)
+
+	graphAgent, err := New("test-agent", g)
+	require.NoError(t, err)
+
+	toolMsg := model.NewToolMessage("call-1", "calc", "result")
+	toolEvt := event.NewResponseEvent("inv", "test-agent", &model.Response{
+		Choices: []model.Choice{{Index: 0, Message: toolMsg}},
+	})
+
+	sess := &session.Session{
+		ID:     "sid",
+		Events: []event.Event{*toolEvt},
+	}
+
+	invocation := agent.NewInvocation(
+		agent.WithInvocationID("inv"),
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(toolMsg),
+	)
+	graphAgent.setupInvocation(invocation)
+
+	state := graphAgent.createInitialState(context.Background(), invocation)
+	_, hasUserInput := state[graph.StateKeyUserInput]
+	require.False(t, hasUserInput)
+
+	messages, ok := graph.GetStateValue[[]model.Message](state, graph.StateKeyMessages)
+	require.True(t, ok)
+	require.NotEmpty(t, messages)
+	require.Equal(t, model.RoleTool, messages[len(messages)-1].Role)
+	require.Equal(t, "call-1", messages[len(messages)-1].ToolID)
+	require.Equal(t, "result", messages[len(messages)-1].Content)
+}
+
 // mockCheckpointSaver is a mock implementation of graph.CheckpointSaver.
 type mockCheckpointSaver struct{}
 
@@ -1320,4 +1516,272 @@ func TestGraphAgent_RunWithBarrierEmitError(t *testing.T) {
 	require.NotNil(t, events[0].Response.Error)
 	require.Equal(t, model.ErrorTypeFlowError, events[0].Response.Error.Type)
 	require.Contains(t, events[0].Response.Error.Message, "add notice channel")
+}
+
+func TestGraphAgent_WithExecutorOptions(t *testing.T) {
+	// Create a simple graph
+	schema := graph.NewStateSchema().
+		AddField("counter", graph.StateField{
+			Type:    reflect.TypeOf(0),
+			Reducer: graph.DefaultReducer,
+		})
+
+	g, err := graph.NewStateGraph(schema).
+		AddNode("increment", func(ctx context.Context, state graph.State) (any, error) {
+			counter, _ := state["counter"].(int)
+			return graph.State{"counter": counter + 1}, nil
+		}).
+		SetEntryPoint("increment").
+		SetFinishPoint("increment").
+		Compile()
+
+	require.NoError(t, err)
+
+	// Test creating graph agent with executor options
+	graphAgent, err := New("test-agent", g,
+		WithExecutorOptions(
+			graph.WithMaxSteps(50),
+			graph.WithStepTimeout(5*time.Minute),
+			graph.WithNodeTimeout(2*time.Minute),
+		))
+
+	require.NoError(t, err)
+	require.NotNil(t, graphAgent)
+
+	// Verify that executor was created successfully
+	executor := graphAgent.Executor()
+	require.NotNil(t, executor)
+
+	// Test that the agent can execute with the configured options
+	ctx := context.Background()
+	invocation := &agent.Invocation{
+		InvocationID: "test-executor-options",
+		AgentName:    "test-agent",
+	}
+
+	eventChan, err := graphAgent.Run(ctx, invocation)
+	require.NoError(t, err)
+
+	// Consume events to ensure execution completes
+	var done bool
+	for evt := range eventChan {
+		if evt.Done || evt.IsRunnerCompletion() {
+			done = true
+			break
+		}
+	}
+	require.True(t, done, "Execution should complete")
+}
+
+func TestGraphAgent_WithExecutorOptions_OverrideMappedOptions(t *testing.T) {
+	// Create a simple graph
+	schema := graph.NewStateSchema().
+		AddField("value", graph.StateField{
+			Type:    reflect.TypeOf(""),
+			Reducer: graph.DefaultReducer,
+		})
+
+	g, err := graph.NewStateGraph(schema).
+		AddNode("set", func(ctx context.Context, state graph.State) (any, error) {
+			return graph.State{"value": "test"}, nil
+		}).
+		SetEntryPoint("set").
+		SetFinishPoint("set").
+		Compile()
+
+	require.NoError(t, err)
+
+	// Test that executor options can override mapped options
+	// Set MaxConcurrency via mapped option, then override via executor option
+	graphAgent, err := New("test-agent", g,
+		WithMaxConcurrency(4),
+		WithExecutorOptions(
+			graph.WithMaxConcurrency(8), // This should override the mapped option
+			graph.WithMaxSteps(100),
+		))
+
+	require.NoError(t, err)
+	require.NotNil(t, graphAgent)
+
+	// Verify executor was created
+	executor := graphAgent.Executor()
+	require.NotNil(t, executor)
+
+	// Test execution
+	ctx := context.Background()
+	invocation := &agent.Invocation{
+		InvocationID: "test-override",
+		AgentName:    "test-agent",
+	}
+
+	eventChan, err := graphAgent.Run(ctx, invocation)
+	require.NoError(t, err)
+
+	// Consume events
+	var done bool
+	for evt := range eventChan {
+		if evt.Done || evt.IsRunnerCompletion() {
+			done = true
+			break
+		}
+	}
+	require.True(t, done, "Execution should complete")
+}
+
+// recordingSpanForEmitError captures span operations for testing emit error handling.
+type recordingSpanForEmitError struct {
+	oteltrace.Span
+	mu         sync.Mutex
+	statusCode codes.Code
+	statusDesc string
+	attributes []attribute.KeyValue
+}
+
+func (s *recordingSpanForEmitError) SetStatus(code codes.Code, description string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.statusCode = code
+	s.statusDesc = description
+	s.Span.SetStatus(code, description)
+}
+
+func (s *recordingSpanForEmitError) SetAttributes(kv ...attribute.KeyValue) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.attributes = append(s.attributes, kv...)
+	s.Span.SetAttributes(kv...)
+}
+
+func (s *recordingSpanForEmitError) getStatus() (codes.Code, string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.statusCode, s.statusDesc
+}
+
+func (s *recordingSpanForEmitError) getAttributes() []attribute.KeyValue {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result := make([]attribute.KeyValue, len(s.attributes))
+	copy(result, s.attributes)
+	return result
+}
+
+// recordingTracerForEmitError returns a tracer that creates recording spans.
+type recordingTracerForEmitError struct {
+	oteltrace.Tracer
+	mu    sync.Mutex
+	spans []*recordingSpanForEmitError
+}
+
+func newRecordingTracerForEmitError() *recordingTracerForEmitError {
+	baseTracer := noop.NewTracerProvider().Tracer("test")
+	return &recordingTracerForEmitError{Tracer: baseTracer}
+}
+
+func (t *recordingTracerForEmitError) Start(ctx context.Context, spanName string, opts ...oteltrace.SpanStartOption) (context.Context, oteltrace.Span) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	_, baseSpan := t.Tracer.Start(ctx, spanName, opts...)
+	recordingSpan := &recordingSpanForEmitError{Span: baseSpan}
+	t.spans = append(t.spans, recordingSpan)
+	return ctx, recordingSpan
+}
+
+func TestGraphAgent_RunWithBarrier_EmitEventError(t *testing.T) {
+	// Save original tracer
+	originalTracer := trace.Tracer
+	defer func() {
+		trace.Tracer = originalTracer
+	}()
+
+	// Create recording tracer
+	recordingTracer := newRecordingTracerForEmitError()
+	trace.Tracer = recordingTracer
+
+	// Create a simple graph that produces events
+	schema := graph.NewStateSchema().
+		AddField("output", graph.StateField{
+			Type:    reflect.TypeOf(""),
+			Reducer: graph.DefaultReducer,
+		})
+	g, err := graph.NewStateGraph(schema).
+		AddNode("process", func(ctx context.Context, state graph.State) (any, error) {
+			return graph.State{"output": "result"}, nil
+		}).
+		SetEntryPoint("process").
+		SetFinishPoint("process").
+		Compile()
+	require.NoError(t, err)
+
+	ga, err := New("emit-error-test", g)
+	require.NoError(t, err)
+
+	inv := &agent.Invocation{
+		AgentName:    "emit-error-test",
+		InvocationID: "inv-emit-error",
+		Message:      model.NewUserMessage("test"),
+	}
+
+	// Create output channel with buffer size 0 to make EmitEvent block
+	out := make(chan *event.Event, 0)
+
+	// Create a context that will be canceled to cause EmitEvent to fail
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Start runWithBarrier in a goroutine
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ga.runWithBarrier(ctx, inv, out)
+	}()
+
+	// Wait a bit for the graph to start executing and produce an event
+	// The event will try to be emitted but will block on the unbuffered channel
+	time.Sleep(100 * time.Millisecond)
+
+	// Cancel the context to cause EmitEvent to fail with context.Canceled
+	cancel()
+
+	// Wait for the goroutine to finish
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for runWithBarrier to complete")
+	}
+
+	// Verify that span operations were called
+	recordingTracer.mu.Lock()
+	spans := recordingTracer.spans
+	recordingTracer.mu.Unlock()
+
+	require.NotEmpty(t, spans, "expected at least one span to be created")
+
+	// Find the span for the agent invocation
+	var agentSpan *recordingSpanForEmitError
+	for _, span := range spans {
+		// The span name should contain the operation and agent name
+		agentSpan = span
+		break
+	}
+
+	require.NotNil(t, agentSpan, "expected agent span to be created")
+
+	// Verify SetStatus was called with Error code
+	statusCode, statusDesc := agentSpan.getStatus()
+	require.Equal(t, codes.Error, statusCode, "expected span status to be Error")
+	require.NotEmpty(t, statusDesc, "expected span status description to be set")
+
+	// Verify SetAttributes was called with error type
+	attrs := agentSpan.getAttributes()
+	var errorTypeAttr *attribute.KeyValue
+	for i := range attrs {
+		if string(attrs[i].Key) == string(itelemetry.KeyErrorType) {
+			errorTypeAttr = &attrs[i]
+			break
+		}
+	}
+	require.NotNil(t, errorTypeAttr, "expected error type attribute to be set")
+	errorTypeValue := errorTypeAttr.Value.AsString()
+	require.Equal(t, model.ErrorTypeFlowError, errorTypeValue, "expected error type to be FlowError")
 }

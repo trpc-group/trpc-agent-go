@@ -184,6 +184,18 @@ func (b *blockingTool) Call(ctx context.Context, _ []byte) (any, error) {
 	return b.result, nil
 }
 
+type resultWithErrorTool struct {
+	name   string
+	result any
+	err    error
+}
+
+func (t *resultWithErrorTool) Declaration() *tool.Declaration { return &tool.Declaration{Name: t.name} }
+
+func (t *resultWithErrorTool) Call(_ context.Context, _ []byte) (any, error) {
+	return t.result, t.err
+}
+
 // helper to build tool calls with fixed IDs and names.
 func makeToolCalls(names ...string) []model.ToolCall {
 	calls := make([]model.ToolCall, 0, len(names))
@@ -347,7 +359,7 @@ func TestProcessAgentEventStream_UnmarshalErrorLogged(t *testing.T) {
 	}
 	close(agentEvents)
 
-	last, final, raw, _, _, _, err := processAgentEventStream(
+	res, err := processAgentEventStream(
 		ctx,
 		agentEvents,
 		nil,
@@ -358,9 +370,9 @@ func TestProcessAgentEventStream_UnmarshalErrorLogged(t *testing.T) {
 		&itelemetry.InvokeAgentTracker{},
 	)
 	require.NoError(t, err)
-	require.Equal(t, "", last)
-	require.NotNil(t, final)
-	require.Len(t, raw, 1)
+	require.Equal(t, "", res.lastResponse)
+	require.NotNil(t, res.finalState)
+	require.Len(t, res.rawDelta, 1)
 }
 
 func TestProcessAgentEventStream_AccumulatesTokenUsage(t *testing.T) {
@@ -395,7 +407,7 @@ func TestProcessAgentEventStream_AccumulatesTokenUsage(t *testing.T) {
 	agentEvents <- finalEvent
 	close(agentEvents)
 
-	last, _, _, _, fullRespEvent, tokenUsage, err := processAgentEventStream(
+	res, err := processAgentEventStream(
 		ctx,
 		agentEvents,
 		nil,
@@ -406,11 +418,15 @@ func TestProcessAgentEventStream_AccumulatesTokenUsage(t *testing.T) {
 		&itelemetry.InvokeAgentTracker{},
 	)
 	require.NoError(t, err)
-	require.Equal(t, "final", last)
-	require.Equal(t, finalUsage.PromptTokens, tokenUsage.PromptTokens)
-	require.Equal(t, finalUsage.CompletionTokens, tokenUsage.CompletionTokens)
-	require.Equal(t, finalUsage.TotalTokens, tokenUsage.TotalTokens)
-	require.Equal(t, finalEvent, fullRespEvent)
+	require.Equal(t, "final", res.lastResponse)
+	require.Equal(t, finalUsage.PromptTokens, res.tokenUsage.PromptTokens)
+	require.Equal(
+		t,
+		finalUsage.CompletionTokens,
+		res.tokenUsage.CompletionTokens,
+	)
+	require.Equal(t, finalUsage.TotalTokens, res.tokenUsage.TotalTokens)
+	require.Equal(t, finalEvent, res.fullRespEvent)
 	require.Len(t, parentEventChan, 2)
 }
 
@@ -442,7 +458,7 @@ func TestProcessAgentEventStream_CapturesStructuredOutput(t *testing.T) {
 	}
 	close(agentEvents)
 
-	last, _, _, capturedOutput, _, _, err := processAgentEventStream(
+	res, err := processAgentEventStream(
 		ctx,
 		agentEvents,
 		nil,
@@ -453,9 +469,18 @@ func TestProcessAgentEventStream_CapturesStructuredOutput(t *testing.T) {
 		&itelemetry.InvokeAgentTracker{},
 	)
 	require.NoError(t, err)
-	require.Equal(t, "final", last)
-	require.NotNil(t, capturedOutput, "should capture structured output from event")
-	require.Equal(t, structuredData, capturedOutput, "captured output should match event payload")
+	require.Equal(t, "final", res.lastResponse)
+	require.NotNil(
+		t,
+		res.structuredOutput,
+		"should capture structured output from event",
+	)
+	require.Equal(
+		t,
+		structuredData,
+		res.structuredOutput,
+		"captured output should match event payload",
+	)
 }
 
 func TestProcessToolCalls_ParallelCancelOnFirstError(t *testing.T) {
@@ -533,6 +558,139 @@ func TestNewToolsNodeFunc_WithEnableParallelTools(t *testing.T) {
 	close(allowA)
 	close(allowB)
 	<-done
+}
+
+func TestNewToolsNodeFunc_WithToolCallbacks(t *testing.T) {
+	// Track callback invocations.
+	var beforeCalled, afterCalled bool
+	callbacks := tool.NewCallbacks()
+	callbacks.BeforeTool = append(callbacks.BeforeTool,
+		func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+			beforeCalled = true
+			return &tool.BeforeToolResult{Context: ctx}, nil
+		},
+	)
+	callbacks.AfterTool = append(callbacks.AfterTool,
+		func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+			afterCalled = true
+			return &tool.AfterToolResult{Context: ctx}, nil
+		},
+	)
+
+	// Create a simple tool.
+	simpleTool := &dummyTool{name: "simple"}
+	tools := map[string]tool.Tool{"simple": simpleTool}
+
+	// Build node func with tool callbacks configured via WithToolCallbacks option.
+	nf := NewToolsNodeFunc(tools, WithToolCallbacks(callbacks))
+
+	// Prepare state with tool call.
+	state := State{
+		StateKeyMessages: []model.Message{{
+			Role:      model.RoleAssistant,
+			ToolCalls: makeToolCalls("simple"),
+		}},
+	}
+
+	// Run the node function.
+	res, err := nf(context.Background(), state)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+
+	// Verify callbacks were invoked.
+	require.True(t, beforeCalled, "BeforeTool callback should be invoked")
+	require.True(t, afterCalled, "AfterTool callback should be invoked")
+
+	// Verify messages were created.
+	msgs, ok := res.(State)[StateKeyMessages].([]model.Message)
+	require.True(t, ok, "expected messages in result state")
+	require.Len(t, msgs, 1, "expected one tool result message")
+}
+
+func TestNewToolsNodeFunc_ToolCallbacksPrecedence(t *testing.T) {
+	// Test that node-configured callbacks take precedence over state callbacks.
+	var nodeCallbackUsed, stateCallbackUsed bool
+
+	// Node-level callbacks.
+	nodeCallbacks := tool.NewCallbacks()
+	nodeCallbacks.BeforeTool = append(nodeCallbacks.BeforeTool,
+		func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+			nodeCallbackUsed = true
+			return &tool.BeforeToolResult{Context: ctx}, nil
+		},
+	)
+
+	// State-level callbacks.
+	stateCallbacks := tool.NewCallbacks()
+	stateCallbacks.BeforeTool = append(stateCallbacks.BeforeTool,
+		func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+			stateCallbackUsed = true
+			return &tool.BeforeToolResult{Context: ctx}, nil
+		},
+	)
+
+	// Create a simple tool.
+	simpleTool := &dummyTool{name: "simple"}
+	tools := map[string]tool.Tool{"simple": simpleTool}
+
+	// Build node func with node-level callbacks.
+	nf := NewToolsNodeFunc(tools, WithToolCallbacks(nodeCallbacks))
+
+	// Prepare state with tool call and state-level callbacks.
+	state := State{
+		StateKeyMessages: []model.Message{{
+			Role:      model.RoleAssistant,
+			ToolCalls: makeToolCalls("simple"),
+		}},
+		StateKeyToolCallbacks: stateCallbacks,
+	}
+
+	// Run the node function.
+	res, err := nf(context.Background(), state)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+
+	// Verify only node-level callbacks were used.
+	require.True(t, nodeCallbackUsed, "node callback should be used")
+	require.False(t, stateCallbackUsed, "state callback should NOT be used when node callback is configured")
+}
+
+func TestNewToolsNodeFunc_StateCallbacksFallback(t *testing.T) {
+	// Test that state callbacks are used when node callbacks are not configured.
+	var stateCallbackUsed bool
+
+	// State-level callbacks.
+	stateCallbacks := tool.NewCallbacks()
+	stateCallbacks.BeforeTool = append(stateCallbacks.BeforeTool,
+		func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+			stateCallbackUsed = true
+			return &tool.BeforeToolResult{Context: ctx}, nil
+		},
+	)
+
+	// Create a simple tool.
+	simpleTool := &dummyTool{name: "simple"}
+	tools := map[string]tool.Tool{"simple": simpleTool}
+
+	// Build node func WITHOUT node-level callbacks.
+	nf := NewToolsNodeFunc(tools)
+
+	// Prepare state with tool call and state-level callbacks.
+	state := State{
+		StateKeyMessages: []model.Message{{
+			Role:      model.RoleAssistant,
+			ToolCalls: makeToolCalls("simple"),
+		}},
+		StateKeyToolCallbacks: stateCallbacks,
+	}
+
+	// Run the node function.
+	res, err := nf(context.Background(), state)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+
+	// Verify state callbacks were used.
+	require.True(t, stateCallbackUsed, "state callback should be used as fallback")
 }
 
 func TestBuilderEdges(t *testing.T) {
@@ -1468,6 +1626,7 @@ func TestBuildAgentInvocationWithStateAndScope_PreservesRequestID(
 		runtime,
 		&messageEchoAgent{name: "child"},
 		"",
+		"",
 	)
 	require.Equal(t, requestID, childInv.RunOptions.RequestID)
 	require.Equal(t, "model-x", childInv.RunOptions.ModelName)
@@ -1722,7 +1881,13 @@ func TestLLMRunnerSetsLastResponseID(t *testing.T) {
 		{
 			name: "user-input",
 			run: func(r *llmRunner) (State, error) {
-				res, err := r.executeUserInputStage(ctx, State{StateKeyUserInput: "hi"}, "hi", span)
+				res, err := r.executeUserInputStage(
+					ctx,
+					State{StateKeyUserInput: "hi"},
+					StateKeyUserInput,
+					"hi",
+					span,
+				)
 				require.NoError(t, err)
 				return res.(State), nil
 			},
@@ -1747,6 +1912,41 @@ func TestLLMRunnerSetsLastResponseID(t *testing.T) {
 			require.Equal(t, tt.expect, state[StateKeyLastResponseID])
 		})
 	}
+}
+
+func TestLLMRunner_CustomUserInputKey(t *testing.T) {
+	const (
+		testCustomInputKey = "custom_input"
+		testCustomInput    = "from-custom"
+	)
+
+	ctx, span := trace.Tracer.Start(context.Background(), "test")
+	defer span.End()
+
+	runner := newRunner("resp-custom")
+	runner.userInputKey = testCustomInputKey
+
+	res, err := runner.execute(ctx, State{
+		StateKeyMessages:   []model.Message{},
+		StateKeyUserInput:  "from-user",
+		testCustomInputKey: testCustomInput,
+	}, span)
+	require.NoError(t, err)
+
+	state, ok := res.(State)
+	require.True(t, ok)
+	require.Equal(t, "", state[testCustomInputKey])
+	_, hasDefaultKey := state[StateKeyUserInput]
+	require.False(t, hasDefaultKey)
+
+	merged := MessageReducer([]model.Message{}, state[StateKeyMessages])
+	msgs, ok := merged.([]model.Message)
+	require.True(t, ok)
+	require.Len(t, msgs, 2)
+	require.Equal(t, model.RoleUser, msgs[0].Role)
+	require.Equal(t, testCustomInput, msgs[0].Content)
+	require.Equal(t, model.RoleAssistant, msgs[1].Role)
+	require.Equal(t, "ok", msgs[1].Content)
 }
 
 func TestLLMRunner_OverridesStreamFromRunOptions(t *testing.T) {
@@ -1930,6 +2130,177 @@ func TestExecuteSingleToolCallPropagatesResponseID(t *testing.T) {
 			require.True(t, seenPhases[ToolExecutionPhaseComplete])
 		})
 	}
+}
+
+func TestExecuteSingleToolCall_InterruptWithCustomResultEmitsOutput(t *testing.T) {
+	ctx, span := trace.Tracer.Start(context.Background(), "tool")
+	defer span.End()
+
+	ch := make(chan *event.Event, 2)
+
+	callbacks := tool.NewCallbacks()
+	customResult := map[string]any{"reason": "need_user_confirm"}
+	callbacks.RegisterAfterTool(func(
+		_ context.Context,
+		_ *tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		return &tool.AfterToolResult{CustomResult: customResult}, NewInterruptError("pause")
+	})
+
+	_, err := executeSingleToolCall(ctx, singleToolCallConfig{
+		ToolCall: model.ToolCall{
+			ID: "call-1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "echo",
+				Arguments: []byte(`{"x":1}`),
+			},
+		},
+		Tools: map[string]tool.Tool{
+			"echo": &blockingTool{name: "echo", result: map[string]int{"x": 1}},
+		},
+		InvocationID:  "inv-1",
+		EventChan:     ch,
+		Span:          span,
+		ToolCallbacks: callbacks,
+		State:         State{StateKeyCurrentNodeID: "node-1"},
+	})
+	require.Error(t, err)
+	var interruptErr *InterruptError
+	require.ErrorAs(t, err, &interruptErr)
+
+	events := []*event.Event{<-ch, <-ch}
+
+	seenPhases := map[ToolExecutionPhase]bool{}
+	var complete ToolExecutionMetadata
+	for _, evt := range events {
+		raw := evt.StateDelta[MetadataKeyTool]
+		require.NotEmpty(t, raw)
+
+		var meta ToolExecutionMetadata
+		require.NoError(t, json.Unmarshal(raw, &meta))
+		seenPhases[meta.Phase] = true
+		if meta.Phase == ToolExecutionPhaseComplete {
+			complete = meta
+		}
+	}
+
+	require.True(t, seenPhases[ToolExecutionPhaseStart])
+	require.True(t, seenPhases[ToolExecutionPhaseComplete])
+	require.Empty(t, complete.Error)
+	require.JSONEq(t, `{"reason":"need_user_confirm"}`, complete.Output)
+}
+
+func TestExecuteSingleToolCall_InterruptFromToolEmitsOutput(t *testing.T) {
+	ctx, span := trace.Tracer.Start(context.Background(), "tool")
+	defer span.End()
+
+	ch := make(chan *event.Event, 2)
+
+	_, err := executeSingleToolCall(ctx, singleToolCallConfig{
+		ToolCall: model.ToolCall{
+			ID: "call-1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "echo",
+				Arguments: []byte(`{"x":1}`),
+			},
+		},
+		Tools: map[string]tool.Tool{
+			"echo": &resultWithErrorTool{
+				name:   "echo",
+				result: map[string]int{"x": 1},
+				err:    NewInterruptError("pause"),
+			},
+		},
+		InvocationID: "inv-1",
+		EventChan:    ch,
+		Span:         span,
+		State:        State{StateKeyCurrentNodeID: "node-1"},
+	})
+	require.Error(t, err)
+	var interruptErr *InterruptError
+	require.ErrorAs(t, err, &interruptErr)
+
+	events := []*event.Event{<-ch, <-ch}
+
+	seenPhases := map[ToolExecutionPhase]bool{}
+	var complete ToolExecutionMetadata
+	for _, evt := range events {
+		raw := evt.StateDelta[MetadataKeyTool]
+		require.NotEmpty(t, raw)
+
+		var meta ToolExecutionMetadata
+		require.NoError(t, json.Unmarshal(raw, &meta))
+		seenPhases[meta.Phase] = true
+		if meta.Phase == ToolExecutionPhaseComplete {
+			complete = meta
+		}
+	}
+
+	require.True(t, seenPhases[ToolExecutionPhaseStart])
+	require.True(t, seenPhases[ToolExecutionPhaseComplete])
+	require.Empty(t, complete.Error)
+	require.JSONEq(t, `{"x":1}`, complete.Output)
+}
+
+func TestExecuteSingleToolCall_InterruptBeforeCallbackWithCustomResultEmitsOutputAndSkipsTool(t *testing.T) {
+	ctx, span := trace.Tracer.Start(context.Background(), "tool")
+	defer span.End()
+
+	ch := make(chan *event.Event, 2)
+
+	callbacks := tool.NewCallbacks()
+	customResult := map[string]any{"reason": "need_user_confirm"}
+	callbacks.RegisterBeforeTool(func(
+		_ context.Context,
+		_ *tool.BeforeToolArgs,
+	) (*tool.BeforeToolResult, error) {
+		return &tool.BeforeToolResult{CustomResult: customResult}, NewInterruptError("pause")
+	})
+
+	tl := &captureTool{name: "echo", result: map[string]int{"x": 1}}
+
+	_, err := executeSingleToolCall(ctx, singleToolCallConfig{
+		ToolCall: model.ToolCall{
+			ID: "call-1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "echo",
+				Arguments: []byte(`{"x":1}`),
+			},
+		},
+		Tools: map[string]tool.Tool{
+			"echo": tl,
+		},
+		InvocationID:  "inv-1",
+		EventChan:     ch,
+		Span:          span,
+		ToolCallbacks: callbacks,
+		State:         State{StateKeyCurrentNodeID: "node-1"},
+	})
+	require.Error(t, err)
+	var interruptErr *InterruptError
+	require.ErrorAs(t, err, &interruptErr)
+	require.False(t, tl.called)
+
+	events := []*event.Event{<-ch, <-ch}
+
+	seenPhases := map[ToolExecutionPhase]bool{}
+	var complete ToolExecutionMetadata
+	for _, evt := range events {
+		raw := evt.StateDelta[MetadataKeyTool]
+		require.NotEmpty(t, raw)
+
+		var meta ToolExecutionMetadata
+		require.NoError(t, json.Unmarshal(raw, &meta))
+		seenPhases[meta.Phase] = true
+		if meta.Phase == ToolExecutionPhaseComplete {
+			complete = meta
+		}
+	}
+
+	require.True(t, seenPhases[ToolExecutionPhaseStart])
+	require.True(t, seenPhases[ToolExecutionPhaseComplete])
+	require.Empty(t, complete.Error)
+	require.JSONEq(t, `{"reason":"need_user_confirm"}`, complete.Output)
 }
 
 func TestExtractResponseIDNonResponse(t *testing.T) {
@@ -2193,4 +2564,358 @@ func TestNewToolsNodeFunc_RefreshToolSetsOnRun(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, 2, ts.calls)
+}
+
+func TestStateGraph_StaticInterruptNodes_SetFlags(t *testing.T) {
+	const (
+		nodeA = "a"
+		nodeB = "b"
+	)
+
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode(nodeA, func(ctx context.Context, state State) (any, error) {
+		return nil, nil
+	})
+	sg.AddNode(nodeB, func(ctx context.Context, state State) (any, error) {
+		return nil, nil
+	})
+
+	sg.WithInterruptBeforeNodes(nodeA)
+	sg.WithInterruptAfterNodes(nodeB)
+
+	sg.SetEntryPoint(nodeA)
+	sg.AddEdge(nodeA, nodeB)
+	sg.SetFinishPoint(nodeB)
+
+	_, err := sg.Compile()
+	require.NoError(t, err)
+
+	a := sg.graph.nodes[nodeA]
+	b := sg.graph.nodes[nodeB]
+	require.NotNil(t, a)
+	require.NotNil(t, b)
+	require.True(t, a.interruptBefore)
+	require.True(t, b.interruptAfter)
+}
+
+func TestStateGraph_StaticInterruptNodes_UnknownNodeBuildError(t *testing.T) {
+	const (
+		nodeA         = "a"
+		nodeB         = "b"
+		missingBefore = "missing_before"
+		missingAfter  = "missing_after"
+	)
+
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode(nodeA, func(ctx context.Context, state State) (any, error) {
+		return nil, nil
+	})
+	sg.AddNode(nodeB, func(ctx context.Context, state State) (any, error) {
+		return nil, nil
+	})
+
+	sg.WithInterruptBeforeNodes(missingBefore)
+	sg.WithInterruptAfterNodes(missingAfter)
+
+	sg.SetEntryPoint(nodeA)
+	sg.AddEdge(nodeA, nodeB)
+	sg.SetFinishPoint(nodeB)
+
+	_, err := sg.Compile()
+	require.Error(t, err)
+}
+
+type latestCheckpointAgent struct {
+	name string
+	exec *Executor
+}
+
+func (a *latestCheckpointAgent) Info() agent.Info {
+	return agent.Info{Name: a.name}
+}
+
+func (a *latestCheckpointAgent) Tools() []tool.Tool { return nil }
+
+func (a *latestCheckpointAgent) SubAgents() []agent.Agent { return nil }
+
+func (a *latestCheckpointAgent) FindSubAgent(_ string) agent.Agent {
+	return nil
+}
+
+func (a *latestCheckpointAgent) Executor() *Executor { return a.exec }
+
+func (a *latestCheckpointAgent) Run(
+	_ context.Context,
+	_ *agent.Invocation,
+) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event)
+	close(ch)
+	return ch, nil
+}
+
+func TestStateStringOr(t *testing.T) {
+	const (
+		key      = "k"
+		fallback = "fb"
+		value    = "v"
+	)
+
+	require.Equal(t, fallback, stateStringOr(nil, key, fallback))
+	require.Equal(
+		t,
+		fallback,
+		stateStringOr(State{key: testEmptyString}, key, fallback),
+	)
+	require.Equal(t, value, stateStringOr(State{key: value}, key, fallback))
+}
+
+func TestResumeCommandForSubgraph(t *testing.T) {
+	const (
+		taskID      = "task"
+		otherTaskID = "other"
+		resumeValue = "ok"
+	)
+
+	require.Nil(t, resumeCommandForSubgraph(nil, taskID))
+
+	cmd := resumeCommandForSubgraph(
+		State{ResumeChannel: resumeValue},
+		taskID,
+	)
+	require.NotNil(t, cmd)
+	require.Equal(t, resumeValue, cmd.Resume)
+
+	stateMap := map[string]any{
+		taskID:      resumeValue,
+		otherTaskID: resumeValue,
+	}
+	cmd = resumeCommandForSubgraph(
+		State{StateKeyResumeMap: stateMap},
+		taskID,
+	)
+	require.NotNil(t, cmd)
+	require.Equal(t, map[string]any{taskID: resumeValue}, cmd.ResumeMap)
+
+	cmd = resumeCommandForSubgraph(
+		State{StateKeyResumeMap: stateMap},
+		testEmptyString,
+	)
+	require.NotNil(t, cmd)
+	require.Equal(t, stateMap, cmd.ResumeMap)
+	stateMap["new"] = "x"
+	_, ok := cmd.ResumeMap["new"]
+	require.False(t, ok)
+
+	cmd = resumeCommandForSubgraph(
+		State{StateKeyResumeMap: map[string]any{otherTaskID: "x"}},
+		taskID,
+	)
+	require.Nil(t, cmd)
+}
+
+func TestExtractPregelInterrupt(t *testing.T) {
+	const (
+		invocationID = "inv"
+		author       = "a"
+		nodeID       = "n"
+		interruptKey = "k"
+		interruptVal = "prompt"
+	)
+
+	_, ok := extractPregelInterrupt(nil)
+	require.False(t, ok)
+
+	e := event.New(invocationID, author, event.WithObject("other"))
+	_, ok = extractPregelInterrupt(e)
+	require.False(t, ok)
+
+	e = event.New(
+		invocationID,
+		author,
+		event.WithObject(ObjectTypeGraphPregelStep),
+	)
+	_, ok = extractPregelInterrupt(e)
+	require.False(t, ok)
+
+	e = event.New(
+		invocationID,
+		author,
+		event.WithObject(ObjectTypeGraphPregelStep),
+		event.WithStateDelta(map[string][]byte{}),
+	)
+	_, ok = extractPregelInterrupt(e)
+	require.False(t, ok)
+
+	e = event.New(
+		invocationID,
+		author,
+		event.WithObject(ObjectTypeGraphPregelStep),
+		event.WithStateDelta(map[string][]byte{
+			MetadataKeyPregel: []byte("{"),
+		}),
+	)
+	_, ok = extractPregelInterrupt(e)
+	require.False(t, ok)
+
+	meta := PregelStepMetadata{
+		NodeID:         nodeID,
+		InterruptValue: interruptVal,
+	}
+	b, err := json.Marshal(meta)
+	require.NoError(t, err)
+	e = event.New(
+		invocationID,
+		author,
+		event.WithObject(ObjectTypeGraphPregelStep),
+		event.WithStateDelta(map[string][]byte{
+			MetadataKeyPregel: b,
+		}),
+	)
+	intr, ok := extractPregelInterrupt(e)
+	require.True(t, ok)
+	require.NotNil(t, intr)
+	require.Equal(t, nodeID, intr.NodeID)
+	require.Equal(t, nodeID, intr.TaskID)
+	require.Equal(t, nodeID, intr.Key)
+	require.Equal(t, interruptVal, intr.Value)
+
+	meta = PregelStepMetadata{
+		NodeID:         nodeID,
+		InterruptKey:   interruptKey,
+		InterruptValue: interruptVal,
+	}
+	b, err = json.Marshal(meta)
+	require.NoError(t, err)
+	e = event.New(
+		invocationID,
+		author,
+		event.WithObject(ObjectTypeGraphPregelStep),
+		event.WithStateDelta(map[string][]byte{
+			MetadataKeyPregel: b,
+		}),
+	)
+	intr, ok = extractPregelInterrupt(e)
+	require.True(t, ok)
+	require.NotNil(t, intr)
+	require.Equal(t, nodeID, intr.NodeID)
+	require.Equal(t, interruptKey, intr.TaskID)
+	require.Equal(t, interruptKey, intr.Key)
+	require.Equal(t, interruptVal, intr.Value)
+
+	meta = PregelStepMetadata{
+		NodeID:         testEmptyString,
+		InterruptValue: interruptVal,
+	}
+	b, err = json.Marshal(meta)
+	require.NoError(t, err)
+	e = event.New(
+		invocationID,
+		author,
+		event.WithObject(ObjectTypeGraphPregelStep),
+		event.WithStateDelta(map[string][]byte{
+			MetadataKeyPregel: b,
+		}),
+	)
+	_, ok = extractPregelInterrupt(e)
+	require.False(t, ok)
+
+	meta = PregelStepMetadata{NodeID: nodeID}
+	b, err = json.Marshal(meta)
+	require.NoError(t, err)
+	e = event.New(
+		invocationID,
+		author,
+		event.WithObject(ObjectTypeGraphPregelStep),
+		event.WithStateDelta(map[string][]byte{
+			MetadataKeyPregel: b,
+		}),
+	)
+	_, ok = extractPregelInterrupt(e)
+	require.False(t, ok)
+}
+
+func TestLatestInterruptedCheckpointID(t *testing.T) {
+	ctx := context.Background()
+
+	targetAgent := &inspectAgent{name: "no_exec"}
+	id, err := latestInterruptedCheckpointID(ctx, targetAgent, "ln", "ns")
+	require.NoError(t, err)
+	require.Equal(t, testEmptyString, id)
+
+	targetAgent2 := &latestCheckpointAgent{name: "nil_exec"}
+	id, err = latestInterruptedCheckpointID(ctx, targetAgent2, "ln", "ns")
+	require.NoError(t, err)
+	require.Equal(t, testEmptyString, id)
+
+	execWithNilCM := &Executor{
+		checkpointManager: nil,
+	}
+	targetAgent3 := &latestCheckpointAgent{
+		name: "nil_cm",
+		exec: execWithNilCM,
+	}
+	id, err = latestInterruptedCheckpointID(ctx, targetAgent3, "ln", "ns")
+	require.NoError(t, err)
+	require.Equal(t, testEmptyString, id)
+
+	execWithBrokenCM := &Executor{
+		checkpointManager: &CheckpointManager{},
+	}
+	targetAgent4 := &latestCheckpointAgent{
+		name: "err_latest",
+		exec: execWithBrokenCM,
+	}
+	_, err = latestInterruptedCheckpointID(ctx, targetAgent4, "ln", "ns")
+	require.Error(t, err)
+
+	saver := newSubgraphTestSaver()
+	graphSchema := NewStateSchema()
+	g, err := NewStateGraph(graphSchema).
+		AddNode("n", func(_ context.Context, s State) (any, error) {
+			return s, nil
+		}).
+		SetEntryPoint("n").
+		SetFinishPoint("n").
+		Compile()
+	require.NoError(t, err)
+	exec, err := NewExecutor(g, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+	targetAgent5 := &latestCheckpointAgent{
+		name: "with_saver",
+		exec: exec,
+	}
+
+	id, err = latestInterruptedCheckpointID(ctx, targetAgent5, "ln", "ns")
+	require.NoError(t, err)
+	require.Equal(t, testEmptyString, id)
+
+	cfg := CreateCheckpointConfig("ln", "ck1", "ns")
+	_, err = saver.Put(ctx, PutRequest{
+		Config: cfg,
+		Checkpoint: &Checkpoint{
+			ID:            "ck1",
+			ChannelValues: map[string]any{},
+		},
+		Metadata: NewCheckpointMetadata("test", 0),
+	})
+	require.NoError(t, err)
+	id, err = latestInterruptedCheckpointID(ctx, targetAgent5, "ln", "ns")
+	require.NoError(t, err)
+	require.Equal(t, testEmptyString, id)
+
+	cfg = CreateCheckpointConfig("ln", "ck2", "ns")
+	_, err = saver.Put(ctx, PutRequest{
+		Config: cfg,
+		Checkpoint: &Checkpoint{
+			ID: "ck2",
+			InterruptState: &InterruptState{
+				NodeID: "n",
+			},
+		},
+		Metadata: NewCheckpointMetadata("test", 1),
+	})
+	require.NoError(t, err)
+	id, err = latestInterruptedCheckpointID(ctx, targetAgent5, "ln", "ns")
+	require.NoError(t, err)
+	require.Equal(t, "ck2", id)
 }

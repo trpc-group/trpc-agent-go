@@ -66,8 +66,9 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.NotNil(t, span)
 
 	assert.Equal(t, time.Hour, opts.Timeout)
-	assert.False(t, opts.GraphNodeStartActivityEnabled)
+	assert.False(t, opts.GraphNodeLifecycleActivityEnabled)
 	assert.False(t, opts.GraphNodeInterruptActivityEnabled)
+	assert.False(t, opts.GraphNodeInterruptActivityTopLevelOnly)
 }
 
 func TestWithUserIDResolver(t *testing.T) {
@@ -107,14 +108,19 @@ func TestWithTranslatorFactory(t *testing.T) {
 	assert.Equal(t, customTranslator, tr)
 }
 
-func TestWithGraphNodeStartActivityEnabled(t *testing.T) {
-	opts := NewOptions(WithGraphNodeStartActivityEnabled(true))
-	assert.True(t, opts.GraphNodeStartActivityEnabled)
+func TestWithGraphNodeLifecycleActivityEnabled(t *testing.T) {
+	opts := NewOptions(WithGraphNodeLifecycleActivityEnabled(true))
+	assert.True(t, opts.GraphNodeLifecycleActivityEnabled)
 }
 
 func TestWithGraphNodeInterruptActivityEnabled(t *testing.T) {
 	opts := NewOptions(WithGraphNodeInterruptActivityEnabled(true))
 	assert.True(t, opts.GraphNodeInterruptActivityEnabled)
+}
+
+func TestWithGraphNodeInterruptActivityTopLevelOnly(t *testing.T) {
+	opts := NewOptions(WithGraphNodeInterruptActivityTopLevelOnly(true))
+	assert.True(t, opts.GraphNodeInterruptActivityTopLevelOnly)
 }
 
 func TestWithTranslateCallbacks(t *testing.T) {
@@ -212,4 +218,14 @@ func TestWithStartSpan(t *testing.T) {
 func TestWithTimeout(t *testing.T) {
 	opts := NewOptions(WithTimeout(2 * time.Second))
 	assert.Equal(t, 2*time.Second, opts.Timeout)
+}
+
+func TestWithMessagesSnapshotFollowEnabled(t *testing.T) {
+	opts := NewOptions(WithMessagesSnapshotFollowEnabled(true))
+	assert.True(t, opts.MessagesSnapshotFollowEnabled)
+}
+
+func TestWithMessagesSnapshotFollowMaxDuration(t *testing.T) {
+	opts := NewOptions(WithMessagesSnapshotFollowMaxDuration(2 * time.Second))
+	assert.Equal(t, 2*time.Second, opts.MessagesSnapshotFollowMaxDuration)
 }

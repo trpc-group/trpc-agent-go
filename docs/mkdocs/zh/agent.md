@@ -138,6 +138,64 @@ if err != nil {
 }
 ```
 
+### 中断 Agent 运行（取消）
+
+在 Go 里，`context.Context`（常命名为 `ctx`）不仅用于“传参”，还可以携带：
+
+- **取消信号**（调用 `cancel()`）
+- **截止时间**（deadline / timeout）
+
+框架会用 `ctx` 来安全地停止正在运行的 agent。
+
+#### 如何停止一个正在运行的 agent
+
+取消你传给 `Runner.Run` 的同一个 `ctx`。不要只停止读取事件通道。
+
+```go
+ctx, cancel := context.WithCancel(context.Background())
+defer cancel()
+
+// 假设 r 是通过 runner.NewRunner(...) 创建的 runner.Runner。
+eventCh, err := r.Run(ctx, "user-001", "session-001", message)
+if err != nil {
+    return err
+}
+
+go func() {
+    time.Sleep(2 * time.Second)
+    cancel()
+}()
+
+for range eventCh {
+    // 一直读到通道关闭：要么 ctx 被取消，要么 run 正常结束。
+}
+```
+
+#### Ctrl+C（命令行程序）
+
+```go
+ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+defer stop()
+
+// 假设 r 是通过 runner.NewRunner(...) 创建的 runner.Runner。
+eventCh, err := r.Run(ctx, "user-001", "session-001", message)
+if err != nil {
+    return err
+}
+for range eventCh {
+}
+```
+
+#### 如果你实现自定义 Agent 或 Tool
+
+取消是“协作式”的：你的代码需要检查 `ctx.Done()` 并尽快返回。
+
+- 自定义 Agent 在长循环里要 `select` 监听 `ctx.Done()`。
+- Tool 做网络/DB 调用时建议传入 `ctx`（这样这些调用也能被取消）。
+
+更完整的 run 控制说明（requestID cancel、StopError、超时等）见
+`docs/mkdocs/zh/runner.md`。
+
 ### 消息可见性选项
 当前 Agent 可在需要时根据不同场景控制其对其他 Agent 生成的消息以及历史会话消息的可见性进行管理，可通过相关选项配置进行管理。
 在与 model 交互时仅将可见的内容输入给模型。 
@@ -647,6 +705,12 @@ llmagent := llmagent.New("llmagent", llmagent.WithAgentCallbacks(callbacks))
 
 提供用户自定义的 JSON schema 用于结构化输出，同时**允许使用工具**。这是需要结构化输出和工具能力的 Agent 的最灵活选项。
 
+**注意：**
+- “允许使用工具”表示 Agent 仍可发起工具调用（包括 Skills 的
+  `skill_load` / `skill_run`）。
+- 当模型需要调用工具时，可能会先返回工具调用事件而不是最终 JSON；
+  只有最终答复才需要满足 schema，并且必须是单个 JSON 对象。
+
 **示例：**
 
 ```go
@@ -701,6 +765,10 @@ for event := range eventCh {
 ### WithStructuredOutputJSON
 
 从 Go 结构体自动生成 JSON schema 并返回类型化输出。提供编译时类型安全。
+
+**注意：**
+- 当模型需要调用工具时，可能会先返回工具调用事件而不是最终 JSON；
+  只有最终答复才需要满足 schema，并且必须是单个 JSON 对象。
 
 **示例：**
 
@@ -941,7 +1009,8 @@ llm := llmagent.New(
 
 - 持久化“按用户”：写到 `user:*`，在模板里用 `{user:key}` 引用
 - 持久化“按应用”：写到 `app:*`，在模板里用 `{app:key}` 引用
-- 每轮一次（临时）：写入会话的 `temp:*` 命名空间，模板用 `{temp:key}`（不会持久化）
+- 会话内临时：写入会话的 `temp:*` 命名空间，模板用 `{temp:key}`
+  引用（不属于 `user:*`/`app:*` 的持久化配置；常见用法是每轮覆盖）
 
 示例：按用户动态提示词
 
@@ -984,7 +1053,7 @@ _, _ = run.Run(context.Background(), user, sid, model.NewUserMessage("Hi!"))
 callbacks := agent.NewCallbacks()
 callbacks.RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
   if args.Invocation != nil && args.Invocation.Session != nil {
-    // 为"本轮"临时指定指令
+    // 为本次运行写入临时指令
     args.Invocation.Session.SetState("temp:sys", []byte("Translate to French."))
   }
   return nil, nil
@@ -999,5 +1068,6 @@ llm := llmagent.New(
 
 注意事项
 
-- 内存版 `UpdateUserState` 出于安全设计禁止写 `temp:*`；需要临时值时，通过 `invocation.Session.SetState` 写入（例如通过回调）。
+- 内存版 `UpdateUserState` 出于安全设计禁止写 `temp:*`；需要会话内
+  临时值时，通过 `invocation.Session.SetState` 写入（例如通过回调）。
 - 占位符是在“请求时”解析；只要你换了存储的值，下一次模型请求就会用新值，无需重建 Agent。
