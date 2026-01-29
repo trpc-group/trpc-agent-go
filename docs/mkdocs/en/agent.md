@@ -721,6 +721,13 @@ Structured output ensures that agent responses conform to a predefined format, m
 
 Provides a user-defined JSON schema for structured output while **allowing tool usage**. This is the most flexible option for agents that need both structured output and tool capabilities.
 
+**Notes:**
+- “Tools are allowed” means the agent can still make tool calls (including
+  Skills tools like `skill_load` / `skill_run`).
+- When the model needs tools, it may emit tool call events first and only
+  produce the final JSON later. Only the final answer must conform to the
+  schema and must be a single JSON object.
+
 **Example:**
 
 ```go
@@ -775,6 +782,11 @@ for event := range eventCh {
 ### WithStructuredOutputJSON
 
 Auto-generates JSON schema from a Go struct and returns typed output. Provides compile-time type safety.
+
+**Notes:**
+- When the model needs tools, it may emit tool call events first and only
+  produce the final JSON later. Only the final answer must conform to the
+  schema and must be a single JSON object.
 
 **Example:**
 
