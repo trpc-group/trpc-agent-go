@@ -29,6 +29,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
 	evalstatus "trpc.group/trpc-go/trpc-agent-go/evaluation/status"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
@@ -393,11 +394,28 @@ func prepareCaseEvaluationInputs(inferenceResult *service.InferenceResult, evalC
 		return nil, fmt.Errorf("inference count %d does not match expected conversation length %d",
 			len(actuals), len(expecteds))
 	}
+	attachContextMessages(actuals, evalCase.ContextMessages)
+	attachContextMessages(expecteds, evalCase.ContextMessages)
 	return &caseEvaluationInputs{
 		actuals:   actuals,
 		expecteds: expecteds,
 		userID:    evalCase.SessionInput.UserID,
 	}, nil
+}
+
+func attachContextMessages(invocations []*evalset.Invocation, contextMessages []*model.Message) {
+	if len(invocations) == 0 || len(contextMessages) == 0 {
+		return
+	}
+	for _, invocation := range invocations {
+		if invocation == nil {
+			continue
+		}
+		if len(invocation.ContextMessages) != 0 {
+			continue
+		}
+		invocation.ContextMessages = contextMessages
+	}
 }
 
 // traceExpectedsForEval builds placeholder expected invocations that only preserve user inputs.
