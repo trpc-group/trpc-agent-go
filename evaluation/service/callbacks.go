@@ -249,8 +249,8 @@ type BeforeEvaluateSetResult struct {
 type AfterEvaluateSetArgs struct {
 	// Request is the final request used for this evaluation stage.
 	Request *EvaluateRequest
-	// Result contains the persisted eval set result and may be nil on error.
-	Result *evalresult.EvalSetResult
+	// Result contains the eval set run result and may be nil on error.
+	Result *EvalSetRunResult
 	// Error is the error occurred during evaluation and may be nil.
 	Error error
 	// StartTime records when the evaluate set stage started.
