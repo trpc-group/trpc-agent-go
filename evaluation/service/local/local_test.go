@@ -1679,23 +1679,23 @@ func TestLocalEvaluateDoesNotPersistEvalSetResult(t *testing.T) {
 	}
 	defer func() {
 		assert.NoError(t, svc.Close())
-		}()
+	}()
 
-		res, err := svc.Evaluate(ctx, &service.EvaluateRequest{
-			AppName:          appName,
-			EvalSetID:        evalSetID,
-			InferenceResults: []*service.InferenceResult{{AppName: appName, EvalSetID: evalSetID, EvalCaseID: "case-1", SessionID: "session", Status: status.EvalStatusFailed, ErrorMessage: "failed"}},
-			EvaluateConfig:   &service.EvaluateConfig{},
-		})
-		assert.NoError(t, err)
-		assert.NotNil(t, res)
-		if assert.NotNil(t, res) {
-			assert.Len(t, res.EvalCaseResults, 1)
-			assert.Equal(t, "case-1", res.EvalCaseResults[0].EvalID)
-			assert.Equal(t, status.EvalStatusFailed, res.EvalCaseResults[0].FinalEvalStatus)
-			assert.Equal(t, "failed", res.EvalCaseResults[0].ErrorMessage)
-		}
+	res, err := svc.Evaluate(ctx, &service.EvaluateRequest{
+		AppName:          appName,
+		EvalSetID:        evalSetID,
+		InferenceResults: []*service.InferenceResult{{AppName: appName, EvalSetID: evalSetID, EvalCaseID: "case-1", SessionID: "session", Status: status.EvalStatusFailed, ErrorMessage: "failed"}},
+		EvaluateConfig:   &service.EvaluateConfig{},
+	})
+	assert.NoError(t, err)
+	assert.NotNil(t, res)
+	if assert.NotNil(t, res) {
+		assert.Len(t, res.EvalCaseResults, 1)
+		assert.Equal(t, "case-1", res.EvalCaseResults[0].EvalID)
+		assert.Equal(t, status.EvalStatusFailed, res.EvalCaseResults[0].FinalEvalStatus)
+		assert.Equal(t, "failed", res.EvalCaseResults[0].ErrorMessage)
 	}
+}
 
 func TestLocalEvaluatePerCaseErrorMarksCaseFailed(t *testing.T) {
 	ctx := context.Background()
