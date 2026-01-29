@@ -705,6 +705,12 @@ llmagent := llmagent.New("llmagent", llmagent.WithAgentCallbacks(callbacks))
 
 提供用户自定义的 JSON schema 用于结构化输出，同时**允许使用工具**。这是需要结构化输出和工具能力的 Agent 的最灵活选项。
 
+**注意：**
+- “允许使用工具”表示 Agent 仍可发起工具调用（包括 Skills 的
+  `skill_load` / `skill_run`）。
+- 当模型需要调用工具时，可能会先返回工具调用事件而不是最终 JSON；
+  只有最终答复才需要满足 schema，并且必须是单个 JSON 对象。
+
 **示例：**
 
 ```go
@@ -759,6 +765,10 @@ for event := range eventCh {
 ### WithStructuredOutputJSON
 
 从 Go 结构体自动生成 JSON schema 并返回类型化输出。提供编译时类型安全。
+
+**注意：**
+- 当模型需要调用工具时，可能会先返回工具调用事件而不是最终 JSON；
+  只有最终答复才需要满足 schema，并且必须是单个 JSON 对象。
 
 **示例：**
 
