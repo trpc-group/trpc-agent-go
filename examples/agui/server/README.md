@@ -13,3 +13,4 @@ This directory shows AG-UI servers that can talk to the AG-UI client examples.
 - [`langfuse/`](langfuse/) – This example shows how AG-UI Server customizes reporting through TranslateCallback and connects to the langfuse observability platform.
 - [`report/`](report/) – Report-focused LLMAgent that delivers answers as structured reports in a dedicated view for easy consumption.
 - [`thinkaggregator/`](thinkaggregator/) – Surfaces model reasoning ("think") as custom events and aggregates them per session before persistence.
+- [`follow/`](follow/) – Enables `MessagesSnapshot` follow mode so `/history` continues streaming persisted events until the run finishes.
