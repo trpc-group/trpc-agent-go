@@ -218,6 +218,12 @@ func TestNewAgentEvaluatorValidation(t *testing.T) {
 	)
 	assert.Error(t, err)
 
+	_, err = New("app", stubRunner{}, WithEvalResultManager(nil))
+	assert.Error(t, err)
+	if err != nil {
+		assert.Contains(t, err.Error(), "eval result manager is nil")
+	}
+
 	ae, err := New("app", stubRunner{})
 	assert.NoError(t, err)
 	impl, ok := ae.(*agentEvaluator)
