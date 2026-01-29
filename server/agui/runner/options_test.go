@@ -219,3 +219,13 @@ func TestWithTimeout(t *testing.T) {
 	opts := NewOptions(WithTimeout(2 * time.Second))
 	assert.Equal(t, 2*time.Second, opts.Timeout)
 }
+
+func TestWithMessagesSnapshotFollowEnabled(t *testing.T) {
+	opts := NewOptions(WithMessagesSnapshotFollowEnabled(true))
+	assert.True(t, opts.MessagesSnapshotFollowEnabled)
+}
+
+func TestWithMessagesSnapshotFollowMaxDuration(t *testing.T) {
+	opts := NewOptions(WithMessagesSnapshotFollowMaxDuration(2 * time.Second))
+	assert.Equal(t, 2*time.Second, opts.MessagesSnapshotFollowMaxDuration)
+}
