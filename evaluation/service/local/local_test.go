@@ -1753,7 +1753,7 @@ func TestRunAfterEvaluateSetCallbacksPassesArgs(t *testing.T) {
 	startTime := time.Unix(123, 0)
 	wantErr := errors.New("evaluate error")
 	req := &service.EvaluateRequest{AppName: "app", EvalSetID: "set", EvaluateConfig: &service.EvaluateConfig{}}
-	result := &evalresult.EvalSetResult{EvalSetID: "set"}
+	result := &service.EvalSetRunResult{AppName: "app", EvalSetID: "set"}
 
 	callbacks := service.NewCallbacks()
 	var got *service.AfterEvaluateSetArgs

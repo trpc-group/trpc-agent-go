@@ -108,7 +108,7 @@ func (s *local) runBeforeEvaluateSetCallbacks(ctx context.Context, req *service.
 	return ctx, nil
 }
 
-func (s *local) runAfterEvaluateSetCallbacks(ctx context.Context, req *service.EvaluateRequest, result *evalresult.EvalSetResult, err error, startTime time.Time) error {
+func (s *local) runAfterEvaluateSetCallbacks(ctx context.Context, req *service.EvaluateRequest, result *service.EvalSetRunResult, err error, startTime time.Time) error {
 	_, err = callback.RunAfterEvaluateSet(ctx, s.callbacks, &service.AfterEvaluateSetArgs{
 		Request:   req,
 		Result:    result,
@@ -182,9 +182,8 @@ func (s *local) Evaluate(ctx context.Context, req *service.EvaluateRequest) (run
 			req.AppName, req.EvalSetID, err)
 	}
 	setStartTime := time.Now()
-	var callbackResult *evalresult.EvalSetResult
 	defer func() {
-		afterErr := s.runAfterEvaluateSetCallbacks(ctx, req, callbackResult, err, setStartTime)
+		afterErr := s.runAfterEvaluateSetCallbacks(ctx, req, runResult, err, setStartTime)
 		if afterErr != nil {
 			runResult = nil
 			err = afterErr
@@ -202,10 +201,6 @@ func (s *local) Evaluate(ctx context.Context, req *service.EvaluateRequest) (run
 				req.AppName, req.EvalSetID, evalCaseID, err)
 		}
 		evalCaseResults = append(evalCaseResults, caseResult)
-	}
-	callbackResult = &evalresult.EvalSetResult{
-		EvalSetID:       req.EvalSetID,
-		EvalCaseResults: evalCaseResults,
 	}
 	runResult = &service.EvalSetRunResult{
 		AppName:         req.AppName,
