@@ -35,5 +35,5 @@ func StableHashIndex(key string, n int) int {
 	if n <= 0 {
 		return 0
 	}
-	return int(StableHash32(key) % uint32(n))
+	return StableHashInt(key) % n
 }
