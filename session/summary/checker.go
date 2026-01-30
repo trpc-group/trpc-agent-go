@@ -95,6 +95,11 @@ func checkTokenThresholdFromText(tokenCount int, conversationText string) bool {
 		model.Message{Content: conversationText},
 	)
 	if err != nil {
+		log.Warnf(
+			"failed to count tokens for conversation text, failing closed (no summary) (chars=%d): %v",
+			len(conversationText),
+			err,
+		)
 		return false
 	}
 	return tokens > tokenCount
@@ -113,10 +118,7 @@ func CheckTokenThreshold(tokenCount int) Checker {
 			return false
 		}
 
-		conversationText := extractConversationText(delta,
-			nil,
-			nil,
-		)
+		conversationText := extractConversationText(delta, nil, nil)
 		return checkTokenThresholdFromText(tokenCount, conversationText)
 	}
 }

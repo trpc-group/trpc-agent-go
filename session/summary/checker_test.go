@@ -22,6 +22,12 @@ import (
 )
 
 func TestCheckEventThreshold(t *testing.T) {
+	t.Run("nil session returns false", func(t *testing.T) {
+		checker := CheckEventThreshold(1)
+		var sess *session.Session
+		assert.False(t, checker(sess))
+	})
+
 	t.Run("events exceed threshold without lastIncludedTs", func(t *testing.T) {
 		checker := CheckEventThreshold(5)
 		sess := &session.Session{Events: make([]event.Event, 10)}
@@ -33,6 +39,15 @@ func TestCheckEventThreshold(t *testing.T) {
 
 	t.Run("events equal threshold does not trigger", func(t *testing.T) {
 		checker := CheckEventThreshold(5)
+		sess := &session.Session{Events: make([]event.Event, 5)}
+		for i := range sess.Events {
+			sess.Events[i] = event.Event{Timestamp: time.Now()}
+		}
+		assert.False(t, checker(sess))
+	})
+
+	t.Run("events below threshold without lastIncludedTs does not trigger", func(t *testing.T) {
+		checker := CheckEventThreshold(10)
 		sess := &session.Session{Events: make([]event.Event, 5)}
 		for i := range sess.Events {
 			sess.Events[i] = event.Event{Timestamp: time.Now()}
@@ -60,6 +75,23 @@ func TestCheckEventThreshold(t *testing.T) {
 
 		checker = CheckEventThreshold(1)
 		assert.True(t, checker(sess))
+	})
+
+	t.Run("lastIncludedTs in future yields no delta events", func(t *testing.T) {
+		now := time.Now()
+		future := now.Add(5 * time.Minute)
+		sess := &session.Session{
+			Events: []event.Event{
+				{Timestamp: now.Add(-2 * time.Minute)},
+				{Timestamp: now.Add(-1 * time.Minute)},
+			},
+			State: session.StateMap{
+				lastIncludedTsKey: []byte(future.UTC().Format(time.RFC3339Nano)),
+			},
+		}
+
+		checker := CheckEventThreshold(0)
+		assert.False(t, checker(sess))
 	})
 
 	t.Run("invalid lastIncludedTs falls back to all events", func(t *testing.T) {
@@ -204,6 +236,26 @@ func TestCheckTokenThreshold(t *testing.T) {
 
 		checker := CheckTokenThreshold(threshold)
 		assert.False(t, checker(sess))
+	})
+
+	t.Run("invalid lastIncludedTs falls back to counting all events", func(t *testing.T) {
+		checker := CheckTokenThreshold(100)
+		sess := &session.Session{
+			Events: []event.Event{
+				{
+					Author:    "user",
+					Timestamp: time.Now(),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: strings.Repeat("a", 800)},
+					}}},
+				},
+			},
+			State: session.StateMap{
+				lastIncludedTsKey: []byte("invalid-timestamp"),
+			},
+		}
+
+		assert.True(t, checker(sess))
 	})
 }
 
