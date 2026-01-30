@@ -38,8 +38,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
-	"trpc.group/trpc-go/trpc-agent-go/planner"
-	"trpc.group/trpc-go/trpc-agent-go/planner/ralphloop"
 	"trpc.group/trpc-go/trpc-agent-go/planner/react"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
@@ -232,10 +230,8 @@ func main() {
 	log.Printf("Max tasks: %d", *maxTasks)
 	log.Printf("Model: %s", *modelName)
 	if *enableRalphLoop {
-		log.Printf(
-			"Planner: react+ralphloop (max iterations: %d)",
-			*ralphMaxIterations,
-		)
+		log.Printf("Planner: react (Ralph Loop enabled)")
+		log.Printf("Ralph Loop max iterations: %d", *ralphMaxIterations)
 	} else {
 		log.Printf("Planner: react")
 	}
@@ -259,11 +255,13 @@ func main() {
 
 	log.Printf("Loaded %d tasks", len(tasks))
 
-	// Create agent
+	// Create agent and runner
 	gaiaAgent := createGAIAAgent()
+	gaiaRunner := createGAIARunner(gaiaAgent)
+	defer gaiaRunner.Close()
 
 	// Run benchmark
-	results := runBenchmark(gaiaAgent, tasks)
+	results := runBenchmark(gaiaRunner, tasks)
 
 	// Save results
 	if err := saveResults(results, *outputPath); err != nil {
@@ -1360,116 +1358,61 @@ type gaiaFinalAnswerVerifier struct{}
 func (gaiaFinalAnswerVerifier) Verify(
 	ctx context.Context,
 	invocation *agent.Invocation,
-	response *model.Response,
-) (ralphloop.VerifyResult, error) {
-	content := assistantContent(response)
+	lastEvent *event.Event,
+) (runner.VerifyResult, error) {
+	content := assistantContentFromEvent(lastEvent)
 	if gaiaFinalAnswerLineRE.MatchString(content) {
-		return ralphloop.VerifyResult{Passed: true}, nil
+		return runner.VerifyResult{Passed: true}, nil
 	}
 
 	feedback := fmt.Sprintf(
 		"Please end with %q followed by the answer.",
 		gaiaFinalAnswerPrefix,
 	)
-	return ralphloop.VerifyResult{
+	return runner.VerifyResult{
 		Passed:   false,
 		Feedback: feedback,
 	}, nil
 }
 
-func assistantContent(response *model.Response) string {
-	if response == nil || len(response.Choices) == 0 {
+func assistantContentFromEvent(lastEvent *event.Event) string {
+	if lastEvent == nil || len(lastEvent.Choices) == 0 {
 		return ""
 	}
-	return response.Choices[0].Message.Content
-}
-
-type ralphLoopWrapperPlanner struct {
-	base  planner.Planner
-	ralph *ralphloop.Planner
-}
-
-func newGAIAPlanner(
-	enable bool,
-	maxIterations int,
-) (planner.Planner, error) {
-	base := react.New()
-	if !enable {
-		return base, nil
+	msg := lastEvent.Choices[0].Message
+	if msg.Content != "" {
+		return msg.Content
 	}
-
-	rl, err := ralphloop.New(ralphloop.Config{
-		MaxIterations: maxIterations,
-		Verifiers: []ralphloop.Verifier{
-			gaiaFinalAnswerVerifier{},
-		},
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	return &ralphLoopWrapperPlanner{
-		base:  base,
-		ralph: rl,
-	}, nil
-}
-
-func (p *ralphLoopWrapperPlanner) BuildPlanningInstruction(
-	ctx context.Context,
-	invocation *agent.Invocation,
-	req *model.Request,
-) string {
-	if p == nil || p.base == nil {
+	if len(msg.ContentParts) == 0 {
 		return ""
 	}
-
-	baseInstruction := p.base.BuildPlanningInstruction(ctx, invocation, req)
-	if p.ralph == nil {
-		return baseInstruction
+	var b strings.Builder
+	for _, part := range msg.ContentParts {
+		if part.Type != model.ContentTypeText || part.Text == nil {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(*part.Text)
 	}
-
-	ralphInstruction := p.ralph.BuildPlanningInstruction(
-		ctx,
-		invocation,
-		req,
-	)
-	if baseInstruction == "" {
-		return ralphInstruction
-	}
-	if ralphInstruction == "" {
-		return baseInstruction
-	}
-	return baseInstruction + "\n\n" + ralphInstruction
+	return b.String()
 }
 
-func (p *ralphLoopWrapperPlanner) ProcessPlanningResponse(
-	ctx context.Context,
-	invocation *agent.Invocation,
-	response *model.Response,
-) *model.Response {
-	if p == nil || p.base == nil {
-		return nil
+func createGAIARunner(ag agent.Agent) runner.Runner {
+	if !*enableRalphLoop {
+		return runner.NewRunner("gaia-runner", ag)
 	}
-
-	processed := p.base.ProcessPlanningResponse(ctx, invocation, response)
-	if p.ralph == nil {
-		return processed
-	}
-
-	responseToVerify := response
-	if processed != nil {
-		responseToVerify = processed
-	}
-
-	verified := p.ralph.ProcessPlanningResponse(
-		ctx,
-		invocation,
-		responseToVerify,
+	return runner.NewRunner(
+		"gaia-runner",
+		ag,
+		runner.WithRalphLoop(runner.RalphLoopConfig{
+			MaxIterations: *ralphMaxIterations,
+			Verifiers: []runner.Verifier{
+				gaiaFinalAnswerVerifier{},
+			},
+		}),
 	)
-	if verified != nil {
-		return verified
-	}
-	return processed
 }
 
 func createGAIAAgent() agent.Agent {
@@ -1573,20 +1516,6 @@ IMPORTANT:
 		generationConfig.Temperature = floatPtr(0.0)
 	}
 
-	plannerInstance, err := newGAIAPlanner(
-		*enableRalphLoop,
-		*ralphMaxIterations,
-	)
-	if err != nil {
-		log.Fatalf("Failed to create planner: %v", err)
-	}
-	if *enableRalphLoop {
-		log.Printf(
-			"RalphLoop enabled (max iterations: %d)",
-			*ralphMaxIterations,
-		)
-	}
-
 	// Create Skills Repository
 	skillsRoot := filepath.Join(filepath.Dir(absDataDir), "skills")
 	var skillRepo *skill.FSRepository
@@ -1609,7 +1538,7 @@ IMPORTANT:
 		llmagent.WithToolSets([]tool.ToolSet{fileToolSet, arxivToolSet, wikipediaToolSet}),
 		llmagent.WithGenerationConfig(generationConfig),
 		llmagent.WithInstruction(SystemPrompt),
-		llmagent.WithPlanner(plannerInstance),
+		llmagent.WithPlanner(react.New()),
 	}
 
 	// Add Skills to Agent if available
@@ -1621,9 +1550,7 @@ IMPORTANT:
 	return llmagent.New("gaia-agent", agentOpts...)
 }
 
-func runBenchmark(ag agent.Agent, tasks []GAIATask) SummaryResult {
-	r := runner.NewRunner("gaia-runner", ag)
-
+func runBenchmark(r runner.Runner, tasks []GAIATask) SummaryResult {
 	results := make([]BenchmarkResult, 0, len(tasks))
 
 	for i, task := range tasks {

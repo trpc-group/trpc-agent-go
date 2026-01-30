@@ -179,6 +179,34 @@ Notes:
 - Plugins run in the order they are registered.
 - If a plugin implements `plugin.Closer`, Runner will call it in `Close()`.
 
+### 🔄 Ralph Loop Mode
+
+Ralph Loop is an "outer loop" mode. Instead of trusting a Large Language Model
+(LLM) to decide when it is done, Runner will keep iterating until a verifiable
+completion condition is met.
+
+Common completion conditions:
+
+- A completion promise in the assistant output (for example,
+  `<promise>DONE</promise>`).
+- A verification command exits with code 0 (for example, `go test ./...`).
+- Additional custom checks via `runner.Verifier`.
+- `MaxIterations` is always recommended as a safety valve.
+
+```go
+r := runner.NewRunner("my-app", a,
+    runner.WithRalphLoop(runner.RalphLoopConfig{
+        MaxIterations:     20,
+        CompletionPromise: "DONE",
+        VerifyCommand:     "go test ./... -count=1",
+        VerifyTimeout:     2 * time.Minute,
+    }),
+)
+```
+
+When `MaxIterations` is reached without success, Runner emits an error event
+with error type `stop_agent_error`.
+
 ### Run Conversation
 
 ```go

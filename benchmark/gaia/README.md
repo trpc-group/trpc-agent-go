@@ -159,31 +159,34 @@ Evaluation results are saved in JSON format:
 This benchmark can be run in two modes:
 
 - **Baseline**: default `react` planner (`-ralph-loop=false`)
-- **Experimental**: `react` planner + `planner/ralphloop` wrapper
-  (`-ralph-loop=true`)
+- **Ralph Loop (runner-level outer loop)**: wraps the agent with
+  `runner.WithRalphLoop(...)` (`-ralph-loop=true`)
 
-The Ralph Loop wrapper uses a simple verifier: only allow the agent to stop if
-the output contains `FINAL ANSWER: <answer>`.
+When Ralph Loop is enabled, the runner will keep re-running the agent until a
+completion condition is met (or `-ralph-max-iterations` is reached). In this
+GAIA implementation, the completion condition is a simple verifier: the last
+assistant message must contain a `FINAL ANSWER: <answer>` line.
 
-Results (GAIA Level 1 validation, 53 tasks, run date: 2026-01-29):
+Results (GAIA Level 1 validation, 53 tasks, run date: 2026-01-30):
 
-| Run | Planner | Correct | Accuracy | Avg steps | Avg time | Avg tokens | Avg tool calls |
-|-----|---------|--------:|---------:|----------:|---------:|-----------:|---------------:|
-| A | react | 35/53 | 66.04% | 5.19 | 96.6s | 16,480 | 4.28 |
-| B | react + ralphloop | 40/53 | 75.47% | 5.92 | 107.7s | 21,178 | 4.79 |
+| Run | Mode | Correct | Accuracy | Avg steps | Avg time | Avg tokens | Avg tool calls |
+|-----|------|--------:|---------:|----------:|---------:|-----------:|---------------:|
+| A | react | 41/53 | 77.36% | 7.26 | 201.2s | 22,588 | 6.15 |
+| B | react + ralph-loop (runner) | 39/53 | 73.58% | 7.85 | 207.5s | 20,516 | 6.83 |
 
 Notes:
 
-- In run A, **6 tasks failed** due to model API errors (HTTP 400/403) and were
-  counted as incorrect. Run B had **0** such failures.
-- If you exclude those 6 error tasks and compare only the remaining 47 tasks,
-  both runs are **35/47 (74.47%)**. In this setup, enabling Ralph Loop mostly
-  trades off tasks (some improve, some regress) while increasing cost.
+- Run B had **2 tasks fail** with transient model API `429 Too Many Requests`
+  errors; those tasks are counted as incorrect.
+- If you exclude those 2 error tasks and compare only the remaining 51 tasks,
+  both runs are **39/51 (76.47%)**. In this setup, enabling Ralph Loop did not
+  show a clear accuracy improvement, and slightly increased steps / tool calls.
 
-Raw outputs are stored in `benchmark/gaia/results/`:
+Raw outputs are stored in `benchmark/gaia/results/` (kept out of git by
+default):
 
-- `gpt-5_react.json`
-- `gpt-5_react_ralphloop.json`
+- `gpt-5_react_baseline.json`
+- `gpt-5_react_ralph_runner.json`
 
 ## Agent Capabilities
 

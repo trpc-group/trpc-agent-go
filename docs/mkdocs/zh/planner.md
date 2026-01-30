@@ -210,50 +210,6 @@ llmAgent := llmagent.New(
 
 完整代码示例可参考 [examples/react](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/react)
 
-## RalphLoop Planner
-
-Ralph Loop 是一种“外部循环（outer loop）”的思路：不依赖 Large Language Model
-(LLM，大语言模型) 主观判断“我已经完成了”，而是用可验证的完成条件来决定是否
-继续迭代执行。
-
-RalphLoop Planner 运行在 `LLMAgent`（Large Language Model Agent，大语言模型
-智能体）的内部流程里。当模型尝试停止（它设置 `model.Response.Done = true`）时，
-如果完成条件尚未满足，Planner 可以把 `Done` 改回 `false`，从而让内部的 LLM 流程
-循环再发起一次模型调用。
-
-限制：
-
-- 只对 `LLMAgent` 生效，因为 Planner 只挂载在 `LLMAgent` 的 flow（流程）里。
-
-常见完成条件：
-
-- Assistant 输出包含完成承诺（completion promise），例如
-  `<promise>DONE</promise>`。
-- 通过 `ralphloop.Verifier` 扩展自定义校验（例如：在你自己的 verifier 里跑测试，
-  只有测试通过才返回通过）。
-
-示例：
-
-```go
-import (
-    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
-    "trpc.group/trpc-go/trpc-agent-go/planner/ralphloop"
-)
-
-rl, err := ralphloop.New(ralphloop.Config{
-    MaxIterations:     20,
-    CompletionPromise: "DONE",
-})
-if err != nil { /* 处理错误 */ }
-
-llmAgent := llmagent.New(
-    "demo-agent",
-    llmagent.WithModel(modelInstance),
-    llmagent.WithPlanner(rl),
-    llmagent.WithMaxLLMCalls(50), // 安全阀
-)
-```
-
 ## 自定义 Planner
 
 除了框架提供的两种 Planner 实现，你还可以通过实现 `Planner` 接口来创建自定义的 Planner，以满足特定需求：

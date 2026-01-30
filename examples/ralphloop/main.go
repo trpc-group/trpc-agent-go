@@ -26,7 +26,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
-	"trpc.group/trpc-go/trpc-agent-go/planner/ralphloop"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
@@ -139,14 +138,6 @@ func (c *taskChat) setup() error {
 		openai.WithVariant(openai.Variant(c.variant)),
 	)
 
-	rl, err := ralphloop.New(ralphloop.Config{
-		MaxIterations:     c.maxIterations,
-		CompletionPromise: c.completionPromise,
-	})
-	if err != nil {
-		return err
-	}
-
 	genConfig := model.GenerationConfig{
 		MaxTokens:   intPtr(defaultMaxTokens),
 		Temperature: floatPtr(defaultTemperature),
@@ -158,17 +149,31 @@ func (c *taskChat) setup() error {
 		callLimit = c.maxIterations + defaultExtraCalls
 	}
 
+	instruction := fmt.Sprintf(
+		"%s\n\nStop only when you output %s%s%s.",
+		agentInstruction,
+		promiseTagOpen,
+		c.completionPromise,
+		promiseTagClose,
+	)
+
 	llmAgent := llmagent.New(
 		agentName,
 		llmagent.WithModel(modelInstance),
-		llmagent.WithPlanner(rl),
 		llmagent.WithDescription("Task-focused assistant in RalphLoop mode."),
-		llmagent.WithInstruction(agentInstruction),
+		llmagent.WithInstruction(instruction),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithMaxLLMCalls(callLimit),
 	)
 
-	c.runner = runner.NewRunner(appName, llmAgent)
+	c.runner = runner.NewRunner(
+		appName,
+		llmAgent,
+		runner.WithRalphLoop(runner.RalphLoopConfig{
+			MaxIterations:     c.maxIterations,
+			CompletionPromise: c.completionPromise,
+		}),
+	)
 	c.userID = "demo-user"
 	c.sessionID = fmt.Sprintf("ralphloop-session-%d", time.Now().Unix())
 	fmt.Printf("✅ Ready! Session: %s\n\n", c.sessionID)
