@@ -39,7 +39,7 @@ var (
 	extModel  = flag.String("ext-model", "", "Model for memory extraction (defaults to chat model)")
 	streaming = flag.Bool("streaming", true, "Enable streaming mode for responses")
 	debug     = flag.Bool("debug", false, "Enable debug mode to print messages sent to model")
-	memType   = flag.String("memory", "inmemory", "Memory service type: inmemory, redis, postgres, pgvector, mysql")
+	memType   = flag.String("memory", "inmemory", "Memory service type: inmemory, redis, postgres, pgvector, mysql, clickhouse")
 )
 
 func main() {
