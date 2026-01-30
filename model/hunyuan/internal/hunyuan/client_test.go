@@ -156,6 +156,13 @@ func TestHmacSha256(t *testing.T) {
 func newTCP4TestServer(t *testing.T, h http.Handler) *httptest.Server {
 	t.Helper()
 	ts := httptest.NewUnstartedServer(h)
+
+	// NewUnstartedServer allocates a default listener. Close it before
+	// overriding to avoid leaking the FD.
+	if ts.Listener != nil {
+		_ = ts.Listener.Close()
+	}
+
 	ln, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to listen on tcp4 127.0.0.1:0: %v", err)
