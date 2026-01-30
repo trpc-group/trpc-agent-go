@@ -639,6 +639,7 @@ func (hostRalphLoopRunner) Run(
 		defer cancel()
 	}
 
+	//nolint:gosec // VerifyCommand is explicitly provided by the caller.
 	cmd := exec.CommandContext(
 		runCtx,
 		ralphVerifyShell,
