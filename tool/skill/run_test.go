@@ -1378,7 +1378,10 @@ func TestRunTool_RelativeCWD_TraversalDoesNotEscapeWorkspace(t *testing.T) {
 
 	pwd := strings.TrimSpace(lines[0])
 	wsRoot := strings.TrimSpace(lines[1])
-	require.True(t, strings.HasPrefix(pwd, wsRoot))
+
+	rel, err := filepath.Rel(wsRoot, pwd)
+	require.NoError(t, err)
+	require.False(t, strings.HasPrefix(rel, ".."))
 }
 
 func TestResolveCWD_WorkspaceEnvPathAllowlist(t *testing.T) {
@@ -1386,6 +1389,7 @@ func TestResolveCWD_WorkspaceEnvPathAllowlist(t *testing.T) {
 
 	// traversal should fallback
 	require.Equal(t, base, resolveCWD("$"+codeexecutor.WorkspaceEnvDirKey+"/../..", "x"))
+	require.Equal(t, base, resolveCWD("$"+codeexecutor.WorkspaceEnvDirKey+"\\..\\..", "x"))
 
 	// allowed roots under workspace
 	require.Equal(t, codeexecutor.DirWork, resolveCWD("$"+codeexecutor.WorkspaceEnvDirKey+"/"+codeexecutor.DirWork, "x"))
@@ -1401,6 +1405,11 @@ func TestResolveCWD_AbsPathAllowlist(t *testing.T) {
 	require.Equal(t, codeexecutor.DirWork, resolveCWD("/"+codeexecutor.DirWork, "x"))
 	require.Equal(t, base, resolveCWD("/etc", "x"))
 	require.Equal(t, ".", resolveCWD("/", "x"))
+}
+
+func TestResolveCWD_RelPath_BackslashTraversalDoesNotEscape(t *testing.T) {
+	base := path.Join(codeexecutor.DirSkills, "x")
+	require.Equal(t, base, resolveCWD("..\\..\\..", "x"))
 }
 
 // Validate Declaration basics and required fields.

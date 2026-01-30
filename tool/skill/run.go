@@ -790,6 +790,7 @@ func resolveCWD(cwd string, name string) string {
 	// start with known workspace dirs like "/skills" or "/work".
 	base := path.Join(codeexecutor.DirSkills, name)
 	s := strings.TrimSpace(cwd)
+	s = strings.ReplaceAll(s, "\\", "/")
 	if s == "" {
 		return base
 	}
