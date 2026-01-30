@@ -1,3 +1,2 @@
+*.json
 *.log
-_smoke_*.json
-rerun_*.json
