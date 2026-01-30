@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 	oteltrace "go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
@@ -30,7 +31,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
-// Additional unit tests for long-running tool tracking and preprocess
+// Additional unit tests cover long-running tool tracking and preprocess.
 
 // mockLongRunnerTool implements tool.Tool and a LongRunning() flag.
 type mockLongRunnerTool struct {
@@ -52,7 +53,7 @@ func TestCollectLongRunningToolIDs(t *testing.T) {
 		"fast":   &mockLongRunnerTool{name: "fast", long: false},
 		"slow":   &mockLongRunnerTool{name: "slow", long: true},
 		"nolong": &mockLongRunnerTool{name: "nolong", long: false},
-		// unknown not present
+		// Unknown is not present.
 	}
 	got := collectLongRunningToolIDs(calls, tools)
 	require.Contains(t, got, "2")
@@ -134,14 +135,50 @@ func TestProcessStreamingResponses_RepairsToolCallArgumentsWhenEnabled(t *testin
 	require.Equal(t, "{\"a\":2}", string(response.Choices[0].Message.ToolCalls[0].Function.Arguments))
 }
 
-// mockAgent implements agent.Agent for testing
+func TestProcessStreamingResponses_PreparesCodeExecutionResponseWhenEnabled(t *testing.T) {
+	f := New(nil, []flow.ResponseProcessor{processor.NewCodeExecutionResponseProcessor()}, Options{})
+	inv := agent.NewInvocation()
+	inv.AgentName = "test-agent"
+	inv.Agent = &codeExecTestAgent{exec: &codeExecTestExecutor{}}
+
+	rsp := &model.Response{
+		Done: true,
+		Choices: []model.Choice{
+			{
+				Message: model.Message{Role: model.RoleAssistant, Content: "```bash\necho hello\n```"},
+			},
+		},
+	}
+	responseChan := make(chan *model.Response, 1)
+	responseChan <- rsp
+	close(responseChan)
+
+	eventChan := make(chan *event.Event, 10)
+	tracer := oteltrace.NewNoopTracerProvider().Tracer("t")
+	ctx, span := tracer.Start(context.Background(), "s")
+	defer span.End()
+
+	lastEvent, err := f.processStreamingResponses(ctx, inv, &model.Request{}, responseChan, eventChan, span)
+	require.NoError(t, err)
+	require.NotNil(t, lastEvent)
+	require.Equal(t, "", rsp.Choices[0].Message.Content)
+
+	var evts []*event.Event
+	for len(eventChan) > 0 {
+		evts = append(evts, <-eventChan)
+	}
+	require.NotEmpty(t, evts)
+	require.Equal(t, "", evts[0].Response.Choices[0].Message.Content)
+}
+
+// mockAgent implements agent.Agent for testing.
 type mockAgent struct {
 	name  string
 	tools []tool.CallableTool
 }
 
 func (m *mockAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
-	// Simple mock implementation
+	// Simple mock implementation.
 	eventChan := make(chan *event.Event, 1)
 	defer close(eventChan)
 	return eventChan, nil
@@ -166,7 +203,7 @@ func (m *mockAgent) FindSubAgent(name string) agent.Agent {
 	return nil
 }
 
-// mockAgentWithTools implements agent.Agent with tool.Tool support
+// mockAgentWithTools implements agent.Agent with tool.Tool support.
 type mockAgentWithTools struct {
 	name  string
 	tools []tool.Tool
@@ -197,7 +234,7 @@ func (m *mockAgentWithTools) FindSubAgent(name string) agent.Agent {
 	return nil
 }
 
-// mockModel implements model.Model for testing
+// mockModel implements model.Model for testing.
 type mockModel struct {
 	ShouldError bool
 	responses   []*model.Response
@@ -231,7 +268,32 @@ func (m *mockModel) GenerateContent(ctx context.Context, req *model.Request) (<-
 	return respChan, nil
 }
 
-// mockRequestProcessor implements flow.RequestProcessor
+type codeExecTestExecutor struct{}
+
+func (e *codeExecTestExecutor) ExecuteCode(
+	ctx context.Context, input codeexecutor.CodeExecutionInput,
+) (codeexecutor.CodeExecutionResult, error) {
+	return codeexecutor.CodeExecutionResult{Output: "OK"}, nil
+}
+
+func (e *codeExecTestExecutor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
+	return codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
+}
+
+type codeExecTestAgent struct{ exec codeexecutor.CodeExecutor }
+
+func (a *codeExecTestAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event)
+	close(ch)
+	return ch, nil
+}
+func (a *codeExecTestAgent) Tools() []tool.Tool                      { return nil }
+func (a *codeExecTestAgent) Info() agent.Info                        { return agent.Info{Name: "a"} }
+func (a *codeExecTestAgent) SubAgents() []agent.Agent                { return nil }
+func (a *codeExecTestAgent) FindSubAgent(string) agent.Agent         { return nil }
+func (a *codeExecTestAgent) CodeExecutor() codeexecutor.CodeExecutor { return a.exec }
+
+// mockRequestProcessor implements flow.RequestProcessor.
 type mockRequestProcessor struct{}
 
 func (m *mockRequestProcessor) ProcessRequest(
@@ -248,7 +310,7 @@ func (m *mockRequestProcessor) ProcessRequest(
 	}
 }
 
-// mockResponseProcessor implements flow.ResponseProcessor
+// mockResponseProcessor implements flow.ResponseProcessor.
 type mockResponseProcessor struct{}
 
 func (m *mockResponseProcessor) ProcessResponse(
@@ -270,10 +332,10 @@ func TestFlow_Interface(t *testing.T) {
 	llmFlow := New(nil, nil, Options{})
 	var f flow.Flow = llmFlow
 
-	// Test that the flow implements the interface
+	// Test that the flow implements the interface.
 	log.Debugf("Flow interface test: %v", f)
 
-	// Simple compile test
+	// Simple compile test.
 	var _ flow.Flow = f
 }
 
@@ -555,8 +617,7 @@ func TestRun_NoPanicWhenModelReturnsNoResponses(t *testing.T) {
 	require.Equal(t, 1, count)
 }
 
-// TestRunAfterModelCallbacks_ErrorPassing tests that modelErr is correctly passed to callbacks
-// when response.Error is not nil.
+// TestRunAfterModelCallbacks_ErrorPassing ensures modelErr is passed to callbacks when response.Error is not nil.
 func TestRunAfterModelCallbacks_ErrorPassing(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -1055,9 +1116,7 @@ done:
 	require.Equal(t, 1, count)
 }
 
-// Test that when RunOptions.Resume is enabled and the latest session event
-// is an assistant tool_call response, the flow executes the pending tool
-// before issuing a new LLM request.
+// TestResumePendingToolCall verifies resume executes pending tools before issuing a new LLM request.
 func TestRun_WithResumeExecutesPendingToolCalls(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
