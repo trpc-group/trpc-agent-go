@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -152,6 +153,18 @@ func TestHmacSha256(t *testing.T) {
 	}
 }
 
+func newTCP4TestServer(t *testing.T, h http.Handler) *httptest.Server {
+	t.Helper()
+	ts := httptest.NewUnstartedServer(h)
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen on tcp4 127.0.0.1:0: %v", err)
+	}
+	ts.Listener = ln
+	ts.Start()
+	return ts
+}
+
 func TestChatCompletionMessageParam(t *testing.T) {
 	msg := &ChatCompletionMessageParam{
 		Role:    "user",
@@ -185,7 +198,7 @@ func TestChatCompletionMessageParam(t *testing.T) {
 }
 
 func TestChatCompletionWithMockServer(t *testing.T) {
-	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mockServer := newTCP4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
 			t.Errorf("Expected POST request, got %s", r.Method)
 		}
@@ -269,7 +282,7 @@ func TestChatCompletionWithMockServer(t *testing.T) {
 }
 
 func TestChatCompletionWithMockServerError(t *testing.T) {
-	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mockServer := newTCP4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mockResponse := chatCompletionResponseData{
 			Response: ChatCompletionResponse{
 				RequestId: "test-request-id",
@@ -311,7 +324,7 @@ func TestChatCompletionWithMockServerError(t *testing.T) {
 }
 
 func TestChatCompletionWithMockServerHttpError(t *testing.T) {
-	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mockServer := newTCP4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer mockServer.Close()
