@@ -36,3 +36,11 @@ type ResponseProcessor interface {
 	// ProcessResponse processes the response and sends events directly to the provided channel.
 	ProcessResponse(ctx context.Context, invocation *agent.Invocation, req *model.Request, rsp *model.Response, ch chan<- *event.Event)
 }
+
+// ContinueOnToolErrorEnabled resolves ContinueOnToolError with a default value.
+func ContinueOnToolErrorEnabled(invocation *agent.Invocation, defaultValue bool) bool {
+	if invocation == nil || invocation.RunOptions.ContinueOnToolError == nil {
+		return defaultValue
+	}
+	return *invocation.RunOptions.ContinueOnToolError
+}

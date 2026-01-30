@@ -475,6 +475,14 @@ func WithToolCallArgumentsJSONRepairEnabled(enabled bool) RunOption {
 	}
 }
 
+// WithContinueOnToolError sets whether the framework continues when a tool returns an error.
+func WithContinueOnToolError(continueOnError bool) RunOption {
+	return func(opts *RunOptions) {
+		v := continueOnError
+		opts.ContinueOnToolError = &v
+	}
+}
+
 // WithA2ARequestOptions sets the A2A request options for the RunOptions.
 // These options will be passed to A2A agent's SendMessage and StreamMessage calls.
 // This allows passing dynamic HTTP headers or other request-specific options for each run.
@@ -686,9 +694,14 @@ type RunOptions struct {
 	// assistant tool_call response so the caller can execute the tool
 	// externally and later provide tool results (RoleTool messages).
 	ToolExecutionFilter tool.FilterFunc
+
 	// ToolCallArgumentsJSONRepairEnabled enables best-effort JSON repair for tool call arguments.
 	// When nil, JSON repair is disabled by default.
 	ToolCallArgumentsJSONRepairEnabled *bool
+
+	// ContinueOnToolError controls whether the framework continues execution when a tool returns an error.
+	// When nil, each executor uses its historical default behavior.
+	ContinueOnToolError *bool
 }
 
 // NewInvocation create a new invocation
