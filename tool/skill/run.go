@@ -766,8 +766,31 @@ func resolveCWD(cwd string, name string) string {
 	}
 	if isWorkspaceEnvPath(s) {
 		if out := codeexecutor.NormalizeGlobs([]string{s}); len(out) > 0 {
-			return out[0]
+			cleaned := path.Clean(out[0])
+			if cleaned == "." || cleaned == "" {
+				return "."
+			}
+			if cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+				return base
+			}
+			switch {
+			case cleaned == codeexecutor.DirSkills ||
+				strings.HasPrefix(cleaned, codeexecutor.DirSkills+"/"):
+				return cleaned
+			case cleaned == codeexecutor.DirWork ||
+				strings.HasPrefix(cleaned, codeexecutor.DirWork+"/"):
+				return cleaned
+			case cleaned == codeexecutor.DirOut ||
+				strings.HasPrefix(cleaned, codeexecutor.DirOut+"/"):
+				return cleaned
+			case cleaned == codeexecutor.DirRuns ||
+				strings.HasPrefix(cleaned, codeexecutor.DirRuns+"/"):
+				return cleaned
+			default:
+				return base
+			}
 		}
+		return base
 	}
 	if strings.HasPrefix(s, "/") {
 		cleaned := path.Clean(s)
@@ -791,7 +814,11 @@ func resolveCWD(cwd string, name string) string {
 			return base
 		}
 	}
-	return path.Join(base, s)
+	rel := path.Join(base, s)
+	if rel == base || strings.HasPrefix(rel, base+"/") {
+		return rel
+	}
+	return base
 }
 
 // filepathBase returns the last element of a path, trimming trailing
