@@ -45,6 +45,7 @@ func TestCodeExecutionResponseProcessor_EmitsCodeAndResultEvents(t *testing.T) {
 	}
 
 	ch := make(chan *event.Event, 4)
+	iprocessor.PrepareCodeExecutionResponse(inv, rsp)
 	proc.ProcessResponse(ctx, inv, &model.Request{}, rsp, ch)
 
 	if assert.NotEmpty(t, rsp.Choices) {

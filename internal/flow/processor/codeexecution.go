@@ -22,10 +22,46 @@ import (
 type CodeExecutionResponseProcessor struct {
 }
 
+const codeExecutionPayloadStateKey = "processor:code_execution_payload"
+
+type codeExecutionPayload struct {
+	truncatedContent string
+	codeBlocks       []codeexecutor.CodeBlock
+}
+
 // NewCodeExecutionResponseProcessor creates a new instance of CodeExecutionResponseProcessor.
 // This processor is responsible for handling code execution responses from the model.
 func NewCodeExecutionResponseProcessor() *CodeExecutionResponseProcessor {
 	return &CodeExecutionResponseProcessor{}
+}
+
+// PrepareCodeExecutionResponse captures code execution payload and clears the response content before emission.
+func PrepareCodeExecutionResponse(invocation *agent.Invocation, rsp *model.Response) {
+	if invocation == nil || rsp == nil || rsp.IsPartial {
+		return
+	}
+	ce, ok := invocation.Agent.(agent.CodeExecutor)
+	if !ok || ce == nil {
+		return
+	}
+	e := ce.CodeExecutor()
+	if e == nil {
+		return
+	}
+	if len(rsp.Choices) == 0 {
+		return
+	}
+
+	content := rsp.Choices[0].Message.Content
+	codeBlocks := codeexecutor.ExtractCodeBlock(content, e.CodeBlockDelimiter())
+	if len(codeBlocks) == 0 {
+		return
+	}
+	invocation.SetState(codeExecutionPayloadStateKey, &codeExecutionPayload{
+		truncatedContent: content, // TODO: Truncate the content if needed.
+		codeBlocks:       codeBlocks,
+	})
+	rsp.Choices[0].Message.Content = ""
 }
 
 // ProcessResponse processes the model response, extracts code blocks, executes them,
@@ -33,6 +69,14 @@ func NewCodeExecutionResponseProcessor() *CodeExecutionResponseProcessor {
 func (p *CodeExecutionResponseProcessor) ProcessResponse(
 	ctx context.Context, invocation *agent.Invocation, req *model.Request, rsp *model.Response, ch chan<- *event.Event) {
 	if invocation == nil || rsp == nil || rsp.IsPartial {
+		return
+	}
+	raw, ok := invocation.GetState(codeExecutionPayloadStateKey)
+	if !ok || raw == nil {
+		return
+	}
+	payload, ok := raw.(*codeExecutionPayload)
+	if !ok || payload == nil {
 		return
 	}
 	ce, ok := invocation.Agent.(agent.CodeExecutor)
@@ -48,11 +92,9 @@ func (p *CodeExecutionResponseProcessor) ProcessResponse(
 		return
 	}
 
-	codeBlocks := codeexecutor.ExtractCodeBlock(rsp.Choices[0].Message.Content, e.CodeBlockDelimiter())
-	if len(codeBlocks) == 0 {
+	if len(payload.codeBlocks) == 0 {
 		return
 	}
-	truncatedContent := rsp.Choices[0].Message.Content // todo: truncate the content
 
 	//  [Step 2] Executes the code and emit 2 Events for code and execution result.
 	agent.EmitEvent(ctx, invocation, ch, event.New(
@@ -61,7 +103,7 @@ func (p *CodeExecutionResponseProcessor) ProcessResponse(
 		event.WithResponse(&model.Response{
 			Choices: []model.Choice{
 				{
-					Message: model.Message{Role: model.RoleAssistant, Content: truncatedContent},
+					Message: model.Message{Role: model.RoleAssistant, Content: payload.truncatedContent},
 				},
 			},
 		}),
@@ -69,9 +111,13 @@ func (p *CodeExecutionResponseProcessor) ProcessResponse(
 		event.WithTag(event.CodeExecutionTag),
 	))
 
+	executionID := invocation.InvocationID
+	if invocation.Session != nil {
+		executionID = invocation.Session.ID
+	}
 	codeExecutionResult, err := e.ExecuteCode(ctx, codeexecutor.CodeExecutionInput{
-		CodeBlocks:  codeBlocks,
-		ExecutionID: invocation.Session.ID,
+		CodeBlocks:  payload.codeBlocks,
+		ExecutionID: executionID,
 	})
 	if err != nil {
 		agent.EmitEvent(ctx, invocation, ch, event.New(
@@ -102,6 +148,4 @@ func (p *CodeExecutionResponseProcessor) ProcessResponse(
 		event.WithObject(model.ObjectTypePostprocessingCodeExecution),
 		event.WithTag(event.CodeExecutionResultTag),
 	))
-	//  [Step 3] Skip processing the original model response to continue code generation loop.
-	rsp.Choices[0].Message.Content = ""
 }

@@ -275,6 +275,14 @@ func (f *Flow) processStreamingResponses(
 	tracker := itelemetry.NewChatMetricsTracker(ctx, invocation, llmRequest, timingInfo, &err)
 	defer tracker.RecordMetrics()()
 
+	enableCodeExecution := false
+	for _, rp := range f.responseProcessors {
+		if _, ok := rp.(*processor.CodeExecutionResponseProcessor); ok {
+			enableCodeExecution = true
+			break
+		}
+	}
+
 	for response := range responseChan {
 		// Track response for telemetry (token usage and timing info)
 		tracker.TrackResponse(response)
@@ -297,6 +305,10 @@ func (f *Flow) processStreamingResponses(
 		// Repair tool call arguments in place when needed.
 		if jsonrepair.IsToolCallArgumentsJSONRepairEnabled(invocation) {
 			jsonrepair.RepairResponseToolCallArgumentsInPlace(ctx, response)
+		}
+		if enableCodeExecution {
+			// Capture code execution payload and clear response content before emitting the LLM event.
+			processor.PrepareCodeExecutionResponse(invocation, response)
 		}
 		// 4. Create and send LLM response using the clean constructor.
 		llmResponseEvent := f.createLLMResponseEvent(invocation, response, llmRequest)
