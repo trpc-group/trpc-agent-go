@@ -72,6 +72,91 @@ func TestCodeExecutionResponseProcessor_EmitsCodeAndResultEvents(t *testing.T) {
 	}
 }
 
+func TestCodeExecutionResponseProcessor_NoPayload_NoEvents(t *testing.T) {
+	ctx := context.Background()
+	proc := iprocessor.NewCodeExecutionResponseProcessor()
+
+	inv := &agent.Invocation{
+		Agent:     &testAgent{exec: &stubExec{}},
+		Session:   &session.Session{ID: "test-session"},
+		AgentName: "test-agent",
+	}
+
+	rsp := &model.Response{
+		Done: true,
+		Choices: []model.Choice{
+			{Message: model.Message{Role: model.RoleAssistant,
+				Content: "```bash\necho hello\n```"}},
+		},
+	}
+
+	ch := make(chan *event.Event, 4)
+	proc.ProcessResponse(ctx, inv, &model.Request{}, rsp, ch)
+
+	assert.Empty(t, ch)
+	assert.Equal(t, "```bash\necho hello\n```", rsp.Choices[0].Message.Content)
+}
+
+func TestCodeExecutionResponseProcessor_ExecuteError_EmitsErrorResultEvent(t *testing.T) {
+	ctx := context.Background()
+	proc := iprocessor.NewCodeExecutionResponseProcessor()
+
+	inv := &agent.Invocation{
+		Agent:     &testAgent{exec: &failingExec{err: assert.AnError}},
+		Session:   &session.Session{ID: "test-session"},
+		AgentName: "test-agent",
+	}
+
+	rsp := &model.Response{
+		Done: true,
+		Choices: []model.Choice{
+			{Message: model.Message{Role: model.RoleAssistant,
+				Content: "```bash\necho hello\n```"}},
+		},
+	}
+
+	ch := make(chan *event.Event, 4)
+	iprocessor.PrepareCodeExecutionResponse(inv, rsp)
+	proc.ProcessResponse(ctx, inv, &model.Request{}, rsp, ch)
+
+	assert.Equal(t, "", rsp.Choices[0].Message.Content)
+
+	var evts []*event.Event
+	for len(ch) > 0 {
+		evts = append(evts, <-ch)
+	}
+	if assert.Len(t, evts, 2) {
+		assert.Contains(t, evts[0].Tag, event.CodeExecutionTag)
+		assert.Contains(t, evts[1].Tag, event.CodeExecutionResultTag)
+		assert.Contains(t, evts[1].Response.Choices[0].Message.Content, "Code execution failed:")
+	}
+}
+
+func TestCodeExecutionResponseProcessor_NoCodeBlocks_NoEvents(t *testing.T) {
+	ctx := context.Background()
+	proc := iprocessor.NewCodeExecutionResponseProcessor()
+
+	inv := &agent.Invocation{
+		Agent:     &testAgent{exec: &stubExec{}},
+		Session:   &session.Session{ID: "test-session"},
+		AgentName: "test-agent",
+	}
+
+	rsp := &model.Response{
+		Done: true,
+		Choices: []model.Choice{
+			{Message: model.Message{Role: model.RoleAssistant, Content: "hello"}},
+		},
+	}
+
+	ch := make(chan *event.Event, 4)
+	iprocessor.PrepareCodeExecutionResponse(inv, rsp)
+	proc.ProcessResponse(ctx, inv, &model.Request{}, rsp, ch)
+
+	assert.Equal(t, "hello", rsp.Choices[0].Message.Content)
+	assert.Empty(t, ch)
+}
+
 // stubExec is a simple CodeExecutor stub returning a fixed output
 type stubExec struct{}
 
@@ -81,6 +166,20 @@ func (s *stubExec) ExecuteCode(
 	return codeexecutor.CodeExecutionResult{Output: "OK"}, nil
 }
 func (s *stubExec) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
+	return codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
+}
+
+type failingExec struct {
+	err error
+}
+
+func (f *failingExec) ExecuteCode(
+	ctx context.Context, input codeexecutor.CodeExecutionInput,
+) (codeexecutor.CodeExecutionResult, error) {
+	return codeexecutor.CodeExecutionResult{}, f.err
+}
+
+func (f *failingExec) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
 	return codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
 }
 
