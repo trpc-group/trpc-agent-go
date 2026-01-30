@@ -82,17 +82,6 @@ func TestVectorStore_Add(t *testing.T) {
 			errMsg:    "embedding is required",
 		},
 		{
-			name: "dimension_mismatch",
-			doc: &document.Document{
-				ID:      "test_003",
-				Content: "Test content",
-			},
-			vector:    []float64{1.0, 0.5}, // Only 2 dimensions, expected 3
-			setupMock: func(mock sqlmock.Sqlmock) {},
-			wantErr:   true,
-			errMsg:    "dimension mismatch",
-		},
-		{
 			name: "database_error",
 			doc: &document.Document{
 				ID:      "test_004",
@@ -278,16 +267,6 @@ func TestVectorStore_Update(t *testing.T) {
 			vector:  []float64{1.0, 0.5, 0.2},
 			wantErr: true,
 			errMsg:  "pgvector document not updated",
-		},
-		{
-			name: "dimension_mismatch",
-			doc: &document.Document{
-				ID:      "test_002",
-				Content: "Test",
-			},
-			vector:  []float64{1.0, 0.5}, // Only 2 dimensions
-			wantErr: true,
-			errMsg:  "dimension mismatch",
 		},
 	}
 

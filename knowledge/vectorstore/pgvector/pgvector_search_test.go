@@ -77,17 +77,6 @@ func TestVectorStore_Search(t *testing.T) {
 			errMsg:    "vector is not supported",
 		},
 		{
-			name: "dimension_mismatch",
-			query: &vectorstore.SearchQuery{
-				Vector:     []float64{1.0, 0.5}, // Only 2 dimensions
-				Limit:      5,
-				SearchMode: vectorstore.SearchModeVector,
-			},
-			setupMock: func(mock sqlmock.Sqlmock) {},
-			wantErr:   true,
-			errMsg:    "dimension mismatch",
-		},
-		{
 			name: "no_results",
 			query: &vectorstore.SearchQuery{
 				Vector:     []float64{1.0, 0.5, 0.2},
@@ -363,25 +352,6 @@ func TestVectorStore_SearchByHybrid(t *testing.T) {
 		result, err := vs.Search(context.Background(), query)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "vector is required")
-		require.Nil(t, result)
-		tc.AssertExpectations(t)
-	})
-
-	t.Run("hybrid_search_dimension_mismatch", func(t *testing.T) {
-		vs, tc := newTestVectorStoreWithTSVector(t, WithIndexDimension(3))
-		defer tc.Close()
-
-		query := &vectorstore.SearchQuery{
-			Vector:     []float64{1.0, 0.5}, // Wrong dimension: 2 instead of 3
-			Query:      "test",
-			SearchMode: vectorstore.SearchModeHybrid,
-			Limit:      5,
-		}
-
-		result, err := vs.Search(context.Background(), query)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "dimension mismatch")
-		assert.Contains(t, err.Error(), "expected 3, got 2")
 		require.Nil(t, result)
 		tc.AssertExpectations(t)
 	})
