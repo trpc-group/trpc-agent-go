@@ -16,11 +16,10 @@ module example.com/trpc-agent-go-sumcheck
 
 go 1.21
 
-require golang.org/x/mod v0.24.0
+require golang.org/x/mod v0.20.0
 EOF
 
 export GOMODCACHE="${tmp_dir}/gomodcache"
 export GOFLAGS="-modcacherw"
 
 go run -mod=mod -modfile="${tool_mod}" .github/scripts/check-current-module-sums.go
-
