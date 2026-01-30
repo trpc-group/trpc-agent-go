@@ -107,6 +107,24 @@ func TestVectorStore_Search(t *testing.T) {
 			wantErr: true,
 			errMsg:  "connection timeout",
 		},
+		{
+			// This test documents that dimension validation is enforced at the database level.
+			// When a query vector with wrong dimensions is used, PostgreSQL/pgvector returns
+			// an error like "expected 3 dimensions, not 2".
+			name: "dimension_mismatch_from_database",
+			query: &vectorstore.SearchQuery{
+				Vector:     []float64{1.0, 0.5}, // 2 dimensions, but table expects 3
+				Limit:      5,
+				SearchMode: vectorstore.SearchModeVector,
+			},
+			setupMock: func(mock sqlmock.Sqlmock) {
+				// Simulate PostgreSQL/pgvector dimension mismatch error
+				mock.ExpectQuery("SELECT .+ FROM documents").
+					WillReturnError(errors.New("ERROR: expected 3 dimensions, not 2 (SQLSTATE 22000)"))
+			},
+			wantErr: true,
+			errMsg:  "expected 3 dimensions, not 2",
+		},
 	}
 
 	for _, tt := range tests {

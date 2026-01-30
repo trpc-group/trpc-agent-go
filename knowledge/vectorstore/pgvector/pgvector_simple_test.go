@@ -95,6 +95,24 @@ func TestVectorStore_Add(t *testing.T) {
 			wantErr: true,
 			errMsg:  "connection timeout",
 		},
+		{
+			// This test documents that dimension validation is enforced at the database level.
+			// When a vector with wrong dimensions is inserted, PostgreSQL/pgvector returns
+			// an error like "expected 3 dimensions, not 2".
+			name: "dimension_mismatch_from_database",
+			doc: &document.Document{
+				ID:      "test_005",
+				Content: "Test content",
+			},
+			vector: []float64{1.0, 0.5}, // 2 dimensions, but table expects 3
+			setupMock: func(mock sqlmock.Sqlmock) {
+				// Simulate PostgreSQL/pgvector dimension mismatch error
+				mock.ExpectExec("INSERT INTO documents").
+					WillReturnError(errors.New("ERROR: expected 3 dimensions, not 2 (SQLSTATE 22000)"))
+			},
+			wantErr: true,
+			errMsg:  "expected 3 dimensions, not 2",
+		},
 	}
 
 	for _, tt := range tests {
@@ -267,6 +285,22 @@ func TestVectorStore_Update(t *testing.T) {
 			vector:  []float64{1.0, 0.5, 0.2},
 			wantErr: true,
 			errMsg:  "pgvector document not updated",
+		},
+		{
+			// This test documents that dimension validation is enforced at the database level.
+			name: "dimension_mismatch_from_database",
+			doc: &document.Document{
+				ID:      "test_003",
+				Content: "Test",
+			},
+			setupMock: func(mock sqlmock.Sqlmock) {
+				// Simulate PostgreSQL/pgvector dimension mismatch error
+				mock.ExpectExec("UPDATE documents SET").
+					WillReturnError(errors.New("ERROR: expected 3 dimensions, not 2 (SQLSTATE 22000)"))
+			},
+			vector:  []float64{1.0, 0.5}, // 2 dimensions, but table expects 3
+			wantErr: true,
+			errMsg:  "expected 3 dimensions, not 2",
 		},
 	}
 
