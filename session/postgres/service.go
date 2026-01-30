@@ -20,10 +20,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/spaolacci/murmur3"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/hook"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
+	"trpc.group/trpc-go/trpc-agent-go/internal/util"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
@@ -763,7 +763,7 @@ func (s *Service) AppendTrackEvent(
 
 		hKey := fmt.Sprintf("%s:%s:%s:%s", key.AppName, key.UserID, key.SessionID, trackEvent.Track)
 		n := len(s.trackEventChans)
-		index := int(murmur3.Sum32([]byte(hKey))) % n
+		index := util.StableHashIndex(hKey, n)
 		select {
 		case s.trackEventChans[index] <- &trackEventPair{key: key, event: trackEvent}:
 		case <-ctx.Done():

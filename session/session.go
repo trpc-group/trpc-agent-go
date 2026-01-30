@@ -17,8 +17,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/spaolacci/murmur3"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/util"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
@@ -57,7 +57,7 @@ type Session struct {
 	CreatedAt   time.Time           `json:"createdAt"`           // CreatedAt is the creation time.
 
 	// Hash is the pre-computed slot hash value for asynchronous task dispatching.
-	// It is calculated once during session creation using murmur3 hash of
+	// It is calculated once during session creation using a stable hash of
 	// "appName:userID:sessionID" and remains immutable throughout the session's lifecycle.
 	// This field is computed once during session creation and never modified.
 	Hash int `json:"-"`
@@ -192,7 +192,7 @@ func WithSessionUpdatedAt(updatedAt time.Time) SessionOptions {
 // NewSession creates a new session.
 func NewSession(appName, userID, sessionID string, options ...SessionOptions) *Session {
 	hashKey := fmt.Sprintf("%s:%s:%s", appName, userID, sessionID)
-	hash := int(murmur3.Sum32([]byte(hashKey)))
+	hash := util.StableHashInt(hashKey)
 
 	sess := &Session{
 		ID:        sessionID,

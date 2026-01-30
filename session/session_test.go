@@ -19,10 +19,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spaolacci/murmur3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/util"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -2078,7 +2078,7 @@ func TestNewSession(t *testing.T) {
 
 			// Test that Hash is computed correctly
 			expectedHashKey := fmt.Sprintf("%s:%s:%s", tt.appName, tt.userID, tt.sessionID)
-			expectedHash := int(murmur3.Sum32([]byte(expectedHashKey)))
+			expectedHash := util.StableHashInt(expectedHashKey)
 			if got.Hash != expectedHash {
 				t.Errorf("NewSession() Hash = %v, want %v", got.Hash, expectedHash)
 			}
