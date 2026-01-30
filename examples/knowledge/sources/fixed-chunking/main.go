@@ -95,7 +95,7 @@ func main() {
 		fmt.Printf("  Chunk %d: ID=%s, Size=%d chars\n", i+1, chunk.ID, len(chunk.Content))
 		fmt.Printf("    Preview: %s\n", preview)
 	}
-	fmt.Println("--- End of Chunking Preview ---\n")
+	fmt.Println("--- End of Chunking Preview ---")
 
 	// Create file source with custom chunking strategy
 	sources := []source.Source{
