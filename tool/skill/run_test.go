@@ -1381,6 +1381,28 @@ func TestRunTool_RelativeCWD_TraversalDoesNotEscapeWorkspace(t *testing.T) {
 	require.True(t, strings.HasPrefix(pwd, wsRoot))
 }
 
+func TestResolveCWD_WorkspaceEnvPathAllowlist(t *testing.T) {
+	base := path.Join(codeexecutor.DirSkills, "x")
+
+	// traversal should fallback
+	require.Equal(t, base, resolveCWD("$"+codeexecutor.WorkspaceEnvDirKey+"/../..", "x"))
+
+	// allowed roots under workspace
+	require.Equal(t, codeexecutor.DirWork, resolveCWD("$"+codeexecutor.WorkspaceEnvDirKey+"/"+codeexecutor.DirWork, "x"))
+	require.Equal(t, codeexecutor.DirSkills+"/x", resolveCWD("$"+codeexecutor.WorkspaceEnvDirKey+"/"+codeexecutor.DirSkills+"/x", "x"))
+
+	// disallowed root under workspace falls back to base
+	require.Equal(t, base, resolveCWD("$"+codeexecutor.WorkspaceEnvDirKey+"/etc", "x"))
+}
+
+func TestResolveCWD_AbsPathAllowlist(t *testing.T) {
+	base := path.Join(codeexecutor.DirSkills, "x")
+
+	require.Equal(t, codeexecutor.DirWork, resolveCWD("/"+codeexecutor.DirWork, "x"))
+	require.Equal(t, base, resolveCWD("/etc", "x"))
+	require.Equal(t, ".", resolveCWD("/", "x"))
+}
+
 // Validate Declaration basics and required fields.
 func TestRunTool_Declaration(t *testing.T) {
 	rt := NewRunTool(nil, nil)

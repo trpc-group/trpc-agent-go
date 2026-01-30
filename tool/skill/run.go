@@ -754,6 +754,35 @@ func isWorkspaceEnvPath(s string) bool {
 		hasEnvPrefix(s, codeexecutor.EnvRunDir)
 }
 
+func isAllowedWorkspacePath(rel string) bool {
+	switch {
+	case rel == codeexecutor.DirSkills || strings.HasPrefix(rel, codeexecutor.DirSkills+"/"):
+		return true
+	case rel == codeexecutor.DirWork || strings.HasPrefix(rel, codeexecutor.DirWork+"/"):
+		return true
+	case rel == codeexecutor.DirOut || strings.HasPrefix(rel, codeexecutor.DirOut+"/"):
+		return true
+	case rel == codeexecutor.DirRuns || strings.HasPrefix(rel, codeexecutor.DirRuns+"/"):
+		return true
+	default:
+		return false
+	}
+}
+
+func sanitizeWorkspaceRelPath(rel string, fallback string) string {
+	cleaned := path.Clean(rel)
+	if cleaned == "." || cleaned == "" {
+		return "."
+	}
+	if cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+		return fallback
+	}
+	if isAllowedWorkspacePath(cleaned) {
+		return cleaned
+	}
+	return fallback
+}
+
 func resolveCWD(cwd string, name string) string {
 	// Default: run at the skill root. Relative cwd resolves under the
 	// skill root. "$WORK_DIR" style paths resolve to workspace-relative
@@ -764,59 +793,28 @@ func resolveCWD(cwd string, name string) string {
 	if s == "" {
 		return base
 	}
+
 	if isWorkspaceEnvPath(s) {
 		if out := codeexecutor.NormalizeGlobs([]string{s}); len(out) > 0 {
-			cleaned := path.Clean(out[0])
-			if cleaned == "." || cleaned == "" {
-				return "."
-			}
-			if cleaned == ".." || strings.HasPrefix(cleaned, "../") {
-				return base
-			}
-			switch {
-			case cleaned == codeexecutor.DirSkills ||
-				strings.HasPrefix(cleaned, codeexecutor.DirSkills+"/"):
-				return cleaned
-			case cleaned == codeexecutor.DirWork ||
-				strings.HasPrefix(cleaned, codeexecutor.DirWork+"/"):
-				return cleaned
-			case cleaned == codeexecutor.DirOut ||
-				strings.HasPrefix(cleaned, codeexecutor.DirOut+"/"):
-				return cleaned
-			case cleaned == codeexecutor.DirRuns ||
-				strings.HasPrefix(cleaned, codeexecutor.DirRuns+"/"):
-				return cleaned
-			default:
-				return base
-			}
+			return sanitizeWorkspaceRelPath(out[0], base)
 		}
 		return base
 	}
+
 	if strings.HasPrefix(s, "/") {
-		cleaned := path.Clean(s)
-		rel := strings.TrimPrefix(cleaned, "/")
-		switch {
-		case rel == "" || rel == ".":
+		rel := strings.TrimPrefix(path.Clean(s), "/")
+		if rel == "" || rel == "." {
 			return "."
-		case rel == codeexecutor.DirSkills ||
-			strings.HasPrefix(rel, codeexecutor.DirSkills+"/"):
-			return rel
-		case rel == codeexecutor.DirWork ||
-			strings.HasPrefix(rel, codeexecutor.DirWork+"/"):
-			return rel
-		case rel == codeexecutor.DirOut ||
-			strings.HasPrefix(rel, codeexecutor.DirOut+"/"):
-			return rel
-		case rel == codeexecutor.DirRuns ||
-			strings.HasPrefix(rel, codeexecutor.DirRuns+"/"):
-			return rel
-		default:
-			return base
 		}
+		if isAllowedWorkspacePath(rel) {
+			return rel
+		}
+		return base
 	}
-	rel := path.Join(base, s)
-	if rel == base || strings.HasPrefix(rel, base+"/") {
-		return rel
+
+	joined := path.Join(base, s)
+	if joined == base || strings.HasPrefix(joined, base+"/") {
+		return joined
 	}
 	return base
 }
