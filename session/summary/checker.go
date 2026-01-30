@@ -90,18 +90,11 @@ func checkTokenThresholdFromText(tokenCount int, conversationText string) bool {
 		return false
 	}
 
-	tokens, err := tokenCounter.CountTokens(
+	// SimpleTokenCounter.CountTokens currently never returns an error.
+	tokens, _ := tokenCounter.CountTokens(
 		context.Background(),
 		model.Message{Content: conversationText},
 	)
-	if err != nil {
-		log.Warnf(
-			"failed to count tokens for conversation text, failing closed (no summary) (chars=%d): %v",
-			len(conversationText),
-			err,
-		)
-		return false
-	}
 	return tokens > tokenCount
 }
 
