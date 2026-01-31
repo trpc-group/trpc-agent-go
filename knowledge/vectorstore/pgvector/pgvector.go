@@ -249,9 +249,6 @@ func (vs *VectorStore) Add(ctx context.Context, doc *document.Document, embeddin
 	if len(embedding) == 0 {
 		return fmt.Errorf("pgvector embedding is required for %s", doc.ID)
 	}
-	if len(embedding) != vs.option.indexDimension {
-		return fmt.Errorf("pgvector embedding dimension mismatch: expected %d, got %d, table: %s", vs.option.indexDimension, len(embedding), vs.option.table)
-	}
 
 	upsertSQL := buildUpsertSQL(vs.option)
 	now := time.Now().Unix()
@@ -324,9 +321,6 @@ func (vs *VectorStore) Update(ctx context.Context, doc *document.Document, embed
 	}
 
 	if len(embedding) > 0 {
-		if len(embedding) != vs.option.indexDimension {
-			return fmt.Errorf("pgvector embedding dimension mismatch: expected %d, got %d", vs.option.indexDimension, len(embedding))
-		}
 		ub.addField(vs.option.embeddingFieldName, pgvector.NewVector(convertToFloat32Vector(embedding)))
 	}
 
@@ -411,9 +405,6 @@ func (vs *VectorStore) searchByVector(ctx context.Context, query *vectorstore.Se
 	if len(query.Vector) == 0 {
 		return nil, errors.New("pgvector: searching with a nil or empty vector is not supported")
 	}
-	if len(query.Vector) != vs.option.indexDimension {
-		return nil, fmt.Errorf("pgvector vector dimension mismatch: expected %d, got %d", vs.option.indexDimension, len(query.Vector))
-	}
 
 	// Build vector search query
 	qb := newVectorQueryBuilder(vs.option)
@@ -456,12 +447,8 @@ func (vs *VectorStore) searchByKeyword(ctx context.Context, query *vectorstore.S
 
 // searchByHybrid combines vector similarity and keyword matching.
 func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
-	// Check vector dimension and keyword.
 	if len(query.Vector) == 0 {
 		return nil, errors.New("pgvector vector is required for hybrid search")
-	}
-	if len(query.Vector) != vs.option.indexDimension {
-		return nil, fmt.Errorf("pgvector vector dimension mismatch: expected %d, got %d", vs.option.indexDimension, len(query.Vector))
 	}
 
 	vectorWeight := vs.option.vectorWeight
