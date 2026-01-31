@@ -109,6 +109,9 @@ go run main.go -task-id "e1fc63a2-da7a-432f-be78-7c4a95598703"
 
 # Specify model
 go run main.go -model gpt-4o
+
+# Enable Ralph Loop (outer loop verification)
+go run main.go -ralph-loop
 ```
 
 ### Command Line Arguments
@@ -121,12 +124,14 @@ go run main.go -model gpt-4o
 | `-tasks` | `0` | Number of tasks to run (0 means all) |
 | `-model` | `deepseek-v3-local-II` | Model name to use |
 | `-task-id` | `""` | Run specific task (by index or task_id) |
+| `-ralph-loop` | `false` | Enable Ralph Loop outer loop verification |
+| `-ralph-max-iterations` | `3` | Max Ralph Loop iterations (only when `-ralph-loop` is enabled) |
 
 ### Dataset Description
 
 | File | Description |
 |------|-------------|
-| `gaia_2023_level1_validation.json` | Level 1 validation set (54 tasks) |
+| `gaia_2023_level1_validation.json` | Level 1 validation set (53 tasks) |
 | `gaia_sample.json` | Small sample for quick testing |
 
 > **Note**: Only Level 1 evaluation is currently supported.
@@ -138,7 +143,7 @@ Evaluation results are saved in JSON format:
 ```json
 {
   "framework": "trpc-agent-go",
-  "total_tasks": 54,
+  "total_tasks": 53,
   "correct_count": 30,
   "accuracy": 0.5556,
   "avg_steps": 5.2,
@@ -148,6 +153,40 @@ Evaluation results are saved in JSON format:
   "detailed_results": [...]
 }
 ```
+
+## Ralph Loop A/B Results (gpt-5)
+
+This benchmark can be run in two modes:
+
+- **Baseline**: default `react` planner (`-ralph-loop=false`)
+- **Ralph Loop (runner-level outer loop)**: wraps the agent with
+  `runner.WithRalphLoop(...)` (`-ralph-loop=true`)
+
+When Ralph Loop is enabled, the runner will keep re-running the agent until a
+completion condition is met (or `-ralph-max-iterations` is reached). In this
+GAIA implementation, the completion condition is a simple verifier: the last
+assistant message must contain a `FINAL ANSWER: <answer>` line.
+
+Results (GAIA Level 1 validation, 53 tasks, run date: 2026-01-30):
+
+| Run | Mode | Correct | Accuracy | Avg steps | Avg time | Avg tokens | Avg tool calls |
+|-----|------|--------:|---------:|----------:|---------:|-----------:|---------------:|
+| A | react | 41/53 | 77.36% | 7.26 | 201.2s | 22,588 | 6.15 |
+| B | react + ralph-loop (runner) | 39/53 | 73.58% | 7.85 | 207.5s | 20,516 | 6.83 |
+
+Notes:
+
+- Run B had **2 tasks fail** with transient model API `429 Too Many Requests`
+  errors; those tasks are counted as incorrect.
+- If you exclude those 2 error tasks and compare only the remaining 51 tasks,
+  both runs are **39/51 (76.47%)**. In this setup, enabling Ralph Loop did not
+  show a clear accuracy improvement, and slightly increased steps / tool calls.
+
+Raw outputs are stored in `benchmark/gaia/results/` (kept out of git by
+default):
+
+- `gpt-5_react_baseline.json`
+- `gpt-5_react_ralph_runner.json`
 
 ## Agent Capabilities
 
