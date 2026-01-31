@@ -133,6 +133,7 @@ type runner struct {
 	memoryService    memory.Service
 	artifactService  artifact.Service
 	pluginManager    agent.PluginManager
+	ralphLoop        *RalphLoopConfig
 
 	// Resource management fields.
 	ownedSessionService bool      // Indicates if sessionService was created by this runner.
@@ -156,6 +157,7 @@ type Options struct {
 	artifactService artifact.Service
 	agents          map[string]agent.Agent
 	plugins         []plugin.Plugin
+	ralphLoop       *RalphLoopConfig
 }
 
 // newOptions creates a new Options.
@@ -180,6 +182,9 @@ func NewRunner(appName string, ag agent.Agent, opts ...Option) Runner {
 	}
 	agents := options.agents
 	agents[ag.Info().Name] = ag
+	if options.ralphLoop != nil {
+		wrapAgentsWithRalphLoop(agents, *options.ralphLoop)
+	}
 	var pm agent.PluginManager
 	if len(options.plugins) > 0 {
 		pm = plugin.MustNewManager(options.plugins...)
@@ -198,6 +203,7 @@ func NewRunner(appName string, ag agent.Agent, opts ...Option) Runner {
 		memoryService:       options.memoryService,
 		artifactService:     options.artifactService,
 		pluginManager:       pm,
+		ralphLoop:           options.ralphLoop,
 		ownedSessionService: ownedSessionService,
 	}
 }
@@ -519,8 +525,15 @@ func (r *runner) selectAgent(
 	ro agent.RunOptions,
 ) (agent.Agent, error) {
 	if ro.Agent != nil {
-		appid.RegisterRunner(r.appName, ro.Agent.Info().Name)
-		return ro.Agent, nil
+		selected := ro.Agent
+		if r.ralphLoop != nil {
+			selected = wrapAgentWithRalphLoop(
+				selected,
+				*r.ralphLoop,
+			)
+		}
+		appid.RegisterRunner(r.appName, selected.Info().Name)
+		return selected, nil
 	}
 	agentName := r.defaultAgentName
 	if ro.AgentByName != "" {
