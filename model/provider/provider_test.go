@@ -422,10 +422,18 @@ func TestModelWithAllOptions(t *testing.T) {
 			) {
 			}),
 		}),
-		WithGeminiOption(gemini.WithGeminiClientConfig(nil)),
+		WithGeminiOption(gemini.WithGeminiClientConfig(&genai.ClientConfig{
+			APIKey:     "test-key",
+			Backend:    2,
+			HTTPClient: http.DefaultClient,
+		})),
 	)
-	assert.NoError(t, err)
-	assert.NotNil(t, modelInstance)
+	if !assert.NoError(t, err) {
+		return
+	}
+	if !assert.NotNil(t, modelInstance) {
+		return
+	}
 	assert.Equal(t, "gemini-pro", modelInstance.Info().Name)
 
 	modelInstance, err = Model(
