@@ -1,8 +1,14 @@
-module git.code.oa.com/trpc-agent-go/benchmark/gaia/trpc-agent-go-impl
+module trpc.group/trpc-go/trpc-agent-go/benchmark/gaia/trpc-agent-go-impl
 
 go 1.24.1
 
-toolchain go1.24.11
+toolchain go1.24.9
+
+replace (
+	trpc.group/trpc-go/trpc-agent-go => ../../../
+	trpc.group/trpc-go/trpc-agent-go/tool/arxivsearch => ../../../tool/arxivsearch
+	trpc.group/trpc-go/trpc-agent-go/tool/wikipedia => ../../../tool/wikipedia
+)
 
 require (
 	github.com/google/uuid v1.6.0

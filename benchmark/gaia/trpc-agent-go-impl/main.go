@@ -49,12 +49,22 @@ import (
 )
 
 var (
-	datasetPath  = flag.String("dataset", "../data/gaia_2023_level1_validation.json", "Path to GAIA dataset")
-	dataDir      = flag.String("data-dir", "../data", "Directory containing data files")
-	outputPath   = flag.String("output", "../results/trpc-agent-go.json", "Path to output results")
-	maxTasks     = flag.Int("tasks", 0, "Maximum number of tasks to run (0 means all)")
-	modelName    = flag.String("model", "deepseek-v3-local-II", "Model name to use")
-	specificTask = flag.String("task-id", "", "Run specific task by task ID or index (e.g., '28' or 'e1fc63a2-da7a-432f-be78-7c4a95598703')")
+	datasetPath     = flag.String("dataset", "../data/gaia_2023_level1_validation.json", "Path to GAIA dataset")
+	dataDir         = flag.String("data-dir", "../data", "Directory containing data files")
+	outputPath      = flag.String("output", "../results/trpc-agent-go.json", "Path to output results")
+	maxTasks        = flag.Int("tasks", 0, "Maximum number of tasks to run (0 means all)")
+	modelName       = flag.String("model", "deepseek-v3-local-II", "Model name to use")
+	specificTask    = flag.String("task-id", "", "Run specific task by task ID or index (e.g., '28' or 'e1fc63a2-da7a-432f-be78-7c4a95598703')")
+	enableRalphLoop = flag.Bool(
+		"ralph-loop",
+		false,
+		"Enable Ralph Loop outer loop verification",
+	)
+	ralphMaxIterations = flag.Int(
+		"ralph-max-iterations",
+		3,
+		"Max Ralph Loop iterations",
+	)
 )
 
 // Store original working directory for relative path resolution
@@ -218,6 +228,13 @@ func main() {
 	log.Printf("Dataset: %s", *datasetPath)
 	log.Printf("Data directory: %s", *dataDir)
 	log.Printf("Max tasks: %d", *maxTasks)
+	log.Printf("Model: %s", *modelName)
+	if *enableRalphLoop {
+		log.Printf("Planner: react (Ralph Loop enabled)")
+		log.Printf("Ralph Loop max iterations: %d", *ralphMaxIterations)
+	} else {
+		log.Printf("Planner: react")
+	}
 
 	// Load dataset
 	tasks, err := loadDataset(*datasetPath)
@@ -238,11 +255,13 @@ func main() {
 
 	log.Printf("Loaded %d tasks", len(tasks))
 
-	// Create agent
+	// Create agent and runner
 	gaiaAgent := createGAIAAgent()
+	gaiaRunner := createGAIARunner(gaiaAgent)
+	defer gaiaRunner.Close()
 
 	// Run benchmark
-	results := runBenchmark(gaiaAgent, tasks)
+	results := runBenchmark(gaiaRunner, tasks)
 
 	// Save results
 	if err := saveResults(results, *outputPath); err != nil {
@@ -1328,6 +1347,74 @@ func extractTextFromHTML(html string) string {
 	return strings.TrimSpace(text)
 }
 
+const gaiaFinalAnswerPrefix = "FINAL ANSWER:"
+
+var gaiaFinalAnswerLineRE = regexp.MustCompile(
+	`(?i)FINAL\s*ANSWER\s*:\s*\S`,
+)
+
+type gaiaFinalAnswerVerifier struct{}
+
+func (gaiaFinalAnswerVerifier) Verify(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	lastEvent *event.Event,
+) (runner.VerifyResult, error) {
+	content := assistantContentFromEvent(lastEvent)
+	if gaiaFinalAnswerLineRE.MatchString(content) {
+		return runner.VerifyResult{Passed: true}, nil
+	}
+
+	feedback := fmt.Sprintf(
+		"Please end with %q followed by the answer.",
+		gaiaFinalAnswerPrefix,
+	)
+	return runner.VerifyResult{
+		Passed:   false,
+		Feedback: feedback,
+	}, nil
+}
+
+func assistantContentFromEvent(lastEvent *event.Event) string {
+	if lastEvent == nil || len(lastEvent.Choices) == 0 {
+		return ""
+	}
+	msg := lastEvent.Choices[0].Message
+	if msg.Content != "" {
+		return msg.Content
+	}
+	if len(msg.ContentParts) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, part := range msg.ContentParts {
+		if part.Type != model.ContentTypeText || part.Text == nil {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(*part.Text)
+	}
+	return b.String()
+}
+
+func createGAIARunner(ag agent.Agent) runner.Runner {
+	if !*enableRalphLoop {
+		return runner.NewRunner("gaia-runner", ag)
+	}
+	return runner.NewRunner(
+		"gaia-runner",
+		ag,
+		runner.WithRalphLoop(runner.RalphLoopConfig{
+			MaxIterations: *ralphMaxIterations,
+			Verifiers: []runner.Verifier{
+				gaiaFinalAnswerVerifier{},
+			},
+		}),
+	)
+}
+
 func createGAIAAgent() agent.Agent {
 	// Create model
 	modelInstance := openai.New(*modelName)
@@ -1463,9 +1550,7 @@ IMPORTANT:
 	return llmagent.New("gaia-agent", agentOpts...)
 }
 
-func runBenchmark(ag agent.Agent, tasks []GAIATask) SummaryResult {
-	r := runner.NewRunner("gaia-runner", ag)
-
+func runBenchmark(r runner.Runner, tasks []GAIATask) SummaryResult {
 	results := make([]BenchmarkResult, 0, len(tasks))
 
 	for i, task := range tasks {

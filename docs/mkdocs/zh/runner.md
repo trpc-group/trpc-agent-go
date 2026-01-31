@@ -177,6 +177,33 @@ defer r.Close()
 - 插件按注册顺序执行。
 - 如果插件实现了 `plugin.Closer`，Runner 会在 `Close()` 时调用它。
 
+### 🔄 Ralph Loop Mode
+
+Ralph Loop 是一种“外部循环（outer loop）”模式：不依赖 LLM 主观判断“我已经完成了”，
+而是用可验证的完成条件来决定是否继续迭代执行。
+
+常见完成条件：
+
+- Assistant 输出包含完成承诺（completion promise），例如
+  `<promise>DONE</promise>`。
+- 校验命令退出码为 0（例如 `go test ./...`）。
+- 通过 `runner.Verifier` 扩展自定义校验。
+- 强烈建议设置 `MaxIterations` 作为安全阀。
+
+```go
+r := runner.NewRunner("my-app", a,
+    runner.WithRalphLoop(runner.RalphLoopConfig{
+        MaxIterations:     20,
+        CompletionPromise: "DONE",
+        VerifyCommand:     "go test ./... -count=1",
+        VerifyTimeout:     2 * time.Minute,
+    }),
+)
+```
+
+当达到 `MaxIterations` 仍未满足完成条件时，Runner 会发出一个 error event，其错误类型为
+`stop_agent_error`。
+
 ### 运行对话
 
 ```go
