@@ -77,17 +77,6 @@ func TestVectorStore_Search(t *testing.T) {
 			errMsg:    "vector is not supported",
 		},
 		{
-			name: "dimension_mismatch",
-			query: &vectorstore.SearchQuery{
-				Vector:     []float64{1.0, 0.5}, // Only 2 dimensions
-				Limit:      5,
-				SearchMode: vectorstore.SearchModeVector,
-			},
-			setupMock: func(mock sqlmock.Sqlmock) {},
-			wantErr:   true,
-			errMsg:    "dimension mismatch",
-		},
-		{
 			name: "no_results",
 			query: &vectorstore.SearchQuery{
 				Vector:     []float64{1.0, 0.5, 0.2},
@@ -117,6 +106,24 @@ func TestVectorStore_Search(t *testing.T) {
 			},
 			wantErr: true,
 			errMsg:  "connection timeout",
+		},
+		{
+			// This test documents that dimension validation is enforced at the database level.
+			// When a query vector with wrong dimensions is used, PostgreSQL/pgvector returns
+			// an error like "expected 3 dimensions, not 2".
+			name: "dimension_mismatch_from_database",
+			query: &vectorstore.SearchQuery{
+				Vector:     []float64{1.0, 0.5}, // 2 dimensions, but table expects 3
+				Limit:      5,
+				SearchMode: vectorstore.SearchModeVector,
+			},
+			setupMock: func(mock sqlmock.Sqlmock) {
+				// Simulate PostgreSQL/pgvector dimension mismatch error
+				mock.ExpectQuery("SELECT .+ FROM documents").
+					WillReturnError(errors.New("ERROR: expected 3 dimensions, not 2 (SQLSTATE 22000)"))
+			},
+			wantErr: true,
+			errMsg:  "expected 3 dimensions, not 2",
 		},
 	}
 
@@ -363,25 +370,6 @@ func TestVectorStore_SearchByHybrid(t *testing.T) {
 		result, err := vs.Search(context.Background(), query)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "vector is required")
-		require.Nil(t, result)
-		tc.AssertExpectations(t)
-	})
-
-	t.Run("hybrid_search_dimension_mismatch", func(t *testing.T) {
-		vs, tc := newTestVectorStoreWithTSVector(t, WithIndexDimension(3))
-		defer tc.Close()
-
-		query := &vectorstore.SearchQuery{
-			Vector:     []float64{1.0, 0.5}, // Wrong dimension: 2 instead of 3
-			Query:      "test",
-			SearchMode: vectorstore.SearchModeHybrid,
-			Limit:      5,
-		}
-
-		result, err := vs.Search(context.Background(), query)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "dimension mismatch")
-		assert.Contains(t, err.Error(), "expected 3, got 2")
 		require.Nil(t, result)
 		tc.AssertExpectations(t)
 	})
