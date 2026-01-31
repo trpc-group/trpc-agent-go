@@ -310,6 +310,9 @@ func (p *Planner) buildPlannerInstruction() string {
 		"- Ask for clarification if the query is ambiguous or lacks necessary details.",
 	}, "\n")
 
+	// Few-shot example demonstrating the expected format.
+	fewShotExample := p.buildFewShotExample()
+
 	return strings.Join([]string{
 		highLevelPreamble,
 		criticalRules,
@@ -318,5 +321,30 @@ func (p *Planner) buildPlannerInstruction() string {
 		reasoningPreamble,
 		finalAnswerPreamble,
 		userInputPreamble,
+		fewShotExample,
 	}, "\n\n")
+}
+
+// buildFewShotExample builds a few-shot example demonstrating the expected
+// React format based on actual successful execution patterns.
+func (p *Planner) buildFewShotExample() string {
+	return strings.Join([]string{
+		"=== EXAMPLE ===",
+		"User: What is the population of Tokyo in millions?",
+		"",
+		PlanningTag,
+		"1. Search Wikipedia for Tokyo's population data",
+		"2. Extract the population number and convert to millions",
+		"3. Provide the final answer",
+		"",
+		ActionTag,
+		"I will search Wikipedia for Tokyo's population information.",
+		"",
+		ReasoningTag,
+		"The Wikipedia search returned Tokyo's population as approximately 13,960,000. Converting to millions: 13,960,000 / 1,000,000 = 13.96 million.",
+		"",
+		FinalAnswerTag,
+		"13.96",
+		"=== END EXAMPLE ===",
+	}, "\n")
 }
