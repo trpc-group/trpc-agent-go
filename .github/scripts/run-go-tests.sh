@@ -36,6 +36,9 @@ if [ "${#requested_modules[@]}" -gt 0 ]; then
   done
 else
   while IFS= read -r mod; do
+    if head -n 5 "${mod}" | grep -q "DO NOT USE!"; then
+      continue
+    fi
     gomodules+=("${mod}")
   done < <(find . -name go.mod \
     -not -path "./.resource/*" \
