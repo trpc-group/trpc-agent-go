@@ -193,16 +193,16 @@ func anthropicProvider(opts *Options) (model.Model, error) {
 func geminiProvider(opts *Options) (model.Model, error) {
 	var res []gemini.Option
 	if cb := opts.Callbacks; cb != nil {
-		if cb.AnthropicChatRequest != nil {
+		if cb.GeminiChatRequest != nil {
 			res = append(res, gemini.WithChatRequestCallback(cb.GeminiChatRequest))
 		}
-		if cb.AnthropicChatResponse != nil {
+		if cb.GeminiChatResponse != nil {
 			res = append(res, gemini.WithChatResponseCallback(cb.GeminiChatResponse))
 		}
-		if cb.AnthropicChatChunk != nil {
+		if cb.GeminiChatChunk != nil {
 			res = append(res, gemini.WithChatChunkCallback(cb.GeminiChatChunk))
 		}
-		if cb.AnthropicStreamComplete != nil {
+		if cb.GeminiStreamComplete != nil {
 			res = append(res, gemini.WithChatStreamCompleteCallback(cb.GeminiStreamComplete))
 		}
 	}
