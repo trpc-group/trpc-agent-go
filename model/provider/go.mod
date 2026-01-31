@@ -2,8 +2,6 @@ module trpc.group/trpc-go/trpc-agent-go/model/provider
 
 go 1.24.1
 
-toolchain go1.24.4
-
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../../
 	trpc.group/trpc-go/trpc-agent-go/model/anthropic => ../../model/anthropic
@@ -17,6 +15,7 @@ require (
 	github.com/ollama/ollama v0.13.1
 	github.com/openai/openai-go v1.12.0
 	github.com/stretchr/testify v1.11.1
+	google.golang.org/genai v1.36.0
 	trpc.group/trpc-go/trpc-agent-go v0.6.0
 	trpc.group/trpc-go/trpc-agent-go/model/anthropic v0.0.0-20251126064502-c8c2594d2519
 	trpc.group/trpc-go/trpc-agent-go/model/gemini v0.8.1-0.20251222024650-ea147adf3d21
@@ -53,7 +52,6 @@ require (
 	golang.org/x/net v0.47.0 // indirect
 	golang.org/x/sys v0.38.0 // indirect
 	golang.org/x/text v0.31.0 // indirect
-	google.golang.org/genai v1.36.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251124214823-79d6a2a48846 // indirect
 	google.golang.org/grpc v1.77.0 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
