@@ -43,7 +43,7 @@ examples/toolsearch/toollibrary/small/
 
 #### LLM Search
 
-| paramter name | paramter value |
+| parameter name | parameter value |
 | --- | --- |
 | SystemPrompt | Your goal is to select the most relevant tools for answering the user's query.<br><br>IMPORTANT: List the tool names in order of relevance, with the most relevant first.<br>If you exceed the maximum number of tools, only the first {MaxTools} will be used.<br><br>Available tools:<br>- {ToolName-1}: {ToolDescription-1}<br>- {ToolName-2}: {ToolDescription-2}<br>......<br>- {ToolName-n}: {ToolDescription-n} |
 | Chat Model | deepseek v3.2, 使用[对话补全（chat/completions） Request](https://api-docs.deepseek.com/zh-cn/api/create-chat-completion) 里面的默认参数 |
@@ -51,7 +51,7 @@ examples/toolsearch/toollibrary/small/
 
 #### Knowledge Search
 
-| paramter name | paramter value |
+| parameter name | parameter value |
 | --- | --- |
 | SystemPrompt | Your goal is to identify the most relevant tools for answering the user's query.<br>Provide a natural-language description of the kind of tool needed (e.g., 'weather information', 'currency conversion', 'stock prices'). |
 | Chat Model | deepseek v3.2, 使用[对话补全（chat/completions） Request](https://api-docs.deepseek.com/zh-cn/api/create-chat-completion) 里面的默认参数 |
