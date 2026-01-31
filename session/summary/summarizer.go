@@ -345,14 +345,25 @@ func (s *sessionSummarizer) Metadata() map[string]any {
 // extractConversationText extracts conversation text from events.
 // This includes regular messages, tool calls, and tool responses.
 func (s *sessionSummarizer) extractConversationText(events []event.Event) string {
+	return extractConversationText(
+		events,
+		s.toolCallFormatter,
+		s.toolResultFormatter,
+	)
+}
+
+// extractConversationText converts events into conversation text.
+// When tool formatters are nil, default formatters are used.
+func extractConversationText(
+	events []event.Event,
+	toolCallFmt ToolCallFormatter,
+	toolResultFmt ToolResultFormatter,
+) string {
 	var parts []string
 
-	// Use default formatters if not configured.
-	toolCallFmt := s.toolCallFormatter
 	if toolCallFmt == nil {
 		toolCallFmt = defaultToolCallFormatter
 	}
-	toolResultFmt := s.toolResultFormatter
 	if toolResultFmt == nil {
 		toolResultFmt = defaultToolResultFormatter
 	}
