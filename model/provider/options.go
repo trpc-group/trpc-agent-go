@@ -10,6 +10,7 @@
 package provider
 
 import (
+	"maps"
 	"net/http"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -161,6 +162,18 @@ func WithCallbacks(cb Callbacks) Option {
 		if cb.AnthropicStreamComplete != nil {
 			o.Callbacks.AnthropicStreamComplete = cb.AnthropicStreamComplete
 		}
+		if cb.GeminiChatRequest != nil {
+			o.Callbacks.GeminiChatRequest = cb.GeminiChatRequest
+		}
+		if cb.GeminiChatResponse != nil {
+			o.Callbacks.GeminiChatResponse = cb.GeminiChatResponse
+		}
+		if cb.GeminiChatChunk != nil {
+			o.Callbacks.GeminiChatChunk = cb.GeminiChatChunk
+		}
+		if cb.GeminiStreamComplete != nil {
+			o.Callbacks.GeminiStreamComplete = cb.GeminiStreamComplete
+		}
 		if cb.OllamaChatRequest != nil {
 			o.Callbacks.OllamaChatRequest = cb.OllamaChatRequest
 		}
@@ -172,6 +185,18 @@ func WithCallbacks(cb Callbacks) Option {
 		}
 		if cb.OllamaChatChunk != nil {
 			o.Callbacks.OllamaChatChunk = cb.OllamaChatChunk
+		}
+		if cb.HunyuanChatRequest != nil {
+			o.Callbacks.HunyuanChatRequest = cb.HunyuanChatRequest
+		}
+		if cb.HunyuanChatResponse != nil {
+			o.Callbacks.HunyuanChatResponse = cb.HunyuanChatResponse
+		}
+		if cb.HunyuanChatChunk != nil {
+			o.Callbacks.HunyuanChatChunk = cb.HunyuanChatChunk
+		}
+		if cb.HunyuanStreamComplete != nil {
+			o.Callbacks.HunyuanStreamComplete = cb.HunyuanStreamComplete
 		}
 	}
 }
@@ -189,9 +214,7 @@ func WithExtraFields(fields map[string]any) Option {
 		if o.ExtraFields == nil {
 			o.ExtraFields = make(map[string]any)
 		}
-		for k, v := range fields {
-			o.ExtraFields[k] = v
-		}
+		maps.Copy(o.ExtraFields, fields)
 	}
 }
 
