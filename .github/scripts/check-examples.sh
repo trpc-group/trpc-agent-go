@@ -35,6 +35,11 @@ for mod_file in "${go_mod_files[@]}"; do
     fi
     module_path="examples/${rel_path:-root}"
 
+    if head -n 5 "${mod_file}" | grep -q "DO NOT USE!"; then
+        echo "::warning::Skipping ${module_path}: marked as DO NOT USE."
+        continue
+    fi
+
     echo "::group::Checking ${rel_path:-examples}"
 
     cd "$repo_root/examples/$rel_path"
