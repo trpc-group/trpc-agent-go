@@ -10,6 +10,7 @@ package summary
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -35,8 +36,20 @@ func TestOptions(t *testing.T) {
 
 		sIso := NewSummarizer(&testModel{}, WithTokenThreshold(2))
 		sess := &session.Session{Events: []event.Event{
-			{Response: &model.Response{Usage: &model.Usage{TotalTokens: 2}}, Timestamp: time.Now()},
-			{Response: &model.Response{Usage: &model.Usage{TotalTokens: 3}}, Timestamp: time.Now()},
+			{
+				Author:    "user",
+				Timestamp: time.Now(),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Content: strings.Repeat("a", 40)},
+				}}},
+			},
+			{
+				Author:    "assistant",
+				Timestamp: time.Now(),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Content: strings.Repeat("b", 40)},
+				}}},
+			},
 		}}
 		assert.True(t, sIso.ShouldSummarize(sess))
 	})
@@ -66,8 +79,20 @@ func TestOptions(t *testing.T) {
 		checks := []Checker{CheckEventThreshold(1), CheckTokenThreshold(4)}
 		s := NewSummarizer(&testModel{}, WithChecksAll(checks...))
 		sess := &session.Session{Events: []event.Event{
-			{Response: &model.Response{Usage: &model.Usage{TotalTokens: 5}}, Timestamp: time.Now()},
-			{Response: &model.Response{Usage: &model.Usage{TotalTokens: 5}}, Timestamp: time.Now()},
+			{
+				Author:    "user",
+				Timestamp: time.Now(),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Content: strings.Repeat("a", 40)},
+				}}},
+			},
+			{
+				Author:    "assistant",
+				Timestamp: time.Now(),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Content: strings.Repeat("b", 40)},
+				}}},
+			},
 		}}
 		assert.True(t, s.ShouldSummarize(sess))
 	})
