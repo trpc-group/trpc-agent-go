@@ -336,7 +336,7 @@ func TestAgentEvaluatorCollectCaseResultsGetEvalSetError(t *testing.T) {
 		evalSetManager: evalsetinmemory.New(),
 		numRuns:        1,
 	}
-	_, err := ae.collectCaseResults(ctx, "set")
+	_, _, err := ae.collectCaseResults(ctx, "set")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "get eval set")
 	assert.ErrorIs(t, err, os.ErrNotExist)
@@ -372,7 +372,7 @@ func TestAgentEvaluatorCollectCaseResultsSortByEvalSetOrder(t *testing.T) {
 		evalResultManager: evalresultinmemory.New(),
 		numRuns:           1,
 	}
-	results, err := ae.collectCaseResults(ctx, evalSetID)
+	results, _, err := ae.collectCaseResults(ctx, evalSetID)
 	assert.NoError(t, err)
 	assert.Len(t, results, 2)
 	assert.Equal(t, "B", results[0].EvalCaseID)
@@ -408,7 +408,7 @@ func TestAgentEvaluatorCollectCaseResultsSortKnownCaseFirst(t *testing.T) {
 		evalResultManager: evalresultinmemory.New(),
 		numRuns:           1,
 	}
-	results, err := ae.collectCaseResults(ctx, evalSetID)
+	results, _, err := ae.collectCaseResults(ctx, evalSetID)
 	assert.NoError(t, err)
 	assert.Len(t, results, 2)
 	assert.Equal(t, "A", results[0].EvalCaseID)
@@ -438,7 +438,7 @@ func TestAgentEvaluatorCollectCaseResultsSortLexicographically(t *testing.T) {
 		evalResultManager: evalresultinmemory.New(),
 		numRuns:           1,
 	}
-	results, err := ae.collectCaseResults(ctx, evalSetID)
+	results, _, err := ae.collectCaseResults(ctx, evalSetID)
 	assert.NoError(t, err)
 	assert.Len(t, results, 2)
 	assert.Equal(t, "a", results[0].EvalCaseID)
