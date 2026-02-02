@@ -12,6 +12,7 @@ package runner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -581,6 +582,87 @@ func TestRunner_Run_WithAgentNameRegistry(t *testing.T) {
 	require.Len(t, events, 2)
 	assert.Equal(t, "alt-agent", events[0].Author)
 	assert.Contains(t, events[0].Response.Choices[0].Message.Content, "hello")
+}
+
+func TestRunner_Run_WithAgentFactoryByName(t *testing.T) {
+	sessionService := sessioninmemory.NewSessionService()
+	defaultAgent := &mockAgent{name: "default-agent"}
+
+	const (
+		factoryKey      = "dynamic"
+		factoryNameBase = "dynamic-agent-"
+	)
+
+	calls := 0
+	r := NewRunner(
+		"test-app",
+		defaultAgent,
+		WithSessionService(sessionService),
+		WithAgentFactory(factoryKey, func(
+			_ context.Context,
+			_ agent.RunOptions,
+		) (agent.Agent, error) {
+			calls++
+			name := fmt.Sprintf("%s%d", factoryNameBase, calls)
+			return &mockAgent{name: name}, nil
+		}),
+	)
+
+	ctx := context.Background()
+	msg := model.NewUserMessage("hi")
+
+	runOnce := func(expectedName string) {
+		ch, err := r.Run(
+			ctx,
+			"user",
+			"session",
+			msg,
+			agent.WithAgentByName(factoryKey),
+		)
+		require.NoError(t, err)
+		var events []*event.Event
+		for e := range ch {
+			events = append(events, e)
+		}
+		require.Len(t, events, 2)
+		assert.Equal(t, expectedName, events[0].Author)
+	}
+
+	runOnce(factoryNameBase + "1")
+	runOnce(factoryNameBase + "2")
+}
+
+func TestRunner_Run_WithDefaultAgentFactory(t *testing.T) {
+	sessionService := sessioninmemory.NewSessionService()
+
+	const (
+		defaultKey      = "dynamic-default"
+		defaultNameBase = "default-agent-"
+	)
+
+	calls := 0
+	r := NewRunnerWithAgentFactory(
+		"test-app",
+		defaultKey,
+		func(_ context.Context, _ agent.RunOptions) (agent.Agent, error) {
+			calls++
+			name := fmt.Sprintf("%s%d", defaultNameBase, calls)
+			return &mockAgent{name: name}, nil
+		},
+		WithSessionService(sessionService),
+	)
+
+	ctx := context.Background()
+	msg := model.NewUserMessage("hello")
+	ch, err := r.Run(ctx, "user", "session", msg)
+	require.NoError(t, err)
+
+	var events []*event.Event
+	for e := range ch {
+		events = append(events, e)
+	}
+	require.Len(t, events, 2)
+	assert.Equal(t, defaultNameBase+"1", events[0].Author)
 }
 
 func TestRunner_Run_WithAgentInstanceOverride(t *testing.T) {

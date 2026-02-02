@@ -154,6 +154,55 @@ r := runner.NewRunner("my-app", agent,
 )
 ```
 
+### 🧩 按请求动态创建 Agent（Agent Factory）
+
+默认情况下，`runner.NewRunner(...)` 需要你先把 `agent.Agent` 完整构建好，然后
+Runner 会在每次请求里复用同一个 Agent 实例。
+
+如果你的 Agent 配置需要 **跟当前请求绑定**（例如：提示词、模型、沙箱实例、工具集），
+可以用 “Agent Factory” 在每次 `Runner.Run(...)` 时动态创建一个新的 Agent。
+
+#### 方式 A：默认 Agent 按需创建
+
+```go
+r := runner.NewRunnerWithAgentFactory(
+    "my-app",
+    "assistant",
+    func(ctx context.Context, ro agent.RunOptions) (agent.Agent, error) {
+        // 你可以从 ro（或 ro.RuntimeState / ro.CustomAgentConfigs）读取
+        // 本次请求的参数，然后据此构建 Agent。
+        a := llmagent.New("assistant",
+            llmagent.WithInstruction(ro.Instruction),
+        )
+        return a, nil
+    },
+)
+```
+
+#### 方式 B：注册多个命名工厂，并通过名字选择
+
+```go
+r := runner.NewRunner("my-app", defaultAgent,
+    runner.WithAgentFactory("sandboxed", func(
+        ctx context.Context,
+        ro agent.RunOptions,
+    ) (agent.Agent, error) {
+        return llmagent.New("sandboxed"), nil
+    }),
+)
+
+events, err := r.Run(ctx, userID, sessionID, message,
+    agent.WithAgentByName("sandboxed"),
+)
+_ = events
+_ = err
+```
+
+说明：
+
+- 每次调用 `Runner.Run(...)`，Factory 会被调用一次。
+- `agent.WithAgent(...)` 依然优先生效（测试时很方便）。
+
 ### 🔌 插件
 
 Runner 插件是一类全局、Runner 作用域的 Hook（钩子）。只需要在创建 Runner 时
