@@ -14,10 +14,13 @@ import (
 	"strings"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
 
 // Common metadata field keys.
@@ -232,7 +235,7 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 		return "", fmt.Errorf("no conversation text extracted for session %s (events=%d)", sess.ID, len(eventsToSummarize))
 	}
 
-	summaryText, err := s.generateSummary(ctx, conversationText)
+	summaryText, err := s.generateSummary(ctx, sess, conversationText)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate summary for session %s: %w", sess.ID, err)
 	}
@@ -409,7 +412,7 @@ func extractConversationText(
 }
 
 // generateSummary generates a summary using the LLM model.
-func (s *sessionSummarizer) generateSummary(ctx context.Context, conversationText string) (string, error) {
+func (s *sessionSummarizer) generateSummary(ctx context.Context, sess *session.Session, conversationText string) (string, error) {
 	// Create summarization prompt.
 	prompt := strings.Replace(s.prompt, conversationTextPlaceholder, conversationText, 1)
 
@@ -433,6 +436,49 @@ func (s *sessionSummarizer) generateSummary(ctx context.Context, conversationTex
 		},
 	}
 
+	// Telemetry trace + metrics tracking (aligned with toolsearch/llm_search.go).
+	var err error
+	modelName := ""
+	if s.model != nil {
+		modelName = s.model.Info().Name
+	}
+	_, span := trace.Tracer.Start(ctx, itelemetry.NewChatSpanName(modelName))
+	defer span.End()
+
+	invocation, ok := agent.InvocationFromContext(ctx)
+	if !ok || invocation == nil {
+		invocation = agent.NewInvocation(
+			agent.WithInvocationModel(s.model),
+			agent.WithInvocationSession(sess),
+		)
+	} else {
+		// Best-effort: ensure telemetry has model/session info.
+		if invocation.Model == nil && s.model != nil {
+			invocation.Model = s.model
+		}
+		if invocation.Session == nil && sess != nil {
+			invocation.Session = sess
+		}
+	}
+
+	// Get or create timing info from invocation (only record first LLM call).
+	timingInfo := invocation.GetOrCreateTimingInfo()
+	tracker := itelemetry.NewChatMetricsTracker(ctx, invocation, request, timingInfo, &err)
+	defer tracker.RecordMetrics()()
+
+	var finalResp *model.Response
+	defer func() {
+		if finalResp == nil {
+			return
+		}
+		// Ensure timing info is attached to the final response.
+		if finalResp.Usage == nil {
+			finalResp.Usage = &model.Usage{}
+		}
+		finalResp.Usage.TimingInfo = timingInfo
+		itelemetry.TraceChat(span, invocation, request, finalResp, "", tracker.FirstTokenTimeDuration())
+	}()
+
 	// Generate content using the model.
 	responseChan, err := s.model.GenerateContent(ctx, request)
 	if err != nil {
@@ -442,8 +488,21 @@ func (s *sessionSummarizer) generateSummary(ctx context.Context, conversationTex
 	// Collect the response.
 	var summary strings.Builder
 	for response := range responseChan {
+		if response == nil {
+			continue
+		}
+		finalResp = response
+
+		// Track response for metrics.
+		tracker.TrackResponse(response)
+		if response.Usage == nil {
+			response.Usage = &model.Usage{}
+		}
+		response.Usage.TimingInfo = timingInfo
+
 		if response.Error != nil {
-			return "", formatResponseError(response.Error)
+			err = formatResponseError(response.Error)
+			return "", err
 		}
 
 		if len(response.Choices) > 0 {
@@ -461,7 +520,8 @@ func (s *sessionSummarizer) generateSummary(ctx context.Context, conversationTex
 	// Clean up the summary.
 	summaryText := strings.TrimSpace(summary.String())
 	if summaryText == "" {
-		return "", fmt.Errorf("generated empty summary (input_chars=%d)", len(conversationText))
+		err = fmt.Errorf("generated empty summary (input_chars=%d)", len(conversationText))
+		return "", err
 	}
 
 	return summaryText, nil
