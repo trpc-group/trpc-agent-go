@@ -10,7 +10,7 @@ package summary
 
 import (
 	"context"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -26,19 +26,16 @@ import (
 // When no custom checkers are supplied, a default set is used.
 type Checker func(sess *session.Session) bool
 
-var defaultTokenCounter atomic.Value
-
-func init() {
-	defaultTokenCounter.Store((model.NewSimpleTokenCounter()))
-}
+var (
+	defaultTokenCounterMu sync.RWMutex
+	defaultTokenCounter   model.TokenCounter = model.NewSimpleTokenCounter()
+)
 
 func getTokenCounter() model.TokenCounter {
-	v := defaultTokenCounter.Load()
-	if v == nil {
-		return model.NewSimpleTokenCounter()
-	}
+	defaultTokenCounterMu.RLock()
+	counter := defaultTokenCounter
+	defaultTokenCounterMu.RUnlock()
 
-	counter := v.(model.TokenCounter)
 	if counter == nil {
 		return model.NewSimpleTokenCounter()
 	}
@@ -51,7 +48,10 @@ func SetTokenCounter(counter model.TokenCounter) {
 	if counter == nil {
 		counter = model.NewSimpleTokenCounter()
 	}
-	defaultTokenCounter.Store(counter)
+
+	defaultTokenCounterMu.Lock()
+	defaultTokenCounter = counter
+	defaultTokenCounterMu.Unlock()
 }
 
 // filterDeltaEvents returns events that occurred strictly after the last

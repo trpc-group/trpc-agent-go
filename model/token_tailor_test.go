@@ -29,7 +29,7 @@ func TestSimpleTokenCounter_CountTokens(t *testing.T) {
 
 func TestSimpleTokenCounter_WithApproxRunesPerToken(t *testing.T) {
 	const (
-		textLen = 16
+		textLen     = 16
 		cnHeuristic = 1.6
 	)
 
@@ -39,31 +39,61 @@ func TestSimpleTokenCounter_WithApproxRunesPerToken(t *testing.T) {
 	defaultCounter := NewSimpleTokenCounter()
 	defaultTokens, err := defaultCounter.CountTokens(ctx, msg)
 	require.NoError(t, err)
+	require.Greater(t, defaultTokens, 0)
 
-	cnCounter := NewSimpleTokenCounter(WithApproxRunesPerToken(cnHeuristic))
-	cnTokens, err := cnCounter.CountTokens(ctx, msg)
-	require.NoError(t, err)
+	tests := []struct {
+		name         string
+		options      []SimpleTokenCounterOption
+		assertTokens func(t *testing.T, got, baseline int)
+	}{
+		{
+			name:    "negative_value_ignored_like_default",
+			options: []SimpleTokenCounterOption{WithApproxRunesPerToken(-1)},
+			assertTokens: func(t *testing.T, got, baseline int) {
+				assert.Equal(t, baseline, got)
+			},
+		},
+		{
+			name:    "zero_value_ignored_like_default",
+			options: []SimpleTokenCounterOption{WithApproxRunesPerToken(0)},
+			assertTokens: func(t *testing.T, got, baseline int) {
+				assert.Equal(t, baseline, got)
+			},
+		},
+		{
+			name:    "smaller_runes_per_token_increases_token_count",
+			options: []SimpleTokenCounterOption{WithApproxRunesPerToken(cnHeuristic)},
+			assertTokens: func(t *testing.T, got, baseline int) {
+				assert.Greater(t, got, baseline)
+			},
+		},
+		{
+			name:    "very_small_positive_value_produces_large_token_count",
+			options: []SimpleTokenCounterOption{WithApproxRunesPerToken(0.1)},
+			assertTokens: func(t *testing.T, got, baseline int) {
+				assert.Greater(t, got, baseline)
+			},
+		},
+		{
+			name:    "nil_option_is_safely_skipped",
+			options: []SimpleTokenCounterOption{nil},
+			assertTokens: func(t *testing.T, got, baseline int) {
+				assert.Equal(t, baseline, got)
+			},
+		},
+	}
 
-	assert.Greater(t, cnTokens, defaultTokens)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			counter := NewSimpleTokenCounter(tt.options...)
+			gotTokens, err := counter.CountTokens(ctx, msg)
+			require.NoError(t, err)
+			tt.assertTokens(t, gotTokens, defaultTokens)
+		})
+	}
 }
 
-func TestSimpleTokenCounter_WithApproxRunesPerToken_InvalidValue(t *testing.T) {
-	const textLen = 16
-	msg := NewUserMessage(repeat("a", textLen))
-	ctx := context.Background()
-
-	defaultCounter := NewSimpleTokenCounter()
-	defaultTokens, err := defaultCounter.CountTokens(ctx, msg)
-	require.NoError(t, err)
-
-	invalidCounter := NewSimpleTokenCounter(WithApproxRunesPerToken(-1))
-	invalidTokens, err := invalidCounter.CountTokens(ctx, msg)
-	require.NoError(t, err)
-
-	assert.Equal(t, defaultTokens, invalidTokens)
-}
-
-// TestSimpleTokenCounter_CountTokens_DetailedCoverage tests all code paths in CountTokens function
+// TestSimpleTokenCounter_CountTokens_DetailedCoverage tests all code paths in CountTokens function.
 func TestSimpleTokenCounter_CountTokens_DetailedCoverage(t *testing.T) {
 	counter := NewSimpleTokenCounter()
 	ctx := context.Background()

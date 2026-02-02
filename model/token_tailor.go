@@ -27,6 +27,9 @@ type SimpleTokenCounterOption func(*simpleTokenCounterOptions)
 
 // WithApproxRunesPerToken sets the approximate runes per token heuristic.
 // This is a heuristic and may vary across languages and models.
+//
+// Note:
+// Values <= 0 are ignored and the default value is kept.
 func WithApproxRunesPerToken(v float64) SimpleTokenCounterOption {
 	return func(o *simpleTokenCounterOptions) {
 		if v <= 0 {
@@ -662,18 +665,19 @@ func calculatePreservedHeadCount(messages []Message) int {
 // prefixSum[i] represents the cumulative token count from messages[0] to messages[i-1].
 // This function is shared by all tailoring strategies for consistent token calculation.
 func buildPrefixSum(ctx context.Context, tokenCounter TokenCounter, messages []Message) []int {
+	if tokenCounter == nil {
+		tokenCounter = NewSimpleTokenCounter()
+	}
+
+	fallbackCounter := NewSimpleTokenCounter()
 	prefixSum := make([]int, len(messages)+1)
 	for i, msg := range messages {
 		tokens, err := tokenCounter.CountTokens(ctx, msg)
 		if err != nil {
-			// In case of error, use a fallback estimation.
-			prefixSum[i+1] = prefixSum[i] + int(
-				float64(utf8.RuneCountInString(msg.Content))/
-					defaultApproxRunesPerToken,
-			)
-		} else {
-			prefixSum[i+1] = prefixSum[i] + tokens
+			// Fall back to SimpleTokenCounter to keep estimation consistent.
+			tokens, _ = fallbackCounter.CountTokens(ctx, msg)
 		}
+		prefixSum[i+1] = prefixSum[i] + tokens
 	}
 	return prefixSum
 }
