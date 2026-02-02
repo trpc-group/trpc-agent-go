@@ -488,6 +488,7 @@ sessionService := inmemory.NewSessionService(
 - **`WithAsyncSummaryNum(num int)`**：设置摘要处理 worker 数量。默认值为 3。
 - **`WithSummaryQueueSize(size int)`**：设置摘要任务队列大小。默认值为 100。
 - **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 60 秒。
+- **`WithKeyPrefix(prefix string)`**：设置 Redis key 前缀。所有 key 将以 `prefix:` 开头。默认无前缀。
 - **`WithExtraOptions(extraOptions ...interface{})`**：为 Redis 客户端设置额外选项。
 
 ### 基础配置示例
@@ -1737,6 +1738,61 @@ llmagent.WithMaxHistoryRuns(10)  // 限制历史轮次
 - **`WithMaxSummaryWords(maxWords int)`**：限制摘要的最大字数。该限制会包含在提示词中以指导模型生成。示例：`WithMaxSummaryWords(150)` 请求在 150 字以内的摘要。
 - **`WithPrompt(prompt string)`**：提供自定义摘要提示词。提示词必须包含占位符 `{conversation_text}`，它会被对话内容替换。可选包含 `{max_summary_words}` 用于字数限制指令。
 - **`WithSkipRecent(skipFunc SkipRecentFunc)`**：通过自定义函数在摘要时跳过**最近**事件。函数接收所有事件并返回应跳过的尾部事件数量，返回 0 表示不跳过。适合避免总结最近、可能不完整的对话，或实现基于时间/内容的跳过策略。
+
+**工具调用格式化：**
+
+默认情况下，摘要器会将工具调用和工具结果包含在发送给 LLM 进行总结的对话文本中。默认格式为：
+
+- 工具调用：`[Called tool: toolName with args: {"arg": "value"}]`
+- 工具结果：`[toolName returned: result content]`
+
+你可以使用以下选项自定义工具调用和结果的格式化方式：
+
+- **`WithToolCallFormatter(f ToolCallFormatter)`**：自定义工具调用在摘要输入中的格式。格式化器接收 `model.ToolCall` 并返回格式化字符串。返回空字符串可排除该工具调用。
+- **`WithToolResultFormatter(f ToolResultFormatter)`**：自定义工具结果在摘要输入中的格式。格式化器接收包含工具结果的 `model.Message` 并返回格式化字符串。返回空字符串可排除该结果。
+
+**自定义工具格式化器示例：**
+
+```go
+// 截断过长的工具参数
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithToolCallFormatter(func(tc model.ToolCall) string {
+        name := tc.Function.Name
+        if name == "" {
+            return ""
+        }
+        args := string(tc.Function.Arguments)
+        const maxLen = 100
+        if len(args) > maxLen {
+            args = args[:maxLen] + "...(已截断)"
+        }
+        return fmt.Sprintf("[工具: %s, 参数: %s]", name, args)
+    }),
+    summary.WithEventThreshold(20),
+)
+
+// 从摘要中排除工具结果
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithToolResultFormatter(func(msg model.Message) string {
+        return "" // 返回空字符串以排除工具结果。
+    }),
+    summary.WithEventThreshold(20),
+)
+
+// 仅包含工具名称，排除参数
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithToolCallFormatter(func(tc model.ToolCall) string {
+        if tc.Function.Name == "" {
+            return ""
+        }
+        return fmt.Sprintf("[使用工具: %s]", tc.Function.Name)
+    }),
+    summary.WithEventThreshold(20),
+)
+```
 
 **自定义提示词示例：**
 

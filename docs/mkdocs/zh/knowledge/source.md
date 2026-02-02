@@ -181,6 +181,209 @@ sources := []source.Source{
 }
 ```
 
+## 分块策略 (Chunking Strategy)
+
+> **示例代码**: [fixed-chunking](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/sources/fixed-chunking) | [recursive-chunking](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/sources/recursive-chunking)
+
+分块（Chunking）是将长文档拆分为较小片段的过程，这对于向量检索至关重要。框架提供了多种内置分块策略，同时支持自定义分块策略。
+
+### 内置分块策略
+
+| 策略 | 说明 | 适用场景 |
+|-----|------|---------|
+| **FixedSizeChunking** | 固定大小分块 | 通用文本，简单快速 |
+| **RecursiveChunking** | 递归分块，按分隔符层级拆分 | 保持语义完整性 |
+| **MarkdownChunking** | 按 Markdown 结构分块 | Markdown 文档（默认） |
+| **JSONChunking** | 按 JSON 结构分块 | JSON 文件（默认） |
+
+### 默认行为
+
+每种文件类型都有相关的分块策略：
+
+- `.md` 文件 → MarkdownChunking（按标题层级 H1→H6→段落→固定大小 递归分块）
+- `.json` 文件 → JSONChunking（按 JSON 结构分块）
+- `.txt/.csv/.docx` 等 → FixedSizeChunking
+
+**默认参数**：
+
+| 参数 | 默认值 | 说明 |
+|-----|-------|------|
+| ChunkSize | 1024 | 每个分块的最大字符数 |
+| Overlap | 128 | 相邻分块之间的重叠字符数 |
+
+> 默认的分块策略都受 `chunkSize` 参数影响。`overlap` 参数仅对 FixedSizeChunking、RecursiveChunking、MarkdownChunking 生效，JSONChunking 不支持 overlap。
+
+可通过 `WithChunkSize` 和 `WithChunkOverlap` 调整默认策略的参数：
+
+```go
+fileSrc := filesource.New(
+    []string{"./data/document.txt"},
+    filesource.WithChunkSize(512),     // 分块大小（字符数）
+    filesource.WithChunkOverlap(64),   // 分块重叠（字符数）
+)
+```
+
+### 自定义分块策略
+
+使用 `WithCustomChunkingStrategy` 可覆盖默认分块策略。
+
+> **注意**：自定义分块策略会完全覆盖 `WithChunkSize` 和 `WithChunkOverlap` 的配置，分块参数需在自定义策略内部设置。
+
+#### FixedSizeChunking - 固定大小分块
+
+将文本按固定字符数分割，支持重叠：
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
+    filesource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
+)
+
+// 创建固定大小分块策略
+fixedChunking := chunking.NewFixedSizeChunking(
+    chunking.WithChunkSize(512),   // 每块最大 512 字符
+    chunking.WithOverlap(64),      // 块间重叠 64 字符
+)
+
+fileSrc := filesource.New(
+    []string{"./data/document.md"},
+    filesource.WithCustomChunkingStrategy(fixedChunking),
+)
+```
+
+#### RecursiveChunking - 递归分块
+
+按分隔符层级递归拆分，尽量在自然边界处分割：
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
+    filesource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
+)
+
+// 创建递归分块策略
+recursiveChunking := chunking.NewRecursiveChunking(
+    chunking.WithRecursiveChunkSize(512),   // 最大块大小
+    chunking.WithRecursiveOverlap(64),      // 块间重叠
+    // 自定义分隔符优先级（可选）
+    chunking.WithRecursiveSeparators([]string{"\n\n", "\n", ". ", " "}),
+)
+
+fileSrc := filesource.New(
+    []string{"./data/article.txt"},
+    filesource.WithCustomChunkingStrategy(recursiveChunking),
+)
+```
+
+**分隔符优先级说明**：
+
+1. `\n\n` - 优先按段落分割
+2. `\n` - 其次按行分割
+3. `. ` - 再按句子分割
+4. ` ` - 按空格分割
+
+递归分块会尝试使用更高优先级的分隔符，仅当分块仍超过最大大小时才使用下一级分隔符。若所有分隔符都无法将文本切分到 chunkSize 以内，则按 chunkSize 强制切分。
+
+
+
+
+## 内容转换器 (Transformer)
+
+> **示例代码**: [examples/knowledge/features/transform](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/transform)
+
+Transformer 用于在文档分块（Chunking）前后对内容进行预处理和后处理。这对于清理从 PDF、网页等来源提取的文本特别有用，可以去除多余的空白字符、重复字符等噪声。
+
+### 处理流程
+
+```
+文档 → Preprocess（预处理） → 处理后的文档 → Chunking（分块） → 分块 → Postprocess（后处理） → 最终分块
+```
+
+### 内置转换器
+
+#### CharFilter - 字符过滤器
+
+移除指定的字符或字符串：
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
+
+// 移除换行符和制表符
+filter := transform.NewCharFilter("\n", "\t", "\r")
+```
+
+#### CharDedup - 字符去重器
+
+将连续重复的字符或字符串合并为单个：
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
+
+// 将多个连续空格合并为单个空格，多个换行合并为单个换行
+dedup := transform.NewCharDedup(" ", "\n")
+
+// 示例：
+// 输入:  "hello     world\n\n\nfoo"
+// 输出:  "hello world\nfoo"
+```
+
+### 使用方式
+
+Transformer 通过 `WithTransformers` 选项传递给各类文档源：
+
+```go
+import (
+    filesource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
+    dirsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/dir"
+    urlsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/url"
+    autosource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/auto"
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
+)
+
+// 创建转换器
+filter := transform.NewCharFilter("\t")           // 移除制表符
+dedup := transform.NewCharDedup(" ", "\n")        // 合并连续空格和换行
+
+// 文件源使用转换器
+fileSrc := filesource.New(
+    []string{"./data/document.pdf"},
+    filesource.WithTransformers(filter, dedup),
+)
+
+// 目录源使用转换器
+dirSrc := dirsource.New(
+    []string{"./docs"},
+    dirsource.WithTransformers(filter, dedup),
+)
+
+// URL 源使用转换器
+urlSrc := urlsource.New(
+    []string{"https://example.com/article"},
+    urlsource.WithTransformers(filter, dedup),
+)
+
+// 自动源使用转换器
+autoSrc := autosource.New(
+    []string{"./mixed-content"},
+    autosource.WithTransformers(filter, dedup),
+)
+```
+
+### 组合多个转换器
+
+多个转换器按顺序依次执行：
+
+```go
+// 先移除制表符，再合并连续空格
+filter := transform.NewCharFilter("\t")
+dedup := transform.NewCharDedup(" ")
+
+src := filesource.New(
+    []string{"./data/messy.txt"},
+    filesource.WithTransformers(filter, dedup),  // 按顺序执行
+)
+```
+
 ## PDF 文件支持
 
 由于 PDF reader 依赖第三方库，为避免主模块引入不必要的依赖，PDF reader 采用独立 `go.mod` 管理。

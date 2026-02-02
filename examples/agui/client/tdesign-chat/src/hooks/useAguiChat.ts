@@ -1421,61 +1421,111 @@ export function useAguiChat(config: AguiChatConfig) {
       }
       appendRequest({ endpoint: historyEndpoint, payload });
 
-      try {
-        await streamAguiSse(historyEndpoint, payload, {
+      return await new Promise<HistoryLoadResult>((resolve) => {
+        let settled = false;
+        const settle = (result: HistoryLoadResult) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          resolve(result);
+        };
+
+        const applySnapshot = (evt: AguiSseEvent) => {
+          snapshotEvent = evt;
+          const restored = restoreFromMessagesSnapshot(evt);
+          replaceMessages(restored.messages);
+          reportSessionsRef.current = restored.reportSessions;
+          setReportSessions(restored.reportSessions);
+          const openReport = restored.reportSessions.slice().reverse().find((session) => session.status === "open") ?? null;
+          writingReportIdRef.current = openReport ? openReport.documentId : null;
+          const nextActiveReportId = openReport?.documentId ?? restored.activeReportId;
+          setActiveReportId(nextActiveReportId);
+          setReportDrawerOpen(Boolean(openReport));
+          setGraphNodeId(restored.graphNodeId);
+          setGraphInterrupt(restored.graphInterrupt);
+          settle({ ok: true, count: restored.messages.length });
+        };
+
+        streamAguiSse(historyEndpoint, payload, {
           signal: controller.signal,
           onEvent: (evt) => {
-            appendRawEvent(evt);
             const type = typeof evt.type === "string" ? evt.type : "";
-            if (type === "MESSAGES_SNAPSHOT") {
-              snapshotEvent = evt;
-            }
             if (type === "RUN_ERROR") {
-              runError = typeof (evt as any).message === "string" ? (evt as any).message : "Run error.";
+              appendRawEvent(evt);
+              const message = typeof (evt as any).message === "string" ? (evt as any).message : "Run error.";
+              runError = message;
+              setInProgress(false);
+              if (abortRef.current === controller) {
+                abortRef.current = null;
+              }
+              if (!isSessionNotFoundError(message)) {
+                setLastError(message);
+              }
+              if (!snapshotEvent) {
+                settle({ ok: false, message });
+              }
+              return;
             }
+            if (type === "MESSAGES_SNAPSHOT") {
+              appendRawEvent(evt);
+              applySnapshot(evt);
+              return;
+            }
+            handleEvent(evt);
           },
+        }).then(() => {
+          if (controller.signal.aborted) {
+            settle({ ok: false, message: "aborted" });
+            return;
+          }
+          if (!snapshotEvent) {
+            const message = runError ?? "history snapshot not found";
+            if (!isSessionNotFoundError(message)) {
+              setLastError(message);
+            }
+            settle({ ok: false, message });
+            if (abortRef.current === controller) {
+              abortRef.current = null;
+              setInProgress(false);
+            }
+            return;
+          }
+          if (abortRef.current === controller) {
+            abortRef.current = null;
+            setInProgress(false);
+          }
+        }).catch((error: any) => {
+          if (controller.signal.aborted) {
+            settle({ ok: false, message: "aborted" });
+            if (abortRef.current === controller) {
+              abortRef.current = null;
+              setInProgress(false);
+            }
+            return;
+          }
+          const message = String(error?.message ?? error);
+          if (!isSessionNotFoundError(message)) {
+            setLastError(message);
+          }
+          settle({ ok: false, message });
+          if (abortRef.current === controller) {
+            abortRef.current = null;
+            setInProgress(false);
+          }
         });
-      } catch (error: any) {
-        if (controller.signal.aborted) {
-          setInProgress(false);
-          abortRef.current = null;
-          return { ok: false, message: "aborted" };
-        }
-        const message = String(error?.message ?? error);
-        setInProgress(false);
-        abortRef.current = null;
-        if (!isSessionNotFoundError(message)) {
-          setLastError(message);
-        }
-        return { ok: false, message };
-      }
-
-      setInProgress(false);
-      abortRef.current = null;
-
-      if (!snapshotEvent) {
-        const message = runError ?? "history snapshot not found";
-        if (!isSessionNotFoundError(message)) {
-          setLastError(message);
-        }
-        return { ok: false, message };
-      }
-
-      const restored = restoreFromMessagesSnapshot(snapshotEvent);
-      replaceMessages(restored.messages);
-      reportSessionsRef.current = restored.reportSessions;
-      setReportSessions(restored.reportSessions);
-      const openReport = restored.reportSessions.slice().reverse().find((session) => session.status === "open") ?? null;
-      writingReportIdRef.current = openReport ? openReport.documentId : null;
-      const nextActiveReportId = openReport?.documentId ?? restored.activeReportId;
-      setActiveReportId(nextActiveReportId);
-      setReportDrawerOpen(Boolean(openReport));
-      setGraphNodeId(restored.graphNodeId);
-      setGraphInterrupt(restored.graphInterrupt);
-
-      return { ok: true, count: restored.messages.length };
+      });
     },
-    [abortActiveRun, appendRawEvent, config.forwardedProps, config.threadId, replaceMessages, setLastError],
+    [
+      abortActiveRun,
+      appendRawEvent,
+      appendRequest,
+      config.forwardedProps,
+      config.threadId,
+      handleEvent,
+      replaceMessages,
+      setLastError,
+    ],
   );
 
   const send = useCallback(

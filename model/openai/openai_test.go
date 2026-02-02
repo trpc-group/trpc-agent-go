@@ -2990,6 +2990,42 @@ func TestBuildChatRequest_EdgeCases(t *testing.T) {
 		chatReq, _ := m.buildChatRequest(req)
 		assert.NotEmpty(t, chatReq.Tools, "expected tools to be present")
 	})
+
+	t.Run("structured output disables parallel tool calls", func(t *testing.T) {
+		schema := map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		}
+		tools := map[string]tool.Tool{
+			"test_tool": stubTool{
+				decl: &tool.Declaration{
+					Name:        "test_tool",
+					Description: "A test tool",
+					InputSchema: &tool.Schema{Type: "object"},
+				},
+			},
+		}
+		req := &model.Request{
+			Messages: []model.Message{
+				model.NewUserMessage("test"),
+			},
+			Tools: tools,
+			StructuredOutput: &model.StructuredOutput{
+				Type: model.StructuredOutputJSONSchema,
+				JSONSchema: &model.JSONSchemaConfig{
+					Name:   "output",
+					Schema: schema,
+					Strict: true,
+				},
+			},
+		}
+
+		chatReq, _ := m.buildChatRequest(req)
+		if !chatReq.ParallelToolCalls.Valid() {
+			t.Fatalf("expected parallel_tool_calls to be set")
+		}
+		assert.False(t, chatReq.ParallelToolCalls.Value)
+	})
 }
 
 // TestConvertUserMessageContent_WithImage tests image content conversion.
@@ -6113,10 +6149,23 @@ func TestWithOptimizeForCache(t *testing.T) {
 	}
 }
 
-// TestOptimizeForCache_DefaultDisabled tests that cache optimization is disabled by default.
-func TestOptimizeForCache_DefaultDisabled(t *testing.T) {
+// TestOptimizeForCache_DefaultEnabled_OpenAI tests the default for OpenAI.
+func TestOptimizeForCache_DefaultEnabled_OpenAI(t *testing.T) {
 	m := New("gpt-4o", WithAPIKey("test-key"))
-	assert.False(t, m.optimizeForCache, "cache optimization should be disabled by default")
+	assert.True(t, m.optimizeForCache, "cache optimization should be enabled by default")
+}
+
+func TestOptimizeForCache_DefaultDisabled_NonOpenAI(t *testing.T) {
+	m := New(
+		"deepseek-chat",
+		WithAPIKey("test-key"),
+		WithVariant(VariantDeepSeek),
+	)
+	require.False(
+		t,
+		m.optimizeForCache,
+		"cache optimization should be disabled by default",
+	)
 }
 
 // TestOptimizeMessagesForCache tests the optimizeMessagesForCache function.
@@ -6261,13 +6310,13 @@ func TestGenerateContent_OptimizeForCache(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Test with cache optimization enabled (default)
+	// Test with cache optimization enabled (default for OpenAI)
 	m := New("gpt-4o", WithBaseURL(server.URL), WithAPIKey("test-key"))
 
 	req := &model.Request{
 		Messages: []model.Message{
-			{Role: model.RoleSystem, Content: "You are helpful"},
 			{Role: model.RoleUser, Content: "Hello"},
+			{Role: model.RoleSystem, Content: "You are helpful"},
 			{Role: model.RoleAssistant, Content: "Hi"},
 		},
 	}
@@ -6281,7 +6330,7 @@ func TestGenerateContent_OptimizeForCache(t *testing.T) {
 	}
 
 	// Verify system message was moved to front
-	assert.Equal(t, "system", capturedRoles[0], "system message should be first")
+	assert.Equal(t, []string{"system", "user", "assistant"}, capturedRoles)
 }
 
 // TestGenerateContent_OptimizeForCache_Disabled tests that messages are not reordered when disabled.

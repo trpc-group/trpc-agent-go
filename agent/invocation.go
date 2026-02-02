@@ -782,6 +782,14 @@ func (inv *Invocation) GetEventFilterKey() string {
 	return inv.eventFilterKey
 }
 
+// GetParentInvocation get parent invocation.
+func (inv *Invocation) GetParentInvocation() *Invocation {
+	if inv == nil {
+		return nil
+	}
+	return inv.parent
+}
+
 // InjectIntoEvent inject invocation information into event.
 func InjectIntoEvent(inv *Invocation, e *event.Event) {
 	if e == nil || inv == nil {

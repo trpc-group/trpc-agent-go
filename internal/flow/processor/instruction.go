@@ -52,6 +52,35 @@ type InstructionRequestProcessor struct {
 	StructuredOutputSchema map[string]any
 }
 
+const (
+	jsonInstructionsStrictTemplate = `IMPORTANT: Return ONLY a JSON object that
+conforms to the schema below.
+- Do NOT include the schema itself in your output.
+- Do NOT include explanations, comments, or markdown fences.
+- Do NOT add keys other than those defined in the schema's properties.
+- The response must be a single JSON object instance, not wrapped, and no
+  trailing text.
+
+Schema (for reference only, do not include this in your output):
+%s
+`
+
+	jsonInstructionsToolsTemplate = `IMPORTANT:
+- You MAY call tools when needed (function calling).
+- While you are calling tools, do NOT provide a user-facing answer.
+- When you are ready to provide the final answer, return ONLY a JSON object
+  that conforms to the schema below.
+- Do NOT include the schema itself in your output.
+- Do NOT include explanations, comments, or markdown fences.
+- Do NOT add keys other than those defined in the schema's properties.
+- The final response must be a single JSON object instance, not wrapped, and
+  no trailing text.
+
+Schema (for reference only, do not include this in your output):
+%s
+`
+)
+
 // InstructionRequestProcessorOption is a function that can be used to configure the instruction request processor.
 type InstructionRequestProcessorOption func(*InstructionRequestProcessor)
 
@@ -202,11 +231,20 @@ func (p *InstructionRequestProcessor) processInstructionsWithState(
 	// Automatically inject JSON output instructions.
 	// Precedence: StructuredOutputSchema > OutputSchema.
 	if p.StructuredOutputSchema != nil {
-		jsonInstructions := p.generateJSONInstructions(p.StructuredOutputSchema)
-		processedInstruction = p.combineInstructions(processedInstruction, jsonInstructions)
+		jsonInstructions := p.generateStructuredOutputJSONInstructions(
+			invocation,
+			p.StructuredOutputSchema,
+		)
+		processedInstruction = p.combineInstructions(
+			processedInstruction,
+			jsonInstructions,
+		)
 	} else if p.OutputSchema != nil {
 		jsonInstructions := p.generateJSONInstructions(p.OutputSchema)
-		processedInstruction = p.combineInstructions(processedInstruction, jsonInstructions)
+		processedInstruction = p.combineInstructions(
+			processedInstruction,
+			jsonInstructions,
+		)
 	}
 
 	if invocation != nil {
@@ -367,10 +405,42 @@ func findSystemMessageIndex(messages []model.Message) int {
 	return -1
 }
 
+func findLastSystemMessageIndex(messages []model.Message) int {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == model.RoleSystem {
+			return i
+		}
+	}
+	return -1
+}
+
 // containsInstruction checks if the given content already contains the instruction.
 func containsInstruction(content, instruction string) bool {
 	// strings.Contains handles both exact match and substring cases
 	return strings.Contains(content, instruction)
+}
+
+func invocationHasTools(invocation *agent.Invocation) bool {
+	if invocation == nil || invocation.Agent == nil {
+		return false
+	}
+	return len(invocation.Agent.Tools()) > 0
+}
+
+func (p *InstructionRequestProcessor) generateStructuredOutputJSONInstructions(
+	invocation *agent.Invocation,
+	schema map[string]any,
+) string {
+	if schema == nil {
+		return ""
+	}
+	if invocationHasTools(invocation) {
+		return p.generateJSONInstructionsWithTemplate(
+			schema,
+			jsonInstructionsToolsTemplate,
+		)
+	}
+	return p.generateJSONInstructions(schema)
 }
 
 // generateJSONInstructions generates JSON output instructions based on a schema.
@@ -379,18 +449,19 @@ func (p *InstructionRequestProcessor) generateJSONInstructions(schema map[string
 		return ""
 	}
 
+	return p.generateJSONInstructionsWithTemplate(
+		schema,
+		jsonInstructionsStrictTemplate,
+	)
+}
+
+func (p *InstructionRequestProcessor) generateJSONInstructionsWithTemplate(
+	schema map[string]any,
+	template string,
+) string {
 	// Convert schema to a readable format for the instruction.
 	schemaStr := p.formatSchemaForInstruction(schema)
-
-	return fmt.Sprintf(
-		"IMPORTANT: Return ONLY a JSON object that conforms to the schema below.\n"+
-			"- Do NOT include the schema itself in your output.\n"+
-			"- Do NOT include explanations, comments, or markdown fences.\n"+
-			"- Do NOT add keys other than those defined in the schema's properties.\n"+
-			"- The response must be a single JSON object instance, not wrapped, and no trailing text.\n\n"+
-			"Schema (for reference only, do not include this in your output):\n%s\n",
-		schemaStr,
-	)
+	return fmt.Sprintf(template, schemaStr)
 }
 
 // formatSchemaForInstruction formats the schema for inclusion in instructions.

@@ -81,6 +81,12 @@ var (
 		defaultTimeout,
 		"Request timeout",
 	)
+	crossRequestTransfer = flag.Bool(
+		"cross-request-transfer",
+		false,
+		"Enable cross-request transfer: after a transfer, the next user message "+
+			"will start from the target agent (default: false)",
+	)
 )
 
 func main() {
@@ -201,7 +207,11 @@ func buildRunner(
 		pragmatist,
 		summarizer,
 	}
-	teamInstance, err := team.NewSwarm(teamName, entryAgentName, members)
+	var teamOpts []team.Option
+	if *crossRequestTransfer {
+		teamOpts = append(teamOpts, team.WithCrossRequestTransfer(true))
+	}
+	teamInstance, err := team.NewSwarm(teamName, entryAgentName, members, teamOpts...)
 	if err != nil {
 		return nil, err
 	}

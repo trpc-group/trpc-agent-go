@@ -99,6 +99,39 @@ type RunAgentInput struct {
 
 取消路由的请求体与实时对话请求一致，要成功取消，需要传入与实时对话路由相同的 `SessionKey`(`AppName`+`userID`+`sessionID`)。
 
+#### 取消路由到底会停止什么？
+
+取消路由会停止同一 `SessionKey` 下正在运行的后端 **run**（同一 `AppName`、解析
+出来的 `userID`、以及相同的 `threadId`）。
+
+它通常用于：
+
+- 前端有“停止生成”按钮，需要中断后端执行。
+- SSE 连接断开了，但仍希望停止后端（避免白白消耗模型/工具资源）。
+- 你希望做服务端预算控制（时间/成本），及时中断异常 run。
+
+#### 最小取消请求
+
+大多数情况下，你只需要：
+
+- `threadId`（映射到 `sessionID`）
+- 以及 `UserIDResolver` 需要读取的字段（通常是 `forwardedProps.userId`）
+
+当然，你也可以直接把实时对话请求的 JSON 原样再发一遍。
+
+示例：
+
+```bash
+curl -X POST http://localhost:8080/cancel \
+  -H 'Content-Type: application/json' \
+  -d '{"threadId":"thread-id","runId":"run-id","forwardedProps":{"userId":"alice"}}'
+```
+
+典型返回：
+
+- `200 OK`：取消成功
+- `404 Not Found`：没有找到对应 `SessionKey` 的运行中任务（可能已结束，或标识不匹配）
+
 ### 消息快照路由
 
 消息快照用于在页面初始化或断线重连时恢复历史对话，通过 `agui.WithMessagesSnapshotEnabled(true)` 控制功能是否开启，默认关闭。该路由默认是 `/history`， 可通过 `WithMessagesSnapshotPath` 自定义，负责返回 `RUN_STARTED → MESSAGES_SNAPSHOT → RUN_FINISHED` 的事件流。
@@ -113,7 +146,7 @@ type RunAgentInput struct {
 - `agui.WithSessionService(service)` 注入 `session.Service` 用于查询历史事件；
 - `aguirunner.WithUserIDResolver(resolver)` 自定义 `userID` 解析逻辑，默认恒为 `"user"`。
 
-框架在处理消息快照请求时会从 AG-UI 请求体 `RunAgentInput` 中解析 `threadId` 作为 `SessionID`，结合自定义 `UserIDResolver` 得到 `userID`，再与 `appName` 组装得到 `session.Key`，然后通过 `session.Service` 查询 `Session`。将 `Session` 中存储的事件 `Session.Events` 转换为 AG-UI 消息并封装成 `MESSAGES_SNAPSHOT` 事件，同时发送配套的 `RUN_STARTED`、`RUN_FINISHED` 事件。
+框架在处理消息快照请求时会从 AG-UI 请求体 `RunAgentInput` 中解析 `threadId` 作为 `SessionID`，结合自定义 `UserIDResolver` 得到 `userID`，再与 `appName` 组装得到 `session.Key`，并从会话存储中读取已持久化的事件，将其还原为 `MessagesSnapshot` 所需的消息列表，封装成 `MESSAGES_SNAPSHOT` 事件，同时发送配套的 `RUN_STARTED`、`RUN_FINISHED` 事件。
 
 代码示例如下：
 
@@ -137,7 +170,7 @@ resolver := func(ctx context.Context, input *adapter.RunAgentInput) (string, err
     return user, nil
 }
 
-sessionService := inmemory.NewService(context.Background())
+sessionService := inmemory.NewSessionService()
 server, err := agui.New(
     runner,
     agui.WithPath("/chat"),                    // 自定义实时对话路由，默认为 "/"
@@ -540,10 +573,10 @@ server, err := agui.New(
     agui.WithMessagesSnapshotEnabled(true),
     agui.WithAppName(appName),
     agui.WithSessionService(sessionService),
+    agui.WithFlushInterval(time.Second), // 设置事件聚合结果的定时刷新间隔，默认 1 秒
     agui.WithAGUIRunnerOptions(
         aguirunner.WithUserIDResolver(userIDResolver),
         aguirunner.WithAggregationOption(aggregator.WithEnabled(true)), // 开启事件聚合，默认开启
-        aguirunner.WithFlushInterval(time.Second),                      // 设置事件聚合结果的定时刷新间隔，默认 1 秒
     ),
 )
 ```
@@ -659,6 +692,48 @@ server, err := agui.New(
     ),
 )
 ```
+
+### 消息快照续传
+
+默认情况下，消息快照路由只返回一次性快照并立即结束连接。当用户在一次实时对话的中途刷新或重连时，仅靠快照可能无法覆盖快照边界之后继续产生的事件。如需在快照之后继续流式接收后续 AG-UI 事件，需要使用消息快照续传功能。
+
+开启续传后，服务端会在发送 `MESSAGES_SNAPSHOT` 后继续通过同一条 SSE 连接续传后续事件，直到读到 `RUN_FINISHED` 或 `RUN_ERROR`。返回序列变为：
+
+`RUN_STARTED → MESSAGES_SNAPSHOT → ...events... → RUN_FINISHED/RUN_ERROR`
+
+消息快照续传功能有以下配置参数：
+
+- `agui.WithMessagesSnapshotFollowEnabled(bool)`：控制是否启用消息快照续传功能
+- `agui.WithMessagesSnapshotFollowMaxDuration(time.Duration)`：限制续传最长时间，避免无限等待
+- `agui.WithFlushInterval(time.Duration)`：控制历史事件落库频率，续传的轮询间隔会复用该值
+
+代码示例如下。
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui"
+	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+)
+
+runner := runner.NewRunner(agent.Info().Name, agent)
+sessionService := inmemory.NewSessionService()
+
+server, err := agui.New(
+    runner,
+    agui.WithAppName(appName),
+    agui.WithSessionService(sessionService),
+    agui.WithMessagesSnapshotEnabled(true),
+    agui.WithMessagesSnapshotFollowEnabled(true),
+    agui.WithMessagesSnapshotFollowMaxDuration(30*time.Second),
+    agui.WithFlushInterval(50*time.Millisecond),
+)
+```
+
+完整示例可参考 [examples/agui/server/follow](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/follow)，前端可参考 [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat)。
+
+多实例部署时，不同实例需要共享同一个 `SessionService`，否则消息快照路由无法读取其他实例写入的历史事件。
 
 ### 设置路由前缀 BasePath
 

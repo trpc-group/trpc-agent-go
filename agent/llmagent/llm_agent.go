@@ -141,7 +141,12 @@ func New(name string, opts ...Option) *LLMAgent {
 		responseProcessors = append(responseProcessors, planningResponseProcessor)
 	}
 
-	responseProcessors = append(responseProcessors, processor.NewCodeExecutionResponseProcessor())
+	if options.EnableCodeExecutionResponseProcessor {
+		responseProcessors = append(
+			responseProcessors,
+			processor.NewCodeExecutionResponseProcessor(),
+		)
+	}
 
 	// Add output response processor if output_key or output_schema is configured or structured output is requested.
 	if options.OutputKey != "" || options.OutputSchema != nil || options.StructuredOutput != nil {
@@ -250,6 +255,10 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 				),
 			)
 		}
+		skillsOpts = append(
+			skillsOpts,
+			processor.WithSkillLoadMode(options.SkillLoadMode),
+		)
 		skillsProcessor := processor.NewSkillsRequestProcessor(
 			options.skillsRepository,
 			skillsOpts...,
@@ -494,7 +503,7 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 		}
 		// Handle actual errors
 		span.SetStatus(codes.Error, err.Error())
-		span.SetAttributes(attribute.String(itelemetry.KeyErrorType, itelemetry.ValueDefaultErrorType))
+		span.SetAttributes(attribute.String(itelemetry.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeRunError)))
 		span.End()
 		return nil, err
 	}
