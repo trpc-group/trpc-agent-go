@@ -27,6 +27,42 @@ func TestSimpleTokenCounter_CountTokens(t *testing.T) {
 	assert.Greater(t, n, 0)
 }
 
+func TestSimpleTokenCounter_WithApproxRunesPerToken(t *testing.T) {
+	const (
+		textLen = 16
+		cnHeuristic = 1.6
+	)
+
+	msg := NewUserMessage(repeat("a", textLen))
+	ctx := context.Background()
+
+	defaultCounter := NewSimpleTokenCounter()
+	defaultTokens, err := defaultCounter.CountTokens(ctx, msg)
+	require.NoError(t, err)
+
+	cnCounter := NewSimpleTokenCounter(WithApproxRunesPerToken(cnHeuristic))
+	cnTokens, err := cnCounter.CountTokens(ctx, msg)
+	require.NoError(t, err)
+
+	assert.Greater(t, cnTokens, defaultTokens)
+}
+
+func TestSimpleTokenCounter_WithApproxRunesPerToken_InvalidValue(t *testing.T) {
+	const textLen = 16
+	msg := NewUserMessage(repeat("a", textLen))
+	ctx := context.Background()
+
+	defaultCounter := NewSimpleTokenCounter()
+	defaultTokens, err := defaultCounter.CountTokens(ctx, msg)
+	require.NoError(t, err)
+
+	invalidCounter := NewSimpleTokenCounter(WithApproxRunesPerToken(-1))
+	invalidTokens, err := invalidCounter.CountTokens(ctx, msg)
+	require.NoError(t, err)
+
+	assert.Equal(t, defaultTokens, invalidTokens)
+}
+
 // TestSimpleTokenCounter_CountTokens_DetailedCoverage tests all code paths in CountTokens function
 func TestSimpleTokenCounter_CountTokens_DetailedCoverage(t *testing.T) {
 	counter := NewSimpleTokenCounter()
@@ -77,12 +113,12 @@ func TestSimpleTokenCounter_CountTokens_DetailedCoverage(t *testing.T) {
 	t.Run("content with reasoning content", func(t *testing.T) {
 		msg := Message{
 			Role:             RoleAssistant,
-			Content:          "Answer",                     // 6 runes / 4 = 1 token
-			ReasoningContent: "Let me think about this...", // 26 runes / 4 = 6 tokens
+			Content:          "Answer",                     // 6 runes
+			ReasoningContent: "Let me think about this...", // 26 runes
 		}
 		result, err := counter.CountTokens(ctx, msg)
 		require.NoError(t, err)
-		assert.Equal(t, 7, result) // max(1 + 6, 1) = 7
+		assert.Equal(t, 8, result) // max((6+26)/4, 1) = 8
 	})
 
 	t.Run("empty reasoning content is ignored", func(t *testing.T) {
@@ -196,12 +232,12 @@ func TestSimpleTokenCounter_CountTokens_DetailedCoverage(t *testing.T) {
 	})
 
 	t.Run("all features combined", func(t *testing.T) {
-		textPart1 := "Additional info" // 15 runes / 4 = 3 tokens
-		textPart2 := "More details"    // 12 runes / 4 = 3 tokens
+		textPart1 := "Additional info" // 15 runes
+		textPart2 := "More details"    // 12 runes
 		msg := Message{
 			Role:             RoleAssistant,
-			Content:          "Main answer",      // 11 runes / 4 = 2 tokens
-			ReasoningContent: "Thinking process", // 16 runes / 4 = 4 tokens
+			Content:          "Main answer",      // 11 runes
+			ReasoningContent: "Thinking process", // 16 runes
 			ContentParts: []ContentPart{
 				{
 					Type: ContentTypeText,
@@ -219,7 +255,7 @@ func TestSimpleTokenCounter_CountTokens_DetailedCoverage(t *testing.T) {
 		}
 		result, err := counter.CountTokens(ctx, msg)
 		require.NoError(t, err)
-		assert.Equal(t, 12, result) // max(2 + 4 + 3 + 3, 1) = 12
+		assert.Equal(t, 13, result) // max((11+16+15+12)/4, 1) = 13
 	})
 
 	t.Run("empty content parts slice", func(t *testing.T) {

@@ -10,6 +10,7 @@ package summary
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -25,11 +26,33 @@ import (
 // When no custom checkers are supplied, a default set is used.
 type Checker func(sess *session.Session) bool
 
-var (
-	// tokenCounter is a shared token counter instance.
-	// model.SimpleTokenCounter is stateless and concurrency-safe.
-	tokenCounter = model.NewSimpleTokenCounter()
-)
+var defaultTokenCounter atomic.Value
+
+func init() {
+	defaultTokenCounter.Store((model.NewSimpleTokenCounter()))
+}
+
+func getTokenCounter() model.TokenCounter {
+	v := defaultTokenCounter.Load()
+	if v == nil {
+		return model.NewSimpleTokenCounter()
+	}
+
+	counter := v.(model.TokenCounter)
+	if counter == nil {
+		return model.NewSimpleTokenCounter()
+	}
+	return counter
+}
+
+// SetTokenCounter sets the default TokenCounter used by summary checkers.
+// This affects all future CheckTokenThreshold evaluations in this process.
+func SetTokenCounter(counter model.TokenCounter) {
+	if counter == nil {
+		counter = model.NewSimpleTokenCounter()
+	}
+	defaultTokenCounter.Store(counter)
+}
 
 // filterDeltaEvents returns events that occurred strictly after the last
 // summarized timestamp stored in session state. If the timestamp is not set
@@ -85,13 +108,14 @@ func CheckTimeThreshold(interval time.Duration) Checker {
 	}
 }
 
+// checkTokenThresholdFromText checks if the token count of the given text exceeds the threshold.
 func checkTokenThresholdFromText(tokenCount int, conversationText string) bool {
 	if conversationText == "" {
 		return false
 	}
 
 	// SimpleTokenCounter.CountTokens currently never returns an error.
-	tokens, _ := tokenCounter.CountTokens(
+	tokens, _ := getTokenCounter().CountTokens(
 		context.Background(),
 		model.Message{Content: conversationText},
 	)
