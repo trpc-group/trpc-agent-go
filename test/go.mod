@@ -3,7 +3,7 @@ module trpc.group/trpc-go/trpc-agent-go/test
 go 1.24.4
 
 require (
-	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20251229221019-6a8d741d66f8
+	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260201021820-c2d2db22a1c9
 	github.com/r3labs/sse/v2 v2.10.0
 	github.com/stretchr/testify v1.10.0
 	trpc.group/trpc-go/trpc-agent-go v0.0.0-20260108131845-87b14951638b
