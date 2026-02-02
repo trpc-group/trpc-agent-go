@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -179,8 +180,8 @@ func (r *reducer) handleTextStart(e *aguievents.TextMessageStartEvent) error {
 	}
 	r.messages = append(r.messages, &aguievents.Message{
 		ID:   e.MessageID,
-		Role: role,
-		Name: &name,
+		Role: types.Role(role),
+		Name: name,
 	})
 	r.texts[e.MessageID] = &textState{
 		role:  role,
@@ -246,8 +247,8 @@ func (r *reducer) handleTextChunk(e *aguievents.TextMessageChunkEvent) error {
 	}
 	r.messages = append(r.messages, &aguievents.Message{
 		ID:      *e.MessageID,
-		Role:    role,
-		Name:    &name,
+		Role:    types.Role(role),
+		Name:    name,
 		Content: &content,
 	})
 	builder := strings.Builder{}
@@ -278,8 +279,8 @@ func (r *reducer) handleToolStart(e *aguievents.ToolCallStartEvent) error {
 		name := r.appName
 		r.messages = append(r.messages, &aguievents.Message{
 			ID:   *e.ParentMessageID,
-			Role: string(model.RoleAssistant),
-			Name: &name,
+			Role: types.Role(string(model.RoleAssistant)),
+			Name: name,
 		})
 		parentState = &textState{
 			role:  string(model.RoleAssistant),
@@ -353,9 +354,9 @@ func (r *reducer) handleToolResult(e *aguievents.ToolCallResultEvent) error {
 	toolCallID := strings.Clone(e.ToolCallID)
 	msg := &aguievents.Message{
 		ID:         e.MessageID,
-		Role:       role,
+		Role:       types.Role(role),
 		Content:    &content,
-		ToolCallID: &toolCallID,
+		ToolCallID: toolCallID,
 	}
 	r.messages = append(r.messages, msg)
 	state.phase = toolCompleted
@@ -369,37 +370,37 @@ func (r *reducer) handleActivity(e aguievents.Event) error {
 	case *aguievents.StepStartedEvent:
 		activity.ID = e.ID()
 		activity.ActivityType = string(e.Type())
-		activity.ActivityContent = map[string]any{
+		activity.Content = map[string]any{
 			"stepName": e.StepName,
 		}
 	case *aguievents.StepFinishedEvent:
 		activity.ID = e.ID()
 		activity.ActivityType = string(e.Type())
-		activity.ActivityContent = map[string]any{
+		activity.Content = map[string]any{
 			"stepName": e.StepName,
 		}
 	case *aguievents.StateSnapshotEvent:
 		activity.ID = e.ID()
 		activity.ActivityType = string(e.Type())
-		activity.ActivityContent = map[string]any{
+		activity.Content = map[string]any{
 			"snapshot": e.Snapshot,
 		}
 	case *aguievents.StateDeltaEvent:
 		activity.ID = e.ID()
 		activity.ActivityType = string(e.Type())
-		activity.ActivityContent = map[string]any{
+		activity.Content = map[string]any{
 			"delta": e.Delta,
 		}
 	case *aguievents.MessagesSnapshotEvent:
 		activity.ID = e.ID()
 		activity.ActivityType = string(e.Type())
-		activity.ActivityContent = map[string]any{
+		activity.Content = map[string]any{
 			"messages": e.Messages,
 		}
 	case *aguievents.ActivitySnapshotEvent:
 		activity.ID = e.ID()
 		activity.ActivityType = string(e.Type())
-		activity.ActivityContent = map[string]any{
+		activity.Content = map[string]any{
 			"messageId":    e.MessageID,
 			"activityType": e.ActivityType,
 			"content":      e.Content,
@@ -408,7 +409,7 @@ func (r *reducer) handleActivity(e aguievents.Event) error {
 	case *aguievents.ActivityDeltaEvent:
 		activity.ID = e.ID()
 		activity.ActivityType = string(e.Type())
-		activity.ActivityContent = map[string]any{
+		activity.Content = map[string]any{
 			"messageId":    e.MessageID,
 			"activityType": e.ActivityType,
 			"patch":        e.Patch,
@@ -416,14 +417,14 @@ func (r *reducer) handleActivity(e aguievents.Event) error {
 	case *aguievents.CustomEvent:
 		activity.ID = e.ID()
 		activity.ActivityType = string(e.Type())
-		activity.ActivityContent = map[string]any{
+		activity.Content = map[string]any{
 			"name":  e.Name,
 			"value": e.Value,
 		}
 	case *aguievents.RawEvent:
 		activity.ID = e.ID()
 		activity.ActivityType = string(e.Type())
-		activity.ActivityContent = map[string]any{
+		activity.Content = map[string]any{
 			"source": e.Source,
 			"event":  e.Event,
 		}
