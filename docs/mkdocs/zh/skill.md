@@ -350,8 +350,8 @@ agent := llmagent.New(
 - `output_files`：文件列表（`name`、`ref`、`content`、`mime_type`、
   `size_bytes`、`truncated`）
   - `ref` 是稳定的 `workspace://<name>` 引用，可传给其它工具使用
-  - 非文本文件的 `content` 始终为空。
-  - 当 `omit_inline_content=true` 时，所有文件的 `content` 为空。可用
+  - 非文本文件的 `content` 会被省略。
+  - 当 `omit_inline_content=true` 时，所有文件的 `content` 会被省略。可用
     `ref` 配合 `read_file` 按需读取文本内容。
   - `size_bytes` 表示磁盘上的文件大小；`truncated=true` 表示收集内容触发了
     内部上限（例如 4 MiB/文件）。
@@ -381,7 +381,7 @@ agent := llmagent.New(
 ```
 
 该调用会返回 `output_files[*].ref`（如 `workspace://out/a.txt`），
-`content=""`，并包含 `size_bytes` 与 `truncated`。
+并省略 `content`，同时包含 `size_bytes` 与 `truncated`。
 
 需要内容时再读取：
 
