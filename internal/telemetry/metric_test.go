@@ -147,7 +147,7 @@ func TestNewChatMetricsTracker(t *testing.T) {
 	var err error
 	timingInfo := &model.TimingInfo{}
 
-	tracker := NewChatMetricsTracker(ctx, invocation, llmRequest, timingInfo, &err)
+	tracker := NewChatMetricsTracker(ctx, invocation, llmRequest, timingInfo, nil, &err)
 
 	if tracker == nil {
 		t.Fatal("expected non-nil tracker")
@@ -175,7 +175,7 @@ func TestNewChatMetricsTracker(t *testing.T) {
 func TestChatMetricsTracker_TrackResponse(t *testing.T) {
 	ctx := context.Background()
 	timingInfo := &model.TimingInfo{}
-	tracker := NewChatMetricsTracker(ctx, nil, nil, timingInfo, nil)
+	tracker := NewChatMetricsTracker(ctx, nil, nil, timingInfo, nil, nil)
 
 	// First response
 	response1 := &model.Response{
@@ -229,7 +229,7 @@ func TestChatMetricsTracker_TrackResponse(t *testing.T) {
 func TestChatMetricsTracker_TrackResponse_NilUsage(t *testing.T) {
 	ctx := context.Background()
 	timingInfo := &model.TimingInfo{}
-	tracker := NewChatMetricsTracker(ctx, nil, nil, timingInfo, nil)
+	tracker := NewChatMetricsTracker(ctx, nil, nil, timingInfo, nil, nil)
 
 	response := &model.Response{
 		Usage: nil,
@@ -254,7 +254,7 @@ func TestChatMetricsTracker_TrackResponse_NilUsage(t *testing.T) {
 func TestChatMetricsTracker_SetLastEvent(t *testing.T) {
 	ctx := context.Background()
 	timingInfo := &model.TimingInfo{}
-	tracker := NewChatMetricsTracker(ctx, nil, nil, timingInfo, nil)
+	tracker := NewChatMetricsTracker(ctx, nil, nil, timingInfo, nil, nil)
 
 	evt := &event.Event{
 		Response: &model.Response{
@@ -272,7 +272,7 @@ func TestChatMetricsTracker_SetLastEvent(t *testing.T) {
 func TestChatMetricsTracker_FirstTokenTimeDuration(t *testing.T) {
 	ctx := context.Background()
 	timingInfo := &model.TimingInfo{}
-	tracker := NewChatMetricsTracker(ctx, nil, nil, timingInfo, nil)
+	tracker := NewChatMetricsTracker(ctx, nil, nil, timingInfo, nil, nil)
 
 	if tracker.FirstTokenTimeDuration() != 0 {
 		t.Error("initial FirstTokenTimeDuration should be 0")
@@ -297,7 +297,7 @@ func TestChatMetricsTracker_buildAttributes(t *testing.T) {
 			setupFunc: func() *ChatMetricsTracker {
 				testErr := errors.New("test error")
 				timingInfo := &model.TimingInfo{}
-				return NewChatMetricsTracker(context.Background(), nil, nil, timingInfo, &testErr)
+				return NewChatMetricsTracker(context.Background(), nil, nil, timingInfo, nil, &testErr)
 			},
 			checkFunc: func(t *testing.T, attrs chatAttributes) {
 				if attrs.Error == nil {
@@ -314,7 +314,7 @@ func TestChatMetricsTracker_buildAttributes(t *testing.T) {
 					},
 				}
 				timingInfo := &model.TimingInfo{}
-				return NewChatMetricsTracker(context.Background(), nil, req, timingInfo, nil)
+				return NewChatMetricsTracker(context.Background(), nil, req, timingInfo, nil, nil)
 			},
 			checkFunc: func(t *testing.T, attrs chatAttributes) {
 				if !attrs.Stream {
@@ -335,7 +335,7 @@ func TestChatMetricsTracker_buildAttributes(t *testing.T) {
 					},
 				}
 				timingInfo := &model.TimingInfo{}
-				return NewChatMetricsTracker(context.Background(), inv, nil, timingInfo, nil)
+				return NewChatMetricsTracker(context.Background(), inv, nil, timingInfo, nil, nil)
 			},
 			checkFunc: func(t *testing.T, attrs chatAttributes) {
 				if attrs.AgentName != "test-agent" {
@@ -359,7 +359,7 @@ func TestChatMetricsTracker_buildAttributes(t *testing.T) {
 			name: "with last event - response model",
 			setupFunc: func() *ChatMetricsTracker {
 				timingInfo := &model.TimingInfo{}
-				tracker := NewChatMetricsTracker(context.Background(), nil, nil, timingInfo, nil)
+				tracker := NewChatMetricsTracker(context.Background(), nil, nil, timingInfo, nil, nil)
 				evt := event.New("inv-123", "test-author")
 				evt.Model = "gpt-4-0613"
 				tracker.SetLastEvent(evt)
@@ -375,7 +375,7 @@ func TestChatMetricsTracker_buildAttributes(t *testing.T) {
 			name: "with last event - error type",
 			setupFunc: func() *ChatMetricsTracker {
 				timingInfo := &model.TimingInfo{}
-				tracker := NewChatMetricsTracker(context.Background(), nil, nil, timingInfo, nil)
+				tracker := NewChatMetricsTracker(context.Background(), nil, nil, timingInfo, nil, nil)
 				evt := event.NewErrorEvent("inv-123", "test-author", "rate_limit", "rate limit exceeded")
 				tracker.SetLastEvent(evt)
 				return tracker
@@ -390,7 +390,7 @@ func TestChatMetricsTracker_buildAttributes(t *testing.T) {
 			name: "nil invocation",
 			setupFunc: func() *ChatMetricsTracker {
 				timingInfo := &model.TimingInfo{}
-				return NewChatMetricsTracker(context.Background(), nil, nil, timingInfo, nil)
+				return NewChatMetricsTracker(context.Background(), nil, nil, timingInfo, nil, nil)
 			},
 			checkFunc: func(t *testing.T, attrs chatAttributes) {
 				if attrs.AgentName != "" {
@@ -470,7 +470,7 @@ func TestChatMetricsTracker_RecordMetrics(t *testing.T) {
 	}
 
 	timingInfo := &model.TimingInfo{}
-	tracker := NewChatMetricsTracker(ctx, inv, req, timingInfo, nil)
+	tracker := NewChatMetricsTracker(ctx, inv, req, timingInfo, nil, nil)
 
 	// Simulate some responses
 	time.Sleep(10 * time.Millisecond)
@@ -566,7 +566,7 @@ func TestChatMetricsTracker_recordDerivedMetrics(t *testing.T) {
 
 			ctx := context.Background()
 			timingInfo := &model.TimingInfo{}
-			tracker := NewChatMetricsTracker(ctx, nil, nil, timingInfo, nil)
+			tracker := NewChatMetricsTracker(ctx, nil, nil, timingInfo, nil, nil)
 			tracker.firstCompleteToken = tt.firstCompleteToken
 			tracker.totalCompletionTokens = tt.totalCompletionTokens
 			tracker.firstTokenTimeDuration = tt.firstTokenDuration

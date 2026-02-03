@@ -181,6 +181,7 @@ var (
 	KeyGenAIRequestTopP             = semconvtrace.KeyGenAIRequestTopP
 	KeyGenAISystemInstructions      = semconvtrace.KeyGenAISystemInstructions
 	KeyGenAITokenType               = semconvtrace.KeyGenAITokenType
+	KeyGenAITaskType                = semconvtrace.KeyGenAITaskType
 	KeyGenAIRequestThinkingEnabled  = semconvtrace.KeyGenAIRequestThinkingEnabled
 	KeyGenAIRequestToolDefinitions  = "gen_ai.request.tool.definitions"
 

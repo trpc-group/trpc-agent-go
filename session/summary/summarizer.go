@@ -467,7 +467,8 @@ func (s *sessionSummarizer) generateSummary(ctx context.Context, sess *session.S
 
 	// Get or create timing info from invocation (only record first LLM call).
 	timingInfo := invocation.GetOrCreateTimingInfo()
-	tracker := itelemetry.NewChatMetricsTracker(ctx, invocation, request, timingInfo, &err)
+	taskType := itelemetry.NewSummarizeTaskType(s.name)
+	tracker := itelemetry.NewChatMetricsTracker(ctx, invocation, request, timingInfo, &taskType, &err)
 	defer tracker.RecordMetrics()()
 
 	var finalResp *model.Response
@@ -486,7 +487,7 @@ func (s *sessionSummarizer) generateSummary(ctx context.Context, sess *session.S
 			Request:          request,
 			Response:         finalResp,
 			TimeToFirstToken: tracker.FirstTokenTimeDuration(),
-			TaskType:         itelemetry.NewSummarizeTaskType(s.name),
+			TaskType:         taskType,
 		})
 	}()
 
