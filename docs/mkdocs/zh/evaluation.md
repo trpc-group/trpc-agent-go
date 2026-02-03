@@ -25,11 +25,15 @@ export OPENAI_API_KEY="sk-xxx"
 export OPENAI_BASE_URL="https://api.deepseek.com/v1"
 ```
 
-### 代码示例
+### 基于本地文件评估示例
+
+本示例基于本地文件评估，完整代码见 [examples/evaluation/local](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/local)。
+
+#### 代码示例
 
 下面给出两段核心代码片段，分别用于构建 Agent 与执行评估。
 
-#### Agent 代码片段
+##### Agent 代码片段
 
 这段代码构建了一个最小可评估的 Agent，使用 `llmagent` 挂载名为 `calculator` 的函数工具，并通过 `instruction` 约束数学问题都走工具调用，便于在评估中稳定对齐工具轨迹。
 
@@ -100,7 +104,7 @@ func calculate(_ context.Context, args calculatorArgs) (calculatorResult, error)
 }
 ```
 
-#### 评估代码片段
+##### 评估代码片段
 
 这段代码通过 Agent 创建可执行的 Runner，配置三个本地 Manager 读取评估集 EvalSet 与评估指标 Metric 并写入结果文件，再通过 `evaluation.New` 创建 AgentEvaluator 并调用 `Evaluate` 方法执行指定评估集。
 
@@ -159,7 +163,7 @@ fmt.Printf("Eval Set: %s\n", result.EvalSetID)
 fmt.Printf("Overall Status: %s\n", result.OverallStatus)
 ```
 
-### 评估文件
+#### 评估文件
 
 评估文件包含评估集文件与评估指标文件，组织结构如下所示。
 
@@ -170,7 +174,7 @@ data/
     math-basic.metrics.json # 评估指标文件
 ```
 
-#### 评估集文件
+##### 评估集文件
 
 评估集文件路径为 `data/math-eval-app/math-basic.evalset.json`，用于承载评估用例。推理阶段会按 `evalCases` 遍历用例，再按每个用例的 `conversation` 逐轮取 `userContent` 作为输入。
 
@@ -219,7 +223,7 @@ data/
 }
 ```
 
-#### 评估指标文件
+##### 评估指标文件
 
 评估指标文件路径为 `data/math-eval-app/math-basic.metrics.json`，用于描述评估指标，按照 `metricName` 选择评估器，通过 `criterion` 描述评估准则，根据 `threshold` 定义阈值。一个文件可以配置多条指标，框架会依次执行。
 
@@ -236,7 +240,7 @@ data/
 ]
 ```
 
-### 执行评估
+#### 执行评估
 
 ```bash
 # 设置环境变量
@@ -250,7 +254,7 @@ go run .
 
 执行评估时，框架读取评估集文件与评估指标文件，调用 Runner 并捕获推理过程中的响应与工具调用，再根据评估指标完成评分并写入评估结果文件。
 
-### 查看评估结果
+#### 查看评估结果
 
 结果写入 `output/math-eval-app/`，文件名形如 `math-eval-app_math-basic_<uuid>.evalset_result.json`。
 
@@ -343,6 +347,157 @@ go run .
   ],
   "creationTimestamp": 1766455261.342534
 }
+```
+
+### 基于内存评估示例
+
+inmemory 在内存中维护评估集、评估指标和评估结果。
+
+完整示例参见 [examples/evaluation/inmemory](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/inmemory)。
+
+#### 代码
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
+	evalresultinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	metricinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+// 创建 Runner
+run := runner.NewRunner(appName, agent)
+// 创建评估集 EvalSet Manager、评估指标 Metric Manager、评估结果 EvalResult Manager、评估器注册中心 Registry
+evalSetManager := evalsetinmemory.New()
+metricManager := metricinmemory.New()
+evalResultManager := evalresultinmemory.New()
+registry := registry.New()
+// 构建评估集数据
+if err := prepareEvalSet(ctx, evalSetManager); err != nil {
+	log.Fatalf("prepare eval set: %v", err)
+}
+// 构建评估指标数据
+if err := prepareMetric(ctx, metricManager); err != nil {
+	log.Fatalf("prepare metric: %v", err)
+}
+// 创建 AgentEvaluator
+agentEvaluator, err := evaluation.New(
+	appName,
+	run,
+	evaluation.WithEvalSetManager(evalSetManager),
+	evaluation.WithMetricManager(metricManager),
+	evaluation.WithEvalResultManager(evalResultManager),
+	evaluation.WithRegistry(registry),
+	evaluation.WithNumRuns(numRuns),
+)
+if err != nil {
+	log.Fatalf("create evaluator: %v", err)
+}
+defer agentEvaluator.Close()
+// 执行评估
+result, err := agentEvaluator.Evaluate(ctx, evalSetID)
+if err != nil {
+	log.Fatalf("evaluate: %v", err)
+}
+```
+
+#### 评估集 EvalSet 构建
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+)
+
+if _, err := evalSetManager.Create(ctx, appName, evalSetID); err != nil {
+	return err
+}
+cases := []*evalset.EvalCase{
+	{
+		EvalID: "calc_add",
+		Conversation: []*evalset.Invocation{
+			{
+				InvocationID: "calc_add-1",
+				UserContent: &model.Message{
+					Role:    model.RoleUser,
+					Content: "calc add 2 3",
+				},
+				FinalResponse: &model.Message{
+					Role:    model.RoleAssistant,
+					Content: "calc result: 5",
+				},
+				Tools: []*evalset.Tool{
+					{
+						ID:   "tool_use_1",
+						Name: "calculator",
+						Arguments: map[string]any{
+							"operation": "add",
+							"a":         2,
+							"b":         3,
+						},
+						Result: map[string]any{
+							"a":         2,
+							"b":         3,
+							"operation": "add",
+							"result":    5,
+						},
+					},
+				},
+			},
+		},
+		SessionInput: &evalset.SessionInput{
+			AppName: appName,
+			UserID:  "user",
+		},
+	},
+}
+for _, evalCase := range cases {
+	if err := evalSetManager.AddCase(ctx, appName, evalSetID, evalCase); err != nil {
+		return err
+	}
+}
+```
+
+#### 评估指标 Metric 构建
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	cjson "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
+	ctext "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
+	ctooltrajectory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory"
+)
+
+evalMetric := &metric.EvalMetric{
+	MetricName: "tool_trajectory_avg_score",
+	Threshold:  1.0,
+	Criterion: criterion.New(
+		criterion.WithToolTrajectory(
+			ctooltrajectory.New(
+				ctooltrajectory.WithDefault(
+					&ctooltrajectory.ToolTrajectoryStrategy{
+						Name: &ctext.TextCriterion{
+							MatchStrategy: ctext.TextMatchStrategyExact,
+						},
+						Arguments: &cjson.JSONCriterion{
+							MatchStrategy: cjson.JSONMatchStrategyExact,
+						},
+						Result: &cjson.JSONCriterion{
+							MatchStrategy: cjson.JSONMatchStrategyExact,
+						},
+					},
+				),
+			),
+		),
+	),
+}
+metricManager.Add(ctx, appName, evalSetID, evalMetric)
 ```
 
 ## 核心概念
