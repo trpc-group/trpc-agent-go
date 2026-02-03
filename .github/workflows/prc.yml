@@ -224,6 +224,17 @@ jobs:
             echo "✓ All Go files have proper license headers"
           fi
           echo "::endgroup::"
+  check-go-mod-tidy:
+    name: check go mod tidy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+      - name: Check go.mod and go.sum are tidy
+        shell: bash
+        run: bash .github/scripts/check-go-mod-tidy.sh
   check-examples:
     name: check examples
     runs-on: ubuntu-latest
