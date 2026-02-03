@@ -282,12 +282,14 @@ Input:
   the workspace. Each item supports:
   - `from` with schemes:
     - `artifact://name[@version]` to load from the Artifact service
-    - `host://abs/path` to copy/link from a host absolute path
+    - `host:///abs/path` to copy/link from a host absolute path
     - `workspace://rel/path` to copy/link from current workspace
     - `skill://<name>/rel/path` to copy/link from a staged skill
   - `to` workspace‑relative destination; defaults to
     `WORK_DIR/inputs/<basename>`
   - `mode`: `copy` (default) or `link` when feasible
+  - `pin`: for `artifact://name` without `@version`, reuse the first
+    resolved version for the same `to` path (best effort)
 
 - `outputs` (optional, declarative outputs): a manifest to collect
   results with limits and persistence:
@@ -368,6 +370,28 @@ Typical flow:
 
 Examples:
 
+Stage an external input file and collect a small text output:
+
+```json
+{
+  "skill": "demo",
+  "inputs": [
+    {
+      "from": "host:///tmp/notes.txt",
+      "to": "work/inputs/notes.txt",
+      "mode": "copy"
+    }
+  ],
+  "command": "mkdir -p out; wc -l work/inputs/notes.txt > out/lines.txt",
+  "outputs": {
+    "globs": ["$OUTPUT_DIR/lines.txt"],
+    "inline": true,
+    "save": false,
+    "max_files": 1
+  }
+}
+```
+
 Metadata-only outputs (avoid filling context):
 
 ```json
@@ -410,6 +434,19 @@ Persist large outputs as artifacts (no inline content):
 When saved, `skill_run` returns `artifact_files` with `name` and
 `version`. You can reference an artifact as `artifact://<name>[@<version>]`
 in tools like `read_file`.
+
+Legacy artifact save path (when you use `output_files`):
+
+```json
+{
+  "skill": "demo",
+  "command": "mkdir -p out; echo report > out/report.txt",
+  "output_files": ["out/report.txt"],
+  "omit_inline_content": true,
+  "save_as_artifacts": true,
+  "artifact_prefix": "pref/"
+}
+```
 
 Environment and CWD:
 - When `cwd` is omitted, runs at the skill root: `/skills/<name>`
