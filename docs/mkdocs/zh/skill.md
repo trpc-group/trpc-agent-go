@@ -286,12 +286,14 @@ agent := llmagent.New(
   
   - `from`：来源，支持四类方案（scheme）：
     - `artifact://name[@version]` 从制品服务拉取文件
-    - `host://abs/path` 从宿主机绝对路径复制/链接
+    - `host:///abs/path` 从宿主机绝对路径复制/链接
     - `workspace://rel/path` 从当前工作区相对路径复制/链接
     - `skill://<name>/rel/path` 从已缓存的技能目录复制/链接
   - `to`：目的路径（相对工作区）。未指定时默认写到
     `WORK_DIR/inputs/<basename>`。
   - `mode`：`copy`（默认）或 `link`（在可行时建立符号链接）。
+  - `pin`：当 `from=artifact://name` 未指定 `@version` 时，
+    尝试复用同一 `to` 路径第一次解析到的版本（best effort）。
 
 - `outputs`（可选，声明式输出）：使用清单（manifest）收集输出。
   字段：
@@ -350,8 +352,8 @@ agent := llmagent.New(
 - `output_files`：文件列表（`name`、`ref`、`content`、`mime_type`、
   `size_bytes`、`truncated`）
   - `ref` 是稳定的 `workspace://<name>` 引用，可传给其它工具使用
-  - 非文本文件的 `content` 始终为空。
-  - 当 `omit_inline_content=true` 时，所有文件的 `content` 为空。可用
+  - 非文本文件的 `content` 会被省略。
+  - 当 `omit_inline_content=true` 时，所有文件的 `content` 会被省略。可用
     `ref` 配合 `read_file` 按需读取文本内容。
   - `size_bytes` 表示磁盘上的文件大小；`truncated=true` 表示收集内容触发了
     内部上限（例如 4 MiB/文件）。
@@ -369,6 +371,28 @@ agent := llmagent.New(
 
 示例：
 
+映射外部输入文件，并收集一个小型文本输出：
+
+```json
+{
+  "skill": "demo",
+  "inputs": [
+    {
+      "from": "host:///tmp/notes.txt",
+      "to": "work/inputs/notes.txt",
+      "mode": "copy"
+    }
+  ],
+  "command": "mkdir -p out; wc -l work/inputs/notes.txt > out/lines.txt",
+  "outputs": {
+    "globs": ["$OUTPUT_DIR/lines.txt"],
+    "inline": true,
+    "save": false,
+    "max_files": 1
+  }
+}
+```
+
 元信息输出（避免把上下文塞满）：
 
 ```json
@@ -381,7 +405,7 @@ agent := llmagent.New(
 ```
 
 该调用会返回 `output_files[*].ref`（如 `workspace://out/a.txt`），
-`content=""`，并包含 `size_bytes` 与 `truncated`。
+并省略 `content`，同时包含 `size_bytes` 与 `truncated`。
 
 需要内容时再读取：
 
@@ -410,6 +434,19 @@ agent := llmagent.New(
 
 保存成功后，`skill_run` 会返回 `artifact_files`（`name`、`version`），
 并可用 `artifact://<name>[@<version>]` 作为文件引用传给 `read_file` 等工具。
+
+传统保存路径（当你使用 `output_files` 时）：
+
+```json
+{
+  "skill": "demo",
+  "command": "mkdir -p out; echo report > out/report.txt",
+  "output_files": ["out/report.txt"],
+  "omit_inline_content": true,
+  "save_as_artifacts": true,
+  "artifact_prefix": "pref/"
+}
+```
 
 运行环境与工作目录：
 - 未提供 `cwd` 时，默认在技能根目录运行：`/skills/<name>`
