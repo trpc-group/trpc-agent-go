@@ -60,7 +60,7 @@ func (r CodeExecutionResult) String() string {
 // File represents a file generated during code execution.
 type File struct {
 	Name      string `json:"name"`
-	Content   string `json:"content"`
+	Content   string `json:"content,omitempty"`
 	MIMEType  string `json:"mime_type"`
 	SizeBytes int64  `json:"size_bytes,omitempty"`
 	Truncated bool   `json:"truncated,omitempty"`

@@ -348,8 +348,8 @@ Output:
   `truncated`
   - `ref` is a stable `workspace://<name>` reference that can be passed
     to other tools
-  - For non-text files, `content` is always empty.
-  - When `omit_inline_content=true`, `content` is empty for all files.
+  - For non-text files, `content` is omitted.
+  - When `omit_inline_content=true`, `content` is omitted for all files.
     Use `ref` with `read_file` to fetch text content on demand.
   - `size_bytes` is the file size on disk; `truncated=true` means the
     collected content hit internal caps (for example, 4 MiB/file).
@@ -380,7 +380,7 @@ Metadata-only outputs (avoid filling context):
 ```
 
 The tool returns `output_files[*].ref` like `workspace://out/a.txt`
-with `content=""`, plus `size_bytes` and `truncated`.
+with `content` omitted, plus `size_bytes` and `truncated`.
 
 To read the content later:
 
