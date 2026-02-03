@@ -461,7 +461,7 @@ func (m *MarkdownChunking) applyOverlap(chunks []*document.Document) []*document
 			overlappedContent = chunks[i].Content
 		}
 
-		metadata[source.MetaChunkSize] = encoding.RuneCount(overlappedContent)
+		metadata[source.MetaOverlappedContentSize] = encoding.RuneCount(overlappedContent)
 
 		overlappedChunk := &document.Document{
 			ID:        chunks[i].ID,

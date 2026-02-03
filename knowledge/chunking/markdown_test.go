@@ -1006,9 +1006,15 @@ This section contains extensive technical documentation that will be split into 
 
 		// Verify chunk size metadata matches actual content size
 		actualSize := utf8.RuneCountInString(chunk.Content)
-		require.Equal(t, chunkSizeMeta, actualSize,
-			"Chunk %d size metadata mismatch: expected %d, got %d",
-			i, chunkSizeMeta, actualSize)
+		if overlappedSize, hasOverlapped := chunk.Metadata[source.MetaOverlappedContentSize]; hasOverlapped {
+			require.Equal(t, overlappedSize, actualSize,
+				"Chunk %d overlapped content size mismatch: metadata=%d, actual=%d",
+				i, overlappedSize, actualSize)
+		} else {
+			require.Equal(t, chunkSizeMeta, actualSize,
+				"Chunk %d size metadata mismatch: expected %d, got %d",
+				i, chunkSizeMeta, actualSize)
+		}
 	}
 
 	// Verify content integrity
