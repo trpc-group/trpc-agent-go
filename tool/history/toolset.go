@@ -19,8 +19,8 @@ import (
 // ToolSet bundles history-related tools.
 //
 // Currently it includes:
-//   - search_history: find relevant events with snippets
-//   - get_history_events: fetch full (but bounded) content by event id
+//   - search_history: find relevant events with snippets.
+//   - get_history_events: fetch full (but bounded) content by event id.
 type ToolSet struct {
 	name  string
 	tools []tool.Tool

@@ -21,40 +21,65 @@ import (
 )
 
 const (
+	// SearchToolName is the name of the tool exposed to the model.
 	SearchToolName = "search_history"
 )
 
+// SearchArgs is the JSON argument payload for search_history.
 type SearchArgs struct {
-	Query    string   `json:"query,omitempty"`
-	Roles    []string `json:"roles,omitempty"`
-	SinceMs  *int64   `json:"sinceMs,omitempty"`
-	UntilMs  *int64   `json:"untilMs,omitempty"`
-	Cursor   string   `json:"cursor,omitempty"`
-	Limit    int      `json:"limit,omitempty"`
-	MaxChars int      `json:"maxChars,omitempty"`
+	// Query is a keyword query. Empty means no keyword filtering.
+	Query string `json:"query,omitempty"`
+	// Roles filters by message roles (e.g., user, assistant, tool).
+	Roles []string `json:"roles,omitempty"`
+	// SinceMs filters events with timestamp >= sinceMs.
+	SinceMs *int64 `json:"sinceMs,omitempty"`
+	// UntilMs filters events with timestamp <= untilMs.
+	UntilMs *int64 `json:"untilMs,omitempty"`
+	// Cursor is the pagination cursor returned by a previous call.
+	Cursor string `json:"cursor,omitempty"`
+	// Limit is the requested max number of results. The server will clamp it.
+	Limit int `json:"limit,omitempty"`
+	// MaxChars is the requested max characters per snippet. The server will clamp it.
+	MaxChars int `json:"maxChars,omitempty"`
 }
 
+// SearchItem is a single search hit with a bounded snippet.
 type SearchItem struct {
-	EventID     string `json:"eventId"`
-	TimestampMs int64  `json:"timestampMs"`
-	Role        string `json:"role"`
-	Snippet     string `json:"snippet"`
-	Truncated   bool   `json:"truncated"`
-	TotalChars  int    `json:"totalChars"`
+	// EventID is the stable identifier of the matched event.
+	EventID string `json:"eventId"`
+	// TimestampMs is the unix-ms timestamp of the event.
+	TimestampMs int64 `json:"timestampMs"`
+	// Role is the message role (user, assistant, tool, system).
+	Role string `json:"role"`
+	// Snippet is the truncated text snippet.
+	Snippet string `json:"snippet"`
+	// Truncated indicates whether Snippet was truncated.
+	Truncated bool `json:"truncated"`
+	// TotalChars is the original text length before truncation.
+	TotalChars int `json:"totalChars"`
 }
 
+// SearchResult is the structured output of search_history.
 type SearchResult struct {
-	Success          bool        `json:"success"`
-	Message          string      `json:"message,omitempty"`
-	Items            []SearchItem `json:"items,omitempty"`
-	NextCursor       string      `json:"nextCursor,omitempty"`
-	BudgetRemaining  *Budget     `json:"budgetRemaining,omitempty"`
+	// Success indicates whether the call succeeded.
+	Success bool `json:"success"`
+	// Message carries an error message when Success is false.
+	Message string `json:"message,omitempty"`
+	// Items are the matched results.
+	Items []SearchItem `json:"items,omitempty"`
+	// NextCursor is the cursor for the next page.
+	NextCursor string `json:"nextCursor,omitempty"`
+	// BudgetRemaining is the remaining invocation-scoped budget snapshot.
+	BudgetRemaining *Budget `json:"budgetRemaining,omitempty"`
 }
 
+// SearchTool implements the search_history tool.
 type SearchTool struct{}
 
+// NewSearchTool creates a new SearchTool.
 func NewSearchTool() *SearchTool { return &SearchTool{} }
 
+// Declaration returns the tool declaration.
 func (t *SearchTool) Declaration() *tool.Declaration {
 	schema := &tool.Schema{
 		Type: "object",
@@ -66,12 +91,12 @@ func (t *SearchTool) Declaration() *tool.Declaration {
 			"roles": {
 				Type:        "array",
 				Description: "Filter by message roles (e.g., user, assistant, tool)",
-				Items: &tool.Schema{Type: "string"},
+				Items:       &tool.Schema{Type: "string"},
 			},
-			"sinceMs": {Type: "number", Description: "Only include events after this unix-ms timestamp"},
-			"untilMs": {Type: "number", Description: "Only include events before this unix-ms timestamp"},
-			"cursor":  {Type: "string", Description: "Pagination cursor from previous call"},
-			"limit":   {Type: "number", Description: "Max number of results. Server may clamp to a small value"},
+			"sinceMs":  {Type: "number", Description: "Only include events after this unix-ms timestamp"},
+			"untilMs":  {Type: "number", Description: "Only include events before this unix-ms timestamp"},
+			"cursor":   {Type: "string", Description: "Pagination cursor from previous call"},
+			"limit":    {Type: "number", Description: "Max number of results. Server may clamp to a small value"},
 			"maxChars": {Type: "number", Description: "Max characters per snippet. Server may clamp"},
 		},
 	}
@@ -82,6 +107,7 @@ func (t *SearchTool) Declaration() *tool.Declaration {
 	}
 }
 
+// Call executes the tool with JSON arguments.
 func (t *SearchTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 	var args SearchArgs
 	if err := json.Unmarshal(jsonArgs, &args); err != nil {

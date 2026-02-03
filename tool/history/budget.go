@@ -21,9 +21,12 @@ const (
 // Budget keeps invocation-scoped limits for history tools.
 // It is stored on agent.Invocation state so it is naturally per-run.
 type Budget struct {
+	// SearchCallsRemaining is the remaining number of search_history calls.
 	SearchCallsRemaining int `json:"searchCallsRemaining"`
-	GetCallsRemaining    int `json:"getCallsRemaining"`
-	CharsRemaining       int `json:"charsRemaining"`
+	// GetCallsRemaining is the remaining number of get_history_events calls.
+	GetCallsRemaining int `json:"getCallsRemaining"`
+	// CharsRemaining is the remaining character budget across history tool calls.
+	CharsRemaining int `json:"charsRemaining"`
 }
 
 func defaultBudget() *Budget {
