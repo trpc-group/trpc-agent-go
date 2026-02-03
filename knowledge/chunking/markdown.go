@@ -25,15 +25,15 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
 
-// DocIDGenerator provides thread-safe unique ID generation for document chunks.
-type DocIDGenerator struct {
+// docIDGenerator provides thread-safe unique ID generation for document chunks.
+type docIDGenerator struct {
 	nextID int
 	mu     sync.Mutex
 }
 
 // Next returns the next unique integer ID in a thread-safe manner.
 // It increments the internal counter and returns the new value.
-func (d *DocIDGenerator) Next() int {
+func (d *docIDGenerator) Next() int {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	id := d.nextID
@@ -126,7 +126,7 @@ func (m *MarkdownChunking) splitRecursively(
 	content string,
 	originalDoc *document.Document,
 ) []*document.Document {
-	idGen := &DocIDGenerator{nextID: 1}
+	idGen := &docIDGenerator{nextID: 1}
 	return m.splitRecursivelyWithPath(content, originalDoc, nil, idGen)
 }
 
@@ -135,7 +135,7 @@ func (m *MarkdownChunking) splitRecursivelyWithPath(
 	content string,
 	originalDoc *document.Document,
 	headerPath []string,
-	idGen *DocIDGenerator,
+	idGen *docIDGenerator,
 ) []*document.Document {
 	var chunks []*document.Document
 
@@ -328,7 +328,7 @@ func (m *MarkdownChunking) mergeSmallParagraphsWithPath(
 	paragraphs []string,
 	originalDoc *document.Document,
 	headerPath []string,
-	idGen *DocIDGenerator,
+	idGen *docIDGenerator,
 ) []*document.Document {
 	var chunks []*document.Document
 	var currentChunk strings.Builder
