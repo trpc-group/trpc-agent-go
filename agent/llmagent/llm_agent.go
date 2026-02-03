@@ -35,6 +35,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/planner"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/history"
 	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
 )
@@ -392,6 +393,15 @@ func registerTools(options *Options) ([]tool.Tool, map[string]bool) {
 				userToolNames[t.Declaration().Name] = true
 			}
 		}
+	}
+
+	// Add history tools as framework tools.
+	// They are used to retrieve older session context on demand (especially when using session summary).
+	// This is a FRAMEWORK toolset (auto-added by framework), NOT a user tool.
+	{
+		ts := history.NewToolSet()
+		ctx := context.Background()
+		allTools = append(allTools, ts.Tools(ctx)...)
 	}
 
 	// Add knowledge search tool if knowledge base is provided.

@@ -305,6 +305,18 @@ func (p *ContentRequestProcessor) ProcessRequest(
 			} else {
 				req.Messages = append([]model.Message{*summaryMsg}, req.Messages...)
 			}
+
+			// When using summary, explicitly tell the model how to retrieve
+			// older details on demand via history tools.
+			if msg := historyToolGuidanceMessage(); msg != nil {
+				systemMsgIndex = findLastSystemMessageIndex(req.Messages)
+				if systemMsgIndex >= 0 {
+					req.Messages = append(req.Messages[:systemMsgIndex+1],
+						append([]model.Message{*msg}, req.Messages[systemMsgIndex+1:]...)...)
+				} else {
+					req.Messages = append([]model.Message{*msg}, req.Messages...)
+				}
+			}
 		}
 
 		if skipHistory {

@@ -314,8 +314,8 @@ func TestLLMAgent_AddToolSet_DynamicTools(t *testing.T) {
 	)
 
 	initialTools := agent.Tools()
-	if len(initialTools) != 1 {
-		t.Fatalf("expected 1 tool before add, got %d",
+	if len(initialTools) != 3 {
+		t.Fatalf("expected 3 tools before add (user tool + history tools), got %d",
 			len(initialTools))
 	}
 
@@ -483,8 +483,8 @@ func TestLLMAgent_FilterTools_NoFilterReturnsAll(t *testing.T) {
 	)
 
 	allTools := agent.Tools()
-	if len(allTools) != 2 {
-		t.Fatalf("expected 2 tools, got %d", len(allTools))
+	if len(allTools) != 4 {
+		t.Fatalf("expected 4 tools (2 user tools + history tools), got %d", len(allTools))
 	}
 
 	filtered := agent.FilterTools(ctx)
