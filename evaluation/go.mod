@@ -8,21 +8,25 @@ replace (
 	trpc.group/trpc-go/trpc-agent-go/model/gemini => ../model/gemini
 	trpc.group/trpc-go/trpc-agent-go/model/ollama => ../model/ollama
 	trpc.group/trpc-go/trpc-agent-go/model/provider => ../model/provider
+	trpc.group/trpc-go/trpc-agent-go/storage/mysql => ../storage/mysql
 )
 
 require (
+	github.com/go-sql-driver/mysql v1.9.3
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/go-multierror v1.1.1
 	github.com/panjf2000/ants/v2 v2.10.0
 	github.com/stretchr/testify v1.11.1
 	trpc.group/trpc-go/trpc-agent-go v0.8.0
 	trpc.group/trpc-go/trpc-agent-go/model/provider v0.8.0
+	trpc.group/trpc-go/trpc-agent-go/storage/mysql v0.8.0
 )
 
 require (
 	cloud.google.com/go v0.123.0 // indirect
 	cloud.google.com/go/auth v0.17.0 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
+	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/anthropics/anthropic-sdk-go v1.19.0 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect

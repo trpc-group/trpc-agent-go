@@ -1863,6 +1863,10 @@ type failingEvalResultManager struct {
 	err error
 }
 
+func (m *failingEvalResultManager) Close() error {
+	return nil
+}
+
 func (m *failingEvalResultManager) Save(ctx context.Context, appName string, evalSetResult *evalresult.EvalSetResult) (string, error) {
 	return "", m.err
 }
