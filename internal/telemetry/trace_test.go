@@ -417,6 +417,36 @@ func TestNewExecuteToolSpanName(t *testing.T) {
 	}
 }
 
+func TestNewSummarizeTaskType(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "empty name",
+			in:   "",
+			want: "summarize",
+		},
+		{
+			name: "non-empty name",
+			in:   "demo",
+			want: "summarize demo",
+		},
+		{
+			name: "whitespace is preserved",
+			in:   "  demo  ",
+			want: "summarize   demo  ",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, NewSummarizeTaskType(tt.in))
+		})
+	}
+}
+
 func TestTraceToolCall_NilPaths(t *testing.T) {
 	tests := []struct {
 		name     string

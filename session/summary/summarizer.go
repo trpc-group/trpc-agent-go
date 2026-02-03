@@ -27,6 +27,8 @@ import (
 const (
 	// metadataKeyModelName is the key for model name in metadata.
 	metadataKeyModelName = "model_name"
+	// metadataKeySummarizerName is the key for summarizer name in metadata.
+	metadataKeySummarizerName = "summarizer_name"
 	// metadataKeyMaxSummaryWords is the key for max summary words in metadata.
 	metadataKeyMaxSummaryWords = "max_summary_words"
 	// metadataKeyModelAvailable is the key for model availability in metadata.
@@ -141,6 +143,7 @@ func getDefaultSummarizerPrompt(maxWords int) string {
 // sessionSummarizer implements the SessionSummarizer interface.
 type sessionSummarizer struct {
 	model           model.Model
+	name            string
 	prompt          string
 	checks          []Checker
 	maxSummaryWords int
@@ -338,6 +341,7 @@ func (s *sessionSummarizer) Metadata() map[string]any {
 	}
 	return map[string]any{
 		metadataKeyModelName:         modelName,
+		metadataKeySummarizerName:    s.name,
 		metadataKeyMaxSummaryWords:   s.maxSummaryWords,
 		metadataKeyModelAvailable:    modelAvailable,
 		metadataKeyCheckFunctions:    len(s.checks),
@@ -476,7 +480,14 @@ func (s *sessionSummarizer) generateSummary(ctx context.Context, sess *session.S
 			finalResp.Usage = &model.Usage{}
 		}
 		finalResp.Usage.TimingInfo = timingInfo
-		itelemetry.TraceChat(span, invocation, request, finalResp, "", tracker.FirstTokenTimeDuration())
+
+		itelemetry.TraceChat(span, &itelemetry.TraceChatAttributes{
+			Invocation:       invocation,
+			Request:          request,
+			Response:         finalResp,
+			TimeToFirstToken: tracker.FirstTokenTimeDuration(),
+			TaskType:         itelemetry.NewSummarizeTaskType(s.name),
+		})
 	}()
 
 	// Generate content using the model.

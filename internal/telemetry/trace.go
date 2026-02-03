@@ -391,6 +391,16 @@ type TraceChatAttributes struct {
 	Response         *model.Response
 	EventID          string
 	TimeToFirstToken time.Duration
+	TaskType         string
+}
+
+// NewSummarizeTaskType creates a task type for summarize.
+func NewSummarizeTaskType(name string) string {
+	taskType := "summarize"
+	if name == "" {
+		return taskType
+	}
+	return taskType + " " + name
 }
 
 // TraceChat traces the invocation of an LLM call.
@@ -409,6 +419,9 @@ func TraceChat(span trace.Span, attributes *TraceChatAttributes) {
 	}
 	if attributes.TimeToFirstToken > 0 {
 		attrs = append(attrs, attribute.Float64(KeyTRPCAgentGoClientTimeToFirstToken, attributes.TimeToFirstToken.Seconds()))
+	}
+	if attributes.TaskType != "" {
+		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAITaskType, attributes.TaskType))
 	}
 
 	// Add invocation attributes
