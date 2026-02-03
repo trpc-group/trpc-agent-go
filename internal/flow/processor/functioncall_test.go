@@ -2287,8 +2287,12 @@ func TestExecuteStreamableTool_EmitsPartialEvents(t *testing.T) {
 		require.Equal(t, inv.AgentName, e.Author)
 		require.Equal(t, inv.Branch, e.Branch)
 		require.Len(t, e.Choices, 1)
+		require.Equal(t, model.RoleTool, e.Choices[0].Delta.Role)
+		require.Equal(t, "call-xyz", e.Choices[0].Delta.ToolID)
 		require.Equal(t, "call-xyz", e.Choices[0].Message.ToolID)
 	}
+	require.Equal(t, "hello", evts[0].Choices[0].Delta.Content)
+	require.Equal(t, " world", evts[1].Choices[0].Delta.Content)
 }
 
 func TestExecuteCallableTool_ErrorWrap(t *testing.T) {

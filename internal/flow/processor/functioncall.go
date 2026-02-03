@@ -1381,7 +1381,7 @@ func (f *FunctionCallResponseProcessor) buildPartialToolResponseEvent(
 		Choices: []model.Choice{{
 			Index:   0,
 			Message: model.Message{Role: model.RoleTool, ToolID: toolCall.ID},
-			Delta:   model.Message{Content: text},
+			Delta:   model.Message{Role: model.RoleTool, Content: text, ToolID: toolCall.ID},
 		}},
 		Timestamp: time.Now(),
 		Done:      false,
