@@ -382,32 +382,47 @@ func TraceAfterInvokeAgent(span trace.Span, rspEvent *event.Event, tokenUsage *T
 	}
 }
 
+// TraceChatAttribute contains TraceChat inputs other than span.
+//
+// It is used to keep TraceChat signatures stable as parameters evolve.
+type TraceChatAttribute struct {
+	Invocation       *agent.Invocation
+	Request          *model.Request
+	Response         *model.Response
+	EventID          string
+	TimeToFirstToken time.Duration
+}
+
 // TraceChat traces the invocation of an LLM call.
-func TraceChat(span trace.Span, invoke *agent.Invocation, req *model.Request, rsp *model.Response, eventID string, timeToFirstToken time.Duration) {
+func TraceChat(span trace.Span, params *TraceChatAttribute) {
+	if params == nil {
+		return
+	}
+
 	attrs := []attribute.KeyValue{
 		attribute.String(KeyGenAISystem, SystemTRPCGoAgent),
 		attribute.String(KeyGenAIOperationName, OperationChat),
-		attribute.String(KeyEventID, eventID),
+		attribute.String(KeyEventID, params.EventID),
 	}
-	if timeToFirstToken > 0 {
-		attrs = append(attrs, attribute.Float64(KeyTRPCAgentGoClientTimeToFirstToken, timeToFirstToken.Seconds()))
+	if params.TimeToFirstToken > 0 {
+		attrs = append(attrs, attribute.Float64(KeyTRPCAgentGoClientTimeToFirstToken, params.TimeToFirstToken.Seconds()))
 	}
 
 	// Add invocation attributes
-	attrs = append(attrs, buildInvocationAttributes(invoke)...)
+	attrs = append(attrs, buildInvocationAttributes(params.Invocation)...)
 
 	// Add request attributes
-	attrs = append(attrs, buildRequestAttributes(req)...)
+	attrs = append(attrs, buildRequestAttributes(params.Request)...)
 
 	// Add response attributes
-	attrs = append(attrs, buildResponseAttributes(rsp)...)
+	attrs = append(attrs, buildResponseAttributes(params.Response)...)
 
 	// Set all attributes at once
 	span.SetAttributes(attrs...)
 
 	// Handle response error status
-	if rsp != nil && rsp.Error != nil {
-		span.SetStatus(codes.Error, rsp.Error.Message)
+	if params.Response != nil && params.Response.Error != nil {
+		span.SetStatus(codes.Error, params.Response.Error.Message)
 	}
 }
 

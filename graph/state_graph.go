@@ -2948,7 +2948,13 @@ func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (a
 		}
 		if lastEvent != nil {
 			tracker.SetLastEvent(lastEvent)
-			itelemetry.TraceChat(config.Span, invocation, config.Request, response, lastEvent.ID, tracker.FirstTokenTimeDuration())
+			itelemetry.TraceChat(config.Span, &itelemetry.TraceChatAttribute{
+				Invocation:       invocation,
+				Request:          config.Request,
+				Response:         response,
+				EventID:          lastEvent.ID,
+				TimeToFirstToken: tracker.FirstTokenTimeDuration(),
+			})
 		}
 
 		if len(response.Choices) > 0 && len(response.Choices[0].Message.ToolCalls) > 0 {
