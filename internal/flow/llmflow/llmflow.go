@@ -314,7 +314,13 @@ func (f *Flow) processStreamingResponses(
 			return lastEvent, err
 		}
 
-		itelemetry.TraceChat(span, invocation, llmRequest, response, llmResponseEvent.ID, tracker.FirstTokenTimeDuration())
+		itelemetry.TraceChat(span, &itelemetry.TraceChatAttributes{
+			Invocation:       invocation,
+			Request:          llmRequest,
+			Response:         response,
+			EventID:          llmResponseEvent.ID,
+			TimeToFirstToken: tracker.FirstTokenTimeDuration(),
+		})
 	}
 
 	return lastEvent, nil
