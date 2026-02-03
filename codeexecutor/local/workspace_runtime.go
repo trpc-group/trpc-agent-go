@@ -523,6 +523,44 @@ func (r *Runtime) Collect(
 	return out, nil
 }
 
+const (
+	inputSchemeArtifact  = "artifact://"
+	inputSchemeHost      = "host://"
+	inputSchemeWorkspace = "workspace://"
+	inputSchemeSkill     = "skill://"
+)
+
+func pinnedArtifactVersion(
+	md codeexecutor.WorkspaceMetadata,
+	name string,
+	to string,
+) *int {
+	if strings.TrimSpace(name) == "" || strings.TrimSpace(to) == "" {
+		return nil
+	}
+	for i := len(md.Inputs) - 1; i >= 0; i-- {
+		rec := md.Inputs[i]
+		if rec.To != to {
+			continue
+		}
+		if rec.Version == nil {
+			continue
+		}
+		if rec.Resolved == name {
+			return rec.Version
+		}
+		if !strings.HasPrefix(rec.From, inputSchemeArtifact) {
+			continue
+		}
+		ref := strings.TrimPrefix(rec.From, inputSchemeArtifact)
+		rname, _, err := codeexecutor.ParseArtifactRef(ref)
+		if err == nil && rname == name {
+			return rec.Version
+		}
+	}
+	return nil
+}
+
 // StageInputs maps external inputs into the workspace.
 func (r *Runtime) StageInputs(
 	ctx context.Context,
@@ -538,76 +576,16 @@ func (r *Runtime) StageInputs(
 		if mode == "" {
 			mode = "copy"
 		}
-		to := sp.To
-		if strings.TrimSpace(to) == "" {
+		to := strings.TrimSpace(sp.To)
+		if to == "" {
 			base := inputDefaultName(sp.From)
 			to = filepath.Join(
 				codeexecutor.DirWork, "inputs", base,
 			)
 		}
-		var err error
-		var resolved string
-		var ver *int
-		switch {
-		case strings.HasPrefix(sp.From, "artifact://"):
-			name := strings.TrimPrefix(sp.From, "artifact://")
-			aname, aver, perr := codeexecutor.ParseArtifactRef(name)
-			if perr != nil {
-				return perr
-			}
-			data, _, actual, lerr := codeexecutor.LoadArtifactHelper(
-				ctx, aname, aver,
-			)
-			if lerr != nil {
-				return lerr
-			}
-			resolved = aname
-			if aver != nil {
-				v := *aver
-				ver = &v
-			} else {
-				v := actual
-				ver = &v
-			}
-			err = r.writeFileSafe(ws.Path, codeexecutor.PutFile{
-				Path:    to,
-				Content: data,
-				Mode:    defaultFileMode,
-			})
-		case strings.HasPrefix(sp.From, "host://"):
-			host := strings.TrimPrefix(sp.From, "host://")
-			resolved = host
-			if mode == "link" {
-				err = makeSymlink(ws.Path, to, host)
-			} else {
-				err = r.PutDirectory(ctx, ws, host,
-					filepath.Dir(to))
-			}
-		case strings.HasPrefix(sp.From, "workspace://"):
-			rel := strings.TrimPrefix(sp.From, "workspace://")
-			src := filepath.Join(ws.Path, filepath.Clean(rel))
-			resolved = rel
-			if mode == "link" {
-				err = makeSymlink(ws.Path, to, src)
-			} else {
-				err = copyPath(src,
-					filepath.Join(ws.Path, filepath.Clean(to)))
-			}
-		case strings.HasPrefix(sp.From, "skill://"):
-			rest := strings.TrimPrefix(sp.From, "skill://")
-			src := filepath.Join(
-				ws.Path, codeexecutor.DirSkills, filepath.Clean(rest),
-			)
-			resolved = src
-			if mode == "link" {
-				err = makeSymlink(ws.Path, to, src)
-			} else {
-				err = copyPath(src,
-					filepath.Join(ws.Path, filepath.Clean(to)))
-			}
-		default:
-			return fmt.Errorf("unsupported input: %s", sp.From)
-		}
+		resolved, ver, err := r.stageInput(
+			ctx, ws, md, sp, mode, to,
+		)
 		if err != nil {
 			return err
 		}
@@ -621,6 +599,77 @@ func (r *Runtime) StageInputs(
 		})
 	}
 	return codeexecutor.SaveMetadata(ws.Path, md)
+}
+
+func (r *Runtime) stageInput(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	md codeexecutor.WorkspaceMetadata,
+	sp codeexecutor.InputSpec,
+	mode string,
+	to string,
+) (string, *int, error) {
+	switch {
+	case strings.HasPrefix(sp.From, inputSchemeArtifact):
+		name := strings.TrimPrefix(sp.From, inputSchemeArtifact)
+		aname, aver, err := codeexecutor.ParseArtifactRef(name)
+		if err != nil {
+			return "", nil, err
+		}
+		useVer := aver
+		if useVer == nil && sp.Pin {
+			useVer = pinnedArtifactVersion(md, aname, to)
+		}
+		data, _, actual, err := codeexecutor.LoadArtifactHelper(
+			ctx, aname, useVer,
+		)
+		if err != nil {
+			return "", nil, err
+		}
+		ver := useVer
+		if ver == nil {
+			v := actual
+			ver = &v
+		} else {
+			v := *ver
+			ver = &v
+		}
+		err = r.writeFileSafe(ws.Path, codeexecutor.PutFile{
+			Path:    to,
+			Content: data,
+			Mode:    defaultFileMode,
+		})
+		return aname, ver, err
+	case strings.HasPrefix(sp.From, inputSchemeHost):
+		host := strings.TrimPrefix(sp.From, inputSchemeHost)
+		if mode == "link" {
+			return host, nil, makeSymlink(ws.Path, to, host)
+		}
+		err := r.PutDirectory(ctx, ws, host, filepath.Dir(to))
+		return host, nil, err
+	case strings.HasPrefix(sp.From, inputSchemeWorkspace):
+		rel := strings.TrimPrefix(sp.From, inputSchemeWorkspace)
+		src := filepath.Join(ws.Path, filepath.Clean(rel))
+		if mode == "link" {
+			return rel, nil, makeSymlink(ws.Path, to, src)
+		}
+		err := copyPath(src,
+			filepath.Join(ws.Path, filepath.Clean(to)))
+		return rel, nil, err
+	case strings.HasPrefix(sp.From, inputSchemeSkill):
+		rest := strings.TrimPrefix(sp.From, inputSchemeSkill)
+		src := filepath.Join(
+			ws.Path, codeexecutor.DirSkills, filepath.Clean(rest),
+		)
+		if mode == "link" {
+			return src, nil, makeSymlink(ws.Path, to, src)
+		}
+		err := copyPath(src,
+			filepath.Join(ws.Path, filepath.Clean(to)))
+		return src, nil, err
+	default:
+		return "", nil, fmt.Errorf("unsupported input: %s", sp.From)
+	}
 }
 
 // CollectOutputs implements the declarative collector with limits.
