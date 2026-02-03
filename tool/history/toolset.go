@@ -40,8 +40,8 @@ func NewToolSet() *ToolSet {
 	return &ToolSet{
 		name: "history",
 		tools: []tool.Tool{
-			NewSearchTool(),
-			NewGetEventsTool(),
+			newSearchTool(),
+			newGetEventsTool(),
 		},
 	}
 }

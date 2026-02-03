@@ -23,16 +23,16 @@ const (
 	GetEventsToolName = "get_history_events"
 )
 
-// GetEventsArgs is the JSON argument payload for get_history_events.
-type GetEventsArgs struct {
+// getEventsArgs is the JSON argument payload for get_history_events.
+type getEventsArgs struct {
 	// EventIDs are the event IDs to retrieve.
 	EventIDs []string `json:"eventIds"`
 	// MaxChars is the requested max characters per event content. The server will clamp it.
 	MaxChars int `json:"maxChars,omitempty"`
 }
 
-// HistoryEvent is a bounded view of a single session event.
-type HistoryEvent struct {
+// historyEvent is a bounded view of a single session event.
+type historyEvent struct {
 	// EventID is the stable identifier of the event.
 	EventID string `json:"eventId"`
 	// TimestampMs is the unix-ms timestamp of the event.
@@ -47,26 +47,25 @@ type HistoryEvent struct {
 	TotalChars int `json:"totalChars"`
 }
 
-// GetEventsResult is the structured output of get_history_events.
-type GetEventsResult struct {
+// getEventsResult is the structured output of get_history_events.
+type getEventsResult struct {
 	// Success indicates whether the call succeeded.
 	Success bool `json:"success"`
 	// Message carries an error message when Success is false.
 	Message string `json:"message,omitempty"`
 	// Items are the retrieved events.
-	Items []HistoryEvent `json:"items,omitempty"`
+	Items []historyEvent `json:"items,omitempty"`
 	// BudgetRemaining is the remaining invocation-scoped budget snapshot.
-	BudgetRemaining *Budget `json:"budgetRemaining,omitempty"`
+	BudgetRemaining *budget `json:"budgetRemaining,omitempty"`
 }
 
-// GetEventsTool implements the get_history_events tool.
-type GetEventsTool struct{}
+// getEventsTool implements the get_history_events tool.
+type getEventsTool struct{}
 
-// NewGetEventsTool creates a new GetEventsTool.
-func NewGetEventsTool() *GetEventsTool { return &GetEventsTool{} }
+func newGetEventsTool() *getEventsTool { return &getEventsTool{} }
 
 // Declaration returns the tool declaration.
-func (t *GetEventsTool) Declaration() *tool.Declaration {
+func (t *getEventsTool) Declaration() *tool.Declaration {
 	schema := &tool.Schema{
 		Type: "object",
 		Properties: map[string]*tool.Schema{
@@ -90,18 +89,18 @@ func (t *GetEventsTool) Declaration() *tool.Declaration {
 }
 
 // Call executes the tool with JSON arguments.
-func (t *GetEventsTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
-	var args GetEventsArgs
+func (t *getEventsTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
+	var args getEventsArgs
 	if err := json.Unmarshal(jsonArgs, &args); err != nil {
-		return GetEventsResult{Success: false, Message: fmt.Sprintf("invalid args: %v", err)}, nil
+		return getEventsResult{Success: false, Message: fmt.Sprintf("invalid args: %v", err)}, nil
 	}
 	inv, ok := agent.InvocationFromContext(ctx)
 	if !ok || inv == nil || inv.Session == nil {
-		return GetEventsResult{Success: false, Message: "no session history available"}, nil
+		return getEventsResult{Success: false, Message: "no session history available"}, nil
 	}
 	budget := getOrInitBudget(inv)
 	if budget.GetCallsRemaining <= 0 {
-		return GetEventsResult{Success: false, Message: "history get budget exceeded", BudgetRemaining: budget}, nil
+		return getEventsResult{Success: false, Message: "history get budget exceeded", BudgetRemaining: budget}, nil
 	}
 
 	maxChars := clamp(args.MaxChars, 200, 3000)
@@ -124,7 +123,7 @@ func (t *GetEventsTool) Call(ctx context.Context, jsonArgs []byte) (any, error) 
 		}
 	}
 	if len(ids) == 0 {
-		return GetEventsResult{Success: false, Message: "eventIds is empty", BudgetRemaining: budget}, nil
+		return getEventsResult{Success: false, Message: "eventIds is empty", BudgetRemaining: budget}, nil
 	}
 
 	sess := inv.Session
@@ -135,7 +134,7 @@ func (t *GetEventsTool) Call(ctx context.Context, jsonArgs []byte) (any, error) 
 		byID[sess.Events[i].ID] = i
 	}
 
-	items := make([]HistoryEvent, 0, len(ids))
+	items := make([]historyEvent, 0, len(ids))
 	spent := 0
 	for _, id := range ids {
 		idx, ok := byID[id]
@@ -149,7 +148,7 @@ func (t *GetEventsTool) Call(ctx context.Context, jsonArgs []byte) (any, error) 
 		}
 		content, truncated := truncate(txt, maxChars)
 		spent += len(content)
-		items = append(items, HistoryEvent{
+		items = append(items, historyEvent{
 			EventID:     ev.ID,
 			TimestampMs: toUnixMs(ev.Timestamp),
 			Role:        role,
@@ -161,9 +160,9 @@ func (t *GetEventsTool) Call(ctx context.Context, jsonArgs []byte) (any, error) 
 	sess.EventMu.RUnlock()
 
 	if err := spendChars(budget, spent); err != nil {
-		return GetEventsResult{Success: false, Message: "history budget exceeded", BudgetRemaining: budget}, nil
+		return getEventsResult{Success: false, Message: "history budget exceeded", BudgetRemaining: budget}, nil
 	}
 	budget.GetCallsRemaining--
 
-	return GetEventsResult{Success: true, Items: items, BudgetRemaining: budget}, nil
+	return getEventsResult{Success: true, Items: items, BudgetRemaining: budget}, nil
 }

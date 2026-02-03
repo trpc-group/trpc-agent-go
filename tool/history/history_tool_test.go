@@ -62,11 +62,11 @@ func TestHistoryTools_SearchAndGet_WithBudgetAndTruncation(t *testing.T) {
 	inv := &agent.Invocation{Session: sess}
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 
-	search := NewSearchTool()
+	search := newSearchTool()
 	args, _ := json.Marshal(map[string]any{"query": "hello", "limit": 10, "maxChars": 50})
 	resAny, err := search.Call(ctx, args)
 	require.NoError(t, err)
-	res := resAny.(SearchResult)
+	res := resAny.(searchResult)
 	require.True(t, res.Success)
 	require.Len(t, res.Items, 1)
 	require.Equal(t, "e1", res.Items[0].EventID)
@@ -77,7 +77,7 @@ func TestHistoryTools_SearchAndGet_WithBudgetAndTruncation(t *testing.T) {
 	args2, _ := json.Marshal(map[string]any{"query": "x", "limit": 1, "maxChars": 100})
 	resAny2, err := search.Call(ctx, args2)
 	require.NoError(t, err)
-	res2 := resAny2.(SearchResult)
+	res2 := resAny2.(searchResult)
 	require.True(t, res2.Success)
 	require.Len(t, res2.Items, 1)
 	require.Equal(t, "e2", res2.Items[0].EventID)
@@ -86,11 +86,11 @@ func TestHistoryTools_SearchAndGet_WithBudgetAndTruncation(t *testing.T) {
 	// budget decremented again
 	require.Equal(t, 1, res2.BudgetRemaining.SearchCallsRemaining)
 
-	get := NewGetEventsTool()
+	get := newGetEventsTool()
 	getArgs, _ := json.Marshal(map[string]any{"eventIds": []string{"e2"}, "maxChars": 2000})
 	getAny, err := get.Call(ctx, getArgs)
 	require.NoError(t, err)
-	getRes := getAny.(GetEventsResult)
+	getRes := getAny.(getEventsResult)
 	require.True(t, getRes.Success)
 	require.Len(t, getRes.Items, 1)
 	require.Equal(t, "e2", getRes.Items[0].EventID)
@@ -107,11 +107,11 @@ func TestHistoryTools_BudgetExhausted(t *testing.T) {
 	b := getOrInitBudget(inv)
 	b.SearchCallsRemaining = 0
 
-	search := NewSearchTool()
+	search := newSearchTool()
 	args, _ := json.Marshal(map[string]any{"query": "hello"})
 	resAny, err := search.Call(ctx, args)
 	require.NoError(t, err)
-	res := resAny.(SearchResult)
+	res := resAny.(searchResult)
 	require.False(t, res.Success)
 	require.Contains(t, res.Message, "budget")
 }
@@ -124,7 +124,7 @@ func TestToolSet_Basics(t *testing.T) {
 }
 
 func TestSearchTool_DeclarationAndCursorParsing(t *testing.T) {
-	decl := NewSearchTool().Declaration()
+	decl := newSearchTool().Declaration()
 	require.NotNil(t, decl)
 	require.Equal(t, SearchToolName, decl.Name)
 	require.NotNil(t, decl.InputSchema)
@@ -154,9 +154,9 @@ func TestSearchTool_RolesAndTimeFiltering(t *testing.T) {
 		"limit":    10,
 		"maxChars": 80,
 	})
-	resAny, err := NewSearchTool().Call(ctx, args)
+	resAny, err := newSearchTool().Call(ctx, args)
 	require.NoError(t, err)
-	res := resAny.(SearchResult)
+	res := resAny.(searchResult)
 	require.True(t, res.Success)
 	require.Len(t, res.Items, 1)
 	require.Equal(t, "e2", res.Items[0].EventID)
@@ -186,12 +186,12 @@ func TestBudgetHelpers_StateAndSpend(t *testing.T) {
 	require.NoError(t, spendChars(nil, 10))
 	require.NoError(t, spendChars(b, 0))
 
-	b2 := &Budget{CharsRemaining: 3}
+	b2 := &budget{CharsRemaining: 3}
 	require.Error(t, spendChars(b2, 10))
 }
 
 func TestGetEventsTool_DeclarationAndValidation(t *testing.T) {
-	decl := NewGetEventsTool().Declaration()
+	decl := newGetEventsTool().Declaration()
 	require.NotNil(t, decl)
 	require.Equal(t, GetEventsToolName, decl.Name)
 	require.NotNil(t, decl.InputSchema)
@@ -201,9 +201,9 @@ func TestGetEventsTool_DeclarationAndValidation(t *testing.T) {
 	inv := &agent.Invocation{Session: sess}
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 
-	resAny, err := NewGetEventsTool().Call(ctx, []byte(`{"eventIds":[]}`))
+	resAny, err := newGetEventsTool().Call(ctx, []byte(`{"eventIds":[]}`))
 	require.NoError(t, err)
-	res := resAny.(GetEventsResult)
+	res := resAny.(getEventsResult)
 	require.False(t, res.Success)
 	require.Contains(t, res.Message, "empty")
 }
@@ -227,9 +227,9 @@ func TestGetEventsTool_DedupeClampAndBudgetChars(t *testing.T) {
 		"eventIds": []string{" e1 ", "e1", "e2", "e3", "e4"},
 		"maxChars": 200,
 	})
-	resAny, err := NewGetEventsTool().Call(ctx, args)
+	resAny, err := newGetEventsTool().Call(ctx, args)
 	require.NoError(t, err)
-	res := resAny.(GetEventsResult)
+	res := resAny.(getEventsResult)
 	require.False(t, res.Success)
 	require.Contains(t, res.Message, "budget")
 }

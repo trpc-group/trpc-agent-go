@@ -25,8 +25,8 @@ const (
 	SearchToolName = "search_history"
 )
 
-// SearchArgs is the JSON argument payload for search_history.
-type SearchArgs struct {
+// searchArgs is the JSON argument payload for search_history.
+type searchArgs struct {
 	// Query is a keyword query. Empty means no keyword filtering.
 	Query string `json:"query,omitempty"`
 	// Roles filters by message roles (e.g., user, assistant, tool).
@@ -43,8 +43,8 @@ type SearchArgs struct {
 	MaxChars int `json:"maxChars,omitempty"`
 }
 
-// SearchItem is a single search hit with a bounded snippet.
-type SearchItem struct {
+// searchItem is a single search hit with a bounded snippet.
+type searchItem struct {
 	// EventID is the stable identifier of the matched event.
 	EventID string `json:"eventId"`
 	// TimestampMs is the unix-ms timestamp of the event.
@@ -59,28 +59,27 @@ type SearchItem struct {
 	TotalChars int `json:"totalChars"`
 }
 
-// SearchResult is the structured output of search_history.
-type SearchResult struct {
+// searchResult is the structured output of search_history.
+type searchResult struct {
 	// Success indicates whether the call succeeded.
 	Success bool `json:"success"`
 	// Message carries an error message when Success is false.
 	Message string `json:"message,omitempty"`
 	// Items are the matched results.
-	Items []SearchItem `json:"items,omitempty"`
+	Items []searchItem `json:"items,omitempty"`
 	// NextCursor is the cursor for the next page.
 	NextCursor string `json:"nextCursor,omitempty"`
 	// BudgetRemaining is the remaining invocation-scoped budget snapshot.
-	BudgetRemaining *Budget `json:"budgetRemaining,omitempty"`
+	BudgetRemaining *budget `json:"budgetRemaining,omitempty"`
 }
 
-// SearchTool implements the search_history tool.
-type SearchTool struct{}
+// searchTool implements the search_history tool.
+type searchTool struct{}
 
-// NewSearchTool creates a new SearchTool.
-func NewSearchTool() *SearchTool { return &SearchTool{} }
+func newSearchTool() *searchTool { return &searchTool{} }
 
 // Declaration returns the tool declaration.
-func (t *SearchTool) Declaration() *tool.Declaration {
+func (t *searchTool) Declaration() *tool.Declaration {
 	schema := &tool.Schema{
 		Type: "object",
 		Properties: map[string]*tool.Schema{
@@ -108,20 +107,20 @@ func (t *SearchTool) Declaration() *tool.Declaration {
 }
 
 // Call executes the tool with JSON arguments.
-func (t *SearchTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
+func (t *searchTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 	args, err := parseSearchArgs(jsonArgs)
 	if err != nil {
-		return SearchResult{Success: false, Message: err.Error()}, nil
+		return searchResult{Success: false, Message: err.Error()}, nil
 	}
 
 	inv, ok := agent.InvocationFromContext(ctx)
 	if !ok || inv == nil || inv.Session == nil {
-		return SearchResult{Success: false, Message: "no session history available"}, nil
+		return searchResult{Success: false, Message: "no session history available"}, nil
 	}
 
 	budget := getOrInitBudget(inv)
 	if budget.SearchCallsRemaining <= 0 {
-		return SearchResult{Success: false, Message: "history search budget exceeded", BudgetRemaining: budget}, nil
+		return searchResult{Success: false, Message: "history search budget exceeded", BudgetRemaining: budget}, nil
 	}
 
 	limit := clamp(args.Limit, 1, 10)
@@ -133,11 +132,11 @@ func (t *SearchTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 	items, spentChars := filterSearchItems(events, roles, args.Query, args.SinceMs, args.UntilMs, offset, limit, maxChars)
 
 	if err := spendChars(budget, spentChars); err != nil {
-		return SearchResult{Success: false, Message: "history budget exceeded", BudgetRemaining: budget}, nil
+		return searchResult{Success: false, Message: "history budget exceeded", BudgetRemaining: budget}, nil
 	}
 	budget.SearchCallsRemaining--
 
-	return SearchResult{
+	return searchResult{
 		Success:         true,
 		Items:           items,
 		NextCursor:      buildNextCursor(offset, len(items), len(events)),
@@ -152,10 +151,10 @@ type toolEventView struct {
 	Text        string
 }
 
-func parseSearchArgs(jsonArgs []byte) (SearchArgs, error) {
-	var args SearchArgs
+func parseSearchArgs(jsonArgs []byte) (searchArgs, error) {
+	var args searchArgs
 	if err := json.Unmarshal(jsonArgs, &args); err != nil {
-		return SearchArgs{}, fmt.Errorf("invalid args: %v", err)
+		return searchArgs{}, fmt.Errorf("invalid args: %v", err)
 	}
 	return args, nil
 }
@@ -211,7 +210,7 @@ func filterSearchItems(
 	offset int,
 	limit int,
 	maxChars int,
-) ([]SearchItem, int) {
+) ([]searchItem, int) {
 	q := strings.TrimSpace(query)
 	qLower := strings.ToLower(q)
 
@@ -224,7 +223,7 @@ func filterSearchItems(
 		until = *untilMs
 	}
 
-	items := make([]SearchItem, 0, limit)
+	items := make([]searchItem, 0, limit)
 	spentChars := 0
 	for i := offset; i < len(events); i++ {
 		ev := events[i]
@@ -248,7 +247,7 @@ func filterSearchItems(
 
 		snippet, truncated := truncate(ev.Text, maxChars)
 		spentChars += len(snippet)
-		items = append(items, SearchItem{
+		items = append(items, searchItem{
 			EventID:     ev.ID,
 			TimestampMs: ev.TimestampMs,
 			Role:        ev.Role,

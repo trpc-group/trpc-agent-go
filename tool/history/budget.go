@@ -18,9 +18,9 @@ const (
 	invStateKeyBudget = "tool:history:budget"
 )
 
-// Budget keeps invocation-scoped limits for history tools.
+// budget keeps invocation-scoped limits for history tools.
 // It is stored on agent.Invocation state so it is naturally per-run.
-type Budget struct {
+type budget struct {
 	// SearchCallsRemaining is the remaining number of search_history calls.
 	SearchCallsRemaining int `json:"searchCallsRemaining"`
 	// GetCallsRemaining is the remaining number of get_history_events calls.
@@ -29,20 +29,20 @@ type Budget struct {
 	CharsRemaining int `json:"charsRemaining"`
 }
 
-func defaultBudget() *Budget {
-	return &Budget{
+func defaultBudget() *budget {
+	return &budget{
 		SearchCallsRemaining: 3,
 		GetCallsRemaining:    2,
 		CharsRemaining:       6000,
 	}
 }
 
-func getOrInitBudget(inv *agent.Invocation) *Budget {
+func getOrInitBudget(inv *agent.Invocation) *budget {
 	if inv == nil {
 		return defaultBudget()
 	}
 	if v, ok := inv.GetState(invStateKeyBudget); ok {
-		if b, ok2 := v.(*Budget); ok2 && b != nil {
+		if b, ok2 := v.(*budget); ok2 && b != nil {
 			return b
 		}
 	}
@@ -51,7 +51,7 @@ func getOrInitBudget(inv *agent.Invocation) *Budget {
 	return b
 }
 
-func spendChars(b *Budget, n int) error {
+func spendChars(b *budget, n int) error {
 	if b == nil {
 		return nil
 	}
