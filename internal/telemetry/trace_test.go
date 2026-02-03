@@ -230,7 +230,7 @@ func TestTraceFunctions_NoPanics(t *testing.T) {
 	}
 	req := &model.Request{}
 	resp := &model.Response{}
-	TraceChat(span, &TraceChatAttribute{
+	TraceChat(span, &TraceChatAttributes{
 		Invocation:       inv,
 		Request:          req,
 		Response:         resp,
@@ -281,7 +281,7 @@ func TestTraceBeforeAfter_Tool_Merged_Chat_Embedding(t *testing.T) {
 	inv2 := &agent.Invocation{InvocationID: "i1", Session: &session.Session{ID: "s1"}}
 	req := &model.Request{GenerationConfig: model.GenerationConfig{Stop: []string{"END"}}, Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}}}
 	s5 := newRecordingSpan()
-	TraceChat(s5, &TraceChatAttribute{
+	TraceChat(s5, &TraceChatAttributes{
 		Invocation:       inv2,
 		Request:          req,
 		Response:         &model.Response{ID: "rid"},
@@ -595,7 +595,7 @@ func TestTraceChat_WithTimeToFirstToken(t *testing.T) {
 	}
 
 	span := newRecordingSpan()
-	TraceChat(span, &TraceChatAttribute{
+	TraceChat(span, &TraceChatAttributes{
 		Invocation:       inv,
 		Request:          req,
 		Response:         rsp,
@@ -966,7 +966,7 @@ func TestTrace_AdditionalBranches(t *testing.T) {
 	// TraceChat with nil req and nil rsp
 	inv := &agent.Invocation{InvocationID: "invx"}
 	s4 := newRecordingSpan()
-	TraceChat(s4, &TraceChatAttribute{
+	TraceChat(s4, &TraceChatAttributes{
 		Invocation:       inv,
 		Request:          nil,
 		Response:         nil,
@@ -981,7 +981,7 @@ func TestTraceChat_WithChoicesAndError(t *testing.T) {
 	stop := "stop"
 	rsp := &model.Response{ID: "rid3", Model: "m3", Usage: &model.Usage{PromptTokens: 2, CompletionTokens: 3}, Choices: []model.Choice{{FinishReason: &stop}}, Error: &model.ResponseError{Message: "bad", Type: "api_error"}}
 	s := newRecordingSpan()
-	TraceChat(s, &TraceChatAttribute{
+	TraceChat(s, &TraceChatAttributes{
 		Invocation:       inv,
 		Request:          req,
 		Response:         rsp,

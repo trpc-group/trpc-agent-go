@@ -314,7 +314,7 @@ func (f *Flow) processStreamingResponses(
 			return lastEvent, err
 		}
 
-		itelemetry.TraceChat(span, &itelemetry.TraceChatAttribute{
+		itelemetry.TraceChat(span, &itelemetry.TraceChatAttributes{
 			Invocation:       invocation,
 			Request:          llmRequest,
 			Response:         response,

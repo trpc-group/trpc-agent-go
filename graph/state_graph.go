@@ -2948,7 +2948,7 @@ func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (a
 		}
 		if lastEvent != nil {
 			tracker.SetLastEvent(lastEvent)
-			itelemetry.TraceChat(config.Span, &itelemetry.TraceChatAttribute{
+			itelemetry.TraceChat(config.Span, &itelemetry.TraceChatAttributes{
 				Invocation:       invocation,
 				Request:          config.Request,
 				Response:         response,

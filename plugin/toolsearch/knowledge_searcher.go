@@ -119,7 +119,7 @@ func (s *knowledgeSearcher) rewriteQuery(ctx context.Context, query string) (con
 		final.Usage = &model.Usage{}
 	}
 	final.Usage.TimingInfo = timingInfo
-	itelemetry.TraceChat(span, &itelemetry.TraceChatAttribute{
+	itelemetry.TraceChat(span, &itelemetry.TraceChatAttributes{
 		Invocation:       invocation,
 		Request:          req,
 		Response:         final,

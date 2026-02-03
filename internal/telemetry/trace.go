@@ -382,10 +382,10 @@ func TraceAfterInvokeAgent(span trace.Span, rspEvent *event.Event, tokenUsage *T
 	}
 }
 
-// TraceChatAttribute contains TraceChat inputs other than span.
+// TraceChatAttributes contains TraceChat inputs other than span.
 //
 // It is used to keep TraceChat signatures stable as parameters evolve.
-type TraceChatAttribute struct {
+type TraceChatAttributes struct {
 	Invocation       *agent.Invocation
 	Request          *model.Request
 	Response         *model.Response
@@ -394,35 +394,38 @@ type TraceChatAttribute struct {
 }
 
 // TraceChat traces the invocation of an LLM call.
-func TraceChat(span trace.Span, params *TraceChatAttribute) {
-	if params == nil {
-		return
-	}
-
+func TraceChat(span trace.Span, attributes *TraceChatAttributes) {
 	attrs := []attribute.KeyValue{
 		attribute.String(KeyGenAISystem, SystemTRPCGoAgent),
 		attribute.String(KeyGenAIOperationName, OperationChat),
-		attribute.String(KeyEventID, params.EventID),
 	}
-	if params.TimeToFirstToken > 0 {
-		attrs = append(attrs, attribute.Float64(KeyTRPCAgentGoClientTimeToFirstToken, params.TimeToFirstToken.Seconds()))
+	if attributes == nil {
+		span.SetAttributes(attrs...)
+		return
+	}
+
+	if attributes.EventID != "" {
+		attrs = append(attrs, attribute.String(KeyEventID, attributes.EventID))
+	}
+	if attributes.TimeToFirstToken > 0 {
+		attrs = append(attrs, attribute.Float64(KeyTRPCAgentGoClientTimeToFirstToken, attributes.TimeToFirstToken.Seconds()))
 	}
 
 	// Add invocation attributes
-	attrs = append(attrs, buildInvocationAttributes(params.Invocation)...)
+	attrs = append(attrs, buildInvocationAttributes(attributes.Invocation)...)
 
 	// Add request attributes
-	attrs = append(attrs, buildRequestAttributes(params.Request)...)
+	attrs = append(attrs, buildRequestAttributes(attributes.Request)...)
 
 	// Add response attributes
-	attrs = append(attrs, buildResponseAttributes(params.Response)...)
+	attrs = append(attrs, buildResponseAttributes(attributes.Response)...)
 
 	// Set all attributes at once
 	span.SetAttributes(attrs...)
 
 	// Handle response error status
-	if params.Response != nil && params.Response.Error != nil {
-		span.SetStatus(codes.Error, params.Response.Error.Message)
+	if attributes.Response != nil && attributes.Response.Error != nil {
+		span.SetStatus(codes.Error, attributes.Response.Error.Message)
 	}
 }
 
