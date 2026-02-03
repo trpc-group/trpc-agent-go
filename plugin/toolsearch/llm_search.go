@@ -185,7 +185,13 @@ func trackAndTraceToolSearch(
 	final.Usage.TimingInfo = timingInfo
 	// Store usage in context
 	ctx = SetToolSearchUsage(ctx, final.Usage)
-	itelemetry.TraceChat(span, invocation, req, final, "", tracker.FirstTokenTimeDuration())
+	itelemetry.TraceChat(span, &itelemetry.TraceChatAttributes{
+		Invocation:       invocation,
+		Request:          req,
+		Response:         final,
+		EventID:          "",
+		TimeToFirstToken: tracker.FirstTokenTimeDuration(),
+	})
 	return ctx
 }
 
