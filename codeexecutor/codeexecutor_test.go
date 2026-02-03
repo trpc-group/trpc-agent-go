@@ -11,6 +11,7 @@
 package codeexecutor_test
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -139,6 +140,52 @@ func TestCodeExecutionResultString(t *testing.T) {
 			assert.Equal(t, tt.expected, tt.result.String())
 		})
 	}
+}
+
+func TestFileContentOmitEmpty(t *testing.T) {
+	const (
+		fileName             = "out.txt"
+		fileContent          = "hello"
+		fileSizeBytes  int64 = 10
+		jsonKeyContent       = "content"
+		jsonKeyName          = "name"
+		jsonKeySize          = "size_bytes"
+	)
+
+	t.Run("omits content when empty", func(t *testing.T) {
+		in := codeexecutor.File{
+			Name:      fileName,
+			SizeBytes: fileSizeBytes,
+		}
+
+		b, err := json.Marshal(in)
+		assert.NoError(t, err)
+
+		var got map[string]any
+		err = json.Unmarshal(b, &got)
+		assert.NoError(t, err)
+
+		_, ok := got[jsonKeyContent]
+		assert.False(t, ok)
+		assert.Equal(t, fileName, got[jsonKeyName])
+		assert.Equal(t, float64(fileSizeBytes), got[jsonKeySize])
+	})
+
+	t.Run("keeps content when non-empty", func(t *testing.T) {
+		in := codeexecutor.File{
+			Name:    fileName,
+			Content: fileContent,
+		}
+
+		b, err := json.Marshal(in)
+		assert.NoError(t, err)
+
+		var got map[string]any
+		err = json.Unmarshal(b, &got)
+		assert.NoError(t, err)
+
+		assert.Equal(t, fileContent, got[jsonKeyContent])
+	})
 }
 
 func TestIsTextMIME(t *testing.T) {
