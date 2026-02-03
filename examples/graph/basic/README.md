@@ -65,6 +65,16 @@ go run . -interactive
 go run . -model "gpt-4"
 ```
 
+### Provider compatibility: convert foreign tool messages
+
+Some OpenAI-like providers reject requests when the message history contains tool
+calls/responses but the current node does not declare the corresponding tools.
+Enable a compatibility mode that converts those tool messages into plain text:
+
+```bash
+go run . -convert_foreign_tool_messages
+```
+
 ## Runtime State Keys
 
 Important keys used by the example:

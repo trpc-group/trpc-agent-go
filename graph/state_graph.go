@@ -20,6 +20,7 @@ import (
 	"maps"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -147,6 +148,21 @@ func WithToolSets(toolSets []tool.ToolSet) Option {
 func WithRefreshToolSetsOnRun(refresh bool) Option {
 	return func(node *Node) {
 		node.refreshToolSetsOnRun = refresh
+	}
+}
+
+// WithConvertForeignToolMessages enables an opt-in compatibility mode that
+// converts tool calls and tool responses for tools not available to the
+// current LLM node into plain text before sending messages to the model.
+//
+// This can help with some OpenAI-like providers that reject requests when the
+// message history contains tool interactions that are not compatible with the
+// current request's tool set.
+//
+// Effective only for nodes added via AddLLMNode.
+func WithConvertForeignToolMessages(enable bool) Option {
+	return func(node *Node) {
+		node.convertForeignToolMessagesEnabled = enable
 	}
 }
 
@@ -495,6 +511,7 @@ func (sg *StateGraph) AddLLMNode(
 		WithLLMUserInputKey(node.userInputKey),
 		WithLLMRefreshToolSetsOnRun(node.refreshToolSetsOnRun),
 		WithLLMToolSets(node.toolSets),
+		WithLLMConvertForeignToolMessages(node.convertForeignToolMessagesEnabled),
 	}
 	if node.llmGenerationConfig != nil {
 		llmOptsForFunc = append(
@@ -905,6 +922,14 @@ func WithLLMRefreshToolSetsOnRun(refresh bool) LLMNodeFuncOption {
 	}
 }
 
+// WithLLMConvertForeignToolMessages enables conversion of foreign tool call
+// messages to plain text before sending to the model (compatibility mode).
+func WithLLMConvertForeignToolMessages(enable bool) LLMNodeFuncOption {
+	return func(runner *llmRunner) {
+		runner.convertForeignToolMessagesEnabled = enable
+	}
+}
+
 func mergeToolsWithToolSets(
 	ctx context.Context,
 	base map[string]tool.Tool,
@@ -1000,14 +1025,15 @@ func NewLLMNodeFunc(
 // llmRunner encapsulates LLM execution dependencies to avoid long parameter
 // lists.
 type llmRunner struct {
-	llmModel             model.Model
-	instruction          string
-	tools                map[string]tool.Tool
-	toolSets             []tool.ToolSet
-	refreshToolSetsOnRun bool
-	nodeID               string
-	generationConfig     model.GenerationConfig
-	userInputKey         string
+	llmModel                          model.Model
+	instruction                       string
+	tools                             map[string]tool.Tool
+	toolSets                          []tool.ToolSet
+	refreshToolSetsOnRun              bool
+	convertForeignToolMessagesEnabled bool
+	nodeID                            string
+	generationConfig                  model.GenerationConfig
+	userInputKey                      string
 }
 
 // execute implements the three-stage rule for LLM execution.
@@ -1161,6 +1187,97 @@ func (r *llmRunner) executeHistoryStage(ctx context.Context, state State, span o
 	return nil, nil
 }
 
+// convertForeignToolMessages converts ToolCalls and tool responses to text for tools not in r.tools.
+// When the LLM node has no tools, all tool-related messages are converted to plain text
+// to avoid API errors when message history contains tool interactions from other nodes.
+// This matches ContentRequestProcessor's convertForeignEvent behavior used by non-graph flows.
+//
+// Note: This conversion is only applied when WithConvertForeignToolMessages (or
+// WithLLMConvertForeignToolMessages) is enabled.
+func (r *llmRunner) convertForeignToolMessages(messages []model.Message, tools map[string]tool.Tool) []model.Message {
+	if len(messages) == 0 {
+		return messages
+	}
+
+	const contextPrefix = "For context:"
+
+	// Get set of tool names available to this node
+	availableToolNames := make(map[string]bool)
+	for name := range tools {
+		availableToolNames[name] = true
+	}
+
+	// First pass: collect tool call IDs that need conversion (tools not available to this node)
+	// Also track their matching tool response IDs
+	callIDsToConvert := make(map[string]bool)
+	for _, msg := range messages {
+		if msg.Role == model.RoleAssistant && len(msg.ToolCalls) > 0 {
+			for _, tc := range msg.ToolCalls {
+				if !availableToolNames[tc.Function.Name] {
+					callIDsToConvert[tc.ID] = true
+				}
+			}
+		}
+	}
+
+	// If nothing to convert and we have tools, return original messages
+	if len(callIDsToConvert) == 0 && len(tools) > 0 {
+		return messages
+	}
+
+	// Second pass: convert messages
+	result := make([]model.Message, 0, len(messages))
+	for _, msg := range messages {
+		if msg.Role == model.RoleAssistant && len(msg.ToolCalls) > 0 {
+			// Check if any tool calls need conversion
+			var convertedParts []string
+			var remainingToolCalls []model.ToolCall
+
+			for _, tc := range msg.ToolCalls {
+				if !availableToolNames[tc.Function.Name] {
+					convertedParts = append(convertedParts,
+						fmt.Sprintf("Tool `%s` called with parameters: %s",
+							tc.Function.Name, string(tc.Function.Arguments)))
+				} else {
+					remainingToolCalls = append(remainingToolCalls, tc)
+				}
+			}
+
+			if len(convertedParts) == 0 {
+				result = append(result, msg)
+				continue
+			}
+
+			kept := msg
+			kept.ToolCalls = remainingToolCalls
+			// Drop empty assistant messages after removing foreign tool calls
+			// to align with non-graph flows that rewrite foreign events as user context.
+			if kept.Content != "" ||
+				len(kept.ContentParts) > 0 ||
+				len(kept.ToolCalls) > 0 ||
+				kept.ReasoningContent != "" {
+				result = append(result, kept)
+			}
+
+			parts := append([]string{contextPrefix}, convertedParts...)
+			result = append(result, model.NewUserMessage(strings.Join(parts, " ")))
+		} else if msg.Role == model.RoleTool && (len(tools) == 0 || callIDsToConvert[msg.ToolID]) {
+			// Convert tool response to user message text
+			identifier := msg.ToolID
+			if identifier == "" {
+				identifier = msg.ToolName
+			}
+			result = append(result, model.NewUserMessage(
+				fmt.Sprintf("%s `%s` tool returned result: %s", contextPrefix, identifier, msg.Content),
+			))
+		} else {
+			result = append(result, msg)
+		}
+	}
+
+	return result
+}
+
 func (r *llmRunner) executeModel(
 	ctx context.Context,
 	state State,
@@ -1171,6 +1288,11 @@ func (r *llmRunner) executeModel(
 	tools := r.tools
 	if r.refreshToolSetsOnRun && len(r.toolSets) > 0 {
 		tools = mergeToolsWithToolSets(ctx, tools, r.toolSets)
+	}
+	if r.convertForeignToolMessagesEnabled {
+		// Convert foreign tool messages to text when this node has no tools or different tools.
+		// This prevents API errors when message history contains tool interactions from other nodes.
+		messages = r.convertForeignToolMessages(messages, tools)
 	}
 	nodeID := r.nodeID
 	if v, ok := state[StateKeyCurrentNodeID].(string); ok && v != "" {
