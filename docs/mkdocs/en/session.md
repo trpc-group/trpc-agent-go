@@ -1635,6 +1635,46 @@ Configure the summarizer behavior with the following options:
 - **`WithPrompt(prompt string)`**: Provide a custom summarization prompt. The prompt must include the placeholder `{conversation_text}`, which will be replaced with the conversation content. Optionally include `{max_summary_words}` for word limit instructions.
 - **`WithSkipRecent(skipFunc SkipRecentFunc)`**: Skip the _most recent_ events during summarization using a custom function. The function receives all events and returns how many tail events to skip. Return 0 to skip none. Useful for avoiding summarizing very recent/incomplete conversations, or applying time/content-based skipping strategies.
 
+#### Token Counter Configuration
+
+By default, `CheckTokenThreshold` uses a built-in `SimpleTokenCounter` to estimate tokens based on text length. If you need to customize the token counting behavior (e.g., using a more accurate tokenizer for specific models), you can use `summary.SetTokenCounter` to set a global token counter:
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/session/summary"
+)
+
+// Set custom token counter (affects all CheckTokenThreshold evaluations)
+summary.SetTokenCounter(model.NewSimpleTokenCounter())
+
+// Or use custom implementation
+type MyCustomCounter struct{}
+
+func (c *MyCustomCounter) CountTokens(ctx context.Context, message model.Message) (int, error) {
+    // Your custom token counting logic
+    // e.g., use tiktoken, huggingface tokenizer, etc.
+    return estimatedTokens, nil
+}
+
+summary.SetTokenCounter(&MyCustomCounter{})
+
+// Create summarizer with token threshold checker
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.CheckTokenThreshold(4000),  // Will use your custom counter
+)
+```
+
+**Important Notes:**
+
+- **Global Effect**: `SetTokenCounter` affects all `CheckTokenThreshold` evaluations in the current process. Set it once during application initialization.
+- **Default Counter**: If not set, a `SimpleTokenCounter` with default configuration is used (approx. 4 characters per token).
+- **Use Cases**:
+  - Use accurate tokenizers (tiktoken) when precise estimation is needed
+  - Adjust for language-specific models (Chinese models may have different token densities)
+  - Integrate with model-specific token counting APIs for better accuracy
+
 **Tool Call Formatting:**
 
 By default, the summarizer includes tool calls and tool results in the conversation text sent to the LLM for summarization. The default format is:
