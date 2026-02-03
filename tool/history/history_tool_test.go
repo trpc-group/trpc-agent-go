@@ -115,3 +115,121 @@ func TestHistoryTools_BudgetExhausted(t *testing.T) {
 	require.False(t, res.Success)
 	require.Contains(t, res.Message, "budget")
 }
+
+func TestToolSet_Basics(t *testing.T) {
+	ts := NewToolSet()
+	require.Equal(t, "history", ts.Name())
+	require.Len(t, ts.Tools(context.Background()), 2)
+	require.NoError(t, ts.Close())
+}
+
+func TestSearchTool_DeclarationAndCursorParsing(t *testing.T) {
+	decl := NewSearchTool().Declaration()
+	require.NotNil(t, decl)
+	require.Equal(t, SearchToolName, decl.Name)
+	require.NotNil(t, decl.InputSchema)
+	require.Equal(t, "object", decl.InputSchema.Type)
+
+	// base64("2")
+	require.Equal(t, 2, parseSearchCursor("Mg=="))
+	require.Equal(t, 3, parseSearchCursor("3"))
+	require.Equal(t, 0, parseSearchCursor("-10"))
+	require.Equal(t, 0, parseSearchCursor("not-a-number"))
+}
+
+func TestSearchTool_RolesAndTimeFiltering(t *testing.T) {
+	now := time.Now()
+	sess := newTestSessionWithEvents([]event.Event{
+		{ID: "e1", Timestamp: now.Add(-2 * time.Minute), Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello world"}}}}},
+		{ID: "e2", Timestamp: now.Add(-1 * time.Minute), Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "HELLO there"}}}}},
+	})
+	inv := &agent.Invocation{Session: sess}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	since := toUnixMs(now.Add(-90 * time.Second))
+	args, _ := json.Marshal(map[string]any{
+		"query":   "hello",
+		"roles":   []string{" assistant ", ""},
+		"sinceMs": since,
+		"limit":   10,
+		"maxChars": 80,
+	})
+	resAny, err := NewSearchTool().Call(ctx, args)
+	require.NoError(t, err)
+	res := resAny.(SearchResult)
+	require.True(t, res.Success)
+	require.Len(t, res.Items, 1)
+	require.Equal(t, "e2", res.Items[0].EventID)
+}
+
+func TestEventMessageText_ToolCallsFormatting(t *testing.T) {
+	e := event.Event{ID: "e1", Timestamp: time.Now(), Response: &model.Response{Choices: []model.Choice{{Message: model.Message{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{
+			{Type: "function", Function: model.FunctionDefinitionParam{Name: "search_history", Arguments: []byte("{\"query\":\"x\"}")}},
+			{Type: "function", Function: model.FunctionDefinitionParam{Name: "get_history_events"}},
+		},
+	}}}}}
+	role, txt := eventMessageText(e)
+	require.Equal(t, string(model.RoleAssistant), role)
+	require.Contains(t, txt, "search_history({\"query\":\"x\"})")
+	require.Contains(t, txt, "get_history_events()")
+}
+
+func TestBudgetHelpers_StateAndSpend(t *testing.T) {
+	inv := &agent.Invocation{}
+	inv.SetState(invStateKeyBudget, "not-a-budget")
+	b := getOrInitBudget(inv)
+	require.NotNil(t, b)
+	require.Greater(t, b.CharsRemaining, 0)
+
+	require.NoError(t, spendChars(nil, 10))
+	require.NoError(t, spendChars(b, 0))
+
+	b2 := &Budget{CharsRemaining: 3}
+	require.Error(t, spendChars(b2, 10))
+}
+
+func TestGetEventsTool_DeclarationAndValidation(t *testing.T) {
+	decl := NewGetEventsTool().Declaration()
+	require.NotNil(t, decl)
+	require.Equal(t, GetEventsToolName, decl.Name)
+	require.NotNil(t, decl.InputSchema)
+	require.Contains(t, decl.InputSchema.Required, "eventIds")
+
+	sess := newTestSessionWithEvents([]event.Event{msgEvent("e1", model.RoleUser, "hello")})
+	inv := &agent.Invocation{Session: sess}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	resAny, err := NewGetEventsTool().Call(ctx, []byte(`{"eventIds":[]}`))
+	require.NoError(t, err)
+	res := resAny.(GetEventsResult)
+	require.False(t, res.Success)
+	require.Contains(t, res.Message, "empty")
+}
+
+func TestGetEventsTool_DedupeClampAndBudgetChars(t *testing.T) {
+	large := strings.Repeat("y", 500)
+	sess := newTestSessionWithEvents([]event.Event{
+		toolResultEvent("e1", large, "tool-1"),
+		toolResultEvent("e2", large, "tool-2"),
+		toolResultEvent("e3", large, "tool-3"),
+		toolResultEvent("e4", large, "tool-4"),
+	})
+	inv := &agent.Invocation{Session: sess}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	// Force a tiny remaining budget so spending will fail.
+	b := getOrInitBudget(inv)
+	b.CharsRemaining = 10
+
+	args, _ := json.Marshal(map[string]any{
+		"eventIds": []string{" e1 ", "e1", "e2", "e3", "e4"},
+		"maxChars": 200,
+	})
+	resAny, err := NewGetEventsTool().Call(ctx, args)
+	require.NoError(t, err)
+	res := resAny.(GetEventsResult)
+	require.False(t, res.Success)
+	require.Contains(t, res.Message, "budget")
+}
