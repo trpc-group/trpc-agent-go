@@ -148,10 +148,10 @@ func TestSearchTool_RolesAndTimeFiltering(t *testing.T) {
 
 	since := toUnixMs(now.Add(-90 * time.Second))
 	args, _ := json.Marshal(map[string]any{
-		"query":   "hello",
-		"roles":   []string{" assistant ", ""},
-		"sinceMs": since,
-		"limit":   10,
+		"query":    "hello",
+		"roles":    []string{" assistant ", ""},
+		"sinceMs":  since,
+		"limit":    10,
 		"maxChars": 80,
 	})
 	resAny, err := NewSearchTool().Call(ctx, args)
