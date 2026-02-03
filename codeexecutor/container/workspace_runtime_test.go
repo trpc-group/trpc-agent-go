@@ -1147,6 +1147,171 @@ func TestStageInputs_ArtifactPinUsesPinnedVersion(t *testing.T) {
 	require.Equal(t, []string{"nil", "7"}, svc.loadVersions)
 }
 
+func TestStageInputs_ArtifactPinFromMetadata(t *testing.T) {
+	const to = "work/inputs/demo.txt"
+
+	intPtr := func(v int) *int { return &v }
+	md := codeexecutor.WorkspaceMetadata{
+		Version:   0,
+		CreatedAt: time.Time{},
+		Skills:    nil,
+		Inputs: []codeexecutor.InputRecord{{
+			From:      "artifact://demo.txt@1",
+			To:        to,
+			Resolved:  "other",
+			Version:   intPtr(3),
+			Mode:      "copy",
+			Timestamp: time.Time{},
+		}, {
+			From:      "artifact://demo.txt@bad",
+			To:        to,
+			Resolved:  "other",
+			Version:   intPtr(2),
+			Mode:      "copy",
+			Timestamp: time.Time{},
+		}, {
+			From:      "workspace://x",
+			To:        to,
+			Resolved:  "other",
+			Version:   intPtr(5),
+			Mode:      "copy",
+			Timestamp: time.Time{},
+		}, {
+			From:      "artifact://demo.txt@1",
+			To:        to,
+			Resolved:  "other",
+			Version:   nil,
+			Mode:      "copy",
+			Timestamp: time.Time{},
+		}, {
+			From:      "artifact://demo.txt@1",
+			To:        "work/inputs/other.txt",
+			Resolved:  "other",
+			Version:   intPtr(4),
+			Mode:      "copy",
+			Timestamp: time.Time{},
+		}},
+	}
+	buf, err := json.Marshal(md)
+	require.NoError(t, err)
+
+	ws := codeexecutor.Workspace{ID: "w-md",
+		Path: path.Join(testRunBase, "w-md")}
+
+	var execIdx int
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/exec"):
+			execIdx++
+			id := testExec1
+			if execIdx > 1 {
+				id = testExec2
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"` + id + `"}`))
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/start"):
+			hj, _ := w.(http.Hijacker)
+			conn, bw, _ := hj.Hijack()
+			list := ws.Path + "/" + codeexecutor.MetaFileName + "\n"
+			writeHijackStream(t, conn, bw, list, "")
+		case r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ExitCode":0}`))
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec2+"/start"):
+			hj, _ := w.(http.Hijacker)
+			conn, bw, _ := hj.Hijack()
+			writeHijackStream(t, conn, bw, "", "")
+		case r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec2+"/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ExitCode":0}`))
+		case r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/archive"):
+			w.Header().Set(
+				"X-Docker-Container-Path-Stat",
+				b64PathStat+b64PathStat2+b64PathStat3,
+			)
+			var tarBuf bytes.Buffer
+			tw := tar.NewWriter(&tarBuf)
+			_ = tw.WriteHeader(&tar.Header{
+				Name: codeexecutor.MetaFileName,
+				Mode: 0o600,
+				Size: int64(len(buf)),
+			})
+			_, _ = tw.Write(buf)
+			_ = tw.Close()
+			_, _ = w.Write(tarBuf.Bytes())
+		case r.Method == http.MethodPut &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/archive"):
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}
+
+	cli, cleanup := fakeDocker(t, handler)
+	defer cleanup()
+
+	svc := &pinnedArtifactService{}
+	ctx := codeexecutor.WithArtifactService(
+		context.Background(), svc,
+	)
+
+	rt := &workspaceRuntime{
+		ce: &CodeExecutor{
+			client:    cli,
+			container: &tcontainer.Summary{ID: testCID},
+		},
+		cfg: runtimeConfig{runContainerBase: testRunBase},
+	}
+	spec := codeexecutor.InputSpec{
+		From: "artifact://demo.txt",
+		To:   to,
+		Pin:  true,
+	}
+	err = rt.StageInputs(ctx, ws, []codeexecutor.InputSpec{spec})
+	require.NoError(t, err)
+	require.Equal(t, []string{"3"}, svc.loadVersions)
+}
+
+func TestStageInputs_LoadWorkspaceMetadataError(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/exec") {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+	}
+
+	cli, cleanup := fakeDocker(t, handler)
+	defer cleanup()
+
+	rt := &workspaceRuntime{
+		ce: &CodeExecutor{
+			client:    cli,
+			container: &tcontainer.Summary{ID: testCID},
+		},
+		cfg: runtimeConfig{runContainerBase: testRunBase},
+	}
+	ws := codeexecutor.Workspace{ID: "w-md-err",
+		Path: path.Join(testRunBase, "w-md-err")}
+	err := rt.StageInputs(context.Background(), ws, nil)
+	require.Error(t, err)
+}
+
 func TestStageInputs_AllBranches(t *testing.T) {
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		switch {

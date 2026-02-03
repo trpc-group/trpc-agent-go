@@ -255,6 +255,34 @@ func TestStageInputs_UnsupportedScheme(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestStageInputs_Artifact_InvalidRef(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(ctx, "in-bad-ref",
+		codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	const badRef = "artifact://bad@v1"
+	specs := []codeexecutor.InputSpec{{From: badRef}}
+	err = rt.StageInputs(ctx, ws, specs)
+	require.Error(t, err)
+}
+
+func TestStageInputs_Artifact_NoServiceInContext(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(ctx, "in-no-svc",
+		codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	const artRef = "artifact://demo.txt"
+	specs := []codeexecutor.InputSpec{{From: artRef}}
+	err = rt.StageInputs(ctx, ws, specs)
+	require.Error(t, err)
+}
+
 func TestCollectOutputs_SaveInlineTemplateAndLimits(t *testing.T) {
 	rt := local.NewRuntime("")
 	ctx := context.Background()
