@@ -1961,3 +1961,53 @@ func TestGraphNodeCustomEvents_EmptyStateDelta(t *testing.T) {
 	events = tr.graphNodeCustomEvents(evt2)
 	assert.Empty(t, events)
 }
+
+func TestStreamToolResultEvent(t *testing.T) {
+	tr := newTranslatorImplForTest(t)
+	if tr == nil {
+		return
+	}
+
+	chunkRsp1 := &model.Response{
+		ID:     "msg-1",
+		Object: string(model.ObjectTypeToolResponse),
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleTool, Content: "Hello", ToolID: "tool-1"},
+		}},
+	}
+	events, err := tr.Translate(context.Background(), &agentevent.Event{ID: "evt-1", Response: chunkRsp1})
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+	toolResultEvt, ok := events[0].(*aguievents.ToolCallResultEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "evt-1", toolResultEvt.MessageID)
+	assert.Equal(t, "tool-1", toolResultEvt.ToolCallID)
+	assert.Equal(t, "Hello", toolResultEvt.Content)
+	assert.Equal(t, "tool", *toolResultEvt.Role)
+	chunkRsp2 := &model.Response{
+		ID:     "msg-1",
+		Object: string(model.ObjectTypeToolResponse),
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleTool, Content: "", ToolID: "tool-1"},
+		}},
+	}
+	events, err = tr.Translate(context.Background(), &agentevent.Event{ID: "evt-2", Response: chunkRsp2})
+	assert.NoError(t, err)
+	assert.Len(t, events, 0)
+	chunkRsp3 := &model.Response{
+		ID:     "msg-1",
+		Object: string(model.ObjectTypeToolResponse),
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleTool, Content: "World", ToolID: "tool-1"},
+		}},
+	}
+	events, err = tr.Translate(context.Background(), &agentevent.Event{ID: "evt-3", Response: chunkRsp3})
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+	toolResultEvt, ok = events[0].(*aguievents.ToolCallResultEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "evt-3", toolResultEvt.MessageID)
+	assert.Equal(t, "tool-1", toolResultEvt.ToolCallID)
+	assert.Equal(t, "World", toolResultEvt.Content)
+	assert.Equal(t, "tool", *toolResultEvt.Role)
+}
