@@ -25,11 +25,14 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
 
+// DocIDGenerator provides thread-safe unique ID generation for document chunks.
 type DocIDGenerator struct {
 	nextID int
 	mu     sync.Mutex
 }
 
+// Next returns the next unique integer ID in a thread-safe manner.
+// It increments the internal counter and returns the new value.
 func (d *DocIDGenerator) Next() int {
 	d.mu.Lock()
 	defer d.mu.Unlock()
