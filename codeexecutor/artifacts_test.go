@@ -46,32 +46,41 @@ func TestArtifactHelpers_SaveAndLoad(t *testing.T) {
 		AppName: "app", UserID: "u", SessionID: "s",
 	})
 
-	data := []byte("abc")
-	ver, err := SaveArtifactHelper(ctx, "a.txt", data,
+	dataV0 := []byte("abc")
+	ver0, err := SaveArtifactHelper(ctx, "a.txt", dataV0,
 		"text/plain")
 	require.NoError(t, err)
-	// Services may use 0 for the latest; any value is acceptable.
-	_ = ver
+	dataV1 := []byte("def")
+	ver1, err := SaveArtifactHelper(ctx, "a.txt", dataV1,
+		"text/plain")
+	require.NoError(t, err)
 
 	// Load latest when version is nil.
 	out, mt, actual, err := LoadArtifactHelper(
 		ctx, "a.txt", nil,
 	)
 	require.NoError(t, err)
-	require.Equal(t, data, out)
+	require.Equal(t, dataV1, out)
 	// Mime type should be preserved.
 	require.Equal(t, "text/plain", mt)
-	// Helper returns 0 when version was nil.
-	require.Equal(t, 0, actual)
+	require.Equal(t, ver1, actual)
 
 	// Load a specific version.
 	out, mt, actual, err = LoadArtifactHelper(
-		ctx, "a.txt", &ver,
+		ctx, "a.txt", &ver0,
 	)
 	require.NoError(t, err)
-	require.Equal(t, data, out)
+	require.Equal(t, dataV0, out)
 	require.Equal(t, "text/plain", mt)
-	require.Equal(t, ver, actual)
+	require.Equal(t, ver0, actual)
+
+	out, mt, actual, err = LoadArtifactHelper(
+		ctx, "a.txt", &ver1,
+	)
+	require.NoError(t, err)
+	require.Equal(t, dataV1, out)
+	require.Equal(t, "text/plain", mt)
+	require.Equal(t, ver1, actual)
 
 	// Save without a session to exercise the nil-branch.
 	ctxNoSess := WithArtifactService(context.Background(), svc)

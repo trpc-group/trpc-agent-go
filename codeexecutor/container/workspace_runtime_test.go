@@ -163,6 +163,10 @@ func TestWorkspaceRuntime_CreateWorkspace_AutoMapsInputs(t *testing.T) {
 			w.Header().Set("Content-Type",
 				"application/json")
 			_, _ = w.Write([]byte(`{"ExitCode":0}`))
+		case r.Method == http.MethodPut &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/archive"):
+			w.WriteHeader(http.StatusOK)
 		default:
 			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
 		}
@@ -1022,6 +1026,117 @@ func (*artMem) ListVersions(
 	_ string,
 ) ([]int, error) {
 	return nil, nil
+}
+
+type pinnedArtifactService struct {
+	loadVersions []string
+}
+
+func (*pinnedArtifactService) SaveArtifact(
+	_ context.Context,
+	_ artifact.SessionInfo,
+	_ string,
+	_ *artifact.Artifact,
+) (int, error) {
+	return 0, nil
+}
+
+func (s *pinnedArtifactService) LoadArtifact(
+	_ context.Context,
+	_ artifact.SessionInfo,
+	_ string,
+	version *int,
+) (*artifact.Artifact, error) {
+	if version == nil {
+		s.loadVersions = append(s.loadVersions, "nil")
+	} else {
+		s.loadVersions = append(s.loadVersions, fmt.Sprint(*version))
+	}
+	return &artifact.Artifact{
+		Data:     []byte("A"),
+		MimeType: "text/plain",
+		Name:     "name",
+	}, nil
+}
+
+func (*pinnedArtifactService) ListArtifactKeys(
+	_ context.Context,
+	_ artifact.SessionInfo,
+) ([]string, error) {
+	return nil, nil
+}
+
+func (*pinnedArtifactService) DeleteArtifact(
+	_ context.Context,
+	_ artifact.SessionInfo,
+	_ string,
+) error {
+	return nil
+}
+
+func (*pinnedArtifactService) ListVersions(
+	_ context.Context,
+	_ artifact.SessionInfo,
+	_ string,
+) ([]int, error) {
+	return []int{7}, nil
+}
+
+func TestStageInputs_ArtifactPinUsesPinnedVersion(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/exec"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"` + testExec1 + `"}`))
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/start"):
+			hj, _ := w.(http.Hijacker)
+			conn, buf, _ := hj.Hijack()
+			writeHijackStream(t, conn, buf, "", "")
+		case r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ExitCode":0}`))
+		case r.Method == http.MethodPut &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/archive"):
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}
+	cli, cleanup := fakeDocker(t, handler)
+	defer cleanup()
+
+	svc := &pinnedArtifactService{}
+	ctx := codeexecutor.WithArtifactService(
+		context.Background(), svc,
+	)
+
+	rt := &workspaceRuntime{
+		ce: &CodeExecutor{
+			client:    cli,
+			container: &tcontainer.Summary{ID: testCID},
+		},
+		cfg: runtimeConfig{runContainerBase: testRunBase},
+	}
+	ws := codeexecutor.Workspace{ID: "w-pin",
+		Path: path.Join(testRunBase, "w-pin")}
+
+	spec := codeexecutor.InputSpec{
+		From: "artifact://demo.txt",
+		To:   "work/inputs/demo.txt",
+		Pin:  true,
+	}
+	err := rt.StageInputs(ctx, ws, []codeexecutor.InputSpec{
+		spec, spec,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"nil", "7"}, svc.loadVersions)
 }
 
 func TestStageInputs_AllBranches(t *testing.T) {

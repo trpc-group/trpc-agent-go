@@ -14,6 +14,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -529,8 +530,47 @@ func (r *workspaceRuntime) StageInputs(
 	ws codeexecutor.Workspace,
 	specs []codeexecutor.InputSpec,
 ) error {
+	const (
+		schemeArtifact  = "artifact://"
+		schemeHost      = "host://"
+		schemeWorkspace = "workspace://"
+		schemeSkill     = "skill://"
+
+		metadataFileMode = 0o600
+	)
+
 	if r.ce == nil || r.ce.client == nil || r.ce.container == nil {
 		return fmt.Errorf("container executor not ready")
+	}
+	md, err := r.loadWorkspaceMetadata(ctx, ws)
+	if err != nil {
+		return err
+	}
+	pinnedArtifactVersion := func(name string, to string) *int {
+		if strings.TrimSpace(name) == "" || strings.TrimSpace(to) == "" {
+			return nil
+		}
+		for i := len(md.Inputs) - 1; i >= 0; i-- {
+			rec := md.Inputs[i]
+			if rec.To != to {
+				continue
+			}
+			if rec.Version == nil {
+				continue
+			}
+			if rec.Resolved == name {
+				return rec.Version
+			}
+			if !strings.HasPrefix(rec.From, schemeArtifact) {
+				continue
+			}
+			ref := strings.TrimPrefix(rec.From, schemeArtifact)
+			rname, _, err := codeexecutor.ParseArtifactRef(ref)
+			if err == nil && rname == name {
+				return rec.Version
+			}
+		}
+		return nil
 	}
 	for _, sp := range specs {
 		mode := strings.ToLower(strings.TrimSpace(sp.Mode))
@@ -544,23 +584,38 @@ func (r *workspaceRuntime) StageInputs(
 		}
 		dest := path.Join(ws.Path, to)
 		var err error
+		var resolved string
+		var ver *int
 		switch {
-		case strings.HasPrefix(sp.From, "artifact://"):
-			name := strings.TrimPrefix(sp.From, "artifact://")
+		case strings.HasPrefix(sp.From, schemeArtifact):
+			name := strings.TrimPrefix(sp.From, schemeArtifact)
 			aname, aver, perr := codeexecutor.ParseArtifactRef(name)
 			if perr != nil {
 				return perr
 			}
-			data, _, _, lerr := codeexecutor.LoadArtifactHelper(
-				ctx, aname, aver,
+			useVer := aver
+			if useVer == nil && sp.Pin {
+				useVer = pinnedArtifactVersion(aname, to)
+			}
+			data, _, actual, lerr := codeexecutor.LoadArtifactHelper(
+				ctx, aname, useVer,
 			)
 			if lerr != nil {
 				return lerr
 			}
+			resolved = aname
+			if useVer != nil {
+				v := *useVer
+				ver = &v
+			} else {
+				v := actual
+				ver = &v
+			}
 			// Copy single file into container at dest.
 			err = r.copyBytesTo(ctx, dest, data, 0o644)
-		case strings.HasPrefix(sp.From, "host://"):
-			host := strings.TrimPrefix(sp.From, "host://")
+		case strings.HasPrefix(sp.From, schemeHost):
+			host := strings.TrimPrefix(sp.From, schemeHost)
+			resolved = host
 			// If under inputsHostBase, prefer symlink (zero-copy).
 			if r.cfg.inputsHostBase != "" {
 				if strings.HasPrefix(host,
@@ -594,8 +649,9 @@ func (r *workspaceRuntime) StageInputs(
 			}
 			// Fallback: tar copy host path to dest dir.
 			err = r.PutDirectory(ctx, ws, host, path.Dir(to))
-		case strings.HasPrefix(sp.From, "workspace://"):
-			rel := strings.TrimPrefix(sp.From, "workspace://")
+		case strings.HasPrefix(sp.From, schemeWorkspace):
+			rel := strings.TrimPrefix(sp.From, schemeWorkspace)
+			resolved = rel
 			src := path.Join(ws.Path, filepath.ToSlash(rel))
 			var cmd []string
 			if mode == "link" {
@@ -609,10 +665,11 @@ func (r *workspaceRuntime) StageInputs(
 			}
 			_, _, _, _, err = r.execCmd(ctx, cmd,
 				time.Duration(defaultStageTimeoutSec)*time.Second)
-		case strings.HasPrefix(sp.From, "skill://"):
-			rest := strings.TrimPrefix(sp.From, "skill://")
+		case strings.HasPrefix(sp.From, schemeSkill):
+			rest := strings.TrimPrefix(sp.From, schemeSkill)
 			src := path.Join(ws.Path, codeexecutor.DirSkills,
 				filepath.ToSlash(rest))
+			resolved = src
 			var cmd []string
 			if mode == "link" {
 				cmd = []string{"/bin/bash", "-lc",
@@ -631,8 +688,73 @@ func (r *workspaceRuntime) StageInputs(
 		if err != nil {
 			return err
 		}
+		md.Inputs = append(md.Inputs, codeexecutor.InputRecord{
+			From:      sp.From,
+			To:        to,
+			Resolved:  resolved,
+			Version:   ver,
+			Mode:      mode,
+			Timestamp: time.Now(),
+		})
 	}
-	return nil
+	now := time.Now()
+	if md.Version == 0 {
+		md.Version = 1
+	}
+	if md.CreatedAt.IsZero() {
+		md.CreatedAt = now
+	}
+	md.UpdatedAt = now
+	md.LastAccess = now
+	if md.Skills == nil {
+		md.Skills = map[string]codeexecutor.SkillMeta{}
+	}
+	buf, err := json.MarshalIndent(md, "", "  ")
+	if err != nil {
+		return err
+	}
+	return r.PutFiles(ctx, ws, []codeexecutor.PutFile{{
+		Path:    codeexecutor.MetaFileName,
+		Content: buf,
+		Mode:    metadataFileMode,
+	}})
+}
+
+func (r *workspaceRuntime) loadWorkspaceMetadata(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+) (codeexecutor.WorkspaceMetadata, error) {
+	now := time.Now()
+	md := codeexecutor.WorkspaceMetadata{
+		Version:    1,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+		LastAccess: now,
+		Skills:     map[string]codeexecutor.SkillMeta{},
+	}
+	files, err := r.Collect(
+		ctx, ws, []string{codeexecutor.MetaFileName},
+	)
+	if err != nil {
+		return md, err
+	}
+	if len(files) == 0 || strings.TrimSpace(files[0].Content) == "" {
+		return md, nil
+	}
+	if err := json.Unmarshal([]byte(files[0].Content), &md); err != nil {
+		return codeexecutor.WorkspaceMetadata{}, err
+	}
+	if md.Version == 0 {
+		md.Version = 1
+	}
+	if md.CreatedAt.IsZero() {
+		md.CreatedAt = now
+	}
+	md.LastAccess = now
+	if md.Skills == nil {
+		md.Skills = map[string]codeexecutor.SkillMeta{}
+	}
+	return md, nil
 }
 
 // CollectOutputs applies container-side glob and optional save.

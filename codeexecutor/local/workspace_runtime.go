@@ -529,10 +529,43 @@ func (r *Runtime) StageInputs(
 	ws codeexecutor.Workspace,
 	specs []codeexecutor.InputSpec,
 ) error {
+	const (
+		schemeArtifact  = "artifact://"
+		schemeHost      = "host://"
+		schemeWorkspace = "workspace://"
+		schemeSkill     = "skill://"
+	)
+
 	if _, err := codeexecutor.EnsureLayout(ws.Path); err != nil {
 		return err
 	}
 	md, _ := codeexecutor.LoadMetadata(ws.Path)
+	pinnedArtifactVersion := func(name string, to string) *int {
+		if strings.TrimSpace(name) == "" || strings.TrimSpace(to) == "" {
+			return nil
+		}
+		for i := len(md.Inputs) - 1; i >= 0; i-- {
+			rec := md.Inputs[i]
+			if rec.To != to {
+				continue
+			}
+			if rec.Version == nil {
+				continue
+			}
+			if rec.Resolved == name {
+				return rec.Version
+			}
+			if !strings.HasPrefix(rec.From, schemeArtifact) {
+				continue
+			}
+			ref := strings.TrimPrefix(rec.From, schemeArtifact)
+			rname, _, err := codeexecutor.ParseArtifactRef(ref)
+			if err == nil && rname == name {
+				return rec.Version
+			}
+		}
+		return nil
+	}
 	for _, sp := range specs {
 		mode := strings.ToLower(strings.TrimSpace(sp.Mode))
 		if mode == "" {
@@ -549,21 +582,25 @@ func (r *Runtime) StageInputs(
 		var resolved string
 		var ver *int
 		switch {
-		case strings.HasPrefix(sp.From, "artifact://"):
-			name := strings.TrimPrefix(sp.From, "artifact://")
+		case strings.HasPrefix(sp.From, schemeArtifact):
+			name := strings.TrimPrefix(sp.From, schemeArtifact)
 			aname, aver, perr := codeexecutor.ParseArtifactRef(name)
 			if perr != nil {
 				return perr
 			}
+			useVer := aver
+			if useVer == nil && sp.Pin {
+				useVer = pinnedArtifactVersion(aname, to)
+			}
 			data, _, actual, lerr := codeexecutor.LoadArtifactHelper(
-				ctx, aname, aver,
+				ctx, aname, useVer,
 			)
 			if lerr != nil {
 				return lerr
 			}
 			resolved = aname
-			if aver != nil {
-				v := *aver
+			if useVer != nil {
+				v := *useVer
 				ver = &v
 			} else {
 				v := actual
@@ -574,8 +611,8 @@ func (r *Runtime) StageInputs(
 				Content: data,
 				Mode:    defaultFileMode,
 			})
-		case strings.HasPrefix(sp.From, "host://"):
-			host := strings.TrimPrefix(sp.From, "host://")
+		case strings.HasPrefix(sp.From, schemeHost):
+			host := strings.TrimPrefix(sp.From, schemeHost)
 			resolved = host
 			if mode == "link" {
 				err = makeSymlink(ws.Path, to, host)
@@ -583,8 +620,8 @@ func (r *Runtime) StageInputs(
 				err = r.PutDirectory(ctx, ws, host,
 					filepath.Dir(to))
 			}
-		case strings.HasPrefix(sp.From, "workspace://"):
-			rel := strings.TrimPrefix(sp.From, "workspace://")
+		case strings.HasPrefix(sp.From, schemeWorkspace):
+			rel := strings.TrimPrefix(sp.From, schemeWorkspace)
 			src := filepath.Join(ws.Path, filepath.Clean(rel))
 			resolved = rel
 			if mode == "link" {
@@ -593,8 +630,8 @@ func (r *Runtime) StageInputs(
 				err = copyPath(src,
 					filepath.Join(ws.Path, filepath.Clean(to)))
 			}
-		case strings.HasPrefix(sp.From, "skill://"):
-			rest := strings.TrimPrefix(sp.From, "skill://")
+		case strings.HasPrefix(sp.From, schemeSkill):
+			rest := strings.TrimPrefix(sp.From, schemeSkill)
 			src := filepath.Join(
 				ws.Path, codeexecutor.DirSkills, filepath.Clean(rest),
 			)

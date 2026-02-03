@@ -196,6 +196,52 @@ func TestStageInputs_DefaultTo_Artifact(t *testing.T) {
 	require.Equal(t, "z", string(data))
 }
 
+func TestStageInputs_ArtifactPinReusesVersion(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(ctx, "in-pin",
+		codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	svc := inmemory.NewService()
+	ctxIO := codeexecutor.WithArtifactService(ctx, svc)
+	ctxIO = codeexecutor.WithArtifactSession(
+		ctxIO, artifact.SessionInfo{},
+	)
+
+	_, err = svc.SaveArtifact(ctx, artifact.SessionInfo{},
+		"demo.txt", &artifact.Artifact{Data: []byte("v0")})
+	require.NoError(t, err)
+	_, err = svc.SaveArtifact(ctx, artifact.SessionInfo{},
+		"demo.txt", &artifact.Artifact{Data: []byte("v1")})
+	require.NoError(t, err)
+
+	spec := []codeexecutor.InputSpec{{
+		From: "artifact://demo.txt",
+		To: filepath.Join(
+			codeexecutor.DirWork, "inputs", "demo.txt",
+		),
+		Pin: true,
+	}}
+	require.NoError(t, rt.StageInputs(ctxIO, ws, spec))
+	got, err := os.ReadFile(filepath.Join(
+		ws.Path, codeexecutor.DirWork, "inputs", "demo.txt",
+	))
+	require.NoError(t, err)
+	require.Equal(t, "v1", string(got))
+
+	_, err = svc.SaveArtifact(ctx, artifact.SessionInfo{},
+		"demo.txt", &artifact.Artifact{Data: []byte("v2")})
+	require.NoError(t, err)
+	require.NoError(t, rt.StageInputs(ctxIO, ws, spec))
+	got, err = os.ReadFile(filepath.Join(
+		ws.Path, codeexecutor.DirWork, "inputs", "demo.txt",
+	))
+	require.NoError(t, err)
+	require.Equal(t, "v1", string(got))
+}
+
 func TestStageInputs_UnsupportedScheme(t *testing.T) {
 	rt := local.NewRuntime("")
 	ctx := context.Background()
