@@ -495,6 +495,9 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 				msg := choice.Message
 				// Apply reasoning content stripping based on mode.
 				msg = p.processReasoningContent(msg, evt.RequestID, currentRequestID)
+				if isEmptyAssistantMessage(msg) {
+					continue
+				}
 				messages = append(messages, msg)
 			}
 		}
@@ -539,6 +542,16 @@ func (p *ContentRequestProcessor) processReasoningContent(
 		}
 	}
 	return msg
+}
+
+func isEmptyAssistantMessage(msg model.Message) bool {
+	if msg.Role != model.RoleAssistant {
+		return false
+	}
+	return msg.Content == "" &&
+		len(msg.ContentParts) == 0 &&
+		len(msg.ToolCalls) == 0 &&
+		msg.ReasoningContent == ""
 }
 
 // getCurrentInvocationMessages gets messages only from the current invocation.
@@ -603,6 +616,9 @@ func (p *ContentRequestProcessor) getCurrentInvocationMessages(inv *agent.Invoca
 			for _, choice := range ev.Choices {
 				msg := choice.Message
 				msg = p.processReasoningContent(msg, evt.RequestID, currentRequestID)
+				if isEmptyAssistantMessage(msg) {
+					continue
+				}
 				messages = append(messages, msg)
 			}
 		}
