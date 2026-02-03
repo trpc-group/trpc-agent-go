@@ -195,7 +195,15 @@ func TestWorkspaceRuntime_CreateWorkspace_AutoMapsInputs(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, ws.Path)
 	require.GreaterOrEqual(t, len(cmds), 2)
-	linkCmd := strings.Join(cmds[1], " ")
+	var linkCmd string
+	for _, c := range cmds {
+		s := strings.Join(c, " ")
+		if strings.Contains(s, "ln -sfn") {
+			linkCmd = s
+			break
+		}
+	}
+	require.NotEmpty(t, linkCmd)
 	require.Contains(t, linkCmd, "ln -sfn")
 	require.Contains(t, linkCmd, defaultInputsContainer)
 	require.Contains(t, linkCmd, path.Join(
