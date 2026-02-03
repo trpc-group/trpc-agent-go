@@ -109,14 +109,16 @@ func (t *SearchTool) Declaration() *tool.Declaration {
 
 // Call executes the tool with JSON arguments.
 func (t *SearchTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
-	var args SearchArgs
-	if err := json.Unmarshal(jsonArgs, &args); err != nil {
-		return SearchResult{Success: false, Message: fmt.Sprintf("invalid args: %v", err)}, nil
+	args, err := parseSearchArgs(jsonArgs)
+	if err != nil {
+		return SearchResult{Success: false, Message: err.Error()}, nil
 	}
+
 	inv, ok := agent.InvocationFromContext(ctx)
 	if !ok || inv == nil || inv.Session == nil {
 		return SearchResult{Success: false, Message: "no session history available"}, nil
 	}
+
 	budget := getOrInitBudget(inv)
 	if budget.SearchCallsRemaining <= 0 {
 		return SearchResult{Success: false, Message: "history search budget exceeded", BudgetRemaining: budget}, nil
@@ -124,36 +126,72 @@ func (t *SearchTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 
 	limit := clamp(args.Limit, 1, 10)
 	maxChars := clamp(args.MaxChars, 50, 500)
+	offset := parseSearchCursor(args.Cursor)
+	roles := normalizeRoles(args.Roles)
 
-	roles := make(map[string]struct{}, len(args.Roles))
-	for _, r := range args.Roles {
+	events := snapshotEvents(inv)
+	items, spentChars := filterSearchItems(events, roles, args.Query, args.SinceMs, args.UntilMs, offset, limit, maxChars)
+
+	if err := spendChars(budget, spentChars); err != nil {
+		return SearchResult{Success: false, Message: "history budget exceeded", BudgetRemaining: budget}, nil
+	}
+	budget.SearchCallsRemaining--
+
+	return SearchResult{
+		Success:         true,
+		Items:           items,
+		NextCursor:      buildNextCursor(offset, len(items), len(events)),
+		BudgetRemaining: budget,
+	}, nil
+}
+
+type toolEventView struct {
+	ID          string
+	TimestampMs int64
+	Role        string
+	Text        string
+}
+
+func parseSearchArgs(jsonArgs []byte) (SearchArgs, error) {
+	var args SearchArgs
+	if err := json.Unmarshal(jsonArgs, &args); err != nil {
+		return SearchArgs{}, fmt.Errorf("invalid args: %v", err)
+	}
+	return args, nil
+}
+
+func normalizeRoles(rs []string) map[string]struct{} {
+	roles := make(map[string]struct{}, len(rs))
+	for _, r := range rs {
 		r = strings.TrimSpace(r)
 		if r != "" {
 			roles[r] = struct{}{}
 		}
 	}
+	return roles
+}
 
-	// Cursor: base64 encoded integer offset.
-	offset := 0
-	if args.Cursor != "" {
-		if b, err := base64.StdEncoding.DecodeString(args.Cursor); err == nil {
-			if n, err2 := strconv.Atoi(string(b)); err2 == nil {
-				offset = n
-			}
-		}
-		// Fallback: try plain int.
-		if offset == 0 {
-			if n, err := strconv.Atoi(args.Cursor); err == nil {
-				offset = n
-			}
-		}
-		if offset < 0 {
-			offset = 0
+// parseSearchCursor parses a cursor string into an integer offset.
+func parseSearchCursor(cursor string) int {
+	if cursor == "" {
+		return 0
+	}
+	if b, err := base64.StdEncoding.DecodeString(cursor); err == nil {
+		if n, err2 := strconv.Atoi(string(b)); err2 == nil {
+			return maxInt(0, n)
 		}
 	}
+	if n, err := strconv.Atoi(cursor); err == nil {
+		return maxInt(0, n)
+	}
+	return 0
+}
 
+func snapshotEvents(inv *agent.Invocation) []toolEventView {
 	sess := inv.Session
 	sess.EventMu.RLock()
+	defer sess.EventMu.RUnlock()
+
 	events := make([]toolEventView, 0, len(sess.Events))
 	for i := range sess.Events {
 		e := sess.Events[i]
@@ -161,19 +199,31 @@ func (t *SearchTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 		ev.Role, ev.Text = eventMessageText(e)
 		events = append(events, ev)
 	}
-	sess.EventMu.RUnlock()
+	return events
+}
 
-	query := strings.TrimSpace(args.Query)
+func filterSearchItems(
+	events []toolEventView,
+	roles map[string]struct{},
+	query string,
+	sinceMs *int64,
+	untilMs *int64,
+	offset int,
+	limit int,
+	maxChars int,
+) ([]SearchItem, int) {
+	q := strings.TrimSpace(query)
+	qLower := strings.ToLower(q)
+
 	since := int64(0)
 	until := int64(0)
-	if args.SinceMs != nil {
-		since = *args.SinceMs
+	if sinceMs != nil {
+		since = *sinceMs
 	}
-	if args.UntilMs != nil {
-		until = *args.UntilMs
+	if untilMs != nil {
+		until = *untilMs
 	}
 
-	// Filter in chronological order.
 	items := make([]SearchItem, 0, limit)
 	spentChars := 0
 	for i := offset; i < len(events); i++ {
@@ -192,7 +242,7 @@ func (t *SearchTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 				continue
 			}
 		}
-		if query != "" && !strings.Contains(strings.ToLower(ev.Text), strings.ToLower(query)) {
+		if qLower != "" && !strings.Contains(strings.ToLower(ev.Text), qLower) {
 			continue
 		}
 
@@ -210,30 +260,21 @@ func (t *SearchTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 			break
 		}
 	}
-
-	if err := spendChars(budget, spentChars); err != nil {
-		return SearchResult{Success: false, Message: "history budget exceeded", BudgetRemaining: budget}, nil
-	}
-	budget.SearchCallsRemaining--
-
-	next := ""
-	if offset+len(items) < len(events) {
-		// Use plain int encoded in base64 to avoid tool hallucination issues.
-		b := []byte(fmt.Sprintf("%d", offset+len(items)))
-		next = base64.StdEncoding.EncodeToString(b)
-	}
-
-	return SearchResult{
-		Success:         true,
-		Items:           items,
-		NextCursor:      next,
-		BudgetRemaining: budget,
-	}, nil
+	return items, spentChars
 }
 
-type toolEventView struct {
-	ID          string
-	TimestampMs int64
-	Role        string
-	Text        string
+func buildNextCursor(offset, returned, total int) string {
+	nextOffset := offset + returned
+	if returned == 0 || nextOffset >= total {
+		return ""
+	}
+	b := []byte(fmt.Sprintf("%d", nextOffset))
+	return base64.StdEncoding.EncodeToString(b)
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
