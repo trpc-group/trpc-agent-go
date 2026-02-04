@@ -159,10 +159,7 @@ func (m *Model) handleStreamingResponse(
 	chatCompletion := m.client.Models().GenerateContentStream(
 		ctx, m.name, chatRequest, generateConfig)
 	acc := &Accumulator{}
-	chunkCount := 0
-	// iter.Seq2 returns (response, error) pairs - we must capture both!
 	for chunk, err := range chatCompletion {
-		chunkCount++
 		// Check for errors from the stream
 		if err != nil {
 			errorResponse := &model.Response{

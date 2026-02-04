@@ -148,11 +148,12 @@ func (f *fileToolSet) listFile(
 		} else {
 			rsp.Files = append(rsp.Files, entry.Name())
 			if req.WithSize {
-				info, _ := entry.Info()
-				rsp.FilesWithSize = append(rsp.FilesWithSize, fileInfo{
-					Name: entry.Name(),
-					Size: info.Size(),
-				})
+				if info, _ := entry.Info(); info != nil {
+					rsp.FilesWithSize = append(rsp.FilesWithSize, fileInfo{
+						Name: entry.Name(),
+						Size: info.Size(),
+					})
+				}
 			}
 		}
 	}

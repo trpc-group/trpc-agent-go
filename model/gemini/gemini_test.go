@@ -1099,6 +1099,17 @@ func TestModel_GenerateContentStreamingError(t *testing.T) {
 		assert.Equal(t, "stream connection failed", resp.Error.Message)
 		assert.Equal(t, model.ErrorTypeAPIError, resp.Error.Type)
 		assert.True(t, resp.Done)
+
+		// Verify channel is closed and no extra messages are delivered
+		select {
+		case extraMsg, ok := <-respChan:
+			if ok {
+				t.Errorf("unexpected extra message received after error: %+v", extraMsg)
+			}
+			// Channel closed as expected
+		case <-time.After(100 * time.Millisecond):
+			t.Error("channel was not closed after error - potential goroutine leak")
+		}
 	})
 
 	t.Run("mid_stream_error", func(t *testing.T) {
