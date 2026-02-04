@@ -2232,6 +2232,8 @@ pass@k 与 pass^k 的计算依赖运行之间的独立性与同分布假设，�
 
 Agent 演进最怕两件事。改动看起来很小，但行为悄悄漂移。问题只有在用户侧暴露，定位成本成倍上涨。评估的意义就是把这些风险提前拦下来。
 
+### tRPC-Agent-Go 发版流水线
+
 tRPC-Agent-Go 在 [examples/runner](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runner) 里把关键路径写成评估集与评估指标，并在发版前的流水线中执行。Runner quickstart 的这组用例覆盖计算器、时间工具、复利计算等常见场景，目标很明确，守住工具选择与输出形态的底线。一旦行为跑偏，流水线会在最早阶段给出失败信号，可以直接回到对应的用例与轨迹定位问题。
 
 ```go
@@ -2301,3 +2303,11 @@ func TestTool(t *testing.T) {
 	}
 }
 ```
+
+### Claude Code CLI 评估
+
+如果希望评估 Claude Code CLI 的运行结果，推荐把 CLI 封装成一个 `agent.Agent`，每次评估用例直接执行 `claude -p "..." --verbose --output-format json`，捕获完整 stdout/stderr，并将整段输出作为本次 invocation 的最终响应内容保存到评估产物中，便于回溯与排障。
+
+为了让框架的 `tool_trajectory_avg_score` 能够验证工具使用情况，需要在 agent 层解析 JSON 输出中的 `tool_use` / `tool_result`，并发出对应的 tool-call / tool-result 事件，从而让 `Invocation.Tools` 具备可比对的工具轨迹。
+
+完整示例参见 [examples/evaluation/claude](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/claude)。
