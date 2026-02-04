@@ -49,6 +49,58 @@ type indexDefinition struct {
 	template string
 }
 
+type indexSpec struct {
+	name     string
+	template string
+}
+
+type schemaSpec struct {
+	target    SchemaTarget
+	tableName func(Tables) string
+	tableSQL  string
+	indexes   []indexSpec
+}
+
+var schemaSpecs = []schemaSpec{
+	{
+		target:    SchemaEvalSets,
+		tableName: func(t Tables) string { return t.EvalSets },
+		tableSQL:  sqlCreateEvalSetsTable,
+		indexes: []indexSpec{
+			{name: "uniq_eval_sets_app_eval_set", template: sqlCreateEvalSetsUniqueIndex},
+			{name: "idx_eval_sets_app_created", template: sqlCreateEvalSetsAppCreatedIndex},
+		},
+	},
+	{
+		target:    SchemaEvalCases,
+		tableName: func(t Tables) string { return t.EvalCases },
+		tableSQL:  sqlCreateEvalCasesTable,
+		indexes: []indexSpec{
+			{name: "uniq_eval_cases_app_set_case", template: sqlCreateEvalCasesUniqueIndex},
+			{name: "idx_eval_cases_app_set_order", template: sqlCreateEvalCasesOrderIndex},
+		},
+	},
+	{
+		target:    SchemaMetrics,
+		tableName: func(t Tables) string { return t.Metrics },
+		tableSQL:  sqlCreateMetricsTable,
+		indexes: []indexSpec{
+			{name: "uniq_metrics_app_set_name", template: sqlCreateMetricsUniqueIndex},
+			{name: "idx_metrics_app_set", template: sqlCreateMetricsAppSetIndex},
+		},
+	},
+	{
+		target:    SchemaEvalSetResults,
+		tableName: func(t Tables) string { return t.EvalSetResults },
+		tableSQL:  sqlCreateEvalSetResultsTable,
+		indexes: []indexSpec{
+			{name: "uniq_results_app_result_id", template: sqlCreateEvalSetResultsUniqueIndex},
+			{name: "idx_results_app_created", template: sqlCreateEvalSetResultsAppCreatedIndex},
+			{name: "idx_results_app_set_created", template: sqlCreateEvalSetResultsAppSetCreatedIndex},
+		},
+	},
+}
+
 // SchemaTarget selects which evaluation tables should be ensured.
 type SchemaTarget uint8
 
@@ -85,39 +137,22 @@ func EnsureSchema(ctx context.Context, db storage.Client, tables Tables, target 
 	tableDefs := []tableDefinition{}
 	indexDefs := []indexDefinition{}
 
-	appendTable := func(tableName string, template string) {
+	for _, spec := range schemaSpecs {
+		if target&spec.target == 0 {
+			continue
+		}
+		tableName := spec.tableName(tables)
 		tableDefs = append(tableDefs, tableDefinition{
 			name:     tableName,
-			template: template,
+			template: spec.tableSQL,
 		})
-	}
-	appendIndex := func(tableName, indexName, template string) {
-		indexDefs = append(indexDefs, indexDefinition{
-			table:    tableName,
-			name:     indexName,
-			template: template,
-		})
-	}
-	if target&SchemaEvalSets != 0 {
-		appendTable(tables.EvalSets, sqlCreateEvalSetsTable)
-		appendIndex(tables.EvalSets, "uniq_eval_sets_app_eval_set", sqlCreateEvalSetsUniqueIndex)
-		appendIndex(tables.EvalSets, "idx_eval_sets_app_created", sqlCreateEvalSetsAppCreatedIndex)
-	}
-	if target&SchemaEvalCases != 0 {
-		appendTable(tables.EvalCases, sqlCreateEvalCasesTable)
-		appendIndex(tables.EvalCases, "uniq_eval_cases_app_set_case", sqlCreateEvalCasesUniqueIndex)
-		appendIndex(tables.EvalCases, "idx_eval_cases_app_set_order", sqlCreateEvalCasesOrderIndex)
-	}
-	if target&SchemaMetrics != 0 {
-		appendTable(tables.Metrics, sqlCreateMetricsTable)
-		appendIndex(tables.Metrics, "uniq_metrics_app_set_name", sqlCreateMetricsUniqueIndex)
-		appendIndex(tables.Metrics, "idx_metrics_app_set", sqlCreateMetricsAppSetIndex)
-	}
-	if target&SchemaEvalSetResults != 0 {
-		appendTable(tables.EvalSetResults, sqlCreateEvalSetResultsTable)
-		appendIndex(tables.EvalSetResults, "uniq_results_app_result_id", sqlCreateEvalSetResultsUniqueIndex)
-		appendIndex(tables.EvalSetResults, "idx_results_app_created", sqlCreateEvalSetResultsAppCreatedIndex)
-		appendIndex(tables.EvalSetResults, "idx_results_app_set_created", sqlCreateEvalSetResultsAppSetCreatedIndex)
+		for _, idx := range spec.indexes {
+			indexDefs = append(indexDefs, indexDefinition{
+				table:    tableName,
+				name:     idx.name,
+				template: idx.template,
+			})
+		}
 	}
 
 	for _, tableDef := range tableDefs {
