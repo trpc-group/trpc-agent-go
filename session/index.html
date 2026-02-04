@@ -1573,6 +1573,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#token-counter-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Token Counter Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#session-service-options" class="md-nav__link">
     <span class="md-ellipsis">
       Session Service Options
@@ -3048,6 +3057,15 @@
   <a href="#summarizer-options" class="md-nav__link">
     <span class="md-ellipsis">
       Summarizer Options
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#token-counter-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Token Counter Configuration
     </span>
   </a>
   
@@ -5675,18 +5693,8 @@
 <li><strong><code>WithPrompt(prompt string)</code></strong>: Provide a custom summarization prompt. The prompt must include the placeholder <code>{conversation_text}</code>, which will be replaced with the conversation content. Optionally include <code>{max_summary_words}</code> for word limit instructions.</li>
 <li><strong><code>WithSkipRecent(skipFunc SkipRecentFunc)</code></strong>: Skip the <em>most recent</em> events during summarization using a custom function. The function receives all events and returns how many tail events to skip. Return 0 to skip none. Useful for avoiding summarizing very recent/incomplete conversations, or applying time/content-based skipping strategies.</li>
 </ul>
-<p><strong>Tool Call Formatting:</strong></p>
-<p>By default, the summarizer includes tool calls and tool results in the conversation text sent to the LLM for summarization. The default format is:</p>
-<ul>
-<li>Tool calls: <code>[Called tool: toolName with args: {"arg": "value"}]</code></li>
-<li>Tool results: <code>[toolName returned: result content]</code></li>
-</ul>
-<p>You can customize how tool calls and results are formatted using these options:</p>
-<ul>
-<li><strong><code>WithToolCallFormatter(f ToolCallFormatter)</code></strong>: Customize how tool calls are formatted in the summary input. The formatter receives a <code>model.ToolCall</code> and returns a formatted string. Return empty string to exclude the tool call.</li>
-<li><strong><code>WithToolResultFormatter(f ToolResultFormatter)</code></strong>: Customize how tool results are formatted in the summary input. The formatter receives the <code>model.Message</code> containing the tool result and returns a formatted string. Return empty string to exclude the result.</li>
-</ul>
-<p><strong>Example with custom tool formatters:</strong></p>
+<h4 id="token-counter-configuration">Token Counter Configuration</h4>
+<p>By default, <code>CheckTokenThreshold</code> uses a built-in <code>SimpleTokenCounter</code> to estimate tokens based on text length. If you need to customize the token counting behavior (e.g., using a more accurate tokenizer for specific models), you can use <code>summary.SetTokenCounter</code> to set a global token counter:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-43-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-43-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-43-3"> 3</a></span>
@@ -5724,46 +5732,82 @@
 <span class="normal"><a href="#__codelineno-43-35">35</a></span>
 <span class="normal"><a href="#__codelineno-43-36">36</a></span>
 <span class="normal"><a href="#__codelineno-43-37">37</a></span>
-<span class="normal"><a href="#__codelineno-43-38">38</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-43-1"><a id="__codelineno-43-1" name="__codelineno-43-1"></a><span class="c1">// Truncate long tool arguments</span>
-</span><span id="__span-43-2"><a id="__codelineno-43-2" name="__codelineno-43-2"></a><span class="nx">summarizer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">summary</span><span class="p">.</span><span class="nx">NewSummarizer</span><span class="p">(</span>
-</span><span id="__span-43-3"><a id="__codelineno-43-3" name="__codelineno-43-3"></a><span class="w">    </span><span class="nx">summaryModel</span><span class="p">,</span>
-</span><span id="__span-43-4"><a id="__codelineno-43-4" name="__codelineno-43-4"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithToolCallFormatter</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">tc</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">ToolCall</span><span class="p">)</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-43-5"><a id="__codelineno-43-5" name="__codelineno-43-5"></a><span class="w">        </span><span class="nx">name</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">tc</span><span class="p">.</span><span class="nx">Function</span><span class="p">.</span><span class="nx">Name</span>
-</span><span id="__span-43-6"><a id="__codelineno-43-6" name="__codelineno-43-6"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">name</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-43-7"><a id="__codelineno-43-7" name="__codelineno-43-7"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="s">&quot;&quot;</span>
-</span><span id="__span-43-8"><a id="__codelineno-43-8" name="__codelineno-43-8"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-43-9"><a id="__codelineno-43-9" name="__codelineno-43-9"></a><span class="w">        </span><span class="nx">args</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nb">string</span><span class="p">(</span><span class="nx">tc</span><span class="p">.</span><span class="nx">Function</span><span class="p">.</span><span class="nx">Arguments</span><span class="p">)</span>
-</span><span id="__span-43-10"><a id="__codelineno-43-10" name="__codelineno-43-10"></a><span class="w">        </span><span class="kd">const</span><span class="w"> </span><span class="nx">maxLen</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="mi">100</span>
-</span><span id="__span-43-11"><a id="__codelineno-43-11" name="__codelineno-43-11"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">args</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="nx">maxLen</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-43-12"><a id="__codelineno-43-12" name="__codelineno-43-12"></a><span class="w">            </span><span class="nx">args</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">args</span><span class="p">[:</span><span class="nx">maxLen</span><span class="p">]</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="s">&quot;...(truncated)&quot;</span>
-</span><span id="__span-43-13"><a id="__codelineno-43-13" name="__codelineno-43-13"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-43-14"><a id="__codelineno-43-14" name="__codelineno-43-14"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Sprintf</span><span class="p">(</span><span class="s">&quot;[Tool: %s, Args: %s]&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">name</span><span class="p">,</span><span class="w"> </span><span class="nx">args</span><span class="p">)</span>
-</span><span id="__span-43-15"><a id="__codelineno-43-15" name="__codelineno-43-15"></a><span class="w">    </span><span class="p">}),</span>
-</span><span id="__span-43-16"><a id="__codelineno-43-16" name="__codelineno-43-16"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithEventThreshold</span><span class="p">(</span><span class="mi">20</span><span class="p">),</span>
-</span><span id="__span-43-17"><a id="__codelineno-43-17" name="__codelineno-43-17"></a><span class="p">)</span>
-</span><span id="__span-43-18"><a id="__codelineno-43-18" name="__codelineno-43-18"></a>
-</span><span id="__span-43-19"><a id="__codelineno-43-19" name="__codelineno-43-19"></a><span class="c1">// Exclude tool results from summary</span>
-</span><span id="__span-43-20"><a id="__codelineno-43-20" name="__codelineno-43-20"></a><span class="nx">summarizer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">summary</span><span class="p">.</span><span class="nx">NewSummarizer</span><span class="p">(</span>
-</span><span id="__span-43-21"><a id="__codelineno-43-21" name="__codelineno-43-21"></a><span class="w">    </span><span class="nx">summaryModel</span><span class="p">,</span>
-</span><span id="__span-43-22"><a id="__codelineno-43-22" name="__codelineno-43-22"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithToolResultFormatter</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">msg</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="p">)</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-43-23"><a id="__codelineno-43-23" name="__codelineno-43-23"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="c1">// Return empty to exclude tool results.</span>
-</span><span id="__span-43-24"><a id="__codelineno-43-24" name="__codelineno-43-24"></a><span class="w">    </span><span class="p">}),</span>
-</span><span id="__span-43-25"><a id="__codelineno-43-25" name="__codelineno-43-25"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithEventThreshold</span><span class="p">(</span><span class="mi">20</span><span class="p">),</span>
-</span><span id="__span-43-26"><a id="__codelineno-43-26" name="__codelineno-43-26"></a><span class="p">)</span>
+<span class="normal"><a href="#__codelineno-43-38">38</a></span>
+<span class="normal"><a href="#__codelineno-43-39">39</a></span>
+<span class="normal"><a href="#__codelineno-43-40">40</a></span>
+<span class="normal"><a href="#__codelineno-43-41">41</a></span>
+<span class="normal"><a href="#__codelineno-43-42">42</a></span>
+<span class="normal"><a href="#__codelineno-43-43">43</a></span>
+<span class="normal"><a href="#__codelineno-43-44">44</a></span>
+<span class="normal"><a href="#__codelineno-43-45">45</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-43-1"><a id="__codelineno-43-1" name="__codelineno-43-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-43-2"><a id="__codelineno-43-2" name="__codelineno-43-2"></a><span class="w">    </span><span class="s">&quot;context&quot;</span>
+</span><span id="__span-43-3"><a id="__codelineno-43-3" name="__codelineno-43-3"></a><span class="w">    </span><span class="s">&quot;fmt&quot;</span>
+</span><span id="__span-43-4"><a id="__codelineno-43-4" name="__codelineno-43-4"></a><span class="w">    </span><span class="s">&quot;unicode/utf8&quot;</span>
+</span><span id="__span-43-5"><a id="__codelineno-43-5" name="__codelineno-43-5"></a>
+</span><span id="__span-43-6"><a id="__codelineno-43-6" name="__codelineno-43-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
+</span><span id="__span-43-7"><a id="__codelineno-43-7" name="__codelineno-43-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/session/summary&quot;</span>
+</span><span id="__span-43-8"><a id="__codelineno-43-8" name="__codelineno-43-8"></a><span class="p">)</span>
+</span><span id="__span-43-9"><a id="__codelineno-43-9" name="__codelineno-43-9"></a>
+</span><span id="__span-43-10"><a id="__codelineno-43-10" name="__codelineno-43-10"></a><span class="c1">// Set custom token counter (affects all CheckTokenThreshold evaluations)</span>
+</span><span id="__span-43-11"><a id="__codelineno-43-11" name="__codelineno-43-11"></a><span class="nx">summary</span><span class="p">.</span><span class="nx">SetTokenCounter</span><span class="p">(</span><span class="nx">model</span><span class="p">.</span><span class="nx">NewSimpleTokenCounter</span><span class="p">())</span>
+</span><span id="__span-43-12"><a id="__codelineno-43-12" name="__codelineno-43-12"></a>
+</span><span id="__span-43-13"><a id="__codelineno-43-13" name="__codelineno-43-13"></a><span class="c1">// Or use custom implementation</span>
+</span><span id="__span-43-14"><a id="__codelineno-43-14" name="__codelineno-43-14"></a><span class="kd">type</span><span class="w"> </span><span class="nx">MyCustomCounter</span><span class="w"> </span><span class="kd">struct</span><span class="p">{}</span>
+</span><span id="__span-43-15"><a id="__codelineno-43-15" name="__codelineno-43-15"></a>
+</span><span id="__span-43-16"><a id="__codelineno-43-16" name="__codelineno-43-16"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">MyCustomCounter</span><span class="p">)</span><span class="w"> </span><span class="nx">CountTokens</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">message</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-43-17"><a id="__codelineno-43-17" name="__codelineno-43-17"></a><span class="w">    </span><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">ctx</span>
+</span><span id="__span-43-18"><a id="__codelineno-43-18" name="__codelineno-43-18"></a><span class="w">    </span><span class="c1">// TODO: Replace this with your real tokenizer implementation.</span>
+</span><span id="__span-43-19"><a id="__codelineno-43-19" name="__codelineno-43-19"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">utf8</span><span class="p">.</span><span class="nx">RuneCountInString</span><span class="p">(</span><span class="nx">message</span><span class="p">.</span><span class="nx">Content</span><span class="p">),</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-43-20"><a id="__codelineno-43-20" name="__codelineno-43-20"></a><span class="p">}</span>
+</span><span id="__span-43-21"><a id="__codelineno-43-21" name="__codelineno-43-21"></a>
+</span><span id="__span-43-22"><a id="__codelineno-43-22" name="__codelineno-43-22"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">MyCustomCounter</span><span class="p">)</span><span class="w"> </span><span class="nx">CountTokensRange</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">messages</span><span class="w"> </span><span class="p">[]</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="p">,</span><span class="w"> </span><span class="nx">start</span><span class="p">,</span><span class="w"> </span><span class="nx">end</span><span class="w"> </span><span class="kt">int</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-43-23"><a id="__codelineno-43-23" name="__codelineno-43-23"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">start</span><span class="w"> </span><span class="p">&lt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nx">end</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">messages</span><span class="p">)</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nx">start</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="nx">end</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-43-24"><a id="__codelineno-43-24" name="__codelineno-43-24"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;invalid range: start=%d, end=%d, len=%d&quot;</span><span class="p">,</span>
+</span><span id="__span-43-25"><a id="__codelineno-43-25" name="__codelineno-43-25"></a><span class="w">            </span><span class="nx">start</span><span class="p">,</span><span class="w"> </span><span class="nx">end</span><span class="p">,</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">messages</span><span class="p">))</span>
+</span><span id="__span-43-26"><a id="__codelineno-43-26" name="__codelineno-43-26"></a><span class="w">    </span><span class="p">}</span>
 </span><span id="__span-43-27"><a id="__codelineno-43-27" name="__codelineno-43-27"></a>
-</span><span id="__span-43-28"><a id="__codelineno-43-28" name="__codelineno-43-28"></a><span class="c1">// Only include tool names, exclude arguments</span>
-</span><span id="__span-43-29"><a id="__codelineno-43-29" name="__codelineno-43-29"></a><span class="nx">summarizer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">summary</span><span class="p">.</span><span class="nx">NewSummarizer</span><span class="p">(</span>
-</span><span id="__span-43-30"><a id="__codelineno-43-30" name="__codelineno-43-30"></a><span class="w">    </span><span class="nx">summaryModel</span><span class="p">,</span>
-</span><span id="__span-43-31"><a id="__codelineno-43-31" name="__codelineno-43-31"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithToolCallFormatter</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">tc</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">ToolCall</span><span class="p">)</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-43-32"><a id="__codelineno-43-32" name="__codelineno-43-32"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">tc</span><span class="p">.</span><span class="nx">Function</span><span class="p">.</span><span class="nx">Name</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-43-33"><a id="__codelineno-43-33" name="__codelineno-43-33"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="s">&quot;&quot;</span>
-</span><span id="__span-43-34"><a id="__codelineno-43-34" name="__codelineno-43-34"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-43-35"><a id="__codelineno-43-35" name="__codelineno-43-35"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Sprintf</span><span class="p">(</span><span class="s">&quot;[Used tool: %s]&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">tc</span><span class="p">.</span><span class="nx">Function</span><span class="p">.</span><span class="nx">Name</span><span class="p">)</span>
-</span><span id="__span-43-36"><a id="__codelineno-43-36" name="__codelineno-43-36"></a><span class="w">    </span><span class="p">}),</span>
-</span><span id="__span-43-37"><a id="__codelineno-43-37" name="__codelineno-43-37"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithEventThreshold</span><span class="p">(</span><span class="mi">20</span><span class="p">),</span>
-</span><span id="__span-43-38"><a id="__codelineno-43-38" name="__codelineno-43-38"></a><span class="p">)</span>
+</span><span id="__span-43-28"><a id="__codelineno-43-28" name="__codelineno-43-28"></a><span class="w">    </span><span class="nx">total</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mi">0</span>
+</span><span id="__span-43-29"><a id="__codelineno-43-29" name="__codelineno-43-29"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">i</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">start</span><span class="p">;</span><span class="w"> </span><span class="nx">i</span><span class="w"> </span><span class="p">&lt;</span><span class="w"> </span><span class="nx">end</span><span class="p">;</span><span class="w"> </span><span class="nx">i</span><span class="o">++</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-43-30"><a id="__codelineno-43-30" name="__codelineno-43-30"></a><span class="w">        </span><span class="nx">tokens</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">CountTokens</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">messages</span><span class="p">[</span><span class="nx">i</span><span class="p">])</span>
+</span><span id="__span-43-31"><a id="__codelineno-43-31" name="__codelineno-43-31"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-43-32"><a id="__codelineno-43-32" name="__codelineno-43-32"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-43-33"><a id="__codelineno-43-33" name="__codelineno-43-33"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-43-34"><a id="__codelineno-43-34" name="__codelineno-43-34"></a><span class="w">        </span><span class="nx">total</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="nx">tokens</span>
+</span><span id="__span-43-35"><a id="__codelineno-43-35" name="__codelineno-43-35"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-43-36"><a id="__codelineno-43-36" name="__codelineno-43-36"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">total</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-43-37"><a id="__codelineno-43-37" name="__codelineno-43-37"></a><span class="p">}</span>
+</span><span id="__span-43-38"><a id="__codelineno-43-38" name="__codelineno-43-38"></a>
+</span><span id="__span-43-39"><a id="__codelineno-43-39" name="__codelineno-43-39"></a><span class="nx">summary</span><span class="p">.</span><span class="nx">SetTokenCounter</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">MyCustomCounter</span><span class="p">{})</span>
+</span><span id="__span-43-40"><a id="__codelineno-43-40" name="__codelineno-43-40"></a>
+</span><span id="__span-43-41"><a id="__codelineno-43-41" name="__codelineno-43-41"></a><span class="c1">// Create summarizer with token threshold checker</span>
+</span><span id="__span-43-42"><a id="__codelineno-43-42" name="__codelineno-43-42"></a><span class="nx">summarizer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">summary</span><span class="p">.</span><span class="nx">NewSummarizer</span><span class="p">(</span>
+</span><span id="__span-43-43"><a id="__codelineno-43-43" name="__codelineno-43-43"></a><span class="w">    </span><span class="nx">summaryModel</span><span class="p">,</span>
+</span><span id="__span-43-44"><a id="__codelineno-43-44" name="__codelineno-43-44"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">CheckTokenThreshold</span><span class="p">(</span><span class="mi">4000</span><span class="p">),</span><span class="w">  </span><span class="c1">// Will use your custom counter</span>
+</span><span id="__span-43-45"><a id="__codelineno-43-45" name="__codelineno-43-45"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<p><strong>Example with custom prompt:</strong></p>
+<p><strong>Important Notes:</strong></p>
+<ul>
+<li><strong>Global Effect</strong>: <code>SetTokenCounter</code> affects all <code>CheckTokenThreshold</code> evaluations in the current process. Set it once during application initialization.</li>
+<li><strong>Default Counter</strong>: If not set, a <code>SimpleTokenCounter</code> with default configuration is used (approx. 4 characters per token).</li>
+<li><strong>Use Cases</strong>:<ul>
+<li>Use accurate tokenizers (tiktoken) when precise estimation is needed</li>
+<li>Adjust for language-specific models (Chinese models may have different token densities)</li>
+<li>Integrate with model-specific token counting APIs for better accuracy</li>
+</ul>
+</li>
+</ul>
+<p><strong>Tool Call Formatting:</strong></p>
+<p>By default, the summarizer includes tool calls and tool results in the conversation text sent to the LLM for summarization. The default format is:</p>
+<ul>
+<li>Tool calls: <code>[Called tool: toolName with args: {"arg": "value"}]</code></li>
+<li>Tool results: <code>[toolName returned: result content]</code></li>
+</ul>
+<p>You can customize how tool calls and results are formatted using these options:</p>
+<ul>
+<li><strong><code>WithToolCallFormatter(f ToolCallFormatter)</code></strong>: Customize how tool calls are formatted in the summary input. The formatter receives a <code>model.ToolCall</code> and returns a formatted string. Return empty string to exclude the tool call.</li>
+<li><strong><code>WithToolResultFormatter(f ToolResultFormatter)</code></strong>: Customize how tool results are formatted in the summary input. The formatter receives the <code>model.Message</code> containing the tool result and returns a formatted string. Return empty string to exclude the result.</li>
+</ul>
+<p><strong>Example with custom tool formatters:</strong></p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-44-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-44-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-44-3"> 3</a></span>
@@ -5801,97 +5845,46 @@
 <span class="normal"><a href="#__codelineno-44-35">35</a></span>
 <span class="normal"><a href="#__codelineno-44-36">36</a></span>
 <span class="normal"><a href="#__codelineno-44-37">37</a></span>
-<span class="normal"><a href="#__codelineno-44-38">38</a></span>
-<span class="normal"><a href="#__codelineno-44-39">39</a></span>
-<span class="normal"><a href="#__codelineno-44-40">40</a></span>
-<span class="normal"><a href="#__codelineno-44-41">41</a></span>
-<span class="normal"><a href="#__codelineno-44-42">42</a></span>
-<span class="normal"><a href="#__codelineno-44-43">43</a></span>
-<span class="normal"><a href="#__codelineno-44-44">44</a></span>
-<span class="normal"><a href="#__codelineno-44-45">45</a></span>
-<span class="normal"><a href="#__codelineno-44-46">46</a></span>
-<span class="normal"><a href="#__codelineno-44-47">47</a></span>
-<span class="normal"><a href="#__codelineno-44-48">48</a></span>
-<span class="normal"><a href="#__codelineno-44-49">49</a></span>
-<span class="normal"><a href="#__codelineno-44-50">50</a></span>
-<span class="normal"><a href="#__codelineno-44-51">51</a></span>
-<span class="normal"><a href="#__codelineno-44-52">52</a></span>
-<span class="normal"><a href="#__codelineno-44-53">53</a></span>
-<span class="normal"><a href="#__codelineno-44-54">54</a></span>
-<span class="normal"><a href="#__codelineno-44-55">55</a></span>
-<span class="normal"><a href="#__codelineno-44-56">56</a></span>
-<span class="normal"><a href="#__codelineno-44-57">57</a></span>
-<span class="normal"><a href="#__codelineno-44-58">58</a></span>
-<span class="normal"><a href="#__codelineno-44-59">59</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-44-1"><a id="__codelineno-44-1" name="__codelineno-44-1"></a><span class="nx">customPrompt</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">`Analyze the following conversation and provide a concise summary</span>
-</span><span id="__span-44-2"><a id="__codelineno-44-2" name="__codelineno-44-2"></a><span class="s">focusing on key decisions, action items, and important context.</span>
-</span><span id="__span-44-3"><a id="__codelineno-44-3" name="__codelineno-44-3"></a><span class="s">Keep it within {max_summary_words} words.</span>
-</span><span id="__span-44-4"><a id="__codelineno-44-4" name="__codelineno-44-4"></a>
-</span><span id="__span-44-5"><a id="__codelineno-44-5" name="__codelineno-44-5"></a><span class="s">&lt;conversation&gt;</span>
-</span><span id="__span-44-6"><a id="__codelineno-44-6" name="__codelineno-44-6"></a><span class="s">{conversation_text}</span>
-</span><span id="__span-44-7"><a id="__codelineno-44-7" name="__codelineno-44-7"></a><span class="s">&lt;/conversation&gt;</span>
-</span><span id="__span-44-8"><a id="__codelineno-44-8" name="__codelineno-44-8"></a>
-</span><span id="__span-44-9"><a id="__codelineno-44-9" name="__codelineno-44-9"></a><span class="s">Summary:`</span>
-</span><span id="__span-44-10"><a id="__codelineno-44-10" name="__codelineno-44-10"></a>
-</span><span id="__span-44-11"><a id="__codelineno-44-11" name="__codelineno-44-11"></a><span class="nx">summarizer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">summary</span><span class="p">.</span><span class="nx">NewSummarizer</span><span class="p">(</span>
-</span><span id="__span-44-12"><a id="__codelineno-44-12" name="__codelineno-44-12"></a><span class="w">    </span><span class="nx">summaryModel</span><span class="p">,</span>
-</span><span id="__span-44-13"><a id="__codelineno-44-13" name="__codelineno-44-13"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithPrompt</span><span class="p">(</span><span class="nx">customPrompt</span><span class="p">),</span><span class="w"> </span><span class="c1">// Custom Prompt</span>
-</span><span id="__span-44-14"><a id="__codelineno-44-14" name="__codelineno-44-14"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithMaxSummaryWords</span><span class="p">(</span><span class="mi">100</span><span class="p">),</span><span class="w"> </span><span class="c1">// Inject into {max_summary_words}</span>
-</span><span id="__span-44-15"><a id="__codelineno-44-15" name="__codelineno-44-15"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithEventThreshold</span><span class="p">(</span><span class="mi">15</span><span class="p">),</span>
-</span><span id="__span-44-16"><a id="__codelineno-44-16" name="__codelineno-44-16"></a><span class="p">)</span>
-</span><span id="__span-44-17"><a id="__codelineno-44-17" name="__codelineno-44-17"></a>
-</span><span id="__span-44-18"><a id="__codelineno-44-18" name="__codelineno-44-18"></a><span class="c1">// Skip a fixed number of recent events (compatible with old behavior)</span>
-</span><span id="__span-44-19"><a id="__codelineno-44-19" name="__codelineno-44-19"></a><span class="nx">summarizer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">summary</span><span class="p">.</span><span class="nx">NewSummarizer</span><span class="p">(</span>
-</span><span id="__span-44-20"><a id="__codelineno-44-20" name="__codelineno-44-20"></a><span class="w">    </span><span class="nx">summaryModel</span><span class="p">,</span>
-</span><span id="__span-44-21"><a id="__codelineno-44-21" name="__codelineno-44-21"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithSkipRecent</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">_</span><span class="w"> </span><span class="p">[]</span><span class="nx">event</span><span class="p">.</span><span class="nx">Event</span><span class="p">)</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="p">}),</span><span class="w"> </span><span class="c1">// skip last 2 events</span>
-</span><span id="__span-44-22"><a id="__codelineno-44-22" name="__codelineno-44-22"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithEventThreshold</span><span class="p">(</span><span class="mi">10</span><span class="p">),</span>
-</span><span id="__span-44-23"><a id="__codelineno-44-23" name="__codelineno-44-23"></a><span class="p">)</span>
-</span><span id="__span-44-24"><a id="__codelineno-44-24" name="__codelineno-44-24"></a>
-</span><span id="__span-44-25"><a id="__codelineno-44-25" name="__codelineno-44-25"></a><span class="c1">// Skip events from the last 5 minutes (time window)</span>
-</span><span id="__span-44-26"><a id="__codelineno-44-26" name="__codelineno-44-26"></a><span class="nx">summarizer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">summary</span><span class="p">.</span><span class="nx">NewSummarizer</span><span class="p">(</span>
-</span><span id="__span-44-27"><a id="__codelineno-44-27" name="__codelineno-44-27"></a><span class="w">    </span><span class="nx">summaryModel</span><span class="p">,</span>
-</span><span id="__span-44-28"><a id="__codelineno-44-28" name="__codelineno-44-28"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithSkipRecent</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">events</span><span class="w"> </span><span class="p">[]</span><span class="nx">event</span><span class="p">.</span><span class="nx">Event</span><span class="p">)</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-44-29"><a id="__codelineno-44-29" name="__codelineno-44-29"></a><span class="w">        </span><span class="nx">cutoff</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Now</span><span class="p">().</span><span class="nx">Add</span><span class="p">(</span><span class="o">-</span><span class="mi">5</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">)</span>
-</span><span id="__span-44-30"><a id="__codelineno-44-30" name="__codelineno-44-30"></a><span class="w">        </span><span class="nx">skip</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mi">0</span>
-</span><span id="__span-44-31"><a id="__codelineno-44-31" name="__codelineno-44-31"></a><span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="nx">i</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">events</span><span class="p">)</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w"> </span><span class="nx">i</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="nx">i</span><span class="o">--</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-44-32"><a id="__codelineno-44-32" name="__codelineno-44-32"></a><span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="nx">events</span><span class="p">[</span><span class="nx">i</span><span class="p">].</span><span class="nx">Timestamp</span><span class="p">.</span><span class="nx">After</span><span class="p">(</span><span class="nx">cutoff</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-44-33"><a id="__codelineno-44-33" name="__codelineno-44-33"></a><span class="w">                </span><span class="nx">skip</span><span class="o">++</span>
-</span><span id="__span-44-34"><a id="__codelineno-44-34" name="__codelineno-44-34"></a><span class="w">            </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-44-35"><a id="__codelineno-44-35" name="__codelineno-44-35"></a><span class="w">                </span><span class="k">break</span>
-</span><span id="__span-44-36"><a id="__codelineno-44-36" name="__codelineno-44-36"></a><span class="w">            </span><span class="p">}</span>
-</span><span id="__span-44-37"><a id="__codelineno-44-37" name="__codelineno-44-37"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-44-38"><a id="__codelineno-44-38" name="__codelineno-44-38"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">skip</span>
-</span><span id="__span-44-39"><a id="__codelineno-44-39" name="__codelineno-44-39"></a><span class="w">    </span><span class="p">}),</span>
-</span><span id="__span-44-40"><a id="__codelineno-44-40" name="__codelineno-44-40"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithEventThreshold</span><span class="p">(</span><span class="mi">10</span><span class="p">),</span>
-</span><span id="__span-44-41"><a id="__codelineno-44-41" name="__codelineno-44-41"></a><span class="p">)</span>
-</span><span id="__span-44-42"><a id="__codelineno-44-42" name="__codelineno-44-42"></a>
-</span><span id="__span-44-43"><a id="__codelineno-44-43" name="__codelineno-44-43"></a><span class="c1">// Skip trailing tool-call messages only</span>
-</span><span id="__span-44-44"><a id="__codelineno-44-44" name="__codelineno-44-44"></a><span class="nx">summarizer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">summary</span><span class="p">.</span><span class="nx">NewSummarizer</span><span class="p">(</span>
-</span><span id="__span-44-45"><a id="__codelineno-44-45" name="__codelineno-44-45"></a><span class="w">    </span><span class="nx">summaryModel</span><span class="p">,</span>
-</span><span id="__span-44-46"><a id="__codelineno-44-46" name="__codelineno-44-46"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithSkipRecent</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">events</span><span class="w"> </span><span class="p">[]</span><span class="nx">event</span><span class="p">.</span><span class="nx">Event</span><span class="p">)</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-44-47"><a id="__codelineno-44-47" name="__codelineno-44-47"></a><span class="w">        </span><span class="nx">skip</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mi">0</span>
-</span><span id="__span-44-48"><a id="__codelineno-44-48" name="__codelineno-44-48"></a><span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="nx">i</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">events</span><span class="p">)</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w"> </span><span class="nx">i</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="nx">i</span><span class="o">--</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-44-49"><a id="__codelineno-44-49" name="__codelineno-44-49"></a><span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="nx">events</span><span class="p">[</span><span class="nx">i</span><span class="p">].</span><span class="nx">Response</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">events</span><span class="p">[</span><span class="nx">i</span><span class="p">].</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="o">&amp;&amp;</span>
-</span><span id="__span-44-50"><a id="__codelineno-44-50" name="__codelineno-44-50"></a><span class="w">                </span><span class="nx">events</span><span class="p">[</span><span class="nx">i</span><span class="p">].</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">Message</span><span class="p">.</span><span class="nx">Role</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">RoleTool</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-44-51"><a id="__codelineno-44-51" name="__codelineno-44-51"></a><span class="w">                </span><span class="nx">skip</span><span class="o">++</span>
-</span><span id="__span-44-52"><a id="__codelineno-44-52" name="__codelineno-44-52"></a><span class="w">            </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-44-53"><a id="__codelineno-44-53" name="__codelineno-44-53"></a><span class="w">                </span><span class="k">break</span>
-</span><span id="__span-44-54"><a id="__codelineno-44-54" name="__codelineno-44-54"></a><span class="w">            </span><span class="p">}</span>
-</span><span id="__span-44-55"><a id="__codelineno-44-55" name="__codelineno-44-55"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-44-56"><a id="__codelineno-44-56" name="__codelineno-44-56"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">skip</span>
-</span><span id="__span-44-57"><a id="__codelineno-44-57" name="__codelineno-44-57"></a><span class="w">    </span><span class="p">}),</span>
-</span><span id="__span-44-58"><a id="__codelineno-44-58" name="__codelineno-44-58"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithEventThreshold</span><span class="p">(</span><span class="mi">10</span><span class="p">),</span>
-</span><span id="__span-44-59"><a id="__codelineno-44-59" name="__codelineno-44-59"></a><span class="p">)</span>
+<span class="normal"><a href="#__codelineno-44-38">38</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-44-1"><a id="__codelineno-44-1" name="__codelineno-44-1"></a><span class="c1">// Truncate long tool arguments</span>
+</span><span id="__span-44-2"><a id="__codelineno-44-2" name="__codelineno-44-2"></a><span class="nx">summarizer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">summary</span><span class="p">.</span><span class="nx">NewSummarizer</span><span class="p">(</span>
+</span><span id="__span-44-3"><a id="__codelineno-44-3" name="__codelineno-44-3"></a><span class="w">    </span><span class="nx">summaryModel</span><span class="p">,</span>
+</span><span id="__span-44-4"><a id="__codelineno-44-4" name="__codelineno-44-4"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithToolCallFormatter</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">tc</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">ToolCall</span><span class="p">)</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-44-5"><a id="__codelineno-44-5" name="__codelineno-44-5"></a><span class="w">        </span><span class="nx">name</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">tc</span><span class="p">.</span><span class="nx">Function</span><span class="p">.</span><span class="nx">Name</span>
+</span><span id="__span-44-6"><a id="__codelineno-44-6" name="__codelineno-44-6"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">name</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-44-7"><a id="__codelineno-44-7" name="__codelineno-44-7"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="s">&quot;&quot;</span>
+</span><span id="__span-44-8"><a id="__codelineno-44-8" name="__codelineno-44-8"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-44-9"><a id="__codelineno-44-9" name="__codelineno-44-9"></a><span class="w">        </span><span class="nx">args</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nb">string</span><span class="p">(</span><span class="nx">tc</span><span class="p">.</span><span class="nx">Function</span><span class="p">.</span><span class="nx">Arguments</span><span class="p">)</span>
+</span><span id="__span-44-10"><a id="__codelineno-44-10" name="__codelineno-44-10"></a><span class="w">        </span><span class="kd">const</span><span class="w"> </span><span class="nx">maxLen</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="mi">100</span>
+</span><span id="__span-44-11"><a id="__codelineno-44-11" name="__codelineno-44-11"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">args</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="nx">maxLen</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-44-12"><a id="__codelineno-44-12" name="__codelineno-44-12"></a><span class="w">            </span><span class="nx">args</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">args</span><span class="p">[:</span><span class="nx">maxLen</span><span class="p">]</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="s">&quot;...(truncated)&quot;</span>
+</span><span id="__span-44-13"><a id="__codelineno-44-13" name="__codelineno-44-13"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-44-14"><a id="__codelineno-44-14" name="__codelineno-44-14"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Sprintf</span><span class="p">(</span><span class="s">&quot;[Tool: %s, Args: %s]&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">name</span><span class="p">,</span><span class="w"> </span><span class="nx">args</span><span class="p">)</span>
+</span><span id="__span-44-15"><a id="__codelineno-44-15" name="__codelineno-44-15"></a><span class="w">    </span><span class="p">}),</span>
+</span><span id="__span-44-16"><a id="__codelineno-44-16" name="__codelineno-44-16"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithEventThreshold</span><span class="p">(</span><span class="mi">20</span><span class="p">),</span>
+</span><span id="__span-44-17"><a id="__codelineno-44-17" name="__codelineno-44-17"></a><span class="p">)</span>
+</span><span id="__span-44-18"><a id="__codelineno-44-18" name="__codelineno-44-18"></a>
+</span><span id="__span-44-19"><a id="__codelineno-44-19" name="__codelineno-44-19"></a><span class="c1">// Exclude tool results from summary</span>
+</span><span id="__span-44-20"><a id="__codelineno-44-20" name="__codelineno-44-20"></a><span class="nx">summarizer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">summary</span><span class="p">.</span><span class="nx">NewSummarizer</span><span class="p">(</span>
+</span><span id="__span-44-21"><a id="__codelineno-44-21" name="__codelineno-44-21"></a><span class="w">    </span><span class="nx">summaryModel</span><span class="p">,</span>
+</span><span id="__span-44-22"><a id="__codelineno-44-22" name="__codelineno-44-22"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithToolResultFormatter</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">msg</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="p">)</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-44-23"><a id="__codelineno-44-23" name="__codelineno-44-23"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="c1">// Return empty to exclude tool results.</span>
+</span><span id="__span-44-24"><a id="__codelineno-44-24" name="__codelineno-44-24"></a><span class="w">    </span><span class="p">}),</span>
+</span><span id="__span-44-25"><a id="__codelineno-44-25" name="__codelineno-44-25"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithEventThreshold</span><span class="p">(</span><span class="mi">20</span><span class="p">),</span>
+</span><span id="__span-44-26"><a id="__codelineno-44-26" name="__codelineno-44-26"></a><span class="p">)</span>
+</span><span id="__span-44-27"><a id="__codelineno-44-27" name="__codelineno-44-27"></a>
+</span><span id="__span-44-28"><a id="__codelineno-44-28" name="__codelineno-44-28"></a><span class="c1">// Only include tool names, exclude arguments</span>
+</span><span id="__span-44-29"><a id="__codelineno-44-29" name="__codelineno-44-29"></a><span class="nx">summarizer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">summary</span><span class="p">.</span><span class="nx">NewSummarizer</span><span class="p">(</span>
+</span><span id="__span-44-30"><a id="__codelineno-44-30" name="__codelineno-44-30"></a><span class="w">    </span><span class="nx">summaryModel</span><span class="p">,</span>
+</span><span id="__span-44-31"><a id="__codelineno-44-31" name="__codelineno-44-31"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithToolCallFormatter</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">tc</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">ToolCall</span><span class="p">)</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-44-32"><a id="__codelineno-44-32" name="__codelineno-44-32"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">tc</span><span class="p">.</span><span class="nx">Function</span><span class="p">.</span><span class="nx">Name</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-44-33"><a id="__codelineno-44-33" name="__codelineno-44-33"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="s">&quot;&quot;</span>
+</span><span id="__span-44-34"><a id="__codelineno-44-34" name="__codelineno-44-34"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-44-35"><a id="__codelineno-44-35" name="__codelineno-44-35"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Sprintf</span><span class="p">(</span><span class="s">&quot;[Used tool: %s]&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">tc</span><span class="p">.</span><span class="nx">Function</span><span class="p">.</span><span class="nx">Name</span><span class="p">)</span>
+</span><span id="__span-44-36"><a id="__codelineno-44-36" name="__codelineno-44-36"></a><span class="w">    </span><span class="p">}),</span>
+</span><span id="__span-44-37"><a id="__codelineno-44-37" name="__codelineno-44-37"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithEventThreshold</span><span class="p">(</span><span class="mi">20</span><span class="p">),</span>
+</span><span id="__span-44-38"><a id="__codelineno-44-38" name="__codelineno-44-38"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<h4 id="session-service-options">Session Service Options</h4>
-<p>Configure async summary processing in session services:</p>
-<ul>
-<li><strong><code>WithSummarizer(s summary.SessionSummarizer)</code></strong>: Inject the summarizer into the session service.</li>
-<li><strong><code>WithAsyncSummaryNum(num int)</code></strong>: Set the number of async worker goroutines for summary processing. Default is 3. More workers allow higher concurrency but consume more resources.</li>
-<li><strong><code>WithSummaryQueueSize(size int)</code></strong>: Set the size of the summary job queue. Default is 100. Larger queues allow more pending jobs but consume more memory.</li>
-<li><strong><code>WithSummaryJobTimeout(timeout time.Duration)</code></strong>: Set the timeout for processing a single summary job. Default is 60 seconds.</li>
-</ul>
-<h3 id="manual-summarization">Manual Summarization</h3>
-<p>You can manually trigger summarization using the session service APIs:</p>
+<p><strong>Example with custom prompt:</strong></p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-45-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-45-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-45-3"> 3</a></span>
@@ -5922,37 +5915,165 @@
 <span class="normal"><a href="#__codelineno-45-28">28</a></span>
 <span class="normal"><a href="#__codelineno-45-29">29</a></span>
 <span class="normal"><a href="#__codelineno-45-30">30</a></span>
-<span class="normal"><a href="#__codelineno-45-31">31</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-45-1"><a id="__codelineno-45-1" name="__codelineno-45-1"></a><span class="c1">// Asynchronous summarization (recommended) - background processing, non-blocking.</span>
-</span><span id="__span-45-2"><a id="__codelineno-45-2" name="__codelineno-45-2"></a><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sessionService</span><span class="p">.</span><span class="nx">EnqueueSummaryJob</span><span class="p">(</span>
-</span><span id="__span-45-3"><a id="__codelineno-45-3" name="__codelineno-45-3"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
-</span><span id="__span-45-4"><a id="__codelineno-45-4" name="__codelineno-45-4"></a><span class="w">    </span><span class="nx">sess</span><span class="p">,</span>
-</span><span id="__span-45-5"><a id="__codelineno-45-5" name="__codelineno-45-5"></a><span class="w">    </span><span class="nx">session</span><span class="p">.</span><span class="nx">SummaryFilterKeyAllContents</span><span class="p">,</span><span class="w"> </span><span class="c1">// Full session summary.</span>
-</span><span id="__span-45-6"><a id="__codelineno-45-6" name="__codelineno-45-6"></a><span class="w">    </span><span class="kc">false</span><span class="p">,</span><span class="w">                                </span><span class="c1">// force=false, respects trigger conditions.</span>
-</span><span id="__span-45-7"><a id="__codelineno-45-7" name="__codelineno-45-7"></a><span class="p">)</span>
+<span class="normal"><a href="#__codelineno-45-31">31</a></span>
+<span class="normal"><a href="#__codelineno-45-32">32</a></span>
+<span class="normal"><a href="#__codelineno-45-33">33</a></span>
+<span class="normal"><a href="#__codelineno-45-34">34</a></span>
+<span class="normal"><a href="#__codelineno-45-35">35</a></span>
+<span class="normal"><a href="#__codelineno-45-36">36</a></span>
+<span class="normal"><a href="#__codelineno-45-37">37</a></span>
+<span class="normal"><a href="#__codelineno-45-38">38</a></span>
+<span class="normal"><a href="#__codelineno-45-39">39</a></span>
+<span class="normal"><a href="#__codelineno-45-40">40</a></span>
+<span class="normal"><a href="#__codelineno-45-41">41</a></span>
+<span class="normal"><a href="#__codelineno-45-42">42</a></span>
+<span class="normal"><a href="#__codelineno-45-43">43</a></span>
+<span class="normal"><a href="#__codelineno-45-44">44</a></span>
+<span class="normal"><a href="#__codelineno-45-45">45</a></span>
+<span class="normal"><a href="#__codelineno-45-46">46</a></span>
+<span class="normal"><a href="#__codelineno-45-47">47</a></span>
+<span class="normal"><a href="#__codelineno-45-48">48</a></span>
+<span class="normal"><a href="#__codelineno-45-49">49</a></span>
+<span class="normal"><a href="#__codelineno-45-50">50</a></span>
+<span class="normal"><a href="#__codelineno-45-51">51</a></span>
+<span class="normal"><a href="#__codelineno-45-52">52</a></span>
+<span class="normal"><a href="#__codelineno-45-53">53</a></span>
+<span class="normal"><a href="#__codelineno-45-54">54</a></span>
+<span class="normal"><a href="#__codelineno-45-55">55</a></span>
+<span class="normal"><a href="#__codelineno-45-56">56</a></span>
+<span class="normal"><a href="#__codelineno-45-57">57</a></span>
+<span class="normal"><a href="#__codelineno-45-58">58</a></span>
+<span class="normal"><a href="#__codelineno-45-59">59</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-45-1"><a id="__codelineno-45-1" name="__codelineno-45-1"></a><span class="nx">customPrompt</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">`Analyze the following conversation and provide a concise summary</span>
+</span><span id="__span-45-2"><a id="__codelineno-45-2" name="__codelineno-45-2"></a><span class="s">focusing on key decisions, action items, and important context.</span>
+</span><span id="__span-45-3"><a id="__codelineno-45-3" name="__codelineno-45-3"></a><span class="s">Keep it within {max_summary_words} words.</span>
+</span><span id="__span-45-4"><a id="__codelineno-45-4" name="__codelineno-45-4"></a>
+</span><span id="__span-45-5"><a id="__codelineno-45-5" name="__codelineno-45-5"></a><span class="s">&lt;conversation&gt;</span>
+</span><span id="__span-45-6"><a id="__codelineno-45-6" name="__codelineno-45-6"></a><span class="s">{conversation_text}</span>
+</span><span id="__span-45-7"><a id="__codelineno-45-7" name="__codelineno-45-7"></a><span class="s">&lt;/conversation&gt;</span>
 </span><span id="__span-45-8"><a id="__codelineno-45-8" name="__codelineno-45-8"></a>
-</span><span id="__span-45-9"><a id="__codelineno-45-9" name="__codelineno-45-9"></a><span class="c1">// Synchronous summarization - immediate processing, blocking.</span>
-</span><span id="__span-45-10"><a id="__codelineno-45-10" name="__codelineno-45-10"></a><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sessionService</span><span class="p">.</span><span class="nx">CreateSessionSummary</span><span class="p">(</span>
-</span><span id="__span-45-11"><a id="__codelineno-45-11" name="__codelineno-45-11"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
-</span><span id="__span-45-12"><a id="__codelineno-45-12" name="__codelineno-45-12"></a><span class="w">    </span><span class="nx">sess</span><span class="p">,</span>
-</span><span id="__span-45-13"><a id="__codelineno-45-13" name="__codelineno-45-13"></a><span class="w">    </span><span class="nx">session</span><span class="p">.</span><span class="nx">SummaryFilterKeyAllContents</span><span class="p">,</span>
-</span><span id="__span-45-14"><a id="__codelineno-45-14" name="__codelineno-45-14"></a><span class="w">    </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="c1">// force=false, respects trigger conditions.</span>
-</span><span id="__span-45-15"><a id="__codelineno-45-15" name="__codelineno-45-15"></a><span class="p">)</span>
-</span><span id="__span-45-16"><a id="__codelineno-45-16" name="__codelineno-45-16"></a>
-</span><span id="__span-45-17"><a id="__codelineno-45-17" name="__codelineno-45-17"></a><span class="c1">// Asynchronous force summarization - bypass trigger conditions.</span>
-</span><span id="__span-45-18"><a id="__codelineno-45-18" name="__codelineno-45-18"></a><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sessionService</span><span class="p">.</span><span class="nx">EnqueueSummaryJob</span><span class="p">(</span>
-</span><span id="__span-45-19"><a id="__codelineno-45-19" name="__codelineno-45-19"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
-</span><span id="__span-45-20"><a id="__codelineno-45-20" name="__codelineno-45-20"></a><span class="w">    </span><span class="nx">sess</span><span class="p">,</span>
-</span><span id="__span-45-21"><a id="__codelineno-45-21" name="__codelineno-45-21"></a><span class="w">    </span><span class="nx">session</span><span class="p">.</span><span class="nx">SummaryFilterKeyAllContents</span><span class="p">,</span>
-</span><span id="__span-45-22"><a id="__codelineno-45-22" name="__codelineno-45-22"></a><span class="w">    </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="c1">// force=true, bypass all trigger condition checks.</span>
+</span><span id="__span-45-9"><a id="__codelineno-45-9" name="__codelineno-45-9"></a><span class="s">Summary:`</span>
+</span><span id="__span-45-10"><a id="__codelineno-45-10" name="__codelineno-45-10"></a>
+</span><span id="__span-45-11"><a id="__codelineno-45-11" name="__codelineno-45-11"></a><span class="nx">summarizer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">summary</span><span class="p">.</span><span class="nx">NewSummarizer</span><span class="p">(</span>
+</span><span id="__span-45-12"><a id="__codelineno-45-12" name="__codelineno-45-12"></a><span class="w">    </span><span class="nx">summaryModel</span><span class="p">,</span>
+</span><span id="__span-45-13"><a id="__codelineno-45-13" name="__codelineno-45-13"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithPrompt</span><span class="p">(</span><span class="nx">customPrompt</span><span class="p">),</span><span class="w"> </span><span class="c1">// Custom Prompt</span>
+</span><span id="__span-45-14"><a id="__codelineno-45-14" name="__codelineno-45-14"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithMaxSummaryWords</span><span class="p">(</span><span class="mi">100</span><span class="p">),</span><span class="w"> </span><span class="c1">// Inject into {max_summary_words}</span>
+</span><span id="__span-45-15"><a id="__codelineno-45-15" name="__codelineno-45-15"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithEventThreshold</span><span class="p">(</span><span class="mi">15</span><span class="p">),</span>
+</span><span id="__span-45-16"><a id="__codelineno-45-16" name="__codelineno-45-16"></a><span class="p">)</span>
+</span><span id="__span-45-17"><a id="__codelineno-45-17" name="__codelineno-45-17"></a>
+</span><span id="__span-45-18"><a id="__codelineno-45-18" name="__codelineno-45-18"></a><span class="c1">// Skip a fixed number of recent events (compatible with old behavior)</span>
+</span><span id="__span-45-19"><a id="__codelineno-45-19" name="__codelineno-45-19"></a><span class="nx">summarizer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">summary</span><span class="p">.</span><span class="nx">NewSummarizer</span><span class="p">(</span>
+</span><span id="__span-45-20"><a id="__codelineno-45-20" name="__codelineno-45-20"></a><span class="w">    </span><span class="nx">summaryModel</span><span class="p">,</span>
+</span><span id="__span-45-21"><a id="__codelineno-45-21" name="__codelineno-45-21"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithSkipRecent</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">_</span><span class="w"> </span><span class="p">[]</span><span class="nx">event</span><span class="p">.</span><span class="nx">Event</span><span class="p">)</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="p">}),</span><span class="w"> </span><span class="c1">// skip last 2 events</span>
+</span><span id="__span-45-22"><a id="__codelineno-45-22" name="__codelineno-45-22"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithEventThreshold</span><span class="p">(</span><span class="mi">10</span><span class="p">),</span>
 </span><span id="__span-45-23"><a id="__codelineno-45-23" name="__codelineno-45-23"></a><span class="p">)</span>
 </span><span id="__span-45-24"><a id="__codelineno-45-24" name="__codelineno-45-24"></a>
-</span><span id="__span-45-25"><a id="__codelineno-45-25" name="__codelineno-45-25"></a><span class="c1">// Synchronous force summarization - immediate forced generation.</span>
-</span><span id="__span-45-26"><a id="__codelineno-45-26" name="__codelineno-45-26"></a><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sessionService</span><span class="p">.</span><span class="nx">CreateSessionSummary</span><span class="p">(</span>
-</span><span id="__span-45-27"><a id="__codelineno-45-27" name="__codelineno-45-27"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
-</span><span id="__span-45-28"><a id="__codelineno-45-28" name="__codelineno-45-28"></a><span class="w">    </span><span class="nx">sess</span><span class="p">,</span>
-</span><span id="__span-45-29"><a id="__codelineno-45-29" name="__codelineno-45-29"></a><span class="w">    </span><span class="nx">session</span><span class="p">.</span><span class="nx">SummaryFilterKeyAllContents</span><span class="p">,</span>
-</span><span id="__span-45-30"><a id="__codelineno-45-30" name="__codelineno-45-30"></a><span class="w">    </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="c1">// force=true, bypass all trigger condition checks.</span>
-</span><span id="__span-45-31"><a id="__codelineno-45-31" name="__codelineno-45-31"></a><span class="p">)</span>
+</span><span id="__span-45-25"><a id="__codelineno-45-25" name="__codelineno-45-25"></a><span class="c1">// Skip events from the last 5 minutes (time window)</span>
+</span><span id="__span-45-26"><a id="__codelineno-45-26" name="__codelineno-45-26"></a><span class="nx">summarizer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">summary</span><span class="p">.</span><span class="nx">NewSummarizer</span><span class="p">(</span>
+</span><span id="__span-45-27"><a id="__codelineno-45-27" name="__codelineno-45-27"></a><span class="w">    </span><span class="nx">summaryModel</span><span class="p">,</span>
+</span><span id="__span-45-28"><a id="__codelineno-45-28" name="__codelineno-45-28"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithSkipRecent</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">events</span><span class="w"> </span><span class="p">[]</span><span class="nx">event</span><span class="p">.</span><span class="nx">Event</span><span class="p">)</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-45-29"><a id="__codelineno-45-29" name="__codelineno-45-29"></a><span class="w">        </span><span class="nx">cutoff</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Now</span><span class="p">().</span><span class="nx">Add</span><span class="p">(</span><span class="o">-</span><span class="mi">5</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">)</span>
+</span><span id="__span-45-30"><a id="__codelineno-45-30" name="__codelineno-45-30"></a><span class="w">        </span><span class="nx">skip</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mi">0</span>
+</span><span id="__span-45-31"><a id="__codelineno-45-31" name="__codelineno-45-31"></a><span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="nx">i</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">events</span><span class="p">)</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w"> </span><span class="nx">i</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="nx">i</span><span class="o">--</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-45-32"><a id="__codelineno-45-32" name="__codelineno-45-32"></a><span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="nx">events</span><span class="p">[</span><span class="nx">i</span><span class="p">].</span><span class="nx">Timestamp</span><span class="p">.</span><span class="nx">After</span><span class="p">(</span><span class="nx">cutoff</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-45-33"><a id="__codelineno-45-33" name="__codelineno-45-33"></a><span class="w">                </span><span class="nx">skip</span><span class="o">++</span>
+</span><span id="__span-45-34"><a id="__codelineno-45-34" name="__codelineno-45-34"></a><span class="w">            </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-45-35"><a id="__codelineno-45-35" name="__codelineno-45-35"></a><span class="w">                </span><span class="k">break</span>
+</span><span id="__span-45-36"><a id="__codelineno-45-36" name="__codelineno-45-36"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-45-37"><a id="__codelineno-45-37" name="__codelineno-45-37"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-45-38"><a id="__codelineno-45-38" name="__codelineno-45-38"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">skip</span>
+</span><span id="__span-45-39"><a id="__codelineno-45-39" name="__codelineno-45-39"></a><span class="w">    </span><span class="p">}),</span>
+</span><span id="__span-45-40"><a id="__codelineno-45-40" name="__codelineno-45-40"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithEventThreshold</span><span class="p">(</span><span class="mi">10</span><span class="p">),</span>
+</span><span id="__span-45-41"><a id="__codelineno-45-41" name="__codelineno-45-41"></a><span class="p">)</span>
+</span><span id="__span-45-42"><a id="__codelineno-45-42" name="__codelineno-45-42"></a>
+</span><span id="__span-45-43"><a id="__codelineno-45-43" name="__codelineno-45-43"></a><span class="c1">// Skip trailing tool-call messages only</span>
+</span><span id="__span-45-44"><a id="__codelineno-45-44" name="__codelineno-45-44"></a><span class="nx">summarizer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">summary</span><span class="p">.</span><span class="nx">NewSummarizer</span><span class="p">(</span>
+</span><span id="__span-45-45"><a id="__codelineno-45-45" name="__codelineno-45-45"></a><span class="w">    </span><span class="nx">summaryModel</span><span class="p">,</span>
+</span><span id="__span-45-46"><a id="__codelineno-45-46" name="__codelineno-45-46"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithSkipRecent</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">events</span><span class="w"> </span><span class="p">[]</span><span class="nx">event</span><span class="p">.</span><span class="nx">Event</span><span class="p">)</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-45-47"><a id="__codelineno-45-47" name="__codelineno-45-47"></a><span class="w">        </span><span class="nx">skip</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mi">0</span>
+</span><span id="__span-45-48"><a id="__codelineno-45-48" name="__codelineno-45-48"></a><span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="nx">i</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">events</span><span class="p">)</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w"> </span><span class="nx">i</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="nx">i</span><span class="o">--</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-45-49"><a id="__codelineno-45-49" name="__codelineno-45-49"></a><span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="nx">events</span><span class="p">[</span><span class="nx">i</span><span class="p">].</span><span class="nx">Response</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">events</span><span class="p">[</span><span class="nx">i</span><span class="p">].</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="o">&amp;&amp;</span>
+</span><span id="__span-45-50"><a id="__codelineno-45-50" name="__codelineno-45-50"></a><span class="w">                </span><span class="nx">events</span><span class="p">[</span><span class="nx">i</span><span class="p">].</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">Message</span><span class="p">.</span><span class="nx">Role</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">RoleTool</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-45-51"><a id="__codelineno-45-51" name="__codelineno-45-51"></a><span class="w">                </span><span class="nx">skip</span><span class="o">++</span>
+</span><span id="__span-45-52"><a id="__codelineno-45-52" name="__codelineno-45-52"></a><span class="w">            </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-45-53"><a id="__codelineno-45-53" name="__codelineno-45-53"></a><span class="w">                </span><span class="k">break</span>
+</span><span id="__span-45-54"><a id="__codelineno-45-54" name="__codelineno-45-54"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-45-55"><a id="__codelineno-45-55" name="__codelineno-45-55"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-45-56"><a id="__codelineno-45-56" name="__codelineno-45-56"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">skip</span>
+</span><span id="__span-45-57"><a id="__codelineno-45-57" name="__codelineno-45-57"></a><span class="w">    </span><span class="p">}),</span>
+</span><span id="__span-45-58"><a id="__codelineno-45-58" name="__codelineno-45-58"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithEventThreshold</span><span class="p">(</span><span class="mi">10</span><span class="p">),</span>
+</span><span id="__span-45-59"><a id="__codelineno-45-59" name="__codelineno-45-59"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<h4 id="session-service-options">Session Service Options</h4>
+<p>Configure async summary processing in session services:</p>
+<ul>
+<li><strong><code>WithSummarizer(s summary.SessionSummarizer)</code></strong>: Inject the summarizer into the session service.</li>
+<li><strong><code>WithAsyncSummaryNum(num int)</code></strong>: Set the number of async worker goroutines for summary processing. Default is 3. More workers allow higher concurrency but consume more resources.</li>
+<li><strong><code>WithSummaryQueueSize(size int)</code></strong>: Set the size of the summary job queue. Default is 100. Larger queues allow more pending jobs but consume more memory.</li>
+<li><strong><code>WithSummaryJobTimeout(timeout time.Duration)</code></strong>: Set the timeout for processing a single summary job. Default is 60 seconds.</li>
+</ul>
+<h3 id="manual-summarization">Manual Summarization</h3>
+<p>You can manually trigger summarization using the session service APIs:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-46-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-46-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-46-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-46-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-46-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-46-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-46-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-46-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-46-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-46-10">10</a></span>
+<span class="normal"><a href="#__codelineno-46-11">11</a></span>
+<span class="normal"><a href="#__codelineno-46-12">12</a></span>
+<span class="normal"><a href="#__codelineno-46-13">13</a></span>
+<span class="normal"><a href="#__codelineno-46-14">14</a></span>
+<span class="normal"><a href="#__codelineno-46-15">15</a></span>
+<span class="normal"><a href="#__codelineno-46-16">16</a></span>
+<span class="normal"><a href="#__codelineno-46-17">17</a></span>
+<span class="normal"><a href="#__codelineno-46-18">18</a></span>
+<span class="normal"><a href="#__codelineno-46-19">19</a></span>
+<span class="normal"><a href="#__codelineno-46-20">20</a></span>
+<span class="normal"><a href="#__codelineno-46-21">21</a></span>
+<span class="normal"><a href="#__codelineno-46-22">22</a></span>
+<span class="normal"><a href="#__codelineno-46-23">23</a></span>
+<span class="normal"><a href="#__codelineno-46-24">24</a></span>
+<span class="normal"><a href="#__codelineno-46-25">25</a></span>
+<span class="normal"><a href="#__codelineno-46-26">26</a></span>
+<span class="normal"><a href="#__codelineno-46-27">27</a></span>
+<span class="normal"><a href="#__codelineno-46-28">28</a></span>
+<span class="normal"><a href="#__codelineno-46-29">29</a></span>
+<span class="normal"><a href="#__codelineno-46-30">30</a></span>
+<span class="normal"><a href="#__codelineno-46-31">31</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-46-1"><a id="__codelineno-46-1" name="__codelineno-46-1"></a><span class="c1">// Asynchronous summarization (recommended) - background processing, non-blocking.</span>
+</span><span id="__span-46-2"><a id="__codelineno-46-2" name="__codelineno-46-2"></a><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sessionService</span><span class="p">.</span><span class="nx">EnqueueSummaryJob</span><span class="p">(</span>
+</span><span id="__span-46-3"><a id="__codelineno-46-3" name="__codelineno-46-3"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
+</span><span id="__span-46-4"><a id="__codelineno-46-4" name="__codelineno-46-4"></a><span class="w">    </span><span class="nx">sess</span><span class="p">,</span>
+</span><span id="__span-46-5"><a id="__codelineno-46-5" name="__codelineno-46-5"></a><span class="w">    </span><span class="nx">session</span><span class="p">.</span><span class="nx">SummaryFilterKeyAllContents</span><span class="p">,</span><span class="w"> </span><span class="c1">// Full session summary.</span>
+</span><span id="__span-46-6"><a id="__codelineno-46-6" name="__codelineno-46-6"></a><span class="w">    </span><span class="kc">false</span><span class="p">,</span><span class="w">                                </span><span class="c1">// force=false, respects trigger conditions.</span>
+</span><span id="__span-46-7"><a id="__codelineno-46-7" name="__codelineno-46-7"></a><span class="p">)</span>
+</span><span id="__span-46-8"><a id="__codelineno-46-8" name="__codelineno-46-8"></a>
+</span><span id="__span-46-9"><a id="__codelineno-46-9" name="__codelineno-46-9"></a><span class="c1">// Synchronous summarization - immediate processing, blocking.</span>
+</span><span id="__span-46-10"><a id="__codelineno-46-10" name="__codelineno-46-10"></a><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sessionService</span><span class="p">.</span><span class="nx">CreateSessionSummary</span><span class="p">(</span>
+</span><span id="__span-46-11"><a id="__codelineno-46-11" name="__codelineno-46-11"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
+</span><span id="__span-46-12"><a id="__codelineno-46-12" name="__codelineno-46-12"></a><span class="w">    </span><span class="nx">sess</span><span class="p">,</span>
+</span><span id="__span-46-13"><a id="__codelineno-46-13" name="__codelineno-46-13"></a><span class="w">    </span><span class="nx">session</span><span class="p">.</span><span class="nx">SummaryFilterKeyAllContents</span><span class="p">,</span>
+</span><span id="__span-46-14"><a id="__codelineno-46-14" name="__codelineno-46-14"></a><span class="w">    </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="c1">// force=false, respects trigger conditions.</span>
+</span><span id="__span-46-15"><a id="__codelineno-46-15" name="__codelineno-46-15"></a><span class="p">)</span>
+</span><span id="__span-46-16"><a id="__codelineno-46-16" name="__codelineno-46-16"></a>
+</span><span id="__span-46-17"><a id="__codelineno-46-17" name="__codelineno-46-17"></a><span class="c1">// Asynchronous force summarization - bypass trigger conditions.</span>
+</span><span id="__span-46-18"><a id="__codelineno-46-18" name="__codelineno-46-18"></a><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sessionService</span><span class="p">.</span><span class="nx">EnqueueSummaryJob</span><span class="p">(</span>
+</span><span id="__span-46-19"><a id="__codelineno-46-19" name="__codelineno-46-19"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
+</span><span id="__span-46-20"><a id="__codelineno-46-20" name="__codelineno-46-20"></a><span class="w">    </span><span class="nx">sess</span><span class="p">,</span>
+</span><span id="__span-46-21"><a id="__codelineno-46-21" name="__codelineno-46-21"></a><span class="w">    </span><span class="nx">session</span><span class="p">.</span><span class="nx">SummaryFilterKeyAllContents</span><span class="p">,</span>
+</span><span id="__span-46-22"><a id="__codelineno-46-22" name="__codelineno-46-22"></a><span class="w">    </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="c1">// force=true, bypass all trigger condition checks.</span>
+</span><span id="__span-46-23"><a id="__codelineno-46-23" name="__codelineno-46-23"></a><span class="p">)</span>
+</span><span id="__span-46-24"><a id="__codelineno-46-24" name="__codelineno-46-24"></a>
+</span><span id="__span-46-25"><a id="__codelineno-46-25" name="__codelineno-46-25"></a><span class="c1">// Synchronous force summarization - immediate forced generation.</span>
+</span><span id="__span-46-26"><a id="__codelineno-46-26" name="__codelineno-46-26"></a><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sessionService</span><span class="p">.</span><span class="nx">CreateSessionSummary</span><span class="p">(</span>
+</span><span id="__span-46-27"><a id="__codelineno-46-27" name="__codelineno-46-27"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
+</span><span id="__span-46-28"><a id="__codelineno-46-28" name="__codelineno-46-28"></a><span class="w">    </span><span class="nx">sess</span><span class="p">,</span>
+</span><span id="__span-46-29"><a id="__codelineno-46-29" name="__codelineno-46-29"></a><span class="w">    </span><span class="nx">session</span><span class="p">.</span><span class="nx">SummaryFilterKeyAllContents</span><span class="p">,</span>
+</span><span id="__span-46-30"><a id="__codelineno-46-30" name="__codelineno-46-30"></a><span class="w">    </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="c1">// force=true, bypass all trigger condition checks.</span>
+</span><span id="__span-46-31"><a id="__codelineno-46-31" name="__codelineno-46-31"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p><strong>API Description:</strong></p>
 <ul>
@@ -6027,31 +6148,31 @@
 </table>
 <h3 id="retrieve-summary">Retrieve Summary</h3>
 <p>Get the latest summary text from a session:</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-46-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-46-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-46-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-46-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-46-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-46-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-46-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-46-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-46-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-46-10">10</a></span>
-<span class="normal"><a href="#__codelineno-46-11">11</a></span>
-<span class="normal"><a href="#__codelineno-46-12">12</a></span>
-<span class="normal"><a href="#__codelineno-46-13">13</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-46-1"><a id="__codelineno-46-1" name="__codelineno-46-1"></a><span class="c1">// Get the full-session summary (default behavior)</span>
-</span><span id="__span-46-2"><a id="__codelineno-46-2" name="__codelineno-46-2"></a><span class="nx">summaryText</span><span class="p">,</span><span class="w"> </span><span class="nx">found</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sessionService</span><span class="p">.</span><span class="nx">GetSessionSummaryText</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">sess</span><span class="p">)</span>
-</span><span id="__span-46-3"><a id="__codelineno-46-3" name="__codelineno-46-3"></a><span class="k">if</span><span class="w"> </span><span class="nx">found</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-46-4"><a id="__codelineno-46-4" name="__codelineno-46-4"></a><span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Summary: %s\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">summaryText</span><span class="p">)</span>
-</span><span id="__span-46-5"><a id="__codelineno-46-5" name="__codelineno-46-5"></a><span class="p">}</span>
-</span><span id="__span-46-6"><a id="__codelineno-46-6" name="__codelineno-46-6"></a>
-</span><span id="__span-46-7"><a id="__codelineno-46-7" name="__codelineno-46-7"></a><span class="c1">// Get summary for a specific filter key</span>
-</span><span id="__span-46-8"><a id="__codelineno-46-8" name="__codelineno-46-8"></a><span class="nx">userSummary</span><span class="p">,</span><span class="w"> </span><span class="nx">found</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sessionService</span><span class="p">.</span><span class="nx">GetSessionSummaryText</span><span class="p">(</span>
-</span><span id="__span-46-9"><a id="__codelineno-46-9" name="__codelineno-46-9"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">sess</span><span class="p">,</span><span class="w"> </span><span class="nx">session</span><span class="p">.</span><span class="nx">WithSummaryFilterKey</span><span class="p">(</span><span class="s">&quot;user-messages&quot;</span><span class="p">),</span>
-</span><span id="__span-46-10"><a id="__codelineno-46-10" name="__codelineno-46-10"></a><span class="p">)</span>
-</span><span id="__span-46-11"><a id="__codelineno-46-11" name="__codelineno-46-11"></a><span class="k">if</span><span class="w"> </span><span class="nx">found</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-46-12"><a id="__codelineno-46-12" name="__codelineno-46-12"></a><span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;User messages summary: %s\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">userSummary</span><span class="p">)</span>
-</span><span id="__span-46-13"><a id="__codelineno-46-13" name="__codelineno-46-13"></a><span class="p">}</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-47-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-47-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-47-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-47-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-47-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-47-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-47-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-47-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-47-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-47-10">10</a></span>
+<span class="normal"><a href="#__codelineno-47-11">11</a></span>
+<span class="normal"><a href="#__codelineno-47-12">12</a></span>
+<span class="normal"><a href="#__codelineno-47-13">13</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-47-1"><a id="__codelineno-47-1" name="__codelineno-47-1"></a><span class="c1">// Get the full-session summary (default behavior)</span>
+</span><span id="__span-47-2"><a id="__codelineno-47-2" name="__codelineno-47-2"></a><span class="nx">summaryText</span><span class="p">,</span><span class="w"> </span><span class="nx">found</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sessionService</span><span class="p">.</span><span class="nx">GetSessionSummaryText</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">sess</span><span class="p">)</span>
+</span><span id="__span-47-3"><a id="__codelineno-47-3" name="__codelineno-47-3"></a><span class="k">if</span><span class="w"> </span><span class="nx">found</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-47-4"><a id="__codelineno-47-4" name="__codelineno-47-4"></a><span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Summary: %s\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">summaryText</span><span class="p">)</span>
+</span><span id="__span-47-5"><a id="__codelineno-47-5" name="__codelineno-47-5"></a><span class="p">}</span>
+</span><span id="__span-47-6"><a id="__codelineno-47-6" name="__codelineno-47-6"></a>
+</span><span id="__span-47-7"><a id="__codelineno-47-7" name="__codelineno-47-7"></a><span class="c1">// Get summary for a specific filter key</span>
+</span><span id="__span-47-8"><a id="__codelineno-47-8" name="__codelineno-47-8"></a><span class="nx">userSummary</span><span class="p">,</span><span class="w"> </span><span class="nx">found</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sessionService</span><span class="p">.</span><span class="nx">GetSessionSummaryText</span><span class="p">(</span>
+</span><span id="__span-47-9"><a id="__codelineno-47-9" name="__codelineno-47-9"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">sess</span><span class="p">,</span><span class="w"> </span><span class="nx">session</span><span class="p">.</span><span class="nx">WithSummaryFilterKey</span><span class="p">(</span><span class="s">&quot;user-messages&quot;</span><span class="p">),</span>
+</span><span id="__span-47-10"><a id="__codelineno-47-10" name="__codelineno-47-10"></a><span class="p">)</span>
+</span><span id="__span-47-11"><a id="__codelineno-47-11" name="__codelineno-47-11"></a><span class="k">if</span><span class="w"> </span><span class="nx">found</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-47-12"><a id="__codelineno-47-12" name="__codelineno-47-12"></a><span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;User messages summary: %s\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">userSummary</span><span class="p">)</span>
+</span><span id="__span-47-13"><a id="__codelineno-47-13" name="__codelineno-47-13"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p><strong>Filter Key Support:</strong></p>
 <p>The <code>GetSessionSummaryText</code> method supports an optional <code>WithSummaryFilterKey</code> option to retrieve summaries for specific event filters:</p>
@@ -6109,54 +6230,54 @@
 <p>To achieve this, you need to set the <code>FilterKey</code> field on events to identify their type.</p>
 <h4 id="setting-filterkey-with-appendeventhook">Setting FilterKey with AppendEventHook</h4>
 <p>The recommended approach is to use <code>AppendEventHook</code> to automatically set <code>FilterKey</code> before events are persisted:</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-47-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-47-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-47-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-47-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-47-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-47-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-47-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-47-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-47-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-47-10">10</a></span>
-<span class="normal"><a href="#__codelineno-47-11">11</a></span>
-<span class="normal"><a href="#__codelineno-47-12">12</a></span>
-<span class="normal"><a href="#__codelineno-47-13">13</a></span>
-<span class="normal"><a href="#__codelineno-47-14">14</a></span>
-<span class="normal"><a href="#__codelineno-47-15">15</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-47-1"><a id="__codelineno-47-1" name="__codelineno-47-1"></a><span class="nx">sessionService</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">NewSessionService</span><span class="p">(</span>
-</span><span id="__span-47-2"><a id="__codelineno-47-2" name="__codelineno-47-2"></a><span class="w">    </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithAppendEventHook</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="o">*</span><span class="nx">session</span><span class="p">.</span><span class="nx">AppendEventContext</span><span class="p">,</span><span class="w"> </span><span class="nx">next</span><span class="w"> </span><span class="kd">func</span><span class="p">()</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-47-3"><a id="__codelineno-47-3" name="__codelineno-47-3"></a><span class="w">        </span><span class="c1">// Auto-categorize by event author</span>
-</span><span id="__span-47-4"><a id="__codelineno-47-4" name="__codelineno-47-4"></a><span class="w">        </span><span class="nx">prefix</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">&quot;my-app/&quot;</span><span class="w">  </span><span class="c1">// Must add appName prefix</span>
-</span><span id="__span-47-5"><a id="__codelineno-47-5" name="__codelineno-47-5"></a><span class="w">        </span><span class="k">switch</span><span class="w"> </span><span class="nx">ctx</span><span class="p">.</span><span class="nx">Event</span><span class="p">.</span><span class="nx">Author</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-47-6"><a id="__codelineno-47-6" name="__codelineno-47-6"></a><span class="w">        </span><span class="k">case</span><span class="w"> </span><span class="s">&quot;user&quot;</span><span class="p">:</span>
-</span><span id="__span-47-7"><a id="__codelineno-47-7" name="__codelineno-47-7"></a><span class="w">            </span><span class="nx">ctx</span><span class="p">.</span><span class="nx">Event</span><span class="p">.</span><span class="nx">FilterKey</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">prefix</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="s">&quot;user-messages&quot;</span>
-</span><span id="__span-47-8"><a id="__codelineno-47-8" name="__codelineno-47-8"></a><span class="w">        </span><span class="k">case</span><span class="w"> </span><span class="s">&quot;tool&quot;</span><span class="p">:</span>
-</span><span id="__span-47-9"><a id="__codelineno-47-9" name="__codelineno-47-9"></a><span class="w">            </span><span class="nx">ctx</span><span class="p">.</span><span class="nx">Event</span><span class="p">.</span><span class="nx">FilterKey</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">prefix</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="s">&quot;tool-calls&quot;</span>
-</span><span id="__span-47-10"><a id="__codelineno-47-10" name="__codelineno-47-10"></a><span class="w">        </span><span class="k">default</span><span class="p">:</span>
-</span><span id="__span-47-11"><a id="__codelineno-47-11" name="__codelineno-47-11"></a><span class="w">            </span><span class="nx">ctx</span><span class="p">.</span><span class="nx">Event</span><span class="p">.</span><span class="nx">FilterKey</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">prefix</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="s">&quot;misc&quot;</span>
-</span><span id="__span-47-12"><a id="__codelineno-47-12" name="__codelineno-47-12"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-47-13"><a id="__codelineno-47-13" name="__codelineno-47-13"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">next</span><span class="p">()</span>
-</span><span id="__span-47-14"><a id="__codelineno-47-14" name="__codelineno-47-14"></a><span class="w">    </span><span class="p">}),</span>
-</span><span id="__span-47-15"><a id="__codelineno-47-15" name="__codelineno-47-15"></a><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-48-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-48-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-48-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-48-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-48-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-48-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-48-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-48-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-48-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-48-10">10</a></span>
+<span class="normal"><a href="#__codelineno-48-11">11</a></span>
+<span class="normal"><a href="#__codelineno-48-12">12</a></span>
+<span class="normal"><a href="#__codelineno-48-13">13</a></span>
+<span class="normal"><a href="#__codelineno-48-14">14</a></span>
+<span class="normal"><a href="#__codelineno-48-15">15</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-48-1"><a id="__codelineno-48-1" name="__codelineno-48-1"></a><span class="nx">sessionService</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">NewSessionService</span><span class="p">(</span>
+</span><span id="__span-48-2"><a id="__codelineno-48-2" name="__codelineno-48-2"></a><span class="w">    </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithAppendEventHook</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="o">*</span><span class="nx">session</span><span class="p">.</span><span class="nx">AppendEventContext</span><span class="p">,</span><span class="w"> </span><span class="nx">next</span><span class="w"> </span><span class="kd">func</span><span class="p">()</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-48-3"><a id="__codelineno-48-3" name="__codelineno-48-3"></a><span class="w">        </span><span class="c1">// Auto-categorize by event author</span>
+</span><span id="__span-48-4"><a id="__codelineno-48-4" name="__codelineno-48-4"></a><span class="w">        </span><span class="nx">prefix</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">&quot;my-app/&quot;</span><span class="w">  </span><span class="c1">// Must add appName prefix</span>
+</span><span id="__span-48-5"><a id="__codelineno-48-5" name="__codelineno-48-5"></a><span class="w">        </span><span class="k">switch</span><span class="w"> </span><span class="nx">ctx</span><span class="p">.</span><span class="nx">Event</span><span class="p">.</span><span class="nx">Author</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-48-6"><a id="__codelineno-48-6" name="__codelineno-48-6"></a><span class="w">        </span><span class="k">case</span><span class="w"> </span><span class="s">&quot;user&quot;</span><span class="p">:</span>
+</span><span id="__span-48-7"><a id="__codelineno-48-7" name="__codelineno-48-7"></a><span class="w">            </span><span class="nx">ctx</span><span class="p">.</span><span class="nx">Event</span><span class="p">.</span><span class="nx">FilterKey</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">prefix</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="s">&quot;user-messages&quot;</span>
+</span><span id="__span-48-8"><a id="__codelineno-48-8" name="__codelineno-48-8"></a><span class="w">        </span><span class="k">case</span><span class="w"> </span><span class="s">&quot;tool&quot;</span><span class="p">:</span>
+</span><span id="__span-48-9"><a id="__codelineno-48-9" name="__codelineno-48-9"></a><span class="w">            </span><span class="nx">ctx</span><span class="p">.</span><span class="nx">Event</span><span class="p">.</span><span class="nx">FilterKey</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">prefix</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="s">&quot;tool-calls&quot;</span>
+</span><span id="__span-48-10"><a id="__codelineno-48-10" name="__codelineno-48-10"></a><span class="w">        </span><span class="k">default</span><span class="p">:</span>
+</span><span id="__span-48-11"><a id="__codelineno-48-11" name="__codelineno-48-11"></a><span class="w">            </span><span class="nx">ctx</span><span class="p">.</span><span class="nx">Event</span><span class="p">.</span><span class="nx">FilterKey</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">prefix</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="s">&quot;misc&quot;</span>
+</span><span id="__span-48-12"><a id="__codelineno-48-12" name="__codelineno-48-12"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-48-13"><a id="__codelineno-48-13" name="__codelineno-48-13"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">next</span><span class="p">()</span>
+</span><span id="__span-48-14"><a id="__codelineno-48-14" name="__codelineno-48-14"></a><span class="w">    </span><span class="p">}),</span>
+</span><span id="__span-48-15"><a id="__codelineno-48-15" name="__codelineno-48-15"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>Once FilterKey is set, you can generate independent summaries for different event types:</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-48-1">1</a></span>
-<span class="normal"><a href="#__codelineno-48-2">2</a></span>
-<span class="normal"><a href="#__codelineno-48-3">3</a></span>
-<span class="normal"><a href="#__codelineno-48-4">4</a></span>
-<span class="normal"><a href="#__codelineno-48-5">5</a></span>
-<span class="normal"><a href="#__codelineno-48-6">6</a></span>
-<span class="normal"><a href="#__codelineno-48-7">7</a></span>
-<span class="normal"><a href="#__codelineno-48-8">8</a></span>
-<span class="normal"><a href="#__codelineno-48-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-48-1"><a id="__codelineno-48-1" name="__codelineno-48-1"></a><span class="c1">// Generate summary for user messages</span>
-</span><span id="__span-48-2"><a id="__codelineno-48-2" name="__codelineno-48-2"></a><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sessionService</span><span class="p">.</span><span class="nx">CreateSessionSummary</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">sess</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;my-app/user-messages&quot;</span><span class="p">,</span><span class="w"> </span><span class="kc">false</span><span class="p">)</span>
-</span><span id="__span-48-3"><a id="__codelineno-48-3" name="__codelineno-48-3"></a>
-</span><span id="__span-48-4"><a id="__codelineno-48-4" name="__codelineno-48-4"></a><span class="c1">// Generate summary for tool calls</span>
-</span><span id="__span-48-5"><a id="__codelineno-48-5" name="__codelineno-48-5"></a><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sessionService</span><span class="p">.</span><span class="nx">CreateSessionSummary</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">sess</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;my-app/tool-calls&quot;</span><span class="p">,</span><span class="w"> </span><span class="kc">false</span><span class="p">)</span>
-</span><span id="__span-48-6"><a id="__codelineno-48-6" name="__codelineno-48-6"></a>
-</span><span id="__span-48-7"><a id="__codelineno-48-7" name="__codelineno-48-7"></a><span class="c1">// Retrieve summary for specific type</span>
-</span><span id="__span-48-8"><a id="__codelineno-48-8" name="__codelineno-48-8"></a><span class="nx">userSummary</span><span class="p">,</span><span class="w"> </span><span class="nx">found</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sessionService</span><span class="p">.</span><span class="nx">GetSessionSummaryText</span><span class="p">(</span>
-</span><span id="__span-48-9"><a id="__codelineno-48-9" name="__codelineno-48-9"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">sess</span><span class="p">,</span><span class="w"> </span><span class="nx">session</span><span class="p">.</span><span class="nx">WithSummaryFilterKey</span><span class="p">(</span><span class="s">&quot;my-app/user-messages&quot;</span><span class="p">))</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-49-1">1</a></span>
+<span class="normal"><a href="#__codelineno-49-2">2</a></span>
+<span class="normal"><a href="#__codelineno-49-3">3</a></span>
+<span class="normal"><a href="#__codelineno-49-4">4</a></span>
+<span class="normal"><a href="#__codelineno-49-5">5</a></span>
+<span class="normal"><a href="#__codelineno-49-6">6</a></span>
+<span class="normal"><a href="#__codelineno-49-7">7</a></span>
+<span class="normal"><a href="#__codelineno-49-8">8</a></span>
+<span class="normal"><a href="#__codelineno-49-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-49-1"><a id="__codelineno-49-1" name="__codelineno-49-1"></a><span class="c1">// Generate summary for user messages</span>
+</span><span id="__span-49-2"><a id="__codelineno-49-2" name="__codelineno-49-2"></a><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sessionService</span><span class="p">.</span><span class="nx">CreateSessionSummary</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">sess</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;my-app/user-messages&quot;</span><span class="p">,</span><span class="w"> </span><span class="kc">false</span><span class="p">)</span>
+</span><span id="__span-49-3"><a id="__codelineno-49-3" name="__codelineno-49-3"></a>
+</span><span id="__span-49-4"><a id="__codelineno-49-4" name="__codelineno-49-4"></a><span class="c1">// Generate summary for tool calls</span>
+</span><span id="__span-49-5"><a id="__codelineno-49-5" name="__codelineno-49-5"></a><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sessionService</span><span class="p">.</span><span class="nx">CreateSessionSummary</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">sess</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;my-app/tool-calls&quot;</span><span class="p">,</span><span class="w"> </span><span class="kc">false</span><span class="p">)</span>
+</span><span id="__span-49-6"><a id="__codelineno-49-6" name="__codelineno-49-6"></a>
+</span><span id="__span-49-7"><a id="__codelineno-49-7" name="__codelineno-49-7"></a><span class="c1">// Retrieve summary for specific type</span>
+</span><span id="__span-49-8"><a id="__codelineno-49-8" name="__codelineno-49-8"></a><span class="nx">userSummary</span><span class="p">,</span><span class="w"> </span><span class="nx">found</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sessionService</span><span class="p">.</span><span class="nx">GetSessionSummaryText</span><span class="p">(</span>
+</span><span id="__span-49-9"><a id="__codelineno-49-9" name="__codelineno-49-9"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">sess</span><span class="p">,</span><span class="w"> </span><span class="nx">session</span><span class="p">.</span><span class="nx">WithSummaryFilterKey</span><span class="p">(</span><span class="s">&quot;my-app/user-messages&quot;</span><span class="p">))</span>
 </span></code></pre></div></td></tr></table></div>
 <h4 id="filterkey-prefix-convention">FilterKey Prefix Convention</h4>
 <p><strong>⚠️ Important: FilterKey must include the <code>appName + "/"</code> prefix.</strong></p>
@@ -6166,15 +6287,15 @@
 <li>Summary content is incomplete, losing important context</li>
 </ul>
 <p><strong>Example:</strong></p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-49-1">1</a></span>
-<span class="normal"><a href="#__codelineno-49-2">2</a></span>
-<span class="normal"><a href="#__codelineno-49-3">3</a></span>
-<span class="normal"><a href="#__codelineno-49-4">4</a></span>
-<span class="normal"><a href="#__codelineno-49-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-49-1"><a id="__codelineno-49-1" name="__codelineno-49-1"></a><span class="c1">// ✅ Correct: with appName prefix</span>
-</span><span id="__span-49-2"><a id="__codelineno-49-2" name="__codelineno-49-2"></a><span class="nx">evt</span><span class="p">.</span><span class="nx">FilterKey</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;my-app/user-messages&quot;</span>
-</span><span id="__span-49-3"><a id="__codelineno-49-3" name="__codelineno-49-3"></a>
-</span><span id="__span-49-4"><a id="__codelineno-49-4" name="__codelineno-49-4"></a><span class="c1">// ❌ Wrong: no prefix, events will be filtered out</span>
-</span><span id="__span-49-5"><a id="__codelineno-49-5" name="__codelineno-49-5"></a><span class="nx">evt</span><span class="p">.</span><span class="nx">FilterKey</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;user-messages&quot;</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-50-1">1</a></span>
+<span class="normal"><a href="#__codelineno-50-2">2</a></span>
+<span class="normal"><a href="#__codelineno-50-3">3</a></span>
+<span class="normal"><a href="#__codelineno-50-4">4</a></span>
+<span class="normal"><a href="#__codelineno-50-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-50-1"><a id="__codelineno-50-1" name="__codelineno-50-1"></a><span class="c1">// ✅ Correct: with appName prefix</span>
+</span><span id="__span-50-2"><a id="__codelineno-50-2" name="__codelineno-50-2"></a><span class="nx">evt</span><span class="p">.</span><span class="nx">FilterKey</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;my-app/user-messages&quot;</span>
+</span><span id="__span-50-3"><a id="__codelineno-50-3" name="__codelineno-50-3"></a>
+</span><span id="__span-50-4"><a id="__codelineno-50-4" name="__codelineno-50-4"></a><span class="c1">// ❌ Wrong: no prefix, events will be filtered out</span>
+</span><span id="__span-50-5"><a id="__codelineno-50-5" name="__codelineno-50-5"></a><span class="nx">evt</span><span class="p">.</span><span class="nx">FilterKey</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;user-messages&quot;</span>
 </span></code></pre></div></td></tr></table></div>
 <p><strong>Technical Details:</strong> The framework uses prefix matching (<code>strings.HasPrefix</code>) to determine which events should be included in the context. See <code>ContentRequestProcessor</code> filtering logic for details.</p>
 <h4 id="complete-examples">Complete Examples</h4>
@@ -6192,125 +6313,125 @@
 </ul>
 <h3 id="complete-example">Complete Example</h3>
 <p>Here's a complete example demonstrating all components together:</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-50-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-50-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-50-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-50-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-50-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-50-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-50-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-50-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-50-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-50-10">10</a></span>
-<span class="normal"><a href="#__codelineno-50-11">11</a></span>
-<span class="normal"><a href="#__codelineno-50-12">12</a></span>
-<span class="normal"><a href="#__codelineno-50-13">13</a></span>
-<span class="normal"><a href="#__codelineno-50-14">14</a></span>
-<span class="normal"><a href="#__codelineno-50-15">15</a></span>
-<span class="normal"><a href="#__codelineno-50-16">16</a></span>
-<span class="normal"><a href="#__codelineno-50-17">17</a></span>
-<span class="normal"><a href="#__codelineno-50-18">18</a></span>
-<span class="normal"><a href="#__codelineno-50-19">19</a></span>
-<span class="normal"><a href="#__codelineno-50-20">20</a></span>
-<span class="normal"><a href="#__codelineno-50-21">21</a></span>
-<span class="normal"><a href="#__codelineno-50-22">22</a></span>
-<span class="normal"><a href="#__codelineno-50-23">23</a></span>
-<span class="normal"><a href="#__codelineno-50-24">24</a></span>
-<span class="normal"><a href="#__codelineno-50-25">25</a></span>
-<span class="normal"><a href="#__codelineno-50-26">26</a></span>
-<span class="normal"><a href="#__codelineno-50-27">27</a></span>
-<span class="normal"><a href="#__codelineno-50-28">28</a></span>
-<span class="normal"><a href="#__codelineno-50-29">29</a></span>
-<span class="normal"><a href="#__codelineno-50-30">30</a></span>
-<span class="normal"><a href="#__codelineno-50-31">31</a></span>
-<span class="normal"><a href="#__codelineno-50-32">32</a></span>
-<span class="normal"><a href="#__codelineno-50-33">33</a></span>
-<span class="normal"><a href="#__codelineno-50-34">34</a></span>
-<span class="normal"><a href="#__codelineno-50-35">35</a></span>
-<span class="normal"><a href="#__codelineno-50-36">36</a></span>
-<span class="normal"><a href="#__codelineno-50-37">37</a></span>
-<span class="normal"><a href="#__codelineno-50-38">38</a></span>
-<span class="normal"><a href="#__codelineno-50-39">39</a></span>
-<span class="normal"><a href="#__codelineno-50-40">40</a></span>
-<span class="normal"><a href="#__codelineno-50-41">41</a></span>
-<span class="normal"><a href="#__codelineno-50-42">42</a></span>
-<span class="normal"><a href="#__codelineno-50-43">43</a></span>
-<span class="normal"><a href="#__codelineno-50-44">44</a></span>
-<span class="normal"><a href="#__codelineno-50-45">45</a></span>
-<span class="normal"><a href="#__codelineno-50-46">46</a></span>
-<span class="normal"><a href="#__codelineno-50-47">47</a></span>
-<span class="normal"><a href="#__codelineno-50-48">48</a></span>
-<span class="normal"><a href="#__codelineno-50-49">49</a></span>
-<span class="normal"><a href="#__codelineno-50-50">50</a></span>
-<span class="normal"><a href="#__codelineno-50-51">51</a></span>
-<span class="normal"><a href="#__codelineno-50-52">52</a></span>
-<span class="normal"><a href="#__codelineno-50-53">53</a></span>
-<span class="normal"><a href="#__codelineno-50-54">54</a></span>
-<span class="normal"><a href="#__codelineno-50-55">55</a></span>
-<span class="normal"><a href="#__codelineno-50-56">56</a></span>
-<span class="normal"><a href="#__codelineno-50-57">57</a></span>
-<span class="normal"><a href="#__codelineno-50-58">58</a></span>
-<span class="normal"><a href="#__codelineno-50-59">59</a></span>
-<span class="normal"><a href="#__codelineno-50-60">60</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-50-1"><a id="__codelineno-50-1" name="__codelineno-50-1"></a><span class="kn">package</span><span class="w"> </span><span class="nx">main</span>
-</span><span id="__span-50-2"><a id="__codelineno-50-2" name="__codelineno-50-2"></a>
-</span><span id="__span-50-3"><a id="__codelineno-50-3" name="__codelineno-50-3"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-50-4"><a id="__codelineno-50-4" name="__codelineno-50-4"></a><span class="w">    </span><span class="s">&quot;context&quot;</span>
-</span><span id="__span-50-5"><a id="__codelineno-50-5" name="__codelineno-50-5"></a><span class="w">    </span><span class="s">&quot;time&quot;</span>
-</span><span id="__span-50-6"><a id="__codelineno-50-6" name="__codelineno-50-6"></a>
-</span><span id="__span-50-7"><a id="__codelineno-50-7" name="__codelineno-50-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
-</span><span id="__span-50-8"><a id="__codelineno-50-8" name="__codelineno-50-8"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
-</span><span id="__span-50-9"><a id="__codelineno-50-9" name="__codelineno-50-9"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/openai&quot;</span>
-</span><span id="__span-50-10"><a id="__codelineno-50-10" name="__codelineno-50-10"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
-</span><span id="__span-50-11"><a id="__codelineno-50-11" name="__codelineno-50-11"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/session/inmemory&quot;</span>
-</span><span id="__span-50-12"><a id="__codelineno-50-12" name="__codelineno-50-12"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/session/summary&quot;</span>
-</span><span id="__span-50-13"><a id="__codelineno-50-13" name="__codelineno-50-13"></a><span class="p">)</span>
-</span><span id="__span-50-14"><a id="__codelineno-50-14" name="__codelineno-50-14"></a>
-</span><span id="__span-50-15"><a id="__codelineno-50-15" name="__codelineno-50-15"></a><span class="kd">func</span><span class="w"> </span><span class="nx">main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-50-16"><a id="__codelineno-50-16" name="__codelineno-50-16"></a><span class="w">    </span><span class="nx">ctx</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">()</span>
-</span><span id="__span-50-17"><a id="__codelineno-50-17" name="__codelineno-50-17"></a>
-</span><span id="__span-50-18"><a id="__codelineno-50-18" name="__codelineno-50-18"></a><span class="w">    </span><span class="c1">// Create LLM model for both chat and summarization.</span>
-</span><span id="__span-50-19"><a id="__codelineno-50-19" name="__codelineno-50-19"></a><span class="w">    </span><span class="nx">llm</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-4&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">WithAPIKey</span><span class="p">(</span><span class="s">&quot;your-api-key&quot;</span><span class="p">))</span>
-</span><span id="__span-50-20"><a id="__codelineno-50-20" name="__codelineno-50-20"></a>
-</span><span id="__span-50-21"><a id="__codelineno-50-21" name="__codelineno-50-21"></a><span class="w">    </span><span class="c1">// Create summarizer with flexible trigger conditions.</span>
-</span><span id="__span-50-22"><a id="__codelineno-50-22" name="__codelineno-50-22"></a><span class="w">    </span><span class="nx">summarizer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">summary</span><span class="p">.</span><span class="nx">NewSummarizer</span><span class="p">(</span>
-</span><span id="__span-50-23"><a id="__codelineno-50-23" name="__codelineno-50-23"></a><span class="w">        </span><span class="nx">llm</span><span class="p">,</span>
-</span><span id="__span-50-24"><a id="__codelineno-50-24" name="__codelineno-50-24"></a><span class="w">        </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithMaxSummaryWords</span><span class="p">(</span><span class="mi">200</span><span class="p">),</span>
-</span><span id="__span-50-25"><a id="__codelineno-50-25" name="__codelineno-50-25"></a><span class="w">        </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithChecksAny</span><span class="p">(</span>
-</span><span id="__span-50-26"><a id="__codelineno-50-26" name="__codelineno-50-26"></a><span class="w">            </span><span class="nx">summary</span><span class="p">.</span><span class="nx">CheckEventThreshold</span><span class="p">(</span><span class="mi">20</span><span class="p">),</span>
-</span><span id="__span-50-27"><a id="__codelineno-50-27" name="__codelineno-50-27"></a><span class="w">            </span><span class="nx">summary</span><span class="p">.</span><span class="nx">CheckTokenThreshold</span><span class="p">(</span><span class="mi">4000</span><span class="p">),</span>
-</span><span id="__span-50-28"><a id="__codelineno-50-28" name="__codelineno-50-28"></a><span class="w">            </span><span class="nx">summary</span><span class="p">.</span><span class="nx">CheckTimeThreshold</span><span class="p">(</span><span class="mi">5</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">),</span>
-</span><span id="__span-50-29"><a id="__codelineno-50-29" name="__codelineno-50-29"></a><span class="w">        </span><span class="p">),</span>
-</span><span id="__span-50-30"><a id="__codelineno-50-30" name="__codelineno-50-30"></a><span class="w">    </span><span class="p">)</span>
-</span><span id="__span-50-31"><a id="__codelineno-50-31" name="__codelineno-50-31"></a>
-</span><span id="__span-50-32"><a id="__codelineno-50-32" name="__codelineno-50-32"></a><span class="w">    </span><span class="c1">// Create session service with summarizer.</span>
-</span><span id="__span-50-33"><a id="__codelineno-50-33" name="__codelineno-50-33"></a><span class="w">    </span><span class="nx">sessionService</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">NewSessionService</span><span class="p">(</span>
-</span><span id="__span-50-34"><a id="__codelineno-50-34" name="__codelineno-50-34"></a><span class="w">        </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithSummarizer</span><span class="p">(</span><span class="nx">summarizer</span><span class="p">),</span>
-</span><span id="__span-50-35"><a id="__codelineno-50-35" name="__codelineno-50-35"></a><span class="w">        </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithAsyncSummaryNum</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span>
-</span><span id="__span-50-36"><a id="__codelineno-50-36" name="__codelineno-50-36"></a><span class="w">        </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithSummaryQueueSize</span><span class="p">(</span><span class="mi">100</span><span class="p">),</span>
-</span><span id="__span-50-37"><a id="__codelineno-50-37" name="__codelineno-50-37"></a><span class="w">        </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithSummaryJobTimeout</span><span class="p">(</span><span class="mi">60</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Second</span><span class="p">),</span>
-</span><span id="__span-50-38"><a id="__codelineno-50-38" name="__codelineno-50-38"></a><span class="w">    </span><span class="p">)</span>
-</span><span id="__span-50-39"><a id="__codelineno-50-39" name="__codelineno-50-39"></a>
-</span><span id="__span-50-40"><a id="__codelineno-50-40" name="__codelineno-50-40"></a><span class="w">    </span><span class="c1">// Create agent with summary injection enabled.</span>
-</span><span id="__span-50-41"><a id="__codelineno-50-41" name="__codelineno-50-41"></a><span class="w">    </span><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-50-42"><a id="__codelineno-50-42" name="__codelineno-50-42"></a><span class="w">        </span><span class="s">&quot;my-agent&quot;</span><span class="p">,</span>
-</span><span id="__span-50-43"><a id="__codelineno-50-43" name="__codelineno-50-43"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">llm</span><span class="p">),</span>
-</span><span id="__span-50-44"><a id="__codelineno-50-44" name="__codelineno-50-44"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithAddSessionSummary</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
-</span><span id="__span-50-45"><a id="__codelineno-50-45" name="__codelineno-50-45"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithMaxHistoryRuns</span><span class="p">(</span><span class="mi">10</span><span class="p">),</span><span class="w">        </span><span class="c1">// Limit history runs when AddSessionSummary=false</span>
-</span><span id="__span-50-46"><a id="__codelineno-50-46" name="__codelineno-50-46"></a><span class="w">    </span><span class="p">)</span>
-</span><span id="__span-50-47"><a id="__codelineno-50-47" name="__codelineno-50-47"></a>
-</span><span id="__span-50-48"><a id="__codelineno-50-48" name="__codelineno-50-48"></a><span class="w">    </span><span class="c1">// Create runner.</span>
-</span><span id="__span-50-49"><a id="__codelineno-50-49" name="__codelineno-50-49"></a><span class="w">    </span><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;my-app&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">,</span>
-</span><span id="__span-50-50"><a id="__codelineno-50-50" name="__codelineno-50-50"></a><span class="w">        </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">sessionService</span><span class="p">))</span>
-</span><span id="__span-50-51"><a id="__codelineno-50-51" name="__codelineno-50-51"></a>
-</span><span id="__span-50-52"><a id="__codelineno-50-52" name="__codelineno-50-52"></a><span class="w">    </span><span class="c1">// Run conversation - summaries are automatically managed.</span>
-</span><span id="__span-50-53"><a id="__codelineno-50-53" name="__codelineno-50-53"></a><span class="w">    </span><span class="nx">userMsg</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;Tell me about AI&quot;</span><span class="p">)</span>
-</span><span id="__span-50-54"><a id="__codelineno-50-54" name="__codelineno-50-54"></a><span class="w">    </span><span class="nx">eventChan</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;user123&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;session456&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">userMsg</span><span class="p">)</span>
-</span><span id="__span-50-55"><a id="__codelineno-50-55" name="__codelineno-50-55"></a>
-</span><span id="__span-50-56"><a id="__codelineno-50-56" name="__codelineno-50-56"></a><span class="w">    </span><span class="c1">// Consume events.</span>
-</span><span id="__span-50-57"><a id="__codelineno-50-57" name="__codelineno-50-57"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">eventChan</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-50-58"><a id="__codelineno-50-58" name="__codelineno-50-58"></a><span class="w">        </span><span class="c1">// Handle events...</span>
-</span><span id="__span-50-59"><a id="__codelineno-50-59" name="__codelineno-50-59"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-50-60"><a id="__codelineno-50-60" name="__codelineno-50-60"></a><span class="p">}</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-51-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-51-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-51-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-51-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-51-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-51-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-51-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-51-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-51-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-51-10">10</a></span>
+<span class="normal"><a href="#__codelineno-51-11">11</a></span>
+<span class="normal"><a href="#__codelineno-51-12">12</a></span>
+<span class="normal"><a href="#__codelineno-51-13">13</a></span>
+<span class="normal"><a href="#__codelineno-51-14">14</a></span>
+<span class="normal"><a href="#__codelineno-51-15">15</a></span>
+<span class="normal"><a href="#__codelineno-51-16">16</a></span>
+<span class="normal"><a href="#__codelineno-51-17">17</a></span>
+<span class="normal"><a href="#__codelineno-51-18">18</a></span>
+<span class="normal"><a href="#__codelineno-51-19">19</a></span>
+<span class="normal"><a href="#__codelineno-51-20">20</a></span>
+<span class="normal"><a href="#__codelineno-51-21">21</a></span>
+<span class="normal"><a href="#__codelineno-51-22">22</a></span>
+<span class="normal"><a href="#__codelineno-51-23">23</a></span>
+<span class="normal"><a href="#__codelineno-51-24">24</a></span>
+<span class="normal"><a href="#__codelineno-51-25">25</a></span>
+<span class="normal"><a href="#__codelineno-51-26">26</a></span>
+<span class="normal"><a href="#__codelineno-51-27">27</a></span>
+<span class="normal"><a href="#__codelineno-51-28">28</a></span>
+<span class="normal"><a href="#__codelineno-51-29">29</a></span>
+<span class="normal"><a href="#__codelineno-51-30">30</a></span>
+<span class="normal"><a href="#__codelineno-51-31">31</a></span>
+<span class="normal"><a href="#__codelineno-51-32">32</a></span>
+<span class="normal"><a href="#__codelineno-51-33">33</a></span>
+<span class="normal"><a href="#__codelineno-51-34">34</a></span>
+<span class="normal"><a href="#__codelineno-51-35">35</a></span>
+<span class="normal"><a href="#__codelineno-51-36">36</a></span>
+<span class="normal"><a href="#__codelineno-51-37">37</a></span>
+<span class="normal"><a href="#__codelineno-51-38">38</a></span>
+<span class="normal"><a href="#__codelineno-51-39">39</a></span>
+<span class="normal"><a href="#__codelineno-51-40">40</a></span>
+<span class="normal"><a href="#__codelineno-51-41">41</a></span>
+<span class="normal"><a href="#__codelineno-51-42">42</a></span>
+<span class="normal"><a href="#__codelineno-51-43">43</a></span>
+<span class="normal"><a href="#__codelineno-51-44">44</a></span>
+<span class="normal"><a href="#__codelineno-51-45">45</a></span>
+<span class="normal"><a href="#__codelineno-51-46">46</a></span>
+<span class="normal"><a href="#__codelineno-51-47">47</a></span>
+<span class="normal"><a href="#__codelineno-51-48">48</a></span>
+<span class="normal"><a href="#__codelineno-51-49">49</a></span>
+<span class="normal"><a href="#__codelineno-51-50">50</a></span>
+<span class="normal"><a href="#__codelineno-51-51">51</a></span>
+<span class="normal"><a href="#__codelineno-51-52">52</a></span>
+<span class="normal"><a href="#__codelineno-51-53">53</a></span>
+<span class="normal"><a href="#__codelineno-51-54">54</a></span>
+<span class="normal"><a href="#__codelineno-51-55">55</a></span>
+<span class="normal"><a href="#__codelineno-51-56">56</a></span>
+<span class="normal"><a href="#__codelineno-51-57">57</a></span>
+<span class="normal"><a href="#__codelineno-51-58">58</a></span>
+<span class="normal"><a href="#__codelineno-51-59">59</a></span>
+<span class="normal"><a href="#__codelineno-51-60">60</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-51-1"><a id="__codelineno-51-1" name="__codelineno-51-1"></a><span class="kn">package</span><span class="w"> </span><span class="nx">main</span>
+</span><span id="__span-51-2"><a id="__codelineno-51-2" name="__codelineno-51-2"></a>
+</span><span id="__span-51-3"><a id="__codelineno-51-3" name="__codelineno-51-3"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-51-4"><a id="__codelineno-51-4" name="__codelineno-51-4"></a><span class="w">    </span><span class="s">&quot;context&quot;</span>
+</span><span id="__span-51-5"><a id="__codelineno-51-5" name="__codelineno-51-5"></a><span class="w">    </span><span class="s">&quot;time&quot;</span>
+</span><span id="__span-51-6"><a id="__codelineno-51-6" name="__codelineno-51-6"></a>
+</span><span id="__span-51-7"><a id="__codelineno-51-7" name="__codelineno-51-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
+</span><span id="__span-51-8"><a id="__codelineno-51-8" name="__codelineno-51-8"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
+</span><span id="__span-51-9"><a id="__codelineno-51-9" name="__codelineno-51-9"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/openai&quot;</span>
+</span><span id="__span-51-10"><a id="__codelineno-51-10" name="__codelineno-51-10"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
+</span><span id="__span-51-11"><a id="__codelineno-51-11" name="__codelineno-51-11"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/session/inmemory&quot;</span>
+</span><span id="__span-51-12"><a id="__codelineno-51-12" name="__codelineno-51-12"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/session/summary&quot;</span>
+</span><span id="__span-51-13"><a id="__codelineno-51-13" name="__codelineno-51-13"></a><span class="p">)</span>
+</span><span id="__span-51-14"><a id="__codelineno-51-14" name="__codelineno-51-14"></a>
+</span><span id="__span-51-15"><a id="__codelineno-51-15" name="__codelineno-51-15"></a><span class="kd">func</span><span class="w"> </span><span class="nx">main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-51-16"><a id="__codelineno-51-16" name="__codelineno-51-16"></a><span class="w">    </span><span class="nx">ctx</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">()</span>
+</span><span id="__span-51-17"><a id="__codelineno-51-17" name="__codelineno-51-17"></a>
+</span><span id="__span-51-18"><a id="__codelineno-51-18" name="__codelineno-51-18"></a><span class="w">    </span><span class="c1">// Create LLM model for both chat and summarization.</span>
+</span><span id="__span-51-19"><a id="__codelineno-51-19" name="__codelineno-51-19"></a><span class="w">    </span><span class="nx">llm</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-4&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">WithAPIKey</span><span class="p">(</span><span class="s">&quot;your-api-key&quot;</span><span class="p">))</span>
+</span><span id="__span-51-20"><a id="__codelineno-51-20" name="__codelineno-51-20"></a>
+</span><span id="__span-51-21"><a id="__codelineno-51-21" name="__codelineno-51-21"></a><span class="w">    </span><span class="c1">// Create summarizer with flexible trigger conditions.</span>
+</span><span id="__span-51-22"><a id="__codelineno-51-22" name="__codelineno-51-22"></a><span class="w">    </span><span class="nx">summarizer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">summary</span><span class="p">.</span><span class="nx">NewSummarizer</span><span class="p">(</span>
+</span><span id="__span-51-23"><a id="__codelineno-51-23" name="__codelineno-51-23"></a><span class="w">        </span><span class="nx">llm</span><span class="p">,</span>
+</span><span id="__span-51-24"><a id="__codelineno-51-24" name="__codelineno-51-24"></a><span class="w">        </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithMaxSummaryWords</span><span class="p">(</span><span class="mi">200</span><span class="p">),</span>
+</span><span id="__span-51-25"><a id="__codelineno-51-25" name="__codelineno-51-25"></a><span class="w">        </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithChecksAny</span><span class="p">(</span>
+</span><span id="__span-51-26"><a id="__codelineno-51-26" name="__codelineno-51-26"></a><span class="w">            </span><span class="nx">summary</span><span class="p">.</span><span class="nx">CheckEventThreshold</span><span class="p">(</span><span class="mi">20</span><span class="p">),</span>
+</span><span id="__span-51-27"><a id="__codelineno-51-27" name="__codelineno-51-27"></a><span class="w">            </span><span class="nx">summary</span><span class="p">.</span><span class="nx">CheckTokenThreshold</span><span class="p">(</span><span class="mi">4000</span><span class="p">),</span>
+</span><span id="__span-51-28"><a id="__codelineno-51-28" name="__codelineno-51-28"></a><span class="w">            </span><span class="nx">summary</span><span class="p">.</span><span class="nx">CheckTimeThreshold</span><span class="p">(</span><span class="mi">5</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">),</span>
+</span><span id="__span-51-29"><a id="__codelineno-51-29" name="__codelineno-51-29"></a><span class="w">        </span><span class="p">),</span>
+</span><span id="__span-51-30"><a id="__codelineno-51-30" name="__codelineno-51-30"></a><span class="w">    </span><span class="p">)</span>
+</span><span id="__span-51-31"><a id="__codelineno-51-31" name="__codelineno-51-31"></a>
+</span><span id="__span-51-32"><a id="__codelineno-51-32" name="__codelineno-51-32"></a><span class="w">    </span><span class="c1">// Create session service with summarizer.</span>
+</span><span id="__span-51-33"><a id="__codelineno-51-33" name="__codelineno-51-33"></a><span class="w">    </span><span class="nx">sessionService</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">NewSessionService</span><span class="p">(</span>
+</span><span id="__span-51-34"><a id="__codelineno-51-34" name="__codelineno-51-34"></a><span class="w">        </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithSummarizer</span><span class="p">(</span><span class="nx">summarizer</span><span class="p">),</span>
+</span><span id="__span-51-35"><a id="__codelineno-51-35" name="__codelineno-51-35"></a><span class="w">        </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithAsyncSummaryNum</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span>
+</span><span id="__span-51-36"><a id="__codelineno-51-36" name="__codelineno-51-36"></a><span class="w">        </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithSummaryQueueSize</span><span class="p">(</span><span class="mi">100</span><span class="p">),</span>
+</span><span id="__span-51-37"><a id="__codelineno-51-37" name="__codelineno-51-37"></a><span class="w">        </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithSummaryJobTimeout</span><span class="p">(</span><span class="mi">60</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Second</span><span class="p">),</span>
+</span><span id="__span-51-38"><a id="__codelineno-51-38" name="__codelineno-51-38"></a><span class="w">    </span><span class="p">)</span>
+</span><span id="__span-51-39"><a id="__codelineno-51-39" name="__codelineno-51-39"></a>
+</span><span id="__span-51-40"><a id="__codelineno-51-40" name="__codelineno-51-40"></a><span class="w">    </span><span class="c1">// Create agent with summary injection enabled.</span>
+</span><span id="__span-51-41"><a id="__codelineno-51-41" name="__codelineno-51-41"></a><span class="w">    </span><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-51-42"><a id="__codelineno-51-42" name="__codelineno-51-42"></a><span class="w">        </span><span class="s">&quot;my-agent&quot;</span><span class="p">,</span>
+</span><span id="__span-51-43"><a id="__codelineno-51-43" name="__codelineno-51-43"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">llm</span><span class="p">),</span>
+</span><span id="__span-51-44"><a id="__codelineno-51-44" name="__codelineno-51-44"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithAddSessionSummary</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-51-45"><a id="__codelineno-51-45" name="__codelineno-51-45"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithMaxHistoryRuns</span><span class="p">(</span><span class="mi">10</span><span class="p">),</span><span class="w">        </span><span class="c1">// Limit history runs when AddSessionSummary=false</span>
+</span><span id="__span-51-46"><a id="__codelineno-51-46" name="__codelineno-51-46"></a><span class="w">    </span><span class="p">)</span>
+</span><span id="__span-51-47"><a id="__codelineno-51-47" name="__codelineno-51-47"></a>
+</span><span id="__span-51-48"><a id="__codelineno-51-48" name="__codelineno-51-48"></a><span class="w">    </span><span class="c1">// Create runner.</span>
+</span><span id="__span-51-49"><a id="__codelineno-51-49" name="__codelineno-51-49"></a><span class="w">    </span><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;my-app&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">,</span>
+</span><span id="__span-51-50"><a id="__codelineno-51-50" name="__codelineno-51-50"></a><span class="w">        </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">sessionService</span><span class="p">))</span>
+</span><span id="__span-51-51"><a id="__codelineno-51-51" name="__codelineno-51-51"></a>
+</span><span id="__span-51-52"><a id="__codelineno-51-52" name="__codelineno-51-52"></a><span class="w">    </span><span class="c1">// Run conversation - summaries are automatically managed.</span>
+</span><span id="__span-51-53"><a id="__codelineno-51-53" name="__codelineno-51-53"></a><span class="w">    </span><span class="nx">userMsg</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;Tell me about AI&quot;</span><span class="p">)</span>
+</span><span id="__span-51-54"><a id="__codelineno-51-54" name="__codelineno-51-54"></a><span class="w">    </span><span class="nx">eventChan</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;user123&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;session456&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">userMsg</span><span class="p">)</span>
+</span><span id="__span-51-55"><a id="__codelineno-51-55" name="__codelineno-51-55"></a>
+</span><span id="__span-51-56"><a id="__codelineno-51-56" name="__codelineno-51-56"></a><span class="w">    </span><span class="c1">// Consume events.</span>
+</span><span id="__span-51-57"><a id="__codelineno-51-57" name="__codelineno-51-57"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">eventChan</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-51-58"><a id="__codelineno-51-58" name="__codelineno-51-58"></a><span class="w">        </span><span class="c1">// Handle events...</span>
+</span><span id="__span-51-59"><a id="__codelineno-51-59" name="__codelineno-51-59"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-51-60"><a id="__codelineno-51-60" name="__codelineno-51-60"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <h2 id="references">References</h2>
 <ul>
@@ -6340,7 +6461,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="February 4, 2026 06:44:31 UTC">2026-02-04 06:44:31</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="February 4, 2026 08:22:10 UTC">2026-02-04 08:22:10</span>
   </span>
 
     
