@@ -257,6 +257,13 @@ func parseJudgeResponse(content string) (*LLMJudgeResult, error) {
 		result.Confidence = 0.5
 		result.Reason = "Failed to parse JSON response"
 	}
+	// Normalize confidence to [0, 1] range.
+	if result.Confidence < 0 {
+		result.Confidence = -result.Confidence
+	}
+	if result.Confidence > 1 {
+		result.Confidence = 1
+	}
 	return &result, nil
 }
 

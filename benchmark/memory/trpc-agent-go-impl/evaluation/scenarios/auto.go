@@ -76,17 +76,11 @@ func (e *AutoEvaluator) Evaluate(
 	}
 
 	// Wait for async extraction to complete.
-	// Use a longer wait time since LLM extraction takes time.
-	// Each session may take 2-5 seconds depending on the model.
-	numSessions := len(sample.Conversation)
-	waitTime := time.Duration(numSessions) * 3 * time.Second
-	if waitTime < 5*time.Second {
-		waitTime = 5 * time.Second
+	// The extractor runs asynchronously; if we start QA too early, retrieval will miss
+	// facts and evaluation will be artificially low.
+	if err := e.waitForAutoExtraction(ctx, userKey, sample); err != nil {
+		return nil, fmt.Errorf("wait for auto extraction: %w", err)
 	}
-	if waitTime > 60*time.Second {
-		waitTime = 60 * time.Second
-	}
-	time.Sleep(waitTime)
 
 	// Phase 2: Answer QA questions using search-only agent.
 	result := &SampleResult{
@@ -110,6 +104,64 @@ func (e *AutoEvaluator) Evaluate(
 	return result, nil
 }
 
+func (e *AutoEvaluator) waitForAutoExtraction(
+	ctx context.Context,
+	userKey memory.UserKey,
+	sample *dataset.LoCoMoSample,
+) error {
+	// Heuristic: wait until the number of extracted memories becomes stable.
+	// We cap total wait time to avoid hanging forever on extractor issues.
+	numSessions := len(sample.Conversation)
+
+	// Poll interval and stability criteria.
+	const pollInterval = 5 * time.Second
+	const stableRounds = 3
+	const readLimit = 10000
+
+	// Timeout heuristic: 15s per session, clamped to [30s, 10m].
+	timeout := time.Duration(numSessions) * 15 * time.Second
+	if timeout < 30*time.Second {
+		timeout = 30 * time.Second
+	}
+	if timeout > 10*time.Minute {
+		timeout = 10 * time.Minute
+	}
+	deadline := time.Now().Add(timeout)
+
+	var (
+		lastCount   = -1
+		stableCount = 0
+	)
+
+	for {
+		if time.Now().After(deadline) {
+			// Best-effort: continue evaluation even if we couldn't observe stability.
+			return nil
+		}
+
+		entries, err := e.memoryService.ReadMemories(ctx, userKey, readLimit)
+		if err != nil {
+			// Transient DB/read issues shouldn't hard-fail the eval.
+			time.Sleep(pollInterval)
+			continue
+		}
+
+		cur := len(entries)
+		if cur == lastCount {
+			stableCount++
+		} else {
+			stableCount = 0
+			lastCount = cur
+		}
+
+		if stableCount >= stableRounds {
+			return nil
+		}
+
+		time.Sleep(pollInterval)
+	}
+}
+
 // triggerAutoExtraction feeds conversation to the auto extractor.
 // Each conversation session is enqueued separately to avoid token limits.
 func (e *AutoEvaluator) triggerAutoExtraction(
@@ -128,14 +180,23 @@ func (e *AutoEvaluator) triggerAutoExtraction(
 			UpdatedAt: time.Now(),
 		}
 
-		// Convert conversation turns to events.
-		eventTime := time.Now()
+		// Parse session date to use as event timestamp.
+		// This allows the framework to inject correct time context.
+		eventTime := parseSessionDate(convSession.SessionDate)
+		if eventTime.IsZero() {
+			eventTime = time.Now()
+		}
+
+		// Convert conversation turns to events with speaker info in content.
 		for idx, turn := range convSession.Turns {
 			role := model.RoleUser
 			if strings.ToLower(turn.Speaker) == "user2" ||
 				strings.Contains(strings.ToLower(turn.Speaker), "assistant") {
 				role = model.RoleAssistant
 			}
+
+			// Include speaker name in content for multi-party conversations.
+			content := fmt.Sprintf("[%s]: %s", turn.Speaker, turn.Text)
 
 			evt := event.Event{
 				ID:        fmt.Sprintf("%s-%d", convSession.SessionID, idx),
@@ -145,7 +206,7 @@ func (e *AutoEvaluator) triggerAutoExtraction(
 						{
 							Message: model.Message{
 								Role:    role,
-								Content: turn.Text,
+								Content: content,
 							},
 						},
 					},
@@ -162,6 +223,26 @@ func (e *AutoEvaluator) triggerAutoExtraction(
 		}
 	}
 	return nil
+}
+
+// parseSessionDate parses session date string like "1:56 pm on 8 May, 2023".
+func parseSessionDate(dateStr string) time.Time {
+	if dateStr == "" {
+		return time.Time{}
+	}
+	// Try common formats from LoCoMo dataset.
+	formats := []string{
+		"3:04 pm on 2 January, 2006",
+		"3:04 pm on 2 Jan, 2006",
+		"3:04 PM on 2 January, 2006",
+		"3:04 PM on 2 Jan, 2006",
+	}
+	for _, format := range formats {
+		if t, err := time.Parse(format, dateStr); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
 }
 
 // evaluateQA evaluates a single QA using search-only agent.
@@ -192,7 +273,7 @@ func (e *AutoEvaluator) evaluateQA(
 	}
 
 	// Generate answer.
-	prompt := fmt.Sprintf(`Based on the following automatically extracted memories, answer the question.
+	prompt := fmt.Sprintf(`Based on the following memories, answer the question.
 
 ## Memories
 %s
@@ -201,9 +282,11 @@ func (e *AutoEvaluator) evaluateQA(
 %s
 
 ## Instructions
-- Answer based ONLY on the information in the memories.
-- If the answer cannot be found, say "The information is not available."
-- Be concise and direct.
+- Extract the answer from the memories above.
+- If a memory contains relevant information, use it to answer even if not perfectly matching.
+- Look for dates, names, numbers, and facts in the memories.
+- Provide a concise answer. Only say "The information is not available." if NO memory
+  contains ANY relevant information.
 
 Answer:`, memContext.String(), qa.Question)
 
@@ -219,10 +302,16 @@ Answer:`, memContext.String(), qa.Question)
 	}
 
 	// LLM judge if enabled.
+	// We store a calibrated correctness score in [0,1]: confidence when judged
+	// correct, otherwise 0. This makes category/overall averages meaningful.
 	if e.llmJudge != nil {
 		judgeResult, err := e.llmJudge.Evaluate(ctx, qa.Question, qa.Answer, predicted)
-		if err == nil && judgeResult.Correct {
-			m.LLMScore = judgeResult.Confidence
+		if err == nil {
+			if judgeResult.Correct {
+				m.LLMScore = judgeResult.Confidence
+			} else {
+				m.LLMScore = 0
+			}
 		}
 	}
 
