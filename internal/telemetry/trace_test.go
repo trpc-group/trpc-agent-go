@@ -417,6 +417,36 @@ func TestNewExecuteToolSpanName(t *testing.T) {
 	}
 }
 
+func TestNewSummarizeTaskType(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "empty name",
+			in:   "",
+			want: "summarize",
+		},
+		{
+			name: "non-empty name",
+			in:   "demo",
+			want: "summarize demo",
+		},
+		{
+			name: "whitespace is preserved",
+			in:   "  demo  ",
+			want: "summarize   demo  ",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, NewSummarizeTaskType(tt.in))
+		})
+	}
+}
+
 func TestTraceToolCall_NilPaths(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -604,6 +634,24 @@ func TestTraceChat_WithTimeToFirstToken(t *testing.T) {
 	})
 
 	require.True(t, hasAttr(span.attrs, KeyTRPCAgentGoClientTimeToFirstToken, 0.1))
+}
+
+func TestTraceChat_WithTaskType(t *testing.T) {
+	inv := &agent.Invocation{InvocationID: "inv-task", Session: &session.Session{ID: "sess-task"}}
+	req := &model.Request{Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}}}
+	rsp := &model.Response{ID: "resp-task"}
+
+	span := newRecordingSpan()
+	TraceChat(span, &TraceChatAttributes{
+		Invocation:       inv,
+		Request:          req,
+		Response:         rsp,
+		EventID:          "evt-task",
+		TimeToFirstToken: 0,
+		TaskType:         "summarize demo",
+	})
+
+	require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAITaskType, "summarize demo"))
 }
 
 func TestBuildInvocationAttributes(t *testing.T) {
