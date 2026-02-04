@@ -748,7 +748,7 @@ import "trpc.group/trpc-go/trpc-agent-go/server/agui"
 
 server, err := agui.New(
     runner,
-    agui.WithBasePath("/agui"),                // 设置 AG-UI 前缀路由
+    agui.WithBasePath("/agui/"),               // 设置 AG-UI 前缀路由
     agui.WithPath("/chat"),                    // 设置实时对话路由，默认为 "/"
     agui.WithCancelEnabled(true),              // 开启取消路由
     agui.WithCancelPath("/cancel"),            // 设置取消路由，默认为 "/cancel"
