@@ -27,6 +27,9 @@ import (
 type listFileRequest struct {
 	// Path is a relative directory under base_directory.
 	Path string `json:"path"`
+
+	// WithSize returns the size of the files.
+	WithSize bool `json:"with_size"`
 }
 
 // listFileResponse represents the output from the list file operation.
@@ -36,6 +39,13 @@ type listFileResponse struct {
 	Files         []string `json:"files"`
 	Folders       []string `json:"folders"`
 	Message       string   `json:"message"`
+
+	FilesWithSize []fileInfo `json:"files_with_size"`
+}
+
+type fileInfo struct {
+	Name string `json:"name"`
+	Size int64  `json:"size"`
 }
 
 // listFile performs the list file operation.
@@ -137,6 +147,14 @@ func (f *fileToolSet) listFile(
 			rsp.Folders = append(rsp.Folders, entry.Name())
 		} else {
 			rsp.Files = append(rsp.Files, entry.Name())
+			if req.WithSize {
+				if info, _ := entry.Info(); info != nil {
+					rsp.FilesWithSize = append(rsp.FilesWithSize, fileInfo{
+						Name: entry.Name(),
+						Size: info.Size(),
+					})
+				}
+			}
 		}
 	}
 	// Create a summary message.
