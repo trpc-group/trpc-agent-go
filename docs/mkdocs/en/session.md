@@ -1641,6 +1641,10 @@ By default, `CheckTokenThreshold` uses a built-in `SimpleTokenCounter` to estima
 
 ```go
 import (
+    "context"
+    "fmt"
+    "unicode/utf8"
+
     "trpc.group/trpc-go/trpc-agent-go/model"
     "trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
@@ -1652,9 +1656,26 @@ summary.SetTokenCounter(model.NewSimpleTokenCounter())
 type MyCustomCounter struct{}
 
 func (c *MyCustomCounter) CountTokens(ctx context.Context, message model.Message) (int, error) {
-    // Your custom token counting logic
-    // e.g., use tiktoken, huggingface tokenizer, etc.
-    return estimatedTokens, nil
+    _ = ctx
+    // TODO: Replace this with your real tokenizer implementation.
+    return utf8.RuneCountInString(message.Content), nil
+}
+
+func (c *MyCustomCounter) CountTokensRange(ctx context.Context, messages []model.Message, start, end int) (int, error) {
+    if start < 0 || end > len(messages) || start >= end {
+        return 0, fmt.Errorf("invalid range: start=%d, end=%d, len=%d",
+            start, end, len(messages))
+    }
+
+    total := 0
+    for i := start; i < end; i++ {
+        tokens, err := c.CountTokens(ctx, messages[i])
+        if err != nil {
+            return 0, err
+        }
+        total += tokens
+    }
+    return total, nil
 }
 
 summary.SetTokenCounter(&MyCustomCounter{})
