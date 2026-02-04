@@ -11,18 +11,46 @@ package redis
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
-	"trpc.group/trpc-go/trpc-agent-go/log"
+	"github.com/redis/go-redis/v9"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
-	v1 "trpc.group/trpc-go/trpc-agent-go/session/redis/internal/v1"
-	v2 "trpc.group/trpc-go/trpc-agent-go/session/redis/internal/v2"
+)
+
+// luaSummariesSetIfNewer atomically merges one filterKey summary into the stored
+// JSON map only if the incoming UpdatedAt is newer-or-equal.
+// KEYS[1] = [prefix:]sesssum:{app}:{user}  (prefix is optional, set via WithKeyPrefix)
+// ARGV[1] = sessionID
+// ARGV[2] = filterKey
+// ARGV[3] = newSummaryJSON -> {"Summary":"...","UpdatedAt":"RFC3339 time"}
+var luaSummariesSetIfNewer = redis.NewScript(
+	"local cur = redis.call('HGET', KEYS[1], ARGV[1])\n" +
+		"local fk = ARGV[2]\n" +
+		"local newSum = cjson.decode(ARGV[3])\n" +
+		"if not cur or cur == '' then\n" +
+		"  local m = {}\n" +
+		"  m[fk] = newSum\n" +
+		"  redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(m))\n" +
+		"  return 1\n" +
+		"end\n" +
+		"local map = cjson.decode(cur)\n" +
+		"local old = map[fk]\n" +
+		"local old_ts = nil\n" +
+		"local new_ts = nil\n" +
+		"if old and old['updated_at'] then old_ts = old['updated_at'] end\n" +
+		"if newSum and newSum['updated_at'] then new_ts = newSum['updated_at'] end\n" +
+		"if not old or (old_ts and new_ts and old_ts <= new_ts) then\n" +
+		"  map[fk] = newSum\n" +
+		"  redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(map))\n" +
+		"  return 1\n" +
+		"end\n" +
+		"return 0\n",
 )
 
 // CreateSessionSummary generates a summary for the session (async-ready).
 // It performs per-filterKey delta summarization; when filterKey=="", it means full-session summary.
-// Strategy: Summary storage version follows session storage version.
 func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
 	if s.opts.summarizer == nil {
 		return nil
@@ -51,46 +79,30 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 		return nil
 	}
 
-	// Dual-write mode: write to both V2 and V1
-	if s.needDualWrite() {
-		if err := s.v2Client.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL); err != nil {
-			return err
-		}
-		if err := s.v1Client.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL); err != nil {
-			return fmt.Errorf("dual-write summary to V1 failed: %w", err)
-		}
-		return nil
-	}
-
-	// Fast path: use version tag from session
-	ver := getSessionVersion(sess)
-	if ver == v2.VersionV2 {
-		return s.v2Client.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL)
-	} else if ver == v1.VersionV1 {
-		return s.v1Client.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL)
-	}
-
-	// Slow path: check which storage has the session
-	v1Exists, v2Exists, err := s.checkSessionExists(ctx, key)
+	payload, err := json.Marshal(sum)
 	if err != nil {
-		log.WarnfContext(ctx, "checkSessionExists failed: %v", err)
+		return fmt.Errorf("marshal summary failed: %w", err)
 	}
 
-	if v2Exists {
-		return s.v2Client.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL)
-	}
-	if s.legacyEnabled() && v1Exists {
-		return s.v1Client.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL)
+	sumKey := s.getSessionSummaryKey(key)
+	if _, err := luaSummariesSetIfNewer.Run(
+		ctx, s.redisClient, []string{sumKey}, sess.ID, filterKey, string(payload),
+	).Result(); err != nil {
+		return fmt.Errorf("store summaries (lua) failed: %w", err)
 	}
 
-	log.WarnfContext(ctx, "session not found when creating summary: %s/%s/%s", key.AppName, key.UserID, key.SessionID)
+	if s.opts.sessionTTL > 0 {
+		if err := s.redisClient.Expire(ctx, sumKey, s.opts.sessionTTL).Err(); err != nil {
+			return fmt.Errorf("expire summaries failed: %w", err)
+		}
+	}
+
 	return nil
 }
 
 // GetSessionSummaryText returns the latest summary text from the session state if present.
 // When no options are provided, returns the full-session summary (SummaryFilterKeyAllContents).
 // Use session.WithSummaryFilterKey to specify a different filter key.
-// Strategy: Summary storage version follows session storage version.
 func (s *Service) GetSessionSummaryText(ctx context.Context, sess *session.Session, opts ...session.SummaryOption) (string, bool) {
 	// Check session validity.
 	if sess == nil {
@@ -107,37 +119,18 @@ func (s *Service) GetSessionSummaryText(ctx context.Context, sess *session.Sessi
 		return text, true
 	}
 
-	// Check which storage has the session (summary follows session version)
-	v1Exists, v2Exists, err := s.checkSessionExists(ctx, key)
-	if err != nil {
-		log.WarnfContext(ctx, "checkSessionExists failed: %v", err)
+	// Fall back to Redis-stored summaries.
+	bytes, err := s.redisClient.HGet(ctx, s.getSessionSummaryKey(key), key.SessionID).Bytes()
+	if err != nil || len(bytes) == 0 {
 		return "", false
 	}
 
-	// Priority: V2 > V1 (summary follows session version)
-	if v2Exists {
-		summaries, err := s.v2Client.GetSummary(ctx, key)
-		if err != nil {
-			log.WarnfContext(ctx, "get V2 summary failed: %v", err)
-			return "", false
-		}
-		if summaries != nil {
-			return isummary.PickSummaryText(summaries, isummary.GetFilterKeyFromOptions(opts...), sess.CreatedAt)
-		}
+	var summaries map[string]*session.Summary
+	if err := json.Unmarshal(bytes, &summaries); err != nil {
+		return "", false
 	}
 
-	if s.legacyEnabled() && v1Exists {
-		summaries, err := s.v1Client.GetSummary(ctx, key)
-		if err != nil {
-			log.WarnfContext(ctx, "get V1 summary failed: %v", err)
-			return "", false
-		}
-		if summaries != nil {
-			return isummary.PickSummaryText(summaries, isummary.GetFilterKeyFromOptions(opts...), sess.CreatedAt)
-		}
-	}
-
-	return "", false
+	return isummary.PickSummaryText(summaries, isummary.GetFilterKeyFromOptions(opts...), sess.CreatedAt)
 }
 
 // EnqueueSummaryJob enqueues a summary job for asynchronous processing.

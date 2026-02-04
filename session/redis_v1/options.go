@@ -27,30 +27,6 @@ const (
 	defaultSummaryJobTimeout = 60 * time.Second
 )
 
-// CompatMode defines the V1/V2 compatibility mode for the redis session service.
-type CompatMode int
-
-const (
-	// CompatModeNone disables V1 compatibility entirely.
-	// - Read: V2 only
-	// - Write: V2 only
-	// Use this when all instances are upgraded and V1 data has expired.
-	CompatModeNone CompatMode = iota
-
-	// CompatModeLegacy enables V1 read fallback only (no dual-write).
-	// - Read: V2 first, fallback to V1 if not found
-	// - Write: V2 only
-	// Use this after all instances are upgraded but V1 data still exists.
-	CompatModeLegacy
-
-	// CompatModeDualWrite enables full V1 compatibility with dual-write.
-	// - Read: V2 first, fallback to V1 if not found
-	// - Write: dual-write to both V2 and V1
-	// Use this during rolling upgrades when old V1-only instances are still running.
-	// This ensures old instances can read data created by new instances.
-	CompatModeDualWrite
-)
-
 // ServiceOpts is the options for the redis session service.
 type ServiceOpts struct {
 	sessionEventLimit  int
@@ -77,10 +53,6 @@ type ServiceOpts struct {
 	// hooks for session operations.
 	appendEventHooks []session.AppendEventHook
 	getSessionHooks  []session.GetSessionHook
-	// compatMode controls V1/V2 compatibility behavior.
-	// See CompatMode constants for details.
-	// Default: CompatModeLegacy (safe for most scenarios).
-	compatMode CompatMode
 }
 
 // ServiceOpt is the option for the redis session service.
@@ -97,7 +69,6 @@ var (
 		asyncSummaryNum:    defaultAsyncSummaryNum,
 		summaryQueueSize:   defaultSummaryQueueSize,
 		summaryJobTimeout:  defaultSummaryJobTimeout,
-		compatMode:         CompatModeLegacy,
 	}
 )
 
@@ -226,54 +197,11 @@ func WithGetSessionHook(hooks ...session.GetSessionHook) ServiceOpt {
 	}
 }
 
-// WithCompatMode sets the V1/V2 compatibility mode.
-//
-// Available modes:
-//   - CompatModeNone: V2 only, no V1 compatibility
-//   - CompatModeLegacy: V2 first with V1 read fallback (default)
-//   - CompatModeDualWrite: Full compatibility with dual-write
-//
-// Migration path:
-//  1. Rolling upgrade: WithCompatMode(CompatModeDualWrite) - old V1 instances can read new data
-//  2. All upgraded: WithCompatMode(CompatModeLegacy) - stop dual-write, keep V1 read fallback
-//  3. V1 TTL expired: WithCompatMode(CompatModeNone) - pure V2 mode
-//
-// Default: CompatModeLegacy (safe for most scenarios where V1 data may still exist).
-func WithCompatMode(mode CompatMode) ServiceOpt {
-	return func(opts *ServiceOpts) {
-		opts.compatMode = mode
-	}
-}
-
-// WithKeyPrefix sets the key prefix for V1 keys.
-// This is used to find existing V1 data when legacy support is enabled.
-// V2 keys always use the "v2:" prefix and are not affected by this setting.
+// WithKeyPrefix sets the prefix for all redis keys.
+// If set, all keys will be prefixed with this value followed by a colon.
+// For example, if keyPrefix is "myapp", key "sess:{app}:user" becomes "myapp:sess:{app}:user".
 func WithKeyPrefix(prefix string) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.keyPrefix = prefix
-	}
-}
-
-// WithLegacySupport is deprecated. Use WithCompatMode instead.
-//
-// Deprecated: Use WithCompatMode(CompatModeLegacy) or WithCompatMode(CompatModeNone).
-func WithLegacySupport(enable bool) ServiceOpt {
-	return func(opts *ServiceOpts) {
-		if enable {
-			opts.compatMode = CompatModeLegacy
-		} else {
-			opts.compatMode = CompatModeNone
-		}
-	}
-}
-
-// WithDualWrite is deprecated. Use WithCompatMode instead.
-//
-// Deprecated: Use WithCompatMode(CompatModeDualWrite).
-func WithDualWrite(enable bool) ServiceOpt {
-	return func(opts *ServiceOpts) {
-		if enable {
-			opts.compatMode = CompatModeDualWrite
-		}
 	}
 }
