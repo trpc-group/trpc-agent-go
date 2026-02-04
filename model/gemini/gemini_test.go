@@ -1031,6 +1031,182 @@ func seqFromSlice[T any](items []T) iter.Seq2[T, error] {
 	}
 }
 
+// seqFromSliceWithError creates an iter.Seq2 that yields items then returns an error.
+func seqFromSliceWithError[T any](items []T, err error) iter.Seq2[T, error] {
+	return func(yield func(T, error) bool) {
+		for _, item := range items {
+			if !yield(item, nil) {
+				return
+			}
+		}
+		// Yield the error after all items
+		var zero T
+		yield(zero, err)
+	}
+}
+
+// seqWithImmediateError creates an iter.Seq2 that immediately returns an error.
+func seqWithImmediateError[T any](err error) iter.Seq2[T, error] {
+	return func(yield func(T, error) bool) {
+		var zero T
+		yield(zero, err)
+	}
+}
+
+func TestModel_GenerateContentStreamingError(t *testing.T) {
+	subText := "subText"
+	req := &model.Request{
+		Messages: []model.Message{
+			{
+				Role:    model.RoleAssistant,
+				Content: "text",
+				ContentParts: []model.ContentPart{
+					{
+						Type: model.ContentTypeText,
+						Text: &subText,
+					},
+				},
+			},
+		},
+		GenerationConfig: model.GenerationConfig{
+			Stream: true,
+		},
+	}
+
+	t.Run("immediate_stream_error", func(t *testing.T) {
+		// Test when the stream immediately returns an error on the first chunk
+		streamErr := errors.New("stream connection failed")
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		mockClient := NewMockClient(ctrl)
+		mockModels := NewMockModels(ctrl)
+		mockClient.EXPECT().Models().Return(mockModels).AnyTimes()
+		mockModels.EXPECT().
+			GenerateContentStream(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(seqWithImmediateError[*genai.GenerateContentResponse](streamErr)).AnyTimes()
+
+		m := &Model{
+			client: mockClient,
+		}
+		respChan, err := m.GenerateContent(context.Background(), req)
+		assert.Nil(t, err)
+
+		// Read response from channel
+		resp := <-respChan
+		assert.NotNil(t, resp)
+		assert.NotNil(t, resp.Error)
+		assert.Equal(t, "stream connection failed", resp.Error.Message)
+		assert.Equal(t, model.ErrorTypeAPIError, resp.Error.Type)
+		assert.True(t, resp.Done)
+
+		// Verify channel is closed and no extra messages are delivered
+		select {
+		case extraMsg, ok := <-respChan:
+			if ok {
+				t.Errorf("unexpected extra message received after error: %+v", extraMsg)
+			}
+			// Channel closed as expected
+		case <-time.After(100 * time.Millisecond):
+			t.Error("channel was not closed after error - potential goroutine leak")
+		}
+	})
+
+	t.Run("mid_stream_error", func(t *testing.T) {
+		// Test when the stream returns some chunks then fails
+		now := time.Now()
+		streamErr := errors.New("stream interrupted")
+		successChunk := &genai.GenerateContentResponse{
+			ResponseID:   "1",
+			CreateTime:   now,
+			ModelVersion: "pro-v1",
+			Candidates: []*genai.Candidate{
+				{
+					Content: &genai.Content{
+						Parts: []*genai.Part{
+							{Text: "partial response"},
+						},
+					},
+				},
+			},
+		}
+
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		mockClient := NewMockClient(ctrl)
+		mockModels := NewMockModels(ctrl)
+		mockClient.EXPECT().Models().Return(mockModels).AnyTimes()
+		mockModels.EXPECT().
+			GenerateContentStream(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(seqFromSliceWithError([]*genai.GenerateContentResponse{successChunk}, streamErr)).AnyTimes()
+
+		m := &Model{
+			client: mockClient,
+		}
+		respChan, err := m.GenerateContent(context.Background(), req)
+		assert.Nil(t, err)
+
+		// First response should be the successful chunk
+		resp := <-respChan
+		assert.NotNil(t, resp)
+		assert.Nil(t, resp.Error)
+		assert.Len(t, resp.Choices, 1)
+		assert.Equal(t, "partial response", resp.Choices[0].Message.Content)
+
+		// Second response should be the error
+		errorResp := <-respChan
+		assert.NotNil(t, errorResp)
+		assert.NotNil(t, errorResp.Error)
+		assert.Equal(t, "stream interrupted", errorResp.Error.Message)
+		assert.Equal(t, model.ErrorTypeAPIError, errorResp.Error.Type)
+		assert.True(t, errorResp.Done)
+	})
+
+	t.Run("error_with_callbacks", func(t *testing.T) {
+		// Test that chunk callback is not called when error occurs immediately
+		streamErr := errors.New("callback test error")
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		mockClient := NewMockClient(ctrl)
+		mockModels := NewMockModels(ctrl)
+		mockClient.EXPECT().Models().Return(mockModels).AnyTimes()
+		mockModels.EXPECT().
+			GenerateContentStream(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(seqWithImmediateError[*genai.GenerateContentResponse](streamErr)).AnyTimes()
+
+		chunkCallbackCalled := false
+		completeCallbackCalled := false
+
+		m := &Model{
+			client: mockClient,
+			chatChunkCallback: func(ctx context.Context, chatRequest []*genai.Content,
+				generateConfig *genai.GenerateContentConfig, chatResponse *genai.GenerateContentResponse) {
+				chunkCallbackCalled = true
+			},
+			chatStreamCompleteCallback: func(ctx context.Context, chatRequest []*genai.Content,
+				generateConfig *genai.GenerateContentConfig, chatResponse *model.Response) {
+				completeCallbackCalled = true
+			},
+		}
+		respChan, err := m.GenerateContent(context.Background(), req)
+		assert.Nil(t, err)
+
+		// Read response (error)
+		resp := <-respChan
+		assert.NotNil(t, resp.Error)
+
+		// Wait for channel to close
+		for range respChan {
+		}
+
+		// Callbacks should not be called when error occurs immediately
+		assert.False(t, chunkCallbackCalled, "chunk callback should not be called on immediate error")
+		assert.False(t, completeCallbackCalled, "complete callback should not be called on error")
+	})
+}
+
 func TestModel_convertContentPartNil(t *testing.T) {
 	type args struct {
 		part model.ContentPart

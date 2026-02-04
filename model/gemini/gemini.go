@@ -159,12 +159,25 @@ func (m *Model) handleStreamingResponse(
 	chatCompletion := m.client.Models().GenerateContentStream(
 		ctx, m.name, chatRequest, generateConfig)
 	acc := &Accumulator{}
-	for chunk := range chatCompletion {
+	for chunk, err := range chatCompletion {
+		// Check for errors from the stream
+		if err != nil {
+			errorResponse := &model.Response{
+				Error: &model.ResponseError{
+					Message: err.Error(),
+					Type:    model.ErrorTypeAPIError,
+				},
+				Timestamp: time.Now(),
+				Done:      true,
+			}
+			select {
+			case responseChan <- errorResponse:
+			case <-ctx.Done():
+			}
+			return
+		}
 		response := m.buildChunkResponse(chunk)
 		acc.Accumulate(response)
-		if m.chatChunkCallback != nil {
-			m.chatChunkCallback(ctx, chatRequest, generateConfig, chunk)
-		}
 		if m.chatChunkCallback != nil {
 			m.chatChunkCallback(ctx, chatRequest, generateConfig, chunk)
 		}
@@ -175,6 +188,7 @@ func (m *Model) handleStreamingResponse(
 		}
 	}
 	finalResponse := acc.BuildResponse()
+
 	if m.chatStreamCompleteCallback != nil {
 		m.chatStreamCompleteCallback(ctx, chatRequest, generateConfig, finalResponse)
 	}
@@ -398,6 +412,16 @@ func (m *Model) buildChatConfig(request *model.Request) *genai.GenerateContentCo
 		Tools: m.convertTools(request.Tools),
 	}
 
+	// Explicitly set ToolConfig when tools are present to use AUTO mode.
+	// AUTO mode allows the model to decide whether to call tools or respond with text.
+	if len(request.Tools) > 0 {
+		chatRequest.ToolConfig = &genai.ToolConfig{
+			FunctionCallingConfig: &genai.FunctionCallingConfig{
+				Mode: genai.FunctionCallingConfigModeAuto,
+			},
+		}
+	}
+
 	// Set response_format for native structured outputs when requested.
 	if request.StructuredOutput != nil &&
 		request.StructuredOutput.Type == model.StructuredOutputJSONSchema &&
@@ -479,16 +503,20 @@ func (m *Model) convertMessageContent(
 }
 
 func (m *Model) convertTools(tools map[string]tool.Tool) []*genai.Tool {
-	var result []*genai.Tool
+	result := make([]*genai.Tool, 0, len(tools))
 	for _, t := range tools {
+		decl := t.Declaration()
+		funcDeclaration := &genai.FunctionDeclaration{
+			Description:          decl.Description,
+			Name:                 decl.Name,
+			ParametersJsonSchema: decl.InputSchema,
+		}
+		if decl.OutputSchema != nil {
+			funcDeclaration.ResponseJsonSchema = decl.OutputSchema
+		}
 		result = append(result, &genai.Tool{
 			FunctionDeclarations: []*genai.FunctionDeclaration{
-				{
-					Description:          t.Declaration().Description,
-					Name:                 t.Declaration().Name,
-					ParametersJsonSchema: t.Declaration().InputSchema,
-					ResponseJsonSchema:   t.Declaration().OutputSchema,
-				},
+				funcDeclaration,
 			},
 		})
 	}
