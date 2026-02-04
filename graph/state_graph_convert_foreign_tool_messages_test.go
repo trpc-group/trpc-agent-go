@@ -1,9 +1,11 @@
 package graph
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -155,6 +157,62 @@ func TestLLMRunner_convertForeignToolMessages_UsesToolNameWhenToolIDEmpty(t *tes
 	require.Equal(t, model.RoleUser, out[0].Role)
 	require.Contains(t, out[0].Content, "For context:")
 	require.Contains(t, out[0].Content, "`weather` tool returned result: {\"temp\":20}")
+}
+
+func TestWithConvertForeignToolMessages_SetsNodeFlag(t *testing.T) {
+	node := &Node{}
+	WithConvertForeignToolMessages(true)(node)
+	require.True(t, node.convertForeignToolMessagesEnabled)
+
+	WithConvertForeignToolMessages(false)(node)
+	require.False(t, node.convertForeignToolMessagesEnabled)
+}
+
+func TestWithLLMConvertForeignToolMessages_SetsRunnerFlag(t *testing.T) {
+	runner := &llmRunner{}
+	WithLLMConvertForeignToolMessages(true)(runner)
+	require.True(t, runner.convertForeignToolMessagesEnabled)
+
+	WithLLMConvertForeignToolMessages(false)(runner)
+	require.False(t, runner.convertForeignToolMessagesEnabled)
+}
+
+func TestLLMRunner_executeModel_ConvertEnabled_ConvertsMessages(t *testing.T) {
+	m := &captureModel{}
+	runner := &llmRunner{
+		llmModel:                          m,
+		tools:                             map[string]tool.Tool{"local_tool": nil},
+		convertForeignToolMessagesEnabled: true,
+		nodeID:                            "node-1",
+	}
+	span := trace.SpanFromContext(context.Background())
+
+	_, err := runner.executeModel(
+		context.Background(),
+		State(nil),
+		[]model.Message{
+			{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{
+					{
+						ID: "foreign-1",
+						Function: model.FunctionDefinitionParam{
+							Name:      "foreign_tool",
+							Arguments: []byte(`{"x":1}`),
+						},
+					},
+				},
+			},
+		},
+		span,
+		"",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, m.lastReq)
+	require.Len(t, m.lastReq.Messages, 1)
+	require.Equal(t, model.RoleUser, m.lastReq.Messages[0].Role)
+	require.Contains(t, m.lastReq.Messages[0].Content, "For context:")
+	require.Contains(t, m.lastReq.Messages[0].Content, "Tool `foreign_tool` called with parameters: {\"x\":1}")
 }
 
 func TestLLMRunner_convertForeignToolMessages_AllToolsPresent_NoOp(t *testing.T) {

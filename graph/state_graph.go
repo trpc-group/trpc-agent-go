@@ -1187,6 +1187,108 @@ func (r *llmRunner) executeHistoryStage(ctx context.Context, state State, span o
 	return nil, nil
 }
 
+const foreignToolContextPrefix = "For context:"
+
+type toolNameSet map[string]struct{}
+
+func toolNameSetFromTools(tools map[string]tool.Tool) toolNameSet {
+	set := make(toolNameSet, len(tools))
+	for name := range tools {
+		set[name] = struct{}{}
+	}
+	return set
+}
+
+func collectForeignToolCallIDs(messages []model.Message, available toolNameSet) map[string]struct{} {
+	callIDs := make(map[string]struct{})
+	for _, msg := range messages {
+		if msg.Role != model.RoleAssistant {
+			continue
+		}
+		for _, tc := range msg.ToolCalls {
+			if _, ok := available[tc.Function.Name]; ok {
+				continue
+			}
+			callIDs[tc.ID] = struct{}{}
+		}
+	}
+	return callIDs
+}
+
+func isNonEmptyAssistantMessage(msg model.Message) bool {
+	return msg.Content != "" ||
+		len(msg.ContentParts) > 0 ||
+		len(msg.ToolCalls) > 0 ||
+		msg.ReasoningContent != ""
+}
+
+func splitToolCallsByAvailability(
+	toolCalls []model.ToolCall,
+	available toolNameSet,
+) (remaining []model.ToolCall, convertedParts []string) {
+	for _, tc := range toolCalls {
+		if _, ok := available[tc.Function.Name]; ok {
+			remaining = append(remaining, tc)
+			continue
+		}
+		convertedParts = append(convertedParts,
+			fmt.Sprintf("Tool `%s` called with parameters: %s",
+				tc.Function.Name, string(tc.Function.Arguments)),
+		)
+	}
+	return remaining, convertedParts
+}
+
+func appendConvertedAssistantMessage(
+	dst []model.Message,
+	msg model.Message,
+	available toolNameSet,
+) []model.Message {
+	if msg.Role != model.RoleAssistant || len(msg.ToolCalls) == 0 {
+		return append(dst, msg)
+	}
+
+	remainingToolCalls, convertedParts := splitToolCallsByAvailability(msg.ToolCalls, available)
+	if len(convertedParts) == 0 {
+		return append(dst, msg)
+	}
+
+	kept := msg
+	kept.ToolCalls = remainingToolCalls
+	// Drop empty assistant messages after removing foreign tool calls to align
+	// with non-graph flows that rewrite foreign events as user context.
+	if isNonEmptyAssistantMessage(kept) {
+		dst = append(dst, kept)
+	}
+
+	parts := append([]string{foreignToolContextPrefix}, convertedParts...)
+	return append(dst, model.NewUserMessage(strings.Join(parts, " ")))
+}
+
+func appendConvertedToolMessage(
+	dst []model.Message,
+	msg model.Message,
+	noTools bool,
+	callIDsToConvert map[string]struct{},
+) []model.Message {
+	if msg.Role != model.RoleTool {
+		return append(dst, msg)
+	}
+	if !noTools {
+		if _, ok := callIDsToConvert[msg.ToolID]; !ok {
+			return append(dst, msg)
+		}
+	}
+
+	identifier := msg.ToolID
+	if identifier == "" {
+		identifier = msg.ToolName
+	}
+	return append(dst, model.NewUserMessage(
+		fmt.Sprintf("%s `%s` tool returned result: %s", foreignToolContextPrefix, identifier, msg.Content),
+	))
+}
+
 // convertForeignToolMessages converts ToolCalls and tool responses to text for tools not in r.tools.
 // When the LLM node has no tools, all tool-related messages are converted to plain text
 // to avoid API errors when message history contains tool interactions from other nodes.
@@ -1199,26 +1301,8 @@ func (r *llmRunner) convertForeignToolMessages(messages []model.Message, tools m
 		return messages
 	}
 
-	const contextPrefix = "For context:"
-
-	// Get set of tool names available to this node
-	availableToolNames := make(map[string]bool)
-	for name := range tools {
-		availableToolNames[name] = true
-	}
-
-	// First pass: collect tool call IDs that need conversion (tools not available to this node)
-	// Also track their matching tool response IDs
-	callIDsToConvert := make(map[string]bool)
-	for _, msg := range messages {
-		if msg.Role == model.RoleAssistant && len(msg.ToolCalls) > 0 {
-			for _, tc := range msg.ToolCalls {
-				if !availableToolNames[tc.Function.Name] {
-					callIDsToConvert[tc.ID] = true
-				}
-			}
-		}
-	}
+	availableToolNames := toolNameSetFromTools(tools)
+	callIDsToConvert := collectForeignToolCallIDs(messages, availableToolNames)
 
 	// If nothing to convert and we have tools, return original messages
 	if len(callIDsToConvert) == 0 && len(tools) > 0 {
@@ -1226,51 +1310,15 @@ func (r *llmRunner) convertForeignToolMessages(messages []model.Message, tools m
 	}
 
 	// Second pass: convert messages
-	result := make([]model.Message, 0, len(messages))
+	noTools := len(tools) == 0
+	result := make([]model.Message, 0, len(messages)+len(callIDsToConvert))
 	for _, msg := range messages {
-		if msg.Role == model.RoleAssistant && len(msg.ToolCalls) > 0 {
-			// Check if any tool calls need conversion
-			var convertedParts []string
-			var remainingToolCalls []model.ToolCall
-
-			for _, tc := range msg.ToolCalls {
-				if !availableToolNames[tc.Function.Name] {
-					convertedParts = append(convertedParts,
-						fmt.Sprintf("Tool `%s` called with parameters: %s",
-							tc.Function.Name, string(tc.Function.Arguments)))
-				} else {
-					remainingToolCalls = append(remainingToolCalls, tc)
-				}
-			}
-
-			if len(convertedParts) == 0 {
-				result = append(result, msg)
-				continue
-			}
-
-			kept := msg
-			kept.ToolCalls = remainingToolCalls
-			// Drop empty assistant messages after removing foreign tool calls
-			// to align with non-graph flows that rewrite foreign events as user context.
-			if kept.Content != "" ||
-				len(kept.ContentParts) > 0 ||
-				len(kept.ToolCalls) > 0 ||
-				kept.ReasoningContent != "" {
-				result = append(result, kept)
-			}
-
-			parts := append([]string{contextPrefix}, convertedParts...)
-			result = append(result, model.NewUserMessage(strings.Join(parts, " ")))
-		} else if msg.Role == model.RoleTool && (len(tools) == 0 || callIDsToConvert[msg.ToolID]) {
-			// Convert tool response to user message text
-			identifier := msg.ToolID
-			if identifier == "" {
-				identifier = msg.ToolName
-			}
-			result = append(result, model.NewUserMessage(
-				fmt.Sprintf("%s `%s` tool returned result: %s", contextPrefix, identifier, msg.Content),
-			))
-		} else {
+		switch msg.Role {
+		case model.RoleAssistant:
+			result = appendConvertedAssistantMessage(result, msg, availableToolNames)
+		case model.RoleTool:
+			result = appendConvertedToolMessage(result, msg, noTools, callIDsToConvert)
+		default:
 			result = append(result, msg)
 		}
 	}
