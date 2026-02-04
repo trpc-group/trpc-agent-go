@@ -636,6 +636,24 @@ func TestTraceChat_WithTimeToFirstToken(t *testing.T) {
 	require.True(t, hasAttr(span.attrs, KeyTRPCAgentGoClientTimeToFirstToken, 0.1))
 }
 
+func TestTraceChat_WithTaskType(t *testing.T) {
+	inv := &agent.Invocation{InvocationID: "inv-task", Session: &session.Session{ID: "sess-task"}}
+	req := &model.Request{Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}}}
+	rsp := &model.Response{ID: "resp-task"}
+
+	span := newRecordingSpan()
+	TraceChat(span, &TraceChatAttributes{
+		Invocation:       inv,
+		Request:          req,
+		Response:         rsp,
+		EventID:          "evt-task",
+		TimeToFirstToken: 0,
+		TaskType:         "summarize demo",
+	})
+
+	require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAITaskType, "summarize demo"))
+}
+
 func TestBuildInvocationAttributes(t *testing.T) {
 	tests := []struct {
 		name   string

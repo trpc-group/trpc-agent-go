@@ -85,6 +85,23 @@ func TestChatAttributes_toAttributes(t *testing.T) {
 			},
 		},
 		{
+			name: "with task type",
+			attrs: chatAttributes{
+				RequestModelName: "gpt-4",
+				Stream:           false,
+				SessionID:        "session-1",
+				TaskType:         "summarize demo",
+			},
+			expected: []attribute.KeyValue{
+				attribute.String(KeyGenAIOperationName, OperationChat),
+				attribute.String(KeyGenAISystem, "gpt-4"),
+				attribute.String(KeyGenAIRequestModel, "gpt-4"),
+				attribute.Bool(metrics.KeyTRPCAgentGoStream, false),
+				attribute.String(KeyGenAIConversationID, "session-1"),
+				attribute.String(KeyGenAITaskType, "summarize demo"),
+			},
+		},
+		{
 			name: "error without error type",
 			attrs: chatAttributes{
 				RequestModelName: "gpt-4",
@@ -319,6 +336,19 @@ func TestChatMetricsTracker_buildAttributes(t *testing.T) {
 			checkFunc: func(t *testing.T, attrs chatAttributes) {
 				if !attrs.Stream {
 					t.Error("expected Stream to be true")
+				}
+			},
+		},
+		{
+			name: "with task type pointer",
+			setupFunc: func() *ChatMetricsTracker {
+				tt := "summarize demo"
+				timingInfo := &model.TimingInfo{}
+				return NewChatMetricsTracker(context.Background(), nil, nil, timingInfo, &tt, nil)
+			},
+			checkFunc: func(t *testing.T, attrs chatAttributes) {
+				if attrs.TaskType != "summarize demo" {
+					t.Errorf("expected TaskType=summarize demo, got %s", attrs.TaskType)
 				}
 			},
 		},
