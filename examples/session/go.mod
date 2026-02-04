@@ -7,6 +7,7 @@ replace (
 	trpc.group/trpc-go/trpc-agent-go/session/clickhouse => ../../session/clickhouse
 	trpc.group/trpc-go/trpc-agent-go/session/mysql => ../../session/mysql
 	trpc.group/trpc-go/trpc-agent-go/session/postgres => ../../session/postgres
+	// trpc.group/trpc-go/trpc-agent-go/session/redis => trpc.group/trpc-go/trpc-agent-go/session/redis v1.5.0
 	trpc.group/trpc-go/trpc-agent-go/session/redis => ../../session/redis/
 	trpc.group/trpc-go/trpc-agent-go/storage/clickhouse => ../../storage/clickhouse
 	trpc.group/trpc-go/trpc-agent-go/storage/mysql => ../../storage/mysql

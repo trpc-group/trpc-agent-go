@@ -105,6 +105,7 @@ func newRedisSessionService(cfg SessionServiceConfig) (session.Service, error) {
 		redis.WithSessionTTL(cfg.TTL),
 		redis.WithAppendEventHook(cfg.AppendEventHooks...),
 		redis.WithGetSessionHook(cfg.GetSessionHooks...),
+		redis.WithCompatMode(redis.CompatModeDualWrite),
 	)
 }
 

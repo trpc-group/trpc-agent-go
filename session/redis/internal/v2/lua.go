@@ -11,9 +11,10 @@ package v2
 
 import "github.com/redis/go-redis/v9"
 
-// luaAppendEvent appends an event atomically.
+// luaAppendEvent appends an event atomically and applies StateDelta to session state.
 // KEYS[1] = sessionMeta key, KEYS[2] = evtdata key, KEYS[3] = evtidx:time key
-// ARGV[1] = eventID, ARGV[2] = eventJSON, ARGV[3] = timestamp, ARGV[4] = TTL (seconds)
+// ARGV[1] = eventID, ARGV[2] = eventJSON, ARGV[3] = timestamp, ARGV[4] = TTL (seconds), ARGV[5] = shouldStoreEvent (1 or 0)
+// Returns: 1 on success, 0 if session not found
 var luaAppendEvent = redis.NewScript(`
 local sessionMetaKey = KEYS[1]
 local evtDataKey = KEYS[2]
@@ -23,18 +24,42 @@ local eventID = ARGV[1]
 local eventJSON = ARGV[2]
 local timestamp = tonumber(ARGV[3])
 local ttl = tonumber(ARGV[4])
+local shouldStoreEvent = tonumber(ARGV[5]) == 1
 
--- 1. Store event data
-redis.call('HSET', evtDataKey, eventID, eventJSON)
+-- 1. Check session meta exists first to avoid orphan events
+local metaJSON = redis.call('GET', sessionMetaKey)
+if not metaJSON then
+    return 0
+end
 
--- 2. Update time index
-redis.call('ZADD', evtTimeKey, timestamp, eventID)
+-- 2. Store event data only if shouldStoreEvent is true
+-- This matches V1 behavior: only store events with Response != nil && !IsPartial && IsValidContent()
+if shouldStoreEvent then
+    redis.call('HSET', evtDataKey, eventID, eventJSON)
+    redis.call('ZADD', evtTimeKey, timestamp, eventID)
+end
 
--- 3. Unified TTL refresh
+-- 3. Apply StateDelta to session meta's state (always, regardless of shouldStoreEvent)
+local evt = cjson.decode(eventJSON)
+local stateDelta = evt.stateDelta
+if stateDelta and next(stateDelta) ~= nil then
+    local meta = cjson.decode(metaJSON)
+    if not meta.state then
+        meta.state = {}
+    end
+    for k, v in pairs(stateDelta) do
+        meta.state[k] = v
+    end
+    redis.call('SET', sessionMetaKey, cjson.encode(meta))
+end
+
+-- 4. Unified TTL refresh
 if ttl > 0 then
     redis.call('EXPIRE', sessionMetaKey, ttl)
-    redis.call('EXPIRE', evtDataKey, ttl)
-    redis.call('EXPIRE', evtTimeKey, ttl)
+    if shouldStoreEvent then
+        redis.call('EXPIRE', evtDataKey, ttl)
+        redis.call('EXPIRE', evtTimeKey, ttl)
+    end
 end
 
 return 1
