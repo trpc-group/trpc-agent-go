@@ -14,16 +14,21 @@ import (
 	"strings"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
 
 // Common metadata field keys.
 const (
 	// metadataKeyModelName is the key for model name in metadata.
 	metadataKeyModelName = "model_name"
+	// metadataKeySummarizerName is the key for summarizer name in metadata.
+	metadataKeySummarizerName = "summarizer_name"
 	// metadataKeyMaxSummaryWords is the key for max summary words in metadata.
 	metadataKeyMaxSummaryWords = "max_summary_words"
 	// metadataKeyModelAvailable is the key for model availability in metadata.
@@ -138,6 +143,7 @@ func getDefaultSummarizerPrompt(maxWords int) string {
 // sessionSummarizer implements the SessionSummarizer interface.
 type sessionSummarizer struct {
 	model           model.Model
+	name            string
 	prompt          string
 	checks          []Checker
 	maxSummaryWords int
@@ -235,7 +241,7 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 		return "", fmt.Errorf("no conversation text extracted for session %s (events=%d)", sess.ID, len(eventsToSummarize))
 	}
 
-	ctx, summaryText, err := s.generateSummary(ctx, conversationText)
+	ctx, summaryText, err := s.generateSummary(ctx, sess, conversationText)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate summary for session %s: %w", sess.ID, err)
 	}
@@ -338,6 +344,7 @@ func (s *sessionSummarizer) Metadata() map[string]any {
 	}
 	return map[string]any{
 		metadataKeyModelName:         modelName,
+		metadataKeySummarizerName:    s.name,
 		metadataKeyMaxSummaryWords:   s.maxSummaryWords,
 		metadataKeyModelAvailable:    modelAvailable,
 		metadataKeyCheckFunctions:    len(s.checks),
@@ -414,31 +421,110 @@ func extractConversationText(
 // generateSummary generates a summary using the LLM model.
 func (s *sessionSummarizer) generateSummary(
 	ctx context.Context,
+	sess *session.Session,
 	conversationText string,
 ) (context.Context, string, error) {
+	// Telemetry trace + metrics tracking (aligned with toolsearch/llm_search.go).
+	var err error
+	modelName := ""
+	if s.model != nil {
+		modelName = s.model.Info().Name
+	}
+	_, span := trace.Tracer.Start(ctx, itelemetry.NewChatSpanName(modelName))
+	defer span.End()
+
 	prompt := s.buildSummaryPrompt(conversationText)
 	request := newSummaryRequest(prompt)
 
-	ctx, responseChan, err := s.runBeforeModelCallbacks(ctx, request)
-	if err != nil {
-		return ctx, "", err
-	}
-	if responseChan == nil {
-		responseChan, err = s.model.GenerateContent(ctx, request)
-		if err != nil {
-			return ctx, "", fmt.Errorf("failed to generate summary: %w", err)
+	invocation, ok := agent.InvocationFromContext(ctx)
+	if !ok || invocation == nil {
+		invocation = agent.NewInvocation(
+			agent.WithInvocationModel(s.model),
+			agent.WithInvocationSession(sess),
+		)
+	} else {
+		// Best-effort: ensure telemetry has model/session info.
+		if invocation.Model == nil && s.model != nil {
+			invocation.Model = s.model
+		}
+		if invocation.Session == nil && sess != nil {
+			invocation.Session = sess
 		}
 	}
 
-	ctx, summaryText, err := s.collectSummaryFromResponses(ctx, request, responseChan)
-	if err != nil {
-		return ctx, "", err
+	// Get or create timing info from invocation (only record first LLM call).
+	timingInfo := invocation.GetOrCreateTimingInfo()
+	taskType := itelemetry.NewSummarizeTaskType(s.name)
+	tracker := itelemetry.NewChatMetricsTracker(
+		ctx,
+		invocation,
+		request,
+		timingInfo,
+		&taskType,
+		&err,
+	)
+	defer tracker.RecordMetrics()()
+
+	ensureTimingInfo := func(resp *model.Response) {
+		if resp == nil {
+			return
+		}
+		if resp.Usage == nil {
+			resp.Usage = &model.Usage{}
+		}
+		resp.Usage.TimingInfo = timingInfo
+	}
+
+	trackResponse := func(resp *model.Response) {
+		tracker.TrackResponse(resp)
+		ensureTimingInfo(resp)
+	}
+
+	var finalResp *model.Response
+	defer func() {
+		if finalResp == nil {
+			return
+		}
+		ensureTimingInfo(finalResp)
+
+		itelemetry.TraceChat(span, &itelemetry.TraceChatAttributes{
+			Invocation:       invocation,
+			Request:          request,
+			Response:         finalResp,
+			TimeToFirstToken: tracker.FirstTokenTimeDuration(),
+			TaskType:         taskType,
+		})
+	}()
+
+	ctx, responseChan, cbErr := s.runBeforeModelCallbacks(ctx, request)
+	if cbErr != nil {
+		err = cbErr
+		return ctx, "", cbErr
+	}
+
+	if responseChan == nil {
+		responseChan, cbErr = s.model.GenerateContent(ctx, request)
+		if cbErr != nil {
+			err = fmt.Errorf("failed to generate summary: %w", cbErr)
+			return ctx, "", err
+		}
+	}
+
+	var summaryText string
+	ctx, summaryText, finalResp, cbErr = s.collectSummaryFromResponses(
+		ctx,
+		request,
+		responseChan,
+		trackResponse,
+		ensureTimingInfo,
+	)
+	if cbErr != nil {
+		err = cbErr
+		return ctx, "", cbErr
 	}
 	if summaryText == "" {
-		return ctx, "", fmt.Errorf(
-			"generated empty summary (input_chars=%d)",
-			len(conversationText),
-		)
+		err = fmt.Errorf("generated empty summary (input_chars=%d)", len(conversationText))
+		return ctx, "", err
 	}
 	return ctx, summaryText, nil
 }
@@ -546,29 +632,46 @@ func (s *sessionSummarizer) collectSummaryFromResponses(
 	ctx context.Context,
 	request *model.Request,
 	responseChan <-chan *model.Response,
-) (context.Context, string, error) {
-	var summary strings.Builder
+	trackResponse func(resp *model.Response),
+	ensureTimingInfo func(resp *model.Response),
+) (context.Context, string, *model.Response, error) {
+	var (
+		summary   strings.Builder
+		finalResp *model.Response
+	)
 
 	for response := range responseChan {
+		if trackResponse != nil {
+			trackResponse(response)
+		}
+
 		var err error
 		ctx, response, err = s.runAfterModelCallbacks(ctx, request, response)
 		if err != nil {
-			return ctx, "", err
+			return ctx, "", finalResp, err
 		}
-		if response != nil && response.Error != nil {
-			return ctx, "", formatResponseError(response.Error)
+		if ensureTimingInfo != nil {
+			ensureTimingInfo(response)
 		}
-		if response != nil && len(response.Choices) > 0 {
+		if response == nil {
+			continue
+		}
+		finalResp = response
+
+		if response.Error != nil {
+			return ctx, "", finalResp, formatResponseError(response.Error)
+		}
+		if len(response.Choices) > 0 {
 			content := response.Choices[0].Message.Content
 			if content != "" {
 				summary.WriteString(content)
 			}
 		}
-		if response != nil && response.Done {
+		if response.Done {
 			break
 		}
 	}
 
 	summaryText := strings.TrimSpace(summary.String())
-	return ctx, summaryText, nil
+	return ctx, summaryText, finalResp, nil
 }

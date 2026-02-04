@@ -28,6 +28,14 @@ func TestOptions(t *testing.T) {
 		assert.Equal(t, "test", sm.prompt)
 	})
 
+	t.Run("WithName", func(t *testing.T) {
+		s := NewSummarizer(&testModel{}, WithName("  demo  "))
+		sm, ok := s.(*sessionSummarizer)
+		assert.True(t, ok)
+		assert.Equal(t, "  demo  ", sm.name)
+		assert.Equal(t, "  demo  ", sm.Metadata()[metadataKeySummarizerName])
+	})
+
 	t.Run("WithTokenThreshold", func(t *testing.T) {
 		// Verify metadata increments and logic via isolated checks.
 		s := NewSummarizer(&testModel{}, WithTokenThreshold(2))

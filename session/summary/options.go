@@ -18,6 +18,15 @@ import (
 // Option is a function that configures a SessionSummarizer.
 type Option func(*sessionSummarizer)
 
+// WithName sets a logical name for the summarizer instance.
+// This name is used for telemetry tagging (e.g., gen_ai.task_type) to help
+// distinguish different summarization tasks.
+func WithName(name string) Option {
+	return func(s *sessionSummarizer) {
+		s.name = name
+	}
+}
+
 // SkipRecentFunc defines a function that determines how many recent events to skip during summarization.
 // It receives all events and returns the number of recent events to skip.
 // Return 0 to skip no events.
