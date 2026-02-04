@@ -596,10 +596,7 @@ func (p *ContentRequestProcessor) getCurrentInvocationMessages(inv *agent.Invoca
 	resultEvents = p.rearrangeAsyncFuncRespHist(resultEvents)
 
 	// Get current request ID for reasoning content filtering.
-	currentRequestID := ""
-	if inv != nil && inv.RunOptions.RequestID != "" {
-		currentRequestID = inv.RunOptions.RequestID
-	}
+	currentRequestID := inv.RunOptions.RequestID
 
 	// Convert events to messages with reasoning content handling.
 	var messages []model.Message
