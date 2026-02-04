@@ -30,30 +30,30 @@ V2 的 key 生成逻辑：
 2. 用户可通过 `WithKeyGenerator` 自定义 V2 的 key 生成方式（仅对 V2 生效，V1 保持固定格式）
 3. 默认 key 格式采用 user 级别 hash tag：`v2:meta:{AppName:UserID}:SessionID`，同一用户的 session 落在同一 slot，便于 Lua 脚本原子操作
 
+### V2 数据结构
+
+V2 将 event 数据与索引分离，支持按 eventID 修改/删除单个 event：
+
+| Key | Redis 类型 | 说明 |
+| :--- | :--- | :--- |
+| `v2:meta:{tag}:sessID` | String | Session 元数据（JSON：id, appName, userID, state, createdAt, updatedAt） |
+| `v2:evtdata:{tag}:sessID` | Hash | Event 数据，field=eventID，value=event JSON |
+| `v2:evtidx:time:{tag}:sessID` | ZSet | 时间索引，score=timestamp，member=eventID |
+| `v2:evtidx:custom:{tag}:sessID` | Hash | 自定义索引（如 requestID -> eventID） |
+| `v2:sesssum:{tag}:sessID` | String | Session 摘要 |
+
+与 V1 对比：
+- V1 将 event 存储为 ZSet（score=时间，member=完整 event JSON），无法高效修改单个 event
+- V2 将 event 数据（Hash）与索引（ZSet）分离，支持 O(1) 修改/删除指定 eventID
+
 ### 核心原则
 
 尽可能减少兼容逻辑的影响，保证新的session service走到新的逻辑上：
 
-1. CreateSession：优先检测 V2 key 和 V1 key 是否存在，若已存在则不做操作并返回已有 session；若均不存在则创建 V2 session，并设置 `State["__ver"]="v2"`
-2. GetSession：一次操作同时获取 V2 key 和 V1 key 的 session 元数据，命中哪个走哪个逻辑；根据命中的版本设置 `State["__ver"]`
-3. AppendEvent：若 `State["__ver"]="v2"` 则直接走 V2 逻辑；若为空或 `v1` 则路由到 V1 实现（老数据可能没有 version 字段）
+1. CreateSession：优先检测 V2 key 和 V1 key 是否存在，若已存在则不做操作并返回错误；若均不存在则创建 V2 session，并设置 `ServiceMeta["version"]="v2"`
+2. GetSession：一次操作同时获取 V2 key 和 V1 key 的 session 元数据，命中哪个走哪个逻辑；根据命中的版本设置 `ServiceMeta["version"]`
+3. AppendEvent：若 `ServiceMeta["version"]="v2"` 则直接走 V2 逻辑；若为空则执行一次检测确定是 V2 key 还是 V1 key，然后路由到对应实现
 4. 不主动迁移：不对存量 V1 数据做搬迁，V1 session 继续按原格式运行，依赖 TTL 自然过期淘汰。对于未设置 TTL 的 session，后续单独支持数据迁移模式
-
-### 双写策略 (Dual-Write)
-
-为解决滚动升级期间新旧实例混部的兼容性问题，提供 `WithDualWrite(true)` 配置：
-
-| 场景 | 问题 | 双写如何解决 |
-| :--- | :--- | :--- |
-| 新实例创建 session，旧实例读取 | 旧代码不识别 V2 key | 同时写 V1，旧代码可从 V1 读取 |
-| 旧实例创建 session，新实例读取 | 无问题 | V2 优先，回退 V1 |
-| 回滚到旧版本 | V2 数据丢失 | V1 有副本，回滚后可用 |
-
-双写行为：
-*   `CreateSession`：同时写入 V1 和 V2 元数据（V2 是主存储，V1 写入失败仅 warning 不影响返回）
-*   `AppendEvent`：当 session 版本为 `v2` 且开启双写时，同时写入 V1 和 V2 事件（确保旧代码能看到新事件）
-*   `UpdateState`：根据 session 版本标记写单端（state 更新频率低，暂不双写）
-*   `GetSession`：V2 优先，V1 回退（不变）
 
 ## 3. 详细设计流程
 
@@ -65,11 +65,17 @@ V2 的 key 生成逻辑：
 type Session struct {
     // ... 其他字段
     
-    // ServiceMeta 存储 service 层面的元数据（仅内存使用，不持久化）
-    // 例如存储版本信息：ServiceMeta["version"] = "v2"
-    ServiceMeta map[string]string
+    // ServiceMeta stores service-layer metadata (memory only, not persisted).
+    // Used internally by session service implementations for version routing, etc.
+    // Users should not access or modify this field directly.
+    ServiceMeta map[string]string `json:"-"`
 }
 ```
+
+版本标记的设置时机：
+- `CreateSession`：创建 V2 session 时设置 `ServiceMeta["version"]="v2"`
+- `GetSession`：根据命中的存储版本设置 `ServiceMeta["version"]`（v1 或 v2）
+- `AppendEvent`：只读取 `ServiceMeta["version"]` 进行路由，不修改
 
 ### 3.2 操作流程详解
 
@@ -119,19 +125,14 @@ type Session struct {
 
 ```go
 type ServiceOpts struct {
-    // 是否开启 V1 兼容模式（读取回退）。
+    // 是否开启 V1 兼容模式。
     // 默认: true。
     // 未来 V1 数据全部过期后，可设为 false 以彻底关闭 V1 查询路径。
     enableLegacy bool
     
-    // 是否开启双写模式（CreateSession 同时写 V1 和 V2）。
-    // 默认: false。
-    // 滚动升级期间建议设为 true，确保旧实例可读新创建的 session。
-    dualWrite bool
-    
-    // V1 key 前缀（用于兼容已有数据）。
-    // 默认: ""。
-    keyPrefix string
+    // V2 的 Key 生成器（仅对 V2 生效）。
+    // 默认: 使用 session 级别 hash tag 的内置生成器。
+    keyGenerator KeyGenerator
     
     // ... 其他原有配置
 }
@@ -139,55 +140,22 @@ type ServiceOpts struct {
 // WithLegacySupport 控制是否回退查询 V1 数据。
 func WithLegacySupport(enable bool) ServiceOpt { ... }
 
-// WithDualWrite 控制 CreateSession 是否同时写入 V1 和 V2。
-func WithDualWrite(enable bool) ServiceOpt { ... }
-
-// WithKeyPrefix 设置 V1 key 前缀（用于兼容已有数据）。
-func WithKeyPrefix(prefix string) ServiceOpt { ... }
+// WithKeyGenerator 自定义 V2 的 Key 生成方式（仅对 V2 生效）。
+func WithKeyGenerator(gen KeyGenerator) ServiceOpt { ... }
 ```
 
 ## 5. 迁移与兼容性路径
 
-### 5.1 推荐发布流程
+1.  阶段一：双栈运行（当前）
+    *   代码合并，默认开启 `WithLegacySupport(true)`。
+    *   新 session 创建与写入走 V2。
+    *   老 session 按 V1 逻辑继续运行，直到 TTL 过期。
 
-```
-阶段 0：全量发布准备
-├── 配置: WithDualWrite(true) + WithLegacySupport(true)
-├── 行为: CreateSession 双写 V1+V2，读取 V2 优先
-└── 目标: 确保新旧实例混部时数据互通
+2.  阶段二：自然过期
+    *   随时间推移（通常覆盖一个 TTL 周期以上），V1 数据自然淘汰，主流流量转为 V2。
 
-阶段 1：滚动升级
-├── 逐步将实例从旧代码升级到新代码
-├── 混部期间旧实例可读新实例创建的 session（通过 V1 key）
-└── 新实例可读旧实例的 session（通过 V1 回退）
-
-阶段 2：升级完成
-├── 所有实例运行新代码
-├── 配置: WithDualWrite(false) + WithLegacySupport(true)
-└── 新 session 只写 V2，老 session 仍可读（V1 回退）
-
-阶段 3：自然过期
-├── 等待 V1 数据 TTL 过期（通常 1 个 TTL 周期）
-└── 主流流量已全部走 V2
-
-阶段 4：关闭兼容
-├── 配置: WithLegacySupport(false)
-├── 完全关闭 V1 读取路径
-└── 可移除 internal/v1 代码
-```
-
-### 5.2 配置矩阵
-
-| 阶段 | dualWrite | enableLegacy | 说明 |
-| :--- | :---: | :---: | :--- |
-| 混部期 | true | true | 双写保证旧代码可读 |
-| 升级完成 | false | true | 只写 V2，兼容读老数据 |
-| V1 过期后 | false | false | 纯 V2 模式 |
-
-### 5.3 风险提示
-
-*   **禁止回滚到纯 V1 代码**：V2 创建的 session 在纯 V1 代码中不可见（除非开启了双写）
-*   **混部时间控制**：建议混部时间不超过 1 个 session TTL，避免数据分裂
-*   **监控告警**：关注 `session exists in both V1 and V2` 错误日志，表示数据不一致
+3.  阶段三：关闭兼容（未来）
+    *   业务确认 V1 数据已清理后，配置 `WithLegacySupport(false)`。
+    *   移除读取路径的 V1 回退逻辑；最终可删除 `internal/v1` 兼容实现。
 
 
