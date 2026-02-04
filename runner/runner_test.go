@@ -12,6 +12,7 @@ package runner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -581,6 +582,168 @@ func TestRunner_Run_WithAgentNameRegistry(t *testing.T) {
 	require.Len(t, events, 2)
 	assert.Equal(t, "alt-agent", events[0].Author)
 	assert.Contains(t, events[0].Response.Choices[0].Message.Content, "hello")
+}
+
+func TestRunner_Run_WithAgentFactoryByName(t *testing.T) {
+	sessionService := sessioninmemory.NewSessionService()
+	defaultAgent := &mockAgent{name: "default-agent"}
+
+	const (
+		factoryKey      = "dynamic"
+		factoryNameBase = "dynamic-agent-"
+	)
+
+	calls := 0
+	r := NewRunner(
+		"test-app",
+		defaultAgent,
+		WithSessionService(sessionService),
+		WithAgentFactory(factoryKey, func(
+			_ context.Context,
+			_ agent.RunOptions,
+		) (agent.Agent, error) {
+			calls++
+			name := fmt.Sprintf("%s%d", factoryNameBase, calls)
+			return &mockAgent{name: name}, nil
+		}),
+	)
+
+	ctx := context.Background()
+	msg := model.NewUserMessage("hi")
+
+	runOnce := func(expectedName string) {
+		ch, err := r.Run(
+			ctx,
+			"user",
+			"session",
+			msg,
+			agent.WithAgentByName(factoryKey),
+		)
+		require.NoError(t, err)
+		var events []*event.Event
+		for e := range ch {
+			events = append(events, e)
+		}
+		require.Len(t, events, 2)
+		assert.Equal(t, expectedName, events[0].Author)
+	}
+
+	runOnce(factoryNameBase + "1")
+	runOnce(factoryNameBase + "2")
+}
+
+func TestRunner_Run_WithDefaultAgentFactory(t *testing.T) {
+	sessionService := sessioninmemory.NewSessionService()
+
+	const (
+		defaultKey      = "dynamic-default"
+		defaultNameBase = "default-agent-"
+	)
+
+	calls := 0
+	r := NewRunnerWithAgentFactory(
+		"test-app",
+		defaultKey,
+		func(_ context.Context, _ agent.RunOptions) (agent.Agent, error) {
+			calls++
+			name := fmt.Sprintf("%s%d", defaultNameBase, calls)
+			return &mockAgent{name: name}, nil
+		},
+		WithSessionService(sessionService),
+	)
+
+	ctx := context.Background()
+	msg := model.NewUserMessage("hello")
+	ch, err := r.Run(ctx, "user", "session", msg)
+	require.NoError(t, err)
+
+	var events []*event.Event
+	for e := range ch {
+		events = append(events, e)
+	}
+	require.Len(t, events, 2)
+	assert.Equal(t, defaultNameBase+"1", events[0].Author)
+}
+
+func TestRunner_NewRunnerWithAgentFactory_CoverageBranches(t *testing.T) {
+	const (
+		appName       = "test-app"
+		defaultName   = "default-factory"
+		staticAgentID = "static"
+	)
+
+	factoryCalled := false
+	r := NewRunnerWithAgentFactory(
+		appName,
+		defaultName,
+		func(_ context.Context, _ agent.RunOptions) (agent.Agent, error) {
+			factoryCalled = true
+			return &mockAgent{name: "created"}, nil
+		},
+		WithAgent(staticAgentID, &mockAgent{name: "static-agent"}),
+		WithPlugins(plugin.NewLogging()),
+		WithRalphLoop(RalphLoopConfig{MaxIterations: 1}),
+	).(*runner)
+
+	t.Cleanup(func() { _ = r.Close() })
+	assert.True(t, r.ownedSessionService)
+
+	ag, err := r.selectAgent(context.Background(), agent.RunOptions{})
+	require.NoError(t, err)
+	require.True(t, factoryCalled)
+
+	_, ok := ag.(*ralphLoopAgent)
+	require.True(t, ok)
+}
+
+func TestRunner_selectAgent_FactoryError(t *testing.T) {
+	const (
+		appName  = "test-app"
+		agentKey = "factory-error"
+	)
+
+	r := NewRunner(
+		appName,
+		&mockAgent{name: "default"},
+		WithAgentFactory(agentKey, func(
+			_ context.Context,
+			_ agent.RunOptions,
+		) (agent.Agent, error) {
+			return nil, errors.New("boom")
+		}),
+	).(*runner)
+
+	assert.Nil(t, r.wrapSelectedAgent(nil))
+
+	_, err := r.selectAgent(context.Background(), agent.RunOptions{
+		AgentByName: agentKey,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "agent factory")
+}
+
+func TestRunner_selectAgent_FactoryNil(t *testing.T) {
+	const (
+		appName  = "test-app"
+		agentKey = "factory-nil"
+	)
+
+	r := NewRunner(
+		appName,
+		&mockAgent{name: "default"},
+		WithAgentFactory(agentKey, func(
+			_ context.Context,
+			_ agent.RunOptions,
+		) (agent.Agent, error) {
+			return nil, nil
+		}),
+	).(*runner)
+
+	_, err := r.selectAgent(context.Background(), agent.RunOptions{
+		AgentByName: agentKey,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "agent factory returned nil")
 }
 
 func TestRunner_Run_WithAgentInstanceOverride(t *testing.T) {
