@@ -332,6 +332,34 @@ type calculatorRsp struct {
 }
 ```
 
+### 每次请求动态创建 Agent
+
+有些场景下，你希望 Agent **按请求创建**（例如：不同的提示词、模型、工具集、沙箱实例）。
+这时可以让 Runner 在每次 `Run(...)` 时动态构建一个新的 Agent：
+
+```go
+r := runner.NewRunnerWithAgentFactory(
+    "my-app",
+    "assistant",
+    func(ctx context.Context, ro agent.RunOptions) (agent.Agent, error) {
+        // 通过 ro 构建本次请求使用的 Agent。
+        a := llmagent.New("assistant",
+            llmagent.WithInstruction(ro.Instruction),
+        )
+        return a, nil
+    },
+)
+
+events, err := r.Run(ctx,
+    "user-001",
+    "session-001",
+    model.NewUserMessage("Hello"),
+    agent.WithInstruction("You are a helpful assistant."),
+)
+_ = events
+_ = err
+```
+
 ### 中断 / 取消一次运行
 
 如果你希望“中断正在运行的 agent”（停止本次模型调用 / 工具调用），推荐做法是：
