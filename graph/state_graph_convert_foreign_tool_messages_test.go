@@ -139,6 +139,24 @@ func TestLLMRunner_convertForeignToolMessages_MixedContent_PreservesAssistantCon
 	require.Contains(t, out[2].Content, "Tool `foreign_tool` called with parameters: {\"foo\":\"baz\"}")
 }
 
+func TestLLMRunner_convertForeignToolMessages_UsesToolNameWhenToolIDEmpty(t *testing.T) {
+	runner := &llmRunner{}
+	messages := []model.Message{
+		{
+			Role:     model.RoleTool,
+			ToolID:   "",
+			ToolName: "weather",
+			Content:  `{"temp":20}`,
+		},
+	}
+
+	out := runner.convertForeignToolMessages(messages, nil)
+	require.Len(t, out, 1)
+	require.Equal(t, model.RoleUser, out[0].Role)
+	require.Contains(t, out[0].Content, "For context:")
+	require.Contains(t, out[0].Content, "`weather` tool returned result: {\"temp\":20}")
+}
+
 func TestLLMRunner_convertForeignToolMessages_AllToolsPresent_NoOp(t *testing.T) {
 	runner := &llmRunner{}
 	messages := []model.Message{
