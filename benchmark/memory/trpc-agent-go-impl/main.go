@@ -127,15 +127,14 @@ CRITICAL RULES (TIME):
   - Use [DATE: unknown] only if no absolute date can be inferred from the provided context.
 
 EXTRACTION RULES (CONTENT):
-- Prefer atomic memories: ONE fact per memory. Do NOT combine multiple unrelated facts in one memory.
+- Prefer atomic memories: one fact per memory.
 - Extract concrete facts that can answer future questions: who/what/when/where/relationships/preferences/attributes/events.
 - Include facts about all mentioned people (not only the user).
-- Be comprehensive rather than conservative: store MANY small facts.
-  - Aim for at least 8-20 atomic memories per session when possible.
-  - Include "small" details too: names, books, pets, items purchased, places visited, hobbies, numbers.
+- Be comprehensive rather than conservative: store many small facts.
+  - Aim for at least 3-8 atomic memories per session when possible.
 - Do NOT guess. If not stated, omit it.
 - Avoid vague summaries like "They discussed their plans".
-- Avoid duplicates: if the same fact already exists, do not add a duplicate; update only when refined.
+- Avoid duplicates: update existing memories when the same fact is refined.
 
 OUTPUT:
 - Use the provided tools to add/update/delete memories.
