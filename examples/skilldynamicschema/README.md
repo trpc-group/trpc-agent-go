@@ -73,5 +73,5 @@ event.StructuredOutput:
 - The schema set by `set_output_schema` only affects **subsequent** LLM calls (not the one that requested the tool call).
 - Skill folders must include `SKILL.md` with YAML front matter (`--- ... ---`) so the repository can discover them.
 - This demo embeds the JSON schema in `SKILL.md` under "Output JSON Schema" to avoid escaping issues from tool stdout.
-- `set_output_schema` accepts `schema` as a JSON object, or as a JSON string (the tool will parse it).
+- `set_output_schema` expects `schema` to be a JSON object.
 - The demo prints tool call/response trace by default; disable with `-trace_tools=false`.
