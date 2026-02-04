@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -56,6 +57,117 @@ func TestProcessRequest_IgnoresRunOptionsMessages_UsesSessionOnly(t *testing.T) 
 	require.True(t, model.MessagesEqual(model.NewUserMessage("hello"), req.Messages[0]))
 	require.True(t, model.MessagesEqual(model.NewAssistantMessage("hi"), req.Messages[1]))
 	require.True(t, model.MessagesEqual(model.NewAssistantMessage("latest from session"), req.Messages[2]))
+}
+
+func TestProcessRequest_FiltersEmptyAssistantMessages(t *testing.T) {
+	sess := &session.Session{}
+	sess.Events = append(sess.Events,
+		newSessionEvent("user", model.NewUserMessage("hello")),
+		event.Event{
+			Response: &model.Response{
+				Done: true,
+				Choices: []model.Choice{
+					{Index: 0, Message: model.Message{Role: model.RoleAssistant}},
+					{Index: 1, Message: model.NewAssistantMessage("hi")},
+				},
+			},
+			Author: "test-agent",
+		},
+	)
+
+	inv := &agent.Invocation{
+		InvocationID: "inv-empty-assistant",
+		AgentName:    "test-agent",
+		Session:      sess,
+	}
+
+	req := &model.Request{}
+	NewContentRequestProcessor().ProcessRequest(context.Background(), inv, req, nil)
+
+	require.Len(t, req.Messages, 2)
+	require.True(t, model.MessagesEqual(model.NewUserMessage("hello"), req.Messages[0]))
+	require.True(t, model.MessagesEqual(model.NewAssistantMessage("hi"), req.Messages[1]))
+}
+
+func TestProcessRequest_FiltersEmptyAssistantMessages_ToolCallResponse(t *testing.T) {
+	toolCallMsg := model.Message{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{
+			{
+				Type: "function",
+				ID:   "call_1",
+				Function: model.FunctionDefinitionParam{
+					Name:      "get_user_phone",
+					Arguments: []byte(`{"purpose":"test"}`),
+				},
+			},
+		},
+	}
+
+	sess := &session.Session{}
+	sess.Events = append(sess.Events,
+		newSessionEvent("user", model.NewUserMessage("hi")),
+		event.Event{
+			Response: &model.Response{
+				Done: true,
+				Choices: []model.Choice{
+					{Index: 0, Message: toolCallMsg},
+					{Index: 1, Message: model.Message{Role: model.RoleAssistant}},
+				},
+			},
+			Author: "test-agent",
+		},
+	)
+
+	inv := &agent.Invocation{
+		InvocationID: "inv-empty-assistant-toolcall",
+		AgentName:    "test-agent",
+		Session:      sess,
+	}
+
+	req := &model.Request{}
+	NewContentRequestProcessor().ProcessRequest(context.Background(), inv, req, nil)
+
+	require.Len(t, req.Messages, 2)
+	require.True(t, model.MessagesEqual(model.NewUserMessage("hi"), req.Messages[0]))
+	require.True(t, model.MessagesEqual(toolCallMsg, req.Messages[1]))
+}
+
+func TestProcessRequest_IncludeContentsNone_FiltersEmptyAssistantMessages(t *testing.T) {
+	sess := &session.Session{}
+
+	userEvt := newSessionEvent("user", model.NewUserMessage("hello"))
+	userEvt.InvocationID = "inv-include-none"
+	assistantEvt := event.Event{
+		InvocationID: "inv-include-none",
+		Response: &model.Response{
+			Done: true,
+			Choices: []model.Choice{
+				{Index: 0, Message: model.Message{Role: model.RoleAssistant}},
+				{Index: 1, Message: model.NewAssistantMessage("hi")},
+			},
+		},
+		Author: "test-agent",
+	}
+	sess.Events = append(sess.Events, userEvt, assistantEvt)
+
+	inv := &agent.Invocation{
+		InvocationID: "inv-include-none",
+		AgentName:    "test-agent",
+		Session:      sess,
+		RunOptions: agent.RunOptions{
+			RuntimeState: map[string]any{
+				graph.CfgKeyIncludeContents: "none",
+			},
+		},
+	}
+
+	req := &model.Request{}
+	NewContentRequestProcessor().ProcessRequest(context.Background(), inv, req, nil)
+
+	require.Len(t, req.Messages, 2)
+	require.True(t, model.MessagesEqual(model.NewUserMessage("hello"), req.Messages[0]))
+	require.True(t, model.MessagesEqual(model.NewAssistantMessage("hi"), req.Messages[1]))
 }
 
 func TestProcessRequest_IncludeInvocationMessage_WhenNoSession(t *testing.T) {
