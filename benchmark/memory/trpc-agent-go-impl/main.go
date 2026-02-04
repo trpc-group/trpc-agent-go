@@ -109,30 +109,32 @@ const (
 	autoMemoryJobTimeout   = 2 * time.Minute
 )
 
-// locomoExtractorPrompt is tuned for the LoCoMo benchmark.
-// The default memory extractor prompt is user-profile oriented; for LoCoMo we
+// benchmarkExtractorPrompt is optimized for retrieval-based benchmark evaluation.
+// The default memory extractor prompt is user-profile oriented; for benchmarks we
 // need dense, queryable, factual memories (entities, dates, relations).
-const locomoExtractorPrompt = `You are a memory extraction engine for benchmark evaluation (LoCoMo).
+const benchmarkExtractorPrompt = `You are a memory extraction engine for retrieval-based QA benchmarks.
 
-Goal: extract factual, queryable memories from multi-session conversations so that downstream QA can answer questions by searching memories.
+Goal: Extract factual, queryable memories from multi-session conversations so that downstream QA can answer questions by searching memories.
 
-CRITICAL RULES:
-- DO NOT use relative time words like "yesterday", "last week", "two days ago", "next month".
-- Always write an ABSOLUTE DATE if possible. Use one of:
-  - the exact date text from the conversation (e.g., "7 May 2023"), or
-  - an ISO date "YYYY-MM-DD" when you can infer it from the session date.
-- Every memory must start with a date prefix in square brackets:
+CRITICAL RULES (TIME):
+- Do NOT use relative time words like "yesterday", "last week", "two days ago", "next month".
+- Always write an ABSOLUTE DATE when possible:
+  - Prefer ISO date: YYYY-MM-DD.
+  - If only a textual date is available, keep it as-is (e.g., "7 May 2023", "late June 2023").
+- Every memory MUST start with a date prefix:
   - Format: [DATE: <absolute-date-or-unknown>]
-  - Examples: [DATE: 2023-05-07] ... , [DATE: 7 May 2023] ... , [DATE: unknown] ...
+  - Examples: [DATE: 2023-05-07] ... , [DATE: 7 May 2023] ... , [DATE: late June 2023] ...
+  - Use [DATE: unknown] only if no absolute date can be inferred from the provided context.
 
-EXTRACTION RULES:
+EXTRACTION RULES (CONTENT):
 - Prefer atomic memories: one fact per memory.
-- Extract concrete facts that can answer future questions: who/what/when/where/relationships/preferences/attributes.
-- Include facts about BOTH speakers/people, not only the "User".
-- If information is uncertain or not stated, do NOT guess.
+- Extract concrete facts that can answer future questions: who/what/when/where/relationships/preferences/attributes/events.
+- Include facts about all mentioned people (not only the user).
+- Be comprehensive rather than conservative: store many small facts.
+  - Aim for at least 3-8 atomic memories per session when possible.
+- Do NOT guess. If not stated, omit it.
 - Avoid vague summaries like "They discussed their plans".
 - Avoid duplicates: update existing memories when the same fact is refined.
-- Aim for coverage: extract at least 3-8 atomic memories per session when possible.
 
 OUTPUT:
 - Use the provided tools to add/update/delete memories.
@@ -565,7 +567,7 @@ func createPGVectorService(
 			embedModelName,
 		)
 		tableName = pgvectorTableAuto
-		ext = extractor.NewExtractor(opts.extractorModel, extractor.WithPrompt(locomoExtractorPrompt))
+		ext = extractor.NewExtractor(opts.extractorModel, extractor.WithPrompt(benchmarkExtractorPrompt))
 	} else {
 		log.Printf(
 			"Creating pgvector memory service (embed_model=%s)",
@@ -591,7 +593,7 @@ func createPGVectorService(
 func createInMemoryService(opts memoryServiceOptions) memory.Service {
 	if opts.enableExtractor {
 		log.Printf("Creating inmemory memory service with extractor")
-		ext := extractor.NewExtractor(opts.extractorModel, extractor.WithPrompt(locomoExtractorPrompt))
+		ext := extractor.NewExtractor(opts.extractorModel, extractor.WithPrompt(benchmarkExtractorPrompt))
 		return inmemory.NewMemoryService(
 			inmemory.WithExtractor(ext),
 			inmemory.WithAsyncMemoryNum(autoMemoryAsyncWorkers),

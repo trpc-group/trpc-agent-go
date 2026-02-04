@@ -324,11 +324,11 @@ func (e *AutoEvaluator) evaluateQA(
 %s
 
 ## Instructions
+- Answer in English only.
 - Extract the answer from the memories above.
-- If a memory contains relevant information, use it to answer even if not perfectly matching.
-- Look for dates, names, numbers, and facts in the memories.
-- Provide a concise answer. Only say "The information is not available." if NO memory
-  contains ANY relevant information.
+- Prefer exact strings (dates/names/numbers) as written in the memories.
+- Be concise. Output ONLY the answer, no explanations, no extra commentary.
+- Only say "The information is not available." if NO memory contains ANY relevant information.
 
 Answer:`, memContext.String(), qa.Question)
 
