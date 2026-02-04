@@ -412,12 +412,12 @@ func (m *Model) buildChatConfig(request *model.Request) *genai.GenerateContentCo
 		Tools: m.convertTools(request.Tools),
 	}
 
-	// Explicitly set ToolConfig when tools are present to ensure Gemini uses ANY mode
-	// This is important because AUTO mode allows Gemini to skip tools entirely
+	// Explicitly set ToolConfig when tools are present to use AUTO mode.
+	// AUTO mode allows the model to decide whether to call tools or respond with text.
 	if len(request.Tools) > 0 {
 		chatRequest.ToolConfig = &genai.ToolConfig{
 			FunctionCallingConfig: &genai.FunctionCallingConfig{
-				Mode: genai.FunctionCallingConfigModeAny,
+				Mode: genai.FunctionCallingConfigModeAuto,
 			},
 		}
 	}
