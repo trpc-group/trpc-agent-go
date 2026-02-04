@@ -149,8 +149,9 @@ func (e *AutoEvaluator) waitForAutoExtraction(
 	deadline := time.Now().Add(timeout)
 
 	var (
-		lastCount   = -1
-		stableCount = 0
+		lastCount      = -1
+		stableCount    = 0
+		sawAnyMemories = false
 	)
 
 	for {
@@ -167,6 +168,9 @@ func (e *AutoEvaluator) waitForAutoExtraction(
 		}
 
 		cur := len(entries)
+		if cur > 0 {
+			sawAnyMemories = true
+		}
 		if cur == lastCount {
 			stableCount++
 		} else {
@@ -174,7 +178,8 @@ func (e *AutoEvaluator) waitForAutoExtraction(
 			lastCount = cur
 		}
 
-		if stableCount >= stableRounds {
+		// Don't consider extraction "stable" until we've observed at least one memory.
+		if sawAnyMemories && stableCount >= stableRounds {
 			return nil
 		}
 
