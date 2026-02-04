@@ -155,6 +155,55 @@ r := runner.NewRunner("my-app", agent,
 )
 ```
 
+### 🧩 Request-Scoped Agent Creation (Agent Factory)
+
+By default, `runner.NewRunner(...)` takes a fully built `agent.Agent` and
+reuses that same instance for every request.
+
+If your agent needs **request-specific configuration** (for example, prompt,
+model, sandbox instance, tools), you can build a fresh agent for every run.
+
+#### Option A: Create the default agent on demand
+
+```go
+r := runner.NewRunnerWithAgentFactory(
+    "my-app",
+    "assistant",
+    func(ctx context.Context, ro agent.RunOptions) (agent.Agent, error) {
+        // Use ro (or ro.RuntimeState / ro.CustomAgentConfigs) to decide
+        // how to build the agent for this request.
+        a := llmagent.New("assistant",
+            llmagent.WithInstruction(ro.Instruction),
+        )
+        return a, nil
+    },
+)
+```
+
+#### Option B: Register named factories and select them by name
+
+```go
+r := runner.NewRunner("my-app", defaultAgent,
+    runner.WithAgentFactory("sandboxed", func(
+        ctx context.Context,
+        ro agent.RunOptions,
+    ) (agent.Agent, error) {
+        return llmagent.New("sandboxed"), nil
+    }),
+)
+
+events, err := r.Run(ctx, userID, sessionID, message,
+    agent.WithAgentByName("sandboxed"),
+)
+_ = events
+_ = err
+```
+
+Notes:
+
+- The factory is called once per `Runner.Run(...)`.
+- `agent.WithAgent(...)` still overrides everything (useful for tests).
+
 ### 🔌 Plugins
 
 Runner plugins are global, runner-scoped hooks. Register plugins once and they
