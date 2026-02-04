@@ -56,24 +56,8 @@ func emitClaudeToolEvents(ctx context.Context, invocation *agent.Invocation, out
 		return
 	}
 
-	trimmed := strings.TrimSpace(rawOutput)
-	if trimmed == "" {
-		return
-	}
-	jsonStart := strings.IndexAny(trimmed, "[{")
-	if jsonStart < 0 {
-		return
-	}
-	trimmed = trimmed[jsonStart:]
-
-	dec := json.NewDecoder(strings.NewReader(trimmed))
-	var raw json.RawMessage
-	if err := dec.Decode(&raw); err != nil {
-		return
-	}
-
-	var entries []claudeCLIEvent
-	if err := json.Unmarshal(raw, &entries); err != nil {
+	entries, ok := parseClaudeCLIEvents(rawOutput)
+	if !ok {
 		return
 	}
 
@@ -87,86 +71,159 @@ func emitClaudeToolEvents(ctx context.Context, invocation *agent.Invocation, out
 		for _, block := range entry.Message.Content {
 			switch strings.TrimSpace(block.Type) {
 			case "tool_use":
-				toolID := strings.TrimSpace(block.ID)
-				if toolID == "" {
-					continue
-				}
-				toolName := strings.TrimSpace(block.Name)
-				if toolName == "" {
-					toolName = "<unknown>"
-				}
-				toolNames[toolID] = toolName
-
-				args := []byte("{}")
-				if block.Input != nil {
-					if toolName == calculatorToolName {
-						if rawInput, err := json.Marshal(block.Input); err == nil {
-							var parsed calculatorArgs
-							if err := json.Unmarshal(rawInput, &parsed); err == nil && parsed.Operation != nil && parsed.A != nil && parsed.B != nil {
-								if normalized, err := json.Marshal(calculatorArgsForEval{
-									Operation: strings.TrimSpace(*parsed.Operation),
-									A:         *parsed.A,
-									B:         *parsed.B,
-								}); err == nil {
-									args = normalized
-								}
-							}
-						}
-					} else if marshaled, err := json.Marshal(block.Input); err == nil {
-						args = marshaled
-					}
-				}
-
-				tc := model.ToolCall{
-					Type: "function",
-					ID:   toolID,
-					Function: model.FunctionDefinitionParam{
-						Name:      toolName,
-						Arguments: args,
-					},
-				}
-				rsp := &model.Response{
-					Object: model.ObjectTypeChatCompletion,
-					Done:   true,
-					Choices: []model.Choice{
-						{
-							Index: 0,
-							Message: model.Message{
-								Role:      model.RoleAssistant,
-								ToolCalls: []model.ToolCall{tc},
-							},
-						},
-					},
-				}
-				agent.EmitEvent(ctx, invocation, out, event.NewResponseEvent(invocation.InvocationID, author, rsp))
+				handleToolUseBlock(ctx, invocation, out, author, calculatorToolName, toolNames, block)
 			case "tool_result":
-				toolID := strings.TrimSpace(block.ToolUseID)
-				if toolID == "" {
-					continue
-				}
-				toolName := toolNames[toolID]
-				if strings.TrimSpace(toolName) == "" {
-					toolName = "<unknown>"
-				}
-				rsp := &model.Response{
-					Object: model.ObjectTypeToolResponse,
-					Done:   false,
-					Choices: []model.Choice{
-						{
-							Index: 0,
-							Message: model.Message{
-								Role:     model.RoleTool,
-								ToolID:   toolID,
-								ToolName: toolName,
-								Content:  extractToolResultText(block.Content),
-							},
-						},
-					},
-				}
-				agent.EmitEvent(ctx, invocation, out, event.NewResponseEvent(invocation.InvocationID, author, rsp))
+				handleToolResultBlock(ctx, invocation, out, author, toolNames, block)
 			}
 		}
 	}
+}
+
+// parseClaudeCLIEvents extracts the first CLI JSON payload and decodes it into events.
+func parseClaudeCLIEvents(rawOutput string) ([]claudeCLIEvent, bool) {
+	trimmed := strings.TrimSpace(rawOutput)
+	if trimmed == "" {
+		return nil, false
+	}
+	jsonStart := strings.IndexAny(trimmed, "[{")
+	if jsonStart < 0 {
+		return nil, false
+	}
+	trimmed = trimmed[jsonStart:]
+
+	dec := json.NewDecoder(strings.NewReader(trimmed))
+	var raw json.RawMessage
+	if err := dec.Decode(&raw); err != nil {
+		return nil, false
+	}
+
+	var entries []claudeCLIEvent
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		return nil, false
+	}
+	return entries, true
+}
+
+// handleToolUseBlock emits a tool-call event for a tool_use content block.
+func handleToolUseBlock(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	out chan<- *event.Event,
+	author string,
+	calculatorToolName string,
+	toolNames map[string]string,
+	block claudeCLIContentBlock,
+) {
+	toolID := strings.TrimSpace(block.ID)
+	if toolID == "" {
+		return
+	}
+	toolName := strings.TrimSpace(block.Name)
+	if toolName == "" {
+		toolName = "<unknown>"
+	}
+	toolNames[toolID] = toolName
+
+	args := marshalToolUseArguments(toolName, calculatorToolName, block.Input)
+	tc := model.ToolCall{
+		Type: "function",
+		ID:   toolID,
+		Function: model.FunctionDefinitionParam{
+			Name:      toolName,
+			Arguments: args,
+		},
+	}
+	rsp := &model.Response{
+		Object: model.ObjectTypeChatCompletion,
+		Done:   true,
+		Choices: []model.Choice{
+			{
+				Index: 0,
+				Message: model.Message{
+					Role:      model.RoleAssistant,
+					ToolCalls: []model.ToolCall{tc},
+				},
+			},
+		},
+	}
+	agent.EmitEvent(ctx, invocation, out, event.NewResponseEvent(invocation.InvocationID, author, rsp))
+}
+
+// handleToolResultBlock emits a tool-result event for a tool_result content block.
+func handleToolResultBlock(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	out chan<- *event.Event,
+	author string,
+	toolNames map[string]string,
+	block claudeCLIContentBlock,
+) {
+	toolID := strings.TrimSpace(block.ToolUseID)
+	if toolID == "" {
+		return
+	}
+	toolName := strings.TrimSpace(toolNames[toolID])
+	if toolName == "" {
+		toolName = "<unknown>"
+	}
+	rsp := &model.Response{
+		Object: model.ObjectTypeToolResponse,
+		Done:   false,
+		Choices: []model.Choice{
+			{
+				Index: 0,
+				Message: model.Message{
+					Role:     model.RoleTool,
+					ToolID:   toolID,
+					ToolName: toolName,
+					Content:  extractToolResultText(block.Content),
+				},
+			},
+		},
+	}
+	agent.EmitEvent(ctx, invocation, out, event.NewResponseEvent(invocation.InvocationID, author, rsp))
+}
+
+// marshalToolUseArguments serializes tool arguments and applies per-tool normalization when needed.
+func marshalToolUseArguments(toolName, calculatorToolName string, input any) []byte {
+	if input == nil {
+		return []byte("{}")
+	}
+	if toolName == calculatorToolName {
+		if normalized, ok := marshalCalculatorArgumentsForEval(input); ok {
+			return normalized
+		}
+	}
+	args, err := json.Marshal(input)
+	if err != nil {
+		return []byte("{}")
+	}
+	return args
+}
+
+// marshalCalculatorArgumentsForEval converts calculator args into a deterministic JSON encoding.
+func marshalCalculatorArgumentsForEval(input any) ([]byte, bool) {
+	rawInput, err := json.Marshal(input)
+	if err != nil {
+		return nil, false
+	}
+	var parsed calculatorArgs
+	if err := json.Unmarshal(rawInput, &parsed); err != nil {
+		return nil, false
+	}
+	if parsed.Operation == nil || parsed.A == nil || parsed.B == nil {
+		return nil, false
+	}
+	normalized := calculatorArgsForEval{
+		Operation: strings.TrimSpace(*parsed.Operation),
+		A:         *parsed.A,
+		B:         *parsed.B,
+	}
+	data, err := json.Marshal(normalized)
+	if err != nil {
+		return nil, false
+	}
+	return data, true
 }
 
 // extractToolResultText extracts the human-readable payload from a tool_result content block.
