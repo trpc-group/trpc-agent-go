@@ -89,9 +89,7 @@ func (a *claudeAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-
 			rawOutput = fmt.Sprintf("claude agent failed: %v", err)
 		}
 
-		if toolEvents, parseErr := parseClaudeToolEvents(rawOutput); parseErr == nil {
-			emitClaudeToolEvents(ctx, invocation, out, a.name, toolEvents)
-		}
+		emitClaudeToolEvents(ctx, invocation, out, a.name, rawOutput)
 
 		rsp := &model.Response{
 			Object: model.ObjectTypeChatCompletion,

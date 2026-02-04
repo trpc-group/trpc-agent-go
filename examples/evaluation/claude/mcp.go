@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -27,45 +26,11 @@ const (
 	claudeMCPServerName = "eva_eval_example"
 )
 
-// flexibleFloat64 accepts both JSON numbers and JSON strings that contain a number.
-type flexibleFloat64 float64
-
-// UnmarshalJSON implements json.Unmarshaler for flexibleFloat64.
-func (f *flexibleFloat64) UnmarshalJSON(data []byte) error {
-	trimmed := strings.TrimSpace(string(data))
-	if trimmed == "" {
-		return fmt.Errorf("number is empty")
-	}
-	if strings.HasPrefix(trimmed, "\"") && strings.HasSuffix(trimmed, "\"") {
-		var s string
-		if err := json.Unmarshal([]byte(trimmed), &s); err != nil {
-			return fmt.Errorf("parse number string: %w", err)
-		}
-		s = strings.TrimSpace(s)
-		if s == "" {
-			return fmt.Errorf("number string is empty")
-		}
-		v, err := strconv.ParseFloat(s, 64)
-		if err != nil {
-			return fmt.Errorf("parse float from string %q: %w", s, err)
-		}
-		*f = flexibleFloat64(v)
-		return nil
-	}
-
-	var v float64
-	if err := json.Unmarshal([]byte(trimmed), &v); err != nil {
-		return fmt.Errorf("parse number: %w", err)
-	}
-	*f = flexibleFloat64(v)
-	return nil
-}
-
 // calculatorArgs defines the MCP calculator tool arguments.
 type calculatorArgs struct {
-	Operation *string          `json:"operation"`
-	A         *flexibleFloat64 `json:"a"`
-	B         *flexibleFloat64 `json:"b"`
+	Operation *string  `json:"operation"`
+	A         *float64 `json:"a"`
+	B         *float64 `json:"b"`
 }
 
 // calculatorResult defines the MCP calculator tool response payload.
@@ -140,8 +105,8 @@ func handleMCPCalculator(ctx context.Context, req *mcp.CallToolRequest) (*mcp.Ca
 	}
 
 	op := strings.TrimSpace(*args.Operation)
-	a := float64(*args.A)
-	b := float64(*args.B)
+	a := *args.A
+	b := *args.B
 
 	result, err := calculate(op, a, b)
 	if err != nil {
