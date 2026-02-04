@@ -248,6 +248,33 @@ summarizer := summary.NewSummarizer(
 )
 ```
 
+#### Model callbacks (before/after)
+
+The `summarizer` supports model callbacks (structured signatures) around the underlying `model.GenerateContent` call. This is useful for request mutation, short-circuiting with a custom response, or adding tracing/metrics for summary generation.
+
+```go
+import (
+    "context"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/session/summary"
+)
+
+callbacks := model.NewCallbacks().
+    RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+        // You may mutate args.Request, or return CustomResponse to skip the real model call.
+        return nil, nil
+    }).
+    RegisterAfterModel(func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+        // You may override the response via CustomResponse.
+        return nil, nil
+    })
+
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithModelCallbacks(callbacks),
+)
+```
+
 Notes:
 
 - Pre-hook can mutate `ctx.Text` (preferred) or `ctx.Events`; post-hook can mutate `ctx.Summary`.
