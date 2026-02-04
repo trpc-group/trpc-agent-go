@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/yuin/goldmark"
@@ -23,6 +24,22 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/encoding"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
+
+// docIDGenerator provides thread-safe unique ID generation for document chunks.
+type docIDGenerator struct {
+	nextID int
+	mu     sync.Mutex
+}
+
+// Next returns the next unique integer ID in a thread-safe manner.
+// It increments the internal counter and returns the new value.
+func (d *docIDGenerator) Next() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	id := d.nextID
+	d.nextID++
+	return id
+}
 
 // MarkdownChunking implements a chunking strategy optimized for markdown documents.
 type MarkdownChunking struct {
@@ -109,7 +126,8 @@ func (m *MarkdownChunking) splitRecursively(
 	content string,
 	originalDoc *document.Document,
 ) []*document.Document {
-	return m.splitRecursivelyWithPath(content, originalDoc, nil)
+	idGen := &docIDGenerator{nextID: 1}
+	return m.splitRecursivelyWithPath(content, originalDoc, nil, idGen)
 }
 
 // splitRecursivelyWithPath splits content recursively while maintaining header path.
@@ -117,15 +135,15 @@ func (m *MarkdownChunking) splitRecursivelyWithPath(
 	content string,
 	originalDoc *document.Document,
 	headerPath []string,
+	idGen *docIDGenerator,
 ) []*document.Document {
 	var chunks []*document.Document
-	chunkNumber := 1
 
 	contentSize := encoding.RuneCount(content)
 
 	// Base case: content fits in one chunk
 	if contentSize <= m.chunkSize {
-		chunk := m.createMarkdownChunkWithPath(originalDoc, content, chunkNumber, headerPath)
+		chunk := m.createMarkdownChunkWithPath(originalDoc, content, idGen.Next(), headerPath)
 		return []*document.Document{chunk}
 	}
 
@@ -161,14 +179,12 @@ func (m *MarkdownChunking) splitRecursivelyWithPath(
 
 				if sectionSize <= m.chunkSize {
 					// Section fits in one chunk
-					chunk := m.createMarkdownChunkWithPath(originalDoc, fullContent, chunkNumber, newPath)
+					chunk := m.createMarkdownChunkWithPath(originalDoc, fullContent, idGen.Next(), newPath)
 					chunks = append(chunks, chunk)
-					chunkNumber++
 				} else {
 					// Section is too large, split recursively
-					subChunks := m.splitRecursivelyWithPath(fullContent, originalDoc, newPath)
+					subChunks := m.splitRecursivelyWithPath(fullContent, originalDoc, newPath, idGen)
 					chunks = append(chunks, subChunks...)
-					chunkNumber += len(subChunks)
 				}
 			}
 			return chunks
@@ -178,7 +194,7 @@ func (m *MarkdownChunking) splitRecursivelyWithPath(
 	// No headers found or only one section, try splitting by paragraphs
 	paragraphs := strings.Split(content, "\n\n")
 	if len(paragraphs) > 1 {
-		chunks = m.mergeSmallParagraphsWithPath(paragraphs, originalDoc, headerPath)
+		chunks = m.mergeSmallParagraphsWithPath(paragraphs, originalDoc, headerPath, idGen)
 		if len(chunks) > 0 {
 			return chunks
 		}
@@ -186,11 +202,11 @@ func (m *MarkdownChunking) splitRecursivelyWithPath(
 
 	// Still too large, split by fixed size (terminal case - prevents infinite recursion)
 	textChunks := encoding.SafeSplitBySize(content, m.chunkSize)
-	for i, chunkText := range textChunks {
+	for _, chunkText := range textChunks {
 		if strings.TrimSpace(chunkText) == "" {
 			continue
 		}
-		chunk := m.createMarkdownChunkWithPath(originalDoc, chunkText, i+1, headerPath)
+		chunk := m.createMarkdownChunkWithPath(originalDoc, chunkText, idGen.Next(), headerPath)
 		chunks = append(chunks, chunk)
 	}
 
@@ -312,10 +328,10 @@ func (m *MarkdownChunking) mergeSmallParagraphsWithPath(
 	paragraphs []string,
 	originalDoc *document.Document,
 	headerPath []string,
+	idGen *docIDGenerator,
 ) []*document.Document {
 	var chunks []*document.Document
 	var currentChunk strings.Builder
-	chunkNumber := 1
 
 	for _, para := range paragraphs {
 		para = strings.TrimSpace(para)
@@ -328,9 +344,8 @@ func (m *MarkdownChunking) mergeSmallParagraphsWithPath(
 
 		// If adding this paragraph exceeds chunk size, save current chunk
 		if currentSize > 0 && currentSize+paraSize+2 > m.chunkSize {
-			chunk := m.createMarkdownChunkWithPath(originalDoc, currentChunk.String(), chunkNumber, headerPath)
+			chunk := m.createMarkdownChunkWithPath(originalDoc, currentChunk.String(), idGen.Next(), headerPath)
 			chunks = append(chunks, chunk)
-			chunkNumber++
 			currentChunk.Reset()
 		}
 
@@ -338,18 +353,16 @@ func (m *MarkdownChunking) mergeSmallParagraphsWithPath(
 		if paraSize > m.chunkSize {
 			// Save current chunk if not empty
 			if currentChunk.Len() > 0 {
-				chunk := m.createMarkdownChunkWithPath(originalDoc, currentChunk.String(), chunkNumber, headerPath)
+				chunk := m.createMarkdownChunkWithPath(originalDoc, currentChunk.String(), idGen.Next(), headerPath)
 				chunks = append(chunks, chunk)
-				chunkNumber++
 				currentChunk.Reset()
 			}
 
 			// Split large paragraph by fixed size
 			paraChunks := encoding.SafeSplitBySize(para, m.chunkSize)
 			for _, pc := range paraChunks {
-				chunk := m.createMarkdownChunkWithPath(originalDoc, pc, chunkNumber, headerPath)
+				chunk := m.createMarkdownChunkWithPath(originalDoc, pc, idGen.Next(), headerPath)
 				chunks = append(chunks, chunk)
-				chunkNumber++
 			}
 		} else {
 			// Add paragraph to current chunk
@@ -362,7 +375,7 @@ func (m *MarkdownChunking) mergeSmallParagraphsWithPath(
 
 	// Add last chunk if not empty
 	if currentChunk.Len() > 0 {
-		chunk := m.createMarkdownChunkWithPath(originalDoc, currentChunk.String(), chunkNumber, headerPath)
+		chunk := m.createMarkdownChunkWithPath(originalDoc, currentChunk.String(), idGen.Next(), headerPath)
 		chunks = append(chunks, chunk)
 	}
 
@@ -447,6 +460,8 @@ func (m *MarkdownChunking) applyOverlap(chunks []*document.Document) []*document
 		} else {
 			overlappedContent = chunks[i].Content
 		}
+
+		metadata[source.MetaOverlappedContentSize] = encoding.RuneCount(overlappedContent)
 
 		overlappedChunk := &document.Document{
 			ID:        chunks[i].ID,
