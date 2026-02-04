@@ -93,7 +93,11 @@ var (
 
 	flagLLMJudge = flag.Bool("llm-judge", false, "Enable LLM-as-Judge evaluation")
 	flagVerbose  = flag.Bool("verbose", false, "Verbose output")
-	flagResume   = flag.Bool("resume", false, "Resume from checkpoint (TODO: implement)")
+	// Debug flags (auto scenario diagnosis).
+	flagDebugDumpMemories = flag.Bool("debug-dump-memories", false, "Dump extracted memories (auto scenario only)")
+	flagDebugMemLimit     = flag.Int("debug-mem-limit", 200, "Max memories to dump when debug-dump-memories is enabled")
+	flagDebugQALimit      = flag.Int("debug-qa-limit", 5, "Dump retrieval hits for the first N questions (auto scenario only)")
+	flagResume            = flag.Bool("resume", false, "Resume from checkpoint (TODO: implement)")
 )
 
 const (
@@ -104,6 +108,27 @@ const (
 	autoMemoryQueueSize    = 200
 	autoMemoryJobTimeout   = 2 * time.Minute
 )
+
+// locomoExtractorPrompt is tuned for the LoCoMo benchmark.
+// The default memory extractor prompt is user-profile oriented; for LoCoMo we
+// need dense, queryable, factual memories (entities, dates, relations).
+const locomoExtractorPrompt = `You are a memory extraction engine for benchmark evaluation.
+
+Goal: extract factual, queryable memories from multi-session conversations.
+
+Rules:
+- Extract concrete facts that can answer future questions: who/what/when/where/relations/preferences/attributes.
+- Preserve dates and times exactly when present (e.g., "7 May 2023", "the week before 9 June 2023").
+- Prefer atomic memories: one fact per memory.
+- Include both parties' facts (not just "User").
+- If information is uncertain, do NOT guess.
+- Avoid vague summaries like "They discussed their plans".
+- Avoid duplicates: update existing memories when the same fact is refined.
+
+Output:
+- Use the provided tools to add/update/delete memories.
+- Use short topics (1-3) like: person, event, date, location, preference.
+`
 
 type memoryMode string
 
@@ -211,11 +236,14 @@ func main() {
 
 	// Base scenario config.
 	baseConfig := scenarios.Config{
-		MaxContext:     *flagMaxContext,
-		TopK:           *flagTopK,
-		EnableLLMJudge: *flagLLMJudge,
-		Verbose:        *flagVerbose,
-		RAGMode:        scenarios.RAGMode(*flagRAGMode),
+		MaxContext:        *flagMaxContext,
+		TopK:              *flagTopK,
+		EnableLLMJudge:    *flagLLMJudge,
+		Verbose:           *flagVerbose,
+		DebugDumpMemories: *flagDebugDumpMemories,
+		DebugMemLimit:     *flagDebugMemLimit,
+		DebugQALimit:      *flagDebugQALimit,
+		RAGMode:           scenarios.RAGMode(*flagRAGMode),
 	}
 
 	// Determine scenarios to run.
@@ -528,7 +556,7 @@ func createPGVectorService(
 			embedModelName,
 		)
 		tableName = pgvectorTableAuto
-		ext = extractor.NewExtractor(opts.extractorModel)
+		ext = extractor.NewExtractor(opts.extractorModel, extractor.WithPrompt(locomoExtractorPrompt))
 	} else {
 		log.Printf(
 			"Creating pgvector memory service (embed_model=%s)",
@@ -554,7 +582,7 @@ func createPGVectorService(
 func createInMemoryService(opts memoryServiceOptions) memory.Service {
 	if opts.enableExtractor {
 		log.Printf("Creating inmemory memory service with extractor")
-		ext := extractor.NewExtractor(opts.extractorModel)
+		ext := extractor.NewExtractor(opts.extractorModel, extractor.WithPrompt(locomoExtractorPrompt))
 		return inmemory.NewMemoryService(
 			inmemory.WithExtractor(ext),
 			inmemory.WithAsyncMemoryNum(autoMemoryAsyncWorkers),

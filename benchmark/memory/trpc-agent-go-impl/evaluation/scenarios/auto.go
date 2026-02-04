@@ -82,6 +82,25 @@ func (e *AutoEvaluator) Evaluate(
 		return nil, fmt.Errorf("wait for auto extraction: %w", err)
 	}
 
+	if e.config.DebugDumpMemories {
+		limit := e.config.DebugMemLimit
+		if limit <= 0 {
+			limit = 200
+		}
+		entries, err := e.memoryService.ReadMemories(ctx, userKey, limit)
+		if err == nil {
+			fmt.Printf("[debug] extracted memories: %d (showing up to %d)\n", len(entries), limit)
+			for i, ent := range entries {
+				if ent == nil || ent.Memory == nil {
+					continue
+				}
+				fmt.Printf("[debug] memory[%d] id=%s: %s\n", i, ent.ID, ent.Memory.Memory)
+			}
+		} else {
+			fmt.Printf("[debug] failed to read memories: %v\n", err)
+		}
+	}
+
 	// Phase 2: Answer QA questions using search-only agent.
 	result := &SampleResult{
 		SampleID:  sample.SampleID,
@@ -89,8 +108,9 @@ func (e *AutoEvaluator) Evaluate(
 	}
 	catAgg := metrics.NewCategoryAggregator()
 
-	for _, qa := range sample.QA {
-		qaResult, err := e.evaluateQA(ctx, userKey, qa)
+	for i, qa := range sample.QA {
+		debugQA := e.config.DebugQALimit > 0 && i < e.config.DebugQALimit
+		qaResult, err := e.evaluateQA(ctx, userKey, qa, debugQA)
 		if err != nil {
 			return nil, fmt.Errorf("evaluate QA %s: %w", qa.QuestionID, err)
 		}
@@ -250,11 +270,26 @@ func (e *AutoEvaluator) evaluateQA(
 	ctx context.Context,
 	userKey memory.UserKey,
 	qa dataset.QAItem,
+	debug bool,
 ) (*QAResult, error) {
 	start := time.Now()
 
 	// Search for relevant memories.
 	memories, err := e.memoryService.SearchMemories(ctx, userKey, qa.Question)
+	if debug {
+		fmt.Printf("[debug] QA %s\n", qa.QuestionID)
+		fmt.Printf("[debug] Q: %s\n", qa.Question)
+		fmt.Printf("[debug] retrieved=%d\n", len(memories))
+		for i, mem := range memories {
+			if i >= e.config.TopK {
+				break
+			}
+			if mem == nil || mem.Memory == nil {
+				continue
+			}
+			fmt.Printf("[debug] hit[%d] id=%s: %s\n", i, mem.ID, mem.Memory.Memory)
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("search memories: %w", err)
 	}

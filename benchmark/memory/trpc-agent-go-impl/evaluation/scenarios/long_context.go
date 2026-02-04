@@ -51,17 +51,25 @@ type Config struct {
 	TopK           int
 	EnableLLMJudge bool
 	Verbose        bool
+
+	// Debug options (primarily for benchmark diagnosis).
+	DebugDumpMemories bool
+	DebugMemLimit     int
+	DebugQALimit      int
 }
 
 // DefaultConfig returns default configuration.
 func DefaultConfig() Config {
 	return Config{
-		Scenario:       ScenarioLongContext,
-		RAGMode:        RAGModeFull,
-		MaxContext:     128000,
-		TopK:           5,
-		EnableLLMJudge: false,
-		Verbose:        false,
+		Scenario:          ScenarioLongContext,
+		RAGMode:           RAGModeFull,
+		MaxContext:        128000,
+		TopK:              5,
+		EnableLLMJudge:    false,
+		Verbose:           false,
+		DebugDumpMemories: false,
+		DebugMemLimit:     0,
+		DebugQALimit:      0,
 	}
 }
 
