@@ -84,7 +84,7 @@ func (s *knowledgeSearcher) rewriteQuery(ctx context.Context, query string) (con
 		invocation = agent.NewInvocation()
 	}
 	timingInfo := invocation.GetOrCreateTimingInfo()
-	tracker := itelemetry.NewChatMetricsTracker(ctx, invocation, req, timingInfo, &err)
+	tracker := itelemetry.NewChatMetricsTracker(ctx, invocation, req, timingInfo, nil, &err)
 	defer tracker.RecordMetrics()()
 	respCh, err := s.model.GenerateContent(ctx, req)
 	if err != nil {
