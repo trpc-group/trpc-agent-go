@@ -739,7 +739,7 @@ import "trpc.group/trpc-go/trpc-agent-go/server/agui"
 
 server, err := agui.New(
     runner,
-    agui.WithBasePath("/agui"),                // Set the AG-UI prefix route.
+    agui.WithBasePath("/agui/"),               // Set the AG-UI prefix route.
     agui.WithPath("/chat"),                    // Set the real-time conversation route, default is "/".
     agui.WithCancelEnabled(true),              // Enable the cancel route.
     agui.WithCancelPath("/cancel"),            // Set the cancel route, default is "/cancel".
