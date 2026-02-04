@@ -14,7 +14,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -53,6 +52,13 @@ type claudeToolEvent struct {
 	ToolName string
 	Input    any
 	Result   any
+}
+
+// normalizedCalculatorToolArguments is the canonical argument shape used for deterministic matching.
+type normalizedCalculatorToolArguments struct {
+	Operation string  `json:"operation"`
+	A         float64 `json:"a"`
+	B         float64 `json:"b"`
 }
 
 // parseClaudeToolEvents extracts tool_use/tool_result blocks from the CLI JSON output.
@@ -168,63 +174,30 @@ func emitClaudeToolEvents(ctx context.Context, invocation *agent.Invocation, out
 
 // normalizeToolCallArguments canonicalizes tool arguments into a deterministic shape for matching.
 func normalizeToolCallArguments(toolName string, input any) any {
-	switch strings.TrimSpace(toolName) {
-	case "mcp__" + claudeMCPServerName + "__calculator":
-		return normalizeCalculatorToolArguments(input)
-	default:
+	if strings.TrimSpace(toolName) != "mcp__"+claudeMCPServerName+"__calculator" {
 		return input
 	}
-}
 
-// normalizeCalculatorToolArguments converts calculator inputs into a {operation,a,b} object with numeric operands.
-func normalizeCalculatorToolArguments(input any) any {
-	m, ok := input.(map[string]any)
-	if !ok {
+	raw, err := json.Marshal(input)
+	if err != nil {
 		return input
 	}
-	rawOperation, _ := m["operation"].(string)
-	operation := strings.TrimSpace(rawOperation)
-	a, okA := toFloat64(m["a"])
-	b, okB := toFloat64(m["b"])
-	if operation == "" || !okA || !okB {
-		return input
-	}
-	return map[string]any{
-		"operation": operation,
-		"a":         a,
-		"b":         b,
-	}
-}
 
-// toFloat64 converts common JSON number representations into float64.
-func toFloat64(v any) (float64, bool) {
-	switch n := v.(type) {
-	case float64:
-		return n, true
-	case float32:
-		return float64(n), true
-	case int:
-		return float64(n), true
-	case int64:
-		return float64(n), true
-	case json.Number:
-		f, err := n.Float64()
-		if err != nil {
-			return 0, false
-		}
-		return f, true
-	case string:
-		s := strings.TrimSpace(n)
-		if s == "" {
-			return 0, false
-		}
-		f, err := strconv.ParseFloat(s, 64)
-		if err != nil {
-			return 0, false
-		}
-		return f, true
-	default:
-		return 0, false
+	var args calculatorArgs
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return input
+	}
+	if args.Operation == nil || strings.TrimSpace(*args.Operation) == "" {
+		return input
+	}
+	if args.A == nil || args.B == nil {
+		return input
+	}
+
+	return normalizedCalculatorToolArguments{
+		Operation: strings.TrimSpace(*args.Operation),
+		A:         float64(*args.A),
+		B:         float64(*args.B),
 	}
 }
 
