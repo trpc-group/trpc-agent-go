@@ -1275,6 +1275,29 @@ memExtractor := extractor.NewExtractor(
 )
 ```
 
+#### Model callbacks (before/after)
+
+The extractor also supports injecting before/after model callbacks via `model.Callbacks` (structured only). This is useful for tracing, request rewriting, or short-circuiting the model call in tests.
+
+```go
+callbacks := model.NewCallbacks().RegisterBeforeModel(
+    func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+        // You can modify args.Request or return CustomResponse.
+        return nil, nil
+    },
+).RegisterAfterModel(
+    func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+        // You can inspect/override args.Response.
+        return nil, nil
+    },
+)
+
+memExtractor := extractor.NewExtractor(
+    extractorModel,
+    extractor.WithModelCallbacks(callbacks),
+)
+```
+
 #### ExtractionContext
 
 The `ExtractionContext` provides information for checker decisions:
