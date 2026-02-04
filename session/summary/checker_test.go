@@ -291,6 +291,63 @@ func TestCheckTokenThreshold_NoUsage(t *testing.T) {
 	assert.False(t, checker(sess))
 }
 
+type testFixedTokenCounter struct {
+	tokens int
+}
+
+func (c testFixedTokenCounter) CountTokens(_ context.Context, _ model.Message) (int, error) {
+	return c.tokens, nil
+}
+
+func (c testFixedTokenCounter) CountTokensRange(
+	_ context.Context,
+	_ []model.Message,
+	start,
+	end int,
+) (int, error) {
+	if start >= end {
+		return 0, nil
+	}
+	return c.tokens * (end - start), nil
+}
+
+func TestSetTokenCounter_AffectsCheckTokenThreshold(t *testing.T) {
+	defer SetTokenCounter(nil)
+	SetTokenCounter(testFixedTokenCounter{tokens: 1000})
+
+	checker := CheckTokenThreshold(100)
+	sess := &session.Session{Events: []event.Event{
+		{
+			Author:    "user",
+			Timestamp: time.Now(),
+			Response: &model.Response{Choices: []model.Choice{{
+				Message: model.Message{Content: "a"},
+			}}},
+		},
+	}}
+	assert.True(t, checker(sess))
+}
+
+func TestSetTokenCounter_NilResetsToDefault(t *testing.T) {
+	defer SetTokenCounter(nil)
+
+	SetTokenCounter(testFixedTokenCounter{tokens: 1000})
+	SetTokenCounter(nil)
+
+	checker := CheckTokenThreshold(100)
+	const shortContentLen = 40
+	sess := &session.Session{Events: []event.Event{
+		{
+			Author:    "user",
+			Timestamp: time.Now(),
+			Response: &model.Response{Choices: []model.Choice{{
+				Message: model.Message{Content: strings.Repeat("a", shortContentLen)},
+			}}},
+		},
+	}}
+	assert.False(t, checker(sess))
+}
+
 func TestChecksAll(t *testing.T) {
 	tests := []struct {
 		name     string

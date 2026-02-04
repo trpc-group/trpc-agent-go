@@ -27,7 +27,108 @@ func TestSimpleTokenCounter_CountTokens(t *testing.T) {
 	assert.Greater(t, n, 0)
 }
 
-// TestSimpleTokenCounter_CountTokens_DetailedCoverage tests all code paths in CountTokens function
+func TestSimpleTokenCounter_WithApproxRunesPerToken(t *testing.T) {
+	const (
+		textLen     = 16
+		cnHeuristic = 1.6
+	)
+
+	msg := NewUserMessage(repeat("a", textLen))
+	ctx := context.Background()
+
+	defaultCounter := NewSimpleTokenCounter()
+	defaultTokens, err := defaultCounter.CountTokens(ctx, msg)
+	require.NoError(t, err)
+	require.Greater(t, defaultTokens, 0)
+
+	tests := []struct {
+		name         string
+		options      []SimpleTokenCounterOption
+		assertTokens func(t *testing.T, got, baseline int)
+	}{
+		{
+			name:    "negative_value_ignored_like_default",
+			options: []SimpleTokenCounterOption{WithApproxRunesPerToken(-1)},
+			assertTokens: func(t *testing.T, got, baseline int) {
+				assert.Equal(t, baseline, got)
+			},
+		},
+		{
+			name:    "zero_value_ignored_like_default",
+			options: []SimpleTokenCounterOption{WithApproxRunesPerToken(0)},
+			assertTokens: func(t *testing.T, got, baseline int) {
+				assert.Equal(t, baseline, got)
+			},
+		},
+		{
+			name:    "smaller_runes_per_token_increases_token_count",
+			options: []SimpleTokenCounterOption{WithApproxRunesPerToken(cnHeuristic)},
+			assertTokens: func(t *testing.T, got, baseline int) {
+				assert.Greater(t, got, baseline)
+			},
+		},
+		{
+			name:    "very_small_positive_value_produces_large_token_count",
+			options: []SimpleTokenCounterOption{WithApproxRunesPerToken(0.1)},
+			assertTokens: func(t *testing.T, got, baseline int) {
+				assert.Greater(t, got, baseline)
+			},
+		},
+		{
+			name:    "nil_option_is_safely_skipped",
+			options: []SimpleTokenCounterOption{nil},
+			assertTokens: func(t *testing.T, got, baseline int) {
+				assert.Equal(t, baseline, got)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			counter := NewSimpleTokenCounter(tt.options...)
+			gotTokens, err := counter.CountTokens(ctx, msg)
+			require.NoError(t, err)
+			tt.assertTokens(t, gotTokens, defaultTokens)
+		})
+	}
+}
+
+func TestSimpleTokenCounter_CountTokens_ApproxRunesPerTokenFallback(t *testing.T) {
+	ctx := context.Background()
+	msg := NewUserMessage("hello")
+
+	baselineCounter := NewSimpleTokenCounter()
+	baselineTokens, err := baselineCounter.CountTokens(ctx, msg)
+	require.NoError(t, err)
+	require.Greater(t, baselineTokens, 0)
+
+	tests := []struct {
+		name                string
+		approxRunesPerToken float64
+	}{
+		{
+			name:                "zero_value_falls_back_to_default",
+			approxRunesPerToken: 0,
+		},
+		{
+			name:                "negative_value_falls_back_to_default",
+			approxRunesPerToken: -1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			counter := &SimpleTokenCounter{
+				approxRunesPerToken: tt.approxRunesPerToken,
+			}
+			gotTokens, err := counter.CountTokens(ctx, msg)
+			require.NoError(t, err)
+			assert.Equal(t, baselineTokens, gotTokens)
+		})
+	}
+}
+
+// TestSimpleTokenCounter_CountTokens_DetailedCoverage tests all code paths in CountTokens function.
 func TestSimpleTokenCounter_CountTokens_DetailedCoverage(t *testing.T) {
 	counter := NewSimpleTokenCounter()
 	ctx := context.Background()
@@ -77,12 +178,12 @@ func TestSimpleTokenCounter_CountTokens_DetailedCoverage(t *testing.T) {
 	t.Run("content with reasoning content", func(t *testing.T) {
 		msg := Message{
 			Role:             RoleAssistant,
-			Content:          "Answer",                     // 6 runes / 4 = 1 token
-			ReasoningContent: "Let me think about this...", // 26 runes / 4 = 6 tokens
+			Content:          "Answer",                     // 6 runes
+			ReasoningContent: "Let me think about this...", // 26 runes
 		}
 		result, err := counter.CountTokens(ctx, msg)
 		require.NoError(t, err)
-		assert.Equal(t, 7, result) // max(1 + 6, 1) = 7
+		assert.Equal(t, 8, result) // max((6+26)/4, 1) = 8
 	})
 
 	t.Run("empty reasoning content is ignored", func(t *testing.T) {
@@ -196,12 +297,12 @@ func TestSimpleTokenCounter_CountTokens_DetailedCoverage(t *testing.T) {
 	})
 
 	t.Run("all features combined", func(t *testing.T) {
-		textPart1 := "Additional info" // 15 runes / 4 = 3 tokens
-		textPart2 := "More details"    // 12 runes / 4 = 3 tokens
+		textPart1 := "Additional info" // 15 runes
+		textPart2 := "More details"    // 12 runes
 		msg := Message{
 			Role:             RoleAssistant,
-			Content:          "Main answer",      // 11 runes / 4 = 2 tokens
-			ReasoningContent: "Thinking process", // 16 runes / 4 = 4 tokens
+			Content:          "Main answer",      // 11 runes
+			ReasoningContent: "Thinking process", // 16 runes
 			ContentParts: []ContentPart{
 				{
 					Type: ContentTypeText,
@@ -219,7 +320,7 @@ func TestSimpleTokenCounter_CountTokens_DetailedCoverage(t *testing.T) {
 		}
 		result, err := counter.CountTokens(ctx, msg)
 		require.NoError(t, err)
-		assert.Equal(t, 12, result) // max(2 + 4 + 3 + 3, 1) = 12
+		assert.Equal(t, 13, result) // max((11+16+15+12)/4, 1) = 13
 	})
 
 	t.Run("empty content parts slice", func(t *testing.T) {
