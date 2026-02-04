@@ -124,4 +124,6 @@ const (
 
 	// SystemTRPCGoAgent is the system identifier for trpc-go-agent.
 	SystemTRPCGoAgent = "trpc.go.agent"
+
+	KeyGenAITaskType = "gen_ai.task_type"
 )
