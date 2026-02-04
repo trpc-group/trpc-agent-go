@@ -24,6 +24,8 @@ import (
 const (
 	// claudeMCPServerName is the local MCP server name registered via the Claude CLI.
 	claudeMCPServerName = "eva_eval_example"
+	// claudeCalculatorMCPToolName is the full calculator tool name exposed to the Claude CLI.
+	claudeCalculatorMCPToolName = "mcp__" + claudeMCPServerName + "__calculator"
 )
 
 // calculatorArgs defines the MCP calculator tool arguments.

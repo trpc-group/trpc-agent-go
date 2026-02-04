@@ -62,7 +62,6 @@ func emitClaudeToolEvents(ctx context.Context, invocation *agent.Invocation, out
 	}
 
 	toolNames := make(map[string]string)
-	calculatorToolName := "mcp__" + claudeMCPServerName + "__calculator"
 
 	for _, entry := range entries {
 		if entry.Message == nil {
@@ -71,7 +70,7 @@ func emitClaudeToolEvents(ctx context.Context, invocation *agent.Invocation, out
 		for _, block := range entry.Message.Content {
 			switch strings.TrimSpace(block.Type) {
 			case "tool_use":
-				handleToolUseBlock(ctx, invocation, out, author, calculatorToolName, toolNames, block)
+				handleToolUseBlock(ctx, invocation, out, author, toolNames, block)
 			case "tool_result":
 				handleToolResultBlock(ctx, invocation, out, author, toolNames, block)
 			}
@@ -110,7 +109,6 @@ func handleToolUseBlock(
 	invocation *agent.Invocation,
 	out chan<- *event.Event,
 	author string,
-	calculatorToolName string,
 	toolNames map[string]string,
 	block claudeCLIContentBlock,
 ) {
@@ -124,7 +122,7 @@ func handleToolUseBlock(
 	}
 	toolNames[toolID] = toolName
 
-	args := marshalToolUseArguments(toolName, calculatorToolName, block.Input)
+	args := marshalToolUseArguments(toolName, block.Input)
 	tc := model.ToolCall{
 		Type: "function",
 		ID:   toolID,
@@ -185,11 +183,11 @@ func handleToolResultBlock(
 }
 
 // marshalToolUseArguments serializes tool arguments and applies per-tool normalization when needed.
-func marshalToolUseArguments(toolName, calculatorToolName string, input any) []byte {
+func marshalToolUseArguments(toolName string, input any) []byte {
 	if input == nil {
 		return []byte("{}")
 	}
-	if toolName == calculatorToolName {
+	if toolName == claudeCalculatorMCPToolName {
 		if normalized, ok := marshalCalculatorArgumentsForEval(input); ok {
 			return normalized
 		}

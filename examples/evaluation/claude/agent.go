@@ -135,7 +135,7 @@ func (a *claudeAgent) runClaude(ctx context.Context, invocationID, prompt string
 	args = append(args, prompt)
 	args = append(args, "--verbose", "--output-format", "json")
 	args = append(args, "--allowedTools")
-	args = append(args, "mcp__"+claudeMCPServerName+"__calculator")
+	args = append(args, claudeCalculatorMCPToolName)
 	cmd := exec.CommandContext(ctx, a.cfg.ClaudeBin, args...)
 	cmd.Env = os.Environ()
 
