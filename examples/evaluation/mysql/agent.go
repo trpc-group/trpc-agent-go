@@ -89,4 +89,3 @@ func intPtr(v int) *int {
 func floatPtr(v float64) *float64 {
 	return &v
 }
-

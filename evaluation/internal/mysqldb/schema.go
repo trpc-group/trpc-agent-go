@@ -38,6 +38,17 @@ type Tables struct {
 	EvalSetResults string
 }
 
+type tableDefinition struct {
+	name     string
+	template string
+}
+
+type indexDefinition struct {
+	table    string
+	name     string
+	template string
+}
+
 // SchemaTarget selects which evaluation tables should be ensured.
 type SchemaTarget uint8
 
@@ -70,37 +81,60 @@ func EnsureSchema(ctx context.Context, db storage.Client, tables Tables, target 
 	if target == 0 {
 		return errors.New("no schema target specified")
 	}
-	ddl := []struct {
-		name string
-		sql  string
-	}{}
+
+	tableDefs := []tableDefinition{}
+	indexDefs := []indexDefinition{}
+
+	appendTable := func(tableName string, template string) {
+		tableDefs = append(tableDefs, tableDefinition{
+			name:     tableName,
+			template: template,
+		})
+	}
+	appendIndex := func(tableName, indexName, template string) {
+		indexDefs = append(indexDefs, indexDefinition{
+			table:    tableName,
+			name:     indexName,
+			template: template,
+		})
+	}
 	if target&SchemaEvalSets != 0 {
-		ddl = append(ddl, struct {
-			name string
-			sql  string
-		}{name: tables.EvalSets, sql: strings.ReplaceAll(sqlCreateEvalSetsTable, "{{TABLE_NAME}}", tables.EvalSets)})
+		appendTable(tables.EvalSets, sqlCreateEvalSetsTable)
+		appendIndex(tables.EvalSets, "uniq_eval_sets_app_eval_set", sqlCreateEvalSetsUniqueIndex)
+		appendIndex(tables.EvalSets, "idx_eval_sets_app_created", sqlCreateEvalSetsAppCreatedIndex)
 	}
 	if target&SchemaEvalCases != 0 {
-		ddl = append(ddl, struct {
-			name string
-			sql  string
-		}{name: tables.EvalCases, sql: strings.ReplaceAll(sqlCreateEvalCasesTable, "{{TABLE_NAME}}", tables.EvalCases)})
+		appendTable(tables.EvalCases, sqlCreateEvalCasesTable)
+		appendIndex(tables.EvalCases, "uniq_eval_cases_app_set_case", sqlCreateEvalCasesUniqueIndex)
+		appendIndex(tables.EvalCases, "idx_eval_cases_app_set_order", sqlCreateEvalCasesOrderIndex)
 	}
 	if target&SchemaMetrics != 0 {
-		ddl = append(ddl, struct {
-			name string
-			sql  string
-		}{name: tables.Metrics, sql: strings.ReplaceAll(sqlCreateMetricsTable, "{{TABLE_NAME}}", tables.Metrics)})
+		appendTable(tables.Metrics, sqlCreateMetricsTable)
+		appendIndex(tables.Metrics, "uniq_metrics_app_set_name", sqlCreateMetricsUniqueIndex)
+		appendIndex(tables.Metrics, "idx_metrics_app_set", sqlCreateMetricsAppSetIndex)
 	}
 	if target&SchemaEvalSetResults != 0 {
-		ddl = append(ddl, struct {
-			name string
-			sql  string
-		}{name: tables.EvalSetResults, sql: strings.ReplaceAll(sqlCreateEvalSetResultsTable, "{{TABLE_NAME}}", tables.EvalSetResults)})
+		appendTable(tables.EvalSetResults, sqlCreateEvalSetResultsTable)
+		appendIndex(tables.EvalSetResults, "uniq_results_app_result_id", sqlCreateEvalSetResultsUniqueIndex)
+		appendIndex(tables.EvalSetResults, "idx_results_app_created", sqlCreateEvalSetResultsAppCreatedIndex)
+		appendIndex(tables.EvalSetResults, "idx_results_app_set_created", sqlCreateEvalSetResultsAppSetCreatedIndex)
 	}
-	for _, item := range ddl {
-		if _, err := db.Exec(ctx, item.sql); err != nil {
-			return fmt.Errorf("create table %s failed: %w", item.name, err)
+
+	for _, tableDef := range tableDefs {
+		query := strings.ReplaceAll(tableDef.template, "{{TABLE_NAME}}", tableDef.name)
+		if _, err := db.Exec(ctx, query); err != nil {
+			return fmt.Errorf("create table %s failed: %w", tableDef.name, err)
+		}
+	}
+
+	for _, indexDef := range indexDefs {
+		query := strings.ReplaceAll(indexDef.template, "{{TABLE_NAME}}", indexDef.table)
+		query = strings.ReplaceAll(query, "{{INDEX_NAME}}", indexDef.name)
+		if _, err := db.Exec(ctx, query); err != nil {
+			if IsDuplicateKeyName(err) {
+				continue
+			}
+			return fmt.Errorf("create index %s on table %s failed: %w", indexDef.name, indexDef.table, err)
 		}
 	}
 	return nil
@@ -116,10 +150,14 @@ const (
 			description TEXT DEFAULT NULL,
 			created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
 			updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
-			PRIMARY KEY (id),
-			UNIQUE KEY uniq_eval_sets_app_eval_set (app_name, eval_set_id),
-			KEY idx_eval_sets_app_created (app_name, created_at)
+			PRIMARY KEY (id)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+
+	sqlCreateEvalSetsUniqueIndex = `
+		CREATE UNIQUE INDEX {{INDEX_NAME}} ON {{TABLE_NAME}}(app_name, eval_set_id)`
+
+	sqlCreateEvalSetsAppCreatedIndex = `
+		CREATE INDEX {{INDEX_NAME}} ON {{TABLE_NAME}}(app_name, created_at)`
 
 	sqlCreateEvalCasesTable = `
 		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
@@ -131,10 +169,14 @@ const (
 			eval_case JSON NOT NULL,
 			created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
 			updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
-			PRIMARY KEY (id),
-			UNIQUE KEY uniq_eval_cases_app_set_case (app_name, eval_set_id, eval_id),
-			KEY idx_eval_cases_app_set_order (app_name, eval_set_id, id)
+			PRIMARY KEY (id)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+
+	sqlCreateEvalCasesUniqueIndex = `
+		CREATE UNIQUE INDEX {{INDEX_NAME}} ON {{TABLE_NAME}}(app_name, eval_set_id, eval_id)`
+
+	sqlCreateEvalCasesOrderIndex = `
+		CREATE INDEX {{INDEX_NAME}} ON {{TABLE_NAME}}(app_name, eval_set_id, id)`
 
 	sqlCreateMetricsTable = `
 		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
@@ -145,10 +187,14 @@ const (
 			metric JSON NOT NULL,
 			created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
 			updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
-			PRIMARY KEY (id),
-			UNIQUE KEY uniq_metrics_app_set_name (app_name, eval_set_id, metric_name),
-			KEY idx_metrics_app_set (app_name, eval_set_id)
+			PRIMARY KEY (id)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+
+	sqlCreateMetricsUniqueIndex = `
+		CREATE UNIQUE INDEX {{INDEX_NAME}} ON {{TABLE_NAME}}(app_name, eval_set_id, metric_name)`
+
+	sqlCreateMetricsAppSetIndex = `
+		CREATE INDEX {{INDEX_NAME}} ON {{TABLE_NAME}}(app_name, eval_set_id)`
 
 	sqlCreateEvalSetResultsTable = `
 		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
@@ -161,8 +207,15 @@ const (
 			summary JSON DEFAULT NULL,
 			created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
 			updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
-			PRIMARY KEY (id),
-			UNIQUE KEY uniq_results_app_result_id (app_name, eval_set_result_id),
-			KEY idx_results_app_set_created (app_name, eval_set_id, created_at)
+			PRIMARY KEY (id)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+
+	sqlCreateEvalSetResultsUniqueIndex = `
+		CREATE UNIQUE INDEX {{INDEX_NAME}} ON {{TABLE_NAME}}(app_name, eval_set_result_id)`
+
+	sqlCreateEvalSetResultsAppCreatedIndex = `
+		CREATE INDEX {{INDEX_NAME}} ON {{TABLE_NAME}}(app_name, created_at)`
+
+	sqlCreateEvalSetResultsAppSetCreatedIndex = `
+		CREATE INDEX {{INDEX_NAME}} ON {{TABLE_NAME}}(app_name, eval_set_id, created_at)`
 )

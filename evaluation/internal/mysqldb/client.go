@@ -42,3 +42,12 @@ func IsDuplicateEntry(err error) bool {
 	}
 	return mysqlErr.Number == sqldb.MySQLErrDuplicateEntry
 }
+
+// IsDuplicateKeyName reports whether the error is a MySQL duplicate index name error.
+func IsDuplicateKeyName(err error) bool {
+	var mysqlErr *mysql.MySQLError
+	if !errors.As(err, &mysqlErr) {
+		return false
+	}
+	return mysqlErr.Number == sqldb.MySQLErrDuplicateKeyName
+}

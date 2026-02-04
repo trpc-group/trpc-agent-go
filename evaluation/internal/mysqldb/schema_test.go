@@ -58,6 +58,21 @@ func containsCreateForTable(queries []string, table string) bool {
 	return false
 }
 
+func containsCreateIndexForTable(queries []string, indexName string, table string) bool {
+	needles := []string{
+		"CREATE UNIQUE INDEX " + indexName + " ON " + table,
+		"CREATE INDEX " + indexName + " ON " + table,
+	}
+	for _, q := range queries {
+		for _, needle := range needles {
+			if strings.Contains(q, needle) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func TestEnsureSchema_TargetSelection(t *testing.T) {
 	ctx := context.Background()
 	client := &recordingClient{}
@@ -65,11 +80,20 @@ func TestEnsureSchema_TargetSelection(t *testing.T) {
 
 	err := EnsureSchema(ctx, client, tables, SchemaEvalSets|SchemaEvalSetResults)
 	assert.NoError(t, err)
-	assert.Len(t, client.queries, 2)
+	assert.Len(t, client.queries, 7)
 	assert.True(t, containsCreateForTable(client.queries, tables.EvalSets))
 	assert.True(t, containsCreateForTable(client.queries, tables.EvalSetResults))
+	assert.True(t, containsCreateIndexForTable(client.queries, "uniq_eval_sets_app_eval_set", tables.EvalSets))
+	assert.True(t, containsCreateIndexForTable(client.queries, "idx_eval_sets_app_created", tables.EvalSets))
+	assert.True(t, containsCreateIndexForTable(client.queries, "uniq_results_app_result_id", tables.EvalSetResults))
+	assert.True(t, containsCreateIndexForTable(client.queries, "idx_results_app_created", tables.EvalSetResults))
+	assert.True(t, containsCreateIndexForTable(client.queries, "idx_results_app_set_created", tables.EvalSetResults))
 	assert.False(t, containsCreateForTable(client.queries, tables.EvalCases))
 	assert.False(t, containsCreateForTable(client.queries, tables.Metrics))
+	assert.False(t, containsCreateIndexForTable(client.queries, "uniq_eval_cases_app_set_case", tables.EvalCases))
+	assert.False(t, containsCreateIndexForTable(client.queries, "idx_eval_cases_app_set_order", tables.EvalCases))
+	assert.False(t, containsCreateIndexForTable(client.queries, "uniq_metrics_app_set_name", tables.Metrics))
+	assert.False(t, containsCreateIndexForTable(client.queries, "idx_metrics_app_set", tables.Metrics))
 }
 
 func TestEnsureSchema_AllTargets(t *testing.T) {
@@ -79,11 +103,20 @@ func TestEnsureSchema_AllTargets(t *testing.T) {
 
 	err := EnsureSchema(ctx, client, tables, SchemaAll)
 	assert.NoError(t, err)
-	assert.Len(t, client.queries, 4)
+	assert.Len(t, client.queries, 13)
 	assert.True(t, containsCreateForTable(client.queries, tables.EvalSets))
 	assert.True(t, containsCreateForTable(client.queries, tables.EvalCases))
 	assert.True(t, containsCreateForTable(client.queries, tables.Metrics))
 	assert.True(t, containsCreateForTable(client.queries, tables.EvalSetResults))
+	assert.True(t, containsCreateIndexForTable(client.queries, "uniq_eval_sets_app_eval_set", tables.EvalSets))
+	assert.True(t, containsCreateIndexForTable(client.queries, "idx_eval_sets_app_created", tables.EvalSets))
+	assert.True(t, containsCreateIndexForTable(client.queries, "uniq_eval_cases_app_set_case", tables.EvalCases))
+	assert.True(t, containsCreateIndexForTable(client.queries, "idx_eval_cases_app_set_order", tables.EvalCases))
+	assert.True(t, containsCreateIndexForTable(client.queries, "uniq_metrics_app_set_name", tables.Metrics))
+	assert.True(t, containsCreateIndexForTable(client.queries, "idx_metrics_app_set", tables.Metrics))
+	assert.True(t, containsCreateIndexForTable(client.queries, "uniq_results_app_result_id", tables.EvalSetResults))
+	assert.True(t, containsCreateIndexForTable(client.queries, "idx_results_app_created", tables.EvalSetResults))
+	assert.True(t, containsCreateIndexForTable(client.queries, "idx_results_app_set_created", tables.EvalSetResults))
 }
 
 func TestEnsureSchema_NoTarget(t *testing.T) {
