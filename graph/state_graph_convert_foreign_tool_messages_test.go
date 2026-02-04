@@ -93,6 +93,52 @@ func TestLLMRunner_convertForeignToolMessages_ToolSubset_ConvertsOnlyForeign(t *
 	require.Contains(t, out[3].Content, "`c2` tool returned result: {\"y\":2}")
 }
 
+func TestLLMRunner_convertForeignToolMessages_MixedContent_PreservesAssistantContentAndLocalCalls(t *testing.T) {
+	runner := &llmRunner{}
+	messages := []model.Message{
+		model.NewUserMessage("Please check the weather and also run the local tool."),
+		{
+			Role:    model.RoleAssistant,
+			Content: "Sure, I'll do both.",
+			ToolCalls: []model.ToolCall{
+				{
+					ID: "local-1",
+					Function: model.FunctionDefinitionParam{
+						Name:      "local_tool",
+						Arguments: []byte(`{"foo":"bar"}`),
+					},
+				},
+				{
+					ID: "foreign-1",
+					Function: model.FunctionDefinitionParam{
+						Name:      "foreign_tool",
+						Arguments: []byte(`{"foo":"baz"}`),
+					},
+				},
+			},
+		},
+	}
+	tools := map[string]tool.Tool{
+		"local_tool": nil,
+	}
+
+	out := runner.convertForeignToolMessages(messages, tools)
+	require.Len(t, out, 3)
+
+	require.Equal(t, model.RoleUser, out[0].Role)
+	require.Equal(t, messages[0].Content, out[0].Content)
+
+	require.Equal(t, model.RoleAssistant, out[1].Role)
+	require.Equal(t, "Sure, I'll do both.", out[1].Content)
+	require.Len(t, out[1].ToolCalls, 1)
+	require.Equal(t, "local_tool", out[1].ToolCalls[0].Function.Name)
+	require.Equal(t, "local-1", out[1].ToolCalls[0].ID)
+
+	require.Equal(t, model.RoleUser, out[2].Role)
+	require.Contains(t, out[2].Content, "For context:")
+	require.Contains(t, out[2].Content, "Tool `foreign_tool` called with parameters: {\"foo\":\"baz\"}")
+}
+
 func TestLLMRunner_convertForeignToolMessages_AllToolsPresent_NoOp(t *testing.T) {
 	runner := &llmRunner{}
 	messages := []model.Message{
@@ -117,4 +163,3 @@ func TestLLMRunner_convertForeignToolMessages_AllToolsPresent_NoOp(t *testing.T)
 	out := runner.convertForeignToolMessages(messages, tools)
 	require.Equal(t, messages, out)
 }
-
