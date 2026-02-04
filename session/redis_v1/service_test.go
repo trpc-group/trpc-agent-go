@@ -25,7 +25,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-	v1 "trpc.group/trpc-go/trpc-agent-go/session/redis/internal/v1"
 )
 
 // Test helper functions for generating expected redis keys with optional prefix.
@@ -935,19 +934,14 @@ func TestService_Atomicity(t *testing.T) {
 				assert.Equal(t, "event123", finalSess.Events[0].ID)
 
 				// Verify Redis state consistency
-<<<<<<< HEAD
 				sessStateKey := getExpectedSessionStateKey(sessionKey)
 				eventKey := getExpectedEventKey(sessionKey)
-=======
-				sessStateKey := v1.GetSessionStateKey(sessionKey)
-				eventKey := v1.GetEventKey(sessionKey)
->>>>>>> 15420563 (support redis session v2)
 
 				// Check session state in Redis
 				sessStateData, err := client.HGet(context.Background(), sessStateKey, sessionKey.SessionID).Result()
 				require.NoError(t, err)
 
-				var redisSessionState v1.SessionState
+				var redisSessionState SessionState
 				err = json.Unmarshal([]byte(sessStateData), &redisSessionState)
 				require.NoError(t, err)
 				assert.True(t, redisSessionState.UpdatedAt.After(finalSess.CreatedAt))
@@ -983,11 +977,7 @@ func TestService_Atomicity(t *testing.T) {
 				assert.Nil(t, sess)
 
 				// Verify events are also deleted
-<<<<<<< HEAD
 				eventKey := getExpectedEventKey(sessionKey)
-=======
-				eventKey := v1.GetEventKey(sessionKey)
->>>>>>> 15420563 (support redis session v2)
 				count, err := client.ZCard(context.Background(), eventKey).Result()
 				require.NoError(t, err)
 				assert.Equal(t, int64(0), count)
@@ -1056,21 +1046,13 @@ func TestService_SessionTTL(t *testing.T) {
 			},
 			validate: func(t *testing.T, client *redis.Client, sessionKey session.Key) {
 				// Check session state TTL
-<<<<<<< HEAD
 				sessionStateKey := getExpectedSessionStateKey(sessionKey)
-=======
-				sessionStateKey := v1.GetSessionStateKey(sessionKey)
->>>>>>> 15420563 (support redis session v2)
 				ttl := client.TTL(context.Background(), sessionStateKey)
 				require.NoError(t, ttl.Err())
 				assert.True(t, ttl.Val() > 0 && ttl.Val() <= 5*time.Second, "Session state TTL should be set and close to 5 seconds, got: %v", ttl.Val())
 
 				// Check event list TTL
-<<<<<<< HEAD
 				eventKey := getExpectedEventKey(sessionKey)
-=======
-				eventKey := v1.GetEventKey(sessionKey)
->>>>>>> 15420563 (support redis session v2)
 				ttl = client.TTL(context.Background(), eventKey)
 				require.NoError(t, ttl.Err())
 				assert.True(t, ttl.Val() > 0 && ttl.Val() <= 5*time.Second, "Event list TTL should be set and close to 5 seconds, got: %v", ttl.Val())
@@ -1113,20 +1095,12 @@ func TestService_SessionTTL(t *testing.T) {
 			},
 			validate: func(t *testing.T, client *redis.Client, sessionKey session.Key) {
 				// Check that TTL was refreshed (should be close to 5 seconds again)
-<<<<<<< HEAD
 				sessionStateKey := getExpectedSessionStateKey(sessionKey)
-=======
-				sessionStateKey := v1.GetSessionStateKey(sessionKey)
->>>>>>> 15420563 (support redis session v2)
 				ttl := client.TTL(context.Background(), sessionStateKey)
 				require.NoError(t, ttl.Err())
 				assert.True(t, ttl.Val() > 3*time.Second, "Session state TTL should be refreshed, got: %v", ttl.Val())
 
-<<<<<<< HEAD
 				eventKey := getExpectedEventKey(sessionKey)
-=======
-				eventKey := v1.GetEventKey(sessionKey)
->>>>>>> 15420563 (support redis session v2)
 				ttl = client.TTL(context.Background(), eventKey)
 				require.NoError(t, ttl.Err())
 				assert.True(t, ttl.Val() > 3*time.Second, "Event list TTL should be refreshed, got: %v", ttl.Val())
@@ -1185,11 +1159,7 @@ func TestService_getSessionSummaryTTL(t *testing.T) {
 	require.NoError(t, err)
 
 	client := buildRedisClient(t, redisURL)
-<<<<<<< HEAD
 	summaryKey := getExpectedSessionSummaryKey(key)
-=======
-	summaryKey := v1.GetSessionSummaryKey(key)
->>>>>>> 15420563 (support redis session v2)
 	err = client.HSet(ctx, summaryKey, key.SessionID, summaryBytes).Err()
 	require.NoError(t, err)
 
@@ -1217,11 +1187,7 @@ func TestService_AppStateTTL(t *testing.T) {
 				return appName
 			},
 			validate: func(t *testing.T, client *redis.Client, appName string) {
-<<<<<<< HEAD
 				appStateKey := getExpectedAppStateKey(appName)
-=======
-				appStateKey := v1.GetAppStateKey(appName)
->>>>>>> 15420563 (support redis session v2)
 				ttl := client.TTL(context.Background(), appStateKey)
 				require.NoError(t, ttl.Err())
 				assert.True(t, ttl.Val() > 0 && ttl.Val() <= 5*time.Second, "App state TTL should be set and close to 5 seconds, got: %v", ttl.Val())
@@ -1254,11 +1220,7 @@ func TestService_AppStateTTL(t *testing.T) {
 			},
 			validate: func(t *testing.T, client *redis.Client, appName string) {
 				// Check that TTL was refreshed (should be close to 5 seconds again)
-<<<<<<< HEAD
 				appStateKey := getExpectedAppStateKey(appName)
-=======
-				appStateKey := v1.GetAppStateKey(appName)
->>>>>>> 15420563 (support redis session v2)
 				ttl := client.TTL(context.Background(), appStateKey)
 				require.NoError(t, ttl.Err())
 				assert.True(t, ttl.Val() > 3*time.Second, "App state TTL should be refreshed, got: %v", ttl.Val())
@@ -1305,11 +1267,7 @@ func TestService_UserStateTTL(t *testing.T) {
 				return userKey
 			},
 			validate: func(t *testing.T, client *redis.Client, userKey session.UserKey) {
-<<<<<<< HEAD
 				userStateKey := getExpectedUserStateKey(session.Key{AppName: userKey.AppName, UserID: userKey.UserID})
-=======
-				userStateKey := v1.GetUserStateKey(session.Key{AppName: userKey.AppName, UserID: userKey.UserID})
->>>>>>> 15420563 (support redis session v2)
 				ttl := client.TTL(context.Background(), userStateKey)
 				require.NoError(t, ttl.Err())
 				assert.True(t, ttl.Val() > 0 && ttl.Val() <= 5*time.Second, "User state TTL should be set and close to 5 seconds, got: %v", ttl.Val())
@@ -1345,11 +1303,7 @@ func TestService_UserStateTTL(t *testing.T) {
 			},
 			validate: func(t *testing.T, client *redis.Client, userKey session.UserKey) {
 				// Check that TTL was refreshed (should be close to 5 seconds again)
-<<<<<<< HEAD
 				userStateKey := getExpectedUserStateKey(session.Key{AppName: userKey.AppName, UserID: userKey.UserID})
-=======
-				userStateKey := v1.GetUserStateKey(session.Key{AppName: userKey.AppName, UserID: userKey.UserID})
->>>>>>> 15420563 (support redis session v2)
 				ttl := client.TTL(context.Background(), userStateKey)
 				require.NoError(t, ttl.Err())
 				assert.True(t, ttl.Val() > 3*time.Second, "User state TTL should be refreshed, got: %v", ttl.Val())
@@ -2260,11 +2214,7 @@ func TestService_GetSession_AttachSummaries(t *testing.T) {
 	require.NoError(t, err)
 	client := buildRedisClient(t, redisURL)
 	err = client.HSet(
-<<<<<<< HEAD
 		ctx, getExpectedSessionSummaryKey(key), key.SessionID, string(payload),
-=======
-		ctx, v1.GetSessionSummaryKey(key), key.SessionID, string(payload),
->>>>>>> 15420563 (support redis session v2)
 	).Err()
 	require.NoError(t, err)
 
@@ -2421,11 +2371,7 @@ func TestService_ProcessStateCmd_Errors(t *testing.T) {
 
 	// Manually corrupt the data in Redis to trigger unmarshal error
 	client := buildRedisClient(t, redisURL)
-<<<<<<< HEAD
 	sessKey := getExpectedSessionStateKey(key)
-=======
-	sessKey := v1.GetSessionStateKey(key)
->>>>>>> 15420563 (support redis session v2)
 	err = client.HSet(ctx, sessKey, key.SessionID, "invalid json").Err()
 	require.NoError(t, err)
 
@@ -2866,11 +2812,7 @@ func TestService_CorruptedData_AppState(t *testing.T) {
 
 	// Manually corrupt app state data in Redis
 	client := buildRedisClient(t, redisURL)
-<<<<<<< HEAD
 	appStateKey := getExpectedAppStateKey(key.AppName)
-=======
-	appStateKey := v1.GetAppStateKey(key.AppName)
->>>>>>> 15420563 (support redis session v2)
 	// Set invalid data that can't be converted to bytes properly
 	// This tests the error path in processStateCmd
 	err = client.HSet(ctx, appStateKey, "corrupted_key", string([]byte{0xff, 0xfe, 0xfd})).Err()
@@ -2903,11 +2845,7 @@ func TestService_CorruptedData_Events(t *testing.T) {
 
 	// Manually corrupt event data in Redis by setting the event key to a hash instead of a list
 	client := buildRedisClient(t, redisURL)
-<<<<<<< HEAD
 	eventKey := getExpectedEventKey(key)
-=======
-	eventKey := v1.GetEventKey(key)
->>>>>>> 15420563 (support redis session v2)
 	// Delete the existing list and create a hash with the same key
 	err = client.Del(ctx, eventKey).Err()
 	require.NoError(t, err)
@@ -3071,11 +3009,18 @@ func TestService_ListSessionsWithTrackEvents(t *testing.T) {
 }
 
 func TestGetTrackEvents_EmptyKeys(t *testing.T) {
-	t.Skip("Skipped: getTrackEvents is an internal method moved to v1 package")
+	s := &Service{}
+	trackEvents, err := s.getTrackEvents(context.Background(), nil, nil, 0, time.Time{})
+	require.NoError(t, err)
+	assert.Nil(t, trackEvents)
 }
 
 func TestGetTrackEvents_Mismatch(t *testing.T) {
-	t.Skip("Skipped: getTrackEvents is an internal method moved to v1 package")
+	s := &Service{}
+	keys := []session.Key{{AppName: "a", UserID: "u", SessionID: "s"}}
+	_, err := s.getTrackEvents(context.Background(), keys, nil, 0, time.Time{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mismatch")
 }
 
 func TestService_AppendTrackEventRecover(t *testing.T) {
@@ -3113,15 +3058,26 @@ func TestService_AppendTrackEventRecover(t *testing.T) {
 }
 
 func TestService_getTrackEventsEmptyKeys(t *testing.T) {
-	t.Skip("Skipped: getTrackEvents is an internal method moved to v1 package")
+	service := &Service{}
+	result, err := service.getTrackEvents(context.Background(), nil, nil, 0, time.Time{})
+	require.NoError(t, err)
+	assert.Nil(t, result)
 }
 
 func TestService_getTrackEventsStateMismatch(t *testing.T) {
-	t.Skip("Skipped: getTrackEvents is an internal method moved to v1 package")
+	service := &Service{}
+	_, err := service.getTrackEvents(
+		context.Background(),
+		[]session.Key{{AppName: "app", UserID: "user", SessionID: "s1"}},
+		nil,
+		0,
+		time.Time{},
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "session states count mismatch")
 }
 
 func TestService_getTrackEventsLimitAndTTL(t *testing.T) {
-<<<<<<< HEAD
 	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
@@ -3166,46 +3122,204 @@ func TestService_getTrackEventsLimitAndTTL(t *testing.T) {
 	trackTTL := client.TTL(ctx, getExpectedTrackKey(key, "alpha")).Val()
 	require.Greater(t, trackTTL, time.Duration(0))
 	require.LessOrEqual(t, trackTTL, ttl)
-=======
-	t.Skip("Skipped: getTrackEvents is an internal method moved to v1 package")
->>>>>>> 15420563 (support redis session v2)
 }
 
 func TestService_getTrackEventsAfterTime(t *testing.T) {
-	t.Skip("Skipped: getTrackEvents is an internal method moved to v1 package")
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "filter-app",
+		UserID:    "filter-user",
+		SessionID: "filter-session",
+	}
+	_, err = service.CreateSession(ctx, key, session.StateMap{})
+	require.NoError(t, err)
+
+	oldEvent := &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"first"`),
+		Timestamp: time.Now().Add(-2 * time.Hour),
+	}
+	newEvent := &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"second"`),
+		Timestamp: time.Now(),
+	}
+
+	require.NoError(t, service.addTrackEvent(ctx, key, oldEvent))
+	require.NoError(t, service.addTrackEvent(ctx, key, newEvent))
+
+	client := buildRedisClient(t, redisURL)
+	state := fetchSessionState(t, ctx, client, key)
+	cutoff := newEvent.Timestamp.Add(-time.Minute)
+
+	result, err := service.getTrackEvents(
+		ctx,
+		[]session.Key{key},
+		[]*SessionState{state},
+		0,
+		cutoff,
+	)
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	events := result[0]["alpha"]
+	require.Len(t, events, 1)
+	assert.Equal(t, json.RawMessage(`"second"`), events[0].Payload)
 }
 
 func TestService_getTrackEventsOrderingAndEmpty(t *testing.T) {
-	t.Skip("Skipped: getTrackEvents is an internal method moved to v1 package")
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "order-app",
+		UserID:    "order-user",
+		SessionID: "order-session",
+	}
+	_, err = service.CreateSession(ctx, key, session.StateMap{})
+	require.NoError(t, err)
+
+	oldEvent := &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"first"`),
+		Timestamp: time.Now().Add(-time.Hour),
+	}
+	newEvent := &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"second"`),
+		Timestamp: time.Now(),
+	}
+	require.NoError(t, service.addTrackEvent(ctx, key, oldEvent))
+	require.NoError(t, service.addTrackEvent(ctx, key, newEvent))
+
+	client := buildRedisClient(t, redisURL)
+	state := fetchSessionState(t, ctx, client, key)
+	result, err := service.getTrackEvents(ctx, []session.Key{key}, []*SessionState{state}, 0, time.Time{})
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	events := result[0]["alpha"]
+	require.Len(t, events, 2)
+	assert.Equal(t, json.RawMessage(`"first"`), events[0].Payload)
+	assert.Equal(t, json.RawMessage(`"second"`), events[1].Payload)
+
+	keyNoTrack := session.Key{
+		AppName:   "order-app",
+		UserID:    "order-user",
+		SessionID: "no-track",
+	}
+	_, err = service.CreateSession(ctx, keyNoTrack, session.StateMap{})
+	require.NoError(t, err)
+
+	stateNoTrack := fetchSessionState(t, ctx, client, keyNoTrack)
+	emptyResult, err := service.getTrackEvents(ctx, []session.Key{keyNoTrack}, []*SessionState{stateNoTrack}, 0, time.Time{})
+	require.NoError(t, err)
+	require.Len(t, emptyResult, 1)
+	assert.Empty(t, emptyResult[0])
 }
 
 // TestProcessEventCmd_SkipMalformed ensures malformed JSON items are skipped
 // rather than failing the entire list parsing.
 func TestProcessEventCmd_SkipMalformed(t *testing.T) {
-	t.Skip("Skipped: processEventCmd is an internal function moved to v1 package")
+	// Prepare one valid event and one malformed JSON string.
+	valid := &event.Event{ID: "ok", Timestamp: time.Now()}
+	validBytes, err := json.Marshal(valid)
+	require.NoError(t, err)
+
+	malformed := "{not-json}"
+
+	// Build a StringSliceCmd like ZREVRANGE would return.
+	cmd := redis.NewStringSliceCmd(context.Background(), "zrange", "k")
+	cmd.SetVal([]string{malformed, string(validBytes)})
+
+	// Call the helper under test.
+	events, err := processEventCmd(context.Background(), cmd)
+	require.NoError(t, err)
+
+	// Only the valid one should be returned.
+	require.Len(t, events, 1)
+	require.Equal(t, "ok", events[0].ID)
 }
 
 func Test_normalizeSessionEvents(t *testing.T) {
-	t.Skip("Skipped: normalizeSessionEvents is an internal function moved to v1 package")
+	t.Run("nil_when_no_slices", func(t *testing.T) {
+		assert.Nil(t, normalizeSessionEvents(nil))
+	})
+	t.Run("first_slice_returned", func(t *testing.T) {
+		evts := []event.Event{{ID: "a"}}
+		res := normalizeSessionEvents([][]event.Event{evts})
+		require.Len(t, res, 1)
+		assert.Equal(t, "a", res[0].ID)
+	})
 }
 
 func Test_attachSummaries(t *testing.T) {
-	t.Skip("Skipped: attachSummaries is an internal function moved to v1 package")
+	ctx := context.Background()
+
+	t.Run("skip_when_no_events", func(t *testing.T) {
+		sess := session.NewSession("app", "user", "sess")
+		cmd := redis.NewStringCmd(ctx, "hget", "k")
+		attachSummaries(sess, cmd)
+		assert.Empty(t, sess.Summaries)
+	})
+
+	t.Run("attach_when_events_present", func(t *testing.T) {
+		sess := session.NewSession("app", "user", "sess")
+		sess.Events = []event.Event{{ID: "evt"}}
+
+		summary := map[string]*session.Summary{
+			session.SummaryFilterKeyAllContents: {
+				Summary:   "hi",
+				UpdatedAt: time.Now(),
+			},
+		}
+		bytes, err := json.Marshal(summary)
+		require.NoError(t, err)
+
+		cmd := redis.NewStringCmd(ctx, "hget", "k")
+		cmd.SetVal(string(bytes))
+
+		attachSummaries(sess, cmd)
+		require.NotNil(t, sess.Summaries)
+		assert.Contains(t, sess.Summaries, session.SummaryFilterKeyAllContents)
+	})
 }
 
 func Test_collectTrackQueryResultsSkipNil(t *testing.T) {
-	t.Skip("Skipped: collectTrackQueryResults is an internal function moved to v1 package")
+	ctx := context.Background()
+	cmd := redis.NewStringSliceCmd(ctx, "zrange", "k")
+	cmd.SetErr(redis.Nil)
+
+	results, err := collectTrackQueryResults(
+		[]*trackQuery{
+			{
+				sessionIdx: 0,
+				track:      session.Track("alpha"),
+				cmd:        cmd,
+			},
+		},
+		1,
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Empty(t, results[0])
 }
 
-func fetchSessionState(t *testing.T, ctx context.Context, client *redis.Client, key session.Key) *v1.SessionState {
+func fetchSessionState(t *testing.T, ctx context.Context, client *redis.Client, key session.Key) *SessionState {
 	t.Helper()
-<<<<<<< HEAD
 	raw, err := client.HGet(ctx, getExpectedSessionStateKey(key), key.SessionID).Bytes()
-=======
-	raw, err := client.HGet(ctx, v1.GetSessionStateKey(key), key.SessionID).Bytes()
->>>>>>> 15420563 (support redis session v2)
 	require.NoError(t, err)
-	var state v1.SessionState
+	var state SessionState
 	require.NoError(t, json.Unmarshal(raw, &state))
 	if state.State == nil {
 		state.State = make(session.StateMap)
@@ -3831,13 +3945,8 @@ func TestService_TrimConversations_TTLRefresh(t *testing.T) {
 	client := buildRedisClient(t, redisURL)
 	defer client.Close()
 
-<<<<<<< HEAD
 	eventKey := service.getEventKey(key)
 	sessKey := service.getSessionStateKey(key)
-=======
-	eventKey := v1.GetEventKey(key)
-	sessKey := v1.GetSessionStateKey(key)
->>>>>>> 15420563 (support redis session v2)
 
 	eventTTL := client.TTL(ctx, eventKey).Val()
 	sessTTL := client.TTL(ctx, sessKey).Val()
