@@ -12,7 +12,7 @@ Key ideas:
 
 How it works (in this demo):
 
-1. The model chooses a skill (`demo_a` or `demo_b`) based on your input.
+1. The model chooses a skill (`plan_route` or `recommend_poi`) based on your input.
 2. Call `skill_load` to mark that skill as loaded for this invocation.
 3. On the next model request, the framework injects the loaded `SKILL.md` into the system prompt (`[Loaded] <skill>` block).
 4. The model finds the schema under **"Output JSON Schema"** in `SKILL.md` and calls `set_output_schema`.
@@ -29,10 +29,10 @@ go run . -model gpt-5
 
 Then type requests to switch output formats dynamically. For example (same as the startup hints):
 
-- "Plan a route from A to B and return distance and ETA. (Use demo_a for the output format.)"
-- "Recommend a coffee shop POI in Shenzhen. (Use demo_b for the output format.)"
+- "Plan a route from A to B and return distance and ETA. (Use plan_route for the output format.)"
+- "Recommend a coffee shop POI in Shenzhen. (Use recommend_poi for the output format.)"
 
-You can also force a specific skill by mentioning `demo_a` or `demo_b` in your prompt.
+You can also force a specific skill by mentioning `plan_route` or `recommend_poi` in your prompt.
 
 Type `exit` to quit.
 
@@ -47,15 +47,15 @@ go run . -model gpt-5 -streaming=true
 ```text
 $ go run . -model gpt-5
 ...
-> Plan a route from A to B and return distance and ETA. (Use demo_a for the output format.)
+> Plan a route from A to B and return distance and ETA. (Use plan_route for the output format.)
 tool_call: 📥 skill_load (id=call_...)
-  args: {"skill":"demo_a"}
-tool_result: 📥 skill_load (id=call_...): "loaded: demo_a"
+  args: {"skill":"plan_route"}
+tool_result: 📥 skill_load (id=call_...): "loaded: plan_route"
 tool_call: 🧩 set_output_schema (id=call_...)
   args: {"schema":{...}}
 tool_result: 🧩 set_output_schema (id=call_...): {"name":"output","ok":true}
 tool_call: ▶️ skill_run (id=call_...)
-  args: {"command":"cat result.json","skill":"demo_a"}
+  args: {"command":"cat result.json","skill":"plan_route"}
 tool_result: ▶️ skill_run (id=call_...): {"stdout":"{...}","exit_code":0,...}
 {"distance_km":12.3,"eta_min":25,"route":"A->B"}
 

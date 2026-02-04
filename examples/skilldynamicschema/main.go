@@ -57,12 +57,12 @@ const (
 const instructionText = `
 You are a tool-using agent.
 
-You have two skills available: demo_a and demo_b.
+You have two skills available: plan_route and recommend_poi.
 
 For every user request:
 - Choose exactly one skill to run.
-  - If the user explicitly mentions "demo_a" or "demo_b", use that one.
-  - Otherwise, use demo_a for route/ETA/distance requests, and demo_b for POI/city/recommendation requests.
+  - If the user explicitly mentions "plan_route" or "recommend_poi", use that one.
+  - Otherwise, use plan_route for route/ETA/distance requests, and recommend_poi for POI/city/recommendation requests.
 - Perform the following steps using tool calls only (no assistant content):
   1) Call skill_load for the chosen skill.
   2) From the loaded skill content, find the JSON schema under the section "Output JSON Schema".
@@ -133,8 +133,8 @@ func run() error {
 	fmt.Printf("Session: %s\n", sessionID)
 	fmt.Println()
 	fmt.Println("Example prompts:")
-	fmt.Println(`- "Plan a route from A to B and return distance and ETA. (Use demo_a for the output format.)"`)
-	fmt.Println(`- "Recommend a coffee shop POI in Shenzhen. (Use demo_b for the output format.)"`)
+	fmt.Println(`- "Plan a route from A to B and return distance and ETA. (Use plan_route for the output format.)"`)
+	fmt.Println(`- "Recommend a coffee shop POI in Shenzhen. (Use recommend_poi for the output format.)"`)
 	fmt.Println()
 
 	scanner := bufio.NewScanner(os.Stdin)

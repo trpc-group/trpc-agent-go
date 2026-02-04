@@ -1,9 +1,9 @@
 ---
-name: demo_b
-description: Print a JSON Schema and a deterministic JSON result (demo B).
+name: recommend_poi
+description: Recommend a POI in a city (schema + deterministic result).
 ---
 
-# demo_b
+# recommend_poi
 
 This skill is used by the dynamic structured output demo.
 

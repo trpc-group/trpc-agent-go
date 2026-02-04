@@ -1,9 +1,9 @@
 ---
-name: demo_a
-description: Print a JSON Schema and a deterministic JSON result (demo A).
+name: plan_route
+description: Plan a route and return distance + ETA (schema + deterministic result).
 ---
 
-# demo_a
+# plan_route
 
 This skill is used by the dynamic structured output demo.
 
