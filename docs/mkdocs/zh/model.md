@@ -1385,7 +1385,7 @@ summary.SetTokenCounter(counter)
 // 3. 创建摘要器
 summarizer := summary.NewSummarizer(
     summaryModel,
-    summary.CheckTokenThreshold(4000),  // 使用自定义计数器评估
+    summary.WithTokenThreshold(4000),  // 使用自定义计数器评估
 )
 ```
 

@@ -1394,7 +1394,7 @@ summary.SetTokenCounter(counter)
 // 3. Create summarizer
 summarizer := summary.NewSummarizer(
     summaryModel,
-    summary.CheckTokenThreshold(4000),  // Uses your custom counter for evaluation
+    summary.WithTokenThreshold(4000),  // Uses your custom counter for evaluation
 )
 ```
 
