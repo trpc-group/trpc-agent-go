@@ -12,10 +12,13 @@ package mysqldb
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/assert"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/mysql"
 )
 
@@ -47,6 +50,35 @@ func (c *recordingClient) Transaction(_ context.Context, _ storage.TxFunc, _ ...
 }
 
 func (c *recordingClient) Close() error { return nil }
+
+type scriptedClient struct {
+	queries []string
+	execFn  func(query string) error
+}
+
+func (c *scriptedClient) Exec(_ context.Context, query string, _ ...any) (sql.Result, error) {
+	c.queries = append(c.queries, query)
+	if c.execFn != nil {
+		if err := c.execFn(query); err != nil {
+			return dummyResult{}, err
+		}
+	}
+	return dummyResult{}, nil
+}
+
+func (c *scriptedClient) Query(_ context.Context, _ storage.NextFunc, _ string, _ ...any) error {
+	return nil
+}
+
+func (c *scriptedClient) QueryRow(_ context.Context, _ []any, _ string, _ ...any) error {
+	return nil
+}
+
+func (c *scriptedClient) Transaction(_ context.Context, _ storage.TxFunc, _ ...storage.TxOption) error {
+	return nil
+}
+
+func (c *scriptedClient) Close() error { return nil }
 
 func containsCreateForTable(queries []string, table string) bool {
 	needle := "CREATE TABLE IF NOT EXISTS " + table
@@ -126,4 +158,43 @@ func TestEnsureSchema_NoTarget(t *testing.T) {
 
 	err := EnsureSchema(ctx, client, tables, 0)
 	assert.Error(t, err)
+}
+
+func TestEnsureSchema_IgnoresDuplicateIndexName(t *testing.T) {
+	ctx := context.Background()
+	client := &scriptedClient{
+		execFn: func(query string) error {
+			if strings.Contains(query, "CREATE INDEX") || strings.Contains(query, "CREATE UNIQUE INDEX") {
+				return &mysql.MySQLError{Number: sqldb.MySQLErrDuplicateKeyName, Message: "Duplicate key name 'idx_test'"}
+			}
+			return nil
+		},
+	}
+	tables := BuildTables("test")
+
+	err := EnsureSchema(ctx, client, tables, SchemaEvalSets)
+	assert.NoError(t, err)
+}
+
+func TestEnsureSchema_IndexError(t *testing.T) {
+	ctx := context.Background()
+	client := &scriptedClient{
+		execFn: func(query string) error {
+			if strings.Contains(query, "CREATE INDEX") || strings.Contains(query, "CREATE UNIQUE INDEX") {
+				return errors.New("boom")
+			}
+			return nil
+		},
+	}
+	tables := BuildTables("test")
+
+	err := EnsureSchema(ctx, client, tables, SchemaEvalSets)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "create index")
+}
+
+func TestIsDuplicateKeyName(t *testing.T) {
+	assert.False(t, IsDuplicateKeyName(errors.New("boom")))
+	assert.False(t, IsDuplicateKeyName(&mysql.MySQLError{Number: sqldb.MySQLErrDuplicateEntry}))
+	assert.True(t, IsDuplicateKeyName(&mysql.MySQLError{Number: sqldb.MySQLErrDuplicateKeyName}))
 }
