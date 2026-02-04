@@ -1246,7 +1246,159 @@ Per-request headers
 - Chat completion per-request base URL override is not exposed; create a
   second model with a different base URL or alter `r.URL` in middleware.
 
-#### 6. Token Tailoring
+#### 6. Token Counter
+
+The Token Counter is used to estimate the token count of text content. The framework provides `SimpleTokenCounter` as the default implementation, supporting custom token counting logic to meet different scenario requirements.
+
+##### SimpleTokenCounter
+
+`SimpleTokenCounter` provides a very rough token estimation based on UTF-8 character count. Its features include:
+
+**Core Features:**
+
+- **Lightweight**: Does not depend on external tokenizers, only uses character length estimation
+- **Model-agnostic**: Suitable for all OpenAI-compatible models
+- **Multimodal Support**: Supports message content, reasoning content (ReasoningContent), and tool calls
+
+**Estimation Principle:**
+
+Uses heuristic rules: approximately `N` UTF-8 characters per token, where `N` can be configured via `WithApproxRunesPerToken`.
+
+**Usage:**
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/model"
+
+// Use default configuration (English scenario)
+counter := model.NewSimpleTokenCounter()
+
+// Adjust for Chinese scenarios (Chinese has higher token density)
+counter := model.NewSimpleTokenCounter(
+    model.WithApproxRunesPerToken(1.6),  // Approx. 1.6 chars/token
+)
+
+// Adjust for other languages or specific models
+counter := model.NewSimpleTokenCounter(
+    model.WithApproxRunesPerToken(3.5),  // Approx. 3.5 chars/token
+)
+```
+
+**Parameter Description:**
+
+**`WithApproxRunesPerToken(v float64)`**
+
+- **Purpose**: Set the approximate number of characters per token
+- **Type**: float64
+- **Default Value**: 4.0 (approx. 4 characters per token, suitable for English scenarios)
+- **Value Constraint**: Values <= 0 will be ignored, keeping the default value
+
+**Recommended Values for Common Languages:**
+
+| Language/Scenario | Recommended Value | Description |
+| -------------- | ------- | ---- |
+| English text     | 4.0     | Default value, suitable for English words and common Latin characters |
+| Chinese text     | 1.6-1.8  | Chinese characters have higher token density than English, use smaller values |
+| Japanese text    | 2.0-2.5  | Japanese character token density is between Chinese and English |
+| Mixed text       | 3.0      | Trade-off value for mixed Chinese/English scenarios |
+
+**Important Notes:**
+
+- **Empirical Values**: The recommended values above are empirical estimates. Actual token count depends on the specific model's tokenizer implementation.
+- **Uncertainty**: If you're uncertain about language mix or model characteristics, keep the default value (4.0).
+- **Model Differences**: Different model vendors (OpenAI, DeepSeek, Hunyuan) have different tokenizer implementations, which may require adjusting this parameter.
+- **Accuracy Consideration**: `SimpleTokenCounter` only provides rough estimation. If you need accurate token counting, consider using the model provider's tokenizer API (e.g., OpenAI's tiktoken).
+
+**Custom Token Counter**
+
+If `SimpleTokenCounter`'s rough estimation doesn't meet your requirements, you can implement a custom `TokenCounter` interface:
+
+```go
+import (
+    "context"
+    "fmt"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+type MyCustomCounter struct{}
+
+func (c *MyCustomCounter) CountTokens(ctx context.Context, message model.Message) (int, error) {
+    // Calculate tokens for message content, reasoning content, and tool calls
+    total := 0
+
+    // Process main content
+    if len(message.Content) > 0 {
+        total += len(message.Content)  // Example: use more accurate algorithm
+    }
+
+    // Process reasoning content
+    if len(message.ReasoningContent) > 0 {
+        total += len(message.ReasoningContent)
+    }
+
+    // Process multimodal content
+    for _, part := range message.ContentParts {
+        if part.Text != nil {
+            total += len(*part.Text)
+        }
+    }
+
+    // Process tool calls
+    for _, toolCall := range message.ToolCalls {
+        total += len(toolCall.Function.Name)
+        total += len(string(toolCall.Function.Arguments))
+    }
+
+    return total, nil
+}
+
+func (c *MyCustomCounter) CountTokensRange(ctx context.Context, messages []model.Message, start, end int) (int, error) {
+    if start < 0 || end > len(messages) || start >= end {
+        return 0, fmt.Errorf("invalid range: start=%d, end=%d, len=%d", start, end, len(messages))
+    }
+
+    total := 0
+    for i := start; i < end; i++ {
+        tokens, err := c.CountTokens(ctx, messages[i])
+        if err != nil {
+            return 0, err
+        }
+        total += tokens
+    }
+    return total, nil
+}
+
+// Use custom counter when creating a model
+llm := openai.New("deepseek-chat",
+    openai.WithTokenCounter(&MyCustomCounter{}),
+)
+```
+
+**Using Token Counter in Summarizer**
+
+`SimpleTokenCounter` can also be used with the `session/summary` module to control summary triggering:
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/session/summary"
+)
+
+// 1. Create a counter optimized for Chinese
+counter := model.NewSimpleTokenCounter(
+    model.WithApproxRunesPerToken(1.6),  // Recommended value for Chinese scenarios
+)
+
+// 2. Set as global counter (affects all summary triggers)
+summary.SetTokenCounter(counter)
+
+// 3. Create summarizer
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithTokenThreshold(4000),  // Uses your custom counter for evaluation
+)
+```
+
+#### 7. Token Tailoring
 
 Token Tailoring is an intelligent message management technique designed to automatically trim messages when they exceed the model's context window limits, ensuring requests can be successfully sent to the LLM API. This feature is particularly useful for long conversation scenarios, allowing you to keep the message list within the model's token limits while preserving key context.
 
