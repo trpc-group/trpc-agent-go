@@ -147,6 +147,9 @@ type sessionSummarizer struct {
 	postHook         PostSummaryHook
 	hookAbortOnError bool
 
+	// modelCallbacks configures before/after model callbacks for summarization.
+	modelCallbacks *model.Callbacks
+
 	// toolCallFormatter customizes how tool calls are formatted in summary input.
 	toolCallFormatter ToolCallFormatter
 	// toolResultFormatter customizes how tool results are formatted in summary input.
@@ -232,7 +235,7 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 		return "", fmt.Errorf("no conversation text extracted for session %s (events=%d)", sess.ID, len(eventsToSummarize))
 	}
 
-	summaryText, err := s.generateSummary(ctx, conversationText)
+	ctx, summaryText, err := s.generateSummary(ctx, conversationText)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate summary for session %s: %w", sess.ID, err)
 	}
@@ -409,21 +412,62 @@ func extractConversationText(
 }
 
 // generateSummary generates a summary using the LLM model.
-func (s *sessionSummarizer) generateSummary(ctx context.Context, conversationText string) (string, error) {
-	// Create summarization prompt.
-	prompt := strings.Replace(s.prompt, conversationTextPlaceholder, conversationText, 1)
+func (s *sessionSummarizer) generateSummary(
+	ctx context.Context,
+	conversationText string,
+) (context.Context, string, error) {
+	prompt := s.buildSummaryPrompt(conversationText)
+	request := newSummaryRequest(prompt)
+
+	ctx, responseChan, err := s.runBeforeModelCallbacks(ctx, request)
+	if err != nil {
+		return ctx, "", err
+	}
+	if responseChan == nil {
+		responseChan, err = s.model.GenerateContent(ctx, request)
+		if err != nil {
+			return ctx, "", fmt.Errorf("failed to generate summary: %w", err)
+		}
+	}
+
+	ctx, summaryText, err := s.collectSummaryFromResponses(ctx, request, responseChan)
+	if err != nil {
+		return ctx, "", err
+	}
+	if summaryText == "" {
+		return ctx, "", fmt.Errorf(
+			"generated empty summary (input_chars=%d)",
+			len(conversationText),
+		)
+	}
+	return ctx, summaryText, nil
+}
+
+func (s *sessionSummarizer) buildSummaryPrompt(conversationText string) string {
+	prompt := strings.Replace(
+		s.prompt,
+		conversationTextPlaceholder,
+		conversationText,
+		1,
+	)
 
 	// Replace max summary words placeholder if it exists.
 	if s.maxSummaryWords > 0 {
-		// Replace with the actual number
-		prompt = strings.Replace(prompt, maxSummaryWordsPlaceholder, fmt.Sprintf("%d", s.maxSummaryWords), 1)
-	} else {
-		// Remove the placeholder if no word limit is set.
-		prompt = strings.Replace(prompt, maxSummaryWordsPlaceholder, "", 1)
+		// Replace with the actual number.
+		return strings.Replace(
+			prompt,
+			maxSummaryWordsPlaceholder,
+			fmt.Sprintf("%d", s.maxSummaryWords),
+			1,
+		)
 	}
 
-	// Create LLM request.
-	request := &model.Request{
+	// Remove the placeholder if no word limit is set.
+	return strings.Replace(prompt, maxSummaryWordsPlaceholder, "", 1)
+}
+
+func newSummaryRequest(prompt string) *model.Request {
+	return &model.Request{
 		Messages: []model.Message{{
 			Role:    authorUser,
 			Content: prompt,
@@ -432,37 +476,99 @@ func (s *sessionSummarizer) generateSummary(ctx context.Context, conversationTex
 			Stream: false, // Non-streaming for summarization.
 		},
 	}
+}
 
-	// Generate content using the model.
-	responseChan, err := s.model.GenerateContent(ctx, request)
-	if err != nil {
-		return "", fmt.Errorf("failed to generate summary: %w", err)
+func (s *sessionSummarizer) runBeforeModelCallbacks(
+	ctx context.Context,
+	request *model.Request,
+) (context.Context, <-chan *model.Response, error) {
+	if s.modelCallbacks == nil {
+		return ctx, nil, nil
 	}
 
-	// Collect the response.
-	var summary strings.Builder
-	for response := range responseChan {
-		if response.Error != nil {
-			return "", formatResponseError(response.Error)
-		}
+	result, err := s.modelCallbacks.RunBeforeModel(
+		ctx,
+		&model.BeforeModelArgs{Request: request},
+	)
+	if err != nil {
+		return ctx, nil, fmt.Errorf("before model callback failed: %w", err)
+	}
+	if result != nil && result.Context != nil {
+		ctx = result.Context
+	}
+	if result == nil || result.CustomResponse == nil {
+		return ctx, nil, nil
+	}
 
-		if len(response.Choices) > 0 {
+	customChan := make(chan *model.Response, 1)
+	customChan <- result.CustomResponse
+	close(customChan)
+	return ctx, customChan, nil
+}
+
+func modelErrFromResponse(resp *model.Response) error {
+	if resp == nil || resp.Error == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %s", resp.Error.Type, resp.Error.Message)
+}
+
+func (s *sessionSummarizer) runAfterModelCallbacks(
+	ctx context.Context,
+	request *model.Request,
+	response *model.Response,
+) (context.Context, *model.Response, error) {
+	if s.modelCallbacks == nil {
+		return ctx, response, nil
+	}
+
+	result, err := s.modelCallbacks.RunAfterModel(
+		ctx,
+		&model.AfterModelArgs{
+			Request:  request,
+			Response: response,
+			Error:    modelErrFromResponse(response),
+		},
+	)
+	if err != nil {
+		return ctx, nil, fmt.Errorf("after model callback failed: %w", err)
+	}
+	if result != nil && result.Context != nil {
+		ctx = result.Context
+	}
+	if result != nil && result.CustomResponse != nil {
+		response = result.CustomResponse
+	}
+	return ctx, response, nil
+}
+
+func (s *sessionSummarizer) collectSummaryFromResponses(
+	ctx context.Context,
+	request *model.Request,
+	responseChan <-chan *model.Response,
+) (context.Context, string, error) {
+	var summary strings.Builder
+
+	for response := range responseChan {
+		var err error
+		ctx, response, err = s.runAfterModelCallbacks(ctx, request, response)
+		if err != nil {
+			return ctx, "", err
+		}
+		if response != nil && response.Error != nil {
+			return ctx, "", formatResponseError(response.Error)
+		}
+		if response != nil && len(response.Choices) > 0 {
 			content := response.Choices[0].Message.Content
 			if content != "" {
 				summary.WriteString(content)
 			}
 		}
-
-		if response.Done {
+		if response != nil && response.Done {
 			break
 		}
 	}
 
-	// Clean up the summary.
 	summaryText := strings.TrimSpace(summary.String())
-	if summaryText == "" {
-		return "", fmt.Errorf("generated empty summary (input_chars=%d)", len(conversationText))
-	}
-
-	return summaryText, nil
+	return ctx, summaryText, nil
 }
