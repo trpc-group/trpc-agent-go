@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -66,21 +65,25 @@ type sessionMeta struct {
 }
 
 // CreateSession creates a new session using V2 logic.
+// SessionID must be provided by the caller; empty SessionID returns an error.
 func (c *Client) CreateSession(
 	ctx context.Context,
 	key session.Key,
 	state session.StateMap,
 ) (*session.Session, error) {
 	if key.SessionID == "" {
-		key.SessionID = uuid.New().String()
+		return nil, fmt.Errorf("sessionID is required")
 	}
+
+	// Deep copy state to avoid external modifications affecting stored data
+	copiedState := deepCopyState(state)
 
 	now := time.Now()
 	meta := sessionMeta{
 		ID:        key.SessionID,
 		AppName:   key.AppName,
 		UserID:    key.UserID,
-		State:     state,
+		State:     copiedState,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -97,7 +100,7 @@ func (c *Client) CreateSession(
 	}
 
 	sess := session.NewSession(key.AppName, key.UserID, key.SessionID)
-	sess.State = state
+	sess.State = copiedState
 	sess.CreatedAt = now
 	sess.UpdatedAt = now
 
@@ -107,11 +110,18 @@ func (c *Client) CreateSession(
 	return sess, nil
 }
 
-// GetSession retrieves a session using V2 logic.
+// GetSession retrieves a session using V2 logic with all post-processing.
+// This matches V1 behavior: returns a complete session with:
+// - Events (filtered by limit and afterTime)
+// - App/User state merged
+// - Track events loaded
+// - Summaries loaded
+// - TTL refreshed for app state, user state, and summary
 func (c *Client) GetSession(
 	ctx context.Context,
 	key session.Key,
 	limit int,
+	afterTime time.Time,
 ) (*session.Session, error) {
 	metaJSON, err := c.client.Get(ctx, c.keys.SessionMetaKey(key)).Bytes()
 	if err != nil {
@@ -121,15 +131,17 @@ func (c *Client) GetSession(
 		return nil, fmt.Errorf("get session meta (v2): %w", err)
 	}
 
-	return c.loadSessionFromMeta(ctx, key, metaJSON, limit)
+	return c.loadSessionComplete(ctx, key, metaJSON, limit, afterTime)
 }
 
-// loadSessionFromMeta loads session data given meta JSON bytes.
-func (c *Client) loadSessionFromMeta(
+// loadSessionComplete loads session data with all post-processing (matches V1 behavior).
+// This includes: events, app/user state merge, track events, summaries.
+func (c *Client) loadSessionComplete(
 	ctx context.Context,
 	key session.Key,
 	metaJSON []byte,
 	limit int,
+	afterTime time.Time,
 ) (*session.Session, error) {
 	var meta sessionMeta
 	if err := json.Unmarshal(metaJSON, &meta); err != nil {
@@ -141,25 +153,21 @@ func (c *Client) loadSessionFromMeta(
 	sess.CreatedAt = meta.CreatedAt
 	sess.UpdatedAt = meta.UpdatedAt
 
-	// Load events
-	limit64 := int64(-1)
-	if limit > 0 {
-		limit64 = int64(limit)
-	}
-
+	// Load events (load all, then filter in memory - matches V1 behavior)
 	ttlSeconds := int64(0)
 	if c.cfg.SessionTTL > 0 {
 		ttlSeconds = int64(c.cfg.SessionTTL.Seconds())
 	}
 
 	// reverse=0 means oldest first (chronological order)
+	// limit=-1 means no limit, load all events
 	result, err := luaLoadEvents.Run(ctx, c.client,
 		[]string{
 			c.keys.EventDataKey(key),
 			c.keys.EventTimeIndexKey(key),
 			c.keys.SessionMetaKey(key),
 		},
-		0, limit64, ttlSeconds, 0,
+		0, int64(-1), ttlSeconds, 0,
 	).StringSlice()
 	if err != nil && err != redis.Nil {
 		return nil, fmt.Errorf("load events (v2): %w", err)
@@ -173,13 +181,107 @@ func (c *Client) loadSessionFromMeta(
 		sess.Events = append(sess.Events, evt)
 	}
 
+	// Apply event filtering (matches V1 behavior)
+	sess.ApplyEventFiltering(session.WithEventNum(limit), session.WithEventTime(afterTime))
+
+	// Merge app/user state (matches V1 behavior)
+	c.mergeAppUserState(ctx, key, sess)
+
+	// Load and attach track events (matches V1 behavior)
+	c.loadAndAttachTrackEvents(ctx, key, sess, limit, afterTime)
+
+	// Load and attach summaries (matches V1 behavior)
+	c.loadAndAttachSummaries(ctx, key, sess)
+
+	// Refresh TTLs (matches V1 behavior)
+	c.refreshRelatedTTLs(ctx, key)
+
 	// Inject V2 version tag into ServiceMeta (not persisted, memory only)
 	sess.ServiceMeta = map[string]string{ServiceMetaVersionKey: VersionV2}
 
 	return sess, nil
 }
 
-// AppendEvent persists an event to Redis V2 storage.
+// mergeAppUserState merges app and user state into session.
+func (c *Client) mergeAppUserState(ctx context.Context, key session.Key, sess *session.Session) {
+	if sess == nil {
+		return
+	}
+
+	// Query and merge appState
+	appState, err := c.ListAppStates(ctx, key.AppName)
+	if err == nil {
+		for k, v := range appState {
+			sess.SetState(session.StateAppPrefix+k, v)
+		}
+	}
+
+	// Query and merge userState
+	userState, err := c.ListUserStates(ctx, session.UserKey{AppName: key.AppName, UserID: key.UserID})
+	if err == nil {
+		for k, v := range userState {
+			sess.SetState(session.StateUserPrefix+k, v)
+		}
+	}
+}
+
+// loadAndAttachTrackEvents loads track events for a session and attaches them.
+func (c *Client) loadAndAttachTrackEvents(ctx context.Context, key session.Key, sess *session.Session, limit int, afterTime time.Time) {
+	if sess == nil {
+		return
+	}
+
+	// Get list of tracks from session state
+	tracks, err := session.TracksFromState(sess.State)
+	if err != nil || len(tracks) == 0 {
+		return
+	}
+
+	// Load track events
+	trackEventsMap, err := c.GetTrackEvents(ctx, key, tracks, limit, afterTime)
+	if err != nil || len(trackEventsMap) == 0 {
+		return
+	}
+
+	// Attach to session
+	sess.Tracks = make(map[session.Track]*session.TrackEvents, len(trackEventsMap))
+	for trackName, events := range trackEventsMap {
+		sess.Tracks[trackName] = &session.TrackEvents{
+			Track:  trackName,
+			Events: events,
+		}
+	}
+}
+
+// loadAndAttachSummaries loads summaries for a session and attaches them.
+func (c *Client) loadAndAttachSummaries(ctx context.Context, key session.Key, sess *session.Session) {
+	if sess == nil || len(sess.Events) == 0 {
+		return // V1 behavior: don't load summaries if no events
+	}
+
+	summaries, err := c.GetSummary(ctx, key)
+	if err != nil || len(summaries) == 0 {
+		return
+	}
+
+	sess.Summaries = summaries
+}
+
+// refreshRelatedTTLs refreshes TTLs for app state, user state, and summary.
+func (c *Client) refreshRelatedTTLs(ctx context.Context, key session.Key) {
+	_ = c.RefreshAppStateTTL(ctx, key.AppName)
+	_ = c.RefreshUserStateTTL(ctx, session.UserKey{AppName: key.AppName, UserID: key.UserID})
+	_ = c.RefreshSummaryTTL(ctx, key)
+}
+
+// AppendEvent persists an event to Redis V2 storage and applies StateDelta to session state.
+// Note: UpdatedAt is not updated here for performance reasons.
+// The last activity time can be inferred from the latest event's timestamp.
+// StateDelta from the event is atomically merged into session meta's state via Lua script.
+//
+// Event storage follows V1 behavior:
+//   - StateDelta is always applied to session state (regardless of event content)
+//   - Event is only stored in event list if: Response != nil && !IsPartial && IsValidContent()
 func (c *Client) AppendEvent(ctx context.Context, key session.Key, evt *event.Event) error {
 	evtJSON, err := json.Marshal(evt)
 	if err != nil {
@@ -191,6 +293,10 @@ func (c *Client) AppendEvent(ctx context.Context, key session.Key, evt *event.Ev
 		ttlSeconds = int64(c.cfg.SessionTTL.Seconds())
 	}
 
+	// Determine if event should be stored in event list (matches V1 behavior)
+	// Only store events with valid response content
+	shouldStoreEvent := shouldStoreEventInList(evt)
+
 	keys := []string{
 		c.keys.SessionMetaKey(key),
 		c.keys.EventDataKey(key),
@@ -201,12 +307,34 @@ func (c *Client) AppendEvent(ctx context.Context, key session.Key, evt *event.Ev
 		string(evtJSON),
 		evt.Timestamp.UnixNano(),
 		ttlSeconds,
+		boolToInt(shouldStoreEvent),
 	}
 
-	if _, err := luaAppendEvent.Run(ctx, c.client, keys, args...).Result(); err != nil {
+	result, err := luaAppendEvent.Run(ctx, c.client, keys, args...).Int()
+	if err != nil {
 		return fmt.Errorf("append event (v2): %w", err)
 	}
+	if result == 0 {
+		return fmt.Errorf("session not found")
+	}
 	return nil
+}
+
+// shouldStoreEventInList checks if an event should be stored in the event list.
+// Matches V1 behavior: only store events with Response != nil && !IsPartial && IsValidContent().
+func shouldStoreEventInList(evt *event.Event) bool {
+	if evt == nil || evt.Response == nil || evt.IsPartial {
+		return false
+	}
+	return evt.Response.IsValidContent()
+}
+
+// boolToInt converts a boolean to int (1 for true, 0 for false) for Lua script.
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // DeleteSession deletes a session in V2 storage.
@@ -385,6 +513,30 @@ func (c *Client) ListUserStates(ctx context.Context, userKey session.UserKey) (s
 	return state, nil
 }
 
+// RefreshAppStateTTL refreshes the TTL for app state key.
+func (c *Client) RefreshAppStateTTL(ctx context.Context, appName string) error {
+	if c.cfg.AppStateTTL <= 0 {
+		return nil
+	}
+	return c.client.Expire(ctx, c.keys.AppStateKey(appName), c.cfg.AppStateTTL).Err()
+}
+
+// RefreshUserStateTTL refreshes the TTL for user state key.
+func (c *Client) RefreshUserStateTTL(ctx context.Context, userKey session.UserKey) error {
+	if c.cfg.UserStateTTL <= 0 {
+		return nil
+	}
+	return c.client.Expire(ctx, c.keys.UserStateKey(userKey.AppName, userKey.UserID), c.cfg.UserStateTTL).Err()
+}
+
+// RefreshSummaryTTL refreshes the TTL for session summary key.
+func (c *Client) RefreshSummaryTTL(ctx context.Context, key session.Key) error {
+	if c.cfg.SessionTTL <= 0 {
+		return nil
+	}
+	return c.client.Expire(ctx, c.keys.SummaryKey(key), c.cfg.SessionTTL).Err()
+}
+
 // ListSessionsPattern returns scan pattern for listing sessions.
 func (c *Client) ListSessionsPattern(userKey session.UserKey) string {
 	// Need to access strategy type...
@@ -396,8 +548,13 @@ func (c *Client) ListSessionsPattern(userKey session.UserKey) string {
 	return ""
 }
 
-// ListSessions scans for sessions (V2).
-func (c *Client) ListSessions(ctx context.Context, userKey session.UserKey, limit int) ([]*session.Session, error) {
+// ListSessions scans for sessions (V2) with all post-processing.
+// This matches V1 behavior:
+// - Events (filtered by limit and afterTime)
+// - App/User state merged (batch loaded, shared across sessions)
+// - Track events loaded
+// - Note: Summaries are NOT loaded in ListSessions (same as V1)
+func (c *Client) ListSessions(ctx context.Context, userKey session.UserKey, limit int, afterTime time.Time) ([]*session.Session, error) {
 	pattern := c.keys.SessionMetaPattern(userKey)
 	var sessions []*session.Session
 
@@ -408,7 +565,17 @@ func (c *Client) ListSessions(ctx context.Context, userKey session.UserKey, limi
 		if err != nil {
 			continue
 		}
-		sess, err := c.loadSessionFromMeta(ctx, session.Key{}, metaJSON, limit)
+		// Parse meta to get session key for loading events
+		var meta sessionMeta
+		if err := json.Unmarshal(metaJSON, &meta); err != nil {
+			continue
+		}
+		key := session.Key{
+			AppName:   meta.AppName,
+			UserID:    meta.UserID,
+			SessionID: meta.ID,
+		}
+		sess, err := c.loadSessionBasic(ctx, key, metaJSON, limit, afterTime)
 		if err == nil && sess != nil {
 			sessions = append(sessions, sess)
 		}
@@ -416,7 +583,88 @@ func (c *Client) ListSessions(ctx context.Context, userKey session.UserKey, limi
 	if err := iter.Err(); err != nil {
 		return nil, err
 	}
+
+	// Post-process: batch load shared app/user state and track events
+	// This is more efficient than loading per-session
+	if len(sessions) > 0 {
+		// Batch load app/user state (shared across all sessions of the same user)
+		appState, _ := c.ListAppStates(ctx, userKey.AppName)
+		userState, _ := c.ListUserStates(ctx, userKey)
+
+		for _, sess := range sessions {
+			// Merge app/user state
+			for k, v := range appState {
+				sess.SetState(session.StateAppPrefix+k, v)
+			}
+			for k, v := range userState {
+				sess.SetState(session.StateUserPrefix+k, v)
+			}
+
+			// Load track events for each session
+			key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
+			c.loadAndAttachTrackEvents(ctx, key, sess, limit, afterTime)
+		}
+
+		// Refresh shared state TTLs once
+		_ = c.RefreshAppStateTTL(ctx, userKey.AppName)
+		_ = c.RefreshUserStateTTL(ctx, userKey)
+	}
+
 	return sessions, nil
+}
+
+// loadSessionBasic loads session with events only (no app/user state, no track, no summary).
+// Used by ListSessions where post-processing is done in batch.
+func (c *Client) loadSessionBasic(
+	ctx context.Context,
+	key session.Key,
+	metaJSON []byte,
+	limit int,
+	afterTime time.Time,
+) (*session.Session, error) {
+	var meta sessionMeta
+	if err := json.Unmarshal(metaJSON, &meta); err != nil {
+		return nil, fmt.Errorf("unmarshal session meta: %w", err)
+	}
+
+	sess := session.NewSession(meta.AppName, meta.UserID, meta.ID)
+	sess.State = meta.State
+	sess.CreatedAt = meta.CreatedAt
+	sess.UpdatedAt = meta.UpdatedAt
+
+	// Load events
+	ttlSeconds := int64(0)
+	if c.cfg.SessionTTL > 0 {
+		ttlSeconds = int64(c.cfg.SessionTTL.Seconds())
+	}
+
+	result, err := luaLoadEvents.Run(ctx, c.client,
+		[]string{
+			c.keys.EventDataKey(key),
+			c.keys.EventTimeIndexKey(key),
+			c.keys.SessionMetaKey(key),
+		},
+		0, int64(-1), ttlSeconds, 0,
+	).StringSlice()
+	if err != nil && err != redis.Nil {
+		return nil, fmt.Errorf("load events (v2): %w", err)
+	}
+
+	for _, evtJSON := range result {
+		var evt event.Event
+		if err := json.Unmarshal([]byte(evtJSON), &evt); err != nil {
+			continue
+		}
+		sess.Events = append(sess.Events, evt)
+	}
+
+	// Apply event filtering
+	sess.ApplyEventFiltering(session.WithEventNum(limit), session.WithEventTime(afterTime))
+
+	// Inject V2 version tag into ServiceMeta (not persisted, memory only)
+	sess.ServiceMeta = map[string]string{ServiceMetaVersionKey: VersionV2}
+
+	return sess, nil
 }
 
 // =============================================================================
@@ -634,4 +882,23 @@ func (c *Client) ListTracksForSession(ctx context.Context, key session.Key) ([]s
 	}
 
 	return session.TracksFromState(meta.State)
+}
+
+// deepCopyState creates a deep copy of the state map to prevent external modifications.
+// Returns an empty map (not nil) if input is nil to ensure State is always initialized.
+func deepCopyState(state session.StateMap) session.StateMap {
+	if state == nil {
+		return make(session.StateMap)
+	}
+	copied := make(session.StateMap, len(state))
+	for k, v := range state {
+		if v == nil {
+			copied[k] = nil
+			continue
+		}
+		val := make([]byte, len(v))
+		copy(val, v)
+		copied[k] = val
+	}
+	return copied
 }

@@ -18,7 +18,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -64,13 +63,14 @@ type SessionState struct {
 }
 
 // CreateSession creates a new session using V1 logic.
+// SessionID must be provided by the caller; empty SessionID returns an error.
 func (c *Client) CreateSession(
 	ctx context.Context,
 	key session.Key,
 	state session.StateMap,
 ) (*session.Session, error) {
 	if key.SessionID == "" {
-		key.SessionID = uuid.New().String()
+		return nil, fmt.Errorf("sessionID is required")
 	}
 
 	sessState := &SessionState{
@@ -841,6 +841,85 @@ func collectTrackQueryResults(queries []*trackQuery, sessionCount int) ([]map[se
 		results[query.sessionIdx][query.track] = events
 	}
 	return results, nil
+}
+
+// =============================================================================
+// TrimConversations
+// =============================================================================
+
+const trimScanBatchSize = 100
+
+// TrimConversations trims recent conversations and returns the deleted events.
+// A conversation is defined as all events sharing the same RequestID.
+func (c *Client) TrimConversations(ctx context.Context, key session.Key, count int) ([]event.Event, error) {
+	if count <= 0 {
+		count = 1
+	}
+
+	eventKey := c.eventKey(key)
+	targetReqIDs := make(map[string]struct{})
+	var toDelete []any
+	var deletedEvents []event.Event
+	var offset int64
+	stop := false
+
+	for !stop {
+		batch, err := c.client.ZRevRange(ctx, eventKey, offset, offset+trimScanBatchSize-1).Result()
+		if err != nil && err != redis.Nil {
+			return nil, fmt.Errorf("trim events: load events: %w", err)
+		}
+		if len(batch) == 0 {
+			break
+		}
+
+		for _, raw := range batch {
+			var evt event.Event
+			if err := json.Unmarshal([]byte(raw), &evt); err != nil {
+				return nil, fmt.Errorf("trim events: unmarshal event: %w", err)
+			}
+			if evt.RequestID == "" {
+				continue
+			}
+
+			if _, ok := targetReqIDs[evt.RequestID]; !ok {
+				if len(targetReqIDs) >= count {
+					stop = true
+					break
+				}
+				targetReqIDs[evt.RequestID] = struct{}{}
+			}
+
+			toDelete = append(toDelete, raw)
+			deletedEvents = append(deletedEvents, evt)
+		}
+
+		if stop {
+			break
+		}
+		offset += trimScanBatchSize
+	}
+
+	if len(toDelete) == 0 {
+		return nil, nil
+	}
+
+	// Batch remove from ZSet and refresh TTL.
+	pipe := c.client.TxPipeline()
+	pipe.ZRem(ctx, eventKey, toDelete...)
+
+	sessKey := c.sessionStateKey(key)
+	sumKey := c.sessionSummaryKey(key)
+	appStateKey := c.appStateKey(key.AppName)
+	userStateKey := c.userStateKey(key)
+	c.appendSessionTTL(ctx, pipe, key, sessKey, sumKey, appStateKey, userStateKey)
+
+	if _, err := pipe.Exec(ctx); err != nil {
+		return nil, fmt.Errorf("trim events: remove events: %w", err)
+	}
+
+	// Reverse to return events in chronological order.
+	slices.Reverse(deletedEvents)
+	return deletedEvents, nil
 }
 
 // =============================================================================

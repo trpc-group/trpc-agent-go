@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/hook"
@@ -110,20 +111,34 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		return nil, fmt.Errorf("create redis client failed: %w", err)
 	}
 
+	// Normalize TTL values: negative TTL means no expiration (use 0)
+	sessionTTL := opts.sessionTTL
+	if sessionTTL < 0 {
+		sessionTTL = 0
+	}
+	appStateTTL := opts.appStateTTL
+	if appStateTTL < 0 {
+		appStateTTL = 0
+	}
+	userStateTTL := opts.userStateTTL
+	if userStateTTL < 0 {
+		userStateTTL = 0
+	}
+
 	// Initialize V1 config
 	v1Cfg := v1.Config{
-		SessionTTL:        opts.sessionTTL,
-		AppStateTTL:       opts.appStateTTL,
-		UserStateTTL:      opts.userStateTTL,
+		SessionTTL:        sessionTTL,
+		AppStateTTL:       appStateTTL,
+		UserStateTTL:      userStateTTL,
 		SessionEventLimit: opts.sessionEventLimit,
 		KeyPrefix:         opts.keyPrefix,
 	}
 
 	// Initialize V2 config
 	v2Cfg := v2.Config{
-		SessionTTL:        opts.sessionTTL,
-		AppStateTTL:       opts.appStateTTL,
-		UserStateTTL:      opts.userStateTTL,
+		SessionTTL:        sessionTTL,
+		AppStateTTL:       appStateTTL,
+		UserStateTTL:      userStateTTL,
 		SessionEventLimit: opts.sessionEventLimit,
 		KeyPrefix:         opts.keyPrefix,
 	}
@@ -201,10 +216,10 @@ func (s *Service) checkSessionExists(ctx context.Context, key session.Key) (v1Ex
 }
 
 // CreateSession creates a new session.
-// Strategy:
-//   - If V2 exists: return existing session
-//   - If only V1 exists (legacy data): in dual-write mode, create V2 meta then return
-//   - Otherwise: create new session in V2 (and V1 if dual-write enabled)
+// Strategy (per xxx.md):
+//   - If either V1 or V2 exists: return existing session (no supplementary creation)
+//   - Only when BOTH v1/v2 don't exist: create in both storages (dual-write mode)
+//   - Strict dual-write: both must succeed, any failure returns error with best-effort rollback
 func (s *Service) CreateSession(
 	ctx context.Context,
 	key session.Key,
@@ -222,8 +237,9 @@ func (s *Service) CreateSession(
 			return nil, fmt.Errorf("check session exists: %w", err)
 		}
 
-		// Case 1: V2 exists - return existing session
-		if v2Exists {
+		// If either side exists, return existing session (no supplementary creation)
+		// This ensures session "belongs" to whichever storage created it first.
+		if v1Exists || v2Exists {
 			sess, err := s.getSessionInternal(ctx, key, applyOptions(opts...), v1Exists, v2Exists)
 			if err != nil {
 				return nil, fmt.Errorf("get existing session: %w", err)
@@ -232,48 +248,80 @@ func (s *Service) CreateSession(
 				return sess, nil
 			}
 		}
-
-		// Case 2: Only V1 exists (legacy data) - need to create V2 meta in dual-write mode
-		// This ensures V2 can work independently after migration completes.
-		if v1Exists && !v2Exists && s.needDualWrite() {
-			// Get session from V1
-			sess, err := s.getSessionInternal(ctx, key, applyOptions(opts...), v1Exists, false)
-			if err != nil {
-				return nil, fmt.Errorf("get V1 session: %w", err)
-			}
-			if sess != nil {
-				// Create V2 meta for this V1 session (events will be dual-written separately)
-				if _, err := s.v2Client.CreateSession(ctx, key, state); err != nil {
-					return nil, fmt.Errorf("create V2 meta for V1 session: %w", err)
-				}
-				return sess, nil
-			}
-		}
-
-		// Case 3: V1 exists but not in dual-write mode - just return V1 session
-		if v1Exists {
-			sess, err := s.getSessionInternal(ctx, key, applyOptions(opts...), v1Exists, false)
-			if err != nil {
-				return nil, fmt.Errorf("get existing session: %w", err)
-			}
-			if sess != nil {
-				return sess, nil
-			}
-		}
 	}
 
-	// Create new session in V2 (primary storage)
+	// Create new session - only reaches here when BOTH v1/v2 don't exist
+	// Generate sessionID upfront to ensure V1 and V2 use the same ID in dual-write mode.
+	if key.SessionID == "" {
+		key.SessionID = uuid.New().String()
+	}
+
+	if s.needDualWrite() {
+		// Strict dual-write: create in both V2 and V1, both must succeed
+		sess, err := s.v2Client.CreateSession(ctx, key, state)
+		if err != nil {
+			return nil, fmt.Errorf("create session in V2 failed: %w", err)
+		}
+
+		if _, err := s.v1Client.CreateSession(ctx, key, state); err != nil {
+			// V1 creation failed - best effort rollback V2
+			if delErr := s.v2Client.DeleteSession(ctx, key); delErr != nil {
+				log.WarnfContext(ctx, "failed to rollback V2 session after V1 creation failed: %v", delErr)
+			}
+			return nil, fmt.Errorf("dual-write session to V1 failed: %w", err)
+		}
+
+		// Merge appState and userState into session (matches V1 behavior)
+		return s.mergeAppUserState(ctx, key, sess)
+	}
+
+	// Non-dual-write mode: create in V2 only
 	sess, err := s.v2Client.CreateSession(ctx, key, state)
 	if err != nil {
 		return nil, err
 	}
 
-	// Dual-write to V1 for backward compatibility during rolling upgrades.
-	// This allows older V1-only instances to still access new sessions.
-	if s.needDualWrite() {
-		if _, err := s.v1Client.CreateSession(ctx, key, state); err != nil {
-			return nil, fmt.Errorf("dual-write session to V1 failed: %w", err)
-		}
+	// Merge appState and userState into session (matches V1 behavior)
+	return s.mergeAppUserState(ctx, key, sess)
+}
+
+// mergeAppUserState queries and merges appState and userState into the session.
+// This matches V1 behavior where CreateSession/GetSession returns session with merged states.
+// It also refreshes TTL for appState and userState keys (matching V1 behavior).
+func (s *Service) mergeAppUserState(ctx context.Context, key session.Key, sess *session.Session) (*session.Session, error) {
+	if sess == nil {
+		return nil, nil
+	}
+
+	// Query appState
+	appState, err := s.v2Client.ListAppStates(ctx, key.AppName)
+	if err != nil {
+		log.WarnfContext(ctx, "failed to get appState for merge: %v", err)
+		// Don't fail the whole operation, just skip merging appState
+	}
+
+	// Query userState
+	userState, err := s.v2Client.ListUserStates(ctx, session.UserKey{AppName: key.AppName, UserID: key.UserID})
+	if err != nil {
+		log.WarnfContext(ctx, "failed to get userState for merge: %v", err)
+		// Don't fail the whole operation, just skip merging userState
+	}
+
+	// Merge states with prefixes
+	for k, v := range appState {
+		sess.SetState(session.StateAppPrefix+k, v)
+	}
+	for k, v := range userState {
+		sess.SetState(session.StateUserPrefix+k, v)
+	}
+
+	// Refresh TTL for appState and userState (matches V1 behavior)
+	// This ensures shared states stay alive as long as any session is active.
+	if err := s.v2Client.RefreshAppStateTTL(ctx, key.AppName); err != nil {
+		log.WarnfContext(ctx, "failed to refresh appState TTL: %v", err)
+	}
+	if err := s.v2Client.RefreshUserStateTTL(ctx, session.UserKey{AppName: key.AppName, UserID: key.UserID}); err != nil {
+		log.WarnfContext(ctx, "failed to refresh userState TTL: %v", err)
 	}
 
 	return sess, nil
@@ -311,39 +359,47 @@ func (s *Service) GetSession(
 	return sess, nil
 }
 
-// getSessionInternal retrieves session with V2-first fallback to V1.
+// getSessionInternal retrieves session based on CompatMode.
 // v1Exists/v2Exists indicate whether session exists in each storage version.
 // Caller should call checkSessionExists first and pass the results.
+//
+// Read strategy:
+//   - If V1 exists (legacy enabled): read V1 first (V1 may have more complete data during migration)
+//   - Otherwise: read V2
 func (s *Service) getSessionInternal(
 	ctx context.Context,
 	key session.Key,
 	opts *session.Options,
 	v1Exists, v2Exists bool,
 ) (*session.Session, error) {
-	// 1. Try V2 (priority)
-	if v2Exists {
-		sess, err := s.v2Client.GetSession(ctx, key, opts.EventNum)
-		if err != nil {
-			return nil, err
-		}
-		return sess, nil
+	// Use sessionEventLimit as default if EventNum is not specified
+	eventLimit := s.getEffectiveEventLimit(opts.EventNum)
+
+	// V1 priority: if V1 exists and legacy is enabled, read V1
+	// This ensures data completeness during migration (old instances may only write V1)
+	if s.legacyEnabled() && v1Exists {
+		return s.v1Client.GetSession(ctx, key, eventLimit, opts.EventTime)
 	}
 
-	// 2. Legacy Fallback
-	if s.legacyEnabled() && v1Exists {
-		sess, err := s.v1Client.GetSession(ctx, key, opts.EventNum, opts.EventTime)
-		if err != nil {
-			return nil, err
-		}
-		if sess != nil {
-			return sess, nil
-		}
+	// V2 read
+	if v2Exists {
+		return s.v2Client.GetSession(ctx, key, eventLimit, opts.EventTime)
 	}
+
 	return nil, nil // Not found
 }
 
+// getEffectiveEventLimit returns the effective event limit.
+// If the provided limit is <= 0, it uses sessionEventLimit as default.
+func (s *Service) getEffectiveEventLimit(limit int) int {
+	if limit <= 0 {
+		return s.opts.sessionEventLimit
+	}
+	return limit
+}
+
 // ListSessions lists all sessions by user scope of session key.
-// Strategy: List V2 (Scan) + List V1 (HGetAll) -> Merge.
+// Strategy: List V2 (Scan) + List V1 (HGetAll) -> Merge with V1 priority for duplicates.
 func (s *Service) ListSessions(
 	ctx context.Context,
 	userKey session.UserKey,
@@ -354,33 +410,43 @@ func (s *Service) ListSessions(
 	}
 	opt := applyOptions(opts...)
 
-	// 1. List V2
-	sessions, err := s.v2Client.ListSessions(ctx, userKey, opt.EventNum)
+	// Use sessionEventLimit as default if EventNum is not specified
+	eventLimit := s.getEffectiveEventLimit(opt.EventNum)
+
+	v2Sessions, err := s.v2Client.ListSessions(ctx, userKey, eventLimit, opt.EventTime)
 	if err != nil {
 		return nil, fmt.Errorf("scan sessions (v2): %w", err)
 	}
 
 	// 2. List V1 (if legacy enabled)
-	if s.legacyEnabled() {
-		sessListV1, err := s.v1Client.ListSessions(ctx, userKey, opt.EventNum, opt.EventTime)
-		if err != nil {
-			return nil, fmt.Errorf("list sessions (v1): %w", err)
-		}
+	if !s.legacyEnabled() {
+		return v2Sessions, nil
+	}
 
-		// Merge: V2 overrides V1 (skip duplicates)
-		v2Map := make(map[string]bool)
-		for _, sess := range sessions {
-			v2Map[sess.ID] = true
+	v1Sessions, err := s.v1Client.ListSessions(ctx, userKey, eventLimit, opt.EventTime)
+	if err != nil {
+		return nil, fmt.Errorf("list sessions (v1): %w", err)
+	}
+
+	// Merge: V1 priority for duplicates (V1 data is more complete during migration while enable dual-write)
+	v1Map := make(map[string]*session.Session, len(v1Sessions))
+	for _, s1 := range v1Sessions {
+		v1Map[s1.ID] = s1
+	}
+
+	sessions := make([]*session.Session, 0, len(v2Sessions)+len(v1Sessions))
+	for _, sess := range v2Sessions {
+		if v1Sess, exists := v1Map[sess.ID]; exists {
+			// Use V1 data for duplicates
+			sessions = append(sessions, v1Sess)
+			delete(v1Map, sess.ID)
+		} else {
+			sessions = append(sessions, sess)
 		}
-		for _, s1 := range sessListV1 {
-			if v2Map[s1.ID] {
-				// Skip V1 session if it already exists in V2 (expected in dual-write mode)
-				log.InfofContext(ctx, "session exists in both V1 and V2 (dual-write): %s/%s/%s",
-					userKey.AppName, userKey.UserID, s1.ID)
-			} else {
-				sessions = append(sessions, s1)
-			}
-		}
+	}
+	// Add V1-only sessions
+	for _, s1 := range v1Map {
+		sessions = append(sessions, s1)
 	}
 
 	return sessions, nil
@@ -492,15 +558,16 @@ func getSessionVersion(sess *session.Session) string {
 }
 
 func (s *Service) persistEvent(ctx context.Context, ver string, e *event.Event, key session.Key) error {
-	// Dual-write mode: append to both V2 and V1
+	// Dual-write mode: strict dual-write based on session existence
 	if s.needDualWrite() {
-		return s.appendEventV2WithDualWrite(ctx, key, e)
+		return s.appendEventWithStrictDualWrite(ctx, key, e)
 	}
 
 	// fast path: use version tag
-	if ver == v2.VersionV2 {
+	switch ver {
+	case v2.VersionV2:
 		return s.v2Client.AppendEvent(ctx, key, e)
-	} else if ver == v1.VersionV1 {
+	case v1.VersionV1:
 		return s.v1Client.AppendEvent(ctx, key, e)
 	}
 
@@ -520,28 +587,47 @@ func (s *Service) persistEvent(ctx context.Context, ver string, e *event.Event, 
 	return fmt.Errorf("session not found: %s/%s/%s", key.AppName, key.UserID, key.SessionID)
 }
 
-// appendEventV2WithDualWrite appends event to V2 and optionally to V1 for backward compatibility.
-// Note: V1 write may fail if the session was created by V2 only (V1 session doesn't exist).
-// In this case, we log a warning but don't fail the operation since V2 is the primary storage.
-func (s *Service) appendEventV2WithDualWrite(ctx context.Context, key session.Key, e *event.Event) error {
-	if err := s.v2Client.AppendEvent(ctx, key, e); err != nil {
-		return err
+// appendEventWithStrictDualWrite implements strict dual-write semantics (per xxx.md):
+//   - If both V1 and V2 exist: must write to both, both must succeed
+//   - If only one side exists: write to existing side only (with warning)
+//   - Any failure returns error immediately
+func (s *Service) appendEventWithStrictDualWrite(ctx context.Context, key session.Key, e *event.Event) error {
+	// Check which storages have this session
+	v1Exists, v2Exists, err := s.checkSessionExists(ctx, key)
+	if err != nil {
+		return fmt.Errorf("check session exists failed: %w", err)
 	}
 
-	// Try to dual-write to V1. If V1 session doesn't exist (e.g., session created by V2 only),
-	// we skip V1 write since V2 is the primary storage and V1 is only for backward compatibility.
-	if err := s.v1Client.AppendEvent(ctx, key, e); err != nil {
-		// Check if the error is due to V1 session not existing
-		v1Exists, checkErr := s.v1Client.Exists(ctx, key)
-		if checkErr == nil && !v1Exists {
-			// V1 session doesn't exist, this is expected for V2-created sessions
-			// Skip V1 write silently
-			return nil
+	// Case 1: Both exist - strict dual-write, both must succeed
+	if v1Exists && v2Exists {
+		if err := s.v2Client.AppendEvent(ctx, key, e); err != nil {
+			return fmt.Errorf("dual-write to V2 failed: %w", err)
 		}
-		// V1 exists but write failed, or check failed - log warning but don't fail
-		log.WarnfContext(ctx, "dual-write event to V1 failed (non-fatal): %v", err)
+		if err := s.v1Client.AppendEvent(ctx, key, e); err != nil {
+			// V2 succeeded but V1 failed - this is a partial write
+			// Log error for monitoring, but return error to caller
+			log.ErrorfContext(ctx, "dual-write partial failure: V2 succeeded but V1 failed: %v", err)
+			return fmt.Errorf("dual-write to V1 failed (V2 succeeded): %w", err)
+		}
+		return nil
 	}
-	return nil
+
+	// Case 2: Only V2 exists - write to V2 only (legacy session path)
+	if v2Exists {
+		log.WarnfContext(ctx, "dual-write mode but only V2 exists for session %s/%s/%s, writing to V2 only",
+			key.AppName, key.UserID, key.SessionID)
+		return s.v2Client.AppendEvent(ctx, key, e)
+	}
+
+	// Case 3: Only V1 exists - write to V1 only (old session not migrated)
+	if v1Exists {
+		log.WarnfContext(ctx, "dual-write mode but only V1 exists for session %s/%s/%s, writing to V1 only",
+			key.AppName, key.UserID, key.SessionID)
+		return s.v1Client.AppendEvent(ctx, key, e)
+	}
+
+	// Case 4: Neither exists - error
+	return fmt.Errorf("session not found: %s/%s/%s", key.AppName, key.UserID, key.SessionID)
 }
 
 // trimEventOptions defines trimming behavior.
@@ -588,8 +674,7 @@ func (s *Service) TrimConversations(
 	}
 
 	if s.legacyEnabled() {
-		// Call V1 Trim (Not implemented in v1 client yet)
-		return nil, nil // Placeholder
+		return s.v1Client.TrimConversations(ctx, key, opt.ConversationCount)
 	}
 
 	return nil, nil

@@ -78,16 +78,11 @@ func (s *Service) enqueueTrackEvent(ctx context.Context, sess *session.Session, 
 }
 
 // persistTrackEvent persists track event to the appropriate storage (V1 or V2).
+// Uses same strict dual-write semantics as AppendEvent (per xxx.md).
 func (s *Service) persistTrackEvent(ctx context.Context, ver string, key session.Key, trackEvent *session.TrackEvent) error {
-	// Dual-write mode: append to both V2 and V1
+	// Dual-write mode: strict dual-write based on session existence
 	if s.needDualWrite() {
-		if err := s.v2Client.AppendTrackEvent(ctx, key, trackEvent); err != nil {
-			return err
-		}
-		if err := s.v1Client.AppendTrackEvent(ctx, key, trackEvent); err != nil {
-			return fmt.Errorf("dual-write track event to V1 failed: %w", err)
-		}
-		return nil
+		return s.appendTrackEventWithStrictDualWrite(ctx, key, trackEvent)
 	}
 
 	// Fast path: use version tag
@@ -110,5 +105,44 @@ func (s *Service) persistTrackEvent(ctx context.Context, ver string, key session
 		return s.v1Client.AppendTrackEvent(ctx, key, trackEvent)
 	}
 
+	return fmt.Errorf("session not found: %s/%s/%s", key.AppName, key.UserID, key.SessionID)
+}
+
+// appendTrackEventWithStrictDualWrite implements strict dual-write for track events.
+// Same semantics as appendEventWithStrictDualWrite (per xxx.md).
+func (s *Service) appendTrackEventWithStrictDualWrite(ctx context.Context, key session.Key, trackEvent *session.TrackEvent) error {
+	// Check which storages have this session
+	v1Exists, v2Exists, err := s.checkSessionExists(ctx, key)
+	if err != nil {
+		return fmt.Errorf("check session exists failed: %w", err)
+	}
+
+	// Case 1: Both exist - strict dual-write, both must succeed
+	if v1Exists && v2Exists {
+		if err := s.v2Client.AppendTrackEvent(ctx, key, trackEvent); err != nil {
+			return fmt.Errorf("dual-write track to V2 failed: %w", err)
+		}
+		if err := s.v1Client.AppendTrackEvent(ctx, key, trackEvent); err != nil {
+			log.ErrorfContext(ctx, "dual-write track partial failure: V2 succeeded but V1 failed: %v", err)
+			return fmt.Errorf("dual-write track to V1 failed (V2 succeeded): %w", err)
+		}
+		return nil
+	}
+
+	// Case 2: Only V2 exists
+	if v2Exists {
+		log.WarnfContext(ctx, "dual-write mode but only V2 exists for session %s/%s/%s, writing track to V2 only",
+			key.AppName, key.UserID, key.SessionID)
+		return s.v2Client.AppendTrackEvent(ctx, key, trackEvent)
+	}
+
+	// Case 3: Only V1 exists
+	if v1Exists {
+		log.WarnfContext(ctx, "dual-write mode but only V1 exists for session %s/%s/%s, writing track to V1 only",
+			key.AppName, key.UserID, key.SessionID)
+		return s.v1Client.AppendTrackEvent(ctx, key, trackEvent)
+	}
+
+	// Case 4: Neither exists
 	return fmt.Errorf("session not found: %s/%s/%s", key.AppName, key.UserID, key.SessionID)
 }
