@@ -157,6 +157,14 @@ func (m *manager) AddCase(_ context.Context, appName, evalSetID string, evalCase
 			invocation.CreationTimestamp = &epochtime.EpochTime{Time: time.Now()}
 		}
 	}
+	for _, invocation := range cloned.ActualConversation {
+		if invocation == nil {
+			continue
+		}
+		if invocation.CreationTimestamp == nil {
+			invocation.CreationTimestamp = &epochtime.EpochTime{Time: time.Now()}
+		}
+	}
 	m.evalCases[appName][evalSetID][evalCase.EvalID] = cloned
 	evalSet.EvalCases = append(evalSet.EvalCases, cloned)
 	return nil
