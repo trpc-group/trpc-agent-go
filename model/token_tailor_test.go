@@ -93,6 +93,41 @@ func TestSimpleTokenCounter_WithApproxRunesPerToken(t *testing.T) {
 	}
 }
 
+func TestSimpleTokenCounter_CountTokens_ApproxRunesPerTokenFallback(t *testing.T) {
+	ctx := context.Background()
+	msg := NewUserMessage("hello")
+
+	baselineCounter := NewSimpleTokenCounter()
+	baselineTokens, err := baselineCounter.CountTokens(ctx, msg)
+	require.NoError(t, err)
+	require.Greater(t, baselineTokens, 0)
+
+	tests := []struct {
+		name                string
+		approxRunesPerToken float64
+	}{
+		{
+			name:                "zero_value_falls_back_to_default",
+			approxRunesPerToken: 0,
+		},
+		{
+			name:                "negative_value_falls_back_to_default",
+			approxRunesPerToken: -1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			counter := &SimpleTokenCounter{
+				approxRunesPerToken: tt.approxRunesPerToken,
+			}
+			gotTokens, err := counter.CountTokens(ctx, msg)
+			require.NoError(t, err)
+			assert.Equal(t, baselineTokens, gotTokens)
+		})
+	}
+}
+
 // TestSimpleTokenCounter_CountTokens_DetailedCoverage tests all code paths in CountTokens function.
 func TestSimpleTokenCounter_CountTokens_DetailedCoverage(t *testing.T) {
 	counter := NewSimpleTokenCounter()

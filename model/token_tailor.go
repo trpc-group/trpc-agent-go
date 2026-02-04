@@ -121,7 +121,12 @@ func (c *SimpleTokenCounter) CountTokens(_ context.Context, message Message) (in
 		total += c.countToolCallRunes(toolCall)
 	}
 
-	total = int(float64(total) / c.approxRunesPerToken)
+	runesPerToken := c.approxRunesPerToken
+	if runesPerToken <= 0 {
+		// Fall back to default to avoid division by zero.
+		runesPerToken = defaultApproxRunesPerToken
+	}
+	total = int(float64(total) / runesPerToken)
 
 	// Total should be at least 1 if message is not empty.
 	if isMessageNotEmpty(message) {
