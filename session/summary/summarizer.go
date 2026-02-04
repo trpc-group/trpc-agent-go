@@ -153,6 +153,9 @@ type sessionSummarizer struct {
 	postHook         PostSummaryHook
 	hookAbortOnError bool
 
+	// modelCallbacks configures before/after model callbacks for summarization.
+	modelCallbacks *model.Callbacks
+
 	// toolCallFormatter customizes how tool calls are formatted in summary input.
 	toolCallFormatter ToolCallFormatter
 	// toolResultFormatter customizes how tool results are formatted in summary input.
@@ -238,7 +241,7 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 		return "", fmt.Errorf("no conversation text extracted for session %s (events=%d)", sess.ID, len(eventsToSummarize))
 	}
 
-	summaryText, err := s.generateSummary(ctx, sess, conversationText)
+	ctx, summaryText, err := s.generateSummary(ctx, sess, conversationText)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate summary for session %s: %w", sess.ID, err)
 	}
@@ -416,30 +419,11 @@ func extractConversationText(
 }
 
 // generateSummary generates a summary using the LLM model.
-func (s *sessionSummarizer) generateSummary(ctx context.Context, sess *session.Session, conversationText string) (string, error) {
-	// Create summarization prompt.
-	prompt := strings.Replace(s.prompt, conversationTextPlaceholder, conversationText, 1)
-
-	// Replace max summary words placeholder if it exists.
-	if s.maxSummaryWords > 0 {
-		// Replace with the actual number
-		prompt = strings.Replace(prompt, maxSummaryWordsPlaceholder, fmt.Sprintf("%d", s.maxSummaryWords), 1)
-	} else {
-		// Remove the placeholder if no word limit is set.
-		prompt = strings.Replace(prompt, maxSummaryWordsPlaceholder, "", 1)
-	}
-
-	// Create LLM request.
-	request := &model.Request{
-		Messages: []model.Message{{
-			Role:    authorUser,
-			Content: prompt,
-		}},
-		GenerationConfig: model.GenerationConfig{
-			Stream: false, // Non-streaming for summarization.
-		},
-	}
-
+func (s *sessionSummarizer) generateSummary(
+	ctx context.Context,
+	sess *session.Session,
+	conversationText string,
+) (context.Context, string, error) {
 	// Telemetry trace + metrics tracking (aligned with toolsearch/llm_search.go).
 	var err error
 	modelName := ""
@@ -448,6 +432,9 @@ func (s *sessionSummarizer) generateSummary(ctx context.Context, sess *session.S
 	}
 	_, span := trace.Tracer.Start(ctx, itelemetry.NewChatSpanName(modelName))
 	defer span.End()
+
+	prompt := s.buildSummaryPrompt(conversationText)
+	request := newSummaryRequest(prompt)
 
 	invocation, ok := agent.InvocationFromContext(ctx)
 	if !ok || invocation == nil {
@@ -468,19 +455,37 @@ func (s *sessionSummarizer) generateSummary(ctx context.Context, sess *session.S
 	// Get or create timing info from invocation (only record first LLM call).
 	timingInfo := invocation.GetOrCreateTimingInfo()
 	taskType := itelemetry.NewSummarizeTaskType(s.name)
-	tracker := itelemetry.NewChatMetricsTracker(ctx, invocation, request, timingInfo, &taskType, &err)
+	tracker := itelemetry.NewChatMetricsTracker(
+		ctx,
+		invocation,
+		request,
+		timingInfo,
+		&taskType,
+		&err,
+	)
 	defer tracker.RecordMetrics()()
+
+	ensureTimingInfo := func(resp *model.Response) {
+		if resp == nil {
+			return
+		}
+		if resp.Usage == nil {
+			resp.Usage = &model.Usage{}
+		}
+		resp.Usage.TimingInfo = timingInfo
+	}
+
+	trackResponse := func(resp *model.Response) {
+		tracker.TrackResponse(resp)
+		ensureTimingInfo(resp)
+	}
 
 	var finalResp *model.Response
 	defer func() {
 		if finalResp == nil {
 			return
 		}
-		// Ensure timing info is attached to the final response.
-		if finalResp.Usage == nil {
-			finalResp.Usage = &model.Usage{}
-		}
-		finalResp.Usage.TimingInfo = timingInfo
+		ensureTimingInfo(finalResp)
 
 		itelemetry.TraceChat(span, &itelemetry.TraceChatAttributes{
 			Invocation:       invocation,
@@ -491,50 +496,182 @@ func (s *sessionSummarizer) generateSummary(ctx context.Context, sess *session.S
 		})
 	}()
 
-	// Generate content using the model.
-	responseChan, err := s.model.GenerateContent(ctx, request)
-	if err != nil {
-		return "", fmt.Errorf("failed to generate summary: %w", err)
+	ctx, responseChan, cbErr := s.runBeforeModelCallbacks(ctx, request)
+	if cbErr != nil {
+		err = cbErr
+		return ctx, "", cbErr
 	}
 
-	// Collect the response.
-	var summary strings.Builder
+	if responseChan == nil {
+		responseChan, cbErr = s.model.GenerateContent(ctx, request)
+		if cbErr != nil {
+			err = fmt.Errorf("failed to generate summary: %w", cbErr)
+			return ctx, "", err
+		}
+	}
+
+	var summaryText string
+	ctx, summaryText, finalResp, cbErr = s.collectSummaryFromResponses(
+		ctx,
+		request,
+		responseChan,
+		trackResponse,
+		ensureTimingInfo,
+	)
+	if cbErr != nil {
+		err = cbErr
+		return ctx, "", cbErr
+	}
+	if summaryText == "" {
+		err = fmt.Errorf("generated empty summary (input_chars=%d)", len(conversationText))
+		return ctx, "", err
+	}
+	return ctx, summaryText, nil
+}
+
+func (s *sessionSummarizer) buildSummaryPrompt(conversationText string) string {
+	prompt := strings.Replace(
+		s.prompt,
+		conversationTextPlaceholder,
+		conversationText,
+		1,
+	)
+
+	// Replace max summary words placeholder if it exists.
+	if s.maxSummaryWords > 0 {
+		// Replace with the actual number.
+		return strings.Replace(
+			prompt,
+			maxSummaryWordsPlaceholder,
+			fmt.Sprintf("%d", s.maxSummaryWords),
+			1,
+		)
+	}
+
+	// Remove the placeholder if no word limit is set.
+	return strings.Replace(prompt, maxSummaryWordsPlaceholder, "", 1)
+}
+
+func newSummaryRequest(prompt string) *model.Request {
+	return &model.Request{
+		Messages: []model.Message{{
+			Role:    authorUser,
+			Content: prompt,
+		}},
+		GenerationConfig: model.GenerationConfig{
+			Stream: false, // Non-streaming for summarization.
+		},
+	}
+}
+
+func (s *sessionSummarizer) runBeforeModelCallbacks(
+	ctx context.Context,
+	request *model.Request,
+) (context.Context, <-chan *model.Response, error) {
+	if s.modelCallbacks == nil {
+		return ctx, nil, nil
+	}
+
+	result, err := s.modelCallbacks.RunBeforeModel(
+		ctx,
+		&model.BeforeModelArgs{Request: request},
+	)
+	if err != nil {
+		return ctx, nil, fmt.Errorf("before model callback failed: %w", err)
+	}
+	if result != nil && result.Context != nil {
+		ctx = result.Context
+	}
+	if result == nil || result.CustomResponse == nil {
+		return ctx, nil, nil
+	}
+
+	customChan := make(chan *model.Response, 1)
+	customChan <- result.CustomResponse
+	close(customChan)
+	return ctx, customChan, nil
+}
+
+func modelErrFromResponse(resp *model.Response) error {
+	if resp == nil || resp.Error == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %s", resp.Error.Type, resp.Error.Message)
+}
+
+func (s *sessionSummarizer) runAfterModelCallbacks(
+	ctx context.Context,
+	request *model.Request,
+	response *model.Response,
+) (context.Context, *model.Response, error) {
+	if s.modelCallbacks == nil {
+		return ctx, response, nil
+	}
+
+	result, err := s.modelCallbacks.RunAfterModel(
+		ctx,
+		&model.AfterModelArgs{
+			Request:  request,
+			Response: response,
+			Error:    modelErrFromResponse(response),
+		},
+	)
+	if err != nil {
+		return ctx, nil, fmt.Errorf("after model callback failed: %w", err)
+	}
+	if result != nil && result.Context != nil {
+		ctx = result.Context
+	}
+	if result != nil && result.CustomResponse != nil {
+		response = result.CustomResponse
+	}
+	return ctx, response, nil
+}
+
+func (s *sessionSummarizer) collectSummaryFromResponses(
+	ctx context.Context,
+	request *model.Request,
+	responseChan <-chan *model.Response,
+	trackResponse func(resp *model.Response),
+	ensureTimingInfo func(resp *model.Response),
+) (context.Context, string, *model.Response, error) {
+	var (
+		summary   strings.Builder
+		finalResp *model.Response
+	)
+
 	for response := range responseChan {
+		if trackResponse != nil {
+			trackResponse(response)
+		}
+
+		var err error
+		ctx, response, err = s.runAfterModelCallbacks(ctx, request, response)
+		if err != nil {
+			return ctx, "", finalResp, err
+		}
+		if ensureTimingInfo != nil {
+			ensureTimingInfo(response)
+		}
 		if response == nil {
 			continue
 		}
 		finalResp = response
 
-		// Track response for metrics.
-		tracker.TrackResponse(response)
-		if response.Usage == nil {
-			response.Usage = &model.Usage{}
-		}
-		response.Usage.TimingInfo = timingInfo
-
 		if response.Error != nil {
-			err = formatResponseError(response.Error)
-			return "", err
+			return ctx, "", finalResp, formatResponseError(response.Error)
 		}
-
 		if len(response.Choices) > 0 {
 			content := response.Choices[0].Message.Content
 			if content != "" {
 				summary.WriteString(content)
 			}
 		}
-
 		if response.Done {
 			break
 		}
 	}
 
-	// Clean up the summary.
 	summaryText := strings.TrimSpace(summary.String())
-	if summaryText == "" {
-		err = fmt.Errorf("generated empty summary (input_chars=%d)", len(conversationText))
-		return "", err
-	}
-
-	return summaryText, nil
+	return ctx, summaryText, finalResp, nil
 }

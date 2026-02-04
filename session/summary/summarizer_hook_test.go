@@ -215,3 +215,180 @@ func TestSessionSummarizer_PostHook_ErrorBehavior(t *testing.T) {
 		assert.Contains(t, summary, "origin")
 	})
 }
+
+type panicGenerateModel struct{}
+
+func (m *panicGenerateModel) Info() model.Info {
+	return model.Info{Name: "panic-generate"}
+}
+
+func (m *panicGenerateModel) GenerateContent(
+	ctx context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	panic("GenerateContent should not be called")
+}
+
+type staticResponseModel struct {
+	content string
+}
+
+func (m *staticResponseModel) Info() model.Info {
+	return model.Info{Name: "static"}
+}
+
+func (m *staticResponseModel) GenerateContent(
+	ctx context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.Message{Content: m.content},
+		}},
+	}
+	close(ch)
+	return ch, nil
+}
+
+func TestSessionSummarizer_ModelCallbacks_Before_ModifiesRequest(t *testing.T) {
+	m := &echoPromptModel{}
+	callbacks := model.NewCallbacks().RegisterBeforeModel(
+		func(
+			ctx context.Context,
+			args *model.BeforeModelArgs,
+		) (*model.BeforeModelResult, error) {
+			if args != nil && args.Request != nil && len(args.Request.Messages) > 0 {
+				args.Request.Messages[0].Content = "MODIFIED"
+			}
+			return nil, nil
+		},
+	)
+	s := NewSummarizer(m, WithModelCallbacks(callbacks))
+
+	sess := &session.Session{
+		ID:     "sess",
+		Events: []event.Event{newEventWithContent("origin")},
+	}
+	summary, err := s.Summarize(context.Background(), sess)
+	require.NoError(t, err)
+	assert.Contains(t, summary, "MODIFIED")
+	assert.NotContains(t, summary, "origin")
+}
+
+func TestSessionSummarizer_ModelCallbacks_Before_CustomResponseSkipsModel(t *testing.T) {
+	callbacks := model.NewCallbacks().RegisterBeforeModel(
+		func(
+			ctx context.Context,
+			args *model.BeforeModelArgs,
+		) (*model.BeforeModelResult, error) {
+			return &model.BeforeModelResult{
+				CustomResponse: &model.Response{
+					Done: true,
+					Choices: []model.Choice{{
+						Message: model.Message{Content: "FROM_CALLBACK"},
+					}},
+				},
+			}, nil
+		},
+	)
+	s := NewSummarizer(&panicGenerateModel{}, WithModelCallbacks(callbacks))
+
+	sess := &session.Session{
+		ID:     "sess",
+		Events: []event.Event{newEventWithContent("origin")},
+	}
+	summary, err := s.Summarize(context.Background(), sess)
+	require.NoError(t, err)
+	assert.Equal(t, "FROM_CALLBACK", summary)
+}
+
+func TestSessionSummarizer_ModelCallbacks_After_OverridesResponse(t *testing.T) {
+	callbacks := model.NewCallbacks().RegisterAfterModel(
+		func(
+			ctx context.Context,
+			args *model.AfterModelArgs,
+		) (*model.AfterModelResult, error) {
+			return &model.AfterModelResult{
+				CustomResponse: &model.Response{
+					Done: true,
+					Choices: []model.Choice{{
+						Message: model.Message{Content: "OVERRIDE"},
+					}},
+				},
+			}, nil
+		},
+	)
+	s := NewSummarizer(
+		&staticResponseModel{content: "ORIG"},
+		WithModelCallbacks(callbacks),
+	)
+
+	sess := &session.Session{
+		ID:     "sess",
+		Events: []event.Event{newEventWithContent("origin")},
+	}
+	summary, err := s.Summarize(context.Background(), sess)
+	require.NoError(t, err)
+	assert.Equal(t, "OVERRIDE", summary)
+}
+
+func TestSessionSummarizer_ModelCallbacks_ContextPropagationToPostHook(t *testing.T) {
+	type ctxKey string
+	const key ctxKey = "after-model-key"
+
+	m := &staticResponseModel{content: "OK"}
+	var captured any
+
+	callbacks := model.NewCallbacks().RegisterAfterModel(
+		func(
+			ctx context.Context,
+			args *model.AfterModelArgs,
+		) (*model.AfterModelResult, error) {
+			return &model.AfterModelResult{
+				Context: context.WithValue(ctx, key, "value"),
+			}, nil
+		},
+	)
+
+	s := NewSummarizer(m,
+		WithModelCallbacks(callbacks),
+		WithPostSummaryHook(func(in *PostSummaryHookContext) error {
+			captured = in.Ctx.Value(key)
+			return nil
+		}),
+	)
+
+	sess := &session.Session{
+		ID:     "sess",
+		Events: []event.Event{newEventWithContent("origin")},
+	}
+	_, err := s.Summarize(context.Background(), sess)
+	require.NoError(t, err)
+	assert.Equal(t, "value", captured)
+}
+
+func TestSessionSummarizer_ModelCallbacks_Before_Error(t *testing.T) {
+	callbacks := model.NewCallbacks().RegisterBeforeModel(
+		func(
+			ctx context.Context,
+			args *model.BeforeModelArgs,
+		) (*model.BeforeModelResult, error) {
+			return nil, assert.AnError
+		},
+	)
+
+	s := NewSummarizer(
+		&staticResponseModel{content: "OK"},
+		WithModelCallbacks(callbacks),
+	)
+
+	sess := &session.Session{
+		ID:     "sess",
+		Events: []event.Event{newEventWithContent("origin")},
+	}
+	_, err := s.Summarize(context.Background(), sess)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "before model callback failed")
+}

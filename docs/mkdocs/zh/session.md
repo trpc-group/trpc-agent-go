@@ -253,6 +253,33 @@ summarizer := summary.NewSummarizer(
 - Pre-hook 主要修改 `ctx.Text`，也可调整 `ctx.Events`；Post-hook 可修改 `ctx.Summary`。
 - 默认忽略 Hook 错误，需中断时使用 `WithSummaryHookAbortOnError(true)`。
 
+#### 模型回调（Before/After Model）
+
+`summarizer` 在调用底层 `model.GenerateContent` 前后支持模型回调（structured 签名），可用于修改请求、短路返回自定义响应、或在摘要请求上做埋点。
+
+```go
+import (
+    "context"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/session/summary"
+)
+
+callbacks := model.NewCallbacks().
+    RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+        // 可修改 args.Request，也可以返回 CustomResponse 来跳过真实 model 调用
+        return nil, nil
+    }).
+    RegisterAfterModel(func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+        // 可通过 CustomResponse 覆盖模型输出
+        return nil, nil
+    })
+
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithModelCallbacks(callbacks),
+)
+```
+
 **上下文注入机制：**
 
 启用摘要后，框架会将摘要作为独立的系统消息插入到第一个现有系统消息之后，同时包含摘要时间点之后的所有增量事件，保证完整上下文：
