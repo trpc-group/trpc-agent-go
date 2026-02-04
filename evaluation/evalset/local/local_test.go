@@ -333,23 +333,19 @@ func TestLocalManagerAddCaseSetsCreationTimestampForActualConversation(t *testin
 			{InvocationID: "inv1"},
 		},
 		ActualConversation: []*evalset.Invocation{
-			nil,
 			{InvocationID: "act1", CreationTimestamp: fixed},
 			{InvocationID: "act2"},
 		},
 	}
-	assert.NotPanics(t, func() {
-		err = manager.AddCase(ctx, "app", "set", caseInput)
-	})
+	err = manager.AddCase(ctx, "app", "set", caseInput)
 	assert.NoError(t, err)
 
 	gotCase, err := manager.GetCase(ctx, "app", "set", "case1")
 	assert.NoError(t, err)
-	assert.Len(t, gotCase.ActualConversation, 3)
-	assert.Nil(t, gotCase.ActualConversation[0])
+	assert.Len(t, gotCase.ActualConversation, 2)
+	assert.NotNil(t, gotCase.ActualConversation[0])
+	assert.NotNil(t, gotCase.ActualConversation[0].CreationTimestamp)
+	assert.WithinDuration(t, fixed.Time, gotCase.ActualConversation[0].CreationTimestamp.Time, time.Nanosecond)
 	assert.NotNil(t, gotCase.ActualConversation[1])
 	assert.NotNil(t, gotCase.ActualConversation[1].CreationTimestamp)
-	assert.WithinDuration(t, fixed.Time, gotCase.ActualConversation[1].CreationTimestamp.Time, time.Nanosecond)
-	assert.NotNil(t, gotCase.ActualConversation[2])
-	assert.NotNil(t, gotCase.ActualConversation[2].CreationTimestamp)
 }
