@@ -220,8 +220,10 @@ func (e *AutoEvaluator) triggerAutoExtraction(
 				role = model.RoleAssistant
 			}
 
-			// Include speaker name in content for multi-party conversations.
-			content := fmt.Sprintf("[%s]: %s", turn.Speaker, turn.Text)
+			// Include session date and speaker in content.
+			// LoCoMo QA expects absolute dates; providing the raw session date here
+			// helps the extractor preserve/emit absolute dates rather than relative ones.
+			content := fmt.Sprintf("[SessionDate: %s][%s]: %s", convSession.SessionDate, turn.Speaker, turn.Text)
 
 			evt := event.Event{
 				ID:        fmt.Sprintf("%s-%d", convSession.SessionID, idx),
