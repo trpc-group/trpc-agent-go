@@ -112,22 +112,31 @@ const (
 // locomoExtractorPrompt is tuned for the LoCoMo benchmark.
 // The default memory extractor prompt is user-profile oriented; for LoCoMo we
 // need dense, queryable, factual memories (entities, dates, relations).
-const locomoExtractorPrompt = `You are a memory extraction engine for benchmark evaluation.
+const locomoExtractorPrompt = `You are a memory extraction engine for benchmark evaluation (LoCoMo).
 
-Goal: extract factual, queryable memories from multi-session conversations.
+Goal: extract factual, queryable memories from multi-session conversations so that downstream QA can answer questions by searching memories.
 
-Rules:
-- Extract concrete facts that can answer future questions: who/what/when/where/relations/preferences/attributes.
-- Preserve dates and times exactly when present (e.g., "7 May 2023", "the week before 9 June 2023").
+CRITICAL RULES:
+- DO NOT use relative time words like "yesterday", "last week", "two days ago", "next month".
+- Always write an ABSOLUTE DATE if possible. Use one of:
+  - the exact date text from the conversation (e.g., "7 May 2023"), or
+  - an ISO date "YYYY-MM-DD" when you can infer it from the session date.
+- Every memory must start with a date prefix in square brackets:
+  - Format: [DATE: <absolute-date-or-unknown>]
+  - Examples: [DATE: 2023-05-07] ... , [DATE: 7 May 2023] ... , [DATE: unknown] ...
+
+EXTRACTION RULES:
 - Prefer atomic memories: one fact per memory.
-- Include both parties' facts (not just "User").
-- If information is uncertain, do NOT guess.
+- Extract concrete facts that can answer future questions: who/what/when/where/relationships/preferences/attributes.
+- Include facts about BOTH speakers/people, not only the "User".
+- If information is uncertain or not stated, do NOT guess.
 - Avoid vague summaries like "They discussed their plans".
 - Avoid duplicates: update existing memories when the same fact is refined.
+- Aim for coverage: extract at least 3-8 atomic memories per session when possible.
 
-Output:
+OUTPUT:
 - Use the provided tools to add/update/delete memories.
-- Use short topics (1-3) like: person, event, date, location, preference.
+- Use short topics (1-3) such as: person, event, date, location, preference.
 `
 
 type memoryMode string
