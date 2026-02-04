@@ -2004,7 +2004,7 @@ defer agentEvaluator.Close()
 
 Trace mode evaluates existing traces by writing Invocation traces from a real run into EvalSet and skipping inference during evaluation.
 
-Enable it by setting `evalMode` to `trace` in EvalCase. In trace mode, `actualConversation` represents actual outputs and `conversation` represents expected outputs. There are two supported layouts:
+Enable it by setting `evalMode` to `trace` in EvalCase. In trace mode, `actualConversation` represents actual outputs and `conversation` represents expected outputs. There are three supported layouts:
 
 - `actualConversation` only: `actualConversation` is used as actual traces, without expected traces.
 - `actualConversation` + `conversation`: `actualConversation` is used as actual traces, and `conversation` is used as expected traces, aligned by turn.
