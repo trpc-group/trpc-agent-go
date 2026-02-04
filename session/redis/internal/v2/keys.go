@@ -117,3 +117,43 @@ func GetSessionSummaryKey(userPrefix string, key session.Key) string {
 	}
 	return fmt.Sprintf("%s:sesssum:{%s:%s}:%s", prefix, key.AppName, key.UserID, key.SessionID)
 }
+
+// GetSessionMetaKey returns the Redis key for V2 session metadata (for external use/testing).
+// Format: [userPrefix:]v2:meta:{appName:userID}:sessionID
+func GetSessionMetaKey(userPrefix string, key session.Key) string {
+	prefix := v2VersionPrefix
+	if userPrefix != "" {
+		prefix = userPrefix + ":" + v2VersionPrefix
+	}
+	return fmt.Sprintf("%s:meta:{%s:%s}:%s", prefix, key.AppName, key.UserID, key.SessionID)
+}
+
+// GetEventDataKey returns the Redis key for V2 event data (for external use/testing).
+// Format: [userPrefix:]v2:evtdata:{appName:userID}:sessionID
+func GetEventDataKey(userPrefix string, key session.Key) string {
+	prefix := v2VersionPrefix
+	if userPrefix != "" {
+		prefix = userPrefix + ":" + v2VersionPrefix
+	}
+	return fmt.Sprintf("%s:evtdata:{%s:%s}:%s", prefix, key.AppName, key.UserID, key.SessionID)
+}
+
+// GetEventTimeIndexKey returns the Redis key for V2 event time index (for external use/testing).
+// Format: [userPrefix:]v2:evtidx:time:{appName:userID}:sessionID
+func GetEventTimeIndexKey(userPrefix string, key session.Key) string {
+	prefix := v2VersionPrefix
+	if userPrefix != "" {
+		prefix = userPrefix + ":" + v2VersionPrefix
+	}
+	return fmt.Sprintf("%s:evtidx:time:{%s:%s}:%s", prefix, key.AppName, key.UserID, key.SessionID)
+}
+
+// GetUserStateKey returns the Redis key for V2 user state (for external use/testing).
+// Format: [userPrefix:]v2:userstate:{appName:userID}
+func GetUserStateKey(userPrefix string, appName, userID string) string {
+	prefix := v2VersionPrefix
+	if userPrefix != "" {
+		prefix = userPrefix + ":" + v2VersionPrefix
+	}
+	return fmt.Sprintf("%s:userstate:{%s:%s}", prefix, appName, userID)
+}

@@ -245,9 +245,12 @@ func WithCompatMode(mode CompatMode) ServiceOpt {
 	}
 }
 
-// WithKeyPrefix sets the key prefix for V1 keys.
-// This is used to find existing V1 data when legacy support is enabled.
-// V2 keys always use the "v2:" prefix and are not affected by this setting.
+// WithKeyPrefix sets the key prefix for all Redis keys.
+// Both V1 and V2 keys will use this prefix:
+//   - V1: prefix:sess:{app}:user, prefix:event:{app}:user:sess, etc.
+//   - V2: prefix:v2:meta:{app:user}:sess, prefix:v2:evtdata:{app:user}:sess, etc.
+//
+// This is typically used to namespace keys when multiple applications share the same Redis instance.
 func WithKeyPrefix(prefix string) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.keyPrefix = prefix

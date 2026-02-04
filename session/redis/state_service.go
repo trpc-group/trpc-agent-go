@@ -125,20 +125,28 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 		}
 	}
 
-	// Strategy: Check V2 Exists -> V2 Update. Else -> V1 Update.
-
-	// Check V2 Exists
-	v2Exists, err := s.v2Client.Exists(ctx, key)
+	// Check session existence in V1 and V2
+	v1Exists, v2Exists, err := s.checkSessionExists(ctx, key)
 	if err != nil {
 		return fmt.Errorf("check session existence failed: %w", err)
 	}
 
+	// DualWrite mode: update both V1 and V2 if both exist
+	if s.needDualWrite() && v1Exists && v2Exists {
+		if err := s.v2Client.UpdateSessionState(ctx, key, state); err != nil {
+			return fmt.Errorf("update session state in V2 failed: %w", err)
+		}
+		if err := s.v1Client.UpdateSessionState(ctx, key, state); err != nil {
+			return fmt.Errorf("dual-write session state to V1 failed: %w", err)
+		}
+		return nil
+	}
+
+	// Non-DualWrite or only one side exists: update the existing one
 	if v2Exists {
 		return s.v2Client.UpdateSessionState(ctx, key, state)
 	}
-
-	if s.legacyEnabled() {
-		// V1 UpdateSessionState checks existence internally.
+	if s.legacyEnabled() && v1Exists {
 		return s.v1Client.UpdateSessionState(ctx, key, state)
 	}
 
