@@ -300,3 +300,7 @@ func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
 }
+
+func TestClose_NoError(t *testing.T) {
+	assert.NoError(t, New().Close())
+}

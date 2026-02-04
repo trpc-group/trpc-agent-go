@@ -315,3 +315,7 @@ func TestLocalManagerEmptyInputs(t *testing.T) {
 	err = manager.DeleteCase(ctx, "app", "set", "")
 	assert.Error(t, err)
 }
+
+func TestClose_NoError(t *testing.T) {
+	assert.NoError(t, New().Close())
+}

@@ -245,3 +245,7 @@ func TestManagerValidationAndErrors(t *testing.T) {
 	_, err = newMgr.GetCase(ctx, "phantom", "set", "case")
 	assert.Error(t, err)
 }
+
+func TestClose_NoError(t *testing.T) {
+	assert.NoError(t, New().Close())
+}
