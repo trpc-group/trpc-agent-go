@@ -12,6 +12,7 @@ package mysql
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,6 +29,39 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/mysql"
 )
+
+type evalCasePayloadMatcher struct {
+	t *testing.T
+}
+
+func (m evalCasePayloadMatcher) Match(v driver.Value) bool {
+	var payload []byte
+	switch typed := v.(type) {
+	case []byte:
+		payload = typed
+	case string:
+		payload = []byte(typed)
+	default:
+		return false
+	}
+	var c evalset.EvalCase
+	if err := json.Unmarshal(payload, &c); err != nil {
+		return false
+	}
+	if c.EvalID != "case" {
+		return false
+	}
+	if c.CreationTimestamp == nil {
+		return false
+	}
+	if len(c.Conversation) != 1 || c.Conversation[0] == nil || c.Conversation[0].CreationTimestamp == nil {
+		return false
+	}
+	if len(c.ActualConversation) != 1 || c.ActualConversation[0] == nil || c.ActualConversation[0].CreationTimestamp == nil {
+		return false
+	}
+	return true
+}
 
 func newEvalSetManager(t *testing.T) (*manager, *sql.DB, sqlmock.Sqlmock) {
 	t.Helper()
@@ -466,6 +500,38 @@ func TestGetCase_NotFoundAndBadJSON(t *testing.T) {
 
 	_, err = m.GetCase(ctx, "app", "set", "bad")
 	assert.Error(t, err)
+
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestAddCase_SetsCreationTimestampForActualConversation(t *testing.T) {
+	ctx := context.Background()
+	m, db, mock := newEvalSetManager(t)
+	t.Cleanup(func() { _ = db.Close() })
+
+	existsSQL := fmt.Sprintf("SELECT 1 FROM %s WHERE app_name = ? AND eval_set_id = ?", m.tables.EvalSets)
+	mock.ExpectQuery(regexp.QuoteMeta(existsSQL)).
+		WithArgs("app", "set").
+		WillReturnRows(sqlmock.NewRows([]string{"1"}).AddRow(1))
+
+	addSQL := fmt.Sprintf(
+		"INSERT INTO %s (app_name, eval_set_id, eval_id, eval_mode, eval_case) VALUES (?, ?, ?, ?, ?)",
+		m.tables.EvalCases,
+	)
+	mock.ExpectExec(regexp.QuoteMeta(addSQL)).
+		WithArgs("app", "set", "case", "", evalCasePayloadMatcher{t: t}).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	err := m.AddCase(ctx, "app", "set", &evalset.EvalCase{
+		EvalID: "case",
+		Conversation: []*evalset.Invocation{
+			{InvocationID: "conv"},
+		},
+		ActualConversation: []*evalset.Invocation{
+			{InvocationID: "actual"},
+		},
+	})
+	assert.NoError(t, err)
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

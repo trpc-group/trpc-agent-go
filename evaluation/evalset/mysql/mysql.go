@@ -288,6 +288,14 @@ func (m *manager) AddCase(ctx context.Context, appName, evalSetID string, evalCa
 			invocation.CreationTimestamp = &epochtime.EpochTime{Time: now}
 		}
 	}
+	for _, invocation := range cloned.ActualConversation {
+		if invocation == nil {
+			continue
+		}
+		if invocation.CreationTimestamp == nil {
+			invocation.CreationTimestamp = &epochtime.EpochTime{Time: now}
+		}
+	}
 	payload, err := json.Marshal(cloned)
 	if err != nil {
 		return fmt.Errorf("marshal evalcase: %w", err)
