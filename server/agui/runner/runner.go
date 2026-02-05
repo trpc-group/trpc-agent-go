@@ -29,6 +29,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	trunner "trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/multimodal"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/track"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -120,6 +121,7 @@ type runInput struct {
 	userID         string
 	inputMessage   *model.Message
 	inputMessageID string
+	userMessage    *types.Message
 	runOption      []agent.RunOption
 	translator     translator.Translator
 	enableTrack    bool
@@ -135,30 +137,49 @@ type resumeInfo struct {
 	resumeValue  any
 }
 
-func inputMessageFromRunAgentInput(input *adapter.RunAgentInput) (*model.Message, string, error) {
+func inputMessageFromRunAgentInput(input *adapter.RunAgentInput) (*model.Message, string, *types.Message, error) {
 	if len(input.Messages) == 0 {
-		return nil, "", errors.New("no messages provided")
+		return nil, "", nil, errors.New("no messages provided")
 	}
 	lastMessage := input.Messages[len(input.Messages)-1]
 	if lastMessage.Role != types.RoleUser && lastMessage.Role != types.RoleTool {
-		return nil, "", errors.New("last message role must be user or tool")
+		return nil, "", nil, errors.New("last message role must be user or tool")
 	}
-	if lastMessage.Role == types.RoleTool && lastMessage.ToolCallID == "" {
-		return nil, "", errors.New("tool message missing tool call id")
-	}
-	content, ok := lastMessage.ContentString()
-	if !ok {
-		return nil, "", errors.New("last message content is not a string")
-	}
-	inputMessage := model.Message{Content: content}
 	if lastMessage.Role == types.RoleTool {
-		inputMessage.Role = model.RoleTool
-		inputMessage.ToolID = lastMessage.ToolCallID
-		inputMessage.ToolName = lastMessage.Name
-	} else {
-		inputMessage.Role = model.RoleUser
+		if lastMessage.ToolCallID == "" {
+			return nil, "", nil, errors.New("tool message missing tool call id")
+		}
+		content, ok := lastMessage.ContentString()
+		if !ok {
+			return nil, "", nil, errors.New("last message content is not a string")
+		}
+		inputMessage := model.Message{
+			Role:     model.RoleTool,
+			Content:  content,
+			ToolID:   lastMessage.ToolCallID,
+			ToolName: lastMessage.Name,
+		}
+		return &inputMessage, lastMessage.ID, nil, nil
 	}
-	return &inputMessage, lastMessage.ID, nil
+	if content, ok := lastMessage.ContentString(); ok {
+		inputMessage := model.Message{
+			Role:    model.RoleUser,
+			Content: content,
+		}
+		userMessage := lastMessage
+		return &inputMessage, lastMessage.ID, &userMessage, nil
+	}
+	contents, ok := lastMessage.ContentInputContents()
+	if !ok {
+		return nil, "", nil, errors.New("last message content is not a string")
+	}
+	inputMessage, err := multimodal.UserMessageFromInputContents(contents)
+	if err != nil {
+		return nil, "", nil, fmt.Errorf("parse user message input contents: %w", err)
+	}
+	userMessage := lastMessage
+	userMessage.Content = contents
+	return &inputMessage, lastMessage.ID, &userMessage, nil
 }
 
 // Run starts processing one AG-UI run request and returns a channel of AG-UI events.
@@ -175,7 +196,7 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 	}
 	threadID := runAgentInput.ThreadID
 	runID := runAgentInput.RunID
-	inputMessage, inputMessageID, err := inputMessageFromRunAgentInput(runAgentInput)
+	inputMessage, inputMessageID, userMessage, err := inputMessageFromRunAgentInput(runAgentInput)
 	if err != nil {
 		return nil, fmt.Errorf("build input message: %w", err)
 	}
@@ -220,6 +241,7 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 		userID:         userID,
 		inputMessage:   inputMessage,
 		inputMessageID: inputMessageID,
+		userMessage:    userMessage,
 		runOption:      runOption,
 		translator:     trans,
 		enableTrack:    r.tracker != nil,
@@ -258,7 +280,7 @@ func (r *runner) run(ctx context.Context, cancel context.CancelFunc, key session
 			}
 		}()
 		if input.inputMessage.Role == model.RoleUser {
-			if err := r.recordUserMessage(ctx, input.key, input.inputMessage); err != nil {
+			if err := r.recordUserMessage(ctx, input.key, input.userMessage); err != nil {
 				log.WarnfContext(
 					ctx,
 					"agui run: threadID: %s, runID: %s, record input "+
@@ -565,18 +587,23 @@ func (r *runner) emitEvent(ctx context.Context, events chan<- aguievents.Event, 
 	}
 }
 
-func (r *runner) recordUserMessage(ctx context.Context, key session.Key, message *model.Message) error {
-	messageID := uuid.New().String()
-	start := aguievents.NewTextMessageStartEvent(messageID, aguievents.WithRole(string(model.RoleUser)))
-	events := []aguievents.Event{start}
-	if message.Content != "" {
-		events = append(events, aguievents.NewTextMessageContentEvent(messageID, message.Content))
+func (r *runner) recordUserMessage(ctx context.Context, key session.Key, message *types.Message) error {
+	if message == nil {
+		return errors.New("user message is nil")
 	}
-	events = append(events, aguievents.NewTextMessageEndEvent(messageID))
-	for _, evt := range events {
-		if err := r.recordTrackEvent(ctx, key, evt); err != nil {
-			return fmt.Errorf("record track event: %w", err)
-		}
+	if message.Role != types.RoleUser {
+		return fmt.Errorf("user message role must be user: %s", message.Role)
+	}
+	userMessage := *message
+	if userMessage.ID == "" {
+		userMessage.ID = uuid.NewString()
+	}
+	if userMessage.Name == "" {
+		userMessage.Name = key.UserID
+	}
+	evt := aguievents.NewCustomEvent(multimodal.CustomEventNameUserMessage, aguievents.WithValue(userMessage))
+	if err := r.recordTrackEvent(ctx, key, evt); err != nil {
+		return fmt.Errorf("record track event: %w", err)
 	}
 	return nil
 }
