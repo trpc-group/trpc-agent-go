@@ -47,10 +47,31 @@ RAG content is controlled by `-rag-mode`.
 
 Supported `-rag-mode` values:
 
-- **full**: Full dialog per session.
-- **observation**: Session observations.
-- **summary**: Session summaries.
-- **auto_extract**: Simulated auto extraction per session.
+- **full**: Stores the full dialog turns per session as one memory.
+- **observation**: Stores the dataset-provided session observation text.
+- **summary**: Stores the dataset-provided session summary text.
+- **fallback**: Uses `observation`, then `summary`, then `full` as a fallback chain.
+
+Data sources for `observation` and `summary` come directly from the LoCoMo
+JSON files.
+
+```text
+RAG memory construction (rag_memory scenario)
+
+  observation  summary  full dialog turns
+      |          |           |
+      |          |           |
+      +----------+-----------+
+                 |
+                 v
+            memory store
+                 |
+                 v
+           Top-K retrieval
+                 |
+                 v
+            LLM answer
+```
 
 ```bash
 # Observation-based RAG (inmemory backend).
@@ -61,6 +82,9 @@ go run main.go -scenario rag_memory -rag-mode summary
 
 # Full dialog RAG (inmemory backend).
 go run main.go -scenario rag_memory -rag-mode full
+
+# Fallback RAG (observation -> summary -> full).
+go run main.go -scenario rag_memory -rag-mode fallback
 
 # RAG with pgvector backend (requires PostgreSQL with pgvector).
 export PGVECTOR_DSN="postgres://user:password@localhost:5432/memory_eval\
@@ -117,7 +141,7 @@ go run main.go -scenario all -memory-backend inmemory,pgvector
 | `-data-file`      | locomo_sample.json     | Dataset file name                            |
 | `-output`         | ../results             | Output directory                             |
 | `-scenario`       | long_context           | Evaluation scenario                          |
-| `-rag-mode`       | observation            | RAG retrieval mode (rag_memory scenario only)|
+| `-rag-mode`       | observation            | RAG mode (rag_memory scenario only)          |
 | `-memory-backend` | inmemory               | Memory backend: inmemory, pgvector           |
 | `-pgvector-dsn`   | (env)                  | PostgreSQL DSN for pgvector                  |
 | `-embed-model`    | text-embedding-3-small | Embedding model for pgvector                 |

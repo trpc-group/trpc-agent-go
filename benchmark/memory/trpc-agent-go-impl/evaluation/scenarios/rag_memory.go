@@ -99,8 +99,8 @@ func (e *RAGMemoryEvaluator) populateMemories(
 		return e.populateObservations(ctx, userKey, sample)
 	case RAGModeSummary:
 		return e.populateSummaries(ctx, userKey, sample)
-	case RAGModeAutoExtract:
-		return e.populateAutoExtract(ctx, userKey, sample)
+	case RAGModeFallback:
+		return e.populateFallback(ctx, userKey, sample)
 	default:
 		// Full mode: store all dialog turns.
 		return e.populateFullDialog(ctx, userKey, sample)
@@ -166,13 +166,12 @@ func (e *RAGMemoryEvaluator) populateFullDialog(
 	return nil
 }
 
-func (e *RAGMemoryEvaluator) populateAutoExtract(
+func (e *RAGMemoryEvaluator) populateFallback(
 	ctx context.Context,
 	userKey memory.UserKey,
 	sample *dataset.LoCoMoSample,
 ) error {
-	// For auto-extract mode, we simulate what the extractor would produce.
-	// This extracts key facts from each session.
+	// Fallback mode uses observation, summary, or full dialog content.
 	for _, sess := range sample.Conversation {
 		// Use observation if available, otherwise use summary.
 		content := sess.Observation
@@ -188,9 +187,9 @@ func (e *RAGMemoryEvaluator) populateAutoExtract(
 		if content == "" {
 			continue
 		}
-		topics := []string{"session:" + sess.SessionID, "auto_extracted"}
+		topics := []string{"session:" + sess.SessionID, "fallback"}
 		if err := e.memoryService.AddMemory(ctx, userKey, content, topics); err != nil {
-			return fmt.Errorf("add extracted memory for session %s: %w", sess.SessionID, err)
+			return fmt.Errorf("add fallback memory for session %s: %w", sess.SessionID, err)
 		}
 	}
 	return nil

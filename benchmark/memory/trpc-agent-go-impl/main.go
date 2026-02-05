@@ -65,7 +65,7 @@ var (
 	flagRAGMode = flag.String(
 		"rag-mode",
 		"observation",
-		"RAG mode: full, observation, summary, auto_extract",
+		"RAG mode: full, observation, summary, fallback",
 	)
 	flagTopK = flag.Int("top-k", 5, "Top-K memories for RAG retrieval")
 
@@ -430,10 +430,10 @@ func validateFlags() {
 	}
 
 	validRAGModes := map[string]bool{
-		"full":         true,
-		"observation":  true,
-		"summary":      true,
-		"auto_extract": true,
+		"full":        true,
+		"observation": true,
+		"summary":     true,
+		"fallback":    true,
 	}
 	if !validRAGModes[*flagRAGMode] {
 		log.Fatalf("Invalid RAG mode: %s", *flagRAGMode)

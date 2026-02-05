@@ -40,7 +40,7 @@ const (
 	RAGModeFull        RAGMode = "full"
 	RAGModeObservation RAGMode = "observation"
 	RAGModeSummary     RAGMode = "summary"
-	RAGModeAutoExtract RAGMode = "auto_extract"
+	RAGModeFallback    RAGMode = "fallback"
 )
 
 // Config holds scenario evaluation configuration.

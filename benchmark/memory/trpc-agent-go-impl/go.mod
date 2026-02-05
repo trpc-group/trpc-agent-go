@@ -8,8 +8,8 @@ replace (
 )
 
 require (
-	trpc.group/trpc-go/trpc-agent-go v1.2.0
-	trpc.group/trpc-go/trpc-agent-go/memory/pgvector v0.0.0
+	trpc.group/trpc-go/trpc-agent-go v1.5.0
+	trpc.group/trpc-go/trpc-agent-go/memory/pgvector v1.5.0
 )
 
 require (
