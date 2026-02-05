@@ -44,7 +44,12 @@ const (
 var (
 	modelName = flag.String("model", defaultModelName,
 		"Name of the model to use")
-	verbose = flag.Bool("verbose", false, "Enable verbose event logging")
+	verbose                    = flag.Bool("verbose", false, "Enable verbose event logging")
+	convertForeignToolMessages = flag.Bool(
+		"convert_foreign_tool_messages",
+		false,
+		"Convert tool calls/responses from other nodes into plain text before calling the model (provider compatibility)",
+	)
 )
 
 func main() {
@@ -52,6 +57,9 @@ func main() {
 	flag.Parse()
 	fmt.Printf("🚀 Document Processing Workflow Example\n")
 	fmt.Printf("Model: %s\n", *modelName)
+	if *convertForeignToolMessages {
+		fmt.Printf("Provider compatibility: convert foreign tool messages enabled\n")
+	}
 	fmt.Println(strings.Repeat("=", 50))
 	// Create and run the workflow.
 	workflow := &documentWorkflow{
@@ -162,6 +170,10 @@ func (w *documentWorkflow) createDocumentProcessingGraph() (*graph.Graph, error)
 	tools := map[string]tool.Tool{
 		"analyze_complexity": complexityTool,
 	}
+	var llmCompatOpts []graph.Option
+	if *convertForeignToolMessages {
+		llmCompatOpts = append(llmCompatOpts, graph.WithConvertForeignToolMessages(true))
+	}
 
 	// Build the workflow graph.
 	stateGraph.
@@ -197,7 +209,7 @@ Focus on:
 4. Conclusions and implications
 Provide a well-structured summary that preserves the essential information.
 Remember: only output the final result itself, no other text.`,
-			map[string]tool.Tool{}).
+			map[string]tool.Tool{}, llmCompatOpts...).
 
 		// Add LLM enhancer for low-quality content.
 		AddLLMNode("enhance", modelInstance,
@@ -208,7 +220,7 @@ Remember: only output the final result itself, no other text.`,
 4. Ensuring consistency and coherence
 Focus on making the content more engaging and professional while preserving the original meaning.
 Remember: only output the final result itself, no other text.`,
-			map[string]tool.Tool{}).
+			map[string]tool.Tool{}, llmCompatOpts...).
 
 		// Add final formatting.
 		AddNode("format_output", w.formatOutput).
