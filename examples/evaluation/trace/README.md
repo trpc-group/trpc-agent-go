@@ -1,8 +1,13 @@
 # Trace Evaluation Example
 
-This example evaluates a pre-recorded execution trace without re-running the agent. Each `evalCase` sets `evalMode` to `"trace"`, which tells the evaluation service to treat `conversation` as the actual output trace (user prompts, final responses, tool calls, etc.) and skip the runner inference phase.
+This example evaluates a pre-recorded execution trace without re-running the agent. Each `evalCase` sets `evalMode` to `"trace"`, which tells the evaluation service to skip the runner inference phase and use `actualConversation` as the actual trace.
 
-Because trace mode does not provide reference answers, you should use metrics that do not depend on expected outputs. This example uses `llm_rubric_response`.
+In this sample EvalSet, `actualConversation` contains the recorded trace (user prompts, tool calls, and final responses). `conversation` provides expected outputs (optional) and is used here as the reference trace for tool-trajectory evaluation.
+
+This example runs two metrics:
+
+- `tool_trajectory_avg_score` compares tool calls in `actualConversation` against `conversation`.
+- `llm_rubric_response` judges the final answer quality from the actual trace and does not require expected outputs.
 
 The sample trace includes tool calls under `tools`, including the tool call ID, tool name, input arguments, and execution result.
 
@@ -46,7 +51,7 @@ go run . \
 data/
 └── trace-eval-app/
     ├── trace-basic.evalset.json    # EvalSet with trace-mode cases
-    └── trace-basic.metrics.json    # llm_rubric_response metric
+    └── trace-basic.metrics.json    # tool_trajectory_avg_score + llm_rubric_response metrics
 ```
 
 ## Output

@@ -34,6 +34,8 @@ type EvalCase struct {
 	ContextMessages []*model.Message `json:"contextMessages,omitempty"`
 	// Conversation contains the sequence of invocations.
 	Conversation []*Invocation `json:"conversation,omitempty"`
+	// ActualConversation contains the actual invocations aligned by turn for evaluation.
+	ActualConversation []*Invocation `json:"actualConversation,omitempty"`
 	// SessionInput contains initialization data for the session.
 	SessionInput *SessionInput `json:"sessionInput,omitempty"`
 	// CreationTimestamp when this eval case was created.

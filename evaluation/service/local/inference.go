@@ -250,14 +250,45 @@ func (s *local) inferenceEvalCase(ctx context.Context, req *service.InferenceReq
 		err = fmt.Errorf("inference eval case (evalCaseID=%s, sessionID=%s): session input is nil", evalCase.EvalID, sessionID)
 		return newFailedInferenceResult(result, err)
 	}
-	if len(evalCase.Conversation) == 0 {
-		err = fmt.Errorf("inference eval case (evalCaseID=%s, sessionID=%s): invocations are empty", evalCase.EvalID, sessionID)
+	if len(evalCase.ActualConversation) != 0 && evalCase.EvalMode != evalset.EvalModeTrace {
+		err = fmt.Errorf("inference eval case (evalCaseID=%s, sessionID=%s): actualConversation is only supported in trace mode",
+			evalCase.EvalID, sessionID)
 		return newFailedInferenceResult(result, err)
 	}
 	if evalCase.EvalMode == evalset.EvalModeTrace {
+		if len(evalCase.ActualConversation) != 0 {
+			if len(evalCase.Conversation) != 0 && len(evalCase.ActualConversation) != len(evalCase.Conversation) {
+				err = fmt.Errorf("inference eval case (evalCaseID=%s, sessionID=%s): actual conversation length %d does not match conversation length %d",
+					evalCase.EvalID, sessionID, len(evalCase.ActualConversation), len(evalCase.Conversation))
+				return newFailedInferenceResult(result, err)
+			}
+			for i, invocation := range evalCase.ActualConversation {
+				if invocation == nil {
+					err = fmt.Errorf("inference eval case (evalCaseID=%s, sessionID=%s): actual invocation is nil at index %d",
+						evalCase.EvalID, sessionID, i)
+					return newFailedInferenceResult(result, err)
+				}
+				if invocation.UserContent == nil {
+					err = fmt.Errorf("inference eval case (evalCaseID=%s, sessionID=%s): actual invocation user content is nil at index %d",
+						evalCase.EvalID, sessionID, i)
+					return newFailedInferenceResult(result, err)
+				}
+			}
+			result.Inferences = evalCase.ActualConversation
+			result.Status = status.EvalStatusPassed
+			return result
+		}
+		if len(evalCase.Conversation) == 0 {
+			err = fmt.Errorf("inference eval case (evalCaseID=%s, sessionID=%s): invocations are empty", evalCase.EvalID, sessionID)
+			return newFailedInferenceResult(result, err)
+		}
 		result.Inferences = evalCase.Conversation
 		result.Status = status.EvalStatusPassed
 		return result
+	}
+	if len(evalCase.Conversation) == 0 {
+		err = fmt.Errorf("inference eval case (evalCaseID=%s, sessionID=%s): invocations are empty", evalCase.EvalID, sessionID)
+		return newFailedInferenceResult(result, err)
 	}
 	inferences, err := inference.Inference(
 		ctx,
