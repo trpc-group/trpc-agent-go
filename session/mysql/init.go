@@ -136,15 +136,17 @@ const (
 		CREATE INDEX {{INDEX_NAME}}
 		ON {{TABLE_NAME}}(expires_at)`
 
+	// mysqlVarCharIndexPrefixLen is a safe prefix length for utf8mb4 indexes.
+	mysqlVarCharIndexPrefixLen = 191
+
 	// session_summaries: unique index on (app_name, user_id, session_id, filter_key).
 	// Note: This index does NOT include deleted_at because MySQL treats NULL != NULL,
 	// which would allow duplicate active records. To ensure uniqueness, we exclude
 	// deleted_at from the unique index. On subsequent writes, deleted_at is reset to
 	// NULL (via ON DUPLICATE KEY UPDATE), effectively "reviving" the record instead
 	// of preserving deleted historical versions.
-	sqlCreateSessionSummariesUniqueIndex = `
-		CREATE UNIQUE INDEX {{INDEX_NAME}}
-		ON {{TABLE_NAME}}(app_name, user_id, session_id, filter_key)`
+	//
+	// Note: We use prefix indexes to avoid Error 1071 (max key length is 3072 bytes).
 
 	// session_summaries: TTL index on (expires_at)
 	sqlCreateSessionSummariesExpiresIndex = `
@@ -170,6 +172,16 @@ const (
 	sqlCreateUserStatesExpiresIndex = `
 		CREATE INDEX {{INDEX_NAME}}
 		ON {{TABLE_NAME}}(expires_at)`
+)
+
+var sqlCreateSessionSummariesUniqueIndex = fmt.Sprintf(
+	`
+		CREATE UNIQUE INDEX {{INDEX_NAME}}
+		ON {{TABLE_NAME}}(app_name(%d), user_id(%d), session_id(%d), filter_key(%d))`,
+	mysqlVarCharIndexPrefixLen,
+	mysqlVarCharIndexPrefixLen,
+	mysqlVarCharIndexPrefixLen,
+	mysqlVarCharIndexPrefixLen,
 )
 
 // tableDefinition defines a table with its SQL template
