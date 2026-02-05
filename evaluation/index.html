@@ -2120,6 +2120,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#evalcase-level-parallel-evaluation" class="md-nav__link">
+    <span class="md-ellipsis">
+      EvalCase-Level Parallel Evaluation
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#context-injection" class="md-nav__link">
     <span class="md-ellipsis">
       Context Injection
@@ -3026,6 +3035,15 @@
   <a href="#evalcase-level-parallel-inference" class="md-nav__link">
     <span class="md-ellipsis">
       EvalCase-Level Parallel Inference
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#evalcase-level-parallel-evaluation" class="md-nav__link">
+    <span class="md-ellipsis">
+      EvalCase-Level Parallel Evaluation
     </span>
   </a>
   
@@ -6428,7 +6446,8 @@
 <li><code>return result, nil</code>: update <code>ctx</code> to <code>result.Context</code> and use it for subsequent callbacks and later stages.</li>
 <li><code>return nil, err</code>: stop at the current callback point and return the error.</li>
 </ul>
-<p>When parallel inference is enabled via <code>evaluation.WithEvalCaseParallelInferenceEnabled(true)</code>, case-level callbacks may run concurrently. Because <code>args.Request</code> points to the same <code>*InferenceRequest</code>, treat it as read-only. If you need to modify the request, do it in a set-level callback.</p>
+<p>When parallel inference is enabled via <code>evaluation.WithEvalCaseParallelInferenceEnabled(true)</code>, inference case-level callbacks may run concurrently. Because <code>args.Request</code> points to the same <code>*InferenceRequest</code>, treat it as read-only. If you need to modify the request, do it in a set-level callback.</p>
+<p>When parallel evaluation is enabled via <code>evaluation.WithEvalCaseParallelEvaluationEnabled(true)</code>, evaluation case-level callbacks may also run concurrently. Because <code>args.Request</code> points to the same <code>*EvaluateRequest</code>, treat it as read-only. If you need to modify the request, do it in a set-level callback.</p>
 <p>A single EvalCase inference or evaluation failure usually does not return through <code>error</code>. It is written into <code>Result.Status</code> and <code>Result.ErrorMessage</code>. Therefore, <code>After*CaseArgs.Error</code> does not carry per-case failure reasons. Check <code>args.Result.Status</code> and <code>args.Result.ErrorMessage</code> to detect failures.</p>
 <h3 id="evalcase-level-parallel-inference">EvalCase-Level Parallel Inference</h3>
 <p>When an evaluation set has many cases, inference is often the dominant cost. The framework supports EvalCase-level parallel inference to reduce overall duration.</p>
@@ -6451,64 +6470,84 @@
 </span></code></pre></div></td></tr></table></div>
 <p>Parallel inference only affects inference across different cases. Turns within a single case still run sequentially, and evaluation still processes cases in order.</p>
 <p>After enabling concurrency, ensure that Runner, tool implementations, external dependencies, and callback logic are safe for concurrent calls to avoid interference from shared mutable state.</p>
+<h3 id="evalcase-level-parallel-evaluation">EvalCase-Level Parallel Evaluation</h3>
+<p>When evaluators are slow, such as LLM judges, the evaluation phase can become the bottleneck. The framework supports EvalCase-level parallel evaluation to reduce overall duration.</p>
+<p>Enable parallel evaluation when creating AgentEvaluator and set the maximum parallelism. If not set, the default is <code>runtime.GOMAXPROCS(0)</code>.</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-58-1">1</a></span>
+<span class="normal"><a href="#__codelineno-58-2">2</a></span>
+<span class="normal"><a href="#__codelineno-58-3">3</a></span>
+<span class="normal"><a href="#__codelineno-58-4">4</a></span>
+<span class="normal"><a href="#__codelineno-58-5">5</a></span>
+<span class="normal"><a href="#__codelineno-58-6">6</a></span>
+<span class="normal"><a href="#__codelineno-58-7">7</a></span>
+<span class="normal"><a href="#__codelineno-58-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-58-1"><a id="__codelineno-58-1" name="__codelineno-58-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation&quot;</span>
+</span><span id="__span-58-2"><a id="__codelineno-58-2" name="__codelineno-58-2"></a>
+</span><span id="__span-58-3"><a id="__codelineno-58-3" name="__codelineno-58-3"></a><span class="nx">agentEvaluator</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-58-4"><a id="__codelineno-58-4" name="__codelineno-58-4"></a><span class="w">    </span><span class="nx">appName</span><span class="p">,</span>
+</span><span id="__span-58-5"><a id="__codelineno-58-5" name="__codelineno-58-5"></a><span class="w">    </span><span class="nx">runner</span><span class="p">,</span>
+</span><span id="__span-58-6"><a id="__codelineno-58-6" name="__codelineno-58-6"></a><span class="w">    </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithEvalCaseParallelEvaluationEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-58-7"><a id="__codelineno-58-7" name="__codelineno-58-7"></a><span class="w">    </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithEvalCaseParallelism</span><span class="p">(</span><span class="mi">8</span><span class="p">),</span>
+</span><span id="__span-58-8"><a id="__codelineno-58-8" name="__codelineno-58-8"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>Parallel evaluation only affects evaluation across different cases. Turns within a case are still sequential, and evaluators are executed in metric order. The returned <code>EvalCaseResults</code> preserve the order of the input <code>InferenceResults</code>.</p>
 <h3 id="context-injection">Context Injection</h3>
 <p><code>contextMessages</code> provides additional context messages for an EvalCase. It is commonly used to supply background information, role setup, or examples. It is also suitable for pure model evaluation scenarios, where a system prompt is configured per case to compare different model and prompt combinations.</p>
 <p>Context injection example:</p>
-<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-58-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-58-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-58-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-58-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-58-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-58-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-58-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-58-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-58-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-58-10">10</a></span>
-<span class="normal"><a href="#__codelineno-58-11">11</a></span>
-<span class="normal"><a href="#__codelineno-58-12">12</a></span>
-<span class="normal"><a href="#__codelineno-58-13">13</a></span>
-<span class="normal"><a href="#__codelineno-58-14">14</a></span>
-<span class="normal"><a href="#__codelineno-58-15">15</a></span>
-<span class="normal"><a href="#__codelineno-58-16">16</a></span>
-<span class="normal"><a href="#__codelineno-58-17">17</a></span>
-<span class="normal"><a href="#__codelineno-58-18">18</a></span>
-<span class="normal"><a href="#__codelineno-58-19">19</a></span>
-<span class="normal"><a href="#__codelineno-58-20">20</a></span>
-<span class="normal"><a href="#__codelineno-58-21">21</a></span>
-<span class="normal"><a href="#__codelineno-58-22">22</a></span>
-<span class="normal"><a href="#__codelineno-58-23">23</a></span>
-<span class="normal"><a href="#__codelineno-58-24">24</a></span>
-<span class="normal"><a href="#__codelineno-58-25">25</a></span>
-<span class="normal"><a href="#__codelineno-58-26">26</a></span>
-<span class="normal"><a href="#__codelineno-58-27">27</a></span>
-<span class="normal"><a href="#__codelineno-58-28">28</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-58-1"><a id="__codelineno-58-1" name="__codelineno-58-1"></a><span class="p">{</span>
-</span><span id="__span-58-2"><a id="__codelineno-58-2" name="__codelineno-58-2"></a><span class="w">  </span><span class="nt">&quot;evalSetId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;contextmessage-basic&quot;</span><span class="p">,</span>
-</span><span id="__span-58-3"><a id="__codelineno-58-3" name="__codelineno-58-3"></a><span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;contextmessage-basic&quot;</span><span class="p">,</span>
-</span><span id="__span-58-4"><a id="__codelineno-58-4" name="__codelineno-58-4"></a><span class="w">  </span><span class="nt">&quot;evalCases&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-</span><span id="__span-58-5"><a id="__codelineno-58-5" name="__codelineno-58-5"></a><span class="w">    </span><span class="p">{</span>
-</span><span id="__span-58-6"><a id="__codelineno-58-6" name="__codelineno-58-6"></a><span class="w">      </span><span class="nt">&quot;evalId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;identity_name&quot;</span><span class="p">,</span>
-</span><span id="__span-58-7"><a id="__codelineno-58-7" name="__codelineno-58-7"></a><span class="w">      </span><span class="nt">&quot;contextMessages&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-</span><span id="__span-58-8"><a id="__codelineno-58-8" name="__codelineno-58-8"></a><span class="w">        </span><span class="p">{</span>
-</span><span id="__span-58-9"><a id="__codelineno-58-9" name="__codelineno-58-9"></a><span class="w">          </span><span class="nt">&quot;role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;system&quot;</span><span class="p">,</span>
-</span><span id="__span-58-10"><a id="__codelineno-58-10" name="__codelineno-58-10"></a><span class="w">          </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;You are trpc-agent-go bot.&quot;</span>
-</span><span id="__span-58-11"><a id="__codelineno-58-11" name="__codelineno-58-11"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-58-12"><a id="__codelineno-58-12" name="__codelineno-58-12"></a><span class="w">      </span><span class="p">],</span>
-</span><span id="__span-58-13"><a id="__codelineno-58-13" name="__codelineno-58-13"></a><span class="w">      </span><span class="nt">&quot;conversation&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-</span><span id="__span-58-14"><a id="__codelineno-58-14" name="__codelineno-58-14"></a><span class="w">        </span><span class="p">{</span>
-</span><span id="__span-58-15"><a id="__codelineno-58-15" name="__codelineno-58-15"></a><span class="w">          </span><span class="nt">&quot;invocationId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;identity_name-1&quot;</span><span class="p">,</span>
-</span><span id="__span-58-16"><a id="__codelineno-58-16" name="__codelineno-58-16"></a><span class="w">          </span><span class="nt">&quot;userContent&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-58-17"><a id="__codelineno-58-17" name="__codelineno-58-17"></a><span class="w">            </span><span class="nt">&quot;role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;user&quot;</span><span class="p">,</span>
-</span><span id="__span-58-18"><a id="__codelineno-58-18" name="__codelineno-58-18"></a><span class="w">            </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Who are you?&quot;</span>
-</span><span id="__span-58-19"><a id="__codelineno-58-19" name="__codelineno-58-19"></a><span class="w">          </span><span class="p">}</span>
-</span><span id="__span-58-20"><a id="__codelineno-58-20" name="__codelineno-58-20"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-58-21"><a id="__codelineno-58-21" name="__codelineno-58-21"></a><span class="w">      </span><span class="p">],</span>
-</span><span id="__span-58-22"><a id="__codelineno-58-22" name="__codelineno-58-22"></a><span class="w">      </span><span class="nt">&quot;sessionInput&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-58-23"><a id="__codelineno-58-23" name="__codelineno-58-23"></a><span class="w">        </span><span class="nt">&quot;appName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;contextmessage-app&quot;</span><span class="p">,</span>
-</span><span id="__span-58-24"><a id="__codelineno-58-24" name="__codelineno-58-24"></a><span class="w">        </span><span class="nt">&quot;userId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;demo-user&quot;</span>
-</span><span id="__span-58-25"><a id="__codelineno-58-25" name="__codelineno-58-25"></a><span class="w">      </span><span class="p">}</span>
-</span><span id="__span-58-26"><a id="__codelineno-58-26" name="__codelineno-58-26"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-58-27"><a id="__codelineno-58-27" name="__codelineno-58-27"></a><span class="w">  </span><span class="p">]</span>
-</span><span id="__span-58-28"><a id="__codelineno-58-28" name="__codelineno-58-28"></a><span class="p">}</span>
+<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-59-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-59-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-59-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-59-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-59-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-59-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-59-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-59-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-59-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-59-10">10</a></span>
+<span class="normal"><a href="#__codelineno-59-11">11</a></span>
+<span class="normal"><a href="#__codelineno-59-12">12</a></span>
+<span class="normal"><a href="#__codelineno-59-13">13</a></span>
+<span class="normal"><a href="#__codelineno-59-14">14</a></span>
+<span class="normal"><a href="#__codelineno-59-15">15</a></span>
+<span class="normal"><a href="#__codelineno-59-16">16</a></span>
+<span class="normal"><a href="#__codelineno-59-17">17</a></span>
+<span class="normal"><a href="#__codelineno-59-18">18</a></span>
+<span class="normal"><a href="#__codelineno-59-19">19</a></span>
+<span class="normal"><a href="#__codelineno-59-20">20</a></span>
+<span class="normal"><a href="#__codelineno-59-21">21</a></span>
+<span class="normal"><a href="#__codelineno-59-22">22</a></span>
+<span class="normal"><a href="#__codelineno-59-23">23</a></span>
+<span class="normal"><a href="#__codelineno-59-24">24</a></span>
+<span class="normal"><a href="#__codelineno-59-25">25</a></span>
+<span class="normal"><a href="#__codelineno-59-26">26</a></span>
+<span class="normal"><a href="#__codelineno-59-27">27</a></span>
+<span class="normal"><a href="#__codelineno-59-28">28</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-59-1"><a id="__codelineno-59-1" name="__codelineno-59-1"></a><span class="p">{</span>
+</span><span id="__span-59-2"><a id="__codelineno-59-2" name="__codelineno-59-2"></a><span class="w">  </span><span class="nt">&quot;evalSetId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;contextmessage-basic&quot;</span><span class="p">,</span>
+</span><span id="__span-59-3"><a id="__codelineno-59-3" name="__codelineno-59-3"></a><span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;contextmessage-basic&quot;</span><span class="p">,</span>
+</span><span id="__span-59-4"><a id="__codelineno-59-4" name="__codelineno-59-4"></a><span class="w">  </span><span class="nt">&quot;evalCases&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-59-5"><a id="__codelineno-59-5" name="__codelineno-59-5"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-59-6"><a id="__codelineno-59-6" name="__codelineno-59-6"></a><span class="w">      </span><span class="nt">&quot;evalId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;identity_name&quot;</span><span class="p">,</span>
+</span><span id="__span-59-7"><a id="__codelineno-59-7" name="__codelineno-59-7"></a><span class="w">      </span><span class="nt">&quot;contextMessages&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-59-8"><a id="__codelineno-59-8" name="__codelineno-59-8"></a><span class="w">        </span><span class="p">{</span>
+</span><span id="__span-59-9"><a id="__codelineno-59-9" name="__codelineno-59-9"></a><span class="w">          </span><span class="nt">&quot;role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;system&quot;</span><span class="p">,</span>
+</span><span id="__span-59-10"><a id="__codelineno-59-10" name="__codelineno-59-10"></a><span class="w">          </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;You are trpc-agent-go bot.&quot;</span>
+</span><span id="__span-59-11"><a id="__codelineno-59-11" name="__codelineno-59-11"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-59-12"><a id="__codelineno-59-12" name="__codelineno-59-12"></a><span class="w">      </span><span class="p">],</span>
+</span><span id="__span-59-13"><a id="__codelineno-59-13" name="__codelineno-59-13"></a><span class="w">      </span><span class="nt">&quot;conversation&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-59-14"><a id="__codelineno-59-14" name="__codelineno-59-14"></a><span class="w">        </span><span class="p">{</span>
+</span><span id="__span-59-15"><a id="__codelineno-59-15" name="__codelineno-59-15"></a><span class="w">          </span><span class="nt">&quot;invocationId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;identity_name-1&quot;</span><span class="p">,</span>
+</span><span id="__span-59-16"><a id="__codelineno-59-16" name="__codelineno-59-16"></a><span class="w">          </span><span class="nt">&quot;userContent&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-59-17"><a id="__codelineno-59-17" name="__codelineno-59-17"></a><span class="w">            </span><span class="nt">&quot;role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;user&quot;</span><span class="p">,</span>
+</span><span id="__span-59-18"><a id="__codelineno-59-18" name="__codelineno-59-18"></a><span class="w">            </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Who are you?&quot;</span>
+</span><span id="__span-59-19"><a id="__codelineno-59-19" name="__codelineno-59-19"></a><span class="w">          </span><span class="p">}</span>
+</span><span id="__span-59-20"><a id="__codelineno-59-20" name="__codelineno-59-20"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-59-21"><a id="__codelineno-59-21" name="__codelineno-59-21"></a><span class="w">      </span><span class="p">],</span>
+</span><span id="__span-59-22"><a id="__codelineno-59-22" name="__codelineno-59-22"></a><span class="w">      </span><span class="nt">&quot;sessionInput&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-59-23"><a id="__codelineno-59-23" name="__codelineno-59-23"></a><span class="w">        </span><span class="nt">&quot;appName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;contextmessage-app&quot;</span><span class="p">,</span>
+</span><span id="__span-59-24"><a id="__codelineno-59-24" name="__codelineno-59-24"></a><span class="w">        </span><span class="nt">&quot;userId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;demo-user&quot;</span>
+</span><span id="__span-59-25"><a id="__codelineno-59-25" name="__codelineno-59-25"></a><span class="w">      </span><span class="p">}</span>
+</span><span id="__span-59-26"><a id="__codelineno-59-26" name="__codelineno-59-26"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-59-27"><a id="__codelineno-59-27" name="__codelineno-59-27"></a><span class="w">  </span><span class="p">]</span>
+</span><span id="__span-59-28"><a id="__codelineno-59-28" name="__codelineno-59-28"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>See <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/contextmessage">examples/evaluation/contextmessage</a> for the full example.</p>
 <h3 id="passk-and-passk">pass@k and pass^k</h3>
@@ -6524,152 +6563,152 @@
 \]</div>
 <p>This metric emphasizes stability and consistency, and complements pass@k, which focuses on at least one pass.</p>
 <p>Example usage:</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-59-1">1</a></span>
-<span class="normal"><a href="#__codelineno-59-2">2</a></span>
-<span class="normal"><a href="#__codelineno-59-3">3</a></span>
-<span class="normal"><a href="#__codelineno-59-4">4</a></span>
-<span class="normal"><a href="#__codelineno-59-5">5</a></span>
-<span class="normal"><a href="#__codelineno-59-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-59-1"><a id="__codelineno-59-1" name="__codelineno-59-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation&quot;</span>
-</span><span id="__span-59-2"><a id="__codelineno-59-2" name="__codelineno-59-2"></a>
-</span><span id="__span-59-3"><a id="__codelineno-59-3" name="__codelineno-59-3"></a><span class="nx">result</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agentEvaluator</span><span class="p">.</span><span class="nx">Evaluate</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">evalSetId</span><span class="p">)</span>
-</span><span id="__span-59-4"><a id="__codelineno-59-4" name="__codelineno-59-4"></a><span class="nx">n</span><span class="p">,</span><span class="w"> </span><span class="nx">c</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">ParsePassNC</span><span class="p">(</span><span class="nx">result</span><span class="p">)</span>
-</span><span id="__span-59-5"><a id="__codelineno-59-5" name="__codelineno-59-5"></a><span class="nx">passAtK</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">PassAtK</span><span class="p">(</span><span class="nx">n</span><span class="p">,</span><span class="w"> </span><span class="nx">c</span><span class="p">,</span><span class="w"> </span><span class="nx">k</span><span class="p">)</span>
-</span><span id="__span-59-6"><a id="__codelineno-59-6" name="__codelineno-59-6"></a><span class="nx">passHatK</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">PassHatK</span><span class="p">(</span><span class="nx">n</span><span class="p">,</span><span class="w"> </span><span class="nx">c</span><span class="p">,</span><span class="w"> </span><span class="nx">k</span><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-60-1">1</a></span>
+<span class="normal"><a href="#__codelineno-60-2">2</a></span>
+<span class="normal"><a href="#__codelineno-60-3">3</a></span>
+<span class="normal"><a href="#__codelineno-60-4">4</a></span>
+<span class="normal"><a href="#__codelineno-60-5">5</a></span>
+<span class="normal"><a href="#__codelineno-60-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-60-1"><a id="__codelineno-60-1" name="__codelineno-60-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation&quot;</span>
+</span><span id="__span-60-2"><a id="__codelineno-60-2" name="__codelineno-60-2"></a>
+</span><span id="__span-60-3"><a id="__codelineno-60-3" name="__codelineno-60-3"></a><span class="nx">result</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agentEvaluator</span><span class="p">.</span><span class="nx">Evaluate</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">evalSetId</span><span class="p">)</span>
+</span><span id="__span-60-4"><a id="__codelineno-60-4" name="__codelineno-60-4"></a><span class="nx">n</span><span class="p">,</span><span class="w"> </span><span class="nx">c</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">ParsePassNC</span><span class="p">(</span><span class="nx">result</span><span class="p">)</span>
+</span><span id="__span-60-5"><a id="__codelineno-60-5" name="__codelineno-60-5"></a><span class="nx">passAtK</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">PassAtK</span><span class="p">(</span><span class="nx">n</span><span class="p">,</span><span class="w"> </span><span class="nx">c</span><span class="p">,</span><span class="w"> </span><span class="nx">k</span><span class="p">)</span>
+</span><span id="__span-60-6"><a id="__codelineno-60-6" name="__codelineno-60-6"></a><span class="nx">passHatK</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">PassHatK</span><span class="p">(</span><span class="nx">n</span><span class="p">,</span><span class="w"> </span><span class="nx">c</span><span class="p">,</span><span class="w"> </span><span class="nx">k</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>The computation of pass@k and pass^k relies on independence and identical distribution across runs. When doing repeated runs, ensure each run is independently sampled with necessary state reset, and avoid reusing session memory, tool caches, or external dependencies that would systematically inflate the metrics.</p>
 <h2 id="best-practices">Best Practices</h2>
 <p>Integrating evaluation into engineering workflows often delivers more value than expected. It is not about producing a polished report; it is about turning key Agent behaviors into sustainable regression signals.</p>
 <p>Two things are most dangerous in Agent evolution: small-looking changes that cause silent behavior drift, and issues that only surface for users, which multiplies diagnosis cost. Evaluation exists to block these risks early.</p>
 <p>tRPC-Agent-Go in <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runner">examples/runner</a> encodes critical paths into evaluation sets and metrics and runs them in the release pipeline. The Runner quickstart cases cover common scenarios such as calculator, time tool, and compound interest, with a clear goal to guard tool selection and output shape. If behavior drifts, the pipeline fails early, and you can locate the issue directly with the corresponding case and trace.</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-60-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-60-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-60-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-60-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-60-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-60-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-60-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-60-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-60-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-60-10">10</a></span>
-<span class="normal"><a href="#__codelineno-60-11">11</a></span>
-<span class="normal"><a href="#__codelineno-60-12">12</a></span>
-<span class="normal"><a href="#__codelineno-60-13">13</a></span>
-<span class="normal"><a href="#__codelineno-60-14">14</a></span>
-<span class="normal"><a href="#__codelineno-60-15">15</a></span>
-<span class="normal"><a href="#__codelineno-60-16">16</a></span>
-<span class="normal"><a href="#__codelineno-60-17">17</a></span>
-<span class="normal"><a href="#__codelineno-60-18">18</a></span>
-<span class="normal"><a href="#__codelineno-60-19">19</a></span>
-<span class="normal"><a href="#__codelineno-60-20">20</a></span>
-<span class="normal"><a href="#__codelineno-60-21">21</a></span>
-<span class="normal"><a href="#__codelineno-60-22">22</a></span>
-<span class="normal"><a href="#__codelineno-60-23">23</a></span>
-<span class="normal"><a href="#__codelineno-60-24">24</a></span>
-<span class="normal"><a href="#__codelineno-60-25">25</a></span>
-<span class="normal"><a href="#__codelineno-60-26">26</a></span>
-<span class="normal"><a href="#__codelineno-60-27">27</a></span>
-<span class="normal"><a href="#__codelineno-60-28">28</a></span>
-<span class="normal"><a href="#__codelineno-60-29">29</a></span>
-<span class="normal"><a href="#__codelineno-60-30">30</a></span>
-<span class="normal"><a href="#__codelineno-60-31">31</a></span>
-<span class="normal"><a href="#__codelineno-60-32">32</a></span>
-<span class="normal"><a href="#__codelineno-60-33">33</a></span>
-<span class="normal"><a href="#__codelineno-60-34">34</a></span>
-<span class="normal"><a href="#__codelineno-60-35">35</a></span>
-<span class="normal"><a href="#__codelineno-60-36">36</a></span>
-<span class="normal"><a href="#__codelineno-60-37">37</a></span>
-<span class="normal"><a href="#__codelineno-60-38">38</a></span>
-<span class="normal"><a href="#__codelineno-60-39">39</a></span>
-<span class="normal"><a href="#__codelineno-60-40">40</a></span>
-<span class="normal"><a href="#__codelineno-60-41">41</a></span>
-<span class="normal"><a href="#__codelineno-60-42">42</a></span>
-<span class="normal"><a href="#__codelineno-60-43">43</a></span>
-<span class="normal"><a href="#__codelineno-60-44">44</a></span>
-<span class="normal"><a href="#__codelineno-60-45">45</a></span>
-<span class="normal"><a href="#__codelineno-60-46">46</a></span>
-<span class="normal"><a href="#__codelineno-60-47">47</a></span>
-<span class="normal"><a href="#__codelineno-60-48">48</a></span>
-<span class="normal"><a href="#__codelineno-60-49">49</a></span>
-<span class="normal"><a href="#__codelineno-60-50">50</a></span>
-<span class="normal"><a href="#__codelineno-60-51">51</a></span>
-<span class="normal"><a href="#__codelineno-60-52">52</a></span>
-<span class="normal"><a href="#__codelineno-60-53">53</a></span>
-<span class="normal"><a href="#__codelineno-60-54">54</a></span>
-<span class="normal"><a href="#__codelineno-60-55">55</a></span>
-<span class="normal"><a href="#__codelineno-60-56">56</a></span>
-<span class="normal"><a href="#__codelineno-60-57">57</a></span>
-<span class="normal"><a href="#__codelineno-60-58">58</a></span>
-<span class="normal"><a href="#__codelineno-60-59">59</a></span>
-<span class="normal"><a href="#__codelineno-60-60">60</a></span>
-<span class="normal"><a href="#__codelineno-60-61">61</a></span>
-<span class="normal"><a href="#__codelineno-60-62">62</a></span>
-<span class="normal"><a href="#__codelineno-60-63">63</a></span>
-<span class="normal"><a href="#__codelineno-60-64">64</a></span>
-<span class="normal"><a href="#__codelineno-60-65">65</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-60-1"><a id="__codelineno-60-1" name="__codelineno-60-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-60-2"><a id="__codelineno-60-2" name="__codelineno-60-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation&quot;</span>
-</span><span id="__span-60-3"><a id="__codelineno-60-3" name="__codelineno-60-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult&quot;</span>
-</span><span id="__span-60-4"><a id="__codelineno-60-4" name="__codelineno-60-4"></a><span class="w">    </span><span class="nx">localevalresult</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/local&quot;</span>
-</span><span id="__span-60-5"><a id="__codelineno-60-5" name="__codelineno-60-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/evalset&quot;</span>
-</span><span id="__span-60-6"><a id="__codelineno-60-6" name="__codelineno-60-6"></a><span class="w">    </span><span class="nx">localevalset</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/local&quot;</span>
-</span><span id="__span-60-7"><a id="__codelineno-60-7" name="__codelineno-60-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric&quot;</span>
-</span><span id="__span-60-8"><a id="__codelineno-60-8" name="__codelineno-60-8"></a><span class="w">    </span><span class="nx">localmetric</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric/local&quot;</span>
-</span><span id="__span-60-9"><a id="__codelineno-60-9" name="__codelineno-60-9"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/status&quot;</span>
-</span><span id="__span-60-10"><a id="__codelineno-60-10" name="__codelineno-60-10"></a><span class="p">)</span>
-</span><span id="__span-60-11"><a id="__codelineno-60-11" name="__codelineno-60-11"></a>
-</span><span id="__span-60-12"><a id="__codelineno-60-12" name="__codelineno-60-12"></a><span class="kd">func</span><span class="w"> </span><span class="nx">TestTool</span><span class="p">(</span><span class="nx">t</span><span class="w"> </span><span class="o">*</span><span class="nx">testing</span><span class="p">.</span><span class="nx">T</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-60-13"><a id="__codelineno-60-13" name="__codelineno-60-13"></a><span class="w">    </span><span class="nx">tests</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="p">[]</span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-60-14"><a id="__codelineno-60-14" name="__codelineno-60-14"></a><span class="w">        </span><span class="nx">name</span><span class="w">      </span><span class="kt">string</span>
-</span><span id="__span-60-15"><a id="__codelineno-60-15" name="__codelineno-60-15"></a><span class="w">        </span><span class="nx">evalSetID</span><span class="w"> </span><span class="kt">string</span>
-</span><span id="__span-60-16"><a id="__codelineno-60-16" name="__codelineno-60-16"></a><span class="w">    </span><span class="p">}{</span>
-</span><span id="__span-60-17"><a id="__codelineno-60-17" name="__codelineno-60-17"></a><span class="w">        </span><span class="p">{</span>
-</span><span id="__span-60-18"><a id="__codelineno-60-18" name="__codelineno-60-18"></a><span class="w">            </span><span class="nx">name</span><span class="p">:</span><span class="w">      </span><span class="s">&quot;calculator&quot;</span><span class="p">,</span>
-</span><span id="__span-60-19"><a id="__codelineno-60-19" name="__codelineno-60-19"></a><span class="w">            </span><span class="nx">evalSetID</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;calculator_tool&quot;</span><span class="p">,</span>
-</span><span id="__span-60-20"><a id="__codelineno-60-20" name="__codelineno-60-20"></a><span class="w">        </span><span class="p">},</span>
-</span><span id="__span-60-21"><a id="__codelineno-60-21" name="__codelineno-60-21"></a><span class="w">        </span><span class="p">{</span>
-</span><span id="__span-60-22"><a id="__codelineno-60-22" name="__codelineno-60-22"></a><span class="w">            </span><span class="nx">name</span><span class="p">:</span><span class="w">      </span><span class="s">&quot;currenttime&quot;</span><span class="p">,</span>
-</span><span id="__span-60-23"><a id="__codelineno-60-23" name="__codelineno-60-23"></a><span class="w">            </span><span class="nx">evalSetID</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;currenttime_tool&quot;</span><span class="p">,</span>
-</span><span id="__span-60-24"><a id="__codelineno-60-24" name="__codelineno-60-24"></a><span class="w">        </span><span class="p">},</span>
-</span><span id="__span-60-25"><a id="__codelineno-60-25" name="__codelineno-60-25"></a><span class="w">        </span><span class="p">{</span>
-</span><span id="__span-60-26"><a id="__codelineno-60-26" name="__codelineno-60-26"></a><span class="w">            </span><span class="nx">name</span><span class="p">:</span><span class="w">      </span><span class="s">&quot;compound_interest&quot;</span><span class="p">,</span>
-</span><span id="__span-60-27"><a id="__codelineno-60-27" name="__codelineno-60-27"></a><span class="w">            </span><span class="nx">evalSetID</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;compound_interest&quot;</span><span class="p">,</span>
-</span><span id="__span-60-28"><a id="__codelineno-60-28" name="__codelineno-60-28"></a><span class="w">        </span><span class="p">},</span>
-</span><span id="__span-60-29"><a id="__codelineno-60-29" name="__codelineno-60-29"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-60-30"><a id="__codelineno-60-30" name="__codelineno-60-30"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">tt</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">tests</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-60-31"><a id="__codelineno-60-31" name="__codelineno-60-31"></a><span class="w">        </span><span class="nx">t</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">tt</span><span class="p">.</span><span class="nx">name</span><span class="p">,</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">t</span><span class="w"> </span><span class="o">*</span><span class="nx">testing</span><span class="p">.</span><span class="nx">T</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-60-32"><a id="__codelineno-60-32" name="__codelineno-60-32"></a><span class="w">            </span><span class="nx">chat</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">multiTurnChat</span><span class="p">{</span>
-</span><span id="__span-60-33"><a id="__codelineno-60-33" name="__codelineno-60-33"></a><span class="w">                </span><span class="nx">modelName</span><span class="p">:</span><span class="w"> </span><span class="o">*</span><span class="nx">modelName</span><span class="p">,</span>
-</span><span id="__span-60-34"><a id="__codelineno-60-34" name="__codelineno-60-34"></a><span class="w">                </span><span class="nx">streaming</span><span class="p">:</span><span class="w"> </span><span class="o">*</span><span class="nx">streaming</span><span class="p">,</span>
-</span><span id="__span-60-35"><a id="__codelineno-60-35" name="__codelineno-60-35"></a><span class="w">                </span><span class="nx">variant</span><span class="p">:</span><span class="w">   </span><span class="o">*</span><span class="nx">variant</span><span class="p">,</span>
-</span><span id="__span-60-36"><a id="__codelineno-60-36" name="__codelineno-60-36"></a><span class="w">            </span><span class="p">}</span>
-</span><span id="__span-60-37"><a id="__codelineno-60-37" name="__codelineno-60-37"></a><span class="w">            </span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">cancel</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">WithTimeout</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">(),</span><span class="w"> </span><span class="mi">5</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">)</span>
-</span><span id="__span-60-38"><a id="__codelineno-60-38" name="__codelineno-60-38"></a><span class="w">            </span><span class="k">defer</span><span class="w"> </span><span class="nx">cancel</span><span class="p">()</span>
-</span><span id="__span-60-39"><a id="__codelineno-60-39" name="__codelineno-60-39"></a><span class="w">            </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">chat</span><span class="p">.</span><span class="nx">setup</span><span class="p">(</span><span class="nx">ctx</span><span class="p">)</span>
-</span><span id="__span-60-40"><a id="__codelineno-60-40" name="__codelineno-60-40"></a><span class="w">            </span><span class="nx">assert</span><span class="p">.</span><span class="nx">NoError</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-60-41"><a id="__codelineno-60-41" name="__codelineno-60-41"></a><span class="w">            </span><span class="k">defer</span><span class="w"> </span><span class="nx">chat</span><span class="p">.</span><span class="nx">runner</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
-</span><span id="__span-60-42"><a id="__codelineno-60-42" name="__codelineno-60-42"></a><span class="w">            </span><span class="nx">evaluationDir</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">&quot;evaluation&quot;</span>
-</span><span id="__span-60-43"><a id="__codelineno-60-43" name="__codelineno-60-43"></a><span class="w">            </span><span class="nx">localEvalSetManager</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">localevalset</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">evalset</span><span class="p">.</span><span class="nx">WithBaseDir</span><span class="p">(</span><span class="nx">evaluationDir</span><span class="p">))</span>
-</span><span id="__span-60-44"><a id="__codelineno-60-44" name="__codelineno-60-44"></a><span class="w">            </span><span class="nx">localMetricManager</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">localmetric</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">metric</span><span class="p">.</span><span class="nx">WithBaseDir</span><span class="p">(</span><span class="nx">evaluationDir</span><span class="p">))</span>
-</span><span id="__span-60-45"><a id="__codelineno-60-45" name="__codelineno-60-45"></a><span class="w">            </span><span class="nx">localEvalResultManager</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">localevalresult</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">evalresult</span><span class="p">.</span><span class="nx">WithBaseDir</span><span class="p">(</span><span class="nx">evaluationDir</span><span class="p">))</span>
-</span><span id="__span-60-46"><a id="__codelineno-60-46" name="__codelineno-60-46"></a><span class="w">            </span><span class="nx">evaluator</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-60-47"><a id="__codelineno-60-47" name="__codelineno-60-47"></a><span class="w">                </span><span class="nx">appName</span><span class="p">,</span>
-</span><span id="__span-60-48"><a id="__codelineno-60-48" name="__codelineno-60-48"></a><span class="w">                </span><span class="nx">chat</span><span class="p">.</span><span class="nx">runner</span><span class="p">,</span>
-</span><span id="__span-60-49"><a id="__codelineno-60-49" name="__codelineno-60-49"></a><span class="w">                </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithEvalSetManager</span><span class="p">(</span><span class="nx">localEvalSetManager</span><span class="p">),</span>
-</span><span id="__span-60-50"><a id="__codelineno-60-50" name="__codelineno-60-50"></a><span class="w">                </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithMetricManager</span><span class="p">(</span><span class="nx">localMetricManager</span><span class="p">),</span>
-</span><span id="__span-60-51"><a id="__codelineno-60-51" name="__codelineno-60-51"></a><span class="w">                </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithEvalResultManager</span><span class="p">(</span><span class="nx">localEvalResultManager</span><span class="p">),</span>
-</span><span id="__span-60-52"><a id="__codelineno-60-52" name="__codelineno-60-52"></a><span class="w">            </span><span class="p">)</span>
-</span><span id="__span-60-53"><a id="__codelineno-60-53" name="__codelineno-60-53"></a><span class="w">            </span><span class="nx">assert</span><span class="p">.</span><span class="nx">NoError</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-60-54"><a id="__codelineno-60-54" name="__codelineno-60-54"></a><span class="w">            </span><span class="nx">t</span><span class="p">.</span><span class="nx">Cleanup</span><span class="p">(</span><span class="kd">func</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-60-55"><a id="__codelineno-60-55" name="__codelineno-60-55"></a><span class="w">                </span><span class="nx">assert</span><span class="p">.</span><span class="nx">NoError</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">evaluator</span><span class="p">.</span><span class="nx">Close</span><span class="p">())</span>
-</span><span id="__span-60-56"><a id="__codelineno-60-56" name="__codelineno-60-56"></a><span class="w">            </span><span class="p">})</span>
-</span><span id="__span-60-57"><a id="__codelineno-60-57" name="__codelineno-60-57"></a><span class="w">            </span><span class="nx">result</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evaluator</span><span class="p">.</span><span class="nx">Evaluate</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">tt</span><span class="p">.</span><span class="nx">evalSetID</span><span class="p">)</span>
-</span><span id="__span-60-58"><a id="__codelineno-60-58" name="__codelineno-60-58"></a><span class="w">            </span><span class="nx">assert</span><span class="p">.</span><span class="nx">NoError</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-60-59"><a id="__codelineno-60-59" name="__codelineno-60-59"></a><span class="w">            </span><span class="nx">assert</span><span class="p">.</span><span class="nx">NotNil</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">result</span><span class="p">)</span>
-</span><span id="__span-60-60"><a id="__codelineno-60-60" name="__codelineno-60-60"></a><span class="w">            </span><span class="nx">resultData</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">json</span><span class="p">.</span><span class="nx">MarshalIndent</span><span class="p">(</span><span class="nx">result</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;  &quot;</span><span class="p">)</span>
-</span><span id="__span-60-61"><a id="__codelineno-60-61" name="__codelineno-60-61"></a><span class="w">            </span><span class="nx">assert</span><span class="p">.</span><span class="nx">NoError</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-60-62"><a id="__codelineno-60-62" name="__codelineno-60-62"></a><span class="w">            </span><span class="nx">assert</span><span class="p">.</span><span class="nx">Equal</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">status</span><span class="p">.</span><span class="nx">EvalStatusPassed</span><span class="p">,</span><span class="w"> </span><span class="nx">result</span><span class="p">.</span><span class="nx">OverallStatus</span><span class="p">,</span><span class="w"> </span><span class="nb">string</span><span class="p">(</span><span class="nx">resultData</span><span class="p">))</span>
-</span><span id="__span-60-63"><a id="__codelineno-60-63" name="__codelineno-60-63"></a><span class="w">        </span><span class="p">})</span>
-</span><span id="__span-60-64"><a id="__codelineno-60-64" name="__codelineno-60-64"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-60-65"><a id="__codelineno-60-65" name="__codelineno-60-65"></a><span class="p">}</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-61-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-61-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-61-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-61-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-61-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-61-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-61-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-61-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-61-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-61-10">10</a></span>
+<span class="normal"><a href="#__codelineno-61-11">11</a></span>
+<span class="normal"><a href="#__codelineno-61-12">12</a></span>
+<span class="normal"><a href="#__codelineno-61-13">13</a></span>
+<span class="normal"><a href="#__codelineno-61-14">14</a></span>
+<span class="normal"><a href="#__codelineno-61-15">15</a></span>
+<span class="normal"><a href="#__codelineno-61-16">16</a></span>
+<span class="normal"><a href="#__codelineno-61-17">17</a></span>
+<span class="normal"><a href="#__codelineno-61-18">18</a></span>
+<span class="normal"><a href="#__codelineno-61-19">19</a></span>
+<span class="normal"><a href="#__codelineno-61-20">20</a></span>
+<span class="normal"><a href="#__codelineno-61-21">21</a></span>
+<span class="normal"><a href="#__codelineno-61-22">22</a></span>
+<span class="normal"><a href="#__codelineno-61-23">23</a></span>
+<span class="normal"><a href="#__codelineno-61-24">24</a></span>
+<span class="normal"><a href="#__codelineno-61-25">25</a></span>
+<span class="normal"><a href="#__codelineno-61-26">26</a></span>
+<span class="normal"><a href="#__codelineno-61-27">27</a></span>
+<span class="normal"><a href="#__codelineno-61-28">28</a></span>
+<span class="normal"><a href="#__codelineno-61-29">29</a></span>
+<span class="normal"><a href="#__codelineno-61-30">30</a></span>
+<span class="normal"><a href="#__codelineno-61-31">31</a></span>
+<span class="normal"><a href="#__codelineno-61-32">32</a></span>
+<span class="normal"><a href="#__codelineno-61-33">33</a></span>
+<span class="normal"><a href="#__codelineno-61-34">34</a></span>
+<span class="normal"><a href="#__codelineno-61-35">35</a></span>
+<span class="normal"><a href="#__codelineno-61-36">36</a></span>
+<span class="normal"><a href="#__codelineno-61-37">37</a></span>
+<span class="normal"><a href="#__codelineno-61-38">38</a></span>
+<span class="normal"><a href="#__codelineno-61-39">39</a></span>
+<span class="normal"><a href="#__codelineno-61-40">40</a></span>
+<span class="normal"><a href="#__codelineno-61-41">41</a></span>
+<span class="normal"><a href="#__codelineno-61-42">42</a></span>
+<span class="normal"><a href="#__codelineno-61-43">43</a></span>
+<span class="normal"><a href="#__codelineno-61-44">44</a></span>
+<span class="normal"><a href="#__codelineno-61-45">45</a></span>
+<span class="normal"><a href="#__codelineno-61-46">46</a></span>
+<span class="normal"><a href="#__codelineno-61-47">47</a></span>
+<span class="normal"><a href="#__codelineno-61-48">48</a></span>
+<span class="normal"><a href="#__codelineno-61-49">49</a></span>
+<span class="normal"><a href="#__codelineno-61-50">50</a></span>
+<span class="normal"><a href="#__codelineno-61-51">51</a></span>
+<span class="normal"><a href="#__codelineno-61-52">52</a></span>
+<span class="normal"><a href="#__codelineno-61-53">53</a></span>
+<span class="normal"><a href="#__codelineno-61-54">54</a></span>
+<span class="normal"><a href="#__codelineno-61-55">55</a></span>
+<span class="normal"><a href="#__codelineno-61-56">56</a></span>
+<span class="normal"><a href="#__codelineno-61-57">57</a></span>
+<span class="normal"><a href="#__codelineno-61-58">58</a></span>
+<span class="normal"><a href="#__codelineno-61-59">59</a></span>
+<span class="normal"><a href="#__codelineno-61-60">60</a></span>
+<span class="normal"><a href="#__codelineno-61-61">61</a></span>
+<span class="normal"><a href="#__codelineno-61-62">62</a></span>
+<span class="normal"><a href="#__codelineno-61-63">63</a></span>
+<span class="normal"><a href="#__codelineno-61-64">64</a></span>
+<span class="normal"><a href="#__codelineno-61-65">65</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-61-1"><a id="__codelineno-61-1" name="__codelineno-61-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-61-2"><a id="__codelineno-61-2" name="__codelineno-61-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation&quot;</span>
+</span><span id="__span-61-3"><a id="__codelineno-61-3" name="__codelineno-61-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult&quot;</span>
+</span><span id="__span-61-4"><a id="__codelineno-61-4" name="__codelineno-61-4"></a><span class="w">    </span><span class="nx">localevalresult</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/local&quot;</span>
+</span><span id="__span-61-5"><a id="__codelineno-61-5" name="__codelineno-61-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/evalset&quot;</span>
+</span><span id="__span-61-6"><a id="__codelineno-61-6" name="__codelineno-61-6"></a><span class="w">    </span><span class="nx">localevalset</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/local&quot;</span>
+</span><span id="__span-61-7"><a id="__codelineno-61-7" name="__codelineno-61-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric&quot;</span>
+</span><span id="__span-61-8"><a id="__codelineno-61-8" name="__codelineno-61-8"></a><span class="w">    </span><span class="nx">localmetric</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric/local&quot;</span>
+</span><span id="__span-61-9"><a id="__codelineno-61-9" name="__codelineno-61-9"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/status&quot;</span>
+</span><span id="__span-61-10"><a id="__codelineno-61-10" name="__codelineno-61-10"></a><span class="p">)</span>
+</span><span id="__span-61-11"><a id="__codelineno-61-11" name="__codelineno-61-11"></a>
+</span><span id="__span-61-12"><a id="__codelineno-61-12" name="__codelineno-61-12"></a><span class="kd">func</span><span class="w"> </span><span class="nx">TestTool</span><span class="p">(</span><span class="nx">t</span><span class="w"> </span><span class="o">*</span><span class="nx">testing</span><span class="p">.</span><span class="nx">T</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-61-13"><a id="__codelineno-61-13" name="__codelineno-61-13"></a><span class="w">    </span><span class="nx">tests</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="p">[]</span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-61-14"><a id="__codelineno-61-14" name="__codelineno-61-14"></a><span class="w">        </span><span class="nx">name</span><span class="w">      </span><span class="kt">string</span>
+</span><span id="__span-61-15"><a id="__codelineno-61-15" name="__codelineno-61-15"></a><span class="w">        </span><span class="nx">evalSetID</span><span class="w"> </span><span class="kt">string</span>
+</span><span id="__span-61-16"><a id="__codelineno-61-16" name="__codelineno-61-16"></a><span class="w">    </span><span class="p">}{</span>
+</span><span id="__span-61-17"><a id="__codelineno-61-17" name="__codelineno-61-17"></a><span class="w">        </span><span class="p">{</span>
+</span><span id="__span-61-18"><a id="__codelineno-61-18" name="__codelineno-61-18"></a><span class="w">            </span><span class="nx">name</span><span class="p">:</span><span class="w">      </span><span class="s">&quot;calculator&quot;</span><span class="p">,</span>
+</span><span id="__span-61-19"><a id="__codelineno-61-19" name="__codelineno-61-19"></a><span class="w">            </span><span class="nx">evalSetID</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;calculator_tool&quot;</span><span class="p">,</span>
+</span><span id="__span-61-20"><a id="__codelineno-61-20" name="__codelineno-61-20"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-61-21"><a id="__codelineno-61-21" name="__codelineno-61-21"></a><span class="w">        </span><span class="p">{</span>
+</span><span id="__span-61-22"><a id="__codelineno-61-22" name="__codelineno-61-22"></a><span class="w">            </span><span class="nx">name</span><span class="p">:</span><span class="w">      </span><span class="s">&quot;currenttime&quot;</span><span class="p">,</span>
+</span><span id="__span-61-23"><a id="__codelineno-61-23" name="__codelineno-61-23"></a><span class="w">            </span><span class="nx">evalSetID</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;currenttime_tool&quot;</span><span class="p">,</span>
+</span><span id="__span-61-24"><a id="__codelineno-61-24" name="__codelineno-61-24"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-61-25"><a id="__codelineno-61-25" name="__codelineno-61-25"></a><span class="w">        </span><span class="p">{</span>
+</span><span id="__span-61-26"><a id="__codelineno-61-26" name="__codelineno-61-26"></a><span class="w">            </span><span class="nx">name</span><span class="p">:</span><span class="w">      </span><span class="s">&quot;compound_interest&quot;</span><span class="p">,</span>
+</span><span id="__span-61-27"><a id="__codelineno-61-27" name="__codelineno-61-27"></a><span class="w">            </span><span class="nx">evalSetID</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;compound_interest&quot;</span><span class="p">,</span>
+</span><span id="__span-61-28"><a id="__codelineno-61-28" name="__codelineno-61-28"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-61-29"><a id="__codelineno-61-29" name="__codelineno-61-29"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-61-30"><a id="__codelineno-61-30" name="__codelineno-61-30"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">tt</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">tests</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-61-31"><a id="__codelineno-61-31" name="__codelineno-61-31"></a><span class="w">        </span><span class="nx">t</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">tt</span><span class="p">.</span><span class="nx">name</span><span class="p">,</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">t</span><span class="w"> </span><span class="o">*</span><span class="nx">testing</span><span class="p">.</span><span class="nx">T</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-61-32"><a id="__codelineno-61-32" name="__codelineno-61-32"></a><span class="w">            </span><span class="nx">chat</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">multiTurnChat</span><span class="p">{</span>
+</span><span id="__span-61-33"><a id="__codelineno-61-33" name="__codelineno-61-33"></a><span class="w">                </span><span class="nx">modelName</span><span class="p">:</span><span class="w"> </span><span class="o">*</span><span class="nx">modelName</span><span class="p">,</span>
+</span><span id="__span-61-34"><a id="__codelineno-61-34" name="__codelineno-61-34"></a><span class="w">                </span><span class="nx">streaming</span><span class="p">:</span><span class="w"> </span><span class="o">*</span><span class="nx">streaming</span><span class="p">,</span>
+</span><span id="__span-61-35"><a id="__codelineno-61-35" name="__codelineno-61-35"></a><span class="w">                </span><span class="nx">variant</span><span class="p">:</span><span class="w">   </span><span class="o">*</span><span class="nx">variant</span><span class="p">,</span>
+</span><span id="__span-61-36"><a id="__codelineno-61-36" name="__codelineno-61-36"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-61-37"><a id="__codelineno-61-37" name="__codelineno-61-37"></a><span class="w">            </span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">cancel</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">WithTimeout</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">(),</span><span class="w"> </span><span class="mi">5</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">)</span>
+</span><span id="__span-61-38"><a id="__codelineno-61-38" name="__codelineno-61-38"></a><span class="w">            </span><span class="k">defer</span><span class="w"> </span><span class="nx">cancel</span><span class="p">()</span>
+</span><span id="__span-61-39"><a id="__codelineno-61-39" name="__codelineno-61-39"></a><span class="w">            </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">chat</span><span class="p">.</span><span class="nx">setup</span><span class="p">(</span><span class="nx">ctx</span><span class="p">)</span>
+</span><span id="__span-61-40"><a id="__codelineno-61-40" name="__codelineno-61-40"></a><span class="w">            </span><span class="nx">assert</span><span class="p">.</span><span class="nx">NoError</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-61-41"><a id="__codelineno-61-41" name="__codelineno-61-41"></a><span class="w">            </span><span class="k">defer</span><span class="w"> </span><span class="nx">chat</span><span class="p">.</span><span class="nx">runner</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+</span><span id="__span-61-42"><a id="__codelineno-61-42" name="__codelineno-61-42"></a><span class="w">            </span><span class="nx">evaluationDir</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">&quot;evaluation&quot;</span>
+</span><span id="__span-61-43"><a id="__codelineno-61-43" name="__codelineno-61-43"></a><span class="w">            </span><span class="nx">localEvalSetManager</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">localevalset</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">evalset</span><span class="p">.</span><span class="nx">WithBaseDir</span><span class="p">(</span><span class="nx">evaluationDir</span><span class="p">))</span>
+</span><span id="__span-61-44"><a id="__codelineno-61-44" name="__codelineno-61-44"></a><span class="w">            </span><span class="nx">localMetricManager</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">localmetric</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">metric</span><span class="p">.</span><span class="nx">WithBaseDir</span><span class="p">(</span><span class="nx">evaluationDir</span><span class="p">))</span>
+</span><span id="__span-61-45"><a id="__codelineno-61-45" name="__codelineno-61-45"></a><span class="w">            </span><span class="nx">localEvalResultManager</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">localevalresult</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">evalresult</span><span class="p">.</span><span class="nx">WithBaseDir</span><span class="p">(</span><span class="nx">evaluationDir</span><span class="p">))</span>
+</span><span id="__span-61-46"><a id="__codelineno-61-46" name="__codelineno-61-46"></a><span class="w">            </span><span class="nx">evaluator</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-61-47"><a id="__codelineno-61-47" name="__codelineno-61-47"></a><span class="w">                </span><span class="nx">appName</span><span class="p">,</span>
+</span><span id="__span-61-48"><a id="__codelineno-61-48" name="__codelineno-61-48"></a><span class="w">                </span><span class="nx">chat</span><span class="p">.</span><span class="nx">runner</span><span class="p">,</span>
+</span><span id="__span-61-49"><a id="__codelineno-61-49" name="__codelineno-61-49"></a><span class="w">                </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithEvalSetManager</span><span class="p">(</span><span class="nx">localEvalSetManager</span><span class="p">),</span>
+</span><span id="__span-61-50"><a id="__codelineno-61-50" name="__codelineno-61-50"></a><span class="w">                </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithMetricManager</span><span class="p">(</span><span class="nx">localMetricManager</span><span class="p">),</span>
+</span><span id="__span-61-51"><a id="__codelineno-61-51" name="__codelineno-61-51"></a><span class="w">                </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithEvalResultManager</span><span class="p">(</span><span class="nx">localEvalResultManager</span><span class="p">),</span>
+</span><span id="__span-61-52"><a id="__codelineno-61-52" name="__codelineno-61-52"></a><span class="w">            </span><span class="p">)</span>
+</span><span id="__span-61-53"><a id="__codelineno-61-53" name="__codelineno-61-53"></a><span class="w">            </span><span class="nx">assert</span><span class="p">.</span><span class="nx">NoError</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-61-54"><a id="__codelineno-61-54" name="__codelineno-61-54"></a><span class="w">            </span><span class="nx">t</span><span class="p">.</span><span class="nx">Cleanup</span><span class="p">(</span><span class="kd">func</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-61-55"><a id="__codelineno-61-55" name="__codelineno-61-55"></a><span class="w">                </span><span class="nx">assert</span><span class="p">.</span><span class="nx">NoError</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">evaluator</span><span class="p">.</span><span class="nx">Close</span><span class="p">())</span>
+</span><span id="__span-61-56"><a id="__codelineno-61-56" name="__codelineno-61-56"></a><span class="w">            </span><span class="p">})</span>
+</span><span id="__span-61-57"><a id="__codelineno-61-57" name="__codelineno-61-57"></a><span class="w">            </span><span class="nx">result</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evaluator</span><span class="p">.</span><span class="nx">Evaluate</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">tt</span><span class="p">.</span><span class="nx">evalSetID</span><span class="p">)</span>
+</span><span id="__span-61-58"><a id="__codelineno-61-58" name="__codelineno-61-58"></a><span class="w">            </span><span class="nx">assert</span><span class="p">.</span><span class="nx">NoError</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-61-59"><a id="__codelineno-61-59" name="__codelineno-61-59"></a><span class="w">            </span><span class="nx">assert</span><span class="p">.</span><span class="nx">NotNil</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">result</span><span class="p">)</span>
+</span><span id="__span-61-60"><a id="__codelineno-61-60" name="__codelineno-61-60"></a><span class="w">            </span><span class="nx">resultData</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">json</span><span class="p">.</span><span class="nx">MarshalIndent</span><span class="p">(</span><span class="nx">result</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;  &quot;</span><span class="p">)</span>
+</span><span id="__span-61-61"><a id="__codelineno-61-61" name="__codelineno-61-61"></a><span class="w">            </span><span class="nx">assert</span><span class="p">.</span><span class="nx">NoError</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-61-62"><a id="__codelineno-61-62" name="__codelineno-61-62"></a><span class="w">            </span><span class="nx">assert</span><span class="p">.</span><span class="nx">Equal</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">status</span><span class="p">.</span><span class="nx">EvalStatusPassed</span><span class="p">,</span><span class="w"> </span><span class="nx">result</span><span class="p">.</span><span class="nx">OverallStatus</span><span class="p">,</span><span class="w"> </span><span class="nb">string</span><span class="p">(</span><span class="nx">resultData</span><span class="p">))</span>
+</span><span id="__span-61-63"><a id="__codelineno-61-63" name="__codelineno-61-63"></a><span class="w">        </span><span class="p">})</span>
+</span><span id="__span-61-64"><a id="__codelineno-61-64" name="__codelineno-61-64"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-61-65"><a id="__codelineno-61-65" name="__codelineno-61-65"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 
 
@@ -6693,7 +6732,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="February 5, 2026 01:51:19 UTC">2026-02-05 01:51:19</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="February 5, 2026 09:07:43 UTC">2026-02-05 09:07:43</span>
   </span>
 
     
