@@ -3941,9 +3941,9 @@
 </ol>
 <h2 id="_14">使用方法</h2>
 <h3 id="evalset_1">评估集 EvalSet</h3>
-<p>EvalSet 用于描述评估覆盖的场景集合，提供评估集输入。每个场景对应一个评估用例 EvalCase，EvalCase 再按轮组织 Invocation。评估运行时，Service 会按 EvalCase 的 <code>conversation</code> 驱动 Runner 推理，并将推理得到的实际轨迹与 EvalSet 中的预期轨迹交给 Evaluator 对比打分。</p>
+<p>EvalSet 用于描述评估覆盖的场景集合，提供评估集输入。每个场景对应一个评估用例 EvalCase，EvalCase 再按轮组织 Invocation。默认模式会按 <code>conversation</code> 驱动 Runner 推理产出实际轨迹，并将 <code>conversation</code> 作为预期轨迹；Trace 模式会跳过推理并使用 <code>actualConversation</code> 作为实际轨迹。评估运行时，Service 会将实际轨迹与预期轨迹交给 Evaluator 对比打分。</p>
 <h4 id="_15">结构定义</h4>
-<p>EvalSet 是评估用例的集合，每个用例用 EvalCase 表达，用例内部的 Conversation 按轮组织 Invocation，用于描述用户输入与可选的预期信息，结构定义如下。</p>
+<p>EvalSet 是评估用例的集合，每个用例用 EvalCase 表达。用例内部的 Conversation 按轮组织 Invocation，用于描述用户输入与预期输出；Trace 模式下 ActualConversation 用于描述实际输出轨迹，结构定义如下。</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-11-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-11-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-11-3"> 3</a></span>
@@ -3991,7 +3991,8 @@
 <span class="normal"><a href="#__codelineno-11-45">45</a></span>
 <span class="normal"><a href="#__codelineno-11-46">46</a></span>
 <span class="normal"><a href="#__codelineno-11-47">47</a></span>
-<span class="normal"><a href="#__codelineno-11-48">48</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+<span class="normal"><a href="#__codelineno-11-48">48</a></span>
+<span class="normal"><a href="#__codelineno-11-49">49</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime&quot;</span>
 </span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
 </span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4"></a><span class="p">)</span>
@@ -4010,40 +4011,43 @@
 </span><span id="__span-11-17"><a id="__codelineno-11-17" name="__codelineno-11-17"></a><span class="w">    </span><span class="nx">EvalID</span><span class="w">            </span><span class="kt">string</span><span class="w">               </span><span class="c1">// EvalID 是用例标识</span>
 </span><span id="__span-11-18"><a id="__codelineno-11-18" name="__codelineno-11-18"></a><span class="w">    </span><span class="nx">EvalMode</span><span class="w">          </span><span class="nx">EvalMode</span><span class="w">             </span><span class="c1">// EvalMode 是用例模式，可选为空或 trace</span>
 </span><span id="__span-11-19"><a id="__codelineno-11-19" name="__codelineno-11-19"></a><span class="w">    </span><span class="nx">ContextMessages</span><span class="w">   </span><span class="p">[]</span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="w">     </span><span class="c1">// ContextMessages 是上下文消息，可选</span>
-</span><span id="__span-11-20"><a id="__codelineno-11-20" name="__codelineno-11-20"></a><span class="w">    </span><span class="nx">Conversation</span><span class="w">      </span><span class="p">[]</span><span class="o">*</span><span class="nx">Invocation</span><span class="w">        </span><span class="c1">// Conversation 是多轮交互序列，必填</span>
-</span><span id="__span-11-21"><a id="__codelineno-11-21" name="__codelineno-11-21"></a><span class="w">    </span><span class="nx">SessionInput</span><span class="w">      </span><span class="o">*</span><span class="nx">SessionInput</span><span class="w">        </span><span class="c1">// SessionInput 是会话初始化信息，必填</span>
-</span><span id="__span-11-22"><a id="__codelineno-11-22" name="__codelineno-11-22"></a><span class="w">    </span><span class="nx">CreationTimestamp</span><span class="w"> </span><span class="o">*</span><span class="nx">epochtime</span><span class="p">.</span><span class="nx">EpochTime</span><span class="w"> </span><span class="c1">// CreationTimestamp 是创建时间戳，可选</span>
-</span><span id="__span-11-23"><a id="__codelineno-11-23" name="__codelineno-11-23"></a><span class="p">}</span>
-</span><span id="__span-11-24"><a id="__codelineno-11-24" name="__codelineno-11-24"></a>
-</span><span id="__span-11-25"><a id="__codelineno-11-25" name="__codelineno-11-25"></a><span class="c1">// Invocation 表示对话中的一轮交互</span>
-</span><span id="__span-11-26"><a id="__codelineno-11-26" name="__codelineno-11-26"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Invocation</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-11-27"><a id="__codelineno-11-27" name="__codelineno-11-27"></a><span class="w">    </span><span class="nx">InvocationID</span><span class="w">          </span><span class="kt">string</span><span class="w">               </span><span class="c1">// InvocationID 是本轮标识，可选</span>
-</span><span id="__span-11-28"><a id="__codelineno-11-28" name="__codelineno-11-28"></a><span class="w">    </span><span class="nx">UserContent</span><span class="w">           </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="w">       </span><span class="c1">// UserContent 是本轮用户输入，必填</span>
-</span><span id="__span-11-29"><a id="__codelineno-11-29" name="__codelineno-11-29"></a><span class="w">    </span><span class="nx">FinalResponse</span><span class="w">         </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="w">       </span><span class="c1">// FinalResponse 是最终响应，可选</span>
-</span><span id="__span-11-30"><a id="__codelineno-11-30" name="__codelineno-11-30"></a><span class="w">    </span><span class="nx">Tools</span><span class="w">                 </span><span class="p">[]</span><span class="o">*</span><span class="nx">Tool</span><span class="w">              </span><span class="c1">// Tools 是工具轨迹，可选</span>
-</span><span id="__span-11-31"><a id="__codelineno-11-31" name="__codelineno-11-31"></a><span class="w">    </span><span class="nx">IntermediateResponses</span><span class="w"> </span><span class="p">[]</span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="w">     </span><span class="c1">// IntermediateResponses 是中间响应，可选</span>
-</span><span id="__span-11-32"><a id="__codelineno-11-32" name="__codelineno-11-32"></a><span class="w">    </span><span class="nx">CreationTimestamp</span><span class="w">     </span><span class="o">*</span><span class="nx">epochtime</span><span class="p">.</span><span class="nx">EpochTime</span><span class="w"> </span><span class="c1">// CreationTimestamp 是创建时间戳，可选</span>
-</span><span id="__span-11-33"><a id="__codelineno-11-33" name="__codelineno-11-33"></a><span class="p">}</span>
-</span><span id="__span-11-34"><a id="__codelineno-11-34" name="__codelineno-11-34"></a>
-</span><span id="__span-11-35"><a id="__codelineno-11-35" name="__codelineno-11-35"></a><span class="c1">// Tool 表示一次工具调用及其结果</span>
-</span><span id="__span-11-36"><a id="__codelineno-11-36" name="__codelineno-11-36"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Tool</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-11-37"><a id="__codelineno-11-37" name="__codelineno-11-37"></a><span class="w">    </span><span class="nx">ID</span><span class="w">        </span><span class="kt">string</span><span class="w"> </span><span class="c1">// ID 是工具调用标识，可选</span>
-</span><span id="__span-11-38"><a id="__codelineno-11-38" name="__codelineno-11-38"></a><span class="w">    </span><span class="nx">Name</span><span class="w">      </span><span class="kt">string</span><span class="w"> </span><span class="c1">// Name 是工具名，必填</span>
-</span><span id="__span-11-39"><a id="__codelineno-11-39" name="__codelineno-11-39"></a><span class="w">    </span><span class="nx">Arguments</span><span class="w"> </span><span class="kt">any</span><span class="w">    </span><span class="c1">// Arguments 是工具入参，可选</span>
-</span><span id="__span-11-40"><a id="__codelineno-11-40" name="__codelineno-11-40"></a><span class="w">    </span><span class="nx">Result</span><span class="w">    </span><span class="kt">any</span><span class="w">    </span><span class="c1">// Result 是工具输出，可选</span>
-</span><span id="__span-11-41"><a id="__codelineno-11-41" name="__codelineno-11-41"></a><span class="p">}</span>
-</span><span id="__span-11-42"><a id="__codelineno-11-42" name="__codelineno-11-42"></a>
-</span><span id="__span-11-43"><a id="__codelineno-11-43" name="__codelineno-11-43"></a><span class="c1">// SessionInput 表示会话初始化信息</span>
-</span><span id="__span-11-44"><a id="__codelineno-11-44" name="__codelineno-11-44"></a><span class="kd">type</span><span class="w"> </span><span class="nx">SessionInput</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-11-45"><a id="__codelineno-11-45" name="__codelineno-11-45"></a><span class="w">    </span><span class="nx">AppName</span><span class="w"> </span><span class="kt">string</span><span class="w">         </span><span class="c1">// AppName 是应用名，可选</span>
-</span><span id="__span-11-46"><a id="__codelineno-11-46" name="__codelineno-11-46"></a><span class="w">    </span><span class="nx">UserID</span><span class="w">  </span><span class="kt">string</span><span class="w">         </span><span class="c1">// UserID 是用户标识，必填</span>
-</span><span id="__span-11-47"><a id="__codelineno-11-47" name="__codelineno-11-47"></a><span class="w">    </span><span class="nx">State</span><span class="w">   </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="w"> </span><span class="c1">// State 是会话初始状态，可选</span>
-</span><span id="__span-11-48"><a id="__codelineno-11-48" name="__codelineno-11-48"></a><span class="p">}</span>
+</span><span id="__span-11-20"><a id="__codelineno-11-20" name="__codelineno-11-20"></a><span class="w">    </span><span class="nx">Conversation</span><span class="w">      </span><span class="p">[]</span><span class="o">*</span><span class="nx">Invocation</span><span class="w">        </span><span class="c1">// Conversation 是预期多轮交互序列，默认模式必填，Trace 模式可选</span>
+</span><span id="__span-11-21"><a id="__codelineno-11-21" name="__codelineno-11-21"></a><span class="w">    </span><span class="nx">ActualConversation</span><span class="w">   </span><span class="p">[]</span><span class="o">*</span><span class="nx">Invocation</span><span class="w">     </span><span class="c1">// ActualConversation 是 Trace 模式下的实际输出轨迹，Trace 模式必填</span>
+</span><span id="__span-11-22"><a id="__codelineno-11-22" name="__codelineno-11-22"></a><span class="w">    </span><span class="nx">SessionInput</span><span class="w">      </span><span class="o">*</span><span class="nx">SessionInput</span><span class="w">        </span><span class="c1">// SessionInput 是会话初始化信息，必填</span>
+</span><span id="__span-11-23"><a id="__codelineno-11-23" name="__codelineno-11-23"></a><span class="w">    </span><span class="nx">CreationTimestamp</span><span class="w"> </span><span class="o">*</span><span class="nx">epochtime</span><span class="p">.</span><span class="nx">EpochTime</span><span class="w"> </span><span class="c1">// CreationTimestamp 是创建时间戳，可选</span>
+</span><span id="__span-11-24"><a id="__codelineno-11-24" name="__codelineno-11-24"></a><span class="p">}</span>
+</span><span id="__span-11-25"><a id="__codelineno-11-25" name="__codelineno-11-25"></a>
+</span><span id="__span-11-26"><a id="__codelineno-11-26" name="__codelineno-11-26"></a><span class="c1">// Invocation 表示对话中的一轮交互</span>
+</span><span id="__span-11-27"><a id="__codelineno-11-27" name="__codelineno-11-27"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Invocation</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-11-28"><a id="__codelineno-11-28" name="__codelineno-11-28"></a><span class="w">    </span><span class="nx">InvocationID</span><span class="w">          </span><span class="kt">string</span><span class="w">               </span><span class="c1">// InvocationID 是本轮标识，可选</span>
+</span><span id="__span-11-29"><a id="__codelineno-11-29" name="__codelineno-11-29"></a><span class="w">    </span><span class="nx">UserContent</span><span class="w">           </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="w">       </span><span class="c1">// UserContent 是本轮用户输入，必填</span>
+</span><span id="__span-11-30"><a id="__codelineno-11-30" name="__codelineno-11-30"></a><span class="w">    </span><span class="nx">FinalResponse</span><span class="w">         </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="w">       </span><span class="c1">// FinalResponse 是最终响应，可选</span>
+</span><span id="__span-11-31"><a id="__codelineno-11-31" name="__codelineno-11-31"></a><span class="w">    </span><span class="nx">Tools</span><span class="w">                 </span><span class="p">[]</span><span class="o">*</span><span class="nx">Tool</span><span class="w">              </span><span class="c1">// Tools 是工具轨迹，可选</span>
+</span><span id="__span-11-32"><a id="__codelineno-11-32" name="__codelineno-11-32"></a><span class="w">    </span><span class="nx">IntermediateResponses</span><span class="w"> </span><span class="p">[]</span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="w">     </span><span class="c1">// IntermediateResponses 是中间响应，可选</span>
+</span><span id="__span-11-33"><a id="__codelineno-11-33" name="__codelineno-11-33"></a><span class="w">    </span><span class="nx">CreationTimestamp</span><span class="w">     </span><span class="o">*</span><span class="nx">epochtime</span><span class="p">.</span><span class="nx">EpochTime</span><span class="w"> </span><span class="c1">// CreationTimestamp 是创建时间戳，可选</span>
+</span><span id="__span-11-34"><a id="__codelineno-11-34" name="__codelineno-11-34"></a><span class="p">}</span>
+</span><span id="__span-11-35"><a id="__codelineno-11-35" name="__codelineno-11-35"></a>
+</span><span id="__span-11-36"><a id="__codelineno-11-36" name="__codelineno-11-36"></a><span class="c1">// Tool 表示一次工具调用及其结果</span>
+</span><span id="__span-11-37"><a id="__codelineno-11-37" name="__codelineno-11-37"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Tool</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-11-38"><a id="__codelineno-11-38" name="__codelineno-11-38"></a><span class="w">    </span><span class="nx">ID</span><span class="w">        </span><span class="kt">string</span><span class="w"> </span><span class="c1">// ID 是工具调用标识，可选</span>
+</span><span id="__span-11-39"><a id="__codelineno-11-39" name="__codelineno-11-39"></a><span class="w">    </span><span class="nx">Name</span><span class="w">      </span><span class="kt">string</span><span class="w"> </span><span class="c1">// Name 是工具名，必填</span>
+</span><span id="__span-11-40"><a id="__codelineno-11-40" name="__codelineno-11-40"></a><span class="w">    </span><span class="nx">Arguments</span><span class="w"> </span><span class="kt">any</span><span class="w">    </span><span class="c1">// Arguments 是工具入参，可选</span>
+</span><span id="__span-11-41"><a id="__codelineno-11-41" name="__codelineno-11-41"></a><span class="w">    </span><span class="nx">Result</span><span class="w">    </span><span class="kt">any</span><span class="w">    </span><span class="c1">// Result 是工具输出，可选</span>
+</span><span id="__span-11-42"><a id="__codelineno-11-42" name="__codelineno-11-42"></a><span class="p">}</span>
+</span><span id="__span-11-43"><a id="__codelineno-11-43" name="__codelineno-11-43"></a>
+</span><span id="__span-11-44"><a id="__codelineno-11-44" name="__codelineno-11-44"></a><span class="c1">// SessionInput 表示会话初始化信息</span>
+</span><span id="__span-11-45"><a id="__codelineno-11-45" name="__codelineno-11-45"></a><span class="kd">type</span><span class="w"> </span><span class="nx">SessionInput</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-11-46"><a id="__codelineno-11-46" name="__codelineno-11-46"></a><span class="w">    </span><span class="nx">AppName</span><span class="w"> </span><span class="kt">string</span><span class="w">         </span><span class="c1">// AppName 是应用名，可选</span>
+</span><span id="__span-11-47"><a id="__codelineno-11-47" name="__codelineno-11-47"></a><span class="w">    </span><span class="nx">UserID</span><span class="w">  </span><span class="kt">string</span><span class="w">         </span><span class="c1">// UserID 是用户标识，必填</span>
+</span><span id="__span-11-48"><a id="__codelineno-11-48" name="__codelineno-11-48"></a><span class="w">    </span><span class="nx">State</span><span class="w">   </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="w"> </span><span class="c1">// State 是会话初始状态，可选</span>
+</span><span id="__span-11-49"><a id="__codelineno-11-49" name="__codelineno-11-49"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>EvalSet 由 <code>evalSetId</code> 标识，包含多个 EvalCase，每个用例用 <code>evalId</code> 标识。</p>
-<p>推理阶段按 <code>conversation</code> 的轮次读取 <code>userContent</code> 作为输入，<code>sessionInput.userId</code> 用于创建会话，必要时通过 <code>sessionInput.state</code> 注入初始状态，<code>contextMessages</code> 会在每次推理前注入额外上下文。</p>
-<p>EvalSet 中的 <code>tools</code> 与 <code>finalResponse</code> 用于描述工具轨迹与最终响应，是否需要填写取决于所选评估指标。默认模式下它们通常作为预期信息，<code>trace</code> 模式下它们表示既有轨迹。</p>
-<p><code>evalMode</code> 为空表示默认模式，此时会实时推理并采集工具轨迹与最终响应。<code>evalMode</code> 为 <code>trace</code> 时跳过推理，直接使用 <code>conversation</code> 中的既有轨迹参与评估。</p>
+<p>默认模式推理阶段按 <code>conversation</code> 的轮次读取 <code>userContent</code> 作为输入，<code>sessionInput.userId</code> 用于创建会话，必要时通过 <code>sessionInput.state</code> 注入初始状态，<code>contextMessages</code> 会在每次推理前注入额外上下文。Trace 模式下不会推理，而是直接使用 <code>actualConversation</code> 作为实际轨迹。</p>
+<p>EvalSet 中的 <code>tools</code> 与 <code>finalResponse</code> 用于描述工具轨迹与最终响应，是否需要填写取决于所选评估指标。</p>
+<p>Trace 模式下可以通过 <code>actualConversation</code> 显式配置实际输出轨迹。</p>
+<p>当 Trace 模式同时配置了 <code>conversation</code> 与 <code>actualConversation</code> 时，需要按轮次对齐，且 <code>actualConversation</code> 每轮应包含 <code>userContent</code>。当仅配置 <code>actualConversation</code> 且未配置 <code>conversation</code> 时，表示不提供预期输出。</p>
+<p><code>evalMode</code> 为空表示默认模式，此时会实时推理并采集工具轨迹与最终响应。<code>evalMode</code> 为 <code>trace</code> 时跳过推理，使用 <code>actualConversation</code> 作为实际轨迹参与评估；<code>conversation</code> 可选用于提供预期输出。</p>
 <h4 id="evalset-manager">EvalSet Manager</h4>
 <p>EvalSetManager 是 EvalSet 的存储抽象，用于将评估用例资产从代码中分离。通过切换实现可以选择本地文件或内存存储，也可以自行实现接口接入数据库或配置平台。</p>
 <h5 id="_16">接口定义</h5>
@@ -5121,7 +5125,7 @@
 </span><span id="__span-34-38"><a id="__codelineno-34-38" name="__codelineno-34-38"></a><span class="w">    </span><span class="nx">RubricScores</span><span class="w"> </span><span class="p">[]</span><span class="o">*</span><span class="nx">evalresult</span><span class="p">.</span><span class="nx">RubricScore</span><span class="w"> </span><span class="c1">// RubricScores 是评估细则分数列表</span>
 </span><span id="__span-34-39"><a id="__codelineno-34-39" name="__codelineno-34-39"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p>Evaluator 的输入是两组 Invocation 列表。actuals 表示推理阶段采集到的实际轨迹，expecteds 表示 EvalSet 中的预期轨迹。框架会以 EvalCase 为粒度调用 Evaluate，actuals 与 expecteds 均来自同一个 EvalCase 的 Conversation，并按轮次对齐。大多数评估器要求两者轮数一致，否则会直接返回错误。</p>
+<p>Evaluator 的输入是两组 Invocation 列表。actuals 表示推理阶段采集到的实际轨迹，expecteds 表示 EvalSet 中的预期轨迹。框架会以 EvalCase 为粒度调用 Evaluate，actuals 与 expecteds 分别表示 EvalCase 的实际轨迹与预期轨迹，并按轮次对齐。大多数评估器要求两者轮数一致，否则会直接返回错误。</p>
 <p>Evaluator 的输出包含整体结果与逐轮明细。整体分数通常由逐轮分数聚合得到，整体状态通常由整体分数与 <code>threshold</code> 对比得到。对确定性评估器，<code>reason</code> 通常用于记录不匹配原因。对 LLM Judge 类评估器，<code>reason</code> 与 <code>rubricScores</code> 会用于保留裁判依据。</p>
 <h4 id="_20">工具轨迹评估器</h4>
 <p>内置工具轨迹评估器名称为 <code>tool_trajectory_avg_score</code>，相应评估准则为 <a href="#tooltrajectorycriterion">criterion.toolTrajectory</a>，在每一轮调用 <code>ToolTrajectoryCriterion</code> 对比工具名、参数与结果。</p>
@@ -6065,12 +6069,12 @@
 <h4 id="_28">推理阶段</h4>
 <p>推理阶段由 <code>Inference</code> 方法负责，读取 EvalSet 并按 <code>EvalCaseIDs</code> 过滤用例，然后为每个用例生成一个独立的 <code>SessionID</code> 并执行推理。</p>
 <p>当 <code>evalMode</code> 为空值时，推理阶段会按 <code>conversation</code> 的轮次依次调用 Runner，并把每轮采集到的实际 Invocation 写入 <code>Inferences</code>。</p>
-<p>当 <code>evalMode</code> 为 <code>trace</code> 时，推理阶段不会运行 Runner，而是直接将 EvalSet 中的 <code>conversation</code> 作为实际轨迹返回。</p>
+<p>当 <code>evalMode</code> 为 <code>trace</code> 时，推理阶段不会运行 Runner，而是直接将 <code>actualConversation</code> 作为实际轨迹返回。</p>
 <p>Local 实现支持 EvalCase 级并发推理。开启后会并行运行多个用例，单个用例内部仍按轮次顺序执行。</p>
 <h4 id="_29">评估阶段</h4>
 <p>评估阶段由 <code>Evaluate</code> 方法负责，以 <code>InferenceResult</code> 为输入，加载对应的 EvalCase，构造 actuals 与 expecteds 两组 Invocation 列表，并按 <code>EvaluateConfig.EvalMetrics</code> 逐条执行评估器。</p>
 <p>Local 实现会通过 Registry 按 <code>MetricName</code> 获取 Evaluator，并调用 <code>Evaluator.Evaluate</code> 完成打分。该调用以 EvalCase 为粒度，actuals 与 expecteds 均来自同一个用例，并按轮次对齐。</p>
-<p>当 <code>evalMode</code> 为 <code>trace</code> 时，评估阶段会将预期侧 expecteds 处理为仅保留用户输入的占位 Invocation，用于避免将 trace 输出误作为参考答案参与对比。</p>
+<p>当 <code>evalMode</code> 为 <code>trace</code> 时，推理阶段跳过 Runner，实际轨迹 actuals 来自 <code>actualConversation</code>；预期轨迹由 <code>conversation</code> 提供。</p>
 <p>评估完成后会生成 <code>EvalSetRunResult</code> 并返回给 AgentEvaluator。</p>
 <h3 id="agentevaluator">AgentEvaluator</h3>
 <p>AgentEvaluator 是面向使用方的评估入口。它负责按 <code>evalSetID</code> 组织一次评估运行，读取评估集与评估指标，驱动评估服务完成推理与打分，对多次运行的结果做聚合并将结果落盘。</p>
@@ -6135,7 +6139,12 @@
 </span></code></pre></div></td></tr></table></div>
 <h3 id="trace">Trace 评估模式</h3>
 <p>Trace 模式用于评估既有轨迹，可以将一次真实运行采集到的 Invocation 轨迹写入评估集 EvalSet，并在运行评估时跳过推理阶段。</p>
-<p>启用方式是在 EvalCase 中将 <code>evalMode</code> 设为 <code>trace</code>，并在 <code>conversation</code> 中写入完整轨迹。Trace 模式下仍要求 <code>sessionInput</code> 与 <code>conversation</code> 非空。</p>
+<p>启用方式是在 EvalCase 中将 <code>evalMode</code> 设为 <code>trace</code>。Trace 模式下 <code>actualConversation</code> 表示实际输出，<code>conversation</code> 表示预期输出，有三种配置方式：</p>
+<ul>
+<li>仅配置 <code>actualConversation</code>：<code>actualConversation</code> 作为实际轨迹，不提供预期轨迹。</li>
+<li>同时配置 <code>actualConversation</code> 与 <code>conversation</code>：<code>actualConversation</code> 作为实际轨迹，<code>conversation</code> 作为预期轨迹，按轮次对齐。</li>
+<li>仅配置 <code>conversation</code>：<code>conversation</code> 作为实际轨迹，不提供预期轨迹（仅为兼容历史行为）。</li>
+</ul>
 <div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-55-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-55-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-55-3"> 3</a></span>
@@ -6179,7 +6188,37 @@
 <span class="normal"><a href="#__codelineno-55-41">41</a></span>
 <span class="normal"><a href="#__codelineno-55-42">42</a></span>
 <span class="normal"><a href="#__codelineno-55-43">43</a></span>
-<span class="normal"><a href="#__codelineno-55-44">44</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-55-1"><a id="__codelineno-55-1" name="__codelineno-55-1"></a><span class="p">{</span>
+<span class="normal"><a href="#__codelineno-55-44">44</a></span>
+<span class="normal"><a href="#__codelineno-55-45">45</a></span>
+<span class="normal"><a href="#__codelineno-55-46">46</a></span>
+<span class="normal"><a href="#__codelineno-55-47">47</a></span>
+<span class="normal"><a href="#__codelineno-55-48">48</a></span>
+<span class="normal"><a href="#__codelineno-55-49">49</a></span>
+<span class="normal"><a href="#__codelineno-55-50">50</a></span>
+<span class="normal"><a href="#__codelineno-55-51">51</a></span>
+<span class="normal"><a href="#__codelineno-55-52">52</a></span>
+<span class="normal"><a href="#__codelineno-55-53">53</a></span>
+<span class="normal"><a href="#__codelineno-55-54">54</a></span>
+<span class="normal"><a href="#__codelineno-55-55">55</a></span>
+<span class="normal"><a href="#__codelineno-55-56">56</a></span>
+<span class="normal"><a href="#__codelineno-55-57">57</a></span>
+<span class="normal"><a href="#__codelineno-55-58">58</a></span>
+<span class="normal"><a href="#__codelineno-55-59">59</a></span>
+<span class="normal"><a href="#__codelineno-55-60">60</a></span>
+<span class="normal"><a href="#__codelineno-55-61">61</a></span>
+<span class="normal"><a href="#__codelineno-55-62">62</a></span>
+<span class="normal"><a href="#__codelineno-55-63">63</a></span>
+<span class="normal"><a href="#__codelineno-55-64">64</a></span>
+<span class="normal"><a href="#__codelineno-55-65">65</a></span>
+<span class="normal"><a href="#__codelineno-55-66">66</a></span>
+<span class="normal"><a href="#__codelineno-55-67">67</a></span>
+<span class="normal"><a href="#__codelineno-55-68">68</a></span>
+<span class="normal"><a href="#__codelineno-55-69">69</a></span>
+<span class="normal"><a href="#__codelineno-55-70">70</a></span>
+<span class="normal"><a href="#__codelineno-55-71">71</a></span>
+<span class="normal"><a href="#__codelineno-55-72">72</a></span>
+<span class="normal"><a href="#__codelineno-55-73">73</a></span>
+<span class="normal"><a href="#__codelineno-55-74">74</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-55-1"><a id="__codelineno-55-1" name="__codelineno-55-1"></a><span class="p">{</span>
 </span><span id="__span-55-2"><a id="__codelineno-55-2" name="__codelineno-55-2"></a><span class="w">  </span><span class="nt">&quot;evalSetId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;trace-basic&quot;</span><span class="p">,</span>
 </span><span id="__span-55-3"><a id="__codelineno-55-3" name="__codelineno-55-3"></a><span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;trace-basic&quot;</span><span class="p">,</span>
 </span><span id="__span-55-4"><a id="__codelineno-55-4" name="__codelineno-55-4"></a><span class="w">  </span><span class="nt">&quot;evalCases&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
@@ -6216,16 +6255,46 @@
 </span><span id="__span-55-35"><a id="__codelineno-55-35" name="__codelineno-55-35"></a><span class="w">          </span><span class="p">]</span>
 </span><span id="__span-55-36"><a id="__codelineno-55-36" name="__codelineno-55-36"></a><span class="w">        </span><span class="p">}</span>
 </span><span id="__span-55-37"><a id="__codelineno-55-37" name="__codelineno-55-37"></a><span class="w">      </span><span class="p">],</span>
-</span><span id="__span-55-38"><a id="__codelineno-55-38" name="__codelineno-55-38"></a><span class="w">      </span><span class="nt">&quot;sessionInput&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-55-39"><a id="__codelineno-55-39" name="__codelineno-55-39"></a><span class="w">        </span><span class="nt">&quot;appName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;trace-eval-app&quot;</span><span class="p">,</span>
-</span><span id="__span-55-40"><a id="__codelineno-55-40" name="__codelineno-55-40"></a><span class="w">        </span><span class="nt">&quot;userId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;demo-user&quot;</span>
-</span><span id="__span-55-41"><a id="__codelineno-55-41" name="__codelineno-55-41"></a><span class="w">      </span><span class="p">}</span>
-</span><span id="__span-55-42"><a id="__codelineno-55-42" name="__codelineno-55-42"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-55-43"><a id="__codelineno-55-43" name="__codelineno-55-43"></a><span class="w">  </span><span class="p">]</span>
-</span><span id="__span-55-44"><a id="__codelineno-55-44" name="__codelineno-55-44"></a><span class="p">}</span>
+</span><span id="__span-55-38"><a id="__codelineno-55-38" name="__codelineno-55-38"></a><span class="w">      </span><span class="nt">&quot;actualConversation&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-55-39"><a id="__codelineno-55-39" name="__codelineno-55-39"></a><span class="w">        </span><span class="p">{</span>
+</span><span id="__span-55-40"><a id="__codelineno-55-40" name="__codelineno-55-40"></a><span class="w">          </span><span class="nt">&quot;invocationId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;trace_calc_add-1&quot;</span><span class="p">,</span>
+</span><span id="__span-55-41"><a id="__codelineno-55-41" name="__codelineno-55-41"></a><span class="w">          </span><span class="nt">&quot;userContent&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-55-42"><a id="__codelineno-55-42" name="__codelineno-55-42"></a><span class="w">            </span><span class="nt">&quot;role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;user&quot;</span><span class="p">,</span>
+</span><span id="__span-55-43"><a id="__codelineno-55-43" name="__codelineno-55-43"></a><span class="w">            </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;calc add 123 456&quot;</span>
+</span><span id="__span-55-44"><a id="__codelineno-55-44" name="__codelineno-55-44"></a><span class="w">          </span><span class="p">},</span>
+</span><span id="__span-55-45"><a id="__codelineno-55-45" name="__codelineno-55-45"></a><span class="w">          </span><span class="nt">&quot;finalResponse&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-55-46"><a id="__codelineno-55-46" name="__codelineno-55-46"></a><span class="w">            </span><span class="nt">&quot;role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-55-47"><a id="__codelineno-55-47" name="__codelineno-55-47"></a><span class="w">            </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;calc result: 579&quot;</span>
+</span><span id="__span-55-48"><a id="__codelineno-55-48" name="__codelineno-55-48"></a><span class="w">          </span><span class="p">},</span>
+</span><span id="__span-55-49"><a id="__codelineno-55-49" name="__codelineno-55-49"></a><span class="w">          </span><span class="nt">&quot;tools&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-55-50"><a id="__codelineno-55-50" name="__codelineno-55-50"></a><span class="w">            </span><span class="p">{</span>
+</span><span id="__span-55-51"><a id="__codelineno-55-51" name="__codelineno-55-51"></a><span class="w">              </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;call_00_example&quot;</span><span class="p">,</span>
+</span><span id="__span-55-52"><a id="__codelineno-55-52" name="__codelineno-55-52"></a><span class="w">              </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;calculator&quot;</span><span class="p">,</span>
+</span><span id="__span-55-53"><a id="__codelineno-55-53" name="__codelineno-55-53"></a><span class="w">              </span><span class="nt">&quot;arguments&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-55-54"><a id="__codelineno-55-54" name="__codelineno-55-54"></a><span class="w">                </span><span class="nt">&quot;a&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">123</span><span class="p">,</span>
+</span><span id="__span-55-55"><a id="__codelineno-55-55" name="__codelineno-55-55"></a><span class="w">                </span><span class="nt">&quot;b&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">456</span><span class="p">,</span>
+</span><span id="__span-55-56"><a id="__codelineno-55-56" name="__codelineno-55-56"></a><span class="w">                </span><span class="nt">&quot;operation&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;add&quot;</span>
+</span><span id="__span-55-57"><a id="__codelineno-55-57" name="__codelineno-55-57"></a><span class="w">              </span><span class="p">},</span>
+</span><span id="__span-55-58"><a id="__codelineno-55-58" name="__codelineno-55-58"></a><span class="w">              </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-55-59"><a id="__codelineno-55-59" name="__codelineno-55-59"></a><span class="w">                </span><span class="nt">&quot;a&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">123</span><span class="p">,</span>
+</span><span id="__span-55-60"><a id="__codelineno-55-60" name="__codelineno-55-60"></a><span class="w">                </span><span class="nt">&quot;b&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">456</span><span class="p">,</span>
+</span><span id="__span-55-61"><a id="__codelineno-55-61" name="__codelineno-55-61"></a><span class="w">                </span><span class="nt">&quot;operation&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;add&quot;</span><span class="p">,</span>
+</span><span id="__span-55-62"><a id="__codelineno-55-62" name="__codelineno-55-62"></a><span class="w">                </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">579</span>
+</span><span id="__span-55-63"><a id="__codelineno-55-63" name="__codelineno-55-63"></a><span class="w">              </span><span class="p">}</span>
+</span><span id="__span-55-64"><a id="__codelineno-55-64" name="__codelineno-55-64"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-55-65"><a id="__codelineno-55-65" name="__codelineno-55-65"></a><span class="w">          </span><span class="p">]</span>
+</span><span id="__span-55-66"><a id="__codelineno-55-66" name="__codelineno-55-66"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-55-67"><a id="__codelineno-55-67" name="__codelineno-55-67"></a><span class="w">      </span><span class="p">],</span>
+</span><span id="__span-55-68"><a id="__codelineno-55-68" name="__codelineno-55-68"></a><span class="w">      </span><span class="nt">&quot;sessionInput&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-55-69"><a id="__codelineno-55-69" name="__codelineno-55-69"></a><span class="w">        </span><span class="nt">&quot;appName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;trace-eval-app&quot;</span><span class="p">,</span>
+</span><span id="__span-55-70"><a id="__codelineno-55-70" name="__codelineno-55-70"></a><span class="w">        </span><span class="nt">&quot;userId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;demo-user&quot;</span>
+</span><span id="__span-55-71"><a id="__codelineno-55-71" name="__codelineno-55-71"></a><span class="w">      </span><span class="p">}</span>
+</span><span id="__span-55-72"><a id="__codelineno-55-72" name="__codelineno-55-72"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-55-73"><a id="__codelineno-55-73" name="__codelineno-55-73"></a><span class="w">  </span><span class="p">]</span>
+</span><span id="__span-55-74"><a id="__codelineno-55-74" name="__codelineno-55-74"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p>在 Trace 模式下，推理阶段不会运行 Runner，而是直接将 <code>conversation</code> 作为实际轨迹写入 <code>InferenceResult.Inferences</code>。评估阶段仍会生成 expecteds 列表，但只保留每轮的 <code>userContent</code> 作为占位，避免将 trace 轨迹误当作参考答案参与对比。</p>
-<p>Trace 模式更适合只依赖实际轨迹的指标，例如 <code>llm_rubric_response</code> 与 <code>llm_rubric_knowledge_recall</code>。需要对比参考工具轨迹或参考最终回答的指标建议使用默认模式，并在 EvalSet 预期侧提供对应字段。</p>
+<p>在 Trace 模式下，推理阶段不会运行 Runner，而是直接将 <code>actualConversation</code> 写入 <code>InferenceResult.Inferences</code> 作为实际轨迹。<code>conversation</code> 用于提供预期轨迹；当未配置 <code>conversation</code> 时，评估阶段会生成仅保留每轮 <code>userContent</code> 的占位 expecteds，避免将 trace 轨迹误当作参考答案参与对比。</p>
+<p>当只提供实际轨迹时，适合只依赖实际轨迹的指标，例如 <code>llm_rubric_response</code> 与 <code>llm_rubric_knowledge_recall</code>。如果需要对比参考工具轨迹或参考最终回答，可以额外配置预期轨迹。</p>
 <p>完整示例参见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/trace">examples/evaluation/trace</a>。</p>
 <h3 id="callback">Callback 回调</h3>
 <p>框架支持在评估流程的关键节点注册回调，用于观测/埋点、上下文传递以及调整请求参数。</p>
@@ -6623,7 +6692,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年2月3日 12:11:28 UTC">2026-02-03 12:11:28</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年2月5日 01:51:19 UTC">2026-02-05 01:51:19</span>
   </span>
 
     

@@ -3943,9 +3943,9 @@
 </ol>
 <h2 id="usage">Usage</h2>
 <h3 id="evalset">EvalSet</h3>
-<p>EvalSet describes the set of scenarios covered and provides evaluation input. Each scenario corresponds to an EvalCase, and EvalCase organizes Invocations per turn. During evaluation, Service drives Runner using <code>conversation</code> and then compares actual traces with expected traces from EvalSet using Evaluator.</p>
+<p>EvalSet describes the set of scenarios covered and provides evaluation input. Each scenario corresponds to an EvalCase, and EvalCase organizes Invocations per turn. In default mode, Runner is driven by <code>conversation</code> to produce actual traces, and <code>conversation</code> is used as expected traces. In trace mode, inference is skipped and <code>actualConversation</code> is used as actual traces. During evaluation, Service passes actual and expected traces to Evaluator for comparison and scoring.</p>
 <h4 id="structure-definition">Structure Definition</h4>
-<p>EvalSet is a collection of evaluation cases. Each case is an EvalCase, and its Conversation organizes Invocations per turn to describe user input and optional expected information. The structure definition is as follows.</p>
+<p>EvalSet is a collection of evaluation cases. Each case is an EvalCase. Its Conversation organizes Invocations per turn to describe user input and expected outputs. In trace mode, ActualConversation is used to describe recorded actual traces. The structure definition is as follows.</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-11-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-11-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-11-3"> 3</a></span>
@@ -3993,7 +3993,8 @@
 <span class="normal"><a href="#__codelineno-11-45">45</a></span>
 <span class="normal"><a href="#__codelineno-11-46">46</a></span>
 <span class="normal"><a href="#__codelineno-11-47">47</a></span>
-<span class="normal"><a href="#__codelineno-11-48">48</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+<span class="normal"><a href="#__codelineno-11-48">48</a></span>
+<span class="normal"><a href="#__codelineno-11-49">49</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime&quot;</span>
 </span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
 </span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4"></a><span class="p">)</span>
@@ -4012,40 +4013,43 @@
 </span><span id="__span-11-17"><a id="__codelineno-11-17" name="__codelineno-11-17"></a><span class="w">    </span><span class="nx">EvalID</span><span class="w">            </span><span class="kt">string</span><span class="w">               </span><span class="c1">// EvalID is the case identifier.</span>
 </span><span id="__span-11-18"><a id="__codelineno-11-18" name="__codelineno-11-18"></a><span class="w">    </span><span class="nx">EvalMode</span><span class="w">          </span><span class="nx">EvalMode</span><span class="w">             </span><span class="c1">// EvalMode is the case mode, optional and can be empty or trace.</span>
 </span><span id="__span-11-19"><a id="__codelineno-11-19" name="__codelineno-11-19"></a><span class="w">    </span><span class="nx">ContextMessages</span><span class="w">   </span><span class="p">[]</span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="w">     </span><span class="c1">// ContextMessages are context messages, optional.</span>
-</span><span id="__span-11-20"><a id="__codelineno-11-20" name="__codelineno-11-20"></a><span class="w">    </span><span class="nx">Conversation</span><span class="w">      </span><span class="p">[]</span><span class="o">*</span><span class="nx">Invocation</span><span class="w">        </span><span class="c1">// Conversation is the multi-turn interaction sequence, required.</span>
-</span><span id="__span-11-21"><a id="__codelineno-11-21" name="__codelineno-11-21"></a><span class="w">    </span><span class="nx">SessionInput</span><span class="w">      </span><span class="o">*</span><span class="nx">SessionInput</span><span class="w">        </span><span class="c1">// SessionInput is session initialization info, required.</span>
-</span><span id="__span-11-22"><a id="__codelineno-11-22" name="__codelineno-11-22"></a><span class="w">    </span><span class="nx">CreationTimestamp</span><span class="w"> </span><span class="o">*</span><span class="nx">epochtime</span><span class="p">.</span><span class="nx">EpochTime</span><span class="w"> </span><span class="c1">// CreationTimestamp is the creation timestamp, optional.</span>
-</span><span id="__span-11-23"><a id="__codelineno-11-23" name="__codelineno-11-23"></a><span class="p">}</span>
-</span><span id="__span-11-24"><a id="__codelineno-11-24" name="__codelineno-11-24"></a>
-</span><span id="__span-11-25"><a id="__codelineno-11-25" name="__codelineno-11-25"></a><span class="c1">// Invocation represents one turn in a conversation.</span>
-</span><span id="__span-11-26"><a id="__codelineno-11-26" name="__codelineno-11-26"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Invocation</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-11-27"><a id="__codelineno-11-27" name="__codelineno-11-27"></a><span class="w">    </span><span class="nx">InvocationID</span><span class="w">          </span><span class="kt">string</span><span class="w">               </span><span class="c1">// InvocationID is the turn identifier, optional.</span>
-</span><span id="__span-11-28"><a id="__codelineno-11-28" name="__codelineno-11-28"></a><span class="w">    </span><span class="nx">UserContent</span><span class="w">           </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="w">       </span><span class="c1">// UserContent is the user input for this turn, required.</span>
-</span><span id="__span-11-29"><a id="__codelineno-11-29" name="__codelineno-11-29"></a><span class="w">    </span><span class="nx">FinalResponse</span><span class="w">         </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="w">       </span><span class="c1">// FinalResponse is the final response, optional.</span>
-</span><span id="__span-11-30"><a id="__codelineno-11-30" name="__codelineno-11-30"></a><span class="w">    </span><span class="nx">Tools</span><span class="w">                 </span><span class="p">[]</span><span class="o">*</span><span class="nx">Tool</span><span class="w">              </span><span class="c1">// Tools are tool traces, optional.</span>
-</span><span id="__span-11-31"><a id="__codelineno-11-31" name="__codelineno-11-31"></a><span class="w">    </span><span class="nx">IntermediateResponses</span><span class="w"> </span><span class="p">[]</span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="w">     </span><span class="c1">// IntermediateResponses are intermediate responses, optional.</span>
-</span><span id="__span-11-32"><a id="__codelineno-11-32" name="__codelineno-11-32"></a><span class="w">    </span><span class="nx">CreationTimestamp</span><span class="w">     </span><span class="o">*</span><span class="nx">epochtime</span><span class="p">.</span><span class="nx">EpochTime</span><span class="w"> </span><span class="c1">// CreationTimestamp is the creation timestamp, optional.</span>
-</span><span id="__span-11-33"><a id="__codelineno-11-33" name="__codelineno-11-33"></a><span class="p">}</span>
-</span><span id="__span-11-34"><a id="__codelineno-11-34" name="__codelineno-11-34"></a>
-</span><span id="__span-11-35"><a id="__codelineno-11-35" name="__codelineno-11-35"></a><span class="c1">// Tool represents one tool call and its result.</span>
-</span><span id="__span-11-36"><a id="__codelineno-11-36" name="__codelineno-11-36"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Tool</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-11-37"><a id="__codelineno-11-37" name="__codelineno-11-37"></a><span class="w">    </span><span class="nx">ID</span><span class="w">        </span><span class="kt">string</span><span class="w"> </span><span class="c1">// ID is the tool call identifier, optional.</span>
-</span><span id="__span-11-38"><a id="__codelineno-11-38" name="__codelineno-11-38"></a><span class="w">    </span><span class="nx">Name</span><span class="w">      </span><span class="kt">string</span><span class="w"> </span><span class="c1">// Name is the tool name, required.</span>
-</span><span id="__span-11-39"><a id="__codelineno-11-39" name="__codelineno-11-39"></a><span class="w">    </span><span class="nx">Arguments</span><span class="w"> </span><span class="kt">any</span><span class="w">    </span><span class="c1">// Arguments are tool inputs, optional.</span>
-</span><span id="__span-11-40"><a id="__codelineno-11-40" name="__codelineno-11-40"></a><span class="w">    </span><span class="nx">Result</span><span class="w">    </span><span class="kt">any</span><span class="w">    </span><span class="c1">// Result is tool output, optional.</span>
-</span><span id="__span-11-41"><a id="__codelineno-11-41" name="__codelineno-11-41"></a><span class="p">}</span>
-</span><span id="__span-11-42"><a id="__codelineno-11-42" name="__codelineno-11-42"></a>
-</span><span id="__span-11-43"><a id="__codelineno-11-43" name="__codelineno-11-43"></a><span class="c1">// SessionInput represents session initialization info.</span>
-</span><span id="__span-11-44"><a id="__codelineno-11-44" name="__codelineno-11-44"></a><span class="kd">type</span><span class="w"> </span><span class="nx">SessionInput</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-11-45"><a id="__codelineno-11-45" name="__codelineno-11-45"></a><span class="w">    </span><span class="nx">AppName</span><span class="w"> </span><span class="kt">string</span><span class="w">         </span><span class="c1">// AppName is the application name, optional.</span>
-</span><span id="__span-11-46"><a id="__codelineno-11-46" name="__codelineno-11-46"></a><span class="w">    </span><span class="nx">UserID</span><span class="w">  </span><span class="kt">string</span><span class="w">         </span><span class="c1">// UserID is the user identifier, required.</span>
-</span><span id="__span-11-47"><a id="__codelineno-11-47" name="__codelineno-11-47"></a><span class="w">    </span><span class="nx">State</span><span class="w">   </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="w"> </span><span class="c1">// State is the initial session state, optional.</span>
-</span><span id="__span-11-48"><a id="__codelineno-11-48" name="__codelineno-11-48"></a><span class="p">}</span>
+</span><span id="__span-11-20"><a id="__codelineno-11-20" name="__codelineno-11-20"></a><span class="w">    </span><span class="nx">Conversation</span><span class="w">      </span><span class="p">[]</span><span class="o">*</span><span class="nx">Invocation</span><span class="w">        </span><span class="c1">// Conversation is the expected multi-turn interaction sequence. It is required in default mode and optional in trace mode.</span>
+</span><span id="__span-11-21"><a id="__codelineno-11-21" name="__codelineno-11-21"></a><span class="w">    </span><span class="nx">ActualConversation</span><span class="w"> </span><span class="p">[]</span><span class="o">*</span><span class="nx">Invocation</span><span class="w">       </span><span class="c1">// ActualConversation is the actual trace in trace mode. It is required in trace mode.</span>
+</span><span id="__span-11-22"><a id="__codelineno-11-22" name="__codelineno-11-22"></a><span class="w">    </span><span class="nx">SessionInput</span><span class="w">      </span><span class="o">*</span><span class="nx">SessionInput</span><span class="w">        </span><span class="c1">// SessionInput is session initialization info, required.</span>
+</span><span id="__span-11-23"><a id="__codelineno-11-23" name="__codelineno-11-23"></a><span class="w">    </span><span class="nx">CreationTimestamp</span><span class="w"> </span><span class="o">*</span><span class="nx">epochtime</span><span class="p">.</span><span class="nx">EpochTime</span><span class="w"> </span><span class="c1">// CreationTimestamp is the creation timestamp, optional.</span>
+</span><span id="__span-11-24"><a id="__codelineno-11-24" name="__codelineno-11-24"></a><span class="p">}</span>
+</span><span id="__span-11-25"><a id="__codelineno-11-25" name="__codelineno-11-25"></a>
+</span><span id="__span-11-26"><a id="__codelineno-11-26" name="__codelineno-11-26"></a><span class="c1">// Invocation represents one turn in a conversation.</span>
+</span><span id="__span-11-27"><a id="__codelineno-11-27" name="__codelineno-11-27"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Invocation</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-11-28"><a id="__codelineno-11-28" name="__codelineno-11-28"></a><span class="w">    </span><span class="nx">InvocationID</span><span class="w">          </span><span class="kt">string</span><span class="w">               </span><span class="c1">// InvocationID is the turn identifier, optional.</span>
+</span><span id="__span-11-29"><a id="__codelineno-11-29" name="__codelineno-11-29"></a><span class="w">    </span><span class="nx">UserContent</span><span class="w">           </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="w">       </span><span class="c1">// UserContent is the user input for this turn, required.</span>
+</span><span id="__span-11-30"><a id="__codelineno-11-30" name="__codelineno-11-30"></a><span class="w">    </span><span class="nx">FinalResponse</span><span class="w">         </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="w">       </span><span class="c1">// FinalResponse is the final response, optional.</span>
+</span><span id="__span-11-31"><a id="__codelineno-11-31" name="__codelineno-11-31"></a><span class="w">    </span><span class="nx">Tools</span><span class="w">                 </span><span class="p">[]</span><span class="o">*</span><span class="nx">Tool</span><span class="w">              </span><span class="c1">// Tools are tool traces, optional.</span>
+</span><span id="__span-11-32"><a id="__codelineno-11-32" name="__codelineno-11-32"></a><span class="w">    </span><span class="nx">IntermediateResponses</span><span class="w"> </span><span class="p">[]</span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="w">     </span><span class="c1">// IntermediateResponses are intermediate responses, optional.</span>
+</span><span id="__span-11-33"><a id="__codelineno-11-33" name="__codelineno-11-33"></a><span class="w">    </span><span class="nx">CreationTimestamp</span><span class="w">     </span><span class="o">*</span><span class="nx">epochtime</span><span class="p">.</span><span class="nx">EpochTime</span><span class="w"> </span><span class="c1">// CreationTimestamp is the creation timestamp, optional.</span>
+</span><span id="__span-11-34"><a id="__codelineno-11-34" name="__codelineno-11-34"></a><span class="p">}</span>
+</span><span id="__span-11-35"><a id="__codelineno-11-35" name="__codelineno-11-35"></a>
+</span><span id="__span-11-36"><a id="__codelineno-11-36" name="__codelineno-11-36"></a><span class="c1">// Tool represents one tool call and its result.</span>
+</span><span id="__span-11-37"><a id="__codelineno-11-37" name="__codelineno-11-37"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Tool</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-11-38"><a id="__codelineno-11-38" name="__codelineno-11-38"></a><span class="w">    </span><span class="nx">ID</span><span class="w">        </span><span class="kt">string</span><span class="w"> </span><span class="c1">// ID is the tool call identifier, optional.</span>
+</span><span id="__span-11-39"><a id="__codelineno-11-39" name="__codelineno-11-39"></a><span class="w">    </span><span class="nx">Name</span><span class="w">      </span><span class="kt">string</span><span class="w"> </span><span class="c1">// Name is the tool name, required.</span>
+</span><span id="__span-11-40"><a id="__codelineno-11-40" name="__codelineno-11-40"></a><span class="w">    </span><span class="nx">Arguments</span><span class="w"> </span><span class="kt">any</span><span class="w">    </span><span class="c1">// Arguments are tool inputs, optional.</span>
+</span><span id="__span-11-41"><a id="__codelineno-11-41" name="__codelineno-11-41"></a><span class="w">    </span><span class="nx">Result</span><span class="w">    </span><span class="kt">any</span><span class="w">    </span><span class="c1">// Result is tool output, optional.</span>
+</span><span id="__span-11-42"><a id="__codelineno-11-42" name="__codelineno-11-42"></a><span class="p">}</span>
+</span><span id="__span-11-43"><a id="__codelineno-11-43" name="__codelineno-11-43"></a>
+</span><span id="__span-11-44"><a id="__codelineno-11-44" name="__codelineno-11-44"></a><span class="c1">// SessionInput represents session initialization info.</span>
+</span><span id="__span-11-45"><a id="__codelineno-11-45" name="__codelineno-11-45"></a><span class="kd">type</span><span class="w"> </span><span class="nx">SessionInput</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-11-46"><a id="__codelineno-11-46" name="__codelineno-11-46"></a><span class="w">    </span><span class="nx">AppName</span><span class="w"> </span><span class="kt">string</span><span class="w">         </span><span class="c1">// AppName is the application name, optional.</span>
+</span><span id="__span-11-47"><a id="__codelineno-11-47" name="__codelineno-11-47"></a><span class="w">    </span><span class="nx">UserID</span><span class="w">  </span><span class="kt">string</span><span class="w">         </span><span class="c1">// UserID is the user identifier, required.</span>
+</span><span id="__span-11-48"><a id="__codelineno-11-48" name="__codelineno-11-48"></a><span class="w">    </span><span class="nx">State</span><span class="w">   </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="w"> </span><span class="c1">// State is the initial session state, optional.</span>
+</span><span id="__span-11-49"><a id="__codelineno-11-49" name="__codelineno-11-49"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>EvalSet is identified by <code>evalSetId</code> and contains multiple EvalCases, each identified by <code>evalId</code>.</p>
-<p>During inference, <code>userContent</code> is read per turn from <code>conversation</code> as input. <code>sessionInput.userId</code> is used to create the session. <code>sessionInput.state</code> can inject initial state when needed. <code>contextMessages</code> inject additional context before each inference.</p>
-<p><code>tools</code> and <code>finalResponse</code> in EvalSet describe tool traces and final responses. Whether they are needed depends on the selected evaluation metrics. In default mode they usually represent expected information, while in <code>trace</code> mode they represent existing traces.</p>
-<p>When <code>evalMode</code> is empty, it is the default mode, which performs real-time inference and collects tool traces and final responses. When <code>evalMode</code> is <code>trace</code>, inference is skipped and existing traces in <code>conversation</code> are used for evaluation.</p>
+<p>In default mode, the inference phase reads <code>userContent</code> per turn from <code>conversation</code> as input. <code>sessionInput.userId</code> is used to create the session. <code>sessionInput.state</code> can inject initial state when needed. <code>contextMessages</code> inject additional context before each inference. In trace mode, inference is skipped and <code>actualConversation</code> is used directly as actual traces.</p>
+<p><code>tools</code> and <code>finalResponse</code> in EvalSet describe tool traces and final responses. Whether they are needed depends on the selected evaluation metrics.</p>
+<p>In trace mode, you can configure actual output traces explicitly via <code>actualConversation</code>.</p>
+<p>If both <code>conversation</code> and <code>actualConversation</code> are provided in trace mode, they must be aligned by turn, and each turn in <code>actualConversation</code> should include <code>userContent</code>. If only <code>actualConversation</code> is provided and <code>conversation</code> is omitted, it means no expected outputs are provided.</p>
+<p>When <code>evalMode</code> is empty, it is the default mode, which performs real-time inference and collects tool traces and final responses. When <code>evalMode</code> is <code>trace</code>, inference is skipped and <code>actualConversation</code> is used as actual traces for evaluation. <code>conversation</code> can be provided optionally as expected outputs.</p>
 <h4 id="evalset-manager">EvalSet Manager</h4>
 <p>EvalSetManager is the storage abstraction for EvalSet, separating evaluation assets from code. By switching implementations, you can use local file or in-memory storage, or implement the interface to connect to a database or configuration platform.</p>
 <h5 id="interface-definition">Interface Definition</h5>
@@ -5122,7 +5126,7 @@
 </span><span id="__span-34-38"><a id="__codelineno-34-38" name="__codelineno-34-38"></a><span class="w">    </span><span class="nx">RubricScores</span><span class="w"> </span><span class="p">[]</span><span class="o">*</span><span class="nx">evalresult</span><span class="p">.</span><span class="nx">RubricScore</span><span class="w"> </span><span class="c1">// RubricScores are rubric score list.</span>
 </span><span id="__span-34-39"><a id="__codelineno-34-39" name="__codelineno-34-39"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p>Evaluator input is two Invocation lists. <code>actuals</code> are the actual traces collected during inference, and <code>expecteds</code> are expected traces from EvalSet. The framework calls Evaluate per EvalCase, and <code>actuals</code> and <code>expecteds</code> both come from the same case Conversation and are aligned by turn. Most evaluators require both lists to have the same number of turns, otherwise an error is returned.</p>
+<p>Evaluator input is two Invocation lists. <code>actuals</code> are the actual traces collected during inference, and <code>expecteds</code> are expected traces from EvalSet. The framework calls Evaluate per EvalCase, and <code>actuals</code> and <code>expecteds</code> represent the actual and expected traces for the case and are aligned by turn. Most evaluators require both lists to have the same number of turns, otherwise an error is returned.</p>
 <p>Evaluator output includes overall results and per-turn details. Overall score is usually aggregated from per-turn scores, and overall status is usually determined by comparing overall score with <code>threshold</code>. For deterministic evaluators, <code>reason</code> usually records mismatch reasons. For LLM Judge evaluators, <code>reason</code> and <code>rubricScores</code> preserve judge rationale.</p>
 <h4 id="tool-trajectory-evaluator">Tool Trajectory Evaluator</h4>
 <p>The built-in tool trajectory evaluator is named <code>tool_trajectory_avg_score</code>, and its criterion is <a href="#tooltrajectorycriterion">criterion.toolTrajectory</a>. It compares tool name, arguments, and result per turn.</p>
@@ -6066,12 +6070,12 @@
 <h4 id="inference-phase">Inference Phase</h4>
 <p>The inference phase is handled by <code>Inference</code>. It reads EvalSet, filters cases by <code>EvalCaseIDs</code>, then generates an independent <code>SessionID</code> for each case and runs inference.</p>
 <p>When <code>evalMode</code> is empty, it runs the Runner turn by turn based on <code>conversation</code> and writes actual Invocations into <code>Inferences</code>.</p>
-<p>When <code>evalMode</code> is <code>trace</code>, it does not run the Runner and instead returns <code>conversation</code> from EvalSet as actual traces.</p>
+<p>When <code>evalMode</code> is <code>trace</code>, it does not run the Runner and instead returns <code>actualConversation</code> as actual traces.</p>
 <p>The local implementation supports EvalCase-level concurrent inference. When enabled, multiple cases are run in parallel, while turns within a case remain sequential.</p>
 <h4 id="evaluation-phase">Evaluation Phase</h4>
 <p>The evaluation phase is handled by <code>Evaluate</code>. It takes <code>InferenceResult</code> as input, loads the corresponding EvalCase, constructs actuals and expecteds, and executes evaluators according to <code>EvaluateConfig.EvalMetrics</code>.</p>
 <p>The local implementation looks up Evaluators by <code>MetricName</code> from Registry and calls <code>Evaluator.Evaluate</code>. This operates per EvalCase, with actuals and expecteds from the same case aligned by turn.</p>
-<p>When <code>evalMode</code> is <code>trace</code>, the evaluation phase processes expected traces to keep only user input placeholder Invocations, to avoid treating trace outputs as reference answers in comparisons.</p>
+<p>When <code>evalMode</code> is <code>trace</code>, inference is skipped, actual traces come from <code>actualConversation</code>, and expected traces are provided by <code>conversation</code>.</p>
 <p>After evaluation, it returns <code>EvalSetRunResult</code> to AgentEvaluator.</p>
 <h3 id="agentevaluator">AgentEvaluator</h3>
 <p>AgentEvaluator is the evaluation entry for users. It organizes an evaluation run by <code>evalSetID</code>, reads evaluation sets and metrics, drives the evaluation service for inference and scoring, aggregates multi-run results, and persists outputs.</p>
@@ -6136,7 +6140,12 @@
 </span></code></pre></div></td></tr></table></div>
 <h3 id="trace-evaluation-mode">Trace Evaluation Mode</h3>
 <p>Trace mode evaluates existing traces by writing Invocation traces from a real run into EvalSet and skipping inference during evaluation.</p>
-<p>Enable it by setting <code>evalMode</code> to <code>trace</code> in EvalCase and writing the full trace into <code>conversation</code>. Trace mode still requires non-empty <code>sessionInput</code> and <code>conversation</code>.</p>
+<p>Enable it by setting <code>evalMode</code> to <code>trace</code> in EvalCase. In trace mode, <code>actualConversation</code> represents actual outputs and <code>conversation</code> represents expected outputs. There are three supported layouts:</p>
+<ul>
+<li><code>actualConversation</code> only: <code>actualConversation</code> is used as actual traces, without expected traces.</li>
+<li><code>actualConversation</code> + <code>conversation</code>: <code>actualConversation</code> is used as actual traces, and <code>conversation</code> is used as expected traces, aligned by turn.</li>
+<li><code>conversation</code> only: <code>conversation</code> is used as actual traces without expected traces (for backward compatibility only).</li>
+</ul>
 <div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-55-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-55-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-55-3"> 3</a></span>
@@ -6180,7 +6189,37 @@
 <span class="normal"><a href="#__codelineno-55-41">41</a></span>
 <span class="normal"><a href="#__codelineno-55-42">42</a></span>
 <span class="normal"><a href="#__codelineno-55-43">43</a></span>
-<span class="normal"><a href="#__codelineno-55-44">44</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-55-1"><a id="__codelineno-55-1" name="__codelineno-55-1"></a><span class="p">{</span>
+<span class="normal"><a href="#__codelineno-55-44">44</a></span>
+<span class="normal"><a href="#__codelineno-55-45">45</a></span>
+<span class="normal"><a href="#__codelineno-55-46">46</a></span>
+<span class="normal"><a href="#__codelineno-55-47">47</a></span>
+<span class="normal"><a href="#__codelineno-55-48">48</a></span>
+<span class="normal"><a href="#__codelineno-55-49">49</a></span>
+<span class="normal"><a href="#__codelineno-55-50">50</a></span>
+<span class="normal"><a href="#__codelineno-55-51">51</a></span>
+<span class="normal"><a href="#__codelineno-55-52">52</a></span>
+<span class="normal"><a href="#__codelineno-55-53">53</a></span>
+<span class="normal"><a href="#__codelineno-55-54">54</a></span>
+<span class="normal"><a href="#__codelineno-55-55">55</a></span>
+<span class="normal"><a href="#__codelineno-55-56">56</a></span>
+<span class="normal"><a href="#__codelineno-55-57">57</a></span>
+<span class="normal"><a href="#__codelineno-55-58">58</a></span>
+<span class="normal"><a href="#__codelineno-55-59">59</a></span>
+<span class="normal"><a href="#__codelineno-55-60">60</a></span>
+<span class="normal"><a href="#__codelineno-55-61">61</a></span>
+<span class="normal"><a href="#__codelineno-55-62">62</a></span>
+<span class="normal"><a href="#__codelineno-55-63">63</a></span>
+<span class="normal"><a href="#__codelineno-55-64">64</a></span>
+<span class="normal"><a href="#__codelineno-55-65">65</a></span>
+<span class="normal"><a href="#__codelineno-55-66">66</a></span>
+<span class="normal"><a href="#__codelineno-55-67">67</a></span>
+<span class="normal"><a href="#__codelineno-55-68">68</a></span>
+<span class="normal"><a href="#__codelineno-55-69">69</a></span>
+<span class="normal"><a href="#__codelineno-55-70">70</a></span>
+<span class="normal"><a href="#__codelineno-55-71">71</a></span>
+<span class="normal"><a href="#__codelineno-55-72">72</a></span>
+<span class="normal"><a href="#__codelineno-55-73">73</a></span>
+<span class="normal"><a href="#__codelineno-55-74">74</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-55-1"><a id="__codelineno-55-1" name="__codelineno-55-1"></a><span class="p">{</span>
 </span><span id="__span-55-2"><a id="__codelineno-55-2" name="__codelineno-55-2"></a><span class="w">  </span><span class="nt">&quot;evalSetId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;trace-basic&quot;</span><span class="p">,</span>
 </span><span id="__span-55-3"><a id="__codelineno-55-3" name="__codelineno-55-3"></a><span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;trace-basic&quot;</span><span class="p">,</span>
 </span><span id="__span-55-4"><a id="__codelineno-55-4" name="__codelineno-55-4"></a><span class="w">  </span><span class="nt">&quot;evalCases&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
@@ -6217,16 +6256,46 @@
 </span><span id="__span-55-35"><a id="__codelineno-55-35" name="__codelineno-55-35"></a><span class="w">          </span><span class="p">]</span>
 </span><span id="__span-55-36"><a id="__codelineno-55-36" name="__codelineno-55-36"></a><span class="w">        </span><span class="p">}</span>
 </span><span id="__span-55-37"><a id="__codelineno-55-37" name="__codelineno-55-37"></a><span class="w">      </span><span class="p">],</span>
-</span><span id="__span-55-38"><a id="__codelineno-55-38" name="__codelineno-55-38"></a><span class="w">      </span><span class="nt">&quot;sessionInput&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-55-39"><a id="__codelineno-55-39" name="__codelineno-55-39"></a><span class="w">        </span><span class="nt">&quot;appName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;trace-eval-app&quot;</span><span class="p">,</span>
-</span><span id="__span-55-40"><a id="__codelineno-55-40" name="__codelineno-55-40"></a><span class="w">        </span><span class="nt">&quot;userId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;demo-user&quot;</span>
-</span><span id="__span-55-41"><a id="__codelineno-55-41" name="__codelineno-55-41"></a><span class="w">      </span><span class="p">}</span>
-</span><span id="__span-55-42"><a id="__codelineno-55-42" name="__codelineno-55-42"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-55-43"><a id="__codelineno-55-43" name="__codelineno-55-43"></a><span class="w">  </span><span class="p">]</span>
-</span><span id="__span-55-44"><a id="__codelineno-55-44" name="__codelineno-55-44"></a><span class="p">}</span>
+</span><span id="__span-55-38"><a id="__codelineno-55-38" name="__codelineno-55-38"></a><span class="w">      </span><span class="nt">&quot;actualConversation&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-55-39"><a id="__codelineno-55-39" name="__codelineno-55-39"></a><span class="w">        </span><span class="p">{</span>
+</span><span id="__span-55-40"><a id="__codelineno-55-40" name="__codelineno-55-40"></a><span class="w">          </span><span class="nt">&quot;invocationId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;trace_calc_add-1&quot;</span><span class="p">,</span>
+</span><span id="__span-55-41"><a id="__codelineno-55-41" name="__codelineno-55-41"></a><span class="w">          </span><span class="nt">&quot;userContent&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-55-42"><a id="__codelineno-55-42" name="__codelineno-55-42"></a><span class="w">            </span><span class="nt">&quot;role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;user&quot;</span><span class="p">,</span>
+</span><span id="__span-55-43"><a id="__codelineno-55-43" name="__codelineno-55-43"></a><span class="w">            </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;calc add 123 456&quot;</span>
+</span><span id="__span-55-44"><a id="__codelineno-55-44" name="__codelineno-55-44"></a><span class="w">          </span><span class="p">},</span>
+</span><span id="__span-55-45"><a id="__codelineno-55-45" name="__codelineno-55-45"></a><span class="w">          </span><span class="nt">&quot;finalResponse&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-55-46"><a id="__codelineno-55-46" name="__codelineno-55-46"></a><span class="w">            </span><span class="nt">&quot;role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-55-47"><a id="__codelineno-55-47" name="__codelineno-55-47"></a><span class="w">            </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;calc result: 579&quot;</span>
+</span><span id="__span-55-48"><a id="__codelineno-55-48" name="__codelineno-55-48"></a><span class="w">          </span><span class="p">},</span>
+</span><span id="__span-55-49"><a id="__codelineno-55-49" name="__codelineno-55-49"></a><span class="w">          </span><span class="nt">&quot;tools&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-55-50"><a id="__codelineno-55-50" name="__codelineno-55-50"></a><span class="w">            </span><span class="p">{</span>
+</span><span id="__span-55-51"><a id="__codelineno-55-51" name="__codelineno-55-51"></a><span class="w">              </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;call_00_example&quot;</span><span class="p">,</span>
+</span><span id="__span-55-52"><a id="__codelineno-55-52" name="__codelineno-55-52"></a><span class="w">              </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;calculator&quot;</span><span class="p">,</span>
+</span><span id="__span-55-53"><a id="__codelineno-55-53" name="__codelineno-55-53"></a><span class="w">              </span><span class="nt">&quot;arguments&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-55-54"><a id="__codelineno-55-54" name="__codelineno-55-54"></a><span class="w">                </span><span class="nt">&quot;a&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">123</span><span class="p">,</span>
+</span><span id="__span-55-55"><a id="__codelineno-55-55" name="__codelineno-55-55"></a><span class="w">                </span><span class="nt">&quot;b&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">456</span><span class="p">,</span>
+</span><span id="__span-55-56"><a id="__codelineno-55-56" name="__codelineno-55-56"></a><span class="w">                </span><span class="nt">&quot;operation&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;add&quot;</span>
+</span><span id="__span-55-57"><a id="__codelineno-55-57" name="__codelineno-55-57"></a><span class="w">              </span><span class="p">},</span>
+</span><span id="__span-55-58"><a id="__codelineno-55-58" name="__codelineno-55-58"></a><span class="w">              </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-55-59"><a id="__codelineno-55-59" name="__codelineno-55-59"></a><span class="w">                </span><span class="nt">&quot;a&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">123</span><span class="p">,</span>
+</span><span id="__span-55-60"><a id="__codelineno-55-60" name="__codelineno-55-60"></a><span class="w">                </span><span class="nt">&quot;b&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">456</span><span class="p">,</span>
+</span><span id="__span-55-61"><a id="__codelineno-55-61" name="__codelineno-55-61"></a><span class="w">                </span><span class="nt">&quot;operation&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;add&quot;</span><span class="p">,</span>
+</span><span id="__span-55-62"><a id="__codelineno-55-62" name="__codelineno-55-62"></a><span class="w">                </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">579</span>
+</span><span id="__span-55-63"><a id="__codelineno-55-63" name="__codelineno-55-63"></a><span class="w">              </span><span class="p">}</span>
+</span><span id="__span-55-64"><a id="__codelineno-55-64" name="__codelineno-55-64"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-55-65"><a id="__codelineno-55-65" name="__codelineno-55-65"></a><span class="w">          </span><span class="p">]</span>
+</span><span id="__span-55-66"><a id="__codelineno-55-66" name="__codelineno-55-66"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-55-67"><a id="__codelineno-55-67" name="__codelineno-55-67"></a><span class="w">      </span><span class="p">],</span>
+</span><span id="__span-55-68"><a id="__codelineno-55-68" name="__codelineno-55-68"></a><span class="w">      </span><span class="nt">&quot;sessionInput&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-55-69"><a id="__codelineno-55-69" name="__codelineno-55-69"></a><span class="w">        </span><span class="nt">&quot;appName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;trace-eval-app&quot;</span><span class="p">,</span>
+</span><span id="__span-55-70"><a id="__codelineno-55-70" name="__codelineno-55-70"></a><span class="w">        </span><span class="nt">&quot;userId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;demo-user&quot;</span>
+</span><span id="__span-55-71"><a id="__codelineno-55-71" name="__codelineno-55-71"></a><span class="w">      </span><span class="p">}</span>
+</span><span id="__span-55-72"><a id="__codelineno-55-72" name="__codelineno-55-72"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-55-73"><a id="__codelineno-55-73" name="__codelineno-55-73"></a><span class="w">  </span><span class="p">]</span>
+</span><span id="__span-55-74"><a id="__codelineno-55-74" name="__codelineno-55-74"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p>In Trace mode, the inference phase does not run Runner and instead writes <code>conversation</code> as actual traces into <code>InferenceResult.Inferences</code>. The evaluation phase still generates expecteds, but keeps only per-turn <code>userContent</code> as placeholders to avoid treating trace outputs as reference answers in comparisons.</p>
-<p>Trace mode is better suited to metrics that depend only on actual traces, such as <code>llm_rubric_response</code> and <code>llm_rubric_knowledge_recall</code>. Metrics that compare reference tool traces or reference final responses should use default mode and provide the expected fields in EvalSet.</p>
+<p>In Trace mode, the inference phase does not run Runner and instead writes <code>actualConversation</code> into <code>InferenceResult.Inferences</code> as actual traces. <code>conversation</code> provides expected traces. If <code>conversation</code> is omitted, the evaluation phase builds placeholder expecteds that keep only per-turn <code>userContent</code>, to avoid treating trace outputs as reference answers in comparisons.</p>
+<p>When only actual traces are provided, it is suitable for metrics that depend only on actual traces, such as <code>llm_rubric_response</code> and <code>llm_rubric_knowledge_recall</code>. If you need metrics that compare reference tool traces or reference final responses, you can additionally configure expected traces.</p>
 <p>See <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/trace">examples/evaluation/trace</a> for the full example.</p>
 <h3 id="callback">Callback</h3>
 <p>The framework supports registering callbacks at key points in the evaluation flow for observation, telemetry, context passing, and request parameter adjustments.</p>
@@ -6624,7 +6693,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="February 3, 2026 12:11:28 UTC">2026-02-03 12:11:28</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="February 5, 2026 01:51:19 UTC">2026-02-05 01:51:19</span>
   </span>
 
     
