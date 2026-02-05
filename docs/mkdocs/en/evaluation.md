@@ -1264,7 +1264,9 @@ The framework has the following built-in types of evaluation criteria:
 | ----------------------- | ----------------------------------------------------- |
 | TextCriterion           | Text string                                           |
 | JSONCriterion           | JSON object, usually used to compare `map[string]any` |
+| RougeCriterion          | ROUGE text scoring                                    |
 | ToolTrajectoryCriterion | Tool invocation trajectory                            |
+| FinalResponseCriterion  | Final response content                                |
 | LLMCriterion            | Evaluation based on an LLM judge model                |
 | Criterion               | Aggregation of multiple criteria                      |
 
@@ -1290,6 +1292,8 @@ Explanation of TextMatchStrategy values:
 | contains                | The actual string contains the expected string.                         |
 | regex                   | The actual string matches the expected string as a regular expression.  |
 
+Compare injects a compare function instance. It is not loaded from metric JSON.
+
 #### JSONCriterion
 
 JSONCriterion is used to compare structured JSON data. You can configure whether to ignore the comparison and choose a specific matching strategy.
@@ -1299,9 +1303,9 @@ JSONCriterion is used to compare structured JSON data. You can configure whether
 type JSONCriterion struct {
 	Ignore          bool                                                // Whether to skip matching.
 	IgnoreTree      map[string]any                                      // Ignore tree; a true leaf skips the key and its subtree.
-	NumberTolerance *float64                                            // Numeric tolerance; default is 1e-6, 0 means exact; applied to numeric leaf values.
 	MatchStrategy   JSONMatchStrategy                                   // Matching strategy.
-	Compare         func(actual, expected map[string]any) (bool, error) // Custom comparison.
+	NumberTolerance *float64                                            // Numeric tolerance; default is 1e-6, 0 means exact; applied to numeric leaf values.
+	Compare         func(actual, expected any) (bool, error)             // Custom comparison.
 }
 ```
 
@@ -1310,6 +1314,8 @@ Explanation of JSONMatchStrategy values:
 | JSONMatchStrategy Value | Description                                                         |
 | ----------------------- | ------------------------------------------------------------------- |
 | exact                   | The actual JSON is exactly the same as the expected JSON (default). |
+
+Compare injects a compare function instance. It is not loaded from metric JSON.
 
 `IgnoreTree` lets you skip specific fields and their subtrees while checking the remaining fields.
 
@@ -1360,6 +1366,105 @@ Configuration file example:
 ]
 ```
 
+#### RougeCriterion
+
+RougeCriterion scores text using ROUGE and determines a match based on the configured threshold.
+
+For a complete example, see [examples/evaluation/rouge](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/rouge).
+
+```go
+// RougeCriterion defines ROUGE scoring and threshold checks.
+type RougeCriterion struct {
+	Ignore         bool         // Whether to skip matching.
+	RougeType      string       // ROUGE type.
+	Measure        RougeMeasure // Primary measure.
+	Threshold      Score        // Score thresholds.
+	UseStemmer     bool         // Whether to enable stemming.
+	SplitSummaries bool         // Whether to split summaries for rougeLsum.
+	Tokenizer      Tokenizer    // Custom tokenizer.
+}
+
+// RougeMeasure defines which score component is used as the primary value.
+type RougeMeasure string
+
+const (
+	RougeMeasureF1        RougeMeasure = "f1"        // F1 score.
+	RougeMeasurePrecision RougeMeasure = "precision" // Precision score.
+	RougeMeasureRecall    RougeMeasure = "recall"    // Recall score.
+)
+
+// Score holds precision, recall, and F1.
+type Score struct {
+	Precision float64 // Precision score.
+	Recall    float64 // Recall score.
+	F1        float64 // F1 score.
+}
+```
+
+RougeType supports `rougeN`, `rougeL`, and `rougeLsum`. N is a positive integer.
+
+Examples: `rouge1`, `rouge2`, `rouge3`, `rougeL`, `rougeLsum`.
+
+Measure defaults to `f1` when unset.
+
+Threshold defines minimum requirements. Precision, recall, and F1 are checked independently. Unset fields are treated as 0.
+
+UseStemmer enables Porter stemming in the built-in tokenizer. It is ignored when Tokenizer is used.
+
+SplitSummaries controls sentence splitting for `rougeLsum`. It only applies to `rougeLsum`.
+
+Tokenizer injects a tokenizer instance. It is not loaded from metric JSON.
+
+Code example:
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	cfinalresponse "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/finalresponse"
+	crouge "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/rouge"
+)
+
+criterion := criterion.New(
+	criterion.WithFinalResponse(
+		cfinalresponse.New(
+			cfinalresponse.WithRougeCriterion(&crouge.RougeCriterion{
+				RougeType:      "rougeLsum",
+				Measure:        crouge.RougeMeasureF1,
+				Threshold:      crouge.Score{Precision: 0.3, Recall: 0.6, F1: 0.4},
+				UseStemmer:     true,
+				SplitSummaries: true,
+			}),
+		),
+	),
+)
+```
+
+Configuration file example:
+
+```json
+[
+  {
+    "metricName": "final_response_avg_score",
+    "threshold": 1,
+    "criterion": {
+      "finalResponse": {
+        "rouge": {
+          "rougeType": "rougeLsum",
+          "measure": "f1",
+          "threshold": {
+            "precision": 0.3,
+            "recall": 0.6,
+            "f1": 0.4
+          },
+          "useStemmer": true,
+          "splitSummaries": true
+        }
+      }
+    }
+  }
+]
+```
+
 #### ToolTrajectoryCriterion
 
 ToolTrajectoryCriterion is used to configure the evaluation criteria for tool invocations and results. You can set default strategies, customize strategies by tool name, and control whether invocation order must be preserved.
@@ -1385,6 +1490,8 @@ type ToolTrajectoryStrategy struct {
 DefaultStrategy is used to configure the global default evaluation criterion and applies to all tools.
 
 ToolStrategy overrides the evaluation criterion for specific tools by tool name. When ToolStrategy is not set, all tool invocations use DefaultStrategy.
+
+Compare injects a compare function instance. It is not loaded from metric JSON.
 
 If no evaluation criterion is configured, the framework uses the default evaluation criterion: tool names are compared using TextCriterion with the `exact` strategy, and arguments and results are compared using JSONCriterion with the `exact` strategy. This ensures that tool trajectory evaluation always has a reasonable fallback behavior.
 
@@ -1527,6 +1634,32 @@ Assume `A`, `B`, `C`, and `D` each denote one tool call. Matching examples:
 | On | Off | `[C, D]` | `[A, B, C]` | Mismatch | Actual tool sequence missing D |
 | Any | Any | `[A, A]` | `[A]` | Mismatch | Actual calls insufficient; a single call cannot be reused |
 
+
+#### FinalResponseCriterion
+
+FinalResponseCriterion compares the per-invocation final response content. The field is `Invocation.FinalResponse.Content`. It supports three sub-criteria: `text`, `json`, and `rouge`.
+
+```go
+// FinalResponseCriterion defines the evaluation criteria for final response content.
+type FinalResponseCriterion struct {
+	Text    *TextCriterion                                           // Text matching criterion.
+	JSON    *JSONCriterion                                           // JSON matching criterion.
+	Rouge   *RougeCriterion                                          // ROUGE matching criterion.
+	Compare func(actual, expected *evalset.Invocation) (bool, error) // Custom comparison.
+}
+```
+
+Text compares the content as plain text using TextCriterion.
+
+JSON parses the content as JSON and compares it using JSONCriterion.
+
+Rouge computes ROUGE scores using RougeCriterion and checks them against the configured threshold.
+
+Compare overrides the built-in matching logic and allows custom comparison based on the full Invocation.
+
+When multiple sub-criteria are configured, all configured checks must pass. The semantics is AND.
+
+In metric JSON, the key is `finalResponse` with optional sub-fields `text` / `json` / `rouge`.
 
 #### LLMCriterion
 
@@ -1701,10 +1834,11 @@ Evaluation logic:
 - Use `FinalResponseCriterion` to compare `Invocation.FinalResponse.Content` for each invocation; a match scores 1, otherwise 0.
 - For multiple runs, take the average score across invocations and compare it with `EvalMetric.Threshold` to determine pass/fail.
 
-`FinalResponseCriterion` supports two criteria:
+`FinalResponseCriterion` supports three criteria:
 
 - `text`: Compare plain text using `TextCriterion` with strategies like `exact/contains/regex`. For details, see [TextCriterion](#textcriterion).
 - `json`: Parse `FinalResponse.Content` as JSON and compare using `JSONCriterion`. You can configure `ignoreTree`, `numberTolerance`, and more. For details, see [JSONCriterion](#jsoncriterion).
+- `rouge`: Score text using `RougeCriterion` and determine a match based on the configured threshold. The threshold can specify `precision`, `recall`, and `f1`, and all configured values must be satisfied.
 
 Code example:
 
@@ -1714,6 +1848,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
 	cfinalresponse "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/finalresponse"
 	cjson "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
+	crouge "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/rouge"
 	ctext "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
 )
 
@@ -1724,6 +1859,13 @@ evalMetric := &metric.EvalMetric{
 		criterion.WithFinalResponse(
 			cfinalresponse.New(
 				cfinalresponse.WithJSONCriterion(cjson.New()),
+				cfinalresponse.WithRougeCriterion(&crouge.RougeCriterion{
+					RougeType:      "rougeLsum",
+					Measure:        crouge.RougeMeasureF1,
+					Threshold:      crouge.Score{Precision: 0.3, Recall: 0.6, F1: 0.4},
+					UseStemmer:     true,
+					SplitSummaries: true,
+				}),
 				cfinalresponse.WithTextCriterion(ctext.New()),
 			),
 		),
@@ -1745,12 +1887,25 @@ An example metric config file
         },
         "json": {
           "matchStrategy": "exact"
+        },
+        "rouge": {
+          "rougeType": "rougeLsum",
+          "measure": "f1",
+          "threshold": {
+            "precision": 0.3,
+            "recall": 0.6,
+            "f1": 0.4
+          },
+          "useStemmer": true,
+          "splitSummaries": true
         }
       }
     }
   }
 ]
 ```
+
+For a complete example, see [examples/evaluation/rouge](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/rouge).
 
 #### LLM Final Response Evaluator
 

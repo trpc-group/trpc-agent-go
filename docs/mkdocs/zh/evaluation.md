@@ -1248,7 +1248,9 @@ Trace 评估模式用于评估离线采集到的 Trace 执行轨迹，评估过�
 |-------------------------|--------------------------------------|
 | TextCriterion           | 文本字符串                             |
 | JSONCriterion           | JSON 对象，通常用于比较 map[string]any  |
+| RougeCriterion          | ROUGE 文本评分                         |
 | ToolTrajectoryCriterion | 工具调用轨迹                           |
+| FinalResponseCriterion  | 最终响应内容                           |
 | LLMCriterion            | 基于 LLM 评估模型的评估                 |
 | Criterion               | 多种准则的聚合                         |
 
@@ -1274,6 +1276,8 @@ TextMatchStrategy 取值说明：
 | contains              | 实际字符串包含预期字符串。       |
 | regex                 | 实际字符串满足预期字符串作为正则表达式。 |
 
+Compare 用于直接注入自定义比较函数，配置文件中不会加载该字段。
+
 #### JSONCriterion
 
 JSONCriterion 用于对比结构化 JSON 数据，可配置是否忽略比较以及具体的匹配策略。
@@ -1285,7 +1289,7 @@ type JSONCriterion struct {
 	IgnoreTree      map[string]any                                      // 忽略的字段树，值为 true 时跳过该字段及其子树
 	MatchStrategy   JSONMatchStrategy                                   // 匹配策略
 	NumberTolerance *float64                                            // 数值容差，默认 1e-6，对叶子上的数字做近似比较
-	Compare         func(actual, expected map[string]any) (bool, error) // 自定义比较
+	Compare         func(actual, expected any) (bool, error)             // 自定义比较
 }
 ```
 
@@ -1294,6 +1298,8 @@ JSONMatchStrategy 取值说明：
 | JSONMatchStrategy 取值 | 说明                         |
 |-----------------------|------------------------------|
 | exact                 | 实际 JSON 与预期 JSON 完全一致（默认）。 |
+
+Compare 用于直接注入自定义比较函数，配置文件中不会加载该字段。
 
 `IgnoreTree` 支持在比较时跳过特定字段以及其子树，只校验未被忽略的字段。
 
@@ -1344,6 +1350,103 @@ criterion := &json.JSONCriterion{
 ]
 ```
 
+#### RougeCriterion
+
+RougeCriterion 用于对文本进行 ROUGE 评分，并按配置阈值判定是否匹配。
+
+完整示例参见 [examples/evaluation/rouge](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/rouge)。
+
+```go
+// RougeCriterion 定义 ROUGE 评分与阈值判定规则。
+type RougeCriterion struct {
+	Ignore         bool         // 是否跳过匹配
+	RougeType      string       // ROUGE 类型
+	Measure        RougeMeasure // 主要分数类型
+	Threshold      Score        // 分数阈值
+	UseStemmer     bool         // 是否启用 stemming
+	SplitSummaries bool         // 是否按句子切分 summary
+	Tokenizer      Tokenizer    // 自定义 tokenizer
+}
+
+// RougeMeasure 定义 ROUGE 的分数类型。
+type RougeMeasure string
+
+const (
+	RougeMeasureF1        RougeMeasure = "f1"        // F1 分数
+	RougeMeasurePrecision RougeMeasure = "precision" // Precision 分数
+	RougeMeasureRecall    RougeMeasure = "recall"    // Recall 分数
+)
+
+// Score 定义 precision、recall 和 f1。
+type Score struct {
+	Precision float64 // Precision 分数
+	Recall    float64 // Recall 分数
+	F1        float64 // F1 分数
+}
+```
+
+RougeType 用于指定 ROUGE 评分类型，支持 `rougeN`、`rougeL` 和 `rougeLsum`，其中 N 为正整数。例如：`rouge1`、`rouge2`、`rouge3`、`rougeL`、`rougeLsum`。
+
+Measure 用于指定主要分数类型，未配置时默认为 `f1`。
+
+Threshold 用于设置阈值。precision、recall 和 f1 都会参与判定，未配置的字段按 0 处理。
+
+UseStemmer 控制内置 tokenizer 是否启用 Porter stemming。使用 Tokenizer 选择自定义 tokenizer 时该字段不会生效。
+
+SplitSummaries 控制在 `rougeLsum` 下是否先按句子切分再计算 ROUGE，仅对 `rougeLsum` 生效。
+
+Tokenizer 用于直接注入 tokenizer，配置文件中不会加载该字段。
+
+代码示例如下：
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	cfinalresponse "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/finalresponse"
+	crouge "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/rouge"
+)
+
+criterion := criterion.New(
+	criterion.WithFinalResponse(
+		cfinalresponse.New(
+			cfinalresponse.WithRougeCriterion(&crouge.RougeCriterion{
+				RougeType:      "rougeLsum",
+				Measure:        crouge.RougeMeasureF1,
+				Threshold:      crouge.Score{Precision: 0.3, Recall: 0.6, F1: 0.4},
+				UseStemmer:     true,
+				SplitSummaries: true,
+			}),
+		),
+	),
+)
+```
+
+配置文件示例如下：
+
+```json
+[
+  {
+    "metricName": "final_response_avg_score",
+    "threshold": 1,
+    "criterion": {
+      "finalResponse": {
+        "rouge": {
+          "rougeType": "rougeLsum",
+          "measure": "f1",
+          "threshold": {
+            "precision": 0.3,
+            "recall": 0.6,
+            "f1": 0.4
+          },
+          "useStemmer": true,
+          "splitSummaries": true
+        }
+      }
+    }
+  }
+]
+```
+
 #### ToolTrajectoryCriterion
 
 ToolTrajectoryCriterion 用于配置工具调用与结果的评估准则，可设置默认策略、按工具名定制策略以及是否要求保持调用顺序。
@@ -1369,6 +1472,8 @@ type ToolTrajectoryStrategy struct {
 DefaultStrategy 用于配置全局默认评估准则，适用于所有工具。
 
 ToolStrategy 按工具名覆盖特定工具的评估准则，未设置 ToolStrategy 时所有工具调用都使用 DefaultStrategy。
+
+Compare 用于直接注入自定义比较函数，配置文件中不会加载该字段。
 
 若未设置任何评估准则，框架会使用默认评估准则：工具名按 TextCriterion 的 exact 策略比较，参数和结果按 JSONCriterion 的 exact 策略比较，保证工具轨迹评估始终有合理的兜底行为。
 
@@ -1515,6 +1620,32 @@ criterion := criterion.New(
 | 开 | 关 | `[C, D]` | `[A, B, C]` | 不匹配 | 实际工具序列缺少 D |
 | 任意 | 任意 | `[A, A]` | `[A]` | 不匹配 | 实际调用不足，同一调用不能重复匹配 |
 
+
+#### FinalResponseCriterion
+
+FinalResponseCriterion 用于对比每轮对话的最终响应内容，字段为 `Invocation.FinalResponse.Content`。它支持按需配置 `text` / `json` / `rouge` 三类子准则。
+
+```go
+// FinalResponseCriterion 定义最终响应内容的评估准则。
+type FinalResponseCriterion struct {
+	Text    *TextCriterion                                           // 文本匹配准则
+	JSON    *JSONCriterion                                           // JSON 匹配准则
+	Rouge   *RougeCriterion                                          // ROUGE 匹配准则
+	Compare func(actual, expected *evalset.Invocation) (bool, error) // 自定义比较
+}
+```
+
+Text 使用 TextCriterion 对文本进行比较。
+
+JSON 将内容解析为 JSON 后使用 JSONCriterion 进行比较。
+
+Rouge 使用 RougeCriterion 对文本进行 ROUGE 评分，并按配置阈值判定是否匹配。
+
+Compare 用于覆盖内置匹配逻辑，可直接基于 Invocation 自定义判断。
+
+同时配置多个子准则时，所有已配置的子准则都必须满足才视为匹配，语义为 AND。
+
+配置文件中的 key 为 `finalResponse`，子字段为 `text` / `json` / `rouge`。
 
 #### LLMCriterion
 
@@ -1689,10 +1820,11 @@ evalMetric := &metric.EvalMetric{
 - 使用 `FinalResponseCriterion` 对每轮对话的 `Invocation.FinalResponse.Content` 进行对比；匹配得 1 分，不匹配得 0 分。
 - 多次会话场景下对所有会话的得分取平均值，并与 `EvalMetric.Threshold` 比较得到通过/未通过判定。
 
-`FinalResponseCriterion` 支持两类准则：
+`FinalResponseCriterion` 支持三类准则：
 
 - `text`：使用 `TextCriterion` 按 `exact/contains/regex` 等策略比较文本，详细介绍可见 [TextCriterion](#textcriterion)。
 - `json`：将 `FinalResponse.Content` 解析为 JSON 后使用 `JSONCriterion` 进行匹配。可配置 `ignoreTree`、`numberTolerance` 等参数，详细介绍可见 [JsonCriterion](#jsoncriterion)。
+- `rouge`：使用 `RougeCriterion` 对文本进行 ROUGE 评分，并按配置阈值判定是否匹配。阈值可配置 `precision`/`recall`/`f1`，且配置的字段都会参与判定。
 
 代码示例如下：
 
@@ -1702,6 +1834,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
 	cfinalresponse "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/finalresponse"
 	cjson "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
+	crouge "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/rouge"
 	ctext "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
 )
 
@@ -1712,6 +1845,13 @@ evalMetric := &metric.EvalMetric{
 		criterion.WithFinalResponse(
 			cfinalresponse.New(
 				cfinalresponse.WithJSONCriterion(cjson.New()),
+				cfinalresponse.WithRougeCriterion(&crouge.RougeCriterion{
+					RougeType:      "rougeLsum",
+					Measure:        crouge.RougeMeasureF1,
+					Threshold:      crouge.Score{Precision: 0.3, Recall: 0.6, F1: 0.4},
+					UseStemmer:     true,
+					SplitSummaries: true,
+				}),
 				cfinalresponse.WithTextCriterion(ctext.New()),
 			),
 		),
@@ -1733,12 +1873,25 @@ evalMetric := &metric.EvalMetric{
         },
         "json": {
           "matchStrategy": "exact"
+        },
+        "rouge": {
+          "rougeType": "rougeLsum",
+          "measure": "f1",
+          "threshold": {
+            "precision": 0.3,
+            "recall": 0.6,
+            "f1": 0.4
+          },
+          "useStemmer": true,
+          "splitSummaries": true
         }
       }
     }
   }
 ]
 ```
+
+完整示例参见 [examples/evaluation/rouge](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/rouge)。
 
 #### LLM 最终响应评估器
 
