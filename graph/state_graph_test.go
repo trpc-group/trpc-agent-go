@@ -12,6 +12,7 @@ package graph
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"reflect"
 	"strings"
 	"sync"
@@ -508,6 +509,155 @@ func TestProcessToolCalls_ParallelCancelOnFirstError(t *testing.T) {
 type assertAnError struct{}
 
 func (assertAnError) Error() string { return "boom" }
+
+func TestProcessToolCalls_ContinueOnToolError_AppendsToolErrorMessage(t *testing.T) {
+	continueOnToolError := true
+	inv := &agent.Invocation{
+		RunOptions: agent.RunOptions{
+			ContinueOnToolError: &continueOnToolError,
+		},
+	}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	tools := map[string]tool.Tool{
+		"X": &blockingTool{name: "X", returnErr: assertAnError{}},
+	}
+	calls := makeToolCalls("X")
+
+	msgs, err := processToolCalls(ctx, toolCallsConfig{
+		ToolCalls:      calls,
+		Tools:          tools,
+		InvocationID:   "inv",
+		EventChan:      nil,
+		Span:           oteltrace.SpanFromContext(ctx),
+		State:          State{},
+		EnableParallel: false,
+	})
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+	require.Equal(t, model.RoleTool, msgs[0].Role)
+	require.Equal(t, "X", msgs[0].ToolName)
+	require.Equal(t, "call_X", msgs[0].ToolID)
+	require.Contains(t, msgs[0].Content, "tool X call failed")
+	require.Contains(t, msgs[0].Content, "boom")
+}
+
+func TestProcessToolCalls_ContinueOnToolError_ToolNotFound_AppendsToolErrorMessage(t *testing.T) {
+	continueOnToolError := true
+	inv := &agent.Invocation{
+		RunOptions: agent.RunOptions{
+			ContinueOnToolError: &continueOnToolError,
+		},
+	}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	calls := makeToolCalls("X")
+	msgs, err := processToolCalls(ctx, toolCallsConfig{
+		ToolCalls:      calls,
+		Tools:          map[string]tool.Tool{},
+		InvocationID:   "inv",
+		EventChan:      nil,
+		Span:           oteltrace.SpanFromContext(ctx),
+		State:          State{},
+		EnableParallel: false,
+	})
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+	require.Equal(t, model.RoleTool, msgs[0].Role)
+	require.Equal(t, "X", msgs[0].ToolName)
+	require.Equal(t, "call_X", msgs[0].ToolID)
+	require.Contains(t, msgs[0].Content, "tool X not found")
+}
+
+func TestProcessToolCalls_StopOnToolError_ToolNotFound_ReturnsError(t *testing.T) {
+	inv := &agent.Invocation{}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	_, err := processToolCalls(ctx, toolCallsConfig{
+		ToolCalls:      makeToolCalls("X"),
+		Tools:          map[string]tool.Tool{},
+		InvocationID:   "inv",
+		EventChan:      nil,
+		Span:           oteltrace.SpanFromContext(ctx),
+		State:          State{},
+		EnableParallel: false,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "tool X not found")
+}
+
+func TestProcessToolCalls_ContinueOnToolError_MarshalFailure_AppendsToolErrorMessage(t *testing.T) {
+	continueOnToolError := true
+	inv := &agent.Invocation{
+		RunOptions: agent.RunOptions{
+			ContinueOnToolError: &continueOnToolError,
+		},
+	}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	tools := map[string]tool.Tool{
+		"X": &blockingTool{name: "X", result: math.NaN()},
+	}
+	calls := makeToolCalls("X")
+
+	msgs, err := processToolCalls(ctx, toolCallsConfig{
+		ToolCalls:      calls,
+		Tools:          tools,
+		InvocationID:   "inv",
+		EventChan:      nil,
+		Span:           oteltrace.SpanFromContext(ctx),
+		State:          State{},
+		EnableParallel: false,
+	})
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+	require.Equal(t, model.RoleTool, msgs[0].Role)
+	require.Equal(t, "X", msgs[0].ToolName)
+	require.Equal(t, "call_X", msgs[0].ToolID)
+	require.Contains(t, msgs[0].Content, "failed to marshal tool result")
+	require.Contains(t, msgs[0].Content, "unsupported value")
+}
+
+func TestProcessToolCalls_StopOnToolError_MarshalFailure_ReturnsError(t *testing.T) {
+	inv := &agent.Invocation{}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	tools := map[string]tool.Tool{
+		"X": &blockingTool{name: "X", result: math.NaN()},
+	}
+	_, err := processToolCalls(ctx, toolCallsConfig{
+		ToolCalls:      makeToolCalls("X"),
+		Tools:          tools,
+		InvocationID:   "inv",
+		EventChan:      nil,
+		Span:           oteltrace.SpanFromContext(ctx),
+		State:          State{},
+		EnableParallel: false,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "failed to marshal tool result")
+}
+
+func TestProcessToolCalls_StopOnToolError_ToolExecutionFailure_ReturnsError(t *testing.T) {
+	inv := &agent.Invocation{}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	tools := map[string]tool.Tool{
+		"X": &blockingTool{name: "X", returnErr: assertAnError{}},
+	}
+	_, err := processToolCalls(ctx, toolCallsConfig{
+		ToolCalls:      makeToolCalls("X"),
+		Tools:          tools,
+		InvocationID:   "inv",
+		EventChan:      nil,
+		Span:           oteltrace.SpanFromContext(ctx),
+		State:          State{},
+		EnableParallel: false,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "tool X call failed")
+	require.Contains(t, err.Error(), "boom")
+}
 
 func TestNewToolsNodeFunc_WithEnableParallelTools(t *testing.T) {
 	started := make(chan string, 2)

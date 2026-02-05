@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	iflow "trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
@@ -348,6 +349,9 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequential(
 	)
 	if err != nil {
 		if shouldIgnoreError {
+			if !iflow.ContinueOnToolErrorEnabled(invocation, true) {
+				invocation.EndInvocation = true
+			}
 			// Create error choice for ignorable errors
 			choice := p.createErrorChoice(index, toolCall.ID, err.Error())
 			choices = []model.Choice{*choice}
@@ -443,9 +447,12 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 		close(done)
 	}()
 
-	toolCallResponsesEvents, err := p.collectParallelToolResults(
+	toolCallResponsesEvents, hadToolError, err := p.collectParallelToolResults(
 		ctx, resultChan, len(toolCalls),
 	)
+	if hadToolError && !iflow.ContinueOnToolErrorEnabled(invocation, true) {
+		invocation.EndInvocation = true
+	}
 	if len(toolCallResponsesEvents) == 0 &&
 		invocation != nil &&
 		invocation.RunOptions.ToolExecutionFilter != nil {
@@ -498,7 +505,8 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 			if tc.Function.Name == transfer.TransferToolName {
 				errorEvent.Tag = event.TransferTag
 			}
-			p.sendToolResult(ctx, resultChan, toolResult{index: index, event: errorEvent})
+			panicErr := fmt.Errorf("tool execution panic: %v", r)
+			p.sendToolResult(ctx, resultChan, toolResult{index: index, event: errorEvent, err: panicErr})
 		}
 	}()
 
@@ -507,7 +515,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	defer span.End()
 	startTime := time.Now()
 	// Execute the tool (streamable or callable) with callbacks.
-	ctx, choices, modifiedArgs, shouldIgnoreError, err := p.executeToolCall(
+	ctx, choices, modifiedArgs, _, err := p.executeToolCall(
 		ctx, invocation, tc, tools, index, eventChan,
 	)
 	// Handle errors based on whether they are ignorable or critical.
@@ -531,12 +539,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 		if tc.Function.Name == transfer.TransferToolName {
 			errorEvent.Tag = event.TransferTag
 		}
-		// Only propagate the error if it's not ignorable (e.g., stop errors)
-		var returnErr error
-		if !shouldIgnoreError {
-			returnErr = err
-		}
-		p.sendToolResult(ctx, resultChan, toolResult{index: index, event: errorEvent, err: returnErr})
+		p.sendToolResult(ctx, resultChan, toolResult{index: index, event: errorEvent, err: err})
 		return
 	}
 
@@ -930,25 +933,31 @@ func (p *FunctionCallResponseProcessor) createErrorChoice(index int, toolID stri
 }
 
 // collectParallelToolResults drains resultChan and preserves order by index.
-// It returns only non-nil events.
+// It returns only non-nil events and whether any tool returned an error.
 func (p *FunctionCallResponseProcessor) collectParallelToolResults(
 	ctx context.Context,
 	resultChan <-chan toolResult,
 	toolCallsCount int,
-) ([]*event.Event, error) {
+) ([]*event.Event, bool, error) {
 	results := make([]*event.Event, toolCallsCount)
+	hadToolError := false
 	var err error
 	for {
 		select {
 		case result, ok := <-resultChan:
 			if !ok {
 				// Channel closed, all results received.
-				return p.filterNilEvents(results), err
+				return p.filterNilEvents(results), hadToolError, err
 			}
 			if result.index >= 0 && result.index < len(results) {
 				results[result.index] = result.event
-				if err == nil && result.err != nil {
-					err = result.err
+				if result.err != nil {
+					hadToolError = true
+					if err == nil {
+						if _, ok := agent.AsStopError(result.err); ok {
+							err = result.err
+						}
+					}
 				}
 			} else {
 				log.ErrorfContext(
@@ -964,7 +973,7 @@ func (p *FunctionCallResponseProcessor) collectParallelToolResults(
 				ctx,
 				"Context cancelled while waiting for tool results",
 			)
-			return p.filterNilEvents(results), nil
+			return p.filterNilEvents(results), hadToolError, nil
 		}
 	}
 }
