@@ -18,7 +18,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
-	"trpc.group/trpc-go/trpc-agent-go/ctxmsg"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	evalresultinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
@@ -98,25 +97,27 @@ func (c *countingService) Close() error {
 	return nil
 }
 
-type messageProbeService struct {
-	inferenceMessage ctxmsg.Msg
-	evaluateMessage  ctxmsg.Msg
-	evaluateHasKey   bool
+type invocationProbeService struct {
+	inferenceInvocation *agent.Invocation
+	evaluateInvocation  *agent.Invocation
+	evaluateHasKey      bool
 }
 
-func (s *messageProbeService) Inference(ctx context.Context, req *service.InferenceRequest) ([]*service.InferenceResult, error) {
-	msg := ctxmsg.Message(ctx)
-	s.inferenceMessage = msg
-	md := msg.Metadata()
-	md["probe"] = []byte("value")
-	msg.SetMetadata(md)
+func (s *invocationProbeService) Inference(ctx context.Context, req *service.InferenceRequest) ([]*service.InferenceResult, error) {
+	inv, _ := agent.InvocationFromContext(ctx)
+	s.inferenceInvocation = inv
+	if inv != nil {
+		inv.SetState("probe", "value")
+	}
 	return []*service.InferenceResult{}, nil
 }
 
-func (s *messageProbeService) Evaluate(ctx context.Context, req *service.EvaluateRequest) (*service.EvalSetRunResult, error) {
-	msg := ctxmsg.Message(ctx)
-	s.evaluateMessage = msg
-	_, s.evaluateHasKey = msg.Metadata()["probe"]
+func (s *invocationProbeService) Evaluate(ctx context.Context, req *service.EvaluateRequest) (*service.EvalSetRunResult, error) {
+	inv, _ := agent.InvocationFromContext(ctx)
+	s.evaluateInvocation = inv
+	if inv != nil {
+		_, s.evaluateHasKey = inv.GetState("probe")
+	}
 	return &service.EvalSetRunResult{
 		AppName:         req.AppName,
 		EvalSetID:       req.EvalSetID,
@@ -124,9 +125,7 @@ func (s *messageProbeService) Evaluate(ctx context.Context, req *service.Evaluat
 	}, nil
 }
 
-func (s *messageProbeService) Close() error {
-	return nil
-}
+func (s *invocationProbeService) Close() error { return nil }
 
 type countingEvalResultManager struct {
 	saves int32
@@ -271,11 +270,11 @@ func TestNewAgentEvaluatorValidation(t *testing.T) {
 	assert.NoError(t, ae.Close())
 }
 
-func TestAgentEvaluatorEvaluateAttachesMessage(t *testing.T) {
+func TestAgentEvaluatorEvaluateAttachesInvocation(t *testing.T) {
 	ctx := context.Background()
 	appName := "app"
 
-	svc := &messageProbeService{}
+	svc := &invocationProbeService{}
 	ae := &agentEvaluator{
 		appName:           appName,
 		evalService:       svc,
@@ -286,8 +285,8 @@ func TestAgentEvaluatorEvaluateAttachesMessage(t *testing.T) {
 
 	_, err := ae.Evaluate(ctx, "set")
 	assert.NoError(t, err)
-	assert.NotNil(t, svc.inferenceMessage)
-	assert.Same(t, svc.inferenceMessage, svc.evaluateMessage)
+	assert.NotNil(t, svc.inferenceInvocation)
+	assert.Same(t, svc.inferenceInvocation, svc.evaluateInvocation)
 	assert.True(t, svc.evaluateHasKey)
 }
 
