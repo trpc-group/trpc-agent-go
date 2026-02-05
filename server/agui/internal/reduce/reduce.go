@@ -11,12 +11,14 @@
 package reduce
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/multimodal"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -125,9 +127,44 @@ func (r *reducer) reduceEvent(evt aguievents.Event) error {
 		return r.handleToolEnd(e)
 	case *aguievents.ToolCallResultEvent:
 		return r.handleToolResult(e)
+	case *aguievents.CustomEvent:
+		if e.Name == multimodal.CustomEventNameUserMessage {
+			return r.handleUserMessageCustomEvent(e)
+		}
+		return r.handleActivity(e)
 	default:
 		return r.handleActivity(e)
 	}
+}
+
+func (r *reducer) handleUserMessageCustomEvent(e *aguievents.CustomEvent) error {
+	if e.Value == nil {
+		return fmt.Errorf("user message custom event missing value")
+	}
+	data, err := json.Marshal(e.Value)
+	if err != nil {
+		return fmt.Errorf("marshal user message custom event value: %w", err)
+	}
+	var message types.Message
+	if err := json.Unmarshal(data, &message); err != nil {
+		return fmt.Errorf("unmarshal user message custom event value: %w", err)
+	}
+	if message.Role != types.RoleUser {
+		return fmt.Errorf("user message custom event role must be user: %s", message.Role)
+	}
+	if message.ID == "" {
+		return fmt.Errorf("user message custom event missing message id")
+	}
+	if message.Name == "" {
+		message.Name = r.userID
+	}
+	if _, ok := message.ContentString(); !ok {
+		if _, ok := message.ContentInputContents(); !ok {
+			return fmt.Errorf("user message custom event content is invalid")
+		}
+	}
+	r.messages = append(r.messages, &message)
+	return nil
 }
 
 func (r *reducer) finalizePartial() {
