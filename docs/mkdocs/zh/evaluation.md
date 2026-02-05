@@ -2168,7 +2168,9 @@ agentEvaluator, err := evaluation.New(
 - `return result, nil`：将 `ctx` 更新为 `result.Context`，后续回调与后续阶段使用更新后的 `ctx`。
 - `return nil, err`：中断当前回调点并向上返回错误。
 
-通过 `evaluation.WithEvalCaseParallelInferenceEnabled(true)` 开启并行推理后，case 级回调可能并发执行，由于 `args.Request` 指向同一份 `*InferenceRequest`，因此建议只读；如需改写请求，可以在 set 级回调中完成。
+通过 `evaluation.WithEvalCaseParallelInferenceEnabled(true)` 开启并行推理后，推理阶段的 case 级回调可能并发执行，由于 `args.Request` 指向同一份 `*InferenceRequest`，因此建议只读；如需改写请求，可以在 set 级回调中完成。
+
+通过 `evaluation.WithEvalCaseParallelEvaluationEnabled(true)` 开启并发评估后，评估阶段的 case 级回调也可能并发执行；同样由于 `args.Request` 指向同一份 `*EvaluateRequest`，因此建议只读；如需改写请求，可以在 set 级回调中完成。
 
 单个 EvalCase 的推理或评估失败通常不会通过 `error` 向上传递，而是写入 `Result.Status` 与 `Result.ErrorMessage`，因此 `After*CaseArgs.Error` 不用于承载单个用例失败原因，需要判断失败可以查看 `args.Result.Status` 与 `args.Result.ErrorMessage`。
 
@@ -2192,6 +2194,25 @@ agentEvaluator, err := evaluation.New(
 并发推理只影响不同用例之间的推理。单个用例内部仍按 `conversation` 的轮次顺序执行，评估阶段也会按用例顺序逐个评估。
 
 开启并发后，需要保证 Runner、工具实现、外部依赖与回调逻辑可并发调用，避免共享可变状态导致相互干扰。
+
+### EvalCase 级别并发评估
+
+当评估器耗时较长时，例如 LLM Judge，评估阶段也可能成为瓶颈。框架支持在评估阶段按 EvalCase 并发执行评估器，以缩短总体耗时。
+
+在创建 AgentEvaluator 时开启并发评估，并设置最大并发数。不设置时并发数默认值为 `runtime.GOMAXPROCS(0)`。
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/evaluation"
+
+agentEvaluator, err := evaluation.New(
+	appName,
+	runner,
+	evaluation.WithEvalCaseParallelEvaluationEnabled(true),
+	evaluation.WithEvalCaseParallelism(8),
+)
+```
+
+并发评估只影响不同用例之间的评估。单个用例内部仍会按指标顺序逐条执行评估器，且返回的 `EvalCaseResults` 顺序与输入的 `InferenceResults` 一致。
 
 ### 上下文注入
 
