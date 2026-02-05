@@ -167,6 +167,63 @@ func TestEvalSetJSONRoundTrip(t *testing.T) {
 	assert.JSONEq(t, jsonData, string(encoded))
 }
 
+func TestEvalSetJSONRoundTripWithActualConversation(t *testing.T) {
+	jsonData := `{
+  "evalSetId": "trace-set",
+  "name": "Trace Set",
+  "evalCases": [
+    {
+      "evalId": "case-trace",
+      "evalMode": "trace",
+      "conversation": [
+        {
+          "invocationId": "exp-1",
+          "userContent": {
+            "role": "user",
+            "content": "hello"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "expected"
+          }
+        }
+      ],
+      "actualConversation": [
+        {
+          "invocationId": "act-1",
+          "userContent": {
+            "role": "user",
+            "content": "hello"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "actual"
+          }
+        }
+      ],
+      "sessionInput": {
+        "userId": "user-1"
+      }
+    }
+  ]
+}`
+
+	var evalSet EvalSet
+	err := json.Unmarshal([]byte(jsonData), &evalSet)
+	assert.NoError(t, err)
+	assert.Len(t, evalSet.EvalCases, 1)
+	assert.Equal(t, EvalModeTrace, evalSet.EvalCases[0].EvalMode)
+	assert.Len(t, evalSet.EvalCases[0].Conversation, 1)
+	assert.Len(t, evalSet.EvalCases[0].ActualConversation, 1)
+	assert.Equal(t, "act-1", evalSet.EvalCases[0].ActualConversation[0].InvocationID)
+	assert.NotNil(t, evalSet.EvalCases[0].ActualConversation[0].FinalResponse)
+	assert.Equal(t, "actual", evalSet.EvalCases[0].ActualConversation[0].FinalResponse.Content)
+
+	encoded, err := json.Marshal(evalSet)
+	assert.NoError(t, err)
+	assert.JSONEq(t, jsonData, string(encoded))
+}
+
 func TestEvalSetNestedToolCallArgsFromJSON(t *testing.T) {
 	const jsonData = `{
   "evalSetId": "nested-set",

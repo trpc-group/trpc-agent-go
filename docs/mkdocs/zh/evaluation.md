@@ -525,11 +525,11 @@ metricManager.Add(ctx, appName, evalSetID, evalMetric)
 
 ### 评估集 EvalSet
 
-EvalSet 用于描述评估覆盖的场景集合，提供评估集输入。每个场景对应一个评估用例 EvalCase，EvalCase 再按轮组织 Invocation。评估运行时，Service 会按 EvalCase 的 `conversation` 驱动 Runner 推理，并将推理得到的实际轨迹与 EvalSet 中的预期轨迹交给 Evaluator 对比打分。
+EvalSet 用于描述评估覆盖的场景集合，提供评估集输入。每个场景对应一个评估用例 EvalCase，EvalCase 再按轮组织 Invocation。默认模式会按 `conversation` 驱动 Runner 推理产出实际轨迹，并将 `conversation` 作为预期轨迹；Trace 模式会跳过推理并使用 `actualConversation` 作为实际轨迹。评估运行时，Service 会将实际轨迹与预期轨迹交给 Evaluator 对比打分。
 
 #### 结构定义
 
-EvalSet 是评估用例的集合，每个用例用 EvalCase 表达，用例内部的 Conversation 按轮组织 Invocation，用于描述用户输入与可选的预期信息，结构定义如下。
+EvalSet 是评估用例的集合，每个用例用 EvalCase 表达。用例内部的 Conversation 按轮组织 Invocation，用于描述用户输入与预期输出；Trace 模式下 ActualConversation 用于描述实际输出轨迹，结构定义如下。
 
 ```go
 import (
@@ -551,7 +551,8 @@ type EvalCase struct {
 	EvalID            string               // EvalID 是用例标识
 	EvalMode          EvalMode             // EvalMode 是用例模式，可选为空或 trace
 	ContextMessages   []*model.Message     // ContextMessages 是上下文消息，可选
-	Conversation      []*Invocation        // Conversation 是多轮交互序列，必填
+	Conversation      []*Invocation        // Conversation 是预期多轮交互序列，默认模式必填，Trace 模式可选
+	ActualConversation   []*Invocation     // ActualConversation 是 Trace 模式下的实际输出轨迹，Trace 模式必填
 	SessionInput      *SessionInput        // SessionInput 是会话初始化信息，必填
 	CreationTimestamp *epochtime.EpochTime // CreationTimestamp 是创建时间戳，可选
 }
@@ -584,11 +585,15 @@ type SessionInput struct {
 
 EvalSet 由 `evalSetId` 标识，包含多个 EvalCase，每个用例用 `evalId` 标识。
 
-推理阶段按 `conversation` 的轮次读取 `userContent` 作为输入，`sessionInput.userId` 用于创建会话，必要时通过 `sessionInput.state` 注入初始状态，`contextMessages` 会在每次推理前注入额外上下文。
+默认模式推理阶段按 `conversation` 的轮次读取 `userContent` 作为输入，`sessionInput.userId` 用于创建会话，必要时通过 `sessionInput.state` 注入初始状态，`contextMessages` 会在每次推理前注入额外上下文。Trace 模式下不会推理，而是直接使用 `actualConversation` 作为实际轨迹。
 
-EvalSet 中的 `tools` 与 `finalResponse` 用于描述工具轨迹与最终响应，是否需要填写取决于所选评估指标。默认模式下它们通常作为预期信息，`trace` 模式下它们表示既有轨迹。
+EvalSet 中的 `tools` 与 `finalResponse` 用于描述工具轨迹与最终响应，是否需要填写取决于所选评估指标。
 
-`evalMode` 为空表示默认模式，此时会实时推理并采集工具轨迹与最终响应。`evalMode` 为 `trace` 时跳过推理，直接使用 `conversation` 中的既有轨迹参与评估。
+Trace 模式下可以通过 `actualConversation` 显式配置实际输出轨迹。
+
+当 Trace 模式同时配置了 `conversation` 与 `actualConversation` 时，需要按轮次对齐，且 `actualConversation` 每轮应包含 `userContent`。当仅配置 `actualConversation` 且未配置 `conversation` 时，表示不提供预期输出。
+
+`evalMode` 为空表示默认模式，此时会实时推理并采集工具轨迹与最终响应。`evalMode` 为 `trace` 时跳过推理，使用 `actualConversation` 作为实际轨迹参与评估；`conversation` 可选用于提供预期输出。
 
 #### EvalSet Manager
 
@@ -1471,7 +1476,7 @@ type PerInvocationDetails struct {
 }
 ```
 
-Evaluator 的输入是两组 Invocation 列表。actuals 表示推理阶段采集到的实际轨迹，expecteds 表示 EvalSet 中的预期轨迹。框架会以 EvalCase 为粒度调用 Evaluate，actuals 与 expecteds 均来自同一个 EvalCase 的 Conversation，并按轮次对齐。大多数评估器要求两者轮数一致，否则会直接返回错误。
+Evaluator 的输入是两组 Invocation 列表。actuals 表示推理阶段采集到的实际轨迹，expecteds 表示 EvalSet 中的预期轨迹。框架会以 EvalCase 为粒度调用 Evaluate，actuals 与 expecteds 分别表示 EvalCase 的实际轨迹与预期轨迹，并按轮次对齐。大多数评估器要求两者轮数一致，否则会直接返回错误。
 
 Evaluator 的输出包含整体结果与逐轮明细。整体分数通常由逐轮分数聚合得到，整体状态通常由整体分数与 `threshold` 对比得到。对确定性评估器，`reason` 通常用于记录不匹配原因。对 LLM Judge 类评估器，`reason` 与 `rubricScores` 会用于保留裁判依据。
 
@@ -2215,7 +2220,7 @@ type EvalSetRunResult struct {
 
 当 `evalMode` 为空值时，推理阶段会按 `conversation` 的轮次依次调用 Runner，并把每轮采集到的实际 Invocation 写入 `Inferences`。
 
-当 `evalMode` 为 `trace` 时，推理阶段不会运行 Runner，而是直接将 EvalSet 中的 `conversation` 作为实际轨迹返回。
+当 `evalMode` 为 `trace` 时，推理阶段不会运行 Runner，而是直接将 `actualConversation` 作为实际轨迹返回。
 
 Local 实现支持 EvalCase 级并发推理。开启后会并行运行多个用例，单个用例内部仍按轮次顺序执行。
 
@@ -2225,7 +2230,7 @@ Local 实现支持 EvalCase 级并发推理。开启后会并行运行多个用�
 
 Local 实现会通过 Registry 按 `MetricName` 获取 Evaluator，并调用 `Evaluator.Evaluate` 完成打分。该调用以 EvalCase 为粒度，actuals 与 expecteds 均来自同一个用例，并按轮次对齐。
 
-当 `evalMode` 为 `trace` 时，评估阶段会将预期侧 expecteds 处理为仅保留用户输入的占位 Invocation，用于避免将 trace 输出误作为参考答案参与对比。
+当 `evalMode` 为 `trace` 时，推理阶段跳过 Runner，实际轨迹 actuals 来自 `actualConversation`；预期轨迹由 `conversation` 提供。
 
 评估完成后会生成 `EvalSetRunResult` 并返回给 AgentEvaluator。
 
@@ -2290,7 +2295,11 @@ defer agentEvaluator.Close()
 
 Trace 模式用于评估既有轨迹，可以将一次真实运行采集到的 Invocation 轨迹写入评估集 EvalSet，并在运行评估时跳过推理阶段。
 
-启用方式是在 EvalCase 中将 `evalMode` 设为 `trace`，并在 `conversation` 中写入完整轨迹。Trace 模式下仍要求 `sessionInput` 与 `conversation` 非空。
+启用方式是在 EvalCase 中将 `evalMode` 设为 `trace`。Trace 模式下 `actualConversation` 表示实际输出，`conversation` 表示预期输出，有三种配置方式：
+
+- 仅配置 `actualConversation`：`actualConversation` 作为实际轨迹，不提供预期轨迹。
+- 同时配置 `actualConversation` 与 `conversation`：`actualConversation` 作为实际轨迹，`conversation` 作为预期轨迹，按轮次对齐。
+- 仅配置 `conversation`：`conversation` 作为实际轨迹，不提供预期轨迹（仅为兼容历史行为）。
 
 ```json
 {
@@ -2330,6 +2339,36 @@ Trace 模式用于评估既有轨迹，可以将一次真实运行采集到的 I
           ]
         }
       ],
+      "actualConversation": [
+        {
+          "invocationId": "trace_calc_add-1",
+          "userContent": {
+            "role": "user",
+            "content": "calc add 123 456"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "calc result: 579"
+          },
+          "tools": [
+            {
+              "id": "call_00_example",
+              "name": "calculator",
+              "arguments": {
+                "a": 123,
+                "b": 456,
+                "operation": "add"
+              },
+              "result": {
+                "a": 123,
+                "b": 456,
+                "operation": "add",
+                "result": 579
+              }
+            }
+          ]
+        }
+      ],
       "sessionInput": {
         "appName": "trace-eval-app",
         "userId": "demo-user"
@@ -2339,9 +2378,9 @@ Trace 模式用于评估既有轨迹，可以将一次真实运行采集到的 I
 }
 ```
 
-在 Trace 模式下，推理阶段不会运行 Runner，而是直接将 `conversation` 作为实际轨迹写入 `InferenceResult.Inferences`。评估阶段仍会生成 expecteds 列表，但只保留每轮的 `userContent` 作为占位，避免将 trace 轨迹误当作参考答案参与对比。
+在 Trace 模式下，推理阶段不会运行 Runner，而是直接将 `actualConversation` 写入 `InferenceResult.Inferences` 作为实际轨迹。`conversation` 用于提供预期轨迹；当未配置 `conversation` 时，评估阶段会生成仅保留每轮 `userContent` 的占位 expecteds，避免将 trace 轨迹误当作参考答案参与对比。
 
-Trace 模式更适合只依赖实际轨迹的指标，例如 `llm_rubric_response` 与 `llm_rubric_knowledge_recall`。需要对比参考工具轨迹或参考最终回答的指标建议使用默认模式，并在 EvalSet 预期侧提供对应字段。
+当只提供实际轨迹时，适合只依赖实际轨迹的指标，例如 `llm_rubric_response` 与 `llm_rubric_knowledge_recall`。如果需要对比参考工具轨迹或参考最终回答，可以额外配置预期轨迹。
 
 完整示例参见 [examples/evaluation/trace](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/trace)。
 

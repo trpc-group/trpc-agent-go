@@ -526,11 +526,11 @@ A typical evaluation run includes the following steps.
 
 ### EvalSet
 
-EvalSet describes the set of scenarios covered and provides evaluation input. Each scenario corresponds to an EvalCase, and EvalCase organizes Invocations per turn. During evaluation, Service drives Runner using `conversation` and then compares actual traces with expected traces from EvalSet using Evaluator.
+EvalSet describes the set of scenarios covered and provides evaluation input. Each scenario corresponds to an EvalCase, and EvalCase organizes Invocations per turn. In default mode, Runner is driven by `conversation` to produce actual traces, and `conversation` is used as expected traces. In trace mode, inference is skipped and `actualConversation` is used as actual traces. During evaluation, Service passes actual and expected traces to Evaluator for comparison and scoring.
 
 #### Structure Definition
 
-EvalSet is a collection of evaluation cases. Each case is an EvalCase, and its Conversation organizes Invocations per turn to describe user input and optional expected information. The structure definition is as follows.
+EvalSet is a collection of evaluation cases. Each case is an EvalCase. Its Conversation organizes Invocations per turn to describe user input and expected outputs. In trace mode, ActualConversation is used to describe recorded actual traces. The structure definition is as follows.
 
 ```go
 import (
@@ -552,7 +552,8 @@ type EvalCase struct {
 	EvalID            string               // EvalID is the case identifier.
 	EvalMode          EvalMode             // EvalMode is the case mode, optional and can be empty or trace.
 	ContextMessages   []*model.Message     // ContextMessages are context messages, optional.
-	Conversation      []*Invocation        // Conversation is the multi-turn interaction sequence, required.
+	Conversation      []*Invocation        // Conversation is the expected multi-turn interaction sequence. It is required in default mode and optional in trace mode.
+	ActualConversation []*Invocation       // ActualConversation is the actual trace in trace mode. It is required in trace mode.
 	SessionInput      *SessionInput        // SessionInput is session initialization info, required.
 	CreationTimestamp *epochtime.EpochTime // CreationTimestamp is the creation timestamp, optional.
 }
@@ -585,11 +586,15 @@ type SessionInput struct {
 
 EvalSet is identified by `evalSetId` and contains multiple EvalCases, each identified by `evalId`.
 
-During inference, `userContent` is read per turn from `conversation` as input. `sessionInput.userId` is used to create the session. `sessionInput.state` can inject initial state when needed. `contextMessages` inject additional context before each inference.
+In default mode, the inference phase reads `userContent` per turn from `conversation` as input. `sessionInput.userId` is used to create the session. `sessionInput.state` can inject initial state when needed. `contextMessages` inject additional context before each inference. In trace mode, inference is skipped and `actualConversation` is used directly as actual traces.
 
-`tools` and `finalResponse` in EvalSet describe tool traces and final responses. Whether they are needed depends on the selected evaluation metrics. In default mode they usually represent expected information, while in `trace` mode they represent existing traces.
+`tools` and `finalResponse` in EvalSet describe tool traces and final responses. Whether they are needed depends on the selected evaluation metrics.
 
-When `evalMode` is empty, it is the default mode, which performs real-time inference and collects tool traces and final responses. When `evalMode` is `trace`, inference is skipped and existing traces in `conversation` are used for evaluation.
+In trace mode, you can configure actual output traces explicitly via `actualConversation`.
+
+If both `conversation` and `actualConversation` are provided in trace mode, they must be aligned by turn, and each turn in `actualConversation` should include `userContent`. If only `actualConversation` is provided and `conversation` is omitted, it means no expected outputs are provided.
+
+When `evalMode` is empty, it is the default mode, which performs real-time inference and collects tool traces and final responses. When `evalMode` is `trace`, inference is skipped and `actualConversation` is used as actual traces for evaluation. `conversation` can be provided optionally as expected outputs.
 
 #### EvalSet Manager
 
@@ -1469,7 +1474,7 @@ type PerInvocationDetails struct {
 }
 ```
 
-Evaluator input is two Invocation lists. `actuals` are the actual traces collected during inference, and `expecteds` are expected traces from EvalSet. The framework calls Evaluate per EvalCase, and `actuals` and `expecteds` both come from the same case Conversation and are aligned by turn. Most evaluators require both lists to have the same number of turns, otherwise an error is returned.
+Evaluator input is two Invocation lists. `actuals` are the actual traces collected during inference, and `expecteds` are expected traces from EvalSet. The framework calls Evaluate per EvalCase, and `actuals` and `expecteds` represent the actual and expected traces for the case and are aligned by turn. Most evaluators require both lists to have the same number of turns, otherwise an error is returned.
 
 Evaluator output includes overall results and per-turn details. Overall score is usually aggregated from per-turn scores, and overall status is usually determined by comparing overall score with `threshold`. For deterministic evaluators, `reason` usually records mismatch reasons. For LLM Judge evaluators, `reason` and `rubricScores` preserve judge rationale.
 
@@ -2213,7 +2218,7 @@ The inference phase is handled by `Inference`. It reads EvalSet, filters cases b
 
 When `evalMode` is empty, it runs the Runner turn by turn based on `conversation` and writes actual Invocations into `Inferences`.
 
-When `evalMode` is `trace`, it does not run the Runner and instead returns `conversation` from EvalSet as actual traces.
+When `evalMode` is `trace`, it does not run the Runner and instead returns `actualConversation` as actual traces.
 
 The local implementation supports EvalCase-level concurrent inference. When enabled, multiple cases are run in parallel, while turns within a case remain sequential.
 
@@ -2223,7 +2228,7 @@ The evaluation phase is handled by `Evaluate`. It takes `InferenceResult` as inp
 
 The local implementation looks up Evaluators by `MetricName` from Registry and calls `Evaluator.Evaluate`. This operates per EvalCase, with actuals and expecteds from the same case aligned by turn.
 
-When `evalMode` is `trace`, the evaluation phase processes expected traces to keep only user input placeholder Invocations, to avoid treating trace outputs as reference answers in comparisons.
+When `evalMode` is `trace`, inference is skipped, actual traces come from `actualConversation`, and expected traces are provided by `conversation`.
 
 After evaluation, it returns `EvalSetRunResult` to AgentEvaluator.
 
@@ -2287,7 +2292,11 @@ defer agentEvaluator.Close()
 
 Trace mode evaluates existing traces by writing Invocation traces from a real run into EvalSet and skipping inference during evaluation.
 
-Enable it by setting `evalMode` to `trace` in EvalCase and writing the full trace into `conversation`. Trace mode still requires non-empty `sessionInput` and `conversation`.
+Enable it by setting `evalMode` to `trace` in EvalCase. In trace mode, `actualConversation` represents actual outputs and `conversation` represents expected outputs. There are three supported layouts:
+
+- `actualConversation` only: `actualConversation` is used as actual traces, without expected traces.
+- `actualConversation` + `conversation`: `actualConversation` is used as actual traces, and `conversation` is used as expected traces, aligned by turn.
+- `conversation` only: `conversation` is used as actual traces without expected traces (for backward compatibility only).
 
 ```json
 {
@@ -2327,6 +2336,36 @@ Enable it by setting `evalMode` to `trace` in EvalCase and writing the full trac
           ]
         }
       ],
+      "actualConversation": [
+        {
+          "invocationId": "trace_calc_add-1",
+          "userContent": {
+            "role": "user",
+            "content": "calc add 123 456"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "calc result: 579"
+          },
+          "tools": [
+            {
+              "id": "call_00_example",
+              "name": "calculator",
+              "arguments": {
+                "a": 123,
+                "b": 456,
+                "operation": "add"
+              },
+              "result": {
+                "a": 123,
+                "b": 456,
+                "operation": "add",
+                "result": 579
+              }
+            }
+          ]
+        }
+      ],
       "sessionInput": {
         "appName": "trace-eval-app",
         "userId": "demo-user"
@@ -2336,9 +2375,9 @@ Enable it by setting `evalMode` to `trace` in EvalCase and writing the full trac
 }
 ```
 
-In Trace mode, the inference phase does not run Runner and instead writes `conversation` as actual traces into `InferenceResult.Inferences`. The evaluation phase still generates expecteds, but keeps only per-turn `userContent` as placeholders to avoid treating trace outputs as reference answers in comparisons.
+In Trace mode, the inference phase does not run Runner and instead writes `actualConversation` into `InferenceResult.Inferences` as actual traces. `conversation` provides expected traces. If `conversation` is omitted, the evaluation phase builds placeholder expecteds that keep only per-turn `userContent`, to avoid treating trace outputs as reference answers in comparisons.
 
-Trace mode is better suited to metrics that depend only on actual traces, such as `llm_rubric_response` and `llm_rubric_knowledge_recall`. Metrics that compare reference tool traces or reference final responses should use default mode and provide the expected fields in EvalSet.
+When only actual traces are provided, it is suitable for metrics that depend only on actual traces, such as `llm_rubric_response` and `llm_rubric_knowledge_recall`. If you need metrics that compare reference tool traces or reference final responses, you can additionally configure expected traces.
 
 See [examples/evaluation/trace](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/trace) for the full example.
 

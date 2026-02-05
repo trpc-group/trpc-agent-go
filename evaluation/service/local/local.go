@@ -370,17 +370,13 @@ type caseEvaluationInputs struct {
 }
 
 func prepareCaseEvaluationInputs(inferenceResult *service.InferenceResult, evalCase *evalset.EvalCase) (*caseEvaluationInputs, error) {
-	if len(evalCase.Conversation) == 0 {
-		return nil, errors.New("invalid eval case")
-	}
 	if evalCase.SessionInput == nil {
 		return nil, errors.New("session input is nil")
 	}
-	evalMode := evalCase.EvalMode
 	actuals := inferenceResult.Inferences
-	expecteds := evalCase.Conversation
-	if evalMode == evalset.EvalModeTrace {
-		expecteds = traceExpectedsForEval(evalCase.Conversation)
+	expecteds, err := buildExpectedsForEval(evalCase)
+	if err != nil {
+		return nil, fmt.Errorf("build expecteds for eval (evalCaseID=%s): %w", evalCase.EvalID, err)
 	}
 	if len(actuals) != len(expecteds) {
 		return nil, fmt.Errorf("inference count %d does not match expected conversation length %d",
@@ -410,11 +406,39 @@ func attachContextMessages(invocations []*evalset.Invocation, contextMessages []
 	}
 }
 
+// In trace mode, Conversation can represent either expected outputs or recorded actual traces for backward compatibility.
+// If ActualConversation is provided, Conversation is treated as expecteds aligned by turn.
+// If ActualConversation is omitted, Conversation is treated as the actual trace and expecteds are reduced to user-input placeholders.
+// If Conversation is omitted but ActualConversation is provided, expecteds are built from ActualConversation as user-input placeholders,
+// which represents trace evaluation without expected outputs.
+func buildExpectedsForEval(evalCase *evalset.EvalCase) ([]*evalset.Invocation, error) {
+	if evalCase.EvalMode == evalset.EvalModeTrace {
+		if len(evalCase.Conversation) != 0 {
+			if len(evalCase.ActualConversation) == 0 {
+				return traceExpectedsForEval(evalCase.Conversation), nil
+			}
+			return evalCase.Conversation, nil
+		}
+		if len(evalCase.ActualConversation) != 0 {
+			return traceExpectedsForEval(evalCase.ActualConversation), nil
+		}
+		return nil, errors.New("invalid eval case")
+	}
+	if len(evalCase.Conversation) == 0 {
+		return nil, errors.New("invalid eval case")
+	}
+	return evalCase.Conversation, nil
+}
+
 // traceExpectedsForEval builds placeholder expected invocations that only preserve user inputs.
 // This whitelist prevents trace outputs from being treated as reference answers and stays correct when Invocation gains new fields.
 func traceExpectedsForEval(conversation []*evalset.Invocation) []*evalset.Invocation {
 	expecteds := make([]*evalset.Invocation, len(conversation))
 	for i, invocation := range conversation {
+		if invocation == nil {
+			expecteds[i] = &evalset.Invocation{}
+			continue
+		}
 		expecteds[i] = &evalset.Invocation{
 			InvocationID: invocation.InvocationID,
 			UserContent:  invocation.UserContent,

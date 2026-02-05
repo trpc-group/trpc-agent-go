@@ -17,6 +17,7 @@ import (
 	"sort"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/ctxmsg"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
@@ -122,6 +123,8 @@ func (a *agentEvaluator) Evaluate(ctx context.Context, evalSetID string) (*Evalu
 	if evalSetID == "" {
 		return nil, errors.New("eval set id is not configured")
 	}
+	ctx, msg := ctxmsg.WithCloneMessage(ctx)
+	defer ctxmsg.PutBackMessage(msg)
 	start := time.Now()
 	// Gather per-case results.
 	evalCases, evalSetResult, err := a.collectCaseResults(ctx, evalSetID)
