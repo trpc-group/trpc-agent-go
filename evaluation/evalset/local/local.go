@@ -190,6 +190,14 @@ func (m *manager) AddCase(_ context.Context, appName, evalSetID string, evalCase
 			invocation.CreationTimestamp = &epochtime.EpochTime{Time: time.Now()}
 		}
 	}
+	for _, invocation := range cloned.ActualConversation {
+		if invocation == nil {
+			continue
+		}
+		if invocation.CreationTimestamp == nil {
+			invocation.CreationTimestamp = &epochtime.EpochTime{Time: time.Now()}
+		}
+	}
 	evalSet.EvalCases = append(evalSet.EvalCases, cloned)
 	if err := m.store(appName, evalSet); err != nil {
 		return fmt.Errorf("store eval set %s.%s: %w", appName, evalSetID, err)
