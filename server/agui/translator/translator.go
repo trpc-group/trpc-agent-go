@@ -334,8 +334,14 @@ func (t *translator) toolResultEvent(rsp *model.Response, messageID string) ([]a
 	}
 	events := make([]aguievents.Event, 0, len(rsp.Choices))
 	for _, choice := range rsp.Choices {
-		events = append(events, aguievents.NewToolCallResultEvent(messageID,
-			choice.Message.ToolID, choice.Message.Content))
+		if choice.Message.Content != "" {
+			events = append(events, aguievents.NewToolCallResultEvent(messageID,
+				choice.Message.ToolID, choice.Message.Content))
+		}
+		if choice.Delta.Content != "" {
+			events = append(events, aguievents.NewToolCallResultEvent(messageID,
+				choice.Delta.ToolID, choice.Delta.Content))
+		}
 	}
 	t.lastMessageID = messageID
 	return events, nil

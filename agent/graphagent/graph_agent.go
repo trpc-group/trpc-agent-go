@@ -57,6 +57,7 @@ func New(name string, g *graph.Graph, opts ...Option) (*GraphAgent, error) {
 	}
 
 	// Build executor options.
+	// First, apply mapped options (ChannelBufferSize, MaxConcurrency, CheckpointSaver).
 	var executorOpts []graph.ExecutorOption
 	executorOpts = append(executorOpts,
 		graph.WithChannelBufferSize(options.ChannelBufferSize))
@@ -68,6 +69,11 @@ func New(name string, g *graph.Graph, opts ...Option) (*GraphAgent, error) {
 		executorOpts = append(executorOpts,
 			graph.WithCheckpointSaver(options.CheckpointSaver))
 	}
+
+	// Then, append user-provided executor options.
+	// These options are applied after the mapped options, so they can override
+	// the mapped settings if needed.
+	executorOpts = append(executorOpts, options.ExecutorOptions...)
 
 	executor, err := graph.NewExecutor(g, executorOpts...)
 	if err != nil {
@@ -114,7 +120,7 @@ func (ga *GraphAgent) runWithBarrier(ctx context.Context, invocation *agent.Invo
 		evt := event.NewErrorEvent(invocation.InvocationID, invocation.AgentName,
 			model.ErrorTypeFlowError, err.Error())
 		span.SetStatus(codes.Error, err.Error())
-		span.SetAttributes(attribute.String(itelemetry.KeyErrorType, model.ErrorTypeFlowError))
+		span.SetAttributes(attribute.String(itelemetry.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeFlowError)))
 		if emitErr := agent.EmitEvent(ctx, invocation, out, evt); emitErr != nil {
 			log.Errorf("graphagent: emit error event failed: %v", emitErr)
 		}
@@ -125,7 +131,7 @@ func (ga *GraphAgent) runWithBarrier(ctx context.Context, invocation *agent.Invo
 		evt := event.NewErrorEvent(invocation.InvocationID, invocation.AgentName,
 			model.ErrorTypeFlowError, err.Error())
 		span.SetStatus(codes.Error, err.Error())
-		span.SetAttributes(attribute.String(itelemetry.KeyErrorType, model.ErrorTypeFlowError))
+		span.SetAttributes(attribute.String(itelemetry.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeFlowError)))
 		if emitErr := agent.EmitEvent(ctx, invocation, out, evt); emitErr != nil {
 			log.Errorf("graphagent: emit error event failed: %v.", emitErr)
 		}
@@ -134,7 +140,7 @@ func (ga *GraphAgent) runWithBarrier(ctx context.Context, invocation *agent.Invo
 	for evt := range innerChan {
 		if err := event.EmitEvent(ctx, out, evt); err != nil {
 			span.SetStatus(codes.Error, err.Error())
-			span.SetAttributes(attribute.String(itelemetry.KeyErrorType, model.ErrorTypeFlowError))
+			span.SetAttributes(attribute.String(itelemetry.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeFlowError)))
 			log.Errorf("graphagent: emit event failed: %v.", err)
 			return
 		}

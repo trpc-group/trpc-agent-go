@@ -1237,7 +1237,159 @@ llm := openai.New("deepseek-chat",
 - 对“对话补全”而言，目前未暴露单次调用级别的 BaseURL 覆盖；如需切
   换，请新建一个使用不同 BaseURL 的模型，或在中间件中修改 `r.URL`。
 
-#### 6. Token 裁剪（Token Tailoring）
+#### 6. Token 计数器（Token Counter）
+
+Token 计数器用于估算文本内容的 token 数量。框架提供了 `SimpleTokenCounter` 作为默认实现，支持自定义 token 计数逻辑以满足不同场景的需求。
+
+##### SimpleTokenCounter
+
+`SimpleTokenCounter` 提供了一个非常粗略的 token 估算，基于 UTF-8 字符数量计算。它的特点是：
+
+**核心特性：**
+
+- **轻量级**：不依赖外部 tokenizer，仅使用字符长度估算
+- **模型无关**：适用于所有 OpenAI 兼容的模型
+- **多模态支持**：支持消息内容、推理内容（ReasoningContent）和工具调用
+
+**估算原理：**
+
+使用启发式规则：每 token 大约对应 `N` 个 UTF-8 字符，其中 `N` 可通过 `WithApproxRunesPerToken` 配置。
+
+**使用方式：**
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/model"
+
+// 使用默认配置（英文场景）
+counter := model.NewSimpleTokenCounter()
+
+// 针对中文场景调整（中文 token 密度更高）
+counter := model.NewSimpleTokenCounter(
+    model.WithApproxRunesPerToken(1.6),  // 约 1.6 字符/token
+)
+
+// 针对其他语言或特定模型调整
+counter := model.NewSimpleTokenCounter(
+    model.WithApproxRunesPerToken(3.5),  // 约 3.5 字符/token
+)
+```
+
+**参数说明：**
+
+**`WithApproxRunesPerToken(v float64)`**
+
+- **作用**：设置每 token 大约对应的字符数
+- **类型**：float64
+- **默认值**：4.0（约每 4 个字符对应 1 个 token，适合英文场景）
+- **值限制**：<= 0 的值会被忽略，保持默认值
+
+**常见语言的推荐值：**
+
+| 语言/场景          | 推荐值 | 说明 |
+| --------------- | ------- | ---- |
+| 英文文本        | 4.0     | 默认值，适合英文单词和常见拉丁字符 |
+| 中文文本        | 1.6-1.8  | 中文字符的 token 密度高于英文，建议使用较小的值 |
+| 日文文本        | 2.0-2.5  | 日文字符 token 密度介于中英文之间 |
+| 混合文本        | 3.0      | 中英混合场景的折中值 |
+
+**重要提示：**
+
+- **经验值**：上述推荐值为经验值，实际 token 数量取决于具体模型的 tokenizer 实现。
+- **不确定场景**：如果您不确定语言混合或使用的模型特性，建议保留默认值（4.0）。
+- **模型差异**：不同模型厂商（如 OpenAI、DeepSeek、混元）的 tokenizer 实现不同，可能需要调整此参数。
+- **精度考虑**：`SimpleTokenCounter` 仅提供粗略估算。如果需要精确的 token 计算，建议使用模型提供商提供的 tokenizer API（如 OpenAI 的 tiktoken）。
+
+**自定义 Token Counter**
+
+如果 `SimpleTokenCounter` 的粗略估算不能满足需求，可以实现自定义的 `TokenCounter` 接口：
+
+```go
+import (
+    "context"
+    "fmt"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+type MyCustomCounter struct{}
+
+func (c *MyCustomCounter) CountTokens(ctx context.Context, message model.Message) (int, error) {
+    // 计算消息内容、推理内容和工具调用的 token 数量
+    total := 0
+
+    // 处理主内容
+    if len(message.Content) > 0 {
+        total += len(message.Content)  // 示例：使用更精确的算法
+    }
+
+    // 处理推理内容
+    if len(message.ReasoningContent) > 0 {
+        total += len(message.ReasoningContent)
+    }
+
+    // 处理多模态内容
+    for _, part := range message.ContentParts {
+        if part.Text != nil {
+            total += len(*part.Text)
+        }
+    }
+
+    // 处理工具调用
+    for _, toolCall := range message.ToolCalls {
+        total += len(toolCall.Function.Name)
+        total += len(string(toolCall.Function.Arguments))
+    }
+
+    return total, nil
+}
+
+func (c *MyCustomCounter) CountTokensRange(ctx context.Context, messages []model.Message, start, end int) (int, error) {
+    if start < 0 || end > len(messages) || start >= end {
+        return 0, fmt.Errorf("invalid range: start=%d, end=%d, len=%d", start, end, len(messages))
+    }
+
+    total := 0
+    for i := start; i < end; i++ {
+        tokens, err := c.CountTokens(ctx, messages[i])
+        if err != nil {
+            return 0, err
+        }
+        total += tokens
+    }
+    return total, nil
+}
+
+// 在创建模型时使用自定义计数器
+llm := openai.New("deepseek-chat",
+    openai.WithTokenCounter(&MyCustomCounter{}),
+)
+```
+
+**在摘要器中使用 Token Counter**
+
+`SimpleTokenCounter` 也可以与 `session/summary` 模块配合使用，用于控制摘要触发：
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/session/summary"
+)
+
+// 1. 创建针对中文优化的计数器
+counter := model.NewSimpleTokenCounter(
+    model.WithApproxRunesPerToken(1.6),  // 中文场景推荐值
+)
+
+// 2. 设置为全局计数器（影响所有摘要触发）
+summary.SetTokenCounter(counter)
+
+// 3. 创建摘要器
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithTokenThreshold(4000),  // 使用自定义计数器评估
+)
+```
+
+#### 7. Token 裁剪（Token Tailoring）
 
 Token Tailoring 是一种智能的消息管理技术，用于在消息超出模型上下文窗口限制时自动裁剪消息，确保请求能够成功发送到 LLM API。该功能特别适用于长对话场景，能够在保留关键上下文的同时，将消息列表控制在模型的 token 限制内。
 

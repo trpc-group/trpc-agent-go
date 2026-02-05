@@ -53,6 +53,7 @@ type chatAttributes struct {
 	ResponseModelName string
 	Stream            bool
 	AgentName         string
+	TaskType          string
 
 	AppName   string
 	UserID    string
@@ -81,10 +82,13 @@ func (a chatAttributes) toAttributes() []attribute.KeyValue {
 	if a.SessionID != "" {
 		attrs = append(attrs, attribute.String(KeyGenAIConversationID, a.SessionID))
 	}
+	if a.TaskType != "" {
+		attrs = append(attrs, attribute.String(KeyGenAITaskType, a.TaskType))
+	}
 	if a.ErrorType != "" {
 		attrs = append(attrs, attribute.String(KeyErrorType, a.ErrorType))
 	} else if a.Error != nil {
-		attrs = append(attrs, attribute.String(KeyErrorType, ValueDefaultErrorType))
+		attrs = append(attrs, attribute.String(KeyErrorType, ToErrorType(a.Error, ValueDefaultErrorType)))
 	}
 	if a.AgentName != "" {
 		attrs = append(attrs, attribute.String(KeyGenAIAgentName, a.AgentName))
@@ -114,6 +118,7 @@ type ChatMetricsTracker struct {
 	// Configuration
 	invocation *agent.Invocation
 	llmRequest *model.Request
+	taskType   *string
 	err        *error // pointer to capture final error
 }
 
@@ -125,6 +130,7 @@ func NewChatMetricsTracker(
 	invocation *agent.Invocation,
 	llmRequest *model.Request,
 	timingInfo *model.TimingInfo,
+	taskType *string,
 	err *error,
 ) *ChatMetricsTracker {
 	return &ChatMetricsTracker{
@@ -133,6 +139,7 @@ func NewChatMetricsTracker(
 		isFirstToken: true,
 		invocation:   invocation,
 		llmRequest:   llmRequest,
+		taskType:     taskType,
 		err:          err,
 		timingInfo:   timingInfo,
 	}
@@ -266,6 +273,10 @@ func (t *ChatMetricsTracker) buildAttributes() chatAttributes {
 	// Extract request attributes
 	if t.llmRequest != nil {
 		attrs.Stream = t.llmRequest.GenerationConfig.Stream
+	}
+
+	if t.taskType != nil {
+		attrs.TaskType = *t.taskType
 	}
 
 	// Extract invocation attributes (with nil safety)

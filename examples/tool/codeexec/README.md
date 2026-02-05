@@ -52,16 +52,33 @@ cd tool/codeexec
 
 ```
 👤 User: Calculate the factorial of 10
-🤖 Assistant: I'll calculate the factorial of 10 for you...
+🤖 Assistant: I'll calculate the factorial of 10 for you. The factorial of a number n (denoted as n!) is the product of all positive integers less than or equal to n.
+
+Let me execute Python code to calculate 10!:
+
+
 🔧 Tool calls:
-   💻 execute_code (ID: call_xxx)
-     Arguments: {"language": "python", "code": "..."}
+   💻 execute_code (ID: call_3cf6cde9ac9c4eafac71b847)
+     Arguments: {"code_blocks": [{"language": "python", "code": "import math\n\n# Calculate factorial of 10\nresult = math.factorial(10)\nprint(f\"10! = {result}\")\n\n# Let's also show the step-by-step calculation\n...
 
 ⚡ Executing code...
-✅ Execution result (ID: call_xxx):
-{"output":"3628800\n"}
+✅ Execution result (ID: call_3cf6cde9ac9c4eafac71b847):
+{"output":"10! = 3628800\n\nStep-by-step calculation:\n1! = 1\n2! = 2\n3! = 6\n4! = 24\n5! = 120\n6! = 720\n7! = 5040\n8! = 40320\n9! = 362880\n10! = 3628800\n"}
+The factorial of 10 is **3,628,800**.
 
-The factorial of 10 is 3,628,800.
+Here's the step-by-step calculation:
+- 1! = 1
+- 2! = 2 × 1 = 2
+- 3! = 3 × 2 = 6
+- 4! = 4 × 6 = 24
+- 5! = 5 × 24 = 120
+- 6! = 6 × 120 = 720
+- 7! = 7 × 720 = 5,040
+- 8! = 8 × 5,040 = 40,320
+- 9! = 9 × 40,320 = 362,880
+- 10! = 10 × 362,880 = 3,628,800
+
+So 10! = 10 × 9 × 8 × 7 × 6 × 5 × 4 × 3 × 2 × 1 = 3,628,800
 ```
 
 ## Example Questions
@@ -168,35 +185,6 @@ tool := codeexec.NewTool(
 )
 ```
 
-### Tool Schema
-
-**Input**:
-```json
-{
-    "type": "object",
-    "required": ["language", "code"],
-    "properties": {
-        "language": {
-            "type": "string",
-            "enum": ["python", "bash"],
-            "description": "Programming language to execute"
-        },
-        "code": {
-            "type": "string",
-            "description": "Code to execute"
-        }
-    }
-}
-```
-
-**Output**:
-```json
-{
-    "output": "string",  // stdout
-    "error": "string"    // stderr or error message (optional)
-}
-```
-
 ## Supported Executors
 
 | Executor | Description | Import Path |
@@ -210,3 +198,4 @@ tool := codeexec.NewTool(
 1. **Security**: `local.New()` executes code directly on the local machine. Do not use in production environments.
 2. **Timeout**: It's recommended to set a reasonable timeout to prevent infinite code execution.
 3. **Language Support**: Supports `python` and `bash` by default. Extend via `WithLanguages`.
+4. **File Outputs & Multi-node Deployments**: If your executor produces output files (e.g., images, CSVs), make sure your application surfaces them via the `file` tool (or another file-serving mechanism). In multi-node deployments, if the `file` tool (or file server) stores files on local disk, each node will have its own state and requests may not be able to read previously generated files—use shared storage (PVC/NFS/object storage) and/or sticky routing to keep file access consistent.

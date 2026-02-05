@@ -230,7 +230,13 @@ func TestTraceFunctions_NoPanics(t *testing.T) {
 	}
 	req := &model.Request{}
 	resp := &model.Response{}
-	TraceChat(span, inv, req, resp, "event1", 0)
+	TraceChat(span, &TraceChatAttributes{
+		Invocation:       inv,
+		Request:          req,
+		Response:         resp,
+		EventID:          "event1",
+		TimeToFirstToken: 0,
+	})
 	require.True(t, span.called, "expected SetAttributes in TraceChat")
 }
 
@@ -275,7 +281,13 @@ func TestTraceBeforeAfter_Tool_Merged_Chat_Embedding(t *testing.T) {
 	inv2 := &agent.Invocation{InvocationID: "i1", Session: &session.Session{ID: "s1"}}
 	req := &model.Request{GenerationConfig: model.GenerationConfig{Stop: []string{"END"}}, Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}}}
 	s5 := newRecordingSpan()
-	TraceChat(s5, inv2, req, &model.Response{ID: "rid"}, "e1", 0)
+	TraceChat(s5, &TraceChatAttributes{
+		Invocation:       inv2,
+		Request:          req,
+		Response:         &model.Response{ID: "rid"},
+		EventID:          "e1",
+		TimeToFirstToken: 0,
+	})
 	if !hasAttr(s5.attrs, KeyInvocationID, "i1") {
 		t.Fatalf("missing invocation id")
 	}
@@ -401,6 +413,36 @@ func TestNewExecuteToolSpanName(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := NewExecuteToolSpanName(tt.toolName)
 			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestNewSummarizeTaskType(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "empty name",
+			in:   "",
+			want: "summarize",
+		},
+		{
+			name: "non-empty name",
+			in:   "demo",
+			want: "summarize demo",
+		},
+		{
+			name: "whitespace is preserved",
+			in:   "  demo  ",
+			want: "summarize   demo  ",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, NewSummarizeTaskType(tt.in))
 		})
 	}
 }
@@ -583,9 +625,33 @@ func TestTraceChat_WithTimeToFirstToken(t *testing.T) {
 	}
 
 	span := newRecordingSpan()
-	TraceChat(span, inv, req, rsp, "evt1", 100*time.Millisecond)
+	TraceChat(span, &TraceChatAttributes{
+		Invocation:       inv,
+		Request:          req,
+		Response:         rsp,
+		EventID:          "evt1",
+		TimeToFirstToken: 100 * time.Millisecond,
+	})
 
 	require.True(t, hasAttr(span.attrs, KeyTRPCAgentGoClientTimeToFirstToken, 0.1))
+}
+
+func TestTraceChat_WithTaskType(t *testing.T) {
+	inv := &agent.Invocation{InvocationID: "inv-task", Session: &session.Session{ID: "sess-task"}}
+	req := &model.Request{Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}}}
+	rsp := &model.Response{ID: "resp-task"}
+
+	span := newRecordingSpan()
+	TraceChat(span, &TraceChatAttributes{
+		Invocation:       inv,
+		Request:          req,
+		Response:         rsp,
+		EventID:          "evt-task",
+		TimeToFirstToken: 0,
+		TaskType:         "summarize demo",
+	})
+
+	require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAITaskType, "summarize demo"))
 }
 
 func TestBuildInvocationAttributes(t *testing.T) {
@@ -948,7 +1014,13 @@ func TestTrace_AdditionalBranches(t *testing.T) {
 	// TraceChat with nil req and nil rsp
 	inv := &agent.Invocation{InvocationID: "invx"}
 	s4 := newRecordingSpan()
-	TraceChat(s4, inv, nil, nil, "evt", 0)
+	TraceChat(s4, &TraceChatAttributes{
+		Invocation:       inv,
+		Request:          nil,
+		Response:         nil,
+		EventID:          "evt",
+		TimeToFirstToken: 0,
+	})
 }
 
 func TestTraceChat_WithChoicesAndError(t *testing.T) {
@@ -957,7 +1029,13 @@ func TestTraceChat_WithChoicesAndError(t *testing.T) {
 	stop := "stop"
 	rsp := &model.Response{ID: "rid3", Model: "m3", Usage: &model.Usage{PromptTokens: 2, CompletionTokens: 3}, Choices: []model.Choice{{FinishReason: &stop}}, Error: &model.ResponseError{Message: "bad", Type: "api_error"}}
 	s := newRecordingSpan()
-	TraceChat(s, inv, req, rsp, "e3", 0)
+	TraceChat(s, &TraceChatAttributes{
+		Invocation:       inv,
+		Request:          req,
+		Response:         rsp,
+		EventID:          "e3",
+		TimeToFirstToken: 0,
+	})
 	if s.status != codes.Error {
 		t.Fatalf("expected error status on chat")
 	}

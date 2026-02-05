@@ -16,12 +16,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"mime"
 	"os"
 	"path"
-	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
@@ -78,7 +77,17 @@ const (
 
 const (
 	skillDirInputs = "inputs"
+	skillDirVenv   = ".venv"
 )
+
+const (
+	envPath       = "PATH"
+	envVirtualEnv = "VIRTUAL_ENV"
+)
+
+const workspaceMetadataFileMode uint32 = 0o600
+
+const workspaceMetadataTmpFile = ".metadata.tmp"
 
 // WithAllowedCommands restricts skill_run to a single program execution
 // whose command name is in the allowlist.
@@ -220,11 +229,15 @@ func (t *RunTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name: "skill_run",
 		Description: "Run a command inside a skill workspace. " +
+			"Use it only for commands required by the skill " +
+			"docs (not for generic shell tasks). " +
 			"Returns stdout/stderr, a primary_output " +
 			"(best small text file), and collected output_files " +
-			"(inline, with workspace:// refs). Prefer " +
-			"primary_output/output_files content; use " +
-			"output_files[*].ref when passing a file to other tools.",
+			"(text inline by default, with workspace:// refs). " +
+			"Non-text outputs omit inline content. " +
+			"Prefer primary_output/output_files content; " +
+			"use output_files[*].ref when passing a file to " +
+			"other tools.",
 		InputSchema: &tool.Schema{
 			Type:        "object",
 			Description: "Run command input",
@@ -238,7 +251,8 @@ func (t *RunTool) Declaration() *tool.Declaration {
 				"output_files": {Type: "array",
 					Items: &tool.Schema{Type: "string"},
 					Description: "Workspace-relative paths/globs to " +
-						"collect and inline (e.g. out/*.txt). " +
+						"collect and inline text (e.g. out/*.txt). " +
+						"Non-text outputs omit inline content. " +
 						"Prefer output_files content; for other " +
 						"tools use output_files[*].ref " +
 						"(workspace://...). Do not use " +
@@ -247,9 +261,13 @@ func (t *RunTool) Declaration() *tool.Declaration {
 				"save_as_artifacts": {Type: "boolean", Description: "" +
 					"Persist collected files via Artifact service"},
 				"omit_inline_content": {Type: "boolean", Description: "" +
-					"With save_as_artifacts, omit output_files content"},
+					"Omit output_files content (metadata only). " +
+					"Non-text outputs are always metadata only. " +
+					"Use output_files[*].ref to read later."},
 				"artifact_prefix": {Type: "string", Description: "" +
 					"With save_as_artifacts, prefix artifact names"},
+				"inputs":  inputSpecsSchema(),
+				"outputs": outputSpecSchema(),
 			},
 		},
 		OutputSchema: &tool.Schema{Type: "object",
@@ -300,6 +318,7 @@ func (t *RunTool) Call(
 	if err != nil {
 		return nil, err
 	}
+	trimTruncatedUTF8TextFiles(files)
 	out := buildRunOutput(rr, files)
 	mergeAutoPrimaryOutput(autoFiles, &out)
 	if len(files) > 0 && !in.SaveArtifacts {
@@ -313,9 +332,8 @@ func (t *RunTool) Call(
 		return nil, err
 	}
 	mergeManifestArtifactRefs(manifest, &out)
-	if !(in.SaveArtifacts && in.OmitInline) {
-		toolcache.StoreSkillRunOutputFilesFromContext(ctx, files)
-	}
+	applyOmitInlineContent(ctx, &out, in.OmitInline)
+	toolcache.StoreSkillRunOutputFilesFromContext(ctx, files)
 	return out, nil
 }
 
@@ -339,6 +357,7 @@ func (t *RunTool) autoExportWorkspaceOut(
 	if len(files) > defaultAutoExportMax {
 		files = files[:defaultAutoExportMax]
 	}
+	trimTruncatedUTF8TextFiles(files)
 	toolcache.StoreSkillRunOutputFilesFromContext(ctx, files)
 	return files
 }
@@ -408,23 +427,22 @@ func (t *RunTool) stageSkill(
 	if err != nil {
 		return err
 	}
-	// Ensure layout + load metadata to decide if staging is needed.
-	if _, err := codeexecutor.EnsureLayout(ws.Path); err != nil {
-		return err
-	}
-	md, err := codeexecutor.LoadMetadata(ws.Path)
+	md, err := t.loadWorkspaceMetadata(ctx, eng, ws)
 	if err != nil {
 		return err
-	}
-	if md.Skills == nil {
-		md.Skills = map[string]codeexecutor.SkillMeta{}
 	}
 	// Stage into /skills/<name> inside workspace.
 	dest := path.Join(codeexecutor.DirSkills, name)
 	// If metadata has same digest, skip staging.
-	if s, ok := md.Skills[name]; ok && s.Digest == dg &&
-		s.Mounted && skillLinksPresent(ws.Path, name) {
-		return nil
+	if s, ok := md.Skills[name]; ok &&
+		s.Digest == dg && s.Mounted {
+		ok, err := t.skillLinksPresent(ctx, eng, ws, name)
+		if err != nil {
+			return err
+		}
+		if ok {
+			return nil
+		}
 	}
 	if err := t.removeWorkspacePath(ctx, eng, ws, dest); err != nil {
 		return err
@@ -456,7 +474,139 @@ func (t *RunTool) stageSkill(
 		Mounted:  true,
 		StagedAt: time.Now(),
 	}
-	return codeexecutor.SaveMetadata(ws.Path, md)
+	return t.saveWorkspaceMetadata(ctx, eng, ws, md)
+}
+
+func (t *RunTool) loadWorkspaceMetadata(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	ws codeexecutor.Workspace,
+) (codeexecutor.WorkspaceMetadata, error) {
+	now := time.Now()
+	md := codeexecutor.WorkspaceMetadata{
+		Version:    1,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+		LastAccess: now,
+		Skills:     map[string]codeexecutor.SkillMeta{},
+	}
+	if eng == nil || eng.FS() == nil {
+		return md, fmt.Errorf("workspace fs is not configured")
+	}
+	files, err := eng.FS().Collect(
+		ctx, ws, []string{codeexecutor.MetaFileName},
+	)
+	if err != nil {
+		return md, err
+	}
+	if len(files) == 0 || strings.TrimSpace(files[0].Content) == "" {
+		return md, nil
+	}
+	if err := json.Unmarshal([]byte(files[0].Content), &md); err != nil {
+		return codeexecutor.WorkspaceMetadata{}, err
+	}
+	if md.Version == 0 {
+		md.Version = 1
+	}
+	if md.CreatedAt.IsZero() {
+		md.CreatedAt = now
+	}
+	md.LastAccess = now
+	if md.Skills == nil {
+		md.Skills = map[string]codeexecutor.SkillMeta{}
+	}
+	return md, nil
+}
+
+func (t *RunTool) saveWorkspaceMetadata(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	ws codeexecutor.Workspace,
+	md codeexecutor.WorkspaceMetadata,
+) error {
+	if eng == nil || eng.FS() == nil {
+		return fmt.Errorf("workspace fs is not configured")
+	}
+	if eng.Runner() == nil {
+		return fmt.Errorf("workspace runner is not configured")
+	}
+	if md.Version == 0 {
+		md.Version = 1
+	}
+	now := time.Now()
+	if md.CreatedAt.IsZero() {
+		md.CreatedAt = now
+	}
+	md.UpdatedAt = now
+	md.LastAccess = now
+	if md.Skills == nil {
+		md.Skills = map[string]codeexecutor.SkillMeta{}
+	}
+	buf, err := json.MarshalIndent(md, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := eng.FS().PutFiles(ctx, ws, []codeexecutor.PutFile{{
+		Path:    workspaceMetadataTmpFile,
+		Content: buf,
+		Mode:    workspaceMetadataFileMode,
+	}}); err != nil {
+		return err
+	}
+	var sb strings.Builder
+	sb.WriteString("set -e; mv -f ")
+	sb.WriteString(shellQuote(workspaceMetadataTmpFile))
+	sb.WriteString(" ")
+	sb.WriteString(shellQuote(codeexecutor.MetaFileName))
+	_, err = eng.Runner().RunProgram(
+		ctx, ws, codeexecutor.RunProgramSpec{
+			Cmd:     "bash",
+			Args:    []string{"-lc", sb.String()},
+			Env:     map[string]string{},
+			Cwd:     ".",
+			Timeout: 5 * time.Second,
+		},
+	)
+	return err
+}
+
+func (t *RunTool) skillLinksPresent(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	ws codeexecutor.Workspace,
+	name string,
+) (bool, error) {
+	skillName := strings.TrimSpace(name)
+	if skillName == "" {
+		return false, nil
+	}
+	if eng == nil || eng.Runner() == nil {
+		return false, fmt.Errorf("workspace runner is not configured")
+	}
+	base := path.Join(codeexecutor.DirSkills, skillName)
+	var sb strings.Builder
+	sb.WriteString("test -L ")
+	sb.WriteString(shellQuote(path.Join(base, codeexecutor.DirOut)))
+	sb.WriteString(" && test -L ")
+	sb.WriteString(shellQuote(path.Join(base, codeexecutor.DirWork)))
+	sb.WriteString(" && test -L ")
+	sb.WriteString(shellQuote(path.Join(base, skillDirInputs)))
+	rr, err := eng.Runner().RunProgram(
+		ctx, ws, codeexecutor.RunProgramSpec{
+			Cmd:     "bash",
+			Args:    []string{"-lc", sb.String()},
+			Env:     map[string]string{},
+			Cwd:     ".",
+			Timeout: 5 * time.Second,
+		},
+	)
+	if err != nil {
+		return false, err
+	}
+	if rr.ExitCode == 0 {
+		return true, nil
+	}
+	return false, nil
 }
 
 // linkWorkspaceDirs creates convenience symlinks under the staged
@@ -477,9 +627,12 @@ func (t *RunTool) linkWorkspaceDirs(
 	var sb strings.Builder
 	sb.WriteString("set -e; cd ")
 	sb.WriteString(shellQuote(skillRoot))
-	sb.WriteString("; rm -rf out work inputs")
+	sb.WriteString("; rm -rf out work inputs ")
+	sb.WriteString(shellQuote(skillDirVenv))
 	sb.WriteString("; mkdir -p ")
 	sb.WriteString(shellQuote(toInputs))
+	sb.WriteString(" ")
+	sb.WriteString(shellQuote(skillDirVenv))
 	sb.WriteString("; ln -sfn ")
 	sb.WriteString(shellQuote(toOut))
 	sb.WriteString(" out; ln -sfn ")
@@ -499,26 +652,6 @@ func (t *RunTool) linkWorkspaceDirs(
 	return err
 }
 
-func skillLinksPresent(wsRoot string, name string) bool {
-	root := strings.TrimSpace(wsRoot)
-	skillName := strings.TrimSpace(name)
-	if root == "" || skillName == "" {
-		return false
-	}
-	base := filepath.Join(root, codeexecutor.DirSkills, skillName)
-	return isSymlink(filepath.Join(base, codeexecutor.DirOut)) &&
-		isSymlink(filepath.Join(base, codeexecutor.DirWork)) &&
-		isSymlink(filepath.Join(base, skillDirInputs))
-}
-
-func isSymlink(path string) bool {
-	st, err := os.Lstat(path)
-	if err != nil {
-		return false
-	}
-	return st.Mode()&os.ModeSymlink != 0
-}
-
 func (t *RunTool) removeWorkspacePath(
 	ctx context.Context,
 	eng codeexecutor.Engine,
@@ -530,11 +663,7 @@ func (t *RunTool) removeWorkspacePath(
 		return nil
 	}
 	if eng == nil || eng.Runner() == nil {
-		if ws.Path == "" {
-			return nil
-		}
-		p := filepath.Join(ws.Path, filepath.FromSlash(target))
-		return os.RemoveAll(p)
+		return fmt.Errorf("workspace runner is not configured")
 	}
 	var sb strings.Builder
 	sb.WriteString("set -e; if [ -e ")
@@ -565,11 +694,14 @@ func (t *RunTool) readOnlyExceptSymlinks(
 	ctx context.Context, eng codeexecutor.Engine,
 	ws codeexecutor.Workspace, dest string,
 ) error {
+	venv := path.Join(dest, skillDirVenv)
 	var sb strings.Builder
 	// Use find to skip symlinks and chmod others.
 	sb.WriteString("set -e; find ")
 	sb.WriteString(shellQuote(dest))
-	sb.WriteString(" -type l -prune -o -exec chmod a-w {} +")
+	sb.WriteString(" -path ")
+	sb.WriteString(shellQuote(venv))
+	sb.WriteString(" -prune -o -type l -prune -o -exec chmod a-w {} +")
 	_, err := eng.Runner().RunProgram(
 		ctx, ws, codeexecutor.RunProgramSpec{
 			Cmd:     "bash",
@@ -622,6 +754,35 @@ func isWorkspaceEnvPath(s string) bool {
 		hasEnvPrefix(s, codeexecutor.EnvRunDir)
 }
 
+func isAllowedWorkspacePath(rel string) bool {
+	switch {
+	case rel == codeexecutor.DirSkills || strings.HasPrefix(rel, codeexecutor.DirSkills+"/"):
+		return true
+	case rel == codeexecutor.DirWork || strings.HasPrefix(rel, codeexecutor.DirWork+"/"):
+		return true
+	case rel == codeexecutor.DirOut || strings.HasPrefix(rel, codeexecutor.DirOut+"/"):
+		return true
+	case rel == codeexecutor.DirRuns || strings.HasPrefix(rel, codeexecutor.DirRuns+"/"):
+		return true
+	default:
+		return false
+	}
+}
+
+func sanitizeWorkspaceRelPath(rel string, fallback string) string {
+	cleaned := path.Clean(rel)
+	if cleaned == "." || cleaned == "" {
+		return "."
+	}
+	if cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+		return fallback
+	}
+	if isAllowedWorkspacePath(cleaned) {
+		return cleaned
+	}
+	return fallback
+}
+
 func resolveCWD(cwd string, name string) string {
 	// Default: run at the skill root. Relative cwd resolves under the
 	// skill root. "$WORK_DIR" style paths resolve to workspace-relative
@@ -629,37 +790,34 @@ func resolveCWD(cwd string, name string) string {
 	// start with known workspace dirs like "/skills" or "/work".
 	base := path.Join(codeexecutor.DirSkills, name)
 	s := strings.TrimSpace(cwd)
+	s = strings.ReplaceAll(s, "\\", "/")
 	if s == "" {
 		return base
 	}
+
 	if isWorkspaceEnvPath(s) {
 		if out := codeexecutor.NormalizeGlobs([]string{s}); len(out) > 0 {
-			return out[0]
+			return sanitizeWorkspaceRelPath(out[0], base)
 		}
+		return base
 	}
+
 	if strings.HasPrefix(s, "/") {
-		cleaned := path.Clean(s)
-		rel := strings.TrimPrefix(cleaned, "/")
-		switch {
-		case rel == "" || rel == ".":
+		rel := strings.TrimPrefix(path.Clean(s), "/")
+		if rel == "" || rel == "." {
 			return "."
-		case rel == codeexecutor.DirSkills ||
-			strings.HasPrefix(rel, codeexecutor.DirSkills+"/"):
-			return rel
-		case rel == codeexecutor.DirWork ||
-			strings.HasPrefix(rel, codeexecutor.DirWork+"/"):
-			return rel
-		case rel == codeexecutor.DirOut ||
-			strings.HasPrefix(rel, codeexecutor.DirOut+"/"):
-			return rel
-		case rel == codeexecutor.DirRuns ||
-			strings.HasPrefix(rel, codeexecutor.DirRuns+"/"):
-			return rel
-		default:
-			return base
 		}
+		if isAllowedWorkspacePath(rel) {
+			return rel
+		}
+		return base
 	}
-	return path.Join(base, s)
+
+	joined := path.Join(base, s)
+	if joined == base || strings.HasPrefix(joined, base+"/") {
+		return joined
+	}
+	return base
 }
 
 // filepathBase returns the last element of a path, trimming trailing
@@ -690,7 +848,11 @@ func (t *RunTool) runProgram(
 	if _, ok := env[codeexecutor.EnvSkillName]; !ok {
 		env[codeexecutor.EnvSkillName] = in.Skill
 	}
+
+	venvRel, venvBinRel := venvRelPaths(cwd, in.Skill)
+
 	if len(t.allowedCmds) > 0 || len(t.deniedCmds) > 0 {
+		injectVenvEnv(env, venvRel, venvBinRel)
 		argv, err := splitCommandLine(in.Command)
 		if err != nil {
 			return codeexecutor.RunResult{}, err
@@ -718,15 +880,110 @@ func (t *RunTool) runProgram(
 			},
 		)
 	}
+
+	cmd := wrapWithVenvPrefix(in.Command, venvRel, venvBinRel)
 	return eng.Runner().RunProgram(
 		ctx, ws, codeexecutor.RunProgramSpec{
 			Cmd:     "bash",
-			Args:    []string{"-c", in.Command},
+			Args:    []string{"-c", cmd},
 			Env:     env,
 			Cwd:     cwd,
 			Timeout: timeout,
 		},
 	)
+}
+
+func venvRelPaths(cwd string, skillName string) (string, string) {
+	base := path.Clean(strings.TrimSpace(cwd))
+	if base == "" {
+		base = "."
+	}
+	skillRoot := path.Join(codeexecutor.DirSkills, skillName)
+	venv := path.Join(skillRoot, skillDirVenv)
+	venvBin := path.Join(venv, "bin")
+
+	relVenv := slashRel(base, venv)
+	relBin := slashRel(base, venvBin)
+	return relVenv, relBin
+}
+
+func slashRel(base string, target string) string {
+	base = strings.TrimPrefix(path.Clean(base), "/")
+	target = strings.TrimPrefix(path.Clean(target), "/")
+	if base == "." {
+		base = ""
+	}
+	if target == "." {
+		target = ""
+	}
+	if base == target {
+		return "."
+	}
+
+	var bParts []string
+	if base != "" {
+		bParts = strings.Split(base, "/")
+	}
+	var tParts []string
+	if target != "" {
+		tParts = strings.Split(target, "/")
+	}
+
+	i := 0
+	for i < len(bParts) && i < len(tParts) && bParts[i] == tParts[i] {
+		i++
+	}
+	var out []string
+	for j := i; j < len(bParts); j++ {
+		if bParts[j] == "" || bParts[j] == "." {
+			continue
+		}
+		out = append(out, "..")
+	}
+	out = append(out, tParts[i:]...)
+	if len(out) == 0 {
+		return "."
+	}
+	return strings.Join(out, "/")
+}
+
+func injectVenvEnv(env map[string]string, venv string, venvBin string) {
+	if env == nil {
+		return
+	}
+	if _, ok := env[envVirtualEnv]; !ok && strings.TrimSpace(venv) != "" {
+		env[envVirtualEnv] = venv
+	}
+	basePATH := strings.TrimSpace(env[envPath])
+	if basePATH == "" {
+		basePATH = strings.TrimSpace(os.Getenv(envPath))
+	}
+	sep := string(os.PathListSeparator)
+	if basePATH == "" {
+		env[envPath] = venvBin
+		return
+	}
+	env[envPath] = venvBin + sep + basePATH
+}
+
+func wrapWithVenvPrefix(cmd string, venv string, venvBin string) string {
+	var sb strings.Builder
+	sb.WriteString("export ")
+	sb.WriteString(envPath)
+	sb.WriteString("=")
+	sb.WriteString(shellQuote(venvBin))
+	sb.WriteString(":\"$")
+	sb.WriteString(envPath)
+	sb.WriteString("\"; ")
+	sb.WriteString("if [ -z \"$")
+	sb.WriteString(envVirtualEnv)
+	sb.WriteString("\" ]; then export ")
+	sb.WriteString(envVirtualEnv)
+	sb.WriteString("=")
+	sb.WriteString(shellQuote(venv))
+	sb.WriteString("; fi; ")
+	sb.WriteString(cmd)
+	return sb.String()
 }
 
 const disallowedShellMeta = "\n\r;&|<>"
@@ -843,9 +1100,11 @@ func (t *RunTool) prepareOutputs(
 		if in.Outputs.Inline {
 			for _, fr := range m.Files {
 				files = append(files, codeexecutor.File{
-					Name:     fr.Name,
-					Content:  fr.Content,
-					MIMEType: fr.MIMEType,
+					Name:      fr.Name,
+					Content:   fr.Content,
+					MIMEType:  fr.MIMEType,
+					SizeBytes: fr.SizeBytes,
+					Truncated: fr.Truncated,
 				})
 			}
 		}
@@ -908,12 +1167,68 @@ func truncateOutput(s string) (string, bool) {
 func toRunFiles(files []codeexecutor.File) []runFile {
 	out := make([]runFile, 0, len(files))
 	for _, f := range files {
+		rf := f
+		if !shouldInlineFileContent(rf) {
+			rf.Content = ""
+		}
 		out = append(out, runFile{
-			File: f,
+			File: rf,
 			Ref:  fileref.WorkspaceRef(f.Name),
 		})
 	}
 	return out
+}
+
+func shouldInlineFileContent(f codeexecutor.File) bool {
+	if f.Content == "" {
+		return true
+	}
+	if !codeexecutor.IsTextMIME(f.MIMEType) {
+		return false
+	}
+	if strings.IndexByte(f.Content, 0) >= 0 {
+		return false
+	}
+	return utf8.ValidString(f.Content)
+}
+
+const maxTrimUTF8SuffixBytes = utf8.UTFMax - 1
+
+func trimTruncatedUTF8TextFiles(files []codeexecutor.File) {
+	for i := range files {
+		f := &files[i]
+		if !f.Truncated || f.Content == "" {
+			continue
+		}
+		if !codeexecutor.IsTextMIME(f.MIMEType) {
+			continue
+		}
+		if strings.IndexByte(f.Content, 0) >= 0 {
+			continue
+		}
+		if utf8.ValidString(f.Content) {
+			continue
+		}
+		n := validUTF8PrefixLen(f.Content)
+		if len(f.Content)-n > maxTrimUTF8SuffixBytes {
+			continue
+		}
+		if n > 0 {
+			f.Content = f.Content[:n]
+		}
+	}
+}
+
+func validUTF8PrefixLen(s string) int {
+	n := 0
+	for n < len(s) {
+		r, size := utf8.DecodeRuneInString(s[n:])
+		if r == utf8.RuneError && size == 1 {
+			break
+		}
+		n += size
+	}
+	return n
 }
 
 func selectPrimaryOutput(files []runFile) *runFile {
@@ -922,7 +1237,7 @@ func selectPrimaryOutput(files []runFile) *runFile {
 		if strings.TrimSpace(f.Content) == "" {
 			continue
 		}
-		if !isTextMIME(f.MIMEType) {
+		if !codeexecutor.IsTextMIME(f.MIMEType) {
 			continue
 		}
 		if len(f.Content) > maxPrimaryOutputChars {
@@ -943,16 +1258,6 @@ func mergeAutoPrimaryOutput(files []codeexecutor.File, out *runOutput) {
 	}
 	runFiles := toRunFiles(files)
 	out.PrimaryOutput = selectPrimaryOutput(runFiles)
-}
-
-func isTextMIME(mimeType string) bool {
-	mt := strings.TrimSpace(mimeType)
-	if parsed, _, err := mime.ParseMediaType(mt); err == nil {
-		mt = parsed
-	}
-	return strings.HasPrefix(mt, "text/") ||
-		mt == "application/json" ||
-		strings.HasSuffix(mt, "+json")
 }
 
 // attachArtifactsIfRequested saves files as artifacts when requested
@@ -992,7 +1297,7 @@ func (t *RunTool) attachArtifactsIfRequested(
 }
 
 const warnSaveArtifactsSkippedTmpl = "save_as_artifacts requested but " +
-	"%s; returning inline output_files"
+	"%s; outputs are not persisted"
 
 const warnOutputFilesWorkspaceOnly = "output_files are workspace-" +
 	"relative; prefer output_files content; when you need a " +
@@ -1031,6 +1336,82 @@ func appendWarning(out *runOutput, reason string) {
 		out.Warnings,
 		fmt.Sprintf(warnSaveArtifactsSkippedTmpl, reason),
 	)
+}
+
+const warnOmitInlineNoFallback = "omit_inline_content requested but " +
+	"invocation is missing; returning inline output_files"
+
+func applyOmitInlineContent(
+	ctx context.Context,
+	out *runOutput,
+	omit bool,
+) {
+	if out == nil || !omit {
+		return
+	}
+	if !hasOmitInlineFallback(ctx) {
+		out.Warnings = append(out.Warnings, warnOmitInlineNoFallback)
+		return
+	}
+	for i := range out.OutputFiles {
+		out.OutputFiles[i].Content = ""
+	}
+	if out.PrimaryOutput != nil {
+		out.PrimaryOutput.Content = ""
+	}
+}
+
+func hasOmitInlineFallback(ctx context.Context) bool {
+	inv, ok := agent.InvocationFromContext(ctx)
+	return ok && inv != nil
+}
+
+func inputSpecsSchema() *tool.Schema {
+	return &tool.Schema{
+		Type:        "array",
+		Description: "Declarative inputs to stage into workspace",
+		Items: &tool.Schema{
+			Type: "object",
+			Properties: map[string]*tool.Schema{
+				"from": {Type: "string", Description: "" +
+					"Source ref (artifact://, host://, " +
+					"workspace://, skill://)"},
+				"to": {Type: "string", Description: "" +
+					"Workspace-relative destination"},
+				"mode": {Type: "string", Description: "" +
+					"copy (default) or link"},
+				"pin": {Type: "boolean", Description: "" +
+					"Pin artifact version when supported"},
+			},
+		},
+	}
+}
+
+func outputSpecSchema() *tool.Schema {
+	return &tool.Schema{
+		Type:        "object",
+		Description: "Declarative outputs with limits and persistence",
+		Properties: map[string]*tool.Schema{
+			"globs": {
+				Type:  "array",
+				Items: &tool.Schema{Type: "string"},
+				Description: "Workspace-relative patterns " +
+					"(supports ** and $OUTPUT_DIR/**)",
+			},
+			"inline": {Type: "boolean", Description: "" +
+				"Inline file contents into result"},
+			"save": {Type: "boolean", Description: "" +
+				"Persist outputs via Artifact service"},
+			"name_template": {Type: "string", Description: "" +
+				"Prefix for artifact names (e.g. pref/)"},
+			"max_files": {Type: "integer", Description: "" +
+				"Max number of matched files"},
+			"max_file_bytes": {Type: "integer", Description: "" +
+				"Max bytes per file (default 4 MiB)"},
+			"max_total_bytes": {Type: "integer", Description: "" +
+				"Max total bytes across files (default 64 MiB)"},
+		},
+	}
 }
 
 // mergeManifestArtifactRefs appends artifact refs derived from a

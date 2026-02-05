@@ -27,6 +27,64 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
+// Test helper functions for generating expected redis keys with optional prefix.
+
+// prefixedTestKey adds the prefix to the base key if prefix is non-empty.
+func prefixedTestKey(prefix, base string) string {
+	if prefix == "" {
+		return base
+	}
+	return prefix + ":" + base
+}
+
+func getExpectedSessionSummaryKey(key session.Key) string {
+	return getExpectedSessionSummaryKeyWithPrefix("", key)
+}
+
+func getExpectedSessionSummaryKeyWithPrefix(prefix string, key session.Key) string {
+	return prefixedTestKey(prefix, fmt.Sprintf("sesssum:{%s}:%s", key.AppName, key.UserID))
+}
+
+func getExpectedSessionStateKey(key session.Key) string {
+	return getExpectedSessionStateKeyWithPrefix("", key)
+}
+
+func getExpectedSessionStateKeyWithPrefix(prefix string, key session.Key) string {
+	return prefixedTestKey(prefix, fmt.Sprintf("sess:{%s}:%s", key.AppName, key.UserID))
+}
+
+func getExpectedAppStateKey(appName string) string {
+	return getExpectedAppStateKeyWithPrefix("", appName)
+}
+
+func getExpectedAppStateKeyWithPrefix(prefix, appName string) string {
+	return prefixedTestKey(prefix, fmt.Sprintf("appstate:{%s}", appName))
+}
+
+func getExpectedUserStateKey(key session.Key) string {
+	return getExpectedUserStateKeyWithPrefix("", key)
+}
+
+func getExpectedUserStateKeyWithPrefix(prefix string, key session.Key) string {
+	return prefixedTestKey(prefix, fmt.Sprintf("userstate:{%s}:%s", key.AppName, key.UserID))
+}
+
+func getExpectedEventKey(key session.Key) string {
+	return getExpectedEventKeyWithPrefix("", key)
+}
+
+func getExpectedEventKeyWithPrefix(prefix string, key session.Key) string {
+	return prefixedTestKey(prefix, fmt.Sprintf("event:{%s}:%s:%s", key.AppName, key.UserID, key.SessionID))
+}
+
+func getExpectedTrackKey(key session.Key, track session.Track) string {
+	return getExpectedTrackKeyWithPrefix("", key, track)
+}
+
+func getExpectedTrackKeyWithPrefix(prefix string, key session.Key, track session.Track) string {
+	return prefixedTestKey(prefix, fmt.Sprintf("track:{%s}:%s:%s:%s", key.AppName, key.UserID, key.SessionID, track))
+}
+
 func TestNewService(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -876,8 +934,8 @@ func TestService_Atomicity(t *testing.T) {
 				assert.Equal(t, "event123", finalSess.Events[0].ID)
 
 				// Verify Redis state consistency
-				sessStateKey := getSessionStateKey(sessionKey)
-				eventKey := getEventKey(sessionKey)
+				sessStateKey := getExpectedSessionStateKey(sessionKey)
+				eventKey := getExpectedEventKey(sessionKey)
 
 				// Check session state in Redis
 				sessStateData, err := client.HGet(context.Background(), sessStateKey, sessionKey.SessionID).Result()
@@ -919,7 +977,7 @@ func TestService_Atomicity(t *testing.T) {
 				assert.Nil(t, sess)
 
 				// Verify events are also deleted
-				eventKey := getEventKey(sessionKey)
+				eventKey := getExpectedEventKey(sessionKey)
 				count, err := client.ZCard(context.Background(), eventKey).Result()
 				require.NoError(t, err)
 				assert.Equal(t, int64(0), count)
@@ -988,13 +1046,13 @@ func TestService_SessionTTL(t *testing.T) {
 			},
 			validate: func(t *testing.T, client *redis.Client, sessionKey session.Key) {
 				// Check session state TTL
-				sessionStateKey := getSessionStateKey(sessionKey)
+				sessionStateKey := getExpectedSessionStateKey(sessionKey)
 				ttl := client.TTL(context.Background(), sessionStateKey)
 				require.NoError(t, ttl.Err())
 				assert.True(t, ttl.Val() > 0 && ttl.Val() <= 5*time.Second, "Session state TTL should be set and close to 5 seconds, got: %v", ttl.Val())
 
 				// Check event list TTL
-				eventKey := getEventKey(sessionKey)
+				eventKey := getExpectedEventKey(sessionKey)
 				ttl = client.TTL(context.Background(), eventKey)
 				require.NoError(t, ttl.Err())
 				assert.True(t, ttl.Val() > 0 && ttl.Val() <= 5*time.Second, "Event list TTL should be set and close to 5 seconds, got: %v", ttl.Val())
@@ -1037,12 +1095,12 @@ func TestService_SessionTTL(t *testing.T) {
 			},
 			validate: func(t *testing.T, client *redis.Client, sessionKey session.Key) {
 				// Check that TTL was refreshed (should be close to 5 seconds again)
-				sessionStateKey := getSessionStateKey(sessionKey)
+				sessionStateKey := getExpectedSessionStateKey(sessionKey)
 				ttl := client.TTL(context.Background(), sessionStateKey)
 				require.NoError(t, ttl.Err())
 				assert.True(t, ttl.Val() > 3*time.Second, "Session state TTL should be refreshed, got: %v", ttl.Val())
 
-				eventKey := getEventKey(sessionKey)
+				eventKey := getExpectedEventKey(sessionKey)
 				ttl = client.TTL(context.Background(), eventKey)
 				require.NoError(t, ttl.Err())
 				assert.True(t, ttl.Val() > 3*time.Second, "Event list TTL should be refreshed, got: %v", ttl.Val())
@@ -1101,7 +1159,7 @@ func TestService_getSessionSummaryTTL(t *testing.T) {
 	require.NoError(t, err)
 
 	client := buildRedisClient(t, redisURL)
-	summaryKey := getSessionSummaryKey(key)
+	summaryKey := getExpectedSessionSummaryKey(key)
 	err = client.HSet(ctx, summaryKey, key.SessionID, summaryBytes).Err()
 	require.NoError(t, err)
 
@@ -1129,7 +1187,7 @@ func TestService_AppStateTTL(t *testing.T) {
 				return appName
 			},
 			validate: func(t *testing.T, client *redis.Client, appName string) {
-				appStateKey := getAppStateKey(appName)
+				appStateKey := getExpectedAppStateKey(appName)
 				ttl := client.TTL(context.Background(), appStateKey)
 				require.NoError(t, ttl.Err())
 				assert.True(t, ttl.Val() > 0 && ttl.Val() <= 5*time.Second, "App state TTL should be set and close to 5 seconds, got: %v", ttl.Val())
@@ -1162,7 +1220,7 @@ func TestService_AppStateTTL(t *testing.T) {
 			},
 			validate: func(t *testing.T, client *redis.Client, appName string) {
 				// Check that TTL was refreshed (should be close to 5 seconds again)
-				appStateKey := getAppStateKey(appName)
+				appStateKey := getExpectedAppStateKey(appName)
 				ttl := client.TTL(context.Background(), appStateKey)
 				require.NoError(t, ttl.Err())
 				assert.True(t, ttl.Val() > 3*time.Second, "App state TTL should be refreshed, got: %v", ttl.Val())
@@ -1209,7 +1267,7 @@ func TestService_UserStateTTL(t *testing.T) {
 				return userKey
 			},
 			validate: func(t *testing.T, client *redis.Client, userKey session.UserKey) {
-				userStateKey := getUserStateKey(session.Key{AppName: userKey.AppName, UserID: userKey.UserID})
+				userStateKey := getExpectedUserStateKey(session.Key{AppName: userKey.AppName, UserID: userKey.UserID})
 				ttl := client.TTL(context.Background(), userStateKey)
 				require.NoError(t, ttl.Err())
 				assert.True(t, ttl.Val() > 0 && ttl.Val() <= 5*time.Second, "User state TTL should be set and close to 5 seconds, got: %v", ttl.Val())
@@ -1245,7 +1303,7 @@ func TestService_UserStateTTL(t *testing.T) {
 			},
 			validate: func(t *testing.T, client *redis.Client, userKey session.UserKey) {
 				// Check that TTL was refreshed (should be close to 5 seconds again)
-				userStateKey := getUserStateKey(session.Key{AppName: userKey.AppName, UserID: userKey.UserID})
+				userStateKey := getExpectedUserStateKey(session.Key{AppName: userKey.AppName, UserID: userKey.UserID})
 				ttl := client.TTL(context.Background(), userStateKey)
 				require.NoError(t, ttl.Err())
 				assert.True(t, ttl.Val() > 3*time.Second, "User state TTL should be refreshed, got: %v", ttl.Val())
@@ -2156,7 +2214,7 @@ func TestService_GetSession_AttachSummaries(t *testing.T) {
 	require.NoError(t, err)
 	client := buildRedisClient(t, redisURL)
 	err = client.HSet(
-		ctx, getSessionSummaryKey(key), key.SessionID, string(payload),
+		ctx, getExpectedSessionSummaryKey(key), key.SessionID, string(payload),
 	).Err()
 	require.NoError(t, err)
 
@@ -2313,7 +2371,7 @@ func TestService_ProcessStateCmd_Errors(t *testing.T) {
 
 	// Manually corrupt the data in Redis to trigger unmarshal error
 	client := buildRedisClient(t, redisURL)
-	sessKey := getSessionStateKey(key)
+	sessKey := getExpectedSessionStateKey(key)
 	err = client.HSet(ctx, sessKey, key.SessionID, "invalid json").Err()
 	require.NoError(t, err)
 
@@ -2754,7 +2812,7 @@ func TestService_CorruptedData_AppState(t *testing.T) {
 
 	// Manually corrupt app state data in Redis
 	client := buildRedisClient(t, redisURL)
-	appStateKey := getAppStateKey(key.AppName)
+	appStateKey := getExpectedAppStateKey(key.AppName)
 	// Set invalid data that can't be converted to bytes properly
 	// This tests the error path in processStateCmd
 	err = client.HSet(ctx, appStateKey, "corrupted_key", string([]byte{0xff, 0xfe, 0xfd})).Err()
@@ -2787,7 +2845,7 @@ func TestService_CorruptedData_Events(t *testing.T) {
 
 	// Manually corrupt event data in Redis by setting the event key to a hash instead of a list
 	client := buildRedisClient(t, redisURL)
-	eventKey := getEventKey(key)
+	eventKey := getExpectedEventKey(key)
 	// Delete the existing list and create a hash with the same key
 	err = client.Del(ctx, eventKey).Err()
 	require.NoError(t, err)
@@ -3061,7 +3119,7 @@ func TestService_getTrackEventsLimitAndTTL(t *testing.T) {
 	require.Len(t, alpha, 1)
 	assert.Equal(t, json.RawMessage(`"new"`), alpha[0].Payload)
 
-	trackTTL := client.TTL(ctx, getTrackKey(key, "alpha")).Val()
+	trackTTL := client.TTL(ctx, getExpectedTrackKey(key, "alpha")).Val()
 	require.Greater(t, trackTTL, time.Duration(0))
 	require.LessOrEqual(t, trackTTL, ttl)
 }
@@ -3259,7 +3317,7 @@ func Test_collectTrackQueryResultsSkipNil(t *testing.T) {
 
 func fetchSessionState(t *testing.T, ctx context.Context, client *redis.Client, key session.Key) *SessionState {
 	t.Helper()
-	raw, err := client.HGet(ctx, getSessionStateKey(key), key.SessionID).Bytes()
+	raw, err := client.HGet(ctx, getExpectedSessionStateKey(key), key.SessionID).Bytes()
 	require.NoError(t, err)
 	var state SessionState
 	require.NoError(t, json.Unmarshal(raw, &state))
@@ -3548,4 +3606,391 @@ func TestGetSessionHook(t *testing.T) {
 
 		assert.Equal(t, []string{"hook1_before", "hook2_before", "hook2_after", "hook1_after"}, order)
 	})
+}
+
+func TestService_TrimConversations(t *testing.T) {
+	tests := []struct {
+		name           string
+		setupEvents    func(t *testing.T, service *Service, key session.Key) []event.Event
+		trimOptions    []TrimConversationOption
+		expectedCount  int
+		expectedReqIDs []string
+		wantErr        bool
+		errContains    string
+	}{
+		{
+			name: "trim single conversation by default",
+			setupEvents: func(t *testing.T, service *Service, key session.Key) []event.Event {
+				ctx := context.Background()
+				sess, err := service.CreateSession(ctx, key, nil)
+				require.NoError(t, err)
+
+				events := []event.Event{
+					{ID: "e1", RequestID: "req1", Timestamp: time.Now().Add(-2 * time.Hour)},
+					{ID: "e2", RequestID: "req1", Timestamp: time.Now().Add(-1 * time.Hour)},
+					{ID: "e3", RequestID: "req2", Timestamp: time.Now()},
+				}
+				for i := range events {
+					events[i].Response = &model.Response{Done: true, Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: fmt.Sprintf("msg%d", i)}}}}
+					require.NoError(t, service.AppendEvent(ctx, sess, &events[i]))
+				}
+				return events
+			},
+			trimOptions:    nil,
+			expectedCount:  1,
+			expectedReqIDs: []string{"req2"},
+			wantErr:        false,
+		},
+		{
+			name: "trim multiple conversations",
+			setupEvents: func(t *testing.T, service *Service, key session.Key) []event.Event {
+				ctx := context.Background()
+				sess, err := service.CreateSession(ctx, key, nil)
+				require.NoError(t, err)
+
+				events := []event.Event{
+					{ID: "e1", RequestID: "req1", Timestamp: time.Now().Add(-3 * time.Hour)},
+					{ID: "e2", RequestID: "req2", Timestamp: time.Now().Add(-2 * time.Hour)},
+					{ID: "e3", RequestID: "req3", Timestamp: time.Now().Add(-1 * time.Hour)},
+					{ID: "e4", RequestID: "req4", Timestamp: time.Now()},
+				}
+				for i := range events {
+					events[i].Response = &model.Response{Done: true, Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: fmt.Sprintf("msg%d", i)}}}}
+					require.NoError(t, service.AppendEvent(ctx, sess, &events[i]))
+				}
+				return events
+			},
+			trimOptions:    []TrimConversationOption{WithCount(2)},
+			expectedCount:  2,
+			expectedReqIDs: []string{"req3", "req4"},
+			wantErr:        false,
+		},
+		{
+			name: "trim conversation with multiple events per request",
+			setupEvents: func(t *testing.T, service *Service, key session.Key) []event.Event {
+				ctx := context.Background()
+				sess, err := service.CreateSession(ctx, key, nil)
+				require.NoError(t, err)
+
+				events := []event.Event{
+					{ID: "e1", RequestID: "req1", Timestamp: time.Now().Add(-4 * time.Hour)},
+					{ID: "e2", RequestID: "req1", Timestamp: time.Now().Add(-3 * time.Hour)},
+					{ID: "e3", RequestID: "req2", Timestamp: time.Now().Add(-2 * time.Hour)},
+					{ID: "e4", RequestID: "req2", Timestamp: time.Now().Add(-1 * time.Hour)},
+					{ID: "e5", RequestID: "req2", Timestamp: time.Now()},
+				}
+				for i := range events {
+					events[i].Response = &model.Response{Done: true, Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: fmt.Sprintf("msg%d", i)}}}}
+					require.NoError(t, service.AppendEvent(ctx, sess, &events[i]))
+				}
+				return events
+			},
+			trimOptions:    []TrimConversationOption{WithCount(1)},
+			expectedCount:  3,
+			expectedReqIDs: []string{"req2", "req2", "req2"},
+			wantErr:        false,
+		},
+		{
+			name: "empty events returns nil",
+			setupEvents: func(t *testing.T, service *Service, key session.Key) []event.Event {
+				ctx := context.Background()
+				_, err := service.CreateSession(ctx, key, nil)
+				require.NoError(t, err)
+				return nil
+			},
+			trimOptions:    nil,
+			expectedCount:  0,
+			expectedReqIDs: nil,
+			wantErr:        false,
+		},
+		{
+			name: "events without RequestID are skipped",
+			setupEvents: func(t *testing.T, service *Service, key session.Key) []event.Event {
+				ctx := context.Background()
+				sess, err := service.CreateSession(ctx, key, nil)
+				require.NoError(t, err)
+
+				events := []event.Event{
+					{ID: "e1", RequestID: "", Timestamp: time.Now().Add(-2 * time.Hour)},
+					{ID: "e2", RequestID: "req1", Timestamp: time.Now().Add(-1 * time.Hour)},
+					{ID: "e3", RequestID: "", Timestamp: time.Now()},
+				}
+				for i := range events {
+					events[i].Response = &model.Response{Done: true, Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: fmt.Sprintf("msg%d", i)}}}}
+					require.NoError(t, service.AppendEvent(ctx, sess, &events[i]))
+				}
+				return events
+			},
+			trimOptions:    nil,
+			expectedCount:  1,
+			expectedReqIDs: []string{"req1"},
+			wantErr:        false,
+		},
+		{
+			name: "zero conversation count defaults to 1",
+			setupEvents: func(t *testing.T, service *Service, key session.Key) []event.Event {
+				ctx := context.Background()
+				sess, err := service.CreateSession(ctx, key, nil)
+				require.NoError(t, err)
+
+				events := []event.Event{
+					{ID: "e1", RequestID: "req1", Timestamp: time.Now().Add(-1 * time.Hour)},
+					{ID: "e2", RequestID: "req2", Timestamp: time.Now()},
+				}
+				for i := range events {
+					events[i].Response = &model.Response{Done: true, Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: fmt.Sprintf("msg%d", i)}}}}
+					require.NoError(t, service.AppendEvent(ctx, sess, &events[i]))
+				}
+				return events
+			},
+			trimOptions:    []TrimConversationOption{WithCount(0)},
+			expectedCount:  1,
+			expectedReqIDs: []string{"req2"},
+			wantErr:        false,
+		},
+		{
+			name: "negative conversation count defaults to 1",
+			setupEvents: func(t *testing.T, service *Service, key session.Key) []event.Event {
+				ctx := context.Background()
+				sess, err := service.CreateSession(ctx, key, nil)
+				require.NoError(t, err)
+
+				events := []event.Event{
+					{ID: "e1", RequestID: "req1", Timestamp: time.Now().Add(-1 * time.Hour)},
+					{ID: "e2", RequestID: "req2", Timestamp: time.Now()},
+				}
+				for i := range events {
+					events[i].Response = &model.Response{Done: true, Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: fmt.Sprintf("msg%d", i)}}}}
+					require.NoError(t, service.AppendEvent(ctx, sess, &events[i]))
+				}
+				return events
+			},
+			trimOptions:    []TrimConversationOption{WithCount(-5)},
+			expectedCount:  1,
+			expectedReqIDs: []string{"req2"},
+			wantErr:        false,
+		},
+		{
+			name: "trim more than available conversations",
+			setupEvents: func(t *testing.T, service *Service, key session.Key) []event.Event {
+				ctx := context.Background()
+				sess, err := service.CreateSession(ctx, key, nil)
+				require.NoError(t, err)
+
+				events := []event.Event{
+					{ID: "e1", RequestID: "req1", Timestamp: time.Now()},
+				}
+				for i := range events {
+					events[i].Response = &model.Response{Done: true, Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: fmt.Sprintf("msg%d", i)}}}}
+					require.NoError(t, service.AppendEvent(ctx, sess, &events[i]))
+				}
+				return events
+			},
+			trimOptions:    []TrimConversationOption{WithCount(10)},
+			expectedCount:  1,
+			expectedReqIDs: []string{"req1"},
+			wantErr:        false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			redisURL, cleanup := setupTestRedis(t)
+			defer cleanup()
+
+			service, err := NewService(
+				WithRedisClientURL(redisURL),
+				WithSessionTTL(time.Hour),
+			)
+			require.NoError(t, err)
+			defer service.Close()
+
+			key := session.Key{
+				AppName:   "testapp",
+				UserID:    "user123",
+				SessionID: fmt.Sprintf("sess_%s", tt.name),
+			}
+
+			tt.setupEvents(t, service, key)
+
+			deleted, err := service.TrimConversations(context.Background(), key, tt.trimOptions...)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errContains != "" {
+					assert.Contains(t, err.Error(), tt.errContains)
+				}
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Len(t, deleted, tt.expectedCount)
+
+			if tt.expectedReqIDs != nil {
+				for i, evt := range deleted {
+					assert.Equal(t, tt.expectedReqIDs[i], evt.RequestID, "event %d has wrong RequestID", i)
+				}
+			}
+		})
+	}
+}
+
+func TestService_TrimConversations_InvalidKey(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	tests := []struct {
+		name        string
+		key         session.Key
+		errContains string
+	}{
+		{
+			name:        "empty app name",
+			key:         session.Key{AppName: "", UserID: "user", SessionID: "sess"},
+			errContains: "appName",
+		},
+		{
+			name:        "empty user id",
+			key:         session.Key{AppName: "app", UserID: "", SessionID: "sess"},
+			errContains: "userID",
+		},
+		{
+			name:        "empty session id",
+			key:         session.Key{AppName: "app", UserID: "user", SessionID: ""},
+			errContains: "sessionID",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := service.TrimConversations(context.Background(), tt.key)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.errContains)
+		})
+	}
+}
+
+func TestService_TrimConversations_ChronologicalOrder(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL), WithSessionTTL(time.Hour))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess_chrono"}
+
+	sess, err := service.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	// Create events with known timestamps.
+	baseTime := time.Now()
+	events := []event.Event{
+		{ID: "e1", RequestID: "req1", Timestamp: baseTime.Add(-3 * time.Second)},
+		{ID: "e2", RequestID: "req1", Timestamp: baseTime.Add(-2 * time.Second)},
+		{ID: "e3", RequestID: "req1", Timestamp: baseTime.Add(-1 * time.Second)},
+	}
+	for i := range events {
+		events[i].Response = &model.Response{Done: true, Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: fmt.Sprintf("msg%d", i)}}}}
+		require.NoError(t, service.AppendEvent(ctx, sess, &events[i]))
+	}
+
+	deleted, err := service.TrimConversations(ctx, key)
+	require.NoError(t, err)
+	require.Len(t, deleted, 3)
+
+	// Verify chronological order (oldest first).
+	assert.Equal(t, "e1", deleted[0].ID)
+	assert.Equal(t, "e2", deleted[1].ID)
+	assert.Equal(t, "e3", deleted[2].ID)
+}
+
+func TestService_TrimConversations_TTLRefresh(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	ttl := 2 * time.Hour
+	service, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithSessionTTL(ttl),
+	)
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess_ttl"}
+
+	sess, err := service.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	// Add 2 conversations so that after trim, one still remains.
+	events := []*event.Event{
+		{ID: "e1", RequestID: "req1", Timestamp: time.Now().Add(-1 * time.Hour), Response: &model.Response{Done: true, Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "test1"}}}}},
+		{ID: "e2", RequestID: "req2", Timestamp: time.Now(), Response: &model.Response{Done: true, Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "test2"}}}}},
+	}
+	for _, evt := range events {
+		require.NoError(t, service.AppendEvent(ctx, sess, evt))
+	}
+
+	// Perform trim operation (trim 1 conversation, leave 1).
+	_, err = service.TrimConversations(ctx, key, WithCount(1))
+	require.NoError(t, err)
+
+	// Verify TTL was refreshed by checking keys still exist with TTL.
+	client := buildRedisClient(t, redisURL)
+	defer client.Close()
+
+	eventKey := service.getEventKey(key)
+	sessKey := service.getSessionStateKey(key)
+
+	eventTTL := client.TTL(ctx, eventKey).Val()
+	sessTTL := client.TTL(ctx, sessKey).Val()
+
+	// TTL should be positive (key exists with TTL set).
+	assert.Greater(t, eventTTL, time.Duration(0), "event key TTL should be set")
+	assert.Greater(t, sessTTL, time.Duration(0), "session key TTL should be set")
+}
+
+func TestService_TrimConversations_RemainingEvents(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL), WithSessionTTL(time.Hour))
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess_remain"}
+
+	sess, err := service.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	// Create 3 conversations.
+	events := []event.Event{
+		{ID: "e1", RequestID: "req1", Timestamp: time.Now().Add(-3 * time.Hour)},
+		{ID: "e2", RequestID: "req2", Timestamp: time.Now().Add(-2 * time.Hour)},
+		{ID: "e3", RequestID: "req3", Timestamp: time.Now().Add(-1 * time.Hour)},
+	}
+	for i := range events {
+		events[i].Response = &model.Response{Done: true, Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: fmt.Sprintf("msg%d", i)}}}}
+		require.NoError(t, service.AppendEvent(ctx, sess, &events[i]))
+	}
+
+	// Trim 1 conversation (the most recent one: req3).
+	deleted, err := service.TrimConversations(ctx, key, WithCount(1))
+	require.NoError(t, err)
+	require.Len(t, deleted, 1)
+	assert.Equal(t, "req3", deleted[0].RequestID)
+
+	// Verify remaining events.
+	sess, err = service.GetSession(ctx, key)
+	require.NoError(t, err)
+	require.Len(t, sess.Events, 2)
+	assert.Equal(t, "e1", sess.Events[0].ID)
+	assert.Equal(t, "e2", sess.Events[1].ID)
 }

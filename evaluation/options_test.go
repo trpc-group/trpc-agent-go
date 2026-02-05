@@ -16,7 +16,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	evalresultinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/inmemory"
 	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
@@ -30,7 +29,7 @@ func (stubService) Inference(ctx context.Context, req *service.InferenceRequest)
 	return nil, nil
 }
 
-func (stubService) Evaluate(ctx context.Context, req *service.EvaluateRequest) (*evalresult.EvalSetResult, error) {
+func (stubService) Evaluate(ctx context.Context, req *service.EvaluateRequest) (*service.EvalSetRunResult, error) {
 	return nil, nil
 }
 
@@ -47,8 +46,10 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.NotNil(t, opts.metricManager)
 	assert.NotNil(t, opts.registry)
 	assert.Nil(t, opts.evalService)
+	assert.Nil(t, opts.callbacks)
 	assert.Equal(t, runtime.GOMAXPROCS(0), opts.evalCaseParallelism)
 	assert.False(t, opts.evalCaseParallelInferenceEnabled)
+	assert.False(t, opts.evalCaseParallelEvaluationEnabled)
 }
 
 func TestWithEvalSetManager(t *testing.T) {
@@ -86,6 +87,13 @@ func TestWithEvaluationService(t *testing.T) {
 	assert.Equal(t, custom, opts.evalService)
 }
 
+func TestWithCallbacks(t *testing.T) {
+	custom := &service.Callbacks{}
+	opts := newOptions(WithCallbacks(custom))
+
+	assert.Same(t, custom, opts.callbacks)
+}
+
 func TestWithNumRuns(t *testing.T) {
 	opts := newOptions(WithNumRuns(5))
 	assert.Equal(t, 5, opts.numRuns)
@@ -99,4 +107,9 @@ func TestWithEvalCaseParallelism(t *testing.T) {
 func TestWithEvalCaseParallelInferenceEnabled(t *testing.T) {
 	opts := newOptions(WithEvalCaseParallelInferenceEnabled(true))
 	assert.True(t, opts.evalCaseParallelInferenceEnabled)
+}
+
+func TestWithEvalCaseParallelEvaluationEnabled(t *testing.T) {
+	opts := newOptions(WithEvalCaseParallelEvaluationEnabled(true))
+	assert.True(t, opts.evalCaseParallelEvaluationEnabled)
 }

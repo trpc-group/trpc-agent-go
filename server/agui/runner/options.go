@@ -42,6 +42,8 @@ type Options struct {
 	AggregatorFactory                      aggregator.Factory    // AggregatorFactory builds an aggregator for each run.
 	AggregationOption                      []aggregator.Option   // AggregationOption is the aggregation options for each run.
 	FlushInterval                          time.Duration         // FlushInterval controls how often buffered AG-UI events are flushed for a session.
+	MessagesSnapshotFollowEnabled          bool                  // MessagesSnapshotFollowEnabled enables tailing persisted AG-UI track events after MESSAGES_SNAPSHOT.
+	MessagesSnapshotFollowMaxDuration      time.Duration         // MessagesSnapshotFollowMaxDuration bounds how long tailing can run before emitting RUN_ERROR.
 	StartSpan                              StartSpan             // StartSpan starts a span for an AG-UI run.
 	Timeout                                time.Duration         // Timeout controls how long a run is allowed to execute.
 	GraphNodeLifecycleActivityEnabled      bool                  // GraphNodeLifecycleActivityEnabled enables graph node lifecycle activity events.
@@ -154,6 +156,20 @@ func WithAggregatorFactory(factory aggregator.Factory) Option {
 func WithFlushInterval(d time.Duration) Option {
 	return func(o *Options) {
 		o.FlushInterval = d
+	}
+}
+
+// WithMessagesSnapshotFollowEnabled enables or disables tailing persisted track events after a snapshot.
+func WithMessagesSnapshotFollowEnabled(enabled bool) Option {
+	return func(o *Options) {
+		o.MessagesSnapshotFollowEnabled = enabled
+	}
+}
+
+// WithMessagesSnapshotFollowMaxDuration sets the maximum duration for snapshot tailing.
+func WithMessagesSnapshotFollowMaxDuration(d time.Duration) Option {
+	return func(o *Options) {
+		o.MessagesSnapshotFollowMaxDuration = d
 	}
 }
 

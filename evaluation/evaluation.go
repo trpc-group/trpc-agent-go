@@ -17,9 +17,11 @@ import (
 	"sort"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/multirun"
 	istatus "trpc.group/trpc-go/trpc-agent-go/evaluation/internal/status"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
@@ -56,8 +58,11 @@ func New(appName string, runner runner.Runner, opt ...Option) (AgentEvaluator, e
 	if a.numRuns <= 0 {
 		return nil, errors.New("num runs must be greater than 0")
 	}
-	if opts.evalCaseParallelInferenceEnabled && opts.evalCaseParallelism <= 0 {
+	if (opts.evalCaseParallelInferenceEnabled || opts.evalCaseParallelEvaluationEnabled) && opts.evalCaseParallelism <= 0 {
 		return nil, errors.New("eval case parallelism must be greater than 0")
+	}
+	if a.evalResultManager == nil {
+		return nil, errors.New("eval result manager is nil")
 	}
 	if a.evalService == nil {
 		evalService, err := local.New(
@@ -65,8 +70,10 @@ func New(appName string, runner runner.Runner, opt ...Option) (AgentEvaluator, e
 			service.WithEvalSetManager(a.evalSetManager),
 			service.WithEvalResultManager(a.evalResultManager),
 			service.WithRegistry(a.registry),
+			service.WithCallbacks(opts.callbacks),
 			service.WithEvalCaseParallelism(opts.evalCaseParallelism),
 			service.WithEvalCaseParallelInferenceEnabled(opts.evalCaseParallelInferenceEnabled),
+			service.WithEvalCaseParallelEvaluationEnabled(opts.evalCaseParallelEvaluationEnabled),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("create eval service: %w", err)
@@ -90,11 +97,12 @@ type agentEvaluator struct {
 
 // EvaluationResult contains the aggregated outcome of running an evaluation across multiple runs.
 type EvaluationResult struct {
-	AppName       string                  `json:"appName"`       // AppName identifies the agent being evaluated.
-	EvalSetID     string                  `json:"evalSetId"`     // EvalSetID identifies the evaluation set used in this run.
-	OverallStatus status.EvalStatus       `json:"overallStatus"` // OverallStatus summarizes the aggregated evaluation status across cases.
-	ExecutionTime time.Duration           `json:"executionTime"` // ExecutionTime records the total latency for the evaluation run.
-	EvalCases     []*EvaluationCaseResult `json:"evalCases"`     // EvalCases contains aggregated results for each evaluation case.
+	AppName       string                    `json:"appName"`       // AppName identifies the agent being evaluated.
+	EvalSetID     string                    `json:"evalSetId"`     // EvalSetID identifies the evaluation set used in this run.
+	OverallStatus status.EvalStatus         `json:"overallStatus"` // OverallStatus summarizes the aggregated evaluation status across cases.
+	ExecutionTime time.Duration             `json:"executionTime"` // ExecutionTime records the total latency for the evaluation run.
+	EvalCases     []*EvaluationCaseResult   `json:"evalCases"`     // EvalCases contains aggregated results for each evaluation case.
+	EvalResult    *evalresult.EvalSetResult `json:"evalSetResult"` // EvalSetResult contains the aggregated results of the evaluation set.
 }
 
 // EvaluationCaseResult aggregates the outcome of a single eval case across multiple runs.
@@ -110,9 +118,10 @@ func (a *agentEvaluator) Evaluate(ctx context.Context, evalSetID string) (*Evalu
 	if evalSetID == "" {
 		return nil, errors.New("eval set id is not configured")
 	}
+	ctx, _ = agent.EnsureInvocation(ctx)
 	start := time.Now()
 	// Gather per-case results.
-	evalCases, err := a.collectCaseResults(ctx, evalSetID)
+	evalCases, evalSetResult, err := a.collectCaseResults(ctx, evalSetID)
 	if err != nil {
 		return nil, fmt.Errorf("collect eval case results: %w", err)
 	}
@@ -127,6 +136,7 @@ func (a *agentEvaluator) Evaluate(ctx context.Context, evalSetID string) (*Evalu
 		OverallStatus: status,
 		ExecutionTime: time.Since(start),
 		EvalCases:     evalCases,
+		EvalResult:    evalSetResult,
 	}, nil
 }
 
@@ -139,13 +149,13 @@ func (a *agentEvaluator) Close() error {
 }
 
 // collectCaseResults runs evaluation on the specified eval set across multiple runs and groups results by case ID.
-func (a *agentEvaluator) collectCaseResults(ctx context.Context, evalSetID string) ([]*EvaluationCaseResult, error) {
+func (a *agentEvaluator) collectCaseResults(ctx context.Context, evalSetID string) ([]*EvaluationCaseResult, *evalresult.EvalSetResult, error) {
 	// Determine eval case ordering from the eval set definition when possible.
 	evalSetIndex := make(map[string]int)
 	if a.evalSetManager != nil {
 		evalSet, err := a.evalSetManager.Get(ctx, a.appName, evalSetID)
 		if err != nil {
-			return nil, fmt.Errorf("get eval set: %w", err)
+			return nil, nil, fmt.Errorf("get eval set: %w", err)
 		}
 		for i, evalCase := range evalSet.EvalCases {
 			evalSetIndex[evalCase.EvalID] = i
@@ -155,23 +165,21 @@ func (a *agentEvaluator) collectCaseResults(ctx context.Context, evalSetID strin
 	// case results. So EvalCaseResults need to be grouped by case ID.
 	// caseResultsByID is a map from case ID to a list of eval case results.
 	caseResultsByID := make(map[string][]*evalresult.EvalCaseResult)
-	for range a.numRuns {
-		// Run evaluation on the specified eval set.
-		evalSetResult, err := a.runEvaluation(ctx, evalSetID)
-		if err != nil {
-			return nil, fmt.Errorf("run evaluation: %w", err)
-		}
-		// Group results by case ID.
-		for _, caseResult := range evalSetResult.EvalCaseResults {
-			caseResultsByID[caseResult.EvalID] = append(caseResultsByID[caseResult.EvalID], caseResult)
-		}
+	// Run evaluation on the specified eval set across multiple inference runs.
+	evalSetResult, err := a.runEvaluation(ctx, evalSetID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("run evaluation: %w", err)
+	}
+	// Group results by case ID.
+	for _, caseResult := range evalSetResult.EvalCaseResults {
+		caseResultsByID[caseResult.EvalID] = append(caseResultsByID[caseResult.EvalID], caseResult)
 	}
 	evalCaseResults := make([]*EvaluationCaseResult, 0, len(caseResultsByID))
 	for caseID, runs := range caseResultsByID {
 		// Aggregate multiple runs for a single case.
 		evalCaseResult, err := aggregateCaseRuns(caseID, runs)
 		if err != nil {
-			return nil, fmt.Errorf("aggregate case runs: %w", err)
+			return nil, nil, fmt.Errorf("aggregate case runs: %w", err)
 		}
 		evalCaseResults = append(evalCaseResults, evalCaseResult)
 	}
@@ -186,20 +194,11 @@ func (a *agentEvaluator) collectCaseResults(ctx context.Context, evalSetID strin
 		}
 		return evalCaseResults[i].EvalCaseID < evalCaseResults[j].EvalCaseID
 	})
-	return evalCaseResults, nil
+	return evalCaseResults, evalSetResult, nil
 }
 
 // runEvaluation runs inference and evaluation on the specified eval set.
 func (a *agentEvaluator) runEvaluation(ctx context.Context, evalSetID string) (*evalresult.EvalSetResult, error) {
-	inferenceRequest := &service.InferenceRequest{
-		AppName:   a.appName,
-		EvalSetID: evalSetID,
-	}
-	// Run inference on the specified eval set.
-	inferenceResults, err := a.evalService.Inference(ctx, inferenceRequest)
-	if err != nil {
-		return nil, fmt.Errorf("inference: %w", err)
-	}
 	// Fetch the metric configuration that will be applied to these runs.
 	metricNames, err := a.metricManager.List(ctx, a.appName, evalSetID)
 	if err != nil {
@@ -213,19 +212,52 @@ func (a *agentEvaluator) runEvaluation(ctx context.Context, evalSetID string) (*
 		}
 		evalMetrics = append(evalMetrics, metric)
 	}
-	evaluateRequest := &service.EvaluateRequest{
-		AppName:          a.appName,
-		EvalSetID:        evalSetID,
-		InferenceResults: inferenceResults,
-		EvaluateConfig: &service.EvaluateConfig{
-			EvalMetrics: evalMetrics,
-		},
+	allCaseResults := make([]*evalresult.EvalCaseResult, 0)
+	for runID := 1; runID <= a.numRuns; runID++ {
+		inferenceRequest := &service.InferenceRequest{
+			AppName:   a.appName,
+			EvalSetID: evalSetID,
+		}
+		runInferenceResults, err := a.evalService.Inference(ctx, inferenceRequest)
+		if err != nil {
+			return nil, fmt.Errorf("inference: %w", err)
+		}
+		evaluateRequest := &service.EvaluateRequest{
+			AppName:          a.appName,
+			EvalSetID:        evalSetID,
+			InferenceResults: runInferenceResults,
+			EvaluateConfig: &service.EvaluateConfig{
+				EvalMetrics: evalMetrics,
+			},
+		}
+		runResult, err := a.evalService.Evaluate(ctx, evaluateRequest)
+		if err != nil {
+			return nil, fmt.Errorf("evaluate: %w", err)
+		}
+		if runResult == nil {
+			return nil, errors.New("eval set run result is nil")
+		}
+		for _, caseResult := range runResult.EvalCaseResults {
+			if caseResult == nil {
+				continue
+			}
+			caseResult.RunID = runID
+			allCaseResults = append(allCaseResults, caseResult)
+		}
 	}
-	// Run evaluation on the specified eval set.
-	evalSetResult, err := a.evalService.Evaluate(ctx, evaluateRequest)
+	evalSetResult := &evalresult.EvalSetResult{
+		EvalSetID:       evalSetID,
+		EvalCaseResults: allCaseResults,
+	}
+	if err := multirun.SummarizeMultiRun(evalSetResult, a.numRuns); err != nil {
+		return nil, fmt.Errorf("summarize eval set result: %w", err)
+	}
+	evalSetResultID, err := a.evalResultManager.Save(ctx, a.appName, evalSetResult)
 	if err != nil {
-		return nil, fmt.Errorf("evaluate: %w", err)
+		return nil, fmt.Errorf("save eval set result: %w", err)
 	}
+	evalSetResult.EvalSetResultID = evalSetResultID
+	evalSetResult.EvalSetResultName = evalSetResultID
 	return evalSetResult, nil
 }
 

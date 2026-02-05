@@ -23,12 +23,14 @@ import (
 
 // Options holds the options for the evaluation service.
 type Options struct {
-	EvalSetManager                   evalset.Manager                  // EvalSetManager is used to store and retrieve eval set.
-	EvalResultManager                evalresult.Manager               // EvalResultManager is used to store and retrieve eval results.
-	Registry                         registry.Registry                // Registry is used to store and retrieve evaluator.
-	SessionIDSupplier                func(ctx context.Context) string // SessionIDSupplier is used to generate session IDs.
-	EvalCaseParallelism              int                              // EvalCaseParallelism controls concurrent inference across eval cases.
-	EvalCaseParallelInferenceEnabled bool                             // EvalCaseParallelInferenceEnabled toggles parallel inference across eval cases.
+	EvalSetManager                    evalset.Manager                  // EvalSetManager is used to store and retrieve eval set.
+	EvalResultManager                 evalresult.Manager               // EvalResultManager is used to store and retrieve eval results.
+	Registry                          registry.Registry                // Registry is used to store and retrieve evaluator.
+	SessionIDSupplier                 func(ctx context.Context) string // SessionIDSupplier is used to generate session IDs.
+	Callbacks                         *Callbacks                       // Callbacks holds evaluation callbacks.
+	EvalCaseParallelism               int                              // EvalCaseParallelism controls concurrent eval case processing.
+	EvalCaseParallelInferenceEnabled  bool                             // EvalCaseParallelInferenceEnabled toggles parallel inference across eval cases.
+	EvalCaseParallelEvaluationEnabled bool                             // EvalCaseParallelEvaluationEnabled toggles parallel evaluation across eval cases.
 }
 
 // Option defines a function type for configuring the evaluation service.
@@ -43,8 +45,9 @@ func NewOptions(opt ...Option) *Options {
 		SessionIDSupplier: func(ctx context.Context) string {
 			return uuid.New().String()
 		},
-		EvalCaseParallelism:              runtime.GOMAXPROCS(0),
-		EvalCaseParallelInferenceEnabled: false,
+		EvalCaseParallelism:               runtime.GOMAXPROCS(0),
+		EvalCaseParallelInferenceEnabled:  false,
+		EvalCaseParallelEvaluationEnabled: false,
 	}
 	for _, o := range opt {
 		o(opts)
@@ -84,7 +87,14 @@ func WithSessionIDSupplier(s func(ctx context.Context) string) Option {
 	}
 }
 
-// WithEvalCaseParallelism sets the maximum number of eval cases inferred in parallel.
+// WithCallbacks sets the evaluation lifecycle callbacks.
+func WithCallbacks(c *Callbacks) Option {
+	return func(o *Options) {
+		o.Callbacks = c
+	}
+}
+
+// WithEvalCaseParallelism sets the maximum number of eval cases processed in parallel.
 func WithEvalCaseParallelism(parallelism int) Option {
 	return func(o *Options) {
 		o.EvalCaseParallelism = parallelism
@@ -95,5 +105,12 @@ func WithEvalCaseParallelism(parallelism int) Option {
 func WithEvalCaseParallelInferenceEnabled(enabled bool) Option {
 	return func(o *Options) {
 		o.EvalCaseParallelInferenceEnabled = enabled
+	}
+}
+
+// WithEvalCaseParallelEvaluationEnabled enables or disables parallel evaluation across eval cases.
+func WithEvalCaseParallelEvaluationEnabled(enabled bool) Option {
+	return func(o *Options) {
+		o.EvalCaseParallelEvaluationEnabled = enabled
 	}
 }

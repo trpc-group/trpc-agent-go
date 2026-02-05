@@ -20,6 +20,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
+const (
+	swarmTeamNameKey          = "swarm_team_name"
+	swarmActiveAgentKeyPrefix = "swarm_active_agent:"
+)
+
 // TransferResponseProcessor handles agent transfer operations after LLM responses.
 type TransferResponseProcessor struct {
 	// endInvocationAfterTransfer controls whether to end the current agent invocation after transfer.
@@ -206,6 +211,9 @@ func (p *TransferResponseProcessor) ProcessResponse(
 
 	// Forward all events from the target agent.
 	for targetEvent := range targetEventChan {
+		if targetEvent != nil && targetEvent.Response != nil && targetEvent.Response.Done {
+			p.saveActiveAgent(ctx, invocation, targetAgent, targetEvent)
+		}
 		if err := event.EmitEvent(ctx, ch, targetEvent); err != nil {
 			return
 		}
@@ -227,4 +235,41 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	)
 	invocation.TransferInfo = nil
 	invocation.EndInvocation = p.endInvocationAfterTransfer
+}
+
+// saveActiveAgent saves the target agent to session state for Swarm cross-request transfer
+// by attaching a StateDelta to the final response event.
+func (p *TransferResponseProcessor) saveActiveAgent(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	targetAgent agent.Agent,
+	targetEvent *event.Event,
+) {
+	if invocation == nil || invocation.Session == nil || targetEvent == nil {
+		return
+	}
+
+	// Check if this session belongs to a Swarm Team with cross-request transfer enabled.
+	// In Swarm mode with cross-request transfer, Team.runSwarm() sets SwarmTeamNameKey in session state.
+	// This works for both direct Team transfers and member-to-member transfers.
+	teamNameBytes, ok := invocation.Session.GetState(swarmTeamNameKey)
+	if !ok || len(teamNameBytes) == 0 {
+		// Not a Swarm team session with cross-request transfer enabled, skip.
+		return
+	}
+	teamName := string(teamNameBytes)
+
+	if targetEvent.StateDelta == nil {
+		targetEvent.StateDelta = make(map[string][]byte)
+	}
+	// Save the target agent name for cross-request transfer.
+	// Next user message will start from this agent.
+	targetEvent.StateDelta[swarmActiveAgentKey(teamName)] = []byte(targetAgent.Info().Name)
+}
+
+func swarmActiveAgentKey(teamName string) string {
+	if teamName == "" {
+		return swarmActiveAgentKeyPrefix
+	}
+	return swarmActiveAgentKeyPrefix + teamName
 }
