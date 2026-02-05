@@ -110,6 +110,8 @@ func transformSpan(span *tracepb.Span) {
 		transformCallLLM(span)
 	case itelemetry.OperationExecuteTool:
 		transformExecuteTool(span)
+	case itelemetry.OperationWorkflow:
+		transformWorkflow(span)
 	default:
 	}
 }
@@ -282,6 +284,73 @@ func transformExecuteTool(span *tracepb.Span) {
 			}
 			// Skip this attribute (delete it)
 		case itelemetry.KeyGenAIToolCallResult:
+			if attr.Value != nil {
+				newAttributes = append(newAttributes, &commonpb.KeyValue{
+					Key: observationOutput,
+					Value: &commonpb.AnyValue{
+						Value: &commonpb.AnyValue_StringValue{StringValue: attr.Value.GetStringValue()},
+					},
+				})
+			} else {
+				newAttributes = append(newAttributes, &commonpb.KeyValue{
+					Key: observationOutput,
+					Value: &commonpb.AnyValue{
+						Value: &commonpb.AnyValue_StringValue{StringValue: "N/A"},
+					},
+				})
+			}
+			// Skip this attribute (delete it)
+		default:
+			// Keep other attributes
+			newAttributes = append(newAttributes, attr)
+		}
+	}
+	if llmSessionID != nil { // use post set session id
+		newAttributes = append(newAttributes, &commonpb.KeyValue{Key: traceSessionID, Value: llmSessionID})
+	}
+
+	// Replace span attributes
+	span.Attributes = newAttributes
+}
+
+// transformWorkflow transforms workflow spans for Langfuse.
+func transformWorkflow(span *tracepb.Span) {
+	var newAttributes []*commonpb.KeyValue
+
+	// Add observation type
+	newAttributes = append(newAttributes, &commonpb.KeyValue{
+		Key: observationType,
+		Value: &commonpb.AnyValue{
+			Value: &commonpb.AnyValue_StringValue{StringValue: observationTypeChain},
+		},
+	})
+
+	// Process existing attributes
+	var llmSessionID *commonpb.AnyValue
+	for _, attr := range span.Attributes {
+		switch attr.Key {
+		case itelemetry.KeyGenAIConversationID, itelemetry.KeyRunnerSessionID, traceSessionID:
+			llmSessionID = attr.Value
+		case itelemetry.KeyRunnerUserID:
+			newAttributes = append(newAttributes, &commonpb.KeyValue{Key: traceUserID, Value: attr.Value})
+		case itelemetry.KeyGenAIWorkflowRequest:
+			if attr.Value != nil {
+				newAttributes = append(newAttributes, &commonpb.KeyValue{
+					Key: observationInput,
+					Value: &commonpb.AnyValue{
+						Value: &commonpb.AnyValue_StringValue{StringValue: attr.Value.GetStringValue()},
+					},
+				})
+			} else {
+				newAttributes = append(newAttributes, &commonpb.KeyValue{
+					Key: observationInput,
+					Value: &commonpb.AnyValue{
+						Value: &commonpb.AnyValue_StringValue{StringValue: "N/A"},
+					},
+				})
+			}
+			// Skip this attribute (delete it)
+		case itelemetry.KeyGenAIWorkflowResponse:
 			if attr.Value != nil {
 				newAttributes = append(newAttributes, &commonpb.KeyValue{
 					Key: observationOutput,
