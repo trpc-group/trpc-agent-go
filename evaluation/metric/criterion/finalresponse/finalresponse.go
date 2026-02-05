@@ -47,9 +47,17 @@ func New(opt ...Option) *FinalResponseCriterion {
 }
 
 // Match compares the final responses of actual and expected invocations.
-func (c *FinalResponseCriterion) Match(ctx context.Context, actual, expected *evalset.Invocation) (bool, error) {
+func (c *FinalResponseCriterion) Match(actual, expected *evalset.Invocation) (bool, error) {
+	return c.MatchWithContext(context.Background(), actual, expected)
+}
+
+// MatchWithContext compares the final responses of actual and expected invocations using the provided context.
+func (c *FinalResponseCriterion) MatchWithContext(ctx context.Context, actual, expected *evalset.Invocation) (bool, error) {
 	if c == nil {
 		return false, fmt.Errorf("final response criterion is nil")
+	}
+	if ctx == nil {
+		return false, fmt.Errorf("context is nil")
 	}
 	if c.Compare != nil {
 		return c.Compare(actual, expected)

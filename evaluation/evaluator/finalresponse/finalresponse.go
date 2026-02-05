@@ -103,7 +103,7 @@ func (e *finalResponseEvaluator) statusForScore(score float64, evalMetric *metri
 // finalResponsesMatch performs deterministic matching for the configured final response criterion.
 func finalResponsesMatch(ctx context.Context, actual, expected *evalset.Invocation,
 	criterion *cfinalresponse.FinalResponseCriterion) (bool, error) {
-	ok, err := criterion.Match(ctx, actual, expected)
+	ok, err := criterion.MatchWithContext(ctx, actual, expected)
 	if err != nil {
 		return false, fmt.Errorf("final response mismatch: %w", err)
 	}
