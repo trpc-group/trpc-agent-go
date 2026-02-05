@@ -560,6 +560,56 @@ func TestTransformWorkflow(t *testing.T) {
 	}
 }
 
+func TestTransformWorkflow_NilRequestResponse(t *testing.T) {
+	span := &tracepb.Span{
+		Name: "workflow-span-nil",
+		Attributes: []*commonpb.KeyValue{
+			{
+				Key: itelemetry.KeyRunnerSessionID,
+				Value: &commonpb.AnyValue{
+					Value: &commonpb.AnyValue_StringValue{StringValue: "sess-2"},
+				},
+			},
+			{
+				Key: itelemetry.KeyRunnerUserID,
+				Value: &commonpb.AnyValue{
+					Value: &commonpb.AnyValue_StringValue{StringValue: "user-2"},
+				},
+			},
+			{
+				Key:   itelemetry.KeyGenAIWorkflowRequest,
+				Value: nil,
+			},
+			{
+				Key:   itelemetry.KeyGenAIWorkflowResponse,
+				Value: nil,
+			},
+		},
+	}
+
+	transformWorkflow(span)
+
+	attrMap := make(map[string]string)
+	for _, attr := range span.Attributes {
+		if attr.Value != nil {
+			attrMap[attr.Key] = attr.Value.GetStringValue()
+		}
+	}
+
+	assert.Equal(t, observationTypeChain, attrMap[observationType])
+	assert.Equal(t, "N/A", attrMap[observationInput])
+	assert.Equal(t, "N/A", attrMap[observationOutput])
+	assert.Equal(t, "user-2", attrMap[traceUserID])
+	assert.Equal(t, "sess-2", attrMap[traceSessionID])
+
+	for _, attr := range span.Attributes {
+		assert.NotEqual(t, itelemetry.KeyGenAIWorkflowRequest, attr.Key)
+		assert.NotEqual(t, itelemetry.KeyGenAIWorkflowResponse, attr.Key)
+		assert.NotEqual(t, itelemetry.KeyRunnerSessionID, attr.Key)
+		assert.NotEqual(t, itelemetry.KeyRunnerUserID, attr.Key)
+	}
+}
+
 // Mock client for testing
 type mockClient struct {
 	started bool
