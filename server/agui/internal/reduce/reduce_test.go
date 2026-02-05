@@ -17,6 +17,7 @@ import (
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/multimodal"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -84,6 +85,113 @@ func TestBuildMessagesHappyPath(t *testing.T) {
 	assert.Equal(t, "42", content)
 	require.NotNil(t, tool.ToolCallID)
 	assert.Equal(t, "tool-call-1", tool.ToolCallID)
+}
+
+func TestReduceUserMessageCustomEventWithInputContents(t *testing.T) {
+	user := types.Message{
+		ID:   "user-1",
+		Role: types.RoleUser,
+		Content: []types.InputContent{
+			{Type: types.InputContentTypeBinary, MimeType: "image/jpeg", URL: "https://example.com/images/1.jpeg"},
+			{Type: types.InputContentTypeText, Text: "图中有哪些信息?"},
+		},
+	}
+	customEvent := aguievents.NewCustomEvent(multimodal.CustomEventNameUserMessage, aguievents.WithValue(user))
+	msgs, err := Reduce(testAppName, testUserID, trackEventsFrom(customEvent))
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+
+	got := msgs[0]
+	assert.Equal(t, "user-1", got.ID)
+	assert.Equal(t, types.RoleUser, got.Role)
+	require.NotNil(t, got.Name)
+	assert.Equal(t, testUserID, got.Name)
+
+	contents, ok := got.ContentInputContents()
+	require.True(t, ok)
+	require.Len(t, contents, 2)
+	assert.Equal(t, types.InputContentTypeBinary, contents[0].Type)
+	assert.Equal(t, "image/jpeg", contents[0].MimeType)
+	assert.Equal(t, "https://example.com/images/1.jpeg", contents[0].URL)
+	assert.Equal(t, types.InputContentTypeText, contents[1].Type)
+	assert.Equal(t, "图中有哪些信息?", contents[1].Text)
+}
+
+func TestReduceUserMessageCustomEventWithStringContent(t *testing.T) {
+	user := types.Message{
+		ID:      "user-1",
+		Role:    types.RoleUser,
+		Name:    "alice",
+		Content: "hi",
+	}
+	customEvent := aguievents.NewCustomEvent(multimodal.CustomEventNameUserMessage, aguievents.WithValue(user))
+	msgs, err := Reduce(testAppName, testUserID, trackEventsFrom(customEvent))
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+
+	got := msgs[0]
+	assert.Equal(t, "user-1", got.ID)
+	assert.Equal(t, types.RoleUser, got.Role)
+	assert.Equal(t, "alice", got.Name)
+	content, ok := got.ContentString()
+	require.True(t, ok)
+	assert.Equal(t, "hi", content)
+}
+
+func TestHandleUserMessageCustomEventErrors(t *testing.T) {
+	tests := []struct {
+		name  string
+		event *aguievents.CustomEvent
+		want  string
+	}{
+		{
+			name:  "missing value",
+			event: aguievents.NewCustomEvent(multimodal.CustomEventNameUserMessage),
+			want:  "user message custom event missing value",
+		},
+		{
+			name:  "marshal value error",
+			event: aguievents.NewCustomEvent(multimodal.CustomEventNameUserMessage, aguievents.WithValue(make(chan int))),
+			want:  "marshal user message custom event value",
+		},
+		{
+			name:  "unmarshal value error",
+			event: aguievents.NewCustomEvent(multimodal.CustomEventNameUserMessage, aguievents.WithValue("invalid")),
+			want:  "unmarshal user message custom event value",
+		},
+		{
+			name: "role mismatch",
+			event: aguievents.NewCustomEvent(
+				multimodal.CustomEventNameUserMessage,
+				aguievents.WithValue(types.Message{ID: "msg-1", Role: types.RoleAssistant, Content: "hi"}),
+			),
+			want: "user message custom event role must be user",
+		},
+		{
+			name: "missing message id",
+			event: aguievents.NewCustomEvent(
+				multimodal.CustomEventNameUserMessage,
+				aguievents.WithValue(types.Message{Role: types.RoleUser, Content: "hi"}),
+			),
+			want: "user message custom event missing message id",
+		},
+		{
+			name: "invalid content",
+			event: aguievents.NewCustomEvent(
+				multimodal.CustomEventNameUserMessage,
+				aguievents.WithValue(types.Message{ID: "msg-1", Role: types.RoleUser, Content: map[string]any{"invalid": "payload"}}),
+			),
+			want: "user message custom event content is invalid",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := new(testAppName, testUserID)
+			err := r.reduceEvent(tt.event)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.want)
+		})
+	}
 }
 
 func TestReduceReturnsMessagesOnReduceError(t *testing.T) {
