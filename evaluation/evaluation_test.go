@@ -18,6 +18,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/ctxmsg"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	evalresultinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
@@ -94,6 +95,36 @@ func (c *countingService) Evaluate(ctx context.Context, req *service.EvaluateReq
 
 func (c *countingService) Close() error {
 	atomic.AddInt32(&c.closed, 1)
+	return nil
+}
+
+type messageProbeService struct {
+	inferenceMessage ctxmsg.Msg
+	evaluateMessage  ctxmsg.Msg
+	evaluateHasKey   bool
+}
+
+func (s *messageProbeService) Inference(ctx context.Context, req *service.InferenceRequest) ([]*service.InferenceResult, error) {
+	msg := ctxmsg.Message(ctx)
+	s.inferenceMessage = msg
+	md := msg.Metadata()
+	md["probe"] = []byte("value")
+	msg.SetMetadata(md)
+	return []*service.InferenceResult{}, nil
+}
+
+func (s *messageProbeService) Evaluate(ctx context.Context, req *service.EvaluateRequest) (*service.EvalSetRunResult, error) {
+	msg := ctxmsg.Message(ctx)
+	s.evaluateMessage = msg
+	_, s.evaluateHasKey = msg.Metadata()["probe"]
+	return &service.EvalSetRunResult{
+		AppName:         req.AppName,
+		EvalSetID:       req.EvalSetID,
+		EvalCaseResults: []*evalresult.EvalCaseResult{},
+	}, nil
+}
+
+func (s *messageProbeService) Close() error {
 	return nil
 }
 
@@ -230,6 +261,26 @@ func TestNewAgentEvaluatorValidation(t *testing.T) {
 	assert.True(t, ok)
 	assert.NotNil(t, impl.evalService)
 	assert.NoError(t, ae.Close())
+}
+
+func TestAgentEvaluatorEvaluateAttachesMessage(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+
+	svc := &messageProbeService{}
+	ae := &agentEvaluator{
+		appName:           appName,
+		evalService:       svc,
+		metricManager:     metricinmemory.New(),
+		evalResultManager: evalresultinmemory.New(),
+		numRuns:           1,
+	}
+
+	_, err := ae.Evaluate(ctx, "set")
+	assert.NoError(t, err)
+	assert.NotNil(t, svc.inferenceMessage)
+	assert.Same(t, svc.inferenceMessage, svc.evaluateMessage)
+	assert.True(t, svc.evaluateHasKey)
 }
 
 func TestNewAgentEvaluatorWithCustomService(t *testing.T) {
