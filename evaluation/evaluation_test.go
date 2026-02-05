@@ -249,6 +249,14 @@ func TestNewAgentEvaluatorValidation(t *testing.T) {
 	)
 	assert.Error(t, err)
 
+	_, err = New(
+		"app",
+		stubRunner{},
+		WithEvalCaseParallelEvaluationEnabled(true),
+		WithEvalCaseParallelism(0),
+	)
+	assert.Error(t, err)
+
 	_, err = New("app", stubRunner{}, WithEvalResultManager(nil))
 	assert.Error(t, err)
 	if err != nil {

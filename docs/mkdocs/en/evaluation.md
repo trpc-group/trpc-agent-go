@@ -2165,7 +2165,9 @@ A callback returns `Result` and `error`. `Result` is optional and is used to pas
 - `return result, nil`: update `ctx` to `result.Context` and use it for subsequent callbacks and later stages.
 - `return nil, err`: stop at the current callback point and return the error.
 
-When parallel inference is enabled via `evaluation.WithEvalCaseParallelInferenceEnabled(true)`, case-level callbacks may run concurrently. Because `args.Request` points to the same `*InferenceRequest`, treat it as read-only. If you need to modify the request, do it in a set-level callback.
+When parallel inference is enabled via `evaluation.WithEvalCaseParallelInferenceEnabled(true)`, inference case-level callbacks may run concurrently. Because `args.Request` points to the same `*InferenceRequest`, treat it as read-only. If you need to modify the request, do it in a set-level callback.
+
+When parallel evaluation is enabled via `evaluation.WithEvalCaseParallelEvaluationEnabled(true)`, evaluation case-level callbacks may also run concurrently. Because `args.Request` points to the same `*EvaluateRequest`, treat it as read-only. If you need to modify the request, do it in a set-level callback.
 
 A single EvalCase inference or evaluation failure usually does not return through `error`. It is written into `Result.Status` and `Result.ErrorMessage`. Therefore, `After*CaseArgs.Error` does not carry per-case failure reasons. Check `args.Result.Status` and `args.Result.ErrorMessage` to detect failures.
 
@@ -2189,6 +2191,25 @@ agentEvaluator, err := evaluation.New(
 Parallel inference only affects inference across different cases. Turns within a single case still run sequentially, and evaluation still processes cases in order.
 
 After enabling concurrency, ensure that Runner, tool implementations, external dependencies, and callback logic are safe for concurrent calls to avoid interference from shared mutable state.
+
+### EvalCase-Level Parallel Evaluation
+
+When evaluators are slow, such as LLM judges, the evaluation phase can become the bottleneck. The framework supports EvalCase-level parallel evaluation to reduce overall duration.
+
+Enable parallel evaluation when creating AgentEvaluator and set the maximum parallelism. If not set, the default is `runtime.GOMAXPROCS(0)`.
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/evaluation"
+
+agentEvaluator, err := evaluation.New(
+	appName,
+	runner,
+	evaluation.WithEvalCaseParallelEvaluationEnabled(true),
+	evaluation.WithEvalCaseParallelism(8),
+)
+```
+
+Parallel evaluation only affects evaluation across different cases. Turns within a case are still sequential, and evaluators are executed in metric order. The returned `EvalCaseResults` preserve the order of the input `InferenceResults`.
 
 ### Context Injection
 
