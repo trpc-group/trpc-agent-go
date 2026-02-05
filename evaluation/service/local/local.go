@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/panjf2000/ants/v2"
@@ -36,15 +37,17 @@ const reasonSeparator = ";"
 
 // local is a local implementation of service.Service.
 type local struct {
-	runner                           runner.Runner
-	evalSetManager                   evalset.Manager
-	evalResultManager                evalresult.Manager
-	registry                         registry.Registry
-	sessionIDSupplier                func(ctx context.Context) string
-	callbacks                        *service.Callbacks
-	evalCaseParallelism              int
-	evalCaseParallelInferenceEnabled bool
-	evalCaseInferencePool            *ants.PoolWithFunc
+	runner                            runner.Runner
+	evalSetManager                    evalset.Manager
+	evalResultManager                 evalresult.Manager
+	registry                          registry.Registry
+	sessionIDSupplier                 func(ctx context.Context) string
+	callbacks                         *service.Callbacks
+	evalCaseParallelism               int
+	evalCaseParallelInferenceEnabled  bool
+	evalCaseParallelEvaluationEnabled bool
+	evalCaseInferencePool             *ants.PoolWithFunc
+	evalCaseEvaluationPool            *ants.PoolWithFunc
 }
 
 // New returns a new local evaluation service.
@@ -54,7 +57,7 @@ func New(runner runner.Runner, opt ...service.Option) (service.Service, error) {
 		return nil, errors.New("runner is nil")
 	}
 	opts := service.NewOptions(opt...)
-	if opts.EvalCaseParallelInferenceEnabled && opts.EvalCaseParallelism <= 0 {
+	if (opts.EvalCaseParallelInferenceEnabled || opts.EvalCaseParallelEvaluationEnabled) && opts.EvalCaseParallelism <= 0 {
 		return nil, errors.New("eval case parallelism must be greater than 0")
 	}
 	if opts.EvalSetManager == nil {
@@ -70,14 +73,15 @@ func New(runner runner.Runner, opt ...service.Option) (service.Service, error) {
 		return nil, errors.New("session id supplier is nil")
 	}
 	service := &local{
-		runner:                           runner,
-		evalSetManager:                   opts.EvalSetManager,
-		evalResultManager:                opts.EvalResultManager,
-		registry:                         opts.Registry,
-		sessionIDSupplier:                opts.SessionIDSupplier,
-		callbacks:                        opts.Callbacks,
-		evalCaseParallelism:              opts.EvalCaseParallelism,
-		evalCaseParallelInferenceEnabled: opts.EvalCaseParallelInferenceEnabled,
+		runner:                            runner,
+		evalSetManager:                    opts.EvalSetManager,
+		evalResultManager:                 opts.EvalResultManager,
+		registry:                          opts.Registry,
+		sessionIDSupplier:                 opts.SessionIDSupplier,
+		callbacks:                         opts.Callbacks,
+		evalCaseParallelism:               opts.EvalCaseParallelism,
+		evalCaseParallelInferenceEnabled:  opts.EvalCaseParallelInferenceEnabled,
+		evalCaseParallelEvaluationEnabled: opts.EvalCaseParallelEvaluationEnabled,
 	}
 	if service.evalCaseParallelInferenceEnabled {
 		pool, err := createEvalCaseInferencePool(service.evalCaseParallelism)
@@ -86,6 +90,13 @@ func New(runner runner.Runner, opt ...service.Option) (service.Service, error) {
 		}
 		service.evalCaseInferencePool = pool
 	}
+	if service.evalCaseParallelEvaluationEnabled {
+		pool, err := createEvalCaseEvaluationPool(service.evalCaseParallelism)
+		if err != nil {
+			return nil, fmt.Errorf("create eval case evaluation pool: %w", err)
+		}
+		service.evalCaseEvaluationPool = pool
+	}
 	return service, nil
 }
 
@@ -93,6 +104,9 @@ func New(runner runner.Runner, opt ...service.Option) (service.Service, error) {
 func (s *local) Close() error {
 	if s.evalCaseInferencePool != nil {
 		s.evalCaseInferencePool.Release()
+	}
+	if s.evalCaseEvaluationPool != nil {
+		s.evalCaseEvaluationPool.Release()
 	}
 	return nil
 }
@@ -189,8 +203,61 @@ func (s *local) Evaluate(ctx context.Context, req *service.EvaluateRequest) (run
 			err = afterErr
 		}
 	}()
-	evalCaseResults := make([]*evalresult.EvalCaseResult, 0, len(req.InferenceResults))
-	for _, inferenceResult := range req.InferenceResults {
+	evalCaseResults, err := s.evaluateCaseResults(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("evaluate case results (app=%s, evalSetID=%s): %w", req.AppName, req.EvalSetID, err)
+	}
+	runResult = &service.EvalSetRunResult{
+		AppName:         req.AppName,
+		EvalSetID:       req.EvalSetID,
+		EvalCaseResults: evalCaseResults,
+	}
+	return runResult, nil
+}
+
+func (s *local) evaluateCaseResults(ctx context.Context, req *service.EvaluateRequest) ([]*evalresult.EvalCaseResult, error) {
+	if s.evalCaseParallelEvaluationEnabled {
+		return s.evaluateCaseResultsParallel(ctx, req)
+	}
+	return s.evaluateCaseResultsSerial(ctx, req)
+}
+
+func (s *local) evaluateCaseResultsParallel(ctx context.Context, req *service.EvaluateRequest) ([]*evalresult.EvalCaseResult, error) {
+	results := make([]*evalresult.EvalCaseResult, len(req.InferenceResults))
+	evalErrors := make([]error, len(req.InferenceResults))
+	var wg sync.WaitGroup
+	for idx, inferenceResult := range req.InferenceResults {
+		wg.Add(1)
+		param := evalCaseEvaluationParamPool.Get().(*evalCaseEvaluationParam)
+		param.idx = idx
+		param.ctx = ctx
+		param.req = req
+		param.inferenceResult = inferenceResult
+		param.svc = s
+		param.results = results
+		param.errs = evalErrors
+		param.wg = &wg
+		if err := s.evalCaseEvaluationPool.Invoke(param); err != nil {
+			wg.Done()
+			evalCaseID := ""
+			if inferenceResult != nil {
+				evalCaseID = inferenceResult.EvalCaseID
+			}
+			evalErrors[idx] = fmt.Errorf("submit evaluation task for eval case %s: %w", evalCaseID, err)
+			param.reset()
+			evalCaseEvaluationParamPool.Put(param)
+		}
+	}
+	wg.Wait()
+	if err := errors.Join(evalErrors...); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+func (s *local) evaluateCaseResultsSerial(ctx context.Context, req *service.EvaluateRequest) ([]*evalresult.EvalCaseResult, error) {
+	results := make([]*evalresult.EvalCaseResult, len(req.InferenceResults))
+	for idx, inferenceResult := range req.InferenceResults {
 		caseResult, err := s.evaluateCase(ctx, req, inferenceResult)
 		if err != nil {
 			evalCaseID := ""
@@ -200,14 +267,9 @@ func (s *local) Evaluate(ctx context.Context, req *service.EvaluateRequest) (run
 			return nil, fmt.Errorf("evaluate case (app=%s, evalSetID=%s, evalCaseID=%s): %w",
 				req.AppName, req.EvalSetID, evalCaseID, err)
 		}
-		evalCaseResults = append(evalCaseResults, caseResult)
+		results[idx] = caseResult
 	}
-	runResult = &service.EvalSetRunResult{
-		AppName:         req.AppName,
-		EvalSetID:       req.EvalSetID,
-		EvalCaseResults: evalCaseResults,
-	}
-	return runResult, nil
+	return results, nil
 }
 
 func (s *local) evaluateCase(ctx context.Context, req *service.EvaluateRequest, inferenceResult *service.InferenceResult) (result *evalresult.EvalCaseResult, err error) {
