@@ -196,3 +196,7 @@ func TestLocalManagerStoreErrors(t *testing.T) {
 		assert.ErrorContains(t, err, "rename file")
 	})
 }
+
+func TestClose_NoError(t *testing.T) {
+	assert.NoError(t, New().Close())
+}

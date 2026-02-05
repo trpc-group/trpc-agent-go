@@ -246,6 +246,10 @@ func TestManagerValidationAndErrors(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestClose_NoError(t *testing.T) {
+	assert.NoError(t, New().Close())
+}
+
 func TestManagerAddCaseSetsCreationTimestampForActualConversation(t *testing.T) {
 	ctx := context.Background()
 	mgr := New().(*manager)
