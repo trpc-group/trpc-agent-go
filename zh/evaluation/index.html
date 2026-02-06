@@ -4880,7 +4880,8 @@
 <span class="normal"><a href="#__codelineno-29-27">27</a></span>
 <span class="normal"><a href="#__codelineno-29-28">28</a></span>
 <span class="normal"><a href="#__codelineno-29-29">29</a></span>
-<span class="normal"><a href="#__codelineno-29-30">30</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
+<span class="normal"><a href="#__codelineno-29-30">30</a></span>
+<span class="normal"><a href="#__codelineno-29-31">31</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
 </span><span id="__span-29-2"><a id="__codelineno-29-2" name="__codelineno-29-2"></a>
 </span><span id="__span-29-3"><a id="__codelineno-29-3" name="__codelineno-29-3"></a><span class="c1">// LLMCriterion 表示 LLM Judge 准则</span>
 </span><span id="__span-29-4"><a id="__codelineno-29-4" name="__codelineno-29-4"></a><span class="kd">type</span><span class="w"> </span><span class="nx">LLMCriterion</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
@@ -4892,26 +4893,28 @@
 </span><span id="__span-29-10"><a id="__codelineno-29-10" name="__codelineno-29-10"></a><span class="kd">type</span><span class="w"> </span><span class="nx">JudgeModelOptions</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-29-11"><a id="__codelineno-29-11" name="__codelineno-29-11"></a><span class="w">    </span><span class="nx">ProviderName</span><span class="w"> </span><span class="kt">string</span><span class="w">                  </span><span class="c1">// ProviderName 是模型提供方</span>
 </span><span id="__span-29-12"><a id="__codelineno-29-12" name="__codelineno-29-12"></a><span class="w">    </span><span class="nx">ModelName</span><span class="w">    </span><span class="kt">string</span><span class="w">                  </span><span class="c1">// ModelName 是模型名称</span>
-</span><span id="__span-29-13"><a id="__codelineno-29-13" name="__codelineno-29-13"></a><span class="w">    </span><span class="nx">BaseURL</span><span class="w">      </span><span class="kt">string</span><span class="w">                  </span><span class="c1">// BaseURL 是自定义地址</span>
-</span><span id="__span-29-14"><a id="__codelineno-29-14" name="__codelineno-29-14"></a><span class="w">    </span><span class="nx">APIKey</span><span class="w">       </span><span class="kt">string</span><span class="w">                  </span><span class="c1">// APIKey 是访问密钥</span>
-</span><span id="__span-29-15"><a id="__codelineno-29-15" name="__codelineno-29-15"></a><span class="w">    </span><span class="nx">ExtraFields</span><span class="w">  </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="w">          </span><span class="c1">// ExtraFields 是额外字段</span>
-</span><span id="__span-29-16"><a id="__codelineno-29-16" name="__codelineno-29-16"></a><span class="w">    </span><span class="nx">NumSamples</span><span class="w">   </span><span class="o">*</span><span class="kt">int</span><span class="w">                    </span><span class="c1">// NumSamples 是采样次数</span>
-</span><span id="__span-29-17"><a id="__codelineno-29-17" name="__codelineno-29-17"></a><span class="w">    </span><span class="nx">Generation</span><span class="w">   </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">GenerationConfig</span><span class="w"> </span><span class="c1">// Generation 是生成参数</span>
-</span><span id="__span-29-18"><a id="__codelineno-29-18" name="__codelineno-29-18"></a><span class="p">}</span>
-</span><span id="__span-29-19"><a id="__codelineno-29-19" name="__codelineno-29-19"></a>
-</span><span id="__span-29-20"><a id="__codelineno-29-20" name="__codelineno-29-20"></a><span class="c1">// Rubric 表示一条评估细则</span>
-</span><span id="__span-29-21"><a id="__codelineno-29-21" name="__codelineno-29-21"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Rubric</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-29-22"><a id="__codelineno-29-22" name="__codelineno-29-22"></a><span class="w">    </span><span class="nx">ID</span><span class="w">          </span><span class="kt">string</span><span class="w">         </span><span class="c1">// ID 是细则标识</span>
-</span><span id="__span-29-23"><a id="__codelineno-29-23" name="__codelineno-29-23"></a><span class="w">    </span><span class="nx">Content</span><span class="w">     </span><span class="o">*</span><span class="nx">RubricContent</span><span class="w"> </span><span class="c1">// Content 是细则内容</span>
-</span><span id="__span-29-24"><a id="__codelineno-29-24" name="__codelineno-29-24"></a><span class="w">    </span><span class="nx">Description</span><span class="w"> </span><span class="kt">string</span><span class="w">         </span><span class="c1">// Description 是细则说明</span>
-</span><span id="__span-29-25"><a id="__codelineno-29-25" name="__codelineno-29-25"></a><span class="w">    </span><span class="nx">Type</span><span class="w">        </span><span class="kt">string</span><span class="w">         </span><span class="c1">// Type 是细则类型</span>
-</span><span id="__span-29-26"><a id="__codelineno-29-26" name="__codelineno-29-26"></a><span class="p">}</span>
-</span><span id="__span-29-27"><a id="__codelineno-29-27" name="__codelineno-29-27"></a>
-</span><span id="__span-29-28"><a id="__codelineno-29-28" name="__codelineno-29-28"></a><span class="kd">type</span><span class="w"> </span><span class="nx">RubricContent</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-29-29"><a id="__codelineno-29-29" name="__codelineno-29-29"></a><span class="w">    </span><span class="nx">Text</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="c1">// Text 是细则文本</span>
-</span><span id="__span-29-30"><a id="__codelineno-29-30" name="__codelineno-29-30"></a><span class="p">}</span>
+</span><span id="__span-29-13"><a id="__codelineno-29-13" name="__codelineno-29-13"></a><span class="w">    </span><span class="nx">Variant</span><span class="w">      </span><span class="kt">string</span><span class="w">                  </span><span class="c1">// Variant 是 OpenAI 兼容变体，可选</span>
+</span><span id="__span-29-14"><a id="__codelineno-29-14" name="__codelineno-29-14"></a><span class="w">    </span><span class="nx">BaseURL</span><span class="w">      </span><span class="kt">string</span><span class="w">                  </span><span class="c1">// BaseURL 是自定义地址</span>
+</span><span id="__span-29-15"><a id="__codelineno-29-15" name="__codelineno-29-15"></a><span class="w">    </span><span class="nx">APIKey</span><span class="w">       </span><span class="kt">string</span><span class="w">                  </span><span class="c1">// APIKey 是访问密钥</span>
+</span><span id="__span-29-16"><a id="__codelineno-29-16" name="__codelineno-29-16"></a><span class="w">    </span><span class="nx">ExtraFields</span><span class="w">  </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="w">          </span><span class="c1">// ExtraFields 是额外字段</span>
+</span><span id="__span-29-17"><a id="__codelineno-29-17" name="__codelineno-29-17"></a><span class="w">    </span><span class="nx">NumSamples</span><span class="w">   </span><span class="o">*</span><span class="kt">int</span><span class="w">                    </span><span class="c1">// NumSamples 是采样次数</span>
+</span><span id="__span-29-18"><a id="__codelineno-29-18" name="__codelineno-29-18"></a><span class="w">    </span><span class="nx">Generation</span><span class="w">   </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">GenerationConfig</span><span class="w"> </span><span class="c1">// Generation 是生成参数</span>
+</span><span id="__span-29-19"><a id="__codelineno-29-19" name="__codelineno-29-19"></a><span class="p">}</span>
+</span><span id="__span-29-20"><a id="__codelineno-29-20" name="__codelineno-29-20"></a>
+</span><span id="__span-29-21"><a id="__codelineno-29-21" name="__codelineno-29-21"></a><span class="c1">// Rubric 表示一条评估细则</span>
+</span><span id="__span-29-22"><a id="__codelineno-29-22" name="__codelineno-29-22"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Rubric</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-29-23"><a id="__codelineno-29-23" name="__codelineno-29-23"></a><span class="w">    </span><span class="nx">ID</span><span class="w">          </span><span class="kt">string</span><span class="w">         </span><span class="c1">// ID 是细则标识</span>
+</span><span id="__span-29-24"><a id="__codelineno-29-24" name="__codelineno-29-24"></a><span class="w">    </span><span class="nx">Content</span><span class="w">     </span><span class="o">*</span><span class="nx">RubricContent</span><span class="w"> </span><span class="c1">// Content 是细则内容</span>
+</span><span id="__span-29-25"><a id="__codelineno-29-25" name="__codelineno-29-25"></a><span class="w">    </span><span class="nx">Description</span><span class="w"> </span><span class="kt">string</span><span class="w">         </span><span class="c1">// Description 是细则说明</span>
+</span><span id="__span-29-26"><a id="__codelineno-29-26" name="__codelineno-29-26"></a><span class="w">    </span><span class="nx">Type</span><span class="w">        </span><span class="kt">string</span><span class="w">         </span><span class="c1">// Type 是细则类型</span>
+</span><span id="__span-29-27"><a id="__codelineno-29-27" name="__codelineno-29-27"></a><span class="p">}</span>
+</span><span id="__span-29-28"><a id="__codelineno-29-28" name="__codelineno-29-28"></a>
+</span><span id="__span-29-29"><a id="__codelineno-29-29" name="__codelineno-29-29"></a><span class="kd">type</span><span class="w"> </span><span class="nx">RubricContent</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-29-30"><a id="__codelineno-29-30" name="__codelineno-29-30"></a><span class="w">    </span><span class="nx">Text</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="c1">// Text 是细则文本</span>
+</span><span id="__span-29-31"><a id="__codelineno-29-31" name="__codelineno-29-31"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p><code>judgeModel</code> 支持在 <code>providerName</code>、<code>modelName</code>、<code>baseURL</code>、<code>apiKey</code> 中引用环境变量，运行时会自动展开，出于安全考虑，建议不要把 <code>judgeModel.apiKey</code> / <code>judgeModel.baseURL</code> 明文写入指标配置文件或者代码。</p>
+<p><code>judgeModel</code> 支持在 <code>providerName</code>、<code>modelName</code>、<code>variant</code>、<code>baseURL</code>、<code>apiKey</code> 中引用环境变量，运行时会自动展开，出于安全考虑，建议不要把 <code>judgeModel.apiKey</code> / <code>judgeModel.baseURL</code> 明文写入指标配置文件或者代码。</p>
+<p><code>variant</code> 为可选字段，用于选择 OpenAI 兼容的变体，例如 <code>openai</code>、<code>hunyuan</code>、<code>deepseek</code>、<code>qwen</code>，仅当 <code>providerName</code> 为 <code>openai</code> 时生效。不配置时默认使用 <code>openai</code> 变体。</p>
 <p><code>Generation</code> 默认使用 <code>MaxTokens=2000</code>、<code>Temperature=0.8</code>、<code>Stream=false</code>。</p>
 <p><code>numSamples</code> 用于控制每轮的采样次数，默认为 1，采样次数越大越能抵御裁判波动，但开销也会相应增加。</p>
 <p><code>providerName</code> 表示裁判模型的供应商，对应框架的 Model Provider。框架会按 <code>providerName</code> 与 <code>modelName</code> 创建裁判模型实例，常见取值有 <code>openai</code>、<code>anthropic</code> 和 <code>gemini</code>。Provider 的详细介绍可参考 <a href="../model/#provider">Provider</a>。</p>
@@ -6731,7 +6734,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年2月5日 09:07:43 UTC">2026-02-05 09:07:43</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年2月6日 08:19:52 UTC">2026-02-06 08:19:52</span>
   </span>
 
     
