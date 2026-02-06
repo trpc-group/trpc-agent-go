@@ -70,10 +70,10 @@ import (
 
 var (
 	modelName       = flag.String("model", os.Getenv("MODEL_NAME"), "Name of the model to use (default: MODEL_NAME env var)")
-	sessServiceName = flag.String("session", "inmemory", "Name of the session service to use, inmemory / redis / postgres / mysql / clickhouse")
+	sessServiceName = flag.String("session", "redis", "Name of the session service to use, inmemory / redis / postgres / mysql / clickhouse")
 	streaming       = flag.Bool("streaming", true, "Enable streaming mode for responses")
 	eventLimit      = flag.Int("event-limit", 1000, "Maximum number of events to store per session")
-	sessionTTL      = flag.Duration("session-ttl", 10*time.Second, "Session time-to-live duration")
+	sessionTTL      = flag.Duration("session-ttl", 1000000000*time.Second, "Session time-to-live duration")
 	debugMode       = flag.Bool("debug", true, "Enable debug mode to print session events after each turn")
 )
 
@@ -178,11 +178,11 @@ func (c *multiTurnChat) startChat(ctx context.Context) error {
 	scanner := bufio.NewScanner(os.Stdin)
 
 	fmt.Println("Session commands:")
-	fmt.Println("   /history   - Ask the assistant to recap our conversation")
-	fmt.Println("   /new       - Start a brand-new session ID")
-	fmt.Println("   /sessions  - List known session IDs")
-	fmt.Println("   /use <id>  - Switch to an existing (or new) session")
-	fmt.Println("   /exit      - End the conversation")
+	fmt.Println("   /history      - Ask the assistant to recap our conversation")
+	fmt.Println("   /new [id]     - Start a new session (optional: specify custom ID)")
+	fmt.Println("   /sessions     - List known session IDs")
+	fmt.Println("   /use <id>     - Switch to an existing (or new) session")
+	fmt.Println("   /exit         - End the conversation")
 	fmt.Println()
 
 	for {
@@ -204,8 +204,9 @@ func (c *multiTurnChat) startChat(ctx context.Context) error {
 			return nil
 		case lowerInput == "/history":
 			userInput = "show our conversation history"
-		case lowerInput == "/new":
-			c.startNewSession()
+		case strings.HasPrefix(lowerInput, "/new"):
+			customID := strings.TrimSpace(userInput[4:])
+			c.startNewSession(customID)
 			continue
 		case lowerInput == "/sessions":
 			c.listSessions()
@@ -398,9 +399,13 @@ func (c *multiTurnChat) displayContent(
 	*fullContent += content
 }
 
-func (c *multiTurnChat) startNewSession() {
+func (c *multiTurnChat) startNewSession(customID string) {
 	oldSessionID := c.sessionID
-	c.sessionID = fmt.Sprintf("session-%d", time.Now().Unix())
+	if customID != "" {
+		c.sessionID = customID
+	} else {
+		c.sessionID = fmt.Sprintf("session-%d", time.Now().Unix())
+	}
 	c.rememberSession(c.sessionID)
 	fmt.Printf("Started new session!\n")
 	fmt.Printf("   Previous: %s\n", oldSessionID)
