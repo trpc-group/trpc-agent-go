@@ -15,7 +15,7 @@ replace (
 require (
 	trpc.group/trpc-go/trpc-agent-go v1.1.1
 	trpc.group/trpc-go/trpc-agent-go/memory/mysql v1.1.1
-	trpc.group/trpc-go/trpc-agent-go/memory/pgvector v1.1.1-0.20251231012321-d95e4cbc4349
+	trpc.group/trpc-go/trpc-agent-go/memory/pgvector v1.1.1
 	trpc.group/trpc-go/trpc-agent-go/memory/postgres v1.1.1
 	trpc.group/trpc-go/trpc-agent-go/memory/redis v1.1.1
 )
