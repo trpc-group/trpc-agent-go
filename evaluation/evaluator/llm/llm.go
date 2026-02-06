@@ -160,6 +160,7 @@ func judgeModelResponse(ctx context.Context, messages []model.Message,
 	modelInstance, err := provider.Model(
 		judgeModel.ProviderName,
 		judgeModel.ModelName,
+		provider.WithVariant(judgeModel.Variant),
 		provider.WithAPIKey(judgeModel.APIKey),
 		provider.WithBaseURL(judgeModel.BaseURL),
 		provider.WithExtraFields(judgeModel.ExtraFields),

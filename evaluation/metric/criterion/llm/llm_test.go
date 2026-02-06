@@ -50,13 +50,15 @@ func TestJudgeModelEnvExpansion(t *testing.T) {
 	t.Setenv("TEST_JUDGE_BASE_URL", "https://example.com")
 	t.Setenv("TEST_JUDGE_PROVIDER_NAME", "env-provider")
 	t.Setenv("TEST_JUDGE_MODEL_NAME", "env-model")
+	t.Setenv("TEST_JUDGE_VARIANT", "deepseek")
 
 	var decoded LLMCriterion
-	err := json.Unmarshal([]byte(`{"judgeModel":{"providerName":"${TEST_JUDGE_PROVIDER_NAME}","modelName":"${TEST_JUDGE_MODEL_NAME}","apiKey":"${TEST_JUDGE_API_KEY}","baseURL":"${TEST_JUDGE_BASE_URL}"}}`), &decoded)
+	err := json.Unmarshal([]byte(`{"judgeModel":{"providerName":"${TEST_JUDGE_PROVIDER_NAME}","modelName":"${TEST_JUDGE_MODEL_NAME}","variant":"${TEST_JUDGE_VARIANT}","apiKey":"${TEST_JUDGE_API_KEY}","baseURL":"${TEST_JUDGE_BASE_URL}"}}`), &decoded)
 	require.NoError(t, err)
 	require.NotNil(t, decoded.JudgeModel)
 	assert.Equal(t, "env-provider", decoded.JudgeModel.ProviderName)
 	assert.Equal(t, "env-model", decoded.JudgeModel.ModelName)
+	assert.Equal(t, "deepseek", decoded.JudgeModel.Variant)
 	assert.Equal(t, "secret", decoded.JudgeModel.APIKey)
 	assert.Equal(t, "https://example.com", decoded.JudgeModel.BaseURL)
 }

@@ -1097,6 +1097,7 @@ type LLMCriterion struct {
 type JudgeModelOptions struct {
 	ProviderName string                  // ProviderName is the model provider.
 	ModelName    string                  // ModelName is the model name.
+	Variant      string                  // Variant is optional and selects the OpenAI-compatible variant when ProviderName is openai.
 	BaseURL      string                  // BaseURL is a custom endpoint.
 	APIKey       string                  // APIKey is the access key.
 	ExtraFields  map[string]any          // ExtraFields are extra fields.
@@ -1117,7 +1118,9 @@ type RubricContent struct {
 }
 ```
 
-`judgeModel` supports environment variable references in `providerName`, `modelName`, `baseURL`, and `apiKey`, which are expanded at runtime. For security, avoid writing `judgeModel.apiKey` or `judgeModel.baseURL` in plain text in metric configuration files or code.
+`judgeModel` supports environment variable references in `providerName`, `modelName`, `variant`, `baseURL`, and `apiKey`, which are expanded at runtime. For security, avoid writing `judgeModel.apiKey` or `judgeModel.baseURL` in plain text in metric configuration files or code.
+
+`variant` is optional and selects the OpenAI-compatible variant, for example `openai`, `hunyuan`, `deepseek`, `qwen`. It is only effective when `providerName` is `openai`. When omitted, the default variant is `openai`.
 
 `Generation` defaults to `MaxTokens=2000`, `Temperature=0.8`, `Stream=false`.
 
