@@ -97,6 +97,36 @@ func (c *countingService) Close() error {
 	return nil
 }
 
+type invocationProbeService struct {
+	inferenceInvocation *agent.Invocation
+	evaluateInvocation  *agent.Invocation
+	evaluateHasKey      bool
+}
+
+func (s *invocationProbeService) Inference(ctx context.Context, req *service.InferenceRequest) ([]*service.InferenceResult, error) {
+	inv, _ := agent.InvocationFromContext(ctx)
+	s.inferenceInvocation = inv
+	if inv != nil {
+		inv.SetState("probe", "value")
+	}
+	return []*service.InferenceResult{}, nil
+}
+
+func (s *invocationProbeService) Evaluate(ctx context.Context, req *service.EvaluateRequest) (*service.EvalSetRunResult, error) {
+	inv, _ := agent.InvocationFromContext(ctx)
+	s.evaluateInvocation = inv
+	if inv != nil {
+		_, s.evaluateHasKey = inv.GetState("probe")
+	}
+	return &service.EvalSetRunResult{
+		AppName:         req.AppName,
+		EvalSetID:       req.EvalSetID,
+		EvalCaseResults: []*evalresult.EvalCaseResult{},
+	}, nil
+}
+
+func (s *invocationProbeService) Close() error { return nil }
+
 type countingEvalResultManager struct {
 	saves int32
 	last  *evalresult.EvalSetResult
@@ -218,6 +248,14 @@ func TestNewAgentEvaluatorValidation(t *testing.T) {
 	)
 	assert.Error(t, err)
 
+	_, err = New(
+		"app",
+		stubRunner{},
+		WithEvalCaseParallelEvaluationEnabled(true),
+		WithEvalCaseParallelism(0),
+	)
+	assert.Error(t, err)
+
 	_, err = New("app", stubRunner{}, WithEvalResultManager(nil))
 	assert.Error(t, err)
 	if err != nil {
@@ -230,6 +268,26 @@ func TestNewAgentEvaluatorValidation(t *testing.T) {
 	assert.True(t, ok)
 	assert.NotNil(t, impl.evalService)
 	assert.NoError(t, ae.Close())
+}
+
+func TestAgentEvaluatorEvaluateAttachesInvocation(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+
+	svc := &invocationProbeService{}
+	ae := &agentEvaluator{
+		appName:           appName,
+		evalService:       svc,
+		metricManager:     metricinmemory.New(),
+		evalResultManager: evalresultinmemory.New(),
+		numRuns:           1,
+	}
+
+	_, err := ae.Evaluate(ctx, "set")
+	assert.NoError(t, err)
+	assert.NotNil(t, svc.inferenceInvocation)
+	assert.Same(t, svc.inferenceInvocation, svc.evaluateInvocation)
+	assert.True(t, svc.evaluateHasKey)
 }
 
 func TestNewAgentEvaluatorWithCustomService(t *testing.T) {

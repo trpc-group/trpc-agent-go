@@ -248,6 +248,33 @@ summarizer := summary.NewSummarizer(
 )
 ```
 
+#### Model callbacks (before/after)
+
+The `summarizer` supports model callbacks (structured signatures) around the underlying `model.GenerateContent` call. This is useful for request mutation, short-circuiting with a custom response, or adding tracing/metrics for summary generation.
+
+```go
+import (
+    "context"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/session/summary"
+)
+
+callbacks := model.NewCallbacks().
+    RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+        // You may mutate args.Request, or return CustomResponse to skip the real model call.
+        return nil, nil
+    }).
+    RegisterAfterModel(func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+        // You may override the response via CustomResponse.
+        return nil, nil
+    })
+
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithModelCallbacks(callbacks),
+)
+```
+
 Notes:
 
 - Pre-hook can mutate `ctx.Text` (preferred) or `ctx.Events`; post-hook can mutate `ctx.Summary`.
@@ -1634,6 +1661,67 @@ Configure the summarizer behavior with the following options:
 - **`WithMaxSummaryWords(maxWords int)`**: Limit the summary to a maximum word count. The limit is included in the prompt to guide the model's generation. Example: `WithMaxSummaryWords(150)` requests summaries within 150 words.
 - **`WithPrompt(prompt string)`**: Provide a custom summarization prompt. The prompt must include the placeholder `{conversation_text}`, which will be replaced with the conversation content. Optionally include `{max_summary_words}` for word limit instructions.
 - **`WithSkipRecent(skipFunc SkipRecentFunc)`**: Skip the _most recent_ events during summarization using a custom function. The function receives all events and returns how many tail events to skip. Return 0 to skip none. Useful for avoiding summarizing very recent/incomplete conversations, or applying time/content-based skipping strategies.
+
+#### Token Counter Configuration
+
+By default, `CheckTokenThreshold` uses a built-in `SimpleTokenCounter` to estimate tokens based on text length. If you need to customize the token counting behavior (e.g., using a more accurate tokenizer for specific models), you can use `summary.SetTokenCounter` to set a global token counter:
+
+```go
+import (
+    "context"
+    "fmt"
+    "unicode/utf8"
+
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/session/summary"
+)
+
+// Set custom token counter (affects all CheckTokenThreshold evaluations)
+summary.SetTokenCounter(model.NewSimpleTokenCounter())
+
+// Or use custom implementation
+type MyCustomCounter struct{}
+
+func (c *MyCustomCounter) CountTokens(ctx context.Context, message model.Message) (int, error) {
+    _ = ctx
+    // TODO: Replace this with your real tokenizer implementation.
+    return utf8.RuneCountInString(message.Content), nil
+}
+
+func (c *MyCustomCounter) CountTokensRange(ctx context.Context, messages []model.Message, start, end int) (int, error) {
+    if start < 0 || end > len(messages) || start >= end {
+        return 0, fmt.Errorf("invalid range: start=%d, end=%d, len=%d",
+            start, end, len(messages))
+    }
+
+    total := 0
+    for i := start; i < end; i++ {
+        tokens, err := c.CountTokens(ctx, messages[i])
+        if err != nil {
+            return 0, err
+        }
+        total += tokens
+    }
+    return total, nil
+}
+
+summary.SetTokenCounter(&MyCustomCounter{})
+
+// Create summarizer with token threshold checker
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.CheckTokenThreshold(4000),  // Will use your custom counter
+)
+```
+
+**Important Notes:**
+
+- **Global Effect**: `SetTokenCounter` affects all `CheckTokenThreshold` evaluations in the current process. Set it once during application initialization.
+- **Default Counter**: If not set, a `SimpleTokenCounter` with default configuration is used (approx. 4 characters per token).
+- **Use Cases**:
+  - Use accurate tokenizers (tiktoken) when precise estimation is needed
+  - Adjust for language-specific models (Chinese models may have different token densities)
+  - Integrate with model-specific token counting APIs for better accuracy
 
 **Tool Call Formatting:**
 

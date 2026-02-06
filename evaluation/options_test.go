@@ -49,6 +49,7 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.Nil(t, opts.callbacks)
 	assert.Equal(t, runtime.GOMAXPROCS(0), opts.evalCaseParallelism)
 	assert.False(t, opts.evalCaseParallelInferenceEnabled)
+	assert.False(t, opts.evalCaseParallelEvaluationEnabled)
 }
 
 func TestWithEvalSetManager(t *testing.T) {
@@ -106,4 +107,9 @@ func TestWithEvalCaseParallelism(t *testing.T) {
 func TestWithEvalCaseParallelInferenceEnabled(t *testing.T) {
 	opts := newOptions(WithEvalCaseParallelInferenceEnabled(true))
 	assert.True(t, opts.evalCaseParallelInferenceEnabled)
+}
+
+func TestWithEvalCaseParallelEvaluationEnabled(t *testing.T) {
+	opts := newOptions(WithEvalCaseParallelEvaluationEnabled(true))
+	assert.True(t, opts.evalCaseParallelEvaluationEnabled)
 }

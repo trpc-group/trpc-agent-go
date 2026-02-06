@@ -334,6 +334,35 @@ type calculatorRsp struct {
 }
 ```
 
+### Dynamic Agent per Request
+
+Sometimes your Agent must be created **per request** (for example: different
+prompt, model, tools, sandbox instance). In that case, you can let Runner build
+a fresh Agent for every `Run(...)`:
+
+```go
+r := runner.NewRunnerWithAgentFactory(
+    "my-app",
+    "assistant",
+    func(ctx context.Context, ro agent.RunOptions) (agent.Agent, error) {
+        // Use ro to build an Agent for this request.
+        a := llmagent.New("assistant",
+            llmagent.WithInstruction(ro.Instruction),
+        )
+        return a, nil
+    },
+)
+
+events, err := r.Run(ctx,
+    "user-001",
+    "session-001",
+    model.NewUserMessage("Hello"),
+    agent.WithInstruction("You are a helpful assistant."),
+)
+_ = events
+_ = err
+```
+
 ### Stop / Cancel a Run
 
 If you want to interrupt a running agent, **cancel the context** you passed to

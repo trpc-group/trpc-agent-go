@@ -272,7 +272,7 @@ func (f *Flow) processStreamingResponses(
 	timingInfo := invocation.GetOrCreateTimingInfo()
 
 	// Create telemetry tracker and defer metrics recording
-	tracker := itelemetry.NewChatMetricsTracker(ctx, invocation, llmRequest, timingInfo, &err)
+	tracker := itelemetry.NewChatMetricsTracker(ctx, invocation, llmRequest, timingInfo, nil, &err)
 	defer tracker.RecordMetrics()()
 
 	for response := range responseChan {
@@ -314,7 +314,13 @@ func (f *Flow) processStreamingResponses(
 			return lastEvent, err
 		}
 
-		itelemetry.TraceChat(span, invocation, llmRequest, response, llmResponseEvent.ID, tracker.FirstTokenTimeDuration())
+		itelemetry.TraceChat(span, &itelemetry.TraceChatAttributes{
+			Invocation:       invocation,
+			Request:          llmRequest,
+			Response:         response,
+			EventID:          llmResponseEvent.ID,
+			TimeToFirstToken: tracker.FirstTokenTimeDuration(),
+		})
 	}
 
 	return lastEvent, nil

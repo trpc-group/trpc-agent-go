@@ -181,6 +181,7 @@ var (
 	KeyGenAIRequestTopP             = semconvtrace.KeyGenAIRequestTopP
 	KeyGenAISystemInstructions      = semconvtrace.KeyGenAISystemInstructions
 	KeyGenAITokenType               = semconvtrace.KeyGenAITokenType
+	KeyGenAITaskType                = semconvtrace.KeyGenAITaskType
 	KeyGenAIRequestThinkingEnabled  = semconvtrace.KeyGenAIRequestThinkingEnabled
 	KeyGenAIRequestToolDefinitions  = "gen_ai.request.tool.definitions"
 
@@ -382,32 +383,63 @@ func TraceAfterInvokeAgent(span trace.Span, rspEvent *event.Event, tokenUsage *T
 	}
 }
 
+// TraceChatAttributes contains TraceChat inputs other than span.
+//
+// It is used to keep TraceChat signatures stable as parameters evolve.
+type TraceChatAttributes struct {
+	Invocation       *agent.Invocation
+	Request          *model.Request
+	Response         *model.Response
+	EventID          string
+	TimeToFirstToken time.Duration
+	TaskType         string
+}
+
+// NewSummarizeTaskType creates a task type for summarize.
+func NewSummarizeTaskType(name string) string {
+	taskType := "summarize"
+	if name == "" {
+		return taskType
+	}
+	return taskType + " " + name
+}
+
 // TraceChat traces the invocation of an LLM call.
-func TraceChat(span trace.Span, invoke *agent.Invocation, req *model.Request, rsp *model.Response, eventID string, timeToFirstToken time.Duration) {
+func TraceChat(span trace.Span, attributes *TraceChatAttributes) {
 	attrs := []attribute.KeyValue{
 		attribute.String(KeyGenAISystem, SystemTRPCGoAgent),
 		attribute.String(KeyGenAIOperationName, OperationChat),
-		attribute.String(KeyEventID, eventID),
 	}
-	if timeToFirstToken > 0 {
-		attrs = append(attrs, attribute.Float64(KeyTRPCAgentGoClientTimeToFirstToken, timeToFirstToken.Seconds()))
+	if attributes == nil {
+		span.SetAttributes(attrs...)
+		return
+	}
+
+	if attributes.EventID != "" {
+		attrs = append(attrs, attribute.String(KeyEventID, attributes.EventID))
+	}
+	if attributes.TimeToFirstToken > 0 {
+		attrs = append(attrs, attribute.Float64(KeyTRPCAgentGoClientTimeToFirstToken, attributes.TimeToFirstToken.Seconds()))
+	}
+	if attributes.TaskType != "" {
+		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAITaskType, attributes.TaskType))
 	}
 
 	// Add invocation attributes
-	attrs = append(attrs, buildInvocationAttributes(invoke)...)
+	attrs = append(attrs, buildInvocationAttributes(attributes.Invocation)...)
 
 	// Add request attributes
-	attrs = append(attrs, buildRequestAttributes(req)...)
+	attrs = append(attrs, buildRequestAttributes(attributes.Request)...)
 
 	// Add response attributes
-	attrs = append(attrs, buildResponseAttributes(rsp)...)
+	attrs = append(attrs, buildResponseAttributes(attributes.Response)...)
 
 	// Set all attributes at once
 	span.SetAttributes(attrs...)
 
 	// Handle response error status
-	if rsp != nil && rsp.Error != nil {
-		span.SetStatus(codes.Error, rsp.Error.Message)
+	if attributes.Response != nil && attributes.Response.Error != nil {
+		span.SetStatus(codes.Error, attributes.Response.Error.Message)
 	}
 }
 

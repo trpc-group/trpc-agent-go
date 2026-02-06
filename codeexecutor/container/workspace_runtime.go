@@ -14,6 +14,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -47,6 +48,13 @@ const (
 	defaultSkillsContainer = "/opt/trpc-agent/skills"
 	// Bind-mounted inputs default inside container.
 	defaultInputsContainer = "/opt/trpc-agent/inputs"
+
+	inputSchemeArtifact  = "artifact://"
+	inputSchemeHost      = "host://"
+	inputSchemeWorkspace = "workspace://"
+	inputSchemeSkill     = "skill://"
+
+	metadataFileMode = 0o600
 )
 
 // workspaceRuntime provides workspace execution on Docker.
@@ -532,6 +540,10 @@ func (r *workspaceRuntime) StageInputs(
 	if r.ce == nil || r.ce.client == nil || r.ce.container == nil {
 		return fmt.Errorf("container executor not ready")
 	}
+	md, err := r.loadWorkspaceMetadata(ctx, ws)
+	if err != nil {
+		return err
+	}
 	for _, sp := range specs {
 		mode := strings.ToLower(strings.TrimSpace(sp.Mode))
 		if mode == "" {
@@ -542,97 +554,269 @@ func (r *workspaceRuntime) StageInputs(
 			base := inputBase(sp.From)
 			to = path.Join(codeexecutor.DirWork, "inputs", base)
 		}
-		dest := path.Join(ws.Path, to)
-		var err error
-		switch {
-		case strings.HasPrefix(sp.From, "artifact://"):
-			name := strings.TrimPrefix(sp.From, "artifact://")
-			aname, aver, perr := codeexecutor.ParseArtifactRef(name)
-			if perr != nil {
-				return perr
-			}
-			data, _, _, lerr := codeexecutor.LoadArtifactHelper(
-				ctx, aname, aver,
-			)
-			if lerr != nil {
-				return lerr
-			}
-			// Copy single file into container at dest.
-			err = r.copyBytesTo(ctx, dest, data, 0o644)
-		case strings.HasPrefix(sp.From, "host://"):
-			host := strings.TrimPrefix(sp.From, "host://")
-			// If under inputsHostBase, prefer symlink (zero-copy).
-			if r.cfg.inputsHostBase != "" {
-				if strings.HasPrefix(host,
-					r.cfg.inputsHostBase+string(os.PathSeparator)) ||
-					host == r.cfg.inputsHostBase {
-					rel, _ := filepath.Rel(r.cfg.inputsHostBase, host)
-					csrc := path.Join(r.cfg.inputsContainerBase,
-						filepath.ToSlash(rel))
-					if mode == "link" {
-						cmd := []string{"/bin/bash", "-lc",
-							"mkdir -p '" + path.Dir(dest) + "' && " +
-								"ln -sfn '" + csrc + "' '" + dest +
-								"'"}
-						_, _, _, _, err = r.execCmd(ctx, cmd,
-							time.Duration(defaultStageTimeoutSec)*
-								time.Second)
-					} else {
-						cmd := []string{"/bin/bash", "-lc",
-							"mkdir -p '" + path.Dir(dest) + "' && " +
-								"cp -a '" + csrc + "' '" + dest +
-								"'"}
-						_, _, _, _, err = r.execCmd(ctx, cmd,
-							time.Duration(defaultStageTimeoutSec)*
-								time.Second)
-					}
-					if err != nil {
-						return err
-					}
-					continue
-				}
-			}
-			// Fallback: tar copy host path to dest dir.
-			err = r.PutDirectory(ctx, ws, host, path.Dir(to))
-		case strings.HasPrefix(sp.From, "workspace://"):
-			rel := strings.TrimPrefix(sp.From, "workspace://")
-			src := path.Join(ws.Path, filepath.ToSlash(rel))
-			var cmd []string
-			if mode == "link" {
-				cmd = []string{"/bin/bash", "-lc",
-					"mkdir -p '" + path.Dir(dest) + "' && ln -sfn '" +
-						src + "' '" + dest + "'"}
-			} else {
-				cmd = []string{"/bin/bash", "-lc",
-					"mkdir -p '" + path.Dir(dest) + "' && cp -a '" +
-						src + "' '" + dest + "'"}
-			}
-			_, _, _, _, err = r.execCmd(ctx, cmd,
-				time.Duration(defaultStageTimeoutSec)*time.Second)
-		case strings.HasPrefix(sp.From, "skill://"):
-			rest := strings.TrimPrefix(sp.From, "skill://")
-			src := path.Join(ws.Path, codeexecutor.DirSkills,
-				filepath.ToSlash(rest))
-			var cmd []string
-			if mode == "link" {
-				cmd = []string{"/bin/bash", "-lc",
-					"mkdir -p '" + path.Dir(dest) + "' && ln -sfn '" +
-						src + "' '" + dest + "'"}
-			} else {
-				cmd = []string{"/bin/bash", "-lc",
-					"mkdir -p '" + path.Dir(dest) + "' && cp -a '" +
-						src + "' '" + dest + "'"}
-			}
-			_, _, _, _, err = r.execCmd(ctx, cmd,
-				time.Duration(defaultStageTimeoutSec)*time.Second)
-		default:
-			return fmt.Errorf("unsupported input: %s", sp.From)
-		}
+		resolved, ver, err := r.stageInput(
+			ctx, ws, md, sp, mode, to,
+		)
 		if err != nil {
 			return err
 		}
+		md.Inputs = append(md.Inputs, codeexecutor.InputRecord{
+			From:      sp.From,
+			To:        to,
+			Resolved:  resolved,
+			Version:   ver,
+			Mode:      mode,
+			Timestamp: time.Now(),
+		})
+	}
+	return r.saveWorkspaceMetadata(ctx, ws, md)
+}
+
+func (r *workspaceRuntime) stageInput(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	md codeexecutor.WorkspaceMetadata,
+	sp codeexecutor.InputSpec,
+	mode string,
+	to string,
+) (string, *int, error) {
+	dest := path.Join(ws.Path, to)
+	switch {
+	case strings.HasPrefix(sp.From, inputSchemeArtifact):
+		return r.stageArtifactInput(ctx, md, sp, to, dest)
+	case strings.HasPrefix(sp.From, inputSchemeHost):
+		return r.stageHostInput(ctx, ws, sp, mode, to, dest)
+	case strings.HasPrefix(sp.From, inputSchemeWorkspace):
+		return r.stageWorkspaceInput(ctx, ws, sp, mode, dest)
+	case strings.HasPrefix(sp.From, inputSchemeSkill):
+		return r.stageSkillInput(ctx, ws, sp, mode, dest)
+	default:
+		return "", nil, fmt.Errorf("unsupported input: %s", sp.From)
+	}
+}
+
+func (r *workspaceRuntime) stageArtifactInput(
+	ctx context.Context,
+	md codeexecutor.WorkspaceMetadata,
+	sp codeexecutor.InputSpec,
+	to string,
+	dest string,
+) (string, *int, error) {
+	name := strings.TrimPrefix(sp.From, inputSchemeArtifact)
+	aname, aver, err := codeexecutor.ParseArtifactRef(name)
+	if err != nil {
+		return "", nil, err
+	}
+	useVer := aver
+	if useVer == nil && sp.Pin {
+		useVer = pinnedArtifactVersion(md, aname, to)
+	}
+	data, _, actual, err := codeexecutor.LoadArtifactHelper(
+		ctx, aname, useVer,
+	)
+	if err != nil {
+		return "", nil, err
+	}
+	var ver *int
+	if useVer != nil {
+		v := *useVer
+		ver = &v
+	} else {
+		v := actual
+		ver = &v
+	}
+	if err := r.copyBytesTo(ctx, dest, data, 0o644); err != nil {
+		return "", nil, err
+	}
+	return aname, ver, nil
+}
+
+func (r *workspaceRuntime) stageHostInput(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	sp codeexecutor.InputSpec,
+	mode string,
+	to string,
+	dest string,
+) (string, *int, error) {
+	host := strings.TrimPrefix(sp.From, inputSchemeHost)
+	// If under inputsHostBase, prefer symlink/cp (zero-copy).
+	if r.cfg.inputsHostBase != "" {
+		base := r.cfg.inputsHostBase
+		if strings.HasPrefix(host, base+string(os.PathSeparator)) ||
+			host == base {
+			rel, _ := filepath.Rel(base, host)
+			csrc := path.Join(r.cfg.inputsContainerBase,
+				filepath.ToSlash(rel))
+			var cmd []string
+			if mode == "link" {
+				cmd = []string{"/bin/bash", "-lc",
+					"mkdir -p '" + path.Dir(dest) + "' && " +
+						"ln -sfn '" + csrc + "' '" + dest + "'"}
+			} else {
+				cmd = []string{"/bin/bash", "-lc",
+					"mkdir -p '" + path.Dir(dest) + "' && " +
+						"cp -a '" + csrc + "' '" + dest + "'"}
+			}
+			_, _, _, _, err := r.execCmd(
+				ctx,
+				cmd,
+				time.Duration(defaultStageTimeoutSec)*time.Second,
+			)
+			if err != nil {
+				return "", nil, err
+			}
+			return host, nil, nil
+		}
+	}
+	// Fallback: tar copy host path to dest dir.
+	err := r.PutDirectory(ctx, ws, host, path.Dir(to))
+	return host, nil, err
+}
+
+func (r *workspaceRuntime) stageWorkspaceInput(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	sp codeexecutor.InputSpec,
+	mode string,
+	dest string,
+) (string, *int, error) {
+	rel := strings.TrimPrefix(sp.From, inputSchemeWorkspace)
+	src := path.Join(ws.Path, filepath.ToSlash(rel))
+	var cmd []string
+	if mode == "link" {
+		cmd = []string{"/bin/bash", "-lc",
+			"mkdir -p '" + path.Dir(dest) + "' && ln -sfn '" +
+				src + "' '" + dest + "'"}
+	} else {
+		cmd = []string{"/bin/bash", "-lc",
+			"mkdir -p '" + path.Dir(dest) + "' && cp -a '" +
+				src + "' '" + dest + "'"}
+	}
+	_, _, _, _, err := r.execCmd(ctx, cmd,
+		time.Duration(defaultStageTimeoutSec)*time.Second)
+	return rel, nil, err
+}
+
+func (r *workspaceRuntime) stageSkillInput(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	sp codeexecutor.InputSpec,
+	mode string,
+	dest string,
+) (string, *int, error) {
+	rest := strings.TrimPrefix(sp.From, inputSchemeSkill)
+	src := path.Join(ws.Path, codeexecutor.DirSkills,
+		filepath.ToSlash(rest))
+	var cmd []string
+	if mode == "link" {
+		cmd = []string{"/bin/bash", "-lc",
+			"mkdir -p '" + path.Dir(dest) + "' && ln -sfn '" +
+				src + "' '" + dest + "'"}
+	} else {
+		cmd = []string{"/bin/bash", "-lc",
+			"mkdir -p '" + path.Dir(dest) + "' && cp -a '" +
+				src + "' '" + dest + "'"}
+	}
+	_, _, _, _, err := r.execCmd(ctx, cmd,
+		time.Duration(defaultStageTimeoutSec)*time.Second)
+	return src, nil, err
+}
+
+func pinnedArtifactVersion(
+	md codeexecutor.WorkspaceMetadata,
+	name string,
+	to string,
+) *int {
+	if strings.TrimSpace(name) == "" || strings.TrimSpace(to) == "" {
+		return nil
+	}
+	for i := len(md.Inputs) - 1; i >= 0; i-- {
+		rec := md.Inputs[i]
+		if rec.To != to {
+			continue
+		}
+		if rec.Version == nil {
+			continue
+		}
+		if rec.Resolved == name {
+			return rec.Version
+		}
+		if !strings.HasPrefix(rec.From, inputSchemeArtifact) {
+			continue
+		}
+		ref := strings.TrimPrefix(rec.From, inputSchemeArtifact)
+		rname, _, err := codeexecutor.ParseArtifactRef(ref)
+		if err == nil && rname == name {
+			return rec.Version
+		}
 	}
 	return nil
+}
+
+func (r *workspaceRuntime) saveWorkspaceMetadata(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	md codeexecutor.WorkspaceMetadata,
+) error {
+	now := time.Now()
+	if md.Version == 0 {
+		md.Version = 1
+	}
+	if md.CreatedAt.IsZero() {
+		md.CreatedAt = now
+	}
+	md.UpdatedAt = now
+	md.LastAccess = now
+	if md.Skills == nil {
+		md.Skills = map[string]codeexecutor.SkillMeta{}
+	}
+	buf, err := json.MarshalIndent(md, "", "  ")
+	if err != nil {
+		return err
+	}
+	return r.PutFiles(ctx, ws, []codeexecutor.PutFile{{
+		Path:    codeexecutor.MetaFileName,
+		Content: buf,
+		Mode:    metadataFileMode,
+	}})
+}
+
+func (r *workspaceRuntime) loadWorkspaceMetadata(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+) (codeexecutor.WorkspaceMetadata, error) {
+	now := time.Now()
+	md := codeexecutor.WorkspaceMetadata{
+		Version:    1,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+		LastAccess: now,
+		Skills:     map[string]codeexecutor.SkillMeta{},
+	}
+	files, err := r.Collect(
+		ctx, ws, []string{codeexecutor.MetaFileName},
+	)
+	if err != nil {
+		return md, err
+	}
+	if len(files) == 0 || strings.TrimSpace(files[0].Content) == "" {
+		return md, nil
+	}
+	if err := json.Unmarshal([]byte(files[0].Content), &md); err != nil {
+		return codeexecutor.WorkspaceMetadata{}, err
+	}
+	if md.Version == 0 {
+		md.Version = 1
+	}
+	if md.CreatedAt.IsZero() {
+		md.CreatedAt = now
+	}
+	md.LastAccess = now
+	if md.Skills == nil {
+		md.Skills = map[string]codeexecutor.SkillMeta{}
+	}
+	return md, nil
 }
 
 // CollectOutputs applies container-side glob and optional save.

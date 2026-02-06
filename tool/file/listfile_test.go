@@ -224,6 +224,49 @@ func TestFileTool_listFile_ParseError(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestFileTool_listFile_WithSize(t *testing.T) {
+	// Create a temporary directory for testing.
+	tempDir := t.TempDir()
+	fileToolSet := &fileToolSet{baseDir: tempDir}
+	// Create some test files with known content sizes.
+	testFiles := map[string]string{
+		"file1.txt": "hello",        // 5 bytes
+		"file2.go":  "package main", // 12 bytes
+		"README.md": "# Readme",     // 8 bytes
+	}
+	for fileName, content := range testFiles {
+		filePath := filepath.Join(tempDir, fileName)
+		err := os.WriteFile(filePath, []byte(content), 0644)
+		assert.NoError(t, err)
+	}
+	// Create a subdirectory (should not appear in FilesWithSize).
+	err := os.MkdirAll(filepath.Join(tempDir, "subdir"), 0755)
+	assert.NoError(t, err)
+
+	// Test listing files with WithSize = true.
+	req := &listFileRequest{WithSize: true}
+	rsp, err := fileToolSet.listFile(context.Background(), req)
+	assert.NoError(t, err)
+	// Check that the response contains the expected base directory.
+	assert.Equal(t, tempDir, rsp.BaseDirectory)
+	assert.Equal(t, "", rsp.Path)
+	// Check that the number of files matches.
+	assert.Equal(t, len(testFiles), len(rsp.Files))
+	// Check that FilesWithSize is populated.
+	assert.Equal(t, len(testFiles), len(rsp.FilesWithSize))
+	// Check that file sizes are correct.
+	expectedSizes := map[string]int64{
+		"file1.txt": 5,
+		"file2.go":  12,
+		"README.md": 8,
+	}
+	for _, fi := range rsp.FilesWithSize {
+		expectedSize, ok := expectedSizes[fi.Name]
+		assert.True(t, ok, "unexpected file in FilesWithSize: %s", fi.Name)
+		assert.Equal(t, expectedSize, fi.Size, "size mismatch for file: %s", fi.Name)
+	}
+}
+
 func TestFileTool_listFile_FallbackToWorkspaceCache(t *testing.T) {
 	tempDir := t.TempDir()
 	set, err := NewToolSet(WithBaseDir(tempDir))

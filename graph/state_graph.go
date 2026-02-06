@@ -2916,7 +2916,7 @@ func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (a
 	// Get or create timing info from invocation (only record first LLM call)
 	timingInfo := invocation.GetOrCreateTimingInfo()
 	// Create telemetry tracker and defer metrics recording
-	tracker := itelemetry.NewChatMetricsTracker(ctx, invocation, config.Request, timingInfo, &err)
+	tracker := itelemetry.NewChatMetricsTracker(ctx, invocation, config.Request, timingInfo, nil, &err)
 	defer tracker.RecordMetrics()()
 
 	// Process response.
@@ -2948,7 +2948,13 @@ func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (a
 		}
 		if lastEvent != nil {
 			tracker.SetLastEvent(lastEvent)
-			itelemetry.TraceChat(config.Span, invocation, config.Request, response, lastEvent.ID, tracker.FirstTokenTimeDuration())
+			itelemetry.TraceChat(config.Span, &itelemetry.TraceChatAttributes{
+				Invocation:       invocation,
+				Request:          config.Request,
+				Response:         response,
+				EventID:          lastEvent.ID,
+				TimeToFirstToken: tracker.FirstTokenTimeDuration(),
+			})
 		}
 
 		if len(response.Choices) > 0 && len(response.Choices[0].Message.ToolCalls) > 0 {

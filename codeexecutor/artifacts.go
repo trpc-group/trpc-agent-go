@@ -34,18 +34,35 @@ func LoadArtifactHelper(
 	if art == nil {
 		return nil, "", 0, fmt.Errorf("artifact not found: %s", name)
 	}
-	// Determine actual version by listing versions and taking max
-	// when version was nil. As services may fill latest as 0, we
-	// keep simple: when version==nil, return 0.
-	actual := 0
-	if version != nil {
-		actual = *version
-	}
+	actual := resolveArtifactVersion(ctx, svc, info, name, version)
 	mt := art.MimeType
 	if mt == "" {
 		mt = "application/octet-stream"
 	}
 	return art.Data, mt, actual, nil
+}
+
+func resolveArtifactVersion(
+	ctx context.Context,
+	svc artifact.Service,
+	info artifact.SessionInfo,
+	name string,
+	version *int,
+) int {
+	if version != nil {
+		return *version
+	}
+	vers, err := svc.ListVersions(ctx, info, name)
+	if err != nil || len(vers) == 0 {
+		return 0
+	}
+	max := vers[0]
+	for _, v := range vers[1:] {
+		if v > max {
+			max = v
+		}
+	}
+	return max
 }
 
 // ParseArtifactRef splits "name@version" into name and optional version.
