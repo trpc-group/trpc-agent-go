@@ -419,6 +419,273 @@ func TestJSONCriterionOnlyTreeScalarFallbackToExact(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestJSONCriterionOnlyTreeLeafTrueComparesSubtreeExact(t *testing.T) {
+	criterion := &JSONCriterion{
+		OnlyTree: map[string]any{
+			"meta": true,
+		},
+	}
+	actual := map[string]any{
+		"meta": map[string]any{
+			"id":    "1",
+			"extra": "x",
+		},
+		"other": "ignored",
+	}
+	expected := map[string]any{
+		"meta": map[string]any{
+			"id":    "1",
+			"extra": "x",
+		},
+		"unexpected": "ignored",
+	}
+	ok, err := criterion.Match(actual, expected)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+}
+
+func TestJSONCriterionOnlyTreeLeafTrueSubtreeMissingKeyInExpected(t *testing.T) {
+	criterion := &JSONCriterion{
+		OnlyTree: map[string]any{
+			"meta": true,
+		},
+	}
+	actual := map[string]any{
+		"meta": map[string]any{
+			"id":    "1",
+			"extra": "x",
+		},
+	}
+	expected := map[string]any{
+		"meta": map[string]any{
+			"id": "1",
+		},
+	}
+	ok, err := criterion.Match(actual, expected)
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "key extra in actual but not in expected")
+}
+
+func TestJSONCriterionOnlyTreeLeafTrueSubtreeMissingKeyInActual(t *testing.T) {
+	criterion := &JSONCriterion{
+		OnlyTree: map[string]any{
+			"meta": true,
+		},
+	}
+	actual := map[string]any{
+		"meta": map[string]any{
+			"id": "1",
+		},
+	}
+	expected := map[string]any{
+		"meta": map[string]any{
+			"id":    "1",
+			"extra": "x",
+		},
+	}
+	ok, err := criterion.Match(actual, expected)
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "key extra in expected but not in actual")
+}
+
+func TestJSONCriterionOnlyTreeLeafTrueSubtreeMismatch(t *testing.T) {
+	criterion := &JSONCriterion{
+		OnlyTree: map[string]any{
+			"meta": true,
+		},
+	}
+	actual := map[string]any{
+		"meta": map[string]any{
+			"id": "1",
+		},
+	}
+	expected := map[string]any{
+		"meta": map[string]any{
+			"id": "2",
+		},
+	}
+	ok, err := criterion.Match(actual, expected)
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "compare meta")
+}
+
+func TestJSONCriterionOnlyTreeSkipsFalseSelector(t *testing.T) {
+	criterion := &JSONCriterion{
+		OnlyTree: map[string]any{
+			"skip": false,
+			"keep": true,
+		},
+	}
+	actual := map[string]any{
+		"keep": "v",
+		"skip": "x",
+	}
+	expected := map[string]any{
+		"keep": "v",
+		"skip": "y",
+	}
+	ok, err := criterion.Match(actual, expected)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+}
+
+func TestJSONCriterionOnlyTreeSelectedKeyMissingInActual(t *testing.T) {
+	criterion := &JSONCriterion{
+		OnlyTree: map[string]any{
+			"missing": true,
+		},
+	}
+	actual := map[string]any{}
+	expected := map[string]any{
+		"missing": "v",
+	}
+	ok, err := criterion.Match(actual, expected)
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "key missing in onlyTree but not in actual")
+}
+
+func TestJSONCriterionOnlyTreeMapTypeMismatchActualMapExpectedNonMap(t *testing.T) {
+	criterion := &JSONCriterion{
+		OnlyTree: map[string]any{
+			"keep": true,
+		},
+	}
+	ok, err := criterion.Match(map[string]any{"keep": "v"}, "x")
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "is a map")
+}
+
+func TestJSONCriterionOnlyTreeMapTypeMismatchActualNonMapExpectedMap(t *testing.T) {
+	criterion := &JSONCriterion{
+		OnlyTree: map[string]any{
+			"keep": true,
+		},
+	}
+	ok, err := criterion.Match("x", map[string]any{"keep": "v"})
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "is a map")
+}
+
+func TestJSONCriterionOnlyTreeNilValues(t *testing.T) {
+	criterion := &JSONCriterion{
+		OnlyTree: map[string]any{
+			"keep": true,
+		},
+	}
+
+	ok, err := criterion.Match(nil, nil)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+
+	ok, err = criterion.Match(nil, "x")
+	assert.False(t, ok)
+	assert.Error(t, err)
+
+	ok, err = criterion.Match("x", nil)
+	assert.False(t, ok)
+	assert.Error(t, err)
+}
+
+func TestJSONCriterionOnlyTreeNestedSelectorMissingKeyInActual(t *testing.T) {
+	criterion := &JSONCriterion{
+		OnlyTree: map[string]any{
+			"meta": map[string]any{
+				"id": true,
+			},
+		},
+	}
+	actual := map[string]any{}
+	expected := map[string]any{
+		"meta": map[string]any{
+			"id": "1",
+		},
+	}
+	ok, err := criterion.Match(actual, expected)
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "key meta in onlyTree but not in actual")
+}
+
+func TestJSONCriterionOnlyTreeLeafTrueSubtreeNilValues(t *testing.T) {
+	criterion := &JSONCriterion{
+		OnlyTree: map[string]any{
+			"meta": true,
+		},
+	}
+	actual := map[string]any{
+		"meta": nil,
+	}
+	expected := map[string]any{
+		"meta": nil,
+	}
+	ok, err := criterion.Match(actual, expected)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+}
+
+func TestJSONCriterionOnlyTreeLeafTrueSubtreeNilMismatch(t *testing.T) {
+	criterion := &JSONCriterion{
+		OnlyTree: map[string]any{
+			"meta": true,
+		},
+	}
+	actual := map[string]any{
+		"meta": nil,
+	}
+	expected := map[string]any{
+		"meta": "x",
+	}
+	ok, err := criterion.Match(actual, expected)
+	assert.False(t, ok)
+	assert.Error(t, err)
+}
+
+func TestJSONCriterionOnlyTreeLeafTrueSubtreeTypeMismatchActualMapExpectedScalar(t *testing.T) {
+	criterion := &JSONCriterion{
+		OnlyTree: map[string]any{
+			"meta": true,
+		},
+	}
+	actual := map[string]any{
+		"meta": map[string]any{
+			"id": "1",
+		},
+	}
+	expected := map[string]any{
+		"meta": "x",
+	}
+	ok, err := criterion.Match(actual, expected)
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "is a map")
+}
+
+func TestJSONCriterionOnlyTreeLeafTrueSubtreeTypeMismatchActualScalarExpectedMap(t *testing.T) {
+	criterion := &JSONCriterion{
+		OnlyTree: map[string]any{
+			"meta": true,
+		},
+	}
+	actual := map[string]any{
+		"meta": "x",
+	}
+	expected := map[string]any{
+		"meta": map[string]any{
+			"id": "1",
+		},
+	}
+	ok, err := criterion.Match(actual, expected)
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "is a map")
+}
+
 func TestJSONCriterionNumberToleranceDefault(t *testing.T) {
 	criterion := &JSONCriterion{}
 	actual := map[string]any{"value": 0.3000005}
