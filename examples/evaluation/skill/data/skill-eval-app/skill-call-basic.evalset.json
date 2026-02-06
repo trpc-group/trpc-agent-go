@@ -1,0 +1,47 @@
+{
+  "evalSetId": "skill-call-basic",
+  "name": "skill-call-basic",
+  "evalCases": [
+    {
+      "evalId": "write_ok",
+      "conversation": [
+        {
+          "invocationId": "write_ok-1",
+          "userContent": {
+            "role": "user",
+            "content": "Use skills to generate an OK file and confirm when done."
+          },
+          "tools": [
+            {
+              "id": "tool_use_1",
+              "name": "skill_load",
+              "arguments": {
+                "skill": "write-ok"
+              }
+            },
+            {
+              "id": "tool_use_2",
+              "name": "skill_run",
+              "arguments": {
+                "skill": "write-ok",
+                "output_files": [
+                  "out/ok.txt"
+                ]
+              },
+              "result": {
+                "exit_code": 0,
+                "timed_out": false
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "skill-eval-app",
+        "userId": "user"
+      }
+    }
+  ],
+  "creationTimestamp": 1761134484.9804401
+}
+
