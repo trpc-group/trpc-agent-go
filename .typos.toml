@@ -16,6 +16,7 @@ extend-exclude = [
   "*_string.go",
   "*.gen.go",
   "evaluation/internal/rouge/testdata/",
+  "evaluation/internal/rouge/tokenizer.go",
   "examples/"
 ]
 
@@ -35,7 +36,3 @@ ba = "ba"
 UE = "UE"
 rin = "rin"
 dify = "dify"
-ative = "ative"
-ful = "ful"
-iz = "iz"
-ment = "ment"
