@@ -508,8 +508,16 @@ func validateStrictTopLevelObjectProperties(payload []byte) error {
 		if !ok || typeVal != "object" {
 			continue
 		}
-		if _, exists := params["properties"]; !exists {
+		props, exists := params["properties"]
+		if !exists {
 			return fmt.Errorf("tool %q missing top-level properties in parameters", toolParam.Function.Name)
+		}
+		if _, ok := props.(map[string]any); !ok {
+			return fmt.Errorf(
+				"tool %q has non-object top-level properties type %T",
+				toolParam.Function.Name,
+				props,
+			)
 		}
 	}
 	return nil
