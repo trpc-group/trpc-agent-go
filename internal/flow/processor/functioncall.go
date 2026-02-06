@@ -10,6 +10,7 @@
 package processor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -57,9 +58,11 @@ const (
 	toolTokenLimitBeforeEvictKey = "tool_token_limit_before_evict"
 
 	defaultToolTokenLimitBeforeEvict = 20000
+	toolResultChunkRunes             = 2048
 	toolResultPreviewRunes           = 1024
 	toolResultTokenApproxBytes       = 4
 	toolResultArtifactMimeType       = "application/json"
+	toolResultTextMimeType           = "text/plain"
 )
 
 // summarizationSkipper is implemented by tools that can indicate whether
@@ -893,11 +896,12 @@ func maybeEvictToolResult(
 		return resultBytes
 	}
 	artifactName := toolResultArtifactName(toolCall)
+	storage := formatToolResultForStorage(resultBytes)
 	version, err := codeexecutor.SaveArtifactHelper(
 		ctxIO,
 		artifactName,
-		resultBytes,
-		toolResultArtifactMimeType,
+		storage.data,
+		storage.mimeType,
 	)
 	if err != nil {
 		log.WarnfContext(
@@ -915,7 +919,7 @@ func maybeEvictToolResult(
 		version,
 	)
 	payload := toolResultEvictedPayload{
-		Preview: truncateToolResultPreview(string(resultBytes)),
+		Preview: storage.preview,
 		Ref:     ref,
 	}
 	refBytes, err := json.Marshal(payload)
@@ -956,6 +960,78 @@ func maybeEvictToolResultChoices(
 type toolResultEvictedPayload struct {
 	Preview string `json:"preview"`
 	Ref     string `json:"ref"`
+}
+
+type toolResultStorage struct {
+	data     []byte
+	mimeType string
+	preview  string
+}
+
+func formatToolResultForStorage(resultBytes []byte) toolResultStorage {
+	if len(resultBytes) == 0 {
+		return toolResultStorage{
+			data:     resultBytes,
+			mimeType: toolResultArtifactMimeType,
+			preview:  "",
+		}
+	}
+	var decoded any
+	if err := json.Unmarshal(resultBytes, &decoded); err != nil {
+		text := wrapToolResultText(string(resultBytes))
+		return toolResultStorage{
+			data:     []byte(text),
+			mimeType: toolResultTextMimeType,
+			preview:  truncateToolResultPreview(text),
+		}
+	}
+	switch value := decoded.(type) {
+	case string:
+		text := wrapToolResultText(value)
+		return toolResultStorage{
+			data:     []byte(text),
+			mimeType: toolResultTextMimeType,
+			preview:  truncateToolResultPreview(text),
+		}
+	default:
+		var buf bytes.Buffer
+		if err := json.Indent(&buf, resultBytes, "", "  "); err != nil {
+			text := string(resultBytes)
+			return toolResultStorage{
+				data:     resultBytes,
+				mimeType: toolResultArtifactMimeType,
+				preview:  truncateToolResultPreview(text),
+			}
+		}
+		text := buf.String()
+		return toolResultStorage{
+			data:     []byte(text),
+			mimeType: toolResultArtifactMimeType,
+			preview:  truncateToolResultPreview(text),
+		}
+	}
+}
+
+func wrapToolResultText(text string) string {
+	if toolResultChunkRunes <= 0 || text == "" {
+		return text
+	}
+	runes := []rune(text)
+	if len(runes) <= toolResultChunkRunes {
+		return text
+	}
+	var b strings.Builder
+	for i := 0; i < len(runes); i += toolResultChunkRunes {
+		end := i + toolResultChunkRunes
+		if end > len(runes) {
+			end = len(runes)
+		}
+		b.WriteString(string(runes[i:end]))
+		if end < len(runes) {
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
 }
 
 func toolResultTokenLimit(invocation *agent.Invocation) int {

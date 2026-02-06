@@ -356,6 +356,16 @@ _ = handled
 _ = full
 ```
 
+For large results, the stored artifact is formatted for chunked reads:
+- JSON objects/arrays are pretty-printed.
+- Large string outputs are wrapped with line breaks.
+
+Use `read_file` with `start_line` / `num_lines` to page through the result:
+
+```json
+{"file_name":"artifact://tool_result_echo_call-1.json@0","start_line":1,"num_lines":50}
+```
+
 **Usage example:**
 
 ```go

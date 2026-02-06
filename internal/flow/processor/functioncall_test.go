@@ -184,7 +184,7 @@ func TestExecuteToolCall_EvictLargeToolResult(t *testing.T) {
 	)
 	ctx = agent.NewInvocationContext(ctx, inv)
 
-	large := strings.Repeat("a", toolResultPreviewRunes+10)
+	large := strings.Repeat("a", toolResultChunkRunes+10)
 	tools := map[string]tool.Tool{
 		"echo": &mockCallableTool{
 			declaration: &tool.Declaration{Name: "echo", Description: "echo tool"},
@@ -216,9 +216,8 @@ func TestExecuteToolCall_EvictLargeToolResult(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, handled)
 
-	expectedBytes, err := json.Marshal(large)
-	require.NoError(t, err)
-	assert.Equal(t, string(expectedBytes), content)
+	assert.Contains(t, content, "\n")
+	assert.Equal(t, large, strings.ReplaceAll(content, "\n", ""))
 }
 
 func TestExecuteToolCall_InlineSmallResult(t *testing.T) {
@@ -270,7 +269,7 @@ func TestExecuteToolCall_ToolResultMessagesCallback_EvictsLargeResult(t *testing
 	ctx := context.Background()
 
 	limit := 5
-	large := strings.Repeat("b", toolResultPreviewRunes+10)
+	large := strings.Repeat("b", toolResultChunkRunes+10)
 	callbacks := &tool.Callbacks{}
 	callbacks.RegisterToolResultMessages(func(_ context.Context, in *tool.ToolResultMessagesInput) (any, error) {
 		return model.Message{
@@ -322,7 +321,8 @@ func TestExecuteToolCall_ToolResultMessagesCallback_EvictsLargeResult(t *testing
 	content, _, handled, err := fileref.TryRead(ctx, payload.Ref)
 	require.NoError(t, err)
 	require.True(t, handled)
-	assert.Equal(t, large, content)
+	assert.Contains(t, content, "\n")
+	assert.Equal(t, large, strings.ReplaceAll(content, "\n", ""))
 }
 
 func TestExecuteToolCall_ToolResultMessagesCallback_Nil_NoOverride(t *testing.T) {

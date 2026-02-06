@@ -354,6 +354,16 @@ _ = handled
 _ = full
 ```
 
+对于大结果，制品内容会做便于分段读取的格式化：
+- JSON 对象/数组会被美化（多行格式）。
+- 超长字符串会自动换行。
+
+可用 `read_file` 的 `start_line` / `num_lines` 分页读取：
+
+```json
+{"file_name":"artifact://tool_result_echo_call-1.json@0","start_line":1,"num_lines":50}
+```
+
 **使用示例：**
 
 ```go
