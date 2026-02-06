@@ -852,6 +852,13 @@ func (m *Model) convertTools(tools map[string]tool.Tool) []openai.ChatCompletion
 			log.Errorf("failed to unmarshal tool schema for %s: %v", declaration.Name, err)
 			continue
 		}
+		// Some OpenAI-compatible proxies require object schemas to include
+		// a `properties` key, even when the tool takes no arguments.
+		if typ, ok := parameters["type"].(string); ok && typ == "object" {
+			if props, exists := parameters["properties"]; !exists || props == nil {
+				parameters["properties"] = map[string]any{}
+			}
+		}
 		result = append(result, openai.ChatCompletionToolParam{
 			Function: openai.FunctionDefinitionParam{
 				Name:        declaration.Name,
