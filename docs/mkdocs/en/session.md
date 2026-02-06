@@ -998,7 +998,7 @@ Both situations could lead to duplicate data.
 - `idx_*_session_summaries_unique_active(app_name, user_id, session_id, filter_key, deleted_at)` — unique index but includes deleted_at
 - `idx_*_session_summaries_lookup(app_name, user_id, session_id, deleted_at)` — regular index
 
-**New Index**: `idx_*_session_summaries_unique_active(app_name(191), user_id(191), session_id(191), filter_key(191))` — unique index without deleted_at (prefix indexes are used to avoid Error 1071).
+**New Index**: `idx_*_session_summaries_unique_active(app_name, user_id, session_id)` — unique index without deleted_at (filter_key excluded to avoid index length issues).
 
 **Migration Steps**:
 
@@ -1013,12 +1013,14 @@ SHOW INDEX FROM session_summaries;
 
 -- Step 2: Clean up duplicate data (keep the latest record)
 -- If there are multiple records with deleted_at = NULL, keep the one with the largest id.
+-- Note: filter_key is excluded from the unique constraint, so only (app_name, user_id, session_id)
+-- is considered for deduplication. For records with the same (app_name, user_id, session_id)
+-- but different filter_keys, only one will be kept (the one with the largest id).
 DELETE t1 FROM session_summaries t1
 INNER JOIN session_summaries t2
 WHERE t1.app_name = t2.app_name
   AND t1.user_id = t2.user_id
   AND t1.session_id = t2.session_id
-  AND t1.filter_key = t2.filter_key
   AND t1.deleted_at IS NULL
   AND t2.deleted_at IS NULL
   AND t1.id < t2.id;
@@ -1035,10 +1037,10 @@ DROP INDEX idx_session_summaries_lookup ON session_summaries;
 -- If it's an old unique_active index (includes deleted_at):
 -- DROP INDEX idx_session_summaries_unique_active ON session_summaries;
 
--- Step 5: Create the new unique index (without deleted_at)
+-- Step 5: Create the new unique index (without deleted_at and filter_key)
 -- Note: Index name may have a table prefix, adjust according to your configuration.
 CREATE UNIQUE INDEX idx_session_summaries_unique_active 
-ON session_summaries(app_name(191), user_id(191), session_id(191), filter_key(191));
+ON session_summaries(app_name, user_id, session_id);
 
 -- Step 6: Verify migration results
 SELECT COUNT(*) as duplicate_count FROM (

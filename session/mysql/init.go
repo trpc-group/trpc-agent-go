@@ -102,9 +102,19 @@ const (
 			deleted_at TIMESTAMP(6) NULL DEFAULT NULL
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
 
-	// Index creation SQL (MySQL syntax)
-	// Note: MySQL doesn't support IF NOT EXISTS for indexes until MySQL 8.0.13+
-	// We'll handle duplicate index errors in the creation logic
+	// session_summaries: unique index on (app_name, user_id, session_id).
+	// Note: This index does NOT include deleted_at because MySQL treats NULL != NULL,
+	// which would allow duplicate active records. To ensure uniqueness, we exclude
+	// deleted_at from the unique index. On subsequent writes, deleted_at is reset to
+	// NULL (via ON DUPLICATE KEY UPDATE), effectively "reviving" the record instead
+	// of preserving deleted historical versions.
+	//
+	// Note: filter_key is excluded from the unique index to avoid index length
+	// issues and simplify the constraint. A session can have multiple summaries
+	// with different filter keys, which will be managed at the application layer.
+	sqlCreateSessionSummariesUniqueIndex = `
+		CREATE UNIQUE INDEX {{INDEX_NAME}}
+		ON {{TABLE_NAME}}(app_name, user_id, session_id)`
 
 	// session_states: unique index on (app_name, user_id, session_id, deleted_at)
 	sqlCreateSessionStatesUniqueIndex = `
@@ -160,34 +170,6 @@ const (
 	sqlCreateUserStatesExpiresIndex = `
 		CREATE INDEX {{INDEX_NAME}}
 		ON {{TABLE_NAME}}(expires_at)`
-)
-
-// mysqlVarCharIndexPrefixLen is a safe prefix length for utf8mb4 indexes.
-// InnoDB has a maximum index key length of 3072 bytes. For utf8mb4, each
-// character can take up to 4 bytes. To avoid Error 1071 (Specified key was
-// too long), we use 191 as the prefix length, which is the standard
-// industry practice:
-//   - 4 columns * 191 chars * 4 bytes/char = 3056 bytes < 3072 bytes limit
-//   - Using 192 would be 4 * 192 * 4 = 3072 bytes, which is exactly on the
-//     boundary and may cause issues in some MySQL versions.
-const mysqlVarCharIndexPrefixLen = 191
-
-// session_summaries: unique index on (app_name, user_id, session_id, filter_key).
-// Note: This index does NOT include deleted_at because MySQL treats NULL != NULL,
-// which would allow duplicate active records. To ensure uniqueness, we exclude
-// deleted_at from the unique index. On subsequent writes, deleted_at is reset to
-// NULL (via ON DUPLICATE KEY UPDATE), effectively "reviving" the record instead
-// of preserving deleted historical versions.
-//
-// Note: We use prefix indexes to avoid Error 1071 (max key length is 3072 bytes).
-var sqlCreateSessionSummariesUniqueIndex = fmt.Sprintf(
-	`
-		CREATE UNIQUE INDEX {{INDEX_NAME}}
-		ON {{TABLE_NAME}}(app_name(%d), user_id(%d), session_id(%d), filter_key(%d))`,
-	mysqlVarCharIndexPrefixLen,
-	mysqlVarCharIndexPrefixLen,
-	mysqlVarCharIndexPrefixLen,
-	mysqlVarCharIndexPrefixLen,
 )
 
 // tableDefinition defines a table with its SQL template
@@ -288,8 +270,8 @@ var expectedSchema = map[string]struct {
 			{"deleted_at", "timestamp", true},
 		},
 		indexes: []tableIndex{
-			// Unique index on business key only (no deleted_at) to prevent duplicate active records.
-			{sqldb.TableNameSessionSummaries, sqldb.IndexSuffixUniqueActive, []string{"app_name", "user_id", "session_id", "filter_key"}, true},
+			// Unique index on business key only (no deleted_at, no filter_key) to prevent duplicate active records.
+			{sqldb.TableNameSessionSummaries, sqldb.IndexSuffixUniqueActive, []string{"app_name", "user_id", "session_id"}, true},
 			{sqldb.TableNameSessionSummaries, sqldb.IndexSuffixExpires, []string{"expires_at"}, false},
 		},
 	},
@@ -540,7 +522,7 @@ func (s *Service) verifyIndexes(ctx context.Context, fullTableName string, expec
 		actualColumns, exists := actualIndexes[expectedIndexName]
 		if !exists {
 			// Build CREATE INDEX statement for user reference.
-			columnsStr := buildIndexColumnsStr(expected.table, expected.suffix, expected.columns)
+			columnsStr := strings.Join(expected.columns, ", ")
 			createSQL := buildCreateIndexSQL(expectedIndexName, fullTableName, columnsStr, expected.unique)
 			log.WarnfContext(ctx, "index %s on table %s is missing, please run: %s",
 				expectedIndexName, fullTableName, createSQL)
@@ -549,7 +531,7 @@ func (s *Service) verifyIndexes(ctx context.Context, fullTableName string, expec
 
 		if !stringSlicesEqual(actualColumns, expected.columns) {
 			// Build DROP and CREATE INDEX statements for user reference.
-			columnsStr := buildIndexColumnsStr(expected.table, expected.suffix, expected.columns)
+			columnsStr := strings.Join(expected.columns, ", ")
 			dropSQL := fmt.Sprintf("DROP INDEX %s ON %s;", expectedIndexName, fullTableName)
 			createSQL := buildCreateIndexSQL(expectedIndexName, fullTableName, columnsStr, expected.unique)
 			log.WarnfContext(ctx, "index %s on table %s has wrong columns: got %v, want %v. "+
@@ -583,21 +565,6 @@ func stringSlicesEqual(a, b []string) bool {
 		}
 	}
 	return true
-}
-
-// buildIndexColumnsStr builds a comma-separated column list with appropriate
-// prefix lengths for indexes that require them.
-func buildIndexColumnsStr(table, suffix string, columns []string) string {
-	// session_summaries unique_active index requires prefix lengths to avoid Error 1071.
-	if table == sqldb.TableNameSessionSummaries && suffix == sqldb.IndexSuffixUniqueActive {
-		var prefixed []string
-		for _, col := range columns {
-			prefixed = append(prefixed, fmt.Sprintf("%s(%d)", col, mysqlVarCharIndexPrefixLen))
-		}
-		return strings.Join(prefixed, ", ")
-	}
-	// For all other indexes, use columns as-is.
-	return strings.Join(columns, ", ")
 }
 
 // buildCreateIndexSQL builds a CREATE INDEX SQL statement.

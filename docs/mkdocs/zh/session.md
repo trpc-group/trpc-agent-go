@@ -1000,7 +1000,7 @@ sessionService, err := mysql.NewService(
 - `idx_*_session_summaries_unique_active(app_name, user_id, session_id, filter_key, deleted_at)` — 唯一索引但包含 deleted_at
 - `idx_*_session_summaries_lookup(app_name, user_id, session_id, deleted_at)` — 普通索引
 
-**新版索引**：`idx_*_session_summaries_unique_active(app_name(191), user_id(191), session_id(191), filter_key(191))` — 唯一索引，不包含 deleted_at（使用前缀索引以避免 Error 1071）。
+**新版索引**：`idx_*_session_summaries_unique_active(app_name, user_id, session_id)` — 唯一索引，不包含 deleted_at（排除 filter_key 以避免索引长度问题）。
 
 **迁移步骤**：
 
@@ -1015,12 +1015,14 @@ SHOW INDEX FROM session_summaries;
 
 -- Step 2: 清理重复数据（保留最新记录）
 -- 如果存在多条 deleted_at = NULL 的重复记录，保留 id 最大的那条。
+-- 注意：filter_key 不参与唯一性约束，因此只根据 (app_name, user_id, session_id)
+-- 去重。对于相同 (app_name, user_id, session_id) 但 filter_key 不同的记录，
+-- 只保留 id 最大的那一条。
 DELETE t1 FROM session_summaries t1
 INNER JOIN session_summaries t2
 WHERE t1.app_name = t2.app_name
   AND t1.user_id = t2.user_id
   AND t1.session_id = t2.session_id
-  AND t1.filter_key = t2.filter_key
   AND t1.deleted_at IS NULL
   AND t2.deleted_at IS NULL
   AND t1.id < t2.id;
@@ -1036,10 +1038,10 @@ DROP INDEX idx_session_summaries_lookup ON session_summaries;
 -- 如果是旧的 unique_active 索引（包含 deleted_at）：
 -- DROP INDEX idx_session_summaries_unique_active ON session_summaries;
 
--- Step 5: 创建新的唯一索引（不包含 deleted_at）
+-- Step 5: 创建新的唯一索引（不包含 deleted_at 和 filter_key）
 -- 注意：索引名称可能带有表前缀，请根据实际情况调整。
 CREATE UNIQUE INDEX idx_session_summaries_unique_active 
-ON session_summaries(app_name(191), user_id(191), session_id(191), filter_key(191));
+ON session_summaries(app_name, user_id, session_id);
 
 -- Step 6: 验证迁移结果
 SELECT COUNT(*) as duplicate_count FROM (
