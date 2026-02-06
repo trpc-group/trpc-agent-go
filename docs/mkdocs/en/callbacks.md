@@ -342,6 +342,20 @@ Example payload sent to the model:
 {"preview":"...","ref":"artifact://tool_result_echo_call-1.json@0"}
 ```
 
+To read the full result, extract the `ref` and fetch it with the file tool (supports `artifact://`)
+or use the Go helper:
+
+```go
+var payload struct {
+    Preview string `json:"preview"`
+    Ref     string `json:"ref"`
+}
+_ = json.Unmarshal([]byte(msg.Content), &payload)
+full, _, handled, _ := fileref.TryRead(ctx, payload.Ref)
+_ = handled
+_ = full
+```
+
 **Usage example:**
 
 ```go
