@@ -44,7 +44,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	"trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
-	"trpc.group/trpc-go/trpc-agent-go/memory/pgvector"
+	memorymysql "trpc.group/trpc-go/trpc-agent-go/memory/mysql"
+	memorypgvector "trpc.group/trpc-go/trpc-agent-go/memory/pgvector"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	openaimodel "trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
@@ -73,7 +74,7 @@ var (
 	flagMemoryBackends = flag.String(
 		"memory-backend",
 		"inmemory",
-		"Memory backends (comma-separated): inmemory, pgvector",
+		"Memory backends (comma-separated): inmemory, pgvector, mysql",
 	)
 	flagPGVectorDSN = flag.String(
 		"pgvector-dsn",
@@ -84,6 +85,11 @@ var (
 		"embed-model",
 		"",
 		"Embedding model for pgvector (env EMBED_MODEL_NAME or text-embedding-3-small)",
+	)
+	flagMySQLDSN = flag.String(
+		"mysql-dsn",
+		"",
+		"MySQL DSN for mysql backend (env MYSQL_DSN)",
 	)
 
 	flagSampleID   = flag.String("sample-id", "", "Filter by sample ID")
@@ -103,6 +109,8 @@ var (
 const (
 	pgvectorTableDefault = "memory_eval"
 	pgvectorTableAuto    = "memory_eval_auto"
+	mysqlTableDefault    = "memory_eval_mysql"
+	mysqlTableAuto       = "memory_eval_auto_mysql"
 
 	autoMemoryAsyncWorkers = 3
 	autoMemoryQueueSize    = 200
@@ -442,6 +450,7 @@ func validateFlags() {
 	validBackends := map[string]bool{
 		"inmemory": true,
 		"pgvector": true,
+		"mysql":    true,
 	}
 	for _, b := range parseMemoryBackends(*flagMemoryBackends) {
 		if !validBackends[b] {
@@ -495,6 +504,13 @@ func getPGVectorDSN() string {
 	return os.Getenv("PGVECTOR_DSN")
 }
 
+func getMySQLDSN() string {
+	if *flagMySQLDSN != "" {
+		return *flagMySQLDSN
+	}
+	return os.Getenv("MYSQL_DSN")
+}
+
 func buildMemoryConfig(
 	scenarioType scenarios.ScenarioType,
 	backend string,
@@ -542,6 +558,8 @@ func createMemoryService(
 	switch cfg.backend {
 	case "pgvector":
 		return createPGVectorService(opts)
+	case "mysql":
+		return createMySQLService(opts)
 	default:
 		return createInMemoryService(opts), nil
 	}
@@ -574,20 +592,55 @@ func createPGVectorService(
 			embedModelName,
 		)
 	}
-	svcOpts := []pgvector.ServiceOpt{
-		pgvector.WithPGVectorClientDSN(dsn),
-		pgvector.WithEmbedder(emb),
-		pgvector.WithTableName(tableName),
-		pgvector.WithExtractor(ext),
+	svcOpts := []memorypgvector.ServiceOpt{
+		memorypgvector.WithPGVectorClientDSN(dsn),
+		memorypgvector.WithEmbedder(emb),
+		memorypgvector.WithTableName(tableName),
+		memorypgvector.WithExtractor(ext),
 	}
 	if opts.enableExtractor {
 		svcOpts = append(svcOpts,
-			pgvector.WithAsyncMemoryNum(autoMemoryAsyncWorkers),
-			pgvector.WithMemoryQueueSize(autoMemoryQueueSize),
-			pgvector.WithMemoryJobTimeout(autoMemoryJobTimeout),
+			memorypgvector.WithAsyncMemoryNum(autoMemoryAsyncWorkers),
+			memorypgvector.WithMemoryQueueSize(autoMemoryQueueSize),
+			memorypgvector.WithMemoryJobTimeout(autoMemoryJobTimeout),
 		)
 	}
-	return pgvector.NewService(svcOpts...)
+	return memorypgvector.NewService(svcOpts...)
+}
+
+func createMySQLService(
+	opts memoryServiceOptions,
+) (memory.Service, error) {
+	dsn := getMySQLDSN()
+	if dsn == "" {
+		return nil, fmt.Errorf(
+			"mysql-dsn or MYSQL_DSN is required for mysql backend",
+		)
+	}
+
+	tableName := mysqlTableDefault
+	var ext extractor.MemoryExtractor
+	if opts.enableExtractor {
+		log.Printf("Creating mysql memory service with extractor")
+		tableName = mysqlTableAuto
+		ext = extractor.NewExtractor(opts.extractorModel, extractor.WithPrompt(benchmarkExtractorPrompt))
+	} else {
+		log.Printf("Creating mysql memory service")
+	}
+
+	svcOpts := []memorymysql.ServiceOpt{
+		memorymysql.WithMySQLClientDSN(dsn),
+		memorymysql.WithTableName(tableName),
+		memorymysql.WithExtractor(ext),
+	}
+	if opts.enableExtractor {
+		svcOpts = append(svcOpts,
+			memorymysql.WithAsyncMemoryNum(autoMemoryAsyncWorkers),
+			memorymysql.WithMemoryQueueSize(autoMemoryQueueSize),
+			memorymysql.WithMemoryJobTimeout(autoMemoryJobTimeout),
+		)
+	}
+	return memorymysql.NewService(svcOpts...)
 }
 
 func createInMemoryService(opts memoryServiceOptions) memory.Service {

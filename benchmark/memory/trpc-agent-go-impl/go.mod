@@ -4,18 +4,22 @@ go 1.24.1
 
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../../../
+	trpc.group/trpc-go/trpc-agent-go/memory/mysql => ../../../memory/mysql
 	trpc.group/trpc-go/trpc-agent-go/memory/pgvector => ../../../memory/pgvector
 )
 
 require (
 	trpc.group/trpc-go/trpc-agent-go v1.5.0
+	trpc.group/trpc-go/trpc-agent-go/memory/mysql v1.5.0
 	trpc.group/trpc-go/trpc-agent-go/memory/pgvector v1.5.0
 )
 
 require (
+	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/go-logr/logr v1.4.2 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
+	github.com/go-sql-driver/mysql v1.9.3 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.22.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
@@ -50,5 +54,6 @@ require (
 	google.golang.org/grpc v1.65.0 // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5 // indirect
+	trpc.group/trpc-go/trpc-agent-go/storage/mysql v0.0.0-20251126064502-c8c2594d2519 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/postgres v1.1.1 // indirect
 )
