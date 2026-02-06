@@ -26,12 +26,17 @@ type mockModel struct {
 	name      string
 	responses []*model.Response
 	err       error
+
+	called      int
+	lastRequest *model.Request
 }
 
 func (m *mockModel) GenerateContent(
 	ctx context.Context,
 	request *model.Request,
 ) (<-chan *model.Response, error) {
+	m.called++
+	m.lastRequest = request
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -165,6 +170,151 @@ func TestExtractor_Extract_ResponseError(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "model error")
+	assert.Nil(t, ops)
+}
+
+func TestExtractor_Extract_BeforeModelCallback_ModifiesRequest(t *testing.T) {
+	m := &mockModel{
+		name: "test-model",
+		responses: []*model.Response{{
+			Choices: []model.Choice{{
+				Message: model.Message{},
+			}},
+		}},
+	}
+
+	callbacks := model.NewCallbacks().RegisterBeforeModel(
+		func(_ context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+			args.Request.Messages = append(
+				args.Request.Messages,
+				model.NewUserMessage("sentinel"),
+			)
+			return nil, nil
+		},
+	)
+	e := NewExtractor(m, WithModelCallbacks(callbacks))
+
+	ops, err := e.Extract(context.Background(), []model.Message{
+		model.NewUserMessage("hello"),
+	}, nil)
+
+	require.NoError(t, err)
+	assert.Nil(t, ops)
+	require.NotNil(t, m.lastRequest)
+	require.Greater(t, len(m.lastRequest.Messages), 0)
+	last := m.lastRequest.Messages[len(m.lastRequest.Messages)-1]
+	assert.Equal(t, "sentinel", last.Content)
+}
+
+func TestExtractor_Extract_BeforeModelCallback_ShortCircuit(t *testing.T) {
+	args, _ := json.Marshal(map[string]any{
+		"memory": "User likes coffee.",
+	})
+	customResp := &model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{
+				ToolCalls: []model.ToolCall{makeToolCall(memory.AddToolName, args)},
+			},
+		}},
+	}
+	callbacks := model.NewCallbacks().RegisterBeforeModel(
+		func(_ context.Context, _ *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+			return &model.BeforeModelResult{CustomResponse: customResp}, nil
+		},
+	)
+
+	m := &mockModel{name: "test-model", err: errors.New("should not call")}
+	e := NewExtractor(m, WithModelCallbacks(callbacks))
+
+	ops, err := e.Extract(context.Background(), []model.Message{
+		model.NewUserMessage("hello"),
+	}, nil)
+
+	require.NoError(t, err)
+	require.Len(t, ops, 1)
+	assert.Equal(t, OperationAdd, ops[0].Type)
+	assert.Equal(t, "User likes coffee.", ops[0].Memory)
+	assert.Equal(t, 0, m.called)
+}
+
+func TestExtractor_Extract_BeforeModelCallback_Error(t *testing.T) {
+	callbacks := model.NewCallbacks().RegisterBeforeModel(
+		func(_ context.Context, _ *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+			return nil, errors.New("before failed")
+		},
+	)
+
+	m := &mockModel{name: "test-model"}
+	e := NewExtractor(m, WithModelCallbacks(callbacks))
+
+	ops, err := e.Extract(context.Background(), []model.Message{
+		model.NewUserMessage("hello"),
+	}, nil)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "before model callback failed")
+	assert.Nil(t, ops)
+	assert.Equal(t, 0, m.called)
+}
+
+func TestExtractor_Extract_AfterModelCallback_OverridesError(t *testing.T) {
+	args, _ := json.Marshal(map[string]any{
+		"memory": "User likes tea.",
+	})
+
+	m := &mockModel{
+		name: "test-model",
+		responses: []*model.Response{{
+			Error: &model.ResponseError{Message: "API error"},
+		}},
+	}
+
+	callbacks := model.NewCallbacks().RegisterAfterModel(
+		func(_ context.Context, _ *model.AfterModelArgs) (*model.AfterModelResult, error) {
+			return &model.AfterModelResult{CustomResponse: &model.Response{
+				Choices: []model.Choice{{
+					Message: model.Message{
+						ToolCalls: []model.ToolCall{makeToolCall(memory.AddToolName, args)},
+					},
+				}},
+			}}, nil
+		},
+	)
+	e := NewExtractor(m, WithModelCallbacks(callbacks))
+
+	ops, err := e.Extract(context.Background(), []model.Message{
+		model.NewUserMessage("hello"),
+	}, nil)
+
+	require.NoError(t, err)
+	require.Len(t, ops, 1)
+	assert.Equal(t, OperationAdd, ops[0].Type)
+	assert.Equal(t, "User likes tea.", ops[0].Memory)
+}
+
+func TestExtractor_Extract_AfterModelCallback_Error(t *testing.T) {
+	m := &mockModel{
+		name: "test-model",
+		responses: []*model.Response{{
+			Choices: []model.Choice{{
+				Message: model.Message{},
+			}},
+		}},
+	}
+
+	callbacks := model.NewCallbacks().RegisterAfterModel(
+		func(_ context.Context, _ *model.AfterModelArgs) (*model.AfterModelResult, error) {
+			return nil, errors.New("after failed")
+		},
+	)
+	e := NewExtractor(m, WithModelCallbacks(callbacks))
+
+	ops, err := e.Extract(context.Background(), []model.Message{
+		model.NewUserMessage("hello"),
+	}, nil)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "after model callback failed")
 	assert.Nil(t, ops)
 }
 

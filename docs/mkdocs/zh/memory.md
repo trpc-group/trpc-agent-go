@@ -1324,6 +1324,29 @@ memExtractor := extractor.NewExtractor(
 )
 ```
 
+#### 模型回调（Before/After Model）
+
+提取器也支持通过 `model.Callbacks` 注入 before/after 回调（仅支持 structured），用于埋点、改写请求，或在测试中短路模型调用。
+
+```go
+callbacks := model.NewCallbacks().RegisterBeforeModel(
+    func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+        // You can modify args.Request or return CustomResponse.
+        return nil, nil
+    },
+).RegisterAfterModel(
+    func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+        // You can inspect/override args.Response.
+        return nil, nil
+    },
+)
+
+memExtractor := extractor.NewExtractor(
+    extractorModel,
+    extractor.WithModelCallbacks(callbacks),
+)
+```
+
 #### ExtractionContext
 
 `ExtractionContext` 为检查器提供决策所需的上下文信息：
