@@ -1341,8 +1341,6 @@ Evaluator 的输出包含整体结果与逐轮明细。整体分数通常由逐�
 
 完整示例参见 [examples/evaluation/tooltrajectory](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/tooltrajectory)。
 
-Agent Skills 以工具形式暴露（`skill_load` / `skill_run`），因此也可以复用工具轨迹评估器来评估 Agent 是否按预期使用 Skills。实践中 `skill_run` 的结果通常包含波动字段（例如 `stdout`、`stderr`、`duration_ms`，以及收集到的 `output_files` 内联内容），建议通过按工具覆盖策略忽略这些字段，仅对稳定字段进行回归校验，例如 `skill`、请求的 `output_files`，以及 `exit_code` / `timed_out`。完整可运行示例参见 [examples/evaluation/skill](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/skill)。
-
 #### 最终响应评估器
 
 内置最终响应评估器名称为 `final_response_avg_score`，相应评估准则为 [finalResponse](#finalresponsecriterion)，并在每一轮对比 `finalResponse`。
@@ -2287,6 +2285,108 @@ passHatK, err := evaluation.PassHatK(n, c, k)
 ```
 
 pass@k 与 pass^k 的计算依赖运行之间的独立性与同分布假设，进行重复运行评估时需要确保每次运行均为独立采样并完成必要的状态重置，避免会话记忆、工具缓存或外部依赖复用导致指标被系统性高估。
+
+### Skills 评估
+
+Agent Skills 以工具 `skill_load` 与 `skill_run` 形式暴露，因此也可以复用工具轨迹评估器来评估 Agent 是否按预期使用 Skills。实践中 `skill_run` 的结果通常包含波动字段，例如 `stdout`、`stderr`、`duration_ms`，以及收集到的 `output_files` 内联内容。建议通过按工具覆盖策略忽略这些字段，仅对稳定字段进行回归校验，例如 `skill`、请求的 `output_files`，以及 `exit_code` 与 `timed_out`。
+
+下面给出一个最小示例，展示如何在 EvalSet 中声明预期的工具轨迹，并在 Metric 中忽略 `skill_run` 的波动字段。
+
+EvalSet 中的 `tools` 片段示例如下：
+
+```json
+{
+  "invocationId": "write_ok-1",
+  "userContent": {
+    "role": "user",
+    "content": "Use skills to generate an OK file and confirm when done."
+  },
+  "tools": [
+    {
+      "id": "tool_use_1",
+      "name": "skill_load",
+      "arguments": {
+        "skill": "write-ok"
+      }
+    },
+    {
+      "id": "tool_use_2",
+      "name": "skill_run",
+      "arguments": {
+        "skill": "write-ok",
+        "output_files": [
+          "out/ok.txt"
+        ]
+      },
+      "result": {
+        "exit_code": 0,
+        "timed_out": false
+      }
+    }
+  ]
+}
+```
+
+Metric 的 `toolTrajectory` 配置示例如下：
+
+```json
+[
+  {
+    "metricName": "tool_trajectory_avg_score",
+    "threshold": 1,
+    "criterion": {
+      "toolTrajectory": {
+        "orderSensitive": true,
+        "subsetMatching": true,
+        "toolStrategy": {
+          "skill_load": {
+            "arguments": {
+              "ignoreTree": {
+                "docs": true,
+                "include_all_docs": true
+              },
+              "matchStrategy": "exact"
+            },
+            "result": {
+              "ignore": true
+            }
+          },
+          "skill_run": {
+            "arguments": {
+              "ignoreTree": {
+                "command": true,
+                "cwd": true,
+                "env": true,
+                "timeout": true,
+                "inputs": true,
+                "outputs": true,
+                "save_as_artifacts": true,
+                "omit_inline_content": true,
+                "artifact_prefix": true
+              },
+              "matchStrategy": "exact"
+            },
+            "result": {
+              "ignoreTree": {
+                "stdout": true,
+                "stderr": true,
+                "duration_ms": true,
+                "warnings": true,
+                "primary_output": true,
+                "output_files": true,
+                "artifact_files": true
+              },
+              "matchStrategy": "exact"
+            }
+          }
+        }
+      }
+    }
+  }
+]
+```
+
+完整示例参见 [examples/evaluation/skill](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/skill)。
 
 ## 最佳实践
 
