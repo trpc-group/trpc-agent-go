@@ -2380,6 +2380,108 @@ passHatK, err := evaluation.PassHatK(n, c, k)
 
 The computation of pass@k and pass^k relies on independence and identical distribution across runs. When doing repeated runs, ensure each run is independently sampled with necessary state reset, and avoid reusing session memory, tool caches, or external dependencies that would systematically inflate the metrics.
 
+### Skills Evaluation
+
+Agent Skills are exposed as built-in tools: `skill_load` and `skill_run`, so you can evaluate whether the agent uses Skills correctly with the same tool trajectory evaluator. In practice, `skill_run` results contain volatile fields such as `stdout`, `stderr`, `duration_ms`, and inline `output_files` content. Prefer configuring a per-tool strategy to ignore these keys and only assert stable fields such as `skill`, requested `output_files`, and `exit_code` and `timed_out`.
+
+A minimal example is shown below.
+
+EvalSet `tools` snippet:
+
+```json
+{
+  "invocationId": "write_ok-1",
+  "userContent": {
+    "role": "user",
+    "content": "Use skills to generate an OK file and confirm when done."
+  },
+  "tools": [
+    {
+      "id": "tool_use_1",
+      "name": "skill_load",
+      "arguments": {
+        "skill": "write-ok"
+      }
+    },
+    {
+      "id": "tool_use_2",
+      "name": "skill_run",
+      "arguments": {
+        "skill": "write-ok",
+        "output_files": [
+          "out/ok.txt"
+        ]
+      },
+      "result": {
+        "exit_code": 0,
+        "timed_out": false
+      }
+    }
+  ]
+}
+```
+
+Metric `toolTrajectory` snippet:
+
+```json
+[
+  {
+    "metricName": "tool_trajectory_avg_score",
+    "threshold": 1,
+    "criterion": {
+      "toolTrajectory": {
+        "orderSensitive": true,
+        "subsetMatching": true,
+        "toolStrategy": {
+          "skill_load": {
+            "arguments": {
+              "ignoreTree": {
+                "docs": true,
+                "include_all_docs": true
+              },
+              "matchStrategy": "exact"
+            },
+            "result": {
+              "ignore": true
+            }
+          },
+          "skill_run": {
+            "arguments": {
+              "ignoreTree": {
+                "command": true,
+                "cwd": true,
+                "env": true,
+                "timeout": true,
+                "inputs": true,
+                "outputs": true,
+                "save_as_artifacts": true,
+                "omit_inline_content": true,
+                "artifact_prefix": true
+              },
+              "matchStrategy": "exact"
+            },
+            "result": {
+              "ignoreTree": {
+                "stdout": true,
+                "stderr": true,
+                "duration_ms": true,
+                "warnings": true,
+                "primary_output": true,
+                "output_files": true,
+                "artifact_files": true
+              },
+              "matchStrategy": "exact"
+            }
+          }
+        }
+      }
+    }
+  }
+]
+```
+
+See [examples/evaluation/skill](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/skill) for a runnable example.
+
 ## Best Practices
 
 Integrating evaluation into engineering workflows often delivers more value than expected. It is not about producing a polished report; it is about turning key Agent behaviors into sustainable regression signals.
