@@ -15,12 +15,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/artifact"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
@@ -48,6 +52,11 @@ const (
 // funcRespCompletionTimeout is the default wait duration for ensuring a
 // tool.response event has been processed by the session persistence layer.
 const funcRespCompletionTimeout = 5 * time.Second
+
+const (
+	maxToolResultBytes         = 32 * 1024
+	toolResultArtifactMimeType = "application/json"
+)
 
 // summarizationSkipper is implemented by tools that can indicate whether
 // the flow should skip a post-tool summarization step. This allows tools
@@ -818,6 +827,8 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 			fmt.Errorf("%s: %w", ErrorMarshalResult, err)
 	}
 
+	resultBytes = maybeEvictToolResult(ctx, invocation, toolCall, resultBytes)
+
 	defaultMsg := model.Message{
 		Role:    model.RoleTool,
 		Content: string(resultBytes),
@@ -847,6 +858,7 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 			choices = customChoices
 		}
 	}
+	choices = maybeEvictToolResultChoices(ctx, invocation, toolCall, choices)
 
 	log.DebugfContext(
 		ctx,
@@ -856,6 +868,132 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 	)
 
 	return ctx, choices, modifiedArgs, true, nil
+}
+
+func maybeEvictToolResult(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	toolCall model.ToolCall,
+	resultBytes []byte,
+) []byte {
+	if len(resultBytes) <= maxToolResultBytes {
+		return resultBytes
+	}
+	ctxIO, ok := toolResultArtifactContext(ctx, invocation)
+	if !ok {
+		return resultBytes
+	}
+	artifactName := toolResultArtifactName(toolCall)
+	version, err := codeexecutor.SaveArtifactHelper(
+		ctxIO,
+		artifactName,
+		resultBytes,
+		toolResultArtifactMimeType,
+	)
+	if err != nil {
+		log.WarnfContext(
+			ctx,
+			"Failed to evict tool result for %s: %v",
+			toolCall.Function.Name,
+			err,
+		)
+		return resultBytes
+	}
+	ref := fmt.Sprintf(
+		"%s%s@%d",
+		fileref.ArtifactPrefix,
+		artifactName,
+		version,
+	)
+	refBytes, err := json.Marshal(ref)
+	if err != nil {
+		log.WarnfContext(
+			ctx,
+			"Failed to marshal tool result ref for %s: %v",
+			toolCall.Function.Name,
+			err,
+		)
+		return resultBytes
+	}
+	return refBytes
+}
+
+func maybeEvictToolResultChoices(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	toolCall model.ToolCall,
+	choices []model.Choice,
+) []model.Choice {
+	if len(choices) == 0 {
+		return choices
+	}
+	for i := range choices {
+		if choices[i].Message.Role != model.RoleTool ||
+			choices[i].Message.Content == "" {
+			continue
+		}
+		content := []byte(choices[i].Message.Content)
+		choices[i].Message.Content = string(
+			maybeEvictToolResult(ctx, invocation, toolCall, content),
+		)
+	}
+	return choices
+}
+
+func toolResultArtifactContext(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (context.Context, bool) {
+	if invocation == nil || invocation.ArtifactService == nil ||
+		invocation.Session == nil {
+		return ctx, false
+	}
+	if invocation.Session.AppName == "" || invocation.Session.UserID == "" ||
+		invocation.Session.ID == "" {
+		return ctx, false
+	}
+	ctx = codeexecutor.WithArtifactService(ctx, invocation.ArtifactService)
+	ctx = codeexecutor.WithArtifactSession(ctx, artifact.SessionInfo{
+		AppName:   invocation.Session.AppName,
+		UserID:    invocation.Session.UserID,
+		SessionID: invocation.Session.ID,
+	})
+	return ctx, true
+}
+
+func toolResultArtifactName(toolCall model.ToolCall) string {
+	parts := []string{"tool_result"}
+	if name := sanitizeArtifactToken(toolCall.Function.Name); name != "" {
+		parts = append(parts, name)
+	}
+	if token := sanitizeArtifactToken(toolCall.ID); token != "" {
+		parts = append(parts, token)
+	} else {
+		parts = append(parts, sanitizeArtifactToken(uuid.NewString()))
+	}
+	return strings.Join(parts, "_") + ".json"
+}
+
+func sanitizeArtifactToken(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return ""
+	}
+	var b strings.Builder
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '-' || r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	return strings.Trim(b.String(), "_")
 }
 
 // applyToolResultMessagesCallback invokes the optional ToolResultMessages callback and
