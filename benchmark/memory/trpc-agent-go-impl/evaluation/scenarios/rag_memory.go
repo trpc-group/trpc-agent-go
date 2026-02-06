@@ -15,11 +15,24 @@ import (
 	"strings"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/benchmark/memory/trpc-agent-go-impl/evaluation/dataset"
 	"trpc.group/trpc-go/trpc-agent-go/benchmark/memory/trpc-agent-go-impl/evaluation/metrics"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
+
+const (
+	ragAppName = "memory-eval-rag"
+
+	ragMaxTokens = 500
+)
+
+var ragAnswerInstruction = "Answer the question based ONLY on the retrieved memories. " +
+	"If the answer cannot be found in the memories, say \"The information is not available.\". " +
+	"Be concise and direct. Output ONLY the answer."
 
 // RAGMemoryEvaluator evaluates using RAG with memory service.
 type RAGMemoryEvaluator struct {
@@ -65,13 +78,22 @@ func (e *RAGMemoryEvaluator) Evaluate(
 	if err := e.populateMemories(ctx, sample); err != nil {
 		return nil, fmt.Errorf("populate memories: %w", err)
 	}
+
+	ag := newRAGAgent(e.model)
+	r := runner.NewRunner(
+		ragAppName,
+		ag,
+		runner.WithSessionService(newSessionService(e.config)),
+	)
+	defer r.Close()
+
 	result := &SampleResult{
 		SampleID:  sample.SampleID,
 		QAResults: make([]*QAResult, 0, len(sample.QA)),
 	}
 	catAgg := metrics.NewCategoryAggregator()
 	for _, qa := range sample.QA {
-		qaResult, err := e.evaluateQA(ctx, sample, qa)
+		qaResult, err := e.evaluateQA(ctx, r, sample, qa)
 		if err != nil {
 			return nil, fmt.Errorf("evaluate QA %s: %w", qa.QuestionID, err)
 		}
@@ -84,12 +106,22 @@ func (e *RAGMemoryEvaluator) Evaluate(
 	return result, nil
 }
 
+func newRAGAgent(m model.Model) agent.Agent {
+	genConfig := model.GenerationConfig{Stream: false, MaxTokens: intPtr(ragMaxTokens)}
+	return llmagent.New(
+		defaultAgentName,
+		llmagent.WithModel(m),
+		llmagent.WithGenerationConfig(genConfig),
+		llmagent.WithInstruction(ragAnswerInstruction),
+	)
+}
+
 func (e *RAGMemoryEvaluator) populateMemories(
 	ctx context.Context,
 	sample *dataset.LoCoMoSample,
 ) error {
 	userKey := memory.UserKey{
-		AppName: "memory-eval",
+		AppName: ragAppName,
 		UserID:  sample.SampleID,
 	}
 	// Clear existing memories.
@@ -147,11 +179,17 @@ func (e *RAGMemoryEvaluator) populateFullDialog(
 	sample *dataset.LoCoMoSample,
 ) error {
 	for _, sess := range sample.Conversation {
-		// Store each session as a memory.
-		var content string
+		var b strings.Builder
 		for _, turn := range sess.Turns {
-			content += fmt.Sprintf("%s: %s\n", turn.Speaker, turn.Text)
+			if turn.Text == "" {
+				continue
+			}
+			b.WriteString(turn.Speaker)
+			b.WriteString(": ")
+			b.WriteString(turn.Text)
+			b.WriteString("\n")
 		}
+		content := b.String()
 		if content == "" {
 			continue
 		}
@@ -173,16 +211,22 @@ func (e *RAGMemoryEvaluator) populateFallback(
 ) error {
 	// Fallback mode uses observation, summary, or full dialog content.
 	for _, sess := range sample.Conversation {
-		// Use observation if available, otherwise use summary.
 		content := sess.Observation
 		if content == "" {
 			content = sess.Summary
 		}
 		if content == "" {
-			// Build content from turns.
+			var b strings.Builder
 			for _, turn := range sess.Turns {
-				content += fmt.Sprintf("%s: %s\n", turn.Speaker, turn.Text)
+				if turn.Text == "" {
+					continue
+				}
+				b.WriteString(turn.Speaker)
+				b.WriteString(": ")
+				b.WriteString(turn.Text)
+				b.WriteString("\n")
 			}
+			content = b.String()
 		}
 		if content == "" {
 			continue
@@ -197,38 +241,49 @@ func (e *RAGMemoryEvaluator) populateFallback(
 
 func (e *RAGMemoryEvaluator) evaluateQA(
 	ctx context.Context,
+	r runner.Runner,
 	sample *dataset.LoCoMoSample,
 	qa dataset.QAItem,
 ) (*QAResult, error) {
 	start := time.Now()
-	// Retrieve relevant memories.
-	userKey := memory.UserKey{
-		AppName: "memory-eval",
-		UserID:  sample.SampleID,
-	}
+	userKey := memory.UserKey{AppName: ragAppName, UserID: sample.SampleID}
+
 	memories, err := e.memoryService.SearchMemories(ctx, userKey, qa.Question)
 	if err != nil {
 		return nil, fmt.Errorf("search memories: %w", err)
 	}
-	// Build context from retrieved memories.
+
 	ragContext := e.buildRAGContext(memories, e.config.TopK)
 	prompt := buildRAGQAPrompt(ragContext, qa.Question)
-	predicted, tokensUsed, err := e.generateAnswer(ctx, prompt)
+
+	sessionID := fmt.Sprintf("qa-%s", qa.QuestionID)
+	ch, err := r.Run(
+		ctx,
+		sample.SampleID,
+		sessionID,
+		model.NewUserMessage(prompt),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("runner run: %w", err)
+	}
+
+	predicted, err := collectFinalText(ch)
 	if err != nil {
 		return nil, err
 	}
-	// Calculate metrics.
+
 	m := metrics.QAMetrics{
 		F1:   metrics.CalculateF1(predicted, qa.Answer),
 		BLEU: metrics.CalculateBLEU(predicted, qa.Answer),
 	}
-	// LLM judge if enabled.
 	if e.llmJudge != nil {
 		judgeResult, err := e.llmJudge.Evaluate(ctx, qa.Question, qa.Answer, predicted)
 		if err == nil && judgeResult.Correct {
 			m.LLMScore = judgeResult.Confidence
 		}
 	}
+
+	tokensUsed := e.tokenCounter.Count(prompt) + e.tokenCounter.Count(predicted)
 	return &QAResult{
 		QuestionID: qa.QuestionID,
 		Question:   qa.Question,
@@ -241,10 +296,7 @@ func (e *RAGMemoryEvaluator) evaluateQA(
 	}, nil
 }
 
-func (e *RAGMemoryEvaluator) buildRAGContext(
-	memories []*memory.Entry,
-	topK int,
-) string {
+func (e *RAGMemoryEvaluator) buildRAGContext(memories []*memory.Entry, topK int) string {
 	if len(memories) == 0 {
 		return "No relevant memories found."
 	}
@@ -258,52 +310,17 @@ func (e *RAGMemoryEvaluator) buildRAGContext(
 	return b.String()
 }
 
-func (e *RAGMemoryEvaluator) generateAnswer(
-	ctx context.Context,
-	prompt string,
-) (string, int, error) {
-	req := &model.Request{
-		Messages: []model.Message{
-			{Role: model.RoleUser, Content: prompt},
-		},
-		GenerationConfig: model.GenerationConfig{
-			Stream:    false,
-			MaxTokens: intPtr(500),
-		},
-	}
-	respCh, err := e.model.GenerateContent(ctx, req)
-	if err != nil {
-		return "", 0, fmt.Errorf("generate content: %w", err)
-	}
-	var answerBuilder strings.Builder
-	var totalTokens int
-	for resp := range respCh {
-		if resp.Error != nil {
-			return "", 0, fmt.Errorf("response error: %s", resp.Error.Message)
-		}
-		if len(resp.Choices) > 0 {
-			answerBuilder.WriteString(resp.Choices[0].Message.Content)
-		}
-		if resp.Usage != nil {
-			totalTokens = resp.Usage.TotalTokens
-		}
-	}
-	return answerBuilder.String(), totalTokens, nil
-}
-
 func buildRAGQAPrompt(context, question string) string {
-	return fmt.Sprintf(`Based on the following retrieved memories, answer the question.
-
-## Retrieved Memories
-%s
-
-## Question
-%s
-
-## Instructions
-- Answer the question based ONLY on the information in the retrieved memories.
-- If the answer cannot be found in the memories, say "The information is not available."
-- Be concise and direct in your answer.
-
-Answer:`, context, question)
+	var b strings.Builder
+	b.WriteString("Based on the following retrieved memories, answer the question.\n\n")
+	b.WriteString("## Retrieved Memories\n")
+	b.WriteString(context)
+	b.WriteString("\n\n## Question\n")
+	b.WriteString(question)
+	b.WriteString("\n\n## Instructions\n")
+	b.WriteString("- Answer the question based ONLY on the information in the retrieved memories.\n")
+	b.WriteString("- If the answer cannot be found in the memories, say \"The information is not available.\".\n")
+	b.WriteString("- Be concise and direct in your answer.\n\n")
+	b.WriteString("Answer:")
+	return b.String()
 }

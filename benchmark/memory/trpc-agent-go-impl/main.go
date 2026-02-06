@@ -92,10 +92,11 @@ var (
 		"MySQL DSN for mysql backend (env MYSQL_DSN)",
 	)
 
-	flagSampleID   = flag.String("sample-id", "", "Filter by sample ID")
-	flagCategory   = flag.String("category", "", "Filter by QA category")
-	flagMaxTasks   = flag.Int("max-tasks", 0, "Maximum tasks (0=all)")
-	flagMaxContext = flag.Int("max-context", 128000, "Maximum context length")
+	flagSampleID          = flag.String("sample-id", "", "Filter by sample ID")
+	flagCategory          = flag.String("category", "", "Filter by QA category")
+	flagMaxTasks          = flag.Int("max-tasks", 0, "Maximum tasks (0=all)")
+	flagMaxContext        = flag.Int("max-context", 128000, "Maximum context length")
+	flagSessionEventLimit = flag.Int("session-event-limit", 1000, "Max events kept in each session (0=unlimited)")
 
 	flagLLMJudge = flag.Bool("llm-judge", false, "Enable LLM-as-Judge evaluation")
 	flagVerbose  = flag.Bool("verbose", false, "Verbose output")
@@ -259,6 +260,7 @@ func main() {
 		TopK:              *flagTopK,
 		EnableLLMJudge:    *flagLLMJudge,
 		Verbose:           *flagVerbose,
+		SessionEventLimit: *flagSessionEventLimit,
 		DebugDumpMemories: *flagDebugDumpMemories,
 		DebugMemLimit:     *flagDebugMemLimit,
 		DebugQALimit:      *flagDebugQALimit,
@@ -464,6 +466,9 @@ func validateFlags() {
 
 	if *flagMaxContext <= 0 {
 		log.Fatalf("Invalid max-context: %d", *flagMaxContext)
+	}
+	if *flagSessionEventLimit < 0 {
+		log.Fatalf("Invalid session-event-limit: %d", *flagSessionEventLimit)
 	}
 }
 

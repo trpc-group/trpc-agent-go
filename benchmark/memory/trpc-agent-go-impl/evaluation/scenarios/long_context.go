@@ -13,12 +13,14 @@ package scenarios
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/benchmark/memory/trpc-agent-go-impl/evaluation/dataset"
 	"trpc.group/trpc-go/trpc-agent-go/benchmark/memory/trpc-agent-go-impl/evaluation/metrics"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
 // ScenarioType represents the evaluation scenario type.
@@ -45,12 +47,13 @@ const (
 
 // Config holds scenario evaluation configuration.
 type Config struct {
-	Scenario       ScenarioType
-	RAGMode        RAGMode
-	MaxContext     int
-	TopK           int
-	EnableLLMJudge bool
-	Verbose        bool
+	Scenario          ScenarioType
+	RAGMode           RAGMode
+	MaxContext        int
+	TopK              int
+	EnableLLMJudge    bool
+	Verbose           bool
+	SessionEventLimit int
 
 	// Debug options (primarily for benchmark diagnosis).
 	DebugDumpMemories bool
@@ -67,6 +70,7 @@ func DefaultConfig() Config {
 		TopK:              5,
 		EnableLLMJudge:    false,
 		Verbose:           false,
+		SessionEventLimit: 1000,
 		DebugDumpMemories: false,
 		DebugMemLimit:     0,
 		DebugQALimit:      0,
@@ -102,7 +106,19 @@ type Evaluator interface {
 	Name() string
 }
 
+const (
+	longContextAppName = "memory-eval-long-context"
+
+	longContextMaxTokens = 500
+)
+
+var longContextInstruction = "Answer the question based ONLY on the conversation history. " +
+	"If the answer cannot be found in the conversation, say \"The information is not available in the conversation.\". " +
+	"Be concise and direct. Output ONLY the answer."
+
 // LongContextEvaluator evaluates using full conversation context.
+// The full conversation is persisted into session via agent.WithMessages(...).
+// Each QA is evaluated in an isolated session to avoid cross-QA contamination.
 type LongContextEvaluator struct {
 	model        model.Model
 	evalModel    model.Model
@@ -130,56 +146,98 @@ func (e *LongContextEvaluator) Name() string {
 	return "long_context"
 }
 
-// Evaluate runs evaluation on a sample.
+// Evaluate runs evaluation on a sample using runner -> agent -> model.
 func (e *LongContextEvaluator) Evaluate(
 	ctx context.Context,
 	sample *dataset.LoCoMoSample,
 ) (*SampleResult, error) {
 	startTime := time.Now()
-	// Build full conversation context.
-	fullConv := sample.BuildFullConversation()
+	seed := fullConversationMessages(sample)
+	seedTokens := estimateTokens(e.tokenCounter, seed)
+
+	ag := newLongContextAgent(e.model)
+	r := runner.NewRunner(
+		longContextAppName,
+		ag,
+		runner.WithSessionService(newSessionService(e.config)),
+	)
+	defer r.Close()
+
 	result := &SampleResult{
 		SampleID:  sample.SampleID,
 		QAResults: make([]*QAResult, 0, len(sample.QA)),
 	}
 	catAgg := metrics.NewCategoryAggregator()
+
 	for _, qa := range sample.QA {
-		qaResult, err := e.evaluateQA(ctx, fullConv, qa)
+		qaResult, err := e.evaluateQA(ctx, r, sample.SampleID, seed, seedTokens, qa)
 		if err != nil {
 			return nil, fmt.Errorf("evaluate QA %s: %w", qa.QuestionID, err)
 		}
 		result.QAResults = append(result.QAResults, qaResult)
 		catAgg.Add(qa.Category, qaResult.Metrics)
 	}
+
 	result.ByCategory = catAgg.GetCategoryMetrics()
 	result.Overall = catAgg.GetOverall()
 	result.TotalTimeMs = time.Since(startTime).Milliseconds()
 	return result, nil
 }
 
+func newLongContextAgent(m model.Model) agent.Agent {
+	genConfig := model.GenerationConfig{Stream: false, MaxTokens: intPtr(longContextMaxTokens)}
+	return llmagent.New(
+		defaultAgentName,
+		llmagent.WithModel(m),
+		llmagent.WithGenerationConfig(genConfig),
+	)
+}
+
 func (e *LongContextEvaluator) evaluateQA(
 	ctx context.Context,
-	context string,
+	r runner.Runner,
+	userID string,
+	seed []model.Message,
+	seedTokens int,
 	qa dataset.QAItem,
 ) (*QAResult, error) {
 	start := time.Now()
-	prompt := buildQAPrompt(context, qa.Question)
-	predicted, tokensUsed, err := e.generateAnswer(ctx, prompt)
+	sessionID := fmt.Sprintf("qa-%s", qa.QuestionID)
+	msg := model.NewUserMessage(qa.Question)
+
+	ch, err := r.Run(
+		ctx,
+		userID,
+		sessionID,
+		msg,
+		agent.WithMessages(seed),
+		agent.WithInstruction(longContextInstruction),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("runner run: %w", err)
+	}
+
+	predicted, err := collectFinalText(ch)
 	if err != nil {
 		return nil, err
 	}
-	// Calculate metrics.
+
 	m := metrics.QAMetrics{
 		F1:   metrics.CalculateF1(predicted, qa.Answer),
 		BLEU: metrics.CalculateBLEU(predicted, qa.Answer),
 	}
-	// LLM judge if enabled.
 	if e.llmJudge != nil {
 		judgeResult, err := e.llmJudge.Evaluate(ctx, qa.Question, qa.Answer, predicted)
-		if err == nil && judgeResult.Correct {
-			m.LLMScore = judgeResult.Confidence
+		if err == nil {
+			if judgeResult.Correct {
+				m.LLMScore = judgeResult.Confidence
+			} else {
+				m.LLMScore = 0
+			}
 		}
 	}
+
+	tokensUsed := seedTokens + e.tokenCounter.Count(qa.Question) + e.tokenCounter.Count(predicted)
 	return &QAResult{
 		QuestionID: qa.QuestionID,
 		Question:   qa.Question,
@@ -192,54 +250,31 @@ func (e *LongContextEvaluator) evaluateQA(
 	}, nil
 }
 
-func (e *LongContextEvaluator) generateAnswer(
-	ctx context.Context,
-	prompt string,
-) (string, int, error) {
-	req := &model.Request{
-		Messages: []model.Message{
-			{Role: model.RoleUser, Content: prompt},
-		},
-		GenerationConfig: model.GenerationConfig{
-			Stream:    false,
-			MaxTokens: intPtr(500),
-		},
+func fullConversationMessages(sample *dataset.LoCoMoSample) []model.Message {
+	if sample == nil {
+		return nil
 	}
-	respCh, err := e.model.GenerateContent(ctx, req)
-	if err != nil {
-		return "", 0, fmt.Errorf("generate content: %w", err)
+
+	msgs := make([]model.Message, 0, 64)
+	for _, sess := range sample.Conversation {
+		msgs = append(msgs, sessionMessages(sample, sess)...)
 	}
-	var answerBuilder strings.Builder
-	var totalTokens int
-	for resp := range respCh {
-		if resp.Error != nil {
-			return "", 0, fmt.Errorf("response error: %s", resp.Error.Message)
-		}
-		if len(resp.Choices) > 0 {
-			answerBuilder.WriteString(resp.Choices[0].Message.Content)
-		}
-		if resp.Usage != nil {
-			totalTokens = resp.Usage.TotalTokens
-		}
-	}
-	return answerBuilder.String(), totalTokens, nil
+	return msgs
 }
 
-func buildQAPrompt(context, question string) string {
-	return fmt.Sprintf(`Based on the following conversation history, answer the question.
+func estimateTokens(counter *metrics.TokenCounter, msgs []model.Message) int {
+	if counter == nil {
+		return 0
+	}
 
-## Conversation History
-%s
-
-## Question
-%s
-
-## Instructions
-- Answer the question based ONLY on the information in the conversation history.
-- If the answer cannot be found in the conversation, say "The information is not available in the conversation."
-- Be concise and direct in your answer.
-
-Answer:`, context, question)
+	total := 0
+	for _, m := range msgs {
+		if m.Content == "" {
+			continue
+		}
+		total += counter.Count(m.Content)
+	}
+	return total
 }
 
 func intPtr(i int) *int {
