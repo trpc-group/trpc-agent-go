@@ -757,7 +757,9 @@ Criterion 用于描述评估准则，不同评估器只会读取自己关心的�
 |-------------------------|--------------------------------------|
 | TextCriterion           | 文本字符串                             |
 | JSONCriterion           | JSON 对象                             |
+| RougeCriterion          | ROUGE 文本评分                         |
 | ToolTrajectoryCriterion | 工具调用轨迹                           |
+| FinalResponseCriterion  | 最终响应内容                           |
 | LLMCriterion            | 基于 LLM 评估模型的评估                 |
 | Criterion               | 多种准则的聚合                         |
 
@@ -859,25 +861,113 @@ jsonCriterion := cjson.New(
 	cjson.WithCompare(func(actual, expected any) (bool, error) {
 		actualObj, ok := actual.(map[string]any)
 		if !ok {
-			return false, fmt.Errorf("actual is not an object")
-		}
-		expectedObj, ok := expected.(map[string]any)
-		if !ok {
-			return false, fmt.Errorf("expected is not an object")
-		}
-		if _, ok := actualObj["common"]; !ok {
-			return false, fmt.Errorf("actual missing key common")
-		}
-		if _, ok := expectedObj["common"]; !ok {
-			return false, fmt.Errorf("expected missing key common")
-		}
-		return true, nil
+		return false, fmt.Errorf("actual is not an object")
+	}
+	expectedObj, ok := expected.(map[string]any)
+	if !ok {
+		return false, fmt.Errorf("expected is not an object")
+	}
+	if _, ok := actualObj["common"]; !ok {
+		return false, fmt.Errorf("actual missing key common")
+	}
+	if _, ok := expectedObj["common"]; !ok {
+		return false, fmt.Errorf("expected missing key common")
+	}
+	return true, nil
+	}),
+)
+```
+	
+##### RougeCriterion
+
+RougeCriterion 用于基于 ROUGE 对两个字符串进行评分，并在分数满足阈值要求时判定为匹配。
+
+完整示例参见 [examples/evaluation/rouge](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/rouge)。
+
+```go
+import crouge "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/rouge"
+
+// RougeCriterion 表示 ROUGE 评分与阈值判定准则
+type RougeCriterion struct {
+	Ignore         bool         // Ignore 表示跳过对比
+	RougeType      string       // RougeType 表示 ROUGE 类型
+	Measure        RougeMeasure // Measure 表示主要评分指标
+	Threshold      Score        // Threshold 表示最低分数要求
+	UseStemmer     bool         // UseStemmer 表示是否启用内置 tokenizer 的 Porter stemming
+	SplitSummaries bool         // SplitSummaries 表示是否在 rougeLsum 下按句子切分摘要
+	Tokenizer      Tokenizer    // Tokenizer 表示自定义 tokenizer
+}
+
+// RougeMeasure 表示主要评分指标类型
+type RougeMeasure string
+
+const (
+	RougeMeasureF1        RougeMeasure = "f1"
+	RougeMeasurePrecision RougeMeasure = "precision"
+	RougeMeasureRecall    RougeMeasure = "recall"
+)
+
+// Score 表示 ROUGE 的 precision、recall 与 f1
+type Score struct {
+	Precision float64
+	Recall    float64
+	F1        float64
+}
+```
+
+RougeType 支持 `rougeN`、`rougeL`、`rougeLsum`。其中 N 是正整数，例如 `rouge1`、`rouge2`、`rouge3`、`rougeL`、`rougeLsum`。
+
+Measure 支持 `f1`、`precision`、`recall`，未设置时默认值为 `f1`。
+
+Threshold 用于设置最低分数要求。precision、recall 与 f1 都参与阈值判定。未设置的字段默认值为 0。ROUGE 分数取值范围为 `[0, 1]`。
+
+UseStemmer 会对内置 tokenizer 启用 Porter stemming。配置 Tokenizer 后 UseStemmer 会被忽略。
+
+SplitSummaries 仅对 `rougeLsum` 生效，用于在文本没有换行分句时按句子切分摘要。
+
+Tokenizer 用于注入自定义 tokenizer。
+
+以下代码示例片段，通过配置 FinalResponseCriterion 的 `rouge` 子准则，以 rougeLsum 与阈值的方式对比最终响应。
+
+```go
+import (
+	cfinalresponse "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/finalresponse"
+	crouge "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/rouge"
+)
+
+finalResponseCriterion := cfinalresponse.New(
+	cfinalresponse.WithRougeCriterion(&crouge.RougeCriterion{
+		RougeType:      "rougeLsum",
+		Measure:        crouge.RougeMeasureF1,
+		Threshold:      crouge.Score{Precision: 0.3, Recall: 0.6, F1: 0.4},
+		UseStemmer:     true,
+		SplitSummaries: true,
 	}),
 )
 ```
 
-##### ToolTrajectoryCriterion
+配置示例片段如下：
 
+```json
+{
+  "finalResponse": {
+    "rouge": {
+      "rougeType": "rougeLsum",
+      "measure": "f1",
+      "threshold": {
+        "precision": 0.3,
+        "recall": 0.6,
+        "f1": 0.4
+      },
+      "useStemmer": true,
+      "splitSummaries": true
+    }
+  }
+}
+```
+
+##### ToolTrajectoryCriterion
+	
 ToolTrajectoryCriterion 用于对比工具轨迹，按轮处理 Invocation，并在每一轮对比工具调用列表，结构定义如下。
 
 ```go
@@ -1015,12 +1105,13 @@ toolTrajectoryCriterion := ctooltrajectory.New(
 
 ##### FinalResponseCriterion
 
-FinalResponseCriterion 用于对比每轮 Invocation 的最终响应，支持按文本对比，也支持把内容解析为 JSON 后按结构对比，结构定义如下。
+FinalResponseCriterion 用于对比每轮 Invocation 的最终响应，支持按文本对比、把内容解析为 JSON 后按结构对比，也支持基于 ROUGE 评分对比，结构定义如下。
 
 ```go
 import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	cjson "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
+	crouge "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/rouge"
 	ctext "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
 )
 
@@ -1028,14 +1119,17 @@ import (
 type FinalResponseCriterion struct {
 	Text    *ctext.TextCriterion                                      // Text 用于对比最终响应文本
 	JSON    *cjson.JSONCriterion                                      // JSON 用于对比最终响应 JSON
+	Rouge   *crouge.RougeCriterion                                    // Rouge 用于基于 ROUGE 评分对比最终响应文本
 	Compare func(actual, expected *evalset.Invocation) (bool, error) // Compare 自定义比较逻辑
 }
 ```
 
 使用该准则时，需要在评估集预期侧为对应轮次填写 `finalResponse`。
 
-`text` 与 `json` 可以同时配置，同时配置时两者都需要匹配。配置 `json` 时要求内容可被解析为 JSON。
+`text`、`json` 与 `rouge` 可以同时配置，同时配置时三者都需要匹配。配置 `json` 时要求内容可被解析为 JSON。
 
+若希望按 ROUGE 对比，配置 `rouge`，相关字段说明参见 RougeCriterion。
+	
 以下配置示例选择 `final_response_avg_score` 评估器，并配置 FinalResponseCriterion 按文本包含关系对比最终响应。
 
 ```json

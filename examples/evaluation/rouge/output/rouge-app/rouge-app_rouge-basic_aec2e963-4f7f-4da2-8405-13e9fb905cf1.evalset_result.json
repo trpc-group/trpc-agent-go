@@ -1,0 +1,89 @@
+{
+  "evalSetResultId": "rouge-app_rouge-basic_aec2e963-4f7f-4da2-8405-13e9fb905cf1",
+  "evalSetResultName": "rouge-app_rouge-basic_aec2e963-4f7f-4da2-8405-13e9fb905cf1",
+  "evalSetId": "rouge-basic",
+  "evalCaseResults": [
+    {
+      "evalSetId": "rouge-basic",
+      "evalId": "rouge_similarity",
+      "finalEvalStatus": "passed",
+      "overallEvalMetricResults": [
+        {
+          "metricName": "final_response_avg_score",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 1,
+          "criterion": {
+            "finalResponse": {
+              "rouge": {
+                "rougeType": "rouge1",
+                "measure": "f1",
+                "threshold": {
+                  "precision": 0.3,
+                  "recall": 0.6,
+                  "f1": 0.4
+                }
+              }
+            }
+          },
+          "details": {
+            "score": 1
+          }
+        }
+      ],
+      "evalMetricResultPerInvocation": [
+        {
+          "actualInvocation": {
+            "invocationId": "254ecfbf-51da-45da-9f83-7bd32213ad50",
+            "userContent": {
+              "role": "user",
+              "content": "What is trpc-agent-go?"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "trpc-agent-go is a Go library for building AI agents on top of Tencent’s tRPC framework, providing agent orchestration and tool-calling capabilities."
+            }
+          },
+          "expectedInvocation": {
+            "invocationId": "rouge_similarity-1",
+            "userContent": {
+              "role": "user",
+              "content": "What is trpc-agent-go?"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "trpc-agent-go is a Go framework for building AI agents by Tencent."
+            }
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "final_response_avg_score",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "criterion": {
+                "finalResponse": {
+                  "rouge": {
+                    "rougeType": "rouge1",
+                    "measure": "f1",
+                    "threshold": {
+                      "precision": 0.3,
+                      "recall": 0.6,
+                      "f1": 0.4
+                    }
+                  }
+                }
+              },
+              "details": {
+                "score": 1
+              }
+            }
+          ]
+        }
+      ],
+      "sessionId": "c32228cf-8bf6-4260-95a2-819a75fa41a8",
+      "userId": "demo-user"
+    }
+  ],
+  "creationTimestamp": 1770269224.621223
+}
