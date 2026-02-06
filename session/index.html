@@ -4718,7 +4718,7 @@
 <li><code>idx_*_session_summaries_unique_active(app_name, user_id, session_id, filter_key, deleted_at)</code> — unique index but includes deleted_at</li>
 <li><code>idx_*_session_summaries_lookup(app_name, user_id, session_id, deleted_at)</code> — regular index</li>
 </ul>
-<p><strong>New Index</strong>: <code>idx_*_session_summaries_unique_active(app_name, user_id, session_id, filter_key)</code> — unique index without deleted_at</p>
+<p><strong>New Index</strong>: <code>idx_*_session_summaries_unique_active(app_name(191), user_id(191), session_id(191), filter_key(191))</code> — unique index without deleted_at (prefix indexes are used to avoid Error 1071).</p>
 <p><strong>Migration Steps</strong>:</p>
 <div class="language-sql highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-27-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-27-2"> 2</a></span>
@@ -4804,7 +4804,7 @@
 </span><span id="__span-27-33"><a id="__codelineno-27-33" name="__codelineno-27-33"></a><span class="c1">-- Step 5: Create the new unique index (without deleted_at)</span>
 </span><span id="__span-27-34"><a id="__codelineno-27-34" name="__codelineno-27-34"></a><span class="c1">-- Note: Index name may have a table prefix, adjust according to your configuration.</span>
 </span><span id="__span-27-35"><a id="__codelineno-27-35" name="__codelineno-27-35"></a><span class="k">CREATE</span><span class="w"> </span><span class="k">UNIQUE</span><span class="w"> </span><span class="k">INDEX</span><span class="w"> </span><span class="n">idx_session_summaries_unique_active</span><span class="w"> </span>
-</span><span id="__span-27-36"><a id="__codelineno-27-36" name="__codelineno-27-36"></a><span class="k">ON</span><span class="w"> </span><span class="n">session_summaries</span><span class="p">(</span><span class="n">app_name</span><span class="p">,</span><span class="w"> </span><span class="n">user_id</span><span class="p">,</span><span class="w"> </span><span class="n">session_id</span><span class="p">,</span><span class="w"> </span><span class="n">filter_key</span><span class="p">);</span>
+</span><span id="__span-27-36"><a id="__codelineno-27-36" name="__codelineno-27-36"></a><span class="k">ON</span><span class="w"> </span><span class="n">session_summaries</span><span class="p">(</span><span class="n">app_name</span><span class="p">(</span><span class="mi">191</span><span class="p">),</span><span class="w"> </span><span class="n">user_id</span><span class="p">(</span><span class="mi">191</span><span class="p">),</span><span class="w"> </span><span class="n">session_id</span><span class="p">(</span><span class="mi">191</span><span class="p">),</span><span class="w"> </span><span class="n">filter_key</span><span class="p">(</span><span class="mi">191</span><span class="p">));</span>
 </span><span id="__span-27-37"><a id="__codelineno-27-37" name="__codelineno-27-37"></a>
 </span><span id="__span-27-38"><a id="__codelineno-27-38" name="__codelineno-27-38"></a><span class="c1">-- Step 6: Verify migration results</span>
 </span><span id="__span-27-39"><a id="__codelineno-27-39" name="__codelineno-27-39"></a><span class="k">SELECT</span><span class="w"> </span><span class="k">COUNT</span><span class="p">(</span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">duplicate_count</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="p">(</span>
@@ -6461,7 +6461,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="February 4, 2026 08:22:10 UTC">2026-02-04 08:22:10</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="February 6, 2026 07:39:33 UTC">2026-02-06 07:39:33</span>
   </span>
 
     
