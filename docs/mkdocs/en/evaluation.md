@@ -923,7 +923,7 @@ UseStemmer enables Porter stemming for the built-in tokenizer. When Tokenizer is
 
 SplitSummaries controls sentence splitting for `rougeLsum` only.
 
-Tokenizer injects a custom tokenizer and is not loaded from metric JSON.
+Tokenizer injects a custom tokenizer.
 
 The following snippet configures FinalResponseCriterion to match by rougeLsum with thresholds.
 

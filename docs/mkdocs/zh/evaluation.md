@@ -857,26 +857,26 @@ JSONCriterion 提供了 `Compare` 扩展点，用于在代码中覆盖默认对�
 ```go
 import cjson "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
 
-	jsonCriterion := cjson.New(
-		cjson.WithCompare(func(actual, expected any) (bool, error) {
-			actualObj, ok := actual.(map[string]any)
-			if !ok {
-			return false, fmt.Errorf("actual is not an object")
-		}
-		expectedObj, ok := expected.(map[string]any)
+jsonCriterion := cjson.New(
+	cjson.WithCompare(func(actual, expected any) (bool, error) {
+		actualObj, ok := actual.(map[string]any)
 		if !ok {
-			return false, fmt.Errorf("expected is not an object")
-		}
-		if _, ok := actualObj["common"]; !ok {
-			return false, fmt.Errorf("actual missing key common")
-		}
-		if _, ok := expectedObj["common"]; !ok {
-			return false, fmt.Errorf("expected missing key common")
-		}
-		return true, nil
-		}),
-	)
-	```
+		return false, fmt.Errorf("actual is not an object")
+	}
+	expectedObj, ok := expected.(map[string]any)
+	if !ok {
+		return false, fmt.Errorf("expected is not an object")
+	}
+	if _, ok := actualObj["common"]; !ok {
+		return false, fmt.Errorf("actual missing key common")
+	}
+	if _, ok := expectedObj["common"]; !ok {
+		return false, fmt.Errorf("expected missing key common")
+	}
+	return true, nil
+	}),
+)
+```
 	
 ##### RougeCriterion
 
@@ -925,7 +925,7 @@ UseStemmer 会对内置 tokenizer 启用 Porter stemming。配置 Tokenizer 后 
 
 SplitSummaries 仅对 `rougeLsum` 生效，用于在文本没有换行分句时按句子切分摘要。
 
-Tokenizer 用于注入自定义 tokenizer，无法从 metric JSON 反序列化加载。
+Tokenizer 用于注入自定义 tokenizer。
 
 以下代码示例片段，通过配置 FinalResponseCriterion 的 `rouge` 子准则，以 rougeLsum 与阈值的方式对比最终响应。
 
@@ -1104,25 +1104,25 @@ toolTrajectoryCriterion := ctooltrajectory.New(
 | 任意 | 任意 | `[A, A]` | `[A]` | 不匹配 | 实际调用不足，同一调用不能重复匹配 |
 
 ##### FinalResponseCriterion
-	
+
 FinalResponseCriterion 用于对比每轮 Invocation 的最终响应，支持按文本对比、把内容解析为 JSON 后按结构对比，也支持基于 ROUGE 评分对比，结构定义如下。
-	
+
 ```go
-	import (
-		"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
-		cjson "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
-		crouge "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/rouge"
-		ctext "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
-	)
-	
-	// FinalResponseCriterion 表示最终响应匹配准则
-	type FinalResponseCriterion struct {
-		Text    *ctext.TextCriterion                                      // Text 用于对比最终响应文本
-		JSON    *cjson.JSONCriterion                                      // JSON 用于对比最终响应 JSON
-		Rouge   *crouge.RougeCriterion                                    // Rouge 用于基于 ROUGE 评分对比最终响应文本
-		Compare func(actual, expected *evalset.Invocation) (bool, error) // Compare 自定义比较逻辑
-	}
-	```
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	cjson "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
+	crouge "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/rouge"
+	ctext "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
+)
+
+// FinalResponseCriterion 表示最终响应匹配准则
+type FinalResponseCriterion struct {
+	Text    *ctext.TextCriterion                                      // Text 用于对比最终响应文本
+	JSON    *cjson.JSONCriterion                                      // JSON 用于对比最终响应 JSON
+	Rouge   *crouge.RougeCriterion                                    // Rouge 用于基于 ROUGE 评分对比最终响应文本
+	Compare func(actual, expected *evalset.Invocation) (bool, error) // Compare 自定义比较逻辑
+}
+```
 
 使用该准则时，需要在评估集预期侧为对应轮次填写 `finalResponse`。
 
