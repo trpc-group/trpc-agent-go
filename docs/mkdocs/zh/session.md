@@ -1045,10 +1045,10 @@ ON session_summaries(app_name, user_id, session_id);
 
 -- Step 6: 验证迁移结果
 SELECT COUNT(*) as duplicate_count FROM (
-    SELECT app_name, user_id, session_id, filter_key, COUNT(*) as cnt
+    SELECT app_name, user_id, session_id, COUNT(*) as cnt
     FROM session_summaries
     WHERE deleted_at IS NULL
-    GROUP BY app_name, user_id, session_id, filter_key
+    GROUP BY app_name, user_id, session_id
     HAVING cnt > 1
 ) t;
 -- 期望结果：duplicate_count = 0
