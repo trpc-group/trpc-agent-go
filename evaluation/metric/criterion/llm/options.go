@@ -31,6 +31,7 @@ var (
 // options captures judge model configuration overrides.
 type options struct {
 	rubrics     []*Rubric               // rubrics is the list of rubrics to use.
+	variant     string                  // variant selects OpenAI-compatible model behavior.
 	baseURL     string                  // baseURL is a custom base URL for the judge model.
 	apiKey      string                  // apiKey is the credential for the judge model provider.
 	extraFields map[string]any          // extraFields holds provider-specific extras.
@@ -57,6 +58,13 @@ type Option func(*options)
 func WithRubrics(rubrics []*Rubric) Option {
 	return func(o *options) {
 		o.rubrics = rubrics
+	}
+}
+
+// WithVariant sets the OpenAI-compatible variant for the judge model.
+func WithVariant(variant string) Option {
+	return func(o *options) {
+		o.variant = variant
 	}
 }
 
