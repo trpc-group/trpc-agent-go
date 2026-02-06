@@ -79,6 +79,9 @@ func openaiProvider(opts *Options) (model.Model, error) {
 	if opts.BaseURL != "" {
 		res = append(res, openai.WithBaseURL(opts.BaseURL))
 	}
+	if opts.Variant != "" {
+		res = append(res, openai.WithVariant(openai.Variant(opts.Variant)))
+	}
 	var httpOpts []openai.HTTPClientOption
 	if opts.HTTPClientName != "" {
 		httpOpts = append(httpOpts, openai.WithHTTPClientName(opts.HTTPClientName))

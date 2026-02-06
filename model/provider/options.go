@@ -28,6 +28,7 @@ type Option func(*Options)
 type Options struct {
 	ProviderName         string                      // ProviderName is the provider identifier passed to Model.
 	ModelName            string                      // ModelName is the concrete model identifier.
+	Variant              string                      // Variant selects OpenAI-compatible model behavior.
 	APIKey               string                      // APIKey holds the credential used for downstream SDK initialization.
 	BaseURL              string                      // BaseURL overrides the default endpoint when specified.
 	HTTPClientName       string                      // HTTPClientName is the logical name applied to the HTTP client.
@@ -103,6 +104,13 @@ func WithAPIKey(key string) Option {
 func WithBaseURL(url string) Option {
 	return func(o *Options) {
 		o.BaseURL = url
+	}
+}
+
+// WithVariant records the OpenAI-compatible variant.
+func WithVariant(variant string) Option {
+	return func(o *Options) {
+		o.Variant = variant
 	}
 }
 

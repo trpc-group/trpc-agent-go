@@ -1099,6 +1099,7 @@ type LLMCriterion struct {
 type JudgeModelOptions struct {
 	ProviderName string                  // ProviderName 是模型提供方
 	ModelName    string                  // ModelName 是模型名称
+	Variant      string                  // Variant 是 OpenAI 兼容变体，可选
 	BaseURL      string                  // BaseURL 是自定义地址
 	APIKey       string                  // APIKey 是访问密钥
 	ExtraFields  map[string]any          // ExtraFields 是额外字段
@@ -1119,7 +1120,9 @@ type RubricContent struct {
 }
 ```
 
-`judgeModel` 支持在 `providerName`、`modelName`、`baseURL`、`apiKey` 中引用环境变量，运行时会自动展开，出于安全考虑，建议不要把 `judgeModel.apiKey` / `judgeModel.baseURL` 明文写入指标配置文件或者代码。
+`judgeModel` 支持在 `providerName`、`modelName`、`variant`、`baseURL`、`apiKey` 中引用环境变量，运行时会自动展开，出于安全考虑，建议不要把 `judgeModel.apiKey` / `judgeModel.baseURL` 明文写入指标配置文件或者代码。
+
+`variant` 为可选字段，用于选择 OpenAI 兼容的变体，例如 `openai`、`hunyuan`、`deepseek`、`qwen`，仅当 `providerName` 为 `openai` 时生效。不配置时默认使用 `openai` 变体。
 
 `Generation` 默认使用 `MaxTokens=2000`、`Temperature=0.8`、`Stream=false`。
 

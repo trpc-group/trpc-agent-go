@@ -81,6 +81,7 @@ func TestOpenAIFactoryAppliesOptions(t *testing.T) {
 	opts := &Options{ModelName: "gpt-4"}
 	WithAPIKey("openai-key")(opts)
 	WithBaseURL("https://api.example.com")(opts)
+	WithVariant(string(openai.VariantDeepSeek))(opts)
 	WithHTTPClientName("custom-client")(opts)
 	WithHTTPClientTransport(http.DefaultTransport)(opts)
 	WithHeaders(headers)(opts)
@@ -104,6 +105,7 @@ func TestOpenAIFactoryAppliesOptions(t *testing.T) {
 	assert.Equal(t, "gpt-4", modelInstance.Info().Name)
 	assert.Equal(t, "https://api.example.com", readStringField(openaiModel, "baseURL"))
 	assert.Equal(t, "openai-key", readStringField(openaiModel, "apiKey"))
+	assert.Equal(t, openai.VariantDeepSeek, readInterfaceField(openaiModel, "variant"))
 	assert.Equal(t, 42, readIntField(openaiModel, "channelBufferSize"))
 	assert.True(t, readBoolField(openaiModel, "enableTokenTailoring"))
 	assert.Equal(t, 256, readIntField(openaiModel, "maxInputTokens"))
