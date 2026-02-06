@@ -78,7 +78,7 @@ CREATE TABLE IF NOT EXISTS `{{PREFIX}}session_summaries` (
     `expires_at` TIMESTAMP(6) NULL DEFAULT NULL,
     `deleted_at` TIMESTAMP(6) NULL DEFAULT NULL,
     PRIMARY KEY (`id`),
-    UNIQUE KEY `idx_{{PREFIX}}session_summaries_unique_active` (`app_name`,`user_id`,`session_id`,`filter_key`),
+    UNIQUE KEY `idx_{{PREFIX}}session_summaries_unique_active` (`app_name`(191),`user_id`(191),`session_id`(191),`filter_key`(191)),
     KEY `idx_{{PREFIX}}session_summaries_expires` (`expires_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

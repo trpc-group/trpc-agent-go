@@ -645,3 +645,63 @@ func TestVerifyIndexes_QueryError(t *testing.T) {
 	assert.Contains(t, err.Error(), "query indexes failed")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+func TestBuildIndexColumnsStr(t *testing.T) {
+	tests := []struct {
+		name     string
+		table    string
+		suffix   string
+		columns  []string
+		expected string
+	}{
+		{
+			name:     "session_summaries unique_active - should add prefix",
+			table:    sqldb.TableNameSessionSummaries,
+			suffix:   sqldb.IndexSuffixUniqueActive,
+			columns:  []string{"app_name", "user_id", "session_id", "filter_key"},
+			expected: "app_name(191), user_id(191), session_id(191), filter_key(191)",
+		},
+		{
+			name:     "session_summaries expires - no prefix",
+			table:    sqldb.TableNameSessionSummaries,
+			suffix:   sqldb.IndexSuffixExpires,
+			columns:  []string{"expires_at"},
+			expected: "expires_at",
+		},
+		{
+			name:     "session_states unique_active - no prefix",
+			table:    sqldb.TableNameSessionStates,
+			suffix:   sqldb.IndexSuffixUniqueActive,
+			columns:  []string{"app_name", "user_id", "session_id", "deleted_at"},
+			expected: "app_name, user_id, session_id, deleted_at",
+		},
+		{
+			name:     "app_states unique_active - no prefix",
+			table:    sqldb.TableNameAppStates,
+			suffix:   sqldb.IndexSuffixUniqueActive,
+			columns:  []string{"app_name", "key", "deleted_at"},
+			expected: "app_name, key, deleted_at",
+		},
+		{
+			name:     "user_states unique_active - no prefix",
+			table:    sqldb.TableNameUserStates,
+			suffix:   sqldb.IndexSuffixUniqueActive,
+			columns:  []string{"app_name", "user_id", "key", "deleted_at"},
+			expected: "app_name, user_id, key, deleted_at",
+		},
+		{
+			name:     "session_events lookup - no prefix",
+			table:    sqldb.TableNameSessionEvents,
+			suffix:   sqldb.IndexSuffixLookup,
+			columns:  []string{"app_name", "user_id", "session_id", "created_at"},
+			expected: "app_name, user_id, session_id, created_at",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildIndexColumnsStr(tt.table, tt.suffix, tt.columns)
+			assert.Equal(t, tt.expected, got)
+		})
+	}
+}
