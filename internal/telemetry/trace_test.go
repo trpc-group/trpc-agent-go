@@ -825,6 +825,11 @@ func TestBuildResponseAttributes(t *testing.T) {
 				Usage: &model.Usage{
 					PromptTokens:     10,
 					CompletionTokens: 20,
+					PromptTokensDetails: model.PromptTokensDetails{
+						CachedTokens:        7,
+						CacheReadTokens:     11,
+						CacheCreationTokens: 13,
+					},
 				},
 			},
 		},
@@ -856,6 +861,19 @@ func TestBuildResponseAttributes(t *testing.T) {
 				// Verify basic attributes
 				require.True(t, hasAttr(attrs, KeyGenAIResponseModel, tt.rsp.Model))
 				require.True(t, hasAttr(attrs, KeyGenAIResponseID, tt.rsp.ID))
+
+				// Verify cached prompt tokens attribute when provided
+				if tt.rsp.Usage != nil {
+					if tt.rsp.Usage.PromptTokensDetails.CachedTokens != 0 {
+						require.True(t, hasAttr(attrs, KeyGenAIUsageInputTokensCached, int64(tt.rsp.Usage.PromptTokensDetails.CachedTokens)))
+					}
+					if tt.rsp.Usage.PromptTokensDetails.CacheReadTokens != 0 {
+						require.True(t, hasAttr(attrs, KeyGenAIUsageInputTokensCacheRead, int64(tt.rsp.Usage.PromptTokensDetails.CacheReadTokens)))
+					}
+					if tt.rsp.Usage.PromptTokensDetails.CacheCreationTokens != 0 {
+						require.True(t, hasAttr(attrs, KeyGenAIUsageInputTokensCacheCreation, int64(tt.rsp.Usage.PromptTokensDetails.CacheCreationTokens)))
+					}
+				}
 			}
 		})
 	}

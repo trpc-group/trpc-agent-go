@@ -17,6 +17,12 @@ const (
 	KeyTRPCAgentGoInputTokenType = "input" // #nosec G101 - this is a metric key name, not a credential.
 	// KeyTRPCAgentGoOutputTokenType represents the type of output token.
 	KeyTRPCAgentGoOutputTokenType = "output" // #nosec G101 - this is a metric key name, not a credential.
+	// KeyTRPCAgentGoInputCachedTokenType represents the cached portion of input(prompt) tokens.
+	KeyTRPCAgentGoInputCachedTokenType = "input_cached" // #nosec G101 - this is a metric key name, not a credential.
+	// KeyTRPCAgentGoInputCacheReadTokenType represents tokens read from prompt cache (Anthropic).
+	KeyTRPCAgentGoInputCacheReadTokenType = "input_cache_read" // #nosec G101 - this is a metric key name, not a credential.
+	// KeyTRPCAgentGoInputCacheCreationTokenType represents tokens used to create prompt cache (Anthropic).
+	KeyTRPCAgentGoInputCacheCreationTokenType = "input_cache_creation" // #nosec G101 - this is a metric key name, not a credential.
 	// KeyTRPCAgentGoStream represents the stream of the response.
 	KeyTRPCAgentGoStream = "trpc_agent_go.is_stream" // #nosec G101 - this is a metric key name, not a credential.
 	// KeyMetricName represents the name of the metric.
