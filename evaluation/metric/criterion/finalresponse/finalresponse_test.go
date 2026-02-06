@@ -51,7 +51,7 @@ func TestFinalResponseCriterion_EmptyCriteriaError(t *testing.T) {
 	criterion := &FinalResponseCriterion{}
 	actual := &evalset.Invocation{FinalResponse: &model.Message{Content: "ok"}}
 	expected := &evalset.Invocation{FinalResponse: &model.Message{Content: "ok"}}
-	ok, err := criterion.MatchWithContext(context.Background(), actual, expected)
+	ok, err := criterion.Match(context.Background(), actual, expected)
 	assert.False(t, ok)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "must configure text, json, or rouge")
@@ -64,7 +64,7 @@ func TestFinalResponseCriterion_TextMismatch(t *testing.T) {
 	}
 	actual := &evalset.Invocation{FinalResponse: &model.Message{Content: "a"}}
 	expected := &evalset.Invocation{FinalResponse: &model.Message{Content: "b"}}
-	ok, err := criterion.MatchWithContext(context.Background(), actual, expected)
+	ok, err := criterion.Match(context.Background(), actual, expected)
 	assert.False(t, ok)
 	assert.Error(t, err)
 }
@@ -76,7 +76,7 @@ func TestFinalResponseCriterion_JSONMatch(t *testing.T) {
 	}
 	actual := &evalset.Invocation{FinalResponse: &model.Message{Content: `{"a":1,"b":[2,3]}`}}
 	expected := &evalset.Invocation{FinalResponse: &model.Message{Content: `{"b":[2,3],"a":1}`}}
-	ok, err := criterion.MatchWithContext(context.Background(), actual, expected)
+	ok, err := criterion.Match(context.Background(), actual, expected)
 	assert.NoError(t, err)
 	assert.True(t, ok)
 }
@@ -88,7 +88,7 @@ func TestFinalResponseCriterion_JSONParseError(t *testing.T) {
 	}
 	actual := &evalset.Invocation{FinalResponse: &model.Message{Content: `not json`}}
 	expected := &evalset.Invocation{FinalResponse: &model.Message{Content: `{}`}}
-	ok, err := criterion.MatchWithContext(context.Background(), actual, expected)
+	ok, err := criterion.Match(context.Background(), actual, expected)
 	assert.False(t, ok)
 	assert.Error(t, err)
 }
@@ -101,7 +101,7 @@ func TestFinalResponseCriterion_TextAndJSONCriteria_BothPass(t *testing.T) {
 	}
 	actual := &evalset.Invocation{FinalResponse: &model.Message{Content: `{"a":1}`}}
 	expected := &evalset.Invocation{FinalResponse: &model.Message{Content: `{"a":1}`}}
-	ok, err := criterion.MatchWithContext(context.Background(), actual, expected)
+	ok, err := criterion.Match(context.Background(), actual, expected)
 	assert.True(t, ok)
 	assert.NoError(t, err)
 }
@@ -114,7 +114,7 @@ func TestFinalResponseCriterion_TextAndJSONCriteria_TextFails(t *testing.T) {
 	}
 	actual := &evalset.Invocation{FinalResponse: &model.Message{Content: `{"a":1}`}}
 	expected := &evalset.Invocation{FinalResponse: &model.Message{Content: "{\n  \"a\": 1\n}"}}
-	ok, err := criterion.MatchWithContext(context.Background(), actual, expected)
+	ok, err := criterion.Match(context.Background(), actual, expected)
 	assert.False(t, ok)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "text mismatch")
@@ -128,7 +128,7 @@ func TestFinalResponseCriterion_TextAndJSONCriteria_JSONFails(t *testing.T) {
 	}
 	actual := &evalset.Invocation{FinalResponse: &model.Message{Content: `{"a":1}`}}
 	expected := &evalset.Invocation{FinalResponse: &model.Message{Content: `"a"`}}
-	ok, err := criterion.MatchWithContext(context.Background(), actual, expected)
+	ok, err := criterion.Match(context.Background(), actual, expected)
 	assert.False(t, ok)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "json mismatch")
@@ -145,7 +145,7 @@ func TestFinalResponseCriterion_CustomCompare(t *testing.T) {
 	}
 	actual := &evalset.Invocation{InvocationID: "same"}
 	expected := &evalset.Invocation{InvocationID: "same"}
-	ok, err := criterion.MatchWithContext(context.Background(), actual, expected)
+	ok, err := criterion.Match(context.Background(), actual, expected)
 	assert.NoError(t, err)
 	assert.True(t, ok)
 	assert.True(t, called)
@@ -154,7 +154,7 @@ func TestFinalResponseCriterion_CustomCompare(t *testing.T) {
 // TestFinalResponseCriterion_NilReceiver verifies nil receiver handling.
 func TestFinalResponseCriterion_NilReceiver(t *testing.T) {
 	var criterion *FinalResponseCriterion
-	ok, err := criterion.MatchWithContext(context.Background(), nil, nil)
+	ok, err := criterion.Match(context.Background(), nil, nil)
 	assert.False(t, ok)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "final response criterion is nil")
@@ -182,7 +182,7 @@ func TestFinalResponseCriterion_NewAppliesOptions(t *testing.T) {
 	assert.Same(t, jsonCriterion, criterion.JSON)
 	assert.Same(t, rougeCriterion, criterion.Rouge)
 
-	ok, err := criterion.MatchWithContext(context.Background(), nil, nil)
+	ok, err := criterion.Match(context.Background(), nil, nil)
 	assert.True(t, ok)
 	assert.NoError(t, err)
 	assert.True(t, called)
@@ -191,12 +191,12 @@ func TestFinalResponseCriterion_NewAppliesOptions(t *testing.T) {
 // TestFinalResponseCriterion_NilInvocations verifies error handling for nil invocations.
 func TestFinalResponseCriterion_NilInvocations(t *testing.T) {
 	criterion := &FinalResponseCriterion{Text: &text.TextCriterion{Ignore: true}}
-	ok, err := criterion.MatchWithContext(context.Background(), nil, &evalset.Invocation{})
+	ok, err := criterion.Match(context.Background(), nil, &evalset.Invocation{})
 	assert.False(t, ok)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "actual or expected invocation is nil")
 
-	ok, err = criterion.MatchWithContext(context.Background(), &evalset.Invocation{}, nil)
+	ok, err = criterion.Match(context.Background(), &evalset.Invocation{}, nil)
 	assert.False(t, ok)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "actual or expected invocation is nil")
@@ -207,7 +207,7 @@ func TestFinalResponseCriterion_BothFinalResponseNil(t *testing.T) {
 	criterion := &FinalResponseCriterion{Text: &text.TextCriterion{MatchStrategy: text.TextMatchStrategyExact}}
 	actual := &evalset.Invocation{}
 	expected := &evalset.Invocation{}
-	ok, err := criterion.MatchWithContext(context.Background(), actual, expected)
+	ok, err := criterion.Match(context.Background(), actual, expected)
 	assert.True(t, ok)
 	assert.NoError(t, err)
 }
@@ -217,7 +217,7 @@ func TestFinalResponseCriterion_OneFinalResponseNil(t *testing.T) {
 	criterion := &FinalResponseCriterion{Text: &text.TextCriterion{MatchStrategy: text.TextMatchStrategyExact}}
 	actual := &evalset.Invocation{}
 	expected := &evalset.Invocation{FinalResponse: &model.Message{Content: "ok"}}
-	ok, err := criterion.MatchWithContext(context.Background(), actual, expected)
+	ok, err := criterion.Match(context.Background(), actual, expected)
 	assert.False(t, ok)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "actual or expected final response is nil")
@@ -231,7 +231,7 @@ func TestFinalResponseCriterion_TextAndJSONCriteria_BothFail(t *testing.T) {
 	}
 	actual := &evalset.Invocation{FinalResponse: &model.Message{Content: `{"a":1}`}}
 	expected := &evalset.Invocation{FinalResponse: &model.Message{Content: `{"a":2}`}}
-	ok, err := criterion.MatchWithContext(context.Background(), actual, expected)
+	ok, err := criterion.Match(context.Background(), actual, expected)
 	assert.False(t, ok)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "json mismatch")
