@@ -325,6 +325,23 @@ type ToolResultMessagesFunc = func(
 - If the callback returns non-empty messages, they replace the default tool message.
 - When using llmagent with built-in OpenAI/Anthropic adapters, the recommended return type is `[]model.Message`.
 
+#### Large Tool Result Eviction
+
+When tool result content grows too large, the framework automatically evicts it to
+the configured artifact service and replaces the tool message content with a
+truncated preview plus an `artifact://` reference. This applies to both default
+tool results and callback-provided results.
+
+- **Default limit:** 20,000 tokens (estimated at ~4 bytes per token).
+- **Runtime override:** pass `agent.WithRuntimeState(map[string]any{ "tool_token_limit_before_evict": <int> })`.
+- **Disable eviction:** set the runtime value to `0` or a negative number.
+
+Example payload sent to the model:
+
+```json
+{"preview":"...","ref":"artifact://tool_result_echo_call-1.json@0"}
+```
+
 **Usage example:**
 
 ```go

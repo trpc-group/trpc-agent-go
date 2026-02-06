@@ -172,13 +172,19 @@ func TestExecuteToolCall_EvictLargeToolResult(t *testing.T) {
 
 	svc := inmemory.NewService()
 	sess := session.NewSession("app", "user", "session")
+	limit := 5
 	inv := agent.NewInvocation(
 		agent.WithInvocationSession(sess),
 		agent.WithInvocationArtifactService(svc),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RuntimeState: map[string]any{
+				toolTokenLimitBeforeEvictKey: limit,
+			},
+		}),
 	)
 	ctx = agent.NewInvocationContext(ctx, inv)
 
-	large := strings.Repeat("a", maxToolResultBytes+10)
+	large := strings.Repeat("a", toolResultPreviewRunes+10)
 	tools := map[string]tool.Tool{
 		"echo": &mockCallableTool{
 			declaration: &tool.Declaration{Name: "echo", Description: "echo tool"},
@@ -200,11 +206,13 @@ func TestExecuteToolCall_EvictLargeToolResult(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, choices, 1)
 
-	var ref string
-	require.NoError(t, json.Unmarshal([]byte(choices[0].Message.Content), &ref))
-	require.True(t, strings.HasPrefix(ref, fileref.ArtifactPrefix))
+	var payload toolResultEvictedPayload
+	require.NoError(t, json.Unmarshal([]byte(choices[0].Message.Content), &payload))
+	require.True(t, strings.HasPrefix(payload.Ref, fileref.ArtifactPrefix))
+	require.NotEmpty(t, payload.Preview)
+	require.True(t, strings.HasSuffix(payload.Preview, "..."))
 
-	content, _, handled, err := fileref.TryRead(ctx, ref)
+	content, _, handled, err := fileref.TryRead(ctx, payload.Ref)
 	require.NoError(t, err)
 	require.True(t, handled)
 
@@ -219,13 +227,19 @@ func TestExecuteToolCall_InlineSmallResult(t *testing.T) {
 
 	svc := inmemory.NewService()
 	sess := session.NewSession("app", "user", "session")
+	limit := 5
 	inv := agent.NewInvocation(
 		agent.WithInvocationSession(sess),
 		agent.WithInvocationArtifactService(svc),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RuntimeState: map[string]any{
+				toolTokenLimitBeforeEvictKey: limit,
+			},
+		}),
 	)
 	ctx = agent.NewInvocationContext(ctx, inv)
 
-	small := strings.Repeat("a", maxToolResultBytes-10)
+	small := strings.Repeat("a", 10)
 	tools := map[string]tool.Tool{
 		"echo": &mockCallableTool{
 			declaration: &tool.Declaration{Name: "echo", Description: "echo tool"},
@@ -255,7 +269,8 @@ func TestExecuteToolCall_InlineSmallResult(t *testing.T) {
 func TestExecuteToolCall_ToolResultMessagesCallback_EvictsLargeResult(t *testing.T) {
 	ctx := context.Background()
 
-	large := strings.Repeat("b", maxToolResultBytes+10)
+	limit := 5
+	large := strings.Repeat("b", toolResultPreviewRunes+10)
 	callbacks := &tool.Callbacks{}
 	callbacks.RegisterToolResultMessages(func(_ context.Context, in *tool.ToolResultMessagesInput) (any, error) {
 		return model.Message{
@@ -271,6 +286,11 @@ func TestExecuteToolCall_ToolResultMessagesCallback_EvictsLargeResult(t *testing
 	inv := agent.NewInvocation(
 		agent.WithInvocationSession(sess),
 		agent.WithInvocationArtifactService(svc),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RuntimeState: map[string]any{
+				toolTokenLimitBeforeEvictKey: limit,
+			},
+		}),
 	)
 	ctx = agent.NewInvocationContext(ctx, inv)
 
@@ -294,11 +314,12 @@ func TestExecuteToolCall_ToolResultMessagesCallback_EvictsLargeResult(t *testing
 	require.NoError(t, err)
 	require.Len(t, choices, 1)
 
-	var ref string
-	require.NoError(t, json.Unmarshal([]byte(choices[0].Message.Content), &ref))
-	require.True(t, strings.HasPrefix(ref, fileref.ArtifactPrefix))
+	var payload toolResultEvictedPayload
+	require.NoError(t, json.Unmarshal([]byte(choices[0].Message.Content), &payload))
+	require.True(t, strings.HasPrefix(payload.Ref, fileref.ArtifactPrefix))
+	require.NotEmpty(t, payload.Preview)
 
-	content, _, handled, err := fileref.TryRead(ctx, ref)
+	content, _, handled, err := fileref.TryRead(ctx, payload.Ref)
 	require.NoError(t, err)
 	require.True(t, handled)
 	assert.Equal(t, large, content)

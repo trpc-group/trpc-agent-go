@@ -54,8 +54,12 @@ const (
 const funcRespCompletionTimeout = 5 * time.Second
 
 const (
-	maxToolResultBytes         = 32 * 1024
-	toolResultArtifactMimeType = "application/json"
+	toolTokenLimitBeforeEvictKey = "tool_token_limit_before_evict"
+
+	defaultToolTokenLimitBeforeEvict = 20000
+	toolResultPreviewRunes           = 1024
+	toolResultTokenApproxBytes       = 4
+	toolResultArtifactMimeType       = "application/json"
 )
 
 // summarizationSkipper is implemented by tools that can indicate whether
@@ -839,9 +843,10 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 		{Index: index, Message: defaultMsg},
 	}
 
+	overridden := false
 	if p.toolCallbacks != nil &&
 		p.toolCallbacks.ToolResultMessages != nil {
-		customChoices, overridden, cbErr :=
+		customChoices, override, cbErr :=
 			p.applyToolResultMessagesCallback(
 				ctx,
 				toolCall,
@@ -854,11 +859,14 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 		if cbErr != nil {
 			return ctx, nil, modifiedArgs, true, cbErr
 		}
+		overridden = override
 		if overridden {
 			choices = customChoices
 		}
 	}
-	choices = maybeEvictToolResultChoices(ctx, invocation, toolCall, choices)
+	if overridden {
+		choices = maybeEvictToolResultChoices(ctx, invocation, toolCall, choices)
+	}
 
 	log.DebugfContext(
 		ctx,
@@ -876,7 +884,8 @@ func maybeEvictToolResult(
 	toolCall model.ToolCall,
 	resultBytes []byte,
 ) []byte {
-	if len(resultBytes) <= maxToolResultBytes {
+	limit := toolResultTokenLimit(invocation)
+	if limit <= 0 || toolResultTokens(resultBytes) <= limit {
 		return resultBytes
 	}
 	ctxIO, ok := toolResultArtifactContext(ctx, invocation)
@@ -905,7 +914,11 @@ func maybeEvictToolResult(
 		artifactName,
 		version,
 	)
-	refBytes, err := json.Marshal(ref)
+	payload := toolResultEvictedPayload{
+		Preview: truncateToolResultPreview(string(resultBytes)),
+		Ref:     ref,
+	}
+	refBytes, err := json.Marshal(payload)
 	if err != nil {
 		log.WarnfContext(
 			ctx,
@@ -938,6 +951,44 @@ func maybeEvictToolResultChoices(
 		)
 	}
 	return choices
+}
+
+type toolResultEvictedPayload struct {
+	Preview string `json:"preview"`
+	Ref     string `json:"ref"`
+}
+
+func toolResultTokenLimit(invocation *agent.Invocation) int {
+	if invocation != nil && invocation.RunOptions.RuntimeState != nil {
+		if v, ok := agent.GetRuntimeStateValue[int](&invocation.RunOptions, toolTokenLimitBeforeEvictKey); ok {
+			return v
+		}
+		if v, ok := agent.GetRuntimeStateValue[int64](&invocation.RunOptions, toolTokenLimitBeforeEvictKey); ok {
+			return int(v)
+		}
+		if v, ok := agent.GetRuntimeStateValue[float64](&invocation.RunOptions, toolTokenLimitBeforeEvictKey); ok {
+			return int(v)
+		}
+	}
+	return defaultToolTokenLimitBeforeEvict
+}
+
+func toolResultTokens(resultBytes []byte) int {
+	if len(resultBytes) == 0 {
+		return 0
+	}
+	return (len(resultBytes) + toolResultTokenApproxBytes - 1) / toolResultTokenApproxBytes
+}
+
+func truncateToolResultPreview(content string) string {
+	if toolResultPreviewRunes <= 0 || content == "" {
+		return ""
+	}
+	runes := []rune(content)
+	if len(runes) <= toolResultPreviewRunes {
+		return content
+	}
+	return string(runes[:toolResultPreviewRunes]) + "..."
 }
 
 func toolResultArtifactContext(

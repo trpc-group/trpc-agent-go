@@ -325,6 +325,21 @@ type ToolResultMessagesFunc = func(
 - 如果回调返回非空消息，它们将替换默认工具消息。
 - 当使用带有内置 OpenAI/Anthropic 适配器的 llmagent 时，推荐的返回类型是 `[]model.Message`。
 
+#### 大工具结果自动驱逐
+
+当工具结果过大时，框架会自动将其写入已配置的 artifact 服务，并将工具消息内容替换为
+截断预览 + `artifact://` 引用。这一行为同样适用于回调返回的工具结果。
+
+- **默认阈值：** 20,000 tokens（按 ~4 字节/Token 估算）。
+- **运行时覆盖：** 使用 `agent.WithRuntimeState(map[string]any{ "tool_token_limit_before_evict": <int> })`。
+- **禁用驱逐：** 将运行时值设为 `0` 或负数。
+
+发送给模型的示例 payload：
+
+```json
+{"preview":"...","ref":"artifact://tool_result_echo_call-1.json@0"}
+```
+
 **使用示例：**
 
 ```go
