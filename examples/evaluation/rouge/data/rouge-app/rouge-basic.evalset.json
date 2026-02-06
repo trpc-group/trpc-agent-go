@@ -1,0 +1,26 @@
+{
+  "evalSetId": "rouge-basic",
+  "name": "rouge-basic",
+  "evalCases": [
+    {
+      "evalId": "rouge_similarity",
+      "conversation": [
+        {
+          "invocationId": "rouge_similarity-1",
+          "userContent": {
+            "role": "user",
+            "content": "What is trpc-agent-go?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "trpc-agent-go is a Go framework for building AI agents by Tencent."
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "rouge-app",
+        "userId": "demo-user"
+      }
+    }
+  ]
+}

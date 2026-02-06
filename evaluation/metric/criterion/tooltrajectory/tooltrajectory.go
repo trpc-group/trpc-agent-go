@@ -177,6 +177,7 @@ func (t *ToolTrajectoryCriterion) getStrategy(actualTool, expectedTool *evalset.
 	return defaultToolTrajectoryStrategy
 }
 
+// Match compares a single tool call against the expected tool call using the configured strategies.
 func (t *ToolTrajectoryStrategy) Match(actual, expected *evalset.Tool) (bool, error) {
 	if t.Name != nil {
 		ok, err := t.Name.Match(actual.Name, expected.Name)

@@ -58,7 +58,7 @@ func (e *finalResponseEvaluator) Evaluate(ctx context.Context, actuals, expected
 		expected := expecteds[i]
 		score := 0.0
 		reason := ""
-		ok, err := finalResponsesMatch(actual, expected, evalMetric.Criterion.FinalResponse)
+		ok, err := finalResponsesMatch(ctx, actual, expected, evalMetric.Criterion.FinalResponse)
 		if err != nil {
 			reason = err.Error()
 		} else if ok {
@@ -66,12 +66,12 @@ func (e *finalResponseEvaluator) Evaluate(ctx context.Context, actuals, expected
 		} else {
 			reason = "final response mismatch"
 		}
-		status := e.statusForScore(score, evalMetric)
+		invocationStatus := e.statusForScore(score, evalMetric)
 		perInvocation = append(perInvocation, &evaluator.PerInvocationResult{
 			ActualInvocation:   actual,
 			ExpectedInvocation: expected,
 			Score:              score,
-			Status:             status,
+			Status:             invocationStatus,
 			Details: &evaluator.PerInvocationDetails{
 				Reason: reason,
 				Score:  score,
@@ -92,6 +92,7 @@ func (e *finalResponseEvaluator) Evaluate(ctx context.Context, actuals, expected
 	}, nil
 }
 
+// statusForScore maps a numeric score to an evaluation status based on the metric threshold.
 func (e *finalResponseEvaluator) statusForScore(score float64, evalMetric *metric.EvalMetric) status.EvalStatus {
 	if score >= evalMetric.Threshold {
 		return status.EvalStatusPassed
@@ -99,9 +100,10 @@ func (e *finalResponseEvaluator) statusForScore(score float64, evalMetric *metri
 	return status.EvalStatusFailed
 }
 
-func finalResponsesMatch(actual, expected *evalset.Invocation,
+// finalResponsesMatch performs deterministic matching for the configured final response criterion.
+func finalResponsesMatch(ctx context.Context, actual, expected *evalset.Invocation,
 	criterion *cfinalresponse.FinalResponseCriterion) (bool, error) {
-	ok, err := criterion.Match(actual, expected)
+	ok, err := criterion.Match(ctx, actual, expected)
 	if err != nil {
 		return false, fmt.Errorf("final response mismatch: %w", err)
 	}

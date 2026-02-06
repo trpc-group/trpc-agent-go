@@ -19,11 +19,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
 	cfinalresponse "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/finalresponse"
+	criterionrouge "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/rouge"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
+// TestFinalResponseEvaluator_EvaluateSuccessAndFailure verifies the overall status and score aggregation.
 func TestFinalResponseEvaluator_EvaluateSuccessAndFailure(t *testing.T) {
 	ev := New()
 	frCriterion := &cfinalresponse.FinalResponseCriterion{
@@ -50,6 +52,7 @@ func TestFinalResponseEvaluator_EvaluateSuccessAndFailure(t *testing.T) {
 	assert.Equal(t, status.EvalStatusFailed, result.OverallStatus)
 }
 
+// TestFinalResponseEvaluator_Errors verifies input validation and error cases.
 func TestFinalResponseEvaluator_Errors(t *testing.T) {
 	ev := New()
 	_, err := ev.Evaluate(context.Background(), nil, nil, nil)
@@ -60,6 +63,7 @@ func TestFinalResponseEvaluator_Errors(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestFinalResponseEvaluator_ErrorReason verifies that evaluation errors are propagated as a reason string.
 func TestFinalResponseEvaluator_ErrorReason(t *testing.T) {
 	ev := New()
 	frCriterion := &cfinalresponse.FinalResponseCriterion{
@@ -75,6 +79,7 @@ func TestFinalResponseEvaluator_ErrorReason(t *testing.T) {
 	assert.Contains(t, result.PerInvocationResults[0].Details.Reason, "final response mismatch")
 }
 
+// TestFinalResponseEvaluator_NoInvocations verifies behavior when there are no invocations to evaluate.
 func TestFinalResponseEvaluator_NoInvocations(t *testing.T) {
 	ev := New()
 	evalMetric := &metric.EvalMetric{Threshold: 0.5, Criterion: &criterion.Criterion{FinalResponse: &cfinalresponse.FinalResponseCriterion{}}}
@@ -85,6 +90,7 @@ func TestFinalResponseEvaluator_NoInvocations(t *testing.T) {
 	assert.Empty(t, result.PerInvocationResults)
 }
 
+// TestFinalResponseEvaluator_TextCriterionIntegration verifies deterministic text criterion integration.
 func TestFinalResponseEvaluator_TextCriterionIntegration(t *testing.T) {
 	ev := New()
 	evalMetric := &metric.EvalMetric{
@@ -101,4 +107,30 @@ func TestFinalResponseEvaluator_TextCriterionIntegration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, status.EvalStatusPassed, result.OverallStatus)
 	assert.Equal(t, 1.0, result.OverallScore)
+}
+
+// TestFinalResponseEvaluator_RougeCriterionIntegration verifies ROUGE scoring integration and threshold checks.
+func TestFinalResponseEvaluator_RougeCriterionIntegration(t *testing.T) {
+	ev := New()
+	evalMetric := &metric.EvalMetric{
+		Threshold: 0.5,
+		Criterion: &criterion.Criterion{
+			FinalResponse: &cfinalresponse.FinalResponseCriterion{
+				Rouge: &criterionrouge.RougeCriterion{
+					RougeType: "rouge1",
+					Measure:   criterionrouge.RougeMeasureF1,
+					Threshold: criterionrouge.Score{Precision: 0.9, Recall: 0.3, F1: 0.5},
+				},
+			},
+		},
+	}
+	actuals := []*evalset.Invocation{{FinalResponse: &model.Message{Content: "testing"}}}
+	expecteds := []*evalset.Invocation{{FinalResponse: &model.Message{Content: "testing one two"}}}
+	result, err := ev.Evaluate(context.Background(), actuals, expecteds, evalMetric)
+	require.NoError(t, err)
+	require.Len(t, result.PerInvocationResults, 1)
+	assert.InDelta(t, 1.0, result.PerInvocationResults[0].Score, 1e-12)
+	assert.Equal(t, status.EvalStatusPassed, result.PerInvocationResults[0].Status)
+	assert.Equal(t, status.EvalStatusPassed, result.OverallStatus)
+	assert.Empty(t, result.PerInvocationResults[0].Details.Reason)
 }
