@@ -31,6 +31,9 @@ type memoryExtractor struct {
 	model    model.Model
 	prompt   string
 	checkers []Checker
+
+	// modelCallbacks configures before/after model callbacks for extraction.
+	modelCallbacks *model.Callbacks
 }
 
 // Option is a function that configures a MemoryExtractor.
@@ -55,6 +58,14 @@ func WithChecker(c Checker) Option {
 		if c != nil {
 			e.checkers = append(e.checkers, c)
 		}
+	}
+}
+
+// WithModelCallbacks sets model callbacks for memory extraction.
+// Only structured callbacks are supported.
+func WithModelCallbacks(callbacks *model.Callbacks) Option {
+	return func(e *memoryExtractor) {
+		e.modelCallbacks = callbacks
 	}
 }
 
@@ -101,15 +112,28 @@ func (e *memoryExtractor) Extract(
 	}
 
 	// Call model.
-	rspChan, err := e.model.GenerateContent(ctx, req)
+	ctx, rspChan, err := e.runBeforeModelCallbacks(ctx, req)
 	if err != nil {
-		log.WarnfContext(ctx, "extractor: model call failed: %v", err)
-		return nil, fmt.Errorf("model call failed: %w", err)
+		return nil, err
+	}
+	if rspChan == nil {
+		rspChan, err = e.model.GenerateContent(ctx, req)
+		if err != nil {
+			log.WarnfContext(ctx, "extractor: model call failed: %v", err)
+			return nil, fmt.Errorf("model call failed: %w", err)
+		}
 	}
 
 	// Parse tool calls into operations.
 	var ops []*Operation
 	for rsp := range rspChan {
+		ctx, rsp, err = e.runAfterModelCallbacks(ctx, req, rsp)
+		if err != nil {
+			return nil, err
+		}
+		if rsp == nil {
+			continue
+		}
 		if rsp.Error != nil {
 			return nil, fmt.Errorf("model error: %s", rsp.Error.Message)
 		}
@@ -214,6 +238,70 @@ func (e *memoryExtractor) parseToolCall(ctx context.Context, call model.ToolCall
 		return nil
 	}
 	return parseToolCallArgs(call.Function.Name, args)
+}
+
+func (e *memoryExtractor) runBeforeModelCallbacks(
+	ctx context.Context,
+	request *model.Request,
+) (context.Context, <-chan *model.Response, error) {
+	if e.modelCallbacks == nil {
+		return ctx, nil, nil
+	}
+
+	result, err := e.modelCallbacks.RunBeforeModel(
+		ctx,
+		&model.BeforeModelArgs{Request: request},
+	)
+	if err != nil {
+		return ctx, nil, fmt.Errorf("before model callback failed: %w", err)
+	}
+	if result != nil && result.Context != nil {
+		ctx = result.Context
+	}
+	if result == nil || result.CustomResponse == nil {
+		return ctx, nil, nil
+	}
+
+	customChan := make(chan *model.Response, 1)
+	customChan <- result.CustomResponse
+	close(customChan)
+	return ctx, customChan, nil
+}
+
+func modelErrFromResponse(resp *model.Response) error {
+	if resp == nil || resp.Error == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %s", resp.Error.Type, resp.Error.Message)
+}
+
+func (e *memoryExtractor) runAfterModelCallbacks(
+	ctx context.Context,
+	request *model.Request,
+	response *model.Response,
+) (context.Context, *model.Response, error) {
+	if e.modelCallbacks == nil {
+		return ctx, response, nil
+	}
+
+	result, err := e.modelCallbacks.RunAfterModel(
+		ctx,
+		&model.AfterModelArgs{
+			Request:  request,
+			Response: response,
+			Error:    modelErrFromResponse(response),
+		},
+	)
+	if err != nil {
+		return ctx, nil, fmt.Errorf("after model callback failed: %w", err)
+	}
+	if result != nil && result.Context != nil {
+		ctx = result.Context
+	}
+	if result != nil && result.CustomResponse != nil {
+		response = result.CustomResponse
+	}
+	return ctx, response, nil
 }
 
 // defaultPrompt is the default system prompt for memory extraction.
