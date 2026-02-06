@@ -1385,6 +1385,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#beforeafter-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      模型回调（Before/After Model）
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#extractioncontext" class="md-nav__link">
     <span class="md-ellipsis">
       ExtractionContext
@@ -2796,6 +2805,15 @@
   <a href="#_38" class="md-nav__link">
     <span class="md-ellipsis">
       检查器配置示例
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#beforeafter-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      模型回调（Before/After Model）
     </span>
   </a>
   
@@ -5093,17 +5111,51 @@
 </span><span id="__span-37-14"><a id="__codelineno-37-14" name="__codelineno-37-14"></a><span class="w">    </span><span class="nx">extractor</span><span class="p">.</span><span class="nx">WithChecker</span><span class="p">(</span><span class="nx">extractor</span><span class="p">.</span><span class="nx">CheckTimeInterval</span><span class="p">(</span><span class="mi">5</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">)),</span>
 </span><span id="__span-37-15"><a id="__codelineno-37-15" name="__codelineno-37-15"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
+<h4 id="beforeafter-model">模型回调（Before/After Model）</h4>
+<p>提取器也支持通过 <code>model.Callbacks</code> 注入 before/after 回调（仅支持 structured），用于埋点、改写请求，或在测试中短路模型调用。</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-38-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-38-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-38-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-38-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-38-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-38-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-38-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-38-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-38-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-38-10">10</a></span>
+<span class="normal"><a href="#__codelineno-38-11">11</a></span>
+<span class="normal"><a href="#__codelineno-38-12">12</a></span>
+<span class="normal"><a href="#__codelineno-38-13">13</a></span>
+<span class="normal"><a href="#__codelineno-38-14">14</a></span>
+<span class="normal"><a href="#__codelineno-38-15">15</a></span>
+<span class="normal"><a href="#__codelineno-38-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-38-1"><a id="__codelineno-38-1" name="__codelineno-38-1"></a><span class="nx">callbacks</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewCallbacks</span><span class="p">().</span><span class="nx">RegisterBeforeModel</span><span class="p">(</span>
+</span><span id="__span-38-2"><a id="__codelineno-38-2" name="__codelineno-38-2"></a><span class="w">    </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">args</span><span class="w"> </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">BeforeModelArgs</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">BeforeModelResult</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-38-3"><a id="__codelineno-38-3" name="__codelineno-38-3"></a><span class="w">        </span><span class="c1">// You can modify args.Request or return CustomResponse.</span>
+</span><span id="__span-38-4"><a id="__codelineno-38-4" name="__codelineno-38-4"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-38-5"><a id="__codelineno-38-5" name="__codelineno-38-5"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-38-6"><a id="__codelineno-38-6" name="__codelineno-38-6"></a><span class="p">).</span><span class="nx">RegisterAfterModel</span><span class="p">(</span>
+</span><span id="__span-38-7"><a id="__codelineno-38-7" name="__codelineno-38-7"></a><span class="w">    </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">args</span><span class="w"> </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">AfterModelArgs</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">AfterModelResult</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-38-8"><a id="__codelineno-38-8" name="__codelineno-38-8"></a><span class="w">        </span><span class="c1">// You can inspect/override args.Response.</span>
+</span><span id="__span-38-9"><a id="__codelineno-38-9" name="__codelineno-38-9"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-38-10"><a id="__codelineno-38-10" name="__codelineno-38-10"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-38-11"><a id="__codelineno-38-11" name="__codelineno-38-11"></a><span class="p">)</span>
+</span><span id="__span-38-12"><a id="__codelineno-38-12" name="__codelineno-38-12"></a>
+</span><span id="__span-38-13"><a id="__codelineno-38-13" name="__codelineno-38-13"></a><span class="nx">memExtractor</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">extractor</span><span class="p">.</span><span class="nx">NewExtractor</span><span class="p">(</span>
+</span><span id="__span-38-14"><a id="__codelineno-38-14" name="__codelineno-38-14"></a><span class="w">    </span><span class="nx">extractorModel</span><span class="p">,</span>
+</span><span id="__span-38-15"><a id="__codelineno-38-15" name="__codelineno-38-15"></a><span class="w">    </span><span class="nx">extractor</span><span class="p">.</span><span class="nx">WithModelCallbacks</span><span class="p">(</span><span class="nx">callbacks</span><span class="p">),</span>
+</span><span id="__span-38-16"><a id="__codelineno-38-16" name="__codelineno-38-16"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
 <h4 id="extractioncontext">ExtractionContext</h4>
 <p><code>ExtractionContext</code> 为检查器提供决策所需的上下文信息：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-38-1">1</a></span>
-<span class="normal"><a href="#__codelineno-38-2">2</a></span>
-<span class="normal"><a href="#__codelineno-38-3">3</a></span>
-<span class="normal"><a href="#__codelineno-38-4">4</a></span>
-<span class="normal"><a href="#__codelineno-38-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-38-1"><a id="__codelineno-38-1" name="__codelineno-38-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">ExtractionContext</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-38-2"><a id="__codelineno-38-2" name="__codelineno-38-2"></a><span class="w">    </span><span class="nx">UserKey</span><span class="w">       </span><span class="nx">memory</span><span class="p">.</span><span class="nx">UserKey</span><span class="w">  </span><span class="c1">// 用户标识。</span>
-</span><span id="__span-38-3"><a id="__codelineno-38-3" name="__codelineno-38-3"></a><span class="w">    </span><span class="nx">Messages</span><span class="w">      </span><span class="p">[]</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="w"> </span><span class="c1">// 自上次提取以来累积的消息。</span>
-</span><span id="__span-38-4"><a id="__codelineno-38-4" name="__codelineno-38-4"></a><span class="w">    </span><span class="nx">LastExtractAt</span><span class="w"> </span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Time</span><span class="w">      </span><span class="c1">// 上次提取时间戳，首次提取时为 nil。</span>
-</span><span id="__span-38-5"><a id="__codelineno-38-5" name="__codelineno-38-5"></a><span class="p">}</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-39-1">1</a></span>
+<span class="normal"><a href="#__codelineno-39-2">2</a></span>
+<span class="normal"><a href="#__codelineno-39-3">3</a></span>
+<span class="normal"><a href="#__codelineno-39-4">4</a></span>
+<span class="normal"><a href="#__codelineno-39-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-39-1"><a id="__codelineno-39-1" name="__codelineno-39-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">ExtractionContext</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-39-2"><a id="__codelineno-39-2" name="__codelineno-39-2"></a><span class="w">    </span><span class="nx">UserKey</span><span class="w">       </span><span class="nx">memory</span><span class="p">.</span><span class="nx">UserKey</span><span class="w">  </span><span class="c1">// 用户标识。</span>
+</span><span id="__span-39-3"><a id="__codelineno-39-3" name="__codelineno-39-3"></a><span class="w">    </span><span class="nx">Messages</span><span class="w">      </span><span class="p">[]</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="w"> </span><span class="c1">// 自上次提取以来累积的消息。</span>
+</span><span id="__span-39-4"><a id="__codelineno-39-4" name="__codelineno-39-4"></a><span class="w">    </span><span class="nx">LastExtractAt</span><span class="w"> </span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Time</span><span class="w">      </span><span class="c1">// 上次提取时间戳，首次提取时为 nil。</span>
+</span><span id="__span-39-5"><a id="__codelineno-39-5" name="__codelineno-39-5"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p><strong>注意</strong>：<code>Messages</code> 包含自上次成功提取以来累积的所有消息。当检查器返回 <code>false</code> 时，消息会被累积，并在下次提取时一并处理。这确保了使用轮数或时间检查器时不会丢失对话上下文。</p>
 <h3 id="_39">工具控制</h3>
@@ -5163,23 +5215,23 @@
 </tbody>
 </table>
 <p><strong>配置示例</strong>：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-39-1">1</a></span>
-<span class="normal"><a href="#__codelineno-39-2">2</a></span>
-<span class="normal"><a href="#__codelineno-39-3">3</a></span>
-<span class="normal"><a href="#__codelineno-39-4">4</a></span>
-<span class="normal"><a href="#__codelineno-39-5">5</a></span>
-<span class="normal"><a href="#__codelineno-39-6">6</a></span>
-<span class="normal"><a href="#__codelineno-39-7">7</a></span>
-<span class="normal"><a href="#__codelineno-39-8">8</a></span>
-<span class="normal"><a href="#__codelineno-39-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-39-1"><a id="__codelineno-39-1" name="__codelineno-39-1"></a><span class="nx">memoryService</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">memoryinmemory</span><span class="p">.</span><span class="nx">NewMemoryService</span><span class="p">(</span>
-</span><span id="__span-39-2"><a id="__codelineno-39-2" name="__codelineno-39-2"></a><span class="w">    </span><span class="nx">memoryinmemory</span><span class="p">.</span><span class="nx">WithExtractor</span><span class="p">(</span><span class="nx">memExtractor</span><span class="p">),</span>
-</span><span id="__span-39-3"><a id="__codelineno-39-3" name="__codelineno-39-3"></a><span class="w">    </span><span class="c1">// 前端：启用 memory_load 供 Agent 调用。</span>
-</span><span id="__span-39-4"><a id="__codelineno-39-4" name="__codelineno-39-4"></a><span class="w">    </span><span class="nx">memoryinmemory</span><span class="p">.</span><span class="nx">WithToolEnabled</span><span class="p">(</span><span class="nx">memory</span><span class="p">.</span><span class="nx">LoadToolName</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">),</span>
-</span><span id="__span-39-5"><a id="__codelineno-39-5" name="__codelineno-39-5"></a><span class="w">    </span><span class="c1">// 后端：禁用 memory_delete，提取器将无法删除记忆。</span>
-</span><span id="__span-39-6"><a id="__codelineno-39-6" name="__codelineno-39-6"></a><span class="w">    </span><span class="nx">memoryinmemory</span><span class="p">.</span><span class="nx">WithToolEnabled</span><span class="p">(</span><span class="nx">memory</span><span class="p">.</span><span class="nx">DeleteToolName</span><span class="p">,</span><span class="w"> </span><span class="kc">false</span><span class="p">),</span>
-</span><span id="__span-39-7"><a id="__codelineno-39-7" name="__codelineno-39-7"></a><span class="w">    </span><span class="c1">// 后端：启用 memory_clear 供提取器使用（谨慎使用）。</span>
-</span><span id="__span-39-8"><a id="__codelineno-39-8" name="__codelineno-39-8"></a><span class="w">    </span><span class="nx">memoryinmemory</span><span class="p">.</span><span class="nx">WithToolEnabled</span><span class="p">(</span><span class="nx">memory</span><span class="p">.</span><span class="nx">ClearToolName</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">),</span>
-</span><span id="__span-39-9"><a id="__codelineno-39-9" name="__codelineno-39-9"></a><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-40-1">1</a></span>
+<span class="normal"><a href="#__codelineno-40-2">2</a></span>
+<span class="normal"><a href="#__codelineno-40-3">3</a></span>
+<span class="normal"><a href="#__codelineno-40-4">4</a></span>
+<span class="normal"><a href="#__codelineno-40-5">5</a></span>
+<span class="normal"><a href="#__codelineno-40-6">6</a></span>
+<span class="normal"><a href="#__codelineno-40-7">7</a></span>
+<span class="normal"><a href="#__codelineno-40-8">8</a></span>
+<span class="normal"><a href="#__codelineno-40-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-40-1"><a id="__codelineno-40-1" name="__codelineno-40-1"></a><span class="nx">memoryService</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">memoryinmemory</span><span class="p">.</span><span class="nx">NewMemoryService</span><span class="p">(</span>
+</span><span id="__span-40-2"><a id="__codelineno-40-2" name="__codelineno-40-2"></a><span class="w">    </span><span class="nx">memoryinmemory</span><span class="p">.</span><span class="nx">WithExtractor</span><span class="p">(</span><span class="nx">memExtractor</span><span class="p">),</span>
+</span><span id="__span-40-3"><a id="__codelineno-40-3" name="__codelineno-40-3"></a><span class="w">    </span><span class="c1">// 前端：启用 memory_load 供 Agent 调用。</span>
+</span><span id="__span-40-4"><a id="__codelineno-40-4" name="__codelineno-40-4"></a><span class="w">    </span><span class="nx">memoryinmemory</span><span class="p">.</span><span class="nx">WithToolEnabled</span><span class="p">(</span><span class="nx">memory</span><span class="p">.</span><span class="nx">LoadToolName</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-40-5"><a id="__codelineno-40-5" name="__codelineno-40-5"></a><span class="w">    </span><span class="c1">// 后端：禁用 memory_delete，提取器将无法删除记忆。</span>
+</span><span id="__span-40-6"><a id="__codelineno-40-6" name="__codelineno-40-6"></a><span class="w">    </span><span class="nx">memoryinmemory</span><span class="p">.</span><span class="nx">WithToolEnabled</span><span class="p">(</span><span class="nx">memory</span><span class="p">.</span><span class="nx">DeleteToolName</span><span class="p">,</span><span class="w"> </span><span class="kc">false</span><span class="p">),</span>
+</span><span id="__span-40-7"><a id="__codelineno-40-7" name="__codelineno-40-7"></a><span class="w">    </span><span class="c1">// 后端：启用 memory_clear 供提取器使用（谨慎使用）。</span>
+</span><span id="__span-40-8"><a id="__codelineno-40-8" name="__codelineno-40-8"></a><span class="w">    </span><span class="nx">memoryinmemory</span><span class="p">.</span><span class="nx">WithToolEnabled</span><span class="p">(</span><span class="nx">memory</span><span class="p">.</span><span class="nx">ClearToolName</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-40-9"><a id="__codelineno-40-9" name="__codelineno-40-9"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p><strong>注意</strong>：<code>WithToolEnabled</code> 可以在 <code>WithExtractor</code> 之前或之后调用，顺序不影响结果。</p>
 <h3 id="_40">两种模式对比</h3>
@@ -5226,37 +5278,6 @@
 </table>
 <h3 id="_41">记忆预加载</h3>
 <p>两种模式都支持将记忆预加载到系统提示词中：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-40-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-40-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-40-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-40-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-40-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-40-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-40-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-40-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-40-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-40-10">10</a></span>
-<span class="normal"><a href="#__codelineno-40-11">11</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-40-1"><a id="__codelineno-40-1" name="__codelineno-40-1"></a><span class="nx">llmAgent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-40-2"><a id="__codelineno-40-2" name="__codelineno-40-2"></a><span class="w">    </span><span class="s">&quot;assistant&quot;</span><span class="p">,</span>
-</span><span id="__span-40-3"><a id="__codelineno-40-3" name="__codelineno-40-3"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">model</span><span class="p">),</span>
-</span><span id="__span-40-4"><a id="__codelineno-40-4" name="__codelineno-40-4"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">(</span><span class="nx">memoryService</span><span class="p">.</span><span class="nx">Tools</span><span class="p">()),</span>
-</span><span id="__span-40-5"><a id="__codelineno-40-5" name="__codelineno-40-5"></a><span class="w">    </span><span class="c1">// 预加载选项：</span>
-</span><span id="__span-40-6"><a id="__codelineno-40-6" name="__codelineno-40-6"></a><span class="w">    </span><span class="c1">// llmagent.WithPreloadMemory(0),   // 禁用预加载（默认）。</span>
-</span><span id="__span-40-7"><a id="__codelineno-40-7" name="__codelineno-40-7"></a><span class="w">    </span><span class="c1">// llmagent.WithPreloadMemory(10),  // 加载最近 10 条（推荐用于生产环境）。</span>
-</span><span id="__span-40-8"><a id="__codelineno-40-8" name="__codelineno-40-8"></a><span class="w">    </span><span class="c1">// llmagent.WithPreloadMemory(-1),  // 加载全部。</span>
-</span><span id="__span-40-9"><a id="__codelineno-40-9" name="__codelineno-40-9"></a><span class="w">    </span><span class="c1">//                                  // ⚠️ 警告：全量加载可能显著增加 token 使用量和 API 成本，</span>
-</span><span id="__span-40-10"><a id="__codelineno-40-10" name="__codelineno-40-10"></a><span class="w">    </span><span class="c1">//                                  //     特别是对于存储了大量记忆的用户。生产环境建议使用正数限制。</span>
-</span><span id="__span-40-11"><a id="__codelineno-40-11" name="__codelineno-40-11"></a><span class="p">)</span>
-</span></code></pre></div></td></tr></table></div>
-<p>启用预加载后，记忆会自动注入到系统提示词中，让 Agent 无需显式工具调用就能获得用户上下文。</p>
-<p><strong>⚠️ 重要提示</strong>：配置为 <code>-1</code> 会加载所有记忆，这可能会显著增加<strong>Token 使用量</strong>和<strong>API 成本</strong>。默认情况下预加载是禁用的（<code>0</code>），推荐使用正数限制（如 <code>10-50</code>）来平衡性能和成本。</p>
-<h3 id="_42">混合方案</h3>
-<p>你可以结合两种方式：</p>
-<ol>
-<li>使用自动提取模式进行被动学习（后台提取）</li>
-<li>启用搜索工具进行显式记忆查询</li>
-<li>预加载记忆获得即时上下文</li>
-</ol>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-41-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-41-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-41-3"> 3</a></span>
@@ -5267,17 +5288,48 @@
 <span class="normal"><a href="#__codelineno-41-8"> 8</a></span>
 <span class="normal"><a href="#__codelineno-41-9"> 9</a></span>
 <span class="normal"><a href="#__codelineno-41-10">10</a></span>
-<span class="normal"><a href="#__codelineno-41-11">11</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-41-1"><a id="__codelineno-41-1" name="__codelineno-41-1"></a><span class="c1">// 自动提取 + 搜索工具 + 预加载。</span>
-</span><span id="__span-41-2"><a id="__codelineno-41-2" name="__codelineno-41-2"></a><span class="nx">memoryService</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">memoryinmemory</span><span class="p">.</span><span class="nx">NewMemoryService</span><span class="p">(</span>
-</span><span id="__span-41-3"><a id="__codelineno-41-3" name="__codelineno-41-3"></a><span class="w">    </span><span class="nx">memoryinmemory</span><span class="p">.</span><span class="nx">WithExtractor</span><span class="p">(</span><span class="nx">extractor</span><span class="p">),</span>
-</span><span id="__span-41-4"><a id="__codelineno-41-4" name="__codelineno-41-4"></a><span class="p">)</span>
-</span><span id="__span-41-5"><a id="__codelineno-41-5" name="__codelineno-41-5"></a>
-</span><span id="__span-41-6"><a id="__codelineno-41-6" name="__codelineno-41-6"></a><span class="nx">llmAgent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-41-7"><a id="__codelineno-41-7" name="__codelineno-41-7"></a><span class="w">    </span><span class="s">&quot;assistant&quot;</span><span class="p">,</span>
-</span><span id="__span-41-8"><a id="__codelineno-41-8" name="__codelineno-41-8"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">model</span><span class="p">),</span>
-</span><span id="__span-41-9"><a id="__codelineno-41-9" name="__codelineno-41-9"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">(</span><span class="nx">memoryService</span><span class="p">.</span><span class="nx">Tools</span><span class="p">()),</span><span class="w">  </span><span class="c1">// 默认只有 search（load 可选）。</span>
-</span><span id="__span-41-10"><a id="__codelineno-41-10" name="__codelineno-41-10"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithPreloadMemory</span><span class="p">(</span><span class="mi">10</span><span class="p">),</span><span class="w">             </span><span class="c1">// 预加载最近记忆。</span>
+<span class="normal"><a href="#__codelineno-41-11">11</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-41-1"><a id="__codelineno-41-1" name="__codelineno-41-1"></a><span class="nx">llmAgent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-41-2"><a id="__codelineno-41-2" name="__codelineno-41-2"></a><span class="w">    </span><span class="s">&quot;assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-41-3"><a id="__codelineno-41-3" name="__codelineno-41-3"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">model</span><span class="p">),</span>
+</span><span id="__span-41-4"><a id="__codelineno-41-4" name="__codelineno-41-4"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">(</span><span class="nx">memoryService</span><span class="p">.</span><span class="nx">Tools</span><span class="p">()),</span>
+</span><span id="__span-41-5"><a id="__codelineno-41-5" name="__codelineno-41-5"></a><span class="w">    </span><span class="c1">// 预加载选项：</span>
+</span><span id="__span-41-6"><a id="__codelineno-41-6" name="__codelineno-41-6"></a><span class="w">    </span><span class="c1">// llmagent.WithPreloadMemory(0),   // 禁用预加载（默认）。</span>
+</span><span id="__span-41-7"><a id="__codelineno-41-7" name="__codelineno-41-7"></a><span class="w">    </span><span class="c1">// llmagent.WithPreloadMemory(10),  // 加载最近 10 条（推荐用于生产环境）。</span>
+</span><span id="__span-41-8"><a id="__codelineno-41-8" name="__codelineno-41-8"></a><span class="w">    </span><span class="c1">// llmagent.WithPreloadMemory(-1),  // 加载全部。</span>
+</span><span id="__span-41-9"><a id="__codelineno-41-9" name="__codelineno-41-9"></a><span class="w">    </span><span class="c1">//                                  // ⚠️ 警告：全量加载可能显著增加 token 使用量和 API 成本，</span>
+</span><span id="__span-41-10"><a id="__codelineno-41-10" name="__codelineno-41-10"></a><span class="w">    </span><span class="c1">//                                  //     特别是对于存储了大量记忆的用户。生产环境建议使用正数限制。</span>
 </span><span id="__span-41-11"><a id="__codelineno-41-11" name="__codelineno-41-11"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>启用预加载后，记忆会自动注入到系统提示词中，让 Agent 无需显式工具调用就能获得用户上下文。</p>
+<p><strong>⚠️ 重要提示</strong>：配置为 <code>-1</code> 会加载所有记忆，这可能会显著增加<strong>Token 使用量</strong>和<strong>API 成本</strong>。默认情况下预加载是禁用的（<code>0</code>），推荐使用正数限制（如 <code>10-50</code>）来平衡性能和成本。</p>
+<h3 id="_42">混合方案</h3>
+<p>你可以结合两种方式：</p>
+<ol>
+<li>使用自动提取模式进行被动学习（后台提取）</li>
+<li>启用搜索工具进行显式记忆查询</li>
+<li>预加载记忆获得即时上下文</li>
+</ol>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-42-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-42-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-42-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-42-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-42-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-42-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-42-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-42-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-42-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-42-10">10</a></span>
+<span class="normal"><a href="#__codelineno-42-11">11</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-42-1"><a id="__codelineno-42-1" name="__codelineno-42-1"></a><span class="c1">// 自动提取 + 搜索工具 + 预加载。</span>
+</span><span id="__span-42-2"><a id="__codelineno-42-2" name="__codelineno-42-2"></a><span class="nx">memoryService</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">memoryinmemory</span><span class="p">.</span><span class="nx">NewMemoryService</span><span class="p">(</span>
+</span><span id="__span-42-3"><a id="__codelineno-42-3" name="__codelineno-42-3"></a><span class="w">    </span><span class="nx">memoryinmemory</span><span class="p">.</span><span class="nx">WithExtractor</span><span class="p">(</span><span class="nx">extractor</span><span class="p">),</span>
+</span><span id="__span-42-4"><a id="__codelineno-42-4" name="__codelineno-42-4"></a><span class="p">)</span>
+</span><span id="__span-42-5"><a id="__codelineno-42-5" name="__codelineno-42-5"></a>
+</span><span id="__span-42-6"><a id="__codelineno-42-6" name="__codelineno-42-6"></a><span class="nx">llmAgent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-42-7"><a id="__codelineno-42-7" name="__codelineno-42-7"></a><span class="w">    </span><span class="s">&quot;assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-42-8"><a id="__codelineno-42-8" name="__codelineno-42-8"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">model</span><span class="p">),</span>
+</span><span id="__span-42-9"><a id="__codelineno-42-9" name="__codelineno-42-9"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">(</span><span class="nx">memoryService</span><span class="p">.</span><span class="nx">Tools</span><span class="p">()),</span><span class="w">  </span><span class="c1">// 默认只有 search（load 可选）。</span>
+</span><span id="__span-42-10"><a id="__codelineno-42-10" name="__codelineno-42-10"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithPreloadMemory</span><span class="p">(</span><span class="mi">10</span><span class="p">),</span><span class="w">             </span><span class="c1">// 预加载最近记忆。</span>
+</span><span id="__span-42-11"><a id="__codelineno-42-11" name="__codelineno-42-11"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h2 id="_43">参考链接</h2>
 <ul>
@@ -5308,7 +5360,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月21日 11:03:02 UTC">2026-01-21 11:03:02</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年2月6日 07:36:48 UTC">2026-02-06 07:36:48</span>
   </span>
 
     
