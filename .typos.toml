@@ -19,11 +19,6 @@ extend-exclude = [
   "examples/"
 ]
 
-[default]
-extend-ignore-words-re = [
-  "^(ative|ful|iz|ment)$",
-]
-
 # Allow specific identifiers
 [default.extend-identifiers]
 O_WRONLY = "O_WRONLY"
@@ -40,3 +35,7 @@ ba = "ba"
 UE = "UE"
 rin = "rin"
 dify = "dify"
+ative = "ative"
+ful = "ful"
+iz = "iz"
+ment = "ment"
