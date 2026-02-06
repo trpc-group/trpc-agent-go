@@ -1339,6 +1339,8 @@ Example tool trajectory metric configuration:
 
 See [examples/evaluation/tooltrajectory](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/tooltrajectory) for the full example.
 
+Agent Skills are exposed as built-in tools (`skill_load` / `skill_run`), so you can evaluate whether the agent uses Skills correctly with the same tool trajectory evaluator. In practice, `skill_run` results contain volatile fields (for example `stdout`, `stderr`, `duration_ms`, and collected `output_files` inline content), so prefer configuring a per-tool strategy to ignore these keys and only assert stable fields such as `skill`, requested `output_files`, and `exit_code` / `timed_out`. See [examples/evaluation/skill](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/skill) for a runnable example.
+
 #### Final Response Evaluator
 
 The built-in final response evaluator is named `final_response_avg_score`, and its criterion is [finalResponse](#finalresponsecriterion). It compares `finalResponse` per turn.

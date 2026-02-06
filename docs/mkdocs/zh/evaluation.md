@@ -1341,6 +1341,8 @@ Evaluator 的输出包含整体结果与逐轮明细。整体分数通常由逐�
 
 完整示例参见 [examples/evaluation/tooltrajectory](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/tooltrajectory)。
 
+Agent Skills 以工具形式暴露（`skill_load` / `skill_run`），因此也可以复用工具轨迹评估器来评估 Agent 是否按预期使用 Skills。实践中 `skill_run` 的结果通常包含波动字段（例如 `stdout`、`stderr`、`duration_ms`，以及收集到的 `output_files` 内联内容），建议通过按工具覆盖策略忽略这些字段，仅对稳定字段进行回归校验，例如 `skill`、请求的 `output_files`，以及 `exit_code` / `timed_out`。完整可运行示例参见 [examples/evaluation/skill](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/skill)。
+
 #### 最终响应评估器
 
 内置最终响应评估器名称为 `final_response_avg_score`，相应评估准则为 [finalResponse](#finalresponsecriterion)，并在每一轮对比 `finalResponse`。
