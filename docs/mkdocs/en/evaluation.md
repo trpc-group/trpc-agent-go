@@ -819,6 +819,7 @@ JSONCriterion compares two JSON values, commonly used for tool arguments and too
 type JSONCriterion struct {
 	Ignore          bool                                     // Ignore indicates skipping comparison.
 	IgnoreTree      map[string]any                           // IgnoreTree indicates the field tree to ignore.
+	OnlyTree        map[string]any                           // OnlyTree indicates the only field tree to compare.
 	MatchStrategy   JSONMatchStrategy                        // MatchStrategy is the matching strategy.
 	NumberTolerance *float64                                 // NumberTolerance is the numeric tolerance.
 	Compare         func(actual, expected any) (bool, error) // Compare is custom comparison logic.
@@ -830,7 +831,7 @@ type JSONMatchStrategy string
 
 Currently, `matchStrategy` only supports `exact`, with default `exact`.
 
-During comparison, `actual` is the actual value and `expected` is the expected value. Object comparison requires identical key sets. Array comparison requires identical length and order. Numeric comparison supports a tolerance, default `1e-6`. `ignoreTree` ignores unstable fields; a leaf node set to true ignores that field and its subtree.
+During comparison, `actual` is the actual value and `expected` is the expected value. Object comparison requires identical key sets. Array comparison requires identical length and order. Numeric comparison supports a tolerance, default `1e-6`. `ignoreTree` ignores unstable fields; a leaf node set to true ignores that field and its subtree. `onlyTree` compares only selected fields; keys not present in the tree are ignored. A leaf node set to true compares that field and its subtree. `onlyTree` and `ignoreTree` cannot be set at the same time when both are non-empty.
 
 Example configuration ignores `id` and `metadata.timestamp`, and relaxes numeric tolerance.
 
@@ -843,6 +844,19 @@ Example configuration ignores `id` and `metadata.timestamp`, and relaxes numeric
     }
   },
   "numberTolerance": 1e-2
+}
+```
+
+Example configuration compares only `name` and `metadata.id`, and ignores all other fields.
+
+```json
+{
+  "onlyTree": {
+    "name": true,
+    "metadata": {
+      "id": true
+    }
+  }
 }
 ```
 

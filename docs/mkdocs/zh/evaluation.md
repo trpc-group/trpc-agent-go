@@ -821,6 +821,7 @@ JSONCriterion 用于比较两个 JSON 值，常用于工具参数与工具结果
 type JSONCriterion struct {
 	Ignore          bool                                     // Ignore 表示跳过对比
 	IgnoreTree      map[string]any                           // IgnoreTree 表示需要忽略的字段树
+	OnlyTree        map[string]any                           // OnlyTree 表示仅需要对比的字段树
 	MatchStrategy   JSONMatchStrategy                        // MatchStrategy 表示匹配策略
 	NumberTolerance *float64                                 // NumberTolerance 表示数字容差
 	Compare         func(actual, expected any) (bool, error) // Compare 自定义比较逻辑
@@ -832,7 +833,7 @@ type JSONMatchStrategy string
 
 当前 `matchStrategy` 仅支持 `exact`，默认值为 `exact`。
 
-对比时 actual 是实际值，expected 是预期值。对象对比要求键集合一致，数组对比要求长度一致且顺序一致。数字对比支持数值容差，默认值为 `1e-6`。`ignoreTree` 用于忽略不稳定字段，叶子节点为 true 表示忽略该字段及其子树。
+对比时 actual 是实际值，expected 是预期值。对象对比要求键集合一致，数组对比要求长度一致且顺序一致。数字对比支持数值容差，默认值为 `1e-6`。`ignoreTree` 用于忽略不稳定字段，叶子节点为 true 表示忽略该字段及其子树。`onlyTree` 用于只对比指定字段，未出现在字段树中的字段将被忽略；叶子节点为 true 表示对比该字段及其子树。`onlyTree` 与 `ignoreTree` 不能同时配置。两者同时非空时将报错。
 
 配置示例片段如下，忽略 `id` 和 `metadata.timestamp` 字段，并放宽数字容差。
 
@@ -845,6 +846,19 @@ type JSONMatchStrategy string
     }
   },
   "numberTolerance": 1e-2
+}
+```
+
+配置示例片段如下，只对比 `name` 和 `metadata.id` 字段，忽略其他所有字段。
+
+```json
+{
+  "onlyTree": {
+    "name": true,
+    "metadata": {
+      "id": true
+    }
+  }
 }
 ```
 
