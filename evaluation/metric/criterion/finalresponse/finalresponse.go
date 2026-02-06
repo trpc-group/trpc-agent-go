@@ -11,13 +11,15 @@
 package finalresponse
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
-	criterionjson "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
+	cjson "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
+	crouge "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/rouge"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
 )
 
@@ -26,7 +28,9 @@ type FinalResponseCriterion struct {
 	// Text compares the final response content as plain text.
 	Text *text.TextCriterion `json:"text,omitempty"`
 	// JSON compares the final response content as JSON.
-	JSON *criterionjson.JSONCriterion `json:"json,omitempty"`
+	JSON *cjson.JSONCriterion `json:"json,omitempty"`
+	// Rouge scores the final response content with ROUGE.
+	Rouge *crouge.RougeCriterion `json:"rouge,omitempty"`
 	// Compare allows overriding the built-in matching logic.
 	Compare func(actual, expected *evalset.Invocation) (bool, error) `json:"-"`
 }
@@ -37,20 +41,21 @@ func New(opt ...Option) *FinalResponseCriterion {
 	return &FinalResponseCriterion{
 		Text:    opts.text,
 		JSON:    opts.json,
+		Rouge:   opts.rouge,
 		Compare: opts.compare,
 	}
 }
 
-// Match compares the final responses of actual and expected invocations.
-func (c *FinalResponseCriterion) Match(actual, expected *evalset.Invocation) (bool, error) {
+// Match compares the final responses of actual and expected invocations using the provided context.
+func (c *FinalResponseCriterion) Match(ctx context.Context, actual, expected *evalset.Invocation) (bool, error) {
 	if c == nil {
 		return false, fmt.Errorf("final response criterion is nil")
 	}
 	if c.Compare != nil {
 		return c.Compare(actual, expected)
 	}
-	if c.Text == nil && c.JSON == nil {
-		return false, fmt.Errorf("final response criterion must configure text and/or json")
+	if c.Text == nil && c.JSON == nil && c.Rouge == nil {
+		return false, fmt.Errorf("final response criterion must configure text, json, or rouge")
 	}
 	if actual == nil || expected == nil {
 		return false, fmt.Errorf("actual or expected invocation is nil")
@@ -62,7 +67,7 @@ func (c *FinalResponseCriterion) Match(actual, expected *evalset.Invocation) (bo
 		return false, fmt.Errorf("actual or expected final response is nil")
 	}
 
-	mismatchMessages := make([]string, 0, 2)
+	mismatchMessages := make([]string, 0, 3)
 
 	if c.JSON != nil {
 		if err := matchContentAsJSON(actual.FinalResponse.Content, expected.FinalResponse.Content, c.JSON); err != nil {
@@ -74,6 +79,11 @@ func (c *FinalResponseCriterion) Match(actual, expected *evalset.Invocation) (bo
 			mismatchMessages = append(mismatchMessages, err.Error())
 		}
 	}
+	if c.Rouge != nil {
+		if err := matchContentAsRouge(ctx, actual.FinalResponse.Content, expected.FinalResponse.Content, c.Rouge); err != nil {
+			mismatchMessages = append(mismatchMessages, err.Error())
+		}
+	}
 
 	if len(mismatchMessages) > 0 {
 		return false, errors.New(strings.Join(mismatchMessages, "; "))
@@ -81,6 +91,7 @@ func (c *FinalResponseCriterion) Match(actual, expected *evalset.Invocation) (bo
 	return true, nil
 }
 
+// matchContentAsText compares two strings using a TextCriterion.
 func matchContentAsText(actual, expected string, criterion *text.TextCriterion) error {
 	if criterion == nil || criterion.Ignore {
 		return nil
@@ -95,7 +106,8 @@ func matchContentAsText(actual, expected string, criterion *text.TextCriterion) 
 	return nil
 }
 
-func matchContentAsJSON(actual, expected string, criterion *criterionjson.JSONCriterion) error {
+// matchContentAsJSON parses and compares two JSON strings using a JSONCriterion.
+func matchContentAsJSON(actual, expected string, criterion *cjson.JSONCriterion) error {
 	if criterion == nil || criterion.Ignore {
 		return nil
 	}
@@ -117,6 +129,22 @@ func matchContentAsJSON(actual, expected string, criterion *criterionjson.JSONCr
 	return nil
 }
 
+// matchContentAsRouge scores and validates two strings using a RougeCriterion.
+func matchContentAsRouge(ctx context.Context, actual, expected string, criterion *crouge.RougeCriterion) error {
+	if criterion == nil || criterion.Ignore {
+		return nil
+	}
+	result, err := criterion.Match(ctx, expected, actual)
+	if err != nil {
+		return fmt.Errorf("rouge mismatch: %w", err)
+	}
+	if !result.Passed {
+		return fmt.Errorf("rouge mismatch: %s", result.Reason())
+	}
+	return nil
+}
+
+// parseContentAsJSON parses a JSON string into an untyped Go value.
 func parseContentAsJSON(content string) (any, error) {
 	decoder := json.NewDecoder(strings.NewReader(content))
 	var v any

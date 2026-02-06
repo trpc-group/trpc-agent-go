@@ -23,6 +23,7 @@ type LLMCriterion struct {
 	JudgeModel *JudgeModelOptions `json:"judgeModel,omitempty"` // JudgeModel holds configuration for the judge model.
 }
 
+// Rubric defines a single judging rubric item for LLM-based evaluation.
 type Rubric struct {
 	ID          string         `json:"id,omitempty"`
 	Content     *RubricContent `json:"content,omitempty"`
@@ -30,6 +31,7 @@ type Rubric struct {
 	Type        string         `json:"type,omitempty"`
 }
 
+// RubricContent provides the judge-readable content for a rubric item.
 type RubricContent struct {
 	Text string `json:"text,omitempty"`
 }
