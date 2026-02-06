@@ -199,6 +199,11 @@ func TestChatMetricsTracker_TrackResponse(t *testing.T) {
 		Usage: &model.Usage{
 			PromptTokens:     10,
 			CompletionTokens: 5,
+			PromptTokensDetails: model.PromptTokensDetails{
+				CachedTokens:        7,
+				CacheReadTokens:     11,
+				CacheCreationTokens: 13,
+			},
 		},
 	}
 
@@ -221,12 +226,26 @@ func TestChatMetricsTracker_TrackResponse(t *testing.T) {
 	if tracker.totalCompletionTokens != 5 {
 		t.Errorf("expected totalCompletionTokens=5, got %d", tracker.totalCompletionTokens)
 	}
+	if tracker.totalPromptCachedTokens != 7 {
+		t.Errorf("expected totalPromptCachedTokens=7, got %d", tracker.totalPromptCachedTokens)
+	}
+	if tracker.totalPromptCacheReadTokens != 11 {
+		t.Errorf("expected totalPromptCacheReadTokens=11, got %d", tracker.totalPromptCacheReadTokens)
+	}
+	if tracker.totalPromptCacheCreationTokens != 13 {
+		t.Errorf("expected totalPromptCacheCreationTokens=13, got %d", tracker.totalPromptCacheCreationTokens)
+	}
 
 	// Second response
 	response2 := &model.Response{
 		Usage: &model.Usage{
 			PromptTokens:     0,
 			CompletionTokens: 3,
+			PromptTokensDetails: model.PromptTokensDetails{
+				CachedTokens:        2,
+				CacheReadTokens:     5,
+				CacheCreationTokens: 8,
+			},
 		},
 	}
 	firstTokenDuration := tracker.firstTokenTimeDuration
@@ -240,6 +259,15 @@ func TestChatMetricsTracker_TrackResponse(t *testing.T) {
 	}
 	if tracker.totalCompletionTokens != 3 {
 		t.Errorf("expected totalCompletionTokens=3, got %d", tracker.totalCompletionTokens)
+	}
+	if tracker.totalPromptCachedTokens != 2 {
+		t.Errorf("expected totalPromptCachedTokens=2, got %d", tracker.totalPromptCachedTokens)
+	}
+	if tracker.totalPromptCacheReadTokens != 5 {
+		t.Errorf("expected totalPromptCacheReadTokens=5, got %d", tracker.totalPromptCacheReadTokens)
+	}
+	if tracker.totalPromptCacheCreationTokens != 8 {
+		t.Errorf("expected totalPromptCacheCreationTokens=8, got %d", tracker.totalPromptCacheCreationTokens)
 	}
 }
 
@@ -265,6 +293,15 @@ func TestChatMetricsTracker_TrackResponse_NilUsage(t *testing.T) {
 	}
 	if tracker.totalCompletionTokens != 0 {
 		t.Errorf("expected totalCompletionTokens=0, got %d", tracker.totalCompletionTokens)
+	}
+	if tracker.totalPromptCachedTokens != 0 {
+		t.Errorf("expected totalPromptCachedTokens=0, got %d", tracker.totalPromptCachedTokens)
+	}
+	if tracker.totalPromptCacheReadTokens != 0 {
+		t.Errorf("expected totalPromptCacheReadTokens=0, got %d", tracker.totalPromptCacheReadTokens)
+	}
+	if tracker.totalPromptCacheCreationTokens != 0 {
+		t.Errorf("expected totalPromptCacheCreationTokens=0, got %d", tracker.totalPromptCacheCreationTokens)
 	}
 }
 
