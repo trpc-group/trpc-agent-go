@@ -223,6 +223,62 @@ func TestDocumentProcessingWorkflow(t *testing.T) {
 	})
 }
 
+func TestExecutor_NodeStartEvent_UsesCustomUserInputKey(t *testing.T) {
+	const (
+		testNodeID         = "llm"
+		testCustomInputKey = "custom_input"
+		testCustomInput    = "from-custom"
+	)
+
+	schema := MessagesStateSchema()
+	sg := NewStateGraph(schema)
+	sg.AddLLMNode(
+		testNodeID,
+		&MockModel{responses: map[string]string{}},
+		"inst",
+		nil,
+		WithUserInputKey(testCustomInputKey),
+	)
+	sg.SetEntryPoint(testNodeID)
+	sg.SetFinishPoint(testNodeID)
+
+	g, err := sg.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	initialState := State{
+		StateKeyUserInput:  "from-user",
+		testCustomInputKey: testCustomInput,
+	}
+	invocation := &agent.Invocation{InvocationID: "inv-node-start"}
+	eventChan, err := exec.Execute(
+		context.Background(),
+		initialState,
+		invocation,
+	)
+	require.NoError(t, err)
+
+	var got string
+	for ev := range eventChan {
+		if ev == nil || ev.Object != ObjectTypeGraphNodeStart {
+			continue
+		}
+		raw, ok := ev.StateDelta[MetadataKeyNode]
+		if !ok {
+			continue
+		}
+		var meta NodeExecutionMetadata
+		require.NoError(t, json.Unmarshal(raw, &meta))
+		if meta.NodeID != testNodeID {
+			continue
+		}
+		got = meta.ModelInput
+	}
+	require.Equal(t, testCustomInput, got)
+}
+
 // Ensure handleInterrupt still emits the interrupt event even when
 // the provided context is canceled, because it uses a fresh background
 // context with a timeout for emission.

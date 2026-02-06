@@ -15,7 +15,29 @@ import (
 	"unicode/utf8"
 )
 
-const approxRunesPerToken = 4 // heuristic: ~1 token per 4 UTF-8 runes
+// defaultApproxRunesPerToken is the default approximate runes per token heuristic.
+const defaultApproxRunesPerToken = 4.0
+
+type simpleTokenCounterOptions struct {
+	approxRunesPerToken float64
+}
+
+// SimpleTokenCounterOption configures a SimpleTokenCounter.
+type SimpleTokenCounterOption func(*simpleTokenCounterOptions)
+
+// WithApproxRunesPerToken sets the approximate runes per token heuristic.
+// This is a heuristic and may vary across languages and models.
+//
+// Note:
+// Values <= 0 are ignored and the default value is kept.
+func WithApproxRunesPerToken(v float64) SimpleTokenCounterOption {
+	return func(o *simpleTokenCounterOptions) {
+		if v <= 0 {
+			return
+		}
+		o.approxRunesPerToken = v
+	}
+}
 
 // TokenTailoringConfig holds custom token tailoring budget parameters.
 // This configuration allows advanced users to fine-tune the token allocation strategy.
@@ -56,12 +78,23 @@ type TailoringStrategy interface {
 }
 
 // SimpleTokenCounter provides a very rough token estimation based on rune length.
-// Heuristic: approximately one token per four UTF-8 runes for text content fields.
-type SimpleTokenCounter struct{}
+// Heuristic: approximately one token per several UTF-8 runes for text fields.
+type SimpleTokenCounter struct {
+	approxRunesPerToken float64
+}
 
-// NewSimpleTokenCounter creates a SimpleTokenCounter with a max token budget.
-func NewSimpleTokenCounter() *SimpleTokenCounter {
-	return &SimpleTokenCounter{}
+// NewSimpleTokenCounter creates a SimpleTokenCounter.
+func NewSimpleTokenCounter(opts ...SimpleTokenCounterOption) *SimpleTokenCounter {
+	o := simpleTokenCounterOptions{
+		approxRunesPerToken: defaultApproxRunesPerToken,
+	}
+	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
+		opt(&o)
+	}
+	return &SimpleTokenCounter{approxRunesPerToken: o.approxRunesPerToken}
 }
 
 // CountTokens estimates tokens for a single message.
@@ -69,24 +102,31 @@ func (c *SimpleTokenCounter) CountTokens(_ context.Context, message Message) (in
 	total := 0
 
 	// Count main content.
-	total += utf8.RuneCountInString(message.Content) / approxRunesPerToken
+	total += utf8.RuneCountInString(message.Content)
 
 	// Count reasoning content if present.
 	if message.ReasoningContent != "" {
-		total += utf8.RuneCountInString(message.ReasoningContent) / approxRunesPerToken
+		total += utf8.RuneCountInString(message.ReasoningContent)
 	}
 
 	// Count text parts in multimodal content.
 	for _, part := range message.ContentParts {
 		if part.Text != nil {
-			total += utf8.RuneCountInString(*part.Text) / approxRunesPerToken
+			total += utf8.RuneCountInString(*part.Text)
 		}
 	}
 
 	// Count tool calls.
 	for _, toolCall := range message.ToolCalls {
-		total += c.countToolCallRunes(toolCall) / approxRunesPerToken
+		total += c.countToolCallRunes(toolCall)
 	}
+
+	runesPerToken := c.approxRunesPerToken
+	if runesPerToken <= 0 {
+		// Fall back to default to avoid division by zero.
+		runesPerToken = defaultApproxRunesPerToken
+	}
+	total = int(float64(total) / runesPerToken)
 
 	// Total should be at least 1 if message is not empty.
 	if isMessageNotEmpty(message) {
@@ -612,8 +652,6 @@ func (s *TailOutStrategy) TailorMessages(ctx context.Context, messages []Message
 	return ensureTailoredWithinBudget(ctx, s.tokenCounter, result, maxTokens)
 }
 
-// binarySearchMaxHeadCount finds the maximum number of head messages that fit with preserved tail.
-
 // calculatePreservedHeadCount calculates the number of preserved head messages.
 // It preserves all consecutive system messages from the beginning.
 func calculatePreservedHeadCount(messages []Message) int {
@@ -632,15 +670,19 @@ func calculatePreservedHeadCount(messages []Message) int {
 // prefixSum[i] represents the cumulative token count from messages[0] to messages[i-1].
 // This function is shared by all tailoring strategies for consistent token calculation.
 func buildPrefixSum(ctx context.Context, tokenCounter TokenCounter, messages []Message) []int {
+	if tokenCounter == nil {
+		tokenCounter = NewSimpleTokenCounter()
+	}
+
+	fallbackCounter := NewSimpleTokenCounter()
 	prefixSum := make([]int, len(messages)+1)
 	for i, msg := range messages {
 		tokens, err := tokenCounter.CountTokens(ctx, msg)
 		if err != nil {
-			// In case of error, use a fallback estimation.
-			prefixSum[i+1] = prefixSum[i] + utf8.RuneCountInString(msg.Content)/approxRunesPerToken
-		} else {
-			prefixSum[i+1] = prefixSum[i] + tokens
+			// Fall back to SimpleTokenCounter to keep estimation consistent.
+			tokens, _ = fallbackCounter.CountTokens(ctx, msg)
 		}
+		prefixSum[i+1] = prefixSum[i] + tokens
 	}
 	return prefixSum
 }

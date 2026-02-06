@@ -14,8 +14,10 @@ import (
 	"time"
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/multimodal"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -47,21 +49,25 @@ func TestBuildMessagesHappyPath(t *testing.T) {
 	// User message assertions.
 	user := msgs[0]
 	assert.Equal(t, "user-1", user.ID)
-	assert.Equal(t, "user", user.Role)
+	assert.Equal(t, types.RoleUser, user.Role)
 	require.NotNil(t, user.Name)
-	assert.Equal(t, testUserID, *user.Name)
+	assert.Equal(t, testUserID, user.Name)
 	require.NotNil(t, user.Content)
-	assert.Equal(t, "hello world", *user.Content)
+	content, ok := user.ContentString()
+	require.True(t, ok)
+	assert.Equal(t, "hello world", content)
 	assert.Empty(t, user.ToolCalls)
 
 	// Assistant message assertions.
 	assistant := msgs[1]
 	assert.Equal(t, "assistant-1", assistant.ID)
-	assert.Equal(t, "assistant", assistant.Role)
+	assert.Equal(t, types.RoleAssistant, assistant.Role)
 	require.NotNil(t, assistant.Name)
-	assert.Equal(t, testAppName, *assistant.Name)
+	assert.Equal(t, testAppName, assistant.Name)
 	require.NotNil(t, assistant.Content)
-	assert.Equal(t, "thinking...done", *assistant.Content)
+	content, ok = assistant.ContentString()
+	require.True(t, ok)
+	assert.Equal(t, "thinking...done", content)
 	require.Len(t, assistant.ToolCalls, 1)
 	call := assistant.ToolCalls[0]
 	assert.Equal(t, "tool-call-1", call.ID)
@@ -72,11 +78,120 @@ func TestBuildMessagesHappyPath(t *testing.T) {
 	// Tool result assertions.
 	tool := msgs[2]
 	assert.Equal(t, "tool-msg-1", tool.ID)
-	assert.Equal(t, "tool", tool.Role)
+	assert.Equal(t, types.RoleTool, tool.Role)
 	require.NotNil(t, tool.Content)
-	assert.Equal(t, "42", *tool.Content)
+	content, ok = tool.ContentString()
+	require.True(t, ok)
+	assert.Equal(t, "42", content)
 	require.NotNil(t, tool.ToolCallID)
-	assert.Equal(t, "tool-call-1", *tool.ToolCallID)
+	assert.Equal(t, "tool-call-1", tool.ToolCallID)
+}
+
+func TestReduceUserMessageCustomEventWithInputContents(t *testing.T) {
+	user := types.Message{
+		ID:   "user-1",
+		Role: types.RoleUser,
+		Content: []types.InputContent{
+			{Type: types.InputContentTypeBinary, MimeType: "image/jpeg", URL: "https://example.com/images/1.jpeg"},
+			{Type: types.InputContentTypeText, Text: "图中有哪些信息?"},
+		},
+	}
+	customEvent := aguievents.NewCustomEvent(multimodal.CustomEventNameUserMessage, aguievents.WithValue(user))
+	msgs, err := Reduce(testAppName, testUserID, trackEventsFrom(customEvent))
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+
+	got := msgs[0]
+	assert.Equal(t, "user-1", got.ID)
+	assert.Equal(t, types.RoleUser, got.Role)
+	require.NotNil(t, got.Name)
+	assert.Equal(t, testUserID, got.Name)
+
+	contents, ok := got.ContentInputContents()
+	require.True(t, ok)
+	require.Len(t, contents, 2)
+	assert.Equal(t, types.InputContentTypeBinary, contents[0].Type)
+	assert.Equal(t, "image/jpeg", contents[0].MimeType)
+	assert.Equal(t, "https://example.com/images/1.jpeg", contents[0].URL)
+	assert.Equal(t, types.InputContentTypeText, contents[1].Type)
+	assert.Equal(t, "图中有哪些信息?", contents[1].Text)
+}
+
+func TestReduceUserMessageCustomEventWithStringContent(t *testing.T) {
+	user := types.Message{
+		ID:      "user-1",
+		Role:    types.RoleUser,
+		Name:    "alice",
+		Content: "hi",
+	}
+	customEvent := aguievents.NewCustomEvent(multimodal.CustomEventNameUserMessage, aguievents.WithValue(user))
+	msgs, err := Reduce(testAppName, testUserID, trackEventsFrom(customEvent))
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+
+	got := msgs[0]
+	assert.Equal(t, "user-1", got.ID)
+	assert.Equal(t, types.RoleUser, got.Role)
+	assert.Equal(t, "alice", got.Name)
+	content, ok := got.ContentString()
+	require.True(t, ok)
+	assert.Equal(t, "hi", content)
+}
+
+func TestHandleUserMessageCustomEventErrors(t *testing.T) {
+	tests := []struct {
+		name  string
+		event *aguievents.CustomEvent
+		want  string
+	}{
+		{
+			name:  "missing value",
+			event: aguievents.NewCustomEvent(multimodal.CustomEventNameUserMessage),
+			want:  "user message custom event missing value",
+		},
+		{
+			name:  "marshal value error",
+			event: aguievents.NewCustomEvent(multimodal.CustomEventNameUserMessage, aguievents.WithValue(make(chan int))),
+			want:  "marshal user message custom event value",
+		},
+		{
+			name:  "unmarshal value error",
+			event: aguievents.NewCustomEvent(multimodal.CustomEventNameUserMessage, aguievents.WithValue("invalid")),
+			want:  "unmarshal user message custom event value",
+		},
+		{
+			name: "role mismatch",
+			event: aguievents.NewCustomEvent(
+				multimodal.CustomEventNameUserMessage,
+				aguievents.WithValue(types.Message{ID: "msg-1", Role: types.RoleAssistant, Content: "hi"}),
+			),
+			want: "user message custom event role must be user",
+		},
+		{
+			name: "missing message id",
+			event: aguievents.NewCustomEvent(
+				multimodal.CustomEventNameUserMessage,
+				aguievents.WithValue(types.Message{Role: types.RoleUser, Content: "hi"}),
+			),
+			want: "user message custom event missing message id",
+		},
+		{
+			name: "invalid content",
+			event: aguievents.NewCustomEvent(
+				multimodal.CustomEventNameUserMessage,
+				aguievents.WithValue(types.Message{ID: "msg-1", Role: types.RoleUser, Content: map[string]any{"invalid": "payload"}}),
+			),
+			want: "user message custom event content is invalid",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := new(testAppName, testUserID)
+			err := r.reduceEvent(tt.event)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.want)
+		})
+	}
 }
 
 func TestReduceReturnsMessagesOnReduceError(t *testing.T) {
@@ -91,7 +206,9 @@ func TestReduceReturnsMessagesOnReduceError(t *testing.T) {
 	assert.Contains(t, err.Error(), "reduce: text message content after end: user-1")
 	require.Len(t, msgs, 1)
 	require.NotNil(t, msgs[0].Content)
-	assert.Equal(t, "hello", *msgs[0].Content)
+	content, ok := msgs[0].ContentString()
+	require.True(t, ok)
+	assert.Equal(t, "hello", content)
 }
 
 func TestReduceAllowsUnclosedTextMessage(t *testing.T) {
@@ -102,7 +219,26 @@ func TestReduceAllowsUnclosedTextMessage(t *testing.T) {
 	msgs, err := Reduce(testAppName, testUserID, events)
 	require.NoError(t, err)
 	require.Len(t, msgs, 1)
-	assert.Nil(t, msgs[0].Content)
+	require.NotNil(t, msgs[0].Content)
+	content, ok := msgs[0].ContentString()
+	require.True(t, ok)
+	assert.Equal(t, "hello", content)
+}
+
+func TestReduceAllowsUnclosedToolCallArgs(t *testing.T) {
+	events := trackEventsFrom(
+		aguievents.NewTextMessageStartEvent("assistant-1", aguievents.WithRole("assistant")),
+		aguievents.NewToolCallStartEvent("tool-call-1", "calc", aguievents.WithParentMessageID("assistant-1")),
+		aguievents.NewToolCallArgsEvent("tool-call-1", "{\"a\":"),
+		aguievents.NewToolCallArgsEvent("tool-call-1", "1}"),
+	)
+	msgs, err := Reduce(testAppName, testUserID, events)
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+	require.Len(t, msgs[0].ToolCalls, 1)
+	assert.Equal(t, "tool-call-1", msgs[0].ToolCalls[0].ID)
+	assert.Equal(t, "calc", msgs[0].ToolCalls[0].Function.Name)
+	assert.Equal(t, "{\"a\":1}", msgs[0].ToolCalls[0].Function.Arguments)
 }
 
 func TestHandleTextChunkSuccess(t *testing.T) {
@@ -134,11 +270,13 @@ func TestHandleTextChunkSuccess(t *testing.T) {
 			require.NoError(t, r.handleTextChunk(tt.chunk))
 			require.Len(t, r.messages, 1)
 			msg := r.messages[0]
-			assert.Equal(t, tt.wantRole, msg.Role)
+			assert.Equal(t, types.Role(tt.wantRole), msg.Role)
 			require.NotNil(t, msg.Name)
-			assert.Equal(t, tt.wantName, *msg.Name)
+			assert.Equal(t, tt.wantName, msg.Name)
 			require.NotNil(t, msg.Content)
-			assert.Equal(t, tt.wantContent, *msg.Content)
+			content, ok := msg.ContentString()
+			require.True(t, ok)
+			assert.Equal(t, tt.wantContent, content)
 			require.NotNil(t, tt.chunk.MessageID)
 			state, ok := r.texts[*tt.chunk.MessageID]
 			require.True(t, ok)
@@ -193,7 +331,9 @@ func TestReduceEventDispatchesChunk(t *testing.T) {
 	require.NoError(t, r.reduceEvent(chunk))
 	require.Len(t, r.messages, 1)
 	require.NotNil(t, r.messages[0].Content)
-	assert.Equal(t, "hi", *r.messages[0].Content)
+	content, ok := r.messages[0].ContentString()
+	require.True(t, ok)
+	assert.Equal(t, "hi", content)
 }
 
 func TestAssistantOnlyToolCall(t *testing.T) {
@@ -217,9 +357,11 @@ func TestAssistantOnlyToolCall(t *testing.T) {
 	assert.Equal(t, "{}", call.Function.Arguments)
 	tool := msgs[1]
 	require.NotNil(t, tool.ToolCallID)
-	assert.Equal(t, "tool-call-1", *tool.ToolCallID)
+	assert.Equal(t, "tool-call-1", tool.ToolCallID)
 	require.NotNil(t, tool.Content)
-	assert.Equal(t, "reply", *tool.Content)
+	content, ok := tool.ContentString()
+	require.True(t, ok)
+	assert.Equal(t, "reply", content)
 }
 
 func TestAssistantInterleavesTextAfterToolEnd(t *testing.T) {
@@ -238,14 +380,18 @@ func TestAssistantInterleavesTextAfterToolEnd(t *testing.T) {
 	require.Len(t, msgs, 2)
 	assistant := msgs[0]
 	require.NotNil(t, assistant.Content)
-	assert.Equal(t, "waiting", *assistant.Content)
+	content, ok := assistant.ContentString()
+	require.True(t, ok)
+	assert.Equal(t, "waiting", content)
 	require.Len(t, assistant.ToolCalls, 1)
 	assert.Equal(t, "{\"x\":1}", assistant.ToolCalls[0].Function.Arguments)
 	tool := msgs[1]
 	require.NotNil(t, tool.Content)
-	assert.Equal(t, "done", *tool.Content)
+	content, ok = tool.ContentString()
+	require.True(t, ok)
+	assert.Equal(t, "done", content)
 	require.NotNil(t, tool.ToolCallID)
-	assert.Equal(t, "tool-call-1", *tool.ToolCallID)
+	assert.Equal(t, "tool-call-1", tool.ToolCallID)
 }
 
 func TestAssistantMultipleToolCalls(t *testing.T) {
@@ -277,14 +423,18 @@ func TestAssistantMultipleToolCalls(t *testing.T) {
 
 	first := msgs[1]
 	require.NotNil(t, first.ToolCallID)
-	assert.Equal(t, "call-1", *first.ToolCallID)
+	assert.Equal(t, "call-1", first.ToolCallID)
 	require.NotNil(t, first.Content)
-	assert.Equal(t, "first-result", *first.Content)
+	content, ok := first.ContentString()
+	require.True(t, ok)
+	assert.Equal(t, "first-result", content)
 	second := msgs[2]
 	require.NotNil(t, second.ToolCallID)
-	assert.Equal(t, "call-2", *second.ToolCallID)
+	assert.Equal(t, "call-2", second.ToolCallID)
 	require.NotNil(t, second.Content)
-	assert.Equal(t, "second-result", *second.Content)
+	content, ok = second.ContentString()
+	require.True(t, ok)
+	assert.Equal(t, "second-result", content)
 }
 
 func TestReduceTextStartErrors(t *testing.T) {
@@ -460,18 +610,20 @@ func TestReduceToolStartCreatesParentMessage(t *testing.T) {
 	require.Len(t, msgs, 2)
 	first := msgs[0]
 	assert.Equal(t, "assistant-ghost", first.ID)
-	assert.Equal(t, "assistant", first.Role)
+	assert.Equal(t, types.RoleAssistant, first.Role)
 	require.NotNil(t, first.Name)
-	assert.Equal(t, testAppName, *first.Name)
+	assert.Equal(t, testAppName, first.Name)
 	require.Len(t, first.ToolCalls, 1)
 	assert.Equal(t, "search", first.ToolCalls[0].Function.Name)
 	assert.Equal(t, "{\"q\":\"hi\"}", first.ToolCalls[0].Function.Arguments)
 	second := msgs[1]
-	assert.Equal(t, "tool", second.Role)
+	assert.Equal(t, types.RoleTool, second.Role)
 	require.NotNil(t, second.ToolCallID)
-	assert.Equal(t, "tool-call-1", *second.ToolCallID)
+	assert.Equal(t, "tool-call-1", second.ToolCallID)
 	require.NotNil(t, second.Content)
-	assert.Equal(t, "done", *second.Content)
+	content, ok := second.ContentString()
+	require.True(t, ok)
+	assert.Equal(t, "done", content)
 }
 
 func TestReduceToolArgsErrors(t *testing.T) {
@@ -720,11 +872,13 @@ func TestHandleActivityAllCases(t *testing.T) {
 				return
 			}
 			msg := r.messages[0]
-			assert.Equal(t, "activity", msg.Role)
+			assert.Equal(t, types.RoleActivity, msg.Role)
 			assert.Equal(t, tt.wantID, msg.ID)
 			assert.Equal(t, tt.wantType, msg.ActivityType)
-			assert.Nil(t, msg.Content)
-			assert.Equal(t, tt.wantContent, msg.ActivityContent)
+			assert.NotEmpty(t, msg.Content)
+			content, ok := msg.ContentActivity()
+			require.True(t, ok)
+			assert.Equal(t, tt.wantContent, content)
 		})
 	}
 }

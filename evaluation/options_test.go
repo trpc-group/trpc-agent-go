@@ -16,7 +16,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	evalresultinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/inmemory"
 	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
@@ -30,7 +29,7 @@ func (stubService) Inference(ctx context.Context, req *service.InferenceRequest)
 	return nil, nil
 }
 
-func (stubService) Evaluate(ctx context.Context, req *service.EvaluateRequest) (*evalresult.EvalSetResult, error) {
+func (stubService) Evaluate(ctx context.Context, req *service.EvaluateRequest) (*service.EvalSetRunResult, error) {
 	return nil, nil
 }
 
@@ -50,6 +49,7 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.Nil(t, opts.callbacks)
 	assert.Equal(t, runtime.GOMAXPROCS(0), opts.evalCaseParallelism)
 	assert.False(t, opts.evalCaseParallelInferenceEnabled)
+	assert.False(t, opts.evalCaseParallelEvaluationEnabled)
 }
 
 func TestWithEvalSetManager(t *testing.T) {
@@ -107,4 +107,9 @@ func TestWithEvalCaseParallelism(t *testing.T) {
 func TestWithEvalCaseParallelInferenceEnabled(t *testing.T) {
 	opts := newOptions(WithEvalCaseParallelInferenceEnabled(true))
 	assert.True(t, opts.evalCaseParallelInferenceEnabled)
+}
+
+func TestWithEvalCaseParallelEvaluationEnabled(t *testing.T) {
+	opts := newOptions(WithEvalCaseParallelEvaluationEnabled(true))
+	assert.True(t, opts.evalCaseParallelEvaluationEnabled)
 }

@@ -502,6 +502,11 @@ func (m *Model) buildChatRequest(request *model.Request) (openai.ChatCompletionN
 				},
 			},
 		}
+		if len(request.Tools) > 0 {
+			// Parallel tool calls can interfere with strict JSON schema
+			// output.
+			chatRequest.ParallelToolCalls = openai.Bool(false)
+		}
 	}
 
 	// MaxTokens is deprecated and not compatible with o-series models.

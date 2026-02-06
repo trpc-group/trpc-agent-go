@@ -71,11 +71,12 @@ const (
 	MetaInputCount    = MetaPrefix + "input_count"
 	MetaInputs        = MetaPrefix + "inputs"
 
-	MetaChunkType          = MetaPrefix + "chunk_type"
-	MetaChunkSize          = MetaPrefix + "chunk_size"
-	MetaMarkdownHeaderPath = MetaPrefix + "markdown_header_path" // header path for markdown chunks
-	MetadataDenseScore     = MetaPrefix + "dense_score"
-	MetadataSparseScore    = MetaPrefix + "sparse_score"
+	MetaChunkType             = MetaPrefix + "chunk_type"
+	MetaChunkSize             = MetaPrefix + "chunk_size"
+	MetaMarkdownHeaderPath    = MetaPrefix + "markdown_header_path" // header path for markdown chunks
+	MetadataDenseScore        = MetaPrefix + "dense_score"
+	MetadataSparseScore       = MetaPrefix + "sparse_score"
+	MetaOverlappedContentSize = MetaPrefix + "overlapped_content_size"
 
 	// necessary metadata
 	MetaURI        = MetaPrefix + "uri"         // URI (absolute path / URL / md5 for pure text)

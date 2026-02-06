@@ -177,6 +177,22 @@ func TestTransformSpan(t *testing.T) {
 			},
 			expectedAction: "transform_execute_tool",
 		},
+		{
+			name:          "workflow operation",
+			operationName: itelemetry.OperationWorkflow,
+			inputSpan: &tracepb.Span{
+				Name: "test-span",
+				Attributes: []*commonpb.KeyValue{
+					{
+						Key: itelemetry.KeyGenAIOperationName,
+						Value: &commonpb.AnyValue{
+							Value: &commonpb.AnyValue_StringValue{StringValue: itelemetry.OperationWorkflow},
+						},
+					},
+				},
+			},
+			expectedAction: "transform_workflow",
+		},
 	}
 
 	for _, tt := range tests {
@@ -210,6 +226,16 @@ func TestTransformSpan(t *testing.T) {
 			case "transform_run_runner":
 				// Runner transformation has different behavior, check attributes are processed
 				assert.NotNil(t, tt.inputSpan.Attributes)
+			case "transform_workflow":
+				// Should have observation type added
+				found := false
+				for _, attr := range tt.inputSpan.Attributes {
+					if attr.Key == observationType && attr.Value.GetStringValue() == observationTypeChain {
+						found = true
+						break
+					}
+				}
+				assert.True(t, found, "should have observation type 'chain'")
 			}
 		})
 	}
@@ -470,6 +496,117 @@ func TestTransformExecuteTool(t *testing.T) {
 				assert.NotEqual(t, itelemetry.KeyGenAIToolCallResult, attr.Key, "tool response attribute should be removed")
 			}
 		})
+	}
+}
+
+func TestTransformWorkflow(t *testing.T) {
+	span := &tracepb.Span{
+		Name: "workflow-span",
+		Attributes: []*commonpb.KeyValue{
+			{
+				Key: itelemetry.KeyRunnerSessionID,
+				Value: &commonpb.AnyValue{
+					Value: &commonpb.AnyValue_StringValue{StringValue: "sess-1"},
+				},
+			},
+			{
+				Key: itelemetry.KeyRunnerUserID,
+				Value: &commonpb.AnyValue{
+					Value: &commonpb.AnyValue_StringValue{StringValue: "user-1"},
+				},
+			},
+			{
+				Key: itelemetry.KeyGenAIWorkflowRequest,
+				Value: &commonpb.AnyValue{
+					Value: &commonpb.AnyValue_StringValue{StringValue: `{"req":true}`},
+				},
+			},
+			{
+				Key: itelemetry.KeyGenAIWorkflowResponse,
+				Value: &commonpb.AnyValue{
+					Value: &commonpb.AnyValue_StringValue{StringValue: `{"ok":true}`},
+				},
+			},
+			{
+				Key: "other.attribute",
+				Value: &commonpb.AnyValue{
+					Value: &commonpb.AnyValue_StringValue{StringValue: "keep-this"},
+				},
+			},
+		},
+	}
+
+	transformWorkflow(span)
+
+	attrMap := make(map[string]string)
+	for _, attr := range span.Attributes {
+		if attr.Value != nil {
+			attrMap[attr.Key] = attr.Value.GetStringValue()
+		}
+	}
+
+	assert.Equal(t, observationTypeChain, attrMap[observationType])
+	assert.Equal(t, `{"req":true}`, attrMap[observationInput])
+	assert.Equal(t, `{"ok":true}`, attrMap[observationOutput])
+	assert.Equal(t, "user-1", attrMap[traceUserID])
+	assert.Equal(t, "sess-1", attrMap[traceSessionID])
+	assert.Equal(t, "keep-this", attrMap["other.attribute"])
+
+	for _, attr := range span.Attributes {
+		assert.NotEqual(t, itelemetry.KeyGenAIWorkflowRequest, attr.Key)
+		assert.NotEqual(t, itelemetry.KeyGenAIWorkflowResponse, attr.Key)
+		assert.NotEqual(t, itelemetry.KeyRunnerSessionID, attr.Key)
+		assert.NotEqual(t, itelemetry.KeyRunnerUserID, attr.Key)
+	}
+}
+
+func TestTransformWorkflow_NilRequestResponse(t *testing.T) {
+	span := &tracepb.Span{
+		Name: "workflow-span-nil",
+		Attributes: []*commonpb.KeyValue{
+			{
+				Key: itelemetry.KeyRunnerSessionID,
+				Value: &commonpb.AnyValue{
+					Value: &commonpb.AnyValue_StringValue{StringValue: "sess-2"},
+				},
+			},
+			{
+				Key: itelemetry.KeyRunnerUserID,
+				Value: &commonpb.AnyValue{
+					Value: &commonpb.AnyValue_StringValue{StringValue: "user-2"},
+				},
+			},
+			{
+				Key:   itelemetry.KeyGenAIWorkflowRequest,
+				Value: nil,
+			},
+			{
+				Key:   itelemetry.KeyGenAIWorkflowResponse,
+				Value: nil,
+			},
+		},
+	}
+
+	transformWorkflow(span)
+
+	attrMap := make(map[string]string)
+	for _, attr := range span.Attributes {
+		if attr.Value != nil {
+			attrMap[attr.Key] = attr.Value.GetStringValue()
+		}
+	}
+
+	assert.Equal(t, observationTypeChain, attrMap[observationType])
+	assert.Equal(t, "N/A", attrMap[observationInput])
+	assert.Equal(t, "N/A", attrMap[observationOutput])
+	assert.Equal(t, "user-2", attrMap[traceUserID])
+	assert.Equal(t, "sess-2", attrMap[traceSessionID])
+
+	for _, attr := range span.Attributes {
+		assert.NotEqual(t, itelemetry.KeyGenAIWorkflowRequest, attr.Key)
+		assert.NotEqual(t, itelemetry.KeyGenAIWorkflowResponse, attr.Key)
+		assert.NotEqual(t, itelemetry.KeyRunnerSessionID, attr.Key)
+		assert.NotEqual(t, itelemetry.KeyRunnerUserID, attr.Key)
 	}
 }
 

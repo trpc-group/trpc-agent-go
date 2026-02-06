@@ -112,6 +112,10 @@ Key points:
 - Tools are auto‑registered with `WithSkills`: `skill_load`,
   `skill_select_docs`, `skill_list_docs`, and `skill_run` show up
   automatically; no manual wiring required.
+- Note: when `WithCodeExecutor` is set, LLMAgent will (by default) try to
+  execute Markdown fenced code blocks in model responses. If you only need
+  the executor for `skill_run`, disable this behavior with
+  `llmagent.WithEnableCodeExecutionResponseProcessor(false)`.
 - By default, the framework appends a small `Tooling and workspace guidance:`
   block after the `Available skills:` list in the system message.
   - Disable it (to save prompt tokens): `llmagent.WithSkillsToolingGuidance("")`.
@@ -137,6 +141,9 @@ GAIA benchmark demo (skills + file tools):
 
 It includes a dataset downloader script and notes on Python dependencies
 for skills like `whisper` (audio) and `ocr` (images).
+
+SkillLoadMode demo (no API key required):
+[examples/skillloadmode/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillloadmode/README.md)
 
 Quick start (download dataset JSON into `examples/skill/data/`):
 
@@ -212,10 +219,24 @@ Notes:
   select only the docs you need. Avoid `include_all_docs` unless you
   truly need every doc (or the user explicitly asks).
 - Safe to call multiple times to add or replace docs.
-- These keys are stored on the session state and can remain effective
-  across turns in the same session until overwritten/cleared or the
-  session expires.
-- The keys store only selection metadata, not full doc contents.
+- The tools write session state, but **how long the loaded content stays
+  in the prompt** depends on `SkillLoadMode`:
+  - `turn` (default): loaded bodies/docs stay for the current
+    `Runner.Run` call (one user message) and are cleared automatically
+    before the next run starts.
+  - `once`: loaded bodies/docs are injected for the **next** model
+    request only, then offloaded (cleared) from session state.
+  - `session` (legacy): loaded bodies/docs persist across turns until
+    cleared or the session expires.
+- Configure it on the agent:
+
+```go
+agent := llmagent.New(
+    "skills-assistant",
+    llmagent.WithSkills(repo),
+    llmagent.WithSkillLoadMode(llmagent.SkillLoadModeTurn),
+)
+```
 
 ### `skill_select_docs`
 
@@ -261,12 +282,14 @@ Input:
   the workspace. Each item supports:
   - `from` with schemes:
     - `artifact://name[@version]` to load from the Artifact service
-    - `host://abs/path` to copy/link from a host absolute path
+    - `host:///abs/path` to copy/link from a host absolute path
     - `workspace://rel/path` to copy/link from current workspace
     - `skill://<name>/rel/path` to copy/link from a staged skill
   - `to` workspace‑relative destination; defaults to
     `WORK_DIR/inputs/<basename>`
   - `mode`: `copy` (default) or `link` when feasible
+  - `pin`: for `artifact://name` without `@version`, reuse the first
+    resolved version for the same `to` path (best effort)
 
 - `outputs` (optional, declarative outputs): a manifest to collect
   results with limits and persistence:
@@ -277,19 +300,30 @@ Input:
   - `name_template` prefix for artifact names (e.g., `pref/`)
   - Limits: `max_files` (default 100), `max_file_bytes` (default
     4 MiB/file), `max_total_bytes` (default 64 MiB)
+  - Note: `outputs` accepts both snake_case keys (recommended) and
+    legacy Go-style keys like `MaxFiles`
 
 - `timeout` (optional seconds)
 - `save_as_artifacts` (optional, legacy path): persist files collected
   via `output_files` and return `artifact_files` in the result
-- `omit_inline_content` (optional): with `save_as_artifacts`, omit
-  `output_files[*].content` and return metadata only
+- `omit_inline_content` (optional): omit `output_files[*].content` and
+  `primary_output.content` (metadata only). Non-text outputs never
+  inline content. Use `output_files[*].ref` with `read_file` when you
+  need text content later.
 - `artifact_prefix` (optional): prefix for the legacy artifact path
   - If the Artifact service is not configured, `skill_run` keeps
-    returning inline `output_files` and reports a `warnings` entry.
+    returning `output_files` and reports a `warnings` entry.
+
+Guidance:
+- Prefer using `skill_run` only for commands explicitly required by the
+  selected skill docs (for example, `SKILL.md`).
+- Avoid using `skill_run` for generic shell exploration.
+- Prefer using `skill_list_docs` and `skill_select_docs` to inspect
+  skill docs, then use file tools to read the selected content.
 
 Optional safety restriction (allowlist):
 - Env var `TRPC_AGENT_SKILL_RUN_ALLOWED_COMMANDS`:
-  - Comma/space-separated command names (for example, `ls,cat,ifconfig`)
+  - Comma/space-separated command names (for example, `python3,ffmpeg`)
   - When set, `skill_run` rejects shell syntax (pipes/redirections/
     separators) and only allows a single allowlisted command
   - Because the command is no longer parsed by a shell, patterns like
@@ -308,12 +342,19 @@ Optional safety restriction (denylist):
 
 Output:
 - `stdout`, `stderr`, `exit_code`, `timed_out`, `duration_ms`
-- `primary_output` (optional) with `name`, `ref`, `content`, `mime_type`
+- `primary_output` (optional) with `name`, `ref`, `content`, `mime_type`,
+  `size_bytes`, `truncated`
   - Convenience pointer to the "best" small text output file (when one
     exists). Prefer this when there is a single main output.
-- `output_files` with `name`, `ref`, `content`, `mime_type`
+- `output_files` with `name`, `ref`, `content`, `mime_type`, `size_bytes`,
+  `truncated`
   - `ref` is a stable `workspace://<name>` reference that can be passed
     to other tools
+  - For non-text files, `content` is omitted.
+  - When `omit_inline_content=true`, `content` is omitted for all files.
+    Use `ref` with `read_file` to fetch text content on demand.
+  - `size_bytes` is the file size on disk; `truncated=true` means the
+    collected content hit internal caps (for example, 4 MiB/file).
 - `warnings` (optional): non-fatal notes (for example, when artifact
   saving is skipped)
 - `artifact_files` with `name`, `version` appears in two cases:
@@ -326,6 +367,86 @@ Typical flow:
    - Legacy: use `output_files` globs
    - Declarative: use `outputs` to drive collect/inline/save
    - Use `inputs` to stage upstream files when needed
+
+Examples:
+
+Stage an external input file and collect a small text output:
+
+```json
+{
+  "skill": "demo",
+  "inputs": [
+    {
+      "from": "host:///tmp/notes.txt",
+      "to": "work/inputs/notes.txt",
+      "mode": "copy"
+    }
+  ],
+  "command": "mkdir -p out; wc -l work/inputs/notes.txt > out/lines.txt",
+  "outputs": {
+    "globs": ["$OUTPUT_DIR/lines.txt"],
+    "inline": true,
+    "save": false,
+    "max_files": 1
+  }
+}
+```
+
+Metadata-only outputs (avoid filling context):
+
+```json
+{
+  "skill": "demo",
+  "command": "mkdir -p out; echo hi > out/a.txt",
+  "output_files": ["out/*.txt"],
+  "omit_inline_content": true
+}
+```
+
+The tool returns `output_files[*].ref` like `workspace://out/a.txt`
+with `content` omitted, plus `size_bytes` and `truncated`.
+
+To read the content later:
+
+```json
+{
+  "file_name": "workspace://out/a.txt",
+  "start_line": 1,
+  "num_lines": 20
+}
+```
+
+Persist large outputs as artifacts (no inline content):
+
+```json
+{
+  "skill": "demo",
+  "command": "mkdir -p out; echo report > out/report.txt",
+  "outputs": {
+    "globs": ["$OUTPUT_DIR/report.txt"],
+    "inline": false,
+    "save": true,
+    "max_files": 5
+  }
+}
+```
+
+When saved, `skill_run` returns `artifact_files` with `name` and
+`version`. You can reference an artifact as `artifact://<name>[@<version>]`
+in tools like `read_file`.
+
+Legacy artifact save path (when you use `output_files`):
+
+```json
+{
+  "skill": "demo",
+  "command": "mkdir -p out; echo report > out/report.txt",
+  "output_files": ["out/report.txt"],
+  "omit_inline_content": true,
+  "save_as_artifacts": true,
+  "artifact_prefix": "pref/"
+}
+```
 
 Environment and CWD:
 - When `cwd` is omitted, runs at the skill root: `/skills/<name>`

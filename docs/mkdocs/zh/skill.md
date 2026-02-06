@@ -112,6 +112,10 @@ agent := llmagent.New(
 - 工具自动注册：开启 `WithSkills` 后，`skill_load`、
   `skill_select_docs`、`skill_list_docs` 与 `skill_run`
   会自动出现在工具列表中，无需手动添加。
+- 注意：当你同时设置了 `WithCodeExecutor` 时，LLMAgent 默认会尝试执行
+  模型回复里的 Markdown 围栏代码块。如果你只是为了给 `skill_run` 提供运行时，
+  不希望自动执行代码块，可以加上
+  `llmagent.WithEnableCodeExecutionResponseProcessor(false)`。
 - 默认提示指引：框架会在系统消息里，在 `Available skills:` 列表后追加一段
   `Tooling and workspace guidance:` 指引文本。
   - 关闭该指引（减少提示词占用）：`llmagent.WithSkillsToolingGuidance("")`。
@@ -140,6 +144,9 @@ GAIA 基准示例（技能 + 文件工具）：
 
 该示例包含数据集下载脚本，以及 `whisper`（音频）/`ocr`（图片）等
 技能的 Python 依赖准备说明。
+
+SkillLoadMode 演示（无需 API key）：
+[examples/skillloadmode/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillloadmode/README.md)
 
 快速开始（下载数据集 JSON 到 `examples/skill/data/`）：
 
@@ -209,16 +216,32 @@ https://github.com/anthropics/skills
 - `include_all_docs`（可选）：为 true 时包含所有文档
 
 行为：
-- 写入会话临时键（同一会话内可跨轮保留）：
+- 写入会话临时键（生命周期由 `SkillLoadMode` 控制）：
   - `temp:skill:loaded:<name>` = "1"
   - `temp:skill:docs:<name>` = "*" 或 JSON 字符串数组
 - 请求处理器读取这些键，把 `SKILL.md` 正文与文档注入到系统消息
 
-说明：建议采用“渐进式披露”：默认只传 `skill` 加载正文；需要文档时
-先 `skill_list_docs` 再 `skill_select_docs`，只选必要文档；除非确
-实需要全部（或用户明确要求），避免 `include_all_docs=true`。可多
-次调用以新增或替换文档；这些键写在会话状态里，同一会话内可跨轮
-生效（键本身只存技能名/文档名，不存正文）。
+说明：
+- 建议采用“渐进式披露”：默认只传 `skill` 加载正文；需要文档时先
+  `skill_list_docs` 再 `skill_select_docs`，只选必要文档；除非确
+  实需要全部（或用户明确要求），避免 `include_all_docs=true`。
+- 可多次调用以新增或替换文档。
+- 工具会写入 session state，但**正文/文档在提示词里驻留多久**取决
+  于 `SkillLoadMode`：
+  - `turn`（默认）：在当前一次 `Runner.Run`（处理一条用户消息）
+    的所有模型请求中驻留；下一次运行开始前自动清空。
+  - `once`：只在**下一次**模型请求中注入一次，随后自动 offload
+    并清空对应 state。
+  - `session`（兼容旧行为）：跨多轮对话保留，直到手动清除或会话过期。
+- 在 agent 上配置：
+
+```go
+agent := llmagent.New(
+    "skills-assistant",
+    llmagent.WithSkills(repo),
+    llmagent.WithSkillLoadMode(llmagent.SkillLoadModeTurn),
+)
+```
 
 ### `skill_select_docs`（选择文档）
 
@@ -263,12 +286,14 @@ https://github.com/anthropics/skills
   
   - `from`：来源，支持四类方案（scheme）：
     - `artifact://name[@version]` 从制品服务拉取文件
-    - `host://abs/path` 从宿主机绝对路径复制/链接
+    - `host:///abs/path` 从宿主机绝对路径复制/链接
     - `workspace://rel/path` 从当前工作区相对路径复制/链接
     - `skill://<name>/rel/path` 从已缓存的技能目录复制/链接
   - `to`：目的路径（相对工作区）。未指定时默认写到
     `WORK_DIR/inputs/<basename>`。
   - `mode`：`copy`（默认）或 `link`（在可行时建立符号链接）。
+  - `pin`：当 `from=artifact://name` 未指定 `@version` 时，
+    尝试复用同一 `to` 路径第一次解析到的版本（best effort）。
 
 - `outputs`（可选，声明式输出）：使用清单（manifest）收集输出。
   字段：
@@ -279,20 +304,31 @@ https://github.com/anthropics/skills
   - `name_template`：保存为制品时的文件名前缀（如 `pref/`）。
   - `max_files`（默认 100）、`max_file_bytes`（默认 4 MiB/文件）、
     `max_total_bytes`（默认 64 MiB）：上限控制。
+  - 说明：`outputs` 同时兼容 snake_case（推荐）与旧版 Go 风格字段名
+    （例如 `MaxFiles`）
 
 - `timeout`（可选）：超时秒数（执行器有默认值）
 - `save_as_artifacts`（可选，传统收集路径）：把通过
   `output_files` 收集到的文件保存为制品，并在结果中返回
   `artifact_files`。
-- `omit_inline_content`（可选）：与 `save_as_artifacts` 配合，
-  为 true 时不返回文件内容，仅保留文件名/MIME 信息。
+- `omit_inline_content`（可选）：为 true 时不返回
+  `output_files[*].content` 与 `primary_output.content`（只返回元信息）。
+  非文本输出的 `content` 也会始终为空。需要文本内容时，可用
+  `output_files[*].ref` 配合 `read_file` 按需读取。
 - `artifact_prefix`（可选）：与 `save_as_artifacts` 配合的前缀。
   - 若未配置制品服务（Artifact service），`skill_run` 会继续
-    返回内联的 `output_files`，并在 `warnings` 中给出提示。
+    返回 `output_files`，并在 `warnings` 中给出提示。
+
+建议：
+- 建议 `skill_run` 尽量只用于执行 Skill 文档里描述的流程
+  （例如 `SKILL.md` 明确要求的命令）。
+- 不建议用 `skill_run` 做通用的 Shell 探索。
+- 优先使用 `skill_list_docs` / `skill_select_docs` 读取 Skill 文档，
+  再用文件工具按需查看选中的内容。
 
 可选的安全限制（白名单）：
 - 环境变量 `TRPC_AGENT_SKILL_RUN_ALLOWED_COMMANDS`：
-  - 逗号/空格分隔的命令名列表（如 `ls,cat,ifconfig`）
+  - 逗号/空格分隔的命令名列表（如 `python3,ffmpeg`）
   - 启用后 `skill_run` 会拒绝管道/重定向/分号等 Shell 语法，
     并仅允许执行白名单中的“单条命令”
   - 因为不再经过 Shell 解析，诸如 `> out/x.txt`、heredoc、
@@ -309,11 +345,18 @@ https://github.com/anthropics/skills
 
 输出：
 - `stdout`、`stderr`、`exit_code`、`timed_out`、`duration_ms`
-- `primary_output`（可选）：包含 `name`、`ref`、`content`、`mime_type`
+- `primary_output`（可选）：包含 `name`、`ref`、`content`、`mime_type`、
+  `size_bytes`、`truncated`
   - 便捷字段：指向“最合适的”小型文本输出文件（若存在）。当只有一个主要输出时
     优先使用它。
-- `output_files`：文件列表（`name`、`ref`、`content`、`mime_type`）
+- `output_files`：文件列表（`name`、`ref`、`content`、`mime_type`、
+  `size_bytes`、`truncated`）
   - `ref` 是稳定的 `workspace://<name>` 引用，可传给其它工具使用
+  - 非文本文件的 `content` 会被省略。
+  - 当 `omit_inline_content=true` 时，所有文件的 `content` 会被省略。可用
+    `ref` 配合 `read_file` 按需读取文本内容。
+  - `size_bytes` 表示磁盘上的文件大小；`truncated=true` 表示收集内容触发了
+    内部上限（例如 4 MiB/文件）。
 - `warnings`（可选）：非致命提示（例如制品保存被跳过）
 - `artifact_files`：制品引用（`name`、`version`）。两种途径：
   - 传统路径：设置了 `save_as_artifacts` 时由工具保存并返回
@@ -325,6 +368,85 @@ https://github.com/anthropics/skills
    - 传统：用 `output_files` 指定通配符
    - 声明式：用 `outputs` 统一控制收集/内联/保存
    - 如需把上游文件带入，可用 `inputs` 先行映射
+
+示例：
+
+映射外部输入文件，并收集一个小型文本输出：
+
+```json
+{
+  "skill": "demo",
+  "inputs": [
+    {
+      "from": "host:///tmp/notes.txt",
+      "to": "work/inputs/notes.txt",
+      "mode": "copy"
+    }
+  ],
+  "command": "mkdir -p out; wc -l work/inputs/notes.txt > out/lines.txt",
+  "outputs": {
+    "globs": ["$OUTPUT_DIR/lines.txt"],
+    "inline": true,
+    "save": false,
+    "max_files": 1
+  }
+}
+```
+
+元信息输出（避免把上下文塞满）：
+
+```json
+{
+  "skill": "demo",
+  "command": "mkdir -p out; echo hi > out/a.txt",
+  "output_files": ["out/*.txt"],
+  "omit_inline_content": true
+}
+```
+
+该调用会返回 `output_files[*].ref`（如 `workspace://out/a.txt`），
+并省略 `content`，同时包含 `size_bytes` 与 `truncated`。
+
+需要内容时再读取：
+
+```json
+{
+  "file_name": "workspace://out/a.txt",
+  "start_line": 1,
+  "num_lines": 20
+}
+```
+
+大文件建议保存为制品（不内联内容）：
+
+```json
+{
+  "skill": "demo",
+  "command": "mkdir -p out; echo report > out/report.txt",
+  "outputs": {
+    "globs": ["$OUTPUT_DIR/report.txt"],
+    "inline": false,
+    "save": true,
+    "max_files": 5
+  }
+}
+```
+
+保存成功后，`skill_run` 会返回 `artifact_files`（`name`、`version`），
+并可用 `artifact://<name>[@<version>]` 作为文件引用传给 `read_file` 等工具。
+
+传统保存路径（当你使用 `output_files` 时）：
+
+```json
+{
+  "skill": "demo",
+  "command": "mkdir -p out; echo report > out/report.txt",
+  "output_files": ["out/report.txt"],
+  "omit_inline_content": true,
+  "save_as_artifacts": true,
+  "artifact_prefix": "pref/"
+}
+```
 
 运行环境与工作目录：
 - 未提供 `cwd` 时，默认在技能根目录运行：`/skills/<name>`

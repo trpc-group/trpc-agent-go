@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -29,26 +30,30 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
+	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcache"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
 const (
-	testSkillName   = "demo"
-	skillFileName   = "SKILL.md"
-	timeoutSecSmall = 5
-	outGlobTxt      = "out/*.txt"
-	outATxt         = "out/a.txt"
-	outBTxt         = "out/b.txt"
-	scriptsDir      = "scripts"
-	contentHi       = "hi"
-	contentHello    = "hello"
-	contentMsg      = "msg"
-	echoOK          = "echo ok"
-	cmdEcho         = "echo"
-	cmdLS           = "ls"
-	cmdEchoThenLS   = "echo ok; ls"
+	testSkillName    = "demo"
+	skillFileName    = "SKILL.md"
+	timeoutSecSmall  = 5
+	outGlobTxt       = "out/*.txt"
+	outGlobAll       = "out/*"
+	outATxt          = "out/a.txt"
+	outAPng          = "out/a.png"
+	outBTxt          = "out/b.txt"
+	scriptsDir       = "scripts"
+	contentHi        = "hi"
+	contentHello     = "hello"
+	contentMsg       = "msg"
+	pngHeaderEscaped = "\\x89PNG\\r\\n\\x1a\\n"
+	echoOK           = "echo ok"
+	cmdEcho          = "echo"
+	cmdLS            = "ls"
+	cmdEchoThenLS    = "echo ok; ls"
 
 	errCollectFail     = "collect-fail"
 	errPutFail         = "put-fail"
@@ -113,6 +118,170 @@ func TestRunTool_ExecutesAndCollectsOutputFiles(t *testing.T) {
 	require.NotNil(t, out.PrimaryOutput)
 	require.Equal(t, outATxt, out.PrimaryOutput.Name)
 	require.Contains(t, out.PrimaryOutput.Content, contentHi)
+}
+
+func TestRunTool_DoesNotInlineNonTextOutputs(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	cmd := strings.Join([]string{
+		"mkdir -p out",
+		"printf '" + pngHeaderEscaped + "' > " + outAPng,
+		"echo " + contentHi + " > " + outATxt,
+	}, "; ")
+
+	args := runInput{
+		Skill:       testSkillName,
+		Command:     cmd,
+		OutputFiles: []string{outGlobAll},
+		Timeout:     timeoutSecSmall,
+	}
+
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Len(t, out.OutputFiles, 2)
+
+	got := make(map[string]runFile, len(out.OutputFiles))
+	for _, f := range out.OutputFiles {
+		got[f.Name] = f
+	}
+
+	png, ok := got[outAPng]
+	require.True(t, ok)
+	require.Equal(t, "", png.Content)
+	require.Equal(t, "image/png", png.MIMEType)
+	require.False(t, png.Truncated)
+	require.NotZero(t, png.SizeBytes)
+
+	txt, ok := got[outATxt]
+	require.True(t, ok)
+	require.Contains(t, txt.Content, contentHi)
+
+	require.NotNil(t, out.PrimaryOutput)
+	require.Equal(t, outATxt, out.PrimaryOutput.Name)
+	require.Contains(t, out.PrimaryOutput.Content, contentHi)
+}
+
+func TestRunTool_TrimsTruncatedUTF8TextOutputs(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	const bytes4MiB = 4 * 1024 * 1024
+	cmd := strings.Join([]string{
+		"set -e",
+		"mkdir -p out",
+		"head -c " + strconv.Itoa(bytes4MiB-1) +
+			" /dev/zero | tr '\\000' 'a' > " + outATxt,
+		"printf '\\xE2\\x82\\xAC\\n' >> " + outATxt,
+	}, "; ")
+
+	args := runInput{
+		Skill:       testSkillName,
+		Command:     cmd,
+		OutputFiles: []string{outATxt},
+		Timeout:     timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Len(t, out.OutputFiles, 1)
+
+	f := out.OutputFiles[0]
+	require.Equal(t, outATxt, f.Name)
+	require.True(t, strings.HasPrefix(f.MIMEType, "text/plain"))
+	require.True(t, f.Truncated)
+	require.Equal(t, bytes4MiB-1, len(f.Content))
+	require.True(t, strings.HasSuffix(f.Content, "a"))
+
+	got, _, handled, err := fileref.TryRead(ctx, f.Ref)
+	require.True(t, handled)
+	require.NoError(t, err)
+	require.Equal(t, bytes4MiB-1, len(got))
+	require.True(t, strings.HasSuffix(got, "a"))
+}
+
+func TestShouldInlineFileContent(t *testing.T) {
+	const (
+		mimeTextPlain = "text/plain"
+		mimeImagePNG  = "image/png"
+		invalidByte   = 0xff
+	)
+
+	tests := []struct {
+		name string
+		file codeexecutor.File
+		want bool
+	}{
+		{
+			name: "empty content",
+			file: codeexecutor.File{},
+			want: true,
+		},
+		{
+			name: "valid text",
+			file: codeexecutor.File{
+				Content:  contentHi,
+				MIMEType: mimeTextPlain,
+			},
+			want: true,
+		},
+		{
+			name: "non-text mime",
+			file: codeexecutor.File{
+				Content:  contentHi,
+				MIMEType: mimeImagePNG,
+			},
+			want: false,
+		},
+		{
+			name: "contains nul",
+			file: codeexecutor.File{
+				Content:  contentHi + "\x00",
+				MIMEType: mimeTextPlain,
+			},
+			want: false,
+		},
+		{
+			name: "invalid utf8",
+			file: codeexecutor.File{
+				Content:  string([]byte{invalidByte}),
+				MIMEType: mimeTextPlain,
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, shouldInlineFileContent(tt.file))
+		})
+	}
 }
 
 func TestRunTool_AutoExportsOutToWorkspaceCache(t *testing.T) {
@@ -433,7 +602,7 @@ func TestRunTool_SaveAsArtifacts_NoArtifactService(t *testing.T) {
 	require.Len(t, out.Warnings, 1)
 	require.Contains(t, out.Warnings[0], "artifact service")
 	require.Len(t, out.OutputFiles, 1)
-	require.Contains(t, out.OutputFiles[0].Content, contentHi)
+	require.Equal(t, "", out.OutputFiles[0].Content)
 }
 
 func TestRunTool_SaveAsArtifacts_NoInvocation(t *testing.T) {
@@ -464,7 +633,7 @@ func TestRunTool_SaveAsArtifacts_NoInvocation(t *testing.T) {
 	out := res.(runOutput)
 	require.Equal(t, 0, out.ExitCode)
 	require.Empty(t, out.ArtifactFiles)
-	require.Len(t, out.Warnings, 1)
+	require.Len(t, out.Warnings, 2)
 	require.Contains(t, out.Warnings[0], reasonNoInvocation)
 	require.Len(t, out.OutputFiles, 1)
 	require.Contains(t, out.OutputFiles[0].Content, contentHi)
@@ -506,7 +675,7 @@ func TestRunTool_SaveAsArtifacts_NoSession(t *testing.T) {
 	require.Len(t, out.Warnings, 1)
 	require.Contains(t, out.Warnings[0], reasonNoSession)
 	require.Len(t, out.OutputFiles, 1)
-	require.Contains(t, out.OutputFiles[0].Content, contentHi)
+	require.Equal(t, "", out.OutputFiles[0].Content)
 }
 
 func TestRunTool_SaveAsArtifacts_SessionMissingIDs(t *testing.T) {
@@ -548,6 +717,103 @@ func TestRunTool_SaveAsArtifacts_SessionMissingIDs(t *testing.T) {
 	require.Empty(t, out.ArtifactFiles)
 	require.Len(t, out.Warnings, 1)
 	require.Contains(t, out.Warnings[0], reasonNoSessionIDs)
+	require.Len(t, out.OutputFiles, 1)
+	require.Equal(t, "", out.OutputFiles[0].Content)
+}
+
+func TestRunTool_OmitInlineContent_AllowsReadByRef(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	rt := NewRunTool(repo, localexec.New())
+
+	args := runInput{
+		Skill: testSkillName,
+		Command: "mkdir -p out; echo " + contentHi +
+			" > " + outATxt,
+		OutputFiles: []string{outGlobTxt},
+		Timeout:     timeoutSecSmall,
+		OmitInline:  true,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+	out := res.(runOutput)
+	require.Len(t, out.OutputFiles, 1)
+	require.Equal(t, "", out.OutputFiles[0].Content)
+	require.False(t, out.OutputFiles[0].Truncated)
+	require.NotZero(t, out.OutputFiles[0].SizeBytes)
+
+	got, _, handled, err := fileref.TryRead(ctx, out.OutputFiles[0].Ref)
+	require.True(t, handled)
+	require.NoError(t, err)
+	require.Contains(t, got, contentHi)
+}
+
+func TestRunTool_OmitInlineContent_IncludesFileSize(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	rt := NewRunTool(repo, localexec.New())
+
+	const bytes5MiB = 5 * 1024 * 1024
+	args := runInput{
+		Skill: testSkillName,
+		Command: "mkdir -p out; " +
+			"head -c " + strconv.Itoa(bytes5MiB) +
+			" /dev/zero > " + outATxt,
+		OutputFiles: []string{outATxt},
+		Timeout:     timeoutSecSmall,
+		OmitInline:  true,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+	out := res.(runOutput)
+	require.Len(t, out.OutputFiles, 1)
+	require.Equal(t, "", out.OutputFiles[0].Content)
+	require.Equal(t, int64(bytes5MiB), out.OutputFiles[0].SizeBytes)
+	require.True(t, out.OutputFiles[0].Truncated)
+}
+
+func TestRunTool_OutputsSpec_AcceptsSnakeCaseJSON(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	rt := NewRunTool(repo, localexec.New())
+
+	args := map[string]any{
+		"skill": testSkillName,
+		"command": "mkdir -p out; echo " + contentHi +
+			" > " + outATxt,
+		"outputs": map[string]any{
+			"globs":         []string{"$OUTPUT_DIR/*.txt"},
+			"inline":        true,
+			"save":          false,
+			"max_files":     10,
+			"name_template": "pref/",
+		},
+		"timeout": timeoutSecSmall,
+	}
+	enc, err := json.Marshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+	out := res.(runOutput)
 	require.Len(t, out.OutputFiles, 1)
 	require.Contains(t, out.OutputFiles[0].Content, contentHi)
 }
@@ -1081,6 +1347,69 @@ func TestRunTool_RelativeCWD_SubpathUnderSkillRoot(t *testing.T) {
 	require.Len(t, out.OutputFiles, 1)
 	require.Equal(t, outBTxt, out.OutputFiles[0].Name)
 	require.Contains(t, out.OutputFiles[0].Content, contentMsg)
+}
+
+func TestRunTool_RelativeCWD_TraversalDoesNotEscapeWorkspace(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	args := runInput{
+		Skill: testSkillName,
+		Cwd:   "../../..",
+		Command: "pwd; echo \"$" +
+			codeexecutor.WorkspaceEnvDirKey + "\"",
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	lines := strings.Split(strings.TrimSpace(out.Stdout), "\n")
+	require.GreaterOrEqual(t, len(lines), 2)
+
+	pwd := strings.TrimSpace(lines[0])
+	wsRoot := strings.TrimSpace(lines[1])
+
+	rel, err := filepath.Rel(wsRoot, pwd)
+	require.NoError(t, err)
+	require.False(t, strings.HasPrefix(rel, ".."))
+}
+
+func TestResolveCWD_WorkspaceEnvPathAllowlist(t *testing.T) {
+	base := path.Join(codeexecutor.DirSkills, "x")
+
+	// traversal should fallback
+	require.Equal(t, base, resolveCWD("$"+codeexecutor.WorkspaceEnvDirKey+"/../..", "x"))
+	require.Equal(t, base, resolveCWD("$"+codeexecutor.WorkspaceEnvDirKey+"\\..\\..", "x"))
+
+	// allowed roots under workspace
+	require.Equal(t, codeexecutor.DirWork, resolveCWD("$"+codeexecutor.WorkspaceEnvDirKey+"/"+codeexecutor.DirWork, "x"))
+	require.Equal(t, codeexecutor.DirSkills+"/x", resolveCWD("$"+codeexecutor.WorkspaceEnvDirKey+"/"+codeexecutor.DirSkills+"/x", "x"))
+
+	// disallowed root under workspace falls back to base
+	require.Equal(t, base, resolveCWD("$"+codeexecutor.WorkspaceEnvDirKey+"/etc", "x"))
+}
+
+func TestResolveCWD_AbsPathAllowlist(t *testing.T) {
+	base := path.Join(codeexecutor.DirSkills, "x")
+
+	require.Equal(t, codeexecutor.DirWork, resolveCWD("/"+codeexecutor.DirWork, "x"))
+	require.Equal(t, base, resolveCWD("/etc", "x"))
+	require.Equal(t, ".", resolveCWD("/", "x"))
+}
+
+func TestResolveCWD_RelPath_BackslashTraversalDoesNotEscape(t *testing.T) {
+	base := path.Join(codeexecutor.DirSkills, "x")
+	require.Equal(t, base, resolveCWD("..\\..\\..", "x"))
 }
 
 // Validate Declaration basics and required fields.

@@ -70,6 +70,9 @@ type baselineChat struct {
 	userID    string
 	sessionID string
 
+	// Timing
+	sessionStart time.Time
+
 	// Token usage tracking
 	sessionUsage *SessionTokenUsage
 	turnCount    int
@@ -94,6 +97,7 @@ type TurnUsage struct {
 	UserMessage       string
 	AssistantResponse string
 	SelectedTools     []string
+	Duration          time.Duration
 }
 
 func (c *baselineChat) run() error {
@@ -137,6 +141,7 @@ func (c *baselineChat) setup(_ context.Context) error {
 	c.sessionUsage = &SessionTokenUsage{
 		UsageHistory: make([]TurnUsage, 0),
 	}
+	c.sessionStart = time.Now()
 
 	fmt.Printf("✅ Baseline chat ready! Session: %s\n", c.sessionID)
 	fmt.Printf("⚠️  Note: All 10 tools are provided to LLM without any search\n\n")
@@ -249,6 +254,7 @@ func readMessagesFromFile(filename string) ([]string, error) {
 }
 
 func (c *baselineChat) processMessage(ctx context.Context, userMessage string) error {
+	turnStart := time.Now()
 	message := model.NewUserMessage(userMessage)
 	c.turnCount++
 
@@ -257,10 +263,10 @@ func (c *baselineChat) processMessage(ctx context.Context, userMessage string) e
 		return fmt.Errorf("failed to run agent: %w", err)
 	}
 
-	return c.processResponse(eventChan, userMessage)
+	return c.processResponse(eventChan, userMessage, turnStart)
 }
 
-func (c *baselineChat) processResponse(eventChan <-chan *event.Event, userMessage string) error {
+func (c *baselineChat) processResponse(eventChan <-chan *event.Event, userMessage string, turnStart time.Time) error {
 	fmt.Print("🤖 Assistant: ")
 
 	var (
@@ -309,6 +315,7 @@ func (c *baselineChat) processResponse(eventChan <-chan *event.Event, userMessag
 			if turnUsage != nil {
 				turnUsage.AssistantResponse = fullContent
 				turnUsage.SelectedTools = selectedTools
+				turnUsage.Duration = time.Since(turnStart)
 				c.addTurnUsage(*turnUsage)
 			}
 
@@ -318,6 +325,7 @@ func (c *baselineChat) processResponse(eventChan <-chan *event.Event, userMessag
 					turnUsage.PromptTokens,
 					turnUsage.CompletionTokens,
 					turnUsage.TotalTokens)
+				fmt.Printf("   ⏱ Duration: %s\n", turnUsage.Duration.Round(time.Millisecond))
 				if len(selectedTools) > 0 {
 					fmt.Printf("   Tools used: %s\n", strings.Join(selectedTools, ", "))
 				}
@@ -340,6 +348,8 @@ func (c *baselineChat) addTurnUsage(usage TurnUsage) {
 
 func (c *baselineChat) showStats() {
 	fmt.Printf("\n📊 Session Token Usage Statistics:\n")
+	elapsed := time.Since(c.sessionStart)
+	fmt.Printf("   Elapsed: %s\n", elapsed.Round(time.Millisecond))
 	fmt.Printf("   Total Turns: %d\n", c.sessionUsage.TurnCount)
 	fmt.Printf("   Total Prompt Tokens: %d\n", c.sessionUsage.TotalPromptTokens)
 	fmt.Printf("   Total Completion Tokens: %d\n", c.sessionUsage.TotalCompletionTokens)
@@ -355,6 +365,14 @@ func (c *baselineChat) showStats() {
 		fmt.Printf("   Average Total Tokens per Turn: %.1f\n", avgTotal)
 	}
 
+	var totalDuration time.Duration
+	for _, usage := range c.sessionUsage.UsageHistory {
+		totalDuration += usage.Duration
+	}
+	if c.sessionUsage.TurnCount > 0 && totalDuration > 0 {
+		fmt.Printf("   Average Duration per Turn: %s\n", (totalDuration / time.Duration(c.sessionUsage.TurnCount)).Round(time.Millisecond))
+	}
+
 	// Print detailed usage history
 	if len(c.sessionUsage.UsageHistory) > 0 {
 		fmt.Printf("\n📋 Turn-by-Turn Usage History:\n")
@@ -363,6 +381,9 @@ func (c *baselineChat) showStats() {
 			fmt.Printf("      PromptTokens: %d\n", usage.PromptTokens)
 			fmt.Printf("      CompletionTokens: %d\n", usage.CompletionTokens)
 			fmt.Printf("      TotalTokens: %d\n", usage.TotalTokens)
+			if usage.Duration > 0 {
+				fmt.Printf("      Duration: %s\n", usage.Duration.Round(time.Millisecond))
+			}
 			if len(usage.SelectedTools) > 0 {
 				fmt.Printf("      SelectedTools: %s\n", strings.Join(usage.SelectedTools, ", "))
 			}
@@ -375,6 +396,7 @@ func (c *baselineChat) showStats() {
 func (c *baselineChat) showFinalStats() {
 	fmt.Printf("\n%s\n", strings.Repeat("=", 60))
 	fmt.Printf("🎯 Final Session Statistics (Without Tool Search):\n")
+	fmt.Printf("⏱ Total Session Duration: %s\n", time.Since(c.sessionStart).Round(time.Millisecond))
 	c.showStats()
 }
 
@@ -385,6 +407,7 @@ func (c *baselineChat) startNewSession() {
 		UsageHistory: make([]TurnUsage, 0),
 	}
 	c.turnCount = 0
+	c.sessionStart = time.Now()
 
 	fmt.Printf("🆕 Started new session!\n")
 	fmt.Printf("   Previous: %s\n", oldSessionID)

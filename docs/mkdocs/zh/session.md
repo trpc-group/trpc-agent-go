@@ -253,6 +253,33 @@ summarizer := summary.NewSummarizer(
 - Pre-hook 主要修改 `ctx.Text`，也可调整 `ctx.Events`；Post-hook 可修改 `ctx.Summary`。
 - 默认忽略 Hook 错误，需中断时使用 `WithSummaryHookAbortOnError(true)`。
 
+#### 模型回调（Before/After Model）
+
+`summarizer` 在调用底层 `model.GenerateContent` 前后支持模型回调（structured 签名），可用于修改请求、短路返回自定义响应、或在摘要请求上做埋点。
+
+```go
+import (
+    "context"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/session/summary"
+)
+
+callbacks := model.NewCallbacks().
+    RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+        // 可修改 args.Request，也可以返回 CustomResponse 来跳过真实 model 调用
+        return nil, nil
+    }).
+    RegisterAfterModel(func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+        // 可通过 CustomResponse 覆盖模型输出
+        return nil, nil
+    })
+
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithModelCallbacks(callbacks),
+)
+```
+
 **上下文注入机制：**
 
 启用摘要后，框架会将摘要作为独立的系统消息插入到第一个现有系统消息之后，同时包含摘要时间点之后的所有增量事件，保证完整上下文：
@@ -1738,6 +1765,67 @@ llmagent.WithMaxHistoryRuns(10)  // 限制历史轮次
 - **`WithMaxSummaryWords(maxWords int)`**：限制摘要的最大字数。该限制会包含在提示词中以指导模型生成。示例：`WithMaxSummaryWords(150)` 请求在 150 字以内的摘要。
 - **`WithPrompt(prompt string)`**：提供自定义摘要提示词。提示词必须包含占位符 `{conversation_text}`，它会被对话内容替换。可选包含 `{max_summary_words}` 用于字数限制指令。
 - **`WithSkipRecent(skipFunc SkipRecentFunc)`**：通过自定义函数在摘要时跳过**最近**事件。函数接收所有事件并返回应跳过的尾部事件数量，返回 0 表示不跳过。适合避免总结最近、可能不完整的对话，或实现基于时间/内容的跳过策略。
+
+#### Token 计数器配置（Token Counter Configuration）
+
+默认情况下，`CheckTokenThreshold` 使用内置的 `SimpleTokenCounter` 基于文本长度估算 token 数量。如果您需要自定义 token 计数行为（例如，为特定模型使用更精确的 tokenizer），可以使用 `summary.SetTokenCounter` 设置全局 token 计数器：
+
+```go
+import (
+    "context"
+    "fmt"
+    "unicode/utf8"
+
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/session/summary"
+)
+
+// 设置自定义 token 计数器（影响该进程中的所有 CheckTokenThreshold 评估）
+summary.SetTokenCounter(model.NewSimpleTokenCounter())
+
+// 或者使用自定义实现
+type MyCustomCounter struct{}
+
+func (c *MyCustomCounter) CountTokens(ctx context.Context, message model.Message) (int, error) {
+    _ = ctx
+    // TODO: Replace this with your real tokenizer implementation.
+    return utf8.RuneCountInString(message.Content), nil
+}
+
+func (c *MyCustomCounter) CountTokensRange(ctx context.Context, messages []model.Message, start, end int) (int, error) {
+    if start < 0 || end > len(messages) || start >= end {
+        return 0, fmt.Errorf("invalid range: start=%d, end=%d, len=%d",
+            start, end, len(messages))
+    }
+
+    total := 0
+    for i := start; i < end; i++ {
+        tokens, err := c.CountTokens(ctx, messages[i])
+        if err != nil {
+            return 0, err
+        }
+        total += tokens
+    }
+    return total, nil
+}
+
+summary.SetTokenCounter(&MyCustomCounter{})
+
+// 创建带 token 阈值检查器的摘要器
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.CheckTokenThreshold(4000),  // 将使用您的自定义计数器
+)
+```
+
+**重要说明：**
+
+- **全局影响**：`SetTokenCounter` 会影响当前进程中所有的 `CheckTokenThreshold` 评估。建议在应用初始化时一次性设置。
+- **默认计数器**：如果不设置，将使用默认配置的 `SimpleTokenCounter`（约每 token 对应 4 个字符）。
+- **使用场景**：
+  - 需要精确估算 token 时使用准确的 tokenizer（如 tiktoken）
+  - 针对特定语言的模型进行调整（中文模型的 token 密度可能不同）
+  - 集成模型特定的计数 API 以获得更好的准确性
 
 **工具调用格式化：**
 

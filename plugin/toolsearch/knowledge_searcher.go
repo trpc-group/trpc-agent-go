@@ -84,7 +84,7 @@ func (s *knowledgeSearcher) rewriteQuery(ctx context.Context, query string) (con
 		invocation = agent.NewInvocation()
 	}
 	timingInfo := invocation.GetOrCreateTimingInfo()
-	tracker := itelemetry.NewChatMetricsTracker(ctx, invocation, req, timingInfo, &err)
+	tracker := itelemetry.NewChatMetricsTracker(ctx, invocation, req, timingInfo, nil, &err)
 	defer tracker.RecordMetrics()()
 	respCh, err := s.model.GenerateContent(ctx, req)
 	if err != nil {
@@ -119,7 +119,13 @@ func (s *knowledgeSearcher) rewriteQuery(ctx context.Context, query string) (con
 		final.Usage = &model.Usage{}
 	}
 	final.Usage.TimingInfo = timingInfo
-	itelemetry.TraceChat(span, invocation, req, final, "", tracker.FirstTokenTimeDuration())
+	itelemetry.TraceChat(span, &itelemetry.TraceChatAttributes{
+		Invocation:       invocation,
+		Request:          req,
+		Response:         final,
+		EventID:          "",
+		TimeToFirstToken: tracker.FirstTokenTimeDuration(),
+	})
 
 	return ctx, content, final.Usage, nil
 }

@@ -9,8 +9,13 @@
 package summary
 
 import (
+	"context"
+	"sync"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -21,23 +26,81 @@ import (
 // When no custom checkers are supplied, a default set is used.
 type Checker func(sess *session.Session) bool
 
-// CheckEventThreshold creates a checker that triggers when the total number of
-// events in the session is greater than the specified threshold.
-// This is a simple proxy for conversation growth and is inexpensive to compute.
-// Example: CheckEventThreshold(30) will trigger once there are at least 30 events.
+var (
+	defaultTokenCounterMu sync.RWMutex
+	defaultTokenCounter   model.TokenCounter = model.NewSimpleTokenCounter()
+)
+
+func getTokenCounter() model.TokenCounter {
+	defaultTokenCounterMu.RLock()
+	counter := defaultTokenCounter
+	defaultTokenCounterMu.RUnlock()
+
+	if counter == nil {
+		return model.NewSimpleTokenCounter()
+	}
+	return counter
+}
+
+// SetTokenCounter sets the default TokenCounter used by summary checkers.
+// This affects all future CheckTokenThreshold evaluations in this process.
+func SetTokenCounter(counter model.TokenCounter) {
+	if counter == nil {
+		counter = model.NewSimpleTokenCounter()
+	}
+
+	defaultTokenCounterMu.Lock()
+	defaultTokenCounter = counter
+	defaultTokenCounterMu.Unlock()
+}
+
+// filterDeltaEvents returns events that occurred strictly after the last
+// summarized timestamp stored in session state. If the timestamp is not set
+// or invalid, it returns all events (first summarization scenario).
+func filterDeltaEvents(sess *session.Session) []event.Event {
+	if sess == nil || len(sess.Events) == 0 {
+		return nil
+	}
+
+	raw, ok := sess.GetState(lastIncludedTsKey)
+	if !ok || len(raw) == 0 {
+		return sess.Events
+	}
+
+	lastTs, err := time.Parse(time.RFC3339Nano, string(raw))
+	if err != nil {
+		log.Warnf(
+			"invalid %s in session state (session_id=%s): %v",
+			lastIncludedTsKey,
+			sess.ID,
+			err,
+		)
+		return sess.Events
+	}
+
+	out := make([]event.Event, 0, len(sess.Events))
+	for _, e := range sess.Events {
+		if e.Timestamp.After(lastTs) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// CheckEventThreshold creates a checker that triggers when the number of events
+// since the last summary exceeds the given threshold.
 func CheckEventThreshold(eventCount int) Checker {
 	return func(sess *session.Session) bool {
-		return len(sess.Events) > eventCount
+		delta := filterDeltaEvents(sess)
+		return len(delta) > eventCount
 	}
 }
 
-// CheckTimeThreshold creates a checker that triggers when the time elapsed since
-// the last event is greater than to the given interval.
-// This is useful to ensure periodic summarization in long-running sessions.
-// Example: CheckTimeThreshold(5*time.Minute) triggers if no events occurred in five minutes.
+// CheckTimeThreshold creates a checker that triggers when the time elapsed
+// since the last event is greater than the given interval.
 func CheckTimeThreshold(interval time.Duration) Checker {
 	return func(sess *session.Session) bool {
-		if len(sess.Events) == 0 {
+		if sess == nil || len(sess.Events) == 0 {
 			return false
 		}
 		lastEvent := sess.Events[len(sess.Events)-1]
@@ -45,33 +108,35 @@ func CheckTimeThreshold(interval time.Duration) Checker {
 	}
 }
 
-// CheckTokenThreshold creates a checker that triggers when the approximate token
-// count of the accumulated messages exceeds the given threshold.
-// Tokens are estimated naïvely as len(content)/4 for simplicity and speed.
-// This estimation is coarse and model-agnostic but good enough for gating.
+// checkTokenThresholdFromText checks if the token count of the given text exceeds the threshold.
+func checkTokenThresholdFromText(tokenCount int, conversationText string) bool {
+	if conversationText == "" {
+		return false
+	}
+
+	// SimpleTokenCounter.CountTokens currently never returns an error.
+	tokens, _ := getTokenCounter().CountTokens(
+		context.Background(),
+		model.Message{Content: conversationText},
+	)
+	return tokens > tokenCount
+}
+
+// CheckTokenThreshold creates a checker that triggers when the estimated token
+// count of the events since the last summary exceeds the given threshold.
+//
+// Note:
+// Token accounting via model usage is not stable once session summary injection
+// is enabled. For consistent gating, we estimate tokens from the delta events.
 func CheckTokenThreshold(tokenCount int) Checker {
 	return func(sess *session.Session) bool {
-		if len(sess.Events) == 0 {
+		delta := filterDeltaEvents(sess)
+		if len(delta) == 0 {
 			return false
 		}
 
-		invocationTokens := make(map[string]int)
-		for _, event := range sess.Events {
-			if event.Response == nil || event.Response.Usage == nil {
-				continue
-			}
-			invocationID := event.InvocationID
-			if event.Response.Usage.TotalTokens > 0 {
-				invocationTokens[invocationID] = event.Response.Usage.TotalTokens
-			}
-		}
-
-		totalTokens := 0
-		for _, tokens := range invocationTokens {
-			totalTokens += tokens
-		}
-
-		return totalTokens > tokenCount
+		conversationText := extractConversationText(delta, nil, nil)
+		return checkTokenThresholdFromText(tokenCount, conversationText)
 	}
 }
 

@@ -16,11 +16,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"mime"
 	"os"
 	"path"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
@@ -229,11 +229,15 @@ func (t *RunTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name: "skill_run",
 		Description: "Run a command inside a skill workspace. " +
+			"Use it only for commands required by the skill " +
+			"docs (not for generic shell tasks). " +
 			"Returns stdout/stderr, a primary_output " +
 			"(best small text file), and collected output_files " +
-			"(inline, with workspace:// refs). Prefer " +
-			"primary_output/output_files content; use " +
-			"output_files[*].ref when passing a file to other tools.",
+			"(text inline by default, with workspace:// refs). " +
+			"Non-text outputs omit inline content. " +
+			"Prefer primary_output/output_files content; " +
+			"use output_files[*].ref when passing a file to " +
+			"other tools.",
 		InputSchema: &tool.Schema{
 			Type:        "object",
 			Description: "Run command input",
@@ -247,7 +251,8 @@ func (t *RunTool) Declaration() *tool.Declaration {
 				"output_files": {Type: "array",
 					Items: &tool.Schema{Type: "string"},
 					Description: "Workspace-relative paths/globs to " +
-						"collect and inline (e.g. out/*.txt). " +
+						"collect and inline text (e.g. out/*.txt). " +
+						"Non-text outputs omit inline content. " +
 						"Prefer output_files content; for other " +
 						"tools use output_files[*].ref " +
 						"(workspace://...). Do not use " +
@@ -256,9 +261,13 @@ func (t *RunTool) Declaration() *tool.Declaration {
 				"save_as_artifacts": {Type: "boolean", Description: "" +
 					"Persist collected files via Artifact service"},
 				"omit_inline_content": {Type: "boolean", Description: "" +
-					"With save_as_artifacts, omit output_files content"},
+					"Omit output_files content (metadata only). " +
+					"Non-text outputs are always metadata only. " +
+					"Use output_files[*].ref to read later."},
 				"artifact_prefix": {Type: "string", Description: "" +
 					"With save_as_artifacts, prefix artifact names"},
+				"inputs":  inputSpecsSchema(),
+				"outputs": outputSpecSchema(),
 			},
 		},
 		OutputSchema: &tool.Schema{Type: "object",
@@ -309,6 +318,7 @@ func (t *RunTool) Call(
 	if err != nil {
 		return nil, err
 	}
+	trimTruncatedUTF8TextFiles(files)
 	out := buildRunOutput(rr, files)
 	mergeAutoPrimaryOutput(autoFiles, &out)
 	if len(files) > 0 && !in.SaveArtifacts {
@@ -322,9 +332,8 @@ func (t *RunTool) Call(
 		return nil, err
 	}
 	mergeManifestArtifactRefs(manifest, &out)
-	if !(in.SaveArtifacts && in.OmitInline) {
-		toolcache.StoreSkillRunOutputFilesFromContext(ctx, files)
-	}
+	applyOmitInlineContent(ctx, &out, in.OmitInline)
+	toolcache.StoreSkillRunOutputFilesFromContext(ctx, files)
 	return out, nil
 }
 
@@ -348,6 +357,7 @@ func (t *RunTool) autoExportWorkspaceOut(
 	if len(files) > defaultAutoExportMax {
 		files = files[:defaultAutoExportMax]
 	}
+	trimTruncatedUTF8TextFiles(files)
 	toolcache.StoreSkillRunOutputFilesFromContext(ctx, files)
 	return files
 }
@@ -744,6 +754,35 @@ func isWorkspaceEnvPath(s string) bool {
 		hasEnvPrefix(s, codeexecutor.EnvRunDir)
 }
 
+func isAllowedWorkspacePath(rel string) bool {
+	switch {
+	case rel == codeexecutor.DirSkills || strings.HasPrefix(rel, codeexecutor.DirSkills+"/"):
+		return true
+	case rel == codeexecutor.DirWork || strings.HasPrefix(rel, codeexecutor.DirWork+"/"):
+		return true
+	case rel == codeexecutor.DirOut || strings.HasPrefix(rel, codeexecutor.DirOut+"/"):
+		return true
+	case rel == codeexecutor.DirRuns || strings.HasPrefix(rel, codeexecutor.DirRuns+"/"):
+		return true
+	default:
+		return false
+	}
+}
+
+func sanitizeWorkspaceRelPath(rel string, fallback string) string {
+	cleaned := path.Clean(rel)
+	if cleaned == "." || cleaned == "" {
+		return "."
+	}
+	if cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+		return fallback
+	}
+	if isAllowedWorkspacePath(cleaned) {
+		return cleaned
+	}
+	return fallback
+}
+
 func resolveCWD(cwd string, name string) string {
 	// Default: run at the skill root. Relative cwd resolves under the
 	// skill root. "$WORK_DIR" style paths resolve to workspace-relative
@@ -751,37 +790,34 @@ func resolveCWD(cwd string, name string) string {
 	// start with known workspace dirs like "/skills" or "/work".
 	base := path.Join(codeexecutor.DirSkills, name)
 	s := strings.TrimSpace(cwd)
+	s = strings.ReplaceAll(s, "\\", "/")
 	if s == "" {
 		return base
 	}
+
 	if isWorkspaceEnvPath(s) {
 		if out := codeexecutor.NormalizeGlobs([]string{s}); len(out) > 0 {
-			return out[0]
+			return sanitizeWorkspaceRelPath(out[0], base)
 		}
+		return base
 	}
+
 	if strings.HasPrefix(s, "/") {
-		cleaned := path.Clean(s)
-		rel := strings.TrimPrefix(cleaned, "/")
-		switch {
-		case rel == "" || rel == ".":
+		rel := strings.TrimPrefix(path.Clean(s), "/")
+		if rel == "" || rel == "." {
 			return "."
-		case rel == codeexecutor.DirSkills ||
-			strings.HasPrefix(rel, codeexecutor.DirSkills+"/"):
-			return rel
-		case rel == codeexecutor.DirWork ||
-			strings.HasPrefix(rel, codeexecutor.DirWork+"/"):
-			return rel
-		case rel == codeexecutor.DirOut ||
-			strings.HasPrefix(rel, codeexecutor.DirOut+"/"):
-			return rel
-		case rel == codeexecutor.DirRuns ||
-			strings.HasPrefix(rel, codeexecutor.DirRuns+"/"):
-			return rel
-		default:
-			return base
 		}
+		if isAllowedWorkspacePath(rel) {
+			return rel
+		}
+		return base
 	}
-	return path.Join(base, s)
+
+	joined := path.Join(base, s)
+	if joined == base || strings.HasPrefix(joined, base+"/") {
+		return joined
+	}
+	return base
 }
 
 // filepathBase returns the last element of a path, trimming trailing
@@ -1064,9 +1100,11 @@ func (t *RunTool) prepareOutputs(
 		if in.Outputs.Inline {
 			for _, fr := range m.Files {
 				files = append(files, codeexecutor.File{
-					Name:     fr.Name,
-					Content:  fr.Content,
-					MIMEType: fr.MIMEType,
+					Name:      fr.Name,
+					Content:   fr.Content,
+					MIMEType:  fr.MIMEType,
+					SizeBytes: fr.SizeBytes,
+					Truncated: fr.Truncated,
 				})
 			}
 		}
@@ -1129,12 +1167,68 @@ func truncateOutput(s string) (string, bool) {
 func toRunFiles(files []codeexecutor.File) []runFile {
 	out := make([]runFile, 0, len(files))
 	for _, f := range files {
+		rf := f
+		if !shouldInlineFileContent(rf) {
+			rf.Content = ""
+		}
 		out = append(out, runFile{
-			File: f,
+			File: rf,
 			Ref:  fileref.WorkspaceRef(f.Name),
 		})
 	}
 	return out
+}
+
+func shouldInlineFileContent(f codeexecutor.File) bool {
+	if f.Content == "" {
+		return true
+	}
+	if !codeexecutor.IsTextMIME(f.MIMEType) {
+		return false
+	}
+	if strings.IndexByte(f.Content, 0) >= 0 {
+		return false
+	}
+	return utf8.ValidString(f.Content)
+}
+
+const maxTrimUTF8SuffixBytes = utf8.UTFMax - 1
+
+func trimTruncatedUTF8TextFiles(files []codeexecutor.File) {
+	for i := range files {
+		f := &files[i]
+		if !f.Truncated || f.Content == "" {
+			continue
+		}
+		if !codeexecutor.IsTextMIME(f.MIMEType) {
+			continue
+		}
+		if strings.IndexByte(f.Content, 0) >= 0 {
+			continue
+		}
+		if utf8.ValidString(f.Content) {
+			continue
+		}
+		n := validUTF8PrefixLen(f.Content)
+		if len(f.Content)-n > maxTrimUTF8SuffixBytes {
+			continue
+		}
+		if n > 0 {
+			f.Content = f.Content[:n]
+		}
+	}
+}
+
+func validUTF8PrefixLen(s string) int {
+	n := 0
+	for n < len(s) {
+		r, size := utf8.DecodeRuneInString(s[n:])
+		if r == utf8.RuneError && size == 1 {
+			break
+		}
+		n += size
+	}
+	return n
 }
 
 func selectPrimaryOutput(files []runFile) *runFile {
@@ -1143,7 +1237,7 @@ func selectPrimaryOutput(files []runFile) *runFile {
 		if strings.TrimSpace(f.Content) == "" {
 			continue
 		}
-		if !isTextMIME(f.MIMEType) {
+		if !codeexecutor.IsTextMIME(f.MIMEType) {
 			continue
 		}
 		if len(f.Content) > maxPrimaryOutputChars {
@@ -1164,16 +1258,6 @@ func mergeAutoPrimaryOutput(files []codeexecutor.File, out *runOutput) {
 	}
 	runFiles := toRunFiles(files)
 	out.PrimaryOutput = selectPrimaryOutput(runFiles)
-}
-
-func isTextMIME(mimeType string) bool {
-	mt := strings.TrimSpace(mimeType)
-	if parsed, _, err := mime.ParseMediaType(mt); err == nil {
-		mt = parsed
-	}
-	return strings.HasPrefix(mt, "text/") ||
-		mt == "application/json" ||
-		strings.HasSuffix(mt, "+json")
 }
 
 // attachArtifactsIfRequested saves files as artifacts when requested
@@ -1213,7 +1297,7 @@ func (t *RunTool) attachArtifactsIfRequested(
 }
 
 const warnSaveArtifactsSkippedTmpl = "save_as_artifacts requested but " +
-	"%s; returning inline output_files"
+	"%s; outputs are not persisted"
 
 const warnOutputFilesWorkspaceOnly = "output_files are workspace-" +
 	"relative; prefer output_files content; when you need a " +
@@ -1252,6 +1336,82 @@ func appendWarning(out *runOutput, reason string) {
 		out.Warnings,
 		fmt.Sprintf(warnSaveArtifactsSkippedTmpl, reason),
 	)
+}
+
+const warnOmitInlineNoFallback = "omit_inline_content requested but " +
+	"invocation is missing; returning inline output_files"
+
+func applyOmitInlineContent(
+	ctx context.Context,
+	out *runOutput,
+	omit bool,
+) {
+	if out == nil || !omit {
+		return
+	}
+	if !hasOmitInlineFallback(ctx) {
+		out.Warnings = append(out.Warnings, warnOmitInlineNoFallback)
+		return
+	}
+	for i := range out.OutputFiles {
+		out.OutputFiles[i].Content = ""
+	}
+	if out.PrimaryOutput != nil {
+		out.PrimaryOutput.Content = ""
+	}
+}
+
+func hasOmitInlineFallback(ctx context.Context) bool {
+	inv, ok := agent.InvocationFromContext(ctx)
+	return ok && inv != nil
+}
+
+func inputSpecsSchema() *tool.Schema {
+	return &tool.Schema{
+		Type:        "array",
+		Description: "Declarative inputs to stage into workspace",
+		Items: &tool.Schema{
+			Type: "object",
+			Properties: map[string]*tool.Schema{
+				"from": {Type: "string", Description: "" +
+					"Source ref (artifact://, host://, " +
+					"workspace://, skill://)"},
+				"to": {Type: "string", Description: "" +
+					"Workspace-relative destination"},
+				"mode": {Type: "string", Description: "" +
+					"copy (default) or link"},
+				"pin": {Type: "boolean", Description: "" +
+					"Pin artifact version when supported"},
+			},
+		},
+	}
+}
+
+func outputSpecSchema() *tool.Schema {
+	return &tool.Schema{
+		Type:        "object",
+		Description: "Declarative outputs with limits and persistence",
+		Properties: map[string]*tool.Schema{
+			"globs": {
+				Type:  "array",
+				Items: &tool.Schema{Type: "string"},
+				Description: "Workspace-relative patterns " +
+					"(supports ** and $OUTPUT_DIR/**)",
+			},
+			"inline": {Type: "boolean", Description: "" +
+				"Inline file contents into result"},
+			"save": {Type: "boolean", Description: "" +
+				"Persist outputs via Artifact service"},
+			"name_template": {Type: "string", Description: "" +
+				"Prefix for artifact names (e.g. pref/)"},
+			"max_files": {Type: "integer", Description: "" +
+				"Max number of matched files"},
+			"max_file_bytes": {Type: "integer", Description: "" +
+				"Max bytes per file (default 4 MiB)"},
+			"max_total_bytes": {Type: "integer", Description: "" +
+				"Max total bytes across files (default 64 MiB)"},
+		},
+	}
 }
 
 // mergeManifestArtifactRefs appends artifact refs derived from a
