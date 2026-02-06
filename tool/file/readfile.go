@@ -381,9 +381,8 @@ func (f *fileToolSet) readFileTool() tool.CallableTool {
 		function.WithName("read_file"),
 		function.WithDescription(
 			"Read a text file under base_directory. Supports "+
-				"workspace:// and artifact:// refs (including "+
-				"evicted tool results). Optional start_line and "+
-				"num_lines select line ranges for paging.",
+				"workspace:// and artifact:// refs. Optional "+
+				"start_line and num_lines select line ranges.",
 		),
 	)
 }
