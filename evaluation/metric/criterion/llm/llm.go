@@ -40,6 +40,8 @@ type JudgeModelOptions struct {
 	ProviderName string `json:"providerName,omitempty"`
 	// ModelName identifies the judge model.
 	ModelName string `json:"modelName,omitempty"`
+	// Variant selects the OpenAI-compatible variant when ProviderName is "openai".
+	Variant string `json:"variant,omitempty"`
 	// BaseURL is an optional custom endpoint.
 	BaseURL string `json:"baseURL,omitempty"`
 	// APIKey is used for the judge provider.
@@ -60,7 +62,7 @@ func (j JudgeModelOptions) MarshalJSON() ([]byte, error) {
 	return json.Marshal(alias)
 }
 
-// UnmarshalJSON expands environment variables for ProviderName, ModelName, BaseURL and APIKey.
+// UnmarshalJSON expands environment variables for ProviderName, ModelName, Variant, BaseURL and APIKey.
 func (j *JudgeModelOptions) UnmarshalJSON(data []byte) error {
 	type judgeModelOptionsAlias JudgeModelOptions
 	var alias judgeModelOptionsAlias
@@ -69,6 +71,7 @@ func (j *JudgeModelOptions) UnmarshalJSON(data []byte) error {
 	}
 	alias.ProviderName = os.ExpandEnv(alias.ProviderName)
 	alias.ModelName = os.ExpandEnv(alias.ModelName)
+	alias.Variant = os.ExpandEnv(alias.Variant)
 	alias.BaseURL = os.ExpandEnv(alias.BaseURL)
 	alias.APIKey = os.ExpandEnv(alias.APIKey)
 	*j = JudgeModelOptions(alias)
@@ -84,6 +87,7 @@ func New(providerName, modelName string, opt ...Option) *LLMCriterion {
 		JudgeModel: &JudgeModelOptions{
 			ProviderName: providerName,
 			ModelName:    modelName,
+			Variant:      opts.variant,
 			BaseURL:      opts.baseURL,
 			APIKey:       opts.apiKey,
 			ExtraFields:  opts.extraFields,
