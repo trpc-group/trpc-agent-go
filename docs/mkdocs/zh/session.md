@@ -1000,7 +1000,7 @@ sessionService, err := mysql.NewService(
 - `idx_*_session_summaries_unique_active(app_name, user_id, session_id, filter_key, deleted_at)` — 唯一索引但包含 deleted_at
 - `idx_*_session_summaries_lookup(app_name, user_id, session_id, deleted_at)` — 普通索引
 
-**新版索引**：`idx_*_session_summaries_unique_active(app_name, user_id, session_id, filter_key)` — 唯一索引，不包含 deleted_at
+**新版索引**：`idx_*_session_summaries_unique_active(app_name(191), user_id(191), session_id(191), filter_key(191))` — 唯一索引，不包含 deleted_at（使用前缀索引以避免 Error 1071）。
 
 **迁移步骤**：
 
@@ -1039,7 +1039,7 @@ DROP INDEX idx_session_summaries_lookup ON session_summaries;
 -- Step 5: 创建新的唯一索引（不包含 deleted_at）
 -- 注意：索引名称可能带有表前缀，请根据实际情况调整。
 CREATE UNIQUE INDEX idx_session_summaries_unique_active 
-ON session_summaries(app_name, user_id, session_id, filter_key);
+ON session_summaries(app_name(191), user_id(191), session_id(191), filter_key(191));
 
 -- Step 6: 验证迁移结果
 SELECT COUNT(*) as duplicate_count FROM (
