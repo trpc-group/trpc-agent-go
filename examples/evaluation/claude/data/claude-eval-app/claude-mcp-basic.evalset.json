@@ -1,0 +1,43 @@
+{
+  "evalSetId": "claude-mcp-basic",
+  "name": "claude-mcp-basic",
+  "evalCases": [
+    {
+      "evalId": "call_mcp_calculator",
+      "conversation": [
+        {
+          "invocationId": "call_mcp_calculator-1",
+          "userContent": {
+            "role": "user",
+            "content": "Calculate the sum of 1 and 2."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "(unused)"
+          },
+          "tools": [
+            {
+              "id": "tool_use_mcp_calculator",
+              "name": "mcp__eva_eval_example__calculator",
+              "arguments": {
+                "operation": "add",
+                "a": 1,
+                "b": 2
+              },
+              "result": {
+                "operation": "add",
+                "a": 1,
+                "b": 2,
+                "result": 3
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "claude-eval-app",
+        "userId": "demo-user"
+      }
+    }
+  ]
+}
