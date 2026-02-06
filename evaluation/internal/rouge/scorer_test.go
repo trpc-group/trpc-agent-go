@@ -10,6 +10,7 @@ package rouge
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,6 +34,22 @@ func TestCompute_InvalidRougeType(t *testing.T) {
 		_, err := Compute(context.Background(), "a", "b", WithRougeTypes(rougeType))
 		require.Error(t, err)
 	}
+}
+
+// TestCompute_NilContext verifies that nil contexts return an error.
+func TestCompute_NilContext(t *testing.T) {
+	_, err := Compute(nil, "a", "b", WithRougeTypes("rouge1"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "context is nil")
+}
+
+// TestCompute_ContextCanceled verifies that canceled contexts return the context error.
+func TestCompute_ContextCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := Compute(ctx, "a", "b", WithRougeTypes("rouge1"))
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, context.Canceled))
 }
 
 // TestCompute_RougeN_MultiDigit verifies that multi-digit ROUGE-N values are accepted.
@@ -116,6 +133,13 @@ func TestComputeMulti_RougeAll(t *testing.T) {
 	assert.InDelta(t, 1.0, result["rouge1"].FMeasure, 1e-12)
 	assert.InDelta(t, 0.0, result["rouge2"].FMeasure, 1e-12)
 	assert.InDelta(t, 0.5, result["rougeL"].FMeasure, 1e-12)
+}
+
+// TestComputeMulti_EmptyTargets verifies that computeMulti rejects empty targets.
+func TestComputeMulti_EmptyTargets(t *testing.T) {
+	_, err := computeMulti(context.Background(), nil, "prediction", WithRougeTypes("rouge1"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "targets are empty")
 }
 
 // TestCompute_RougeLsum verifies rougeLsum scoring on newline-separated summaries and edge cases.

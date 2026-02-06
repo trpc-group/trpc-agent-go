@@ -9,6 +9,8 @@
 package rouge
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -76,4 +78,46 @@ func TestNLTKSentTokenizeEnglish_Compatibility(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, tc.expected, actual)
 	}
+}
+
+// TestNLTKSentTokenizeEnglish_CachedError verifies that cached initialization errors are returned.
+func TestNLTKSentTokenizeEnglish_CachedError(t *testing.T) {
+	origOnce := englishSentenceTokenizerOnce
+	origTok := englishSentenceTokenizer
+	origErr := englishSentenceTokenizerErr
+	defer func() {
+		englishSentenceTokenizerOnce = origOnce
+		englishSentenceTokenizer = origTok
+		englishSentenceTokenizerErr = origErr
+	}()
+
+	englishSentenceTokenizerOnce = sync.Once{}
+	englishSentenceTokenizerOnce.Do(func() {})
+	englishSentenceTokenizer = nil
+	englishSentenceTokenizerErr = fmt.Errorf("cached error")
+
+	_, err := nltkSentTokenizeEnglish("Hello.")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cached error")
+}
+
+// TestNLTKSentTokenizeEnglish_NilTokenizer verifies that a nil tokenizer returns an error.
+func TestNLTKSentTokenizeEnglish_NilTokenizer(t *testing.T) {
+	origOnce := englishSentenceTokenizerOnce
+	origTok := englishSentenceTokenizer
+	origErr := englishSentenceTokenizerErr
+	defer func() {
+		englishSentenceTokenizerOnce = origOnce
+		englishSentenceTokenizer = origTok
+		englishSentenceTokenizerErr = origErr
+	}()
+
+	englishSentenceTokenizerOnce = sync.Once{}
+	englishSentenceTokenizerOnce.Do(func() {})
+	englishSentenceTokenizer = nil
+	englishSentenceTokenizerErr = nil
+
+	_, err := nltkSentTokenizeEnglish("Hello.")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "english sentence tokenizer is nil")
 }
