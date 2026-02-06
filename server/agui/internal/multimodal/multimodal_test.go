@@ -32,6 +32,24 @@ func TestUserMessageFromInputContentsErrors(t *testing.T) {
 		_, err := UserMessageFromInputContents([]types.InputContent{{Type: types.InputContentTypeBinary, MimeType: "image/jpeg"}})
 		assert.ErrorContains(t, err, "binary input content requires at least one of id, url, or data")
 	})
+	t.Run("binary data URL missing comma", func(t *testing.T) {
+		_, err := UserMessageFromInputContents([]types.InputContent{{
+			Type:     types.InputContentTypeBinary,
+			MimeType: "image/png",
+			Data:     "data:image/png;base64",
+		}})
+		assert.ErrorContains(t, err, "decode binary payload")
+		assert.ErrorContains(t, err, "base64 data URL is missing comma separator")
+	})
+	t.Run("binary data URL not base64", func(t *testing.T) {
+		_, err := UserMessageFromInputContents([]types.InputContent{{
+			Type:     types.InputContentTypeBinary,
+			MimeType: "image/png",
+			Data:     "data:image/png," + base64.StdEncoding.EncodeToString([]byte{0x01}),
+		}})
+		assert.ErrorContains(t, err, "decode binary payload")
+		assert.ErrorContains(t, err, "data URL is not base64-encoded")
+	})
 	t.Run("binary invalid base64", func(t *testing.T) {
 		_, err := UserMessageFromInputContents([]types.InputContent{{
 			Type:     types.InputContentTypeBinary,
