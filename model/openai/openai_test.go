@@ -442,6 +442,85 @@ func TestModel_convertTools(t *testing.T) {
 	require.True(t, fn.Description.Valid() && fn.Description.Value == toolDesc, "function description mismatch")
 
 	require.False(t, reflect.ValueOf(fn.Parameters).IsZero(), "expected parameters to be populated from schema")
+	assert.Equal(t, "object", fn.Parameters["type"])
+	props, ok := fn.Parameters["properties"].(map[string]any)
+	require.True(t, ok, "expected properties to be an object")
+	assert.Empty(t, props, "expected empty properties for no-arg tool")
+}
+
+// TestModel_convertTools_StrictProxyTopLevelProperties validates the final JSON
+// payload shape expected by strict OpenAI-compatible proxies.
+func TestModel_convertTools_StrictProxyTopLevelProperties(t *testing.T) {
+	m := New("dummy")
+
+	toolsMap := map[string]tool.Tool{
+		"no_arg_tool": stubTool{decl: &tool.Declaration{
+			Name:        "no_arg_tool",
+			Description: "no args",
+			InputSchema: &tool.Schema{Type: "object"},
+		}},
+		"nested_tool": stubTool{decl: &tool.Declaration{
+			Name:        "nested_tool",
+			Description: "nested args",
+			InputSchema: &tool.Schema{
+				Type: "object",
+				Properties: map[string]*tool.Schema{
+					"nested": {Type: "object"},
+				},
+			},
+		}},
+	}
+
+	converted := m.convertTools(toolsMap)
+	require.Len(t, converted, 2)
+
+	payload := struct {
+		Tools []openai.ChatCompletionToolParam `json:"tools"`
+	}{
+		Tools: converted,
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	err = validateStrictTopLevelObjectProperties(body)
+	require.NoError(t, err)
+}
+
+func validateStrictTopLevelObjectProperties(payload []byte) error {
+	var req struct {
+		Tools []struct {
+			Function struct {
+				Name       string         `json:"name"`
+				Parameters map[string]any `json:"parameters"`
+			} `json:"function"`
+		} `json:"tools"`
+	}
+
+	if err := json.Unmarshal(payload, &req); err != nil {
+		return err
+	}
+	for _, toolParam := range req.Tools {
+		params := toolParam.Function.Parameters
+		if params == nil {
+			continue
+		}
+		typeVal, ok := params["type"].(string)
+		if !ok || typeVal != "object" {
+			continue
+		}
+		props, exists := params["properties"]
+		if !exists {
+			return fmt.Errorf("tool %q missing top-level properties in parameters", toolParam.Function.Name)
+		}
+		if _, ok := props.(map[string]any); !ok {
+			return fmt.Errorf(
+				"tool %q has non-object top-level properties type %T",
+				toolParam.Function.Name,
+				props,
+			)
+		}
+	}
+	return nil
 }
 
 func TestBuildToolDescription_AppendsOutputSchema(t *testing.T) {
