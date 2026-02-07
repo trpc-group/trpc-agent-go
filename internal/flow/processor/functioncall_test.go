@@ -211,6 +211,7 @@ func TestExecuteToolCall_EvictLargeToolResult(t *testing.T) {
 	require.True(t, strings.HasPrefix(payload.Ref, fileref.ArtifactPrefix))
 	require.NotEmpty(t, payload.Preview)
 	require.True(t, strings.HasSuffix(payload.Preview, "..."))
+	require.Contains(t, payload.Hint, "read_file")
 
 	content, _, handled, err := fileref.TryRead(ctx, payload.Ref)
 	require.NoError(t, err)
@@ -317,6 +318,7 @@ func TestExecuteToolCall_ToolResultMessagesCallback_EvictsLargeResult(t *testing
 	require.NoError(t, json.Unmarshal([]byte(choices[0].Message.Content), &payload))
 	require.True(t, strings.HasPrefix(payload.Ref, fileref.ArtifactPrefix))
 	require.NotEmpty(t, payload.Preview)
+	require.Contains(t, payload.Hint, "read_file")
 
 	content, _, handled, err := fileref.TryRead(ctx, payload.Ref)
 	require.NoError(t, err)

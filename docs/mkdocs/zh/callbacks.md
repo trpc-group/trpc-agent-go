@@ -337,7 +337,7 @@ type ToolResultMessagesFunc = func(
 发送给模型的示例 payload：
 
 ```json
-{"preview":"...","ref":"artifact://tool_result_echo_call-1.json@0"}
+{"preview":"...","ref":"artifact://tool_result_echo_call-1.json@0","hint":"Large result saved. Use read_file with ref and start_line/num_lines to page."}
 ```
 
 读取完整结果时，先取出 `ref`，再通过文件工具读取（支持 `artifact://`），

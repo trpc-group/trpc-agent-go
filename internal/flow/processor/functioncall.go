@@ -63,6 +63,7 @@ const (
 	toolResultTokenApproxBytes       = 4
 	toolResultArtifactMimeType       = "application/json"
 	toolResultTextMimeType           = "text/plain"
+	toolResultReadHint               = "Large result saved. Use read_file with ref and start_line/num_lines to page."
 )
 
 // summarizationSkipper is implemented by tools that can indicate whether
@@ -921,6 +922,7 @@ func maybeEvictToolResult(
 	payload := toolResultEvictedPayload{
 		Preview: storage.preview,
 		Ref:     ref,
+		Hint:    toolResultReadHint,
 	}
 	refBytes, err := json.Marshal(payload)
 	if err != nil {
@@ -960,6 +962,7 @@ func maybeEvictToolResultChoices(
 type toolResultEvictedPayload struct {
 	Preview string `json:"preview"`
 	Ref     string `json:"ref"`
+	Hint    string `json:"hint"`
 }
 
 type toolResultStorage struct {

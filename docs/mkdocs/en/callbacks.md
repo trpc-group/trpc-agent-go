@@ -339,7 +339,7 @@ tool results and callback-provided results.
 Example payload sent to the model:
 
 ```json
-{"preview":"...","ref":"artifact://tool_result_echo_call-1.json@0"}
+{"preview":"...","ref":"artifact://tool_result_echo_call-1.json@0","hint":"Large result saved. Use read_file with ref and start_line/num_lines to page."}
 ```
 
 To read the full result, extract the `ref` and fetch it with the file tool (supports `artifact://`)
