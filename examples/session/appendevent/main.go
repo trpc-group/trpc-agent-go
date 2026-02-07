@@ -302,7 +302,7 @@ func (c *appendEventChat) appendAssistantMessage(ctx context.Context, content st
 // For persistence to session, Response must satisfy:
 //   - Response != nil
 //   - !IsPartial (or has StateDelta)
-//   - IsValidContent() returns true (Choices with Message.Content or tool calls)
+//   - IsValidContent() returns true (Choices with Message.Content, Message.ContentParts, or tool calls).
 //
 // Optional but recommended fields:
 //   - RequestID: For request tracking (set manually)

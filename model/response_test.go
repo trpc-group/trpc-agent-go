@@ -418,11 +418,49 @@ func TestResponse_IsValidContent(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "valid content in content parts",
+			rsp: &Response{
+				Choices: []Choice{{
+					Message: Message{
+						ContentParts: []ContentPart{
+							{
+								Type: ContentTypeText,
+								Text: func() *string {
+									s := "Hello from part"
+									return &s
+								}(),
+							},
+						},
+					},
+				}},
+			},
+			want: true,
+		},
+		{
 			name: "valid content in delta",
 			rsp: &Response{
 				Choices: []Choice{{
 					Delta: Message{
 						Content: "Hello, world!",
+					},
+				}},
+			},
+			want: true,
+		},
+		{
+			name: "valid content in delta content parts",
+			rsp: &Response{
+				Choices: []Choice{{
+					Delta: Message{
+						ContentParts: []ContentPart{
+							{
+								Type: ContentTypeText,
+								Text: func() *string {
+									s := "Hello from delta part"
+									return &s
+								}(),
+							},
+						},
 					},
 				}},
 			},
