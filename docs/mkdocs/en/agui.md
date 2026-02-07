@@ -56,7 +56,7 @@ type RunAgentInput struct {
 	RunID          string // Run ID. Used to correlate `RUN_STARTED`, `RUN_FINISHED`, and other events.
 	ParentRunID    *string // Parent run ID. Optional.
 	State          any    // Arbitrary state.
-	Messages       []Message // Message list. The framework requires the last message to be `role=user` and uses its content as input.
+	Messages       []Message // Message list. The framework requires the last message to be `role=user` and uses its content (string or multimodal array) as input.
 	Tools          []Tool    // Tool definitions. Protocol field. Optional.
 	Context        []Context // Context entries. Protocol field. Optional.
 	ForwardedProps any    // Arbitrary forwarded properties. Typically used to carry business custom parameters.
@@ -92,6 +92,51 @@ For the same `SessionKey` (`AppName` + `userID` + `sessionID`), only one real-ti
 Even if the client SSE connection is closed, the backend continues executing until it finishes normally (or is cancelled / times out). By default, a single request can run for up to 1 hour. You can adjust this with `agui.WithTimeout(d)`, and set it to `0` to disable the timeout; the effective deadline is the earlier of the request context deadline and `agui.WithTimeout(d)`.
 
 A complete example is available at [examples/agui/server/default](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/default).
+
+#### Multimodal user input
+
+For `role=user` messages, `content` can also be a multimodal array. Each item is an `InputContent` fragment:
+
+- `type: "text"` with `text`
+- `type: "binary"` with `mimeType` and at least one of `url`, `data` (base64 string or base64 data URL), or `id`
+
+Example (text + image URL):
+
+```json
+{
+    "threadId": "thread-id",
+    "runId": "run-id",
+    "messages": [
+        {
+            "role": "user",
+            "content": [
+                { "type": "text", "text": "Describe the image." },
+                { "type": "binary", "mimeType": "image/png", "url": "https://example.com/image.png" }
+            ]
+        }
+    ]
+}
+```
+
+Example (text + image data as base64 data URL):
+
+```json
+{
+    "threadId": "thread-id",
+    "runId": "run-id",
+    "messages": [
+        {
+            "role": "user",
+            "content": [
+                { "type": "text", "text": "Describe the image." },
+                { "type": "binary", "mimeType": "image/png", "data": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMBAH+X1d0AAAAASUVORK5CYII=" }
+            ]
+        }
+    ]
+}
+```
+
+The `url` parameter only supports binary input of type `image/*`; for other `mimeType`s, please use `data` or `id`. The server will decode the `data` using standard base64 decoding. If you wish to send only the raw base64 string, you can remove the `data:*;base64,` prefix.
 
 ### Cancel route
 

@@ -32,6 +32,24 @@ func TestUserMessageFromInputContentsErrors(t *testing.T) {
 		_, err := UserMessageFromInputContents([]types.InputContent{{Type: types.InputContentTypeBinary, MimeType: "image/jpeg"}})
 		assert.ErrorContains(t, err, "binary input content requires at least one of id, url, or data")
 	})
+	t.Run("binary data URL missing comma", func(t *testing.T) {
+		_, err := UserMessageFromInputContents([]types.InputContent{{
+			Type:     types.InputContentTypeBinary,
+			MimeType: "image/png",
+			Data:     "data:image/png;base64",
+		}})
+		assert.ErrorContains(t, err, "decode binary payload")
+		assert.ErrorContains(t, err, "base64 data URL is missing comma separator")
+	})
+	t.Run("binary data URL not base64", func(t *testing.T) {
+		_, err := UserMessageFromInputContents([]types.InputContent{{
+			Type:     types.InputContentTypeBinary,
+			MimeType: "image/png",
+			Data:     "data:image/png," + base64.StdEncoding.EncodeToString([]byte{0x01}),
+		}})
+		assert.ErrorContains(t, err, "decode binary payload")
+		assert.ErrorContains(t, err, "data URL is not base64-encoded")
+	})
 	t.Run("binary invalid base64", func(t *testing.T) {
 		_, err := UserMessageFromInputContents([]types.InputContent{{
 			Type:     types.InputContentTypeBinary,
@@ -47,7 +65,7 @@ func TestUserMessageFromInputContentsErrors(t *testing.T) {
 			Data:     " ",
 		}})
 		assert.ErrorContains(t, err, "decode binary payload")
-		assert.ErrorContains(t, err, "base64 payload is empty")
+		assert.ErrorContains(t, err, "illegal base64 data")
 	})
 }
 
@@ -106,6 +124,24 @@ func TestUserMessageFromInputContentsBinaryDataImage(t *testing.T) {
 			Type:     types.InputContentTypeBinary,
 			MimeType: "image/png",
 			Data:     base64.StdEncoding.EncodeToString(payload),
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, msg.ContentParts, 1)
+	assert.Equal(t, model.ContentTypeImage, msg.ContentParts[0].Type)
+	require.NotNil(t, msg.ContentParts[0].Image)
+	assert.Equal(t, payload, msg.ContentParts[0].Image.Data)
+	assert.Equal(t, "png", msg.ContentParts[0].Image.Format)
+	assert.Empty(t, msg.ContentParts[0].Image.Detail)
+}
+
+func TestUserMessageFromInputContentsBinaryDataImage_DataURL(t *testing.T) {
+	payload := []byte{0x01, 0x02, 0x03}
+	msg, err := UserMessageFromInputContents([]types.InputContent{
+		{
+			Type:     types.InputContentTypeBinary,
+			MimeType: "image/png",
+			Data:     "data:image/png;base64," + base64.StdEncoding.EncodeToString(payload),
 		},
 	})
 	require.NoError(t, err)
