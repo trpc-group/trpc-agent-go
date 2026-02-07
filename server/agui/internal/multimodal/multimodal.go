@@ -126,13 +126,19 @@ func contentPartFromBinaryInput(part types.InputContent) (*model.ContentPart, er
 }
 
 func decodeBase64Payload(payload string) ([]byte, error) {
-	payload = strings.TrimSpace(payload)
+	if strings.HasPrefix(payload, "data:") {
+		comma := strings.IndexByte(payload, ',')
+		if comma < 0 {
+			return nil, errors.New("base64 data URL is missing comma separator")
+		}
+		header := strings.ToLower(payload[:comma])
+		if !strings.Contains(header, ";base64") {
+			return nil, errors.New("data URL is not base64-encoded")
+		}
+		payload = payload[comma+1:]
+	}
 	if payload == "" {
 		return nil, errors.New("base64 payload is empty")
 	}
-	b, err := base64.StdEncoding.DecodeString(payload)
-	if err != nil {
-		return nil, err
-	}
-	return b, nil
+	return base64.StdEncoding.DecodeString(payload)
 }

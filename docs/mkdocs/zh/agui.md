@@ -56,7 +56,7 @@ type RunAgentInput struct {
 	RunID          string          // 本次运行 ID，用于和事件流中的 `RUN_STARTED`、`RUN_FINISHED` 等事件关联。
 	ParentRunID    *string         // 父运行 ID，可选。
 	State          any             // 任意状态。
-	Messages       []Message       // 消息列表，框架要求最后一条消息为 `role=user` 并把其内容作为输入。
+	Messages       []Message       // 消息列表，框架要求最后一条消息为 `role=user` 并把其内容（字符串或多模态数组）作为输入。
 	Tools          []Tool          // 工具定义列表，协议字段，可选。
 	Context        []Context       // 上下文列表，协议字段，可选。
 	ForwardedProps any             // 任意透传字段，通常用于携带业务自定义参数。
@@ -92,6 +92,51 @@ type RunAgentInput struct {
 即使前端 SSE 连接断开，后端也会继续执行直到正常结束（或被取消/超时）。默认情况下单次请求最多执行 1h，可通过 `agui.WithTimeout(d)` 调整，设置为 `0` 表示不设置超时；实际生效的超时时间取请求上下文超时时间与 `agui.WithTimeout(d)` 的较小值。
 
 完整代码示例参见 [examples/agui/server/default](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/default)。
+
+#### 多模态输入
+
+对于 `role=user` 的消息，`content` 也可以是一个多模态数组，每个元素是一个 `InputContent` 片段，例如：
+
+- `type: "text"` + `text`
+- `type: "binary"` + `mimeType`，并且至少提供 `url` / `data`（base64 字符串或 base64 data URL）/ `id` 之一
+
+URL 请求体示例：
+
+```json
+{
+    "threadId": "thread-id",
+    "runId": "run-id",
+    "messages": [
+        {
+            "role": "user",
+            "content": [
+                { "type": "text", "text": "请描述这张图片。" },
+                { "type": "binary", "mimeType": "image/png", "url": "https://example.com/image.png" }
+            ]
+        }
+    ]
+}
+```
+
+DATA 请求体示例：
+
+```json
+{
+    "threadId": "thread-id",
+    "runId": "run-id",
+    "messages": [
+        {
+            "role": "user",
+            "content": [
+                { "type": "text", "text": "请描述这张图片。" },
+                { "type": "binary", "mimeType": "image/png", "data": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMBAH+X1d0AAAAASUVORK5CYII=" }
+            ]
+        }
+    ]
+}
+```
+
+`url` 仅支持 `image/*` 类型的二进制输入；其他 `mimeType` 请使用 `data` 或 `id`。服务端会将 `data` 按标准 base64 解码。若希望只传原始 base64，也可以去掉 `data:*;base64,` 前缀。
 
 ### 取消路由
 

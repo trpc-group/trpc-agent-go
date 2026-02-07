@@ -420,8 +420,8 @@ func (r *runner) Run(
 		}
 	}
 
-	// Append the incoming user message to the session if it has content.
-	if message.Content != "" && shouldAppendUserMessage(message, ro.Messages) {
+	// Append the incoming message to the session if it has payload.
+	if model.HasPayload(message) && shouldAppendUserMessage(message, ro.Messages) {
 		evt := event.NewResponseEvent(
 			invocation.InvocationID,
 			authorUser,
@@ -1208,7 +1208,7 @@ func RunWithMessages(
 	// (e.g., used by GraphAgent to set initial user_input).
 	var latestUser model.Message
 	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == model.RoleUser && (messages[i].Content != "" || len(messages[i].ContentParts) > 0) {
+		if messages[i].Role == model.RoleUser && model.HasPayload(messages[i]) {
 			latestUser = messages[i]
 			break
 		}
