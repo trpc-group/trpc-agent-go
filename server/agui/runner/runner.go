@@ -80,6 +80,7 @@ func New(r trunner.Runner, opt ...Option) Runner {
 		startSpan:                              opts.StartSpan,
 		flushInterval:                          opts.FlushInterval,
 		timeout:                                opts.Timeout,
+		cancelOnContextDoneEnabled:             opts.CancelOnContextDoneEnabled,
 		messagesSnapshotFollowEnabled:          opts.MessagesSnapshotFollowEnabled,
 		messagesSnapshotFollowMaxDuration:      opts.MessagesSnapshotFollowMaxDuration,
 	}
@@ -105,6 +106,7 @@ type runner struct {
 	startSpan                              StartSpan
 	flushInterval                          time.Duration
 	timeout                                time.Duration
+	cancelOnContextDoneEnabled             bool
 	messagesSnapshotFollowEnabled          bool
 	messagesSnapshotFollowMaxDuration      time.Duration
 }
@@ -609,6 +611,13 @@ func (r *runner) recordUserMessage(ctx context.Context, key session.Key, message
 }
 
 func (r *runner) newExecutionContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if r.cancelOnContextDoneEnabled {
+		ctx = agent.CloneContext(ctx)
+		if timeout != 0 {
+			return context.WithTimeout(ctx, timeout)
+		}
+		return context.WithCancel(ctx)
+	}
 	deadline, ok := ctx.Deadline()
 	if ok {
 		remaining := time.Until(deadline)
