@@ -167,6 +167,24 @@ cd benchmark/anthropic_skills/trpc-agent-go-impl
 go run . -suite prompt-cache -model gpt-5
 ```
 
+### Example results (gpt-5)
+
+Case: `internal-comms` (runs `skill_load`, `skill_select_docs`, `skill_run`).
+
+| Mode | Steps | Prompt | Cached | Uncached (Prompt - Cached) | Completion | Total | Duration |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| A: system prompt (legacy) | 4 | 19442 | 2432 | 17010 | 481 | 19923 | 16.997s |
+| B: tool results | 5 | 25344 | 8832 | 16512 | 1274 | 26618 | 27.024s |
+
+Notes:
+- Cache fields are provider-specific. For OpenAI-style APIs, `Cached` is
+  `usage.prompt_tokens_details.cached_tokens`.
+- A useful derived metric is **uncached prompt tokens**:
+  `prompt_tokens - cached_tokens`. In this run, Mode B increased total prompt
+  tokens (more context materialized into tool results), but also increased cache
+  hits enough to slightly reduce uncached prompt tokens overall.
+- These numbers can vary by provider/model and can be non-deterministic.
+
 ## Notes
 
 - The tool suite verifies that the staged skill tree is read-only while
