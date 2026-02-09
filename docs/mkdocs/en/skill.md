@@ -1,4 +1,4 @@
-# Skill (Agent Skills)
+# Skill
 
 Agent Skills package reusable workflows as folders with a `SKILL.md`
 spec plus optional docs and scripts. During a conversation, the agent
@@ -42,7 +42,7 @@ Background references:
      `skill_select_docs`). Scripts are not inlined; they are executed
      inside a workspace, returning results and output files.
 
-### Token Cost (Why Progressive Disclosure Matters)
+### Token Cost
 
 If you inline a full skills repo (all `SKILL.md` bodies and docs) into
 the prompt up-front, it can dominate your prompt-token budget and even
@@ -52,7 +52,7 @@ For a reproducible, **runtime** token comparison (progressive disclosure
 vs full injection), see `benchmark/anthropic_skills/README.md` and run
 the `token-report` suite described there.
 
-### Prompt Cache (Why Injection Location Matters)
+### Prompt Cache
 
 Some model providers support **prompt caching**: if a later model request
 starts with the exact same tokens as an earlier request, the provider
@@ -83,7 +83,7 @@ Enable tool-result materialization with:
 To measure the impact in a real tool-using flow, run the
 `benchmark/anthropic_skills` `prompt-cache` suite.
 
-### Session Persistence (Will This Change Tool Results in the Session?)
+### Session Persistence
 
 It helps to separate two concepts:
 
@@ -113,7 +113,7 @@ Stability across calls:
   correctness. This fallback may reduce prompt-cache benefits because it
   changes the system content.
 
-### Industry Comparison (Where Dynamic Context Lives)
+### Industry Comparison
 
 Many agent frameworks avoid mutating the system prompt mid-loop. Instead,
 they fetch dynamic context via a tool and keep that context in **tool
@@ -593,7 +593,7 @@ Common spans:
 - `workspace.create`, `workspace.stage.*`, `workspace.run`
 - `workspace.collect`, `workspace.cleanup`, `workspace.inline`
 
-## Rationale and Design (brief)
+## Rationale and Design
 
 - Motivation: Skills often contain lengthy instructions and scripts.
   Inlining all of them is costly and risky. The three‑layer model keeps

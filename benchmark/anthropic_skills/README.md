@@ -39,7 +39,7 @@ By default the agent suite prints step-by-step tool calls and tool
 results (similar to `benchmark/gaia`). Use `-debug` to disable log
 truncation and include extra debug fields.
 
-## LLM Setup (Agent Suite)
+## LLM Setup
 
 The agent suite requires a model endpoint via `OPENAI_API_KEY` (and
 optionally `OPENAI_BASE_URL`).
@@ -117,7 +117,9 @@ This is the practical baseline most people hit when they don’t have
 progressive disclosure and just paste a whole skills repo into the
 prompt.
 
-### Example results (gpt-5)
+### Example results
+
+Model: `gpt-5`.
 
 Scenario: `brand_landing_page` (uses `brand-guidelines` + `frontend-design`).
 
@@ -167,7 +169,9 @@ cd benchmark/anthropic_skills/trpc-agent-go-impl
 go run . -suite prompt-cache -model gpt-5
 ```
 
-### Example results (gpt-5)
+### Example results
+
+Model: `gpt-5`.
 
 Case: `internal-comms` (runs `skill_load`, `skill_select_docs`, `skill_run`).
 

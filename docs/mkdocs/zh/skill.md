@@ -1,4 +1,4 @@
-# Skill（Agent Skills）
+# Skill
 
 Agent Skills 把可复用的任务封装为“技能目录”，用 `SKILL.md`
 描述目标与流程，并配套脚本与文档。在对话中，Agent 只注入
@@ -41,7 +41,7 @@ Agent Skills 把可复用的任务封装为“技能目录”，用 `SKILL.md`
      仅把文本内容物化到提示词；脚本不会被内联，而是在工作区中
      执行，并回传结果与输出文件。
 
-### Token 成本（为什么要渐进披露）
+### Token 成本
 
 如果把一个技能仓库的全部内容（所有 `SKILL.md` 正文与 docs）
 一股脑塞进提示词，往往会让 prompt token 占用变得非常高，甚至
@@ -51,7 +51,7 @@ Agent Skills 把可复用的任务封装为“技能目录”，用 `SKILL.md`
 可参考 `benchmark/anthropic_skills/README.md`，并按其中说明运行
 `token-report` 套件。
 
-### Prompt Cache（为什么“注入位置”重要）
+### Prompt Cache
 
 一些模型服务支持 **prompt cache**：如果后续一次模型请求的开头
 （token 前缀）与之前某次请求完全一致，服务端可以复用这段共同
@@ -77,7 +77,7 @@ system message，确保模型仍能看到已加载内容。
 要在真实工具链路中测量提升，参见 `benchmark/anthropic_skills` 的
 `prompt-cache` 套件。
 
-### 会话持久化（这些改动会写回 Session 吗？）
+### 会话持久化
 
 先区分两个概念：
 
@@ -105,7 +105,7 @@ system message，确保模型仍能看到已加载内容。
   （`Loaded skill context:`）来保证正确性。但这会让 system 内容发生变化，
   prompt cache 的收益可能会变小。
 
-### 与业界实现对比（动态上下文放在哪里？）
+### 与业界实现对比
 
 很多框架为了更友好地利用 prompt cache，会尽量避免在多步工具链路中
 不断改写 system prompt，而是把动态上下文放到 **tool 消息**（工具结果）
@@ -145,7 +145,7 @@ skills/
 
 仓库与解析： [skill/repository.go](https://github.com/trpc-group/trpc-agent-go/blob/main/skill/repository.go)
 
-## 快速开始（从 0 到 1）
+## 快速开始
 
 ### 1) 环境准备
 
@@ -290,7 +290,7 @@ https://github.com/anthropics/skills
 
 ## 工具用法详解
 
-### `skill_load`（加载内容）
+### `skill_load`
 
 声明： [tool/skill/load.go](https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/load.go)
 
@@ -330,7 +330,7 @@ agent := llmagent.New(
 )
 ```
 
-### `skill_select_docs`（选择文档）
+### `skill_select_docs`
 
 声明： [tool/skill/select_docs.go](https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/select_docs.go)
 
@@ -343,7 +343,7 @@ agent := llmagent.New(
 行为：
 - 更新 `temp:skill:docs:<name>`：`*` 表示全选；数组表示显式列表
 
-### `skill_list_docs`（列出文档）
+### `skill_list_docs`
 
 声明： [tool/skill/list_docs.go](https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/list_docs.go)
 
@@ -356,7 +356,7 @@ agent := llmagent.New(
 提示：这些会话键由框架自动管理；用户通常无需直接操作，仅需用
 自然语言驱动对话即可。
 
-### `skill_run`（执行命令）
+### `skill_run`
 
 声明： [tool/skill/run.go](https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/run.go)
 
@@ -584,7 +584,7 @@ agent := llmagent.New(
 - `workspace.create`、`workspace.stage.*`、`workspace.run`
 - `workspace.collect`、`workspace.cleanup`、`workspace.inline`
 
-## 原理与设计（简述）
+## 原理与设计
 
 - 动机：在真实任务中，技能说明与脚本往往内容较多，全部内联到
   提示词既昂贵又易泄漏。三层信息模型让“知道有何能力”与“在
