@@ -16,6 +16,7 @@ require (
 	github.com/go-sql-driver/mysql v1.9.3
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/go-multierror v1.1.1
+	github.com/neurosnap/sentences v1.1.2
 	github.com/panjf2000/ants/v2 v2.10.0
 	github.com/stretchr/testify v1.11.1
 	trpc.group/trpc-go/trpc-agent-go v0.8.0

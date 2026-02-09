@@ -362,6 +362,41 @@ func TestProcessRequest_IncludeInvocationMessage_WhenNoBranchEvents(t *testing.T
 	require.True(t, model.MessagesEqual(inv.Message, req.Messages[0]))
 }
 
+func TestProcessRequest_IncludeInvocationMessage_WhenNoBranchEvents_Multimodal(t *testing.T) {
+	// Session has events, but authored under a different filter key/branch.
+	sess := &session.Session{}
+	sess.Events = append(sess.Events, event.Event{
+		Response: &model.Response{
+			Done:    true,
+			Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("context")}},
+		},
+		Author:    "other-agent",
+		FilterKey: "other-agent",
+		Version:   event.CurrentVersion,
+	})
+
+	msg := model.NewUserMessage("")
+	msg.AddImageURL("https://example.com/image.png", "auto")
+
+	// Build invocation explicitly with filter key set to sub-agent branch.
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(msg),
+		agent.WithInvocationEventFilterKey("sub-agent"),
+	)
+	inv.AgentName = "sub-agent"
+
+	req := &model.Request{}
+	ch := make(chan *event.Event, 1)
+	p := NewContentRequestProcessor()
+
+	p.ProcessRequest(context.Background(), inv, req, ch)
+
+	// The other-agent event is filtered out; invocation message must be added.
+	require.Equal(t, 1, len(req.Messages))
+	require.True(t, model.MessagesEqual(inv.Message, req.Messages[0]))
+}
+
 func TestProcessRequest_PreserveSameBranchKeepsRoles(t *testing.T) {
 	makeInvocation := func(sess *session.Session) *agent.Invocation {
 		inv := agent.NewInvocation(

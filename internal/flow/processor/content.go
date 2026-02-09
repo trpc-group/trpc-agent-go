@@ -320,7 +320,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		needToAddInvocationMessage = len(messages) == 0
 	}
 
-	if invocation.Message.Content != "" && needToAddInvocationMessage {
+	if model.HasPayload(invocation.Message) && needToAddInvocationMessage {
 		req.Messages = append(req.Messages, invocation.Message)
 		log.DebugfContext(
 			ctx,
@@ -469,7 +469,7 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 	inv.Session.EventMu.RUnlock()
 
 	// insert invocation message
-	if !includedInvocationMessage && inv.Message.Content != "" {
+	if !includedInvocationMessage && model.HasPayload(inv.Message) {
 		events = p.insertInvocationMessage(events, inv)
 	}
 
@@ -588,7 +588,7 @@ func (p *ContentRequestProcessor) getCurrentInvocationMessages(inv *agent.Invoca
 			break
 		}
 	}
-	if !hasInvocationMessage && inv.Message.Content != "" {
+	if !hasInvocationMessage && model.HasPayload(inv.Message) {
 		events = p.insertInvocationMessage(events, inv)
 	}
 
@@ -624,7 +624,7 @@ func (p *ContentRequestProcessor) getCurrentInvocationMessages(inv *agent.Invoca
 
 func (p *ContentRequestProcessor) insertInvocationMessage(
 	events []event.Event, inv *agent.Invocation) []event.Event {
-	if inv.Message.Content == "" {
+	if !model.HasPayload(inv.Message) {
 		return events
 	}
 	userMsgEvent := event.NewResponseEvent(inv.InvocationID, "user", &model.Response{
