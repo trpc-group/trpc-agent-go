@@ -11,6 +11,7 @@ package toolcall
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -18,6 +19,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
+
+type stubTool struct {
+	decl *tool.Declaration
+}
+
+func (s stubTool) Declaration() *tool.Declaration { return s.decl }
 
 func TestSanitizeMessagesWithTools_DowngradesInvalidToolCallAndResult(t *testing.T) {
 	in := []model.Message{
@@ -452,4 +459,153 @@ func TestSanitizeMessagesWithTools_PreservesNullArgumentsWhenSchemaAllowsNull(t 
 		assert.Equal(t, model.RoleTool, out[1].Role)
 		assert.Equal(t, "call_1", out[1].ToolID)
 	}
+}
+
+func TestResolveSchemaRef(t *testing.T) {
+	defs := map[string]*tool.Schema{
+		"Input": {Type: "object"},
+	}
+	assert.NotNil(t, resolveSchemaRef("#/$defs/Input", defs))
+	assert.Nil(t, resolveSchemaRef("#/$defs/Missing", defs))
+	assert.Nil(t, resolveSchemaRef("#/$defs/", defs))
+	assert.Nil(t, resolveSchemaRef("https://example.com/schema.json", defs))
+	assert.Nil(t, resolveSchemaRef("#/$defs/Input", nil))
+}
+
+func TestInferSchemaType(t *testing.T) {
+	assert.Equal(t, "boolean", inferSchemaType(&tool.Schema{Type: "boolean"}))
+	assert.Equal(t, "object", inferSchemaType(&tool.Schema{Properties: map[string]*tool.Schema{"a": {Type: "string"}}}))
+	assert.Equal(t, "array", inferSchemaType(&tool.Schema{Items: &tool.Schema{Type: "string"}}))
+	assert.Equal(t, "", inferSchemaType(&tool.Schema{}))
+	assert.Equal(t, "", inferSchemaType(nil))
+}
+
+func TestValidateArgumentsAgainstSchema_NullArgsRefToObject(t *testing.T) {
+	schema := &tool.Schema{
+		Ref: "#/$defs/Input",
+		Defs: map[string]*tool.Schema{
+			"Input": {Properties: map[string]*tool.Schema{"a": {Type: "integer"}}},
+		},
+	}
+	ok, reason := validateArgumentsAgainstSchema(nil, schema)
+	assert.False(t, ok)
+	assert.Contains(t, reason, "expected object")
+}
+
+func TestValidateArgumentsAgainstSchema_NullArgsUnknownRef(t *testing.T) {
+	schema := &tool.Schema{
+		Ref:  "#/$defs/Missing",
+		Defs: map[string]*tool.Schema{"Other": {Type: "object"}},
+	}
+	ok, reason := validateArgumentsAgainstSchema(nil, schema)
+	assert.True(t, ok)
+	assert.Empty(t, reason)
+}
+
+func TestValidateArgumentsAgainstSchema_NullArgsSchemaTypes(t *testing.T) {
+	tests := []struct {
+		schema *tool.Schema
+		substr string
+	}{
+		{schema: &tool.Schema{Type: "array"}, substr: "expected array"},
+		{schema: &tool.Schema{Type: "string"}, substr: "expected string"},
+		{schema: &tool.Schema{Type: "boolean"}, substr: "expected boolean"},
+		{schema: &tool.Schema{Type: "integer"}, substr: "expected integer"},
+		{schema: &tool.Schema{Type: "number"}, substr: "expected number"},
+	}
+	for _, tt := range tests {
+		ok, reason := validateArgumentsAgainstSchema(nil, tt.schema)
+		assert.False(t, ok)
+		assert.Contains(t, reason, tt.substr)
+	}
+}
+
+func TestValidateToolCallArguments_SkipsWhenDeclarationMissing(t *testing.T) {
+	tests := []struct {
+		name  string
+		tools map[string]tool.Tool
+	}{
+		{
+			name: "nil declaration",
+			tools: map[string]tool.Tool{
+				"t": stubTool{decl: nil},
+			},
+		},
+		{
+			name: "nil input schema",
+			tools: map[string]tool.Tool{
+				"t": stubTool{decl: &tool.Declaration{Name: "t", InputSchema: nil}},
+			},
+		},
+		{
+			name:  "tool missing",
+			tools: map[string]tool.Tool{},
+		},
+	}
+	for _, tt := range tests {
+		ok, reason := validateToolCallArguments("t", map[string]any{"a": 1}, tt.tools)
+		assert.True(t, ok)
+		assert.Empty(t, reason)
+	}
+}
+
+func TestValidateValueAgainstSchema_ScalarTypes(t *testing.T) {
+	ok, reason := validateValueAgainstSchema(true, &tool.Schema{Type: "boolean"}, nil, "$")
+	assert.True(t, ok)
+	assert.Empty(t, reason)
+
+	ok, reason = validateValueAgainstSchema("x", &tool.Schema{Type: "boolean"}, nil, "$")
+	assert.False(t, ok)
+	assert.Contains(t, reason, "expected boolean")
+
+	ok, reason = validateValueAgainstSchema(json.Number("1.25"), &tool.Schema{Type: "number"}, nil, "$")
+	assert.True(t, ok)
+	assert.Empty(t, reason)
+
+	ok, reason = validateValueAgainstSchema(json.Number("1e309"), &tool.Schema{Type: "number"}, nil, "$")
+	assert.False(t, ok)
+	assert.Contains(t, reason, "expected number")
+
+	ok, reason = validateValueAgainstSchema(json.Number("1.25"), &tool.Schema{Type: "integer"}, nil, "$")
+	assert.False(t, ok)
+	assert.Contains(t, reason, "expected integer")
+
+	ok, reason = validateValueAgainstSchema(1.0, &tool.Schema{Type: "integer"}, nil, "$")
+	assert.False(t, ok)
+	assert.Contains(t, reason, "expected integer")
+}
+
+func TestValidateValueAgainstSchema_ArrayItemsNil(t *testing.T) {
+	ok, reason := validateValueAgainstSchema([]any{json.Number("1")}, &tool.Schema{Type: "array"}, nil, "$")
+	assert.True(t, ok)
+	assert.Empty(t, reason)
+}
+
+func TestValidateValueAgainstSchema_ArrayTypeMismatch(t *testing.T) {
+	ok, reason := validateValueAgainstSchema(map[string]any{}, &tool.Schema{Type: "array"}, nil, "$")
+	assert.False(t, ok)
+	assert.Contains(t, reason, "expected array")
+}
+
+func TestSplitToolResults_GroupsByIDs(t *testing.T) {
+	toolResults := []model.Message{
+		{Role: model.RoleTool, ToolID: ""},
+		{Role: model.RoleTool, ToolID: "valid"},
+		{Role: model.RoleTool, ToolID: "invalid"},
+		{Role: model.RoleTool, ToolID: "unknown"},
+	}
+	validIDs := map[string]struct{}{"valid": {}}
+	invalidIDs := map[string]struct{}{"invalid": {}}
+	split := splitToolResults(toolResults, validIDs, invalidIDs)
+	assert.Len(t, split.kept, 1)
+	assert.Len(t, split.invalidByID["invalid"], 1)
+	assert.Len(t, split.orphan, 2)
+}
+
+func TestIsEmptyAssistantMessage(t *testing.T) {
+	assert.True(t, isEmptyAssistantMessage(model.Message{Role: model.RoleAssistant}))
+	assert.False(t, isEmptyAssistantMessage(model.Message{Role: model.RoleUser}))
+	assert.False(t, isEmptyAssistantMessage(model.Message{Role: model.RoleAssistant, Content: "x"}))
+	assert.False(t, isEmptyAssistantMessage(model.Message{Role: model.RoleAssistant, ReasoningContent: "x"}))
+	assert.False(t, isEmptyAssistantMessage(model.Message{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{{ID: "call_1"}}}))
 }
