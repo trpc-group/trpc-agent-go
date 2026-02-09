@@ -11,6 +11,7 @@ package processor
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -388,4 +389,303 @@ func TestSkillsRequestProcessor_SkillLoadModeTurn_ClearsOncePerInvocation(
 	ev3 := <-ch2
 	require.NotNil(t, ev3)
 	require.Equal(t, model.ObjectTypePreprocessingInstruction, ev3.Object)
+}
+
+func TestSkillsRequestProcessor_ToolResultMode_OverviewOnly(
+	t *testing.T,
+) {
+	repo := &mockRepo{
+		sums: []skill.Summary{
+			{Name: "calc", Description: "math ops"},
+		},
+		full: map[string]*skill.Skill{
+			"calc": {
+				Summary: skill.Summary{Name: "calc"},
+				Body:    "Calc body",
+				Docs: []skill.Doc{{
+					Path:    "USAGE.md",
+					Content: "use me",
+				}},
+			},
+		},
+	}
+
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.StateKeyLoadedPrefix + "calc": []byte("1"),
+				skill.StateKeyDocsPrefix + "calc":   []byte("*"),
+			},
+		},
+	}
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("base sys"),
+		},
+	}
+
+	ch := make(chan *event.Event, 2)
+	p := NewSkillsRequestProcessor(
+		repo,
+		WithSkillLoadMode(SkillLoadModeSession),
+		WithSkillsLoadedContentInToolResults(true),
+	)
+	p.ProcessRequest(context.Background(), inv, req, ch)
+
+	require.NotEmpty(t, req.Messages)
+	sys := req.Messages[0].Content
+	require.Contains(t, sys, skillsOverviewHeader)
+	require.NotContains(t, sys, "[Loaded] calc")
+	require.NotContains(t, sys, "[Doc] USAGE.md")
+
+	ev := <-ch
+	require.NotNil(t, ev)
+	require.Equal(t, model.ObjectTypePreprocessingInstruction, ev.Object)
+}
+
+func TestSkillsToolResultRequestProcessor_MaterializesIntoLastToolMsg(
+	t *testing.T,
+) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "calc", Description: "math"}},
+		full: map[string]*skill.Skill{
+			"calc": {
+				Summary: skill.Summary{Name: "calc"},
+				Body:    "B",
+				Docs: []skill.Doc{{
+					Path:    "USAGE.md",
+					Content: "use",
+				}},
+			},
+		},
+	}
+
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.StateKeyLoadedPrefix + "calc": []byte("1"),
+				skill.StateKeyDocsPrefix + "calc":   []byte("*"),
+			},
+		},
+	}
+
+	args1, err := json.Marshal(skillNameInput{Skill: "calc"})
+	require.NoError(t, err)
+	args2, err := json.Marshal(skillNameInput{Skill: "calc"})
+	require.NoError(t, err)
+
+	const (
+		toolCallID1 = "tc1"
+		toolCallID2 = "tc2"
+	)
+	assistant := model.Message{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{
+			{
+				Type: "function",
+				ID:   toolCallID1,
+				Function: model.FunctionDefinitionParam{
+					Name:      skillToolLoad,
+					Arguments: args1,
+				},
+			},
+			{
+				Type: "function",
+				ID:   toolCallID2,
+				Function: model.FunctionDefinitionParam{
+					Name:      skillToolLoad,
+					Arguments: args2,
+				},
+			},
+		},
+	}
+
+	baseOut := loadedPrefix + " calc"
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("sys"),
+			assistant,
+			{
+				Role:     model.RoleTool,
+				ToolName: skillToolLoad,
+				ToolID:   toolCallID1,
+				Content:  baseOut,
+			},
+			{
+				Role:     model.RoleTool,
+				ToolName: skillToolLoad,
+				ToolID:   toolCallID2,
+				Content:  baseOut,
+			},
+		},
+	}
+
+	p := NewSkillsToolResultRequestProcessor(
+		repo,
+		WithSkillsToolResultLoadMode(SkillLoadModeSession),
+	)
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	require.Equal(t, baseOut, req.Messages[2].Content)
+	lastTool := req.Messages[3].Content
+	require.Contains(t, lastTool, baseOut)
+	require.Contains(t, lastTool, "[Loaded] calc")
+	require.Contains(t, lastTool, "B")
+	require.Contains(t, lastTool, "[Doc] USAGE.md")
+	require.Contains(t, lastTool, "use")
+
+	for _, m := range req.Messages {
+		if m.Role != model.RoleSystem {
+			continue
+		}
+		require.NotContains(t, m.Content, skillsLoadedContextHeader)
+	}
+}
+
+func TestSkillsToolResultRequestProcessor_FallbackSystemMessageAdded(
+	t *testing.T,
+) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "calc", Description: "math"}},
+		full: map[string]*skill.Skill{
+			"calc": {Summary: skill.Summary{Name: "calc"}, Body: "B"},
+		},
+	}
+
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.StateKeyLoadedPrefix + "calc": []byte("1"),
+			},
+		},
+	}
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("sys"),
+			model.NewUserMessage("u"),
+		},
+	}
+
+	p := NewSkillsToolResultRequestProcessor(
+		repo,
+		WithSkillsToolResultLoadMode(SkillLoadModeSession),
+	)
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	var found bool
+	for _, m := range req.Messages {
+		if m.Role != model.RoleSystem {
+			continue
+		}
+		if strings.Contains(m.Content, skillsLoadedContextHeader) {
+			found = true
+			require.Contains(t, m.Content, "[Loaded] calc")
+			require.Contains(t, m.Content, "B")
+		}
+	}
+	require.True(t, found)
+
+	inv.Session.SetState(skill.StateKeyLoadedPrefix+"calc", nil)
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	for _, m := range req.Messages {
+		if m.Role != model.RoleSystem {
+			continue
+		}
+		require.NotContains(t, m.Content, skillsLoadedContextHeader)
+	}
+}
+
+func TestSkillsToolResultRequestProcessor_SkillLoadModeOnce_Offloads(
+	t *testing.T,
+) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "calc", Description: "math"}},
+		full: map[string]*skill.Skill{
+			"calc": {Summary: skill.Summary{Name: "calc"}, Body: "B"},
+		},
+	}
+
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.StateKeyLoadedPrefix + "calc": []byte("1"),
+				skill.StateKeyDocsPrefix + "calc":   []byte("[]"),
+			},
+		},
+	}
+
+	args, err := json.Marshal(skillNameInput{Skill: "calc"})
+	require.NoError(t, err)
+
+	const toolCallID = "tc1"
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("sys"),
+			{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					Type: "function",
+					ID:   toolCallID,
+					Function: model.FunctionDefinitionParam{
+						Name:      skillToolLoad,
+						Arguments: args,
+					},
+				}},
+			},
+			{
+				Role:     model.RoleTool,
+				ToolName: skillToolLoad,
+				ToolID:   toolCallID,
+				Content:  loadedPrefix + " calc",
+			},
+		},
+	}
+
+	ch := make(chan *event.Event, 2)
+	p := NewSkillsToolResultRequestProcessor(
+		repo,
+		WithSkillsToolResultLoadMode(SkillLoadModeOnce),
+	)
+	p.ProcessRequest(context.Background(), inv, req, ch)
+
+	toolMsg := req.Messages[2].Content
+	require.Contains(t, toolMsg, "[Loaded] calc")
+	require.Contains(t, toolMsg, "B")
+
+	loadedVal, ok := inv.Session.GetState(
+		skill.StateKeyLoadedPrefix + "calc",
+	)
+	require.True(t, ok)
+	require.Empty(t, loadedVal)
+
+	docsVal, ok := inv.Session.GetState(
+		skill.StateKeyDocsPrefix + "calc",
+	)
+	require.True(t, ok)
+	require.Empty(t, docsVal)
+
+	ev := <-ch
+	require.NotNil(t, ev)
+	require.Equal(t, model.ObjectTypeStateUpdate, ev.Object)
+	require.Contains(
+		t,
+		ev.StateDelta,
+		skill.StateKeyLoadedPrefix+"calc",
+	)
+	require.Contains(
+		t,
+		ev.StateDelta,
+		skill.StateKeyDocsPrefix+"calc",
+	)
 }

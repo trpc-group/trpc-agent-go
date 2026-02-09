@@ -33,12 +33,13 @@ Agent Skills 把可复用的任务封装为“技能目录”，用 `SKILL.md`
 
 2) 正文层（按需注入）
    - 当任务确实需要某技能时，模型调用 `skill_load`，框架把该
-     技能的 `SKILL.md` 正文整体注入到系统消息中，供模型精准参考。
+     技能的 `SKILL.md` 正文物化到下一次模型请求中（详见下文
+     Prompt Cache 小节）。
 
 3) 文档/脚本层（精确选择 + 隔离执行）
-   - 关联文档按需选择（`docs` 或 `include_all_docs`），仅把文本
-     内容注入；脚本不会被内联到提示词，而是在工作区中执行，并
-     回传结果与输出文件。
+   - 关联文档按需选择（通过 `skill_load` 或 `skill_select_docs`），
+     仅把文本内容物化到提示词；脚本不会被内联，而是在工作区中
+     执行，并回传结果与输出文件。
 
 ### Token 成本（为什么要渐进披露）
 
@@ -49,6 +50,32 @@ Agent Skills 把可复用的任务封装为“技能目录”，用 `SKILL.md`
 想要**可复现、基于真实运行**的 token 对比（渐进披露 vs 全量注入），
 可参考 `benchmark/anthropic_skills/README.md`，并按其中说明运行
 `token-report` 套件。
+
+### Prompt Cache（为什么“注入位置”重要）
+
+一些模型服务支持 **prompt cache**：如果后续一次模型请求的开头
+（token 前缀）与之前某次请求完全一致，服务端可以复用这段共同
+前缀，从而减少计算，并降低延迟和/或输入 token 成本（取决于服务商）。
+
+对于 Skills，“已加载的 `SKILL.md` / docs”落在消息序列的哪里，会影响
+连续模型调用之间可复用的前缀长度：
+
+- 旧行为（默认）：把已加载内容追加到 **system message**。
+  - 这会在 user/history 之前插入新 token，导致连续模型调用的共同前缀
+    变短。
+- Tool-result 物化（可选）：把已加载内容追加到对应的 **tool result**
+  消息（`skill_load` / `skill_select_docs`）。
+  - system message 更稳定，早期消息更不容易“后移”，prompt cache 往往能
+    命中更多前缀 token。
+
+回退机制：如果对应的 tool result 消息不在本次请求的 history 里
+（例如启用了 history suppression），框架会回退为插入一条专用的
+system message，确保模型仍能看到已加载内容。
+
+启用方式：`llmagent.WithSkillsLoadedContentInToolResults(true)`。
+
+要在真实工具链路中测量提升，参见 `benchmark/anthropic_skills` 的
+`prompt-cache` 套件。
 
 ### 目录结构
 
@@ -102,6 +129,8 @@ agent := llmagent.New(
     "skills-assistant",
     llmagent.WithSkills(repo),
     llmagent.WithCodeExecutor(exec),
+    // Optional: keep the system prompt stable for prompt caching.
+    llmagent.WithSkillsLoadedContentInToolResults(true),
 )
 ```
 
@@ -219,7 +248,10 @@ https://github.com/anthropics/skills
 - 写入会话临时键（生命周期由 `SkillLoadMode` 控制）：
   - `temp:skill:loaded:<name>` = "1"
   - `temp:skill:docs:<name>` = "*" 或 JSON 字符串数组
-- 请求处理器读取这些键，把 `SKILL.md` 正文与文档注入到系统消息
+- 请求处理器读取这些键，把 `SKILL.md` 正文与文档物化到下一次模型请求中：
+  - 默认：追加到系统消息（兼容旧行为）
+  - 可选：追加到对应 tool result 消息
+    (`llmagent.WithSkillsLoadedContentInToolResults(true)`)
 
 说明：
 - 建议采用“渐进式披露”：默认只传 `skill` 加载正文；需要文档时先
@@ -504,7 +536,8 @@ agent := llmagent.New(
   需要时获得细节/执行脚本”解耦，从而减少上下文开销并提升安全。
 - 注入与状态：通过事件中的 `StateDelta` 将加载选择以键值形式
   写入会话状态的 `temp:*` 命名空间，后续每轮请求处理器据此拼接
-  系统消息，形成“概览 → 正文/文档”的渐进式上下文。
+  提示词上下文（默认拼接系统消息；也可按需物化到 tool result），
+  形成“概览 → 正文/文档”的渐进式上下文。
 - 执行隔离：脚本以工作区为边界，输出文件由通配符精确收集，避免
   将脚本源码或非必要文件带入模型上下文。
 
@@ -524,6 +557,11 @@ agent := llmagent.New(
   - 工程博客：
     https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills
   - 开源库： https://github.com/anthropics/skills
+- 业界实践：
+  - OpenClaw：在 prompt 中要求模型用工具读取所选 skill 的 `SKILL.md`：
+    https://github.com/openclaw/openclaw/blob/0cf93b8fa74566258131f9e8ca30f313aac89d26/src/agents/system-prompt.ts
+  - OpenAI Codex：在项目文档里列出 skills，并要求按需打开 `SKILL.md`：
+    https://github.com/openai/codex/blob/383b45279efda1ef611a4aa286621815fe656b8a/codex-rs/core/src/project_doc.rs
 - 本仓库：
   - 交互示例： [examples/skillrun/main.go]
     (https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillrun/main.go)
