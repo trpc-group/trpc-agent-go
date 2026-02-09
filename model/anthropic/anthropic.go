@@ -282,7 +282,7 @@ func (m *Model) buildChatRequest(request *model.Request) (*anthropic.MessageNewP
 		chatRequest.MaxTokens = int64(*request.GenerationConfig.MaxTokens)
 	}
 	if chatRequest.MaxTokens == 0 {
-		chatRequest.MaxTokens = int64(imodel.ResolveContextWindow(m.name))
+		chatRequest.MaxTokens = 4096
 	}
 	if request.Temperature != nil {
 		chatRequest.Temperature = anthropic.Float(*request.Temperature)
