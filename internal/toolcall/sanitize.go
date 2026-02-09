@@ -238,6 +238,22 @@ func validateArgumentsAgainstSchema(args any, schema *tool.Schema) (bool, string
 	return false, reason
 }
 
+func inferSchemaType(schema *tool.Schema) string {
+	if schema == nil {
+		return ""
+	}
+	if schema.Type != "" {
+		return schema.Type
+	}
+	if len(schema.Properties) > 0 {
+		return "object"
+	}
+	if schema.Items != nil {
+		return "array"
+	}
+	return ""
+}
+
 // validateValueAgainstSchema validates a value against a subset of JSON Schema and skips unknown schema types.
 func validateValueAgainstSchema(value any, schema *tool.Schema, defs map[string]*tool.Schema, path string) (bool, string) {
 	if schema == nil || value == nil {
@@ -250,75 +266,93 @@ func validateValueAgainstSchema(value any, schema *tool.Schema, defs map[string]
 		}
 		return validateValueAgainstSchema(value, resolved, defs, path)
 	}
-	schemaType := schema.Type
-	if schemaType == "" {
-		if len(schema.Properties) > 0 {
-			schemaType = "object"
-		} else if schema.Items != nil {
-			schemaType = "array"
-		}
-	}
-	switch schemaType {
+	switch inferSchemaType(schema) {
 	case "object":
-		asMap, ok := value.(map[string]any)
-		if !ok {
-			return false, fmt.Sprintf("expected object at %s", path)
-		}
-		for key, propSchema := range schema.Properties {
-			propValue, exists := asMap[key]
-			if !exists {
-				continue
-			}
-			ok2, reason := validateValueAgainstSchema(propValue, propSchema, defs, path+"."+key)
-			if !ok2 {
-				return false, reason
-			}
-		}
-		return true, ""
+		return validateObjectValueAgainstSchema(value, schema, defs, path)
 	case "array":
-		asSlice, ok := value.([]any)
-		if !ok {
-			return false, fmt.Sprintf("expected array at %s", path)
-		}
-		if schema.Items == nil {
-			return true, ""
-		}
-		for i, item := range asSlice {
-			ok2, reason := validateValueAgainstSchema(item, schema.Items, defs, fmt.Sprintf("%s[%d]", path, i))
-			if !ok2 {
-				return false, reason
-			}
-		}
-		return true, ""
+		return validateArrayValueAgainstSchema(value, schema, defs, path)
 	case "string":
-		if _, ok := value.(string); ok {
-			return true, ""
-		}
-		return false, fmt.Sprintf("expected string at %s", path)
+		return validateStringValueAgainstSchema(value, path)
 	case "boolean":
-		if _, ok := value.(bool); ok {
-			return true, ""
-		}
-		return false, fmt.Sprintf("expected boolean at %s", path)
+		return validateBooleanValueAgainstSchema(value, path)
 	case "integer":
-		if num, ok := value.(json.Number); ok {
-			if _, err := num.Int64(); err == nil {
-				return true, ""
-			}
-			return false, fmt.Sprintf("expected integer at %s", path)
-		}
-		return false, fmt.Sprintf("expected integer at %s", path)
+		return validateIntegerValueAgainstSchema(value, path)
 	case "number":
-		if num, ok := value.(json.Number); ok {
-			if _, err := num.Float64(); err == nil {
-				return true, ""
-			}
-			return false, fmt.Sprintf("expected number at %s", path)
-		}
-		return false, fmt.Sprintf("expected number at %s", path)
+		return validateNumberValueAgainstSchema(value, path)
 	default:
 		return true, ""
 	}
+}
+
+func validateObjectValueAgainstSchema(value any, schema *tool.Schema, defs map[string]*tool.Schema, path string) (bool, string) {
+	asMap, ok := value.(map[string]any)
+	if !ok {
+		return false, fmt.Sprintf("expected object at %s", path)
+	}
+	for key, propSchema := range schema.Properties {
+		propValue, exists := asMap[key]
+		if !exists {
+			continue
+		}
+		ok2, reason := validateValueAgainstSchema(propValue, propSchema, defs, path+"."+key)
+		if !ok2 {
+			return false, reason
+		}
+	}
+	return true, ""
+}
+
+func validateArrayValueAgainstSchema(value any, schema *tool.Schema, defs map[string]*tool.Schema, path string) (bool, string) {
+	asSlice, ok := value.([]any)
+	if !ok {
+		return false, fmt.Sprintf("expected array at %s", path)
+	}
+	if schema.Items == nil {
+		return true, ""
+	}
+	for i, item := range asSlice {
+		ok2, reason := validateValueAgainstSchema(item, schema.Items, defs, fmt.Sprintf("%s[%d]", path, i))
+		if !ok2 {
+			return false, reason
+		}
+	}
+	return true, ""
+}
+
+func validateStringValueAgainstSchema(value any, path string) (bool, string) {
+	if _, ok := value.(string); ok {
+		return true, ""
+	}
+	return false, fmt.Sprintf("expected string at %s", path)
+}
+
+func validateBooleanValueAgainstSchema(value any, path string) (bool, string) {
+	if _, ok := value.(bool); ok {
+		return true, ""
+	}
+	return false, fmt.Sprintf("expected boolean at %s", path)
+}
+
+func validateIntegerValueAgainstSchema(value any, path string) (bool, string) {
+	num, ok := value.(json.Number)
+	if !ok {
+		return false, fmt.Sprintf("expected integer at %s", path)
+	}
+	if _, err := num.Int64(); err != nil {
+		return false, fmt.Sprintf("expected integer at %s", path)
+	}
+	return true, ""
+}
+
+func validateNumberValueAgainstSchema(value any, path string) (bool, string) {
+	num, ok := value.(json.Number)
+	if !ok {
+		return false, fmt.Sprintf("expected number at %s", path)
+	}
+	if _, err := num.Float64(); err != nil {
+		return false, fmt.Sprintf("expected number at %s", path)
+	}
+	return true, ""
 }
 
 // splitToolResults groups tool result messages by tool_call_id based on tool call validity.
