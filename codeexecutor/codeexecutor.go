@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 // CodeExecutor executes code blocks via a friendly front-door API.
@@ -75,13 +76,35 @@ type CodeBlockDelimiter struct {
 	End   string
 }
 
+var codeBlockPatternCache sync.Map
+
 // ExtractCodeBlock extracts fenced code blocks using the given delimiter.
 func ExtractCodeBlock(input string, delimiter CodeBlockDelimiter) []CodeBlock {
-	var blocks []CodeBlock
-	startDelim := regexp.QuoteMeta(delimiter.Start)
-	endDelim := regexp.QuoteMeta(delimiter.End)
-	pattern := regexp.MustCompile(`(?s)` + startDelim + `([^\n]*)\n(.*?)` + endDelim)
+	if input == "" || delimiter.Start == "" || delimiter.End == "" {
+		return nil
+	}
+	if !strings.Contains(input, delimiter.Start) || !strings.Contains(input, delimiter.End) {
+		return nil
+	}
+
+	cacheKey := delimiter.Start + "\x00" + delimiter.End
+	patternAny, ok := codeBlockPatternCache.Load(cacheKey)
+	var pattern *regexp.Regexp
+	if ok {
+		pattern, _ = patternAny.(*regexp.Regexp)
+	}
+	if pattern == nil {
+		startDelim := regexp.QuoteMeta(delimiter.Start)
+		endDelim := regexp.QuoteMeta(delimiter.End)
+		pattern = regexp.MustCompile(`(?s)` + startDelim + `([^\n]*)\n(.*?)` + endDelim)
+		codeBlockPatternCache.Store(cacheKey, pattern)
+	}
+
 	matches := pattern.FindAllStringSubmatch(input, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	blocks := make([]CodeBlock, 0, len(matches))
 	for _, match := range matches {
 		if len(match) >= 3 {
 			language := strings.TrimSpace(match[1])

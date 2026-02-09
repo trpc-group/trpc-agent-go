@@ -94,7 +94,8 @@ func TestCreateLLMResponseEvent_LongRunningIDs(t *testing.T) {
 		"slow": &mockLongRunnerTool{name: "slow", long: true},
 	}}
 	rsp := &model.Response{Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{{ID: "x", Function: model.FunctionDefinitionParam{Name: "slow"}}}}}}}
-	evt := f.createLLMResponseEvent(inv, rsp, req)
+	var pool eventArena
+	evt := f.createLLMResponseEvent(&pool, inv, rsp, req, "", time.Time{})
 	if _, ok := evt.LongRunningToolIDs["x"]; !ok {
 		t.Fatalf("expected long-running tool id tracked")
 	}
@@ -655,8 +656,7 @@ func TestFlow_CallLLM_PluginBeforeModelCanShortCircuit(t *testing.T) {
 
 	ch, err := flow.callLLM(context.Background(), inv, &model.Request{})
 	require.NoError(t, err)
-	for range ch {
-	}
+	ch(func(_ *model.Response, _ error) bool { return true })
 	require.True(t, plugCalled)
 	require.False(t, localCalled)
 	require.False(t, m.called)
@@ -744,8 +744,7 @@ func TestFlow_CallLLM_PluginBeforeModelContextPropagates(t *testing.T) {
 
 	ch, err := flow.callLLM(context.Background(), inv, &model.Request{})
 	require.NoError(t, err)
-	for range ch {
-	}
+	ch(func(_ *model.Response, _ error) bool { return true })
 	require.True(t, plugCalled)
 	require.Equal(t, "v", localSaw)
 }

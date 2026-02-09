@@ -71,6 +71,10 @@ func (p *IdentityRequestProcessor) ProcessRequest(
 		return
 	}
 
+	if invocation.RunOptions.DisablePreprocessingEvents && !p.addNameToInstruction && p.Description == "" {
+		return
+	}
+
 	// Get agent name.
 	agentName := invocation.AgentName
 	log.DebugfContext(
@@ -119,6 +123,9 @@ func (p *IdentityRequestProcessor) ProcessRequest(
 	}
 
 	log.DebugContext(ctx, "Identity request processor: sent preprocessing event")
+	if invocation.RunOptions.DisablePreprocessingEvents {
+		return
+	}
 
 	if err := agent.EmitEvent(ctx, invocation, ch, event.New(
 		invocation.InvocationID,

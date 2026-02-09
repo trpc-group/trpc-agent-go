@@ -36,3 +36,13 @@ type ResponseProcessor interface {
 	// ProcessResponse processes the response and sends events directly to the provided channel.
 	ProcessResponse(ctx context.Context, invocation *agent.Invocation, req *model.Request, rsp *model.Response, ch chan<- *event.Event)
 }
+
+// PartialResponseProcessor declares whether a ResponseProcessor needs to see
+// partial (streaming) model responses.
+//
+// Implement this interface when a processor must observe or mutate partial
+// chunks. Processors that only act on final responses should return false so
+// flows can skip invoking them for partial chunks.
+type PartialResponseProcessor interface {
+	HandlesPartialResponse() bool
+}

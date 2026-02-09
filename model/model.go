@@ -10,7 +10,10 @@
 // Package model provides interfaces for working with LLMs.
 package model
 
-import "context"
+import (
+	"context"
+	"iter"
+)
 
 // Model is the interface for all language models.
 //
@@ -54,6 +57,15 @@ type Model interface {
 
 	// Info returns basic information about the model.
 	Info() Info
+}
+
+// IterModel is an optional interface a Model can implement to stream responses
+// in the caller goroutine using Go's iterator protocol.
+//
+// When implemented, flows may prefer this method to reduce goroutine and
+// channel scheduling overhead for streaming use cases.
+type IterModel interface {
+	GenerateContentIter(ctx context.Context, request *Request) (iter.Seq2[*Response, error], error)
 }
 
 // Info contains basic information about a Model.

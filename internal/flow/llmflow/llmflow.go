@@ -14,9 +14,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
 	"sort"
+	"strconv"
 	"time"
 
+	"github.com/google/uuid"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -51,10 +54,11 @@ type Options struct {
 
 // Flow provides the basic flow implementation.
 type Flow struct {
-	requestProcessors  []flow.RequestProcessor
-	responseProcessors []flow.ResponseProcessor
-	channelBufferSize  int
-	modelCallbacks     *model.Callbacks
+	requestProcessors         []flow.RequestProcessor
+	responseProcessors        []flow.ResponseProcessor
+	channelBufferSize         int
+	modelCallbacks            *model.Callbacks
+	canSkipPartialPostprocess bool
 }
 
 // New creates a new basic flow instance with the provided processors.
@@ -64,21 +68,43 @@ func New(
 	responseProcessors []flow.ResponseProcessor,
 	opts Options,
 ) *Flow {
+	canSkipPartialPostprocess := true
+	for _, rp := range responseProcessors {
+		if rp == nil {
+			continue
+		}
+		prp, ok := rp.(flow.PartialResponseProcessor)
+		if !ok || prp.HandlesPartialResponse() {
+			canSkipPartialPostprocess = false
+			break
+		}
+	}
 	return &Flow{
-		requestProcessors:  requestProcessors,
-		responseProcessors: responseProcessors,
-		channelBufferSize:  opts.ChannelBufferSize,
-		modelCallbacks:     opts.ModelCallbacks,
+		requestProcessors:         requestProcessors,
+		responseProcessors:        responseProcessors,
+		channelBufferSize:         opts.ChannelBufferSize,
+		modelCallbacks:            opts.ModelCallbacks,
+		canSkipPartialPostprocess: canSkipPartialPostprocess,
 	}
 }
 
 // Run executes the flow in a loop until completion.
 func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
-	eventChan := make(chan *event.Event, f.channelBufferSize) // Configurable buffered channel for events.
+	bufferSize := f.channelBufferSize
+	if invocation != nil && invocation.RunOptions.EventChannelBufferSize > 0 {
+		bufferSize = invocation.RunOptions.EventChannelBufferSize
+	}
+	if bufferSize < 0 {
+		bufferSize = 0
+	}
+	eventChan := make(chan *event.Event, bufferSize) // Configurable buffered channel for events.
 
 	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
-		defer close(eventChan)
+		defer func() {
+			close(eventChan)
+			invocation.SignalDone(ctx)
+		}()
 
 		// Optionally resume from pending tool calls before starting a new
 		// LLM cycle. This covers scenarios where the previous run stopped
@@ -86,9 +112,12 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 		f.maybeResumePendingToolCalls(ctx, invocation, eventChan)
 
 		for {
-			// emit start event and wait for completion notice.
-			if err := f.emitStartEventAndWait(ctx, invocation, eventChan); err != nil {
-				return
+			disableStartBarrier := invocation != nil && invocation.RunOptions.DisableStartBarrier
+			if !disableStartBarrier {
+				// emit start event and wait for completion notice.
+				if err := f.emitStartEventAndWait(ctx, invocation, eventChan); err != nil {
+					return
+				}
 			}
 
 			// Run one step (one LLM call cycle).
@@ -230,9 +259,7 @@ func (f *Flow) runOneStep(
 	var lastEvent *event.Event
 
 	// Initialize empty LLM request.
-	llmRequest := &model.Request{
-		Tools: make(map[string]tool.Tool), // Initialize tools map
-	}
+	llmRequest := &model.Request{}
 
 	// 1. Preprocess (prepare request).
 	f.preprocess(ctx, invocation, llmRequest, eventChan)
@@ -245,16 +272,20 @@ func (f *Flow) runOneStep(
 	if invocation.Model != nil {
 		modelName = invocation.Model.Info().Name
 	}
-	_, span = trace.Tracer.Start(ctx, itelemetry.NewChatSpanName(modelName))
-	defer span.End()
+	if invocation != nil && invocation.RunOptions.DisableTracing {
+		span = oteltrace.SpanFromContext(ctx)
+	} else {
+		ctx, span = trace.Tracer.Start(ctx, itelemetry.NewChatSpanName(modelName))
+		defer span.End()
+	}
 
 	// 2. Call LLM (get response channel).
-	responseChan, err := f.callLLM(ctx, invocation, llmRequest)
+	responseSeq, err := f.callLLM(ctx, invocation, llmRequest)
 	if err != nil {
 		return nil, err
 	}
 	// 3. Process streaming responses.
-	return f.processStreamingResponses(ctx, invocation, llmRequest, responseChan, eventChan, span)
+	return f.processStreamingResponses(ctx, invocation, llmRequest, responseSeq, eventChan, span)
 }
 
 // processStreamingResponses handles the streaming response processing logic.
@@ -262,58 +293,146 @@ func (f *Flow) processStreamingResponses(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	llmRequest *model.Request,
-	responseChan <-chan *model.Response,
+	responseSeq iter.Seq2[*model.Response, error],
 	eventChan chan<- *event.Event,
 	span oteltrace.Span,
 ) (lastEvent *event.Event, err error) {
-	// Get or create timing info from invocation (only record first LLM call)
-	timingInfo := invocation.GetOrCreateTimingInfo()
+	usageTrackingDisabled := invocation != nil && invocation.RunOptions.DisableResponseUsageTracking
+	partialEventIDsDisabled := invocation != nil && invocation.RunOptions.DisablePartialEventIDs
+	partialEventTimestampsDisabled := invocation != nil && invocation.RunOptions.DisablePartialEventTimestamps
+	var eventPool eventArena
 
-	// Create telemetry tracker and defer metrics recording
-	tracker := itelemetry.NewChatMetricsTracker(ctx, invocation, llmRequest, timingInfo, &err)
-	defer tracker.RecordMetrics()()
+	// Get or create timing info from invocation (only record first LLM call).
+	var timingInfo *model.TimingInfo
 
-	for response := range responseChan {
-		// Track response for telemetry (token usage and timing info)
-		tracker.TrackResponse(response)
+	// Create telemetry tracker and defer metrics recording.
+	var tracker *itelemetry.ChatMetricsTracker
+	var partialUsageFallback *model.Usage
+	if !usageTrackingDisabled {
+		timingInfo = invocation.GetOrCreateTimingInfo()
+		tracker = itelemetry.NewChatMetricsTracker(ctx, invocation, llmRequest, timingInfo, &err)
+		defer tracker.RecordMetrics()()
+	}
+	var eventSeq uint64
+	var eventIDBuf []byte
+	var eventIDPrefixLen int
+	var eventIDSource string
+	traceRecording := !usageTrackingDisabled && span != nil && span.IsRecording()
+	hasAfterModelCallbacks := f.modelCallbacks != nil
+	if !hasAfterModelCallbacks && invocation != nil && invocation.Plugins != nil {
+		hasAfterModelCallbacks = invocation.Plugins.ModelCallbacks() != nil
+	}
 
-		// Attach timing info to response
-		if response.Usage == nil {
-			response.Usage = &model.Usage{}
+	responseSeq(func(response *model.Response, responseErr error) bool {
+		if responseErr != nil {
+			err = responseErr
+			return false
 		}
-		// set timing info to response
-		response.Usage.TimingInfo = timingInfo
+		if response == nil {
+			return true
+		}
+
+		if tracker != nil {
+			// Track response for telemetry (token usage and timing info).
+			tracker.TrackResponse(response)
+
+			// Attach timing info to response.
+			if response.Usage == nil {
+				if response.IsPartial {
+					if partialUsageFallback == nil {
+						partialUsageFallback = &model.Usage{}
+					}
+					response.Usage = partialUsageFallback
+				} else {
+					response.Usage = &model.Usage{}
+				}
+			}
+			// Set timing info to response.
+			response.Usage.TimingInfo = timingInfo
+		}
 
 		// Handle after model callbacks.
-		customResp, err := f.handleAfterModelCallbacks(ctx, invocation, llmRequest, response, eventChan)
-		if err != nil {
-			return lastEvent, err
-		}
-		if customResp != nil {
-			response = customResp
+		if hasAfterModelCallbacks {
+			customResp, cbErr := f.handleAfterModelCallbacks(ctx, invocation, llmRequest, response, eventChan)
+			if cbErr != nil {
+				err = cbErr
+				return false
+			}
+			if customResp != nil {
+				response = customResp
+			}
 		}
 
 		// 4. Create and send LLM response using the clean constructor.
-		llmResponseEvent := f.createLLMResponseEvent(invocation, response, llmRequest)
+		eventSeq++
+		eventID := ""
+		if response.ID != "" && !(partialEventIDsDisabled && response.IsPartial) {
+			if eventIDSource != response.ID {
+				eventIDSource = response.ID
+				eventIDBuf = eventIDBuf[:0]
+				eventIDBuf = append(eventIDBuf, response.ID...)
+				eventIDBuf = append(eventIDBuf, ':')
+				eventIDPrefixLen = len(eventIDBuf)
+			} else {
+				eventIDBuf = eventIDBuf[:eventIDPrefixLen]
+			}
+			eventIDBuf = strconv.AppendUint(eventIDBuf, eventSeq, 10)
+			eventID = string(eventIDBuf)
+		}
+		eventTimestamp := response.Timestamp
+		if eventTimestamp.IsZero() && !(partialEventTimestampsDisabled && response.IsPartial) {
+			eventTimestamp = time.Now()
+		}
+		llmResponseEvent := f.createLLMResponseEvent(&eventPool, invocation, response, llmRequest, eventID, eventTimestamp)
 		agent.EmitEvent(ctx, invocation, eventChan, llmResponseEvent)
 		lastEvent = llmResponseEvent
-		tracker.SetLastEvent(lastEvent)
+		if tracker != nil {
+			tracker.SetLastEvent(lastEvent)
+		}
 		// 5. Check context cancellation.
 		if err = agent.CheckContextCancelled(ctx); err != nil {
-			return lastEvent, err
+			return false
 		}
 
 		// 6. Postprocess response.
-		f.postprocess(ctx, invocation, llmRequest, response, eventChan)
-		if err := agent.CheckContextCancelled(ctx); err != nil {
-			return lastEvent, err
+		if !response.IsPartial || !f.canSkipPartialPostprocess {
+			f.postprocess(ctx, invocation, llmRequest, response, eventChan)
+			if ctxErr := agent.CheckContextCancelled(ctx); ctxErr != nil {
+				err = ctxErr
+				return false
+			}
 		}
 
-		itelemetry.TraceChat(span, invocation, llmRequest, response, llmResponseEvent.ID, tracker.FirstTokenTimeDuration())
+		if traceRecording {
+			itelemetry.TraceChat(span, invocation, llmRequest, response, llmResponseEvent.ID, tracker.FirstTokenTimeDuration())
+		}
 
+		return true
+	})
+
+	return lastEvent, err
+}
+
+type eventArena struct {
+	blockSize int
+	block     []event.Event
+	idx       int
+}
+
+func (a *eventArena) newEvent() *event.Event {
+	if a == nil {
+		return &event.Event{}
 	}
-
-	return lastEvent, nil
+	if a.blockSize <= 0 {
+		a.blockSize = 64
+	}
+	if a.idx >= len(a.block) {
+		a.block = make([]event.Event, a.blockSize)
+		a.idx = 0
+	}
+	e := &a.block[a.idx]
+	a.idx++
+	return e
 }
 
 // handleAfterModelCallbacks processes after model callbacks.
@@ -353,9 +472,40 @@ func (f *Flow) handleAfterModelCallbacks(
 }
 
 // createLLMResponseEvent creates a new LLM response event.
-func (f *Flow) createLLMResponseEvent(invocation *agent.Invocation, response *model.Response, llmRequest *model.Request) *event.Event {
-	llmResponseEvent := event.New(invocation.InvocationID, invocation.AgentName, event.WithResponse(response))
-	if len(response.Choices) > 0 && len(response.Choices[0].Message.ToolCalls) > 0 {
+func (f *Flow) createLLMResponseEvent(
+	pool *eventArena,
+	invocation *agent.Invocation,
+	response *model.Response,
+	llmRequest *model.Request,
+	eventID string,
+	eventTimestamp time.Time,
+) *event.Event {
+	invocationID := ""
+	author := ""
+	if invocation != nil {
+		invocationID = invocation.InvocationID
+		author = invocation.AgentName
+	}
+	if eventID == "" {
+		if invocation == nil || response == nil || !response.IsPartial || !invocation.RunOptions.DisablePartialEventIDs {
+			eventID = uuid.NewString()
+		}
+	}
+	if eventTimestamp.IsZero() {
+		if invocation == nil || response == nil || !response.IsPartial || !invocation.RunOptions.DisablePartialEventTimestamps {
+			eventTimestamp = time.Now()
+		}
+	}
+	llmResponseEvent := pool.newEvent()
+	*llmResponseEvent = event.Event{
+		Response:     response,
+		ID:           eventID,
+		Timestamp:    eventTimestamp,
+		InvocationID: invocationID,
+		Author:       author,
+		Version:      event.CurrentVersion,
+	}
+	if response != nil && len(response.Choices) > 0 && len(response.Choices[0].Message.ToolCalls) > 0 && llmRequest != nil {
 		llmResponseEvent.LongRunningToolIDs = collectLongRunningToolIDs(response.Choices[0].Message.ToolCalls, llmRequest.Tools)
 	}
 	return llmResponseEvent
@@ -465,8 +615,13 @@ func (f *Flow) preprocess(
 	// Add tools to the request with optional filtering.
 	if invocation.Agent != nil {
 		tools := f.getFilteredTools(ctx, invocation)
-		for _, t := range tools {
-			llmRequest.Tools[t.Declaration().Name] = t
+		if len(tools) > 0 {
+			if llmRequest.Tools == nil {
+				llmRequest.Tools = make(map[string]tool.Tool, len(tools))
+			}
+			for _, t := range tools {
+				llmRequest.Tools[t.Declaration().Name] = t
+			}
 		}
 	}
 }
@@ -574,7 +729,7 @@ func (f *Flow) callLLM(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	llmRequest *model.Request,
-) (<-chan *model.Response, error) {
+) (iter.Seq2[*model.Response, error], error) {
 	if invocation.Model == nil {
 		return nil, errors.New("no model available for LLM call")
 	}
@@ -613,10 +768,9 @@ func (f *Flow) callLLM(
 				ctx = result.Context
 			}
 			if result != nil && result.CustomResponse != nil {
-				responseChan := make(chan *model.Response, 1)
-				responseChan <- result.CustomResponse
-				close(responseChan)
-				return responseChan, nil
+				return func(yield func(*model.Response, error) bool) {
+					yield(result.CustomResponse, nil)
+				}, nil
 			}
 		}
 	}
@@ -639,15 +793,27 @@ func (f *Flow) callLLM(
 			ctx = result.Context
 		}
 		if result != nil && result.CustomResponse != nil {
-			// Create a channel that returns the custom response and then closes.
-			responseChan := make(chan *model.Response, 1)
-			responseChan <- result.CustomResponse
-			close(responseChan)
-			return responseChan, nil
+			return func(yield func(*model.Response, error) bool) {
+				yield(result.CustomResponse, nil)
+			}, nil
 		}
 	}
 
 	// Call the model.
+	if iterModel, ok := invocation.Model.(model.IterModel); ok {
+		seq, err := iterModel.GenerateContentIter(ctx, llmRequest)
+		if err != nil {
+			log.ErrorfContext(
+				ctx,
+				"LLM call failed for agent %s: %v",
+				invocation.AgentName,
+				err,
+			)
+			return nil, err
+		}
+		return seq, nil
+	}
+
 	responseChan, err := invocation.Model.GenerateContent(ctx, llmRequest)
 	if err != nil {
 		log.ErrorfContext(
@@ -659,7 +825,13 @@ func (f *Flow) callLLM(
 		return nil, err
 	}
 
-	return responseChan, nil
+	return func(yield func(*model.Response, error) bool) {
+		for resp := range responseChan {
+			if !yield(resp, nil) {
+				return
+			}
+		}
+	}, nil
 }
 
 // postprocess handles post-LLM call processing using response processors.
@@ -671,6 +843,12 @@ func (f *Flow) postprocess(
 	eventChan chan<- *event.Event,
 ) {
 	if llmResponse == nil {
+		return
+	}
+	if invocation != nil && invocation.RunOptions.DisableResponseProcessors {
+		return
+	}
+	if llmResponse.IsPartial && f.canSkipPartialPostprocess {
 		return
 	}
 

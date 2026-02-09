@@ -455,40 +455,66 @@ func registerTools(options *Options) ([]tool.Tool, map[string]bool) {
 func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-chan *event.Event, err error) {
 	a.setupInvocation(invocation)
 
-	ctx, span := trace.Tracer.Start(
-		ctx,
-		fmt.Sprintf(
-			"%s %s",
-			itelemetry.OperationInvokeAgent,
-			a.name,
-		),
-	)
+	var span sdktrace.Span
+	if invocation != nil && invocation.RunOptions.DisableTracing {
+		span = sdktrace.SpanFromContext(ctx)
+	} else {
+		ctx, span = trace.Tracer.Start(
+			ctx,
+			fmt.Sprintf(
+				"%s %s",
+				itelemetry.OperationInvokeAgent,
+				a.name,
+			),
+		)
+	}
 	effectiveGenConfig := a.genConfig
 	if invocation.RunOptions.Stream != nil {
 		effectiveGenConfig.Stream = *invocation.RunOptions.Stream
 	}
 
-	promptText := a.systemPromptForInvocation(invocation) +
-		a.instructionForInvocation(invocation)
-	itelemetry.TraceBeforeInvokeAgent(
-		span,
-		invocation,
-		a.description,
-		promptText,
-		&effectiveGenConfig,
-	)
-	tracker := itelemetry.NewInvokeAgentTracker(
-		ctx,
-		invocation,
-		effectiveGenConfig.Stream,
-		&err,
-	)
+	metricsEnabled := itelemetry.InvokeAgentMetricGenAIRequestCnt != nil ||
+		itelemetry.InvokeAgentMetricGenAIClientTokenUsage != nil ||
+		itelemetry.InvokeAgentMetricGenAIClientTimeToFirstToken != nil ||
+		itelemetry.InvokeAgentMetricGenAIClientOperationDuration != nil
+
+	spanRecording := span.IsRecording()
+	if spanRecording {
+		promptText := a.systemPromptForInvocation(invocation) +
+			a.instructionForInvocation(invocation)
+		itelemetry.TraceBeforeInvokeAgent(
+			span,
+			invocation,
+			a.description,
+			promptText,
+			&effectiveGenConfig,
+		)
+	}
+
+	needWrap := a.agentCallbacks != nil || metricsEnabled || spanRecording
+	var tracker *itelemetry.InvokeAgentTracker
+	if needWrap {
+		tracker = itelemetry.NewInvokeAgentTracker(
+			ctx,
+			invocation,
+			effectiveGenConfig.Stream,
+			&err,
+		)
+	}
+	reservedWrapRef := false
+	if needWrap {
+		invocation.AddDoneRef()
+		reservedWrapRef = true
+	}
 
 	ctx, flowEventChan, err := a.executeAgentFlow(ctx, invocation)
 	if err != nil {
 		// Check if this is a custom response error (early return)
 		var customErr *haveCustomResponseError
 		if errors.As(err, &customErr) {
+			if reservedWrapRef {
+				invocation.SignalDone(ctx)
+			}
 			span.End()
 			return customErr.EventChan, nil
 		}
@@ -497,6 +523,11 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 		span.SetAttributes(attribute.String(itelemetry.KeyErrorType, itelemetry.ValueDefaultErrorType))
 		span.End()
 		return nil, err
+	}
+
+	if !needWrap {
+		span.End()
+		return flowEventChan, nil
 	}
 
 	return a.wrapEventChannelWithTelemetry(ctx, invocation, flowEventChan, span, tracker), nil
@@ -523,6 +554,7 @@ func (a *LLMAgent) executeAgentFlow(ctx context.Context, invocation *agent.Invoc
 			customEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, result.CustomResponse)
 			agent.EmitEvent(ctx, invocation, eventChan, customEvent)
 			close(eventChan)
+			invocation.SignalDone(ctx)
 			return ctx, nil, &haveCustomResponseError{EventChan: eventChan}
 		}
 	}
@@ -610,6 +642,7 @@ func (a *LLMAgent) wrapEventChannelWithTelemetry(
 			tracker.RecordMetrics()()
 			span.End()
 			close(wrappedChan)
+			invocation.SignalDone(ctx)
 		}()
 
 		// Forward all events from the original channel

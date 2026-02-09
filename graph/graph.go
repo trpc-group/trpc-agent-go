@@ -146,7 +146,6 @@ type Node struct {
 	// conditional branches to resolve results with clearer, local semantics.
 	ends map[string]string
 
-	// It's effect just for LLM node
 	modelCallbacks *model.Callbacks
 	// just for tool node.
 	toolCallbacks *tool.Callbacks

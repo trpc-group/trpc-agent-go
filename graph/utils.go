@@ -31,16 +31,54 @@ func deepCopyAny(value any) any {
 		return copier.DeepCopy()
 	}
 
-	visited := make(map[uintptr]any)
 	if out, ok := deepCopyFastPath(value); ok {
 		return out
 	}
+	visited := make(map[uintptr]any)
 	return deepCopyReflect(reflect.ValueOf(value), visited)
 }
 
 // deepCopyFastPath handles common JSON-friendly types without reflection.
 func deepCopyFastPath(value any) (any, bool) {
 	switch v := value.(type) {
+	case nil:
+		return nil, true
+	case bool:
+		return v, true
+	case int:
+		return v, true
+	case int8:
+		return v, true
+	case int16:
+		return v, true
+	case int32:
+		return v, true
+	case int64:
+		return v, true
+	case uint:
+		return v, true
+	case uint8:
+		return v, true
+	case uint16:
+		return v, true
+	case uint32:
+		return v, true
+	case uint64:
+		return v, true
+	case uintptr:
+		return v, true
+	case float32:
+		return v, true
+	case float64:
+		return v, true
+	case complex64:
+		return v, true
+	case complex128:
+		return v, true
+	case string:
+		return v, true
+	case time.Duration:
+		return v, true
 	case map[string]any:
 		copied := make(map[string]any, len(v))
 		for k, vv := range v {

@@ -28,6 +28,10 @@ type TransferResponseProcessor struct {
 	endInvocationAfterTransfer bool
 }
 
+func (p *TransferResponseProcessor) HandlesPartialResponse() bool {
+	return false
+}
+
 // NewTransferResponseProcessor creates a new transfer response processor.
 func NewTransferResponseProcessor(endInvocation bool) *TransferResponseProcessor {
 	return &TransferResponseProcessor{

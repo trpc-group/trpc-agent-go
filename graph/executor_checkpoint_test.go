@@ -953,7 +953,7 @@ func TestExecutor_GetNextNodes_And_BuildTaskStateCopy_And_MergeNodeCallbacks(t *
 
 	// buildTaskStateCopy with overlay
 	tsk := &Task{NodeID: "nodeX", Overlay: State{"b": 2}}
-	st := exec.buildTaskStateCopy(ec, tsk)
+	st := exec.buildTaskStateCopy(ec, tsk, false)
 	require.Equal(t, 1, st["a"])
 	require.Equal(t, 2, st["b"])
 

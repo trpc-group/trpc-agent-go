@@ -85,6 +85,25 @@ func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-
 	// Setup invocation
 	ga.setupInvocation(invocation)
 
+	if invocation != nil &&
+		invocation.RunOptions.DisableTracing &&
+		ga.agentCallbacks == nil &&
+		!barrier.Enabled(invocation) {
+		initialState := ga.createInitialState(ctx, invocation)
+		eventChan, err := ga.executor.Execute(ctx, initialState, invocation)
+		if err != nil {
+			out := make(chan *event.Event, 1)
+			evt := event.NewErrorEvent(invocation.InvocationID, invocation.AgentName,
+				model.ErrorTypeFlowError, err.Error())
+			if emitErr := agent.EmitEvent(ctx, invocation, out, evt); emitErr != nil {
+				log.Errorf("graphagent: emit error event failed: %v", emitErr)
+			}
+			close(out)
+			return out, nil
+		}
+		return eventChan, nil
+	}
+
 	out := make(chan *event.Event, ga.channelBufferSize)
 	runCtx := agent.CloneContext(ctx)
 	go ga.runWithBarrier(runCtx, invocation, out)
@@ -200,12 +219,13 @@ func (ga *GraphAgent) runWithCallbacks(ctx context.Context, invocation *agent.In
 
 func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.Invocation) graph.State {
 	var initialState graph.State
+	disableExtras := invocation != nil && invocation.RunOptions.DisableGraphAgentInitialStateExtras
 
 	if ga.initialState != nil {
 		// Clone the base initial state to avoid modifying the original.
 		initialState = ga.initialState.Clone()
 	} else {
-		initialState = make(graph.State)
+		initialState = make(graph.State, 8)
 	}
 
 	// Merge runtime state from RunOptions if provided.
@@ -218,30 +238,45 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 	// Seed messages from session events so multi‑turn runs share history.
 	// This mirrors ContentRequestProcessor behavior used by non-graph flows.
 	if invocation.Session != nil {
-		// Build a temporary request to reuse the processor logic.
-		req := &model.Request{}
+		sess := invocation.Session
+		sess.EventMu.RLock()
+		hasEvents := len(sess.Events) > 0
+		sess.EventMu.RUnlock()
 
-		// Default processor: include (possibly overridden) + preserve same branch.
-		contentOpts := []processor.ContentOption{
-			processor.WithAddSessionSummary(ga.options.AddSessionSummary),
-			processor.WithMaxHistoryRuns(ga.options.MaxHistoryRuns),
-			processor.WithPreserveSameBranch(true),
-			processor.WithTimelineFilterMode(ga.options.messageTimelineFilterMode),
-			processor.WithBranchFilterMode(ga.options.messageBranchFilterMode),
-		}
-		if ga.options.ReasoningContentMode != "" {
-			contentOpts = append(contentOpts,
-				processor.WithReasoningContentMode(ga.options.ReasoningContentMode))
-		}
-		if ga.options.summaryFormatter != nil {
-			contentOpts = append(contentOpts,
-				processor.WithSummaryFormatter(ga.options.summaryFormatter))
-		}
-		p := processor.NewContentRequestProcessor(contentOpts...)
-		// We only need messages side effect; no output channel needed.
-		p.ProcessRequest(ctx, invocation, req, nil)
-		if len(req.Messages) > 0 {
-			initialState[graph.StateKeyMessages] = req.Messages
+		sess.TracksMu.RLock()
+		hasTracks := len(sess.Tracks) > 0
+		sess.TracksMu.RUnlock()
+
+		sess.SummariesMu.RLock()
+		hasSummaries := len(sess.Summaries) > 0
+		sess.SummariesMu.RUnlock()
+
+		if hasEvents || hasTracks || hasSummaries {
+			// Build a temporary request to reuse the processor logic.
+			req := &model.Request{}
+
+			// Default processor: include (possibly overridden) + preserve same branch.
+			contentOpts := []processor.ContentOption{
+				processor.WithAddSessionSummary(ga.options.AddSessionSummary),
+				processor.WithMaxHistoryRuns(ga.options.MaxHistoryRuns),
+				processor.WithPreserveSameBranch(true),
+				processor.WithTimelineFilterMode(ga.options.messageTimelineFilterMode),
+				processor.WithBranchFilterMode(ga.options.messageBranchFilterMode),
+			}
+			if ga.options.ReasoningContentMode != "" {
+				contentOpts = append(contentOpts,
+					processor.WithReasoningContentMode(ga.options.ReasoningContentMode))
+			}
+			if ga.options.summaryFormatter != nil {
+				contentOpts = append(contentOpts,
+					processor.WithSummaryFormatter(ga.options.summaryFormatter))
+			}
+			p := processor.NewContentRequestProcessor(contentOpts...)
+			// We only need messages side effect; no output channel needed.
+			p.ProcessRequest(ctx, invocation, req, nil)
+			if len(req.Messages) > 0 {
+				initialState[graph.StateKeyMessages] = req.Messages
+			}
 		}
 	}
 
@@ -265,11 +300,14 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 	if invocation.Session != nil {
 		initialState[graph.StateKeySession] = invocation.Session
 	}
-	// Add parent agent to state so agent nodes can access sub-agents.
-	initialState[graph.StateKeyParentAgent] = ga
-	// Set checkpoint namespace if not already set.
-	if ns, ok := initialState[graph.CfgKeyCheckpointNS].(string); !ok || ns == "" {
-		initialState[graph.CfgKeyCheckpointNS] = ga.name
+
+	if !disableExtras {
+		// Add parent agent to state so agent nodes can access sub-agents.
+		initialState[graph.StateKeyParentAgent] = ga
+		// Set checkpoint namespace if not already set.
+		if ns, ok := initialState[graph.CfgKeyCheckpointNS].(string); !ok || ns == "" {
+			initialState[graph.CfgKeyCheckpointNS] = ga.name
+		}
 	}
 
 	return initialState

@@ -80,10 +80,5 @@ func GetRuntimeStateValueFromContext[T any](ctx context.Context, key string) (T,
 
 // CheckContextCancelled check context cancelled
 func CheckContextCancelled(ctx context.Context) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-		return nil
-	}
+	return ctx.Err()
 }

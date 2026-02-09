@@ -41,6 +41,10 @@ type stubSpan struct {
 	called bool
 }
 
+func (s *stubSpan) IsRecording() bool {
+	return true
+}
+
 func (s *stubSpan) SetAttributes(kv ...attribute.KeyValue) {
 	s.called = true
 	// Forward to the underlying noop span so behaviour remains unchanged.
@@ -74,6 +78,10 @@ type recordingSpan struct {
 	status         codes.Code
 	statusDesc     string
 	recordedErrors []error
+}
+
+func (s *recordingSpan) IsRecording() bool {
+	return true
 }
 
 func (s *recordingSpan) SetAttributes(kv ...attribute.KeyValue) {

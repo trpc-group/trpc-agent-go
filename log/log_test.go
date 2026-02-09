@@ -216,6 +216,10 @@ func TestTracefContext(t *testing.T) {
 	t.Cleanup(func() {
 		log.ContextDefault = original
 	})
+	log.SetTraceEnabled(true)
+	t.Cleanup(func() {
+		log.SetTraceEnabled(false)
+	})
 
 	log.TracefContext(ctx, "hello %s", "world")
 

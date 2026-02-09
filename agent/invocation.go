@@ -15,9 +15,9 @@ import (
 	"fmt"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -97,9 +97,8 @@ type Invocation struct {
 	// ArtifactService is the service for managing artifacts.
 	ArtifactService artifact.Service
 
-	// noticeChannels is used to signal when events are written to the session.
-	noticeChannels map[string]chan any
-	noticeMu       *sync.Mutex
+	// notice is used to signal when events are written to the session.
+	notice *noticeState
 
 	// eventFilterKey is used to filter events for flow or agent
 	eventFilterKey string
@@ -111,6 +110,14 @@ type Invocation struct {
 	// Can be used by callbacks, middleware, or any invocation-scoped logic.
 	state   map[string]any
 	stateMu sync.RWMutex
+
+	// emitHook is an optional runner-provided hook invoked before emitting events.
+	emitHook EmitHook
+
+	// finishHook is an optional runner-provided hook invoked after the outermost event stream completes.
+	finishHook FinishHook
+	finishOnce sync.Once
+	finishRefs atomic.Int64
 
 	// MaxLLMCalls is an optional upper bound on the number of LLM calls
 	// allowed for this invocation. When the value is:
@@ -145,6 +152,18 @@ type Invocation struct {
 	// in this invocation. This is used together with MaxToolIterations
 	// to guard against unbounded tool_call -> LLM -> tool_call loops.
 	toolIterationCount int
+}
+
+// EmitHook is invoked by EmitEvent after invocation fields are injected but before the event is forwarded.
+// The returned boolean indicates whether the event should be forwarded to callers.
+type EmitHook func(context.Context, *Invocation, *event.Event) (bool, *event.Event)
+
+// FinishHook is invoked when the outermost event stream for an invocation completes.
+type FinishHook func(context.Context, *Invocation)
+
+type noticeState struct {
+	mu       sync.Mutex
+	channels map[string]chan any
 }
 
 // DefaultWaitNoticeTimeoutErr is the default error returned when a wait notice times out.
@@ -270,6 +289,14 @@ func WithResume(enabled bool) RunOption {
 	}
 }
 
+// WithDisableStartBarrier disables the "start event + completion wait" barrier
+// emitted before each LLM step in flows like llmflow.
+func WithDisableStartBarrier(disable bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.DisableStartBarrier = disable
+	}
+}
+
 // WithGraphEmitFinalModelResponses controls whether graph-based agents emit
 // final (Done=true) model responses as events.
 //
@@ -303,6 +330,158 @@ func WithStreamMode(modes ...StreamMode) RunOption {
 				break
 			}
 		}
+	}
+}
+
+// WithDisablePreprocessingEvents disables preprocessing progress events emitted
+// by request processors (e.g., basic/identity/content).
+func WithDisablePreprocessingEvents(disable bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.DisablePreprocessingEvents = disable
+	}
+}
+
+// WithDisableRunnerCompletionEvent disables emitting the runner completion event.
+//
+// When enabled, runners will skip generating and emitting the final
+// ObjectTypeRunnerCompletion event. Callers should rely on the event
+// channel closure as the completion signal.
+func WithDisableRunnerCompletionEvent(disable bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.DisableRunnerCompletionEvent = disable
+	}
+}
+
+// WithDisableAppendUserMessage disables persisting the incoming user message
+// into the session transcript for this run.
+//
+// When enabled, Runner still carries the message via invocation.Message, but
+// will skip creating and appending the corresponding user message event to the
+// session service.
+func WithDisableAppendUserMessage(disable bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.DisableAppendUserMessage = disable
+	}
+}
+
+// WithDisableRunStatusTracking disables updating per-run status counters (EventCount and LastEventAt).
+func WithDisableRunStatusTracking(disable bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.DisableRunStatusTracking = disable
+	}
+}
+
+// WithDisableResponseUsageTracking disables attaching usage and timing info to streaming responses.
+func WithDisableResponseUsageTracking(disable bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.DisableResponseUsageTracking = disable
+	}
+}
+
+// WithDisableTracing disables creating OpenTelemetry spans for this run.
+func WithDisableTracing(disable bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.DisableTracing = disable
+	}
+}
+
+// WithDisableResponseProcessors disables running response processors after model calls.
+func WithDisableResponseProcessors(disable bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.DisableResponseProcessors = disable
+	}
+}
+
+// WithDisableModelExecutionEvents disables emitting model execution events for this run.
+func WithDisableModelExecutionEvents(disable bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.DisableModelExecutionEvents = disable
+	}
+}
+
+// WithDisableRunnerBypassEmitHook disables the runner bypass emit hook.
+func WithDisableRunnerBypassEmitHook(disable bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.DisableRunnerBypassEmitHook = disable
+	}
+}
+
+// WithDisableEventInjection disables injecting invocation metadata into emitted events.
+func WithDisableEventInjection(disable bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.DisableEventInjection = disable
+	}
+}
+
+// WithDisableNotices disables creating and using notice channels for this invocation.
+func WithDisableNotices(disable bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.DisableNotices = disable
+	}
+}
+
+// WithDisablePartialEventIDs disables generating IDs for partial response events.
+func WithDisablePartialEventIDs(disable bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.DisablePartialEventIDs = disable
+	}
+}
+
+// WithDisablePartialEventTimestamps disables generating timestamps for partial response events.
+func WithDisablePartialEventTimestamps(disable bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.DisablePartialEventTimestamps = disable
+	}
+}
+
+// WithDisableGraphCompletionEvent disables emitting the final graph completion event.
+func WithDisableGraphCompletionEvent(disable bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.DisableGraphCompletionEvent = disable
+	}
+}
+
+// WithDisableGraphExecutorEvents disables emitting graph executor lifecycle events.
+func WithDisableGraphExecutorEvents(disable bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.DisableGraphExecutorEvents = disable
+	}
+}
+
+// WithDisableGraphStateUpdates disables applying graph node state updates for this run.
+func WithDisableGraphStateUpdates(disable bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.DisableGraphStateUpdates = disable
+	}
+}
+
+// WithDisableTaskInvocationClone disables creating a child invocation per graph task.
+func WithDisableTaskInvocationClone(disable bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.DisableTaskInvocationClone = disable
+	}
+}
+
+// WithDisableTaskStateCopy disables deep-copying task state for single-task steps.
+func WithDisableTaskStateCopy(disable bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.DisableTaskStateCopy = disable
+	}
+}
+
+// WithDisableGraphAgentInitialStateExtras disables injecting GraphAgent helper fields into the initial state.
+func WithDisableGraphAgentInitialStateExtras(disable bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.DisableGraphAgentInitialStateExtras = disable
+	}
+}
+
+// WithEventChannelBufferSize overrides the event channel buffer size for this run.
+//
+// When size <= 0, the flow default is used.
+func WithEventChannelBufferSize(size int) RunOption {
+	return func(opts *RunOptions) {
+		opts.EventChannelBufferSize = size
 	}
 }
 
@@ -558,6 +737,14 @@ type RunOptions struct {
 	// LLM request.
 	Resume bool
 
+	// DisableStartBarrier disables the "start event + completion wait" barrier
+	// emitted before each LLM step in flows like llmflow.
+	//
+	// When enabled, the flow skips emitting the start event and proceeds
+	// immediately to the LLM call. This reduces per-step overhead for
+	// latency-sensitive streaming use cases.
+	DisableStartBarrier bool
+
 	// GraphEmitFinalModelResponses controls event emission for graph-based
 	// Large Language Model (LLM) nodes.
 	//
@@ -581,6 +768,77 @@ type RunOptions struct {
 	// When StreamModeEnabled is false, runners should not apply any stream
 	// filtering and preserve the existing behavior.
 	StreamModes []StreamMode
+
+	// DisablePreprocessingEvents disables preprocessing progress events emitted
+	// by request processors (e.g., basic/identity/content).
+	//
+	// When enabled, processors still perform their request mutations but do not
+	// emit additional preprocessing events to the event stream.
+	DisablePreprocessingEvents bool
+
+	// DisableRunnerCompletionEvent disables emitting the final runner completion event.
+	//
+	// When enabled, runners will skip generating and emitting the
+	// ObjectTypeRunnerCompletion event. Callers should rely on the event
+	// channel closure as the completion signal.
+	DisableRunnerCompletionEvent bool
+
+	// DisableAppendUserMessage disables persisting the incoming user message
+	// into the session transcript for this run.
+	DisableAppendUserMessage bool
+
+	// DisableRunStatusTracking disables updating per-run status counters (EventCount and LastEventAt).
+	DisableRunStatusTracking bool
+
+	// DisableResponseUsageTracking disables attaching usage and timing info to streaming responses.
+	DisableResponseUsageTracking bool
+
+	// DisableTracing disables creating OpenTelemetry spans for this run.
+	DisableTracing bool
+
+	// DisableResponseProcessors disables running response processors after model calls.
+	DisableResponseProcessors bool
+
+	// DisableModelExecutionEvents disables emitting model execution start/complete events.
+	DisableModelExecutionEvents bool
+
+	// DisableRunnerBypassEmitHook disables the runner-provided emit hook in bypass mode.
+	DisableRunnerBypassEmitHook bool
+
+	// DisableEventInjection disables injecting invocation metadata into emitted events.
+	DisableEventInjection bool
+
+	// DisableNotices disables creating and using notice channels for this invocation.
+	DisableNotices bool
+
+	// DisablePartialEventIDs disables generating IDs for partial response events.
+	DisablePartialEventIDs bool
+
+	// DisablePartialEventTimestamps disables generating timestamps for partial response events.
+	DisablePartialEventTimestamps bool
+
+	// DisableGraphCompletionEvent disables emitting the final graph completion event.
+	DisableGraphCompletionEvent bool
+
+	// DisableGraphExecutorEvents disables emitting graph executor lifecycle events.
+	DisableGraphExecutorEvents bool
+
+	// DisableGraphStateUpdates disables applying graph node state updates.
+	DisableGraphStateUpdates bool
+
+	// DisableTaskInvocationClone disables creating a child invocation per graph task.
+	DisableTaskInvocationClone bool
+
+	// DisableTaskStateCopy disables deep-copying task state for single-task steps.
+	DisableTaskStateCopy bool
+
+	// DisableGraphAgentInitialStateExtras disables injecting GraphAgent helper fields into the initial state.
+	DisableGraphAgentInitialStateExtras bool
+
+	// EventChannelBufferSize overrides the flow's default event channel buffer size for this run.
+	//
+	// When <= 0, the flow uses its configured ChannelBufferSize.
+	EventChannelBufferSize int
 
 	// RequestID is the request id of the request.
 	RequestID string
@@ -683,14 +941,17 @@ type RunOptions struct {
 
 // NewInvocation create a new invocation
 func NewInvocation(invocationOpts ...InvocationOptions) *Invocation {
-	inv := &Invocation{
-		InvocationID:   uuid.NewString(),
-		noticeMu:       &sync.Mutex{},
-		noticeChannels: make(map[string]chan any),
-	}
+	inv := &Invocation{}
 
 	for _, opt := range invocationOpts {
 		opt(inv)
+	}
+
+	if inv.InvocationID == "" {
+		inv.InvocationID = util.NewUUIDString()
+	}
+	if inv.notice == nil && !inv.RunOptions.DisableNotices {
+		inv.notice = &noticeState{}
 	}
 
 	if inv.Branch == "" {
@@ -710,22 +971,30 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 		return nil
 	}
 	newInv := &Invocation{
-		InvocationID:    uuid.NewString(),
 		Session:         inv.Session,
 		Message:         inv.Message,
 		RunOptions:      inv.RunOptions,
 		MemoryService:   inv.MemoryService,
 		ArtifactService: inv.ArtifactService,
 		Plugins:         inv.Plugins,
-		noticeMu:        inv.noticeMu,
-		noticeChannels:  inv.noticeChannels,
+		notice:          inv.notice,
 		eventFilterKey:  inv.eventFilterKey,
 		parent:          inv,
 		state:           inv.cloneState(),
+		emitHook:        inv.emitHook,
 	}
 
 	for _, opt := range invocationOpts {
 		opt(newInv)
+	}
+
+	if newInv.InvocationID == "" {
+		newInv.InvocationID = util.NewUUIDString()
+	}
+	if newInv.RunOptions.DisableNotices {
+		newInv.notice = nil
+	} else if newInv.notice == nil {
+		newInv.notice = &noticeState{}
 	}
 
 	if newInv.Branch != "" {
@@ -743,6 +1012,30 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 	}
 
 	return newInv
+}
+
+// AddDoneRef reserves one completion signal for this invocation.
+// This is used by layered event-stream wrappers to ensure FinishHook runs when the outermost stream completes.
+func (inv *Invocation) AddDoneRef() {
+	if inv == nil || inv.finishHook == nil {
+		return
+	}
+	inv.finishRefs.Add(1)
+}
+
+// SignalDone releases one completion signal for this invocation.
+// FinishHook runs once when the remaining reference count reaches zero.
+func (inv *Invocation) SignalDone(ctx context.Context) {
+	if inv == nil || inv.finishHook == nil {
+		return
+	}
+	remaining := inv.finishRefs.Add(-1)
+	if remaining != 0 {
+		return
+	}
+	inv.finishOnce.Do(func() {
+		inv.finishHook(ctx, inv)
+	})
 }
 
 func (inv *Invocation) cloneState() map[string]any {
@@ -793,21 +1086,38 @@ func EmitEvent(ctx context.Context, inv *Invocation, ch chan<- *event.Event,
 	if ch == nil || e == nil {
 		return nil
 	}
-	InjectIntoEvent(inv, e)
+	injectionDisabled := inv != nil && inv.RunOptions.DisableEventInjection
+	if !injectionDisabled {
+		InjectIntoEvent(inv, e)
+	}
+	if inv != nil && inv.emitHook != nil {
+		forward, updated := inv.emitHook(ctx, inv, e)
+		if updated != nil {
+			e = updated
+			if !injectionDisabled {
+				InjectIntoEvent(inv, e)
+			}
+		}
+		if !forward {
+			return nil
+		}
+	}
 	var agentName, requestID string
 	if inv != nil {
 		agentName = inv.AgentName
 		requestID = inv.RunOptions.RequestID
 	}
-	log.Tracef(
-		"[agent.EmitEvent]queue monitoring:RequestID: %s channel capacity: "+
-			"%d, current length: %d, branch: %s, agent name:%s",
-		requestID,
-		cap(ch),
-		len(ch),
-		e.Branch,
-		agentName,
-	)
+	if log.IsTraceEnabled() {
+		log.Tracef(
+			"[agent.EmitEvent]queue monitoring:RequestID: %s channel capacity: "+
+				"%d, current length: %d, branch: %s, agent name:%s",
+			requestID,
+			cap(ch),
+			len(ch),
+			e.Branch,
+			agentName,
+		)
+	}
 	return event.EmitEvent(ctx, ch, e)
 }
 
@@ -978,13 +1288,30 @@ func (inv *Invocation) AddNoticeChannelAndWait(ctx context.Context, key string, 
 		return fmt.Errorf("notice channel create failed for %s", key)
 	}
 	if timeout == WaitNoticeWithoutTimeout {
-		// no timeout, maybe wait for ever
-		select {
-		case <-ch:
-		case <-ctx.Done():
-			return ctx.Err()
+		// No timeout, wait forever unless context is done.
+		if ctx.Done() != nil {
+			select {
+			case <-ch:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			return nil
 		}
-		return nil
+
+		// Some custom contexts never signal cancellation via Done().
+		// Poll Err() to avoid waiting forever when errors become observable.
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			select {
+			case <-ch:
+				return nil
+			case <-ticker.C:
+			}
+		}
 	}
 
 	select {
@@ -1006,56 +1333,56 @@ func (inv *Invocation) AddNoticeChannelAndWait(ctx context.Context, key string, 
 
 // AddNoticeChannel add a new notice channel
 func (inv *Invocation) AddNoticeChannel(ctx context.Context, key string) chan any {
-	if inv == nil || inv.noticeMu == nil {
+	if inv == nil || inv.notice == nil {
 		log.ErrorContext(
 			ctx,
-			"noticeMu is uninitialized, please use agent.NewInvocation or "+
+			"notice state is uninitialized, please use agent.NewInvocation or "+
 				"Clone method to create Invocation",
 		)
 		return nil
 	}
-	inv.noticeMu.Lock()
-	defer inv.noticeMu.Unlock()
+	inv.notice.mu.Lock()
+	defer inv.notice.mu.Unlock()
 
-	if ch, ok := inv.noticeChannels[key]; ok {
+	if ch, ok := inv.notice.channels[key]; ok {
 		return ch
 	}
 
 	ch := make(chan any)
-	if inv.noticeChannels == nil {
-		inv.noticeChannels = make(map[string]chan any)
+	if inv.notice.channels == nil {
+		inv.notice.channels = make(map[string]chan any)
 	}
-	inv.noticeChannels[key] = ch
+	inv.notice.channels[key] = ch
 
 	return ch
 }
 
 // NotifyCompletion notify completion signal to waiting task
 func (inv *Invocation) NotifyCompletion(ctx context.Context, key string) error {
-	if inv == nil || inv.noticeMu == nil {
+	if inv == nil || inv.notice == nil {
 		log.ErrorContext(
 			ctx,
-			"noticeMu is uninitialized, please use agent.NewInvocation or "+
+			"notice state is uninitialized, please use agent.NewInvocation or "+
 				"Clone method to create Invocation",
 		)
 		return fmt.Errorf(
-			"noticeMu is uninitialized, please use agent.NewInvocation or "+
+			"notice state is uninitialized, please use agent.NewInvocation or "+
 				"Clone method to create Invocation key:%s",
 			key,
 		)
 	}
-	inv.noticeMu.Lock()
-	defer inv.noticeMu.Unlock()
+	inv.notice.mu.Lock()
+	defer inv.notice.mu.Unlock()
 
-	ch, ok := inv.noticeChannels[key]
+	ch, ok := inv.notice.channels[key]
 	// channel not found, create a new one and close it.
 	// May involve notification followed by waiting.
 	if !ok {
 		ch = make(chan any)
-		if inv.noticeChannels == nil {
-			inv.noticeChannels = make(map[string]chan any)
+		if inv.notice.channels == nil {
+			inv.notice.channels = make(map[string]chan any)
 		}
-		inv.noticeChannels[key] = ch
+		inv.notice.channels[key] = ch
 		close(ch)
 		return nil
 	}
@@ -1077,18 +1404,18 @@ func (inv *Invocation) NotifyCompletion(ctx context.Context, key string) error {
 // The 'Invocation' instance created via the NewInvocation method ​​should be disposed​​
 // upon completion to prevent resource leaks.
 func (inv *Invocation) CleanupNotice(ctx context.Context) {
-	if inv == nil || inv.noticeMu == nil {
+	if inv == nil || inv.notice == nil {
 		log.ErrorContext(
 			ctx,
-			"noticeMu is uninitialized, please use agent.NewInvocation or "+
+			"notice state is uninitialized, please use agent.NewInvocation or "+
 				"Clone method to create Invocation",
 		)
 		return
 	}
-	inv.noticeMu.Lock()
-	defer inv.noticeMu.Unlock()
+	inv.notice.mu.Lock()
+	defer inv.notice.mu.Unlock()
 
-	for _, ch := range inv.noticeChannels {
+	for _, ch := range inv.notice.channels {
 		select {
 		case _, isOpen := <-ch:
 			if isOpen {
@@ -1098,7 +1425,7 @@ func (inv *Invocation) CleanupNotice(ctx context.Context) {
 			close(ch)
 		}
 	}
-	inv.noticeChannels = nil
+	inv.notice.channels = nil
 }
 
 // GetCustomAgentConfig retrieves configuration for a specific custom agent type.

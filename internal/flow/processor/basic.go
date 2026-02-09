@@ -89,6 +89,9 @@ func (p *BasicRequestProcessor) ProcessRequest(
 	}
 
 	log.DebugContext(ctx, "Basic request processor: sent preprocessing event")
+	if invocation.RunOptions.DisablePreprocessingEvents {
+		return
+	}
 	// Send a preprocessing event.
 	if err := agent.EmitEvent(ctx, invocation, ch, event.New(
 		invocation.InvocationID,

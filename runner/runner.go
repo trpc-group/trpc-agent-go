@@ -16,17 +16,18 @@ import (
 	"fmt"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/google/uuid"
-
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
+	"trpc.group/trpc-go/trpc-agent-go/internal/util"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -145,8 +146,9 @@ type runner struct {
 type runHandle struct {
 	cancel context.CancelFunc
 
-	mu     sync.RWMutex
-	status RunStatus
+	status              RunStatus
+	eventCount          atomic.Int64
+	lastEventAtUnixNano atomic.Int64
 }
 
 // Options is the options for the Runner.
@@ -254,12 +256,12 @@ func (r *runner) Run(
 	message model.Message,
 	runOpts ...agent.RunOption,
 ) (<-chan *event.Event, error) {
-	ro := agent.RunOptions{RequestID: uuid.NewString()}
+	ro := agent.RunOptions{RequestID: util.NewUUIDString()}
 	for _, opt := range runOpts {
 		opt(&ro)
 	}
 	if ro.RequestID == "" {
-		ro.RequestID = uuid.NewString()
+		ro.RequestID = util.NewUUIDString()
 	}
 
 	execCtx, execCancel := r.newExecutionContext(ctx, ro)
@@ -283,6 +285,65 @@ func (r *runner) Run(
 		return nil, fmt.Errorf("select agent: %w", err)
 	}
 
+	useBypass := ro.DisableRunnerCompletionEvent &&
+		ro.DisableStartBarrier &&
+		!ro.StreamModeEnabled &&
+		!ro.GraphEmitFinalModelResponses &&
+		r.pluginManager == nil &&
+		len(ag.Tools()) == 0
+	if useBypass {
+		// Only bypass the runner event loop for LLMAgent-based invocations for now.
+		// This keeps cleanup semantics correct because LLMAgent/llmflow will signal completion.
+		if _, ok := ag.(*llmagent.LLMAgent); !ok {
+			useBypass = false
+		}
+	}
+
+	var handle *runHandle
+	var emitHook agent.EmitHook
+	var finishHook agent.FinishHook
+	if useBypass {
+		if !ro.DisableRunnerBypassEmitHook {
+			emitHook = func(ctx context.Context, inv *agent.Invocation, e *event.Event) (bool, *event.Event) {
+				if handle != nil && (inv == nil || !inv.RunOptions.DisableRunStatusTracking) {
+					handle.eventCount.Add(1)
+					if e != nil && !e.Timestamp.IsZero() {
+						handle.lastEventAtUnixNano.Store(e.Timestamp.UnixNano())
+					} else {
+						handle.lastEventAtUnixNano.Store(time.Now().UnixNano())
+					}
+				}
+
+				if e != nil && e.RequiresCompletion && inv != nil {
+					completionID := agent.GetAppendEventNoticeKey(e.ID)
+					inv.NotifyCompletion(ctx, completionID)
+				}
+
+				if e == nil {
+					return true, e
+				}
+				// Keep session persistence behavior consistent with the runner event loop.
+				// Persist state deltas and complete, valid responses only.
+				if len(e.StateDelta) > 0 ||
+					(e.Response != nil && !e.IsPartial && e.IsValidContent()) {
+					r.handleEventPersistence(ctx, sess, e)
+				}
+				return true, e
+			}
+		}
+		finishHook = func(ctx context.Context, inv *agent.Invocation) {
+			flush.Clear(inv)
+			appender.Clear(inv)
+			if inv != nil {
+				inv.CleanupNotice(ctx)
+			}
+			r.unregisterRun(ro.RequestID)
+			if handle != nil && handle.cancel != nil {
+				handle.cancel()
+			}
+		}
+	}
+
 	invocation := agent.NewInvocation(
 		agent.WithInvocationSession(sess),
 		agent.WithInvocationMessage(message),
@@ -292,9 +353,11 @@ func (r *runner) Run(
 		agent.WithInvocationArtifactService(r.artifactService),
 		agent.WithInvocationEventFilterKey(r.appName),
 		agent.WithInvocationPlugins(r.pluginManager),
+		agent.WithInvocationEmitHook(emitHook),
+		agent.WithInvocationFinishHook(finishHook),
 	)
 
-	handle, err := r.registerRun(
+	handle, err = r.registerRun(
 		ro.RequestID,
 		RunStatus{
 			RequestID:    ro.RequestID,
@@ -341,7 +404,9 @@ func (r *runner) Run(
 	}
 
 	// Append the incoming user message to the session if it has content.
-	if message.Content != "" && shouldAppendUserMessage(message, ro.Messages) {
+	if !ro.DisableAppendUserMessage &&
+		message.Content != "" &&
+		shouldAppendUserMessage(message, ro.Messages) {
 		evt := event.NewResponseEvent(
 			invocation.InvocationID,
 			authorUser,
@@ -361,16 +426,21 @@ func (r *runner) Run(
 	// transfer_to_agent that rely on agent.InvocationFromContext(ctx).
 	execCtx = agent.NewInvocationContext(execCtx, invocation)
 
-	// Create flush channel and attach flusher before agent.Run to ensure cloned invocations inherit it.
-	flushChan := make(chan *flush.FlushRequest)
-	flush.Attach(execCtx, invocation, flushChan)
-	appender.Attach(invocation, func(ctx context.Context, e *event.Event) error {
-		if e == nil {
-			return nil
+	var flushChan chan *flush.FlushRequest
+	if !useBypass {
+		// Create flush channel and attach flusher before agent.Run to ensure cloned invocations inherit it.
+		flushChan = make(chan *flush.FlushRequest)
+		flush.Attach(execCtx, invocation, flushChan)
+		appender.Attach(invocation, func(ctx context.Context, e *event.Event) error {
+			if e == nil {
+				return nil
+			}
+			return r.sessionService.AppendEvent(ctx, sess, e)
+		})
+		if !ro.DisableStartBarrier {
+			barrier.Enable(invocation)
 		}
-		return r.sessionService.AppendEvent(ctx, sess, e)
-	})
-	barrier.Enable(invocation)
+	}
 
 	// Run the agent and get the event channel.
 	agentEventCh, err := agent.RunWithPlugins(execCtx, invocation, ag)
@@ -395,6 +465,10 @@ func (r *runner) Run(
 		execCancel()
 		invocation.CleanupNotice(execCtx)
 		return nil, err
+	}
+
+	if useBypass {
+		return agentEventCh, nil
 	}
 
 	// Process the agent events and emit them to the output channel.
@@ -422,9 +496,12 @@ func (r *runner) RunStatus(requestID string) (RunStatus, bool) {
 	if handle == nil {
 		return RunStatus{}, false
 	}
-	handle.mu.RLock()
-	defer handle.mu.RUnlock()
-	return handle.status, true
+	status := handle.status
+	status.EventCount = int(handle.eventCount.Load())
+	if ns := handle.lastEventAtUnixNano.Load(); ns != 0 {
+		status.LastEventAt = time.Unix(0, ns)
+	}
+	return status, true
 }
 
 func (r *runner) newExecutionContext(
@@ -574,7 +651,11 @@ func (r *runner) processAgentEvents(
 	flushChan chan *flush.FlushRequest,
 	handle *runHandle,
 ) chan *event.Event {
-	processedEventCh := make(chan *event.Event, cap(agentEventCh))
+	bufSize := cap(agentEventCh)
+	if bufSize < 16 {
+		bufSize = 16
+	}
+	processedEventCh := make(chan *event.Event, bufSize)
 	loop := &eventLoopContext{
 		sess:             sess,
 		invocation:       invocation,
@@ -599,7 +680,11 @@ func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
 			log.Errorf("panic in runner event loop: %v\n%s", rr, string(debug.Stack()))
 		}
 		// Agent event stream completed.
-		r.safeEmitRunnerCompletion(ctx, loop)
+		if loop != nil && loop.invocation != nil && loop.invocation.RunOptions.DisableRunnerCompletionEvent {
+			// Skip runner completion event emission when explicitly disabled by caller.
+		} else {
+			r.safeEmitRunnerCompletion(ctx, loop)
+		}
 		// Disable further flush requests for this invocation.
 		flush.Clear(loop.invocation)
 		appender.Clear(loop.invocation)
@@ -648,6 +733,24 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 		return nil
 	}
 
+	if loop != nil &&
+		agentEvent.Response != nil &&
+		agentEvent.IsPartial &&
+		len(agentEvent.StateDelta) == 0 &&
+		!agentEvent.RequiresCompletion &&
+		(loop.invocation == nil || loop.invocation.Plugins == nil) &&
+		(loop.invocation == nil || !loop.invocation.RunOptions.GraphEmitFinalModelResponses) &&
+		!isGraphCompletionEvent(agentEvent) {
+		r.recordRunEvent(loop, agentEvent)
+		if !loop.streamFilter.Allows(agentEvent) {
+			return nil
+		}
+		if err := event.EmitEvent(ctx, loop.processedEventCh, agentEvent); err != nil {
+			return fmt.Errorf("emit event to output channel: %w", err)
+		}
+		return nil
+	}
+
 	agentEvent = r.applyEventPlugins(ctx, loop.invocation, agentEvent)
 
 	r.recordEmittedAssistantResponseID(loop, agentEvent)
@@ -666,7 +769,7 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 		loop.invocation.NotifyCompletion(ctx, completionID)
 	}
 
-	r.recordRunEvent(loop)
+	r.recordRunEvent(loop, agentEvent)
 	if !loop.streamFilter.Allows(agentEvent) {
 		return nil
 	}
@@ -679,15 +782,20 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 	return nil
 }
 
-func (r *runner) recordRunEvent(loop *eventLoopContext) {
+func (r *runner) recordRunEvent(loop *eventLoopContext, e *event.Event) {
 	if loop == nil || loop.runHandle == nil {
 		return
 	}
+	if loop.invocation != nil && loop.invocation.RunOptions.DisableRunStatusTracking {
+		return
+	}
 	handle := loop.runHandle
-	handle.mu.Lock()
-	defer handle.mu.Unlock()
-	handle.status.LastEventAt = time.Now()
-	handle.status.EventCount++
+	handle.eventCount.Add(1)
+	if e != nil && !e.Timestamp.IsZero() {
+		handle.lastEventAtUnixNano.Store(e.Timestamp.UnixNano())
+		return
+	}
+	handle.lastEventAtUnixNano.Store(time.Now().UnixNano())
 }
 
 func (r *runner) applyEventPlugins(
@@ -906,7 +1014,7 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 		loop.invocation.InvocationID,
 		r.appName,
 		&model.Response{
-			ID:        "runner-completion-" + uuid.New().String(),
+			ID:        "runner-completion-" + util.NewUUIDString(),
 			Object:    model.ObjectTypeRunnerCompletion,
 			Created:   time.Now().Unix(),
 			Done:      true,
@@ -974,11 +1082,47 @@ func (r *runner) propagateGraphCompletion(
 		runnerCompletionEvent.Response != nil &&
 		len(runnerCompletionEvent.Response.Choices) == 0 &&
 		len(finalChoices) > 0 {
-		// Keep only content to avoid carrying tool deltas etc.
-		// Use JSON marshal/unmarshal to deep-copy minimal fields safely.
-		b, _ := json.Marshal(finalChoices)
-		_ = json.Unmarshal(b, &runnerCompletionEvent.Response.Choices)
+		if cloned, ok := cloneTextOnlyChoices(finalChoices); ok {
+			runnerCompletionEvent.Response.Choices = cloned
+		} else {
+			// Use JSON marshal/unmarshal to deep-copy minimal fields safely.
+			b, _ := json.Marshal(finalChoices)
+			_ = json.Unmarshal(b, &runnerCompletionEvent.Response.Choices)
+		}
 	}
+}
+
+func cloneTextOnlyChoices(choices []model.Choice) ([]model.Choice, bool) {
+	out := make([]model.Choice, len(choices))
+	for i, c := range choices {
+		if !isTextOnlyMessage(c.Message) || !isTextOnlyMessage(c.Delta) {
+			return nil, false
+		}
+		out[i] = model.Choice{
+			Index: c.Index,
+			Message: model.Message{
+				Role:    c.Message.Role,
+				Content: c.Message.Content,
+			},
+			Delta: model.Message{
+				Role:    c.Delta.Role,
+				Content: c.Delta.Content,
+			},
+		}
+		if c.FinishReason != nil {
+			reason := *c.FinishReason
+			out[i].FinishReason = &reason
+		}
+	}
+	return out, true
+}
+
+func isTextOnlyMessage(m model.Message) bool {
+	return m.ToolID == "" &&
+		m.ToolName == "" &&
+		len(m.ToolCalls) == 0 &&
+		len(m.ContentParts) == 0 &&
+		m.ReasoningContent == ""
 }
 
 // shouldEchoFinalChoicesInCompletion decides whether Runner should copy the

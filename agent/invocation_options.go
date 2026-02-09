@@ -128,3 +128,23 @@ func WithInvocationEventFilterKey(key string) InvocationOptions {
 		inv.eventFilterKey = key
 	}
 }
+
+// WithInvocationEmitHook sets the EmitHook for this invocation.
+func WithInvocationEmitHook(hook EmitHook) InvocationOptions {
+	return func(inv *Invocation) {
+		inv.emitHook = hook
+	}
+}
+
+// WithInvocationFinishHook sets the FinishHook for this invocation.
+// When the hook is non-nil, it initializes the completion reference count to 1.
+func WithInvocationFinishHook(hook FinishHook) InvocationOptions {
+	return func(inv *Invocation) {
+		inv.finishHook = hook
+		if hook == nil {
+			inv.finishRefs.Store(0)
+			return
+		}
+		inv.finishRefs.Store(1)
+	}
+}

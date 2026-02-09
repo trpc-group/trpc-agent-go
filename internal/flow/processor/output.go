@@ -26,6 +26,10 @@ type OutputResponseProcessor struct {
 	outputSchema map[string]any
 }
 
+func (p *OutputResponseProcessor) HandlesPartialResponse() bool {
+	return false
+}
+
 // NewOutputResponseProcessor creates a new instance of OutputResponseProcessor.
 func NewOutputResponseProcessor(
 	outputKey string,

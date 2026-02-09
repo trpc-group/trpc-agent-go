@@ -22,6 +22,10 @@ import (
 type CodeExecutionResponseProcessor struct {
 }
 
+func (p *CodeExecutionResponseProcessor) HandlesPartialResponse() bool {
+	return false
+}
+
 // NewCodeExecutionResponseProcessor creates a new instance of CodeExecutionResponseProcessor.
 // This processor is responsible for handling code execution responses from the model.
 func NewCodeExecutionResponseProcessor() *CodeExecutionResponseProcessor {

@@ -301,14 +301,21 @@ func (p *ContentRequestProcessor) ProcessRequest(
 			}
 		}
 
-		if skipHistory {
-			// When include_contents=none, only get events from current invocation
-			// to preserve tool call history within the current ReAct loop.
-			// This fixes the infinite loop issue where the agent doesn't see its
-			// own tool calls when running as an isolated subgraph.
-			messages = p.getCurrentInvocationMessages(invocation)
-		} else {
-			messages = p.getIncrementMessages(invocation, summaryUpdatedAt)
+		// Fast-path: if the session has no events, skip expensive message reconstruction
+		// and rely on invocation.Message to seed the request.
+		invocation.Session.EventMu.RLock()
+		hasEvents := len(invocation.Session.Events) > 0
+		invocation.Session.EventMu.RUnlock()
+		if hasEvents {
+			if skipHistory {
+				// When include_contents=none, only get events from current invocation
+				// to preserve tool call history within the current ReAct loop.
+				// This fixes the infinite loop issue where the agent doesn't see its
+				// own tool calls when running as an isolated subgraph.
+				messages = p.getCurrentInvocationMessages(invocation)
+			} else {
+				messages = p.getIncrementMessages(invocation, summaryUpdatedAt)
+			}
 		}
 		req.Messages = append(req.Messages, messages...)
 		needToAddInvocationMessage = len(messages) == 0
@@ -322,6 +329,10 @@ func (p *ContentRequestProcessor) ProcessRequest(
 				"role %s (no session or empty session)",
 			invocation.Message.Role,
 		)
+	}
+
+	if invocation.RunOptions.DisablePreprocessingEvents {
+		return
 	}
 
 	// Send a preprocessing event.
@@ -448,6 +459,10 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 		events = append(events, evt)
 	}
 	inv.Session.EventMu.RUnlock()
+
+	if len(events) == 0 && !includedInvocationMessage && inv.Message.Content != "" {
+		return []model.Message{inv.Message}
+	}
 
 	// insert invocation message
 	if !includedInvocationMessage && inv.Message.Content != "" {

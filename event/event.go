@@ -188,14 +188,18 @@ func (e *Event) Filter(filterKey string) bool {
 func New(invocationID, author string, opts ...Option) *Event {
 	e := &Event{
 		Response:     &model.Response{},
-		ID:           uuid.New().String(),
-		Timestamp:    time.Now(),
 		InvocationID: invocationID,
 		Author:       author,
 		Version:      CurrentVersion,
 	}
 	for _, opt := range opts {
 		opt(e)
+	}
+	if e.ID == "" {
+		e.ID = uuid.NewString()
+	}
+	if e.Timestamp.IsZero() {
+		e.Timestamp = time.Now()
 	}
 	return e
 }
@@ -276,48 +280,138 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 	// rather than attempting to send. This avoids a racy select where both
 	// the send and the ctx.Done() cases are ready, which could otherwise
 	// result in emitting an event after cancellation.
-	if err := ctx.Err(); err != nil {
+	select {
+	case <-ctx.Done():
+		object := ""
+		done := false
+		isPartial := false
+		if e.Response != nil {
+			object = e.Object
+			done = e.Done
+			isPartial = e.IsPartial
+		}
 		log.WarnfContext(
 			ctx,
-			"EmitEventWithTimeout: context cancelled, event: %+v",
-			*e,
+			"EmitEventWithTimeout: context cancelled, event_id=%s invocation_id=%s object=%s done=%v partial=%v",
+			e.ID,
+			e.InvocationID,
+			object,
+			done,
+			isPartial,
 		)
-		return err
+		return ctx.Err()
+	default:
 	}
 
-	log.TracefContext(ctx, "[EmitEventWithTimeout]queue monitoring: RequestID: %s, channel capacity: %d, current length: %d, branch: %s",
-		e.RequestID, cap(ch), len(ch), e.Branch)
+	if log.IsTraceEnabled() {
+		log.TracefContext(ctx, "[EmitEventWithTimeout]queue monitoring: RequestID: %s, channel capacity: %d, current length: %d, branch: %s",
+			e.RequestID, cap(ch), len(ch), e.Branch)
+	}
 
 	if timeout == EmitWithoutTimeout {
 		select {
 		case ch <- e:
-			log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %+v", *e)
+			if log.IsTraceEnabled() {
+				object := ""
+				done := false
+				isPartial := false
+				if e.Response != nil {
+					object = e.Object
+					done = e.Done
+					isPartial = e.IsPartial
+				}
+				log.TracefContext(
+					ctx,
+					"EmitEventWithTimeout: event sent, event_id=%s invocation_id=%s object=%s done=%v partial=%v",
+					e.ID,
+					e.InvocationID,
+					object,
+					done,
+					isPartial,
+				)
+			}
 		case <-ctx.Done():
+			object := ""
+			done := false
+			isPartial := false
+			if e.Response != nil {
+				object = e.Object
+				done = e.Done
+				isPartial = e.IsPartial
+			}
 			log.WarnfContext(
 				ctx,
-				"EmitEventWithTimeout: context cancelled, event: %+v",
-				*e,
+				"EmitEventWithTimeout: context cancelled, event_id=%s invocation_id=%s object=%s done=%v partial=%v",
+				e.ID,
+				e.InvocationID,
+				object,
+				done,
+				isPartial,
 			)
 			return ctx.Err()
 		}
 		return nil
 	}
 
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 	select {
 	case ch <- e:
-		log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %+v", *e)
+		if log.IsTraceEnabled() {
+			object := ""
+			done := false
+			isPartial := false
+			if e.Response != nil {
+				object = e.Object
+				done = e.Done
+				isPartial = e.IsPartial
+			}
+			log.TracefContext(
+				ctx,
+				"EmitEventWithTimeout: event sent, event_id=%s invocation_id=%s object=%s done=%v partial=%v",
+				e.ID,
+				e.InvocationID,
+				object,
+				done,
+				isPartial,
+			)
+		}
 	case <-ctx.Done():
+		object := ""
+		done := false
+		isPartial := false
+		if e.Response != nil {
+			object = e.Object
+			done = e.Done
+			isPartial = e.IsPartial
+		}
 		log.WarnfContext(
 			ctx,
-			"EmitEventWithTimeout: context cancelled, event: %+v",
-			*e,
+			"EmitEventWithTimeout: context cancelled, event_id=%s invocation_id=%s object=%s done=%v partial=%v",
+			e.ID,
+			e.InvocationID,
+			object,
+			done,
+			isPartial,
 		)
 		return ctx.Err()
-	case <-time.After(timeout):
+	case <-timer.C:
+		object := ""
+		done := false
+		isPartial := false
+		if e.Response != nil {
+			object = e.Object
+			done = e.Done
+			isPartial = e.IsPartial
+		}
 		log.WarnfContext(
 			ctx,
-			"EmitEventWithTimeout: timeout, event: %+v",
-			*e,
+			"EmitEventWithTimeout: timeout, event_id=%s invocation_id=%s object=%s done=%v partial=%v",
+			e.ID,
+			e.InvocationID,
+			object,
+			done,
+			isPartial,
 		)
 		return DefaultEmitTimeoutErr
 	}

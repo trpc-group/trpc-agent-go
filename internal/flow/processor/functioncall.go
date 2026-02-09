@@ -92,6 +92,10 @@ type FunctionCallResponseProcessor struct {
 	toolCallbacks       *tool.Callbacks
 }
 
+func (p *FunctionCallResponseProcessor) HandlesPartialResponse() bool {
+	return false
+}
+
 // NewFunctionCallResponseProcessor creates a new transfer response processor.
 func NewFunctionCallResponseProcessor(enableParallelTools bool, toolCallbacks *tool.Callbacks) *FunctionCallResponseProcessor {
 	return &FunctionCallResponseProcessor{

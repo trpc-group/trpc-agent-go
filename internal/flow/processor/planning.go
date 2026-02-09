@@ -130,6 +130,10 @@ type PlanningResponseProcessor struct {
 	Planner planner.Planner
 }
 
+func (p *PlanningResponseProcessor) HandlesPartialResponse() bool {
+	return false
+}
+
 // NewPlanningResponseProcessor creates a new planning response processor.
 func NewPlanningResponseProcessor(p planner.Planner) *PlanningResponseProcessor {
 	return &PlanningResponseProcessor{

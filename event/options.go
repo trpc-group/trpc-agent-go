@@ -11,6 +11,8 @@
 package event
 
 import (
+	"time"
+
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -71,5 +73,19 @@ func WithTag(tag string) Option {
 			return
 		}
 		e.Tag += TagDelimiter + tag
+	}
+}
+
+// WithID sets the ID for the event.
+func WithID(id string) Option {
+	return func(e *Event) {
+		e.ID = id
+	}
+}
+
+// WithTimestamp sets the timestamp for the event.
+func WithTimestamp(ts time.Time) Option {
+	return func(e *Event) {
+		e.Timestamp = ts
 	}
 }
