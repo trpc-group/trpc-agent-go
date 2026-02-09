@@ -25,7 +25,7 @@ import (
 )
 
 var (
-	mysqlDSN    = flag.String("dsn", "", "MySQL DSN used by evaluation managers")
+	mysqlDSN    = flag.String("dsn", "user:password@tcp(localhost:3306)/db?parseTime=true&charset=utf8mb4", "MySQL DSN used by evaluation managers")
 	tablePrefix = flag.String("table-prefix", "evaluation_example", "Table prefix applied to evaluation tables")
 	skipDBInit  = flag.Bool("skip-db-init", false, "Skip table creation during manager initialization")
 	modelName   = flag.String("model", "deepseek-chat", "Model to use for evaluation runs")

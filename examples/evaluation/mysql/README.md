@@ -19,7 +19,7 @@ This example runs the evaluation pipeline with MySQL-backed managers for EvalSet
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `-dsn` | MySQL DSN used by evaluation managers | `` |
+| `-dsn` | MySQL DSN used by evaluation managers | `user:password@tcp(localhost:3306)/db?parseTime=true&charset=utf8mb4` |
 | `-table-prefix` | Table prefix for all evaluation tables | `evaluation_example` |
 | `-skip-db-init` | Skip table creation during manager initialization | `false` |
 | `-eval-set` | Evaluation set ID to execute | `math-basic` |
