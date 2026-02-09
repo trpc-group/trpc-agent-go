@@ -77,6 +77,61 @@ system message，确保模型仍能看到已加载内容。
 要在真实工具链路中测量提升，参见 `benchmark/anthropic_skills` 的
 `prompt-cache` 套件。
 
+### 会话持久化（这些改动会写回 Session 吗？）
+
+先区分两个概念：
+
+- **Session（持久化）**：保存事件流（用户消息、助手消息、工具调用/结果）
+  + 一份小的键值 **state map**。
+- **模型请求（一次性的）**：本次发给模型的 `[]Message`，由 Session +
+  运行时配置拼出来。
+
+`skill_load` 只会把“已加载/已选文档”的**小状态**写入 Session（例如
+`temp:skill:loaded:*`、`temp:skill:docs:*`）。随后由请求处理器在
+**下一次模型请求**里，把对应的 `SKILL.md` 正文/已选 docs **物化**
+进去。
+
+重要：物化不会把“扩展后的 tool result 内容”写回 Session。
+所以如果你去看 Session 里保存的工具结果，`skill_load` 仍然通常是
+一个很短的 stub（比如 `loaded: internal-comms`）。但模型在每次请求
+里仍能看到完整正文/文档，因为它们是在构造请求时注入的。
+
+后续请求的稳定性：
+- 在同一次工具链路里，每次模型调用前都会按同一套规则重新物化，
+  所以只要 skills 仓库内容和选择状态不变，模型看到的 skill 内容
+  就是稳定的。
+- 如果本次请求 history 里没有对应的 tool result（例如 history
+  suppression 或截断），框架会回退为插入一条专用 system message
+  （`Loaded skill context:`）来保证正确性。但这会让 system 内容发生变化，
+  prompt cache 的收益可能会变小。
+
+### 与业界实现对比（动态上下文放在哪里？）
+
+很多框架为了更友好地利用 prompt cache，会尽量避免在多步工具链路中
+不断改写 system prompt，而是把动态上下文放到 **tool 消息**（工具结果）
+里，让 system 更稳定。
+
+一些例子：
+- OpenClaw：system prompt 列出可用 skills，但选中 skill 的 `SKILL.md`
+  会要求通过工具读取（正文落在 tool result 里）：
+  https://github.com/openclaw/openclaw/blob/0cf93b8fa74566258131f9e8ca30f313aac89d26/src/agents/system-prompt.ts
+- OpenAI Codex：项目文档中渲染 skills 列表，并要求按需打开 `SKILL.md`
+ （正文来自读文件工具的 tool result）：
+  https://github.com/openai/codex/blob/383b45279efda1ef611a4aa286621815fe656b8a/codex-rs/core/src/project_doc.rs
+- LangGraph：工具执行产出 `ToolMessage` 并作为消息状态的一部分（工具输出是
+  显式消息，而不是 system 编辑）：
+  https://github.com/langchain-ai/langgraph/blob/f6d95abbe367f7b757b879c4c4a5910c91ed50c1/libs/prebuilt/langgraph/prebuilt/tool_node.py
+- OpenAI Agents（Python）：工具输出会序列化成 `"role": "tool"` 的消息，
+  并用 `tool_call_id` 关联：
+  https://github.com/openai/openai-agents-python/blob/ff3a186ec3b0d4176264ba79bcdc60703353e189/src/agents/models/chatcmpl_converter.py
+
+在 trpc-agent-go 中：
+- 旧模式：把已加载的 skill 正文/文档追加到 **system message**
+  （简单、兼容旧语义，但可能缩短可缓存的前缀）。
+- 新模式（可选）：保持 system 更稳定，把已加载内容物化到 `skill_load` /
+  `skill_select_docs` 的 **tool result** 消息中（更接近“工具消息承载动态上下文”
+  的主流模式）。
+
 ### 目录结构
 
 ```

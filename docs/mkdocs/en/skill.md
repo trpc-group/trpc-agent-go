@@ -83,6 +83,65 @@ Enable tool-result materialization with:
 To measure the impact in a real tool-using flow, run the
 `benchmark/anthropic_skills` `prompt-cache` suite.
 
+### Session Persistence (Will This Change Tool Results in the Session?)
+
+It helps to separate two concepts:
+
+- **Session (persistent):** a stored log of events (user messages,
+  assistant messages, tool calls/results) plus a small key/value
+  **state map**.
+- **Model request (ephemeral):** the `[]Message` array sent to the model
+  for *this* call, built from the session + runtime configuration.
+
+`skill_load` stores only small state keys (loaded flag + doc selection).
+Request processors then **materialize** the full `SKILL.md` body/docs
+into the *next* model request.
+
+Important: materialization does **not** rewrite the session transcript.
+So if you inspect stored tool results, `skill_load` typically still looks
+like a short stub (for example, `loaded: internal-comms`). The model
+still sees the expanded body/docs because they are added when building
+the outbound request.
+
+Stability across calls:
+- Within a tool loop, the materialization is re-applied deterministically
+  on every model call, so later requests see the same skill content as
+  long as the skills repo and selection state are unchanged.
+- If the relevant tool result message is missing from the request history
+  (for example, history suppression or truncation), the framework falls
+  back to a dedicated system message (`Loaded skill context:`) to preserve
+  correctness. This fallback may reduce prompt-cache benefits because it
+  changes the system content.
+
+### Industry Comparison (Where Dynamic Context Lives)
+
+Many agent frameworks avoid mutating the system prompt mid-loop. Instead,
+they fetch dynamic context via a tool and keep that context in **tool
+messages**, which is typically more prompt-cache friendly.
+
+Examples:
+- OpenClaw: system prompt lists available skills, but the selected
+  `SKILL.md` is read via a tool (so the body lands in a tool result):
+  https://github.com/openclaw/openclaw/blob/0cf93b8fa74566258131f9e8ca30f313aac89d26/src/agents/system-prompt.ts
+- OpenAI Codex: project docs render a skills list and instruct opening
+  `SKILL.md` on demand (skill body comes from a file-read tool result):
+  https://github.com/openai/codex/blob/383b45279efda1ef611a4aa286621815fe656b8a/codex-rs/core/src/project_doc.rs
+- LangGraph: tool execution produces `ToolMessage` objects that become
+  part of the message state (tool outputs are explicit messages, not
+  system edits):
+  https://github.com/langchain-ai/langgraph/blob/f6d95abbe367f7b757b879c4c4a5910c91ed50c1/libs/prebuilt/langgraph/prebuilt/tool_node.py
+- OpenAI Agents (Python): tool outputs are serialized as `"role": "tool"`
+  messages keyed by `tool_call_id`:
+  https://github.com/openai/openai-agents-python/blob/ff3a186ec3b0d4176264ba79bcdc60703353e189/src/agents/models/chatcmpl_converter.py
+
+In trpc-agent-go:
+- Legacy mode appends loaded skill bodies/docs to the **system message**
+  (simple and backward-compatible, but can reduce cacheable prefix length).
+- Tool-result materialization keeps the **system message stable** and
+  attaches loaded skill bodies/docs to `skill_load` / `skill_select_docs`
+  tool result messages (closer to the “tool message carries context”
+  pattern used above).
+
 ### File Layout
 
 ```
