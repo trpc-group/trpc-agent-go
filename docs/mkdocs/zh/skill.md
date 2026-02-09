@@ -118,12 +118,6 @@ system message，确保模型仍能看到已加载内容。
 - OpenAI Codex：项目文档中渲染 skills 列表，并要求按需打开 `SKILL.md`
  （正文来自读文件工具的 tool result）：
   https://github.com/openai/codex/blob/383b45279efda1ef611a4aa286621815fe656b8a/codex-rs/core/src/project_doc.rs
-- LangGraph：工具执行产出 `ToolMessage` 并作为消息状态的一部分（工具输出是
-  显式消息，而不是 system 编辑）：
-  https://github.com/langchain-ai/langgraph/blob/f6d95abbe367f7b757b879c4c4a5910c91ed50c1/libs/prebuilt/langgraph/prebuilt/tool_node.py
-- OpenAI Agents（Python）：工具输出会序列化成 `"role": "tool"` 的消息，
-  并用 `tool_call_id` 关联：
-  https://github.com/openai/openai-agents-python/blob/ff3a186ec3b0d4176264ba79bcdc60703353e189/src/agents/models/chatcmpl_converter.py
 
 在 trpc-agent-go 中：
 - 旧模式：把已加载的 skill 正文/文档追加到 **system message**

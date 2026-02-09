@@ -126,13 +126,6 @@ Examples:
 - OpenAI Codex: project docs render a skills list and instruct opening
   `SKILL.md` on demand (skill body comes from a file-read tool result):
   https://github.com/openai/codex/blob/383b45279efda1ef611a4aa286621815fe656b8a/codex-rs/core/src/project_doc.rs
-- LangGraph: tool execution produces `ToolMessage` objects that become
-  part of the message state (tool outputs are explicit messages, not
-  system edits):
-  https://github.com/langchain-ai/langgraph/blob/f6d95abbe367f7b757b879c4c4a5910c91ed50c1/libs/prebuilt/langgraph/prebuilt/tool_node.py
-- OpenAI Agents (Python): tool outputs are serialized as `"role": "tool"`
-  messages keyed by `tool_call_id`:
-  https://github.com/openai/openai-agents-python/blob/ff3a186ec3b0d4176264ba79bcdc60703353e189/src/agents/models/chatcmpl_converter.py
 
 In trpc-agent-go:
 - Legacy mode appends loaded skill bodies/docs to the **system message**
