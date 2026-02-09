@@ -163,14 +163,11 @@ func TestTryRead_Artifact_WithService(t *testing.T) {
 		UserID:    sess.UserID,
 		SessionID: sess.ID,
 	}
-	ctxIO := codeexecutor.WithArtifactService(ctx, svc)
-	ctxIO = codeexecutor.WithArtifactSession(ctxIO, info)
-	_, err := codeexecutor.SaveArtifactHelper(
-		ctxIO,
-		"x.txt",
-		[]byte("hi"),
-		"text/plain",
-	)
+	_, err := svc.SaveArtifact(ctx, info, "x.txt", &artifact.Artifact{
+		Data:     []byte("hi"),
+		MimeType: "text/plain",
+		Name:     "x.txt",
+	})
 	require.NoError(t, err)
 
 	content, mime, handled, err := fileref.TryRead(ctx, "artifact://x.txt")
@@ -204,17 +201,22 @@ func TestTryRead_ParseErrorHandled(t *testing.T) {
 
 func TestTryRead_Artifact_WithServiceInContext(t *testing.T) {
 	svc := artifactinmemory.NewService()
+	sess := session.NewSession("app", "user", "sess")
 
-	ctx := context.Background()
-	ctx = codeexecutor.WithArtifactService(ctx, svc)
-	ctx = codeexecutor.WithArtifactSession(ctx, artifact.SessionInfo{})
+	inv := agent.NewInvocation()
+	inv.Session = sess
+	inv.ArtifactService = svc
+	ctx := agent.NewInvocationContext(context.Background(), inv)
 
-	_, err := codeexecutor.SaveArtifactHelper(
-		ctx,
-		"x.txt",
-		[]byte("hi"),
-		"text/plain",
-	)
+	_, err := svc.SaveArtifact(ctx, artifact.SessionInfo{
+		AppName:   sess.AppName,
+		UserID:    sess.UserID,
+		SessionID: sess.ID,
+	}, "x.txt", &artifact.Artifact{
+		Data:     []byte("hi"),
+		MimeType: "text/plain",
+		Name:     "x.txt",
+	})
 	require.NoError(t, err)
 
 	content, mime, handled, err := fileref.TryRead(ctx, "artifact://x.txt")

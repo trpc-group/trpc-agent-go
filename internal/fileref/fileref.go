@@ -23,7 +23,6 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
-	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcache"
 )
 
@@ -89,7 +88,7 @@ func Parse(raw string) (Ref, error) {
 		if rest == "" {
 			return Ref{}, fmt.Errorf(errArtifactNameEmpty)
 		}
-		name, ver, err := codeexecutor.ParseArtifactRef(rest)
+		name, ver, err := parseArtifactRef(rest)
 		if err != nil {
 			return Ref{}, err
 		}
@@ -198,25 +197,84 @@ func loadArtifactFromContext(
 	name string,
 	version *int,
 ) ([]byte, string, int, error) {
-	ctxIO := withArtifactContext(ctx)
-	return codeexecutor.LoadArtifactHelper(ctxIO, name, version)
+	svc, info, ok := artifactTargetFromContext(ctx)
+	if !ok || svc == nil {
+		return nil, "", 0, fmt.Errorf("artifact service not in context")
+	}
+	art, err := svc.LoadArtifact(ctx, info, name, version)
+	if err != nil {
+		return nil, "", 0, err
+	}
+	if art == nil {
+		return nil, "", 0, fmt.Errorf("artifact not found: %s", name)
+	}
+	mt := art.MimeType
+	if mt == "" {
+		mt = "application/octet-stream"
+	}
+	actual := resolveArtifactVersion(ctx, svc, info, name, version)
+	return art.Data, mt, actual, nil
 }
 
-func withArtifactContext(ctx context.Context) context.Context {
-	if svc, ok := codeexecutor.ArtifactServiceFromContext(ctx); ok &&
-		svc != nil {
-		return ctx
-	}
+func artifactTargetFromContext(
+	ctx context.Context,
+) (artifact.Service, artifact.SessionInfo, bool) {
 	inv, ok := agent.InvocationFromContext(ctx)
 	if !ok || inv == nil || inv.ArtifactService == nil ||
 		inv.Session == nil {
-		return ctx
+		return nil, artifact.SessionInfo{}, false
+	}
+	if inv.Session.AppName == "" || inv.Session.UserID == "" ||
+		inv.Session.ID == "" {
+		return nil, artifact.SessionInfo{}, false
 	}
 	info := artifact.SessionInfo{
 		AppName:   inv.Session.AppName,
 		UserID:    inv.Session.UserID,
 		SessionID: inv.Session.ID,
 	}
-	ctx = codeexecutor.WithArtifactService(ctx, inv.ArtifactService)
-	return codeexecutor.WithArtifactSession(ctx, info)
+	return inv.ArtifactService, info, true
+}
+
+func resolveArtifactVersion(
+	ctx context.Context,
+	svc artifact.Service,
+	info artifact.SessionInfo,
+	name string,
+	version *int,
+) int {
+	if version != nil {
+		return *version
+	}
+	vers, err := svc.ListVersions(ctx, info, name)
+	if err != nil || len(vers) == 0 {
+		return 0
+	}
+	max := vers[0]
+	for _, v := range vers[1:] {
+		if v > max {
+			max = v
+		}
+	}
+	return max
+}
+
+func parseArtifactRef(ref string) (string, *int, error) {
+	parts := strings.Split(ref, "@")
+	if len(parts) == 1 {
+		return parts[0], nil, nil
+	}
+	if len(parts) == 2 {
+		var v int
+		for _, r := range parts[1] {
+			if r < '0' || r > '9' {
+				return "", nil, fmt.Errorf("invalid version: %s", parts[1])
+			}
+		}
+		for i := 0; i < len(parts[1]); i++ {
+			v = v*10 + int(parts[1][i]-'0')
+		}
+		return parts[0], &v, nil
+	}
+	return "", nil, fmt.Errorf("invalid artifact ref: %s", ref)
 }

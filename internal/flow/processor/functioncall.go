@@ -23,7 +23,6 @@ import (
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
-	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
@@ -892,18 +891,17 @@ func maybeEvictToolResult(
 	if limit <= 0 || toolResultTokens(resultBytes) <= limit {
 		return resultBytes
 	}
-	ctxIO, ok := toolResultArtifactContext(ctx, invocation)
-	if !ok {
+	svc, info, ok := toolResultArtifactTarget(invocation)
+	if !ok || svc == nil {
 		return resultBytes
 	}
 	artifactName := toolResultArtifactName(toolCall)
 	storage := formatToolResultForStorage(resultBytes)
-	version, err := codeexecutor.SaveArtifactHelper(
-		ctxIO,
-		artifactName,
-		storage.data,
-		storage.mimeType,
-	)
+	version, err := svc.SaveArtifact(ctx, info, artifactName, &artifact.Artifact{
+		Data:     storage.data,
+		MimeType: storage.mimeType,
+		Name:     artifactName,
+	})
 	if err != nil {
 		log.WarnfContext(
 			ctx,
@@ -1070,25 +1068,23 @@ func truncateToolResultPreview(content string) string {
 	return string(runes[:toolResultPreviewRunes]) + "..."
 }
 
-func toolResultArtifactContext(
-	ctx context.Context,
+func toolResultArtifactTarget(
 	invocation *agent.Invocation,
-) (context.Context, bool) {
+) (artifact.Service, artifact.SessionInfo, bool) {
 	if invocation == nil || invocation.ArtifactService == nil ||
 		invocation.Session == nil {
-		return ctx, false
+		return nil, artifact.SessionInfo{}, false
 	}
 	if invocation.Session.AppName == "" || invocation.Session.UserID == "" ||
 		invocation.Session.ID == "" {
-		return ctx, false
+		return nil, artifact.SessionInfo{}, false
 	}
-	ctx = codeexecutor.WithArtifactService(ctx, invocation.ArtifactService)
-	ctx = codeexecutor.WithArtifactSession(ctx, artifact.SessionInfo{
+	info := artifact.SessionInfo{
 		AppName:   invocation.Session.AppName,
 		UserID:    invocation.Session.UserID,
 		SessionID: invocation.Session.ID,
-	})
-	return ctx, true
+	}
+	return invocation.ArtifactService, info, true
 }
 
 func toolResultArtifactName(toolCall model.ToolCall) string {
