@@ -68,7 +68,7 @@ type usageDetails struct {
 	InputCacheCreation int64 `json:"input_cache_creation,omitempty"`
 }
 
-// isEmpty reports whether all fields are zero.
+// empty reports whether all fields are zero.
 func (u *usageDetails) empty() bool {
-	return u.Input == 0 && u.Output == 0 && u.InputCached == 0 && u.InputCacheRead == 0 && u.InputCacheCreation == 0
+	return *u == (usageDetails{})
 }
