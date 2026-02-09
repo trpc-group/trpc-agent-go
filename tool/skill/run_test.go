@@ -1414,6 +1414,8 @@ func TestResolveCWD_RelPath_BackslashTraversalDoesNotEscape(t *testing.T) {
 
 // Validate Declaration basics and required fields.
 func TestRunTool_Declaration(t *testing.T) {
+	t.Setenv(envAllowedCommands, "")
+	t.Setenv(envDeniedCommands, "")
 	rt := NewRunTool(nil, nil)
 	d := rt.Declaration()
 	require.NotNil(t, d)
