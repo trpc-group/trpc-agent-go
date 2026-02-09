@@ -44,7 +44,7 @@ var (
 // kept tool call message to avoid invalid tool message sequences in strict chat APIs.
 func SanitizeMessagesWithTools(messages []model.Message, tools map[string]tool.Tool) []model.Message {
 	if len(messages) == 0 {
-		return nil
+		return messages
 	}
 	out := make([]model.Message, 0, len(messages))
 	for i := 0; i < len(messages); {

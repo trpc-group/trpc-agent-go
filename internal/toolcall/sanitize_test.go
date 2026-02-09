@@ -62,6 +62,19 @@ func TestSanitizeMessagesWithTools_DowngradesInvalidToolCallAndResult(t *testing
 	}
 }
 
+func TestSanitizeMessagesWithTools_PreservesNilMessagesSlice(t *testing.T) {
+	var in []model.Message
+	out := SanitizeMessagesWithTools(in, nil)
+	assert.Nil(t, out)
+}
+
+func TestSanitizeMessagesWithTools_PreservesEmptyMessagesSlice(t *testing.T) {
+	in := make([]model.Message, 0)
+	out := SanitizeMessagesWithTools(in, nil)
+	assert.NotNil(t, out)
+	assert.Len(t, out, 0)
+}
+
 func TestSanitizeMessagesWithTools_PreservesValidToolRound(t *testing.T) {
 	in := []model.Message{
 		model.NewUserMessage("hi"),
