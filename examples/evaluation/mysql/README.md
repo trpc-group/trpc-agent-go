@@ -14,13 +14,12 @@ This example runs the evaluation pipeline with MySQL-backed managers for EvalSet
 |----------|-------------|---------------|
 | `OPENAI_API_KEY` | API key for the model service (required) | `` |
 | `OPENAI_BASE_URL` | Base URL for the model API endpoint | `https://api.openai.com/v1` |
-| `EVALUATION_MYSQL_DSN` | DSN used by the example. Can be overridden via `-dsn`. | `` |
 
 ## Configuration Flags
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `-dsn` | MySQL DSN used by evaluation managers | `$EVALUATION_MYSQL_DSN` |
+| `-dsn` | MySQL DSN used by evaluation managers | `` |
 | `-table-prefix` | Table prefix for all evaluation tables | `evaluation_example` |
 | `-skip-db-init` | Skip table creation during manager initialization | `false` |
 | `-eval-set` | Evaluation set ID to execute | `math-basic` |

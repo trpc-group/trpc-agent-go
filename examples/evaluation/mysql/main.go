@@ -15,7 +15,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"os"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation"
 	evalresultmysql "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/mysql"
@@ -26,7 +25,7 @@ import (
 )
 
 var (
-	mysqlDSN    = flag.String("dsn", os.Getenv("EVALUATION_MYSQL_DSN"), "MySQL DSN used by evaluation managers")
+	mysqlDSN    = flag.String("dsn", "", "MySQL DSN used by evaluation managers")
 	tablePrefix = flag.String("table-prefix", "evaluation_example", "Table prefix applied to evaluation tables")
 	skipDBInit  = flag.Bool("skip-db-init", false, "Skip table creation during manager initialization")
 	modelName   = flag.String("model", "deepseek-chat", "Model to use for evaluation runs")
@@ -46,7 +45,7 @@ func main() {
 
 func run(ctx context.Context) error {
 	if *mysqlDSN == "" {
-		return errors.New("missing MySQL DSN, set -dsn or EVALUATION_MYSQL_DSN")
+		return errors.New("missing MySQL DSN, set -dsn")
 	}
 
 	runner := runner.NewRunner(appName, newCalculatorAgent(*modelName, *streaming))
