@@ -652,6 +652,149 @@ func TestFindHeadingLineStartFallback(t *testing.T) {
 	}
 }
 
+func TestNormalizeHeadingLineStart(t *testing.T) {
+	tests := []struct {
+		name             string
+		headingLineStart int
+		lastHeaderPos    int
+		want             int
+	}{
+		{
+			name:             "negative start is clamped to lastHeaderPos",
+			headingLineStart: -1,
+			lastHeaderPos:    12,
+			want:             12,
+		},
+		{
+			name:             "start less than lastHeaderPos is clamped",
+			headingLineStart: 8,
+			lastHeaderPos:    12,
+			want:             12,
+		},
+		{
+			name:             "start equals lastHeaderPos is preserved",
+			headingLineStart: 12,
+			lastHeaderPos:    12,
+			want:             12,
+		},
+		{
+			name:             "start greater than lastHeaderPos is preserved",
+			headingLineStart: 30,
+			lastHeaderPos:    12,
+			want:             30,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := normalizeHeadingLineStart(tt.headingLineStart, tt.lastHeaderPos)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestIsATXHeadingLineAtLevel(t *testing.T) {
+	tests := []struct {
+		name  string
+		line  []byte
+		level int
+		want  bool
+	}{
+		{
+			name:  "invalid level zero",
+			line:  []byte("# Title"),
+			level: 0,
+			want:  false,
+		},
+		{
+			name:  "invalid negative level",
+			line:  []byte("# Title"),
+			level: -1,
+			want:  false,
+		},
+		{
+			name:  "leading spaces greater than three are rejected",
+			line:  []byte("    # Title"),
+			level: 1,
+			want:  false,
+		},
+		{
+			name:  "leading spaces up to three are accepted",
+			line:  []byte("   # Title"),
+			level: 1,
+			want:  true,
+		},
+		{
+			name:  "exact marker length is accepted",
+			line:  []byte("##"),
+			level: 2,
+			want:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isATXHeadingLineAtLevel(tt.line, tt.level)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestFindLineContentStartPos(t *testing.T) {
+	source := []byte("line1\nline2")
+
+	tests := []struct {
+		name      string
+		src       []byte
+		lineStart int
+		want      int
+	}{
+		{
+			name:      "negative line start returns zero",
+			src:       source,
+			lineStart: -3,
+			want:      0,
+		},
+		{
+			name:      "line start beyond source length returns source length",
+			src:       source,
+			lineStart: len(source) + 5,
+			want:      len(source),
+		},
+		{
+			name:      "line start equal source length returns source length",
+			src:       source,
+			lineStart: len(source),
+			want:      len(source),
+		},
+		{
+			name:      "normal line start returns next line start",
+			src:       source,
+			lineStart: 0,
+			want:      6,
+		},
+		{
+			name:      "line without trailing newline returns source length",
+			src:       source,
+			lineStart: 6,
+			want:      len(source),
+		},
+		{
+			name:      "empty source with negative start returns zero",
+			src:       []byte(""),
+			lineStart: -1,
+			want:      0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := findLineContentStartPos(tt.src, tt.lineStart)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func mustFindHeadingByLevel(t *testing.T, content string, level int) ast.Node {
 	t.Helper()
 

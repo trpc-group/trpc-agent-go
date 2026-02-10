@@ -259,12 +259,7 @@ func (m *MarkdownChunking) splitByHeader(content string, level int) []headerSect
 			//   Equality is allowed when position recovery fails and we clamp to
 			//   lastHeaderPos. In that case the previous range is empty and is
 			//   safely dropped by the existing TrimSpace/empty-content filter.
-			if headingLineStart < 0 {
-				headingLineStart = lastHeaderPos
-			}
-			if headingLineStart < lastHeaderPos {
-				headingLineStart = lastHeaderPos
-			}
+			headingLineStart = normalizeHeadingLineStart(headingLineStart, lastHeaderPos)
 
 			// Save the previous section before starting a new one
 			if lastHeader != nil {
@@ -353,6 +348,18 @@ func findNodeStartPos(heading ast.Node, source []byte) int {
 		return ast.WalkStop, nil
 	})
 	return startPos
+}
+
+// normalizeHeadingLineStart keeps headingLineStart monotonic with lastHeaderPos.
+// This prevents invalid slice bounds when section ranges are computed.
+func normalizeHeadingLineStart(headingLineStart, lastHeaderPos int) int {
+	if headingLineStart < 0 {
+		return lastHeaderPos
+	}
+	if headingLineStart < lastHeaderPos {
+		return lastHeaderPos
+	}
+	return headingLineStart
 }
 
 // findHeadingLineStartFallback scans source lines to find the next ATX heading
