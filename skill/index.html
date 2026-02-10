@@ -86,7 +86,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#skill-agent-skills" class="md-skip">
+        <a href="#skill" class="md-skip">
           Skip to content
         </a>
       
@@ -890,9 +890,36 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#token-cost-why-progressive-disclosure-matters" class="md-nav__link">
+  <a href="#token-cost" class="md-nav__link">
     <span class="md-ellipsis">
-      Token Cost (Why Progressive Disclosure Matters)
+      Token Cost
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prompt-cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      Prompt Cache
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#session-persistence" class="md-nav__link">
+    <span class="md-ellipsis">
+      Session Persistence
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#industry-comparison" class="md-nav__link">
+    <span class="md-ellipsis">
+      Industry Comparison
     </span>
   </a>
   
@@ -1033,9 +1060,9 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#rationale-and-design-brief" class="md-nav__link">
+  <a href="#rationale-and-design" class="md-nav__link">
     <span class="md-ellipsis">
-      Rationale and Design (brief)
+      Rationale and Design
     </span>
   </a>
   
@@ -1826,9 +1853,36 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#token-cost-why-progressive-disclosure-matters" class="md-nav__link">
+  <a href="#token-cost" class="md-nav__link">
     <span class="md-ellipsis">
-      Token Cost (Why Progressive Disclosure Matters)
+      Token Cost
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prompt-cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      Prompt Cache
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#session-persistence" class="md-nav__link">
+    <span class="md-ellipsis">
+      Session Persistence
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#industry-comparison" class="md-nav__link">
+    <span class="md-ellipsis">
+      Industry Comparison
     </span>
   </a>
   
@@ -1969,9 +2023,9 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#rationale-and-design-brief" class="md-nav__link">
+  <a href="#rationale-and-design" class="md-nav__link">
     <span class="md-ellipsis">
-      Rationale and Design (brief)
+      Rationale and Design
     </span>
   </a>
   
@@ -2027,7 +2081,7 @@
   
 
 
-<h1 id="skill-agent-skills">Skill (Agent Skills)</h1>
+<h1 id="skill">Skill</h1>
 <p>Agent Skills package reusable workflows as folders with a <code>SKILL.md</code>
 spec plus optional docs and scripts. During a conversation, the agent
 injects a low‑cost “overview” first, then loads the full body/docs only
@@ -2056,18 +2110,94 @@ when actually needed, and runs scripts inside an isolated workspace.</p>
    - Inject only <code>name</code> and <code>description</code> from <code>SKILL.md</code> into the
      system message so the model knows what skills exist.</p>
 <p>2) Full body (on demand)
-   - When a task truly needs a skill, the model calls <code>skill_load</code> and
-     the framework injects that skill’s full <code>SKILL.md</code> body.</p>
+   - When a task truly needs a skill, the model calls <code>skill_load</code>. The
+     framework then materializes that skill’s full <code>SKILL.md</code> body into
+     the next model request (see “Prompt Cache” below).</p>
 <p>3) Docs/Scripts (selective + isolated execution)
-   - Docs are included only when requested; scripts are not inlined but
-     executed inside a workspace, returning results and output files.</p>
-<h3 id="token-cost-why-progressive-disclosure-matters">Token Cost (Why Progressive Disclosure Matters)</h3>
+   - Docs are included only when requested (via <code>skill_load</code> or
+     <code>skill_select_docs</code>). Scripts are not inlined; they are executed
+     inside a workspace, returning results and output files.</p>
+<h3 id="token-cost">Token Cost</h3>
 <p>If you inline a full skills repo (all <code>SKILL.md</code> bodies and docs) into
 the prompt up-front, it can dominate your prompt-token budget and even
 exceed the model context window.</p>
 <p>For a reproducible, <strong>runtime</strong> token comparison (progressive disclosure
 vs full injection), see <code>benchmark/anthropic_skills/README.md</code> and run
 the <code>token-report</code> suite described there.</p>
+<h3 id="prompt-cache">Prompt Cache</h3>
+<p>Some model providers support <strong>prompt caching</strong>: if a later model request
+starts with the exact same tokens as an earlier request, the provider
+can reuse that shared <strong>prefix</strong> from cache. This reduces work and can
+lower latency and/or input token cost (provider-dependent).</p>
+<p>For Skills, <em>where</em> the loaded <code>SKILL.md</code> body/docs land in the message
+sequence affects how long the shared prefix is:</p>
+<ul>
+<li>Legacy behavior (default): loaded skill bodies/docs are appended to the
+  <strong>system message</strong>.<ul>
+<li>This inserts new tokens <strong>before</strong> the user message and history,
+  which can shorten the shared prefix between consecutive model calls.</li>
+</ul>
+</li>
+<li>Tool-result materialization (optional): loaded skill bodies/docs are
+  appended to the matching <strong>tool result</strong> messages (<code>skill_load</code> /
+  <code>skill_select_docs</code>).<ul>
+<li>This keeps the system message stable, so earlier messages are less
+  likely to shift, and prompt caching can often reuse a longer prefix.</li>
+</ul>
+</li>
+</ul>
+<p>Fallback: if the matching tool result message is not present in the
+request history (for example, history suppression), the framework falls
+back to a dedicated system message so the model still sees the loaded
+content.</p>
+<p>Enable tool-result materialization with:
+<code>llmagent.WithSkillsLoadedContentInToolResults(true)</code>.</p>
+<p>To measure the impact in a real tool-using flow, run the
+<code>benchmark/anthropic_skills</code> <code>prompt-cache</code> suite.</p>
+<h3 id="session-persistence">Session Persistence</h3>
+<p>It helps to separate two concepts:</p>
+<ul>
+<li><strong>Session (persistent):</strong> a stored log of events (user messages,
+  assistant messages, tool calls/results) plus a small key/value
+  <strong>state map</strong>.</li>
+<li><strong>Model request (ephemeral):</strong> the <code>[]Message</code> array sent to the model
+  for <em>this</em> call, built from the session + runtime configuration.</li>
+</ul>
+<p><code>skill_load</code> stores only small state keys (loaded flag + doc selection).
+Request processors then <strong>materialize</strong> the full <code>SKILL.md</code> body/docs
+into the <em>next</em> model request.</p>
+<p>Important: materialization does <strong>not</strong> rewrite the session transcript.
+So if you inspect stored tool results, <code>skill_load</code> typically still looks
+like a short stub (for example, <code>loaded: internal-comms</code>). The model
+still sees the expanded body/docs because they are added when building
+the outbound request.</p>
+<p>Stability across calls:
+- Within a tool loop, the materialization is re-applied deterministically
+  on every model call, so later requests see the same skill content as
+  long as the skills repo and selection state are unchanged.
+- If the relevant tool result message is missing from the request history
+  (for example, history suppression or truncation), the framework falls
+  back to a dedicated system message (<code>Loaded skill context:</code>) to preserve
+  correctness. This fallback may reduce prompt-cache benefits because it
+  changes the system content.</p>
+<h3 id="industry-comparison">Industry Comparison</h3>
+<p>Many agent frameworks avoid mutating the system prompt mid-loop. Instead,
+they fetch dynamic context via a tool and keep that context in <strong>tool
+messages</strong>, which is typically more prompt-cache friendly.</p>
+<p>Examples:
+- OpenClaw: system prompt lists available skills, but the selected
+  <code>SKILL.md</code> is read via a tool (so the body lands in a tool result):
+  https://github.com/openclaw/openclaw/blob/0cf93b8fa74566258131f9e8ca30f313aac89d26/src/agents/system-prompt.ts
+- OpenAI Codex: project docs render a skills list and instruct opening
+  <code>SKILL.md</code> on demand (skill body comes from a file-read tool result):
+  https://github.com/openai/codex/blob/383b45279efda1ef611a4aa286621815fe656b8a/codex-rs/core/src/project_doc.rs</p>
+<p>In trpc-agent-go:
+- Legacy mode appends loaded skill bodies/docs to the <strong>system message</strong>
+  (simple and backward-compatible, but can reduce cacheable prefix length).
+- Tool-result materialization keeps the <strong>system message stable</strong> and
+  attaches loaded skill bodies/docs to <code>skill_load</code> / <code>skill_select_docs</code>
+  tool result messages (closer to the “tool message carries context”
+  pattern used above).</p>
 <h3 id="file-layout">File Layout</h3>
 <div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1">1</a></span>
 <span class="normal"><a href="#__codelineno-0-2">2</a></span>
@@ -2120,7 +2250,9 @@ used for convenience during development.</p>
 <span class="normal"><a href="#__codelineno-2-11">11</a></span>
 <span class="normal"><a href="#__codelineno-2-12">12</a></span>
 <span class="normal"><a href="#__codelineno-2-13">13</a></span>
-<span class="normal"><a href="#__codelineno-2-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+<span class="normal"><a href="#__codelineno-2-14">14</a></span>
+<span class="normal"><a href="#__codelineno-2-15">15</a></span>
+<span class="normal"><a href="#__codelineno-2-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
 </span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="w">    </span><span class="nx">local</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/codeexecutor/local&quot;</span>
 </span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/skill&quot;</span>
@@ -2133,7 +2265,9 @@ used for convenience during development.</p>
 </span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11"></a><span class="w">    </span><span class="s">&quot;skills-assistant&quot;</span><span class="p">,</span>
 </span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithSkills</span><span class="p">(</span><span class="nx">repo</span><span class="p">),</span>
 </span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithCodeExecutor</span><span class="p">(</span><span class="nx">exec</span><span class="p">),</span>
-</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14"></a><span class="p">)</span>
+</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14"></a><span class="w">    </span><span class="c1">// Optional: keep the system prompt stable for prompt caching.</span>
+</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithSkillsLoadedContentInToolResults</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-2-16"><a id="__codelineno-2-16" name="__codelineno-2-16"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>Key points:
 - Request processor injects overview and on‑demand content:
@@ -2232,7 +2366,11 @@ https://github.com/anthropics/skills</p>
 - Writes session-scoped <code>temp:*</code> keys:
   - <code>temp:skill:loaded:&lt;name&gt;</code> = "1"
   - <code>temp:skill:docs:&lt;name&gt;</code> = "*" or JSON array
-- Request processor injects <code>SKILL.md</code> body and docs into system message</p>
+- Request processors materialize <code>SKILL.md</code> body and docs into the next
+  model request:
+  - Default: appended to the system message (legacy behavior)
+  - Optional: appended to the matching tool result message
+    (<code>llmagent.WithSkillsLoadedContentInToolResults(true)</code>)</p>
 <p>Notes:
 - Prefer progressive disclosure: load only the body first, then list and
   select only the docs you need. Avoid <code>include_all_docs</code> unless you
@@ -2518,13 +2656,14 @@ in tools like <code>read_file</code>.</p>
 <p>Common spans:
 - <code>workspace.create</code>, <code>workspace.stage.*</code>, <code>workspace.run</code>
 - <code>workspace.collect</code>, <code>workspace.cleanup</code>, <code>workspace.inline</code></p>
-<h2 id="rationale-and-design-brief">Rationale and Design (brief)</h2>
+<h2 id="rationale-and-design">Rationale and Design</h2>
 <ul>
 <li>Motivation: Skills often contain lengthy instructions and scripts.
   Inlining all of them is costly and risky. The three‑layer model keeps
   the prompt lean while loading details and running code only when needed.</li>
 <li>Injection &amp; state: Tools write temporary keys (via <code>StateDelta</code>), and
-  the next request processor builds the system message accordingly.</li>
+  request processors materialize loaded bodies/docs into the prompt
+  (system message by default, or tool results when enabled).</li>
 <li>Isolation: Scripts run within a workspace boundary and only selected
   output files are brought back, not the script source.</li>
 </ul>
@@ -2544,6 +2683,15 @@ in tools like <code>read_file</code>.</p>
 <li>Blog:
   https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills</li>
 <li>Open repo: https://github.com/anthropics/skills</li>
+</ul>
+</li>
+<li>Industry patterns:<ul>
+<li>OpenClaw: prompt instructs the model to read a selected skill’s
+  <code>SKILL.md</code> via a tool:
+  https://github.com/openclaw/openclaw/blob/0cf93b8fa74566258131f9e8ca30f313aac89d26/src/agents/system-prompt.ts</li>
+<li>OpenAI Codex: project docs list skills and instruct opening
+  <code>SKILL.md</code> on demand:
+  https://github.com/openai/codex/blob/383b45279efda1ef611a4aa286621815fe656b8a/codex-rs/core/src/project_doc.rs</li>
 </ul>
 </li>
 <li>This repo:<ul>
@@ -2576,7 +2724,7 @@ in tools like <code>read_file</code>.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="February 3, 2026 10:08:29 UTC">2026-02-03 10:08:29</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="February 10, 2026 03:15:48 UTC">2026-02-10 03:15:48</span>
   </span>
 
     
