@@ -97,6 +97,8 @@ var ModelContextWindows = map[string]int{
 
 	// Anthropic Claude 4
 	"claude-4-opus":   200000,
+	"claude-opus-4":   200000,
+	"claude-sonnet-4": 200000,
 	"claude-4-sonnet": 200000,
 
 	// Anthropic Claude 3.7
