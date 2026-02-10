@@ -1379,7 +1379,12 @@ func TestRunTool_RelativeCWD_TraversalDoesNotEscapeWorkspace(t *testing.T) {
 	pwd := strings.TrimSpace(lines[0])
 	wsRoot := strings.TrimSpace(lines[1])
 
-	rel, err := filepath.Rel(wsRoot, pwd)
+	pwdResolved, err := filepath.EvalSymlinks(pwd)
+	require.NoError(t, err)
+	wsRootResolved, err := filepath.EvalSymlinks(wsRoot)
+	require.NoError(t, err)
+
+	rel, err := filepath.Rel(wsRootResolved, pwdResolved)
 	require.NoError(t, err)
 	require.False(t, strings.HasPrefix(rel, ".."))
 }

@@ -39,7 +39,7 @@ By default the agent suite prints step-by-step tool calls and tool
 results (similar to `benchmark/gaia`). Use `-debug` to disable log
 truncation and include extra debug fields.
 
-## LLM Setup (Agent Suite)
+## LLM Setup
 
 The agent suite requires a model endpoint via `OPENAI_API_KEY` (and
 optionally `OPENAI_BASE_URL`).
@@ -66,6 +66,7 @@ If you see a clang "missing sysroot" error (macOS), run Go with
   - `agent`: LLM-based checks (`skill_load` + `skill_list_docs`)
   - `all`: run both (default)
   - `token-report`: compare token usage between progressive disclosure and full injection
+  - `prompt-cache`: compare prompt-cache usage with skills injected into tool results vs system prompt
 - `-model`: model name for agent suite (default: `$MODEL_NAME` or `gpt-5`)
 - `-with-exec`: run extra exec cases (default: true)
 - `-only-skill`: run a single skill name (optional)
@@ -116,7 +117,9 @@ This is the practical baseline most people hit when they don’t have
 progressive disclosure and just paste a whole skills repo into the
 prompt.
 
-### Example results (gpt-5)
+### Example results
+
+Model: `gpt-5`.
 
 Scenario: `brand_landing_page` (uses `brand-guidelines` + `frontend-design`).
 
@@ -138,6 +141,53 @@ Notes:
 - The main savings come from **prompt tokens** (input size), because
   progressive disclosure prevents large skills/docs from being inlined
   unless the agent actually needs them.
+
+## Prompt Cache Report
+
+The prompt cache report suite compares two progressive-disclosure modes:
+- **Mode A (legacy):** loaded skill bodies/docs are appended to the system prompt
+- **Mode B (tool results):** loaded skill bodies/docs are materialized into tool
+  result messages (`skill_load` / `skill_select_docs`)
+
+This matters for providers that support prompt caching because caching typically
+works on a **prefix**: if a later request shares an identical prefix with an
+earlier request, that prefix can be reused from cache. Injecting loaded skill
+content into the system prompt shifts subsequent messages (user/history) and can
+reduce the shared prefix. Materializing into tool results keeps the system prompt
+more stable and often increases cached prompt tokens in multi-step tool flows.
+
+The suite runs the `internal-comms` case (requires `skill_load`,
+`skill_select_docs`, and `skill_run`) in both modes and prints a cache delta.
+
+Reported fields depend on provider:
+- OpenAI-style APIs: `usage.prompt_tokens_details.cached_tokens`
+- Anthropic-style APIs: `usage.prompt_tokens_details.cache_read_tokens` and
+  `usage.prompt_tokens_details.cache_creation_tokens`
+
+```bash
+cd benchmark/anthropic_skills/trpc-agent-go-impl
+go run . -suite prompt-cache -model gpt-5
+```
+
+### Example results
+
+Model: `gpt-5`.
+
+Case: `internal-comms` (runs `skill_load`, `skill_select_docs`, `skill_run`).
+
+| Mode | Steps | Prompt | Cached | Uncached (Prompt - Cached) | Completion | Total | Duration |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| A: system prompt (legacy) | 4 | 19442 | 2432 | 17010 | 481 | 19923 | 16.997s |
+| B: tool results | 5 | 25344 | 8832 | 16512 | 1274 | 26618 | 27.024s |
+
+Notes:
+- Cache fields are provider-specific. For OpenAI-style APIs, `Cached` is
+  `usage.prompt_tokens_details.cached_tokens`.
+- A useful derived metric is **uncached prompt tokens**:
+  `prompt_tokens - cached_tokens`. In this run, Mode B increased total prompt
+  tokens (more context materialized into tool results), but also increased cache
+  hits enough to slightly reduce uncached prompt tokens overall.
+- These numbers can vary by provider/model and can be non-deterministic.
 
 ## Notes
 

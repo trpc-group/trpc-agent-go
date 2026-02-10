@@ -46,7 +46,7 @@ func main() {
 		flagSuite = flag.String(
 			"suite",
 			suiteAll,
-			"tool | agent | all | token-report",
+			"tool | agent | all | token-report | prompt-cache",
 		)
 		flagModel = flag.String(
 			"model",
@@ -89,12 +89,14 @@ func main() {
 	toolWorkRoot := filepath.Join(workRoot, suiteTool)
 	agentWorkRoot := filepath.Join(workRoot, suiteAgent)
 	tokenWorkRoot := filepath.Join(workRoot, suiteTokenReport)
+	cacheWorkRoot := filepath.Join(workRoot, suitePromptCache)
 
 	suite := strings.ToLower(strings.TrimSpace(*flagSuite))
 	if suite != suiteTool &&
 		suite != suiteAgent &&
 		suite != suiteAll &&
-		suite != suiteTokenReport {
+		suite != suiteTokenReport &&
+		suite != suitePromptCache {
 		must(fmt.Errorf("unknown suite: %q", suite), "flags")
 	}
 
@@ -144,6 +146,23 @@ func main() {
 				progress,
 			),
 			"token report suite",
+		)
+		fmt.Println("PASS")
+		return
+	}
+
+	if suite == suitePromptCache {
+		must(checkAgentEnv(*flagModel), "agent env")
+		exec := localexec.New(localexec.WithWorkDir(cacheWorkRoot))
+		must(
+			runPromptCacheSuite(
+				repo,
+				exec,
+				*flagModel,
+				*flagDebug,
+				progress,
+			),
+			"prompt cache suite",
 		)
 		fmt.Println("PASS")
 		return

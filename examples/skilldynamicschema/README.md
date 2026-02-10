@@ -14,7 +14,7 @@ How it works (in this demo):
 
 1. The model chooses a skill (`plan_route` or `recommend_poi`) based on your input.
 2. Call `skill_load` to mark that skill as loaded for this invocation.
-3. On the next model request, the framework injects the loaded `SKILL.md` into the system prompt (`[Loaded] <skill>` block).
+3. On the next model request, the framework materializes the loaded `SKILL.md` into the prompt (by default as a system-message `[Loaded] <skill>` block).
 4. The model finds the schema under **"Output JSON Schema"** in `SKILL.md` and calls `set_output_schema`.
 5. The model calls `skill_run` (`cat result.json`) to produce a JSON result.
 6. The model returns **only** that JSON as the final assistant message; the framework extracts it into `event.StructuredOutput` (untyped `map[string]any`, etc.).
