@@ -30,6 +30,13 @@ type CallableTool interface {
 }
 ```
 
+**Recommendation (always configure `name` and `description`)**
+
+- **name (required)**: Used by the model to precisely select and invoke the tool. Keep it **stable, unique, and descriptive** (prefer `snake_case`), and avoid name collisions across Tools/ToolSets.
+- **description (required)**: Used by the model to understand what the tool does, when to use it, and any constraints. Missing or vague descriptions will noticeably reduce tool-call accuracy and stability.
+
+> For Function Tools, set these via `function.WithName(...)` / `function.WithDescription(...)`. For custom Tools, set `Name` / `Description` on the `tool.Declaration` returned by `Declaration()`.
+
 #### 📦 ToolSet
 
 A ToolSet is a collection of related tools that implements the `tool.ToolSet` interface. A ToolSet manages the lifecycle of tools, connections, and resource cleanup.
@@ -100,9 +107,9 @@ import "trpc.group/trpc-go/trpc-agent-go/tool/function"
 
 // 1. Define a tool function.
 func calculator(ctx context.Context, req struct {
-    Operation string  `json:"operation"`
-    A         float64 `json:"a"`
-    B         float64 `json:"b"`
+    Operation string  `json:"operation" jsonschema:"description=Operation type e.g. add/multiply"`
+    A         float64 `json:"a" jsonschema:"description=First operand"`
+    B         float64 `json:"b" jsonschema:"description=Second operand"`
 }) (map[string]interface{}, error) {
     switch req.Operation {
     case "add":
@@ -127,12 +134,22 @@ agent := llmagent.New("math-assistant",
     llmagent.WithTools([]tool.Tool{calculatorTool}))
 ```
 
+### Input Schema and field descriptions
+
+For Function Tools, the input `req` is automatically converted into a JSON Schema (so the model can understand the expected arguments). Add field descriptions via struct tags:
+
+- **Field name**: use `json:"..."` as the schema property name.
+- **Field description (recommended)**: use `jsonschema:"description=..."` to populate `properties.<field>.description`.
+- **Note**: the `jsonschema` tag uses comma `,` as the separator, so **the description value must not contain `,`**; otherwise it will be parsed as multiple tag items.
+- **Compatibility**: `description:"..."` is also supported for legacy code. If both `jsonschema:"description=..."` and `description:"..."` are present, the `jsonschema` description wins.
+- **More flexible schema**: if you need full control over the input schema (e.g. complex JSON Schema constraints), use `function.WithInputSchema(customInputSchema)` to bypass auto-generation.
+
 ### Streaming Tool Example
 
 ```go
 // 1. Define input and output structures.
 type weatherInput struct {
-    Location string `json:"location"`
+    Location string `json:"location" jsonschema:"description=Location to query e.g. city name or coordinates"`
 }
 
 type weatherOutput struct {
@@ -1063,9 +1080,9 @@ func main() {
     // 1. Create a simple tool.
     calculatorTool := function.NewFunctionTool(
         func(ctx context.Context, req struct {
-            Operation string  `json:"operation"`
-            A         float64 `json:"a"`
-            B         float64 `json:"b"`
+            Operation string  `json:"operation" jsonschema:"description=Operation type e.g. add/multiply"`
+            A         float64 `json:"a" jsonschema:"description=First operand"`
+            B         float64 `json:"b" jsonschema:"description=Second operand"`
         }) (map[string]interface{}, error) {
             var result float64
             switch req.Operation {

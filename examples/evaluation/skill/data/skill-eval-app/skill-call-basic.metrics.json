@@ -1,0 +1,58 @@
+[
+  {
+    "metricName": "tool_trajectory_avg_score",
+    "threshold": 1,
+    "criterion": {
+      "toolTrajectory": {
+        "orderSensitive": true,
+        "subsetMatching": true,
+        "defaultStrategy": {
+          "name": {
+            "matchStrategy": "exact"
+          },
+          "arguments": {
+            "matchStrategy": "exact"
+          },
+          "result": {
+            "matchStrategy": "exact"
+          }
+        },
+        "toolStrategy": {
+          "skill_load": {
+            "name": {
+              "matchStrategy": "exact"
+            },
+            "arguments": {
+              "onlyTree": {
+                "skill": true
+              },
+              "matchStrategy": "exact"
+            },
+            "result": {
+              "ignore": true
+            }
+          },
+          "skill_run": {
+            "name": {
+              "matchStrategy": "exact"
+            },
+            "arguments": {
+              "onlyTree": {
+                "skill": true,
+                "output_files": true
+              },
+              "matchStrategy": "exact"
+            },
+            "result": {
+              "onlyTree": {
+                "exit_code": true,
+                "timed_out": true
+              },
+              "matchStrategy": "exact"
+            }
+          }
+        }
+      }
+    }
+  }
+]

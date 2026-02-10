@@ -525,11 +525,11 @@ metricManager.Add(ctx, appName, evalSetID, evalMetric)
 
 ### 评估集 EvalSet
 
-EvalSet 用于描述评估覆盖的场景集合，提供评估集输入。每个场景对应一个评估用例 EvalCase，EvalCase 再按轮组织 Invocation。评估运行时，Service 会按 EvalCase 的 `conversation` 驱动 Runner 推理，并将推理得到的实际轨迹与 EvalSet 中的预期轨迹交给 Evaluator 对比打分。
+EvalSet 用于描述评估覆盖的场景集合，提供评估集输入。每个场景对应一个评估用例 EvalCase，EvalCase 再按轮组织 Invocation。默认模式会按 `conversation` 驱动 Runner 推理产出实际轨迹，并将 `conversation` 作为预期轨迹；Trace 模式会跳过推理并使用 `actualConversation` 作为实际轨迹。评估运行时，Service 会将实际轨迹与预期轨迹交给 Evaluator 对比打分。
 
 #### 结构定义
 
-EvalSet 是评估用例的集合，每个用例用 EvalCase 表达，用例内部的 Conversation 按轮组织 Invocation，用于描述用户输入与可选的预期信息，结构定义如下。
+EvalSet 是评估用例的集合，每个用例用 EvalCase 表达。用例内部的 Conversation 按轮组织 Invocation，用于描述用户输入与预期输出；Trace 模式下 ActualConversation 用于描述实际输出轨迹，结构定义如下。
 
 ```go
 import (
@@ -551,7 +551,8 @@ type EvalCase struct {
 	EvalID            string               // EvalID 是用例标识
 	EvalMode          EvalMode             // EvalMode 是用例模式，可选为空或 trace
 	ContextMessages   []*model.Message     // ContextMessages 是上下文消息，可选
-	Conversation      []*Invocation        // Conversation 是多轮交互序列，必填
+	Conversation      []*Invocation        // Conversation 是预期多轮交互序列，默认模式必填，Trace 模式可选
+	ActualConversation   []*Invocation     // ActualConversation 是 Trace 模式下的实际输出轨迹，Trace 模式必填
 	SessionInput      *SessionInput        // SessionInput 是会话初始化信息，必填
 	CreationTimestamp *epochtime.EpochTime // CreationTimestamp 是创建时间戳，可选
 }
@@ -584,11 +585,15 @@ type SessionInput struct {
 
 EvalSet 由 `evalSetId` 标识，包含多个 EvalCase，每个用例用 `evalId` 标识。
 
-推理阶段按 `conversation` 的轮次读取 `userContent` 作为输入，`sessionInput.userId` 用于创建会话，必要时通过 `sessionInput.state` 注入初始状态，`contextMessages` 会在每次推理前注入额外上下文。
+默认模式推理阶段按 `conversation` 的轮次读取 `userContent` 作为输入，`sessionInput.userId` 用于创建会话，必要时通过 `sessionInput.state` 注入初始状态，`contextMessages` 会在每次推理前注入额外上下文。Trace 模式下不会推理，而是直接使用 `actualConversation` 作为实际轨迹。
 
-EvalSet 中的 `tools` 与 `finalResponse` 用于描述工具轨迹与最终响应，是否需要填写取决于所选评估指标。默认模式下它们通常作为预期信息，`trace` 模式下它们表示既有轨迹。
+EvalSet 中的 `tools` 与 `finalResponse` 用于描述工具轨迹与最终响应，是否需要填写取决于所选评估指标。
 
-`evalMode` 为空表示默认模式，此时会实时推理并采集工具轨迹与最终响应。`evalMode` 为 `trace` 时跳过推理，直接使用 `conversation` 中的既有轨迹参与评估。
+Trace 模式下可以通过 `actualConversation` 显式配置实际输出轨迹。
+
+当 Trace 模式同时配置了 `conversation` 与 `actualConversation` 时，需要按轮次对齐，且 `actualConversation` 每轮应包含 `userContent`。当仅配置 `actualConversation` 且未配置 `conversation` 时，表示不提供预期输出。
+
+`evalMode` 为空表示默认模式，此时会实时推理并采集工具轨迹与最终响应。`evalMode` 为 `trace` 时跳过推理，使用 `actualConversation` 作为实际轨迹参与评估；`conversation` 可选用于提供预期输出。
 
 #### EvalSet Manager
 
@@ -752,7 +757,9 @@ Criterion 用于描述评估准则，不同评估器只会读取自己关心的�
 |-------------------------|--------------------------------------|
 | TextCriterion           | 文本字符串                             |
 | JSONCriterion           | JSON 对象                             |
+| RougeCriterion          | ROUGE 文本评分                         |
 | ToolTrajectoryCriterion | 工具调用轨迹                           |
+| FinalResponseCriterion  | 最终响应内容                           |
 | LLMCriterion            | 基于 LLM 评估模型的评估                 |
 | Criterion               | 多种准则的聚合                         |
 
@@ -816,6 +823,7 @@ JSONCriterion 用于比较两个 JSON 值，常用于工具参数与工具结果
 type JSONCriterion struct {
 	Ignore          bool                                     // Ignore 表示跳过对比
 	IgnoreTree      map[string]any                           // IgnoreTree 表示需要忽略的字段树
+	OnlyTree        map[string]any                           // OnlyTree 表示仅需要对比的字段树
 	MatchStrategy   JSONMatchStrategy                        // MatchStrategy 表示匹配策略
 	NumberTolerance *float64                                 // NumberTolerance 表示数字容差
 	Compare         func(actual, expected any) (bool, error) // Compare 自定义比较逻辑
@@ -827,7 +835,7 @@ type JSONMatchStrategy string
 
 当前 `matchStrategy` 仅支持 `exact`，默认值为 `exact`。
 
-对比时 actual 是实际值，expected 是预期值。对象对比要求键集合一致，数组对比要求长度一致且顺序一致。数字对比支持数值容差，默认值为 `1e-6`。`ignoreTree` 用于忽略不稳定字段，叶子节点为 true 表示忽略该字段及其子树。
+对比时 actual 是实际值，expected 是预期值。对象对比要求键集合一致，数组对比要求长度一致且顺序一致。数字对比支持数值容差，默认值为 `1e-6`。`ignoreTree` 用于忽略不稳定字段，叶子节点为 true 表示忽略该字段及其子树。`onlyTree` 用于只对比指定字段，未出现在字段树中的字段将被忽略；叶子节点为 true 表示对比该字段及其子树。`onlyTree` 与 `ignoreTree` 不能同时配置。两者同时非空时将报错。
 
 配置示例片段如下，忽略 `id` 和 `metadata.timestamp` 字段，并放宽数字容差。
 
@@ -843,6 +851,19 @@ type JSONMatchStrategy string
 }
 ```
 
+配置示例片段如下，只对比 `name` 和 `metadata.id` 字段，忽略其他所有字段。
+
+```json
+{
+  "onlyTree": {
+    "name": true,
+    "metadata": {
+      "id": true
+    }
+  }
+}
+```
+
 JSONCriterion 提供了 `Compare` 扩展点，用于在代码中覆盖默认对比逻辑。
 
 以下代码示例片段，通过 `Compare` 自定义匹配逻辑，只要实际值与预期值都包含键 `common` 就视为匹配。
@@ -854,25 +875,113 @@ jsonCriterion := cjson.New(
 	cjson.WithCompare(func(actual, expected any) (bool, error) {
 		actualObj, ok := actual.(map[string]any)
 		if !ok {
-			return false, fmt.Errorf("actual is not an object")
-		}
-		expectedObj, ok := expected.(map[string]any)
-		if !ok {
-			return false, fmt.Errorf("expected is not an object")
-		}
-		if _, ok := actualObj["common"]; !ok {
-			return false, fmt.Errorf("actual missing key common")
-		}
-		if _, ok := expectedObj["common"]; !ok {
-			return false, fmt.Errorf("expected missing key common")
-		}
-		return true, nil
+		return false, fmt.Errorf("actual is not an object")
+	}
+	expectedObj, ok := expected.(map[string]any)
+	if !ok {
+		return false, fmt.Errorf("expected is not an object")
+	}
+	if _, ok := actualObj["common"]; !ok {
+		return false, fmt.Errorf("actual missing key common")
+	}
+	if _, ok := expectedObj["common"]; !ok {
+		return false, fmt.Errorf("expected missing key common")
+	}
+	return true, nil
+	}),
+)
+```
+	
+##### RougeCriterion
+
+RougeCriterion 用于基于 ROUGE 对两个字符串进行评分，并在分数满足阈值要求时判定为匹配。
+
+完整示例参见 [examples/evaluation/rouge](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/rouge)。
+
+```go
+import crouge "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/rouge"
+
+// RougeCriterion 表示 ROUGE 评分与阈值判定准则
+type RougeCriterion struct {
+	Ignore         bool         // Ignore 表示跳过对比
+	RougeType      string       // RougeType 表示 ROUGE 类型
+	Measure        RougeMeasure // Measure 表示主要评分指标
+	Threshold      Score        // Threshold 表示最低分数要求
+	UseStemmer     bool         // UseStemmer 表示是否启用内置 tokenizer 的 Porter stemming
+	SplitSummaries bool         // SplitSummaries 表示是否在 rougeLsum 下按句子切分摘要
+	Tokenizer      Tokenizer    // Tokenizer 表示自定义 tokenizer
+}
+
+// RougeMeasure 表示主要评分指标类型
+type RougeMeasure string
+
+const (
+	RougeMeasureF1        RougeMeasure = "f1"
+	RougeMeasurePrecision RougeMeasure = "precision"
+	RougeMeasureRecall    RougeMeasure = "recall"
+)
+
+// Score 表示 ROUGE 的 precision、recall 与 f1
+type Score struct {
+	Precision float64
+	Recall    float64
+	F1        float64
+}
+```
+
+RougeType 支持 `rougeN`、`rougeL`、`rougeLsum`。其中 N 是正整数，例如 `rouge1`、`rouge2`、`rouge3`、`rougeL`、`rougeLsum`。
+
+Measure 支持 `f1`、`precision`、`recall`，未设置时默认值为 `f1`。
+
+Threshold 用于设置最低分数要求。precision、recall 与 f1 都参与阈值判定。未设置的字段默认值为 0。ROUGE 分数取值范围为 `[0, 1]`。
+
+UseStemmer 会对内置 tokenizer 启用 Porter stemming。配置 Tokenizer 后 UseStemmer 会被忽略。
+
+SplitSummaries 仅对 `rougeLsum` 生效，用于在文本没有换行分句时按句子切分摘要。
+
+Tokenizer 用于注入自定义 tokenizer。
+
+以下代码示例片段，通过配置 FinalResponseCriterion 的 `rouge` 子准则，以 rougeLsum 与阈值的方式对比最终响应。
+
+```go
+import (
+	cfinalresponse "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/finalresponse"
+	crouge "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/rouge"
+)
+
+finalResponseCriterion := cfinalresponse.New(
+	cfinalresponse.WithRougeCriterion(&crouge.RougeCriterion{
+		RougeType:      "rougeLsum",
+		Measure:        crouge.RougeMeasureF1,
+		Threshold:      crouge.Score{Precision: 0.3, Recall: 0.6, F1: 0.4},
+		UseStemmer:     true,
+		SplitSummaries: true,
 	}),
 )
 ```
 
-##### ToolTrajectoryCriterion
+配置示例片段如下：
 
+```json
+{
+  "finalResponse": {
+    "rouge": {
+      "rougeType": "rougeLsum",
+      "measure": "f1",
+      "threshold": {
+        "precision": 0.3,
+        "recall": 0.6,
+        "f1": 0.4
+      },
+      "useStemmer": true,
+      "splitSummaries": true
+    }
+  }
+}
+```
+
+##### ToolTrajectoryCriterion
+	
 ToolTrajectoryCriterion 用于对比工具轨迹，按轮处理 Invocation，并在每一轮对比工具调用列表，结构定义如下。
 
 ```go
@@ -1010,12 +1119,13 @@ toolTrajectoryCriterion := ctooltrajectory.New(
 
 ##### FinalResponseCriterion
 
-FinalResponseCriterion 用于对比每轮 Invocation 的最终响应，支持按文本对比，也支持把内容解析为 JSON 后按结构对比，结构定义如下。
+FinalResponseCriterion 用于对比每轮 Invocation 的最终响应，支持按文本对比、把内容解析为 JSON 后按结构对比，也支持基于 ROUGE 评分对比，结构定义如下。
 
 ```go
 import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	cjson "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
+	crouge "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/rouge"
 	ctext "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
 )
 
@@ -1023,14 +1133,17 @@ import (
 type FinalResponseCriterion struct {
 	Text    *ctext.TextCriterion                                      // Text 用于对比最终响应文本
 	JSON    *cjson.JSONCriterion                                      // JSON 用于对比最终响应 JSON
+	Rouge   *crouge.RougeCriterion                                    // Rouge 用于基于 ROUGE 评分对比最终响应文本
 	Compare func(actual, expected *evalset.Invocation) (bool, error) // Compare 自定义比较逻辑
 }
 ```
 
 使用该准则时，需要在评估集预期侧为对应轮次填写 `finalResponse`。
 
-`text` 与 `json` 可以同时配置，同时配置时两者都需要匹配。配置 `json` 时要求内容可被解析为 JSON。
+`text`、`json` 与 `rouge` 可以同时配置，同时配置时三者都需要匹配。配置 `json` 时要求内容可被解析为 JSON。
 
+若希望按 ROUGE 对比，配置 `rouge`，相关字段说明参见 RougeCriterion。
+	
 以下配置示例选择 `final_response_avg_score` 评估器，并配置 FinalResponseCriterion 按文本包含关系对比最终响应。
 
 ```json
@@ -1094,6 +1207,7 @@ type LLMCriterion struct {
 type JudgeModelOptions struct {
 	ProviderName string                  // ProviderName 是模型提供方
 	ModelName    string                  // ModelName 是模型名称
+	Variant      string                  // Variant 是 OpenAI 兼容变体，可选
 	BaseURL      string                  // BaseURL 是自定义地址
 	APIKey       string                  // APIKey 是访问密钥
 	ExtraFields  map[string]any          // ExtraFields 是额外字段
@@ -1114,7 +1228,9 @@ type RubricContent struct {
 }
 ```
 
-`judgeModel` 支持在 `providerName`、`modelName`、`baseURL`、`apiKey` 中引用环境变量，运行时会自动展开，出于安全考虑，建议不要把 `judgeModel.apiKey` / `judgeModel.baseURL` 明文写入指标配置文件或者代码。
+`judgeModel` 支持在 `providerName`、`modelName`、`variant`、`baseURL`、`apiKey` 中引用环境变量，运行时会自动展开，出于安全考虑，建议不要把 `judgeModel.apiKey` / `judgeModel.baseURL` 明文写入指标配置文件或者代码。
+
+`variant` 为可选字段，用于选择 OpenAI 兼容的变体，例如 `openai`、`hunyuan`、`deepseek`、`qwen`，仅当 `providerName` 为 `openai` 时生效。不配置时默认使用 `openai` 变体。
 
 `Generation` 默认使用 `MaxTokens=2000`、`Temperature=0.8`、`Stream=false`。
 
@@ -1275,7 +1391,7 @@ type PerInvocationDetails struct {
 }
 ```
 
-Evaluator 的输入是两组 Invocation 列表。actuals 表示推理阶段采集到的实际轨迹，expecteds 表示 EvalSet 中的预期轨迹。框架会以 EvalCase 为粒度调用 Evaluate，actuals 与 expecteds 均来自同一个 EvalCase 的 Conversation，并按轮次对齐。大多数评估器要求两者轮数一致，否则会直接返回错误。
+Evaluator 的输入是两组 Invocation 列表。actuals 表示推理阶段采集到的实际轨迹，expecteds 表示 EvalSet 中的预期轨迹。框架会以 EvalCase 为粒度调用 Evaluate，actuals 与 expecteds 分别表示 EvalCase 的实际轨迹与预期轨迹，并按轮次对齐。大多数评估器要求两者轮数一致，否则会直接返回错误。
 
 Evaluator 的输出包含整体结果与逐轮明细。整体分数通常由逐轮分数聚合得到，整体状态通常由整体分数与 `threshold` 对比得到。对确定性评估器，`reason` 通常用于记录不匹配原因。对 LLM Judge 类评估器，`reason` 与 `rubricScores` 会用于保留裁判依据。
 
@@ -1927,7 +2043,7 @@ type EvalSetRunResult struct {
 
 当 `evalMode` 为空值时，推理阶段会按 `conversation` 的轮次依次调用 Runner，并把每轮采集到的实际 Invocation 写入 `Inferences`。
 
-当 `evalMode` 为 `trace` 时，推理阶段不会运行 Runner，而是直接将 EvalSet 中的 `conversation` 作为实际轨迹返回。
+当 `evalMode` 为 `trace` 时，推理阶段不会运行 Runner，而是直接将 `actualConversation` 作为实际轨迹返回。
 
 Local 实现支持 EvalCase 级并发推理。开启后会并行运行多个用例，单个用例内部仍按轮次顺序执行。
 
@@ -1937,7 +2053,7 @@ Local 实现支持 EvalCase 级并发推理。开启后会并行运行多个用�
 
 Local 实现会通过 Registry 按 `MetricName` 获取 Evaluator，并调用 `Evaluator.Evaluate` 完成打分。该调用以 EvalCase 为粒度，actuals 与 expecteds 均来自同一个用例，并按轮次对齐。
 
-当 `evalMode` 为 `trace` 时，评估阶段会将预期侧 expecteds 处理为仅保留用户输入的占位 Invocation，用于避免将 trace 输出误作为参考答案参与对比。
+当 `evalMode` 为 `trace` 时，推理阶段跳过 Runner，实际轨迹 actuals 来自 `actualConversation`；预期轨迹由 `conversation` 提供。
 
 评估完成后会生成 `EvalSetRunResult` 并返回给 AgentEvaluator。
 
@@ -2002,7 +2118,11 @@ defer agentEvaluator.Close()
 
 Trace 模式用于评估既有轨迹，可以将一次真实运行采集到的 Invocation 轨迹写入评估集 EvalSet，并在运行评估时跳过推理阶段。
 
-启用方式是在 EvalCase 中将 `evalMode` 设为 `trace`，并在 `conversation` 中写入完整轨迹。Trace 模式下仍要求 `sessionInput` 与 `conversation` 非空。
+启用方式是在 EvalCase 中将 `evalMode` 设为 `trace`。Trace 模式下 `actualConversation` 表示实际输出，`conversation` 表示预期输出，有三种配置方式：
+
+- 仅配置 `actualConversation`：`actualConversation` 作为实际轨迹，不提供预期轨迹。
+- 同时配置 `actualConversation` 与 `conversation`：`actualConversation` 作为实际轨迹，`conversation` 作为预期轨迹，按轮次对齐。
+- 仅配置 `conversation`：`conversation` 作为实际轨迹，不提供预期轨迹（仅为兼容历史行为）。
 
 ```json
 {
@@ -2042,6 +2162,36 @@ Trace 模式用于评估既有轨迹，可以将一次真实运行采集到的 I
           ]
         }
       ],
+      "actualConversation": [
+        {
+          "invocationId": "trace_calc_add-1",
+          "userContent": {
+            "role": "user",
+            "content": "calc add 123 456"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "calc result: 579"
+          },
+          "tools": [
+            {
+              "id": "call_00_example",
+              "name": "calculator",
+              "arguments": {
+                "a": 123,
+                "b": 456,
+                "operation": "add"
+              },
+              "result": {
+                "a": 123,
+                "b": 456,
+                "operation": "add",
+                "result": 579
+              }
+            }
+          ]
+        }
+      ],
       "sessionInput": {
         "appName": "trace-eval-app",
         "userId": "demo-user"
@@ -2051,9 +2201,9 @@ Trace 模式用于评估既有轨迹，可以将一次真实运行采集到的 I
 }
 ```
 
-在 Trace 模式下，推理阶段不会运行 Runner，而是直接将 `conversation` 作为实际轨迹写入 `InferenceResult.Inferences`。评估阶段仍会生成 expecteds 列表，但只保留每轮的 `userContent` 作为占位，避免将 trace 轨迹误当作参考答案参与对比。
+在 Trace 模式下，推理阶段不会运行 Runner，而是直接将 `actualConversation` 写入 `InferenceResult.Inferences` 作为实际轨迹。`conversation` 用于提供预期轨迹；当未配置 `conversation` 时，评估阶段会生成仅保留每轮 `userContent` 的占位 expecteds，避免将 trace 轨迹误当作参考答案参与对比。
 
-Trace 模式更适合只依赖实际轨迹的指标，例如 `llm_rubric_response` 与 `llm_rubric_knowledge_recall`。需要对比参考工具轨迹或参考最终回答的指标建议使用默认模式，并在 EvalSet 预期侧提供对应字段。
+当只提供实际轨迹时，适合只依赖实际轨迹的指标，例如 `llm_rubric_response` 与 `llm_rubric_knowledge_recall`。如果需要对比参考工具轨迹或参考最终回答，可以额外配置预期轨迹。
 
 完整示例参见 [examples/evaluation/trace](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/trace)。
 
@@ -2129,7 +2279,9 @@ agentEvaluator, err := evaluation.New(
 - `return result, nil`：将 `ctx` 更新为 `result.Context`，后续回调与后续阶段使用更新后的 `ctx`。
 - `return nil, err`：中断当前回调点并向上返回错误。
 
-通过 `evaluation.WithEvalCaseParallelInferenceEnabled(true)` 开启并行推理后，case 级回调可能并发执行，由于 `args.Request` 指向同一份 `*InferenceRequest`，因此建议只读；如需改写请求，可以在 set 级回调中完成。
+通过 `evaluation.WithEvalCaseParallelInferenceEnabled(true)` 开启并行推理后，推理阶段的 case 级回调可能并发执行，由于 `args.Request` 指向同一份 `*InferenceRequest`，因此建议只读；如需改写请求，可以在 set 级回调中完成。
+
+通过 `evaluation.WithEvalCaseParallelEvaluationEnabled(true)` 开启并发评估后，评估阶段的 case 级回调也可能并发执行；同样由于 `args.Request` 指向同一份 `*EvaluateRequest`，因此建议只读；如需改写请求，可以在 set 级回调中完成。
 
 单个 EvalCase 的推理或评估失败通常不会通过 `error` 向上传递，而是写入 `Result.Status` 与 `Result.ErrorMessage`，因此 `After*CaseArgs.Error` 不用于承载单个用例失败原因，需要判断失败可以查看 `args.Result.Status` 与 `args.Result.ErrorMessage`。
 
@@ -2153,6 +2305,25 @@ agentEvaluator, err := evaluation.New(
 并发推理只影响不同用例之间的推理。单个用例内部仍按 `conversation` 的轮次顺序执行，评估阶段也会按用例顺序逐个评估。
 
 开启并发后，需要保证 Runner、工具实现、外部依赖与回调逻辑可并发调用，避免共享可变状态导致相互干扰。
+
+### EvalCase 级别并发评估
+
+当评估器耗时较长时，例如 LLM Judge，评估阶段也可能成为瓶颈。框架支持在评估阶段按 EvalCase 并发执行评估器，以缩短总体耗时。
+
+在创建 AgentEvaluator 时开启并发评估，并设置最大并发数。不设置时并发数默认值为 `runtime.GOMAXPROCS(0)`。
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/evaluation"
+
+agentEvaluator, err := evaluation.New(
+	appName,
+	runner,
+	evaluation.WithEvalCaseParallelEvaluationEnabled(true),
+	evaluation.WithEvalCaseParallelism(8),
+)
+```
+
+并发评估只影响不同用例之间的评估。单个用例内部仍会按指标顺序逐条执行评估器，且返回的 `EvalCaseResults` 顺序与输入的 `InferenceResults` 一致。
 
 ### 上下文注入
 
@@ -2225,6 +2396,95 @@ passHatK, err := evaluation.PassHatK(n, c, k)
 ```
 
 pass@k 与 pass^k 的计算依赖运行之间的独立性与同分布假设，进行重复运行评估时需要确保每次运行均为独立采样并完成必要的状态重置，避免会话记忆、工具缓存或外部依赖复用导致指标被系统性高估。
+
+### Skills 评估
+
+Agent Skills 以工具 `skill_load` 与 `skill_run` 形式暴露，因此也可以复用工具轨迹评估器来评估 Agent 是否按预期使用 Skills。实践中 `skill_run` 的结果通常包含波动字段，例如 `stdout`、`stderr`、`duration_ms`，以及收集到的 `output_files` 内联内容。建议在按工具覆盖策略中使用 `onlyTree` 只对比稳定字段，例如 `skill`、请求的 `output_files`，以及 `exit_code` 与 `timed_out`，未被选中的字段将被忽略。
+
+下面给出一个最小示例，展示如何在 EvalSet 中声明预期的工具轨迹，并在 Metric 中通过 `onlyTree` 仅校验稳定字段。
+
+EvalSet 中的 `tools` 片段示例如下：
+
+```json
+{
+  "invocationId": "write_ok-1",
+  "userContent": {
+    "role": "user",
+    "content": "Use skills to generate an OK file and confirm when done."
+  },
+  "tools": [
+    {
+      "id": "tool_use_1",
+      "name": "skill_load",
+      "arguments": {
+        "skill": "write-ok"
+      }
+    },
+    {
+      "id": "tool_use_2",
+      "name": "skill_run",
+      "arguments": {
+        "skill": "write-ok",
+        "output_files": [
+          "out/ok.txt"
+        ]
+      },
+      "result": {
+        "exit_code": 0,
+        "timed_out": false
+      }
+    }
+  ]
+}
+```
+
+Metric 的 `toolTrajectory` 配置示例如下：
+
+```json
+[
+  {
+    "metricName": "tool_trajectory_avg_score",
+    "threshold": 1,
+    "criterion": {
+      "toolTrajectory": {
+        "orderSensitive": true,
+        "subsetMatching": true,
+        "toolStrategy": {
+          "skill_load": {
+            "arguments": {
+              "onlyTree": {
+                "skill": true
+              },
+              "matchStrategy": "exact"
+            },
+            "result": {
+              "ignore": true
+            }
+          },
+          "skill_run": {
+            "arguments": {
+              "onlyTree": {
+                "skill": true,
+                "output_files": true
+              },
+              "matchStrategy": "exact"
+            },
+            "result": {
+              "onlyTree": {
+                "exit_code": true,
+                "timed_out": true
+              },
+              "matchStrategy": "exact"
+            }
+          }
+        }
+      }
+    }
+  }
+]
+```
+
+完整示例参见 [examples/evaluation/skill](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/skill)。
 
 ## 最佳实践
 

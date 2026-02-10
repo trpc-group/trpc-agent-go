@@ -526,11 +526,11 @@ A typical evaluation run includes the following steps.
 
 ### EvalSet
 
-EvalSet describes the set of scenarios covered and provides evaluation input. Each scenario corresponds to an EvalCase, and EvalCase organizes Invocations per turn. During evaluation, Service drives Runner using `conversation` and then compares actual traces with expected traces from EvalSet using Evaluator.
+EvalSet describes the set of scenarios covered and provides evaluation input. Each scenario corresponds to an EvalCase, and EvalCase organizes Invocations per turn. In default mode, Runner is driven by `conversation` to produce actual traces, and `conversation` is used as expected traces. In trace mode, inference is skipped and `actualConversation` is used as actual traces. During evaluation, Service passes actual and expected traces to Evaluator for comparison and scoring.
 
 #### Structure Definition
 
-EvalSet is a collection of evaluation cases. Each case is an EvalCase, and its Conversation organizes Invocations per turn to describe user input and optional expected information. The structure definition is as follows.
+EvalSet is a collection of evaluation cases. Each case is an EvalCase. Its Conversation organizes Invocations per turn to describe user input and expected outputs. In trace mode, ActualConversation is used to describe recorded actual traces. The structure definition is as follows.
 
 ```go
 import (
@@ -552,7 +552,8 @@ type EvalCase struct {
 	EvalID            string               // EvalID is the case identifier.
 	EvalMode          EvalMode             // EvalMode is the case mode, optional and can be empty or trace.
 	ContextMessages   []*model.Message     // ContextMessages are context messages, optional.
-	Conversation      []*Invocation        // Conversation is the multi-turn interaction sequence, required.
+	Conversation      []*Invocation        // Conversation is the expected multi-turn interaction sequence. It is required in default mode and optional in trace mode.
+	ActualConversation []*Invocation       // ActualConversation is the actual trace in trace mode. It is required in trace mode.
 	SessionInput      *SessionInput        // SessionInput is session initialization info, required.
 	CreationTimestamp *epochtime.EpochTime // CreationTimestamp is the creation timestamp, optional.
 }
@@ -585,11 +586,15 @@ type SessionInput struct {
 
 EvalSet is identified by `evalSetId` and contains multiple EvalCases, each identified by `evalId`.
 
-During inference, `userContent` is read per turn from `conversation` as input. `sessionInput.userId` is used to create the session. `sessionInput.state` can inject initial state when needed. `contextMessages` inject additional context before each inference.
+In default mode, the inference phase reads `userContent` per turn from `conversation` as input. `sessionInput.userId` is used to create the session. `sessionInput.state` can inject initial state when needed. `contextMessages` inject additional context before each inference. In trace mode, inference is skipped and `actualConversation` is used directly as actual traces.
 
-`tools` and `finalResponse` in EvalSet describe tool traces and final responses. Whether they are needed depends on the selected evaluation metrics. In default mode they usually represent expected information, while in `trace` mode they represent existing traces.
+`tools` and `finalResponse` in EvalSet describe tool traces and final responses. Whether they are needed depends on the selected evaluation metrics.
 
-When `evalMode` is empty, it is the default mode, which performs real-time inference and collects tool traces and final responses. When `evalMode` is `trace`, inference is skipped and existing traces in `conversation` are used for evaluation.
+In trace mode, you can configure actual output traces explicitly via `actualConversation`.
+
+If both `conversation` and `actualConversation` are provided in trace mode, they must be aligned by turn, and each turn in `actualConversation` should include `userContent`. If only `actualConversation` is provided and `conversation` is omitted, it means no expected outputs are provided.
+
+When `evalMode` is empty, it is the default mode, which performs real-time inference and collects tool traces and final responses. When `evalMode` is `trace`, inference is skipped and `actualConversation` is used as actual traces for evaluation. `conversation` can be provided optionally as expected outputs.
 
 #### EvalSet Manager
 
@@ -750,7 +755,9 @@ The framework includes the following criterion types:
 |--------------------------|-----------------------------------------|
 | TextCriterion            | Text strings                            |
 | JSONCriterion            | JSON objects                            |
+| RougeCriterion           | ROUGE text scoring                      |
 | ToolTrajectoryCriterion  | Tool call trajectories                  |
+| FinalResponseCriterion   | Final response content                  |
 | LLMCriterion             | LLM-based evaluation models             |
 | Criterion                | Aggregation of multiple criteria        |
 
@@ -814,6 +821,7 @@ JSONCriterion compares two JSON values, commonly used for tool arguments and too
 type JSONCriterion struct {
 	Ignore          bool                                     // Ignore indicates skipping comparison.
 	IgnoreTree      map[string]any                           // IgnoreTree indicates the field tree to ignore.
+	OnlyTree        map[string]any                           // OnlyTree indicates the only field tree to compare.
 	MatchStrategy   JSONMatchStrategy                        // MatchStrategy is the matching strategy.
 	NumberTolerance *float64                                 // NumberTolerance is the numeric tolerance.
 	Compare         func(actual, expected any) (bool, error) // Compare is custom comparison logic.
@@ -825,7 +833,7 @@ type JSONMatchStrategy string
 
 Currently, `matchStrategy` only supports `exact`, with default `exact`.
 
-During comparison, `actual` is the actual value and `expected` is the expected value. Object comparison requires identical key sets. Array comparison requires identical length and order. Numeric comparison supports a tolerance, default `1e-6`. `ignoreTree` ignores unstable fields; a leaf node set to true ignores that field and its subtree.
+During comparison, `actual` is the actual value and `expected` is the expected value. Object comparison requires identical key sets. Array comparison requires identical length and order. Numeric comparison supports a tolerance, default `1e-6`. `ignoreTree` ignores unstable fields; a leaf node set to true ignores that field and its subtree. `onlyTree` compares only selected fields; keys not present in the tree are ignored. A leaf node set to true compares that field and its subtree. `onlyTree` and `ignoreTree` cannot be set at the same time when both are non-empty.
 
 Example configuration ignores `id` and `metadata.timestamp`, and relaxes numeric tolerance.
 
@@ -838,6 +846,19 @@ Example configuration ignores `id` and `metadata.timestamp`, and relaxes numeric
     }
   },
   "numberTolerance": 1e-2
+}
+```
+
+Example configuration compares only `name` and `metadata.id`, and ignores all other fields.
+
+```json
+{
+  "onlyTree": {
+    "name": true,
+    "metadata": {
+      "id": true
+    }
+  }
 }
 ```
 
@@ -867,6 +888,94 @@ jsonCriterion := cjson.New(
 		return true, nil
 	}),
 )
+```
+
+##### RougeCriterion
+
+RougeCriterion scores two strings using ROUGE and treats the pair as a match when the scores meet the configured thresholds.
+
+See [examples/evaluation/rouge](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/rouge) for a complete example.
+
+```go
+import crouge "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/rouge"
+
+// RougeCriterion defines ROUGE scoring and threshold checks.
+type RougeCriterion struct {
+	Ignore         bool         // Ignore indicates skipping comparison.
+	RougeType      string       // RougeType selects the ROUGE variant.
+	Measure        RougeMeasure // Measure selects the primary scalar measure.
+	Threshold      Score        // Threshold defines minimum scores to pass.
+	UseStemmer     bool         // UseStemmer enables Porter stemming in the built-in tokenizer.
+	SplitSummaries bool         // SplitSummaries enables sentence splitting for rougeLsum.
+	Tokenizer      Tokenizer    // Tokenizer overrides the built-in tokenizer.
+}
+
+// RougeMeasure represents the scalar measure used as the primary score.
+type RougeMeasure string
+
+const (
+	RougeMeasureF1        RougeMeasure = "f1"
+	RougeMeasurePrecision RougeMeasure = "precision"
+	RougeMeasureRecall    RougeMeasure = "recall"
+)
+
+// Score holds ROUGE precision, recall and F1.
+type Score struct {
+	Precision float64
+	Recall    float64
+	F1        float64
+}
+```
+
+RougeType supports `rougeN`, `rougeL`, and `rougeLsum`, where N is a positive integer. For example: `rouge1`, `rouge2`, `rouge3`, `rougeL`, `rougeLsum`.
+
+Measure supports `f1`, `precision`, and `recall`, with a default of `f1` when unset.
+
+Threshold defines minimum requirements. Precision, recall, and f1 all participate in the pass check. Unset fields default to 0. ROUGE scores are in range `[0, 1]`.
+
+UseStemmer enables Porter stemming for the built-in tokenizer. When Tokenizer is set, UseStemmer is ignored.
+
+SplitSummaries controls sentence splitting for `rougeLsum` only.
+
+Tokenizer injects a custom tokenizer.
+
+The following snippet configures FinalResponseCriterion to match by rougeLsum with thresholds.
+
+```go
+import (
+	cfinalresponse "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/finalresponse"
+	crouge "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/rouge"
+)
+
+finalResponseCriterion := cfinalresponse.New(
+	cfinalresponse.WithRougeCriterion(&crouge.RougeCriterion{
+		RougeType:      "rougeLsum",
+		Measure:        crouge.RougeMeasureF1,
+		Threshold:      crouge.Score{Precision: 0.3, Recall: 0.6, F1: 0.4},
+		UseStemmer:     true,
+		SplitSummaries: true,
+	}),
+)
+```
+
+Example metric JSON config:
+
+```json
+{
+  "finalResponse": {
+    "rouge": {
+      "rougeType": "rougeLsum",
+      "measure": "f1",
+      "threshold": {
+        "precision": 0.3,
+        "recall": 0.6,
+        "f1": 0.4
+      },
+      "useStemmer": true,
+      "splitSummaries": true
+    }
+  }
+}
 ```
 
 ##### ToolTrajectoryCriterion
@@ -1008,12 +1117,13 @@ Assuming `A`, `B`, `C`, and `D` are tool calls, matching examples are as follows
 
 ##### FinalResponseCriterion
 
-FinalResponseCriterion compares final responses per turn. It supports text comparison and also JSON structural comparison after parsing content. The structure is defined as follows.
+FinalResponseCriterion compares final responses per turn. It supports text comparison, JSON structural comparison after parsing content, and ROUGE scoring. The structure is defined as follows.
 
 ```go
 import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	cjson "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
+	crouge "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/rouge"
 	ctext "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
 )
 
@@ -1021,13 +1131,16 @@ import (
 type FinalResponseCriterion struct {
 	Text    *ctext.TextCriterion                                      // Text compares final response text.
 	JSON    *cjson.JSONCriterion                                      // JSON compares final response JSON.
+	Rouge   *crouge.RougeCriterion                                    // Rouge scores final response text with ROUGE.
 	Compare func(actual, expected *evalset.Invocation) (bool, error) // Compare is custom comparison logic.
 }
 ```
 
 When using this criterion, you need to fill `finalResponse` on the expected side for the corresponding turn in EvalSet.
 
-`text` and `json` can be configured together, and both must match when both are set. When `json` is configured, the content must be parseable as JSON.
+`text`, `json`, and `rouge` can be configured together, and all configured sub-criteria must match. When `json` is configured, the content must be parseable as JSON.
+
+To match by ROUGE, configure `rouge` and see RougeCriterion for details.
 
 The following example selects `final_response_avg_score` and configures FinalResponseCriterion to compare final responses by text containment.
 
@@ -1092,6 +1205,7 @@ type LLMCriterion struct {
 type JudgeModelOptions struct {
 	ProviderName string                  // ProviderName is the model provider.
 	ModelName    string                  // ModelName is the model name.
+	Variant      string                  // Variant is optional and selects the OpenAI-compatible variant when ProviderName is openai.
 	BaseURL      string                  // BaseURL is a custom endpoint.
 	APIKey       string                  // APIKey is the access key.
 	ExtraFields  map[string]any          // ExtraFields are extra fields.
@@ -1112,7 +1226,9 @@ type RubricContent struct {
 }
 ```
 
-`judgeModel` supports environment variable references in `providerName`, `modelName`, `baseURL`, and `apiKey`, which are expanded at runtime. For security, avoid writing `judgeModel.apiKey` or `judgeModel.baseURL` in plain text in metric configuration files or code.
+`judgeModel` supports environment variable references in `providerName`, `modelName`, `variant`, `baseURL`, and `apiKey`, which are expanded at runtime. For security, avoid writing `judgeModel.apiKey` or `judgeModel.baseURL` in plain text in metric configuration files or code.
+
+`variant` is optional and selects the OpenAI-compatible variant, for example `openai`, `hunyuan`, `deepseek`, `qwen`. It is only effective when `providerName` is `openai`. When omitted, the default variant is `openai`.
 
 `Generation` defaults to `MaxTokens=2000`, `Temperature=0.8`, `Stream=false`.
 
@@ -1273,7 +1389,7 @@ type PerInvocationDetails struct {
 }
 ```
 
-Evaluator input is two Invocation lists. `actuals` are the actual traces collected during inference, and `expecteds` are expected traces from EvalSet. The framework calls Evaluate per EvalCase, and `actuals` and `expecteds` both come from the same case Conversation and are aligned by turn. Most evaluators require both lists to have the same number of turns, otherwise an error is returned.
+Evaluator input is two Invocation lists. `actuals` are the actual traces collected during inference, and `expecteds` are expected traces from EvalSet. The framework calls Evaluate per EvalCase, and `actuals` and `expecteds` represent the actual and expected traces for the case and are aligned by turn. Most evaluators require both lists to have the same number of turns, otherwise an error is returned.
 
 Evaluator output includes overall results and per-turn details. Overall score is usually aggregated from per-turn scores, and overall status is usually determined by comparing overall score with `threshold`. For deterministic evaluators, `reason` usually records mismatch reasons. For LLM Judge evaluators, `reason` and `rubricScores` preserve judge rationale.
 
@@ -1925,7 +2041,7 @@ The inference phase is handled by `Inference`. It reads EvalSet, filters cases b
 
 When `evalMode` is empty, it runs the Runner turn by turn based on `conversation` and writes actual Invocations into `Inferences`.
 
-When `evalMode` is `trace`, it does not run the Runner and instead returns `conversation` from EvalSet as actual traces.
+When `evalMode` is `trace`, it does not run the Runner and instead returns `actualConversation` as actual traces.
 
 The local implementation supports EvalCase-level concurrent inference. When enabled, multiple cases are run in parallel, while turns within a case remain sequential.
 
@@ -1935,7 +2051,7 @@ The evaluation phase is handled by `Evaluate`. It takes `InferenceResult` as inp
 
 The local implementation looks up Evaluators by `MetricName` from Registry and calls `Evaluator.Evaluate`. This operates per EvalCase, with actuals and expecteds from the same case aligned by turn.
 
-When `evalMode` is `trace`, the evaluation phase processes expected traces to keep only user input placeholder Invocations, to avoid treating trace outputs as reference answers in comparisons.
+When `evalMode` is `trace`, inference is skipped, actual traces come from `actualConversation`, and expected traces are provided by `conversation`.
 
 After evaluation, it returns `EvalSetRunResult` to AgentEvaluator.
 
@@ -1999,7 +2115,11 @@ defer agentEvaluator.Close()
 
 Trace mode evaluates existing traces by writing Invocation traces from a real run into EvalSet and skipping inference during evaluation.
 
-Enable it by setting `evalMode` to `trace` in EvalCase and writing the full trace into `conversation`. Trace mode still requires non-empty `sessionInput` and `conversation`.
+Enable it by setting `evalMode` to `trace` in EvalCase. In trace mode, `actualConversation` represents actual outputs and `conversation` represents expected outputs. There are three supported layouts:
+
+- `actualConversation` only: `actualConversation` is used as actual traces, without expected traces.
+- `actualConversation` + `conversation`: `actualConversation` is used as actual traces, and `conversation` is used as expected traces, aligned by turn.
+- `conversation` only: `conversation` is used as actual traces without expected traces (for backward compatibility only).
 
 ```json
 {
@@ -2039,6 +2159,36 @@ Enable it by setting `evalMode` to `trace` in EvalCase and writing the full trac
           ]
         }
       ],
+      "actualConversation": [
+        {
+          "invocationId": "trace_calc_add-1",
+          "userContent": {
+            "role": "user",
+            "content": "calc add 123 456"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "calc result: 579"
+          },
+          "tools": [
+            {
+              "id": "call_00_example",
+              "name": "calculator",
+              "arguments": {
+                "a": 123,
+                "b": 456,
+                "operation": "add"
+              },
+              "result": {
+                "a": 123,
+                "b": 456,
+                "operation": "add",
+                "result": 579
+              }
+            }
+          ]
+        }
+      ],
       "sessionInput": {
         "appName": "trace-eval-app",
         "userId": "demo-user"
@@ -2048,9 +2198,9 @@ Enable it by setting `evalMode` to `trace` in EvalCase and writing the full trac
 }
 ```
 
-In Trace mode, the inference phase does not run Runner and instead writes `conversation` as actual traces into `InferenceResult.Inferences`. The evaluation phase still generates expecteds, but keeps only per-turn `userContent` as placeholders to avoid treating trace outputs as reference answers in comparisons.
+In Trace mode, the inference phase does not run Runner and instead writes `actualConversation` into `InferenceResult.Inferences` as actual traces. `conversation` provides expected traces. If `conversation` is omitted, the evaluation phase builds placeholder expecteds that keep only per-turn `userContent`, to avoid treating trace outputs as reference answers in comparisons.
 
-Trace mode is better suited to metrics that depend only on actual traces, such as `llm_rubric_response` and `llm_rubric_knowledge_recall`. Metrics that compare reference tool traces or reference final responses should use default mode and provide the expected fields in EvalSet.
+When only actual traces are provided, it is suitable for metrics that depend only on actual traces, such as `llm_rubric_response` and `llm_rubric_knowledge_recall`. If you need metrics that compare reference tool traces or reference final responses, you can additionally configure expected traces.
 
 See [examples/evaluation/trace](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/trace) for the full example.
 
@@ -2126,7 +2276,9 @@ A callback returns `Result` and `error`. `Result` is optional and is used to pas
 - `return result, nil`: update `ctx` to `result.Context` and use it for subsequent callbacks and later stages.
 - `return nil, err`: stop at the current callback point and return the error.
 
-When parallel inference is enabled via `evaluation.WithEvalCaseParallelInferenceEnabled(true)`, case-level callbacks may run concurrently. Because `args.Request` points to the same `*InferenceRequest`, treat it as read-only. If you need to modify the request, do it in a set-level callback.
+When parallel inference is enabled via `evaluation.WithEvalCaseParallelInferenceEnabled(true)`, inference case-level callbacks may run concurrently. Because `args.Request` points to the same `*InferenceRequest`, treat it as read-only. If you need to modify the request, do it in a set-level callback.
+
+When parallel evaluation is enabled via `evaluation.WithEvalCaseParallelEvaluationEnabled(true)`, evaluation case-level callbacks may also run concurrently. Because `args.Request` points to the same `*EvaluateRequest`, treat it as read-only. If you need to modify the request, do it in a set-level callback.
 
 A single EvalCase inference or evaluation failure usually does not return through `error`. It is written into `Result.Status` and `Result.ErrorMessage`. Therefore, `After*CaseArgs.Error` does not carry per-case failure reasons. Check `args.Result.Status` and `args.Result.ErrorMessage` to detect failures.
 
@@ -2150,6 +2302,25 @@ agentEvaluator, err := evaluation.New(
 Parallel inference only affects inference across different cases. Turns within a single case still run sequentially, and evaluation still processes cases in order.
 
 After enabling concurrency, ensure that Runner, tool implementations, external dependencies, and callback logic are safe for concurrent calls to avoid interference from shared mutable state.
+
+### EvalCase-Level Parallel Evaluation
+
+When evaluators are slow, such as LLM judges, the evaluation phase can become the bottleneck. The framework supports EvalCase-level parallel evaluation to reduce overall duration.
+
+Enable parallel evaluation when creating AgentEvaluator and set the maximum parallelism. If not set, the default is `runtime.GOMAXPROCS(0)`.
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/evaluation"
+
+agentEvaluator, err := evaluation.New(
+	appName,
+	runner,
+	evaluation.WithEvalCaseParallelEvaluationEnabled(true),
+	evaluation.WithEvalCaseParallelism(8),
+)
+```
+
+Parallel evaluation only affects evaluation across different cases. Turns within a case are still sequential, and evaluators are executed in metric order. The returned `EvalCaseResults` preserve the order of the input `InferenceResults`.
 
 ### Context Injection
 
@@ -2222,6 +2393,95 @@ passHatK, err := evaluation.PassHatK(n, c, k)
 ```
 
 The computation of pass@k and pass^k relies on independence and identical distribution across runs. When doing repeated runs, ensure each run is independently sampled with necessary state reset, and avoid reusing session memory, tool caches, or external dependencies that would systematically inflate the metrics.
+
+### Skills Evaluation
+
+Agent Skills are exposed as built-in tools: `skill_load` and `skill_run`, so you can evaluate whether the agent uses Skills correctly with the same tool trajectory evaluator. In practice, `skill_run` results contain volatile fields such as `stdout`, `stderr`, `duration_ms`, and inline `output_files` content. Prefer using `onlyTree` in a per-tool strategy to assert only stable fields such as `skill`, requested `output_files`, and `exit_code` and `timed_out`, letting other volatile keys be ignored.
+
+A minimal example is shown below.
+
+EvalSet `tools` snippet:
+
+```json
+{
+  "invocationId": "write_ok-1",
+  "userContent": {
+    "role": "user",
+    "content": "Use skills to generate an OK file and confirm when done."
+  },
+  "tools": [
+    {
+      "id": "tool_use_1",
+      "name": "skill_load",
+      "arguments": {
+        "skill": "write-ok"
+      }
+    },
+    {
+      "id": "tool_use_2",
+      "name": "skill_run",
+      "arguments": {
+        "skill": "write-ok",
+        "output_files": [
+          "out/ok.txt"
+        ]
+      },
+      "result": {
+        "exit_code": 0,
+        "timed_out": false
+      }
+    }
+  ]
+}
+```
+
+Metric `toolTrajectory` snippet:
+
+```json
+[
+  {
+    "metricName": "tool_trajectory_avg_score",
+    "threshold": 1,
+    "criterion": {
+      "toolTrajectory": {
+        "orderSensitive": true,
+        "subsetMatching": true,
+        "toolStrategy": {
+          "skill_load": {
+            "arguments": {
+              "onlyTree": {
+                "skill": true
+              },
+              "matchStrategy": "exact"
+            },
+            "result": {
+              "ignore": true
+            }
+          },
+          "skill_run": {
+            "arguments": {
+              "onlyTree": {
+                "skill": true,
+                "output_files": true
+              },
+              "matchStrategy": "exact"
+            },
+            "result": {
+              "onlyTree": {
+                "exit_code": true,
+                "timed_out": true
+              },
+              "matchStrategy": "exact"
+            }
+          }
+        }
+      }
+    }
+  }
+]
+```
+
+See [examples/evaluation/skill](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/skill) for a runnable example.
 
 ## Best Practices
 

@@ -417,6 +417,36 @@ func TestNewExecuteToolSpanName(t *testing.T) {
 	}
 }
 
+func TestNewSummarizeTaskType(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "empty name",
+			in:   "",
+			want: "summarize",
+		},
+		{
+			name: "non-empty name",
+			in:   "demo",
+			want: "summarize demo",
+		},
+		{
+			name: "whitespace is preserved",
+			in:   "  demo  ",
+			want: "summarize   demo  ",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, NewSummarizeTaskType(tt.in))
+		})
+	}
+}
+
 func TestTraceToolCall_NilPaths(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -606,6 +636,24 @@ func TestTraceChat_WithTimeToFirstToken(t *testing.T) {
 	require.True(t, hasAttr(span.attrs, KeyTRPCAgentGoClientTimeToFirstToken, 0.1))
 }
 
+func TestTraceChat_WithTaskType(t *testing.T) {
+	inv := &agent.Invocation{InvocationID: "inv-task", Session: &session.Session{ID: "sess-task"}}
+	req := &model.Request{Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}}}
+	rsp := &model.Response{ID: "resp-task"}
+
+	span := newRecordingSpan()
+	TraceChat(span, &TraceChatAttributes{
+		Invocation:       inv,
+		Request:          req,
+		Response:         rsp,
+		EventID:          "evt-task",
+		TimeToFirstToken: 0,
+		TaskType:         "summarize demo",
+	})
+
+	require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAITaskType, "summarize demo"))
+}
+
 func TestBuildInvocationAttributes(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -777,6 +825,11 @@ func TestBuildResponseAttributes(t *testing.T) {
 				Usage: &model.Usage{
 					PromptTokens:     10,
 					CompletionTokens: 20,
+					PromptTokensDetails: model.PromptTokensDetails{
+						CachedTokens:        7,
+						CacheReadTokens:     11,
+						CacheCreationTokens: 13,
+					},
 				},
 			},
 		},
@@ -808,6 +861,19 @@ func TestBuildResponseAttributes(t *testing.T) {
 				// Verify basic attributes
 				require.True(t, hasAttr(attrs, KeyGenAIResponseModel, tt.rsp.Model))
 				require.True(t, hasAttr(attrs, KeyGenAIResponseID, tt.rsp.ID))
+
+				// Verify cached prompt tokens attribute when provided
+				if tt.rsp.Usage != nil {
+					if tt.rsp.Usage.PromptTokensDetails.CachedTokens != 0 {
+						require.True(t, hasAttr(attrs, KeyGenAIUsageInputTokensCached, int64(tt.rsp.Usage.PromptTokensDetails.CachedTokens)))
+					}
+					if tt.rsp.Usage.PromptTokensDetails.CacheReadTokens != 0 {
+						require.True(t, hasAttr(attrs, KeyGenAIUsageInputTokensCacheRead, int64(tt.rsp.Usage.PromptTokensDetails.CacheReadTokens)))
+					}
+					if tt.rsp.Usage.PromptTokensDetails.CacheCreationTokens != 0 {
+						require.True(t, hasAttr(attrs, KeyGenAIUsageInputTokensCacheCreation, int64(tt.rsp.Usage.PromptTokensDetails.CacheCreationTokens)))
+					}
+				}
 			}
 		})
 	}

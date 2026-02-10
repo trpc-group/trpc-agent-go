@@ -18,7 +18,15 @@ framework writes session state keys:
 - `temp:skill:docs:<name>`
 
 The Skills request processor reads these keys and injects the corresponding
-skill body/docs into the system prompt.
+skill body/docs into the next model request.
+
+By default (legacy behavior), the loaded content is appended to the system
+prompt. Optionally, you can enable tool-result materialization to append loaded
+skill content into the corresponding tool result messages (`skill_load` /
+`skill_select_docs`) instead:
+
+- `llmagent.WithSkillsLoadedContentInToolResults(true)`
+- Or in this example: `go run . -tool-results=true`
 
 SkillLoadMode controls the lifetime of those keys:
 

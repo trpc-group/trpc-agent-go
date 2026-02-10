@@ -1,0 +1,295 @@
+{
+  "evalSetResultId": "skill-eval-app_skill-call-basic_370dc583-f4b2-48f5-b6f2-9f0df1034a08",
+  "evalSetResultName": "skill-eval-app_skill-call-basic_370dc583-f4b2-48f5-b6f2-9f0df1034a08",
+  "evalSetId": "skill-call-basic",
+  "evalCaseResults": [
+    {
+      "evalSetId": "skill-call-basic",
+      "evalId": "write_ok",
+      "runId": 1,
+      "finalEvalStatus": "passed",
+      "overallEvalMetricResults": [
+        {
+          "metricName": "tool_trajectory_avg_score",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 1,
+          "criterion": {
+            "toolTrajectory": {
+              "defaultStrategy": {
+                "name": {
+                  "matchStrategy": "exact"
+                },
+                "arguments": {
+                  "matchStrategy": "exact"
+                },
+                "result": {
+                  "matchStrategy": "exact"
+                }
+              },
+              "toolStrategy": {
+                "skill_load": {
+                  "name": {
+                    "matchStrategy": "exact"
+                  },
+                  "arguments": {
+                    "onlyTree": {
+                      "skill": true
+                    },
+                    "matchStrategy": "exact"
+                  },
+                  "result": {
+                    "ignore": true
+                  }
+                },
+                "skill_run": {
+                  "name": {
+                    "matchStrategy": "exact"
+                  },
+                  "arguments": {
+                    "onlyTree": {
+                      "skill": true,
+                      "output_files": true
+                    },
+                    "matchStrategy": "exact"
+                  },
+                  "result": {
+                    "onlyTree": {
+                      "exit_code": true,
+                      "timed_out": true
+                    },
+                    "matchStrategy": "exact"
+                  }
+                }
+              },
+              "orderSensitive": true,
+              "subsetMatching": true
+            }
+          },
+          "details": {
+            "score": 1
+          }
+        }
+      ],
+      "evalMetricResultPerInvocation": [
+        {
+          "actualInvocation": {
+            "invocationId": "e3b861ea-4d07-4572-8bd5-706cd69a4867",
+            "userContent": {
+              "role": "user",
+              "content": "Use skills to generate an OK file and confirm when done."
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "Generated the OK file successfully.\n\n- File: `out/ok.txt`\n- Contents: `OK`"
+            },
+            "tools": [
+              {
+                "id": "call_tBFVetsWw5Kj1ljMD776U3aE",
+                "name": "skill_load",
+                "arguments": {
+                  "skill": "write-ok"
+                },
+                "result": "loaded: write-ok"
+              },
+              {
+                "id": "call_nbV5zbAiaypOXMWo4T738qXH",
+                "name": "skill_run",
+                "arguments": {
+                  "command": "bash scripts/write_ok.sh",
+                  "output_files": [
+                    "out/ok.txt"
+                  ],
+                  "skill": "write-ok"
+                },
+                "result": {
+                  "duration_ms": 5,
+                  "exit_code": 0,
+                  "output_files": [
+                    {
+                      "content": "OK\n",
+                      "mime_type": "text/plain; charset=utf-8",
+                      "name": "out/ok.txt",
+                      "ref": "workspace://out/ok.txt",
+                      "size_bytes": 3
+                    }
+                  ],
+                  "primary_output": {
+                    "content": "OK\n",
+                    "mime_type": "text/plain; charset=utf-8",
+                    "name": "out/ok.txt",
+                    "ref": "workspace://out/ok.txt",
+                    "size_bytes": 3
+                  },
+                  "stderr": "",
+                  "stdout": "Wrote out/ok.txt\n",
+                  "timed_out": false,
+                  "warnings": [
+                    "output_files are workspace-relative; prefer output_files content; when you need a stable reference, use output_files[*].ref (workspace://...)"
+                  ]
+                }
+              }
+            ]
+          },
+          "expectedInvocation": {
+            "invocationId": "write_ok-1",
+            "userContent": {
+              "role": "user",
+              "content": "Use skills to generate an OK file and confirm when done."
+            },
+            "tools": [
+              {
+                "id": "tool_use_1",
+                "name": "skill_load",
+                "arguments": {
+                  "skill": "write-ok"
+                }
+              },
+              {
+                "id": "tool_use_2",
+                "name": "skill_run",
+                "arguments": {
+                  "output_files": [
+                    "out/ok.txt"
+                  ],
+                  "skill": "write-ok"
+                },
+                "result": {
+                  "exit_code": 0,
+                  "timed_out": false
+                }
+              }
+            ]
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "criterion": {
+                "toolTrajectory": {
+                  "defaultStrategy": {
+                    "name": {
+                      "matchStrategy": "exact"
+                    },
+                    "arguments": {
+                      "matchStrategy": "exact"
+                    },
+                    "result": {
+                      "matchStrategy": "exact"
+                    }
+                  },
+                  "toolStrategy": {
+                    "skill_load": {
+                      "name": {
+                        "matchStrategy": "exact"
+                      },
+                      "arguments": {
+                        "onlyTree": {
+                          "skill": true
+                        },
+                        "matchStrategy": "exact"
+                      },
+                      "result": {
+                        "ignore": true
+                      }
+                    },
+                    "skill_run": {
+                      "name": {
+                        "matchStrategy": "exact"
+                      },
+                      "arguments": {
+                        "onlyTree": {
+                          "skill": true,
+                          "output_files": true
+                        },
+                        "matchStrategy": "exact"
+                      },
+                      "result": {
+                        "onlyTree": {
+                          "exit_code": true,
+                          "timed_out": true
+                        },
+                        "matchStrategy": "exact"
+                      }
+                    }
+                  },
+                  "orderSensitive": true,
+                  "subsetMatching": true
+                }
+              },
+              "details": {
+                "score": 1
+              }
+            }
+          ]
+        }
+      ],
+      "sessionId": "dd60922c-09e1-4e93-ac34-4aaa4b412da0",
+      "userId": "user"
+    }
+  ],
+  "summary": {
+    "overallStatus": "passed",
+    "numRuns": 1,
+    "runStatusCounts": {
+      "passed": 1
+    },
+    "runSummaries": [
+      {
+        "runId": 1,
+        "overallStatus": "passed",
+        "caseStatusCounts": {
+          "passed": 1
+        },
+        "metricSummaries": [
+          {
+            "metricName": "tool_trajectory_avg_score",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 1,
+            "statusCounts": {
+              "passed": 1
+            }
+          }
+        ]
+      }
+    ],
+    "evalCaseSummaries": [
+      {
+        "evalId": "write_ok",
+        "overallStatus": "passed",
+        "runStatusCounts": {
+          "passed": 1
+        },
+        "metricSummaries": [
+          {
+            "metricName": "tool_trajectory_avg_score",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 1,
+            "statusCounts": {
+              "passed": 1
+            }
+          }
+        ],
+        "runSummaries": [
+          {
+            "runId": 1,
+            "finalEvalStatus": "passed",
+            "metricResults": [
+              {
+                "metricName": "tool_trajectory_avg_score",
+                "score": 1,
+                "evalStatus": "passed",
+                "threshold": 1
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "creationTimestamp": 1770307706.940677
+}

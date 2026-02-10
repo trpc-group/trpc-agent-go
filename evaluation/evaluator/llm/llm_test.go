@@ -329,6 +329,23 @@ func TestJudgeModelResponseErrors(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestJudgeModelResponsePassesVariantToProvider(t *testing.T) {
+	var capturedVariant string
+	provider.Register("llm-variant-provider", func(opts *provider.Options) (model.Model, error) {
+		capturedVariant = opts.Variant
+		return &fakeModel{responses: []*model.Response{{
+			Choices: []model.Choice{{Message: model.Message{Content: "ok"}}},
+			Done:    true,
+		}}}, nil
+	})
+	evalMetric := buildEvalMetric("llm-variant-provider", 1)
+	evalMetric.Criterion.LLMJudge.JudgeModel.Variant = "deepseek"
+
+	_, err := judgeModelResponse(context.Background(), []model.Message{{Role: "user", Content: "prompt"}}, evalMetric)
+	require.NoError(t, err)
+	assert.Equal(t, "deepseek", capturedVariant)
+}
+
 func TestLLMBaseEvaluator_NameDescription(t *testing.T) {
 	base := &LLMBaseEvaluator{}
 	assert.Equal(t, "llm_base_evaluator", base.Name())

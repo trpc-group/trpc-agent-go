@@ -17,6 +17,7 @@ import (
 	"sort"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
@@ -57,7 +58,7 @@ func New(appName string, runner runner.Runner, opt ...Option) (AgentEvaluator, e
 	if a.numRuns <= 0 {
 		return nil, errors.New("num runs must be greater than 0")
 	}
-	if opts.evalCaseParallelInferenceEnabled && opts.evalCaseParallelism <= 0 {
+	if (opts.evalCaseParallelInferenceEnabled || opts.evalCaseParallelEvaluationEnabled) && opts.evalCaseParallelism <= 0 {
 		return nil, errors.New("eval case parallelism must be greater than 0")
 	}
 	if a.evalResultManager == nil {
@@ -72,6 +73,7 @@ func New(appName string, runner runner.Runner, opt ...Option) (AgentEvaluator, e
 			service.WithCallbacks(opts.callbacks),
 			service.WithEvalCaseParallelism(opts.evalCaseParallelism),
 			service.WithEvalCaseParallelInferenceEnabled(opts.evalCaseParallelInferenceEnabled),
+			service.WithEvalCaseParallelEvaluationEnabled(opts.evalCaseParallelEvaluationEnabled),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("create eval service: %w", err)
@@ -116,6 +118,7 @@ func (a *agentEvaluator) Evaluate(ctx context.Context, evalSetID string) (*Evalu
 	if evalSetID == "" {
 		return nil, errors.New("eval set id is not configured")
 	}
+	ctx, _ = agent.EnsureInvocation(ctx)
 	start := time.Now()
 	// Gather per-case results.
 	evalCases, evalSetResult, err := a.collectCaseResults(ctx, evalSetID)

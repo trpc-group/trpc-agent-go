@@ -320,7 +320,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		needToAddInvocationMessage = len(messages) == 0
 	}
 
-	if invocation.Message.Content != "" && needToAddInvocationMessage {
+	if model.HasPayload(invocation.Message) && needToAddInvocationMessage {
 		req.Messages = append(req.Messages, invocation.Message)
 		log.DebugfContext(
 			ctx,
@@ -469,7 +469,7 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 	inv.Session.EventMu.RUnlock()
 
 	// insert invocation message
-	if !includedInvocationMessage && inv.Message.Content != "" {
+	if !includedInvocationMessage && model.HasPayload(inv.Message) {
 		events = p.insertInvocationMessage(events, inv)
 	}
 
@@ -477,10 +477,7 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 	resultEvents = p.rearrangeAsyncFuncRespHist(resultEvents)
 
 	// Get current request ID for reasoning content filtering.
-	currentRequestID := ""
-	if inv != nil && inv.RunOptions.RequestID != "" {
-		currentRequestID = inv.RunOptions.RequestID
-	}
+	currentRequestID := inv.RunOptions.RequestID
 
 	// Convert events to messages with reasoning content handling.
 	var messages []model.Message
@@ -495,6 +492,9 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 				msg := choice.Message
 				// Apply reasoning content stripping based on mode.
 				msg = p.processReasoningContent(msg, evt.RequestID, currentRequestID)
+				if isEmptyAssistantMessage(msg) {
+					continue
+				}
 				messages = append(messages, msg)
 			}
 		}
@@ -541,6 +541,16 @@ func (p *ContentRequestProcessor) processReasoningContent(
 	return msg
 }
 
+func isEmptyAssistantMessage(msg model.Message) bool {
+	if msg.Role != model.RoleAssistant {
+		return false
+	}
+	return msg.Content == "" &&
+		len(msg.ContentParts) == 0 &&
+		len(msg.ToolCalls) == 0 &&
+		msg.ReasoningContent == ""
+}
+
 // getCurrentInvocationMessages gets messages only from the current invocation.
 // This is used when include_contents=none to preserve tool call history within
 // the current ReAct loop while isolating from parent/other branch history.
@@ -578,7 +588,7 @@ func (p *ContentRequestProcessor) getCurrentInvocationMessages(inv *agent.Invoca
 			break
 		}
 	}
-	if !hasInvocationMessage && inv.Message.Content != "" {
+	if !hasInvocationMessage && model.HasPayload(inv.Message) {
 		events = p.insertInvocationMessage(events, inv)
 	}
 
@@ -586,10 +596,7 @@ func (p *ContentRequestProcessor) getCurrentInvocationMessages(inv *agent.Invoca
 	resultEvents = p.rearrangeAsyncFuncRespHist(resultEvents)
 
 	// Get current request ID for reasoning content filtering.
-	currentRequestID := ""
-	if inv != nil && inv.RunOptions.RequestID != "" {
-		currentRequestID = inv.RunOptions.RequestID
-	}
+	currentRequestID := inv.RunOptions.RequestID
 
 	// Convert events to messages with reasoning content handling.
 	var messages []model.Message
@@ -603,6 +610,9 @@ func (p *ContentRequestProcessor) getCurrentInvocationMessages(inv *agent.Invoca
 			for _, choice := range ev.Choices {
 				msg := choice.Message
 				msg = p.processReasoningContent(msg, evt.RequestID, currentRequestID)
+				if isEmptyAssistantMessage(msg) {
+					continue
+				}
 				messages = append(messages, msg)
 			}
 		}
@@ -614,7 +624,7 @@ func (p *ContentRequestProcessor) getCurrentInvocationMessages(inv *agent.Invoca
 
 func (p *ContentRequestProcessor) insertInvocationMessage(
 	events []event.Event, inv *agent.Invocation) []event.Event {
-	if inv.Message.Content == "" {
+	if !model.HasPayload(inv.Message) {
 		return events
 	}
 	userMsgEvent := event.NewResponseEvent(inv.InvocationID, "user", &model.Response{

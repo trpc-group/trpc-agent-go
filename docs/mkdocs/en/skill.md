@@ -1,4 +1,4 @@
-# Skill (Agent Skills)
+# Skill
 
 Agent Skills package reusable workflows as folders with a `SKILL.md`
 spec plus optional docs and scripts. During a conversation, the agent
@@ -33,14 +33,16 @@ Background references:
      system message so the model knows what skills exist.
 
 2) Full body (on demand)
-   - When a task truly needs a skill, the model calls `skill_load` and
-     the framework injects that skill’s full `SKILL.md` body.
+   - When a task truly needs a skill, the model calls `skill_load`. The
+     framework then materializes that skill’s full `SKILL.md` body into
+     the next model request (see “Prompt Cache” below).
 
 3) Docs/Scripts (selective + isolated execution)
-   - Docs are included only when requested; scripts are not inlined but
-     executed inside a workspace, returning results and output files.
+   - Docs are included only when requested (via `skill_load` or
+     `skill_select_docs`). Scripts are not inlined; they are executed
+     inside a workspace, returning results and output files.
 
-### Token Cost (Why Progressive Disclosure Matters)
+### Token Cost
 
 If you inline a full skills repo (all `SKILL.md` bodies and docs) into
 the prompt up-front, it can dominate your prompt-token budget and even
@@ -49,6 +51,89 @@ exceed the model context window.
 For a reproducible, **runtime** token comparison (progressive disclosure
 vs full injection), see `benchmark/anthropic_skills/README.md` and run
 the `token-report` suite described there.
+
+### Prompt Cache
+
+Some model providers support **prompt caching**: if a later model request
+starts with the exact same tokens as an earlier request, the provider
+can reuse that shared **prefix** from cache. This reduces work and can
+lower latency and/or input token cost (provider-dependent).
+
+For Skills, *where* the loaded `SKILL.md` body/docs land in the message
+sequence affects how long the shared prefix is:
+
+- Legacy behavior (default): loaded skill bodies/docs are appended to the
+  **system message**.
+  - This inserts new tokens **before** the user message and history,
+    which can shorten the shared prefix between consecutive model calls.
+- Tool-result materialization (optional): loaded skill bodies/docs are
+  appended to the matching **tool result** messages (`skill_load` /
+  `skill_select_docs`).
+  - This keeps the system message stable, so earlier messages are less
+    likely to shift, and prompt caching can often reuse a longer prefix.
+
+Fallback: if the matching tool result message is not present in the
+request history (for example, history suppression), the framework falls
+back to a dedicated system message so the model still sees the loaded
+content.
+
+Enable tool-result materialization with:
+`llmagent.WithSkillsLoadedContentInToolResults(true)`.
+
+To measure the impact in a real tool-using flow, run the
+`benchmark/anthropic_skills` `prompt-cache` suite.
+
+### Session Persistence
+
+It helps to separate two concepts:
+
+- **Session (persistent):** a stored log of events (user messages,
+  assistant messages, tool calls/results) plus a small key/value
+  **state map**.
+- **Model request (ephemeral):** the `[]Message` array sent to the model
+  for *this* call, built from the session + runtime configuration.
+
+`skill_load` stores only small state keys (loaded flag + doc selection).
+Request processors then **materialize** the full `SKILL.md` body/docs
+into the *next* model request.
+
+Important: materialization does **not** rewrite the session transcript.
+So if you inspect stored tool results, `skill_load` typically still looks
+like a short stub (for example, `loaded: internal-comms`). The model
+still sees the expanded body/docs because they are added when building
+the outbound request.
+
+Stability across calls:
+- Within a tool loop, the materialization is re-applied deterministically
+  on every model call, so later requests see the same skill content as
+  long as the skills repo and selection state are unchanged.
+- If the relevant tool result message is missing from the request history
+  (for example, history suppression or truncation), the framework falls
+  back to a dedicated system message (`Loaded skill context:`) to preserve
+  correctness. This fallback may reduce prompt-cache benefits because it
+  changes the system content.
+
+### Industry Comparison
+
+Many agent frameworks avoid mutating the system prompt mid-loop. Instead,
+they fetch dynamic context via a tool and keep that context in **tool
+messages**, which is typically more prompt-cache friendly.
+
+Examples:
+- OpenClaw: system prompt lists available skills, but the selected
+  `SKILL.md` is read via a tool (so the body lands in a tool result):
+  https://github.com/openclaw/openclaw/blob/0cf93b8fa74566258131f9e8ca30f313aac89d26/src/agents/system-prompt.ts
+- OpenAI Codex: project docs render a skills list and instruct opening
+  `SKILL.md` on demand (skill body comes from a file-read tool result):
+  https://github.com/openai/codex/blob/383b45279efda1ef611a4aa286621815fe656b8a/codex-rs/core/src/project_doc.rs
+
+In trpc-agent-go:
+- Legacy mode appends loaded skill bodies/docs to the **system message**
+  (simple and backward-compatible, but can reduce cacheable prefix length).
+- Tool-result materialization keeps the **system message stable** and
+  attaches loaded skill bodies/docs to `skill_load` / `skill_select_docs`
+  tool result messages (closer to the “tool message carries context”
+  pattern used above).
 
 ### File Layout
 
@@ -102,6 +187,8 @@ agent := llmagent.New(
     "skills-assistant",
     llmagent.WithSkills(repo),
     llmagent.WithCodeExecutor(exec),
+    // Optional: keep the system prompt stable for prompt caching.
+    llmagent.WithSkillsLoadedContentInToolResults(true),
 )
 ```
 
@@ -212,7 +299,11 @@ Behavior:
 - Writes session-scoped `temp:*` keys:
   - `temp:skill:loaded:<name>` = "1"
   - `temp:skill:docs:<name>` = "*" or JSON array
-- Request processor injects `SKILL.md` body and docs into system message
+- Request processors materialize `SKILL.md` body and docs into the next
+  model request:
+  - Default: appended to the system message (legacy behavior)
+  - Optional: appended to the matching tool result message
+    (`llmagent.WithSkillsLoadedContentInToolResults(true)`)
 
 Notes:
 - Prefer progressive disclosure: load only the body first, then list and
@@ -495,13 +586,14 @@ Common spans:
 - `workspace.create`, `workspace.stage.*`, `workspace.run`
 - `workspace.collect`, `workspace.cleanup`, `workspace.inline`
 
-## Rationale and Design (brief)
+## Rationale and Design
 
 - Motivation: Skills often contain lengthy instructions and scripts.
   Inlining all of them is costly and risky. The three‑layer model keeps
   the prompt lean while loading details and running code only when needed.
 - Injection & state: Tools write temporary keys (via `StateDelta`), and
-  the next request processor builds the system message accordingly.
+  request processors materialize loaded bodies/docs into the prompt
+  (system message by default, or tool results when enabled).
 - Isolation: Scripts run within a workspace boundary and only selected
   output files are brought back, not the script source.
 
@@ -521,6 +613,13 @@ Common spans:
   - Blog:
     https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills
   - Open repo: https://github.com/anthropics/skills
+- Industry patterns:
+  - OpenClaw: prompt instructs the model to read a selected skill’s
+    `SKILL.md` via a tool:
+    https://github.com/openclaw/openclaw/blob/0cf93b8fa74566258131f9e8ca30f313aac89d26/src/agents/system-prompt.ts
+  - OpenAI Codex: project docs list skills and instruct opening
+    `SKILL.md` on demand:
+    https://github.com/openai/codex/blob/383b45279efda1ef611a4aa286621815fe656b8a/codex-rs/core/src/project_doc.rs
 - This repo:
   - Interactive demo: [examples/skillrun/main.go]
     (https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillrun/main.go)

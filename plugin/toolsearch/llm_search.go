@@ -104,7 +104,7 @@ func searchTools(ctx context.Context, m model.Model, req *model.Request, tools m
 	defer span.End()
 	invocation := invocationFromContextOrNew(ctx)
 	timingInfo := invocation.GetOrCreateTimingInfo()
-	tracker := itelemetry.NewChatMetricsTracker(ctx, invocation, req, timingInfo, &err)
+	tracker := itelemetry.NewChatMetricsTracker(ctx, invocation, req, timingInfo, nil, &err)
 	defer tracker.RecordMetrics()()
 
 	final, err := generateFinalResponse(ctx, m, req)

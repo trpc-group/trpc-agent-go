@@ -130,6 +130,53 @@ func (f *fakeEvaluator) Evaluate(ctx context.Context, actuals, expecteds []*eval
 	return f.result, nil
 }
 
+type blockingEvaluator struct {
+	name          string
+	result        *evaluator.EvaluateResult
+	started       chan string
+	release       chan struct{}
+	running       int32
+	maxConcurrent int32
+}
+
+func newBlockingEvaluator(name string, expectedCalls int) *blockingEvaluator {
+	return &blockingEvaluator{
+		name:    name,
+		result:  &evaluator.EvaluateResult{OverallScore: 1, OverallStatus: status.EvalStatusPassed, PerInvocationResults: []*evaluator.PerInvocationResult{{Score: 1, Status: status.EvalStatusPassed}}},
+		started: make(chan string, expectedCalls),
+		release: make(chan struct{}),
+	}
+}
+
+func (b *blockingEvaluator) Name() string {
+	return b.name
+}
+
+func (b *blockingEvaluator) Description() string {
+	return "blocking evaluator"
+}
+
+func (b *blockingEvaluator) Evaluate(ctx context.Context, actuals, expecteds []*evalset.Invocation, evalMetric *metric.EvalMetric) (*evaluator.EvaluateResult, error) {
+	cur := atomic.AddInt32(&b.running, 1)
+	for {
+		prev := atomic.LoadInt32(&b.maxConcurrent)
+		if cur <= prev {
+			break
+		}
+		if atomic.CompareAndSwapInt32(&b.maxConcurrent, prev, cur) {
+			break
+		}
+	}
+	invocationID := ""
+	if len(actuals) > 0 && actuals[0] != nil {
+		invocationID = actuals[0].InvocationID
+	}
+	b.started <- invocationID
+	<-b.release
+	atomic.AddInt32(&b.running, -1)
+	return b.result, nil
+}
+
 func makeFinalEvent(text string) *event.Event {
 	return &event.Event{
 		InvocationID: "generated-invocation",
@@ -226,6 +273,15 @@ func TestLocalNewValidationErrors(t *testing.T) {
 			wantErr: "eval case parallelism must be greater than 0",
 		},
 		{
+			name: "parallel_evaluation_requires_positive_parallelism",
+			r:    &fakeRunner{},
+			options: []service.Option{
+				service.WithEvalCaseParallelEvaluationEnabled(true),
+				service.WithEvalCaseParallelism(0),
+			},
+			wantErr: "eval case parallelism must be greater than 0",
+		},
+		{
 			name: "nil_eval_set_manager",
 			r:    &fakeRunner{},
 			options: []service.Option{
@@ -269,7 +325,9 @@ func TestLocalNewDefaultOptions(t *testing.T) {
 	localSvc, ok := svc.(*local)
 	assert.True(t, ok)
 	assert.False(t, localSvc.evalCaseParallelInferenceEnabled)
+	assert.False(t, localSvc.evalCaseParallelEvaluationEnabled)
 	assert.Nil(t, localSvc.evalCaseInferencePool)
+	assert.Nil(t, localSvc.evalCaseEvaluationPool)
 
 	assert.NoError(t, svc.Close())
 }
@@ -288,6 +346,24 @@ func TestLocalNewParallelInferenceCreatesPool(t *testing.T) {
 	assert.True(t, localSvc.evalCaseParallelInferenceEnabled)
 	assert.NotNil(t, localSvc.evalCaseInferencePool)
 	assert.Equal(t, 2, localSvc.evalCaseInferencePool.Cap())
+
+	assert.NoError(t, svc.Close())
+}
+
+func TestLocalNewParallelEvaluationCreatesPool(t *testing.T) {
+	svc, err := New(
+		&fakeRunner{},
+		service.WithEvalCaseParallelEvaluationEnabled(true),
+		service.WithEvalCaseParallelism(2),
+	)
+	assert.NoError(t, err)
+	assert.NotNil(t, svc)
+
+	localSvc, ok := svc.(*local)
+	assert.True(t, ok)
+	assert.True(t, localSvc.evalCaseParallelEvaluationEnabled)
+	assert.NotNil(t, localSvc.evalCaseEvaluationPool)
+	assert.Equal(t, 2, localSvc.evalCaseEvaluationPool.Cap())
 
 	assert.NoError(t, svc.Close())
 }
@@ -813,6 +889,172 @@ func TestLocalEvaluateSuccess(t *testing.T) {
 	assert.Equal(t, "demo-user", caseResult.UserID)
 }
 
+func TestLocalEvaluateParallelEvaluationPreservesOrder(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, makeEvalCase(appName, "case-1", "prompt-1")))
+	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, makeEvalCase(appName, "case-2", "prompt-2")))
+
+	reg := registry.New()
+	metricName := "blocking_metric"
+	blocking := newBlockingEvaluator(metricName, 2)
+	assert.NoError(t, reg.Register(metricName, blocking))
+
+	svc, err := New(
+		&fakeRunner{},
+		service.WithEvalSetManager(mgr),
+		service.WithRegistry(reg),
+		service.WithSessionIDSupplier(func(ctx context.Context) string { return "session-xyz" }),
+		service.WithEvalCaseParallelEvaluationEnabled(true),
+		service.WithEvalCaseParallelism(2),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	if svc == nil {
+		return
+	}
+	defer func() { assert.NoError(t, svc.Close()) }()
+
+	inference1 := makeInferenceResult(appName, evalSetID, "case-1", "session-xyz", []*evalset.Invocation{
+		makeActualInvocation("case-1-actual", "prompt-1", "resp-1"),
+	})
+	inference2 := makeInferenceResult(appName, evalSetID, "case-2", "session-xyz", []*evalset.Invocation{
+		makeActualInvocation("case-2-actual", "prompt-2", "resp-2"),
+	})
+	req := &service.EvaluateRequest{
+		AppName:          appName,
+		EvalSetID:        evalSetID,
+		InferenceResults: []*service.InferenceResult{inference1, inference2},
+		EvaluateConfig: &service.EvaluateConfig{
+			EvalMetrics: []*metric.EvalMetric{{MetricName: metricName, Threshold: 0.5}},
+		},
+	}
+
+	type response struct {
+		result *service.EvalSetRunResult
+		err    error
+	}
+	respCh := make(chan response, 1)
+	go func() {
+		result, err := svc.Evaluate(ctx, req)
+		respCh <- response{result: result, err: err}
+	}()
+
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+	for i := 0; i < 2; i++ {
+		select {
+		case <-blocking.started:
+		case <-deadline.C:
+			assert.FailNow(t, "timeout waiting for evaluator calls")
+		}
+	}
+	close(blocking.release)
+
+	resp := <-respCh
+	assert.NoError(t, resp.err)
+	assert.NotNil(t, resp.result)
+	if resp.result == nil {
+		return
+	}
+	assert.Len(t, resp.result.EvalCaseResults, 2)
+	assert.Equal(t, "case-1", resp.result.EvalCaseResults[0].EvalID)
+	assert.Equal(t, "case-2", resp.result.EvalCaseResults[1].EvalID)
+	assert.GreaterOrEqual(t, atomic.LoadInt32(&blocking.maxConcurrent), int32(2))
+}
+
+func TestLocalEvaluateParallelEvaluationAggregatesErrors(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+
+	callbacks := &service.Callbacks{}
+	callbacks.Register("fail", &service.Callback{
+		BeforeEvaluateCase: func(ctx context.Context, args *service.BeforeEvaluateCaseArgs) (*service.BeforeEvaluateCaseResult, error) {
+			if args.EvalCaseID == "case-2" {
+				select {
+				case started <- struct{}{}:
+				default:
+				}
+				select {
+				case <-release:
+					return nil, errors.New("case-2 failed")
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			}
+			return nil, errors.New("case-1 failed")
+		},
+	})
+
+	svc, err := New(
+		&fakeRunner{},
+		service.WithEvalSetManager(evalsetinmemory.New()),
+		service.WithEvalResultManager(evalresultinmemory.New()),
+		service.WithRegistry(registry.New()),
+		service.WithCallbacks(callbacks),
+		service.WithSessionIDSupplier(func(ctx context.Context) string { return "session" }),
+		service.WithEvalCaseParallelEvaluationEnabled(true),
+		service.WithEvalCaseParallelism(2),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	if svc == nil {
+		return
+	}
+	defer func() { assert.NoError(t, svc.Close()) }()
+
+	req := &service.EvaluateRequest{
+		AppName:   appName,
+		EvalSetID: evalSetID,
+		InferenceResults: []*service.InferenceResult{
+			{AppName: appName, EvalSetID: evalSetID, EvalCaseID: "case-1", SessionID: "session", Status: status.EvalStatusFailed, ErrorMessage: "failed"},
+			{AppName: appName, EvalSetID: evalSetID, EvalCaseID: "case-2", SessionID: "session", Status: status.EvalStatusFailed, ErrorMessage: "failed"},
+		},
+		EvaluateConfig: &service.EvaluateConfig{},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := svc.Evaluate(ctx, req)
+		done <- err
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		assert.FailNow(t, "timeout waiting for case-2 callback")
+	}
+
+	close(release)
+
+	select {
+	case err := <-done:
+		assert.Error(t, err)
+		if err == nil {
+			return
+		}
+		assert.Contains(t, err.Error(), "evalCaseID=case-1")
+		assert.Contains(t, err.Error(), "case-1 failed")
+		assert.Contains(t, err.Error(), "evalCaseID=case-2")
+		assert.Contains(t, err.Error(), "case-2 failed")
+		assert.NotContains(t, err.Error(), "context canceled")
+	case <-time.After(2 * time.Second):
+		assert.FailNow(t, "timeout waiting for evaluation completion")
+	}
+}
+
 func TestLocalEvaluateInferenceFailureReturnsErrorMessage(t *testing.T) {
 	ctx := context.Background()
 	appName := "app"
@@ -1079,6 +1321,136 @@ func TestLocalInferenceTraceModeSkipsRunner(t *testing.T) {
 	assert.Zero(t, callCount)
 }
 
+func TestLocalInferenceDefaultModeRejectsActualConversation(t *testing.T) {
+	ctx := context.Background()
+	appName := "fixture-app"
+	evalSetID := "fixture-set"
+	caseID := "case-fixture"
+
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+
+	fixtureCase := &evalset.EvalCase{
+		EvalID: caseID,
+		Conversation: []*evalset.Invocation{
+			makeInvocation("fixture-inv-1", "prompt"),
+		},
+		ActualConversation: []*evalset.Invocation{
+			&evalset.Invocation{
+				FinalResponse: &model.Message{Role: model.RoleAssistant, Content: "answer"},
+			},
+		},
+		SessionInput: &evalset.SessionInput{AppName: appName, UserID: "demo-user", State: map[string]any{}},
+	}
+	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, fixtureCase))
+
+	runnerStub := &fakeRunner{err: errors.New("runner should not be called when actualConversation is set")}
+	reg := registry.New()
+	svc := newLocalService(t, runnerStub, mgr, reg, "session-fixture")
+
+	req := &service.InferenceRequest{AppName: appName, EvalSetID: evalSetID}
+	results, err := svc.Inference(ctx, req)
+	assert.NoError(t, err)
+	assert.Len(t, results, 1)
+	assert.Equal(t, caseID, results[0].EvalCaseID)
+	assert.Equal(t, "session-fixture", results[0].SessionID)
+	assert.Equal(t, status.EvalStatusFailed, results[0].Status)
+	assert.Contains(t, results[0].ErrorMessage, "actualConversation is only supported in trace mode")
+
+	runnerStub.mu.Lock()
+	callCount := len(runnerStub.calls)
+	runnerStub.mu.Unlock()
+	assert.Zero(t, callCount)
+}
+
+func TestLocalInferenceTraceModeUsesConfiguredActualConversation(t *testing.T) {
+	ctx := context.Background()
+	appName := "trace-app"
+	evalSetID := "trace-set"
+	caseID := "case-trace"
+
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+
+	traceCase := &evalset.EvalCase{
+		EvalID:   caseID,
+		EvalMode: evalset.EvalModeTrace,
+		Conversation: []*evalset.Invocation{
+			makeInvocation("trace-inv-1", "prompt"),
+		},
+		ActualConversation: []*evalset.Invocation{
+			makeActualInvocation("trace-inv-1", "prompt", "answer"),
+		},
+		SessionInput: &evalset.SessionInput{AppName: appName, UserID: "demo-user", State: map[string]any{}},
+	}
+	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, traceCase))
+
+	runnerStub := &fakeRunner{err: errors.New("runner should not be called when actualConversation is set")}
+	reg := registry.New()
+	svc := newLocalService(t, runnerStub, mgr, reg, "session-trace")
+
+	req := &service.InferenceRequest{AppName: appName, EvalSetID: evalSetID}
+	results, err := svc.Inference(ctx, req)
+	assert.NoError(t, err)
+	assert.Len(t, results, 1)
+	assert.Equal(t, caseID, results[0].EvalCaseID)
+	assert.Equal(t, "session-trace", results[0].SessionID)
+	assert.Len(t, results[0].Inferences, 1)
+	assert.Equal(t, "trace-inv-1", results[0].Inferences[0].InvocationID)
+	assert.NotNil(t, results[0].Inferences[0].FinalResponse)
+	assert.Equal(t, "answer", results[0].Inferences[0].FinalResponse.Content)
+
+	runnerStub.mu.Lock()
+	callCount := len(runnerStub.calls)
+	runnerStub.mu.Unlock()
+	assert.Zero(t, callCount)
+}
+
+func TestLocalInferenceTraceModeAllowsActualConversationWithoutConversation(t *testing.T) {
+	ctx := context.Background()
+	appName := "trace-app"
+	evalSetID := "trace-set"
+	caseID := "case-trace"
+
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+
+	traceCase := &evalset.EvalCase{
+		EvalID:   caseID,
+		EvalMode: evalset.EvalModeTrace,
+		ActualConversation: []*evalset.Invocation{
+			makeActualInvocation("trace-inv-1", "prompt", "answer"),
+		},
+		SessionInput: &evalset.SessionInput{AppName: appName, UserID: "demo-user", State: map[string]any{}},
+	}
+	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, traceCase))
+
+	runnerStub := &fakeRunner{err: errors.New("runner should not be called in trace mode")}
+	reg := registry.New()
+	svc := newLocalService(t, runnerStub, mgr, reg, "session-trace")
+
+	req := &service.InferenceRequest{AppName: appName, EvalSetID: evalSetID}
+	results, err := svc.Inference(ctx, req)
+	assert.NoError(t, err)
+	assert.Len(t, results, 1)
+	assert.Equal(t, caseID, results[0].EvalCaseID)
+	assert.Equal(t, status.EvalStatusPassed, results[0].Status)
+	assert.Len(t, results[0].Inferences, 1)
+	assert.Equal(t, "trace-inv-1", results[0].Inferences[0].InvocationID)
+	assert.NotNil(t, results[0].Inferences[0].UserContent)
+	assert.Equal(t, "prompt", results[0].Inferences[0].UserContent.Content)
+	assert.NotNil(t, results[0].Inferences[0].FinalResponse)
+	assert.Equal(t, "answer", results[0].Inferences[0].FinalResponse.Content)
+
+	runnerStub.mu.Lock()
+	callCount := len(runnerStub.calls)
+	runnerStub.mu.Unlock()
+	assert.Zero(t, callCount)
+}
+
 func TestLocalEvaluateTraceModeUsesUserContentAsExpected(t *testing.T) {
 	ctx := context.Background()
 	appName := "trace-app"
@@ -1146,6 +1518,156 @@ func TestLocalEvaluateTraceModeUsesUserContentAsExpected(t *testing.T) {
 	assert.Nil(t, perInvocation.ExpectedInvocation.FinalResponse)
 	assert.Nil(t, perInvocation.ExpectedInvocation.Tools)
 	assert.Nil(t, perInvocation.ExpectedInvocation.IntermediateResponses)
+}
+
+func TestLocalEvaluateTraceModeUsesUserContentAsExpectedWhenConversationIsOmitted(t *testing.T) {
+	ctx := context.Background()
+	appName := "trace-app"
+	evalSetID := "trace-set"
+	caseID := "case-trace"
+	metricName := "trace_metric"
+
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, &evalset.EvalCase{
+		EvalID:   caseID,
+		EvalMode: evalset.EvalModeTrace,
+		ActualConversation: []*evalset.Invocation{
+			makeActualInvocation("trace-inv-1", "prompt", "answer"),
+		},
+		SessionInput: &evalset.SessionInput{AppName: appName, UserID: "demo-user", State: map[string]any{}},
+	}))
+
+	reg := registry.New()
+	fakeEval := &fakeEvaluator{
+		name: metricName,
+		result: &evaluator.EvaluateResult{
+			OverallScore:  1,
+			OverallStatus: status.EvalStatusPassed,
+			PerInvocationResults: []*evaluator.PerInvocationResult{
+				{Score: 1, Status: status.EvalStatusPassed},
+			},
+		},
+	}
+	assert.NoError(t, reg.Register(metricName, fakeEval))
+
+	runnerStub := &fakeRunner{err: errors.New("runner should not be called in trace mode")}
+	svc := newLocalService(t, runnerStub, mgr, reg, "session-trace")
+
+	inferenceResults, err := svc.Inference(ctx, &service.InferenceRequest{AppName: appName, EvalSetID: evalSetID})
+	assert.NoError(t, err)
+	assert.Len(t, inferenceResults, 1)
+
+	evalReq := &service.EvaluateRequest{
+		AppName:          appName,
+		EvalSetID:        evalSetID,
+		InferenceResults: inferenceResults,
+		EvaluateConfig: &service.EvaluateConfig{
+			EvalMetrics: []*metric.EvalMetric{{MetricName: metricName, Threshold: 0.5}},
+		},
+	}
+	result, err := svc.Evaluate(ctx, evalReq)
+	assert.NoError(t, err)
+	assert.Len(t, fakeEval.receivedActuals, 1)
+	assert.Len(t, fakeEval.receivedExpecteds, 1)
+	assert.NotNil(t, fakeEval.receivedActuals[0])
+	assert.NotNil(t, fakeEval.receivedActuals[0].FinalResponse)
+	assert.Equal(t, "answer", fakeEval.receivedActuals[0].FinalResponse.Content)
+	assert.NotNil(t, fakeEval.receivedExpecteds[0])
+	assert.NotNil(t, fakeEval.receivedExpecteds[0].UserContent)
+	assert.Equal(t, "prompt", fakeEval.receivedExpecteds[0].UserContent.Content)
+	assert.Nil(t, fakeEval.receivedExpecteds[0].FinalResponse)
+	assert.Nil(t, fakeEval.receivedExpecteds[0].Tools)
+	assert.Len(t, result.EvalCaseResults, 1)
+	assert.Len(t, result.EvalCaseResults[0].EvalMetricResultPerInvocation, 1)
+	perInvocation := result.EvalCaseResults[0].EvalMetricResultPerInvocation[0]
+	assert.NotNil(t, perInvocation.ActualInvocation)
+	assert.NotNil(t, perInvocation.ExpectedInvocation)
+	assert.Equal(t, "trace-inv-1", perInvocation.ExpectedInvocation.InvocationID)
+	assert.NotNil(t, perInvocation.ExpectedInvocation.UserContent)
+	assert.Equal(t, "prompt", perInvocation.ExpectedInvocation.UserContent.Content)
+	assert.Nil(t, perInvocation.ExpectedInvocation.FinalResponse)
+	assert.Nil(t, perInvocation.ExpectedInvocation.Tools)
+	assert.Nil(t, perInvocation.ExpectedInvocation.IntermediateResponses)
+}
+
+func TestLocalEvaluateTraceModeUsesConversationAsExpectedWhenActualConversationIsConfigured(t *testing.T) {
+	ctx := context.Background()
+	appName := "trace-app"
+	evalSetID := "trace-set"
+	caseID := "case-trace"
+	metricName := "trace_metric"
+
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, &evalset.EvalCase{
+		EvalID:   caseID,
+		EvalMode: evalset.EvalModeTrace,
+		Conversation: []*evalset.Invocation{
+			makeActualInvocation("trace-inv-1", "prompt", "expected"),
+		},
+		ActualConversation: []*evalset.Invocation{
+			makeActualInvocation("trace-inv-1", "prompt", "answer"),
+		},
+		SessionInput: &evalset.SessionInput{AppName: appName, UserID: "demo-user", State: map[string]any{}},
+	}))
+
+	reg := registry.New()
+	fakeEval := &fakeEvaluator{
+		name: metricName,
+		result: &evaluator.EvaluateResult{
+			OverallScore:  1,
+			OverallStatus: status.EvalStatusPassed,
+			PerInvocationResults: []*evaluator.PerInvocationResult{
+				{Score: 1, Status: status.EvalStatusPassed},
+			},
+		},
+	}
+	assert.NoError(t, reg.Register(metricName, fakeEval))
+
+	runnerStub := &fakeRunner{err: errors.New("runner should not be called in trace mode")}
+	svc := newLocalService(t, runnerStub, mgr, reg, "session-trace")
+
+	inferenceResults, err := svc.Inference(ctx, &service.InferenceRequest{AppName: appName, EvalSetID: evalSetID})
+	assert.NoError(t, err)
+	assert.Len(t, inferenceResults, 1)
+
+	evalReq := &service.EvaluateRequest{
+		AppName:          appName,
+		EvalSetID:        evalSetID,
+		InferenceResults: inferenceResults,
+		EvaluateConfig: &service.EvaluateConfig{
+			EvalMetrics: []*metric.EvalMetric{{MetricName: metricName, Threshold: 0.5}},
+		},
+	}
+	result, err := svc.Evaluate(ctx, evalReq)
+	assert.NoError(t, err)
+
+	assert.Len(t, fakeEval.receivedActuals, 1)
+	assert.Len(t, fakeEval.receivedExpecteds, 1)
+	assert.NotNil(t, fakeEval.receivedActuals[0])
+	assert.Equal(t, "trace-inv-1", fakeEval.receivedActuals[0].InvocationID)
+	assert.NotNil(t, fakeEval.receivedActuals[0].UserContent)
+	assert.Equal(t, "prompt", fakeEval.receivedActuals[0].UserContent.Content)
+	assert.NotNil(t, fakeEval.receivedActuals[0].FinalResponse)
+	assert.Equal(t, "answer", fakeEval.receivedActuals[0].FinalResponse.Content)
+	assert.NotNil(t, fakeEval.receivedExpecteds[0])
+	assert.Equal(t, "trace-inv-1", fakeEval.receivedExpecteds[0].InvocationID)
+	assert.NotNil(t, fakeEval.receivedExpecteds[0].UserContent)
+	assert.Equal(t, "prompt", fakeEval.receivedExpecteds[0].UserContent.Content)
+	assert.NotNil(t, fakeEval.receivedExpecteds[0].FinalResponse)
+	assert.Equal(t, "expected", fakeEval.receivedExpecteds[0].FinalResponse.Content)
+
+	assert.Len(t, result.EvalCaseResults, 1)
+	assert.Len(t, result.EvalCaseResults[0].EvalMetricResultPerInvocation, 1)
+	perInvocation := result.EvalCaseResults[0].EvalMetricResultPerInvocation[0]
+	assert.Equal(t, "trace-inv-1", perInvocation.ExpectedInvocation.InvocationID)
+	assert.NotNil(t, perInvocation.ExpectedInvocation.UserContent)
+	assert.Equal(t, "prompt", perInvocation.ExpectedInvocation.UserContent.Content)
+	assert.NotNil(t, perInvocation.ExpectedInvocation.FinalResponse)
+	assert.Equal(t, "expected", perInvocation.ExpectedInvocation.FinalResponse.Content)
 }
 
 func TestLocalInferenceParallelBeforeInferenceCaseReceivesSharedRequest(t *testing.T) {

@@ -53,6 +53,7 @@ type chatAttributes struct {
 	ResponseModelName string
 	Stream            bool
 	AgentName         string
+	TaskType          string
 
 	AppName   string
 	UserID    string
@@ -81,6 +82,9 @@ func (a chatAttributes) toAttributes() []attribute.KeyValue {
 	if a.SessionID != "" {
 		attrs = append(attrs, attribute.String(KeyGenAIConversationID, a.SessionID))
 	}
+	if a.TaskType != "" {
+		attrs = append(attrs, attribute.String(KeyGenAITaskType, a.TaskType))
+	}
 	if a.ErrorType != "" {
 		attrs = append(attrs, attribute.String(KeyErrorType, a.ErrorType))
 	} else if a.Error != nil {
@@ -95,14 +99,17 @@ func (a chatAttributes) toAttributes() []attribute.KeyValue {
 
 // ChatMetricsTracker tracks metrics for a single chat request lifecycle.
 type ChatMetricsTracker struct {
-	ctx                    context.Context
-	start                  time.Time
-	isFirstToken           bool
-	firstTokenTimeDuration time.Duration
-	firstCompleteToken     int
-	totalCompletionTokens  int
-	totalPromptTokens      int
-	lastEvent              *event.Event
+	ctx                            context.Context
+	start                          time.Time
+	isFirstToken                   bool
+	firstTokenTimeDuration         time.Duration
+	firstCompleteToken             int
+	totalCompletionTokens          int
+	totalPromptTokens              int
+	totalPromptCachedTokens        int
+	totalPromptCacheReadTokens     int
+	totalPromptCacheCreationTokens int
+	lastEvent                      *event.Event
 
 	// Timing tracking for streaming reasoning phases
 	firstReasoningTime time.Time
@@ -114,6 +121,7 @@ type ChatMetricsTracker struct {
 	// Configuration
 	invocation *agent.Invocation
 	llmRequest *model.Request
+	taskType   *string
 	err        *error // pointer to capture final error
 }
 
@@ -125,6 +133,7 @@ func NewChatMetricsTracker(
 	invocation *agent.Invocation,
 	llmRequest *model.Request,
 	timingInfo *model.TimingInfo,
+	taskType *string,
 	err *error,
 ) *ChatMetricsTracker {
 	return &ChatMetricsTracker{
@@ -133,6 +142,7 @@ func NewChatMetricsTracker(
 		isFirstToken: true,
 		invocation:   invocation,
 		llmRequest:   llmRequest,
+		taskType:     taskType,
 		err:          err,
 		timingInfo:   timingInfo,
 	}
@@ -169,6 +179,10 @@ func (t *ChatMetricsTracker) TrackResponse(response *model.Response) {
 	if response.Usage != nil {
 		t.totalPromptTokens = response.Usage.PromptTokens
 		t.totalCompletionTokens = response.Usage.CompletionTokens
+		totalDetails := response.Usage.PromptTokensDetails
+		t.totalPromptCachedTokens = totalDetails.CachedTokens
+		t.totalPromptCacheReadTokens = totalDetails.CacheReadTokens
+		t.totalPromptCacheCreationTokens = totalDetails.CacheCreationTokens
 	}
 
 	// Track reasoning duration (streaming mode only, first LLM call only)
@@ -242,6 +256,21 @@ func (t *ChatMetricsTracker) RecordMetrics() func() {
 			ChatMetricGenAIClientTokenUsage.Record(t.ctx, int64(t.totalPromptTokens),
 				metric.WithAttributes(append(otelAttrs, attribute.String(KeyGenAITokenType, metrics.KeyTRPCAgentGoInputTokenType))...))
 		}
+		// Record cached prompt token usage (subset of input tokens)
+		if ChatMetricGenAIClientTokenUsage != nil {
+			ChatMetricGenAIClientTokenUsage.Record(t.ctx, int64(t.totalPromptCachedTokens),
+				metric.WithAttributes(append(otelAttrs, attribute.String(KeyGenAITokenType, metrics.KeyTRPCAgentGoInputCachedTokenType))...))
+		}
+		// Record tokens read from prompt cache (Anthropic)
+		if ChatMetricGenAIClientTokenUsage != nil {
+			ChatMetricGenAIClientTokenUsage.Record(t.ctx, int64(t.totalPromptCacheReadTokens),
+				metric.WithAttributes(append(otelAttrs, attribute.String(KeyGenAITokenType, metrics.KeyTRPCAgentGoInputCacheReadTokenType))...))
+		}
+		// Record tokens used to create prompt cache (Anthropic)
+		if ChatMetricGenAIClientTokenUsage != nil {
+			ChatMetricGenAIClientTokenUsage.Record(t.ctx, int64(t.totalPromptCacheCreationTokens),
+				metric.WithAttributes(append(otelAttrs, attribute.String(KeyGenAITokenType, metrics.KeyTRPCAgentGoInputCacheCreationTokenType))...))
+		}
 
 		// Record output token usage
 		if ChatMetricGenAIClientTokenUsage != nil {
@@ -266,6 +295,10 @@ func (t *ChatMetricsTracker) buildAttributes() chatAttributes {
 	// Extract request attributes
 	if t.llmRequest != nil {
 		attrs.Stream = t.llmRequest.GenerationConfig.Stream
+	}
+
+	if t.taskType != nil {
+		attrs.TaskType = *t.taskType
 	}
 
 	// Extract invocation attributes (with nil safety)
