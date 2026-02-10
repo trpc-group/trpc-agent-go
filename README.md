@@ -48,20 +48,26 @@ English | [中文](README.zh_CN.md)
 
 ```go
 // Wrap a chat model as an LLMAgent
-modelInstance := openai.New("gpt-4o-mini")
-agent := llmagent.New("assistant",
-    llmagent.WithModel(modelInstance),
-    llmagent.WithInstruction("You are a helpful assistant."),
-)
+func runLLMAgent(ctx context.Context) error {
+    modelInstance := openai.New("gpt-4o-mini")
+    agent := llmagent.New("assistant",
+        llmagent.WithModel(modelInstance),
+        llmagent.WithInstruction("You are a helpful assistant."),
+    )
 
-// Run a basic chat
-agentRunner := runner.NewRunner("app", agent)
-events, err := agentRunner.Run(ctx, "user-1", "session-1",
-    model.NewUserMessage("What is 2+2?"))
-if err != nil {
-    panic(err)
-}
-for range events {
+    // Run a basic chat
+    agentRunner := runner.NewRunner("app", agent)
+    events, err := agentRunner.Run(ctx, "user-1", "session-1",
+        model.NewUserMessage("What is 2+2?"))
+    if err != nil {
+        return err
+    }
+
+    // Consume events to completion; handle responses as needed.
+    for event := range events {
+        log.Printf("event: %v", event)
+    }
+    return nil
 }
 ```
 
@@ -72,32 +78,39 @@ for range events {
 
 ```go
 // Build and compile a simple graph workflow
-schema := graph.NewStateSchema().AddField("status", graph.StateField{
-    Type:    reflect.TypeOf(""),
-    Reducer: graph.DefaultReducer,
-})
-workflow, err := graph.NewStateGraph(schema).
-    AddNode("start", func(ctx context.Context, state graph.State) (any, error) {
-        return graph.State{"status": "ready"}, nil
-    }).
-    SetEntryPoint("start").
-    SetFinishPoint("start").
-    Compile()
-if err != nil {
-    panic(err)
-}
+func runGraphAgent(ctx context.Context) error {
+    schema := graph.NewStateSchema().AddField("status", graph.StateField{
+        Type:    reflect.TypeOf(""),
+        Reducer: graph.DefaultReducer,
+    })
+    workflow, err := graph.NewStateGraph(schema).
+        AddNode("start", func(ctx context.Context, state graph.State) (any, error) {
+            return graph.State{"status": "ready"}, nil
+        }).
+        SetEntryPoint("start").
+        SetFinishPoint("start").
+        Compile()
+    if err != nil {
+        return err
+    }
 
-graphAgent, err := graphagent.New("workflow", workflow)
-if err != nil {
-    panic(err)
-}
-agentRunner := runner.NewRunner("app", graphAgent)
-events, err := agentRunner.Run(ctx, "user-1", "session-1",
-    model.NewUserMessage("Run the workflow"))
-if err != nil {
-    panic(err)
-}
-for range events {
+    graphAgent, err := graphagent.New("workflow", workflow)
+    if err != nil {
+        return err
+    }
+
+    agentRunner := runner.NewRunner("app", graphAgent)
+    events, err := agentRunner.Run(ctx, "user-1", "session-1",
+        model.NewUserMessage("Run the workflow"))
+    if err != nil {
+        return err
+    }
+
+    // Consume events to completion; handle responses as needed.
+    for event := range events {
+        log.Printf("event: %v", event)
+    }
+    return nil
 }
 ```
 

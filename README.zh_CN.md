@@ -47,20 +47,26 @@
 
 ```go
 // 将 chat 模型封装为 LLMAgent
-modelInstance := openai.New("gpt-4o-mini")
-agent := llmagent.New("assistant",
-    llmagent.WithModel(modelInstance),
-    llmagent.WithInstruction("你是一个乐于助人的助手。"),
-)
+func runLLMAgent(ctx context.Context) error {
+    modelInstance := openai.New("gpt-4o-mini")
+    agent := llmagent.New("assistant",
+        llmagent.WithModel(modelInstance),
+        llmagent.WithInstruction("你是一个乐于助人的助手。"),
+    )
 
-// 运行一次对话
-agentRunner := runner.NewRunner("app", agent)
-events, err := agentRunner.Run(ctx, "user-1", "session-1",
-    model.NewUserMessage("2+2 等于多少？"))
-if err != nil {
-    panic(err)
-}
-for range events {
+    // 运行一次对话
+    agentRunner := runner.NewRunner("app", agent)
+    events, err := agentRunner.Run(ctx, "user-1", "session-1",
+        model.NewUserMessage("2+2 等于多少？"))
+    if err != nil {
+        return err
+    }
+
+    // 需消费事件直到结束，可在此处理响应。
+    for event := range events {
+        log.Printf("event: %v", event)
+    }
+    return nil
 }
 ```
 
@@ -71,32 +77,39 @@ for range events {
 
 ```go
 // 构建并编译一个简单的 Graph 工作流
-schema := graph.NewStateSchema().AddField("status", graph.StateField{
-    Type:    reflect.TypeOf(""),
-    Reducer: graph.DefaultReducer,
-})
-workflow, err := graph.NewStateGraph(schema).
-    AddNode("start", func(ctx context.Context, state graph.State) (any, error) {
-        return graph.State{"status": "ready"}, nil
-    }).
-    SetEntryPoint("start").
-    SetFinishPoint("start").
-    Compile()
-if err != nil {
-    panic(err)
-}
+func runGraphAgent(ctx context.Context) error {
+    schema := graph.NewStateSchema().AddField("status", graph.StateField{
+        Type:    reflect.TypeOf(""),
+        Reducer: graph.DefaultReducer,
+    })
+    workflow, err := graph.NewStateGraph(schema).
+        AddNode("start", func(ctx context.Context, state graph.State) (any, error) {
+            return graph.State{"status": "ready"}, nil
+        }).
+        SetEntryPoint("start").
+        SetFinishPoint("start").
+        Compile()
+    if err != nil {
+        return err
+    }
 
-graphAgent, err := graphagent.New("workflow", workflow)
-if err != nil {
-    panic(err)
-}
-agentRunner := runner.NewRunner("app", graphAgent)
-events, err := agentRunner.Run(ctx, "user-1", "session-1",
-    model.NewUserMessage("运行图工作流"))
-if err != nil {
-    panic(err)
-}
-for range events {
+    graphAgent, err := graphagent.New("workflow", workflow)
+    if err != nil {
+        return err
+    }
+
+    agentRunner := runner.NewRunner("app", graphAgent)
+    events, err := agentRunner.Run(ctx, "user-1", "session-1",
+        model.NewUserMessage("运行图工作流"))
+    if err != nil {
+        return err
+    }
+
+    // 需消费事件直到结束，可在此处理响应。
+    for event := range events {
+        log.Printf("event: %v", event)
+    }
+    return nil
 }
 ```
 
