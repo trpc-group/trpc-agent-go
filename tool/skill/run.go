@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -226,25 +227,35 @@ type artifactRef struct {
 
 // Declaration implements tool.Tool.
 func (t *RunTool) Declaration() *tool.Declaration {
+	desc := "Run a command inside a skill workspace. " +
+		"Use it only for commands required by the skill " +
+		"docs (not for generic shell tasks). " +
+		"Returns stdout/stderr, a primary_output " +
+		"(best small text file), and collected output_files " +
+		"(text inline by default, with workspace:// refs). " +
+		"Non-text outputs omit inline content. " +
+		"Prefer primary_output/output_files content; " +
+		"use output_files[*].ref when passing a file to " +
+		"other tools."
+	cmdDesc := "Shell command"
+	if len(t.allowedCmds) > 0 || len(t.deniedCmds) > 0 {
+		desc += " Restrictions enabled when allowed_commands/denied_commands are set: " +
+			"no shell; one executable + args only; no > < | ; && ||."
+		cmdDesc = "Command string (no shell syntax when allowed_commands/denied_commands are set)"
+		if len(t.allowedCmds) > 0 {
+			desc += " Allowed commands: " + formatCommandPreview(t.allowedCmds, 20) + "."
+		}
+	}
 	return &tool.Declaration{
-		Name: "skill_run",
-		Description: "Run a command inside a skill workspace. " +
-			"Use it only for commands required by the skill " +
-			"docs (not for generic shell tasks). " +
-			"Returns stdout/stderr, a primary_output " +
-			"(best small text file), and collected output_files " +
-			"(text inline by default, with workspace:// refs). " +
-			"Non-text outputs omit inline content. " +
-			"Prefer primary_output/output_files content; " +
-			"use output_files[*].ref when passing a file to " +
-			"other tools.",
+		Name:        "skill_run",
+		Description: desc,
 		InputSchema: &tool.Schema{
 			Type:        "object",
 			Description: "Run command input",
 			Required:    []string{"skill", "command"},
 			Properties: map[string]*tool.Schema{
 				"skill":   skillNameSchema(t.repo, "Skill name"),
-				"command": {Type: "string", Description: "Shell command"},
+				"command": {Type: "string", Description: cmdDesc},
 				"cwd":     {Type: "string", Description: "Working dir"},
 				"env": {Type: "object", Description: "Env vars",
 					AdditionalProperties: &tool.Schema{Type: "string"}},
@@ -273,6 +284,30 @@ func (t *RunTool) Declaration() *tool.Declaration {
 		OutputSchema: &tool.Schema{Type: "object",
 			Description: "Run result with output files"},
 	}
+}
+
+func formatCommandPreview(cmds map[string]struct{}, max int) string {
+	if len(cmds) == 0 {
+		return ""
+	}
+	if max <= 0 {
+		max = 1
+	}
+	items := make([]string, 0, len(cmds))
+	for cmd := range cmds {
+		items = append(items, cmd)
+	}
+	sort.Strings(items)
+	more := 0
+	if len(items) > max {
+		more = len(items) - max
+		items = items[:max]
+	}
+	out := strings.Join(items, ", ")
+	if more > 0 {
+		out += fmt.Sprintf(" (+%d more)", more)
+	}
+	return out
 }
 
 // Call executes the run request.
@@ -860,13 +895,13 @@ func (t *RunTool) runProgram(
 		cmd := argv[0]
 		if len(t.allowedCmds) > 0 && !cmdInList(t.allowedCmds, cmd) {
 			return codeexecutor.RunResult{}, fmt.Errorf(
-				"skill_run: command %q is not allowed",
+				"skill_run: command %q is not allowed by allowed_commands",
 				cmd,
 			)
 		}
 		if cmdInList(t.deniedCmds, cmd) {
 			return codeexecutor.RunResult{}, fmt.Errorf(
-				"skill_run: command %q is denied",
+				"skill_run: command %q is denied by denied_commands",
 				cmd,
 			)
 		}
@@ -1004,10 +1039,11 @@ func splitCommandLine(s string) ([]string, error) {
 	if strings.TrimSpace(s) == "" {
 		return nil, fmt.Errorf("skill_run: command is empty")
 	}
-	if strings.ContainsAny(s, disallowedShellMeta) {
+	if idx := strings.IndexAny(s, disallowedShellMeta); idx >= 0 {
+		meta := s[idx : idx+1]
 		return nil, fmt.Errorf(
-			"skill_run: shell syntax is not allowed " +
-				"when command restrictions are enabled",
+			"skill_run: shell metacharacter %q is not allowed when command restrictions are enabled (allowed_commands/denied_commands set). Use a single executable with args only (no redirects/pipes/chaining). To allow shell syntax, clear allowed_commands/denied_commands in the tool config",
+			meta,
 		)
 	}
 	var args []string
