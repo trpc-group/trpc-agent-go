@@ -363,49 +363,167 @@ func normalizeHeadingLineStart(headingLineStart, lastHeaderPos int) int {
 }
 
 // findHeadingLineStartFallback scans source lines to find the next ATX heading
-// at the target level, starting from searchFrom. It prefers lines containing
-// headingText when available, and falls back to the first candidate.
+// at the target level, starting from searchFrom.
+//
+// Matching policy:
+//   - headingText is non-empty: prefer lines that contain headingText and
+//     fall back to the first same-level ATX heading.
+//   - headingText is empty: match only empty ATX headings (pure marker lines),
+//     and do not match arbitrary same-level headings.
 //
 // The scan works on byte slices to avoid per-line string allocations in large
-// markdown files.
+// markdown files and ignores lines inside fenced code blocks.
 func findHeadingLineStartFallback(source []byte, searchFrom, level int, headingText string) int {
 	if len(source) == 0 || level <= 0 {
 		return -1
 	}
-	if searchFrom < 0 {
-		searchFrom = 0
-	}
-	if searchFrom > len(source) {
-		searchFrom = len(source)
-	}
 	headingTextBytes := bytes.TrimSpace([]byte(headingText))
-
-	lineStart := searchFrom
-	for lineStart > 0 && source[lineStart-1] != '\n' {
-		lineStart--
-	}
+	lineStart := normalizeFallbackSearchStart(source, searchFrom)
 
 	firstCandidate := -1
+	inFence := false
+	var fenceChar byte
+	var fenceLen int
 	for lineStart <= len(source) {
 		lineEnd := lineStart
 		for lineEnd < len(source) && source[lineEnd] != '\n' {
 			lineEnd++
 		}
 		line := source[lineStart:lineEnd]
-		if isATXHeadingLineAtLevel(line, level) {
-			if firstCandidate < 0 {
-				firstCandidate = lineStart
-			}
-			if len(headingTextBytes) == 0 || bytes.Contains(line, headingTextBytes) {
-				return lineStart
+
+		var handled bool
+		inFence, fenceChar, fenceLen, handled = handleFallbackFenceLine(line, inFence, fenceChar, fenceLen)
+		if !handled && !inFence {
+			if matchPos, updatedCandidate, ok := matchFallbackHeadingLine(
+				line, lineStart, level, headingTextBytes, firstCandidate,
+			); ok {
+				return matchPos
+			} else {
+				firstCandidate = updatedCandidate
 			}
 		}
+
 		if lineEnd == len(source) {
 			break
 		}
 		lineStart = lineEnd + 1
 	}
 	return firstCandidate
+}
+
+// normalizeFallbackSearchStart clamps searchFrom to [0,len(source)] and then
+// backtracks to the beginning of the current line.
+func normalizeFallbackSearchStart(source []byte, searchFrom int) int {
+	if searchFrom < 0 {
+		searchFrom = 0
+	}
+	if searchFrom > len(source) {
+		searchFrom = len(source)
+	}
+	for searchFrom > 0 && source[searchFrom-1] != '\n' {
+		searchFrom--
+	}
+	return searchFrom
+}
+
+// handleFallbackFenceLine updates fenced-code-block state for a scanned line.
+// handled=true means the line is a fence delimiter and should not be treated as
+// a heading candidate.
+func handleFallbackFenceLine(
+	line []byte,
+	inFence bool,
+	fenceChar byte,
+	fenceLen int,
+) (newInFence bool, newFenceChar byte, newFenceLen int, handled bool) {
+	delimChar, delimLen, delimRest, ok := parseFenceDelimiter(line)
+	if !ok {
+		return inFence, fenceChar, fenceLen, false
+	}
+	if !inFence {
+		return true, delimChar, delimLen, true
+	}
+	if delimChar == fenceChar && delimLen >= fenceLen && len(bytes.TrimSpace(delimRest)) == 0 {
+		return false, fenceChar, fenceLen, true
+	}
+	return inFence, fenceChar, fenceLen, true
+}
+
+// matchFallbackHeadingLine evaluates whether line is a fallback match.
+// It returns (matchPos, updatedFirstCandidate, ok).
+func matchFallbackHeadingLine(
+	line []byte,
+	lineStart int,
+	level int,
+	headingTextBytes []byte,
+	firstCandidate int,
+) (int, int, bool) {
+	if !isATXHeadingLineAtLevel(line, level) {
+		return -1, firstCandidate, false
+	}
+	if len(headingTextBytes) == 0 {
+		if isEmptyATXHeadingLineAtLevel(line, level) {
+			return lineStart, firstCandidate, true
+		}
+		return -1, firstCandidate, false
+	}
+	if firstCandidate < 0 {
+		firstCandidate = lineStart
+	}
+	if bytes.Contains(line, headingTextBytes) {
+		return lineStart, firstCandidate, true
+	}
+	return -1, firstCandidate, false
+}
+
+// isEmptyATXHeadingLineAtLevel checks whether an ATX heading line is an empty
+// heading at the given level (for example: "#", "##   ", "### ###").
+func isEmptyATXHeadingLineAtLevel(line []byte, level int) bool {
+	if !isATXHeadingLineAtLevel(line, level) {
+		return false
+	}
+	line = bytes.TrimSuffix(line, []byte{'\r'})
+	trimmedLeft := bytes.TrimLeft(line, " ")
+	rest := trimmedLeft[level:]
+	if len(rest) == 0 {
+		return true
+	}
+	rest = bytes.TrimLeft(rest, " \t")
+	if len(rest) == 0 {
+		return true
+	}
+	rest = bytes.TrimSpace(rest)
+	if len(rest) == 0 {
+		return true
+	}
+	for _, b := range rest {
+		if b != '#' {
+			return false
+		}
+	}
+	return true
+}
+
+// parseFenceDelimiter parses a potential fenced code block delimiter line.
+// It supports up to 3 leading spaces and requires at least 3 delimiter chars.
+func parseFenceDelimiter(line []byte) (fenceChar byte, fenceLen int, rest []byte, ok bool) {
+	line = bytes.TrimSuffix(line, []byte{'\r'})
+	trimmedLeft := bytes.TrimLeft(line, " ")
+	leadingSpaces := len(line) - len(trimmedLeft)
+	if leadingSpaces > 3 || len(trimmedLeft) == 0 {
+		return 0, 0, nil, false
+	}
+	first := trimmedLeft[0]
+	if first != '`' && first != '~' {
+		return 0, 0, nil, false
+	}
+	count := 0
+	for count < len(trimmedLeft) && trimmedLeft[count] == first {
+		count++
+	}
+	if count < 3 {
+		return 0, 0, nil, false
+	}
+	return first, count, trimmedLeft[count:], true
 }
 
 // isATXHeadingLineAtLevel checks whether a line matches an ATX heading marker

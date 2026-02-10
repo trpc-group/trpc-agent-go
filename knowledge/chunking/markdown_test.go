@@ -624,6 +624,54 @@ func TestFindHeadingLineStartFallback(t *testing.T) {
 			headingText: "Alpha",
 			wantTag:     "# Alpha",
 		},
+		{
+			name:        "empty heading text does not match non-empty heading lines",
+			source:      "# Alpha\n\n# Beta\n",
+			searchFrom:  0,
+			level:       1,
+			headingText: "",
+			wantPos:     -1,
+		},
+		{
+			name:        "empty heading text matches pure empty heading marker",
+			source:      "# Alpha\n\n#\n\nTail\n",
+			searchFrom:  0,
+			level:       1,
+			headingText: "",
+			wantTag:     "#\n",
+		},
+		{
+			name:        "empty heading text matches empty closing-hash heading",
+			source:      "### Alpha\n\n### ###\n\nTail\n",
+			searchFrom:  0,
+			level:       3,
+			headingText: "",
+			wantTag:     "### ###",
+		},
+		{
+			name:        "empty heading text ignores heading-like lines in fenced code block",
+			source:      "```md\n# inside code\n```\n\n#\n",
+			searchFrom:  0,
+			level:       1,
+			headingText: "",
+			wantTag:     "#\n",
+		},
+		{
+			name:        "empty heading text returns negative one when only fenced heading-like lines exist",
+			source:      "```md\n# inside code\n```\n\nTail\n",
+			searchFrom:  0,
+			level:       1,
+			headingText: "",
+			wantPos:     -1,
+		},
+		{
+			name:        "non-empty heading text ignores fenced heading-like lines",
+			source:      "```md\n# Target\n```\n\n# Target outside\n",
+			searchFrom:  0,
+			level:       1,
+			headingText: "Target outside",
+			wantTag:     "# Target outside",
+		},
 	}
 
 	for _, tt := range tests {
@@ -736,6 +784,123 @@ func TestIsATXHeadingLineAtLevel(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := isATXHeadingLineAtLevel(tt.line, tt.level)
 			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestIsEmptyATXHeadingLineAtLevel(t *testing.T) {
+	tests := []struct {
+		name  string
+		line  []byte
+		level int
+		want  bool
+	}{
+		{
+			name:  "pure marker heading",
+			line:  []byte("#"),
+			level: 1,
+			want:  true,
+		},
+		{
+			name:  "marker with trailing spaces",
+			line:  []byte("##   "),
+			level: 2,
+			want:  true,
+		},
+		{
+			name:  "empty heading with closing hashes",
+			line:  []byte("### ###"),
+			level: 3,
+			want:  true,
+		},
+		{
+			name:  "non-empty heading text",
+			line:  []byte("# title"),
+			level: 1,
+			want:  false,
+		},
+		{
+			name:  "not atx heading line",
+			line:  []byte("plain text"),
+			level: 1,
+			want:  false,
+		},
+		{
+			name:  "leading spaces over limit",
+			line:  []byte("    #"),
+			level: 1,
+			want:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isEmptyATXHeadingLineAtLevel(tt.line, tt.level)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestParseFenceDelimiter(t *testing.T) {
+	tests := []struct {
+		name     string
+		line     []byte
+		wantOK   bool
+		wantChar byte
+		wantLen  int
+		wantRema string
+	}{
+		{
+			name:     "backtick fence with info string",
+			line:     []byte("```go"),
+			wantOK:   true,
+			wantChar: '`',
+			wantLen:  3,
+			wantRema: "go",
+		},
+		{
+			name:     "tilde fence with indentation",
+			line:     []byte("   ~~~~python"),
+			wantOK:   true,
+			wantChar: '~',
+			wantLen:  4,
+			wantRema: "python",
+		},
+		{
+			name:   "too short delimiter is rejected",
+			line:   []byte("``"),
+			wantOK: false,
+		},
+		{
+			name:   "indentation over three spaces is rejected",
+			line:   []byte("    ```"),
+			wantOK: false,
+		},
+		{
+			name:   "non fence line is rejected",
+			line:   []byte("# heading"),
+			wantOK: false,
+		},
+		{
+			name:     "fence with carriage return",
+			line:     []byte("```\r"),
+			wantOK:   true,
+			wantChar: '`',
+			wantLen:  3,
+			wantRema: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotChar, gotLen, gotRest, ok := parseFenceDelimiter(tt.line)
+			require.Equal(t, tt.wantOK, ok)
+			if !tt.wantOK {
+				return
+			}
+			require.Equal(t, tt.wantChar, gotChar)
+			require.Equal(t, tt.wantLen, gotLen)
+			require.Equal(t, tt.wantRema, string(gotRest))
 		})
 	}
 }
