@@ -1419,6 +1419,8 @@ func TestResolveCWD_RelPath_BackslashTraversalDoesNotEscape(t *testing.T) {
 
 // Validate Declaration basics and required fields.
 func TestRunTool_Declaration(t *testing.T) {
+	t.Setenv(envAllowedCommands, "")
+	t.Setenv(envDeniedCommands, "")
 	rt := NewRunTool(nil, nil)
 	d := rt.Declaration()
 	require.NotNil(t, d)
@@ -1426,6 +1428,24 @@ func TestRunTool_Declaration(t *testing.T) {
 	require.NotNil(t, d.InputSchema)
 	require.Contains(t, d.InputSchema.Required, "skill")
 	require.Contains(t, d.InputSchema.Required, "command")
+	require.Equal(t, "Shell command", d.InputSchema.Properties["command"].Description)
+}
+
+func TestRunTool_Declaration_IncludesAllowedCommandsPreview(t *testing.T) {
+	cmds := make([]string, 0, 25)
+	for i := 0; i < 25; i++ {
+		cmds = append(cmds, fmt.Sprintf("cmd%02d", i))
+	}
+	rt := NewRunTool(nil, nil, WithAllowedCommands(cmds...))
+	d := rt.Declaration()
+	require.NotNil(t, d)
+	require.Contains(t, d.Description, "Restrictions enabled")
+	require.Contains(t, d.Description, "Allowed commands:")
+	require.Contains(t, d.Description, "cmd00")
+	require.Contains(t, d.Description, "cmd19")
+	require.Contains(t, d.Description, "(+5 more)")
+	require.NotContains(t, d.Description, "cmd24")
+	require.Contains(t, d.InputSchema.Properties["command"].Description, "no shell syntax")
 }
 
 // Ensure parseRunArgs rejects invalid JSON and missing fields.
