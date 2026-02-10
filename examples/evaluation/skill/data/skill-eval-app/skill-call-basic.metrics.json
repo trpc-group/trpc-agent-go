@@ -1,0 +1,71 @@
+[
+  {
+    "metricName": "tool_trajectory_avg_score",
+    "threshold": 1,
+    "criterion": {
+      "toolTrajectory": {
+        "orderSensitive": true,
+        "subsetMatching": true,
+        "defaultStrategy": {
+          "name": {
+            "matchStrategy": "exact"
+          },
+          "arguments": {
+            "matchStrategy": "exact"
+          },
+          "result": {
+            "matchStrategy": "exact"
+          }
+        },
+        "toolStrategy": {
+          "skill_load": {
+            "name": {
+              "matchStrategy": "exact"
+            },
+            "arguments": {
+              "ignoreTree": {
+                "docs": true,
+                "include_all_docs": true
+              },
+              "matchStrategy": "exact"
+            },
+            "result": {
+              "ignore": true
+            }
+          },
+          "skill_run": {
+            "name": {
+              "matchStrategy": "exact"
+            },
+            "arguments": {
+              "ignoreTree": {
+                "command": true,
+                "cwd": true,
+                "env": true,
+                "timeout": true,
+                "inputs": true,
+                "outputs": true,
+                "save_as_artifacts": true,
+                "omit_inline_content": true,
+                "artifact_prefix": true
+              },
+              "matchStrategy": "exact"
+            },
+            "result": {
+              "ignoreTree": {
+                "stdout": true,
+                "stderr": true,
+                "duration_ms": true,
+                "warnings": true,
+                "primary_output": true,
+                "output_files": true,
+                "artifact_files": true
+              },
+              "matchStrategy": "exact"
+            }
+          }
+        }
+      }
+    }
+  }
+]

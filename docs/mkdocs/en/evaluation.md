@@ -755,7 +755,9 @@ The framework includes the following criterion types:
 |--------------------------|-----------------------------------------|
 | TextCriterion            | Text strings                            |
 | JSONCriterion            | JSON objects                            |
+| RougeCriterion           | ROUGE text scoring                      |
 | ToolTrajectoryCriterion  | Tool call trajectories                  |
+| FinalResponseCriterion   | Final response content                  |
 | LLMCriterion             | LLM-based evaluation models             |
 | Criterion                | Aggregation of multiple criteria        |
 
@@ -819,6 +821,7 @@ JSONCriterion compares two JSON values, commonly used for tool arguments and too
 type JSONCriterion struct {
 	Ignore          bool                                     // Ignore indicates skipping comparison.
 	IgnoreTree      map[string]any                           // IgnoreTree indicates the field tree to ignore.
+	OnlyTree        map[string]any                           // OnlyTree indicates the only field tree to compare.
 	MatchStrategy   JSONMatchStrategy                        // MatchStrategy is the matching strategy.
 	NumberTolerance *float64                                 // NumberTolerance is the numeric tolerance.
 	Compare         func(actual, expected any) (bool, error) // Compare is custom comparison logic.
@@ -830,7 +833,7 @@ type JSONMatchStrategy string
 
 Currently, `matchStrategy` only supports `exact`, with default `exact`.
 
-During comparison, `actual` is the actual value and `expected` is the expected value. Object comparison requires identical key sets. Array comparison requires identical length and order. Numeric comparison supports a tolerance, default `1e-6`. `ignoreTree` ignores unstable fields; a leaf node set to true ignores that field and its subtree.
+During comparison, `actual` is the actual value and `expected` is the expected value. Object comparison requires identical key sets. Array comparison requires identical length and order. Numeric comparison supports a tolerance, default `1e-6`. `ignoreTree` ignores unstable fields; a leaf node set to true ignores that field and its subtree. `onlyTree` compares only selected fields; keys not present in the tree are ignored. A leaf node set to true compares that field and its subtree. `onlyTree` and `ignoreTree` cannot be set at the same time when both are non-empty.
 
 Example configuration ignores `id` and `metadata.timestamp`, and relaxes numeric tolerance.
 
@@ -843,6 +846,19 @@ Example configuration ignores `id` and `metadata.timestamp`, and relaxes numeric
     }
   },
   "numberTolerance": 1e-2
+}
+```
+
+Example configuration compares only `name` and `metadata.id`, and ignores all other fields.
+
+```json
+{
+  "onlyTree": {
+    "name": true,
+    "metadata": {
+      "id": true
+    }
+  }
 }
 ```
 
@@ -872,6 +888,94 @@ jsonCriterion := cjson.New(
 		return true, nil
 	}),
 )
+```
+
+##### RougeCriterion
+
+RougeCriterion scores two strings using ROUGE and treats the pair as a match when the scores meet the configured thresholds.
+
+See [examples/evaluation/rouge](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/rouge) for a complete example.
+
+```go
+import crouge "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/rouge"
+
+// RougeCriterion defines ROUGE scoring and threshold checks.
+type RougeCriterion struct {
+	Ignore         bool         // Ignore indicates skipping comparison.
+	RougeType      string       // RougeType selects the ROUGE variant.
+	Measure        RougeMeasure // Measure selects the primary scalar measure.
+	Threshold      Score        // Threshold defines minimum scores to pass.
+	UseStemmer     bool         // UseStemmer enables Porter stemming in the built-in tokenizer.
+	SplitSummaries bool         // SplitSummaries enables sentence splitting for rougeLsum.
+	Tokenizer      Tokenizer    // Tokenizer overrides the built-in tokenizer.
+}
+
+// RougeMeasure represents the scalar measure used as the primary score.
+type RougeMeasure string
+
+const (
+	RougeMeasureF1        RougeMeasure = "f1"
+	RougeMeasurePrecision RougeMeasure = "precision"
+	RougeMeasureRecall    RougeMeasure = "recall"
+)
+
+// Score holds ROUGE precision, recall and F1.
+type Score struct {
+	Precision float64
+	Recall    float64
+	F1        float64
+}
+```
+
+RougeType supports `rougeN`, `rougeL`, and `rougeLsum`, where N is a positive integer. For example: `rouge1`, `rouge2`, `rouge3`, `rougeL`, `rougeLsum`.
+
+Measure supports `f1`, `precision`, and `recall`, with a default of `f1` when unset.
+
+Threshold defines minimum requirements. Precision, recall, and f1 all participate in the pass check. Unset fields default to 0. ROUGE scores are in range `[0, 1]`.
+
+UseStemmer enables Porter stemming for the built-in tokenizer. When Tokenizer is set, UseStemmer is ignored.
+
+SplitSummaries controls sentence splitting for `rougeLsum` only.
+
+Tokenizer injects a custom tokenizer.
+
+The following snippet configures FinalResponseCriterion to match by rougeLsum with thresholds.
+
+```go
+import (
+	cfinalresponse "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/finalresponse"
+	crouge "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/rouge"
+)
+
+finalResponseCriterion := cfinalresponse.New(
+	cfinalresponse.WithRougeCriterion(&crouge.RougeCriterion{
+		RougeType:      "rougeLsum",
+		Measure:        crouge.RougeMeasureF1,
+		Threshold:      crouge.Score{Precision: 0.3, Recall: 0.6, F1: 0.4},
+		UseStemmer:     true,
+		SplitSummaries: true,
+	}),
+)
+```
+
+Example metric JSON config:
+
+```json
+{
+  "finalResponse": {
+    "rouge": {
+      "rougeType": "rougeLsum",
+      "measure": "f1",
+      "threshold": {
+        "precision": 0.3,
+        "recall": 0.6,
+        "f1": 0.4
+      },
+      "useStemmer": true,
+      "splitSummaries": true
+    }
+  }
+}
 ```
 
 ##### ToolTrajectoryCriterion
@@ -1013,12 +1117,13 @@ Assuming `A`, `B`, `C`, and `D` are tool calls, matching examples are as follows
 
 ##### FinalResponseCriterion
 
-FinalResponseCriterion compares final responses per turn. It supports text comparison and also JSON structural comparison after parsing content. The structure is defined as follows.
+FinalResponseCriterion compares final responses per turn. It supports text comparison, JSON structural comparison after parsing content, and ROUGE scoring. The structure is defined as follows.
 
 ```go
 import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	cjson "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
+	crouge "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/rouge"
 	ctext "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
 )
 
@@ -1026,13 +1131,16 @@ import (
 type FinalResponseCriterion struct {
 	Text    *ctext.TextCriterion                                      // Text compares final response text.
 	JSON    *cjson.JSONCriterion                                      // JSON compares final response JSON.
+	Rouge   *crouge.RougeCriterion                                    // Rouge scores final response text with ROUGE.
 	Compare func(actual, expected *evalset.Invocation) (bool, error) // Compare is custom comparison logic.
 }
 ```
 
 When using this criterion, you need to fill `finalResponse` on the expected side for the corresponding turn in EvalSet.
 
-`text` and `json` can be configured together, and both must match when both are set. When `json` is configured, the content must be parseable as JSON.
+`text`, `json`, and `rouge` can be configured together, and all configured sub-criteria must match. When `json` is configured, the content must be parseable as JSON.
+
+To match by ROUGE, configure `rouge` and see RougeCriterion for details.
 
 The following example selects `final_response_avg_score` and configures FinalResponseCriterion to compare final responses by text containment.
 
@@ -1097,6 +1205,7 @@ type LLMCriterion struct {
 type JudgeModelOptions struct {
 	ProviderName string                  // ProviderName is the model provider.
 	ModelName    string                  // ModelName is the model name.
+	Variant      string                  // Variant is optional and selects the OpenAI-compatible variant when ProviderName is openai.
 	BaseURL      string                  // BaseURL is a custom endpoint.
 	APIKey       string                  // APIKey is the access key.
 	ExtraFields  map[string]any          // ExtraFields are extra fields.
@@ -1117,7 +1226,9 @@ type RubricContent struct {
 }
 ```
 
-`judgeModel` supports environment variable references in `providerName`, `modelName`, `baseURL`, and `apiKey`, which are expanded at runtime. For security, avoid writing `judgeModel.apiKey` or `judgeModel.baseURL` in plain text in metric configuration files or code.
+`judgeModel` supports environment variable references in `providerName`, `modelName`, `variant`, `baseURL`, and `apiKey`, which are expanded at runtime. For security, avoid writing `judgeModel.apiKey` or `judgeModel.baseURL` in plain text in metric configuration files or code.
+
+`variant` is optional and selects the OpenAI-compatible variant, for example `openai`, `hunyuan`, `deepseek`, `qwen`. It is only effective when `providerName` is `openai`. When omitted, the default variant is `openai`.
 
 `Generation` defaults to `MaxTokens=2000`, `Temperature=0.8`, `Stream=false`.
 
@@ -2282,6 +2393,108 @@ passHatK, err := evaluation.PassHatK(n, c, k)
 ```
 
 The computation of pass@k and pass^k relies on independence and identical distribution across runs. When doing repeated runs, ensure each run is independently sampled with necessary state reset, and avoid reusing session memory, tool caches, or external dependencies that would systematically inflate the metrics.
+
+### Skills Evaluation
+
+Agent Skills are exposed as built-in tools: `skill_load` and `skill_run`, so you can evaluate whether the agent uses Skills correctly with the same tool trajectory evaluator. In practice, `skill_run` results contain volatile fields such as `stdout`, `stderr`, `duration_ms`, and inline `output_files` content. Prefer configuring a per-tool strategy to ignore these keys and only assert stable fields such as `skill`, requested `output_files`, and `exit_code` and `timed_out`.
+
+A minimal example is shown below.
+
+EvalSet `tools` snippet:
+
+```json
+{
+  "invocationId": "write_ok-1",
+  "userContent": {
+    "role": "user",
+    "content": "Use skills to generate an OK file and confirm when done."
+  },
+  "tools": [
+    {
+      "id": "tool_use_1",
+      "name": "skill_load",
+      "arguments": {
+        "skill": "write-ok"
+      }
+    },
+    {
+      "id": "tool_use_2",
+      "name": "skill_run",
+      "arguments": {
+        "skill": "write-ok",
+        "output_files": [
+          "out/ok.txt"
+        ]
+      },
+      "result": {
+        "exit_code": 0,
+        "timed_out": false
+      }
+    }
+  ]
+}
+```
+
+Metric `toolTrajectory` snippet:
+
+```json
+[
+  {
+    "metricName": "tool_trajectory_avg_score",
+    "threshold": 1,
+    "criterion": {
+      "toolTrajectory": {
+        "orderSensitive": true,
+        "subsetMatching": true,
+        "toolStrategy": {
+          "skill_load": {
+            "arguments": {
+              "ignoreTree": {
+                "docs": true,
+                "include_all_docs": true
+              },
+              "matchStrategy": "exact"
+            },
+            "result": {
+              "ignore": true
+            }
+          },
+          "skill_run": {
+            "arguments": {
+              "ignoreTree": {
+                "command": true,
+                "cwd": true,
+                "env": true,
+                "timeout": true,
+                "inputs": true,
+                "outputs": true,
+                "save_as_artifacts": true,
+                "omit_inline_content": true,
+                "artifact_prefix": true
+              },
+              "matchStrategy": "exact"
+            },
+            "result": {
+              "ignoreTree": {
+                "stdout": true,
+                "stderr": true,
+                "duration_ms": true,
+                "warnings": true,
+                "primary_output": true,
+                "output_files": true,
+                "artifact_files": true
+              },
+              "matchStrategy": "exact"
+            }
+          }
+        }
+      }
+    }
+  }
+]
+```
+
+See [examples/evaluation/skill](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/skill) for a runnable example.
 
 ## Best Practices
 

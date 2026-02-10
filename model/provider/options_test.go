@@ -33,6 +33,7 @@ func TestOptionsSetters(t *testing.T) {
 
 	WithAPIKey("key")(opts)
 	WithBaseURL("https://example.com")(opts)
+	WithVariant("deepseek")(opts)
 	WithHTTPClientName("client")(opts)
 	WithHTTPClientTransport(http.DefaultTransport)(opts)
 	WithChannelBufferSize(128)(opts)
@@ -44,6 +45,7 @@ func TestOptionsSetters(t *testing.T) {
 
 	assert.Equal(t, "key", opts.APIKey)
 	assert.Equal(t, "https://example.com", opts.BaseURL)
+	assert.Equal(t, "deepseek", opts.Variant)
 	assert.Equal(t, "client", opts.HTTPClientName)
 	assert.Equal(t, http.DefaultTransport, opts.HTTPClientTransport)
 	assert.NotNil(t, opts.ChannelBufferSize)
