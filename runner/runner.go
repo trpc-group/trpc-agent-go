@@ -286,7 +286,6 @@ func (r *runner) Run(
 	}
 
 	useBypass := ro.DisableRunnerCompletionEvent &&
-		ro.DisableStartBarrier &&
 		!ro.StreamModeEnabled &&
 		!ro.GraphEmitFinalModelResponses &&
 		r.pluginManager == nil &&
@@ -303,33 +302,31 @@ func (r *runner) Run(
 	var emitHook agent.EmitHook
 	var finishHook agent.FinishHook
 	if useBypass {
-		if !ro.DisableRunnerBypassEmitHook {
-			emitHook = func(ctx context.Context, inv *agent.Invocation, e *event.Event) (bool, *event.Event) {
-				if handle != nil && (inv == nil || !inv.RunOptions.DisableRunStatusTracking) {
-					handle.eventCount.Add(1)
-					if e != nil && !e.Timestamp.IsZero() {
-						handle.lastEventAtUnixNano.Store(e.Timestamp.UnixNano())
-					} else {
-						handle.lastEventAtUnixNano.Store(time.Now().UnixNano())
-					}
+		emitHook = func(ctx context.Context, inv *agent.Invocation, e *event.Event) (bool, *event.Event) {
+			if handle != nil && (inv == nil || !inv.RunOptions.DisableRunStatusTracking) {
+				handle.eventCount.Add(1)
+				if e != nil && !e.Timestamp.IsZero() {
+					handle.lastEventAtUnixNano.Store(e.Timestamp.UnixNano())
+				} else {
+					handle.lastEventAtUnixNano.Store(time.Now().UnixNano())
 				}
+			}
 
-				if e != nil && e.RequiresCompletion && inv != nil {
-					completionID := agent.GetAppendEventNoticeKey(e.ID)
-					inv.NotifyCompletion(ctx, completionID)
-				}
+			if e != nil && e.RequiresCompletion && inv != nil {
+				completionID := agent.GetAppendEventNoticeKey(e.ID)
+				inv.NotifyCompletion(ctx, completionID)
+			}
 
-				if e == nil {
-					return true, e
-				}
-				// Keep session persistence behavior consistent with the runner event loop.
-				// Persist state deltas and complete, valid responses only.
-				if len(e.StateDelta) > 0 ||
-					(e.Response != nil && !e.IsPartial && e.IsValidContent()) {
-					r.handleEventPersistence(ctx, sess, e)
-				}
+			if e == nil {
 				return true, e
 			}
+			// Keep session persistence behavior consistent with the runner event loop.
+			// Persist state deltas and complete, valid responses only.
+			if len(e.StateDelta) > 0 ||
+				(e.Response != nil && !e.IsPartial && e.IsValidContent()) {
+				r.handleEventPersistence(ctx, sess, e)
+			}
+			return true, e
 		}
 		finishHook = func(ctx context.Context, inv *agent.Invocation) {
 			flush.Clear(inv)
@@ -404,8 +401,7 @@ func (r *runner) Run(
 	}
 
 	// Append the incoming user message to the session if it has content.
-	if !ro.DisableAppendUserMessage &&
-		message.Content != "" &&
+	if message.Content != "" &&
 		shouldAppendUserMessage(message, ro.Messages) {
 		evt := event.NewResponseEvent(
 			invocation.InvocationID,
@@ -437,9 +433,7 @@ func (r *runner) Run(
 			}
 			return r.sessionService.AppendEvent(ctx, sess, e)
 		})
-		if !ro.DisableStartBarrier {
-			barrier.Enable(invocation)
-		}
+		barrier.Enable(invocation)
 	}
 
 	// Run the agent and get the event channel.

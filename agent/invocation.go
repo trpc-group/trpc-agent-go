@@ -289,14 +289,6 @@ func WithResume(enabled bool) RunOption {
 	}
 }
 
-// WithDisableStartBarrier disables the "start event + completion wait" barrier
-// emitted before each LLM step in flows like llmflow.
-func WithDisableStartBarrier(disable bool) RunOption {
-	return func(opts *RunOptions) {
-		opts.DisableStartBarrier = disable
-	}
-}
-
 // WithGraphEmitFinalModelResponses controls whether graph-based agents emit
 // final (Done=true) model responses as events.
 //
@@ -352,18 +344,6 @@ func WithDisableRunnerCompletionEvent(disable bool) RunOption {
 	}
 }
 
-// WithDisableAppendUserMessage disables persisting the incoming user message
-// into the session transcript for this run.
-//
-// When enabled, Runner still carries the message via invocation.Message, but
-// will skip creating and appending the corresponding user message event to the
-// session service.
-func WithDisableAppendUserMessage(disable bool) RunOption {
-	return func(opts *RunOptions) {
-		opts.DisableAppendUserMessage = disable
-	}
-}
-
 // WithDisableRunStatusTracking disables updating per-run status counters (EventCount and LastEventAt).
 func WithDisableRunStatusTracking(disable bool) RunOption {
 	return func(opts *RunOptions) {
@@ -399,24 +379,10 @@ func WithDisableModelExecutionEvents(disable bool) RunOption {
 	}
 }
 
-// WithDisableRunnerBypassEmitHook disables the runner bypass emit hook.
-func WithDisableRunnerBypassEmitHook(disable bool) RunOption {
-	return func(opts *RunOptions) {
-		opts.DisableRunnerBypassEmitHook = disable
-	}
-}
-
 // WithDisableEventInjection disables injecting invocation metadata into emitted events.
 func WithDisableEventInjection(disable bool) RunOption {
 	return func(opts *RunOptions) {
 		opts.DisableEventInjection = disable
-	}
-}
-
-// WithDisableNotices disables creating and using notice channels for this invocation.
-func WithDisableNotices(disable bool) RunOption {
-	return func(opts *RunOptions) {
-		opts.DisableNotices = disable
 	}
 }
 
@@ -445,34 +411,6 @@ func WithDisableGraphCompletionEvent(disable bool) RunOption {
 func WithDisableGraphExecutorEvents(disable bool) RunOption {
 	return func(opts *RunOptions) {
 		opts.DisableGraphExecutorEvents = disable
-	}
-}
-
-// WithDisableGraphStateUpdates disables applying graph node state updates for this run.
-func WithDisableGraphStateUpdates(disable bool) RunOption {
-	return func(opts *RunOptions) {
-		opts.DisableGraphStateUpdates = disable
-	}
-}
-
-// WithDisableTaskInvocationClone disables creating a child invocation per graph task.
-func WithDisableTaskInvocationClone(disable bool) RunOption {
-	return func(opts *RunOptions) {
-		opts.DisableTaskInvocationClone = disable
-	}
-}
-
-// WithDisableTaskStateCopy disables deep-copying task state for single-task steps.
-func WithDisableTaskStateCopy(disable bool) RunOption {
-	return func(opts *RunOptions) {
-		opts.DisableTaskStateCopy = disable
-	}
-}
-
-// WithDisableGraphAgentInitialStateExtras disables injecting GraphAgent helper fields into the initial state.
-func WithDisableGraphAgentInitialStateExtras(disable bool) RunOption {
-	return func(opts *RunOptions) {
-		opts.DisableGraphAgentInitialStateExtras = disable
 	}
 }
 
@@ -737,14 +675,6 @@ type RunOptions struct {
 	// LLM request.
 	Resume bool
 
-	// DisableStartBarrier disables the "start event + completion wait" barrier
-	// emitted before each LLM step in flows like llmflow.
-	//
-	// When enabled, the flow skips emitting the start event and proceeds
-	// immediately to the LLM call. This reduces per-step overhead for
-	// latency-sensitive streaming use cases.
-	DisableStartBarrier bool
-
 	// GraphEmitFinalModelResponses controls event emission for graph-based
 	// Large Language Model (LLM) nodes.
 	//
@@ -783,10 +713,6 @@ type RunOptions struct {
 	// channel closure as the completion signal.
 	DisableRunnerCompletionEvent bool
 
-	// DisableAppendUserMessage disables persisting the incoming user message
-	// into the session transcript for this run.
-	DisableAppendUserMessage bool
-
 	// DisableRunStatusTracking disables updating per-run status counters (EventCount and LastEventAt).
 	DisableRunStatusTracking bool
 
@@ -802,14 +728,8 @@ type RunOptions struct {
 	// DisableModelExecutionEvents disables emitting model execution start/complete events.
 	DisableModelExecutionEvents bool
 
-	// DisableRunnerBypassEmitHook disables the runner-provided emit hook in bypass mode.
-	DisableRunnerBypassEmitHook bool
-
 	// DisableEventInjection disables injecting invocation metadata into emitted events.
 	DisableEventInjection bool
-
-	// DisableNotices disables creating and using notice channels for this invocation.
-	DisableNotices bool
 
 	// DisablePartialEventIDs disables generating IDs for partial response events.
 	DisablePartialEventIDs bool
@@ -822,18 +742,6 @@ type RunOptions struct {
 
 	// DisableGraphExecutorEvents disables emitting graph executor lifecycle events.
 	DisableGraphExecutorEvents bool
-
-	// DisableGraphStateUpdates disables applying graph node state updates.
-	DisableGraphStateUpdates bool
-
-	// DisableTaskInvocationClone disables creating a child invocation per graph task.
-	DisableTaskInvocationClone bool
-
-	// DisableTaskStateCopy disables deep-copying task state for single-task steps.
-	DisableTaskStateCopy bool
-
-	// DisableGraphAgentInitialStateExtras disables injecting GraphAgent helper fields into the initial state.
-	DisableGraphAgentInitialStateExtras bool
 
 	// EventChannelBufferSize overrides the flow's default event channel buffer size for this run.
 	//
@@ -950,7 +858,7 @@ func NewInvocation(invocationOpts ...InvocationOptions) *Invocation {
 	if inv.InvocationID == "" {
 		inv.InvocationID = util.NewUUIDString()
 	}
-	if inv.notice == nil && !inv.RunOptions.DisableNotices {
+	if inv.notice == nil {
 		inv.notice = &noticeState{}
 	}
 
@@ -991,9 +899,7 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 	if newInv.InvocationID == "" {
 		newInv.InvocationID = util.NewUUIDString()
 	}
-	if newInv.RunOptions.DisableNotices {
-		newInv.notice = nil
-	} else if newInv.notice == nil {
+	if newInv.notice == nil {
 		newInv.notice = &noticeState{}
 	}
 

@@ -1258,7 +1258,7 @@ func (e *Executor) executeStep(
 			}
 		}()
 		taskInvocation, taskCtx := invocation, runCtx
-		if invocation != nil && !invocation.RunOptions.DisableTaskInvocationClone {
+		if invocation != nil {
 			branch := t.NodeID
 			if invocation.Branch != "" {
 				branch = invocation.Branch + agent.BranchDelimiter + t.NodeID
@@ -1918,25 +1918,6 @@ func (e *Executor) buildTaskStateCopy(execCtx *ExecutionContext, t *Task, single
 	}
 	if base == nil {
 		base = execCtx.State
-	}
-
-	if singleTaskStep &&
-		execCtx.Invocation != nil &&
-		execCtx.Invocation.RunOptions.DisableTaskStateCopy {
-		stateCopy := make(State, len(base)+2)
-		for k, v := range base {
-			stateCopy[k] = v
-		}
-
-		// Apply overlay if present to form the isolated input view.
-		if t.Overlay != nil && e.graph.Schema() != nil {
-			stateCopy = e.graph.Schema().ApplyUpdate(stateCopy, t.Overlay)
-		}
-
-		// Inject execution context helpers used by nodes.
-		stateCopy[StateKeyExecContext] = execCtx
-		stateCopy[StateKeyCurrentNodeID] = t.NodeID
-		return stateCopy
 	}
 
 	stateCopy := base.deepCopy(true, e.graph.Schema().Fields)

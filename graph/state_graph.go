@@ -978,10 +978,6 @@ func (r *llmRunner) executeOneShotStage(
 	if err != nil {
 		return nil, err
 	}
-	if invocation, ok := agent.InvocationFromContext(ctx); ok &&
-		invocation != nil && invocation.RunOptions.DisableGraphStateUpdates {
-		return nil, nil
-	}
 	var ops []MessageOp
 	if len(used) > 0 && used[len(used)-1].Role == model.RoleUser {
 		ops = append(ops, ReplaceLastUser{Content: used[len(used)-1].Content})
@@ -1005,12 +1001,6 @@ func (r *llmRunner) executeOneShotStage(
 func (r *llmRunner) executeUserInputStage(
 	ctx context.Context, state State, userInput string, span oteltrace.Span,
 ) (any, error) {
-	disableStateUpdates := false
-	if invocation, ok := agent.InvocationFromContext(ctx); ok &&
-		invocation != nil && invocation.RunOptions.DisableGraphStateUpdates {
-		disableStateUpdates = true
-	}
-
 	var history []model.Message
 	if msgData, exists := state[StateKeyMessages]; exists {
 		if msgs, ok := msgData.([]model.Message); ok {
@@ -1023,22 +1013,15 @@ func (r *llmRunner) executeUserInputStage(
 	if len(used) > 0 && used[len(used)-1].Role == model.RoleUser {
 		if used[len(used)-1].Content != userInput {
 			used[len(used)-1] = model.NewUserMessage(userInput)
-			if !disableStateUpdates {
-				ops = append(ops, ReplaceLastUser{Content: userInput})
-			}
+			ops = append(ops, ReplaceLastUser{Content: userInput})
 		}
 	} else {
 		used = append(used, model.NewUserMessage(userInput))
-		if !disableStateUpdates {
-			ops = append(ops, AppendMessages{Items: []model.Message{model.NewUserMessage(userInput)}})
-		}
+		ops = append(ops, AppendMessages{Items: []model.Message{model.NewUserMessage(userInput)}})
 	}
 	result, err := r.executeModel(ctx, state, used, span, instr)
 	if err != nil {
 		return nil, err
-	}
-	if disableStateUpdates {
-		return nil, nil
 	}
 	asst := extractAssistantMessage(result)
 	if asst != nil {
@@ -1069,10 +1052,6 @@ func (r *llmRunner) executeHistoryStage(ctx context.Context, state State, span o
 	result, err := r.executeModel(ctx, state, used, span, instr)
 	if err != nil {
 		return nil, err
-	}
-	if invocation, ok := agent.InvocationFromContext(ctx); ok &&
-		invocation != nil && invocation.RunOptions.DisableGraphStateUpdates {
-		return nil, nil
 	}
 	asst := extractAssistantMessage(result)
 	if asst != nil {

@@ -112,12 +112,9 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 		f.maybeResumePendingToolCalls(ctx, invocation, eventChan)
 
 		for {
-			disableStartBarrier := invocation != nil && invocation.RunOptions.DisableStartBarrier
-			if !disableStartBarrier {
-				// emit start event and wait for completion notice.
-				if err := f.emitStartEventAndWait(ctx, invocation, eventChan); err != nil {
-					return
-				}
+			// Emit start event and wait for completion notice.
+			if err := f.emitStartEventAndWait(ctx, invocation, eventChan); err != nil {
+				return
 			}
 
 			// Run one step (one LLM call cycle).
