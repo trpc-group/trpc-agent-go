@@ -259,6 +259,12 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 			skillsOpts,
 			processor.WithSkillLoadMode(options.SkillLoadMode),
 		)
+		if options.SkillsLoadedContentInToolResults {
+			skillsOpts = append(
+				skillsOpts,
+				processor.WithSkillsLoadedContentInToolResults(true),
+			)
+		}
 		skillsProcessor := processor.NewSkillsRequestProcessor(
 			options.skillsRepository,
 			skillsOpts...,
@@ -286,6 +292,21 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	}
 	contentProcessor := processor.NewContentRequestProcessor(contentOpts...)
 	requestProcessors = append(requestProcessors, contentProcessor)
+
+	if options.skillsRepository != nil &&
+		options.SkillsLoadedContentInToolResults {
+		skillsToolResultProcessor :=
+			processor.NewSkillsToolResultRequestProcessor(
+				options.skillsRepository,
+				processor.WithSkillsToolResultLoadMode(
+					options.SkillLoadMode,
+				),
+			)
+		requestProcessors = append(
+			requestProcessors,
+			skillsToolResultProcessor,
+		)
+	}
 
 	// 7. Time processor - adds current time information if enabled.
 	// Moved after content processor to avoid invalidating system message cache.

@@ -62,10 +62,13 @@ type runCapture struct {
 }
 
 type usageTotals struct {
-	Steps            int
-	PromptTokens     int
-	CompletionTokens int
-	TotalTokens      int
+	Steps             int
+	PromptTokens      int
+	CachedTokens      int
+	CacheCreateTokens int
+	CacheReadTokens   int
+	CompletionTokens  int
+	TotalTokens       int
 }
 
 func checkAgentEnv(modelName string) error {
@@ -94,6 +97,7 @@ func runAgentSuite(
 		exec,
 		modelName,
 		llmagent.SkillLoadModeTurn,
+		false,
 	)
 	r := runner.NewRunner(defaultAppName, agt)
 	defer r.Close()
@@ -186,6 +190,7 @@ func runTokenReportSuite(
 		exec,
 		modelName,
 		llmagent.SkillLoadModeSession,
+		false,
 	)
 	svc := inmemory.NewSessionService()
 	r := runner.NewRunner(
@@ -313,6 +318,7 @@ func newBenchAgent(
 	exec codeexecutor.CodeExecutor,
 	modelName string,
 	skillLoadMode string,
+	loadedInToolResults bool,
 ) agent.Agent {
 	m := openai.New(modelName)
 
@@ -331,8 +337,7 @@ func newBenchAgent(
 		gen.Temperature = floatPtr(0.0)
 	}
 
-	return llmagent.New(
-		"anthropic-skills-agent",
+	opts := []llmagent.Option{
 		llmagent.WithModel(m),
 		llmagent.WithSkills(repo),
 		llmagent.WithSkillLoadMode(skillLoadMode),
@@ -341,6 +346,16 @@ func newBenchAgent(
 		llmagent.WithMaxToolIterations(20),
 		llmagent.WithGenerationConfig(gen),
 		llmagent.WithInstruction(benchSystemPrompt()),
+	}
+	if loadedInToolResults {
+		opts = append(
+			opts,
+			llmagent.WithSkillsLoadedContentInToolResults(true),
+		)
+	}
+	return llmagent.New(
+		"anthropic-skills-agent",
+		opts...,
 	)
 }
 
@@ -926,6 +941,10 @@ func accumulateUsage(
 	}
 	totals.Steps++
 	totals.PromptTokens += resp.Usage.PromptTokens
+	totals.CachedTokens += resp.Usage.PromptTokensDetails.CachedTokens
+	totals.CacheCreateTokens +=
+		resp.Usage.PromptTokensDetails.CacheCreationTokens
+	totals.CacheReadTokens += resp.Usage.PromptTokensDetails.CacheReadTokens
 	totals.CompletionTokens += resp.Usage.CompletionTokens
 	totals.TotalTokens += resp.Usage.TotalTokens
 }

@@ -1,4 +1,4 @@
-# Skill（Agent Skills）
+# Skill
 
 Agent Skills 把可复用的任务封装为“技能目录”，用 `SKILL.md`
 描述目标与流程，并配套脚本与文档。在对话中，Agent 只注入
@@ -33,14 +33,15 @@ Agent Skills 把可复用的任务封装为“技能目录”，用 `SKILL.md`
 
 2) 正文层（按需注入）
    - 当任务确实需要某技能时，模型调用 `skill_load`，框架把该
-     技能的 `SKILL.md` 正文整体注入到系统消息中，供模型精准参考。
+     技能的 `SKILL.md` 正文物化到下一次模型请求中（详见下文
+     Prompt Cache 小节）。
 
 3) 文档/脚本层（精确选择 + 隔离执行）
-   - 关联文档按需选择（`docs` 或 `include_all_docs`），仅把文本
-     内容注入；脚本不会被内联到提示词，而是在工作区中执行，并
-     回传结果与输出文件。
+   - 关联文档按需选择（通过 `skill_load` 或 `skill_select_docs`），
+     仅把文本内容物化到提示词；脚本不会被内联，而是在工作区中
+     执行，并回传结果与输出文件。
 
-### Token 成本（为什么要渐进披露）
+### Token 成本
 
 如果把一个技能仓库的全部内容（所有 `SKILL.md` 正文与 docs）
 一股脑塞进提示词，往往会让 prompt token 占用变得非常高，甚至
@@ -49,6 +50,81 @@ Agent Skills 把可复用的任务封装为“技能目录”，用 `SKILL.md`
 想要**可复现、基于真实运行**的 token 对比（渐进披露 vs 全量注入），
 可参考 `benchmark/anthropic_skills/README.md`，并按其中说明运行
 `token-report` 套件。
+
+### Prompt Cache
+
+一些模型服务支持 **prompt cache**：如果后续一次模型请求的开头
+（token 前缀）与之前某次请求完全一致，服务端可以复用这段共同
+前缀，从而减少计算，并降低延迟和/或输入 token 成本（取决于服务商）。
+
+对于 Skills，“已加载的 `SKILL.md` / docs”落在消息序列的哪里，会影响
+连续模型调用之间可复用的前缀长度：
+
+- 旧行为（默认）：把已加载内容追加到 **system message**。
+  - 这会在 user/history 之前插入新 token，导致连续模型调用的共同前缀
+    变短。
+- Tool-result 物化（可选）：把已加载内容追加到对应的 **tool result**
+  消息（`skill_load` / `skill_select_docs`）。
+  - system message 更稳定，早期消息更不容易“后移”，prompt cache 往往能
+    命中更多前缀 token。
+
+回退机制：如果对应的 tool result 消息不在本次请求的 history 里
+（例如启用了 history suppression），框架会回退为插入一条专用的
+system message，确保模型仍能看到已加载内容。
+
+启用方式：`llmagent.WithSkillsLoadedContentInToolResults(true)`。
+
+要在真实工具链路中测量提升，参见 `benchmark/anthropic_skills` 的
+`prompt-cache` 套件。
+
+### 会话持久化
+
+先区分两个概念：
+
+- **Session（持久化）**：保存事件流（用户消息、助手消息、工具调用/结果）
+  + 一份小的键值 **state map**。
+- **模型请求（一次性的）**：本次发给模型的 `[]Message`，由 Session +
+  运行时配置拼出来。
+
+`skill_load` 只会把“已加载/已选文档”的**小状态**写入 Session（例如
+`temp:skill:loaded:*`、`temp:skill:docs:*`）。随后由请求处理器在
+**下一次模型请求**里，把对应的 `SKILL.md` 正文/已选 docs **物化**
+进去。
+
+重要：物化不会把“扩展后的 tool result 内容”写回 Session。
+所以如果你去看 Session 里保存的工具结果，`skill_load` 仍然通常是
+一个很短的 stub（比如 `loaded: internal-comms`）。但模型在每次请求
+里仍能看到完整正文/文档，因为它们是在构造请求时注入的。
+
+后续请求的稳定性：
+- 在同一次工具链路里，每次模型调用前都会按同一套规则重新物化，
+  所以只要 skills 仓库内容和选择状态不变，模型看到的 skill 内容
+  就是稳定的。
+- 如果本次请求 history 里没有对应的 tool result（例如 history
+  suppression 或截断），框架会回退为插入一条专用 system message
+  （`Loaded skill context:`）来保证正确性。但这会让 system 内容发生变化，
+  prompt cache 的收益可能会变小。
+
+### 与业界实现对比
+
+很多框架为了更友好地利用 prompt cache，会尽量避免在多步工具链路中
+不断改写 system prompt，而是把动态上下文放到 **tool 消息**（工具结果）
+里，让 system 更稳定。
+
+一些例子：
+- OpenClaw：system prompt 列出可用 skills，但选中 skill 的 `SKILL.md`
+  会要求通过工具读取（正文落在 tool result 里）：
+  https://github.com/openclaw/openclaw/blob/0cf93b8fa74566258131f9e8ca30f313aac89d26/src/agents/system-prompt.ts
+- OpenAI Codex：项目文档中渲染 skills 列表，并要求按需打开 `SKILL.md`
+ （正文来自读文件工具的 tool result）：
+  https://github.com/openai/codex/blob/383b45279efda1ef611a4aa286621815fe656b8a/codex-rs/core/src/project_doc.rs
+
+在 trpc-agent-go 中：
+- 旧模式：把已加载的 skill 正文/文档追加到 **system message**
+  （简单、兼容旧语义，但可能缩短可缓存的前缀）。
+- 新模式（可选）：保持 system 更稳定，把已加载内容物化到 `skill_load` /
+  `skill_select_docs` 的 **tool result** 消息中（更接近“工具消息承载动态上下文”
+  的主流模式）。
 
 ### 目录结构
 
@@ -63,7 +139,7 @@ skills/
 
 仓库与解析： [skill/repository.go](https://github.com/trpc-group/trpc-agent-go/blob/main/skill/repository.go)
 
-## 快速开始（从 0 到 1）
+## 快速开始
 
 ### 1) 环境准备
 
@@ -102,6 +178,8 @@ agent := llmagent.New(
     "skills-assistant",
     llmagent.WithSkills(repo),
     llmagent.WithCodeExecutor(exec),
+    // Optional: keep the system prompt stable for prompt caching.
+    llmagent.WithSkillsLoadedContentInToolResults(true),
 )
 ```
 
@@ -206,7 +284,7 @@ https://github.com/anthropics/skills
 
 ## 工具用法详解
 
-### `skill_load`（加载内容）
+### `skill_load`
 
 声明： [tool/skill/load.go](https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/load.go)
 
@@ -219,7 +297,10 @@ https://github.com/anthropics/skills
 - 写入会话临时键（生命周期由 `SkillLoadMode` 控制）：
   - `temp:skill:loaded:<name>` = "1"
   - `temp:skill:docs:<name>` = "*" 或 JSON 字符串数组
-- 请求处理器读取这些键，把 `SKILL.md` 正文与文档注入到系统消息
+- 请求处理器读取这些键，把 `SKILL.md` 正文与文档物化到下一次模型请求中：
+  - 默认：追加到系统消息（兼容旧行为）
+  - 可选：追加到对应 tool result 消息
+    (`llmagent.WithSkillsLoadedContentInToolResults(true)`)
 
 说明：
 - 建议采用“渐进式披露”：默认只传 `skill` 加载正文；需要文档时先
@@ -243,7 +324,7 @@ agent := llmagent.New(
 )
 ```
 
-### `skill_select_docs`（选择文档）
+### `skill_select_docs`
 
 声明： [tool/skill/select_docs.go](https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/select_docs.go)
 
@@ -256,7 +337,7 @@ agent := llmagent.New(
 行为：
 - 更新 `temp:skill:docs:<name>`：`*` 表示全选；数组表示显式列表
 
-### `skill_list_docs`（列出文档）
+### `skill_list_docs`
 
 声明： [tool/skill/list_docs.go](https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/list_docs.go)
 
@@ -269,7 +350,7 @@ agent := llmagent.New(
 提示：这些会话键由框架自动管理；用户通常无需直接操作，仅需用
 自然语言驱动对话即可。
 
-### `skill_run`（执行命令）
+### `skill_run`
 
 声明： [tool/skill/run.go](https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/run.go)
 
@@ -497,14 +578,15 @@ agent := llmagent.New(
 - `workspace.create`、`workspace.stage.*`、`workspace.run`
 - `workspace.collect`、`workspace.cleanup`、`workspace.inline`
 
-## 原理与设计（简述）
+## 原理与设计
 
 - 动机：在真实任务中，技能说明与脚本往往内容较多，全部内联到
   提示词既昂贵又易泄漏。三层信息模型让“知道有何能力”与“在
   需要时获得细节/执行脚本”解耦，从而减少上下文开销并提升安全。
 - 注入与状态：通过事件中的 `StateDelta` 将加载选择以键值形式
   写入会话状态的 `temp:*` 命名空间，后续每轮请求处理器据此拼接
-  系统消息，形成“概览 → 正文/文档”的渐进式上下文。
+  提示词上下文（默认拼接系统消息；也可按需物化到 tool result），
+  形成“概览 → 正文/文档”的渐进式上下文。
 - 执行隔离：脚本以工作区为边界，输出文件由通配符精确收集，避免
   将脚本源码或非必要文件带入模型上下文。
 
@@ -524,6 +606,11 @@ agent := llmagent.New(
   - 工程博客：
     https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills
   - 开源库： https://github.com/anthropics/skills
+- 业界实践：
+  - OpenClaw：在 prompt 中要求模型用工具读取所选 skill 的 `SKILL.md`：
+    https://github.com/openclaw/openclaw/blob/0cf93b8fa74566258131f9e8ca30f313aac89d26/src/agents/system-prompt.ts
+  - OpenAI Codex：在项目文档里列出 skills，并要求按需打开 `SKILL.md`：
+    https://github.com/openai/codex/blob/383b45279efda1ef611a4aa286621815fe656b8a/codex-rs/core/src/project_doc.rs
 - 本仓库：
   - 交互示例： [examples/skillrun/main.go]
     (https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillrun/main.go)

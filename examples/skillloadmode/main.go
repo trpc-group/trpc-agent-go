@@ -50,6 +50,11 @@ func main() {
 			defaultRoot,
 			"Skills root directory",
 		)
+		flagToolResults = flag.Bool(
+			"tool-results",
+			false,
+			"Materialize loaded skill content into tool results",
+		)
 	)
 	flag.Parse()
 
@@ -71,6 +76,7 @@ func main() {
 		llmagent.WithModel(mock),
 		llmagent.WithSkills(repo),
 		llmagent.WithSkillLoadMode(mode),
+		llmagent.WithSkillsLoadedContentInToolResults(*flagToolResults),
 	)
 
 	svc := inmemory.NewSessionService()
@@ -87,6 +93,7 @@ func main() {
 	)
 
 	fmt.Printf("SkillLoadMode: %s\n", mode)
+	fmt.Printf("Tool result materialization: %t\n", *flagToolResults)
 	fmt.Printf("Skills root: %s\n", *flagSkillsRoot)
 	fmt.Printf("Session: %s\n\n", sessionID)
 
@@ -138,7 +145,13 @@ func printSelectedEvent(evt *event.Event) {
 		return
 	}
 	if ch.Message.Role == model.RoleTool && ch.Message.Content != "" {
-		fmt.Printf("tool result: %s\n", strings.TrimSpace(ch.Message.Content))
+		content := strings.TrimSpace(ch.Message.Content)
+		firstLine, _, _ := strings.Cut(content, "\n")
+		extra := ""
+		if strings.Contains(content, "[Loaded]") {
+			extra = " (materialized skill content)"
+		}
+		fmt.Printf("tool result: %s%s\n", firstLine, extra)
 		return
 	}
 	if ch.Message.Role == model.RoleAssistant && ch.Message.Content != "" {
