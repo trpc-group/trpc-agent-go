@@ -25,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
@@ -471,7 +472,6 @@ func (f *Flow) preprocess(
 	for _, processor := range f.requestProcessors {
 		processor.ProcessRequest(ctx, invocation, llmRequest, eventChan)
 	}
-
 	// Add tools to the request with optional filtering.
 	if invocation.Agent != nil {
 		tools := f.getFilteredTools(ctx, invocation)
@@ -479,6 +479,8 @@ func (f *Flow) preprocess(
 			llmRequest.Tools[t.Declaration().Name] = t
 		}
 	}
+	// Sanitize invalid tool calls in history to avoid poisoning future requests.
+	llmRequest.Messages = toolcall.SanitizeMessagesWithTools(llmRequest.Messages, llmRequest.Tools)
 }
 
 // UserToolsProvider is an optional interface that agents can implement to expose
