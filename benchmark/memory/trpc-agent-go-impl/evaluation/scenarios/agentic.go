@@ -19,6 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/benchmark/memory/trpc-agent-go-impl/evaluation/dataset"
 	"trpc.group/trpc-go/trpc-agent-go/benchmark/memory/trpc-agent-go-impl/evaluation/metrics"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -93,10 +94,22 @@ func (e *AgenticEvaluator) Evaluate(
 	result.QAResults = make([]*QAResult, 0, len(sample.QA))
 	catAgg := metrics.NewCategoryAggregator()
 
+	seed := fullConversationMessages(sample)
 	for _, qa := range sample.QA {
-		qaResult, err := e.evaluateQA(ctx, r, userKey, qa)
+		qaResult, err := e.evaluateQA(ctx, r, userKey, seed, qa)
 		if err != nil {
-			return nil, fmt.Errorf("evaluate QA %s: %w", qa.QuestionID, err)
+			if e.config.Verbose {
+				log.Printf("Warning: evaluate QA %s failed: %v", qa.QuestionID, err)
+			}
+			qaResult = &QAResult{
+				QuestionID: qa.QuestionID,
+				Question:   qa.Question,
+				Category:   qa.Category,
+				Expected:   qa.Answer,
+				Predicted:  fallbackAnswer,
+				Metrics:    metrics.QAMetrics{F1: 0, BLEU: 0},
+				LatencyMs:  0,
+			}
 		}
 		result.QAResults = append(result.QAResults, qaResult)
 		catAgg.Add(qa.Category, qaResult.Metrics)
@@ -155,6 +168,7 @@ func (e *AgenticEvaluator) evaluateQA(
 	ctx context.Context,
 	r runner.Runner,
 	userKey memory.UserKey,
+	seed []model.Message,
 	qa dataset.QAItem,
 ) (*QAResult, error) {
 	start := time.Now()
@@ -164,15 +178,15 @@ func (e *AgenticEvaluator) evaluateQA(
 
 	sessionID := fmt.Sprintf("qa-%s", qa.QuestionID)
 	msg := model.NewUserMessage(qa.Question)
-	ch, err := r.Run(ctx, userKey.UserID, sessionID, msg,
-		agent.WithInstruction(readInstruction),
-	)
+	opts := []agent.RunOption{agent.WithInstruction(readInstruction)}
+	if e.config.QAWithHistory {
+		opts = append(opts, agent.WithMessages(seed))
+	}
+	predicted, err := runWithRateLimitRetry(ctx, func() (<-chan *event.Event, error) {
+		return r.Run(ctx, userKey.UserID, sessionID, msg, opts...)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("runner run: %w", err)
-	}
-	predicted, err := collectFinalText(ch)
-	if err != nil {
-		return nil, err
 	}
 
 	m := metrics.QAMetrics{

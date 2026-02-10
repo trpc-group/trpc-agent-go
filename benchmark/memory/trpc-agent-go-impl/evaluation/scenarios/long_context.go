@@ -19,6 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/benchmark/memory/trpc-agent-go-impl/evaluation/dataset"
 	"trpc.group/trpc-go/trpc-agent-go/benchmark/memory/trpc-agent-go-impl/evaluation/metrics"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
@@ -54,6 +55,7 @@ type Config struct {
 	EnableLLMJudge    bool
 	Verbose           bool
 	SessionEventLimit int
+	QAWithHistory     bool
 
 	// Debug options (primarily for benchmark diagnosis).
 	DebugDumpMemories bool
@@ -71,6 +73,7 @@ func DefaultConfig() Config {
 		EnableLLMJudge:    false,
 		Verbose:           false,
 		SessionEventLimit: 1000,
+		QAWithHistory:     false,
 		DebugDumpMemories: false,
 		DebugMemLimit:     0,
 		DebugQALimit:      0,
@@ -205,21 +208,18 @@ func (e *LongContextEvaluator) evaluateQA(
 	sessionID := fmt.Sprintf("qa-%s", qa.QuestionID)
 	msg := model.NewUserMessage(qa.Question)
 
-	ch, err := r.Run(
-		ctx,
-		userID,
-		sessionID,
-		msg,
-		agent.WithMessages(seed),
-		agent.WithInstruction(longContextInstruction),
-	)
+	predicted, err := runWithRateLimitRetry(ctx, func() (<-chan *event.Event, error) {
+		return r.Run(
+			ctx,
+			userID,
+			sessionID,
+			msg,
+			agent.WithMessages(seed),
+			agent.WithInstruction(longContextInstruction),
+		)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("runner run: %w", err)
-	}
-
-	predicted, err := collectFinalText(ch)
-	if err != nil {
-		return nil, err
 	}
 
 	m := metrics.QAMetrics{

@@ -1,6 +1,7 @@
 # Ignore result files but keep directory structure.
 *.json
 *.log
+.old/
 
 # Keep README.
 !README.md

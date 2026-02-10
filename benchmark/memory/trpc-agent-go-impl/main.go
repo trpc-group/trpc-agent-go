@@ -97,6 +97,11 @@ var (
 	flagMaxTasks          = flag.Int("max-tasks", 0, "Maximum tasks (0=all)")
 	flagMaxContext        = flag.Int("max-context", 128000, "Maximum context length")
 	flagSessionEventLimit = flag.Int("session-event-limit", 1000, "Max events kept in each session (0=unlimited)")
+	flagQAWithHistory     = flag.Bool(
+		"qa-with-history",
+		false,
+		"Include full conversation history in QA sessions (auto/agentic/rag_memory only)",
+	)
 
 	flagLLMJudge = flag.Bool("llm-judge", false, "Enable LLM-as-Judge evaluation")
 	flagVerbose  = flag.Bool("verbose", false, "Verbose output")
@@ -261,6 +266,7 @@ func main() {
 		EnableLLMJudge:    *flagLLMJudge,
 		Verbose:           *flagVerbose,
 		SessionEventLimit: *flagSessionEventLimit,
+		QAWithHistory:     *flagQAWithHistory,
 		DebugDumpMemories: *flagDebugDumpMemories,
 		DebugMemLimit:     *flagDebugMemLimit,
 		DebugQALimit:      *flagDebugQALimit,
@@ -730,6 +736,11 @@ func runEvaluation(
 }
 
 func saveResults(outputDir string, result *EvaluationResult) {
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		log.Printf("Failed to create output directory: %v", err)
+		return
+	}
+
 	// Save full results.
 	resultsPath := filepath.Join(outputDir, "results.json")
 	data, err := json.MarshalIndent(result, "", "  ")

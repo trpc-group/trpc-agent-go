@@ -12,19 +12,27 @@ package scenarios
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/benchmark/memory/trpc-agent-go-impl/evaluation/dataset"
 	"trpc.group/trpc-go/trpc-agent-go/benchmark/memory/trpc-agent-go-impl/evaluation/metrics"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-const autoAppName = "memory-eval-auto"
+const (
+	autoAppName = "memory-eval-auto"
+
+	autoQAMaxToolIterations = 20
+)
+
+var autoFallbackAnswer = "The information is not available."
 
 // AutoEvaluator evaluates using automatic memory extraction.
 // Memories are extracted by Runner and stored by the memory service.
@@ -109,10 +117,14 @@ func (e *AutoEvaluator) Evaluate(
 	result.QAResults = make([]*QAResult, 0, len(sample.QA))
 	catAgg := metrics.NewCategoryAggregator()
 
+	seed := fullConversationMessages(sample)
 	for _, qa := range sample.QA {
-		qaResult, err := e.evaluateQA(ctx, qaRunner, userKey, qa)
+		qaResult, err := e.evaluateQA(ctx, qaRunner, userKey, seed, qa)
 		if err != nil {
-			return nil, fmt.Errorf("evaluate QA %s: %w", qa.QuestionID, err)
+			if e.config.Verbose {
+				log.Printf("Warning: evaluate QA %s failed: %v", qa.QuestionID, err)
+			}
+			qaResult = qaResultFromError(qa, err)
 		}
 		result.QAResults = append(result.QAResults, qaResult)
 		catAgg.Add(qa.Category, qaResult.Metrics)
@@ -131,11 +143,12 @@ func newAutoQAAAgent(m model.Model, tools []tool.Tool) agent.Agent {
 		llmagent.WithModel(m),
 		llmagent.WithInstruction(
 			"Use memory_search to find relevant facts. "+
+				"Call memory_search at most 3 times. "+
 				"Answer in English only. Output ONLY the answer.",
 		),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithTools(tools),
-		llmagent.WithMaxToolIterations(5),
+		llmagent.WithMaxToolIterations(autoQAMaxToolIterations),
 	)
 }
 
@@ -143,19 +156,22 @@ func (e *AutoEvaluator) evaluateQA(
 	ctx context.Context,
 	r runner.Runner,
 	userKey memory.UserKey,
+	seed []model.Message,
 	qa dataset.QAItem,
 ) (*QAResult, error) {
 	start := time.Now()
 	sessionID := fmt.Sprintf("qa-%s", qa.QuestionID)
 	msg := model.NewUserMessage(qa.Question)
+	opts := make([]agent.RunOption, 0, 1)
+	if e.config.QAWithHistory {
+		opts = append(opts, agent.WithMessages(seed))
+	}
 
-	ch, err := r.Run(ctx, userKey.UserID, sessionID, msg)
+	predicted, err := runWithRateLimitRetry(ctx, func() (<-chan *event.Event, error) {
+		return r.Run(ctx, userKey.UserID, sessionID, msg, opts...)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("runner run: %w", err)
-	}
-	predicted, err := collectFinalText(ch)
-	if err != nil {
-		return nil, err
 	}
 
 	m := metrics.QAMetrics{
@@ -182,6 +198,20 @@ func (e *AutoEvaluator) evaluateQA(
 		Metrics:    m,
 		LatencyMs:  time.Since(start).Milliseconds(),
 	}, nil
+}
+
+func qaResultFromError(qa dataset.QAItem, err error) *QAResult {
+	_ = err
+	m := metrics.QAMetrics{F1: 0, BLEU: 0}
+	return &QAResult{
+		QuestionID: qa.QuestionID,
+		Question:   qa.Question,
+		Category:   qa.Category,
+		Expected:   qa.Answer,
+		Predicted:  autoFallbackAnswer,
+		Metrics:    m,
+		LatencyMs:  0,
+	}
 }
 
 func (e *AutoEvaluator) waitForAutoExtraction(

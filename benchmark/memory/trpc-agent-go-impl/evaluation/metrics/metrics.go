@@ -273,6 +273,8 @@ func normalizeAndTokenize(text string) []string {
 	if text == "" {
 		return nil
 	}
+	// Replace <｜end▁of▁sentence｜> to space.
+	text = strings.ReplaceAll(text, "<｜end▁of▁sentence｜>", " ")
 	// Lowercase.
 	text = strings.ToLower(text)
 	// Remove punctuation.

@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -192,8 +193,18 @@ func sessionMessages(sample *dataset.LoCoMoSample, sess dataset.Session) []model
 	return msgs
 }
 
+const fallbackAnswer = "The information is not available."
+
+const (
+	venusRateLimitCode         = "\"code\":\"4029\""
+	maxRateLimitRetries        = 10
+	rateLimitInitialBackoff    = 2 * time.Second
+	rateLimitMaxBackoff        = 90 * time.Second
+	rateLimitBackoffMultiplier = 2
+)
+
 func collectFinalText(eventChan <-chan *event.Event) (string, error) {
-	var out strings.Builder
+	lastAssistant := ""
 	for ev := range eventChan {
 		if ev == nil {
 			continue
@@ -203,13 +214,77 @@ func collectFinalText(eventChan <-chan *event.Event) (string, error) {
 		}
 		if ev.Response != nil && len(ev.Response.Choices) > 0 {
 			msg := ev.Response.Choices[0].Message
-			if msg.Content != "" {
-				out.WriteString(msg.Content)
+			if msg.Role == model.RoleAssistant && msg.Content != "" {
+				lastAssistant = msg.Content
 			}
 		}
 		if ev.IsFinalResponse() || ev.IsRunnerCompletion() {
 			break
 		}
 	}
-	return strings.TrimSpace(out.String()), nil
+	return strings.TrimSpace(lastAssistant), nil
+}
+
+func isRateLimitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "429 Too Many Requests") ||
+		strings.Contains(msg, venusRateLimitCode)
+}
+
+func sleepWithContext(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
+func runWithRateLimitRetry(
+	ctx context.Context,
+	run func() (<-chan *event.Event, error),
+) (string, error) {
+	backoff := rateLimitInitialBackoff
+	for attempt := 0; attempt <= maxRateLimitRetries; attempt++ {
+		ch, err := run()
+		if err != nil {
+			if isRateLimitError(err) {
+				if sleepErr := sleepWithContext(ctx, backoff); sleepErr != nil {
+					return "", sleepErr
+				}
+				backoff = minDuration(backoff*time.Duration(rateLimitBackoffMultiplier), rateLimitMaxBackoff)
+				continue
+			}
+			return "", err
+		}
+
+		out, err := collectFinalText(ch)
+		if err != nil {
+			if isRateLimitError(err) {
+				if sleepErr := sleepWithContext(ctx, backoff); sleepErr != nil {
+					return "", sleepErr
+				}
+				backoff = minDuration(backoff*time.Duration(rateLimitBackoffMultiplier), rateLimitMaxBackoff)
+				continue
+			}
+			return "", err
+		}
+		return out, nil
+	}
+	return "", fmt.Errorf("rate limit retry exceeded")
+}
+
+func minDuration(a, b time.Duration) time.Duration {
+	if a < b {
+		return a
+	}
+	return b
 }
