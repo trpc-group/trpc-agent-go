@@ -281,7 +281,10 @@ func (m *Model) buildChatRequest(request *model.Request) (*anthropic.MessageNewP
 	if request.GenerationConfig.MaxTokens != nil {
 		chatRequest.MaxTokens = int64(*request.GenerationConfig.MaxTokens)
 	}
-	if chatRequest.MaxTokens == 0 {
+	// Only apply default MaxTokens when token tailoring is disabled.
+	// When token tailoring is enabled, respect the value set by applyTokenTailoring
+	// (or leave it as 0 if token counting failed).
+	if chatRequest.MaxTokens == 0 && !m.enableTokenTailoring {
 		chatRequest.MaxTokens = 4096
 	}
 	if request.Temperature != nil {
