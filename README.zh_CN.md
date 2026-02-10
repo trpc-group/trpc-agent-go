@@ -149,6 +149,32 @@ _ = result.OverallStatus
 
 </td>
 </tr>
+<tr>
+<td valign="top">
+
+### LLMAgent
+
+```go
+// 将 chat 模型封装为 LLMAgent
+modelInstance := openai.New("gpt-4o-mini")
+agent := llmagent.New("assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithInstruction("你是一个乐于助人的助手。"),
+)
+
+// 运行一次对话
+runner := runner.NewRunner("app", agent)
+events, _ := runner.Run(ctx, "user-1", "session-1",
+    model.NewUserMessage("2+2 等于多少？"))
+```
+
+</td>
+<td valign="top">
+
+&nbsp;
+
+</td>
+</tr>
 </table>
 
 ## 目录
@@ -162,6 +188,7 @@ _ = result.OverallStatus
     - [**生产可观测性**](#生产可观测性)
     - [**Agent Skills**](#agent-skills)
     - [**评测与基准**](#评测与基准)
+    - [**LLMAgent**](#llmagent)
   - [目录](#目录)
   - [文档](#文档)
   - [快速开始](#快速开始)

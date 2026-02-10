@@ -151,6 +151,32 @@ _ = result.OverallStatus
 
 </td>
 </tr>
+<tr>
+<td valign="top">
+
+### LLMAgent
+
+```go
+// Wrap a chat model as an LLMAgent
+modelInstance := openai.New("gpt-4o-mini")
+agent := llmagent.New("assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithInstruction("You are a helpful assistant."),
+)
+
+// Run a basic chat
+runner := runner.NewRunner("app", agent)
+events, _ := runner.Run(ctx, "user-1", "session-1",
+    model.NewUserMessage("What is 2+2?"))
+```
+
+</td>
+<td valign="top">
+
+&nbsp;
+
+</td>
+</tr>
 </table>
 
 ## Table of Contents
@@ -164,6 +190,7 @@ _ = result.OverallStatus
     - [Production Observability](#production-observability)
     - [Agent Skills](#agent-skills)
     - [Evaluation \& Benchmarks](#evaluation--benchmarks)
+    - [LLMAgent](#llmagent)
   - [Table of Contents](#table-of-contents)
   - [Documentation](#documentation)
   - [Quick Start](#quick-start)
