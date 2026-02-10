@@ -32,6 +32,34 @@
               }
             }
           ]
+        },
+        {
+          "invocationId": "call_mcp_calculator-2",
+          "userContent": {
+            "role": "user",
+            "content": "Let lastNumber be the last answer. Calculate the product of lastNumber and 2."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "(unused)"
+          },
+          "tools": [
+            {
+              "id": "tool_use_mcp_calculator",
+              "name": "mcp__eva_eval_example__calculator",
+              "arguments": {
+                "operation": "multiply",
+                "a": 3,
+                "b": 2
+              },
+              "result": {
+                "operation": "multiply",
+                "a": 3,
+                "b": 2,
+                "result": 6
+              }
+            }
+          ]
         }
       ],
       "sessionInput": {
