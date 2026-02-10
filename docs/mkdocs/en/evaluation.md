@@ -2489,8 +2489,6 @@ Integrating evaluation into engineering workflows often delivers more value than
 
 Two things are most dangerous in Agent evolution: small-looking changes that cause silent behavior drift, and issues that only surface for users, which multiplies diagnosis cost. Evaluation exists to block these risks early.
 
-### tRPC-Agent-Go Release Pipeline
-
 tRPC-Agent-Go in [examples/runner](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runner) encodes critical paths into evaluation sets and metrics and runs them in the release pipeline. The Runner quickstart cases cover common scenarios such as calculator, time tool, and compound interest, with a clear goal to guard tool selection and output shape. If behavior drifts, the pipeline fails early, and you can locate the issue directly with the corresponding case and trace.
 
 ```go
@@ -2560,11 +2558,3 @@ func TestTool(t *testing.T) {
 	}
 }
 ```
-
-### Claude CLI Output Evaluation
-
-If you want to evaluate real Claude CLI executions, wrap the CLI as an `agent.Agent`: for each eval case, run `claude -p "..." --verbose --output-format json`, capture the full stdout/stderr output, and store it as the invocation final response. This keeps artifacts debuggable and makes failures easy to reproduce.
-
-To make `tool_trajectory_avg_score` work, parse the JSON stream and turn `tool_use` / `tool_result` blocks into tool-call and tool-result events so the framework can populate `Invocation.Tools` with a comparable tool trajectory.
-
-See [examples/evaluation/claude](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/claude) for the full example.
