@@ -381,6 +381,88 @@ func TestMarkdownChunking_EdgeCases(t *testing.T) {
 	}
 }
 
+// TestMarkdownChunking_SplitByHeader_HeadingWithoutText verifies that
+// splitByHeader handles headings without text safely and preserves content.
+func TestMarkdownChunking_SplitByHeader_HeadingWithoutText(t *testing.T) {
+	tests := []struct {
+		name         string
+		level        int
+		content      string
+		contentHints []string
+	}{
+		{
+			name:  "empty level1 heading after normal level1 heading",
+			level: 1,
+			content: `# First Title
+
+Paragraph before empty level1 heading that should be retained.
+
+#
+
+Paragraph after empty level1 heading should still be retained.`,
+			contentHints: []string{
+				"Paragraph before empty level1 heading",
+				"Paragraph after empty level1 heading",
+			},
+		},
+		{
+			name:  "empty level2 heading after normal level2 heading",
+			level: 2,
+			content: `## Section A
+
+Content before empty level2 heading should be retained.
+
+##
+
+Content after empty level2 heading should still be retained.`,
+			contentHints: []string{
+				"Content before empty level2 heading",
+				"Content after empty level2 heading",
+			},
+		},
+		{
+			name:  "closing-hash-only heading",
+			level: 3,
+			content: `### Section A
+
+Content before closing-hash-only heading should be retained.
+
+### ###
+
+Content after closing-hash-only heading should still be retained.`,
+			contentHints: []string{
+				"Content before closing-hash-only heading",
+				"Content after closing-hash-only heading",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mc := NewMarkdownChunking(WithMarkdownChunkSize(32), WithMarkdownOverlap(0))
+
+			var sections []headerSection
+			require.NotPanics(t, func() {
+				sections = mc.splitByHeader(tt.content, tt.level)
+			})
+			require.NotEmpty(t, sections)
+
+			var combined strings.Builder
+			for _, section := range sections {
+				combined.WriteString(section.Header)
+				combined.WriteString("\n")
+				combined.WriteString(section.Content)
+				combined.WriteString("\n")
+			}
+
+			fullText := combined.String()
+			for _, hint := range tt.contentHints {
+				require.Contains(t, fullText, hint)
+			}
+		})
+	}
+}
+
 // TestMarkdownChunking_MultipleParagraphsInSection tests splitLargeSection with multiple paragraphs
 func TestMarkdownChunking_MultipleParagraphsInSection(t *testing.T) {
 	// Create a section with multiple paragraphs that should be grouped intelligently

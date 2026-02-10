@@ -230,7 +230,10 @@ func (m *MarkdownChunking) splitByHeader(content string, level int) []headerSect
 		}
 
 		if heading, ok := node.(*ast.Heading); ok && heading.Level == level {
-			// Find the start of the heading line (including the # symbols)
+			// Extract heading text once so fallback strategies can reuse it.
+			headerText := m.extractText(heading, source)
+
+			// Find the start of the heading line (including the # symbols).
 			var headingLineStart int
 			if heading.Lines().Len() > 0 {
 				headingLineStart = heading.Lines().At(0).Start
@@ -238,6 +241,23 @@ func (m *MarkdownChunking) splitByHeader(content string, level int) []headerSect
 				for headingLineStart > 0 && source[headingLineStart-1] != '\n' {
 					headingLineStart--
 				}
+			} else {
+				// Fallback: try to determine position from heading descendants.
+				headingLineStart = findNodeStartPos(heading, source)
+			}
+
+			// Final fallback: scan from the last known content position to find
+			// the next heading line at this level.
+			if headingLineStart < 0 {
+				headingLineStart = findHeadingLineStartFallback(source, lastHeaderPos, level, headerText)
+			}
+			// Keep monotonic progress to avoid invalid ranges while preserving
+			// subsequent heading boundaries.
+			if headingLineStart < 0 {
+				headingLineStart = lastHeaderPos
+			}
+			if headingLineStart < lastHeaderPos {
+				headingLineStart = lastHeaderPos
 			}
 
 			// Save the previous section before starting a new one
@@ -264,7 +284,6 @@ func (m *MarkdownChunking) splitByHeader(content string, level int) []headerSect
 			}
 
 			// Start tracking new section
-			headerText := m.extractText(heading, source)
 			headerPrefix := strings.Repeat("#", level) + " "
 
 			// Calculate position after the header line (after the newline)
@@ -276,6 +295,10 @@ func (m *MarkdownChunking) splitByHeader(content string, level int) []headerSect
 				if contentStartPos < len(source) && source[contentStartPos] == '\n' {
 					contentStartPos++
 				}
+			} else {
+				// Fallback: move to the beginning of the next line so the header line
+				// itself is not duplicated in section content.
+				contentStartPos = findLineContentStartPos(source, headingLineStart)
 			}
 
 			lastHeader = &headerSection{
@@ -302,6 +325,114 @@ func (m *MarkdownChunking) splitByHeader(content string, level int) []headerSect
 	// We return empty slice to let caller try next level or other splitting strategies.
 
 	return sections
+}
+
+// findNodeStartPos tries to determine the start position of a heading node
+// by inspecting descendant text segments. It walks back to find the beginning
+// of the line (before any '#' prefix). Returns -1 if no position can be determined.
+func findNodeStartPos(heading ast.Node, source []byte) int {
+	startPos := -1
+	_ = ast.Walk(heading, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		textNode, ok := node.(*ast.Text)
+		if !ok {
+			return ast.WalkContinue, nil
+		}
+		startPos = textNode.Segment.Start
+		for startPos > 0 && source[startPos-1] != '\n' {
+			startPos--
+		}
+		return ast.WalkStop, nil
+	})
+	return startPos
+}
+
+// findHeadingLineStartFallback scans source lines to find the next ATX heading
+// at the target level, starting from searchFrom. It prefers lines containing
+// headingText when available, and falls back to the first candidate.
+func findHeadingLineStartFallback(source []byte, searchFrom, level int, headingText string) int {
+	if len(source) == 0 || level <= 0 {
+		return -1
+	}
+	if searchFrom < 0 {
+		searchFrom = 0
+	}
+	if searchFrom > len(source) {
+		searchFrom = len(source)
+	}
+	headingText = strings.TrimSpace(headingText)
+
+	lineStart := searchFrom
+	for lineStart > 0 && source[lineStart-1] != '\n' {
+		lineStart--
+	}
+
+	firstCandidate := -1
+	for lineStart <= len(source) {
+		lineEnd := lineStart
+		for lineEnd < len(source) && source[lineEnd] != '\n' {
+			lineEnd++
+		}
+		line := string(source[lineStart:lineEnd])
+		if isATXHeadingLineAtLevel(line, level) {
+			if firstCandidate < 0 {
+				firstCandidate = lineStart
+			}
+			if headingText == "" || strings.Contains(line, headingText) {
+				return lineStart
+			}
+		}
+		if lineEnd == len(source) {
+			break
+		}
+		lineStart = lineEnd + 1
+	}
+	return firstCandidate
+}
+
+// isATXHeadingLineAtLevel checks whether a line matches an ATX heading marker
+// of the given level ("#", "##", ...). It allows up to 3 leading spaces.
+func isATXHeadingLineAtLevel(line string, level int) bool {
+	if level <= 0 {
+		return false
+	}
+	line = strings.TrimSuffix(line, "\r")
+
+	trimmedLeft := strings.TrimLeft(line, " ")
+	leadingSpaces := len(line) - len(trimmedLeft)
+	if leadingSpaces > 3 {
+		return false
+	}
+	prefix := strings.Repeat("#", level)
+	if !strings.HasPrefix(trimmedLeft, prefix) {
+		return false
+	}
+	if len(trimmedLeft) == level {
+		return true
+	}
+	next := trimmedLeft[level]
+	return next == ' ' || next == '\t'
+}
+
+// findLineContentStartPos returns the index of the first character on the
+// line following lineStart, used as fallback section content start.
+func findLineContentStartPos(source []byte, lineStart int) int {
+	if lineStart < 0 {
+		return 0
+	}
+	if lineStart >= len(source) {
+		return len(source)
+	}
+	pos := lineStart
+	for pos < len(source) && source[pos] != '\n' {
+		pos++
+	}
+	if pos < len(source) {
+		pos++
+	}
+	return pos
 }
 
 // extractText extracts text content from an AST node.
