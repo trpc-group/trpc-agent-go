@@ -56,8 +56,13 @@ agent := llmagent.New("assistant",
 
 // Run a basic chat
 agentRunner := runner.NewRunner("app", agent)
-events, _ := agentRunner.Run(ctx, "user-1", "session-1",
+events, err := agentRunner.Run(ctx, "user-1", "session-1",
     model.NewUserMessage("What is 2+2?"))
+if err != nil {
+    panic(err)
+}
+for range events {
+}
 ```
 
 </td>
@@ -71,18 +76,29 @@ schema := graph.NewStateSchema().AddField("status", graph.StateField{
     Type:    reflect.TypeOf(""),
     Reducer: graph.DefaultReducer,
 })
-workflow, _ := graph.NewStateGraph(schema).
+workflow, err := graph.NewStateGraph(schema).
     AddNode("start", func(ctx context.Context, state graph.State) (any, error) {
         return graph.State{"status": "ready"}, nil
     }).
     SetEntryPoint("start").
     SetFinishPoint("start").
     Compile()
+if err != nil {
+    panic(err)
+}
 
-graphAgent, _ := graphagent.New("workflow", workflow)
+graphAgent, err := graphagent.New("workflow", workflow)
+if err != nil {
+    panic(err)
+}
 agentRunner := runner.NewRunner("app", graphAgent)
-events, _ := agentRunner.Run(ctx, "user-1", "session-1",
+events, err := agentRunner.Run(ctx, "user-1", "session-1",
     model.NewUserMessage("Run the workflow"))
+if err != nil {
+    panic(err)
+}
+for range events {
+}
 ```
 
 </td>
