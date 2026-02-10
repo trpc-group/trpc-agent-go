@@ -253,6 +253,12 @@ func (m *MarkdownChunking) splitByHeader(content string, level int) []headerSect
 			}
 			// Keep monotonic progress to avoid invalid ranges while preserving
 			// subsequent heading boundaries.
+			//
+			// Invariant:
+			//   headingLineStart is always >= lastHeaderPos (non-decreasing).
+			//   Equality is allowed when position recovery fails and we clamp to
+			//   lastHeaderPos. In that case the previous range is empty and is
+			//   safely dropped by the existing TrimSpace/empty-content filter.
 			if headingLineStart < 0 {
 				headingLineStart = lastHeaderPos
 			}
@@ -352,6 +358,9 @@ func findNodeStartPos(heading ast.Node, source []byte) int {
 // findHeadingLineStartFallback scans source lines to find the next ATX heading
 // at the target level, starting from searchFrom. It prefers lines containing
 // headingText when available, and falls back to the first candidate.
+//
+// The scan works on byte slices to avoid per-line string allocations in large
+// markdown files.
 func findHeadingLineStartFallback(source []byte, searchFrom, level int, headingText string) int {
 	if len(source) == 0 || level <= 0 {
 		return -1
@@ -362,7 +371,7 @@ func findHeadingLineStartFallback(source []byte, searchFrom, level int, headingT
 	if searchFrom > len(source) {
 		searchFrom = len(source)
 	}
-	headingText = strings.TrimSpace(headingText)
+	headingTextBytes := bytes.TrimSpace([]byte(headingText))
 
 	lineStart := searchFrom
 	for lineStart > 0 && source[lineStart-1] != '\n' {
@@ -375,12 +384,12 @@ func findHeadingLineStartFallback(source []byte, searchFrom, level int, headingT
 		for lineEnd < len(source) && source[lineEnd] != '\n' {
 			lineEnd++
 		}
-		line := string(source[lineStart:lineEnd])
+		line := source[lineStart:lineEnd]
 		if isATXHeadingLineAtLevel(line, level) {
 			if firstCandidate < 0 {
 				firstCandidate = lineStart
 			}
-			if headingText == "" || strings.Contains(line, headingText) {
+			if len(headingTextBytes) == 0 || bytes.Contains(line, headingTextBytes) {
 				return lineStart
 			}
 		}
@@ -394,20 +403,24 @@ func findHeadingLineStartFallback(source []byte, searchFrom, level int, headingT
 
 // isATXHeadingLineAtLevel checks whether a line matches an ATX heading marker
 // of the given level ("#", "##", ...). It allows up to 3 leading spaces.
-func isATXHeadingLineAtLevel(line string, level int) bool {
+func isATXHeadingLineAtLevel(line []byte, level int) bool {
 	if level <= 0 {
 		return false
 	}
-	line = strings.TrimSuffix(line, "\r")
+	line = bytes.TrimSuffix(line, []byte{'\r'})
 
-	trimmedLeft := strings.TrimLeft(line, " ")
+	trimmedLeft := bytes.TrimLeft(line, " ")
 	leadingSpaces := len(line) - len(trimmedLeft)
 	if leadingSpaces > 3 {
 		return false
 	}
-	prefix := strings.Repeat("#", level)
-	if !strings.HasPrefix(trimmedLeft, prefix) {
+	if len(trimmedLeft) < level {
 		return false
+	}
+	for i := 0; i < level; i++ {
+		if trimmedLeft[i] != '#' {
+			return false
+		}
 	}
 	if len(trimmedLeft) == level {
 		return true

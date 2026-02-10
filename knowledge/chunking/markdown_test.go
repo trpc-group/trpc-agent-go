@@ -435,6 +435,23 @@ Content after closing-hash-only heading should still be retained.`,
 				"Content after closing-hash-only heading",
 			},
 		},
+		{
+			name:  "consecutive empty level1 headings",
+			level: 1,
+			content: `# First Title
+
+Content before consecutive empty level1 headings should be retained.
+
+#
+
+#
+
+Content after consecutive empty level1 headings should still be retained.`,
+			contentHints: []string{
+				"Content before consecutive empty level1 headings",
+				"Content after consecutive empty level1 headings",
+			},
+		},
 	}
 
 	for _, tt := range tests {
