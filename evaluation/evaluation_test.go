@@ -20,11 +20,14 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	evalresultinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/inmemory"
+	evalresultlocal "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/local"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
+	evalsetlocal "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/local"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	metricinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/inmemory"
+	metriclocal "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/local"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -132,6 +135,10 @@ type countingEvalResultManager struct {
 	last  *evalresult.EvalSetResult
 }
 
+func (m *countingEvalResultManager) Close() error {
+	return nil
+}
+
 func (m *countingEvalResultManager) Save(_ context.Context, _ string, evalSetResult *evalresult.EvalSetResult) (string, error) {
 	atomic.AddInt32(&m.saves, 1)
 	m.last = evalSetResult
@@ -150,6 +157,10 @@ type fakeMetricManager struct {
 	listErr error
 	getErr  error
 	metrics map[string]*metric.EvalMetric
+}
+
+func (f *fakeMetricManager) Close() error {
+	return nil
 }
 
 func (f *fakeMetricManager) List(ctx context.Context, appName, evalSetID string) ([]string, error) {
@@ -202,6 +213,33 @@ func (f *fakeMetricManager) Update(ctx context.Context, appName, evalSetID strin
 	}
 	f.metrics[metricValue.MetricName] = metricValue
 	return nil
+}
+
+type closeErrEvalSetManager struct {
+	evalset.Manager
+	closeErr error
+}
+
+func (m closeErrEvalSetManager) Close() error {
+	return m.closeErr
+}
+
+type closeErrMetricManager struct {
+	metric.Manager
+	closeErr error
+}
+
+func (m closeErrMetricManager) Close() error {
+	return m.closeErr
+}
+
+type closeErrEvalResultManager struct {
+	evalresult.Manager
+	closeErr error
+}
+
+func (m closeErrEvalResultManager) Close() error {
+	return m.closeErr
 }
 
 func makeEvalMetricResult(metricName string, score float64, status status.EvalStatus, threshold float64) *evalresult.EvalMetricResult {
@@ -262,12 +300,53 @@ func TestNewAgentEvaluatorValidation(t *testing.T) {
 		assert.Contains(t, err.Error(), "eval result manager is nil")
 	}
 
+	_, err = New("app", stubRunner{}, WithMetricManager(nil))
+	assert.Error(t, err)
+	if err != nil {
+		assert.Contains(t, err.Error(), "metric manager is nil")
+	}
+
+	_, err = New("app", stubRunner{}, WithEvalSetManager(nil))
+	assert.Error(t, err)
+	if err != nil {
+		assert.Contains(t, err.Error(), "eval set manager is nil")
+	}
+
 	ae, err := New("app", stubRunner{})
 	assert.NoError(t, err)
 	impl, ok := ae.(*agentEvaluator)
 	assert.True(t, ok)
 	assert.NotNil(t, impl.evalService)
 	assert.NoError(t, ae.Close())
+}
+
+func TestAgentEvaluatorClose_CollectsErrors(t *testing.T) {
+	ev, err := New(
+		"app",
+		stubRunner{},
+		WithEvalSetManager(closeErrEvalSetManager{Manager: evalsetinmemory.New(), closeErr: errors.New("evalset close")}),
+		WithMetricManager(closeErrMetricManager{Manager: metricinmemory.New(), closeErr: errors.New("metric close")}),
+		WithEvalResultManager(closeErrEvalResultManager{Manager: evalresultinmemory.New(), closeErr: errors.New("evalresult close")}),
+		WithEvaluationService(&fakeService{closeErr: errors.New("service close")}),
+	)
+	assert.NoError(t, err)
+
+	closeErr := ev.Close()
+	assert.Error(t, closeErr)
+	assert.Contains(t, closeErr.Error(), "close eval service")
+	assert.Contains(t, closeErr.Error(), "close eval set manager")
+	assert.Contains(t, closeErr.Error(), "close metric manager")
+	assert.Contains(t, closeErr.Error(), "close eval result manager")
+}
+
+func TestManagersClose_NoError(t *testing.T) {
+	assert.NoError(t, evalsetinmemory.New().Close())
+	assert.NoError(t, evalresultinmemory.New().Close())
+	assert.NoError(t, metricinmemory.New().Close())
+
+	assert.NoError(t, evalsetlocal.New().Close())
+	assert.NoError(t, evalresultlocal.New().Close())
+	assert.NoError(t, metriclocal.New().Close())
 }
 
 func TestAgentEvaluatorEvaluateAttachesInvocation(t *testing.T) {
@@ -708,6 +787,10 @@ func TestAgentEvaluatorRunEvaluationNilRunResult(t *testing.T) {
 type failingEvalResultManager struct {
 	last *evalresult.EvalSetResult
 	err  error
+}
+
+func (m *failingEvalResultManager) Close() error {
+	return nil
 }
 
 func (m *failingEvalResultManager) Save(_ context.Context, _ string, evalSetResult *evalresult.EvalSetResult) (string, error) {

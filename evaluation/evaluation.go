@@ -61,6 +61,12 @@ func New(appName string, runner runner.Runner, opt ...Option) (AgentEvaluator, e
 	if (opts.evalCaseParallelInferenceEnabled || opts.evalCaseParallelEvaluationEnabled) && opts.evalCaseParallelism <= 0 {
 		return nil, errors.New("eval case parallelism must be greater than 0")
 	}
+	if a.evalSetManager == nil {
+		return nil, errors.New("eval set manager is nil")
+	}
+	if a.metricManager == nil {
+		return nil, errors.New("metric manager is nil")
+	}
 	if a.evalResultManager == nil {
 		return nil, errors.New("eval result manager is nil")
 	}
@@ -142,10 +148,28 @@ func (a *agentEvaluator) Evaluate(ctx context.Context, evalSetID string) (*Evalu
 
 // Close closes the evaluator and releases owned resources.
 func (a *agentEvaluator) Close() error {
-	if err := a.evalService.Close(); err != nil {
-		return fmt.Errorf("close eval service: %w", err)
+	var overallErr error
+	if a.evalService != nil {
+		if err := a.evalService.Close(); err != nil {
+			overallErr = errors.Join(overallErr, fmt.Errorf("close eval service: %w", err))
+		}
 	}
-	return nil
+	if a.evalSetManager != nil {
+		if err := a.evalSetManager.Close(); err != nil {
+			overallErr = errors.Join(overallErr, fmt.Errorf("close eval set manager: %w", err))
+		}
+	}
+	if a.metricManager != nil {
+		if err := a.metricManager.Close(); err != nil {
+			overallErr = errors.Join(overallErr, fmt.Errorf("close metric manager: %w", err))
+		}
+	}
+	if a.evalResultManager != nil {
+		if err := a.evalResultManager.Close(); err != nil {
+			overallErr = errors.Join(overallErr, fmt.Errorf("close eval result manager: %w", err))
+		}
+	}
+	return overallErr
 }
 
 // collectCaseResults runs evaluation on the specified eval set across multiple runs and groups results by case ID.

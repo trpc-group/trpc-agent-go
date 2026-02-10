@@ -35,6 +35,11 @@ func New() metric.Manager {
 	}
 }
 
+// Close implements metric.Manager.
+func (m *manager) Close() error {
+	return nil
+}
+
 // List lists all metric names identified by the given app name and eval set ID.
 func (m *manager) List(_ context.Context, appName, evalSetID string) ([]string, error) {
 	if appName == "" {

@@ -622,6 +622,8 @@ type Manager interface {
 	UpdateCase(ctx context.Context, appName, evalSetID string, evalCase *EvalCase) error
 	// DeleteCase deletes an evaluation case.
 	DeleteCase(ctx context.Context, appName, evalSetID, evalCaseID string) error
+	// Close releases resources.
+	Close() error
 }
 ```
 
@@ -691,6 +693,110 @@ evalSetManager := local.New(
 	evalset.WithBaseDir(dataDir),
 	evalset.WithLocator(&customLocator{}),
 )
+```
+
+##### MySQL Implementation
+
+The MySQL implementation of EvalSetManager persists EvalSet and EvalCase to MySQL.
+
+It stores evaluation sets and evaluation cases in two tables, and returns cases in insertion order when reading an evaluation set.
+
+###### Configuration Options
+
+**Connection:**
+
+- **`WithMySQLClientDSN(dsn string)`**: Connect using DSN directly (recommended). Consider enabling `parseTime=true`.
+- **`WithMySQLInstance(instanceName string)`**: Use a registered MySQL instance. You must register it via `storage/mysql.RegisterMySQLInstance` before use. Note: `WithMySQLClientDSN` has higher priority; if both are set, DSN wins.
+- **`WithExtraOptions(extraOptions ...any)`**: Extra options passed to the MySQL client builder. Note: When using `WithMySQLInstance`, the registered instance configuration takes precedence and this option will not take effect.
+
+**Tables:**
+
+- **`WithTablePrefix(prefix string)`**: Table name prefix. An empty prefix means no prefix. A non-empty prefix must start with a letter or underscore and contain only letters/numbers/underscores. `trpc` and `trpc_` are equivalent; an underscore separator is added automatically.
+
+**Initialization:**
+
+- **`WithSkipDBInit(skip bool)`**: Skip automatic table creation. Default is `false`.
+- **`WithInitTimeout(timeout time.Duration)`**: Automatic table creation timeout. Default is `30s`.
+
+###### Code Example
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation"
+	evalsetmysql "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/mysql"
+)
+
+evalSetManager, err := evalsetmysql.New(
+	evalsetmysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/dbname?parseTime=true&charset=utf8mb4"),
+	evalsetmysql.WithTablePrefix("trpc_"),
+)
+if err != nil {
+	log.Fatalf("create mysql evalset manager: %v", err)
+}
+
+agentEvaluator, err := evaluation.New(
+	appName,
+	runner,
+	evaluation.WithEvalSetManager(evalSetManager),
+)
+if err != nil {
+	log.Fatalf("create evaluator: %v", err)
+}
+defer agentEvaluator.Close()
+```
+
+###### Configuration Reuse
+
+```go
+import (
+	storagemysql "trpc.group/trpc-go/trpc-agent-go/storage/mysql"
+	evalsetmysql "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/mysql"
+)
+
+// Register MySQL instance.
+storagemysql.RegisterMySQLInstance(
+	"my-evaluation-mysql",
+	storagemysql.WithClientBuilderDSN("user:password@tcp(localhost:3306)/dbname?parseTime=true&charset=utf8mb4"),
+)
+
+// Reuse it in EvalSetManager.
+evalSetManager, err := evalsetmysql.New(evalsetmysql.WithMySQLInstance("my-evaluation-mysql"))
+if err != nil {
+	log.Fatalf("create mysql evalset manager: %v", err)
+}
+```
+
+###### Storage Layout
+
+When `skipDBInit=false`, the manager creates required tables during initialization. The default value is `false`. If `skipDBInit=true`, you need to create tables yourself. You can use the SQL below, which is identical to `evaluation/evalset/mysql/schema.sql`. Replace `{{PREFIX}}` with the actual table prefix, e.g. `trpc_`. If you don't use a prefix, replace it with an empty string.
+
+```sql
+CREATE TABLE IF NOT EXISTS `{{PREFIX}}evaluation_eval_sets` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT,
+  `app_name` VARCHAR(255) NOT NULL,
+  `eval_set_id` VARCHAR(255) NOT NULL,
+  `name` VARCHAR(255) NOT NULL,
+  `description` TEXT DEFAULT NULL,
+  `created_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_eval_sets_app_eval_set` (`app_name`, `eval_set_id`),
+  KEY `idx_eval_sets_app_created` (`app_name`, `created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `{{PREFIX}}evaluation_eval_cases` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT,
+  `app_name` VARCHAR(255) NOT NULL,
+  `eval_set_id` VARCHAR(255) NOT NULL,
+  `eval_id` VARCHAR(255) NOT NULL,
+  `eval_mode` VARCHAR(32) NOT NULL DEFAULT '',
+  `eval_case` JSON NOT NULL,
+  `created_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_eval_cases_app_set_case` (`app_name`, `eval_set_id`, `eval_id`),
+  KEY `idx_eval_cases_app_set_order` (`app_name`, `eval_set_id`, `id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 ```
 
 ### EvalMetric
@@ -1294,6 +1400,8 @@ type Manager interface {
 	Delete(ctx context.Context, appName, evalSetID, metricName string) error
 	// Update updates an evaluation metric.
 	Update(ctx context.Context, appName, evalSetID string, metric *EvalMetric) error
+	// Close releases resources.
+	Close() error
 }
 ```
 
@@ -1337,6 +1445,94 @@ metricManager := metriclocal.New(
 	metric.WithBaseDir(dataDir),
 	metric.WithLocator(&customMetricLocator{}),
 )
+```
+
+##### MySQL Implementation
+
+The MySQL implementation of MetricManager persists metric configuration to MySQL.
+
+###### Configuration Options
+
+**Connection:**
+
+- **`WithMySQLClientDSN(dsn string)`**: Connect using DSN directly (recommended). Consider enabling `parseTime=true`.
+- **`WithMySQLInstance(instanceName string)`**: Use a registered MySQL instance. You must register it via `storage/mysql.RegisterMySQLInstance` before use. Note: `WithMySQLClientDSN` has higher priority; if both are set, DSN wins.
+- **`WithExtraOptions(extraOptions ...any)`**: Extra options passed to the MySQL client builder. Note: When using `WithMySQLInstance`, the registered instance configuration takes precedence and this option will not take effect.
+
+**Tables:**
+
+- **`WithTablePrefix(prefix string)`**: Table name prefix. An empty prefix means no prefix. A non-empty prefix must start with a letter or underscore and contain only letters/numbers/underscores. `trpc` and `trpc_` are equivalent; an underscore separator is added automatically.
+
+**Initialization:**
+
+- **`WithSkipDBInit(skip bool)`**: Skip automatic table creation. Default is `false`.
+- **`WithInitTimeout(timeout time.Duration)`**: Automatic table creation timeout. Default is `30s`, consistent with components such as memory/mysql.
+
+###### Code Example
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation"
+	metricmysql "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/mysql"
+)
+
+metricManager, err := metricmysql.New(
+	metricmysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/dbname?parseTime=true&charset=utf8mb4"),
+	metricmysql.WithTablePrefix("trpc_"),
+)
+if err != nil {
+	log.Fatalf("create mysql metric manager: %v", err)
+}
+
+agentEvaluator, err := evaluation.New(
+	appName,
+	runner,
+	evaluation.WithMetricManager(metricManager),
+)
+if err != nil {
+	log.Fatalf("create evaluator: %v", err)
+}
+defer agentEvaluator.Close()
+```
+
+###### Configuration Reuse
+
+```go
+import (
+	storagemysql "trpc.group/trpc-go/trpc-agent-go/storage/mysql"
+	metricmysql "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/mysql"
+)
+
+// Register MySQL instance.
+storagemysql.RegisterMySQLInstance(
+	"my-evaluation-mysql",
+	storagemysql.WithClientBuilderDSN("user:password@tcp(localhost:3306)/dbname?parseTime=true&charset=utf8mb4"),
+)
+
+// Reuse it in MetricManager.
+metricManager, err := metricmysql.New(metricmysql.WithMySQLInstance("my-evaluation-mysql"))
+if err != nil {
+	log.Fatalf("create mysql metric manager: %v", err)
+}
+```
+
+###### Storage Layout
+
+When `skipDBInit=false`, the manager creates required tables during initialization. The default value is `false`. If `skipDBInit=true`, you need to create tables yourself. You can use the SQL below, which is identical to `evaluation/metric/mysql/schema.sql`. Replace `{{PREFIX}}` with the actual table prefix, e.g. `trpc_`. If you don't use a prefix, replace it with an empty string.
+
+```sql
+CREATE TABLE IF NOT EXISTS `{{PREFIX}}evaluation_metrics` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT,
+  `app_name` VARCHAR(255) NOT NULL,
+  `eval_set_id` VARCHAR(255) NOT NULL,
+  `metric_name` VARCHAR(255) NOT NULL,
+  `metric` JSON NOT NULL,
+  `created_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_metrics_app_set_name` (`app_name`, `eval_set_id`, `metric_name`),
+  KEY `idx_metrics_app_set` (`app_name`, `eval_set_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 ```
 
 ### Evaluator
@@ -1904,6 +2100,8 @@ type Manager interface {
 	Get(ctx context.Context, appName, evalSetResultID string) (*EvalSetResult, error)
 	// List lists evaluation result IDs.
 	List(ctx context.Context, appName string) ([]string, error)
+	// Close releases resources.
+	Close() error
 }
 ```
 
@@ -1968,6 +2166,96 @@ evalResultManager := local.New(
 	evalresult.WithBaseDir(dataDir),
 	evalresult.WithLocator(&customResultLocator{}),
 )
+```
+
+##### MySQL Implementation
+
+The MySQL implementation of EvalResultManager persists evaluation results to MySQL.
+
+###### Configuration Options
+
+**Connection:**
+
+- **`WithMySQLClientDSN(dsn string)`**: Connect using DSN directly (recommended). Consider enabling `parseTime=true`.
+- **`WithMySQLInstance(instanceName string)`**: Use a registered MySQL instance. You must register it via `storage/mysql.RegisterMySQLInstance` before use. Note: `WithMySQLClientDSN` has higher priority; if both are set, DSN wins.
+- **`WithExtraOptions(extraOptions ...any)`**: Extra options passed to the MySQL client builder. Note: When using `WithMySQLInstance`, the registered instance configuration takes precedence and this option will not take effect.
+
+**Tables:**
+
+- **`WithTablePrefix(prefix string)`**: Table name prefix. An empty prefix means no prefix. A non-empty prefix must start with a letter or underscore and contain only letters/numbers/underscores. `trpc` and `trpc_` are equivalent; an underscore separator is added automatically.
+
+**Initialization:**
+
+- **`WithSkipDBInit(skip bool)`**: Skip automatic table creation. Default is `false`.
+- **`WithInitTimeout(timeout time.Duration)`**: Automatic table creation timeout. Default is `30s`, consistent with components such as memory/mysql.
+
+###### Code Example
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation"
+	evalresultmysql "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/mysql"
+)
+
+evalResultManager, err := evalresultmysql.New(
+	evalresultmysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/dbname?parseTime=true&charset=utf8mb4"),
+	evalresultmysql.WithTablePrefix("trpc_"),
+)
+if err != nil {
+	log.Fatalf("create mysql evalresult manager: %v", err)
+}
+
+agentEvaluator, err := evaluation.New(
+	appName,
+	runner,
+	evaluation.WithEvalResultManager(evalResultManager),
+)
+if err != nil {
+	log.Fatalf("create evaluator: %v", err)
+}
+defer agentEvaluator.Close()
+```
+
+###### Configuration Reuse
+
+```go
+import (
+	storagemysql "trpc.group/trpc-go/trpc-agent-go/storage/mysql"
+	evalresultmysql "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/mysql"
+)
+
+// Register MySQL instance.
+storagemysql.RegisterMySQLInstance(
+	"my-evaluation-mysql",
+	storagemysql.WithClientBuilderDSN("user:password@tcp(localhost:3306)/dbname?parseTime=true&charset=utf8mb4"),
+)
+
+// Reuse it in EvalResultManager.
+evalResultManager, err := evalresultmysql.New(evalresultmysql.WithMySQLInstance("my-evaluation-mysql"))
+if err != nil {
+	log.Fatalf("create mysql evalresult manager: %v", err)
+}
+```
+
+###### Storage Layout
+
+When `skipDBInit=false`, the manager creates required tables during initialization. The default value is `false`. If `skipDBInit=true`, you need to create tables yourself. You can use the SQL below, which is identical to `evaluation/evalresult/mysql/schema.sql`. Replace `{{PREFIX}}` with the actual table prefix, e.g. `trpc_`. If you don't use a prefix, replace it with an empty string.
+
+```sql
+CREATE TABLE IF NOT EXISTS `{{PREFIX}}evaluation_eval_set_results` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT,
+  `app_name` VARCHAR(255) NOT NULL,
+  `eval_set_result_id` VARCHAR(255) NOT NULL,
+  `eval_set_id` VARCHAR(255) NOT NULL,
+  `eval_set_result_name` VARCHAR(255) NOT NULL,
+  `eval_case_results` JSON NOT NULL,
+  `summary` JSON DEFAULT NULL,
+  `created_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_results_app_result_id` (`app_name`, `eval_set_result_id`),
+  KEY `idx_results_app_set_created` (`app_name`, `eval_set_id`, `created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 ```
 
 ### Evaluation Service
