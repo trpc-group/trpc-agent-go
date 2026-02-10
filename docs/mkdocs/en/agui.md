@@ -93,6 +93,20 @@ Even if the client SSE connection is closed, the backend continues executing unt
 
 A complete example is available at [examples/agui/server/default](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/default).
 
+#### Connection close and cancellation semantics
+
+By default, the AG-UI service decouples an Agent run from the request's cancellation signal. Even if the SSE connection is interrupted (e.g., due to a page refresh), and the request `ctx` is cancelled, the backend run will continue until it finishes normally, is actively cancelled via the cancellation route, or times out.
+
+If you want the Agent run to stop when the request `ctx` ends (i.e., when the client disconnects or `ctx` is cancelled), you can explicitly enable this option:
+
+```go
+server, err := agui.New(
+    runner,
+    agui.WithPath("/agui"),
+    agui.WithCancelOnContextDoneEnabled(true),
+)
+```
+
 #### Multimodal user input
 
 For `role=user` messages, `content` can also be a multimodal array. Each item is an `InputContent` fragment:
