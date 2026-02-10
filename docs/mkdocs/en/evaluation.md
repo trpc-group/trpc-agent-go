@@ -2396,7 +2396,7 @@ The computation of pass@k and pass^k relies on independence and identical distri
 
 ### Skills Evaluation
 
-Agent Skills are exposed as built-in tools: `skill_load` and `skill_run`, so you can evaluate whether the agent uses Skills correctly with the same tool trajectory evaluator. In practice, `skill_run` results contain volatile fields such as `stdout`, `stderr`, `duration_ms`, and inline `output_files` content. Prefer configuring a per-tool strategy to ignore these keys and only assert stable fields such as `skill`, requested `output_files`, and `exit_code` and `timed_out`.
+Agent Skills are exposed as built-in tools: `skill_load` and `skill_run`, so you can evaluate whether the agent uses Skills correctly with the same tool trajectory evaluator. In practice, `skill_run` results contain volatile fields such as `stdout`, `stderr`, `duration_ms`, and inline `output_files` content. Prefer using `onlyTree` in a per-tool strategy to assert only stable fields such as `skill`, requested `output_files`, and `exit_code` and `timed_out`, letting other volatile keys be ignored.
 
 A minimal example is shown below.
 
@@ -2449,9 +2449,8 @@ Metric `toolTrajectory` snippet:
         "toolStrategy": {
           "skill_load": {
             "arguments": {
-              "ignoreTree": {
-                "docs": true,
-                "include_all_docs": true
+              "onlyTree": {
+                "skill": true
               },
               "matchStrategy": "exact"
             },
@@ -2461,28 +2460,16 @@ Metric `toolTrajectory` snippet:
           },
           "skill_run": {
             "arguments": {
-              "ignoreTree": {
-                "command": true,
-                "cwd": true,
-                "env": true,
-                "timeout": true,
-                "inputs": true,
-                "outputs": true,
-                "save_as_artifacts": true,
-                "omit_inline_content": true,
-                "artifact_prefix": true
+              "onlyTree": {
+                "skill": true,
+                "output_files": true
               },
               "matchStrategy": "exact"
             },
             "result": {
-              "ignoreTree": {
-                "stdout": true,
-                "stderr": true,
-                "duration_ms": true,
-                "warnings": true,
-                "primary_output": true,
-                "output_files": true,
-                "artifact_files": true
+              "onlyTree": {
+                "exit_code": true,
+                "timed_out": true
               },
               "matchStrategy": "exact"
             }

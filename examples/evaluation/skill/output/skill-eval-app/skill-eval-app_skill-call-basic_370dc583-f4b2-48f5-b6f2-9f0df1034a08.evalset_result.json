@@ -33,9 +33,8 @@
                     "matchStrategy": "exact"
                   },
                   "arguments": {
-                    "ignoreTree": {
-                      "docs": true,
-                      "include_all_docs": true
+                    "onlyTree": {
+                      "skill": true
                     },
                     "matchStrategy": "exact"
                   },
@@ -48,28 +47,16 @@
                     "matchStrategy": "exact"
                   },
                   "arguments": {
-                    "ignoreTree": {
-                      "artifact_prefix": true,
-                      "command": true,
-                      "cwd": true,
-                      "env": true,
-                      "inputs": true,
-                      "omit_inline_content": true,
-                      "outputs": true,
-                      "save_as_artifacts": true,
-                      "timeout": true
+                    "onlyTree": {
+                      "skill": true,
+                      "output_files": true
                     },
                     "matchStrategy": "exact"
                   },
                   "result": {
-                    "ignoreTree": {
-                      "artifact_files": true,
-                      "duration_ms": true,
-                      "output_files": true,
-                      "primary_output": true,
-                      "stderr": true,
-                      "stdout": true,
-                      "warnings": true
+                    "onlyTree": {
+                      "exit_code": true,
+                      "timed_out": true
                     },
                     "matchStrategy": "exact"
                   }
@@ -199,9 +186,8 @@
                         "matchStrategy": "exact"
                       },
                       "arguments": {
-                        "ignoreTree": {
-                          "docs": true,
-                          "include_all_docs": true
+                        "onlyTree": {
+                          "skill": true
                         },
                         "matchStrategy": "exact"
                       },
@@ -214,28 +200,16 @@
                         "matchStrategy": "exact"
                       },
                       "arguments": {
-                        "ignoreTree": {
-                          "artifact_prefix": true,
-                          "command": true,
-                          "cwd": true,
-                          "env": true,
-                          "inputs": true,
-                          "omit_inline_content": true,
-                          "outputs": true,
-                          "save_as_artifacts": true,
-                          "timeout": true
+                        "onlyTree": {
+                          "skill": true,
+                          "output_files": true
                         },
                         "matchStrategy": "exact"
                       },
                       "result": {
-                        "ignoreTree": {
-                          "artifact_files": true,
-                          "duration_ms": true,
-                          "output_files": true,
-                          "primary_output": true,
-                          "stderr": true,
-                          "stdout": true,
-                          "warnings": true
+                        "onlyTree": {
+                          "exit_code": true,
+                          "timed_out": true
                         },
                         "matchStrategy": "exact"
                       }
