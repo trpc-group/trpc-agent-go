@@ -2399,9 +2399,9 @@ pass@k 与 pass^k 的计算依赖运行之间的独立性与同分布假设，�
 
 ### Skills 评估
 
-Agent Skills 以工具 `skill_load` 与 `skill_run` 形式暴露，因此也可以复用工具轨迹评估器来评估 Agent 是否按预期使用 Skills。实践中 `skill_run` 的结果通常包含波动字段，例如 `stdout`、`stderr`、`duration_ms`，以及收集到的 `output_files` 内联内容。建议通过按工具覆盖策略忽略这些字段，仅对稳定字段进行回归校验，例如 `skill`、请求的 `output_files`，以及 `exit_code` 与 `timed_out`。
+Agent Skills 以工具 `skill_load` 与 `skill_run` 形式暴露，因此也可以复用工具轨迹评估器来评估 Agent 是否按预期使用 Skills。实践中 `skill_run` 的结果通常包含波动字段，例如 `stdout`、`stderr`、`duration_ms`，以及收集到的 `output_files` 内联内容。建议在按工具覆盖策略中使用 `onlyTree` 只对比稳定字段，例如 `skill`、请求的 `output_files`，以及 `exit_code` 与 `timed_out`，未被选中的字段将被忽略。
 
-下面给出一个最小示例，展示如何在 EvalSet 中声明预期的工具轨迹，并在 Metric 中忽略 `skill_run` 的波动字段。
+下面给出一个最小示例，展示如何在 EvalSet 中声明预期的工具轨迹，并在 Metric 中通过 `onlyTree` 仅校验稳定字段。
 
 EvalSet 中的 `tools` 片段示例如下：
 
@@ -2452,9 +2452,8 @@ Metric 的 `toolTrajectory` 配置示例如下：
         "toolStrategy": {
           "skill_load": {
             "arguments": {
-              "ignoreTree": {
-                "docs": true,
-                "include_all_docs": true
+              "onlyTree": {
+                "skill": true
               },
               "matchStrategy": "exact"
             },
@@ -2464,28 +2463,16 @@ Metric 的 `toolTrajectory` 配置示例如下：
           },
           "skill_run": {
             "arguments": {
-              "ignoreTree": {
-                "command": true,
-                "cwd": true,
-                "env": true,
-                "timeout": true,
-                "inputs": true,
-                "outputs": true,
-                "save_as_artifacts": true,
-                "omit_inline_content": true,
-                "artifact_prefix": true
+              "onlyTree": {
+                "skill": true,
+                "output_files": true
               },
               "matchStrategy": "exact"
             },
             "result": {
-              "ignoreTree": {
-                "stdout": true,
-                "stderr": true,
-                "duration_ms": true,
-                "warnings": true,
-                "primary_output": true,
-                "output_files": true,
-                "artifact_files": true
+              "onlyTree": {
+                "exit_code": true,
+                "timed_out": true
               },
               "matchStrategy": "exact"
             }
