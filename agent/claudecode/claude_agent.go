@@ -222,7 +222,10 @@ func (a *claudeCodeAgent) emitFlowError(
 
 // runWithSession executes the CLI with resume-first semantics and returns stdout/stderr.
 func (a *claudeCodeAgent) runWithSession(ctx context.Context, sessionID, prompt string) ([]byte, []byte, error) {
-	resumeArgs := append(a.args, "--resume", sessionID, prompt)
+	// Copy base args to avoid mutating shared backing arrays across concurrent invocations.
+	resumeArgs := make([]string, 0, len(a.args)+3)
+	resumeArgs = append(resumeArgs, a.args...)
+	resumeArgs = append(resumeArgs, "--resume", sessionID, prompt)
 	stdout, stderr, runErr := a.commandRunner.Run(ctx, command{
 		bin:  a.bin,
 		args: resumeArgs,
@@ -232,7 +235,9 @@ func (a *claudeCodeAgent) runWithSession(ctx context.Context, sessionID, prompt 
 	if runErr == nil {
 		return stdout, stderr, nil
 	}
-	createArgs := append(a.args, "--session-id", sessionID, prompt)
+	createArgs := make([]string, 0, len(a.args)+3)
+	createArgs = append(createArgs, a.args...)
+	createArgs = append(createArgs, "--session-id", sessionID, prompt)
 	createStdout, createStderr, createErr := a.commandRunner.Run(ctx, command{
 		bin:  a.bin,
 		args: createArgs,

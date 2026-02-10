@@ -110,6 +110,40 @@ func TestClaudeCodeAgent_Run_ResumeThenCreate(t *testing.T) {
 	require.Contains(t, strings.Join(calls[1].args, " "), "--session-id")
 }
 
+func TestClaudeCodeAgent_RunWithSession_DoesNotMutateArgsOnFallback(t *testing.T) {
+	ctx := context.Background()
+	callCount := 0
+	runner := &scriptedRunner{
+		run: func(cmd command) ([]byte, []byte, error) {
+			callCount++
+			if callCount == 1 {
+				return nil, nil, errors.New("resume failed")
+			}
+			return []byte(`[{"type":"result","result":"ok"}]`), nil, nil
+		},
+	}
+
+	baseArgs := make([]string, 0, 32)
+	baseArgs = append(baseArgs, "-p", "--verbose", "--output-format", "json")
+	baseLen := len(baseArgs)
+
+	ag := &claudeCodeAgent{
+		bin:           "claude",
+		args:          baseArgs,
+		commandRunner: runner,
+	}
+
+	_, _, err := ag.runWithSession(ctx, "session-1", "Hi.")
+	require.NoError(t, err)
+
+	calls := runner.Calls()
+	require.Len(t, calls, 2)
+	require.GreaterOrEqual(t, len(calls[0].args), baseLen+1)
+	require.GreaterOrEqual(t, len(calls[1].args), baseLen+1)
+	require.Equal(t, "--resume", calls[0].args[baseLen])
+	require.Equal(t, "--session-id", calls[1].args[baseLen])
+}
+
 // TestClaudeCodeAgent_Run_ResumeSuccess verifies the agent uses --resume when the session is available.
 func TestClaudeCodeAgent_Run_ResumeSuccess(t *testing.T) {
 	ctx := context.Background()
