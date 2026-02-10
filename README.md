@@ -66,11 +66,14 @@ events, _ := agentRunner.Run(ctx, "user-1", "session-1",
 ### GraphAgent
 
 ```go
-// Compile a simple graph workflow
-schema := graph.NewStateSchema()
+// Build and compile a simple graph workflow
+schema := graph.NewStateSchema().AddField("status", graph.StateField{
+    Type:    reflect.TypeOf(""),
+    Reducer: graph.DefaultReducer,
+})
 workflow, _ := graph.NewStateGraph(schema).
     AddNode("start", func(ctx context.Context, state graph.State) (any, error) {
-        return nil, nil
+        return graph.State{"status": "ready"}, nil
     }).
     SetEntryPoint("start").
     SetFinishPoint("start").
