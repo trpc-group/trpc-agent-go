@@ -57,3 +57,18 @@ const (
 	// Internal
 	asRoot = "langfuse.internal.as_root"
 )
+
+// usageDetails collects token usage metrics for Langfuse's usage_details JSON field.
+// Fields follow Langfuse conventions and use omitempty to exclude zero-value fields.
+type usageDetails struct {
+	Input              int64 `json:"input,omitempty"`
+	Output             int64 `json:"output,omitempty"`
+	InputCached        int64 `json:"input_cached,omitempty"`
+	InputCacheRead     int64 `json:"input_cache_read,omitempty"`
+	InputCacheCreation int64 `json:"input_cache_creation,omitempty"`
+}
+
+// empty reports whether all fields are zero.
+func (u *usageDetails) empty() bool {
+	return *u == (usageDetails{})
+}
