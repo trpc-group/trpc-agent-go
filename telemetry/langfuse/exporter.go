@@ -154,7 +154,9 @@ func transformInvokeAgent(span *tracepb.Span) {
 			// InvokeAgent spans (to support Galileo); previously only Chat spans had token usage.
 			// Keeping token attributes on InvokeAgent would make Langfuse double count tokens
 			// compared to the old behavior (Chat-only token accounting).
-		case itelemetry.KeyGenAIUsageInputTokens, itelemetry.KeyGenAIUsageOutputTokens:
+		case itelemetry.KeyGenAIUsageInputTokens, itelemetry.KeyGenAIUsageOutputTokens,
+			itelemetry.KeyGenAIUsageInputTokensCached, itelemetry.KeyGenAIUsageInputTokensCacheRead,
+			itelemetry.KeyGenAIUsageInputTokensCacheCreation:
 		default:
 			newAttributes = append(newAttributes, attr)
 		}
@@ -173,6 +175,9 @@ func transformCallLLM(span *tracepb.Span) {
 			Value: &commonpb.AnyValue_StringValue{StringValue: observationTypeGeneration},
 		},
 	})
+
+	// Collect token usage for building usage_details JSON (aligned with Langfuse SDK)
+	var usage usageDetails
 
 	// Process existing attributes
 	var llmSessionID *commonpb.AnyValue
@@ -233,11 +238,40 @@ func transformCallLLM(span *tracepb.Span) {
 				})
 			}
 			// Skip this attribute (delete it)
+
+		// Collect token usage attributes into usage_details map.
+		// These are converted from individual OTEL attributes to the Langfuse
+		// usage_details JSON format: {"input": N, "output": N, "total": N, ...}
+		case itelemetry.KeyGenAIUsageInputTokens:
+			usage.Input = attr.Value.GetIntValue()
+		case itelemetry.KeyGenAIUsageOutputTokens:
+			usage.Output = attr.Value.GetIntValue()
+		case itelemetry.KeyGenAIUsageInputTokensCached:
+			usage.InputCached = attr.Value.GetIntValue()
+		case itelemetry.KeyGenAIUsageInputTokensCacheRead:
+			usage.InputCacheRead = attr.Value.GetIntValue()
+		case itelemetry.KeyGenAIUsageInputTokensCacheCreation:
+			usage.InputCacheCreation = attr.Value.GetIntValue()
+
 		default:
 			// Keep other attributes
 			newAttributes = append(newAttributes, attr)
 		}
 	}
+
+	// Build usage_details JSON attribute if any usage data was collected.
+	// Note: "total" is not computed here; the Langfuse server calculates it automatically.
+	if !usage.empty() {
+		if usageJSON, err := json.Marshal(usage); err == nil {
+			newAttributes = append(newAttributes, &commonpb.KeyValue{
+				Key: observationUsageDetails,
+				Value: &commonpb.AnyValue{
+					Value: &commonpb.AnyValue_StringValue{StringValue: string(usageJSON)},
+				},
+			})
+		}
+	}
+
 	if llmSessionID != nil { // use post set session id
 		newAttributes = append(newAttributes, &commonpb.KeyValue{Key: traceSessionID, Value: llmSessionID})
 	}

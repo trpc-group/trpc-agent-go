@@ -11,6 +11,7 @@ package langfuse
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"testing"
@@ -408,6 +409,192 @@ func TestTransformCallLLM(t *testing.T) {
 				assert.NotEqual(t, itelemetry.KeyLLMResponse, attr.Key, "LLM response attribute should be removed")
 			}
 		})
+	}
+}
+
+func TestTransformCallLLM_UsageDetails(t *testing.T) {
+	tests := []struct {
+		name                string
+		inputTokens         int64
+		outputTokens        int64
+		cachedTokens        int64
+		cacheReadTokens     int64
+		cacheCreationTokens int64
+		expectedUsage       map[string]int64
+	}{
+		{
+			name:          "basic input/output tokens",
+			inputTokens:   100,
+			outputTokens:  50,
+			expectedUsage: map[string]int64{"input": 100, "output": 50},
+		},
+		{
+			name:          "with OpenAI cached tokens",
+			inputTokens:   100,
+			outputTokens:  50,
+			cachedTokens:  30,
+			expectedUsage: map[string]int64{"input": 100, "output": 50, "input_cached": 30},
+		},
+		{
+			name:            "with Anthropic cache_read tokens",
+			inputTokens:     200,
+			outputTokens:    80,
+			cacheReadTokens: 60,
+			expectedUsage:   map[string]int64{"input": 200, "output": 80, "input_cache_read": 60},
+		},
+		{
+			name:                "with Anthropic cache_creation tokens",
+			inputTokens:         200,
+			outputTokens:        80,
+			cacheCreationTokens: 40,
+			expectedUsage:       map[string]int64{"input": 200, "output": 80, "input_cache_creation": 40},
+		},
+		{
+			name:                "all cache fields present",
+			inputTokens:         300,
+			outputTokens:        100,
+			cachedTokens:        50,
+			cacheReadTokens:     70,
+			cacheCreationTokens: 20,
+			expectedUsage:       map[string]int64{"input": 300, "output": 100, "input_cached": 50, "input_cache_read": 70, "input_cache_creation": 20},
+		},
+		{
+			name:          "zero tokens omitted",
+			inputTokens:   0,
+			outputTokens:  0,
+			expectedUsage: nil, // no usage_details attribute when all zero
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			attrs := []*commonpb.KeyValue{
+				{
+					Key: itelemetry.KeyLLMRequest,
+					Value: &commonpb.AnyValue{
+						Value: &commonpb.AnyValue_StringValue{StringValue: `{"prompt":"hello"}`},
+					},
+				},
+				{
+					Key: itelemetry.KeyLLMResponse,
+					Value: &commonpb.AnyValue{
+						Value: &commonpb.AnyValue_StringValue{StringValue: `{"text":"world"}`},
+					},
+				},
+			}
+			// Add token usage attributes (only non-zero values, matching how buildResponseAttributes works)
+			if tt.inputTokens != 0 {
+				attrs = append(attrs, &commonpb.KeyValue{
+					Key:   itelemetry.KeyGenAIUsageInputTokens,
+					Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: tt.inputTokens}},
+				})
+			}
+			if tt.outputTokens != 0 {
+				attrs = append(attrs, &commonpb.KeyValue{
+					Key:   itelemetry.KeyGenAIUsageOutputTokens,
+					Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: tt.outputTokens}},
+				})
+			}
+			if tt.cachedTokens != 0 {
+				attrs = append(attrs, &commonpb.KeyValue{
+					Key:   itelemetry.KeyGenAIUsageInputTokensCached,
+					Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: tt.cachedTokens}},
+				})
+			}
+			if tt.cacheReadTokens != 0 {
+				attrs = append(attrs, &commonpb.KeyValue{
+					Key:   itelemetry.KeyGenAIUsageInputTokensCacheRead,
+					Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: tt.cacheReadTokens}},
+				})
+			}
+			if tt.cacheCreationTokens != 0 {
+				attrs = append(attrs, &commonpb.KeyValue{
+					Key:   itelemetry.KeyGenAIUsageInputTokensCacheCreation,
+					Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: tt.cacheCreationTokens}},
+				})
+			}
+
+			span := &tracepb.Span{Name: "llm-call", Attributes: attrs}
+			transformCallLLM(span)
+
+			// Verify original gen_ai.usage.* attributes are removed
+			for _, attr := range span.Attributes {
+				assert.NotEqual(t, itelemetry.KeyGenAIUsageInputTokens, attr.Key)
+				assert.NotEqual(t, itelemetry.KeyGenAIUsageOutputTokens, attr.Key)
+				assert.NotEqual(t, itelemetry.KeyGenAIUsageInputTokensCached, attr.Key)
+				assert.NotEqual(t, itelemetry.KeyGenAIUsageInputTokensCacheRead, attr.Key)
+				assert.NotEqual(t, itelemetry.KeyGenAIUsageInputTokensCacheCreation, attr.Key)
+			}
+
+			// Check usage_details attribute
+			var usageJSON string
+			for _, attr := range span.Attributes {
+				if attr.Key == observationUsageDetails {
+					usageJSON = attr.Value.GetStringValue()
+					break
+				}
+			}
+
+			if tt.expectedUsage == nil {
+				assert.Empty(t, usageJSON, "should not have usage_details when all tokens are zero")
+			} else {
+				require.NotEmpty(t, usageJSON, "should have usage_details attribute")
+				var actual map[string]int64
+				require.NoError(t, json.Unmarshal([]byte(usageJSON), &actual))
+				assert.Equal(t, tt.expectedUsage, actual)
+			}
+		})
+	}
+}
+
+func TestTransformInvokeAgent_CacheTokensFiltered(t *testing.T) {
+	span := &tracepb.Span{
+		Name: "agent-span",
+		Attributes: []*commonpb.KeyValue{
+			{
+				Key: itelemetry.KeyGenAIInputMessages,
+				Value: &commonpb.AnyValue{
+					Value: &commonpb.AnyValue_StringValue{StringValue: `[{"role":"user","content":"hi"}]`},
+				},
+			},
+			{
+				Key: itelemetry.KeyGenAIOutputMessages,
+				Value: &commonpb.AnyValue{
+					Value: &commonpb.AnyValue_StringValue{StringValue: `[{"role":"assistant","content":"hello"}]`},
+				},
+			},
+			{
+				Key:   itelemetry.KeyGenAIUsageInputTokens,
+				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: 100}},
+			},
+			{
+				Key:   itelemetry.KeyGenAIUsageOutputTokens,
+				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: 50}},
+			},
+			{
+				Key:   itelemetry.KeyGenAIUsageInputTokensCached,
+				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: 30}},
+			},
+			{
+				Key:   itelemetry.KeyGenAIUsageInputTokensCacheRead,
+				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: 20}},
+			},
+			{
+				Key:   itelemetry.KeyGenAIUsageInputTokensCacheCreation,
+				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: 10}},
+			},
+		},
+	}
+
+	transformInvokeAgent(span)
+
+	// All token usage attributes (including cache ones) should be filtered out
+	for _, attr := range span.Attributes {
+		assert.NotEqual(t, itelemetry.KeyGenAIUsageInputTokens, attr.Key)
+		assert.NotEqual(t, itelemetry.KeyGenAIUsageOutputTokens, attr.Key)
+		assert.NotEqual(t, itelemetry.KeyGenAIUsageInputTokensCached, attr.Key)
+		assert.NotEqual(t, itelemetry.KeyGenAIUsageInputTokensCacheRead, attr.Key)
+		assert.NotEqual(t, itelemetry.KeyGenAIUsageInputTokensCacheCreation, attr.Key)
 	}
 }
 
