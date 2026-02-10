@@ -46,6 +46,7 @@ type Options struct {
 	MessagesSnapshotFollowMaxDuration      time.Duration         // MessagesSnapshotFollowMaxDuration bounds how long tailing can run before emitting RUN_ERROR.
 	StartSpan                              StartSpan             // StartSpan starts a span for an AG-UI run.
 	Timeout                                time.Duration         // Timeout controls how long a run is allowed to execute.
+	CancelOnContextDoneEnabled             bool                  // CancelOnContextDoneEnabled cancels the run when the parent context is done.
 	GraphNodeLifecycleActivityEnabled      bool                  // GraphNodeLifecycleActivityEnabled enables graph node lifecycle activity events.
 	GraphNodeInterruptActivityEnabled      bool                  // GraphNodeInterruptActivityEnabled enables graph interrupt activity events.
 	GraphNodeInterruptActivityTopLevelOnly bool                  // GraphNodeInterruptActivityTopLevelOnly drops nested graph interrupt activity events.
@@ -197,6 +198,13 @@ func WithStartSpan(start StartSpan) Option {
 func WithTimeout(d time.Duration) Option {
 	return func(o *Options) {
 		o.Timeout = d
+	}
+}
+
+// WithCancelOnContextDoneEnabled controls whether a run is canceled when the parent context is done.
+func WithCancelOnContextDoneEnabled(enabled bool) Option {
+	return func(o *Options) {
+		o.CancelOnContextDoneEnabled = enabled
 	}
 }
 

@@ -93,6 +93,20 @@ type RunAgentInput struct {
 
 完整代码示例参见 [examples/agui/server/default](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/default)。
 
+#### 连接断开与取消语义
+
+默认情况下，AG-UI 服务会将一次 Agent 运行与请求的取消信号解耦，即使 SSE 连接断开，例如页面刷新导致连接中断，并触发请求 `ctx` 被取消，后端 run 仍会继续执行，直到正常结束、通过取消路由主动取消，或触发超时。
+
+如果你希望请求 `ctx` 结束即停止 Agent 运行，也就是客户端断开或 `ctx` cancel 时停止 Agent 运行，可以显式开启：
+
+```go
+server, err := agui.New(
+    runner,
+    agui.WithPath("/agui"),
+    agui.WithCancelOnContextDoneEnabled(true),
+)
+```
+
 #### 多模态输入
 
 对于 `role=user` 的消息，`content` 也可以是一个多模态数组，每个元素是一个 `InputContent` 片段，例如：
