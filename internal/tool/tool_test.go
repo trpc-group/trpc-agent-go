@@ -327,6 +327,96 @@ func TestGenerateJSONSchema_JSONSchemaTag_Description(t *testing.T) {
 	require.Equal(t, "User's age in years", result.Properties["age"].Description)
 }
 
+func TestGenerateJSONSchema_DescriptionTag_Compat(t *testing.T) {
+	type Inner struct {
+		City    string `json:"city" description:"City name"`
+		Country string `json:"country" jsonschema:"description=Country code" description:"Country name"`
+	}
+
+	type Flat struct {
+		Name string `json:"name" description:"User full name"`
+		Age  int    `json:"age" jsonschema:"description=Age via jsonschema" description:"Age via description"`
+	}
+
+	type Nested struct {
+		Query   string `json:"query" description:"Search query"`
+		Address Inner  `json:"address"`
+	}
+
+	tests := []struct {
+		name   string
+		input  reflect.Type
+		checks map[string]string // field path -> expected description
+	}{
+		{
+			name:  "description tag on flat fields",
+			input: reflect.TypeOf(Flat{}),
+			checks: map[string]string{
+				"name": "User full name",
+			},
+		},
+		{
+			name:  "jsonschema description overrides description tag",
+			input: reflect.TypeOf(Flat{}),
+			checks: map[string]string{
+				"age": "Age via jsonschema",
+			},
+		},
+		{
+			name:  "description tag on nested struct fields",
+			input: reflect.TypeOf(Nested{}),
+			checks: map[string]string{
+				"query": "Search query",
+			},
+		},
+		{
+			name:  "description tag inside nested struct",
+			input: reflect.TypeOf(Inner{}),
+			checks: map[string]string{
+				"city":    "City name",
+				"country": "Country code",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := GenerateJSONSchema(tt.input)
+			for field, expected := range tt.checks {
+				require.Equal(t, expected, result.Properties[field].Description,
+					"field %q description mismatch", field)
+			}
+		})
+	}
+}
+
+func TestGenerateJSONSchema_DescriptionTag_NestedStruct(t *testing.T) {
+	type Inner struct {
+		Street string `json:"street" description:"Street address"`
+		Zip    string `json:"zip" jsonschema:"description=Postal code" description:"Zip code"`
+	}
+
+	type Outer struct {
+		Name    string `json:"name" description:"User name"`
+		Address Inner  `json:"address" description:"Mailing address"`
+	}
+
+	result := GenerateJSONSchema(reflect.TypeOf(Outer{}))
+
+	// Outer-level fields.
+	require.Equal(t, "User name", result.Properties["name"].Description)
+
+	// The nested struct field itself should carry the outer description tag.
+	addrSchema := result.Properties["address"]
+	require.NotNil(t, addrSchema, "address schema should exist")
+	require.Equal(t, "Mailing address", addrSchema.Description)
+
+	// Inner-level fields inside the nested struct.
+	require.Equal(t, "Street address", addrSchema.Properties["street"].Description)
+	require.Equal(t, "Postal code", addrSchema.Properties["zip"].Description,
+		"jsonschema description should take priority over description tag")
+}
+
 func TestGenerateJSONSchema_JSONSchemaTag_StringEnum(t *testing.T) {
 	type TestStruct struct {
 		Status string `json:"status" jsonschema:"enum=active,enum=inactive,enum=pending"`
