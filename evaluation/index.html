@@ -6773,7 +6773,7 @@
 </span></code></pre></div></td></tr></table></div>
 <p>The computation of pass@k and pass^k relies on independence and identical distribution across runs. When doing repeated runs, ensure each run is independently sampled with necessary state reset, and avoid reusing session memory, tool caches, or external dependencies that would systematically inflate the metrics.</p>
 <h3 id="skills-evaluation">Skills Evaluation</h3>
-<p>Agent Skills are exposed as built-in tools: <code>skill_load</code> and <code>skill_run</code>, so you can evaluate whether the agent uses Skills correctly with the same tool trajectory evaluator. In practice, <code>skill_run</code> results contain volatile fields such as <code>stdout</code>, <code>stderr</code>, <code>duration_ms</code>, and inline <code>output_files</code> content. Prefer configuring a per-tool strategy to ignore these keys and only assert stable fields such as <code>skill</code>, requested <code>output_files</code>, and <code>exit_code</code> and <code>timed_out</code>.</p>
+<p>Agent Skills are exposed as built-in tools: <code>skill_load</code> and <code>skill_run</code>, so you can evaluate whether the agent uses Skills correctly with the same tool trajectory evaluator. In practice, <code>skill_run</code> results contain volatile fields such as <code>stdout</code>, <code>stderr</code>, <code>duration_ms</code>, and inline <code>output_files</code> content. Prefer using <code>onlyTree</code> in a per-tool strategy to assert only stable fields such as <code>skill</code>, requested <code>output_files</code>, and <code>exit_code</code> and <code>timed_out</code>, letting other volatile keys be ignored.</p>
 <p>A minimal example is shown below.</p>
 <p>EvalSet <code>tools</code> snippet:</p>
 <div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-65-1"> 1</a></span>
@@ -6877,20 +6877,7 @@
 <span class="normal"><a href="#__codelineno-66-38">38</a></span>
 <span class="normal"><a href="#__codelineno-66-39">39</a></span>
 <span class="normal"><a href="#__codelineno-66-40">40</a></span>
-<span class="normal"><a href="#__codelineno-66-41">41</a></span>
-<span class="normal"><a href="#__codelineno-66-42">42</a></span>
-<span class="normal"><a href="#__codelineno-66-43">43</a></span>
-<span class="normal"><a href="#__codelineno-66-44">44</a></span>
-<span class="normal"><a href="#__codelineno-66-45">45</a></span>
-<span class="normal"><a href="#__codelineno-66-46">46</a></span>
-<span class="normal"><a href="#__codelineno-66-47">47</a></span>
-<span class="normal"><a href="#__codelineno-66-48">48</a></span>
-<span class="normal"><a href="#__codelineno-66-49">49</a></span>
-<span class="normal"><a href="#__codelineno-66-50">50</a></span>
-<span class="normal"><a href="#__codelineno-66-51">51</a></span>
-<span class="normal"><a href="#__codelineno-66-52">52</a></span>
-<span class="normal"><a href="#__codelineno-66-53">53</a></span>
-<span class="normal"><a href="#__codelineno-66-54">54</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-66-1"><a id="__codelineno-66-1" name="__codelineno-66-1"></a><span class="p">[</span>
+<span class="normal"><a href="#__codelineno-66-41">41</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-66-1"><a id="__codelineno-66-1" name="__codelineno-66-1"></a><span class="p">[</span>
 </span><span id="__span-66-2"><a id="__codelineno-66-2" name="__codelineno-66-2"></a><span class="w">  </span><span class="p">{</span>
 </span><span id="__span-66-3"><a id="__codelineno-66-3" name="__codelineno-66-3"></a><span class="w">    </span><span class="nt">&quot;metricName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;tool_trajectory_avg_score&quot;</span><span class="p">,</span>
 </span><span id="__span-66-4"><a id="__codelineno-66-4" name="__codelineno-66-4"></a><span class="w">    </span><span class="nt">&quot;threshold&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
@@ -6901,49 +6888,36 @@
 </span><span id="__span-66-9"><a id="__codelineno-66-9" name="__codelineno-66-9"></a><span class="w">        </span><span class="nt">&quot;toolStrategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-66-10"><a id="__codelineno-66-10" name="__codelineno-66-10"></a><span class="w">          </span><span class="nt">&quot;skill_load&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-66-11"><a id="__codelineno-66-11" name="__codelineno-66-11"></a><span class="w">            </span><span class="nt">&quot;arguments&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-66-12"><a id="__codelineno-66-12" name="__codelineno-66-12"></a><span class="w">              </span><span class="nt">&quot;ignoreTree&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-66-13"><a id="__codelineno-66-13" name="__codelineno-66-13"></a><span class="w">                </span><span class="nt">&quot;docs&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-</span><span id="__span-66-14"><a id="__codelineno-66-14" name="__codelineno-66-14"></a><span class="w">                </span><span class="nt">&quot;include_all_docs&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
-</span><span id="__span-66-15"><a id="__codelineno-66-15" name="__codelineno-66-15"></a><span class="w">              </span><span class="p">},</span>
-</span><span id="__span-66-16"><a id="__codelineno-66-16" name="__codelineno-66-16"></a><span class="w">              </span><span class="nt">&quot;matchStrategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;exact&quot;</span>
-</span><span id="__span-66-17"><a id="__codelineno-66-17" name="__codelineno-66-17"></a><span class="w">            </span><span class="p">},</span>
-</span><span id="__span-66-18"><a id="__codelineno-66-18" name="__codelineno-66-18"></a><span class="w">            </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-66-19"><a id="__codelineno-66-19" name="__codelineno-66-19"></a><span class="w">              </span><span class="nt">&quot;ignore&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
-</span><span id="__span-66-20"><a id="__codelineno-66-20" name="__codelineno-66-20"></a><span class="w">            </span><span class="p">}</span>
-</span><span id="__span-66-21"><a id="__codelineno-66-21" name="__codelineno-66-21"></a><span class="w">          </span><span class="p">},</span>
-</span><span id="__span-66-22"><a id="__codelineno-66-22" name="__codelineno-66-22"></a><span class="w">          </span><span class="nt">&quot;skill_run&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-66-23"><a id="__codelineno-66-23" name="__codelineno-66-23"></a><span class="w">            </span><span class="nt">&quot;arguments&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-66-24"><a id="__codelineno-66-24" name="__codelineno-66-24"></a><span class="w">              </span><span class="nt">&quot;ignoreTree&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-66-25"><a id="__codelineno-66-25" name="__codelineno-66-25"></a><span class="w">                </span><span class="nt">&quot;command&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-</span><span id="__span-66-26"><a id="__codelineno-66-26" name="__codelineno-66-26"></a><span class="w">                </span><span class="nt">&quot;cwd&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-</span><span id="__span-66-27"><a id="__codelineno-66-27" name="__codelineno-66-27"></a><span class="w">                </span><span class="nt">&quot;env&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-</span><span id="__span-66-28"><a id="__codelineno-66-28" name="__codelineno-66-28"></a><span class="w">                </span><span class="nt">&quot;timeout&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-</span><span id="__span-66-29"><a id="__codelineno-66-29" name="__codelineno-66-29"></a><span class="w">                </span><span class="nt">&quot;inputs&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-</span><span id="__span-66-30"><a id="__codelineno-66-30" name="__codelineno-66-30"></a><span class="w">                </span><span class="nt">&quot;outputs&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-</span><span id="__span-66-31"><a id="__codelineno-66-31" name="__codelineno-66-31"></a><span class="w">                </span><span class="nt">&quot;save_as_artifacts&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-</span><span id="__span-66-32"><a id="__codelineno-66-32" name="__codelineno-66-32"></a><span class="w">                </span><span class="nt">&quot;omit_inline_content&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-</span><span id="__span-66-33"><a id="__codelineno-66-33" name="__codelineno-66-33"></a><span class="w">                </span><span class="nt">&quot;artifact_prefix&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
-</span><span id="__span-66-34"><a id="__codelineno-66-34" name="__codelineno-66-34"></a><span class="w">              </span><span class="p">},</span>
-</span><span id="__span-66-35"><a id="__codelineno-66-35" name="__codelineno-66-35"></a><span class="w">              </span><span class="nt">&quot;matchStrategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;exact&quot;</span>
-</span><span id="__span-66-36"><a id="__codelineno-66-36" name="__codelineno-66-36"></a><span class="w">            </span><span class="p">},</span>
-</span><span id="__span-66-37"><a id="__codelineno-66-37" name="__codelineno-66-37"></a><span class="w">            </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-66-38"><a id="__codelineno-66-38" name="__codelineno-66-38"></a><span class="w">              </span><span class="nt">&quot;ignoreTree&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-66-39"><a id="__codelineno-66-39" name="__codelineno-66-39"></a><span class="w">                </span><span class="nt">&quot;stdout&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-</span><span id="__span-66-40"><a id="__codelineno-66-40" name="__codelineno-66-40"></a><span class="w">                </span><span class="nt">&quot;stderr&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-</span><span id="__span-66-41"><a id="__codelineno-66-41" name="__codelineno-66-41"></a><span class="w">                </span><span class="nt">&quot;duration_ms&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-</span><span id="__span-66-42"><a id="__codelineno-66-42" name="__codelineno-66-42"></a><span class="w">                </span><span class="nt">&quot;warnings&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-</span><span id="__span-66-43"><a id="__codelineno-66-43" name="__codelineno-66-43"></a><span class="w">                </span><span class="nt">&quot;primary_output&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-</span><span id="__span-66-44"><a id="__codelineno-66-44" name="__codelineno-66-44"></a><span class="w">                </span><span class="nt">&quot;output_files&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-</span><span id="__span-66-45"><a id="__codelineno-66-45" name="__codelineno-66-45"></a><span class="w">                </span><span class="nt">&quot;artifact_files&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
-</span><span id="__span-66-46"><a id="__codelineno-66-46" name="__codelineno-66-46"></a><span class="w">              </span><span class="p">},</span>
-</span><span id="__span-66-47"><a id="__codelineno-66-47" name="__codelineno-66-47"></a><span class="w">              </span><span class="nt">&quot;matchStrategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;exact&quot;</span>
-</span><span id="__span-66-48"><a id="__codelineno-66-48" name="__codelineno-66-48"></a><span class="w">            </span><span class="p">}</span>
-</span><span id="__span-66-49"><a id="__codelineno-66-49" name="__codelineno-66-49"></a><span class="w">          </span><span class="p">}</span>
-</span><span id="__span-66-50"><a id="__codelineno-66-50" name="__codelineno-66-50"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-66-51"><a id="__codelineno-66-51" name="__codelineno-66-51"></a><span class="w">      </span><span class="p">}</span>
-</span><span id="__span-66-52"><a id="__codelineno-66-52" name="__codelineno-66-52"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-66-53"><a id="__codelineno-66-53" name="__codelineno-66-53"></a><span class="w">  </span><span class="p">}</span>
-</span><span id="__span-66-54"><a id="__codelineno-66-54" name="__codelineno-66-54"></a><span class="p">]</span>
+</span><span id="__span-66-12"><a id="__codelineno-66-12" name="__codelineno-66-12"></a><span class="w">              </span><span class="nt">&quot;onlyTree&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-66-13"><a id="__codelineno-66-13" name="__codelineno-66-13"></a><span class="w">                </span><span class="nt">&quot;skill&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-66-14"><a id="__codelineno-66-14" name="__codelineno-66-14"></a><span class="w">              </span><span class="p">},</span>
+</span><span id="__span-66-15"><a id="__codelineno-66-15" name="__codelineno-66-15"></a><span class="w">              </span><span class="nt">&quot;matchStrategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;exact&quot;</span>
+</span><span id="__span-66-16"><a id="__codelineno-66-16" name="__codelineno-66-16"></a><span class="w">            </span><span class="p">},</span>
+</span><span id="__span-66-17"><a id="__codelineno-66-17" name="__codelineno-66-17"></a><span class="w">            </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-66-18"><a id="__codelineno-66-18" name="__codelineno-66-18"></a><span class="w">              </span><span class="nt">&quot;ignore&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-66-19"><a id="__codelineno-66-19" name="__codelineno-66-19"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-66-20"><a id="__codelineno-66-20" name="__codelineno-66-20"></a><span class="w">          </span><span class="p">},</span>
+</span><span id="__span-66-21"><a id="__codelineno-66-21" name="__codelineno-66-21"></a><span class="w">          </span><span class="nt">&quot;skill_run&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-66-22"><a id="__codelineno-66-22" name="__codelineno-66-22"></a><span class="w">            </span><span class="nt">&quot;arguments&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-66-23"><a id="__codelineno-66-23" name="__codelineno-66-23"></a><span class="w">              </span><span class="nt">&quot;onlyTree&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-66-24"><a id="__codelineno-66-24" name="__codelineno-66-24"></a><span class="w">                </span><span class="nt">&quot;skill&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-66-25"><a id="__codelineno-66-25" name="__codelineno-66-25"></a><span class="w">                </span><span class="nt">&quot;output_files&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-66-26"><a id="__codelineno-66-26" name="__codelineno-66-26"></a><span class="w">              </span><span class="p">},</span>
+</span><span id="__span-66-27"><a id="__codelineno-66-27" name="__codelineno-66-27"></a><span class="w">              </span><span class="nt">&quot;matchStrategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;exact&quot;</span>
+</span><span id="__span-66-28"><a id="__codelineno-66-28" name="__codelineno-66-28"></a><span class="w">            </span><span class="p">},</span>
+</span><span id="__span-66-29"><a id="__codelineno-66-29" name="__codelineno-66-29"></a><span class="w">            </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-66-30"><a id="__codelineno-66-30" name="__codelineno-66-30"></a><span class="w">              </span><span class="nt">&quot;onlyTree&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-66-31"><a id="__codelineno-66-31" name="__codelineno-66-31"></a><span class="w">                </span><span class="nt">&quot;exit_code&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-66-32"><a id="__codelineno-66-32" name="__codelineno-66-32"></a><span class="w">                </span><span class="nt">&quot;timed_out&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-66-33"><a id="__codelineno-66-33" name="__codelineno-66-33"></a><span class="w">              </span><span class="p">},</span>
+</span><span id="__span-66-34"><a id="__codelineno-66-34" name="__codelineno-66-34"></a><span class="w">              </span><span class="nt">&quot;matchStrategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;exact&quot;</span>
+</span><span id="__span-66-35"><a id="__codelineno-66-35" name="__codelineno-66-35"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-66-36"><a id="__codelineno-66-36" name="__codelineno-66-36"></a><span class="w">          </span><span class="p">}</span>
+</span><span id="__span-66-37"><a id="__codelineno-66-37" name="__codelineno-66-37"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-66-38"><a id="__codelineno-66-38" name="__codelineno-66-38"></a><span class="w">      </span><span class="p">}</span>
+</span><span id="__span-66-39"><a id="__codelineno-66-39" name="__codelineno-66-39"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-66-40"><a id="__codelineno-66-40" name="__codelineno-66-40"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-66-41"><a id="__codelineno-66-41" name="__codelineno-66-41"></a><span class="p">]</span>
 </span></code></pre></div></td></tr></table></div>
 <p>See <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/skill">examples/evaluation/skill</a> for a runnable example.</p>
 <h2 id="best-practices">Best Practices</h2>
@@ -7102,7 +7076,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="February 6, 2026 09:22:16 UTC">2026-02-06 09:22:16</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="February 10, 2026 03:17:32 UTC">2026-02-10 03:17:32</span>
   </span>
 
     
