@@ -259,6 +259,17 @@ type Options struct {
 	// available in the system prompt.
 	SkillLoadMode string
 
+	// SkillsLoadedContentInToolResults controls where loaded skill bodies
+	// and selected docs are materialized.
+	//
+	// When false (default), loaded content is appended to the system
+	// message (legacy behavior).
+	//
+	// When true, loaded content is appended to the corresponding tool
+	// result messages (skill_load / skill_select_docs). This keeps the
+	// system prompt more stable for prompt caching.
+	SkillsLoadedContentInToolResults bool
+
 	// skillsRepository enables agent skills when non-nil.
 	skillsRepository skill.Repository
 	// skillsToolingGuidance overrides the built-in skills guidance block.
@@ -436,6 +447,16 @@ func WithSkills(repo skill.Repository) Option {
 func WithSkillLoadMode(mode string) Option {
 	return func(opts *Options) {
 		opts.SkillLoadMode = mode
+	}
+}
+
+// WithSkillsLoadedContentInToolResults enables an alternative injection
+// mode where loaded skill bodies/docs are materialized into tool result
+// messages (skill_load / skill_select_docs) instead of being appended
+// to the system prompt.
+func WithSkillsLoadedContentInToolResults(enable bool) Option {
+	return func(opts *Options) {
+		opts.SkillsLoadedContentInToolResults = enable
 	}
 }
 
