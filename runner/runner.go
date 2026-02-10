@@ -708,9 +708,9 @@ func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
 		// Disable further flush requests for this invocation.
 		flush.Clear(loop.invocation)
 		appender.Clear(loop.invocation)
+		r.unregisterRun(loop.invocation.RunOptions.RequestID)
 		close(loop.processedEventCh)
 		loop.invocation.CleanupNotice(ctx)
-		r.unregisterRun(loop.invocation.RunOptions.RequestID)
 		if loop.runHandle != nil {
 			loop.runHandle.cancel()
 		}

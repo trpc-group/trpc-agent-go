@@ -30,6 +30,13 @@ type CallableTool interface {
 }
 ```
 
+**建议（务必配置 name 与 description）**
+
+- **name（必填）**：用于让模型精确定位要调用的工具。请保证 **稳定、唯一、语义明确**（建议使用 `snake_case`），不要在不同工具/不同 ToolSet 之间重名。
+- **description（必填）**：用于让模型理解“这个工具做什么/何时该用/有什么约束”。没有清晰的描述会显著降低 tool call 的命中率与稳定性。
+
+> 对于 Function Tool：通过 `function.WithName(...)` / `function.WithDescription(...)` 配置；对于自定义 Tool：在 `Declaration()` 返回的 `tool.Declaration` 中设置 `Name` / `Description`。
+
 #### 📦 ToolSet（工具集）
 
 ToolSet 是一组相关工具的集合，实现 `tool.ToolSet` 接口。ToolSet 负责管理工具的生命周期、连接和资源清理。
@@ -99,9 +106,9 @@ import "trpc.group/trpc-go/trpc-agent-go/tool/function"
 
 // 1. 定义工具函数
 func calculator(ctx context.Context, req struct {
-    Operation string  `json:"operation"`
-    A         float64 `json:"a"`
-    B         float64 `json:"b"`
+    Operation string  `json:"operation" jsonschema:"description=运算类型，例如 add/multiply"`
+    A         float64 `json:"a" jsonschema:"description=第一个操作数"`
+    B         float64 `json:"b" jsonschema:"description=第二个操作数"`
 }) (map[string]interface{}, error) {
     switch req.Operation {
     case "add":
@@ -126,12 +133,22 @@ agent := llmagent.New("math-assistant",
     llmagent.WithTools([]tool.Tool{calculatorTool}))
 ```
 
+### Input Schema（入参 schema）与字段描述
+
+Function Tool 的入参 `req` 会自动生成对应的 JSON Schema（用于模型理解参数结构）。建议通过 struct tag 补充字段描述：
+
+- **字段名**：使用 `json:"..."` 作为 schema 的字段名。
+- **字段描述（推荐）**：使用 `jsonschema:"description=..."` 写入 schema 的 `properties.<field>.description`。
+- **注意**：`jsonschema` tag 内部使用英文逗号 `,` 作为分隔符，因此 **description 内容中不能包含 `,`**，否则会被误解析成多个 tag。
+- **兼容**：也支持 `description:"..."` 作为字段描述（用于历史代码）；若同时配置 `jsonschema:"description=..."` 与 `description:"..."`，以 `jsonschema` 中的 `description` 为准。
+- **更灵活的 schema**：如果想完全自定义入参 schema（例如需要更复杂的 JSON Schema 结构/约束），可使用 `function.WithInputSchema(customInputSchema)` 跳过自动生成。
+
 ### 流式工具示例
 
 ```go
 // 1. 定义输入输出结构
 type weatherInput struct {
-    Location string `json:"location"`
+    Location string `json:"location" jsonschema:"description=查询地点，例如城市名或经纬度"`
 }
 
 type weatherOutput struct {
@@ -1055,9 +1072,9 @@ func main() {
     // 1. 创建简单工具
     calculatorTool := function.NewFunctionTool(
         func(ctx context.Context, req struct {
-            Operation string  `json:"operation"`
-            A         float64 `json:"a"`
-            B         float64 `json:"b"`
+            Operation string  `json:"operation" jsonschema:"description=运算类型，例如 add/multiply"`
+            A         float64 `json:"a" jsonschema:"description=第一个操作数"`
+            B         float64 `json:"b" jsonschema:"description=第二个操作数"`
         }) (map[string]interface{}, error) {
             var result float64
             switch req.Operation {
