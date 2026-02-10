@@ -9,6 +9,7 @@ replace (
 	trpc.group/trpc-go/trpc-agent-go/model/gemini => ../../model/gemini
 	trpc.group/trpc-go/trpc-agent-go/model/ollama => ../../model/ollama
 	trpc.group/trpc-go/trpc-agent-go/model/provider => ../../model/provider
+	trpc.group/trpc-go/trpc-agent-go/storage/mysql => ../../storage/mysql
 )
 
 require (
@@ -20,12 +21,14 @@ require (
 	cloud.google.com/go v0.123.0 // indirect
 	cloud.google.com/go/auth v0.17.0 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
+	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/anthropics/anthropic-sdk-go v1.19.0 // indirect
 	github.com/bmatcuk/doublestar/v4 v4.9.1 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
+	github.com/go-sql-driver/mysql v1.9.3 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/google/uuid v1.6.0 // indirect
@@ -72,4 +75,5 @@ require (
 	trpc.group/trpc-go/trpc-agent-go/model/gemini v0.8.1-0.20251222024650-ea147adf3d21 // indirect
 	trpc.group/trpc-go/trpc-agent-go/model/ollama v0.8.0 // indirect
 	trpc.group/trpc-go/trpc-agent-go/model/provider v0.8.0 // indirect
+	trpc.group/trpc-go/trpc-agent-go/storage/mysql v0.8.0 // indirect
 )

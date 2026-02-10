@@ -43,6 +43,11 @@ func New(opts ...metric.Option) metric.Manager {
 	}
 }
 
+// Close implements metric.Manager.
+func (m *manager) Close() error {
+	return nil
+}
+
 func (m *manager) List(_ context.Context, appName, evalSetID string) ([]string, error) {
 	if appName == "" {
 		return nil, errors.New("empty app name")
