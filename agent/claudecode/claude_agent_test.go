@@ -278,6 +278,100 @@ func TestClaudeCodeAgent_Run_RawOutputHookError(t *testing.T) {
 	require.Contains(t, events[0].Choices[0].Message.Content, "warn")
 }
 
+func TestClaudeCodeAgent_InfoAndRunnerArgs(t *testing.T) {
+	ctx := context.Background()
+	sess := session.NewSession("app", "user", "sess-info-1")
+	inv := &agent.Invocation{
+		InvocationID: "inv-info-1",
+		Session:      sess,
+		Message: model.Message{
+			Role:    model.RoleUser,
+			Content: "Hi.",
+		},
+	}
+
+	transcript := `[{"type":"result","result":"ok"}]`
+	runner := &scriptedRunner{
+		run: func(cmd command) ([]byte, []byte, error) {
+			return []byte(transcript), nil, nil
+		},
+	}
+
+	ag, err := New(
+		WithName("my-claude"),
+		WithBin("claude-bin"),
+		WithExtraArgs("--permission-mode", "bypassPermissions"),
+		WithEnv("CLAUDE_AGENT_TEST=1"),
+		WithWorkDir("/tmp"),
+		withCommandRunner(runner),
+	)
+	require.NoError(t, err)
+
+	info := ag.Info()
+	require.Equal(t, "my-claude", info.Name)
+	require.NotEmpty(t, info.Description)
+	require.Nil(t, ag.Tools())
+	require.Nil(t, ag.SubAgents())
+	require.Nil(t, ag.FindSubAgent("anything"))
+
+	ch, err := ag.Run(ctx, inv)
+	require.NoError(t, err)
+	events := drainEvents(ch)
+	require.NotEmpty(t, events)
+	require.True(t, events[len(events)-1].IsFinalResponse())
+
+	calls := runner.Calls()
+	require.Len(t, calls, 1)
+	require.Equal(t, "claude-bin", calls[0].bin)
+	require.Equal(t, "/tmp", calls[0].dir)
+	require.Contains(t, calls[0].env, "CLAUDE_AGENT_TEST=1")
+	require.Contains(t, calls[0].args, "--permission-mode")
+	require.Contains(t, calls[0].args, "bypassPermissions")
+	require.Contains(t, calls[0].args, "--resume")
+	require.Contains(t, calls[0].args, cliSessionID(sess))
+	require.Equal(t, "Hi.", calls[0].args[len(calls[0].args)-1])
+}
+
+func TestNew_ValidationErrors(t *testing.T) {
+	_, err := New(WithBin(""))
+	require.Error(t, err)
+
+	_, err = New(withCommandRunner(nil))
+	require.Error(t, err)
+
+	_, err = New(WithOutputFormat(OutputFormat("yaml")))
+	require.Error(t, err)
+}
+
+func TestExecCommandRunner_Run(t *testing.T) {
+	tmp := t.TempDir()
+	runner := execCommandRunner{}
+
+	stdout, stderr, err := runner.Run(context.Background(), command{
+		bin:  "sh",
+		args: []string{"-c", "printf \"$FOO\""},
+		env:  []string{"FOO=bar"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "bar", string(stdout))
+	require.Empty(t, string(stderr))
+
+	stdout, stderr, err = runner.Run(context.Background(), command{
+		bin:  "sh",
+		args: []string{"-c", "pwd"},
+		dir:  tmp,
+	})
+	require.NoError(t, err)
+	require.Equal(t, tmp, strings.TrimSpace(string(stdout)))
+	require.Empty(t, string(stderr))
+}
+
+func TestCliSessionID_EdgeCases(t *testing.T) {
+	require.Equal(t, "", cliSessionID(nil))
+	require.Equal(t, "", cliSessionID(&session.Session{}))
+	require.NotEmpty(t, cliSessionID(&session.Session{ID: "session-1"}))
+}
+
 // TestParseTranscriptToolEvents_ToolResultStringContent verifies tool_result blocks can carry plain string content.
 func TestParseTranscriptToolEvents_ToolResultStringContent(t *testing.T) {
 	transcript := `[{"type":"assistant","message":{"content":[{"type":"tool_use","id":"call_1","name":"Bash","input":{"command":"ls"}}]}},{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"call_1","content":"No files found"}]}},{"type":"result","result":"ok"}]`
@@ -289,6 +383,42 @@ func TestParseTranscriptToolEvents_ToolResultStringContent(t *testing.T) {
 	require.True(t, events[0].IsToolCallResponse())
 	require.True(t, events[1].IsToolResultResponse())
 	require.Equal(t, "No files found", events[1].Choices[0].Message.Content)
+}
+
+func TestParseTranscriptToolEvents_EmptyOutput(t *testing.T) {
+	events, result, err := parseTranscriptToolEvents(nil, "inv-empty-1", "claude")
+	require.NoError(t, err)
+	require.Empty(t, result)
+	require.Nil(t, events)
+}
+
+func TestParseTranscriptToolEvents_ToolUseNullInput(t *testing.T) {
+	transcript := `[{"type":"assistant","message":{"content":[{"type":"tool_use","id":"call_1","name":"Bash","input":null}]}},{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"call_1","content":"ok"}]}},{"type":"result","result":"done"}]`
+
+	events, result, err := parseTranscriptToolEvents([]byte(transcript), "inv-null-input-1", "claude")
+	require.NoError(t, err)
+	require.Equal(t, "done", result)
+	require.Len(t, events, 2)
+	require.True(t, events[0].IsToolCallResponse())
+	require.Equal(t, "{}", string(events[0].Choices[0].Message.ToolCalls[0].Function.Arguments))
+	require.True(t, events[1].IsToolResultResponse())
+}
+
+func TestParseTranscriptToolEvents_TaskInvalidInputNoTransfer(t *testing.T) {
+	transcript := `[{"type":"assistant","message":{"content":[{"type":"tool_use","id":"call_task","name":"Task","input":"not-json"}]}},{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"call_task","content":"ok"}]}},{"type":"result","result":"done"}]`
+
+	events, result, err := parseTranscriptToolEvents([]byte(transcript), "inv-task-invalid-1", "claude")
+	require.NoError(t, err)
+	require.Equal(t, "done", result)
+	require.Len(t, events, 2)
+	require.True(t, events[0].IsToolCallResponse())
+	require.True(t, events[1].IsToolResultResponse())
+	require.Equal(t, "Task", events[0].Choices[0].Message.ToolCalls[0].Function.Name)
+}
+
+func TestDecodeToolResultContent_TextBlocks(t *testing.T) {
+	raw := json.RawMessage(`[{"type":"text","text":"one"},{"type":"text","text":""},{"type":"text","text":"two"}]`)
+	require.Equal(t, "one\ntwo", decodeToolResultContent(raw))
 }
 
 func TestClaudeCodeAgent_Run_OutputFormatOverride(t *testing.T) {
