@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "eva_cli_example": {
+      "command": "go",
+      "args": [
+        "run",
+        "./mcpserver"
+      ]
+    }
+  }
+}
