@@ -621,6 +621,8 @@ type Manager interface {
 	UpdateCase(ctx context.Context, appName, evalSetID string, evalCase *EvalCase) error
 	// DeleteCase 删除评估用例
 	DeleteCase(ctx context.Context, appName, evalSetID, evalCaseID string) error
+	// Close 释放资源
+	Close() error
 }
 ```
 
@@ -692,6 +694,110 @@ evalSetManager := local.New(
 	evalset.WithBaseDir(dataDir),
 	evalset.WithLocator(&customLocator{}),
 )
+```
+
+##### MySQL 实现
+
+EvalSetManager 的 MySQL 实现会将 EvalSet 与 EvalCase 持久化到 MySQL。
+
+该实现会将评估集与评估用例分别写入两张表，并在读取评估集时按用例插入顺序返回用例列表。
+
+###### 配置选项
+
+**连接配置：**
+
+- **`WithMySQLClientDSN(dsn string)`**：直接使用 DSN 连接，推荐优先使用该方式，建议开启 `parseTime=true`。
+- **`WithMySQLInstance(instanceName string)`**：使用已注册的 MySQL instance。使用前需要通过 `storage/mysql.RegisterMySQLInstance` 注册。注意：`WithMySQLClientDSN` 优先级更高，同时设置时以 DSN 为准。
+- **`WithExtraOptions(extraOptions ...any)`**：传递给 MySQL client builder 的额外参数。注意：当使用 `WithMySQLInstance` 时，以注册 instance 的配置为准，本参数不会生效。
+
+**表配置：**
+
+- **`WithTablePrefix(prefix string)`**：表名前缀。prefix 为空表示不加前缀；prefix 非空时必须以字母或下划线开头，且只能包含字母/数字/下划线。`trpc` 与 `trpc_` 等价，实际表名会自动补齐下划线分隔。
+
+**初始化配置：**
+
+- **`WithSkipDBInit(skip bool)`**：跳过自动建表。默认值为 `false`。
+- **`WithInitTimeout(timeout time.Duration)`**：自动建表超时。默认值为 `30s`。
+
+###### 代码示例
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation"
+	evalsetmysql "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/mysql"
+)
+
+evalSetManager, err := evalsetmysql.New(
+	evalsetmysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/dbname?parseTime=true&charset=utf8mb4"),
+	evalsetmysql.WithTablePrefix("trpc_"),
+)
+if err != nil {
+	log.Fatalf("create mysql evalset manager: %v", err)
+}
+
+agentEvaluator, err := evaluation.New(
+	appName,
+	runner,
+	evaluation.WithEvalSetManager(evalSetManager),
+)
+if err != nil {
+	log.Fatalf("create evaluator: %v", err)
+}
+defer agentEvaluator.Close()
+```
+
+###### 配置复用
+
+```go
+import (
+	storagemysql "trpc.group/trpc-go/trpc-agent-go/storage/mysql"
+	evalsetmysql "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/mysql"
+)
+
+// 注册 MySQL instance
+storagemysql.RegisterMySQLInstance(
+	"my-evaluation-mysql",
+	storagemysql.WithClientBuilderDSN("user:password@tcp(localhost:3306)/dbname?parseTime=true&charset=utf8mb4"),
+)
+
+// 在 EvalSetManager 中复用
+evalSetManager, err := evalsetmysql.New(evalsetmysql.WithMySQLInstance("my-evaluation-mysql"))
+if err != nil {
+	log.Fatalf("create mysql evalset manager: %v", err)
+}
+```
+
+###### 存储结构
+
+当 `skipDBInit=false` 时，manager 会在初始化阶段按需创建所需表结构。该选项默认值为 `false`。若设置 `skipDBInit=true`，需要自行建表；可以直接使用下面的 SQL，与 `evaluation/evalset/mysql/schema.sql` 一致。并将 `{{PREFIX}}` 替换为实际表名前缀，例如 `trpc_`。不使用前缀时将其替换为空字符串。
+
+```sql
+CREATE TABLE IF NOT EXISTS `{{PREFIX}}evaluation_eval_sets` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT,
+  `app_name` VARCHAR(255) NOT NULL,
+  `eval_set_id` VARCHAR(255) NOT NULL,
+  `name` VARCHAR(255) NOT NULL,
+  `description` TEXT DEFAULT NULL,
+  `created_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_eval_sets_app_eval_set` (`app_name`, `eval_set_id`),
+  KEY `idx_eval_sets_app_created` (`app_name`, `created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `{{PREFIX}}evaluation_eval_cases` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT,
+  `app_name` VARCHAR(255) NOT NULL,
+  `eval_set_id` VARCHAR(255) NOT NULL,
+  `eval_id` VARCHAR(255) NOT NULL,
+  `eval_mode` VARCHAR(32) NOT NULL DEFAULT '',
+  `eval_case` JSON NOT NULL,
+  `created_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_eval_cases_app_set_case` (`app_name`, `eval_set_id`, `eval_id`),
+  KEY `idx_eval_cases_app_set_order` (`app_name`, `eval_set_id`, `id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 ```
 
 ### 评估指标 EvalMetric
@@ -784,7 +890,7 @@ TextMatchStrategy 取值如下表所示，支持 `exact`、`contains`、`regex` 
 
 | TextMatchStrategy 取值 | 说明                         |
 |-----------------------|------------------------------|
-| exact                 | 实际字符串与预期字符串完全一致（默认）。 |
+| exact                 | 实际字符串与预期字符串完全一致，为默认策略。 |
 | contains              | 实际字符串包含预期字符串。       |
 | regex                 | 实际字符串满足预期字符串作为正则表达式。 |
 
@@ -1296,6 +1402,8 @@ type Manager interface {
 	Delete(ctx context.Context, appName, evalSetID, metricName string) error
 	// Update 更新评估指标
 	Update(ctx context.Context, appName, evalSetID string, metric *EvalMetric) error
+	// Close 释放资源
+	Close() error
 }
 ```
 
@@ -1325,7 +1433,7 @@ agentEvaluator, err := evaluation.New(
 ```go
 import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/local"
+	metriclocal "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/local"
 )
 
 type customMetricLocator struct{}
@@ -1339,6 +1447,94 @@ metricManager := metriclocal.New(
 	metric.WithBaseDir(dataDir),
 	metric.WithLocator(&customMetricLocator{}),
 )
+```
+
+##### MySQL 实现
+
+MetricManager 的 MySQL 实现会将指标配置持久化到 MySQL。
+
+###### 配置选项
+
+**连接配置：**
+
+- **`WithMySQLClientDSN(dsn string)`**：直接使用 DSN 连接，推荐优先使用该方式，建议开启 `parseTime=true`。
+- **`WithMySQLInstance(instanceName string)`**：使用已注册的 MySQL instance。使用前需要通过 `storage/mysql.RegisterMySQLInstance` 注册。注意：`WithMySQLClientDSN` 优先级更高，同时设置时以 DSN 为准。
+- **`WithExtraOptions(extraOptions ...any)`**：传递给 MySQL client builder 的额外参数。注意：当使用 `WithMySQLInstance` 时，以注册 instance 的配置为准，本参数不会生效。
+
+**表配置：**
+
+- **`WithTablePrefix(prefix string)`**：表名前缀。prefix 为空表示不加前缀；prefix 非空时必须以字母或下划线开头，且只能包含字母/数字/下划线。`trpc` 与 `trpc_` 等价，实际表名会自动补齐下划线分隔。
+
+**初始化配置：**
+
+- **`WithSkipDBInit(skip bool)`**：跳过自动建表。默认值为 `false`。
+- **`WithInitTimeout(timeout time.Duration)`**：自动建表超时。默认值为 `30s`，与 memory/mysql 等组件保持一致。
+
+###### 代码示例
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation"
+	metricmysql "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/mysql"
+)
+
+metricManager, err := metricmysql.New(
+	metricmysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/dbname?parseTime=true&charset=utf8mb4"),
+	metricmysql.WithTablePrefix("trpc_"),
+)
+if err != nil {
+	log.Fatalf("create mysql metric manager: %v", err)
+}
+
+agentEvaluator, err := evaluation.New(
+	appName,
+	runner,
+	evaluation.WithMetricManager(metricManager),
+)
+if err != nil {
+	log.Fatalf("create evaluator: %v", err)
+}
+defer agentEvaluator.Close()
+```
+
+###### 配置复用
+
+```go
+import (
+	storagemysql "trpc.group/trpc-go/trpc-agent-go/storage/mysql"
+	metricmysql "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/mysql"
+)
+
+// 注册 MySQL instance
+storagemysql.RegisterMySQLInstance(
+	"my-evaluation-mysql",
+	storagemysql.WithClientBuilderDSN("user:password@tcp(localhost:3306)/dbname?parseTime=true&charset=utf8mb4"),
+)
+
+// 在 MetricManager 中复用
+metricManager, err := metricmysql.New(metricmysql.WithMySQLInstance("my-evaluation-mysql"))
+if err != nil {
+	log.Fatalf("create mysql metric manager: %v", err)
+}
+```
+
+###### 存储结构
+
+当 `skipDBInit=false` 时，manager 会在初始化阶段按需创建所需表结构。该选项默认值为 `false`。若设置 `skipDBInit=true`，需要自行建表；可以直接使用下面的 SQL，与 `evaluation/metric/mysql/schema.sql` 一致。并将 `{{PREFIX}}` 替换为实际表名前缀，例如 `trpc_`。不使用前缀时将其替换为空字符串。
+
+```sql
+CREATE TABLE IF NOT EXISTS `{{PREFIX}}evaluation_metrics` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT,
+  `app_name` VARCHAR(255) NOT NULL,
+  `eval_set_id` VARCHAR(255) NOT NULL,
+  `metric_name` VARCHAR(255) NOT NULL,
+  `metric` JSON NOT NULL,
+  `created_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_metrics_app_set_name` (`app_name`, `eval_set_id`, `metric_name`),
+  KEY `idx_metrics_app_set` (`app_name`, `eval_set_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 ```
 
 ### 评估器 Evaluator
@@ -1906,6 +2102,8 @@ type Manager interface {
 	Get(ctx context.Context, appName, evalSetResultID string) (*EvalSetResult, error)
 	// List 列出评估结果 ID 列表
 	List(ctx context.Context, appName string) ([]string, error)
+	// Close 释放资源
+	Close() error
 }
 ```
 
@@ -1970,6 +2168,96 @@ evalResultManager := local.New(
 	evalresult.WithBaseDir(dataDir),
 	evalresult.WithLocator(&customResultLocator{}),
 )
+```
+
+##### MySQL 实现
+
+EvalResultManager 的 MySQL 实现会将评估结果持久化到 MySQL。
+
+###### 配置选项
+
+**连接配置：**
+
+- **`WithMySQLClientDSN(dsn string)`**：直接使用 DSN 连接，推荐优先使用该方式，建议开启 `parseTime=true`。
+- **`WithMySQLInstance(instanceName string)`**：使用已注册的 MySQL instance。使用前需要通过 `storage/mysql.RegisterMySQLInstance` 注册。注意：`WithMySQLClientDSN` 优先级更高，同时设置时以 DSN 为准。
+- **`WithExtraOptions(extraOptions ...any)`**：传递给 MySQL client builder 的额外参数。注意：当使用 `WithMySQLInstance` 时，以注册 instance 的配置为准，本参数不会生效。
+
+**表配置：**
+
+- **`WithTablePrefix(prefix string)`**：表名前缀。prefix 为空表示不加前缀；prefix 非空时必须以字母或下划线开头，且只能包含字母/数字/下划线。`trpc` 与 `trpc_` 等价，实际表名会自动补齐下划线分隔。
+
+**初始化配置：**
+
+- **`WithSkipDBInit(skip bool)`**：跳过自动建表。默认值为 `false`。
+- **`WithInitTimeout(timeout time.Duration)`**：自动建表超时。默认值为 `30s`，与 memory/mysql 等组件保持一致。
+
+###### 代码示例
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation"
+	evalresultmysql "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/mysql"
+)
+
+evalResultManager, err := evalresultmysql.New(
+	evalresultmysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/dbname?parseTime=true&charset=utf8mb4"),
+	evalresultmysql.WithTablePrefix("trpc_"),
+)
+if err != nil {
+	log.Fatalf("create mysql evalresult manager: %v", err)
+}
+
+agentEvaluator, err := evaluation.New(
+	appName,
+	runner,
+	evaluation.WithEvalResultManager(evalResultManager),
+)
+if err != nil {
+	log.Fatalf("create evaluator: %v", err)
+}
+defer agentEvaluator.Close()
+```
+
+###### 配置复用
+
+```go
+import (
+	storagemysql "trpc.group/trpc-go/trpc-agent-go/storage/mysql"
+	evalresultmysql "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/mysql"
+)
+
+// 注册 MySQL instance
+storagemysql.RegisterMySQLInstance(
+	"my-evaluation-mysql",
+	storagemysql.WithClientBuilderDSN("user:password@tcp(localhost:3306)/dbname?parseTime=true&charset=utf8mb4"),
+)
+
+// 在 EvalResultManager 中复用
+evalResultManager, err := evalresultmysql.New(evalresultmysql.WithMySQLInstance("my-evaluation-mysql"))
+if err != nil {
+	log.Fatalf("create mysql evalresult manager: %v", err)
+}
+```
+
+###### 存储结构
+
+当 `skipDBInit=false` 时，manager 会在初始化阶段按需创建所需表结构。该选项默认值为 `false`。若设置 `skipDBInit=true`，需要自行建表；可以直接使用下面的 SQL，与 `evaluation/evalresult/mysql/schema.sql` 一致。并将 `{{PREFIX}}` 替换为实际表名前缀，例如 `trpc_`。不使用前缀时将其替换为空字符串。
+
+```sql
+CREATE TABLE IF NOT EXISTS `{{PREFIX}}evaluation_eval_set_results` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT,
+  `app_name` VARCHAR(255) NOT NULL,
+  `eval_set_result_id` VARCHAR(255) NOT NULL,
+  `eval_set_id` VARCHAR(255) NOT NULL,
+  `eval_set_result_name` VARCHAR(255) NOT NULL,
+  `eval_case_results` JSON NOT NULL,
+  `summary` JSON DEFAULT NULL,
+  `created_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_results_app_result_id` (`app_name`, `eval_set_result_id`),
+  KEY `idx_results_app_set_created` (`app_name`, `eval_set_id`, `created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 ```
 
 ### 评估服务 Service

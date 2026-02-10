@@ -48,4 +48,6 @@ type Manager interface {
 	UpdateCase(ctx context.Context, appName, evalSetID string, evalCase *EvalCase) error
 	// DeleteCase deletes an EvalCase identified by evalSetID and evalCaseID.
 	DeleteCase(ctx context.Context, appName, evalSetID, evalCaseID string) error
+	// Close releases resources held by the manager.
+	Close() error
 }

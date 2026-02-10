@@ -35,4 +35,6 @@ type Manager interface {
 	Delete(ctx context.Context, appName, evalSetID, metricName string) error
 	// Update updates the metric identified by evalSetID and metric.MetricName.
 	Update(ctx context.Context, appName, evalSetID string, metric *EvalMetric) error
+	// Close releases resources held by the manager.
+	Close() error
 }

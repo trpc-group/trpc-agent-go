@@ -108,4 +108,6 @@ type Manager interface {
 	Get(ctx context.Context, appName, evalSetResultID string) (*EvalSetResult, error)
 	// List returns all available evaluation results.
 	List(ctx context.Context, appName string) ([]string, error)
+	// Close releases resources held by the manager.
+	Close() error
 }
