@@ -16,6 +16,9 @@ import (
 	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/text"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
@@ -379,6 +382,608 @@ func TestMarkdownChunking_EdgeCases(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestMarkdownChunking_SplitByHeader_HeadingWithoutText verifies that
+// splitByHeader handles headings without text safely and preserves content.
+func TestMarkdownChunking_SplitByHeader_HeadingWithoutText(t *testing.T) {
+	tests := []struct {
+		name         string
+		level        int
+		content      string
+		contentHints []string
+	}{
+		{
+			name:  "empty level1 heading after normal level1 heading",
+			level: 1,
+			content: `# First Title
+
+Paragraph before empty level1 heading that should be retained.
+
+#
+
+Paragraph after empty level1 heading should still be retained.`,
+			contentHints: []string{
+				"Paragraph before empty level1 heading",
+				"Paragraph after empty level1 heading",
+			},
+		},
+		{
+			name:  "empty level2 heading after normal level2 heading",
+			level: 2,
+			content: `## Section A
+
+Content before empty level2 heading should be retained.
+
+##
+
+Content after empty level2 heading should still be retained.`,
+			contentHints: []string{
+				"Content before empty level2 heading",
+				"Content after empty level2 heading",
+			},
+		},
+		{
+			name:  "closing-hash-only heading",
+			level: 3,
+			content: `### Section A
+
+Content before closing-hash-only heading should be retained.
+
+### ###
+
+Content after closing-hash-only heading should still be retained.`,
+			contentHints: []string{
+				"Content before closing-hash-only heading",
+				"Content after closing-hash-only heading",
+			},
+		},
+		{
+			name:  "consecutive empty level1 headings",
+			level: 1,
+			content: `# First Title
+
+Content before consecutive empty level1 headings should be retained.
+
+#
+
+#
+
+Content after consecutive empty level1 headings should still be retained.`,
+			contentHints: []string{
+				"Content before consecutive empty level1 headings",
+				"Content after consecutive empty level1 headings",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mc := NewMarkdownChunking(WithMarkdownChunkSize(32), WithMarkdownOverlap(0))
+
+			var sections []headerSection
+			require.NotPanics(t, func() {
+				sections = mc.splitByHeader(tt.content, tt.level)
+			})
+			require.NotEmpty(t, sections)
+
+			var combined strings.Builder
+			for _, section := range sections {
+				require.NotEmpty(t, strings.TrimSpace(section.Content))
+				combined.WriteString(section.Header)
+				combined.WriteString("\n")
+				combined.WriteString(section.Content)
+				combined.WriteString("\n")
+			}
+
+			fullText := combined.String()
+			for _, hint := range tt.contentHints {
+				require.Contains(t, fullText, hint)
+			}
+		})
+	}
+}
+
+func TestFindNodeStartPos(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		level   int
+		wantPos int
+		wantTag string
+	}{
+		{
+			name:    "heading at file start",
+			content: "# Title\n\nBody",
+			level:   1,
+			wantTag: "# Title",
+		},
+		{
+			name:    "heading after prefix line",
+			content: "Intro line\n\n## Subtitle\n\nBody",
+			level:   2,
+			wantTag: "## Subtitle",
+		},
+		{
+			name:    "heading with nested emphasis text",
+			content: "Intro line\n\n## **Subtitle**\n\nBody",
+			level:   2,
+			wantTag: "## **Subtitle**",
+		},
+		{
+			name:    "heading with nested link text",
+			content: "Intro line\n\n## [Link](https://example.com)\n\nBody",
+			level:   2,
+			wantTag: "## [Link](https://example.com)",
+		},
+		{
+			name:    "empty heading has no text segment",
+			content: "Intro line\n\n#\n\nBody",
+			level:   1,
+			wantPos: -1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			heading := mustFindHeadingByLevel(t, tt.content, tt.level)
+			got := findNodeStartPos(heading, []byte(tt.content))
+
+			want := tt.wantPos
+			if tt.wantTag != "" {
+				want = strings.Index(tt.content, tt.wantTag)
+				require.NotEqual(t, -1, want)
+			}
+			require.Equal(t, want, got)
+		})
+	}
+}
+
+func TestFindHeadingLineStartFallback(t *testing.T) {
+	tests := []struct {
+		name             string
+		source           string
+		searchFrom       int
+		searchFromAnchor string
+		searchFromOffset int
+		level            int
+		headingText      string
+		wantPos          int
+		wantTag          string
+	}{
+		{
+			name:        "empty source",
+			source:      "",
+			searchFrom:  0,
+			level:       1,
+			headingText: "A",
+			wantPos:     -1,
+		},
+		{
+			name:        "invalid level",
+			source:      "# A\n",
+			searchFrom:  0,
+			level:       0,
+			headingText: "A",
+			wantPos:     -1,
+		},
+		{
+			name:        "negative searchFrom is clamped",
+			source:      "# Alpha\n\nBody\n",
+			searchFrom:  -100,
+			level:       1,
+			headingText: "Alpha",
+			wantTag:     "# Alpha",
+		},
+		{
+			name:        "searchFrom above length is clamped",
+			source:      "Body line\n\n# Tail",
+			searchFrom:  999,
+			level:       1,
+			headingText: "Tail",
+			wantTag:     "# Tail",
+		},
+		{
+			name:             "searchFrom inside heading line backtracks to line start",
+			source:           "Body line\n\n## Mid\n\nTail\n",
+			searchFromAnchor: "## Mid",
+			searchFromOffset: 3,
+			level:            2,
+			headingText:      "Mid",
+			wantTag:          "## Mid",
+		},
+		{
+			name:        "heading text trim space still matches",
+			source:      "# Alpha\n\n# Beta\n",
+			searchFrom:  0,
+			level:       1,
+			headingText: "   Beta   ",
+			wantTag:     "# Beta",
+		},
+		{
+			name:        "heading text mismatch falls back to first candidate",
+			source:      "# Alpha\n\n# Beta\n",
+			searchFrom:  0,
+			level:       1,
+			headingText: "Gamma",
+			wantTag:     "# Alpha",
+		},
+		{
+			name:        "no heading candidate returns negative one",
+			source:      "Body line\n\nTail line\n",
+			searchFrom:  0,
+			level:       1,
+			headingText: "Alpha",
+			wantPos:     -1,
+		},
+		{
+			name:        "windows newline heading line is recognized",
+			source:      "# Alpha\r\n\r\nBody\n",
+			searchFrom:  0,
+			level:       1,
+			headingText: "Alpha",
+			wantTag:     "# Alpha",
+		},
+		{
+			name:        "empty heading text does not match non-empty heading lines",
+			source:      "# Alpha\n\n# Beta\n",
+			searchFrom:  0,
+			level:       1,
+			headingText: "",
+			wantPos:     -1,
+		},
+		{
+			name:        "empty heading text matches pure empty heading marker",
+			source:      "# Alpha\n\n#\n\nTail\n",
+			searchFrom:  0,
+			level:       1,
+			headingText: "",
+			wantTag:     "#\n",
+		},
+		{
+			name:        "empty heading text matches empty closing-hash heading",
+			source:      "### Alpha\n\n### ###\n\nTail\n",
+			searchFrom:  0,
+			level:       3,
+			headingText: "",
+			wantTag:     "### ###",
+		},
+		{
+			name:        "empty heading text ignores heading-like lines in fenced code block",
+			source:      "```md\n# inside code\n```\n\n#\n",
+			searchFrom:  0,
+			level:       1,
+			headingText: "",
+			wantTag:     "#\n",
+		},
+		{
+			name:        "empty heading text returns negative one when only fenced heading-like lines exist",
+			source:      "```md\n# inside code\n```\n\nTail\n",
+			searchFrom:  0,
+			level:       1,
+			headingText: "",
+			wantPos:     -1,
+		},
+		{
+			name:        "non-empty heading text ignores fenced heading-like lines",
+			source:      "```md\n# Target\n```\n\n# Target outside\n",
+			searchFrom:  0,
+			level:       1,
+			headingText: "Target outside",
+			wantTag:     "# Target outside",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			searchFrom := tt.searchFrom
+			if tt.searchFromAnchor != "" {
+				anchorPos := strings.Index(tt.source, tt.searchFromAnchor)
+				require.NotEqual(t, -1, anchorPos)
+				searchFrom = anchorPos + tt.searchFromOffset
+			}
+
+			got := findHeadingLineStartFallback(
+				[]byte(tt.source),
+				searchFrom,
+				tt.level,
+				tt.headingText,
+			)
+
+			want := tt.wantPos
+			if tt.wantTag != "" {
+				want = strings.Index(tt.source, tt.wantTag)
+				require.NotEqual(t, -1, want)
+			}
+			require.Equal(t, want, got)
+		})
+	}
+}
+
+func TestNormalizeHeadingLineStart(t *testing.T) {
+	tests := []struct {
+		name             string
+		headingLineStart int
+		lastHeaderPos    int
+		want             int
+	}{
+		{
+			name:             "negative start is clamped to lastHeaderPos",
+			headingLineStart: -1,
+			lastHeaderPos:    12,
+			want:             12,
+		},
+		{
+			name:             "start less than lastHeaderPos is clamped",
+			headingLineStart: 8,
+			lastHeaderPos:    12,
+			want:             12,
+		},
+		{
+			name:             "start equals lastHeaderPos is preserved",
+			headingLineStart: 12,
+			lastHeaderPos:    12,
+			want:             12,
+		},
+		{
+			name:             "start greater than lastHeaderPos is preserved",
+			headingLineStart: 30,
+			lastHeaderPos:    12,
+			want:             30,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := normalizeHeadingLineStart(tt.headingLineStart, tt.lastHeaderPos)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestIsATXHeadingLineAtLevel(t *testing.T) {
+	tests := []struct {
+		name  string
+		line  []byte
+		level int
+		want  bool
+	}{
+		{
+			name:  "invalid level zero",
+			line:  []byte("# Title"),
+			level: 0,
+			want:  false,
+		},
+		{
+			name:  "invalid negative level",
+			line:  []byte("# Title"),
+			level: -1,
+			want:  false,
+		},
+		{
+			name:  "leading spaces greater than three are rejected",
+			line:  []byte("    # Title"),
+			level: 1,
+			want:  false,
+		},
+		{
+			name:  "leading spaces up to three are accepted",
+			line:  []byte("   # Title"),
+			level: 1,
+			want:  true,
+		},
+		{
+			name:  "exact marker length is accepted",
+			line:  []byte("##"),
+			level: 2,
+			want:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isATXHeadingLineAtLevel(tt.line, tt.level)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestIsEmptyATXHeadingLineAtLevel(t *testing.T) {
+	tests := []struct {
+		name  string
+		line  []byte
+		level int
+		want  bool
+	}{
+		{
+			name:  "pure marker heading",
+			line:  []byte("#"),
+			level: 1,
+			want:  true,
+		},
+		{
+			name:  "marker with trailing spaces",
+			line:  []byte("##   "),
+			level: 2,
+			want:  true,
+		},
+		{
+			name:  "empty heading with closing hashes",
+			line:  []byte("### ###"),
+			level: 3,
+			want:  true,
+		},
+		{
+			name:  "non-empty heading text",
+			line:  []byte("# title"),
+			level: 1,
+			want:  false,
+		},
+		{
+			name:  "not atx heading line",
+			line:  []byte("plain text"),
+			level: 1,
+			want:  false,
+		},
+		{
+			name:  "leading spaces over limit",
+			line:  []byte("    #"),
+			level: 1,
+			want:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isEmptyATXHeadingLineAtLevel(tt.line, tt.level)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestParseFenceDelimiter(t *testing.T) {
+	tests := []struct {
+		name     string
+		line     []byte
+		wantOK   bool
+		wantChar byte
+		wantLen  int
+		wantRema string
+	}{
+		{
+			name:     "backtick fence with info string",
+			line:     []byte("```go"),
+			wantOK:   true,
+			wantChar: '`',
+			wantLen:  3,
+			wantRema: "go",
+		},
+		{
+			name:     "tilde fence with indentation",
+			line:     []byte("   ~~~~python"),
+			wantOK:   true,
+			wantChar: '~',
+			wantLen:  4,
+			wantRema: "python",
+		},
+		{
+			name:   "too short delimiter is rejected",
+			line:   []byte("``"),
+			wantOK: false,
+		},
+		{
+			name:   "indentation over three spaces is rejected",
+			line:   []byte("    ```"),
+			wantOK: false,
+		},
+		{
+			name:   "non fence line is rejected",
+			line:   []byte("# heading"),
+			wantOK: false,
+		},
+		{
+			name:     "fence with carriage return",
+			line:     []byte("```\r"),
+			wantOK:   true,
+			wantChar: '`',
+			wantLen:  3,
+			wantRema: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotChar, gotLen, gotRest, ok := parseFenceDelimiter(tt.line)
+			require.Equal(t, tt.wantOK, ok)
+			if !tt.wantOK {
+				return
+			}
+			require.Equal(t, tt.wantChar, gotChar)
+			require.Equal(t, tt.wantLen, gotLen)
+			require.Equal(t, tt.wantRema, string(gotRest))
+		})
+	}
+}
+
+func TestFindLineContentStartPos(t *testing.T) {
+	source := []byte("line1\nline2")
+
+	tests := []struct {
+		name      string
+		src       []byte
+		lineStart int
+		want      int
+	}{
+		{
+			name:      "negative line start returns zero",
+			src:       source,
+			lineStart: -3,
+			want:      0,
+		},
+		{
+			name:      "line start beyond source length returns source length",
+			src:       source,
+			lineStart: len(source) + 5,
+			want:      len(source),
+		},
+		{
+			name:      "line start equal source length returns source length",
+			src:       source,
+			lineStart: len(source),
+			want:      len(source),
+		},
+		{
+			name:      "normal line start returns next line start",
+			src:       source,
+			lineStart: 0,
+			want:      6,
+		},
+		{
+			name:      "line without trailing newline returns source length",
+			src:       source,
+			lineStart: 6,
+			want:      len(source),
+		},
+		{
+			name:      "empty source with negative start returns zero",
+			src:       []byte(""),
+			lineStart: -1,
+			want:      0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := findLineContentStartPos(tt.src, tt.lineStart)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func mustFindHeadingByLevel(t *testing.T, content string, level int) ast.Node {
+	t.Helper()
+
+	md := goldmark.New()
+	doc := md.Parser().Parse(text.NewReader([]byte(content)))
+
+	var found ast.Node
+	_ = ast.Walk(doc, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		heading, ok := node.(*ast.Heading)
+		if !ok {
+			return ast.WalkContinue, nil
+		}
+		if heading.Level != level {
+			return ast.WalkContinue, nil
+		}
+		found = heading
+		return ast.WalkStop, nil
+	})
+
+	require.NotNil(t, found)
+	return found
 }
 
 // TestMarkdownChunking_MultipleParagraphsInSection tests splitLargeSection with multiple paragraphs
