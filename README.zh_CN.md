@@ -41,6 +41,32 @@
 
 <table>
 <tr>
+<td valign="top">
+
+### LLMAgent
+
+```go
+// 将 chat 模型封装为 LLMAgent
+modelInstance := openai.New("gpt-4o-mini")
+agent := llmagent.New("assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithInstruction("你是一个乐于助人的助手。"),
+)
+
+// 运行一次对话
+agentRunner := runner.NewRunner("app", agent)
+events, _ := agentRunner.Run(ctx, "user-1", "session-1",
+    model.NewUserMessage("2+2 等于多少？"))
+```
+
+</td>
+<td valign="top">
+
+&nbsp;
+
+</td>
+</tr>
+<tr>
 <td width="50%" valign="top">
 
 ### 多 Agent 编排
@@ -149,32 +175,6 @@ _ = result.OverallStatus
 
 </td>
 </tr>
-<tr>
-<td valign="top">
-
-### LLMAgent
-
-```go
-// 将 chat 模型封装为 LLMAgent
-modelInstance := openai.New("gpt-4o-mini")
-agent := llmagent.New("assistant",
-    llmagent.WithModel(modelInstance),
-    llmagent.WithInstruction("你是一个乐于助人的助手。"),
-)
-
-// 运行一次对话
-agentRunner := runner.NewRunner("app", agent)
-events, _ := agentRunner.Run(ctx, "user-1", "session-1",
-    model.NewUserMessage("2+2 等于多少？"))
-```
-
-</td>
-<td valign="top">
-
-&nbsp;
-
-</td>
-</tr>
 </table>
 
 ## 目录
@@ -182,13 +182,13 @@ events, _ := agentRunner.Run(ctx, "user-1", "session-1",
 - [tRPC-Agent-Go](#trpc-agent-go)
   - [使用场景](#使用场景)
   - [核心特性](#核心特性)
+    - [**LLMAgent**](#llmagent)
     - [**多 Agent 编排**](#多-agent-编排)
     - [**先进的 Memory 系统**](#先进的-memory-系统)
     - [**丰富的 Tool 集成**](#丰富的-tool-集成)
     - [**生产可观测性**](#生产可观测性)
     - [**Agent Skills**](#agent-skills)
     - [**评测与基准**](#评测与基准)
-    - [**LLMAgent**](#llmagent)
   - [目录](#目录)
   - [文档](#文档)
   - [快速开始](#快速开始)

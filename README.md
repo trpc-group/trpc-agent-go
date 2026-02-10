@@ -42,6 +42,32 @@ English | [中文](README.zh_CN.md)
 
 <table>
 <tr>
+<td valign="top">
+
+### LLMAgent
+
+```go
+// Wrap a chat model as an LLMAgent
+modelInstance := openai.New("gpt-4o-mini")
+agent := llmagent.New("assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithInstruction("You are a helpful assistant."),
+)
+
+// Run a basic chat
+agentRunner := runner.NewRunner("app", agent)
+events, _ := agentRunner.Run(ctx, "user-1", "session-1",
+    model.NewUserMessage("What is 2+2?"))
+```
+
+</td>
+<td valign="top">
+
+&nbsp;
+
+</td>
+</tr>
+<tr>
 <td width="50%" valign="top">
 
 ### Multi-Agent Orchestration
@@ -151,32 +177,6 @@ _ = result.OverallStatus
 
 </td>
 </tr>
-<tr>
-<td valign="top">
-
-### LLMAgent
-
-```go
-// Wrap a chat model as an LLMAgent
-modelInstance := openai.New("gpt-4o-mini")
-agent := llmagent.New("assistant",
-    llmagent.WithModel(modelInstance),
-    llmagent.WithInstruction("You are a helpful assistant."),
-)
-
-// Run a basic chat
-agentRunner := runner.NewRunner("app", agent)
-events, _ := agentRunner.Run(ctx, "user-1", "session-1",
-    model.NewUserMessage("What is 2+2?"))
-```
-
-</td>
-<td valign="top">
-
-&nbsp;
-
-</td>
-</tr>
 </table>
 
 ## Table of Contents
@@ -184,13 +184,13 @@ events, _ := agentRunner.Run(ctx, "user-1", "session-1",
 - [tRPC-Agent-Go](#trpc-agent-go)
   - [Use Cases](#use-cases)
   - [Key Features](#key-features)
+    - [LLMAgent](#llmagent)
     - [Multi-Agent Orchestration](#multi-agent-orchestration)
     - [Advanced Memory System](#advanced-memory-system)
     - [Rich Tool Integration](#rich-tool-integration)
     - [Production Observability](#production-observability)
     - [Agent Skills](#agent-skills)
     - [Evaluation \& Benchmarks](#evaluation--benchmarks)
-    - [LLMAgent](#llmagent)
   - [Table of Contents](#table-of-contents)
   - [Documentation](#documentation)
   - [Quick Start](#quick-start)
