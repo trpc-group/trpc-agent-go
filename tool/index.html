@@ -979,6 +979,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#input-schema-and-field-descriptions" class="md-nav__link">
+    <span class="md-ellipsis">
+      Input Schema and field descriptions
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#streaming-tool-example" class="md-nav__link">
     <span class="md-ellipsis">
       Streaming Tool Example
@@ -2225,6 +2234,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#input-schema-and-field-descriptions" class="md-nav__link">
+    <span class="md-ellipsis">
+      Input Schema and field descriptions
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#streaming-tool-example" class="md-nav__link">
     <span class="md-ellipsis">
       Streaming Tool Example
@@ -2724,6 +2742,14 @@
 </span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7"></a><span class="w">    </span><span class="nx">Tool</span>
 </span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
+<p><strong>Recommendation (always configure <code>name</code> and <code>description</code>)</strong></p>
+<ul>
+<li><strong>name (required)</strong>: Used by the model to precisely select and invoke the tool. Keep it <strong>stable, unique, and descriptive</strong> (prefer <code>snake_case</code>), and avoid name collisions across Tools/ToolSets.</li>
+<li><strong>description (required)</strong>: Used by the model to understand what the tool does, when to use it, and any constraints. Missing or vague descriptions will noticeably reduce tool-call accuracy and stability.</li>
+</ul>
+<blockquote>
+<p>For Function Tools, set these via <code>function.WithName(...)</code> / <code>function.WithDescription(...)</code>. For custom Tools, set <code>Name</code> / <code>Description</code> on the <code>tool.Declaration</code> returned by <code>Declaration()</code>.</p>
+</blockquote>
 <h4 id="toolset">📦 ToolSet</h4>
 <p>A ToolSet is a collection of related tools that implements the <code>tool.ToolSet</code> interface. A ToolSet manages the lifecycle of tools, connections, and resource cleanup.</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1"> 1</a></span>
@@ -2854,9 +2880,9 @@
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a>
 </span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a><span class="c1">// 1. Define a tool function.</span>
 </span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4"></a><span class="kd">func</span><span class="w"> </span><span class="nx">calculator</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5"></a><span class="w">    </span><span class="nx">Operation</span><span class="w"> </span><span class="kt">string</span><span class="w">  </span><span class="s">`json:&quot;operation&quot;`</span>
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6"></a><span class="w">    </span><span class="nx">A</span><span class="w">         </span><span class="kt">float64</span><span class="w"> </span><span class="s">`json:&quot;a&quot;`</span>
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7"></a><span class="w">    </span><span class="nx">B</span><span class="w">         </span><span class="kt">float64</span><span class="w"> </span><span class="s">`json:&quot;b&quot;`</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5"></a><span class="w">    </span><span class="nx">Operation</span><span class="w"> </span><span class="kt">string</span><span class="w">  </span><span class="s">`json:&quot;operation&quot; jsonschema:&quot;description=Operation type e.g. add/multiply&quot;`</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6"></a><span class="w">    </span><span class="nx">A</span><span class="w">         </span><span class="kt">float64</span><span class="w"> </span><span class="s">`json:&quot;a&quot; jsonschema:&quot;description=First operand&quot;`</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7"></a><span class="w">    </span><span class="nx">B</span><span class="w">         </span><span class="kt">float64</span><span class="w"> </span><span class="s">`json:&quot;b&quot; jsonschema:&quot;description=Second operand&quot;`</span>
 </span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8"></a><span class="p">})</span><span class="w"> </span><span class="p">(</span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kd">interface</span><span class="p">{},</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9"></a><span class="w">    </span><span class="k">switch</span><span class="w"> </span><span class="nx">req</span><span class="p">.</span><span class="nx">Operation</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10"></a><span class="w">    </span><span class="k">case</span><span class="w"> </span><span class="s">&quot;add&quot;</span><span class="p">:</span>
@@ -2880,6 +2906,15 @@
 </span><span id="__span-3-28"><a id="__codelineno-3-28" name="__codelineno-3-28"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">model</span><span class="p">),</span>
 </span><span id="__span-3-29"><a id="__codelineno-3-29" name="__codelineno-3-29"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">calculatorTool</span><span class="p">}))</span>
 </span></code></pre></div></td></tr></table></div>
+<h3 id="input-schema-and-field-descriptions">Input Schema and field descriptions</h3>
+<p>For Function Tools, the input <code>req</code> is automatically converted into a JSON Schema (so the model can understand the expected arguments). Add field descriptions via struct tags:</p>
+<ul>
+<li><strong>Field name</strong>: use <code>json:"..."</code> as the schema property name.</li>
+<li><strong>Field description (recommended)</strong>: use <code>jsonschema:"description=..."</code> to populate <code>properties.&lt;field&gt;.description</code>.</li>
+<li><strong>Note</strong>: the <code>jsonschema</code> tag uses comma <code>,</code> as the separator, so <strong>the description value must not contain <code>,</code></strong>; otherwise it will be parsed as multiple tag items.</li>
+<li><strong>Compatibility</strong>: <code>description:"..."</code> is also supported for legacy code. If both <code>jsonschema:"description=..."</code> and <code>description:"..."</code> are present, the <code>jsonschema</code> description wins.</li>
+<li><strong>More flexible schema</strong>: if you need full control over the input schema (e.g. complex JSON Schema constraints), use <code>function.WithInputSchema(customInputSchema)</code> to bypass auto-generation.</li>
+</ul>
 <h3 id="streaming-tool-example">Streaming Tool Example</h3>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-4-2"> 2</a></span>
@@ -2944,7 +2979,7 @@
 <span class="normal"><a href="#__codelineno-4-61">61</a></span>
 <span class="normal"><a href="#__codelineno-4-62">62</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1"></a><span class="c1">// 1. Define input and output structures.</span>
 </span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2"></a><span class="kd">type</span><span class="w"> </span><span class="nx">weatherInput</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3"></a><span class="w">    </span><span class="nx">Location</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;location&quot;`</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3"></a><span class="w">    </span><span class="nx">Location</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;location&quot; jsonschema:&quot;description=Location to query e.g. city name or coordinates&quot;`</span>
 </span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4"></a><span class="p">}</span>
 </span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5"></a>
 </span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6"></a><span class="kd">type</span><span class="w"> </span><span class="nx">weatherOutput</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
@@ -4293,9 +4328,9 @@ execute tools instead. You can interrupt tool execution with
 </span><span id="__span-35-15"><a id="__codelineno-35-15" name="__codelineno-35-15"></a><span class="w">    </span><span class="c1">// 1. Create a simple tool.</span>
 </span><span id="__span-35-16"><a id="__codelineno-35-16" name="__codelineno-35-16"></a><span class="w">    </span><span class="nx">calculatorTool</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">function</span><span class="p">.</span><span class="nx">NewFunctionTool</span><span class="p">(</span>
 </span><span id="__span-35-17"><a id="__codelineno-35-17" name="__codelineno-35-17"></a><span class="w">        </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-35-18"><a id="__codelineno-35-18" name="__codelineno-35-18"></a><span class="w">            </span><span class="nx">Operation</span><span class="w"> </span><span class="kt">string</span><span class="w">  </span><span class="s">`json:&quot;operation&quot;`</span>
-</span><span id="__span-35-19"><a id="__codelineno-35-19" name="__codelineno-35-19"></a><span class="w">            </span><span class="nx">A</span><span class="w">         </span><span class="kt">float64</span><span class="w"> </span><span class="s">`json:&quot;a&quot;`</span>
-</span><span id="__span-35-20"><a id="__codelineno-35-20" name="__codelineno-35-20"></a><span class="w">            </span><span class="nx">B</span><span class="w">         </span><span class="kt">float64</span><span class="w"> </span><span class="s">`json:&quot;b&quot;`</span>
+</span><span id="__span-35-18"><a id="__codelineno-35-18" name="__codelineno-35-18"></a><span class="w">            </span><span class="nx">Operation</span><span class="w"> </span><span class="kt">string</span><span class="w">  </span><span class="s">`json:&quot;operation&quot; jsonschema:&quot;description=Operation type e.g. add/multiply&quot;`</span>
+</span><span id="__span-35-19"><a id="__codelineno-35-19" name="__codelineno-35-19"></a><span class="w">            </span><span class="nx">A</span><span class="w">         </span><span class="kt">float64</span><span class="w"> </span><span class="s">`json:&quot;a&quot; jsonschema:&quot;description=First operand&quot;`</span>
+</span><span id="__span-35-20"><a id="__codelineno-35-20" name="__codelineno-35-20"></a><span class="w">            </span><span class="nx">B</span><span class="w">         </span><span class="kt">float64</span><span class="w"> </span><span class="s">`json:&quot;b&quot; jsonschema:&quot;description=Second operand&quot;`</span>
 </span><span id="__span-35-21"><a id="__codelineno-35-21" name="__codelineno-35-21"></a><span class="w">        </span><span class="p">})</span><span class="w"> </span><span class="p">(</span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kd">interface</span><span class="p">{},</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-35-22"><a id="__codelineno-35-22" name="__codelineno-35-22"></a><span class="w">            </span><span class="kd">var</span><span class="w"> </span><span class="nx">result</span><span class="w"> </span><span class="kt">float64</span>
 </span><span id="__span-35-23"><a id="__codelineno-35-23" name="__codelineno-35-23"></a><span class="w">            </span><span class="k">switch</span><span class="w"> </span><span class="nx">req</span><span class="p">.</span><span class="nx">Operation</span><span class="w"> </span><span class="p">{</span>
@@ -4407,7 +4442,7 @@ execute tools instead. You can interrupt tool execution with
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 26, 2026 01:44:56 UTC">2026-01-26 01:44:56</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="February 10, 2026 02:18:26 UTC">2026-02-10 02:18:26</span>
   </span>
 
     

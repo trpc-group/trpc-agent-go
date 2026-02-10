@@ -979,6 +979,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#input-schema-schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      Input Schema（入参 schema）与字段描述
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#_7" class="md-nav__link">
     <span class="md-ellipsis">
       流式工具示例
@@ -2225,6 +2234,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#input-schema-schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      Input Schema（入参 schema）与字段描述
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#_7" class="md-nav__link">
     <span class="md-ellipsis">
       流式工具示例
@@ -2724,6 +2742,14 @@
 </span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7"></a><span class="w">    </span><span class="nx">Tool</span>
 </span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
+<p><strong>建议（务必配置 name 与 description）</strong></p>
+<ul>
+<li><strong>name（必填）</strong>：用于让模型精确定位要调用的工具。请保证 <strong>稳定、唯一、语义明确</strong>（建议使用 <code>snake_case</code>），不要在不同工具/不同 ToolSet 之间重名。</li>
+<li><strong>description（必填）</strong>：用于让模型理解“这个工具做什么/何时该用/有什么约束”。没有清晰的描述会显著降低 tool call 的命中率与稳定性。</li>
+</ul>
+<blockquote>
+<p>对于 Function Tool：通过 <code>function.WithName(...)</code> / <code>function.WithDescription(...)</code> 配置；对于自定义 Tool：在 <code>Declaration()</code> 返回的 <code>tool.Declaration</code> 中设置 <code>Name</code> / <code>Description</code>。</p>
+</blockquote>
 <h4 id="toolset">📦 ToolSet（工具集）</h4>
 <p>ToolSet 是一组相关工具的集合，实现 <code>tool.ToolSet</code> 接口。ToolSet 负责管理工具的生命周期、连接和资源清理。</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1"> 1</a></span>
@@ -2852,9 +2878,9 @@
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a>
 </span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a><span class="c1">// 1. 定义工具函数</span>
 </span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4"></a><span class="kd">func</span><span class="w"> </span><span class="nx">calculator</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5"></a><span class="w">    </span><span class="nx">Operation</span><span class="w"> </span><span class="kt">string</span><span class="w">  </span><span class="s">`json:&quot;operation&quot;`</span>
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6"></a><span class="w">    </span><span class="nx">A</span><span class="w">         </span><span class="kt">float64</span><span class="w"> </span><span class="s">`json:&quot;a&quot;`</span>
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7"></a><span class="w">    </span><span class="nx">B</span><span class="w">         </span><span class="kt">float64</span><span class="w"> </span><span class="s">`json:&quot;b&quot;`</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5"></a><span class="w">    </span><span class="nx">Operation</span><span class="w"> </span><span class="kt">string</span><span class="w">  </span><span class="s">`json:&quot;operation&quot; jsonschema:&quot;description=运算类型，例如 add/multiply&quot;`</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6"></a><span class="w">    </span><span class="nx">A</span><span class="w">         </span><span class="kt">float64</span><span class="w"> </span><span class="s">`json:&quot;a&quot; jsonschema:&quot;description=第一个操作数&quot;`</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7"></a><span class="w">    </span><span class="nx">B</span><span class="w">         </span><span class="kt">float64</span><span class="w"> </span><span class="s">`json:&quot;b&quot; jsonschema:&quot;description=第二个操作数&quot;`</span>
 </span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8"></a><span class="p">})</span><span class="w"> </span><span class="p">(</span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kd">interface</span><span class="p">{},</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9"></a><span class="w">    </span><span class="k">switch</span><span class="w"> </span><span class="nx">req</span><span class="p">.</span><span class="nx">Operation</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10"></a><span class="w">    </span><span class="k">case</span><span class="w"> </span><span class="s">&quot;add&quot;</span><span class="p">:</span>
@@ -2878,6 +2904,15 @@
 </span><span id="__span-3-28"><a id="__codelineno-3-28" name="__codelineno-3-28"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">model</span><span class="p">),</span>
 </span><span id="__span-3-29"><a id="__codelineno-3-29" name="__codelineno-3-29"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">calculatorTool</span><span class="p">}))</span>
 </span></code></pre></div></td></tr></table></div>
+<h3 id="input-schema-schema">Input Schema（入参 schema）与字段描述</h3>
+<p>Function Tool 的入参 <code>req</code> 会自动生成对应的 JSON Schema（用于模型理解参数结构）。建议通过 struct tag 补充字段描述：</p>
+<ul>
+<li><strong>字段名</strong>：使用 <code>json:"..."</code> 作为 schema 的字段名。</li>
+<li><strong>字段描述（推荐）</strong>：使用 <code>jsonschema:"description=..."</code> 写入 schema 的 <code>properties.&lt;field&gt;.description</code>。</li>
+<li><strong>注意</strong>：<code>jsonschema</code> tag 内部使用英文逗号 <code>,</code> 作为分隔符，因此 <strong>description 内容中不能包含 <code>,</code></strong>，否则会被误解析成多个 tag。</li>
+<li><strong>兼容</strong>：也支持 <code>description:"..."</code> 作为字段描述（用于历史代码）；若同时配置 <code>jsonschema:"description=..."</code> 与 <code>description:"..."</code>，以 <code>jsonschema</code> 中的 <code>description</code> 为准。</li>
+<li><strong>更灵活的 schema</strong>：如果想完全自定义入参 schema（例如需要更复杂的 JSON Schema 结构/约束），可使用 <code>function.WithInputSchema(customInputSchema)</code> 跳过自动生成。</li>
+</ul>
 <h3 id="_7">流式工具示例</h3>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-4-2"> 2</a></span>
@@ -2942,7 +2977,7 @@
 <span class="normal"><a href="#__codelineno-4-61">61</a></span>
 <span class="normal"><a href="#__codelineno-4-62">62</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1"></a><span class="c1">// 1. 定义输入输出结构</span>
 </span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2"></a><span class="kd">type</span><span class="w"> </span><span class="nx">weatherInput</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3"></a><span class="w">    </span><span class="nx">Location</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;location&quot;`</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3"></a><span class="w">    </span><span class="nx">Location</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;location&quot; jsonschema:&quot;description=查询地点，例如城市名或经纬度&quot;`</span>
 </span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4"></a><span class="p">}</span>
 </span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5"></a>
 </span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6"></a><span class="kd">type</span><span class="w"> </span><span class="nx">weatherOutput</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
@@ -4281,9 +4316,9 @@ Model Context Protocol (MCP)）来执行工具。此时可以使用
 </span><span id="__span-35-15"><a id="__codelineno-35-15" name="__codelineno-35-15"></a><span class="w">    </span><span class="c1">// 1. 创建简单工具</span>
 </span><span id="__span-35-16"><a id="__codelineno-35-16" name="__codelineno-35-16"></a><span class="w">    </span><span class="nx">calculatorTool</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">function</span><span class="p">.</span><span class="nx">NewFunctionTool</span><span class="p">(</span>
 </span><span id="__span-35-17"><a id="__codelineno-35-17" name="__codelineno-35-17"></a><span class="w">        </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-35-18"><a id="__codelineno-35-18" name="__codelineno-35-18"></a><span class="w">            </span><span class="nx">Operation</span><span class="w"> </span><span class="kt">string</span><span class="w">  </span><span class="s">`json:&quot;operation&quot;`</span>
-</span><span id="__span-35-19"><a id="__codelineno-35-19" name="__codelineno-35-19"></a><span class="w">            </span><span class="nx">A</span><span class="w">         </span><span class="kt">float64</span><span class="w"> </span><span class="s">`json:&quot;a&quot;`</span>
-</span><span id="__span-35-20"><a id="__codelineno-35-20" name="__codelineno-35-20"></a><span class="w">            </span><span class="nx">B</span><span class="w">         </span><span class="kt">float64</span><span class="w"> </span><span class="s">`json:&quot;b&quot;`</span>
+</span><span id="__span-35-18"><a id="__codelineno-35-18" name="__codelineno-35-18"></a><span class="w">            </span><span class="nx">Operation</span><span class="w"> </span><span class="kt">string</span><span class="w">  </span><span class="s">`json:&quot;operation&quot; jsonschema:&quot;description=运算类型，例如 add/multiply&quot;`</span>
+</span><span id="__span-35-19"><a id="__codelineno-35-19" name="__codelineno-35-19"></a><span class="w">            </span><span class="nx">A</span><span class="w">         </span><span class="kt">float64</span><span class="w"> </span><span class="s">`json:&quot;a&quot; jsonschema:&quot;description=第一个操作数&quot;`</span>
+</span><span id="__span-35-20"><a id="__codelineno-35-20" name="__codelineno-35-20"></a><span class="w">            </span><span class="nx">B</span><span class="w">         </span><span class="kt">float64</span><span class="w"> </span><span class="s">`json:&quot;b&quot; jsonschema:&quot;description=第二个操作数&quot;`</span>
 </span><span id="__span-35-21"><a id="__codelineno-35-21" name="__codelineno-35-21"></a><span class="w">        </span><span class="p">})</span><span class="w"> </span><span class="p">(</span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kd">interface</span><span class="p">{},</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-35-22"><a id="__codelineno-35-22" name="__codelineno-35-22"></a><span class="w">            </span><span class="kd">var</span><span class="w"> </span><span class="nx">result</span><span class="w"> </span><span class="kt">float64</span>
 </span><span id="__span-35-23"><a id="__codelineno-35-23" name="__codelineno-35-23"></a><span class="w">            </span><span class="k">switch</span><span class="w"> </span><span class="nx">req</span><span class="p">.</span><span class="nx">Operation</span><span class="w"> </span><span class="p">{</span>
@@ -4395,7 +4430,7 @@ Model Context Protocol (MCP)）来执行工具。此时可以使用
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月26日 01:44:56 UTC">2026-01-26 01:44:56</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年2月10日 02:18:26 UTC">2026-02-10 02:18:26</span>
   </span>
 
     
