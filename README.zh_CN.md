@@ -62,7 +62,24 @@ events, _ := agentRunner.Run(ctx, "user-1", "session-1",
 </td>
 <td valign="top">
 
-&nbsp;
+### GraphAgent
+
+```go
+// 构建一个简单的 Graph 工作流
+schema := graph.NewStateSchema()
+workflow, _ := graph.NewStateGraph(schema).
+    AddNode("start", func(ctx context.Context, state graph.State) (any, error) {
+        return nil, nil
+    }).
+    SetEntryPoint("start").
+    SetFinishPoint("start").
+    Compile()
+
+graphAgent, _ := graphagent.New("workflow", workflow)
+agentRunner := runner.NewRunner("app", graphAgent)
+events, _ := agentRunner.Run(ctx, "user-1", "session-1",
+    model.NewUserMessage("运行图工作流"))
+```
 
 </td>
 </tr>
@@ -183,6 +200,7 @@ _ = result.OverallStatus
   - [使用场景](#使用场景)
   - [核心特性](#核心特性)
     - [**LLMAgent**](#llmagent)
+    - [**GraphAgent**](#graphagent)
     - [**多 Agent 编排**](#多-agent-编排)
     - [**先进的 Memory 系统**](#先进的-memory-系统)
     - [**丰富的 Tool 集成**](#丰富的-tool-集成)

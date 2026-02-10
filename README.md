@@ -63,7 +63,24 @@ events, _ := agentRunner.Run(ctx, "user-1", "session-1",
 </td>
 <td valign="top">
 
-&nbsp;
+### GraphAgent
+
+```go
+// Compile a simple graph workflow
+schema := graph.NewStateSchema()
+workflow, _ := graph.NewStateGraph(schema).
+    AddNode("start", func(ctx context.Context, state graph.State) (any, error) {
+        return nil, nil
+    }).
+    SetEntryPoint("start").
+    SetFinishPoint("start").
+    Compile()
+
+graphAgent, _ := graphagent.New("workflow", workflow)
+agentRunner := runner.NewRunner("app", graphAgent)
+events, _ := agentRunner.Run(ctx, "user-1", "session-1",
+    model.NewUserMessage("Run the workflow"))
+```
 
 </td>
 </tr>
@@ -185,6 +202,7 @@ _ = result.OverallStatus
   - [Use Cases](#use-cases)
   - [Key Features](#key-features)
     - [LLMAgent](#llmagent)
+    - [GraphAgent](#graphagent)
     - [Multi-Agent Orchestration](#multi-agent-orchestration)
     - [Advanced Memory System](#advanced-memory-system)
     - [Rich Tool Integration](#rich-tool-integration)
