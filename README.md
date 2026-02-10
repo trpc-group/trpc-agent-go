@@ -176,7 +176,7 @@ mcpTool := mcptool.New(serverConn)
 ### Production Observability
 
 ```go
-func runWithLangfuse(ctx context.Context) error {
+func runWithLangfuse(ctx context.Context, baseAgent agent.Agent) error {
     // Start Langfuse integration
     clean, err := langfuse.Start(ctx)
     if err != nil {
@@ -184,7 +184,7 @@ func runWithLangfuse(ctx context.Context) error {
     }
     defer clean(ctx)
 
-    agentRunner := runner.NewRunner("app", agent)
+    agentRunner := runner.NewRunner("app", baseAgent)
     // Run with Langfuse attributes
     events, err := agentRunner.Run(ctx, "user-1", "session-1",
         model.NewUserMessage("Hello"),
@@ -237,8 +237,8 @@ func loadSkills() ([]tool.Tool, error) {
 ### Evaluation & Benchmarks
 
 ```go
-func runEvaluation(ctx context.Context, agentRunner runner.Runner) error {
-    evaluator, err := evaluation.New("app", agentRunner, evaluation.WithNumRuns(3))
+func runEvaluation(ctx context.Context, runner runner.Runner) error {
+    evaluator, err := evaluation.New("app", runner, evaluation.WithNumRuns(3))
     if err != nil {
         return err
     }
