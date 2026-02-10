@@ -163,8 +163,8 @@ agent := llmagent.New("assistant",
 )
 
 // 运行一次对话
-runner := runner.NewRunner("app", agent)
-events, _ := runner.Run(ctx, "user-1", "session-1",
+agentRunner := runner.NewRunner("app", agent)
+events, _ := agentRunner.Run(ctx, "user-1", "session-1",
     model.NewUserMessage("2+2 等于多少？"))
 ```
 

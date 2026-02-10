@@ -165,8 +165,8 @@ agent := llmagent.New("assistant",
 )
 
 // Run a basic chat
-runner := runner.NewRunner("app", agent)
-events, _ := runner.Run(ctx, "user-1", "session-1",
+agentRunner := runner.NewRunner("app", agent)
+events, _ := agentRunner.Run(ctx, "user-1", "session-1",
     model.NewUserMessage("What is 2+2?"))
 ```
 
