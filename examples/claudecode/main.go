@@ -13,7 +13,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -73,8 +72,6 @@ func runOnce(ctx context.Context, r runner.Runner, userID, sessionID, prompt str
 		return err
 	}
 	for evt := range ch {
-		data, _ := json.Marshal(evt)
-		fmt.Println(string(data))
 		if evt == nil {
 			continue
 		}
