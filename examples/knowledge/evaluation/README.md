@@ -41,8 +41,11 @@ export PGVECTOR_DATABASE="vector"
 ### Run Evaluation
 
 ```bash
-# Evaluate with LangChain knowledge base
+# Evaluate with LangChain knowledge base (native mode, default)
 python3 main.py --evaluator=ragas --kb=langchain
+
+# Evaluate with strict mode (fair baseline comparison)
+python3 main.py --evaluator=ragas --kb=langchain --eval-mode=strict
 
 # Evaluate with tRPC-Agent-Go knowledge base
 python3 main.py --evaluator=ragas --kb=trpc-agent-go
@@ -66,6 +69,7 @@ python3 main.py --evaluator=ragas --kb=langchain --output=results.json
 |--------|---------|-------------|
 | `--kb` | langchain | Knowledge base: `langchain`, `trpc-agent-go`, `agno`, or `crewai` |
 | `--evaluator` | ragas | Evaluator to use (currently only `ragas`) |
+| `--eval-mode` | native | `strict`: single search() for contexts (fair baseline); `native`: contexts from agent tool calls |
 | `--k` | 4 | Number of documents to retrieve per query |
 | `--max-qa` | all | Maximum QA items for evaluation |
 | `--max-docs` | all | Maximum documents to load |
@@ -87,6 +91,8 @@ All four systems use **identical parameters** to ensure fair comparison:
 | **Chunk Overlap** | 50 | 50 | 50 | 50 |
 | **Embedding Dimensions** | 1024 | 1024 | 1024 | 1024 |
 | **Vector Store** | PGVector | PGVector | PgVector | ChromaDB |
+| **Search Mode (strict)** | Vector | Vector | Vector | Vector |
+| **Search Mode (native)** | Vector | Hybrid (default) | Vector | Vector |
 | **Knowledge Base Build** | Native framework method | Native framework method | Native framework method | Native framework method |
 | **Agent Type** | Agent + KB (ReAct disabled) | Agent + KB (ReAct disabled) | Agent + KB (ReAct disabled) | Agent + KB (ReAct disabled) |
 | **Max Retrieval Results (k)** | 4 | 4 | 4 | 4 |
@@ -94,6 +100,42 @@ All four systems use **identical parameters** to ensure fair comparison:
 > 📝 **CrewAI Notes**:
 > - **Vector Store**: CrewAI does not currently support PGVector for knowledge base construction, so ChromaDB is used as the vector store.
 > - **Bug Fix**: CrewAI (v1.9.0) has a bug where it prioritizes `content` over `tool_calls` when the LLM (e.g., DeepSeek-V3.2) returns both simultaneously, causing the Agent to skip tool invocations. We applied a Monkey Patch to `LLM._handle_non_streaming_response` to prioritize `tool_calls`, ensuring fair evaluation. See `knowledge_system/crewai/knowledge_base.py` for details.
+
+## Evaluation Modes
+
+The framework supports two evaluation modes to address different comparison goals:
+
+### `strict` Mode (Fair Baseline)
+
+```bash
+python3 main.py --kb=langchain --eval-mode=strict
+```
+
+- **Context collection**: A single deterministic `search(question, k)` call provides the contexts for RAGAS evaluation, **decoupled from the agent**.
+- **Answer generation**: The agent's `answer()` is still called normally, but its internally retrieved contexts are **not** used for evaluation.
+- **Search mode**: tRPC-Agent-Go uses **vector-only** search (no hybrid/keyword), matching the pure vector similarity search used by LangChain, Agno, and CrewAI.
+- **Purpose**: Ensures all frameworks are evaluated on the **exact same retrieval result** for each question, eliminating differences caused by agent multi-turn tool calls, query rewriting, or hybrid search strategies.
+- **Failed samples**: Preserved with placeholder values to guarantee identical sample sets across frameworks.
+
+### `native` Mode (Real-World Behavior)
+
+```bash
+python3 main.py --kb=langchain --eval-mode=native
+```
+
+- **Context collection**: Contexts come from the agent's actual tool call responses during `answer()`.
+- **Search mode**: Each framework uses its **native retrieval pipeline** (e.g., tRPC-Agent-Go may use hybrid search, query enhancement, and reranking).
+- **Purpose**: Measures the **end-to-end real-world performance** of each framework's complete RAG pipeline, including agent behavior, multi-turn retrieval, and framework-specific optimizations.
+- **Failed samples**: Preserved with placeholder values.
+
+### When to Use Which Mode
+
+| Goal | Mode |
+|------|------|
+| Fair horizontal comparison of retrieval + generation quality | `strict` |
+| Measure real-world production performance | `native` |
+| Debug retrieval pipeline differences | `strict` (compare contexts directly) |
+| Evaluate agent tool-calling behavior | `native` |
 
 ## System Prompt
 

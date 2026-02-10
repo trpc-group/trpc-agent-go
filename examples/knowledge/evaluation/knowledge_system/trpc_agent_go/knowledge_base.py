@@ -33,6 +33,7 @@ class TRPCAgentGoKnowledgeBase(KnowledgeBase):
         timeout: int = 120,
         auto_start: bool = True,
         vectorstore: str = "pgvector",
+        search_mode: int = 0,
     ):
         """
         Initialize the knowledge base client.
@@ -42,11 +43,14 @@ class TRPCAgentGoKnowledgeBase(KnowledgeBase):
             timeout: Request timeout in seconds.
             auto_start: If True, automatically build and start the Go service.
             vectorstore: Vector store type: inmemory|pgvector.
+            search_mode: Search mode for the Go service: 0=hybrid (default), 1=vector, 2=keyword, 3=filter.
         """
         self.port = port
         self.service_url = f"http://localhost:{port}"
         self.timeout = timeout
         self.vectorstore = vectorstore
+        self.search_mode = search_mode
+        self.last_trace: Optional[dict] = None
 
         if auto_start:
             self._ensure_service_running()
@@ -78,9 +82,9 @@ class TRPCAgentGoKnowledgeBase(KnowledgeBase):
         if not os.path.exists(GO_SERVICE_PATH):
             raise RuntimeError(f"Go binary not found at {GO_SERVICE_PATH}")
 
-        print(f"Starting Go service on port {self.port}...")
+        print(f"Starting Go service on port {self.port} (search_mode={self.search_mode})...")
         TRPCAgentGoKnowledgeBase._process = subprocess.Popen(
-            [GO_SERVICE_PATH, f"--port={self.port}", f"--vectorstore={self.vectorstore}"],
+            [GO_SERVICE_PATH, f"--port={self.port}", f"--vectorstore={self.vectorstore}", f"--search-mode={self.search_mode}"],
             cwd=GO_SERVICE_DIR,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -214,6 +218,7 @@ class TRPCAgentGoKnowledgeBase(KnowledgeBase):
         result = response.json()
         answer = result.get("answer", "")
         trace = result.get("trace")  # Extract trace from response
+        self.last_trace = trace if isinstance(trace, dict) else None
 
         search_results = [
             SearchResult(

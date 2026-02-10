@@ -37,8 +37,11 @@ export PGVECTOR_DATABASE="vector"
 ### 运行评测
 
 ```bash
-# 评测 LangChain
+# 评测 LangChain（native 模式，默认）
 python3 main.py --kb=langchain
+
+# 使用 strict 模式评测（公平基线对比）
+python3 main.py --kb=langchain --eval-mode=strict
 
 # 评测 tRPC-Agent-Go
 python3 main.py --kb=trpc-agent-go
@@ -62,6 +65,8 @@ python3 main.py --kb=trpc-agent-go --max-qa=1 --full-log
 | **Chunk Overlap**        | 50                      | 50                      | 50                      | 50                      |
 | **Embedding Dimensions** | 1024                    | 1024                    | 1024                    | 1024                    |
 | **Vector Store**         | PGVector                | PGVector                | PgVector                | ChromaDB                |
+| **检索模式 (strict)**    | Vector                  | Vector                  | Vector                  | Vector                  |
+| **检索模式 (native)**    | Vector                  | Hybrid (默认)           | Vector                  | Vector                  |
 | **Knowledge Base 构建**  | 框架原生方式            | 框架原生方式            | 框架原生方式            | 框架原生方式            |
 | **Agent 类型**           | Agent + KB (ReAct 关闭) | Agent + KB (ReAct 关闭) | Agent + KB (ReAct 关闭) | Agent + KB (ReAct 关闭) |
 | **单次检索数量 (k)**     | 4                       | 4                       | 4                       | 4                       |
@@ -70,6 +75,42 @@ python3 main.py --kb=trpc-agent-go --max-qa=1 --full-log
 >
 > - **Vector Store**：由于 CrewAI 目前不支持 PGVector 构建知识库，这里使用 ChromaDB 作为向量存储。
 > - **Bug 修复**：CrewAI (v1.9.0) 存在一个 Bug，当 LLM（如 DeepSeek-V3.2）同时返回 `content` 和 `tool_calls` 时，框架会优先返回 `content` 而忽略 `tool_calls`，导致 Agent 无法正常调用工具。我们通过 Monkey Patch 修复了 `LLM._handle_non_streaming_response` 方法，使其优先处理 `tool_calls`，确保评测的公平性。详见 `knowledge_system/crewai/knowledge_base.py`。
+
+## 评测模式
+
+框架支持两种评测模式，分别对应不同的对比目标：
+
+### `strict` 模式（公平基线）
+
+```bash
+python3 main.py --kb=langchain --eval-mode=strict
+```
+
+- **上下文采集**：每题固定一次 `search(question, k)` 调用获取上下文，**与 Agent 解耦**。
+- **答案生成**：Agent 的 `answer()` 仍然正常调用，但其内部检索到的上下文**不用于评测**。
+- **检索模式**：tRPC-Agent-Go 使用**纯向量检索**（非 Hybrid/关键词），与 LangChain、Agno、CrewAI 的纯向量相似度检索一致。
+- **用途**：确保所有框架在**完全相同的检索结果**上被评测，消除 Agent 多轮工具调用、Query 改写、混合检索等差异。
+- **失败样本**：保留并填充占位值，保证各框架的样本集合完全一致。
+
+### `native` 模式（真实表现）
+
+```bash
+python3 main.py --kb=langchain --eval-mode=native
+```
+
+- **上下文采集**：上下文来自 Agent 在 `answer()` 过程中的实际工具调用响应。
+- **检索模式**：各框架使用**原生检索管线**（如 tRPC-Agent-Go 可能使用混合检索、Query 增强、重排序等）。
+- **用途**：衡量各框架完整 RAG 管线的**端到端真实表现**，包括 Agent 行为、多轮检索、框架特有优化。
+- **失败样本**：保留并填充占位值。
+
+### 模式选择指南
+
+| 目标 | 模式 |
+|------|------|
+| 公平横向对比检索+生成质量 | `strict` |
+| 衡量生产环境真实表现 | `native` |
+| 调试检索管线差异 | `strict`（直接对比上下文） |
+| 评估 Agent 工具调用行为 | `native` |
 
 ## 系统提示词 (System Prompt)
 

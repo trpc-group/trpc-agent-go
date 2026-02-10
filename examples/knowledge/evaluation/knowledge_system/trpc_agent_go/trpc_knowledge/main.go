@@ -37,6 +37,7 @@ import (
 var (
 	port           = flag.Int("port", 8765, "HTTP server port")
 	vectorStoreArg = flag.String("vectorstore", "pgvector", "Vector store type: inmemory|pgvector")
+	searchModeArg  = flag.Int("search-mode", 0, "Search mode: 0=hybrid (default), 1=vector, 2=keyword, 3=filter")
 	modelName      = getEnvOrDefault("MODEL_NAME", "deepseek-v3.2")
 )
 
@@ -84,13 +85,15 @@ type AnswerResponse struct {
 func main() {
 	flag.Parse()
 
+	searchModeNames := map[int]string{0: "hybrid", 1: "vector", 2: "keyword", 3: "filter"}
 	fmt.Println("🚀 Knowledge Base HTTP Service")
 	fmt.Printf("Model: %s\n", modelName)
 	fmt.Printf("Vector Store: %s\n", *vectorStoreArg)
+	fmt.Printf("Search Mode: %s (%d)\n", searchModeNames[*searchModeArg], *searchModeArg)
 	fmt.Println(strings.Repeat("=", 50))
 
 	var err error
-	knowledgeSvc, err = NewKnowledgeService(VectorStoreType(*vectorStoreArg), modelName)
+	knowledgeSvc, err = NewKnowledgeService(VectorStoreType(*vectorStoreArg), modelName, *searchModeArg)
 	if err != nil {
 		log.Fatalf("Failed to initialize knowledge service: %v", err)
 	}

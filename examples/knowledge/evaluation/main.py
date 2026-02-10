@@ -5,12 +5,136 @@ Main entry point for RAG evaluation with different evaluators.
 import argparse
 import json
 import os
+import platform
 import time
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from dataset.base import BaseDataset
 from knowledge_system.base import KnowledgeBase
 from evaluator.base import Evaluator, EvaluationSample
+
+
+def _normalize_query(query: Any) -> Optional[str]:
+    """Normalize a query value to a non-empty string."""
+    if isinstance(query, str):
+        normalized = query.strip()
+        if normalized:
+            return normalized
+    return None
+
+
+def _extract_query_from_tool_call_arguments(arguments: Any) -> Optional[str]:
+    """Extract query text from tool-call arguments."""
+    if isinstance(arguments, dict):
+        return _normalize_query(arguments.get("query"))
+
+    if isinstance(arguments, str):
+        argument_text = arguments.strip()
+        if not argument_text:
+            return None
+        try:
+            payload = json.loads(argument_text)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(payload, dict):
+            return _normalize_query(payload.get("query"))
+    return None
+
+
+def _dedupe_queries(queries: List[str]) -> List[str]:
+    """Dedupe queries while preserving original order."""
+    seen = set()
+    deduped = []
+    for query in queries:
+        if query in seen:
+            continue
+        seen.add(query)
+        deduped.append(query)
+    return deduped
+
+
+def extract_retrieval_queries(
+    question: str,
+    eval_mode: str,
+    search_results: List[Any],
+    fallback_trace: Optional[dict] = None,
+) -> List[str]:
+    """Extract retrieval queries from search-result metadata or agent trace."""
+    if eval_mode == "strict":
+        # Strict mode always issues one deterministic retrieval by question text.
+        return [question]
+
+    queries: List[str] = []
+
+    # CrewAI path: tool query is attached to per-result metadata.
+    for result in search_results:
+        metadata = getattr(result, "metadata", None)
+        if not isinstance(metadata, dict):
+            continue
+        normalized = _normalize_query(metadata.get("tool_query"))
+        if normalized:
+            queries.append(normalized)
+
+    # tRPC-Agent-Go path: tool query is embedded in trace.tool_calls[*].arguments.
+    trace: Optional[dict] = None
+    for result in search_results:
+        candidate = getattr(result, "trace", None)
+        if isinstance(candidate, dict):
+            trace = candidate
+            break
+
+    if trace is None and isinstance(fallback_trace, dict):
+        trace = fallback_trace
+
+    if isinstance(trace, dict):
+        tool_queries = trace.get("tool_queries", [])
+        if isinstance(tool_queries, list):
+            for query in tool_queries:
+                normalized = _normalize_query(query)
+                if normalized:
+                    queries.append(normalized)
+
+        tool_calls = trace.get("tool_calls", [])
+        if isinstance(tool_calls, list):
+            for call in tool_calls:
+                if not isinstance(call, dict):
+                    continue
+                extracted = _extract_query_from_tool_call_arguments(call.get("arguments"))
+                if extracted:
+                    queries.append(extracted)
+
+    return _dedupe_queries(queries)
+
+
+def build_run_manifest(
+    kb_name: str,
+    evaluator_name: str,
+    eval_mode: str,
+    max_docs: Optional[int],
+    max_qa_items: Optional[int],
+    retrieval_k: int,
+    skip_load: bool,
+    force_reload: bool,
+) -> Dict[str, Any]:
+    """Build a manifest capturing all key configuration for reproducibility."""
+    from util import get_config
+    config = get_config()
+    return {
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "platform": platform.platform(),
+        "python_version": platform.python_version(),
+        "knowledge_base": kb_name,
+        "evaluator": evaluator_name,
+        "eval_mode": eval_mode,
+        "model_name": config.get("model_name", ""),
+        "eval_model_name": config.get("eval_model_name", ""),
+        "embedding_model": config.get("embedding_model", ""),
+        "retrieval_k": retrieval_k,
+        "max_docs": max_docs,
+        "max_qa_items": max_qa_items,
+        "skip_load": skip_load,
+        "force_reload": force_reload,
+    }
 
 
 def run_evaluation(
@@ -24,6 +148,9 @@ def run_evaluation(
     full_log: bool = False,
     output_file: Optional[str] = None,
     force_reload: bool = True,
+    eval_mode: str = "native",
+    kb_name: str = "unknown",
+    evaluator_name: str = "unknown",
 ) -> str:
     """
     Run RAG evaluation with specified evaluator.
@@ -39,11 +166,31 @@ def run_evaluation(
         full_log: If True, print full answer results for each question.
         output_file: Optional path to save evaluation results as JSON.
         force_reload: If True (default), force reload documents even if already cached.
+        eval_mode: Evaluation mode - "strict" uses a single search() call for contexts
+                   (decoupled from agent); "native" uses contexts from agent tool calls.
+        kb_name: Name of the knowledge base implementation (for manifest).
+        evaluator_name: Name of the evaluator (for manifest).
 
     Returns:
         Evaluation results as formatted string.
     """
-    print("=== RAG Evaluation ===\n")
+    print(f"=== RAG Evaluation (mode={eval_mode}) ===\n")
+
+    # Build and print run manifest for reproducibility
+    manifest = build_run_manifest(
+        kb_name=kb_name,
+        evaluator_name=evaluator_name,
+        eval_mode=eval_mode,
+        max_docs=max_docs,
+        max_qa_items=max_qa_items,
+        retrieval_k=retrieval_k,
+        skip_load=skip_load,
+        force_reload=force_reload,
+    )
+    print("📋 Run Manifest:")
+    for k, v in manifest.items():
+        print(f"   {k}: {v}")
+    print()
 
     # Step 1: Load QA items
     print("1. Loading QA items...")
@@ -58,22 +205,23 @@ def run_evaluation(
         doc_dir = dataset.load_documents(max_docs, filter_extensions=[".md"], force_reload=force_reload)
 
         file_paths = []
-        for filename in os.listdir(doc_dir):
+        for filename in sorted(os.listdir(doc_dir)):
             filepath = os.path.join(doc_dir, filename)
             if os.path.isfile(filepath):
                 file_paths.append(filepath)
 
-        print(f"   Found {len(file_paths)} documents.")
+        print(f"   Found {len(file_paths)} documents (sorted for reproducibility).")
 
         print("3. Building knowledge base...")
         kb.load(file_paths)
         print("   Knowledge base built.\n")
 
     # Step 3: Run Q&A
-    print("4. Running Q&A with fresh sessions...")
+    print(f"4. Running Q&A with fresh sessions (mode={eval_mode})...")
     samples = []
     errors = []
     qa_times = []
+    sample_debug = []
     qa_start_total = time.time()
 
     for i, qa in enumerate(qa_items):
@@ -81,8 +229,27 @@ def run_evaluation(
         qa_start = time.time()
 
         try:
-            answer, search_results = kb.answer(qa.question, k=retrieval_k)
-            contexts = [r.content for r in search_results]
+            if eval_mode == "strict":
+                # Strict mode: decouple context retrieval from agent answer.
+                # 1) One deterministic search() call for contexts.
+                # 2) One answer() call for the generated answer.
+                # This ensures every framework is evaluated on the same
+                # single-pass retrieval result regardless of how the agent
+                # internally invokes tools.
+                search_results = kb.search(qa.question, k=retrieval_k)
+                contexts = [r.content for r in search_results]
+                answer, _ = kb.answer(qa.question, k=retrieval_k)
+            else:
+                # Native mode: contexts come from the agent's tool calls.
+                answer, search_results = kb.answer(qa.question, k=retrieval_k)
+                contexts = [r.content for r in search_results]
+
+            retrieval_queries = extract_retrieval_queries(
+                question=qa.question,
+                eval_mode=eval_mode,
+                search_results=search_results,
+                fallback_trace=getattr(kb, "last_trace", None),
+            )
 
             if not contexts:
                 print("   ⚠️  No contexts retrieved, using placeholder")
@@ -93,6 +260,12 @@ def run_evaluation(
 
             print(f"   A: {answer[:200]}{'...' if len(answer) > 200 else ''}")
             print(f"   Retrieved {len(search_results)} contexts, took {qa_elapsed:.2f}s")
+            if retrieval_queries:
+                print(f"   Retrieval queries ({len(retrieval_queries)}):")
+                for idx, query in enumerate(retrieval_queries, 1):
+                    print(f"      [{idx}] {query}")
+            else:
+                print("   Retrieval queries: unavailable")
 
             if full_log:
                 print("\n   === Full Answer ===")
@@ -109,11 +282,32 @@ def run_evaluation(
                     ground_truth=qa.answer,
                 )
             )
+            sample_debug.append(
+                {
+                    "question": qa.question,
+                    "retrieval_queries": retrieval_queries,
+                }
+            )
         except Exception as e:
             qa_elapsed = time.time() - qa_start
             print(f"   ❌ Error: {e} (took {qa_elapsed:.2f}s)")
             errors.append({"question": qa.question, "error": str(e), "time": qa_elapsed})
-            continue
+            # Preserve failed samples with placeholder values so that every
+            # framework is evaluated on the exact same question set.
+            samples.append(
+                EvaluationSample(
+                    question=qa.question,
+                    answer="Error: failed to generate answer.",
+                    contexts=["No relevant context found."],
+                    ground_truth=qa.answer,
+                )
+            )
+            sample_debug.append(
+                {
+                    "question": qa.question,
+                    "retrieval_queries": [],
+                }
+            )
 
     qa_total_time = time.time() - qa_start_total
 
@@ -164,12 +358,7 @@ def run_evaluation(
     # Save results if specified
     if output_file:
         output_data = {
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "config": {
-                "max_docs": max_docs,
-                "max_qa_items": max_qa_items,
-                "retrieval_k": retrieval_k,
-            },
+            "manifest": manifest,
             "timing": {
                 "qa_total_seconds": round(qa_total_time, 2),
                 "qa_avg_seconds": round(avg_time, 2),
@@ -180,6 +369,7 @@ def run_evaluation(
             "errors_count": len(errors),
             "result": result,
             "errors": errors,
+            "sample_debug": sample_debug,
         }
         with open(output_file, "w", encoding="utf-8") as f:
             json.dump(output_data, f, indent=2, ensure_ascii=False)
@@ -241,6 +431,14 @@ def main():
         type=str,
         default=None,
         help="Output file path to save evaluation results as JSON",
+    )
+    parser.add_argument(
+        "--eval-mode",
+        choices=["strict", "native"],
+        default="native",
+        help="Evaluation mode: 'strict' uses a single search() for contexts "
+             "(fair baseline); 'native' uses contexts from agent tool calls "
+             "(real-world behavior). Default: native",
     )
     parser.add_argument(
         "--cache-document",
@@ -305,6 +503,9 @@ def main():
         full_log=args.full_log,
         output_file=args.output,
         force_reload=not args.cache_document,
+        eval_mode=args.eval_mode,
+        kb_name=args.kb,
+        evaluator_name=args.evaluator,
     )
 
 

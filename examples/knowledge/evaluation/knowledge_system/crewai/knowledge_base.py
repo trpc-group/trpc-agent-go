@@ -180,6 +180,7 @@ class CrewAIKnowledgeBase(KnowledgeBase):
 
         self._last_search_results: List[SearchResult] = []
         self._loaded_file_paths: List[str] = []
+        self.last_trace: Optional[dict] = None
 
     def _split_text(self, text: str) -> List[str]:
         """Split text into chunks with overlap similar to LangChain splitter."""
@@ -355,13 +356,27 @@ class CrewAIKnowledgeBase(KnowledgeBase):
         self._last_search_results = []
         last_results = self._last_search_results
         effective_k = k or self._max_results
+        tool_queries: List[str] = []
 
         # Create search tool that uses ChromaDB directly
         @tool("search_knowledge_base")
         def search_knowledge_base(query: str) -> str:
             """Search the knowledge base for relevant information about a query."""
+            normalized_query = query.strip()
+            if normalized_query:
+                tool_queries.append(normalized_query)
             results = self.search(query, k=effective_k)
-            last_results.extend(results)
+            for result in results:
+                metadata = dict(result.metadata) if isinstance(result.metadata, dict) else {}
+                if normalized_query:
+                    metadata["tool_query"] = normalized_query
+                last_results.append(
+                    SearchResult(
+                        content=result.content,
+                        score=result.score,
+                        metadata=metadata,
+                    )
+                )
 
             if not results:
                 return "No relevant documents found."
@@ -379,7 +394,7 @@ class CrewAIKnowledgeBase(KnowledgeBase):
         # Create CrewAI agent with native knowledge sources
         researcher = Agent(
             role="Knowledge Base Researcher",
-            goal="Answer questions accurately using only the knowledge base",
+            goal="",
             backstory=AGENT_INSTRUCTIONS,
             tools=[search_knowledge_base],
             llm=self._llm,
@@ -407,5 +422,10 @@ class CrewAIKnowledgeBase(KnowledgeBase):
 
         result = crew.kickoff()
         answer = str(result) if result else ""
+
+        trace = {"tool_queries": tool_queries}
+        self.last_trace = trace
+        for search_result in self._last_search_results:
+            search_result.trace = trace
 
         return answer, self._last_search_results

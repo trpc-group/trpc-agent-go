@@ -38,6 +38,18 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+// searchModeKnowledge wraps a Knowledge instance and forces a specific search mode
+// on every Search call. This is used in evaluation to ensure consistent search behavior.
+type searchModeKnowledge struct {
+	inner      knowledge.Knowledge
+	searchMode int
+}
+
+func (w *searchModeKnowledge) Search(ctx context.Context, req *knowledge.SearchRequest) (*knowledge.SearchResult, error) {
+	req.SearchMode = w.searchMode
+	return w.inner.Search(ctx, req)
+}
+
 // VectorStoreType defines the type of vector store.
 type VectorStoreType string
 
@@ -49,19 +61,22 @@ const (
 
 // KnowledgeService manages knowledge base operations.
 type KnowledgeService struct {
-	kb        *knowledge.BuiltinKnowledge
-	vs        vectorstore.VectorStore
-	emb       embedder.Embedder
-	lock      sync.RWMutex
-	storeType VectorStoreType
-	modelName string
+	kb         *knowledge.BuiltinKnowledge
+	vs         vectorstore.VectorStore
+	emb        embedder.Embedder
+	lock       sync.RWMutex
+	storeType  VectorStoreType
+	modelName  string
+	searchMode int // default search mode: 0=hybrid, 1=vector, 2=keyword, 3=filter
 }
 
 // NewKnowledgeService creates a new KnowledgeService instance.
-func NewKnowledgeService(storeType VectorStoreType, modelName string) (*KnowledgeService, error) {
+// searchMode: 0=hybrid (default), 1=vector, 2=keyword, 3=filter.
+func NewKnowledgeService(storeType VectorStoreType, modelName string, searchMode int) (*KnowledgeService, error) {
 	svc := &KnowledgeService{
-		storeType: storeType,
-		modelName: modelName,
+		storeType:  storeType,
+		modelName:  modelName,
+		searchMode: searchMode,
 	}
 
 	var err error
@@ -117,6 +132,7 @@ func (s *KnowledgeService) newPGVectorStore() (vectorstore.VectorStore, error) {
 		pgvector.WithPGVectorClientDSN(dsn),
 		pgvector.WithTable(table),
 		pgvector.WithIndexDimension(1024), // Match embedding model dimension
+		pgvector.WithHybridSearchWeights(0.5, 0.5),
 	)
 }
 
@@ -168,13 +184,25 @@ func (s *KnowledgeService) Search(ctx context.Context, query string, k int) ([]*
 	result, err := s.kb.Search(ctx, &knowledge.SearchRequest{
 		Query:      query,
 		MaxResults: k,
+		SearchMode: s.searchMode,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("search failed: %w", err)
 	}
 
 	var documents []*DocumentResult
-	for _, doc := range result.Documents {
+	for i, doc := range result.Documents {
+		denseScore, hasDenseScore := metadataScore(doc.Document.Metadata, source.MetadataDenseScore)
+		sparseScore, hasSparseScore := metadataScore(doc.Document.Metadata, source.MetadataSparseScore)
+		log.Infof(
+			"[Search] [%d/%d] score=%.4f dense=%s sparse=%s text=%s",
+			i+1,
+			len(result.Documents),
+			doc.Score,
+			formatMetadataScore(denseScore, hasDenseScore),
+			formatMetadataScore(sparseScore, hasSparseScore),
+			truncateForLog(doc.Document.Content, 200),
+		)
 		documents = append(documents, &DocumentResult{
 			Text:     doc.Document.Content,
 			Score:    doc.Score,
@@ -237,7 +265,13 @@ func (s *KnowledgeService) runAgent(ctx context.Context, question string, k int)
 	s.lock.RLock()
 	defer s.lock.RUnlock()
 
-	// Create search tool with description matching LangChain
+	// Create search tool with description matching LangChain.
+	// Wrap the knowledge base to force the configured search mode,
+	// ensuring consistent retrieval behavior during evaluation.
+	// var kb knowledge.Knowledge = s.kb
+	// if s.searchMode != 0 {
+	// 	kb = &searchModeKnowledge{inner: s.kb, searchMode: s.searchMode}
+	// }
 
 	toolDescription := "Search the knowledge base for relevant information."
 	searchTool := knowledgetool.NewKnowledgeSearchTool(
@@ -472,7 +506,15 @@ func (s *KnowledgeService) captureToolResponses(evt *event.Event, trace *AgentTr
 				for _, doc := range searchResp.Documents {
 					if doc.Text != "" {
 						result.Contexts = append(result.Contexts, doc.Text)
-						log.Infof("[Agent] [Context Extracted] (score=%.4f): %s", doc.Score, truncateForLog(doc.Text, 200))
+						denseScore, hasDenseScore := metadataScore(doc.Metadata, source.MetadataDenseScore)
+						sparseScore, hasSparseScore := metadataScore(doc.Metadata, source.MetadataSparseScore)
+						log.Infof(
+							"[Agent] [Context Extracted] (score=%.4f dense=%s sparse=%s): %s",
+							doc.Score,
+							formatMetadataScore(denseScore, hasDenseScore),
+							formatMetadataScore(sparseScore, hasSparseScore),
+							truncateForLog(doc.Text, 200),
+						)
 					}
 				}
 			} else {
@@ -514,6 +556,49 @@ func truncateForLog(s string, maxLen int) string {
 		return s[:maxLen] + "..."
 	}
 	return s
+}
+
+func metadataScore(metadata map[string]any, key string) (float64, bool) {
+	if metadata == nil {
+		return 0, false
+	}
+	value, ok := metadata[key]
+	if !ok || value == nil {
+		return 0, false
+	}
+	switch v := value.(type) {
+	case float64:
+		return v, true
+	case float32:
+		return float64(v), true
+	case int:
+		return float64(v), true
+	case int32:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case json.Number:
+		parsed, err := v.Float64()
+		if err != nil {
+			return 0, false
+		}
+		return parsed, true
+	case string:
+		parsed, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return 0, false
+		}
+		return parsed, true
+	default:
+		return 0, false
+	}
+}
+
+func formatMetadataScore(score float64, hasScore bool) string {
+	if !hasScore {
+		return "N/A"
+	}
+	return fmt.Sprintf("%.4f", score)
 }
 
 func getEnvOrDefault(key, defaultValue string) string {
