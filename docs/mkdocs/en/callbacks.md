@@ -325,6 +325,47 @@ type ToolResultMessagesFunc = func(
 - If the callback returns non-empty messages, they replace the default tool message.
 - When using llmagent with built-in OpenAI/Anthropic adapters, the recommended return type is `[]model.Message`.
 
+#### Large Tool Result Eviction
+
+When tool result content grows too large, the framework automatically evicts it to
+the configured artifact service and replaces the tool message content with a
+truncated preview plus an `artifact://` reference. This applies to both default
+tool results and callback-provided results.
+
+- **Default limit:** 20,000 tokens (estimated at ~4 bytes per token).
+- **Runtime override:** pass `agent.WithRuntimeState(map[string]any{ "tool_token_limit_before_evict": <int> })`.
+- **Disable eviction:** set the runtime value to `0` or a negative number.
+
+Example payload sent to the model:
+
+```json
+{"preview":"...","ref":"artifact://tool_result_echo_call-1.json@0","hint":"Large result saved. Use read_file with ref and start_line/num_lines to page."}
+```
+
+To read the full result, extract the `ref` and fetch it with the file tool (supports `artifact://`)
+or use the Go helper:
+
+```go
+var payload struct {
+    Preview string `json:"preview"`
+    Ref     string `json:"ref"`
+}
+_ = json.Unmarshal([]byte(msg.Content), &payload)
+full, _, handled, _ := fileref.TryRead(ctx, payload.Ref)
+_ = handled
+_ = full
+```
+
+For large results, the stored artifact is formatted for chunked reads:
+- JSON objects/arrays are pretty-printed.
+- Large string outputs are wrapped with line breaks.
+
+Use `read_file` with `start_line` / `num_lines` to page through the result:
+
+```json
+{"file_name":"artifact://tool_result_echo_call-1.json@0","start_line":1,"num_lines":50}
+```
+
 **Usage example:**
 
 ```go

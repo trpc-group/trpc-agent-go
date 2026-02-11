@@ -657,14 +657,11 @@ func TestFileTool_ReadFile_ArtifactRef(t *testing.T) {
 		UserID:    sess.UserID,
 		SessionID: sess.ID,
 	}
-	ctxIO := codeexecutor.WithArtifactService(ctx, svc)
-	ctxIO = codeexecutor.WithArtifactSession(ctxIO, info)
-	_, err = codeexecutor.SaveArtifactHelper(
-		ctxIO,
-		"x.txt",
-		[]byte("hi"),
-		"text/plain",
-	)
+	_, err = svc.SaveArtifact(ctx, info, "x.txt", &artifact.Artifact{
+		Data:     []byte("hi"),
+		MimeType: "text/plain",
+		Name:     "x.txt",
+	})
 	assert.NoError(t, err)
 
 	rsp, err := fileToolSet.readFile(ctx, &readFileRequest{

@@ -10,17 +10,21 @@
 package processor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
@@ -48,6 +52,18 @@ const (
 // funcRespCompletionTimeout is the default wait duration for ensuring a
 // tool.response event has been processed by the session persistence layer.
 const funcRespCompletionTimeout = 5 * time.Second
+
+const (
+	toolTokenLimitBeforeEvictKey = "tool_token_limit_before_evict"
+
+	defaultToolTokenLimitBeforeEvict = 20000
+	toolResultChunkRunes             = 2048
+	toolResultPreviewRunes           = 1024
+	toolResultTokenApproxBytes       = 4
+	toolResultArtifactMimeType       = "application/json"
+	toolResultTextMimeType           = "text/plain"
+	toolResultReadHint               = "Large result saved. Use read_file with ref and start_line/num_lines to page."
+)
 
 // summarizationSkipper is implemented by tools that can indicate whether
 // the flow should skip a post-tool summarization step. This allows tools
@@ -818,6 +834,8 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 			fmt.Errorf("%s: %w", ErrorMarshalResult, err)
 	}
 
+	resultBytes = maybeEvictToolResult(ctx, invocation, toolCall, resultBytes)
+
 	defaultMsg := model.Message{
 		Role:    model.RoleTool,
 		Content: string(resultBytes),
@@ -828,9 +846,10 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 		{Index: index, Message: defaultMsg},
 	}
 
+	overridden := false
 	if p.toolCallbacks != nil &&
 		p.toolCallbacks.ToolResultMessages != nil {
-		customChoices, overridden, cbErr :=
+		customChoices, override, cbErr :=
 			p.applyToolResultMessagesCallback(
 				ctx,
 				toolCall,
@@ -843,9 +862,13 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 		if cbErr != nil {
 			return ctx, nil, modifiedArgs, true, cbErr
 		}
+		overridden = override
 		if overridden {
 			choices = customChoices
 		}
+	}
+	if overridden {
+		choices = maybeEvictToolResultChoices(ctx, invocation, toolCall, choices)
 	}
 
 	log.DebugfContext(
@@ -856,6 +879,247 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 	)
 
 	return ctx, choices, modifiedArgs, true, nil
+}
+
+func maybeEvictToolResult(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	toolCall model.ToolCall,
+	resultBytes []byte,
+) []byte {
+	limit := toolResultTokenLimit(invocation)
+	if limit <= 0 || toolResultTokens(resultBytes) <= limit {
+		return resultBytes
+	}
+	svc, info, ok := toolResultArtifactTarget(invocation)
+	if !ok || svc == nil {
+		return resultBytes
+	}
+	artifactName := toolResultArtifactName(toolCall)
+	storage := formatToolResultForStorage(resultBytes)
+	version, err := svc.SaveArtifact(ctx, info, artifactName, &artifact.Artifact{
+		Data:     storage.data,
+		MimeType: storage.mimeType,
+		Name:     artifactName,
+	})
+	if err != nil {
+		log.WarnfContext(
+			ctx,
+			"Failed to evict tool result for %s: %v",
+			toolCall.Function.Name,
+			err,
+		)
+		return resultBytes
+	}
+	ref := fmt.Sprintf(
+		"%s%s@%d",
+		fileref.ArtifactPrefix,
+		artifactName,
+		version,
+	)
+	payload := toolResultEvictedPayload{
+		Preview: storage.preview,
+		Ref:     ref,
+		Hint:    toolResultReadHint,
+	}
+	refBytes, err := json.Marshal(payload)
+	if err != nil {
+		log.WarnfContext(
+			ctx,
+			"Failed to marshal tool result ref for %s: %v",
+			toolCall.Function.Name,
+			err,
+		)
+		return resultBytes
+	}
+	return refBytes
+}
+
+func maybeEvictToolResultChoices(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	toolCall model.ToolCall,
+	choices []model.Choice,
+) []model.Choice {
+	if len(choices) == 0 {
+		return choices
+	}
+	for i := range choices {
+		if choices[i].Message.Role != model.RoleTool ||
+			choices[i].Message.Content == "" {
+			continue
+		}
+		content := []byte(choices[i].Message.Content)
+		choices[i].Message.Content = string(
+			maybeEvictToolResult(ctx, invocation, toolCall, content),
+		)
+	}
+	return choices
+}
+
+type toolResultEvictedPayload struct {
+	Preview string `json:"preview"`
+	Ref     string `json:"ref"`
+	Hint    string `json:"hint"`
+}
+
+type toolResultStorage struct {
+	data     []byte
+	mimeType string
+	preview  string
+}
+
+func formatToolResultForStorage(resultBytes []byte) toolResultStorage {
+	if len(resultBytes) == 0 {
+		return toolResultStorage{
+			data:     resultBytes,
+			mimeType: toolResultArtifactMimeType,
+			preview:  "",
+		}
+	}
+	var decoded any
+	if err := json.Unmarshal(resultBytes, &decoded); err != nil {
+		text := wrapToolResultText(string(resultBytes))
+		return toolResultStorage{
+			data:     []byte(text),
+			mimeType: toolResultTextMimeType,
+			preview:  truncateToolResultPreview(text),
+		}
+	}
+	switch value := decoded.(type) {
+	case string:
+		text := wrapToolResultText(value)
+		return toolResultStorage{
+			data:     []byte(text),
+			mimeType: toolResultTextMimeType,
+			preview:  truncateToolResultPreview(text),
+		}
+	default:
+		var buf bytes.Buffer
+		if err := json.Indent(&buf, resultBytes, "", "  "); err != nil {
+			text := string(resultBytes)
+			return toolResultStorage{
+				data:     resultBytes,
+				mimeType: toolResultArtifactMimeType,
+				preview:  truncateToolResultPreview(text),
+			}
+		}
+		text := buf.String()
+		return toolResultStorage{
+			data:     []byte(text),
+			mimeType: toolResultArtifactMimeType,
+			preview:  truncateToolResultPreview(text),
+		}
+	}
+}
+
+func wrapToolResultText(text string) string {
+	if toolResultChunkRunes <= 0 || text == "" {
+		return text
+	}
+	runes := []rune(text)
+	if len(runes) <= toolResultChunkRunes {
+		return text
+	}
+	var b strings.Builder
+	for i := 0; i < len(runes); i += toolResultChunkRunes {
+		end := i + toolResultChunkRunes
+		if end > len(runes) {
+			end = len(runes)
+		}
+		b.WriteString(string(runes[i:end]))
+		if end < len(runes) {
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
+}
+
+func toolResultTokenLimit(invocation *agent.Invocation) int {
+	if invocation != nil && invocation.RunOptions.RuntimeState != nil {
+		if v, ok := agent.GetRuntimeStateValue[int](&invocation.RunOptions, toolTokenLimitBeforeEvictKey); ok {
+			return v
+		}
+		if v, ok := agent.GetRuntimeStateValue[int64](&invocation.RunOptions, toolTokenLimitBeforeEvictKey); ok {
+			return int(v)
+		}
+		if v, ok := agent.GetRuntimeStateValue[float64](&invocation.RunOptions, toolTokenLimitBeforeEvictKey); ok {
+			return int(v)
+		}
+	}
+	return defaultToolTokenLimitBeforeEvict
+}
+
+func toolResultTokens(resultBytes []byte) int {
+	if len(resultBytes) == 0 {
+		return 0
+	}
+	return (len(resultBytes) + toolResultTokenApproxBytes - 1) / toolResultTokenApproxBytes
+}
+
+func truncateToolResultPreview(content string) string {
+	if toolResultPreviewRunes <= 0 || content == "" {
+		return ""
+	}
+	runes := []rune(content)
+	if len(runes) <= toolResultPreviewRunes {
+		return content
+	}
+	return string(runes[:toolResultPreviewRunes]) + "..."
+}
+
+func toolResultArtifactTarget(
+	invocation *agent.Invocation,
+) (artifact.Service, artifact.SessionInfo, bool) {
+	if invocation == nil || invocation.ArtifactService == nil ||
+		invocation.Session == nil {
+		return nil, artifact.SessionInfo{}, false
+	}
+	if invocation.Session.AppName == "" || invocation.Session.UserID == "" ||
+		invocation.Session.ID == "" {
+		return nil, artifact.SessionInfo{}, false
+	}
+	info := artifact.SessionInfo{
+		AppName:   invocation.Session.AppName,
+		UserID:    invocation.Session.UserID,
+		SessionID: invocation.Session.ID,
+	}
+	return invocation.ArtifactService, info, true
+}
+
+func toolResultArtifactName(toolCall model.ToolCall) string {
+	parts := []string{"tool_result"}
+	if name := sanitizeArtifactToken(toolCall.Function.Name); name != "" {
+		parts = append(parts, name)
+	}
+	if token := sanitizeArtifactToken(toolCall.ID); token != "" {
+		parts = append(parts, token)
+	} else {
+		parts = append(parts, sanitizeArtifactToken(uuid.NewString()))
+	}
+	return strings.Join(parts, "_") + ".json"
+}
+
+func sanitizeArtifactToken(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return ""
+	}
+	var b strings.Builder
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '-' || r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	return strings.Trim(b.String(), "_")
 }
 
 // applyToolResultMessagesCallback invokes the optional ToolResultMessages callback and
