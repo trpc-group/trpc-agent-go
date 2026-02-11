@@ -121,6 +121,8 @@ const (
 	KeyGenAIToolCallArguments = "gen_ai.tool.call.arguments"
 	// KeyGenAIToolCallResult is the attribute key for tool call result.
 	KeyGenAIToolCallResult = "gen_ai.tool.call.result"
+	// KeyGenAIRequestToolDefinitions is the attribute key for tool definitions.
+	KeyGenAIRequestToolDefinitions = "gen_ai.request.tool.definitions"
 
 	// KeyErrorType is the attribute key for error type.
 	// Reference: https://github.com/open-telemetry/semantic-conventions/blob/main/docs/general/recording-errors.md#recording-errors-on-spans
