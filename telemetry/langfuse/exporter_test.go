@@ -22,6 +22,7 @@ import (
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 func TestTransform(t *testing.T) {
@@ -335,7 +336,7 @@ func TestTransformCallLLM(t *testing.T) {
 				observationType:            "generation",
 				observationInput:           `{"prompt": "Hello", "generation_config": {"temperature": 0.7}}`,
 				observationOutput:          `{"text": "Hello! How can I help you?"}`,
-				observationModelParameters: `{"temperature":0.7}`,
+				observationModelParameters: `{"temperature": 0.7}`,
 				"other.attribute":          "keep-this",
 			},
 		},
@@ -410,6 +411,83 @@ func TestTransformCallLLM(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestTransformCallLLM_PromptWithTools(t *testing.T) {
+	toolDefs := []*tool.Declaration{
+		{
+			Name:        "alpha",
+			Description: "first",
+			InputSchema: &tool.Schema{Type: "object"},
+		},
+		{
+			Name:        "beta",
+			Description: "second",
+			InputSchema: &tool.Schema{Type: "object"},
+		},
+	}
+	defsJSON, err := json.Marshal(toolDefs)
+	require.NoError(t, err)
+
+	span := &tracepb.Span{
+		Name: "llm-call",
+		Attributes: []*commonpb.KeyValue{
+			{
+				Key: itelemetry.KeyLLMRequest,
+				Value: &commonpb.AnyValue{
+					Value: &commonpb.AnyValue_StringValue{StringValue: `{"generation_config": {"temperature": 0.7}}`},
+				},
+			},
+			{
+				Key: itelemetry.KeyGenAIInputMessages,
+				Value: &commonpb.AnyValue{
+					Value: &commonpb.AnyValue_StringValue{StringValue: `[{"role":"user","content":"hi"}]`},
+				},
+			},
+			{
+				Key: itelemetry.KeyGenAIRequestToolDefinitions,
+				Value: &commonpb.AnyValue{
+					Value: &commonpb.AnyValue_StringValue{StringValue: string(defsJSON)},
+				},
+			},
+		},
+	}
+
+	transformCallLLM(span)
+
+	attrMap := make(map[string]string)
+	for _, attr := range span.Attributes {
+		attrMap[attr.Key] = attr.Value.GetStringValue()
+		assert.NotEqual(t, itelemetry.KeyGenAIInputMessages, attr.Key, "input messages should be folded into observation.input")
+		assert.NotEqual(t, itelemetry.KeyGenAIRequestToolDefinitions, attr.Key, "tool definitions should be folded into observation.input")
+	}
+
+	inputStr := attrMap[observationInput]
+	require.NotEmpty(t, inputStr)
+
+	var input map[string]any
+	require.NoError(t, json.Unmarshal([]byte(inputStr), &input))
+
+	msgs, ok := input["messages"].([]any)
+	require.True(t, ok)
+	require.Len(t, msgs, 1)
+
+	toolsVal, ok := input["tools"].([]any)
+	require.True(t, ok)
+	require.Len(t, toolsVal, 2)
+
+	seen := map[string]bool{}
+	for _, tv := range toolsVal {
+		m, ok := tv.(map[string]any)
+		require.True(t, ok)
+		name, _ := m["name"].(string)
+		seen[name] = true
+	}
+	require.True(t, seen["alpha"])
+	require.True(t, seen["beta"])
+
+	// generation_config is still extracted from llm_request.
+	assert.Equal(t, `{"temperature": 0.7}`, attrMap[observationModelParameters])
 }
 
 func TestTransformCallLLM_UsageDetails(t *testing.T) {
