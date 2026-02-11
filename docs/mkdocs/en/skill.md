@@ -98,12 +98,20 @@ How this relates to `SkillLoadMode` (common pitfall):
 Practical guidance (especially with
 `WithSkillsLoadedContentInToolResults(true)`):
 
-- `SkillLoadModeSession` can be more prompt-cache friendly because you
-  do not need to re-run `skill_load` every turn; the message sequence
-  stays more stable and the shared prefix tends to be longer. The trade
-  off is a larger prompt.
-- Use `session` only for a small number of skills you truly need across
-  the whole session; use `turn/once` otherwise.
+- First, be clear about *which* caching scenario you mean:
+  - **Within a single turn** (multiple model calls inside one
+    `Runner.Run`): `turn` and `session` behave similarly because both
+    keep loaded content available within the run. The more important
+    lever is usually *where* you materialize content (system vs tool
+    result).
+  - **Across turns**: `session` can be more prompt-cache friendly
+    because you load once and avoid repeating `skill_load` every turn.
+    The trade-off is a larger prompt and the need to manage clearing.
+- Rule of thumb:
+  - Default to `turn` (least-privilege, smaller prompts, less likely to
+    trigger truncation/summary).
+  - Use `session` only for a small number of skills you truly need
+    across the whole session, and keep docs selection tight.
 - Keep docs selection tight (avoid `include_all_docs` when possible).
   Otherwise the prompt can grow quickly and trigger truncation/summary.
   That increases the chance of falling back to a system message, which

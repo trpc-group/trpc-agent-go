@@ -89,9 +89,15 @@ system message，确保模型仍能看到已加载内容。
 
 实践建议（尤其是 `WithSkillsLoadedContentInToolResults(true)` 时）：
 
-- `SkillLoadModeSession` 往往更利于 prompt cache：你不需要每轮都重新
-  `skill_load`，消息序列更稳定、共同前缀更长；但代价是上下文会更大。
-- 只对“整个会话都需要”的少量技能使用 `session`；其余用 `turn/once`。
+- 先确认你在讨论哪种“缓存”场景：
+  - **同一轮对话内**（一次 `Runner.Run` 里多次调用模型）：`turn` 与
+    `session` 基本等价，因为它们都会让“本轮已加载内容”在该轮内可见。
+    更关键的开关通常是“注入到 system 还是 tool result”。
+  - **跨多轮对话**：`session` 可能更利于 prompt cache，因为你只需加载一次，
+    后续不必反复 `skill_load`；但代价是上下文更大、需要更主动地管理清理。
+- 经验法则：
+  - 默认用 `turn`（最小权限、上下文更小、也更不容易触发截断/summary）。
+  - 仅对“整段会话都会反复用到”的少量技能用 `session`，并严格控制 docs。
 - 严格控制 docs 选择（尽量不要 `include_all_docs=true`），否则很容易把
   上下文塞爆，进而触发 history 截断/summary，导致回退为 system message，
   prompt cache 的收益会下降。
