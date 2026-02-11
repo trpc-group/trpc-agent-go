@@ -179,48 +179,42 @@ func transformCallLLM(span *tracepb.Span) {
 	// Collect token usage for building usage_details JSON (aligned with Langfuse SDK)
 	var usage usageDetails
 
-	// Process existing attributes
-	var llmSessionID *commonpb.AnyValue
+	// Collect prompt pieces (aligned with langfuse-python prompt shape)
+	var (
+		llmSessionID    *commonpb.AnyValue
+		llmRequest      *string
+		inputMessages   *string
+		toolDefinitions *string
+	)
+
 	for _, attr := range span.Attributes {
 		switch attr.Key {
 		case itelemetry.KeyGenAIConversationID, itelemetry.KeyRunnerSessionID, traceSessionID:
 			llmSessionID = attr.Value
 		case itelemetry.KeyRunnerUserID:
 			newAttributes = append(newAttributes, &commonpb.KeyValue{Key: traceUserID, Value: attr.Value})
+
 		case itelemetry.KeyLLMRequest:
 			if attr.Value != nil {
-				request := attr.Value.GetStringValue()
-				newAttributes = append(newAttributes, &commonpb.KeyValue{
-					Key: observationInput,
-					Value: &commonpb.AnyValue{
-						Value: &commonpb.AnyValue_StringValue{StringValue: request},
-					},
-				})
-
-				// Extract generation_config if exists
-				var req map[string]any
-				if err := json.Unmarshal([]byte(request), &req); err == nil {
-					if genConfig, exists := req["generation_config"]; exists {
-						if jsonConfig, err := json.Marshal(genConfig); err == nil {
-							newAttributes = append(newAttributes, &commonpb.KeyValue{
-								Key: observationModelParameters,
-								Value: &commonpb.AnyValue{
-									Value: &commonpb.AnyValue_StringValue{StringValue: string(jsonConfig)},
-								},
-							})
-						}
-					}
-				}
-			} else {
-				newAttributes = append(newAttributes, &commonpb.KeyValue{
-					Key: observationInput,
-					Value: &commonpb.AnyValue{
-						Value: &commonpb.AnyValue_StringValue{StringValue: "N/A"},
-					},
-				})
+				s := attr.Value.GetStringValue()
+				llmRequest = &s
 			}
-
 			// Skip this attribute (delete it)
+
+		case itelemetry.KeyGenAIInputMessages:
+			if attr.Value != nil {
+				s := attr.Value.GetStringValue()
+				inputMessages = &s
+			}
+			// Skip this attribute (delete it)
+
+		case itelemetry.KeyGenAIRequestToolDefinitions:
+			if attr.Value != nil {
+				s := attr.Value.GetStringValue()
+				toolDefinitions = &s
+			}
+			// Skip this attribute (delete it)
+
 		case itelemetry.KeyLLMResponse:
 			if attr.Value != nil {
 				newAttributes = append(newAttributes, &commonpb.KeyValue{
@@ -259,6 +253,54 @@ func transformCallLLM(span *tracepb.Span) {
 		}
 	}
 
+	// Build Langfuse observation.input.
+	observationInputValue := "N/A"
+	if inputMessages != nil && *inputMessages != "" {
+		// Default to messages-only, like langfuse-python.
+		observationInputValue = *inputMessages
+
+		// If tools exist, wrap as {tools, messages}.
+		if toolDefinitions != nil && *toolDefinitions != "" {
+			if wrapped, err := buildObservationInputPrompt(*inputMessages, *toolDefinitions); err == nil {
+				observationInputValue = wrapped
+			}
+		}
+	} else if llmRequest != nil && *llmRequest != "" {
+		// Fallback: extract messages from request JSON, instead of using the whole request.
+		if messagesJSON, ok := extractMessagesJSONFromRequestJSON(*llmRequest); ok && messagesJSON != "" {
+			observationInputValue = messagesJSON
+			if toolDefinitions != nil && *toolDefinitions != "" {
+				if wrapped, err := buildObservationInputPrompt(messagesJSON, *toolDefinitions); err == nil {
+					observationInputValue = wrapped
+				}
+			}
+		} else {
+			observationInputValue = *llmRequest
+		}
+	}
+
+	newAttributes = append(newAttributes, &commonpb.KeyValue{
+		Key:   observationInput,
+		Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: observationInputValue}},
+	})
+
+	// Extract generation_config if exists (from llm request).
+	if llmRequest != nil && *llmRequest != "" {
+		var req map[string]any
+		if err := json.Unmarshal([]byte(*llmRequest), &req); err == nil {
+			if genConfig, exists := req["generation_config"]; exists {
+				if jsonConfig, err := json.Marshal(genConfig); err == nil {
+					newAttributes = append(newAttributes, &commonpb.KeyValue{
+						Key: observationModelParameters,
+						Value: &commonpb.AnyValue{
+							Value: &commonpb.AnyValue_StringValue{StringValue: string(jsonConfig)},
+						},
+					})
+				}
+			}
+		}
+	}
+
 	// Build usage_details JSON attribute if any usage data was collected.
 	// Note: "total" is not computed here; the Langfuse server calculates it automatically.
 	if !usage.empty() {
@@ -278,6 +320,40 @@ func transformCallLLM(span *tracepb.Span) {
 
 	// Replace span attributes
 	span.Attributes = newAttributes
+}
+
+func buildObservationInputPrompt(messagesJSON, toolDefsJSON string) (string, error) {
+	if !json.Valid([]byte(messagesJSON)) {
+		return "", fmt.Errorf("invalid messages json")
+	}
+	if !json.Valid([]byte(toolDefsJSON)) {
+		return "", fmt.Errorf("invalid tool definitions json")
+	}
+
+	payload := observationInputPrompt{
+		Tools:    json.RawMessage([]byte(toolDefsJSON)),
+		Messages: json.RawMessage([]byte(messagesJSON)),
+	}
+	bts, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	return string(bts), nil
+}
+
+func extractMessagesJSONFromRequestJSON(requestJSON string) (string, bool) {
+	if requestJSON == "" || !json.Valid([]byte(requestJSON)) {
+		return "", false
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(requestJSON), &m); err != nil {
+		return "", false
+	}
+	msgs, ok := m["messages"]
+	if !ok || len(msgs) == 0 || !json.Valid(msgs) {
+		return "", false
+	}
+	return string(msgs), true
 }
 
 // transformExecuteTool transforms tool execution spans for Langfuse
