@@ -533,7 +533,7 @@ func TestSkillsToolResultRequestProcessor_MaterializesIntoLastToolMsg(
 
 	require.Equal(t, baseOut, req.Messages[2].Content)
 	lastTool := req.Messages[3].Content
-	require.Contains(t, lastTool, baseOut)
+	require.NotContains(t, lastTool, baseOut)
 	require.Contains(t, lastTool, "[Loaded] calc")
 	require.Contains(t, lastTool, "B")
 	require.Contains(t, lastTool, "[Doc] USAGE.md")
@@ -602,6 +602,27 @@ func TestSkillsToolResultRequestProcessor_FallbackSystemMessageAdded(
 		}
 		require.NotContains(t, m.Content, skillsLoadedContextHeader)
 	}
+}
+
+func TestSkillsToolResultRequestProcessor_BuildToolResultContent_Base(
+	t *testing.T,
+) {
+	repo := &mockRepo{
+		full: map[string]*skill.Skill{
+			"calc": {Summary: skill.Summary{Name: "calc"}, Body: "B"},
+		},
+	}
+
+	p := NewSkillsToolResultRequestProcessor(repo)
+	out, ok := p.buildToolResultContent(
+		context.Background(),
+		nil,
+		"calc",
+		"ok",
+	)
+	require.True(t, ok)
+	require.Contains(t, out, "ok")
+	require.Contains(t, out, "[Loaded] calc")
 }
 
 func TestSkillsToolResultRequestProcessor_SkillLoadModeOnce_Offloads(
