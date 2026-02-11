@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"hash/fnv"
+	"strings"
 	"sync"
 	"time"
 
@@ -28,6 +29,9 @@ const (
 	DefaultAsyncMemoryNum   = 1
 	DefaultMemoryQueueSize  = 10
 	DefaultMemoryJobTimeout = 30 * time.Second
+
+	memoryNotFoundErrSubstr = "memory with id"
+	memoryNotFoundErrMarker = "not found"
 )
 
 // MemoryJob represents a job for async memory extraction.
@@ -287,6 +291,15 @@ func (w *AutoMemoryWorker) createAutoMemory(
 	return nil
 }
 
+func isMemoryNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, memoryNotFoundErrSubstr) &&
+		strings.Contains(msg, memoryNotFoundErrMarker)
+}
+
 // executeOperation executes a single memory operation.
 func (w *AutoMemoryWorker) executeOperation(
 	ctx context.Context,
@@ -306,6 +319,17 @@ func (w *AutoMemoryWorker) executeOperation(
 			MemoryID: op.MemoryID,
 		}
 		if err := w.operator.UpdateMemory(ctx, memKey, op.Memory, op.Topics); err != nil {
+			if isMemoryNotFoundError(err) {
+				if addErr := w.operator.AddMemory(
+					ctx, userKey, op.Memory, op.Topics,
+				); addErr != nil {
+					log.WarnfContext(ctx,
+						"auto_memory: update missing, add memory failed for user %s/%s, memory_id=%s: %v",
+						userKey.AppName, userKey.UserID, op.MemoryID, addErr,
+					)
+				}
+				return
+			}
 			log.WarnfContext(ctx, "auto_memory: update memory failed for user %s/%s, memory_id=%s: %v",
 				userKey.AppName, userKey.UserID, op.MemoryID, err)
 		}
