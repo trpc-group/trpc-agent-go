@@ -242,6 +242,14 @@ func parseLoadedSkillFromText(content string) string {
 	return name
 }
 
+func isLoadedToolStub(toolOutput string, skillName string) bool {
+	name := parseLoadedSkillFromText(toolOutput)
+	if name == "" {
+		return false
+	}
+	return strings.EqualFold(name, skillName)
+}
+
 func (p *SkillsToolResultRequestProcessor) buildToolResultContent(
 	ctx context.Context,
 	inv *agent.Invocation,
@@ -261,6 +269,9 @@ func (p *SkillsToolResultRequestProcessor) buildToolResultContent(
 
 	var b strings.Builder
 	base := strings.TrimSpace(toolOutput)
+	if base != "" && isLoadedToolStub(base, skillName) {
+		base = ""
+	}
 	if base != "" {
 		b.WriteString(base)
 		b.WriteString("\n\n")
