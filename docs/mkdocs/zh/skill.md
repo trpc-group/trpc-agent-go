@@ -77,6 +77,31 @@ system message，确保模型仍能看到已加载内容。
 要在真实工具链路中测量提升，参见 `benchmark/anthropic_skills` 的
 `prompt-cache` 套件。
 
+与 `SkillLoadMode` 的关系（容易踩坑）：
+
+- 上面讨论的“缓存前缀变短/变长”，主要发生在同一次 `Runner.Run`
+  里多次调用模型的场景（一次用户消息触发多个 tool call）。
+- 如果你希望跨**多轮对话**继续复用“已加载技能的正文/文档”，需要把
+  `SkillLoadMode` 设为 `session`。默认 `turn` 会在下一轮开始前清空
+  `temp:skill:loaded:*` / `temp:skill:docs:*`，因此即使 history 里仍然
+  有上一轮的 `skill_load` tool result（通常是 `loaded: <name>` 这种短
+  stub），框架也不会再把正文/文档物化进去。
+
+实践建议（尤其是 `WithSkillsLoadedContentInToolResults(true)` 时）：
+
+- 先确认你在讨论哪种“缓存”场景：
+  - **同一轮对话内**（一次 `Runner.Run` 里多次调用模型）：`turn` 与
+    `session` 基本等价，因为它们都会让“本轮已加载内容”在该轮内可见。
+    更关键的开关通常是“注入到 system 还是 tool result”。
+  - **跨多轮对话**：`session` 可能更利于 prompt cache，因为你只需加载一次，
+    后续不必反复 `skill_load`；但代价是上下文更大、需要更主动地管理清理。
+- 经验法则：
+  - 默认用 `turn`（最小权限、上下文更小、也更不容易触发截断/summary）。
+  - 仅对“整段会话都会反复用到”的少量技能用 `session`，并严格控制 docs。
+- 严格控制 docs 选择（尽量不要 `include_all_docs=true`），否则很容易把
+  上下文塞爆，进而触发 history 截断/summary，导致回退为 system message，
+  prompt cache 的收益会下降。
+
 ### 会话持久化
 
 先区分两个概念：
@@ -95,6 +120,9 @@ system message，确保模型仍能看到已加载内容。
 所以如果你去看 Session 里保存的工具结果，`skill_load` 仍然通常是
 一个很短的 stub（比如 `loaded: internal-comms`）。但模型在每次请求
 里仍能看到完整正文/文档，因为它们是在构造请求时注入的。
+
+补充：`SkillLoadMode` 控制的是这些 state key 的生命周期，所以也决定了
+“下一轮对话”里是否还能继续物化正文/文档。
 
 后续请求的稳定性：
 - 在同一次工具链路里，每次模型调用前都会按同一套规则重新物化，
@@ -314,6 +342,90 @@ https://github.com/anthropics/skills
   - `once`：只在**下一次**模型请求中注入一次，随后自动 offload
     并清空对应 state。
   - `session`（兼容旧行为）：跨多轮对话保留，直到手动清除或会话过期。
+- 常见疑问：为什么你在 tool result 里只看到 `loaded: <name>`，没看到
+  `[Loaded] <name>` + 正文？
+  - 先确认你是否开启了 tool-result 物化：
+    `llmagent.WithSkillsLoadedContentInToolResults(true)`。
+    未开启时，正文/文档会被追加到 system message，而不是 tool result。
+  - 如果已开启，但你看到“第二轮对话”的请求里仍只有 stub，通常是因为
+    你使用了默认的 `SkillLoadModeTurn`：下一轮开始前框架会清空 state，
+    于是不会再物化正文/文档。需要跨轮保留时，改用：
+
+```go
+agent := llmagent.New(
+    "skills-assistant",
+    llmagent.WithSkills(repo),
+    llmagent.WithSkillsLoadedContentInToolResults(true),
+    llmagent.WithSkillLoadMode(llmagent.SkillLoadModeSession),
+)
+```
+
+多轮对话示例：复用同一个 `sessionID` 才能让“已加载状态”跨轮生效：
+
+```go
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/event"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+    "trpc.group/trpc-go/trpc-agent-go/session"
+    "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+)
+
+ctx := context.Background()
+svc := inmemory.NewSessionService()
+r := runner.NewRunner(
+    "demo-app",
+    agent,
+    runner.WithSessionService(svc),
+)
+defer r.Close()
+
+userID := "u1"
+sessionID := "s1"
+
+drain := func(ch <-chan *event.Event) {
+    for range ch {
+    }
+}
+
+ch, _ := r.Run(ctx, userID, sessionID, model.NewUserMessage(
+    "Please load the internal-comms skill.",
+))
+drain(ch)
+
+// Next turn, same sessionID:
+ch, _ = r.Run(ctx, userID, sessionID, model.NewUserMessage(
+    "Now use internal-comms to generate an update.",
+))
+drain(ch)
+
+// Optional: inspect what is persisted in the session service.
+sess, _ := svc.GetSession(ctx, session.Key{
+    AppName:   "demo-app",
+    UserID:    userID,
+    SessionID: sessionID,
+})
+_ = sess
+```
+
+清空建议（`SkillLoadModeSession` 下很常见）：
+
+- 最简单：换一个新的 `sessionID` 开启新对话。
+- 或者由上层删除 session（以 inmemory 为例）：
+
+```go
+_ = svc.DeleteSession(ctx, session.Key{
+    AppName:   "demo-app",
+    UserID:    userID,
+    SessionID: sessionID,
+})
+```
+
+提示：tool-result 物化依赖本次请求的 history 中包含对应的 tool result
+消息；如果 history 被截断/抑制，框架会回退为插入专用 system message
+（`Loaded skill context:`）来保证正确性。
 - 在 agent 上配置：
 
 ```go
@@ -321,6 +433,28 @@ agent := llmagent.New(
     "skills-assistant",
     llmagent.WithSkills(repo),
     llmagent.WithSkillLoadMode(llmagent.SkillLoadModeTurn),
+)
+```
+
+配置片段：更利于 prompt cache 的常用组合（system 更稳定 + 只在本轮驻留）：
+
+```go
+agent := llmagent.New(
+    "skills-assistant",
+    llmagent.WithSkills(repo),
+    llmagent.WithSkillsLoadedContentInToolResults(true),
+    llmagent.WithSkillLoadMode(llmagent.SkillLoadModeTurn),
+)
+```
+
+配置片段：一次性注入（只让**下一次**模型请求看到正文/文档）：
+
+```go
+agent := llmagent.New(
+    "skills-assistant",
+    llmagent.WithSkills(repo),
+    llmagent.WithSkillsLoadedContentInToolResults(true),
+    llmagent.WithSkillLoadMode(llmagent.SkillLoadModeOnce),
 )
 ```
 
