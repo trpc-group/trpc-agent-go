@@ -9,10 +9,8 @@ results/
 ├── long_context/        # Long-context scenario results.
 │   ├── results.json     # Full evaluation results.
 │   └── checkpoint.json  # Checkpoint for resume.
-├── rag_observation/     # RAG with observation mode.
-├── rag_summary/         # RAG with summary mode.
-├── rag_full/            # RAG with full dialog mode.
-└── rag_auto_extract/    # RAG with auto-extract mode.
+├── agentic_<backend>/   # Agentic scenario results.
+└── auto_<backend>/      # Auto scenario results.
 ```
 
 ## Result Format
@@ -24,8 +22,8 @@ Each `results.json` contains:
   "metadata": {
     "framework": "trpc-agent-go",
     "model": "gpt-4o-mini",
-    "scenario": "rag_memory",
-    "rag_mode": "observation"
+    "scenario": "agentic",
+    "memory_backend": "pgvector"
   },
   "summary": {
     "total_samples": 10,

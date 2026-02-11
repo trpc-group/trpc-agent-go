@@ -193,6 +193,28 @@ func sessionMessages(sample *dataset.LoCoMoSample, sess dataset.Session) []model
 	return msgs
 }
 
+// buildHistoryMessages constructs the most recent k conversation
+// turns (messages) from the sample's full conversation. It walks
+// sessions in order and collects all turns, then returns the
+// trailing k messages. Returns nil when k <= 0.
+func buildHistoryMessages(
+	sample *dataset.LoCoMoSample, k int,
+) []model.Message {
+	if k <= 0 || sample == nil {
+		return nil
+	}
+	// Collect all conversation turns into messages.
+	var all []model.Message
+	for _, sess := range sample.Conversation {
+		msgs := sessionMessages(sample, sess)
+		all = append(all, msgs...)
+	}
+	if len(all) <= k {
+		return all
+	}
+	return all[len(all)-k:]
+}
+
 const fallbackAnswer = "The information is not available."
 
 const (

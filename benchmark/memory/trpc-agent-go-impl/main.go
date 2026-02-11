@@ -12,7 +12,6 @@
 //
 // Evaluation Scenarios:
 //   - Long-Context: Full conversation as context (baseline).
-//   - RAG Memory: Direct memory service retrieval.
 //   - Agentic: Agent with memory tools (add/update/search/load).
 //   - Auto: Automatic memory extraction + search.
 //
@@ -61,15 +60,9 @@ var (
 	flagScenario = flag.String(
 		"scenario",
 		"long_context",
-		"Evaluation scenario: long_context, rag_memory, agentic, auto, all",
+		"Evaluation scenario (comma-separated): "+
+			"long_context, agentic, auto, all",
 	)
-	flagRAGMode = flag.String(
-		"rag-mode",
-		"observation",
-		"RAG mode: full, observation, summary, fallback",
-	)
-	flagTopK = flag.Int("top-k", 5, "Top-K memories for RAG retrieval")
-
 	// Memory backend flags (comma-separated for multiple).
 	flagMemoryBackends = flag.String(
 		"memory-backend",
@@ -97,12 +90,10 @@ var (
 	flagMaxTasks          = flag.Int("max-tasks", 0, "Maximum tasks (0=all)")
 	flagMaxContext        = flag.Int("max-context", 128000, "Maximum context length")
 	flagSessionEventLimit = flag.Int("session-event-limit", 1000, "Max events kept in each session (0=unlimited)")
-	flagQAWithHistory     = flag.Bool(
-		"qa-with-history",
-		false,
-		"Include full conversation history in QA sessions (auto/agentic/rag_memory only)",
+	flagQAHistoryTurns    = flag.Int(
+		"qa-history-turns", 0,
+		"Recent conversation turns injected as context during QA (0=none, auto/agentic only)",
 	)
-
 	flagLLMJudge = flag.Bool("llm-judge", false, "Enable LLM-as-Judge evaluation")
 	flagVerbose  = flag.Bool("verbose", false, "Verbose output")
 	// Debug flags (auto scenario diagnosis).
@@ -178,17 +169,16 @@ type EvaluationResult struct {
 
 // EvalMetadata holds evaluation metadata.
 type EvalMetadata struct {
-	Framework     string    `json:"framework"`
-	Version       string    `json:"version"`
-	Timestamp     time.Time `json:"timestamp"`
-	Model         string    `json:"model"`
-	EvalModel     string    `json:"eval_model,omitempty"`
-	Scenario      string    `json:"scenario"`
-	RAGMode       string    `json:"rag_mode,omitempty"`
-	MemoryBackend string    `json:"memory_backend,omitempty"`
-	TopK          int       `json:"top_k,omitempty"`
-	MaxContext    int       `json:"max_context"`
-	LLMJudge      bool      `json:"llm_judge"`
+	Framework      string    `json:"framework"`
+	Version        string    `json:"version"`
+	Timestamp      time.Time `json:"timestamp"`
+	Model          string    `json:"model"`
+	EvalModel      string    `json:"eval_model,omitempty"`
+	Scenario       string    `json:"scenario"`
+	MemoryBackend  string    `json:"memory_backend,omitempty"`
+	MaxContext     int       `json:"max_context"`
+	QAHistoryTurns int       `json:"qa_history_turns,omitempty"`
+	LLMJudge       bool      `json:"llm_judge"`
 }
 
 // EvalSummary holds aggregated evaluation summary.
@@ -222,11 +212,10 @@ func main() {
 	log.Printf("Eval Model: %s", evalModelName)
 	log.Printf("Scenario: %s", *flagScenario)
 	log.Printf("Memory Backends: %v", backends)
-	if needsRAGConfig(*flagScenario) {
-		log.Printf("RAG Mode: %s", *flagRAGMode)
-		log.Printf("Top-K: %d", *flagTopK)
-	}
 	log.Printf("LLM Judge: %v", *flagLLMJudge)
+	if *flagQAHistoryTurns > 0 {
+		log.Printf("QA History Turns: %d", *flagQAHistoryTurns)
+	}
 	log.Printf("Output: %s", outputDir)
 	if *flagResume {
 		log.Printf("Resume mode: enabled (checkpoint will be loaded if exists)")
@@ -262,15 +251,13 @@ func main() {
 	// Base scenario config.
 	baseConfig := scenarios.Config{
 		MaxContext:        *flagMaxContext,
-		TopK:              *flagTopK,
 		EnableLLMJudge:    *flagLLMJudge,
 		Verbose:           *flagVerbose,
 		SessionEventLimit: *flagSessionEventLimit,
-		QAWithHistory:     *flagQAWithHistory,
+		QAHistoryTurns:    *flagQAHistoryTurns,
 		DebugDumpMemories: *flagDebugDumpMemories,
 		DebugMemLimit:     *flagDebugMemLimit,
 		DebugQALimit:      *flagDebugQALimit,
-		RAGMode:           scenarios.RAGMode(*flagRAGMode),
 	}
 
 	// Determine scenarios to run.
@@ -291,11 +278,6 @@ func main() {
 	}
 }
 
-func needsRAGConfig(scenario string) bool {
-	return scenario == "rag_memory" || scenario == "agentic" ||
-		scenario == "auto" || scenario == "all"
-}
-
 func parseMemoryBackends(backendsStr string) []string {
 	parts := strings.Split(backendsStr, ",")
 	backends := make([]string, 0, len(parts))
@@ -309,26 +291,34 @@ func parseMemoryBackends(backendsStr string) []string {
 }
 
 func getScenarios(scenario string) []scenarios.ScenarioType {
-	switch scenario {
-	case "long_context":
-		return []scenarios.ScenarioType{scenarios.ScenarioLongContext}
-	case "rag_memory":
-		return []scenarios.ScenarioType{scenarios.ScenarioRAGMemory}
-	case "agentic":
-		return []scenarios.ScenarioType{scenarios.ScenarioAgentic}
-	case "auto":
-		return []scenarios.ScenarioType{scenarios.ScenarioAuto}
-	case "all":
+	scenarioMap := map[string]scenarios.ScenarioType{
+		"long_context": scenarios.ScenarioLongContext,
+		"agentic":      scenarios.ScenarioAgentic,
+		"auto":         scenarios.ScenarioAuto,
+	}
+	if scenario == "all" {
 		return []scenarios.ScenarioType{
 			scenarios.ScenarioLongContext,
-			scenarios.ScenarioRAGMemory,
 			scenarios.ScenarioAgentic,
 			scenarios.ScenarioAuto,
 		}
-	default:
-		log.Fatalf("Invalid scenario: %s", scenario)
-		return nil
 	}
+	// Support comma-separated scenarios.
+	var result []scenarios.ScenarioType
+	seen := make(map[string]bool)
+	for _, s := range strings.Split(scenario, ",") {
+		s = strings.TrimSpace(s)
+		if seen[s] {
+			continue
+		}
+		seen[s] = true
+		st, ok := scenarioMap[s]
+		if !ok {
+			log.Fatalf("Invalid scenario: %s", s)
+		}
+		result = append(result, st)
+	}
+	return result
 }
 
 func filterSamples(samples []*dataset.LoCoMoSample) []*dataset.LoCoMoSample {
@@ -380,13 +370,6 @@ func runScenario(
 	switch scenarioType {
 	case scenarios.ScenarioLongContext:
 		evaluator = scenarios.NewLongContextEvaluator(llm, evalLLM, config)
-	case scenarios.ScenarioRAGMemory:
-		memSvc, err = createMemoryService(memCfg, memOpts)
-		if err != nil {
-			log.Printf("Failed to create %s memory service: %v", backend, err)
-			return
-		}
-		evaluator = scenarios.NewRAGMemoryEvaluator(llm, evalLLM, memSvc, config)
 	case scenarios.ScenarioAgentic:
 		memSvc, err = createMemoryService(memCfg, memOpts)
 		if err != nil {
@@ -427,32 +410,21 @@ func buildScenarioDir(outputDir string, scenario scenarios.ScenarioType, backend
 	if scenario == scenarios.ScenarioLongContext {
 		return filepath.Join(outputDir, string(scenario))
 	}
-	if scenario == scenarios.ScenarioRAGMemory {
-		return filepath.Join(outputDir, fmt.Sprintf("rag_%s_%s", *flagRAGMode, backend))
-	}
 	return filepath.Join(outputDir, fmt.Sprintf("%s_%s", scenario, backend))
 }
 
 func validateFlags() {
 	validScenarios := map[string]bool{
 		"long_context": true,
-		"rag_memory":   true,
 		"agentic":      true,
 		"auto":         true,
 		"all":          true,
 	}
-	if !validScenarios[*flagScenario] {
-		log.Fatalf("Invalid scenario: %s", *flagScenario)
-	}
-
-	validRAGModes := map[string]bool{
-		"full":        true,
-		"observation": true,
-		"summary":     true,
-		"fallback":    true,
-	}
-	if !validRAGModes[*flagRAGMode] {
-		log.Fatalf("Invalid RAG mode: %s", *flagRAGMode)
+	for _, s := range strings.Split(*flagScenario, ",") {
+		s = strings.TrimSpace(s)
+		if !validScenarios[s] {
+			log.Fatalf("Invalid scenario: %s", s)
+		}
 	}
 
 	validBackends := map[string]bool{
@@ -464,10 +436,6 @@ func validateFlags() {
 		if !validBackends[b] {
 			log.Fatalf("Invalid memory backend: %s", b)
 		}
-	}
-
-	if *flagTopK <= 0 {
-		log.Fatalf("Invalid top-k: %d", *flagTopK)
 	}
 
 	if *flagMaxContext <= 0 {
@@ -532,7 +500,7 @@ func buildMemoryConfig(
 			backend: backend,
 			mode:    memoryModeAuto,
 		}
-	case scenarios.ScenarioRAGMemory, scenarios.ScenarioAgentic:
+	case scenarios.ScenarioAgentic:
 		return memoryConfig{
 			backend: backend,
 			mode:    memoryModeManual,
@@ -709,17 +677,16 @@ func runEvaluation(
 
 	return &EvaluationResult{
 		Metadata: &EvalMetadata{
-			Framework:     "trpc-agent-go",
-			Version:       "1.0.0",
-			Timestamp:     time.Now(),
-			Model:         getModelName(),
-			EvalModel:     getEvalModelName(),
-			Scenario:      string(config.Scenario),
-			RAGMode:       string(config.RAGMode),
-			MemoryBackend: backend,
-			TopK:          config.TopK,
-			MaxContext:    config.MaxContext,
-			LLMJudge:      config.EnableLLMJudge,
+			Framework:      "trpc-agent-go",
+			Version:        "1.0.0",
+			Timestamp:      time.Now(),
+			Model:          getModelName(),
+			EvalModel:      getEvalModelName(),
+			Scenario:       string(config.Scenario),
+			MemoryBackend:  backend,
+			MaxContext:     config.MaxContext,
+			QAHistoryTurns: config.QAHistoryTurns,
+			LLMJudge:       config.EnableLLMJudge,
 		},
 		Summary: &EvalSummary{
 			TotalSamples:    len(sampleResults),
@@ -769,9 +736,13 @@ func printSummary(result *EvaluationResult) {
 
 	fmt.Printf("\nModel: %s\n", result.Metadata.Model)
 	fmt.Printf("Scenario: %s\n", result.Metadata.Scenario)
-	if result.Metadata.RAGMode != "" {
-		fmt.Printf("RAG Mode: %s (Top-K=%d)\n", result.Metadata.RAGMode, result.Metadata.TopK)
-		fmt.Printf("Memory Backend: %s\n", result.Metadata.MemoryBackend)
+	if result.Metadata.MemoryBackend != "" {
+		fmt.Printf("Memory Backend: %s\n",
+			result.Metadata.MemoryBackend)
+	}
+	if result.Metadata.QAHistoryTurns > 0 {
+		fmt.Printf("QA History Turns: %d\n",
+			result.Metadata.QAHistoryTurns)
 	}
 	fmt.Printf("Samples: %d | Questions: %d\n",
 		result.Summary.TotalSamples, result.Summary.TotalQuestions)

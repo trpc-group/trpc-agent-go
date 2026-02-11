@@ -27,32 +27,24 @@ type ScenarioType string
 // Scenario types.
 const (
 	ScenarioLongContext ScenarioType = "long_context"
-	ScenarioRAGMemory   ScenarioType = "rag_memory"
 	ScenarioAgentic     ScenarioType = "agentic"
 	ScenarioAuto        ScenarioType = "auto"
-)
-
-// RAGMode represents the RAG retrieval mode.
-type RAGMode string
-
-// RAG modes.
-const (
-	RAGModeFull        RAGMode = "full"
-	RAGModeObservation RAGMode = "observation"
-	RAGModeSummary     RAGMode = "summary"
-	RAGModeFallback    RAGMode = "fallback"
 )
 
 // Config holds scenario evaluation configuration.
 type Config struct {
 	Scenario          ScenarioType
-	RAGMode           RAGMode
 	MaxContext        int
-	TopK              int
 	EnableLLMJudge    bool
 	Verbose           bool
 	SessionEventLimit int
-	QAWithHistory     bool
+
+	// QAHistoryTurns controls how many recent conversation
+	// turns (across all sessions) are injected as context
+	// when answering QA questions. 0 means no history
+	// (default, pure memory retrieval).
+	// Only applies to agentic and auto scenarios.
+	QAHistoryTurns int
 
 	// Debug options (primarily for benchmark diagnosis).
 	DebugDumpMemories bool
@@ -64,13 +56,10 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		Scenario:          ScenarioLongContext,
-		RAGMode:           RAGModeFull,
 		MaxContext:        128000,
-		TopK:              5,
 		EnableLLMJudge:    false,
 		Verbose:           false,
 		SessionEventLimit: 1000,
-		QAWithHistory:     false,
 		DebugDumpMemories: false,
 		DebugMemLimit:     0,
 		DebugQALimit:      0,

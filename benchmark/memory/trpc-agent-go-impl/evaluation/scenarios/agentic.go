@@ -237,9 +237,13 @@ func (e *AgenticEvaluator) Evaluate(
 	result.QAResults = make([]*QAResult, 0, len(sample.QA))
 	catAgg := metrics.NewCategoryAggregator()
 
+	historyMsgs := buildHistoryMessages(
+		sample, e.config.QAHistoryTurns,
+	)
+
 	for _, qa := range sample.QA {
 		qaResult, err := e.evaluateQA(
-			ctx, qaRunner, userKey, qa,
+			ctx, qaRunner, userKey, qa, historyMsgs,
 		)
 		if err != nil {
 			if e.config.Verbose {
@@ -358,16 +362,25 @@ func (e *AgenticEvaluator) evaluateQA(
 	r runner.Runner,
 	userKey memory.UserKey,
 	qa dataset.QAItem,
+	historyMsgs []model.Message,
 ) (*QAResult, error) {
 	start := time.Now()
 
 	sessionID := fmt.Sprintf("qa-%s", qa.QuestionID)
 	msg := model.NewUserMessage(qa.Question)
 
+	var runOpts []agent.RunOption
+	if len(historyMsgs) > 0 {
+		runOpts = append(runOpts,
+			agent.WithInjectedContextMessages(historyMsgs),
+		)
+	}
+
 	predicted, err := runWithRateLimitRetry(
 		ctx, func() (<-chan *event.Event, error) {
 			return r.Run(
 				ctx, userKey.UserID, sessionID, msg,
+				runOpts...,
 			)
 		},
 	)
