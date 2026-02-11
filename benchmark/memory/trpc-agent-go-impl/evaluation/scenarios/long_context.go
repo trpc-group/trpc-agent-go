@@ -13,15 +13,12 @@ package scenarios
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/agent"
-	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/benchmark/memory/trpc-agent-go-impl/evaluation/dataset"
 	"trpc.group/trpc-go/trpc-agent-go/benchmark/memory/trpc-agent-go-impl/evaluation/metrics"
-	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
 // ScenarioType represents the evaluation scenario type.
@@ -109,19 +106,56 @@ type Evaluator interface {
 	Name() string
 }
 
-const (
-	longContextAppName = "memory-eval-long-context"
+const longContextMaxTokens = 500
 
-	longContextMaxTokens = 500
-)
+// longContextPromptTemplate is the prompt template aligned with mem0's
+// evaluation approach. The entire conversation transcript and question
+// are inlined into a single system message so the model treats the
+// transcript as reference material rather than a chat to continue.
+const longContextPromptTemplate = `You are an intelligent memory assistant tasked with retrieving accurate information from a conversation transcript.
 
-var longContextInstruction = "Answer the question based ONLY on the conversation history. " +
-	"If the answer cannot be found in the conversation, say \"The information is not available in the conversation.\". " +
-	"Be concise and direct. Output ONLY the answer."
+# CONTEXT:
+You have access to the full conversation transcript between speakers.
+The transcript contains timestamped sessions that may be relevant to answering the question.
+
+# INSTRUCTIONS:
+1. Carefully analyze the entire conversation transcript.
+2. Pay special attention to the SessionDate lines to determine when events occurred.
+3. If the question asks about a specific event or fact, look for direct evidence in the transcript.
+4. If the transcript contains contradictory information, prioritize the most recent information.
+5. If there is a question about time references (like "last year", "two months ago", etc.),
+   calculate the actual date based on the SessionDate. For example, if a session from
+   4 May 2022 mentions "went to India last year", then the trip occurred in 2021.
+6. CRITICAL: Always convert relative time references to ABSOLUTE dates, months, or years.
+   - "last year" -> "2022" (not "Last year")
+   - "this month" -> "July 2023" (not "This month")
+   - "next month" -> "August 2023" (not "Next month")
+   - "seven years" -> "Since 2016" or "7 years"
+   NEVER output relative time words as the answer.
+7. Focus only on the content of the transcript. Do not confuse character
+   names mentioned in the transcript with real-world individuals.
+8. The answer should be less than 5-6 words.
+9. If the answer cannot be found in the transcript, reply with "%s" exactly.
+
+# APPROACH (Think step by step):
+1. First, examine all parts of the transcript that contain information related to the question.
+2. Examine the SessionDate and content of these parts carefully.
+3. Look for explicit mentions of dates, times, locations, or events that answer the question.
+4. If the answer requires calculation (e.g., converting relative time references), show your work.
+5. Formulate a precise, concise answer based solely on the evidence in the transcript.
+6. Double-check that your answer directly addresses the question asked.
+7. Ensure your final answer uses ABSOLUTE dates/years, never relative words like "last year" or "this month".
+
+# TRANSCRIPT:
+
+%s
+
+Question: %s
+Answer:`
 
 // LongContextEvaluator evaluates using full conversation context.
-// The full conversation is persisted into session via agent.WithMessages(...).
-// Each QA is evaluated in an isolated session to avoid cross-QA contamination.
+// It calls the model directly with a single system message containing
+// the entire transcript and question, aligned with mem0's approach.
 type LongContextEvaluator struct {
 	model        model.Model
 	evalModel    model.Model
@@ -131,7 +165,9 @@ type LongContextEvaluator struct {
 }
 
 // NewLongContextEvaluator creates a new long context evaluator.
-func NewLongContextEvaluator(m, evalModel model.Model, cfg Config) *LongContextEvaluator {
+func NewLongContextEvaluator(
+	m, evalModel model.Model, cfg Config,
+) *LongContextEvaluator {
 	e := &LongContextEvaluator{
 		model:        m,
 		evalModel:    evalModel,
@@ -149,22 +185,14 @@ func (e *LongContextEvaluator) Name() string {
 	return "long_context"
 }
 
-// Evaluate runs evaluation on a sample using runner -> agent -> model.
+// Evaluate runs evaluation on a sample by calling the model directly.
 func (e *LongContextEvaluator) Evaluate(
 	ctx context.Context,
 	sample *dataset.LoCoMoSample,
 ) (*SampleResult, error) {
 	startTime := time.Now()
-	seed := fullConversationMessages(sample)
-	seedTokens := estimateTokens(e.tokenCounter, seed)
-
-	ag := newLongContextAgent(e.model)
-	r := runner.NewRunner(
-		longContextAppName,
-		ag,
-		runner.WithSessionService(newSessionService(e.config)),
-	)
-	defer r.Close()
+	transcript := buildTranscript(sample)
+	transcriptTokens := e.tokenCounter.Count(transcript)
 
 	result := &SampleResult{
 		SampleID:  sample.SampleID,
@@ -173,7 +201,9 @@ func (e *LongContextEvaluator) Evaluate(
 	catAgg := metrics.NewCategoryAggregator()
 
 	for _, qa := range sample.QA {
-		qaResult, err := e.evaluateQA(ctx, r, sample.SampleID, seed, seedTokens, qa)
+		qaResult, err := e.evaluateQA(
+			ctx, transcript, transcriptTokens, qa,
+		)
 		if err != nil {
 			return nil, fmt.Errorf("evaluate QA %s: %w", qa.QuestionID, err)
 		}
@@ -187,39 +217,38 @@ func (e *LongContextEvaluator) Evaluate(
 	return result, nil
 }
 
-func newLongContextAgent(m model.Model) agent.Agent {
-	genConfig := model.GenerationConfig{Stream: false, MaxTokens: intPtr(longContextMaxTokens)}
-	return llmagent.New(
-		defaultAgentName,
-		llmagent.WithModel(m),
-		llmagent.WithGenerationConfig(genConfig),
-	)
-}
-
 func (e *LongContextEvaluator) evaluateQA(
 	ctx context.Context,
-	r runner.Runner,
-	userID string,
-	seed []model.Message,
-	seedTokens int,
+	transcript string,
+	transcriptTokens int,
 	qa dataset.QAItem,
 ) (*QAResult, error) {
 	start := time.Now()
-	sessionID := fmt.Sprintf("qa-%s", qa.QuestionID)
-	msg := model.NewUserMessage(qa.Question)
 
-	predicted, err := runWithRateLimitRetry(ctx, func() (<-chan *event.Event, error) {
-		return r.Run(
-			ctx,
-			userID,
-			sessionID,
-			msg,
-			agent.WithMessages(seed),
-			agent.WithInstruction(longContextInstruction),
-		)
-	})
+	prompt := fmt.Sprintf(
+		longContextPromptTemplate,
+		fallbackAnswer,
+		transcript,
+		qa.Question,
+	)
+
+	maxTokens := longContextMaxTokens
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage(prompt),
+		},
+		GenerationConfig: model.GenerationConfig{
+			Stream:      false,
+			MaxTokens:   &maxTokens,
+			Temperature: float64Ptr(0),
+		},
+	}
+
+	predicted, err := runModelWithRateLimitRetry(
+		ctx, e.model, req,
+	)
 	if err != nil {
-		return nil, fmt.Errorf("runner run: %w", err)
+		return nil, fmt.Errorf("model generate: %w", err)
 	}
 
 	m := metrics.QAMetrics{
@@ -227,7 +256,9 @@ func (e *LongContextEvaluator) evaluateQA(
 		BLEU: metrics.CalculateBLEU(predicted, qa.Answer),
 	}
 	if e.llmJudge != nil {
-		judgeResult, err := e.llmJudge.Evaluate(ctx, qa.Question, qa.Answer, predicted)
+		judgeResult, err := e.llmJudge.Evaluate(
+			ctx, qa.Question, qa.Answer, predicted,
+		)
 		if err == nil {
 			if judgeResult.Correct {
 				m.LLMScore = judgeResult.Confidence
@@ -237,7 +268,9 @@ func (e *LongContextEvaluator) evaluateQA(
 		}
 	}
 
-	tokensUsed := seedTokens + e.tokenCounter.Count(qa.Question) + e.tokenCounter.Count(predicted)
+	tokensUsed := transcriptTokens +
+		e.tokenCounter.Count(qa.Question) +
+		e.tokenCounter.Count(predicted)
 	return &QAResult{
 		QuestionID: qa.QuestionID,
 		Question:   qa.Question,
@@ -250,33 +283,128 @@ func (e *LongContextEvaluator) evaluateQA(
 	}, nil
 }
 
-func fullConversationMessages(sample *dataset.LoCoMoSample) []model.Message {
-	if sample == nil {
-		return nil
-	}
+// runModelWithRateLimitRetry calls model.GenerateContent with
+// rate-limit retry logic.
+func runModelWithRateLimitRetry(
+	ctx context.Context,
+	m model.Model,
+	req *model.Request,
+) (string, error) {
+	backoff := rateLimitInitialBackoff
+	for attempt := 0; attempt <= maxRateLimitRetries; attempt++ {
+		respCh, err := m.GenerateContent(ctx, req)
+		if err != nil {
+			if isRateLimitError(err) {
+				if sleepErr := sleepWithContext(
+					ctx, backoff,
+				); sleepErr != nil {
+					return "", sleepErr
+				}
+				backoff = minDuration(
+					backoff*time.Duration(rateLimitBackoffMultiplier),
+					rateLimitMaxBackoff,
+				)
+				continue
+			}
+			return "", err
+		}
 
-	msgs := make([]model.Message, 0, 64)
-	for _, sess := range sample.Conversation {
-		msgs = append(msgs, sessionMessages(sample, sess)...)
-	}
-	return msgs
-}
-
-func estimateTokens(counter *metrics.TokenCounter, msgs []model.Message) int {
-	if counter == nil {
-		return 0
-	}
-
-	total := 0
-	for _, m := range msgs {
-		if m.Content == "" {
+		var lastContent string
+		for resp := range respCh {
+			if resp == nil {
+				continue
+			}
+			if resp.Error != nil {
+				errMsg := resp.Error.Message
+				if isRateLimitError(
+					fmt.Errorf("%s", errMsg),
+				) {
+					// Drain remaining responses.
+					for range respCh {
+					}
+					if sleepErr := sleepWithContext(
+						ctx, backoff,
+					); sleepErr != nil {
+						return "", sleepErr
+					}
+					backoff = minDuration(
+						backoff*time.Duration(
+							rateLimitBackoffMultiplier,
+						),
+						rateLimitMaxBackoff,
+					)
+					lastContent = ""
+					break
+				}
+				return "", fmt.Errorf(
+					"model error: %s", errMsg,
+				)
+			}
+			if len(resp.Choices) > 0 {
+				c := resp.Choices[0].Message.Content
+				if c != "" {
+					lastContent = c
+				}
+			}
+		}
+		if lastContent != "" {
+			return strings.TrimSpace(lastContent), nil
+		}
+		// Empty response (possibly rate limit or model overload).
+		// Apply backoff before retrying.
+		if attempt < maxRateLimitRetries {
+			if sleepErr := sleepWithContext(
+				ctx, backoff,
+			); sleepErr != nil {
+				return "", sleepErr
+			}
+			backoff = minDuration(
+				backoff*time.Duration(
+					rateLimitBackoffMultiplier,
+				),
+				rateLimitMaxBackoff,
+			)
 			continue
 		}
-		total += counter.Count(m.Content)
 	}
-	return total
+	return "", fmt.Errorf("model returned empty response after retries")
+}
+
+// buildTranscript concatenates all sessions into a single transcript
+// string with SessionDate headers and Speaker labels.
+func buildTranscript(sample *dataset.LoCoMoSample) string {
+	if sample == nil {
+		return ""
+	}
+
+	b := strings.Builder{}
+	for i, sess := range sample.Conversation {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		if strings.TrimSpace(sess.SessionDate) != "" {
+			fmt.Fprintf(&b, "%s: %s\n",
+				seedSessionDateLabel, sess.SessionDate)
+		}
+		for _, turn := range sess.Turns {
+			content := strings.TrimSpace(turn.Text)
+			if content == "" {
+				continue
+			}
+			speaker := strings.TrimSpace(turn.Speaker)
+			if speaker == "" {
+				speaker = "Unknown"
+			}
+			fmt.Fprintf(&b, "%s: %s\n", speaker, content)
+		}
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func intPtr(i int) *int {
 	return &i
+}
+
+func float64Ptr(f float64) *float64 {
+	return &f
 }

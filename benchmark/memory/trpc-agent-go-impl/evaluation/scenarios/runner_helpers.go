@@ -196,7 +196,7 @@ func sessionMessages(sample *dataset.LoCoMoSample, sess dataset.Session) []model
 const fallbackAnswer = "The information is not available."
 
 const (
-	venusRateLimitCode         = "\"code\":\"4029\""
+	rateLimitCode              = "\"code\":\"4029\""
 	maxRateLimitRetries        = 10
 	rateLimitInitialBackoff    = 2 * time.Second
 	rateLimitMaxBackoff        = 90 * time.Second
@@ -231,7 +231,14 @@ func isRateLimitError(err error) bool {
 	}
 	msg := err.Error()
 	return strings.Contains(msg, "429 Too Many Requests") ||
-		strings.Contains(msg, venusRateLimitCode)
+		strings.Contains(msg, "429") ||
+		strings.Contains(msg, "rate limit") ||
+		strings.Contains(msg, "Rate limit") ||
+		strings.Contains(msg, "too many requests") ||
+		strings.Contains(msg, "Too Many Requests") ||
+		strings.Contains(msg, "rate_limit_exceeded") ||
+		strings.Contains(msg, "server_busy") ||
+		strings.Contains(msg, rateLimitCode)
 }
 
 func sleepWithContext(ctx context.Context, d time.Duration) error {
