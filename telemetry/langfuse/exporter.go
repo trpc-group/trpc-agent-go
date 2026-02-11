@@ -311,13 +311,6 @@ func stringValueOrNA(v *commonpb.AnyValue) string {
 }
 
 func buildObservationInputPrompt(messagesJSON, toolDefsJSON string) (string, error) {
-	if !json.Valid([]byte(messagesJSON)) {
-		return "", fmt.Errorf("invalid messages json")
-	}
-	if !json.Valid([]byte(toolDefsJSON)) {
-		return "", fmt.Errorf("invalid tool definitions json")
-	}
-
 	payload := observationInputPrompt{
 		Tools:    json.RawMessage([]byte(toolDefsJSON)),
 		Messages: json.RawMessage([]byte(messagesJSON)),
@@ -330,7 +323,7 @@ func buildObservationInputPrompt(messagesJSON, toolDefsJSON string) (string, err
 }
 
 func extractMessagesJSONFromRequestJSON(requestJSON string) (string, bool) {
-	if requestJSON == "" || !json.Valid([]byte(requestJSON)) {
+	if requestJSON == "" {
 		return "", false
 	}
 	var m map[string]json.RawMessage
@@ -338,7 +331,7 @@ func extractMessagesJSONFromRequestJSON(requestJSON string) (string, bool) {
 		return "", false
 	}
 	msgs, ok := m["messages"]
-	if !ok || len(msgs) == 0 || !json.Valid(msgs) {
+	if !ok || len(msgs) == 0 {
 		return "", false
 	}
 	return string(msgs), true
