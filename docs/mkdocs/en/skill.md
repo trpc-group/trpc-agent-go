@@ -83,6 +83,40 @@ Enable tool-result materialization with:
 To measure the impact in a real tool-using flow, run the
 `benchmark/anthropic_skills` `prompt-cache` suite.
 
+How this relates to `SkillLoadMode` (common pitfall):
+
+- The cache-prefix discussion above mostly applies to multiple model
+  calls within the same `Runner.Run` (one user message triggers a tool
+  loop).
+- If you want loaded skill bodies/docs to persist across **multiple
+  conversation turns**, set `SkillLoadMode` to `session`. The default
+  `turn` mode clears `temp:skill:loaded:*` / `temp:skill:docs:*` before
+  the next run starts. As a result, even if your history still contains
+  the previous `skill_load` tool result (typically a short `loaded:
+  <name>` stub), the framework will not materialize the body/docs again.
+
+Practical guidance (especially with
+`WithSkillsLoadedContentInToolResults(true)`):
+
+- First, be clear about *which* caching scenario you mean:
+  - **Within a single turn** (multiple model calls inside one
+    `Runner.Run`): `turn` and `session` behave similarly because both
+    keep loaded content available within the run. The more important
+    lever is usually *where* you materialize content (system vs tool
+    result).
+  - **Across turns**: `session` can be more prompt-cache friendly
+    because you load once and avoid repeating `skill_load` every turn.
+    The trade-off is a larger prompt and the need to manage clearing.
+- Rule of thumb:
+  - Default to `turn` (least-privilege, smaller prompts, less likely to
+    trigger truncation/summary).
+  - Use `session` only for a small number of skills you truly need
+    across the whole session, and keep docs selection tight.
+- Keep docs selection tight (avoid `include_all_docs` when possible).
+  Otherwise the prompt can grow quickly and trigger truncation/summary.
+  That increases the chance of falling back to a system message, which
+  usually reduces prompt-cache benefits.
+
 ### Session Persistence
 
 It helps to separate two concepts:
@@ -102,6 +136,9 @@ So if you inspect stored tool results, `skill_load` typically still looks
 like a short stub (for example, `loaded: internal-comms`). The model
 still sees the expanded body/docs because they are added when building
 the outbound request.
+
+Note: `SkillLoadMode` controls the lifecycle of those state keys, so it
+also determines whether the next turn can keep materializing bodies/docs.
 
 Stability across calls:
 - Within a tool loop, the materialization is re-applied deterministically
@@ -319,6 +356,94 @@ Notes:
     request only, then offloaded (cleared) from session state.
   - `session` (legacy): loaded bodies/docs persist across turns until
     cleared or the session expires.
+- Common question: why do I only see `loaded: <name>` in a tool result
+  (and not a `[Loaded] <name>` block with the full body)?
+  - First, make sure you enabled tool-result materialization:
+    `llmagent.WithSkillsLoadedContentInToolResults(true)`.
+    If it is disabled, bodies/docs are appended to the system message,
+    not the tool result.
+  - If it is enabled but you still see only the stub on the “next
+    conversation turn”, you are likely using the default
+    `SkillLoadModeTurn`: state is cleared before the next run, so the
+    framework won’t re-materialize bodies/docs. Use:
+
+```go
+agent := llmagent.New(
+    "skills-assistant",
+    llmagent.WithSkills(repo),
+    llmagent.WithSkillsLoadedContentInToolResults(true),
+    llmagent.WithSkillLoadMode(llmagent.SkillLoadModeSession),
+)
+```
+
+Multi-turn example: reuse the same `sessionID` so the “loaded state” can
+carry across turns:
+
+```go
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/event"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+    "trpc.group/trpc-go/trpc-agent-go/session"
+    "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+)
+
+ctx := context.Background()
+svc := inmemory.NewSessionService()
+r := runner.NewRunner(
+    "demo-app",
+    agent,
+    runner.WithSessionService(svc),
+)
+defer r.Close()
+
+userID := "u1"
+sessionID := "s1"
+
+drain := func(ch <-chan *event.Event) {
+    for range ch {
+    }
+}
+
+ch, _ := r.Run(ctx, userID, sessionID, model.NewUserMessage(
+    "Please load the internal-comms skill.",
+))
+drain(ch)
+
+// Next turn, same sessionID:
+ch, _ = r.Run(ctx, userID, sessionID, model.NewUserMessage(
+    "Now use internal-comms to generate an update.",
+))
+drain(ch)
+
+// Optional: inspect what is persisted in the session service.
+sess, _ := svc.GetSession(ctx, session.Key{
+    AppName:   "demo-app",
+    UserID:    userID,
+    SessionID: sessionID,
+})
+_ = sess
+```
+
+Clearing guidance (common with `SkillLoadModeSession`):
+
+- Easiest: start a new conversation using a new `sessionID`.
+- Or delete the session (in this inmemory example):
+
+```go
+_ = svc.DeleteSession(ctx, session.Key{
+    AppName:   "demo-app",
+    UserID:    userID,
+    SessionID: sessionID,
+})
+```
+
+Hint: tool-result materialization requires the relevant tool result
+message to be present in the request history. If history is suppressed
+or truncated, the framework falls back to a dedicated system message
+(`Loaded skill context:`) to preserve correctness.
 - Configure it on the agent:
 
 ```go
@@ -326,6 +451,30 @@ agent := llmagent.New(
     "skills-assistant",
     llmagent.WithSkills(repo),
     llmagent.WithSkillLoadMode(llmagent.SkillLoadModeTurn),
+)
+```
+
+Config snippet: a common prompt-cache friendly setup (stable system +
+per-turn lifetime):
+
+```go
+agent := llmagent.New(
+    "skills-assistant",
+    llmagent.WithSkills(repo),
+    llmagent.WithSkillsLoadedContentInToolResults(true),
+    llmagent.WithSkillLoadMode(llmagent.SkillLoadModeTurn),
+)
+```
+
+Config snippet: one-shot injection (only the **next** model request sees
+the body/docs):
+
+```go
+agent := llmagent.New(
+    "skills-assistant",
+    llmagent.WithSkills(repo),
+    llmagent.WithSkillsLoadedContentInToolResults(true),
+    llmagent.WithSkillLoadMode(llmagent.SkillLoadModeOnce),
 )
 ```
 
