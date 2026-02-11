@@ -354,6 +354,69 @@ agent := llmagent.New(
 )
 ```
 
+多轮对话示例：复用同一个 `sessionID` 才能让“已加载状态”跨轮生效：
+
+```go
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/event"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+    "trpc.group/trpc-go/trpc-agent-go/session"
+    "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+)
+
+ctx := context.Background()
+svc := inmemory.NewSessionService()
+r := runner.NewRunner(
+    "demo-app",
+    agent,
+    runner.WithSessionService(svc),
+)
+defer r.Close()
+
+userID := "u1"
+sessionID := "s1"
+
+drain := func(ch <-chan *event.Event) {
+    for range ch {
+    }
+}
+
+ch, _ := r.Run(ctx, userID, sessionID, model.NewUserMessage(
+    "Please load the internal-comms skill.",
+))
+drain(ch)
+
+// Next turn, same sessionID:
+ch, _ = r.Run(ctx, userID, sessionID, model.NewUserMessage(
+    "Now use internal-comms to generate an update.",
+))
+drain(ch)
+
+// Optional: inspect what is persisted in the session service.
+sess, _ := svc.GetSession(ctx, session.Key{
+    AppName:   "demo-app",
+    UserID:    userID,
+    SessionID: sessionID,
+})
+_ = sess
+```
+
+清空建议（`SkillLoadModeSession` 下很常见）：
+
+- 最简单：换一个新的 `sessionID` 开启新对话。
+- 或者由上层删除 session（以 inmemory 为例）：
+
+```go
+_ = svc.DeleteSession(ctx, session.Key{
+    AppName:   "demo-app",
+    UserID:    userID,
+    SessionID: sessionID,
+})
+```
+
 提示：tool-result 物化依赖本次请求的 history 中包含对应的 tool result
 消息；如果 history 被截断/抑制，框架会回退为插入专用 system message
 （`Loaded skill context:`）来保证正确性。
@@ -364,6 +427,28 @@ agent := llmagent.New(
     "skills-assistant",
     llmagent.WithSkills(repo),
     llmagent.WithSkillLoadMode(llmagent.SkillLoadModeTurn),
+)
+```
+
+配置片段：更利于 prompt cache 的常用组合（system 更稳定 + 只在本轮驻留）：
+
+```go
+agent := llmagent.New(
+    "skills-assistant",
+    llmagent.WithSkills(repo),
+    llmagent.WithSkillsLoadedContentInToolResults(true),
+    llmagent.WithSkillLoadMode(llmagent.SkillLoadModeTurn),
+)
+```
+
+配置片段：一次性注入（只让**下一次**模型请求看到正文/文档）：
+
+```go
+agent := llmagent.New(
+    "skills-assistant",
+    llmagent.WithSkills(repo),
+    llmagent.WithSkillsLoadedContentInToolResults(true),
+    llmagent.WithSkillLoadMode(llmagent.SkillLoadModeOnce),
 )
 ```
 

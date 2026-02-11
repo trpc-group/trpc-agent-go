@@ -368,6 +368,70 @@ agent := llmagent.New(
 )
 ```
 
+Multi-turn example: reuse the same `sessionID` so the “loaded state” can
+carry across turns:
+
+```go
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/event"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+    "trpc.group/trpc-go/trpc-agent-go/session"
+    "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+)
+
+ctx := context.Background()
+svc := inmemory.NewSessionService()
+r := runner.NewRunner(
+    "demo-app",
+    agent,
+    runner.WithSessionService(svc),
+)
+defer r.Close()
+
+userID := "u1"
+sessionID := "s1"
+
+drain := func(ch <-chan *event.Event) {
+    for range ch {
+    }
+}
+
+ch, _ := r.Run(ctx, userID, sessionID, model.NewUserMessage(
+    "Please load the internal-comms skill.",
+))
+drain(ch)
+
+// Next turn, same sessionID:
+ch, _ = r.Run(ctx, userID, sessionID, model.NewUserMessage(
+    "Now use internal-comms to generate an update.",
+))
+drain(ch)
+
+// Optional: inspect what is persisted in the session service.
+sess, _ := svc.GetSession(ctx, session.Key{
+    AppName:   "demo-app",
+    UserID:    userID,
+    SessionID: sessionID,
+})
+_ = sess
+```
+
+Clearing guidance (common with `SkillLoadModeSession`):
+
+- Easiest: start a new conversation using a new `sessionID`.
+- Or delete the session (in this inmemory example):
+
+```go
+_ = svc.DeleteSession(ctx, session.Key{
+    AppName:   "demo-app",
+    UserID:    userID,
+    SessionID: sessionID,
+})
+```
+
 Hint: tool-result materialization requires the relevant tool result
 message to be present in the request history. If history is suppressed
 or truncated, the framework falls back to a dedicated system message
@@ -379,6 +443,30 @@ agent := llmagent.New(
     "skills-assistant",
     llmagent.WithSkills(repo),
     llmagent.WithSkillLoadMode(llmagent.SkillLoadModeTurn),
+)
+```
+
+Config snippet: a common prompt-cache friendly setup (stable system +
+per-turn lifetime):
+
+```go
+agent := llmagent.New(
+    "skills-assistant",
+    llmagent.WithSkills(repo),
+    llmagent.WithSkillsLoadedContentInToolResults(true),
+    llmagent.WithSkillLoadMode(llmagent.SkillLoadModeTurn),
+)
+```
+
+Config snippet: one-shot injection (only the **next** model request sees
+the body/docs):
+
+```go
+agent := llmagent.New(
+    "skills-assistant",
+    llmagent.WithSkills(repo),
+    llmagent.WithSkillsLoadedContentInToolResults(true),
+    llmagent.WithSkillLoadMode(llmagent.SkillLoadModeOnce),
 )
 ```
 
