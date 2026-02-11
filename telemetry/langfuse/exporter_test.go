@@ -336,7 +336,7 @@ func TestTransformCallLLM(t *testing.T) {
 				observationType:            "generation",
 				observationInput:           `{"prompt": "Hello", "generation_config": {"temperature": 0.7}}`,
 				observationOutput:          `{"text": "Hello! How can I help you?"}`,
-				observationModelParameters: `{"temperature":0.7}`,
+				observationModelParameters: `{"temperature": 0.7}`,
 				"other.attribute":          "keep-this",
 			},
 		},
@@ -487,7 +487,7 @@ func TestTransformCallLLM_PromptWithTools(t *testing.T) {
 	require.True(t, seen["beta"])
 
 	// generation_config is still extracted from llm_request.
-	assert.Equal(t, `{"temperature":0.7}`, attrMap[observationModelParameters])
+	assert.Equal(t, `{"temperature": 0.7}`, attrMap[observationModelParameters])
 }
 
 func TestTransformCallLLM_UsageDetails(t *testing.T) {

@@ -165,161 +165,149 @@ func transformInvokeAgent(span *tracepb.Span) {
 }
 
 // transformCallLLM transforms LLM call spans for Langfuse
+// llmSpanCollected holds the intermediate values collected from an LLM span's attributes.
+type llmSpanCollected struct {
+	sessionID       *commonpb.AnyValue
+	llmRequest      *string
+	inputMessages   *string
+	toolDefinitions *string
+	usage           usageDetails
+	attrs           []*commonpb.KeyValue // non-LLM attributes to keep
+}
+
+// transformCallLLM transforms LLM call spans for Langfuse.
 func transformCallLLM(span *tracepb.Span) {
-	var newAttributes []*commonpb.KeyValue
+	collected := collectLLMSpanAttributes(span.Attributes)
 
-	// Add observation type
-	newAttributes = append(newAttributes, &commonpb.KeyValue{
-		Key: observationType,
-		Value: &commonpb.AnyValue{
-			Value: &commonpb.AnyValue_StringValue{StringValue: observationTypeGeneration},
-		},
-	})
+	newAttributes := []*commonpb.KeyValue{{
+		Key:   observationType,
+		Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: observationTypeGeneration}},
+	}}
+	newAttributes = append(newAttributes, collected.attrs...)
 
-	// Collect token usage for building usage_details JSON (aligned with Langfuse SDK)
-	var usage usageDetails
+	// observation.input
+	newAttributes = append(newAttributes, stringKV(observationInput, buildLLMObservationInput(collected)))
 
-	// Collect prompt pieces (aligned with langfuse-python prompt shape)
-	var (
-		llmSessionID    *commonpb.AnyValue
-		llmRequest      *string
-		inputMessages   *string
-		toolDefinitions *string
-	)
+	// observation.model_parameters (generation_config from llm request)
+	if kv := extractModelParameters(collected.llmRequest); kv != nil {
+		newAttributes = append(newAttributes, kv)
+	}
 
-	for _, attr := range span.Attributes {
+	// observation.usage_details
+	if !collected.usage.empty() {
+		if usageJSON, err := json.Marshal(collected.usage); err == nil {
+			newAttributes = append(newAttributes, stringKV(observationUsageDetails, string(usageJSON)))
+		}
+	}
+
+	if collected.sessionID != nil {
+		newAttributes = append(newAttributes, &commonpb.KeyValue{Key: traceSessionID, Value: collected.sessionID})
+	}
+
+	span.Attributes = newAttributes
+}
+
+// collectLLMSpanAttributes iterates over the raw span attributes once, collecting
+// the pieces needed by subsequent build steps and filtering out OTEL-specific keys.
+func collectLLMSpanAttributes(attrs []*commonpb.KeyValue) llmSpanCollected {
+	var c llmSpanCollected
+	for _, attr := range attrs {
 		switch attr.Key {
 		case itelemetry.KeyGenAIConversationID, itelemetry.KeyRunnerSessionID, traceSessionID:
-			llmSessionID = attr.Value
+			c.sessionID = attr.Value
 		case itelemetry.KeyRunnerUserID:
-			newAttributes = append(newAttributes, &commonpb.KeyValue{Key: traceUserID, Value: attr.Value})
-
+			c.attrs = append(c.attrs, &commonpb.KeyValue{Key: traceUserID, Value: attr.Value})
 		case itelemetry.KeyLLMRequest:
-			if attr.Value != nil {
-				s := attr.Value.GetStringValue()
-				llmRequest = &s
-			}
-			// Skip this attribute (delete it)
-
+			c.llmRequest = getStringPtr(attr.Value)
 		case itelemetry.KeyGenAIInputMessages:
-			if attr.Value != nil {
-				s := attr.Value.GetStringValue()
-				inputMessages = &s
-			}
-			// Skip this attribute (delete it)
-
+			c.inputMessages = getStringPtr(attr.Value)
 		case itelemetry.KeyGenAIRequestToolDefinitions:
-			if attr.Value != nil {
-				s := attr.Value.GetStringValue()
-				toolDefinitions = &s
-			}
-			// Skip this attribute (delete it)
-
+			c.toolDefinitions = getStringPtr(attr.Value)
 		case itelemetry.KeyLLMResponse:
-			if attr.Value != nil {
-				newAttributes = append(newAttributes, &commonpb.KeyValue{
-					Key: observationOutput,
-					Value: &commonpb.AnyValue{
-						Value: &commonpb.AnyValue_StringValue{StringValue: attr.Value.GetStringValue()},
-					},
-				})
-			} else {
-				newAttributes = append(newAttributes, &commonpb.KeyValue{
-					Key: observationOutput,
-					Value: &commonpb.AnyValue{
-						Value: &commonpb.AnyValue_StringValue{StringValue: "N/A"},
-					},
-				})
-			}
-			// Skip this attribute (delete it)
-
-		// Collect token usage attributes into usage_details map.
-		// These are converted from individual OTEL attributes to the Langfuse
-		// usage_details JSON format: {"input": N, "output": N, "total": N, ...}
+			c.attrs = append(c.attrs, stringKV(observationOutput, stringValueOrNA(attr.Value)))
 		case itelemetry.KeyGenAIUsageInputTokens:
-			usage.Input = attr.Value.GetIntValue()
+			c.usage.Input = attr.Value.GetIntValue()
 		case itelemetry.KeyGenAIUsageOutputTokens:
-			usage.Output = attr.Value.GetIntValue()
+			c.usage.Output = attr.Value.GetIntValue()
 		case itelemetry.KeyGenAIUsageInputTokensCached:
-			usage.InputCached = attr.Value.GetIntValue()
+			c.usage.InputCached = attr.Value.GetIntValue()
 		case itelemetry.KeyGenAIUsageInputTokensCacheRead:
-			usage.InputCacheRead = attr.Value.GetIntValue()
+			c.usage.InputCacheRead = attr.Value.GetIntValue()
 		case itelemetry.KeyGenAIUsageInputTokensCacheCreation:
-			usage.InputCacheCreation = attr.Value.GetIntValue()
-
+			c.usage.InputCacheCreation = attr.Value.GetIntValue()
 		default:
-			// Keep other attributes
-			newAttributes = append(newAttributes, attr)
+			c.attrs = append(c.attrs, attr)
 		}
 	}
+	return c
+}
 
-	// Build Langfuse observation.input.
-	observationInputValue := "N/A"
-	if inputMessages != nil && *inputMessages != "" {
-		// Default to messages-only, like langfuse-python.
-		observationInputValue = *inputMessages
-
-		// If tools exist, wrap as {tools, messages}.
-		if toolDefinitions != nil && *toolDefinitions != "" {
-			if wrapped, err := buildObservationInputPrompt(*inputMessages, *toolDefinitions); err == nil {
-				observationInputValue = wrapped
-			}
-		}
-	} else if llmRequest != nil && *llmRequest != "" {
-		// Fallback: extract messages from request JSON, instead of using the whole request.
-		if messagesJSON, ok := extractMessagesJSONFromRequestJSON(*llmRequest); ok && messagesJSON != "" {
-			observationInputValue = messagesJSON
-			if toolDefinitions != nil && *toolDefinitions != "" {
-				if wrapped, err := buildObservationInputPrompt(messagesJSON, *toolDefinitions); err == nil {
-					observationInputValue = wrapped
-				}
-			}
-		} else {
-			observationInputValue = *llmRequest
-		}
+// buildLLMObservationInput constructs the Langfuse observation.input value from
+// collected LLM span data, wrapping tools+messages when both are present.
+func buildLLMObservationInput(c llmSpanCollected) string {
+	if c.inputMessages != nil && *c.inputMessages != "" {
+		return wrapWithToolsIfPresent(*c.inputMessages, c.toolDefinitions)
 	}
+	if c.llmRequest != nil && *c.llmRequest != "" {
+		if messagesJSON, ok := extractMessagesJSONFromRequestJSON(*c.llmRequest); ok && messagesJSON != "" {
+			return wrapWithToolsIfPresent(messagesJSON, c.toolDefinitions)
+		}
+		return *c.llmRequest
+	}
+	return "N/A"
+}
 
-	newAttributes = append(newAttributes, &commonpb.KeyValue{
-		Key:   observationInput,
-		Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: observationInputValue}},
-	})
-
-	// Extract generation_config if exists (from llm request).
-	if llmRequest != nil && *llmRequest != "" {
-		var req map[string]any
-		if err := json.Unmarshal([]byte(*llmRequest), &req); err == nil {
-			if genConfig, exists := req["generation_config"]; exists {
-				if jsonConfig, err := json.Marshal(genConfig); err == nil {
-					newAttributes = append(newAttributes, &commonpb.KeyValue{
-						Key: observationModelParameters,
-						Value: &commonpb.AnyValue{
-							Value: &commonpb.AnyValue_StringValue{StringValue: string(jsonConfig)},
-						},
-					})
-				}
-			}
+// wrapWithToolsIfPresent returns messagesJSON as-is, or wraps it with tool
+// definitions into {"tools":..., "messages":...} when toolDefs is non-empty.
+func wrapWithToolsIfPresent(messagesJSON string, toolDefs *string) string {
+	if toolDefs != nil && *toolDefs != "" {
+		if wrapped, err := buildObservationInputPrompt(messagesJSON, *toolDefs); err == nil {
+			return wrapped
 		}
 	}
+	return messagesJSON
+}
 
-	// Build usage_details JSON attribute if any usage data was collected.
-	// Note: "total" is not computed here; the Langfuse server calculates it automatically.
-	if !usage.empty() {
-		if usageJSON, err := json.Marshal(usage); err == nil {
-			newAttributes = append(newAttributes, &commonpb.KeyValue{
-				Key: observationUsageDetails,
-				Value: &commonpb.AnyValue{
-					Value: &commonpb.AnyValue_StringValue{StringValue: string(usageJSON)},
-				},
-			})
-		}
+// extractModelParameters extracts "generation_config" from the LLM request JSON
+// and returns it as an observation.model_parameters attribute, or nil.
+func extractModelParameters(llmRequest *string) *commonpb.KeyValue {
+	if llmRequest == nil || *llmRequest == "" {
+		return nil
 	}
-
-	if llmSessionID != nil { // use post set session id
-		newAttributes = append(newAttributes, &commonpb.KeyValue{Key: traceSessionID, Value: llmSessionID})
+	var req map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(*llmRequest), &req); err != nil {
+		return nil
 	}
+	raw, exists := req["generation_config"]
+	if !exists {
+		return nil
+	}
+	return stringKV(observationModelParameters, string(raw))
+}
 
-	// Replace span attributes
-	span.Attributes = newAttributes
+// stringKV is a helper to build a string-valued KeyValue proto attribute.
+func stringKV(key, value string) *commonpb.KeyValue {
+	return &commonpb.KeyValue{
+		Key:   key,
+		Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: value}},
+	}
+}
+
+// getStringPtr returns a pointer to the string value of v, or nil if v is nil.
+func getStringPtr(v *commonpb.AnyValue) *string {
+	if v == nil {
+		return nil
+	}
+	s := v.GetStringValue()
+	return &s
+}
+
+// stringValueOrNA returns the string value of v, or "N/A" if v is nil.
+func stringValueOrNA(v *commonpb.AnyValue) string {
+	if v == nil {
+		return "N/A"
+	}
+	return v.GetStringValue()
 }
 
 func buildObservationInputPrompt(messagesJSON, toolDefsJSON string) (string, error) {
