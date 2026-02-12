@@ -20,6 +20,7 @@ import (
 	"maps"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -148,6 +149,21 @@ func WithToolSets(toolSets []tool.ToolSet) Option {
 func WithRefreshToolSetsOnRun(refresh bool) Option {
 	return func(node *Node) {
 		node.refreshToolSetsOnRun = refresh
+	}
+}
+
+// WithConvertForeignToolMessages enables an opt-in compatibility mode that
+// converts tool calls and tool responses for tools not available to the
+// current LLM node into plain text before sending messages to the model.
+//
+// This can help with some OpenAI-like providers that reject requests when the
+// message history contains tool interactions that are not compatible with the
+// current request's tool set.
+//
+// Effective only for nodes added via AddLLMNode.
+func WithConvertForeignToolMessages(enable bool) Option {
+	return func(node *Node) {
+		node.convertForeignToolMessagesEnabled = enable
 	}
 }
 
@@ -496,6 +512,7 @@ func (sg *StateGraph) AddLLMNode(
 		WithLLMUserInputKey(node.userInputKey),
 		WithLLMRefreshToolSetsOnRun(node.refreshToolSetsOnRun),
 		WithLLMToolSets(node.toolSets),
+		WithLLMConvertForeignToolMessages(node.convertForeignToolMessagesEnabled),
 	}
 	if node.llmGenerationConfig != nil {
 		llmOptsForFunc = append(
@@ -906,6 +923,14 @@ func WithLLMRefreshToolSetsOnRun(refresh bool) LLMNodeFuncOption {
 	}
 }
 
+// WithLLMConvertForeignToolMessages enables conversion of foreign tool call
+// messages to plain text before sending to the model (compatibility mode).
+func WithLLMConvertForeignToolMessages(enable bool) LLMNodeFuncOption {
+	return func(runner *llmRunner) {
+		runner.convertForeignToolMessagesEnabled = enable
+	}
+}
+
 func mergeToolsWithToolSets(
 	ctx context.Context,
 	base map[string]tool.Tool,
@@ -1001,14 +1026,15 @@ func NewLLMNodeFunc(
 // llmRunner encapsulates LLM execution dependencies to avoid long parameter
 // lists.
 type llmRunner struct {
-	llmModel             model.Model
-	instruction          string
-	tools                map[string]tool.Tool
-	toolSets             []tool.ToolSet
-	refreshToolSetsOnRun bool
-	nodeID               string
-	generationConfig     model.GenerationConfig
-	userInputKey         string
+	llmModel                          model.Model
+	instruction                       string
+	tools                             map[string]tool.Tool
+	toolSets                          []tool.ToolSet
+	refreshToolSetsOnRun              bool
+	convertForeignToolMessagesEnabled bool
+	nodeID                            string
+	generationConfig                  model.GenerationConfig
+	userInputKey                      string
 }
 
 // execute implements the three-stage rule for LLM execution.
@@ -1162,6 +1188,145 @@ func (r *llmRunner) executeHistoryStage(ctx context.Context, state State, span o
 	return nil, nil
 }
 
+const foreignToolContextPrefix = "For context:"
+
+type toolNameSet map[string]struct{}
+
+func toolNameSetFromTools(tools map[string]tool.Tool) toolNameSet {
+	set := make(toolNameSet, len(tools))
+	for name := range tools {
+		set[name] = struct{}{}
+	}
+	return set
+}
+
+func collectForeignToolCallIDs(messages []model.Message, available toolNameSet) map[string]struct{} {
+	callIDs := make(map[string]struct{})
+	for _, msg := range messages {
+		if msg.Role != model.RoleAssistant {
+			continue
+		}
+		for _, tc := range msg.ToolCalls {
+			if _, ok := available[tc.Function.Name]; ok {
+				continue
+			}
+			callIDs[tc.ID] = struct{}{}
+		}
+	}
+	return callIDs
+}
+
+func isNonEmptyAssistantMessage(msg model.Message) bool {
+	return msg.Content != "" ||
+		len(msg.ContentParts) > 0 ||
+		len(msg.ToolCalls) > 0 ||
+		msg.ReasoningContent != ""
+}
+
+func splitToolCallsByAvailability(
+	toolCalls []model.ToolCall,
+	available toolNameSet,
+) (remaining []model.ToolCall, convertedParts []string) {
+	for _, tc := range toolCalls {
+		if _, ok := available[tc.Function.Name]; ok {
+			remaining = append(remaining, tc)
+			continue
+		}
+		convertedParts = append(convertedParts,
+			fmt.Sprintf("Tool `%s` called with parameters: %s",
+				tc.Function.Name, string(tc.Function.Arguments)),
+		)
+	}
+	return remaining, convertedParts
+}
+
+func appendConvertedAssistantMessage(
+	dst []model.Message,
+	msg model.Message,
+	available toolNameSet,
+) []model.Message {
+	if msg.Role != model.RoleAssistant || len(msg.ToolCalls) == 0 {
+		return append(dst, msg)
+	}
+
+	remainingToolCalls, convertedParts := splitToolCallsByAvailability(msg.ToolCalls, available)
+	if len(convertedParts) == 0 {
+		return append(dst, msg)
+	}
+
+	kept := msg
+	kept.ToolCalls = remainingToolCalls
+	// Drop empty assistant messages after removing foreign tool calls to align
+	// with non-graph flows that rewrite foreign events as user context.
+	if isNonEmptyAssistantMessage(kept) {
+		dst = append(dst, kept)
+	}
+
+	parts := append([]string{foreignToolContextPrefix}, convertedParts...)
+	return append(dst, model.NewUserMessage(strings.Join(parts, " ")))
+}
+
+func appendConvertedToolMessage(
+	dst []model.Message,
+	msg model.Message,
+	noTools bool,
+	callIDsToConvert map[string]struct{},
+) []model.Message {
+	if msg.Role != model.RoleTool {
+		return append(dst, msg)
+	}
+	if !noTools {
+		if _, ok := callIDsToConvert[msg.ToolID]; !ok {
+			return append(dst, msg)
+		}
+	}
+
+	identifier := msg.ToolID
+	if identifier == "" {
+		identifier = msg.ToolName
+	}
+	return append(dst, model.NewUserMessage(
+		fmt.Sprintf("%s `%s` tool returned result: %s", foreignToolContextPrefix, identifier, msg.Content),
+	))
+}
+
+// convertForeignToolMessages converts ToolCalls and tool responses to text for tools not in r.tools.
+// When the LLM node has no tools, all tool-related messages are converted to plain text
+// to avoid API errors when message history contains tool interactions from other nodes.
+// This matches ContentRequestProcessor's convertForeignEvent behavior used by non-graph flows.
+//
+// Note: This conversion is only applied when WithConvertForeignToolMessages (or
+// WithLLMConvertForeignToolMessages) is enabled.
+func (r *llmRunner) convertForeignToolMessages(messages []model.Message, tools map[string]tool.Tool) []model.Message {
+	if len(messages) == 0 {
+		return messages
+	}
+
+	availableToolNames := toolNameSetFromTools(tools)
+	callIDsToConvert := collectForeignToolCallIDs(messages, availableToolNames)
+
+	// If nothing to convert and we have tools, return original messages
+	if len(callIDsToConvert) == 0 && len(tools) > 0 {
+		return messages
+	}
+
+	// Second pass: convert messages
+	noTools := len(tools) == 0
+	result := make([]model.Message, 0, len(messages)+len(callIDsToConvert))
+	for _, msg := range messages {
+		switch msg.Role {
+		case model.RoleAssistant:
+			result = appendConvertedAssistantMessage(result, msg, availableToolNames)
+		case model.RoleTool:
+			result = appendConvertedToolMessage(result, msg, noTools, callIDsToConvert)
+		default:
+			result = append(result, msg)
+		}
+	}
+
+	return result
+}
+
 func (r *llmRunner) executeModel(
 	ctx context.Context,
 	state State,
@@ -1172,6 +1337,11 @@ func (r *llmRunner) executeModel(
 	tools := r.tools
 	if r.refreshToolSetsOnRun && len(r.toolSets) > 0 {
 		tools = mergeToolsWithToolSets(ctx, tools, r.toolSets)
+	}
+	if r.convertForeignToolMessagesEnabled {
+		// Convert foreign tool messages to text when this node has no tools or different tools.
+		// This prevents API errors when message history contains tool interactions from other nodes.
+		messages = r.convertForeignToolMessages(messages, tools)
 	}
 	nodeID := r.nodeID
 	if v, ok := state[StateKeyCurrentNodeID].(string); ok && v != "" {
