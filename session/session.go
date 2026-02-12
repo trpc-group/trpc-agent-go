@@ -14,10 +14,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"sync"
 	"time"
 
-	"github.com/spaolacci/murmur3"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
@@ -189,10 +189,18 @@ func WithSessionUpdatedAt(updatedAt time.Time) SessionOptions {
 	}
 }
 
+// HashString computes a deterministic hash for the given string.
+// It is used for slot-based dispatching of sessions and track events.
+func HashString(s string) int {
+	h := fnv.New32a()
+	h.Write([]byte(s))
+	return int(h.Sum32())
+}
+
 // NewSession creates a new session.
 func NewSession(appName, userID, sessionID string, options ...SessionOptions) *Session {
 	hashKey := fmt.Sprintf("%s:%s:%s", appName, userID, sessionID)
-	hash := int(murmur3.Sum32([]byte(hashKey)))
+	hash := HashString(hashKey)
 
 	sess := &Session{
 		ID:        sessionID,
