@@ -1,0 +1,749 @@
+{
+  "evalSetResultId": "toolsearch-benchmark_toolsearch-multiturn_8224c9bf-1c3d-4866-908c-f12b6b32324d",
+  "evalSetResultName": "toolsearch-benchmark_toolsearch-multiturn_8224c9bf-1c3d-4866-908c-f12b6b32324d",
+  "evalSetId": "toolsearch-multiturn",
+  "evalCaseResults": [
+    {
+      "evalSetId": "toolsearch-multiturn",
+      "evalId": "multiturn",
+      "runId": 1,
+      "finalEvalStatus": "passed",
+      "overallEvalMetricResults": [
+        {
+          "metricName": "tool_trajectory_avg_score",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 1,
+          "criterion": {
+            "toolTrajectory": {
+              "defaultStrategy": {
+                "name": {
+                  "matchStrategy": "exact"
+                }
+              },
+              "subsetMatching": true
+            }
+          },
+          "details": {
+            "reason": ";;;;;;;;;",
+            "score": 1
+          }
+        }
+      ],
+      "evalMetricResultPerInvocation": [
+        {
+          "actualInvocation": {
+            "invocationId": "c12c3a80-17c1-434a-8a94-744da3dc0878",
+            "userContent": {
+              "role": "user",
+              "content": "Calculate 123 + 456 * 789"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "The result of 123 + 456 × 789 is **359,907**.\n\nHere's the step-by-step calculation:\n1. First, calculate 456 × 789 = 359,784\n2. Then add 123: 359,784 + 123 = 359,907\u003c｜end▁of▁sentence｜\u003e"
+            },
+            "tools": [
+              {
+                "id": "chatcmpl-tool-1ee9712a9f5347e8ad72f4dfb5fb0672",
+                "name": "calculator",
+                "arguments": {
+                  "expression": "123 + 456 * 789"
+                },
+                "result": {
+                  "expression": "123 + 456 * 789",
+                  "message": "Calculation result: 359907",
+                  "result": 359907
+                }
+              }
+            ]
+          },
+          "expectedInvocation": {
+            "invocationId": "turn-01",
+            "userContent": {
+              "role": "user",
+              "content": "Calculate 123 + 456 * 789"
+            },
+            "tools": [
+              {
+                "id": "tool_use_1",
+                "name": "calculator"
+              }
+            ]
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "criterion": {
+                "toolTrajectory": {
+                  "defaultStrategy": {
+                    "name": {
+                      "matchStrategy": "exact"
+                    }
+                  },
+                  "subsetMatching": true
+                }
+              },
+              "details": {
+                "score": 1
+              }
+            }
+          ]
+        },
+        {
+          "actualInvocation": {
+            "invocationId": "cf5f20ff-962e-4bd5-9172-317b0863660f",
+            "userContent": {
+              "role": "user",
+              "content": "What day of the week is today?"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "Today is **Thursday**.\u003c｜end▁of▁sentence｜\u003e"
+            },
+            "tools": [
+              {
+                "id": "chatcmpl-tool-fec3fc90a81a4063b4a67976b451154d",
+                "name": "time_tool",
+                "arguments": {
+                  "operation": "weekday"
+                },
+                "result": {
+                  "operation": "weekday",
+                  "result": "Thursday",
+                  "timestamp": 1770895401
+                }
+              }
+            ]
+          },
+          "expectedInvocation": {
+            "invocationId": "turn-02",
+            "userContent": {
+              "role": "user",
+              "content": "What day of the week is today?"
+            },
+            "tools": [
+              {
+                "id": "tool_use_2",
+                "name": "time_tool"
+              }
+            ]
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "criterion": {
+                "toolTrajectory": {
+                  "defaultStrategy": {
+                    "name": {
+                      "matchStrategy": "exact"
+                    }
+                  },
+                  "subsetMatching": true
+                }
+              },
+              "details": {
+                "score": 1
+              }
+            }
+          ]
+        },
+        {
+          "actualInvocation": {
+            "invocationId": "fce29129-518c-4a34-af10-70f7f604e793",
+            "userContent": {
+              "role": "user",
+              "content": "Convert 'Hello World' to uppercase"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "The text \"Hello World\" converted to uppercase is: **HELLO WORLD**\u003c｜end▁of▁sentence｜\u003e"
+            },
+            "tools": [
+              {
+                "id": "chatcmpl-tool-216f70df5aa44d1bb4e9ff24f50e7070",
+                "name": "text_tool",
+                "arguments": {
+                  "operation": "uppercase",
+                  "text": "Hello World"
+                },
+                "result": {
+                  "info": "Text converted to uppercase",
+                  "operation": "uppercase",
+                  "original_text": "Hello World",
+                  "result": "HELLO WORLD"
+                }
+              }
+            ]
+          },
+          "expectedInvocation": {
+            "invocationId": "turn-03",
+            "userContent": {
+              "role": "user",
+              "content": "Convert 'Hello World' to uppercase"
+            },
+            "tools": [
+              {
+                "id": "tool_use_3",
+                "name": "text_tool"
+              }
+            ]
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "criterion": {
+                "toolTrajectory": {
+                  "defaultStrategy": {
+                    "name": {
+                      "matchStrategy": "exact"
+                    }
+                  },
+                  "subsetMatching": true
+                }
+              },
+              "details": {
+                "score": 1
+              }
+            }
+          ]
+        },
+        {
+          "actualInvocation": {
+            "invocationId": "8eaa51ee-ff14-4645-8fd8-ae41d96e58c2",
+            "userContent": {
+              "role": "user",
+              "content": "Convert 100 USD to EUR"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "100 USD is equivalent to **85 EUR** at an approximate exchange rate of 0.85 EUR per USD.\u003c｜end▁of▁sentence｜\u003e"
+            },
+            "tools": [
+              {
+                "id": "chatcmpl-tool-dd3219ad45244a7a9a3ca699c46fff6a",
+                "name": "currency_converter",
+                "arguments": {
+                  "amount": 100,
+                  "from": "USD",
+                  "to": "EUR"
+                },
+                "result": {
+                  "converted_amount": 85,
+                  "exchange_rate": 0.85,
+                  "from_currency": "USD",
+                  "message": "100.00 USD = 85.00 EUR (rate: 0.8500)",
+                  "original_amount": 100,
+                  "to_currency": "EUR"
+                }
+              }
+            ]
+          },
+          "expectedInvocation": {
+            "invocationId": "turn-04",
+            "userContent": {
+              "role": "user",
+              "content": "Convert 100 USD to EUR"
+            },
+            "tools": [
+              {
+                "id": "tool_use_4",
+                "name": "currency_converter"
+              }
+            ]
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "criterion": {
+                "toolTrajectory": {
+                  "defaultStrategy": {
+                    "name": {
+                      "matchStrategy": "exact"
+                    }
+                  },
+                  "subsetMatching": true
+                }
+              },
+              "details": {
+                "score": 1
+              }
+            }
+          ]
+        },
+        {
+          "actualInvocation": {
+            "invocationId": "2c6d8b6a-0488-4d79-a261-bea023064d08",
+            "userContent": {
+              "role": "user",
+              "content": "Convert 100 meters to feet"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "100 meters is equal to approximately **328.08 feet**.\u003c｜end▁of▁sentence｜\u003e"
+            },
+            "tools": [
+              {
+                "id": "chatcmpl-tool-2ff29f75691943389c511c1aba062f20",
+                "name": "unit_converter",
+                "arguments": {
+                  "category": "length",
+                  "from_unit": "m",
+                  "to_unit": "foot",
+                  "value": 100
+                },
+                "result": {
+                  "category": "length",
+                  "converted_value": 328.0839895013123,
+                  "from_unit": "m",
+                  "message": "100.0000 m = 328.0840 foot",
+                  "original_value": 100,
+                  "to_unit": "foot"
+                }
+              }
+            ]
+          },
+          "expectedInvocation": {
+            "invocationId": "turn-05",
+            "userContent": {
+              "role": "user",
+              "content": "Convert 100 meters to feet"
+            },
+            "tools": [
+              {
+                "id": "tool_use_5",
+                "name": "unit_converter"
+              }
+            ]
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "criterion": {
+                "toolTrajectory": {
+                  "defaultStrategy": {
+                    "name": {
+                      "matchStrategy": "exact"
+                    }
+                  },
+                  "subsetMatching": true
+                }
+              },
+              "details": {
+                "score": 1
+              }
+            }
+          ]
+        },
+        {
+          "actualInvocation": {
+            "invocationId": "dd26d9f0-aeb7-4b3a-a0c4-e9e0f4894190",
+            "userContent": {
+              "role": "user",
+              "content": "Generate a secure password with 12 characters"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "I've generated a secure password for you: **ZSgRWeW%lrcC**\n\nThis is a 12-character password with:\n- Uppercase letters\n- Lowercase letters  \n- Numbers\n- Symbols\n\nThe password is rated as \"Strong\" in terms of security.\u003c｜end▁of▁sentence｜\u003e"
+            },
+            "tools": [
+              {
+                "id": "chatcmpl-tool-e2972ee1a04b4a24bbb6594d0f143f5b",
+                "name": "password_generator",
+                "arguments": {
+                  "length": 12
+                },
+                "result": "Error: callable tool execution failed: no character types selected"
+              },
+              {
+                "id": "chatcmpl-tool-f4b8d290949a4d10b150d223eef96546",
+                "name": "password_generator",
+                "arguments": {
+                  "include_lowercase": true,
+                  "include_numbers": true,
+                  "include_symbols": true,
+                  "include_uppercase": true,
+                  "length": 12
+                },
+                "result": {
+                  "length": 12,
+                  "message": "Generated Strong password with length 12",
+                  "password": "ZSgRWeW%lrcC",
+                  "strength": "Strong"
+                }
+              }
+            ]
+          },
+          "expectedInvocation": {
+            "invocationId": "turn-06",
+            "userContent": {
+              "role": "user",
+              "content": "Generate a secure password with 12 characters"
+            },
+            "tools": [
+              {
+                "id": "tool_use_6",
+                "name": "password_generator"
+              }
+            ]
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "criterion": {
+                "toolTrajectory": {
+                  "defaultStrategy": {
+                    "name": {
+                      "matchStrategy": "exact"
+                    }
+                  },
+                  "subsetMatching": true
+                }
+              },
+              "details": {
+                "score": 1
+              }
+            }
+          ]
+        },
+        {
+          "actualInvocation": {
+            "invocationId": "bd5815f4-cb99-4b56-8868-c0cc9bf528e6",
+            "userContent": {
+              "role": "user",
+              "content": "Generate MD5 hash of 'hello world'"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "The MD5 hash of \"hello world\" is: **5eb63bbbe01eeed093cb22bb8f5acdc3**\u003c｜end▁of▁sentence｜\u003e"
+            },
+            "tools": [
+              {
+                "id": "chatcmpl-tool-6f90b40509954eb9beaf65c3978bf522",
+                "name": "hash_generator",
+                "arguments": {
+                  "algorithm": "MD5",
+                  "text": "hello world"
+                },
+                "result": {
+                  "algorithm": "MD5",
+                  "hash": "5eb63bbbe01eeed093cb22bb8f5acdc3",
+                  "message": "Generated MD5 hash successfully",
+                  "original_text": "hello world"
+                }
+              }
+            ]
+          },
+          "expectedInvocation": {
+            "invocationId": "turn-07",
+            "userContent": {
+              "role": "user",
+              "content": "Generate MD5 hash of 'hello world'"
+            },
+            "tools": [
+              {
+                "id": "tool_use_7",
+                "name": "hash_generator"
+              }
+            ]
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "criterion": {
+                "toolTrajectory": {
+                  "defaultStrategy": {
+                    "name": {
+                      "matchStrategy": "exact"
+                    }
+                  },
+                  "subsetMatching": true
+                }
+              },
+              "details": {
+                "score": 1
+              }
+            }
+          ]
+        },
+        {
+          "actualInvocation": {
+            "invocationId": "89ba8ca7-91c8-4a2d-a5d1-4f03733e2ddd",
+            "userContent": {
+              "role": "user",
+              "content": "Encode 'hello world' to base64"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "The Base64 encoded version of \"hello world\" is: **aGVsbG8gd29ybGQ=**\u003c｜end▁of▁sentence｜\u003e"
+            },
+            "tools": [
+              {
+                "id": "chatcmpl-tool-14cfe0043c464877977182039a34eb5e",
+                "name": "base64_converter",
+                "arguments": {
+                  "operation": "encode",
+                  "text": "hello world"
+                },
+                "result": {
+                  "message": "Text Base64-encoded",
+                  "operation": "encode",
+                  "original_text": "hello world",
+                  "result": "aGVsbG8gd29ybGQ="
+                }
+              }
+            ]
+          },
+          "expectedInvocation": {
+            "invocationId": "turn-08",
+            "userContent": {
+              "role": "user",
+              "content": "Encode 'hello world' to base64"
+            },
+            "tools": [
+              {
+                "id": "tool_use_8",
+                "name": "base64_converter"
+              }
+            ]
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "criterion": {
+                "toolTrajectory": {
+                  "defaultStrategy": {
+                    "name": {
+                      "matchStrategy": "exact"
+                    }
+                  },
+                  "subsetMatching": true
+                }
+              },
+              "details": {
+                "score": 1
+              }
+            }
+          ]
+        },
+        {
+          "actualInvocation": {
+            "invocationId": "953846df-6cc9-4db9-b156-4d944cf9e47e",
+            "userContent": {
+              "role": "user",
+              "content": "Validate this email: test@example.com"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "The email address **test@example.com** is **valid**.\n\nHere are the details:\n- **Username**: test\n- **Domain**: example.com\n- **Validation**: ✓ Valid email address format\u003c｜end▁of▁sentence｜\u003e"
+            },
+            "tools": [
+              {
+                "id": "chatcmpl-tool-08571ef20ecd488789a8e789a6064f90",
+                "name": "email_validator",
+                "arguments": {
+                  "email": "test@example.com"
+                },
+                "result": {
+                  "domain": "example.com",
+                  "email": "test@example.com",
+                  "message": "Valid email address",
+                  "username": "test",
+                  "valid": true
+                }
+              }
+            ]
+          },
+          "expectedInvocation": {
+            "invocationId": "turn-09",
+            "userContent": {
+              "role": "user",
+              "content": "Validate this email: test@example.com"
+            },
+            "tools": [
+              {
+                "id": "tool_use_9",
+                "name": "email_validator"
+              }
+            ]
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "criterion": {
+                "toolTrajectory": {
+                  "defaultStrategy": {
+                    "name": {
+                      "matchStrategy": "exact"
+                    }
+                  },
+                  "subsetMatching": true
+                }
+              },
+              "details": {
+                "score": 1
+              }
+            }
+          ]
+        },
+        {
+          "actualInvocation": {
+            "invocationId": "6cb188ad-4c36-468d-b369-4f96a3ae06a6",
+            "userContent": {
+              "role": "user",
+              "content": "Generate a random number between 1 and 100"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "I've generated a random integer between 1 and 100: **24**\u003c｜end▁of▁sentence｜\u003e"
+            },
+            "tools": [
+              {
+                "id": "chatcmpl-tool-8010d0ed31c14d57977f8a4747ea9a63",
+                "name": "random_generator",
+                "arguments": {
+                  "count": 1,
+                  "max": 100,
+                  "min": 1,
+                  "type": "integer"
+                },
+                "result": {
+                  "count": 1,
+                  "message": "Generated 1 integer random values between 1.00 and 100.00",
+                  "type": "integer",
+                  "values": [
+                    24
+                  ]
+                }
+              }
+            ]
+          },
+          "expectedInvocation": {
+            "invocationId": "turn-10",
+            "userContent": {
+              "role": "user",
+              "content": "Generate a random number between 1 and 100"
+            },
+            "tools": [
+              {
+                "id": "tool_use_10",
+                "name": "random_generator"
+              }
+            ]
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "criterion": {
+                "toolTrajectory": {
+                  "defaultStrategy": {
+                    "name": {
+                      "matchStrategy": "exact"
+                    }
+                  },
+                  "subsetMatching": true
+                }
+              },
+              "details": {
+                "score": 1
+              }
+            }
+          ]
+        }
+      ],
+      "sessionId": "4b26771e-cf1e-46dd-b025-1ff31304d441",
+      "userId": "user"
+    }
+  ],
+  "summary": {
+    "overallStatus": "passed",
+    "numRuns": 1,
+    "runStatusCounts": {
+      "passed": 1
+    },
+    "runSummaries": [
+      {
+        "runId": 1,
+        "overallStatus": "passed",
+        "caseStatusCounts": {
+          "passed": 1
+        },
+        "metricSummaries": [
+          {
+            "metricName": "tool_trajectory_avg_score",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 1,
+            "statusCounts": {
+              "passed": 1
+            }
+          }
+        ]
+      }
+    ],
+    "evalCaseSummaries": [
+      {
+        "evalId": "multiturn",
+        "overallStatus": "passed",
+        "runStatusCounts": {
+          "passed": 1
+        },
+        "metricSummaries": [
+          {
+            "metricName": "tool_trajectory_avg_score",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 1,
+            "statusCounts": {
+              "passed": 1
+            }
+          }
+        ],
+        "runSummaries": [
+          {
+            "runId": 1,
+            "finalEvalStatus": "passed",
+            "metricResults": [
+              {
+                "metricName": "tool_trajectory_avg_score",
+                "score": 1,
+                "evalStatus": "passed",
+                "threshold": 1
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "creationTimestamp": 1770895480.2139673
+}

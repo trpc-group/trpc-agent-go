@@ -1,0 +1,146 @@
+{
+  "evalSetId": "toolsearch-multiturn",
+  "name": "toolsearch-multiturn",
+  "description": "toolsearch multi-turn benchmark (one case with multiple turns)",
+  "evalCases": [
+    {
+      "evalId": "multiturn",
+      "conversation": [
+        {
+          "invocationId": "turn-01",
+          "userContent": {
+            "role": "user",
+            "content": "Calculate 123 + 456 * 789"
+          },
+          "tools": [
+            {
+              "id": "tool_use_1",
+              "name": "calculator"
+            }
+          ]
+        },
+        {
+          "invocationId": "turn-02",
+          "userContent": {
+            "role": "user",
+            "content": "What day of the week is today?"
+          },
+          "tools": [
+            {
+              "id": "tool_use_2",
+              "name": "time_tool"
+            }
+          ]
+        },
+        {
+          "invocationId": "turn-03",
+          "userContent": {
+            "role": "user",
+            "content": "Convert 'Hello World' to uppercase"
+          },
+          "tools": [
+            {
+              "id": "tool_use_3",
+              "name": "text_tool"
+            }
+          ]
+        },
+        {
+          "invocationId": "turn-04",
+          "userContent": {
+            "role": "user",
+            "content": "Convert 100 USD to EUR"
+          },
+          "tools": [
+            {
+              "id": "tool_use_4",
+              "name": "currency_converter"
+            }
+          ]
+        },
+        {
+          "invocationId": "turn-05",
+          "userContent": {
+            "role": "user",
+            "content": "Convert 100 meters to feet"
+          },
+          "tools": [
+            {
+              "id": "tool_use_5",
+              "name": "unit_converter"
+            }
+          ]
+        },
+        {
+          "invocationId": "turn-06",
+          "userContent": {
+            "role": "user",
+            "content": "Generate a secure password with 12 characters"
+          },
+          "tools": [
+            {
+              "id": "tool_use_6",
+              "name": "password_generator"
+            }
+          ]
+        },
+        {
+          "invocationId": "turn-07",
+          "userContent": {
+            "role": "user",
+            "content": "Generate MD5 hash of 'hello world'"
+          },
+          "tools": [
+            {
+              "id": "tool_use_7",
+              "name": "hash_generator"
+            }
+          ]
+        },
+        {
+          "invocationId": "turn-08",
+          "userContent": {
+            "role": "user",
+            "content": "Encode 'hello world' to base64"
+          },
+          "tools": [
+            {
+              "id": "tool_use_8",
+              "name": "base64_converter"
+            }
+          ]
+        },
+        {
+          "invocationId": "turn-09",
+          "userContent": {
+            "role": "user",
+            "content": "Validate this email: test@example.com"
+          },
+          "tools": [
+            {
+              "id": "tool_use_9",
+              "name": "email_validator"
+            }
+          ]
+        },
+        {
+          "invocationId": "turn-10",
+          "userContent": {
+            "role": "user",
+            "content": "Generate a random number between 1 and 100"
+          },
+          "tools": [
+            {
+              "id": "tool_use_10",
+              "name": "random_generator"
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "toolsearch-benchmark",
+        "userId": "user"
+      }
+    }
+  ]
+}

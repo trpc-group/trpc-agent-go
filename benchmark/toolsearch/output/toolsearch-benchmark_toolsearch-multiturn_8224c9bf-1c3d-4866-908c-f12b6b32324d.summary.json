@@ -1,0 +1,164 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-02-12T19:24:40.214409921+08:00",
+  "config": {
+    "appName": "toolsearch-benchmark",
+    "evalSetId": "toolsearch-multiturn",
+    "mode": "llm",
+    "modelName": "deepseek-v3.2",
+    "embedModel": "text-embedding-3-small",
+    "maxTools": 3,
+    "numRuns": 1,
+    "dataDir": "/data/workspace/trpc-agent-go/benchmark/toolsearch/data",
+    "outputDir": "/data/workspace/trpc-agent-go/benchmark/toolsearch/output"
+  },
+  "result": {
+    "overallStatus": "passed",
+    "executionTimeMs": 90323,
+    "wallTimeMs": 90323,
+    "evalSetResultId": "toolsearch-benchmark_toolsearch-multiturn_8224c9bf-1c3d-4866-908c-f12b6b32324d"
+  },
+  "tokens": {
+    "chat": {
+      "prompt": 39940,
+      "completion": 1243,
+      "total": 41183
+    },
+    "toolsearch": {
+      "prompt": 10983,
+      "completion": 442,
+      "total": 11425
+    },
+    "total": {
+      "prompt": 50923,
+      "completion": 1685,
+      "total": 52608
+    }
+  },
+  "cases": [
+    {
+      "evalCaseId": "multiturn",
+      "overallStatus": "passed",
+      "runs": [
+        {
+          "runId": 1,
+          "finalEvalStatus": "passed",
+          "sessionId": "4b26771e-cf1e-46dd-b025-1ff31304d441",
+          "turns": [
+            {
+              "turnId": "turn-01",
+              "metricScore": 1,
+              "expectedTool": "calculator",
+              "actualTools": [
+                "calculator"
+              ],
+              "durationMs": 8876,
+              "chatTokens": 2560,
+              "toolsearchTokens": 1088
+            },
+            {
+              "turnId": "turn-02",
+              "metricScore": 1,
+              "expectedTool": "time_tool",
+              "actualTools": [
+                "time_tool"
+              ],
+              "durationMs": 4623,
+              "chatTokens": 2564,
+              "toolsearchTokens": 1086
+            },
+            {
+              "turnId": "turn-03",
+              "metricScore": 1,
+              "expectedTool": "text_tool",
+              "actualTools": [
+                "text_tool"
+              ],
+              "durationMs": 16329,
+              "chatTokens": 2724,
+              "toolsearchTokens": 1090
+            },
+            {
+              "turnId": "turn-04",
+              "metricScore": 1,
+              "expectedTool": "currency_converter",
+              "actualTools": [
+                "currency_converter"
+              ],
+              "durationMs": 6035,
+              "chatTokens": 3606,
+              "toolsearchTokens": 1082
+            },
+            {
+              "turnId": "turn-05",
+              "metricScore": 1,
+              "expectedTool": "unit_converter",
+              "actualTools": [
+                "unit_converter"
+              ],
+              "durationMs": 6691,
+              "chatTokens": 3380,
+              "toolsearchTokens": 1072
+            },
+            {
+              "turnId": "turn-06",
+              "metricScore": 1,
+              "expectedTool": "password_generator",
+              "actualTools": [
+                "password_generator",
+                "password_generator"
+              ],
+              "durationMs": 16113,
+              "chatTokens": 6136,
+              "toolsearchTokens": 1637
+            },
+            {
+              "turnId": "turn-07",
+              "metricScore": 1,
+              "expectedTool": "hash_generator",
+              "actualTools": [
+                "hash_generator"
+              ],
+              "durationMs": 7203,
+              "chatTokens": 4501,
+              "toolsearchTokens": 1094
+            },
+            {
+              "turnId": "turn-08",
+              "metricScore": 1,
+              "expectedTool": "base64_converter",
+              "actualTools": [
+                "base64_converter"
+              ],
+              "durationMs": 9707,
+              "chatTokens": 4851,
+              "toolsearchTokens": 1094
+            },
+            {
+              "turnId": "turn-09",
+              "metricScore": 1,
+              "expectedTool": "email_validator",
+              "actualTools": [
+                "email_validator"
+              ],
+              "durationMs": 6758,
+              "chatTokens": 5106,
+              "toolsearchTokens": 1092
+            },
+            {
+              "turnId": "turn-10",
+              "metricScore": 1,
+              "expectedTool": "random_generator",
+              "actualTools": [
+                "random_generator"
+              ],
+              "durationMs": 7982,
+              "chatTokens": 5755,
+              "toolsearchTokens": 1090
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
