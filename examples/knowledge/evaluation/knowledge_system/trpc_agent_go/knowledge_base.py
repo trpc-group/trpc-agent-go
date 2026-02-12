@@ -186,13 +186,14 @@ class TRPCAgentGoKnowledgeBase(KnowledgeBase):
         response.raise_for_status()
 
         result = response.json()
+        raw_documents = result.get("documents") or []
         return [
             SearchResult(
                 content=r["text"],
-                score=r["score"],
+                score=r.get("score", 0.0),
                 metadata=r.get("metadata", {}),
             )
-            for r in result.get("documents", [])
+            for r in raw_documents
         ]
 
     def answer(self, question: str, k: int = 4) -> Tuple[str, List[SearchResult]]:
@@ -220,14 +221,17 @@ class TRPCAgentGoKnowledgeBase(KnowledgeBase):
         trace = result.get("trace")  # Extract trace from response
         self.last_trace = trace if isinstance(trace, dict) else None
 
+        # Guard against JSON null: dict.get("documents", []) returns None
+        # when the key exists but its value is null, not the default [].
+        raw_documents = result.get("documents") or []
         search_results = [
             SearchResult(
                 content=r["text"],
-                score=r["score"],
+                score=r.get("score", 0.0),
                 metadata=r.get("metadata", {}),
                 trace=trace,  # Attach trace to first result for easy access
             )
-            for r in result.get("documents", [])
+            for r in raw_documents
         ]
 
         return answer, search_results

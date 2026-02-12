@@ -132,7 +132,7 @@ func (s *KnowledgeService) newPGVectorStore() (vectorstore.VectorStore, error) {
 		pgvector.WithPGVectorClientDSN(dsn),
 		pgvector.WithTable(table),
 		pgvector.WithIndexDimension(1024), // Match embedding model dimension
-		pgvector.WithHybridSearchWeights(0.5, 0.5),
+		pgvector.WithHybridSearchWeights(0.99999, 0.00001),
 	)
 }
 
@@ -154,7 +154,7 @@ func (s *KnowledgeService) Load(ctx context.Context, filePaths []string) error {
 
 	// Load documents
 	log.Infof("[Load] Starting document loading from %d file(s)...", len(filePaths))
-	if err := s.kb.Load(ctx, knowledge.WithShowProgress(true), knowledge.WithDocConcurrency(10), knowledge.WithDocConcurrency(10)); err != nil {
+	if err := s.kb.Load(ctx, knowledge.WithShowProgress(true), knowledge.WithDocConcurrency(30), knowledge.WithDocConcurrency(12)); err != nil {
 		return fmt.Errorf("failed to load documents: %w", err)
 	}
 
@@ -248,8 +248,10 @@ func (s *KnowledgeService) Answer(ctx context.Context, question string, k int) (
 		return "", nil, nil, err
 	}
 
-	// Convert contexts from trace to DocumentResult
-	var documents []*DocumentResult
+	// Convert contexts from trace to DocumentResult.
+	// Use make() to ensure an empty slice (JSON []) instead of nil (JSON null),
+	// preventing Python-side "'NoneType' object is not iterable" errors.
+	documents := make([]*DocumentResult, 0, len(result.Contexts))
 	for _, c := range result.Contexts {
 		documents = append(documents, &DocumentResult{
 			Text: c,
@@ -273,7 +275,7 @@ func (s *KnowledgeService) runAgent(ctx context.Context, question string, k int)
 	// 	kb = &searchModeKnowledge{inner: s.kb, searchMode: s.searchMode}
 	// }
 
-	toolDescription := "Search the knowledge base for relevant information."
+	toolDescription := "this is a search tool that help search information you need. It's your knowledgebase, you search information by the tool to answer user's question."
 	searchTool := knowledgetool.NewKnowledgeSearchTool(
 		s.kb,
 		knowledgetool.WithMaxResults(k),
@@ -292,13 +294,15 @@ func (s *KnowledgeService) runAgent(ctx context.Context, question string, k int)
 		llmagent.WithTools([]tool.Tool{searchTool}),
 		llmagent.WithInstruction(
 			"You are a helpful assistant that answers questions using a knowledge base search tool.\n\n"+
-				"CRITICAL RULES:\n"+
-				"1. Answer ONLY using information retrieved from the search tool.\n"+
-				"2. Do NOT add external knowledge, explanations, or context not found in the retrieved documents.\n"+
-				"3. Do NOT provide additional details, synonyms, or interpretations beyond what is explicitly stated in the search results.\n"+
-				"4. Use the search tool at most 3 times. If you haven't found the answer after 3 searches, provide the best answer from what you found.\n"+
-				"5. Be concise and stick strictly to the facts from the retrieved information.\n\n"+
-				"If the search results don't contain the answer, say \"I cannot find this information in the knowledge base\" instead of making up an answer.",
+				"CRITICAL RULES(IMPORTANT !!!):\n"+
+				"1. You MUST call the search tool AT LEAST ONCE before answering. NEVER answer without searching first.\n"+
+				"2. Answer ONLY using information retrieved from the search tool.\n"+
+				"3. Do NOT add external knowledge, explanations, or context not found in the retrieved documents.\n"+
+				"4. Do NOT provide additional details, synonyms, or interpretations beyond what is explicitly stated in the search results.\n"+
+				"5. Use the search tool at most 3 times. If you haven't found the answer after 3 searches, provide the best answer from what you found.\n"+
+				"6. Be concise and stick strictly to the facts from the retrieved information.\n"+
+				"7. Give ONLY the direct answer. Don't need external explanation.\n"+
+				"8. Do NOT start your answer with \"Based on the search results\" or any similar prefix. Output the answer directly.",
 		),
 		llmagent.WithGenerationConfig(genConfig),
 	)

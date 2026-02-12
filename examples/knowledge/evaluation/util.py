@@ -6,9 +6,9 @@ import os
 from urllib.parse import quote_plus
 
 # Default configuration values
-DEFAULT_EMBEDDING_MODEL = "server:274214"
+DEFAULT_EMBEDDING_MODEL = "bge-m3"
 DEFAULT_MODEL_NAME = "deepseek-v3.2"
-DEFAULT_EVAL_MODEL_NAME = "gemini-2.5-flash"  # Default evaluation model
+DEFAULT_EVAL_MODEL_NAME = "gemini-3-flash"  # Default evaluation model
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 
 # PGVector defaults
@@ -74,7 +74,7 @@ def get_config():
     Environment variables:
         EMBEDDING_MODEL: Embedding model name (default: server:274214)
         MODEL_NAME: LLM model name for knowledge/RAG (default: deepseek-v3.2)
-        EVAL_MODEL_NAME: LLM model name for evaluation (default: gemini-2.5-flash)
+        EVAL_MODEL_NAME: LLM model name for evaluation (default: gemini-3-flash)
         OPENAI_API_KEY: OpenAI API key (required)
         OPENAI_BASE_URL: OpenAI API base URL (default: https://api.openai.com/v1)
         EVAL_API_KEY: Evaluation model API key (default: same as OPENAI_API_KEY)

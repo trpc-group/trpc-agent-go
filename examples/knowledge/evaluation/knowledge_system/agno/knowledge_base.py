@@ -26,14 +26,15 @@ from knowledge_system.base import KnowledgeBase, SearchResult
 
 AGENT_INSTRUCTIONS = """You are a helpful assistant that answers questions using a knowledge base search tool.
 
-CRITICAL RULES:
-1. Answer ONLY using information retrieved from the knowledge base.
-2. Do NOT add external knowledge, explanations, or context not found in the retrieved documents.
-3. Do NOT provide additional details, synonyms, or interpretations beyond what is explicitly stated in the search results.
-4. Search the knowledge base at most 3 times. If you haven't found the answer after 3 searches, provide the best answer from what you found.
-5. Be concise and stick strictly to the facts from the retrieved information.
-
-If the search results don't contain the answer, say "I cannot find this information in the knowledge base" instead of making up an answer."""
+CRITICAL RULES(IMPORTANT !!!):
+1. You MUST call the search tool AT LEAST ONCE before answering. NEVER answer without searching first.
+2. Answer ONLY using information retrieved from the search tool.
+3. Do NOT add external knowledge, explanations, or context not found in the retrieved documents.
+4. Do NOT provide additional details, synonyms, or interpretations beyond what is explicitly stated in the search results.
+5. Use the search tool at most 3 times. If you haven't found the answer after 3 searches, provide the best answer from what you found.
+6. Be concise and stick strictly to the facts from the retrieved information.
+7. Give ONLY the direct answer. Don't need external explanation.
+8. Do NOT start your answer with "Based on the search results" or any similar prefix. Output the answer directly."""
 
 
 class AgnoKnowledgeBase(KnowledgeBase):

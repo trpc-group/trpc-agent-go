@@ -23,7 +23,7 @@ pip install -r requirements.txt
 export OPENAI_API_KEY="your-api-key"
 export OPENAI_BASE_URL="your-base-url"  # Optional
 export MODEL_NAME="deepseek-v3.2"       # Optional, model for knowledge/RAG
-export EVAL_MODEL_NAME="gemini-2.5-flash"  # Optional, model for evaluation (default: gemini-2.5-flash)
+export EVAL_MODEL_NAME="gemini-3-flash"    # Optional, model for evaluation (default: gemini-3-flash)
 export EMBEDDING_MODEL="server:274214"  # Optional
 
 # Optional: Use different API endpoint for evaluation
@@ -91,11 +91,13 @@ All four systems use **identical parameters** to ensure fair comparison:
 | **Chunk Overlap** | 50 | 50 | 50 | 50 |
 | **Embedding Dimensions** | 1024 | 1024 | 1024 | 1024 |
 | **Vector Store** | PGVector | PGVector | PgVector | ChromaDB |
-| **Search Mode (strict)** | Vector | Vector | Vector | Vector |
-| **Search Mode (native)** | Vector | Hybrid (default) | Vector | Vector |
+| **Search Mode** | Vector | Vector (Hybrid disabled) | Vector | Vector |
 | **Knowledge Base Build** | Native framework method | Native framework method | Native framework method | Native framework method |
 | **Agent Type** | Agent + KB (ReAct disabled) | Agent + KB (ReAct disabled) | Agent + KB (ReAct disabled) | Agent + KB (ReAct disabled) |
 | **Max Retrieval Results (k)** | 4 | 4 | 4 | 4 |
+
+> 📝 **tRPC-Agent-Go Notes**:
+> - **Search Mode**: tRPC-Agent-Go uses Hybrid Search (vector similarity + full-text search) by default, but for fair comparison with other frameworks, **Hybrid Search is disabled** in this evaluation. All frameworks use pure Vector Search (vector similarity only).
 
 > 📝 **CrewAI Notes**:
 > - **Vector Store**: CrewAI does not currently support PGVector for knowledge base construction, so ChromaDB is used as the vector store.
@@ -113,7 +115,7 @@ python3 main.py --kb=langchain --eval-mode=strict
 
 - **Context collection**: A single deterministic `search(question, k)` call provides the contexts for RAGAS evaluation, **decoupled from the agent**.
 - **Answer generation**: The agent's `answer()` is still called normally, but its internally retrieved contexts are **not** used for evaluation.
-- **Search mode**: tRPC-Agent-Go uses **vector-only** search (no hybrid/keyword), matching the pure vector similarity search used by LangChain, Agno, and CrewAI.
+- **Search mode**: All frameworks use **vector-only** search (tRPC-Agent-Go's default Hybrid Search is disabled), ensuring consistent retrieval conditions.
 - **Purpose**: Ensures all frameworks are evaluated on the **exact same retrieval result** for each question, eliminating differences caused by agent multi-turn tool calls, query rewriting, or hybrid search strategies.
 - **Failed samples**: Preserved with placeholder values to guarantee identical sample sets across frameworks.
 
@@ -124,7 +126,7 @@ python3 main.py --kb=langchain --eval-mode=native
 ```
 
 - **Context collection**: Contexts come from the agent's actual tool call responses during `answer()`.
-- **Search mode**: Each framework uses its **native retrieval pipeline** (e.g., tRPC-Agent-Go may use hybrid search, query enhancement, and reranking).
+- **Search mode**: Each framework uses its **native retrieval pipeline** (tRPC-Agent-Go's Hybrid Search is also disabled in this evaluation to ensure fair comparison).
 - **Purpose**: Measures the **end-to-end real-world performance** of each framework's complete RAG pipeline, including agent behavior, multi-turn retrieval, and framework-specific optimizations.
 - **Failed samples**: Preserved with placeholder values.
 
@@ -145,14 +147,15 @@ To ensure fair comparison, all four systems are configured with **identical** in
 ```text
 You are a helpful assistant that answers questions using a knowledge base search tool.
 
-CRITICAL RULES:
-1. Answer ONLY using information retrieved from the search tool.
-2. Do NOT add external knowledge, explanations, or context not found in the retrieved documents.
-3. Do NOT provide additional details, synonyms, or interpretations beyond what is explicitly stated in the search results.
-4. Use the search tool at most 3 times. If you haven't found the answer after 3 searches, provide the best answer from what you found.
-5. Be concise and stick strictly to the facts from the retrieved information.
-
-If the search results don't contain the answer, say "I cannot find this information in the knowledge base" instead of making up an answer.
+CRITICAL RULES(IMPORTANT !!!):
+1. You MUST call the search tool AT LEAST ONCE before answering. NEVER answer without searching first.
+2. Answer ONLY using information retrieved from the search tool.
+3. Do NOT add external knowledge, explanations, or context not found in the retrieved documents.
+4. Do NOT provide additional details, synonyms, or interpretations beyond what is explicitly stated in the search results.
+5. Use the search tool at most 3 times. If you haven't found the answer after 3 searches, provide the best answer from what you found.
+6. Be concise and stick strictly to the facts from the retrieved information.
+7. Give ONLY the direct answer. Don't need external explanation.
+8. Do NOT start your answer with "Based on the search results" or any similar prefix. Output the answer directly.
 ```
 
 ## Dataset
@@ -201,9 +204,9 @@ We evaluate 7 metrics across 3 categories:
 
 **Test Configuration:**
 - **Dataset**: Full LangChain HuggingFace documentation dataset (54 QA items)
-- **Embedding Model**: `server:274214` (1024 dimensions)
+- **Embedding Model**: `BGE-M3` (1024 dimensions)
 - **Agent Model**: `DeepSeek-V3.2`
-- **Evaluation Model**: `Gemini 2.5 Flash`
+- **Evaluation Model**: `Gemini 3 Flash`
 - **Retrieval k**: 4 documents per query
 - **Chunk Size**: 500 characters
 - **Chunk Overlap**: 50 characters
@@ -212,18 +215,18 @@ We evaluate 7 metrics across 3 categories:
 
 | Metric | LangChain | tRPC-Agent-Go | Agno | CrewAI | Best |
 |--------|-----------|---------------|------|--------|------|
-| **Faithfulness** | 0.8978 | 0.8639 | 0.8491 | 0.9027 | ✅ CrewAI |
-| **Answer Relevancy** | 0.8921 | 0.9034 | 0.9625 | 0.7680 | ✅ Agno |
-| **Answer Correctness** | 0.6193 | 0.6167 | 0.6120 | 0.6941 | ✅ CrewAI |
-| **Answer Similarity** | 0.6535 | 0.6468 | 0.6312 | 0.6714 | ✅ CrewAI |
+| **Faithfulness** | 0.9340 | **1.0000** | 0.9815 | 0.9907 | ✅ tRPC-Agent-Go |
+| **Answer Relevancy** | 0.7430 | 0.7909 | 0.7814 | **0.8073** | ✅ CrewAI |
+| **Answer Correctness** | 0.7417 | **0.8392** | 0.8357 | 0.7855 | ✅ tRPC-Agent-Go |
+| **Answer Similarity** | 0.7313 | 0.7663 | **0.7711** | 0.7043 | ✅ Agno |
 
 #### Context Quality Metrics
 
 | Metric | LangChain | tRPC-Agent-Go | Agno | CrewAI | Best |
 |--------|-----------|---------------|------|--------|------|
-| **Context Precision** | 0.6267 | 0.6983 | 0.6860 | 0.6942 | ✅ tRPC-Agent-Go |
-| **Context Recall** | 0.8889 | 0.9259 | 0.9630 | 0.9259 | ✅ Agno |
-| **Context Entity Recall** | 0.4466 | 0.4846 | 0.4654 | 0.4883 | ✅ CrewAI |
+| **Context Precision** | 0.6026 | **0.7171** | 0.6932 | 0.6623 | ✅ tRPC-Agent-Go |
+| **Context Recall** | 0.8704 | **0.9444** | **0.9444** | **0.9444** | ✅ tRPC-Agent-Go / Agno / CrewAI |
+| **Context Entity Recall** | **0.4251** | 0.4179 | 0.4205 | 0.4189 | ✅ LangChain |
 
 #### Execution Time
 
@@ -231,34 +234,40 @@ We evaluate 7 metrics across 3 categories:
 
 | Metric | LangChain | tRPC-Agent-Go | Agno | CrewAI |
 |--------|-----------|---------------|------|--------|
-| **Q&A Total Time** | 753.79s | 795.35s | 1556.45s | 385.23s |
-| **Avg Time per Question** | 13.96s | 14.73s | 28.82s | 7.13s |
-| **Evaluation Time** | 2049.52s | 1962.01s | 2031.81s | 2285.87s |
-| **Total Time** | 2803.31s | 2757.36s | 3588.26s | 2671.09s |
+| **Q&A Total Time** | 378.94s | 583.63s | 571.68s | 521.72s |
+| **Avg Time per Question** | 7.02s | 10.81s | 10.59s | 9.66s |
+| **Evaluation Time** | 4471.66s | 3636.58s | 3745.98s | 3909.57s |
+| **Total Time** | 4850.60s | 4220.22s | 4317.66s | 4431.29s |
 
 ### Summary
 
 | Category | LangChain | tRPC-Agent-Go | Agno | CrewAI |
 |----------|-----------|---------------|------|--------|
-| **Faithfulness** | 2nd | 3rd | 4th | ✅ Best (0.9027) |
-| **Answer Relevancy** | 3rd | 2nd | ✅ Best (0.9625) | 4th |
-| **Answer Correctness** | 2nd | 3rd | 4th | ✅ Best (0.6941) |
-| **Answer Similarity** | 2nd | 3rd | 4th | ✅ Best (0.6714) |
-| **Context Precision** | 4th | ✅ Best (0.6983) | 3rd | 2nd |
-| **Context Recall** | 4th | 2nd (tie) | ✅ Best (0.9630) | 2nd (tie) |
-| **Context Entity Recall** | 4th | 2nd | 3rd | ✅ Best (0.4883) |
+| **Faithfulness** | 4th | ✅ Best (1.0000) | 3rd | 2nd |
+| **Answer Relevancy** | 4th | 2nd | 3rd | ✅ Best (0.8073) |
+| **Answer Correctness** | 4th | ✅ Best (0.8392) | 2nd | 3rd |
+| **Answer Similarity** | 3rd | 2nd | ✅ Best (0.7711) | 4th |
+| **Context Precision** | 4th | ✅ Best (0.7171) | 2nd | 3rd |
+| **Context Recall** | 4th | ✅ Best (tie, 0.9444) | ✅ Best (tie, 0.9444) | ✅ Best (tie, 0.9444) |
+| **Context Entity Recall** | ✅ Best (0.4251) | 4th | 3rd | 2nd |
 
 **Key Observations**:
 
-1. **CrewAI** excels in answer quality metrics (Faithfulness 0.9027, Correctness 0.6941, Similarity 0.6714), but has the **lowest Answer Relevancy** (0.7680).
+1. **tRPC-Agent-Go** achieves relatively better overall performance, leading in **Faithfulness (1.0000 perfect score)**, **Answer Correctness (0.8392)**, and **Context Precision (0.7171)**. Its perfect Faithfulness score means zero hallucination.
 
-2. **tRPC-Agent-Go** achieves the best Context Precision (0.6983), with competitive performance across all metrics.
+2. **Each framework has its strengths**: CrewAI leads in **Answer Relevancy (0.8073)**, Agno in **Answer Similarity (0.7711)**, and LangChain in **Context Entity Recall (0.4251)**.
 
-3. **Agno** leads in Answer Relevancy (0.9625) and Context Recall (0.9630), demonstrating strong retrieval capabilities.
+3. **Context Recall three-way tie**: tRPC-Agent-Go, Agno, and CrewAI all achieve **0.9444**, indicating comparable retrieval recall capabilities.
 
-4. **LangChain** provides balanced performance across all metrics.
+### Evaluation Observations
 
+Through packet capture analysis during evaluation, we found that all frameworks follow **fairly similar request flows** when using the same LLM model — essentially the standard RAG pipeline of agent calling search tool, retrieving context, and generating answers. Some frameworks (e.g., CrewAI) inject additional framework-level prompts internally.
 
+Key considerations:
+
+- **Small dataset size**: The current evaluation dataset contains only 1900+ documents, which is not large-scale data.
+- **Prompt sensitivity**: It is undeniable that system prompts have a significant impact on agent execution under the current dataset, which in turn greatly affects the final scores. We have ensured unified system prompts across all frameworks.
+- **Chunking strategy is the core differentiator**: After controlling for system prompt differences, **the quality of document chunking is likely the key factor that ultimately determines retrieval and answer quality**. Different frameworks' chunking implementations (chunk size, overlap, boundary detection, etc.) directly impact Context Precision, Context Recall, and consequently answer correctness.
 
 ## Project Structure
 

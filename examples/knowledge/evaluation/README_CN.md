@@ -23,7 +23,7 @@ pip install -r requirements.txt
 export OPENAI_API_KEY="your-api-key"
 export OPENAI_BASE_URL="your-base-url"  # 可选
 export MODEL_NAME="deepseek-v3.2"        # 可选，用于 RAG 的模型
-export EVAL_MODEL_NAME="gemini-2.5-flash" # 可选，用于评测的模型
+export EVAL_MODEL_NAME="gemini-3-flash"   # 可选，用于评测的模型
 export EMBEDDING_MODEL="server:274214"  # 可选
 
 # PostgreSQL (PGVector) 配置
@@ -65,11 +65,14 @@ python3 main.py --kb=trpc-agent-go --max-qa=1 --full-log
 | **Chunk Overlap**        | 50                      | 50                      | 50                      | 50                      |
 | **Embedding Dimensions** | 1024                    | 1024                    | 1024                    | 1024                    |
 | **Vector Store**         | PGVector                | PGVector                | PgVector                | ChromaDB                |
-| **检索模式 (strict)**    | Vector                  | Vector                  | Vector                  | Vector                  |
-| **检索模式 (native)**    | Vector                  | Hybrid (默认)           | Vector                  | Vector                  |
+| **检索模式**             | Vector                  | Vector (已关闭默认 Hybrid) | Vector                  | Vector                  |
 | **Knowledge Base 构建**  | 框架原生方式            | 框架原生方式            | 框架原生方式            | 框架原生方式            |
 | **Agent 类型**           | Agent + KB (ReAct 关闭) | Agent + KB (ReAct 关闭) | Agent + KB (ReAct 关闭) | Agent + KB (ReAct 关闭) |
 | **单次检索数量 (k)**     | 4                       | 4                       | 4                       | 4                       |
+
+> 📝 **tRPC-Agent-Go 说明**：
+>
+> - **检索模式**：tRPC-Agent-Go 默认使用 Hybrid Search（混合检索：向量相似度 + 全文检索），但为了保证与其他框架的公平对比，评测中**关闭了混合检索**，统一使用纯 Vector Search（向量相似度检索）。
 
 > 📝 **CrewAI 说明**：
 >
@@ -88,7 +91,7 @@ python3 main.py --kb=langchain --eval-mode=strict
 
 - **上下文采集**：每题固定一次 `search(question, k)` 调用获取上下文，**与 Agent 解耦**。
 - **答案生成**：Agent 的 `answer()` 仍然正常调用，但其内部检索到的上下文**不用于评测**。
-- **检索模式**：tRPC-Agent-Go 使用**纯向量检索**（非 Hybrid/关键词），与 LangChain、Agno、CrewAI 的纯向量相似度检索一致。
+- **检索模式**：所有框架统一使用**纯向量检索**（tRPC-Agent-Go 已关闭默认的 Hybrid Search），确保检索条件一致。
 - **用途**：确保所有框架在**完全相同的检索结果**上被评测，消除 Agent 多轮工具调用、Query 改写、混合检索等差异。
 - **失败样本**：保留并填充占位值，保证各框架的样本集合完全一致。
 
@@ -99,7 +102,7 @@ python3 main.py --kb=langchain --eval-mode=native
 ```
 
 - **上下文采集**：上下文来自 Agent 在 `answer()` 过程中的实际工具调用响应。
-- **检索模式**：各框架使用**原生检索管线**（如 tRPC-Agent-Go 可能使用混合检索、Query 增强、重排序等）。
+- **检索模式**：各框架使用**原生检索管线**（tRPC-Agent-Go 在此评测中同样关闭了混合检索，使用纯向量检索以保证公平）。
 - **用途**：衡量各框架完整 RAG 管线的**端到端真实表现**，包括 Agent 行为、多轮检索、框架特有优化。
 - **失败样本**：保留并填充占位值。
 
@@ -121,14 +124,15 @@ python3 main.py --kb=langchain --eval-mode=native
 ```text
 You are a helpful assistant that answers questions using a knowledge base search tool.
 
-CRITICAL RULES:
-1. Answer ONLY using information retrieved from the search tool.
-2. Do NOT add external knowledge, explanations, or context not found in the retrieved documents.
-3. Do NOT provide additional details, synonyms, or interpretations beyond what is explicitly stated in the search results.
-4. Use the search tool at most 3 times. If you haven't found the answer after 3 searches, provide the best answer from what you found.
-5. Be concise and stick strictly to the facts from the retrieved information.
-
-If the search results don't contain the answer, say "I cannot find this information in the knowledge base" instead of making up an answer.
+CRITICAL RULES(IMPORTANT !!!):
+1. You MUST call the search tool AT LEAST ONCE before answering. NEVER answer without searching first.
+2. Answer ONLY using information retrieved from the search tool.
+3. Do NOT add external knowledge, explanations, or context not found in the retrieved documents.
+4. Do NOT provide additional details, synonyms, or interpretations beyond what is explicitly stated in the search results.
+5. Use the search tool at most 3 times. If you haven't found the answer after 3 searches, provide the best answer from what you found.
+6. Be concise and stick strictly to the facts from the retrieved information.
+7. Give ONLY the direct answer. Don't need external explanation.
+8. Do NOT start your answer with "Based on the search results" or any similar prefix. Output the answer directly.
 ```
 
 ## 数据集
@@ -178,42 +182,51 @@ If the search results don't contain the answer, say "I cannot find this informat
 **测试环境参数：**
 
 - **数据集**: 全量 HuggingFace Markdown 文档集 (54 QA)
-- **Embedding 模型**: `server:274214` (1024 维)
+- **Embedding 模型**: `BGE-M3` (1024 维)
 - **Agent 模型**: `DeepSeek-V3.2`
-- **评测模型**: `Gemini 2.5 Flash`
+- **评测模型**: `Gemini 3 Flash`
 
 #### 回答质量指标 (Answer Quality)
 
 
-| 指标                            | LangChain | tRPC-Agent-Go | Agno   | CrewAI | 胜者      |
-| --------------------------------- | ----------- | --------------- | -------- | -------- | ----------- |
-| **Faithfulness (忠实度)**       | 0.8978    | 0.8639        | 0.8491 | 0.9027 | ✅ CrewAI |
-| **Answer Relevancy (相关性)**   | 0.8921    | 0.9034        | 0.9625 | 0.7680 | ✅ Agno   |
-| **Answer Correctness (正确性)** | 0.6193    | 0.6167        | 0.6120 | 0.6941 | ✅ CrewAI |
-| **Answer Similarity (相似度)**  | 0.6535    | 0.6468        | 0.6312 | 0.6714 | ✅ CrewAI |
+| 指标                            | LangChain | tRPC-Agent-Go | Agno   | CrewAI | 胜者              |
+| --------------------------------- | ----------- | --------------- | -------- | -------- | ------------------- |
+| **Faithfulness (忠实度)**       | 0.9340    | **1.0000**    | 0.9815 | 0.9907 | ✅ tRPC-Agent-Go |
+| **Answer Relevancy (相关性)**   | 0.7430    | 0.7909        | 0.7814 | **0.8073** | ✅ CrewAI        |
+| **Answer Correctness (正确性)** | 0.7417    | **0.8392**    | 0.8357 | 0.7855 | ✅ tRPC-Agent-Go |
+| **Answer Similarity (相似度)**  | 0.7313    | 0.7663        | **0.7711** | 0.7043 | ✅ Agno          |
 
 #### 上下文质量指标 (Context Quality)
 
 
-| 指标                                 | LangChain | tRPC-Agent-Go | Agno   | CrewAI | 胜者             |
-| -------------------------------------- | ----------- | --------------- | -------- | -------- | ------------------ |
-| **Context Precision (精确率)**       | 0.6267    | 0.6983        | 0.6860 | 0.6942 | ✅ tRPC-Agent-Go |
-| **Context Recall (召回率)**          | 0.8889    | 0.9259        | 0.9630 | 0.9259 | ✅ Agno          |
-| **Context Entity Recall (实体召回)** | 0.4466    | 0.4846        | 0.4654 | 0.4883 | ✅ CrewAI        |
+| 指标                                 | LangChain | tRPC-Agent-Go | Agno   | CrewAI | 胜者                    |
+| -------------------------------------- | ----------- | --------------- | -------- | -------- | ------------------------- |
+| **Context Precision (精确率)**       | 0.6026    | **0.7171**    | 0.6932 | 0.6623 | ✅ tRPC-Agent-Go        |
+| **Context Recall (召回率)**          | 0.8704    | **0.9444**    | **0.9444** | **0.9444** | ✅ tRPC-Agent-Go / Agno / CrewAI |
+| **Context Entity Recall (实体召回)** | **0.4251** | 0.4179       | 0.4205 | 0.4189 | ✅ LangChain            |
 
 #### 执行效率 (耗时)
 
 > ⚠️ **重要说明**：各框架的评测是在**不同时间段**分别运行的，模型推理速度会受 API 服务器负载和网络状况影响而有较大波动。**时间指标仅供参考，不宜用于严格的性能对比。**
 
 
-| 指标             | LangChain | tRPC-Agent-Go | Agno     | CrewAI  |
-| ------------------ | ----------- | --------------- | ---------- | --------- |
-| **问答总耗时**   | 753.79s   | 795.35s       | 1556.45s | 385.23s |
-| **单题平均耗时** | 13.96s    | 14.73s        | 28.82s   | 7.13s   |
+| 指标             | LangChain | tRPC-Agent-Go | Agno     | CrewAI   |
+| ------------------ | ----------- | --------------- | ---------- | ---------- |
+| **问答总耗时**   | 378.94s   | 583.63s       | 571.68s  | 521.72s  |
+| **单题平均耗时** | 7.02s     | 10.81s        | 10.59s   | 9.66s    |
 
 ### 核心结论
 
-1. **CrewAI 回答质量最高**：在 **Faithfulness (0.9027)**、**Answer Correctness (0.6941)**、**Answer Similarity (0.6714)** 和 **Context Entity Recall (0.4883)** 上均位居第一，但 **Answer Relevancy (0.7680)** 最低。
-2. **tRPC-Agent-Go 检索精度最高**：在 **Context Precision (0.6983)** 上位居第一，表明检索到的文档更加精准，各项指标表现均衡。
-3. **Agno 检索召回最高**：在 **Answer Relevancy (0.9625)** 和 **Context Recall (0.9630)** 上表现最好，检索能力最强。
-4. **LangChain 表现均衡**：各项指标均处于中上水平，是成熟稳定的参考实现。
+1. **tRPC-Agent-Go 综合表现相对更优**：在 **Faithfulness (1.0000 满分)**、**Answer Correctness (0.8392)** 和 **Context Precision (0.7171)** 上均位居第一，回答忠实度达到满分，检索精度相对领先。
+2. **四个框架各有所长**：CrewAI 在 **Answer Relevancy (0.8073)** 上领先，Agno 在 **Answer Similarity (0.7711)** 上最高，LangChain 在 **Context Entity Recall (0.4251)** 上略优。
+3. **Context Recall 三方持平**：tRPC-Agent-Go、Agno、CrewAI 均达到 **0.9444**，表明三者的检索召回能力相当。
+
+### 评测观察
+
+在评测过程中，我们通过抓包分析发现，各框架在使用相同 LLM 模型的情况下，**框架发起请求的流程比较相似**——本质上都是 Agent 调用搜索工具、获取上下文、生成回答的标准 RAG 流程。部分框架（如 CrewAI）会在内部额外注入一些框架级 prompt。
+
+需要注意的是：
+
+- **数据集规模偏小**：当前评测集仅有1900+文档，不算大规模数据
+- **Prompt 对分数影响显著**： 不可否认，在当前数据集下系统提示词对Agent的执行影响比较大，同样也会对最终的分数产生很大的影响，我们保证了统一的系统提示词。
+- **切块策略是核心差异**：排除系统提示词的影响后，**文档切块（chunking）的质量可能是最终影响检索和回答质量的关键因素**。不同框架的切块实现（chunk size、overlap、边界识别等）会直接影响 Context Precision、Context Recall 等检索指标，进而影响回答的正确性。
