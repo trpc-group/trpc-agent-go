@@ -58,7 +58,7 @@ type Session struct {
 	CreatedAt   time.Time           `json:"createdAt"`           // CreatedAt is the creation time.
 
 	// Hash is the pre-computed slot hash value for asynchronous task dispatching.
-	// It is calculated once during session creation using murmur3 hash of
+	// It is calculated once during session creation by hashing
 	// "appName:userID:sessionID" and remains immutable throughout the session's lifecycle.
 	// This field is computed once during session creation and never modified.
 	Hash int `json:"-"`
