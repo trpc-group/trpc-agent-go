@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"math"
 	"sync"
 	"time"
 
@@ -189,12 +190,13 @@ func WithSessionUpdatedAt(updatedAt time.Time) SessionOptions {
 	}
 }
 
-// HashString computes a deterministic hash for the given string.
+// HashString computes a non-negative deterministic hash for the given string.
 // It is used for slot-based dispatching of sessions and track events.
+// The result is always >= 0, safe for use as a slice index after modulus.
 func HashString(s string) int {
 	h := fnv.New32a()
 	h.Write([]byte(s))
-	return int(h.Sum32())
+	return int(h.Sum32()) & math.MaxInt
 }
 
 // NewSession creates a new session.
