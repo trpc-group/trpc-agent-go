@@ -502,35 +502,42 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 
 	messages = p.mergeUserMessages(messages)
 
-	// Apply MaxHistoryRuns limit if set MaxHistoryRuns and
-	// AddSessionSummary is false.
-	if !p.AddSessionSummary && p.MaxHistoryRuns > 0 &&
-		len(messages) > p.MaxHistoryRuns {
-		startIdx := len(messages) - p.MaxHistoryRuns
-
-		// Collect tool_use IDs from assistant messages that will be truncated
-		// (before startIdx). If the message at startIdx is a tool result whose
-		// corresponding tool_use was truncated, the API will reject it with a
-		// 400 "unexpected tool_use_id" error. Advance startIdx past any such
-		// orphaned tool results.
-		truncatedToolIDs := make(map[string]bool)
-		for i := 0; i < startIdx; i++ {
-			for _, tc := range messages[i].ToolCalls {
-				if tc.ID != "" {
-					truncatedToolIDs[tc.ID] = true
-				}
-			}
-		}
-		for startIdx < len(messages) &&
-			messages[startIdx].Role == model.RoleTool &&
-			messages[startIdx].ToolID != "" &&
-			truncatedToolIDs[messages[startIdx].ToolID] {
-			startIdx++
-		}
-
-		messages = messages[startIdx:]
+	// Apply MaxHistoryRuns limit when AddSessionSummary is false.
+	if !p.AddSessionSummary && p.MaxHistoryRuns > 0 {
+		messages = applyMaxHistoryRuns(messages, p.MaxHistoryRuns)
 	}
 	return messages
+}
+
+// applyMaxHistoryRuns trims messages to at most maxRuns entries from the tail.
+// If the trim boundary falls on a tool-result message whose corresponding
+// tool_use was truncated, the boundary is advanced past any such orphaned
+// results to prevent API 400 "unexpected tool_use_id" errors.
+func applyMaxHistoryRuns(messages []model.Message, maxRuns int) []model.Message {
+	if len(messages) <= maxRuns {
+		return messages
+	}
+	startIdx := len(messages) - maxRuns
+
+	// Collect tool-call IDs that will be truncated (before startIdx).
+	truncatedToolIDs := make(map[string]bool)
+	for i := 0; i < startIdx; i++ {
+		for _, tc := range messages[i].ToolCalls {
+			if tc.ID != "" {
+				truncatedToolIDs[tc.ID] = true
+			}
+		}
+	}
+
+	// Skip orphaned tool results whose corresponding call was truncated.
+	for startIdx < len(messages) &&
+		messages[startIdx].Role == model.RoleTool &&
+		messages[startIdx].ToolID != "" &&
+		truncatedToolIDs[messages[startIdx].ToolID] {
+		startIdx++
+	}
+
+	return messages[startIdx:]
 }
 
 // processReasoningContent applies reasoning content stripping based on the
