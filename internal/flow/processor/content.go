@@ -507,6 +507,27 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 	if !p.AddSessionSummary && p.MaxHistoryRuns > 0 &&
 		len(messages) > p.MaxHistoryRuns {
 		startIdx := len(messages) - p.MaxHistoryRuns
+
+		// Collect tool_use IDs from assistant messages that will be truncated
+		// (before startIdx). If the message at startIdx is a tool result whose
+		// corresponding tool_use was truncated, the API will reject it with a
+		// 400 "unexpected tool_use_id" error. Advance startIdx past any such
+		// orphaned tool results.
+		truncatedToolIDs := make(map[string]bool)
+		for i := 0; i < startIdx; i++ {
+			for _, tc := range messages[i].ToolCalls {
+				if tc.ID != "" {
+					truncatedToolIDs[tc.ID] = true
+				}
+			}
+		}
+		for startIdx < len(messages) &&
+			messages[startIdx].Role == model.RoleTool &&
+			messages[startIdx].ToolID != "" &&
+			truncatedToolIDs[messages[startIdx].ToolID] {
+			startIdx++
+		}
+
 		messages = messages[startIdx:]
 	}
 	return messages
