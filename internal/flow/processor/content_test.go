@@ -1129,10 +1129,8 @@ func TestContentRequestProcessor_MaxHistoryRuns_SkipsOrphanedToolResults(t *test
 
 			assert.Equal(t, tt.expectedCount, len(messages), tt.description)
 			for i, expectedContent := range tt.expectedContent {
-				if i < len(messages) {
-					assert.Equal(t, expectedContent, messages[i].Content,
-						"message[%d] content mismatch", i)
-				}
+				assert.Equal(t, expectedContent, messages[i].Content,
+					"message[%d] content mismatch", i)
 			}
 		})
 	}

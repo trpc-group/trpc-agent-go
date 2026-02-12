@@ -519,6 +519,12 @@ func applyMaxHistoryRuns(messages []model.Message, maxRuns int) []model.Message 
 	}
 	startIdx := len(messages) - maxRuns
 
+	// Only scan the truncated prefix when the boundary actually falls on a
+	// tool-result message; otherwise there's nothing to skip.
+	if messages[startIdx].Role != model.RoleTool || messages[startIdx].ToolID == "" {
+		return messages[startIdx:]
+	}
+
 	// Collect tool-call IDs that will be truncated (before startIdx).
 	truncatedToolIDs := make(map[string]bool)
 	for i := 0; i < startIdx; i++ {
