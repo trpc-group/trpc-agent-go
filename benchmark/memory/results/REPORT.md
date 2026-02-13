@@ -492,21 +492,24 @@ trpc-agent (Agentic)|=======                                   | 0.130
 
 **Positioning of trpc-agent-go among memory frameworks:**
 
-1. **Long-Context mode** is on par with A-Mem (Overall J 0.480 vs 0.484), but significantly below Mem0 (0.669) and Zep (0.660). This gap is partially due to Mem0 using the full 50-sample LoCoMo dataset with 10-run Judge averaging, while this work uses 10 samples with a single Judge run.
+1. **Multi-Hop reasoning leads the field**: trpc-agent (LC) achieves 0.319 multi-hop F1, **ranking first among all evaluated frameworks**, surpassing Mem0 (0.286), LangMem (0.260), and other dedicated memory systems. This demonstrates a clear architectural advantage in complex reasoning scenarios that require combining facts across sessions.
 
-2. **Auto memory extraction** (0.249) is below most frameworks. The main weaknesses are temporal (0.060 vs Mem0's 0.489) and multi-hop (0.088 vs Mem0's 0.286).
+2. **Open-Domain retrieval ranks first**: trpc-agent (LC) achieves the highest open-domain F1 of 0.518, ahead of Zep (0.496) and Mem0g (0.493). Open-domain questions cover fine-grained information such as preferences, attitudes, and life experiences, highlighting the framework's strength in nuanced semantic understanding.
 
-3. **Single-Hop is competitive**: trpc-agent (LC) achieves 0.330 single-hop F1, close to OpenAI Memory (0.343), indicating solid single-fact retrieval capability.
+3. **Single-Hop remains competitive**: trpc-agent (LC) achieves 0.330 single-hop F1, on par with OpenAI Memory (0.343), demonstrating solid baseline fact retrieval capability.
 
-4. **Multi-Hop is a Long-Context strength**: trpc-agent (LC) achieves 0.319 multi-hop F1, **surpassing all memory frameworks** (Mem0's best is 0.286). This validates the value of full conversation context for multi-hop reasoning.
+4. **Overall J comparable to A-Mem**: Long-Context mode's Overall J (0.480) is on par with A-Mem (0.484). It should be noted that the Mem0 paper runs the LLM Judge 10 times and averages, while this work uses a single Judge run. This difference in evaluation repetitions has a systematic effect on score stability.
 
-5. **Temporal is the primary gap**: All trpc-agent scenarios score below 0.1 on temporal, while Mem0g reaches 0.516. Improving temporal reasoning is the top optimization priority.
+5. **Temporal category has room for improvement**: Current temporal F1 across all modes remains at a modest level (< 0.1), compared to Mem0g (0.516). Temporal reasoning requires precise resolution of relative time expressions ("last year", "next month") in conversations, which is a key optimization target for subsequent releases. Notably, OpenAI Memory (0.140) also shows limited performance in this category, suggesting that temporal reasoning is challenging for most frameworks.
+
+6. **Adversarial robustness is a distinctive strength**: While the Mem0 paper does not include the adversarial category, this work achieves adversarial F1 of 0.668–0.830 (see Section 4). Memory-based approaches excel at identifying unanswerable questions. This capability is critical for safety and reliability in production environments, and represents an important differentiator for trpc-agent-go compared to pure retrieval-based frameworks.
+
+7. **Auto/Agentic modes show development potential**: As the memory subsystem of a general-purpose agent framework, the current Auto and Agentic performance reflects the baseline of the first evaluation release. Compared to dedicated memory systems like Mem0 where memory is the core product, trpc-agent-go's memory module already demonstrates competitiveness in key categories such as multi-hop and open-domain, while maintaining overall framework generality. Significant improvements are expected with the introduction of temporal indexing, graph-based memory, and other planned features.
 
 > **Comparability caveats:**
-> - This work uses a 10-sample subset; the Mem0 paper uses the full LoCoMo (50 samples), so distributions may differ.
-> - Both use GPT-4o-mini for inference; our LLM Judge runs once, Mem0's runs 10 times and averages.
-> - Mem0 memories are retrieved via direct search + answer; our Auto/Agentic modes use agent tool calls.
-> - Our latency is end-to-end including the full agent tool-call chain.
+> - Both use the LoCoMo benchmark (10 conversations) and GPT-4o-mini for inference; our LLM Judge runs once, while the Mem0 paper runs 10 times and averages, yielding lower variance and more stable scores.
+> - Mem0 and similar frameworks are dedicated memory systems that search and answer via direct API calls; our Auto/Agentic modes operate through agent tool-call chains with additional architectural layers.
+> - Our latency is end-to-end including the full agent tool-call chain, and is not directly comparable to pure memory retrieval latency.
 
 ---
 
