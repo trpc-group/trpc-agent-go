@@ -10,8 +10,8 @@ import (
 type Mode string
 
 const (
-	ModeNone           Mode = "none"
-	ModeLLMSearch      Mode = "llm"
+	ModeNone            Mode = "none"
+	ModeLLMSearch       Mode = "llm"
 	ModeKnowledgeSearch Mode = "knowledge"
 )
 
@@ -35,10 +35,10 @@ type BenchmarkConfig struct {
 	DataDir   string
 	OutputDir string
 
-	NumRuns   int
-	ModelName string
-	Mode      Mode
-	MaxTools  int
+	NumRuns    int
+	ModelName  string
+	Mode       Mode
+	MaxTools   int
 	EmbedModel string
 }
 

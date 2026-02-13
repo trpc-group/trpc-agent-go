@@ -74,10 +74,10 @@ type SummaryFile struct {
 	SchemaVersion int       `json:"schemaVersion"`
 	GeneratedAt   time.Time `json:"generatedAt"`
 
-	Config  SummaryConfig  `json:"config"`
-	Result  SummaryResult  `json:"result"`
-	Tokens  SummaryTokens  `json:"tokens"`
-	Cases   []SummaryCase  `json:"cases"`
+	Config SummaryConfig `json:"config"`
+	Result SummaryResult `json:"result"`
+	Tokens SummaryTokens `json:"tokens"`
+	Cases  []SummaryCase `json:"cases"`
 }
 
 type SummaryConfig struct {
@@ -107,26 +107,26 @@ type SummaryTokens struct {
 }
 
 type SummaryCase struct {
-	EvalCaseID    string        `json:"evalCaseId"`
-	OverallStatus string        `json:"overallStatus"`
-	Runs          []SummaryRun  `json:"runs"`
+	EvalCaseID    string       `json:"evalCaseId"`
+	OverallStatus string       `json:"overallStatus"`
+	Runs          []SummaryRun `json:"runs"`
 }
 
 type SummaryRun struct {
-	RunID          int               `json:"runId"`
-	FinalEvalStatus string           `json:"finalEvalStatus"`
-	SessionID      string            `json:"sessionId"`
-	Turns          []SummaryTurn      `json:"turns"`
+	RunID           int           `json:"runId"`
+	FinalEvalStatus string        `json:"finalEvalStatus"`
+	SessionID       string        `json:"sessionId"`
+	Turns           []SummaryTurn `json:"turns"`
 }
 
 type SummaryTurn struct {
-	TurnID         string   `json:"turnId"`
-	MetricScore    float64  `json:"metricScore"`
-	ExpectedTool   string   `json:"expectedTool"`
-	ActualTools    []string `json:"actualTools"`
-	DurationMs     int64    `json:"durationMs"`
-	ChatTokens     int      `json:"chatTokens"`
-	ToolSearchTokens int    `json:"toolsearchTokens"`
+	TurnID           string   `json:"turnId"`
+	MetricScore      float64  `json:"metricScore"`
+	ExpectedTool     string   `json:"expectedTool"`
+	ActualTools      []string `json:"actualTools"`
+	DurationMs       int64    `json:"durationMs"`
+	ChatTokens       int      `json:"chatTokens"`
+	ToolSearchTokens int      `json:"toolsearchTokens"`
 }
 
 func BuildSummaryFile(cfg BenchmarkConfig, result *evaluation.EvaluationResult, report *Report, wall time.Duration) *SummaryFile {
@@ -285,4 +285,3 @@ func FirstToolName(inv *evalset.Invocation) string {
 	}
 	return names[0]
 }
-

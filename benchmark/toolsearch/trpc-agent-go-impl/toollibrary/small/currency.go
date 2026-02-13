@@ -28,9 +28,9 @@ func NewCurrencyConverterTool() tool.CallableTool {
 			Description: "Currency conversion request",
 			Required:    []string{"amount", "from", "to"},
 			Properties: map[string]*tool.Schema{
-				"amount": {Type: "number", Description: "The amount to convert"},
-				"from":   {Type: "string", Description: "Source currency code (e.g., USD, EUR, CNY)"},
-				"to":     {Type: "string", Description: "Target currency code (e.g., USD, EUR, CNY)"},
+				"amount":        {Type: "number", Description: "The amount to convert"},
+				"from":          {Type: "string", Description: "Source currency code (e.g., USD, EUR, CNY)"},
+				"to":            {Type: "string", Description: "Target currency code (e.g., USD, EUR, CNY)"},
 				"exchange_rate": {Type: "number", Description: "Optional exchange rate (from to to). If not provided, uses approximate rates for demonstration."},
 			},
 		}),
