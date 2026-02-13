@@ -526,11 +526,11 @@ func applyMaxHistoryRuns(messages []model.Message, maxRuns int) []model.Message 
 	}
 
 	// Collect tool-call IDs that will be truncated (before startIdx).
-	truncatedToolIDs := make(map[string]bool)
+	truncatedToolIDs := make(map[string]struct{})
 	for i := 0; i < startIdx; i++ {
 		for _, tc := range messages[i].ToolCalls {
 			if tc.ID != "" {
-				truncatedToolIDs[tc.ID] = true
+				truncatedToolIDs[tc.ID] = struct{}{}
 			}
 		}
 	}
@@ -538,9 +538,12 @@ func applyMaxHistoryRuns(messages []model.Message, maxRuns int) []model.Message 
 	// Skip orphaned tool results whose corresponding call was truncated.
 	for startIdx < len(messages) &&
 		messages[startIdx].Role == model.RoleTool &&
-		messages[startIdx].ToolID != "" &&
-		truncatedToolIDs[messages[startIdx].ToolID] {
-		startIdx++
+		messages[startIdx].ToolID != "" {
+		if _, orphaned := truncatedToolIDs[messages[startIdx].ToolID]; orphaned {
+			startIdx++
+			continue
+		}
+		break
 	}
 
 	return messages[startIdx:]
