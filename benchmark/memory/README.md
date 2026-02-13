@@ -10,6 +10,46 @@ Based on:
 - [LoCoMo: Long-Context Conversational Memory](https://arxiv.org/abs/2402.17753)
 - [Memory in the Age of AI Agents](https://arxiv.org/abs/2512.13564)
 
+## Reports
+
+| File | Description |
+|------|-------------|
+| [REPORT.md](results/REPORT.md) | Full evaluation report (English) |
+| [REPORT.zh_CN.md](results/REPORT.zh_CN.md) | Full evaluation report (Chinese) |
+
+## Key Results
+
+**Configuration**: Model=gpt-4o-mini, 10 samples, 1,986 QA pairs.
+
+**Overall Results (No History Injection)**:
+
+| Scenario | Backend | F1 | LLM Score |
+|----------|---------|----:|----------:|
+| Long-Context | - | **0.472** | **0.523** |
+| Auto | pgvector | 0.357 | 0.366 |
+| Auto | MySQL | 0.347 | 0.362 |
+| Agentic | pgvector | 0.294 | 0.287 |
+| Agentic | MySQL | 0.286 | 0.285 |
+
+**History Injection Effect (Auto pgvector)**:
+
+| History | F1 | LLM Score | Adversarial F1 | Open-domain LLM |
+|---------|----:|----------:|---------------:|----------------:|
+| None | **0.357** | 0.366 | **0.771** | 0.355 |
+| +300 turns | 0.296 | 0.414 | 0.514 | 0.539 |
+| +700 turns | 0.288 | **0.464** | 0.418 | **0.685** |
+
+**Key Insights**:
+1. Auto extraction with pgvector achieves the best memory-based F1 (75.6%
+   of long-context baseline).
+2. History injection improves semantic quality (LLM Score +0.10~0.18) but
+   hurts token-level precision (F1 -0.02~0.07) due to adversarial
+   robustness degradation.
+3. Structured memory extraction outperforms brute-force history injection
+   for factual recall tasks.
+4. pgvector > MySQL for retrieval quality; gap vanishes with history
+   injection.
+
 ## Evaluation Metrics
 
 Aligned with LoCoMo paper and industry standards (Mem0, MemMachine):
@@ -72,24 +112,35 @@ go run main.go -scenario all
 go run main.go -scenario all -memory-backend inmemory,pgvector
 ```
 
+### 5. Comma-Separated Scenarios
+
+Run specific combinations of scenarios.
+
+```bash
+# Run agentic and auto only.
+go run main.go -scenario agentic,auto -memory-backend pgvector,mysql
+```
+
 ## Command-Line Options
 
-| Option            | Default                | Description                                  |
-| ----------------- | ---------------------- | -------------------------------------------- |
-| `-model`          | gpt-4o-mini            | Model name                                   |
-| `-eval-model`     | same as model          | Evaluation model for LLM judge               |
-| `-dataset`        | ../data                | Dataset directory                            |
-| `-data-file`      | locomo_sample.json     | Dataset file name                            |
-| `-output`         | ../results             | Output directory                             |
-| `-scenario`       | long_context           | Evaluation scenario                          |
-| `-memory-backend` | inmemory               | Memory backend: inmemory, pgvector           |
-| `-pgvector-dsn`   | (env)                  | PostgreSQL DSN for pgvector                  |
-| `-embed-model`    | text-embedding-3-small | Embedding model for pgvector                 |
-| `-sample-id`      |                        | Filter by sample ID                          |
-| `-max-tasks`      | 0                      | Maximum tasks (0=all)                        |
-| `-llm-judge`      | false                  | Enable LLM-as-Judge                          |
-| `-verbose`        | false                  | Verbose output                               |
-| `-resume`         | false                  | Resume from checkpoint                       |
+| Option              | Default                | Description                            |
+| ------------------- | ---------------------- | -------------------------------------- |
+| `-model`            | gpt-4o-mini            | Model name                             |
+| `-eval-model`       | same as model          | Evaluation model for LLM judge         |
+| `-dataset`          | ../data                | Dataset directory                      |
+| `-data-file`        | locomo_sample.json     | Dataset file name                      |
+| `-output`           | ../results             | Output directory                       |
+| `-scenario`         | long_context           | Evaluation scenario (comma-separated)  |
+| `-memory-backend`   | inmemory               | Memory backend (comma-separated)       |
+| `-pgvector-dsn`     | (env)                  | PostgreSQL DSN for pgvector            |
+| `-mysql-dsn`        | (env)                  | MySQL DSN for mysql backend            |
+| `-embed-model`      | text-embedding-3-small | Embedding model for pgvector           |
+| `-qa-history-turns` | 0                      | Inject N conversation turns as context |
+| `-sample-id`        |                        | Filter by sample ID                    |
+| `-max-tasks`        | 0                      | Maximum tasks (0=all)                  |
+| `-llm-judge`        | false                  | Enable LLM-as-Judge                    |
+| `-verbose`          | false                  | Verbose output                         |
+| `-resume`           | false                  | Resume from checkpoint                 |
 
 ## Environment Variables
 
@@ -99,6 +150,7 @@ go run main.go -scenario all -memory-backend inmemory,pgvector
 | `EVAL_MODEL_NAME`  | Evaluation model name               |
 | `OPENAI_API_KEY`   | OpenAI API key                      |
 | `PGVECTOR_DSN`     | PostgreSQL DSN for pgvector backend |
+| `MYSQL_DSN`        | MySQL DSN for mysql backend         |
 | `EMBED_MODEL_NAME` | Embedding model for pgvector        |
 
 ## Dataset Setup
@@ -137,6 +189,14 @@ go run main.go -scenario agentic -memory-backend pgvector
 
 # Run all scenarios.
 go run main.go -scenario all -output ../results/full_eval
+
+# Run with history injection (300 turns).
+go run main.go \
+  -scenario agentic,auto \
+  -memory-backend pgvector,mysql \
+  -qa-history-turns 300 \
+  -llm-judge \
+  -output ../results/history300
 ```
 
 ## Output Format
@@ -178,9 +238,11 @@ Results are saved in JSON format:
 | -------- | ---------------------------------- | -------------------------------------------- |
 | inmemory | Fast, no setup required            | No vector similarity, keyword-based matching |
 | pgvector | Vector similarity search, scalable | Requires PostgreSQL setup                    |
+| mysql    | Full-text search, widely deployed  | Requires MySQL setup                         |
 
 ### Expected Results
 
 - **pgvector** should outperform **inmemory** for semantic retrieval tasks.
 - For exact-match questions, both backends may perform similarly.
 - pgvector is recommended for production and realistic evaluation.
+- With history injection, backend differences diminish.
