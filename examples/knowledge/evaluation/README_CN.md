@@ -1,15 +1,16 @@
-# RAG 评测：tRPC-Agent-Go vs LangChain vs Agno vs CrewAI
+# RAG 评测：tRPC-Agent-Go vs LangChain vs Agno vs CrewAI vs AutoGen
 
 本目录包含一个全面的评测框架，使用 [RAGAS](https://docs.ragas.io/) 指标对不同的 RAG（检索增强生成）系统进行对比分析。
 
 ## 概述
 
-为了确保公平对比，我们使用**完全相同的配置**对四个 RAG 实现进行了评测：
+为了确保公平对比，我们使用**完全相同的配置**对五个 RAG 实现进行了评测：
 
 - **tRPC-Agent-Go**: 我们基于 Go 的 RAG 实现
 - **LangChain**: 基于 Python 的参考实现
 - **Agno**: 具有内置知识库支持的 Python AI Agent 框架
 - **CrewAI**: 基于 Python 的多智能体框架，使用 ChromaDB 向量存储
+- **AutoGen**: 微软开发的基于 Python 的多智能体框架
 
 ## 快速开始
 
@@ -37,11 +38,8 @@ export PGVECTOR_DATABASE="vector"
 ### 运行评测
 
 ```bash
-# 评测 LangChain（native 模式，默认）
+# 评测 LangChain
 python3 main.py --kb=langchain
-
-# 使用 strict 模式评测（公平基线对比）
-python3 main.py --kb=langchain --eval-mode=strict
 
 # 评测 tRPC-Agent-Go
 python3 main.py --kb=trpc-agent-go
@@ -49,26 +47,29 @@ python3 main.py --kb=trpc-agent-go
 # 评测 Agno
 python3 main.py --kb=agno
 
+# 评测 AutoGen
+python3 main.py --kb=autogen
+
 # 查看完整日志（包含答案和上下文）
 python3 main.py --kb=trpc-agent-go --max-qa=1 --full-log
 ```
 
 ## 配置对齐
 
-四个系统均使用**相同参数**以确保对比的公正性：
+五个系统均使用**相同参数**以确保对比的公正性：
 
 
-| 参数                     | LangChain               | tRPC-Agent-Go              | Agno                    | CrewAI                  |
-| -------------------------- | ------------------------- | ---------------------------- | ------------------------- | ------------------------- |
-| **Temperature**          | 0                       | 0                          | 0                       | 0                       |
-| **Chunk Size**           | 500                     | 500                        | 500                     | 500                     |
-| **Chunk Overlap**        | 50                      | 50                         | 50                      | 50                      |
-| **Embedding Dimensions** | 1024                    | 1024                       | 1024                    | 1024                    |
-| **Vector Store**         | PGVector                | PGVector                   | PgVector                | ChromaDB                |
-| **检索模式**             | Vector                  | Vector (已关闭默认 Hybrid) | Vector                  | Vector                  |
-| **Knowledge Base 构建**  | 框架原生方式            | 框架原生方式               | 框架原生方式            | 框架原生方式            |
-| **Agent 类型**           | Agent + KB (ReAct 关闭) | Agent + KB (ReAct 关闭)    | Agent + KB (ReAct 关闭) | Agent + KB (ReAct 关闭) |
-| **单次检索数量 (k)**     | 4                       | 4                          | 4                       | 4                       |
+| 参数                     | LangChain               | tRPC-Agent-Go              | Agno                    | CrewAI                  | AutoGen                 |
+| -------------------------- | ------------------------- | ---------------------------- | ------------------------- | ------------------------- | ------------------------- |
+| **Temperature**          | 0                       | 0                          | 0                       | 0                       | 0                       |
+| **Chunk Size**           | 500                     | 500                        | 500                     | 500                     | 500                     |
+| **Chunk Overlap**        | 50                      | 50                         | 50                      | 50                      | 50                      |
+| **Embedding Dimensions** | 1024                    | 1024                       | 1024                    | 1024                    | 1024                    |
+| **Vector Store**         | PGVector                | PGVector                   | PgVector                | ChromaDB                | PGVector                |
+| **检索模式**             | Vector                  | Vector (已关闭默认 Hybrid) | Vector                  | Vector                  | Vector                  |
+| **Knowledge Base 构建**  | 框架原生方式            | 框架原生方式               | 框架原生方式            | 框架原生方式            | 框架原生方式            |
+| **Agent 类型**           | Agent + KB (ReAct 关闭) | Agent + KB (ReAct 关闭)    | Agent + KB (ReAct 关闭) | Agent + KB (ReAct 关闭) | Agent + KB (ReAct 关闭) |
+| **单次检索数量 (k)**     | 4                       | 4                          | 4                       | 4                       | 4                       |
 
 > 📝 **tRPC-Agent-Go 说明**：
 >
@@ -79,48 +80,11 @@ python3 main.py --kb=trpc-agent-go --max-qa=1 --full-log
 > - **Vector Store**：由于 CrewAI 目前不支持 PGVector 构建知识库，这里使用 ChromaDB 作为向量存储。
 > - **Bug 修复**：CrewAI (v1.9.0) 存在一个 Bug，当 LLM（如 DeepSeek-V3.2）同时返回 `content` 和 `tool_calls` 时，框架会优先返回 `content` 而忽略 `tool_calls`，导致 Agent 无法正常调用工具。我们通过 Monkey Patch 修复了 `LLM._handle_non_streaming_response` 方法，使其优先处理 `tool_calls`，确保评测的公平性。详见 `knowledge_system/crewai/knowledge_base.py`。
 
-## 评测模式
-
-框架支持两种评测模式，分别对应不同的对比目标：
-
-### `strict` 模式（公平基线）
-
-```bash
-python3 main.py --kb=langchain --eval-mode=strict
-```
-
-- **上下文采集**：每题固定一次 `search(question, k)` 调用获取上下文，**与 Agent 解耦**。
-- **答案生成**：Agent 的 `answer()` 仍然正常调用，但其内部检索到的上下文**不用于评测**。
-- **检索模式**：所有框架统一使用**纯向量检索**（tRPC-Agent-Go 已关闭默认的 Hybrid Search），确保检索条件一致。
-- **用途**：确保所有框架在**完全相同的检索结果**上被评测，消除 Agent 多轮工具调用、Query 改写、混合检索等差异。
-- **失败样本**：保留并填充占位值，保证各框架的样本集合完全一致。
-
-### `native` 模式（真实表现）
-
-```bash
-python3 main.py --kb=langchain --eval-mode=native
-```
-
-- **上下文采集**：上下文来自 Agent 在 `answer()` 过程中的实际工具调用响应。
-- **检索模式**：各框架使用**原生检索管线**（tRPC-Agent-Go 在此评测中同样关闭了混合检索，使用纯向量检索以保证公平）。
-- **用途**：衡量各框架完整 RAG 管线的**端到端真实表现**，包括 Agent 行为、多轮检索、框架特有优化。
-- **失败样本**：保留并填充占位值。
-
-### 模式选择指南
-
-
-| 目标                      | 模式                       |
-| --------------------------- | ---------------------------- |
-| 公平横向对比检索+生成质量 | `strict`                   |
-| 衡量生产环境真实表现      | `native`                   |
-| 调试检索管线差异          | `strict`（直接对比上下文） |
-| 评估 Agent 工具调用行为   | `native`                   |
-
 ## 系统提示词 (System Prompt)
 
-为了确保评测的公平性，我们为所有四个系统配置了**完全相同**的核心提示词。
+为了确保评测的公平性，我们为所有五个系统配置了**完全相同**的核心提示词。
 
-**LangChain, Agno, tRPC-Agent-Go & CrewAI 使用的提示词：**
+**LangChain, Agno, tRPC-Agent-Go, CrewAI & AutoGen 使用的提示词：**
 
 ```text
 You are a helpful assistant that answers questions using a knowledge base search tool.
@@ -189,45 +153,36 @@ CRITICAL RULES(IMPORTANT !!!):
 #### 回答质量指标 (Answer Quality)
 
 
-| 指标                            | LangChain | tRPC-Agent-Go  | Agno       | CrewAI     | 胜者             |
-| --------------------------------- | ----------- | ---------------- | ------------ | ------------ | ------------------ |
-| **Faithfulness (忠实度)**       | 0.8614    | **0.9853**     | 0.7213     | 0.9655     | ✅ tRPC-Agent-Go |
-| **Answer Relevancy (相关性)**   | 0.8529    | 0.8890         | **0.9013** | 0.8383     | ✅ Agno          |
-| **Answer Correctness (正确性)** | 0.6912    | **0.8299**     | 0.6916     | 0.8101     | ✅ tRPC-Agent-Go |
-| **Answer Similarity (相似度)**  | 0.6740    | **0.7251**     | 0.6772     | 0.6948     | ✅ tRPC-Agent-Go |
+| 指标                            | LangChain | tRPC-Agent-Go | Agno   | CrewAI | AutoGen    | 胜者             |
+| --------------------------------- | ----------- | --------------- | -------- | -------- | ------------ | ------------------ |
+| **Faithfulness (忠实度)**       | 0.8614    | **0.9853**    | 0.7213 | 0.9655 | 0.9113     | ✅ tRPC-Agent-Go |
+| **Answer Relevancy (相关性)**   | 0.8529    | 0.8890        | 0.9013 | 0.8383 | **0.9040** | ✅ AutoGen       |
+| **Answer Correctness (正确性)** | 0.6912    | **0.8299**    | 0.6916 | 0.8101 | 0.7725     | ✅ tRPC-Agent-Go |
+| **Answer Similarity (相似度)**  | 0.6740    | **0.7251**    | 0.6772 | 0.6948 | 0.6830     | ✅ tRPC-Agent-Go |
 
 #### 上下文质量指标 (Context Quality)
 
 
-| 指标                                 | LangChain | tRPC-Agent-Go  | Agno       | CrewAI     | 胜者             |
-| -------------------------------------- | ----------- | ---------------- | ------------ | ------------ | ------------------ |
-| **Context Precision (精确率)**       | 0.6314    | **0.7278**     | 0.7046     | 0.6673     | ✅ tRPC-Agent-Go |
-| **Context Recall (召回率)**          | 0.8333    | 0.9259         | 0.9259     | **0.9444** | ✅ CrewAI        |
-| **Context Entity Recall (实体召回)** | 0.4138    | **0.5034**     | 0.4331     | 0.3922     | ✅ tRPC-Agent-Go |
-
-#### 执行效率 (耗时)
-
-> ⚠️ **重要说明**：各框架的评测是在**不同时间段**分别运行的，模型推理速度会受 API 服务器负载和网络状况影响而有较大波动。**时间指标仅供参考，不宜用于严格的性能对比。**
-
-
-| 指标             | LangChain | tRPC-Agent-Go | Agno    | CrewAI  |
-| ------------------ | ----------- | --------------- | --------- | --------- |
-| **问答总耗时**   | 439.30s   | 731.65s       | 553.44s | 430.64s |
-| **单题平均耗时** | 8.14s     | 13.55s        | 10.25s  | 7.97s   |
+| 指标                                 | LangChain | tRPC-Agent-Go | Agno   | CrewAI     | AutoGen    | 胜者                |
+| -------------------------------------- | ----------- | --------------- | -------- | ------------ | ------------ | --------------------- |
+| **Context Precision (精确率)**       | 0.6314    | **0.7278**    | 0.7046 | 0.6673     | 0.6142     | ✅ tRPC-Agent-Go    |
+| **Context Recall (召回率)**          | 0.8333    | 0.9259        | 0.9259 | **0.9444** | **0.9444** | ✅ CrewAI / AutoGen |
+| **Context Entity Recall (实体召回)** | 0.4138    | **0.5034**    | 0.4331 | 0.3922     | 0.2902     | ✅ tRPC-Agent-Go    |
 
 ### 核心结论
 
 1. **tRPC-Agent-Go 综合表现最优**：在 7 项指标中拿下 5 项第一——**Faithfulness (0.9853)**、**Answer Correctness (0.8299)**、**Answer Similarity (0.7251)**、**Context Precision (0.7278)** 和 **Context Entity Recall (0.5034)**，回答质量和检索精度全面领先。
-2. **CrewAI 召回率最高**：**Context Recall (0.9444)** 排名第一，表明其检索召回最全面。
-3. **Agno 相关性突出**：**Answer Relevancy (0.9013)** 排名第一，回答切题性最优。
-4. **四个框架各有所长**：LangChain 表现均衡稳定，各框架在不同维度各具优势。
+2. **AutoGen 相关性领先**：**Answer Relevancy (0.9040)** 排名第一（与 Agno 的 0.9013 接近），回答切题性最优。同时 **Context Recall (0.9444)** 并列第一。
+3. **CrewAI 召回率最高**：**Context Recall (0.9444)** 并列第一，表明其检索召回最全面。
+4. **Agno 相关性突出**：**Answer Relevancy (0.9013)** 排名第二，回答切题性优秀。
+5. **五个框架各有所长**：LangChain 表现均衡稳定，各框架在不同维度各具优势。
 
 ### 评测观察
 
-在评测过程中，我们通过抓包分析发现，各框架在使用相同 LLM 模型的情况下，**框架发起请求的流程比较相似**——本质上都是 Agent 调用搜索工具、获取上下文、生成回答的标准 RAG 流程。部分框架（如 CrewAI）会在内部额外注入一些框架级 prompt。
+在评测过程中，我们通过抓包分析发现，各框架在使用相同 LLM 模型的情况下，**框架发起请求的流程比较相似**——本质上都是 Agent 调用搜索工具、获取上下文、生成回答的标准 RAG 流程。
 
 需要注意的是：
 
-- **数据集规模偏小**：当前评测集仅有1900+文档，不算大规模数据
+- **数据集规模偏小**：当前评测集仅有1900+文档 以及 54 个QA对，不算大规模数据
 - **Prompt 对分数影响**： 不可否认，在当前数据集下系统提示词对Agent的执行影响比较大，同样也会对最终的分数产生很大的影响，我们保证了统一的系统提示词。
-- **切块策略是核心差异**：排除系统提示词的影响后，**文档切块（chunking）的质量可能是最终影响检索和回答质量的关键因素**。不同框架的切块实现（chunk size、overlap、边界识别等）会直接影响 Context Precision、Context Recall 等检索指标，进而影响回答的正确性。
+- **切块策略可能有影响**：排除系统提示词的影响后，不同框架的切块实现（chunk size、overlap、边界识别等）可能会对检索和回答质量产生影响，进而影响 Context Precision、Context Recall 等检索指标。

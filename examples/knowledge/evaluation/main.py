@@ -476,6 +476,10 @@ def main():
         from knowledge_system.crewai.knowledge_base import CrewAIKnowledgeBase
         kb = CrewAIKnowledgeBase(max_results=args.k)
         print("Using CrewAI knowledge base")
+    elif args.kb == "autogen":
+        from knowledge_system.autogen.knowledge_base import AutoGenKnowledgeBase
+        kb = AutoGenKnowledgeBase(max_results=args.k)
+        print("Using AutoGen knowledge base")
     else:
         from knowledge_system.langchain.knowledge_base import LangChainKnowledgeBase
         kb = LangChainKnowledgeBase()
