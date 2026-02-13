@@ -62,6 +62,11 @@ type Session struct {
 	// This field is computed once during session creation and never modified.
 	Hash int `json:"-"`
 
+	// ServiceMeta stores service-layer metadata (memory only, not persisted).
+	// Used internally by session service implementations for version routing, etc.
+	// Users should not access or modify this field directly.
+	ServiceMeta map[string]string `json:"-"`
+
 	stateMu sync.RWMutex `json:"-"` // stateMu is the read-write mutex for State.
 }
 
@@ -128,6 +133,14 @@ func (sess *Session) Clone() *Session {
 		}
 	}
 	sess.SummariesMu.RUnlock()
+
+	// Copy service metadata.
+	if sess.ServiceMeta != nil {
+		copiedSess.ServiceMeta = make(map[string]string, len(sess.ServiceMeta))
+		for k, v := range sess.ServiceMeta {
+			copiedSess.ServiceMeta[k] = v
+		}
+	}
 
 	return copiedSess
 }
