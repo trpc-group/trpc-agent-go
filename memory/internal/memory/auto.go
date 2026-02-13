@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/memory/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
@@ -74,7 +75,13 @@ type AutoMemoryWorker struct {
 }
 
 // NewAutoMemoryWorker creates a new auto memory worker.
-func NewAutoMemoryWorker(config AutoMemoryConfig, operator MemoryOperator) *AutoMemoryWorker {
+// The EnabledTools map is defensively copied so that callers
+// cannot mutate the worker's configuration after construction.
+func NewAutoMemoryWorker(
+	config AutoMemoryConfig,
+	operator MemoryOperator,
+) *AutoMemoryWorker {
+	config.EnabledTools = itool.CopyEnabledTools(config.EnabledTools)
 	return &AutoMemoryWorker{
 		config:   config,
 		operator: operator,
@@ -311,7 +318,8 @@ func (w *AutoMemoryWorker) executeOperation(
 	op *extractor.Operation,
 ) {
 	if et := w.config.EnabledTools; len(et) > 0 {
-		if name, ok := operationToolName[op.Type]; ok && !et[name] {
+		if name, ok := operationToolName[op.Type]; ok &&
+			!itool.IsToolEnabled(et, name) {
 			log.DebugfContext(ctx,
 				"auto_memory: skipping disabled %s "+
 					"operation for user %s/%s",

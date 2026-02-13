@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"strings"
 
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/memory/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -170,18 +171,11 @@ func (e *memoryExtractor) SetModel(m model.Model) {
 	}
 }
 
-// SetEnabledTools updates the enabled tool flags for background operations.
-// The map is copied to prevent external mutation.
+// SetEnabledTools updates the enabled tool flags for background
+// operations. The map is defensively copied to prevent external
+// mutation.
 func (e *memoryExtractor) SetEnabledTools(enabled map[string]bool) {
-	if enabled == nil {
-		e.enabledTools = nil
-		return
-	}
-	m := make(map[string]bool, len(enabled))
-	for name, ok := range enabled {
-		m[name] = ok
-	}
-	e.enabledTools = m
+	e.enabledTools = itool.CopyEnabledTools(enabled)
 }
 
 // ShouldExtract checks if extraction should be triggered based on context.
@@ -288,7 +282,7 @@ func (e *memoryExtractor) availableActionsBlock() string {
 	var sb strings.Builder
 	for _, name := range toolActionOrder {
 		// Skip tools that are disabled.
-		if len(e.enabledTools) > 0 && !e.enabledTools[name] {
+		if !itool.IsToolEnabled(e.enabledTools, name) {
 			continue
 		}
 		desc, ok := toolActionDescriptions[name]
