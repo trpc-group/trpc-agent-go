@@ -6,13 +6,14 @@ import (
 	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
-	"trpc.group/trpc-go/trpc-agent-go/benchmark/toolsearch/trpc-agent-go-impl/toollibrary/small"
+	"trpc.group/trpc-go/trpc-agent-go/benchmark/tools/mathtools"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/plugin/toolsearch"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
 	vectorinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
@@ -42,10 +43,15 @@ func NewInstrumentedRunner(cfg BenchmarkConfig, collector *Collector) (runner.Ru
 		"Choose the most appropriate tool, call it, then answer using the tool result. " +
 		"Do not answer directly without calling a tool."
 
+	mathToolSet, err := mathtools.NewToolSet()
+	if err != nil {
+		return nil, fmt.Errorf("create mathtools toolset: %w", err)
+	}
+
 	ag := llmagent.New(
 		"toolsearch-benchmark-agent",
 		llmagent.WithModel(chatModel),
-		llmagent.WithTools(small.GetTools()),
+		llmagent.WithToolSets([]tool.ToolSet{mathToolSet}),
 		llmagent.WithInstruction(instruction),
 		llmagent.WithDescription("Benchmark agent for tool search evaluation"),
 		llmagent.WithGenerationConfig(model.GenerationConfig{Stream: false}),

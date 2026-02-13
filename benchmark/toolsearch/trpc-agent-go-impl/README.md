@@ -7,7 +7,7 @@
 
 ### 运行
 在本目录执行：
-- `go run . -model deepseek-chat -mode llm -max-tools 3`
+- `go run . -model deepseek-chat -mode llm -evalset toolsearch-mathtools-multiturn -max-tools 5`
 
 ### 重要参数
 - `-mode`: `none | llm | knowledge`

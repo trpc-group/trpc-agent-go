@@ -22,7 +22,7 @@ import (
 
 const (
 	defaultAppName   = "toolsearch-benchmark"
-	defaultEvalSetID = "toolsearch-multiturn"
+	defaultEvalSetID = "toolsearch-mathtools-multiturn"
 )
 
 func main() {

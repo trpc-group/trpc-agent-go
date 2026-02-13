@@ -9,7 +9,7 @@
 评估资产（evalset/metrics）通常只需要生成一次，仓库内已放在 `data/` 下；日常跑评估直接执行即可。
 
 在 `benchmark/toolsearch/trpc-agent-go-impl` 目录运行：
-- `go run . -model <MODEL_NAME> -mode llm -max-tools 3`
+- `go run . -model <MODEL_NAME> -mode llm -evalset toolsearch-mathtools-multiturn -max-tools 5`
 
 ### 输入与产物
 - 评估输入：`data/<app>/<evalset>.evalset.json`（用户输入在 evalset 内的 `conversation` 里）
