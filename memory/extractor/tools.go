@@ -9,7 +9,6 @@
 package extractor
 
 import (
-	itool "trpc.group/trpc-go/trpc-agent-go/internal/memory/tool"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	memorytool "trpc.group/trpc-go/trpc-agent-go/memory/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -25,18 +24,18 @@ var backgroundToolCreators = map[string]func() tool.CallableTool{
 }
 
 // filterTools returns a new tool map containing only tools that are
-// enabled by the given map. A nil or empty map means all tools are
+// enabled by the given set. A nil or empty set means all tools are
 // enabled.
 func filterTools(
 	all map[string]tool.Tool,
-	enabled map[string]bool,
+	enabled map[string]struct{},
 ) map[string]tool.Tool {
-	if len(enabled) == 0 {
+	if enabled == nil {
 		return all
 	}
 	filtered := make(map[string]tool.Tool, len(all))
 	for name, t := range all {
-		if itool.IsToolEnabled(enabled, name) {
+		if _, ok := enabled[name]; ok {
 			filtered[name] = t
 		}
 	}

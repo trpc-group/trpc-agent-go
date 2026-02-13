@@ -52,7 +52,7 @@ type MemoryExtractor interface {
 // Framework code can use it to pass enabled tool flags into an extractor.
 // This is intentionally not part of MemoryExtractor to avoid breaking users.
 type EnabledToolsConfigurer interface {
-	SetEnabledTools(enabled map[string]bool)
+	SetEnabledTools(enabled map[string]struct{})
 }
 
 // Operation represents a memory operation to be executed.

@@ -52,7 +52,7 @@ func setupMockService(_ *testing.T, db *sql.DB) *Service {
 		opts: ServiceOpts{
 			memoryLimit:  100,
 			toolCreators: make(map[string]memory.ToolCreator),
-			enabledTools: make(map[string]bool),
+			enabledTools: make(map[string]struct{}),
 			tableName:    "memories",
 			softDelete:   true,
 		},
@@ -280,7 +280,7 @@ func TestServiceOpts(t *testing.T) {
 func TestWithCustomTool(t *testing.T) {
 	opts := ServiceOpts{
 		toolCreators: make(map[string]memory.ToolCreator),
-		enabledTools: make(map[string]bool),
+		enabledTools: make(map[string]struct{}),
 	}
 
 	customCreator := func() tool.Tool {
@@ -289,7 +289,8 @@ func TestWithCustomTool(t *testing.T) {
 
 	WithCustomTool(memory.AddToolName, customCreator)(&opts)
 	assert.Contains(t, opts.toolCreators, memory.AddToolName)
-	assert.True(t, opts.enabledTools[memory.AddToolName])
+	_, hasAdd := opts.enabledTools[memory.AddToolName]
+	assert.True(t, hasAdd)
 
 	// Test with invalid tool name (should do nothing).
 	WithCustomTool("invalid_tool_name", customCreator)(&opts)
@@ -298,7 +299,8 @@ func TestWithCustomTool(t *testing.T) {
 	// Test with nil creator (should do nothing).
 	WithCustomTool(memory.SearchToolName, nil)(&opts)
 	assert.NotContains(t, opts.toolCreators, memory.SearchToolName)
-	assert.False(t, opts.enabledTools[memory.SearchToolName])
+	_, hasSearch := opts.enabledTools[memory.SearchToolName]
+	assert.False(t, hasSearch)
 }
 
 // TestWithToolEnabled tests enabling and disabling tools.
@@ -306,14 +308,16 @@ func TestWithCustomTool(t *testing.T) {
 func TestWithToolEnabled(t *testing.T) {
 	opts := ServiceOpts{
 		toolCreators: make(map[string]memory.ToolCreator),
-		enabledTools: make(map[string]bool),
+		enabledTools: make(map[string]struct{}),
 	}
 
 	WithToolEnabled(memory.AddToolName, true)(&opts)
-	assert.True(t, opts.enabledTools[memory.AddToolName])
+	_, hasAdd := opts.enabledTools[memory.AddToolName]
+	assert.True(t, hasAdd)
 
 	WithToolEnabled(memory.AddToolName, false)(&opts)
-	assert.False(t, opts.enabledTools[memory.AddToolName])
+	_, hasAdd = opts.enabledTools[memory.AddToolName]
+	assert.False(t, hasAdd)
 
 	// Test with invalid tool name (should do nothing).
 	WithToolEnabled("invalid_tool_name", true)(&opts)
@@ -1233,9 +1237,9 @@ func TestService_Tools(t *testing.T) {
 				"tool1": func() tool.Tool { return mockTool1 },
 				"tool2": func() tool.Tool { return mockTool2 },
 			},
-			enabledTools: map[string]bool{
-				"tool1": true,
-				"tool2": true,
+			enabledTools: map[string]struct{}{
+				"tool1": {},
+				"tool2": {},
 			},
 		},
 		db:          storage.WrapSQLDB(db),
@@ -1525,7 +1529,7 @@ func (m *mockExtractor) SetPrompt(prompt string) {}
 
 func (m *mockExtractor) SetModel(mdl model.Model) {}
 
-func (m *mockExtractor) SetEnabledTools(enabled map[string]bool) {}
+func (m *mockExtractor) SetEnabledTools(enabled map[string]struct{}) {}
 
 func (m *mockExtractor) Metadata() map[string]any {
 	return map[string]any{}
@@ -1625,7 +1629,7 @@ func TestTools_AutoMemoryMode(t *testing.T) {
 	assert.True(t, toolNames[memory.SearchToolName], "Search tool should be returned by default")
 
 	// Enable Load tool explicitly.
-	s.opts.enabledTools[memory.LoadToolName] = true
+	s.opts.enabledTools[memory.LoadToolName] = struct{}{}
 	s.precomputedTools = imemory.BuildToolsList(
 		s.opts.extractor,
 		s.opts.toolCreators,

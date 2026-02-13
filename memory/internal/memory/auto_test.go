@@ -661,11 +661,10 @@ func TestAutoMemoryWorker_ExecuteOperation_DisabledByEnabledTools(t *testing.T) 
 		op := newMockOperator()
 		worker := &AutoMemoryWorker{
 			config: AutoMemoryConfig{
-				EnabledTools: map[string]bool{
-					memory.AddToolName:    true,
-					memory.UpdateToolName: true,
-					memory.DeleteToolName: true,
-					memory.ClearToolName:  false,
+				EnabledTools: map[string]struct{}{
+					memory.AddToolName:    {},
+					memory.UpdateToolName: {},
+					memory.DeleteToolName: {},
 				},
 			},
 			operator: op,
@@ -681,9 +680,7 @@ func TestAutoMemoryWorker_ExecuteOperation_DisabledByEnabledTools(t *testing.T) 
 		op := newMockOperator()
 		worker := &AutoMemoryWorker{
 			config: AutoMemoryConfig{
-				EnabledTools: map[string]bool{
-					memory.AddToolName: false,
-				},
+				EnabledTools: map[string]struct{}{},
 			},
 			operator: op,
 		}
@@ -701,9 +698,8 @@ func TestAutoMemoryWorker_ExecuteOperation_DisabledByEnabledTools(t *testing.T) 
 		op := newMockOperator()
 		worker := &AutoMemoryWorker{
 			config: AutoMemoryConfig{
-				EnabledTools: map[string]bool{
-					memory.AddToolName:   true,
-					memory.ClearToolName: false,
+				EnabledTools: map[string]struct{}{
+					memory.AddToolName: {},
 				},
 			},
 			operator: op,

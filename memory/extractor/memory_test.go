@@ -572,29 +572,31 @@ func TestExtractor_SetEnabledTools(t *testing.T) {
 	ext := e.(*memoryExtractor)
 
 	t.Run("set enabled tools", func(t *testing.T) {
-		enabled := map[string]bool{
-			memory.AddToolName:   true,
-			memory.ClearToolName: false,
+		enabled := map[string]struct{}{
+			memory.AddToolName: {},
 		}
 		ext.SetEnabledTools(enabled)
-		assert.Equal(t, true, ext.enabledTools[memory.AddToolName])
-		assert.Equal(t, false, ext.enabledTools[memory.ClearToolName])
+		_, hasAdd := ext.enabledTools[memory.AddToolName]
+		_, hasClear := ext.enabledTools[memory.ClearToolName]
+		assert.True(t, hasAdd)
+		assert.False(t, hasClear)
 	})
 
 	t.Run("copies map to prevent mutation", func(t *testing.T) {
-		orig := map[string]bool{
-			memory.AddToolName: true,
+		orig := map[string]struct{}{
+			memory.AddToolName: {},
 		}
 		ext.SetEnabledTools(orig)
 		// Mutate the original map.
-		orig[memory.AddToolName] = false
+		delete(orig, memory.AddToolName)
 		// The extractor's copy should be unchanged.
-		assert.Equal(t, true, ext.enabledTools[memory.AddToolName])
+		_, hasAdd := ext.enabledTools[memory.AddToolName]
+		assert.True(t, hasAdd)
 	})
 
 	t.Run("nil resets", func(t *testing.T) {
-		ext.SetEnabledTools(map[string]bool{
-			memory.AddToolName: true,
+		ext.SetEnabledTools(map[string]struct{}{
+			memory.AddToolName: {},
 		})
 		assert.NotNil(t, ext.enabledTools)
 		ext.SetEnabledTools(nil)
@@ -611,17 +613,15 @@ func TestFilterTools(t *testing.T) {
 		assert.Equal(t, all, result)
 	})
 
-	t.Run("empty enabled returns all", func(t *testing.T) {
-		result := filterTools(all, map[string]bool{})
-		assert.Equal(t, all, result)
+	t.Run("empty enabled returns none", func(t *testing.T) {
+		result := filterTools(all, map[string]struct{}{})
+		assert.Empty(t, result)
 	})
 
 	t.Run("filters disabled tools", func(t *testing.T) {
-		enabled := map[string]bool{
-			memory.AddToolName:    true,
-			memory.UpdateToolName: true,
-			memory.DeleteToolName: false,
-			memory.ClearToolName:  false,
+		enabled := map[string]struct{}{
+			memory.AddToolName:    {},
+			memory.UpdateToolName: {},
 		}
 		result := filterTools(all, enabled)
 		assert.Len(t, result, 2)
@@ -632,8 +632,8 @@ func TestFilterTools(t *testing.T) {
 	})
 
 	t.Run("missing keys treated as disabled", func(t *testing.T) {
-		enabled := map[string]bool{
-			memory.AddToolName: true,
+		enabled := map[string]struct{}{
+			memory.AddToolName: {},
 		}
 		result := filterTools(all, enabled)
 		assert.Len(t, result, 1)
@@ -655,11 +655,9 @@ func TestExtractor_AvailableActionsBlock(t *testing.T) {
 	})
 
 	t.Run("only enabled tools shown", func(t *testing.T) {
-		ext.SetEnabledTools(map[string]bool{
-			memory.AddToolName:    true,
-			memory.UpdateToolName: true,
-			memory.DeleteToolName: false,
-			memory.ClearToolName:  false,
+		ext.SetEnabledTools(map[string]struct{}{
+			memory.AddToolName:    {},
+			memory.UpdateToolName: {},
 		})
 		block := ext.availableActionsBlock()
 		assert.Contains(t, block, memory.AddToolName)
@@ -671,12 +669,7 @@ func TestExtractor_AvailableActionsBlock(t *testing.T) {
 	})
 
 	t.Run("no tools enabled", func(t *testing.T) {
-		ext.SetEnabledTools(map[string]bool{
-			memory.AddToolName:    false,
-			memory.UpdateToolName: false,
-			memory.DeleteToolName: false,
-			memory.ClearToolName:  false,
-		})
+		ext.SetEnabledTools(map[string]struct{}{})
 		block := ext.availableActionsBlock()
 		assert.Contains(t, block, "No actions available.")
 		// Reset.
@@ -695,11 +688,8 @@ func TestExtractor_Extract_FilteredTools(t *testing.T) {
 	ext := e.(*memoryExtractor)
 
 	// Only enable add tool.
-	ext.SetEnabledTools(map[string]bool{
-		memory.AddToolName:    true,
-		memory.UpdateToolName: false,
-		memory.DeleteToolName: false,
-		memory.ClearToolName:  false,
+	ext.SetEnabledTools(map[string]struct{}{
+		memory.AddToolName: {},
 	})
 
 	ops, err := e.Extract(context.Background(), []model.Message{
@@ -725,12 +715,13 @@ func TestExtractor_EnabledToolsConfigurer(t *testing.T) {
 	configurer, ok := e.(EnabledToolsConfigurer)
 	require.True(t, ok)
 
-	enabled := map[string]bool{
-		memory.AddToolName: true,
+	enabled := map[string]struct{}{
+		memory.AddToolName: {},
 	}
 	configurer.SetEnabledTools(enabled)
 
 	// Verify through the internal state.
 	ext := e.(*memoryExtractor)
-	assert.Equal(t, true, ext.enabledTools[memory.AddToolName])
+	_, hasAdd := ext.enabledTools[memory.AddToolName]
+	assert.True(t, hasAdd)
 }

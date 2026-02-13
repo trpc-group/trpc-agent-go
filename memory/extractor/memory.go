@@ -13,9 +13,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 
-	itool "trpc.group/trpc-go/trpc-agent-go/internal/memory/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -33,7 +33,7 @@ type memoryExtractor struct {
 	prompt   string
 	checkers []Checker
 
-	enabledTools map[string]bool
+	enabledTools map[string]struct{}
 
 	// modelCallbacks configures before/after model callbacks for extraction.
 	modelCallbacks *model.Callbacks
@@ -174,8 +174,10 @@ func (e *memoryExtractor) SetModel(m model.Model) {
 // SetEnabledTools updates the enabled tool flags for background
 // operations. The map is defensively copied to prevent external
 // mutation.
-func (e *memoryExtractor) SetEnabledTools(enabled map[string]bool) {
-	e.enabledTools = itool.CopyEnabledTools(enabled)
+func (e *memoryExtractor) SetEnabledTools(
+	enabled map[string]struct{},
+) {
+	e.enabledTools = maps.Clone(enabled)
 }
 
 // ShouldExtract checks if extraction should be triggered based on context.
@@ -282,8 +284,10 @@ func (e *memoryExtractor) availableActionsBlock() string {
 	var sb strings.Builder
 	for _, name := range toolActionOrder {
 		// Skip tools that are disabled.
-		if !itool.IsToolEnabled(e.enabledTools, name) {
-			continue
+		if e.enabledTools != nil {
+			if _, ok := e.enabledTools[name]; !ok {
+				continue
+			}
 		}
 		desc, ok := toolActionDescriptions[name]
 		if !ok {

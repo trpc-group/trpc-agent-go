@@ -13,10 +13,10 @@ import (
 	"context"
 	"fmt"
 	"hash/fnv"
+	"maps"
 	"sync"
 	"time"
 
-	itool "trpc.group/trpc-go/trpc-agent-go/internal/memory/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
@@ -48,10 +48,10 @@ type AutoMemoryConfig struct {
 	MemoryJobTimeout time.Duration
 	// EnabledTools controls which memory operations the worker
 	// is allowed to execute. When non-empty, only operations
-	// whose corresponding tool name maps to true are executed;
+	// whose corresponding tool name is present are executed;
 	// others are silently skipped. A nil or empty map means all
 	// operations are allowed (default).
-	EnabledTools map[string]bool
+	EnabledTools map[string]struct{}
 }
 
 // MemoryOperator defines the interface for memory operations.
@@ -81,7 +81,7 @@ func NewAutoMemoryWorker(
 	config AutoMemoryConfig,
 	operator MemoryOperator,
 ) *AutoMemoryWorker {
-	config.EnabledTools = itool.CopyEnabledTools(config.EnabledTools)
+	config.EnabledTools = maps.Clone(config.EnabledTools)
 	return &AutoMemoryWorker{
 		config:   config,
 		operator: operator,
@@ -317,14 +317,15 @@ func (w *AutoMemoryWorker) executeOperation(
 	userKey memory.UserKey,
 	op *extractor.Operation,
 ) {
-	if et := w.config.EnabledTools; len(et) > 0 {
-		if name, ok := operationToolName[op.Type]; ok &&
-			!itool.IsToolEnabled(et, name) {
-			log.DebugfContext(ctx,
-				"auto_memory: skipping disabled %s "+
-					"operation for user %s/%s",
-				op.Type, userKey.AppName, userKey.UserID)
-			return
+	if et := w.config.EnabledTools; et != nil {
+		if name, ok := operationToolName[op.Type]; ok {
+			if _, enabled := et[name]; !enabled {
+				log.DebugfContext(ctx,
+					"auto_memory: skipping disabled %s "+
+						"operation for user %s/%s",
+					op.Type, userKey.AppName, userKey.UserID)
+				return
+			}
 		}
 	}
 
