@@ -6,7 +6,7 @@ import (
 	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
-	"trpc.group/trpc-go/trpc-agent-go/benchmark/tools/mathtools"
+	"trpc.group/trpc-go/trpc-agent-go/benchmark/toolsearch/trpc-agent-go-impl/mathtools"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
