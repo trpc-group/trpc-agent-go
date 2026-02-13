@@ -1218,3 +1218,35 @@ func TestAutoMemoryWorker_WritesLastExtractAt_OnSuccess(t *testing.T) {
 	require.NoError(t, parseErr)
 	assert.True(t, ts.Equal(t2.UTC()))
 }
+
+// configurableExtractor is a mock extractor implementing
+// EnabledToolsConfigurer for testing.
+type configurableExtractor struct {
+	mockExtractor
+	enabledTools map[string]struct{}
+}
+
+func (e *configurableExtractor) SetEnabledTools(
+	enabled map[string]struct{},
+) {
+	e.enabledTools = enabled
+}
+
+func TestConfigureExtractorEnabledTools(t *testing.T) {
+	t.Run("configurer receives enabled tools", func(t *testing.T) {
+		ext := &configurableExtractor{}
+		enabled := map[string]struct{}{
+			memory.AddToolName: {},
+		}
+		ConfigureExtractorEnabledTools(ext, enabled)
+		assert.Equal(t, enabled, ext.enabledTools)
+	})
+
+	t.Run("non-configurer is no-op", func(t *testing.T) {
+		ext := &mockExtractor{}
+		// Should not panic.
+		ConfigureExtractorEnabledTools(ext, map[string]struct{}{
+			memory.AddToolName: {},
+		})
+	})
+}

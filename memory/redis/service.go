@@ -20,7 +20,6 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
-	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/redis"
@@ -102,9 +101,9 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 
 	// Initialize auto memory worker if extractor is configured.
 	if opts.extractor != nil {
-		if c, ok := opts.extractor.(extractor.EnabledToolsConfigurer); ok {
-			c.SetEnabledTools(opts.enabledTools)
-		}
+		imemory.ConfigureExtractorEnabledTools(
+			opts.extractor, opts.enabledTools,
+		)
 		config := imemory.AutoMemoryConfig{
 			Extractor:        opts.extractor,
 			AsyncMemoryNum:   opts.asyncMemoryNum,

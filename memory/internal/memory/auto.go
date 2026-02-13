@@ -54,6 +54,26 @@ type AutoMemoryConfig struct {
 	EnabledTools map[string]struct{}
 }
 
+// EnabledToolsConfigurer is an optional capability interface.
+// Extractors that implement it can receive enabled tool flags
+// from the memory service during initialization.
+// This is intentionally not part of MemoryExtractor to avoid
+// breaking users who implement their own extractors.
+type EnabledToolsConfigurer interface {
+	SetEnabledTools(enabled map[string]struct{})
+}
+
+// ConfigureExtractorEnabledTools passes enabled tool flags to the
+// extractor if it implements EnabledToolsConfigurer.
+func ConfigureExtractorEnabledTools(
+	ext extractor.MemoryExtractor,
+	enabledTools map[string]struct{},
+) {
+	if c, ok := ext.(EnabledToolsConfigurer); ok {
+		c.SetEnabledTools(enabledTools)
+	}
+}
+
 // MemoryOperator defines the interface for memory operations.
 // This allows the auto memory worker to work with different storage backends.
 type MemoryOperator interface {

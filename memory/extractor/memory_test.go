@@ -711,8 +711,13 @@ func TestExtractor_EnabledToolsConfigurer(t *testing.T) {
 	m := &mockModel{name: "test-model"}
 	e := NewExtractor(m)
 
-	// Verify the concrete type implements EnabledToolsConfigurer.
-	configurer, ok := e.(EnabledToolsConfigurer)
+	// enabledToolsConfigurer is the local interface for testing.
+	type enabledToolsConfigurer interface {
+		SetEnabledTools(enabled map[string]struct{})
+	}
+
+	// Verify the concrete type implements enabledToolsConfigurer.
+	configurer, ok := e.(enabledToolsConfigurer)
 	require.True(t, ok)
 
 	enabled := map[string]struct{}{
