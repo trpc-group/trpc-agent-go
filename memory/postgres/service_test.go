@@ -3224,6 +3224,8 @@ func (m *mockExtractor) SetPrompt(prompt string) {}
 
 func (m *mockExtractor) SetModel(mdl model.Model) {}
 
+func (m *mockExtractor) SetEnabledTools(enabled map[string]bool) {}
+
 func (m *mockExtractor) Metadata() map[string]any {
 	return map[string]any{}
 }
@@ -3233,6 +3235,22 @@ func TestWithExtractor(t *testing.T) {
 	opts := defaultOptions.clone()
 	WithExtractor(ext)(&opts)
 	assert.Equal(t, ext, opts.extractor)
+}
+
+// TestNewService_WithExtractor tests that the auto memory worker is
+// initialized when an extractor implementing EnabledToolsConfigurer
+// is provided via the full NewService path.
+func TestNewService_WithExtractor(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock,
+		WithSkipDBInit(true),
+		WithExtractor(&mockExtractor{}),
+	)
+	defer svc.Close()
+
+	assert.NotNil(t, svc.autoMemoryWorker)
 }
 
 func TestWithAsyncMemoryNum(t *testing.T) {

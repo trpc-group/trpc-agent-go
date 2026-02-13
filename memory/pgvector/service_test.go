@@ -1846,6 +1846,8 @@ func (m *mockMemoryExtractor) SetPrompt(prompt string) {}
 
 func (m *mockMemoryExtractor) SetModel(md model.Model) {}
 
+func (m *mockMemoryExtractor) SetEnabledTools(enabled map[string]bool) {}
+
 func (m *mockMemoryExtractor) Metadata() map[string]any {
 	return map[string]any{"test": "mock"}
 }

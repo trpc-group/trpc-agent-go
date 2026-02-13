@@ -206,6 +206,34 @@ func TestNewService_WithSkipDBInit(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestNewService_WithExtractor tests that the auto memory worker is
+// initialized when an extractor implementing EnabledToolsConfigurer
+// is provided.
+func TestNewService_WithExtractor(t *testing.T) {
+	mockDB, _ := setupMockDB(t)
+	defer mockDB.Close()
+
+	originalBuilder := storage.GetClientBuilder()
+	storage.SetClientBuilder(func(builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return storage.WrapSQLDB(mockDB), nil
+	})
+	defer storage.SetClientBuilder(originalBuilder)
+
+	ext := &mockExtractor{}
+	service, err := NewService(
+		WithMySQLClientDSN(
+			"user:password@tcp(localhost:3306)/testdb",
+		),
+		WithSkipDBInit(true),
+		WithExtractor(ext),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, service)
+	defer service.Close()
+
+	assert.NotNil(t, service.autoMemoryWorker)
+}
+
 // TestNewService_InitDBError tests that service creation fails when initDB fails.
 func TestNewService_InitDBError(t *testing.T) {
 	mockDB, mock := setupMockDB(t)
@@ -1496,6 +1524,8 @@ func (m *mockExtractor) ShouldExtract(ctx *extractor.ExtractionContext) bool {
 func (m *mockExtractor) SetPrompt(prompt string) {}
 
 func (m *mockExtractor) SetModel(mdl model.Model) {}
+
+func (m *mockExtractor) SetEnabledTools(enabled map[string]bool) {}
 
 func (m *mockExtractor) Metadata() map[string]any {
 	return map[string]any{}
