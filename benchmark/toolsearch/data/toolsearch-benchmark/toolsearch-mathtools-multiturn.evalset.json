@@ -1,55 +1,82 @@
 {
   "evalSetId": "toolsearch-mathtools-multiturn",
   "name": "toolsearch-mathtools-multiturn",
-  "description": "toolsearch multi-turn benchmark over mathtools (3 cases, 8-10 turns each)",
+  "description": "Natural multi-turn chats for toolsearch benchmark over mathtools (3 cases, 8-10 turns each)",
   "evalCases": [
     {
       "evalId": "log-exp",
       "conversation": [
         {
           "invocationId": "log-exp-01",
-          "userContent": { "role": "user", "content": "Compute the base-10 logarithm log10(1000)." },
-          "tools": [{ "id": "tool_use_1", "name": "math_Log10" }]
+          "userContent": {
+            "role": "user",
+            "content": "I'm sanity-checking a log-scale I put on a dashboard. What's log10(1000)?"
+          },
+          "tools": [{ "id": "tool_use_1", "name": "Log10" }]
         },
         {
           "invocationId": "log-exp-02",
-          "userContent": { "role": "user", "content": "Compute the natural logarithm ln(42.42)." },
-          "tools": [{ "id": "tool_use_2", "name": "math_Log" }]
+          "userContent": {
+            "role": "user",
+            "content": "Thanks. For a separate formula, I need the natural log of 42.42 (i.e., ln(42.42))."
+          },
+          "tools": [{ "id": "tool_use_2", "name": "Log" }]
         },
         {
           "invocationId": "log-exp-03",
-          "userContent": { "role": "user", "content": "Compute log2(1024)." },
-          "tools": [{ "id": "tool_use_3", "name": "math_Log2" }]
+          "userContent": {
+            "role": "user",
+            "content": "Now do the base-2 version: log2(1024)."
+          },
+          "tools": [{ "id": "tool_use_3", "name": "Log2" }]
         },
         {
           "invocationId": "log-exp-04",
-          "userContent": { "role": "user", "content": "Compute ln(1 + 1e-9). Use Log1p for numerical accuracy." },
-          "tools": [{ "id": "tool_use_4", "name": "math_Log1p" }]
+          "userContent": {
+            "role": "user",
+            "content": "I'm dealing with a tiny epsilon = 1e-9. I need ln(1 + epsilon) without losing precision."
+          },
+          "tools": [{ "id": "tool_use_4", "name": "Log1p" }]
         },
         {
           "invocationId": "log-exp-05",
-          "userContent": { "role": "user", "content": "Compute e^(0.000001) - 1. Use Expm1." },
-          "tools": [{ "id": "tool_use_5", "name": "math_Expm1" }]
+          "userContent": {
+            "role": "user",
+            "content": "Similar precision issue: for x = 1e-6, compute exp(x) - 1 (I care about numerical stability)."
+          },
+          "tools": [{ "id": "tool_use_5", "name": "Expm1" }]
         },
         {
           "invocationId": "log-exp-06",
-          "userContent": { "role": "user", "content": "Compute e^(-3.2)." },
-          "tools": [{ "id": "tool_use_6", "name": "math_Exp" }]
+          "userContent": {
+            "role": "user",
+            "content": "For a decay constant, what's e^(-3.2)?"
+          },
+          "tools": [{ "id": "tool_use_6", "name": "Exp" }]
         },
         {
           "invocationId": "log-exp-07",
-          "userContent": { "role": "user", "content": "Compute 2^(-7.5). Use Exp2." },
-          "tools": [{ "id": "tool_use_7", "name": "math_Exp2" }]
+          "userContent": {
+            "role": "user",
+            "content": "I also have a power-of-two scaling step: compute 2^(-7.5)."
+          },
+          "tools": [{ "id": "tool_use_7", "name": "Exp2" }]
         },
         {
           "invocationId": "log-exp-08",
-          "userContent": { "role": "user", "content": "Compute log10(1e-50)." },
-          "tools": [{ "id": "tool_use_8", "name": "math_Log10" }]
+          "userContent": {
+            "role": "user",
+            "content": "One more quick extreme-value sanity check: log10(1e-50)."
+          },
+          "tools": [{ "id": "tool_use_8", "name": "Log10" }]
         },
         {
           "invocationId": "log-exp-09",
-          "userContent": { "role": "user", "content": "Compute ln(1 + (-0.25)). Use Log1p." },
-          "tools": [{ "id": "tool_use_9", "name": "math_Log1p" }]
+          "userContent": {
+            "role": "user",
+            "content": "Last one: if the relative change is -0.25, what's ln(1 + change)?"
+          },
+          "tools": [{ "id": "tool_use_9", "name": "Log1p" }]
         }
       ],
       "sessionInput": { "appName": "toolsearch-benchmark", "userId": "user" }
@@ -59,48 +86,75 @@
       "conversation": [
         {
           "invocationId": "trig-01",
-          "userContent": { "role": "user", "content": "Compute sin(0.5)." },
-          "tools": [{ "id": "tool_use_1", "name": "math_Sin" }]
+          "userContent": {
+            "role": "user",
+            "content": "I'm debugging an IMU pipeline. With angle = 0.5 radians, what's sin(angle)?"
+          },
+          "tools": [{ "id": "tool_use_1", "name": "Sin" }]
         },
         {
           "invocationId": "trig-02",
-          "userContent": { "role": "user", "content": "Compute cos(0.5)." },
-          "tools": [{ "id": "tool_use_2", "name": "math_Cos" }]
+          "userContent": {
+            "role": "user",
+            "content": "And cos(0.5) as well?"
+          },
+          "tools": [{ "id": "tool_use_2", "name": "Cos" }]
         },
         {
           "invocationId": "trig-03",
-          "userContent": { "role": "user", "content": "Compute tan(0.3)." },
-          "tools": [{ "id": "tool_use_3", "name": "math_Tan" }]
+          "userContent": {
+            "role": "user",
+            "content": "For a small steering angle approximation I'm checking: what's tan(0.3)?"
+          },
+          "tools": [{ "id": "tool_use_3", "name": "Tan" }]
         },
         {
           "invocationId": "trig-04",
-          "userContent": { "role": "user", "content": "Compute BOTH sin(x) and cos(x) for x = 1.234 in ONE tool call. Return both values." },
-          "tools": [{ "id": "tool_use_4", "name": "math_Sincos" }]
+          "userContent": {
+            "role": "user",
+            "content": "I keep needing sin and cos together. For x = 1.234 radians, can you compute both sin(x) and cos(x) in one shot?"
+          },
+          "tools": [{ "id": "tool_use_4", "name": "Sincos" }]
         },
         {
           "invocationId": "trig-05",
-          "userContent": { "role": "user", "content": "Compute sinh(1.1)." },
-          "tools": [{ "id": "tool_use_5", "name": "math_Sinh" }]
+          "userContent": {
+            "role": "user",
+            "content": "Switching gears: in a toy RNN I'm prototyping, I need sinh(1.1)."
+          },
+          "tools": [{ "id": "tool_use_5", "name": "Sinh" }]
         },
         {
           "invocationId": "trig-06",
-          "userContent": { "role": "user", "content": "Compute cosh(1.1)." },
-          "tools": [{ "id": "tool_use_6", "name": "math_Cosh" }]
+          "userContent": {
+            "role": "user",
+            "content": "What's cosh(1.1)?"
+          },
+          "tools": [{ "id": "tool_use_6", "name": "Cosh" }]
         },
         {
           "invocationId": "trig-07",
-          "userContent": { "role": "user", "content": "Compute tanh(1.1)." },
-          "tools": [{ "id": "tool_use_7", "name": "math_Tanh" }]
+          "userContent": {
+            "role": "user",
+            "content": "And tanh(1.1)?"
+          },
+          "tools": [{ "id": "tool_use_7", "name": "Tanh" }]
         },
         {
           "invocationId": "trig-08",
-          "userContent": { "role": "user", "content": "Compute cos(0)." },
-          "tools": [{ "id": "tool_use_8", "name": "math_Cos" }]
+          "userContent": {
+            "role": "user",
+            "content": "Quick sanity check: cos(0) should come out to 1. What's cos(0)?"
+          },
+          "tools": [{ "id": "tool_use_8", "name": "Cos" }]
         },
         {
           "invocationId": "trig-09",
-          "userContent": { "role": "user", "content": "Compute BOTH sin(x) and cos(x) for x = 0 in ONE tool call." },
-          "tools": [{ "id": "tool_use_9", "name": "math_Sincos" }]
+          "userContent": {
+            "role": "user",
+            "content": "And while we're here, can you give me sin(0) and cos(0) together (single call)?"
+          },
+          "tools": [{ "id": "tool_use_9", "name": "Sincos" }]
         }
       ],
       "sessionInput": { "appName": "toolsearch-benchmark", "userId": "user" }
@@ -110,43 +164,75 @@
       "conversation": [
         {
           "invocationId": "pow-01",
-          "userContent": { "role": "user", "content": "Compute sqrt(2)." },
-          "tools": [{ "id": "tool_use_1", "name": "math_Sqrt" }]
+          "userContent": {
+            "role": "user",
+            "content": "I'm calculating an RMS value. What's sqrt(2)?"
+          },
+          "tools": [{ "id": "tool_use_1", "name": "Sqrt" }]
         },
         {
           "invocationId": "pow-02",
-          "userContent": { "role": "user", "content": "Compute cbrt(27)." },
-          "tools": [{ "id": "tool_use_2", "name": "math_Cbrt" }]
+          "userContent": {
+            "role": "user",
+            "content": "For a scaling factor, what's the cube root of 27?"
+          },
+          "tools": [{ "id": "tool_use_2", "name": "Cbrt" }]
         },
         {
           "invocationId": "pow-03",
-          "userContent": { "role": "user", "content": "Compute 10^6 using Pow10 (n = 6)." },
-          "tools": [{ "id": "tool_use_3", "name": "math_Pow10" }]
+          "userContent": {
+            "role": "user",
+            "content": "I need 10^6 (scientific notation). Please compute 10 to the power of n=6."
+          },
+          "tools": [{ "id": "tool_use_3", "name": "Pow10" }]
         },
         {
           "invocationId": "pow-04",
-          "userContent": { "role": "user", "content": "Compute x^y with x = 3.5 and y = 4.2 (use Pow, not Pow10)." },
-          "tools": [{ "id": "tool_use_4", "name": "math_Pow" }]
+          "userContent": {
+            "role": "user",
+            "content": "Now a general power: compute 3.5^4.2."
+          },
+          "tools": [{ "id": "tool_use_4", "name": "Pow" }]
         },
         {
           "invocationId": "pow-05",
-          "userContent": { "role": "user", "content": "Compute 10^(-3) using Pow10 (n = -3)." },
-          "tools": [{ "id": "tool_use_5", "name": "math_Pow10" }]
+          "userContent": {
+            "role": "user",
+            "content": "I also need 10^(-3) (n = -3)."
+          },
+          "tools": [{ "id": "tool_use_5", "name": "Pow10" }]
         },
         {
           "invocationId": "pow-06",
-          "userContent": { "role": "user", "content": "Compute sqrt(1e-12)." },
-          "tools": [{ "id": "tool_use_6", "name": "math_Sqrt" }]
+          "userContent": {
+            "role": "user",
+            "content": "For a variance-to-std conversion: what's sqrt(1e-12)?"
+          },
+          "tools": [{ "id": "tool_use_6", "name": "Sqrt" }]
         },
         {
           "invocationId": "pow-07",
-          "userContent": { "role": "user", "content": "Compute cbrt(1e-6)." },
-          "tools": [{ "id": "tool_use_7", "name": "math_Cbrt" }]
+          "userContent": {
+            "role": "user",
+            "content": "And cube root of 1e-6?"
+          },
+          "tools": [{ "id": "tool_use_7", "name": "Cbrt" }]
         },
         {
           "invocationId": "pow-08",
-          "userContent": { "role": "user", "content": "Compute 2^16 using Pow (x = 2, y = 16)." },
-          "tools": [{ "id": "tool_use_8", "name": "math_Pow" }]
+          "userContent": {
+            "role": "user",
+            "content": "Compute 2^16 for me."
+          },
+          "tools": [{ "id": "tool_use_8", "name": "Pow" }]
+        },
+        {
+          "invocationId": "pow-09",
+          "userContent": {
+            "role": "user",
+            "content": "Final quick check: what's 10^2 (n = 2)?"
+          },
+          "tools": [{ "id": "tool_use_9", "name": "Pow10" }]
         }
       ],
       "sessionInput": { "appName": "toolsearch-benchmark", "userId": "user" }
