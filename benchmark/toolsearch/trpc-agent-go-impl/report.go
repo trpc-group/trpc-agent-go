@@ -227,9 +227,9 @@ func BuildSummaryFile(cfg BenchmarkConfig, result *evaluation.EvaluationResult, 
 func WriteSummaryFile(cfg BenchmarkConfig, result *evaluation.EvaluationResult, report *Report, wall time.Duration) (string, error) {
 	payload := BuildSummaryFile(cfg, result, report, wall)
 
-	name := fmt.Sprintf("%s_%s_summary.json", cfg.AppName, cfg.EvalSetID)
+	name := fmt.Sprintf("%s_%s_%s_summary.json", cfg.AppName, cfg.EvalSetID, cfg.Mode)
 	if payload.Result.EvalSetResultID != "" {
-		name = payload.Result.EvalSetResultID + ".summary.json"
+		name = fmt.Sprintf("%s_%s.summary.json", payload.Result.EvalSetResultID, cfg.Mode)
 	}
 	outPath := filepath.Join(cfg.OutputDir, name)
 	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
