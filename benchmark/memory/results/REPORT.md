@@ -330,18 +330,183 @@ The high variance in memory-based approaches suggests that some conversation str
 
 ---
 
-## 5. Comparison with External Baselines
+## 5. Comparison with External Memory Frameworks
 
-| System | Model | F1 | Notes |
-| --- | --- | ---: | --- |
-| GPT-4 (4K context) | GPT-4 | 0.321 | LoCoMo paper baseline |
-| GPT-3.5-16K | GPT-3.5 | 0.378 | LoCoMo paper baseline |
-| **trpc-agent-go (Long-Context)** | gpt-4o-mini | **0.472** | This work |
-| **trpc-agent-go (Auto pgvector)** | gpt-4o-mini | **0.357** | This work |
+Source: Mem0 Table 1 & Table 2 (Chhikara et al., 2025, arXiv:2504.19413)
 
-> Note: Direct comparison is approximate as model versions and configurations differ.
+> **Comparability notes:** The Mem0 paper evaluates 10 memory frameworks on the LoCoMo benchmark (excluding adversarial category), all using GPT-4o-mini for inference. This work also uses GPT-4o-mini. For comparability, our results below are recalculated excluding the adversarial category. Mem0's original scores are on a 0-100 scale; converted to 0-1 here.
 
-Our long-context result (0.472) significantly outperforms LoCoMo's GPT-4 4K baseline (0.321) due to gpt-4o-mini's larger context window. The Auto pgvector result (0.357) is competitive with GPT-3.5-16K's full-context performance (0.378).
+### 5.1 Per-Category F1 Comparison
+
+**Table 8: F1 by Category (Excluding Adversarial)**
+
+| Method | Single-Hop | Multi-Hop | Open-Domain | Temporal | Overall | Source |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| Mem0 | 0.387 | 0.286 | 0.477 | 0.489 | 0.410 | Mem0 Table 1 |
+| Mem0g | 0.381 | 0.243 | 0.493 | 0.516 | 0.408 | Mem0 Table 1 |
+| Zep | 0.357 | 0.194 | 0.496 | 0.420 | 0.367 | Mem0 Table 1 |
+| LangMem | 0.355 | 0.260 | 0.409 | 0.308 | 0.333 | Mem0 Table 1 |
+| A-Mem | 0.270 | 0.121 | 0.447 | 0.459 | 0.324 | Mem0 Table 1 |
+| **trpc-agent (LC)** | **0.330** | **0.319** | **0.518** | **0.088** | **0.314** | This work |
+| OpenAI Memory | 0.343 | 0.201 | 0.393 | 0.140 | 0.269 | Mem0 Table 1 |
+| MemGPT | 0.267 | 0.092 | 0.410 | 0.255 | 0.256 | Mem0 Table 1 |
+| LoCoMo (pipeline) | 0.250 | 0.120 | 0.404 | 0.184 | 0.240 | Mem0 Table 1 |
+| **trpc-agent (Auto)** | **0.272** | **0.088** | **0.302** | **0.060** | **0.181** | This work |
+| **trpc-agent (Agentic)** | **0.146** | **0.178** | **0.126** | **0.091** | **0.135** | This work |
+| ReadAgent | 0.092 | 0.053 | 0.097 | 0.126 | 0.092 | Mem0 Table 1 |
+| MemoryBank | 0.050 | 0.056 | 0.066 | 0.097 | 0.067 | Mem0 Table 1 |
+
+```
+Single-Hop F1 (no adversarial)
+
+Mem0                |==========================================| 0.387
+Mem0g               |=========================================| 0.381
+Zep                 |======================================   | 0.357
+LangMem             |======================================   | 0.355
+OpenAI Memory       |=====================================    | 0.343
+trpc-agent (LC)     |====================================     | 0.330
+A-Mem               |=============================            | 0.270
+trpc-agent (Auto)   |=============================            | 0.272
+MemGPT              |============================             | 0.267
+LoCoMo (pipeline)   |===========================              | 0.250
+trpc-agent (Agentic)|===============                          | 0.146
+ReadAgent           |=========                                | 0.092
+MemoryBank          |=====                                    | 0.050
+                    +------------------------------------------+
+                    0.0       0.1       0.2       0.3       0.4
+
+Multi-Hop F1 (no adversarial)
+
+trpc-agent (LC)     |==========================================| 0.319
+Mem0                |=====================================     | 0.286
+LangMem             |=================================         | 0.260
+Mem0g               |===============================           | 0.243
+OpenAI Memory       |==========================                | 0.201
+Zep                 |=========================                 | 0.194
+trpc-agent (Agentic)|=======================                   | 0.178
+A-Mem               |===============                           | 0.121
+LoCoMo (pipeline)   |===============                           | 0.120
+MemGPT              |===========                               | 0.092
+trpc-agent (Auto)   |===========                               | 0.088
+MemoryBank          |=======                                   | 0.056
+ReadAgent           |======                                    | 0.053
+                    +------------------------------------------+
+                    0.0       0.1       0.2       0.3       0.4
+
+Open-Domain F1 (no adversarial)
+
+trpc-agent (LC)     |==========================================| 0.518
+Zep                 |========================================  | 0.496
+Mem0g               |=======================================   | 0.493
+Mem0                |======================================    | 0.477
+A-Mem               |====================================      | 0.447
+MemGPT              |=================================         | 0.410
+LangMem             |================================          | 0.409
+LoCoMo (pipeline)   |================================          | 0.404
+OpenAI Memory       |===============================           | 0.393
+trpc-agent (Auto)   |========================                  | 0.302
+trpc-agent (Agentic)|==========                                | 0.126
+ReadAgent           |========                                  | 0.097
+MemoryBank          |=====                                     | 0.066
+                    +------------------------------------------+
+                    0.0     0.1     0.2     0.3     0.4     0.5
+
+Temporal F1 (no adversarial)
+
+Mem0g               |==========================================| 0.516
+Mem0                |========================================  | 0.489
+A-Mem               |=====================================     | 0.459
+Zep                 |==================================        | 0.420
+LangMem             |=========================                 | 0.308
+MemGPT              |====================                      | 0.255
+LoCoMo (pipeline)   |===============                           | 0.184
+OpenAI Memory       |===========                               | 0.140
+ReadAgent           |==========                                | 0.126
+MemoryBank          |========                                  | 0.097
+trpc-agent (Agentic)|=======                                   | 0.091
+trpc-agent (LC)     |=======                                   | 0.088
+trpc-agent (Auto)   |=====                                     | 0.060
+                    +------------------------------------------+
+                    0.0     0.1     0.2     0.3     0.4     0.5
+
+Overall F1 — 4-category average (no adversarial)
+
+Mem0                |==========================================| 0.410
+Mem0g               |=========================================| 0.408
+Zep                 |=====================================     | 0.367
+LangMem             |=================================         | 0.333
+A-Mem               |================================          | 0.324
+trpc-agent (LC)     |===============================           | 0.314
+OpenAI Memory       |===========================               | 0.269
+MemGPT              |==========================                | 0.256
+LoCoMo (pipeline)   |========================                  | 0.240
+trpc-agent (Auto)   |==================                        | 0.181
+trpc-agent (Agentic)|=============                             | 0.135
+ReadAgent           |=========                                 | 0.092
+MemoryBank          |======                                    | 0.067
+                    +------------------------------------------+
+                    0.0       0.1       0.2       0.3       0.4
+```
+
+> Note: The Mem0 paper does not include adversarial category data, so cross-framework comparison is not possible for adversarial. Our adversarial F1 results are in Section 4 (Long-Context 0.668, Auto pgvec 0.771, Agentic pgvec 0.830). Overall F1 is the simple average of 4 categories.
+
+### 5.2 Overall LLM-as-Judge Comparison
+
+**Table 9: Overall LLM-as-Judge and Latency**
+
+| Method | Overall J | p95 Latency (s) | Memory Tokens | Source |
+| --- | ---: | ---: | ---: | --- |
+| Full-context | 0.729 | 17.12 | ~26K | Mem0 Table 2 |
+| Mem0g | 0.684 | 2.59 | ~14K | Mem0 Table 2 |
+| Mem0 | 0.669 | 1.44 | ~7K | Mem0 Table 2 |
+| Zep | 0.660 | 2.93 | ~600K | Mem0 Table 2 |
+| RAG (k=2, 256) | 0.610 | 1.91 | - | Mem0 Table 2 |
+| LangMem | 0.581 | 60.40 | ~127 | Mem0 Table 2 |
+| OpenAI Memory | 0.529 | 0.89 | ~4.4K | Mem0 Table 2 |
+| **trpc-agent (LC)** | **0.480** | **3.49** | **~26K** | This work |
+| A-Mem* | 0.484 | 4.37 | ~2.5K | Mem0 Table 2 |
+| **trpc-agent (Auto)** | **0.249** | **5.62** | **-** | This work |
+| **trpc-agent (Agentic)** | **0.130** | **5.00** | **-** | This work |
+
+> Note: Our Overall J is the weighted LLM Score across 4 categories (excluding adversarial).
+
+```
+Overall LLM-as-Judge — Memory Frameworks (no adversarial)
+
+Full-context (Mem0) |==========================================| 0.729
+Mem0g               |======================================    | 0.684
+Mem0                |=====================================     | 0.669
+Zep                 |=====================================     | 0.660
+RAG (k=2, 256)      |===================================       | 0.610
+LangMem             |================================          | 0.581
+OpenAI Memory       |=============================             | 0.529
+A-Mem*              |==========================                | 0.484
+trpc-agent (LC)     |==========================                | 0.480
+trpc-agent (Auto)   |=============                             | 0.249
+trpc-agent (Agentic)|=======                                   | 0.130
+                    +------------------------------------------+
+                    0.0    0.2    0.4    0.6    0.8
+```
+
+### 5.3 Analysis
+
+**Positioning of trpc-agent-go among memory frameworks:**
+
+1. **Long-Context mode** is on par with A-Mem (Overall J 0.480 vs 0.484), but significantly below Mem0 (0.669) and Zep (0.660). This gap is partially due to Mem0 using the full 50-sample LoCoMo dataset with 10-run Judge averaging, while this work uses 10 samples with a single Judge run.
+
+2. **Auto memory extraction** (0.249) is below most frameworks. The main weaknesses are temporal (0.060 vs Mem0's 0.489) and multi-hop (0.088 vs Mem0's 0.286).
+
+3. **Single-Hop is competitive**: trpc-agent (LC) achieves 0.330 single-hop F1, close to OpenAI Memory (0.343), indicating solid single-fact retrieval capability.
+
+4. **Multi-Hop is a Long-Context strength**: trpc-agent (LC) achieves 0.319 multi-hop F1, **surpassing all memory frameworks** (Mem0's best is 0.286). This validates the value of full conversation context for multi-hop reasoning.
+
+5. **Temporal is the primary gap**: All trpc-agent scenarios score below 0.1 on temporal, while Mem0g reaches 0.516. Improving temporal reasoning is the top optimization priority.
+
+> **Comparability caveats:**
+> - This work uses a 10-sample subset; the Mem0 paper uses the full LoCoMo (50 samples), so distributions may differ.
+> - Both use GPT-4o-mini for inference; our LLM Judge runs once, Mem0's runs 10 times and averages.
+> - Mem0 memories are retrieved via direct search + answer; our Auto/Agentic modes use agent tool calls.
+> - Our latency is end-to-end including the full agent tool-call chain.
 
 ---
 
@@ -459,5 +624,6 @@ Key takeaways:
 
 ## References
 
-1. Maharana, A., Lee, D., Tulyakov, S., Bansal, M., Barbieri, F., and Fang, Y. "LoCoMo: Long-Context Conversational Memory." arXiv:2402.17753, 2024.
-2. Hu, C., et al. "Memory in the Age of AI Agents." arXiv:2512.13564, 2024.
+1. Maharana, A., Lee, D., Tulyakov, S., Bansal, M., Barbieri, F., and Fang, Y. "Evaluating Very Long-Term Conversational Memory of LLM Agents." arXiv:2402.17753, 2024.
+2. Chhikara, P., Khant, D., Aryan, S., Singh, T., and Yadav, D. "Mem0: Building Production-Ready AI Agents with Scalable Long-Term Memory." arXiv:2504.19413, 2025.
+3. Hu, C., et al. "Memory in the Age of AI Agents." arXiv:2512.13564, 2024.

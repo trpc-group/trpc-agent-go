@@ -44,32 +44,36 @@ This directory stores memory benchmark evaluation results.
 
 ## Directory Structure
 
+Note: `data_*` and `log_*.log` are large, machine-generated artifacts and are
+ignored by git (see `.gitignore`).
+
 ```
 results/
++-- .gitignore                           # Ignore data/log/pdf/tmp artifacts.
++-- README.md                            # This file.
 +-- REPORT.md                            # English evaluation report.
 +-- REPORT.zh_CN.md                      # Chinese evaluation report.
-+-- data_nohistory_gpt4omini/            # No-history baseline.
-|   +-- long_context/
-|   +-- auto_pgvector/
-|   +-- auto_mysql/
-|   +-- agentic_pgvector/
-|   +-- agentic_mysql/
-|   +-- rag_observation_pgvector/
-|   +-- rag_observation_mysql/
-+-- data_history300_gpt4omini/           # +300 turns history injection.
-|   +-- auto_pgvector/
-|   +-- auto_mysql/
-|   +-- agentic_pgvector/
-|   +-- agentic_mysql/
-+-- data_history700_gpt4omini/           # +700 turns history injection.
-|   +-- auto_pgvector/
-|   +-- auto_mysql/
-|   +-- agentic_pgvector/
-|   +-- agentic_mysql/
-+-- log_nohistory_gpt4omini.log          # No-history run log.
-+-- log_history300_gpt4omini.log         # +300 turns run log.
-+-- log_history700_gpt4omini.log         # +700 turns run log.
++-- tools/
+|   +-- extract_paper_locomo_tables.py   # Extract external baselines.
++-- tmp/                                 # Paper text dumps (ignored).
++-- data_*/                              # Evaluation outputs (ignored).
++-- log_*.log                            # Run logs (ignored).
++-- *.pdf                                # Papers (ignored).
 ```
+
+## External Baselines (From Papers)
+
+To extract LoCoMo baseline tables reported by external papers and generate
+Markdown snippets for `REPORT.md` and `REPORT.zh_CN.md`:
+
+- Prepare paper text dumps under `tmp/`:
+  - `tmp/2402.17753v1.txt` (LoCoMo paper).
+  - `tmp/2504.19413.txt` (Mem0 paper).
+- Run:
+  - `python3 tools/extract_paper_locomo_tables.py --format md`
+
+The script parses the tables and converts percentage-point metrics to the
+0-1 range for consistent reporting.
 
 ## Result Format
 
