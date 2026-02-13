@@ -1,7 +1,12 @@
-# Ignore result files but keep directory structure.
-*.json
-*.log
-.old/
+# Ignore temporary/scratch result files.
+tmp/
 
-# Keep README.
+# Track the canonical data and logs used in the report.
+!data_*/
+!data_*/**/*.json
+!log_*.log
+
+# Keep report and README.
 !README.md
+!REPORT.md
+!REPORT.zh_CN.md

@@ -1,0 +1,229 @@
+2026/02/12 22:24:41 === Memory Evaluation (LoCoMo Benchmark) ===
+2026/02/12 22:24:41 Model: gpt-4o-mini
+2026/02/12 22:24:41 Eval Model: gpt-4o-mini
+2026/02/12 22:24:41 Scenario: agentic,auto
+2026/02/12 22:24:41 Memory Backends: [pgvector mysql]
+2026/02/12 22:24:41 LLM Judge: true
+2026/02/12 22:24:41 QA History Turns: 300
+2026/02/12 22:24:41 Output: data_history300_gpt4omini
+2026/02/12 22:24:41 Loaded 10 samples
+2026/02/12 22:24:41 Creating pgvector memory service (embed_model=text-embedding-3-small)
+2026-02-12T22:24:41+08:00	[34mINFO[0m	pgvector/init.go:113	initializing pgvector memory database schema...
+2026-02-12T22:24:41+08:00	[34mINFO[0m	pgvector/init.go:139	created table: memory_eval
+2026-02-12T22:24:41+08:00	[34mINFO[0m	pgvector/init.go:165	created index: app_user on table memory_eval
+2026-02-12T22:24:41+08:00	[34mINFO[0m	pgvector/init.go:165	created index: updated_at on table memory_eval
+2026-02-12T22:24:41+08:00	[34mINFO[0m	pgvector/init.go:165	created index: deleted_at on table memory_eval
+2026-02-12T22:24:41+08:00	[34mINFO[0m	pgvector/init.go:175	created HNSW index on table memory_eval
+2026-02-12T22:24:41+08:00	[34mINFO[0m	pgvector/init.go:177	pgvector memory database schema initialized successfully
+2026/02/12 22:24:41 
+2026/02/12 22:24:41 === Running: agentic (backend=pgvector) ===
+2026/02/12 22:24:41 [1/10] Evaluating sample: locomo10_1 (199 QA)
+2026/02/12 22:42:39   Completed in 17m58.079s | F1=0.206 BLEU=0.178
+2026/02/12 22:42:39 [2/10] Evaluating sample: locomo10_2 (105 QA)
+2026/02/12 22:53:07   Completed in 10m27.957s | F1=0.309 BLEU=0.276
+2026/02/12 22:53:07 [3/10] Evaluating sample: locomo10_3 (193 QA)
+2026/02/12 23:17:53   Completed in 24m46.026s | F1=0.311 BLEU=0.282
+2026/02/12 23:17:53 [4/10] Evaluating sample: locomo10_4 (260 QA)
+2026/02/12 23:44:28   Completed in 26m35.317s | F1=0.302 BLEU=0.271
+2026/02/12 23:44:28 [5/10] Evaluating sample: locomo10_5 (242 QA)
+2026/02/13 00:16:48   Completed in 32m19.603s | F1=0.252 BLEU=0.227
+2026/02/13 00:16:48 [6/10] Evaluating sample: locomo10_6 (158 QA)
+2026/02/13 00:34:05   Completed in 17m17.553s | F1=0.248 BLEU=0.219
+2026/02/13 00:34:05 [7/10] Evaluating sample: locomo10_7 (190 QA)
+2026/02/13 00:55:46   Completed in 21m40.331s | F1=0.272 BLEU=0.240
+2026/02/13 00:55:46 [8/10] Evaluating sample: locomo10_8 (239 QA)
+2026/02/13 01:28:06   Completed in 32m20.404s | F1=0.262 BLEU=0.224
+2026/02/13 01:28:06 [9/10] Evaluating sample: locomo10_9 (196 QA)
+2026/02/13 01:48:13   Completed in 20m7.211s | F1=0.236 BLEU=0.205
+2026/02/13 01:48:13 [10/10] Evaluating sample: locomo10_10 (204 QA)
+2026/02/13 02:16:03   Completed in 27m49.928s | F1=0.287 BLEU=0.256
+2026/02/13 02:16:03 Results saved to: data_history300_gpt4omini/agentic_pgvector/results.json
+
+============================================================
+Memory Evaluation Results - agentic
+============================================================
+
+Model: gpt-4o-mini
+Scenario: agentic
+Memory Backend: pgvector
+QA History Turns: 300
+Samples: 10 | Questions: 1986
+
+--- Overall Metrics ---
+F1 Score:   0.2674 (26.7)
+BLEU Score: 0.2369
+LLM Score:  0.3573
+Total Time: 13882410ms | Avg Latency: 6990.1ms
+
+--- By Category ---
+Category           Count       F1     BLEU      LLM
+---------------------------------------------------
+single-hop           282    0.156    0.122    0.227
+multi-hop            321    0.123    0.096    0.103
+temporal              96    0.062    0.049    0.114
+open-domain          841    0.239    0.191    0.429
+adversarial          446    0.539    0.539    0.540
+============================================================
+2026/02/13 02:16:03 Creating mysql memory service
+2026-02-13T02:16:03+08:00	[34mINFO[0m	mysql/init.go:39	initializing mysql memory database schema...
+2026-02-13T02:16:03+08:00	[34mINFO[0m	mysql/init.go:51	created table: memory_eval_mysql
+2026-02-13T02:16:03+08:00	[34mINFO[0m	mysql/init.go:57	mysql memory database schema initialized successfully
+2026/02/13 02:16:03 
+2026/02/13 02:16:03 === Running: agentic (backend=mysql) ===
+2026/02/13 02:16:03 [1/10] Evaluating sample: locomo10_1 (199 QA)
+2026/02/13 02:34:02   Completed in 17m58.74s | F1=0.209 BLEU=0.181
+2026/02/13 02:34:02 [2/10] Evaluating sample: locomo10_2 (105 QA)
+2026/02/13 02:44:14   Completed in 10m12.265s | F1=0.297 BLEU=0.267
+2026/02/13 02:44:14 [3/10] Evaluating sample: locomo10_3 (193 QA)
+2026/02/13 03:02:09   Completed in 17m55.157s | F1=0.325 BLEU=0.299
+2026/02/13 03:02:09 [4/10] Evaluating sample: locomo10_4 (260 QA)
+2026/02/13 03:29:14   Completed in 27m4.792s | F1=0.309 BLEU=0.278
+2026/02/13 03:29:14 [5/10] Evaluating sample: locomo10_5 (242 QA)
+2026/02/13 03:53:04   Completed in 23m49.662s | F1=0.283 BLEU=0.258
+2026/02/13 03:53:04 [6/10] Evaluating sample: locomo10_6 (158 QA)
+2026/02/13 04:11:02   Completed in 17m57.722s | F1=0.253 BLEU=0.229
+2026/02/13 04:11:02 [7/10] Evaluating sample: locomo10_7 (190 QA)
+2026/02/13 04:29:18   Completed in 18m16.442s | F1=0.284 BLEU=0.252
+2026/02/13 04:29:18 [8/10] Evaluating sample: locomo10_8 (239 QA)
+2026/02/13 04:50:57   Completed in 21m38.801s | F1=0.255 BLEU=0.218
+2026/02/13 04:50:57 [9/10] Evaluating sample: locomo10_9 (196 QA)
+2026/02/13 05:09:13   Completed in 18m16.62s | F1=0.235 BLEU=0.204
+2026/02/13 05:09:13 [10/10] Evaluating sample: locomo10_10 (204 QA)
+2026/02/13 05:28:35   Completed in 19m21.733s | F1=0.293 BLEU=0.263
+2026/02/13 05:28:35 Results saved to: data_history300_gpt4omini/agentic_mysql/results.json
+
+============================================================
+Memory Evaluation Results - agentic
+============================================================
+
+Model: gpt-4o-mini
+Scenario: agentic
+Memory Backend: mysql
+QA History Turns: 300
+Samples: 10 | Questions: 1986
+
+--- Overall Metrics ---
+F1 Score:   0.2745 (27.4)
+BLEU Score: 0.2449
+LLM Score:  0.3654
+Total Time: 11551934ms | Avg Latency: 5816.7ms
+
+--- By Category ---
+Category           Count       F1     BLEU      LLM
+---------------------------------------------------
+single-hop           282    0.156    0.122    0.215
+multi-hop            321    0.117    0.092    0.114
+temporal              96    0.061    0.047    0.139
+open-domain          841    0.237    0.190    0.423
+adversarial          446    0.579    0.579    0.580
+============================================================
+2026/02/13 05:28:35 Creating pgvector memory service with extractor (embed_model=text-embedding-3-small)
+2026-02-13T05:28:35+08:00	[34mINFO[0m	pgvector/init.go:113	initializing pgvector memory database schema...
+2026-02-13T05:28:35+08:00	[34mINFO[0m	pgvector/init.go:139	created table: memory_eval_auto
+2026-02-13T05:28:35+08:00	[34mINFO[0m	pgvector/init.go:165	created index: app_user on table memory_eval_auto
+2026-02-13T05:28:35+08:00	[34mINFO[0m	pgvector/init.go:165	created index: updated_at on table memory_eval_auto
+2026-02-13T05:28:35+08:00	[34mINFO[0m	pgvector/init.go:165	created index: deleted_at on table memory_eval_auto
+2026-02-13T05:28:35+08:00	[34mINFO[0m	pgvector/init.go:175	created HNSW index on table memory_eval_auto
+2026-02-13T05:28:35+08:00	[34mINFO[0m	pgvector/init.go:177	pgvector memory database schema initialized successfully
+2026/02/13 05:28:35 
+2026/02/13 05:28:35 === Running: auto (backend=pgvector) ===
+2026/02/13 05:28:35 [1/10] Evaluating sample: locomo10_1 (199 QA)
+2026/02/13 05:49:13   Completed in 20m38.057s | F1=0.249 BLEU=0.214
+2026/02/13 05:49:13 [2/10] Evaluating sample: locomo10_2 (105 QA)
+2026/02/13 06:00:17   Completed in 11m4.116s | F1=0.316 BLEU=0.281
+2026/02/13 06:00:17 [3/10] Evaluating sample: locomo10_3 (193 QA)
+2026/02/13 06:19:30   Completed in 19m12.804s | F1=0.359 BLEU=0.324
+2026/02/13 06:19:30 [4/10] Evaluating sample: locomo10_4 (260 QA)
+2026/02/13 06:44:07   Completed in 24m37.169s | F1=0.306 BLEU=0.272
+2026/02/13 06:44:07 [5/10] Evaluating sample: locomo10_5 (242 QA)
+2026/02/13 07:09:50   Completed in 25m42.812s | F1=0.264 BLEU=0.233
+2026/02/13 07:09:50 [6/10] Evaluating sample: locomo10_6 (158 QA)
+2026/02/13 07:25:56   Completed in 16m5.995s | F1=0.270 BLEU=0.238
+2026/02/13 07:25:56 [7/10] Evaluating sample: locomo10_7 (190 QA)
+2026/02/13 07:45:08   Completed in 19m11.859s | F1=0.296 BLEU=0.259
+2026/02/13 07:45:08 [8/10] Evaluating sample: locomo10_8 (239 QA)
+2026/02/13 08:07:58   Completed in 22m49.784s | F1=0.315 BLEU=0.279
+2026/02/13 08:07:58 [9/10] Evaluating sample: locomo10_9 (196 QA)
+2026/02/13 08:26:29   Completed in 18m31.769s | F1=0.270 BLEU=0.233
+2026/02/13 08:26:29 [10/10] Evaluating sample: locomo10_10 (204 QA)
+2026/02/13 08:49:02   Completed in 22m33.003s | F1=0.318 BLEU=0.273
+2026/02/13 08:49:02 Results saved to: data_history300_gpt4omini/auto_pgvector/results.json
+
+============================================================
+Memory Evaluation Results - auto
+============================================================
+
+Model: gpt-4o-mini
+Scenario: auto
+Memory Backend: pgvector
+QA History Turns: 300
+Samples: 10 | Questions: 1986
+
+--- Overall Metrics ---
+F1 Score:   0.2959 (29.6)
+BLEU Score: 0.2601
+LLM Score:  0.4143
+Total Time: 12027368ms | Avg Latency: 6056.1ms
+
+--- By Category ---
+Category           Count       F1     BLEU      LLM
+---------------------------------------------------
+single-hop           282    0.196    0.152    0.294
+multi-hop            321    0.120    0.099    0.131
+temporal              96    0.074    0.058    0.162
+open-domain          841    0.306    0.246    0.539
+adversarial          446    0.514    0.514    0.513
+============================================================
+2026/02/13 08:49:02 Creating mysql memory service with extractor
+2026-02-13T08:49:02+08:00	[34mINFO[0m	mysql/init.go:39	initializing mysql memory database schema...
+2026-02-13T08:49:03+08:00	[34mINFO[0m	mysql/init.go:51	created table: memory_eval_auto_mysql
+2026-02-13T08:49:03+08:00	[34mINFO[0m	mysql/init.go:57	mysql memory database schema initialized successfully
+2026/02/13 08:49:03 
+2026/02/13 08:49:03 === Running: auto (backend=mysql) ===
+2026/02/13 08:49:03 [1/10] Evaluating sample: locomo10_1 (199 QA)
+2026/02/13 09:05:07   Completed in 16m4.84s | F1=0.235 BLEU=0.202
+2026/02/13 09:05:07 [2/10] Evaluating sample: locomo10_2 (105 QA)
+2026/02/13 09:15:22   Completed in 10m14.885s | F1=0.274 BLEU=0.241
+2026/02/13 09:15:22 [3/10] Evaluating sample: locomo10_3 (193 QA)
+2026/02/13 09:32:06   Completed in 16m44.118s | F1=0.327 BLEU=0.297
+2026/02/13 09:32:06 [4/10] Evaluating sample: locomo10_4 (260 QA)
+2026/02/13 09:54:56   Completed in 22m50.091s | F1=0.301 BLEU=0.270
+2026/02/13 09:54:56 [5/10] Evaluating sample: locomo10_5 (242 QA)
+2026/02/13 10:19:22   Completed in 24m25.902s | F1=0.243 BLEU=0.210
+2026/02/13 10:19:22 [6/10] Evaluating sample: locomo10_6 (158 QA)
+2026/02/13 10:34:00   Completed in 14m38.113s | F1=0.296 BLEU=0.263
+2026/02/13 10:34:00 [7/10] Evaluating sample: locomo10_7 (190 QA)
+2026/02/13 10:52:46   Completed in 18m45.934s | F1=0.302 BLEU=0.262
+2026/02/13 10:52:46 [8/10] Evaluating sample: locomo10_8 (239 QA)
+2026/02/13 11:14:07   Completed in 21m20.811s | F1=0.299 BLEU=0.262
+2026/02/13 11:14:07 [9/10] Evaluating sample: locomo10_9 (196 QA)
+2026/02/13 11:31:25   Completed in 17m17.535s | F1=0.234 BLEU=0.203
+2026/02/13 11:31:25 [10/10] Evaluating sample: locomo10_10 (204 QA)
+2026/02/13 11:52:39   Completed in 21m13.924s | F1=0.288 BLEU=0.248
+2026/02/13 11:52:39 Results saved to: data_history300_gpt4omini/auto_mysql/results.json
+
+============================================================
+Memory Evaluation Results - auto
+============================================================
+
+Model: gpt-4o-mini
+Scenario: auto
+Memory Backend: mysql
+QA History Turns: 300
+Samples: 10 | Questions: 1986
+
+--- Overall Metrics ---
+F1 Score:   0.2800 (28.0)
+BLEU Score: 0.2458
+LLM Score:  0.3988
+Total Time: 11016152ms | Avg Latency: 5546.9ms
+
+--- By Category ---
+Category           Count       F1     BLEU      LLM
+---------------------------------------------------
+single-hop           282    0.180    0.142    0.261
+multi-hop            321    0.095    0.079    0.113
+temporal              96    0.080    0.065    0.163
+open-domain          841    0.297    0.237    0.534
+adversarial          446    0.488    0.487    0.487
+============================================================
