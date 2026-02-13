@@ -112,8 +112,7 @@ CRITICAL RULES(IMPORTANT !!!):
 4. Do NOT provide additional details, synonyms, or interpretations beyond what is explicitly stated in the search results.
 5. Use the search tool at most 3 times. If you haven't found the answer after 3 searches, provide the best answer from what you found.
 6. Be concise and stick strictly to the facts from the retrieved information.
-7. Give ONLY the direct answer. Don't need external explanation.
-8. Do NOT start your answer with "Based on the search results" or any similar prefix. Output the answer directly."""
+7. Give only the direct answer."""
 
 
 class CrewAIKnowledgeBase(KnowledgeBase):

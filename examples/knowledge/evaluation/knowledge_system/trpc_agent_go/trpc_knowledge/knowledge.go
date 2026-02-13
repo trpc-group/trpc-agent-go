@@ -301,8 +301,7 @@ func (s *KnowledgeService) runAgent(ctx context.Context, question string, k int)
 				"4. Do NOT provide additional details, synonyms, or interpretations beyond what is explicitly stated in the search results.\n"+
 				"5. Use the search tool at most 3 times. If you haven't found the answer after 3 searches, provide the best answer from what you found.\n"+
 				"6. Be concise and stick strictly to the facts from the retrieved information.\n"+
-				"7. Give ONLY the direct answer. Don't need external explanation.\n"+
-				"8. Do NOT start your answer with \"Based on the search results\" or any similar prefix. Output the answer directly.",
+				"7. Give only the direct answer.",
 		),
 		llmagent.WithGenerationConfig(genConfig),
 	)
@@ -424,6 +423,8 @@ func (s *KnowledgeService) runAgent(ctx context.Context, question string, k int)
 			break
 		}
 	}
+
+	log.Infof("[Agent] Final answer: %s", result.Answer)
 
 	return result, nil
 }

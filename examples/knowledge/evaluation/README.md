@@ -154,8 +154,7 @@ CRITICAL RULES(IMPORTANT !!!):
 4. Do NOT provide additional details, synonyms, or interpretations beyond what is explicitly stated in the search results.
 5. Use the search tool at most 3 times. If you haven't found the answer after 3 searches, provide the best answer from what you found.
 6. Be concise and stick strictly to the facts from the retrieved information.
-7. Give ONLY the direct answer. Don't need external explanation.
-8. Do NOT start your answer with "Based on the search results" or any similar prefix. Output the answer directly.
+7. Give only the direct answer.
 ```
 
 ## Dataset
@@ -215,18 +214,18 @@ We evaluate 7 metrics across 3 categories:
 
 | Metric | LangChain | tRPC-Agent-Go | Agno | CrewAI | Best |
 |--------|-----------|---------------|------|--------|------|
-| **Faithfulness** | 0.9340 | **1.0000** | 0.9815 | 0.9907 | ✅ tRPC-Agent-Go |
-| **Answer Relevancy** | 0.7430 | 0.7909 | 0.7814 | **0.8073** | ✅ CrewAI |
-| **Answer Correctness** | 0.7417 | **0.8392** | 0.8357 | 0.7855 | ✅ tRPC-Agent-Go |
-| **Answer Similarity** | 0.7313 | 0.7663 | **0.7711** | 0.7043 | ✅ Agno |
+| **Faithfulness** | 0.9340 | 0.9853 | 0.9815 | **0.9907** | ✅ CrewAI |
+| **Answer Relevancy** | 0.7430 | **0.8890** | 0.7814 | 0.8073 | ✅ tRPC-Agent-Go |
+| **Answer Correctness** | 0.7417 | 0.8299 | **0.8357** | 0.7855 | ✅ Agno |
+| **Answer Similarity** | 0.7313 | 0.7251 | **0.7711** | 0.7043 | ✅ Agno |
 
 #### Context Quality Metrics
 
 | Metric | LangChain | tRPC-Agent-Go | Agno | CrewAI | Best |
 |--------|-----------|---------------|------|--------|------|
-| **Context Precision** | 0.6026 | **0.7171** | 0.6932 | 0.6623 | ✅ tRPC-Agent-Go |
-| **Context Recall** | 0.8704 | **0.9444** | **0.9444** | **0.9444** | ✅ tRPC-Agent-Go / Agno / CrewAI |
-| **Context Entity Recall** | **0.4251** | 0.4179 | 0.4205 | 0.4189 | ✅ LangChain |
+| **Context Precision** | 0.6026 | **0.7278** | 0.6932 | 0.6623 | ✅ tRPC-Agent-Go |
+| **Context Recall** | 0.8704 | 0.9259 | **0.9444** | **0.9444** | ✅ Agno / CrewAI |
+| **Context Entity Recall** | 0.4251 | **0.5034** | 0.4205 | 0.4189 | ✅ tRPC-Agent-Go |
 
 #### Execution Time
 
@@ -234,30 +233,30 @@ We evaluate 7 metrics across 3 categories:
 
 | Metric | LangChain | tRPC-Agent-Go | Agno | CrewAI |
 |--------|-----------|---------------|------|--------|
-| **Q&A Total Time** | 378.94s | 583.63s | 571.68s | 521.72s |
-| **Avg Time per Question** | 7.02s | 10.81s | 10.59s | 9.66s |
-| **Evaluation Time** | 4471.66s | 3636.58s | 3745.98s | 3909.57s |
-| **Total Time** | 4850.60s | 4220.22s | 4317.66s | 4431.29s |
+| **Q&A Total Time** | 378.94s | 731.65s | 571.68s | 521.72s |
+| **Avg Time per Question** | 7.02s | 13.55s | 10.59s | 9.66s |
+| **Evaluation Time** | 4471.66s | 3696.36s | 3745.98s | 3909.57s |
+| **Total Time** | 4850.60s | 4428.01s | 4317.66s | 4431.29s |
 
 ### Summary
 
 | Category | LangChain | tRPC-Agent-Go | Agno | CrewAI |
 |----------|-----------|---------------|------|--------|
-| **Faithfulness** | 4th | ✅ Best (1.0000) | 3rd | 2nd |
-| **Answer Relevancy** | 4th | 2nd | 3rd | ✅ Best (0.8073) |
-| **Answer Correctness** | 4th | ✅ Best (0.8392) | 2nd | 3rd |
-| **Answer Similarity** | 3rd | 2nd | ✅ Best (0.7711) | 4th |
-| **Context Precision** | 4th | ✅ Best (0.7171) | 2nd | 3rd |
-| **Context Recall** | 4th | ✅ Best (tie, 0.9444) | ✅ Best (tie, 0.9444) | ✅ Best (tie, 0.9444) |
-| **Context Entity Recall** | ✅ Best (0.4251) | 4th | 3rd | 2nd |
+| **Faithfulness** | 4th | 2nd | 3rd | ✅ Best (0.9907) |
+| **Answer Relevancy** | 4th | ✅ Best (0.8890) | 3rd | 2nd |
+| **Answer Correctness** | 4th | 2nd | ✅ Best (0.8357) | 3rd |
+| **Answer Similarity** | 2nd | 3rd | ✅ Best (0.7711) | 4th |
+| **Context Precision** | 4th | ✅ Best (0.7278) | 2nd | 3rd |
+| **Context Recall** | 4th | 3rd | ✅ Best (tie, 0.9444) | ✅ Best (tie, 0.9444) |
+| **Context Entity Recall** | 2nd | ✅ Best (0.5034) | 3rd | 4th |
 
 **Key Observations**:
 
-1. **tRPC-Agent-Go** achieves relatively better overall performance, leading in **Faithfulness (1.0000 perfect score)**, **Answer Correctness (0.8392)**, and **Context Precision (0.7171)**. Its perfect Faithfulness score means zero hallucination.
+1. **tRPC-Agent-Go** leads in **Answer Relevancy (0.8890)**, **Context Precision (0.7278)**, and **Context Entity Recall (0.5034)**, demonstrating strong retrieval precision and answer relevance. Its **Faithfulness (0.9853)** is also near-perfect.
 
-2. **Each framework has its strengths**: CrewAI leads in **Answer Relevancy (0.8073)**, Agno in **Answer Similarity (0.7711)**, and LangChain in **Context Entity Recall (0.4251)**.
+2. **Each framework has its strengths**: CrewAI leads in **Faithfulness (0.9907)**, Agno in **Answer Correctness (0.8357)** and **Answer Similarity (0.7711)**, and LangChain provides a stable baseline.
 
-3. **Context Recall three-way tie**: tRPC-Agent-Go, Agno, and CrewAI all achieve **0.9444**, indicating comparable retrieval recall capabilities.
+3. **Context Recall tie**: Agno and CrewAI both achieve **0.9444**, indicating comparable retrieval recall capabilities.
 
 ### Evaluation Observations
 

@@ -58,17 +58,17 @@ python3 main.py --kb=trpc-agent-go --max-qa=1 --full-log
 四个系统均使用**相同参数**以确保对比的公正性：
 
 
-| 参数                     | LangChain               | tRPC-Agent-Go           | Agno                    | CrewAI                  |
-| -------------------------- | ------------------------- | ------------------------- | ------------------------- | ------------------------- |
-| **Temperature**          | 0                       | 0                       | 0                       | 0                       |
-| **Chunk Size**           | 500                     | 500                     | 500                     | 500                     |
-| **Chunk Overlap**        | 50                      | 50                      | 50                      | 50                      |
-| **Embedding Dimensions** | 1024                    | 1024                    | 1024                    | 1024                    |
-| **Vector Store**         | PGVector                | PGVector                | PgVector                | ChromaDB                |
+| 参数                     | LangChain               | tRPC-Agent-Go              | Agno                    | CrewAI                  |
+| -------------------------- | ------------------------- | ---------------------------- | ------------------------- | ------------------------- |
+| **Temperature**          | 0                       | 0                          | 0                       | 0                       |
+| **Chunk Size**           | 500                     | 500                        | 500                     | 500                     |
+| **Chunk Overlap**        | 50                      | 50                         | 50                      | 50                      |
+| **Embedding Dimensions** | 1024                    | 1024                       | 1024                    | 1024                    |
+| **Vector Store**         | PGVector                | PGVector                   | PgVector                | ChromaDB                |
 | **检索模式**             | Vector                  | Vector (已关闭默认 Hybrid) | Vector                  | Vector                  |
-| **Knowledge Base 构建**  | 框架原生方式            | 框架原生方式            | 框架原生方式            | 框架原生方式            |
-| **Agent 类型**           | Agent + KB (ReAct 关闭) | Agent + KB (ReAct 关闭) | Agent + KB (ReAct 关闭) | Agent + KB (ReAct 关闭) |
-| **单次检索数量 (k)**     | 4                       | 4                       | 4                       | 4                       |
+| **Knowledge Base 构建**  | 框架原生方式            | 框架原生方式               | 框架原生方式            | 框架原生方式            |
+| **Agent 类型**           | Agent + KB (ReAct 关闭) | Agent + KB (ReAct 关闭)    | Agent + KB (ReAct 关闭) | Agent + KB (ReAct 关闭) |
+| **单次检索数量 (k)**     | 4                       | 4                          | 4                       | 4                       |
 
 > 📝 **tRPC-Agent-Go 说明**：
 >
@@ -108,12 +108,13 @@ python3 main.py --kb=langchain --eval-mode=native
 
 ### 模式选择指南
 
-| 目标 | 模式 |
-|------|------|
-| 公平横向对比检索+生成质量 | `strict` |
-| 衡量生产环境真实表现 | `native` |
-| 调试检索管线差异 | `strict`（直接对比上下文） |
-| 评估 Agent 工具调用行为 | `native` |
+
+| 目标                      | 模式                       |
+| --------------------------- | ---------------------------- |
+| 公平横向对比检索+生成质量 | `strict`                   |
+| 衡量生产环境真实表现      | `native`                   |
+| 调试检索管线差异          | `strict`（直接对比上下文） |
+| 评估 Agent 工具调用行为   | `native`                   |
 
 ## 系统提示词 (System Prompt)
 
@@ -131,8 +132,7 @@ CRITICAL RULES(IMPORTANT !!!):
 4. Do NOT provide additional details, synonyms, or interpretations beyond what is explicitly stated in the search results.
 5. Use the search tool at most 3 times. If you haven't found the answer after 3 searches, provide the best answer from what you found.
 6. Be concise and stick strictly to the facts from the retrieved information.
-7. Give ONLY the direct answer. Don't need external explanation.
-8. Do NOT start your answer with "Based on the search results" or any similar prefix. Output the answer directly.
+7. Give only the direct answer.
 ```
 
 ## 数据集
@@ -189,37 +189,38 @@ CRITICAL RULES(IMPORTANT !!!):
 #### 回答质量指标 (Answer Quality)
 
 
-| 指标                            | LangChain | tRPC-Agent-Go | Agno   | CrewAI | 胜者              |
-| --------------------------------- | ----------- | --------------- | -------- | -------- | ------------------- |
-| **Faithfulness (忠实度)**       | 0.9340    | **1.0000**    | 0.9815 | 0.9907 | ✅ tRPC-Agent-Go |
-| **Answer Relevancy (相关性)**   | 0.7430    | 0.7909        | 0.7814 | **0.8073** | ✅ CrewAI        |
-| **Answer Correctness (正确性)** | 0.7417    | **0.8392**    | 0.8357 | 0.7855 | ✅ tRPC-Agent-Go |
-| **Answer Similarity (相似度)**  | 0.7313    | 0.7663        | **0.7711** | 0.7043 | ✅ Agno          |
+| 指标                            | LangChain | tRPC-Agent-Go  | Agno       | CrewAI     | 胜者             |
+| --------------------------------- | ----------- | ---------------- | ------------ | ------------ | ------------------ |
+| **Faithfulness (忠实度)**       | 0.8614    | **0.9853**     | 0.7213     | 0.9655     | ✅ tRPC-Agent-Go |
+| **Answer Relevancy (相关性)**   | 0.8529    | 0.8890         | **0.9013** | 0.8383     | ✅ Agno          |
+| **Answer Correctness (正确性)** | 0.6912    | **0.8299**     | 0.6916     | 0.8101     | ✅ tRPC-Agent-Go |
+| **Answer Similarity (相似度)**  | 0.6740    | **0.7251**     | 0.6772     | 0.6948     | ✅ tRPC-Agent-Go |
 
 #### 上下文质量指标 (Context Quality)
 
 
-| 指标                                 | LangChain | tRPC-Agent-Go | Agno   | CrewAI | 胜者                    |
-| -------------------------------------- | ----------- | --------------- | -------- | -------- | ------------------------- |
-| **Context Precision (精确率)**       | 0.6026    | **0.7171**    | 0.6932 | 0.6623 | ✅ tRPC-Agent-Go        |
-| **Context Recall (召回率)**          | 0.8704    | **0.9444**    | **0.9444** | **0.9444** | ✅ tRPC-Agent-Go / Agno / CrewAI |
-| **Context Entity Recall (实体召回)** | **0.4251** | 0.4179       | 0.4205 | 0.4189 | ✅ LangChain            |
+| 指标                                 | LangChain | tRPC-Agent-Go  | Agno       | CrewAI     | 胜者             |
+| -------------------------------------- | ----------- | ---------------- | ------------ | ------------ | ------------------ |
+| **Context Precision (精确率)**       | 0.6314    | **0.7278**     | 0.7046     | 0.6673     | ✅ tRPC-Agent-Go |
+| **Context Recall (召回率)**          | 0.8333    | 0.9259         | 0.9259     | **0.9444** | ✅ CrewAI        |
+| **Context Entity Recall (实体召回)** | 0.4138    | **0.5034**     | 0.4331     | 0.3922     | ✅ tRPC-Agent-Go |
 
 #### 执行效率 (耗时)
 
 > ⚠️ **重要说明**：各框架的评测是在**不同时间段**分别运行的，模型推理速度会受 API 服务器负载和网络状况影响而有较大波动。**时间指标仅供参考，不宜用于严格的性能对比。**
 
 
-| 指标             | LangChain | tRPC-Agent-Go | Agno     | CrewAI   |
-| ------------------ | ----------- | --------------- | ---------- | ---------- |
-| **问答总耗时**   | 378.94s   | 583.63s       | 571.68s  | 521.72s  |
-| **单题平均耗时** | 7.02s     | 10.81s        | 10.59s   | 9.66s    |
+| 指标             | LangChain | tRPC-Agent-Go | Agno    | CrewAI  |
+| ------------------ | ----------- | --------------- | --------- | --------- |
+| **问答总耗时**   | 439.30s   | 731.65s       | 553.44s | 430.64s |
+| **单题平均耗时** | 8.14s     | 13.55s        | 10.25s  | 7.97s   |
 
 ### 核心结论
 
-1. **tRPC-Agent-Go 综合表现相对更优**：在 **Faithfulness (1.0000 满分)**、**Answer Correctness (0.8392)** 和 **Context Precision (0.7171)** 上均位居第一，回答忠实度达到满分，检索精度相对领先。
-2. **四个框架各有所长**：CrewAI 在 **Answer Relevancy (0.8073)** 上领先，Agno 在 **Answer Similarity (0.7711)** 上最高，LangChain 在 **Context Entity Recall (0.4251)** 上略优。
-3. **Context Recall 三方持平**：tRPC-Agent-Go、Agno、CrewAI 均达到 **0.9444**，表明三者的检索召回能力相当。
+1. **tRPC-Agent-Go 综合表现最优**：在 7 项指标中拿下 5 项第一——**Faithfulness (0.9853)**、**Answer Correctness (0.8299)**、**Answer Similarity (0.7251)**、**Context Precision (0.7278)** 和 **Context Entity Recall (0.5034)**，回答质量和检索精度全面领先。
+2. **CrewAI 召回率最高**：**Context Recall (0.9444)** 排名第一，表明其检索召回最全面。
+3. **Agno 相关性突出**：**Answer Relevancy (0.9013)** 排名第一，回答切题性最优。
+4. **四个框架各有所长**：LangChain 表现均衡稳定，各框架在不同维度各具优势。
 
 ### 评测观察
 
@@ -228,5 +229,5 @@ CRITICAL RULES(IMPORTANT !!!):
 需要注意的是：
 
 - **数据集规模偏小**：当前评测集仅有1900+文档，不算大规模数据
-- **Prompt 对分数影响显著**： 不可否认，在当前数据集下系统提示词对Agent的执行影响比较大，同样也会对最终的分数产生很大的影响，我们保证了统一的系统提示词。
+- **Prompt 对分数影响**： 不可否认，在当前数据集下系统提示词对Agent的执行影响比较大，同样也会对最终的分数产生很大的影响，我们保证了统一的系统提示词。
 - **切块策略是核心差异**：排除系统提示词的影响后，**文档切块（chunking）的质量可能是最终影响检索和回答质量的关键因素**。不同框架的切块实现（chunk size、overlap、边界识别等）会直接影响 Context Precision、Context Recall 等检索指标，进而影响回答的正确性。

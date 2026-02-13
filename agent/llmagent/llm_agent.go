@@ -278,7 +278,16 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	contentProcessor := processor.NewContentRequestProcessor(contentOpts...)
 	requestProcessors = append(requestProcessors, contentProcessor)
 
-	// 7. Time processor - adds current time information if enabled.
+	// 7. Post-tool processor - injects dynamic prompt after tool results.
+	var postToolOpts []processor.PostToolOption
+	if options.PostToolPrompt != "" {
+		postToolOpts = append(postToolOpts,
+			processor.WithPostToolPrompt(options.PostToolPrompt))
+	}
+	postToolProcessor := processor.NewPostToolRequestProcessor(postToolOpts...)
+	requestProcessors = append(requestProcessors, postToolProcessor)
+
+	// 8. Time processor - adds current time information if enabled.
 	// Moved after content processor to avoid invalidating system message cache.
 	// Time information changes frequently, so placing it last allows previous
 	// stable content (instructions, identity, skills, history) to be cached.
