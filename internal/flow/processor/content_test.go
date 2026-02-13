@@ -990,7 +990,7 @@ func TestContentRequestProcessor_ProcessRequest_WithMaxHistoryRuns(t *testing.T)
 					},
 				},
 			},
-			expectedCount: 4, // Summary message + 3 events (incremental logic)
+			expectedCount: 5, // Summary message + guidance + 3 events (incremental logic)
 		},
 		{
 			name: "AddSessionSummary false - uses history messages with limit",

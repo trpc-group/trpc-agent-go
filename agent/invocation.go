@@ -439,7 +439,7 @@ func WithGlobalInstruction(instruction string) RunOption {
 //	    }),
 //	)
 //
-// Note: Framework tools (knowledge_search, transfer_to_agent) are never filtered
+// Note: Framework tools (knowledge_search, transfer_to_agent, search_history, get_history_events) are never filtered
 // and will always be available regardless of the filter function.
 //
 // Note: This is a "soft" constraint. Tools should still implement their own
@@ -662,7 +662,7 @@ type RunOptions struct {
 	// This filtering happens at the request preparation stage, before sending to the model.
 	// The model will only see the tool descriptions for tools that pass the filter.
 	//
-	// Note: Framework tools (knowledge_search, transfer_to_agent) are never filtered
+	// Note: Framework tools (knowledge_search, transfer_to_agent, search_history, get_history_events) are never filtered
 	// and will always be included regardless of the filter function's return value.
 	//
 	// Example:
