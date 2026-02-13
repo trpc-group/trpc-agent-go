@@ -1,12 +1,5 @@
-# Ignore temporary/scratch result files.
-tmp/
-
-# Track the canonical data and logs used in the report.
-!data_*/
-!data_*/**/*.json
-!log_*.log
-
-# Keep report and README.
-!README.md
-!REPORT.md
-!REPORT.zh_CN.md
+# Ignore result data and logs (large, machine-generated).
+checkpoint.json
+results.json
+*.log
+*.pdf
