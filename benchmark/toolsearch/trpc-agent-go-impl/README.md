@@ -3,7 +3,7 @@
 ### 功能
 - 用 `trpc-agent-go/evaluation` 执行 toolsearch 评测
 - 输出：整体耗时（evaluation executionTime + wall time）、tokens（chat / toolsearch / total）、每轮的期望工具与实际工具、每轮 tokens 与耗时
-- 额外落盘一份结构化 summary：`<output-dir>/<evalSetResultId>.summary.json`
+- 额外落盘一份结构化 summary：`<output-dir>/<evalSetResultId>_<mode>.summary.json`
 
 ### 运行
 在本目录执行：
