@@ -28,12 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-func TestGetUserMemKey(t *testing.T) {
-	url, cleanup := setupTestRedis(t)
-	defer cleanup()
-	svc, err := NewService(WithRedisClientURL(url))
-	require.NoError(t, err)
-
+func TestBuildUserMemKey(t *testing.T) {
 	tests := []struct {
 		name     string
 		userKey  memory.UserKey
@@ -59,7 +54,7 @@ func TestGetUserMemKey(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			key := svc.getUserMemKey(tt.userKey)
+			key := buildUserMemKey(tt.userKey)
 			assert.Equal(t, tt.expected, key)
 		})
 	}
@@ -80,6 +75,11 @@ func TestGetUserMemKeyWithPrefix(t *testing.T) {
 	}
 	key := svc.getUserMemKey(userKey)
 	assert.Equal(t, "myapp:mem:{test-app:test-user}", key)
+}
+
+func TestPrefixedKey_NoDoubleColon(t *testing.T) {
+	s := &Service{opts: ServiceOpts{keyPrefix: "myapp:"}}
+	assert.Equal(t, "myapp:mem:{a:b}", s.prefixedKey("mem:{a:b}"))
 }
 
 func TestServiceOpts_Defaults(t *testing.T) {

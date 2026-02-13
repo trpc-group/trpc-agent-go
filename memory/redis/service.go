@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -312,35 +313,41 @@ func (s *Service) Close() error {
 	return nil
 }
 
-// prefixedKey adds the configured key prefix to the given
-// base key. If no prefix is configured, returns the base
-// key unchanged.
+// prefixedKey adds the configured key prefix to the given base key.
+// If no prefix is configured, returns the base key unchanged.
+//
+// Note: If the prefix already ends with ':', do not add another ':' to avoid
+// generating keys like "pfx::mem:{...}".
 func (s *Service) prefixedKey(base string) string {
-	if s.opts.keyPrefix != "" {
-		return s.opts.keyPrefix + ":" + base
+	prefix := s.opts.keyPrefix
+	if prefix == "" {
+		return base
 	}
-	return base
+	if strings.HasSuffix(prefix, ":") {
+		return prefix + base
+	}
+	return prefix + ":" + base
 }
 
-// getUserMemKey builds the Redis key for a user's memories.
-// The hash tag includes both AppName and UserID so that
-// each user's hash is independently distributed across
-// Redis Cluster slots.
+// buildUserMemKey builds the Redis base key (without keyPrefix) for a user's
+// memories.
 //
-// Key format change: the hash tag was changed from
-// {AppName} to {AppName:UserID} for better cluster slot
-// distribution. If you are upgrading from a version that
-// used the old key format "mem:{AppName}:UserID", you
-// must migrate your data. See the memory documentation
-// for migration instructions.
-func (s *Service) getUserMemKey(
-	userKey memory.UserKey,
-) string {
-	return s.prefixedKey(
-		fmt.Sprintf(
-			"mem:{%s:%s}",
-			userKey.AppName,
-			userKey.UserID,
-		),
+// In Redis Cluster, only the substring inside `{...}` determines the hash slot.
+// The hash tag includes both AppName and UserID so that each user's hash is
+// independently distributed across slots.
+//
+// Key format change: the hash tag was changed from {AppName} to {AppName:UserID}
+// for better cluster slot distribution. If you are upgrading from a version that
+// used the old key format "mem:{AppName}:UserID", you must migrate your data.
+// See the memory documentation for migration instructions.
+func buildUserMemKey(userKey memory.UserKey) string {
+	return fmt.Sprintf(
+		"mem:{%s:%s}",
+		userKey.AppName,
+		userKey.UserID,
 	)
+}
+
+func (s *Service) getUserMemKey(userKey memory.UserKey) string {
+	return s.prefixedKey(buildUserMemKey(userKey))
 }
