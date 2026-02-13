@@ -502,14 +502,51 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 
 	messages = p.mergeUserMessages(messages)
 
-	// Apply MaxHistoryRuns limit if set MaxHistoryRuns and
-	// AddSessionSummary is false.
-	if !p.AddSessionSummary && p.MaxHistoryRuns > 0 &&
-		len(messages) > p.MaxHistoryRuns {
-		startIdx := len(messages) - p.MaxHistoryRuns
-		messages = messages[startIdx:]
+	// Apply MaxHistoryRuns limit when AddSessionSummary is false.
+	if !p.AddSessionSummary && p.MaxHistoryRuns > 0 {
+		messages = applyMaxHistoryRuns(messages, p.MaxHistoryRuns)
 	}
 	return messages
+}
+
+// applyMaxHistoryRuns trims messages to at most maxRuns entries from the tail.
+// If the trim boundary falls on a tool-result message whose corresponding
+// tool_use was truncated, the boundary is advanced past any such orphaned
+// results to prevent API 400 "unexpected tool_use_id" errors.
+func applyMaxHistoryRuns(messages []model.Message, maxRuns int) []model.Message {
+	if len(messages) <= maxRuns {
+		return messages
+	}
+	startIdx := len(messages) - maxRuns
+
+	// Only scan the truncated prefix when the boundary actually falls on a
+	// tool-result message; otherwise there's nothing to skip.
+	if messages[startIdx].Role != model.RoleTool || messages[startIdx].ToolID == "" {
+		return messages[startIdx:]
+	}
+
+	// Collect tool-call IDs that will be truncated (before startIdx).
+	truncatedToolIDs := make(map[string]struct{})
+	for i := 0; i < startIdx; i++ {
+		for _, tc := range messages[i].ToolCalls {
+			if tc.ID != "" {
+				truncatedToolIDs[tc.ID] = struct{}{}
+			}
+		}
+	}
+
+	// Skip orphaned tool results whose corresponding call was truncated.
+	for startIdx < len(messages) &&
+		messages[startIdx].Role == model.RoleTool &&
+		messages[startIdx].ToolID != "" {
+		if _, orphaned := truncatedToolIDs[messages[startIdx].ToolID]; orphaned {
+			startIdx++
+			continue
+		}
+		break
+	}
+
+	return messages[startIdx:]
 }
 
 // processReasoningContent applies reasoning content stripping based on the
