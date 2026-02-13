@@ -23,6 +23,24 @@ var backgroundToolCreators = map[string]func() tool.CallableTool{
 	memory.ClearToolName:  memorytool.NewClearTool,
 }
 
+// filterTools returns a new tool map containing only tools that are
+// enabled by the given map. A nil or empty map means all tools are enabled.
+func filterTools(
+	all map[string]tool.Tool,
+	enabled map[string]bool,
+) map[string]tool.Tool {
+	if len(enabled) == 0 {
+		return all
+	}
+	filtered := make(map[string]tool.Tool, len(all))
+	for name, t := range all {
+		if enabled[name] {
+			filtered[name] = t
+		}
+	}
+	return filtered
+}
+
 // backgroundTools is the pre-built map of background tools for model request.
 // These tools are declaration-only and not callable.
 var backgroundTools = func() map[string]tool.Tool {

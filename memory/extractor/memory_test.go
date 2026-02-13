@@ -500,7 +500,10 @@ func TestExtractor_BuildSystemPrompt_EmptyExisting(t *testing.T) {
 
 	prompt := extractor.buildSystemPrompt(nil)
 
-	assert.Equal(t, defaultPrompt, prompt)
+	// Prompt always includes available_actions now.
+	assert.Contains(t, prompt, defaultPrompt)
+	assert.Contains(t, prompt, "<available_actions>")
+	assert.Contains(t, prompt, "</available_actions>")
 	assert.NotContains(t, prompt, "<existing_memories>")
 }
 
@@ -546,7 +549,7 @@ func TestExtractor_ParseToolCall_InvalidJSON(t *testing.T) {
 func TestExtractor_ParseToolCall_UnknownTool(t *testing.T) {
 	m := &mockModel{name: "test-model"}
 	e := NewExtractor(m)
-	extractor := e.(*memoryExtractor)
+	ext := e.(*memoryExtractor)
 
 	args, _ := json.Marshal(map[string]any{
 		"memory": "test",
@@ -559,6 +562,175 @@ func TestExtractor_ParseToolCall_UnknownTool(t *testing.T) {
 		},
 	}
 
-	op := extractor.parseToolCall(context.Background(), call)
+	op := ext.parseToolCall(context.Background(), call)
 	assert.Nil(t, op)
+}
+
+func TestExtractor_SetEnabledTools(t *testing.T) {
+	m := &mockModel{name: "test-model"}
+	e := NewExtractor(m)
+	ext := e.(*memoryExtractor)
+
+	t.Run("set enabled tools", func(t *testing.T) {
+		enabled := map[string]bool{
+			memory.AddToolName:   true,
+			memory.ClearToolName: false,
+		}
+		ext.SetEnabledTools(enabled)
+		assert.Equal(t, true, ext.enabledTools[memory.AddToolName])
+		assert.Equal(t, false, ext.enabledTools[memory.ClearToolName])
+	})
+
+	t.Run("copies map to prevent mutation", func(t *testing.T) {
+		orig := map[string]bool{
+			memory.AddToolName: true,
+		}
+		ext.SetEnabledTools(orig)
+		// Mutate the original map.
+		orig[memory.AddToolName] = false
+		// The extractor's copy should be unchanged.
+		assert.Equal(t, true, ext.enabledTools[memory.AddToolName])
+	})
+
+	t.Run("nil resets", func(t *testing.T) {
+		ext.SetEnabledTools(map[string]bool{
+			memory.AddToolName: true,
+		})
+		assert.NotNil(t, ext.enabledTools)
+		ext.SetEnabledTools(nil)
+		assert.Nil(t, ext.enabledTools)
+	})
+}
+
+func TestFilterTools(t *testing.T) {
+	// Use the package-level backgroundTools map.
+	all := backgroundTools
+
+	t.Run("nil enabled returns all", func(t *testing.T) {
+		result := filterTools(all, nil)
+		assert.Equal(t, all, result)
+	})
+
+	t.Run("empty enabled returns all", func(t *testing.T) {
+		result := filterTools(all, map[string]bool{})
+		assert.Equal(t, all, result)
+	})
+
+	t.Run("filters disabled tools", func(t *testing.T) {
+		enabled := map[string]bool{
+			memory.AddToolName:    true,
+			memory.UpdateToolName: true,
+			memory.DeleteToolName: false,
+			memory.ClearToolName:  false,
+		}
+		result := filterTools(all, enabled)
+		assert.Len(t, result, 2)
+		assert.Contains(t, result, memory.AddToolName)
+		assert.Contains(t, result, memory.UpdateToolName)
+		assert.NotContains(t, result, memory.DeleteToolName)
+		assert.NotContains(t, result, memory.ClearToolName)
+	})
+
+	t.Run("missing keys treated as disabled", func(t *testing.T) {
+		enabled := map[string]bool{
+			memory.AddToolName: true,
+		}
+		result := filterTools(all, enabled)
+		assert.Len(t, result, 1)
+		assert.Contains(t, result, memory.AddToolName)
+	})
+}
+
+func TestExtractor_AvailableActionsBlock(t *testing.T) {
+	m := &mockModel{name: "test-model"}
+	e := NewExtractor(m)
+	ext := e.(*memoryExtractor)
+
+	t.Run("all tools enabled by default", func(t *testing.T) {
+		block := ext.availableActionsBlock()
+		assert.Contains(t, block, memory.AddToolName)
+		assert.Contains(t, block, memory.UpdateToolName)
+		assert.Contains(t, block, memory.DeleteToolName)
+		assert.Contains(t, block, memory.ClearToolName)
+	})
+
+	t.Run("only enabled tools shown", func(t *testing.T) {
+		ext.SetEnabledTools(map[string]bool{
+			memory.AddToolName:    true,
+			memory.UpdateToolName: true,
+			memory.DeleteToolName: false,
+			memory.ClearToolName:  false,
+		})
+		block := ext.availableActionsBlock()
+		assert.Contains(t, block, memory.AddToolName)
+		assert.Contains(t, block, memory.UpdateToolName)
+		assert.NotContains(t, block, memory.DeleteToolName)
+		assert.NotContains(t, block, memory.ClearToolName)
+		// Reset.
+		ext.SetEnabledTools(nil)
+	})
+
+	t.Run("no tools enabled", func(t *testing.T) {
+		ext.SetEnabledTools(map[string]bool{
+			memory.AddToolName:    false,
+			memory.UpdateToolName: false,
+			memory.DeleteToolName: false,
+			memory.ClearToolName:  false,
+		})
+		block := ext.availableActionsBlock()
+		assert.Contains(t, block, "No actions available.")
+		// Reset.
+		ext.SetEnabledTools(nil)
+	})
+}
+
+func TestExtractor_Extract_FilteredTools(t *testing.T) {
+	args, _ := json.Marshal(map[string]any{
+		"memory": "User likes coffee.",
+	})
+	m := newMockModelWithToolCalls([]model.ToolCall{
+		makeToolCall(memory.AddToolName, args),
+	})
+	e := NewExtractor(m)
+	ext := e.(*memoryExtractor)
+
+	// Only enable add tool.
+	ext.SetEnabledTools(map[string]bool{
+		memory.AddToolName:    true,
+		memory.UpdateToolName: false,
+		memory.DeleteToolName: false,
+		memory.ClearToolName:  false,
+	})
+
+	ops, err := e.Extract(context.Background(), []model.Message{
+		model.NewUserMessage("I love coffee."),
+	}, nil)
+
+	require.NoError(t, err)
+	require.Len(t, ops, 1)
+
+	// Verify the model request only contains enabled tools.
+	require.NotNil(t, m.lastRequest)
+	assert.Len(t, m.lastRequest.Tools, 1)
+	for name := range m.lastRequest.Tools {
+		assert.Equal(t, memory.AddToolName, name)
+	}
+}
+
+func TestExtractor_EnabledToolsConfigurer(t *testing.T) {
+	m := &mockModel{name: "test-model"}
+	e := NewExtractor(m)
+
+	// Verify the concrete type implements EnabledToolsConfigurer.
+	configurer, ok := e.(EnabledToolsConfigurer)
+	require.True(t, ok)
+
+	enabled := map[string]bool{
+		memory.AddToolName: true,
+	}
+	configurer.SetEnabledTools(enabled)
+
+	// Verify through the internal state.
+	ext := e.(*memoryExtractor)
+	assert.Equal(t, true, ext.enabledTools[memory.AddToolName])
 }

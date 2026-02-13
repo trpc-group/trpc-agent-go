@@ -45,6 +45,12 @@ type AutoMemoryConfig struct {
 	AsyncMemoryNum   int
 	MemoryQueueSize  int
 	MemoryJobTimeout time.Duration
+	// EnabledTools controls which memory operations the worker
+	// is allowed to execute. When non-empty, only operations
+	// whose corresponding tool name maps to true are executed;
+	// others are silently skipped. A nil or empty map means all
+	// operations are allowed (default).
+	EnabledTools map[string]bool
 }
 
 // MemoryOperator defines the interface for memory operations.
@@ -287,12 +293,33 @@ func (w *AutoMemoryWorker) createAutoMemory(
 	return nil
 }
 
+// operationToolName maps an operation type to the corresponding
+// memory tool name for enabled-tools gating.
+var operationToolName = map[extractor.OperationType]string{
+	extractor.OperationAdd:    memory.AddToolName,
+	extractor.OperationUpdate: memory.UpdateToolName,
+	extractor.OperationDelete: memory.DeleteToolName,
+	extractor.OperationClear:  memory.ClearToolName,
+}
+
 // executeOperation executes a single memory operation.
+// Operations whose tool is disabled in config.EnabledTools are
+// silently skipped.
 func (w *AutoMemoryWorker) executeOperation(
 	ctx context.Context,
 	userKey memory.UserKey,
 	op *extractor.Operation,
 ) {
+	if et := w.config.EnabledTools; len(et) > 0 {
+		if name, ok := operationToolName[op.Type]; ok && !et[name] {
+			log.DebugfContext(ctx,
+				"auto_memory: skipping disabled %s "+
+					"operation for user %s/%s",
+				op.Type, userKey.AppName, userKey.UserID)
+			return
+		}
+	}
+
 	switch op.Type {
 	case extractor.OperationAdd:
 		if err := w.operator.AddMemory(ctx, userKey, op.Memory, op.Topics); err != nil {

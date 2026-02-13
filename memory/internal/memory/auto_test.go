@@ -654,6 +654,84 @@ func TestAutoMemoryWorker_ExecuteOperation_Errors(t *testing.T) {
 	})
 }
 
+func TestAutoMemoryWorker_ExecuteOperation_DisabledByEnabledTools(t *testing.T) {
+	userKey := memory.UserKey{AppName: "test-app", UserID: "user-1"}
+
+	t.Run("clear disabled", func(t *testing.T) {
+		op := newMockOperator()
+		worker := &AutoMemoryWorker{
+			config: AutoMemoryConfig{
+				EnabledTools: map[string]bool{
+					memory.AddToolName:    true,
+					memory.UpdateToolName: true,
+					memory.DeleteToolName: true,
+					memory.ClearToolName:  false,
+				},
+			},
+			operator: op,
+		}
+		worker.executeOperation(
+			context.Background(), userKey,
+			&extractor.Operation{Type: extractor.OperationClear},
+		)
+		assert.Equal(t, 0, op.clearCalls)
+	})
+
+	t.Run("add disabled", func(t *testing.T) {
+		op := newMockOperator()
+		worker := &AutoMemoryWorker{
+			config: AutoMemoryConfig{
+				EnabledTools: map[string]bool{
+					memory.AddToolName: false,
+				},
+			},
+			operator: op,
+		}
+		worker.executeOperation(
+			context.Background(), userKey,
+			&extractor.Operation{
+				Type:   extractor.OperationAdd,
+				Memory: "should be skipped",
+			},
+		)
+		assert.Equal(t, 0, op.addCalls)
+	})
+
+	t.Run("enabled tools allows operation", func(t *testing.T) {
+		op := newMockOperator()
+		worker := &AutoMemoryWorker{
+			config: AutoMemoryConfig{
+				EnabledTools: map[string]bool{
+					memory.AddToolName:   true,
+					memory.ClearToolName: false,
+				},
+			},
+			operator: op,
+		}
+		worker.executeOperation(
+			context.Background(), userKey,
+			&extractor.Operation{
+				Type:   extractor.OperationAdd,
+				Memory: "allowed",
+			},
+		)
+		assert.Equal(t, 1, op.addCalls)
+	})
+
+	t.Run("nil enabled tools allows all", func(t *testing.T) {
+		op := newMockOperator()
+		worker := &AutoMemoryWorker{
+			config:   AutoMemoryConfig{},
+			operator: op,
+		}
+		worker.executeOperation(
+			context.Background(), userKey,
+			&extractor.Operation{Type: extractor.OperationClear},
+		)
+		assert.Equal(t, 1, op.clearCalls)
+	})
+}
+
 func TestHashUserKey(t *testing.T) {
 	tests := []struct {
 		name    string
