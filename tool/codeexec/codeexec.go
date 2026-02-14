@@ -153,10 +153,37 @@ func (t *executeCodeTool) Declaration() *tool.Declaration {
 }
 
 // Call executes the code and returns the result.
+// code_blocks may be a JSON array or a JSON string containing the array (LLM quirk).
 func (t *executeCodeTool) Call(ctx context.Context, args []byte) (any, error) {
-	var input codeexecutor.CodeExecutionInput
-	if err := json.Unmarshal(args, &input); err != nil {
+	aux := &struct {
+		CodeBlocks  json.RawMessage `json:"code_blocks"`
+		ExecutionID string          `json:"execution_id,omitempty"`
+	}{}
+	if err := json.Unmarshal(args, aux); err != nil {
 		return nil, err
+	}
+	var blocks []codeexecutor.CodeBlock
+	if len(aux.CodeBlocks) > 0 {
+		raw := aux.CodeBlocks
+		// If the LLM double-encoded the array as a JSON string, unwrap it first.
+		if raw[0] == '"' {
+			var s string
+			if err := json.Unmarshal(raw, &s); err != nil {
+				return nil, err
+			}
+			raw = []byte(s)
+		}
+		// If the LLM sent a single object instead of an array, wrap it.
+		if raw[0] == '{' {
+			raw = append(append([]byte{'['}, raw...), ']')
+		}
+		if err := json.Unmarshal(raw, &blocks); err != nil {
+			return nil, err
+		}
+	}
+	input := codeexecutor.CodeExecutionInput{
+		CodeBlocks:  blocks,
+		ExecutionID: aux.ExecutionID,
 	}
 
 	// Best-effort validation. We return it as structured tool output (instead of Go error)
