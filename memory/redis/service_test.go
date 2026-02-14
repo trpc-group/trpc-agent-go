@@ -28,7 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-func TestGetUserMemKey(t *testing.T) {
+func TestBuildUserMemKey(t *testing.T) {
 	tests := []struct {
 		name     string
 		userKey  memory.UserKey
@@ -40,7 +40,7 @@ func TestGetUserMemKey(t *testing.T) {
 				AppName: "test-app",
 				UserID:  "test-user",
 			},
-			expected: "mem:{test-app}:test-user",
+			expected: "mem:{test-app:test-user}",
 		},
 		{
 			name: "user key with special characters",
@@ -48,16 +48,38 @@ func TestGetUserMemKey(t *testing.T) {
 				AppName: "my-app-123",
 				UserID:  "user_456",
 			},
-			expected: "mem:{my-app-123}:user_456",
+			expected: "mem:{my-app-123:user_456}",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			key := getUserMemKey(tt.userKey)
+			key := buildUserMemKey(tt.userKey)
 			assert.Equal(t, tt.expected, key)
 		})
 	}
+}
+
+func TestGetUserMemKeyWithPrefix(t *testing.T) {
+	url, cleanup := setupTestRedis(t)
+	defer cleanup()
+	svc, err := NewService(
+		WithRedisClientURL(url),
+		WithKeyPrefix("myapp"),
+	)
+	require.NoError(t, err)
+
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "test-user",
+	}
+	key := svc.getUserMemKey(userKey)
+	assert.Equal(t, "myapp:mem:{test-app:test-user}", key)
+}
+
+func TestPrefixedKey_NoDoubleColon(t *testing.T) {
+	s := &Service{opts: ServiceOpts{keyPrefix: "myapp:"}}
+	assert.Equal(t, "myapp:mem:{a:b}", s.prefixedKey("mem:{a:b}"))
 }
 
 func TestServiceOpts_Defaults(t *testing.T) {
@@ -172,11 +194,13 @@ func TestServiceOpts_CombinedOptions(t *testing.T) {
 	WithRedisClientURL("redis://localhost:6379")(&opts)
 	WithMemoryLimit(1000)(&opts)
 	WithRedisInstance("backup-instance")(&opts)
+	WithKeyPrefix("myprefix")(&opts)
 
 	// Verify all options are set correctly.
 	assert.Equal(t, "redis://localhost:6379", opts.url)
 	assert.Equal(t, 1000, opts.memoryLimit)
 	assert.Equal(t, "backup-instance", opts.instanceName)
+	assert.Equal(t, "myprefix", opts.keyPrefix)
 }
 
 func TestServiceOpts_ToolManagement(t *testing.T) {
@@ -566,6 +590,73 @@ func TestNewService_ConnectionSuccess(t *testing.T) {
 	assert.NotNil(t, entries)
 }
 
+func TestWithKeyPrefix(t *testing.T) {
+	opts := ServiceOpts{}
+	WithKeyPrefix("myprefix")(&opts)
+	assert.Equal(t, "myprefix", opts.keyPrefix)
+}
+
+func TestWithKeyPrefix_Empty(t *testing.T) {
+	opts := ServiceOpts{keyPrefix: "existing"}
+	WithKeyPrefix("")(&opts)
+	assert.Equal(t, "", opts.keyPrefix)
+}
+
+func TestService_WithKeyPrefix_E2E(t *testing.T) {
+	url, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	const prefix = "test-prefix"
+
+	svc, err := NewService(
+		WithRedisClientURL(url),
+		WithKeyPrefix(prefix),
+	)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "u1",
+	}
+
+	// Add a memory.
+	require.NoError(t, svc.AddMemory(
+		ctx, userKey, "hello world", []string{"greeting"},
+	))
+
+	// Read it back.
+	entries, err := svc.ReadMemories(ctx, userKey, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "hello world", entries[0].Memory.Memory)
+
+	// Verify the actual Redis key contains the prefix.
+	key := svc.getUserMemKey(userKey)
+	assert.Equal(
+		t,
+		prefix+":mem:{test-app:u1}",
+		key,
+	)
+
+	// Search should also work with prefix.
+	results, err := svc.SearchMemories(
+		ctx, userKey, "hello",
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+
+	// Different prefix = isolated data.
+	svc2, err := NewService(
+		WithRedisClientURL(url),
+		WithKeyPrefix("other-prefix"),
+	)
+	require.NoError(t, err)
+	entries2, err := svc2.ReadMemories(ctx, userKey, 10)
+	require.NoError(t, err)
+	assert.Len(t, entries2, 0)
+}
+
 func TestNewService_InstanceName_ConnectionFailure(t *testing.T) {
 	// Register an instance with invalid Redis address that will fail on ping.
 	storage.RegisterRedisInstance("test-instance-failure", storage.WithClientBuilderURL("redis://255.255.255.255:6379"))
@@ -732,7 +823,7 @@ func TestService_UpdateMemory_UnmarshalError(t *testing.T) {
 	require.Len(t, entries, 1)
 
 	// Manually corrupt the data in Redis to trigger unmarshal error
-	key := getUserMemKey(userKey)
+	key := svc.getUserMemKey(userKey)
 	svc.redisClient.HSet(ctx, key, entries[0].ID, []byte("invalid json"))
 
 	// Try to update - should get unmarshal error
@@ -753,7 +844,7 @@ func TestService_ReadMemories_UnmarshalError(t *testing.T) {
 	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
 
 	// Manually add corrupted data to Redis
-	key := getUserMemKey(userKey)
+	key := svc.getUserMemKey(userKey)
 	svc.redisClient.HSet(ctx, key, "corrupt-id", []byte("invalid json"))
 
 	// Try to read - should get unmarshal error
@@ -773,7 +864,7 @@ func TestService_SearchMemories_UnmarshalError(t *testing.T) {
 	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
 
 	// Manually add corrupted data to Redis
-	key := getUserMemKey(userKey)
+	key := svc.getUserMemKey(userKey)
 	svc.redisClient.HSet(ctx, key, "corrupt-id", []byte("invalid json"))
 
 	// Try to search - should get unmarshal error
