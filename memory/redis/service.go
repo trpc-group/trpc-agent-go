@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -119,7 +120,7 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryS
 	if err := userKey.CheckUserKey(); err != nil {
 		return err
 	}
-	key := getUserMemKey(userKey)
+	key := s.getUserMemKey(userKey)
 
 	// Enforce memory limit by HLen.
 	if s.opts.memoryLimit > 0 {
@@ -162,7 +163,7 @@ func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory
 	if err := memoryKey.CheckMemoryKey(); err != nil {
 		return err
 	}
-	key := getUserMemKey(memory.UserKey{AppName: memoryKey.AppName, UserID: memoryKey.UserID})
+	key := s.getUserMemKey(memory.UserKey{AppName: memoryKey.AppName, UserID: memoryKey.UserID})
 
 	bytes, err := s.redisClient.HGet(ctx, key, memoryKey.MemoryID).Bytes()
 	if err != nil {
@@ -194,7 +195,7 @@ func (s *Service) DeleteMemory(ctx context.Context, memoryKey memory.Key) error 
 	if err := memoryKey.CheckMemoryKey(); err != nil {
 		return err
 	}
-	key := getUserMemKey(memory.UserKey{AppName: memoryKey.AppName, UserID: memoryKey.UserID})
+	key := s.getUserMemKey(memory.UserKey{AppName: memoryKey.AppName, UserID: memoryKey.UserID})
 	if err := s.redisClient.HDel(ctx, key, memoryKey.MemoryID).Err(); err != nil && err != redis.Nil {
 		return fmt.Errorf("delete memory entry failed: %w", err)
 	}
@@ -206,7 +207,7 @@ func (s *Service) ClearMemories(ctx context.Context, userKey memory.UserKey) err
 	if err := userKey.CheckUserKey(); err != nil {
 		return err
 	}
-	key := getUserMemKey(userKey)
+	key := s.getUserMemKey(userKey)
 	if err := s.redisClient.Del(ctx, key).Err(); err != nil && err != redis.Nil {
 		return fmt.Errorf("clear memories failed: %w", err)
 	}
@@ -218,7 +219,7 @@ func (s *Service) ReadMemories(ctx context.Context, userKey memory.UserKey, limi
 	if err := userKey.CheckUserKey(); err != nil {
 		return nil, err
 	}
-	key := getUserMemKey(userKey)
+	key := s.getUserMemKey(userKey)
 	all, err := s.redisClient.HGetAll(ctx, key).Result()
 	if err == redis.Nil {
 		return []*memory.Entry{}, nil
@@ -253,7 +254,7 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 	if err := userKey.CheckUserKey(); err != nil {
 		return nil, err
 	}
-	key := getUserMemKey(userKey)
+	key := s.getUserMemKey(userKey)
 	all, err := s.redisClient.HGetAll(ctx, key).Result()
 	if err == redis.Nil {
 		return []*memory.Entry{}, nil
@@ -312,7 +313,41 @@ func (s *Service) Close() error {
 	return nil
 }
 
-// getUserMemKey builds the Redis key for a user's memories.
-func getUserMemKey(userKey memory.UserKey) string {
-	return fmt.Sprintf("mem:{%s}:%s", userKey.AppName, userKey.UserID)
+// prefixedKey adds the configured key prefix to the given base key.
+// If no prefix is configured, returns the base key unchanged.
+//
+// Note: If the prefix already ends with ':', do not add another ':' to avoid
+// generating keys like "pfx::mem:{...}".
+func (s *Service) prefixedKey(base string) string {
+	prefix := s.opts.keyPrefix
+	if prefix == "" {
+		return base
+	}
+	if strings.HasSuffix(prefix, ":") {
+		return prefix + base
+	}
+	return prefix + ":" + base
+}
+
+// buildUserMemKey builds the Redis base key (without keyPrefix) for a user's
+// memories.
+//
+// In Redis Cluster, only the substring inside `{...}` determines the hash slot.
+// The hash tag includes both AppName and UserID so that each user's hash is
+// independently distributed across slots.
+//
+// Key format change: the hash tag was changed from {AppName} to {AppName:UserID}
+// for better cluster slot distribution. If you are upgrading from a version that
+// used the old key format "mem:{AppName}:UserID", you must migrate your data.
+// See the memory documentation for migration instructions.
+func buildUserMemKey(userKey memory.UserKey) string {
+	return fmt.Sprintf(
+		"mem:{%s:%s}",
+		userKey.AppName,
+		userKey.UserID,
+	)
+}
+
+func (s *Service) getUserMemKey(userKey memory.UserKey) string {
+	return s.prefixedKey(buildUserMemKey(userKey))
 }
