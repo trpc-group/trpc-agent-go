@@ -654,6 +654,80 @@ func TestAutoMemoryWorker_ExecuteOperation_Errors(t *testing.T) {
 	})
 }
 
+func TestAutoMemoryWorker_ExecuteOperation_DisabledByEnabledTools(t *testing.T) {
+	userKey := memory.UserKey{AppName: "test-app", UserID: "user-1"}
+
+	t.Run("clear disabled", func(t *testing.T) {
+		op := newMockOperator()
+		worker := &AutoMemoryWorker{
+			config: AutoMemoryConfig{
+				EnabledTools: map[string]struct{}{
+					memory.AddToolName:    {},
+					memory.UpdateToolName: {},
+					memory.DeleteToolName: {},
+				},
+			},
+			operator: op,
+		}
+		worker.executeOperation(
+			context.Background(), userKey,
+			&extractor.Operation{Type: extractor.OperationClear},
+		)
+		assert.Equal(t, 0, op.clearCalls)
+	})
+
+	t.Run("add disabled", func(t *testing.T) {
+		op := newMockOperator()
+		worker := &AutoMemoryWorker{
+			config: AutoMemoryConfig{
+				EnabledTools: map[string]struct{}{},
+			},
+			operator: op,
+		}
+		worker.executeOperation(
+			context.Background(), userKey,
+			&extractor.Operation{
+				Type:   extractor.OperationAdd,
+				Memory: "should be skipped",
+			},
+		)
+		assert.Equal(t, 0, op.addCalls)
+	})
+
+	t.Run("enabled tools allows operation", func(t *testing.T) {
+		op := newMockOperator()
+		worker := &AutoMemoryWorker{
+			config: AutoMemoryConfig{
+				EnabledTools: map[string]struct{}{
+					memory.AddToolName: {},
+				},
+			},
+			operator: op,
+		}
+		worker.executeOperation(
+			context.Background(), userKey,
+			&extractor.Operation{
+				Type:   extractor.OperationAdd,
+				Memory: "allowed",
+			},
+		)
+		assert.Equal(t, 1, op.addCalls)
+	})
+
+	t.Run("nil enabled tools allows all", func(t *testing.T) {
+		op := newMockOperator()
+		worker := &AutoMemoryWorker{
+			config:   AutoMemoryConfig{},
+			operator: op,
+		}
+		worker.executeOperation(
+			context.Background(), userKey,
+			&extractor.Operation{Type: extractor.OperationClear},
+		)
+		assert.Equal(t, 1, op.clearCalls)
+	})
+}
+
 func TestHashUserKey(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -1143,4 +1217,36 @@ func TestAutoMemoryWorker_WritesLastExtractAt_OnSuccess(t *testing.T) {
 	ts, parseErr := time.Parse(time.RFC3339Nano, string(raw))
 	require.NoError(t, parseErr)
 	assert.True(t, ts.Equal(t2.UTC()))
+}
+
+// configurableExtractor is a mock extractor implementing
+// EnabledToolsConfigurer for testing.
+type configurableExtractor struct {
+	mockExtractor
+	enabledTools map[string]struct{}
+}
+
+func (e *configurableExtractor) SetEnabledTools(
+	enabled map[string]struct{},
+) {
+	e.enabledTools = enabled
+}
+
+func TestConfigureExtractorEnabledTools(t *testing.T) {
+	t.Run("configurer receives enabled tools", func(t *testing.T) {
+		ext := &configurableExtractor{}
+		enabled := map[string]struct{}{
+			memory.AddToolName: {},
+		}
+		ConfigureExtractorEnabledTools(ext, enabled)
+		assert.Equal(t, enabled, ext.enabledTools)
+	})
+
+	t.Run("non-configurer is no-op", func(t *testing.T) {
+		ext := &mockExtractor{}
+		// Should not panic.
+		ConfigureExtractorEnabledTools(ext, map[string]struct{}{
+			memory.AddToolName: {},
+		})
+	})
 }
