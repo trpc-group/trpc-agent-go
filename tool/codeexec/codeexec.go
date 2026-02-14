@@ -10,6 +10,7 @@
 package codeexec
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -165,16 +166,19 @@ func (t *executeCodeTool) Call(ctx context.Context, args []byte) (any, error) {
 	var blocks []codeexecutor.CodeBlock
 	if len(aux.CodeBlocks) > 0 {
 		raw := aux.CodeBlocks
+		trimmed := bytes.TrimLeft(raw, " \t\r\n")
+
 		// If the LLM double-encoded the array as a JSON string, unwrap it first.
-		if raw[0] == '"' {
+		if len(trimmed) > 0 && trimmed[0] == '"' {
 			var s string
 			if err := json.Unmarshal(raw, &s); err != nil {
 				return nil, err
 			}
 			raw = []byte(s)
+			trimmed = bytes.TrimLeft(raw, " \t\r\n")
 		}
 		// If the LLM sent a single object instead of an array, wrap it.
-		if raw[0] == '{' {
+		if len(trimmed) > 0 && trimmed[0] == '{' {
 			raw = append(append([]byte{'['}, raw...), ']')
 		}
 		if err := json.Unmarshal(raw, &blocks); err != nil {
