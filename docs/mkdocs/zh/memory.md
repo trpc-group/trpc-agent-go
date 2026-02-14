@@ -884,11 +884,21 @@ redisService, err := memoryredis.NewService(
 - `WithRedisClientURL(url)`: Redis 连接 URL（推荐）
 - `WithRedisInstance(name)`: 使用预注册的 Redis 实例
 - `WithMemoryLimit(limit)`: 每用户记忆上限
+- `WithKeyPrefix(prefix)`: 设置 Redis key 前缀。设置后所有 key 都会以 `prefix:` 开头。例如 `prefix` 为 `"myapp"` 时，key `mem:{app:user}` 变为 `myapp:mem:{app:user}`。默认为空（无前缀）。适用于多环境或多服务共享同一 Redis 实例的场景
 - `WithCustomTool(toolName, creator)`: 注册自定义工具
 - `WithToolEnabled(toolName, enabled)`: 启用/禁用工具
 - `WithExtraOptions(...options)`: 传递给 Redis 客户端的额外选项
 
 **注意**：`WithRedisClientURL` 优先级高于 `WithRedisInstance`
+
+**Key 前缀示例**：
+
+```go
+redisService, err := memoryredis.NewService(
+    memoryredis.WithRedisClientURL("redis://localhost:6379"),
+    memoryredis.WithKeyPrefix("prod"),
+)
+```
 
 ### MySQL 存储
 
