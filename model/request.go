@@ -38,6 +38,8 @@ const (
 	ThinkingTokensKey = "thinking_tokens"
 	// ReasoningContentKey is the key used for reasoning content in API responses.
 	ReasoningContentKey = "reasoning_content"
+	// ReasoningContentKeyAlt is the alternative key used by some providers (e.g. Ollama).
+	ReasoningContentKeyAlt = "reasoning"
 	// EnabledThinkingKey is the key used for enabling thinking mode in API requests e.g. Qwen model.
 	EnabledThinkingKey = "enabled_thinking"
 )
