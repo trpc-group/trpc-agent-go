@@ -23,7 +23,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -162,6 +164,167 @@ func TestExecuteToolCall(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, choices, 1)
 	assert.Equal(t, string(res), choices[0].Message.Content)
+}
+
+func TestExecuteToolCall_EvictLargeToolResult(t *testing.T) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+
+	svc := inmemory.NewService()
+	sess := session.NewSession("app", "user", "session")
+	limit := 5
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationArtifactService(svc),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RuntimeState: map[string]any{
+				toolTokenLimitBeforeEvictKey: limit,
+			},
+		}),
+	)
+	ctx = agent.NewInvocationContext(ctx, inv)
+
+	large := strings.Repeat("a", toolResultChunkRunes+10)
+	tools := map[string]tool.Tool{
+		"echo": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "echo", Description: "echo tool"},
+			callFn: func(_ context.Context, args []byte) (any, error) {
+				return large, nil
+			},
+		},
+	}
+
+	pc := model.ToolCall{
+		ID: "call-1",
+		Function: model.FunctionDefinitionParam{
+			Name:      "echo",
+			Arguments: []byte(`{}`),
+		},
+	}
+
+	_, choices, _, _, err := p.executeToolCall(ctx, inv, pc, tools, 0, nil)
+	require.NoError(t, err)
+	require.Len(t, choices, 1)
+
+	var payload toolResultEvictedPayload
+	require.NoError(t, json.Unmarshal([]byte(choices[0].Message.Content), &payload))
+	require.True(t, strings.HasPrefix(payload.Ref, fileref.ArtifactPrefix))
+	require.NotEmpty(t, payload.Preview)
+	require.True(t, strings.HasSuffix(payload.Preview, "..."))
+	require.Contains(t, payload.Hint, "read_file")
+
+	content, _, handled, err := fileref.TryRead(ctx, payload.Ref)
+	require.NoError(t, err)
+	require.True(t, handled)
+
+	assert.Contains(t, content, "\n")
+	assert.Equal(t, large, strings.ReplaceAll(content, "\n", ""))
+}
+
+func TestExecuteToolCall_InlineSmallResult(t *testing.T) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+
+	svc := inmemory.NewService()
+	sess := session.NewSession("app", "user", "session")
+	limit := 5
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationArtifactService(svc),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RuntimeState: map[string]any{
+				toolTokenLimitBeforeEvictKey: limit,
+			},
+		}),
+	)
+	ctx = agent.NewInvocationContext(ctx, inv)
+
+	small := strings.Repeat("a", 10)
+	tools := map[string]tool.Tool{
+		"echo": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "echo", Description: "echo tool"},
+			callFn: func(_ context.Context, args []byte) (any, error) {
+				return small, nil
+			},
+		},
+	}
+
+	pc := model.ToolCall{
+		ID: "call-2",
+		Function: model.FunctionDefinitionParam{
+			Name:      "echo",
+			Arguments: []byte(`{}`),
+		},
+	}
+
+	_, choices, _, _, err := p.executeToolCall(ctx, inv, pc, tools, 0, nil)
+	require.NoError(t, err)
+	require.Len(t, choices, 1)
+
+	expectedBytes, err := json.Marshal(small)
+	require.NoError(t, err)
+	assert.Equal(t, string(expectedBytes), choices[0].Message.Content)
+}
+
+func TestExecuteToolCall_ToolResultMessagesCallback_EvictsLargeResult(t *testing.T) {
+	ctx := context.Background()
+
+	limit := 5
+	large := strings.Repeat("b", toolResultChunkRunes+10)
+	callbacks := &tool.Callbacks{}
+	callbacks.RegisterToolResultMessages(func(_ context.Context, in *tool.ToolResultMessagesInput) (any, error) {
+		return model.Message{
+			Role:    model.RoleTool,
+			Content: large,
+			ToolID:  in.ToolCallID,
+		}, nil
+	})
+	p := NewFunctionCallResponseProcessor(false, callbacks)
+
+	svc := inmemory.NewService()
+	sess := session.NewSession("app", "user", "session")
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationArtifactService(svc),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RuntimeState: map[string]any{
+				toolTokenLimitBeforeEvictKey: limit,
+			},
+		}),
+	)
+	ctx = agent.NewInvocationContext(ctx, inv)
+
+	tools := map[string]tool.Tool{
+		"echo": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "echo", Description: "echo tool"},
+			callFn: func(_ context.Context, args []byte) (any, error) {
+				return string(args), nil
+			},
+		},
+	}
+	pc := model.ToolCall{
+		ID: "call-3",
+		Function: model.FunctionDefinitionParam{
+			Name:      "echo",
+			Arguments: []byte(`{}`),
+		},
+	}
+
+	_, choices, _, _, err := p.executeToolCall(ctx, inv, pc, tools, 0, nil)
+	require.NoError(t, err)
+	require.Len(t, choices, 1)
+
+	var payload toolResultEvictedPayload
+	require.NoError(t, json.Unmarshal([]byte(choices[0].Message.Content), &payload))
+	require.True(t, strings.HasPrefix(payload.Ref, fileref.ArtifactPrefix))
+	require.NotEmpty(t, payload.Preview)
+	require.Contains(t, payload.Hint, "read_file")
+
+	content, _, handled, err := fileref.TryRead(ctx, payload.Ref)
+	require.NoError(t, err)
+	require.True(t, handled)
+	assert.Contains(t, content, "\n")
+	assert.Equal(t, large, strings.ReplaceAll(content, "\n", ""))
 }
 
 func TestExecuteToolCall_ToolResultMessagesCallback_Nil_NoOverride(t *testing.T) {
