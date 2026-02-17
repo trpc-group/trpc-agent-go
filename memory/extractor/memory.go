@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -31,6 +32,8 @@ type memoryExtractor struct {
 	model    model.Model
 	prompt   string
 	checkers []Checker
+
+	enabledTools map[string]struct{}
 
 	// modelCallbacks configures before/after model callbacks for extraction.
 	modelCallbacks *model.Callbacks
@@ -106,9 +109,13 @@ func (e *memoryExtractor) Extract(
 	}
 
 	// Build request with tool declarations.
+	tools := backgroundTools
+	if len(e.enabledTools) > 0 {
+		tools = filterTools(backgroundTools, e.enabledTools)
+	}
 	req := &model.Request{
 		Messages: e.buildMessages(messages, existing),
-		Tools:    backgroundTools,
+		Tools:    tools,
 	}
 
 	// Call model.
@@ -164,6 +171,15 @@ func (e *memoryExtractor) SetModel(m model.Model) {
 	}
 }
 
+// SetEnabledTools updates the enabled tool flags for background
+// operations. The map is defensively copied to prevent external
+// mutation.
+func (e *memoryExtractor) SetEnabledTools(
+	enabled map[string]struct{},
+) {
+	e.enabledTools = maps.Clone(enabled)
+}
+
 // ShouldExtract checks if extraction should be triggered based on context.
 // Returns true if extraction should proceed, false to skip.
 // When no checkers are configured, always returns true.
@@ -212,21 +228,76 @@ func (e *memoryExtractor) buildMessages(
 	return result
 }
 
-// buildSystemPrompt builds the system prompt with existing memories.
-func (e *memoryExtractor) buildSystemPrompt(existing []*memory.Entry) string {
-	if len(existing) == 0 {
-		return e.prompt
-	}
-
+// buildSystemPrompt builds the system prompt with existing memories
+// and available actions based on enabled tools.
+func (e *memoryExtractor) buildSystemPrompt(
+	existing []*memory.Entry,
+) string {
 	var sb strings.Builder
 	sb.WriteString(e.prompt)
-	sb.WriteString("\n<existing_memories>\n")
-	for _, entry := range existing {
-		if entry.Memory != nil {
-			fmt.Fprintf(&sb, "- [%s] %s\n", entry.ID, entry.Memory.Memory)
+
+	// Append available actions.
+	sb.WriteString("\n<available_actions>\n")
+	sb.WriteString(e.availableActionsBlock())
+	sb.WriteString("</available_actions>\n")
+
+	// Append existing memories.
+	if len(existing) > 0 {
+		sb.WriteString("\n<existing_memories>\n")
+		for _, entry := range existing {
+			if entry.Memory != nil {
+				fmt.Fprintf(&sb,
+					"- [%s] %s\n", entry.ID, entry.Memory.Memory)
+			}
 		}
+		sb.WriteString("</existing_memories>\n")
 	}
-	sb.WriteString("</existing_memories>\n")
+
+	return sb.String()
+}
+
+// toolActionDescriptions maps background tool names to their
+// one-line descriptions shown in the system prompt.
+var toolActionDescriptions = map[string]string{
+	memory.AddToolName: "Add a new memory " +
+		"(only if genuinely new information).",
+	memory.UpdateToolName: "Update an existing memory " +
+		"with new or corrected information. " +
+		"Prefer updating over adding a near-duplicate.",
+	memory.DeleteToolName: "Delete a memory " +
+		"when the user explicitly asks to forget something.",
+	memory.ClearToolName: "Clear all memories " +
+		"only when the user explicitly asks to forget everything.",
+}
+
+// toolActionOrder controls the deterministic output order.
+var toolActionOrder = []string{
+	memory.AddToolName,
+	memory.UpdateToolName,
+	memory.DeleteToolName,
+	memory.ClearToolName,
+}
+
+// availableActionsBlock returns the text lines describing which
+// memory tools the model is allowed to call.
+func (e *memoryExtractor) availableActionsBlock() string {
+	var sb strings.Builder
+	for _, name := range toolActionOrder {
+		// Skip tools that are disabled.
+		if e.enabledTools != nil {
+			if _, ok := e.enabledTools[name]; !ok {
+				continue
+			}
+		}
+		desc, ok := toolActionDescriptions[name]
+		if !ok {
+			continue
+		}
+		fmt.Fprintf(&sb, "- %s: %s\n", name, desc)
+	}
+	if sb.Len() == 0 {
+		sb.WriteString("No actions available.\n")
+	}
 	return sb.String()
 }
 
@@ -315,15 +386,25 @@ Your task is to analyze the conversation and manage user memories.
 3. Determine if any memories need to be added, updated, or deleted.
 4. You can call multiple tools in parallel to handle all necessary changes at once.
 5. Use the available tools to make the necessary changes.
+6. If no memory changes are needed, do not call any tools.
 </instructions>
 
 <guidelines>
-- Create memories in the third person, e.g., "User enjoys hiking on weekends."
-- Keep each memory focused on a single piece of information.
-- Make multiple tool calls in a single response when you identify multiple distinct pieces of information.
-- Use update when information changes or needs to be appended.
+- Create memories as brief, third-person statements that capture key
+  information, e.g., "User enjoys hiking on weekends."
+- Keep each memory focused on a single piece of information. Create
+  multiple memories if needed rather than one long complex memory.
+- Do not repeat the same information in multiple memories; update
+  existing memories instead.
+- When updating a memory, append new information to the existing
+  memory rather than completely overwriting it.
+- When a user's preferences change, update the relevant memory to
+  reflect the new state.
 - Only use delete when the user explicitly asks to forget something.
-- Use the same language for topics as you use for the memory content.
+- Only use clear when the user explicitly asks to forget everything.
+- Write memory content and topics in the same language as the user's
+  input message. For example, if the user writes in Chinese, write
+  memories and topics in Chinese.
 - Do not create memories for:
   - Transient requests or questions
   - Information already captured in existing memories

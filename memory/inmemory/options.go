@@ -11,6 +11,7 @@
 package inmemory
 
 import (
+	"maps"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -34,7 +35,7 @@ type serviceOpts struct {
 	// toolCreators are functions to build tools after service creation.
 	toolCreators map[string]memory.ToolCreator
 	// enabledTools are the names of tools to enable.
-	enabledTools map[string]bool
+	enabledTools map[string]struct{}
 	// userExplicitlySet tracks which tools were explicitly set by user via WithToolEnabled.
 	userExplicitlySet map[string]bool
 
@@ -56,10 +57,7 @@ func (o serviceOpts) clone() serviceOpts {
 		opts.toolCreators[name] = toolCreator
 	}
 
-	opts.enabledTools = make(map[string]bool, len(o.enabledTools))
-	for name, enabled := range o.enabledTools {
-		opts.enabledTools[name] = enabled
-	}
+	opts.enabledTools = maps.Clone(o.enabledTools)
 
 	// Initialize userExplicitlySet map (empty for new clone).
 	opts.userExplicitlySet = make(map[string]bool)
@@ -87,21 +85,25 @@ func WithCustomTool(toolName string, creator memory.ToolCreator) ServiceOpt {
 			return
 		}
 		opts.toolCreators[toolName] = creator
-		opts.enabledTools[toolName] = true
+		opts.enabledTools[toolName] = struct{}{}
 	}
 }
 
 // WithToolEnabled sets which tool is enabled.
 // If the tool name is invalid, this option will do nothing.
-// User settings via WithToolEnabled take precedence over auto mode defaults,
-// regardless of option order.
+// User settings via WithToolEnabled take precedence over auto mode
+// defaults, regardless of option order.
 func WithToolEnabled(toolName string, enabled bool) ServiceOpt {
 	return func(opts *serviceOpts) {
 		// If the tool name is invalid, do nothing.
 		if !imemory.IsValidToolName(toolName) {
 			return
 		}
-		opts.enabledTools[toolName] = enabled
+		if enabled {
+			opts.enabledTools[toolName] = struct{}{}
+		} else {
+			delete(opts.enabledTools, toolName)
+		}
 		opts.userExplicitlySet[toolName] = true
 	}
 }
