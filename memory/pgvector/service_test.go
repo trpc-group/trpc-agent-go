@@ -92,7 +92,8 @@ func TestServiceOpts_Defaults(t *testing.T) {
 
 	require.NotEmpty(t, opts.toolCreators)
 	require.NotEmpty(t, opts.enabledTools)
-	assert.True(t, opts.enabledTools[memory.SearchToolName])
+	_, hasSearch := opts.enabledTools[memory.SearchToolName]
+	assert.True(t, hasSearch)
 
 	// These are applied by AutoMemoryWorker when needed.
 	assert.Zero(t, opts.memoryQueueSize)
@@ -292,7 +293,7 @@ func TestServiceOpts_WithEmbedder(t *testing.T) {
 func TestServiceOpts_WithCustomTool(t *testing.T) {
 	opts := ServiceOpts{
 		toolCreators: make(map[string]memory.ToolCreator),
-		enabledTools: make(map[string]bool),
+		enabledTools: make(map[string]struct{}),
 	}
 
 	toolName := memory.AddToolName
@@ -300,38 +301,41 @@ func TestServiceOpts_WithCustomTool(t *testing.T) {
 
 	WithCustomTool(toolName, creator)(&opts)
 
-	assert.NotNil(t, opts.toolCreators[toolName], "Expected tool creator to be set")
-	assert.True(t, opts.enabledTools[toolName], "Expected tool to be enabled")
+	assert.NotNil(t, opts.toolCreators[toolName])
+	_, hasAdd := opts.enabledTools[toolName]
+	assert.True(t, hasAdd)
 
 	// Test with nil creator (should do nothing).
 	WithCustomTool(memory.SearchToolName, nil)(&opts)
 
 	assert.Nil(t, opts.toolCreators[memory.SearchToolName])
-	assert.False(t, opts.enabledTools[memory.SearchToolName])
+	_, hasSearch := opts.enabledTools[memory.SearchToolName]
+	assert.False(t, hasSearch)
 }
 
 func TestServiceOpts_WithToolEnabled(t *testing.T) {
 	opts := ServiceOpts{
-		enabledTools: make(map[string]bool),
+		enabledTools: make(map[string]struct{}),
 	}
 
 	toolName := memory.SearchToolName
-	enabled := true
 
-	WithToolEnabled(toolName, enabled)(&opts)
+	WithToolEnabled(toolName, true)(&opts)
 
-	assert.True(t, opts.enabledTools[toolName], "Expected tool to be enabled")
+	_, hasSearch := opts.enabledTools[toolName]
+	assert.True(t, hasSearch, "Expected tool to be enabled")
 
 	// Test disabling.
 	WithToolEnabled(toolName, false)(&opts)
 
-	assert.False(t, opts.enabledTools[toolName], "Expected tool to be disabled")
+	_, hasSearch = opts.enabledTools[toolName]
+	assert.False(t, hasSearch, "Expected tool to be disabled")
 }
 
 func TestServiceOpts_InvalidToolName(t *testing.T) {
 	opts := ServiceOpts{
 		toolCreators: make(map[string]memory.ToolCreator),
-		enabledTools: make(map[string]bool),
+		enabledTools: make(map[string]struct{}),
 	}
 
 	invalidToolName := "invalid_tool"
@@ -341,12 +345,14 @@ func TestServiceOpts_InvalidToolName(t *testing.T) {
 	WithCustomTool(invalidToolName, creator)(&opts)
 
 	assert.Nil(t, opts.toolCreators[invalidToolName])
-	assert.False(t, opts.enabledTools[invalidToolName])
+	_, hasInvalid := opts.enabledTools[invalidToolName]
+	assert.False(t, hasInvalid)
 
 	// Test WithToolEnabled with invalid name.
 	WithToolEnabled(invalidToolName, true)(&opts)
 
-	assert.False(t, opts.enabledTools[invalidToolName])
+	_, hasInvalid = opts.enabledTools[invalidToolName]
+	assert.False(t, hasInvalid)
 }
 
 func TestServiceOpts_WithHNSWIndexParams(t *testing.T) {
@@ -1845,6 +1851,8 @@ func (m *mockMemoryExtractor) ShouldExtract(ctx *extractor.ExtractionContext) bo
 func (m *mockMemoryExtractor) SetPrompt(prompt string) {}
 
 func (m *mockMemoryExtractor) SetModel(md model.Model) {}
+
+func (m *mockMemoryExtractor) SetEnabledTools(enabled map[string]struct{}) {}
 
 func (m *mockMemoryExtractor) Metadata() map[string]any {
 	return map[string]any{"test": "mock"}
