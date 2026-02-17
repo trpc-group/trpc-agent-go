@@ -42,6 +42,81 @@ English | [中文](README.zh_CN.md)
 
 <table>
 <tr>
+<td valign="top">
+
+### LLMAgent
+
+```go
+// Wrap a chat model as an LLMAgent
+func runLLMAgent(ctx context.Context) error {
+    modelInstance := openai.New("gpt-4o-mini")
+    agent := llmagent.New("assistant",
+        llmagent.WithModel(modelInstance),
+        llmagent.WithInstruction("You are a helpful assistant."),
+    )
+
+    // Run a basic chat
+    agentRunner := runner.NewRunner("app", agent)
+    events, err := agentRunner.Run(ctx, "user-1", "session-1",
+        model.NewUserMessage("What is 2+2?"))
+    if err != nil {
+        return err
+    }
+
+    // Consume events to completion; handle responses as needed.
+    for event := range events {
+        log.Printf("event: %v", event)
+    }
+    return nil
+}
+```
+
+</td>
+<td valign="top">
+
+### GraphAgent
+
+```go
+// Build and compile a simple graph workflow
+func runGraphAgent(ctx context.Context) error {
+    schema := graph.NewStateSchema().AddField("status", graph.StateField{
+        Type:    reflect.TypeOf(""),
+        Reducer: graph.DefaultReducer,
+    })
+    workflow, err := graph.NewStateGraph(schema).
+        AddNode("start", func(ctx context.Context, state graph.State) (any, error) {
+            return graph.State{"status": "ready"}, nil
+        }).
+        SetEntryPoint("start").
+        SetFinishPoint("start").
+        Compile()
+    if err != nil {
+        return err
+    }
+
+    graphAgent, err := graphagent.New("workflow", workflow)
+    if err != nil {
+        return err
+    }
+
+    agentRunner := runner.NewRunner("app", graphAgent)
+    events, err := agentRunner.Run(ctx, "user-1", "session-1",
+        model.NewUserMessage("Run the workflow"))
+    if err != nil {
+        return err
+    }
+
+    // Consume events to completion; handle responses as needed.
+    for event := range events {
+        log.Printf("event: %v", event)
+    }
+    return nil
+}
+```
+
+</td>
+</tr>
+<tr>
 <td width="50%" valign="top">
 
 ### Multi-Agent Orchestration
@@ -101,18 +176,31 @@ mcpTool := mcptool.New(serverConn)
 ### Production Observability
 
 ```go
-// Start Langfuse integration
-clean, _ := langfuse.Start(ctx)
-defer clean(ctx)
+func runWithLangfuse(ctx context.Context, baseAgent agent.Agent) error {
+    // Start Langfuse integration
+    clean, err := langfuse.Start(ctx)
+    if err != nil {
+        return err
+    }
+    defer clean(ctx)
 
-runner := runner.NewRunner("app", agent)
-// Run with Langfuse attributes
-events, _ := runner.Run(ctx, "user-1", "session-1", 
-    model.NewUserMessage("Hello"),
-    agent.WithSpanAttributes(
-        attribute.String("langfuse.user.id", "user-1"),
-        attribute.String("langfuse.session.id", "session-1"),
-    ))
+    agentRunner := runner.NewRunner("app", baseAgent)
+    // Run with Langfuse attributes
+    events, err := agentRunner.Run(ctx, "user-1", "session-1",
+        model.NewUserMessage("Hello"),
+        agent.WithSpanAttributes(
+            attribute.String("langfuse.user.id", "user-1"),
+            attribute.String("langfuse.session.id", "session-1"),
+        ))
+    if err != nil {
+        return err
+    }
+
+    for event := range events {
+        log.Printf("event: %v", event)
+    }
+    return nil
+}
 ```
 
 </td>
@@ -123,13 +211,19 @@ events, _ := runner.Run(ctx, "user-1", "session-1",
 ### Agent Skills
 
 ```go
-// Skills are folders with a SKILL.md spec.
-repo, _ := skill.NewFSRepository("./skills")
+func loadSkills() ([]tool.Tool, error) {
+    // Skills are folders with a SKILL.md spec.
+    repo, err := skill.NewFSRepository("./skills")
+    if err != nil {
+        return nil, err
+    }
 
-// Let the agent load and run skills on demand.
-tools := []tool.Tool{
-    skilltool.NewLoadTool(repo),
-    skilltool.NewRunTool(repo, localexec.New()),
+    // Let the agent load and run skills on demand.
+    tools := []tool.Tool{
+        skilltool.NewLoadTool(repo),
+        skilltool.NewRunTool(repo, localexec.New()),
+    }
+    return tools, nil
 }
 ```
 
@@ -143,10 +237,21 @@ tools := []tool.Tool{
 ### Evaluation & Benchmarks
 
 ```go
-evaluator, _ := evaluation.New("app", runner, evaluation.WithNumRuns(3))
-defer evaluator.Close()
-result, _ := evaluator.Evaluate(ctx, "math-basic")
-_ = result.OverallStatus
+func runEvaluation(ctx context.Context, runner runner.Runner) error {
+    evaluator, err := evaluation.New("app", runner, evaluation.WithNumRuns(3))
+    if err != nil {
+        return err
+    }
+    defer evaluator.Close()
+
+    result, err := evaluator.Evaluate(ctx, "math-basic")
+    if err != nil {
+        return err
+    }
+    status := result.OverallStatus
+    log.Printf("status: %v", status)
+    return nil
+}
 ```
 
 </td>
@@ -158,6 +263,8 @@ _ = result.OverallStatus
 - [tRPC-Agent-Go](#trpc-agent-go)
   - [Use Cases](#use-cases)
   - [Key Features](#key-features)
+    - [LLMAgent](#llmagent)
+    - [GraphAgent](#graphagent)
     - [Multi-Agent Orchestration](#multi-agent-orchestration)
     - [Advanced Memory System](#advanced-memory-system)
     - [Rich Tool Integration](#rich-tool-integration)
@@ -359,8 +466,13 @@ events, err := r.Run(ctx,
     model.NewUserMessage("Hello"),
     agent.WithInstruction("You are a helpful assistant."),
 )
-_ = events
-_ = err
+if err != nil {
+    log.Printf("run failed: %v", err)
+} else {
+    for event := range events {
+        log.Printf("event: %v", event)
+    }
+}
 ```
 
 ### Stop / Cancel a Run
@@ -419,8 +531,17 @@ events, err := r.Run(ctx, userID, sessionID, message,
     agent.WithRequestID(requestID),
 )
 
-mr := r.(runner.ManagedRunner)
-_ = mr.Cancel(requestID)
+if err != nil {
+    log.Printf("run failed: %v", err)
+} else {
+    mr := r.(runner.ManagedRunner)
+    if err := mr.Cancel(requestID); err != nil {
+        log.Printf("cancel failed: %v", err)
+    }
+    for range events {
+        // Keep draining until the channel is closed.
+    }
+}
 ```
 
 For more details (including detached cancellation, resume, and server cancel
@@ -619,30 +740,36 @@ agents that you can compose like Lego bricks:
 ### Multi-Agent Collaboration Example
 
 ```go
-// 1. Create a base LLM agent.
-base := llmagent.New(
-    "assistant",
-    llmagent.WithModel(openai.New("gpt-4o-mini")),
-)
+func runPipeline(ctx context.Context) error {
+    // 1. Create a base LLM agent.
+    base := llmagent.New(
+        "assistant",
+        llmagent.WithModel(openai.New("gpt-4o-mini")),
+    )
 
-// 2. Create a second LLM agent with a different instruction.
-translator := llmagent.New(
-    "translator",
-    llmagent.WithInstruction("Translate everything to French"),
-    llmagent.WithModel(openai.New("gpt-3.5-turbo")),
-)
+    // 2. Create a second LLM agent with a different instruction.
+    translator := llmagent.New(
+        "translator",
+        llmagent.WithInstruction("Translate everything to French"),
+        llmagent.WithModel(openai.New("gpt-3.5-turbo")),
+    )
 
-// 3. Combine them in a chain.
-pipeline := chainagent.New(
-    "pipeline",
-    chainagent.WithSubAgents([]agent.Agent{base, translator}),
-)
+    // 3. Combine them in a chain.
+    pipeline := chainagent.New(
+        "pipeline",
+        chainagent.WithSubAgents([]agent.Agent{base, translator}),
+    )
 
-// 4. Run through the runner for sessions & telemetry.
-run := runner.NewRunner("demo-app", pipeline)
-events, _ := run.Run(ctx, "user-1", "sess-1",
-    model.NewUserMessage("Hello!"))
-for ev := range events { /* ... */ }
+    // 4. Run through the runner for sessions & telemetry.
+    run := runner.NewRunner("demo-app", pipeline)
+    events, err := run.Run(ctx, "user-1", "sess-1",
+        model.NewUserMessage("Hello!"))
+    if err != nil {
+        return err
+    }
+    for ev := range events { /* ... */ }
+    return nil
+}
 ```
 
 The composition API lets you nest chains, cycles, or parallels to build complex

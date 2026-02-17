@@ -41,6 +41,81 @@
 
 <table>
 <tr>
+<td valign="top">
+
+### LLMAgent
+
+```go
+// 将 chat 模型封装为 LLMAgent
+func runLLMAgent(ctx context.Context) error {
+    modelInstance := openai.New("gpt-4o-mini")
+    agent := llmagent.New("assistant",
+        llmagent.WithModel(modelInstance),
+        llmagent.WithInstruction("你是一个乐于助人的助手。"),
+    )
+
+    // 运行一次对话
+    agentRunner := runner.NewRunner("app", agent)
+    events, err := agentRunner.Run(ctx, "user-1", "session-1",
+        model.NewUserMessage("2+2 等于多少？"))
+    if err != nil {
+        return err
+    }
+
+    // 需消费事件直到结束，可在此处理响应。
+    for event := range events {
+        log.Printf("event: %v", event)
+    }
+    return nil
+}
+```
+
+</td>
+<td valign="top">
+
+### GraphAgent
+
+```go
+// 构建并编译一个简单的 Graph 工作流
+func runGraphAgent(ctx context.Context) error {
+    schema := graph.NewStateSchema().AddField("status", graph.StateField{
+        Type:    reflect.TypeOf(""),
+        Reducer: graph.DefaultReducer,
+    })
+    workflow, err := graph.NewStateGraph(schema).
+        AddNode("start", func(ctx context.Context, state graph.State) (any, error) {
+            return graph.State{"status": "ready"}, nil
+        }).
+        SetEntryPoint("start").
+        SetFinishPoint("start").
+        Compile()
+    if err != nil {
+        return err
+    }
+
+    graphAgent, err := graphagent.New("workflow", workflow)
+    if err != nil {
+        return err
+    }
+
+    agentRunner := runner.NewRunner("app", graphAgent)
+    events, err := agentRunner.Run(ctx, "user-1", "session-1",
+        model.NewUserMessage("运行图工作流"))
+    if err != nil {
+        return err
+    }
+
+    // 需消费事件直到结束，可在此处理响应。
+    for event := range events {
+        log.Printf("event: %v", event)
+    }
+    return nil
+}
+```
+
+</td>
+</tr>
+<tr>
 <td width="50%" valign="top">
 
 ### 多 Agent 编排
@@ -100,18 +175,31 @@ mcpTool := mcptool.New(serverConn)
 ### 生产可观测性
 
 ```go
-// 启动 Langfuse 集成
-clean, _ := langfuse.Start(ctx)
-defer clean(ctx)
+func runWithLangfuse(ctx context.Context, baseAgent agent.Agent) error {
+    // 启动 Langfuse 集成
+    clean, err := langfuse.Start(ctx)
+    if err != nil {
+        return err
+    }
+    defer clean(ctx)
 
-runner := runner.NewRunner("app", agent)
-// 运行并添加 Langfuse 属性
-events, _ := runner.Run(ctx, "user-1", "session-1", 
-    model.NewUserMessage("Hello"),
-    agent.WithSpanAttributes(
-        attribute.String("langfuse.user.id", "user-1"),
-        attribute.String("langfuse.session.id", "session-1"),
-    ))
+    agentRunner := runner.NewRunner("app", baseAgent)
+    // 运行并添加 Langfuse 属性
+    events, err := agentRunner.Run(ctx, "user-1", "session-1",
+        model.NewUserMessage("Hello"),
+        agent.WithSpanAttributes(
+            attribute.String("langfuse.user.id", "user-1"),
+            attribute.String("langfuse.session.id", "session-1"),
+        ))
+    if err != nil {
+        return err
+    }
+
+    for event := range events {
+        log.Printf("event: %v", event)
+    }
+    return nil
+}
 ```
 
 </td>
@@ -122,13 +210,19 @@ events, _ := runner.Run(ctx, "user-1", "session-1",
 ### Agent Skills
 
 ```go
-// Skills 是一个包含 SKILL.md 的文件夹。
-repo, _ := skill.NewFSRepository("./skills")
+func loadSkills() ([]tool.Tool, error) {
+    // Skills 是一个包含 SKILL.md 的文件夹。
+    repo, err := skill.NewFSRepository("./skills")
+    if err != nil {
+        return nil, err
+    }
 
-// 让 agent 按需加载并执行 skills。
-tools := []tool.Tool{
-    skilltool.NewLoadTool(repo),
-    skilltool.NewRunTool(repo, localexec.New()),
+    // 让 agent 按需加载并执行 skills。
+    tools := []tool.Tool{
+        skilltool.NewLoadTool(repo),
+        skilltool.NewRunTool(repo, localexec.New()),
+    }
+    return tools, nil
 }
 ```
 
@@ -141,10 +235,21 @@ tools := []tool.Tool{
 ### 评测与基准
 
 ```go
-evaluator, _ := evaluation.New("app", runner, evaluation.WithNumRuns(3))
-defer evaluator.Close()
-result, _ := evaluator.Evaluate(ctx, "math-basic")
-_ = result.OverallStatus
+func runEvaluation(ctx context.Context, runner runner.Runner) error {
+    evaluator, err := evaluation.New("app", runner, evaluation.WithNumRuns(3))
+    if err != nil {
+        return err
+    }
+    defer evaluator.Close()
+
+    result, err := evaluator.Evaluate(ctx, "math-basic")
+    if err != nil {
+        return err
+    }
+    status := result.OverallStatus
+    log.Printf("status: %v", status)
+    return nil
+}
 ```
 
 </td>
@@ -156,6 +261,8 @@ _ = result.OverallStatus
 - [tRPC-Agent-Go](#trpc-agent-go)
   - [使用场景](#使用场景)
   - [核心特性](#核心特性)
+    - [**LLMAgent**](#llmagent)
+    - [**GraphAgent**](#graphagent)
     - [**多 Agent 编排**](#多-agent-编排)
     - [**先进的 Memory 系统**](#先进的-memory-系统)
     - [**丰富的 Tool 集成**](#丰富的-tool-集成)
@@ -356,8 +463,13 @@ events, err := r.Run(ctx,
     model.NewUserMessage("Hello"),
     agent.WithInstruction("You are a helpful assistant."),
 )
-_ = events
-_ = err
+if err != nil {
+    log.Printf("运行失败: %v", err)
+} else {
+    for event := range events {
+        log.Printf("event: %v", event)
+    }
+}
 ```
 
 ### 中断 / 取消一次运行
@@ -415,8 +527,17 @@ events, err := r.Run(ctx, userID, sessionID, message,
     agent.WithRequestID(requestID),
 )
 
-mr := r.(runner.ManagedRunner)
-_ = mr.Cancel(requestID)
+if err != nil {
+    log.Printf("运行失败: %v", err)
+} else {
+    mr := r.(runner.ManagedRunner)
+    if err := mr.Cancel(requestID); err != nil {
+        log.Printf("取消失败: %v", err)
+    }
+    for range events {
+        // 持续读取直到通道关闭。
+    }
+}
 ```
 
 更完整的说明（包含 detached cancel、resume、以及 AG-UI 的取消路由）见
@@ -602,30 +723,36 @@ sg.SetFinishPoint("A").SetFinishPoint("B")
 ### 多 Agent 协作示例
 
 ```go
-// 1. 创建一个基础的 LLM agent。
-base := llmagent.New(
-    "assistant",
-    llmagent.WithModel(openai.New("gpt-4o-mini")),
-)
+func runPipeline(ctx context.Context) error {
+    // 1. 创建一个基础的 LLM agent。
+    base := llmagent.New(
+        "assistant",
+        llmagent.WithModel(openai.New("gpt-4o-mini")),
+    )
 
-// 2. 创建第二个具有不同指令的 LLM agent。
-translator := llmagent.New(
-    "translator",
-    llmagent.WithInstruction("Translate everything to French"),
-    llmagent.WithModel(openai.New("gpt-3.5-turbo")),
-)
+    // 2. 创建第二个具有不同指令的 LLM agent。
+    translator := llmagent.New(
+        "translator",
+        llmagent.WithInstruction("Translate everything to French"),
+        llmagent.WithModel(openai.New("gpt-3.5-turbo")),
+    )
 
-// 3. 将它们组合成一个 chain。
-pipeline := chainagent.New(
-    "pipeline",
-    chainagent.WithSubAgents([]agent.Agent{base, translator}),
-)
+    // 3. 将它们组合成一个 chain。
+    pipeline := chainagent.New(
+        "pipeline",
+        chainagent.WithSubAgents([]agent.Agent{base, translator}),
+    )
 
-// 4. 通过 runner 运行以获得会话与 telemetry。
-run := runner.NewRunner("demo-app", pipeline)
-events, _ := run.Run(ctx, "user-1", "sess-1",
-    model.NewUserMessage("Hello!"))
-for ev := range events { /* ... */ }
+    // 4. 通过 runner 运行以获得会话与 telemetry。
+    run := runner.NewRunner("demo-app", pipeline)
+    events, err := run.Run(ctx, "user-1", "sess-1",
+        model.NewUserMessage("Hello!"))
+    if err != nil {
+        return err
+    }
+    for ev := range events { /* ... */ }
+    return nil
+}
 ```
 
 组合式 API 允许你将 chain、cycle 或 parallel 进行嵌套，从而在无需底层管线处理的情况下构建复杂工作流。
