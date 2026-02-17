@@ -688,38 +688,47 @@ func TestApplyAutoModeDefaults(t *testing.T) {
 	})
 
 	t.Run("empty maps", func(t *testing.T) {
-		enabledTools := make(map[string]bool)
+		enabledTools := make(map[string]struct{})
 		userExplicitlySet := make(map[string]bool)
 
 		ApplyAutoModeDefaults(enabledTools, userExplicitlySet)
 
-		// Should set auto mode defaults
-		assert.True(t, enabledTools[memory.AddToolName])
-		assert.True(t, enabledTools[memory.UpdateToolName])
-		assert.True(t, enabledTools[memory.SearchToolName])
-		assert.False(t, enabledTools[memory.ClearToolName])
-		assert.False(t, enabledTools[memory.LoadToolName]) // Default is false for Load
+		// Should set auto mode defaults.
+		_, hasAdd := enabledTools[memory.AddToolName]
+		_, hasUpdate := enabledTools[memory.UpdateToolName]
+		_, hasSearch := enabledTools[memory.SearchToolName]
+		_, hasClear := enabledTools[memory.ClearToolName]
+		_, hasLoad := enabledTools[memory.LoadToolName]
+		assert.True(t, hasAdd)
+		assert.True(t, hasUpdate)
+		assert.True(t, hasSearch)
+		assert.False(t, hasClear)
+		assert.False(t, hasLoad)
 	})
 
 	t.Run("user explicitly set takes precedence", func(t *testing.T) {
-		enabledTools := map[string]bool{
-			memory.SearchToolName: true, // User explicitly enabled Search
-			memory.LoadToolName:   true, // User explicitly enabled Load
+		enabledTools := map[string]struct{}{
+			memory.SearchToolName: {},
+			memory.LoadToolName:   {},
 		}
 		userExplicitlySet := map[string]bool{
-			memory.SearchToolName: true, // User explicitly set Search
-			memory.LoadToolName:   true, // User explicitly set Load
+			memory.SearchToolName: true,
+			memory.LoadToolName:   true,
 		}
 
 		ApplyAutoModeDefaults(enabledTools, userExplicitlySet)
 
-		// User settings should be preserved
-		assert.True(t, enabledTools[memory.SearchToolName]) // User enabled
-		assert.True(t, enabledTools[memory.LoadToolName])   // User enabled
-		// Other defaults should still apply
-		assert.True(t, enabledTools[memory.AddToolName])
-		assert.True(t, enabledTools[memory.UpdateToolName])
-		assert.False(t, enabledTools[memory.ClearToolName])
+		// User settings should be preserved.
+		_, hasSearch := enabledTools[memory.SearchToolName]
+		_, hasLoad := enabledTools[memory.LoadToolName]
+		_, hasAdd := enabledTools[memory.AddToolName]
+		_, hasUpdate := enabledTools[memory.UpdateToolName]
+		_, hasClear := enabledTools[memory.ClearToolName]
+		assert.True(t, hasSearch)
+		assert.True(t, hasLoad)
+		assert.True(t, hasAdd)
+		assert.True(t, hasUpdate)
+		assert.False(t, hasClear)
 	})
 }
 
@@ -735,62 +744,62 @@ func TestBuildToolsList(t *testing.T) {
 	}
 
 	t.Run("agentic mode", func(t *testing.T) {
-		enabledTools := map[string]bool{
-			memory.AddToolName:    true,
-			memory.SearchToolName: false,
+		enabledTools := map[string]struct{}{
+			memory.AddToolName: {},
 		}
 		cachedTools := make(map[string]tool.Tool)
 
 		tools := BuildToolsList(nil, toolCreators, enabledTools, cachedTools)
 
-		// Should only include enabled tools in agentic mode
+		// Should only include enabled tools in agentic mode.
 		assert.Len(t, tools, 1)
 		assert.Equal(t, memory.AddToolName, tools[0].(*mockTool).name)
 	})
 
 	t.Run("auto mode", func(t *testing.T) {
-		// Mock extractor for auto mode
+		// Mock extractor for auto mode.
 		ext := &mockExtractorForMemoryTest{}
-		enabledTools := map[string]bool{
-			memory.SearchToolName: true,
-			memory.LoadToolName:   false, // Not exposed in auto mode
+		enabledTools := map[string]struct{}{
+			memory.SearchToolName: {},
 		}
 		cachedTools := make(map[string]tool.Tool)
 
-		// Add Load tool creator for this test
+		// Add Load tool creator for this test.
 		toolCreators[memory.LoadToolName] = func() tool.Tool {
 			return &mockTool{name: memory.LoadToolName}
 		}
 
 		tools := BuildToolsList(ext, toolCreators, enabledTools, cachedTools)
 
-		// In auto mode, only Search should be exposed (Load is not in autoModeExposedTools)
+		// In auto mode, only Search should be exposed.
 		assert.Len(t, tools, 1)
 		assert.Equal(t, memory.SearchToolName, tools[0].(*mockTool).name)
 	})
 
 	t.Run("caching", func(t *testing.T) {
 		cachedTools := make(map[string]tool.Tool)
-		enabledTools := map[string]bool{memory.AddToolName: true}
+		enabledTools := map[string]struct{}{
+			memory.AddToolName: {},
+		}
 
-		// First call
+		// First call.
 		tools1 := BuildToolsList(nil, toolCreators, enabledTools, cachedTools)
 		assert.Len(t, tools1, 1)
 
-		// Second call should reuse cached tool
+		// Second call should reuse cached tool.
 		tools2 := BuildToolsList(nil, toolCreators, enabledTools, cachedTools)
 		assert.Len(t, tools2, 1)
 		assert.Same(t, tools1[0], tools2[0])
 	})
 
 	t.Run("stable ordering", func(t *testing.T) {
-		// Add more tools to test ordering
+		// Add more tools to test ordering.
 		toolCreators[memory.UpdateToolName] = func() tool.Tool {
 			return &mockTool{name: memory.UpdateToolName}
 		}
-		enabledTools := map[string]bool{
-			memory.UpdateToolName: true,
-			memory.AddToolName:    true,
+		enabledTools := map[string]struct{}{
+			memory.UpdateToolName: {},
+			memory.AddToolName:    {},
 		}
 		cachedTools := make(map[string]tool.Tool)
 
@@ -836,9 +845,8 @@ func (m *mockExtractorForMemoryTest) Metadata() map[string]any {
 
 func TestShouldIncludeTool(t *testing.T) {
 	t.Run("agentic mode", func(t *testing.T) {
-		enabledTools := map[string]bool{
-			memory.AddToolName:    true,
-			memory.SearchToolName: false,
+		enabledTools := map[string]struct{}{
+			memory.AddToolName: {},
 		}
 
 		assert.True(t, shouldIncludeTool(memory.AddToolName, nil, enabledTools))
@@ -847,14 +855,14 @@ func TestShouldIncludeTool(t *testing.T) {
 
 	t.Run("auto mode", func(t *testing.T) {
 		ext := &mockExtractorForMemoryTest{}
-		enabledTools := map[string]bool{
-			memory.SearchToolName: true,
-			memory.AddToolName:    true, // Would be enabled but not exposed in auto mode
+		enabledTools := map[string]struct{}{
+			memory.SearchToolName: {},
+			memory.AddToolName:    {},
 		}
 
-		// Search should be included (exposed in auto mode)
+		// Search should be included (exposed in auto mode).
 		assert.True(t, shouldIncludeTool(memory.SearchToolName, ext, enabledTools))
-		// Add should not be included (not exposed in auto mode)
+		// Add should not be included (not exposed in auto mode).
 		assert.False(t, shouldIncludeTool(memory.AddToolName, ext, enabledTools))
 	})
 }
@@ -863,14 +871,14 @@ func TestShouldIncludeAutoMemoryTool(t *testing.T) {
 	tests := []struct {
 		name         string
 		toolName     string
-		enabledTools map[string]bool
+		enabledTools map[string]struct{}
 		expected     bool
 	}{
-		{"search enabled", memory.SearchToolName, map[string]bool{memory.SearchToolName: true}, true},
-		{"search disabled", memory.SearchToolName, map[string]bool{memory.SearchToolName: false}, false},
-		{"load enabled", memory.LoadToolName, map[string]bool{memory.LoadToolName: true}, true},
-		{"load disabled", memory.LoadToolName, map[string]bool{memory.LoadToolName: false}, false},
-		{"non-exposed tool", memory.AddToolName, map[string]bool{memory.AddToolName: true}, false},
+		{"search enabled", memory.SearchToolName, map[string]struct{}{memory.SearchToolName: {}}, true},
+		{"search disabled", memory.SearchToolName, map[string]struct{}{}, false},
+		{"load enabled", memory.LoadToolName, map[string]struct{}{memory.LoadToolName: {}}, true},
+		{"load disabled", memory.LoadToolName, map[string]struct{}{}, false},
+		{"non-exposed tool", memory.AddToolName, map[string]struct{}{memory.AddToolName: {}}, false},
 	}
 
 	for _, tt := range tests {

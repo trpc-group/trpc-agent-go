@@ -561,6 +561,8 @@ func (m *mockExtractor) SetPrompt(prompt string) {}
 
 func (m *mockExtractor) SetModel(mdl model.Model) {}
 
+func (m *mockExtractor) SetEnabledTools(enabled map[string]struct{}) {}
+
 func (m *mockExtractor) Metadata() map[string]any {
 	return map[string]any{}
 }
