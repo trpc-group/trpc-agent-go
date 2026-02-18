@@ -118,6 +118,11 @@ type Node struct {
 
 	toolSets             []tool.ToolSet
 	refreshToolSetsOnRun bool
+	// convertForeignToolMessagesEnabled controls whether foreign tool call
+	// messages (tool calls and tool responses for tools not available to the
+	// current node) are converted to plain text before sending to the model.
+	// This is an opt-in compatibility mode for some OpenAI-like providers.
+	convertForeignToolMessagesEnabled bool
 	// Per-node callbacks for fine-grained control
 	callbacks *NodeCallbacks
 	// Optional per-node cache policy. If nil, graph-level policy applies.
