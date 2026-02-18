@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	memoryclickhouse "trpc.group/trpc-go/trpc-agent-go/memory/clickhouse"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	memorymysql "trpc.group/trpc-go/trpc-agent-go/memory/mysql"
@@ -37,11 +38,12 @@ type MemoryType string
 
 // Memory type constants.
 const (
-	MemoryInMemory MemoryType = "inmemory"
-	MemoryRedis    MemoryType = "redis"
-	MemoryPostgres MemoryType = "postgres"
-	MemoryPGVector MemoryType = "pgvector"
-	MemoryMySQL    MemoryType = "mysql"
+	MemoryInMemory   MemoryType = "inmemory"
+	MemoryRedis      MemoryType = "redis"
+	MemoryPostgres   MemoryType = "postgres"
+	MemoryPGVector   MemoryType = "pgvector"
+	MemoryMySQL      MemoryType = "mysql"
+	MemoryClickHouse MemoryType = "clickhouse"
 )
 
 // MemoryServiceConfig holds configuration for creating a memory service.
@@ -101,6 +103,7 @@ func DefaultRunnerConfig() RunnerConfig {
 //	postgres:   PG_HOST, PG_PORT, PG_USER, PG_PASSWORD, PG_DATABASE
 //	pgvector:   PGVECTOR_HOST, PGVECTOR_PORT, PGVECTOR_USER, PGVECTOR_PASSWORD, PGVECTOR_DATABASE, PGVECTOR_EMBEDDER_MODEL
 //	mysql:      MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE
+//	clickhouse: CLICKHOUSE_DSN (default: clickhouse://localhost:9000/default)
 func NewMemoryServiceByType(memoryType MemoryType, cfg MemoryServiceConfig) (memory.Service, error) {
 	switch memoryType {
 	case MemoryRedis:
@@ -111,6 +114,8 @@ func NewMemoryServiceByType(memoryType MemoryType, cfg MemoryServiceConfig) (mem
 		return newPGVectorMemoryService(cfg)
 	case MemoryMySQL:
 		return newMySQLMemoryService(cfg)
+	case MemoryClickHouse:
+		return newClickHouseMemoryService(cfg)
 	case MemoryInMemory:
 		fallthrough
 	default:
@@ -309,6 +314,35 @@ func newMySQLMemoryService(cfg MemoryServiceConfig) (memory.Service, error) {
 	return memorymysql.NewService(opts...)
 }
 
+// newClickHouseMemoryService creates a ClickHouse memory service.
+// Supports both manual mode (cfg.Extractor == nil) and auto mode (cfg.Extractor != nil).
+// Environment variables:
+//   - CLICKHOUSE_DSN: ClickHouse DSN connection string (default: clickhouse://localhost:9000/default)
+func newClickHouseMemoryService(cfg MemoryServiceConfig) (memory.Service, error) {
+	dsn := GetEnvOrDefault("CLICKHOUSE_DSN", "clickhouse://localhost:9000/default")
+
+	opts := []memoryclickhouse.ServiceOpt{
+		memoryclickhouse.WithClickHouseDSN(dsn),
+		memoryclickhouse.WithSoftDelete(cfg.SoftDelete),
+	}
+
+	// Configure extractor for auto memory mode if provided.
+	if cfg.Extractor != nil {
+		opts = append(opts, memoryclickhouse.WithExtractor(cfg.Extractor))
+		if cfg.AsyncMemoryNum > 0 {
+			opts = append(opts, memoryclickhouse.WithAsyncMemoryNum(cfg.AsyncMemoryNum))
+		}
+		if cfg.MemoryQueueSize > 0 {
+			opts = append(opts, memoryclickhouse.WithMemoryQueueSize(cfg.MemoryQueueSize))
+		}
+		if cfg.MemoryJobTimeout > 0 {
+			opts = append(opts, memoryclickhouse.WithMemoryJobTimeout(cfg.MemoryJobTimeout))
+		}
+	}
+
+	return memoryclickhouse.NewService(opts...)
+}
+
 // NewRunner creates a runner with the given memory service and configuration.
 func NewRunner(memoryService memory.Service, cfg RunnerConfig) runner.Runner {
 	modelInstance := openai.New(cfg.ModelName)
@@ -379,6 +413,10 @@ func PrintMemoryInfo(memoryType MemoryType, softDelete bool) {
 		port := GetEnvOrDefault("MYSQL_PORT", "3306")
 		database := GetEnvOrDefault("MYSQL_DATABASE", "trpc_agent_go")
 		fmt.Printf("MySQL: %s:%s/%s\n", host, port, database)
+		fmt.Printf("Soft delete: %t\n", softDelete)
+	case MemoryClickHouse:
+		dsn := GetEnvOrDefault("CLICKHOUSE_DSN", "clickhouse://localhost:9000/default")
+		fmt.Printf("ClickHouse: %s\n", dsn)
 		fmt.Printf("Soft delete: %t\n", softDelete)
 	default:
 		fmt.Printf("In-memory\n")

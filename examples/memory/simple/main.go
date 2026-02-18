@@ -17,6 +17,7 @@
 //	go run main.go -memory=mysql
 //	go run main.go -memory=postgres
 //	go run main.go -memory=pgvector
+//	go run main.go -memory=clickhouse
 //
 // Environment variables by memory type (example usage):
 //
@@ -44,6 +45,9 @@
 //		export PGVECTOR_PASSWORD=""
 //		export PGVECTOR_DATABASE="trpc_agent_go"
 //		export PGVECTOR_EMBEDDER_MODEL="text-embedding-3-small"
+//
+//	clickhouse:
+//		export CLICKHOUSE_DSN="clickhouse://localhost:9000/default"
 package main
 
 import (
@@ -68,9 +72,9 @@ import (
 
 var (
 	modelName      = flag.String("model", "deepseek-chat", "Name of the model to use")
-	memServiceName = flag.String("memory", "inmemory", "Name of the memory service to use, inmemory / redis / mysql / postgres / pgvector")
+	memServiceName = flag.String("memory", "inmemory", "Name of the memory service to use, inmemory / redis / mysql / postgres / pgvector / clickhouse")
 	streaming      = flag.Bool("streaming", true, "Enable streaming mode for responses")
-	softDelete     = flag.Bool("soft-delete", false, "Enable soft delete for MySQL/PostgreSQL memory service")
+	softDelete     = flag.Bool("soft-delete", false, "Enable soft delete for MySQL/PostgreSQL/ClickHouse memory service")
 )
 
 func main() {
