@@ -152,11 +152,65 @@ func (t *executeCodeTool) Declaration() *tool.Declaration {
 	}
 }
 
+// unmarshalCodeBlocks flexibly decodes code_blocks from JSON, handling common LLM
+// quirks: the value may be a normal array, a single object (instead of an array),
+// or a double-encoded JSON string containing either of the above.
+func unmarshalCodeBlocks(raw json.RawMessage) ([]codeexecutor.CodeBlock, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+
+	var val any
+	if err := json.Unmarshal(raw, &val); err != nil {
+		return nil, err
+	}
+	if val == nil {
+		return nil, nil
+	}
+
+	// If the LLM double-encoded the array as a JSON string, unwrap and re-parse.
+	if s, ok := val.(string); ok {
+		raw = json.RawMessage(s)
+		if err := json.Unmarshal(raw, &val); err != nil {
+			return nil, err
+		}
+	}
+
+	switch val.(type) {
+	case []any:
+		var blocks []codeexecutor.CodeBlock
+		if err := json.Unmarshal(raw, &blocks); err != nil {
+			return nil, err
+		}
+		return blocks, nil
+	case map[string]any:
+		// Single object — wrap into a slice.
+		var block codeexecutor.CodeBlock
+		if err := json.Unmarshal(raw, &block); err != nil {
+			return nil, err
+		}
+		return []codeexecutor.CodeBlock{block}, nil
+	default:
+		return nil, fmt.Errorf("code_blocks: expected array, object, or string, got %T", val)
+	}
+}
+
 // Call executes the code and returns the result.
 func (t *executeCodeTool) Call(ctx context.Context, args []byte) (any, error) {
-	var input codeexecutor.CodeExecutionInput
-	if err := json.Unmarshal(args, &input); err != nil {
+	aux := &struct {
+		CodeBlocks  json.RawMessage `json:"code_blocks"`
+		ExecutionID string          `json:"execution_id,omitempty"`
+	}{}
+	if err := json.Unmarshal(args, aux); err != nil {
 		return nil, err
+	}
+	blocks, err := unmarshalCodeBlocks(aux.CodeBlocks)
+	if err != nil {
+		return nil, err
+	}
+	input := codeexecutor.CodeExecutionInput{
+		CodeBlocks:  blocks,
+		ExecutionID: aux.ExecutionID,
 	}
 
 	// Best-effort validation. We return it as structured tool output (instead of Go error)
