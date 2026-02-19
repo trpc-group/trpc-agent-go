@@ -224,6 +224,65 @@ func TestExecuteCodeTool_Call(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, "Error: missing code_blocks", output.Output)
 	})
+
+	t.Run("double-encoded code_blocks string", func(t *testing.T) {
+		exec := &mockCodeExecutor{
+			result: codeexecutor.CodeExecutionResult{Output: "ok"},
+		}
+		ct := NewTool(exec)
+
+		// Simulate LLM double-encoding: code_blocks is a JSON string containing the array.
+		inner, _ := json.Marshal([]codeexecutor.CodeBlock{{Language: "python", Code: "1+1"}})
+		args, _ := json.Marshal(map[string]any{
+			"code_blocks": string(inner),
+		})
+
+		result, err := ct.Call(context.Background(), args)
+		require.NoError(t, err)
+		output, ok := result.(codeexecutor.CodeExecutionResult)
+		require.True(t, ok)
+		assert.Equal(t, "ok", output.Output)
+	})
+
+	t.Run("double-encoded code_blocks invalid inner JSON", func(t *testing.T) {
+		exec := &mockCodeExecutor{}
+		ct := NewTool(exec)
+
+		// code_blocks is a JSON string but its content is not valid JSON.
+		args, _ := json.Marshal(map[string]any{
+			"code_blocks": "not valid json",
+		})
+
+		_, err := ct.Call(context.Background(), args)
+		require.Error(t, err)
+	})
+
+	t.Run("single object code_block wrapped into array", func(t *testing.T) {
+		exec := &mockCodeExecutor{
+			result: codeexecutor.CodeExecutionResult{Output: "wrapped"},
+		}
+		ct := NewTool(exec)
+
+		// Simulate LLM sending a single object instead of an array.
+		args := []byte(`{"code_blocks":{"language":"python","code":"print(1)"}}`)
+
+		result, err := ct.Call(context.Background(), args)
+		require.NoError(t, err)
+		output, ok := result.(codeexecutor.CodeExecutionResult)
+		require.True(t, ok)
+		assert.Equal(t, "wrapped", output.Output)
+	})
+
+	t.Run("malformed code_blocks array", func(t *testing.T) {
+		exec := &mockCodeExecutor{}
+		ct := NewTool(exec)
+
+		// code_blocks starts with '[' but contains invalid JSON.
+		args := []byte(`{"code_blocks":[invalid]}`)
+
+		_, err := ct.Call(context.Background(), args)
+		require.Error(t, err)
+	})
 }
 
 func TestExecuteCodeTool_Declaration(t *testing.T) {
