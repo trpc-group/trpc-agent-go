@@ -152,8 +152,55 @@ func (t *executeCodeTool) Declaration() *tool.Declaration {
 	}
 }
 
+// unmarshalCodeBlocks flexibly decodes code_blocks from JSON, handling common LLM
+// quirks: the value may be a normal array, a single object (instead of an array),
+// or a double-encoded JSON string containing either of the above.
+func unmarshalCodeBlocks(raw json.RawMessage) ([]codeexecutor.CodeBlock, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+
+	var val any
+	if err := json.Unmarshal(raw, &val); err != nil {
+		return nil, err
+	}
+	if val == nil {
+		return nil, nil
+	}
+
+	// If the LLM double-encoded the array as a JSON string, unwrap and re-parse.
+	if s, ok := val.(string); ok {
+		if err := json.Unmarshal([]byte(s), &val); err != nil {
+			return nil, err
+		}
+	}
+
+	// Re-marshal the normalized value so we can decode into the target type.
+	normalized, err := json.Marshal(val)
+	if err != nil {
+		return nil, err
+	}
+
+	switch val.(type) {
+	case []any:
+		var blocks []codeexecutor.CodeBlock
+		if err := json.Unmarshal(normalized, &blocks); err != nil {
+			return nil, err
+		}
+		return blocks, nil
+	case map[string]any:
+		// Single object — wrap into a slice.
+		var block codeexecutor.CodeBlock
+		if err := json.Unmarshal(normalized, &block); err != nil {
+			return nil, err
+		}
+		return []codeexecutor.CodeBlock{block}, nil
+	default:
+		return nil, fmt.Errorf("code_blocks: expected array, object, or string, got %T", val)
+	}
+}
+
 // Call executes the code and returns the result.
-// code_blocks may be a JSON array or a JSON string containing the array (LLM quirk).
 func (t *executeCodeTool) Call(ctx context.Context, args []byte) (any, error) {
 	aux := &struct {
 		CodeBlocks  json.RawMessage `json:"code_blocks"`
@@ -162,24 +209,9 @@ func (t *executeCodeTool) Call(ctx context.Context, args []byte) (any, error) {
 	if err := json.Unmarshal(args, aux); err != nil {
 		return nil, err
 	}
-	var blocks []codeexecutor.CodeBlock
-	if len(aux.CodeBlocks) > 0 {
-		raw := aux.CodeBlocks
-		// If the LLM double-encoded the array as a JSON string, unwrap it first.
-		if raw[0] == '"' {
-			var s string
-			if err := json.Unmarshal(raw, &s); err != nil {
-				return nil, err
-			}
-			raw = []byte(s)
-		}
-		// If the LLM sent a single object instead of an array, wrap it.
-		if raw[0] == '{' {
-			raw = append(append([]byte{'['}, raw...), ']')
-		}
-		if err := json.Unmarshal(raw, &blocks); err != nil {
-			return nil, err
-		}
+	blocks, err := unmarshalCodeBlocks(aux.CodeBlocks)
+	if err != nil {
+		return nil, err
 	}
 	input := codeexecutor.CodeExecutionInput{
 		CodeBlocks:  blocks,
