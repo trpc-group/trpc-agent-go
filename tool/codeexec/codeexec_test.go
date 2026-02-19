@@ -344,6 +344,16 @@ func Test_unmarshalCodeBlocks(t *testing.T) {
 		require.Error(t, err)
 	})
 
+	t.Run("array with non-object element", func(t *testing.T) {
+		_, err := unmarshalCodeBlocks(json.RawMessage(`[42]`))
+		require.Error(t, err)
+	})
+
+	t.Run("object with invalid field type", func(t *testing.T) {
+		_, err := unmarshalCodeBlocks(json.RawMessage(`{"language":[1,2,3],"code":"x"}`))
+		require.Error(t, err)
+	})
+
 	t.Run("whitespace before value", func(t *testing.T) {
 		raw := json.RawMessage(`  [{"language":"python","code":"1"}]`)
 		blocks, err := unmarshalCodeBlocks(raw)

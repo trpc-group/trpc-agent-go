@@ -170,28 +170,23 @@ func unmarshalCodeBlocks(raw json.RawMessage) ([]codeexecutor.CodeBlock, error) 
 
 	// If the LLM double-encoded the array as a JSON string, unwrap and re-parse.
 	if s, ok := val.(string); ok {
-		if err := json.Unmarshal([]byte(s), &val); err != nil {
+		raw = json.RawMessage(s)
+		if err := json.Unmarshal(raw, &val); err != nil {
 			return nil, err
 		}
-	}
-
-	// Re-marshal the normalized value so we can decode into the target type.
-	normalized, err := json.Marshal(val)
-	if err != nil {
-		return nil, err
 	}
 
 	switch val.(type) {
 	case []any:
 		var blocks []codeexecutor.CodeBlock
-		if err := json.Unmarshal(normalized, &blocks); err != nil {
+		if err := json.Unmarshal(raw, &blocks); err != nil {
 			return nil, err
 		}
 		return blocks, nil
 	case map[string]any:
 		// Single object — wrap into a slice.
 		var block codeexecutor.CodeBlock
-		if err := json.Unmarshal(normalized, &block); err != nil {
+		if err := json.Unmarshal(raw, &block); err != nil {
 			return nil, err
 		}
 		return []codeexecutor.CodeBlock{block}, nil
