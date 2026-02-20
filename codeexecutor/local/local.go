@@ -109,23 +109,38 @@ func (e *CodeExecutor) ExecuteCode(
 ) (codeexecutor.CodeExecutionResult, error) {
 	var output strings.Builder
 
-	// Determine working directory
-	var workDir string
+	// Determine working directory for the command CWD and a separate
+	// script directory for writing intermediate script files.
+	// When WorkDir is set, we create a unique temp subdirectory inside it
+	// for script files to avoid collisions from concurrent ExecuteCode calls
+	// (e.g. multiple calls all writing to code_0.sh).
+	var cmdDir string    // CWD for the executed command
+	var scriptDir string // directory where script files are written
 	var shouldCleanup bool
 
 	if e.WorkDir != "" {
-		workDir = e.WorkDir
-		if !filepath.IsAbs(workDir) {
-			if abs, err := filepath.Abs(workDir); err == nil {
-				workDir = abs
+		cmdDir = e.WorkDir
+		if !filepath.IsAbs(cmdDir) {
+			if abs, err := filepath.Abs(cmdDir); err == nil {
+				cmdDir = abs
 			}
 		}
-		if err := os.MkdirAll(workDir, 0o755); err != nil {
+		if err := os.MkdirAll(cmdDir, 0o755); err != nil {
 			return codeexecutor.CodeExecutionResult{}, fmt.Errorf(
 				"failed to create work directory: %w", err,
 			)
 		}
-		shouldCleanup = false
+		// Create a unique temp subdirectory for script files to prevent
+		// concurrent calls from overwriting each other's code_0.sh.
+		tmpDir, err := os.MkdirTemp(cmdDir, ".exec_")
+		if err != nil {
+			return codeexecutor.CodeExecutionResult{}, fmt.Errorf(
+				"failed to create script temp directory: %w", err,
+			)
+		}
+		scriptDir = tmpDir
+		// Always clean up the temp script directory.
+		defer os.RemoveAll(scriptDir)
 	} else {
 		tempDir, err := os.MkdirTemp("", "codeexec_"+input.ExecutionID)
 		if err != nil {
@@ -133,16 +148,17 @@ func (e *CodeExecutor) ExecuteCode(
 				"failed to create temp directory: %w", err,
 			)
 		}
-		workDir = tempDir
+		cmdDir = tempDir
+		scriptDir = tempDir
 		shouldCleanup = e.CleanTempFiles
 	}
 
 	if shouldCleanup {
-		defer os.RemoveAll(workDir)
+		defer os.RemoveAll(cmdDir)
 	}
 
 	for i, block := range input.CodeBlocks {
-		blockOutput, err := e.executeCodeBlock(ctx, workDir, block, i)
+		blockOutput, err := e.executeCodeBlock(ctx, cmdDir, scriptDir, block, i)
 		if err != nil {
 			output.WriteString(fmt.Sprintf(
 				"Error executing code block %d: %v\n", i, err,
@@ -161,10 +177,10 @@ func (e *CodeExecutor) ExecuteCode(
 }
 
 func (e *CodeExecutor) executeCodeBlock(
-	ctx context.Context, workDir string,
+	ctx context.Context, cmdDir, scriptDir string,
 	block codeexecutor.CodeBlock, blockIndex int,
 ) (string, error) {
-	filePath, err := e.prepareCodeFile(workDir, block, blockIndex)
+	filePath, err := e.prepareCodeFile(scriptDir, block, blockIndex)
 	if err != nil {
 		return "", err
 	}
@@ -172,7 +188,7 @@ func (e *CodeExecutor) executeCodeBlock(
 	if len(cmdArgs) == 0 {
 		return "", fmt.Errorf("unsupported language: %s", block.Language)
 	}
-	return e.executeCommand(ctx, workDir, cmdArgs)
+	return e.executeCommand(ctx, cmdDir, cmdArgs)
 }
 
 // prepareCodeFile writes code to a temporary file.
