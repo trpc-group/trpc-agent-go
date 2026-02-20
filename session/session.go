@@ -63,6 +63,13 @@ type Session struct {
 	// This field is computed once during session creation and never modified.
 	Hash int `json:"-"`
 
+	// maskedEventIDs tracks events that have been soft-hidden from LLM context.
+	// Masked events remain in the Events slice for audit/debug purposes but
+	// are excluded from GetVisibleEvents(). This implements the Pensieve
+	// paradigm's deleteContext: the model can prune processed information
+	// from its visible context while retaining notes and summaries.
+	maskedEventIDs map[string]bool `json:"-"`
+
 	stateMu sync.RWMutex `json:"-"` // stateMu is the read-write mutex for State.
 }
 
@@ -81,6 +88,14 @@ func (sess *Session) Clone() *Session {
 	}
 	// Copy events.
 	copy(copiedSess.Events, sess.Events)
+
+	// Copy masked event IDs.
+	if len(sess.maskedEventIDs) > 0 {
+		copiedSess.maskedEventIDs = make(map[string]bool, len(sess.maskedEventIDs))
+		for id, v := range sess.maskedEventIDs {
+			copiedSess.maskedEventIDs[id] = v
+		}
+	}
 	sess.EventMu.RUnlock()
 
 	// Copy track events.
