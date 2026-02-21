@@ -151,6 +151,7 @@ func (e *AutoEvaluator) Evaluate(
 	result := &SampleResult{SampleID: sample.SampleID}
 	result.QAResults = make([]*QAResult, 0, len(sample.QA))
 	catAgg := metrics.NewCategoryAggregator()
+	var sampleUsage TokenUsage
 
 	historyMsgs := buildHistoryMessages(
 		sample, e.config.QAHistoryTurns,
@@ -171,11 +172,15 @@ func (e *AutoEvaluator) Evaluate(
 		}
 		result.QAResults = append(result.QAResults, qaResult)
 		catAgg.Add(qa.Category, qaResult.Metrics)
+		if qaResult.TokenUsage != nil {
+			sampleUsage.Add(*qaResult.TokenUsage)
+		}
 	}
 
 	result.ByCategory = catAgg.GetCategoryMetrics()
 	result.Overall = catAgg.GetOverall()
 	result.TotalTimeMs = time.Since(startTime).Milliseconds()
+	result.TokenUsage = &sampleUsage
 	return result, nil
 }
 
@@ -215,7 +220,7 @@ func (e *AutoEvaluator) evaluateQA(
 		)
 	}
 
-	predicted, err := runWithRateLimitRetry(
+	res, err := runWithRateLimitRetry(
 		ctx, func() (<-chan *event.Event, error) {
 			return r.Run(
 				ctx, userKey.UserID, sessionID, msg,
@@ -226,6 +231,7 @@ func (e *AutoEvaluator) evaluateQA(
 	if err != nil {
 		return nil, fmt.Errorf("runner run: %w", err)
 	}
+	predicted := res.text
 
 	m := metrics.QAMetrics{
 		F1:   metrics.CalculateF1(predicted, qa.Answer),
@@ -244,6 +250,7 @@ func (e *AutoEvaluator) evaluateQA(
 		}
 	}
 
+	tu := res.usage
 	return &QAResult{
 		QuestionID: qa.QuestionID,
 		Question:   qa.Question,
@@ -252,6 +259,7 @@ func (e *AutoEvaluator) evaluateQA(
 		Predicted:  predicted,
 		Metrics:    m,
 		LatencyMs:  time.Since(start).Milliseconds(),
+		TokenUsage: &tu,
 	}, nil
 }
 

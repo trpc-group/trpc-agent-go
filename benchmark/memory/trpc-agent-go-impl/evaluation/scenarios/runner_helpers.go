@@ -225,26 +225,54 @@ const (
 	rateLimitBackoffMultiplier = 2
 )
 
-func collectFinalText(eventChan <-chan *event.Event) (string, error) {
-	lastAssistant := ""
+// collectResult holds the output of collecting events from a runner.
+type collectResult struct {
+	text  string
+	usage TokenUsage
+}
+
+func collectFinalTextAndUsage(
+	eventChan <-chan *event.Event,
+) (collectResult, error) {
+	var res collectResult
 	for ev := range eventChan {
 		if ev == nil {
 			continue
 		}
 		if ev.Error != nil {
-			return "", fmt.Errorf("runner event error: %s", ev.Error.Message)
+			return res, fmt.Errorf(
+				"runner event error: %s", ev.Error.Message,
+			)
 		}
-		if ev.Response != nil && len(ev.Response.Choices) > 0 {
-			msg := ev.Response.Choices[0].Message
-			if msg.Role == model.RoleAssistant && msg.Content != "" {
-				lastAssistant = msg.Content
+		if ev.Response != nil {
+			if len(ev.Response.Choices) > 0 {
+				msg := ev.Response.Choices[0].Message
+				if msg.Role == model.RoleAssistant &&
+					msg.Content != "" {
+					res.text = msg.Content
+				}
+			}
+			if ev.Response.Usage != nil {
+				res.usage.PromptTokens +=
+					ev.Response.Usage.PromptTokens
+				res.usage.CompletionTokens +=
+					ev.Response.Usage.CompletionTokens
+				res.usage.TotalTokens +=
+					ev.Response.Usage.TotalTokens
+				res.usage.LLMCalls++
 			}
 		}
 		if ev.IsFinalResponse() || ev.IsRunnerCompletion() {
 			break
 		}
 	}
-	return strings.TrimSpace(lastAssistant), nil
+	res.text = strings.TrimSpace(res.text)
+	return res, nil
+}
+
+func collectFinalText(eventChan <-chan *event.Event) (string, error) {
+	res, err := collectFinalTextAndUsage(eventChan)
+	return res.text, err
 }
 
 func isRateLimitError(err error) bool {
@@ -280,35 +308,35 @@ func sleepWithContext(ctx context.Context, d time.Duration) error {
 func runWithRateLimitRetry(
 	ctx context.Context,
 	run func() (<-chan *event.Event, error),
-) (string, error) {
+) (collectResult, error) {
 	backoff := rateLimitInitialBackoff
 	for attempt := 0; attempt <= maxRateLimitRetries; attempt++ {
 		ch, err := run()
 		if err != nil {
 			if isRateLimitError(err) {
 				if sleepErr := sleepWithContext(ctx, backoff); sleepErr != nil {
-					return "", sleepErr
+					return collectResult{}, sleepErr
 				}
 				backoff = minDuration(backoff*time.Duration(rateLimitBackoffMultiplier), rateLimitMaxBackoff)
 				continue
 			}
-			return "", err
+			return collectResult{}, err
 		}
 
-		out, err := collectFinalText(ch)
+		res, err := collectFinalTextAndUsage(ch)
 		if err != nil {
 			if isRateLimitError(err) {
 				if sleepErr := sleepWithContext(ctx, backoff); sleepErr != nil {
-					return "", sleepErr
+					return collectResult{}, sleepErr
 				}
 				backoff = minDuration(backoff*time.Duration(rateLimitBackoffMultiplier), rateLimitMaxBackoff)
 				continue
 			}
-			return "", err
+			return collectResult{}, err
 		}
-		return out, nil
+		return res, nil
 	}
-	return "", fmt.Errorf("rate limit retry exceeded")
+	return collectResult{}, fmt.Errorf("rate limit retry exceeded")
 }
 
 func minDuration(a, b time.Duration) time.Duration {

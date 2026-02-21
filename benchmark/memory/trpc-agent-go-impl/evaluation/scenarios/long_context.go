@@ -76,6 +76,7 @@ type QAResult struct {
 	Metrics    metrics.QAMetrics `json:"metrics"`
 	LatencyMs  int64             `json:"latency_ms"`
 	TokensUsed int               `json:"tokens_used,omitempty"`
+	TokenUsage *TokenUsage       `json:"token_usage,omitempty"`
 }
 
 // SampleResult holds evaluation results for a single sample.
@@ -85,6 +86,7 @@ type SampleResult struct {
 	ByCategory  map[string]metrics.CategoryMetrics `json:"by_category"`
 	Overall     metrics.CategoryMetrics            `json:"overall"`
 	TotalTimeMs int64                              `json:"total_time_ms"`
+	TokenUsage  *TokenUsage                        `json:"token_usage,omitempty"`
 }
 
 // Evaluator is the interface for scenario evaluators.
@@ -188,6 +190,7 @@ func (e *LongContextEvaluator) Evaluate(
 		QAResults: make([]*QAResult, 0, len(sample.QA)),
 	}
 	catAgg := metrics.NewCategoryAggregator()
+	var sampleUsage TokenUsage
 
 	for _, qa := range sample.QA {
 		qaResult, err := e.evaluateQA(
@@ -198,11 +201,15 @@ func (e *LongContextEvaluator) Evaluate(
 		}
 		result.QAResults = append(result.QAResults, qaResult)
 		catAgg.Add(qa.Category, qaResult.Metrics)
+		if qaResult.TokenUsage != nil {
+			sampleUsage.Add(*qaResult.TokenUsage)
+		}
 	}
 
 	result.ByCategory = catAgg.GetCategoryMetrics()
 	result.Overall = catAgg.GetOverall()
 	result.TotalTimeMs = time.Since(startTime).Milliseconds()
+	result.TokenUsage = &sampleUsage
 	return result, nil
 }
 
@@ -233,12 +240,13 @@ func (e *LongContextEvaluator) evaluateQA(
 		},
 	}
 
-	predicted, err := runModelWithRateLimitRetry(
+	result, err := runModelWithRateLimitRetry(
 		ctx, e.model, req,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("model generate: %w", err)
 	}
+	predicted := result.text
 
 	m := metrics.QAMetrics{
 		F1:   metrics.CalculateF1(predicted, qa.Answer),
@@ -260,6 +268,16 @@ func (e *LongContextEvaluator) evaluateQA(
 	tokensUsed := transcriptTokens +
 		e.tokenCounter.Count(qa.Question) +
 		e.tokenCounter.Count(predicted)
+
+	var tu *TokenUsage
+	if result.usage != nil {
+		tu = &TokenUsage{
+			PromptTokens:     result.usage.PromptTokens,
+			CompletionTokens: result.usage.CompletionTokens,
+			TotalTokens:      result.usage.TotalTokens,
+			LLMCalls:         1,
+		}
+	}
 	return &QAResult{
 		QuestionID: qa.QuestionID,
 		Question:   qa.Question,
@@ -269,7 +287,14 @@ func (e *LongContextEvaluator) evaluateQA(
 		Metrics:    m,
 		LatencyMs:  time.Since(start).Milliseconds(),
 		TokensUsed: tokensUsed,
+		TokenUsage: tu,
 	}, nil
+}
+
+// runModelResult holds the output of a model call.
+type runModelResult struct {
+	text  string
+	usage *model.Usage
 }
 
 // runModelWithRateLimitRetry calls model.GenerateContent with
@@ -278,7 +303,7 @@ func runModelWithRateLimitRetry(
 	ctx context.Context,
 	m model.Model,
 	req *model.Request,
-) (string, error) {
+) (runModelResult, error) {
 	backoff := rateLimitInitialBackoff
 	for attempt := 0; attempt <= maxRateLimitRetries; attempt++ {
 		respCh, err := m.GenerateContent(ctx, req)
@@ -287,7 +312,7 @@ func runModelWithRateLimitRetry(
 				if sleepErr := sleepWithContext(
 					ctx, backoff,
 				); sleepErr != nil {
-					return "", sleepErr
+					return runModelResult{}, sleepErr
 				}
 				backoff = minDuration(
 					backoff*time.Duration(rateLimitBackoffMultiplier),
@@ -295,10 +320,11 @@ func runModelWithRateLimitRetry(
 				)
 				continue
 			}
-			return "", err
+			return runModelResult{}, err
 		}
 
 		var lastContent string
+		var lastUsage *model.Usage
 		for resp := range respCh {
 			if resp == nil {
 				continue
@@ -314,7 +340,7 @@ func runModelWithRateLimitRetry(
 					if sleepErr := sleepWithContext(
 						ctx, backoff,
 					); sleepErr != nil {
-						return "", sleepErr
+						return runModelResult{}, sleepErr
 					}
 					backoff = minDuration(
 						backoff*time.Duration(
@@ -323,9 +349,10 @@ func runModelWithRateLimitRetry(
 						rateLimitMaxBackoff,
 					)
 					lastContent = ""
+					lastUsage = nil
 					break
 				}
-				return "", fmt.Errorf(
+				return runModelResult{}, fmt.Errorf(
 					"model error: %s", errMsg,
 				)
 			}
@@ -335,9 +362,15 @@ func runModelWithRateLimitRetry(
 					lastContent = c
 				}
 			}
+			if resp.Usage != nil {
+				lastUsage = resp.Usage
+			}
 		}
 		if lastContent != "" {
-			return strings.TrimSpace(lastContent), nil
+			return runModelResult{
+				text:  strings.TrimSpace(lastContent),
+				usage: lastUsage,
+			}, nil
 		}
 		// Empty response (possibly rate limit or model overload).
 		// Apply backoff before retrying.
@@ -345,7 +378,7 @@ func runModelWithRateLimitRetry(
 			if sleepErr := sleepWithContext(
 				ctx, backoff,
 			); sleepErr != nil {
-				return "", sleepErr
+				return runModelResult{}, sleepErr
 			}
 			backoff = minDuration(
 				backoff*time.Duration(
@@ -356,7 +389,7 @@ func runModelWithRateLimitRetry(
 			continue
 		}
 	}
-	return "", fmt.Errorf("model returned empty response after retries")
+	return runModelResult{}, fmt.Errorf("model returned empty response after retries")
 }
 
 // buildTranscript concatenates all sessions into a single transcript

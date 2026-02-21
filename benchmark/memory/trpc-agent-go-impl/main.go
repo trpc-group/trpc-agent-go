@@ -190,6 +190,15 @@ type EvalSummary struct {
 	OverallLLMScore float64 `json:"overall_llm_score,omitempty"`
 	TotalTimeMs     int64   `json:"total_time_ms"`
 	AvgLatencyMs    float64 `json:"avg_latency_ms"`
+
+	// Token usage statistics.
+	TotalPromptTokens     int     `json:"total_prompt_tokens"`
+	TotalCompletionTokens int     `json:"total_completion_tokens"`
+	TotalTokens           int     `json:"total_tokens"`
+	TotalLLMCalls         int     `json:"total_llm_calls"`
+	AvgPromptTokensPerQA  float64 `json:"avg_prompt_tokens_per_qa"`
+	AvgCompletionPerQA    float64 `json:"avg_completion_tokens_per_qa"`
+	AvgLLMCallsPerQA      float64 `json:"avg_llm_calls_per_qa"`
 }
 
 func main() {
@@ -646,6 +655,7 @@ func runEvaluation(
 	catAgg := metrics.NewCategoryAggregator()
 	sampleResults := make([]*scenarios.SampleResult, 0, len(samples))
 	var totalQuestions int
+	var totalUsage scenarios.TokenUsage
 
 	for i, sample := range samples {
 		log.Printf("[%d/%d] Evaluating sample: %s (%d QA)",
@@ -666,15 +676,30 @@ func runEvaluation(
 			catAgg.Add(qaResult.Category, qaResult.Metrics)
 		}
 
+		// Aggregate token usage.
+		if result.TokenUsage != nil {
+			totalUsage.Add(*result.TokenUsage)
+		}
+
 		log.Printf("  Completed in %v | F1=%.3f BLEU=%.3f",
 			time.Since(sampleStart).Round(time.Millisecond),
 			result.Overall.F1,
 			result.Overall.BLEU)
+		if result.TokenUsage != nil &&
+			result.TokenUsage.LLMCalls > 0 {
+			log.Printf(
+				"  Tokens: prompt=%d completion=%d calls=%d",
+				result.TokenUsage.PromptTokens,
+				result.TokenUsage.CompletionTokens,
+				result.TokenUsage.LLMCalls,
+			)
+		}
 	}
 
 	totalTime := time.Since(startTime)
 	overall := catAgg.GetOverall()
 
+	qCount := max(totalQuestions, 1)
 	return &EvaluationResult{
 		Metadata: &EvalMetadata{
 			Framework:      "trpc-agent-go",
@@ -689,13 +714,20 @@ func runEvaluation(
 			LLMJudge:       config.EnableLLMJudge,
 		},
 		Summary: &EvalSummary{
-			TotalSamples:    len(sampleResults),
-			TotalQuestions:  totalQuestions,
-			OverallF1:       overall.F1,
-			OverallBLEU:     overall.BLEU,
-			OverallLLMScore: overall.LLMScore,
-			TotalTimeMs:     totalTime.Milliseconds(),
-			AvgLatencyMs:    float64(totalTime.Milliseconds()) / float64(max(totalQuestions, 1)),
+			TotalSamples:          len(sampleResults),
+			TotalQuestions:        totalQuestions,
+			OverallF1:             overall.F1,
+			OverallBLEU:           overall.BLEU,
+			OverallLLMScore:       overall.LLMScore,
+			TotalTimeMs:           totalTime.Milliseconds(),
+			AvgLatencyMs:          float64(totalTime.Milliseconds()) / float64(qCount),
+			TotalPromptTokens:     totalUsage.PromptTokens,
+			TotalCompletionTokens: totalUsage.CompletionTokens,
+			TotalTokens:           totalUsage.TotalTokens,
+			TotalLLMCalls:         totalUsage.LLMCalls,
+			AvgPromptTokensPerQA:  float64(totalUsage.PromptTokens) / float64(qCount),
+			AvgCompletionPerQA:    float64(totalUsage.CompletionTokens) / float64(qCount),
+			AvgLLMCallsPerQA:      float64(totalUsage.LLMCalls) / float64(qCount),
 		},
 		ByCategory:    catAgg.GetCategoryMetrics(),
 		SampleResults: sampleResults,
@@ -755,6 +787,21 @@ func printSummary(result *EvaluationResult) {
 	}
 	fmt.Printf("Total Time: %dms | Avg Latency: %.1fms\n",
 		result.Summary.TotalTimeMs, result.Summary.AvgLatencyMs)
+
+	if result.Summary.TotalLLMCalls > 0 {
+		fmt.Println("\n--- Token Usage ---")
+		fmt.Printf("Prompt Tokens:     %d (avg %.0f/QA)\n",
+			result.Summary.TotalPromptTokens,
+			result.Summary.AvgPromptTokensPerQA)
+		fmt.Printf("Completion Tokens: %d (avg %.0f/QA)\n",
+			result.Summary.TotalCompletionTokens,
+			result.Summary.AvgCompletionPerQA)
+		fmt.Printf("Total Tokens:      %d\n",
+			result.Summary.TotalTokens)
+		fmt.Printf("LLM Calls:         %d (avg %.1f/QA)\n",
+			result.Summary.TotalLLMCalls,
+			result.Summary.AvgLLMCallsPerQA)
+	}
 
 	fmt.Println("\n--- By Category ---")
 	fmt.Printf("%-15s %8s %8s %8s %8s\n", "Category", "Count", "F1", "BLEU", "LLM")
