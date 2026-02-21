@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"maps"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,6 +30,9 @@ const (
 	DefaultAsyncMemoryNum   = 1
 	DefaultMemoryQueueSize  = 10
 	DefaultMemoryJobTimeout = 30 * time.Second
+
+	memoryNotFoundErrSubstr = "memory with id"
+	memoryNotFoundErrMarker = "not found"
 )
 
 // MemoryJob represents a job for async memory extraction.
@@ -320,6 +324,15 @@ func (w *AutoMemoryWorker) createAutoMemory(
 	return nil
 }
 
+func isMemoryNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, memoryNotFoundErrSubstr) &&
+		strings.Contains(msg, memoryNotFoundErrMarker)
+}
+
 // operationToolName maps an operation type to the corresponding
 // memory tool name for enabled-tools gating.
 var operationToolName = map[extractor.OperationType]string{
@@ -327,6 +340,18 @@ var operationToolName = map[extractor.OperationType]string{
 	extractor.OperationUpdate: memory.UpdateToolName,
 	extractor.OperationDelete: memory.DeleteToolName,
 	extractor.OperationClear:  memory.ClearToolName,
+}
+
+// isToolEnabled checks whether the given tool name is allowed
+// by the EnabledTools configuration. Returns true when the
+// allow-list is nil or empty (all tools enabled by default).
+func (w *AutoMemoryWorker) isToolEnabled(toolName string) bool {
+	et := w.config.EnabledTools
+	if len(et) == 0 {
+		return true
+	}
+	_, ok := et[toolName]
+	return ok
 }
 
 // executeOperation executes a single memory operation.
@@ -362,6 +387,25 @@ func (w *AutoMemoryWorker) executeOperation(
 			MemoryID: op.MemoryID,
 		}
 		if err := w.operator.UpdateMemory(ctx, memKey, op.Memory, op.Topics); err != nil {
+			if isMemoryNotFoundError(err) {
+				if !w.isToolEnabled(memory.AddToolName) {
+					log.DebugfContext(ctx,
+						"auto_memory: update-not-found fallback "+
+							"skipped (add disabled) for user %s/%s, "+
+							"memory_id=%s",
+						userKey.AppName, userKey.UserID, op.MemoryID)
+					return
+				}
+				if addErr := w.operator.AddMemory(
+					ctx, userKey, op.Memory, op.Topics,
+				); addErr != nil {
+					log.WarnfContext(ctx,
+						"auto_memory: update missing, add memory failed for user %s/%s, memory_id=%s: %v",
+						userKey.AppName, userKey.UserID, op.MemoryID, addErr,
+					)
+				}
+				return
+			}
 			log.WarnfContext(ctx, "auto_memory: update memory failed for user %s/%s, memory_id=%s: %v",
 				userKey.AppName, userKey.UserID, op.MemoryID, err)
 		}
