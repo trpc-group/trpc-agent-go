@@ -10,6 +10,7 @@
 package redis
 
 import (
+	"maps"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -31,10 +32,16 @@ type ServiceOpts struct {
 	url          string
 	instanceName string
 	memoryLimit  int
+	// keyPrefix is the prefix for all redis keys.
+	// If set, all keys will be prefixed with this value
+	// followed by a colon. For example, if keyPrefix is
+	// "myapp", key "mem:{app:user}" becomes
+	// "myapp:mem:{app:user}".
+	keyPrefix string
 
 	// Tool related settings.
 	toolCreators      map[string]memory.ToolCreator
-	enabledTools      map[string]bool
+	enabledTools      map[string]struct{}
 	userExplicitlySet map[string]bool
 	extraOptions      []any
 
@@ -55,10 +62,7 @@ func (o ServiceOpts) clone() ServiceOpts {
 		opts.toolCreators[name] = toolCreator
 	}
 
-	opts.enabledTools = make(map[string]bool, len(o.enabledTools))
-	for name, enabled := range o.enabledTools {
-		opts.enabledTools[name] = enabled
-	}
+	opts.enabledTools = maps.Clone(o.enabledTools)
 
 	// Initialize userExplicitlySet map (empty for new clone).
 	opts.userExplicitlySet = make(map[string]bool)
@@ -101,26 +105,30 @@ func WithCustomTool(toolName string, creator memory.ToolCreator) ServiceOpt {
 			return
 		}
 		opts.toolCreators[toolName] = creator
-		opts.enabledTools[toolName] = true
+		opts.enabledTools[toolName] = struct{}{}
 	}
 }
 
 // WithToolEnabled sets which tool is enabled.
 // If the tool name is invalid, this option will do nothing.
-// User settings via WithToolEnabled take precedence over auto mode defaults,
-// regardless of option order.
+// User settings via WithToolEnabled take precedence over auto mode
+// defaults, regardless of option order.
 func WithToolEnabled(toolName string, enabled bool) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		if !imemory.IsValidToolName(toolName) {
 			return
 		}
 		if opts.enabledTools == nil {
-			opts.enabledTools = make(map[string]bool)
+			opts.enabledTools = make(map[string]struct{})
 		}
 		if opts.userExplicitlySet == nil {
 			opts.userExplicitlySet = make(map[string]bool)
 		}
-		opts.enabledTools[toolName] = enabled
+		if enabled {
+			opts.enabledTools[toolName] = struct{}{}
+		} else {
+			delete(opts.enabledTools, toolName)
+		}
 		opts.userExplicitlySet[toolName] = true
 	}
 }
@@ -166,5 +174,16 @@ func WithMemoryQueueSize(size int) ServiceOpt {
 func WithMemoryJobTimeout(timeout time.Duration) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.memoryJobTimeout = timeout
+	}
+}
+
+// WithKeyPrefix sets the prefix for all redis keys.
+// If set, all keys will be prefixed with this value
+// followed by a colon. For example, if keyPrefix is
+// "myapp", key "mem:{app:user}" becomes
+// "myapp:mem:{app:user}".
+func WithKeyPrefix(prefix string) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.keyPrefix = prefix
 	}
 }

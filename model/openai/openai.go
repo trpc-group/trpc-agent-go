@@ -1350,7 +1350,11 @@ func extractReasoningContent(extraFields map[string]respjson.Field) string {
 	}
 	reasoningField, ok := extraFields[model.ReasoningContentKey]
 	if !ok {
-		return ""
+		// Ollama and some providers use "reasoning" instead of "reasoning_content".
+		reasoningField, ok = extraFields[model.ReasoningContentKeyAlt]
+		if !ok {
+			return ""
+		}
 	}
 	reasoningStr, err := strconv.Unquote(reasoningField.Raw())
 	if err == nil {

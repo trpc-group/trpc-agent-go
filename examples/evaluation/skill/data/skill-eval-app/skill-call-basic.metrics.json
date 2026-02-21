@@ -23,9 +23,8 @@
               "matchStrategy": "exact"
             },
             "arguments": {
-              "ignoreTree": {
-                "docs": true,
-                "include_all_docs": true
+              "onlyTree": {
+                "skill": true
               },
               "matchStrategy": "exact"
             },
@@ -38,28 +37,16 @@
               "matchStrategy": "exact"
             },
             "arguments": {
-              "ignoreTree": {
-                "command": true,
-                "cwd": true,
-                "env": true,
-                "timeout": true,
-                "inputs": true,
-                "outputs": true,
-                "save_as_artifacts": true,
-                "omit_inline_content": true,
-                "artifact_prefix": true
+              "onlyTree": {
+                "skill": true,
+                "output_files": true
               },
               "matchStrategy": "exact"
             },
             "result": {
-              "ignoreTree": {
-                "stdout": true,
-                "stderr": true,
-                "duration_ms": true,
-                "warnings": true,
-                "primary_output": true,
-                "output_files": true,
-                "artifact_files": true
+              "onlyTree": {
+                "exit_code": true,
+                "timed_out": true
               },
               "matchStrategy": "exact"
             }

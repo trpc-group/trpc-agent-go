@@ -1,0 +1,17 @@
+langchain>=0.3.0,<0.4.0
+langchain-community>=0.3.0,<0.4.0
+langchain-openai>=0.2.0,<0.3.0
+langchain-text-splitters>=0.3.0,<0.4.0
+langchain-core>=0.3.0,<0.4.0
+langchain-postgres>=0.0.9
+psycopg[binary]>=3.1.0
+ragas>=0.1.0
+datasets>=2.14.0
+openai>=1.0.0,<2.0.0
+tiktoken>=0.5.0
+huggingface-hub>=0.19.0
+requests>=2.28.0
+agno>=2.4.0
+crewai>=1.9.0
+chromadb>=0.4.0
+pyautogen[retrievechat-pgvector]==0.2.35

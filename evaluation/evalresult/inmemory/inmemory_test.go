@@ -126,3 +126,7 @@ func TestManagerSaveCloneError(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "clone result")
 }
+
+func TestClose_NoError(t *testing.T) {
+	assert.NoError(t, New().Close())
+}

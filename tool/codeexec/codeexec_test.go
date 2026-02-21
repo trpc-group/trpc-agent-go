@@ -224,6 +224,142 @@ func TestExecuteCodeTool_Call(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, "Error: missing code_blocks", output.Output)
 	})
+
+	t.Run("double-encoded code_blocks string", func(t *testing.T) {
+		exec := &mockCodeExecutor{
+			result: codeexecutor.CodeExecutionResult{Output: "ok"},
+		}
+		ct := NewTool(exec)
+
+		// Simulate LLM double-encoding: code_blocks is a JSON string containing the array.
+		inner, _ := json.Marshal([]codeexecutor.CodeBlock{{Language: "python", Code: "1+1"}})
+		args, _ := json.Marshal(map[string]any{
+			"code_blocks": string(inner),
+		})
+
+		result, err := ct.Call(context.Background(), args)
+		require.NoError(t, err)
+		output, ok := result.(codeexecutor.CodeExecutionResult)
+		require.True(t, ok)
+		assert.Equal(t, "ok", output.Output)
+	})
+
+	t.Run("double-encoded code_blocks invalid inner JSON", func(t *testing.T) {
+		exec := &mockCodeExecutor{}
+		ct := NewTool(exec)
+
+		// code_blocks is a JSON string but its content is not valid JSON.
+		args, _ := json.Marshal(map[string]any{
+			"code_blocks": "not valid json",
+		})
+
+		_, err := ct.Call(context.Background(), args)
+		require.Error(t, err)
+	})
+
+	t.Run("single object code_block wrapped into array", func(t *testing.T) {
+		exec := &mockCodeExecutor{
+			result: codeexecutor.CodeExecutionResult{Output: "wrapped"},
+		}
+		ct := NewTool(exec)
+
+		// Simulate LLM sending a single object instead of an array.
+		args := []byte(`{"code_blocks":{"language":"python","code":"print(1)"}}`)
+
+		result, err := ct.Call(context.Background(), args)
+		require.NoError(t, err)
+		output, ok := result.(codeexecutor.CodeExecutionResult)
+		require.True(t, ok)
+		assert.Equal(t, "wrapped", output.Output)
+	})
+
+	t.Run("malformed code_blocks array", func(t *testing.T) {
+		exec := &mockCodeExecutor{}
+		ct := NewTool(exec)
+
+		// code_blocks starts with '[' but contains invalid JSON.
+		args := []byte(`{"code_blocks":[invalid]}`)
+
+		_, err := ct.Call(context.Background(), args)
+		require.Error(t, err)
+	})
+}
+
+func Test_unmarshalCodeBlocks(t *testing.T) {
+	t.Run("normal array", func(t *testing.T) {
+		raw := json.RawMessage(`[{"language":"python","code":"1+1"}]`)
+		blocks, err := unmarshalCodeBlocks(raw)
+		require.NoError(t, err)
+		require.Len(t, blocks, 1)
+		assert.Equal(t, "python", blocks[0].Language)
+		assert.Equal(t, "1+1", blocks[0].Code)
+	})
+
+	t.Run("single object", func(t *testing.T) {
+		raw := json.RawMessage(`{"language":"bash","code":"echo hi"}`)
+		blocks, err := unmarshalCodeBlocks(raw)
+		require.NoError(t, err)
+		require.Len(t, blocks, 1)
+		assert.Equal(t, "bash", blocks[0].Language)
+	})
+
+	t.Run("double-encoded string containing array", func(t *testing.T) {
+		inner, _ := json.Marshal([]codeexecutor.CodeBlock{{Language: "python", Code: "x"}})
+		raw, _ := json.Marshal(string(inner)) // string → "\"[...]\""
+		blocks, err := unmarshalCodeBlocks(raw)
+		require.NoError(t, err)
+		require.Len(t, blocks, 1)
+		assert.Equal(t, "python", blocks[0].Language)
+	})
+
+	t.Run("double-encoded string containing single object", func(t *testing.T) {
+		inner, _ := json.Marshal(codeexecutor.CodeBlock{Language: "python", Code: "y"})
+		raw, _ := json.Marshal(string(inner))
+		blocks, err := unmarshalCodeBlocks(raw)
+		require.NoError(t, err)
+		require.Len(t, blocks, 1)
+		assert.Equal(t, "python", blocks[0].Language)
+	})
+
+	t.Run("empty input", func(t *testing.T) {
+		blocks, err := unmarshalCodeBlocks(nil)
+		require.NoError(t, err)
+		assert.Nil(t, blocks)
+	})
+
+	t.Run("invalid JSON", func(t *testing.T) {
+		_, err := unmarshalCodeBlocks(json.RawMessage(`not json`))
+		require.Error(t, err)
+	})
+
+	t.Run("unexpected type (number)", func(t *testing.T) {
+		_, err := unmarshalCodeBlocks(json.RawMessage(`42`))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "expected array, object, or string")
+	})
+
+	t.Run("string containing invalid JSON", func(t *testing.T) {
+		raw, _ := json.Marshal("not valid json")
+		_, err := unmarshalCodeBlocks(raw)
+		require.Error(t, err)
+	})
+
+	t.Run("array with non-object element", func(t *testing.T) {
+		_, err := unmarshalCodeBlocks(json.RawMessage(`[42]`))
+		require.Error(t, err)
+	})
+
+	t.Run("object with invalid field type", func(t *testing.T) {
+		_, err := unmarshalCodeBlocks(json.RawMessage(`{"language":[1,2,3],"code":"x"}`))
+		require.Error(t, err)
+	})
+
+	t.Run("whitespace before value", func(t *testing.T) {
+		raw := json.RawMessage(`  [{"language":"python","code":"1"}]`)
+		blocks, err := unmarshalCodeBlocks(raw)
+		require.NoError(t, err)
+		require.Len(t, blocks, 1)
+	})
 }
 
 func TestExecuteCodeTool_Declaration(t *testing.T) {
