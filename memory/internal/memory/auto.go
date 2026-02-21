@@ -13,6 +13,8 @@ import (
 	"context"
 	"fmt"
 	"hash/fnv"
+	"maps"
+	"strings"
 	"sync"
 	"time"
 
@@ -320,6 +322,24 @@ func (w *AutoMemoryWorker) createAutoMemory(
 	}
 
 	return nil
+}
+
+func isMemoryNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, memoryNotFoundErrSubstr) &&
+		strings.Contains(msg, memoryNotFoundErrMarker)
+}
+
+// operationToolName maps an operation type to the corresponding
+// memory tool name for enabled-tools gating.
+var operationToolName = map[extractor.OperationType]string{
+	extractor.OperationAdd:    memory.AddToolName,
+	extractor.OperationUpdate: memory.UpdateToolName,
+	extractor.OperationDelete: memory.DeleteToolName,
+	extractor.OperationClear:  memory.ClearToolName,
 }
 
 // executeOperation executes a single memory operation.
