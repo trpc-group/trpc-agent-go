@@ -293,6 +293,12 @@ type Options struct {
 	// When 0 (default), no memories are preloaded (use tools instead).
 	// When < 0, all memories are loaded.
 	PreloadMemory int
+
+	// PostToolPrompt overrides the default dynamic prompt injected when
+	// tool results are detected. When empty, the built-in default prompt
+	// from processor.DefaultPostToolPrompt is used. Set to a non-empty
+	// string to customize the guidance given to the model after tool calls.
+	PostToolPrompt string
 }
 
 // WithModel sets the model to use.
@@ -823,6 +829,19 @@ func WithMessageFilterMode(mode MessageFilterMode) Option {
 func WithPreloadMemory(limit int) Option {
 	return func(opts *Options) {
 		opts.PreloadMemory = limit
+	}
+}
+
+// WithPostToolPrompt overrides the default dynamic prompt injected when tool
+// results are detected in the conversation. The default prompt guides the
+// model to synthesize results naturally without meta-commentary.
+//
+// Example usage:
+//
+//	llmagent.WithPostToolPrompt("[Dynamic Prompt] Summarize the tool output concisely.")
+func WithPostToolPrompt(prompt string) Option {
+	return func(opts *Options) {
+		opts.PostToolPrompt = prompt
 	}
 }
 
