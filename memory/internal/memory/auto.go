@@ -331,6 +331,7 @@ func isMemoryNotFoundError(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, memoryNotFoundErrSubstr) &&
 		strings.Contains(msg, memoryNotFoundErrMarker)
+}
   
 // operationToolName maps an operation type to the corresponding
 // memory tool name for enabled-tools gating.
