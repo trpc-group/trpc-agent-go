@@ -1515,3 +1515,118 @@ func TestConfigureExtractorEnabledTools(t *testing.T) {
 		})
 	})
 }
+
+func TestAutoMemoryWorker_IsToolEnabled(t *testing.T) {
+	tests := []struct {
+		name         string
+		enabledTools map[string]struct{}
+		toolName     string
+		expected     bool
+	}{
+		{
+			name:         "nil map allows all",
+			enabledTools: nil,
+			toolName:     memory.AddToolName,
+			expected:     true,
+		},
+		{
+			name:         "empty map allows all",
+			enabledTools: map[string]struct{}{},
+			toolName:     memory.AddToolName,
+			expected:     true,
+		},
+		{
+			name: "tool present in allow-list",
+			enabledTools: map[string]struct{}{
+				memory.AddToolName:    {},
+				memory.SearchToolName: {},
+			},
+			toolName: memory.AddToolName,
+			expected: true,
+		},
+		{
+			name: "tool absent from allow-list",
+			enabledTools: map[string]struct{}{
+				memory.SearchToolName: {},
+			},
+			toolName: memory.AddToolName,
+			expected: false,
+		},
+		{
+			name: "delete disabled",
+			enabledTools: map[string]struct{}{
+				memory.AddToolName:    {},
+				memory.UpdateToolName: {},
+			},
+			toolName: memory.DeleteToolName,
+			expected: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := &AutoMemoryWorker{
+				config: AutoMemoryConfig{
+					EnabledTools: tt.enabledTools,
+				},
+			}
+			assert.Equal(t, tt.expected,
+				w.isToolEnabled(tt.toolName))
+		})
+	}
+}
+
+func TestAutoMemoryWorker_ExecuteOperation_UpdateNotFound_AddDisabled(t *testing.T) {
+	op := newMockOperator()
+	op.updateErr = fmt.Errorf("memory with id mem-456 not found")
+	worker := &AutoMemoryWorker{
+		config: AutoMemoryConfig{
+			// Only update and search enabled; add is NOT.
+			EnabledTools: map[string]struct{}{
+				memory.UpdateToolName: {},
+				memory.SearchToolName: {},
+			},
+		},
+		operator: op,
+	}
+
+	worker.executeOperation(context.Background(), memory.UserKey{
+		AppName: "test-app",
+		UserID:  "user-1",
+	}, &extractor.Operation{
+		Type:     extractor.OperationUpdate,
+		MemoryID: "mem-456",
+		Memory:   "Updated memory.",
+		Topics:   []string{"topic1"},
+	})
+
+	// Fallback add should be skipped because add is disabled.
+	assert.Equal(t, 0, op.addCalls)
+}
+
+func TestAutoMemoryWorker_ExecuteOperation_UpdateNotFound_AddEnabled(t *testing.T) {
+	op := newMockOperator()
+	op.updateErr = fmt.Errorf("memory with id mem-789 not found")
+	worker := &AutoMemoryWorker{
+		config: AutoMemoryConfig{
+			// Both update and add are enabled.
+			EnabledTools: map[string]struct{}{
+				memory.UpdateToolName: {},
+				memory.AddToolName:    {},
+			},
+		},
+		operator: op,
+	}
+
+	worker.executeOperation(context.Background(), memory.UserKey{
+		AppName: "test-app",
+		UserID:  "user-1",
+	}, &extractor.Operation{
+		Type:     extractor.OperationUpdate,
+		MemoryID: "mem-789",
+		Memory:   "Updated memory.",
+		Topics:   []string{"topic1"},
+	})
+
+	// Fallback add should proceed because add is enabled.
+	assert.Equal(t, 1, op.addCalls)
+}

@@ -342,6 +342,18 @@ var operationToolName = map[extractor.OperationType]string{
 	extractor.OperationClear:  memory.ClearToolName,
 }
 
+// isToolEnabled checks whether the given tool name is allowed
+// by the EnabledTools configuration. Returns true when the
+// allow-list is nil or empty (all tools enabled by default).
+func (w *AutoMemoryWorker) isToolEnabled(toolName string) bool {
+	et := w.config.EnabledTools
+	if len(et) == 0 {
+		return true
+	}
+	_, ok := et[toolName]
+	return ok
+}
+
 // executeOperation executes a single memory operation.
 // Operations whose tool is disabled in config.EnabledTools are
 // silently skipped.
@@ -376,6 +388,14 @@ func (w *AutoMemoryWorker) executeOperation(
 		}
 		if err := w.operator.UpdateMemory(ctx, memKey, op.Memory, op.Topics); err != nil {
 			if isMemoryNotFoundError(err) {
+				if !w.isToolEnabled(memory.AddToolName) {
+					log.DebugfContext(ctx,
+						"auto_memory: update-not-found fallback "+
+							"skipped (add disabled) for user %s/%s, "+
+							"memory_id=%s",
+						userKey.AppName, userKey.UserID, op.MemoryID)
+					return
+				}
 				if addErr := w.operator.AddMemory(
 					ctx, userKey, op.Memory, op.Topics,
 				); addErr != nil {
