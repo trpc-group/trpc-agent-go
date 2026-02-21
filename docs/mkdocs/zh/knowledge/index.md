@@ -341,6 +341,35 @@ err := kb.Load(ctx,
 > - 请根据吞吐、成本与限流情况调节 `WithSourceConcurrency()`、`WithDocConcurrency()`
 > - 默认值在多数场景下较为均衡；需要更快速度可适当上调，遇到限流则下调
 
+## 评测对比
+
+我们使用 [RAGAS](https://docs.ragas.io/) 框架对 tRPC-Agent-Go、LangChain、Agno 和 CrewAI 进行了全面的 RAG 质量评测。
+
+
+> **详细文档**: 完整的评测方案、参数配置和结果分析请参考 [examples/knowledge/evaluation/README_CN.md](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/evaluation/README_CN.md)
+
+
+### 评测方案
+
+- **数据集**: HuggingFace 文档数据集（[m-ric/huggingface_doc](https://huggingface.co/datasets/m-ric/huggingface_doc)）
+- **评估指标**: 7 项 RAGAS 标准指标（Faithfulness、Answer Relevancy、Context Precision 等）
+- **对比对象**: tRPC-Agent-Go vs LangChain vs Agno vs CrewAI，使用相同的配置参数
+
+### 配置对齐
+
+为确保公平对比，四个系统使用完全相同的配置：
+
+| 参数 | 配置值 |
+|------|--------|
+| **System Prompt** | 统一的 5 条核心准则提示词 |
+| **Temperature** | 0 |
+| **Chunk Size** | 500 |
+| **Chunk Overlap** | 50 |
+| **Embedding Model** | server:274214 (1024 维) |
+| **Vector Store** | PGVector (CrewAI 使用 ChromaDB) |
+| **Agent 模型** | DeepSeek-V3.2 |
+
+
 ## 更多内容
 
 - [向量存储](vectorstore/index.md) - 配置各种向量数据库后端

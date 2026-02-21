@@ -13,7 +13,6 @@ import (
 	"context"
 	"fmt"
 	"hash/fnv"
-	"strings"
 	"sync"
 	"time"
 
@@ -49,6 +48,32 @@ type AutoMemoryConfig struct {
 	AsyncMemoryNum   int
 	MemoryQueueSize  int
 	MemoryJobTimeout time.Duration
+	// EnabledTools controls which memory operations the worker
+	// is allowed to execute. When non-empty, only operations
+	// whose corresponding tool name is present are executed;
+	// others are silently skipped. A nil or empty map means all
+	// operations are allowed (default).
+	EnabledTools map[string]struct{}
+}
+
+// EnabledToolsConfigurer is an optional capability interface.
+// Extractors that implement it can receive enabled tool flags
+// from the memory service during initialization.
+// This is intentionally not part of MemoryExtractor to avoid
+// breaking users who implement their own extractors.
+type EnabledToolsConfigurer interface {
+	SetEnabledTools(enabled map[string]struct{})
+}
+
+// ConfigureExtractorEnabledTools passes enabled tool flags to the
+// extractor if it implements EnabledToolsConfigurer.
+func ConfigureExtractorEnabledTools(
+	ext extractor.MemoryExtractor,
+	enabledTools map[string]struct{},
+) {
+	if c, ok := ext.(EnabledToolsConfigurer); ok {
+		c.SetEnabledTools(enabledTools)
+	}
 }
 
 // MemoryOperator defines the interface for memory operations.
@@ -72,7 +97,13 @@ type AutoMemoryWorker struct {
 }
 
 // NewAutoMemoryWorker creates a new auto memory worker.
-func NewAutoMemoryWorker(config AutoMemoryConfig, operator MemoryOperator) *AutoMemoryWorker {
+// The EnabledTools map is defensively copied so that callers
+// cannot mutate the worker's configuration after construction.
+func NewAutoMemoryWorker(
+	config AutoMemoryConfig,
+	operator MemoryOperator,
+) *AutoMemoryWorker {
+	config.EnabledTools = maps.Clone(config.EnabledTools)
 	return &AutoMemoryWorker{
 		config:   config,
 		operator: operator,
@@ -291,21 +322,26 @@ func (w *AutoMemoryWorker) createAutoMemory(
 	return nil
 }
 
-func isMemoryNotFoundError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return strings.Contains(msg, memoryNotFoundErrSubstr) &&
-		strings.Contains(msg, memoryNotFoundErrMarker)
-}
-
 // executeOperation executes a single memory operation.
+// Operations whose tool is disabled in config.EnabledTools are
+// silently skipped.
 func (w *AutoMemoryWorker) executeOperation(
 	ctx context.Context,
 	userKey memory.UserKey,
 	op *extractor.Operation,
 ) {
+	if et := w.config.EnabledTools; et != nil {
+		if name, ok := operationToolName[op.Type]; ok {
+			if _, enabled := et[name]; !enabled {
+				log.DebugfContext(ctx,
+					"auto_memory: skipping disabled %s "+
+						"operation for user %s/%s",
+					op.Type, userKey.AppName, userKey.UserID)
+				return
+			}
+		}
+	}
+
 	switch op.Type {
 	case extractor.OperationAdd:
 		if err := w.operator.AddMemory(ctx, userKey, op.Memory, op.Topics); err != nil {
