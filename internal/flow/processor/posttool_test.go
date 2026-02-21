@@ -51,12 +51,12 @@ func TestPostToolRequestProcessor_WithToolResults_DefaultPrompt(t *testing.T) {
 	require.Len(t, req.Messages, 4)
 	assert.Equal(t, model.RoleSystem, req.Messages[0].Role)
 	assert.Contains(t, req.Messages[0].Content, "You are helpful.")
-	assert.Contains(t, req.Messages[0].Content, "[Dynamic Prompt]")
+	assert.Contains(t, req.Messages[0].Content, "[Tool Prompt]")
 	assert.Contains(t, req.Messages[0].Content, "Analyze the tool result")
 }
 
 func TestPostToolRequestProcessor_WithToolResults_CustomPrompt(t *testing.T) {
-	customPrompt := "[Dynamic Prompt] Be concise and direct."
+	customPrompt := "[Tool Prompt] Be concise and direct."
 	p := NewPostToolRequestProcessor(WithPostToolPrompt(customPrompt))
 	req := &model.Request{
 		Messages: []model.Message{
@@ -111,7 +111,7 @@ func TestPostToolRequestProcessor_MultipleToolResults(t *testing.T) {
 	// Messages count unchanged; prompt appended to system message.
 	require.Len(t, req.Messages, 5)
 	assert.Equal(t, model.RoleSystem, req.Messages[0].Role)
-	assert.Contains(t, req.Messages[0].Content, "[Dynamic Prompt]")
+	assert.Contains(t, req.Messages[0].Content, "[Tool Prompt]")
 }
 
 func TestPostToolRequestProcessor_NoSystemMessage(t *testing.T) {
@@ -128,7 +128,7 @@ func TestPostToolRequestProcessor_NoSystemMessage(t *testing.T) {
 	// A new system message should be prepended.
 	require.Len(t, req.Messages, 4)
 	assert.Equal(t, model.RoleSystem, req.Messages[0].Role)
-	assert.Contains(t, req.Messages[0].Content, "[Dynamic Prompt]")
+	assert.Contains(t, req.Messages[0].Content, "[Tool Prompt]")
 	// Original messages shifted.
 	assert.Equal(t, model.RoleUser, req.Messages[1].Role)
 }
