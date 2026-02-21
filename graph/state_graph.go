@@ -34,6 +34,7 @@ import (
 	stateinject "trpc.group/trpc-go/trpc-agent-go/internal/state"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
 	"trpc.group/trpc-go/trpc-agent-go/internal/util"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -114,6 +115,14 @@ func WithDescription(description string) Option {
 func WithNodeType(nodeType NodeType) Option {
 	return func(node *Node) {
 		node.Type = nodeType
+	}
+}
+
+// WithUserInputKey sets the state key used as one-shot user input for LLM and
+// Agent nodes. When empty, StateKeyUserInput is used.
+func WithUserInputKey(key string) Option {
+	return func(node *Node) {
+		node.userInputKey = key
 	}
 }
 
@@ -484,6 +493,7 @@ func (sg *StateGraph) AddLLMNode(
 	// Build LLM-specific options from node config
 	llmOptsForFunc := []LLMNodeFuncOption{
 		WithLLMNodeID(id),
+		WithLLMUserInputKey(node.userInputKey),
 		WithLLMRefreshToolSetsOnRun(node.refreshToolSetsOnRun),
 		WithLLMToolSets(node.toolSets),
 	}
@@ -876,6 +886,18 @@ func WithLLMNodeID(nodeID string) LLMNodeFuncOption {
 	}
 }
 
+// WithLLMUserInputKey sets the one-shot input state key used by the LLM node.
+// When empty, StateKeyUserInput is used.
+func WithLLMUserInputKey(key string) LLMNodeFuncOption {
+	return func(runner *llmRunner) {
+		if key == "" {
+			runner.userInputKey = StateKeyUserInput
+			return
+		}
+		runner.userInputKey = key
+	}
+}
+
 // WithLLMRefreshToolSetsOnRun controls whether tools from ToolSets are
 // refreshed from the underlying ToolSet on each LLM node run.
 func WithLLMRefreshToolSetsOnRun(refresh bool) LLMNodeFuncOption {
@@ -957,6 +979,7 @@ func NewLLMNodeFunc(
 		instruction:      instruction,
 		tools:            tools,
 		generationConfig: model.GenerationConfig{Stream: true},
+		userInputKey:     StateKeyUserInput,
 	}
 	for _, opt := range opts {
 		opt(runner)
@@ -985,6 +1008,7 @@ type llmRunner struct {
 	refreshToolSetsOnRun bool
 	nodeID               string
 	generationConfig     model.GenerationConfig
+	userInputKey         string
 }
 
 // execute implements the three-stage rule for LLM execution.
@@ -1009,9 +1033,19 @@ func (r *llmRunner) execute(ctx context.Context, state State, span oteltrace.Spa
 			},
 		)
 	}
-	if userInput, exists := state[StateKeyUserInput]; exists {
+	userInputKey := r.userInputKey
+	if userInputKey == "" {
+		userInputKey = StateKeyUserInput
+	}
+	if userInput, exists := state[userInputKey]; exists {
 		if input, ok := userInput.(string); ok && input != "" {
-			return r.executeUserInputStage(ctx, state, input, span)
+			return r.executeUserInputStage(
+				ctx,
+				state,
+				userInputKey,
+				input,
+				span,
+			)
 		}
 	}
 	return r.executeHistoryStage(ctx, state, span)
@@ -1051,7 +1085,11 @@ func (r *llmRunner) executeOneShotStage(
 }
 
 func (r *llmRunner) executeUserInputStage(
-	ctx context.Context, state State, userInput string, span oteltrace.Span,
+	ctx context.Context,
+	state State,
+	userInputKey string,
+	userInput string,
+	span oteltrace.Span,
 ) (any, error) {
 	var history []model.Message
 	if msgData, exists := state[StateKeyMessages]; exists {
@@ -1079,9 +1117,12 @@ func (r *llmRunner) executeUserInputStage(
 	if asst != nil {
 		ops = append(ops, AppendMessages{Items: []model.Message{*asst}})
 	}
+	if userInputKey == "" {
+		userInputKey = StateKeyUserInput
+	}
 	return State{
 		StateKeyMessages:     ops,
-		StateKeyUserInput:    "", // Clear user input after execution.
+		userInputKey:         "", // Clear user input after execution.
 		StateKeyLastResponse: asst.Content,
 		StateKeyLastResponseID: func() string {
 			return extractResponseID(result)
@@ -1141,6 +1182,8 @@ func (r *llmRunner) executeModel(
 		Tools:            tools,
 		GenerationConfig: r.generationConfig,
 	}
+	// Sanitize invalid tool calls in history to avoid poisoning future requests.
+	request.Messages = toolcall.SanitizeMessagesWithTools(request.Messages, request.Tools)
 	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
 		if opts := graphCallOptionsFromConfigs(
 			inv.RunOptions.CustomAgentConfigs,
@@ -1159,7 +1202,7 @@ func (r *llmRunner) executeModel(
 	modelCallbacks, _ := state[StateKeyModelCallbacks].(*model.Callbacks)
 	// Build model input metadata from the original state and instruction
 	// so events accurately reflect both instruction and user input.
-	modelInput := extractModelInput(state, instructionUsed)
+	modelInput := extractModelInput(state, instructionUsed, r.userInputKey)
 	startTime := time.Now()
 	modelName := getModelName(r.llmModel)
 	emitModelStartEvent(ctx, eventChan, invocationID, modelName, nodeID, modelInput, startTime)
@@ -1852,6 +1895,7 @@ type agentNodeConfig struct {
 	scope               string
 	inputFromLast       bool
 	llmGenerationConfig *model.GenerationConfig
+	userInputKey        string
 }
 
 func agentNodeConfigFromOptions(opts ...Option) agentNodeConfig {
@@ -1867,6 +1911,7 @@ func agentNodeConfigFromOptions(opts ...Option) agentNodeConfig {
 		scope:               dummyNode.agentEventScope,
 		inputFromLast:       dummyNode.agentInputFromLastResponse,
 		llmGenerationConfig: dummyNode.llmGenerationConfig,
+		userInputKey:        dummyNode.userInputKey,
 	}
 }
 
@@ -1879,7 +1924,7 @@ func finalizeInvokeAgentSpan(span oteltrace.Span, errp *error) {
 	span.SetStatus(codes.Error, err.Error())
 	span.SetAttributes(attribute.String(
 		itelemetry.KeyErrorType,
-		itelemetry.ValueDefaultErrorType,
+		itelemetry.ToErrorType(err, itelemetry.ValueDefaultErrorType),
 	))
 	span.End()
 }
@@ -2004,7 +2049,11 @@ func buildChildStateForAgentNode(
 	return childState
 }
 
-func mapParentInputFromLastResponse(state State, enabled bool) State {
+func mapParentInputFromLastResponse(
+	state State,
+	enabled bool,
+	userInputKey string,
+) State {
 	if !enabled {
 		return state
 	}
@@ -2013,7 +2062,10 @@ func mapParentInputFromLastResponse(state State, enabled bool) State {
 		return state
 	}
 	cloned := state.Clone()
-	cloned[StateKeyUserInput] = lastResponse
+	if userInputKey == "" {
+		userInputKey = StateKeyUserInput
+	}
+	cloned[userInputKey] = lastResponse
 	return cloned
 }
 
@@ -2067,7 +2119,11 @@ func finalizeAgentNodeOutput(
 	nodeID string,
 	streamRes agentEventStreamResult,
 	outputMapper SubgraphOutputMapper,
+	userInputKey string,
 ) any {
+	if userInputKey == "" {
+		userInputKey = StateKeyUserInput
+	}
 	if outputMapper != nil {
 		mapped := outputMapper(state, SubgraphResult{
 			LastResponse:     streamRes.lastResponse,
@@ -2075,17 +2131,22 @@ func finalizeAgentNodeOutput(
 			RawStateDelta:    streamRes.rawDelta,
 			StructuredOutput: streamRes.structuredOutput,
 		})
-		if mapped != nil {
-			return mapped
+		if len(mapped) == 0 {
+			return State{}
 		}
-		return State{}
+		if _, ok := mapped[userInputKey]; !ok {
+			copied := mapped.Clone()
+			copied[userInputKey] = ""
+			return copied
+		}
+		return mapped
 	}
 	upd := State{}
 	upd[StateKeyLastResponse] = streamRes.lastResponse
 	upd[StateKeyNodeResponses] = map[string]any{
 		nodeID: streamRes.lastResponse,
 	}
-	upd[StateKeyUserInput] = ""
+	upd[userInputKey] = ""
 	return upd
 }
 
@@ -2114,16 +2175,21 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		childState := buildChildStateForAgentNode(state, nodeID, targetAgent, cfg)
 
 		// Optionally map parent's last_response to user_input for this agent node.
-		parentForInput := mapParentInputFromLastResponse(state, cfg.inputFromLast)
+		parentForInput := mapParentInputFromLastResponse(
+			state,
+			cfg.inputFromLast,
+			cfg.userInputKey,
+		)
 
 		// Build invocation for the target agent with custom runtime state and scope.
-		invocation := buildAgentInvocationWithStateAndScope(
+		invocation := buildAgentInvocationWithStateScopeAndInputKey(
 			ctx,
 			parentForInput,
 			childState,
 			targetAgent,
 			nodeID,
 			cfg.scope,
+			cfg.userInputKey,
 		)
 
 		itelemetry.TraceBeforeInvokeAgent(
@@ -2215,6 +2281,7 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 			nodeID,
 			streamRes,
 			cfg.outputMapper,
+			cfg.userInputKey,
 		), nil
 	}
 }
@@ -2332,7 +2399,8 @@ func processAgentEventStream(
 	return res, nil
 }
 
-// buildAgentInvocationWithStateAndScope builds an invocation for the target agent
+// buildAgentInvocationWithStateScopeAndInputKey builds an invocation for the
+// target agent
 // using a custom runtime state and an optional event filter scope segment.
 //
 // FilterKey Strategy:
@@ -2344,17 +2412,21 @@ func processAgentEventStream(
 //
 // Format: parentKey/agentName (without UUID)
 // Example: "input/knowledge" instead of "input/knowledge/random-uuid"
-func buildAgentInvocationWithStateAndScope(
+func buildAgentInvocationWithStateScopeAndInputKey(
 	ctx context.Context,
 	parentState State,
 	runtime State,
 	targetAgent agent.Agent,
 	nodeID string,
 	scope string,
+	userInputKey string,
 ) *agent.Invocation {
 	// Extract user input from parent state.
 	var userInput string
-	if input, exists := parentState[StateKeyUserInput]; exists {
+	if userInputKey == "" {
+		userInputKey = StateKeyUserInput
+	}
+	if input, exists := parentState[userInputKey]; exists {
 		if inputStr, ok := input.(string); ok {
 			userInput = inputStr
 		}
@@ -2406,6 +2478,25 @@ func buildAgentInvocationWithStateAndScope(
 		agent.WithInvocationEventFilterKey(targetAgent.Info().Name),
 	)
 	return inv
+}
+
+func buildAgentInvocationWithStateAndScope(
+	ctx context.Context,
+	parentState State,
+	runtime State,
+	targetAgent agent.Agent,
+	nodeID string,
+	scope string,
+) *agent.Invocation {
+	return buildAgentInvocationWithStateScopeAndInputKey(
+		ctx,
+		parentState,
+		runtime,
+		targetAgent,
+		nodeID,
+		scope,
+		StateKeyUserInput,
+	)
 }
 
 const (
@@ -2708,10 +2799,13 @@ func runTool(
 }
 
 // extractModelInput extracts the model input from state and instruction.
-func extractModelInput(state State, instruction string) string {
+func extractModelInput(state State, instruction, userInputKey string) string {
 	var input string
 	// Get user input if available.
-	if userInput, exists := state[StateKeyUserInput]; exists {
+	if userInputKey == "" {
+		userInputKey = StateKeyUserInput
+	}
+	if userInput, exists := state[userInputKey]; exists {
 		if inputStr, ok := userInput.(string); ok && inputStr != "" {
 			input = inputStr
 		}
@@ -2825,7 +2919,7 @@ func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (a
 	// Get or create timing info from invocation (only record first LLM call)
 	timingInfo := invocation.GetOrCreateTimingInfo()
 	// Create telemetry tracker and defer metrics recording
-	tracker := itelemetry.NewChatMetricsTracker(ctx, invocation, config.Request, timingInfo, &err)
+	tracker := itelemetry.NewChatMetricsTracker(ctx, invocation, config.Request, timingInfo, nil, &err)
 	defer tracker.RecordMetrics()()
 
 	// Process response.
@@ -2857,7 +2951,13 @@ func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (a
 		}
 		if lastEvent != nil {
 			tracker.SetLastEvent(lastEvent)
-			itelemetry.TraceChat(config.Span, invocation, config.Request, response, lastEvent.ID, tracker.FirstTokenTimeDuration())
+			itelemetry.TraceChat(config.Span, &itelemetry.TraceChatAttributes{
+				Invocation:       invocation,
+				Request:          config.Request,
+				Response:         response,
+				EventID:          lastEvent.ID,
+				TimeToFirstToken: tracker.FirstTokenTimeDuration(),
+			})
 		}
 
 		if len(response.Choices) > 0 && len(response.Choices[0].Message.ToolCalls) > 0 {

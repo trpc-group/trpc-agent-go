@@ -36,12 +36,14 @@ func TestWithIgnoreTreeAndCompare(t *testing.T) {
 	called := false
 	opts := newOptions(
 		WithIgnoreTree(map[string]any{"k": true}),
+		WithOnlyTree(map[string]any{"only": true}),
 		WithCompare(func(actual, expected any) (bool, error) {
 			called = true
 			return true, nil
 		}),
 	)
 	assert.Equal(t, map[string]any{"k": true}, opts.ignoreTree)
+	assert.Equal(t, map[string]any{"only": true}, opts.onlyTree)
 	assert.NotNil(t, opts.compare)
 	_, _ = opts.compare(map[string]any{}, map[string]any{})
 	assert.True(t, called)

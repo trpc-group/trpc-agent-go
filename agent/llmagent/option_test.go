@@ -152,6 +152,22 @@ func TestWithReasoningContentMode(t *testing.T) {
 	}
 }
 
+func TestWithSkillLoadMode(t *testing.T) {
+	a := New("test-agent")
+	require.Equal(t, SkillLoadModeTurn, a.option.SkillLoadMode)
+
+	b := New("test-agent", WithSkillLoadMode(SkillLoadModeSession))
+	require.Equal(t, SkillLoadModeSession, b.option.SkillLoadMode)
+}
+
+func TestWithSkillsLoadedContentInToolResults(t *testing.T) {
+	a := New("test-agent")
+	require.False(t, a.option.SkillsLoadedContentInToolResults)
+
+	b := New("test-agent", WithSkillsLoadedContentInToolResults(true))
+	require.True(t, b.option.SkillsLoadedContentInToolResults)
+}
+
 func TestWithMaxLimits_OnOptions(t *testing.T) {
 	opts := &Options{}
 

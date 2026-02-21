@@ -793,11 +793,21 @@ redisService, err := memoryredis.NewService(
 - `WithRedisClientURL(url)`: Redis connection URL (recommended)
 - `WithRedisInstance(name)`: Use pre-registered Redis instance
 - `WithMemoryLimit(limit)`: Memory limit per user
+- `WithKeyPrefix(prefix)`: Set a prefix for all Redis keys. When set, every key is prefixed with `prefix:`. For example, if `prefix` is `"myapp"`, the key `mem:{app:user}` becomes `myapp:mem:{app:user}`. Default is empty (no prefix). This is useful for sharing a single Redis instance across multiple environments or services
 - `WithCustomTool(toolName, creator)`: Register custom tool
 - `WithToolEnabled(toolName, enabled)`: Enable/disable tool
 - `WithExtraOptions(...options)`: Extra options passed to Redis client
 
 **Note**: `WithRedisClientURL` takes priority over `WithRedisInstance`
+
+**Key prefix example**:
+
+```go
+redisService, err := memoryredis.NewService(
+    memoryredis.WithRedisClientURL("redis://localhost:6379"),
+    memoryredis.WithKeyPrefix("prod"),
+)
+```
 
 ### MySQL Storage
 
@@ -1272,6 +1282,29 @@ memExtractor := extractor.NewExtractor(
     extractorModel,
     extractor.WithChecker(extractor.CheckMessageThreshold(10)),
     extractor.WithChecker(extractor.CheckTimeInterval(5*time.Minute)),
+)
+```
+
+#### Model callbacks (before/after)
+
+The extractor also supports injecting before/after model callbacks via `model.Callbacks` (structured only). This is useful for tracing, request rewriting, or short-circuiting the model call in tests.
+
+```go
+callbacks := model.NewCallbacks().RegisterBeforeModel(
+    func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+        // You can modify args.Request or return CustomResponse.
+        return nil, nil
+    },
+).RegisterAfterModel(
+    func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+        // You can inspect/override args.Response.
+        return nil, nil
+    },
+)
+
+memExtractor := extractor.NewExtractor(
+    extractorModel,
+    extractor.WithModelCallbacks(callbacks),
 )
 ```
 

@@ -16,6 +16,7 @@ package processor
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -266,38 +267,43 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	if invocation.Session != nil {
 		var messages []model.Message
 		var summaryUpdatedAt time.Time
+		var summaryMsg *model.Message
 		// Skip session summary when include_contents=none, but still get current
 		// invocation's events (tool calls/results) to maintain ReAct loop context.
 		if !skipHistory && p.AddSessionSummary && p.TimelineFilterMode == TimelineFilterAll {
-			// Add session summary as a system message if enabled and available.
-			// Also get the summary's UpdatedAt to ensure consistency with incremental messages.
-			if msg, updatedAt := p.getSessionSummaryMessage(invocation); msg != nil {
-				// Insert summary as a separate system message after the first system message.
-				systemMsgIndex := findSystemMessageIndex(req.Messages)
-				if systemMsgIndex >= 0 {
-					// Insert summary as a new system message after the first system message.
-					req.Messages = append(req.Messages[:systemMsgIndex+1],
-						append([]model.Message{*msg}, req.Messages[systemMsgIndex+1:]...)...)
-				} else {
-					// No system message exists, prepend new system message.
-					req.Messages = append([]model.Message{*msg}, req.Messages...)
-				}
-				summaryUpdatedAt = updatedAt
-			}
+			// Fetch session summary early so we can insert it after other
+			// semi-stable system blocks (for example, preloaded memories).
+			summaryMsg, summaryUpdatedAt =
+				p.getSessionSummaryMessage(invocation)
 		}
 
 		// Preload memories into system prompt if configured.
 		// PreloadMemory: 0 = disabled, -1 = all, N > 0 = most recent N.
 		if p.PreloadMemory != 0 && invocation.MemoryService != nil {
 			if memMsg := p.getPreloadMemoryMessage(ctx, invocation); memMsg != nil {
-				// Insert memory as a system message after the first system message.
-				systemMsgIndex := findSystemMessageIndex(req.Messages)
+				// Insert memory as a system message after the last system
+				// message to keep stable instructions cacheable.
+				systemMsgIndex := findLastSystemMessageIndex(
+					req.Messages,
+				)
 				if systemMsgIndex >= 0 {
 					req.Messages = append(req.Messages[:systemMsgIndex+1],
 						append([]model.Message{*memMsg}, req.Messages[systemMsgIndex+1:]...)...)
 				} else {
 					req.Messages = append([]model.Message{*memMsg}, req.Messages...)
 				}
+			}
+		}
+
+		if summaryMsg != nil {
+			// Insert summary as a separate system message after the last
+			// system message to keep stable instructions cacheable.
+			systemMsgIndex := findLastSystemMessageIndex(req.Messages)
+			if systemMsgIndex >= 0 {
+				req.Messages = append(req.Messages[:systemMsgIndex+1],
+					append([]model.Message{*summaryMsg}, req.Messages[systemMsgIndex+1:]...)...)
+			} else {
+				req.Messages = append([]model.Message{*summaryMsg}, req.Messages...)
 			}
 		}
 
@@ -314,7 +320,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		needToAddInvocationMessage = len(messages) == 0
 	}
 
-	if invocation.Message.Content != "" && needToAddInvocationMessage {
+	if model.HasPayload(invocation.Message) && needToAddInvocationMessage {
 		req.Messages = append(req.Messages, invocation.Message)
 		log.DebugfContext(
 			ctx,
@@ -394,7 +400,14 @@ func (p *ContentRequestProcessor) aggregatePrefixSummaries(
 	var latestTime time.Time
 	filterPrefix := prefix + agent.EventFilterKeyDelimiter
 
-	for key, sum := range summaries {
+	keys := make([]string, 0, len(summaries))
+	for key := range summaries {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		sum := summaries[key]
 		if sum == nil || sum.Summary == "" {
 			continue
 		}
@@ -456,7 +469,7 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 	inv.Session.EventMu.RUnlock()
 
 	// insert invocation message
-	if !includedInvocationMessage && inv.Message.Content != "" {
+	if !includedInvocationMessage && model.HasPayload(inv.Message) {
 		events = p.insertInvocationMessage(events, inv)
 	}
 
@@ -464,10 +477,7 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 	resultEvents = p.rearrangeAsyncFuncRespHist(resultEvents)
 
 	// Get current request ID for reasoning content filtering.
-	currentRequestID := ""
-	if inv != nil && inv.RunOptions.RequestID != "" {
-		currentRequestID = inv.RunOptions.RequestID
-	}
+	currentRequestID := inv.RunOptions.RequestID
 
 	// Convert events to messages with reasoning content handling.
 	var messages []model.Message
@@ -482,6 +492,9 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 				msg := choice.Message
 				// Apply reasoning content stripping based on mode.
 				msg = p.processReasoningContent(msg, evt.RequestID, currentRequestID)
+				if isEmptyAssistantMessage(msg) {
+					continue
+				}
 				messages = append(messages, msg)
 			}
 		}
@@ -489,14 +502,51 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 
 	messages = p.mergeUserMessages(messages)
 
-	// Apply MaxHistoryRuns limit if set MaxHistoryRuns and
-	// AddSessionSummary is false.
-	if !p.AddSessionSummary && p.MaxHistoryRuns > 0 &&
-		len(messages) > p.MaxHistoryRuns {
-		startIdx := len(messages) - p.MaxHistoryRuns
-		messages = messages[startIdx:]
+	// Apply MaxHistoryRuns limit when AddSessionSummary is false.
+	if !p.AddSessionSummary && p.MaxHistoryRuns > 0 {
+		messages = applyMaxHistoryRuns(messages, p.MaxHistoryRuns)
 	}
 	return messages
+}
+
+// applyMaxHistoryRuns trims messages to at most maxRuns entries from the tail.
+// If the trim boundary falls on a tool-result message whose corresponding
+// tool_use was truncated, the boundary is advanced past any such orphaned
+// results to prevent API 400 "unexpected tool_use_id" errors.
+func applyMaxHistoryRuns(messages []model.Message, maxRuns int) []model.Message {
+	if len(messages) <= maxRuns {
+		return messages
+	}
+	startIdx := len(messages) - maxRuns
+
+	// Only scan the truncated prefix when the boundary actually falls on a
+	// tool-result message; otherwise there's nothing to skip.
+	if messages[startIdx].Role != model.RoleTool || messages[startIdx].ToolID == "" {
+		return messages[startIdx:]
+	}
+
+	// Collect tool-call IDs that will be truncated (before startIdx).
+	truncatedToolIDs := make(map[string]struct{})
+	for i := 0; i < startIdx; i++ {
+		for _, tc := range messages[i].ToolCalls {
+			if tc.ID != "" {
+				truncatedToolIDs[tc.ID] = struct{}{}
+			}
+		}
+	}
+
+	// Skip orphaned tool results whose corresponding call was truncated.
+	for startIdx < len(messages) &&
+		messages[startIdx].Role == model.RoleTool &&
+		messages[startIdx].ToolID != "" {
+		if _, orphaned := truncatedToolIDs[messages[startIdx].ToolID]; orphaned {
+			startIdx++
+			continue
+		}
+		break
+	}
+
+	return messages[startIdx:]
 }
 
 // processReasoningContent applies reasoning content stripping based on the
@@ -526,6 +576,16 @@ func (p *ContentRequestProcessor) processReasoningContent(
 		}
 	}
 	return msg
+}
+
+func isEmptyAssistantMessage(msg model.Message) bool {
+	if msg.Role != model.RoleAssistant {
+		return false
+	}
+	return msg.Content == "" &&
+		len(msg.ContentParts) == 0 &&
+		len(msg.ToolCalls) == 0 &&
+		msg.ReasoningContent == ""
 }
 
 // getCurrentInvocationMessages gets messages only from the current invocation.
@@ -565,7 +625,7 @@ func (p *ContentRequestProcessor) getCurrentInvocationMessages(inv *agent.Invoca
 			break
 		}
 	}
-	if !hasInvocationMessage && inv.Message.Content != "" {
+	if !hasInvocationMessage && model.HasPayload(inv.Message) {
 		events = p.insertInvocationMessage(events, inv)
 	}
 
@@ -573,10 +633,7 @@ func (p *ContentRequestProcessor) getCurrentInvocationMessages(inv *agent.Invoca
 	resultEvents = p.rearrangeAsyncFuncRespHist(resultEvents)
 
 	// Get current request ID for reasoning content filtering.
-	currentRequestID := ""
-	if inv != nil && inv.RunOptions.RequestID != "" {
-		currentRequestID = inv.RunOptions.RequestID
-	}
+	currentRequestID := inv.RunOptions.RequestID
 
 	// Convert events to messages with reasoning content handling.
 	var messages []model.Message
@@ -590,6 +647,9 @@ func (p *ContentRequestProcessor) getCurrentInvocationMessages(inv *agent.Invoca
 			for _, choice := range ev.Choices {
 				msg := choice.Message
 				msg = p.processReasoningContent(msg, evt.RequestID, currentRequestID)
+				if isEmptyAssistantMessage(msg) {
+					continue
+				}
 				messages = append(messages, msg)
 			}
 		}
@@ -601,7 +661,7 @@ func (p *ContentRequestProcessor) getCurrentInvocationMessages(inv *agent.Invoca
 
 func (p *ContentRequestProcessor) insertInvocationMessage(
 	events []event.Event, inv *agent.Invocation) []event.Event {
-	if inv.Message.Content == "" {
+	if !model.HasPayload(inv.Message) {
 		return events
 	}
 	userMsgEvent := event.NewResponseEvent(inv.InvocationID, "user", &model.Response{

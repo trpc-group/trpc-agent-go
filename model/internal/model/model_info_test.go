@@ -42,6 +42,16 @@ func TestResolveContextWindow(t *testing.T) {
 			expected:  200000,
 		},
 		{
+			name:      "exact match - GPT-5.2",
+			modelName: "gpt-5.2",
+			expected:  400000,
+		},
+		{
+			name:      "exact match - GPT-5.2-instant",
+			modelName: "gpt-5.2-instant",
+			expected:  400000,
+		},
+		{
 			name:      "case insensitive match",
 			modelName: "GPT-4O",
 			expected:  128000,

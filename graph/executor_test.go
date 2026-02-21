@@ -223,6 +223,62 @@ func TestDocumentProcessingWorkflow(t *testing.T) {
 	})
 }
 
+func TestExecutor_NodeStartEvent_UsesCustomUserInputKey(t *testing.T) {
+	const (
+		testNodeID         = "llm"
+		testCustomInputKey = "custom_input"
+		testCustomInput    = "from-custom"
+	)
+
+	schema := MessagesStateSchema()
+	sg := NewStateGraph(schema)
+	sg.AddLLMNode(
+		testNodeID,
+		&MockModel{responses: map[string]string{}},
+		"inst",
+		nil,
+		WithUserInputKey(testCustomInputKey),
+	)
+	sg.SetEntryPoint(testNodeID)
+	sg.SetFinishPoint(testNodeID)
+
+	g, err := sg.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	initialState := State{
+		StateKeyUserInput:  "from-user",
+		testCustomInputKey: testCustomInput,
+	}
+	invocation := &agent.Invocation{InvocationID: "inv-node-start"}
+	eventChan, err := exec.Execute(
+		context.Background(),
+		initialState,
+		invocation,
+	)
+	require.NoError(t, err)
+
+	var got string
+	for ev := range eventChan {
+		if ev == nil || ev.Object != ObjectTypeGraphNodeStart {
+			continue
+		}
+		raw, ok := ev.StateDelta[MetadataKeyNode]
+		if !ok {
+			continue
+		}
+		var meta NodeExecutionMetadata
+		require.NoError(t, json.Unmarshal(raw, &meta))
+		if meta.NodeID != testNodeID {
+			continue
+		}
+		got = meta.ModelInput
+	}
+	require.Equal(t, testCustomInput, got)
+}
+
 // Ensure handleInterrupt still emits the interrupt event even when
 // the provided context is canceled, because it uses a fresh background
 // context with a timeout for emission.
@@ -237,7 +293,7 @@ func TestHandleInterrupt_EmitsEvent_WithCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := exec.handleInterrupt(ctx, inv, execCtx, intr, 7, nil)
+	err := exec.handleInterrupt(ctx, inv, execCtx, intr, 7, nil, nil)
 	require.True(t, IsInterruptError(err))
 	// Same interrupt should be propagated.
 	require.Same(t, intr, err)
@@ -2289,6 +2345,56 @@ func TestProcessConditionalEdges_Multi_SkipEmpty(t *testing.T) {
 	require.False(t, okEmpty, "expected no channel for empty branch key")
 }
 
+func TestExecutor_ConditionalUnknownTarget_ReturnsError(t *testing.T) {
+	const (
+		nodeStart    = "start"
+		unknownRoute = "missing_node"
+		invID        = "inv-unknown-target"
+	)
+
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode(nodeStart, func(ctx context.Context, s State) (any, error) {
+		return s, nil
+	})
+	sg.SetEntryPoint(nodeStart)
+	sg.AddConditionalEdges(
+		nodeStart,
+		func(ctx context.Context, s State) (string, error) {
+			return unknownRoute, nil
+		},
+		nil,
+	)
+
+	g, err := sg.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	events, err := exec.Execute(
+		context.Background(),
+		State{},
+		&agent.Invocation{InvocationID: invID},
+	)
+	require.NoError(t, err)
+
+	var gotErr *model.ResponseError
+	for ev := range events {
+		if ev.Error != nil {
+			gotErr = ev.Error
+		}
+	}
+	require.NotNil(t, gotErr)
+	require.Contains(t, gotErr.Message, unknownRoute)
+
+	channelName := ChannelBranchPrefix + unknownRoute
+	_, channelExists := g.getChannel(channelName)
+	require.False(t, channelExists)
+	triggerToNodes := g.getTriggerToNodes()
+	_, triggerExists := triggerToNodes[channelName]
+	require.False(t, triggerExists)
+}
+
 // minimalNoopNode returns a trivial node function for building test graphs.
 func minimalNoopNode(_ context.Context, _ State) (any, error) { return nil, nil }
 
@@ -3048,6 +3154,7 @@ func TestExecutor_executeStepTask_RecoversFromPanic(t *testing.T) {
 		nil,
 		task,
 		step,
+		nil,
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "task panic")

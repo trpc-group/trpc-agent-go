@@ -442,6 +442,85 @@ func TestModel_convertTools(t *testing.T) {
 	require.True(t, fn.Description.Valid() && fn.Description.Value == toolDesc, "function description mismatch")
 
 	require.False(t, reflect.ValueOf(fn.Parameters).IsZero(), "expected parameters to be populated from schema")
+	assert.Equal(t, "object", fn.Parameters["type"])
+	props, ok := fn.Parameters["properties"].(map[string]any)
+	require.True(t, ok, "expected properties to be an object")
+	assert.Empty(t, props, "expected empty properties for no-arg tool")
+}
+
+// TestModel_convertTools_StrictProxyTopLevelProperties validates the final JSON
+// payload shape expected by strict OpenAI-compatible proxies.
+func TestModel_convertTools_StrictProxyTopLevelProperties(t *testing.T) {
+	m := New("dummy")
+
+	toolsMap := map[string]tool.Tool{
+		"no_arg_tool": stubTool{decl: &tool.Declaration{
+			Name:        "no_arg_tool",
+			Description: "no args",
+			InputSchema: &tool.Schema{Type: "object"},
+		}},
+		"nested_tool": stubTool{decl: &tool.Declaration{
+			Name:        "nested_tool",
+			Description: "nested args",
+			InputSchema: &tool.Schema{
+				Type: "object",
+				Properties: map[string]*tool.Schema{
+					"nested": {Type: "object"},
+				},
+			},
+		}},
+	}
+
+	converted := m.convertTools(toolsMap)
+	require.Len(t, converted, 2)
+
+	payload := struct {
+		Tools []openai.ChatCompletionToolParam `json:"tools"`
+	}{
+		Tools: converted,
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	err = validateStrictTopLevelObjectProperties(body)
+	require.NoError(t, err)
+}
+
+func validateStrictTopLevelObjectProperties(payload []byte) error {
+	var req struct {
+		Tools []struct {
+			Function struct {
+				Name       string         `json:"name"`
+				Parameters map[string]any `json:"parameters"`
+			} `json:"function"`
+		} `json:"tools"`
+	}
+
+	if err := json.Unmarshal(payload, &req); err != nil {
+		return err
+	}
+	for _, toolParam := range req.Tools {
+		params := toolParam.Function.Parameters
+		if params == nil {
+			continue
+		}
+		typeVal, ok := params["type"].(string)
+		if !ok || typeVal != "object" {
+			continue
+		}
+		props, exists := params["properties"]
+		if !exists {
+			return fmt.Errorf("tool %q missing top-level properties in parameters", toolParam.Function.Name)
+		}
+		if _, ok := props.(map[string]any); !ok {
+			return fmt.Errorf(
+				"tool %q has non-object top-level properties type %T",
+				toolParam.Function.Name,
+				props,
+			)
+		}
+	}
+	return nil
 }
 
 func TestBuildToolDescription_AppendsOutputSchema(t *testing.T) {
@@ -2989,6 +3068,42 @@ func TestBuildChatRequest_EdgeCases(t *testing.T) {
 
 		chatReq, _ := m.buildChatRequest(req)
 		assert.NotEmpty(t, chatReq.Tools, "expected tools to be present")
+	})
+
+	t.Run("structured output disables parallel tool calls", func(t *testing.T) {
+		schema := map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		}
+		tools := map[string]tool.Tool{
+			"test_tool": stubTool{
+				decl: &tool.Declaration{
+					Name:        "test_tool",
+					Description: "A test tool",
+					InputSchema: &tool.Schema{Type: "object"},
+				},
+			},
+		}
+		req := &model.Request{
+			Messages: []model.Message{
+				model.NewUserMessage("test"),
+			},
+			Tools: tools,
+			StructuredOutput: &model.StructuredOutput{
+				Type: model.StructuredOutputJSONSchema,
+				JSONSchema: &model.JSONSchemaConfig{
+					Name:   "output",
+					Schema: schema,
+					Strict: true,
+				},
+			},
+		}
+
+		chatReq, _ := m.buildChatRequest(req)
+		if !chatReq.ParallelToolCalls.Valid() {
+			t.Fatalf("expected parallel_tool_calls to be set")
+		}
+		assert.False(t, chatReq.ParallelToolCalls.Value)
 	})
 }
 
@@ -6113,10 +6228,23 @@ func TestWithOptimizeForCache(t *testing.T) {
 	}
 }
 
-// TestOptimizeForCache_DefaultDisabled tests that cache optimization is disabled by default.
-func TestOptimizeForCache_DefaultDisabled(t *testing.T) {
+// TestOptimizeForCache_DefaultEnabled_OpenAI tests the default for OpenAI.
+func TestOptimizeForCache_DefaultEnabled_OpenAI(t *testing.T) {
 	m := New("gpt-4o", WithAPIKey("test-key"))
-	assert.False(t, m.optimizeForCache, "cache optimization should be disabled by default")
+	assert.True(t, m.optimizeForCache, "cache optimization should be enabled by default")
+}
+
+func TestOptimizeForCache_DefaultDisabled_NonOpenAI(t *testing.T) {
+	m := New(
+		"deepseek-chat",
+		WithAPIKey("test-key"),
+		WithVariant(VariantDeepSeek),
+	)
+	require.False(
+		t,
+		m.optimizeForCache,
+		"cache optimization should be disabled by default",
+	)
 }
 
 // TestOptimizeMessagesForCache tests the optimizeMessagesForCache function.
@@ -6261,13 +6389,13 @@ func TestGenerateContent_OptimizeForCache(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Test with cache optimization enabled (default)
+	// Test with cache optimization enabled (default for OpenAI)
 	m := New("gpt-4o", WithBaseURL(server.URL), WithAPIKey("test-key"))
 
 	req := &model.Request{
 		Messages: []model.Message{
-			{Role: model.RoleSystem, Content: "You are helpful"},
 			{Role: model.RoleUser, Content: "Hello"},
+			{Role: model.RoleSystem, Content: "You are helpful"},
 			{Role: model.RoleAssistant, Content: "Hi"},
 		},
 	}
@@ -6281,7 +6409,7 @@ func TestGenerateContent_OptimizeForCache(t *testing.T) {
 	}
 
 	// Verify system message was moved to front
-	assert.Equal(t, "system", capturedRoles[0], "system message should be first")
+	assert.Equal(t, []string{"system", "user", "assistant"}, capturedRoles)
 }
 
 // TestGenerateContent_OptimizeForCache_Disabled tests that messages are not reordered when disabled.

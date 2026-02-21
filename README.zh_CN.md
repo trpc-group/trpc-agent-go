@@ -168,6 +168,7 @@ _ = result.OverallStatus
     - [前置条件](#前置条件)
     - [运行示例](#运行示例)
     - [基本用法](#基本用法)
+    - [中断 / 取消一次运行](#中断--取消一次运行)
   - [示例](#示例)
     - [1. Tool 用法](#1-tool-用法)
     - [2. 仅 LLM 的 Agent](#2-仅-llm-的-agent)
@@ -331,6 +332,96 @@ type calculatorRsp struct {
 }
 ```
 
+### 每次请求动态创建 Agent
+
+有些场景下，你希望 Agent **按请求创建**（例如：不同的提示词、模型、工具集、沙箱实例）。
+这时可以让 Runner 在每次 `Run(...)` 时动态构建一个新的 Agent：
+
+```go
+r := runner.NewRunnerWithAgentFactory(
+    "my-app",
+    "assistant",
+    func(ctx context.Context, ro agent.RunOptions) (agent.Agent, error) {
+        // 通过 ro 构建本次请求使用的 Agent。
+        a := llmagent.New("assistant",
+            llmagent.WithInstruction(ro.Instruction),
+        )
+        return a, nil
+    },
+)
+
+events, err := r.Run(ctx,
+    "user-001",
+    "session-001",
+    model.NewUserMessage("Hello"),
+    agent.WithInstruction("You are a helpful assistant."),
+)
+_ = events
+_ = err
+```
+
+### 中断 / 取消一次运行
+
+如果你希望“中断正在运行的 agent”（停止本次模型调用 / 工具调用），推荐做法是：
+**取消你传给 `Runner.Run` 的 `context.Context`**。
+
+特别注意：**不要**只是在消费事件的 `for range` 里 `break` 然后直接返回。
+如果你不再读取事件通道，但 agent 还在后台写事件，可能会阻塞并造成 goroutine
+泄漏。正确姿势是：先 cancel，再把事件通道读到关闭为止。
+
+#### 方式 A：Ctrl+C（命令行程序）
+
+把 Ctrl+C 转成 ctx cancel：
+
+```go
+ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+defer stop()
+
+events, err := r.Run(ctx, userID, sessionID, message)
+if err != nil {
+    return err
+}
+for range events {
+    // 一直读到通道关闭：要么 ctx 被取消，要么 run 正常结束。
+}
+```
+
+#### 方式 B：代码里主动 cancel
+
+```go
+ctx, cancel := context.WithCancel(context.Background())
+defer cancel()
+
+events, err := r.Run(ctx, userID, sessionID, message)
+if err != nil {
+    return err
+}
+
+go func() {
+    time.Sleep(2 * time.Second)
+    cancel()
+}()
+
+for range events {
+    // 一直读到通道关闭。
+}
+```
+
+#### 方式 C：按 `requestID` 取消（适合服务端 / 后台任务）
+
+```go
+requestID := "req-123"
+events, err := r.Run(ctx, userID, sessionID, message,
+    agent.WithRequestID(requestID),
+)
+
+mr := r.(runner.ManagedRunner)
+_ = mr.Cancel(requestID)
+```
+
+更完整的说明（包含 detached cancel、resume、以及 AG-UI 的取消路由）见
+`docs/mkdocs/zh/runner.md` 与 `docs/mkdocs/zh/agui.md`。
+
 ## 示例
 
 `examples` 目录包含涵盖各主要功能的可运行 Demo。
@@ -440,6 +531,7 @@ sg.SetFinishPoint("A").SetFinishPoint("B")
 
 - Skill 是一个包含 `SKILL.md` 规范的文件夹，可附带 docs/scripts。
 - 内置工具：`skill_load`、`skill_list_docs`、`skill_select_docs`、`skill_run`（在隔离工作空间里执行命令）。
+- 建议 `skill_run` 尽量只用于执行所选 Skill 文档里要求的命令，而不是用于通用的 Shell 探查。
 
 ### 12. Artifacts
 

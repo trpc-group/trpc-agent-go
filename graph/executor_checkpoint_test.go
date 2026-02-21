@@ -1,5 +1,6 @@
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -138,6 +139,18 @@ func (p *panicGetTupleSaver) GetTuple(
 	panic("gettuple panic")
 }
 
+type failingGetTupleSaver struct {
+	*mockSaver
+	retErr error
+}
+
+func (f *failingGetTupleSaver) GetTuple(
+	_ context.Context,
+	_ map[string]any,
+) (*CheckpointTuple, error) {
+	return nil, f.retErr
+}
+
 func TestExecutor_CheckpointSaveError_DoesNotStopRun(
 	t *testing.T,
 ) {
@@ -191,6 +204,146 @@ func TestExecutor_PanicInSaver_IsRecovered(
 	require.NoError(t, err)
 	for range ch {
 	}
+}
+
+func TestExecutor_NonResume_GetTupleError_DoesNotStopRun(t *testing.T) {
+	const (
+		getErrMsg = "gettuple failed"
+		invID     = "inv-gettuple-nonresume"
+	)
+
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode("a", func(ctx context.Context, state State) (any, error) {
+			return nil, nil
+		}).
+		SetEntryPoint("a").
+		SetFinishPoint("a").
+		Compile()
+	require.NoError(t, err)
+
+	baseSaver := newMockSaver()
+	saver := &failingGetTupleSaver{
+		mockSaver: baseSaver,
+		retErr:    errors.New(getErrMsg),
+	}
+	exec, err := NewExecutor(g, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+
+	ch, err := exec.Execute(
+		context.Background(),
+		State{},
+		&agent.Invocation{InvocationID: invID},
+	)
+	require.NoError(t, err)
+
+	var gotDone bool
+	for evt := range ch {
+		require.Nil(t, evt.Error)
+		if evt.Done {
+			gotDone = true
+		}
+	}
+	require.True(t, gotDone)
+	require.NotZero(t, len(baseSaver.byID))
+}
+
+func TestExecutor_Resume_GetTupleError_ReturnsError(t *testing.T) {
+	const (
+		lineageID = "ln-gettuple-err"
+		checkID   = "ck-gettuple-err"
+		getErrMsg = "gettuple failed"
+		invID     = "inv-gettuple-resume"
+	)
+
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode("a", func(ctx context.Context, state State) (any, error) {
+			return nil, nil
+		}).
+		SetEntryPoint("a").
+		SetFinishPoint("a").
+		Compile()
+	require.NoError(t, err)
+
+	baseSaver := newMockSaver()
+	saver := &failingGetTupleSaver{
+		mockSaver: baseSaver,
+		retErr:    errors.New(getErrMsg),
+	}
+	exec, err := NewExecutor(g, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+
+	init := State{
+		CfgKeyLineageID:    lineageID,
+		CfgKeyCheckpointID: checkID,
+	}
+	ch, err := exec.Execute(
+		context.Background(),
+		init,
+		&agent.Invocation{InvocationID: invID},
+	)
+	require.NoError(t, err)
+
+	var gotErr *model.ResponseError
+	var gotDone bool
+	for evt := range ch {
+		if evt.Error != nil {
+			gotErr = evt.Error
+		}
+		if evt.Done {
+			gotDone = true
+		}
+	}
+	require.False(t, gotDone)
+	require.NotNil(t, gotErr)
+	require.Contains(t, gotErr.Message, getErrMsg)
+	require.Zero(t, len(baseSaver.byID))
+}
+
+func TestExecutor_Resume_CheckpointNotFound_ReturnsError(t *testing.T) {
+	const (
+		lineageID = "ln-missing-ckpt"
+		checkID   = "ck-missing"
+		invID     = "inv-missing-ckpt"
+	)
+
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode("a", func(ctx context.Context, state State) (any, error) {
+			return nil, nil
+		}).
+		SetEntryPoint("a").
+		SetFinishPoint("a").
+		Compile()
+	require.NoError(t, err)
+
+	saver := newMockSaver()
+	exec, err := NewExecutor(g, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+
+	init := State{
+		CfgKeyLineageID:    lineageID,
+		CfgKeyCheckpointID: checkID,
+	}
+	ch, err := exec.Execute(
+		context.Background(),
+		init,
+		&agent.Invocation{InvocationID: invID},
+	)
+	require.NoError(t, err)
+
+	var gotErr *model.ResponseError
+	var gotDone bool
+	for evt := range ch {
+		if evt.Error != nil {
+			gotErr = evt.Error
+		}
+		if evt.Done {
+			gotDone = true
+		}
+	}
+	require.False(t, gotDone)
+	require.NotNil(t, gotErr)
+	require.Contains(t, gotErr.Message, ErrCheckpointNotFound.Error())
+	require.Zero(t, len(saver.byID))
 }
 
 func TestExecutor_CreateTask_LogsStepCountAndFinalNode(
@@ -360,6 +513,1154 @@ func TestExecutor_HandleInterrupt_EmitsCheckpointInterruptWhenEnabled(
 
 	counts := collectObjectCounts(ch)
 	require.Greater(t, counts[ObjectTypeGraphCheckpointInterrupt], 0)
+}
+
+func TestExecutor_ExternalInterrupt_PausesBeforeNextStep(t *testing.T) {
+	const lineageID = "ln-external-interrupt"
+
+	started := make(chan struct{}, 1)
+	unblock := make(chan struct{})
+	var bRuns int
+
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode("a", func(ctx context.Context, state State) (any, error) {
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			<-unblock
+			return nil, nil
+		}).
+		AddNode("b", func(ctx context.Context, state State) (any, error) {
+			bRuns++
+			return nil, nil
+		}).
+		AddEdge("a", "b").
+		SetEntryPoint("a").
+		SetFinishPoint("b").
+		Compile()
+	require.NoError(t, err)
+
+	saver := newMockSaver()
+	exec, err := NewExecutor(g, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+
+	inv := &agent.Invocation{InvocationID: lineageID}
+	agent.WithStreamMode(agent.StreamModeCheckpoints)(&inv.RunOptions)
+
+	ctx, interrupt := WithGraphInterrupt(context.Background())
+	ch, err := exec.Execute(ctx, State{}, inv)
+	require.NoError(t, err)
+
+	<-started
+	interrupt()
+	close(unblock)
+
+	for range ch {
+	}
+
+	require.Zero(t, bRuns)
+	intTuple := latestInterruptTuple(t, saver, lineageID)
+	require.Equal(t, []string{"b"}, intTuple.Checkpoint.NextNodes)
+
+	intState := intTuple.Checkpoint.InterruptState
+	require.NotNil(t, intState)
+	payload, ok := intState.InterruptValue.(ExternalInterruptPayload)
+	require.True(t, ok)
+	require.False(t, payload.Forced)
+}
+
+func TestExecutor_ExternalInterruptTimeout_ForcesInterrupt(
+	t *testing.T,
+) {
+	const lineageID = "ln-external-interrupt-timeout"
+	const timeout = 20 * time.Millisecond
+
+	started := make(chan struct{}, 2)
+	allowComplete := make(chan struct{})
+
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode("a", func(ctx context.Context, state State) (any, error) {
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			select {
+			case <-allowComplete:
+				return nil, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}).
+		SetEntryPoint("a").
+		SetFinishPoint("a").
+		Compile()
+	require.NoError(t, err)
+
+	saver := newMockSaver()
+	exec, err := NewExecutor(g, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+
+	inv := &agent.Invocation{InvocationID: lineageID}
+	agent.WithStreamMode(agent.StreamModeCheckpoints)(&inv.RunOptions)
+
+	ctx, interrupt := WithGraphInterrupt(context.Background())
+	ch, err := exec.Execute(ctx, State{}, inv)
+	require.NoError(t, err)
+
+	<-started
+	interrupt(WithGraphInterruptTimeout(timeout))
+
+	for range ch {
+	}
+
+	intTuple := latestInterruptTuple(t, saver, lineageID)
+	intState := intTuple.Checkpoint.InterruptState
+	require.NotNil(t, intState)
+	payload, ok := intState.InterruptValue.(ExternalInterruptPayload)
+	require.True(t, ok)
+	require.True(t, payload.Forced)
+
+	require.NotNil(t, intTuple.Metadata)
+	require.NotNil(t, intTuple.Metadata.Extra)
+	raw := intTuple.Metadata.Extra[CheckpointMetaKeyGraphInterruptInputs]
+	require.NotNil(t, raw)
+	switch m := raw.(type) {
+	case map[string][]any:
+		inputs, ok := m["a"]
+		require.True(t, ok)
+		require.NotEmpty(t, inputs)
+	case map[string]any:
+		v, ok := m["a"]
+		require.True(t, ok)
+		require.NotNil(t, v)
+	case map[string]State:
+		_, ok := m["a"]
+		require.True(t, ok)
+	default:
+		t.Fatalf("unexpected interrupt inputs type: %T", raw)
+	}
+
+	close(allowComplete)
+	resumeInv := &agent.Invocation{InvocationID: lineageID}
+	agent.WithStreamMode(agent.StreamModeCheckpoints)(&resumeInv.RunOptions)
+
+	resumeState := State{
+		CfgKeyCheckpointID: intTuple.Checkpoint.ID,
+		CfgKeyLineageID:    lineageID,
+	}
+	ch2, err := exec.Execute(context.Background(), resumeState, resumeInv)
+	require.NoError(t, err)
+	for range ch2 {
+	}
+}
+
+func TestExecutor_ExternalInterrupt_PreservesFanOutTasks(t *testing.T) {
+	const lineageID = "ln-external-interrupt-fanout"
+	const nodeA = "a"
+	const nodeB = "b"
+	const key = "v"
+
+	started := make(chan struct{}, 1)
+	unblock := make(chan struct{})
+
+	var mu sync.Mutex
+	var values []int
+
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode(nodeA, func(ctx context.Context, state State) (any, error) {
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			<-unblock
+			return []*Command{
+				{GoTo: nodeB, Update: State{key: 1}},
+				{GoTo: nodeB, Update: State{key: 2}},
+			}, nil
+		}).
+		AddNode(nodeB, func(ctx context.Context, state State) (any, error) {
+			v, _ := state[key].(int)
+			mu.Lock()
+			values = append(values, v)
+			mu.Unlock()
+			return nil, nil
+		}).
+		SetEntryPoint(nodeA).
+		SetFinishPoint(nodeB).
+		Compile()
+	require.NoError(t, err)
+
+	saver := newMockSaver()
+	exec, err := NewExecutor(g, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+
+	inv := &agent.Invocation{InvocationID: lineageID}
+	agent.WithStreamMode(agent.StreamModeCheckpoints)(&inv.RunOptions)
+
+	ctx, interrupt := WithGraphInterrupt(context.Background())
+	ch, err := exec.Execute(ctx, State{}, inv)
+	require.NoError(t, err)
+
+	<-started
+	interrupt()
+	close(unblock)
+
+	for range ch {
+	}
+
+	mu.Lock()
+	require.Empty(t, values)
+	mu.Unlock()
+
+	intTuple := latestInterruptTuple(t, saver, lineageID)
+	require.Equal(t, []string{nodeB, nodeB}, intTuple.Checkpoint.NextNodes)
+
+	resumeInv := &agent.Invocation{InvocationID: lineageID}
+	agent.WithStreamMode(agent.StreamModeCheckpoints)(&resumeInv.RunOptions)
+	resumeState := State{
+		CfgKeyCheckpointID: intTuple.Checkpoint.ID,
+		CfgKeyLineageID:    lineageID,
+	}
+	ch2, err := exec.Execute(context.Background(), resumeState, resumeInv)
+	require.NoError(t, err)
+	for range ch2 {
+	}
+
+	mu.Lock()
+	require.Len(t, values, 2)
+	counts := make(map[int]int)
+	for _, v := range values {
+		counts[v]++
+	}
+	mu.Unlock()
+	require.Equal(t, 1, counts[1])
+	require.Equal(t, 1, counts[2])
+}
+
+func TestExecutor_ExternalInterruptTimeout_PreservesFanOutTasks(
+	t *testing.T,
+) {
+	const lineageID = "ln-external-interrupt-fanout-timeout"
+	const nodeA = "a"
+	const nodeB = "b"
+	const key = "v"
+	const timeout = 20 * time.Millisecond
+
+	v2Started := make(chan struct{}, 2)
+	v1Done := make(chan struct{}, 1)
+	allowV2Complete := make(chan struct{})
+
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode(nodeA, func(ctx context.Context, state State) (any, error) {
+			return []*Command{
+				{GoTo: nodeB, Update: State{key: 1}},
+				{GoTo: nodeB, Update: State{key: 2}},
+			}, nil
+		}).
+		AddNode(nodeB, func(ctx context.Context, state State) (any, error) {
+			v, _ := state[key].(int)
+			if v == 2 {
+				select {
+				case v2Started <- struct{}{}:
+				default:
+				}
+				select {
+				case <-allowV2Complete:
+					return nil, nil
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			}
+			if v == 1 {
+				select {
+				case v1Done <- struct{}{}:
+				default:
+				}
+			}
+			return nil, nil
+		}).
+		SetEntryPoint(nodeA).
+		SetFinishPoint(nodeB).
+		Compile()
+	require.NoError(t, err)
+
+	saver := newMockSaver()
+	exec, err := NewExecutor(g, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+
+	inv := &agent.Invocation{InvocationID: lineageID}
+	agent.WithStreamMode(agent.StreamModeCheckpoints)(&inv.RunOptions)
+
+	ctx, interrupt := WithGraphInterrupt(context.Background())
+	ch, err := exec.Execute(ctx, State{}, inv)
+	require.NoError(t, err)
+
+	<-v2Started
+	<-v1Done
+	interrupt(WithGraphInterruptTimeout(timeout))
+
+	for range ch {
+	}
+
+	intTuple := latestInterruptTuple(t, saver, lineageID)
+	require.Contains(t, intTuple.Checkpoint.NextNodes, nodeB)
+
+	close(allowV2Complete)
+	resumeInv := &agent.Invocation{InvocationID: lineageID}
+	agent.WithStreamMode(agent.StreamModeCheckpoints)(&resumeInv.RunOptions)
+	resumeState := State{
+		CfgKeyCheckpointID: intTuple.Checkpoint.ID,
+		CfgKeyLineageID:    lineageID,
+	}
+	ch2, err := exec.Execute(context.Background(), resumeState, resumeInv)
+	require.NoError(t, err)
+	for range ch2 {
+	}
+
+	select {
+	case <-v2Started:
+	default:
+		t.Fatal("expected v2 to rerun after resume")
+	}
+}
+
+func TestExecutor_ApplyGraphInterruptInputs_MapState(t *testing.T) {
+	const nodeID = "node-a"
+	const key = "k"
+
+	exec := &Executor{}
+	restored := make(State)
+	tuple := &CheckpointTuple{
+		Metadata: &CheckpointMetadata{
+			Extra: map[string]any{
+				CheckpointMetaKeyGraphInterruptInputs: map[string]State{
+					nodeID: {key: "v"},
+					"":     {key: "skip-empty-node"},
+					"b":    nil,
+				},
+			},
+		},
+	}
+	exec.applyGraphInterruptInputs(restored, tuple)
+
+	raw, ok := restored[StateKeyGraphInterruptInputs]
+	require.True(t, ok)
+
+	m, ok := raw.(map[string]State)
+	require.True(t, ok)
+	require.Len(t, m, 1)
+	require.Contains(t, m, nodeID)
+}
+
+func TestExecutor_ApplyGraphInterruptInputs_MapAny(t *testing.T) {
+	const nodeID = "node-a"
+	const key = "k"
+
+	exec := &Executor{}
+	restored := make(State)
+	tuple := &CheckpointTuple{
+		Metadata: &CheckpointMetadata{
+			Extra: map[string]any{
+				CheckpointMetaKeyGraphInterruptInputs: map[string]any{
+					nodeID: State{key: "v"},
+					"":     State{key: "skip-empty-node"},
+					"b":    nil,
+				},
+			},
+		},
+	}
+	exec.applyGraphInterruptInputs(restored, tuple)
+
+	raw, ok := restored[StateKeyGraphInterruptInputs]
+	require.True(t, ok)
+
+	m, ok := raw.(map[string]any)
+	require.True(t, ok)
+	require.Len(t, m, 1)
+	require.Contains(t, m, nodeID)
+}
+
+func TestExecutor_ApplyGraphInterruptInputs_MapStateSlice(t *testing.T) {
+	const nodeID = "node-a"
+	const key = "k"
+
+	exec := &Executor{}
+	restored := make(State)
+	tuple := &CheckpointTuple{
+		Metadata: &CheckpointMetadata{
+			Extra: map[string]any{
+				CheckpointMetaKeyGraphInterruptInputs: map[string][]State{
+					nodeID: {
+						{key: "v"},
+						nil,
+					},
+					"": {
+						{key: "skip-empty-node"},
+					},
+					"b": nil,
+				},
+			},
+		},
+	}
+	exec.applyGraphInterruptInputs(restored, tuple)
+
+	raw, ok := restored[StateKeyGraphInterruptInputs]
+	require.True(t, ok)
+
+	m, ok := raw.(map[string]any)
+	require.True(t, ok)
+	require.Len(t, m, 1)
+
+	rawInputs, ok := m[nodeID]
+	require.True(t, ok)
+	inputs, ok := rawInputs.([]any)
+	require.True(t, ok)
+	require.Len(t, inputs, 1)
+
+	st, ok := inputs[0].(State)
+	require.True(t, ok)
+	require.Equal(t, "v", st[key])
+}
+
+func TestExecutor_ApplyGraphInterruptInputs_IgnoresInvalidTuples(t *testing.T) {
+	exec := &Executor{}
+	exec.applyGraphInterruptInputs(nil, nil)
+
+	restored := make(State)
+	exec.applyGraphInterruptInputs(restored, nil)
+	exec.applyGraphInterruptInputs(restored, &CheckpointTuple{})
+	exec.applyGraphInterruptInputs(restored, &CheckpointTuple{
+		Metadata: &CheckpointMetadata{},
+	})
+	exec.applyGraphInterruptInputs(restored, &CheckpointTuple{
+		Metadata: &CheckpointMetadata{
+			Extra: map[string]any{},
+		},
+	})
+	require.Empty(t, restored)
+}
+
+func TestGraphInterruptInputCopyHelpers_EmptyInputs(t *testing.T) {
+	require.Nil(t, copyGraphInterruptInputsState(nil))
+	require.Nil(t, copyGraphInterruptInputsState(map[string]State{}))
+	require.Nil(t, copyGraphInterruptInputsAny(nil))
+	require.Nil(t, copyGraphInterruptInputsAny(map[string]any{}))
+	require.Nil(t, copyGraphInterruptInputsAnySlice(nil))
+	require.Nil(t, copyGraphInterruptInputsAnySlice(map[string][]any{}))
+	require.Nil(t, copyGraphInterruptInputsStateSlice(nil))
+	require.Nil(t, copyGraphInterruptInputsStateSlice(map[string][]State{}))
+}
+
+func TestGraphInterruptConsumeStateHelpers(t *testing.T) {
+	st := State{"k": "v"}
+
+	_, ok := consumeStateFromStateSlice(nil)
+	require.False(t, ok)
+	_, ok = consumeStateFromStateSlice([]State{})
+	require.False(t, ok)
+	_, ok = consumeStateFromStateSlice([]State{nil})
+	require.False(t, ok)
+	got, ok := consumeStateFromStateSlice([]State{st})
+	require.True(t, ok)
+	require.Equal(t, st, got)
+
+	_, ok = consumeStateFromAnySlice(nil)
+	require.False(t, ok)
+	_, ok = consumeStateFromAnySlice([]any{})
+	require.False(t, ok)
+	_, ok = consumeStateFromAnySlice([]any{123})
+	require.False(t, ok)
+	got, ok = consumeStateFromAnySlice([]any{st})
+	require.True(t, ok)
+	require.Equal(t, st, got)
+}
+
+func TestGraphInterruptHelpers_NilSafeAndIdempotent(t *testing.T) {
+	var watcher *externalInterruptWatcher
+	watcher.stop()
+	require.False(t, watcher.requested())
+	require.False(t, watcher.forced(nil))
+
+	var state *graphInterruptState
+	require.False(t, state.requested())
+	require.Nil(t, state.timeoutOrNil())
+	require.Nil(t, state.doneCh())
+
+	require.Nil(t, graphInterruptFromContext(nil))
+	require.Nil(t, graphInterruptFromContext(context.Background()))
+
+	wrongType := context.WithValue(
+		context.Background(),
+		graphInterruptKey{},
+		"bad",
+	)
+	require.Nil(t, graphInterruptFromContext(wrongType))
+
+	opt := WithGraphInterruptTimeout(time.Second)
+	opt(nil)
+
+	ctx, interrupt := WithGraphInterrupt(context.Background())
+	st := graphInterruptFromContext(ctx)
+	require.NotNil(t, st)
+
+	require.False(t, st.requested())
+	select {
+	case <-st.doneCh():
+		t.Fatal("unexpected interrupt request")
+	default:
+	}
+
+	interrupt(nil)
+	require.True(t, st.requested())
+	select {
+	case <-st.doneCh():
+	default:
+		t.Fatal("expected interrupt request")
+	}
+	require.Nil(t, st.timeoutOrNil())
+
+	interrupt(WithGraphInterruptTimeout(time.Second))
+	require.Nil(t, st.timeoutOrNil())
+}
+
+func TestExternalInterruptWatcher_StopBeforeInterrupt(t *testing.T) {
+	const timeout = 5 * time.Millisecond
+
+	ctx, interrupt := WithGraphInterrupt(context.Background())
+	state := graphInterruptFromContext(ctx)
+	require.NotNil(t, state)
+
+	runCtx, watcher := newExternalInterruptWatcher(ctx, state)
+	require.NotNil(t, watcher)
+	watcher.stop()
+
+	interrupt(WithGraphInterruptTimeout(timeout))
+
+	select {
+	case <-runCtx.Done():
+		t.Fatalf("unexpected cancellation: %v", context.Cause(runCtx))
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
+func TestExternalInterruptWatcher_ZeroTimeoutCancelsImmediately(t *testing.T) {
+	ctx, interrupt := WithGraphInterrupt(context.Background())
+	state := graphInterruptFromContext(ctx)
+	require.NotNil(t, state)
+
+	runCtx, watcher := newExternalInterruptWatcher(ctx, state)
+	require.NotNil(t, watcher)
+	defer watcher.stop()
+
+	interrupt(WithGraphInterruptTimeout(0))
+
+	select {
+	case <-runCtx.Done():
+		require.ErrorIs(t, context.Cause(runCtx), errGraphInterruptTimeout)
+		require.True(t, watcher.forced(runCtx))
+	case <-time.After(time.Second):
+		t.Fatal("expected cancellation")
+	}
+}
+
+func TestExternalInterruptWatcher_StopAfterInterrupt(t *testing.T) {
+	const timeout = time.Second
+
+	ctx, interrupt := WithGraphInterrupt(context.Background())
+	state := graphInterruptFromContext(ctx)
+	require.NotNil(t, state)
+
+	runCtx, watcher := newExternalInterruptWatcher(ctx, state)
+	require.NotNil(t, watcher)
+	defer watcher.stop()
+
+	interrupt(WithGraphInterruptTimeout(timeout))
+	watcher.stop()
+
+	select {
+	case <-runCtx.Done():
+		t.Fatalf("unexpected cancellation: %v", context.Cause(runCtx))
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
+func TestExecutor_CreateTask_ConsumesGraphInterruptInputs(t *testing.T) {
+	const nodeA = "a"
+	const key = "k"
+	const value = "v"
+	const v1 = 1
+	const v2 = 2
+
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode(nodeA, func(ctx context.Context, state State) (any, error) {
+			return nil, nil
+		}).
+		SetEntryPoint(nodeA).
+		SetFinishPoint(nodeA).
+		Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	stateMap := State{
+		StateKeyGraphInterruptInputs: map[string]State{
+			nodeA: {key: value},
+		},
+	}
+	task := exec.createTask(nodeA, stateMap, 0)
+	require.NotNil(t, task)
+	input, ok := task.Input.(State)
+	require.True(t, ok)
+	require.Equal(t, value, input[key])
+	_, ok = stateMap[StateKeyGraphInterruptInputs]
+	require.False(t, ok)
+
+	stateAny := State{
+		StateKeyGraphInterruptInputs: map[string]any{
+			nodeA: map[string]any{
+				key: value,
+			},
+		},
+	}
+	task = exec.createTask(nodeA, stateAny, 0)
+	require.NotNil(t, task)
+	input, ok = task.Input.(State)
+	require.True(t, ok)
+	require.Equal(t, value, input[key])
+	_, ok = stateAny[StateKeyGraphInterruptInputs]
+	require.False(t, ok)
+
+	stateAnyState := State{
+		StateKeyGraphInterruptInputs: map[string]any{
+			nodeA: State{key: value},
+		},
+	}
+	task = exec.createTask(nodeA, stateAnyState, 0)
+	require.NotNil(t, task)
+	input, ok = task.Input.(State)
+	require.True(t, ok)
+	require.Equal(t, value, input[key])
+	_, ok = stateAnyState[StateKeyGraphInterruptInputs]
+	require.False(t, ok)
+
+	stateSlices := State{
+		StateKeyGraphInterruptInputs: map[string][]State{
+			nodeA: {
+				{key: v1},
+				{key: v2},
+			},
+		},
+	}
+	task = exec.createTask(nodeA, stateSlices, 0)
+	require.NotNil(t, task)
+	input, ok = task.Input.(State)
+	require.True(t, ok)
+	require.Equal(t, v1, input[key])
+
+	task = exec.createTask(nodeA, stateSlices, 0)
+	require.NotNil(t, task)
+	input, ok = task.Input.(State)
+	require.True(t, ok)
+	require.Equal(t, v2, input[key])
+	_, ok = stateSlices[StateKeyGraphInterruptInputs]
+	require.False(t, ok)
+
+	stateAnyValueSlices := State{
+		StateKeyGraphInterruptInputs: map[string]any{
+			nodeA: []State{
+				{key: v1},
+				{key: v2},
+			},
+		},
+	}
+	task = exec.createTask(nodeA, stateAnyValueSlices, 0)
+	require.NotNil(t, task)
+	input, ok = task.Input.(State)
+	require.True(t, ok)
+	require.Equal(t, v1, input[key])
+
+	task = exec.createTask(nodeA, stateAnyValueSlices, 0)
+	require.NotNil(t, task)
+	input, ok = task.Input.(State)
+	require.True(t, ok)
+	require.Equal(t, v2, input[key])
+	_, ok = stateAnyValueSlices[StateKeyGraphInterruptInputs]
+	require.False(t, ok)
+
+	stateAnyValueAnySlice := State{
+		StateKeyGraphInterruptInputs: map[string]any{
+			nodeA: []any{
+				State{key: v1},
+				map[string]any{key: v2},
+			},
+		},
+	}
+	task = exec.createTask(nodeA, stateAnyValueAnySlice, 0)
+	require.NotNil(t, task)
+	input, ok = task.Input.(State)
+	require.True(t, ok)
+	require.Equal(t, v1, input[key])
+
+	task = exec.createTask(nodeA, stateAnyValueAnySlice, 0)
+	require.NotNil(t, task)
+	input, ok = task.Input.(State)
+	require.True(t, ok)
+	require.Equal(t, v2, input[key])
+	_, ok = stateAnyValueAnySlice[StateKeyGraphInterruptInputs]
+	require.False(t, ok)
+
+	stateAnySlices := State{
+		StateKeyGraphInterruptInputs: map[string][]any{
+			nodeA: {
+				State{key: v1},
+				map[string]any{key: v2},
+			},
+		},
+	}
+	task = exec.createTask(nodeA, stateAnySlices, 0)
+	require.NotNil(t, task)
+	input, ok = task.Input.(State)
+	require.True(t, ok)
+	require.Equal(t, v1, input[key])
+
+	task = exec.createTask(nodeA, stateAnySlices, 0)
+	require.NotNil(t, task)
+	input, ok = task.Input.(State)
+	require.True(t, ok)
+	require.Equal(t, v2, input[key])
+	_, ok = stateAnySlices[StateKeyGraphInterruptInputs]
+	require.False(t, ok)
+}
+
+func TestExecutor_CreateTask_DoesNotConsumeInvalidInterruptInputs(t *testing.T) {
+	const nodeA = "a"
+	const key = "k"
+
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode(nodeA, func(ctx context.Context, state State) (any, error) {
+			return nil, nil
+		}).
+		SetEntryPoint(nodeA).
+		SetFinishPoint(nodeA).
+		Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	stateEmptySlices := State{
+		StateKeyGraphInterruptInputs: map[string][]State{
+			nodeA: {},
+		},
+		key: "v",
+	}
+	task := exec.createTask(nodeA, stateEmptySlices, 0)
+	require.NotNil(t, task)
+	_, ok := stateEmptySlices[StateKeyGraphInterruptInputs]
+	require.True(t, ok)
+
+	stateNilSlice := State{
+		StateKeyGraphInterruptInputs: map[string][]State{
+			nodeA: {nil},
+		},
+		key: "v",
+	}
+	task = exec.createTask(nodeA, stateNilSlice, 0)
+	require.NotNil(t, task)
+	_, ok = stateNilSlice[StateKeyGraphInterruptInputs]
+	require.True(t, ok)
+
+	stateAnyEmpty := State{
+		StateKeyGraphInterruptInputs: map[string][]any{
+			nodeA: {},
+		},
+		key: "v",
+	}
+	task = exec.createTask(nodeA, stateAnyEmpty, 0)
+	require.NotNil(t, task)
+	_, ok = stateAnyEmpty[StateKeyGraphInterruptInputs]
+	require.True(t, ok)
+
+	stateAnyBad := State{
+		StateKeyGraphInterruptInputs: map[string][]any{
+			nodeA: {123},
+		},
+		key: "v",
+	}
+	task = exec.createTask(nodeA, stateAnyBad, 0)
+	require.NotNil(t, task)
+	_, ok = stateAnyBad[StateKeyGraphInterruptInputs]
+	require.True(t, ok)
+
+	stateAnyValueBad := State{
+		StateKeyGraphInterruptInputs: map[string]any{
+			nodeA: "bad",
+		},
+		key: "v",
+	}
+	task = exec.createTask(nodeA, stateAnyValueBad, 0)
+	require.NotNil(t, task)
+	_, ok = stateAnyValueBad[StateKeyGraphInterruptInputs]
+	require.True(t, ok)
+
+	stateAnyValueNil := State{
+		StateKeyGraphInterruptInputs: map[string]any{
+			nodeA: nil,
+		},
+		key: "v",
+	}
+	task = exec.createTask(nodeA, stateAnyValueNil, 0)
+	require.NotNil(t, task)
+	_, ok = stateAnyValueNil[StateKeyGraphInterruptInputs]
+	require.True(t, ok)
+
+	stateAnyValueNilState := State{
+		StateKeyGraphInterruptInputs: map[string]any{
+			nodeA: State(nil),
+		},
+		key: "v",
+	}
+	task = exec.createTask(nodeA, stateAnyValueNilState, 0)
+	require.NotNil(t, task)
+	_, ok = stateAnyValueNilState[StateKeyGraphInterruptInputs]
+	require.True(t, ok)
+
+	stateAnyValueNilMap := State{
+		StateKeyGraphInterruptInputs: map[string]any{
+			nodeA: map[string]any(nil),
+		},
+		key: "v",
+	}
+	task = exec.createTask(nodeA, stateAnyValueNilMap, 0)
+	require.NotNil(t, task)
+	_, ok = stateAnyValueNilMap[StateKeyGraphInterruptInputs]
+	require.True(t, ok)
+
+	stateAnyValueEmptySlice := State{
+		StateKeyGraphInterruptInputs: map[string]any{
+			nodeA: []any{},
+		},
+		key: "v",
+	}
+	task = exec.createTask(nodeA, stateAnyValueEmptySlice, 0)
+	require.NotNil(t, task)
+	_, ok = stateAnyValueEmptySlice[StateKeyGraphInterruptInputs]
+	require.True(t, ok)
+
+	stateAnyValueBadSlice := State{
+		StateKeyGraphInterruptInputs: map[string]any{
+			nodeA: []any{123},
+		},
+		key: "v",
+	}
+	task = exec.createTask(nodeA, stateAnyValueBadSlice, 0)
+	require.NotNil(t, task)
+	_, ok = stateAnyValueBadSlice[StateKeyGraphInterruptInputs]
+	require.True(t, ok)
+
+	stateAnyValueBadStateSlice := State{
+		StateKeyGraphInterruptInputs: map[string]any{
+			nodeA: []State{nil},
+		},
+		key: "v",
+	}
+	task = exec.createTask(nodeA, stateAnyValueBadStateSlice, 0)
+	require.NotNil(t, task)
+	_, ok = stateAnyValueBadStateSlice[StateKeyGraphInterruptInputs]
+	require.True(t, ok)
+
+	stateUnknown := State{
+		StateKeyGraphInterruptInputs: 123,
+		key:                          "v",
+	}
+	task = exec.createTask(nodeA, stateUnknown, 0)
+	require.NotNil(t, task)
+	_, ok = stateUnknown[StateKeyGraphInterruptInputs]
+	require.True(t, ok)
+}
+
+func TestGraphInterruptStateHelpers(t *testing.T) {
+	const nodeA = "a"
+	const nodeB = "b"
+	const key = "k"
+
+	require.Nil(t, (&Executor{}).stateFields())
+	require.Nil(t, (&Executor{graph: &Graph{}}).stateFields())
+
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode(nodeA, func(ctx context.Context, state State) (any, error) {
+			return nil, nil
+		}).
+		SetEntryPoint(nodeA).
+		SetFinishPoint(nodeA).
+		Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+	require.NotNil(t, exec.stateFields())
+
+	st := State{key: "v"}
+	_, ok := stateFromAny(nil)
+	require.False(t, ok)
+	_, ok = stateFromAny(1)
+	require.False(t, ok)
+
+	got, ok := stateFromAny(st)
+	require.True(t, ok)
+	require.Equal(t, st, got)
+
+	got, ok = stateFromAny(map[string]any{key: "v"})
+	require.True(t, ok)
+	require.Equal(t, "v", got[key])
+
+	next := nextNodesFromTasks([]*Task{
+		nil,
+		{NodeID: End},
+		{NodeID: nodeA},
+		{NodeID: nodeB},
+	})
+	require.Equal(t, []string{nodeA, nodeB}, next)
+	require.Nil(t, nextNodesFromTasks(nil))
+
+	meta := exec.metaExtraForPlannedExternalInterrupt([]*Task{
+		nil,
+		{NodeID: ""},
+		{NodeID: nodeA, Input: State{key: "v"}},
+		{NodeID: nodeB, Input: 123},
+	})
+	require.NotNil(t, meta)
+	raw := meta[CheckpointMetaKeyGraphInterruptInputs]
+	require.NotNil(t, raw)
+
+	inputs, ok := raw.(map[string][]any)
+	require.True(t, ok)
+	require.Len(t, inputs[nodeA], 1)
+	require.Nil(t, exec.metaExtraForPlannedExternalInterrupt(nil))
+}
+
+func TestExecutor_MetaExtraForForcedInterrupt_FallbackToTaskInput(t *testing.T) {
+	const nodeA = "a"
+	const key = "k"
+
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode(nodeA, func(ctx context.Context, state State) (any, error) {
+			return nil, nil
+		}).
+		SetEntryPoint(nodeA).
+		SetFinishPoint(nodeA).
+		Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	report := newStepExecutionReport(nil)
+	task := &Task{NodeID: nodeA, Input: State{key: "v"}}
+	meta := exec.metaExtraForForcedInterrupt(report, []*Task{task})
+	require.NotNil(t, meta)
+
+	raw := meta[CheckpointMetaKeyGraphInterruptInputs]
+	require.NotNil(t, raw)
+	m, ok := raw.(map[string][]any)
+	require.True(t, ok)
+	require.Len(t, m[nodeA], 1)
+
+	meta = exec.metaExtraForForcedInterrupt(
+		report,
+		[]*Task{{NodeID: nodeA, Input: 123}},
+	)
+	require.Nil(t, meta)
+}
+
+func TestExecutor_PlanTasksForBspStep_ResumedStartStep(t *testing.T) {
+	const nodeA = "a"
+
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode(nodeA, func(ctx context.Context, state State) (any, error) {
+			return nil, nil
+		}).
+		SetEntryPoint(nodeA).
+		SetFinishPoint(nodeA).
+		Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	execCtx := &ExecutionContext{
+		resumed: true,
+	}
+	tasks, err := exec.planTasksForBspStep(
+		context.Background(),
+		nil,
+		execCtx,
+		1,
+		0,
+	)
+	require.NoError(t, err)
+	require.Empty(t, tasks)
+}
+
+func TestExecutor_PlanTasksForBspStep_WrapsPlanErrors(t *testing.T) {
+	exec := &Executor{
+		graph: &Graph{},
+	}
+	execCtx := &ExecutionContext{
+		InvocationID: "inv",
+		State:        make(State),
+	}
+	_, err := exec.planTasksForBspStep(
+		context.Background(),
+		nil,
+		execCtx,
+		0,
+		0,
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "planning failed at step")
+}
+
+func TestExecutor_ShouldForceExternalInterrupt(t *testing.T) {
+	exec := &Executor{}
+	watcher := &externalInterruptWatcher{}
+
+	require.False(t, exec.shouldForceExternalInterrupt(
+		nil,
+		context.Background(),
+		context.Canceled,
+	))
+	require.False(t, exec.shouldForceExternalInterrupt(
+		watcher,
+		context.Background(),
+		context.Canceled,
+	))
+
+	forcedCtx, cancel := context.WithCancelCause(context.Background())
+	cancel(errGraphInterruptTimeout)
+
+	require.False(t, exec.shouldForceExternalInterrupt(
+		watcher,
+		forcedCtx,
+		nil,
+	))
+	require.True(t, exec.shouldForceExternalInterrupt(
+		watcher,
+		forcedCtx,
+		context.Canceled,
+	))
+	require.True(t, exec.shouldForceExternalInterrupt(
+		watcher,
+		forcedCtx,
+		context.DeadlineExceeded,
+	))
+	require.False(t, exec.shouldForceExternalInterrupt(
+		watcher,
+		forcedCtx,
+		errors.New("other"),
+	))
+}
+
+func TestExecutor_ForcedInterruptHelpers(t *testing.T) {
+	const nodeA = "a"
+	const nodeB = "b"
+
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode(nodeA, func(ctx context.Context, state State) (any, error) {
+			return nil, nil
+		}).
+		AddNode(nodeB, func(ctx context.Context, state State) (any, error) {
+			return nil, nil
+		}).
+		AddEdge(nodeA, nodeB).
+		SetEntryPoint(nodeA).
+		SetFinishPoint(nodeB).
+		Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	taskA := &Task{NodeID: nodeA}
+	taskB := &Task{NodeID: nodeB}
+	tasks := []*Task{
+		nil,
+		{NodeID: ""},
+		taskA,
+		taskB,
+	}
+	report := newStepExecutionReport(nil)
+	report.recordInput(taskB, State{"x": "y"})
+	report.markCompleted(taskA)
+
+	rerun := exec.tasksToRerun(tasks, report)
+	require.NotContains(t, rerun, taskA)
+	require.Contains(t, rerun, taskB)
+
+	require.Nil(t, exec.metaExtraForForcedInterrupt(nil, rerun))
+	require.Nil(t, exec.metaExtraForForcedInterrupt(report, nil))
+
+	metaExtra := exec.metaExtraForForcedInterrupt(report, rerun)
+	require.NotNil(t, metaExtra)
+	raw := metaExtra[CheckpointMetaKeyGraphInterruptInputs]
+	_, ok := raw.(map[string][]any)
+	require.True(t, ok)
+	require.Nil(t, exec.metaExtraForForcedInterrupt(
+		report,
+		[]*Task{{NodeID: "missing"}},
+	))
+
+	execCtx := &ExecutionContext{
+		channels: exec.buildChannelManager(),
+	}
+	branchB := ChannelBranchPrefix + nodeB
+	branchEnd := ChannelBranchPrefix + End
+
+	ch, ok := execCtx.channels.GetChannel(branchB)
+	require.True(t, ok)
+	require.True(t, ch.Update([]any{channelUpdateMarker}, 0))
+
+	ch, ok = execCtx.channels.GetChannel(branchEnd)
+	require.True(t, ok)
+	require.True(t, ch.Update([]any{channelUpdateMarker}, 0))
+
+	next := exec.nextNodesForForcedInterrupt(execCtx, rerun)
+	require.Contains(t, next, nodeB)
+	require.NotContains(t, next, End)
+}
+
+func TestStepExecutionReport_RecordsAndSkipsInputs(t *testing.T) {
+	const nodeID = "a"
+
+	var report *stepExecutionReport
+	task := &Task{NodeID: nodeID}
+	report.recordInput(task, State{})
+	report.markCompleted(task)
+	require.False(t, report.isCompleted(task))
+	_, ok := report.inputFor(task)
+	require.False(t, ok)
+
+	report = newStepExecutionReport(nil)
+	report.recordInput(&Task{NodeID: ""}, State{})
+	report.recordInput(task, nil)
+
+	orig := State{"x": "y"}
+	report.recordInput(task, orig)
+	report.recordInput(task, State{"x": "ignored"})
+
+	in, ok := report.inputFor(&Task{NodeID: "missing"})
+	require.False(t, ok)
+	require.Nil(t, in)
+
+	in, ok = report.inputFor(task)
+	require.True(t, ok)
+	require.Equal(t, "y", in["x"])
+
+	report.markCompleted(&Task{NodeID: ""})
+	report.markCompleted(task)
+	require.True(t, report.isCompleted(task))
 }
 
 func latestInterruptTuple(
@@ -839,6 +2140,8 @@ func TestExecutor_ProcessConditionalResult_SetsStepMark(t *testing.T) {
 	)
 
 	g := New(NewStateSchema())
+	require.NoError(t, g.addNode(&Node{ID: fromNode}))
+	require.NoError(t, g.addNode(&Node{ID: targetNode}))
 	exec := &Executor{graph: g}
 	ec := exec.buildExecutionContext(nil, "inv", State{}, false, nil)
 	condEdge := &ConditionalEdge{
@@ -922,6 +2225,29 @@ func TestExecutor_RestoreStateFromCheckpoint_DefaultsAndZero(t *testing.T) {
 	require.True(t, ok)
 	_, isSlice := v.([]string)
 	require.True(t, isSlice)
+}
+
+func TestExecutor_RestoreStateFromCheckpoint_OneShotMessages(t *testing.T) {
+	exec := &Executor{graph: New(MessagesStateSchema())}
+	ckpt := &Checkpoint{
+		ID: "ck",
+		ChannelValues: map[string]any{
+			StateKeyOneShotMessages: []model.Message{
+				model.NewUserMessage("hi"),
+			},
+		},
+	}
+	tuple := &CheckpointTuple{Checkpoint: ckpt.Copy()}
+
+	st := exec.restoreStateFromCheckpoint(tuple)
+	raw, ok := st[StateKeyOneShotMessages]
+	require.True(t, ok)
+
+	msgs, ok := raw.([]model.Message)
+	require.True(t, ok)
+	require.Len(t, msgs, 1)
+	require.Equal(t, model.RoleUser, msgs[0].Role)
+	require.Equal(t, "hi", msgs[0].Content)
 }
 
 func TestExecutor_HelperMethods(t *testing.T) {

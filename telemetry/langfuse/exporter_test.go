@@ -11,6 +11,7 @@ package langfuse
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"testing"
@@ -21,6 +22,7 @@ import (
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 func TestTransform(t *testing.T) {
@@ -177,6 +179,22 @@ func TestTransformSpan(t *testing.T) {
 			},
 			expectedAction: "transform_execute_tool",
 		},
+		{
+			name:          "workflow operation",
+			operationName: itelemetry.OperationWorkflow,
+			inputSpan: &tracepb.Span{
+				Name: "test-span",
+				Attributes: []*commonpb.KeyValue{
+					{
+						Key: itelemetry.KeyGenAIOperationName,
+						Value: &commonpb.AnyValue{
+							Value: &commonpb.AnyValue_StringValue{StringValue: itelemetry.OperationWorkflow},
+						},
+					},
+				},
+			},
+			expectedAction: "transform_workflow",
+		},
 	}
 
 	for _, tt := range tests {
@@ -210,6 +228,16 @@ func TestTransformSpan(t *testing.T) {
 			case "transform_run_runner":
 				// Runner transformation has different behavior, check attributes are processed
 				assert.NotNil(t, tt.inputSpan.Attributes)
+			case "transform_workflow":
+				// Should have observation type added
+				found := false
+				for _, attr := range tt.inputSpan.Attributes {
+					if attr.Key == observationType && attr.Value.GetStringValue() == observationTypeChain {
+						found = true
+						break
+					}
+				}
+				assert.True(t, found, "should have observation type 'chain'")
 			}
 		})
 	}
@@ -308,7 +336,7 @@ func TestTransformCallLLM(t *testing.T) {
 				observationType:            "generation",
 				observationInput:           `{"prompt": "Hello", "generation_config": {"temperature": 0.7}}`,
 				observationOutput:          `{"text": "Hello! How can I help you?"}`,
-				observationModelParameters: `{"temperature":0.7}`,
+				observationModelParameters: `{"temperature": 0.7}`,
 				"other.attribute":          "keep-this",
 			},
 		},
@@ -382,6 +410,269 @@ func TestTransformCallLLM(t *testing.T) {
 				assert.NotEqual(t, itelemetry.KeyLLMResponse, attr.Key, "LLM response attribute should be removed")
 			}
 		})
+	}
+}
+
+func TestTransformCallLLM_PromptWithTools(t *testing.T) {
+	toolDefs := []*tool.Declaration{
+		{
+			Name:        "alpha",
+			Description: "first",
+			InputSchema: &tool.Schema{Type: "object"},
+		},
+		{
+			Name:        "beta",
+			Description: "second",
+			InputSchema: &tool.Schema{Type: "object"},
+		},
+	}
+	defsJSON, err := json.Marshal(toolDefs)
+	require.NoError(t, err)
+
+	span := &tracepb.Span{
+		Name: "llm-call",
+		Attributes: []*commonpb.KeyValue{
+			{
+				Key: itelemetry.KeyLLMRequest,
+				Value: &commonpb.AnyValue{
+					Value: &commonpb.AnyValue_StringValue{StringValue: `{"generation_config": {"temperature": 0.7}}`},
+				},
+			},
+			{
+				Key: itelemetry.KeyGenAIInputMessages,
+				Value: &commonpb.AnyValue{
+					Value: &commonpb.AnyValue_StringValue{StringValue: `[{"role":"user","content":"hi"}]`},
+				},
+			},
+			{
+				Key: itelemetry.KeyGenAIRequestToolDefinitions,
+				Value: &commonpb.AnyValue{
+					Value: &commonpb.AnyValue_StringValue{StringValue: string(defsJSON)},
+				},
+			},
+		},
+	}
+
+	transformCallLLM(span)
+
+	attrMap := make(map[string]string)
+	for _, attr := range span.Attributes {
+		attrMap[attr.Key] = attr.Value.GetStringValue()
+		assert.NotEqual(t, itelemetry.KeyGenAIInputMessages, attr.Key, "input messages should be folded into observation.input")
+		assert.NotEqual(t, itelemetry.KeyGenAIRequestToolDefinitions, attr.Key, "tool definitions should be folded into observation.input")
+	}
+
+	inputStr := attrMap[observationInput]
+	require.NotEmpty(t, inputStr)
+
+	var input map[string]any
+	require.NoError(t, json.Unmarshal([]byte(inputStr), &input))
+
+	msgs, ok := input["messages"].([]any)
+	require.True(t, ok)
+	require.Len(t, msgs, 1)
+
+	toolsVal, ok := input["tools"].([]any)
+	require.True(t, ok)
+	require.Len(t, toolsVal, 2)
+
+	seen := map[string]bool{}
+	for _, tv := range toolsVal {
+		m, ok := tv.(map[string]any)
+		require.True(t, ok)
+		name, _ := m["name"].(string)
+		seen[name] = true
+	}
+	require.True(t, seen["alpha"])
+	require.True(t, seen["beta"])
+
+	// generation_config is still extracted from llm_request.
+	assert.Equal(t, `{"temperature": 0.7}`, attrMap[observationModelParameters])
+}
+
+func TestTransformCallLLM_UsageDetails(t *testing.T) {
+	tests := []struct {
+		name                string
+		inputTokens         int64
+		outputTokens        int64
+		cachedTokens        int64
+		cacheReadTokens     int64
+		cacheCreationTokens int64
+		expectedUsage       map[string]int64
+	}{
+		{
+			name:          "basic input/output tokens",
+			inputTokens:   100,
+			outputTokens:  50,
+			expectedUsage: map[string]int64{"input": 100, "output": 50},
+		},
+		{
+			name:          "with OpenAI cached tokens",
+			inputTokens:   100,
+			outputTokens:  50,
+			cachedTokens:  30,
+			expectedUsage: map[string]int64{"input": 100, "output": 50, "input_cached": 30},
+		},
+		{
+			name:            "with Anthropic cache_read tokens",
+			inputTokens:     200,
+			outputTokens:    80,
+			cacheReadTokens: 60,
+			expectedUsage:   map[string]int64{"input": 200, "output": 80, "input_cache_read": 60},
+		},
+		{
+			name:                "with Anthropic cache_creation tokens",
+			inputTokens:         200,
+			outputTokens:        80,
+			cacheCreationTokens: 40,
+			expectedUsage:       map[string]int64{"input": 200, "output": 80, "input_cache_creation": 40},
+		},
+		{
+			name:                "all cache fields present",
+			inputTokens:         300,
+			outputTokens:        100,
+			cachedTokens:        50,
+			cacheReadTokens:     70,
+			cacheCreationTokens: 20,
+			expectedUsage:       map[string]int64{"input": 300, "output": 100, "input_cached": 50, "input_cache_read": 70, "input_cache_creation": 20},
+		},
+		{
+			name:          "zero tokens omitted",
+			inputTokens:   0,
+			outputTokens:  0,
+			expectedUsage: nil, // no usage_details attribute when all zero
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			attrs := []*commonpb.KeyValue{
+				{
+					Key: itelemetry.KeyLLMRequest,
+					Value: &commonpb.AnyValue{
+						Value: &commonpb.AnyValue_StringValue{StringValue: `{"prompt":"hello"}`},
+					},
+				},
+				{
+					Key: itelemetry.KeyLLMResponse,
+					Value: &commonpb.AnyValue{
+						Value: &commonpb.AnyValue_StringValue{StringValue: `{"text":"world"}`},
+					},
+				},
+			}
+			// Add token usage attributes (only non-zero values, matching how buildResponseAttributes works)
+			if tt.inputTokens != 0 {
+				attrs = append(attrs, &commonpb.KeyValue{
+					Key:   itelemetry.KeyGenAIUsageInputTokens,
+					Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: tt.inputTokens}},
+				})
+			}
+			if tt.outputTokens != 0 {
+				attrs = append(attrs, &commonpb.KeyValue{
+					Key:   itelemetry.KeyGenAIUsageOutputTokens,
+					Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: tt.outputTokens}},
+				})
+			}
+			if tt.cachedTokens != 0 {
+				attrs = append(attrs, &commonpb.KeyValue{
+					Key:   itelemetry.KeyGenAIUsageInputTokensCached,
+					Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: tt.cachedTokens}},
+				})
+			}
+			if tt.cacheReadTokens != 0 {
+				attrs = append(attrs, &commonpb.KeyValue{
+					Key:   itelemetry.KeyGenAIUsageInputTokensCacheRead,
+					Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: tt.cacheReadTokens}},
+				})
+			}
+			if tt.cacheCreationTokens != 0 {
+				attrs = append(attrs, &commonpb.KeyValue{
+					Key:   itelemetry.KeyGenAIUsageInputTokensCacheCreation,
+					Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: tt.cacheCreationTokens}},
+				})
+			}
+
+			span := &tracepb.Span{Name: "llm-call", Attributes: attrs}
+			transformCallLLM(span)
+
+			// Verify original gen_ai.usage.* attributes are removed
+			for _, attr := range span.Attributes {
+				assert.NotEqual(t, itelemetry.KeyGenAIUsageInputTokens, attr.Key)
+				assert.NotEqual(t, itelemetry.KeyGenAIUsageOutputTokens, attr.Key)
+				assert.NotEqual(t, itelemetry.KeyGenAIUsageInputTokensCached, attr.Key)
+				assert.NotEqual(t, itelemetry.KeyGenAIUsageInputTokensCacheRead, attr.Key)
+				assert.NotEqual(t, itelemetry.KeyGenAIUsageInputTokensCacheCreation, attr.Key)
+			}
+
+			// Check usage_details attribute
+			var usageJSON string
+			for _, attr := range span.Attributes {
+				if attr.Key == observationUsageDetails {
+					usageJSON = attr.Value.GetStringValue()
+					break
+				}
+			}
+
+			if tt.expectedUsage == nil {
+				assert.Empty(t, usageJSON, "should not have usage_details when all tokens are zero")
+			} else {
+				require.NotEmpty(t, usageJSON, "should have usage_details attribute")
+				var actual map[string]int64
+				require.NoError(t, json.Unmarshal([]byte(usageJSON), &actual))
+				assert.Equal(t, tt.expectedUsage, actual)
+			}
+		})
+	}
+}
+
+func TestTransformInvokeAgent_CacheTokensFiltered(t *testing.T) {
+	span := &tracepb.Span{
+		Name: "agent-span",
+		Attributes: []*commonpb.KeyValue{
+			{
+				Key: itelemetry.KeyGenAIInputMessages,
+				Value: &commonpb.AnyValue{
+					Value: &commonpb.AnyValue_StringValue{StringValue: `[{"role":"user","content":"hi"}]`},
+				},
+			},
+			{
+				Key: itelemetry.KeyGenAIOutputMessages,
+				Value: &commonpb.AnyValue{
+					Value: &commonpb.AnyValue_StringValue{StringValue: `[{"role":"assistant","content":"hello"}]`},
+				},
+			},
+			{
+				Key:   itelemetry.KeyGenAIUsageInputTokens,
+				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: 100}},
+			},
+			{
+				Key:   itelemetry.KeyGenAIUsageOutputTokens,
+				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: 50}},
+			},
+			{
+				Key:   itelemetry.KeyGenAIUsageInputTokensCached,
+				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: 30}},
+			},
+			{
+				Key:   itelemetry.KeyGenAIUsageInputTokensCacheRead,
+				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: 20}},
+			},
+			{
+				Key:   itelemetry.KeyGenAIUsageInputTokensCacheCreation,
+				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: 10}},
+			},
+		},
+	}
+
+	transformInvokeAgent(span)
+
+	// All token usage attributes (including cache ones) should be filtered out
+	for _, attr := range span.Attributes {
+		assert.NotEqual(t, itelemetry.KeyGenAIUsageInputTokens, attr.Key)
+		assert.NotEqual(t, itelemetry.KeyGenAIUsageOutputTokens, attr.Key)
+		assert.NotEqual(t, itelemetry.KeyGenAIUsageInputTokensCached, attr.Key)
+		assert.NotEqual(t, itelemetry.KeyGenAIUsageInputTokensCacheRead, attr.Key)
+		assert.NotEqual(t, itelemetry.KeyGenAIUsageInputTokensCacheCreation, attr.Key)
 	}
 }
 
@@ -470,6 +761,117 @@ func TestTransformExecuteTool(t *testing.T) {
 				assert.NotEqual(t, itelemetry.KeyGenAIToolCallResult, attr.Key, "tool response attribute should be removed")
 			}
 		})
+	}
+}
+
+func TestTransformWorkflow(t *testing.T) {
+	span := &tracepb.Span{
+		Name: "workflow-span",
+		Attributes: []*commonpb.KeyValue{
+			{
+				Key: itelemetry.KeyRunnerSessionID,
+				Value: &commonpb.AnyValue{
+					Value: &commonpb.AnyValue_StringValue{StringValue: "sess-1"},
+				},
+			},
+			{
+				Key: itelemetry.KeyRunnerUserID,
+				Value: &commonpb.AnyValue{
+					Value: &commonpb.AnyValue_StringValue{StringValue: "user-1"},
+				},
+			},
+			{
+				Key: itelemetry.KeyGenAIWorkflowRequest,
+				Value: &commonpb.AnyValue{
+					Value: &commonpb.AnyValue_StringValue{StringValue: `{"req":true}`},
+				},
+			},
+			{
+				Key: itelemetry.KeyGenAIWorkflowResponse,
+				Value: &commonpb.AnyValue{
+					Value: &commonpb.AnyValue_StringValue{StringValue: `{"ok":true}`},
+				},
+			},
+			{
+				Key: "other.attribute",
+				Value: &commonpb.AnyValue{
+					Value: &commonpb.AnyValue_StringValue{StringValue: "keep-this"},
+				},
+			},
+		},
+	}
+
+	transformWorkflow(span)
+
+	attrMap := make(map[string]string)
+	for _, attr := range span.Attributes {
+		if attr.Value != nil {
+			attrMap[attr.Key] = attr.Value.GetStringValue()
+		}
+	}
+
+	assert.Equal(t, observationTypeChain, attrMap[observationType])
+	assert.Equal(t, `{"req":true}`, attrMap[observationInput])
+	assert.Equal(t, `{"ok":true}`, attrMap[observationOutput])
+	assert.Equal(t, "user-1", attrMap[traceUserID])
+	assert.Equal(t, "sess-1", attrMap[traceSessionID])
+	assert.Equal(t, "keep-this", attrMap["other.attribute"])
+
+	for _, attr := range span.Attributes {
+		assert.NotEqual(t, itelemetry.KeyGenAIWorkflowRequest, attr.Key)
+		assert.NotEqual(t, itelemetry.KeyGenAIWorkflowResponse, attr.Key)
+		assert.NotEqual(t, itelemetry.KeyRunnerSessionID, attr.Key)
+		assert.NotEqual(t, itelemetry.KeyRunnerUserID, attr.Key)
+	}
+}
+
+func TestTransformWorkflow_NilRequestResponse(t *testing.T) {
+	span := &tracepb.Span{
+		Name: "workflow-span-nil",
+		Attributes: []*commonpb.KeyValue{
+			{
+				Key: itelemetry.KeyRunnerSessionID,
+				Value: &commonpb.AnyValue{
+					Value: &commonpb.AnyValue_StringValue{StringValue: "sess-2"},
+				},
+			},
+			{
+				Key: itelemetry.KeyRunnerUserID,
+				Value: &commonpb.AnyValue{
+					Value: &commonpb.AnyValue_StringValue{StringValue: "user-2"},
+				},
+			},
+			{
+				Key:   itelemetry.KeyGenAIWorkflowRequest,
+				Value: nil,
+			},
+			{
+				Key:   itelemetry.KeyGenAIWorkflowResponse,
+				Value: nil,
+			},
+		},
+	}
+
+	transformWorkflow(span)
+
+	attrMap := make(map[string]string)
+	for _, attr := range span.Attributes {
+		if attr.Value != nil {
+			attrMap[attr.Key] = attr.Value.GetStringValue()
+		}
+	}
+
+	assert.Equal(t, observationTypeChain, attrMap[observationType])
+	assert.Equal(t, "N/A", attrMap[observationInput])
+	assert.Equal(t, "N/A", attrMap[observationOutput])
+	assert.Equal(t, "user-2", attrMap[traceUserID])
+	assert.Equal(t, "sess-2", attrMap[traceSessionID])
+
+	for _, attr := range span.Attributes {
+		assert.NotEqual(t, itelemetry.KeyGenAIWorkflowRequest, attr.Key)
+		assert.NotEqual(t, itelemetry.KeyGenAIWorkflowResponse, attr.Key)
+		assert.NotEqual(t, itelemetry.KeyRunnerSessionID, attr.Key)
+		assert.NotEqual(t, itelemetry.KeyRunnerUserID, attr.Key)
 	}
 }
 

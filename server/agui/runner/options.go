@@ -42,8 +42,11 @@ type Options struct {
 	AggregatorFactory                      aggregator.Factory    // AggregatorFactory builds an aggregator for each run.
 	AggregationOption                      []aggregator.Option   // AggregationOption is the aggregation options for each run.
 	FlushInterval                          time.Duration         // FlushInterval controls how often buffered AG-UI events are flushed for a session.
+	MessagesSnapshotFollowEnabled          bool                  // MessagesSnapshotFollowEnabled enables tailing persisted AG-UI track events after MESSAGES_SNAPSHOT.
+	MessagesSnapshotFollowMaxDuration      time.Duration         // MessagesSnapshotFollowMaxDuration bounds how long tailing can run before emitting RUN_ERROR.
 	StartSpan                              StartSpan             // StartSpan starts a span for an AG-UI run.
 	Timeout                                time.Duration         // Timeout controls how long a run is allowed to execute.
+	CancelOnContextDoneEnabled             bool                  // CancelOnContextDoneEnabled cancels the run when the parent context is done.
 	GraphNodeLifecycleActivityEnabled      bool                  // GraphNodeLifecycleActivityEnabled enables graph node lifecycle activity events.
 	GraphNodeInterruptActivityEnabled      bool                  // GraphNodeInterruptActivityEnabled enables graph interrupt activity events.
 	GraphNodeInterruptActivityTopLevelOnly bool                  // GraphNodeInterruptActivityTopLevelOnly drops nested graph interrupt activity events.
@@ -157,6 +160,20 @@ func WithFlushInterval(d time.Duration) Option {
 	}
 }
 
+// WithMessagesSnapshotFollowEnabled enables or disables tailing persisted track events after a snapshot.
+func WithMessagesSnapshotFollowEnabled(enabled bool) Option {
+	return func(o *Options) {
+		o.MessagesSnapshotFollowEnabled = enabled
+	}
+}
+
+// WithMessagesSnapshotFollowMaxDuration sets the maximum duration for snapshot tailing.
+func WithMessagesSnapshotFollowMaxDuration(d time.Duration) Option {
+	return func(o *Options) {
+		o.MessagesSnapshotFollowMaxDuration = d
+	}
+}
+
 // RunOptionResolver is a function that resolves the run options for an AG-UI run.
 type RunOptionResolver func(ctx context.Context, input *adapter.RunAgentInput) ([]agent.RunOption, error)
 
@@ -181,6 +198,13 @@ func WithStartSpan(start StartSpan) Option {
 func WithTimeout(d time.Duration) Option {
 	return func(o *Options) {
 		o.Timeout = d
+	}
+}
+
+// WithCancelOnContextDoneEnabled controls whether a run is canceled when the parent context is done.
+func WithCancelOnContextDoneEnabled(enabled bool) Option {
+	return func(o *Options) {
+		o.CancelOnContextDoneEnabled = enabled
 	}
 }
 

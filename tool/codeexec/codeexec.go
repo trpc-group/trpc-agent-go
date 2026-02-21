@@ -12,6 +12,7 @@ package codeexec
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
@@ -90,16 +91,30 @@ func (t *executeCodeTool) Declaration() *tool.Declaration {
 		Description: t.cfg.description,
 		InputSchema: &tool.Schema{
 			Type:     "object",
-			Required: []string{"language", "code"},
+			Required: []string{"code_blocks"},
 			Properties: map[string]*tool.Schema{
-				"language": {
-					Type:        "string",
-					Enum:        langEnum,
-					Description: "Programming language to execute",
+				"code_blocks": {
+					Type:        "array",
+					Description: "Code blocks to execute",
+					Items: &tool.Schema{
+						Type:     "object",
+						Required: []string{"language", "code"},
+						Properties: map[string]*tool.Schema{
+							"language": {
+								Type:        "string",
+								Enum:        langEnum,
+								Description: "Programming language to execute",
+							},
+							"code": {
+								Type:        "string",
+								Description: "Code to execute",
+							},
+						},
+					},
 				},
-				"code": {
+				"execution_id": {
 					Type:        "string",
-					Description: "Code to execute",
+					Description: "Optional execution/session identifier",
 				},
 			},
 		},
@@ -111,52 +126,105 @@ func (t *executeCodeTool) Declaration() *tool.Declaration {
 					Type:        "string",
 					Description: "Standard output from code execution",
 				},
-				"error": {
-					Type:        "string",
-					Description: "Error message if execution failed",
+				"output_files": {
+					Type:        "array",
+					Description: "Files generated during code execution",
+					Items: &tool.Schema{
+						Type: "object",
+						Properties: map[string]*tool.Schema{
+							"name": {
+								Type:        "string",
+								Description: "File name",
+							},
+							"content": {
+								Type:        "string",
+								Description: "File content (may be omitted)",
+							},
+							"mime_type": {
+								Type:        "string",
+								Description: "MIME type (may be omitted)",
+							},
+						},
+					},
 				},
 			},
 		},
 	}
 }
 
-// ExecuteCodeInput is the input for code execution.
-type ExecuteCodeInput struct {
-	Language string `json:"language"`
-	Code     string `json:"code"`
-}
+// unmarshalCodeBlocks flexibly decodes code_blocks from JSON, handling common LLM
+// quirks: the value may be a normal array, a single object (instead of an array),
+// or a double-encoded JSON string containing either of the above.
+func unmarshalCodeBlocks(raw json.RawMessage) ([]codeexecutor.CodeBlock, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
 
-// ExecuteCodeOutput is the output of code execution.
-type ExecuteCodeOutput struct {
-	Output string `json:"output"`
-	Error  string `json:"error,omitempty"`
+	var val any
+	if err := json.Unmarshal(raw, &val); err != nil {
+		return nil, err
+	}
+	if val == nil {
+		return nil, nil
+	}
+
+	// If the LLM double-encoded the array as a JSON string, unwrap and re-parse.
+	if s, ok := val.(string); ok {
+		raw = json.RawMessage(s)
+		if err := json.Unmarshal(raw, &val); err != nil {
+			return nil, err
+		}
+	}
+
+	switch val.(type) {
+	case []any:
+		var blocks []codeexecutor.CodeBlock
+		if err := json.Unmarshal(raw, &blocks); err != nil {
+			return nil, err
+		}
+		return blocks, nil
+	case map[string]any:
+		// Single object — wrap into a slice.
+		var block codeexecutor.CodeBlock
+		if err := json.Unmarshal(raw, &block); err != nil {
+			return nil, err
+		}
+		return []codeexecutor.CodeBlock{block}, nil
+	default:
+		return nil, fmt.Errorf("code_blocks: expected array, object, or string, got %T", val)
+	}
 }
 
 // Call executes the code and returns the result.
 func (t *executeCodeTool) Call(ctx context.Context, args []byte) (any, error) {
-	var input ExecuteCodeInput
-	if err := json.Unmarshal(args, &input); err != nil {
+	aux := &struct {
+		CodeBlocks  json.RawMessage `json:"code_blocks"`
+		ExecutionID string          `json:"execution_id,omitempty"`
+	}{}
+	if err := json.Unmarshal(args, aux); err != nil {
 		return nil, err
+	}
+	blocks, err := unmarshalCodeBlocks(aux.CodeBlocks)
+	if err != nil {
+		return nil, err
+	}
+	input := codeexecutor.CodeExecutionInput{
+		CodeBlocks:  blocks,
+		ExecutionID: aux.ExecutionID,
 	}
 
 	// Best-effort validation. We return it as structured tool output (instead of Go error)
 	// so the model can correct itself.
-	if !t.isSupportedLanguage(input.Language) {
-		return ExecuteCodeOutput{Error: "unsupported language"}, nil
+	if len(input.CodeBlocks) == 0 {
+		return codeexecutor.CodeExecutionResult{Output: "Error: missing code_blocks"}, nil
+	}
+	for i, b := range input.CodeBlocks {
+		if b.Language == "" || !t.isSupportedLanguage(b.Language) {
+			return codeexecutor.CodeExecutionResult{Output: fmt.Sprintf("Error: unsupported language: %d: %s", i, b.Language)}, nil
+		}
 	}
 
-	result, err := t.executor.ExecuteCode(ctx, codeexecutor.CodeExecutionInput{
-		CodeBlocks: []codeexecutor.CodeBlock{{
-			Language: input.Language,
-			Code:     input.Code,
-		}},
-	})
-
-	output := ExecuteCodeOutput{Output: result.Output}
-	if err != nil {
-		output.Error = err.Error()
-	}
-	return output, nil
+	return t.executor.ExecuteCode(ctx, input)
 }
 
 func (t *executeCodeTool) isSupportedLanguage(language string) bool {

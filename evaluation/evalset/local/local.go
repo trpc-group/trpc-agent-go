@@ -47,6 +47,11 @@ func New(opt ...evalset.Option) evalset.Manager {
 	}
 }
 
+// Close implements evalset.Manager.
+func (m *manager) Close() error {
+	return nil
+}
+
 // Get gets an EvalSet identified by evalSetID.
 // Returns an error if the EvalSet does not exist.
 func (m *manager) Get(_ context.Context, appName, evalSetID string) (*evalset.EvalSet, error) {
@@ -186,6 +191,14 @@ func (m *manager) AddCase(_ context.Context, appName, evalSetID string, evalCase
 		cloned.CreationTimestamp = &epochtime.EpochTime{Time: time.Now()}
 	}
 	for _, invocation := range cloned.Conversation {
+		if invocation.CreationTimestamp == nil {
+			invocation.CreationTimestamp = &epochtime.EpochTime{Time: time.Now()}
+		}
+	}
+	for _, invocation := range cloned.ActualConversation {
+		if invocation == nil {
+			continue
+		}
 		if invocation.CreationTimestamp == nil {
 			invocation.CreationTimestamp = &epochtime.EpochTime{Time: time.Now()}
 		}

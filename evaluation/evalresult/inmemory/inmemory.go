@@ -38,6 +38,11 @@ func New() evalresult.Manager {
 	}
 }
 
+// Close implements evalresult.Manager.
+func (m *manager) Close() error {
+	return nil
+}
+
 // Save stores a evaluation result keyed by EvalSetResultID.
 // If the eval set result id is empty, it will be generated.
 // Returns an error if the app name is empty or the eval set result is nil or the eval set id is empty.

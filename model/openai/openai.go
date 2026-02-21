@@ -107,6 +107,10 @@ type variantConfig struct {
 	thinkingEnabledKey string
 	// thinkingValueConvertor converts ThinkingEnabled to variant-specific format.
 	thinkingValueConvertor thinkingValueConvertor
+
+	// defaultOptimizeForCache controls the default value for cache optimization
+	// when WithOptimizeForCache is not explicitly set.
+	defaultOptimizeForCache bool
 }
 type fileDeletionBodyConvertor func(body []byte, fileID string) []byte
 
@@ -127,6 +131,7 @@ var variantConfigs = map[Variant]variantConfig{
 		fileDeletionBodyConvertor: defaultFileDeletionBodyConvertor,
 		thinkingEnabledKey:        model.ThinkingEnabledKey,
 		thinkingValueConvertor:    defaultThinkingValueConvertor,
+		defaultOptimizeForCache:   true,
 	},
 	VariantDeepSeek: {
 		fileUploadPath:            "/openapi/v1/files",
@@ -244,8 +249,13 @@ func New(name string, opts ...Option) *Model {
 		opt(&o)
 	}
 
+	cfg, cfgOK := variantConfigs[o.Variant]
+	if !o.optimizeForCacheSet {
+		o.OptimizeForCache = cfgOK && cfg.defaultOptimizeForCache
+	}
+
 	// Set default API key and base URL if not specified.
-	if cfg, ok := variantConfigs[o.Variant]; ok {
+	if cfgOK {
 		if val, ok := os.LookupEnv(cfg.apiKeyName); ok && o.APIKey == "" {
 			o.APIKey = val
 		}
@@ -491,6 +501,11 @@ func (m *Model) buildChatRequest(request *model.Request) (openai.ChatCompletionN
 					Description: openai.String(js.Description),
 				},
 			},
+		}
+		if len(request.Tools) > 0 {
+			// Parallel tool calls can interfere with strict JSON schema
+			// output.
+			chatRequest.ParallelToolCalls = openai.Bool(false)
 		}
 	}
 
@@ -836,6 +851,13 @@ func (m *Model) convertTools(tools map[string]tool.Tool) []openai.ChatCompletion
 		if err := json.Unmarshal(schemaBytes, &parameters); err != nil {
 			log.Errorf("failed to unmarshal tool schema for %s: %v", declaration.Name, err)
 			continue
+		}
+		// Some OpenAI-compatible proxies require object schemas to include
+		// a `properties` key, even when the tool takes no arguments.
+		if typ, ok := parameters["type"].(string); ok && typ == "object" {
+			if props, exists := parameters["properties"]; !exists || props == nil {
+				parameters["properties"] = map[string]any{}
+			}
 		}
 		result = append(result, openai.ChatCompletionToolParam{
 			Function: openai.FunctionDefinitionParam{
@@ -1328,7 +1350,11 @@ func extractReasoningContent(extraFields map[string]respjson.Field) string {
 	}
 	reasoningField, ok := extraFields[model.ReasoningContentKey]
 	if !ok {
-		return ""
+		// Ollama and some providers use "reasoning" instead of "reasoning_content".
+		reasoningField, ok = extraFields[model.ReasoningContentKeyAlt]
+		if !ok {
+			return ""
+		}
 	}
 	reasoningStr, err := strconv.Unquote(reasoningField.Raw())
 	if err == nil {

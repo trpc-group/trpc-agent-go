@@ -1,0 +1,44 @@
+{
+  "evalSetId": "math-basic",
+  "name": "math-basic",
+  "evalCases": [
+    {
+      "evalId": "calc_add",
+      "conversation": [
+        {
+          "invocationId": "calc_add-1",
+          "userContent": {
+            "role": "user",
+            "content": "calc add 2 3"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "calc result: 5"
+          },
+          "tools": [
+            {
+              "id": "tool_use_1",
+              "name": "calculator",
+              "arguments": {
+                "operation": "add",
+                "a": 2,
+                "b": 3
+              },
+              "result": {
+                "a": 2,
+                "b": 3,
+                "operation": "add",
+                "result": 5
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "math-eval-app",
+        "userId": "user"
+      }
+    }
+  ],
+  "creationTimestamp": 1761134484.9804401
+}

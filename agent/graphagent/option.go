@@ -104,6 +104,13 @@ type Options struct {
 	// conversations. This is useful for models like DeepSeek that output reasoning_content
 	// in thinking mode.
 	ReasoningContentMode string
+
+	// ExecutorOptions allows passing additional executor options directly.
+	// These options are applied after the mapped options (ChannelBufferSize,
+	// MaxConcurrency, CheckpointSaver), so they can override those settings if needed.
+	// This provides access to advanced executor configurations like MaxSteps,
+	// StepTimeout, NodeTimeout, CheckpointSaveTimeout, and DefaultRetryPolicy.
+	ExecutorOptions []graph.ExecutorOption
 }
 
 var (
@@ -236,5 +243,32 @@ func WithReasoningContentMode(mode string) Option {
 func WithSummaryFormatter(formatter func(summary string) string) Option {
 	return func(opts *Options) {
 		opts.summaryFormatter = formatter
+	}
+}
+
+// WithExecutorOptions allows passing executor options directly to the underlying graph executor.
+// These options are applied after the mapped options (ChannelBufferSize, MaxConcurrency,
+// CheckpointSaver), so they can override those settings if needed.
+//
+// This provides access to advanced executor configurations that are not directly exposed
+// through GraphAgent options, such as:
+//   - graph.WithMaxSteps() - Maximum number of steps for graph execution
+//   - graph.WithStepTimeout() - Timeout for each step
+//   - graph.WithNodeTimeout() - Timeout for individual node execution
+//   - graph.WithCheckpointSaveTimeout() - Timeout for checkpoint save operations
+//   - graph.WithDefaultRetryPolicy() - Default retry policies for nodes
+//
+// Example:
+//
+//	graphagent.New("my-agent", g,
+//	    graphagent.WithExecutorOptions(
+//	        graph.WithMaxSteps(50),
+//	        graph.WithStepTimeout(5*time.Minute),
+//	        graph.WithNodeTimeout(2*time.Minute),
+//	    ),
+//	)
+func WithExecutorOptions(opts ...graph.ExecutorOption) Option {
+	return func(options *Options) {
+		options.ExecutorOptions = append(options.ExecutorOptions, opts...)
 	}
 }

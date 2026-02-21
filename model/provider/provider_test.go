@@ -24,6 +24,7 @@ import (
 	"github.com/ollama/ollama/api"
 	openaisdk "github.com/openai/openai-go"
 	"github.com/stretchr/testify/assert"
+	"google.golang.org/genai"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/anthropic"
@@ -72,6 +73,7 @@ func TestOpenAIFactoryAppliesOptions(t *testing.T) {
 	}
 
 	fields := map[string]any{"tenant": "internal"}
+	headers := map[string]string{"X-Test-Header": "test-value"}
 	bufSize := 42
 	enabled := true
 	maxTokens := 256
@@ -79,8 +81,10 @@ func TestOpenAIFactoryAppliesOptions(t *testing.T) {
 	opts := &Options{ModelName: "gpt-4"}
 	WithAPIKey("openai-key")(opts)
 	WithBaseURL("https://api.example.com")(opts)
+	WithVariant(string(openai.VariantDeepSeek))(opts)
 	WithHTTPClientName("custom-client")(opts)
 	WithHTTPClientTransport(http.DefaultTransport)(opts)
+	WithHeaders(headers)(opts)
 	WithCallbacks(cb)(opts)
 	WithChannelBufferSize(bufSize)(opts)
 	WithExtraFields(fields)(opts)
@@ -101,6 +105,7 @@ func TestOpenAIFactoryAppliesOptions(t *testing.T) {
 	assert.Equal(t, "gpt-4", modelInstance.Info().Name)
 	assert.Equal(t, "https://api.example.com", readStringField(openaiModel, "baseURL"))
 	assert.Equal(t, "openai-key", readStringField(openaiModel, "apiKey"))
+	assert.Equal(t, openai.VariantDeepSeek, readInterfaceField(openaiModel, "variant"))
 	assert.Equal(t, 42, readIntField(openaiModel, "channelBufferSize"))
 	assert.True(t, readBoolField(openaiModel, "enableTokenTailoring"))
 	assert.Equal(t, 256, readIntField(openaiModel, "maxInputTokens"))
@@ -122,11 +127,13 @@ func TestAnthropicFactoryAppliesOptions(t *testing.T) {
 	}
 
 	bufSize := 64
+	headers := map[string]string{"X-Test-Header": "test-value"}
 	opts := &Options{ModelName: "claude"}
 	WithAPIKey("anthropic-key")(opts)
 	WithBaseURL("https://anthropic.example.com")(opts)
 	WithHTTPClientName("anthropic-client")(opts)
 	WithHTTPClientTransport(http.DefaultTransport)(opts)
+	WithHeaders(headers)(opts)
 	WithCallbacks(cb)(opts)
 	WithChannelBufferSize(bufSize)(opts)
 	WithAnthropicOption(anthropic.WithAnthropicRequestOptions(option.WithJSONSet("tenant", "internal")))(opts)
@@ -390,15 +397,46 @@ func TestModelWithAllOptions(t *testing.T) {
 		WithTailoringStrategy(strategy),
 		WithTokenTailoringConfig(config),
 		WithCallbacks(Callbacks{
-			GeminiChatChunk:      nil,
-			GeminiChatRequest:    nil,
-			GeminiStreamComplete: nil,
-			GeminiChatResponse:   nil,
+			GeminiChatChunk: gemini.ChatChunkCallbackFunc(func(
+				context.Context,
+				[]*genai.Content,
+				*genai.GenerateContentConfig,
+				*genai.GenerateContentResponse,
+			) {
+			}),
+			GeminiChatRequest: gemini.ChatRequestCallbackFunc(func(
+				context.Context,
+				[]*genai.Content,
+			) {
+			}),
+			GeminiStreamComplete: gemini.ChatStreamCompleteCallbackFunc(func(
+				context.Context,
+				[]*genai.Content,
+				*genai.GenerateContentConfig,
+				*model.Response,
+			) {
+			}),
+			GeminiChatResponse: gemini.ChatResponseCallbackFunc(func(
+				context.Context,
+				[]*genai.Content,
+				*genai.GenerateContentConfig,
+				*genai.GenerateContentResponse,
+			) {
+			}),
 		}),
-		WithGeminiOption(gemini.WithGeminiClientConfig(nil)),
+		WithGeminiOption(gemini.WithGeminiClientConfig(&genai.ClientConfig{
+			APIKey:     "test-key",
+			Backend:    2,
+			HTTPClient: http.DefaultClient,
+		})),
 	)
-	assert.Error(t, err)
-	assert.Nil(t, modelInstance)
+	if !assert.NoError(t, err) {
+		return
+	}
+	if !assert.NotNil(t, modelInstance) {
+		return
+	}
+	assert.Equal(t, "gemini-pro", modelInstance.Info().Name)
 
 	modelInstance, err = Model(
 		"ollama",
@@ -434,6 +472,12 @@ func TestModelWithAllOptions(t *testing.T) {
 		WithTokenCounter(counter),
 		WithTailoringStrategy(strategy),
 		WithTokenTailoringConfig(config),
+		WithCallbacks(Callbacks{
+			HunyuanChatRequest:    makeFunc[hunyuan.ChatRequestCallbackFunc](),
+			HunyuanChatResponse:   makeFunc[hunyuan.ChatResponseCallbackFunc](),
+			HunyuanChatChunk:      makeFunc[hunyuan.ChatChunkCallbackFunc](),
+			HunyuanStreamComplete: makeFunc[hunyuan.ChatStreamCompleteCallbackFunc](),
+		}),
 		WithHunyuanOption(hunyuan.WithSecretId("test-secret-id"),
 			hunyuan.WithSecretKey("test-secret-key")),
 	)
@@ -495,4 +539,12 @@ func (testModel) GenerateContent(context.Context, *model.Request) (<-chan *model
 
 func (testModel) Info() model.Info {
 	return model.Info{Name: "test"}
+}
+
+func makeFunc[T any]() T {
+	fnType := reflect.TypeOf((*T)(nil)).Elem()
+	fn := reflect.MakeFunc(fnType, func([]reflect.Value) []reflect.Value {
+		return nil
+	})
+	return fn.Interface().(T)
 }

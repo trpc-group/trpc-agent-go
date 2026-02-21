@@ -15,6 +15,7 @@ nav:
           - Graph Agent: graph.md
           - Custom Agent: custom-agent.md
           - Dify Agent: dify.md
+          - Claude Code Agent: claudecode.md
       - Runner: runner.md
       - Model: model.md
       - Callbacks: callbacks.md
@@ -73,6 +74,7 @@ plugins:
                     - Graph Agent: graph.md
                     - 自定义 Agent: custom-agent.md
                     - Dify Agent: dify.md
+                    - Claude Code Agent: claudecode.md
                 - Runner: runner.md
                 - Model: model.md
                 - Callbacks: callbacks.md
@@ -135,6 +137,8 @@ theme:
         name: Switch to light mode
 
 markdown_extensions:
+  - pymdownx.arithmatex:
+      generic: true
   - pymdownx.highlight:
       anchor_linenums: true
       linenums: true
@@ -150,6 +154,10 @@ markdown_extensions:
 
 extra_css:
   - assets/stylesheets/extra.css
+
+extra_javascript:
+  - assets/javascripts/mathjax.js
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
 
 extra:
   analytics:

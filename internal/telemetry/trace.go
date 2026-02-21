@@ -112,7 +112,7 @@ func TraceWorkflow(span trace.Span, workflow *Workflow) {
 		}
 	}
 	if workflow.Error != nil {
-		span.SetAttributes(attribute.String(KeyErrorType, ValueDefaultErrorType))
+		span.SetAttributes(attribute.String(KeyErrorType, ToErrorType(workflow.Error, ValueDefaultErrorType)))
 		span.SetStatus(codes.Error, workflow.Error.Error())
 		span.RecordError(workflow.Error)
 	}
@@ -159,30 +159,34 @@ var (
 	KeyGenAIOperationName = semconvtrace.KeyGenAIOperationName
 	KeyGenAISystem        = semconvtrace.KeyGenAISystem
 
-	KeyGenAIRequestModel            = semconvtrace.KeyGenAIRequestModel
-	KeyGenAIRequestIsStream         = semconvtrace.KeyGenAIRequestIsStream
-	KeyGenAIRequestChoiceCount      = semconvtrace.KeyGenAIRequestChoiceCount
-	KeyGenAIInputMessages           = semconvtrace.KeyGenAIInputMessages
-	KeyGenAIOutputMessages          = semconvtrace.KeyGenAIOutputMessages
-	KeyGenAIAgentName               = semconvtrace.KeyGenAIAgentName
-	KeyGenAIConversationID          = semconvtrace.KeyGenAIConversationID
-	KeyGenAIUsageOutputTokens       = semconvtrace.KeyGenAIUsageOutputTokens
-	KeyGenAIUsageInputTokens        = semconvtrace.KeyGenAIUsageInputTokens
-	KeyGenAIProviderName            = semconvtrace.KeyGenAIProviderName
-	KeyGenAIAgentDescription        = semconvtrace.KeyGenAIAgentDescription
-	KeyGenAIResponseFinishReasons   = semconvtrace.KeyGenAIResponseFinishReasons
-	KeyGenAIResponseID              = semconvtrace.KeyGenAIResponseID
-	KeyGenAIResponseModel           = semconvtrace.KeyGenAIResponseModel
-	KeyGenAIRequestStopSequences    = semconvtrace.KeyGenAIRequestStopSequences
-	KeyGenAIRequestFrequencyPenalty = semconvtrace.KeyGenAIRequestFrequencyPenalty
-	KeyGenAIRequestMaxTokens        = semconvtrace.KeyGenAIRequestMaxTokens
-	KeyGenAIRequestPresencePenalty  = semconvtrace.KeyGenAIRequestPresencePenalty
-	KeyGenAIRequestTemperature      = semconvtrace.KeyGenAIRequestTemperature
-	KeyGenAIRequestTopP             = semconvtrace.KeyGenAIRequestTopP
-	KeyGenAISystemInstructions      = semconvtrace.KeyGenAISystemInstructions
-	KeyGenAITokenType               = semconvtrace.KeyGenAITokenType
-	KeyGenAIRequestThinkingEnabled  = semconvtrace.KeyGenAIRequestThinkingEnabled
-	KeyGenAIRequestToolDefinitions  = "gen_ai.request.tool.definitions"
+	KeyGenAIRequestModel                  = semconvtrace.KeyGenAIRequestModel
+	KeyGenAIRequestIsStream               = semconvtrace.KeyGenAIRequestIsStream
+	KeyGenAIRequestChoiceCount            = semconvtrace.KeyGenAIRequestChoiceCount
+	KeyGenAIInputMessages                 = semconvtrace.KeyGenAIInputMessages
+	KeyGenAIOutputMessages                = semconvtrace.KeyGenAIOutputMessages
+	KeyGenAIAgentName                     = semconvtrace.KeyGenAIAgentName
+	KeyGenAIConversationID                = semconvtrace.KeyGenAIConversationID
+	KeyGenAIUsageOutputTokens             = semconvtrace.KeyGenAIUsageOutputTokens
+	KeyGenAIUsageInputTokens              = semconvtrace.KeyGenAIUsageInputTokens
+	KeyGenAIUsageInputTokensCached        = semconvtrace.KeyGenAIUsageInputTokensCached
+	KeyGenAIUsageInputTokensCacheRead     = semconvtrace.KeyGenAIUsageInputTokensCacheRead
+	KeyGenAIUsageInputTokensCacheCreation = semconvtrace.KeyGenAIUsageInputTokensCacheCreation
+	KeyGenAIProviderName                  = semconvtrace.KeyGenAIProviderName
+	KeyGenAIAgentDescription              = semconvtrace.KeyGenAIAgentDescription
+	KeyGenAIResponseFinishReasons         = semconvtrace.KeyGenAIResponseFinishReasons
+	KeyGenAIResponseID                    = semconvtrace.KeyGenAIResponseID
+	KeyGenAIResponseModel                 = semconvtrace.KeyGenAIResponseModel
+	KeyGenAIRequestStopSequences          = semconvtrace.KeyGenAIRequestStopSequences
+	KeyGenAIRequestFrequencyPenalty       = semconvtrace.KeyGenAIRequestFrequencyPenalty
+	KeyGenAIRequestMaxTokens              = semconvtrace.KeyGenAIRequestMaxTokens
+	KeyGenAIRequestPresencePenalty        = semconvtrace.KeyGenAIRequestPresencePenalty
+	KeyGenAIRequestTemperature            = semconvtrace.KeyGenAIRequestTemperature
+	KeyGenAIRequestTopP                   = semconvtrace.KeyGenAIRequestTopP
+	KeyGenAISystemInstructions            = semconvtrace.KeyGenAISystemInstructions
+	KeyGenAITokenType                     = semconvtrace.KeyGenAITokenType
+	KeyGenAITaskType                      = semconvtrace.KeyGenAITaskType
+	KeyGenAIRequestThinkingEnabled        = semconvtrace.KeyGenAIRequestThinkingEnabled
+	KeyGenAIRequestToolDefinitions        = semconvtrace.KeyGenAIRequestToolDefinitions
 
 	KeyGenAIToolName          = semconvtrace.KeyGenAIToolName
 	KeyGenAIToolDescription   = semconvtrace.KeyGenAIToolDescription
@@ -223,7 +227,7 @@ func TraceToolCall(span trace.Span, sess *session.Session, declaration *tool.Dec
 			span.SetAttributes(attribute.String(KeyErrorType, e.Type), attribute.String(KeyErrorMessage, e.Message))
 		} else if err != nil {
 			span.SetStatus(codes.Error, err.Error())
-			span.SetAttributes(attribute.String(KeyErrorType, ValueDefaultErrorType), attribute.String(KeyErrorMessage, err.Error()))
+			span.SetAttributes(attribute.String(KeyErrorType, ToErrorType(err, ValueDefaultErrorType)), attribute.String(KeyErrorMessage, err.Error()))
 		}
 
 		if callIDs := rspEvent.Response.GetToolCallIDs(); len(callIDs) > 0 {
@@ -382,32 +386,63 @@ func TraceAfterInvokeAgent(span trace.Span, rspEvent *event.Event, tokenUsage *T
 	}
 }
 
+// TraceChatAttributes contains TraceChat inputs other than span.
+//
+// It is used to keep TraceChat signatures stable as parameters evolve.
+type TraceChatAttributes struct {
+	Invocation       *agent.Invocation
+	Request          *model.Request
+	Response         *model.Response
+	EventID          string
+	TimeToFirstToken time.Duration
+	TaskType         string
+}
+
+// NewSummarizeTaskType creates a task type for summarize.
+func NewSummarizeTaskType(name string) string {
+	taskType := "summarize"
+	if name == "" {
+		return taskType
+	}
+	return taskType + " " + name
+}
+
 // TraceChat traces the invocation of an LLM call.
-func TraceChat(span trace.Span, invoke *agent.Invocation, req *model.Request, rsp *model.Response, eventID string, timeToFirstToken time.Duration) {
+func TraceChat(span trace.Span, attributes *TraceChatAttributes) {
 	attrs := []attribute.KeyValue{
 		attribute.String(KeyGenAISystem, SystemTRPCGoAgent),
 		attribute.String(KeyGenAIOperationName, OperationChat),
-		attribute.String(KeyEventID, eventID),
 	}
-	if timeToFirstToken > 0 {
-		attrs = append(attrs, attribute.Float64(KeyTRPCAgentGoClientTimeToFirstToken, timeToFirstToken.Seconds()))
+	if attributes == nil {
+		span.SetAttributes(attrs...)
+		return
+	}
+
+	if attributes.EventID != "" {
+		attrs = append(attrs, attribute.String(KeyEventID, attributes.EventID))
+	}
+	if attributes.TimeToFirstToken > 0 {
+		attrs = append(attrs, attribute.Float64(KeyTRPCAgentGoClientTimeToFirstToken, attributes.TimeToFirstToken.Seconds()))
+	}
+	if attributes.TaskType != "" {
+		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAITaskType, attributes.TaskType))
 	}
 
 	// Add invocation attributes
-	attrs = append(attrs, buildInvocationAttributes(invoke)...)
+	attrs = append(attrs, buildInvocationAttributes(attributes.Invocation)...)
 
 	// Add request attributes
-	attrs = append(attrs, buildRequestAttributes(req)...)
+	attrs = append(attrs, buildRequestAttributes(attributes.Request)...)
 
 	// Add response attributes
-	attrs = append(attrs, buildResponseAttributes(rsp)...)
+	attrs = append(attrs, buildResponseAttributes(attributes.Response)...)
 
 	// Set all attributes at once
 	span.SetAttributes(attrs...)
 
 	// Handle response error status
-	if rsp != nil && rsp.Error != nil {
-		span.SetStatus(codes.Error, rsp.Error.Message)
+	if attributes.Response != nil && attributes.Response.Error != nil {
+		span.SetStatus(codes.Error, attributes.Response.Error.Message)
 	}
 }
 
@@ -529,6 +564,19 @@ func buildResponseAttributes(rsp *model.Response) []attribute.KeyValue {
 			attribute.Int(KeyGenAIUsageInputTokens, rsp.Usage.PromptTokens),
 			attribute.Int(KeyGenAIUsageOutputTokens, rsp.Usage.CompletionTokens),
 		)
+		// Prompt cache tokens (if provided by the model provider)
+		if cached := rsp.Usage.PromptTokensDetails.CachedTokens; cached != 0 {
+			// OpenAI: cached_tokens
+			attrs = append(attrs, attribute.Int(KeyGenAIUsageInputTokensCached, cached))
+		}
+		if cacheRead := rsp.Usage.PromptTokensDetails.CacheReadTokens; cacheRead != 0 {
+			// Anthropic: cache_read_tokens
+			attrs = append(attrs, attribute.Int(KeyGenAIUsageInputTokensCacheRead, cacheRead))
+		}
+		if cacheCreation := rsp.Usage.PromptTokensDetails.CacheCreationTokens; cacheCreation != 0 {
+			// Anthropic: cache_creation_tokens
+			attrs = append(attrs, attribute.Int(KeyGenAIUsageInputTokensCacheCreation, cacheCreation))
+		}
 	}
 
 	// Add choices attributes

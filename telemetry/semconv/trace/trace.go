@@ -70,6 +70,15 @@ const (
 	KeyGenAIUsageOutputTokens = "gen_ai.usage.output_tokens" // #nosec G101 - this is a metric key name, not a credential.
 	// KeyGenAIUsageInputTokens is the attribute key for input token count.
 	KeyGenAIUsageInputTokens = "gen_ai.usage.input_tokens" // #nosec G101 - this is a metric key name, not a credential.
+	// KeyGenAIUsageInputTokensCached is the attribute key for cached input token count.
+	// Note: This is an extension field used to report prompt cache tokens; it is not part of the upstream GenAI semantic conventions yet.
+	KeyGenAIUsageInputTokensCached = "gen_ai.usage.input_tokens.cached" // #nosec G101 - this is a metric key name, not a credential.
+	// KeyGenAIUsageInputTokensCacheRead is the attribute key for tokens read from cache (Anthropic).
+	// Note: This is an extension field; it is not part of the upstream GenAI semantic conventions yet.
+	KeyGenAIUsageInputTokensCacheRead = "gen_ai.usage.input_tokens.cache_read" // #nosec G101 - this is a metric key name, not a credential.
+	// KeyGenAIUsageInputTokensCacheCreation is the attribute key for tokens used to create cache (Anthropic).
+	// Note: This is an extension field; it is not part of the upstream GenAI semantic conventions yet.
+	KeyGenAIUsageInputTokensCacheCreation = "gen_ai.usage.input_tokens.cache_creation" // #nosec G101 - this is a metric key name, not a credential.
 	// KeyGenAIProviderName is the attribute key for provider name.
 	KeyGenAIProviderName = "gen_ai.provider.name"
 	// KeyGenAIAgentDescription is the attribute key for agent description.
@@ -112,6 +121,8 @@ const (
 	KeyGenAIToolCallArguments = "gen_ai.tool.call.arguments"
 	// KeyGenAIToolCallResult is the attribute key for tool call result.
 	KeyGenAIToolCallResult = "gen_ai.tool.call.result"
+	// KeyGenAIRequestToolDefinitions is the attribute key for tool definitions.
+	KeyGenAIRequestToolDefinitions = "gen_ai.request.tool.definitions"
 
 	// KeyErrorType is the attribute key for error type.
 	// Reference: https://github.com/open-telemetry/semantic-conventions/blob/main/docs/general/recording-errors.md#recording-errors-on-spans
@@ -124,4 +135,6 @@ const (
 
 	// SystemTRPCGoAgent is the system identifier for trpc-go-agent.
 	SystemTRPCGoAgent = "trpc.go.agent"
+
+	KeyGenAITaskType = "gen_ai.task_type"
 )

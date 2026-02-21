@@ -27,7 +27,108 @@ func TestSimpleTokenCounter_CountTokens(t *testing.T) {
 	assert.Greater(t, n, 0)
 }
 
-// TestSimpleTokenCounter_CountTokens_DetailedCoverage tests all code paths in CountTokens function
+func TestSimpleTokenCounter_WithApproxRunesPerToken(t *testing.T) {
+	const (
+		textLen     = 16
+		cnHeuristic = 1.6
+	)
+
+	msg := NewUserMessage(repeat("a", textLen))
+	ctx := context.Background()
+
+	defaultCounter := NewSimpleTokenCounter()
+	defaultTokens, err := defaultCounter.CountTokens(ctx, msg)
+	require.NoError(t, err)
+	require.Greater(t, defaultTokens, 0)
+
+	tests := []struct {
+		name         string
+		options      []SimpleTokenCounterOption
+		assertTokens func(t *testing.T, got, baseline int)
+	}{
+		{
+			name:    "negative_value_ignored_like_default",
+			options: []SimpleTokenCounterOption{WithApproxRunesPerToken(-1)},
+			assertTokens: func(t *testing.T, got, baseline int) {
+				assert.Equal(t, baseline, got)
+			},
+		},
+		{
+			name:    "zero_value_ignored_like_default",
+			options: []SimpleTokenCounterOption{WithApproxRunesPerToken(0)},
+			assertTokens: func(t *testing.T, got, baseline int) {
+				assert.Equal(t, baseline, got)
+			},
+		},
+		{
+			name:    "smaller_runes_per_token_increases_token_count",
+			options: []SimpleTokenCounterOption{WithApproxRunesPerToken(cnHeuristic)},
+			assertTokens: func(t *testing.T, got, baseline int) {
+				assert.Greater(t, got, baseline)
+			},
+		},
+		{
+			name:    "very_small_positive_value_produces_large_token_count",
+			options: []SimpleTokenCounterOption{WithApproxRunesPerToken(0.1)},
+			assertTokens: func(t *testing.T, got, baseline int) {
+				assert.Greater(t, got, baseline)
+			},
+		},
+		{
+			name:    "nil_option_is_safely_skipped",
+			options: []SimpleTokenCounterOption{nil},
+			assertTokens: func(t *testing.T, got, baseline int) {
+				assert.Equal(t, baseline, got)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			counter := NewSimpleTokenCounter(tt.options...)
+			gotTokens, err := counter.CountTokens(ctx, msg)
+			require.NoError(t, err)
+			tt.assertTokens(t, gotTokens, defaultTokens)
+		})
+	}
+}
+
+func TestSimpleTokenCounter_CountTokens_ApproxRunesPerTokenFallback(t *testing.T) {
+	ctx := context.Background()
+	msg := NewUserMessage("hello")
+
+	baselineCounter := NewSimpleTokenCounter()
+	baselineTokens, err := baselineCounter.CountTokens(ctx, msg)
+	require.NoError(t, err)
+	require.Greater(t, baselineTokens, 0)
+
+	tests := []struct {
+		name                string
+		approxRunesPerToken float64
+	}{
+		{
+			name:                "zero_value_falls_back_to_default",
+			approxRunesPerToken: 0,
+		},
+		{
+			name:                "negative_value_falls_back_to_default",
+			approxRunesPerToken: -1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			counter := &SimpleTokenCounter{
+				approxRunesPerToken: tt.approxRunesPerToken,
+			}
+			gotTokens, err := counter.CountTokens(ctx, msg)
+			require.NoError(t, err)
+			assert.Equal(t, baselineTokens, gotTokens)
+		})
+	}
+}
+
+// TestSimpleTokenCounter_CountTokens_DetailedCoverage tests all code paths in CountTokens function.
 func TestSimpleTokenCounter_CountTokens_DetailedCoverage(t *testing.T) {
 	counter := NewSimpleTokenCounter()
 	ctx := context.Background()
@@ -77,12 +178,12 @@ func TestSimpleTokenCounter_CountTokens_DetailedCoverage(t *testing.T) {
 	t.Run("content with reasoning content", func(t *testing.T) {
 		msg := Message{
 			Role:             RoleAssistant,
-			Content:          "Answer",                     // 6 runes / 4 = 1 token
-			ReasoningContent: "Let me think about this...", // 26 runes / 4 = 6 tokens
+			Content:          "Answer",                     // 6 runes
+			ReasoningContent: "Let me think about this...", // 26 runes
 		}
 		result, err := counter.CountTokens(ctx, msg)
 		require.NoError(t, err)
-		assert.Equal(t, 7, result) // max(1 + 6, 1) = 7
+		assert.Equal(t, 8, result) // max((6+26)/4, 1) = 8
 	})
 
 	t.Run("empty reasoning content is ignored", func(t *testing.T) {
@@ -196,12 +297,12 @@ func TestSimpleTokenCounter_CountTokens_DetailedCoverage(t *testing.T) {
 	})
 
 	t.Run("all features combined", func(t *testing.T) {
-		textPart1 := "Additional info" // 15 runes / 4 = 3 tokens
-		textPart2 := "More details"    // 12 runes / 4 = 3 tokens
+		textPart1 := "Additional info" // 15 runes
+		textPart2 := "More details"    // 12 runes
 		msg := Message{
 			Role:             RoleAssistant,
-			Content:          "Main answer",      // 11 runes / 4 = 2 tokens
-			ReasoningContent: "Thinking process", // 16 runes / 4 = 4 tokens
+			Content:          "Main answer",      // 11 runes
+			ReasoningContent: "Thinking process", // 16 runes
 			ContentParts: []ContentPart{
 				{
 					Type: ContentTypeText,
@@ -219,7 +320,7 @@ func TestSimpleTokenCounter_CountTokens_DetailedCoverage(t *testing.T) {
 		}
 		result, err := counter.CountTokens(ctx, msg)
 		require.NoError(t, err)
-		assert.Equal(t, 12, result) // max(2 + 4 + 3 + 3, 1) = 12
+		assert.Equal(t, 13, result) // max((11+16+15+12)/4, 1) = 13
 	})
 
 	t.Run("empty content parts slice", func(t *testing.T) {
@@ -349,8 +450,8 @@ func TestMiddleOutStrategy_MiddleOutLogic(t *testing.T) {
 	assert.Equal(t, RoleSystem, tailored[0].Role)
 	assert.Equal(t, "You are a helpful assistant.", tailored[0].Content)
 
-	// Should preserve last turn (last 2 messages).
-	assert.Equal(t, "Question 5", tailored[len(tailored)-2].Content)
+	// Should preserve the last user message.
+	assert.Equal(t, RoleUser, tailored[len(tailored)-1].Role)
 	assert.Equal(t, "Question 6", tailored[len(tailored)-1].Content)
 
 	// Should have removed some middle messages.
@@ -670,120 +771,7 @@ func TestCalculatePreservedHeadCount(t *testing.T) {
 	}
 }
 
-// TestCalculatePreservedTailCount tests the shared calculatePreservedTailCount function.
-func TestCalculatePreservedTailCount(t *testing.T) {
-	tests := []struct {
-		name     string
-		messages []Message
-		expected int
-	}{
-		{
-			name:     "empty messages",
-			messages: []Message{},
-			expected: 0,
-		},
-		{
-			name: "single system message",
-			messages: []Message{
-				NewSystemMessage("You are a helpful assistant."),
-			},
-			expected: 1,
-		},
-		{
-			name: "user-assistant pair",
-			messages: []Message{
-				NewSystemMessage("You are a helpful assistant."),
-				NewUserMessage("Hello"),
-				NewAssistantMessage("Hi there!"),
-			},
-			expected: 2, // user + assistant
-		},
-		{
-			name: "user-assistant-tool sequence",
-			messages: []Message{
-				NewSystemMessage("You are a helpful assistant."),
-				NewUserMessage("What's the weather?"),
-				NewAssistantMessage("Let me check."),
-				NewToolMessage("tool_1", "weather", "Sunny, 75°F"),
-			},
-			expected: 3, // user + assistant + tool
-		},
-		{
-			name: "multiple turns with tool at end",
-			messages: []Message{
-				NewSystemMessage("You are a helpful assistant."),
-				NewUserMessage("First question"),
-				NewAssistantMessage("First answer"),
-				NewUserMessage("What's the weather?"),
-				NewAssistantMessage("Let me check."),
-				NewToolMessage("tool_1", "weather", "Sunny"),
-			},
-			expected: 3, // last user + assistant + tool
-		},
-		{
-			name: "assistant without preceding user",
-			messages: []Message{
-				NewSystemMessage("You are a helpful assistant."),
-				NewAssistantMessage("Hello!"),
-			},
-			expected: 1, // only assistant
-		},
-		{
-			name: "user without assistant",
-			messages: []Message{
-				NewSystemMessage("You are a helpful assistant."),
-				NewUserMessage("Hello"),
-			},
-			expected: 1, // only last message (user)
-		},
-		{
-			name: "tool between user and assistant",
-			messages: []Message{
-				NewSystemMessage("You are a helpful assistant."),
-				NewUserMessage("Hello"),
-				NewToolMessage("tool_1", "search", "Result"),
-				NewAssistantMessage("Based on the result..."),
-			},
-			expected: 3, // user + tool + assistant (from user to end, tool is skipped in search but included in result)
-		},
-		{
-			name: "multiple tools after user",
-			messages: []Message{
-				NewSystemMessage("You are a helpful assistant."),
-				NewUserMessage("Search for something"),
-				NewToolMessage("tool_1", "search", "Result 1"),
-				NewToolMessage("tool_2", "search", "Result 2"),
-				NewAssistantMessage("Here are the results..."),
-			},
-			expected: 4, // user + 2 tools + assistant
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := calculatePreservedTailCount(tt.messages)
-			require.Equal(t, tt.expected, result, "Expected %d preserved messages, got %d", tt.expected, result)
-
-			// Verify the actual messages that would be preserved.
-			if result > 0 && len(tt.messages) > 0 {
-				preservedMessages := tt.messages[len(tt.messages)-result:]
-				t.Logf("Preserved messages: %d", len(preservedMessages))
-				for i, msg := range preservedMessages {
-					t.Logf("  [%d] %s: %s", i, msg.Role, truncateContent(msg.Content, 50))
-				}
-			}
-		})
-	}
-}
-
 // Helper function to truncate content for logging.
-func truncateContent(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max] + "..."
-}
-
 // TestRoleToolRemoval tests that all strategies properly remove leading RoleTool messages.
 func TestRoleToolRemoval(t *testing.T) {
 	// Create a counter for testing.
@@ -811,150 +799,6 @@ func TestRoleToolRemoval(t *testing.T) {
 
 			// The first message should not be a tool message.
 			require.NotEqual(t, RoleTool, result[0].Role, "First message should not be a tool message")
-		})
-	}
-}
-
-// TestBuildPreservedOnlyResult tests the shared buildPreservedOnlyResult function.
-func TestBuildPreservedOnlyResult(t *testing.T) {
-	tests := []struct {
-		name          string
-		messages      []Message
-		preservedHead int
-		preservedTail int
-		expected      []Message
-		description   string
-	}{
-		{
-			name: "preserve head and tail",
-			messages: []Message{
-				NewSystemMessage("System"),
-				NewUserMessage("User 1"),
-				NewUserMessage("User 2"),
-				NewUserMessage("User 3"),
-				NewUserMessage("User 4"),
-			},
-			preservedHead: 1,
-			preservedTail: 2,
-			expected: []Message{
-				NewSystemMessage("System"),
-				NewUserMessage("User 3"),
-				NewUserMessage("User 4"),
-			},
-			description: "Should preserve system message and last 2 messages",
-		},
-		{
-			name: "preserve only head",
-			messages: []Message{
-				NewSystemMessage("System"),
-				NewUserMessage("User 1"),
-				NewUserMessage("User 2"),
-			},
-			preservedHead: 1,
-			preservedTail: 0,
-			expected: []Message{
-				NewSystemMessage("System"),
-			},
-			description: "Should preserve only system message",
-		},
-		{
-			name: "preserve only tail",
-			messages: []Message{
-				NewSystemMessage("System"),
-				NewUserMessage("User 1"),
-				NewUserMessage("User 2"),
-			},
-			preservedHead: 0,
-			preservedTail: 2,
-			expected: []Message{
-				NewUserMessage("User 1"),
-				NewUserMessage("User 2"),
-			},
-			description: "Should preserve only last 2 messages",
-		},
-		{
-			name: "remove leading tool message",
-			messages: []Message{
-				NewToolMessage("tool_1", "test", "Result"),
-				NewUserMessage("User 1"),
-				NewUserMessage("User 2"),
-			},
-			preservedHead: 0,
-			preservedTail: 3,
-			expected: []Message{
-				NewUserMessage("User 1"),
-				NewUserMessage("User 2"),
-			},
-			description: "Should remove leading tool message",
-		},
-		{
-			name: "tool message in head, keep in tail",
-			messages: []Message{
-				NewSystemMessage("System"),
-				NewUserMessage("User 1"),
-				NewToolMessage("tool_1", "test", "Result"),
-				NewUserMessage("User 2"),
-			},
-			preservedHead: 1,
-			preservedTail: 2,
-			expected: []Message{
-				NewSystemMessage("System"),
-				NewToolMessage("tool_1", "test", "Result"),
-				NewUserMessage("User 2"),
-			},
-			description: "Tool message in tail should be preserved",
-		},
-		{
-			name: "all head preserved leads with tool",
-			messages: []Message{
-				NewToolMessage("tool_1", "test", "Result"),
-				NewUserMessage("User 1"),
-				NewUserMessage("User 2"),
-			},
-			preservedHead: 3,
-			preservedTail: 0,
-			expected: []Message{
-				NewUserMessage("User 1"),
-				NewUserMessage("User 2"),
-			},
-			description: "Leading tool message should be removed even when all head is preserved",
-		},
-		{
-			name: "empty result",
-			messages: []Message{
-				NewUserMessage("User 1"),
-				NewUserMessage("User 2"),
-			},
-			preservedHead: 0,
-			preservedTail: 0,
-			expected:      []Message{},
-			description:   "Empty preservation should return empty result",
-		},
-		{
-			name: "single tool message only",
-			messages: []Message{
-				NewToolMessage("tool_1", "test", "Result"),
-			},
-			preservedHead: 0,
-			preservedTail: 1,
-			expected:      []Message{},
-			description:   "Single tool message should be removed, resulting in empty list",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := buildPreservedOnlyResult(tt.messages, tt.preservedHead, tt.preservedTail)
-
-			require.Equal(t, len(tt.expected), len(result),
-				"%s: expected %d messages, got %d", tt.description, len(tt.expected), len(result))
-
-			for i := range result {
-				assert.Equal(t, tt.expected[i].Role, result[i].Role,
-					"%s: message[%d] role mismatch", tt.description, i)
-				assert.Equal(t, tt.expected[i].Content, result[i].Content,
-					"%s: message[%d] content mismatch", tt.description, i)
-			}
 		})
 	}
 }
@@ -1275,76 +1119,6 @@ func TestBuildPrefixSum_WithActualError(t *testing.T) {
 	require.Greater(t, prefixSum[len(messages)], 0) // Total should be positive
 }
 
-// TestBuildPreservedOnlyResult_EdgeCases tests edge cases in buildPreservedOnlyResult
-func TestBuildPreservedOnlyResult_EdgeCases(t *testing.T) {
-	t.Run("preserved segments exceed message count", func(t *testing.T) {
-		messages := []Message{
-			NewSystemMessage("System"),
-			NewUserMessage("User"),
-		}
-
-		// Request more tail messages than available after head
-		result := buildPreservedOnlyResult(messages, 1, 5)
-		require.NotNil(t, result)
-		// Should adjust preservedTail to not exceed available messages
-		require.LessOrEqual(t, len(result), len(messages))
-	})
-
-	t.Run("starts with tool message", func(t *testing.T) {
-		messages := []Message{
-			NewToolMessage("tool1", "func1", "result"),
-			NewUserMessage("User"),
-		}
-
-		result := buildPreservedOnlyResult(messages, 0, 2)
-		// Tool message at start should be removed
-		require.Len(t, result, 1)
-		require.Equal(t, RoleUser, result[0].Role)
-	})
-}
-
-// TestCalculatePreservedTailCount_EdgeCases tests edge cases in calculatePreservedTailCount
-func TestCalculatePreservedTailCount_EdgeCases(t *testing.T) {
-	t.Run("empty messages", func(t *testing.T) {
-		count := calculatePreservedTailCount([]Message{})
-		require.Equal(t, 0, count)
-	})
-
-	t.Run("only system message", func(t *testing.T) {
-		messages := []Message{
-			NewSystemMessage("System"),
-		}
-		count := calculatePreservedTailCount(messages)
-		require.Equal(t, 1, count) // Should preserve last message
-	})
-
-	t.Run("system then user message", func(t *testing.T) {
-		messages := []Message{
-			NewSystemMessage("System"),
-			NewUserMessage("User"),
-		}
-		count := calculatePreservedTailCount(messages)
-		require.Equal(t, 1, count) // Should preserve last message (no assistant found)
-	})
-
-	t.Run("assistant without preceding user", func(t *testing.T) {
-		messages := []Message{
-			NewSystemMessage("System"),
-			NewAssistantMessage("Assistant"),
-		}
-		count := calculatePreservedTailCount(messages)
-		require.Equal(t, 1, count) // Should preserve assistant message
-	})
-
-	t.Run("assistant at start", func(t *testing.T) {
-		messages := []Message{
-			NewAssistantMessage("Assistant"),
-		}
-		count := calculatePreservedTailCount(messages)
-		require.Equal(t, 1, count) // Should preserve all messages
-	})
-}
-
 // TestSimpleTokenCounter_CountTokensRange_InvalidRange tests error cases
 func TestSimpleTokenCounter_CountTokensRange_InvalidRange(t *testing.T) {
 	counter := NewSimpleTokenCounter()
@@ -1416,9 +1190,9 @@ func TestHeadOutStrategy_BinarySearchAccuracy(t *testing.T) {
 	require.Greater(t, len(tailored), 0)
 	assert.Equal(t, RoleSystem, tailored[0].Role)
 
-	// Should preserve last turn (last 2 messages).
-	assert.Equal(t, "Last user message", tailored[len(tailored)-2].Content)
-	assert.Equal(t, "Last assistant response", tailored[len(tailored)-1].Content)
+	// The sequence must end with user/tool for request legality.
+	assert.Equal(t, RoleUser, tailored[len(tailored)-1].Role)
+	assert.Equal(t, "Last user message", tailored[len(tailored)-1].Content)
 
 	// Verify token count is within limit.
 	totalTokens := 0
@@ -1456,9 +1230,9 @@ func TestTailOutStrategy_BinarySearchAccuracy(t *testing.T) {
 	require.Greater(t, len(tailored), 0)
 	assert.Equal(t, RoleSystem, tailored[0].Role)
 
-	// Should preserve last turn (last 2 messages).
-	assert.Equal(t, "Last user message", tailored[len(tailored)-2].Content)
-	assert.Equal(t, "Last assistant response", tailored[len(tailored)-1].Content)
+	// The sequence must end with user/tool for request legality.
+	assert.Equal(t, RoleUser, tailored[len(tailored)-1].Role)
+	assert.Equal(t, "Last user message", tailored[len(tailored)-1].Content)
 
 	// Verify token count is within limit.
 	totalTokens := 0
@@ -1492,8 +1266,8 @@ func TestHeadOutStrategy_VeryTightBudget(t *testing.T) {
 		assert.Equal(t, RoleSystem, tailored[0].Role)
 	}
 	if len(tailored) >= 2 {
-		assert.Equal(t, "Query", tailored[len(tailored)-2].Content)
-		assert.Equal(t, "Response", tailored[len(tailored)-1].Content)
+		assert.Equal(t, RoleUser, tailored[len(tailored)-1].Role)
+		assert.Equal(t, "Query", tailored[len(tailored)-1].Content)
 	}
 
 	// Verify token count is within limit.
@@ -1528,8 +1302,8 @@ func TestTailOutStrategy_VeryTightBudget(t *testing.T) {
 		assert.Equal(t, RoleSystem, tailored[0].Role)
 	}
 	if len(tailored) >= 2 {
-		assert.Equal(t, "Query", tailored[len(tailored)-2].Content)
-		assert.Equal(t, "Response", tailored[len(tailored)-1].Content)
+		assert.Equal(t, RoleUser, tailored[len(tailored)-1].Role)
+		assert.Equal(t, "Query", tailored[len(tailored)-1].Content)
 	}
 
 	// Verify token count is within limit.
@@ -1561,8 +1335,8 @@ func TestHeadOutStrategy_PreservedSegmentsExceedBudget(t *testing.T) {
 
 	// Should return only preserved segments (system + last turn).
 	require.Greater(t, len(tailored), 0)
-	assert.Equal(t, RoleSystem, tailored[0].Role)
-	assert.Equal(t, RoleAssistant, tailored[len(tailored)-1].Role)
+	assert.Equal(t, RoleUser, tailored[len(tailored)-1].Role)
+	assert.Equal(t, "Query", tailored[len(tailored)-1].Content)
 }
 
 // TestTailOutStrategy_PreservedSegmentsExceedBudget tests when preserved segments exceed budget.
@@ -1584,8 +1358,8 @@ func TestTailOutStrategy_PreservedSegmentsExceedBudget(t *testing.T) {
 
 	// Should return only preserved segments (system + last turn).
 	require.Greater(t, len(tailored), 0)
-	assert.Equal(t, RoleSystem, tailored[0].Role)
-	assert.Equal(t, RoleAssistant, tailored[len(tailored)-1].Role)
+	assert.Equal(t, RoleUser, tailored[len(tailored)-1].Role)
+	assert.Equal(t, "Query", tailored[len(tailored)-1].Content)
 }
 
 // TestHeadOutStrategy_BalancedMessages tests HeadOut with balanced message distribution.
@@ -1611,8 +1385,8 @@ func TestHeadOutStrategy_BalancedMessages(t *testing.T) {
 
 	// Should preserve system and last turn.
 	assert.Equal(t, RoleSystem, tailored[0].Role)
-	assert.Equal(t, "Query", tailored[len(tailored)-2].Content)
-	assert.Equal(t, "Response", tailored[len(tailored)-1].Content)
+	assert.Equal(t, RoleUser, tailored[len(tailored)-1].Role)
+	assert.Equal(t, "Query", tailored[len(tailored)-1].Content)
 
 	// Should keep tail messages (HeadOut removes from head).
 	hasTailMessages := false
@@ -1657,8 +1431,8 @@ func TestTailOutStrategy_BalancedMessages(t *testing.T) {
 
 	// Should preserve system and last turn.
 	assert.Equal(t, RoleSystem, tailored[0].Role)
-	assert.Equal(t, "Query", tailored[len(tailored)-2].Content)
-	assert.Equal(t, "Response", tailored[len(tailored)-1].Content)
+	assert.Equal(t, RoleUser, tailored[len(tailored)-1].Role)
+	assert.Equal(t, "Query", tailored[len(tailored)-1].Content)
 
 	// Should keep head messages (TailOut removes from tail).
 	hasHeadMessages := false
@@ -1801,4 +1575,199 @@ func TestSimpleTokenCounter_EmptyToolCall(t *testing.T) {
 	result, err := counter.CountTokens(ctx, msg)
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, result, 0)
+}
+
+func TestBuildUserAnchoredRounds_UserOnlySplits(t *testing.T) {
+	const preservedHead = 1
+	messages := []Message{
+		NewSystemMessage("sys"),
+		NewUserMessage("u1"),
+		NewUserMessage("u2"),
+		NewUserMessage("u3"),
+	}
+
+	rounds := buildUserAnchoredRounds(messages, preservedHead)
+	require.Len(t, rounds, 3)
+	require.Equal(t, 1, rounds[0].start)
+	require.Equal(t, 2, rounds[0].end)
+	require.Equal(t, 2, rounds[1].start)
+	require.Equal(t, 3, rounds[1].end)
+	require.Equal(t, 3, rounds[2].start)
+	require.Equal(t, 4, rounds[2].end)
+}
+
+func TestBuildUserAnchoredRounds_AssistantGroupsUsers(t *testing.T) {
+	const preservedHead = 1
+	messages := []Message{
+		NewSystemMessage("sys"),
+		NewUserMessage("u1"),
+		NewUserMessage("u2"),
+		NewAssistantMessage("a1"),
+		NewUserMessage("u3"),
+	}
+
+	rounds := buildUserAnchoredRounds(messages, preservedHead)
+	require.Len(t, rounds, 2)
+	require.Equal(t, 1, rounds[0].start)
+	require.Equal(t, 4, rounds[0].end)
+	require.Equal(t, 4, rounds[1].start)
+	require.Equal(t, 5, rounds[1].end)
+}
+
+func TestBuildUserAnchoredRounds_SystemInsideRound(t *testing.T) {
+	const preservedHead = 1
+	messages := []Message{
+		NewSystemMessage("sys"),
+		NewUserMessage("u1"),
+		NewSystemMessage("mid"),
+		NewAssistantMessage("a1"),
+		NewUserMessage("u2"),
+	}
+
+	rounds := buildUserAnchoredRounds(messages, preservedHead)
+	require.Len(t, rounds, 2)
+	require.Equal(t, 1, rounds[0].start)
+	require.Equal(t, 4, rounds[0].end)
+	require.Equal(t, 4, rounds[1].start)
+	require.Equal(t, 5, rounds[1].end)
+}
+
+func TestCountTokensWithPrefixSumBounds(t *testing.T) {
+	prefixSum := []int{0, 2, 5, 9}
+
+	require.Equal(t, 9, countTokensWithPrefixSum(prefixSum, -1, 4))
+	require.Equal(t, 0, countTokensWithPrefixSum(prefixSum, 3, 3))
+	require.Equal(t, 0, countTokensWithPrefixSum(prefixSum, 4, 4))
+}
+
+func TestCountTokensForRoundsSkips(t *testing.T) {
+	prefixSum := []int{0, 1, 3, 6}
+	rounds := []userAnchoredRound{
+		{start: 0, end: 2},
+		{start: 2, end: 3},
+	}
+	keep := []bool{true, false}
+
+	require.Equal(t, 3, countTokensForRounds(prefixSum, rounds, keep))
+}
+
+func TestShouldReturnOriginal_MaxTokensZero(t *testing.T) {
+	counter := NewSimpleTokenCounter()
+	messages := []Message{
+		NewUserMessage("q"),
+	}
+
+	done, out := shouldReturnOriginal(context.Background(), counter, messages, 0)
+	require.True(t, done)
+	require.Nil(t, out)
+}
+
+func TestShouldReturnOriginal_CountTokensError(t *testing.T) {
+	counter := &mockErrorTokenCounter{}
+	messages := []Message{
+		NewUserMessage("q"),
+	}
+
+	done, out := shouldReturnOriginal(context.Background(), counter, messages, 10)
+	require.True(t, done)
+	require.Len(t, out, 1)
+}
+
+func TestFitsWithinBudget_Empty(t *testing.T) {
+	counter := NewSimpleTokenCounter()
+
+	ok := fitsWithinBudget(context.Background(), counter, nil, 10)
+	require.False(t, ok)
+}
+
+func TestBuildMinimalSuffixCandidates_NoNonSystem(t *testing.T) {
+	messages := []Message{
+		NewSystemMessage("sys"),
+	}
+
+	withSystem, withoutSystem := buildMinimalSuffixCandidates(messages, 1)
+	require.Nil(t, withSystem)
+	require.Nil(t, withoutSystem)
+}
+
+func TestBuildMinimalSuffixCandidates_ToolAtEnd(t *testing.T) {
+	messages := []Message{
+		NewSystemMessage("sys"),
+		NewUserMessage("q"),
+		NewToolMessage("tool_1", "search", "result"),
+	}
+
+	withSystem, withoutSystem := buildMinimalSuffixCandidates(messages, 1)
+	require.Len(t, withSystem, 3)
+	require.Equal(t, RoleTool, withSystem[len(withSystem)-1].Role)
+	require.Len(t, withoutSystem, 2)
+	require.Equal(t, RoleTool, withoutSystem[len(withoutSystem)-1].Role)
+}
+
+func TestBuildMinimalSuffixCandidates_ToolOnly(t *testing.T) {
+	messages := []Message{
+		NewToolMessage("tool_1", "search", "result"),
+	}
+
+	withSystem, withoutSystem := buildMinimalSuffixCandidates(messages, 0)
+	require.Nil(t, withSystem)
+	require.Nil(t, withoutSystem)
+}
+
+func TestLastNonSystemIndex_AllSystem(t *testing.T) {
+	messages := []Message{
+		NewSystemMessage("sys"),
+		NewSystemMessage("sys2"),
+	}
+
+	require.Equal(t, -1, lastNonSystemIndex(messages))
+}
+
+func TestTrimTrailingAssistant(t *testing.T) {
+	messages := []Message{
+		NewUserMessage("q"),
+		NewAssistantMessage("a1"),
+		NewAssistantMessage("a2"),
+	}
+
+	require.Equal(t, 0, trimTrailingAssistant(messages, len(messages)-1))
+}
+
+func TestStartOfUserToolGroup_LastIsUser(t *testing.T) {
+	messages := []Message{
+		NewUserMessage("q"),
+	}
+
+	require.Equal(t, 0, startOfUserToolGroup(messages, 0))
+}
+
+func TestStartOfUserToolGroup_ToolWithoutUser(t *testing.T) {
+	messages := []Message{
+		NewToolMessage("tool_1", "search", "result"),
+	}
+
+	require.Equal(t, -1, startOfUserToolGroup(messages, 0))
+}
+
+func TestEnsureTailoredWithinBudget_CountTokensError(t *testing.T) {
+	counter := &mockErrorTokenCounter{}
+	messages := []Message{
+		NewUserMessage("q"),
+	}
+
+	out, err := ensureTailoredWithinBudget(context.Background(), counter,
+		messages, 1)
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	require.Equal(t, "q", out[0].Content)
+}
+
+func TestFitsWithinBudget_CountTokensError(t *testing.T) {
+	counter := &mockErrorTokenCounter{}
+	messages := []Message{
+		NewUserMessage("q"),
+	}
+
+	ok := fitsWithinBudget(context.Background(), counter, messages, 1)
+	require.False(t, ok)
 }

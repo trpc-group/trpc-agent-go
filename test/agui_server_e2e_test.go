@@ -109,10 +109,14 @@ func TestAGUIServer_MockModel_RunAndSnapshot(t *testing.T) {
 	var foundUser bool
 	var foundAssistant bool
 	for _, msg := range snapshot.Messages {
-		if msg.Role == "user" && msg.Content != nil && *msg.Content == "reply now" {
+		content, ok := msg.ContentString()
+		if !ok {
+			continue
+		}
+		if msg.Role == "user" && content == "reply now" {
 			foundUser = true
 		}
-		if msg.Role == "assistant" && msg.Content != nil && *msg.Content == expectedToken {
+		if msg.Role == "assistant" && content == expectedToken {
 			foundAssistant = true
 		}
 	}

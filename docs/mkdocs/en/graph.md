@@ -676,14 +676,16 @@ func processNodeFunc(ctx context.Context, state graph.State) (any, error) {
 
 ### 2. Using LLM Nodes
 
-LLM nodes implement a fixed three-stage input rule without extra configuration:
+LLM nodes implement a fixed three-stage input rule without extra configuration
+(except an optional input key override):
 
 1. OneShot first:
    - If `one_shot_messages_by_node[<node_id>]` exists, use it as the input for
      this round.
    - Otherwise, if `one_shot_messages` exists, use it as the input for this
      round.
-2. UserInput next: Otherwise, if `user_input` exists, persist once to history.
+2. UserInput next: Otherwise, if the node's user input key exists, persist once
+   to history (default key: `user_input`).
 3. History default: Otherwise, use durable `messages` as input.
 
 ```go
@@ -705,6 +707,9 @@ Important notes:
 - System prompt is only used for this round and is not persisted to state.
 - One-shot keys (`user_input` / `one_shot_messages` / `one_shot_messages_by_node`)
   are automatically cleared after successful execution.
+- You can override the user input key per LLM/Agent node via
+  `graph.WithUserInputKey("my_input")`. This key is treated as one-shot input
+  and is cleared after the node runs.
 - Parallel branches: if multiple branches need different one-shot inputs for
   different LLM nodes in the same step, write `one_shot_messages_by_node`
   instead of `one_shot_messages`. If one upstream node prepares inputs for
@@ -775,6 +780,16 @@ Common approaches:
 
   - When non-empty, the LLM node uses durable `messages` plus this round's user input to call the model. After the call, it writes the user input and assistant reply to `messages` using `MessageOp` (e.g., `AppendMessages`, `ReplaceLastUser`) atomically, and clears `user_input` to avoid repeated appends.
   - Use case: conversational flows where pre-nodes may adjust user input.
+  - By default, the user input key is `StateKeyUserInput`. To read one-shot
+    input from a different key, use `graph.WithUserInputKey(...)` on that node.
+  - `WithUserInputKey` is a build-time node option. For per-run customization,
+    keep the key stable and update the value in state (for example, in a
+    pre-node callback).
+  - Placeholder injection is **not** applied to user messages. If your UI/DSL
+    lets users type placeholders inside UserInput (for example, `{key}`,
+    `{{key}}`, or `input.output_parsed.xxx`), you must resolve them yourself
+    (for example, in your DSL layer or a pre-node callback) before writing the
+    final string into the state key.
 
 - Messages only (just `StateKeyMessages`):
   - Common in tool-call loops. After the first round via `user_input`, routing to tools and back to LLM, since `user_input` is cleared, the LLM uses only `messages` (history). The tail is often a `tool` response, enabling the model to continue reasoning based on tool outputs.
@@ -887,6 +902,8 @@ graphAgent, err := graphagent.New(
     graphagent.WithAgentCallbacks(&agent.Callbacks{
         // Agent-level callbacks.
     }),
+    // Executor advanced configuration options, see "Executor Advanced Configuration" section below
+    // graphagent.WithExecutorOptions(...),
 )
 ```
 
@@ -947,6 +964,37 @@ ga := graphagent.New(
 - Custom formatters should ensure that the summary is clearly distinguishable from other messages
 - The default format is designed to be compatible with most models and use cases
 - When `WithAddSessionSummary(false)` is used, the formatter is never invoked
+
+#### Executor Advanced Configuration
+
+`WithExecutorOptions` allows you to pass executor options directly to configure the behavior of the underlying executor. This is useful for scenarios that require fine-grained control over executor behavior, such as:
+
+- **Timeout Control**: Set appropriate timeout durations for long-running nodes (e.g., agent tool nodes)
+- **Step Limits**: Limit the maximum number of steps in graph execution to prevent infinite loops
+- **Retry Policies**: Configure default retry policies
+
+**Usage Example:**
+
+```go
+graphAgent, err := graphagent.New("my-agent", compiledGraph,
+	graphagent.WithDescription("Workflow description"),
+	// Pass executor options directly
+	graphagent.WithExecutorOptions(
+		graph.WithMaxSteps(50),                          // max steps limit
+		graph.WithStepTimeout(5*time.Minute),            // timeout per step
+		graph.WithNodeTimeout(2*time.Minute),            // timeout per node
+		graph.WithCheckpointSaveTimeout(30*time.Second), // checkpoint save timeout
+		graph.WithDefaultRetryPolicy(                    // default retry policy
+			graph.WithSimpleRetry(3),
+		),
+	),
+)
+```
+
+**Notes:**
+
+- Options passed via `WithExecutorOptions` are applied after mapped options (`ChannelBufferSize`, `MaxConcurrency`, `CheckpointSaver`), so they can override those settings if needed
+- If `WithStepTimeout` is not set, `WithNodeTimeout` will not be automatically derived (defaults to no timeout)
 
 #### Concurrency considerations
 
@@ -1321,6 +1369,17 @@ Notes:
 - GraphAgent writes the current `*session.Session` into graph state under `StateKeySession`; the LLM node reads values from there
 - `{invocation:*}` values are read from the current `*agent.Invocation` for this run
 - Unprefixed keys (e.g., `research_topics`) must be present directly in `session.State`
+- Scope: placeholders are expanded only in the LLM node `instruction`
+  (the system message). They are **not** expanded in UserInput or other user
+  messages.
+- Limits: placeholder names are restricted to `key` or `prefix:key` (where
+  `prefix` is one of `user`, `app`, `temp`, `invocation`). Nested paths like
+  `{input.output_parsed.xxx}` are not supported; flatten the value into a key
+  (for example, `temp:output_parsed_xxx`) in your DSL/callback, then reference
+  it as `{temp:output_parsed_xxx}`.
+- Mustache support is a compatibility layer only (`{{key}}` → `{key}`) and it
+  only triggers for valid placeholder names; full Mustache features (sections,
+  loops, helpers) are not supported.
 
 Example:
 
@@ -1716,6 +1775,43 @@ Resuming:
 - No resume input is required because no node called `graph.Interrupt(...)`.
 
 See `examples/graph/static_interrupt` for an end-to-end runnable demo.
+
+### 3. External Interrupt (Pause Button)
+
+Sometimes you want to pause a running graph from *outside* the graph (for
+example, a UI pause button, an admin API, or a service shutdown hook), without
+adding `graph.Interrupt(...)` calls inside node logic.
+
+Use `graph.WithGraphInterrupt` to create a context + a function that can
+request an interrupt:
+
+```go
+ctx, interrupt := graph.WithGraphInterrupt(context.Background())
+
+// Run the graph with ctx (GraphAgent + Runner example).
+events, _ := app.Run(ctx, userID, sessionID, model.NewUserMessage("hi"))
+
+// From another goroutine / handler:
+interrupt() // graceful: wait current step finishes, then pause
+
+// Or force after a max wait:
+interrupt(graph.WithGraphInterruptTimeout(2 * time.Second))
+```
+
+Behavior:
+
+- By default, the executor waits for the current step's tasks to finish and
+  interrupts before starting the next step.
+- With `WithGraphInterruptTimeout`, the executor cancels in-flight tasks after
+  the timeout and interrupts as soon as it can. Nodes that were canceled are
+  re-run when resuming.
+
+Resuming:
+
+- You still resume via checkpoints: run again with the same `lineage_id` and
+  the `checkpoint_id` from the interrupt event (same as static interrupts).
+- Checkpointing must be enabled (configure a `CheckpointSaver`) for resume to
+  work.
 
 ### Execution
 
@@ -2845,7 +2941,7 @@ exec, err := graph.NewExecutor(g,
 - Defaults (Executor)
 
   - `ChannelBufferSize = 256`, `MaxSteps = 100`, `MaxConcurrency = GOMAXPROCS(0)`, `CheckpointSaveTimeout = 10s`
-  - Per‑step/node timeouts are available on `Executor` via `WithStepTimeout` / `WithNodeTimeout` (not exposed by `GraphAgent` options yet)
+  - Per‑step/node timeouts are available via `WithExecutorOptions` when creating `GraphAgent` (see "Executor Advanced Configuration" section above), or directly on `Executor` via `WithStepTimeout` / `WithNodeTimeout`
 
 - Sessions
   - Prefer Redis session backend in production; set TTLs and cleanup
@@ -2991,8 +3087,14 @@ graphAgent, _ := graphagent.New("workflow", g,
         reviewer,
     }))
 
-// I/O: sub‑agents receive graph.StateKeyUserInput as the message AND the full
-// graph state via inv.RunOptions.RuntimeState; on finish they update
+// I/O: by default, sub‑agents receive graph.StateKeyUserInput as the message.
+// To forward a different one-shot input key, set graph.WithUserInputKey("...")
+// on that Agent node. The message content is passed through as-is (no
+// placeholder expansion); do template rendering in your DSL/callbacks if
+// needed.
+//
+// Sub‑agents also receive the full graph state via inv.RunOptions.RuntimeState;
+// on finish they update
 // graph.StateKeyLastResponse and graph.StateKeyNodeResponses[nodeID]
 ```
 
@@ -3000,11 +3102,14 @@ graphAgent, _ := graphagent.New("workflow", g,
 
 > Scenario: A → B → C as black boxes. Downstream should only consume upstream's result text as this turn's input, without pulling full session history.
 
-- Approach 1 (dependency‑free, universally available): add a pre‑node callback to the target Agent node that assigns parent `last_response` to `user_input`. Optionally isolate messages.
+- Approach 1 (dependency‑free, universally available): add a pre‑node callback
+  to the target Agent node that assigns parent `last_response` to the Agent
+  node's configured user input key (default: `user_input`). Optionally isolate
+  messages.
 
 ```go
 sg.AddAgentNode("orchestrator",
-    // Map upstream last_response → this turn's user_input
+    // Map upstream last_response → this turn's user input key
     graph.WithPreNodeCallback(func(ctx context.Context, cb *graph.NodeCallbackContext, s graph.State) (any, error) {
         if v, ok := s[graph.StateKeyLastResponse].(string); ok && v != "" {
             s[graph.StateKeyUserInput] = v
@@ -3029,7 +3134,10 @@ sg.AddAgentNode("orchestrator",
 )
 ```
 
-Notes: Both approaches ensure B only sees A's result, and C only sees B's. The option is more concise when available; the callback is zero‑dependency and works everywhere.
+Notes: Both approaches write to the Agent node's configured user input key
+(default: `StateKeyUserInput`) and ensure B only sees A's result, and C only
+sees B's. The option is more concise when available; the callback is
+zero‑dependency and works everywhere.
 
 ### Hybrid Pattern Example
 

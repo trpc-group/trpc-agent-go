@@ -51,6 +51,15 @@ func WithSessionService(service session.Service) Option {
 	}
 }
 
+// AgentFactory creates an agent for a single run.
+//
+// This enables request-scoped agent construction (for example, building the
+// agent with a prompt/model/sandbox that depends on the current request).
+type AgentFactory func(
+	ctx context.Context,
+	ro agent.RunOptions,
+) (agent.Agent, error)
+
 // WithMemoryService sets the memory service to use.
 func WithMemoryService(service memory.Service) Option {
 	return func(opts *Options) {
@@ -69,6 +78,17 @@ func WithArtifactService(service artifact.Service) Option {
 func WithAgent(name string, ag agent.Agent) Option {
 	return func(opts *Options) {
 		opts.agents[name] = ag
+	}
+}
+
+// WithAgentFactory registers an agent factory for name-based lookup.
+//
+// When the runner resolves an agent name and no registered agent instance
+// exists for that name, it will fall back to this factory and create a new
+// agent for the current run.
+func WithAgentFactory(name string, factory AgentFactory) Option {
+	return func(opts *Options) {
+		opts.agentFactories[name] = factory
 	}
 }
 
@@ -129,10 +149,12 @@ type runner struct {
 	appName          string
 	defaultAgentName string
 	agents           map[string]agent.Agent
+	agentFactories   map[string]AgentFactory
 	sessionService   session.Service
 	memoryService    memory.Service
 	artifactService  artifact.Service
 	pluginManager    agent.PluginManager
+	ralphLoop        *RalphLoopConfig
 
 	// Resource management fields.
 	ownedSessionService bool      // Indicates if sessionService was created by this runner.
@@ -155,13 +177,16 @@ type Options struct {
 	memoryService   memory.Service
 	artifactService artifact.Service
 	agents          map[string]agent.Agent
+	agentFactories  map[string]AgentFactory
 	plugins         []plugin.Plugin
+	ralphLoop       *RalphLoopConfig
 }
 
 // newOptions creates a new Options.
 func newOptions(opt ...Option) Options {
 	opts := Options{
-		agents: make(map[string]agent.Agent),
+		agents:         make(map[string]agent.Agent),
+		agentFactories: make(map[string]AgentFactory),
 	}
 	for _, o := range opt {
 		o(&opts)
@@ -180,6 +205,9 @@ func NewRunner(appName string, ag agent.Agent, opts ...Option) Runner {
 	}
 	agents := options.agents
 	agents[ag.Info().Name] = ag
+	if options.ralphLoop != nil {
+		wrapAgentsWithRalphLoop(agents, *options.ralphLoop)
+	}
 	var pm agent.PluginManager
 	if len(options.plugins) > 0 {
 		pm = plugin.MustNewManager(options.plugins...)
@@ -194,10 +222,62 @@ func NewRunner(appName string, ag agent.Agent, opts ...Option) Runner {
 		appName:             appName,
 		defaultAgentName:    ag.Info().Name,
 		agents:              agents,
+		agentFactories:      options.agentFactories,
 		sessionService:      options.sessionService,
 		memoryService:       options.memoryService,
 		artifactService:     options.artifactService,
 		pluginManager:       pm,
+		ralphLoop:           options.ralphLoop,
+		ownedSessionService: ownedSessionService,
+	}
+}
+
+// NewRunnerWithAgentFactory creates a Runner whose default agent is created
+// on demand for each run.
+//
+// This is useful when agent configuration depends on the current request
+// (prompt, model, sandbox instance, etc.), and you want to avoid
+// initializing a heavy agent at service startup.
+func NewRunnerWithAgentFactory(
+	appName string,
+	defaultAgentName string,
+	factory AgentFactory,
+	opts ...Option,
+) Runner {
+	options := newOptions(opts...)
+
+	var ownedSessionService bool
+	if options.sessionService == nil {
+		options.sessionService = inmemory.NewSessionService()
+		ownedSessionService = true
+	}
+
+	options.agentFactories[defaultAgentName] = factory
+
+	if options.ralphLoop != nil {
+		wrapAgentsWithRalphLoop(options.agents, *options.ralphLoop)
+	}
+
+	var pm agent.PluginManager
+	if len(options.plugins) > 0 {
+		pm = plugin.MustNewManager(options.plugins...)
+	}
+
+	appid.RegisterRunner(appName, defaultAgentName)
+	for _, a := range options.agents {
+		appid.RegisterRunner(appName, a.Info().Name)
+	}
+
+	return &runner{
+		appName:             appName,
+		defaultAgentName:    defaultAgentName,
+		agents:              options.agents,
+		agentFactories:      options.agentFactories,
+		sessionService:      options.sessionService,
+		memoryService:       options.memoryService,
+		artifactService:     options.artifactService,
+		pluginManager:       pm,
+		ralphLoop:           options.ralphLoop,
 		ownedSessionService: ownedSessionService,
 	}
 }
@@ -340,8 +420,8 @@ func (r *runner) Run(
 		}
 	}
 
-	// Append the incoming user message to the session if it has content.
-	if message.Content != "" && shouldAppendUserMessage(message, ro.Messages) {
+	// Append the incoming message to the session if it has payload.
+	if model.HasPayload(message) && shouldAppendUserMessage(message, ro.Messages) {
 		evt := event.NewResponseEvent(
 			invocation.InvocationID,
 			authorUser,
@@ -515,21 +595,46 @@ func (r *runner) lookupCancel(requestID string) context.CancelFunc {
 
 // resolveAgent decides which agent to use for this run.
 func (r *runner) selectAgent(
-	_ context.Context,
+	ctx context.Context,
 	ro agent.RunOptions,
 ) (agent.Agent, error) {
 	if ro.Agent != nil {
-		appid.RegisterRunner(r.appName, ro.Agent.Info().Name)
-		return ro.Agent, nil
+		selected := r.wrapSelectedAgent(ro.Agent)
+		appid.RegisterRunner(r.appName, selected.Info().Name)
+		return selected, nil
 	}
+
 	agentName := r.defaultAgentName
 	if ro.AgentByName != "" {
 		agentName = ro.AgentByName
 	}
+
 	if ag, ok := r.agents[agentName]; ok && ag != nil {
-		return ag, nil
+		return r.wrapSelectedAgent(ag), nil
+	}
+	if factory, ok := r.agentFactories[agentName]; ok && factory != nil {
+		created, err := factory(ctx, ro)
+		if err != nil {
+			return nil, fmt.Errorf("runner: agent factory: %w", err)
+		}
+		if created == nil {
+			return nil, fmt.Errorf("runner: agent factory returned nil")
+		}
+		selected := r.wrapSelectedAgent(created)
+		appid.RegisterRunner(r.appName, selected.Info().Name)
+		return selected, nil
 	}
 	return nil, fmt.Errorf("runner: agent %q not found", agentName)
+}
+
+func (r *runner) wrapSelectedAgent(ag agent.Agent) agent.Agent {
+	if ag == nil {
+		return nil
+	}
+	if r.ralphLoop == nil {
+		return ag
+	}
+	return wrapAgentWithRalphLoop(ag, *r.ralphLoop)
 }
 
 // getOrCreateSession returns an existing session or creates a new one.
@@ -603,9 +708,9 @@ func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
 		// Disable further flush requests for this invocation.
 		flush.Clear(loop.invocation)
 		appender.Clear(loop.invocation)
+		r.unregisterRun(loop.invocation.RunOptions.RequestID)
 		close(loop.processedEventCh)
 		loop.invocation.CleanupNotice(ctx)
-		r.unregisterRun(loop.invocation.RunOptions.RequestID)
 		if loop.runHandle != nil {
 			loop.runHandle.cancel()
 		}
@@ -1103,7 +1208,7 @@ func RunWithMessages(
 	// (e.g., used by GraphAgent to set initial user_input).
 	var latestUser model.Message
 	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == model.RoleUser && (messages[i].Content != "" || len(messages[i].ContentParts) > 0) {
+		if messages[i].Role == model.RoleUser && model.HasPayload(messages[i]) {
 			latestUser = messages[i]
 			break
 		}

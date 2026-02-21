@@ -90,6 +90,13 @@ func WithCancelEnabled(e bool) Option {
 	}
 }
 
+// WithCancelOnContextDoneEnabled controls whether an AG-UI run is canceled when the request context is done.
+func WithCancelOnContextDoneEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithCancelOnContextDoneEnabled(enabled))
+	}
+}
+
 // ServiceFactory is a function that creates AG-UI service.
 type ServiceFactory func(runner aguirunner.Runner, opt ...service.Option) service.Service
 
@@ -111,6 +118,13 @@ func WithAGUIRunnerOptions(aguiRunnerOpts ...aguirunner.Option) Option {
 func WithTimeout(d time.Duration) Option {
 	return func(o *options) {
 		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithTimeout(d))
+	}
+}
+
+// WithFlushInterval sets how often buffered AG-UI events are flushed for a session.
+func WithFlushInterval(d time.Duration) Option {
+	return func(o *options) {
+		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithFlushInterval(d))
 	}
 }
 
@@ -146,6 +160,20 @@ func WithMessagesSnapshotPath(p string) Option {
 func WithMessagesSnapshotEnabled(e bool) Option {
 	return func(o *options) {
 		o.messagesSnapshotEnabled = e
+	}
+}
+
+// WithMessagesSnapshotFollowEnabled controls whether the messages snapshot handler tails persisted track events.
+func WithMessagesSnapshotFollowEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithMessagesSnapshotFollowEnabled(enabled))
+	}
+}
+
+// WithMessagesSnapshotFollowMaxDuration sets the maximum duration for messages snapshot tailing.
+func WithMessagesSnapshotFollowMaxDuration(d time.Duration) Option {
+	return func(o *options) {
+		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithMessagesSnapshotFollowMaxDuration(d))
 	}
 }
 

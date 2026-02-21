@@ -9,9 +9,7 @@
 
 package model
 
-import (
-	"time"
-)
+import "time"
 
 // Error type constants for ResponseError.Type field.
 const (
@@ -216,12 +214,9 @@ func (rsp *Response) IsValidContent() bool {
 	if rsp.IsToolCallResponse() || rsp.IsToolResultResponse() {
 		return true
 	}
-	// Check if event has choices with content.
+	// Check if event has choices with meaningful payload.
 	for _, choice := range rsp.Choices {
-		if choice.Message.Content != "" {
-			return true
-		}
-		if choice.Delta.Content != "" {
+		if HasPayload(choice.Message) || HasPayload(choice.Delta) {
 			return true
 		}
 	}

@@ -15,6 +15,8 @@ extend-exclude = [
   "*.pb.go",
   "*_string.go",
   "*.gen.go",
+  "evaluation/internal/rouge/testdata/",
+  "evaluation/internal/rouge/tokenizer.go",
   "examples/"
 ]
 

@@ -15,7 +15,6 @@ replace (
 	trpc.group/trpc-go/trpc-agent-go/storage/milvus => ../../storage/milvus
 	trpc.group/trpc-go/trpc-agent-go/storage/postgres => ../../storage/postgres
 	trpc.group/trpc-go/trpc-agent-go/storage/tcvector => ../../storage/tcvector
-
 )
 
 require (

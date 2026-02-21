@@ -227,7 +227,7 @@ func (d *defaultA2AEventConverter) buildRespEvent(
 	parseResult := parseA2AMessageParts(msg)
 
 	// Create event with appropriate response structure
-	return buildEventResponse(isStreaming, msg.MessageID, parseResult, invocation, agentName)
+	return buildEventResponse(isStreaming, msg.MessageID, parseResult, invocation, agentName, msg.Role)
 }
 
 // parseResult holds the parsed information from A2A message parts
@@ -454,6 +454,19 @@ func processCodeExecutionResult(d *protocol.DataPart) string {
 	return extractStringField(data, ia2a.CodeExecutionFieldOutput, ia2a.CodeExecutionFieldContent)
 }
 
+// convertA2ARoleToModelRole converts A2A protocol role to internal model role
+func convertA2ARoleToModelRole(role protocol.MessageRole) model.Role {
+	switch role {
+	case protocol.MessageRoleUser:
+		return model.RoleUser
+	case protocol.MessageRoleAgent:
+		return model.RoleAssistant
+	default:
+		// Default to assistant for unknown roles
+		return model.RoleAssistant
+	}
+}
+
 // buildEventResponse creates an event with the appropriate response structure
 func buildEventResponse(
 	isStreaming bool,
@@ -461,6 +474,7 @@ func buildEventResponse(
 	result *parseResult,
 	invocation *agent.Invocation,
 	agentName string,
+	role protocol.MessageRole,
 ) *event.Event {
 	var opts []event.Option
 	// Restore tag from A2A message metadata if present
@@ -471,9 +485,9 @@ func buildEventResponse(
 	evt := event.New(invocation.InvocationID, agentName, opts...)
 
 	if isStreaming {
-		evt.Response = buildStreamingResponse(messageID, result)
+		evt.Response = buildStreamingResponse(messageID, result, role)
 	} else {
-		evt.Response = buildNonStreamingResponse(messageID, result)
+		evt.Response = buildNonStreamingResponse(messageID, result, role)
 	}
 
 	return evt
@@ -483,7 +497,7 @@ func buildEventResponse(
 // In streaming mode:
 // - Tool calls and tool responses use Message (not Delta) since they are complete units
 // - Text content uses Delta for incremental updates
-func buildStreamingResponse(messageID string, result *parseResult) *model.Response {
+func buildStreamingResponse(messageID string, result *parseResult, role protocol.MessageRole) *model.Response {
 	now := time.Now()
 
 	// Tool call: use Message (tool calls are complete units, not streamed incrementally)
@@ -543,11 +557,13 @@ func buildStreamingResponse(messageID string, result *parseResult) *model.Respon
 		objectType = model.ObjectTypeChatCompletionChunk
 	}
 
+	// Convert A2A protocol role to internal model role
+	internalRole := convertA2ARoleToModelRole(role)
 	return &model.Response{
 		ID: messageID,
 		Choices: []model.Choice{{
 			Delta: model.Message{
-				Role:             model.RoleAssistant,
+				Role:             internalRole,
 				Content:          content,
 				ReasoningContent: result.reasoningContent,
 			},
@@ -585,11 +601,9 @@ func extractObjectType(result *parseResult) string {
 
 // buildNonStreamingResponse creates a response for non-streaming mode.
 // In non-streaming mode, all content uses Message (not Delta).
-func buildNonStreamingResponse(messageID string, result *parseResult) *model.Response {
+func buildNonStreamingResponse(messageID string, result *parseResult, role protocol.MessageRole) *model.Response {
 	now := time.Now()
-
 	var choices []model.Choice
-
 	// Tool call: assistant requesting tool execution
 	if len(result.toolCalls) > 0 {
 		choices = append(choices, model.Choice{
@@ -625,9 +639,10 @@ func buildNonStreamingResponse(messageID string, result *parseResult) *model.Res
 		} else if result.codeExecutionResult != "" {
 			content = result.codeExecutionResult
 		}
+		internalRole := convertA2ARoleToModelRole(role)
 		choices = append(choices, model.Choice{
 			Message: model.Message{
-				Role:             model.RoleAssistant,
+				Role:             internalRole,
 				Content:          content,
 				ReasoningContent: result.reasoningContent,
 			},

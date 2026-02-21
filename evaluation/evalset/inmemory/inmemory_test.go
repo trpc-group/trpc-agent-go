@@ -245,3 +245,42 @@ func TestManagerValidationAndErrors(t *testing.T) {
 	_, err = newMgr.GetCase(ctx, "phantom", "set", "case")
 	assert.Error(t, err)
 }
+
+func TestClose_NoError(t *testing.T) {
+	assert.NoError(t, New().Close())
+}
+
+func TestManagerAddCaseSetsCreationTimestampForActualConversation(t *testing.T) {
+	ctx := context.Background()
+	mgr := New().(*manager)
+	_, err := mgr.Create(ctx, "app", "set1")
+	assert.NoError(t, err)
+
+	fixed := &epochtime.EpochTime{Time: time.Unix(1700, 0).UTC()}
+	caseInput := &evalset.EvalCase{
+		EvalID: "case1",
+		SessionInput: &evalset.SessionInput{
+			AppName: "app",
+			UserID:  "user1",
+			State:   map[string]any{},
+		},
+		Conversation: []*evalset.Invocation{
+			{InvocationID: "inv1"},
+		},
+		ActualConversation: []*evalset.Invocation{
+			{InvocationID: "act1", CreationTimestamp: fixed},
+			{InvocationID: "act2"},
+		},
+	}
+	err = mgr.AddCase(ctx, "app", "set1", caseInput)
+	assert.NoError(t, err)
+
+	gotCase, err := mgr.GetCase(ctx, "app", "set1", "case1")
+	assert.NoError(t, err)
+	assert.Len(t, gotCase.ActualConversation, 2)
+	assert.NotNil(t, gotCase.ActualConversation[0])
+	assert.NotNil(t, gotCase.ActualConversation[0].CreationTimestamp)
+	assert.WithinDuration(t, fixed.Time, gotCase.ActualConversation[0].CreationTimestamp.Time, time.Nanosecond)
+	assert.NotNil(t, gotCase.ActualConversation[1])
+	assert.NotNil(t, gotCase.ActualConversation[1].CreationTimestamp)
+}

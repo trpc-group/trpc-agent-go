@@ -172,3 +172,7 @@ func TestManagerConcurrentAddAndList(t *testing.T) {
 		assert.NoError(t, err)
 	}
 }
+
+func TestClose_NoError(t *testing.T) {
+	assert.NoError(t, New().Close())
+}

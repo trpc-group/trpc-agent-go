@@ -141,7 +141,12 @@ func New(name string, opts ...Option) *LLMAgent {
 		responseProcessors = append(responseProcessors, planningResponseProcessor)
 	}
 
-	responseProcessors = append(responseProcessors, processor.NewCodeExecutionResponseProcessor())
+	if options.EnableCodeExecutionResponseProcessor {
+		responseProcessors = append(
+			responseProcessors,
+			processor.NewCodeExecutionResponseProcessor(),
+		)
+	}
 
 	// Add output response processor if output_key or output_schema is configured or structured output is requested.
 	if options.OutputKey != "" || options.OutputSchema != nil || options.StructuredOutput != nil {
@@ -250,6 +255,16 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 				),
 			)
 		}
+		skillsOpts = append(
+			skillsOpts,
+			processor.WithSkillLoadMode(options.SkillLoadMode),
+		)
+		if options.SkillsLoadedContentInToolResults {
+			skillsOpts = append(
+				skillsOpts,
+				processor.WithSkillsLoadedContentInToolResults(true),
+			)
+		}
 		skillsProcessor := processor.NewSkillsRequestProcessor(
 			options.skillsRepository,
 			skillsOpts...,
@@ -287,7 +302,24 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	postToolProcessor := processor.NewPostToolRequestProcessor(postToolOpts...)
 	requestProcessors = append(requestProcessors, postToolProcessor)
 
-	// 8. Time processor - adds current time information if enabled.
+	// 8. Skills tool result processor - materializes loaded skill content
+	// into tool result messages.
+	if options.skillsRepository != nil &&
+		options.SkillsLoadedContentInToolResults {
+		skillsToolResultProcessor :=
+			processor.NewSkillsToolResultRequestProcessor(
+				options.skillsRepository,
+				processor.WithSkillsToolResultLoadMode(
+					options.SkillLoadMode,
+				),
+			)
+		requestProcessors = append(
+			requestProcessors,
+			skillsToolResultProcessor,
+		)
+	}
+
+	// 9. Time processor - adds current time information if enabled.
 	// Moved after content processor to avoid invalidating system message cache.
 	// Time information changes frequently, so placing it last allows previous
 	// stable content (instructions, identity, skills, history) to be cached.
@@ -503,7 +535,7 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 		}
 		// Handle actual errors
 		span.SetStatus(codes.Error, err.Error())
-		span.SetAttributes(attribute.String(itelemetry.KeyErrorType, itelemetry.ValueDefaultErrorType))
+		span.SetAttributes(attribute.String(itelemetry.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeRunError)))
 		span.End()
 		return nil, err
 	}
