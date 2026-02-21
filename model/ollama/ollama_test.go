@@ -238,7 +238,7 @@ func Test_convertMessages(t *testing.T) {
 				assert.Equal(t, "Let me help", messages[0].Content)
 				assert.Equal(t, 1, len(messages[0].ToolCalls))
 				assert.Equal(t, "get_weather", messages[0].ToolCalls[0].Function.Name)
-				assert.Equal(t, map[string]any{"city": "Beijing"}, messages[0].ToolCalls[0].Function.Arguments)
+				assert.Equal(t, map[string]any{"city": "Beijing"}, messages[0].ToolCalls[0].Function.Arguments.ToMap())
 			},
 			wantLen: 1,
 			wantErr: false,
@@ -906,8 +906,12 @@ func Test_convertChatResponse_WithToolCalls(t *testing.T) {
 				{
 					ID: "call1",
 					Function: api.ToolCallFunction{
-						Name:      "get_weather",
-						Arguments: map[string]any{"city": "Beijing"},
+						Name: "get_weather",
+						Arguments: func() api.ToolCallFunctionArguments {
+							a := api.NewToolCallFunctionArguments()
+							a.Set("city", "Beijing")
+							return a
+						}(),
 					},
 				},
 			},

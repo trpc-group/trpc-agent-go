@@ -565,9 +565,13 @@ func convertChatResponse(resp api.ChatResponse) (*model.Response, error) {
 func convertMessage(msg model.Message) (api.Message, error) {
 	var toolCalls []api.ToolCall
 	for i, toolCall := range msg.ToolCalls {
-		args, err := argsToObject(toolCall.Function.Arguments)
+		rawArgs, err := argsToObject(toolCall.Function.Arguments)
 		if err != nil {
 			return api.Message{}, err
+		}
+		args := api.NewToolCallFunctionArguments()
+		for k, v := range rawArgs {
+			args.Set(k, v)
 		}
 		toolCalls = append(toolCalls, api.ToolCall{
 			Function: api.ToolCallFunction{
@@ -623,18 +627,18 @@ func convertMessage(msg model.Message) (api.Message, error) {
 func convertTools(tools map[string]tool.Tool) []api.Tool {
 	var result []api.Tool
 	for _, tl := range tools {
-		properties := make(map[string]api.ToolProperty)
+		properties := api.NewToolPropertiesMap()
 		var required []string
 
 		decl := tl.Declaration()
 		if decl.InputSchema != nil && decl.InputSchema.Properties != nil {
 			for name, prop := range decl.InputSchema.Properties {
-				properties[name] = api.ToolProperty{
+				properties.Set(name, api.ToolProperty{
 					Type:        api.PropertyType{prop.Type},
 					Description: prop.Description,
 					Items:       prop.Items,
 					Enum:        prop.Enum,
-				}
+				})
 				required = append(required, prop.Required...)
 			}
 		}
