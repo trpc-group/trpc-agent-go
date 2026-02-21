@@ -13,8 +13,8 @@ import (
 	"context"
 	"fmt"
 	"hash/fnv"
-	"strings"
 	"maps"
+	"strings"
 	"sync"
 	"time"
 
@@ -332,7 +332,7 @@ func isMemoryNotFoundError(err error) bool {
 	return strings.Contains(msg, memoryNotFoundErrSubstr) &&
 		strings.Contains(msg, memoryNotFoundErrMarker)
 }
-  
+
 // operationToolName maps an operation type to the corresponding
 // memory tool name for enabled-tools gating.
 var operationToolName = map[extractor.OperationType]string{
