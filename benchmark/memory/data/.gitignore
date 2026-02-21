@@ -1,0 +1,3 @@
+# Ignore large dataset files.
+locomo10.json
+locomo10/
