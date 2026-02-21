@@ -43,14 +43,14 @@ Second paragraph more text.`
 	require.NoError(t, err)
 	require.Greater(t, len(chunks), 1)
 
-	// Overlap marker adds 52 characters: "\n\n--- above content is overlap of prefix chunk ---\n\n"
-	const overlapMarkerLen = 52
+	// Overlap separator adds 4 characters: "\n\n" + "\n\n" (no visible marker)
+	const overlapSeparatorLen = 4
 
 	// Validate each chunk size - use character count, not byte count
 	for i, c := range chunks {
-		// Ensure chunk size not huge (>2*size + overlap marker)
+		// Ensure chunk size not huge (>2*size + overlap separator)
 		charCount := utf8.RuneCountInString(c.Content)
-		maxSize := 2*size + overlapMarkerLen
+		maxSize := 2*size + overlapSeparatorLen
 		require.LessOrEqual(t, charCount, maxSize, "Chunk %d has %d chars, exceeds max=%d", i, charCount, maxSize)
 
 		// Verify UTF-8 validity
@@ -128,19 +128,19 @@ func TestMarkdownChunking_NoStructure(t *testing.T) {
 	require.NoError(t, err)
 	require.Greater(t, len(chunks), 1, "Long text should be split into multiple chunks")
 
-	// Overlap marker adds 52 characters: "\n\n--- above content is overlap of prefix chunk ---\n\n"
-	const overlapMarkerLen = 52
+	// Overlap separator adds 4 characters: "\n\n" + "\n\n" (no visible marker)
+	const overlapSeparatorLen = 4
 
 	// Validate forced splitting
 	for i, c := range chunks {
 		charCount := utf8.RuneCountInString(c.Content)
 		var maxSize int
 		if i == 0 {
-			// First chunk has no overlap marker
+			// First chunk has no overlap separator
 			maxSize = size + overlap
 		} else {
-			// Subsequent chunks may have overlap marker
-			maxSize = size + overlap + overlapMarkerLen
+			// Subsequent chunks may have overlap separator
+			maxSize = size + overlap + overlapSeparatorLen
 		}
 		require.LessOrEqual(t, charCount, maxSize, "Chunk %d has %d chars, exceeds max=%d", i, charCount, maxSize)
 
@@ -294,13 +294,13 @@ func TestMarkdownChunking_CaseMDFormat(t *testing.T) {
 	expectedMinChunks := (totalChars + size - 1) / (size - overlap) // Ceiling division
 	require.GreaterOrEqual(t, len(chunks), expectedMinChunks/2, "Should have sufficient chunks for large table content")
 
-	// Overlap marker adds 52 characters: "\n\n--- above content is overlap of prefix chunk ---\n\n"
-	const overlapMarkerLen = 52
+	// Overlap separator adds 4 characters: "\n\n" + "\n\n" (no visible marker)
+	const overlapSeparatorLen = 4
 
 	// Check each chunk
 	for i, chunk := range chunks {
 		charCount := utf8.RuneCountInString(chunk.Content)
-		maxSize := 2*size + overlapMarkerLen
+		maxSize := 2*size + overlapSeparatorLen
 		require.LessOrEqual(t, charCount, maxSize, "Chunk %d has %d chars, exceeds max=%d", i, charCount, maxSize)
 		require.True(t, utf8.ValidString(chunk.Content), "Chunk %d contains invalid UTF-8", i)
 		require.NotEmpty(t, chunk.Content, "Chunk %d is empty", i)
