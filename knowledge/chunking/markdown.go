@@ -725,7 +725,7 @@ func (m *MarkdownChunking) applyOverlap(chunks []*document.Document) []*document
 		// Combine with overlap markers to clearly indicate overlapped content
 		var overlappedContent string
 		if prevText != "" {
-			overlappedContent = prevText + "\n\n--- above content is overlap of prefix chunk ---\n\n" + chunks[i].Content
+			overlappedContent = prevText + "\n\n" + chunks[i].Content
 		} else {
 			overlappedContent = chunks[i].Content
 		}

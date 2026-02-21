@@ -293,35 +293,56 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	contentProcessor := processor.NewContentRequestProcessor(contentOpts...)
 	requestProcessors = append(requestProcessors, contentProcessor)
 
-	if options.skillsRepository != nil &&
-		options.SkillsLoadedContentInToolResults {
-		skillsToolResultProcessor :=
-			processor.NewSkillsToolResultRequestProcessor(
-				options.skillsRepository,
-				processor.WithSkillsToolResultLoadMode(
-					options.SkillLoadMode,
-				),
-			)
-		requestProcessors = append(
-			requestProcessors,
-			skillsToolResultProcessor,
-		)
-	}
+	// 7. Post-tool processor - injects dynamic prompt after tool results.
+	requestProcessors = appendPostToolProcessor(options, requestProcessors)
 
-	// 7. Time processor - adds current time information if enabled.
+	// 8. Skills tool result processor - materializes loaded skill content
+	// into tool result messages.
+	requestProcessors = appendSkillsToolResultProcessor(options, requestProcessors)
+
+	// 9. Time processor - adds current time information if enabled.
 	// Moved after content processor to avoid invalidating system message cache.
 	// Time information changes frequently, so placing it last allows previous
 	// stable content (instructions, identity, skills, history) to be cached.
-	if options.AddCurrentTime {
-		timeProcessor := processor.NewTimeRequestProcessor(
-			processor.WithAddCurrentTime(true),
-			processor.WithTimezone(options.Timezone),
-			processor.WithTimeFormat(options.TimeFormat),
-		)
-		requestProcessors = append(requestProcessors, timeProcessor)
-	}
+	requestProcessors = appendTimeProcessor(options, requestProcessors)
 
 	return requestProcessors
+}
+
+func appendPostToolProcessor(options *Options, requestProcessors []flow.RequestProcessor) []flow.RequestProcessor {
+	var postToolOpts []processor.PostToolOption
+	if options.PostToolPrompt != "" {
+		postToolOpts = append(postToolOpts,
+			processor.WithPostToolPrompt(options.PostToolPrompt))
+	}
+	postToolProcessor := processor.NewPostToolRequestProcessor(postToolOpts...)
+	return append(requestProcessors, postToolProcessor)
+}
+
+func appendSkillsToolResultProcessor(options *Options, requestProcessors []flow.RequestProcessor) []flow.RequestProcessor {
+	if options.skillsRepository == nil || !options.SkillsLoadedContentInToolResults {
+		return requestProcessors
+	}
+	skillsToolResultProcessor :=
+		processor.NewSkillsToolResultRequestProcessor(
+			options.skillsRepository,
+			processor.WithSkillsToolResultLoadMode(
+				options.SkillLoadMode,
+			),
+		)
+	return append(requestProcessors, skillsToolResultProcessor)
+}
+
+func appendTimeProcessor(options *Options, requestProcessors []flow.RequestProcessor) []flow.RequestProcessor {
+	if !options.AddCurrentTime {
+		return requestProcessors
+	}
+	timeProcessor := processor.NewTimeRequestProcessor(
+		processor.WithAddCurrentTime(true),
+		processor.WithTimezone(options.Timezone),
+		processor.WithTimeFormat(options.TimeFormat),
+	)
+	return append(requestProcessors, timeProcessor)
 }
 
 // buildRequestProcessors preserves the original helper signature for tests and
