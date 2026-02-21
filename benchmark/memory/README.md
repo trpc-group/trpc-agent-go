@@ -128,7 +128,7 @@ go run main.go -scenario agentic,auto -memory-backend pgvector,mysql
 | `-model`            | gpt-4o-mini            | Model name                             |
 | `-eval-model`       | same as model          | Evaluation model for LLM judge         |
 | `-dataset`          | ../data                | Dataset directory                      |
-| `-data-file`        | locomo_sample.json     | Dataset file name                      |
+| `-data-file`        | locomo10.json          | Dataset file name                      |
 | `-output`           | ../results             | Output directory                       |
 | `-scenario`         | long_context           | Evaluation scenario (comma-separated)  |
 | `-memory-backend`   | inmemory               | Memory backend (comma-separated)       |
