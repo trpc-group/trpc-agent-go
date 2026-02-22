@@ -332,9 +332,6 @@ func TestModel_buildFinalResponse(t *testing.T) {
 						Message: model.Message{
 							Role: model.RoleAssistant,
 						},
-						Delta: model.Message{
-							Role: model.RoleAssistant,
-						},
 					},
 				},
 			},
@@ -386,20 +383,6 @@ func TestModel_buildFinalResponse(t *testing.T) {
 					{
 						Index:        0,
 						FinishReason: &finishReason,
-						Delta: model.Message{
-							Role:             model.RoleAssistant,
-							ReasoningContent: "Thought",
-							Content:          "Answer",
-							ToolCalls: []model.ToolCall{
-								{
-									ID: "id",
-									Function: model.FunctionDefinitionParam{
-										Name:      "function_call",
-										Arguments: functionArgsBytes,
-									},
-								},
-							},
-						},
 						Message: model.Message{
 							Role:             model.RoleAssistant,
 							ReasoningContent: "Thought",
@@ -464,19 +447,6 @@ func TestModel_buildFinalResponse(t *testing.T) {
 					{
 						Index:        0,
 						FinishReason: &finishReason,
-						Delta: model.Message{
-							Role:    model.RoleAssistant,
-							Content: "Answer",
-							ToolCalls: []model.ToolCall{
-								{
-									ID: "id",
-									Function: model.FunctionDefinitionParam{
-										Name:      "function_call",
-										Arguments: functionArgsBytes,
-									},
-								},
-							},
-						},
 						Message: model.Message{
 							Role:    model.RoleAssistant,
 							Content: "Answer",
@@ -579,20 +549,6 @@ func TestModel_buildChunkResponse(t *testing.T) {
 						Index:        0,
 						FinishReason: &finishReason,
 						Delta: model.Message{
-							Role:             model.RoleAssistant,
-							ReasoningContent: "Thought",
-							Content:          "Answer",
-							ToolCalls: []model.ToolCall{
-								{
-									ID: "id",
-									Function: model.FunctionDefinitionParam{
-										Name:      "function_call",
-										Arguments: functionArgsBytes,
-									},
-								},
-							},
-						},
-						Message: model.Message{
 							Role:             model.RoleAssistant,
 							ReasoningContent: "Thought",
 							Content:          "Answer",
@@ -1152,7 +1108,7 @@ func TestModel_GenerateContentStreamingError(t *testing.T) {
 		assert.NotNil(t, resp)
 		assert.Nil(t, resp.Error)
 		assert.Len(t, resp.Choices, 1)
-		assert.Equal(t, "partial response", resp.Choices[0].Message.Content)
+		assert.Equal(t, "partial response", resp.Choices[0].Delta.Content)
 
 		// Second response should be the error
 		errorResp := <-respChan
