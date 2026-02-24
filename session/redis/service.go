@@ -22,8 +22,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
-	v1 "trpc.group/trpc-go/trpc-agent-go/session/redis/internal/v1"
-	v2 "trpc.group/trpc-go/trpc-agent-go/session/redis/internal/v2"
+	"trpc.group/trpc-go/trpc-agent-go/session/redis/internal/hashidx"
+	"trpc.group/trpc-go/trpc-agent-go/session/redis/internal/util"
+	"trpc.group/trpc-go/trpc-agent-go/session/redis/internal/zset"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/redis"
 )
 
@@ -33,18 +34,20 @@ var (
 )
 
 // Service is the redis session service.
-// It acts as a facade, routing requests to V2 (default) or V1 (legacy) implementations.
+// It acts as a facade, routing requests to hashidx (default) or zset (legacy) implementations.
+// HashIdx is the improved storage with separated data and index, while zset is the legacy
+// ZSet-based storage kept for backward compatibility during migration.
 type Service struct {
 	opts            ServiceOpts
 	redisClient     redis.UniversalClient
-	eventPairChans  []chan *sessionEventPair     // channel for session events to persistence (V1 & V2 shared or separate?) -> V2 has its own logic, but we can share if structure matches.
-	trackEventChans []chan *trackEventPair       // channel for track events to persistence (V1).
+	eventPairChans  []chan *sessionEventPair     // channel for session events to persistence
+	trackEventChans []chan *trackEventPair       // channel for track events to persistence
 	asyncWorker     *isummary.AsyncSummaryWorker // async summary worker
 	persistWg       sync.WaitGroup               // wait group for persist workers
 	once            sync.Once                    // ensure Close is called only once
 
-	v1Client *v1.Client
-	v2Client *v2.Client
+	zsetClient    *zset.Client    // legacy ZSet-based storage client
+	hashidxClient *hashidx.Client // improved Hash+Index storage client
 }
 
 type sessionEventPair struct {
@@ -59,31 +62,35 @@ type trackEventPair struct {
 	version string
 }
 
-// legacyEnabled returns true if V1 legacy support is enabled (read fallback).
+// compatEnabled returns true if zset legacy support is enabled (read fallback).
 // When enabled:
-//   - GetSession: V2 first, fallback to V1 if not found
-//   - ListSessions: merge V2 and V1 results
-//   - CreateSession: V2 only (V1 created via dual-write if needDualWrite)
-//   - AppendEvent: route by session version tag, or dual-write if needDualWrite
-func (s *Service) legacyEnabled() bool {
+//   - GetSession: hashidx first, fallback to zset if not found
+//   - ListSessions: merge hashidx and zset results
+//   - CreateSession: hashidx only (zset created via dual-write if dualWriteEnabled)
+//   - AppendEvent: route by session version tag, or dual-write if dualWriteEnabled
+func (s *Service) compatEnabled() bool {
 	return s.opts.compatMode >= CompatModeLegacy
 }
 
-// needDualWrite returns true if dual-write mode is enabled.
+func (s *Service) legacyEnabled() bool {
+	return s.opts.compatMode == CompatModeLegacy
+}
+
+// dualWriteEnabled returns true if dual-write mode is enabled.
 // Dual-write ensures backward compatibility during rolling upgrades:
 //
 // Session Meta:
-//   - V2 creates session: writes to both V2 and V1 (V1 nodes can read)
-//   - V1 creates session: only in V1 (V2 nodes read via fallback, no V2 meta created)
+//   - hashidx creates session: writes to both hashidx and zset (zset nodes can read)
+//   - zset creates session: only in zset (hashidx nodes read via fallback, no hashidx meta created)
 //
 // Event Data:
-//   - Always writes to both V2 and V1 (regardless of which version created the session)
+//   - Always writes to both hashidx and zset (regardless of which version created the session)
 //
 // This asymmetry is intentional:
-//   - V2 meta count may be less than V1 (only V2-created sessions have V2 meta)
+//   - hashidx meta count may be less than zset (only hashidx-created sessions have hashidx meta)
 //   - Event data is always complete in both storages
-//   - V2 nodes can read V1 sessions via fallback, no need to create V2 meta copy
-func (s *Service) needDualWrite() bool {
+//   - hashidx nodes can read zset sessions via fallback, no need to create hashidx meta copy
+func (s *Service) dualWriteEnabled() bool {
 	return s.opts.compatMode == CompatModeDualWrite
 }
 
@@ -125,8 +132,8 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		userStateTTL = 0
 	}
 
-	// Initialize V1 config
-	v1Cfg := v1.Config{
+	// Initialize ZSet config
+	zsetCfg := zset.Config{
 		SessionTTL:        sessionTTL,
 		AppStateTTL:       appStateTTL,
 		UserStateTTL:      userStateTTL,
@@ -134,8 +141,8 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		KeyPrefix:         opts.keyPrefix,
 	}
 
-	// Initialize V2 config
-	v2Cfg := v2.Config{
+	// Initialize HashIdx config
+	hashidxCfg := hashidx.Config{
 		SessionTTL:        sessionTTL,
 		AppStateTTL:       appStateTTL,
 		UserStateTTL:      userStateTTL,
@@ -144,10 +151,10 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	}
 
 	s := &Service{
-		opts:        opts,
-		redisClient: redisClient,
-		v1Client:    v1.NewClient(redisClient, v1Cfg),
-		v2Client:    v2.NewClient(redisClient, v2Cfg),
+		opts:          opts,
+		redisClient:   redisClient,
+		zsetClient:    zset.NewClient(redisClient, zsetCfg),
+		hashidxClient: hashidx.NewClient(redisClient, hashidxCfg),
 	}
 
 	// Initialize Async Persistence
@@ -170,20 +177,21 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	return s, nil
 }
 
-// checkSessionExists checks if session exists in V1 and V2 using pipeline.
-// Returns (v1Exists, v2Exists, error).
+// checkSessionExists checks if session exists in zset and hashidx using pipeline.
+// Returns (zsetExists, hashidxExists, error).
 // If both exist, logs an error for data inconsistency investigation.
 // TODO: Remove this defensive check after the system is stable.
-func (s *Service) checkSessionExists(ctx context.Context, key session.Key) (v1Exists, v2Exists bool, err error) {
+func (s *Service) checkSessionExists(ctx context.Context, key session.Key) (bool, bool, error) {
+	zsetExists, hashidxExists := false, false
 	pipe := s.redisClient.Pipeline()
 
-	// Add V2 check to pipeline
-	v2Cmd := s.v2Client.ExistsPipelined(ctx, pipe, key)
+	// Add hashidx check to pipeline
+	hashidxCmd := s.hashidxClient.ExistsPipelined(ctx, pipe, key)
 
-	// Add V1 check to pipeline if legacy support is enabled
-	var v1Cmd *redis.BoolCmd
-	if s.legacyEnabled() {
-		v1Cmd = s.v1Client.ExistsPipelined(ctx, pipe, key)
+	// Add zset check to pipeline if legacy support is enabled
+	var zsetCmd *redis.BoolCmd
+	if s.compatEnabled() {
+		zsetCmd = s.zsetClient.ExistsPipelined(ctx, pipe, key)
 	}
 
 	// Execute pipeline (go-redis handles multi-slot routing in cluster mode)
@@ -192,33 +200,27 @@ func (s *Service) checkSessionExists(ctx context.Context, key session.Key) (v1Ex
 	}
 
 	// Extract results
-	if v2Result, err := v2Cmd.Result(); err != nil && err != redis.Nil {
-		return false, false, fmt.Errorf("check v2 exists: %w", err)
+	if hashidxResult, err := hashidxCmd.Result(); err != nil && err != redis.Nil {
+		return false, false, fmt.Errorf("check hashidx exists: %w", err)
 	} else {
-		v2Exists = v2Result > 0
+		hashidxExists = hashidxResult > 0
 	}
 
-	if v1Cmd != nil {
-		if v1Result, err := v1Cmd.Result(); err != nil && err != redis.Nil {
-			return false, false, fmt.Errorf("check v1 exists: %w", err)
+	if zsetCmd != nil {
+		if zsetResult, err := zsetCmd.Result(); err != nil && err != redis.Nil {
+			return false, false, fmt.Errorf("check zset exists: %w", err)
 		} else {
-			v1Exists = v1Result
+			zsetExists = zsetResult
 		}
 	}
 
-	// Log info if both exist (expected during dual-write mode)
-	if v1Exists && v2Exists {
-		// log.InfofContext(ctx, "session exists in both V1 and V2: %s/%s/%s",
-		// key.AppName, key.UserID, key.SessionID)
-	}
-
-	return v1Exists, v2Exists, nil
+	return zsetExists, hashidxExists, nil
 }
 
 // CreateSession creates a new session.
 // Strategy (per xxx.md):
-//   - If either V1 or V2 exists: return existing session (no supplementary creation)
-//   - Only when BOTH v1/v2 don't exist: create in both storages (dual-write mode)
+//   - If either zset or hashidx exists: return existing session (no supplementary creation)
+//   - Only when BOTH zset/hashidx don't exist: create in both storages (dual-write mode)
 //   - Strict dual-write: both must succeed, any failure returns error with best-effort rollback
 func (s *Service) CreateSession(
 	ctx context.Context,
@@ -232,15 +234,15 @@ func (s *Service) CreateSession(
 
 	// Check if session already exists
 	if key.SessionID != "" {
-		v1Exists, v2Exists, err := s.checkSessionExists(ctx, key)
+		zsetExists, hashidxExists, err := s.checkSessionExists(ctx, key)
 		if err != nil {
 			return nil, fmt.Errorf("check session exists: %w", err)
 		}
 
 		// If either side exists, return existing session (no supplementary creation)
 		// This ensures session "belongs" to whichever storage created it first.
-		if v1Exists || v2Exists {
-			sess, err := s.getSessionInternal(ctx, key, applyOptions(opts...), v1Exists, v2Exists)
+		if zsetExists || hashidxExists {
+			sess, err := s.getSessionInternal(ctx, key, applyOptions(opts...), zsetExists, hashidxExists)
 			if err != nil {
 				return nil, fmt.Errorf("get existing session: %w", err)
 			}
@@ -250,58 +252,58 @@ func (s *Service) CreateSession(
 		}
 	}
 
-	// Create new session - only reaches here when BOTH v1/v2 don't exist
-	// Generate sessionID upfront to ensure V1 and V2 use the same ID in dual-write mode.
+	// Create new session - only reaches here when BOTH zset/hashidx don't exist
+	// Generate sessionID upfront to ensure zset and hashidx use the same ID in dual-write mode.
 	if key.SessionID == "" {
 		key.SessionID = uuid.New().String()
 	}
 
-	if s.needDualWrite() {
-		// Strict dual-write: create in both V2 and V1, both must succeed
-		sess, err := s.v2Client.CreateSession(ctx, key, state)
+	if s.dualWriteEnabled() {
+		// Strict dual-write: create in both hashidx and zset, both must succeed
+		sess, err := s.hashidxClient.CreateSession(ctx, key, state)
 		if err != nil {
-			return nil, fmt.Errorf("create session in V2 failed: %w", err)
+			return nil, fmt.Errorf("create session in hashidx failed: %w", err)
 		}
 
-		if _, err := s.v1Client.CreateSession(ctx, key, state); err != nil {
-			// V1 creation failed - best effort rollback V2
-			if delErr := s.v2Client.DeleteSession(ctx, key); delErr != nil {
-				log.WarnfContext(ctx, "failed to rollback V2 session after V1 creation failed: %v", delErr)
+		if _, err := s.zsetClient.CreateSession(ctx, key, state); err != nil {
+			// zset creation failed - best effort rollback hashidx
+			if delErr := s.hashidxClient.DeleteSession(ctx, key); delErr != nil {
+				log.WarnfContext(ctx, "failed to rollback hashidx session after zset creation failed: %v", delErr)
 			}
-			return nil, fmt.Errorf("dual-write session to V1 failed: %w", err)
+			return nil, fmt.Errorf("dual-write session to zset failed: %w", err)
 		}
 
-		// Merge appState and userState into session (matches V1 behavior)
+		// Merge appState and userState into session (matches zset behavior)
 		return s.mergeAppUserState(ctx, key, sess)
 	}
 
-	// Non-dual-write mode: create in V2 only
-	sess, err := s.v2Client.CreateSession(ctx, key, state)
+	// Non-dual-write mode: create in hashidx only
+	sess, err := s.hashidxClient.CreateSession(ctx, key, state)
 	if err != nil {
 		return nil, err
 	}
 
-	// Merge appState and userState into session (matches V1 behavior)
+	// Merge appState and userState into session (matches zset behavior)
 	return s.mergeAppUserState(ctx, key, sess)
 }
 
 // mergeAppUserState queries and merges appState and userState into the session.
-// This matches V1 behavior where CreateSession/GetSession returns session with merged states.
-// It also refreshes TTL for appState and userState keys (matching V1 behavior).
+// This matches zset behavior where CreateSession/GetSession returns session with merged states.
+// It also refreshes TTL for appState and userState keys (matching zset behavior).
 func (s *Service) mergeAppUserState(ctx context.Context, key session.Key, sess *session.Session) (*session.Session, error) {
 	if sess == nil {
 		return nil, nil
 	}
 
 	// Query appState
-	appState, err := s.v2Client.ListAppStates(ctx, key.AppName)
+	appState, err := s.hashidxClient.ListAppStates(ctx, key.AppName)
 	if err != nil {
 		log.WarnfContext(ctx, "failed to get appState for merge: %v", err)
 		// Don't fail the whole operation, just skip merging appState
 	}
 
 	// Query userState
-	userState, err := s.v2Client.ListUserStates(ctx, session.UserKey{AppName: key.AppName, UserID: key.UserID})
+	userState, err := s.hashidxClient.ListUserStates(ctx, session.UserKey{AppName: key.AppName, UserID: key.UserID})
 	if err != nil {
 		log.WarnfContext(ctx, "failed to get userState for merge: %v", err)
 		// Don't fail the whole operation, just skip merging userState
@@ -315,12 +317,12 @@ func (s *Service) mergeAppUserState(ctx context.Context, key session.Key, sess *
 		sess.SetState(session.StateUserPrefix+k, v)
 	}
 
-	// Refresh TTL for appState and userState (matches V1 behavior)
+	// Refresh TTL for appState and userState (matches zset behavior)
 	// This ensures shared states stay alive as long as any session is active.
-	if err := s.v2Client.RefreshAppStateTTL(ctx, key.AppName); err != nil {
+	if err := s.hashidxClient.RefreshAppStateTTL(ctx, key.AppName); err != nil {
 		log.WarnfContext(ctx, "failed to refresh appState TTL: %v", err)
 	}
-	if err := s.v2Client.RefreshUserStateTTL(ctx, session.UserKey{AppName: key.AppName, UserID: key.UserID}); err != nil {
+	if err := s.hashidxClient.RefreshUserStateTTL(ctx, session.UserKey{AppName: key.AppName, UserID: key.UserID}); err != nil {
 		log.WarnfContext(ctx, "failed to refresh userState TTL: %v", err)
 	}
 
@@ -328,7 +330,7 @@ func (s *Service) mergeAppUserState(ctx context.Context, key session.Key, sess *
 }
 
 // GetSession gets a session.
-// Strategy: V2 First -> Legacy Fallback.
+// Strategy: hashidx First -> Legacy Fallback.
 func (s *Service) GetSession(
 	ctx context.Context,
 	key session.Key,
@@ -346,11 +348,11 @@ func (s *Service) GetSession(
 	}
 	final := func(c *session.GetSessionContext, next func() (*session.Session, error)) (*session.Session, error) {
 		// TODO: Remove this defensive check after the system is stable
-		v1Exists, v2Exists, err := s.checkSessionExists(c.Context, c.Key)
+		zsetExists, hashidxExists, err := s.checkSessionExists(c.Context, c.Key)
 		if err != nil {
 			log.WarnfContext(c.Context, "checkSessionExists failed: %v", err)
 		}
-		return s.getSessionInternal(c.Context, c.Key, c.Options, v1Exists, v2Exists)
+		return s.getSessionInternal(c.Context, c.Key, c.Options, zsetExists, hashidxExists)
 	}
 	sess, err := hook.RunGetSessionHooks(s.opts.getSessionHooks, hctx, final)
 	if err != nil {
@@ -360,30 +362,30 @@ func (s *Service) GetSession(
 }
 
 // getSessionInternal retrieves session based on CompatMode.
-// v1Exists/v2Exists indicate whether session exists in each storage version.
+// zsetExists/hashidxExists indicate whether session exists in each storage version.
 // Caller should call checkSessionExists first and pass the results.
 //
 // Read strategy:
-//   - If V1 exists (legacy enabled): read V1 first (V1 may have more complete data during migration)
-//   - Otherwise: read V2
+//   - If zset exists (legacy enabled): read zset first (zset may have more complete data during migration)
+//   - Otherwise: read hashidx
 func (s *Service) getSessionInternal(
 	ctx context.Context,
 	key session.Key,
 	opts *session.Options,
-	v1Exists, v2Exists bool,
+	zsetExists, hashidxExists bool,
 ) (*session.Session, error) {
 	// Use sessionEventLimit as default if EventNum is not specified
 	eventLimit := s.getEffectiveEventLimit(opts.EventNum)
 
-	// V1 priority: if V1 exists and legacy is enabled, read V1
-	// This ensures data completeness during migration (old instances may only write V1)
-	if s.legacyEnabled() && v1Exists {
-		return s.v1Client.GetSession(ctx, key, eventLimit, opts.EventTime)
+	// zset priority: if zset exists and legacy is enabled, read zset
+	// This ensures data completeness during migration (old instances may only write zset)
+	if s.compatEnabled() && zsetExists {
+		return s.zsetClient.GetSession(ctx, key, eventLimit, opts.EventTime)
 	}
 
-	// V2 read
-	if v2Exists {
-		return s.v2Client.GetSession(ctx, key, eventLimit, opts.EventTime)
+	// hashidx read
+	if hashidxExists {
+		return s.hashidxClient.GetSession(ctx, key, eventLimit, opts.EventTime)
 	}
 
 	return nil, nil // Not found
@@ -399,7 +401,7 @@ func (s *Service) getEffectiveEventLimit(limit int) int {
 }
 
 // ListSessions lists all sessions by user scope of session key.
-// Strategy: List V2 (Scan) + List V1 (HGetAll) -> Merge with V1 priority for duplicates.
+// Strategy: List hashidx (Scan) + List zset (HGetAll) -> Merge with zset priority for duplicates.
 func (s *Service) ListSessions(
 	ctx context.Context,
 	userKey session.UserKey,
@@ -413,39 +415,39 @@ func (s *Service) ListSessions(
 	// Use sessionEventLimit as default if EventNum is not specified
 	eventLimit := s.getEffectiveEventLimit(opt.EventNum)
 
-	v2Sessions, err := s.v2Client.ListSessions(ctx, userKey, eventLimit, opt.EventTime)
+	hashidxSessions, err := s.hashidxClient.ListSessions(ctx, userKey, eventLimit, opt.EventTime)
 	if err != nil {
-		return nil, fmt.Errorf("scan sessions (v2): %w", err)
+		return nil, fmt.Errorf("scan sessions (hashidx): %w", err)
 	}
 
-	// 2. List V1 (if legacy enabled)
-	if !s.legacyEnabled() {
-		return v2Sessions, nil
+	// 2. List zset (if legacy enabled)
+	if !s.compatEnabled() {
+		return hashidxSessions, nil
 	}
 
-	v1Sessions, err := s.v1Client.ListSessions(ctx, userKey, eventLimit, opt.EventTime)
+	zsetSessions, err := s.zsetClient.ListSessions(ctx, userKey, eventLimit, opt.EventTime)
 	if err != nil {
-		return nil, fmt.Errorf("list sessions (v1): %w", err)
+		return nil, fmt.Errorf("list sessions (zset): %w", err)
 	}
 
-	// Merge: V1 priority for duplicates (V1 data is more complete during migration while enable dual-write)
-	v1Map := make(map[string]*session.Session, len(v1Sessions))
-	for _, s1 := range v1Sessions {
-		v1Map[s1.ID] = s1
+	// Merge: zset priority for duplicates (zset data is more complete during migration while enable dual-write)
+	zsetMap := make(map[string]*session.Session, len(zsetSessions))
+	for _, s1 := range zsetSessions {
+		zsetMap[s1.ID] = s1
 	}
 
-	sessions := make([]*session.Session, 0, len(v2Sessions)+len(v1Sessions))
-	for _, sess := range v2Sessions {
-		if v1Sess, exists := v1Map[sess.ID]; exists {
-			// Use V1 data for duplicates
-			sessions = append(sessions, v1Sess)
-			delete(v1Map, sess.ID)
+	sessions := make([]*session.Session, 0, len(hashidxSessions)+len(zsetSessions))
+	for _, sess := range hashidxSessions {
+		if zsetSess, exists := zsetMap[sess.ID]; exists {
+			// Use zset data for duplicates
+			sessions = append(sessions, zsetSess)
+			delete(zsetMap, sess.ID)
 		} else {
 			sessions = append(sessions, sess)
 		}
 	}
-	// Add V1-only sessions
-	for _, s1 := range v1Map {
+	// Add zset-only sessions
+	for _, s1 := range zsetMap {
 		sessions = append(sessions, s1)
 	}
 
@@ -462,19 +464,19 @@ func (s *Service) DeleteSession(
 		return err
 	}
 
-	// Delete V2
-	errV2 := s.v2Client.DeleteSession(ctx, key)
+	// Delete hashidx
+	errhashidx := s.hashidxClient.DeleteSession(ctx, key)
 
-	// Delete V1 (if legacy enabled)
-	if s.legacyEnabled() {
-		errV1 := s.v1Client.DeleteSession(ctx, key)
-		if errV2 != nil {
-			return errV2
+	// Delete zset (if legacy enabled)
+	if s.compatEnabled() {
+		errzset := s.zsetClient.DeleteSession(ctx, key)
+		if errhashidx != nil {
+			return errhashidx
 		}
-		return errV1
+		return errzset
 	}
 
-	return errV2
+	return errhashidx
 }
 
 // AppendEvent appends an event to a session.
@@ -554,76 +556,77 @@ func getSessionVersion(sess *session.Session) string {
 	if sess == nil || sess.ServiceMeta == nil {
 		return ""
 	}
-	return sess.ServiceMeta[v2.ServiceMetaVersionKey]
+	return sess.ServiceMeta[util.ServiceMetaStorageTypeKey]
 }
 
 func (s *Service) persistEvent(ctx context.Context, ver string, e *event.Event, key session.Key) error {
 	// Dual-write mode: strict dual-write based on session existence
-	if s.needDualWrite() {
+	if s.dualWriteEnabled() {
 		return s.appendEventWithStrictDualWrite(ctx, key, e)
 	}
 
 	// fast path: use version tag
 	switch ver {
-	case v2.VersionV2:
-		return s.v2Client.AppendEvent(ctx, key, e)
-	case v1.VersionV1:
-		return s.v1Client.AppendEvent(ctx, key, e)
+	case util.StorageTypeHashIdx:
+		return s.hashidxClient.AppendEvent(ctx, key, e)
+	case util.StorageTypeZset:
+		return s.zsetClient.AppendEvent(ctx, key, e)
 	}
 
-	// Slow path: no version tag, check storage
-	v1Exists, v2Exists, err := s.checkSessionExists(ctx, key)
+	// Slow path: no version tag, check storage.
+	// zset first: if zset exists, it's a legacy session.
+	zsetExists, hashidxExists, err := s.checkSessionExists(ctx, key)
 	if err != nil {
 		log.WarnfContext(ctx, "checkSessionExists in persistEvent failed: %v", err)
 	}
 
-	if v2Exists {
-		return s.v2Client.AppendEvent(ctx, key, e)
+	if s.compatEnabled() && zsetExists {
+		return s.zsetClient.AppendEvent(ctx, key, e)
 	}
-	if s.legacyEnabled() && v1Exists {
-		return s.v1Client.AppendEvent(ctx, key, e)
+	if hashidxExists {
+		return s.hashidxClient.AppendEvent(ctx, key, e)
 	}
 
 	return fmt.Errorf("session not found: %s/%s/%s", key.AppName, key.UserID, key.SessionID)
 }
 
 // appendEventWithStrictDualWrite implements strict dual-write semantics (per xxx.md):
-//   - If both V1 and V2 exist: must write to both, both must succeed
+//   - If both zset and hashidx exist: must write to both, both must succeed
 //   - If only one side exists: write to existing side only (with warning)
 //   - Any failure returns error immediately
 func (s *Service) appendEventWithStrictDualWrite(ctx context.Context, key session.Key, e *event.Event) error {
 	// Check which storages have this session
-	v1Exists, v2Exists, err := s.checkSessionExists(ctx, key)
+	zsetExists, hashidxExists, err := s.checkSessionExists(ctx, key)
 	if err != nil {
 		return fmt.Errorf("check session exists failed: %w", err)
 	}
 
 	// Case 1: Both exist - strict dual-write, both must succeed
-	if v1Exists && v2Exists {
-		if err := s.v2Client.AppendEvent(ctx, key, e); err != nil {
-			return fmt.Errorf("dual-write to V2 failed: %w", err)
+	if zsetExists && hashidxExists {
+		if err := s.hashidxClient.AppendEvent(ctx, key, e); err != nil {
+			return fmt.Errorf("dual-write to hashidx failed: %w", err)
 		}
-		if err := s.v1Client.AppendEvent(ctx, key, e); err != nil {
-			// V2 succeeded but V1 failed - this is a partial write
+		if err := s.zsetClient.AppendEvent(ctx, key, e); err != nil {
+			// hashidx succeeded but zset failed - this is a partial write
 			// Log error for monitoring, but return error to caller
-			log.ErrorfContext(ctx, "dual-write partial failure: V2 succeeded but V1 failed: %v", err)
-			return fmt.Errorf("dual-write to V1 failed (V2 succeeded): %w", err)
+			log.ErrorfContext(ctx, "dual-write partial failure: hashidx succeeded but zset failed: %v", err)
+			return fmt.Errorf("dual-write to zset failed (hashidx succeeded): %w", err)
 		}
 		return nil
 	}
 
-	// Case 2: Only V2 exists - write to V2 only (legacy session path)
-	if v2Exists {
-		log.WarnfContext(ctx, "dual-write mode but only V2 exists for session %s/%s/%s, writing to V2 only",
+	// Case 2: Only hashidx exists - write to hashidx only (legacy session path)
+	if hashidxExists {
+		log.WarnfContext(ctx, "dual-write mode but only hashidx exists for session %s/%s/%s, writing to hashidx only",
 			key.AppName, key.UserID, key.SessionID)
-		return s.v2Client.AppendEvent(ctx, key, e)
+		return s.hashidxClient.AppendEvent(ctx, key, e)
 	}
 
-	// Case 3: Only V1 exists - write to V1 only (old session not migrated)
-	if v1Exists {
-		log.WarnfContext(ctx, "dual-write mode but only V1 exists for session %s/%s/%s, writing to V1 only",
+	// Case 3: Only zset exists - write to zset only (old session not migrated)
+	if zsetExists {
+		log.WarnfContext(ctx, "dual-write mode but only zset exists for session %s/%s/%s, writing to zset only",
 			key.AppName, key.UserID, key.SessionID)
-		return s.v1Client.AppendEvent(ctx, key, e)
+		return s.zsetClient.AppendEvent(ctx, key, e)
 	}
 
 	// Case 4: Neither exists - error
@@ -664,17 +667,29 @@ func (s *Service) TrimConversations(
 		o(opt)
 	}
 
-	// Strategy: Check V2 Exists -> V2 Trim. Else -> V1 Trim (if legacy).
-	v2Exists, err := s.v2Client.Exists(ctx, key)
+	zsetExists, hashidxExists, err := s.checkSessionExists(ctx, key)
 	if err != nil {
 		return nil, err
 	}
-	if v2Exists {
-		return s.v2Client.TrimConversations(ctx, key, opt.ConversationCount)
+
+	// DualWrite mode: trim both sides, return hashidx result as canonical
+	if s.dualWriteEnabled() && zsetExists && hashidxExists {
+		deleted, err := s.hashidxClient.TrimConversations(ctx, key, opt.ConversationCount)
+		if err != nil {
+			return nil, fmt.Errorf("dual-write trim hashidx failed: %w", err)
+		}
+		if _, err := s.zsetClient.TrimConversations(ctx, key, opt.ConversationCount); err != nil {
+			log.WarnfContext(ctx, "dual-write trim zset failed (hashidx succeeded): %v", err)
+		}
+		return deleted, nil
 	}
 
-	if s.legacyEnabled() {
-		return s.v1Client.TrimConversations(ctx, key, opt.ConversationCount)
+	// zset first: if zset exists, it's a legacy session.
+	if s.compatEnabled() && zsetExists {
+		return s.zsetClient.TrimConversations(ctx, key, opt.ConversationCount)
+	}
+	if hashidxExists {
+		return s.hashidxClient.TrimConversations(ctx, key, opt.ConversationCount)
 	}
 
 	return nil, nil

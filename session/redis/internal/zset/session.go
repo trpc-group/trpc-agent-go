@@ -7,8 +7,9 @@
 //
 //
 
-// Package v1 implements the V1 Redis session storage logic.
-package v1
+// Package zset implements the ZSet-based Redis session storage logic.
+// Events are stored directly in ZSet with timestamp as score.
+package zset
 
 import (
 	"context"
@@ -24,14 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session/redis/internal/util"
 )
 
-const (
-	// ServiceMetaVersionKey is the key in Session.ServiceMeta to store the data version.
-	ServiceMetaVersionKey = "version"
-	// VersionV1 indicates the session is stored in V1 format.
-	VersionV1 = "v1"
-)
-
-// Config holds configuration for V1 session storage client.
+// Config holds configuration for ZSet session storage client.
 type Config struct {
 	SessionTTL        time.Duration
 	AppStateTTL       time.Duration
@@ -40,13 +34,13 @@ type Config struct {
 	KeyPrefix         string // Prefix for legacy keys
 }
 
-// Client implements V1 session storage logic.
+// Client implements ZSet session storage logic.
 type Client struct {
 	client redis.UniversalClient
 	cfg    Config
 }
 
-// NewClient creates a new V1 client.
+// NewClient creates a new ZSet client.
 func NewClient(client redis.UniversalClient, cfg Config) *Client {
 	return &Client{
 		client: client,
@@ -54,7 +48,7 @@ func NewClient(client redis.UniversalClient, cfg Config) *Client {
 	}
 }
 
-// SessionState is the state of a session (V1 structure).
+// SessionState is the state of a session (ZSet structure).
 type SessionState struct {
 	ID        string           `json:"id"`
 	State     session.StateMap `json:"state"`
@@ -62,7 +56,7 @@ type SessionState struct {
 	UpdatedAt time.Time        `json:"updatedAt"`
 }
 
-// CreateSession creates a new session using V1 logic.
+// CreateSession creates a new session using ZSet logic.
 // SessionID must be provided by the caller; empty SessionID returns an error.
 func (c *Client) CreateSession(
 	ctx context.Context,
@@ -106,7 +100,7 @@ func (c *Client) CreateSession(
 	userStateCmd := pipe.HGetAll(ctx, userStateKey)
 	appStateCmd := pipe.HGetAll(ctx, appStateKey)
 	if _, err := pipe.Exec(ctx); err != nil {
-		return nil, fmt.Errorf("create session (v1) failed: %w", err)
+		return nil, fmt.Errorf("create session (zset) failed: %w", err)
 	}
 
 	appState, err := util.ProcessStateCmd(appStateCmd)
@@ -124,13 +118,13 @@ func (c *Client) CreateSession(
 		session.WithSessionCreatedAt(sessState.CreatedAt),
 		session.WithSessionUpdatedAt(sessState.UpdatedAt),
 	)
-	// Inject V1 version tag into ServiceMeta (not persisted, memory only)
-	sess.ServiceMeta = map[string]string{ServiceMetaVersionKey: VersionV1}
+	// Inject ZSet version tag into ServiceMeta (not persisted, memory only)
+	sess.ServiceMeta = map[string]string{util.ServiceMetaStorageTypeKey: util.StorageTypeZset}
 
 	return util.MergeState(appState, userState, sess), nil
 }
 
-// GetSession retrieves a session using V1 logic.
+// GetSession retrieves a session using ZSet logic.
 func (c *Client) GetSession(
 	ctx context.Context,
 	key session.Key,
@@ -147,7 +141,7 @@ func (c *Client) GetSession(
 
 	events, err := c.getEventsList(ctx, []session.Key{key}, limit, afterTime)
 	if err != nil {
-		return nil, fmt.Errorf("get events (v1) failed: %w", err)
+		return nil, fmt.Errorf("get events (zset) failed: %w", err)
 	}
 
 	sess := session.NewSession(
@@ -160,37 +154,37 @@ func (c *Client) GetSession(
 
 	trackEvents, err := c.getTrackEvents(ctx, []session.Key{key}, []*SessionState{sessState}, limit, afterTime)
 	if err != nil {
-		return nil, fmt.Errorf("get track events (v1) failed: %w", err)
+		return nil, fmt.Errorf("get track events (zset) failed: %w", err)
 	}
 	util.AttachTrackEvents(sess, trackEvents)
 	util.AttachSummaries(sess, summariesCmd)
 
-	// Inject V1 version tag into ServiceMeta (not persisted, memory only)
-	sess.ServiceMeta = map[string]string{ServiceMetaVersionKey: VersionV1}
+	// Inject ZSet version tag into ServiceMeta (not persisted, memory only)
+	sess.ServiceMeta = map[string]string{util.ServiceMetaStorageTypeKey: util.StorageTypeZset}
 
 	return util.MergeState(appState, userState, sess), nil
 }
 
-// Exists checks if a session exists in V1 storage.
+// Exists checks if a session exists in ZSet storage.
 func (c *Client) Exists(ctx context.Context, key session.Key) (bool, error) {
 	exists, err := c.client.HExists(ctx, c.sessionStateKey(key), key.SessionID).Result()
 	if err != nil {
-		return false, fmt.Errorf("check session exists (v1): %w", err)
+		return false, fmt.Errorf("check session exists (zset): %w", err)
 	}
 	return exists, nil
 }
 
-// ExistsPipelined adds a V1 session existence check to the pipeline.
+// ExistsPipelined adds a ZSet session existence check to the pipeline.
 // Returns the BoolCmd that can be evaluated after pipeline execution.
 func (c *Client) ExistsPipelined(ctx context.Context, pipe redis.Pipeliner, key session.Key) *redis.BoolCmd {
 	return pipe.HExists(ctx, c.sessionStateKey(key), key.SessionID)
 }
 
-// AppendEvent persists an event to V1 storage.
+// AppendEvent persists an event to ZSet storage.
 func (c *Client) AppendEvent(ctx context.Context, key session.Key, event *event.Event) error {
 	stateBytes, err := c.client.HGet(ctx, c.sessionStateKey(key), key.SessionID).Bytes()
 	if err != nil {
-		return fmt.Errorf("get session state (v1) failed: %w", err)
+		return fmt.Errorf("get session state (zset) failed: %w", err)
 	}
 	sessState := &SessionState{}
 	if err := json.Unmarshal(stateBytes, sessState); err != nil {
@@ -230,12 +224,12 @@ func (c *Client) AppendEvent(ctx context.Context, key session.Key, event *event.
 	}
 
 	if _, err := txPipe.Exec(ctx); err != nil {
-		return fmt.Errorf("store event (v1) failed: %w", err)
+		return fmt.Errorf("store event (zset) failed: %w", err)
 	}
 	return nil
 }
 
-// ListSessions lists sessions in V1.
+// ListSessions lists sessions in ZSet.
 func (c *Client) ListSessions(
 	ctx context.Context,
 	key session.UserKey,
@@ -310,15 +304,15 @@ func (c *Client) ListSessions(
 		// Let's pass a slice of 1 map.
 		util.AttachTrackEvents(sess, []map[session.Track][]session.TrackEvent{trackEvents[i]})
 
-		// Inject V1 version tag into ServiceMeta (not persisted, memory only)
-		sess.ServiceMeta = map[string]string{ServiceMetaVersionKey: VersionV1}
+		// Inject ZSet version tag into ServiceMeta (not persisted, memory only)
+		sess.ServiceMeta = map[string]string{util.ServiceMetaStorageTypeKey: util.StorageTypeZset}
 
 		sessList = append(sessList, util.MergeState(appState, userState, sess))
 	}
 	return sessList, nil
 }
 
-// UpdateSessionState updates session state in V1.
+// UpdateSessionState updates session state in ZSet.
 func (c *Client) UpdateSessionState(ctx context.Context, key session.Key, state session.StateMap) error {
 	stateBytes, err := c.client.HGet(ctx, c.sessionStateKey(key), key.SessionID).Bytes()
 	if err == redis.Nil {
@@ -363,7 +357,7 @@ func (c *Client) UpdateSessionState(ctx context.Context, key session.Key, state 
 	return nil
 }
 
-// DeleteSession deletes a session in V1.
+// DeleteSession deletes a session in ZSet.
 func (c *Client) DeleteSession(ctx context.Context, key session.Key) error {
 	txPipe := c.client.TxPipeline()
 	txPipe.HDel(ctx, c.sessionStateKey(key), key.SessionID)
@@ -384,7 +378,7 @@ func (c *Client) DeleteSession(ctx context.Context, key session.Key) error {
 	return nil
 }
 
-// AppendTrackEvent persists a track event to V1 storage.
+// AppendTrackEvent persists a track event to ZSet storage.
 func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEvent *session.TrackEvent) error {
 	stateBytes, err := c.client.HGet(ctx, c.sessionStateKey(key), key.SessionID).Bytes()
 	if err != nil {
@@ -645,7 +639,7 @@ func (c *Client) sessionSummaryKey(key session.Key) string {
 	return c.prefixedKey(fmt.Sprintf("sesssum:{%s}:%s", key.AppName, key.UserID))
 }
 
-// UpdateAppState updates app-level state in V1.
+// UpdateAppState updates app-level state in ZSet.
 func (c *Client) UpdateAppState(ctx context.Context, appName string, state session.StateMap, ttl time.Duration) error {
 	pipe := c.client.TxPipeline()
 	appStateKey := c.appStateKey(appName)
@@ -657,19 +651,19 @@ func (c *Client) UpdateAppState(ctx context.Context, appName string, state sessi
 		pipe.Expire(ctx, appStateKey, ttl)
 	}
 	if _, err := pipe.Exec(ctx); err != nil {
-		return fmt.Errorf("update app state (v1): %w", err)
+		return fmt.Errorf("update app state (zset): %w", err)
 	}
 	return nil
 }
 
-// ListAppStates lists app-level states in V1.
+// ListAppStates lists app-level states in ZSet.
 func (c *Client) ListAppStates(ctx context.Context, appName string) (session.StateMap, error) {
 	appState, err := c.client.HGetAll(ctx, c.appStateKey(appName)).Result()
 	if err == redis.Nil {
 		return make(session.StateMap), nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("list app states (v1): %w", err)
+		return nil, fmt.Errorf("list app states (zset): %w", err)
 	}
 	result := make(session.StateMap)
 	for k, v := range appState {
@@ -678,15 +672,15 @@ func (c *Client) ListAppStates(ctx context.Context, appName string) (session.Sta
 	return result, nil
 }
 
-// DeleteAppState deletes a key from app-level state in V1.
+// DeleteAppState deletes a key from app-level state in ZSet.
 func (c *Client) DeleteAppState(ctx context.Context, appName string, key string) error {
 	if _, err := c.client.HDel(ctx, c.appStateKey(appName), key).Result(); err != nil {
-		return fmt.Errorf("delete app state (v1): %w", err)
+		return fmt.Errorf("delete app state (zset): %w", err)
 	}
 	return nil
 }
 
-// UpdateUserState updates user-level state in V1.
+// UpdateUserState updates user-level state in ZSet.
 func (c *Client) UpdateUserState(ctx context.Context, userKey session.UserKey, state session.StateMap, ttl time.Duration) error {
 	pipe := c.client.TxPipeline()
 	userStateKey := c.userStateKey(session.Key{AppName: userKey.AppName, UserID: userKey.UserID})
@@ -698,19 +692,19 @@ func (c *Client) UpdateUserState(ctx context.Context, userKey session.UserKey, s
 		pipe.Expire(ctx, userStateKey, ttl)
 	}
 	if _, err := pipe.Exec(ctx); err != nil {
-		return fmt.Errorf("update user state (v1): %w", err)
+		return fmt.Errorf("update user state (zset): %w", err)
 	}
 	return nil
 }
 
-// ListUserStates lists user-level states in V1.
+// ListUserStates lists user-level states in ZSet.
 func (c *Client) ListUserStates(ctx context.Context, userKey session.UserKey) (session.StateMap, error) {
 	userState, err := c.client.HGetAll(ctx, c.userStateKey(session.Key{AppName: userKey.AppName, UserID: userKey.UserID})).Result()
 	if err == redis.Nil {
 		return make(session.StateMap), nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("list user states (v1): %w", err)
+		return nil, fmt.Errorf("list user states (zset): %w", err)
 	}
 	result := make(session.StateMap)
 	for k, v := range userState {
@@ -719,10 +713,10 @@ func (c *Client) ListUserStates(ctx context.Context, userKey session.UserKey) (s
 	return result, nil
 }
 
-// DeleteUserState deletes a key from user-level state in V1.
+// DeleteUserState deletes a key from user-level state in ZSet.
 func (c *Client) DeleteUserState(ctx context.Context, userKey session.UserKey, key string) error {
 	if _, err := c.client.HDel(ctx, c.userStateKey(session.Key{AppName: userKey.AppName, UserID: userKey.UserID}), key).Result(); err != nil {
-		return fmt.Errorf("delete user state (v1): %w", err)
+		return fmt.Errorf("delete user state (zset): %w", err)
 	}
 	return nil
 }

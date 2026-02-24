@@ -7,7 +7,7 @@
 //
 //
 
-package v2
+package hashidx
 
 import "github.com/redis/go-redis/v9"
 
@@ -33,7 +33,7 @@ if not metaJSON then
 end
 
 -- 2. Store event data only if shouldStoreEvent is true
--- This matches V1 behavior: only store events with Response != nil && !IsPartial && IsValidContent()
+-- This matches zset behavior: only store events with Response != nil && !IsPartial && IsValidContent()
 if shouldStoreEvent then
     redis.call('HSET', evtDataKey, eventID, eventJSON)
     redis.call('ZADD', evtTimeKey, timestamp, eventID)
@@ -167,9 +167,11 @@ for i = #result, 1, -1 do table.insert(reversed, result[i]) end
 return reversed
 `)
 
-// luaDeleteSession deletes all session data.
-// KEYS[1] = sessionMeta, KEYS[2] = evtdata, KEYS[3] = evtidx:time, KEYS[4] = summary
+// luaDeleteSession deletes all session data including any track keys.
+// KEYS[1..N] = all keys to delete (meta, evtdata, evtidx:time, summary, track keys...)
 var luaDeleteSession = redis.NewScript(`
-redis.call('DEL', KEYS[1], KEYS[2], KEYS[3], KEYS[4])
+if #KEYS > 0 then
+    redis.call('DEL', unpack(KEYS))
+end
 return 1
 `)

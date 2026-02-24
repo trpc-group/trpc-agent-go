@@ -18,25 +18,25 @@ import (
 )
 
 // UpdateAppState updates the state by target scope and key.
-// Note: AppState key is shared between V1 and V2 (no v2 prefix), so no dual-write needed.
+// Note: AppState key is shared between zset and hashidx (no v2 prefix), so no dual-write needed.
 func (s *Service) UpdateAppState(ctx context.Context, appName string, state session.StateMap) error {
 	if appName == "" {
 		return session.ErrAppNameRequired
 	}
-	return s.v2Client.UpdateAppState(ctx, appName, state, s.opts.appStateTTL)
+	return s.hashidxClient.UpdateAppState(ctx, appName, state, s.opts.appStateTTL)
 }
 
 // ListAppStates gets the app states.
-// Note: AppState key is shared between V1 and V2 (no v2 prefix).
+// Note: AppState key is shared between zset and hashidx (no v2 prefix).
 func (s *Service) ListAppStates(ctx context.Context, appName string) (session.StateMap, error) {
 	if appName == "" {
 		return nil, session.ErrAppNameRequired
 	}
-	return s.v2Client.ListAppStates(ctx, appName)
+	return s.hashidxClient.ListAppStates(ctx, appName)
 }
 
 // DeleteAppState deletes the state by target scope and key.
-// Note: AppState key is shared between V1 and V2 (no v2 prefix).
+// Note: AppState key is shared between zset and hashidx (no v2 prefix).
 func (s *Service) DeleteAppState(ctx context.Context, appName string, key string) error {
 	if appName == "" {
 		return session.ErrAppNameRequired
@@ -44,29 +44,29 @@ func (s *Service) DeleteAppState(ctx context.Context, appName string, key string
 	if key == "" {
 		return fmt.Errorf("state key is required")
 	}
-	return s.v2Client.DeleteAppState(ctx, appName, key)
+	return s.hashidxClient.DeleteAppState(ctx, appName, key)
 }
 
 // UpdateUserState updates the state by target scope and key.
-// Note: UserState keys are different between V1 and V2 (V2 uses v2: prefix and different hash tag).
+// Note: UserState keys are different between zset and hashidx (hashidx uses hashidx: prefix and different hash tag).
 func (s *Service) UpdateUserState(ctx context.Context, userKey session.UserKey, state session.StateMap) error {
 	if err := userKey.CheckUserKey(); err != nil {
 		return err
 	}
 
-	// Dual-write mode: write to both V2 and V1
-	if s.needDualWrite() {
-		if err := s.v2Client.UpdateUserState(ctx, userKey, state, s.opts.userStateTTL); err != nil {
+	// Dual-write mode: write to both hashidx and zset
+	if s.dualWriteEnabled() {
+		if err := s.hashidxClient.UpdateUserState(ctx, userKey, state, s.opts.userStateTTL); err != nil {
 			return err
 		}
-		if err := s.v1Client.UpdateUserState(ctx, userKey, state, s.opts.userStateTTL); err != nil {
-			return fmt.Errorf("dual-write user state to V1 failed: %w", err)
+		if err := s.zsetClient.UpdateUserState(ctx, userKey, state, s.opts.userStateTTL); err != nil {
+			return fmt.Errorf("dual-write user state to zset failed: %w", err)
 		}
 		return nil
 	}
 
-	// Legacy or None mode: write to V2 only
-	return s.v2Client.UpdateUserState(ctx, userKey, state, s.opts.userStateTTL)
+	// Legacy or None mode: write to hashidx only
+	return s.hashidxClient.UpdateUserState(ctx, userKey, state, s.opts.userStateTTL)
 }
 
 // ListUserStates lists the state by target scope and key.
@@ -74,17 +74,17 @@ func (s *Service) ListUserStates(ctx context.Context, userKey session.UserKey) (
 	if err := userKey.CheckUserKey(); err != nil {
 		return nil, err
 	}
-	// Try V2 first
-	states, err := s.v2Client.ListUserStates(ctx, userKey)
+	// Try hashidx first
+	states, err := s.hashidxClient.ListUserStates(ctx, userKey)
 	if err != nil {
 		return nil, err
 	}
 	if len(states) > 0 {
 		return states, nil
 	}
-	// Fallback to V1
-	if s.legacyEnabled() {
-		return s.v1Client.ListUserStates(ctx, userKey)
+	// Fallback to zset
+	if s.compatEnabled() {
+		return s.zsetClient.ListUserStates(ctx, userKey)
 	}
 	return states, nil
 }
@@ -97,16 +97,16 @@ func (s *Service) DeleteUserState(ctx context.Context, userKey session.UserKey, 
 	if key == "" {
 		return fmt.Errorf("state key is required")
 	}
-	// Delete from both V2 and V1
-	errV2 := s.v2Client.DeleteUserState(ctx, userKey, key)
-	if s.legacyEnabled() {
-		errV1 := s.v1Client.DeleteUserState(ctx, userKey, key)
-		if errV2 != nil {
-			return errV2
+	// Delete from both hashidx and zset
+	errhashidx := s.hashidxClient.DeleteUserState(ctx, userKey, key)
+	if s.compatEnabled() {
+		errzset := s.zsetClient.DeleteUserState(ctx, userKey, key)
+		if errhashidx != nil {
+			return errhashidx
 		}
-		return errV1
+		return errzset
 	}
-	return errV2
+	return errhashidx
 }
 
 // UpdateSessionState updates the session-level state directly without appending an event.
@@ -125,29 +125,30 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 		}
 	}
 
-	// Check session existence in V1 and V2
-	v1Exists, v2Exists, err := s.checkSessionExists(ctx, key)
+	// Check session existence in zset and hashidx
+	zsetExists, hashidxExists, err := s.checkSessionExists(ctx, key)
 	if err != nil {
 		return fmt.Errorf("check session existence failed: %w", err)
 	}
 
-	// DualWrite mode: update both V1 and V2 if both exist
-	if s.needDualWrite() && v1Exists && v2Exists {
-		if err := s.v2Client.UpdateSessionState(ctx, key, state); err != nil {
-			return fmt.Errorf("update session state in V2 failed: %w", err)
+	// DualWrite mode: update both zset and hashidx if both exist
+	if s.dualWriteEnabled() && zsetExists && hashidxExists {
+		if err := s.hashidxClient.UpdateSessionState(ctx, key, state); err != nil {
+			return fmt.Errorf("update session state in hashidx failed: %w", err)
 		}
-		if err := s.v1Client.UpdateSessionState(ctx, key, state); err != nil {
-			return fmt.Errorf("dual-write session state to V1 failed: %w", err)
+		if err := s.zsetClient.UpdateSessionState(ctx, key, state); err != nil {
+			return fmt.Errorf("dual-write session state to zset failed: %w", err)
 		}
 		return nil
 	}
 
-	// Non-DualWrite or only one side exists: update the existing one
-	if v2Exists {
-		return s.v2Client.UpdateSessionState(ctx, key, state)
+	// Non-DualWrite or only one side exists: update the existing one.
+	// zset first: if zset exists, it's a legacy session.
+	if s.compatEnabled() && zsetExists {
+		return s.zsetClient.UpdateSessionState(ctx, key, state)
 	}
-	if s.legacyEnabled() && v1Exists {
-		return s.v1Client.UpdateSessionState(ctx, key, state)
+	if hashidxExists {
+		return s.hashidxClient.UpdateSessionState(ctx, key, state)
 	}
 
 	return fmt.Errorf("session not found")

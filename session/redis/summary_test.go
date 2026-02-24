@@ -21,7 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-	v2 "trpc.group/trpc-go/trpc-agent-go/session/redis/internal/v2"
+	"trpc.group/trpc-go/trpc-agent-go/session/redis/internal/hashidx"
 )
 
 type fakeSummarizer struct {
@@ -101,8 +101,8 @@ func TestRedisService_GetSessionSummaryText_RedisFallback(t *testing.T) {
 	require.NoError(t, err)
 
 	client := buildRedisClient(t, redisURL)
-	// Use V2 key format: v2.GetSessionSummaryKey with "data" as field
-	err = client.HSet(context.Background(), v2.GetSessionSummaryKey("", key), "data", string(payload)).Err()
+	// Use V2 key format: hashidx.GetSessionSummaryKey with "data" as field
+	err = client.HSet(context.Background(), hashidx.GetSessionSummaryKey("", key), "data", string(payload)).Err()
 	require.NoError(t, err)
 
 	// Local session without summaries should fall back to Redis.
@@ -138,7 +138,7 @@ func TestRedisService_CreateSessionSummary_PersistToRedis(t *testing.T) {
 
 	// Verify Redis stored the map with key "".
 	client := buildRedisClient(t, redisURL)
-	raw, err := client.HGet(context.Background(), v2.GetSessionSummaryKey("", key), "data").Bytes()
+	raw, err := client.HGet(context.Background(), hashidx.GetSessionSummaryKey("", key), "data").Bytes()
 	require.NoError(t, err)
 	var m map[string]*session.Summary
 	require.NoError(t, json.Unmarshal(raw, &m))
@@ -147,7 +147,7 @@ func TestRedisService_CreateSessionSummary_PersistToRedis(t *testing.T) {
 	require.Equal(t, "sum-text", sum.Summary)
 
 	// Verify TTL is set on the summary hash.
-	ttl := client.TTL(context.Background(), v2.GetSessionSummaryKey("", key))
+	ttl := client.TTL(context.Background(), hashidx.GetSessionSummaryKey("", key))
 	require.NoError(t, ttl.Err())
 	require.True(t, ttl.Val() > 0)
 }
@@ -183,7 +183,7 @@ func TestRedisService_CreateSessionSummary_UpdateAndPersist_WithFetchedSession(t
 
 	// Verify Redis has the summary under full-session key.
 	client := buildRedisClient(t, redisURL)
-	raw, err := client.HGet(context.Background(), v2.GetSessionSummaryKey("", key), "data").Bytes()
+	raw, err := client.HGet(context.Background(), hashidx.GetSessionSummaryKey("", key), "data").Bytes()
 	require.NoError(t, err)
 	var m map[string]*session.Summary
 	require.NoError(t, json.Unmarshal(raw, &m))
@@ -212,7 +212,7 @@ func TestRedisService_CreateSessionSummary_SetIfNewer_NoOverride(t *testing.T) {
 
 	client := buildRedisClient(t, redisURL)
 	require.NoError(t, client.HSet(
-		context.Background(), v2.GetSessionSummaryKey("", key), "data", string(payload),
+		context.Background(), hashidx.GetSessionSummaryKey("", key), "data", string(payload),
 	).Err())
 
 	// Create a session and append one event.
@@ -231,7 +231,7 @@ func TestRedisService_CreateSessionSummary_SetIfNewer_NoOverride(t *testing.T) {
 	require.NoError(t, s.CreateSessionSummary(context.Background(), sess, "", false))
 
 	// Read back and ensure value is unchanged.
-	raw, err := client.HGet(context.Background(), v2.GetSessionSummaryKey("", key), "data").Bytes()
+	raw, err := client.HGet(context.Background(), hashidx.GetSessionSummaryKey("", key), "data").Bytes()
 	require.NoError(t, err)
 	var got map[string]*session.Summary
 	require.NoError(t, json.Unmarshal(raw, &got))
@@ -275,7 +275,7 @@ func TestRedisService_EnqueueSummaryJob_AsyncEnabled(t *testing.T) {
 
 	// Verify summary was created in Redis
 	client := buildRedisClient(t, redisURL)
-	raw, err := client.HGet(context.Background(), v2.GetSessionSummaryKey("", key), "data").Bytes()
+	raw, err := client.HGet(context.Background(), hashidx.GetSessionSummaryKey("", key), "data").Bytes()
 	require.NoError(t, err)
 	var m map[string]*session.Summary
 	require.NoError(t, json.Unmarshal(raw, &m))
@@ -316,7 +316,7 @@ func TestRedisService_EnqueueSummaryJob_AsyncDisabled_FallbackToSync(t *testing.
 
 	// Verify summary was created immediately in Redis (sync processing).
 	client := buildRedisClient(t, redisURL)
-	raw, err := client.HGet(context.Background(), v2.GetSessionSummaryKey("", key), "data").Bytes()
+	raw, err := client.HGet(context.Background(), hashidx.GetSessionSummaryKey("", key), "data").Bytes()
 	require.NoError(t, err)
 	var m map[string]*session.Summary
 	require.NoError(t, json.Unmarshal(raw, &m))
@@ -350,7 +350,7 @@ func TestRedisService_EnqueueSummaryJob_NoSummarizer_NoOp(t *testing.T) {
 
 	// Verify no summary was created in Redis
 	client := buildRedisClient(t, redisURL)
-	exists, err := client.HExists(context.Background(), v2.GetSessionSummaryKey("", key), "data").Result()
+	exists, err := client.HExists(context.Background(), hashidx.GetSessionSummaryKey("", key), "data").Result()
 	require.NoError(t, err)
 	require.False(t, exists)
 }
@@ -426,7 +426,7 @@ func TestRedisService_EnqueueSummaryJob_QueueFull_FallbackToSync(t *testing.T) {
 
 	// Verify both branch summary and full summary were created immediately in Redis (sync fallback with cascade)
 	client := buildRedisClient(t, redisURL)
-	raw, err := client.HGet(context.Background(), v2.GetSessionSummaryKey("", key), "data").Bytes()
+	raw, err := client.HGet(context.Background(), hashidx.GetSessionSummaryKey("", key), "data").Bytes()
 	require.NoError(t, err)
 	var m map[string]*session.Summary
 	require.NoError(t, json.Unmarshal(raw, &m))
@@ -484,7 +484,7 @@ func TestRedisService_EnqueueSummaryJob_ConcurrentJobs(t *testing.T) {
 	// Verify all summaries were created
 	client := buildRedisClient(t, redisURL)
 	for _, key := range keys {
-		raw, err := client.HGet(context.Background(), v2.GetSessionSummaryKey("", key), "data").Bytes()
+		raw, err := client.HGet(context.Background(), hashidx.GetSessionSummaryKey("", key), "data").Bytes()
 		require.NoError(t, err)
 		var m map[string]*session.Summary
 		require.NoError(t, json.Unmarshal(raw, &m))
@@ -537,7 +537,7 @@ func TestRedisService_SummaryJobTimeout_CancelsSummarizer(t *testing.T) {
 
 	// Verify no summary was created in Redis.
 	client := buildRedisClient(t, redisURL)
-	exists, err := client.HExists(context.Background(), v2.GetSessionSummaryKey("", key), "data").Result()
+	exists, err := client.HExists(context.Background(), hashidx.GetSessionSummaryKey("", key), "data").Result()
 	require.NoError(t, err)
 	require.False(t, exists)
 }
@@ -581,12 +581,12 @@ func TestRedisService_EnqueueSummaryJob_ChannelClosed_PanicRecovery(t *testing.T
 
 	// Verify summary was created through sync fallback.
 	client := buildRedisClient(t, redisURL)
-	exists, err := client.HExists(context.Background(), v2.GetSessionSummaryKey("", key), "data").Result()
+	exists, err := client.HExists(context.Background(), hashidx.GetSessionSummaryKey("", key), "data").Result()
 	require.NoError(t, err)
 	require.True(t, exists)
 
 	// Verify the summary content.
-	bytes, err := client.HGet(context.Background(), v2.GetSessionSummaryKey("", key), "data").Bytes()
+	bytes, err := client.HGet(context.Background(), hashidx.GetSessionSummaryKey("", key), "data").Bytes()
 	require.NoError(t, err)
 	require.NotEmpty(t, bytes)
 
@@ -642,12 +642,12 @@ func TestRedisService_EnqueueSummaryJob_ChannelClosed_AllChannelsClosed(t *testi
 
 	// Verify summary was created through sync fallback.
 	client := buildRedisClient(t, redisURL)
-	exists, err := client.HExists(context.Background(), v2.GetSessionSummaryKey("", key), "data").Result()
+	exists, err := client.HExists(context.Background(), hashidx.GetSessionSummaryKey("", key), "data").Result()
 	require.NoError(t, err)
 	require.True(t, exists)
 
 	// Verify the summary content.
-	bytes, err := client.HGet(context.Background(), v2.GetSessionSummaryKey("", key), "data").Bytes()
+	bytes, err := client.HGet(context.Background(), hashidx.GetSessionSummaryKey("", key), "data").Bytes()
 	require.NoError(t, err)
 	require.NotEmpty(t, bytes)
 
@@ -714,7 +714,7 @@ func TestRedisService_EnqueueSummaryJob_NoAsyncWorkers_FallbackToSyncWithCascade
 
 	// Verify both branch summary and full summary were created.
 	client := buildRedisClient(t, redisURL)
-	raw, err := client.HGet(context.Background(), v2.GetSessionSummaryKey("", key), "data").Bytes()
+	raw, err := client.HGet(context.Background(), hashidx.GetSessionSummaryKey("", key), "data").Bytes()
 	require.NoError(t, err)
 	var m map[string]*session.Summary
 	require.NoError(t, json.Unmarshal(raw, &m))
@@ -786,7 +786,7 @@ func TestRedisService_EnqueueSummaryJob_SingleFilterKey_PersistsBothKeys(t *test
 
 	// Verify both filterKey summary and full-session summary were created.
 	client := buildRedisClient(t, redisURL)
-	raw, err := client.HGet(context.Background(), v2.GetSessionSummaryKey("", key), "data").Bytes()
+	raw, err := client.HGet(context.Background(), hashidx.GetSessionSummaryKey("", key), "data").Bytes()
 	require.NoError(t, err)
 	var m map[string]*session.Summary
 	require.NoError(t, json.Unmarshal(raw, &m))
@@ -905,7 +905,7 @@ func TestCreateSessionSummary_WithSessionTTL(t *testing.T) {
 
 			// Verify TTL is set on the summary hash if sessionTTL > 0.
 			client := buildRedisClient(t, redisURL)
-			sumKey := v2.GetSessionSummaryKey("", key)
+			sumKey := hashidx.GetSessionSummaryKey("", key)
 			ttl := client.TTL(context.Background(), sumKey)
 
 			if tt.shouldSetTTL {
@@ -957,8 +957,8 @@ func TestRedisService_CreateAndGetSessionSummaryWithKeyPrefix(t *testing.T) {
 	// Verify Redis keys: only prefixed key should exist, unprefixed should not.
 	client := buildRedisClient(t, redisURL)
 	// Use V2 key format
-	prefixedKey := v2.GetSessionSummaryKey(testPrefix, key)
-	unprefixedKey := v2.GetSessionSummaryKey("", key)
+	prefixedKey := hashidx.GetSessionSummaryKey(testPrefix, key)
+	unprefixedKey := hashidx.GetSessionSummaryKey("", key)
 
 	prefixedExists, err := client.HExists(context.Background(), prefixedKey, "data").Result()
 	require.NoError(t, err)

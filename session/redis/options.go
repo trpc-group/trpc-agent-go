@@ -27,26 +27,30 @@ const (
 	defaultSummaryJobTimeout = 60 * time.Second
 )
 
-// CompatMode defines the V1/V2 compatibility mode for the redis session service.
+// CompatMode defines the zset/hashidx compatibility mode for the redis session service.
+// HashIdx is the improved version with separated data and index storage, offering:
+//   - Better scalability: no hot spot on app-level hash tags
+//   - Flexible indexing: supports custom indexes beyond time-based
+//   - Cleaner data structure: Hash for data, ZSet for indexes
 type CompatMode int
 
 const (
-	// CompatModeNone disables V1 compatibility entirely.
-	// - Read: V2 only
-	// - Write: V2 only
-	// Use this when all instances are upgraded and V1 data has expired.
+	// CompatModeNone disables zset compatibility entirely.
+	// - Read: hashidx only
+	// - Write: hashidx only
+	// Use this when all instances are upgraded and zset data has expired.
 	CompatModeNone CompatMode = iota
 
-	// CompatModeLegacy enables V1 read fallback only (no dual-write).
-	// - Read: V2 first, fallback to V1 if not found
-	// - Write: V2 only
-	// Use this after all instances are upgraded but V1 data still exists.
+	// CompatModeLegacy enables zset read fallback only (no dual-write).
+	// - Read: hashidx first, fallback to zset if not found
+	// - Write: hashidx only
+	// Use this after all instances are upgraded but zset data still exists.
 	CompatModeLegacy
 
-	// CompatModeDualWrite enables full V1 compatibility with dual-write.
-	// - Read: V2 first, fallback to V1 if not found
-	// - Write: dual-write to both V2 and V1
-	// Use this during rolling upgrades when old V1-only instances are still running.
+	// CompatModeDualWrite enables full zset compatibility with dual-write.
+	// - Read: hashidx first, fallback to zset if not found
+	// - Write: dual-write to both hashidx and zset
+	// Use this during rolling upgrades when old zset-only instances are still running.
 	// This ensures old instances can read data created by new instances.
 	CompatModeDualWrite
 )
@@ -77,7 +81,7 @@ type ServiceOpts struct {
 	// hooks for session operations.
 	appendEventHooks []session.AppendEventHook
 	getSessionHooks  []session.GetSessionHook
-	// compatMode controls V1/V2 compatibility behavior.
+	// compatMode controls zset/hashidx compatibility behavior.
 	// See CompatMode constants for details.
 	// Default: CompatModeLegacy (safe for most scenarios).
 	compatMode CompatMode
@@ -226,19 +230,19 @@ func WithGetSessionHook(hooks ...session.GetSessionHook) ServiceOpt {
 	}
 }
 
-// WithCompatMode sets the V1/V2 compatibility mode.
+// WithCompatMode sets the zset/hashidx compatibility mode.
 //
 // Available modes:
-//   - CompatModeNone: V2 only, no V1 compatibility
-//   - CompatModeLegacy: V2 first with V1 read fallback (default)
+//   - CompatModeNone: hashidx only, no zset compatibility
+//   - CompatModeLegacy: hashidx first with zset read fallback (default)
 //   - CompatModeDualWrite: Full compatibility with dual-write
 //
 // Migration path:
-//  1. Rolling upgrade: WithCompatMode(CompatModeDualWrite) - old V1 instances can read new data
-//  2. All upgraded: WithCompatMode(CompatModeLegacy) - stop dual-write, keep V1 read fallback
-//  3. V1 TTL expired: WithCompatMode(CompatModeNone) - pure V2 mode
+//  1. Rolling upgrade: WithCompatMode(CompatModeDualWrite) - old zset instances can read new data
+//  2. All upgraded: WithCompatMode(CompatModeLegacy) - stop dual-write, keep zset read fallback
+//  3. zset TTL expired: WithCompatMode(CompatModeNone) - pure hashidx mode
 //
-// Default: CompatModeLegacy (safe for most scenarios where V1 data may still exist).
+// Default: CompatModeLegacy (safe for most scenarios where zset data may still exist).
 func WithCompatMode(mode CompatMode) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.compatMode = mode
@@ -246,9 +250,9 @@ func WithCompatMode(mode CompatMode) ServiceOpt {
 }
 
 // WithKeyPrefix sets the key prefix for all Redis keys.
-// Both V1 and V2 keys will use this prefix:
-//   - V1: prefix:sess:{app}:user, prefix:event:{app}:user:sess, etc.
-//   - V2: prefix:v2:meta:{app:user}:sess, prefix:v2:evtdata:{app:user}:sess, etc.
+// Both zset and hashidx keys will use this prefix:
+//   - zset: prefix:sess:{app}:user, prefix:event:{app}:user:sess, etc.
+//   - hashidx: prefix:hashidx:meta:{app:user}:sess, prefix:hashidx:evtdata:{app:user}:sess, etc.
 //
 // This is typically used to namespace keys when multiple applications share the same Redis instance.
 func WithKeyPrefix(prefix string) ServiceOpt {

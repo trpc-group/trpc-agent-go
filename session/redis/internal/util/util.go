@@ -21,6 +21,15 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
+const (
+	// ServiceMetaStorageTypeKey is the key in Session.ServiceMeta to store the data version.
+	ServiceMetaStorageTypeKey = "storage_type"
+	// StorageTypeHashIdx indicates the session is stored in HashIdx format.
+	StorageTypeHashIdx = "hashidx"
+	// StorageTypeZset indicates the session is stored in Hash format.
+	StorageTypeZset = "zset"
+)
+
 // ProcessStateCmd processes a HGetAll command result into a StateMap.
 func ProcessStateCmd(cmd *redis.MapStringStringCmd) (session.StateMap, error) {
 	bytes, err := cmd.Result()
@@ -120,7 +129,7 @@ func AttachSummaries(sess *session.Session, summariesCmd *redis.StringCmd) {
 // Summary Storage
 // =============================================================================
 //
-// Summary Data Structure (shared by V1 and V2):
+// Summary Data Structure (shared by zset and hashidx):
 //
 //	Redis Type: Hash
 //	Hash Field -> Value: JSON encoded map[filterKey]*session.Summary
@@ -138,15 +147,15 @@ func AttachSummaries(sess *session.Session, summariesCmd *redis.StringCmd) {
 //	  }
 //	}
 //
-// V1 Summary Key:
+// zset Summary Key (legacy):
 //
 //	Key:    sesssum:{appName}:{userID}     (or {prefix}:sesssum:{appName}:{userID})
 //	Field:  sessionID
 //	Hash Tag: {appName} -> all users of same app in one slot (hot spot issue)
 //
-// V2 Summary Key:
+// hashidx Summary Key (improved):
 //
-//	Key:    v2:sesssum:{appName:userID}:sessionID
+//	Key:    hashidx:sesssum:{appName:userID}:sessionID
 //	Field:  "data" (fixed)
 //	Hash Tag: {appName:userID} -> distributed by user (no hot spot)
 //
