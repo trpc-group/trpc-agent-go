@@ -84,7 +84,15 @@ plugins:
                 - Artifact: artifact.md
                 - Skill: skill.md
                 - Tool: tool.md
-                - Session: session.md
+                - Session:
+                    - Overview: session/index.md
+                    - Memory: session/inmemory.md
+                    - Redis: session/redis.md
+                    - PostgreSQL: session/postgres.md
+                    - MySQL: session/mysql.md
+                    - ClickHouse: session/clickhouse.md
+                    - Summary: session/summary.md
+                    - Track: session/track.md
                 - Knowledge:
                     - 概述: knowledge/index.md
                     - Embedder: knowledge/embedder.md
