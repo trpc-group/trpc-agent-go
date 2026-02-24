@@ -56,6 +56,18 @@ message.
 The bot will forward inbound text to the gateway and send the final
 reply back to Telegram.
 
+### Telegram polling offset
+
+This demo stores the Telegram `getUpdates` offset on disk so restarts
+can resume from the last processed update.
+
+- Default state dir: `$HOME/.trpc-agent-go/openclaw`
+- Override with: `-state-dir`
+
+On the first run (when no offset file exists), the poller drains pending
+updates by default to avoid replying to very old messages. You can
+disable this behavior with `-telegram-start-from-latest=false`.
+
 ## Safety knobs
 
 ### Allowlist
@@ -98,6 +110,21 @@ go run ./cmd/openclaw \
   -mention "@mybot,/agent"
 ```
 
+### Local code execution (unsafe)
+
+This demo can optionally enable the local code execution tool for the
+agent. This is **unsafe** when exposed to external inputs (Telegram,
+webhook traffic).
+
+It is disabled by default. To enable:
+
+```bash
+go run ./cmd/openclaw \
+  -mode openai \
+  -telegram-token "$TELEGRAM_BOT_TOKEN" \
+  -enable-local-exec
+```
+
 ## Skills
 
 By default, the binary loads skills from `./skills`. A minimal example
@@ -109,4 +136,3 @@ example:
 ```
 List available skills, then run the hello skill.
 ```
-

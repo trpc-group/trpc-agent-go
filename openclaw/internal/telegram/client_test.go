@@ -93,6 +93,7 @@ func TestClient_SendMessage(t *testing.T) {
 
 	const (
 		testChatID   = int64(42)
+		testThreadID = 7
 		testReplyTo  = 100
 		testReplyMsg = "hello"
 	)
@@ -110,6 +111,7 @@ func TestClient_SendMessage(t *testing.T) {
 		var payload sendMessageRequest
 		require.NoError(t, json.Unmarshal(raw, &payload))
 		require.Equal(t, testChatID, payload.ChatID)
+		require.Equal(t, testThreadID, payload.MessageThreadID)
 		require.Equal(t, testReplyTo, payload.ReplyToMessageID)
 		require.Equal(t, testReplyMsg, payload.Text)
 		require.True(t, payload.DisableWebPagePrev)
@@ -133,9 +135,12 @@ func TestClient_SendMessage(t *testing.T) {
 
 	msg, err := c.SendMessage(
 		context.Background(),
-		testChatID,
-		testReplyTo,
-		testReplyMsg,
+		SendMessageParams{
+			ChatID:           testChatID,
+			MessageThreadID:  testThreadID,
+			ReplyToMessageID: testReplyTo,
+			Text:             testReplyMsg,
+		},
 	)
 	require.NoError(t, err)
 	require.Equal(t, 101, msg.MessageID)

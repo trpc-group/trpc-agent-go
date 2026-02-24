@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -26,8 +25,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/server/gateway"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/channel"
+	tgch "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/channel/telegram"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gwclient"
-	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
 )
 
 const (
@@ -43,14 +43,6 @@ const (
 	defaultSkillsDir = "skills"
 
 	csvDelimiter = ","
-)
-
-const (
-	channelTelegram = "telegram"
-
-	telegramRequestIDPrefix = "telegram:"
-
-	telegramMaxReplyRunes = 4000
 )
 
 func main() {
@@ -74,6 +66,11 @@ func main() {
 		"",
 		"Telegram bot token; empty disables Telegram",
 	)
+	telegramStartFromLatest := flag.Bool(
+		"telegram-start-from-latest",
+		true,
+		"Drain pending updates on first start (no offset)",
+	)
 	allowUsers := flag.String(
 		"allow-users",
 		"",
@@ -94,6 +91,16 @@ func main() {
 		"",
 		"Skills root directory (default: ./skills)",
 	)
+	stateDir := flag.String(
+		"state-dir",
+		"",
+		"State dir for offsets (default: $HOME/.trpc-agent-go/openclaw)",
+	)
+	enableLocalExec := flag.Bool(
+		"enable-local-exec",
+		false,
+		"Enable local code execution tool (unsafe)",
+	)
 	flag.Parse()
 
 	ctx, stop := signal.NotifyContext(
@@ -103,17 +110,33 @@ func main() {
 	)
 	defer stop()
 
-	telegramClient, botMention, err := setupTelegram(
-		ctx,
-		*telegramToken,
+	var (
+		telegramBot tgch.BotInfo
+		err         error
 	)
-	if err != nil {
-		log.Fatalf("setup telegram failed: %v", err)
+	if strings.TrimSpace(*telegramToken) != "" {
+		telegramBot, err = tgch.ProbeBotInfo(ctx, *telegramToken)
+		if err != nil {
+			log.Fatalf("probe telegram bot failed: %v", err)
+		}
+
+		if strings.TrimSpace(telegramBot.Username) != "" {
+			log.Infof(
+				"Telegram enabled as @%s",
+				telegramBot.Username,
+			)
+		} else if telegramBot.ID != 0 {
+			log.Infof("Telegram enabled as id %d", telegramBot.ID)
+		} else {
+			log.Infof("Telegram enabled")
+		}
 	}
 
 	mentionPatterns := splitCSV(*mention)
-	if *requireMention && len(mentionPatterns) == 0 && botMention != "" {
-		mentionPatterns = []string{botMention}
+	if *requireMention &&
+		len(mentionPatterns) == 0 &&
+		telegramBot.Mention != "" {
+		mentionPatterns = []string{telegramBot.Mention}
 	}
 
 	mdl, err := newModel(*modelMode, *openAIModel)
@@ -121,7 +144,7 @@ func main() {
 		log.Fatalf("create model failed: %v", err)
 	}
 
-	llm, err := newAgent(mdl, *skillsRoot)
+	llm, err := newAgent(mdl, *skillsRoot, *enableLocalExec)
 	if err != nil {
 		log.Fatalf("create agent failed: %v", err)
 	}
@@ -160,9 +183,25 @@ func main() {
 		errCh <- httpSrv.ListenAndServe()
 	}()
 
-	if telegramClient != nil {
+	var channels []channel.Channel
+	if strings.TrimSpace(*telegramToken) != "" {
+		ch, err := tgch.New(
+			*telegramToken,
+			telegramBot,
+			gw,
+			tgch.WithStateDir(*stateDir),
+			tgch.WithStartFromLatest(*telegramStartFromLatest),
+		)
+		if err != nil {
+			log.Fatalf("create telegram channel failed: %v", err)
+		}
+		channels = append(channels, ch)
+	}
+
+	for _, ch := range channels {
+		ch := ch
 		go func() {
-			errCh <- runTelegram(ctx, telegramClient, gw)
+			errCh <- ch.Run(ctx)
 		}()
 	}
 
@@ -184,33 +223,6 @@ func main() {
 	_ = r.Close()
 }
 
-func setupTelegram(
-	ctx context.Context,
-	token string,
-) (*telegram.Client, string, error) {
-	if strings.TrimSpace(token) == "" {
-		return nil, "", nil
-	}
-
-	c, err := telegram.New(token)
-	if err != nil {
-		return nil, "", err
-	}
-
-	me, err := c.GetMe(ctx)
-	if err != nil {
-		return nil, "", err
-	}
-
-	mention := ""
-	if strings.TrimSpace(me.Username) != "" {
-		mention = "@" + strings.TrimSpace(me.Username)
-	}
-
-	log.Infof("Telegram enabled as @%s", me.Username)
-	return c, mention, nil
-}
-
 func makeGatewayOptions(
 	users []string,
 	requireMention bool,
@@ -229,7 +241,11 @@ func makeGatewayOptions(
 	return opts
 }
 
-func newAgent(mdl model.Model, skillsRoot string) (agent.Agent, error) {
+func newAgent(
+	mdl model.Model,
+	skillsRoot string,
+	enableLocalExec bool,
+) (agent.Agent, error) {
 	opts := []llmagent.Option{
 		llmagent.WithModel(mdl),
 		llmagent.WithInstruction(
@@ -247,13 +263,11 @@ func newAgent(mdl model.Model, skillsRoot string) (agent.Agent, error) {
 		return nil, err
 	}
 
-	exec := localexec.New()
-
-	opts = append(
-		opts,
-		llmagent.WithSkills(repo),
-		llmagent.WithCodeExecutor(exec),
-	)
+	opts = append(opts, llmagent.WithSkills(repo))
+	if enableLocalExec {
+		exec := localexec.New()
+		opts = append(opts, llmagent.WithCodeExecutor(exec))
+	}
 
 	return llmagent.New("assistant", opts...), nil
 }
@@ -269,82 +283,6 @@ func newModel(mode string, openAIModel string) (model.Model, error) {
 	}
 }
 
-func runTelegram(
-	ctx context.Context,
-	client *telegram.Client,
-	gw *gwclient.Client,
-) error {
-	poller, err := telegram.NewPoller(
-		client,
-		telegram.WithMessageHandler(func(
-			ctx context.Context,
-			msg telegram.Message,
-		) error {
-			return handleTelegramMessage(ctx, client, gw, msg)
-		}),
-	)
-	if err != nil {
-		return err
-	}
-	return poller.Run(ctx)
-}
-
-func handleTelegramMessage(
-	ctx context.Context,
-	client *telegram.Client,
-	gw *gwclient.Client,
-	msg telegram.Message,
-) error {
-	if msg.Chat == nil || msg.From == nil {
-		return nil
-	}
-
-	chatID := msg.Chat.ID
-	fromID := strconv.FormatInt(msg.From.ID, 10)
-	thread := ""
-	if telegram.IsGroupChat(strings.TrimSpace(msg.Chat.Type)) {
-		thread = strconv.FormatInt(chatID, 10)
-	}
-
-	requestID := fmt.Sprintf(
-		"%s%d:%d",
-		telegramRequestIDPrefix,
-		chatID,
-		msg.MessageID,
-	)
-
-	rsp, err := gw.SendMessage(ctx, gwclient.MessageRequest{
-		Channel:   channelTelegram,
-		From:      fromID,
-		Thread:    thread,
-		MessageID: strconv.Itoa(msg.MessageID),
-		Text:      msg.Text,
-		UserID:    fromID,
-		RequestID: requestID,
-	})
-	if err != nil {
-		log.WarnfContext(ctx, "telegram: gateway error: %v", err)
-		return nil
-	}
-	if rsp.Ignored || strings.TrimSpace(rsp.Reply) == "" {
-		return nil
-	}
-
-	parts := splitRunes(rsp.Reply, telegramMaxReplyRunes)
-	for i, part := range parts {
-		replyTo := 0
-		if i == 0 {
-			replyTo = msg.MessageID
-		}
-		_, err := client.SendMessage(ctx, chatID, replyTo, part)
-		if err != nil {
-			log.WarnfContext(ctx, "telegram: send message: %v", err)
-			return nil
-		}
-	}
-	return nil
-}
-
 func splitCSV(input string) []string {
 	if strings.TrimSpace(input) == "" {
 		return nil
@@ -357,27 +295,6 @@ func splitCSV(input string) []string {
 			continue
 		}
 		out = append(out, part)
-	}
-	return out
-}
-
-func splitRunes(text string, maxRunes int) []string {
-	if maxRunes <= 0 {
-		return []string{text}
-	}
-	runes := []rune(text)
-	if len(runes) <= maxRunes {
-		return []string{text}
-	}
-
-	out := make([]string, 0, (len(runes)/maxRunes)+1)
-	for len(runes) > 0 {
-		n := maxRunes
-		if len(runes) < n {
-			n = len(runes)
-		}
-		out = append(out, string(runes[:n]))
-		runes = runes[n:]
 	}
 	return out
 }

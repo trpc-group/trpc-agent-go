@@ -32,6 +32,14 @@ type Client struct {
 	httpClient *http.Client
 }
 
+// SendMessageParams contains parameters for SendMessage.
+type SendMessageParams struct {
+	ChatID           int64
+	MessageThreadID  int
+	ReplyToMessageID int
+	Text             string
+}
+
 // Option configures the Telegram client.
 type Option func(*Client)
 
@@ -116,14 +124,13 @@ func (c *Client) GetUpdates(
 // SendMessage sends a message to a chat.
 func (c *Client) SendMessage(
 	ctx context.Context,
-	chatID int64,
-	replyToMessageID int,
-	text string,
+	params SendMessageParams,
 ) (Message, error) {
 	req := sendMessageRequest{
-		ChatID:             chatID,
-		Text:               text,
-		ReplyToMessageID:   replyToMessageID,
+		ChatID:             params.ChatID,
+		Text:               params.Text,
+		MessageThreadID:    params.MessageThreadID,
+		ReplyToMessageID:   params.ReplyToMessageID,
 		DisableWebPagePrev: true,
 	}
 
@@ -152,6 +159,7 @@ type apiResponse[T any] struct {
 type sendMessageRequest struct {
 	ChatID             int64  `json:"chat_id"`
 	Text               string `json:"text"`
+	MessageThreadID    int    `json:"message_thread_id,omitempty"`
 	ReplyToMessageID   int    `json:"reply_to_message_id,omitempty"`
 	DisableWebPagePrev bool   `json:"disable_web_page_preview,omitempty"`
 }

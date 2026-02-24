@@ -12,10 +12,11 @@ type Update struct {
 //
 // Telegram docs: core.telegram.org/bots/api#message
 type Message struct {
-	MessageID int    `json:"message_id"`
-	From      *User  `json:"from,omitempty"`
-	Chat      *Chat  `json:"chat,omitempty"`
-	Text      string `json:"text,omitempty"`
+	MessageID       int    `json:"message_id"`
+	MessageThreadID int    `json:"message_thread_id,omitempty"`
+	From            *User  `json:"from,omitempty"`
+	Chat            *Chat  `json:"chat,omitempty"`
+	Text            string `json:"text,omitempty"`
 }
 
 // User is a Telegram user.
