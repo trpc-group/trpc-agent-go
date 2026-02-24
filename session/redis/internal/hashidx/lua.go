@@ -15,6 +15,9 @@ import "github.com/redis/go-redis/v9"
 // KEYS[1] = sessionMeta key, KEYS[2] = evtdata key, KEYS[3] = evtidx:time key
 // ARGV[1] = eventID, ARGV[2] = eventJSON, ARGV[3] = timestamp, ARGV[4] = TTL (seconds), ARGV[5] = shouldStoreEvent (1 or 0)
 // Returns: 1 on success, 0 if session not found
+//
+// Note on TTL: Only evtdata and evtidx:time keys have TTL set here (they may be newly created
+// by HSET/ZADD and need an initial TTL). sessionMeta TTL is managed by GetSession/CreateSession.
 var luaAppendEvent = redis.NewScript(`
 local sessionMetaKey = KEYS[1]
 local evtDataKey = KEYS[2]
@@ -37,6 +40,11 @@ end
 if shouldStoreEvent then
     redis.call('HSET', evtDataKey, eventID, eventJSON)
     redis.call('ZADD', evtTimeKey, timestamp, eventID)
+    -- Set TTL for event keys (they may be newly created and need an initial TTL)
+    if ttl > 0 then
+        redis.call('EXPIRE', evtDataKey, ttl)
+        redis.call('EXPIRE', evtTimeKey, ttl)
+    end
 end
 
 -- 3. Apply StateDelta to session meta's state (always, regardless of shouldStoreEvent)
@@ -44,22 +52,13 @@ local evt = cjson.decode(eventJSON)
 local stateDelta = evt.stateDelta
 if stateDelta and next(stateDelta) ~= nil then
     local meta = cjson.decode(metaJSON)
-    if not meta.state then
+    if not meta.state or type(meta.state) ~= 'table' then
         meta.state = {}
     end
     for k, v in pairs(stateDelta) do
         meta.state[k] = v
     end
-    redis.call('SET', sessionMetaKey, cjson.encode(meta))
-end
-
--- 4. Unified TTL refresh
-if ttl > 0 then
-    redis.call('EXPIRE', sessionMetaKey, ttl)
-    if shouldStoreEvent then
-        redis.call('EXPIRE', evtDataKey, ttl)
-        redis.call('EXPIRE', evtTimeKey, ttl)
-    end
+    redis.call('SET', sessionMetaKey, cjson.encode(meta), 'KEEPTTL')
 end
 
 return 1

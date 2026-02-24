@@ -777,16 +777,18 @@ func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEve
 
 	trackKey := c.keys.TrackKey(key, trackEvent.Track)
 
-	// Use pipeline for atomic update
+	// Use pipeline for atomic update.
+	// sessionMeta TTL is preserved via KeepTTL (already set by GetSession/CreateSession).
+	// trackKey may be newly created, so it needs an explicit TTL.
 	pipe := c.client.TxPipeline()
-	// Update session meta (includes tracks list in state)
-	pipe.Set(ctx, c.keys.SessionMetaKey(key), updatedMetaJSON, c.cfg.SessionTTL)
+	// Update session meta (includes tracks list in state), keep existing TTL
+	pipe.Set(ctx, c.keys.SessionMetaKey(key), updatedMetaJSON, redis.KeepTTL)
 	// Add track event to ZSet
 	pipe.ZAdd(ctx, trackKey, redis.Z{
 		Score:  float64(trackEvent.Timestamp.UnixNano()),
 		Member: eventJSON,
 	})
-	// Set TTL for track key
+	// Set TTL for track key (may be newly created)
 	if c.cfg.SessionTTL > 0 {
 		pipe.Expire(ctx, trackKey, c.cfg.SessionTTL)
 	}
