@@ -325,6 +325,54 @@ func TestFlow_Run_RecoversPanic(t *testing.T) {
 	require.Contains(t, errorEvent.Error.Message, flowRunPanicTestMsg)
 }
 
+const flowRunPanicTestUnknownValue = 123
+
+func TestRecoverFlowRunPanic_NoPanic(t *testing.T) {
+	func() {
+		defer recoverFlowRunPanic(context.Background(), nil, nil)
+	}()
+}
+
+func TestRecoverFlowRunPanic_RePanicsUnknownType(t *testing.T) {
+	require.PanicsWithValue(
+		t,
+		flowRunPanicTestUnknownValue,
+		func() {
+			defer recoverFlowRunPanic(context.Background(), nil, nil)
+			panic(flowRunPanicTestUnknownValue)
+		},
+	)
+}
+
+func TestFlowPanicValue(t *testing.T) {
+	errorVal, ok := flowPanicValue(errors.New(flowRunPanicTestMsg))
+	require.True(t, ok)
+
+	errorPanic, ok := errorVal.(error)
+	require.True(t, ok)
+	require.Equal(t, flowRunPanicTestMsg, errorPanic.Error())
+
+	stringVal, ok := flowPanicValue(flowRunPanicTestMsg)
+	require.True(t, ok)
+	require.Equal(t, flowRunPanicTestMsg, stringVal)
+
+	unknownVal, ok := flowPanicValue(flowRunPanicTestUnknownValue)
+	require.False(t, ok)
+	require.Nil(t, unknownVal)
+}
+
+func TestFlowInvocationIDAndAgentName(t *testing.T) {
+	require.Equal(t, "", flowInvocationID(nil))
+	require.Equal(t, "", flowAgentName(nil))
+
+	invocation := &agent.Invocation{
+		InvocationID: "test-invocation",
+		AgentName:    "test-agent",
+	}
+	require.Equal(t, invocation.InvocationID, flowInvocationID(invocation))
+	require.Equal(t, invocation.AgentName, flowAgentName(invocation))
+}
+
 func TestModelCallbacks_BeforeSkip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
