@@ -53,6 +53,16 @@ const (
 	defaultSkillsDir = "skills"
 
 	csvDelimiter = ","
+
+	openAIVariantAuto = "auto"
+
+	defaultOpenAIVariant = openAIVariantAuto
+
+	deepSeekModelHint = "deepseek"
+	qwenModelHint     = "qwen"
+	hunyuanModelHint  = "hunyuan"
+
+	openAIBaseURLEnvName = "OPENAI_BASE_URL"
 )
 
 func main() {
@@ -70,6 +80,11 @@ func main() {
 		"model",
 		defaultOpenAIModel,
 		"OpenAI model name (mode=openai)",
+	)
+	openAIVariant := flag.String(
+		"openai-variant",
+		defaultOpenAIVariant,
+		"OpenAI variant: auto, openai, deepseek, qwen, hunyuan",
 	)
 	telegramToken := flag.String(
 		"telegram-token",
@@ -149,7 +164,7 @@ func main() {
 		mentionPatterns = []string{telegramBot.Mention}
 	}
 
-	mdl, err := newModel(*modelMode, *openAIModel)
+	mdl, err := newModel(*modelMode, *openAIModel, *openAIVariant)
 	if err != nil {
 		log.Fatalf("create model failed: %v", err)
 	}
@@ -282,14 +297,62 @@ func newAgent(
 	return llmagent.New("assistant", opts...), nil
 }
 
-func newModel(mode string, openAIModel string) (model.Model, error) {
+func newModel(
+	mode string,
+	openAIModel string,
+	openAIVariant string,
+) (model.Model, error) {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case modeMock:
 		return &echoModel{name: "mock-echo"}, nil
 	case modeOpenAI:
-		return openai.New(openAIModel), nil
+		variant, err := parseOpenAIVariant(openAIVariant, openAIModel)
+		if err != nil {
+			return nil, err
+		}
+		opts := []openai.Option{openai.WithVariant(variant)}
+		baseURL := strings.TrimSpace(os.Getenv(openAIBaseURLEnvName))
+		if baseURL != "" {
+			opts = append(opts, openai.WithBaseURL(baseURL))
+		}
+		return openai.New(openAIModel, opts...), nil
 	default:
 		return nil, fmt.Errorf("unsupported mode: %s", mode)
+	}
+}
+
+func parseOpenAIVariant(
+	raw string,
+	modelName string,
+) (openai.Variant, error) {
+	v := strings.ToLower(strings.TrimSpace(raw))
+	if v == "" || v == openAIVariantAuto {
+		return inferOpenAIVariant(modelName), nil
+	}
+
+	variant := openai.Variant(v)
+	switch variant {
+	case openai.VariantOpenAI,
+		openai.VariantDeepSeek,
+		openai.VariantHunyuan,
+		openai.VariantQwen:
+		return variant, nil
+	default:
+		return "", fmt.Errorf("unsupported openai variant: %s", raw)
+	}
+}
+
+func inferOpenAIVariant(modelName string) openai.Variant {
+	name := strings.ToLower(strings.TrimSpace(modelName))
+	switch {
+	case strings.Contains(name, deepSeekModelHint):
+		return openai.VariantDeepSeek
+	case strings.Contains(name, qwenModelHint):
+		return openai.VariantQwen
+	case strings.Contains(name, hunyuanModelHint):
+		return openai.VariantHunyuan
+	default:
+		return openai.VariantOpenAI
 	}
 }
 

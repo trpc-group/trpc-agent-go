@@ -26,6 +26,33 @@ go run .
 
 The server listens on `:8080` by default.
 
+## Run with a real model (DeepSeek)
+
+This example defaults to the model name `deepseek-chat`.
+
+Set the DeepSeek API key, then start the server in `openai` mode:
+
+```bash
+export DEEPSEEK_API_KEY="your-api-key"
+go run . -mode openai
+```
+
+If you already use the OpenAI-compatible environment variables, this also works:
+
+```bash
+export OPENAI_API_KEY="your-api-key"
+export OPENAI_BASE_URL="https://api.deepseek.com/v1"
+go run . -mode openai
+```
+
+By default, `-openai-variant` is `auto` and is inferred from `-model`.
+You can override it explicitly:
+
+```bash
+export OPENAI_API_KEY="your-api-key"
+go run . -mode openai -openai-variant openai -model gpt-4o-mini
+```
+
 ## Send a message (curl)
 
 ```bash
@@ -128,4 +155,3 @@ curl http://localhost:8080/v1/gateway/cancel \
   -H "Content-Type: application/json" \
   -d '{"request_id":"req-demo-1"}'
 ```
-

@@ -28,7 +28,10 @@ import (
 
 ag := llmagent.New(
     "assistant",
-    llmagent.WithModel(openai.New("deepseek-chat")),
+    llmagent.WithModel(openai.New(
+        "deepseek-chat",
+        openai.WithVariant(openai.VariantDeepSeek),
+    )),
 )
 
 r := runner.NewRunner("gateway-demo", ag)
@@ -39,6 +42,14 @@ _ = http.ListenAndServe(":8080", srv.Handler())
 
 A complete runnable example is available at
 [examples/gateway](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/gateway).
+
+An OpenClaw-like demo binary (Telegram long polling + HTTP gateway) is
+available at
+[openclaw](https://github.com/trpc-group/trpc-agent-go/tree/main/openclaw).
+
+Note: for DeepSeek, the `model/openai` implementation reads `DEEPSEEK_API_KEY`
+and defaults to `https://api.deepseek.com` when you set
+`openai.WithVariant(openai.VariantDeepSeek)`.
 
 ## Endpoints
 

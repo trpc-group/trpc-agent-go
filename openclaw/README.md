@@ -36,6 +36,49 @@ curl -sS 'http://127.0.0.1:8080/v1/gateway/messages' \
   -d '{"from":"alice","text":"Hello"}'
 ```
 
+## Run with a real model (DeepSeek)
+
+This demo uses the `model/openai` implementation with provider variants.
+
+For DeepSeek:
+
+```bash
+export DEEPSEEK_API_KEY="your-api-key"
+
+cd openclaw
+go run ./cmd/openclaw \
+  -mode openai \
+  -model deepseek-chat \
+  -http-addr :8080
+```
+
+If you already use the OpenAI-compatible environment variables, this also works:
+
+```bash
+export OPENAI_API_KEY="your-api-key"
+export OPENAI_BASE_URL="https://api.deepseek.com/v1"
+
+cd openclaw
+go run ./cmd/openclaw \
+  -mode openai \
+  -model deepseek-chat \
+  -http-addr :8080
+```
+
+By default, `-openai-variant` is `auto` and is inferred from `-model`.
+You can override it explicitly:
+
+```bash
+export OPENAI_API_KEY="your-api-key"
+
+cd openclaw
+go run ./cmd/openclaw \
+  -mode openai \
+  -openai-variant openai \
+  -model gpt-4o-mini \
+  -http-addr :8080
+```
+
 ## Enable Telegram
 
 1) Create a bot via `@BotFather` and get a token.
@@ -99,6 +142,8 @@ go run ./cmd/openclaw \
 
 When `-require-mention` is set and `-mention` is empty, this demo uses
 `@<bot_username>` as the default mention pattern.
+
+If Telegram is disabled (HTTP-only), you must provide `-mention` explicitly.
 
 To override patterns:
 
