@@ -87,7 +87,7 @@ the full body/docs.
 Enable tool-result materialization with:
 `llmagent.WithSkillsLoadedContentInToolResults(true)`.
 To restore the legacy fallback behavior in summary mode:
-`llmagent.WithDisableSkillsFallbackOnSessionSummary(false)`.
+`llmagent.WithSkipSkillsFallbackOnSessionSummary(false)`.
 
 To measure the impact in a real tool-using flow, run the
 `benchmark/anthropic_skills` `prompt-cache` suite.

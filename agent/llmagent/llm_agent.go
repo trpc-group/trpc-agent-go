@@ -320,7 +320,8 @@ func appendPostToolProcessor(options *Options, requestProcessors []flow.RequestP
 }
 
 func appendSkillsToolResultProcessor(options *Options, requestProcessors []flow.RequestProcessor) []flow.RequestProcessor {
-	if options.skillsRepository == nil || !options.SkillsLoadedContentInToolResults {
+	if options.skillsRepository == nil ||
+		!options.SkillsLoadedContentInToolResults {
 		return requestProcessors
 	}
 	skillsToolResultProcessor :=
@@ -329,8 +330,8 @@ func appendSkillsToolResultProcessor(options *Options, requestProcessors []flow.
 			processor.WithSkillsToolResultLoadMode(
 				options.SkillLoadMode,
 			),
-			processor.WithDisableSkillsFallbackOnSessionSummary(
-				options.DisableSkillsFallbackOnSessionSummary,
+			processor.WithSkipSkillsFallbackOnSessionSummary(
+				options.SkipSkillsFallbackOnSessionSummary,
 			),
 		)
 	return append(requestProcessors, skillsToolResultProcessor)

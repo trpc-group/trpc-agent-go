@@ -677,7 +677,7 @@ func TestSkillsToolResultRequestProcessor_SessionSummary_AllowsFallback(
 	p := NewSkillsToolResultRequestProcessor(
 		repo,
 		WithSkillsToolResultLoadMode(SkillLoadModeSession),
-		WithDisableSkillsFallbackOnSessionSummary(false),
+		WithSkipSkillsFallbackOnSessionSummary(false),
 	)
 	p.ProcessRequest(context.Background(), inv, req, nil)
 

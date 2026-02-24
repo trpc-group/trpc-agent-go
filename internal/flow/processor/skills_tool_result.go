@@ -31,8 +31,8 @@ const (
 )
 
 type skillsToolResultProcessorOptions struct {
-	loadMode                        string
-	disableFallbackOnSessionSummary bool
+	loadMode                     string
+	skipFallbackOnSessionSummary bool
 }
 
 // SkillsToolResultRequestProcessorOption configures
@@ -56,16 +56,16 @@ func WithSkillsToolResultLoadMode(
 	}
 }
 
-// WithDisableSkillsFallbackOnSessionSummary controls whether the processor
+// WithSkipSkillsFallbackOnSessionSummary controls whether the processor
 // skips the "Loaded skill context" system-message fallback when a session
 // summary is present in the request.
 //
 // Default: true.
-func WithDisableSkillsFallbackOnSessionSummary(
-	disable bool,
+func WithSkipSkillsFallbackOnSessionSummary(
+	skip bool,
 ) SkillsToolResultRequestProcessorOption {
 	return func(o *skillsToolResultProcessorOptions) {
-		o.disableFallbackOnSessionSummary = disable
+		o.skipFallbackOnSessionSummary = skip
 	}
 }
 
@@ -83,7 +83,7 @@ type SkillsToolResultRequestProcessor struct {
 	repo     skill.Repository
 	loadMode string
 
-	disableFallbackOnSessionSummary bool
+	skipFallbackOnSessionSummary bool
 }
 
 // NewSkillsToolResultRequestProcessor creates a processor instance.
@@ -92,7 +92,7 @@ func NewSkillsToolResultRequestProcessor(
 	opts ...SkillsToolResultRequestProcessorOption,
 ) *SkillsToolResultRequestProcessor {
 	options := skillsToolResultProcessorOptions{
-		disableFallbackOnSessionSummary: true,
+		skipFallbackOnSessionSummary: true,
 	}
 	for _, opt := range opts {
 		if opt == nil {
@@ -101,9 +101,9 @@ func NewSkillsToolResultRequestProcessor(
 		opt(&options)
 	}
 	return &SkillsToolResultRequestProcessor{
-		repo:                            repo,
-		loadMode:                        normalizeSkillLoadMode(options.loadMode),
-		disableFallbackOnSessionSummary: options.disableFallbackOnSessionSummary,
+		repo:                         repo,
+		loadMode:                     normalizeSkillLoadMode(options.loadMode),
+		skipFallbackOnSessionSummary: options.skipFallbackOnSessionSummary,
 	}
 }
 
@@ -156,7 +156,7 @@ func (p *SkillsToolResultRequestProcessor) ProcessRequest(
 		loaded,
 		materialized,
 	)
-	if p.disableFallbackOnSessionSummary && hasSessionSummary(inv) {
+	if p.skipFallbackOnSessionSummary && hasSessionSummary(inv) {
 		p.removeLoadedContextMessage(req)
 	} else {
 		p.upsertLoadedContextMessage(req, fallbackContent)
