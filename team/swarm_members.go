@@ -38,27 +38,10 @@ func (t *Team) UpdateSwarmMembers(members []agent.Agent) error {
 	nextMembers := make([]agent.Agent, len(members))
 	copy(nextMembers, members)
 
-	memberByName, err := buildMemberIndex("", nextMembers)
-	if err != nil {
-		return err
-	}
-	if memberByName[t.entryName] == nil {
-		return fmt.Errorf(
-			"entry member %q not found",
-			t.entryName,
-		)
-	}
-
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	if err := wireSwarmRoster(nextMembers); err != nil {
-		return err
-	}
-
-	t.members = nextMembers
-	t.memberByName = memberByName
-	return nil
+	return t.updateSwarmMembersLocked(nextMembers)
 }
 
 // AddSwarmMember adds one member into a Swarm Team roster at runtime.
@@ -72,13 +55,13 @@ func (t *Team) AddSwarmMember(member agent.Agent) error {
 		return errNotSwarmTeam
 	}
 
-	t.mu.RLock()
-	cur := make([]agent.Agent, len(t.members))
-	copy(cur, t.members)
-	t.mu.RUnlock()
+	t.mu.Lock()
+	defer t.mu.Unlock()
 
-	cur = append(cur, member)
-	return t.UpdateSwarmMembers(cur)
+	next := make([]agent.Agent, len(t.members)+1)
+	copy(next, t.members)
+	next[len(next)-1] = member
+	return t.updateSwarmMembersLocked(next)
 }
 
 // RemoveSwarmMember removes a member by name from a Swarm Team roster.
@@ -94,19 +77,16 @@ func (t *Team) RemoveSwarmMember(name string) bool {
 		return false
 	}
 
-	t.mu.RLock()
-	entryName := t.entryName
-	cur := make([]agent.Agent, len(t.members))
-	copy(cur, t.members)
-	t.mu.RUnlock()
+	t.mu.Lock()
+	defer t.mu.Unlock()
 
-	if name == entryName {
+	if name == t.entryName {
 		return false
 	}
 
-	next := make([]agent.Agent, 0, len(cur))
+	next := make([]agent.Agent, 0, len(t.members))
 	removed := false
-	for _, m := range cur {
+	for _, m := range t.members {
 		if m == nil {
 			continue
 		}
@@ -120,8 +100,29 @@ func (t *Team) RemoveSwarmMember(name string) bool {
 		return false
 	}
 
-	if err := t.UpdateSwarmMembers(next); err != nil {
+	if err := t.updateSwarmMembersLocked(next); err != nil {
 		return false
 	}
 	return true
+}
+
+func (t *Team) updateSwarmMembersLocked(members []agent.Agent) error {
+	memberByName, err := buildMemberIndex("", members)
+	if err != nil {
+		return err
+	}
+	if memberByName[t.entryName] == nil {
+		return fmt.Errorf(
+			"entry member %q not found",
+			t.entryName,
+		)
+	}
+
+	if err := wireSwarmRoster(members); err != nil {
+		return err
+	}
+
+	t.members = members
+	t.memberByName = memberByName
+	return nil
 }
