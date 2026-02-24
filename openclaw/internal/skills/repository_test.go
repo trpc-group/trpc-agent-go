@@ -87,7 +87,7 @@ run from {baseDir}
 	require.Contains(t, s.Docs[0].Content, dir)
 }
 
-func TestRepository_PrecendenceNoFallback(t *testing.T) {
+func TestRepository_PrecedenceNoFallback(t *testing.T) {
 	rootA := t.TempDir()
 	rootB := t.TempDir()
 
