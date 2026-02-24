@@ -31,6 +31,7 @@ const (
 	testCoordinatorName = testTeamName
 	testMemberNameOne   = "member_one"
 	testMemberNameTwo   = "member_two"
+	testMemberNameThree = "member_three"
 	testEntryName       = testMemberNameOne
 	testUserMessage     = "hi"
 
@@ -689,4 +690,122 @@ func TestTeam_getActiveAgent_NoState(t *testing.T) {
 
 func TestSwarmActiveAgentKey_EmptyTeamName(t *testing.T) {
 	require.Equal(t, SwarmActiveAgentKeyPrefix, swarmActiveAgentKey(""))
+}
+
+func TestTeam_UpdateSwarmMembers_RewiresRoster(t *testing.T) {
+	a := &testSwarmMember{name: testMemberNameOne}
+	b := &testSwarmMember{name: testMemberNameTwo}
+
+	tm, err := NewSwarm(
+		testTeamName,
+		testEntryName,
+		[]agent.Agent{a, b},
+	)
+	require.NoError(t, err)
+
+	c := &testSwarmMember{name: testMemberNameThree}
+	require.NoError(t, tm.AddSwarmMember(c))
+
+	require.Len(t, tm.SubAgents(), 3)
+	require.NotNil(t, tm.FindSubAgent(testMemberNameThree))
+
+	require.Len(t, a.subAgents, 2)
+	require.Equal(t, testMemberNameTwo, a.subAgents[0].Info().Name)
+	require.Equal(t, testMemberNameThree, a.subAgents[1].Info().Name)
+
+	require.Len(t, b.subAgents, 2)
+	require.Equal(t, testMemberNameOne, b.subAgents[0].Info().Name)
+	require.Equal(t, testMemberNameThree, b.subAgents[1].Info().Name)
+
+	require.Len(t, c.subAgents, 2)
+	require.Equal(t, testMemberNameOne, c.subAgents[0].Info().Name)
+	require.Equal(t, testMemberNameTwo, c.subAgents[1].Info().Name)
+}
+
+func TestTeam_RemoveSwarmMember(t *testing.T) {
+	a := &testSwarmMember{name: testMemberNameOne}
+	b := &testSwarmMember{name: testMemberNameTwo}
+	c := &testSwarmMember{name: testMemberNameThree}
+
+	tm, err := NewSwarm(
+		testTeamName,
+		testEntryName,
+		[]agent.Agent{a, b, c},
+	)
+	require.NoError(t, err)
+
+	require.True(t, tm.RemoveSwarmMember(testMemberNameTwo))
+
+	require.Len(t, tm.SubAgents(), 2)
+	require.Nil(t, tm.FindSubAgent(testMemberNameTwo))
+
+	require.Len(t, a.subAgents, 1)
+	require.Equal(t, testMemberNameThree, a.subAgents[0].Info().Name)
+
+	require.Len(t, c.subAgents, 1)
+	require.Equal(t, testMemberNameOne, c.subAgents[0].Info().Name)
+
+	require.False(t, tm.RemoveSwarmMember(testEntryName))
+}
+
+func TestTeam_UpdateSwarmMembers_MissingEntry(t *testing.T) {
+	a := &testSwarmMember{name: testMemberNameOne}
+	b := &testSwarmMember{name: testMemberNameTwo}
+
+	tm, err := NewSwarm(
+		testTeamName,
+		testEntryName,
+		[]agent.Agent{a, b},
+	)
+	require.NoError(t, err)
+
+	err = tm.UpdateSwarmMembers([]agent.Agent{b})
+	require.Error(t, err)
+}
+
+func TestTeam_UpdateSwarmMembers_NotSwarm(t *testing.T) {
+	coordinator := &testCoordinator{name: testCoordinatorName}
+	members := []agent.Agent{testAgent{name: testMemberNameOne}}
+
+	tm, err := New(coordinator, members)
+	require.NoError(t, err)
+
+	err = tm.UpdateSwarmMembers(members)
+	require.ErrorIs(t, err, errNotSwarmTeam)
+}
+
+func TestTeam_RunSwarm_CrossRequestTransfer_RemovedActiveAgent(t *testing.T) {
+	a := &testSwarmMember{name: testMemberNameOne}
+	b := &testSwarmMember{name: testMemberNameTwo}
+
+	tm, err := NewSwarm(
+		testTeamName,
+		testEntryName,
+		[]agent.Agent{a, b},
+		WithCrossRequestTransfer(true),
+	)
+	require.NoError(t, err)
+
+	sess := session.NewSession(testAppName, testUserID, testSessionID)
+	sess.SetState(
+		SwarmActiveAgentKeyPrefix+testTeamName,
+		[]byte(testMemberNameTwo),
+	)
+
+	require.True(t, tm.RemoveSwarmMember(testMemberNameTwo))
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(tm),
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(model.NewUserMessage(testUserMessage)),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	ch, err := tm.Run(ctx, inv)
+	require.NoError(t, err)
+
+	var gotAuthor string
+	for e := range ch {
+		gotAuthor = e.Author
+	}
+	require.Equal(t, testEntryName, gotAuthor)
 }
