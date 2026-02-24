@@ -248,6 +248,19 @@ func (m *mockRequestProcessor) ProcessRequest(
 	}
 }
 
+const flowRunPanicTestMsg = "boom"
+
+type panicRequestProcessor struct{}
+
+func (p *panicRequestProcessor) ProcessRequest(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	req *model.Request,
+	ch chan<- *event.Event,
+) {
+	panic(errors.New(flowRunPanicTestMsg))
+}
+
 // mockResponseProcessor implements flow.ResponseProcessor
 type mockResponseProcessor struct{}
 
@@ -275,6 +288,41 @@ func TestFlow_Interface(t *testing.T) {
 
 	// Simple compile test
 	var _ flow.Flow = f
+}
+
+func TestFlow_Run_RecoversPanic(t *testing.T) {
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		2*time.Second,
+	)
+	defer cancel()
+
+	llmFlow := New(
+		[]flow.RequestProcessor{&panicRequestProcessor{}},
+		nil,
+		Options{},
+	)
+	invocation := agent.NewInvocation(
+		agent.WithInvocationModel(&mockModel{}),
+		agent.WithInvocationSession(&session.Session{ID: "test-session"}),
+	)
+	eventChan, err := llmFlow.Run(ctx, invocation)
+	require.NoError(t, err)
+
+	var errorEvent *event.Event
+	for evt := range eventChan {
+		if evt.RequiresCompletion {
+			key := agent.AppendEventNoticeKeyPrefix + evt.ID
+			invocation.NotifyCompletion(ctx, key)
+		}
+		if evt.Error != nil {
+			errorEvent = evt
+		}
+	}
+
+	require.NotNil(t, errorEvent)
+	require.Equal(t, model.ErrorTypeFlowError, errorEvent.Error.Type)
+	require.Contains(t, errorEvent.Error.Message, flowRunPanicTestMsg)
 }
 
 func TestModelCallbacks_BeforeSkip(t *testing.T) {
