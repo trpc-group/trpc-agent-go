@@ -7,7 +7,7 @@
 //
 //
 
-package v2
+package hashidx
 
 import (
 	"context"
@@ -21,31 +21,24 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session/redis/internal/util"
 )
 
-const (
-	// ServiceMetaVersionKey is the key in Session.ServiceMeta to store the data version.
-	ServiceMetaVersionKey = "version"
-	// VersionV2 indicates the session is stored in V2 format.
-	VersionV2 = "v2"
-)
-
-// Config holds configuration for V2 session storage client.
+// Config holds configuration for HashIdx session storage client.
 type Config struct {
 	SessionTTL        time.Duration
 	AppStateTTL       time.Duration
 	UserStateTTL      time.Duration
 	SessionEventLimit int
-	// KeyPrefix is the prefix for all V2 keys. Default is "v2".
+	// KeyPrefix is the prefix for all HashIdx keys. Default is "v2".
 	KeyPrefix string
 }
 
-// Client implements V2 session storage logic.
+// Client implements HashIdx session storage logic.
 type Client struct {
 	client redis.UniversalClient
 	keys   *keyBuilder
 	cfg    Config
 }
 
-// NewClient creates a new V2 client.
+// NewClient creates a new HashIdx client.
 func NewClient(client redis.UniversalClient, cfg Config) *Client {
 	return &Client{
 		client: client,
@@ -54,7 +47,7 @@ func NewClient(client redis.UniversalClient, cfg Config) *Client {
 	}
 }
 
-// sessionMeta is the session metadata structure for V2.
+// sessionMeta is the session metadata structure for HashIdx.
 type sessionMeta struct {
 	ID        string           `json:"id"`
 	AppName   string           `json:"appName"`
@@ -64,7 +57,7 @@ type sessionMeta struct {
 	UpdatedAt time.Time        `json:"updatedAt"`
 }
 
-// CreateSession creates a new session using V2 logic.
+// CreateSession creates a new session using HashIdx logic.
 // SessionID must be provided by the caller; empty SessionID returns an error.
 func (c *Client) CreateSession(
 	ctx context.Context,
@@ -104,14 +97,14 @@ func (c *Client) CreateSession(
 	sess.CreatedAt = now
 	sess.UpdatedAt = now
 
-	// Inject V2 version tag into ServiceMeta (not persisted, memory only)
-	sess.ServiceMeta = map[string]string{ServiceMetaVersionKey: VersionV2}
+	// Inject HashIdx version tag into ServiceMeta (not persisted, memory only)
+	sess.ServiceMeta = map[string]string{util.ServiceMetaStorageTypeKey: util.StorageTypeHashIdx}
 
 	return sess, nil
 }
 
-// GetSession retrieves a session using V2 logic with all post-processing.
-// This matches V1 behavior: returns a complete session with:
+// GetSession retrieves a session using HashIdx logic with all post-processing.
+// This matches zset behavior: returns a complete session with:
 // - Events (filtered by limit and afterTime)
 // - App/User state merged
 // - Track events loaded
@@ -134,7 +127,7 @@ func (c *Client) GetSession(
 	return c.loadSessionComplete(ctx, key, metaJSON, limit, afterTime)
 }
 
-// loadSessionComplete loads session data with all post-processing (matches V1 behavior).
+// loadSessionComplete loads session data with all post-processing (matches zset behavior).
 // This includes: events, app/user state merge, track events, summaries.
 func (c *Client) loadSessionComplete(
 	ctx context.Context,
@@ -153,7 +146,7 @@ func (c *Client) loadSessionComplete(
 	sess.CreatedAt = meta.CreatedAt
 	sess.UpdatedAt = meta.UpdatedAt
 
-	// Load events (load all, then filter in memory - matches V1 behavior)
+	// Load events (load all, then filter in memory - matches zset behavior)
 	ttlSeconds := int64(0)
 	if c.cfg.SessionTTL > 0 {
 		ttlSeconds = int64(c.cfg.SessionTTL.Seconds())
@@ -181,23 +174,23 @@ func (c *Client) loadSessionComplete(
 		sess.Events = append(sess.Events, evt)
 	}
 
-	// Apply event filtering (matches V1 behavior)
+	// Apply event filtering (matches zset behavior)
 	sess.ApplyEventFiltering(session.WithEventNum(limit), session.WithEventTime(afterTime))
 
-	// Merge app/user state (matches V1 behavior)
+	// Merge app/user state (matches zset behavior)
 	c.mergeAppUserState(ctx, key, sess)
 
-	// Load and attach track events (matches V1 behavior)
+	// Load and attach track events (matches zset behavior)
 	c.loadAndAttachTrackEvents(ctx, key, sess, limit, afterTime)
 
-	// Load and attach summaries (matches V1 behavior)
+	// Load and attach summaries (matches zset behavior)
 	c.loadAndAttachSummaries(ctx, key, sess)
 
-	// Refresh TTLs (matches V1 behavior)
+	// Refresh TTLs (matches zset behavior)
 	c.refreshRelatedTTLs(ctx, key)
 
-	// Inject V2 version tag into ServiceMeta (not persisted, memory only)
-	sess.ServiceMeta = map[string]string{ServiceMetaVersionKey: VersionV2}
+	// Inject HashIdx version tag into ServiceMeta (not persisted, memory only)
+	sess.ServiceMeta = map[string]string{util.ServiceMetaStorageTypeKey: util.StorageTypeHashIdx}
 
 	return sess, nil
 }
@@ -256,7 +249,7 @@ func (c *Client) loadAndAttachTrackEvents(ctx context.Context, key session.Key, 
 // loadAndAttachSummaries loads summaries for a session and attaches them.
 func (c *Client) loadAndAttachSummaries(ctx context.Context, key session.Key, sess *session.Session) {
 	if sess == nil || len(sess.Events) == 0 {
-		return // V1 behavior: don't load summaries if no events
+		return // zset behavior: don't load summaries if no events
 	}
 
 	summaries, err := c.GetSummary(ctx, key)
@@ -274,12 +267,12 @@ func (c *Client) refreshRelatedTTLs(ctx context.Context, key session.Key) {
 	_ = c.RefreshSummaryTTL(ctx, key)
 }
 
-// AppendEvent persists an event to Redis V2 storage and applies StateDelta to session state.
+// AppendEvent persists an event to Redis HashIdx storage and applies StateDelta to session state.
 // Note: UpdatedAt is not updated here for performance reasons.
 // The last activity time can be inferred from the latest event's timestamp.
 // StateDelta from the event is atomically merged into session meta's state via Lua script.
 //
-// Event storage follows V1 behavior:
+// Event storage follows zset behavior:
 //   - StateDelta is always applied to session state (regardless of event content)
 //   - Event is only stored in event list if: Response != nil && !IsPartial && IsValidContent()
 func (c *Client) AppendEvent(ctx context.Context, key session.Key, evt *event.Event) error {
@@ -293,7 +286,7 @@ func (c *Client) AppendEvent(ctx context.Context, key session.Key, evt *event.Ev
 		ttlSeconds = int64(c.cfg.SessionTTL.Seconds())
 	}
 
-	// Determine if event should be stored in event list (matches V1 behavior)
+	// Determine if event should be stored in event list (matches zset behavior)
 	// Only store events with valid response content
 	shouldStoreEvent := shouldStoreEventInList(evt)
 
@@ -321,7 +314,7 @@ func (c *Client) AppendEvent(ctx context.Context, key session.Key, evt *event.Ev
 }
 
 // shouldStoreEventInList checks if an event should be stored in the event list.
-// Matches V1 behavior: only store events with Response != nil && !IsPartial && IsValidContent().
+// Matches zset behavior: only store events with Response != nil && !IsPartial && IsValidContent().
 func shouldStoreEventInList(evt *event.Event) bool {
 	if evt == nil || evt.Response == nil || evt.IsPartial {
 		return false
@@ -337,16 +330,25 @@ func boolToInt(b bool) int {
 	return 0
 }
 
-// DeleteSession deletes a session in V2 storage.
+// DeleteSession deletes a session and all associated data in HashIdx storage,
+// including track keys discovered from session state.
 func (c *Client) DeleteSession(ctx context.Context, key session.Key) error {
 	keys := c.keys.SessionKeys(key)
+
+	// Best-effort: query tracks from session meta and append track keys.
+	// If this fails (e.g. meta already gone), we still delete the fixed keys.
+	tracks, _ := c.ListTracksForSession(ctx, key)
+	for _, t := range tracks {
+		keys = append(keys, c.keys.TrackKey(key, t))
+	}
+
 	if _, err := luaDeleteSession.Run(ctx, c.client, keys).Result(); err != nil {
 		return fmt.Errorf("delete session (v2): %w", err)
 	}
 	return nil
 }
 
-// TrimConversations trims the most recent N conversations from the session (V2).
+// TrimConversations trims the most recent N conversations from the session (HashIdx).
 func (c *Client) TrimConversations(ctx context.Context, key session.Key, count int) ([]event.Event, error) {
 	if count <= 0 {
 		count = 1
@@ -373,7 +375,7 @@ func (c *Client) TrimConversations(ctx context.Context, key session.Key, count i
 	return events, nil
 }
 
-// DeleteEvent deletes a single event from the session (V2).
+// DeleteEvent deletes a single event from the session (HashIdx).
 func (c *Client) DeleteEvent(ctx context.Context, key session.Key, eventID string) error {
 	keys := []string{
 		c.keys.EventDataKey(key),
@@ -386,7 +388,7 @@ func (c *Client) DeleteEvent(ctx context.Context, key session.Key, eventID strin
 	return nil
 }
 
-// UpdateSessionState updates the session-level state directly (V2).
+// UpdateSessionState updates the session-level state directly (HashIdx).
 func (c *Client) UpdateSessionState(ctx context.Context, key session.Key, state session.StateMap) error {
 	metaJSON, err := c.client.Get(ctx, c.keys.SessionMetaKey(key)).Bytes()
 	if err != nil {
@@ -429,14 +431,14 @@ func (c *Client) Exists(ctx context.Context, key session.Key) (bool, error) {
 	return n > 0, nil
 }
 
-// ExistsPipelined adds a V2 session existence check to the pipeline.
+// ExistsPipelined adds a HashIdx session existence check to the pipeline.
 // Returns the IntCmd that can be evaluated after pipeline execution.
 func (c *Client) ExistsPipelined(ctx context.Context, pipe redis.Pipeliner, key session.Key) *redis.IntCmd {
 	return pipe.Exists(ctx, c.keys.SessionMetaKey(key))
 }
 
 // Key Helpers (Exported for Facade if needed, but App/User state helpers are different)
-// App/User state keys are strategy-independent in V2 keyBuilder (but they were in V1 logic too).
+// App/User state keys are strategy-independent in HashIdx keyBuilder (but they were in zset logic too).
 // We should expose KeyBuilder or provide helpers.
 // Facade in `service.go` needs access to `AppStateKey` and `UserStateKey`.
 // These are not session-specific, so maybe `service.go` should hold a `keyBuilder` or use `v2.Client` methods?
@@ -543,17 +545,17 @@ func (c *Client) ListSessionsPattern(userKey session.UserKey) string {
 	// We can expose a method on keyBuilder.
 	// But ListSessions logic in Service needs it.
 	// Let's just implement ListSessionsScan here?
-	// The Service ListSessions merges V1 and V2.
-	// So we can have `ListSessions(userKey)` in V2 client returning `[]*session.Session`.
+	// The Service ListSessions merges zset and HashIdx.
+	// So we can have `ListSessions(userKey)` in HashIdx client returning `[]*session.Session`.
 	return ""
 }
 
-// ListSessions scans for sessions (V2) with all post-processing.
-// This matches V1 behavior:
+// ListSessions scans for sessions (HashIdx) with all post-processing.
+// This matches zset behavior:
 // - Events (filtered by limit and afterTime)
 // - App/User state merged (batch loaded, shared across sessions)
 // - Track events loaded
-// - Note: Summaries are NOT loaded in ListSessions (same as V1)
+// - Note: Summaries are NOT loaded in ListSessions (same as zset)
 func (c *Client) ListSessions(ctx context.Context, userKey session.UserKey, limit int, afterTime time.Time) ([]*session.Session, error) {
 	pattern := c.keys.SessionMetaPattern(userKey)
 	var sessions []*session.Session
@@ -661,8 +663,8 @@ func (c *Client) loadSessionBasic(
 	// Apply event filtering
 	sess.ApplyEventFiltering(session.WithEventNum(limit), session.WithEventTime(afterTime))
 
-	// Inject V2 version tag into ServiceMeta (not persisted, memory only)
-	sess.ServiceMeta = map[string]string{ServiceMetaVersionKey: VersionV2}
+	// Inject HashIdx version tag into ServiceMeta (not persisted, memory only)
+	sess.ServiceMeta = map[string]string{util.ServiceMetaStorageTypeKey: util.StorageTypeHashIdx}
 
 	return sess, nil
 }
@@ -671,8 +673,8 @@ func (c *Client) loadSessionBasic(
 // Summary Operations
 // =============================================================================
 
-// v2SummaryHashField is the fixed hash field for V2 summary storage.
-// V2 uses a per-session key, so we use a fixed field name instead of sessionID.
+// v2SummaryHashField is the fixed hash field for HashIdx summary storage.
+// HashIdx uses a per-session key, so we use a fixed field name instead of sessionID.
 const v2SummaryHashField = "data"
 
 // CreateSummary creates or updates a summary for the session.
@@ -732,9 +734,9 @@ func (c *Client) GetSummary(ctx context.Context, key session.Key) (map[string]*s
 // Track Event Operations
 // =============================================================================
 
-// AppendTrackEvent persists a track event to V2 storage.
+// AppendTrackEvent persists a track event to HashIdx storage.
 // Track events are stored in a ZSet with timestamp as score.
-// Format: v2:track:{appName:userID}:sessionID:trackName
+// Format: hashidx:track:{appName:userID}:sessionID:trackName
 func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEvent *session.TrackEvent) error {
 	// Get current session state to update tracks list
 	metaJSON, err := c.client.Get(ctx, c.keys.SessionMetaKey(key)).Bytes()

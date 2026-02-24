@@ -16,8 +16,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
-	v1 "trpc.group/trpc-go/trpc-agent-go/session/redis/internal/v1"
-	v2 "trpc.group/trpc-go/trpc-agent-go/session/redis/internal/v2"
+	"trpc.group/trpc-go/trpc-agent-go/session/redis/internal/util"
 )
 
 // CreateSessionSummary generates a summary for the session (async-ready).
@@ -51,36 +50,37 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 		return nil
 	}
 
-	// Dual-write mode: write to both V2 and V1
-	if s.needDualWrite() {
-		if err := s.v2Client.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL); err != nil {
+	// Dual-write mode: write to both hashidx and zset
+	if s.dualWriteEnabled() {
+		if err := s.hashidxClient.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL); err != nil {
 			return err
 		}
-		if err := s.v1Client.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL); err != nil {
-			return fmt.Errorf("dual-write summary to V1 failed: %w", err)
+		if err := s.zsetClient.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL); err != nil {
+			return fmt.Errorf("dual-write summary to zset failed: %w", err)
 		}
 		return nil
 	}
 
 	// Fast path: use version tag from session
-	ver := getSessionVersion(sess)
-	if ver == v2.VersionV2 {
-		return s.v2Client.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL)
-	} else if ver == v1.VersionV1 {
-		return s.v1Client.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL)
+	switch ver := getSessionVersion(sess); ver {
+	case util.StorageTypeHashIdx:
+		return s.hashidxClient.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL)
+	case util.StorageTypeZset:
+		return s.zsetClient.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL)
 	}
 
 	// Slow path: check which storage has the session
-	v1Exists, v2Exists, err := s.checkSessionExists(ctx, key)
+	zsetExists, hashidxExists, err := s.checkSessionExists(ctx, key)
 	if err != nil {
 		log.WarnfContext(ctx, "checkSessionExists failed: %v", err)
 	}
 
-	if v2Exists {
-		return s.v2Client.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL)
+	// zset priority: consistent with getSessionInternal read strategy
+	if s.compatEnabled() && zsetExists {
+		return s.zsetClient.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL)
 	}
-	if s.legacyEnabled() && v1Exists {
-		return s.v1Client.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL)
+	if hashidxExists {
+		return s.hashidxClient.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL)
 	}
 
 	log.WarnfContext(ctx, "session not found when creating summary: %s/%s/%s", key.AppName, key.UserID, key.SessionID)
@@ -108,17 +108,17 @@ func (s *Service) GetSessionSummaryText(ctx context.Context, sess *session.Sessi
 	}
 
 	// Check which storage has the session (summary follows session version)
-	v1Exists, v2Exists, err := s.checkSessionExists(ctx, key)
+	zsetExists, hashidxExists, err := s.checkSessionExists(ctx, key)
 	if err != nil {
 		log.WarnfContext(ctx, "checkSessionExists failed: %v", err)
 		return "", false
 	}
 
-	// Priority: V2 > V1 (summary follows session version)
-	if v2Exists {
-		summaries, err := s.v2Client.GetSummary(ctx, key)
+	// zset priority: consistent with getSessionInternal read strategy
+	if s.compatEnabled() && zsetExists {
+		summaries, err := s.zsetClient.GetSummary(ctx, key)
 		if err != nil {
-			log.WarnfContext(ctx, "get V2 summary failed: %v", err)
+			log.WarnfContext(ctx, "get zset summary failed: %v", err)
 			return "", false
 		}
 		if summaries != nil {
@@ -126,10 +126,10 @@ func (s *Service) GetSessionSummaryText(ctx context.Context, sess *session.Sessi
 		}
 	}
 
-	if s.legacyEnabled() && v1Exists {
-		summaries, err := s.v1Client.GetSummary(ctx, key)
+	if hashidxExists {
+		summaries, err := s.hashidxClient.GetSummary(ctx, key)
 		if err != nil {
-			log.WarnfContext(ctx, "get V1 summary failed: %v", err)
+			log.WarnfContext(ctx, "get hashidx summary failed: %v", err)
 			return "", false
 		}
 		if summaries != nil {

@@ -7,7 +7,7 @@
 //
 //
 
-package v2
+package hashidx
 
 import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
