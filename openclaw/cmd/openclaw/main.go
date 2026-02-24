@@ -33,11 +33,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/gateway"
-	"trpc.group/trpc-go/trpc-agent-go/skill"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/channel"
 	tgch "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/channel/telegram"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gwclient"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/octool"
+	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
 )
 
 const (
@@ -51,6 +53,7 @@ const (
 	defaultOpenAIModel = "deepseek-chat"
 
 	defaultSkillsDir = "skills"
+	defaultAgentsDir = ".agents"
 
 	csvDelimiter = ","
 
@@ -116,15 +119,30 @@ func main() {
 		"",
 		"Skills root directory (default: ./skills)",
 	)
+	skillsExtraDirs := flag.String(
+		"skills-extra-dirs",
+		"",
+		"Extra skills roots (comma-separated, lowest precedence)",
+	)
+	skillsDebug := flag.Bool(
+		"skills-debug",
+		false,
+		"Log skill gating decisions",
+	)
 	stateDir := flag.String(
 		"state-dir",
 		"",
-		"State dir for offsets (default: $HOME/.trpc-agent-go/openclaw)",
+		"State dir for offsets and managed skills",
 	)
 	enableLocalExec := flag.Bool(
 		"enable-local-exec",
 		false,
 		"Enable local code execution tool (unsafe)",
+	)
+	enableOpenClawTools := flag.Bool(
+		"enable-openclaw-tools",
+		false,
+		"Enable OpenClaw-compatible exec/process tools (unsafe)",
 	)
 	flag.Parse()
 
@@ -169,7 +187,19 @@ func main() {
 		log.Fatalf("create model failed: %v", err)
 	}
 
-	llm, err := newAgent(mdl, *skillsRoot, *enableLocalExec)
+	resolvedStateDir, err := resolveStateDir(*stateDir)
+	if err != nil {
+		log.Fatalf("resolve state dir failed: %v", err)
+	}
+
+	llm, err := newAgent(mdl, agentConfig{
+		SkillsRoot:          *skillsRoot,
+		SkillsExtraDirs:     splitCSV(*skillsExtraDirs),
+		SkillsDebug:         *skillsDebug,
+		StateDir:            resolvedStateDir,
+		EnableLocalExec:     *enableLocalExec,
+		EnableOpenClawTools: *enableOpenClawTools,
+	})
 	if err != nil {
 		log.Fatalf("create agent failed: %v", err)
 	}
@@ -214,7 +244,7 @@ func main() {
 			*telegramToken,
 			telegramBot,
 			gw,
-			tgch.WithStateDir(*stateDir),
+			tgch.WithStateDir(resolvedStateDir),
 			tgch.WithStartFromLatest(*telegramStartFromLatest),
 		)
 		if err != nil {
@@ -268,8 +298,7 @@ func makeGatewayOptions(
 
 func newAgent(
 	mdl model.Model,
-	skillsRoot string,
-	enableLocalExec bool,
+	cfg agentConfig,
 ) (agent.Agent, error) {
 	opts := []llmagent.Option{
 		llmagent.WithModel(mdl),
@@ -278,23 +307,111 @@ func newAgent(
 		),
 	}
 
-	root := strings.TrimSpace(skillsRoot)
-	if root == "" {
-		cwd, _ := os.Getwd()
-		root = filepath.Join(cwd, defaultSkillsDir)
-	}
-	repo, err := skill.NewFSRepository(root)
+	cwd, _ := os.Getwd()
+	roots := resolveSkillRoots(cwd, cfg)
+	repo, err := ocskills.NewRepository(
+		roots,
+		ocskills.WithDebug(cfg.SkillsDebug),
+	)
 	if err != nil {
 		return nil, err
 	}
 
 	opts = append(opts, llmagent.WithSkills(repo))
-	if enableLocalExec {
+
+	if cfg.EnableOpenClawTools {
+		mgr := octool.NewManager()
+		tools := []tool.Tool{
+			octool.NewExecTool("exec", mgr),
+			octool.NewExecTool("bash", mgr),
+			octool.NewProcessTool(mgr),
+		}
+		opts = append(opts, llmagent.WithTools(tools))
+	}
+	if cfg.EnableLocalExec {
 		exec := localexec.New()
 		opts = append(opts, llmagent.WithCodeExecutor(exec))
 	}
 
 	return llmagent.New("assistant", opts...), nil
+}
+
+type agentConfig struct {
+	SkillsRoot      string
+	SkillsExtraDirs []string
+	SkillsDebug     bool
+
+	StateDir string
+
+	EnableLocalExec bool
+
+	EnableOpenClawTools bool
+}
+
+func resolveSkillRoots(cwd string, cfg agentConfig) []string {
+	workspaceSkills := resolveWorkspaceSkillsRoot(cwd, cfg.SkillsRoot)
+	projectAgentsSkills := filepath.Join(
+		cwd,
+		defaultAgentsDir,
+		defaultSkillsDir,
+	)
+	home, _ := os.UserHomeDir()
+	personalAgentsSkills := filepath.Join(
+		home,
+		defaultAgentsDir,
+		defaultSkillsDir,
+	)
+	managedSkills := filepath.Join(cfg.StateDir, defaultSkillsDir)
+	bundledSkills := filepath.Join(cwd, appName, defaultSkillsDir)
+
+	roots := make([]string, 0, 6+len(cfg.SkillsExtraDirs))
+	roots = append(roots, workspaceSkills)
+	roots = append(roots, projectAgentsSkills)
+	roots = append(roots, personalAgentsSkills)
+	roots = append(roots, managedSkills)
+	if bundledSkills != workspaceSkills {
+		roots = append(roots, bundledSkills)
+	}
+	roots = append(roots, cfg.SkillsExtraDirs...)
+	return roots
+}
+
+func resolveWorkspaceSkillsRoot(cwd, raw string) string {
+	root := strings.TrimSpace(raw)
+	if root != "" {
+		return root
+	}
+
+	cwdSkills := filepath.Join(cwd, defaultSkillsDir)
+	if dirExists(cwdSkills) {
+		return cwdSkills
+	}
+
+	repoBundled := filepath.Join(cwd, appName, defaultSkillsDir)
+	if dirExists(repoBundled) {
+		return repoBundled
+	}
+	return cwdSkills
+}
+
+func dirExists(path string) bool {
+	st, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return st.IsDir()
+}
+
+func resolveStateDir(raw string) (string, error) {
+	s := strings.TrimSpace(raw)
+	if s != "" {
+		return s, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".trpc-agent-go", appName), nil
 }
 
 func newModel(

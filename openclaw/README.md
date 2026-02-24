@@ -235,12 +235,92 @@ go run ./cmd/openclaw \
 
 ## Skills
 
-By default, the binary loads skills from `./skills`. A minimal example
-skill is available at `skills/hello`.
+This demo supports AgentSkills-style `SKILL.md` skill folders, and
+borrows a few design ideas from OpenClaw:
+
+- Multiple skill roots (workspace, managed, extra dirs) with precedence.
+- Optional load-time gating via `metadata.openclaw.requires.*`.
+- `{baseDir}` placeholder substitution for better OpenClaw skill
+  compatibility.
+
+### Locations and precedence
+
+Skills are loaded from these locations (highest precedence first):
+
+1) Workspace skills: `-skills-root` (default: `./skills`)
+2) Project AgentSkills: `./.agents/skills`
+3) Personal AgentSkills: `$HOME/.agents/skills`
+4) Managed skills: `<state-dir>/skills`
+5) Repo bundled skills (when running from repo root): `./openclaw/skills`
+6) Extra dirs: `-skills-extra-dirs` (comma-separated, lowest precedence)
+
+If two skills have the same `name`, the one from the higher-precedence
+location wins.
+
+### OpenClaw metadata gating (optional)
+
+If a skill's `SKILL.md` front matter contains `metadata.openclaw`, this
+demo can filter the skill at load time based on the local environment:
+
+- `metadata.openclaw.os` (darwin/linux/win32)
+- `metadata.openclaw.requires.bins`
+- `metadata.openclaw.requires.anyBins`
+- `metadata.openclaw.requires.env`
+
+Enable `-skills-debug` to log which skills are skipped and why.
+
+### `{baseDir}` placeholder
+
+Many OpenClaw skills use `{baseDir}` in commands (for example to run
+scripts under `scripts/`). This demo replaces `{baseDir}` in loaded
+skill bodies/docs with the local skill folder path.
+
+### Using OpenClaw skill packs
+
+If you already have an OpenClaw skills directory, you can reuse it:
+
+```bash
+cd openclaw
+go run ./cmd/openclaw \
+  -mode openai \
+  -model deepseek-chat \
+  -skills-extra-dirs "/path/to/openclaw/skills"
+```
+
+Note: OpenClaw skills often assume the OpenClaw tool surface. This demo
+can optionally enable OpenClaw-compatible `exec` / `process` tools (see
+below), but it is not a full OpenClaw replacement.
 
 In a chat, you can ask the assistant to list and run skills. For
 example:
 
 ```
 List available skills, then run the hello skill.
+```
+
+## OpenClaw exec/process tools (unsafe)
+
+OpenClaw skills commonly rely on two tools:
+
+- `exec` (or older skills: `bash`) to run shell commands
+- `process` to manage background sessions
+
+This demo can provide OpenClaw-compatible tools, but they are **unsafe**
+when exposed to untrusted inputs.
+
+Enable with:
+
+```bash
+go run ./cmd/openclaw \
+  -mode openai \
+  -model deepseek-chat \
+  -telegram-token "$TELEGRAM_BOT_TOKEN" \
+  -enable-openclaw-tools
+```
+
+Once enabled, you can ask the assistant to run a command. For example:
+
+```
+Use the exec tool to run: echo hello
+If it runs in background, use the process tool to poll until it exits.
 ```
