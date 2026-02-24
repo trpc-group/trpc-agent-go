@@ -31,7 +31,8 @@ const (
 )
 
 type skillsToolResultProcessorOptions struct {
-	loadMode string
+	loadMode                        string
+	disableFallbackOnSessionSummary bool
 }
 
 // SkillsToolResultRequestProcessorOption configures
@@ -55,6 +56,19 @@ func WithSkillsToolResultLoadMode(
 	}
 }
 
+// WithDisableSkillsFallbackOnSessionSummary controls whether the processor
+// skips the "Loaded skill context" system-message fallback when a session
+// summary is present in the request.
+//
+// Default: true.
+func WithDisableSkillsFallbackOnSessionSummary(
+	disable bool,
+) SkillsToolResultRequestProcessorOption {
+	return func(o *skillsToolResultProcessorOptions) {
+		o.disableFallbackOnSessionSummary = disable
+	}
+}
+
 // SkillsToolResultRequestProcessor materializes loaded skill content
 // into tool result messages (skill_load / skill_select_docs) when
 // possible.
@@ -62,9 +76,14 @@ func WithSkillsToolResultLoadMode(
 // If no matching tool result message exists (for example, when history
 // is suppressed but state persists), it falls back to a dedicated system
 // message containing the loaded skill bodies/docs.
+//
+// If a session summary is present in the request and the corresponding
+// option is enabled, the fallback system message is skipped.
 type SkillsToolResultRequestProcessor struct {
 	repo     skill.Repository
 	loadMode string
+
+	disableFallbackOnSessionSummary bool
 }
 
 // NewSkillsToolResultRequestProcessor creates a processor instance.
@@ -72,7 +91,9 @@ func NewSkillsToolResultRequestProcessor(
 	repo skill.Repository,
 	opts ...SkillsToolResultRequestProcessorOption,
 ) *SkillsToolResultRequestProcessor {
-	var options skillsToolResultProcessorOptions
+	options := skillsToolResultProcessorOptions{
+		disableFallbackOnSessionSummary: true,
+	}
 	for _, opt := range opts {
 		if opt == nil {
 			continue
@@ -80,8 +101,9 @@ func NewSkillsToolResultRequestProcessor(
 		opt(&options)
 	}
 	return &SkillsToolResultRequestProcessor{
-		repo:     repo,
-		loadMode: normalizeSkillLoadMode(options.loadMode),
+		repo:                            repo,
+		loadMode:                        normalizeSkillLoadMode(options.loadMode),
+		disableFallbackOnSessionSummary: options.disableFallbackOnSessionSummary,
 	}
 }
 
@@ -134,9 +156,25 @@ func (p *SkillsToolResultRequestProcessor) ProcessRequest(
 		loaded,
 		materialized,
 	)
-	p.upsertLoadedContextMessage(req, fallbackContent)
+	if p.disableFallbackOnSessionSummary && hasSessionSummary(inv) {
+		p.removeLoadedContextMessage(req)
+	} else {
+		p.upsertLoadedContextMessage(req, fallbackContent)
+	}
 
 	p.maybeOffloadLoadedSkills(ctx, inv, loaded, ch)
+}
+
+func hasSessionSummary(inv *agent.Invocation) bool {
+	if inv == nil {
+		return false
+	}
+	raw, ok := inv.GetState(contentHasSessionSummaryStateKey)
+	if !ok {
+		return false
+	}
+	v, ok := raw.(bool)
+	return ok && v
 }
 
 func (p *SkillsToolResultRequestProcessor) getLoadedSkills(

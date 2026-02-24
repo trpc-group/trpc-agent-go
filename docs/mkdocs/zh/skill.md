@@ -69,10 +69,18 @@ Agent Skills 把可复用的任务封装为“技能目录”，用 `SKILL.md`
     命中更多前缀 token。
 
 回退机制：如果对应的 tool result 消息不在本次请求的 history 里
-（例如启用了 history suppression），框架会回退为插入一条专用的
+（例如启用了 history suppression），框架可以回退为插入一条专用的
 system message，确保模型仍能看到已加载内容。
 
+Session summary 提醒：如果你启用了会话摘要注入
+（`WithAddSessionSummary(true)`），并且本次请求里确实插入了摘要，
+框架默认会**跳过**这条回退 system message，避免把“已被 summary 掉的
+内容”又塞回提示词里。在这种配置下，如果 tool result 被摘要覆盖掉，
+模型需要再次调用 `skill_load` 才能看到完整正文/文档。
+
 启用方式：`llmagent.WithSkillsLoadedContentInToolResults(true)`。
+如果你希望在 summary 场景恢复旧的回退行为：
+`llmagent.WithDisableSkillsFallbackOnSessionSummary(false)`。
 
 要在真实工具链路中测量提升，参见 `benchmark/anthropic_skills` 的
 `prompt-cache` 套件。
@@ -129,9 +137,10 @@ system message，确保模型仍能看到已加载内容。
   所以只要 skills 仓库内容和选择状态不变，模型看到的 skill 内容
   就是稳定的。
 - 如果本次请求 history 里没有对应的 tool result（例如 history
-  suppression 或截断），框架会回退为插入一条专用 system message
+  suppression 或截断），框架可以回退为插入一条专用 system message
   （`Loaded skill context:`）来保证正确性。但这会让 system 内容发生变化，
-  prompt cache 的收益可能会变小。
+  prompt cache 的收益可能会变小。如果本次请求里存在 session summary，
+  该回退默认会被跳过（见上文）。
 
 ### 与业界实现对比
 

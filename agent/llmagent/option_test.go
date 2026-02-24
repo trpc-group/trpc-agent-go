@@ -168,6 +168,17 @@ func TestWithSkillsLoadedContentInToolResults(t *testing.T) {
 	require.True(t, b.option.SkillsLoadedContentInToolResults)
 }
 
+func TestWithDisableSkillsFallbackOnSessionSummary(t *testing.T) {
+	a := New("test-agent")
+	require.True(t, a.option.DisableSkillsFallbackOnSessionSummary)
+
+	b := New(
+		"test-agent",
+		WithDisableSkillsFallbackOnSessionSummary(false),
+	)
+	require.False(t, b.option.DisableSkillsFallbackOnSessionSummary)
+}
+
 func TestWithMaxLimits_OnOptions(t *testing.T) {
 	opts := &Options{}
 

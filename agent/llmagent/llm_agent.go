@@ -329,6 +329,9 @@ func appendSkillsToolResultProcessor(options *Options, requestProcessors []flow.
 			processor.WithSkillsToolResultLoadMode(
 				options.SkillLoadMode,
 			),
+			processor.WithDisableSkillsFallbackOnSessionSummary(
+				options.DisableSkillsFallbackOnSessionSummary,
+			),
 		)
 	return append(requestProcessors, skillsToolResultProcessor)
 }
