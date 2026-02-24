@@ -681,18 +681,31 @@ func TestSkillsToolResultRequestProcessor_SessionSummary_AllowsFallback(
 	)
 	p.ProcessRequest(context.Background(), inv, req, nil)
 
-	var found bool
+	var matchCount int
 	for _, m := range req.Messages {
 		if m.Role != model.RoleSystem {
 			continue
 		}
 		if strings.Contains(m.Content, skillsLoadedContextHeader) {
-			found = true
+			matchCount++
 			require.Contains(t, m.Content, "[Loaded] calc")
 			require.Contains(t, m.Content, "B")
 		}
 	}
-	require.True(t, found)
+	require.Equal(t, 1, matchCount)
+}
+
+func TestHasSessionSummary(t *testing.T) {
+	require.False(t, hasSessionSummary(nil))
+
+	inv := &agent.Invocation{}
+	require.False(t, hasSessionSummary(inv))
+
+	inv.SetState(contentHasSessionSummaryStateKey, "true")
+	require.False(t, hasSessionSummary(inv))
+
+	inv.SetState(contentHasSessionSummaryStateKey, true)
+	require.True(t, hasSessionSummary(inv))
 }
 
 func TestSkillsToolResultRequestProcessor_BuildToolResultContent_Base(
