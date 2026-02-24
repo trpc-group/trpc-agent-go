@@ -47,6 +47,12 @@ const (
 	testNestedLeaf  = "backend_dev"
 	testOuterName   = "project_manager"
 	testOuterMember = "doc_writer"
+
+	testErrMembersEmpty    = "members is empty"
+	testErrMemberNil       = "member is nil"
+	testErrMemberNameEmpty = "member name is empty"
+	testErrDupMemberName   = "duplicate member name"
+	testErrNoSetSubAgents  = "does not support SetSubAgents"
 )
 
 type testAgent struct {
@@ -772,6 +778,131 @@ func TestTeam_UpdateSwarmMembers_NotSwarm(t *testing.T) {
 
 	err = tm.UpdateSwarmMembers(members)
 	require.ErrorIs(t, err, errNotSwarmTeam)
+}
+
+func TestTeam_UpdateSwarmMembers_NilTeam(t *testing.T) {
+	var tm *Team
+	err := tm.UpdateSwarmMembers(nil)
+	require.ErrorIs(t, err, errNilTeam)
+}
+
+func TestTeam_AddSwarmMember_NilTeam(t *testing.T) {
+	var tm *Team
+	err := tm.AddSwarmMember(testAgent{name: testMemberNameOne})
+	require.ErrorIs(t, err, errNilTeam)
+}
+
+func TestTeam_AddSwarmMember_NotSwarm(t *testing.T) {
+	tm := &Team{mode: ModeCoordinator}
+	err := tm.AddSwarmMember(testAgent{name: testMemberNameOne})
+	require.ErrorIs(t, err, errNotSwarmTeam)
+}
+
+func TestTeam_RemoveSwarmMember_EarlyReturns(t *testing.T) {
+	var nilTeam *Team
+	require.False(t, nilTeam.RemoveSwarmMember(testMemberNameOne))
+
+	notSwarm := &Team{mode: ModeCoordinator}
+	require.False(
+		t,
+		notSwarm.RemoveSwarmMember(testMemberNameOne),
+	)
+
+	entry := &testSwarmMember{name: testMemberNameOne}
+	tm, err := NewSwarm(
+		testTeamName,
+		testEntryName,
+		[]agent.Agent{entry},
+	)
+	require.NoError(t, err)
+
+	require.False(t, tm.RemoveSwarmMember(""))
+	require.False(
+		t,
+		tm.RemoveSwarmMember(testMemberNameTwo),
+	)
+}
+
+func TestTeam_UpdateSwarmMembers_InvalidMembers(t *testing.T) {
+	entry := &testSwarmMember{name: testMemberNameOne}
+	other := &testSwarmMember{name: testMemberNameTwo}
+	tm, err := NewSwarm(
+		testTeamName,
+		testEntryName,
+		[]agent.Agent{entry, other},
+	)
+	require.NoError(t, err)
+
+	cases := []struct {
+		name    string
+		members []agent.Agent
+		wantErr string
+	}{
+		{
+			name:    "empty",
+			members: []agent.Agent{},
+			wantErr: testErrMembersEmpty,
+		},
+		{
+			name:    "nil_member",
+			members: []agent.Agent{nil},
+			wantErr: testErrMemberNil,
+		},
+		{
+			name: "empty_name",
+			members: []agent.Agent{
+				entry,
+				&testSwarmMember{name: ""},
+			},
+			wantErr: testErrMemberNameEmpty,
+		},
+		{
+			name: "duplicate_name",
+			members: []agent.Agent{
+				entry,
+				&testSwarmMember{
+					name: testMemberNameTwo,
+				},
+				&testSwarmMember{
+					name: testMemberNameTwo,
+				},
+			},
+			wantErr: testErrDupMemberName,
+		},
+		{
+			name: "no_sub_agent_setter",
+			members: []agent.Agent{
+				entry,
+				testAgent{name: testMemberNameTwo},
+			},
+			wantErr: testErrNoSetSubAgents,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tm.UpdateSwarmMembers(tc.members)
+			require.ErrorContains(t, err, tc.wantErr)
+		})
+	}
+}
+
+func TestTeam_RemoveSwarmMember_UpdateError(t *testing.T) {
+	entry := &testSwarmMember{name: testMemberNameOne}
+	other := testAgent{name: testMemberNameTwo}
+	removed := &testSwarmMember{name: testMemberNameThree}
+
+	tm := &Team{
+		mode:      ModeSwarm,
+		entryName: testEntryName,
+		members: []agent.Agent{
+			entry,
+			nil,
+			other,
+			removed,
+		},
+	}
+	require.False(t, tm.RemoveSwarmMember(testMemberNameThree))
 }
 
 func TestTeam_RunSwarm_CrossRequestTransfer_RemovedActiveAgent(t *testing.T) {
