@@ -98,11 +98,16 @@ func main() {
 		gwOpts = append(gwOpts, gateway.WithAllowUsers(users...))
 	}
 	if *requireMention {
+		patterns := splitCSV(*mention)
+		if len(patterns) == 0 {
+			log.Fatalf(
+				"`-require-mention` requires `-mention` patterns",
+			)
+		}
 		gwOpts = append(
 			gwOpts,
 			gateway.WithRequireMentionInThreads(true),
 		)
-		patterns := splitCSV(*mention)
 		gwOpts = append(
 			gwOpts,
 			gateway.WithMentionPatterns(patterns...),

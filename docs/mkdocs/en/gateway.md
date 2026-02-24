@@ -141,6 +141,10 @@ srv, _ := gateway.New(r,
 )
 ```
 
+Note: if `WithRequireMentionInThreads(true)` is enabled, you must provide at
+least one pattern via `WithMentionPatterns`, otherwise `gateway.New` returns an
+error.
+
 When enabled, a message with `thread` set is only processed if `text` contains
 any configured pattern.
 
@@ -154,4 +158,3 @@ The gateway server exposes:
 Important: if you want to call status/cancel while a run is still in progress,
 set `request_id` yourself in the `/messages` request payload so you already
 know the id.
-

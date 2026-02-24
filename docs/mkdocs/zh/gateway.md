@@ -138,6 +138,9 @@ srv, _ := gateway.New(r,
 )
 ```
 
+注意：如果开启了 `WithRequireMentionInThreads(true)`，必须同时至少配置一个
+`WithMentionPatterns`，否则 `gateway.New` 会返回错误。
+
 开启后，只有当消息 `text` 包含任一 mention pattern 时，且 `thread` 字段不为空，
 该消息才会被处理。
 
@@ -150,4 +153,3 @@ Gateway 提供：
 
 注意：如果你希望在 run 还没结束时就能 status/cancel，需要在 `/messages` 请求中
 自己设置 `request_id`，否则你在运行中无法提前知道 request_id。
-

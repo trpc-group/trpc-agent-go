@@ -132,6 +132,11 @@ func New(r runner.Runner, opts ...Option) (*Server, error) {
 	}
 
 	options := newOptions(opts...)
+	if options.requireMention && len(options.mentionPatterns) == 0 {
+		return nil, errors.New(
+			"gateway: require mention enabled without patterns",
+		)
+	}
 
 	messagesPath, err := joinURLPath(options.basePath, options.messagesPath)
 	if err != nil {
@@ -623,12 +628,12 @@ func (a *replyAccumulator) consumeDelta(rsp *model.Response) {
 
 type laneLocker struct {
 	mu    sync.Mutex
-	lanes map[string]*sync.Mutex
+	lanes map[string]*laneEntry
 }
 
 func newLaneLocker() *laneLocker {
 	return &laneLocker{
-		lanes: make(map[string]*sync.Mutex),
+		lanes: make(map[string]*laneEntry),
 	}
 }
 
@@ -638,21 +643,51 @@ func (l *laneLocker) withLock(key string, fn func()) {
 		return
 	}
 
-	mu := l.lane(key)
-	mu.Lock()
-	defer mu.Unlock()
+	entry := l.acquire(key)
+	entry.lock.Lock()
+	defer func() {
+		entry.lock.Unlock()
+		l.release(key, entry)
+	}()
 	fn()
 }
 
-func (l *laneLocker) lane(key string) *sync.Mutex {
+type laneEntry struct {
+	lock sync.Mutex
+	refs int
+}
+
+func (l *laneLocker) acquire(key string) *laneEntry {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	mu, ok := l.lanes[key]
+	entry, ok := l.lanes[key]
 	if ok {
-		return mu
+		entry.refs++
+		return entry
 	}
-	mu = &sync.Mutex{}
-	l.lanes[key] = mu
-	return mu
+
+	entry = &laneEntry{refs: 1}
+	l.lanes[key] = entry
+	return entry
+}
+
+func (l *laneLocker) release(key string, entry *laneEntry) {
+	if l == nil || entry == nil {
+		return
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	current, ok := l.lanes[key]
+	if !ok || current != entry {
+		return
+	}
+
+	entry.refs--
+	if entry.refs > 0 {
+		return
+	}
+	delete(l.lanes, key)
 }

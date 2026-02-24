@@ -230,6 +230,16 @@ func TestServer_MentionGating(t *testing.T) {
 	require.True(t, rsp.Ignored)
 }
 
+func TestServer_New_RequireMentionWithoutPatterns(t *testing.T) {
+	t.Parallel()
+
+	_, err := New(
+		&stubRunner{},
+		WithRequireMentionInThreads(true),
+	)
+	require.Error(t, err)
+}
+
 func TestServer_Health(t *testing.T) {
 	t.Parallel()
 
@@ -889,4 +899,20 @@ func TestReplyAccumulator_IgnoresNilAndUnsupported(t *testing.T) {
 	})
 	acc.consumeFull(nil)
 	acc.consumeDelta(nil)
+}
+
+func TestLaneLocker_ReclaimsEntries(t *testing.T) {
+	t.Parallel()
+
+	l := newLaneLocker()
+	l.withLock("s1", func() {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		_, ok := l.lanes["s1"]
+		require.True(t, ok)
+	})
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	require.Empty(t, l.lanes)
 }
