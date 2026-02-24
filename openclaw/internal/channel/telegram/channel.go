@@ -77,11 +77,15 @@ type BotInfo struct {
 }
 
 // ProbeBotInfo fetches bot metadata via getMe.
-func ProbeBotInfo(ctx context.Context, token string) (BotInfo, error) {
+func ProbeBotInfo(
+	ctx context.Context,
+	token string,
+	opts ...tgapi.Option,
+) (BotInfo, error) {
 	if strings.TrimSpace(token) == "" {
 		return BotInfo{}, nil
 	}
-	c, err := tgapi.New(token)
+	c, err := tgapi.New(token, opts...)
 	if err != nil {
 		return BotInfo{}, err
 	}

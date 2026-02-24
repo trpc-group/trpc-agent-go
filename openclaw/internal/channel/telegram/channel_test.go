@@ -13,7 +13,9 @@ package telegram
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -135,6 +137,59 @@ func TestProbeBotInfo_EmptyToken(t *testing.T) {
 	require.Equal(t, BotInfo{}, info)
 }
 
+func TestProbeBotInfo_HTTP(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		require.Equal(t, http.MethodGet, r.Method)
+		require.Equal(t, "/bot"+testToken+"/getMe", r.URL.Path)
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(
+			w,
+			`{"ok":true,"result":{"id":123,"username":" my_bot "}}`,
+		)
+	}))
+	t.Cleanup(srv.Close)
+
+	info, err := ProbeBotInfo(
+		context.Background(),
+		testToken,
+		tgapi.WithBaseURL(srv.URL),
+		tgapi.WithHTTPClient(srv.Client()),
+	)
+	require.NoError(t, err)
+	require.Equal(t, int64(123), info.ID)
+	require.Equal(t, "my_bot", info.Username)
+	require.Equal(t, "@my_bot", info.Mention)
+}
+
+func TestProbeBotInfo_HTTPError(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		require.Equal(t, http.MethodGet, r.Method)
+		require.Equal(t, "/bot"+testToken+"/getMe", r.URL.Path)
+
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+
+	_, err := ProbeBotInfo(
+		context.Background(),
+		testToken,
+		tgapi.WithBaseURL(srv.URL),
+		tgapi.WithHTTPClient(srv.Client()),
+	)
+	require.Error(t, err)
+}
+
 func TestMentionFromUsername(t *testing.T) {
 	t.Parallel()
 
@@ -215,6 +270,30 @@ func TestChannel_ID(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, "telegram", ch.ID())
+}
+
+func TestNew_OptionsApplied(t *testing.T) {
+	t.Parallel()
+
+	gw := &stubGateway{}
+	dir := t.TempDir()
+
+	pollTimeout := 5 * time.Second
+	errorBackoff := 7 * time.Second
+	ch, err := New(
+		testToken,
+		BotInfo{Username: "bot"},
+		gw,
+		WithStateDir(dir),
+		WithStartFromLatest(false),
+		WithPollTimeout(pollTimeout),
+		WithErrorBackoff(errorBackoff),
+	)
+	require.NoError(t, err)
+
+	require.False(t, ch.startFromLatest)
+	require.Equal(t, pollTimeout, ch.pollTimeout)
+	require.Equal(t, errorBackoff, ch.errorBackoff)
 }
 
 func TestChannel_Run_Nil(t *testing.T) {
