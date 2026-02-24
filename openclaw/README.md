@@ -81,9 +81,48 @@ go run ./cmd/openclaw \
 
 ## Enable Telegram
 
-1) Create a bot via `@BotFather` and get a token.
+This demo uses **Telegram long polling** (`getUpdates`), so it does not
+require a public HTTPS endpoint.
 
-2) Run the binary with `-telegram-token`:
+### 1) Create a bot token
+
+1) Talk to `@BotFather`.
+
+2) Run `/newbot`.
+
+3) Pick a bot name and a username (Telegram requires the username to end with
+`bot`).
+
+4) Copy the bot token.
+
+### 2) Ensure long polling is enabled (no webhook)
+
+A Telegram bot cannot use `getUpdates` while a webhook is set.
+
+If you ever configured a webhook for this bot, delete it:
+
+```bash
+curl -sS "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getWebhookInfo"
+curl -sS "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/deleteWebhook"
+```
+
+### 3) Group chat notes (privacy mode)
+
+If you add the bot into a group, Telegram privacy mode affects which messages
+the bot receives.
+
+- With privacy **enabled** (default), the bot typically only receives messages
+  that mention it (for example `@mybot`), commands (for example `/start`),
+  and replies to the bot.
+- With privacy **disabled**, the bot can receive all group messages.
+
+This demo recommends mention gating (`-require-mention`) for groups, so keeping
+privacy enabled is usually fine. If you want to disable privacy, use
+`@BotFather` and run `/setprivacy`.
+
+### 4) Run the binary
+
+Run the binary with `-telegram-token`:
 
 ```bash
 cd openclaw
@@ -93,11 +132,22 @@ go run ./cmd/openclaw \
   -telegram-token "$TELEGRAM_BOT_TOKEN"
 ```
 
-3) Open a chat with your bot (or add it into a group) and send a text
-message.
+### 5) Send a message
+
+Open a chat with your bot (or add it into a group) and send a text message.
 
 The bot will forward inbound text to the gateway and send the final
 reply back to Telegram.
+
+### Telegram threads and topics
+
+This demo derives `session_id` based on whether the inbound message is a DM
+or a group message:
+
+- DMs: `thread` is empty, so the session is per-user.
+- Groups: `thread` is the chat ID, so the session is per-group.
+- Group topics: if Telegram provides `message_thread_id`, `thread` becomes
+  `<chat_id>:topic:<message_thread_id>`, so each topic gets its own session.
 
 ### Telegram polling offset
 
@@ -128,6 +178,19 @@ The allowlist is matched against:
 
 - Telegram: the numeric `from.id` (as a string)
 - HTTP: `user_id` if set, otherwise `from`
+
+To find your Telegram `from.id`:
+
+1) Do not run this demo yet (or stop it), so your local process does not
+consume updates.
+
+2) Send any message to your bot in Telegram.
+
+3) Call `getUpdates` and look for `message.from.id`:
+
+```bash
+curl -sS "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getUpdates"
+```
 
 ### Mention gating (groups)
 
