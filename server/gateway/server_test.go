@@ -916,3 +916,51 @@ func TestLaneLocker_ReclaimsEntries(t *testing.T) {
 	defer l.mu.Unlock()
 	require.Empty(t, l.lanes)
 }
+
+func TestNewOptions_DefaultsAndNormalization(t *testing.T) {
+	t.Parallel()
+
+	sessionFn := func(InboundMessage) (string, error) {
+		return "s", nil
+	}
+
+	o := newOptions(
+		WithBasePath(" "),
+		WithMessagesPath(" "),
+		WithStatusPath(" "),
+		WithCancelPath(" "),
+		WithHealthPath(" "),
+		WithMaxBodyBytes(0),
+		WithSessionIDFunc(sessionFn),
+		WithAllowUsers(" a ", "", "b"),
+		WithRequireMentionInThreads(true),
+		WithMentionPatterns(" @bot ", "", "/agent"),
+	)
+
+	require.Equal(t, defaultBasePath, o.basePath)
+	require.Equal(t, defaultMessagesPath, o.messagesPath)
+	require.Equal(t, defaultStatusPath, o.statusPath)
+	require.Equal(t, defaultCancelPath, o.cancelPath)
+	require.Equal(t, defaultHealthPath, o.healthPath)
+	require.Equal(t, defaultMaxBodyBytes, o.maxBodyBytes)
+	require.NotNil(t, o.sessionIDFunc)
+
+	require.NotNil(t, o.allowUsers)
+	_, ok := o.allowUsers["a"]
+	require.True(t, ok)
+	_, ok = o.allowUsers["b"]
+	require.True(t, ok)
+
+	require.True(t, o.requireMention)
+	require.Equal(t, []string{"@bot", "/agent"}, o.mentionPatterns)
+}
+
+func TestWithMentionPatterns_EmptyResets(t *testing.T) {
+	t.Parallel()
+
+	o := newOptions(
+		WithMentionPatterns("@bot"),
+		WithMentionPatterns(),
+	)
+	require.Nil(t, o.mentionPatterns)
+}

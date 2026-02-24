@@ -89,3 +89,85 @@ func TestFileOffsetStore_Write_NegativeOffset(t *testing.T) {
 
 	require.Error(t, store.Write(context.Background(), -1))
 }
+
+func TestNewFileOffsetStore_EmptyPath(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewFileOffsetStore("")
+	require.Error(t, err)
+}
+
+func TestFileOffsetStore_Read_NegativeOffset(t *testing.T) {
+	t.Parallel()
+
+	p := filepath.Join(t.TempDir(), "offset.json")
+	require.NoError(
+		t,
+		os.WriteFile(
+			p,
+			[]byte("{\"version\":1,\"offset\":-1}"),
+			0o600,
+		),
+	)
+
+	store, err := NewFileOffsetStore(p)
+	require.NoError(t, err)
+
+	_, _, err = store.Read(context.Background())
+	require.Error(t, err)
+}
+
+func TestFileOffsetStore_Read_FileReadError(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	p := filepath.Join(dir, "offset.json")
+	require.NoError(t, os.Mkdir(p, 0o700))
+
+	store, err := NewFileOffsetStore(p)
+	require.NoError(t, err)
+
+	_, _, err = store.Read(context.Background())
+	require.Error(t, err)
+}
+
+func TestFileOffsetStore_Read_ContextCanceled(t *testing.T) {
+	t.Parallel()
+
+	p := filepath.Join(t.TempDir(), "offset.json")
+	store, err := NewFileOffsetStore(p)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, _, err = store.Read(ctx)
+	require.Error(t, err)
+}
+
+func TestFileOffsetStore_Write_ContextCanceled(t *testing.T) {
+	t.Parallel()
+
+	p := filepath.Join(t.TempDir(), "offset.json")
+	store, err := NewFileOffsetStore(p)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	require.Error(t, store.Write(ctx, 1))
+}
+
+func TestFileOffsetStore_Write_DirIsFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	parent := filepath.Join(dir, "not-a-dir")
+	require.NoError(t, os.WriteFile(parent, []byte("x"), 0o600))
+
+	p := filepath.Join(parent, "offset.json")
+	store, err := NewFileOffsetStore(p)
+	require.NoError(t, err)
+
+	require.Error(t, store.Write(context.Background(), 1))
+}

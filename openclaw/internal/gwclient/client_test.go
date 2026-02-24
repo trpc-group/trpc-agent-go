@@ -172,3 +172,79 @@ func TestMessageResponse_JSON(t *testing.T) {
 	require.NoError(t, err)
 	require.NotContains(t, string(b), "StatusCode")
 }
+
+func TestNew_ValidationErrors(t *testing.T) {
+	t.Parallel()
+
+	_, err := New(nil, "/v1/gateway/messages")
+	require.Error(t, err)
+
+	_, err = New(http.NewServeMux(), "")
+	require.Error(t, err)
+}
+
+type statusHandler struct {
+	code int
+	body string
+}
+
+func (h *statusHandler) ServeHTTP(
+	w http.ResponseWriter,
+	_ *http.Request,
+) {
+	w.WriteHeader(h.code)
+	_, _ = w.Write([]byte(h.body))
+}
+
+func TestClient_SendMessage_StatusError_NoPayload(t *testing.T) {
+	t.Parallel()
+
+	cli, err := New(
+		&statusHandler{
+			code: http.StatusInternalServerError,
+			body: "{}",
+		},
+		"/v1/gateway/messages",
+	)
+	require.NoError(t, err)
+
+	_, err = cli.SendMessage(context.Background(), MessageRequest{
+		From: "u1",
+		Text: "hello",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "status 500")
+}
+
+func TestClient_SendMessage_StatusError_WithPayload(t *testing.T) {
+	t.Parallel()
+
+	cli, err := New(
+		&statusHandler{
+			code: http.StatusForbidden,
+			body: "{\"error\":{\"type\":\"unauthorized\",\"message\":\"no\"}}",
+		},
+		"/v1/gateway/messages",
+	)
+	require.NoError(t, err)
+
+	_, err = cli.SendMessage(context.Background(), MessageRequest{
+		From: "u1",
+		Text: "hello",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unauthorized")
+}
+
+func TestClient_SendMessage_NewRequestError(t *testing.T) {
+	t.Parallel()
+
+	cli, err := New(http.NewServeMux(), "http://[::1")
+	require.NoError(t, err)
+
+	_, err = cli.SendMessage(context.Background(), MessageRequest{
+		From: "u1",
+		Text: "hello",
+	})
+	require.Error(t, err)
+}

@@ -266,3 +266,220 @@ func TestPoller_OffsetStore_Resume(t *testing.T) {
 	require.NotEmpty(t, store.writes)
 	require.Equal(t, 101, store.writes[len(store.writes)-1])
 }
+
+func TestNewPoller_ValidationErrors(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewPoller(nil)
+	require.Error(t, err)
+
+	client := &stubUpdatesClient{}
+
+	_, err = NewPoller(client)
+	require.Error(t, err)
+
+	_, err = NewPoller(
+		client,
+		WithMessageHandler(func(context.Context, Message) error {
+			return nil
+		}),
+		WithPollTimeout(-1*time.Second),
+	)
+	require.Error(t, err)
+
+	_, err = NewPoller(
+		client,
+		WithMessageHandler(func(context.Context, Message) error {
+			return nil
+		}),
+		WithErrorBackoff(-1*time.Second),
+	)
+	require.Error(t, err)
+
+	_, err = NewPoller(
+		client,
+		WithMessageHandler(func(context.Context, Message) error {
+			return nil
+		}),
+		WithOnError(nil),
+	)
+	require.Error(t, err)
+}
+
+func TestPoller_SkipsNonTextAndBotMessages(t *testing.T) {
+	t.Parallel()
+
+	client := &stubUpdatesClient{
+		results: [][]Update{
+			{
+				{UpdateID: 1},
+				{
+					UpdateID: 2,
+					Message: &Message{
+						MessageID: 2,
+						From:      &User{ID: 1},
+						Chat:      &Chat{ID: 2, Type: chatTypePrivate},
+					},
+				},
+				{
+					UpdateID: 3,
+					Message: &Message{
+						MessageID: 3,
+						From:      &User{ID: 1, IsBot: true},
+						Chat:      &Chat{ID: 2, Type: chatTypePrivate},
+						Text:      "hi",
+					},
+				},
+				{
+					UpdateID: 4,
+					Message: &Message{
+						MessageID: 4,
+						From:      &User{ID: 1},
+						Chat:      &Chat{ID: 2, Type: chatTypePrivate},
+						Text:      "ok",
+					},
+				},
+			},
+		},
+	}
+
+	store := &stubOffsetStore{}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	handled := make(chan struct{}, 1)
+	poller, err := NewPoller(
+		client,
+		WithStartFromLatest(false),
+		WithPollTimeout(0),
+		WithOffsetStore(store),
+		WithMessageHandler(func(_ context.Context, msg Message) error {
+			require.Equal(t, "ok", msg.Text)
+			handled <- struct{}{}
+			cancel()
+			return nil
+		}),
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, poller.Run(ctx))
+
+	select {
+	case <-handled:
+	default:
+		t.Fatal("expected handler to be called")
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	require.NotEmpty(t, store.writes)
+	require.Equal(t, 5, store.writes[len(store.writes)-1])
+}
+
+type errWriteOffsetStore struct {
+	err error
+}
+
+func (s *errWriteOffsetStore) Read(context.Context) (int, bool, error) {
+	return 0, false, nil
+}
+
+func (s *errWriteOffsetStore) Write(
+	context.Context,
+	int,
+) error {
+	return s.err
+}
+
+func TestPoller_OffsetStoreWriteError_CallsOnError(t *testing.T) {
+	t.Parallel()
+
+	expected := errors.New("write fail")
+	store := &errWriteOffsetStore{err: expected}
+
+	client := &stubUpdatesClient{
+		results: [][]Update{
+			{
+				{
+					UpdateID: 1,
+					Message: &Message{
+						MessageID: 1,
+						From:      &User{ID: 1},
+						Chat:      &Chat{ID: 2, Type: chatTypePrivate},
+						Text:      "hi",
+					},
+				},
+			},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	var got error
+	poller, err := NewPoller(
+		client,
+		WithStartFromLatest(false),
+		WithPollTimeout(0),
+		WithOffsetStore(store),
+		WithErrorBackoff(0),
+		WithOnError(func(err error) { got = err }),
+		WithMessageHandler(func(_ context.Context, _ Message) error {
+			cancel()
+			return nil
+		}),
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, poller.Run(ctx))
+	require.ErrorIs(t, got, expected)
+}
+
+type errReadOffsetStore struct {
+	err error
+}
+
+func (s *errReadOffsetStore) Read(
+	context.Context,
+) (int, bool, error) {
+	return 0, false, s.err
+}
+
+func (s *errReadOffsetStore) Write(context.Context, int) error {
+	return nil
+}
+
+func TestPoller_OffsetStoreReadError_ReturnsError(t *testing.T) {
+	t.Parallel()
+
+	expected := errors.New("read fail")
+	store := &errReadOffsetStore{err: expected}
+
+	client := &stubUpdatesClient{}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	poller, err := NewPoller(
+		client,
+		WithOffsetStore(store),
+		WithMessageHandler(func(context.Context, Message) error {
+			return nil
+		}),
+	)
+	require.NoError(t, err)
+
+	err = poller.Run(ctx)
+	require.ErrorIs(t, err, expected)
+}
+
+func TestSleepWithContext(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	require.True(t, sleepWithContext(ctx, 0))
+	require.False(t, sleepWithContext(ctx, time.Second))
+}

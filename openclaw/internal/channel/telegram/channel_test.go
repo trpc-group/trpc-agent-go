@@ -14,6 +14,8 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -38,6 +40,8 @@ type stubGateway struct {
 	rsp   gwclient.MessageResponse
 	err   error
 	delay time.Duration
+
+	onSend func()
 }
 
 func (g *stubGateway) SendMessage(
@@ -55,6 +59,9 @@ func (g *stubGateway) SendMessage(
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.reqs = append(g.reqs, req)
+	if g.onSend != nil {
+		g.onSend()
+	}
 	return g.rsp, g.err
 }
 
@@ -92,6 +99,32 @@ func (b *stubBot) SendMessage(
 	defer b.mu.Unlock()
 	b.sent = append(b.sent, params)
 	return tgapi.Message{}, b.sendErr
+}
+
+type stubOffsetStore struct {
+	mu     sync.Mutex
+	offset int
+	ok     bool
+	err    error
+	writes []int
+}
+
+func (s *stubOffsetStore) Read(
+	_ context.Context,
+) (int, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.offset, s.ok, s.err
+}
+
+func (s *stubOffsetStore) Write(
+	_ context.Context,
+	offset int,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.writes = append(s.writes, offset)
+	return nil
 }
 
 func TestProbeBotInfo_EmptyToken(t *testing.T) {
@@ -402,4 +435,154 @@ func TestChannel_HandleMessage_ReplySplit(t *testing.T) {
 	require.Equal(t, 0, second.ReplyToMessageID)
 	require.Len(t, first.Text, maxReplyRunes)
 	require.Len(t, second.Text, 1)
+}
+
+func TestResolveStateDir_Default(t *testing.T) {
+	t.Parallel()
+
+	got, err := resolveStateDir("")
+	require.NoError(t, err)
+
+	suffix := filepath.Join(defaultStateRootDir, defaultStateAppName)
+	require.True(t, strings.HasSuffix(got, suffix))
+}
+
+func TestNewOffsetStore_StateDirEmpty(t *testing.T) {
+	t.Parallel()
+
+	_, err := newOffsetStore("", BotInfo{})
+	require.Error(t, err)
+}
+
+func TestNewOffsetStore_WritesToExpectedPath(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	bot := BotInfo{Username: "my bot"}
+
+	store, err := newOffsetStore(dir, bot)
+	require.NoError(t, err)
+
+	require.NoError(t, store.Write(context.Background(), 10))
+
+	filename := offsetStoreFilePrefix +
+		offsetKey(bot) +
+		offsetStoreFileSuffix
+	path := filepath.Join(dir, offsetStoreDir, filename)
+
+	_, err = os.Stat(path)
+	require.NoError(t, err)
+}
+
+func TestChannel_Run_OneMessage(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	gw := &stubGateway{
+		rsp: gwclient.MessageResponse{
+			StatusCode: http.StatusOK,
+			Reply:      "ok",
+		},
+		onSend: cancel,
+	}
+	gw.delay = 0
+
+	bot := &stubBot{
+		updates: [][]tgapi.Update{
+			{
+				{
+					UpdateID: 1,
+					Message: &tgapi.Message{
+						MessageID: 1,
+						From:      &tgapi.User{ID: 2},
+						Chat: &tgapi.Chat{
+							ID:   3,
+							Type: chatTypePrivate,
+						},
+						Text: "hi",
+					},
+				},
+			},
+		},
+	}
+
+	store := &stubOffsetStore{}
+	ch := &Channel{
+		bot:             bot,
+		gw:              gw,
+		store:           store,
+		startFromLatest: false,
+		pollTimeout:     0,
+		errorBackoff:    0,
+	}
+
+	require.NoError(t, ch.Run(ctx))
+}
+
+func TestChannel_HandleMessage_Ignored(t *testing.T) {
+	t.Parallel()
+
+	gw := &stubGateway{
+		rsp: gwclient.MessageResponse{
+			StatusCode: http.StatusOK,
+			Ignored:    true,
+			Reply:      "ok",
+		},
+	}
+	dir := t.TempDir()
+	ch, err := New(
+		testToken,
+		BotInfo{Username: "bot"},
+		gw,
+		WithStateDir(dir),
+	)
+	require.NoError(t, err)
+
+	bot := &stubBot{}
+	ch.bot = bot
+
+	err = ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID: 1,
+		From:      &tgapi.User{ID: 2},
+		Chat:      &tgapi.Chat{ID: 3, Type: chatTypePrivate},
+		Text:      "hi",
+	})
+	require.NoError(t, err)
+
+	bot.mu.Lock()
+	require.Empty(t, bot.sent)
+	bot.mu.Unlock()
+}
+
+func TestChannel_HandleMessage_SendError_Drops(t *testing.T) {
+	t.Parallel()
+
+	gw := &stubGateway{
+		rsp: gwclient.MessageResponse{
+			StatusCode: http.StatusOK,
+			Reply:      "ok",
+		},
+	}
+	dir := t.TempDir()
+	ch, err := New(
+		testToken,
+		BotInfo{Username: "bot"},
+		gw,
+		WithStateDir(dir),
+	)
+	require.NoError(t, err)
+
+	botErr := errors.New("send failed")
+	bot := &stubBot{sendErr: botErr}
+	ch.bot = bot
+
+	err = ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID: 1,
+		From:      &tgapi.User{ID: 2},
+		Chat:      &tgapi.Chat{ID: 3, Type: chatTypePrivate},
+		Text:      "hi",
+	})
+	require.NoError(t, err)
 }
