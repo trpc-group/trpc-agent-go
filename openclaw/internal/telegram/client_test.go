@@ -17,6 +17,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"testing"
 	"time"
@@ -308,6 +309,30 @@ func TestClient_GetMe_HTTPClientError(t *testing.T) {
 
 	_, err = c.GetMe(context.Background())
 	require.ErrorIs(t, err, expected)
+}
+
+func TestClient_GetMe_RedactsTokenInHTTPClientError(t *testing.T) {
+	t.Parallel()
+
+	expected := errors.New("transport down")
+	httpClient := &http.Client{
+		Transport: roundTripperFunc(func(
+			r *http.Request,
+		) (*http.Response, error) {
+			return nil, &url.Error{
+				Op:  r.Method,
+				URL: r.URL.String(),
+				Err: expected,
+			}
+		}),
+	}
+	c, err := New(testToken, WithHTTPClient(httpClient))
+	require.NoError(t, err)
+
+	_, err = c.GetMe(context.Background())
+	require.Error(t, err)
+	require.ErrorIs(t, err, expected)
+	require.NotContains(t, err.Error(), testToken)
 }
 
 func TestClient_GetMe_ReadError(t *testing.T) {

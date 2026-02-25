@@ -26,6 +26,8 @@ import (
 
 const defaultBaseURL = "https://api.telegram.org"
 
+const redactedToken = "<redacted>"
+
 const (
 	methodGet  = "GET"
 	methodPost = "POST"
@@ -34,6 +36,19 @@ const (
 	pathGetUpdate = "getUpdates"
 	pathSendMsg   = "sendMessage"
 )
+
+type redactedError struct {
+	msg string
+	err error
+}
+
+func (e redactedError) Error() string {
+	return e.msg
+}
+
+func (e redactedError) Unwrap() error {
+	return e.err
+}
 
 // Client talks to the Telegram Bot API.
 type Client struct {
@@ -210,7 +225,7 @@ func (c *Client) do(
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("telegram: request: %w", err)
+		return c.redactErr(fmt.Errorf("telegram: request: %w", err))
 	}
 	defer resp.Body.Close()
 
@@ -228,6 +243,23 @@ func (c *Client) do(
 		return fmt.Errorf("telegram: decode json: %w", err)
 	}
 	return nil
+}
+
+func (c *Client) redactErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	token := strings.TrimSpace(c.token)
+	if token == "" {
+		return err
+	}
+
+	orig := err.Error()
+	msg := strings.ReplaceAll(orig, token, redactedToken)
+	if msg == orig {
+		return err
+	}
+	return redactedError{msg: msg, err: err}
 }
 
 func validateResponse[T any](rsp apiResponse[T]) error {
