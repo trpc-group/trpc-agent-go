@@ -243,6 +243,14 @@ borrows a few design ideas from OpenClaw:
 - `{baseDir}` placeholder substitution for better OpenClaw skill
   compatibility.
 
+### Bundled skills
+
+This demo includes a few simple bundled skills under `openclaw/skills/`:
+
+- `hello`: write a small file to `out/`.
+- `envdump`: dump environment info to `out/env.txt`.
+- `http_get`: fetch a URL with `curl` into `out/`.
+
 ### Locations and precedence
 
 Skills are loaded from these locations (highest precedence first):
@@ -297,6 +305,15 @@ example:
 ```
 List available skills, then run the hello skill.
 ```
+
+## Session and memory
+
+This demo uses `trpc-agent-go` sessions to store conversation history
+per `session_id` (derived from DM vs group/topic).
+
+It also enables an in-memory memory service and memory tools
+(`memory_add`, `memory_load`, etc.) for the agent. Stored memories are
+kept in process memory and are cleared when the process exits.
 
 ## OpenClaw exec/process tools (unsafe)
 

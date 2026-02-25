@@ -29,6 +29,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	meminmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -192,6 +193,13 @@ func main() {
 		log.Fatalf("resolve state dir failed: %v", err)
 	}
 
+	memSvc := meminmemory.NewMemoryService()
+	defer func() {
+		if err := memSvc.Close(); err != nil {
+			log.Warnf("close memory service failed: %v", err)
+		}
+	}()
+
 	llm, err := newAgent(mdl, agentConfig{
 		SkillsRoot:          *skillsRoot,
 		SkillsExtraDirs:     splitCSV(*skillsExtraDirs),
@@ -199,12 +207,16 @@ func main() {
 		StateDir:            resolvedStateDir,
 		EnableLocalExec:     *enableLocalExec,
 		EnableOpenClawTools: *enableOpenClawTools,
-	})
+	}, memSvc.Tools())
 	if err != nil {
 		log.Fatalf("create agent failed: %v", err)
 	}
 
-	r := runner.NewRunner(appName, llm)
+	r := runner.NewRunner(
+		appName,
+		llm,
+		runner.WithMemoryService(memSvc),
+	)
 
 	gwOpts := makeGatewayOptions(
 		splitCSV(*allowUsers),
@@ -299,6 +311,7 @@ func makeGatewayOptions(
 func newAgent(
 	mdl model.Model,
 	cfg agentConfig,
+	extraTools []tool.Tool,
 ) (agent.Agent, error) {
 	opts := []llmagent.Option{
 		llmagent.WithModel(mdl),
@@ -319,13 +332,16 @@ func newAgent(
 
 	opts = append(opts, llmagent.WithSkills(repo))
 
+	tools := append([]tool.Tool(nil), extraTools...)
 	if cfg.EnableOpenClawTools {
 		mgr := octool.NewManager()
-		tools := []tool.Tool{
+		tools = append(tools,
 			octool.NewExecTool("exec", mgr),
 			octool.NewExecTool("bash", mgr),
 			octool.NewProcessTool(mgr),
-		}
+		)
+	}
+	if len(tools) > 0 {
 		opts = append(opts, llmagent.WithTools(tools))
 	}
 	if cfg.EnableLocalExec {
