@@ -8,7 +8,7 @@
 //
 //
 
-package main
+package app
 
 import (
 	"net/http"
