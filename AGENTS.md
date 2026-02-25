@@ -21,7 +21,7 @@ The root `go.mod` requires Go 1.21. The environment has Go 1.22+ pre-installed, 
 | gofmt check | `gofmt -r 'interface{} -> any' -l .` | CI enforces `any` over `interface{}` |
 | goimports check | `goimports -l .` | |
 | All sub-module tests (CI-style) | `bash .github/scripts/run-go-tests.sh` | Runs tests across ~80 modules excluding examples/docs/test |
-| Check examples build | `bash .github/scripts/check-examples.sh` | |
+| Check example builds | `bash .github/scripts/check-examples.sh` | |
 
 ### Non-obvious caveats
 
