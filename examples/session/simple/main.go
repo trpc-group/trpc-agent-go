@@ -106,7 +106,6 @@ type multiTurnChat struct {
 	sessionService session.Service
 	userID         string
 	sessionID      string
-	sessionIDs     []string
 }
 
 // run starts the interactive chat session.
@@ -167,7 +166,6 @@ func (c *multiTurnChat) setup(_ context.Context) error {
 
 	c.userID = "user"
 	c.sessionID = fmt.Sprintf("session-%d", time.Now().Unix())
-	c.rememberSession(c.sessionID)
 
 	fmt.Printf("Chat ready! Session: %s\n\n", c.sessionID)
 	return nil
@@ -401,7 +399,6 @@ func (c *multiTurnChat) displayContent(
 func (c *multiTurnChat) startNewSession() {
 	oldSessionID := c.sessionID
 	c.sessionID = fmt.Sprintf("session-%d", time.Now().Unix())
-	c.rememberSession(c.sessionID)
 	fmt.Printf("Started new session!\n")
 	fmt.Printf("   Previous: %s\n", oldSessionID)
 	fmt.Printf("   Current:  %s\n", c.sessionID)
@@ -409,32 +406,29 @@ func (c *multiTurnChat) startNewSession() {
 	fmt.Println()
 }
 
-func (c *multiTurnChat) rememberSession(id string) {
-	id = strings.TrimSpace(id)
-	if id == "" {
+func (c *multiTurnChat) listSessions() {
+	ctx := context.Background()
+	userKey := session.UserKey{
+		AppName: "session-demo",
+		UserID:  c.userID,
+	}
+	sessions, err := c.sessionService.ListSessions(ctx, userKey)
+	if err != nil {
+		fmt.Printf("Failed to list sessions: %v\n\n", err)
 		return
 	}
-	for _, existing := range c.sessionIDs {
-		if existing == id {
-			return
-		}
-	}
-	c.sessionIDs = append(c.sessionIDs, id)
-}
-
-func (c *multiTurnChat) listSessions() {
-	if len(c.sessionIDs) == 0 {
+	if len(sessions) == 0 {
 		fmt.Println("(no sessions recorded yet)")
 		fmt.Println()
 		return
 	}
 	fmt.Println("Session roster:")
-	for _, id := range c.sessionIDs {
+	for _, sess := range sessions {
 		marker := " "
-		if id == c.sessionID {
+		if sess.ID == c.sessionID {
 			marker = "*"
 		}
-		fmt.Printf("   %s %s\n", marker, id)
+		fmt.Printf("   %s %s (updated: %s)\n", marker, sess.ID, sess.UpdatedAt.Format(time.RFC3339))
 	}
 	fmt.Println()
 }
@@ -450,6 +444,5 @@ func (c *multiTurnChat) switchSession(target string) {
 		return
 	}
 	c.sessionID = target
-	c.rememberSession(target)
 	fmt.Printf("Switched to session %s\n", target)
 }

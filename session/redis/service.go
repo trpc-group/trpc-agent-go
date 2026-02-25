@@ -923,6 +923,11 @@ func (s *Service) listSessions(
 		return nil, err
 	}
 
+	// Sort sessions by UpdatedAt descending to match SQL-based implementations.
+	slices.SortFunc(sessStates, func(a, b *SessionState) int {
+		return b.UpdatedAt.Compare(a.UpdatedAt)
+	})
+
 	// process app state
 	appState, err := processStateCmd(appStateCmd)
 	if err != nil {
