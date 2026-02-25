@@ -31,6 +31,7 @@ const (
 	testCoordinatorName = testTeamName
 	testMemberNameOne   = "member_one"
 	testMemberNameTwo   = "member_two"
+	testMemberNameThree = "member_three"
 	testEntryName       = testMemberNameOne
 	testUserMessage     = "hi"
 
@@ -46,6 +47,12 @@ const (
 	testNestedLeaf  = "backend_dev"
 	testOuterName   = "project_manager"
 	testOuterMember = "doc_writer"
+
+	testErrMembersEmpty    = "members is empty"
+	testErrMemberNil       = "member is nil"
+	testErrMemberNameEmpty = "member name is empty"
+	testErrDupMemberName   = "duplicate member name"
+	testErrNoSetSubAgents  = "does not support SetSubAgents"
 )
 
 type testAgent struct {
@@ -689,4 +696,247 @@ func TestTeam_getActiveAgent_NoState(t *testing.T) {
 
 func TestSwarmActiveAgentKey_EmptyTeamName(t *testing.T) {
 	require.Equal(t, SwarmActiveAgentKeyPrefix, swarmActiveAgentKey(""))
+}
+
+func TestTeam_UpdateSwarmMembers_RewiresRoster(t *testing.T) {
+	a := &testSwarmMember{name: testMemberNameOne}
+	b := &testSwarmMember{name: testMemberNameTwo}
+
+	tm, err := NewSwarm(
+		testTeamName,
+		testEntryName,
+		[]agent.Agent{a, b},
+	)
+	require.NoError(t, err)
+
+	c := &testSwarmMember{name: testMemberNameThree}
+	require.NoError(t, tm.AddSwarmMember(c))
+
+	require.Len(t, tm.SubAgents(), 3)
+	require.NotNil(t, tm.FindSubAgent(testMemberNameThree))
+
+	require.Len(t, a.subAgents, 2)
+	require.Equal(t, testMemberNameTwo, a.subAgents[0].Info().Name)
+	require.Equal(t, testMemberNameThree, a.subAgents[1].Info().Name)
+
+	require.Len(t, b.subAgents, 2)
+	require.Equal(t, testMemberNameOne, b.subAgents[0].Info().Name)
+	require.Equal(t, testMemberNameThree, b.subAgents[1].Info().Name)
+
+	require.Len(t, c.subAgents, 2)
+	require.Equal(t, testMemberNameOne, c.subAgents[0].Info().Name)
+	require.Equal(t, testMemberNameTwo, c.subAgents[1].Info().Name)
+}
+
+func TestTeam_RemoveSwarmMember(t *testing.T) {
+	a := &testSwarmMember{name: testMemberNameOne}
+	b := &testSwarmMember{name: testMemberNameTwo}
+	c := &testSwarmMember{name: testMemberNameThree}
+
+	tm, err := NewSwarm(
+		testTeamName,
+		testEntryName,
+		[]agent.Agent{a, b, c},
+	)
+	require.NoError(t, err)
+
+	require.True(t, tm.RemoveSwarmMember(testMemberNameTwo))
+
+	require.Len(t, tm.SubAgents(), 2)
+	require.Nil(t, tm.FindSubAgent(testMemberNameTwo))
+
+	require.Len(t, a.subAgents, 1)
+	require.Equal(t, testMemberNameThree, a.subAgents[0].Info().Name)
+
+	require.Len(t, c.subAgents, 1)
+	require.Equal(t, testMemberNameOne, c.subAgents[0].Info().Name)
+
+	require.False(t, tm.RemoveSwarmMember(testEntryName))
+}
+
+func TestTeam_UpdateSwarmMembers_MissingEntry(t *testing.T) {
+	a := &testSwarmMember{name: testMemberNameOne}
+	b := &testSwarmMember{name: testMemberNameTwo}
+
+	tm, err := NewSwarm(
+		testTeamName,
+		testEntryName,
+		[]agent.Agent{a, b},
+	)
+	require.NoError(t, err)
+
+	err = tm.UpdateSwarmMembers([]agent.Agent{b})
+	require.Error(t, err)
+}
+
+func TestTeam_UpdateSwarmMembers_NotSwarm(t *testing.T) {
+	coordinator := &testCoordinator{name: testCoordinatorName}
+	members := []agent.Agent{testAgent{name: testMemberNameOne}}
+
+	tm, err := New(coordinator, members)
+	require.NoError(t, err)
+
+	err = tm.UpdateSwarmMembers(members)
+	require.ErrorIs(t, err, errNotSwarmTeam)
+}
+
+func TestTeam_UpdateSwarmMembers_NilTeam(t *testing.T) {
+	var tm *Team
+	err := tm.UpdateSwarmMembers(nil)
+	require.ErrorIs(t, err, errNilTeam)
+}
+
+func TestTeam_AddSwarmMember_NilTeam(t *testing.T) {
+	var tm *Team
+	err := tm.AddSwarmMember(testAgent{name: testMemberNameOne})
+	require.ErrorIs(t, err, errNilTeam)
+}
+
+func TestTeam_AddSwarmMember_NotSwarm(t *testing.T) {
+	tm := &Team{mode: ModeCoordinator}
+	err := tm.AddSwarmMember(testAgent{name: testMemberNameOne})
+	require.ErrorIs(t, err, errNotSwarmTeam)
+}
+
+func TestTeam_RemoveSwarmMember_EarlyReturns(t *testing.T) {
+	var nilTeam *Team
+	require.False(t, nilTeam.RemoveSwarmMember(testMemberNameOne))
+
+	notSwarm := &Team{mode: ModeCoordinator}
+	require.False(
+		t,
+		notSwarm.RemoveSwarmMember(testMemberNameOne),
+	)
+
+	entry := &testSwarmMember{name: testMemberNameOne}
+	tm, err := NewSwarm(
+		testTeamName,
+		testEntryName,
+		[]agent.Agent{entry},
+	)
+	require.NoError(t, err)
+
+	require.False(t, tm.RemoveSwarmMember(""))
+	require.False(
+		t,
+		tm.RemoveSwarmMember(testMemberNameTwo),
+	)
+}
+
+func TestTeam_UpdateSwarmMembers_InvalidMembers(t *testing.T) {
+	entry := &testSwarmMember{name: testMemberNameOne}
+	other := &testSwarmMember{name: testMemberNameTwo}
+	tm, err := NewSwarm(
+		testTeamName,
+		testEntryName,
+		[]agent.Agent{entry, other},
+	)
+	require.NoError(t, err)
+
+	cases := []struct {
+		name    string
+		members []agent.Agent
+		wantErr string
+	}{
+		{
+			name:    "empty",
+			members: []agent.Agent{},
+			wantErr: testErrMembersEmpty,
+		},
+		{
+			name:    "nil_member",
+			members: []agent.Agent{nil},
+			wantErr: testErrMemberNil,
+		},
+		{
+			name: "empty_name",
+			members: []agent.Agent{
+				entry,
+				&testSwarmMember{name: ""},
+			},
+			wantErr: testErrMemberNameEmpty,
+		},
+		{
+			name: "duplicate_name",
+			members: []agent.Agent{
+				entry,
+				&testSwarmMember{
+					name: testMemberNameTwo,
+				},
+				&testSwarmMember{
+					name: testMemberNameTwo,
+				},
+			},
+			wantErr: testErrDupMemberName,
+		},
+		{
+			name: "no_sub_agent_setter",
+			members: []agent.Agent{
+				entry,
+				testAgent{name: testMemberNameTwo},
+			},
+			wantErr: testErrNoSetSubAgents,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tm.UpdateSwarmMembers(tc.members)
+			require.ErrorContains(t, err, tc.wantErr)
+		})
+	}
+}
+
+func TestTeam_RemoveSwarmMember_UpdateError(t *testing.T) {
+	entry := &testSwarmMember{name: testMemberNameOne}
+	other := testAgent{name: testMemberNameTwo}
+	removed := &testSwarmMember{name: testMemberNameThree}
+
+	tm := &Team{
+		mode:      ModeSwarm,
+		entryName: testEntryName,
+		members: []agent.Agent{
+			entry,
+			nil,
+			other,
+			removed,
+		},
+	}
+	require.False(t, tm.RemoveSwarmMember(testMemberNameThree))
+}
+
+func TestTeam_RunSwarm_CrossRequestTransfer_RemovedActiveAgent(t *testing.T) {
+	a := &testSwarmMember{name: testMemberNameOne}
+	b := &testSwarmMember{name: testMemberNameTwo}
+
+	tm, err := NewSwarm(
+		testTeamName,
+		testEntryName,
+		[]agent.Agent{a, b},
+		WithCrossRequestTransfer(true),
+	)
+	require.NoError(t, err)
+
+	sess := session.NewSession(testAppName, testUserID, testSessionID)
+	sess.SetState(
+		SwarmActiveAgentKeyPrefix+testTeamName,
+		[]byte(testMemberNameTwo),
+	)
+
+	require.True(t, tm.RemoveSwarmMember(testMemberNameTwo))
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(tm),
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(model.NewUserMessage(testUserMessage)),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	ch, err := tm.Run(ctx, inv)
+	require.NoError(t, err)
+
+	var gotAuthor string
+	for e := range ch {
+		gotAuthor = e.Author
+	}
+	require.Equal(t, testEntryName, gotAuthor)
 }
