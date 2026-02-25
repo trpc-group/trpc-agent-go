@@ -423,18 +423,28 @@ func (c *multiTurnChat) rememberSession(id string) {
 }
 
 func (c *multiTurnChat) listSessions() {
-	if len(c.sessionIDs) == 0 {
+	ctx := context.Background()
+	userKey := session.UserKey{
+		AppName: "session-demo",
+		UserID:  c.userID,
+	}
+	sessions, err := c.sessionService.ListSessions(ctx, userKey)
+	if err != nil {
+		fmt.Printf("Failed to list sessions: %v\n\n", err)
+		return
+	}
+	if len(sessions) == 0 {
 		fmt.Println("(no sessions recorded yet)")
 		fmt.Println()
 		return
 	}
 	fmt.Println("Session roster:")
-	for _, id := range c.sessionIDs {
+	for _, sess := range sessions {
 		marker := " "
-		if id == c.sessionID {
+		if sess.ID == c.sessionID {
 			marker = "*"
 		}
-		fmt.Printf("   %s %s\n", marker, id)
+		fmt.Printf("   %s %s (updated: %s)\n", marker, sess.ID, sess.UpdatedAt.Format(time.RFC3339))
 	}
 	fmt.Println()
 }
