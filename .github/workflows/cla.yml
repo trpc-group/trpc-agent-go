@@ -28,4 +28,5 @@ jobs:
           path-to-signatures: 'signatures/${{ github.event.repository.name }}-${{ github.repository_id }}/cla.json'
           path-to-document: 'https://github.com/trpc-group/cla-database/blob/main/Tencent-Contributor-License-Agreement.md'
           # branch should not be protected
-          branch: 'main' 
+          branch: 'main'
+          allowlist: cursoragent
