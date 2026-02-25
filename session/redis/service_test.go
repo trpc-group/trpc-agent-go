@@ -2462,13 +2462,17 @@ func TestService_ListSessions_EmptyEvents(t *testing.T) {
 	defer service.Close()
 
 	ctx := context.Background()
+	client := buildRedisClient(t, redisURL)
 	userKey := session.UserKey{
 		AppName: "testapp",
 		UserID:  "user123",
 	}
 
-	// Create multiple sessions without events
-	for i := 0; i < 3; i++ {
+	// Create sessions with staggered UpdatedAt via direct Redis overwrite
+	// so that the ordering is deterministic: session4 (newest) > ... > session0 (oldest).
+	numSessions := 5
+	baseTime := time.Now()
+	for i := 0; i < numSessions; i++ {
 		key := session.Key{
 			AppName:   userKey.AppName,
 			UserID:    userKey.UserID,
@@ -2476,15 +2480,30 @@ func TestService_ListSessions_EmptyEvents(t *testing.T) {
 		}
 		_, err := service.CreateSession(ctx, key, session.StateMap{})
 		require.NoError(t, err)
+
+		// Overwrite the session state with a distinct UpdatedAt.
+		state := fetchSessionState(t, ctx, client, key)
+		state.UpdatedAt = baseTime.Add(time.Duration(i) * time.Minute)
+		stateBytes, err := json.Marshal(state)
+		require.NoError(t, err)
+		err = client.HSet(ctx, getExpectedSessionStateKey(key), key.SessionID, string(stateBytes)).Err()
+		require.NoError(t, err)
 	}
 
 	// List sessions
 	sessions, err := service.ListSessions(ctx, userKey)
 	require.NoError(t, err)
-	assert.Len(t, sessions, 3)
+	assert.Len(t, sessions, numSessions)
 	// All sessions should have empty events
 	for _, sess := range sessions {
 		assert.Empty(t, sess.Events)
+	}
+	// Verify descending UpdatedAt order: session4, session3, session2, session1, session0.
+	for i := 0; i < numSessions; i++ {
+		assert.Equal(t, fmt.Sprintf("session%d", numSessions-1-i), sessions[i].ID)
+	}
+	for i := 1; i < len(sessions); i++ {
+		assert.False(t, sessions[i].UpdatedAt.After(sessions[i-1].UpdatedAt))
 	}
 }
 
