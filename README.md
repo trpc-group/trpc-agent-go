@@ -564,7 +564,7 @@ Example: [examples/a2aadk](examples/a2aadk)
 
 ### 14. Gateway Server
 
-Example: [examples/gateway](examples/gateway)
+Example: [openclaw](openclaw)
 
 - A minimal OpenClaw-like gateway server.
 - Stable session ids and per-session serialization.

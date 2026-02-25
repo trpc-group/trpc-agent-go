@@ -550,7 +550,7 @@ sg.SetFinishPoint("A").SetFinishPoint("B")
 
 ### 14. Gateway 服务
 
-示例：[examples/gateway](examples/gateway)
+示例：[openclaw](openclaw)
 
 - 一个最小的 OpenClaw-like gateway 服务。
 - 稳定的 session id，以及同一 session 串行执行。
