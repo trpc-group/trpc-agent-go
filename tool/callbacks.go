@@ -107,6 +107,9 @@ type AfterToolArgs struct {
 	Result any
 	// Error is the error occurred during tool execution (may be nil).
 	Error error
+	// Meta contains optional metadata from the tool result.
+	// For MCP tools, this includes the _meta field from CallToolResult.
+	Meta map[string]any
 }
 
 // AfterToolResult contains the return value for after tool callback.
