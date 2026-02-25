@@ -2486,7 +2486,8 @@ func TestService_ListSessions_EmptyEvents(t *testing.T) {
 		state.UpdatedAt = baseTime.Add(time.Duration(i) * time.Minute)
 		stateBytes, err := json.Marshal(state)
 		require.NoError(t, err)
-		client.HSet(ctx, getExpectedSessionStateKey(key), key.SessionID, string(stateBytes))
+		err = client.HSet(ctx, getExpectedSessionStateKey(key), key.SessionID, string(stateBytes)).Err()
+		require.NoError(t, err)
 	}
 
 	// List sessions

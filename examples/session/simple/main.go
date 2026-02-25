@@ -106,7 +106,6 @@ type multiTurnChat struct {
 	sessionService session.Service
 	userID         string
 	sessionID      string
-	sessionIDs     []string
 }
 
 // run starts the interactive chat session.
@@ -167,7 +166,6 @@ func (c *multiTurnChat) setup(_ context.Context) error {
 
 	c.userID = "user"
 	c.sessionID = fmt.Sprintf("session-%d", time.Now().Unix())
-	c.rememberSession(c.sessionID)
 
 	fmt.Printf("Chat ready! Session: %s\n\n", c.sessionID)
 	return nil
@@ -401,25 +399,11 @@ func (c *multiTurnChat) displayContent(
 func (c *multiTurnChat) startNewSession() {
 	oldSessionID := c.sessionID
 	c.sessionID = fmt.Sprintf("session-%d", time.Now().Unix())
-	c.rememberSession(c.sessionID)
 	fmt.Printf("Started new session!\n")
 	fmt.Printf("   Previous: %s\n", oldSessionID)
 	fmt.Printf("   Current:  %s\n", c.sessionID)
 	fmt.Printf("   (Conversation history has been reset)\n")
 	fmt.Println()
-}
-
-func (c *multiTurnChat) rememberSession(id string) {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return
-	}
-	for _, existing := range c.sessionIDs {
-		if existing == id {
-			return
-		}
-	}
-	c.sessionIDs = append(c.sessionIDs, id)
 }
 
 func (c *multiTurnChat) listSessions() {
@@ -460,6 +444,5 @@ func (c *multiTurnChat) switchSession(target string) {
 		return
 	}
 	c.sessionID = target
-	c.rememberSession(target)
 	fmt.Printf("Switched to session %s\n", target)
 }
