@@ -159,6 +159,41 @@ func TestClient_SendMessage(t *testing.T) {
 	require.Equal(t, testReplyMsg, msg.Text)
 }
 
+func TestClient_GetWebhookInfo(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		require.Equal(t, methodGet, r.Method)
+		require.Equal(
+			t,
+			"/bot"+testToken+"/"+pathGetWebhookInfo,
+			r.URL.Path,
+		)
+
+		_ = json.NewEncoder(w).Encode(apiResponse[WebhookInfo]{
+			OK: true,
+			Result: WebhookInfo{
+				URL: "https://example.com/webhook",
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := New(
+		testToken,
+		WithBaseURL(srv.URL),
+		WithHTTPClient(srv.Client()),
+	)
+	require.NoError(t, err)
+
+	info, err := c.GetWebhookInfo(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "https://example.com/webhook", info.URL)
+}
+
 func TestClient_ValidateResponse_Error(t *testing.T) {
 	t.Parallel()
 

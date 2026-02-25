@@ -175,6 +175,16 @@ go run ./cmd/openclaw \
 
 You can also tune retries with `-telegram-max-retries` (default: 3).
 
+### Telegram doctor command
+
+To quickly validate your Telegram setup (token, webhook, pairing store):
+
+```bash
+cd openclaw
+go run ./cmd/openclaw doctor \
+  -telegram-token "$TELEGRAM_BOT_TOKEN"
+```
+
 ### 5) Send a message
 
 Open a chat with your bot (or add it into a group) and send a text message.

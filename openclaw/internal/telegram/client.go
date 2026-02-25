@@ -38,9 +38,10 @@ const (
 	methodGet  = "GET"
 	methodPost = "POST"
 
-	pathGetMe     = "getMe"
-	pathGetUpdate = "getUpdates"
-	pathSendMsg   = "sendMessage"
+	pathGetMe          = "getMe"
+	pathGetUpdate      = "getUpdates"
+	pathGetWebhookInfo = "getWebhookInfo"
+	pathSendMsg        = "sendMessage"
 )
 
 type redactedError struct {
@@ -289,6 +290,39 @@ type sendMessageRequest struct {
 	MessageThreadID    int    `json:"message_thread_id,omitempty"`
 	ReplyToMessageID   int    `json:"reply_to_message_id,omitempty"`
 	DisableWebPagePrev bool   `json:"disable_web_page_preview,omitempty"`
+}
+
+// WebhookInfo describes the currently configured Telegram webhook.
+type WebhookInfo struct {
+	URL                string `json:"url"`
+	PendingUpdateCount int    `json:"pending_update_count,omitempty"`
+	LastErrorMessage   string `json:"last_error_message,omitempty"`
+	LastErrorDate      int64  `json:"last_error_date,omitempty"`
+}
+
+// GetWebhookInfo returns the current webhook configuration.
+func (c *Client) GetWebhookInfo(
+	ctx context.Context,
+) (WebhookInfo, error) {
+	var rsp apiResponse[WebhookInfo]
+	err := c.doWithRetry(ctx, func(ctx context.Context) error {
+		status, err := c.doOnce(
+			ctx,
+			methodGet,
+			pathGetWebhookInfo,
+			nil,
+			nil,
+			&rsp,
+		)
+		if err != nil {
+			return err
+		}
+		return validateResponse(status, rsp)
+	})
+	if err != nil {
+		return WebhookInfo{}, err
+	}
+	return rsp.Result, nil
 }
 
 func (c *Client) doOnce(
