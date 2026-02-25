@@ -504,6 +504,43 @@ example:
 List available skills, then run the hello skill.
 ```
 
+## Extending this demo (custom channels / internal skills)
+
+This demo is intentionally small and "composition-first": it wires
+existing `trpc-agent-go` building blocks together, instead of hiding
+them behind a large framework.
+
+### Add a new channel (for example Enterprise WeChat / Slack)
+
+At a high level, a channel does two things:
+
+1) Receive inbound messages from an external system.
+2) Call the gateway (`POST /v1/gateway/messages`) and deliver replies
+   back to the same place.
+
+To add a new channel implementation:
+
+1) Implement the `channel.Channel` interface (see
+   `openclaw/internal/channel/channel.go`).
+2) Translate inbound events into gateway requests using
+   `openclaw/internal/gwclient.Client`.
+3) Wire the channel into `openclaw/cmd/openclaw/main.go` based on CLI
+   flags / YAML config.
+4) Add tests for:
+   - parsing config, and
+   - basic channel message flow (mock the external API).
+
+### Add internal skills (without changing code)
+
+For skills, the simplest workflow is to keep a separate skills folder
+and point this demo at it:
+
+- Use `-skills-extra-dirs "/path/to/skills"` (comma-separated), or
+- put skills under the managed directory: `<state-dir>/skills`.
+
+This allows an internal team to iterate on skill packs independently,
+without forking the gateway/channel code.
+
 ## Session and memory
 
 This demo uses `trpc-agent-go` sessions to store conversation history
