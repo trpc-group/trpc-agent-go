@@ -367,8 +367,9 @@ func (m *mcpSessionManager) listTools(ctx context.Context) ([]mcp.Tool, error) {
 }
 
 // callTool executes a tool call on the MCP server.
-func (m *mcpSessionManager) callTool(ctx context.Context, name string, arguments map[string]any) ([]mcp.Content, error) {
-	var result []mcp.Content
+// Returns the full CallToolResult including Meta field for metadata access.
+func (m *mcpSessionManager) callTool(ctx context.Context, name string, arguments map[string]any) (*mcp.CallToolResult, error) {
+	var result *mcp.CallToolResult
 
 	// Execute with session reconnection support
 	operationErr := m.executeWithSessionReconnect(ctx, func() error {
@@ -396,18 +397,30 @@ func (m *mcpSessionManager) callTool(ctx context.Context, name string, arguments
 		}
 
 		log.DebugContext(ctx, "Tool call completed", "name", name, "content_count", len(callResp.Content))
-		result = callResp.Content
-		if len(result) == 0 && callResp.StructuredContent != nil {
+		// Handle structured content if present
+		if len(callResp.Content) == 0 && callResp.StructuredContent != nil {
 			structuredBytes, err := json.Marshal(callResp.StructuredContent)
 			if err != nil {
 				return fmt.Errorf("marshal structured content: %w", err)
 			}
-			result = append(result, mcp.NewTextContent(string(structuredBytes)))
+			// Create a copy with the marshaled content
+			result = &mcp.CallToolResult{
+				Result:            callResp.Result,
+				Content:           append([]mcp.Content(nil), mcp.NewTextContent(string(structuredBytes))),
+				StructuredContent: callResp.StructuredContent,
+				IsError:           callResp.IsError,
+			}
+		} else {
+			result = callResp
 		}
 		return nil
 	})
 
-	return result, operationErr
+	// Ensure result is nil on error
+	if operationErr != nil {
+		return nil, operationErr
+	}
+	return result, nil
 }
 
 // close closes the MCP session and client connection.
