@@ -154,8 +154,40 @@ go run ./cmd/openclaw \
 
 Open a chat with your bot (or add it into a group) and send a text message.
 
-The bot will forward inbound text to the gateway and send the final
-reply back to Telegram.
+By default, DMs are **fail-closed** and require pairing.
+
+On the first DM, the bot replies with a 6-digit pairing code and will
+not process your message yet.
+
+To approve a user, run:
+
+```bash
+cd openclaw
+go run ./cmd/openclaw pairing approve <CODE> \
+  -telegram-token "$TELEGRAM_BOT_TOKEN"
+```
+
+You can also list pending pairing requests:
+
+```bash
+cd openclaw
+go run ./cmd/openclaw pairing list \
+  -telegram-token "$TELEGRAM_BOT_TOKEN"
+```
+
+After approval, the bot forwards inbound text to the gateway and sends
+the final reply back to Telegram.
+
+To disable pairing (less safe), run the gateway with:
+
+```bash
+cd openclaw
+go run ./cmd/openclaw \
+  -mode mock \
+  -http-addr :8080 \
+  -telegram-token "$TELEGRAM_BOT_TOKEN" \
+  -telegram-dm-policy open
+```
 
 ### Telegram threads and topics
 
@@ -235,6 +267,35 @@ go run ./cmd/openclaw \
   -require-mention \
   -mention "@mybot,/agent"
 ```
+
+### Telegram group policy and allowlist
+
+By default, this demo ignores all group messages (`-telegram-group-policy` is
+`disabled`).
+
+To enable groups (less safe), use:
+
+```bash
+cd openclaw
+go run ./cmd/openclaw \
+  -mode mock \
+  -telegram-token "$TELEGRAM_BOT_TOKEN" \
+  -telegram-group-policy open \
+  -require-mention
+```
+
+To allowlist specific groups/topics, use:
+
+```bash
+cd openclaw
+go run ./cmd/openclaw \
+  -mode mock \
+  -telegram-token "$TELEGRAM_BOT_TOKEN" \
+  -telegram-group-policy allowlist \
+  -telegram-allow-threads "<chat_id>,<chat_id>:topic:<message_thread_id>"
+```
+
+You can discover `chat_id` and `message_thread_id` from `getUpdates`.
 
 ### Local code execution (unsafe)
 
