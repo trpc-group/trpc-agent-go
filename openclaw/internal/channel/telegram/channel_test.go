@@ -129,6 +129,37 @@ func (s *stubOffsetStore) Write(
 	return nil
 }
 
+type stubPairingStore struct {
+	approved bool
+	code     string
+
+	isApprovedErr error
+	requestErr    error
+
+	requested []string
+}
+
+func (s *stubPairingStore) IsApproved(
+	_ context.Context,
+	_ string,
+) (bool, error) {
+	if s.isApprovedErr != nil {
+		return false, s.isApprovedErr
+	}
+	return s.approved, nil
+}
+
+func (s *stubPairingStore) Request(
+	_ context.Context,
+	userID string,
+) (string, bool, error) {
+	if s.requestErr != nil {
+		return "", false, s.requestErr
+	}
+	s.requested = append(s.requested, userID)
+	return s.code, false, nil
+}
+
 func TestProbeBotInfo_EmptyToken(t *testing.T) {
 	t.Parallel()
 
@@ -319,6 +350,7 @@ func TestChannel_HandleMessage_PrivateChat(t *testing.T) {
 		BotInfo{Username: "bot"},
 		gw,
 		WithStateDir(dir),
+		WithDMPolicy(dmPolicyOpen),
 	)
 	require.NoError(t, err)
 
@@ -357,6 +389,114 @@ func TestChannel_HandleMessage_PrivateChat(t *testing.T) {
 	require.Equal(t, "ok", sent.Text)
 }
 
+func TestChannel_HandleMessage_DMPolicyAllowlist_NoAllowUsers(t *testing.T) {
+	t.Parallel()
+
+	gw := &stubGateway{
+		rsp: gwclient.MessageResponse{
+			StatusCode: http.StatusOK,
+			Reply:      "ok",
+		},
+	}
+	bot := &stubBot{}
+	ch := &Channel{
+		bot:        bot,
+		gw:         gw,
+		dmPolicy:   dmPolicyAllowlist,
+		allowUsers: nil,
+	}
+
+	err := ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID: 3,
+		From:      &tgapi.User{ID: 2},
+		Chat:      &tgapi.Chat{ID: 1, Type: chatTypePrivate},
+		Text:      "hi",
+	})
+	require.NoError(t, err)
+
+	gw.mu.Lock()
+	require.Empty(t, gw.reqs)
+	gw.mu.Unlock()
+
+	bot.mu.Lock()
+	require.Len(t, bot.sent, 1)
+	require.Equal(t, notAllowedMessage, bot.sent[0].Text)
+	bot.mu.Unlock()
+}
+
+func TestChannel_HandleMessage_DMPolicyPairing_Unapproved(t *testing.T) {
+	t.Parallel()
+
+	p := &stubPairingStore{approved: false, code: "123456"}
+	gw := &stubGateway{
+		rsp: gwclient.MessageResponse{
+			StatusCode: http.StatusOK,
+			Reply:      "ok",
+		},
+	}
+	bot := &stubBot{}
+	ch := &Channel{
+		bot:      bot,
+		gw:       gw,
+		dmPolicy: dmPolicyPairing,
+		pairing:  p,
+	}
+
+	err := ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID: 3,
+		From:      &tgapi.User{ID: 2},
+		Chat:      &tgapi.Chat{ID: 1, Type: chatTypePrivate},
+		Text:      "hi",
+	})
+	require.NoError(t, err)
+
+	gw.mu.Lock()
+	require.Empty(t, gw.reqs)
+	gw.mu.Unlock()
+
+	bot.mu.Lock()
+	require.Len(t, bot.sent, 1)
+	require.Contains(t, bot.sent[0].Text, "Pairing required")
+	require.Contains(t, bot.sent[0].Text, "123456")
+	bot.mu.Unlock()
+}
+
+func TestChannel_HandleMessage_DMPolicyPairing_Approved(t *testing.T) {
+	t.Parallel()
+
+	p := &stubPairingStore{approved: true, code: "123456"}
+	gw := &stubGateway{
+		rsp: gwclient.MessageResponse{
+			StatusCode: http.StatusOK,
+			Reply:      "ok",
+		},
+	}
+	bot := &stubBot{}
+	ch := &Channel{
+		bot:      bot,
+		gw:       gw,
+		dmPolicy: dmPolicyPairing,
+		pairing:  p,
+	}
+
+	err := ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID: 3,
+		From:      &tgapi.User{ID: 2},
+		Chat:      &tgapi.Chat{ID: 1, Type: chatTypePrivate},
+		Text:      "hi",
+	})
+	require.NoError(t, err)
+
+	gw.mu.Lock()
+	require.Len(t, gw.reqs, 1)
+	gw.mu.Unlock()
+
+	bot.mu.Lock()
+	require.Len(t, bot.sent, 1)
+	require.Equal(t, "ok", bot.sent[0].Text)
+	bot.mu.Unlock()
+}
+
 func TestChannel_HandleMessage_GroupTopic(t *testing.T) {
 	t.Parallel()
 
@@ -372,6 +512,7 @@ func TestChannel_HandleMessage_GroupTopic(t *testing.T) {
 		BotInfo{Username: "bot"},
 		gw,
 		WithStateDir(dir),
+		WithGroupPolicy(groupPolicyOpen),
 	)
 	require.NoError(t, err)
 
@@ -408,6 +549,118 @@ func TestChannel_HandleMessage_GroupTopic(t *testing.T) {
 	require.Equal(t, 7, sent.ReplyToMessageID)
 }
 
+func TestChannel_HandleMessage_GroupPolicyAllowlist_Drops(t *testing.T) {
+	t.Parallel()
+
+	gw := &stubGateway{
+		rsp: gwclient.MessageResponse{
+			StatusCode: http.StatusOK,
+			Reply:      "ok",
+		},
+	}
+	bot := &stubBot{}
+	ch := &Channel{
+		bot:         bot,
+		gw:          gw,
+		groupPolicy: groupPolicyAllowlist,
+		allowThreads: map[string]struct{}{
+			"11": {},
+		},
+	}
+
+	err := ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID:       7,
+		MessageThreadID: 99,
+		From:            &tgapi.User{ID: 8},
+		Chat: &tgapi.Chat{
+			ID:   10,
+			Type: chatTypeSuperGroup,
+		},
+		Text: "hi",
+	})
+	require.NoError(t, err)
+
+	gw.mu.Lock()
+	require.Empty(t, gw.reqs)
+	gw.mu.Unlock()
+}
+
+func TestChannel_HandleMessage_GroupPolicyAllowlist_AllowsChatID(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	gw := &stubGateway{
+		rsp: gwclient.MessageResponse{
+			StatusCode: http.StatusOK,
+			Reply:      "ok",
+		},
+	}
+	bot := &stubBot{}
+	ch := &Channel{
+		bot:         bot,
+		gw:          gw,
+		groupPolicy: groupPolicyAllowlist,
+		allowThreads: map[string]struct{}{
+			"10": {},
+		},
+	}
+
+	err := ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID:       7,
+		MessageThreadID: 99,
+		From:            &tgapi.User{ID: 8},
+		Chat: &tgapi.Chat{
+			ID:   10,
+			Type: chatTypeSuperGroup,
+		},
+		Text: "hi",
+	})
+	require.NoError(t, err)
+
+	gw.mu.Lock()
+	require.Len(t, gw.reqs, 1)
+	gw.mu.Unlock()
+}
+
+func TestChannel_HandleMessage_GroupPolicyAllowlist_AllowsTopic(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	gw := &stubGateway{
+		rsp: gwclient.MessageResponse{
+			StatusCode: http.StatusOK,
+			Reply:      "ok",
+		},
+	}
+	bot := &stubBot{}
+	ch := &Channel{
+		bot:         bot,
+		gw:          gw,
+		groupPolicy: groupPolicyAllowlist,
+		allowThreads: map[string]struct{}{
+			"10:topic:99": {},
+		},
+	}
+
+	err := ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID:       7,
+		MessageThreadID: 99,
+		From:            &tgapi.User{ID: 8},
+		Chat: &tgapi.Chat{
+			ID:   10,
+			Type: chatTypeSuperGroup,
+		},
+		Text: "hi",
+	})
+	require.NoError(t, err)
+
+	gw.mu.Lock()
+	require.Len(t, gw.reqs, 1)
+	gw.mu.Unlock()
+}
+
 func TestChannel_HandleMessage_Gateway4xx_Drop(t *testing.T) {
 	t.Parallel()
 
@@ -424,6 +677,7 @@ func TestChannel_HandleMessage_Gateway4xx_Drop(t *testing.T) {
 		BotInfo{Username: "bot"},
 		gw,
 		WithStateDir(dir),
+		WithDMPolicy(dmPolicyOpen),
 	)
 	require.NoError(t, err)
 
@@ -459,6 +713,7 @@ func TestChannel_HandleMessage_Gateway5xx_Retry(t *testing.T) {
 		BotInfo{Username: "bot"},
 		gw,
 		WithStateDir(dir),
+		WithDMPolicy(dmPolicyOpen),
 	)
 	require.NoError(t, err)
 
@@ -490,6 +745,7 @@ func TestChannel_HandleMessage_ReplySplit(t *testing.T) {
 		BotInfo{Username: "bot"},
 		gw,
 		WithStateDir(dir),
+		WithDMPolicy(dmPolicyOpen),
 	)
 	require.NoError(t, err)
 
@@ -595,6 +851,7 @@ func TestChannel_Run_OneMessage(t *testing.T) {
 		startFromLatest: false,
 		pollTimeout:     0,
 		errorBackoff:    0,
+		dmPolicy:        dmPolicyOpen,
 	}
 
 	require.NoError(t, ch.Run(ctx))
@@ -616,6 +873,7 @@ func TestChannel_HandleMessage_Ignored(t *testing.T) {
 		BotInfo{Username: "bot"},
 		gw,
 		WithStateDir(dir),
+		WithDMPolicy(dmPolicyOpen),
 	)
 	require.NoError(t, err)
 
@@ -650,6 +908,7 @@ func TestChannel_HandleMessage_SendError_Drops(t *testing.T) {
 		BotInfo{Username: "bot"},
 		gw,
 		WithStateDir(dir),
+		WithDMPolicy(dmPolicyOpen),
 	)
 	require.NoError(t, err)
 
