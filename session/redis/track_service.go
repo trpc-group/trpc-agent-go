@@ -76,13 +76,7 @@ func (s *Service) enqueueTrackEvent(ctx context.Context, sess *session.Session, 
 }
 
 // persistTrackEvent persists track event to the appropriate storage (zset or hashidx).
-// Uses same strict dual-write semantics as AppendEvent (per xxx.md).
 func (s *Service) persistTrackEvent(ctx context.Context, ver string, key session.Key, trackEvent *session.TrackEvent) error {
-	// Dual-write mode: strict dual-write based on session existence
-	if s.dualWriteEnabled() {
-		return s.appendTrackEventWithStrictDualWrite(ctx, key, trackEvent)
-	}
-
 	// Fast path: use version tag
 	switch ver {
 	case util.StorageTypeHashIdx:
@@ -92,7 +86,6 @@ func (s *Service) persistTrackEvent(ctx context.Context, ver string, key session
 	}
 
 	// Slow path: no version tag, check storage.
-	// zset first: if zset exists, it's a legacy session.
 	zsetExists, hashidxExists, err := s.checkSessionExists(ctx, key)
 	if err != nil {
 		log.WarnfContext(ctx, "checkSessionExists failed: %v", err)
@@ -105,44 +98,5 @@ func (s *Service) persistTrackEvent(ctx context.Context, ver string, key session
 		return s.hashidxClient.AppendTrackEvent(ctx, key, trackEvent)
 	}
 
-	return fmt.Errorf("session not found: %s/%s/%s", key.AppName, key.UserID, key.SessionID)
-}
-
-// appendTrackEventWithStrictDualWrite implements strict dual-write for track events.
-// Same semantics as appendEventWithStrictDualWrite (per xxx.md).
-func (s *Service) appendTrackEventWithStrictDualWrite(ctx context.Context, key session.Key, trackEvent *session.TrackEvent) error {
-	// Check which storages have this session
-	zsetExists, hashidxExists, err := s.checkSessionExists(ctx, key)
-	if err != nil {
-		return fmt.Errorf("check session exists failed: %w", err)
-	}
-
-	// Case 1: Both exist - strict dual-write, both must succeed
-	if zsetExists && hashidxExists {
-		if err := s.hashidxClient.AppendTrackEvent(ctx, key, trackEvent); err != nil {
-			return fmt.Errorf("dual-write track to hashidx failed: %w", err)
-		}
-		if err := s.zsetClient.AppendTrackEvent(ctx, key, trackEvent); err != nil {
-			log.ErrorfContext(ctx, "dual-write track partial failure: hashidx succeeded but zset failed: %v", err)
-			return fmt.Errorf("dual-write track to zset failed (hashidx succeeded): %w", err)
-		}
-		return nil
-	}
-
-	// Case 2: Only hashidx exists
-	if hashidxExists {
-		log.WarnfContext(ctx, "dual-write mode but only hashidx exists for session %s/%s/%s, writing track to hashidx only",
-			key.AppName, key.UserID, key.SessionID)
-		return s.hashidxClient.AppendTrackEvent(ctx, key, trackEvent)
-	}
-
-	// Case 3: Only zset exists
-	if zsetExists {
-		log.WarnfContext(ctx, "dual-write mode but only zset exists for session %s/%s/%s, writing track to zset only",
-			key.AppName, key.UserID, key.SessionID)
-		return s.zsetClient.AppendTrackEvent(ctx, key, trackEvent)
-	}
-
-	// Case 4: Neither exists
 	return fmt.Errorf("session not found: %s/%s/%s", key.AppName, key.UserID, key.SessionID)
 }

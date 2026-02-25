@@ -50,17 +50,6 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 		return nil
 	}
 
-	// Dual-write mode: write to both hashidx and zset
-	if s.dualWriteEnabled() {
-		if err := s.hashidxClient.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL); err != nil {
-			return err
-		}
-		if err := s.zsetClient.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL); err != nil {
-			return fmt.Errorf("dual-write summary to zset failed: %w", err)
-		}
-		return nil
-	}
-
 	// Fast path: use version tag from session
 	switch ver := getSessionVersion(sess); ver {
 	case util.StorageTypeHashIdx:
@@ -75,7 +64,6 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 		log.WarnfContext(ctx, "checkSessionExists failed: %v", err)
 	}
 
-	// zset priority: consistent with getSessionInternal read strategy
 	if s.compatEnabled() && zsetExists {
 		return s.zsetClient.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL)
 	}
@@ -114,7 +102,6 @@ func (s *Service) GetSessionSummaryText(ctx context.Context, sess *session.Sessi
 		return "", false
 	}
 
-	// zset priority: consistent with getSessionInternal read strategy
 	if s.compatEnabled() && zsetExists {
 		summaries, err := s.zsetClient.GetSummary(ctx, key)
 		if err != nil {
