@@ -52,7 +52,7 @@ const (
 	modeMock   = "mock"
 	modeOpenAI = "openai"
 
-	defaultOpenAIModel = "deepseek-chat"
+	defaultOpenAIModel = "gpt-5"
 
 	defaultSkillsDir = "skills"
 	defaultAgentsDir = ".agents"
@@ -68,6 +68,7 @@ const (
 	hunyuanModelHint  = "hunyuan"
 
 	openAIBaseURLEnvName = "OPENAI_BASE_URL"
+	openAIModelEnvName   = "OPENAI_MODEL"
 )
 
 func main() {
@@ -78,12 +79,16 @@ func main() {
 	)
 	modelMode := flag.String(
 		"mode",
-		modeMock,
+		modeOpenAI,
 		"Model mode: mock or openai",
 	)
+	defaultModel := strings.TrimSpace(os.Getenv(openAIModelEnvName))
+	if defaultModel == "" {
+		defaultModel = defaultOpenAIModel
+	}
 	openAIModel := flag.String(
 		"model",
-		defaultOpenAIModel,
+		defaultModel,
 		"OpenAI model name (mode=openai)",
 	)
 	openAIVariant := flag.String(

@@ -22,6 +22,9 @@ go run ./cmd/openclaw \
   -http-addr :8080
 ```
 
+Note: by default, this demo uses `-mode openai` and `-model gpt-5`.
+If you do not have model credentials, keep using `-mode mock`.
+
 Health check:
 
 ```bash
@@ -36,11 +39,26 @@ curl -sS 'http://127.0.0.1:8080/v1/gateway/messages' \
   -d '{"from":"alice","text":"Hello"}'
 ```
 
-## Run with a real model (DeepSeek)
+## Run with a real model (OpenAI)
 
 This demo uses the `model/openai` implementation with provider variants.
 
-For DeepSeek:
+For OpenAI:
+
+```bash
+export OPENAI_API_KEY="your-api-key"
+
+cd openclaw
+go run ./cmd/openclaw \
+  -http-addr :8080
+```
+
+By default, `-model` uses `$OPENAI_MODEL` if set, otherwise it falls
+back to `gpt-5`.
+
+### DeepSeek (OpenAI-compatible)
+
+If you use DeepSeek, set `DEEPSEEK_API_KEY`:
 
 ```bash
 export DEEPSEEK_API_KEY="your-api-key"
