@@ -62,10 +62,11 @@ type FileStore struct {
 	path string
 	ttl  time.Duration
 
-	mu      sync.Mutex
-	loaded  bool
-	modTime time.Time
-	state   state
+	mu       sync.Mutex
+	loaded   bool
+	modTime  time.Time
+	fileInfo os.FileInfo
+	state    state
 }
 
 // Option configures a FileStore.
@@ -288,12 +289,14 @@ func (s *FileStore) reloadLocked(ctx context.Context) error {
 		if errors.Is(err, os.ErrNotExist) {
 			s.loaded = true
 			s.modTime = time.Time{}
+			s.fileInfo = nil
 			s.cleanupExpiredLocked(time.Now())
 			return nil
 		}
 		return fmt.Errorf("pairing: stat store: %w", err)
 	}
-	if s.loaded && !st.ModTime().After(s.modTime) {
+	if s.loaded && s.sameFileLocked(st) &&
+		!st.ModTime().After(s.modTime) {
 		s.cleanupExpiredLocked(time.Now())
 		return nil
 	}
@@ -323,8 +326,16 @@ func (s *FileStore) reloadLocked(ctx context.Context) error {
 	s.state = decoded
 	s.loaded = true
 	s.modTime = st.ModTime()
+	s.fileInfo = st
 	s.cleanupExpiredLocked(time.Now())
 	return nil
+}
+
+func (s *FileStore) sameFileLocked(st os.FileInfo) bool {
+	if s.fileInfo == nil {
+		return false
+	}
+	return os.SameFile(s.fileInfo, st)
 }
 
 func (s *FileStore) cleanupExpiredLocked(now time.Time) {
@@ -363,6 +374,7 @@ func (s *FileStore) writeLocked(ctx context.Context) error {
 	st, err := os.Stat(s.path)
 	if err == nil {
 		s.modTime = st.ModTime()
+		s.fileInfo = st
 	}
 	return nil
 }
