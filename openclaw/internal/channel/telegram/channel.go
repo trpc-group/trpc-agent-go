@@ -22,7 +22,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/pairing"
 
-	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gwclient"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwclient"
 	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
 )
 

@@ -22,7 +22,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gwclient"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwclient"
 	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
 )
 

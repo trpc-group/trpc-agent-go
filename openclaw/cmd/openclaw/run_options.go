@@ -48,6 +48,7 @@ type runOptions struct {
 	OpenAIModel    string
 	OpenAIVariant  string
 	OpenAIBaseURL  string
+	ModelConfig    *yaml.Node
 	TelegramToken  string
 	SkillsRoot     string
 	SkillsExtraDir string
@@ -68,16 +69,20 @@ type runOptions struct {
 	TelegramAllowThreads    string
 	TelegramPairingTTL      time.Duration
 
+	Channels []pluginSpec
+
 	SessionBackend       string
 	SessionRedisURL      string
 	SessionRedisInstance string
 	SessionRedisKeyPref  string
+	SessionConfig        *yaml.Node
 
 	MemoryBackend       string
 	MemoryRedisURL      string
 	MemoryRedisInstance string
 	MemoryRedisKeyPref  string
 	MemoryLimit         int
+	MemoryConfig        *yaml.Node
 
 	MemoryAutoEnabled          bool
 	MemoryAutoPolicy           string
@@ -93,6 +98,8 @@ type runOptions struct {
 
 	EnableLocalExec     bool
 	EnableOpenClawTools bool
+
+	ToolProviders []pluginSpec
 }
 
 func parseRunOptions(args []string) (runOptions, error) {
@@ -155,6 +162,12 @@ func parseRunOptions(args []string) (runOptions, error) {
 		"openai-variant",
 		defaultOpenAIVariant,
 		"OpenAI variant: auto, openai, deepseek, qwen, hunyuan",
+	)
+	fs.StringVar(
+		&opts.OpenAIBaseURL,
+		"openai-base-url",
+		"",
+		"OpenAI base URL override (mode=openai, optional)",
 	)
 	fs.StringVar(
 		&opts.TelegramToken,
@@ -435,6 +448,7 @@ type fileConfig struct {
 	Model    *modelConfig    `yaml:"model,omitempty"`
 	Gateway  *gatewayConfig  `yaml:"gateway,omitempty"`
 	Telegram *telegramConfig `yaml:"telegram,omitempty"`
+	Channels []pluginSpec    `yaml:"channels,omitempty"`
 	Skills   *skillsConfig   `yaml:"skills,omitempty"`
 	Tools    *toolsConfig    `yaml:"tools,omitempty"`
 
@@ -447,9 +461,11 @@ type httpConfig struct {
 }
 
 type modelConfig struct {
-	Mode          *string `yaml:"mode,omitempty"`
-	Name          *string `yaml:"name,omitempty"`
-	OpenAIVariant *string `yaml:"openai_variant,omitempty"`
+	Mode          *string    `yaml:"mode,omitempty"`
+	Name          *string    `yaml:"name,omitempty"`
+	BaseURL       *string    `yaml:"base_url,omitempty"`
+	OpenAIVariant *string    `yaml:"openai_variant,omitempty"`
+	Config        *yaml.Node `yaml:"config,omitempty"`
 }
 
 type gatewayConfig struct {
@@ -480,12 +496,15 @@ type skillsConfig struct {
 type toolsConfig struct {
 	EnableLocalExec     *bool `yaml:"enable_local_exec,omitempty"`
 	EnableOpenClawTools *bool `yaml:"enable_openclaw_tools,omitempty"`
+
+	Providers []pluginSpec `yaml:"providers,omitempty"`
 }
 
 type sessionConfig struct {
 	Backend *string        `yaml:"backend,omitempty"`
 	Redis   *redisConfig   `yaml:"redis,omitempty"`
 	Summary *summaryConfig `yaml:"summary,omitempty"`
+	Config  *yaml.Node     `yaml:"config,omitempty"`
 }
 
 type memoryConfig struct {
@@ -493,6 +512,13 @@ type memoryConfig struct {
 	Redis   *redisConfig `yaml:"redis,omitempty"`
 	Limit   *int         `yaml:"limit,omitempty"`
 	Auto    *memoryAuto  `yaml:"auto,omitempty"`
+	Config  *yaml.Node   `yaml:"config,omitempty"`
+}
+
+type pluginSpec struct {
+	Type   string     `yaml:"type,omitempty"`
+	Name   string     `yaml:"name,omitempty"`
+	Config *yaml.Node `yaml:"config,omitempty"`
 }
 
 type redisConfig struct {
@@ -567,11 +593,18 @@ func (cfg *fileConfig) apply(
 		if cfg.Model.Name != nil && !flagWasSet(set, "model") {
 			opts.OpenAIModel = strings.TrimSpace(*cfg.Model.Name)
 		}
+		if cfg.Model.BaseURL != nil &&
+			!flagWasSet(set, "openai-base-url") {
+			opts.OpenAIBaseURL = strings.TrimSpace(*cfg.Model.BaseURL)
+		}
 		if cfg.Model.OpenAIVariant != nil &&
 			!flagWasSet(set, "openai-variant") {
 			opts.OpenAIVariant = strings.TrimSpace(
 				*cfg.Model.OpenAIVariant,
 			)
+		}
+		if cfg.Model.Config != nil {
+			opts.ModelConfig = cfg.Model.Config
 		}
 	}
 
@@ -660,6 +693,10 @@ func (cfg *fileConfig) apply(
 		}
 	}
 
+	if len(cfg.Channels) > 0 {
+		opts.Channels = cfg.Channels
+	}
+
 	if cfg.Skills != nil {
 		if cfg.Skills.Root != nil && !flagWasSet(set, "skills-root") {
 			opts.SkillsRoot = strings.TrimSpace(*cfg.Skills.Root)
@@ -684,6 +721,9 @@ func (cfg *fileConfig) apply(
 		if cfg.Tools.EnableOpenClawTools != nil &&
 			!flagWasSet(set, "enable-openclaw-tools") {
 			opts.EnableOpenClawTools = *cfg.Tools.EnableOpenClawTools
+		}
+		if len(cfg.Tools.Providers) > 0 {
+			opts.ToolProviders = cfg.Tools.Providers
 		}
 	}
 
@@ -723,6 +763,9 @@ func (cfg *fileConfig) apply(
 				return err
 			}
 		}
+		if cfg.Session.Config != nil {
+			opts.SessionConfig = cfg.Session.Config
+		}
 	}
 
 	if cfg.Memory != nil {
@@ -761,6 +804,9 @@ func (cfg *fileConfig) apply(
 			); err != nil {
 				return err
 			}
+		}
+		if cfg.Memory.Config != nil {
+			opts.MemoryConfig = cfg.Memory.Config
 		}
 	}
 

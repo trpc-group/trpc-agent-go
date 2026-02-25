@@ -8,6 +8,7 @@
 //
 //
 
+// Package channel defines the minimal interface for chat channels.
 package channel
 
 import "context"

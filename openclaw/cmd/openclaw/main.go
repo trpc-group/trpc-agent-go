@@ -35,10 +35,10 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
-	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/channel"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwclient"
 	tgch "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/channel/telegram"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
-	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gwclient"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/octool"
 	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
 )
