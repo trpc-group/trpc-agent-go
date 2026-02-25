@@ -80,6 +80,10 @@ Notes:
 - Duration fields use Go-style strings like `60s`, `10m`, `1h`.
 - For secrets (model keys, Telegram tokens), prefer environment variables
   or CLI flags instead of committing config files.
+- Advanced plugin sections:
+  - `channels` and `tools.providers` require a custom binary that imports
+    those plugins. See `openclaw/EXTENDING.md` and
+    `openclaw/examples/stdin_chat/`.
 
 Health check:
 
@@ -111,6 +115,12 @@ go run ./cmd/openclaw \
 
 By default, `-model` uses `$OPENAI_MODEL` if set, otherwise it falls
 back to `gpt-5`.
+
+You can override the OpenAI-compatible base URL with:
+
+- `OPENAI_BASE_URL` (environment), or
+- `-openai-base-url` (CLI flag), or
+- `model.base_url` (YAML config).
 
 ### DeepSeek (OpenAI-compatible)
 
@@ -510,27 +520,68 @@ This demo is intentionally small and "composition-first": it wires
 existing `trpc-agent-go` building blocks together, instead of hiding
 them behind a large framework.
 
-### Add a new channel (for example Enterprise WeChat / Slack)
+It ships:
 
-At a high level, a channel does two things:
+- A runnable binary: `go run ./cmd/openclaw`
+- An importable library: `trpc.group/trpc-go/trpc-agent-go/openclaw/app`
 
-1) Receive inbound messages from an external system.
-2) Call the gateway (`POST /v1/gateway/messages`) and deliver replies
-   back to the same place.
+For enterprise/internal customization, the recommended pattern is to
+build your own "distribution binary" in another repo:
 
-To add a new channel implementation:
+1) Import `openclaw/app`.
+2) Enable internal-only plugins via anonymous imports (`import _ "..."`).
+3) Use a YAML config file to turn plugins on.
 
-1) Implement the `channel.Channel` interface (see
-   `openclaw/internal/channel/channel.go`).
-2) Translate inbound events into gateway requests using
-   `openclaw/internal/gwclient.Client`.
-3) Wire the channel into `openclaw/cmd/openclaw/main.go` based on CLI
-   flags / YAML config.
-4) Add tests for:
-   - parsing config, and
-   - basic channel message flow (mock the external API).
+### Why a custom binary? (Go idioms)
 
-### Add internal skills (without changing code)
+Go is a compiled language: a running binary cannot magically discover
+new Go packages at runtime.
+
+The idiomatic "plugin" pattern in Go is:
+
+1) A shared registry package (`openclaw/registry`).
+2) Plugin packages call `registry.Register...(...)` in `init()`.
+3) Your binary links plugins in by importing them (often anonymously).
+
+### Extension points (overview)
+
+OpenClaw demo supports these extension points:
+
+- **Channels**: implement `openclaw/channel.Channel` and register with
+  `registry.RegisterChannel(type, factory)`.
+  Enable via YAML `channels: [...]`.
+- **Tool providers**: register with
+  `registry.RegisterToolProvider(type, factory)`.
+  Enable via YAML `tools.providers: [...]`.
+- **Model types**: register with `registry.RegisterModel(type, factory)`.
+  Select via `model.mode` (`-mode`) and optional `model.config`.
+- **Session backends**: register with
+  `registry.RegisterSessionBackend(type, factory)`.
+  Select via `session.backend` (`-session-backend`) and optional
+  `session.config`.
+- **Memory backends**: register with
+  `registry.RegisterMemoryBackend(type, factory)`.
+  Select via `memory.backend` (`-memory-backend`) and optional
+  `memory.config`.
+- **Skills**: no Go code needed; point `skills.extra_dirs` at a folder.
+
+For a step-by-step plugin authoring guide (with copy-paste templates),
+see `openclaw/EXTENDING.md`.
+
+### Working example: custom binary + plugins
+
+See `openclaw/examples/stdin_chat/` for a runnable reference
+distribution binary:
+
+- `main.go` imports `openclaw/app`
+- It enables two plugins via anonymous imports:
+  - `openclaw/plugins/stdin` (channel)
+  - `openclaw/plugins/echotool` (tool provider)
+- `openclaw.yaml` turns the plugins on
+
+This is intentionally close to what an internal repo would do.
+
+### Add internal skills (no code changes)
 
 For skills, the simplest workflow is to keep a separate skills folder
 and point this demo at it:
