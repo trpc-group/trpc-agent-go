@@ -340,7 +340,7 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequential(
 	index int,
 	toolCall model.ToolCall,
 ) (*event.Event, error) {
-	_, span := trace.Tracer.Start(ctx, itelemetry.NewExecuteToolSpanName(toolCall.Function.Name))
+	ctx, span := trace.Tracer.Start(ctx, itelemetry.NewExecuteToolSpanName(toolCall.Function.Name))
 	defer span.End()
 	startTime := time.Now()
 	ctx, choices, modifiedArgs, shouldIgnoreError, err := p.executeToolCall(
@@ -503,7 +503,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	}()
 
 	// Trace the tool execution for observability.
-	_, span := trace.Tracer.Start(ctx, itelemetry.NewExecuteToolSpanName(tc.Function.Name))
+	ctx, span := trace.Tracer.Start(ctx, itelemetry.NewExecuteToolSpanName(tc.Function.Name))
 	defer span.End()
 	startTime := time.Now()
 	// Execute the tool (streamable or callable) with callbacks.
