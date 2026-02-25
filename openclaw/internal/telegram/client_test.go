@@ -159,6 +159,120 @@ func TestClient_SendMessage(t *testing.T) {
 	require.Equal(t, testReplyMsg, msg.Text)
 }
 
+func TestClient_EditMessageText(t *testing.T) {
+	t.Parallel()
+
+	const (
+		testChatID  = int64(42)
+		testMsgID   = 100
+		testNewText = "updated"
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		require.Equal(t, methodPost, r.Method)
+		require.Equal(
+			t,
+			"/bot"+testToken+"/"+pathEditMessageText,
+			r.URL.Path,
+		)
+
+		raw, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+
+		var payload editMessageTextRequest
+		require.NoError(t, json.Unmarshal(raw, &payload))
+		require.Equal(t, testChatID, payload.ChatID)
+		require.Equal(t, testMsgID, payload.MessageID)
+		require.Equal(t, testNewText, payload.Text)
+		require.True(t, payload.DisableWebPagePrev)
+
+		_ = json.NewEncoder(w).Encode(apiResponse[Message]{
+			OK: true,
+			Result: Message{
+				MessageID: testMsgID,
+				Text:      payload.Text,
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := New(
+		testToken,
+		WithBaseURL(srv.URL),
+		WithHTTPClient(srv.Client()),
+	)
+	require.NoError(t, err)
+
+	msg, err := c.EditMessageText(
+		context.Background(),
+		EditMessageTextParams{
+			ChatID:    testChatID,
+			MessageID: testMsgID,
+			Text:      testNewText,
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, testMsgID, msg.MessageID)
+	require.Equal(t, testNewText, msg.Text)
+}
+
+func TestClient_SendChatAction(t *testing.T) {
+	t.Parallel()
+
+	const (
+		testChatID = int64(42)
+		testThread = 7
+		testAction = "typing"
+		resultTrue = true
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		require.Equal(t, methodPost, r.Method)
+		require.Equal(
+			t,
+			"/bot"+testToken+"/"+pathSendChatAction,
+			r.URL.Path,
+		)
+
+		raw, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+
+		var payload sendChatActionRequest
+		require.NoError(t, json.Unmarshal(raw, &payload))
+		require.Equal(t, testChatID, payload.ChatID)
+		require.Equal(t, testThread, payload.MessageThreadID)
+		require.Equal(t, testAction, payload.Action)
+
+		_ = json.NewEncoder(w).Encode(apiResponse[bool]{
+			OK:     true,
+			Result: resultTrue,
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := New(
+		testToken,
+		WithBaseURL(srv.URL),
+		WithHTTPClient(srv.Client()),
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, c.SendChatAction(
+		context.Background(),
+		SendChatActionParams{
+			ChatID:          testChatID,
+			MessageThreadID: testThread,
+			Action:          testAction,
+		},
+	))
+}
+
 func TestClient_GetWebhookInfo(t *testing.T) {
 	t.Parallel()
 

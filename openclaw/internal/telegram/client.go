@@ -38,10 +38,12 @@ const (
 	methodGet  = "GET"
 	methodPost = "POST"
 
-	pathGetMe          = "getMe"
-	pathGetUpdate      = "getUpdates"
-	pathGetWebhookInfo = "getWebhookInfo"
-	pathSendMsg        = "sendMessage"
+	pathEditMessageText = "editMessageText"
+	pathGetMe           = "getMe"
+	pathGetUpdate       = "getUpdates"
+	pathGetWebhookInfo  = "getWebhookInfo"
+	pathSendChatAction  = "sendChatAction"
+	pathSendMsg         = "sendMessage"
 )
 
 type redactedError struct {
@@ -111,6 +113,20 @@ type SendMessageParams struct {
 	MessageThreadID  int
 	ReplyToMessageID int
 	Text             string
+}
+
+// EditMessageTextParams contains parameters for EditMessageText.
+type EditMessageTextParams struct {
+	ChatID    int64
+	MessageID int
+	Text      string
+}
+
+// SendChatActionParams contains parameters for SendChatAction.
+type SendChatActionParams struct {
+	ChatID          int64
+	MessageThreadID int
+	Action          string
 }
 
 // Option configures the Telegram client.
@@ -276,6 +292,77 @@ func (c *Client) SendMessage(
 	return rsp.Result, nil
 }
 
+// EditMessageText edits an existing message.
+func (c *Client) EditMessageText(
+	ctx context.Context,
+	params EditMessageTextParams,
+) (Message, error) {
+	req := editMessageTextRequest{
+		ChatID:             params.ChatID,
+		MessageID:          params.MessageID,
+		Text:               params.Text,
+		DisableWebPagePrev: true,
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return Message{}, fmt.Errorf("telegram: marshal request: %w", err)
+	}
+
+	var rsp apiResponse[Message]
+	err = c.doWithRetry(ctx, func(ctx context.Context) error {
+		status, err := c.doOnce(
+			ctx,
+			methodPost,
+			pathEditMessageText,
+			nil,
+			body,
+			&rsp,
+		)
+		if err != nil {
+			return err
+		}
+		return validateResponse(status, rsp)
+	})
+	if err != nil {
+		return Message{}, err
+	}
+	return rsp.Result, nil
+}
+
+// SendChatAction sends a chat action (for example "typing").
+func (c *Client) SendChatAction(
+	ctx context.Context,
+	params SendChatActionParams,
+) error {
+	req := sendChatActionRequest{
+		ChatID:          params.ChatID,
+		MessageThreadID: params.MessageThreadID,
+		Action:          params.Action,
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("telegram: marshal request: %w", err)
+	}
+
+	var rsp apiResponse[bool]
+	return c.doWithRetry(ctx, func(ctx context.Context) error {
+		status, err := c.doOnce(
+			ctx,
+			methodPost,
+			pathSendChatAction,
+			nil,
+			body,
+			&rsp,
+		)
+		if err != nil {
+			return err
+		}
+		return validateResponse(status, rsp)
+	})
+}
+
 type apiResponse[T any] struct {
 	OK          bool           `json:"ok"`
 	Result      T              `json:"result,omitempty"`
@@ -290,6 +377,19 @@ type sendMessageRequest struct {
 	MessageThreadID    int    `json:"message_thread_id,omitempty"`
 	ReplyToMessageID   int    `json:"reply_to_message_id,omitempty"`
 	DisableWebPagePrev bool   `json:"disable_web_page_preview,omitempty"`
+}
+
+type editMessageTextRequest struct {
+	ChatID             int64  `json:"chat_id"`
+	MessageID          int    `json:"message_id"`
+	Text               string `json:"text"`
+	DisableWebPagePrev bool   `json:"disable_web_page_preview,omitempty"`
+}
+
+type sendChatActionRequest struct {
+	ChatID          int64  `json:"chat_id"`
+	MessageThreadID int    `json:"message_thread_id,omitempty"`
+	Action          string `json:"action"`
 }
 
 // WebhookInfo describes the currently configured Telegram webhook.
