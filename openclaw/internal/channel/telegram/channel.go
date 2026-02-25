@@ -152,6 +152,8 @@ type config struct {
 	allowThreads map[string]struct{}
 
 	pairingTTL time.Duration
+
+	apiOptions []tgapi.Option
 }
 
 // Option configures the Telegram channel.
@@ -239,6 +241,11 @@ func WithPairingTTL(ttl time.Duration) Option {
 	return func(c *config) { c.pairingTTL = ttl }
 }
 
+// WithAPIOptions passes options to the underlying Telegram API client.
+func WithAPIOptions(opts ...tgapi.Option) Option {
+	return func(c *config) { c.apiOptions = append(c.apiOptions, opts...) }
+}
+
 type pairingStore interface {
 	IsApproved(ctx context.Context, userID string) (bool, error)
 	Request(
@@ -310,7 +317,7 @@ func New(
 		return nil, errors.New("telegram: non-positive pairing ttl")
 	}
 
-	api, err := tgapi.New(token)
+	api, err := tgapi.New(token, cfg.apiOptions...)
 	if err != nil {
 		return nil, err
 	}

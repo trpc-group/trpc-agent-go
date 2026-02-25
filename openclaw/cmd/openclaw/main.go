@@ -69,6 +69,8 @@ const (
 	pairingCmdList    = "list"
 	pairingCmdApprove = "approve"
 
+	defaultTelegramMaxRetries = 3
+
 	openAIVariantAuto = "auto"
 
 	defaultOpenAIVariant = openAIVariantAuto
@@ -119,6 +121,21 @@ func main() {
 		"telegram-start-from-latest",
 		true,
 		"Drain pending updates on first start (no offset)",
+	)
+	telegramProxy := flag.String(
+		"telegram-proxy",
+		"",
+		"HTTP proxy URL for Telegram API calls (optional)",
+	)
+	telegramHTTPTimeout := flag.Duration(
+		"telegram-http-timeout",
+		0,
+		"HTTP client timeout for Telegram API calls (optional)",
+	)
+	telegramMaxRetries := flag.Int(
+		"telegram-max-retries",
+		defaultTelegramMaxRetries,
+		"Max retries for Telegram API calls (429/5xx/transport errors)",
 	)
 	telegramDMPolicy := flag.String(
 		"telegram-dm-policy",
@@ -196,10 +213,24 @@ func main() {
 
 	var (
 		telegramBot tgch.BotInfo
+		tgapiOpts   []telegramAPIOption
 		err         error
 	)
 	if strings.TrimSpace(*telegramToken) != "" {
-		telegramBot, err = tgch.ProbeBotInfo(ctx, *telegramToken)
+		tgapiOpts, err = makeTelegramAPIOptions(
+			*telegramProxy,
+			*telegramHTTPTimeout,
+			*telegramMaxRetries,
+		)
+		if err != nil {
+			log.Fatalf("telegram config failed: %v", err)
+		}
+
+		telegramBot, err = tgch.ProbeBotInfo(
+			ctx,
+			*telegramToken,
+			tgapiOpts...,
+		)
 		if err != nil {
 			log.Fatalf("probe telegram bot failed: %v", err)
 		}
@@ -310,6 +341,7 @@ func main() {
 			*telegramToken,
 			telegramBot,
 			gw,
+			tgch.WithAPIOptions(tgapiOpts...),
 			tgch.WithStateDir(resolvedStateDir),
 			tgch.WithStartFromLatest(*telegramStartFromLatest),
 			tgch.WithDMPolicy(*telegramDMPolicy),

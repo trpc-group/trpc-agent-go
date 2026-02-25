@@ -150,6 +150,31 @@ go run ./cmd/openclaw \
   -telegram-token "$TELEGRAM_BOT_TOKEN"
 ```
 
+### Telegram networking (proxy / timeout / retries)
+
+If your environment requires an HTTP proxy, set `-telegram-proxy`:
+
+```bash
+cd openclaw
+go run ./cmd/openclaw \
+  -mode mock \
+  -telegram-token "$TELEGRAM_BOT_TOKEN" \
+  -telegram-proxy "http://127.0.0.1:7890"
+```
+
+If you set `-telegram-http-timeout`, make sure it is larger than the
+long-polling timeout (25s by default), for example:
+
+```bash
+cd openclaw
+go run ./cmd/openclaw \
+  -mode mock \
+  -telegram-token "$TELEGRAM_BOT_TOKEN" \
+  -telegram-http-timeout 60s
+```
+
+You can also tune retries with `-telegram-max-retries` (default: 3).
+
 ### 5) Send a message
 
 Open a chat with your bot (or add it into a group) and send a text message.
