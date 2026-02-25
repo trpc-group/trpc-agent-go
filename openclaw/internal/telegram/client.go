@@ -29,6 +29,12 @@ const defaultBaseURL = "https://api.telegram.org"
 const redactedToken = "<redacted>"
 
 const (
+	defaultMaxRetries     = 3
+	defaultRetryBaseDelay = 200 * time.Millisecond
+	defaultRetryMaxDelay  = 5 * time.Second
+)
+
+const (
 	methodGet  = "GET"
 	methodPost = "POST"
 
@@ -42,6 +48,15 @@ type redactedError struct {
 	err error
 }
 
+type statusError struct {
+	status int
+	body   string
+}
+
+func (e statusError) Error() string {
+	return fmt.Sprintf("telegram: status %d: %s", e.status, e.body)
+}
+
 func (e redactedError) Error() string {
 	return e.msg
 }
@@ -50,11 +65,43 @@ func (e redactedError) Unwrap() error {
 	return e.err
 }
 
+type apiParameters struct {
+	RetryAfter int `json:"retry_after,omitempty"`
+}
+
+type apiCallError struct {
+	statusCode  int
+	errorCode   int
+	description string
+	retryAfter  time.Duration
+}
+
+func (e *apiCallError) Error() string {
+	if e == nil {
+		return "telegram: api error"
+	}
+	if e.description == "" {
+		return "telegram: api error"
+	}
+	if e.errorCode == 0 {
+		return fmt.Sprintf("telegram: api error: %s", e.description)
+	}
+	return fmt.Sprintf(
+		"telegram: api error %d: %s",
+		e.errorCode,
+		e.description,
+	)
+}
+
 // Client talks to the Telegram Bot API.
 type Client struct {
 	token      string
 	baseURL    string
 	httpClient *http.Client
+
+	maxRetries     int
+	retryBaseDelay time.Duration
+	retryMaxDelay  time.Duration
 }
 
 // SendMessageParams contains parameters for SendMessage.
@@ -78,15 +125,34 @@ func WithHTTPClient(client *http.Client) Option {
 	return func(c *Client) { c.httpClient = client }
 }
 
+// WithMaxRetries configures how many times a request is retried on
+// transient failures (429 / 5xx / transport errors).
+func WithMaxRetries(maxRetries int) Option {
+	return func(c *Client) { c.maxRetries = maxRetries }
+}
+
+// WithRetryBaseDelay configures the initial retry backoff duration.
+func WithRetryBaseDelay(delay time.Duration) Option {
+	return func(c *Client) { c.retryBaseDelay = delay }
+}
+
+// WithRetryMaxDelay configures the maximum retry backoff duration.
+func WithRetryMaxDelay(delay time.Duration) Option {
+	return func(c *Client) { c.retryMaxDelay = delay }
+}
+
 // New creates a Telegram Bot API client.
 func New(token string, opts ...Option) (*Client, error) {
 	if strings.TrimSpace(token) == "" {
 		return nil, errors.New("telegram: empty token")
 	}
 	c := &Client{
-		token:      token,
-		baseURL:    defaultBaseURL,
-		httpClient: http.DefaultClient,
+		token:          token,
+		baseURL:        defaultBaseURL,
+		httpClient:     http.DefaultClient,
+		maxRetries:     defaultMaxRetries,
+		retryBaseDelay: defaultRetryBaseDelay,
+		retryMaxDelay:  defaultRetryMaxDelay,
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -97,16 +163,36 @@ func New(token string, opts ...Option) (*Client, error) {
 	if c.httpClient == nil {
 		return nil, errors.New("telegram: nil http client")
 	}
+	if c.maxRetries < 0 {
+		return nil, errors.New("telegram: negative max retries")
+	}
+	if c.retryBaseDelay < 0 {
+		return nil, errors.New("telegram: negative retry base delay")
+	}
+	if c.retryMaxDelay < 0 {
+		return nil, errors.New("telegram: negative retry max delay")
+	}
 	return c, nil
 }
 
 // GetMe returns the bot user.
 func (c *Client) GetMe(ctx context.Context) (User, error) {
 	var rsp apiResponse[User]
-	if err := c.do(ctx, methodGet, pathGetMe, nil, nil, &rsp); err != nil {
-		return User{}, err
-	}
-	if err := validateResponse(rsp); err != nil {
+	err := c.doWithRetry(ctx, func(ctx context.Context) error {
+		status, err := c.doOnce(
+			ctx,
+			methodGet,
+			pathGetMe,
+			nil,
+			nil,
+			&rsp,
+		)
+		if err != nil {
+			return err
+		}
+		return validateResponse(status, rsp)
+	})
+	if err != nil {
 		return User{}, err
 	}
 	return rsp.Result, nil
@@ -130,17 +216,21 @@ func (c *Client) GetUpdates(
 	}
 
 	var rsp apiResponse[[]Update]
-	if err := c.do(
-		ctx,
-		methodGet,
-		pathGetUpdate,
-		values,
-		nil,
-		&rsp,
-	); err != nil {
-		return nil, err
-	}
-	if err := validateResponse(rsp); err != nil {
+	err := c.doWithRetry(ctx, func(ctx context.Context) error {
+		status, err := c.doOnce(
+			ctx,
+			methodGet,
+			pathGetUpdate,
+			values,
+			nil,
+			&rsp,
+		)
+		if err != nil {
+			return err
+		}
+		return validateResponse(status, rsp)
+	})
+	if err != nil {
 		return nil, err
 	}
 	return rsp.Result, nil
@@ -165,20 +255,32 @@ func (c *Client) SendMessage(
 	}
 
 	var rsp apiResponse[Message]
-	if err := c.do(ctx, methodPost, pathSendMsg, nil, body, &rsp); err != nil {
-		return Message{}, err
-	}
-	if err := validateResponse(rsp); err != nil {
+	err = c.doWithRetry(ctx, func(ctx context.Context) error {
+		status, err := c.doOnce(
+			ctx,
+			methodPost,
+			pathSendMsg,
+			nil,
+			body,
+			&rsp,
+		)
+		if err != nil {
+			return err
+		}
+		return validateResponse(status, rsp)
+	})
+	if err != nil {
 		return Message{}, err
 	}
 	return rsp.Result, nil
 }
 
 type apiResponse[T any] struct {
-	OK          bool   `json:"ok"`
-	Result      T      `json:"result,omitempty"`
-	Description string `json:"description,omitempty"`
-	ErrorCode   int    `json:"error_code,omitempty"`
+	OK          bool           `json:"ok"`
+	Result      T              `json:"result,omitempty"`
+	Description string         `json:"description,omitempty"`
+	ErrorCode   int            `json:"error_code,omitempty"`
+	Parameters  *apiParameters `json:"parameters,omitempty"`
 }
 
 type sendMessageRequest struct {
@@ -189,21 +291,21 @@ type sendMessageRequest struct {
 	DisableWebPagePrev bool   `json:"disable_web_page_preview,omitempty"`
 }
 
-func (c *Client) do(
+func (c *Client) doOnce(
 	ctx context.Context,
 	method string,
 	path string,
 	query url.Values,
 	body []byte,
 	out any,
-) error {
+) (int, error) {
 	if out == nil {
-		return errors.New("telegram: nil response target")
+		return 0, errors.New("telegram: nil response target")
 	}
 
 	u, err := url.Parse(c.baseURL)
 	if err != nil {
-		return fmt.Errorf("telegram: parse base url: %w", err)
+		return 0, fmt.Errorf("telegram: parse base url: %w", err)
 	}
 	u = u.JoinPath("bot"+c.token, path)
 	if len(query) > 0 {
@@ -217,7 +319,7 @@ func (c *Client) do(
 
 	req, err := http.NewRequestWithContext(ctx, method, u.String(), reader)
 	if err != nil {
-		return fmt.Errorf("telegram: new request: %w", err)
+		return 0, fmt.Errorf("telegram: new request: %w", err)
 	}
 	if len(body) > 0 {
 		req.Header.Set("Content-Type", "application/json")
@@ -225,24 +327,33 @@ func (c *Client) do(
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return c.redactErr(fmt.Errorf("telegram: request: %w", err))
+		return 0, c.redactErr(fmt.Errorf("telegram: request: %w", err))
 	}
 	defer resp.Body.Close()
 
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("telegram: read response: %w", err)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("telegram: status %d: %s",
-			resp.StatusCode, strings.TrimSpace(string(raw)),
+		return resp.StatusCode, fmt.Errorf(
+			"telegram: read response: %w", err,
 		)
 	}
 
 	if err := json.Unmarshal(raw, out); err != nil {
-		return fmt.Errorf("telegram: decode json: %w", err)
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return resp.StatusCode, statusError{
+				status: resp.StatusCode,
+				body:   strings.TrimSpace(string(raw)),
+			}
+		}
+		return resp.StatusCode, fmt.Errorf("telegram: decode json: %w", err)
 	}
-	return nil
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return resp.StatusCode, statusError{
+			status: resp.StatusCode,
+			body:   strings.TrimSpace(string(raw)),
+		}
+	}
+	return resp.StatusCode, nil
 }
 
 func (c *Client) redactErr(err error) error {
@@ -262,16 +373,123 @@ func (c *Client) redactErr(err error) error {
 	return redactedError{msg: msg, err: err}
 }
 
-func validateResponse[T any](rsp apiResponse[T]) error {
+func validateResponse[T any](
+	statusCode int,
+	rsp apiResponse[T],
+) error {
 	if rsp.OK {
 		return nil
 	}
-	if rsp.Description == "" {
-		return errors.New("telegram: api error")
+
+	retryAfter := time.Duration(0)
+	if rsp.Parameters != nil && rsp.Parameters.RetryAfter > 0 {
+		retryAfter = time.Duration(rsp.Parameters.RetryAfter) * time.Second
 	}
-	return fmt.Errorf(
-		"telegram: api error %d: %s",
-		rsp.ErrorCode,
-		rsp.Description,
-	)
+
+	return &apiCallError{
+		statusCode:  statusCode,
+		errorCode:   rsp.ErrorCode,
+		description: rsp.Description,
+		retryAfter:  retryAfter,
+	}
+}
+
+func (c *Client) doWithRetry(
+	ctx context.Context,
+	fn func(ctx context.Context) error,
+) error {
+	if fn == nil {
+		return errors.New("telegram: nil request func")
+	}
+
+	attempt := 0
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		err := fn(ctx)
+		if err == nil {
+			return nil
+		}
+		if !c.shouldRetry(attempt, err) {
+			return err
+		}
+
+		delay := c.retryDelay(attempt, err)
+		attempt++
+		if !sleep(ctx, delay) {
+			return ctx.Err()
+		}
+	}
+}
+
+func (c *Client) shouldRetry(attempt int, err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	if attempt >= c.maxRetries {
+		return false
+	}
+
+	var apiErr *apiCallError
+	if errors.As(err, &apiErr) {
+		if apiErr.errorCode == http.StatusTooManyRequests {
+			return true
+		}
+		return apiErr.errorCode >= http.StatusInternalServerError
+	}
+
+	var statusErr statusError
+	if errors.As(err, &statusErr) {
+		if statusErr.status == http.StatusTooManyRequests {
+			return true
+		}
+		return statusErr.status >= http.StatusInternalServerError
+	}
+
+	return true
+}
+
+func (c *Client) retryDelay(attempt int, err error) time.Duration {
+	var apiErr *apiCallError
+	if errors.As(err, &apiErr) && apiErr.retryAfter > 0 {
+		return apiErr.retryAfter
+	}
+
+	base := c.retryBaseDelay
+	if base <= 0 {
+		return 0
+	}
+
+	delay := base
+	for i := 0; i < attempt; i++ {
+		if delay > c.retryMaxDelay/2 {
+			delay = c.retryMaxDelay
+			break
+		}
+		delay *= 2
+	}
+	if delay > c.retryMaxDelay {
+		return c.retryMaxDelay
+	}
+	return delay
+}
+
+func sleep(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		return true
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }

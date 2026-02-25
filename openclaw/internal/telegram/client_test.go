@@ -222,15 +222,24 @@ func TestClient_New_ValidationErrors(t *testing.T) {
 
 	_, err = New(testToken, WithHTTPClient(nil))
 	require.Error(t, err)
+
+	_, err = New(testToken, WithMaxRetries(-1))
+	require.Error(t, err)
+
+	_, err = New(testToken, WithRetryBaseDelay(-time.Second))
+	require.Error(t, err)
+
+	_, err = New(testToken, WithRetryMaxDelay(-time.Second))
+	require.Error(t, err)
 }
 
-func TestClient_do_NilResponseTarget(t *testing.T) {
+func TestClient_doOnce_NilResponseTarget(t *testing.T) {
 	t.Parallel()
 
 	c, err := New(testToken)
 	require.NoError(t, err)
 
-	err = c.do(
+	_, err = c.doOnce(
 		context.Background(),
 		methodGet,
 		pathGetMe,
@@ -291,7 +300,7 @@ func TestClient_GetMe_BadJSON(t *testing.T) {
 func TestValidateResponse_NoDescription(t *testing.T) {
 	t.Parallel()
 
-	err := validateResponse(apiResponse[User]{OK: false})
+	err := validateResponse(http.StatusOK, apiResponse[User]{OK: false})
 	require.Error(t, err)
 }
 
@@ -386,6 +395,101 @@ func TestClient_GetUpdates_QueryEmptyByDefault(t *testing.T) {
 
 	_, err = c.GetUpdates(context.Background(), 0, 0)
 	require.NoError(t, err)
+}
+
+func TestClient_GetMe_RetriesOnAPI429(t *testing.T) {
+	t.Parallel()
+
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		calls++
+		require.Equal(t, methodGet, r.Method)
+		require.Equal(t, "/bot"+testToken+"/"+pathGetMe, r.URL.Path)
+
+		if calls == 1 {
+			_ = json.NewEncoder(w).Encode(apiResponse[User]{
+				OK:          false,
+				ErrorCode:   http.StatusTooManyRequests,
+				Description: "too many requests",
+				Parameters:  &apiParameters{RetryAfter: 0},
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(apiResponse[User]{
+			OK: true,
+			Result: User{
+				ID:       1,
+				IsBot:    true,
+				Username: "mybot",
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := New(
+		testToken,
+		WithBaseURL(srv.URL),
+		WithHTTPClient(srv.Client()),
+		WithMaxRetries(1),
+		WithRetryBaseDelay(0),
+		WithRetryMaxDelay(0),
+	)
+	require.NoError(t, err)
+
+	me, err := c.GetMe(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "mybot", me.Username)
+	require.Equal(t, 2, calls)
+}
+
+func TestClient_GetMe_RetriesOnAPI5xx(t *testing.T) {
+	t.Parallel()
+
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		calls++
+		require.Equal(t, methodGet, r.Method)
+		require.Equal(t, "/bot"+testToken+"/"+pathGetMe, r.URL.Path)
+
+		if calls == 1 {
+			_ = json.NewEncoder(w).Encode(apiResponse[User]{
+				OK:          false,
+				ErrorCode:   http.StatusInternalServerError,
+				Description: "server error",
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(apiResponse[User]{
+			OK: true,
+			Result: User{
+				ID:       1,
+				IsBot:    true,
+				Username: "mybot",
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := New(
+		testToken,
+		WithBaseURL(srv.URL),
+		WithHTTPClient(srv.Client()),
+		WithMaxRetries(1),
+		WithRetryBaseDelay(0),
+		WithRetryMaxDelay(0),
+	)
+	require.NoError(t, err)
+
+	me, err := c.GetMe(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "mybot", me.Username)
+	require.Equal(t, 2, calls)
 }
 
 type roundTripperFunc func(*http.Request) (*http.Response, error)
