@@ -649,7 +649,7 @@ Redis Session 存储有两种数据存储方式：
 | 存储方式                | Hash Tag           | 特点                                                    |
 | ------------------------- | -------------------- | --------------------------------------------------------- |
 | **ZSet**（旧）          | `{appName}`        | 所有用户数据集中在同一 Cluster slot，大规模下有热点风险 |
-| **HashIdx**（新，默认） | `{appName:userID}` | 按用户散列，消除热点；数据与索引分离，支持自定义索引    |
+| **HashIdx**（新，默认） | `{userID}` | 按用户散列，消除热点；数据与索引分离，支持自定义索引    |
 
 新版本通过 **CompatMode**（兼容模式）实现从旧存储方式到新存储方式的平滑迁移，无需停服。
 
@@ -727,7 +727,7 @@ sessionService, err := redis.NewService(
 
 #### UserState 迁移说明
 
-由于新旧存储方式的 UserState 使用了不同的 Redis Key（旧：`userstate:{appName}:{userID}`，新：`hashidx:userstate:{appName:userID}`），升级后新存储方式**无法自动读取**旧格式的 UserState 数据。
+由于新旧存储方式的 UserState 使用了不同的 Redis Key（旧：`userstate:{appName}:{userID}`，新：`hashidx:userstate:appName:{userID}`），升级后新存储方式**无法自动读取**旧格式的 UserState 数据。
 
 如果您的业务使用了 UserState，在迁移到新版本后需要**重新设置 UserState**（通过 `UpdateUserState` 接口写入），新数据会自动存储到新格式的 Key 中。
 
@@ -748,13 +748,13 @@ track:{appName}:{userID}:{sessionID}:{track}  -> SortedSet {score: timestamp, va
 
 ```
 appstate:{appName}                                         -> Hash {key: value}
-hashidx:userstate:{appName:userID}                         -> Hash {key: value}
-hashidx:meta:{appName:userID}:{sessionID}                  -> Hash {session metadata fields}
-hashidx:evtdata:{appName:userID}:{sessionID}               -> Hash {eventID: Event(JSON)}
-hashidx:evtidx:time:{appName:userID}:{sessionID}           -> SortedSet {score: timestamp, member: eventID}
-hashidx:sesssum:{appName:userID}:{sessionID}               -> Hash {filterKey: Summary(JSON)}
-hashidx:track:{appName:userID}:{sessionID}:{track}         -> SortedSet {score: timestamp, value: TrackEvent(JSON)}
-hashidx:sessidx:{appName:userID}                           -> SortedSet {score: createTime, member: sessionID}
+hashidx:userstate:appName:{userID}                         -> Hash {key: value}
+hashidx:meta:appName:{userID}:{sessionID}                  -> Hash {session metadata fields}
+hashidx:evtdata:appName:{userID}:{sessionID}               -> Hash {eventID: Event(JSON)}
+hashidx:evtidx:time:appName:{userID}:{sessionID}           -> SortedSet {score: timestamp, member: eventID}
+hashidx:sesssum:appName:{userID}:{sessionID}               -> Hash {filterKey: Summary(JSON)}
+hashidx:track:appName:{userID}:{sessionID}:{track}         -> SortedSet {score: timestamp, value: TrackEvent(JSON)}
+hashidx:sessidx:appName:{userID}                           -> SortedSet {score: createTime, member: sessionID}
 ```
 
 > **AppState 兼容**：两种存储方式的 `appstate:{appName}` Key 格式和内容完全一致，迁移时无需额外处理。

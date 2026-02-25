@@ -643,7 +643,7 @@ Redis Session storage has two data storage formats:
 | Storage Format | Hash Tag | Characteristics |
 | -------------- | -------- | --------------- |
 | **ZSet** (legacy) | `{appName}` | All user data concentrated in one Cluster slot; hot spot risk at scale |
-| **HashIdx** (new, default) | `{appName:userID}` | Per-user distribution eliminates hot spots; separated data and index; supports custom indexes |
+| **HashIdx** (new, default) | `{userID}` | Per-user distribution eliminates hot spots; separated data and index; supports custom indexes |
 
 The new version uses **CompatMode** (compatibility mode) to enable smooth migration from the legacy storage format to the new one without downtime.
 
@@ -720,7 +720,7 @@ sessionService, err := redis.NewService(
 
 #### UserState Migration Note
 
-The old and new storage formats use different Redis keys for UserState (old: `userstate:{appName}:{userID}`, new: `hashidx:userstate:{appName:userID}`). After upgrading, the new storage format **cannot automatically read** UserState data in the old format.
+The old and new storage formats use different Redis keys for UserState (old: `userstate:{appName}:{userID}`, new: `hashidx:userstate:appName:{userID}`). After upgrading, the new storage format **cannot automatically read** UserState data in the old format.
 
 If your application uses UserState, you need to **re-set the UserState** after migration (via the `UpdateUserState` API). The new data will be automatically stored under the new key format.
 
@@ -741,13 +741,13 @@ track:{appName}:{userID}:{sessionID}:{track}  -> SortedSet {score: timestamp, va
 
 ```
 appstate:{appName}                                         -> Hash {key: value}
-hashidx:userstate:{appName:userID}                         -> Hash {key: value}
-hashidx:meta:{appName:userID}:{sessionID}                  -> Hash {session metadata fields}
-hashidx:evtdata:{appName:userID}:{sessionID}               -> Hash {eventID: Event(JSON)}
-hashidx:evtidx:time:{appName:userID}:{sessionID}           -> SortedSet {score: timestamp, member: eventID}
-hashidx:sesssum:{appName:userID}:{sessionID}               -> Hash {filterKey: Summary(JSON)}
-hashidx:track:{appName:userID}:{sessionID}:{track}         -> SortedSet {score: timestamp, value: TrackEvent(JSON)}
-hashidx:sessidx:{appName:userID}                           -> SortedSet {score: createTime, member: sessionID}
+hashidx:userstate:appName:{userID}                         -> Hash {key: value}
+hashidx:meta:appName:{userID}:{sessionID}                  -> Hash {session metadata fields}
+hashidx:evtdata:appName:{userID}:{sessionID}               -> Hash {eventID: Event(JSON)}
+hashidx:evtidx:time:appName:{userID}:{sessionID}           -> SortedSet {score: timestamp, member: eventID}
+hashidx:sesssum:appName:{userID}:{sessionID}               -> Hash {filterKey: Summary(JSON)}
+hashidx:track:appName:{userID}:{sessionID}:{track}         -> SortedSet {score: timestamp, value: TrackEvent(JSON)}
+hashidx:sessidx:appName:{userID}                           -> SortedSet {score: createTime, member: sessionID}
 ```
 
 > **AppState Compatibility**: The `appstate:{appName}` key format and content are identical across both storage formats, so no extra handling is needed during migration.

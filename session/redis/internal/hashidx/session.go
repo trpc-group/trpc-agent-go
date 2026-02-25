@@ -736,7 +736,7 @@ func (c *Client) GetSummary(ctx context.Context, key session.Key) (map[string]*s
 
 // AppendTrackEvent persists a track event to HashIdx storage.
 // Track events are stored in a ZSet with timestamp as score.
-// Format: hashidx:track:{appName:userID}:sessionID:trackName
+// Format: hashidx:track:appName:{userID}:sessionID:trackName
 func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEvent *session.TrackEvent) error {
 	// Get current session state to update tracks list
 	metaJSON, err := c.client.Get(ctx, c.keys.SessionMetaKey(key)).Bytes()
