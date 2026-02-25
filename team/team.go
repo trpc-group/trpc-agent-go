@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -33,6 +34,8 @@ type Team struct {
 	mode        Mode
 	coordinator agent.Agent
 	entryName   string
+
+	mu sync.RWMutex
 
 	members      []agent.Agent
 	memberByName map[string]agent.Agent
@@ -215,7 +218,9 @@ func (t *Team) runSwarm(
 	// If no active agent (either cross-request transfer disabled or no active agent stored),
 	// fall back to entry member.
 	if startAgent == nil {
+		t.mu.RLock()
 		startAgent = t.memberByName[t.entryName]
+		t.mu.RUnlock()
 		if startAgent == nil {
 			return nil, fmt.Errorf("entry member %q not found", t.entryName)
 		}
@@ -247,7 +252,9 @@ func (t *Team) getActiveAgent(invocation *agent.Invocation) agent.Agent {
 	activeAgentName := string(agentNameBytes)
 
 	// Look up the agent in memberByName.
+	t.mu.RLock()
 	ag := t.memberByName[activeAgentName]
+	t.mu.RUnlock()
 	if ag == nil {
 		// Active agent doesn't exist, return nil to fall back to entry member.
 		return nil
@@ -265,7 +272,9 @@ func (t *Team) Tools() []tool.Tool {
 		}
 		return t.coordinator.Tools()
 	case ModeSwarm:
+		t.mu.RLock()
 		entry := t.memberByName[t.entryName]
+		t.mu.RUnlock()
 		if entry == nil {
 			return nil
 		}
@@ -285,6 +294,9 @@ func (t *Team) Info() agent.Info {
 
 // SubAgents implements agent.Agent.
 func (t *Team) SubAgents() []agent.Agent {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
 	if len(t.members) == 0 {
 		return nil
 	}
@@ -298,6 +310,8 @@ func (t *Team) FindSubAgent(name string) agent.Agent {
 	if name == "" {
 		return nil
 	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	return t.memberByName[name]
 }
 
@@ -379,6 +393,7 @@ func (s *staticToolSet) Close() error { return nil }
 func (s *staticToolSet) Name() string { return s.name }
 
 func wireSwarmRoster(members []agent.Agent) error {
+	setters := make([]agent.SubAgentSetter, 0, len(members))
 	for _, m := range members {
 		setter, ok := m.(agent.SubAgentSetter)
 		if !ok {
@@ -387,18 +402,18 @@ func wireSwarmRoster(members []agent.Agent) error {
 				m.Info().Name,
 			)
 		}
+		setters = append(setters, setter)
+	}
 
+	for i := range members {
 		roster := make([]agent.Agent, 0, len(members)-1)
-		for _, other := range members {
-			if other == nil {
-				continue
-			}
-			if other.Info().Name == m.Info().Name {
+		for j, other := range members {
+			if other == nil || i == j {
 				continue
 			}
 			roster = append(roster, other)
 		}
-		setter.SetSubAgents(roster)
+		setters[i].SetSubAgents(roster)
 	}
 	return nil
 }
