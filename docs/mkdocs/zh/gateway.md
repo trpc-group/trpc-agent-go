@@ -148,6 +148,20 @@ go run ./cmd/openclaw \
 开启后，只有当消息 `text` 包含任一 mention pattern 时，且 `thread` 字段不为空，
 该消息才会被处理。
 
+## 与 OpenClaw Gateway protocol 的关系
+
+OpenClaw 文档中的 “Gateway protocol” 指的是 **WebSocket 控制面协议**（包含
+device / role / approvals / pairing 等控制能力），它并不是“把 HTTP JSON 字段改成
+一样”就能直接兼容的东西。
+
+本仓库的 Gateway HTTP API 更偏向 **数据面最小入口**：把一条入站消息稳定地映射成
+一次 `runner.Run()`，并提供基础的运行控制（status + cancel）。
+
+如果未来确实需要兼容 OpenClaw 的客户端生态，更合理的做法是：
+
+- 在 `openclaw/` demo binary 里新增一个 WS 控制面（或协议适配层）。
+- 保持 HTTP `/v1/gateway/*` 作为稳定的最小数据面接口，避免把它演进成大而全。
+
 ## Status 与 cancel
 
 Gateway 提供：

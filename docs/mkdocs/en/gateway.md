@@ -154,6 +154,20 @@ go run ./cmd/openclaw \
 When enabled, a message with `thread` set is only processed if `text` contains
 any configured pattern.
 
+## Relationship to OpenClaw "Gateway protocol"
+
+The "Gateway protocol" documented by OpenClaw refers to a **WebSocket
+control-plane protocol** (with concepts like device / role / approvals /
+pairing). It is not something you get by simply renaming HTTP JSON fields.
+
+The gateway server in this repo is intentionally a **minimal data-plane HTTP
+API**: it maps one inbound message to one `runner.Run()` call, and provides
+basic run control (status + cancel).
+
+If OpenClaw client compatibility becomes important, the better approach is to
+add a WS control-plane (or a protocol adapter) in the `openclaw/` demo binary,
+while keeping `/v1/gateway/*` stable and small.
+
 ## Status and cancel
 
 The gateway server exposes:
