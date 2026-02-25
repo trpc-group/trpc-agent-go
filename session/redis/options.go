@@ -47,12 +47,13 @@ const (
 	// Use this after all instances are upgraded but zset data still exists.
 	CompatModeLegacy
 
-	// CompatModeDualWrite enables full zset compatibility with dual-write.
-	// - Read: hashidx first, fallback to zset if not found
-	// - Write: dual-write to both hashidx and zset
+	// CompatModeTransition forces all operations to use zset storage only.
+	// - Read: zset only
+	// - Write: zset only
 	// Use this during rolling upgrades when old zset-only instances are still running.
-	// This ensures old instances can read data created by new instances.
-	CompatModeDualWrite
+	// New instances behave identically to old instances, ensuring full compatibility.
+	// After all instances are upgraded, switch to CompatModeLegacy to start using hashidx.
+	CompatModeTransition
 )
 
 // ServiceOpts is the options for the redis session service.
@@ -234,12 +235,12 @@ func WithGetSessionHook(hooks ...session.GetSessionHook) ServiceOpt {
 //
 // Available modes:
 //   - CompatModeNone: hashidx only, no zset compatibility
-//   - CompatModeLegacy: hashidx first with zset read fallback (default)
-//   - CompatModeDualWrite: Full compatibility with dual-write
+//   - CompatModeLegacy: hashidx write + zset read fallback (default)
+//   - CompatModeTransition: zset only (identical behavior to old zset-only instances)
 //
 // Migration path:
-//  1. Rolling upgrade: WithCompatMode(CompatModeDualWrite) - old zset instances can read new data
-//  2. All upgraded: WithCompatMode(CompatModeLegacy) - stop dual-write, keep zset read fallback
+//  1. Rolling upgrade: WithCompatMode(CompatModeTransition) - all nodes write zset, safe mixed deployment
+//  2. All upgraded: WithCompatMode(CompatModeLegacy) - new sessions use hashidx, old sessions fallback to zset
 //  3. zset TTL expired: WithCompatMode(CompatModeNone) - pure hashidx mode
 //
 // Default: CompatModeLegacy (safe for most scenarios where zset data may still exist).
@@ -258,29 +259,5 @@ func WithCompatMode(mode CompatMode) ServiceOpt {
 func WithKeyPrefix(prefix string) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.keyPrefix = prefix
-	}
-}
-
-// WithLegacySupport is deprecated. Use WithCompatMode instead.
-//
-// Deprecated: Use WithCompatMode(CompatModeLegacy) or WithCompatMode(CompatModeNone).
-func WithLegacySupport(enable bool) ServiceOpt {
-	return func(opts *ServiceOpts) {
-		if enable {
-			opts.compatMode = CompatModeLegacy
-		} else {
-			opts.compatMode = CompatModeNone
-		}
-	}
-}
-
-// WithDualWrite is deprecated. Use WithCompatMode instead.
-//
-// Deprecated: Use WithCompatMode(CompatModeDualWrite).
-func WithDualWrite(enable bool) ServiceOpt {
-	return func(opts *ServiceOpts) {
-		if enable {
-			opts.compatMode = CompatModeDualWrite
-		}
 	}
 }
