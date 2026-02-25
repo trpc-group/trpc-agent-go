@@ -13,6 +13,8 @@ package main
 import (
 	"context"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
@@ -105,4 +107,113 @@ func TestRunDoctor_TelegramDisabled(t *testing.T) {
 	out, err := io.ReadAll(r)
 	require.NoError(t, err)
 	require.Contains(t, string(out), "Telegram: disabled")
+}
+
+func TestRunDoctor_WithTelegram_BaseURLOverride(t *testing.T) {
+	token := "token"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		switch r.URL.Path {
+		case "/bot" + token + "/getMe":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(
+				w,
+				`{"ok":true,"result":{"id":1,"username":"bot"}}`,
+			)
+		case "/bot" + token + "/getWebhookInfo":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(
+				w,
+				`{"ok":true,"result":{"url":""}}`,
+			)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	t.Setenv(telegramBaseURLEnvName, srv.URL)
+
+	code := runDoctor([]string{
+		"-telegram-token", token,
+		"-state-dir", t.TempDir(),
+	})
+	require.Equal(t, 0, code)
+}
+
+func TestCheckWebhook_NotSet(t *testing.T) {
+	token := "token"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		require.Equal(t, http.MethodGet, r.Method)
+		require.Equal(t, "/bot"+token+"/getWebhookInfo", r.URL.Path)
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"ok":true,"result":{"url":""}}`)
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := tgapi.New(
+		token,
+		tgapi.WithBaseURL(srv.URL),
+		tgapi.WithHTTPClient(srv.Client()),
+	)
+	require.NoError(t, err)
+
+	require.True(t, checkWebhook(context.Background(), c))
+}
+
+func TestCheckWebhook_Set(t *testing.T) {
+	token := "token"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		require.Equal(t, http.MethodGet, r.Method)
+		require.Equal(t, "/bot"+token+"/getWebhookInfo", r.URL.Path)
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(
+			w,
+			`{"ok":true,"result":{"url":"https://x","pending_update_count":1}}`,
+		)
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := tgapi.New(
+		token,
+		tgapi.WithBaseURL(srv.URL),
+		tgapi.WithHTTPClient(srv.Client()),
+	)
+	require.NoError(t, err)
+
+	require.False(t, checkWebhook(context.Background(), c))
+}
+
+func TestCheckWebhook_Error(t *testing.T) {
+	token := "token"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		_ *http.Request,
+	) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := tgapi.New(
+		token,
+		tgapi.WithBaseURL(srv.URL),
+		tgapi.WithHTTPClient(srv.Client()),
+	)
+	require.NoError(t, err)
+
+	require.False(t, checkWebhook(context.Background(), c))
 }

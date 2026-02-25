@@ -661,15 +661,121 @@ func (r *errReader) Close() error {
 	return nil
 }
 
-func TestClient_SendMessage_MarshalError(t *testing.T) {
+func TestClient_SendMessage_HTTPStatusError(t *testing.T) {
 	t.Parallel()
 
-	c, err := New(testToken)
+	srv := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		require.Equal(t, methodPost, r.Method)
+		require.Equal(t, "/bot"+testToken+"/"+pathSendMsg, r.URL.Path)
+
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := New(
+		testToken,
+		WithBaseURL(srv.URL),
+		WithHTTPClient(srv.Client()),
+		WithMaxRetries(0),
+	)
 	require.NoError(t, err)
 
-	_, err = c.SendMessage(
-		context.Background(),
-		SendMessageParams{Text: string([]byte{0xff})},
+	_, err = c.SendMessage(context.Background(), SendMessageParams{
+		ChatID: 1,
+		Text:   "hi",
+	})
+	require.Error(t, err)
+}
+
+func TestClient_GetUpdates_HTTPStatusError(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		require.Equal(t, methodGet, r.Method)
+		require.Equal(t, "/bot"+testToken+"/"+pathGetUpdate, r.URL.Path)
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := New(
+		testToken,
+		WithBaseURL(srv.URL),
+		WithHTTPClient(srv.Client()),
+		WithMaxRetries(0),
 	)
+	require.NoError(t, err)
+
+	_, err = c.GetUpdates(context.Background(), 0, 0)
+	require.Error(t, err)
+}
+
+func TestClient_EditMessageText_HTTPStatusError(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		require.Equal(t, methodPost, r.Method)
+		require.Equal(
+			t,
+			"/bot"+testToken+"/"+pathEditMessageText,
+			r.URL.Path,
+		)
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := New(
+		testToken,
+		WithBaseURL(srv.URL),
+		WithHTTPClient(srv.Client()),
+		WithMaxRetries(0),
+	)
+	require.NoError(t, err)
+
+	_, err = c.EditMessageText(context.Background(), EditMessageTextParams{
+		ChatID:    1,
+		MessageID: 2,
+		Text:      "hi",
+	})
+	require.Error(t, err)
+}
+
+func TestClient_SendChatAction_HTTPStatusError(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		require.Equal(t, methodPost, r.Method)
+		require.Equal(
+			t,
+			"/bot"+testToken+"/"+pathSendChatAction,
+			r.URL.Path,
+		)
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := New(
+		testToken,
+		WithBaseURL(srv.URL),
+		WithHTTPClient(srv.Client()),
+		WithMaxRetries(0),
+	)
+	require.NoError(t, err)
+
+	err = c.SendChatAction(context.Background(), SendChatActionParams{
+		ChatID: 1,
+		Action: "typing",
+	})
 	require.Error(t, err)
 }

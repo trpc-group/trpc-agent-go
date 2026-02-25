@@ -12,15 +12,151 @@ package main
 
 import (
 	"context"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
+
+func TestRun_ParseErrorExitCode(t *testing.T) {
+	t.Parallel()
+
+	err := run(context.Background(), []string{"-unknown-flag"})
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 2, exitErr.Code)
+}
+
+func TestRun_TelegramProxyErrorExitCode(t *testing.T) {
+	t.Parallel()
+
+	err := run(context.Background(), []string{
+		"-telegram-token", "x",
+		"-telegram-proxy", "://bad",
+	})
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+}
+
+func TestRun_CreateModelFailsExitCode(t *testing.T) {
+	t.Parallel()
+
+	err := run(context.Background(), []string{
+		"-mode", "nope",
+	})
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+}
+
+func TestRun_CreateAgentFailsExitCode(t *testing.T) {
+	t.Parallel()
+
+	err := run(context.Background(), []string{
+		"-mode", modeMock,
+		"-state-dir", t.TempDir(),
+		"-skills-root", "http://[::1",
+	})
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+}
+
+func TestRun_HTTPListenErrorPath(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	t.Cleanup(cancel)
+
+	err := run(ctx, []string{
+		"-http-addr", "127.0.0.1:-1",
+		"-mode", modeMock,
+		"-state-dir", t.TempDir(),
+		"-skills-root", t.TempDir(),
+	})
+	require.NoError(t, err)
+}
+
+func TestRun_Smoke(t *testing.T) {
+	dir := t.TempDir()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	time.AfterFunc(50*time.Millisecond, cancel)
+
+	err := run(ctx, []string{
+		"-http-addr", "127.0.0.1:0",
+		"-mode", modeMock,
+		"-state-dir", dir,
+		"-skills-root", t.TempDir(),
+		"-skills-extra-dirs", t.TempDir() + "," + t.TempDir(),
+		"-skills-debug",
+		"-allow-users", "u1,u2",
+		"-require-mention",
+		"-mention", "@bot",
+		"-enable-local-exec",
+		"-enable-openclaw-tools",
+	})
+	require.NoError(t, err)
+}
+
+func TestRun_WithTelegram_BaseURLOverride(t *testing.T) {
+	dir := t.TempDir()
+	token := "token"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		switch r.URL.Path {
+		case "/bot" + token + "/getMe":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w,
+				`{"ok":true,"result":{"id":1,"username":"bot"}}`,
+			)
+		case "/bot" + token + "/getUpdates":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"ok":true,"result":[]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	t.Setenv(telegramBaseURLEnvName, srv.URL)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	time.AfterFunc(50*time.Millisecond, cancel)
+
+	err := run(ctx, []string{
+		"-http-addr", "127.0.0.1:0",
+		"-mode", modeMock,
+		"-state-dir", dir,
+		"-skills-root", t.TempDir(),
+		"-telegram-token", token,
+		"-require-mention",
+	})
+	require.NoError(t, err)
+}
 
 func TestSplitCSV(t *testing.T) {
 	require.Nil(t, splitCSV(""))
@@ -85,6 +221,23 @@ func TestNewModel_Mock(t *testing.T) {
 	mdl, err := newModel(modeMock, "ignored", openAIVariantAuto)
 	require.NoError(t, err)
 	require.Equal(t, "mock-echo", mdl.Info().Name)
+}
+
+func TestDefaultOpenAIModelName(t *testing.T) {
+	t.Setenv(openAIModelEnvName, "")
+	require.Equal(t, defaultOpenAIModel, defaultOpenAIModelName())
+
+	t.Setenv(openAIModelEnvName, " gpt-5 ")
+	require.Equal(t, "gpt-5", defaultOpenAIModelName())
+}
+
+func TestExitError_Error(t *testing.T) {
+	t.Parallel()
+
+	var e *exitError
+	require.Equal(t, "", e.Error())
+	require.Equal(t, "", (&exitError{}).Error())
+	require.Equal(t, "x", (&exitError{Err: errors.New("x")}).Error())
 }
 
 func TestNewModel_OpenAI(t *testing.T) {

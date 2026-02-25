@@ -129,6 +129,89 @@ func TestBuildRequestID(t *testing.T) {
 	)
 }
 
+func TestBuildSessionID(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(
+		t,
+		"telegram:dm:u1",
+		buildSessionID("u1", ""),
+	)
+	require.Equal(
+		t,
+		"telegram:thread:10:topic:2",
+		buildSessionID("u1", "10:topic:2"),
+	)
+}
+
+func TestParseDMPolicy_DefaultAndInvalid(t *testing.T) {
+	t.Parallel()
+
+	got, err := parseDMPolicy("")
+	require.NoError(t, err)
+	require.Equal(t, defaultDMPolicy, got)
+
+	_, err = parseDMPolicy("nope")
+	require.Error(t, err)
+}
+
+func TestParseGroupPolicy_DefaultAndInvalid(t *testing.T) {
+	t.Parallel()
+
+	got, err := parseGroupPolicy("")
+	require.NoError(t, err)
+	require.Equal(t, defaultGroupPolicy, got)
+
+	_, err = parseGroupPolicy("nope")
+	require.Error(t, err)
+}
+
+func TestWithAllowUsers_EmptyResetsNil(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config{
+		allowUsers: map[string]struct{}{
+			"u1": {},
+		},
+	}
+
+	WithAllowUsers()(cfg)
+	require.Nil(t, cfg.allowUsers)
+}
+
+func TestWithAllowUsers_TrimsAndSkipsEmpty(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config{}
+	WithAllowUsers(" u1 ", "", "  ")(cfg)
+
+	require.Contains(t, cfg.allowUsers, "u1")
+	require.Len(t, cfg.allowUsers, 1)
+}
+
+func TestWithAllowThreads_EmptyResetsNil(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config{
+		allowThreads: map[string]struct{}{
+			"t1": {},
+		},
+	}
+
+	WithAllowThreads()(cfg)
+	require.Nil(t, cfg.allowThreads)
+}
+
+func TestWithAllowThreads_TrimsAndSkipsEmpty(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config{}
+	WithAllowThreads(" t1 ", "", "  ")(cfg)
+
+	require.Contains(t, cfg.allowThreads, "t1")
+	require.Len(t, cfg.allowThreads, 1)
+}
+
 func TestSplitRunes(t *testing.T) {
 	t.Parallel()
 
@@ -147,6 +230,16 @@ func TestSplitRunes(t *testing.T) {
 		[]string{"a\n\n", "b"},
 		splitRunes("a\n\nb", 3),
 	)
+}
+
+func TestSplitIndex_MinAndFallbacks(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, 1, splitIndex([]rune("a"), 4))
+	require.Equal(t, 2, splitIndex([]rune("a "), 4))
+	require.Equal(t, 3, splitIndex([]rune("a\n\n"), 4))
+	require.Equal(t, 2, splitIndex([]rune("a\n"), 4))
+	require.Equal(t, 4, splitIndex([]rune("abcd"), 4))
 }
 
 func TestParseCommand(t *testing.T) {
@@ -194,6 +287,68 @@ func TestNewOffsetStore_WritesToExpectedPath(t *testing.T) {
 
 	_, err = os.Stat(path)
 	require.NoError(t, err)
+}
+
+func TestPairingStorePath_StateDirEmpty(t *testing.T) {
+	t.Parallel()
+
+	_, err := PairingStorePath("", BotInfo{})
+	require.Error(t, err)
+}
+
+func TestSanitizeFileToken_EmptyUsesDefault(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, defaultOffsetKey, sanitizeFileToken("   "))
+}
+
+func TestNew_OptionValidationErrors(t *testing.T) {
+	t.Parallel()
+
+	_, err := New(
+		testToken,
+		BotInfo{Username: "bot"},
+		&stubGateway{},
+		WithStateDir(t.TempDir()),
+		WithDMPolicy("nope"),
+	)
+	require.Error(t, err)
+
+	_, err = New(
+		testToken,
+		BotInfo{Username: "bot"},
+		&stubGateway{},
+		WithStateDir(t.TempDir()),
+		WithGroupPolicy("nope"),
+	)
+	require.Error(t, err)
+
+	_, err = New(
+		testToken,
+		BotInfo{Username: "bot"},
+		&stubGateway{},
+		WithStateDir(t.TempDir()),
+		WithPairingTTL(0),
+	)
+	require.Error(t, err)
+
+	_, err = New(
+		testToken,
+		BotInfo{Username: "bot"},
+		&stubGateway{},
+		WithStateDir(t.TempDir()),
+		WithStreamingMode("nope"),
+	)
+	require.Error(t, err)
+
+	_, err = New(
+		testToken,
+		BotInfo{Username: "bot"},
+		&stubGateway{},
+		WithStateDir(t.TempDir()),
+		WithAPIOptions(tgapi.WithBaseURL("")),
+	)
+	require.Error(t, err)
 }
 
 func TestChannel_HandleMessage_ReplySplit(t *testing.T) {

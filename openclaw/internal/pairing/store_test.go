@@ -12,6 +12,7 @@ package pairing
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -98,6 +99,109 @@ func TestFileStore_Approve_UnknownCode(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, ok)
 	require.Empty(t, userID)
+}
+
+func TestFileStore_Approve_EmptyCode(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "pairing.json")
+	s, err := NewFileStore(path)
+	require.NoError(t, err)
+
+	_, _, err = s.Approve(context.Background(), " ")
+	require.Error(t, err)
+}
+
+func TestFileStore_Request_EmptyUserID(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "pairing.json")
+	s, err := NewFileStore(path)
+	require.NoError(t, err)
+
+	_, _, err = s.Request(context.Background(), " ")
+	require.Error(t, err)
+}
+
+func TestFileStore_IsApproved_EmptyUserID(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "pairing.json")
+	s, err := NewFileStore(path)
+	require.NoError(t, err)
+
+	_, err = s.IsApproved(context.Background(), " ")
+	require.Error(t, err)
+}
+
+func TestFileStore_IsApproved_ContextCancelled(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "pairing.json")
+	s, err := NewFileStore(path)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err = s.IsApproved(ctx, "u1")
+	require.Error(t, err)
+}
+
+func TestFileStore_Reload_ReadError(t *testing.T) {
+	t.Parallel()
+
+	path := t.TempDir()
+	s, err := NewFileStore(path)
+	require.NoError(t, err)
+
+	_, err = s.IsApproved(context.Background(), "u1")
+	require.Error(t, err)
+}
+
+func TestFileStore_Reload_DecodeError(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "pairing.json")
+	require.NoError(t, os.WriteFile(path, []byte("{"), 0o600))
+
+	s, err := NewFileStore(path)
+	require.NoError(t, err)
+
+	_, err = s.IsApproved(context.Background(), "u1")
+	require.Error(t, err)
+}
+
+func TestFileStore_Reload_UnexpectedVersion(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "pairing.json")
+	require.NoError(t, os.WriteFile(
+		path,
+		[]byte(`{"version":999}`),
+		0o600,
+	))
+
+	s, err := NewFileStore(path)
+	require.NoError(t, err)
+
+	_, err = s.IsApproved(context.Background(), "u1")
+	require.Error(t, err)
+}
+
+func TestFileStore_Request_CreateDirError(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	parent := filepath.Join(dir, "parent")
+	require.NoError(t, os.WriteFile(parent, []byte("x"), 0o600))
+
+	path := filepath.Join(parent, "pairing.json")
+	s, err := NewFileStore(path)
+	require.NoError(t, err)
+
+	_, _, err = s.Request(context.Background(), "u1")
+	require.Error(t, err)
 }
 
 func TestFileStore_ExpiresPending(t *testing.T) {
