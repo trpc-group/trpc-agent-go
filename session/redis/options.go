@@ -253,7 +253,7 @@ func WithCompatMode(mode CompatMode) ServiceOpt {
 // WithKeyPrefix sets the key prefix for all Redis keys.
 // Both zset and hashidx keys will use this prefix:
 //   - zset: prefix:sess:{app}:user, prefix:event:{app}:user:sess, etc.
-//   - hashidx: prefix:hashidx:meta:{app:user}:sess, prefix:hashidx:evtdata:{app:user}:sess, etc.
+//   - hashidx: prefix:hashidx:meta:app:{user}:sess, prefix:hashidx:evtdata:app:{user}:sess, etc.
 //
 // This is typically used to namespace keys when multiple applications share the same Redis instance.
 func WithKeyPrefix(prefix string) ServiceOpt {

@@ -155,9 +155,9 @@ func AttachSummaries(sess *session.Session, summariesCmd *redis.StringCmd) {
 //
 // hashidx Summary Key (improved):
 //
-//	Key:    hashidx:sesssum:{appName:userID}:sessionID
+//	Key:    hashidx:sesssum:appName:{userID}:sessionID
 //	Field:  "data" (fixed)
-//	Hash Tag: {appName:userID} -> distributed by user (no hot spot)
+//	Hash Tag: {userID} -> distributed by user (no hot spot)
 //
 // =============================================================================
 
