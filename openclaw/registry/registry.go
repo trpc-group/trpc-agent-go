@@ -151,7 +151,21 @@ var (
 
 // RegisterChannel registers a channel factory under typeName.
 func RegisterChannel(typeName string, f ChannelFactory) error {
-	return register("channel", channelFactories, typeName, f)
+	name, err := validateType("channel", typeName)
+	if err != nil {
+		return err
+	}
+	if f == nil {
+		return fmt.Errorf("registry: channel factory is nil: %s", name)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if _, ok := channelFactories[name]; ok {
+		return fmt.Errorf("registry: channel already registered: %s", name)
+	}
+	channelFactories[name] = f
+	return nil
 }
 
 // LookupChannel returns a channel factory by typeName.
@@ -165,7 +179,27 @@ func LookupChannel(typeName string) (ChannelFactory, bool) {
 
 // RegisterSessionBackend registers a session backend factory under typeName.
 func RegisterSessionBackend(typeName string, f SessionBackendFactory) error {
-	return register("session backend", sessionFactories, typeName, f)
+	name, err := validateType("session backend", typeName)
+	if err != nil {
+		return err
+	}
+	if f == nil {
+		return fmt.Errorf(
+			"registry: session backend factory is nil: %s",
+			name,
+		)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if _, ok := sessionFactories[name]; ok {
+		return fmt.Errorf(
+			"registry: session backend already registered: %s",
+			name,
+		)
+	}
+	sessionFactories[name] = f
+	return nil
 }
 
 // LookupSessionBackend returns a session backend factory by typeName.
@@ -179,7 +213,27 @@ func LookupSessionBackend(typeName string) (SessionBackendFactory, bool) {
 
 // RegisterMemoryBackend registers a memory backend factory under typeName.
 func RegisterMemoryBackend(typeName string, f MemoryBackendFactory) error {
-	return register("memory backend", memoryFactories, typeName, f)
+	name, err := validateType("memory backend", typeName)
+	if err != nil {
+		return err
+	}
+	if f == nil {
+		return fmt.Errorf(
+			"registry: memory backend factory is nil: %s",
+			name,
+		)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if _, ok := memoryFactories[name]; ok {
+		return fmt.Errorf(
+			"registry: memory backend already registered: %s",
+			name,
+		)
+	}
+	memoryFactories[name] = f
+	return nil
 }
 
 // LookupMemoryBackend returns a memory backend factory by typeName.
@@ -193,7 +247,27 @@ func LookupMemoryBackend(typeName string) (MemoryBackendFactory, bool) {
 
 // RegisterToolProvider registers a tool provider factory under typeName.
 func RegisterToolProvider(typeName string, f ToolProviderFactory) error {
-	return register("tool provider", toolFactories, typeName, f)
+	name, err := validateType("tool provider", typeName)
+	if err != nil {
+		return err
+	}
+	if f == nil {
+		return fmt.Errorf(
+			"registry: tool provider factory is nil: %s",
+			name,
+		)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if _, ok := toolFactories[name]; ok {
+		return fmt.Errorf(
+			"registry: tool provider already registered: %s",
+			name,
+		)
+	}
+	toolFactories[name] = f
+	return nil
 }
 
 // LookupToolProvider returns a tool provider factory by typeName.
@@ -207,7 +281,21 @@ func LookupToolProvider(typeName string) (ToolProviderFactory, bool) {
 
 // RegisterModel registers a model factory under typeName.
 func RegisterModel(typeName string, f ModelFactory) error {
-	return register("model", modelFactories, typeName, f)
+	name, err := validateType("model", typeName)
+	if err != nil {
+		return err
+	}
+	if f == nil {
+		return fmt.Errorf("registry: model factory is nil: %s", name)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if _, ok := modelFactories[name]; ok {
+		return fmt.Errorf("registry: model already registered: %s", name)
+	}
+	modelFactories[name] = f
+	return nil
 }
 
 // LookupModel returns a model factory by typeName.
@@ -223,30 +311,12 @@ func normalizeType(typeName string) string {
 	return strings.ToLower(strings.TrimSpace(typeName))
 }
 
-func register[T any](
-	kind string,
-	dst map[string]T,
-	typeName string,
-	f T,
-) error {
+func validateType(kind string, typeName string) (string, error) {
 	name := normalizeType(typeName)
 	if name == "" {
-		return fmt.Errorf("registry: %s type name is empty", kind)
+		return "", fmt.Errorf("registry: %s type name is empty", kind)
 	}
-
-	var zero T
-	if any(f) == any(zero) {
-		return fmt.Errorf("registry: %s factory is nil: %s", kind, name)
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-
-	if _, ok := dst[name]; ok {
-		return fmt.Errorf("registry: %s already registered: %s", kind, name)
-	}
-	dst[name] = f
-	return nil
+	return name, nil
 }
 
 // Types returns a sorted list of registered types for a registry kind.
