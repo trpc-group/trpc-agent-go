@@ -194,7 +194,7 @@ func run(ctx context.Context, args []string) error {
 	}
 	defer closeSessionService(sessionSvc)
 
-	memSvc, err := newMemoryService(opts)
+	memSvc, err := newMemoryService(mdl, opts)
 	if err != nil {
 		return &exitError{
 			Code: 1,

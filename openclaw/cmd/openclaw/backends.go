@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	memextractor "trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	meminmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	memredis "trpc.group/trpc-go/trpc-agent-go/memory/redis"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -93,26 +94,43 @@ func newRedisSessionService(
 	return sessionredis.NewService(serviceOpts...)
 }
 
-func newMemoryService(opts runOptions) (memory.Service, error) {
+func newMemoryService(
+	mdl model.Model,
+	opts runOptions,
+) (memory.Service, error) {
+	ext, err := newAutoMemoryExtractor(mdl, opts)
+	if err != nil {
+		return nil, err
+	}
+
 	backend := strings.ToLower(strings.TrimSpace(opts.MemoryBackend))
 	switch backend {
 	case "", memoryBackendInMemory:
-		serviceOpts := make([]meminmemory.ServiceOpt, 0, 1)
+		serviceOpts := make([]meminmemory.ServiceOpt, 0, 3)
 		if opts.MemoryLimit > 0 {
 			serviceOpts = append(
 				serviceOpts,
 				meminmemory.WithMemoryLimit(opts.MemoryLimit),
 			)
 		}
+		if ext != nil {
+			serviceOpts = append(
+				serviceOpts,
+				meminmemory.WithExtractor(ext),
+			)
+		}
 		return meminmemory.NewMemoryService(serviceOpts...), nil
 	case memoryBackendRedis:
-		return newRedisMemoryService(opts)
+		return newRedisMemoryService(ext, opts)
 	default:
 		return nil, fmt.Errorf("unsupported memory backend: %s", backend)
 	}
 }
 
-func newRedisMemoryService(opts runOptions) (memory.Service, error) {
+func newRedisMemoryService(
+	ext memextractor.MemoryExtractor,
+	opts runOptions,
+) (memory.Service, error) {
 	memURL := strings.TrimSpace(opts.MemoryRedisURL)
 	instance := strings.TrimSpace(opts.MemoryRedisInstance)
 	if memURL == "" && instance == "" {
@@ -146,6 +164,9 @@ func newRedisMemoryService(opts runOptions) (memory.Service, error) {
 			serviceOpts,
 			memredis.WithMemoryLimit(opts.MemoryLimit),
 		)
+	}
+	if ext != nil {
+		serviceOpts = append(serviceOpts, memredis.WithExtractor(ext))
 	}
 	return memredis.NewService(serviceOpts...)
 }
@@ -224,4 +245,62 @@ func parseSummaryPolicy(raw string) (string, error) {
 	default:
 		return "", fmt.Errorf("unsupported summary policy: %s", raw)
 	}
+}
+
+func newAutoMemoryExtractor(
+	mdl model.Model,
+	opts runOptions,
+) (memextractor.MemoryExtractor, error) {
+	if !opts.MemoryAutoEnabled {
+		return nil, nil
+	}
+	if mdl == nil {
+		return nil, errors.New("memory auto requires a model")
+	}
+
+	checks := make([]memextractor.Checker, 0, 2)
+	if opts.MemoryAutoMessageThreshold > 0 {
+		checks = append(
+			checks,
+			memextractor.CheckMessageThreshold(
+				opts.MemoryAutoMessageThreshold,
+			),
+		)
+	}
+	if opts.MemoryAutoTimeInterval > 0 {
+		checks = append(
+			checks,
+			memextractor.CheckTimeInterval(opts.MemoryAutoTimeInterval),
+		)
+	}
+	if len(checks) == 0 {
+		checks = append(
+			checks,
+			memextractor.CheckMessageThreshold(
+				defaultMemoryAutoMessageThreshold,
+			),
+		)
+	}
+
+	policy, err := parseSummaryPolicy(opts.MemoryAutoPolicy)
+	if err != nil {
+		return nil, err
+	}
+
+	extOpts := make([]memextractor.Option, 0, 2)
+	switch policy {
+	case summaryPolicyAny:
+		extOpts = append(
+			extOpts,
+			memextractor.WithCheckersAny(checks...),
+		)
+	case summaryPolicyAll:
+		for _, check := range checks {
+			extOpts = append(extOpts, memextractor.WithChecker(check))
+		}
+	default:
+		return nil, fmt.Errorf("unsupported memory auto policy: %s", policy)
+	}
+
+	return memextractor.NewExtractor(mdl, extOpts...), nil
 }

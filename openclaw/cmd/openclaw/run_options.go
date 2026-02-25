@@ -35,6 +35,7 @@ const (
 	summaryPolicyAll = "all"
 
 	defaultSessionSummaryEventThreshold = 20
+	defaultMemoryAutoMessageThreshold   = 20
 )
 
 type runOptions struct {
@@ -78,6 +79,11 @@ type runOptions struct {
 	MemoryRedisKeyPref  string
 	MemoryLimit         int
 
+	MemoryAutoEnabled          bool
+	MemoryAutoPolicy           string
+	MemoryAutoMessageThreshold int
+	MemoryAutoTimeInterval     time.Duration
+
 	SessionSummaryEnabled       bool
 	SessionSummaryPolicy        string
 	SessionSummaryEventCount    int
@@ -110,6 +116,8 @@ func parseRunOptions(args []string) (runOptions, error) {
 		MemoryBackend:  memoryBackendInMemory,
 
 		SessionSummaryPolicy: summaryPolicyAny,
+
+		MemoryAutoPolicy: summaryPolicyAny,
 	}
 
 	fs.StringVar(
@@ -305,6 +313,30 @@ func parseRunOptions(args []string) (runOptions, error) {
 		"Memory entries limit per user (optional)",
 	)
 	fs.BoolVar(
+		&opts.MemoryAutoEnabled,
+		"memory-auto",
+		false,
+		"Enable auto memory extraction (optional)",
+	)
+	fs.StringVar(
+		&opts.MemoryAutoPolicy,
+		"memory-auto-policy",
+		summaryPolicyAny,
+		"Auto memory gating policy: any|all",
+	)
+	fs.IntVar(
+		&opts.MemoryAutoMessageThreshold,
+		"memory-auto-messages",
+		0,
+		"Extract when messages exceed N (0 uses default)",
+	)
+	fs.DurationVar(
+		&opts.MemoryAutoTimeInterval,
+		"memory-auto-interval",
+		0,
+		"Extract when time since last extract exceeds duration",
+	)
+	fs.BoolVar(
 		&opts.SessionSummaryEnabled,
 		"session-summary",
 		false,
@@ -460,6 +492,7 @@ type memoryConfig struct {
 	Backend *string      `yaml:"backend,omitempty"`
 	Redis   *redisConfig `yaml:"redis,omitempty"`
 	Limit   *int         `yaml:"limit,omitempty"`
+	Auto    *memoryAuto  `yaml:"auto,omitempty"`
 }
 
 type redisConfig struct {
@@ -475,6 +508,13 @@ type summaryConfig struct {
 	TokenThreshold *int    `yaml:"token_threshold,omitempty"`
 	IdleThreshold  *string `yaml:"idle_threshold,omitempty"`
 	MaxWords       *int    `yaml:"max_words,omitempty"`
+}
+
+type memoryAuto struct {
+	Enabled          *bool   `yaml:"enabled,omitempty"`
+	Policy           *string `yaml:"policy,omitempty"`
+	MessageThreshold *int    `yaml:"message_threshold,omitempty"`
+	TimeInterval     *string `yaml:"time_interval,omitempty"`
 }
 
 func loadConfigFile(path string) (*fileConfig, error) {
@@ -713,6 +753,15 @@ func (cfg *fileConfig) apply(
 		if cfg.Memory.Limit != nil && !flagWasSet(set, "memory-limit") {
 			opts.MemoryLimit = *cfg.Memory.Limit
 		}
+		if cfg.Memory.Auto != nil {
+			if err := applyMemoryAuto(
+				cfg.Memory.Auto,
+				opts,
+				set,
+			); err != nil {
+				return err
+			}
+		}
 	}
 
 	return nil
@@ -750,6 +799,36 @@ func applySessionSummary(
 	}
 	if cfg.MaxWords != nil && !flagWasSet(set, "session-summary-max-words") {
 		opts.SessionSummaryMaxWords = *cfg.MaxWords
+	}
+	return nil
+}
+
+func applyMemoryAuto(
+	cfg *memoryAuto,
+	opts *runOptions,
+	set map[string]struct{},
+) error {
+	if cfg == nil || opts == nil {
+		return nil
+	}
+
+	if cfg.Enabled != nil && !flagWasSet(set, "memory-auto") {
+		opts.MemoryAutoEnabled = *cfg.Enabled
+	}
+	if cfg.Policy != nil && !flagWasSet(set, "memory-auto-policy") {
+		opts.MemoryAutoPolicy = strings.TrimSpace(*cfg.Policy)
+	}
+	if cfg.MessageThreshold != nil &&
+		!flagWasSet(set, "memory-auto-messages") {
+		opts.MemoryAutoMessageThreshold = *cfg.MessageThreshold
+	}
+	if cfg.TimeInterval != nil &&
+		!flagWasSet(set, "memory-auto-interval") {
+		dur, err := parseDuration(*cfg.TimeInterval)
+		if err != nil {
+			return fmt.Errorf("memory.auto.time_interval: %w", err)
+		}
+		opts.MemoryAutoTimeInterval = dur
 	}
 	return nil
 }

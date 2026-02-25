@@ -145,6 +145,11 @@ memory:
     instance: "r2"
     key_prefix: "mp"
   limit: 123
+  auto:
+    enabled: true
+    policy: "all"
+    message_threshold: 7
+    time_interval: "10m"
 `)
 
 	opts, err := parseRunOptions([]string{"-config", cfgPath})
@@ -197,6 +202,11 @@ memory:
 	require.Equal(t, "r2", opts.MemoryRedisInstance)
 	require.Equal(t, "mp", opts.MemoryRedisKeyPref)
 	require.Equal(t, 123, opts.MemoryLimit)
+
+	require.True(t, opts.MemoryAutoEnabled)
+	require.Equal(t, "all", opts.MemoryAutoPolicy)
+	require.Equal(t, 7, opts.MemoryAutoMessageThreshold)
+	require.Equal(t, 10*time.Minute, opts.MemoryAutoTimeInterval)
 }
 
 func TestParseRunOptions_MultipleYAMLDocsFails(t *testing.T) {

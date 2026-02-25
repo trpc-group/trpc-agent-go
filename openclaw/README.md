@@ -64,6 +64,8 @@ session:
 
 memory:
   backend: "inmemory"
+  auto:
+    enabled: false
 ```
 
 Run:
@@ -545,6 +547,23 @@ go run ./cmd/openclaw \
   -session-summary \
   -session-summary-policy any \
   -session-summary-events 20
+```
+
+### Auto memory extraction (optional)
+
+The runner can also enqueue background auto memory extraction jobs after
+assistant replies. When enabled, the memory service uses an LLM-based
+extractor to maintain user memories automatically.
+
+Enable with:
+
+```bash
+cd openclaw
+go run ./cmd/openclaw \
+  -mode openai \
+  -memory-auto \
+  -memory-auto-policy all \
+  -memory-auto-messages 20
 ```
 
 ## OpenClaw exec/process tools (unsafe)
