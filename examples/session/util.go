@@ -156,7 +156,7 @@ func newRedisSessionService(
 		redis.WithSessionTTL(cfg.TTL),
 		redis.WithAppendEventHook(cfg.AppendEventHooks...),
 		redis.WithGetSessionHook(cfg.GetSessionHooks...),
-		redis.WithCompatMode(redis.CompatModeDualWrite),
+		redis.WithCompatMode(redis.CompatModeLegacy),
 	)
 }
 
