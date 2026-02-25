@@ -307,7 +307,11 @@ func main() {
 		log.Fatalf("create gateway failed: %v", err)
 	}
 
-	gw, err := gwclient.New(gwSrv.Handler(), gwSrv.MessagesPath())
+	gw, err := gwclient.New(
+		gwSrv.Handler(),
+		gwSrv.MessagesPath(),
+		gwSrv.CancelPath(),
+	)
 	if err != nil {
 		log.Fatalf("create gateway client failed: %v", err)
 	}

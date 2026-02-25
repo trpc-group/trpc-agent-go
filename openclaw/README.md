@@ -224,6 +224,13 @@ go run ./cmd/openclaw \
   -telegram-dm-policy open
 ```
 
+### Telegram commands
+
+This demo supports a few basic commands:
+
+- `/help`: show a short help message.
+- `/cancel`: cancel the current run for the same DM/thread session.
+
 ### Telegram threads and topics
 
 This demo derives `session_id` based on whether the inbound message is a DM

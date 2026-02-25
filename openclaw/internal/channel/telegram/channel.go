@@ -15,8 +15,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -84,6 +82,8 @@ type gatewayClient interface {
 		ctx context.Context,
 		req gwclient.MessageRequest,
 	) (gwclient.MessageResponse, error)
+
+	Cancel(ctx context.Context, requestID string) (bool, error)
 }
 
 type botAPI interface {
@@ -257,6 +257,7 @@ type pairingStore interface {
 // Channel implements a Telegram long-polling chat surface.
 type Channel struct {
 	bot   botAPI
+	info  BotInfo
 	gw    gatewayClient
 	store tgapi.OffsetStore
 
@@ -271,6 +272,9 @@ type Channel struct {
 	allowThreads map[string]struct{}
 
 	pairing pairingStore
+
+	lanes    *laneLocker
+	inflight *inflightRequests
 }
 
 // New creates a Telegram channel. It persists polling offsets under
@@ -344,6 +348,7 @@ func New(
 
 	return &Channel{
 		bot:             api,
+		info:            bot,
 		gw:              gw,
 		store:           store,
 		startFromLatest: cfg.startFromLatest,
@@ -354,6 +359,8 @@ func New(
 		allowUsers:      cfg.allowUsers,
 		allowThreads:    cfg.allowThreads,
 		pairing:         dmPairing,
+		lanes:           newLaneLocker(),
+		inflight:        newInflightRequests(),
 	}, nil
 }
 
@@ -379,7 +386,16 @@ func (c *Channel) Run(ctx context.Context) error {
 			ctx context.Context,
 			msg tgapi.Message,
 		) error {
-			return c.handleMessage(ctx, msg)
+			go func() {
+				if err := c.handleMessage(ctx, msg); err != nil {
+					log.WarnfContext(
+						ctx,
+						"telegram: handle message: %v",
+						err,
+					)
+				}
+			}()
+			return nil
 		}),
 	)
 	if err != nil {
@@ -433,50 +449,84 @@ func (c *Channel) handleMessage(
 	}
 
 	requestID := buildRequestID(chatID, messageThreadID, msg.MessageID)
+	sessionID := buildSessionID(fromID, thread)
 
-	rsp, err := c.gw.SendMessage(ctx, gwclient.MessageRequest{
-		Channel:   channelID,
-		From:      fromID,
-		Thread:    thread,
-		MessageID: strconv.Itoa(msg.MessageID),
-		Text:      msg.Text,
-		UserID:    fromID,
-		RequestID: requestID,
-	})
-	if err != nil {
-		if rsp.StatusCode >= http.StatusBadRequest &&
-			rsp.StatusCode < http.StatusInternalServerError {
-			log.WarnfContext(
+	cmd := parseCommand(msg.Text, c.info)
+	if cmd != "" {
+		switch cmd {
+		case commandHelp:
+			c.reply(ctx, chatID, messageThreadID, msg.MessageID, helpMessage)
+			return nil
+		case commandCancel:
+			return c.handleCancelCommand(
 				ctx,
-				"telegram: gateway rejected: %v",
-				err,
+				chatID,
+				messageThreadID,
+				msg.MessageID,
+				sessionID,
 			)
+		default:
+			if !isGroup {
+				c.reply(
+					ctx,
+					chatID,
+					messageThreadID,
+					msg.MessageID,
+					helpMessage,
+				)
+			}
 			return nil
 		}
-		return err
-	}
-	if rsp.Ignored || strings.TrimSpace(rsp.Reply) == "" {
-		return nil
 	}
 
-	parts := splitRunes(rsp.Reply, maxReplyRunes)
-	for i, part := range parts {
-		replyTo := 0
-		if i == 0 {
-			replyTo = msg.MessageID
-		}
-		_, err := c.bot.SendMessage(ctx, tgapi.SendMessageParams{
-			ChatID:           chatID,
-			MessageThreadID:  messageThreadID,
-			ReplyToMessageID: replyTo,
-			Text:             part,
+	return c.lanes.withLockErr(sessionID, func() error {
+		c.inflight.Set(sessionID, requestID)
+		defer c.inflight.Clear(sessionID, requestID)
+
+		rsp, err := c.gw.SendMessage(ctx, gwclient.MessageRequest{
+			Channel:   channelID,
+			From:      fromID,
+			Thread:    thread,
+			MessageID: strconv.Itoa(msg.MessageID),
+			Text:      msg.Text,
+			UserID:    fromID,
+			RequestID: requestID,
 		})
 		if err != nil {
-			log.WarnfContext(ctx, "telegram: send message: %v", err)
+			if rsp.StatusCode >= http.StatusBadRequest &&
+				rsp.StatusCode < http.StatusInternalServerError {
+				log.WarnfContext(
+					ctx,
+					"telegram: gateway rejected: %v",
+					err,
+				)
+				return nil
+			}
+			return err
+		}
+		if rsp.Ignored || strings.TrimSpace(rsp.Reply) == "" {
 			return nil
 		}
-	}
-	return nil
+
+		parts := splitRunes(rsp.Reply, maxReplyRunes)
+		for i, part := range parts {
+			replyTo := 0
+			if i == 0 {
+				replyTo = msg.MessageID
+			}
+			_, err := c.bot.SendMessage(ctx, tgapi.SendMessageParams{
+				ChatID:           chatID,
+				MessageThreadID:  messageThreadID,
+				ReplyToMessageID: replyTo,
+				Text:             part,
+			})
+			if err != nil {
+				log.WarnfContext(ctx, "telegram: send message: %v", err)
+				return nil
+			}
+		}
+		return nil
+	})
 }
 
 func (c *Channel) sendDM(
@@ -575,155 +625,4 @@ func (c *Channel) isDMAllowed(
 			c.dmPolicy,
 		)
 	}
-}
-
-func buildRequestID(
-	chatID int64,
-	messageThreadID int,
-	messageID int,
-) string {
-	if messageThreadID == 0 {
-		return fmt.Sprintf(
-			"%s%d:%d",
-			requestIDPrefix,
-			chatID,
-			messageID,
-		)
-	}
-	return fmt.Sprintf(
-		"%s%d:%d:%d",
-		requestIDPrefix,
-		chatID,
-		messageThreadID,
-		messageID,
-	)
-}
-
-func parseDMPolicy(raw string) (string, error) {
-	v := strings.ToLower(strings.TrimSpace(raw))
-	if v == "" {
-		return defaultDMPolicy, nil
-	}
-	switch v {
-	case dmPolicyDisabled,
-		dmPolicyOpen,
-		dmPolicyAllowlist,
-		dmPolicyPairing:
-		return v, nil
-	default:
-		return "", fmt.Errorf("telegram: unsupported dm policy: %s", raw)
-	}
-}
-
-func parseGroupPolicy(raw string) (string, error) {
-	v := strings.ToLower(strings.TrimSpace(raw))
-	if v == "" {
-		return defaultGroupPolicy, nil
-	}
-	switch v {
-	case groupPolicyDisabled,
-		groupPolicyOpen,
-		groupPolicyAllowlist:
-		return v, nil
-	default:
-		return "", fmt.Errorf(
-			"telegram: unsupported group policy: %s",
-			raw,
-		)
-	}
-}
-
-func splitRunes(text string, maxRunes int) []string {
-	if maxRunes <= 0 {
-		return []string{text}
-	}
-	runes := []rune(text)
-	if len(runes) <= maxRunes {
-		return []string{text}
-	}
-
-	out := make([]string, 0, (len(runes)/maxRunes)+1)
-	for len(runes) > 0 {
-		n := maxRunes
-		if len(runes) < n {
-			n = len(runes)
-		}
-		out = append(out, string(runes[:n]))
-		runes = runes[n:]
-	}
-	return out
-}
-
-func resolveStateDir(stateDir string) (string, error) {
-	trimmed := strings.TrimSpace(stateDir)
-	if trimmed != "" {
-		return trimmed, nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(
-		home,
-		defaultStateRootDir,
-		defaultStateAppName,
-	), nil
-}
-
-func newOffsetStore(
-	stateDir string,
-	bot BotInfo,
-) (*tgapi.FileOffsetStore, error) {
-	if strings.TrimSpace(stateDir) == "" {
-		return nil, errors.New("telegram: empty state dir")
-	}
-	filename := fmt.Sprintf(
-		"%s%s%s",
-		offsetStoreFilePrefix,
-		offsetKey(bot),
-		offsetStoreFileSuffix,
-	)
-	path := filepath.Join(stateDir, offsetStoreDir, filename)
-	return tgapi.NewFileOffsetStore(path)
-}
-
-func offsetKey(bot BotInfo) string {
-	if strings.TrimSpace(bot.Username) != "" {
-		return sanitizeFileToken(bot.Username)
-	}
-	if bot.ID != 0 {
-		return strconv.FormatInt(bot.ID, 10)
-	}
-	return defaultOffsetKey
-}
-
-func sanitizeFileToken(value string) string {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return defaultOffsetKey
-	}
-	var b strings.Builder
-	b.Grow(len(trimmed))
-	for _, r := range trimmed {
-		if r >= 'a' && r <= 'z' ||
-			r >= 'A' && r <= 'Z' ||
-			r >= '0' && r <= '9' ||
-			r == '.' || r == '_' || r == '-' {
-			b.WriteRune(r)
-			continue
-		}
-		b.WriteByte('_')
-	}
-	return b.String()
-}
-
-// PairingStorePath returns the path used for storing DM pairing state.
-func PairingStorePath(stateDir string, bot BotInfo) (string, error) {
-	if strings.TrimSpace(stateDir) == "" {
-		return "", errors.New("telegram: empty state dir")
-	}
-	filename := pairingStoreFilePrefix +
-		offsetKey(bot) +
-		pairingStoreFileSuffix
-	return filepath.Join(stateDir, offsetStoreDir, filename), nil
 }

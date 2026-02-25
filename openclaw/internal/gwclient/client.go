@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 )
 
 const (
@@ -32,10 +33,15 @@ const (
 type Client struct {
 	handler      http.Handler
 	messagesPath string
+	cancelPath   string
 }
 
 // New creates a new client for the gateway messages endpoint.
-func New(handler http.Handler, messagesPath string) (*Client, error) {
+func New(
+	handler http.Handler,
+	messagesPath string,
+	cancelPath string,
+) (*Client, error) {
 	if handler == nil {
 		return nil, errors.New("gwclient: nil handler")
 	}
@@ -45,6 +51,7 @@ func New(handler http.Handler, messagesPath string) (*Client, error) {
 	return &Client{
 		handler:      handler,
 		messagesPath: messagesPath,
+		cancelPath:   cancelPath,
 	}, nil
 }
 
@@ -127,6 +134,70 @@ func (c *Client) SendMessage(
 		)
 	}
 	return rsp, nil
+}
+
+type cancelRequest struct {
+	RequestID string `json:"request_id,omitempty"`
+}
+
+type cancelResponse struct {
+	Canceled bool `json:"canceled"`
+}
+
+type errorResponse struct {
+	Error *APIError `json:"error,omitempty"`
+}
+
+// Cancel attempts to cancel a request by request_id.
+func (c *Client) Cancel(
+	ctx context.Context,
+	requestID string,
+) (bool, error) {
+	if strings.TrimSpace(c.cancelPath) == "" {
+		return false, errors.New("gwclient: empty cancel path")
+	}
+	if strings.TrimSpace(requestID) == "" {
+		return false, errors.New("gwclient: empty request id")
+	}
+
+	body, err := json.Marshal(cancelRequest{RequestID: requestID})
+	if err != nil {
+		return false, fmt.Errorf("gwclient: marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(
+		ctx,
+		methodPost,
+		c.cancelPath,
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return false, fmt.Errorf("gwclient: new request: %w", err)
+	}
+	httpReq.Header.Set(headerContentType, contentTypeJSON)
+
+	rr := newResponseRecorder()
+	c.handler.ServeHTTP(rr, httpReq)
+
+	if rr.Code() != http.StatusOK {
+		var rsp errorResponse
+		_ = json.Unmarshal(rr.BodyBytes(), &rsp)
+		if rsp.Error == nil {
+			return false, fmt.Errorf("gwclient: status %d", rr.Code())
+		}
+		return false, fmt.Errorf(
+			"gwclient: status %d: %s: %s",
+			rr.Code(),
+			rsp.Error.Type,
+			rsp.Error.Message,
+		)
+	}
+
+	var rsp cancelResponse
+	if err := json.Unmarshal(rr.BodyBytes(), &rsp); err != nil {
+		return false, fmt.Errorf("gwclient: unmarshal response: %w", err)
+	}
+	return rsp.Canceled, nil
 }
 
 type responseRecorder struct {

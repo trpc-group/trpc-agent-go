@@ -22,6 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
 )
@@ -67,7 +68,7 @@ func TestClient_SendMessage_Success(t *testing.T) {
 	srv, err := gateway.New(&stubRunner{})
 	require.NoError(t, err)
 
-	cli, err := New(srv.Handler(), srv.MessagesPath())
+	cli, err := New(srv.Handler(), srv.MessagesPath(), srv.CancelPath())
 	require.NoError(t, err)
 
 	rsp, err := cli.SendMessage(context.Background(), MessageRequest{
@@ -90,7 +91,7 @@ func TestClient_SendMessage_MentionGating(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	cli, err := New(srv.Handler(), srv.MessagesPath())
+	cli, err := New(srv.Handler(), srv.MessagesPath(), srv.CancelPath())
 	require.NoError(t, err)
 
 	rsp, err := cli.SendMessage(context.Background(), MessageRequest{
@@ -112,7 +113,7 @@ func TestClient_SendMessage_Forbidden(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	cli, err := New(srv.Handler(), srv.MessagesPath())
+	cli, err := New(srv.Handler(), srv.MessagesPath(), srv.CancelPath())
 	require.NoError(t, err)
 
 	_, err = cli.SendMessage(context.Background(), MessageRequest{
@@ -127,7 +128,7 @@ func TestClient_SendMessage_Forbidden(t *testing.T) {
 func TestClient_SendMessage_InvalidJSONResponse(t *testing.T) {
 	t.Parallel()
 
-	cli, err := New(&invalidJSONHandler{}, "/v1/gateway/messages")
+	cli, err := New(&invalidJSONHandler{}, "/v1/gateway/messages", "")
 	require.NoError(t, err)
 
 	_, err = cli.SendMessage(context.Background(), MessageRequest{
@@ -150,7 +151,7 @@ func (h *invalidJSONHandler) ServeHTTP(
 func TestClient_SendMessage_MarshalError(t *testing.T) {
 	t.Parallel()
 
-	cli, err := New(&invalidJSONHandler{}, "/v1/gateway/messages")
+	cli, err := New(&invalidJSONHandler{}, "/v1/gateway/messages", "")
 	require.NoError(t, err)
 
 	_, err = cli.SendMessage(context.Background(), MessageRequest{
@@ -177,10 +178,10 @@ func TestMessageResponse_JSON(t *testing.T) {
 func TestNew_ValidationErrors(t *testing.T) {
 	t.Parallel()
 
-	_, err := New(nil, "/v1/gateway/messages")
+	_, err := New(nil, "/v1/gateway/messages", "/v1/gateway/cancel")
 	require.Error(t, err)
 
-	_, err = New(http.NewServeMux(), "")
+	_, err = New(http.NewServeMux(), "", "/v1/gateway/cancel")
 	require.Error(t, err)
 }
 
@@ -206,6 +207,7 @@ func TestClient_SendMessage_StatusError_NoPayload(t *testing.T) {
 			body: "{}",
 		},
 		"/v1/gateway/messages",
+		"/v1/gateway/cancel",
 	)
 	require.NoError(t, err)
 
@@ -226,6 +228,7 @@ func TestClient_SendMessage_StatusError_WithPayload(t *testing.T) {
 			body: "{\"error\":{\"type\":\"unauthorized\",\"message\":\"no\"}}",
 		},
 		"/v1/gateway/messages",
+		"/v1/gateway/cancel",
 	)
 	require.NoError(t, err)
 
@@ -240,12 +243,67 @@ func TestClient_SendMessage_StatusError_WithPayload(t *testing.T) {
 func TestClient_SendMessage_NewRequestError(t *testing.T) {
 	t.Parallel()
 
-	cli, err := New(http.NewServeMux(), "http://[::1")
+	cli, err := New(http.NewServeMux(), "http://[::1", "/v1/gateway/cancel")
 	require.NoError(t, err)
 
 	_, err = cli.SendMessage(context.Background(), MessageRequest{
 		From: "u1",
 		Text: "hello",
 	})
+	require.Error(t, err)
+}
+
+type managedRunnerStub struct {
+	stubRunner
+}
+
+func (m *managedRunnerStub) Cancel(requestID string) bool {
+	return requestID == "req-1"
+}
+
+func (m *managedRunnerStub) RunStatus(
+	requestID string,
+) (runner.RunStatus, bool) {
+	if requestID != "req-1" {
+		return runner.RunStatus{}, false
+	}
+	return runner.RunStatus{RequestID: "req-1"}, true
+}
+
+func TestClient_Cancel_Success(t *testing.T) {
+	t.Parallel()
+
+	srv, err := gateway.New(&managedRunnerStub{})
+	require.NoError(t, err)
+
+	cli, err := New(srv.Handler(), srv.MessagesPath(), srv.CancelPath())
+	require.NoError(t, err)
+
+	canceled, err := cli.Cancel(context.Background(), "req-1")
+	require.NoError(t, err)
+	require.True(t, canceled)
+
+	canceled, err = cli.Cancel(context.Background(), "req-2")
+	require.NoError(t, err)
+	require.False(t, canceled)
+}
+
+func TestClient_Cancel_ValidationErrors(t *testing.T) {
+	t.Parallel()
+
+	cli, err := New(http.NewServeMux(), "/v1/gateway/messages", "")
+	require.NoError(t, err)
+
+	_, err = cli.Cancel(context.Background(), "req-1")
+	require.Error(t, err)
+
+	cli, err = New(
+		http.NewServeMux(),
+		"/v1/gateway/messages",
+		"/v1/gateway/cancel",
+	)
+	require.NoError(t, err)
+
+	_, err = cli.Cancel(context.Background(), "")
 	require.Error(t, err)
 }

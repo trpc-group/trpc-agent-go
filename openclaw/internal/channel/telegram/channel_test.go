@@ -44,6 +44,10 @@ type stubGateway struct {
 	delay time.Duration
 
 	onSend func()
+
+	canceled  []string
+	cancelOK  bool
+	cancelErr error
 }
 
 func (g *stubGateway) SendMessage(
@@ -65,6 +69,16 @@ func (g *stubGateway) SendMessage(
 		g.onSend()
 	}
 	return g.rsp, g.err
+}
+
+func (g *stubGateway) Cancel(
+	_ context.Context,
+	requestID string,
+) (bool, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.canceled = append(g.canceled, requestID)
+	return g.cancelOK, g.cancelErr
 }
 
 type stubBot struct {
@@ -278,6 +292,16 @@ func TestSplitRunes(t *testing.T) {
 	)
 }
 
+func TestParseCommand(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, "", parseCommand("hi", BotInfo{}))
+	require.Equal(t, "help", parseCommand("/help", BotInfo{}))
+	require.Equal(t, "help", parseCommand(" /help ", BotInfo{}))
+	require.Equal(t, "help", parseCommand("/help@bot", BotInfo{Username: "bot"}))
+	require.Equal(t, "", parseCommand("/help@x", BotInfo{Username: "bot"}))
+}
+
 func TestNew_Errors(t *testing.T) {
 	t.Parallel()
 
@@ -387,6 +411,113 @@ func TestChannel_HandleMessage_PrivateChat(t *testing.T) {
 	require.Equal(t, 0, sent.MessageThreadID)
 	require.Equal(t, 3, sent.ReplyToMessageID)
 	require.Equal(t, "ok", sent.Text)
+}
+
+func TestChannel_HandleMessage_CommandHelp(t *testing.T) {
+	t.Parallel()
+
+	gw := &stubGateway{}
+	dir := t.TempDir()
+	ch, err := New(
+		testToken,
+		BotInfo{Username: "bot"},
+		gw,
+		WithStateDir(dir),
+		WithDMPolicy(dmPolicyOpen),
+	)
+	require.NoError(t, err)
+
+	bot := &stubBot{}
+	ch.bot = bot
+
+	err = ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID: 3,
+		From:      &tgapi.User{ID: 2},
+		Chat:      &tgapi.Chat{ID: 1, Type: chatTypePrivate},
+		Text:      "/help",
+	})
+	require.NoError(t, err)
+
+	gw.mu.Lock()
+	require.Empty(t, gw.reqs)
+	gw.mu.Unlock()
+
+	bot.mu.Lock()
+	require.Len(t, bot.sent, 1)
+	require.Contains(t, bot.sent[0].Text, "Commands:")
+	bot.mu.Unlock()
+}
+
+func TestChannel_HandleMessage_CommandCancel_NoInflight(t *testing.T) {
+	t.Parallel()
+
+	gw := &stubGateway{cancelOK: true}
+	dir := t.TempDir()
+	ch, err := New(
+		testToken,
+		BotInfo{Username: "bot"},
+		gw,
+		WithStateDir(dir),
+		WithDMPolicy(dmPolicyOpen),
+	)
+	require.NoError(t, err)
+
+	bot := &stubBot{}
+	ch.bot = bot
+
+	err = ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID: 3,
+		From:      &tgapi.User{ID: 2},
+		Chat:      &tgapi.Chat{ID: 1, Type: chatTypePrivate},
+		Text:      "/cancel",
+	})
+	require.NoError(t, err)
+
+	gw.mu.Lock()
+	require.Empty(t, gw.canceled)
+	gw.mu.Unlock()
+
+	bot.mu.Lock()
+	require.Len(t, bot.sent, 1)
+	require.Equal(t, cancelNoopMessage, bot.sent[0].Text)
+	bot.mu.Unlock()
+}
+
+func TestChannel_HandleMessage_CommandCancel_Inflight(t *testing.T) {
+	t.Parallel()
+
+	gw := &stubGateway{cancelOK: true}
+	dir := t.TempDir()
+	ch, err := New(
+		testToken,
+		BotInfo{Username: "bot"},
+		gw,
+		WithStateDir(dir),
+		WithDMPolicy(dmPolicyOpen),
+	)
+	require.NoError(t, err)
+
+	ch.inflight.Set("telegram:dm:2", "req-1")
+
+	bot := &stubBot{}
+	ch.bot = bot
+
+	err = ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID: 3,
+		From:      &tgapi.User{ID: 2},
+		Chat:      &tgapi.Chat{ID: 1, Type: chatTypePrivate},
+		Text:      "/cancel",
+	})
+	require.NoError(t, err)
+
+	gw.mu.Lock()
+	require.Equal(t, []string{"req-1"}, gw.canceled)
+	gw.mu.Unlock()
+
+	bot.mu.Lock()
+	require.Len(t, bot.sent, 1)
+	require.Equal(t, cancelOKMessage, bot.sent[0].Text)
+	bot.mu.Unlock()
 }
 
 func TestChannel_HandleMessage_DMPolicyAllowlist_NoAllowUsers(t *testing.T) {
