@@ -97,21 +97,46 @@ type SessionDeps struct {
 	AppName    string
 }
 
+// RedisSpec describes the common Redis options in OpenClaw demo configs.
+type RedisSpec struct {
+	URL       string
+	Instance  string
+	KeyPrefix string
+}
+
+// SessionBackendSpec describes which session backend to create.
+type SessionBackendSpec struct {
+	Type   string
+	Redis  RedisSpec
+	Config *yaml.Node
+}
+
 // SessionBackendFactory creates a session service backend.
-type SessionBackendFactory func(deps SessionDeps, cfg *yaml.Node) (session.Service,
-	error)
+type SessionBackendFactory func(
+	deps SessionDeps,
+	spec SessionBackendSpec,
+) (session.Service, error)
 
 // MemoryDeps are dependencies passed to memory backend factories.
 type MemoryDeps struct {
 	Model     model.Model
 	Extractor memextractor.MemoryExtractor
-	Limit     int
 	AppName   string
 }
 
+// MemoryBackendSpec describes which memory backend to create.
+type MemoryBackendSpec struct {
+	Type   string
+	Redis  RedisSpec
+	Limit  int
+	Config *yaml.Node
+}
+
 // MemoryBackendFactory creates a memory service backend.
-type MemoryBackendFactory func(deps MemoryDeps, cfg *yaml.Node) (memory.Service,
-	error)
+type MemoryBackendFactory func(
+	deps MemoryDeps,
+	spec MemoryBackendSpec,
+) (memory.Service, error)
 
 // ToolProviderDeps are dependencies passed to tool provider factories.
 type ToolProviderDeps struct {

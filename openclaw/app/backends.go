@@ -24,6 +24,8 @@ import (
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	sessionredis "trpc.group/trpc-go/trpc-agent-go/session/redis"
 	"trpc.group/trpc-go/trpc-agent-go/session/summary"
+
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 )
 
 func newSessionService(
@@ -36,29 +38,53 @@ func newSessionService(
 	}
 
 	backend := strings.ToLower(strings.TrimSpace(opts.SessionBackend))
-	switch backend {
-	case "", sessionBackendInMemory:
-		serviceOpts := make([]sessioninmemory.ServiceOpt, 0, 1)
-		if summarizer != nil {
-			serviceOpts = append(
-				serviceOpts,
-				sessioninmemory.WithSummarizer(summarizer),
-			)
-		}
-		return sessioninmemory.NewSessionService(serviceOpts...), nil
-	case sessionBackendRedis:
-		return newRedisSessionService(summarizer, opts)
-	default:
+	if backend == "" {
+		backend = sessionBackendInMemory
+	}
+
+	f, ok := registry.LookupSessionBackend(backend)
+	if !ok {
 		return nil, fmt.Errorf("unsupported session backend: %s", backend)
 	}
+
+	return f(
+		registry.SessionDeps{
+			Model:      mdl,
+			Summarizer: summarizer,
+			AppName:    opts.AppName,
+		},
+		registry.SessionBackendSpec{
+			Type: backend,
+			Redis: registry.RedisSpec{
+				URL:       opts.SessionRedisURL,
+				Instance:  opts.SessionRedisInstance,
+				KeyPrefix: opts.SessionRedisKeyPref,
+			},
+			Config: opts.SessionConfig,
+		},
+	)
 }
 
-func newRedisSessionService(
-	summarizer summary.SessionSummarizer,
-	opts runOptions,
+func newInMemorySessionBackend(
+	deps registry.SessionDeps,
+	_ registry.SessionBackendSpec,
 ) (session.Service, error) {
-	sessionURL := strings.TrimSpace(opts.SessionRedisURL)
-	instance := strings.TrimSpace(opts.SessionRedisInstance)
+	serviceOpts := make([]sessioninmemory.ServiceOpt, 0, 1)
+	if deps.Summarizer != nil {
+		serviceOpts = append(
+			serviceOpts,
+			sessioninmemory.WithSummarizer(deps.Summarizer),
+		)
+	}
+	return sessioninmemory.NewSessionService(serviceOpts...), nil
+}
+
+func newRedisSessionBackend(
+	deps registry.SessionDeps,
+	spec registry.SessionBackendSpec,
+) (session.Service, error) {
+	sessionURL := strings.TrimSpace(spec.Redis.URL)
+	instance := strings.TrimSpace(spec.Redis.Instance)
 	if sessionURL == "" && instance == "" {
 		return nil, errors.New(
 			"session redis backend requires url or instance",
@@ -78,17 +104,17 @@ func newRedisSessionService(
 			sessionredis.WithRedisInstance(instance),
 		)
 	}
-	keyPref := strings.TrimSpace(opts.SessionRedisKeyPref)
+	keyPref := strings.TrimSpace(spec.Redis.KeyPrefix)
 	if keyPref != "" {
 		serviceOpts = append(
 			serviceOpts,
 			sessionredis.WithKeyPrefix(keyPref),
 		)
 	}
-	if summarizer != nil {
+	if deps.Summarizer != nil {
 		serviceOpts = append(
 			serviceOpts,
-			sessionredis.WithSummarizer(summarizer),
+			sessionredis.WithSummarizer(deps.Summarizer),
 		)
 	}
 	return sessionredis.NewService(serviceOpts...)
@@ -104,35 +130,60 @@ func newMemoryService(
 	}
 
 	backend := strings.ToLower(strings.TrimSpace(opts.MemoryBackend))
-	switch backend {
-	case "", memoryBackendInMemory:
-		serviceOpts := make([]meminmemory.ServiceOpt, 0, 3)
-		if opts.MemoryLimit > 0 {
-			serviceOpts = append(
-				serviceOpts,
-				meminmemory.WithMemoryLimit(opts.MemoryLimit),
-			)
-		}
-		if ext != nil {
-			serviceOpts = append(
-				serviceOpts,
-				meminmemory.WithExtractor(ext),
-			)
-		}
-		return meminmemory.NewMemoryService(serviceOpts...), nil
-	case memoryBackendRedis:
-		return newRedisMemoryService(ext, opts)
-	default:
+	if backend == "" {
+		backend = memoryBackendInMemory
+	}
+
+	f, ok := registry.LookupMemoryBackend(backend)
+	if !ok {
 		return nil, fmt.Errorf("unsupported memory backend: %s", backend)
 	}
+
+	return f(
+		registry.MemoryDeps{
+			Model:     mdl,
+			Extractor: ext,
+			AppName:   opts.AppName,
+		},
+		registry.MemoryBackendSpec{
+			Type: backend,
+			Redis: registry.RedisSpec{
+				URL:       opts.MemoryRedisURL,
+				Instance:  opts.MemoryRedisInstance,
+				KeyPrefix: opts.MemoryRedisKeyPref,
+			},
+			Limit:  opts.MemoryLimit,
+			Config: opts.MemoryConfig,
+		},
+	)
 }
 
-func newRedisMemoryService(
-	ext memextractor.MemoryExtractor,
-	opts runOptions,
+func newInMemoryMemoryBackend(
+	deps registry.MemoryDeps,
+	spec registry.MemoryBackendSpec,
 ) (memory.Service, error) {
-	memURL := strings.TrimSpace(opts.MemoryRedisURL)
-	instance := strings.TrimSpace(opts.MemoryRedisInstance)
+	serviceOpts := make([]meminmemory.ServiceOpt, 0, 3)
+	if spec.Limit > 0 {
+		serviceOpts = append(
+			serviceOpts,
+			meminmemory.WithMemoryLimit(spec.Limit),
+		)
+	}
+	if deps.Extractor != nil {
+		serviceOpts = append(
+			serviceOpts,
+			meminmemory.WithExtractor(deps.Extractor),
+		)
+	}
+	return meminmemory.NewMemoryService(serviceOpts...), nil
+}
+
+func newRedisMemoryBackend(
+	deps registry.MemoryDeps,
+	spec registry.MemoryBackendSpec,
+) (memory.Service, error) {
+	memURL := strings.TrimSpace(spec.Redis.URL)
+	instance := strings.TrimSpace(spec.Redis.Instance)
 	if memURL == "" && instance == "" {
 		return nil, errors.New(
 			"memory redis backend requires url or instance",
@@ -152,21 +203,24 @@ func newRedisMemoryService(
 			memredis.WithRedisInstance(instance),
 		)
 	}
-	keyPref := strings.TrimSpace(opts.MemoryRedisKeyPref)
+	keyPref := strings.TrimSpace(spec.Redis.KeyPrefix)
 	if keyPref != "" {
 		serviceOpts = append(
 			serviceOpts,
 			memredis.WithKeyPrefix(keyPref),
 		)
 	}
-	if opts.MemoryLimit > 0 {
+	if spec.Limit > 0 {
 		serviceOpts = append(
 			serviceOpts,
-			memredis.WithMemoryLimit(opts.MemoryLimit),
+			memredis.WithMemoryLimit(spec.Limit),
 		)
 	}
-	if ext != nil {
-		serviceOpts = append(serviceOpts, memredis.WithExtractor(ext))
+	if deps.Extractor != nil {
+		serviceOpts = append(
+			serviceOpts,
+			memredis.WithExtractor(deps.Extractor),
+		)
 	}
 	return memredis.NewService(serviceOpts...)
 }

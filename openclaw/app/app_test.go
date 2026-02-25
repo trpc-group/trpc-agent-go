@@ -22,9 +22,15 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+
+	occhannel "trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwclient"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 )
 
 func TestRun_ParseErrorExitCode(t *testing.T) {
@@ -218,7 +224,7 @@ func TestInferOpenAIVariant(t *testing.T) {
 }
 
 func TestNewModel_Mock(t *testing.T) {
-	mdl, err := newModel(modeMock, "ignored", openAIVariantAuto)
+	mdl, err := modelFromOptions(runOptions{ModelMode: modeMock})
 	require.NoError(t, err)
 	require.Equal(t, "mock-echo", mdl.Info().Name)
 }
@@ -241,13 +247,17 @@ func TestExitError_Error(t *testing.T) {
 }
 
 func TestNewModel_OpenAI(t *testing.T) {
-	mdl, err := newModel(modeOpenAI, "gpt-5", openAIVariantAuto)
+	mdl, err := modelFromOptions(runOptions{
+		ModelMode:     modeOpenAI,
+		OpenAIModel:   "gpt-5",
+		OpenAIVariant: openAIVariantAuto,
+	})
 	require.NoError(t, err)
 	require.Equal(t, "gpt-5", mdl.Info().Name)
 }
 
 func TestNewModel_UnsupportedMode(t *testing.T) {
-	_, err := newModel("x", "gpt-5", openAIVariantAuto)
+	_, err := modelFromOptions(runOptions{ModelMode: "x"})
 	require.Error(t, err)
 }
 
@@ -367,4 +377,135 @@ func TestResolveSkillRoots_IncludesExpectedRoots(t *testing.T) {
 	)
 	require.Contains(t, roots, "extra1")
 	require.Contains(t, roots, "extra2")
+}
+
+type stubGateway struct{}
+
+func (stubGateway) SendMessage(
+	_ context.Context,
+	_ gwclient.MessageRequest,
+) (gwclient.MessageResponse, error) {
+	return gwclient.MessageResponse{}, nil
+}
+
+func (stubGateway) Cancel(_ context.Context, _ string) (bool, error) {
+	return false, nil
+}
+
+type channelPluginCfg struct {
+	Greeting string `yaml:"greeting"`
+}
+
+type stubChannel struct {
+	id       string
+	greeting string
+	deps     registry.ChannelDeps
+}
+
+func (c *stubChannel) ID() string { return c.id }
+
+func (c *stubChannel) Run(ctx context.Context) error {
+	<-ctx.Done()
+	return nil
+}
+
+func TestChannelsFromRegistry(t *testing.T) {
+	const typeName = "test_channel"
+	require.NoError(t, registry.RegisterChannel(
+		typeName,
+		func(
+			deps registry.ChannelDeps,
+			spec registry.PluginSpec,
+		) (occhannel.Channel, error) {
+			var cfg channelPluginCfg
+			if err := registry.DecodeStrict(spec.Config, &cfg); err != nil {
+				return nil, err
+			}
+
+			id := typeName
+			if spec.Name != "" {
+				id = spec.Name
+			}
+			return &stubChannel{
+				id:       id,
+				greeting: cfg.Greeting,
+				deps:     deps,
+			}, nil
+		},
+	))
+
+	var node yaml.Node
+	require.NoError(t, yaml.Unmarshal([]byte("greeting: hi"), &node))
+
+	channels, err := channelsFromRegistry(
+		stubGateway{},
+		"demo",
+		"/state",
+		[]pluginSpec{{
+			Type:   typeName,
+			Name:   "c1",
+			Config: &node,
+		}},
+	)
+	require.NoError(t, err)
+	require.Len(t, channels, 1)
+
+	got, ok := channels[0].(*stubChannel)
+	require.True(t, ok)
+	require.Equal(t, "c1", got.ID())
+	require.Equal(t, "hi", got.greeting)
+	require.Equal(t, "demo", got.deps.AppName)
+	require.Equal(t, "/state", got.deps.StateDir)
+}
+
+type toolProviderCfg struct {
+	ToolName string `yaml:"tool_name"`
+}
+
+type stubTool struct {
+	name string
+}
+
+func (t stubTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{
+		Name:        t.name,
+		Description: "stub tool",
+	}
+}
+
+func TestToolsFromProviders(t *testing.T) {
+	const typeName = "test_tool_provider"
+	require.NoError(t, registry.RegisterToolProvider(
+		typeName,
+		func(
+			_ registry.ToolProviderDeps,
+			spec registry.PluginSpec,
+		) ([]tool.Tool, error) {
+			var cfg toolProviderCfg
+			if err := registry.DecodeStrict(spec.Config, &cfg); err != nil {
+				return nil, err
+			}
+			return []tool.Tool{stubTool{name: cfg.ToolName}}, nil
+		},
+	))
+
+	mdl, err := modelFromOptions(runOptions{ModelMode: modeMock})
+	require.NoError(t, err)
+
+	var node yaml.Node
+	require.NoError(t, yaml.Unmarshal([]byte("tool_name: t1"), &node))
+
+	tools, err := toolsFromProviders(
+		mdl,
+		"demo",
+		"/state",
+		[]pluginSpec{{
+			Type:   typeName,
+			Name:   "p1",
+			Config: &node,
+		}},
+	)
+	require.NoError(t, err)
+	require.Len(t, tools, 1)
+	require.Equal(t, "t1", tools[0].Declaration().Name)
 }

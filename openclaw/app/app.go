@@ -44,6 +44,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/octool"
 	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 )
 
 const (
@@ -174,7 +175,7 @@ func run(ctx context.Context, args []string) error {
 		mentionPatterns = []string{telegramBot.Mention}
 	}
 
-	mdl, err := newModel(opts.ModelMode, opts.OpenAIModel, opts.OpenAIVariant)
+	mdl, err := modelFromOptions(opts)
 	if err != nil {
 		return &exitError{
 			Code: 1,
@@ -213,12 +214,14 @@ func run(ctx context.Context, args []string) error {
 	defer closeMemoryService(memSvc)
 
 	llm, err := newAgent(mdl, agentConfig{
+		AppName:             opts.AppName,
 		SkillsRoot:          opts.SkillsRoot,
 		SkillsExtraDirs:     splitCSV(opts.SkillsExtraDir),
 		SkillsDebug:         opts.SkillsDebug,
 		StateDir:            resolvedStateDir,
 		EnableLocalExec:     opts.EnableLocalExec,
 		EnableOpenClawTools: opts.EnableOpenClawTools,
+		ToolProviders:       opts.ToolProviders,
 	}, memSvc.Tools())
 	if err != nil {
 		return &exitError{
@@ -265,7 +268,11 @@ func run(ctx context.Context, args []string) error {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	errCh := make(chan error, 2)
+	errBuf := 1 + len(opts.Channels)
+	if strings.TrimSpace(opts.TelegramToken) != "" {
+		errBuf++
+	}
+	errCh := make(chan error, errBuf)
 	go func() {
 		log.Infof("Gateway listening on %s", httpSrv.Addr)
 		log.Infof("Health:   GET  %s", gwSrv.HealthPath())
@@ -301,6 +308,22 @@ func run(ctx context.Context, args []string) error {
 			}
 		}
 		channels = append(channels, ch)
+	}
+
+	if len(opts.Channels) > 0 {
+		extra, err := channelsFromRegistry(
+			gw,
+			opts.AppName,
+			resolvedStateDir,
+			opts.Channels,
+		)
+		if err != nil {
+			return &exitError{
+				Code: 1,
+				Err:  fmt.Errorf("create channels failed: %w", err),
+			}
+		}
+		channels = append(channels, extra...)
 	}
 
 	for _, ch := range channels {
@@ -411,6 +434,18 @@ func newAgent(
 			octool.NewProcessTool(mgr),
 		)
 	}
+	if len(cfg.ToolProviders) > 0 {
+		extra, err := toolsFromProviders(
+			mdl,
+			cfg.AppName,
+			cfg.StateDir,
+			cfg.ToolProviders,
+		)
+		if err != nil {
+			return nil, err
+		}
+		tools = append(tools, extra...)
+	}
 	if len(tools) > 0 {
 		opts = append(opts, llmagent.WithTools(tools))
 	}
@@ -422,7 +457,105 @@ func newAgent(
 	return llmagent.New("assistant", opts...), nil
 }
 
+func toolsFromProviders(
+	mdl model.Model,
+	appName string,
+	stateDir string,
+	specs []pluginSpec,
+) ([]tool.Tool, error) {
+	deps := registry.ToolProviderDeps{
+		Model:    mdl,
+		StateDir: stateDir,
+		AppName:  appName,
+	}
+
+	out := make([]tool.Tool, 0, len(specs))
+	for i := range specs {
+		spec := specs[i]
+		typeName := strings.ToLower(strings.TrimSpace(spec.Type))
+		if typeName == "" {
+			return nil, fmt.Errorf(
+				"tools.providers[%d].type is empty",
+				i,
+			)
+		}
+
+		f, ok := registry.LookupToolProvider(typeName)
+		if !ok {
+			return nil, fmt.Errorf(
+				"unsupported tool provider: %s",
+				typeName,
+			)
+		}
+
+		tools, err := f(deps, registry.PluginSpec{
+			Type:   typeName,
+			Name:   strings.TrimSpace(spec.Name),
+			Config: spec.Config,
+		})
+		if err != nil {
+			return nil, fmt.Errorf(
+				"tool provider %s failed: %w",
+				typeName,
+				err,
+			)
+		}
+		out = append(out, tools...)
+	}
+	return out, nil
+}
+
+func channelsFromRegistry(
+	gw registry.GatewayClient,
+	appName string,
+	stateDir string,
+	specs []pluginSpec,
+) ([]channel.Channel, error) {
+	deps := registry.ChannelDeps{
+		Gateway:  gw,
+		StateDir: stateDir,
+		AppName:  appName,
+	}
+
+	out := make([]channel.Channel, 0, len(specs))
+	for i := range specs {
+		spec := specs[i]
+		typeName := strings.ToLower(strings.TrimSpace(spec.Type))
+		if typeName == "" {
+			return nil, fmt.Errorf(
+				"channels[%d].type is empty",
+				i,
+			)
+		}
+
+		f, ok := registry.LookupChannel(typeName)
+		if !ok {
+			return nil, fmt.Errorf(
+				"unsupported channel type: %s",
+				typeName,
+			)
+		}
+
+		ch, err := f(deps, registry.PluginSpec{
+			Type:   typeName,
+			Name:   strings.TrimSpace(spec.Name),
+			Config: spec.Config,
+		})
+		if err != nil {
+			return nil, fmt.Errorf(
+				"channel %s failed: %w",
+				typeName,
+				err,
+			)
+		}
+		out = append(out, ch)
+	}
+	return out, nil
+}
+
 type agentConfig struct {
+	AppName string
+
 	SkillsRoot      string
 	SkillsExtraDirs []string
 	SkillsDebug     bool
@@ -432,6 +565,8 @@ type agentConfig struct {
 	EnableLocalExec bool
 
 	EnableOpenClawTools bool
+
+	ToolProviders []pluginSpec
 }
 
 func resolveSkillRoots(cwd string, cfg agentConfig) []string {
@@ -506,28 +641,53 @@ func configFingerprint(parts ...string) string {
 	return fmt.Sprintf("%08x", sum)
 }
 
-func newModel(
-	mode string,
-	openAIModel string,
-	openAIVariant string,
-) (model.Model, error) {
-	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case modeMock:
-		return &echoModel{name: "mock-echo"}, nil
-	case modeOpenAI:
-		variant, err := parseOpenAIVariant(openAIVariant, openAIModel)
-		if err != nil {
-			return nil, err
-		}
-		opts := []openai.Option{openai.WithVariant(variant)}
-		baseURL := strings.TrimSpace(os.Getenv(openAIBaseURLEnvName))
-		if baseURL != "" {
-			opts = append(opts, openai.WithBaseURL(baseURL))
-		}
-		return openai.New(openAIModel, opts...), nil
-	default:
+func newMockModel(_ registry.ModelSpec) (model.Model, error) {
+	return &echoModel{name: "mock-echo"}, nil
+}
+
+func newOpenAIModel(spec registry.ModelSpec) (model.Model, error) {
+	name := strings.TrimSpace(spec.Name)
+	if name == "" {
+		return nil, errors.New("openai model name is empty")
+	}
+
+	variant, err := parseOpenAIVariant(spec.OpenAIVariant, name)
+	if err != nil {
+		return nil, err
+	}
+
+	opts := []openai.Option{openai.WithVariant(variant)}
+	baseURL := strings.TrimSpace(spec.BaseURL)
+	if baseURL != "" {
+		opts = append(opts, openai.WithBaseURL(baseURL))
+	}
+	return openai.New(name, opts...), nil
+}
+
+func modelFromOptions(opts runOptions) (model.Model, error) {
+	mode := strings.ToLower(strings.TrimSpace(opts.ModelMode))
+	if mode == "" {
+		mode = modeOpenAI
+	}
+
+	f, ok := registry.LookupModel(mode)
+	if !ok {
 		return nil, fmt.Errorf("unsupported mode: %s", mode)
 	}
+
+	baseURL := strings.TrimSpace(opts.OpenAIBaseURL)
+	if baseURL == "" {
+		baseURL = strings.TrimSpace(os.Getenv(openAIBaseURLEnvName))
+	}
+
+	spec := registry.ModelSpec{
+		Type:          mode,
+		Name:          opts.OpenAIModel,
+		BaseURL:       baseURL,
+		OpenAIVariant: opts.OpenAIVariant,
+		Config:        opts.ModelConfig,
+	}
+	return f(spec)
 }
 
 func parseOpenAIVariant(
