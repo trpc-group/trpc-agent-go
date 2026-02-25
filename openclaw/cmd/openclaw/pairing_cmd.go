@@ -32,6 +32,13 @@ const (
 	pairingCmdApprove = "approve"
 )
 
+var probeBotInfo = func(
+	ctx context.Context,
+	token string,
+) (tgch.BotInfo, error) {
+	return tgch.ProbeBotInfo(ctx, token)
+}
+
 func runPairing(args []string) int {
 	fs := flag.NewFlagSet(subcmdPairing, flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -161,7 +168,7 @@ func openPairingStore(
 		return nil, err
 	}
 
-	bot, err := tgch.ProbeBotInfo(ctx, token)
+	bot, err := probeBotInfo(ctx, token)
 	if err != nil {
 		return nil, err
 	}
