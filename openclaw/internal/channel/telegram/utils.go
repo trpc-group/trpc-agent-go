@@ -98,14 +98,50 @@ func splitRunes(text string, maxRunes int) []string {
 
 	out := make([]string, 0, (len(runes)/maxRunes)+1)
 	for len(runes) > 0 {
-		n := maxRunes
-		if len(runes) < n {
-			n = len(runes)
+		if len(runes) <= maxRunes {
+			out = append(out, string(runes))
+			break
 		}
-		out = append(out, string(runes[:n]))
-		runes = runes[n:]
+
+		cut := splitIndex(runes[:maxRunes], maxRunes)
+		out = append(out, string(runes[:cut]))
+		runes = runes[cut:]
 	}
 	return out
+}
+
+func splitIndex(segment []rune, maxRunes int) int {
+	if len(segment) <= 1 {
+		return len(segment)
+	}
+
+	min := maxRunes / 2
+	if min < 1 {
+		min = 1
+	}
+
+	for i := len(segment) - 1; i > 0; i-- {
+		if segment[i] == '\n' && segment[i-1] == '\n' {
+			if i+1 >= min {
+				return i + 1
+			}
+		}
+	}
+	for i := len(segment) - 1; i >= 0; i-- {
+		if segment[i] == '\n' {
+			if i+1 >= min {
+				return i + 1
+			}
+		}
+	}
+	for i := len(segment) - 1; i >= 0; i-- {
+		if segment[i] == ' ' || segment[i] == '\t' {
+			if i+1 >= min {
+				return i + 1
+			}
+		}
+	}
+	return len(segment)
 }
 
 func resolveStateDir(stateDir string) (string, error) {

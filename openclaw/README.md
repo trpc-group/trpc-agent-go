@@ -231,6 +231,27 @@ This demo supports a few basic commands:
 - `/help`: show a short help message.
 - `/cancel`: cancel the current run for the same DM/thread session.
 
+### Telegram reply streaming (preview)
+
+This demo can optionally use `editMessageText` to show a processing preview,
+then replace it with the final answer.
+
+`-telegram-streaming` modes:
+
+- `off`: send the final answer as messages.
+- `block`: send one "Processing..." message, then edit once to final.
+- `progress` (default): keep editing the message while the model is running.
+
+To disable streaming:
+
+```bash
+cd openclaw
+go run ./cmd/openclaw \
+  -mode mock \
+  -telegram-token "$TELEGRAM_BOT_TOKEN" \
+  -telegram-streaming off
+```
+
 ### Telegram threads and topics
 
 This demo derives `session_id` based on whether the inbound message is a DM

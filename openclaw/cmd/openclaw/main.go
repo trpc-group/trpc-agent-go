@@ -61,6 +61,7 @@ const (
 	csvDelimiter = ","
 
 	defaultTelegramMaxRetries = 3
+	defaultTelegramStreaming  = "progress"
 
 	openAIVariantAuto = "auto"
 
@@ -132,6 +133,11 @@ func main() {
 		"telegram-max-retries",
 		defaultTelegramMaxRetries,
 		"Max retries for Telegram API calls (429/5xx/transport errors)",
+	)
+	telegramStreaming := flag.String(
+		"telegram-streaming",
+		defaultTelegramStreaming,
+		"Telegram reply streaming: off|block|progress",
 	)
 	telegramDMPolicy := flag.String(
 		"telegram-dm-policy",
@@ -344,6 +350,7 @@ func main() {
 			tgch.WithAPIOptions(tgapiOpts...),
 			tgch.WithStateDir(resolvedStateDir),
 			tgch.WithStartFromLatest(*telegramStartFromLatest),
+			tgch.WithStreamingMode(*telegramStreaming),
 			tgch.WithDMPolicy(*telegramDMPolicy),
 			tgch.WithGroupPolicy(*telegramGroupPolicy),
 			tgch.WithAllowUsers(users...),

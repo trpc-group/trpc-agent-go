@@ -14,7 +14,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -97,6 +96,16 @@ type botAPI interface {
 		ctx context.Context,
 		params tgapi.SendMessageParams,
 	) (tgapi.Message, error)
+
+	EditMessageText(
+		ctx context.Context,
+		params tgapi.EditMessageTextParams,
+	) (tgapi.Message, error)
+
+	SendChatAction(
+		ctx context.Context,
+		params tgapi.SendChatActionParams,
+	) error
 }
 
 // BotInfo represents Telegram bot metadata used by the channel.
@@ -154,6 +163,8 @@ type config struct {
 	pairingTTL time.Duration
 
 	apiOptions []tgapi.Option
+
+	streamingMode string
 }
 
 // Option configures the Telegram channel.
@@ -246,6 +257,11 @@ func WithAPIOptions(opts ...tgapi.Option) Option {
 	return func(c *config) { c.apiOptions = append(c.apiOptions, opts...) }
 }
 
+// WithStreamingMode controls how replies are delivered to Telegram.
+func WithStreamingMode(mode string) Option {
+	return func(c *config) { c.streamingMode = mode }
+}
+
 type pairingStore interface {
 	IsApproved(ctx context.Context, userID string) (bool, error)
 	Request(
@@ -273,6 +289,8 @@ type Channel struct {
 
 	pairing pairingStore
 
+	streamingMode string
+
 	lanes    *laneLocker
 	inflight *inflightRequests
 }
@@ -299,6 +317,7 @@ func New(
 		dmPolicy:        defaultDMPolicy,
 		groupPolicy:     defaultGroupPolicy,
 		pairingTTL:      defaultPairingTTL,
+		streamingMode:   defaultStreamingMode,
 	}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -319,6 +338,11 @@ func New(
 	}
 	if cfg.pairingTTL <= 0 {
 		return nil, errors.New("telegram: non-positive pairing ttl")
+	}
+
+	streamingMode, err := parseStreamingMode(cfg.streamingMode)
+	if err != nil {
+		return nil, err
 	}
 
 	api, err := tgapi.New(token, cfg.apiOptions...)
@@ -359,6 +383,7 @@ func New(
 		allowUsers:      cfg.allowUsers,
 		allowThreads:    cfg.allowThreads,
 		pairing:         dmPairing,
+		streamingMode:   streamingMode,
 		lanes:           newLaneLocker(),
 		inflight:        newInflightRequests(),
 	}, nil
@@ -483,49 +508,17 @@ func (c *Channel) handleMessage(
 		c.inflight.Set(sessionID, requestID)
 		defer c.inflight.Clear(sessionID, requestID)
 
-		rsp, err := c.gw.SendMessage(ctx, gwclient.MessageRequest{
-			Channel:   channelID,
-			From:      fromID,
-			Thread:    thread,
-			MessageID: strconv.Itoa(msg.MessageID),
-			Text:      msg.Text,
-			UserID:    fromID,
-			RequestID: requestID,
-		})
-		if err != nil {
-			if rsp.StatusCode >= http.StatusBadRequest &&
-				rsp.StatusCode < http.StatusInternalServerError {
-				log.WarnfContext(
-					ctx,
-					"telegram: gateway rejected: %v",
-					err,
-				)
-				return nil
-			}
-			return err
-		}
-		if rsp.Ignored || strings.TrimSpace(rsp.Reply) == "" {
-			return nil
-		}
-
-		parts := splitRunes(rsp.Reply, maxReplyRunes)
-		for i, part := range parts {
-			replyTo := 0
-			if i == 0 {
-				replyTo = msg.MessageID
-			}
-			_, err := c.bot.SendMessage(ctx, tgapi.SendMessageParams{
-				ChatID:           chatID,
-				MessageThreadID:  messageThreadID,
-				ReplyToMessageID: replyTo,
-				Text:             part,
-			})
-			if err != nil {
-				log.WarnfContext(ctx, "telegram: send message: %v", err)
-				return nil
-			}
-		}
-		return nil
+		return c.callGatewayAndReply(
+			ctx,
+			chatID,
+			messageThreadID,
+			msg.MessageID,
+			fromID,
+			thread,
+			requestID,
+			msg.MessageID,
+			msg.Text,
+		)
 	})
 }
 

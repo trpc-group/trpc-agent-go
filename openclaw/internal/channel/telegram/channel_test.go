@@ -82,11 +82,17 @@ func (g *stubGateway) Cancel(
 }
 
 type stubBot struct {
-	mu       sync.Mutex
-	sent     []tgapi.SendMessageParams
-	sendErr  error
-	updates  [][]tgapi.Update
-	getError error
+	mu        sync.Mutex
+	sent      []tgapi.SendMessageParams
+	sendErr   error
+	edits     []tgapi.EditMessageTextParams
+	editErr   error
+	actions   []tgapi.SendChatActionParams
+	actionErr error
+	updates   [][]tgapi.Update
+	getError  error
+
+	nextMessageID int
 }
 
 func (b *stubBot) GetUpdates(
@@ -114,7 +120,41 @@ func (b *stubBot) SendMessage(
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.sent = append(b.sent, params)
-	return tgapi.Message{}, b.sendErr
+	if b.sendErr != nil {
+		return tgapi.Message{}, b.sendErr
+	}
+
+	b.nextMessageID++
+	return tgapi.Message{
+		MessageID: b.nextMessageID,
+		Text:      params.Text,
+	}, nil
+}
+
+func (b *stubBot) EditMessageText(
+	_ context.Context,
+	params tgapi.EditMessageTextParams,
+) (tgapi.Message, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.edits = append(b.edits, params)
+	if b.editErr != nil {
+		return tgapi.Message{}, b.editErr
+	}
+	return tgapi.Message{
+		MessageID: params.MessageID,
+		Text:      params.Text,
+	}, nil
+}
+
+func (b *stubBot) SendChatAction(
+	_ context.Context,
+	params tgapi.SendChatActionParams,
+) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.actions = append(b.actions, params)
+	return b.actionErr
 }
 
 type stubOffsetStore struct {
@@ -290,6 +330,11 @@ func TestSplitRunes(t *testing.T) {
 		[]string{"he", "ll", "o"},
 		splitRunes("hello", 2),
 	)
+	require.Equal(
+		t,
+		[]string{"a\n\n", "b"},
+		splitRunes("a\n\nb", 3),
+	)
 }
 
 func TestParseCommand(t *testing.T) {
@@ -411,6 +456,86 @@ func TestChannel_HandleMessage_PrivateChat(t *testing.T) {
 	require.Equal(t, 0, sent.MessageThreadID)
 	require.Equal(t, 3, sent.ReplyToMessageID)
 	require.Equal(t, "ok", sent.Text)
+}
+
+func TestChannel_HandleMessage_StreamingBlock(t *testing.T) {
+	t.Parallel()
+
+	gw := &stubGateway{
+		rsp: gwclient.MessageResponse{
+			StatusCode: http.StatusOK,
+			Reply:      "ok",
+		},
+	}
+	dir := t.TempDir()
+	ch, err := New(
+		testToken,
+		BotInfo{Username: "bot"},
+		gw,
+		WithStateDir(dir),
+		WithDMPolicy(dmPolicyOpen),
+		WithStreamingMode(streamingBlock),
+	)
+	require.NoError(t, err)
+
+	bot := &stubBot{}
+	ch.bot = bot
+
+	err = ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID: 3,
+		From:      &tgapi.User{ID: 2},
+		Chat:      &tgapi.Chat{ID: 1, Type: chatTypePrivate},
+		Text:      "hi",
+	})
+	require.NoError(t, err)
+
+	bot.mu.Lock()
+	require.Len(t, bot.sent, 1)
+	require.Equal(t, processingMessage, bot.sent[0].Text)
+	require.Len(t, bot.edits, 1)
+	require.Equal(t, "ok", bot.edits[0].Text)
+	bot.mu.Unlock()
+}
+
+func TestChannel_HandleMessage_StreamingBlock_EditFails_Fallback(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	gw := &stubGateway{
+		rsp: gwclient.MessageResponse{
+			StatusCode: http.StatusOK,
+			Reply:      "ok",
+		},
+	}
+	dir := t.TempDir()
+	ch, err := New(
+		testToken,
+		BotInfo{Username: "bot"},
+		gw,
+		WithStateDir(dir),
+		WithDMPolicy(dmPolicyOpen),
+		WithStreamingMode(streamingBlock),
+	)
+	require.NoError(t, err)
+
+	bot := &stubBot{editErr: errors.New("edit failed")}
+	ch.bot = bot
+
+	err = ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID: 3,
+		From:      &tgapi.User{ID: 2},
+		Chat:      &tgapi.Chat{ID: 1, Type: chatTypePrivate},
+		Text:      "hi",
+	})
+	require.NoError(t, err)
+
+	bot.mu.Lock()
+	require.Len(t, bot.sent, 2)
+	require.Equal(t, processingMessage, bot.sent[0].Text)
+	require.Equal(t, "ok", bot.sent[1].Text)
+	require.Len(t, bot.edits, 1)
+	bot.mu.Unlock()
 }
 
 func TestChannel_HandleMessage_CommandHelp(t *testing.T) {
