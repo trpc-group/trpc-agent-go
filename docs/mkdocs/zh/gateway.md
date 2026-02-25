@@ -13,42 +13,34 @@ Agent 做成类似 OpenClaw 的“常驻助手”形态：
 
 ## 快速上手
 
-Gateway 只需要一个 `runner.Runner` 即可启动：
-
-```go
-import (
-    "net/http"
-
-    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
-    "trpc.group/trpc-go/trpc-agent-go/model/openai"
-    "trpc.group/trpc-go/trpc-agent-go/runner"
-    "trpc.group/trpc-go/trpc-agent-go/server/gateway"
-)
-
-ag := llmagent.New(
-    "assistant",
-    llmagent.WithModel(openai.New(
-        "deepseek-chat",
-        openai.WithVariant(openai.VariantDeepSeek),
-    )),
-)
-
-r := runner.NewRunner("gateway-demo", ag)
-srv, _ := gateway.New(r)
-
-_ = http.ListenAndServe(":8080", srv.Handler())
-```
-
-完整可运行示例见
-[examples/gateway](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/gateway)。
-
-一个更接近 OpenClaw 形态的 demo binary（Telegram long polling + HTTP gateway）
-见
+本仓库提供了一个 OpenClaw-like 的 demo binary，用它就可以直接跑起来 Gateway：
 [openclaw](https://github.com/trpc-group/trpc-agent-go/tree/main/openclaw)。
 
-注意：对于 DeepSeek，`model/openai` 在你设置
-`openai.WithVariant(openai.VariantDeepSeek)` 后，会读取 `DEEPSEEK_API_KEY`，
-并默认使用 `https://api.deepseek.com` 作为 base URL。
+先用 mock 模型跑起来（不需要任何模型密钥）：
+
+```bash
+cd openclaw
+go run ./cmd/openclaw \
+  -mode mock \
+  -http-addr :8080
+```
+
+健康检查：
+
+```bash
+curl -sS 'http://127.0.0.1:8080/healthz'
+```
+
+通过 HTTP 触发一次消息（webhook 风格）：
+
+```bash
+curl -sS 'http://127.0.0.1:8080/v1/gateway/messages' \
+  -H 'Content-Type: application/json' \
+  -d '{"from":"alice","text":"Hello"}'
+```
+
+同一个 binary 也可以开启 Telegram long polling（配置步骤见
+`openclaw/README.md`）。
 
 ## 接口
 
@@ -108,7 +100,7 @@ _ = http.ListenAndServe(":8080", srv.Handler())
 
 这样你不需要自己生成或存储 session id，也能获得稳定的多轮对话体验。
 
-如果你需要自定义策略，可以使用 `gateway.WithSessionIDFunc`。
+如果你需要自定义策略，可以在请求里显式传入 `session_id` 覆盖默认值。
 
 ## 同一 session 串行（避免并发）
 
@@ -128,29 +120,30 @@ _ = http.ListenAndServe(":8080", srv.Handler())
 
 ### 1）用户 allowlist
 
-只允许指定用户访问：
+只允许指定用户访问（openclaw demo）：
 
-```go
-srv, _ := gateway.New(r,
-    gateway.WithAllowUsers("alice", "bob"),
-)
+```bash
+cd openclaw
+go run ./cmd/openclaw \
+  -mode mock \
+  -http-addr :8080 \
+  -allow-users "123456789,987654321"
 ```
 
-开启后，其他用户会收到 `403 Forbidden`。
+开启后，其他用户会收到 `403 Forbidden`（HTTP）或被 Telegram 丢弃。
 
 ### 2）线程/群消息的 mention gating
 
-忽略群消息，只有被提及时才触发：
+忽略群消息，只有被提及时才触发（openclaw demo）：
 
-```go
-srv, _ := gateway.New(r,
-    gateway.WithRequireMentionInThreads(true),
-    gateway.WithMentionPatterns("@bot"),
-)
+```bash
+cd openclaw
+go run ./cmd/openclaw \
+  -mode mock \
+  -http-addr :8080 \
+  -require-mention \
+  -mention "@mybot,/agent"
 ```
-
-注意：如果开启了 `WithRequireMentionInThreads(true)`，必须同时至少配置一个
-`WithMentionPatterns`，否则 `gateway.New` 会返回错误。
 
 开启后，只有当消息 `text` 包含任一 mention pattern 时，且 `thread` 字段不为空，
 该消息才会被处理。

@@ -14,42 +14,34 @@ multi-turn chats, safe defaults for external inputs, and basic run control
 
 ## Quick start
 
-The gateway server only needs a `runner.Runner`.
-
-```go
-import (
-    "net/http"
-
-    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
-    "trpc.group/trpc-go/trpc-agent-go/model/openai"
-    "trpc.group/trpc-go/trpc-agent-go/runner"
-    "trpc.group/trpc-go/trpc-agent-go/server/gateway"
-)
-
-ag := llmagent.New(
-    "assistant",
-    llmagent.WithModel(openai.New(
-        "deepseek-chat",
-        openai.WithVariant(openai.VariantDeepSeek),
-    )),
-)
-
-r := runner.NewRunner("gateway-demo", ag)
-srv, _ := gateway.New(r)
-
-_ = http.ListenAndServe(":8080", srv.Handler())
-```
-
-A complete runnable example is available at
-[examples/gateway](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/gateway).
-
-An OpenClaw-like demo binary (Telegram long polling + HTTP gateway) is
-available at
+This repo includes an OpenClaw-like demo binary that runs the gateway server:
 [openclaw](https://github.com/trpc-group/trpc-agent-go/tree/main/openclaw).
 
-Note: for DeepSeek, the `model/openai` implementation reads `DEEPSEEK_API_KEY`
-and defaults to `https://api.deepseek.com` when you set
-`openai.WithVariant(openai.VariantDeepSeek)`.
+Run with a mock model (no external credentials needed):
+
+```bash
+cd openclaw
+go run ./cmd/openclaw \
+  -mode mock \
+  -http-addr :8080
+```
+
+Health check:
+
+```bash
+curl -sS 'http://127.0.0.1:8080/healthz'
+```
+
+Send one message via HTTP (webhook-style):
+
+```bash
+curl -sS 'http://127.0.0.1:8080/v1/gateway/messages' \
+  -H 'Content-Type: application/json' \
+  -d '{"from":"alice","text":"Hello"}'
+```
+
+You can also enable Telegram long polling in the same binary (see
+`openclaw/README.md`).
 
 ## Endpoints
 
@@ -110,7 +102,8 @@ By default, the gateway derives `session_id` from the inbound message:
 This makes multi-turn conversations work without you having to generate or
 store session ids yourself.
 
-If you need a different strategy, use `gateway.WithSessionIDFunc`.
+If you need a different strategy, set `session_id` explicitly in the request
+payload.
 
 ## Per-session serialization (no concurrent runs)
 
@@ -131,30 +124,32 @@ controls:
 
 ### 1) User allowlist
 
-To only allow specific users:
+To only allow specific users (openclaw demo):
 
-```go
-srv, _ := gateway.New(r,
-    gateway.WithAllowUsers("alice", "bob"),
-)
+```bash
+cd openclaw
+go run ./cmd/openclaw \
+  -mode mock \
+  -http-addr :8080 \
+  -allow-users "123456789,987654321"
 ```
 
-When enabled, requests from other users return `403 Forbidden`.
+When enabled, other users get `403 Forbidden` (HTTP) or are dropped by
+Telegram.
 
 ### 2) Mention gating for threads
 
-To ignore thread/group messages unless a mention pattern is present:
+To ignore thread/group messages unless a mention pattern is present
+(openclaw demo):
 
-```go
-srv, _ := gateway.New(r,
-    gateway.WithRequireMentionInThreads(true),
-    gateway.WithMentionPatterns("@bot"),
-)
+```bash
+cd openclaw
+go run ./cmd/openclaw \
+  -mode mock \
+  -http-addr :8080 \
+  -require-mention \
+  -mention "@mybot,/agent"
 ```
-
-Note: if `WithRequireMentionInThreads(true)` is enabled, you must provide at
-least one pattern via `WithMentionPatterns`, otherwise `gateway.New` returns an
-error.
 
 When enabled, a message with `thread` set is only processed if `text` contains
 any configured pattern.
