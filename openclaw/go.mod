@@ -7,6 +7,7 @@ replace trpc.group/trpc-go/trpc-agent-go => ../
 require (
 	github.com/creack/pty v1.1.24
 	github.com/google/uuid v1.6.0
+	github.com/spaolacci/murmur3 v1.1.0
 	github.com/stretchr/testify v1.10.0
 	gopkg.in/yaml.v3 v3.0.1
 	trpc.group/trpc-go/trpc-agent-go v1.5.0

@@ -25,6 +25,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/spaolacci/murmur3"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
@@ -198,6 +199,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("resolve state dir failed: %v", err)
 	}
+	log.Infof(
+		"Instance: %s",
+		configFingerprint(*modelMode, *openAIModel, resolvedStateDir),
+	)
 
 	sessionSvc := sessioninmemory.NewSessionService()
 	defer func() {
@@ -442,6 +447,12 @@ func resolveStateDir(raw string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(home, ".trpc-agent-go", appName), nil
+}
+
+func configFingerprint(parts ...string) string {
+	joined := strings.Join(parts, "\n")
+	sum := murmur3.Sum32([]byte(joined))
+	return fmt.Sprintf("%08x", sum)
 }
 
 func newModel(
