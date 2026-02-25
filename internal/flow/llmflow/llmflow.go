@@ -170,18 +170,13 @@ func recoverFlowRunPanic(
 		return
 	}
 
-	panicValue, ok := flowPanicValue(recovered)
-	if !ok {
-		panic(recovered)
-	}
-
 	stack := debug.Stack()
 	log.ErrorfContext(
 		ctx,
 		flowRunPanicLogFmt,
 		flowInvocationID(invocation),
 		flowAgentName(invocation),
-		panicValue,
+		recovered,
 		string(stack),
 	)
 
@@ -189,20 +184,9 @@ func recoverFlowRunPanic(
 		flowInvocationID(invocation),
 		flowAgentName(invocation),
 		model.ErrorTypeFlowError,
-		fmt.Sprintf(flowRunPanicErrFmt, panicValue),
+		fmt.Sprintf(flowRunPanicErrFmt, recovered),
 	)
 	agent.EmitEvent(ctx, invocation, eventChan, errorEvent)
-}
-
-func flowPanicValue(recovered any) (any, bool) {
-	switch v := recovered.(type) {
-	case error:
-		return v, true
-	case string:
-		return v, true
-	default:
-		return nil, false
-	}
 }
 
 func flowInvocationID(invocation *agent.Invocation) string {

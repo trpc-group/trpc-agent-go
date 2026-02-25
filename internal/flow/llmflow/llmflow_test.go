@@ -333,32 +333,27 @@ func TestRecoverFlowRunPanic_NoPanic(t *testing.T) {
 	}()
 }
 
-func TestRecoverFlowRunPanic_RePanicsUnknownType(t *testing.T) {
-	require.PanicsWithValue(
-		t,
-		flowRunPanicTestUnknownValue,
-		func() {
-			defer recoverFlowRunPanic(context.Background(), nil, nil)
-			panic(flowRunPanicTestUnknownValue)
-		},
-	)
-}
+func TestRecoverFlowRunPanic_EmitsEventForUnknownType(t *testing.T) {
+	ctx := context.Background()
+	invocation := &agent.Invocation{
+		InvocationID: "test-invocation",
+		AgentName:    "test-agent",
+	}
+	eventChan := make(chan *event.Event, 1)
 
-func TestFlowPanicValue(t *testing.T) {
-	errorVal, ok := flowPanicValue(errors.New(flowRunPanicTestMsg))
-	require.True(t, ok)
+	func() {
+		defer recoverFlowRunPanic(ctx, invocation, eventChan)
+		panic(flowRunPanicTestUnknownValue)
+	}()
 
-	errorPanic, ok := errorVal.(error)
-	require.True(t, ok)
-	require.Equal(t, flowRunPanicTestMsg, errorPanic.Error())
-
-	stringVal, ok := flowPanicValue(flowRunPanicTestMsg)
-	require.True(t, ok)
-	require.Equal(t, flowRunPanicTestMsg, stringVal)
-
-	unknownVal, ok := flowPanicValue(flowRunPanicTestUnknownValue)
-	require.False(t, ok)
-	require.Nil(t, unknownVal)
+	select {
+	case evt := <-eventChan:
+		require.NotNil(t, evt.Error)
+		require.Equal(t, model.ErrorTypeFlowError, evt.Error.Type)
+		require.Contains(t, evt.Error.Message, "123")
+	default:
+		t.Fatal("expected error event")
+	}
 }
 
 func TestFlowInvocationIDAndAgentName(t *testing.T) {
