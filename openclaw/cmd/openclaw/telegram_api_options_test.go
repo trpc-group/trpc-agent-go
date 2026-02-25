@@ -46,11 +46,18 @@ func TestMakeTelegramAPIOptions_PropagatesProxyError(t *testing.T) {
 }
 
 func TestMakeTelegramAPIOptions_OptionsCount(t *testing.T) {
+	t.Setenv(telegramBaseURLEnvName, "")
+
 	opts, err := makeTelegramAPIOptions("", 0, 3)
 	require.NoError(t, err)
 	require.Len(t, opts, 1)
 
-	opts, err = makeTelegramAPIOptions("http://127.0.0.1:8080", time.Second, 3)
+	t.Setenv(telegramBaseURLEnvName, "http://127.0.0.1:1")
+	opts, err = makeTelegramAPIOptions("", 0, 3)
 	require.NoError(t, err)
 	require.Len(t, opts, 2)
+
+	opts, err = makeTelegramAPIOptions("http://127.0.0.1:8080", time.Second, 3)
+	require.NoError(t, err)
+	require.Len(t, opts, 3)
 }

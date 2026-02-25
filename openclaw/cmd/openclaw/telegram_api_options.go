@@ -14,6 +14,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -22,13 +23,20 @@ import (
 
 type telegramAPIOption = tgapi.Option
 
+const telegramBaseURLEnvName = "OPENCLAW_TELEGRAM_BASE_URL"
+
 func makeTelegramAPIOptions(
 	rawProxyURL string,
 	httpTimeout time.Duration,
 	maxRetries int,
 ) ([]telegramAPIOption, error) {
-	opts := make([]telegramAPIOption, 0, 2)
+	opts := make([]telegramAPIOption, 0, 3)
 	opts = append(opts, tgapi.WithMaxRetries(maxRetries))
+
+	baseURL := strings.TrimSpace(os.Getenv(telegramBaseURLEnvName))
+	if baseURL != "" {
+		opts = append(opts, tgapi.WithBaseURL(baseURL))
+	}
 
 	client, err := makeTelegramHTTPClient(rawProxyURL, httpTimeout)
 	if err != nil {

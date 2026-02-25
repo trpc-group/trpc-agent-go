@@ -1,0 +1,768 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
+package main
+
+import (
+	"bytes"
+	"errors"
+	"flag"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
+	"gopkg.in/yaml.v3"
+)
+
+const (
+	openClawConfigEnvName = "OPENCLAW_CONFIG"
+
+	sessionBackendInMemory = "inmemory"
+	sessionBackendRedis    = "redis"
+
+	memoryBackendInMemory = "inmemory"
+	memoryBackendRedis    = "redis"
+
+	summaryPolicyAny = "any"
+	summaryPolicyAll = "all"
+
+	defaultSessionSummaryEventThreshold = 20
+)
+
+type runOptions struct {
+	ConfigPath string
+
+	AppName  string
+	HTTPAddr string
+
+	ModelMode      string
+	OpenAIModel    string
+	OpenAIVariant  string
+	OpenAIBaseURL  string
+	TelegramToken  string
+	SkillsRoot     string
+	SkillsExtraDir string
+	SkillsDebug    bool
+	StateDir       string
+
+	AllowUsers     string
+	RequireMention bool
+	Mention        string
+
+	TelegramStartFromLatest bool
+	TelegramProxy           string
+	TelegramHTTPTimeout     time.Duration
+	TelegramMaxRetries      int
+	TelegramStreaming       string
+	TelegramDMPolicy        string
+	TelegramGroupPolicy     string
+	TelegramAllowThreads    string
+	TelegramPairingTTL      time.Duration
+
+	SessionBackend       string
+	SessionRedisURL      string
+	SessionRedisInstance string
+	SessionRedisKeyPref  string
+
+	MemoryBackend       string
+	MemoryRedisURL      string
+	MemoryRedisInstance string
+	MemoryRedisKeyPref  string
+	MemoryLimit         int
+
+	SessionSummaryEnabled       bool
+	SessionSummaryPolicy        string
+	SessionSummaryEventCount    int
+	SessionSummaryTokenCount    int
+	SessionSummaryIdleThreshold time.Duration
+	SessionSummaryMaxWords      int
+
+	EnableLocalExec     bool
+	EnableOpenClawTools bool
+}
+
+func parseRunOptions(args []string) (runOptions, error) {
+	fs := flag.NewFlagSet(appName, flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+
+	opts := runOptions{
+		AppName:  appName,
+		HTTPAddr: defaultHTTPAddr,
+
+		ModelMode:     modeOpenAI,
+		OpenAIModel:   defaultOpenAIModelName(),
+		OpenAIVariant: defaultOpenAIVariant,
+
+		TelegramStartFromLatest: true,
+		TelegramMaxRetries:      defaultTelegramMaxRetries,
+		TelegramStreaming:       defaultTelegramStreaming,
+		TelegramPairingTTL:      time.Hour,
+
+		SessionBackend: sessionBackendInMemory,
+		MemoryBackend:  memoryBackendInMemory,
+
+		SessionSummaryPolicy: summaryPolicyAny,
+	}
+
+	fs.StringVar(
+		&opts.ConfigPath,
+		"config",
+		"",
+		"Path to YAML config file; can also be set via $"+openClawConfigEnvName,
+	)
+	fs.StringVar(
+		&opts.AppName,
+		"app-name",
+		appName,
+		"App name for session/memory isolation",
+	)
+	fs.StringVar(
+		&opts.HTTPAddr,
+		"http-addr",
+		defaultHTTPAddr,
+		"HTTP listen address for gateway endpoints",
+	)
+	fs.StringVar(
+		&opts.ModelMode,
+		"mode",
+		modeOpenAI,
+		"Model mode: mock or openai",
+	)
+	fs.StringVar(
+		&opts.OpenAIModel,
+		"model",
+		defaultOpenAIModelName(),
+		"OpenAI model name (mode=openai)",
+	)
+	fs.StringVar(
+		&opts.OpenAIVariant,
+		"openai-variant",
+		defaultOpenAIVariant,
+		"OpenAI variant: auto, openai, deepseek, qwen, hunyuan",
+	)
+	fs.StringVar(
+		&opts.TelegramToken,
+		"telegram-token",
+		"",
+		"Telegram bot token; empty disables Telegram",
+	)
+	fs.BoolVar(
+		&opts.TelegramStartFromLatest,
+		"telegram-start-from-latest",
+		true,
+		"Drain pending updates on first start (no offset)",
+	)
+	fs.StringVar(
+		&opts.TelegramProxy,
+		"telegram-proxy",
+		"",
+		"HTTP proxy URL for Telegram API calls (optional)",
+	)
+	fs.DurationVar(
+		&opts.TelegramHTTPTimeout,
+		"telegram-http-timeout",
+		0,
+		"HTTP client timeout for Telegram API calls (optional)",
+	)
+	fs.IntVar(
+		&opts.TelegramMaxRetries,
+		"telegram-max-retries",
+		defaultTelegramMaxRetries,
+		"Max retries for Telegram API calls (429/5xx/transport errors)",
+	)
+	fs.StringVar(
+		&opts.TelegramStreaming,
+		"telegram-streaming",
+		defaultTelegramStreaming,
+		"Telegram reply streaming: off|block|progress",
+	)
+	fs.StringVar(
+		&opts.TelegramDMPolicy,
+		"telegram-dm-policy",
+		"",
+		"Telegram DM policy: disabled|open|allowlist|pairing",
+	)
+	fs.StringVar(
+		&opts.TelegramGroupPolicy,
+		"telegram-group-policy",
+		"",
+		"Telegram group policy: disabled|open|allowlist",
+	)
+	fs.StringVar(
+		&opts.TelegramAllowThreads,
+		"telegram-allow-threads",
+		"",
+		"Comma-separated allowlist of chat/topic threads",
+	)
+	fs.DurationVar(
+		&opts.TelegramPairingTTL,
+		"telegram-pairing-ttl",
+		time.Hour,
+		"How long pairing codes stay valid",
+	)
+	fs.StringVar(
+		&opts.AllowUsers,
+		"allow-users",
+		"",
+		"Comma-separated allowlist; empty allows all",
+	)
+	fs.BoolVar(
+		&opts.RequireMention,
+		"require-mention",
+		false,
+		"Require mention in thread/group messages",
+	)
+	fs.StringVar(
+		&opts.Mention,
+		"mention",
+		"",
+		"Comma-separated mention patterns",
+	)
+	fs.StringVar(
+		&opts.SkillsRoot,
+		"skills-root",
+		"",
+		"Skills root directory (default: ./skills)",
+	)
+	fs.StringVar(
+		&opts.SkillsExtraDir,
+		"skills-extra-dirs",
+		"",
+		"Extra skills roots (comma-separated, lowest precedence)",
+	)
+	fs.BoolVar(
+		&opts.SkillsDebug,
+		"skills-debug",
+		false,
+		"Log skill gating decisions",
+	)
+	fs.StringVar(
+		&opts.StateDir,
+		"state-dir",
+		"",
+		"State dir for offsets and managed skills",
+	)
+	fs.StringVar(
+		&opts.SessionBackend,
+		"session-backend",
+		sessionBackendInMemory,
+		"Session backend: inmemory|redis",
+	)
+	fs.StringVar(
+		&opts.SessionRedisURL,
+		"session-redis-url",
+		"",
+		"Redis URL for session backend=redis",
+	)
+	fs.StringVar(
+		&opts.SessionRedisInstance,
+		"session-redis-instance",
+		"",
+		"Redis instance name for session backend=redis",
+	)
+	fs.StringVar(
+		&opts.SessionRedisKeyPref,
+		"session-redis-key-prefix",
+		"",
+		"Redis key prefix for session backend=redis",
+	)
+	fs.StringVar(
+		&opts.MemoryBackend,
+		"memory-backend",
+		memoryBackendInMemory,
+		"Memory backend: inmemory|redis",
+	)
+	fs.StringVar(
+		&opts.MemoryRedisURL,
+		"memory-redis-url",
+		"",
+		"Redis URL for memory backend=redis",
+	)
+	fs.StringVar(
+		&opts.MemoryRedisInstance,
+		"memory-redis-instance",
+		"",
+		"Redis instance name for memory backend=redis",
+	)
+	fs.StringVar(
+		&opts.MemoryRedisKeyPref,
+		"memory-redis-key-prefix",
+		"",
+		"Redis key prefix for memory backend=redis",
+	)
+	fs.IntVar(
+		&opts.MemoryLimit,
+		"memory-limit",
+		0,
+		"Memory entries limit per user (optional)",
+	)
+	fs.BoolVar(
+		&opts.SessionSummaryEnabled,
+		"session-summary",
+		false,
+		"Enable session summarization (optional)",
+	)
+	fs.StringVar(
+		&opts.SessionSummaryPolicy,
+		"session-summary-policy",
+		summaryPolicyAny,
+		"Session summary gating policy: any|all",
+	)
+	fs.IntVar(
+		&opts.SessionSummaryEventCount,
+		"session-summary-events",
+		0,
+		"Summarize when delta events exceed N (0 disables)",
+	)
+	fs.IntVar(
+		&opts.SessionSummaryTokenCount,
+		"session-summary-tokens",
+		0,
+		"Summarize when delta tokens exceed N (0 disables)",
+	)
+	fs.DurationVar(
+		&opts.SessionSummaryIdleThreshold,
+		"session-summary-idle",
+		0,
+		"Summarize when time since last event exceeds duration (0 disables)",
+	)
+	fs.IntVar(
+		&opts.SessionSummaryMaxWords,
+		"session-summary-max-words",
+		0,
+		"Max summary words (0 means no limit)",
+	)
+	fs.BoolVar(
+		&opts.EnableLocalExec,
+		"enable-local-exec",
+		false,
+		"Enable local code execution tool (unsafe)",
+	)
+	fs.BoolVar(
+		&opts.EnableOpenClawTools,
+		"enable-openclaw-tools",
+		false,
+		"Enable OpenClaw-compatible exec/process tools (unsafe)",
+	)
+
+	if err := fs.Parse(args); err != nil {
+		return runOptions{}, &exitError{Code: 2, Err: err}
+	}
+
+	setFlags := make(map[string]struct{})
+	fs.Visit(func(f *flag.Flag) {
+		setFlags[f.Name] = struct{}{}
+	})
+
+	cfgPath := resolveConfigPath(opts.ConfigPath)
+	if cfgPath == "" {
+		return opts, nil
+	}
+
+	cfg, err := loadConfigFile(cfgPath)
+	if err != nil {
+		return runOptions{}, &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("load config failed: %w", err),
+		}
+	}
+	if cfg == nil {
+		return opts, nil
+	}
+	if err := cfg.apply(&opts, setFlags); err != nil {
+		return runOptions{}, &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("apply config failed: %w", err),
+		}
+	}
+
+	return opts, nil
+}
+
+func resolveConfigPath(raw string) string {
+	path := strings.TrimSpace(raw)
+	if path != "" {
+		return path
+	}
+	return strings.TrimSpace(os.Getenv(openClawConfigEnvName))
+}
+
+type fileConfig struct {
+	AppName  *string `yaml:"app_name,omitempty"`
+	StateDir *string `yaml:"state_dir,omitempty"`
+
+	HTTP     *httpConfig     `yaml:"http,omitempty"`
+	Model    *modelConfig    `yaml:"model,omitempty"`
+	Gateway  *gatewayConfig  `yaml:"gateway,omitempty"`
+	Telegram *telegramConfig `yaml:"telegram,omitempty"`
+	Skills   *skillsConfig   `yaml:"skills,omitempty"`
+	Tools    *toolsConfig    `yaml:"tools,omitempty"`
+
+	Session *sessionConfig `yaml:"session,omitempty"`
+	Memory  *memoryConfig  `yaml:"memory,omitempty"`
+}
+
+type httpConfig struct {
+	Addr *string `yaml:"addr,omitempty"`
+}
+
+type modelConfig struct {
+	Mode          *string `yaml:"mode,omitempty"`
+	Name          *string `yaml:"name,omitempty"`
+	OpenAIVariant *string `yaml:"openai_variant,omitempty"`
+}
+
+type gatewayConfig struct {
+	AllowUsers      []string `yaml:"allow_users,omitempty"`
+	RequireMention  *bool    `yaml:"require_mention,omitempty"`
+	MentionPatterns []string `yaml:"mention_patterns,omitempty"`
+}
+
+type telegramConfig struct {
+	Token           *string  `yaml:"token,omitempty"`
+	StartFromLatest *bool    `yaml:"start_from_latest,omitempty"`
+	Proxy           *string  `yaml:"proxy,omitempty"`
+	HTTPTimeout     *string  `yaml:"http_timeout,omitempty"`
+	MaxRetries      *int     `yaml:"max_retries,omitempty"`
+	Streaming       *string  `yaml:"streaming,omitempty"`
+	DMPolicy        *string  `yaml:"dm_policy,omitempty"`
+	GroupPolicy     *string  `yaml:"group_policy,omitempty"`
+	AllowThreads    []string `yaml:"allow_threads,omitempty"`
+	PairingTTL      *string  `yaml:"pairing_ttl,omitempty"`
+}
+
+type skillsConfig struct {
+	Root      *string  `yaml:"root,omitempty"`
+	ExtraDirs []string `yaml:"extra_dirs,omitempty"`
+	Debug     *bool    `yaml:"debug,omitempty"`
+}
+
+type toolsConfig struct {
+	EnableLocalExec     *bool `yaml:"enable_local_exec,omitempty"`
+	EnableOpenClawTools *bool `yaml:"enable_openclaw_tools,omitempty"`
+}
+
+type sessionConfig struct {
+	Backend *string        `yaml:"backend,omitempty"`
+	Redis   *redisConfig   `yaml:"redis,omitempty"`
+	Summary *summaryConfig `yaml:"summary,omitempty"`
+}
+
+type memoryConfig struct {
+	Backend *string      `yaml:"backend,omitempty"`
+	Redis   *redisConfig `yaml:"redis,omitempty"`
+	Limit   *int         `yaml:"limit,omitempty"`
+}
+
+type redisConfig struct {
+	URL      *string `yaml:"url,omitempty"`
+	Instance *string `yaml:"instance,omitempty"`
+	KeyPref  *string `yaml:"key_prefix,omitempty"`
+}
+
+type summaryConfig struct {
+	Enabled        *bool   `yaml:"enabled,omitempty"`
+	Policy         *string `yaml:"policy,omitempty"`
+	EventThreshold *int    `yaml:"event_threshold,omitempty"`
+	TokenThreshold *int    `yaml:"token_threshold,omitempty"`
+	IdleThreshold  *string `yaml:"idle_threshold,omitempty"`
+	MaxWords       *int    `yaml:"max_words,omitempty"`
+}
+
+func loadConfigFile(path string) (*fileConfig, error) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return nil, nil
+	}
+
+	data, err := os.ReadFile(trimmed)
+	if err != nil {
+		return nil, err
+	}
+
+	var cfg fileConfig
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&cfg); err != nil {
+		return nil, err
+	}
+	var extra any
+	if err := dec.Decode(&extra); err == nil && extra != nil {
+		return nil, errors.New("multiple YAML documents are not supported")
+	}
+	return &cfg, nil
+}
+
+func (cfg *fileConfig) apply(
+	opts *runOptions,
+	set map[string]struct{},
+) error {
+	if cfg == nil || opts == nil {
+		return nil
+	}
+
+	if cfg.AppName != nil && !flagWasSet(set, "app-name") {
+		opts.AppName = strings.TrimSpace(*cfg.AppName)
+	}
+	if cfg.StateDir != nil && !flagWasSet(set, "state-dir") {
+		opts.StateDir = strings.TrimSpace(*cfg.StateDir)
+	}
+
+	if cfg.HTTP != nil && cfg.HTTP.Addr != nil && !flagWasSet(set, "http-addr") {
+		opts.HTTPAddr = strings.TrimSpace(*cfg.HTTP.Addr)
+	}
+
+	if cfg.Model != nil {
+		if cfg.Model.Mode != nil && !flagWasSet(set, "mode") {
+			opts.ModelMode = strings.TrimSpace(*cfg.Model.Mode)
+		}
+		if cfg.Model.Name != nil && !flagWasSet(set, "model") {
+			opts.OpenAIModel = strings.TrimSpace(*cfg.Model.Name)
+		}
+		if cfg.Model.OpenAIVariant != nil &&
+			!flagWasSet(set, "openai-variant") {
+			opts.OpenAIVariant = strings.TrimSpace(
+				*cfg.Model.OpenAIVariant,
+			)
+		}
+	}
+
+	if cfg.Gateway != nil {
+		if len(cfg.Gateway.AllowUsers) > 0 &&
+			!flagWasSet(set, "allow-users") {
+			opts.AllowUsers = strings.Join(
+				cfg.Gateway.AllowUsers,
+				csvDelimiter,
+			)
+		}
+		if cfg.Gateway.RequireMention != nil &&
+			!flagWasSet(set, "require-mention") {
+			opts.RequireMention = *cfg.Gateway.RequireMention
+		}
+		if len(cfg.Gateway.MentionPatterns) > 0 &&
+			!flagWasSet(set, "mention") {
+			opts.Mention = strings.Join(
+				cfg.Gateway.MentionPatterns,
+				csvDelimiter,
+			)
+		}
+	}
+
+	if cfg.Telegram != nil {
+		if cfg.Telegram.Token != nil &&
+			!flagWasSet(set, "telegram-token") {
+			opts.TelegramToken = strings.TrimSpace(
+				*cfg.Telegram.Token,
+			)
+		}
+		if cfg.Telegram.StartFromLatest != nil &&
+			!flagWasSet(set, "telegram-start-from-latest") {
+			opts.TelegramStartFromLatest = *cfg.Telegram.StartFromLatest
+		}
+		if cfg.Telegram.Proxy != nil &&
+			!flagWasSet(set, "telegram-proxy") {
+			opts.TelegramProxy = strings.TrimSpace(
+				*cfg.Telegram.Proxy,
+			)
+		}
+		if cfg.Telegram.HTTPTimeout != nil &&
+			!flagWasSet(set, "telegram-http-timeout") {
+			dur, err := parseDuration(*cfg.Telegram.HTTPTimeout)
+			if err != nil {
+				return fmt.Errorf("telegram.http_timeout: %w", err)
+			}
+			opts.TelegramHTTPTimeout = dur
+		}
+		if cfg.Telegram.MaxRetries != nil &&
+			!flagWasSet(set, "telegram-max-retries") {
+			opts.TelegramMaxRetries = *cfg.Telegram.MaxRetries
+		}
+		if cfg.Telegram.Streaming != nil &&
+			!flagWasSet(set, "telegram-streaming") {
+			opts.TelegramStreaming = strings.TrimSpace(
+				*cfg.Telegram.Streaming,
+			)
+		}
+		if cfg.Telegram.DMPolicy != nil &&
+			!flagWasSet(set, "telegram-dm-policy") {
+			opts.TelegramDMPolicy = strings.TrimSpace(
+				*cfg.Telegram.DMPolicy,
+			)
+		}
+		if cfg.Telegram.GroupPolicy != nil &&
+			!flagWasSet(set, "telegram-group-policy") {
+			opts.TelegramGroupPolicy = strings.TrimSpace(
+				*cfg.Telegram.GroupPolicy,
+			)
+		}
+		if len(cfg.Telegram.AllowThreads) > 0 &&
+			!flagWasSet(set, "telegram-allow-threads") {
+			opts.TelegramAllowThreads = strings.Join(
+				cfg.Telegram.AllowThreads,
+				csvDelimiter,
+			)
+		}
+		if cfg.Telegram.PairingTTL != nil &&
+			!flagWasSet(set, "telegram-pairing-ttl") {
+			dur, err := parseDuration(*cfg.Telegram.PairingTTL)
+			if err != nil {
+				return fmt.Errorf("telegram.pairing_ttl: %w", err)
+			}
+			opts.TelegramPairingTTL = dur
+		}
+	}
+
+	if cfg.Skills != nil {
+		if cfg.Skills.Root != nil && !flagWasSet(set, "skills-root") {
+			opts.SkillsRoot = strings.TrimSpace(*cfg.Skills.Root)
+		}
+		if len(cfg.Skills.ExtraDirs) > 0 &&
+			!flagWasSet(set, "skills-extra-dirs") {
+			opts.SkillsExtraDir = strings.Join(
+				cfg.Skills.ExtraDirs,
+				csvDelimiter,
+			)
+		}
+		if cfg.Skills.Debug != nil && !flagWasSet(set, "skills-debug") {
+			opts.SkillsDebug = *cfg.Skills.Debug
+		}
+	}
+
+	if cfg.Tools != nil {
+		if cfg.Tools.EnableLocalExec != nil &&
+			!flagWasSet(set, "enable-local-exec") {
+			opts.EnableLocalExec = *cfg.Tools.EnableLocalExec
+		}
+		if cfg.Tools.EnableOpenClawTools != nil &&
+			!flagWasSet(set, "enable-openclaw-tools") {
+			opts.EnableOpenClawTools = *cfg.Tools.EnableOpenClawTools
+		}
+	}
+
+	if cfg.Session != nil {
+		if cfg.Session.Backend != nil &&
+			!flagWasSet(set, "session-backend") {
+			opts.SessionBackend = strings.TrimSpace(
+				*cfg.Session.Backend,
+			)
+		}
+		if cfg.Session.Redis != nil {
+			if cfg.Session.Redis.URL != nil &&
+				!flagWasSet(set, "session-redis-url") {
+				opts.SessionRedisURL = strings.TrimSpace(
+					*cfg.Session.Redis.URL,
+				)
+			}
+			if cfg.Session.Redis.Instance != nil &&
+				!flagWasSet(set, "session-redis-instance") {
+				opts.SessionRedisInstance = strings.TrimSpace(
+					*cfg.Session.Redis.Instance,
+				)
+			}
+			if cfg.Session.Redis.KeyPref != nil &&
+				!flagWasSet(set, "session-redis-key-prefix") {
+				opts.SessionRedisKeyPref = strings.TrimSpace(
+					*cfg.Session.Redis.KeyPref,
+				)
+			}
+		}
+		if cfg.Session.Summary != nil {
+			if err := applySessionSummary(
+				cfg.Session.Summary,
+				opts,
+				set,
+			); err != nil {
+				return err
+			}
+		}
+	}
+
+	if cfg.Memory != nil {
+		if cfg.Memory.Backend != nil &&
+			!flagWasSet(set, "memory-backend") {
+			opts.MemoryBackend = strings.TrimSpace(*cfg.Memory.Backend)
+		}
+		if cfg.Memory.Redis != nil {
+			if cfg.Memory.Redis.URL != nil &&
+				!flagWasSet(set, "memory-redis-url") {
+				opts.MemoryRedisURL = strings.TrimSpace(
+					*cfg.Memory.Redis.URL,
+				)
+			}
+			if cfg.Memory.Redis.Instance != nil &&
+				!flagWasSet(set, "memory-redis-instance") {
+				opts.MemoryRedisInstance = strings.TrimSpace(
+					*cfg.Memory.Redis.Instance,
+				)
+			}
+			if cfg.Memory.Redis.KeyPref != nil &&
+				!flagWasSet(set, "memory-redis-key-prefix") {
+				opts.MemoryRedisKeyPref = strings.TrimSpace(
+					*cfg.Memory.Redis.KeyPref,
+				)
+			}
+		}
+		if cfg.Memory.Limit != nil && !flagWasSet(set, "memory-limit") {
+			opts.MemoryLimit = *cfg.Memory.Limit
+		}
+	}
+
+	return nil
+}
+
+func applySessionSummary(
+	cfg *summaryConfig,
+	opts *runOptions,
+	set map[string]struct{},
+) error {
+	if cfg == nil || opts == nil {
+		return nil
+	}
+
+	if cfg.Enabled != nil && !flagWasSet(set, "session-summary") {
+		opts.SessionSummaryEnabled = *cfg.Enabled
+	}
+	if cfg.Policy != nil && !flagWasSet(set, "session-summary-policy") {
+		opts.SessionSummaryPolicy = strings.TrimSpace(*cfg.Policy)
+	}
+	if cfg.EventThreshold != nil &&
+		!flagWasSet(set, "session-summary-events") {
+		opts.SessionSummaryEventCount = *cfg.EventThreshold
+	}
+	if cfg.TokenThreshold != nil &&
+		!flagWasSet(set, "session-summary-tokens") {
+		opts.SessionSummaryTokenCount = *cfg.TokenThreshold
+	}
+	if cfg.IdleThreshold != nil && !flagWasSet(set, "session-summary-idle") {
+		dur, err := parseDuration(*cfg.IdleThreshold)
+		if err != nil {
+			return fmt.Errorf("session.summary.idle_threshold: %w", err)
+		}
+		opts.SessionSummaryIdleThreshold = dur
+	}
+	if cfg.MaxWords != nil && !flagWasSet(set, "session-summary-max-words") {
+		opts.SessionSummaryMaxWords = *cfg.MaxWords
+	}
+	return nil
+}
+
+func parseDuration(raw string) (time.Duration, error) {
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		return 0, nil
+	}
+	return time.ParseDuration(v)
+}
+
+func flagWasSet(set map[string]struct{}, name string) bool {
+	_, ok := set[name]
+	return ok
+}

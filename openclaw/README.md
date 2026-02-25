@@ -25,6 +25,60 @@ go run ./cmd/openclaw \
 Note: by default, this demo uses `-mode openai` and `-model gpt-5`.
 If you do not have model credentials, keep using `-mode mock`.
 
+## Configuration (YAML)
+
+This demo supports a YAML config file to avoid a long list of CLI flags.
+
+- Pass `-config /path/to/openclaw.yaml`, or
+- set `OPENCLAW_CONFIG=/path/to/openclaw.yaml`.
+
+CLI flags always override config file values.
+
+Example config:
+
+```yaml
+app_name: "openclaw"
+
+http:
+  addr: ":8080"
+
+model:
+  mode: "openai"
+  name: "gpt-5"
+  openai_variant: "auto"
+
+gateway:
+  allow_users: ["123456789"]
+  require_mention: false
+  mention_patterns: ["@mybot"]
+
+telegram:
+  token: "<YOUR_TELEGRAM_BOT_TOKEN>"
+  streaming: "progress"
+  http_timeout: "60s"
+
+session:
+  backend: "inmemory"
+  summary:
+    enabled: false
+
+memory:
+  backend: "inmemory"
+```
+
+Run:
+
+```bash
+cd openclaw
+go run ./cmd/openclaw -config ./openclaw.yaml
+```
+
+Notes:
+
+- Duration fields use Go-style strings like `60s`, `10m`, `1h`.
+- For secrets (model keys, Telegram tokens), prefer environment variables
+  or CLI flags instead of committing config files.
+
 Health check:
 
 ```bash
@@ -459,6 +513,39 @@ cleared when the process exits.
 It also enables an in-memory memory service and memory tools
 (`memory_add`, `memory_load`, etc.) for the agent. Stored memories are
 kept in process memory and are cleared when the process exits.
+
+### Centralized storage (Redis)
+
+If you want a centralized store (for multi-instance deployments), you
+can switch session and memory backends to Redis:
+
+```bash
+cd openclaw
+go run ./cmd/openclaw \
+  -mode mock \
+  -session-backend redis \
+  -session-redis-url "redis://127.0.0.1:6379/0" \
+  -memory-backend redis \
+  -memory-redis-url "redis://127.0.0.1:6379/0"
+```
+
+The Redis key-space is still isolated by `app_name` and `user_id`. You
+can override `app_name` with `-app-name` (or `app_name` in YAML) to
+match your business identifier.
+
+### Session summarization (optional)
+
+The runner can enqueue background session summarization jobs after
+assistant replies. To enable:
+
+```bash
+cd openclaw
+go run ./cmd/openclaw \
+  -mode openai \
+  -session-summary \
+  -session-summary-policy any \
+  -session-summary-events 20
+```
 
 ## OpenClaw exec/process tools (unsafe)
 

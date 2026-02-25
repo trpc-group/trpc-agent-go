@@ -15,7 +15,7 @@ package main
 
 import (
 	"context"
-	"flag"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -30,11 +30,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 	"trpc.group/trpc-go/trpc-agent-go/log"
-	meminmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
-	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/channel"
@@ -85,127 +83,6 @@ func main() {
 		}
 	}
 
-	httpAddr := flag.String(
-		"http-addr",
-		defaultHTTPAddr,
-		"HTTP listen address for gateway endpoints",
-	)
-	modelMode := flag.String(
-		"mode",
-		modeOpenAI,
-		"Model mode: mock or openai",
-	)
-	defaultModel := strings.TrimSpace(os.Getenv(openAIModelEnvName))
-	if defaultModel == "" {
-		defaultModel = defaultOpenAIModel
-	}
-	openAIModel := flag.String(
-		"model",
-		defaultModel,
-		"OpenAI model name (mode=openai)",
-	)
-	openAIVariant := flag.String(
-		"openai-variant",
-		defaultOpenAIVariant,
-		"OpenAI variant: auto, openai, deepseek, qwen, hunyuan",
-	)
-	telegramToken := flag.String(
-		"telegram-token",
-		"",
-		"Telegram bot token; empty disables Telegram",
-	)
-	telegramStartFromLatest := flag.Bool(
-		"telegram-start-from-latest",
-		true,
-		"Drain pending updates on first start (no offset)",
-	)
-	telegramProxy := flag.String(
-		"telegram-proxy",
-		"",
-		"HTTP proxy URL for Telegram API calls (optional)",
-	)
-	telegramHTTPTimeout := flag.Duration(
-		"telegram-http-timeout",
-		0,
-		"HTTP client timeout for Telegram API calls (optional)",
-	)
-	telegramMaxRetries := flag.Int(
-		"telegram-max-retries",
-		defaultTelegramMaxRetries,
-		"Max retries for Telegram API calls (429/5xx/transport errors)",
-	)
-	telegramStreaming := flag.String(
-		"telegram-streaming",
-		defaultTelegramStreaming,
-		"Telegram reply streaming: off|block|progress",
-	)
-	telegramDMPolicy := flag.String(
-		"telegram-dm-policy",
-		"",
-		"Telegram DM policy: disabled|open|allowlist|pairing",
-	)
-	telegramGroupPolicy := flag.String(
-		"telegram-group-policy",
-		"",
-		"Telegram group policy: disabled|open|allowlist",
-	)
-	telegramAllowThreads := flag.String(
-		"telegram-allow-threads",
-		"",
-		"Comma-separated allowlist of chat/topic threads",
-	)
-	telegramPairingTTL := flag.Duration(
-		"telegram-pairing-ttl",
-		time.Hour,
-		"How long pairing codes stay valid",
-	)
-	allowUsers := flag.String(
-		"allow-users",
-		"",
-		"Comma-separated allowlist; empty allows all",
-	)
-	requireMention := flag.Bool(
-		"require-mention",
-		false,
-		"Require mention in thread/group messages",
-	)
-	mention := flag.String(
-		"mention",
-		"",
-		"Comma-separated mention patterns",
-	)
-	skillsRoot := flag.String(
-		"skills-root",
-		"",
-		"Skills root directory (default: ./skills)",
-	)
-	skillsExtraDirs := flag.String(
-		"skills-extra-dirs",
-		"",
-		"Extra skills roots (comma-separated, lowest precedence)",
-	)
-	skillsDebug := flag.Bool(
-		"skills-debug",
-		false,
-		"Log skill gating decisions",
-	)
-	stateDir := flag.String(
-		"state-dir",
-		"",
-		"State dir for offsets and managed skills",
-	)
-	enableLocalExec := flag.Bool(
-		"enable-local-exec",
-		false,
-		"Enable local code execution tool (unsafe)",
-	)
-	enableOpenClawTools := flag.Bool(
-		"enable-openclaw-tools",
-		false,
-		"Enable OpenClaw-compatible exec/process tools (unsafe)",
-	)
-	flag.Parse()
-
 	ctx, stop := signal.NotifyContext(
 		context.Background(),
 		os.Interrupt,
@@ -213,28 +90,60 @@ func main() {
 	)
 	defer stop()
 
+	if err := run(ctx, os.Args[1:]); err != nil {
+		var exitErr *exitError
+		if errors.As(err, &exitErr) {
+			os.Exit(exitErr.Code)
+		}
+		log.Fatalf("%v", err)
+	}
+}
+
+type exitError struct {
+	Code int
+	Err  error
+}
+
+func (e *exitError) Error() string {
+	if e == nil || e.Err == nil {
+		return ""
+	}
+	return e.Err.Error()
+}
+
+func run(ctx context.Context, args []string) error {
+	opts, err := parseRunOptions(args)
+	if err != nil {
+		return err
+	}
+
 	var (
 		telegramBot tgch.BotInfo
 		tgapiOpts   []telegramAPIOption
-		err         error
 	)
-	if strings.TrimSpace(*telegramToken) != "" {
+	if strings.TrimSpace(opts.TelegramToken) != "" {
 		tgapiOpts, err = makeTelegramAPIOptions(
-			*telegramProxy,
-			*telegramHTTPTimeout,
-			*telegramMaxRetries,
+			opts.TelegramProxy,
+			opts.TelegramHTTPTimeout,
+			opts.TelegramMaxRetries,
 		)
 		if err != nil {
-			log.Fatalf("telegram config failed: %v", err)
+			return &exitError{
+				Code: 1,
+				Err:  fmt.Errorf("telegram config failed: %w", err),
+			}
 		}
 
 		telegramBot, err = tgch.ProbeBotInfo(
 			ctx,
-			*telegramToken,
+			opts.TelegramToken,
 			tgapiOpts...,
 		)
 		if err != nil {
-			log.Fatalf("probe telegram bot failed: %v", err)
+			return &exitError{
+				Code: 1,
+				Err:  fmt.Errorf("probe telegram bot failed: %w", err),
+			}
 		}
 
 		if strings.TrimSpace(telegramBot.Username) != "" {
@@ -249,68 +158,84 @@ func main() {
 		}
 	}
 
-	mentionPatterns := splitCSV(*mention)
-	if *requireMention &&
+	mentionPatterns := splitCSV(opts.Mention)
+	if opts.RequireMention &&
 		len(mentionPatterns) == 0 &&
 		telegramBot.Mention != "" {
 		mentionPatterns = []string{telegramBot.Mention}
 	}
 
-	mdl, err := newModel(*modelMode, *openAIModel, *openAIVariant)
+	mdl, err := newModel(opts.ModelMode, opts.OpenAIModel, opts.OpenAIVariant)
 	if err != nil {
-		log.Fatalf("create model failed: %v", err)
+		return &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("create model failed: %w", err),
+		}
 	}
 
-	resolvedStateDir, err := resolveStateDir(*stateDir)
+	resolvedStateDir, err := resolveStateDir(opts.StateDir)
 	if err != nil {
-		log.Fatalf("resolve state dir failed: %v", err)
+		return &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("resolve state dir failed: %w", err),
+		}
 	}
 	log.Infof(
 		"Instance: %s",
-		configFingerprint(*modelMode, *openAIModel, resolvedStateDir),
+		configFingerprint(opts.ModelMode, opts.OpenAIModel, resolvedStateDir),
 	)
 
-	sessionSvc := sessioninmemory.NewSessionService()
-	defer func() {
-		if err := sessionSvc.Close(); err != nil {
-			log.Warnf("close session service failed: %v", err)
+	sessionSvc, err := newSessionService(mdl, opts)
+	if err != nil {
+		return &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("create session service failed: %w", err),
 		}
-	}()
+	}
+	defer closeSessionService(sessionSvc)
 
-	memSvc := meminmemory.NewMemoryService()
-	defer func() {
-		if err := memSvc.Close(); err != nil {
-			log.Warnf("close memory service failed: %v", err)
+	memSvc, err := newMemoryService(opts)
+	if err != nil {
+		return &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("create memory service failed: %w", err),
 		}
-	}()
+	}
+	defer closeMemoryService(memSvc)
 
 	llm, err := newAgent(mdl, agentConfig{
-		SkillsRoot:          *skillsRoot,
-		SkillsExtraDirs:     splitCSV(*skillsExtraDirs),
-		SkillsDebug:         *skillsDebug,
+		SkillsRoot:          opts.SkillsRoot,
+		SkillsExtraDirs:     splitCSV(opts.SkillsExtraDir),
+		SkillsDebug:         opts.SkillsDebug,
 		StateDir:            resolvedStateDir,
-		EnableLocalExec:     *enableLocalExec,
-		EnableOpenClawTools: *enableOpenClawTools,
+		EnableLocalExec:     opts.EnableLocalExec,
+		EnableOpenClawTools: opts.EnableOpenClawTools,
 	}, memSvc.Tools())
 	if err != nil {
-		log.Fatalf("create agent failed: %v", err)
+		return &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("create agent failed: %w", err),
+		}
 	}
 
 	r := runner.NewRunner(
-		appName,
+		opts.AppName,
 		llm,
 		runner.WithSessionService(sessionSvc),
 		runner.WithMemoryService(memSvc),
 	)
 
 	gwOpts := makeGatewayOptions(
-		splitCSV(*allowUsers),
-		*requireMention,
+		splitCSV(opts.AllowUsers),
+		opts.RequireMention,
 		mentionPatterns,
 	)
 	gwSrv, err := gateway.New(r, gwOpts...)
 	if err != nil {
-		log.Fatalf("create gateway failed: %v", err)
+		return &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("create gateway failed: %w", err),
+		}
 	}
 
 	gw, err := gwclient.New(
@@ -319,11 +244,14 @@ func main() {
 		gwSrv.CancelPath(),
 	)
 	if err != nil {
-		log.Fatalf("create gateway client failed: %v", err)
+		return &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("create gateway client failed: %w", err),
+		}
 	}
 
 	httpSrv := &http.Server{
-		Addr:              *httpAddr,
+		Addr:              opts.HTTPAddr,
 		Handler:           gwSrv.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
@@ -340,25 +268,28 @@ func main() {
 	}()
 
 	var channels []channel.Channel
-	if strings.TrimSpace(*telegramToken) != "" {
-		users := splitCSV(*allowUsers)
-		threads := splitCSV(*telegramAllowThreads)
+	if strings.TrimSpace(opts.TelegramToken) != "" {
+		users := splitCSV(opts.AllowUsers)
+		threads := splitCSV(opts.TelegramAllowThreads)
 		ch, err := tgch.New(
-			*telegramToken,
+			opts.TelegramToken,
 			telegramBot,
 			gw,
 			tgch.WithAPIOptions(tgapiOpts...),
 			tgch.WithStateDir(resolvedStateDir),
-			tgch.WithStartFromLatest(*telegramStartFromLatest),
-			tgch.WithStreamingMode(*telegramStreaming),
-			tgch.WithDMPolicy(*telegramDMPolicy),
-			tgch.WithGroupPolicy(*telegramGroupPolicy),
+			tgch.WithStartFromLatest(opts.TelegramStartFromLatest),
+			tgch.WithStreamingMode(opts.TelegramStreaming),
+			tgch.WithDMPolicy(opts.TelegramDMPolicy),
+			tgch.WithGroupPolicy(opts.TelegramGroupPolicy),
 			tgch.WithAllowUsers(users...),
 			tgch.WithAllowThreads(threads...),
-			tgch.WithPairingTTL(*telegramPairingTTL),
+			tgch.WithPairingTTL(opts.TelegramPairingTTL),
 		)
 		if err != nil {
-			log.Fatalf("create telegram channel failed: %v", err)
+			return &exitError{
+				Code: 1,
+				Err:  fmt.Errorf("create telegram channel failed: %w", err),
+			}
 		}
 		channels = append(channels, ch)
 	}
@@ -386,6 +317,38 @@ func main() {
 
 	_ = httpSrv.Shutdown(shutdownCtx)
 	_ = r.Close()
+
+	return nil
+}
+
+type closeFunc interface {
+	Close() error
+}
+
+func closeSessionService(svc closeFunc) {
+	if svc == nil {
+		return
+	}
+	if err := svc.Close(); err != nil {
+		log.Warnf("close session service failed: %v", err)
+	}
+}
+
+func closeMemoryService(svc closeFunc) {
+	if svc == nil {
+		return
+	}
+	if err := svc.Close(); err != nil {
+		log.Warnf("close memory service failed: %v", err)
+	}
+}
+
+func defaultOpenAIModelName() string {
+	modelName := strings.TrimSpace(os.Getenv(openAIModelEnvName))
+	if modelName != "" {
+		return modelName
+	}
+	return defaultOpenAIModel
 }
 
 func makeGatewayOptions(
