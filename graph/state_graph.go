@@ -3181,7 +3181,7 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 	}
 
 	// Execute the tool with callbacks and get modified arguments.
-	_, span := trace.Tracer.Start(ctx, itelemetry.NewExecuteToolSpanName(config.ToolCall.Function.Name))
+	ctx, span := trace.Tracer.Start(ctx, itelemetry.NewExecuteToolSpanName(config.ToolCall.Function.Name))
 	ctx, result, modifiedArgs, err := runTool(ctx, config.ToolCall, config.ToolCallbacks, t, config.State)
 
 	// Emit tool execution start event with modified arguments.
