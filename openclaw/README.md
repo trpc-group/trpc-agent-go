@@ -311,6 +311,9 @@ List available skills, then run the hello skill.
 This demo uses `trpc-agent-go` sessions to store conversation history
 per `session_id` (derived from DM vs group/topic).
 
+The session service is in-memory by default, so session history is
+cleared when the process exits.
+
 It also enables an in-memory memory service and memory tools
 (`memory_add`, `memory_load`, etc.) for the agent. Stored memories are
 kept in process memory and are cleared when the process exits.

@@ -34,6 +34,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/gateway"
+	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/channel"
@@ -193,6 +194,13 @@ func main() {
 		log.Fatalf("resolve state dir failed: %v", err)
 	}
 
+	sessionSvc := sessioninmemory.NewSessionService()
+	defer func() {
+		if err := sessionSvc.Close(); err != nil {
+			log.Warnf("close session service failed: %v", err)
+		}
+	}()
+
 	memSvc := meminmemory.NewMemoryService()
 	defer func() {
 		if err := memSvc.Close(); err != nil {
@@ -215,6 +223,7 @@ func main() {
 	r := runner.NewRunner(
 		appName,
 		llm,
+		runner.WithSessionService(sessionSvc),
 		runner.WithMemoryService(memSvc),
 	)
 
