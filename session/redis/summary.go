@@ -12,6 +12,7 @@ package redis
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -95,7 +96,17 @@ func (s *Service) GetSessionSummaryText(ctx context.Context, sess *session.Sessi
 		return text, true
 	}
 
-	// Check which storage has the session (summary follows session version)
+	filterKey := isummary.GetFilterKeyFromOptions(opts...)
+
+	// Fast path: use version tag from session to avoid checkSessionExists round-trip.
+	switch ver := getSessionVersion(sess); ver {
+	case util.StorageTypeHashIdx:
+		return s.getSummaryFromHashIdx(ctx, key, filterKey, sess.CreatedAt)
+	case util.StorageTypeZset:
+		return s.getSummaryFromZSet(ctx, key, filterKey, sess.CreatedAt)
+	}
+
+	// Slow path: no version tag, check which storage has the session.
 	zsetExists, hashidxExists, err := s.checkSessionExists(ctx, key)
 	if err != nil {
 		log.WarnfContext(ctx, "checkSessionExists failed: %v", err)
@@ -103,27 +114,36 @@ func (s *Service) GetSessionSummaryText(ctx context.Context, sess *session.Sessi
 	}
 
 	if s.compatEnabled() && zsetExists {
-		summaries, err := s.zsetClient.GetSummary(ctx, key)
-		if err != nil {
-			log.WarnfContext(ctx, "get zset summary failed: %v", err)
-			return "", false
-		}
-		if summaries != nil {
-			return isummary.PickSummaryText(summaries, isummary.GetFilterKeyFromOptions(opts...), sess.CreatedAt)
-		}
+		return s.getSummaryFromZSet(ctx, key, filterKey, sess.CreatedAt)
 	}
-
 	if hashidxExists {
-		summaries, err := s.hashidxClient.GetSummary(ctx, key)
-		if err != nil {
-			log.WarnfContext(ctx, "get hashidx summary failed: %v", err)
-			return "", false
-		}
-		if summaries != nil {
-			return isummary.PickSummaryText(summaries, isummary.GetFilterKeyFromOptions(opts...), sess.CreatedAt)
-		}
+		return s.getSummaryFromHashIdx(ctx, key, filterKey, sess.CreatedAt)
 	}
 
+	return "", false
+}
+
+func (s *Service) getSummaryFromHashIdx(ctx context.Context, key session.Key, filterKey string, createdAt time.Time) (string, bool) {
+	summaries, err := s.hashidxClient.GetSummary(ctx, key)
+	if err != nil {
+		log.WarnfContext(ctx, "get hashidx summary failed: %v", err)
+		return "", false
+	}
+	if summaries != nil {
+		return isummary.PickSummaryText(summaries, filterKey, createdAt)
+	}
+	return "", false
+}
+
+func (s *Service) getSummaryFromZSet(ctx context.Context, key session.Key, filterKey string, createdAt time.Time) (string, bool) {
+	summaries, err := s.zsetClient.GetSummary(ctx, key)
+	if err != nil {
+		log.WarnfContext(ctx, "get zset summary failed: %v", err)
+		return "", false
+	}
+	if summaries != nil {
+		return isummary.PickSummaryText(summaries, filterKey, createdAt)
+	}
 	return "", false
 }
 
