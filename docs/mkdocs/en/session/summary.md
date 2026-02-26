@@ -280,9 +280,9 @@ type Checker func(sess *session.Session) bool
 
 | Checker | Description |
 | --- | --- |
-| `CheckEventThreshold(eventCount int)` | Returns true when total event count exceeds threshold |
+| `CheckEventThreshold(eventCount int)` | Returns true when the number of delta events since the last summary exceeds the threshold |
 | `CheckTimeThreshold(interval time.Duration)` | Returns true when time since last event exceeds interval |
-| `CheckTokenThreshold(tokenCount int)` | Returns true when cumulative token count exceeds threshold (uses `event.Response.Usage.TotalTokens`) |
+| `CheckTokenThreshold(tokenCount int)` | Returns true when the estimated token count of delta events since the last summary exceeds the threshold (estimated via `TokenCounter` from extracted conversation text, not `event.Response.Usage.TotalTokens`) |
 | `ChecksAll(checks []Checker)` | Combines multiple Checkers; returns true only when all return true (AND) |
 | `ChecksAny(checks []Checker)` | Combines multiple Checkers; returns true when any returns true (OR) |
 

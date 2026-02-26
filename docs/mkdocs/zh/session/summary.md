@@ -285,9 +285,9 @@ type Checker func(sess *session.Session) bool
 
 | Checker | 说明 |
 | --- | --- |
-| `CheckEventThreshold(eventCount int)` | 当事件总数大于阈值时返回 true |
+| `CheckEventThreshold(eventCount int)` | 当自上次摘要以来的增量事件数大于阈值时返回 true |
 | `CheckTimeThreshold(interval time.Duration)` | 当距离最后一个事件的时间大于间隔时返回 true |
-| `CheckTokenThreshold(tokenCount int)` | 当累计 token 数大于阈值时返回 true（使用 `event.Response.Usage.TotalTokens`） |
+| `CheckTokenThreshold(tokenCount int)` | 当自上次摘要以来的增量事件提取的对话文本估算 token 数大于阈值时返回 true（通过 `TokenCounter` 估算，而非 `event.Response.Usage.TotalTokens`） |
 | `ChecksAll(checks []Checker)` | 组合多个 Checker，所有都返回 true 时才返回 true（AND） |
 | `ChecksAny(checks []Checker)` | 组合多个 Checker，任一返回 true 时返回 true（OR） |
 
