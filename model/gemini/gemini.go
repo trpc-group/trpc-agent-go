@@ -556,11 +556,12 @@ func normalizeToolSchema(toolName, schemaKind string, schema *tool.Schema) any {
 			toolName,
 			err,
 		)
-		return map[string]any{
-			"type":       "object",
-			"properties": map[string]any{},
-		}
+		return emptyObjectSchema()
 	}
+	return normalizeToolSchemaBytes(toolName, schemaKind, schemaBytes)
+}
+
+func normalizeToolSchemaBytes(toolName, schemaKind string, schemaBytes []byte) any {
 	var out map[string]any
 	if err := json.Unmarshal(schemaBytes, &out); err != nil {
 		log.Warnf(
@@ -569,10 +570,7 @@ func normalizeToolSchema(toolName, schemaKind string, schema *tool.Schema) any {
 			toolName,
 			err,
 		)
-		return map[string]any{
-			"type":       "object",
-			"properties": map[string]any{},
-		}
+		return emptyObjectSchema()
 	}
 	// Some function-calling implementations are strict about top-level object schemas having
 	// an explicit `properties` key, even for no-arg tools.
@@ -582,6 +580,13 @@ func normalizeToolSchema(toolName, schemaKind string, schema *tool.Schema) any {
 		}
 	}
 	return out
+}
+
+func emptyObjectSchema() map[string]any {
+	return map[string]any{
+		"type":       "object",
+		"properties": map[string]any{},
+	}
 }
 
 // convertContentPart converts a single content part to Gemini format.

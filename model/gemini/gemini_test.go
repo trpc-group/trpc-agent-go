@@ -261,6 +261,21 @@ func TestNormalizeToolSchema_MarshalErrorFallsBack(t *testing.T) {
 	require.Empty(t, props)
 }
 
+func TestNormalizeToolSchema_NilSchemaReturnsNil(t *testing.T) {
+	require.Nil(t, normalizeToolSchema("tool", "input", nil))
+}
+
+func TestNormalizeToolSchema_UnmarshalErrorFallsBack(t *testing.T) {
+	normalized := normalizeToolSchemaBytes("tool", "input", []byte("{"))
+
+	out, ok := normalized.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "object", out["type"])
+	props, ok := out["properties"].(map[string]any)
+	require.True(t, ok)
+	require.Empty(t, props)
+}
+
 func TestModel_buildChatConfig(t *testing.T) {
 	var (
 		MaxTokens        = 10
