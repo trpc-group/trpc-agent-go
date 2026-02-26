@@ -117,9 +117,9 @@ func TestSessionManager_CallTool_UsesStructuredContentWhenContentEmpty(t *testin
 
 	result, err := manager.callTool(context.Background(), "test-tool", map[string]any{"key": "value"})
 	require.NoError(t, err)
-	require.Len(t, result, 1)
+	require.Len(t, result.Content, 1)
 
-	structuredText, ok := result[0].(mcp.TextContent)
+	structuredText, ok := result.Content[0].(mcp.TextContent)
 	require.True(t, ok)
 
 	expectedJSON, err := json.Marshal(structured)
@@ -144,9 +144,9 @@ func TestSessionManager_CallTool_IgnoresStructuredContentWhenContentPresent(t *t
 
 	result, err := manager.callTool(context.Background(), "test-tool", map[string]any{"key": "value"})
 	require.NoError(t, err)
-	require.Len(t, result, 1)
+	require.Len(t, result.Content, 1)
 
-	original, ok := result[0].(mcp.TextContent)
+	original, ok := result.Content[0].(mcp.TextContent)
 	require.True(t, ok)
 	assert.Equal(t, "original", original.Text)
 }
@@ -165,7 +165,7 @@ func TestSessionManager_CallTool_NoContentNoStructured(t *testing.T) {
 
 	result, err := manager.callTool(context.Background(), "test-tool", nil)
 	require.NoError(t, err)
-	assert.Len(t, result, 0)
+	assert.Len(t, result.Content, 0)
 }
 
 func TestSessionManager_CallTool_StructuredContentMarshalError(t *testing.T) {
@@ -184,7 +184,7 @@ func TestSessionManager_CallTool_StructuredContentMarshalError(t *testing.T) {
 	result, err := manager.callTool(context.Background(), "test-tool", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "marshal structured content")
-	assert.Len(t, result, 0)
+	assert.Nil(t, result)
 }
 
 // TestSessionManager_CallTool_Error tests callTool when CallTool returns an error

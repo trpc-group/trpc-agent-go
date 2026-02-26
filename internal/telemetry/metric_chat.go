@@ -155,13 +155,14 @@ func (t *ChatMetricsTracker) TrackResponse(response *model.Response) {
 	if response == nil {
 		return
 	}
-
-	now := time.Now()
-
+	var now time.Time
 	// Track first token timing (for both metrics and timing info)
 	if t.isFirstToken {
+		if now.IsZero() {
+			now = time.Now()
+		}
 		// Always record firstTokenTimeDuration for metrics (even if no content)
-		t.firstTokenTimeDuration = time.Since(t.start)
+		t.firstTokenTimeDuration = now.Sub(t.start)
 		t.isFirstToken = false
 
 		// Update FirstTokenDuration in TimingInfo only if not already recorded (first LLM call only)
@@ -196,6 +197,9 @@ func (t *ChatMetricsTracker) TrackResponse(response *model.Response) {
 		hasReasoningContent := choice.Delta.ReasoningContent != "" || choice.Message.ReasoningContent != ""
 
 		if hasReasoningContent {
+			if now.IsZero() {
+				now = time.Now()
+			}
 			// Track reasoning phase start and continuation
 			if t.firstReasoningTime.IsZero() {
 				t.firstReasoningTime = now
@@ -223,9 +227,22 @@ func (t *ChatMetricsTracker) GetTimingInfo() *model.TimingInfo {
 	return t.timingInfo
 }
 
+func chatMetricsEnabled() bool {
+	return ChatMetricTRPCAgentGoClientRequestCnt != nil ||
+		ChatMetricGenAIClientTokenUsage != nil ||
+		ChatMetricGenAIClientOperationDuration != nil ||
+		ChatMetricGenAIServerTimeToFirstToken != nil ||
+		ChatMetricTRPCAgentGoClientTimeToFirstToken != nil ||
+		ChatMetricTRPCAgentGoClientTimePerOutputToken != nil ||
+		ChatMetricTRPCAgentGoClientOutputTokenPerTime != nil
+}
+
 // RecordMetrics returns a defer function that records all telemetry metrics.
 // Should be called with defer immediately after creating the tracker.
 func (t *ChatMetricsTracker) RecordMetrics() func() {
+	if !chatMetricsEnabled() {
+		return func() {}
+	}
 	return func() {
 		attrs := t.buildAttributes()
 		requestDuration := time.Since(t.start)
