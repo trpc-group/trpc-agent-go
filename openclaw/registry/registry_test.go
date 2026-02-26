@@ -16,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
+	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -137,6 +138,65 @@ func TestRegisterSessionBackend_ValidatesInputs(t *testing.T) {
 
 	var nilFactory SessionBackendFactory
 	require.Error(t, RegisterSessionBackend("x", nilFactory))
+}
+
+func TestRegisterAndLookup_MoreKinds(t *testing.T) {
+	resetForTest(t)
+
+	sessionCalled := false
+	require.NoError(t, RegisterSessionBackend(
+		" TeSt ",
+		func(_ SessionDeps, _ SessionBackendSpec) (session.Service, error) {
+			sessionCalled = true
+			return nil, nil
+		},
+	))
+
+	sessionFactory, ok := LookupSessionBackend("test")
+	require.True(t, ok)
+	_, err := sessionFactory(SessionDeps{}, SessionBackendSpec{})
+	require.NoError(t, err)
+	require.True(t, sessionCalled)
+
+	require.Error(t, RegisterSessionBackend(
+		"test",
+		func(_ SessionDeps, _ SessionBackendSpec) (session.Service, error) {
+			return nil, nil
+		},
+	))
+
+	var nilMemoryFactory MemoryBackendFactory
+	require.Error(t, RegisterMemoryBackend("mem", nilMemoryFactory))
+
+	memoryCalled := false
+	require.NoError(t, RegisterMemoryBackend(
+		"mem",
+		func(_ MemoryDeps, _ MemoryBackendSpec) (memory.Service, error) {
+			memoryCalled = true
+			return nil, nil
+		},
+	))
+
+	memFactory, ok := LookupMemoryBackend("mem")
+	require.True(t, ok)
+	_, err = memFactory(MemoryDeps{}, MemoryBackendSpec{})
+	require.NoError(t, err)
+	require.True(t, memoryCalled)
+
+	providerCalled := false
+	require.NoError(t, RegisterToolProvider(
+		"p",
+		func(_ ToolProviderDeps, _ PluginSpec) ([]tool.Tool, error) {
+			providerCalled = true
+			return nil, nil
+		},
+	))
+
+	providerFactory, ok := LookupToolProvider("p")
+	require.True(t, ok)
+	_, err = providerFactory(ToolProviderDeps{}, PluginSpec{})
+	require.NoError(t, err)
+	require.True(t, providerCalled)
 }
 
 func TestRegisterToolProvider_DuplicateFails(t *testing.T) {

@@ -246,6 +246,16 @@ func TestServer_Health(t *testing.T) {
 	srv, err := New(&stubRunner{})
 	require.NoError(t, err)
 
+	require.Equal(t, defaultBasePath, srv.BasePath())
+
+	statusPath, err := joinURLPath(defaultBasePath, defaultStatusPath)
+	require.NoError(t, err)
+	require.Equal(t, statusPath, srv.StatusPath())
+
+	cancelPath, err := joinURLPath(defaultBasePath, defaultCancelPath)
+	require.NoError(t, err)
+	require.Equal(t, cancelPath, srv.CancelPath())
+
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, srv.HealthPath(), nil)
 	srv.Handler().ServeHTTP(rr, req)
