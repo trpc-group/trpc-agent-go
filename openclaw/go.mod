@@ -43,6 +43,7 @@ replace trpc.group/trpc-go/trpc-agent-go/storage/postgres => ../storage/postgres
 replace trpc.group/trpc-go/trpc-agent-go/storage/redis => ../storage/redis
 
 require (
+	github.com/ClickHouse/clickhouse-go/v2 v2.26.0
 	github.com/alicebob/miniredis/v2 v2.35.0
 	github.com/creack/pty v1.1.24
 	github.com/google/uuid v1.6.0
@@ -58,6 +59,10 @@ require (
 	trpc.group/trpc-go/trpc-agent-go/session/mysql v1.5.0
 	trpc.group/trpc-go/trpc-agent-go/session/postgres v1.5.0
 	trpc.group/trpc-go/trpc-agent-go/session/redis v0.0.3
+	trpc.group/trpc-go/trpc-agent-go/storage/clickhouse v1.5.0
+	trpc.group/trpc-go/trpc-agent-go/storage/mysql v1.5.0
+	trpc.group/trpc-go/trpc-agent-go/storage/postgres v1.5.0
+	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.2.0
 	trpc.group/trpc-go/trpc-agent-go/tool/arxivsearch v1.5.0
 	trpc.group/trpc-go/trpc-agent-go/tool/email v1.5.0
 	trpc.group/trpc-go/trpc-agent-go/tool/google v1.5.0
@@ -73,7 +78,6 @@ require (
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
 	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/ClickHouse/ch-go v0.61.5 // indirect
-	github.com/ClickHouse/clickhouse-go/v2 v2.26.0 // indirect
 	github.com/JohannesKaufmann/dom v0.2.0 // indirect
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.0 // indirect
 	github.com/andybalholm/brotli v1.1.0 // indirect
@@ -162,8 +166,4 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5 // indirect
 	trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf v1.5.0 // indirect
-	trpc.group/trpc-go/trpc-agent-go/storage/clickhouse v1.5.0 // indirect
-	trpc.group/trpc-go/trpc-agent-go/storage/mysql v1.5.0 // indirect
-	trpc.group/trpc-go/trpc-agent-go/storage/postgres v1.5.0 // indirect
-	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.2.0 // indirect
 )
