@@ -111,6 +111,8 @@ var (
 		PreloadMemory: 0,
 
 		SkillLoadMode: SkillLoadModeTurn,
+
+		SkipSkillsFallbackOnSessionSummary: true,
 	}
 )
 
@@ -270,6 +272,13 @@ type Options struct {
 	// system prompt more stable for prompt caching.
 	SkillsLoadedContentInToolResults bool
 
+	// SkipSkillsFallbackOnSessionSummary controls whether the framework
+	// skips the "Loaded skill context" system-message fallback when a
+	// session summary is present in the request.
+	//
+	// Default: true.
+	SkipSkillsFallbackOnSessionSummary bool
+
 	// skillsRepository enables agent skills when non-nil.
 	skillsRepository skill.Repository
 	// skillsToolingGuidance overrides the built-in skills guidance block.
@@ -293,6 +302,12 @@ type Options struct {
 	// When 0 (default), no memories are preloaded (use tools instead).
 	// When < 0, all memories are loaded.
 	PreloadMemory int
+
+	// PostToolPrompt overrides the default dynamic prompt injected when
+	// tool results are detected. When empty, the built-in default prompt
+	// from processor.DefaultPostToolPrompt is used. Set to a non-empty
+	// string to customize the guidance given to the model after tool calls.
+	PostToolPrompt string
 }
 
 // WithModel sets the model to use.
@@ -457,6 +472,19 @@ func WithSkillLoadMode(mode string) Option {
 func WithSkillsLoadedContentInToolResults(enable bool) Option {
 	return func(opts *Options) {
 		opts.SkillsLoadedContentInToolResults = enable
+	}
+}
+
+// WithSkipSkillsFallbackOnSessionSummary controls whether the agent
+// skips the "Loaded skill context" system-message fallback when a session
+// summary is present in the request.
+//
+// Default: true.
+func WithSkipSkillsFallbackOnSessionSummary(
+	skip bool,
+) Option {
+	return func(opts *Options) {
+		opts.SkipSkillsFallbackOnSessionSummary = skip
 	}
 }
 
@@ -823,6 +851,19 @@ func WithMessageFilterMode(mode MessageFilterMode) Option {
 func WithPreloadMemory(limit int) Option {
 	return func(opts *Options) {
 		opts.PreloadMemory = limit
+	}
+}
+
+// WithPostToolPrompt overrides the default dynamic prompt injected when tool
+// results are detected in the conversation. The default prompt guides the
+// model to synthesize results naturally without meta-commentary.
+//
+// Example usage:
+//
+//	llmagent.WithPostToolPrompt("[Dynamic Prompt] Summarize the tool output concisely.")
+func WithPostToolPrompt(prompt string) Option {
+	return func(opts *Options) {
+		opts.PostToolPrompt = prompt
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"sort"
 	"time"
 
@@ -36,6 +37,11 @@ import (
 const (
 	// Timeout for event completion signaling.
 	eventCompletionTimeout = 5 * time.Second
+
+	flowRunPanicLogFmt = "Flow execution panic (invocation: %s, " +
+		"agent: %s): %v\n%s"
+
+	flowRunPanicErrFmt = "flow panic: %v"
 
 	// stateKeyToolsSnapshot is the invocation state key used to cache the
 	// final tool list for a single Invocation. This ensures that the tool
@@ -81,6 +87,7 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
 		defer close(eventChan)
+		defer recoverFlowRunPanic(ctx, invocation, eventChan)
 
 		// Optionally resume from pending tool calls before starting a new
 		// LLM cycle. This covers scenarios where the previous run stopped
@@ -151,6 +158,49 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 	}(runCtx)
 
 	return eventChan, nil
+}
+
+func recoverFlowRunPanic(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	eventChan chan<- *event.Event,
+) {
+	recovered := recover()
+	if recovered == nil {
+		return
+	}
+
+	stack := debug.Stack()
+	log.ErrorfContext(
+		ctx,
+		flowRunPanicLogFmt,
+		flowInvocationID(invocation),
+		flowAgentName(invocation),
+		recovered,
+		string(stack),
+	)
+
+	errorEvent := event.NewErrorEvent(
+		flowInvocationID(invocation),
+		flowAgentName(invocation),
+		model.ErrorTypeFlowError,
+		fmt.Sprintf(flowRunPanicErrFmt, recovered),
+	)
+	agent.EmitEvent(ctx, invocation, eventChan, errorEvent)
+}
+
+func flowInvocationID(invocation *agent.Invocation) string {
+	if invocation == nil {
+		return ""
+	}
+	return invocation.InvocationID
+}
+
+func flowAgentName(invocation *agent.Invocation) string {
+	if invocation == nil {
+		return ""
+	}
+	return invocation.AgentName
 }
 
 // maybeResumePendingToolCalls inspects the latest session events and, when

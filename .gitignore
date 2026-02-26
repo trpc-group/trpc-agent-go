@@ -36,4 +36,8 @@ next-env.d.ts
 examples/**/*.evalset_result.json
 !examples/evaluation/**/*.evalset_result.json
 examples/results/
+__pycache__
+.venv
+examples/knowledge/evaluation/dataset/*
 !examples/claudecode/.claude
+!examples/evaluation/claudecode/.claude

@@ -282,12 +282,27 @@ func (m *Model) buildChatCompletionResponse(
 		IsPartial: isPartial,
 	}
 	message, finishReason := m.convertContentBlock(rsp.Candidates)
-	response.Choices = []model.Choice{
-		{
-			Index:   0,
-			Message: message,
-			Delta:   message,
-		},
+	if isPartial {
+		// Streaming chunk: only populate Delta (not Message).
+		// This matches the OpenAI and Anthropic patterns where streaming
+		// chunks carry incremental deltas. Setting both Message and Delta
+		// to the same value caused downstream consumers to double-emit
+		// content — the chunk's Message.Content was treated as a full
+		// response and re-emitted alongside the final accumulated response.
+		response.Choices = []model.Choice{
+			{
+				Index: 0,
+				Delta: message,
+			},
+		}
+	} else {
+		// Final/non-streaming response: populate Message (the full content).
+		response.Choices = []model.Choice{
+			{
+				Index:   0,
+				Message: message,
+			},
+		}
 	}
 	// Set finish reason.
 	if finishReason != "" {

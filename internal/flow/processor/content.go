@@ -200,6 +200,8 @@ func WithSummaryFormatter(formatter func(summary string) string) ContentOption {
 const (
 	mergedUserSeparator = "\n\n"
 	contextPrefix       = "For context:"
+
+	contentHasSessionSummaryStateKey = "processor:content:has_session_summary"
 )
 
 // NewContentRequestProcessor creates a new content request processor.
@@ -296,6 +298,10 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		}
 
 		if summaryMsg != nil {
+			invocation.SetState(
+				contentHasSessionSummaryStateKey,
+				true,
+			)
 			// Insert summary as a separate system message after the last
 			// system message to keep stable instructions cacheable.
 			systemMsgIndex := findLastSystemMessageIndex(req.Messages)
@@ -502,14 +508,51 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 
 	messages = p.mergeUserMessages(messages)
 
-	// Apply MaxHistoryRuns limit if set MaxHistoryRuns and
-	// AddSessionSummary is false.
-	if !p.AddSessionSummary && p.MaxHistoryRuns > 0 &&
-		len(messages) > p.MaxHistoryRuns {
-		startIdx := len(messages) - p.MaxHistoryRuns
-		messages = messages[startIdx:]
+	// Apply MaxHistoryRuns limit when AddSessionSummary is false.
+	if !p.AddSessionSummary && p.MaxHistoryRuns > 0 {
+		messages = applyMaxHistoryRuns(messages, p.MaxHistoryRuns)
 	}
 	return messages
+}
+
+// applyMaxHistoryRuns trims messages to at most maxRuns entries from the tail.
+// If the trim boundary falls on a tool-result message whose corresponding
+// tool_use was truncated, the boundary is advanced past any such orphaned
+// results to prevent API 400 "unexpected tool_use_id" errors.
+func applyMaxHistoryRuns(messages []model.Message, maxRuns int) []model.Message {
+	if len(messages) <= maxRuns {
+		return messages
+	}
+	startIdx := len(messages) - maxRuns
+
+	// Only scan the truncated prefix when the boundary actually falls on a
+	// tool-result message; otherwise there's nothing to skip.
+	if messages[startIdx].Role != model.RoleTool || messages[startIdx].ToolID == "" {
+		return messages[startIdx:]
+	}
+
+	// Collect tool-call IDs that will be truncated (before startIdx).
+	truncatedToolIDs := make(map[string]struct{})
+	for i := 0; i < startIdx; i++ {
+		for _, tc := range messages[i].ToolCalls {
+			if tc.ID != "" {
+				truncatedToolIDs[tc.ID] = struct{}{}
+			}
+		}
+	}
+
+	// Skip orphaned tool results whose corresponding call was truncated.
+	for startIdx < len(messages) &&
+		messages[startIdx].Role == model.RoleTool &&
+		messages[startIdx].ToolID != "" {
+		if _, orphaned := truncatedToolIDs[messages[startIdx].ToolID]; orphaned {
+			startIdx++
+			continue
+		}
+		break
+	}
+
+	return messages[startIdx:]
 }
 
 // processReasoningContent applies reasoning content stripping based on the
@@ -798,54 +841,76 @@ func (p *ContentRequestProcessor) convertForeignEvent(evt *event.Event) event.Ev
 	convertedEvent.Author = "user"
 
 	// Build content parts for context.
-	var contentParts []string
+	var contents []string
+	var contentParts []model.ContentPart
 	if p.AddContextPrefix {
-		contentParts = append(contentParts, contextPrefix)
+		prefix := contextPrefix
+		contents = append(contents, contextPrefix)
+		contentParts = append(contentParts, model.ContentPart{
+			Type: model.ContentTypeText,
+			Text: &prefix,
+		})
 	}
 
 	for _, choice := range evt.Choices {
+		if len(choice.Message.ContentParts) > 0 {
+			if p.AddContextPrefix {
+				prefix := fmt.Sprintf("[%s] said:", evt.Author)
+				contentParts = append(contentParts, model.ContentPart{
+					Type: model.ContentTypeText,
+					Text: &prefix,
+				})
+			}
+			contentParts = append(contentParts, choice.Message.ContentParts...)
+		}
+
 		if choice.Message.Content != "" {
 			if p.AddContextPrefix {
-				contentParts = append(contentParts,
-					fmt.Sprintf("[%s] said: %s", evt.Author, choice.Message.Content))
+				contents = append(contents, fmt.Sprintf("[%s] said: %s", evt.Author, choice.Message.Content))
 			} else {
 				// When prefix is disabled, pass the content directly.
-				contentParts = append(contentParts, choice.Message.Content)
+				contents = append(contents, choice.Message.Content)
 			}
 		} else if len(choice.Message.ToolCalls) > 0 {
 			for _, toolCall := range choice.Message.ToolCalls {
 				if p.AddContextPrefix {
-					contentParts = append(contentParts,
+					contents = append(contents,
 						fmt.Sprintf("[%s] called tool `%s` with parameters: %s",
 							evt.Author, toolCall.Function.Name, string(toolCall.Function.Arguments)))
 				} else {
 					// When prefix is disabled, pass tool call info directly.
-					contentParts = append(contentParts,
+					contents = append(contents,
 						fmt.Sprintf("Tool `%s` called with parameters: %s",
 							toolCall.Function.Name, string(toolCall.Function.Arguments)))
 				}
 			}
 		} else if choice.Message.ToolID != "" {
 			if p.AddContextPrefix {
-				contentParts = append(contentParts,
+				contents = append(contents,
 					fmt.Sprintf("[%s] `%s` tool returned result: %s",
 						evt.Author, choice.Message.ToolID, choice.Message.Content))
 			} else {
 				// When prefix is disabled, pass tool result directly.
-				contentParts = append(contentParts, choice.Message.Content)
+				contents = append(contents, choice.Message.Content)
 			}
 		}
 	}
 
 	// Set the converted message.
-	if len(contentParts) > 0 {
+	if len(contents) > 0 || len(contentParts) > 0 {
+		msg := model.Message{
+			Role: model.RoleUser,
+		}
+		if len(contents) > 0 {
+			msg.Content = strings.Join(contents, " ")
+		}
+		if len(contentParts) > 0 {
+			msg.ContentParts = contentParts
+		}
 		convertedEvent.Response.Choices = []model.Choice{
 			{
-				Index: 0,
-				Message: model.Message{
-					Role:    model.RoleUser,
-					Content: strings.Join(contentParts, " "),
-				},
+				Index:   0,
+				Message: msg,
 			},
 		}
 	}

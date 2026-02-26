@@ -73,12 +73,21 @@ sequence affects how long the shared prefix is:
     likely to shift, and prompt caching can often reuse a longer prefix.
 
 Fallback: if the matching tool result message is not present in the
-request history (for example, history suppression), the framework falls
-back to a dedicated system message so the model still sees the loaded
-content.
+request history (for example, history suppression), the framework can
+fall back to a dedicated system message so the model still sees the
+loaded content.
+
+Session summary note: if you enable session summary injection
+(`WithAddSessionSummary(true)`) and a summary is present, the framework
+**skips** this fallback by default to avoid re-inflating the prompt with
+summarized content. In that setup, if the tool result messages were
+summarized away, the model will need to call `skill_load` again to see
+the full body/docs.
 
 Enable tool-result materialization with:
 `llmagent.WithSkillsLoadedContentInToolResults(true)`.
+To restore the legacy fallback behavior in summary mode:
+`llmagent.WithSkipSkillsFallbackOnSessionSummary(false)`.
 
 To measure the impact in a real tool-using flow, run the
 `benchmark/anthropic_skills` `prompt-cache` suite.
@@ -145,10 +154,11 @@ Stability across calls:
   on every model call, so later requests see the same skill content as
   long as the skills repo and selection state are unchanged.
 - If the relevant tool result message is missing from the request history
-  (for example, history suppression or truncation), the framework falls
-  back to a dedicated system message (`Loaded skill context:`) to preserve
-  correctness. This fallback may reduce prompt-cache benefits because it
-  changes the system content.
+  (for example, history suppression or truncation), the framework can
+  fall back to a dedicated system message (`Loaded skill context:`) to
+  preserve correctness. This fallback may reduce prompt-cache benefits
+  because it changes the system content. If a session summary is present,
+  this fallback is skipped by default (see above).
 
 ### Industry Comparison
 
