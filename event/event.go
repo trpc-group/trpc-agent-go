@@ -306,6 +306,8 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 		return nil
 	}
 
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 	select {
 	case ch <- e:
 		log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %+v", *e)
@@ -318,7 +320,7 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 			*e,
 		)
 		return err
-	case <-time.After(timeout):
+	case <-timer.C:
 		log.WarnfContext(
 			ctx,
 			"EmitEventWithTimeout: timeout, event: %+v",
