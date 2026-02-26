@@ -6,6 +6,7 @@ replace (
 	trpc.group/trpc-go/trpc-agent-go => ../../../
 	trpc.group/trpc-go/trpc-agent-go/evaluation => ../../../evaluation
 	trpc.group/trpc-go/trpc-agent-go/model/provider => ../../../model/provider
+	trpc.group/trpc-go/trpc-agent-go/model/ollama => ../../../model/ollama
 )
 
 require (
