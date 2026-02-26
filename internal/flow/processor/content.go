@@ -200,6 +200,8 @@ func WithSummaryFormatter(formatter func(summary string) string) ContentOption {
 const (
 	mergedUserSeparator = "\n\n"
 	contextPrefix       = "For context:"
+
+	contentHasSessionSummaryStateKey = "processor:content:has_session_summary"
 )
 
 // NewContentRequestProcessor creates a new content request processor.
@@ -296,6 +298,10 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		}
 
 		if summaryMsg != nil {
+			invocation.SetState(
+				contentHasSessionSummaryStateKey,
+				true,
+			)
 			// Insert summary as a separate system message after the last
 			// system message to keep stable instructions cacheable.
 			systemMsgIndex := findLastSystemMessageIndex(req.Messages)
