@@ -504,7 +504,7 @@ func (s *MiddleOutStrategy) TailorMessages(ctx context.Context, messages []Messa
 		keep[i] = true
 	}
 
-	// O(1) initial total via prefix sum: head tokens + all round tokens.
+	// Compute initial total once; subsequent updates are O(1) via prefix sums.
 	headTokens := prefixSum[preservedHead]
 	allRoundsTokens := countTokensForRounds(prefixSum, rounds, keep)
 	currentTotal := headTokens + allRoundsTokens
@@ -579,7 +579,7 @@ func (s *HeadOutStrategy) TailorMessages(ctx context.Context, messages []Message
 		keep[i] = true
 	}
 
-	// O(1) initial total via prefix sum.
+	// Compute initial total once; subsequent updates are O(1) via prefix sums.
 	headTokens := prefixSum[preservedHead]
 	allRoundsTokens := countTokensForRounds(prefixSum, rounds, keep)
 	currentTotal := headTokens + allRoundsTokens
@@ -644,7 +644,7 @@ func (s *TailOutStrategy) TailorMessages(ctx context.Context, messages []Message
 		keep[i] = true
 	}
 
-	// O(1) initial total via prefix sum.
+	// Compute initial total once; subsequent updates are O(1) via prefix sums.
 	headTokens := prefixSum[preservedHead]
 	allRoundsTokens := countTokensForRounds(prefixSum, rounds, keep)
 	currentTotal := headTokens + allRoundsTokens
