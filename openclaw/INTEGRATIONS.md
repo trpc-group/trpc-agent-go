@@ -142,10 +142,12 @@ Then run OpenClaw (skills are discovered automatically):
 
 ```bash
 cd openclaw
-go run ./cmd/openclaw -mode mock
+go run ./cmd/openclaw -config ./examples/stdin_chat/openclaw.yaml
 ```
 
-In a chat, ask the assistant to list and run skills. For example:
+This starts a local terminal chat (STDIN channel).
+
+Now ask the assistant to list and run skills. For example:
 
 ```
 List available skills, then run the hello skill.
