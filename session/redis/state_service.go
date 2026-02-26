@@ -116,7 +116,7 @@ func (s *Service) DeleteUserState(ctx context.Context, userKey session.UserKey, 
 		return fmt.Errorf("delete user state from hashidx failed: %w", errhashidx)
 	}
 
-	return errhashidx
+	return nil
 }
 
 // UpdateSessionState updates the session-level state directly without appending an event.
