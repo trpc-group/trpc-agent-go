@@ -102,6 +102,123 @@ end
 return result
 `)
 
+// luaSummarySetIfNewer atomically merges one filterKey summary into the stored
+// JSON map (String key) only if the incoming UpdatedAt is newer-or-equal.
+//
+// KEYS[1] = summaryKey (String containing JSON map of all filterKey summaries)
+// ARGV[1] = filterKey
+// ARGV[2] = newSummaryJSON (single Summary, e.g. {"summary":"...","updated_at":"..."})
+// ARGV[3] = TTL (seconds, 0 = no TTL)
+//
+// Returns 1 if updated, 0 if skipped (existing is newer).
+var luaSummarySetIfNewer = redis.NewScript(`
+local sumKey = KEYS[1]
+local fk = ARGV[1]
+local newSum = cjson.decode(ARGV[2])
+local ttl = tonumber(ARGV[3])
+
+local cur = redis.call('GET', sumKey)
+if not cur or cur == '' then
+    local m = {}
+    m[fk] = newSum
+    if ttl > 0 then
+        redis.call('SET', sumKey, cjson.encode(m), 'EX', ttl)
+    else
+        redis.call('SET', sumKey, cjson.encode(m))
+    end
+    return 1
+end
+
+local map = cjson.decode(cur)
+local old = map[fk]
+
+local old_ts = old and old['updated_at'] or nil
+local new_ts = newSum and newSum['updated_at'] or nil
+
+if not old or (old_ts and new_ts and old_ts <= new_ts) then
+    map[fk] = newSum
+    redis.call('SET', sumKey, cjson.encode(map), 'KEEPTTL')
+    return 1
+end
+return 0
+`)
+
+// luaLoadSessionData loads core session data in a single Lua call (except appState and tracks).
+// Tracks are loaded separately via pipeline (RT2) to avoid cjson empty-array quirks.
+//
+// KEYS layout (all {userID}-scoped, same Redis Cluster slot):
+//
+//	KEYS[1] = evtdata key (HASH)
+//	KEYS[2] = evtidx:time key (ZSET)
+//	KEYS[3] = sessionMeta key (STRING)
+//	KEYS[4] = summaryKey (STRING, JSON map of filterKey -> Summary)
+//	KEYS[5] = userStateKey (HASH)
+//
+// ARGV layout:
+//
+//	ARGV[1] = sessionTTL (seconds, 0 = no TTL)
+//	ARGV[2] = userStateTTL (seconds, 0 = no TTL)
+//
+// Returns: cjson-encoded table:
+//
+//	{
+//	  "events": [eventJSON, ...],                       -- all events in chronological order
+//	  "summary": "..." or nil,                          -- raw summary JSON string (entire map)
+//	  "userState": {"key": "value", ...} or nil,        -- user state map
+//	}
+var luaLoadSessionData = redis.NewScript(`
+local evtDataKey = KEYS[1]
+local evtTimeKey = KEYS[2]
+local sessionMetaKey = KEYS[3]
+local summaryKey = KEYS[4]
+local userStateKey = KEYS[5]
+
+local sessionTTL = tonumber(ARGV[1])
+local userStateTTL = tonumber(ARGV[2])
+
+local result = {}
+
+-- 1. Load events (chronological order)
+local eventIDs = redis.call('ZRANGE', evtTimeKey, 0, -1)
+local events = {}
+if #eventIDs > 0 then
+    local dataList = redis.call('HMGET', evtDataKey, unpack(eventIDs))
+    for _, data in ipairs(dataList) do
+        if data then table.insert(events, data) end
+    end
+end
+result['events'] = events
+
+-- 2. Load summary (String key containing entire JSON map)
+local sumData = redis.call('GET', summaryKey)
+if sumData then
+    result['summary'] = sumData
+end
+
+-- 3. Load user state
+local userState = redis.call('HGETALL', userStateKey)
+if #userState > 0 then
+    local us = {}
+    for i = 1, #userState, 2 do
+        us[userState[i]] = userState[i + 1]
+    end
+    result['userState'] = us
+end
+
+-- 4. Refresh TTLs for session-scoped keys
+if sessionTTL > 0 then
+    redis.call('EXPIRE', sessionMetaKey, sessionTTL)
+    redis.call('EXPIRE', evtDataKey, sessionTTL)
+    redis.call('EXPIRE', evtTimeKey, sessionTTL)
+    redis.call('EXPIRE', summaryKey, sessionTTL)
+end
+if userStateTTL > 0 then
+    redis.call('EXPIRE', userStateKey, userStateTTL)
+end
+
+return cjson.encode(result)
+`)
+
 // luaDeleteEvent deletes an event and its indexes.
 // KEYS[1] = evtdata key, KEYS[2] = evtidx:time key
 // ARGV[1] = eventID
@@ -173,4 +290,107 @@ if #KEYS > 0 then
     redis.call('DEL', unpack(KEYS))
 end
 return 1
+`)
+
+// luaAppendTrackEvent atomically generates an ID, stores a track event, updates the time index,
+// and registers the track name in session meta's state.tracks.
+// The sequence counter is stored as a reserved field "_seq" inside the data Hash,
+// eliminating the need for a separate key.
+// KEYS[1] = trkdata key (Hash, field=eventID value=TrackEvent JSON, field="_seq" = counter)
+// KEYS[2] = trkidx:time key (ZSet, member=eventID, score=timestamp)
+// KEYS[3] = sessionMeta key (String, for existence check and track registration)
+// ARGV[1] = TrackEvent JSON
+// ARGV[2] = timestamp (UnixNano)
+// ARGV[3] = TTL (seconds, 0 = no TTL)
+// ARGV[4] = updated tracks value (base64-encoded JSON array, to set as state.tracks)
+// Returns: generated eventID (integer) on success, 0 if session not found.
+var luaAppendTrackEvent = redis.NewScript(`
+local dataKey = KEYS[1]
+local idxKey = KEYS[2]
+local metaKey = KEYS[3]
+
+local payload = ARGV[1]
+local ts = tonumber(ARGV[2])
+local ttl = tonumber(ARGV[3])
+local tracksVal = ARGV[4]
+
+-- Check session exists and read meta
+local metaJSON = redis.call('GET', metaKey)
+if not metaJSON then
+    return 0
+end
+
+-- Generate auto-increment ID via reserved "_seq" field in the data Hash
+local id = redis.call('HINCRBY', dataKey, '_seq', 1)
+
+-- Store event data and time index
+redis.call('HSET', dataKey, id, payload)
+redis.call('ZADD', idxKey, ts, id)
+
+-- Set TTL for track keys
+if ttl > 0 then
+    redis.call('EXPIRE', dataKey, ttl)
+    redis.call('EXPIRE', idxKey, ttl)
+end
+
+-- Update session meta's state.tracks with the Go-provided value
+local meta = cjson.decode(metaJSON)
+if not meta.state or type(meta.state) ~= 'table' then
+    meta.state = {}
+end
+meta.state['tracks'] = tracksVal
+redis.call('SET', metaKey, cjson.encode(meta), 'KEEPTTL')
+
+return id
+`)
+
+// luaLoadTrackEvents loads track events by time range from Hash+ZSet structure.
+// KEYS[1] = trkdata key (Hash)
+// KEYS[2] = trkidx:time key (ZSet)
+// ARGV[1] = minScore (afterTime UnixNano, use "-inf" for no lower bound)
+// ARGV[2] = maxScore (use "+inf" for no upper bound)
+// ARGV[3] = limit (0 = no limit)
+// ARGV[4] = TTL (seconds, 0 = no TTL)
+// Returns: list of TrackEvent JSON strings in chronological order.
+var luaLoadTrackEvents = redis.NewScript(`
+local dataKey = KEYS[1]
+local idxKey = KEYS[2]
+
+local minScore = ARGV[1]
+local maxScore = ARGV[2]
+local limit = tonumber(ARGV[3])
+local ttl = tonumber(ARGV[4])
+
+-- Get event IDs in chronological order (ascending score)
+local eventIDs
+if limit > 0 then
+    -- Get the latest N by reversing, then we reverse the result
+    eventIDs = redis.call('ZREVRANGEBYSCORE', idxKey, maxScore, minScore, 'LIMIT', 0, limit)
+    -- Reverse to chronological order
+    local reversed = {}
+    for i = #eventIDs, 1, -1 do
+        table.insert(reversed, eventIDs[i])
+    end
+    eventIDs = reversed
+else
+    eventIDs = redis.call('ZRANGEBYSCORE', idxKey, minScore, maxScore)
+end
+
+local result = {}
+if #eventIDs > 0 then
+    local dataList = redis.call('HMGET', dataKey, unpack(eventIDs))
+    for _, data in ipairs(dataList) do
+        if data then
+            table.insert(result, data)
+        end
+    end
+end
+
+-- Refresh TTL
+if ttl > 0 then
+    redis.call('EXPIRE', dataKey, ttl)
+    redis.call('EXPIRE', idxKey, ttl)
+end
+
+return result
 `)

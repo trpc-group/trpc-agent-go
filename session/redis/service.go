@@ -57,9 +57,10 @@ type sessionEventPair struct {
 }
 
 type trackEventPair struct {
-	key     session.Key
-	event   *session.TrackEvent
-	version string
+	key         session.Key
+	event       *session.TrackEvent
+	version     string
+	tracksState []byte // serialized tracks state from session.State["tracks"]
 }
 
 // compatEnabled returns true if zset storage awareness is needed.
@@ -669,7 +670,7 @@ func (s *Service) startAsyncPersistWorker() {
 			defer s.persistWg.Done()
 			for trackPair := range trackEventChan {
 				ctx, cancel := context.WithTimeout(context.Background(), defaultAsyncPersistTimeout)
-				if err := s.persistTrackEvent(ctx, trackPair.version, trackPair.key, trackPair.event); err != nil {
+				if err := s.persistTrackEvent(ctx, trackPair.version, trackPair.key, trackPair.event, trackPair.tracksState); err != nil {
 					log.ErrorfContext(ctx, "async persist track event failed: %v", err)
 				}
 				cancel()
