@@ -456,6 +456,93 @@ memory:
 Security note: treat `api_key` as a secret. Prefer environment variables
 over committing config files.
 
+## Conversation compression (summary) and context shaping
+
+This section covers two "enterprise-ish" features that many OpenClaw
+users care about:
+
+- **Session summary**: compress long chat history into a short summary.
+- **Memory**: persist long-lived facts about the user (preferences, IDs,
+  frequently used paths, etc).
+
+They sound similar but solve different problems:
+
+- A **session summary** is about *this conversation thread* (one
+  `session_id`). It helps keep context short as the thread grows.
+- **memory** is about *the user* across many sessions. It helps the
+  assistant remember stable facts.
+
+### Session summarization (writes the summary)
+
+When enabled, the runner enqueues background jobs after assistant
+replies to generate a summary and store it in the session backend.
+
+Enable via YAML:
+
+```yaml
+session:
+  summary:
+    enabled: true
+    policy: "any"            # any|all; see below
+    event_threshold: 20      # summarize after N new events
+    token_threshold: 0       # optional; 0 means "ignore"
+    idle_threshold: "0s"     # optional; 0 means "ignore"
+    max_words: 200           # optional; best-effort cap
+```
+
+Policy:
+
+- `any`: summarize when **any** threshold triggers (recommended).
+- `all`: summarize only when **all** thresholds trigger.
+
+Practical tip: if you're testing locally, set `event_threshold` small
+(for example `5`) so you can see summaries appear quickly.
+
+### Session summary injection (uses the summary)
+
+Generating a summary is only half of the story. You also need to tell
+the agent to **use** that summary as part of the model context:
+
+```yaml
+agent:
+  add_session_summary: true
+```
+
+What this does:
+
+1) OpenClaw prepends the latest session summary as a **system** message.
+2) It then only includes the **incremental** messages after the summary,
+   instead of sending the entire history every time.
+
+This is the main way to reduce prompt token usage in long-running
+threads.
+
+### Preload memories into the prompt (optional)
+
+If you use a memory backend, you can preload recent memories into the
+system prompt:
+
+```yaml
+agent:
+  preload_memory: 10   # 0=off, -1=all, N>0=most recent N
+```
+
+Recommendation: keep this small (like 10–50) so it stays readable and
+doesn't dominate the prompt.
+
+### Cap raw history when you do not use summary (optional)
+
+If you do **not** enable `agent.add_session_summary`, you can still cap
+how much raw history is sent to the model:
+
+```yaml
+agent:
+  max_history_runs: 50   # 0=unlimited
+```
+
+Note: `max_history_runs` is only applied when `add_session_summary` is
+false.
+
 ## Tools: providers vs ToolSets
 
 OpenClaw can expose tools to the agent in two ways:

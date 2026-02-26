@@ -439,6 +439,43 @@ session:
     dsn: "postgres://..."
 ```
 
+### Optional: session summaries (compression)
+
+If you enable session summarization in config:
+
+```yaml
+session:
+  summary:
+    enabled: true
+```
+
+OpenClaw creates an LLM-based `summary.SessionSummarizer` and passes it to
+your backend factory via `deps.Summarizer`.
+
+As a session backend author, you should treat this as "optional
+middleware":
+
+- If `deps.Summarizer == nil`, do nothing (feature disabled).
+- If `deps.Summarizer != nil`, wire it into your session service so
+  background summary jobs can run.
+
+Example pattern:
+
+```go
+if deps.Summarizer != nil {
+	// backend-specific option to enable summarization.
+	opts = append(opts, yourbackend.WithSummarizer(deps.Summarizer))
+}
+```
+
+Also note: generating summaries only stores them in the session backend.
+To actually **use** the summary during runs, enable:
+
+```yaml
+agent:
+  add_session_summary: true
+```
+
 ## Memory backend plugin (centralized user memory storage)
 
 Memory backends implement `memory.Service` (from `trpc-agent-go`).

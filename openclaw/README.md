@@ -644,7 +644,15 @@ They are configured via `session.config` / `memory.config`. See
 ### Session summarization (optional)
 
 The runner can enqueue background session summarization jobs after
-assistant replies. To enable:
+assistant replies.
+
+Two related knobs:
+
+- `session.summary`: generate and store summaries in the session backend.
+- `agent.add_session_summary`: prepend the latest summary to the model
+  context (and only send incremental history after the summary).
+
+To enable both:
 
 ```bash
 cd openclaw
@@ -652,7 +660,8 @@ go run ./cmd/openclaw \
   -mode openai \
   -session-summary \
   -session-summary-policy any \
-  -session-summary-events 20
+  -session-summary-events 20 \
+  -add-session-summary
 ```
 
 ### Auto memory extraction (optional)
