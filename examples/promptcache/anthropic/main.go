@@ -246,13 +246,13 @@ func createTimeTool() tool.Tool {
 
 // turnUsage records the cache metrics for a single request turn.
 type turnUsage struct {
-	Turn               int
-	Phase              string
-	Query              string
-	InputTokens        int // new tokens (not cached)
-	CacheReadTokens    int // tokens served from cache
+	Turn                int
+	Phase               string
+	Query               string
+	InputTokens         int // new tokens (not cached)
+	CacheReadTokens     int // tokens served from cache
 	CacheCreationTokens int // tokens written to cache
-	Elapsed            time.Duration
+	Elapsed             time.Duration
 }
 
 func (t *turnUsage) totalInput() int {
