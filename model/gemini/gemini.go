@@ -528,10 +528,10 @@ func (m *Model) convertTools(tools map[string]tool.Tool) []*genai.Tool {
 		if decl.InputSchema != nil {
 			// Avoid sending `"parametersJsonSchema": null` to Gemini when a tool has no input schema.
 			// `ParametersJsonSchema` is `any`, so assigning a typed nil pointer would still marshal as null.
-			funcDeclaration.ParametersJsonSchema = normalizeToolSchema(decl.InputSchema)
+			funcDeclaration.ParametersJsonSchema = normalizeToolSchema(decl.Name, "input", decl.InputSchema)
 		}
 		if decl.OutputSchema != nil {
-			funcDeclaration.ResponseJsonSchema = normalizeToolSchema(decl.OutputSchema)
+			funcDeclaration.ResponseJsonSchema = normalizeToolSchema(decl.Name, "output", decl.OutputSchema)
 		}
 		result = append(result, &genai.Tool{
 			FunctionDeclarations: []*genai.FunctionDeclaration{
@@ -542,7 +542,7 @@ func (m *Model) convertTools(tools map[string]tool.Tool) []*genai.Tool {
 	return result
 }
 
-func normalizeToolSchema(schema *tool.Schema) any {
+func normalizeToolSchema(toolName, schemaKind string, schema *tool.Schema) any {
 	if schema == nil {
 		return nil
 	}
@@ -550,6 +550,12 @@ func normalizeToolSchema(schema *tool.Schema) any {
 	// without mutating shared schema instances.
 	schemaBytes, err := json.Marshal(schema)
 	if err != nil {
+		log.Warnf(
+			"failed to marshal %s schema for tool %q: %v",
+			schemaKind,
+			toolName,
+			err,
+		)
 		return map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
@@ -557,6 +563,12 @@ func normalizeToolSchema(schema *tool.Schema) any {
 	}
 	var out map[string]any
 	if err := json.Unmarshal(schemaBytes, &out); err != nil {
+		log.Warnf(
+			"failed to unmarshal %s schema for tool %q: %v",
+			schemaKind,
+			toolName,
+			err,
+		)
 		return map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	gomock "go.uber.org/mock/gomock"
 	"google.golang.org/genai"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -167,10 +168,10 @@ func TestModel_convertMessages(t *testing.T) {
 	}
 }
 
-var schema *tool.Schema
-
 // Tool implements  tool.Declaration
 type Tool struct {
+	inputSchema  *tool.Schema
+	outputSchema *tool.Schema
 }
 
 // tool.Declaration implements  tool.Declaration
@@ -178,33 +179,86 @@ func (t *Tool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name:         "tool",
 		Description:  "tool description",
-		InputSchema:  schema,
-		OutputSchema: schema,
+		InputSchema:  t.inputSchema,
+		OutputSchema: t.outputSchema,
 	}
 }
 
 func TestModel_convertTools_NilInputSchemaIsOmitted(t *testing.T) {
 	m := &Model{}
-	schema = nil
 
 	converted := m.convertTools(map[string]tool.Tool{
-		"tool": &Tool{},
+		"tool": &Tool{
+			outputSchema: &tool.Schema{Type: "object"},
+		},
 	})
-	if !assert.Len(t, converted, 1) {
-		return
-	}
-	if !assert.Len(t, converted[0].FunctionDeclarations, 1) {
-		return
-	}
+	require.Len(t, converted, 1)
+	require.Len(t, converted[0].FunctionDeclarations, 1)
 
 	fd := converted[0].FunctionDeclarations[0]
-	assert.Equal(t, "tool", fd.Name)
-	assert.Nil(t, fd.ParametersJsonSchema)
+	require.Equal(t, "tool", fd.Name)
+	require.Nil(t, fd.ParametersJsonSchema)
+	require.NotNil(t, fd.ResponseJsonSchema)
 
 	body, err := json.Marshal(fd)
-	if assert.NoError(t, err) {
-		assert.NotContains(t, string(body), "parametersJsonSchema")
-	}
+	require.NoError(t, err)
+	require.NotContains(t, string(body), "parametersJsonSchema")
+}
+
+func TestModel_convertTools_ObjectSchemasAreNormalized(t *testing.T) {
+	m := &Model{}
+
+	converted := m.convertTools(map[string]tool.Tool{
+		"tool": &Tool{
+			inputSchema: &tool.Schema{
+				Type: "object",
+			},
+		},
+	})
+	require.Len(t, converted, 1)
+	require.Len(t, converted[0].FunctionDeclarations, 1)
+
+	fd := converted[0].FunctionDeclarations[0]
+	require.NotNil(t, fd.ParametersJsonSchema)
+	require.Nil(t, fd.ResponseJsonSchema)
+
+	params, ok := fd.ParametersJsonSchema.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "object", params["type"])
+	require.Contains(t, params, "properties")
+}
+
+func TestNormalizeToolSchema_ObjectAddsEmptyProperties(t *testing.T) {
+	normalized := normalizeToolSchema(
+		"tool",
+		"input",
+		&tool.Schema{Type: "object"},
+	)
+
+	out, ok := normalized.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "object", out["type"])
+	props, ok := out["properties"].(map[string]any)
+	require.True(t, ok)
+	require.Empty(t, props)
+}
+
+func TestNormalizeToolSchema_MarshalErrorFallsBack(t *testing.T) {
+	normalized := normalizeToolSchema(
+		"tool",
+		"input",
+		&tool.Schema{
+			Type:                 "object",
+			AdditionalProperties: func() {},
+		},
+	)
+
+	out, ok := normalized.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "object", out["type"])
+	props, ok := out["properties"].(map[string]any)
+	require.True(t, ok)
+	require.Empty(t, props)
 }
 
 func TestModel_buildChatConfig(t *testing.T) {
