@@ -253,6 +253,10 @@ func (c *Client) ListSessions(
 		return nil, err
 	}
 
+	slices.SortFunc(sessStates, func(a, b *SessionState) int {
+		return b.UpdatedAt.Compare(a.UpdatedAt)
+	})
+
 	appState, err := util.ProcessStateCmd(appStateCmd)
 	if err != nil {
 		return nil, err
@@ -278,6 +282,9 @@ func (c *Client) ListSessions(
 	trackEvents, err := c.getTrackEvents(ctx, sessionKeys, sessStates, limit, afterTime)
 	if err != nil {
 		return nil, fmt.Errorf("get track events: %w", err)
+	}
+	if len(trackEvents) != len(sessStates) {
+		return nil, fmt.Errorf("track events count mismatch: got %d, want %d", len(trackEvents), len(sessStates))
 	}
 
 	for i, sessState := range sessStates {
@@ -841,7 +848,7 @@ func collectTrackQueryResults(queries []*trackQuery, sessionCount int) ([]map[se
 // TrimConversations
 // =============================================================================
 
-const trimScanBatchSize = 100
+const trimScanBatchSize int64 = 32
 
 // TrimConversations trims recent conversations and returns the deleted events.
 // A conversation is defined as all events sharing the same RequestID.
