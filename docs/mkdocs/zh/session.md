@@ -747,15 +747,25 @@ track:{appName}:{userID}:{sessionID}:{track}  -> SortedSet {score: timestamp, va
 **HashIdx 存储方式（新）：**
 
 ```
-appstate:{appName}                                         -> Hash {key: value}
-hashidx:userstate:appName:{userID}                         -> Hash {key: value}
-hashidx:meta:appName:{userID}:{sessionID}                  -> Hash {session metadata fields}
-hashidx:evtdata:appName:{userID}:{sessionID}               -> Hash {eventID: Event(JSON)}
-hashidx:evtidx:time:appName:{userID}:{sessionID}           -> SortedSet {score: timestamp, member: eventID}
-hashidx:sesssum:appName:{userID}:{sessionID}               -> Hash {filterKey: Summary(JSON)}
-hashidx:track:appName:{userID}:{sessionID}:{track}         -> SortedSet {score: timestamp, value: TrackEvent(JSON)}
-hashidx:sessidx:appName:{userID}                           -> SortedSet {score: createTime, member: sessionID}
+appstate:{appName}                                         -> Hash   {key: value}
+hashidx:userstate:appName:{userID}                         -> Hash   {key: value}
+hashidx:meta:appName:{userID}:sessionID                    -> String sessionMeta(JSON)
+hashidx:evtdata:appName:{userID}:sessionID                 -> Hash   {eventID: Event(JSON), _seq: counter}
+hashidx:evtidx:time:appName:{userID}:sessionID             -> ZSet   {score: timestamp(UnixNano), member: eventID}
+hashidx:sesssum:appName:{userID}:sessionID                 -> String JSON(map[filterKey]*Summary)
+hashidx:trkdata:appName:{userID}:sessionID:trackName       -> Hash   {eventID: TrackEvent(JSON), _seq: counter}
+hashidx:trkidx:time:appName:{userID}:sessionID:trackName   -> ZSet   {score: timestamp(UnixNano), member: eventID}
 ```
+
+> **Hash Tag 策略**：Session 相关 key 中的 `{userID}` 是 Redis Cluster hash tag，保证同一用户的所有数据落在同一个 slot，从而支持 Lua 脚本跨 key 原子操作。AppState 使用 `{appName}` 作为 hash tag。
+>
+> **数据与索引分离**：Event 和 Track 均采用 Hash（数据）+ ZSet（时间索引）的双 key 结构。ZSet 中只存储 eventID 作为 member（而非完整 JSON），避免了大 value 导致的 ZSet 内存膨胀。读取时先从 ZSet 获取 eventID 列表，再通过 HMGET 批量获取数据。
+>
+> **Session 元数据**：`hashidx:meta` 使用 String 类型存储完整的 sessionMeta JSON（包含 id、appName、userID、state、createdAt、updatedAt），通过 SetNX 保证创建的原子性。
+>
+> **Summary 存储**：`hashidx:sesssum` 使用 String 类型存储整个 filterKey → Summary 的 JSON map，通过 Lua 脚本实现 set-if-newer 的原子更新语义。
+>
+> **Track 自增 ID**：Track data Hash 中使用保留字段 `_seq`（通过 HINCRBY）作为自增计数器生成 eventID，无需额外的 key。
 
 > **AppState 兼容**：两种存储方式的 `appstate:{appName}` Key 格式和内容完全一致，迁移时无需额外处理。
 

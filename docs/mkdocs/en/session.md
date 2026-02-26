@@ -740,15 +740,25 @@ track:{appName}:{userID}:{sessionID}:{track}  -> SortedSet {score: timestamp, va
 **HashIdx Storage Format (new):**
 
 ```
-appstate:{appName}                                         -> Hash {key: value}
-hashidx:userstate:appName:{userID}                         -> Hash {key: value}
-hashidx:meta:appName:{userID}:{sessionID}                  -> Hash {session metadata fields}
-hashidx:evtdata:appName:{userID}:{sessionID}               -> Hash {eventID: Event(JSON)}
-hashidx:evtidx:time:appName:{userID}:{sessionID}           -> SortedSet {score: timestamp, member: eventID}
-hashidx:sesssum:appName:{userID}:{sessionID}               -> Hash {filterKey: Summary(JSON)}
-hashidx:track:appName:{userID}:{sessionID}:{track}         -> SortedSet {score: timestamp, value: TrackEvent(JSON)}
-hashidx:sessidx:appName:{userID}                           -> SortedSet {score: createTime, member: sessionID}
+appstate:{appName}                                         -> Hash   {key: value}
+hashidx:userstate:appName:{userID}                         -> Hash   {key: value}
+hashidx:meta:appName:{userID}:sessionID                    -> String sessionMeta(JSON)
+hashidx:evtdata:appName:{userID}:sessionID                 -> Hash   {eventID: Event(JSON), _seq: counter}
+hashidx:evtidx:time:appName:{userID}:sessionID             -> ZSet   {score: timestamp(UnixNano), member: eventID}
+hashidx:sesssum:appName:{userID}:sessionID                 -> String JSON(map[filterKey]*Summary)
+hashidx:trkdata:appName:{userID}:sessionID:trackName       -> Hash   {eventID: TrackEvent(JSON), _seq: counter}
+hashidx:trkidx:time:appName:{userID}:sessionID:trackName   -> ZSet   {score: timestamp(UnixNano), member: eventID}
 ```
+
+> **Hash Tag Strategy**: `{userID}` in session-related keys is a Redis Cluster hash tag, ensuring all data for the same user lands in the same slot, enabling Lua script atomic operations across keys. AppState uses `{appName}` as its hash tag.
+>
+> **Data-Index Separation**: Both Event and Track use a Hash (data) + ZSet (time index) dual-key structure. The ZSet stores only eventIDs as members (not full JSON), avoiding memory bloat from large values. Reads first fetch eventID lists from the ZSet, then batch-retrieve data via HMGET.
+>
+> **Session Metadata**: `hashidx:meta` uses String type to store the complete sessionMeta JSON (containing id, appName, userID, state, createdAt, updatedAt). SetNX ensures atomic creation.
+>
+> **Summary Storage**: `hashidx:sesssum` uses String type to store the entire filterKey-to-Summary JSON map. A Lua script implements atomic set-if-newer update semantics.
+>
+> **Track Auto-Increment ID**: The Track data Hash uses a reserved field `_seq` (via HINCRBY) as an auto-increment counter for generating eventIDs, eliminating the need for a separate key.
 
 > **AppState Compatibility**: The `appstate:{appName}` key format and content are identical across both storage formats, so no extra handling is needed during migration.
 
