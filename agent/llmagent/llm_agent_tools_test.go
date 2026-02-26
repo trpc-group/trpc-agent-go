@@ -372,6 +372,18 @@ func TestLLMAgent_FilterTools_PassesContextToToolSets(t *testing.T) {
 	if !foundNoCtx {
 		t.Fatalf("expected %q in Tools output", expectedNoCtx)
 	}
+
+	filteredNil := agt.FilterTools(nil)
+	foundNoCtx = false
+	for _, tl := range filteredNil {
+		if tl.Declaration().Name == expectedNoCtx {
+			foundNoCtx = true
+			break
+		}
+	}
+	if !foundNoCtx {
+		t.Fatalf("missing %q from FilterTools(nil)", expectedNoCtx)
+	}
 }
 
 func TestLLMAgent_AddToolSet_DynamicTools(t *testing.T) {
