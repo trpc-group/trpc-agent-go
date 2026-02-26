@@ -41,6 +41,10 @@ type stubSpan struct {
 	called bool
 }
 
+func (s *stubSpan) IsRecording() bool {
+	return true
+}
+
 func (s *stubSpan) SetAttributes(kv ...attribute.KeyValue) {
 	s.called = true
 	// Forward to the underlying noop span so behaviour remains unchanged.
@@ -74,6 +78,10 @@ type recordingSpan struct {
 	status         codes.Code
 	statusDesc     string
 	recordedErrors []error
+}
+
+func (s *recordingSpan) IsRecording() bool {
+	return true
 }
 
 func (s *recordingSpan) SetAttributes(kv ...attribute.KeyValue) {
@@ -238,6 +246,16 @@ func TestTraceFunctions_NoPanics(t *testing.T) {
 		TimeToFirstToken: 0,
 	})
 	require.True(t, span.called, "expected SetAttributes in TraceChat")
+}
+
+func TestTraceFunctions_NonRecordingSpan_ReturnsEarly(t *testing.T) {
+	_, span := trace.NewNoopTracerProvider().Tracer("test").Start(context.Background(), "op")
+	require.False(t, span.IsRecording(), "expected noop span to be non-recording")
+
+	TraceWorkflow(span, &Workflow{Name: "wf", ID: "wf-1"})
+	TraceBeforeInvokeAgent(span, nil, "", "", nil)
+	TraceAfterInvokeAgent(span, nil, nil, 0)
+	TraceChat(span, nil)
 }
 
 func TestTraceBeforeAfter_Tool_Merged_Chat_Embedding(t *testing.T) {

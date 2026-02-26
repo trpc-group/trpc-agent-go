@@ -92,6 +92,9 @@ func NewWorkflowSpanName(workflowName string) string {
 
 // TraceWorkflow traces the workflow.
 func TraceWorkflow(span trace.Span, workflow *Workflow) {
+	if !span.IsRecording() {
+		return
+	}
 	span.SetAttributes(attribute.String(KeyGenAIOperationName, OperationWorkflow))
 	span.SetAttributes(attribute.String(KeyGenAIWorkflowName, workflow.Name))
 	span.SetAttributes(attribute.String(KeyGenAIWorkflowID, workflow.ID))
@@ -289,6 +292,9 @@ func TraceMergedToolCalls(span trace.Span, rspEvent *event.Event) {
 
 // TraceBeforeInvokeAgent traces the before invocation of an agent.
 func TraceBeforeInvokeAgent(span trace.Span, invoke *agent.Invocation, agentDescription, instructions string, genConfig *model.GenerationConfig) {
+	if !span.IsRecording() {
+		return
+	}
 	if invoke != nil && len(invoke.RunOptions.SpanAttributes) > 0 {
 		span.SetAttributes(invoke.RunOptions.SpanAttributes...)
 	}
@@ -346,6 +352,9 @@ type TokenUsage struct {
 
 // TraceAfterInvokeAgent traces the after invocation of an agent.
 func TraceAfterInvokeAgent(span trace.Span, rspEvent *event.Event, tokenUsage *TokenUsage, timeToFirstToken time.Duration) {
+	if !span.IsRecording() {
+		return
+	}
 	if rspEvent == nil {
 		return
 	}
@@ -409,6 +418,9 @@ func NewSummarizeTaskType(name string) string {
 
 // TraceChat traces the invocation of an LLM call.
 func TraceChat(span trace.Span, attributes *TraceChatAttributes) {
+	if !span.IsRecording() {
+		return
+	}
 	attrs := []attribute.KeyValue{
 		attribute.String(KeyGenAISystem, SystemTRPCGoAgent),
 		attribute.String(KeyGenAIOperationName, OperationChat),
