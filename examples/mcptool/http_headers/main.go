@@ -179,7 +179,7 @@ func (c *httpHeadersChat) setup(ctx context.Context) error {
 		// Approach B (alternative): WithToolSets([]tool.ToolSet{toolSet})
 		//   - By default, tool discovery uses context.Background(), so
 		//     initialize/tools/list won't see ctx values.
-		//   - With WithRefreshToolSetsOnRun(true), tool discovery uses the
+		//   - WithRefreshToolSetsOnRun(true), tool discovery uses the
 		//     run context (but refreshes tools every run).
 		//   - tools/call will use the run context either way.
 		//   - Suitable when you only need static headers (e.g., API keys)
