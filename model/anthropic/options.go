@@ -20,11 +20,10 @@ import (
 )
 
 const (
-	defaultChannelBufferSize  = 256
-	defaultMinCacheableTokens = 1024  // Minimum tokens to enable caching
-	defaultCacheSystemPrompt  = false // Disabled by default; opt-in for system prompt caching
-	defaultCacheTools         = false // Disabled by default; opt-in for tools caching
-	defaultCacheMessages      = false // Disabled by default; opt-in for multi-turn conversation caching
+	defaultChannelBufferSize = 256
+	defaultCacheSystemPrompt = false // Disabled by default; opt-in for system prompt caching
+	defaultCacheTools        = false // Disabled by default; opt-in for tools caching
+	defaultCacheMessages     = false // Disabled by default; opt-in for multi-turn conversation caching
 )
 
 // ChatRequestCallbackFunc is the function type for the chat request callback.
@@ -90,9 +89,6 @@ type options struct {
 	tokenTailoringConfig *model.TokenTailoringConfig
 
 	// Prompt cache configuration
-	// minCacheableTokens is the minimum token count to enable caching for a block.
-	// Anthropic requires at least 1024 tokens for cache breakpoints.
-	minCacheableTokens int
 	// cacheSystemPrompt controls whether to cache system prompts.
 	cacheSystemPrompt bool
 	// cacheTools controls whether to cache tool definitions.
@@ -116,10 +112,9 @@ var (
 			MaxInputTokensRatio:    imodel.DefaultMaxInputTokensRatio,
 		},
 		// Prompt cache defaults - all disabled by default, controlled by three sub-options
-		minCacheableTokens: defaultMinCacheableTokens,
-		cacheSystemPrompt:  defaultCacheSystemPrompt,
-		cacheTools:         defaultCacheTools,
-		cacheMessages:      defaultCacheMessages,
+		cacheSystemPrompt: defaultCacheSystemPrompt,
+		cacheTools:        defaultCacheTools,
+		cacheMessages:     defaultCacheMessages,
 	}
 )
 
@@ -288,20 +283,6 @@ func WithTokenTailoringConfig(config *model.TokenTailoringConfig) Option {
 			config.MaxInputTokensRatio = imodel.DefaultMaxInputTokensRatio
 		}
 		opts.tokenTailoringConfig = config
-	}
-}
-
-// WithMinCacheableTokens sets the minimum token count required to enable caching.
-// Anthropic requires at least 1024 tokens for cache breakpoints.
-// This option allows you to set a higher threshold if desired.
-//
-// Default: 1024 tokens
-func WithMinCacheableTokens(tokens int) Option {
-	return func(opts *options) {
-		if tokens < 1024 {
-			tokens = 1024 // Anthropic's minimum requirement
-		}
-		opts.minCacheableTokens = tokens
 	}
 }
 

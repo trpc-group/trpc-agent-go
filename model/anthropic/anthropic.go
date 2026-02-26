@@ -55,10 +55,9 @@ type Model struct {
 	safetyMarginRatio      float64
 	maxInputTokensRatio    float64
 	// Prompt cache configuration
-	minCacheableTokens int
-	cacheSystemPrompt  bool
-	cacheTools         bool
-	cacheMessages      bool
+	cacheSystemPrompt bool
+	cacheTools        bool
+	cacheMessages     bool
 }
 
 // New creates a new Anthropic model adapter.
@@ -104,7 +103,6 @@ func New(name string, opts ...Option) *Model {
 		outputTokensFloor:          o.tokenTailoringConfig.OutputTokensFloor,
 		safetyMarginRatio:          o.tokenTailoringConfig.SafetyMarginRatio,
 		maxInputTokensRatio:        o.tokenTailoringConfig.MaxInputTokensRatio,
-		minCacheableTokens:         o.minCacheableTokens,
 		cacheSystemPrompt:          o.cacheSystemPrompt,
 		cacheTools:                 o.cacheTools,
 		cacheMessages:              o.cacheMessages,

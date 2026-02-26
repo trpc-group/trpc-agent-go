@@ -1499,40 +1499,6 @@ func TestPromptCache_DefaultDisabled(t *testing.T) {
 	assert.False(t, m.cacheSystemPrompt, "cache system prompt should be disabled by default")
 	assert.False(t, m.cacheTools, "cache tools should be disabled by default")
 	assert.False(t, m.cacheMessages, "cache messages should be disabled by default")
-	assert.Equal(t, 1024, m.minCacheableTokens, "min cacheable tokens should be 1024 by default")
-}
-
-// TestWithMinCacheableTokens tests the WithMinCacheableTokens option.
-func TestWithMinCacheableTokens(t *testing.T) {
-	tests := []struct {
-		name     string
-		tokens   int
-		expected int
-	}{
-		{
-			name:     "set valid tokens",
-			tokens:   2048,
-			expected: 2048,
-		},
-		{
-			name:     "set below minimum - should clamp to 1024",
-			tokens:   500,
-			expected: 1024,
-		},
-		{
-			name:     "set exactly 1024",
-			tokens:   1024,
-			expected: 1024,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			opts := &options{}
-			WithMinCacheableTokens(tt.tokens)(opts)
-			assert.Equal(t, tt.expected, opts.minCacheableTokens)
-		})
-	}
 }
 
 // TestWithCacheSystemPrompt tests the WithCacheSystemPrompt option.
