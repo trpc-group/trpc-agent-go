@@ -416,6 +416,12 @@ func parseRunOptions(args []string) (runOptions, error) {
 	if err := fs.Parse(args); err != nil {
 		return runOptions{}, &exitError{Code: 2, Err: err}
 	}
+	if len(fs.Args()) > 0 {
+		return runOptions{}, &exitError{
+			Code: 2,
+			Err:  unexpectedArgsError(fs.Args()),
+		}
+	}
 
 	setFlags := make(map[string]struct{})
 	fs.Visit(func(f *flag.Flag) {
@@ -445,6 +451,24 @@ func parseRunOptions(args []string) (runOptions, error) {
 	}
 
 	return opts, nil
+}
+
+func unexpectedArgsError(args []string) error {
+	if len(args) == 0 {
+		return errors.New("unexpected args")
+	}
+	joined := strings.Join(args, " ")
+	hint := ""
+	switch args[0] {
+	case subcmdPairing:
+		hint = "did you mean: openclaw pairing ...?"
+	case subcmdDoctor:
+		hint = "did you mean: openclaw doctor ...?"
+	}
+	if hint == "" {
+		return fmt.Errorf("unexpected args: %s", joined)
+	}
+	return fmt.Errorf("unexpected args: %s (%s)", joined, hint)
 }
 
 func resolveConfigPath(raw string) string {

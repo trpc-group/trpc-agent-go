@@ -98,3 +98,53 @@ func TestRunPairingListAndApprove_WithStubProbe(t *testing.T) {
 	require.Contains(t, string(out), "CODE")
 	require.Contains(t, string(out), "approved user: u1")
 }
+
+func TestRunPairing_FlagsAfterAction(t *testing.T) {
+	old := probeBotInfo
+	t.Cleanup(func() { probeBotInfo = old })
+	probeBotInfo = func(
+		_ context.Context,
+		_ string,
+	) (tgch.BotInfo, error) {
+		return tgch.BotInfo{ID: 123, Username: "bot"}, nil
+	}
+
+	stateDir := t.TempDir()
+	store, err := openPairingStore(context.Background(), "x", stateDir)
+	require.NoError(t, err)
+
+	code, approved, err := store.Request(context.Background(), "u1")
+	require.NoError(t, err)
+	require.False(t, approved)
+
+	stdout := os.Stdout
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stdout = w
+	t.Cleanup(func() { os.Stdout = stdout })
+
+	require.Equal(
+		t,
+		0,
+		runPairing([]string{
+			"list",
+			"-telegram-token", "x",
+			"-state-dir", stateDir,
+		}),
+	)
+	require.Equal(
+		t,
+		0,
+		runPairing([]string{
+			"approve", code,
+			"-telegram-token", "x",
+			"-state-dir", stateDir,
+		}),
+	)
+
+	require.NoError(t, w.Close())
+	out, err := io.ReadAll(r)
+	require.NoError(t, err)
+	require.Contains(t, string(out), "CODE")
+	require.Contains(t, string(out), "approved user: u1")
+}

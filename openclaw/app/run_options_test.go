@@ -239,6 +239,17 @@ memory:
 	require.Equal(t, 10*time.Minute, opts.MemoryAutoTimeInterval)
 }
 
+func TestParseRunOptions_UnexpectedArgsFails(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseRunOptions([]string{"pairing", "list"})
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 2, exitErr.Code)
+}
+
 func TestParseRunOptions_MultipleYAMLDocsFails(t *testing.T) {
 	t.Parallel()
 

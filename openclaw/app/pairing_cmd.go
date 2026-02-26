@@ -28,6 +28,9 @@ import (
 const (
 	subcmdPairing = "pairing"
 
+	flagTelegramToken = "telegram-token"
+	flagStateDir      = "state-dir"
+
 	pairingCmdList    = "list"
 	pairingCmdApprove = "approve"
 )
@@ -44,17 +47,24 @@ func runPairing(args []string) int {
 	fs.SetOutput(os.Stderr)
 
 	token := fs.String(
-		"telegram-token",
+		flagTelegramToken,
 		"",
 		"Telegram bot token (required)",
 	)
 	stateDir := fs.String(
-		"state-dir",
+		flagStateDir,
 		"",
 		"State dir (default: $HOME/.trpc-agent-go/openclaw)",
 	)
 
-	if err := fs.Parse(args); err != nil {
+	normalizedArgs, err := normalizePairingArgs(args)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		printPairingUsage()
+		return 2
+	}
+
+	if err := fs.Parse(normalizedArgs); err != nil {
 		return 2
 	}
 
@@ -85,12 +95,17 @@ func runPairing(args []string) int {
 
 func printPairingUsage() {
 	fmt.Fprintln(os.Stderr, "Usage:")
-	fmt.Fprintln(os.Stderr,
-		"  openclaw pairing list -telegram-token <TOKEN> [-state-dir <DIR>]",
+	fmt.Fprintf(
+		os.Stderr,
+		"  openclaw pairing list -%s <TOKEN> [-%s <DIR>]\n",
+		flagTelegramToken,
+		flagStateDir,
 	)
-	fmt.Fprintln(os.Stderr,
-		"  openclaw pairing approve <CODE> -telegram-token <TOKEN>"+
-			" [-state-dir <DIR>]",
+	fmt.Fprintf(
+		os.Stderr,
+		"  openclaw pairing approve <CODE> -%s <TOKEN> [-%s <DIR>]\n",
+		flagTelegramToken,
+		flagStateDir,
 	)
 }
 
@@ -160,7 +175,7 @@ func openPairingStore(
 	rawStateDir string,
 ) (*pairing.FileStore, error) {
 	if strings.TrimSpace(token) == "" {
-		return nil, errors.New("pairing: missing -telegram-token")
+		return nil, errors.New("pairing: missing -" + flagTelegramToken)
 	}
 
 	resolvedStateDir, err := resolveStateDir(rawStateDir)
@@ -179,4 +194,51 @@ func openPairingStore(
 	}
 
 	return pairing.NewFileStore(path)
+}
+
+func normalizePairingArgs(args []string) ([]string, error) {
+	var (
+		flagArgs []string
+		posArgs  []string
+	)
+
+	for i := 0; i < len(args); {
+		arg := args[i]
+		if arg == "--" {
+			posArgs = append(posArgs, args[i+1:]...)
+			break
+		}
+		if !strings.HasPrefix(arg, "-") || arg == "-" {
+			posArgs = append(posArgs, arg)
+			i++
+			continue
+		}
+
+		name := flagName(arg)
+		if strings.Contains(arg, "=") ||
+			(name != flagTelegramToken && name != flagStateDir) {
+			flagArgs = append(flagArgs, arg)
+			i++
+			continue
+		}
+
+		if i+1 >= len(args) {
+			return nil, fmt.Errorf("pairing: missing value for %s", arg)
+		}
+		flagArgs = append(flagArgs, arg, args[i+1])
+		i += 2
+	}
+
+	out := make([]string, 0, len(args))
+	out = append(out, flagArgs...)
+	out = append(out, posArgs...)
+	return out, nil
+}
+
+func flagName(arg string) string {
+	trimmed := strings.TrimLeft(arg, "-")
+	if idx := strings.IndexByte(trimmed, '='); idx >= 0 {
+		return trimmed[:idx]
+	}
+	return trimmed
 }
