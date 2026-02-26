@@ -246,14 +246,23 @@ func WriteSummaryFile(cfg BenchmarkConfig, result *evaluation.EvaluationResult, 
 }
 
 func parseTurnIndex(invocationID string) int {
-	// invocationID is like "turn-01".
-	parts := strings.Split(invocationID, "-")
-	if len(parts) != 2 {
+	// invocationID is expected to end with a numeric suffix, e.g.
+	// - "trig-01"
+	// - "pow-09"
+	// - "log-exp-01" (note: multiple '-' in prefix)
+	// We parse the last hyphen-separated segment as the turn index.
+	invocationID = strings.TrimSpace(invocationID)
+	if invocationID == "" {
 		return 0
 	}
+	idx := strings.LastIndex(invocationID, "-")
+	if idx < 0 || idx == len(invocationID)-1 {
+		return 0
+	}
+	suffix := invocationID[idx+1:]
 	// tolerate leading zeros
 	var n int
-	for _, ch := range parts[1] {
+	for _, ch := range suffix {
 		if ch < '0' || ch > '9' {
 			return 0
 		}
