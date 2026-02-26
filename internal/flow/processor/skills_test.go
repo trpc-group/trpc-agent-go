@@ -604,6 +604,110 @@ func TestSkillsToolResultRequestProcessor_FallbackSystemMessageAdded(
 	}
 }
 
+func TestSkillsToolResultRequestProcessor_SessionSummary_DisablesFallback(
+	t *testing.T,
+) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "calc", Description: "math"}},
+		full: map[string]*skill.Skill{
+			"calc": {Summary: skill.Summary{Name: "calc"}, Body: "B"},
+		},
+	}
+
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.StateKeyLoadedPrefix + "calc": []byte("1"),
+			},
+		},
+	}
+	inv.SetState(contentHasSessionSummaryStateKey, true)
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("sys"),
+			model.NewUserMessage("u"),
+		},
+	}
+
+	p := NewSkillsToolResultRequestProcessor(
+		repo,
+		WithSkillsToolResultLoadMode(SkillLoadModeSession),
+	)
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	for _, m := range req.Messages {
+		if m.Role != model.RoleSystem {
+			continue
+		}
+		require.NotContains(t, m.Content, skillsLoadedContextHeader)
+	}
+}
+
+func TestSkillsToolResultRequestProcessor_SessionSummary_AllowsFallback(
+	t *testing.T,
+) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "calc", Description: "math"}},
+		full: map[string]*skill.Skill{
+			"calc": {Summary: skill.Summary{Name: "calc"}, Body: "B"},
+		},
+	}
+
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.StateKeyLoadedPrefix + "calc": []byte("1"),
+			},
+		},
+	}
+	inv.SetState(contentHasSessionSummaryStateKey, true)
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("sys"),
+			model.NewUserMessage("u"),
+		},
+	}
+
+	p := NewSkillsToolResultRequestProcessor(
+		repo,
+		WithSkillsToolResultLoadMode(SkillLoadModeSession),
+		WithSkipSkillsFallbackOnSessionSummary(false),
+	)
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	var matchCount int
+	for _, m := range req.Messages {
+		if m.Role != model.RoleSystem {
+			continue
+		}
+		if strings.Contains(m.Content, skillsLoadedContextHeader) {
+			matchCount++
+			require.Contains(t, m.Content, "[Loaded] calc")
+			require.Contains(t, m.Content, "B")
+		}
+	}
+	require.Equal(t, 1, matchCount)
+}
+
+func TestHasSessionSummary(t *testing.T) {
+	require.False(t, hasSessionSummary(nil))
+
+	inv := &agent.Invocation{}
+	require.False(t, hasSessionSummary(inv))
+
+	inv.SetState(contentHasSessionSummaryStateKey, "true")
+	require.False(t, hasSessionSummary(inv))
+
+	inv.SetState(contentHasSessionSummaryStateKey, true)
+	require.True(t, hasSessionSummary(inv))
+}
+
 func TestSkillsToolResultRequestProcessor_BuildToolResultContent_Base(
 	t *testing.T,
 ) {
