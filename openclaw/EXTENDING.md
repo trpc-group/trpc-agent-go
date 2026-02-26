@@ -9,6 +9,8 @@ You will learn how to:
 - Add new capabilities as **plugins** (channels, tools, storage backends,
   model providers).
 - Enable plugins using a YAML config file.
+- Extend the agent with file-based **skills** (`SKILL.md` folders) without
+  writing Go code.
 
 If you just want a working example, start with `openclaw/examples/stdin_chat/`.
 
@@ -42,6 +44,9 @@ This repo follows that pattern in `openclaw/registry`.
   - The minimal `Channel` interface (what you implement for new IM channels).
 - `openclaw/gwclient`
   - An in-process client that calls the gateway handler without a network hop.
+- `openclaw/internal/skills`
+  - Skill repository wrapper with optional environment gating and
+    `{baseDir}` substitution.
 
 ## Step 1: Build your own binary (internal distribution)
 
@@ -461,18 +466,181 @@ model:
     ...
 ```
 
-## Internal skills (the simplest extension)
+## Skills (file-based, fastest extension)
 
-If your "skills" are file-based `SKILL.md` folders, you do not need any
-Go code.
+A **skill** is a folder that contains a `SKILL.md` file (plus optional
+docs/scripts).
 
-Put skills in a folder and point OpenClaw at it:
+OpenClaw loads skills from the filesystem and makes them available to the
+agent through `trpc-agent-go`'s built-in skills tooling.
+
+If your main goal is to ship "internal know-how" (runbooks, scripts,
+prompt templates) in an easy-to-contribute way, start with skills:
+
+- No Go code required.
+- No custom binary required.
+- Easy to version and review (plain files).
+
+### Skill folder layout
+
+You typically store a skill like this:
+
+```
+skills/
+  hello/
+    SKILL.md
+    scripts/
+      hello.sh
+    DOC.md            # optional extra docs (any .md or .txt)
+```
+
+Rules of thumb:
+
+- Put the human-facing instructions in `SKILL.md`.
+- Put executable logic under `scripts/` (or any subfolder you like).
+- Write outputs under `out/` (the skills runner auto-collects it).
+
+OpenClaw also ships a few example skills under `openclaw/skills/`
+(`hello`, `envdump`, `http_get`).
+
+### Minimal `SKILL.md` template
+
+`SKILL.md` is Markdown with a YAML "front matter" block at the top.
+
+Front matter is delimited by two `---` lines and lets you define:
+
+- `name`: the unique skill name (used to reference the skill)
+- `description`: a one-line description
+
+Example:
+
+```md
+---
+name: hello
+description: Write a hello file to the workspace output directory.
+---
+
+Overview
+
+This skill writes a small file under `out/`.
+
+Command
+
+bash scripts/hello.sh out/hello.txt
+
+Output Files
+
+- out/hello.txt
+```
+
+The body can be any Markdown. In practice, keep it short and explicit:
+
+- What the skill does.
+- The exact command to run.
+- Expected outputs (paths).
+
+### How OpenClaw finds skills (roots and precedence)
+
+OpenClaw searches multiple skill roots (highest precedence first):
+
+1) Workspace skills: `skills.root` / `-skills-root` (default: `./skills`)
+2) Project AgentSkills: `./.agents/skills`
+3) Personal AgentSkills: `$HOME/.agents/skills`
+4) Managed skills: `<state-dir>/skills`
+5) Repo bundled skills: `./openclaw/skills` (when running from repo root)
+6) Extra dirs: `skills.extra_dirs` / `-skills-extra-dirs`
+
+Duplicate names:
+
+- If two skills have the same `name`, the higher-precedence one wins.
+- OpenClaw semantics are **fail-closed**: if the winning skill is gated
+  off (see below), OpenClaw does not "fall back" to a lower-precedence
+  version of the same skill name.
+
+So, avoid publishing multiple variants under the same `name` unless you
+fully understand the gating behavior.
+
+### OpenClaw metadata gating (optional)
+
+In addition to `name` and `description`, OpenClaw recognizes
+`metadata.openclaw` in front matter.
+
+This lets you **hide** skills that cannot work in the current
+environment (missing binaries, missing env vars, OS mismatch).
+
+Supported fields:
+
+- `metadata.openclaw.always`: if `true`, always enable the skill.
+- `metadata.openclaw.os`: allowlist of `darwin`, `linux`, `win32`.
+- `metadata.openclaw.requires.bins`: binaries that must exist in `PATH`.
+- `metadata.openclaw.requires.anyBins`: at least one binary must exist.
+- `metadata.openclaw.requires.env`: env vars that must be present.
+
+Example (requires `bash` + `curl`):
+
+```md
+---
+name: http_get
+description: Fetch a URL with curl and write it to out/.
+metadata:
+  openclaw:
+    requires:
+      bins: ["bash", "curl"]
+---
+
+...
+```
+
+To understand why a skill is missing, enable skills debug logs:
+
+- YAML: `skills.debug: true`
+- CLI: `-skills-debug`
+
+### `{baseDir}` placeholder (OpenClaw skill pack compatibility)
+
+Some OpenClaw skill packs put commands like this into `SKILL.md`:
+
+```
+bash {baseDir}/scripts/setup.sh
+```
+
+`{baseDir}` is a placeholder for "the local directory that contains this
+skill".
+
+This demo replaces `{baseDir}` in loaded skill bodies and docs with the
+actual skill directory path, so those skill packs remain usable.
+
+### Distributing internal skill packs (without code changes)
+
+Because skills are just files, the simplest internal workflow is:
+
+1) Keep skills in a separate repo (reviewable, versioned).
+2) Deploy by mounting/checking out that repo next to the binary.
+3) Point OpenClaw at it using config.
+
+Example:
 
 ```yaml
 skills:
   extra_dirs:
-    - "./skills-internal"
+    - "/path/to/internal/skills"
 ```
 
-This is a good starting point for internal contributions because it does
-not require implementing Go interfaces.
+Advanced option: `skills.root` can be a URL.
+
+The `trpc-agent-go/skill` repository supports `http://` and `https://`
+roots that point to a `.zip`, `.tar`, `.tar.gz`, or `.tgz` archive
+containing a skills directory tree.
+
+This is useful when you want to version and ship skill packs as an
+artifact without rebuilding the OpenClaw binary.
+
+### Security note
+
+Treat skills as code:
+
+- A skill can instruct the agent to run commands (`skill_run`) and read
+  or write files in a workspace.
+- Only load skills from sources you trust.
+- When exposing OpenClaw through external channels (Telegram/webhooks),
+  use allowlists/pairing and limit unsafe tools.

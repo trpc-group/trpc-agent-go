@@ -5,6 +5,8 @@ This document is a practical cookbook for:
 - switching **session** and **memory** backends via YAML config, and
 - enabling `trpc-agent-go`'s **tool ecosystem** in OpenClaw (including
   MCP ToolSets).
+- using file-based **skills** (`SKILL.md` folders) to extend the agent
+  without writing Go code.
 
 It is written for absolute beginners and includes copy-paste examples.
 
@@ -32,6 +34,12 @@ OpenClaw lets you choose implementations for both using config:
 - `session.backend` + optional `session.config`
 - `memory.backend` + optional `memory.config`
 
+In addition, OpenClaw can load **skills** from the filesystem:
+
+- Skills are reusable "playbooks" stored as folders with `SKILL.md`.
+- They are a low-friction way to ship prompts, scripts, and docs.
+- They are loaded from multiple roots (workspace + managed + extra dirs).
+
 ## Configuration basics (YAML)
 
 OpenClaw supports a YAML file:
@@ -42,6 +50,178 @@ OpenClaw supports a YAML file:
 CLI flags always override YAML values.
 
 Duration values use Go-style strings like `30s`, `10m`, `1h`.
+
+## Skills (SKILL.md skill packs)
+
+### What is a skill?
+
+A **skill** in `trpc-agent-go` is a folder that contains:
+
+- a `SKILL.md` file (Markdown + YAML front matter), and
+- optional `.md` / `.txt` documents, scripts, and other files.
+
+Think of it as a small, versioned "how-to" package that the agent can
+load and execute.
+
+OpenClaw exposes built-in skills tooling to the agent:
+
+- `skill_load`: load the content of a skill.
+- `skill_list_docs` / `skill_select_docs`: browse extra docs in the skill.
+- `skill_run`: run a command inside a staged skill workspace.
+
+Rule of thumb: keep logic in scripts and keep `SKILL.md` as a clear,
+human-readable contract.
+
+### How OpenClaw finds skills (roots and precedence)
+
+OpenClaw searches multiple skill roots (highest precedence first):
+
+1) Workspace skills: `skills.root` / `-skills-root` (default: `./skills`)
+2) Project AgentSkills: `./.agents/skills`
+3) Personal AgentSkills: `$HOME/.agents/skills`
+4) Managed skills: `<state-dir>/skills`
+5) Repo bundled skills: `./openclaw/skills` (when running from repo root)
+6) Extra dirs: `skills.extra_dirs` / `-skills-extra-dirs`
+
+Duplicate names:
+
+- If two skills have the same `name`, the higher-precedence one wins.
+- This demo is **fail-closed**: if the winning skill is gated off (see
+  below), OpenClaw does not fall back to a lower-precedence copy.
+
+### Configure skills in YAML
+
+```yaml
+skills:
+  root: "./skills"               # optional; overrides workspace root
+  extra_dirs:
+    - "/path/to/team/skills"      # optional; lowest precedence
+  debug: false                   # log gating decisions when true
+```
+
+CLI equivalents:
+
+- `-skills-root <DIR>`
+- `-skills-extra-dirs <A,B,C>` (comma-separated)
+- `-skills-debug`
+
+### Minimal `SKILL.md` template
+
+Create a new folder under your workspace skills root:
+
+```
+skills/
+  hello/
+    SKILL.md
+    scripts/
+      hello.sh
+```
+
+Example `skills/hello/SKILL.md`:
+
+```md
+---
+name: hello
+description: Write a hello file to the workspace output directory.
+---
+
+Overview
+
+This skill writes a small file under `out/`.
+
+Command
+
+bash scripts/hello.sh out/hello.txt
+
+Output Files
+
+- out/hello.txt
+```
+
+Then run OpenClaw (skills are discovered automatically):
+
+```bash
+cd openclaw
+go run ./cmd/openclaw -mode mock
+```
+
+In a chat, ask the assistant to list and run skills. For example:
+
+```
+List available skills, then run the hello skill.
+```
+
+### OpenClaw metadata gating (optional)
+
+If `SKILL.md` front matter contains `metadata.openclaw`, OpenClaw can
+filter the skill at load time based on the local environment.
+
+Supported fields:
+
+- `metadata.openclaw.always`
+- `metadata.openclaw.os` (`darwin`, `linux`, `win32`)
+- `metadata.openclaw.requires.bins`
+- `metadata.openclaw.requires.anyBins`
+- `metadata.openclaw.requires.env`
+
+Example (require `curl`):
+
+```md
+---
+name: http_get
+description: Fetch a URL with curl and write it to out/.
+metadata:
+  openclaw:
+    requires:
+      bins: ["curl"]
+---
+
+...
+```
+
+To understand why a skill is missing, enable debug logs:
+
+- YAML: `skills.debug: true`
+- CLI: `-skills-debug`
+
+### `{baseDir}` placeholder
+
+Some OpenClaw skill packs use `{baseDir}` in commands and docs to mean
+"the directory that contains this skill".
+
+This demo replaces `{baseDir}` in loaded skill bodies/docs with the
+actual local path to keep those skill packs usable.
+
+### Skills and tool compatibility (OpenClaw-style `exec` / `process`)
+
+Some skill packs assume an OpenClaw-like tool surface, especially:
+
+- `exec` (or `bash`): execute a shell command
+- `process`: manage long-running sessions
+
+This demo can enable OpenClaw-compatible tools:
+
+```yaml
+tools:
+  enable_openclaw_tools: true
+```
+
+Security note: these tools can execute local commands. Only enable them
+for trusted users/channels.
+
+### Advanced: remote skill packs via URL
+
+`trpc-agent-go/skill` supports `http://` / `https://` skill roots that
+point to an archive (`.zip`, `.tar`, `.tar.gz`, `.tgz`) containing a
+skills directory tree.
+
+This is useful when you want to ship a versioned skill pack as an
+artifact without rebuilding the OpenClaw binary:
+
+```yaml
+skills:
+  root: "https://example.com/skills.tgz"
+```
 
 ## Session backends
 
@@ -513,4 +693,3 @@ Go-idiomatic way is:
 2) register your own factories via `openclaw/registry`.
 
 See `openclaw/EXTENDING.md` for the full guide.
-
