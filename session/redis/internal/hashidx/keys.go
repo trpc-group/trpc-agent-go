@@ -72,13 +72,27 @@ func (b *keyBuilder) SummaryKey(key session.Key) string {
 	return fmt.Sprintf("%s:sesssum:%s:%s:%s", b.fullPrefix(), key.AppName, b.hashTag(key.UserID), key.SessionID)
 }
 
-// TrackKey returns the key for track events.
-// Format: [userPrefix:]hashidx:track:appName:{userID}:sessionID:trackName
-func (b *keyBuilder) TrackKey(key session.Key, track session.Track) string {
-	return fmt.Sprintf("%s:track:%s:%s:%s:%s", b.fullPrefix(), key.AppName, b.hashTag(key.UserID), key.SessionID, track)
+// TrackDataKey returns the key for track event data (Hash: field=eventID, value=TrackEvent JSON).
+// Format: [userPrefix:]hashidx:trkdata:appName:{userID}:sessionID:trackName
+func (b *keyBuilder) TrackDataKey(key session.Key, track session.Track) string {
+	return fmt.Sprintf("%s:trkdata:%s:%s:%s:%s", b.fullPrefix(), key.AppName, b.hashTag(key.UserID), key.SessionID, track)
 }
 
-// SessionKeys returns all keys associated with a session.
+// TrackTimeIndexKey returns the key for track event time index (ZSet: member=eventID, score=timestamp).
+// Format: [userPrefix:]hashidx:trkidx:time:appName:{userID}:sessionID:trackName
+func (b *keyBuilder) TrackTimeIndexKey(key session.Key, track session.Track) string {
+	return fmt.Sprintf("%s:trkidx:time:%s:%s:%s:%s", b.fullPrefix(), key.AppName, b.hashTag(key.UserID), key.SessionID, track)
+}
+
+// TrackKeys returns all track-related keys for a given session and track.
+func (b *keyBuilder) TrackKeys(key session.Key, track session.Track) []string {
+	return []string{
+		b.TrackDataKey(key, track),
+		b.TrackTimeIndexKey(key, track),
+	}
+}
+
+// SessionKeys returns all keys associated with a session (excluding track keys).
 // Useful for batch TTL operations and cleanup.
 func (b *keyBuilder) SessionKeys(key session.Key) []string {
 	return []string{
@@ -127,9 +141,14 @@ func GetEventTimeIndexKey(userPrefix string, key session.Key) string {
 	return newKeyBuilder(userPrefix).EventTimeIndexKey(key)
 }
 
-// GetTrackKey returns the Redis key for HashIdx track events (for testing).
-func GetTrackKey(userPrefix string, key session.Key, track session.Track) string {
-	return newKeyBuilder(userPrefix).TrackKey(key, track)
+// GetTrackDataKey returns the Redis key for HashIdx track event data (for testing).
+func GetTrackDataKey(userPrefix string, key session.Key, track session.Track) string {
+	return newKeyBuilder(userPrefix).TrackDataKey(key, track)
+}
+
+// GetTrackTimeIndexKey returns the Redis key for HashIdx track event time index (for testing).
+func GetTrackTimeIndexKey(userPrefix string, key session.Key, track session.Track) string {
+	return newKeyBuilder(userPrefix).TrackTimeIndexKey(key, track)
 }
 
 // GetUserStateKey returns the Redis key for HashIdx user state (for testing).

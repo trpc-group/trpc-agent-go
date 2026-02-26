@@ -1154,9 +1154,9 @@ func TestService_getSessionSummaryTTL(t *testing.T) {
 	require.NoError(t, err)
 
 	client := buildRedisClient(t, redisURL)
-	// Use V2 summary key format
+	// Use String key format
 	summaryKey := hashidx.GetSessionSummaryKey("", key)
-	err = client.HSet(ctx, summaryKey, "data", summaryBytes).Err()
+	err = client.Set(ctx, summaryKey, summaryBytes, 0).Err()
 	require.NoError(t, err)
 
 	_, err = service.getSession(ctx, key, 0, time.Time{})
@@ -2213,9 +2213,9 @@ func TestService_GetSession_AttachSummaries(t *testing.T) {
 	payload, err := json.Marshal(sumMap)
 	require.NoError(t, err)
 	client := buildRedisClient(t, redisURL)
-	// Use V2 summary key format (Hash with field "data")
+	// Use String key format
 	v2SummaryKey := hashidx.GetSessionSummaryKey("", key)
-	err = client.HSet(ctx, v2SummaryKey, "data", string(payload)).Err()
+	err = client.Set(ctx, v2SummaryKey, string(payload), 0).Err()
 	require.NoError(t, err)
 
 	got, err := service.GetSession(ctx, key)
@@ -3819,13 +3819,15 @@ func TestService_DeleteSession_WithTracks(t *testing.T) {
 		Timestamp: time.Now(),
 	}))
 
-	// Verify track keys exist in Redis.
+	// Verify track keys exist in Redis (data + index for each track).
 	client := buildRedisClient(t, redisURL)
-	alphaKey := hashidx.GetTrackKey("", key, "alpha")
-	betaKey := hashidx.GetTrackKey("", key, "beta")
-	n, err := client.Exists(ctx, alphaKey, betaKey).Result()
+	alphaDataKey := hashidx.GetTrackDataKey("", key, "alpha")
+	alphaIdxKey := hashidx.GetTrackTimeIndexKey("", key, "alpha")
+	betaDataKey := hashidx.GetTrackDataKey("", key, "beta")
+	betaIdxKey := hashidx.GetTrackTimeIndexKey("", key, "beta")
+	n, err := client.Exists(ctx, alphaDataKey, alphaIdxKey, betaDataKey, betaIdxKey).Result()
 	require.NoError(t, err)
-	assert.Equal(t, int64(2), n, "both track keys should exist before delete")
+	assert.Equal(t, int64(4), n, "all track keys should exist before delete")
 
 	// Delete session.
 	err = service.DeleteSession(ctx, key)
@@ -3837,7 +3839,7 @@ func TestService_DeleteSession_WithTracks(t *testing.T) {
 	assert.Nil(t, got)
 
 	// Verify track keys are also deleted.
-	n, err = client.Exists(ctx, alphaKey, betaKey).Result()
+	n, err = client.Exists(ctx, alphaDataKey, alphaIdxKey, betaDataKey, betaIdxKey).Result()
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), n, "track keys should be deleted with session")
 

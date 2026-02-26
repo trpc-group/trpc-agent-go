@@ -44,17 +44,20 @@ func (s *Service) AppendTrackEvent(
 		return fmt.Errorf("append track event: %w", err)
 	}
 
+	// Snapshot the tracks state for persistence (sess.State["tracks"] is updated by AppendTrackEvent)
+	tracksState := sess.SnapshotTracksState()
+
 	// Async persist if enabled
 	if s.opts.enableAsyncPersist {
-		return s.enqueueTrackEvent(ctx, sess, key, trackEvent)
+		return s.enqueueTrackEvent(ctx, sess, key, trackEvent, tracksState)
 	}
 
 	// Sync persist - route based on session version
-	return s.persistTrackEvent(ctx, getSessionVersion(sess), key, trackEvent)
+	return s.persistTrackEvent(ctx, getSessionVersion(sess), key, trackEvent, tracksState)
 }
 
 // enqueueTrackEvent enqueues a track event for async persistence.
-func (s *Service) enqueueTrackEvent(ctx context.Context, sess *session.Session, key session.Key, trackEvent *session.TrackEvent) error {
+func (s *Service) enqueueTrackEvent(ctx context.Context, sess *session.Session, key session.Key, trackEvent *session.TrackEvent, tracksState []byte) error {
 	defer func() {
 		if r := recover(); r != nil {
 			if err, ok := r.(error); ok && err.Error() == "send on closed channel" {
@@ -68,7 +71,7 @@ func (s *Service) enqueueTrackEvent(ctx context.Context, sess *session.Session, 
 	ver := getSessionVersion(sess)
 	index := sess.Hash % len(s.trackEventChans)
 	select {
-	case s.trackEventChans[index] <- &trackEventPair{key: key, event: trackEvent, version: ver}:
+	case s.trackEventChans[index] <- &trackEventPair{key: key, event: trackEvent, version: ver, tracksState: tracksState}:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -76,11 +79,11 @@ func (s *Service) enqueueTrackEvent(ctx context.Context, sess *session.Session, 
 }
 
 // persistTrackEvent persists track event to the appropriate storage (zset or hashidx).
-func (s *Service) persistTrackEvent(ctx context.Context, ver string, key session.Key, trackEvent *session.TrackEvent) error {
+func (s *Service) persistTrackEvent(ctx context.Context, ver string, key session.Key, trackEvent *session.TrackEvent, tracksState []byte) error {
 	// Fast path: use version tag
 	switch ver {
 	case util.StorageTypeHashIdx:
-		return s.hashidxClient.AppendTrackEvent(ctx, key, trackEvent)
+		return s.hashidxClient.AppendTrackEvent(ctx, key, trackEvent, tracksState)
 	case util.StorageTypeZset:
 		return s.zsetClient.AppendTrackEvent(ctx, key, trackEvent)
 	}
@@ -95,7 +98,7 @@ func (s *Service) persistTrackEvent(ctx context.Context, ver string, key session
 		return s.zsetClient.AppendTrackEvent(ctx, key, trackEvent)
 	}
 	if hashidxExists {
-		return s.hashidxClient.AppendTrackEvent(ctx, key, trackEvent)
+		return s.hashidxClient.AppendTrackEvent(ctx, key, trackEvent, tracksState)
 	}
 
 	return fmt.Errorf("session not found: %s/%s/%s", key.AppName, key.UserID, key.SessionID)

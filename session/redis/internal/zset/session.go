@@ -937,7 +937,7 @@ func (c *Client) CreateSummary(
 	sumKey := c.sessionSummaryKey(key)
 	hashField := key.SessionID
 
-	if _, err := util.LuaSummariesSetIfNewer.Run(
+	if _, err := luaSummariesSetIfNewer.Run(
 		ctx, c.client, []string{sumKey}, hashField, filterKey, string(payload),
 	).Result(); err != nil {
 		return fmt.Errorf("store summary (lua) failed: %w", err)
