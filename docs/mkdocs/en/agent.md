@@ -133,7 +133,7 @@ _, _ = sessionService.CreateSession(ctx, session.Key{AppName: app, UserID: user,
 See also:
 
 - Examples: `examples/placeholder`, `examples/outputkey`
-- Session API: `docs/mkdocs/en/session.md`
+- Session API: `docs/mkdocs/en/session/index.md`
 
 ### Using Runner to Execute Agent
 
@@ -949,7 +949,7 @@ Memory Service is used to record user preference information, supporting persona
 **Recommended Reading Order:**
 
 1. [Runner](runner.md) - Learn the recommended usage
-2. [Session](session.md) - Understand session management
+2. [Session](session/index.md) - Understand session management
 3. [Multi-Agent](multiagent.md) - Learn multi-Agent systems
 
 ## Runtime Instruction Updates
