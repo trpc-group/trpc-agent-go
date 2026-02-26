@@ -142,7 +142,7 @@ func (m *Model) handleNonStreamingResponse(
 	if m.chatResponseCallback != nil {
 		m.chatResponseCallback(ctx, chatRequest, generateConfig, chatCompletion)
 	}
-	response := m.buildResponse(chatCompletion)
+	response := m.buildFinalResponse(chatCompletion)
 	select {
 	case responseChan <- response:
 	case <-ctx.Done():
@@ -159,14 +159,25 @@ func (m *Model) handleStreamingResponse(
 	chatCompletion := m.client.Models().GenerateContentStream(
 		ctx, m.name, chatRequest, generateConfig)
 	acc := &Accumulator{}
-	for chunk := range chatCompletion {
-		response := m.buildResponse(chunk)
-		acc.Accumulate(response)
-		response.Object = model.ObjectTypeChatCompletionChunk
-		response.IsPartial = true
-		if m.chatChunkCallback != nil {
-			m.chatChunkCallback(ctx, chatRequest, generateConfig, chunk)
+	for chunk, err := range chatCompletion {
+		// Check for errors from the stream
+		if err != nil {
+			errorResponse := &model.Response{
+				Error: &model.ResponseError{
+					Message: err.Error(),
+					Type:    model.ErrorTypeAPIError,
+				},
+				Timestamp: time.Now(),
+				Done:      true,
+			}
+			select {
+			case responseChan <- errorResponse:
+			case <-ctx.Done():
+			}
+			return
 		}
+		response := m.buildChunkResponse(chunk)
+		acc.Accumulate(response)
 		if m.chatChunkCallback != nil {
 			m.chatChunkCallback(ctx, chatRequest, generateConfig, chunk)
 		}
@@ -177,6 +188,7 @@ func (m *Model) handleStreamingResponse(
 		}
 	}
 	finalResponse := acc.BuildResponse()
+
 	if m.chatStreamCompleteCallback != nil {
 		m.chatStreamCompleteCallback(ctx, chatRequest, generateConfig, finalResponse)
 	}
@@ -201,13 +213,12 @@ func (m *Model) convertContentBlock(candidates []*genai.Candidate) (model.Messag
 		}
 		if candidate.Content != nil {
 			for _, part := range candidate.Content.Parts {
-				if len(part.Text) == 0 {
-					continue
-				}
-				if part.Thought {
-					reasoningBuilder.WriteString(part.Text)
-				} else {
-					textBuilder.WriteString(part.Text)
+				if part.Text != "" {
+					if part.Thought {
+						reasoningBuilder.WriteString(part.Text)
+					} else {
+						textBuilder.WriteString(part.Text)
+					}
 				}
 				if part.FunctionCall != nil {
 					args, _ := json.Marshal(part.FunctionCall.Args)
@@ -230,32 +241,75 @@ func (m *Model) convertContentBlock(candidates []*genai.Candidate) (model.Messag
 	}, finishReason
 }
 
-// buildResponse builds a partial streaming response for a chunk.
-// Returns nil if the chunk should be skipped.
-func (m *Model) buildResponse(chatCompletion *genai.GenerateContentResponse) *model.Response {
-	if chatCompletion == nil {
-		return &model.Response{}
+func (m *Model) buildChunkResponse(rsp *genai.GenerateContentResponse) *model.Response {
+	return m.buildChatCompletionResponse(
+		rsp,
+		model.ObjectTypeChatCompletionChunk,
+		false,
+		true,
+	)
+}
+
+func (m *Model) buildFinalResponse(rsp *genai.GenerateContentResponse) *model.Response {
+	return m.buildChatCompletionResponse(
+		rsp,
+		model.ObjectTypeChatCompletion,
+		true,
+		false,
+	)
+}
+
+func (m *Model) buildChatCompletionResponse(
+	rsp *genai.GenerateContentResponse,
+	object string,
+	done bool,
+	isPartial bool,
+) *model.Response {
+	if rsp == nil {
+		return &model.Response{
+			Object:    object,
+			IsPartial: isPartial,
+			Done:      done,
+		}
 	}
 	response := &model.Response{
-		ID:        chatCompletion.ResponseID,
-		Created:   chatCompletion.CreateTime.Unix(),
-		Model:     chatCompletion.ModelVersion,
-		Timestamp: chatCompletion.CreateTime,
+		ID:        rsp.ResponseID,
+		Object:    object,
+		Created:   rsp.CreateTime.Unix(),
+		Model:     rsp.ModelVersion,
+		Timestamp: rsp.CreateTime,
+		Done:      done,
+		IsPartial: isPartial,
 	}
-	message, finishReason := m.convertContentBlock(chatCompletion.Candidates)
-	response.Choices = []model.Choice{
-		{
-			Index:   0,
-			Message: message,
-			Delta:   message,
-		},
+	message, finishReason := m.convertContentBlock(rsp.Candidates)
+	if isPartial {
+		// Streaming chunk: only populate Delta (not Message).
+		// This matches the OpenAI and Anthropic patterns where streaming
+		// chunks carry incremental deltas. Setting both Message and Delta
+		// to the same value caused downstream consumers to double-emit
+		// content — the chunk's Message.Content was treated as a full
+		// response and re-emitted alongside the final accumulated response.
+		response.Choices = []model.Choice{
+			{
+				Index: 0,
+				Delta: message,
+			},
+		}
+	} else {
+		// Final/non-streaming response: populate Message (the full content).
+		response.Choices = []model.Choice{
+			{
+				Index:   0,
+				Message: message,
+			},
+		}
 	}
 	// Set finish reason.
 	if finishReason != "" {
 		response.Choices[0].FinishReason = &finishReason
 	}
 	// Convert usage information.
-	response.Usage = m.completionUsageToModelUsage(chatCompletion.UsageMetadata)
+	response.Usage = m.completionUsageToModelUsage(rsp.UsageMetadata)
 	return response
 }
 
@@ -373,6 +427,16 @@ func (m *Model) buildChatConfig(request *model.Request) *genai.GenerateContentCo
 		Tools: m.convertTools(request.Tools),
 	}
 
+	// Explicitly set ToolConfig when tools are present to use AUTO mode.
+	// AUTO mode allows the model to decide whether to call tools or respond with text.
+	if len(request.Tools) > 0 {
+		chatRequest.ToolConfig = &genai.ToolConfig{
+			FunctionCallingConfig: &genai.FunctionCallingConfig{
+				Mode: genai.FunctionCallingConfigModeAuto,
+			},
+		}
+	}
+
 	// Set response_format for native structured outputs when requested.
 	if request.StructuredOutput != nil &&
 		request.StructuredOutput.Type == model.StructuredOutputJSONSchema &&
@@ -454,16 +518,20 @@ func (m *Model) convertMessageContent(
 }
 
 func (m *Model) convertTools(tools map[string]tool.Tool) []*genai.Tool {
-	var result []*genai.Tool
+	result := make([]*genai.Tool, 0, len(tools))
 	for _, t := range tools {
+		decl := t.Declaration()
+		funcDeclaration := &genai.FunctionDeclaration{
+			Description:          decl.Description,
+			Name:                 decl.Name,
+			ParametersJsonSchema: decl.InputSchema,
+		}
+		if decl.OutputSchema != nil {
+			funcDeclaration.ResponseJsonSchema = decl.OutputSchema
+		}
 		result = append(result, &genai.Tool{
 			FunctionDeclarations: []*genai.FunctionDeclaration{
-				{
-					Description:          t.Declaration().Description,
-					Name:                 t.Declaration().Name,
-					ParametersJsonSchema: t.Declaration().InputSchema,
-					ResponseJsonSchema:   t.Declaration().OutputSchema,
-				},
+				funcDeclaration,
 			},
 		})
 	}

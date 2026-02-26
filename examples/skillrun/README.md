@@ -66,12 +66,45 @@ Workspace paths and env vars:
 - `$OUTPUT_DIR`: unified outputs (collector/artifact saves read from here)
 
 Optional inputs/outputs spec with `skill_run`:
-- Inputs example (map external files into workspace):
-  `{ "inputs": [ {"from": "artifact://datasets/raw.csv@3",
-     "to": "work/inputs/raw.csv"} ] }`
+- Inputs example (map external files into workspace; prefer explicit
+  `@version` for reproducibility):
+
+  ```json
+  {
+    "inputs": [
+      {
+        "from": "artifact://datasets/raw.csv@3",
+        "to": "work/inputs/raw.csv",
+        "mode": "copy"
+      }
+    ]
+  }
+  ```
+
 - Outputs example (collect and save artifacts):
-  `{ "outputs": {"globs": ["out/**/*.csv"], "save": true,
-     "name_template": "user:", "inline": false } }`
+
+  ```json
+  {
+    "outputs": {
+      "globs": ["$OUTPUT_DIR/**/*.csv"],
+      "inline": false,
+      "save": true,
+      "name_template": "user:",
+      "max_files": 100
+    }
+  }
+  ```
+
+- Legacy path (persist `output_files` via Artifact service):
+
+  ```json
+  {
+    "output_files": ["$OUTPUT_DIR/**"],
+    "omit_inline_content": true,
+    "save_as_artifacts": true,
+    "artifact_prefix": "user:"
+  }
+  ```
 
 Container zero-copy hint:
 - Bind a host folder as the inputs base so `host://` inputs under that

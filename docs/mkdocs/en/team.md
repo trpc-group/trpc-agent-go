@@ -338,6 +338,62 @@ Notes:
 - Members must support `SetSubAgents` (LLMAgent does). This is required so
   members can discover and transfer to each other.
 
+### Cross-request transfer (optional)
+
+By default, each new user message starts from the Swarm entry member
+(`entryName`), even if the previous message ended after one or more handoffs.
+
+If you want the "current owner" of the conversation to persist across user
+messages, enable cross-request transfer:
+
+```go
+tm, err := team.NewSwarm(
+    "team",
+    "researcher",
+    members,
+    team.WithCrossRequestTransfer(true),
+)
+```
+
+With this enabled, after a handoff, the next user message will start from the
+Agent that produced the last reply (until another `transfer_to_agent` happens).
+This feature is implemented via session state, so you must reuse the same
+session across requests.
+
+### Dynamic members (runtime)
+
+In long-running services, the set of available Swarm members may change over
+time (for example, when remote Agents are registered/unregistered).
+
+You can update a Swarm Team roster at runtime:
+
+```go
+// Add one member.
+if err := tm.AddSwarmMember(newAgent); err != nil {
+    panic(err)
+}
+
+// Remove one member by name.
+if ok := tm.RemoveSwarmMember("member_name"); !ok {
+    // Not found, or refused (for example, entry member).
+}
+
+// Replace the whole roster.
+if err := tm.UpdateSwarmMembers(members); err != nil {
+    panic(err)
+}
+```
+
+Notes:
+
+- This only applies to Swarm teams (created with `team.NewSwarm`).
+- The entry member (`entryName`) cannot be removed. Create a new Team if you
+  want to change the entrypoint.
+- When a member is removed, members' SubAgents lists are rewired via
+  `SetSubAgents`, so `transfer_to_agent` can no longer target it.
+- With cross-request transfer enabled, if session state points to a removed
+  active Agent, the next run falls back to the entry member.
+
 ## Swarm Guardrails
 
 Swarm-style handoffs can loop if Agents keep transferring back and forth.

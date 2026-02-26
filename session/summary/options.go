@@ -12,10 +12,20 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 // Option is a function that configures a SessionSummarizer.
 type Option func(*sessionSummarizer)
+
+// WithName sets a logical name for the summarizer instance.
+// This name is used for telemetry tagging (e.g., gen_ai.task_type) to help
+// distinguish different summarization tasks.
+func WithName(name string) Option {
+	return func(s *sessionSummarizer) {
+		s.name = name
+	}
+}
 
 // SkipRecentFunc defines a function that determines how many recent events to skip during summarization.
 // It receives all events and returns the number of recent events to skip.
@@ -128,10 +138,55 @@ func WithPostSummaryHook(h PostSummaryHook) Option {
 	}
 }
 
+// WithModelCallbacks sets model callbacks for summarization.
+//
+// Note: Only structured callback signatures are supported.
+func WithModelCallbacks(callbacks *model.Callbacks) Option {
+	return func(s *sessionSummarizer) {
+		s.modelCallbacks = callbacks
+	}
+}
+
 // WithSummaryHookAbortOnError decides whether to abort when a hook returns an error.
 // Default false: ignore hook errors and use original text/summary; true: return error.
 func WithSummaryHookAbortOnError(abort bool) Option {
 	return func(s *sessionSummarizer) {
 		s.hookAbortOnError = abort
+	}
+}
+
+// WithToolCallFormatter sets a custom formatter for tool calls in the summary input.
+// The formatter receives a ToolCall and returns a formatted string.
+// Return empty string to exclude the tool call from the summary.
+//
+// Example:
+//
+//	WithToolCallFormatter(func(tc model.ToolCall) string {
+//	    // Only include tool name, exclude arguments.
+//	    return fmt.Sprintf("[Called tool: %s]", tc.Function.Name)
+//	})
+func WithToolCallFormatter(f ToolCallFormatter) Option {
+	return func(s *sessionSummarizer) {
+		s.toolCallFormatter = f
+	}
+}
+
+// WithToolResultFormatter sets a custom formatter for tool results in the summary input.
+// The formatter receives the Message containing the tool result and returns a formatted string.
+// Return empty string to exclude the tool result from the summary.
+//
+// Example:
+//
+//	WithToolResultFormatter(func(msg model.Message) string {
+//	    // Truncate long results.
+//	    content := msg.Content
+//	    if len(content) > 200 {
+//	        content = content[:200] + "..."
+//	    }
+//	    return fmt.Sprintf("[%s: %s]", msg.ToolName, content)
+//	})
+func WithToolResultFormatter(f ToolResultFormatter) Option {
+	return func(s *sessionSummarizer) {
+		s.toolResultFormatter = f
 	}
 }

@@ -45,10 +45,9 @@ func (t *ListDocsTool) Declaration() *tool.Declaration {
 			Description: "List docs input",
 			Required:    []string{"skill"},
 			Properties: map[string]*tool.Schema{
-				"skill": {
-					Type:        "string",
-					Description: "Skill name",
-				},
+				"skill": skillNameSchema(
+					t.repo, "Skill name",
+				),
 			},
 		},
 		OutputSchema: &tool.Schema{

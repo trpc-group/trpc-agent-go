@@ -40,6 +40,17 @@ const (
 	TextMatchStrategyRegex TextMatchStrategy = "regex"
 )
 
+// New creates a new TextCriterion with the provided options.
+func New(opt ...Option) *TextCriterion {
+	opts := newOptions(opt...)
+	return &TextCriterion{
+		Ignore:          opts.ignore,
+		CaseInsensitive: opts.caseInsensitive,
+		MatchStrategy:   opts.matchStrategy,
+		Compare:         opts.compare,
+	}
+}
+
 // Match compares source and target using the configured strategy.
 func (t *TextCriterion) Match(source, target string) (bool, error) {
 	if t.Ignore {

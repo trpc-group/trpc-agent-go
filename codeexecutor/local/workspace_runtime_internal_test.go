@@ -15,6 +15,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
 
 func TestReadLimitedWithCapBranches(t *testing.T) {
@@ -56,4 +58,67 @@ func TestCopyPath_FileAndDir(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join(dstDir, "b.txt"))
 	require.NoError(t, err)
 	require.Equal(t, "y", string(b))
+}
+
+func intPtr(v int) *int {
+	return &v
+}
+
+func TestPinnedArtifactVersion(t *testing.T) {
+	const (
+		name = "demo.txt"
+		to   = "work/inputs/demo.txt"
+	)
+	md := codeexecutor.WorkspaceMetadata{
+		Inputs: []codeexecutor.InputRecord{{
+			From:     inputSchemeArtifact + name + "@1",
+			To:       to,
+			Resolved: "other",
+			Version:  intPtr(1),
+		}, {
+			From:     inputSchemeArtifact + name + "@bad",
+			To:       to,
+			Resolved: "other",
+			Version:  intPtr(2),
+		}, {
+			From:     inputSchemeHost + "/tmp/x",
+			To:       to,
+			Resolved: "other",
+			Version:  intPtr(3),
+		}, {
+			From:     inputSchemeArtifact + name + "@1",
+			To:       to,
+			Resolved: "other",
+			Version:  nil,
+		}, {
+			From:     inputSchemeArtifact + name + "@1",
+			To:       "work/inputs/other.txt",
+			Resolved: "other",
+			Version:  intPtr(4),
+		}},
+	}
+	got := pinnedArtifactVersion(md, name, to)
+	require.NotNil(t, got)
+	require.Equal(t, 1, *got)
+
+	require.Nil(t, pinnedArtifactVersion(md, "", to))
+	require.Nil(t, pinnedArtifactVersion(md, name, ""))
+}
+
+func TestPinnedArtifactVersion_ResolvedMatch(t *testing.T) {
+	const (
+		name = "demo.txt"
+		to   = "work/inputs/demo.txt"
+	)
+	md := codeexecutor.WorkspaceMetadata{
+		Inputs: []codeexecutor.InputRecord{{
+			From:     inputSchemeArtifact + name + "@1",
+			To:       to,
+			Resolved: name,
+			Version:  intPtr(9),
+		}},
+	}
+	got := pinnedArtifactVersion(md, name, to)
+	require.NotNil(t, got)
+	require.Equal(t, 9, *got)
 }

@@ -16,21 +16,21 @@ Memory 用于管理与用户相关的长期信息，隔离维度为 `<appName, u
 
 Memory 支持两种模式来创建和管理记忆，根据你的场景选择合适的模式：
 
-自动提取模式（Auto）在 v1.2.0 及以上版本可用，且推荐作为默认选择。
+自动提取模式（Auto）在配置了 Extractor 后可用，且推荐作为默认选择。
 
-| 维度         | 工具驱动模式（Agentic）      | 自动提取模式（Auto）            |
-| ------------ | ---------------------------- | ------------------------------- |
-| **工作方式** | Agent 决定何时调用记忆工具   | 系统自动从对话中提取记忆        |
-| **用户体验** | 可见 - 用户可见工具调用过程  | 透明 - 后台静默创建记忆         |
-| **控制权**   | Agent 完全控制记什么         | 提取器根据对话分析决定          |
+| 维度         | 工具驱动模式（Agentic）      | 自动提取模式（Auto）                     |
+| ------------ | ---------------------------- | ---------------------------------------- |
+| **工作方式** | Agent 决定何时调用记忆工具   | 系统自动从对话中提取记忆                 |
+| **用户体验** | 可见 - 用户可见工具调用过程  | 透明 - 后台静默创建记忆                  |
+| **控制权**   | Agent 完全控制记什么         | 提取器根据对话分析决定                   |
 | **可用工具** | 全部 6 个工具                | 搜索工具（search），可选加载工具（load） |
-| **处理方式** | 同步 - 响应生成过程中        | 异步 - 响应后由后台 worker 处理 |
-| **适用场景** | 精确控制、用户主导的记忆管理 | 自然对话、无感知的记忆积累      |
+| **处理方式** | 同步 - 响应生成过程中        | 异步 - 响应后由后台 worker 处理          |
+| **适用场景** | 精确控制、用户主导的记忆管理 | 自然对话、无感知的记忆积累               |
 
 **选择建议**：
 
 - **工具驱动模式**：Agent 会根据对话内容自动判断是否需要调用记忆工具（如用户提到个人信息、偏好等），用户可见工具调用过程，适合需要精确控制记忆内容的场景
-- **自动提取模式（>= 1.2.0，推荐）**：希望自然对话流、系统被动学习用户信息、简化用户体验
+- **自动提取模式（推荐）**：希望自然对话流、系统被动学习用户信息、简化用户体验
 
 ## 核心价值
 
@@ -183,7 +183,7 @@ Agent：你好张三！很高兴认识你。我会记住你在腾讯工作。
 Agent：我已经保存了这些信息。今天有什么可以帮你的？
 ```
 
-### 自动提取模式配置（Auto Mode，>= 1.2.0，推荐）
+### 自动提取模式配置（Auto Mode，推荐）
 
 自动提取模式下，基于 LLM 的提取器分析对话并自动创建记忆。**与工具驱动模式的区别仅在步骤 1：多配置一个 Extractor**。
 
@@ -269,7 +269,7 @@ Agent：你好张三！很高兴认识腾讯的朋友。今天有什么可以帮
 | **步骤 1**   | `NewMemoryService()`                | `NewMemoryService(WithExtractor(ext))` |
 | **步骤 2**   | `WithTools(memoryService.Tools())`  | `WithTools(memoryService.Tools())`     |
 | **步骤 3**   | `WithMemoryService(memoryService)`  | `WithMemoryService(memoryService)`     |
-| **可用工具** | add/update/delete/clear/search/load | search（默认）/load（可选）                                 |
+| **可用工具** | add/update/delete/clear/search/load | search/load                            |
 | **记忆创建** | Agent 主动调用工具                  | 后台自动提取                           |
 
 ## 核心概念
@@ -382,11 +382,14 @@ Memory 模块采用分层设计，由以下核心组件组成：
 记忆 ID 基于内容和主题的 SHA256 哈希生成，确保相同内容产生相同 ID：
 
 ```go
-// 生成逻辑
+// 生成逻辑（伪代码，省略错误处理）
 content := "memory:" + 记忆内容
-if len(主题) > 0 {
-    content += "|topics:" + join(主题, "，")
+if len（）) > 0 {
+    topics = sort(topics)
+    content += "|topics:" + join(topics, ",")
 }
+content += "|app:" + appName
+content += "|user:" + userID
 memoryID := SHA256(content) // 64 位十六进制字符串
 ```
 
@@ -434,7 +437,7 @@ appRunner := runner.NewRunner(
 
 ### 记忆服务 (Memory Service)
 
-记忆服务支持四种存储后端，可根据场景选择。
+记忆服务支持五种存储后端，可根据场景选择。
 
 #### 配置示例
 
@@ -497,13 +500,13 @@ if err != nil {
 
 #### 工具清单
 
-| 工具            | 功能       | 工具驱动模式 | 自动提取模式 | 说明                   |
-| --------------- | ---------- | ------------ | ------------ | ---------------------- |
-| `memory_add`    | 添加新记忆 | ✅ 默认启用  | ❌ 不可用    | 创建新记忆条目         |
-| `memory_update` | 更新记忆   | ✅ 默认启用  | ❌ 不可用    | 修改现有记忆           |
-| `memory_search` | 搜索记忆   | ✅ 默认启用  | ✅ 默认启用  | 根据关键词查找         |
-| `memory_load`   | 加载记忆   | ✅ 默认启用  | ⚙️ 可配置    | 加载最近的记忆         |
-| `memory_delete` | 删除记忆   | ⚙️ 可配置    | ❌ 不可用    | 删除单条记忆           |
+| 工具            | 功能       | 工具驱动模式 | 自动提取模式 | 说明                            |
+| --------------- | ---------- | ------------ | ------------ | ------------------------------- |
+| `memory_add`    | 添加新记忆 | ✅ 默认启用  | ❌ 不可用    | 创建新记忆条目                  |
+| `memory_update` | 更新记忆   | ✅ 默认启用  | ❌ 不可用    | 修改现有记忆                    |
+| `memory_search` | 搜索记忆   | ✅ 默认启用  | ✅ 默认启用  | 根据关键词查找                  |
+| `memory_load`   | 加载记忆   | ✅ 默认启用  | ⚙️ 可配置    | 加载最近的记忆                  |
+| `memory_delete` | 删除记忆   | ⚙️ 可配置    | ❌ 不可用    | 删除单条记忆                    |
 | `memory_clear`  | 清空记忆   | ⚙️ 可配置    | ❌ 不可用    | 删除所有记忆（Auto 模式不暴露） |
 
 **说明**：
@@ -546,7 +549,7 @@ memoryService := memoryinmemory.NewMemoryService(
 
 ### 覆盖语义（ID 与重复）
 
-- 记忆 ID 基于「内容 + 主题」生成。对同一用户重复添加相同内容与主题是幂等的：会覆盖原有记录（非追加），并刷新 UpdatedAt。
+- 记忆 ID 基于「内容 + 排序后的主题 + appName + userID」生成。对同一用户重复添加相同内容与主题是幂等的：会覆盖原有记录（非追加），并刷新 UpdatedAt。
 - 如需“允许重复/只返回已存在/忽略重复”等策略，可通过自定义工具或扩展服务策略配置实现。
 
 ### 自定义工具实现
@@ -609,35 +612,40 @@ memoryService := memoryinmemory.NewMemoryService(
 
 ```bash
 # 查看帮助
-cd examples/memory
-go run . -h
+cd examples/memory/simple
+go run main.go -h
 
-# 使用默认配置（内存存储 + 流式输出）
-go run .
+# 使用默认配置（inmemory + 流式输出）
+go run main.go
 
 # 使用 Redis 存储
 export REDIS_ADDR=localhost:6379
-go run . -memory redis
+go run main.go -memory redis
 
 # 使用 MySQL 存储（带软删除）
 export MYSQL_HOST=localhost
 export MYSQL_PASSWORD=password
-go run . -memory mysql -soft-delete
+go run main.go -memory mysql -soft-delete
 
 # 使用 PostgreSQL 存储
 export PG_HOST=localhost
 export PG_PASSWORD=password
-go run . -memory postgres -soft-delete
+go run main.go -memory postgres -soft-delete
+
+# 使用 pgvector 存储
+export PGVECTOR_HOST=localhost
+export PGVECTOR_PASSWORD=password
+go run main.go -memory pgvector -soft-delete
 
 # 非流式输出模式
-go run . -streaming=false
+go run main.go -streaming=false
 ```
 
 ### 交互演示
 
 ```bash
-$ go run .
-🧠 Multi Turn Chat with Memory
+$ go run main.go
+🧠 Simple Memory Chat
 Model: deepseek-chat
 Memory Service: inmemory
 In-memory
@@ -668,7 +676,7 @@ Available tools: memory_add, memory_update, memory_search, memory_load
 🆕 Started new memory session!
    Previous: memory-session-1765504743
    Current:  memory-session-1765504766
-   (Memory and conversation history have been reset)
+   (Conversation history has been reset, memories are preserved)
 
 👤 You:  我喜欢什么?
 🤖 Assistant: 我来查看一下记忆中关于您的喜好信息。
@@ -803,7 +811,7 @@ func createMemoryService(memType string, softDelete bool) (
             memorypostgres.WithPort(getEnvInt("PG_PORT", 5432)),
             memorypostgres.WithUser(getEnv("PG_USER", "postgres")),
             memorypostgres.WithPassword(getEnv("PG_PASSWORD", "")),
-            memorypostgres.WithDatabase(getEnv("PG_DATABASE", "postgres")),
+            memorypostgres.WithDatabase(getEnv("PG_DATABASE", "trpc-agent-go-pgmemory")),
             memorypostgres.WithSoftDelete(softDelete),
             memorypostgres.WithToolEnabled(memory.DeleteToolName, false),
         )
@@ -876,11 +884,21 @@ redisService, err := memoryredis.NewService(
 - `WithRedisClientURL(url)`: Redis 连接 URL（推荐）
 - `WithRedisInstance(name)`: 使用预注册的 Redis 实例
 - `WithMemoryLimit(limit)`: 每用户记忆上限
+- `WithKeyPrefix(prefix)`: 设置 Redis key 前缀。设置后所有 key 都会以 `prefix:` 开头。例如 `prefix` 为 `"myapp"` 时，key `mem:{app:user}` 变为 `myapp:mem:{app:user}`。默认为空（无前缀）。适用于多环境或多服务共享同一 Redis 实例的场景
 - `WithCustomTool(toolName, creator)`: 注册自定义工具
 - `WithToolEnabled(toolName, enabled)`: 启用/禁用工具
 - `WithExtraOptions(...options)`: 传递给 Redis 客户端的额外选项
 
 **注意**：`WithRedisClientURL` 优先级高于 `WithRedisInstance`
+
+**Key 前缀示例**：
+
+```go
+redisService, err := memoryredis.NewService(
+    memoryredis.WithRedisClientURL("redis://localhost:6379"),
+    memoryredis.WithKeyPrefix("prod"),
+)
+```
 
 ### MySQL 存储
 
@@ -918,16 +936,17 @@ root:password@tcp(localhost:3306)/memory_db?parseTime=true&charset=utf8mb4
 
 ```sql
 CREATE TABLE memories (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
     app_name VARCHAR(255) NOT NULL,
     user_id VARCHAR(255) NOT NULL,
     memory_id VARCHAR(64) NOT NULL,
     memory_data JSON NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    deleted_at TIMESTAMP NULL,
-    UNIQUE INDEX (app_name, user_id, memory_id)
-)
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP NULL DEFAULT NULL,
+    PRIMARY KEY (app_name, user_id, memory_id),
+    INDEX idx_app_user (app_name, user_id),
+    INDEX idx_deleted_at (deleted_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 ```
 
 **资源清理**：使用完毕后需调用 `Close()` 方法释放数据库连接：
@@ -973,16 +992,19 @@ postgresService, err := memorypostgres.NewService(
 
 ```sql
 CREATE TABLE memories (
-    id BIGSERIAL PRIMARY KEY,
-    app_name VARCHAR(255) NOT NULL,
-    user_id VARCHAR(255) NOT NULL,
-    memory_id VARCHAR(64) NOT NULL,
+    memory_id TEXT PRIMARY KEY,
+    app_name TEXT NOT NULL,
+    user_id TEXT NOT NULL,
     memory_data JSONB NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    deleted_at TIMESTAMP NULL,
-    UNIQUE (app_name, user_id, memory_id)
-)
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP NULL DEFAULT NULL
+);
+
+-- 性能索引
+CREATE INDEX IF NOT EXISTS memories_app_user ON memories(app_name, user_id);
+CREATE INDEX IF NOT EXISTS memories_updated_at ON memories(updated_at DESC);
+CREATE INDEX IF NOT EXISTS memories_deleted_at ON memories(deleted_at);
 ```
 
 **资源清理**：使用完毕后需调用 `Close()` 方法释放数据库连接：
@@ -991,19 +1013,88 @@ CREATE TABLE memories (
 defer postgresService.Close()
 ```
 
+### pgvector 存储
+
+**适用场景**：生产环境、向量相似度搜索
+
+```go
+import memorypgvector "trpc.group/trpc-go/trpc-agent-go/memory/pgvector"
+import openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
+
+embedder := openaiembedder.New(openaiembedder.WithModel("text-embedding-3-small"))
+
+pgvectorService, err := memorypgvector.NewService(
+    memorypgvector.WithHost("localhost"),
+    memorypgvector.WithPort(5432),
+    memorypgvector.WithUser("postgres"),
+    memorypgvector.WithPassword("password"),
+    memorypgvector.WithDatabase("dbname"),
+    memorypgvector.WithEmbedder(embedder),
+    memorypgvector.WithSoftDelete(true),
+)
+```
+
+**配置选项**：
+
+- `WithHost/WithPort/WithUser/WithPassword/WithDatabase`: 连接参数
+- `WithSSLMode(mode)`: SSL 模式（默认 "disable"）
+- `WithPostgresInstance(name)`: 使用预注册的 PostgreSQL 实例
+- `WithEmbedder(embedder)`: 文本嵌入器，用于生成向量（必需）
+- `WithSoftDelete(enabled)`: 启用软删除（默认 false）
+- `WithTableName(name)`: 自定义表名（默认 "memories"）
+- `WithSchema(schema)`: 指定数据库 schema（默认为 public）
+- `WithIndexDimension(dim)`: 向量维度（默认 1536）
+- `WithMaxResults(limit)`: 最大搜索结果数（默认 10）
+- `WithMemoryLimit(limit)`: 每用户记忆上限
+- `WithCustomTool(toolName, creator)`: 注册自定义工具
+- `WithToolEnabled(toolName, enabled)`: 启用/禁用工具
+- `WithExtraOptions(...options)`: 传递给 PostgreSQL 客户端的额外选项
+- `WithSkipDBInit(skip)`: 跳过表初始化（适用于无 DDL 权限场景）
+- `WithHNSWIndexParams(params)`: HNSW 索引参数，用于向量搜索
+
+**注意**：直接连接参数优先级高于 `WithPostgresInstance`。需要 PostgreSQL 中安装 pgvector 扩展。
+
+**表结构**（自动创建）：
+
+```sql
+CREATE TABLE memories (
+    memory_id TEXT PRIMARY KEY,
+    app_name TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    memory_content TEXT NOT NULL,
+    topics TEXT[],
+    embedding vector(1536),
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP NULL DEFAULT NULL
+);
+
+-- 性能索引
+CREATE INDEX ON memories(app_name, user_id);
+CREATE INDEX ON memories(updated_at DESC);
+CREATE INDEX ON memories(deleted_at);
+CREATE INDEX ON memories USING hnsw (embedding vector_cosine_ops);
+```
+
+**资源清理**：使用完毕后需调用 `Close()` 方法释放数据库连接：
+
+```go
+defer pgvectorService.Close()
+```
+
 ### 后端对比与选择
 
-| 特性         | InMemory | Redis  | MySQL    | PostgreSQL |
-| ------------ | -------- | ------ | -------- | ---------- |
-| **持久化**   | ❌       | ✅     | ✅       | ✅         |
-| **分布式**   | ❌       | ✅     | ✅       | ✅         |
-| **事务**     | ❌       | 部分   | ✅ ACID  | ✅ ACID    |
-| **查询**     | 简单     | 中等   | SQL      | SQL        |
-| **JSON**     | ❌       | 基础   | JSON     | JSONB      |
-| **性能**     | 极高     | 高     | 中高     | 中高       |
-| **配置**     | 零配置   | 简单   | 中等     | 中等       |
-| **软删除**   | ❌       | ❌     | ✅       | ✅         |
-| **适用场景** | 开发测试 | 高并发 | 企业应用 | 高级特性   |
+| 特性         | InMemory | Redis  | MySQL    | PostgreSQL | pgvector |
+| ------------ | -------- | ------ | -------- | ---------- | -------- |
+| **持久化**   | ❌       | ✅     | ✅       | ✅         | ✅       |
+| **分布式**   | ❌       | ✅     | ✅       | ✅         | ✅       |
+| **事务**     | ❌       | 部分   | ✅ ACID  | ✅ ACID    | ✅ ACID  |
+| **查询**     | 简单     | 中等   | SQL      | SQL        | SQL+向量 |
+| **JSON**     | ❌       | 基础   | JSON     | JSONB      | JSONB    |
+| **性能**     | 极高     | 高     | 中高     | 中高       | 中高     |
+| **配置**     | 零配置   | 简单   | 中等     | 中等       | 中等     |
+| **软删除**   | ❌       | ❌     | ✅       | ✅         | ✅       |
+| **适用场景** | 开发测试 | 高并发 | 企业应用 | 高级特性   | 向量搜索 |
 
 **选择建议**：
 
@@ -1012,7 +1103,8 @@ defer postgresService.Close()
 高并发读写 → Redis（内存级性能）
 需要 ACID → MySQL/PostgreSQL（事务保证）
 复杂 JSON → PostgreSQL（JSONB 索引和查询）
-审计追踪 → MySQL/PostgreSQL（软删除支持）
+向量搜索 → pgvector（基于 embedding 的相似度搜索）
+审计追踪 → MySQL/PostgreSQL/pgvector（软删除支持）
 ```
 
 ## 常见问题
@@ -1045,7 +1137,7 @@ session.AddMessage(ctx, sessionKey, agentMessage("今天晴天"))
 
 ### Memory ID 的幂等性
 
-Memory ID 基于「内容 + 主题」的 SHA256 哈希生成，相同内容会产生相同 ID：
+Memory ID 基于「内容 + 排序后的主题 + appName + userID」的 SHA256 哈希生成，同一用户下相同内容会产生相同 ID：
 
 ```go
 // 第一次添加
@@ -1063,9 +1155,14 @@ memory.AddMemory(ctx, userKey, "用户喜欢编程", []string{"爱好"})
 - ✅ **幂等操作**：重复添加不会创建多条记录
 - ⚠️ **覆盖更新**：无法追加相同内容（如需追加，可在内容中加时间戳或序号）
 
-### 搜索功能的局限性
+### 搜索行为说明
 
-Memory 使用**Token 匹配**，不是语义搜索：
+搜索行为取决于后端：
+
+- 对 `inmemory` / `redis` / `mysql` / `postgres`：`SearchMemories` 使用**Token 匹配**（不是语义搜索）。
+- 对 `pgvector`：`SearchMemories` 使用**向量相似度检索**，并且需要配置 Embedder。
+
+**Token 匹配细节**（非 pgvector 后端）：
 
 **英文分词**：转小写 → 过滤停用词（a、the、is 等）→ 空格分割
 
@@ -1087,22 +1184,22 @@ Memory 使用**Token 匹配**，不是语义搜索：
 搜索："写代码" ❌ 不匹配（词不同）
 ```
 
-**限制**：
+**限制**（非 pgvector 后端）：
 
-- 所有后端均在**应用层**过滤和排序（O(n) 复杂度）
+- 这些后端均在**应用层**过滤和排序（\[O(n)\] 复杂度）
 - 数据量大时性能受影响
 - 不支持语义相似度搜索
 
 **建议**：
 
 - 使用明确关键词和主题标签提高命中率
-- 如需语义搜索，考虑集成向量数据库（需自定义实现）
+- 如需语义相似度检索，使用 pgvector 后端
 
 ### 软删除的注意事项
 
 **支持情况**：
 
-- ✅ MySQL、PostgreSQL：支持软删除
+- ✅ MySQL、PostgreSQL、pgvector：支持软删除
 - ❌ InMemory、Redis：不支持（只有硬删除）
 
 **软删除配置**：
@@ -1204,18 +1301,18 @@ adminService := memoryinmemory.NewMemoryService(
 | `WithMemoryQueueSize(n)`   | 记忆任务队列大小                | 10          |
 | `WithMemoryJobTimeout(d)`  | 每个提取任务的超时时间          | 30s         |
 
-### 提取检查器（Extraction Checkers，>= 1.3.0）
+### 提取检查器（Extraction Checkers）
 
 检查器（Checker）用于控制何时触发记忆提取。默认情况下，每轮对话都会触发提取。使用检查器可以优化提取频率，降低 LLM 调用成本。
 
 #### 可用的检查器
 
-| 检查器                 | 说明                                 | 示例                                             |
-| ---------------------- | ------------------------------------ | ------------------------------------------------ |
-| `CheckMessageThreshold`| 当累积消息数超过阈值时触发           | `CheckMessageThreshold(5)` - 消息数 > 5 时触发   |
-| `CheckTimeInterval`    | 当距上次提取超过指定时间间隔时触发   | `CheckTimeInterval(3*time.Minute)` - 每 3 分钟   |
-| `ChecksAll`            | 组合多个检查器，使用 AND 逻辑        | 所有检查器都通过才触发                           |
-| `ChecksAny`            | 组合多个检查器，使用 OR 逻辑         | 任一检查器通过即触发                             |
+| 检查器                  | 说明                               | 示例                                           |
+| ----------------------- | ---------------------------------- | ---------------------------------------------- |
+| `CheckMessageThreshold` | 当累积消息数超过阈值时触发         | `CheckMessageThreshold(5)` - 消息数 > 5 时触发 |
+| `CheckTimeInterval`     | 当距上次提取超过指定时间间隔时触发 | `CheckTimeInterval(3*time.Minute)` - 每 3 分钟 |
+| `ChecksAll`             | 组合多个检查器，使用 AND 逻辑      | 所有检查器都通过才触发                         |
+| `ChecksAny`             | 组合多个检查器，使用 OR 逻辑       | 任一检查器通过即触发                           |
 
 #### 检查器配置示例
 
@@ -1234,6 +1331,29 @@ memExtractor := extractor.NewExtractor(
     extractorModel,
     extractor.WithChecker(extractor.CheckMessageThreshold(10)),
     extractor.WithChecker(extractor.CheckTimeInterval(5*time.Minute)),
+)
+```
+
+#### 模型回调（Before/After Model）
+
+提取器也支持通过 `model.Callbacks` 注入 before/after 回调（仅支持 structured），用于埋点、改写请求，或在测试中短路模型调用。
+
+```go
+callbacks := model.NewCallbacks().RegisterBeforeModel(
+    func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+        // You can modify args.Request or return CustomResponse.
+        return nil, nil
+    },
+).RegisterAfterModel(
+    func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+        // You can inspect/override args.Response.
+        return nil, nil
+    },
+)
+
+memExtractor := extractor.NewExtractor(
+    extractorModel,
+    extractor.WithModelCallbacks(callbacks),
 )
 ```
 
@@ -1257,19 +1377,19 @@ type ExtractionContext struct {
 
 **前端工具**（通过 `Tools()` 暴露给 Agent 调用）：
 
-| 工具            | 默认  | 说明                       |
-| --------------- | ----- | -------------------------- |
-| `memory_search` | ✅ 开 | 按查询搜索记忆             |
-| `memory_load`   | ❌ 关 | 加载全部或最近 N 条记忆    |
+| 工具            | 默认  | 说明                    |
+| --------------- | ----- | ----------------------- |
+| `memory_search` | ✅ 开 | 按查询搜索记忆          |
+| `memory_load`   | ❌ 关 | 加载全部或最近 N 条记忆 |
 
 **后端工具**（提取器在后台使用，不暴露给 Agent）：
 
-| 工具            | 默认  | 说明                           |
-| --------------- | ----- | ------------------------------ |
-| `memory_add`    | ✅ 开 | 添加新记忆（提取器使用）       |
-| `memory_update` | ✅ 开 | 更新现有记忆                   |
-| `memory_delete` | ✅ 开 | 删除记忆                       |
-| `memory_clear`  | ❌ 关 | 清空用户所有记忆（危险操作）   |
+| 工具            | 默认  | 说明                         |
+| --------------- | ----- | ---------------------------- |
+| `memory_add`    | ✅ 开 | 添加新记忆（提取器使用）     |
+| `memory_update` | ✅ 开 | 更新现有记忆                 |
+| `memory_delete` | ✅ 开 | 删除记忆                     |
+| `memory_clear`  | ❌ 关 | 清空用户所有记忆（危险操作） |
 
 **配置示例**：
 
@@ -1289,14 +1409,14 @@ memoryService := memoryinmemory.NewMemoryService(
 
 ### 两种模式对比
 
-| 工具            | 工具驱动模式（无提取器）        | 自动提取模式（有提取器）          |
-| --------------- | ------------------------------- | --------------------------------- |
-| `memory_add`    | ✅ Agent 通过 `Tools()` 调用    | ✅ 提取器在后台使用               |
-| `memory_update` | ✅ Agent 通过 `Tools()` 调用    | ✅ 提取器在后台使用               |
-| `memory_search` | ✅ Agent 通过 `Tools()` 调用    | ✅ Agent 通过 `Tools()` 调用      |
-| `memory_load`   | ✅ Agent 通过 `Tools()` 调用    | ⚙️ 启用后 Agent 通过 `Tools()` 调用 |
-| `memory_delete` | ⚙️ 启用后 Agent 通过 `Tools()` 调用 | ✅ 提取器在后台使用            |
-| `memory_clear`  | ⚙️ 启用后 Agent 通过 `Tools()` 调用 | ⚙️ 启用后提取器在后台使用      |
+| 工具            | 工具驱动模式（无提取器）            | 自动提取模式（有提取器）            |
+| --------------- | ----------------------------------- | ----------------------------------- |
+| `memory_add`    | ✅ Agent 通过 `Tools()` 调用        | ✅ 提取器在后台使用                 |
+| `memory_update` | ✅ Agent 通过 `Tools()` 调用        | ✅ 提取器在后台使用                 |
+| `memory_search` | ✅ Agent 通过 `Tools()` 调用        | ✅ Agent 通过 `Tools()` 调用        |
+| `memory_load`   | ✅ Agent 通过 `Tools()` 调用        | ⚙️ 启用后 Agent 通过 `Tools()` 调用 |
+| `memory_delete` | ⚙️ 启用后 Agent 通过 `Tools()` 调用 | ✅ 提取器在后台使用                 |
+| `memory_clear`  | ⚙️ 启用后 Agent 通过 `Tools()` 调用 | ⚙️ 启用后提取器在后台使用           |
 
 ### 记忆预加载
 

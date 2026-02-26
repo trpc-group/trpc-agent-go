@@ -13,6 +13,7 @@ package inmemory
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -84,11 +85,15 @@ func NewMemoryService(options ...ServiceOpt) *MemoryService {
 
 	// Initialize auto memory worker if extractor is configured.
 	if opts.extractor != nil {
+		imemory.ConfigureExtractorEnabledTools(
+			opts.extractor, opts.enabledTools,
+		)
 		config := imemory.AutoMemoryConfig{
 			Extractor:        opts.extractor,
 			AsyncMemoryNum:   opts.asyncMemoryNum,
 			MemoryQueueSize:  opts.memoryQueueSize,
 			MemoryJobTimeout: opts.memoryJobTimeout,
+			EnabledTools:     opts.enabledTools,
 		}
 		svc.autoMemoryWorker = imemory.NewAutoMemoryWorker(config, svc)
 		svc.autoMemoryWorker.Start()
@@ -317,7 +322,7 @@ func (s *MemoryService) SearchMemories(ctx context.Context, userKey memory.UserK
 // In agentic mode, all enabled tools are returned.
 // The tools list is pre-computed at service creation time.
 func (s *MemoryService) Tools() []tool.Tool {
-	return s.precomputedTools
+	return slices.Clone(s.precomputedTools)
 }
 
 // EnqueueAutoMemoryJob enqueues an auto memory extraction job for async

@@ -16,7 +16,11 @@ import (
 	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/text"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
 
 func TestMarkdownChunking_BasicOverlap(t *testing.T) {
@@ -39,14 +43,14 @@ Second paragraph more text.`
 	require.NoError(t, err)
 	require.Greater(t, len(chunks), 1)
 
-	// Overlap marker adds 52 characters: "\n\n--- above content is overlap of prefix chunk ---\n\n"
-	const overlapMarkerLen = 52
+	// Overlap separator adds 4 characters: "\n\n" + "\n\n" (no visible marker)
+	const overlapSeparatorLen = 4
 
 	// Validate each chunk size - use character count, not byte count
 	for i, c := range chunks {
-		// Ensure chunk size not huge (>2*size + overlap marker)
+		// Ensure chunk size not huge (>2*size + overlap separator)
 		charCount := utf8.RuneCountInString(c.Content)
-		maxSize := 2*size + overlapMarkerLen
+		maxSize := 2*size + overlapSeparatorLen
 		require.LessOrEqual(t, charCount, maxSize, "Chunk %d has %d chars, exceeds max=%d", i, charCount, maxSize)
 
 		// Verify UTF-8 validity
@@ -124,19 +128,19 @@ func TestMarkdownChunking_NoStructure(t *testing.T) {
 	require.NoError(t, err)
 	require.Greater(t, len(chunks), 1, "Long text should be split into multiple chunks")
 
-	// Overlap marker adds 52 characters: "\n\n--- above content is overlap of prefix chunk ---\n\n"
-	const overlapMarkerLen = 52
+	// Overlap separator adds 4 characters: "\n\n" + "\n\n" (no visible marker)
+	const overlapSeparatorLen = 4
 
 	// Validate forced splitting
 	for i, c := range chunks {
 		charCount := utf8.RuneCountInString(c.Content)
 		var maxSize int
 		if i == 0 {
-			// First chunk has no overlap marker
+			// First chunk has no overlap separator
 			maxSize = size + overlap
 		} else {
-			// Subsequent chunks may have overlap marker
-			maxSize = size + overlap + overlapMarkerLen
+			// Subsequent chunks may have overlap separator
+			maxSize = size + overlap + overlapSeparatorLen
 		}
 		require.LessOrEqual(t, charCount, maxSize, "Chunk %d has %d chars, exceeds max=%d", i, charCount, maxSize)
 
@@ -290,13 +294,13 @@ func TestMarkdownChunking_CaseMDFormat(t *testing.T) {
 	expectedMinChunks := (totalChars + size - 1) / (size - overlap) // Ceiling division
 	require.GreaterOrEqual(t, len(chunks), expectedMinChunks/2, "Should have sufficient chunks for large table content")
 
-	// Overlap marker adds 52 characters: "\n\n--- above content is overlap of prefix chunk ---\n\n"
-	const overlapMarkerLen = 52
+	// Overlap separator adds 4 characters: "\n\n" + "\n\n" (no visible marker)
+	const overlapSeparatorLen = 4
 
 	// Check each chunk
 	for i, chunk := range chunks {
 		charCount := utf8.RuneCountInString(chunk.Content)
-		maxSize := 2*size + overlapMarkerLen
+		maxSize := 2*size + overlapSeparatorLen
 		require.LessOrEqual(t, charCount, maxSize, "Chunk %d has %d chars, exceeds max=%d", i, charCount, maxSize)
 		require.True(t, utf8.ValidString(chunk.Content), "Chunk %d contains invalid UTF-8", i)
 		require.NotEmpty(t, chunk.Content, "Chunk %d is empty", i)
@@ -378,6 +382,608 @@ func TestMarkdownChunking_EdgeCases(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestMarkdownChunking_SplitByHeader_HeadingWithoutText verifies that
+// splitByHeader handles headings without text safely and preserves content.
+func TestMarkdownChunking_SplitByHeader_HeadingWithoutText(t *testing.T) {
+	tests := []struct {
+		name         string
+		level        int
+		content      string
+		contentHints []string
+	}{
+		{
+			name:  "empty level1 heading after normal level1 heading",
+			level: 1,
+			content: `# First Title
+
+Paragraph before empty level1 heading that should be retained.
+
+#
+
+Paragraph after empty level1 heading should still be retained.`,
+			contentHints: []string{
+				"Paragraph before empty level1 heading",
+				"Paragraph after empty level1 heading",
+			},
+		},
+		{
+			name:  "empty level2 heading after normal level2 heading",
+			level: 2,
+			content: `## Section A
+
+Content before empty level2 heading should be retained.
+
+##
+
+Content after empty level2 heading should still be retained.`,
+			contentHints: []string{
+				"Content before empty level2 heading",
+				"Content after empty level2 heading",
+			},
+		},
+		{
+			name:  "closing-hash-only heading",
+			level: 3,
+			content: `### Section A
+
+Content before closing-hash-only heading should be retained.
+
+### ###
+
+Content after closing-hash-only heading should still be retained.`,
+			contentHints: []string{
+				"Content before closing-hash-only heading",
+				"Content after closing-hash-only heading",
+			},
+		},
+		{
+			name:  "consecutive empty level1 headings",
+			level: 1,
+			content: `# First Title
+
+Content before consecutive empty level1 headings should be retained.
+
+#
+
+#
+
+Content after consecutive empty level1 headings should still be retained.`,
+			contentHints: []string{
+				"Content before consecutive empty level1 headings",
+				"Content after consecutive empty level1 headings",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mc := NewMarkdownChunking(WithMarkdownChunkSize(32), WithMarkdownOverlap(0))
+
+			var sections []headerSection
+			require.NotPanics(t, func() {
+				sections = mc.splitByHeader(tt.content, tt.level)
+			})
+			require.NotEmpty(t, sections)
+
+			var combined strings.Builder
+			for _, section := range sections {
+				require.NotEmpty(t, strings.TrimSpace(section.Content))
+				combined.WriteString(section.Header)
+				combined.WriteString("\n")
+				combined.WriteString(section.Content)
+				combined.WriteString("\n")
+			}
+
+			fullText := combined.String()
+			for _, hint := range tt.contentHints {
+				require.Contains(t, fullText, hint)
+			}
+		})
+	}
+}
+
+func TestFindNodeStartPos(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		level   int
+		wantPos int
+		wantTag string
+	}{
+		{
+			name:    "heading at file start",
+			content: "# Title\n\nBody",
+			level:   1,
+			wantTag: "# Title",
+		},
+		{
+			name:    "heading after prefix line",
+			content: "Intro line\n\n## Subtitle\n\nBody",
+			level:   2,
+			wantTag: "## Subtitle",
+		},
+		{
+			name:    "heading with nested emphasis text",
+			content: "Intro line\n\n## **Subtitle**\n\nBody",
+			level:   2,
+			wantTag: "## **Subtitle**",
+		},
+		{
+			name:    "heading with nested link text",
+			content: "Intro line\n\n## [Link](https://example.com)\n\nBody",
+			level:   2,
+			wantTag: "## [Link](https://example.com)",
+		},
+		{
+			name:    "empty heading has no text segment",
+			content: "Intro line\n\n#\n\nBody",
+			level:   1,
+			wantPos: -1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			heading := mustFindHeadingByLevel(t, tt.content, tt.level)
+			got := findNodeStartPos(heading, []byte(tt.content))
+
+			want := tt.wantPos
+			if tt.wantTag != "" {
+				want = strings.Index(tt.content, tt.wantTag)
+				require.NotEqual(t, -1, want)
+			}
+			require.Equal(t, want, got)
+		})
+	}
+}
+
+func TestFindHeadingLineStartFallback(t *testing.T) {
+	tests := []struct {
+		name             string
+		source           string
+		searchFrom       int
+		searchFromAnchor string
+		searchFromOffset int
+		level            int
+		headingText      string
+		wantPos          int
+		wantTag          string
+	}{
+		{
+			name:        "empty source",
+			source:      "",
+			searchFrom:  0,
+			level:       1,
+			headingText: "A",
+			wantPos:     -1,
+		},
+		{
+			name:        "invalid level",
+			source:      "# A\n",
+			searchFrom:  0,
+			level:       0,
+			headingText: "A",
+			wantPos:     -1,
+		},
+		{
+			name:        "negative searchFrom is clamped",
+			source:      "# Alpha\n\nBody\n",
+			searchFrom:  -100,
+			level:       1,
+			headingText: "Alpha",
+			wantTag:     "# Alpha",
+		},
+		{
+			name:        "searchFrom above length is clamped",
+			source:      "Body line\n\n# Tail",
+			searchFrom:  999,
+			level:       1,
+			headingText: "Tail",
+			wantTag:     "# Tail",
+		},
+		{
+			name:             "searchFrom inside heading line backtracks to line start",
+			source:           "Body line\n\n## Mid\n\nTail\n",
+			searchFromAnchor: "## Mid",
+			searchFromOffset: 3,
+			level:            2,
+			headingText:      "Mid",
+			wantTag:          "## Mid",
+		},
+		{
+			name:        "heading text trim space still matches",
+			source:      "# Alpha\n\n# Beta\n",
+			searchFrom:  0,
+			level:       1,
+			headingText: "   Beta   ",
+			wantTag:     "# Beta",
+		},
+		{
+			name:        "heading text mismatch falls back to first candidate",
+			source:      "# Alpha\n\n# Beta\n",
+			searchFrom:  0,
+			level:       1,
+			headingText: "Gamma",
+			wantTag:     "# Alpha",
+		},
+		{
+			name:        "no heading candidate returns negative one",
+			source:      "Body line\n\nTail line\n",
+			searchFrom:  0,
+			level:       1,
+			headingText: "Alpha",
+			wantPos:     -1,
+		},
+		{
+			name:        "windows newline heading line is recognized",
+			source:      "# Alpha\r\n\r\nBody\n",
+			searchFrom:  0,
+			level:       1,
+			headingText: "Alpha",
+			wantTag:     "# Alpha",
+		},
+		{
+			name:        "empty heading text does not match non-empty heading lines",
+			source:      "# Alpha\n\n# Beta\n",
+			searchFrom:  0,
+			level:       1,
+			headingText: "",
+			wantPos:     -1,
+		},
+		{
+			name:        "empty heading text matches pure empty heading marker",
+			source:      "# Alpha\n\n#\n\nTail\n",
+			searchFrom:  0,
+			level:       1,
+			headingText: "",
+			wantTag:     "#\n",
+		},
+		{
+			name:        "empty heading text matches empty closing-hash heading",
+			source:      "### Alpha\n\n### ###\n\nTail\n",
+			searchFrom:  0,
+			level:       3,
+			headingText: "",
+			wantTag:     "### ###",
+		},
+		{
+			name:        "empty heading text ignores heading-like lines in fenced code block",
+			source:      "```md\n# inside code\n```\n\n#\n",
+			searchFrom:  0,
+			level:       1,
+			headingText: "",
+			wantTag:     "#\n",
+		},
+		{
+			name:        "empty heading text returns negative one when only fenced heading-like lines exist",
+			source:      "```md\n# inside code\n```\n\nTail\n",
+			searchFrom:  0,
+			level:       1,
+			headingText: "",
+			wantPos:     -1,
+		},
+		{
+			name:        "non-empty heading text ignores fenced heading-like lines",
+			source:      "```md\n# Target\n```\n\n# Target outside\n",
+			searchFrom:  0,
+			level:       1,
+			headingText: "Target outside",
+			wantTag:     "# Target outside",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			searchFrom := tt.searchFrom
+			if tt.searchFromAnchor != "" {
+				anchorPos := strings.Index(tt.source, tt.searchFromAnchor)
+				require.NotEqual(t, -1, anchorPos)
+				searchFrom = anchorPos + tt.searchFromOffset
+			}
+
+			got := findHeadingLineStartFallback(
+				[]byte(tt.source),
+				searchFrom,
+				tt.level,
+				tt.headingText,
+			)
+
+			want := tt.wantPos
+			if tt.wantTag != "" {
+				want = strings.Index(tt.source, tt.wantTag)
+				require.NotEqual(t, -1, want)
+			}
+			require.Equal(t, want, got)
+		})
+	}
+}
+
+func TestNormalizeHeadingLineStart(t *testing.T) {
+	tests := []struct {
+		name             string
+		headingLineStart int
+		lastHeaderPos    int
+		want             int
+	}{
+		{
+			name:             "negative start is clamped to lastHeaderPos",
+			headingLineStart: -1,
+			lastHeaderPos:    12,
+			want:             12,
+		},
+		{
+			name:             "start less than lastHeaderPos is clamped",
+			headingLineStart: 8,
+			lastHeaderPos:    12,
+			want:             12,
+		},
+		{
+			name:             "start equals lastHeaderPos is preserved",
+			headingLineStart: 12,
+			lastHeaderPos:    12,
+			want:             12,
+		},
+		{
+			name:             "start greater than lastHeaderPos is preserved",
+			headingLineStart: 30,
+			lastHeaderPos:    12,
+			want:             30,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := normalizeHeadingLineStart(tt.headingLineStart, tt.lastHeaderPos)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestIsATXHeadingLineAtLevel(t *testing.T) {
+	tests := []struct {
+		name  string
+		line  []byte
+		level int
+		want  bool
+	}{
+		{
+			name:  "invalid level zero",
+			line:  []byte("# Title"),
+			level: 0,
+			want:  false,
+		},
+		{
+			name:  "invalid negative level",
+			line:  []byte("# Title"),
+			level: -1,
+			want:  false,
+		},
+		{
+			name:  "leading spaces greater than three are rejected",
+			line:  []byte("    # Title"),
+			level: 1,
+			want:  false,
+		},
+		{
+			name:  "leading spaces up to three are accepted",
+			line:  []byte("   # Title"),
+			level: 1,
+			want:  true,
+		},
+		{
+			name:  "exact marker length is accepted",
+			line:  []byte("##"),
+			level: 2,
+			want:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isATXHeadingLineAtLevel(tt.line, tt.level)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestIsEmptyATXHeadingLineAtLevel(t *testing.T) {
+	tests := []struct {
+		name  string
+		line  []byte
+		level int
+		want  bool
+	}{
+		{
+			name:  "pure marker heading",
+			line:  []byte("#"),
+			level: 1,
+			want:  true,
+		},
+		{
+			name:  "marker with trailing spaces",
+			line:  []byte("##   "),
+			level: 2,
+			want:  true,
+		},
+		{
+			name:  "empty heading with closing hashes",
+			line:  []byte("### ###"),
+			level: 3,
+			want:  true,
+		},
+		{
+			name:  "non-empty heading text",
+			line:  []byte("# title"),
+			level: 1,
+			want:  false,
+		},
+		{
+			name:  "not atx heading line",
+			line:  []byte("plain text"),
+			level: 1,
+			want:  false,
+		},
+		{
+			name:  "leading spaces over limit",
+			line:  []byte("    #"),
+			level: 1,
+			want:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isEmptyATXHeadingLineAtLevel(tt.line, tt.level)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestParseFenceDelimiter(t *testing.T) {
+	tests := []struct {
+		name     string
+		line     []byte
+		wantOK   bool
+		wantChar byte
+		wantLen  int
+		wantRema string
+	}{
+		{
+			name:     "backtick fence with info string",
+			line:     []byte("```go"),
+			wantOK:   true,
+			wantChar: '`',
+			wantLen:  3,
+			wantRema: "go",
+		},
+		{
+			name:     "tilde fence with indentation",
+			line:     []byte("   ~~~~python"),
+			wantOK:   true,
+			wantChar: '~',
+			wantLen:  4,
+			wantRema: "python",
+		},
+		{
+			name:   "too short delimiter is rejected",
+			line:   []byte("``"),
+			wantOK: false,
+		},
+		{
+			name:   "indentation over three spaces is rejected",
+			line:   []byte("    ```"),
+			wantOK: false,
+		},
+		{
+			name:   "non fence line is rejected",
+			line:   []byte("# heading"),
+			wantOK: false,
+		},
+		{
+			name:     "fence with carriage return",
+			line:     []byte("```\r"),
+			wantOK:   true,
+			wantChar: '`',
+			wantLen:  3,
+			wantRema: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotChar, gotLen, gotRest, ok := parseFenceDelimiter(tt.line)
+			require.Equal(t, tt.wantOK, ok)
+			if !tt.wantOK {
+				return
+			}
+			require.Equal(t, tt.wantChar, gotChar)
+			require.Equal(t, tt.wantLen, gotLen)
+			require.Equal(t, tt.wantRema, string(gotRest))
+		})
+	}
+}
+
+func TestFindLineContentStartPos(t *testing.T) {
+	source := []byte("line1\nline2")
+
+	tests := []struct {
+		name      string
+		src       []byte
+		lineStart int
+		want      int
+	}{
+		{
+			name:      "negative line start returns zero",
+			src:       source,
+			lineStart: -3,
+			want:      0,
+		},
+		{
+			name:      "line start beyond source length returns source length",
+			src:       source,
+			lineStart: len(source) + 5,
+			want:      len(source),
+		},
+		{
+			name:      "line start equal source length returns source length",
+			src:       source,
+			lineStart: len(source),
+			want:      len(source),
+		},
+		{
+			name:      "normal line start returns next line start",
+			src:       source,
+			lineStart: 0,
+			want:      6,
+		},
+		{
+			name:      "line without trailing newline returns source length",
+			src:       source,
+			lineStart: 6,
+			want:      len(source),
+		},
+		{
+			name:      "empty source with negative start returns zero",
+			src:       []byte(""),
+			lineStart: -1,
+			want:      0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := findLineContentStartPos(tt.src, tt.lineStart)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func mustFindHeadingByLevel(t *testing.T, content string, level int) ast.Node {
+	t.Helper()
+
+	md := goldmark.New()
+	doc := md.Parser().Parse(text.NewReader([]byte(content)))
+
+	var found ast.Node
+	_ = ast.Walk(doc, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		heading, ok := node.(*ast.Heading)
+		if !ok {
+			return ast.WalkContinue, nil
+		}
+		if heading.Level != level {
+			return ast.WalkContinue, nil
+		}
+		found = heading
+		return ast.WalkStop, nil
+	})
+
+	require.NotNil(t, found)
+	return found
 }
 
 // TestMarkdownChunking_MultipleParagraphsInSection tests splitLargeSection with multiple paragraphs
@@ -836,4 +1442,274 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// TestMarkdownChunking_RecursiveIDUniqueness tests that all chunk IDs are unique
+// when recursively splitting markdown documents with nested headers.
+func TestMarkdownChunking_RecursiveIDUniqueness(t *testing.T) {
+	// Create a complex markdown document with multiple levels of nested headers
+	// This structure will trigger the recursive splitting algorithm
+	complexDoc := `# Main Document: System Architecture
+
+This document outlines the complete architecture of our distributed system.
+
+## Chapter 1: Core Components
+
+The core components form the foundation of our system architecture.
+
+### 1.1 Authentication Service
+
+The authentication service handles user identity verification and session management.
+
+#### 1.1.1 JWT Implementation
+
+JSON Web Tokens are used for stateless authentication across services.
+
+##### 1.1.1.1 Token Generation
+
+Tokens are generated using RSA-256 with a 2048-bit key for strong security.
+
+##### 1.1.1.2 Token Validation
+
+All incoming requests must include a valid JWT in the Authorization header.
+
+#### 1.1.2 OAuth 2.0 Integration
+
+Third-party authentication is supported via OAuth 2.0 for major providers.
+
+### 1.2 User Management Service
+
+This service handles user profiles, preferences, and account management.
+
+## Chapter 2: Data Layer
+
+The data layer provides persistence and caching for all services.
+
+### 2.1 Primary Database
+
+We use PostgreSQL 14 as our primary relational database.
+
+#### 2.1.1 Schema Design
+
+The database schema follows third-normal form with appropriate indexes.
+
+#### 2.1.2 Connection Pooling
+
+PgBouncer is used for connection pooling to manage database connections efficiently.
+
+### 2.2 Caching Layer
+
+Redis 7 is used as a distributed cache for frequently accessed data.
+
+#### 2.2.1 Cache Strategies
+
+Different cache strategies are employed based on data access patterns.
+
+##### 2.2.1.1 Read-Through Cache
+
+For data that is read frequently but updated rarely.
+
+##### 2.2.1.2 Write-Through Cache
+
+For data that requires strong consistency between cache and database.
+
+##### 2.2.1.3 Cache Invalidation
+
+A combination of TTL-based and explicit invalidation is used.
+
+### 2.3 Search Index
+
+Elasticsearch provides full-text search capabilities across all content.
+
+## Chapter 3: API Layer
+
+The API layer exposes functionality to external clients and internal services.
+
+### 3.1 REST API
+
+RESTful endpoints follow OpenAPI 3.0 specification with detailed documentation.
+
+### 3.2 GraphQL API
+
+GraphQL provides a flexible query interface for complex data requirements.
+
+### 3.3 gRPC Services
+
+Internal service communication uses gRPC for high-performance RPC calls.
+
+## Chapter 4: Monitoring & Observability
+
+Comprehensive monitoring ensures system reliability and performance.
+
+### 4.1 Metrics Collection
+
+Prometheus scrapes metrics from all services and infrastructure components.
+
+### 4.2 Distributed Tracing
+
+Jaeger provides end-to-end tracing for requests across service boundaries.
+
+### 4.3 Log Aggregation
+
+Fluentd collects and forwards logs to Elasticsearch for centralized analysis.
+
+## Appendix: Long Technical Details
+
+This section contains extensive technical documentation that will be split into multiple chunks due to its length. ` + strings.Repeat("Distributed systems require careful design of communication patterns, failure handling, and consistency models. ", 100)
+
+	doc := &document.Document{
+		ID:      "system_architecture",
+		Name:    "architecture.md",
+		Content: complexDoc,
+		Metadata: map[string]any{
+			"author":  "Engineering Team",
+			"version": "2.1.0",
+			"type":    "technical",
+		},
+	}
+
+	// Use small chunk size to force extensive recursive splitting
+	const chunkSize = 120
+	const overlap = 15
+
+	mc := NewMarkdownChunking(WithMarkdownChunkSize(chunkSize), WithMarkdownOverlap(overlap))
+
+	chunks, err := mc.Chunk(doc)
+	require.NoError(t, err, "Chunk should succeed for complex document")
+	require.Greater(t, len(chunks), 10, "Complex document should generate many chunks")
+
+	//  Verify all chunk IDs are globally unique
+	idSet := make(map[string]bool)
+	for i, chunk := range chunks {
+		// Check for duplicate IDs - this is the main test for the bug fix
+		require.False(t, idSet[chunk.ID], "Duplicate chunk ID found at index %d: %s", i, chunk.ID)
+		idSet[chunk.ID] = true
+
+		// Verify ID follows expected pattern
+		require.True(t, strings.HasPrefix(chunk.ID, doc.ID+"_"),
+			"Chunk ID %s should start with document ID %s", chunk.ID, doc.ID)
+	}
+
+	// Verify metadata consistency
+	require.Equal(t, len(chunks), len(idSet), "Number of chunks should equal number of unique IDs")
+
+	// Verify chunk metadata completeness
+	for i, chunk := range chunks {
+		// Check required metadata fields
+		chunkIndex, hasIndex := chunk.Metadata[source.MetaChunkIndex]
+		require.True(t, hasIndex, "Chunk %d missing chunk index metadata", i)
+
+		chunkSizeMeta, hasSize := chunk.Metadata[source.MetaChunkSize]
+		require.True(t, hasSize, "Chunk %d missing chunk size metadata", i)
+
+		// Verify metadata types
+		_, isInt := chunkIndex.(int)
+		require.True(t, isInt, "Chunk index should be int type")
+
+		_, isIntSize := chunkSizeMeta.(int)
+		require.True(t, isIntSize, "Chunk size should be int type")
+
+		// Verify chunk size metadata matches actual content size
+		actualSize := utf8.RuneCountInString(chunk.Content)
+		if overlappedSize, hasOverlapped := chunk.Metadata[source.MetaOverlappedContentSize]; hasOverlapped {
+			require.Equal(t, overlappedSize, actualSize,
+				"Chunk %d overlapped content size mismatch: metadata=%d, actual=%d",
+				i, overlappedSize, actualSize)
+		} else {
+			require.Equal(t, chunkSizeMeta, actualSize,
+				"Chunk %d size metadata mismatch: expected %d, got %d",
+				i, chunkSizeMeta, actualSize)
+		}
+	}
+
+	// Verify content integrity
+	totalChunkChars := 0
+	for _, chunk := range chunks {
+		content := strings.TrimSpace(chunk.Content)
+		require.NotEmpty(t, content, "Chunk content should not be empty after trimming")
+		require.True(t, utf8.ValidString(chunk.Content), "Chunk contains invalid UTF-8")
+
+		totalChunkChars += utf8.RuneCountInString(chunk.Content)
+	}
+
+	// Account for overlap markers in chunk content
+	overlapMarker := "\n\n--- above content is overlap of prefix chunk ---\n\n"
+	overlapMarkerCount := 0
+	for _, chunk := range chunks {
+		if strings.Contains(chunk.Content, overlapMarker) {
+			overlapMarkerCount++
+		}
+	}
+
+	// Approximate total size check (allowing for overlap and markers)
+	originalChars := utf8.RuneCountInString(complexDoc)
+	expectedMinChars := originalChars - (overlap * (len(chunks) - 1 - overlapMarkerCount))
+	expectedMaxChars := originalChars + (len(overlapMarker) * overlapMarkerCount)
+
+	require.GreaterOrEqual(t, totalChunkChars, expectedMinChars/2,
+		"Total chunk characters too low: got %d, expected at least %d",
+		totalChunkChars, expectedMinChars/2)
+
+	require.LessOrEqual(t, totalChunkChars, expectedMaxChars*2,
+		"Total chunk characters too high: got %d, expected at most %d",
+		totalChunkChars, expectedMaxChars*2)
+
+	// Verify no data loss - check key content appears in chunks
+	keyPhrases := []string{
+		"System Architecture",
+		"Authentication Service",
+		"JWT Implementation",
+		"PostgreSQL",
+		"Redis",
+		"Elasticsearch",
+		"Prometheus",
+		"Jaeger",
+		"Distributed systems",
+	}
+
+	for _, phrase := range keyPhrases {
+		found := false
+		for _, chunk := range chunks {
+			if strings.Contains(chunk.Content, phrase) {
+				found = true
+				break
+			}
+		}
+		require.True(t, found, "Key phrase %q not found in any chunk", phrase)
+	}
+
+	// Verify chunk size limits (accounting for overlap markers)
+	for i, chunk := range chunks {
+		charCount := utf8.RuneCountInString(chunk.Content)
+
+		// Calculate maximum allowed size
+		maxAllowed := chunkSize
+		if i > 0 && strings.Contains(chunk.Content, overlapMarker) {
+			// Chunks with overlap markers can be larger
+			maxAllowed = chunkSize + overlap + len(overlapMarker)
+		} else if i > 0 {
+			// Chunks with overlap but no marker
+			maxAllowed = chunkSize + overlap
+		}
+
+		// Allow some flexibility for header preservation
+		require.LessOrEqual(t, charCount, maxAllowed*2,
+			"Chunk %d too large: %d characters exceeds limit of %d",
+			i, charCount, maxAllowed*2)
+	}
+
+	// Log test results for debugging
+	t.Logf("Generated %d unique chunks for complex recursive document", len(chunks))
+	t.Logf("Document ID: %s", doc.ID)
+	t.Logf("Chunk size: %d, Overlap: %d", chunkSize, overlap)
+
+	// Show sample of generated IDs
+	if len(chunks) > 0 {
+		sampleSize := min(5, len(chunks))
+		sampleIDs := make([]string, sampleSize)
+		for i := 0; i < sampleSize; i++ {
+			sampleIDs[i] = chunks[i].ID
+		}
+		t.Logf("Sample chunk IDs: %v", sampleIDs)
+	}
 }

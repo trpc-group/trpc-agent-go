@@ -32,12 +32,14 @@ func TestNewOptionsDefaults(t *testing.T) {
 func TestOptionOverrides(t *testing.T) {
 	gen := &model.GenerationConfig{Stream: true}
 	opts := newOptions(
+		WithVariant("deepseek"),
 		WithBaseURL("base"),
 		WithAPIKey("key"),
 		WithExtraFields(map[string]any{"x": "y"}),
 		WithNumSamples(3),
 		WithGeneration(gen),
 	)
+	assert.Equal(t, "deepseek", opts.variant)
 	assert.Equal(t, "base", opts.baseURL)
 	assert.Equal(t, "key", opts.apiKey)
 	require.Contains(t, opts.extraFields, "x")

@@ -475,3 +475,173 @@ func TestProcessFileNotRegular(t *testing.T) {
 		t.Errorf("expected 'not a regular file' error, got: %v", err)
 	}
 }
+
+// TestWithFileReaderType verifies the WithFileReaderType option.
+func TestWithFileReaderType(t *testing.T) {
+	tests := []struct {
+		name           string
+		fileReaderType source.FileReaderType
+	}{
+		{
+			name:           "markdown_reader_type",
+			fileReaderType: source.FileReaderTypeMarkdown,
+		},
+		{
+			name:           "json_reader_type",
+			fileReaderType: source.FileReaderTypeJSON,
+		},
+		{
+			name:           "text_reader_type",
+			fileReaderType: source.FileReaderTypeText,
+		},
+		{
+			name:           "csv_reader_type",
+			fileReaderType: source.FileReaderTypeCSV,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			src := New([]string{"dummy"}, WithFileReaderType(tt.fileReaderType))
+
+			if src.fileReaderType != tt.fileReaderType {
+				t.Errorf("fileReaderType = %s, want %s", src.fileReaderType, tt.fileReaderType)
+			}
+		})
+	}
+}
+
+// TestFileReaderTypeOverridesDetection verifies that WithFileReaderType overrides automatic file type detection.
+func TestFileReaderTypeOverridesDetection(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+
+	t.Run("txt_files_with_json_reader", func(t *testing.T) {
+		// Create directory with .txt files containing JSON content
+		subDir := filepath.Join(tmpDir, "json_as_txt")
+		os.Mkdir(subDir, 0755)
+
+		filePath := filepath.Join(subDir, "data.txt")
+		jsonContent := `{"key": "value"}`
+		if err := os.WriteFile(filePath, []byte(jsonContent), 0600); err != nil {
+			t.Fatalf("failed to write file: %v", err)
+		}
+
+		// Use JSON reader type to force JSON parsing for all files
+		src := New([]string{subDir}, WithFileReaderType(source.FileReaderTypeJSON))
+		docs, err := src.ReadDocuments(ctx)
+		if err != nil {
+			t.Fatalf("ReadDocuments failed: %v", err)
+		}
+		if len(docs) == 0 {
+			t.Fatal("expected at least one document")
+		}
+	})
+
+	t.Run("txt_files_with_markdown_reader", func(t *testing.T) {
+		// Create directory with .txt files containing markdown content
+		subDir := filepath.Join(tmpDir, "md_as_txt")
+		os.Mkdir(subDir, 0755)
+
+		filePath := filepath.Join(subDir, "readme.txt")
+		markdownContent := "# Title\n\nParagraph content."
+		if err := os.WriteFile(filePath, []byte(markdownContent), 0600); err != nil {
+			t.Fatalf("failed to write file: %v", err)
+		}
+
+		// Use Markdown reader type
+		src := New([]string{subDir}, WithFileReaderType(source.FileReaderTypeMarkdown))
+		docs, err := src.ReadDocuments(ctx)
+		if err != nil {
+			t.Fatalf("ReadDocuments failed: %v", err)
+		}
+		if len(docs) == 0 {
+			t.Fatal("expected at least one document")
+		}
+	})
+
+	t.Run("default_detection_without_override", func(t *testing.T) {
+		subDir := filepath.Join(tmpDir, "default")
+		os.Mkdir(subDir, 0755)
+
+		filePath := filepath.Join(subDir, "sample.txt")
+		if err := os.WriteFile(filePath, []byte("plain text"), 0600); err != nil {
+			t.Fatalf("failed to write file: %v", err)
+		}
+
+		src := New([]string{subDir})
+		if src.fileReaderType != "" {
+			t.Error("fileReaderType should be empty by default")
+		}
+
+		docs, err := src.ReadDocuments(ctx)
+		if err != nil {
+			t.Fatalf("ReadDocuments failed: %v", err)
+		}
+		if len(docs) == 0 {
+			t.Fatal("expected at least one document")
+		}
+	})
+}
+
+// TestFileReaderTypeWithChunking verifies WithFileReaderType works with chunking options.
+func TestFileReaderTypeWithChunking(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "test.txt")
+	content := strings.Repeat("word ", 100)
+	if err := os.WriteFile(filePath, []byte(content), 0600); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	src := New([]string{tmpDir},
+		WithFileReaderType(source.FileReaderTypeText),
+		WithChunkSize(50),
+		WithChunkOverlap(10),
+	)
+
+	if src.fileReaderType != source.FileReaderTypeText {
+		t.Errorf("fileReaderType = %s, want %s", src.fileReaderType, source.FileReaderTypeText)
+	}
+	if src.chunkSize != 50 {
+		t.Errorf("chunkSize = %d, want 50", src.chunkSize)
+	}
+	if src.chunkOverlap != 10 {
+		t.Errorf("chunkOverlap = %d, want 10", src.chunkOverlap)
+	}
+
+	docs, err := src.ReadDocuments(ctx)
+	if err != nil {
+		t.Fatalf("ReadDocuments failed: %v", err)
+	}
+	if len(docs) == 0 {
+		t.Fatal("expected at least one document")
+	}
+}
+
+// TestFileReaderTypeWithRecursive verifies WithFileReaderType works with recursive option.
+func TestFileReaderTypeWithRecursive(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+
+	// Create nested directory structure
+	subDir := filepath.Join(tmpDir, "sub")
+	os.Mkdir(subDir, 0755)
+
+	// Create files at both levels
+	os.WriteFile(filepath.Join(tmpDir, "root.txt"), []byte(`{"root": true}`), 0600)
+	os.WriteFile(filepath.Join(subDir, "nested.txt"), []byte(`{"nested": true}`), 0600)
+
+	src := New([]string{tmpDir},
+		WithFileReaderType(source.FileReaderTypeJSON),
+		WithRecursive(true),
+	)
+
+	docs, err := src.ReadDocuments(ctx)
+	if err != nil {
+		t.Fatalf("ReadDocuments failed: %v", err)
+	}
+	if len(docs) < 2 {
+		t.Errorf("expected at least 2 documents (root + nested), got %d", len(docs))
+	}
+}

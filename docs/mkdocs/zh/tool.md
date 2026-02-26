@@ -11,6 +11,7 @@ Tool 工具系统是 tRPC-Agent-Go 框架的核心组件，为 Agent 提供了�
 - **⚡ 并行执行**：工具调用支持并行执行以提升性能
 - **🔄 MCP 协议**：完整支持 STDIO、SSE、Streamable HTTP 三种传输方式
 - **🛠️ 配置支持**：提供配置选项和过滤器支持
+- **🧹 参数修复**：可选启用 `agent.WithToolCallArgumentsJSONRepairEnabled(true)`，对 `tool_calls` 的 `arguments` 做一次尽力 JSON 修复，提升工具执行与外部解析的鲁棒性
 
 ### 核心概念
 
@@ -28,6 +29,13 @@ type CallableTool interface {
     Tool
 }
 ```
+
+**建议（务必配置 name 与 description）**
+
+- **name（必填）**：用于让模型精确定位要调用的工具。请保证 **稳定、唯一、语义明确**（建议使用 `snake_case`），不要在不同工具/不同 ToolSet 之间重名。
+- **description（必填）**：用于让模型理解“这个工具做什么/何时该用/有什么约束”。没有清晰的描述会显著降低 tool call 的命中率与稳定性。
+
+> 对于 Function Tool：通过 `function.WithName(...)` / `function.WithDescription(...)` 配置；对于自定义 Tool：在 `Declaration()` 返回的 `tool.Declaration` 中设置 `Name` / `Description`。
 
 #### 📦 ToolSet（工具集）
 
@@ -98,9 +106,9 @@ import "trpc.group/trpc-go/trpc-agent-go/tool/function"
 
 // 1. 定义工具函数
 func calculator(ctx context.Context, req struct {
-    Operation string  `json:"operation"`
-    A         float64 `json:"a"`
-    B         float64 `json:"b"`
+    Operation string  `json:"operation" jsonschema:"description=运算类型，例如 add/multiply"`
+    A         float64 `json:"a" jsonschema:"description=第一个操作数"`
+    B         float64 `json:"b" jsonschema:"description=第二个操作数"`
 }) (map[string]interface{}, error) {
     switch req.Operation {
     case "add":
@@ -125,12 +133,22 @@ agent := llmagent.New("math-assistant",
     llmagent.WithTools([]tool.Tool{calculatorTool}))
 ```
 
+### Input Schema（入参 schema）与字段描述
+
+Function Tool 的入参 `req` 会自动生成对应的 JSON Schema（用于模型理解参数结构）。建议通过 struct tag 补充字段描述：
+
+- **字段名**：使用 `json:"..."` 作为 schema 的字段名。
+- **字段描述（推荐）**：使用 `jsonschema:"description=..."` 写入 schema 的 `properties.<field>.description`。
+- **注意**：`jsonschema` tag 内部使用英文逗号 `,` 作为分隔符，因此 **description 内容中不能包含 `,`**，否则会被误解析成多个 tag。
+- **兼容**：也支持 `description:"..."` 作为字段描述（用于历史代码）；若同时配置 `jsonschema:"description=..."` 与 `description:"..."`，以 `jsonschema` 中的 `description` 为准。
+- **更灵活的 schema**：如果想完全自定义入参 schema（例如需要更复杂的 JSON Schema 结构/约束），可使用 `function.WithInputSchema(customInputSchema)` 跳过自动生成。
+
 ### 流式工具示例
 
 ```go
 // 1. 定义输入输出结构
 type weatherInput struct {
-    Location string `json:"location"`
+    Location string `json:"location" jsonschema:"description=查询地点，例如城市名或经纬度"`
 }
 
 type weatherOutput struct {
@@ -590,6 +608,126 @@ toolSet := mcp.NewMCPToolSet(
 - 🛡️ **智能保护**：框架工具（`transfer_to_agent`、`knowledge_search`）自动保留，永不被过滤
 - 🔧 **灵活定制**：支持内置过滤器和自定义 FilterFunc
 
+#### Tool Search（自动工具筛选）
+
+除了“规则过滤（Tool Filter）”，框架还提供 **Tool Search**：在每次主模型调用前，先做一次“工具选择”，把**候选工具集压缩到 TopK**（例如 3 个），再交给主模型执行，从而进一步降低 token（尤其是 PromptTokens）。
+
+需要注意的 trade-off：
+
+- **耗时**：Tool Search 会引入额外步骤（额外 LLM 调用、以及/或 embedding + 向量检索），端到端耗时可能增加。
+- **Prompt Caching**：每轮传给主模型的工具列表会变化，可能降低部分平台的 prompt caching 命中率。
+
+和 Tool Filter 的区别：
+
+- **Tool Filter**：你（或业务）通过规则决定“允许/禁止哪些工具”（访问控制/成本控制），更偏策略与安全。
+- **Tool Search**：框架根据“当前用户问题”自动挑选相关工具，更偏自动化与成本优化。
+
+它们可以组合使用：先用 Tool Filter 做权限/白名单，再用 Tool Search 在剩余工具里做 TopK 选择。
+
+**两种策略：**
+
+- **LLM Search**：把候选工具列表（name + description）拼进 prompt，让 LLM 直接输出“应该使用哪些工具”。
+  - 优点：不依赖向量库；实现简单。
+  - 缺点：每轮都会把工具列表放进 prompt，开销随工具数量/描述长度近似线性增长。
+- **Knowledge Search**：先用 LLM 做 query rewrite，再用 embedding + 向量检索做语义匹配。
+  - 优点：不需要每轮把完整工具列表塞进 LLM；并且 **tool embedding 会在同一 `ToolKnowledge` 实例内缓存**，后续轮/后续请求可以复用。
+  - 注意：每轮仍需要对 query 做 embedding（固定开销之一）。
+
+##### 基本用法（LLM Search）
+
+Tool Search 既可以作为 Runner plugin 使用，也可以作为单个 Agent 的
+callback 使用。
+
+**方案 A：Runner Plugin**
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/plugin/toolsearch"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+ts, err := toolsearch.New(modelInstance,
+    toolsearch.WithMaxTools(3),
+    toolsearch.WithFailOpen(), // 可选：search 失败时退回到“全部工具可用”
+)
+if err != nil { /* handle */ }
+
+ag := llmagent.New("assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithTools(allTools), // 仍然注册“全量工具”，Tool Search 会挑 TopK
+)
+
+r := runner.NewRunner("app", ag,
+    runner.WithPlugins(ts),
+)
+```
+
+**方案 B：Per-Agent BeforeModel Callback**
+
+通过 `modelCallbacks.RegisterBeforeModel(...)` 注册 Tool Search 的 callback
+（会在主模型调用前自动重写 `req.Tools`）：
+
+```go
+	import (
+	    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	    "trpc.group/trpc-go/trpc-agent-go/plugin/toolsearch"
+	    "trpc.group/trpc-go/trpc-agent-go/model"
+	)
+
+modelCallbacks := model.NewCallbacks()
+tc, err := toolsearch.New(modelInstance,
+    toolsearch.WithMaxTools(3),
+    toolsearch.WithFailOpen(), // 可选：search 失败时退回到“全部工具可用”
+)
+if err != nil { /* handle */ }
+modelCallbacks.RegisterBeforeModel(tc.Callback())
+
+agent := llmagent.New("assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithTools(allTools), // 仍然注册“全量工具”，Tool Search 会在每次调用前挑 TopK
+    llmagent.WithModelCallbacks(modelCallbacks),
+)
+```
+
+##### 基本用法（Knowledge Search）
+
+需要先创建 `ToolKnowledge`（embedding + vector store），再通过 `toolsearch.WithToolKnowledge(...)` 启用 Knowledge Search：
+
+```go
+	import (
+	    "trpc.group/trpc-go/trpc-agent-go/plugin/toolsearch"
+	    openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
+	    vectorinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
+	)
+
+toolKnowledge, err := toolsearch.NewToolKnowledge(
+    openaiembedder.New(openaiembedder.WithModel(openaiembedder.ModelTextEmbedding3Small)),
+    toolsearch.WithVectorStore(vectorinmemory.New()),
+)
+if err != nil { /* handle */ }
+
+tc, err := toolsearch.New(modelInstance,
+    toolsearch.WithMaxTools(3),
+    toolsearch.WithToolKnowledge(toolKnowledge),
+    toolsearch.WithFailOpen(),
+)
+if err != nil { /* handle */ }
+modelCallbacks.RegisterBeforeModel(tc.Callback())
+```
+
+##### Token 统计（可选）
+
+Tool Search 的 token usage 会写入 context，可用于打点与成本分析：
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/plugin/toolsearch"
+
+if usage, ok := toolsearch.ToolSearchUsageFromContext(ctx); ok && usage != nil {
+    // usage.PromptTokens / usage.CompletionTokens / usage.TotalTokens
+}
+```
+
 #### 基本用法
 
 **1. 排除特定工具（Exclude Filter）**
@@ -891,6 +1029,20 @@ if !removed {
 - 通过 `WithTools` 和所有 ToolSet（包括动态添加的 ToolSet）注册的工具都视为**用户工具**，会受到 `WithToolFilter` 以及每次调用的运行时过滤控制。
 - 框架工具（`transfer_to_agent`、`knowledge_search`、`agentic_knowledge_search`）仍然**永远不被过滤**，始终对 Agent 可用。
 
+#### Tool Call 参数自动修复
+
+部分模型在生成 `tool_calls` 时，可能产出非严格 JSON 的参数（例如对象 key 未加引号、尾逗号等），从而导致工具执行或外部解析失败。
+
+Tool Call 参数自动修复功能适用于调用方需要在框架外部解析 `toolCall.Function.Arguments`，或工具严格要求入参为合法 JSON 的场景。
+
+在 `runner.Run` 中启用 `agent.WithToolCallArgumentsJSONRepairEnabled(true)` 后，框架会尽力修复 `toolCall.Function.Arguments`。
+
+```go
+ch, err := r.Run(ctx, userID, sessionID, model.NewUserMessage("..."),
+    agent.WithToolCallArgumentsJSONRepairEnabled(true),
+)
+```
+
 ## 快速开始
 
 ### 环境准备
@@ -920,9 +1072,9 @@ func main() {
     // 1. 创建简单工具
     calculatorTool := function.NewFunctionTool(
         func(ctx context.Context, req struct {
-            Operation string  `json:"operation"`
-            A         float64 `json:"a"`
-            B         float64 `json:"b"`
+            Operation string  `json:"operation" jsonschema:"description=运算类型，例如 add/multiply"`
+            A         float64 `json:"a" jsonschema:"description=第一个操作数"`
+            B         float64 `json:"b" jsonschema:"description=第二个操作数"`
         }) (map[string]interface{}, error) {
             var result float64
             switch req.Operation {

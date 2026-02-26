@@ -13,9 +13,10 @@ package team
 import "trpc.group/trpc-go/trpc-agent-go/tool"
 
 type options struct {
-	description string
-	memberTools memberToolOptions
-	swarm       SwarmConfig
+	description          string
+	memberTools          memberToolOptions
+	swarm                SwarmConfig
+	crossRequestTransfer bool
 }
 
 // HistoryScope controls whether and how member AgentTools inherit parent
@@ -122,6 +123,20 @@ func WithMemberToolConfig(cfg MemberToolConfig) Option {
 func WithSwarmConfig(cfg SwarmConfig) Option {
 	return func(o *options) {
 		o.swarm = cfg
+	}
+}
+
+// WithCrossRequestTransfer enables cross-request transfer for swarm teams.
+//
+// When enabled, after a transfer, the next user message (next runner.Run)
+// will automatically start from the target agent instead of the entry member.
+//
+// Default: false (disabled by default)
+//
+// This only applies to swarm teams.
+func WithCrossRequestTransfer(enabled bool) Option {
+	return func(o *options) {
+		o.crossRequestTransfer = enabled
 	}
 }
 

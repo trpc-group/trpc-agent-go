@@ -16,7 +16,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/openai/openai-go/option"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/embedder"
 )
 
@@ -389,5 +391,289 @@ func TestGetEmbedding_EmptyDataArray(t *testing.T) {
 	}
 	if len(vec) != 0 {
 		t.Errorf("Expected empty embedding, got length %d", len(vec))
+	}
+}
+
+// TestRetryLogic tests the retry logic with rate limit errors.
+func TestRetryLogic(t *testing.T) {
+	t.Run("retry on rate limit error", func(t *testing.T) {
+		attemptCount := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			attemptCount++
+			if attemptCount <= 2 {
+				// Return rate limit error for first 2 attempts
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusTooManyRequests)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"error": map[string]any{
+						"message": "Rate limit exceeded",
+						"type":    "rate_limit_error",
+						"code":    "429",
+					},
+				})
+				return
+			}
+			// Success on 3rd attempt
+			w.Header().Set("Content-Type", "application/json")
+			rsp := map[string]any{
+				"object": "list",
+				"data": []map[string]any{
+					{"object": "embedding", "index": 0, "embedding": []float64{0.1, 0.2, 0.3}},
+				},
+				"model": "text-embedding-3-small",
+				"usage": map[string]any{"prompt_tokens": 1, "total_tokens": 1},
+			}
+			_ = json.NewEncoder(w).Encode(rsp)
+		}))
+		defer srv.Close()
+
+		emb := New(
+			WithBaseURL(srv.URL),
+			WithAPIKey("dummy"),
+			WithMaxRetries(3),
+			WithRetryBackoff([]time.Duration{10 * time.Millisecond, 20 * time.Millisecond}),
+			// Disable SDK internal retry to test our retry logic
+			WithRequestOptions(option.WithMaxRetries(0)),
+		)
+
+		vec, err := emb.GetEmbedding(context.Background(), "test")
+		if err != nil {
+			t.Fatalf("GetEmbedding should succeed after retries: %v", err)
+		}
+		if len(vec) != 3 {
+			t.Errorf("Expected 3 dimensions, got %d", len(vec))
+		}
+		if attemptCount != 3 {
+			t.Errorf("Expected 3 attempts, got %d", attemptCount)
+		}
+	})
+
+	t.Run("max retries exceeded", func(t *testing.T) {
+		attemptCount := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			attemptCount++
+			// Always return rate limit error
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error": map[string]any{
+					"message": "Rate limit exceeded",
+					"type":    "rate_limit_error",
+					"code":    "429",
+				},
+			})
+		}))
+		defer srv.Close()
+
+		emb := New(
+			WithBaseURL(srv.URL),
+			WithAPIKey("dummy"),
+			WithMaxRetries(2),
+			WithRetryBackoff([]time.Duration{5 * time.Millisecond}),
+			// Disable SDK internal retry to test our retry logic
+			WithRequestOptions(option.WithMaxRetries(0)),
+		)
+
+		_, err := emb.GetEmbedding(context.Background(), "test")
+		if err == nil {
+			t.Fatal("Expected error after max retries exceeded")
+		}
+		// Initial attempt + 2 retries = 3 total attempts
+		if attemptCount != 3 {
+			t.Errorf("Expected 3 attempts (1 initial + 2 retries), got %d", attemptCount)
+		}
+	})
+
+	t.Run("retry on any error", func(t *testing.T) {
+		attemptCount := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			attemptCount++
+			// Return bad request error (400)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error": map[string]any{
+					"message": "Invalid request",
+					"type":    "invalid_request_error",
+				},
+			})
+		}))
+		defer srv.Close()
+
+		emb := New(
+			WithBaseURL(srv.URL),
+			WithAPIKey("dummy"),
+			WithMaxRetries(3),
+			WithRetryBackoff([]time.Duration{5 * time.Millisecond}),
+			// Disable SDK internal retry to test our retry logic
+			WithRequestOptions(option.WithMaxRetries(0)),
+		)
+
+		_, err := emb.GetEmbedding(context.Background(), "test")
+		if err == nil {
+			t.Fatal("Expected error for bad request")
+		}
+		// Should retry on any error: Initial attempt + 3 retries = 4 total attempts
+		if attemptCount != 4 {
+			t.Errorf("Expected 4 attempts (1 initial + 3 retries), got %d", attemptCount)
+		}
+	})
+
+	t.Run("no retry when maxRetries is 0", func(t *testing.T) {
+		attemptCount := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			attemptCount++
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error": map[string]any{
+					"message": "Rate limit exceeded",
+					"type":    "rate_limit_error",
+				},
+			})
+		}))
+		defer srv.Close()
+
+		emb := New(
+			WithBaseURL(srv.URL),
+			WithAPIKey("dummy"),
+			WithMaxRetries(0), // Explicitly disable retries
+			// Disable SDK internal retry to test our retry logic
+			WithRequestOptions(option.WithMaxRetries(0)),
+		)
+
+		_, err := emb.GetEmbedding(context.Background(), "test")
+		if err == nil {
+			t.Fatal("Expected error when retries disabled")
+		}
+		if attemptCount != 1 {
+			t.Errorf("Expected 1 attempt (no retries), got %d", attemptCount)
+		}
+	})
+
+	t.Run("negative maxRetries treated as 0", func(t *testing.T) {
+		attemptCount := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			attemptCount++
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error": map[string]any{
+					"message": "Rate limit exceeded",
+					"type":    "rate_limit_error",
+				},
+			})
+		}))
+		defer srv.Close()
+
+		emb := New(
+			WithBaseURL(srv.URL),
+			WithAPIKey("dummy"),
+			WithMaxRetries(-5), // Negative value should be treated as 0
+			WithRequestOptions(option.WithMaxRetries(0)),
+		)
+
+		_, err := emb.GetEmbedding(context.Background(), "test")
+		if err == nil {
+			t.Fatal("Expected error when retries disabled")
+		}
+		if attemptCount != 1 {
+			t.Errorf("Expected 1 attempt (negative maxRetries treated as 0), got %d", attemptCount)
+		}
+	})
+}
+
+// TestGetBackoffDuration tests the getBackoffDuration method.
+func TestGetBackoffDuration(t *testing.T) {
+	t.Run("default backoff", func(t *testing.T) {
+		emb := New()
+		expected := []time.Duration{100 * time.Millisecond, 200 * time.Millisecond, 400 * time.Millisecond, 800 * time.Millisecond}
+		for i, want := range expected {
+			if got := emb.getBackoffDuration(i); got != want {
+				t.Errorf("Expected %v for attempt %d, got %v", want, i, got)
+			}
+		}
+		// Attempt beyond default slice length should return last element
+		if got := emb.getBackoffDuration(10); got != 800*time.Millisecond {
+			t.Errorf("Expected 800ms for attempt beyond slice, got %v", got)
+		}
+	})
+
+	t.Run("empty backoff slice", func(t *testing.T) {
+		emb := New(WithRetryBackoff(nil))
+		if got := emb.getBackoffDuration(0); got != 0 {
+			t.Errorf("Expected 0 for empty backoff, got %v", got)
+		}
+	})
+
+	t.Run("within backoff slice", func(t *testing.T) {
+		emb := New(WithRetryBackoff([]time.Duration{
+			100 * time.Millisecond,
+			200 * time.Millisecond,
+			300 * time.Millisecond,
+		}))
+
+		if got := emb.getBackoffDuration(0); got != 100*time.Millisecond {
+			t.Errorf("Expected 100ms for attempt 0, got %v", got)
+		}
+		if got := emb.getBackoffDuration(1); got != 200*time.Millisecond {
+			t.Errorf("Expected 200ms for attempt 1, got %v", got)
+		}
+		if got := emb.getBackoffDuration(2); got != 300*time.Millisecond {
+			t.Errorf("Expected 300ms for attempt 2, got %v", got)
+		}
+	})
+
+	t.Run("exceeds backoff slice length", func(t *testing.T) {
+		emb := New(WithRetryBackoff([]time.Duration{
+			100 * time.Millisecond,
+			200 * time.Millisecond,
+		}))
+
+		// Attempt index 5 exceeds slice length, should return last element
+		if got := emb.getBackoffDuration(5); got != 200*time.Millisecond {
+			t.Errorf("Expected 200ms for attempt beyond slice, got %v", got)
+		}
+	})
+}
+
+// TestRetryWithContextCancellation tests retry behavior when context is cancelled.
+func TestRetryWithContextCancellation(t *testing.T) {
+	attemptCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attemptCount++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]any{
+				"message": "Rate limit exceeded",
+			},
+		})
+	}))
+	defer srv.Close()
+
+	emb := New(
+		WithBaseURL(srv.URL),
+		WithAPIKey("dummy"),
+		WithMaxRetries(5),
+		WithRetryBackoff([]time.Duration{100 * time.Millisecond}),
+		// Disable SDK internal retry to test our retry logic
+		WithRequestOptions(option.WithMaxRetries(0)),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel context shortly after first request
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	_, err := emb.GetEmbedding(ctx, "test")
+	if err == nil {
+		t.Fatal("Expected error when context is cancelled")
+	}
+	// Should have made at least 1 attempt but not all 6 (1 + 5 retries)
+	if attemptCount == 0 {
+		t.Error("Expected at least 1 attempt")
 	}
 }

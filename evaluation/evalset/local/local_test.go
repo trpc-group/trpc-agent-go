@@ -15,8 +15,10 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 )
 
@@ -314,4 +316,40 @@ func TestLocalManagerEmptyInputs(t *testing.T) {
 
 	err = manager.DeleteCase(ctx, "app", "set", "")
 	assert.Error(t, err)
+}
+
+func TestClose_NoError(t *testing.T) {
+	assert.NoError(t, New().Close())
+}
+
+func TestLocalManagerAddCaseSetsCreationTimestampForActualConversation(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	manager := New(evalset.WithBaseDir(dir)).(*manager)
+
+	_, err := manager.Create(ctx, "app", "set")
+	assert.NoError(t, err)
+
+	fixed := &epochtime.EpochTime{Time: time.Unix(1700, 0).UTC()}
+	caseInput := &evalset.EvalCase{
+		EvalID: "case1",
+		Conversation: []*evalset.Invocation{
+			{InvocationID: "inv1"},
+		},
+		ActualConversation: []*evalset.Invocation{
+			{InvocationID: "act1", CreationTimestamp: fixed},
+			{InvocationID: "act2"},
+		},
+	}
+	err = manager.AddCase(ctx, "app", "set", caseInput)
+	assert.NoError(t, err)
+
+	gotCase, err := manager.GetCase(ctx, "app", "set", "case1")
+	assert.NoError(t, err)
+	assert.Len(t, gotCase.ActualConversation, 2)
+	assert.NotNil(t, gotCase.ActualConversation[0])
+	assert.NotNil(t, gotCase.ActualConversation[0].CreationTimestamp)
+	assert.WithinDuration(t, fixed.Time, gotCase.ActualConversation[0].CreationTimestamp.Time, time.Nanosecond)
+	assert.NotNil(t, gotCase.ActualConversation[1])
+	assert.NotNil(t, gotCase.ActualConversation[1].CreationTimestamp)
 }

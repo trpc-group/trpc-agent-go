@@ -46,6 +46,7 @@ func TestInferenceResultJSONRoundTrip(t *testing.T) {
 		EvalCaseID:   "case-1",
 		Inferences:   []*evalset.Invocation{{InvocationID: "inv-1"}},
 		SessionID:    "session-123",
+		UserID:       "user-123",
 		Status:       status.EvalStatusPassed,
 		ErrorMessage: "",
 	}
@@ -61,6 +62,7 @@ func TestInferenceResultJSONRoundTrip(t *testing.T) {
 	assert.Equal(t, result.EvalSetID, decoded.EvalSetID)
 	assert.Equal(t, result.EvalCaseID, decoded.EvalCaseID)
 	assert.Equal(t, result.SessionID, decoded.SessionID)
+	assert.Equal(t, result.UserID, decoded.UserID)
 	assert.Equal(t, result.Status, decoded.Status)
 	assert.Len(t, decoded.Inferences, 1)
 	if len(decoded.Inferences) == 1 {

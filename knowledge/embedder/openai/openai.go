@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	openai "github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
@@ -34,6 +35,8 @@ const (
 	DefaultDimensions = 1536
 	// DefaultEncodingFormat is the default encoding format for embeddings.
 	DefaultEncodingFormat = "float"
+	// DefaultMaxRetries is the default maximum number of retries (same as OpenAI SDK).
+	DefaultMaxRetries = 2
 
 	// ModelTextEmbedding3Small represents the text-embedding-3-small model.
 	ModelTextEmbedding3Small = "text-embedding-3-small"
@@ -51,6 +54,14 @@ const (
 	textEmbedding3Prefix = "text-embedding-3"
 )
 
+// defaultRetryBackoff is the default backoff durations for retry attempts.
+var defaultRetryBackoff = []time.Duration{
+	100 * time.Millisecond,
+	200 * time.Millisecond,
+	400 * time.Millisecond,
+	800 * time.Millisecond,
+}
+
 // Embedder implements the embedder.Embedder interface for OpenAI API.
 type Embedder struct {
 	client         openai.Client
@@ -62,6 +73,10 @@ type Embedder struct {
 	organization   string
 	baseURL        string
 	requestOptions []option.RequestOption
+
+	// Retry configuration
+	maxRetries   int
+	retryBackoff []time.Duration
 }
 
 // Option represents a functional option for configuring the Embedder.
@@ -128,6 +143,27 @@ func WithRequestOptions(opts ...option.RequestOption) Option {
 	}
 }
 
+// WithMaxRetries sets the maximum number of retries for errors.
+// Default is 2 (same as OpenAI SDK default). Negative values are treated as 0.
+func WithMaxRetries(maxRetries int) Option {
+	return func(e *Embedder) {
+		if maxRetries < 0 {
+			maxRetries = 0
+		}
+		e.maxRetries = maxRetries
+	}
+}
+
+// WithRetryBackoff sets the backoff durations for each retry attempt.
+// If the number of retries exceeds the length of backoff slice,
+// the last backoff duration will be used for remaining retries.
+// Default is [100ms, 200ms, 400ms, 800ms].
+func WithRetryBackoff(backoff []time.Duration) Option {
+	return func(e *Embedder) {
+		e.retryBackoff = backoff
+	}
+}
+
 // New creates a new OpenAI embedder with the given options.
 func New(opts ...Option) *Embedder {
 	// Create embedder with defaults.
@@ -135,6 +171,8 @@ func New(opts ...Option) *Embedder {
 		model:          DefaultModel,
 		dimensions:     DefaultDimensions,
 		encodingFormat: DefaultEncodingFormat,
+		maxRetries:     DefaultMaxRetries,
+		retryBackoff:   defaultRetryBackoff,
 	}
 
 	// Apply functional options.
@@ -154,6 +192,9 @@ func New(opts ...Option) *Embedder {
 		clientOpts = append(clientOpts, option.WithBaseURL(e.baseURL))
 	}
 
+	// disable openai sdk embedding retries
+	clientOpts = append(clientOpts, option.WithMaxRetries(0))
+
 	// Create OpenAI client.
 	e.client = openai.NewClient(clientOpts...)
 
@@ -163,7 +204,7 @@ func New(opts ...Option) *Embedder {
 // GetEmbedding implements the embedder.Embedder interface.
 // It generates an embedding vector for the given text.
 func (e *Embedder) GetEmbedding(ctx context.Context, text string) ([]float64, error) {
-	response, err := e.response(ctx, text)
+	response, err := e.responseWithRetry(ctx, text)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create embedding: %w", err)
 	}
@@ -186,7 +227,7 @@ func (e *Embedder) GetEmbedding(ctx context.Context, text string) ([]float64, er
 // GetEmbeddingWithUsage implements the embedder.Embedder interface.
 // It generates an embedding vector for the given text and returns usage information.
 func (e *Embedder) GetEmbeddingWithUsage(ctx context.Context, text string) ([]float64, map[string]any, error) {
-	response, err := e.response(ctx, text)
+	response, err := e.responseWithRetry(ctx, text)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create embedding: %w", err)
 	}
@@ -211,6 +252,51 @@ func (e *Embedder) GetEmbeddingWithUsage(ctx context.Context, text string) ([]fl
 	}
 
 	return embedding, usage, nil
+}
+
+// responseWithRetry wraps response with retry logic for errors.
+func (e *Embedder) responseWithRetry(ctx context.Context, text string) (*openai.CreateEmbeddingResponse, error) {
+	var lastErr error
+	for attempt := 0; attempt <= e.maxRetries; attempt++ {
+		rsp, err := e.response(ctx, text)
+		if err == nil {
+			return rsp, nil
+		}
+
+		lastErr = err
+
+		// No more retries
+		if attempt >= e.maxRetries {
+			break
+		}
+
+		// Get backoff duration for this attempt and log retry
+		backoff := e.getBackoffDuration(attempt)
+		if backoff > 0 {
+			log.InfoContext(ctx, fmt.Sprintf("embedding request failed, retrying in %v (attempt %d/%d): %v", backoff, attempt+1, e.maxRetries, err))
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoff):
+			}
+		} else {
+			log.InfoContext(ctx, fmt.Sprintf("embedding request failed, retrying immediately (attempt %d/%d): %v", attempt+1, e.maxRetries, err))
+		}
+	}
+
+	return nil, lastErr
+}
+
+// getBackoffDuration returns the backoff duration for the given attempt.
+// If attempt index exceeds the backoff slice length, returns the last backoff duration.
+func (e *Embedder) getBackoffDuration(attempt int) time.Duration {
+	if len(e.retryBackoff) == 0 {
+		return 0
+	}
+	if attempt < len(e.retryBackoff) {
+		return e.retryBackoff[attempt]
+	}
+	return e.retryBackoff[len(e.retryBackoff)-1]
 }
 
 func (e *Embedder) response(ctx context.Context, text string) (rsp *openai.CreateEmbeddingResponse, err error) {

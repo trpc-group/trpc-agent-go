@@ -155,6 +155,55 @@ r := runner.NewRunner("my-app", agent,
 )
 ```
 
+### 🧩 Request-Scoped Agent Creation (Agent Factory)
+
+By default, `runner.NewRunner(...)` takes a fully built `agent.Agent` and
+reuses that same instance for every request.
+
+If your agent needs **request-specific configuration** (for example, prompt,
+model, sandbox instance, tools), you can build a fresh agent for every run.
+
+#### Option A: Create the default agent on demand
+
+```go
+r := runner.NewRunnerWithAgentFactory(
+    "my-app",
+    "assistant",
+    func(ctx context.Context, ro agent.RunOptions) (agent.Agent, error) {
+        // Use ro (or ro.RuntimeState / ro.CustomAgentConfigs) to decide
+        // how to build the agent for this request.
+        a := llmagent.New("assistant",
+            llmagent.WithInstruction(ro.Instruction),
+        )
+        return a, nil
+    },
+)
+```
+
+#### Option B: Register named factories and select them by name
+
+```go
+r := runner.NewRunner("my-app", defaultAgent,
+    runner.WithAgentFactory("sandboxed", func(
+        ctx context.Context,
+        ro agent.RunOptions,
+    ) (agent.Agent, error) {
+        return llmagent.New("sandboxed"), nil
+    }),
+)
+
+events, err := r.Run(ctx, userID, sessionID, message,
+    agent.WithAgentByName("sandboxed"),
+)
+_ = events
+_ = err
+```
+
+Notes:
+
+- The factory is called once per `Runner.Run(...)`.
+- `agent.WithAgent(...)` still overrides everything (useful for tests).
+
 ### 🔌 Plugins
 
 Runner plugins are global, runner-scoped hooks. Register plugins once and they
@@ -178,6 +227,34 @@ Notes:
 - Plugin names must be unique per Runner.
 - Plugins run in the order they are registered.
 - If a plugin implements `plugin.Closer`, Runner will call it in `Close()`.
+
+### 🔄 Ralph Loop Mode
+
+Ralph Loop is an "outer loop" mode. Instead of trusting a Large Language Model
+(LLM) to decide when it is done, Runner will keep iterating until a verifiable
+completion condition is met.
+
+Common completion conditions:
+
+- A completion promise in the assistant output (for example,
+  `<promise>DONE</promise>`).
+- A verification command exits with code 0 (for example, `go test ./...`).
+- Additional custom checks via `runner.Verifier`.
+- `MaxIterations` is always recommended as a safety valve.
+
+```go
+r := runner.NewRunner("my-app", a,
+    runner.WithRalphLoop(runner.RalphLoopConfig{
+        MaxIterations:     20,
+        CompletionPromise: "DONE",
+        VerifyCommand:     "go test ./... -count=1",
+        VerifyTimeout:     2 * time.Minute,
+    }),
+)
+```
+
+When `MaxIterations` is reached without success, Runner emits an error event
+with error type `stop_agent_error`.
 
 ### Run Conversation
 
@@ -274,6 +351,12 @@ When `WithResume(true)` is set:
 If the last event is a user or tool message (or a plain assistant reply
 without `tool_calls`), `WithResume(true)` is a no-op and the flow behaves like
 today’s `Run` call.
+
+#### Tool Call Arguments Auto Repair
+
+Some models may emit non-strict JSON arguments for `tool_calls` (for example, unquoted object keys or trailing commas), which can break tool execution or external parsing.
+
+When `agent.WithToolCallArgumentsJSONRepairEnabled(true)` is enabled in `runner.Run`, the framework will best-effort repair `toolCall.Function.Arguments`. For detailed usage, see [Tool Call Arguments Auto Repair](./runner.md#tool-call-arguments-auto-repair).
 
 #### Provide Conversation History (auto-seed + session reuse)
 
@@ -728,10 +811,49 @@ for event := range eventChan {
 
 ### Stopping a Run Safely
 
-- **Cancel the context**: Wrap `runner.Run` with `context.WithCancel`.
-  Call `cancel()` when turn count or token budget is hit. `llmflow`
-  treats `context.Canceled` as graceful exit and closes the agent event
-  channel, so the runner loop finishes cleanly without blocking writers.
+When you call `Runner.Run`, the framework starts goroutines that keep producing
+events until the run ends.
+
+There are two different “stops” people often confuse:
+
+1. **Stopping your reader loop** (your code stops reading events)
+2. **Stopping the run** (the agent stops calling models/tools and exits)
+
+If you only stop reading but the run is still active, the agent goroutine may
+block trying to write to the event channel. This can lead to goroutine leaks
+and “stuck” runs.
+
+The safe pattern is always:
+
+1. **Trigger cancellation** (ctx cancel / requestID cancel / StopError)
+2. **Keep draining** the event channel until it is closed
+
+#### Option A: Ctrl+C (terminal programs)
+
+In a CLI or local demo, a common approach is to translate Ctrl+C into context
+cancellation:
+
+```go
+ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+defer stop()
+
+eventCh, err := r.Run(ctx, userID, sessionID, message)
+if err != nil {
+    return err
+}
+
+for range eventCh {
+    // Drain until the run stops (ctx canceled or run completed).
+}
+```
+
+#### Option B: Cancel the context (recommended default)
+
+Wrap `Runner.Run` with `context.WithCancel` and call `cancel()` when you decide
+to stop (for example, max turns, token budget, user clicked “Stop”, etc.).
+
+`llmflow` treats `context.Canceled` as a graceful exit and closes the agent
+event channel, so the runner loop can finish cleanly without blocking writers.
 
 ```go
 ctx, cancel := context.WithCancel(context.Background())
@@ -759,11 +881,72 @@ for evt := range eventCh {
 }
 ```
 
-- **Emit a stop event**: Inside custom processors or tools, return `agent.NewStopError("reason")`. `llmflow` converts it into a
-  `stop_agent_error` event and stops the flow. Still pair with context cancel for hard cutoffs.
+If you need to return early (for example, your HTTP handler timed out) but
+still want to avoid blocking writers, you can drain in a separate goroutine:
 
-- **Avoid breaking the runner loop directly**: Breaking the event-loop reader leaves the agent goroutine running and can block on channel
-  writes. Prefer context cancellation or `StopError`.
+```go
+go func() {
+    for range eventCh {
+    }
+}()
+cancel()
+return nil
+```
+
+#### Option C: Cancel by `requestID` (ManagedRunner)
+
+In server scenarios, you often want to cancel a run from a different goroutine
+or even a different request. For that, use a request identifier (requestID).
+
+1. Generate a requestID and pass it into `Run` via `agent.WithRequestID`.
+2. Type-assert the runner to `runner.ManagedRunner`.
+3. Call `Cancel(requestID)`.
+
+```go
+requestID := "req-123"
+
+eventCh, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    message,
+    agent.WithRequestID(requestID),
+)
+if err != nil {
+    return err
+}
+
+mr := r.(runner.ManagedRunner)
+_ = mr.Cancel(requestID)
+
+for range eventCh {
+}
+```
+
+#### Option D: Stop from inside the run (StopError)
+
+Sometimes the best place to decide “stop now” is inside a tool, callback, or
+processor (for example, policy checks, budget limits, or user-defined rules).
+
+Return `agent.NewStopError("reason")` (or wrap it with other errors). `llmflow`
+converts it into a `stop_agent_error` event and stops the flow.
+
+Still prefer **context deadlines** (`WithTimeout`, `WithMaxRunDuration`) for
+hard cutoffs.
+
+#### Common mistakes
+
+- **Breaking the event-loop reader** without cancellation: the run may keep
+  going and block on channel writes.
+- Using `context.Background()` everywhere: you cannot stop a run if you have no
+  way to cancel.
+- Writing tools that ignore `ctx`: cancellation is cooperative; long-running
+  tools should check `ctx.Done()` or pass `ctx` into network/DB requests.
+
+See runnable demos:
+
+- `examples/cancelrun` (cancel via Enter/Ctrl+C, drain events)
+- `examples/managedrunner` (requestID cancel, detached cancel, max duration)
 
 ### Resource Management
 

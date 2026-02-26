@@ -654,6 +654,80 @@ func TestAutoMemoryWorker_ExecuteOperation_Errors(t *testing.T) {
 	})
 }
 
+func TestAutoMemoryWorker_ExecuteOperation_DisabledByEnabledTools(t *testing.T) {
+	userKey := memory.UserKey{AppName: "test-app", UserID: "user-1"}
+
+	t.Run("clear disabled", func(t *testing.T) {
+		op := newMockOperator()
+		worker := &AutoMemoryWorker{
+			config: AutoMemoryConfig{
+				EnabledTools: map[string]struct{}{
+					memory.AddToolName:    {},
+					memory.UpdateToolName: {},
+					memory.DeleteToolName: {},
+				},
+			},
+			operator: op,
+		}
+		worker.executeOperation(
+			context.Background(), userKey,
+			&extractor.Operation{Type: extractor.OperationClear},
+		)
+		assert.Equal(t, 0, op.clearCalls)
+	})
+
+	t.Run("add disabled", func(t *testing.T) {
+		op := newMockOperator()
+		worker := &AutoMemoryWorker{
+			config: AutoMemoryConfig{
+				EnabledTools: map[string]struct{}{},
+			},
+			operator: op,
+		}
+		worker.executeOperation(
+			context.Background(), userKey,
+			&extractor.Operation{
+				Type:   extractor.OperationAdd,
+				Memory: "should be skipped",
+			},
+		)
+		assert.Equal(t, 0, op.addCalls)
+	})
+
+	t.Run("enabled tools allows operation", func(t *testing.T) {
+		op := newMockOperator()
+		worker := &AutoMemoryWorker{
+			config: AutoMemoryConfig{
+				EnabledTools: map[string]struct{}{
+					memory.AddToolName: {},
+				},
+			},
+			operator: op,
+		}
+		worker.executeOperation(
+			context.Background(), userKey,
+			&extractor.Operation{
+				Type:   extractor.OperationAdd,
+				Memory: "allowed",
+			},
+		)
+		assert.Equal(t, 1, op.addCalls)
+	})
+
+	t.Run("nil enabled tools allows all", func(t *testing.T) {
+		op := newMockOperator()
+		worker := &AutoMemoryWorker{
+			config:   AutoMemoryConfig{},
+			operator: op,
+		}
+		worker.executeOperation(
+			context.Background(), userKey,
+			&extractor.Operation{Type: extractor.OperationClear},
+		)
+		assert.Equal(t, 1, op.clearCalls)
+	})
+}
+
 func TestHashUserKey(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -1120,6 +1194,271 @@ func TestAutoMemoryWorker_DeltaMessages_UsesTimestamp(t *testing.T) {
 	assert.True(t, capturedLastExtractAt.Equal(t1.UTC()))
 }
 
+func TestAutoMemoryWorker_EnqueueJob_NilSession(t *testing.T) {
+	ext := &mockExtractor{}
+	op := newMockOperator()
+	config := AutoMemoryConfig{Extractor: ext}
+	worker := NewAutoMemoryWorker(config, op)
+
+	err := worker.EnqueueJob(context.Background(), nil)
+
+	assert.NoError(t, err)
+	assert.Equal(t, 0, op.addCalls)
+}
+
+func TestAutoMemoryWorker_EnqueueJob_SyncFallback_Error(t *testing.T) {
+	ext := &mockExtractor{
+		err: errors.New("extract error"),
+	}
+	op := newMockOperator()
+	config := AutoMemoryConfig{Extractor: ext}
+
+	// Do not start the worker, so it falls back to sync.
+	worker := NewAutoMemoryWorker(config, op)
+
+	sess := newTestSession("test-app", "user-1")
+	appendSessionMessage(sess, time.Now(), model.NewUserMessage("hello"))
+
+	err := worker.EnqueueJob(context.Background(), sess)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "extract failed")
+}
+
+func TestAutoMemoryWorker_ProcessJob_CreateAutoMemoryError(t *testing.T) {
+	ext := &mockExtractor{
+		err: errors.New("extract error"),
+	}
+	op := newMockOperator()
+	config := AutoMemoryConfig{
+		Extractor:        ext,
+		MemoryJobTimeout: time.Second,
+	}
+
+	worker := NewAutoMemoryWorker(config, op)
+
+	sess := newTestSession("test-app", "user-1")
+
+	// Should not panic, error is logged internally.
+	worker.processJob(&MemoryJob{
+		Ctx:     context.Background(),
+		UserKey: memory.UserKey{AppName: "test-app", UserID: "user-1"},
+		Session: sess,
+		Messages: []model.Message{
+			model.NewUserMessage("hello"),
+		},
+	})
+
+	// lastExtractAt should NOT be written on failure.
+	_, ok := sess.GetState(memory.SessionStateKeyAutoMemoryLastExtractAt)
+	assert.False(t, ok)
+}
+
+func TestAutoMemoryWorker_CreateAutoMemory_NilExtractor(t *testing.T) {
+	op := newMockOperator()
+	worker := &AutoMemoryWorker{
+		config:   AutoMemoryConfig{Extractor: nil},
+		operator: op,
+	}
+
+	err := worker.createAutoMemory(
+		context.Background(),
+		memory.UserKey{AppName: "test-app", UserID: "user-1"},
+		[]model.Message{model.NewUserMessage("hello")},
+	)
+
+	assert.NoError(t, err)
+	assert.Equal(t, 0, op.addCalls)
+}
+
+func TestIsMemoryNotFoundError(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{
+			name:     "nil error",
+			err:      nil,
+			expected: false,
+		},
+		{
+			name:     "memory not found",
+			err:      fmt.Errorf("memory with id abc123 not found"),
+			expected: true,
+		},
+		{
+			name:     "other error",
+			err:      errors.New("connection refused"),
+			expected: false,
+		},
+		{
+			name:     "partial match - missing marker",
+			err:      fmt.Errorf("memory with id abc123 exists"),
+			expected: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, isMemoryNotFoundError(tt.err))
+		})
+	}
+}
+
+func TestAutoMemoryWorker_ExecuteOperation_UpdateNotFound_FallbackToAdd(t *testing.T) {
+	op := newMockOperator()
+	op.updateErr = fmt.Errorf("memory with id mem-123 not found")
+	worker := &AutoMemoryWorker{operator: op}
+
+	worker.executeOperation(context.Background(), memory.UserKey{
+		AppName: "test-app",
+		UserID:  "user-1",
+	}, &extractor.Operation{
+		Type:     extractor.OperationUpdate,
+		MemoryID: "mem-123",
+		Memory:   "Updated memory.",
+		Topics:   []string{"topic1"},
+	})
+
+	// Update fails with not-found, should fallback to add.
+	assert.Equal(t, 1, op.addCalls)
+}
+
+func TestAutoMemoryWorker_ExecuteOperation_UpdateNotFound_AddAlsoFails(t *testing.T) {
+	op := newMockOperator()
+	op.updateErr = fmt.Errorf("memory with id mem-123 not found")
+	op.addErr = errors.New("add also failed")
+	worker := &AutoMemoryWorker{operator: op}
+
+	// Should not panic; errors are logged.
+	worker.executeOperation(context.Background(), memory.UserKey{
+		AppName: "test-app",
+		UserID:  "user-1",
+	}, &extractor.Operation{
+		Type:     extractor.OperationUpdate,
+		MemoryID: "mem-123",
+		Memory:   "Updated memory.",
+	})
+}
+
+func TestAutoMemoryWorker_ExecuteOperation_ClearError(t *testing.T) {
+	op := newMockOperator()
+	op.clearErr = errors.New("clear error")
+	worker := &AutoMemoryWorker{operator: op}
+
+	// Should not panic; error is logged.
+	worker.executeOperation(context.Background(), memory.UserKey{
+		AppName: "test-app",
+		UserID:  "user-1",
+	}, &extractor.Operation{
+		Type: extractor.OperationClear,
+	})
+}
+
+func TestAutoMemoryWorker_ExecuteOperation_ClearSuccess(t *testing.T) {
+	op := newMockOperator()
+	worker := &AutoMemoryWorker{operator: op}
+
+	worker.executeOperation(context.Background(), memory.UserKey{
+		AppName: "test-app",
+		UserID:  "user-1",
+	}, &extractor.Operation{
+		Type: extractor.OperationClear,
+	})
+
+	assert.Equal(t, 1, op.clearCalls)
+}
+
+func TestReadLastExtractAt_ParseError(t *testing.T) {
+	sess := newTestSession("test-app", "user-1")
+	sess.SetState(memory.SessionStateKeyAutoMemoryLastExtractAt,
+		[]byte("not-a-valid-timestamp"))
+
+	ts := readLastExtractAt(sess)
+
+	assert.True(t, ts.IsZero())
+}
+
+func TestScanDeltaSince_NilResponse(t *testing.T) {
+	sess := newTestSession("test-app", "user-1")
+	now := time.Now()
+
+	// Add an event with nil response.
+	sess.Events = append(sess.Events, event.Event{
+		Timestamp: now,
+		Response:  nil,
+	})
+	// Add a normal event after it.
+	appendSessionMessage(sess, now.Add(time.Second),
+		model.NewUserMessage("hello"))
+
+	latestTs, msgs := scanDeltaSince(sess, time.Time{})
+
+	assert.Equal(t, now.Add(time.Second), latestTs)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, "hello", msgs[0].Content)
+}
+
+func TestScanDeltaSince_SkipsMessagesWithToolCalls(t *testing.T) {
+	sess := newTestSession("test-app", "user-1")
+	now := time.Now()
+
+	// Add a message with ToolCalls but also has content.
+	appendSessionMessage(sess, now, model.Message{
+		Role:    model.RoleAssistant,
+		Content: "I'll search for that.",
+		ToolCalls: []model.ToolCall{{
+			Type: "function",
+			ID:   "call_1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "search",
+				Arguments: []byte("{}"),
+			},
+		}},
+	})
+	// Add a normal message.
+	appendSessionMessage(sess, now.Add(time.Second),
+		model.NewAssistantMessage("Here is the result."))
+
+	_, msgs := scanDeltaSince(sess, time.Time{})
+
+	// Only the normal message should be included.
+	require.Len(t, msgs, 1)
+	assert.Equal(t, "Here is the result.", msgs[0].Content)
+}
+
+func TestScanDeltaSince_ContentParts(t *testing.T) {
+	sess := newTestSession("test-app", "user-1")
+	now := time.Now()
+
+	// Add a message with ContentParts but no Content string.
+	textContent := "hi"
+	appendSessionMessage(sess, now, model.Message{
+		Role:         model.RoleUser,
+		ContentParts: []model.ContentPart{{Type: "text", Text: &textContent}},
+	})
+
+	_, msgs := scanDeltaSince(sess, time.Time{})
+
+	require.Len(t, msgs, 1)
+	assert.Equal(t, model.RoleUser, msgs[0].Role)
+	assert.Len(t, msgs[0].ContentParts, 1)
+}
+
+func TestScanDeltaSince_EmptyContentSkipped(t *testing.T) {
+	sess := newTestSession("test-app", "user-1")
+	now := time.Now()
+
+	// Message with no content and no content parts.
+	appendSessionMessage(sess, now, model.Message{
+		Role: model.RoleAssistant,
+	})
+
+	_, msgs := scanDeltaSince(sess, time.Time{})
+
+	assert.Empty(t, msgs)
+}
+
 func TestAutoMemoryWorker_WritesLastExtractAt_OnSuccess(t *testing.T) {
 	ext := &mockExtractor{}
 	op := newMockOperator()
@@ -1143,4 +1482,151 @@ func TestAutoMemoryWorker_WritesLastExtractAt_OnSuccess(t *testing.T) {
 	ts, parseErr := time.Parse(time.RFC3339Nano, string(raw))
 	require.NoError(t, parseErr)
 	assert.True(t, ts.Equal(t2.UTC()))
+}
+
+// configurableExtractor is a mock extractor implementing
+// EnabledToolsConfigurer for testing.
+type configurableExtractor struct {
+	mockExtractor
+	enabledTools map[string]struct{}
+}
+
+func (e *configurableExtractor) SetEnabledTools(
+	enabled map[string]struct{},
+) {
+	e.enabledTools = enabled
+}
+
+func TestConfigureExtractorEnabledTools(t *testing.T) {
+	t.Run("configurer receives enabled tools", func(t *testing.T) {
+		ext := &configurableExtractor{}
+		enabled := map[string]struct{}{
+			memory.AddToolName: {},
+		}
+		ConfigureExtractorEnabledTools(ext, enabled)
+		assert.Equal(t, enabled, ext.enabledTools)
+	})
+
+	t.Run("non-configurer is no-op", func(t *testing.T) {
+		ext := &mockExtractor{}
+		// Should not panic.
+		ConfigureExtractorEnabledTools(ext, map[string]struct{}{
+			memory.AddToolName: {},
+		})
+	})
+}
+
+func TestAutoMemoryWorker_IsToolEnabled(t *testing.T) {
+	tests := []struct {
+		name         string
+		enabledTools map[string]struct{}
+		toolName     string
+		expected     bool
+	}{
+		{
+			name:         "nil map allows all",
+			enabledTools: nil,
+			toolName:     memory.AddToolName,
+			expected:     true,
+		},
+		{
+			name:         "empty map allows all",
+			enabledTools: map[string]struct{}{},
+			toolName:     memory.AddToolName,
+			expected:     true,
+		},
+		{
+			name: "tool present in allow-list",
+			enabledTools: map[string]struct{}{
+				memory.AddToolName:    {},
+				memory.SearchToolName: {},
+			},
+			toolName: memory.AddToolName,
+			expected: true,
+		},
+		{
+			name: "tool absent from allow-list",
+			enabledTools: map[string]struct{}{
+				memory.SearchToolName: {},
+			},
+			toolName: memory.AddToolName,
+			expected: false,
+		},
+		{
+			name: "delete disabled",
+			enabledTools: map[string]struct{}{
+				memory.AddToolName:    {},
+				memory.UpdateToolName: {},
+			},
+			toolName: memory.DeleteToolName,
+			expected: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := &AutoMemoryWorker{
+				config: AutoMemoryConfig{
+					EnabledTools: tt.enabledTools,
+				},
+			}
+			assert.Equal(t, tt.expected,
+				w.isToolEnabled(tt.toolName))
+		})
+	}
+}
+
+func TestAutoMemoryWorker_ExecuteOperation_UpdateNotFound_AddDisabled(t *testing.T) {
+	op := newMockOperator()
+	op.updateErr = fmt.Errorf("memory with id mem-456 not found")
+	worker := &AutoMemoryWorker{
+		config: AutoMemoryConfig{
+			// Only update and search enabled; add is NOT.
+			EnabledTools: map[string]struct{}{
+				memory.UpdateToolName: {},
+				memory.SearchToolName: {},
+			},
+		},
+		operator: op,
+	}
+
+	worker.executeOperation(context.Background(), memory.UserKey{
+		AppName: "test-app",
+		UserID:  "user-1",
+	}, &extractor.Operation{
+		Type:     extractor.OperationUpdate,
+		MemoryID: "mem-456",
+		Memory:   "Updated memory.",
+		Topics:   []string{"topic1"},
+	})
+
+	// Fallback add should be skipped because add is disabled.
+	assert.Equal(t, 0, op.addCalls)
+}
+
+func TestAutoMemoryWorker_ExecuteOperation_UpdateNotFound_AddEnabled(t *testing.T) {
+	op := newMockOperator()
+	op.updateErr = fmt.Errorf("memory with id mem-789 not found")
+	worker := &AutoMemoryWorker{
+		config: AutoMemoryConfig{
+			// Both update and add are enabled.
+			EnabledTools: map[string]struct{}{
+				memory.UpdateToolName: {},
+				memory.AddToolName:    {},
+			},
+		},
+		operator: op,
+	}
+
+	worker.executeOperation(context.Background(), memory.UserKey{
+		AppName: "test-app",
+		UserID:  "user-1",
+	}, &extractor.Operation{
+		Type:     extractor.OperationUpdate,
+		MemoryID: "mem-789",
+		Memory:   "Updated memory.",
+		Topics:   []string{"topic1"},
+	})
+
+	// Fallback add should proceed because add is enabled.
+	assert.Equal(t, 1, op.addCalls)
 }

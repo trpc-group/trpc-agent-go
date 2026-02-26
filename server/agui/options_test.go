@@ -80,6 +80,12 @@ func TestWithTimeout(t *testing.T) {
 	assert.Equal(t, 2*time.Second, ro.Timeout)
 }
 
+func TestWithFlushInterval(t *testing.T) {
+	opts := newOptions(WithFlushInterval(2 * time.Second))
+	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
+	assert.Equal(t, 2*time.Second, ro.FlushInterval)
+}
+
 func TestWithGraphNodeLifecycleActivityEnabled(t *testing.T) {
 	opts := newOptions(WithGraphNodeLifecycleActivityEnabled(true))
 	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
@@ -92,7 +98,31 @@ func TestWithGraphNodeInterruptActivityEnabled(t *testing.T) {
 	assert.True(t, ro.GraphNodeInterruptActivityEnabled)
 }
 
+func TestWithGraphNodeInterruptActivityTopLevelOnly(t *testing.T) {
+	opts := newOptions(WithGraphNodeInterruptActivityTopLevelOnly(true))
+	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
+	assert.True(t, ro.GraphNodeInterruptActivityTopLevelOnly)
+}
+
+func TestWithMessagesSnapshotFollowEnabled(t *testing.T) {
+	opts := newOptions(WithMessagesSnapshotFollowEnabled(true))
+	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
+	assert.True(t, ro.MessagesSnapshotFollowEnabled)
+}
+
+func TestWithMessagesSnapshotFollowMaxDuration(t *testing.T) {
+	opts := newOptions(WithMessagesSnapshotFollowMaxDuration(2 * time.Second))
+	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
+	assert.Equal(t, 2*time.Second, ro.MessagesSnapshotFollowMaxDuration)
+}
+
 func TestWithCancelEnabled(t *testing.T) {
 	opts := newOptions(WithCancelEnabled(true))
 	assert.True(t, opts.cancelEnabled)
+}
+
+func TestWithCancelOnContextDoneEnabled(t *testing.T) {
+	opts := newOptions(WithCancelOnContextDoneEnabled(true))
+	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
+	assert.True(t, ro.CancelOnContextDoneEnabled)
 }

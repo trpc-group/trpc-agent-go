@@ -10,6 +10,7 @@
 package provider
 
 import (
+	"maps"
 	"net/http"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -27,6 +28,7 @@ type Option func(*Options)
 type Options struct {
 	ProviderName         string                      // ProviderName is the provider identifier passed to Model.
 	ModelName            string                      // ModelName is the concrete model identifier.
+	Variant              string                      // Variant selects OpenAI-compatible model behavior.
 	APIKey               string                      // APIKey holds the credential used for downstream SDK initialization.
 	BaseURL              string                      // BaseURL overrides the default endpoint when specified.
 	HTTPClientName       string                      // HTTPClientName is the logical name applied to the HTTP client.
@@ -105,6 +107,13 @@ func WithBaseURL(url string) Option {
 	}
 }
 
+// WithVariant records the OpenAI-compatible variant.
+func WithVariant(variant string) Option {
+	return func(o *Options) {
+		o.Variant = variant
+	}
+}
+
 // WithHTTPClientName records the logical HTTP client name.
 func WithHTTPClientName(name string) Option {
 	return func(o *Options) {
@@ -161,6 +170,18 @@ func WithCallbacks(cb Callbacks) Option {
 		if cb.AnthropicStreamComplete != nil {
 			o.Callbacks.AnthropicStreamComplete = cb.AnthropicStreamComplete
 		}
+		if cb.GeminiChatRequest != nil {
+			o.Callbacks.GeminiChatRequest = cb.GeminiChatRequest
+		}
+		if cb.GeminiChatResponse != nil {
+			o.Callbacks.GeminiChatResponse = cb.GeminiChatResponse
+		}
+		if cb.GeminiChatChunk != nil {
+			o.Callbacks.GeminiChatChunk = cb.GeminiChatChunk
+		}
+		if cb.GeminiStreamComplete != nil {
+			o.Callbacks.GeminiStreamComplete = cb.GeminiStreamComplete
+		}
 		if cb.OllamaChatRequest != nil {
 			o.Callbacks.OllamaChatRequest = cb.OllamaChatRequest
 		}
@@ -172,6 +193,18 @@ func WithCallbacks(cb Callbacks) Option {
 		}
 		if cb.OllamaChatChunk != nil {
 			o.Callbacks.OllamaChatChunk = cb.OllamaChatChunk
+		}
+		if cb.HunyuanChatRequest != nil {
+			o.Callbacks.HunyuanChatRequest = cb.HunyuanChatRequest
+		}
+		if cb.HunyuanChatResponse != nil {
+			o.Callbacks.HunyuanChatResponse = cb.HunyuanChatResponse
+		}
+		if cb.HunyuanChatChunk != nil {
+			o.Callbacks.HunyuanChatChunk = cb.HunyuanChatChunk
+		}
+		if cb.HunyuanStreamComplete != nil {
+			o.Callbacks.HunyuanStreamComplete = cb.HunyuanStreamComplete
 		}
 	}
 }
@@ -189,9 +222,7 @@ func WithExtraFields(fields map[string]any) Option {
 		if o.ExtraFields == nil {
 			o.ExtraFields = make(map[string]any)
 		}
-		for k, v := range fields {
-			o.ExtraFields[k] = v
-		}
+		maps.Copy(o.ExtraFields, fields)
 	}
 }
 

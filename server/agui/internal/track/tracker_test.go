@@ -168,6 +168,34 @@ func TestTrackerReuseEnsuredSession(t *testing.T) {
 	require.Len(t, trackEvents.Events, 2)
 }
 
+func TestTrackerGetEventsForwardsOptions(t *testing.T) {
+	ctx := context.Background()
+	svc := newHookSessionService()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+	afterTime := time.Now().Add(-time.Hour)
+
+	var got *session.Options
+	svc.getSessionFn = func(ctx context.Context, key session.Key, opts ...session.Option) (*session.Session, error) {
+		opt := &session.Options{}
+		for _, o := range opts {
+			o(opt)
+		}
+		got = opt
+		sess := session.NewSession(key.AppName, key.UserID, key.SessionID)
+		// Ensure the AG-UI track exists so that GetTrackEvents succeeds.
+		require.NoError(t, sess.AppendTrackEvent(&session.TrackEvent{Track: TrackAGUI, Timestamp: time.Now()}))
+		return sess, nil
+	}
+
+	tracker, err := New(svc, WithFlushInterval(0))
+	require.NoError(t, err)
+
+	_, err = tracker.GetEvents(ctx, key, session.WithEventTime(afterTime))
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.True(t, got.EventTime.Equal(afterTime))
+}
+
 func TestTrackerAppendEventAggregateError(t *testing.T) {
 	ctx := context.Background()
 	svc := inmemory.NewSessionService()

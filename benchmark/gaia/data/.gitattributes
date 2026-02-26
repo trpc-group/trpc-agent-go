@@ -1,0 +1,8 @@
+# Track all files in this data directory with Git LFS.
+* filter=lfs diff=lfs merge=lfs -text
+
+# Keep these text files in Git (override with empty filter).
+.gitattributes filter= diff= merge= text
+.gitkeep filter= diff= merge= text
+go.mod filter= diff= merge= text
+go.sum filter= diff= merge= text

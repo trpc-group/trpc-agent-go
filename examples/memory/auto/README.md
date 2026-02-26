@@ -8,13 +8,13 @@ Auto memory mode uses an LLM-based extractor to analyze conversations and automa
 
 ### Key Differences from Manual Memory
 
-| Aspect              | Manual Memory (Agentic)                           | Auto Memory                             |
-| ------------------- | ------------------------------------------------- | --------------------------------------- |
-| **Memory Creation** | Agent explicitly calls `memory_add`               | System extracts automatically           |
-| **User Experience** | Visible tool calls in conversation                | Transparent, no tool call interruptions |
-| **Available Tools** | 6 tools (4 default, 2 configurable)              | Only `memory_search`                    |
-| **Processing**      | Synchronous during response                       | Asynchronous after response             |
-| **Control**         | Agent decides what to remember                    | Extractor analyzes and decides          |
+| Aspect              | Manual Memory (Agentic)             | Auto Memory                             |
+| ------------------- | ----------------------------------- | --------------------------------------- |
+| **Memory Creation** | Agent explicitly calls `memory_add` | System extracts automatically           |
+| **User Experience** | Visible tool calls in conversation  | Transparent, no tool call interruptions |
+| **Available Tools** | 6 tools (4 default, 2 configurable) | Only `memory_search`                    |
+| **Processing**      | Synchronous during response         | Asynchronous after response             |
+| **Control**         | Agent decides what to remember      | Extractor analyzes and decides          |
 
 ### Key Features
 
@@ -88,12 +88,12 @@ Checkers control when memory extraction should be triggered. By default, extract
 
 #### Available Checkers
 
-| Checker                | Description                                              | Example                                     |
-| ---------------------- | -------------------------------------------------------- | ------------------------------------------- |
-| `CheckMessageThreshold`| Triggers when accumulated messages exceed threshold      | `CheckMessageThreshold(5)` - when messages > 5 |
-| `CheckTimeInterval`    | Triggers when time since last extraction exceeds interval | `CheckTimeInterval(3*time.Minute)` - every 3 min |
-| `ChecksAll`            | Combines checkers with AND logic                         | All checkers must pass                      |
-| `ChecksAny`            | Combines checkers with OR logic                          | Any checker passing triggers extraction     |
+| Checker                 | Description                                               | Example                                          |
+| ----------------------- | --------------------------------------------------------- | ------------------------------------------------ |
+| `CheckMessageThreshold` | Triggers when accumulated messages exceed threshold       | `CheckMessageThreshold(5)` - when messages > 5   |
+| `CheckTimeInterval`     | Triggers when time since last extraction exceeds interval | `CheckTimeInterval(3*time.Minute)` - every 3 min |
+| `ChecksAll`             | Combines checkers with AND logic                          | All checkers must pass                           |
+| `ChecksAny`             | Combines checkers with OR logic                           | Any checker passing triggers extraction          |
 
 #### Checker Configuration Examples
 
@@ -141,19 +141,19 @@ In auto memory mode, `WithToolEnabled` controls all 6 tools, but they serve diff
 
 **Front-end Tools** (exposed via `Tools()` for agent to call):
 
-| Tool            | Default | Description                              |
-| --------------- | ------- | ---------------------------------------- |
-| `memory_search` | ✅ On   | Search memories by query                 |
-| `memory_load`   | ❌ Off  | Load all or recent N memories            |
+| Tool            | Default | Description                   |
+| --------------- | ------- | ----------------------------- |
+| `memory_search` | ✅ On   | Search memories by query      |
+| `memory_load`   | ❌ Off  | Load all or recent N memories |
 
 **Back-end Tools** (used by extractor in background, not exposed to agent):
 
-| Tool            | Default | Description                              |
-| --------------- | ------- | ---------------------------------------- |
-| `memory_add`    | ✅ On   | Add new memories (extractor uses this)   |
-| `memory_update` | ✅ On   | Update existing memories                 |
-| `memory_delete` | ✅ On   | Delete memories                          |
-| `memory_clear`  | ❌ Off  | Clear all user memories (dangerous)      |
+| Tool            | Default | Description                            |
+| --------------- | ------- | -------------------------------------- |
+| `memory_add`    | ✅ On   | Add new memories (extractor uses this) |
+| `memory_update` | ✅ On   | Update existing memories               |
+| `memory_delete` | ✅ On   | Delete memories                        |
+| `memory_clear`  | ❌ Off  | Clear all user memories (dangerous)    |
 
 **Configuration Examples**:
 
@@ -173,13 +173,13 @@ memoryService := memoryinmemory.NewMemoryService(
 
 ### Comparison: Agentic Mode vs Auto Mode
 
-| Tool            | Agentic Mode (no extractor)         | Auto Mode (with extractor)              |
-| --------------- | ----------------------------------- | --------------------------------------- |
-| `memory_add`    | ✅ Agent calls via `Tools()`        | ✅ Extractor uses in background         |
-| `memory_update` | ✅ Agent calls via `Tools()`        | ✅ Extractor uses in background         |
-| `memory_search` | ✅ Agent calls via `Tools()`        | ✅ Agent calls via `Tools()`            |
-| `memory_load`   | ✅ Agent calls via `Tools()`        | ⚙️ Agent calls via `Tools()` if enabled |
-| `memory_delete` | ⚙️ Agent calls via `Tools()` if enabled | ✅ Extractor uses in background      |
+| Tool            | Agentic Mode (no extractor)             | Auto Mode (with extractor)                 |
+| --------------- | --------------------------------------- | ------------------------------------------ |
+| `memory_add`    | ✅ Agent calls via `Tools()`            | ✅ Extractor uses in background            |
+| `memory_update` | ✅ Agent calls via `Tools()`            | ✅ Extractor uses in background            |
+| `memory_search` | ✅ Agent calls via `Tools()`            | ✅ Agent calls via `Tools()`               |
+| `memory_load`   | ✅ Agent calls via `Tools()`            | ⚙️ Agent calls via `Tools()` if enabled    |
+| `memory_delete` | ⚙️ Agent calls via `Tools()` if enabled | ✅ Extractor uses in background            |
 | `memory_clear`  | ⚙️ Agent calls via `Tools()` if enabled | ⚙️ Extractor uses in background if enabled |
 
 ## Prerequisites
@@ -189,19 +189,37 @@ memoryService := memoryinmemory.NewMemoryService(
 
 ## Environment Variables
 
-| Variable          | Description                              | Default Value               |
-| ----------------- | ---------------------------------------- | --------------------------- |
-| `OPENAI_API_KEY`  | API key for the model service (required) | ``                          |
-| `OPENAI_BASE_URL` | Base URL for the model API endpoint      | `https://api.openai.com/v1` |
+| Variable                  | Description                              | Default Value               |
+| ------------------------- | ---------------------------------------- | --------------------------- |
+| `OPENAI_API_KEY`          | API key for the model service (required) | ``                          |
+| `OPENAI_BASE_URL`         | Base URL for the model API endpoint      | `https://api.openai.com/v1` |
+| `REDIS_ADDR`              | Redis server address                     | `localhost:6379`            |
+| `PG_HOST`                 | PostgreSQL host                          | `localhost`                 |
+| `PG_PORT`                 | PostgreSQL port                          | `5432`                      |
+| `PG_USER`                 | PostgreSQL user                          | `postgres`                  |
+| `PG_PASSWORD`             | PostgreSQL password                      | ``                          |
+| `PG_DATABASE`             | PostgreSQL database                      | `trpc-agent-go-pgmemory`    |
+| `PGVECTOR_HOST`           | pgvector PostgreSQL host                 | `localhost`                 |
+| `PGVECTOR_PORT`           | pgvector PostgreSQL port                 | `5432`                      |
+| `PGVECTOR_USER`           | pgvector PostgreSQL user                 | `postgres`                  |
+| `PGVECTOR_PASSWORD`       | pgvector PostgreSQL password             | ``                          |
+| `PGVECTOR_DATABASE`       | pgvector PostgreSQL database             | `trpc-agent-go-pgmemory`    |
+| `PGVECTOR_EMBEDDER_MODEL` | pgvector embedder model                  | `text-embedding-3-small`    |
+| `MYSQL_HOST`              | MySQL host                               | `localhost`                 |
+| `MYSQL_PORT`              | MySQL port                               | `3306`                      |
+| `MYSQL_USER`              | MySQL user                               | `root`                      |
+| `MYSQL_PASSWORD`          | MySQL password                           | ``                          |
+| `MYSQL_DATABASE`          | MySQL database                           | `trpc_agent_go`             |
 
 ## Command Line Arguments
 
-| Argument     | Description                                       | Default Value    |
-| ------------ | ------------------------------------------------- | ---------------- |
-| `-model`     | Name of the model for chat responses              | `deepseek-chat`  |
-| `-ext-model` | Name of the model for memory extraction           | Same as `-model` |
-| `-streaming` | Enable streaming mode for responses               | `true`           |
-| `-debug`     | Enable debug mode to print messages sent to model | `false`          |
+| Argument     | Description                                                               | Default Value    |
+| ------------ | ------------------------------------------------------------------------- | ---------------- |
+| `-model`     | Name of the model for chat responses                                      | `deepseek-chat`  |
+| `-ext-model` | Name of the model for memory extraction                                   | Same as `-model` |
+| `-memory`    | Memory service type: `inmemory`, `redis`, `postgres`, `pgvector`, `mysql` | `inmemory`       |
+| `-streaming` | Enable streaming mode for responses                                       | `true`           |
+| `-debug`     | Enable debug mode to print messages sent to model                         | `false`          |
 
 ## Usage
 
@@ -218,6 +236,34 @@ go run .
 ```bash
 # Use different models for chat and extraction.
 go run . -model gpt-4o -ext-model gpt-4o-mini
+```
+
+### Memory Backend Configuration
+
+The auto memory example supports multiple memory backends. Configure the appropriate environment variables and use the `-memory` flag:
+
+```bash
+# Default in-memory memory service
+go run . -memory inmemory
+
+# Redis memory service (requires Redis server)
+export REDIS_ADDR=localhost:6379
+go run . -memory redis
+
+# MySQL memory service (requires MySQL server)
+export MYSQL_HOST=localhost
+export MYSQL_PASSWORD=password
+go run . -memory mysql
+
+# PostgreSQL memory service (requires PostgreSQL server)
+export PG_HOST=localhost
+export PG_PASSWORD=password
+go run . -memory postgres
+
+# pgvector memory service (requires PostgreSQL with pgvector extension)
+export PGVECTOR_HOST=localhost
+export PGVECTOR_PASSWORD=password
+go run . -memory pgvector
 ```
 
 ### Debug Mode
@@ -248,6 +294,8 @@ Usage of ./auto:
         Enable debug mode to print messages sent to model
   -ext-model string
         Model for memory extraction (defaults to chat model)
+  -memory string
+        Memory service type: inmemory, redis, postgres, pgvector, mysql (default "inmemory")
   -model string
         Model for chat responses (default "deepseek-chat")
   -streaming
@@ -359,13 +407,13 @@ Use `-debug` flag to see preloaded memories in the system prompt.
 
 ### Preloading vs memory_load Tool
 
-| Aspect           | WithPreloadMemory                  | memory_load Tool                        |
-| ---------------- | ---------------------------------- | --------------------------------------- |
-| **When**         | Before every request automatically | Agent decides when to call              |
-| **Control**      | Configured at agent creation       | Agent-driven, on-demand                 |
-| **Token Usage**  | Always included in context         | Only when agent calls the tool          |
-| **Auto Mode**    | Works with preloading              | Disabled by default, can be enabled     |
-| **Use Case**     | Always need full context           | Selective memory access                 |
+| Aspect          | WithPreloadMemory                  | memory_load Tool                    |
+| --------------- | ---------------------------------- | ----------------------------------- |
+| **When**        | Before every request automatically | Agent decides when to call          |
+| **Control**     | Configured at agent creation       | Agent-driven, on-demand             |
+| **Token Usage** | Always included in context         | Only when agent calls the tool      |
+| **Auto Mode**   | Works with preloading              | Disabled by default, can be enabled |
+| **Use Case**    | Always need full context           | Selective memory access             |
 
 In auto memory mode, you can use `WithPreloadMemory(-1)` to inject all memories into the system prompt, or enable `memory_load` tool via `WithToolEnabled(memory.LoadToolName, true)` for agent-driven loading.
 

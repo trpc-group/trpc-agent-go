@@ -308,6 +308,27 @@ func TestSessionSummarizer_GenerateSummary_ResponseError(t *testing.T) {
 	assert.Contains(t, err.Error(), "model error during summarization")
 }
 
+func TestSessionSummarizer_GenerateSummary_ResponseErrorWithDetails(t *testing.T) {
+	// Test that error messages include Type and Code when available.
+	responseErrorModel := &responseErrorModelWithDetails{}
+	s := NewSummarizer(responseErrorModel)
+
+	sess := &session.Session{
+		ID: "test-detailed-error",
+		Events: []event.Event{
+			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "test"}}}}, Timestamp: time.Now()},
+		},
+	}
+
+	_, err := s.Summarize(context.Background(), sess)
+	require.Error(t, err)
+	// Verify error message includes type and code.
+	assert.Contains(t, err.Error(), "model error during summarization")
+	assert.Contains(t, err.Error(), "[requestAuthError]")
+	assert.Contains(t, err.Error(), "API key rate limit exceeded")
+	assert.Contains(t, err.Error(), "(code: rate_limit_exceeded)")
+}
+
 func TestSessionSummarizer_GenerateSummary_EmptyResponse(t *testing.T) {
 	emptyModel := &emptyResponseModel{}
 	s := NewSummarizer(emptyModel)
@@ -364,6 +385,314 @@ func TestSessionSummarizer_ExtractConversationText_WithAuthor(t *testing.T) {
 	assert.Contains(t, text, "assistant:")
 }
 
+func TestSessionSummarizer_ExtractConversationText_WithToolCalls(t *testing.T) {
+	s := NewSummarizer(&fakeModel{})
+
+	t.Run("extracts tool call with arguments", func(t *testing.T) {
+		sess := &session.Session{
+			ID: "test-toolcall",
+			Events: []event.Event{
+				{
+					Author: "user",
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "What is the weather?"},
+					}}},
+				},
+				{
+					Author: "assistant",
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{
+							ToolCalls: []model.ToolCall{{
+								ID:   "call_123",
+								Type: "function",
+								Function: model.FunctionDefinitionParam{
+									Name:      "get_weather",
+									Arguments: []byte(`{"city":"Beijing"}`),
+								},
+							}},
+						},
+					}}},
+				},
+				{
+					Author: "get_weather",
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{
+							ToolID:   "call_123",
+							ToolName: "get_weather",
+							Content:  `{"temperature": 25, "weather": "sunny"}`,
+						},
+					}}},
+				},
+				{
+					Author: "assistant",
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "The weather in Beijing is sunny with 25 degrees."},
+					}}},
+				},
+			},
+		}
+
+		text, err := s.Summarize(context.Background(), sess)
+		require.NoError(t, err)
+		assert.Contains(t, text, "user:")
+		assert.Contains(t, text, "[Called tool: get_weather")
+		assert.Contains(t, text, "Beijing")
+		assert.Contains(t, text, "[get_weather returned:")
+		assert.Contains(t, text, "sunny")
+	})
+
+	t.Run("extracts tool call without arguments", func(t *testing.T) {
+		sess := &session.Session{
+			ID: "test-toolcall-no-args",
+			Events: []event.Event{
+				{
+					Author: "user",
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "Get current time"},
+					}}},
+				},
+				{
+					Author: "assistant",
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{
+							ToolCalls: []model.ToolCall{{
+								ID:   "call_456",
+								Type: "function",
+								Function: model.FunctionDefinitionParam{
+									Name: "get_current_time",
+								},
+							}},
+						},
+					}}},
+				},
+			},
+		}
+
+		text, err := s.Summarize(context.Background(), sess)
+		require.NoError(t, err)
+		assert.Contains(t, text, "[Called tool: get_current_time]")
+		assert.NotContains(t, text, "with args")
+	})
+
+	t.Run("includes full tool arguments by default", func(t *testing.T) {
+		longArgs := `{"data":"` + strings.Repeat("x", 300) + `"}`
+		sess := &session.Session{
+			ID: "test-long-args",
+			Events: []event.Event{
+				{
+					Author: "user",
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "Process data"},
+					}}},
+				},
+				{
+					Author: "assistant",
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{
+							ToolCalls: []model.ToolCall{{
+								ID:   "call_789",
+								Type: "function",
+								Function: model.FunctionDefinitionParam{
+									Name:      "process_data",
+									Arguments: []byte(longArgs),
+								},
+							}},
+						},
+					}}},
+				},
+			},
+		}
+
+		text, err := s.Summarize(context.Background(), sess)
+		require.NoError(t, err)
+		assert.Contains(t, text, "[Called tool: process_data with args:")
+		// Default formatter does not truncate.
+		assert.Contains(t, text, strings.Repeat("x", 300))
+	})
+
+	t.Run("includes full tool response by default", func(t *testing.T) {
+		longContent := strings.Repeat("result_data_", 100)
+		sess := &session.Session{
+			ID: "test-long-response",
+			Events: []event.Event{
+				{
+					Author: "user",
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "Get data"},
+					}}},
+				},
+				{
+					Author: "tool",
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{
+							ToolID:   "call_abc",
+							ToolName: "get_data",
+							Content:  longContent,
+						},
+					}}},
+				},
+			},
+		}
+
+		text, err := s.Summarize(context.Background(), sess)
+		require.NoError(t, err)
+		assert.Contains(t, text, "[get_data returned:")
+		// Default formatter does not truncate.
+		assert.Contains(t, text, longContent)
+	})
+
+	t.Run("handles tool response without tool name", func(t *testing.T) {
+		sess := &session.Session{
+			ID: "test-no-tool-name",
+			Events: []event.Event{
+				{
+					Author: "user",
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "Do something"},
+					}}},
+				},
+				{
+					Author: "tool",
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{
+							ToolID:  "call_def",
+							Content: "done",
+						},
+					}}},
+				},
+			},
+		}
+
+		text, err := s.Summarize(context.Background(), sess)
+		require.NoError(t, err)
+		assert.Contains(t, text, "[tool returned: done]")
+	})
+}
+
+func TestSessionSummarizer_CustomToolFormatters(t *testing.T) {
+	t.Run("custom tool call formatter with truncation", func(t *testing.T) {
+		truncatingFormatter := func(tc model.ToolCall) string {
+			name := tc.Function.Name
+			if name == "" {
+				return ""
+			}
+			args := string(tc.Function.Arguments)
+			const maxLen = 50
+			if len(args) > maxLen {
+				args = args[:maxLen] + "...(truncated)"
+			}
+			return fmt.Sprintf("[Tool: %s, Args: %s]", name, args)
+		}
+
+		s := NewSummarizer(&fakeModel{}, WithToolCallFormatter(truncatingFormatter))
+		longArgs := `{"data":"` + strings.Repeat("x", 100) + `"}`
+		sess := &session.Session{
+			ID: "test-custom-formatter",
+			Events: []event.Event{
+				{
+					Author: "user",
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "Test"},
+					}}},
+				},
+				{
+					Author: "assistant",
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{
+							ToolCalls: []model.ToolCall{{
+								Function: model.FunctionDefinitionParam{
+									Name:      "my_tool",
+									Arguments: []byte(longArgs),
+								},
+							}},
+						},
+					}}},
+				},
+			},
+		}
+
+		text, err := s.Summarize(context.Background(), sess)
+		require.NoError(t, err)
+		assert.Contains(t, text, "[Tool: my_tool, Args:")
+		assert.Contains(t, text, "...(truncated)")
+	})
+
+	t.Run("custom tool result formatter excludes results", func(t *testing.T) {
+		// Formatter that excludes tool results entirely.
+		excludingFormatter := func(msg model.Message) string {
+			return "" // Return empty to exclude.
+		}
+
+		s := NewSummarizer(&fakeModel{}, WithToolResultFormatter(excludingFormatter))
+		sess := &session.Session{
+			ID: "test-exclude-results",
+			Events: []event.Event{
+				{
+					Author: "user",
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "Test"},
+					}}},
+				},
+				{
+					Author: "tool",
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{
+							ToolID:   "call_123",
+							ToolName: "my_tool",
+							Content:  "some result",
+						},
+					}}},
+				},
+			},
+		}
+
+		text, err := s.Summarize(context.Background(), sess)
+		require.NoError(t, err)
+		assert.NotContains(t, text, "my_tool")
+		assert.NotContains(t, text, "some result")
+	})
+
+	t.Run("custom formatter shows only tool name", func(t *testing.T) {
+		nameOnlyFormatter := func(tc model.ToolCall) string {
+			if tc.Function.Name == "" {
+				return ""
+			}
+			return fmt.Sprintf("[Used: %s]", tc.Function.Name)
+		}
+
+		s := NewSummarizer(&fakeModel{}, WithToolCallFormatter(nameOnlyFormatter))
+		sess := &session.Session{
+			ID: "test-name-only",
+			Events: []event.Event{
+				{
+					Author: "user",
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "Test"},
+					}}},
+				},
+				{
+					Author: "assistant",
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{
+							ToolCalls: []model.ToolCall{{
+								Function: model.FunctionDefinitionParam{
+									Name:      "search",
+									Arguments: []byte(`{"query":"test"}`),
+								},
+							}},
+						},
+					}}},
+				},
+			},
+		}
+
+		text, err := s.Summarize(context.Background(), sess)
+		require.NoError(t, err)
+		assert.Contains(t, text, "[Used: search]")
+		assert.NotContains(t, text, "query")
+	})
+}
+
 // errorModel returns an error when generating content
 type errorModel struct{}
 
@@ -372,7 +701,7 @@ func (e *errorModel) GenerateContent(ctx context.Context, req *model.Request) (<
 	return nil, fmt.Errorf("model error")
 }
 
-// responseErrorModel returns a response with an error
+// responseErrorModel returns a response with an error.
 type responseErrorModel struct{}
 
 func (r *responseErrorModel) Info() model.Info { return model.Info{Name: "response-error"} }
@@ -386,7 +715,28 @@ func (r *responseErrorModel) GenerateContent(ctx context.Context, req *model.Req
 	return ch, nil
 }
 
-// emptyResponseModel returns an empty response
+// responseErrorModelWithDetails returns a response with detailed error info.
+type responseErrorModelWithDetails struct{}
+
+func (r *responseErrorModelWithDetails) Info() model.Info {
+	return model.Info{Name: "response-error-detailed"}
+}
+func (r *responseErrorModelWithDetails) GenerateContent(ctx context.Context, req *model.Request) (<-chan *model.Response, error) {
+	code := "rate_limit_exceeded"
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{
+		Done: true,
+		Error: &model.ResponseError{
+			Message: "API key rate limit exceeded",
+			Type:    "requestAuthError",
+			Code:    &code,
+		},
+	}
+	close(ch)
+	return ch, nil
+}
+
+// emptyResponseModel returns an empty response.
 type emptyResponseModel struct{}
 
 func (e *emptyResponseModel) Info() model.Info { return model.Info{Name: "empty"} }
@@ -395,6 +745,78 @@ func (e *emptyResponseModel) GenerateContent(ctx context.Context, req *model.Req
 	ch <- &model.Response{Done: true, Choices: []model.Choice{{Message: model.Message{Content: ""}}}}
 	close(ch)
 	return ch, nil
+}
+
+func TestFormatResponseError(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      *model.ResponseError
+		expected string
+		isNil    bool
+	}{
+		{
+			name:  "nil error",
+			err:   nil,
+			isNil: true,
+		},
+		{
+			name: "message only",
+			err: &model.ResponseError{
+				Message: "simple error",
+			},
+			expected: "model error during summarization: simple error",
+		},
+		{
+			name: "with type",
+			err: &model.ResponseError{
+				Message: "auth failed",
+				Type:    "authError",
+			},
+			expected: "model error during summarization: [authError] auth failed",
+		},
+		{
+			name: "with type and code",
+			err: &model.ResponseError{
+				Message: "rate limit",
+				Type:    "requestError",
+				Code:    stringPtr("rate_limit_exceeded"),
+			},
+			expected: "model error during summarization: [requestError] rate limit (code: rate_limit_exceeded)",
+		},
+		{
+			name: "with empty code",
+			err: &model.ResponseError{
+				Message: "error message",
+				Type:    "someType",
+				Code:    stringPtr(""),
+			},
+			expected: "model error during summarization: [someType] error message",
+		},
+		{
+			name: "code without type",
+			err: &model.ResponseError{
+				Message: "error message",
+				Code:    stringPtr("error_code"),
+			},
+			expected: "model error during summarization: error message (code: error_code)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := formatResponseError(tt.err)
+			if tt.isNil {
+				assert.Nil(t, result)
+			} else {
+				require.NotNil(t, result)
+				assert.Equal(t, tt.expected, result.Error())
+			}
+		})
+	}
+}
+
+func stringPtr(s string) *string {
+	return &s
 }
 
 func TestSessionSummarizer_WithSkipRecent(t *testing.T) {

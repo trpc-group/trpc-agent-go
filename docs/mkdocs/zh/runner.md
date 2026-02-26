@@ -154,6 +154,55 @@ r := runner.NewRunner("my-app", agent,
 )
 ```
 
+### 🧩 按请求动态创建 Agent（Agent Factory）
+
+默认情况下，`runner.NewRunner(...)` 需要你先把 `agent.Agent` 完整构建好，然后
+Runner 会在每次请求里复用同一个 Agent 实例。
+
+如果你的 Agent 配置需要 **跟当前请求绑定**（例如：提示词、模型、沙箱实例、工具集），
+可以用 “Agent Factory” 在每次 `Runner.Run(...)` 时动态创建一个新的 Agent。
+
+#### 方式 A：默认 Agent 按需创建
+
+```go
+r := runner.NewRunnerWithAgentFactory(
+    "my-app",
+    "assistant",
+    func(ctx context.Context, ro agent.RunOptions) (agent.Agent, error) {
+        // 你可以从 ro（或 ro.RuntimeState / ro.CustomAgentConfigs）读取
+        // 本次请求的参数，然后据此构建 Agent。
+        a := llmagent.New("assistant",
+            llmagent.WithInstruction(ro.Instruction),
+        )
+        return a, nil
+    },
+)
+```
+
+#### 方式 B：注册多个命名工厂，并通过名字选择
+
+```go
+r := runner.NewRunner("my-app", defaultAgent,
+    runner.WithAgentFactory("sandboxed", func(
+        ctx context.Context,
+        ro agent.RunOptions,
+    ) (agent.Agent, error) {
+        return llmagent.New("sandboxed"), nil
+    }),
+)
+
+events, err := r.Run(ctx, userID, sessionID, message,
+    agent.WithAgentByName("sandboxed"),
+)
+_ = events
+_ = err
+```
+
+说明：
+
+- 每次调用 `Runner.Run(...)`，Factory 会被调用一次。
+- `agent.WithAgent(...)` 依然优先生效（测试时很方便）。
+
 ### 🔌 插件
 
 Runner 插件是一类全局、Runner 作用域的 Hook（钩子）。只需要在创建 Runner 时
@@ -176,6 +225,33 @@ defer r.Close()
 - 插件名在同一个 Runner 内必须唯一。
 - 插件按注册顺序执行。
 - 如果插件实现了 `plugin.Closer`，Runner 会在 `Close()` 时调用它。
+
+### 🔄 Ralph Loop Mode
+
+Ralph Loop 是一种“外部循环（outer loop）”模式：不依赖 LLM 主观判断“我已经完成了”，
+而是用可验证的完成条件来决定是否继续迭代执行。
+
+常见完成条件：
+
+- Assistant 输出包含完成承诺（completion promise），例如
+  `<promise>DONE</promise>`。
+- 校验命令退出码为 0（例如 `go test ./...`）。
+- 通过 `runner.Verifier` 扩展自定义校验。
+- 强烈建议设置 `MaxIterations` 作为安全阀。
+
+```go
+r := runner.NewRunner("my-app", a,
+    runner.WithRalphLoop(runner.RalphLoopConfig{
+        MaxIterations:     20,
+        CompletionPromise: "DONE",
+        VerifyCommand:     "go test ./... -count=1",
+        VerifyTimeout:     2 * time.Minute,
+    }),
+)
+```
+
+当达到 `MaxIterations` 仍未满足完成条件时，Runner 会发出一个 error event，其错误类型为
+`stop_agent_error`。
 
 ### 运行对话
 
@@ -274,6 +350,12 @@ eventChan, err := r.Run(
 
 如果最后一条事件是 user / tool 消息，或者是普通的 assistant 文本回复，
 则 `WithResume(true)` 不会做任何额外处理，行为等同于普通的 `Run` 调用。
+
+#### Tool Call 参数自动修复
+
+部分模型在生成 `tool_calls` 时，可能产出非严格 JSON 的参数（例如对象 key 未加引号、尾逗号等），从而导致工具执行或外部解析失败。
+
+在 `runner.Run` 中启用 `agent.WithToolCallArgumentsJSONRepairEnabled(true)` 后，框架会对 `toolCall.Function.Arguments` 做一次尽力修复，详细使用方法可参照 [ToolCall参数自动修复](./runner.md#tool-call-参数自动修复)。
 
 #### 传入对话历史（auto-seed + 复用 Session）
 
@@ -714,10 +796,47 @@ for event := range eventChan {
 
 ### 安全中断执行
 
-- **取消上下文**：用 `context.WithCancel` 包裹 `runner.Run` 的 ctx，
-  当轮次或 token 超限时调用 `cancel()`。`llmflow` 将
-  `context.Canceled` 视为正常退出，会关闭 agent 事件通道，
-  runner 的消费循环也会正常结束，避免阻塞。
+当你调用 `Runner.Run` 时，框架会启动 goroutines 来持续产出事件，直到本次 run
+结束。
+
+这里有两种“停止”，非常容易混淆：
+
+1. **停止读取事件**（你的代码不读 eventChan 了）
+2. **停止本次 run**（agent 停止模型/工具调用并退出）
+
+如果你只是停止读取，但 run 还在继续，agent goroutine 可能会在写事件通道时阻塞，
+从而引发 goroutine 泄漏或“卡住的 run”。
+
+安全姿势永远是：
+
+1. **触发取消**（ctx cancel / requestID cancel / StopError）
+2. **把事件通道读到关闭为止**
+
+#### 方式 A：Ctrl+C（命令行程序）
+
+在命令行程序里，常见做法是把 Ctrl+C 转换为 ctx cancel：
+
+```go
+ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+defer stop()
+
+eventCh, err := r.Run(ctx, userID, sessionID, message)
+if err != nil {
+    return err
+}
+
+for range eventCh {
+    // 一直读到通道关闭：要么 ctx 被取消，要么 run 正常结束。
+}
+```
+
+#### 方式 B：取消上下文（推荐默认做法）
+
+用 `context.WithCancel` 包裹 `runner.Run` 的 ctx，在你希望中断时调用
+`cancel()`（例如：轮次上限、token 预算超限、用户点击“停止”等）。
+
+`llmflow` 将 `context.Canceled` 视为正常退出，会关闭 agent 事件通道，
+runner 的消费循环也会正常结束，避免写端阻塞。
 
 ```go
 ctx, cancel := context.WithCancel(context.Background())
@@ -745,11 +864,72 @@ for evt := range eventCh {
 }
 ```
 
-- **发送停止事件**：在自定义处理器或工具内部返回 `agent.NewStopError("原因")`。`llmflow` 会把它转换为 `stop_agent_error` 事件并停止流程。
-  仍建议配合 ctx cancel 进行硬截止。详见 [回调中的停止用法](https://trpc-group.github.io/trpc-agent-go/zh/callbacks/#stop-agent-via-callbacks)。
+如果你需要“尽快返回”（例如 HTTP handler 超时），但仍想避免写端阻塞，可以用单独
+的 goroutine 去 drain：
 
-- **避免直接 break 事件循环**：直接在 runner 的事件消费循环里 break 会让 agent goroutine 继续运行并可能在写通道时阻塞。
-  优先使用上下文取消或 `StopError`。
+```go
+// eventCh 是 Runner.Run 返回的事件通道。
+// cancel 是 context.WithCancel 返回的取消函数。
+go func() {
+    for range eventCh {
+    }
+}()
+cancel()
+return nil
+```
+
+#### 方式 C：按 `requestID` 取消（ManagedRunner）
+
+在服务端场景里，你经常需要在“另一个 goroutine / 另一个请求”里取消某次 run。
+这时可以用 request identifier（requestID）来定位并取消。
+
+1. 生成 requestID，并通过 `agent.WithRequestID` 传入 `Run`。
+2. 将 runner 转换为 `runner.ManagedRunner`。
+3. 调用 `Cancel(requestID)`。
+
+```go
+requestID := "req-123"
+
+eventCh, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    message,
+    agent.WithRequestID(requestID),
+)
+if err != nil {
+    return err
+}
+
+mr := r.(runner.ManagedRunner)
+_ = mr.Cancel(requestID)
+
+for range eventCh {
+}
+```
+
+#### 方式 D：在 run 内部触发停止（StopError）
+
+有时最适合决定“现在就停止”的位置是在工具、回调或处理器内部（例如：策略校验、
+预算限制、业务规则）。
+
+你可以返回 `agent.NewStopError("原因")`（也可以与其他错误 join / wrap）。
+`llmflow` 会把它转换为 `stop_agent_error` 事件并停止流程。
+
+但“硬截止”（强制时间上限）仍建议用 **ctx deadline**（`context.WithTimeout` /
+`agent.WithMaxRunDuration`）来实现。
+
+#### 常见误区
+
+- **只 break 事件循环**：run 可能还在后台继续，并在写通道时阻塞。
+- 全部使用 `context.Background()`：你没有办法取消，就无法中断 run。
+- 工具实现忽略 `ctx`：取消是协作式的；长耗时工具应检查 `ctx.Done()`，
+  或把 `ctx` 传入网络/DB 请求。
+
+可运行示例：
+
+- `examples/cancelrun`（Enter/Ctrl+C 取消、drain 事件通道）
+- `examples/managedrunner`（requestID cancel、detached cancel、最长运行时长）
 
 ### 资源管理
 

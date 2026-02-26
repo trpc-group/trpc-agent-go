@@ -12,13 +12,18 @@ package translator
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
+	"time"
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/stretchr/testify/assert"
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	agentevent "trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	trunner "trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 func newTranslatorForTest(t *testing.T, opts ...Option) Translator {
@@ -45,6 +50,58 @@ func newTranslatorImplForTest(t *testing.T, opts ...Option) *translator {
 		return nil
 	}
 	return impl
+}
+
+type mockModelWithResponses struct {
+	mu        sync.Mutex
+	responses []*model.Response
+	callIndex int
+}
+
+func (m *mockModelWithResponses) GenerateContent(
+	ctx context.Context,
+	request *model.Request,
+) (<-chan *model.Response, error) {
+	ch := make(chan *model.Response, 1)
+	m.mu.Lock()
+	callIndex := m.callIndex
+	m.callIndex++
+	var resp *model.Response
+	if callIndex < len(m.responses) {
+		resp = m.responses[callIndex]
+	}
+	m.mu.Unlock()
+	if resp != nil {
+		ch <- resp
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (m *mockModelWithResponses) Info() model.Info {
+	return model.Info{Name: "mock-model"}
+}
+
+type mockStreamableTool struct {
+	name   string
+	chunks []any
+}
+
+func (m *mockStreamableTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: m.name, Description: "mock stream tool"}
+}
+
+func (m *mockStreamableTool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.StreamReader, error) {
+	stream := tool.NewStream(8)
+	go func() {
+		defer stream.Writer.Close()
+		for _, c := range m.chunks {
+			if stream.Writer.Send(tool.StreamChunk{Content: c}, nil) {
+				return
+			}
+		}
+	}()
+	return stream.Reader, nil
 }
 
 func TestTranslateNilEvent(t *testing.T) {
@@ -1417,6 +1474,65 @@ func TestGraphNodeInterruptEmitsActivityDelta(t *testing.T) {
 	assert.Equal(t, graphNodeInterruptPatchValue{NodeID: "nodeX", Prompt: "ask"}, delta.Patch[0].Value)
 }
 
+func TestGraphNodeInterruptTopLevelOnlySuppressesNested(t *testing.T) {
+	tr := newTranslatorImplForTest(t,
+		WithGraphNodeInterruptActivityEnabled(true),
+		WithGraphNodeInterruptActivityTopLevelOnly(true),
+	)
+	if tr == nil {
+		return
+	}
+
+	meta := graph.PregelStepMetadata{
+		StepNumber:     3,
+		NodeID:         "nodeX",
+		InterruptValue: "ask",
+	}
+	raw, err := json.Marshal(meta)
+	assert.NoError(t, err)
+
+	evt := &agentevent.Event{
+		ID:                 "pregel-interrupt-nested",
+		ParentInvocationID: "parent-invocation",
+		Response:           &model.Response{Choices: []model.Choice{{}}},
+		StateDelta: map[string][]byte{
+			graph.MetadataKeyPregel: raw,
+		},
+	}
+	events, err := tr.Translate(context.Background(), evt)
+	assert.NoError(t, err)
+	assert.Empty(t, events)
+}
+
+func TestGraphNodeInterruptTopLevelOnlyAllowsTopLevel(t *testing.T) {
+	tr := newTranslatorImplForTest(t,
+		WithGraphNodeInterruptActivityEnabled(true),
+		WithGraphNodeInterruptActivityTopLevelOnly(true),
+	)
+	if tr == nil {
+		return
+	}
+
+	meta := graph.PregelStepMetadata{
+		StepNumber:     3,
+		NodeID:         "nodeX",
+		InterruptValue: "ask",
+	}
+	raw, err := json.Marshal(meta)
+	assert.NoError(t, err)
+
+	evt := &agentevent.Event{
+		ID:       "pregel-interrupt-top-level",
+		Response: &model.Response{Choices: []model.Choice{{}}},
+		StateDelta: map[string][]byte{
+			graph.MetadataKeyPregel: raw,
+		},
+	}
+	events, err := tr.Translate(context.Background(), evt)
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+}
+
 func TestGraphNodeInterruptUnmarshalErrorEmitsRunError(t *testing.T) {
 	tr := newTranslatorImplForTest(t, WithGraphNodeInterruptActivityEnabled(true))
 	if tr == nil {
@@ -1901,4 +2017,150 @@ func TestGraphNodeCustomEvents_EmptyStateDelta(t *testing.T) {
 	}
 	events = tr.graphNodeCustomEvents(evt2)
 	assert.Empty(t, events)
+}
+
+func TestStreamToolResultEvent(t *testing.T) {
+	tr := newTranslatorImplForTest(t)
+	if tr == nil {
+		return
+	}
+
+	chunkRsp1 := &model.Response{
+		ID:     "msg-1",
+		Object: string(model.ObjectTypeToolResponse),
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleTool, Content: "Hello", ToolID: "tool-1"},
+		}},
+	}
+	events, err := tr.Translate(context.Background(), &agentevent.Event{ID: "evt-1", Response: chunkRsp1})
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+	toolResultEvt, ok := events[0].(*aguievents.ToolCallResultEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "evt-1", toolResultEvt.MessageID)
+	assert.Equal(t, "tool-1", toolResultEvt.ToolCallID)
+	assert.Equal(t, "Hello", toolResultEvt.Content)
+	assert.Equal(t, "tool", *toolResultEvt.Role)
+	chunkRsp2 := &model.Response{
+		ID:     "msg-1",
+		Object: string(model.ObjectTypeToolResponse),
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleTool, Content: "", ToolID: "tool-1"},
+		}},
+	}
+	events, err = tr.Translate(context.Background(), &agentevent.Event{ID: "evt-2", Response: chunkRsp2})
+	assert.NoError(t, err)
+	assert.Len(t, events, 0)
+	chunkRsp3 := &model.Response{
+		ID:     "msg-1",
+		Object: string(model.ObjectTypeToolResponse),
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleTool, Content: "World", ToolID: "tool-1"},
+		}},
+	}
+	events, err = tr.Translate(context.Background(), &agentevent.Event{ID: "evt-3", Response: chunkRsp3})
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+	toolResultEvt, ok = events[0].(*aguievents.ToolCallResultEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "evt-3", toolResultEvt.MessageID)
+	assert.Equal(t, "tool-1", toolResultEvt.ToolCallID)
+	assert.Equal(t, "World", toolResultEvt.Content)
+	assert.Equal(t, "tool", *toolResultEvt.Role)
+}
+
+func TestTranslateStreamableToolCallAndResultEvents(t *testing.T) {
+	tr := newTranslatorImplForTest(t)
+	if tr == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	const (
+		toolName   = "streamer"
+		toolCallID = "call-stream"
+		msgID      = "msg-tool-call"
+	)
+	toolCallRsp := &model.Response{
+		ID:     msgID,
+		Object: model.ObjectTypeChatCompletion,
+		Model:  "mock-model",
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID:   toolCallID,
+					Type: "function",
+					Function: model.FunctionDefinitionParam{
+						Name:      toolName,
+						Arguments: []byte(`{"foo":"bar"}`),
+					},
+				}},
+			},
+		}},
+	}
+
+	finalRsp := &model.Response{
+		ID:     "msg-final",
+		Object: model.ObjectTypeChatCompletion,
+		Model:  "mock-model",
+		Choices: []model.Choice{{
+			Message: model.Message{Role: model.RoleAssistant, Content: "done"},
+		}},
+		Done: true,
+	}
+	m := &mockModelWithResponses{responses: []*model.Response{toolCallRsp, finalRsp}}
+	streamTool := &mockStreamableTool{name: toolName, chunks: []any{"hello", " world"}}
+
+	agt := llmagent.New("agent", llmagent.WithModel(m), llmagent.WithTools([]tool.Tool{streamTool}))
+	r := trunner.NewRunner("app", agt)
+	defer func() { _ = r.Close() }()
+
+	eventCh, err := r.Run(ctx, "user", "thread", model.Message{Role: model.RoleUser, Content: "hi"})
+	assert.NoError(t, err)
+
+	var (
+		gotStart bool
+		gotArgs  bool
+		gotEnd   bool
+		streamed []string
+	)
+	for evt := range eventCh {
+		evs, translateErr := tr.Translate(ctx, evt)
+		assert.NoError(t, translateErr)
+		for _, e := range evs {
+			switch v := e.(type) {
+			case *aguievents.ToolCallStartEvent:
+				if v.ToolCallID != toolCallID {
+					continue
+				}
+				gotStart = true
+				assert.Equal(t, toolName, v.ToolCallName)
+				assert.NotNil(t, v.ParentMessageID)
+				assert.Equal(t, msgID, *v.ParentMessageID)
+			case *aguievents.ToolCallArgsEvent:
+				if v.ToolCallID != toolCallID {
+					continue
+				}
+				gotArgs = true
+				assert.Equal(t, `{"foo":"bar"}`, v.Delta)
+			case *aguievents.ToolCallEndEvent:
+				if v.ToolCallID != toolCallID {
+					continue
+				}
+				gotEnd = true
+			case *aguievents.ToolCallResultEvent:
+				if v.ToolCallID != toolCallID || evt == nil || !evt.IsPartial {
+					continue
+				}
+				streamed = append(streamed, v.Content)
+			}
+		}
+	}
+	assert.True(t, gotStart)
+	assert.True(t, gotArgs)
+	assert.True(t, gotEnd)
+	assert.Equal(t, []string{"hello", " world"}, streamed)
 }

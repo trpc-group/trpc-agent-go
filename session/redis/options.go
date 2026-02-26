@@ -22,8 +22,9 @@ const (
 	defaultChanBufferSize      = 100
 	defaultAsyncPersisterNum   = 10
 
-	defaultAsyncSummaryNum  = 3
-	defaultSummaryQueueSize = 100
+	defaultAsyncSummaryNum   = 3
+	defaultSummaryQueueSize  = 100
+	defaultSummaryJobTimeout = 60 * time.Second
 )
 
 // ServiceOpts is the options for the redis session service.
@@ -37,6 +38,10 @@ type ServiceOpts struct {
 	userStateTTL       time.Duration // TTL for user state
 	enableAsyncPersist bool
 	asyncPersisterNum  int // number of worker goroutines for async persistence
+	// keyPrefix is the prefix for all redis keys.
+	// If set, all keys will be prefixed with this value followed by a colon.
+	// For example, if keyPrefix is "myapp", key "sess:{app}:user" becomes "myapp:sess:{app}:user".
+	keyPrefix string
 	// summarizer integrates LLM summarization.
 	summarizer summary.SessionSummarizer
 	// asyncSummaryNum is the number of worker goroutines for async summary.
@@ -63,7 +68,7 @@ var (
 		enableAsyncPersist: false,
 		asyncSummaryNum:    defaultAsyncSummaryNum,
 		summaryQueueSize:   defaultSummaryQueueSize,
-		summaryJobTimeout:  30 * time.Second,
+		summaryJobTimeout:  defaultSummaryJobTimeout,
 	}
 )
 
@@ -189,5 +194,14 @@ func WithAppendEventHook(hooks ...session.AppendEventHook) ServiceOpt {
 func WithGetSessionHook(hooks ...session.GetSessionHook) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.getSessionHooks = append(opts.getSessionHooks, hooks...)
+	}
+}
+
+// WithKeyPrefix sets the prefix for all redis keys.
+// If set, all keys will be prefixed with this value followed by a colon.
+// For example, if keyPrefix is "myapp", key "sess:{app}:user" becomes "myapp:sess:{app}:user".
+func WithKeyPrefix(prefix string) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.keyPrefix = prefix
 	}
 }

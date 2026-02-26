@@ -35,27 +35,29 @@ type Translator interface {
 func New(ctx context.Context, threadID, runID string, opts ...Option) (Translator, error) {
 	options := newOptions(opts...)
 	return &translator{
-		threadID:                          threadID,
-		runID:                             runID,
-		lastMessageID:                     "",
-		receivingMessage:                  false,
-		seenResponseIDs:                   make(map[string]struct{}),
-		seenToolCallIDs:                   make(map[string]struct{}),
-		graphNodeLifecycleActivityEnabled: options.graphNodeLifecycleActivityEnabled,
-		graphNodeInterruptActivityEnabled: options.graphNodeInterruptActivityEnabled,
+		threadID:                               threadID,
+		runID:                                  runID,
+		lastMessageID:                          "",
+		receivingMessage:                       false,
+		seenResponseIDs:                        make(map[string]struct{}),
+		seenToolCallIDs:                        make(map[string]struct{}),
+		graphNodeLifecycleActivityEnabled:      options.graphNodeLifecycleActivityEnabled,
+		graphNodeInterruptActivityEnabled:      options.graphNodeInterruptActivityEnabled,
+		graphNodeInterruptActivityTopLevelOnly: options.graphNodeInterruptActivityTopLevelOnly,
 	}, nil
 }
 
 // translator is the default implementation of the Translator.
 type translator struct {
-	threadID                          string
-	runID                             string
-	lastMessageID                     string
-	receivingMessage                  bool
-	seenResponseIDs                   map[string]struct{}
-	seenToolCallIDs                   map[string]struct{}
-	graphNodeLifecycleActivityEnabled bool
-	graphNodeInterruptActivityEnabled bool
+	threadID                               string
+	runID                                  string
+	lastMessageID                          string
+	receivingMessage                       bool
+	seenResponseIDs                        map[string]struct{}
+	seenToolCallIDs                        map[string]struct{}
+	graphNodeLifecycleActivityEnabled      bool
+	graphNodeInterruptActivityEnabled      bool
+	graphNodeInterruptActivityTopLevelOnly bool
 }
 
 // Translate translates one trpc-agent-go event into zero or more AG-UI events.
@@ -196,6 +198,9 @@ func (t *translator) graphNodeInterruptActivityEvents(evt *agentevent.Event) []a
 	if evt == nil || evt.StateDelta == nil {
 		return nil
 	}
+	if t.graphNodeInterruptActivityTopLevelOnly && evt.ParentInvocationID != "" {
+		return nil
+	}
 	raw, ok := evt.StateDelta[graph.MetadataKeyPregel]
 	if !ok || len(raw) == 0 {
 		return nil
@@ -329,8 +334,14 @@ func (t *translator) toolResultEvent(rsp *model.Response, messageID string) ([]a
 	}
 	events := make([]aguievents.Event, 0, len(rsp.Choices))
 	for _, choice := range rsp.Choices {
-		events = append(events, aguievents.NewToolCallResultEvent(messageID,
-			choice.Message.ToolID, choice.Message.Content))
+		if choice.Message.Content != "" {
+			events = append(events, aguievents.NewToolCallResultEvent(messageID,
+				choice.Message.ToolID, choice.Message.Content))
+		}
+		if choice.Delta.Content != "" {
+			events = append(events, aguievents.NewToolCallResultEvent(messageID,
+				choice.Delta.ToolID, choice.Delta.Content))
+		}
 	}
 	t.lastMessageID = messageID
 	return events, nil

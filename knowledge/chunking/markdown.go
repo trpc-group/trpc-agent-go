@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/yuin/goldmark"
@@ -23,6 +24,22 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/encoding"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
+
+// docIDGenerator provides thread-safe unique ID generation for document chunks.
+type docIDGenerator struct {
+	nextID int
+	mu     sync.Mutex
+}
+
+// Next returns the next unique integer ID in a thread-safe manner.
+// It increments the internal counter and returns the new value.
+func (d *docIDGenerator) Next() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	id := d.nextID
+	d.nextID++
+	return id
+}
 
 // MarkdownChunking implements a chunking strategy optimized for markdown documents.
 type MarkdownChunking struct {
@@ -109,7 +126,8 @@ func (m *MarkdownChunking) splitRecursively(
 	content string,
 	originalDoc *document.Document,
 ) []*document.Document {
-	return m.splitRecursivelyWithPath(content, originalDoc, nil)
+	idGen := &docIDGenerator{nextID: 1}
+	return m.splitRecursivelyWithPath(content, originalDoc, nil, idGen)
 }
 
 // splitRecursivelyWithPath splits content recursively while maintaining header path.
@@ -117,15 +135,15 @@ func (m *MarkdownChunking) splitRecursivelyWithPath(
 	content string,
 	originalDoc *document.Document,
 	headerPath []string,
+	idGen *docIDGenerator,
 ) []*document.Document {
 	var chunks []*document.Document
-	chunkNumber := 1
 
 	contentSize := encoding.RuneCount(content)
 
 	// Base case: content fits in one chunk
 	if contentSize <= m.chunkSize {
-		chunk := m.createMarkdownChunkWithPath(originalDoc, content, chunkNumber, headerPath)
+		chunk := m.createMarkdownChunkWithPath(originalDoc, content, idGen.Next(), headerPath)
 		return []*document.Document{chunk}
 	}
 
@@ -161,14 +179,12 @@ func (m *MarkdownChunking) splitRecursivelyWithPath(
 
 				if sectionSize <= m.chunkSize {
 					// Section fits in one chunk
-					chunk := m.createMarkdownChunkWithPath(originalDoc, fullContent, chunkNumber, newPath)
+					chunk := m.createMarkdownChunkWithPath(originalDoc, fullContent, idGen.Next(), newPath)
 					chunks = append(chunks, chunk)
-					chunkNumber++
 				} else {
 					// Section is too large, split recursively
-					subChunks := m.splitRecursivelyWithPath(fullContent, originalDoc, newPath)
+					subChunks := m.splitRecursivelyWithPath(fullContent, originalDoc, newPath, idGen)
 					chunks = append(chunks, subChunks...)
-					chunkNumber += len(subChunks)
 				}
 			}
 			return chunks
@@ -178,7 +194,7 @@ func (m *MarkdownChunking) splitRecursivelyWithPath(
 	// No headers found or only one section, try splitting by paragraphs
 	paragraphs := strings.Split(content, "\n\n")
 	if len(paragraphs) > 1 {
-		chunks = m.mergeSmallParagraphsWithPath(paragraphs, originalDoc, headerPath)
+		chunks = m.mergeSmallParagraphsWithPath(paragraphs, originalDoc, headerPath, idGen)
 		if len(chunks) > 0 {
 			return chunks
 		}
@@ -186,11 +202,11 @@ func (m *MarkdownChunking) splitRecursivelyWithPath(
 
 	// Still too large, split by fixed size (terminal case - prevents infinite recursion)
 	textChunks := encoding.SafeSplitBySize(content, m.chunkSize)
-	for i, chunkText := range textChunks {
+	for _, chunkText := range textChunks {
 		if strings.TrimSpace(chunkText) == "" {
 			continue
 		}
-		chunk := m.createMarkdownChunkWithPath(originalDoc, chunkText, i+1, headerPath)
+		chunk := m.createMarkdownChunkWithPath(originalDoc, chunkText, idGen.Next(), headerPath)
 		chunks = append(chunks, chunk)
 	}
 
@@ -214,7 +230,10 @@ func (m *MarkdownChunking) splitByHeader(content string, level int) []headerSect
 		}
 
 		if heading, ok := node.(*ast.Heading); ok && heading.Level == level {
-			// Find the start of the heading line (including the # symbols)
+			// Extract heading text once so fallback strategies can reuse it.
+			headerText := m.extractText(heading, source)
+
+			// Find the start of the heading line (including the # symbols).
 			var headingLineStart int
 			if heading.Lines().Len() > 0 {
 				headingLineStart = heading.Lines().At(0).Start
@@ -222,7 +241,25 @@ func (m *MarkdownChunking) splitByHeader(content string, level int) []headerSect
 				for headingLineStart > 0 && source[headingLineStart-1] != '\n' {
 					headingLineStart--
 				}
+			} else {
+				// Fallback: try to determine position from heading descendants.
+				headingLineStart = findNodeStartPos(heading, source)
 			}
+
+			// Final fallback: scan from the last known content position to find
+			// the next heading line at this level.
+			if headingLineStart < 0 {
+				headingLineStart = findHeadingLineStartFallback(source, lastHeaderPos, level, headerText)
+			}
+			// Keep monotonic progress to avoid invalid ranges while preserving
+			// subsequent heading boundaries.
+			//
+			// Invariant:
+			//   headingLineStart is always >= lastHeaderPos (non-decreasing).
+			//   Equality is allowed when position recovery fails and we clamp to
+			//   lastHeaderPos. In that case the previous range is empty and is
+			//   safely dropped by the existing TrimSpace/empty-content filter.
+			headingLineStart = normalizeHeadingLineStart(headingLineStart, lastHeaderPos)
 
 			// Save the previous section before starting a new one
 			if lastHeader != nil {
@@ -248,7 +285,6 @@ func (m *MarkdownChunking) splitByHeader(content string, level int) []headerSect
 			}
 
 			// Start tracking new section
-			headerText := m.extractText(heading, source)
 			headerPrefix := strings.Repeat("#", level) + " "
 
 			// Calculate position after the header line (after the newline)
@@ -260,6 +296,10 @@ func (m *MarkdownChunking) splitByHeader(content string, level int) []headerSect
 				if contentStartPos < len(source) && source[contentStartPos] == '\n' {
 					contentStartPos++
 				}
+			} else {
+				// Fallback: move to the beginning of the next line so the header line
+				// itself is not duplicated in section content.
+				contentStartPos = findLineContentStartPos(source, headingLineStart)
 			}
 
 			lastHeader = &headerSection{
@@ -288,6 +328,251 @@ func (m *MarkdownChunking) splitByHeader(content string, level int) []headerSect
 	return sections
 }
 
+// findNodeStartPos tries to determine the start position of a heading node
+// by inspecting descendant text segments. It walks back to find the beginning
+// of the line (before any '#' prefix). Returns -1 if no position can be determined.
+func findNodeStartPos(heading ast.Node, source []byte) int {
+	startPos := -1
+	_ = ast.Walk(heading, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		textNode, ok := node.(*ast.Text)
+		if !ok {
+			return ast.WalkContinue, nil
+		}
+		startPos = textNode.Segment.Start
+		for startPos > 0 && source[startPos-1] != '\n' {
+			startPos--
+		}
+		return ast.WalkStop, nil
+	})
+	return startPos
+}
+
+// normalizeHeadingLineStart keeps headingLineStart monotonic with lastHeaderPos.
+// This prevents invalid slice bounds when section ranges are computed.
+func normalizeHeadingLineStart(headingLineStart, lastHeaderPos int) int {
+	if headingLineStart < 0 {
+		return lastHeaderPos
+	}
+	if headingLineStart < lastHeaderPos {
+		return lastHeaderPos
+	}
+	return headingLineStart
+}
+
+// findHeadingLineStartFallback scans source lines to find the next ATX heading
+// at the target level, starting from searchFrom.
+//
+// Matching policy:
+//   - headingText is non-empty: prefer lines that contain headingText and
+//     fall back to the first same-level ATX heading.
+//   - headingText is empty: match only empty ATX headings (pure marker lines),
+//     and do not match arbitrary same-level headings.
+//
+// The scan works on byte slices to avoid per-line string allocations in large
+// markdown files and ignores lines inside fenced code blocks.
+func findHeadingLineStartFallback(source []byte, searchFrom, level int, headingText string) int {
+	if len(source) == 0 || level <= 0 {
+		return -1
+	}
+	headingTextBytes := bytes.TrimSpace([]byte(headingText))
+	lineStart := normalizeFallbackSearchStart(source, searchFrom)
+
+	firstCandidate := -1
+	inFence := false
+	var fenceChar byte
+	var fenceLen int
+	for lineStart <= len(source) {
+		lineEnd := lineStart
+		for lineEnd < len(source) && source[lineEnd] != '\n' {
+			lineEnd++
+		}
+		line := source[lineStart:lineEnd]
+
+		var handled bool
+		inFence, fenceChar, fenceLen, handled = handleFallbackFenceLine(line, inFence, fenceChar, fenceLen)
+		if !handled && !inFence {
+			if matchPos, updatedCandidate, ok := matchFallbackHeadingLine(
+				line, lineStart, level, headingTextBytes, firstCandidate,
+			); ok {
+				return matchPos
+			} else {
+				firstCandidate = updatedCandidate
+			}
+		}
+
+		if lineEnd == len(source) {
+			break
+		}
+		lineStart = lineEnd + 1
+	}
+	return firstCandidate
+}
+
+// normalizeFallbackSearchStart clamps searchFrom to [0,len(source)] and then
+// backtracks to the beginning of the current line.
+func normalizeFallbackSearchStart(source []byte, searchFrom int) int {
+	if searchFrom < 0 {
+		searchFrom = 0
+	}
+	if searchFrom > len(source) {
+		searchFrom = len(source)
+	}
+	for searchFrom > 0 && source[searchFrom-1] != '\n' {
+		searchFrom--
+	}
+	return searchFrom
+}
+
+// handleFallbackFenceLine updates fenced-code-block state for a scanned line.
+// handled=true means the line is a fence delimiter and should not be treated as
+// a heading candidate.
+func handleFallbackFenceLine(
+	line []byte,
+	inFence bool,
+	fenceChar byte,
+	fenceLen int,
+) (newInFence bool, newFenceChar byte, newFenceLen int, handled bool) {
+	delimChar, delimLen, delimRest, ok := parseFenceDelimiter(line)
+	if !ok {
+		return inFence, fenceChar, fenceLen, false
+	}
+	if !inFence {
+		return true, delimChar, delimLen, true
+	}
+	if delimChar == fenceChar && delimLen >= fenceLen && len(bytes.TrimSpace(delimRest)) == 0 {
+		return false, fenceChar, fenceLen, true
+	}
+	return inFence, fenceChar, fenceLen, true
+}
+
+// matchFallbackHeadingLine evaluates whether line is a fallback match.
+// It returns (matchPos, updatedFirstCandidate, ok).
+func matchFallbackHeadingLine(
+	line []byte,
+	lineStart int,
+	level int,
+	headingTextBytes []byte,
+	firstCandidate int,
+) (int, int, bool) {
+	if !isATXHeadingLineAtLevel(line, level) {
+		return -1, firstCandidate, false
+	}
+	if len(headingTextBytes) == 0 {
+		if isEmptyATXHeadingLineAtLevel(line, level) {
+			return lineStart, firstCandidate, true
+		}
+		return -1, firstCandidate, false
+	}
+	if firstCandidate < 0 {
+		firstCandidate = lineStart
+	}
+	if bytes.Contains(line, headingTextBytes) {
+		return lineStart, firstCandidate, true
+	}
+	return -1, firstCandidate, false
+}
+
+// isEmptyATXHeadingLineAtLevel checks whether an ATX heading line is an empty
+// heading at the given level (for example: "#", "##   ", "### ###").
+func isEmptyATXHeadingLineAtLevel(line []byte, level int) bool {
+	if !isATXHeadingLineAtLevel(line, level) {
+		return false
+	}
+	line = bytes.TrimSuffix(line, []byte{'\r'})
+	trimmedLeft := bytes.TrimLeft(line, " ")
+	rest := trimmedLeft[level:]
+	if len(rest) == 0 {
+		return true
+	}
+	rest = bytes.TrimLeft(rest, " \t")
+	if len(rest) == 0 {
+		return true
+	}
+	rest = bytes.TrimSpace(rest)
+	if len(rest) == 0 {
+		return true
+	}
+	for _, b := range rest {
+		if b != '#' {
+			return false
+		}
+	}
+	return true
+}
+
+// parseFenceDelimiter parses a potential fenced code block delimiter line.
+// It supports up to 3 leading spaces and requires at least 3 delimiter chars.
+func parseFenceDelimiter(line []byte) (fenceChar byte, fenceLen int, rest []byte, ok bool) {
+	line = bytes.TrimSuffix(line, []byte{'\r'})
+	trimmedLeft := bytes.TrimLeft(line, " ")
+	leadingSpaces := len(line) - len(trimmedLeft)
+	if leadingSpaces > 3 || len(trimmedLeft) == 0 {
+		return 0, 0, nil, false
+	}
+	first := trimmedLeft[0]
+	if first != '`' && first != '~' {
+		return 0, 0, nil, false
+	}
+	count := 0
+	for count < len(trimmedLeft) && trimmedLeft[count] == first {
+		count++
+	}
+	if count < 3 {
+		return 0, 0, nil, false
+	}
+	return first, count, trimmedLeft[count:], true
+}
+
+// isATXHeadingLineAtLevel checks whether a line matches an ATX heading marker
+// of the given level ("#", "##", ...). It allows up to 3 leading spaces.
+func isATXHeadingLineAtLevel(line []byte, level int) bool {
+	if level <= 0 {
+		return false
+	}
+	line = bytes.TrimSuffix(line, []byte{'\r'})
+
+	trimmedLeft := bytes.TrimLeft(line, " ")
+	leadingSpaces := len(line) - len(trimmedLeft)
+	if leadingSpaces > 3 {
+		return false
+	}
+	if len(trimmedLeft) < level {
+		return false
+	}
+	for i := 0; i < level; i++ {
+		if trimmedLeft[i] != '#' {
+			return false
+		}
+	}
+	if len(trimmedLeft) == level {
+		return true
+	}
+	next := trimmedLeft[level]
+	return next == ' ' || next == '\t'
+}
+
+// findLineContentStartPos returns the index of the first character on the
+// line following lineStart, used as fallback section content start.
+func findLineContentStartPos(source []byte, lineStart int) int {
+	if lineStart < 0 {
+		return 0
+	}
+	if lineStart >= len(source) {
+		return len(source)
+	}
+	pos := lineStart
+	for pos < len(source) && source[pos] != '\n' {
+		pos++
+	}
+	if pos < len(source) {
+		pos++
+	}
+	return pos
+}
+
 // extractText extracts text content from an AST node.
 func (m *MarkdownChunking) extractText(node ast.Node, source []byte) string {
 	var buf bytes.Buffer
@@ -312,10 +597,10 @@ func (m *MarkdownChunking) mergeSmallParagraphsWithPath(
 	paragraphs []string,
 	originalDoc *document.Document,
 	headerPath []string,
+	idGen *docIDGenerator,
 ) []*document.Document {
 	var chunks []*document.Document
 	var currentChunk strings.Builder
-	chunkNumber := 1
 
 	for _, para := range paragraphs {
 		para = strings.TrimSpace(para)
@@ -328,9 +613,8 @@ func (m *MarkdownChunking) mergeSmallParagraphsWithPath(
 
 		// If adding this paragraph exceeds chunk size, save current chunk
 		if currentSize > 0 && currentSize+paraSize+2 > m.chunkSize {
-			chunk := m.createMarkdownChunkWithPath(originalDoc, currentChunk.String(), chunkNumber, headerPath)
+			chunk := m.createMarkdownChunkWithPath(originalDoc, currentChunk.String(), idGen.Next(), headerPath)
 			chunks = append(chunks, chunk)
-			chunkNumber++
 			currentChunk.Reset()
 		}
 
@@ -338,18 +622,16 @@ func (m *MarkdownChunking) mergeSmallParagraphsWithPath(
 		if paraSize > m.chunkSize {
 			// Save current chunk if not empty
 			if currentChunk.Len() > 0 {
-				chunk := m.createMarkdownChunkWithPath(originalDoc, currentChunk.String(), chunkNumber, headerPath)
+				chunk := m.createMarkdownChunkWithPath(originalDoc, currentChunk.String(), idGen.Next(), headerPath)
 				chunks = append(chunks, chunk)
-				chunkNumber++
 				currentChunk.Reset()
 			}
 
 			// Split large paragraph by fixed size
 			paraChunks := encoding.SafeSplitBySize(para, m.chunkSize)
 			for _, pc := range paraChunks {
-				chunk := m.createMarkdownChunkWithPath(originalDoc, pc, chunkNumber, headerPath)
+				chunk := m.createMarkdownChunkWithPath(originalDoc, pc, idGen.Next(), headerPath)
 				chunks = append(chunks, chunk)
-				chunkNumber++
 			}
 		} else {
 			// Add paragraph to current chunk
@@ -362,7 +644,7 @@ func (m *MarkdownChunking) mergeSmallParagraphsWithPath(
 
 	// Add last chunk if not empty
 	if currentChunk.Len() > 0 {
-		chunk := m.createMarkdownChunkWithPath(originalDoc, currentChunk.String(), chunkNumber, headerPath)
+		chunk := m.createMarkdownChunkWithPath(originalDoc, currentChunk.String(), idGen.Next(), headerPath)
 		chunks = append(chunks, chunk)
 	}
 
@@ -443,10 +725,12 @@ func (m *MarkdownChunking) applyOverlap(chunks []*document.Document) []*document
 		// Combine with overlap markers to clearly indicate overlapped content
 		var overlappedContent string
 		if prevText != "" {
-			overlappedContent = prevText + "\n\n--- above content is overlap of prefix chunk ---\n\n" + chunks[i].Content
+			overlappedContent = prevText + "\n\n" + chunks[i].Content
 		} else {
 			overlappedContent = chunks[i].Content
 		}
+
+		metadata[source.MetaOverlappedContentSize] = encoding.RuneCount(overlappedContent)
 
 		overlappedChunk := &document.Document{
 			ID:        chunks[i].ID,

@@ -18,6 +18,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -210,6 +211,26 @@ func (p *hookPlugin) Register(r *plugin.Registry) {
 		p.reg(r)
 	}
 }
+
+type toolCallbacksPluginManager struct {
+	callbacks *tool.Callbacks
+}
+
+func (m *toolCallbacksPluginManager) AgentCallbacks() *agent.Callbacks { return nil }
+
+func (m *toolCallbacksPluginManager) ModelCallbacks() *model.Callbacks { return nil }
+
+func (m *toolCallbacksPluginManager) ToolCallbacks() *tool.Callbacks { return m.callbacks }
+
+func (m *toolCallbacksPluginManager) OnEvent(
+	_ context.Context,
+	_ *agent.Invocation,
+	e *event.Event,
+) (*event.Event, error) {
+	return e, nil
+}
+
+func (m *toolCallbacksPluginManager) Close(_ context.Context) error { return nil }
 
 type pluginCaptureModel struct {
 	name   string
@@ -478,8 +499,9 @@ func TestRunTool_PluginBeforeToolShortCircuits(t *testing.T) {
 			Arguments: []byte(`{}`),
 		},
 	}
+	state := State{}
 
-	_, got, _, err := runTool(ctx, tc, local, tl)
+	_, got, _, err := runTool(ctx, tc, local, tl, state)
 	require.NoError(t, err)
 	require.Equal(t, map[string]any{"ok": true}, got)
 	require.False(t, localCalled)
@@ -536,12 +558,391 @@ func TestRunTool_PluginAfterToolOverridesError(t *testing.T) {
 			Arguments: []byte(`{}`),
 		},
 	}
+	state := State{}
 
-	_, got, _, err := runTool(ctx, tc, local, tl)
+	_, got, _, err := runTool(ctx, tc, local, tl, state)
 	require.NoError(t, err)
 	require.Equal(t, fixed, got)
 	require.True(t, tl.called)
 	require.False(t, localAfterCalled)
+}
+
+func TestRunTool_PluginBeforeTool_CustomResultWithError(t *testing.T) {
+	const (
+		callID   = "call-1"
+		toolName = "t"
+	)
+	customResult := map[string]any{"need": "confirm"}
+	modifiedArgs := []byte(`{"x":2}`)
+
+	cbs := tool.NewCallbacks().RegisterBeforeTool(func(
+		ctx context.Context,
+		_ *tool.BeforeToolArgs,
+	) (*tool.BeforeToolResult, error) {
+		next := context.WithValue(ctx, testCtxKey{}, "ctx")
+		return &tool.BeforeToolResult{
+			Context:           next,
+			ModifiedArguments: modifiedArgs,
+			CustomResult:      customResult,
+		}, NewInterruptError("pause")
+	})
+
+	inv := &agent.Invocation{Plugins: &toolCallbacksPluginManager{callbacks: cbs}}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	tl := &captureTool{name: toolName, result: "x"}
+	tc := model.ToolCall{
+		ID: callID,
+		Function: model.FunctionDefinitionParam{
+			Name:      toolName,
+			Arguments: []byte(`{"x":1}`),
+		},
+	}
+	state := State{}
+
+	gotCtx, got, gotArgs, err := runTool(ctx, tc, nil, tl, state)
+	require.Error(t, err)
+	var interruptErr *InterruptError
+	require.ErrorAs(t, err, &interruptErr)
+	require.Equal(t, customResult, got)
+	require.Equal(t, modifiedArgs, gotArgs)
+	require.Equal(t, "ctx", gotCtx.Value(testCtxKey{}))
+	require.False(t, tl.called)
+}
+
+func TestRunTool_PluginBeforeTool_ErrorWithModifiedArguments(t *testing.T) {
+	const (
+		callID   = "call-1"
+		toolName = "t"
+	)
+	modifiedArgs := []byte(`{"x":2}`)
+
+	cbs := tool.NewCallbacks().RegisterBeforeTool(func(
+		ctx context.Context,
+		_ *tool.BeforeToolArgs,
+	) (*tool.BeforeToolResult, error) {
+		next := context.WithValue(ctx, testCtxKey{}, "ctx")
+		return &tool.BeforeToolResult{
+			Context:           next,
+			ModifiedArguments: modifiedArgs,
+		}, errors.New("boom")
+	})
+
+	inv := &agent.Invocation{Plugins: &toolCallbacksPluginManager{callbacks: cbs}}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	tl := &captureTool{name: toolName, result: "x"}
+	tc := model.ToolCall{
+		ID: callID,
+		Function: model.FunctionDefinitionParam{
+			Name:      toolName,
+			Arguments: []byte(`{"x":1}`),
+		},
+	}
+	state := State{}
+
+	gotCtx, got, gotArgs, err := runTool(ctx, tc, nil, tl, state)
+	require.Error(t, err)
+	require.Nil(t, got)
+	require.Equal(t, modifiedArgs, gotArgs)
+	require.Equal(t, "ctx", gotCtx.Value(testCtxKey{}))
+	require.False(t, tl.called)
+}
+
+func TestRunTool_BeforeTool_CustomResultWithError(t *testing.T) {
+	const (
+		callID   = "call-1"
+		toolName = "t"
+	)
+	customResult := map[string]any{"need": "confirm"}
+	modifiedArgs := []byte(`{"x":2}`)
+
+	local := tool.NewCallbacks().RegisterBeforeTool(func(
+		ctx context.Context,
+		_ *tool.BeforeToolArgs,
+	) (*tool.BeforeToolResult, error) {
+		next := context.WithValue(ctx, testCtxKey{}, "ctx")
+		return &tool.BeforeToolResult{
+			Context:           next,
+			ModifiedArguments: modifiedArgs,
+			CustomResult:      customResult,
+		}, NewInterruptError("pause")
+	})
+
+	tl := &captureTool{name: toolName, result: "x"}
+	tc := model.ToolCall{
+		ID: callID,
+		Function: model.FunctionDefinitionParam{
+			Name:      toolName,
+			Arguments: []byte(`{"x":1}`),
+		},
+	}
+	state := State{}
+
+	gotCtx, got, gotArgs, err := runTool(context.Background(), tc, local, tl, state)
+	require.Error(t, err)
+	var interruptErr *InterruptError
+	require.ErrorAs(t, err, &interruptErr)
+	require.Equal(t, customResult, got)
+	require.Equal(t, modifiedArgs, gotArgs)
+	require.Equal(t, "ctx", gotCtx.Value(testCtxKey{}))
+	require.False(t, tl.called)
+}
+
+func TestRunTool_AfterTool_InterruptWithoutCustomResultPreservesResult(t *testing.T) {
+	const (
+		callID   = "call-1"
+		toolName = "t"
+	)
+	toolResult := map[string]any{"x": 1}
+
+	local := tool.NewCallbacks().RegisterAfterTool(func(
+		ctx context.Context,
+		_ *tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		next := context.WithValue(ctx, testCtxKey{}, "ctx")
+		return &tool.AfterToolResult{Context: next}, NewInterruptError("pause")
+	})
+
+	tl := &captureTool{name: toolName, result: toolResult}
+	tc := model.ToolCall{
+		ID: callID,
+		Function: model.FunctionDefinitionParam{
+			Name:      toolName,
+			Arguments: []byte(`{"x":1}`),
+		},
+	}
+	state := State{}
+
+	gotCtx, got, gotArgs, err := runTool(context.Background(), tc, local, tl, state)
+	require.Error(t, err)
+	var interruptErr *InterruptError
+	require.ErrorAs(t, err, &interruptErr)
+	require.Equal(t, toolResult, got)
+	require.Equal(t, []byte(`{"x":1}`), gotArgs)
+	require.Equal(t, "ctx", gotCtx.Value(testCtxKey{}))
+	require.True(t, tl.called)
+}
+
+func TestRunTool_AfterTool_ErrorWithoutCustomResultReturnsNilResult(t *testing.T) {
+	const (
+		callID   = "call-1"
+		toolName = "t"
+	)
+
+	local := tool.NewCallbacks().RegisterAfterTool(func(
+		ctx context.Context,
+		_ *tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		next := context.WithValue(ctx, testCtxKey{}, "ctx")
+		return &tool.AfterToolResult{Context: next}, errors.New("boom")
+	})
+
+	tl := &captureTool{name: toolName, result: map[string]any{"x": 1}}
+	tc := model.ToolCall{
+		ID: callID,
+		Function: model.FunctionDefinitionParam{
+			Name:      toolName,
+			Arguments: []byte(`{"x":1}`),
+		},
+	}
+	state := State{}
+
+	gotCtx, got, gotArgs, err := runTool(context.Background(), tc, local, tl, state)
+	require.Error(t, err)
+	require.Nil(t, got)
+	require.Equal(t, []byte(`{"x":1}`), gotArgs)
+	require.Equal(t, "ctx", gotCtx.Value(testCtxKey{}))
+	require.True(t, tl.called)
+}
+
+func TestRunTool_PluginAfterTool_CustomResultWithError(t *testing.T) {
+	const (
+		callID   = "call-1"
+		toolName = "t"
+	)
+	customResult := map[string]any{"override": true}
+
+	cbs := tool.NewCallbacks().RegisterAfterTool(func(
+		ctx context.Context,
+		_ *tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		next := context.WithValue(ctx, testCtxKey{}, "ctx")
+		return &tool.AfterToolResult{
+			Context:      next,
+			CustomResult: customResult,
+		}, errors.New("boom")
+	})
+
+	inv := &agent.Invocation{Plugins: &toolCallbacksPluginManager{callbacks: cbs}}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	tl := &captureTool{name: toolName, result: map[string]any{"x": 1}}
+	tc := model.ToolCall{
+		ID: callID,
+		Function: model.FunctionDefinitionParam{
+			Name:      toolName,
+			Arguments: []byte(`{"x":1}`),
+		},
+	}
+	state := State{}
+
+	gotCtx, got, gotArgs, err := runTool(ctx, tc, nil, tl, state)
+	require.Error(t, err)
+	require.Equal(t, customResult, got)
+	require.Equal(t, []byte(`{"x":1}`), gotArgs)
+	require.Equal(t, "ctx", gotCtx.Value(testCtxKey{}))
+	require.True(t, tl.called)
+}
+
+func TestRunTool_PluginAfterTool_InterruptWithoutCustomResultPreservesResult(t *testing.T) {
+	const (
+		callID   = "call-1"
+		toolName = "t"
+	)
+	toolResult := map[string]any{"x": 1}
+
+	cbs := tool.NewCallbacks().RegisterAfterTool(func(
+		ctx context.Context,
+		_ *tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		next := context.WithValue(ctx, testCtxKey{}, "ctx")
+		return &tool.AfterToolResult{Context: next}, NewInterruptError("pause")
+	})
+
+	inv := &agent.Invocation{Plugins: &toolCallbacksPluginManager{callbacks: cbs}}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	tl := &captureTool{name: toolName, result: toolResult}
+	tc := model.ToolCall{
+		ID: callID,
+		Function: model.FunctionDefinitionParam{
+			Name:      toolName,
+			Arguments: []byte(`{"x":1}`),
+		},
+	}
+	state := State{}
+
+	gotCtx, got, gotArgs, err := runTool(ctx, tc, nil, tl, state)
+	require.Error(t, err)
+	var interruptErr *InterruptError
+	require.ErrorAs(t, err, &interruptErr)
+	require.Equal(t, toolResult, got)
+	require.Equal(t, []byte(`{"x":1}`), gotArgs)
+	require.Equal(t, "ctx", gotCtx.Value(testCtxKey{}))
+	require.True(t, tl.called)
+}
+
+func TestRunTool_PluginToolCallbacksNilFallsBack(t *testing.T) {
+	const (
+		callID   = "call-1"
+		toolName = "t"
+	)
+	toolResult := map[string]any{"x": 1}
+
+	inv := &agent.Invocation{Plugins: &toolCallbacksPluginManager{}}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	tl := &captureTool{name: toolName, result: toolResult}
+	tc := model.ToolCall{
+		ID: callID,
+		Function: model.FunctionDefinitionParam{
+			Name:      toolName,
+			Arguments: []byte(`{"x":1}`),
+		},
+	}
+	state := State{}
+
+	gotCtx, got, gotArgs, err := runTool(ctx, tc, nil, tl, state)
+	require.NoError(t, err)
+	require.Equal(t, toolResult, got)
+	require.Equal(t, []byte(`{"x":1}`), gotArgs)
+	require.True(t, tl.called)
+	gotCallID, ok := tool.ToolCallIDFromContext(gotCtx)
+	require.True(t, ok)
+	require.Equal(t, callID, gotCallID)
+}
+
+func TestRunTool_PluginAfterTool_ErrorWithoutResultReturnsNilResult(t *testing.T) {
+	const (
+		callID   = "call-1"
+		toolName = "t"
+	)
+
+	cbs := tool.NewCallbacks().RegisterAfterTool(func(
+		_ context.Context,
+		_ *tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		return nil, errors.New("boom")
+	})
+
+	inv := &agent.Invocation{Plugins: &toolCallbacksPluginManager{callbacks: cbs}}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	tl := &captureTool{name: toolName, result: map[string]any{"x": 1}}
+	tc := model.ToolCall{
+		ID: callID,
+		Function: model.FunctionDefinitionParam{
+			Name:      toolName,
+			Arguments: []byte(`{"x":1}`),
+		},
+	}
+	state := State{}
+
+	_, got, gotArgs, err := runTool(ctx, tc, nil, tl, state)
+	require.Error(t, err)
+	require.Nil(t, got)
+	require.Equal(t, []byte(`{"x":1}`), gotArgs)
+	require.True(t, tl.called)
+}
+
+func TestRunTool_PluginAfterTool_NoResultNoCustomResultReturnsNil(t *testing.T) {
+	const (
+		callID   = "call-1"
+		toolName = "t"
+	)
+
+	inv := &agent.Invocation{Plugins: &toolCallbacksPluginManager{callbacks: tool.NewCallbacks()}}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	tl := &captureTool{name: toolName, result: nil}
+	tc := model.ToolCall{
+		ID: callID,
+		Function: model.FunctionDefinitionParam{
+			Name:      toolName,
+			Arguments: []byte(`{"x":1}`),
+		},
+	}
+	state := State{}
+
+	_, got, gotArgs, err := runTool(ctx, tc, nil, tl, state)
+	require.NoError(t, err)
+	require.Nil(t, got)
+	require.Equal(t, []byte(`{"x":1}`), gotArgs)
+	require.True(t, tl.called)
+}
+
+func TestRunTool_AfterTool_NoResultNoCustomResultReturnsNil(t *testing.T) {
+	const (
+		callID   = "call-1"
+		toolName = "t"
+	)
+
+	tl := &captureTool{name: toolName, result: nil}
+	tc := model.ToolCall{
+		ID: callID,
+		Function: model.FunctionDefinitionParam{
+			Name:      toolName,
+			Arguments: []byte(`{"x":1}`),
+		},
+	}
+	state := State{}
+
+	_, got, gotArgs, err := runTool(context.Background(), tc, tool.NewCallbacks(), tl, state)
+	require.NoError(t, err)
+	require.Nil(t, got)
+	require.Equal(t, []byte(`{"x":1}`), gotArgs)
+	require.True(t, tl.called)
 }
 
 func TestRunTool_NotCallableReturnsError(t *testing.T) {
@@ -556,11 +957,13 @@ func TestRunTool_NotCallableReturnsError(t *testing.T) {
 			Arguments: []byte(`{}`),
 		},
 	}
+	state := State{}
 	_, _, _, err := runTool(
 		context.Background(),
 		tc,
 		nil,
 		&declOnlyTool{name: toolName},
+		state,
 	)
 	require.Error(t, err)
 }

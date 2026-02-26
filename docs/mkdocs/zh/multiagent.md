@@ -225,6 +225,83 @@ cycleAgent := cycleagent.New(
 )
 ```
 
+#### 退出函数（WithEscalationFunc）
+
+你可以把 `WithEscalationFunc` 理解为“退出函数”：当回调返回 `true`，
+`CycleAgent` 就会退出循环。代码里叫 `EscalationFunc`，这里的
+Escalation 只是指控制流上抛 / 中止循环，并不是“版本升级”。
+
+`CycleAgent` 会按顺序运行 SubAgent，然后重复整套流程。它会在以下任一
+情况发生时停止：
+
+1. 你的 `EscalationFunc` 对某个事件返回 `true`
+2. 达到 `WithMaxIterations(n)` 设定的上限
+3. `context.Context` 被取消（超时 / 手动取消）
+
+##### `EscalationFunc` 会收到什么？
+
+回调签名如下：
+
+```go
+type EscalationFunc func(*event.Event) bool
+```
+
+它会在子 Agent 产生并被转发出来的事件上执行。为了避免在流式输出的
+“半截 token”上误判，`CycleAgent` 只会在更“关键”的事件上做检查，
+例如：
+
+- 错误事件（`evt.Error != nil`）
+- 工具结果事件（`evt.Object == model.ObjectTypeToolResponse`）
+- 最终完成事件（`evt.Done == true`，非 streaming chunk）
+
+##### 默认行为
+
+如果你不设置 `WithEscalationFunc`，`CycleAgent` 只会在遇到错误时停止。
+
+##### 示例：基于质量阈值停止
+
+一个常见的循环是：**生成 → 评审 → 达标就停**。
+
+让评审 Agent 通过工具返回一个“机器可读”的信号（例如 `record_score`
+工具返回 JSON，其中包含 `needs_improvement`）。当
+`needs_improvement` 变为 `false` 时立即停止（需要引入
+`encoding/json`）：
+
+```go
+type scoreResult struct {
+	NeedsImprovement bool `json:"needs_improvement"`
+}
+
+func qualityEscalationFunc(evt *event.Event) bool {
+	if evt == nil || evt.Response == nil {
+		return false
+	}
+	if evt.Error != nil {
+		return true
+	}
+	if evt.Object != model.ObjectTypeToolResponse {
+		return false
+	}
+
+	for _, choice := range evt.Response.Choices {
+		msg := choice.Message
+		if msg.Role != model.RoleTool {
+			continue
+		}
+
+		var res scoreResult
+		if err := json.Unmarshal([]byte(msg.Content), &res); err != nil {
+			continue
+		}
+		return !res.NeedsImprovement
+	}
+	return false
+}
+```
+
+提示：这个函数运行在事件循环里，建议保持轻量、无副作用，并做好
+`nil` / 解析失败的防御处理。
+
 #### 示例会话
 
 ```

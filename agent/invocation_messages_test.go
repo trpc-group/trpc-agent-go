@@ -238,3 +238,16 @@ func TestWithToolExecutionFilter(t *testing.T) {
 	require.True(t, ro.ToolExecutionFilter(ctx, allowed))
 	require.False(t, ro.ToolExecutionFilter(ctx, denied))
 }
+
+// TestWithToolCallArgumentsJSONRepairEnabled_SetsRunOptions verifies the option toggles the RunOptions flag.
+func TestWithToolCallArgumentsJSONRepairEnabled_SetsRunOptions(t *testing.T) {
+	var ro RunOptions
+	require.Nil(t, ro.ToolCallArgumentsJSONRepairEnabled)
+	WithToolCallArgumentsJSONRepairEnabled(true)(&ro)
+	require.NotNil(t, ro.ToolCallArgumentsJSONRepairEnabled)
+	require.True(t, *ro.ToolCallArgumentsJSONRepairEnabled)
+
+	WithToolCallArgumentsJSONRepairEnabled(false)(&ro)
+	require.NotNil(t, ro.ToolCallArgumentsJSONRepairEnabled)
+	require.False(t, *ro.ToolCallArgumentsJSONRepairEnabled)
+}

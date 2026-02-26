@@ -27,7 +27,7 @@ interactions.
 
 Memory supports two modes for creating and managing memories. Choose based on your scenario:
 
-Auto Mode is available in versions >= 1.2.0 and is recommended as the default choice.
+Auto Mode is available when an Extractor is configured and is recommended as the default choice.
 
 | Aspect              | Agentic Mode (Tools)                           | Auto Mode (Extractor)                                     |
 | ------------------- | ---------------------------------------------- | --------------------------------------------------------- |
@@ -41,7 +41,7 @@ Auto Mode is available in versions >= 1.2.0 and is recommended as the default ch
 **Selection Guide**:
 
 - **Agentic Mode**: Agent automatically decides when to call memory tools based on conversation content (e.g., when user mentions personal information or preferences), user sees tool calls, suitable for scenarios requiring precise control over memory content
-- **Auto Mode (>= 1.2.0, recommended)**: Natural conversation flow, system passively learns about users, simplified UX
+- **Auto Mode (recommended)**: Natural conversation flow, system passively learns about users, simplified UX
 
 ## Core Values
 
@@ -193,7 +193,7 @@ Agent: Nice to meet you, Alice! I'll remember that you work at TechCorp.
 Agent: I've saved that information. How can I help you today?
 ```
 
-### Auto Mode Configuration (>= 1.2.0, Recommended)
+### Auto Mode Configuration (Recommended)
 
 In Auto mode, an LLM-based extractor analyzes conversations and automatically
 creates memories. **The only difference from Agentic mode is in Step 1: add an Extractor**.
@@ -284,7 +284,7 @@ Agent: Nice to meet you, Alice! It's great to connect with someone from TechCorp
 | **Step 1**          | `NewMemoryService()`                | `NewMemoryService(WithExtractor(ext))` |
 | **Step 2**          | `WithTools(memoryService.Tools())`  | `WithTools(memoryService.Tools())`     |
 | **Step 3**          | `WithMemoryService(memoryService)`  | `WithMemoryService(memoryService)`     |
-| **Available tools** | add/update/delete/clear/search/load | search (default) / load (optional)     |
+| **Available tools** | add/update/delete/clear/search/load | search /load                           |
 | **Memory creation** | Agent actively calls tools          | Background auto extraction             |
 
 ## Core Concepts
@@ -342,8 +342,8 @@ appRunner := runner.NewRunner(
 
 ### Memory Service
 
-Configure the memory service in code. Three backends are supported: in-memory,
-Redis, MySQL, and PostgreSQL.
+Configure the memory service in code. Five backends are supported: in-memory,
+Redis, MySQL, PostgreSQL, and pgvector.
 
 #### Configuration Example
 
@@ -368,7 +368,7 @@ if err != nil {
 }
 
 // MySQL implementation for production (relational database).
-// Table is automatically created on service initialization. Panics if creation fails.
+// Table is automatically created on service initialization (unless skipped). Returns error on failure.
 mysqlService, err := memorymysql.NewService(
     memorymysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/dbname?parseTime=true"),
     memorymysql.WithToolEnabled(memory.DeleteToolName, true), // Enable delete.
@@ -378,9 +378,9 @@ if err != nil {
 }
 
 // PostgreSQL implementation for production (relational database).
-// Table is automatically created on service initialization. Panics if creation fails.
+// Table is automatically created on service initialization (unless skipped). Returns error on failure.
 postgresService, err := memorypostgres.NewService(
-    memorypostgres.WithPostgresConnString("postgres://user:password@localhost:5432/dbname"),
+    memorypostgres.WithPostgresClientDSN("postgres://user:password@localhost:5432/dbname?sslmode=disable"),
     memorypostgres.WithSoftDelete(true), // Enable soft delete.
     memorypostgres.WithToolEnabled(memory.DeleteToolName, true), // Enable delete.
 )
@@ -457,8 +457,9 @@ memoryService := memoryinmemory.NewMemoryService(
 
 ### Overwrite Semantics (IDs and duplicates)
 
-- Memory IDs are generated from content + topics. Adding the same content and topics
-  is idempotent and overwrites the existing entry (not append). UpdatedAt is refreshed.
+- Memory IDs are generated from memory content + sorted topics + appName + userID.
+  Adding the same content and topics for the same user is idempotent and overwrites
+  the existing entry (not append). UpdatedAt is refreshed.
 - If you need append semantics or different duplicate-handling strategies, you can
   implement custom tools or extend the service with policy options (e.g. allow/overwrite/ignore).
 
@@ -523,35 +524,40 @@ Below is a complete interactive chat example demonstrating memory capabilities i
 
 ```bash
 # View help
-cd examples/memory
-go run . -h
+cd examples/memory/simple
+go run main.go -h
 
-# Use default config (in-memory storage + streaming)
-go run .
+# Use default config (inmemory + streaming)
+go run main.go
 
 # Use Redis storage
 export REDIS_ADDR=localhost:6379
-go run . -memory redis
+go run main.go -memory redis
 
 # Use MySQL storage (with soft delete)
 export MYSQL_HOST=localhost
 export MYSQL_PASSWORD=password
-go run . -memory mysql -soft-delete
+go run main.go -memory mysql -soft-delete
 
 # Use PostgreSQL storage
 export PG_HOST=localhost
 export PG_PASSWORD=password
-go run . -memory postgres -soft-delete
+go run main.go -memory postgres -soft-delete
+
+# Use pgvector storage
+export PGVECTOR_HOST=localhost
+export PGVECTOR_PASSWORD=password
+go run main.go -memory pgvector -soft-delete
 
 # Non-streaming mode
-go run . -streaming=false
+go run main.go -streaming=false
 ```
 
 ### Interactive Demo
 
 ```bash
-$ go run .
-🧠 Multi Turn Chat with Memory
+$ go run main.go
+🧠 Simple Memory Chat
 Model: deepseek-chat
 Memory Service: inmemory
 In-memory
@@ -580,7 +586,7 @@ I see you're a coffee enthusiast! What brings you here today, John? Are you look
 🆕 Started new memory session!
    Previous: memory-session-1765504626
    Current:  memory-session-1765504664
-   (Memory and conversation history have been reset)
+   (Conversation history has been reset, memories are preserved)
 
 👤 You: What do I like?
 🤖 Assistant: I'll search through my memories to recall what you like. Let me check what information I have stored about your preferences.
@@ -714,7 +720,7 @@ func createMemoryService(memType string, softDelete bool) (
             memorypostgres.WithPort(getEnvInt("PG_PORT", 5432)),
             memorypostgres.WithUser(getEnv("PG_USER", "postgres")),
             memorypostgres.WithPassword(getEnv("PG_PASSWORD", "")),
-            memorypostgres.WithDatabase(getEnv("PG_DATABASE", "postgres")),
+            memorypostgres.WithDatabase(getEnv("PG_DATABASE", "trpc-agent-go-pgmemory")),
             memorypostgres.WithSoftDelete(softDelete),
             memorypostgres.WithToolEnabled(memory.DeleteToolName, false),
         )
@@ -787,11 +793,21 @@ redisService, err := memoryredis.NewService(
 - `WithRedisClientURL(url)`: Redis connection URL (recommended)
 - `WithRedisInstance(name)`: Use pre-registered Redis instance
 - `WithMemoryLimit(limit)`: Memory limit per user
+- `WithKeyPrefix(prefix)`: Set a prefix for all Redis keys. When set, every key is prefixed with `prefix:`. For example, if `prefix` is `"myapp"`, the key `mem:{app:user}` becomes `myapp:mem:{app:user}`. Default is empty (no prefix). This is useful for sharing a single Redis instance across multiple environments or services
 - `WithCustomTool(toolName, creator)`: Register custom tool
 - `WithToolEnabled(toolName, enabled)`: Enable/disable tool
 - `WithExtraOptions(...options)`: Extra options passed to Redis client
 
 **Note**: `WithRedisClientURL` takes priority over `WithRedisInstance`
+
+**Key prefix example**:
+
+```go
+redisService, err := memoryredis.NewService(
+    memoryredis.WithRedisClientURL("redis://localhost:6379"),
+    memoryredis.WithKeyPrefix("prod"),
+)
+```
 
 ### MySQL Storage
 
@@ -829,16 +845,17 @@ root:password@tcp(localhost:3306)/memory_db?parseTime=true&charset=utf8mb4
 
 ```sql
 CREATE TABLE memories (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
     app_name VARCHAR(255) NOT NULL,
     user_id VARCHAR(255) NOT NULL,
     memory_id VARCHAR(64) NOT NULL,
     memory_data JSON NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    deleted_at TIMESTAMP NULL,
-    UNIQUE INDEX (app_name, user_id, memory_id)
-)
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP NULL DEFAULT NULL,
+    PRIMARY KEY (app_name, user_id, memory_id),
+    INDEX idx_app_user (app_name, user_id),
+    INDEX idx_deleted_at (deleted_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 ```
 
 **Resource cleanup**: Call `Close()` method to release database connection:
@@ -884,16 +901,19 @@ postgresService, err := memorypostgres.NewService(
 
 ```sql
 CREATE TABLE memories (
-    id BIGSERIAL PRIMARY KEY,
-    app_name VARCHAR(255) NOT NULL,
-    user_id VARCHAR(255) NOT NULL,
-    memory_id VARCHAR(64) NOT NULL,
+    memory_id TEXT PRIMARY KEY,
+    app_name TEXT NOT NULL,
+    user_id TEXT NOT NULL,
     memory_data JSONB NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    deleted_at TIMESTAMP NULL,
-    UNIQUE (app_name, user_id, memory_id)
-)
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP NULL DEFAULT NULL
+);
+
+-- Indexes for performance
+CREATE INDEX IF NOT EXISTS memories_app_user ON memories(app_name, user_id);
+CREATE INDEX IF NOT EXISTS memories_updated_at ON memories(updated_at DESC);
+CREATE INDEX IF NOT EXISTS memories_deleted_at ON memories(deleted_at);
 ```
 
 **Resource cleanup**: Call `Close()` method to release database connection:
@@ -902,19 +922,88 @@ CREATE TABLE memories (
 defer postgresService.Close()
 ```
 
+### pgvector Storage
+
+**Use case**: Production, vector similarity search with PostgreSQL + pgvector
+
+```go
+import memorypgvector "trpc.group/trpc-go/trpc-agent-go/memory/pgvector"
+import openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
+
+embedder := openaiembedder.New(openaiembedder.WithModel("text-embedding-3-small"))
+
+pgvectorService, err := memorypgvector.NewService(
+    memorypgvector.WithHost("localhost"),
+    memorypgvector.WithPort(5432),
+    memorypgvector.WithUser("postgres"),
+    memorypgvector.WithPassword("password"),
+    memorypgvector.WithDatabase("dbname"),
+    memorypgvector.WithEmbedder(embedder),
+    memorypgvector.WithSoftDelete(true),
+)
+```
+
+**Configuration options**:
+
+- `WithHost/WithPort/WithUser/WithPassword/WithDatabase`: Connection parameters
+- `WithSSLMode(mode)`: SSL mode (default "disable")
+- `WithPostgresInstance(name)`: Use pre-registered PostgreSQL instance
+- `WithEmbedder(embedder)`: Text embedder for vector generation (required)
+- `WithSoftDelete(enabled)`: Enable soft delete (default false)
+- `WithTableName(name)`: Custom table name (default "memories")
+- `WithSchema(schema)`: Specify database schema (default is public)
+- `WithIndexDimension(dim)`: Vector dimension (default 1536)
+- `WithMaxResults(limit)`: Max search results (default 10)
+- `WithMemoryLimit(limit)`: Memory limit per user
+- `WithCustomTool(toolName, creator)`: Register custom tool
+- `WithToolEnabled(toolName, enabled)`: Enable/disable tool
+- `WithExtraOptions(...options)`: Extra options passed to PostgreSQL client
+- `WithSkipDBInit(skip)`: Skip table initialization (for users without DDL permissions)
+- `WithHNSWIndexParams(params)`: HNSW index parameters for vector search
+
+**Note**: Direct connection parameters take priority over `WithPostgresInstance`. Requires pgvector extension to be installed in PostgreSQL.
+
+**Table schema** (auto-created):
+
+```sql
+CREATE TABLE memories (
+    memory_id TEXT PRIMARY KEY,
+    app_name TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    memory_content TEXT NOT NULL,
+    topics TEXT[],
+    embedding vector(1536),
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP NULL DEFAULT NULL
+);
+
+-- Indexes for performance
+CREATE INDEX ON memories(app_name, user_id);
+CREATE INDEX ON memories(updated_at DESC);
+CREATE INDEX ON memories(deleted_at);
+CREATE INDEX ON memories USING hnsw (embedding vector_cosine_ops);
+```
+
+**Resource cleanup**: Call `Close()` method to release database connection:
+
+```go
+defer pgvectorService.Close()
+```
+
 ### Backend Comparison
 
-| Feature           | InMemory  | Redis            | MySQL      | PostgreSQL        |
-| ----------------- | --------- | ---------------- | ---------- | ----------------- |
-| **Persistence**   | ❌        | ✅               | ✅         | ✅                |
-| **Distributed**   | ❌        | ✅               | ✅         | ✅                |
-| **Transactions**  | ❌        | Partial          | ✅ ACID    | ✅ ACID           |
-| **Queries**       | Simple    | Medium           | SQL        | SQL               |
-| **JSON**          | ❌        | Basic            | JSON       | JSONB             |
-| **Performance**   | Very High | High             | Med-High   | Med-High          |
-| **Configuration** | Zero      | Simple           | Medium     | Medium            |
-| **Soft Delete**   | ❌        | ❌               | ✅         | ✅                |
-| **Use Case**      | Dev/Test  | High Concurrency | Enterprise | Advanced Features |
+| Feature           | InMemory  | Redis            | MySQL      | PostgreSQL        | pgvector      |
+| ----------------- | --------- | ---------------- | ---------- | ----------------- | ------------- |
+| **Persistence**   | ❌        | ✅               | ✅         | ✅                | ✅            |
+| **Distributed**   | ❌        | ✅               | ✅         | ✅                | ✅            |
+| **Transactions**  | ❌        | Partial          | ✅ ACID    | ✅ ACID           | ✅ ACID       |
+| **Queries**       | Simple    | Medium           | SQL        | SQL               | SQL + Vector  |
+| **JSON**          | ❌        | Basic            | JSON       | JSONB             | JSONB         |
+| **Performance**   | Very High | High             | Med-High   | Med-High          | Med-High      |
+| **Configuration** | Zero      | Simple           | Medium     | Medium            | Medium        |
+| **Soft Delete**   | ❌        | ❌               | ✅         | ✅                | ✅            |
+| **Use Case**      | Dev/Test  | High Concurrency | Enterprise | Advanced Features | Vector Search |
 
 **Selection guide**:
 
@@ -923,7 +1012,8 @@ Development/Testing → InMemory (zero config, fast)
 High Concurrency → Redis (memory-level performance)
 ACID Requirements → MySQL/PostgreSQL (transaction guarantees)
 Complex JSON → PostgreSQL (JSONB indexing and queries)
-Audit Trail → MySQL/PostgreSQL (soft delete support)
+Vector Search → pgvector (similarity search with embeddings)
+Audit Trail → MySQL/PostgreSQL/pgvector (soft delete support)
 ```
 
 **Register PostgreSQL Instance (Optional):**
@@ -947,17 +1037,17 @@ postgresService, err := memorypostgres.NewService(
 
 ### Storage Backend Comparison
 
-| Feature                  | In-Memory | Redis      | MySQL          | PostgreSQL     |
-| ------------------------ | --------- | ---------- | -------------- | -------------- |
-| Data Persistence         | ❌        | ✅         | ✅             | ✅             |
-| Distributed Support      | ❌        | ✅         | ✅             | ✅             |
-| Transaction Support      | ❌        | Partial    | ✅ (ACID)      | ✅ (ACID)      |
-| Query Capability         | Simple    | Medium     | Powerful (SQL) | Powerful (SQL) |
-| JSON Support             | ❌        | Partial    | ✅ (JSON)      | ✅ (JSONB)     |
-| Performance              | Very High | High       | Medium-High    | Medium-High    |
-| Configuration Complexity | Low       | Medium     | Medium         | Medium         |
-| Use Case                 | Dev/Test  | Production | Production     | Production     |
-| Monitoring Tools         | None      | Rich       | Very Rich      | Very Rich      |
+| Feature                  | In-Memory | Redis      | MySQL          | PostgreSQL     | pgvector      |
+| ------------------------ | --------- | ---------- | -------------- | -------------- | ------------- |
+| Data Persistence         | ❌        | ✅         | ✅             | ✅             | ✅            |
+| Distributed Support      | ❌        | ✅         | ✅             | ✅             | ✅            |
+| Transaction Support      | ❌        | Partial    | ✅ (ACID)      | ✅ (ACID)      | ✅ (ACID)     |
+| Query Capability         | Simple    | Medium     | Powerful (SQL) | Powerful (SQL) | SQL + Vectors |
+| JSON Support             | ❌        | Partial    | ✅ (JSON)      | ✅ (JSONB)     | ✅ (JSONB)    |
+| Performance              | Very High | High       | Medium-High    | Medium-High    | Medium-High   |
+| Configuration Complexity | Low       | Medium     | Medium         | Medium         | Medium        |
+| Use Case                 | Dev/Test  | Production | Production     | Production     | Vector Search |
+| Monitoring Tools         | None      | Rich       | Very Rich      | Very Rich      | Very Rich     |
 
 **Selection Guide:**
 
@@ -965,6 +1055,7 @@ postgresService, err := memorypostgres.NewService(
 - **Production (High Performance)**: Use Redis storage for high concurrency scenarios
 - **Production (Data Integrity)**: Use MySQL storage when ACID guarantees and complex queries are needed
 - **Production (PostgreSQL)**: Use PostgreSQL storage when JSONB support and advanced PostgreSQL features are needed
+- **Production (Vector Search)**: Use pgvector storage when similarity search with embeddings is needed
 - **Hybrid Deployment**: Choose different storage backends based on different application scenarios
 
 ## FAQ
@@ -997,7 +1088,7 @@ session.AddMessage(ctx, sessionKey, agentMessage("It's sunny today"))
 
 ### Memory ID Idempotency
 
-Memory ID is generated from SHA256 hash of "content + topics". Same content produces the same ID:
+Memory ID is generated from SHA256 hash of "content + sorted topics + appName + userID". Same content produces the same ID for the same user:
 
 ```go
 // First add
@@ -1015,9 +1106,14 @@ memory.AddMemory(ctx, userKey, "User likes programming", []string{"hobby"})
 - ✅ **Idempotent operations**: Repeated additions don't create multiple records
 - ⚠️ **Overwrite update**: Cannot append same content (add timestamp or sequence number if append is needed)
 
-### Search Function Limitations
+### Search Behavior Notes
 
-Memory uses **token matching**, not semantic search:
+Search behavior depends on the backend:
+
+- For `inmemory` / `redis` / `mysql` / `postgres`: `SearchMemories` uses **token matching** (not semantic search).
+- For `pgvector`: `SearchMemories` uses **vector similarity search** and requires an embedder.
+
+**Token matching details** (non-pgvector backends):
 
 **English tokenization**: lowercase → filter stopwords (a, the, is, etc.) → split by spaces
 
@@ -1039,22 +1135,22 @@ Search: "编程" ✅ Match ("编程" in bigrams)
 Search: "写代码" ❌ No match (different words)
 ```
 
-**Limitations**:
+**Limitations** (non-pgvector backends):
 
-- All backends perform filtering and sorting in **application layer** (O(n) complexity)
+- These backends perform filtering and sorting in **application layer** (\[O(n)\] complexity)
 - Performance affected by data volume
-- No semantic similarity search
+- Not semantic similarity search
 
 **Recommendations**:
 
 - Use explicit keywords and topic tags to improve hit rate
-- Consider integrating vector database for semantic search (requires custom implementation)
+- If you need semantic similarity search, use the pgvector backend
 
 ### Soft Delete Considerations
 
 **Support status**:
 
-- ✅ MySQL, PostgreSQL: support soft delete
+- ✅ MySQL, PostgreSQL, pgvector: support soft delete
 - ❌ InMemory, Redis: not supported (hard delete only)
 
 **Soft delete configuration**:
@@ -1147,7 +1243,7 @@ adminService := memoryinmemory.NewMemoryService(
 
 ## Advanced Configuration
 
-### Auto Mode Configuration Options (>= 1.2.0)
+### Auto Mode Configuration Options
 
 | Option                     | Description                            | Default        |
 | -------------------------- | -------------------------------------- | -------------- |
@@ -1156,7 +1252,7 @@ adminService := memoryinmemory.NewMemoryService(
 | `WithMemoryQueueSize(n)`   | Size of memory job queue               | 10             |
 | `WithMemoryJobTimeout(d)`  | Timeout for each extraction job        | 30s            |
 
-### Extraction Checkers (>= 1.3.0)
+### Extraction Checkers
 
 Checkers control when memory extraction should be triggered. By default, extraction happens on every conversation turn. Use checkers to optimize extraction frequency and reduce LLM costs.
 
@@ -1186,6 +1282,29 @@ memExtractor := extractor.NewExtractor(
     extractorModel,
     extractor.WithChecker(extractor.CheckMessageThreshold(10)),
     extractor.WithChecker(extractor.CheckTimeInterval(5*time.Minute)),
+)
+```
+
+#### Model callbacks (before/after)
+
+The extractor also supports injecting before/after model callbacks via `model.Callbacks` (structured only). This is useful for tracing, request rewriting, or short-circuiting the model call in tests.
+
+```go
+callbacks := model.NewCallbacks().RegisterBeforeModel(
+    func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+        // You can modify args.Request or return CustomResponse.
+        return nil, nil
+    },
+).RegisterAfterModel(
+    func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+        // You can inspect/override args.Response.
+        return nil, nil
+    },
+)
+
+memExtractor := extractor.NewExtractor(
+    extractorModel,
+    extractor.WithModelCallbacks(callbacks),
 )
 ```
 

@@ -227,6 +227,7 @@ func WithTable(table string) Option {
 }
 
 // WithIndexDimension sets the vector dimension for the index.
+// This dimension is used when creating the table schema (vector column definition).
 func WithIndexDimension(dimension int) Option {
 	return func(o *options) {
 		o.indexDimension = dimension

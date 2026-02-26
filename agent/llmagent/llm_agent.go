@@ -141,7 +141,12 @@ func New(name string, opts ...Option) *LLMAgent {
 		responseProcessors = append(responseProcessors, planningResponseProcessor)
 	}
 
-	responseProcessors = append(responseProcessors, processor.NewCodeExecutionResponseProcessor())
+	if options.EnableCodeExecutionResponseProcessor {
+		responseProcessors = append(
+			responseProcessors,
+			processor.NewCodeExecutionResponseProcessor(),
+		)
+	}
 
 	// Add output response processor if output_key or output_schema is configured or structured output is requested.
 	if options.OutputKey != "" || options.OutputSchema != nil || options.StructuredOutput != nil {
@@ -250,6 +255,16 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 				),
 			)
 		}
+		skillsOpts = append(
+			skillsOpts,
+			processor.WithSkillLoadMode(options.SkillLoadMode),
+		)
+		if options.SkillsLoadedContentInToolResults {
+			skillsOpts = append(
+				skillsOpts,
+				processor.WithSkillsLoadedContentInToolResults(true),
+			)
+		}
 		skillsProcessor := processor.NewSkillsRequestProcessor(
 			options.skillsRepository,
 			skillsOpts...,
@@ -278,20 +293,60 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	contentProcessor := processor.NewContentRequestProcessor(contentOpts...)
 	requestProcessors = append(requestProcessors, contentProcessor)
 
-	// 7. Time processor - adds current time information if enabled.
+	// 7. Post-tool processor - injects dynamic prompt after tool results.
+	requestProcessors = appendPostToolProcessor(options, requestProcessors)
+
+	// 8. Skills tool result processor - materializes loaded skill content
+	// into tool result messages.
+	requestProcessors = appendSkillsToolResultProcessor(options, requestProcessors)
+
+	// 9. Time processor - adds current time information if enabled.
 	// Moved after content processor to avoid invalidating system message cache.
 	// Time information changes frequently, so placing it last allows previous
 	// stable content (instructions, identity, skills, history) to be cached.
-	if options.AddCurrentTime {
-		timeProcessor := processor.NewTimeRequestProcessor(
-			processor.WithAddCurrentTime(true),
-			processor.WithTimezone(options.Timezone),
-			processor.WithTimeFormat(options.TimeFormat),
-		)
-		requestProcessors = append(requestProcessors, timeProcessor)
-	}
+	requestProcessors = appendTimeProcessor(options, requestProcessors)
 
 	return requestProcessors
+}
+
+func appendPostToolProcessor(options *Options, requestProcessors []flow.RequestProcessor) []flow.RequestProcessor {
+	var postToolOpts []processor.PostToolOption
+	if options.PostToolPrompt != "" {
+		postToolOpts = append(postToolOpts,
+			processor.WithPostToolPrompt(options.PostToolPrompt))
+	}
+	postToolProcessor := processor.NewPostToolRequestProcessor(postToolOpts...)
+	return append(requestProcessors, postToolProcessor)
+}
+
+func appendSkillsToolResultProcessor(options *Options, requestProcessors []flow.RequestProcessor) []flow.RequestProcessor {
+	if options.skillsRepository == nil ||
+		!options.SkillsLoadedContentInToolResults {
+		return requestProcessors
+	}
+	skillsToolResultProcessor :=
+		processor.NewSkillsToolResultRequestProcessor(
+			options.skillsRepository,
+			processor.WithSkillsToolResultLoadMode(
+				options.SkillLoadMode,
+			),
+			processor.WithSkipSkillsFallbackOnSessionSummary(
+				options.SkipSkillsFallbackOnSessionSummary,
+			),
+		)
+	return append(requestProcessors, skillsToolResultProcessor)
+}
+
+func appendTimeProcessor(options *Options, requestProcessors []flow.RequestProcessor) []flow.RequestProcessor {
+	if !options.AddCurrentTime {
+		return requestProcessors
+	}
+	timeProcessor := processor.NewTimeRequestProcessor(
+		processor.WithAddCurrentTime(true),
+		processor.WithTimezone(options.Timezone),
+		processor.WithTimeFormat(options.TimeFormat),
+	)
+	return append(requestProcessors, timeProcessor)
 }
 
 // buildRequestProcessors preserves the original helper signature for tests and
@@ -494,7 +549,7 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 		}
 		// Handle actual errors
 		span.SetStatus(codes.Error, err.Error())
-		span.SetAttributes(attribute.String(itelemetry.KeyErrorType, itelemetry.ValueDefaultErrorType))
+		span.SetAttributes(attribute.String(itelemetry.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeRunError)))
 		span.End()
 		return nil, err
 	}

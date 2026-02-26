@@ -138,7 +138,7 @@ sessService := inmemory.NewSessionService(
     inmemory.WithSummarizer(sum),
     inmemory.WithAsyncSummaryNum(2),                // 2 async workers for concurrent summary generation
     inmemory.WithSummaryQueueSize(100),             // Queue size 100 to buffer summary jobs during high traffic
-    inmemory.WithSummaryJobTimeout(30*time.Second), // Per-job timeout to avoid long-running LLM calls
+    inmemory.WithSummaryJobTimeout(60*time.Second), // Per-job timeout to avoid long-running LLM calls
 )
 
 // Redis service with async config
@@ -146,7 +146,7 @@ sessService := redis.NewService(
     redis.WithSummarizer(sum),
     redis.WithAsyncSummaryNum(2),                // 2 async workers for concurrent summary generation
     redis.WithSummaryQueueSize(100),             // Queue size 100 to buffer summary jobs during high traffic
-    redis.WithSummaryJobTimeout(30*time.Second), // Per-job timeout to avoid long-running LLM calls
+    redis.WithSummaryJobTimeout(60*time.Second), // Per-job timeout to avoid long-running LLM calls
 )
 ```
 

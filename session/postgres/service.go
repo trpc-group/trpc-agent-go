@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/spaolacci/murmur3"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/hook"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
@@ -763,7 +762,7 @@ func (s *Service) AppendTrackEvent(
 
 		hKey := fmt.Sprintf("%s:%s:%s:%s", key.AppName, key.UserID, key.SessionID, trackEvent.Track)
 		n := len(s.trackEventChans)
-		index := int(murmur3.Sum32([]byte(hKey))) % n
+		index := session.HashString(hKey) % n
 		select {
 		case s.trackEventChans[index] <- &trackEventPair{key: key, event: trackEvent}:
 		case <-ctx.Done():
@@ -783,11 +782,6 @@ func (s *Service) Close() error {
 		// Stop cleanup routine.
 		s.stopCleanupRoutine()
 
-		// Close postgres connection.
-		if s.pgClient != nil {
-			s.pgClient.Close()
-		}
-
 		// Close event pair channels and wait for persist workers.
 		for _, ch := range s.eventPairChans {
 			close(ch)
@@ -801,6 +795,11 @@ func (s *Service) Close() error {
 		// Close summary job channels and wait for summary workers.
 		if s.asyncWorker != nil {
 			s.asyncWorker.Stop()
+		}
+
+		// Close postgres connection after all workers are stopped.
+		if s.pgClient != nil {
+			s.pgClient.Close()
 		}
 	})
 

@@ -19,6 +19,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/team"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -256,4 +258,126 @@ func TestTransferResponseProc_SetsTransferTags(t *testing.T) {
 	}
 
 	require.GreaterOrEqual(t, transferTagCount, 2)
+}
+
+type doneResponseAgent struct {
+	name string
+}
+
+func (d *doneResponseAgent) Info() agent.Info                { return agent.Info{Name: d.name} }
+func (d *doneResponseAgent) SubAgents() []agent.Agent        { return nil }
+func (d *doneResponseAgent) FindSubAgent(string) agent.Agent { return nil }
+func (d *doneResponseAgent) Tools() []tool.Tool              { return nil }
+func (d *doneResponseAgent) Run(_ context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 1)
+	go func() {
+		defer close(ch)
+		ch <- event.NewResponseEvent(
+			inv.InvocationID,
+			d.name,
+			&model.Response{Done: true},
+		)
+	}()
+	return ch, nil
+}
+
+func TestTransferResponseProc_CrossRequestTransfer_SetsStateDelta(t *testing.T) {
+	target := &doneResponseAgent{name: "child"}
+	parent := &parentAgent{child: target}
+
+	sess := session.NewSession("app", "user", "sess")
+	sess.SetState(team.SwarmTeamNameKey, []byte("team"))
+
+	inv := &agent.Invocation{
+		Agent:        parent,
+		AgentName:    "parent",
+		InvocationID: "inv-xrt",
+		Session:      sess,
+		TransferInfo: &agent.TransferInfo{TargetAgentName: "child"},
+	}
+	rsp := &model.Response{ID: "r1"}
+
+	out := make(chan *event.Event, 10)
+	NewTransferResponseProcessor(true).ProcessResponse(
+		context.Background(),
+		inv,
+		&model.Request{},
+		rsp,
+		out,
+	)
+	close(out)
+
+	var doneEvt *event.Event
+	for evt := range out {
+		if evt != nil && evt.Author == "child" && evt.Response != nil && evt.Response.Done {
+			doneEvt = evt
+		}
+	}
+	require.NotNil(t, doneEvt)
+	require.Equal(t, []byte("child"), doneEvt.StateDelta[team.SwarmActiveAgentKeyPrefix+"team"])
+}
+
+func TestTransferResponseProc_CrossRequestTransfer_SkipsStateDeltaWithoutMarker(t *testing.T) {
+	target := &doneResponseAgent{name: "child"}
+	parent := &parentAgent{child: target}
+
+	sess := session.NewSession("app", "user", "sess")
+
+	inv := &agent.Invocation{
+		Agent:        parent,
+		AgentName:    "parent",
+		InvocationID: "inv-xrt-skip",
+		Session:      sess,
+		TransferInfo: &agent.TransferInfo{TargetAgentName: "child"},
+	}
+	rsp := &model.Response{ID: "r1"}
+
+	out := make(chan *event.Event, 10)
+	NewTransferResponseProcessor(true).ProcessResponse(
+		context.Background(),
+		inv,
+		&model.Request{},
+		rsp,
+		out,
+	)
+	close(out)
+
+	for evt := range out {
+		if evt == nil || evt.Author != "child" || evt.Response == nil || !evt.Response.Done {
+			continue
+		}
+		_, ok := evt.StateDelta[team.SwarmActiveAgentKeyPrefix+"team"]
+		require.False(t, ok)
+		return
+	}
+	t.Fatal("missing done response event from child")
+}
+
+func TestTransferResponseProc_SaveActiveAgent_EarlyReturns(t *testing.T) {
+	proc := NewTransferResponseProcessor(true)
+	target := &doneResponseAgent{name: "child"}
+	ctx := context.Background()
+
+	require.NotPanics(t, func() {
+		proc.saveActiveAgent(ctx, nil, target, &event.Event{})
+	})
+
+	require.NotPanics(t, func() {
+		proc.saveActiveAgent(ctx, &agent.Invocation{}, target, &event.Event{})
+	})
+
+	sess := session.NewSession("app", "user", "sess")
+	inv := &agent.Invocation{Session: sess}
+
+	require.NotPanics(t, func() {
+		proc.saveActiveAgent(ctx, inv, target, nil)
+	})
+
+	evt := &event.Event{}
+	proc.saveActiveAgent(ctx, inv, target, evt)
+	require.Nil(t, evt.StateDelta)
+}
+
+func TestSwarmActiveAgentKey_EmptyTeamName(t *testing.T) {
+	require.Equal(t, swarmActiveAgentKeyPrefix, swarmActiveAgentKey(""))
 }

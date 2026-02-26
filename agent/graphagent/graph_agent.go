@@ -12,6 +12,7 @@ package graphagent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -29,6 +30,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
+
+const invocationNilErrMsg = "invocation is nil"
 
 // GraphAgent is an agent that executes a graph.
 type GraphAgent struct {
@@ -54,13 +57,23 @@ func New(name string, g *graph.Graph, opts ...Option) (*GraphAgent, error) {
 	}
 
 	// Build executor options.
+	// First, apply mapped options (ChannelBufferSize, MaxConcurrency, CheckpointSaver).
 	var executorOpts []graph.ExecutorOption
 	executorOpts = append(executorOpts,
 		graph.WithChannelBufferSize(options.ChannelBufferSize))
+	if options.MaxConcurrency != 0 {
+		executorOpts = append(executorOpts,
+			graph.WithMaxConcurrency(options.MaxConcurrency))
+	}
 	if options.CheckpointSaver != nil {
 		executorOpts = append(executorOpts,
 			graph.WithCheckpointSaver(options.CheckpointSaver))
 	}
+
+	// Then, append user-provided executor options.
+	// These options are applied after the mapped options, so they can override
+	// the mapped settings if needed.
+	executorOpts = append(executorOpts, options.ExecutorOptions...)
 
 	executor, err := graph.NewExecutor(g, executorOpts...)
 	if err != nil {
@@ -82,6 +95,9 @@ func New(name string, g *graph.Graph, opts ...Option) (*GraphAgent, error) {
 
 // Run executes the graph with the provided invocation.
 func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+	if invocation == nil {
+		return nil, errors.New(invocationNilErrMsg)
+	}
 	// Setup invocation
 	ga.setupInvocation(invocation)
 
@@ -104,7 +120,7 @@ func (ga *GraphAgent) runWithBarrier(ctx context.Context, invocation *agent.Invo
 		evt := event.NewErrorEvent(invocation.InvocationID, invocation.AgentName,
 			model.ErrorTypeFlowError, err.Error())
 		span.SetStatus(codes.Error, err.Error())
-		span.SetAttributes(attribute.String(itelemetry.KeyErrorType, model.ErrorTypeFlowError))
+		span.SetAttributes(attribute.String(itelemetry.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeFlowError)))
 		if emitErr := agent.EmitEvent(ctx, invocation, out, evt); emitErr != nil {
 			log.Errorf("graphagent: emit error event failed: %v", emitErr)
 		}
@@ -115,7 +131,7 @@ func (ga *GraphAgent) runWithBarrier(ctx context.Context, invocation *agent.Invo
 		evt := event.NewErrorEvent(invocation.InvocationID, invocation.AgentName,
 			model.ErrorTypeFlowError, err.Error())
 		span.SetStatus(codes.Error, err.Error())
-		span.SetAttributes(attribute.String(itelemetry.KeyErrorType, model.ErrorTypeFlowError))
+		span.SetAttributes(attribute.String(itelemetry.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeFlowError)))
 		if emitErr := agent.EmitEvent(ctx, invocation, out, evt); emitErr != nil {
 			log.Errorf("graphagent: emit error event failed: %v.", emitErr)
 		}
@@ -124,7 +140,7 @@ func (ga *GraphAgent) runWithBarrier(ctx context.Context, invocation *agent.Invo
 	for evt := range innerChan {
 		if err := event.EmitEvent(ctx, out, evt); err != nil {
 			span.SetStatus(codes.Error, err.Error())
-			span.SetAttributes(attribute.String(itelemetry.KeyErrorType, model.ErrorTypeFlowError))
+			span.SetAttributes(attribute.String(itelemetry.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeFlowError)))
 			log.Errorf("graphagent: emit event failed: %v.", err)
 			return
 		}
@@ -251,13 +267,13 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 	isResuming := invocation.RunOptions.RuntimeState != nil &&
 		invocation.RunOptions.RuntimeState[graph.CfgKeyCheckpointID] != nil
 
-	if invocation.Message.Content != "" {
-		// If resuming and the message is just "resume", don't add it as input
-		// This allows pure checkpoint resumption without input interference
+	if invocation.Message.Content != "" && invocation.Message.Role == model.RoleUser {
+		// If resuming and the message is just "resume", don't add it as input.
+		// This allows pure checkpoint resumption without input interference.
 		if isResuming && invocation.Message.Content == "resume" {
-			// Skip adding user_input to preserve checkpoint state
+			// Skip adding user_input to preserve checkpoint state.
 		} else {
-			// Add user input for normal execution or resume with meaningful input
+			// Add user input for normal execution or resume with meaningful input.
 			initialState[graph.StateKeyUserInput] = invocation.Message.Content
 		}
 	}
@@ -283,6 +299,16 @@ func (ga *GraphAgent) setupInvocation(invocation *agent.Invocation) {
 
 // Tools returns the list of tools available to this agent.
 func (ga *GraphAgent) Tools() []tool.Tool { return nil }
+
+// TimeTravel exposes checkpoint-based time travel helpers for this GraphAgent.
+//
+// It requires a checkpoint saver configured via graphagent.WithCheckpointSaver.
+func (ga *GraphAgent) TimeTravel() (*graph.TimeTravel, error) {
+	if ga == nil || ga.executor == nil {
+		return nil, fmt.Errorf("graph executor is not configured")
+	}
+	return ga.executor.TimeTravel()
+}
 
 // Info returns the basic information about this agent.
 func (ga *GraphAgent) Info() agent.Info {

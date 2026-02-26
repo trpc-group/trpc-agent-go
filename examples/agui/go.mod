@@ -11,7 +11,7 @@ replace (
 )
 
 require (
-	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20251229221019-6a8d741d66f8
+	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260201021820-c2d2db22a1c9
 	github.com/google/uuid v1.6.0
 	github.com/sirupsen/logrus v1.9.3
 	go.opentelemetry.io/otel v1.29.0
@@ -37,7 +37,6 @@ require (
 	github.com/openai/openai-go v1.12.0 // indirect
 	github.com/panjf2000/ants/v2 v2.10.0 // indirect
 	github.com/redis/go-redis/v9 v9.11.0 // indirect
-	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	github.com/tidwall/gjson v1.14.4 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect

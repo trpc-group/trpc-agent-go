@@ -15,6 +15,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -101,11 +102,15 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 
 	// Initialize auto memory worker if extractor is configured.
 	if opts.extractor != nil {
+		imemory.ConfigureExtractorEnabledTools(
+			opts.extractor, opts.enabledTools,
+		)
 		config := imemory.AutoMemoryConfig{
 			Extractor:        opts.extractor,
 			AsyncMemoryNum:   opts.asyncMemoryNum,
 			MemoryQueueSize:  opts.memoryQueueSize,
 			MemoryJobTimeout: opts.memoryJobTimeout,
+			EnabledTools:     opts.enabledTools,
 		}
 		s.autoMemoryWorker = imemory.NewAutoMemoryWorker(config, s)
 		s.autoMemoryWorker.Start()
@@ -379,7 +384,7 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 // In agentic mode, all enabled tools are returned.
 // The tools list is pre-computed at service creation time.
 func (s *Service) Tools() []tool.Tool {
-	return s.precomputedTools
+	return slices.Clone(s.precomputedTools)
 }
 
 // EnqueueAutoMemoryJob enqueues an auto memory extraction job for async

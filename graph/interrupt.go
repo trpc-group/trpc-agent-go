@@ -30,6 +30,17 @@ type InterruptError struct {
 	Timestamp time.Time
 	// Path is the execution path to the interrupted node.
 	Path []string
+
+	// SkipRerun controls whether the interrupted node is re-executed when
+	// resuming from the interrupt checkpoint. The default behavior (false)
+	// re-executes the interrupted node to preserve the semantics of
+	// graph.Interrupt, which is typically called from inside the node.
+	SkipRerun bool
+
+	// NextNodes overrides checkpoint.NextNodes when set. This is useful for
+	// interrupts that happen before a step executes, where the frontier is not
+	// derivable from channel availability.
+	NextNodes []string
 }
 
 // Error returns the error message for the interrupt.

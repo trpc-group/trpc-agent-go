@@ -170,6 +170,7 @@ _ = result.OverallStatus
     - [Prerequisites](#prerequisites)
     - [Run the Example](#run-the-example)
     - [Basic Usage](#basic-usage)
+    - [Stop / Cancel a Run](#stop--cancel-a-run)
   - [Examples](#examples)
     - [1. Tool Usage](#1-tool-usage)
     - [2. LLM-Only Agent](#2-llm-only-agent)
@@ -333,6 +334,98 @@ type calculatorRsp struct {
 }
 ```
 
+### Dynamic Agent per Request
+
+Sometimes your Agent must be created **per request** (for example: different
+prompt, model, tools, sandbox instance). In that case, you can let Runner build
+a fresh Agent for every `Run(...)`:
+
+```go
+r := runner.NewRunnerWithAgentFactory(
+    "my-app",
+    "assistant",
+    func(ctx context.Context, ro agent.RunOptions) (agent.Agent, error) {
+        // Use ro to build an Agent for this request.
+        a := llmagent.New("assistant",
+            llmagent.WithInstruction(ro.Instruction),
+        )
+        return a, nil
+    },
+)
+
+events, err := r.Run(ctx,
+    "user-001",
+    "session-001",
+    model.NewUserMessage("Hello"),
+    agent.WithInstruction("You are a helpful assistant."),
+)
+_ = events
+_ = err
+```
+
+### Stop / Cancel a Run
+
+If you want to interrupt a running agent, **cancel the context** you passed to
+`Runner.Run` (recommended). This stops model calls and tool calls safely and
+lets the runner clean up.
+
+Important: **do not** just “break” your event loop and walk away — the agent
+goroutine may keep running and can block on channel writes. Always cancel, then
+keep draining the event channel until it is closed.
+
+#### Option A: Ctrl+C (terminal programs)
+
+Convert Ctrl+C into context cancellation:
+
+```go
+ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+defer stop()
+
+events, err := r.Run(ctx, userID, sessionID, message)
+if err != nil {
+    return err
+}
+for range events {
+    // Drain until the runner stops (ctx canceled or run completed).
+}
+```
+
+#### Option B: Cancel from your code
+
+```go
+ctx, cancel := context.WithCancel(context.Background())
+defer cancel()
+
+events, err := r.Run(ctx, userID, sessionID, message)
+if err != nil {
+    return err
+}
+
+go func() {
+    time.Sleep(2 * time.Second)
+    cancel()
+}()
+
+for range events {
+    // Keep draining until the channel is closed.
+}
+```
+
+#### Option C: Cancel by `requestID` (for servers / background runs)
+
+```go
+requestID := "req-123"
+events, err := r.Run(ctx, userID, sessionID, message,
+    agent.WithRequestID(requestID),
+)
+
+mr := r.(runner.ManagedRunner)
+_ = mr.Cancel(requestID)
+```
+
+For more details (including detached cancellation, resume, and server cancel
+routes), see `docs/mkdocs/en/runner.md` and `docs/mkdocs/en/agui.md`.
+
 ## Examples
 
 The `examples` directory contains runnable demos covering every major feature.
@@ -451,6 +544,8 @@ Example: [examples/skillrun](examples/skillrun)
 - Skills are folders with a `SKILL.md` spec + optional docs/scripts.
 - Built-in tools: `skill_load`, `skill_list_docs`, `skill_select_docs`,
   `skill_run` (runs commands in an isolated workspace).
+- Prefer using `skill_run` only for commands required by the selected skill
+  docs, not for generic shell exploration.
 
 ### 12. Artifacts
 

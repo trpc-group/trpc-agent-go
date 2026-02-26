@@ -11,6 +11,7 @@ The Tool system is a core component of the tRPC-Agent-Go framework, enabling Age
 - **⚡ Parallel Execution**: Tool invocations support parallel execution to improve performance.
 - **🔄 MCP Protocol**: Full support for STDIO, SSE, and Streamable HTTP transports.
 - **🛠️ Configuration Support**: Provides configuration options and filter support.
+- **🧹 Arguments Repair**: Optionally enable `agent.WithToolCallArgumentsJSONRepairEnabled(true)` to best-effort repair `tool_calls` `arguments`, improving robustness for tool execution and external parsing.
 
 ### Core Concepts
 
@@ -28,6 +29,13 @@ type CallableTool interface {
     Tool
 }
 ```
+
+**Recommendation (always configure `name` and `description`)**
+
+- **name (required)**: Used by the model to precisely select and invoke the tool. Keep it **stable, unique, and descriptive** (prefer `snake_case`), and avoid name collisions across Tools/ToolSets.
+- **description (required)**: Used by the model to understand what the tool does, when to use it, and any constraints. Missing or vague descriptions will noticeably reduce tool-call accuracy and stability.
+
+> For Function Tools, set these via `function.WithName(...)` / `function.WithDescription(...)`. For custom Tools, set `Name` / `Description` on the `tool.Declaration` returned by `Declaration()`.
 
 #### 📦 ToolSet
 
@@ -99,9 +107,9 @@ import "trpc.group/trpc-go/trpc-agent-go/tool/function"
 
 // 1. Define a tool function.
 func calculator(ctx context.Context, req struct {
-    Operation string  `json:"operation"`
-    A         float64 `json:"a"`
-    B         float64 `json:"b"`
+    Operation string  `json:"operation" jsonschema:"description=Operation type e.g. add/multiply"`
+    A         float64 `json:"a" jsonschema:"description=First operand"`
+    B         float64 `json:"b" jsonschema:"description=Second operand"`
 }) (map[string]interface{}, error) {
     switch req.Operation {
     case "add":
@@ -126,12 +134,22 @@ agent := llmagent.New("math-assistant",
     llmagent.WithTools([]tool.Tool{calculatorTool}))
 ```
 
+### Input Schema and field descriptions
+
+For Function Tools, the input `req` is automatically converted into a JSON Schema (so the model can understand the expected arguments). Add field descriptions via struct tags:
+
+- **Field name**: use `json:"..."` as the schema property name.
+- **Field description (recommended)**: use `jsonschema:"description=..."` to populate `properties.<field>.description`.
+- **Note**: the `jsonschema` tag uses comma `,` as the separator, so **the description value must not contain `,`**; otherwise it will be parsed as multiple tag items.
+- **Compatibility**: `description:"..."` is also supported for legacy code. If both `jsonschema:"description=..."` and `description:"..."` are present, the `jsonschema` description wins.
+- **More flexible schema**: if you need full control over the input schema (e.g. complex JSON Schema constraints), use `function.WithInputSchema(customInputSchema)` to bypass auto-generation.
+
 ### Streaming Tool Example
 
 ```go
 // 1. Define input and output structures.
 type weatherInput struct {
-    Location string `json:"location"`
+    Location string `json:"location" jsonschema:"description=Location to query e.g. city name or coordinates"`
 }
 
 type weatherOutput struct {
@@ -599,6 +617,125 @@ apply to all agents
 - 🛡️ **Smart Protection**: Framework tools (`transfer_to_agent`, `knowledge_search`) automatically preserved, never filtered
 - 🔧 **Flexible Customization**: Support for built-in filters and custom FilterFunc
 
+#### Tool Search (Automatic Tool Selection)
+
+In addition to rule-based filtering (Tool Filter), the framework provides **Tool Search**: before each main model call, it runs a lightweight “tool selection” step to shrink the available tool set to **TopK** (for example, 3 tools), then sends only those tools to the main model. This typically reduces token usage (especially **PromptTokens**) when the full tool list is large.
+
+Trade-offs to keep in mind:
+
+- **Latency**: Tool Search adds extra work (another LLM call and/or embedding + vector search), so end-to-end latency may increase.
+- **Prompt caching**: the tool list can change every turn, which may reduce prompt caching hit rate on some providers.
+
+How it differs from Tool Filter:
+
+- **Tool Filter**: you (or your business logic) decide which tools are allowed/blocked (access control / cost control).
+- **Tool Search**: the framework picks tools automatically based on the current user query (automation / cost optimization).
+
+They can be combined: use Tool Filter for permissions/allow-lists first, then use Tool Search to select TopK from the remaining tools.
+
+**Two strategies:**
+
+- **LLM Search**: put the candidate tool list (name + description) into the prompt and ask an LLM to output the selected tool names.
+  - Pros: no vector store needed; simple to adopt.
+  - Cons: the prompt cost grows roughly linearly with the number/length of tool descriptions, and repeats every turn.
+- **Knowledge Search**: rewrite the query with an LLM, then use embeddings + vector search to find relevant tools.
+  - Pros: you don’t need to send the full tool list to the selection LLM every turn; and **tool embeddings are cached within the same `ToolKnowledge` instance** (so tools are not re-embedded repeatedly).
+  - Note: the query is still embedded each turn (a fixed per-turn cost).
+
+##### Basic Usage (LLM Search)
+
+Tool Search can be used either as a Runner plugin or as a per-agent callback.
+
+**Option A: Runner Plugin**
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/plugin/toolsearch"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+ts, err := toolsearch.New(modelInstance,
+    toolsearch.WithMaxTools(3),
+    toolsearch.WithFailOpen(), // optional: fallback to full tool set on failure
+)
+if err != nil { /* handle */ }
+
+ag := llmagent.New("assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithTools(allTools), // register full tools; Tool Search picks TopK
+)
+
+r := runner.NewRunner("app", ag,
+    runner.WithPlugins(ts),
+)
+```
+
+**Option B: Per-Agent BeforeModel Callback**
+
+Register Tool Search as a `BeforeModel` callback. It will mutate `req.Tools`
+before the main model call:
+
+```go
+	import (
+	    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	    "trpc.group/trpc-go/trpc-agent-go/plugin/toolsearch"
+	    "trpc.group/trpc-go/trpc-agent-go/model"
+	)
+
+modelCallbacks := model.NewCallbacks()
+tc, err := toolsearch.New(modelInstance,
+    toolsearch.WithMaxTools(3),
+    toolsearch.WithFailOpen(), // optional: fallback to full tool set on failure
+)
+if err != nil { /* handle */ }
+modelCallbacks.RegisterBeforeModel(tc.Callback())
+
+agent := llmagent.New("assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithTools(allTools), // register full tools; Tool Search will pick TopK per run
+    llmagent.WithModelCallbacks(modelCallbacks),
+)
+```
+
+##### Basic Usage (Knowledge Search)
+
+Create a `ToolKnowledge` (embedder + vector store) and enable it via `toolsearch.WithToolKnowledge(...)`:
+
+```go
+	import (
+	    "trpc.group/trpc-go/trpc-agent-go/plugin/toolsearch"
+	    openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
+	    vectorinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
+	)
+
+toolKnowledge, err := toolsearch.NewToolKnowledge(
+    openaiembedder.New(openaiembedder.WithModel(openaiembedder.ModelTextEmbedding3Small)),
+    toolsearch.WithVectorStore(vectorinmemory.New()),
+)
+if err != nil { /* handle */ }
+
+tc, err := toolsearch.New(modelInstance,
+    toolsearch.WithMaxTools(3),
+    toolsearch.WithToolKnowledge(toolKnowledge),
+    toolsearch.WithFailOpen(),
+)
+if err != nil { /* handle */ }
+modelCallbacks.RegisterBeforeModel(tc.Callback())
+```
+
+##### Token Usage (Optional)
+
+Tool Search stores usage in `context.Context`, which you can use for metrics/cost analysis:
+
+```go
+	import "trpc.group/trpc-go/trpc-agent-go/plugin/toolsearch"
+
+if usage, ok := toolsearch.ToolSearchUsageFromContext(ctx); ok && usage != nil {
+    // usage.PromptTokens / usage.CompletionTokens / usage.TotalTokens
+}
+```
+
 #### Basic Usage
 
 **1. Exclude Specific Tools (Exclude Filter)**
@@ -900,6 +1037,20 @@ Runtime ToolSet updates integrate seamlessly with the **tool filtering** logic d
 - Tools coming from `WithTools` or any ToolSet (including dynamically added ones) are treated as **user tools** and are subject to `WithToolFilter` and per‑run filters.
 - Framework tools such as `transfer_to_agent`, `knowledge_search`, and `agentic_knowledge_search` remain **never filtered** and are always available.
 
+#### Tool Call Arguments Auto Repair
+
+Some models may emit non-strict JSON arguments for `tool_calls` (for example, unquoted object keys or trailing commas), which can break tool execution or external parsing.
+
+Tool call arguments auto repair is useful when the caller needs to parse `toolCall.Function.Arguments` outside the framework, or when tools require strictly valid JSON input.
+
+When `agent.WithToolCallArgumentsJSONRepairEnabled(true)` is enabled in `runner.Run`, the framework will attempt to repair `toolCall.Function.Arguments` on a best-effort basis.
+
+```go
+ch, err := r.Run(ctx, userID, sessionID, model.NewUserMessage("..."),
+    agent.WithToolCallArgumentsJSONRepairEnabled(true),
+)
+```
+
 ## Quick Start
 
 ### Environment Setup
@@ -929,9 +1080,9 @@ func main() {
     // 1. Create a simple tool.
     calculatorTool := function.NewFunctionTool(
         func(ctx context.Context, req struct {
-            Operation string  `json:"operation"`
-            A         float64 `json:"a"`
-            B         float64 `json:"b"`
+            Operation string  `json:"operation" jsonschema:"description=Operation type e.g. add/multiply"`
+            A         float64 `json:"a" jsonschema:"description=First operand"`
+            B         float64 `json:"b" jsonschema:"description=Second operand"`
         }) (map[string]interface{}, error) {
             var result float64
             switch req.Operation {

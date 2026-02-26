@@ -22,8 +22,10 @@ fi
 
 has_mod_issues=false
 has_build_issues=false
+has_internal_imports=false
 mod_issue_modules=()
 build_issue_modules=()
+internal_import_modules=()
 
 for mod_file in "${go_mod_files[@]}"; do
     mod_dir="$(dirname "$mod_file")"
@@ -33,9 +35,26 @@ for mod_file in "${go_mod_files[@]}"; do
     fi
     module_path="examples/${rel_path:-root}"
 
+    if head -n 5 "${mod_file}" | grep -q "DO NOT USE!"; then
+        echo "::warning::Skipping ${module_path}: marked as DO NOT USE."
+        continue
+    fi
+
     echo "::group::Checking ${rel_path:-examples}"
 
     cd "$repo_root/examples/$rel_path"
+
+    # Check for internal package imports.
+    if grep -r --include="*.go" \
+        "trpc.group/trpc-go/trpc-agent-go/internal" . >/dev/null 2>&1; then
+        has_internal_imports=true
+        internal_import_modules+=("$module_path")
+        echo "::error::${module_path} contains imports of internal packages. Examples must not use internal packages."
+        grep -rn --include="*.go" \
+            "trpc.group/trpc-go/trpc-agent-go/internal" . || true
+        echo "::endgroup::"
+        continue
+    fi
 
     # Store original content
     original_go_mod="$(cat go.mod)"
@@ -111,8 +130,14 @@ done
 
 cd "$repo_root"
 
-if [ "${#mod_issue_modules[@]}" -gt 0 ] || [ "${#build_issue_modules[@]}" -gt 0 ]; then
+if [ "${#internal_import_modules[@]}" -gt 0 ] || \
+   [ "${#mod_issue_modules[@]}" -gt 0 ] || \
+   [ "${#build_issue_modules[@]}" -gt 0 ]; then
     echo "::group::Examples check summary"
+    if [ "${#internal_import_modules[@]}" -gt 0 ]; then
+        echo "Directories with internal package imports:"
+        printf '%s\n' "${internal_import_modules[@]}" | sed 's/^/- /'
+    fi
     if [ "${#mod_issue_modules[@]}" -gt 0 ]; then
         echo "Directories with go.mod/go.sum issues:"
         printf '%s\n' "${mod_issue_modules[@]}" | sed 's/^/- /'
@@ -125,7 +150,11 @@ if [ "${#mod_issue_modules[@]}" -gt 0 ] || [ "${#build_issue_modules[@]}" -gt 0 
 fi
 
 # Report issues with specific error messages
-if [ "$has_mod_issues" = true ] && [ "$has_build_issues" = true ]; then
+if [ "$has_internal_imports" = true ]; then
+    echo "::error::Some examples modules contain internal package imports. Examples must not use internal packages."
+    echo "::endgroup::"
+    exit 1
+elif [ "$has_mod_issues" = true ] && [ "$has_build_issues" = true ]; then
     echo "::error::Some examples modules have go.mod/go.sum issues and some have build failures"
     echo "::endgroup::"
     exit 1

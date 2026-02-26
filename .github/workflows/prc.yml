@@ -32,7 +32,12 @@ jobs:
             -not -path "./.resource/*" \
             -not -path "./docs/*" \
             -not -path "./examples/*" \
-            -not -path "./test/*" | sort)
+            -not -path "./test/*" | sort | while IFS= read -r mod; do
+              if head -n 5 "${mod}" | grep -q "DO NOT USE!"; then
+                continue
+              fi
+              echo "${mod}"
+            done)
           if [ "${#modules[@]}" -eq 0 ]; then
             echo "matrix={\"module\":[]}" >> "$GITHUB_OUTPUT"
             exit 0
@@ -147,7 +152,6 @@ jobs:
         uses: golangci/golangci-lint-action@v3
         with:
           version: latest
-          only-new-issues: true
           args: --timeout=10m
       - name: gofmt
         run: |
@@ -220,6 +224,17 @@ jobs:
             echo "✓ All Go files have proper license headers"
           fi
           echo "::endgroup::"
+  check-go-mod-tidy:
+    name: check go mod tidy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+      - name: Check go.mod and go.sum are tidy
+        shell: bash
+        run: bash .github/scripts/check-go-mod-tidy.sh
   check-examples:
     name: check examples
     runs-on: ubuntu-latest
@@ -230,6 +245,39 @@ jobs:
           go-version: "1.21"
       - name: Check examples go.mod, go.sum and build
         run: bash .github/scripts/check-examples.sh
+  check-lfs-excluded:
+    name: check git lfs excluded
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Validate Git LFS files are excluded from published modules
+        run: bash .github/scripts/check-lfs-excluded.sh
+  check-current-module-sums:
+    name: check current module sums
+    runs-on: ubuntu-latest
+    needs: check-lfs-excluded
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          lfs: true
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+      - name: Compare module zip sums (VCS vs working tree)
+        run: bash .github/scripts/check-current-module-sums.sh
+  check-go-sumdb:
+    name: check sum.golang.org checksums
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+      - name: Validate module checksums via sumdb
+        run: bash .github/scripts/check-go-sumdb.sh
   typos:
     name: typos
     runs-on: ubuntu-latest

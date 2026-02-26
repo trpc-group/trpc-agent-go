@@ -57,6 +57,8 @@ func (t *SelectDocsTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name: selectDocsToolName,
 		Description: "Select docs for a skill. " +
+			"Prefer selecting only needed docs; " +
+			"avoid include_all_docs unless needed. " +
 			"Use mode=add to append, " +
 			"replace to overwrite, or clear to remove.",
 		InputSchema: &tool.Schema{
@@ -64,18 +66,17 @@ func (t *SelectDocsTool) Declaration() *tool.Declaration {
 			Description: "Select docs input",
 			Required:    []string{"skill"},
 			Properties: map[string]*tool.Schema{
-				"skill": {
-					Type:        "string",
-					Description: "Skill name",
-				},
+				"skill": skillNameSchema(
+					t.repo, "Skill name",
+				),
 				"docs": {
 					Type:        "array",
-					Description: "Doc names to select",
+					Description: "Doc names to select (prefer few)",
 					Items:       &tool.Schema{Type: "string"},
 				},
 				"include_all_docs": {
 					Type:        "boolean",
-					Description: "Include all docs if true",
+					Description: "Include all docs if true (use sparingly)",
 				},
 				"mode": {
 					Type:        "string",

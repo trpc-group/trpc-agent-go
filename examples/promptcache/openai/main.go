@@ -322,10 +322,10 @@ func main() {
 
 	ctx := context.Background()
 
-	// Create model with cache optimization enabled
-	llm := openai.New("gpt-4o",
+	// Cache optimization is enabled by default for OpenAI.
+	llm := openai.New(
+		"gpt-4o",
 		openai.WithAPIKey(apiKey),
-		openai.WithOptimizeForCache(true), // Enable cache optimization for better cache hit rates
 	)
 
 	// Create tools

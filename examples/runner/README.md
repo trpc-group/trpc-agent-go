@@ -188,6 +188,17 @@ Available tools: calculator, current_time
 👋 Goodbye!
 ```
 
+## Stopping and cancelling
+
+- To end the chat loop cleanly, type `/exit` and press Enter.
+- To stop the whole program at any time, press **Ctrl+C**.
+- To stop a **single** running agent run safely in your own app, cancel the
+  `context.Context` you passed into `Runner.Run` (do not just stop reading the
+  event channel). See:
+  - `examples/cancelrun` (cancel via Enter/Ctrl+C, drain events)
+  - `examples/managedrunner` (cancel by requestID, detached cancellation)
+  - `docs/mkdocs/en/runner.md` (run control guide)
+
 ## Session Storage
 
 This example uses **in-memory session storage** for simplicity. This means:

@@ -54,6 +54,16 @@ var (
 		"executor", "local",
 		"workspace executor: local|container",
 	)
+	flagTrustedLocal = flag.Bool(
+		"trusted-local",
+		false,
+		"local executor only: reuse a fixed workspace root (unsafe)",
+	)
+	flagTrustedRoot = flag.String(
+		"trusted-root",
+		"",
+		"trusted-local workspace root (default: ./skill_workspace)",
+	)
 	flagArtifacts = flag.Bool("artifacts", true,
 		"save output files via artifact service")
 	flagOmitInline = flag.Bool("omit-inline", false,
@@ -176,6 +186,20 @@ func (c *skillChat) setup(_ context.Context) error {
 		}
 	default:
 		var lopts []localexec.CodeExecutorOption
+		if *flagTrustedLocal {
+			root := strings.TrimSpace(*flagTrustedRoot)
+			if root == "" {
+				cwd, _ := os.Getwd()
+				root = filepath.Join(cwd, "skill_workspace")
+			}
+			lopts = append(
+				lopts,
+				localexec.WithWorkDir(root),
+				localexec.WithWorkspaceMode(
+					localexec.WorkspaceModeTrustedLocal,
+				),
+			)
+		}
 		if *flagInputsHost != "" {
 			lopts = append(
 				lopts, localexec.WithWorkspaceInputsHostBase(

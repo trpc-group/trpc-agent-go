@@ -29,6 +29,8 @@ type EvalSetResult struct {
 	EvalSetID string `json:"evalSetId,omitempty"`
 	// EvalCaseResults contains results for each eval case.
 	EvalCaseResults []*EvalCaseResult `json:"evalCaseResults,omitempty"`
+	// Summary provides aggregated statistics for multi-run results.
+	Summary *EvalSetResultSummary `json:"summary,omitempty"`
 	// CreationTimestamp when this result was created.
 	CreationTimestamp *epochtime.EpochTime `json:"creationTimestamp,omitempty"`
 }
@@ -39,8 +41,12 @@ type EvalCaseResult struct {
 	EvalSetID string `json:"evalSetId,omitempty"`
 	// EvalID identifies the eval case.
 	EvalID string `json:"evalId,omitempty"`
+	// RunID identifies the run that produced this case result.
+	RunID int `json:"runId,omitempty"`
 	// FinalEvalStatus is the final eval status for this eval case.
 	FinalEvalStatus status.EvalStatus `json:"finalEvalStatus,omitempty"`
+	// ErrorMessage contains the error message when evaluation execution failed.
+	ErrorMessage string `json:"errorMessage,omitempty"`
 	// OverallEvalMetricResults contains overall result for each metric for the entire eval case.
 	OverallEvalMetricResults []*EvalMetricResult `json:"overallEvalMetricResults,omitempty"`
 	// EvalMetricResultPerInvocation contains result for each metric on a per invocation basis.
@@ -102,4 +108,6 @@ type Manager interface {
 	Get(ctx context.Context, appName, evalSetResultID string) (*EvalSetResult, error)
 	// List returns all available evaluation results.
 	List(ctx context.Context, appName string) ([]string, error)
+	// Close releases resources held by the manager.
+	Close() error
 }

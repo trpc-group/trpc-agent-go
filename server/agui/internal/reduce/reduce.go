@@ -11,11 +11,14 @@
 package reduce
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/multimodal"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -74,6 +77,7 @@ func Reduce(appName, userID string, events []session.TrackEvent) ([]aguievents.M
 			break
 		}
 	}
+	r.finalizePartial()
 	messages := make([]aguievents.Message, 0, len(r.messages))
 	for _, message := range r.messages {
 		messages = append(messages, *message)
@@ -123,8 +127,70 @@ func (r *reducer) reduceEvent(evt aguievents.Event) error {
 		return r.handleToolEnd(e)
 	case *aguievents.ToolCallResultEvent:
 		return r.handleToolResult(e)
+	case *aguievents.CustomEvent:
+		if e.Name == multimodal.CustomEventNameUserMessage {
+			return r.handleUserMessageCustomEvent(e)
+		}
+		return r.handleActivity(e)
 	default:
 		return r.handleActivity(e)
+	}
+}
+
+func (r *reducer) handleUserMessageCustomEvent(e *aguievents.CustomEvent) error {
+	if e.Value == nil {
+		return fmt.Errorf("user message custom event missing value")
+	}
+	data, err := json.Marshal(e.Value)
+	if err != nil {
+		return fmt.Errorf("marshal user message custom event value: %w", err)
+	}
+	var message types.Message
+	if err := json.Unmarshal(data, &message); err != nil {
+		return fmt.Errorf("unmarshal user message custom event value: %w", err)
+	}
+	if message.Role != types.RoleUser {
+		return fmt.Errorf("user message custom event role must be user: %s", message.Role)
+	}
+	if message.ID == "" {
+		return fmt.Errorf("user message custom event missing message id")
+	}
+	if message.Name == "" {
+		message.Name = r.userID
+	}
+	if _, ok := message.ContentString(); !ok {
+		if _, ok := message.ContentInputContents(); !ok {
+			return fmt.Errorf("user message custom event content is invalid")
+		}
+	}
+	r.messages = append(r.messages, &message)
+	return nil
+}
+
+func (r *reducer) finalizePartial() {
+	for _, state := range r.texts {
+		if state.phase != textReceiving || state.content.Len() == 0 {
+			continue
+		}
+		text := strings.Clone(state.content.String())
+		r.messages[state.index].Content = &text
+	}
+	for _, state := range r.toolCalls {
+		if state.phase != toolAwaitingArgs || state.content.Len() == 0 {
+			continue
+		}
+		parentState, ok := r.texts[state.messageID]
+		if !ok {
+			continue
+		}
+		if parentState.index < 0 || parentState.index >= len(r.messages) {
+			continue
+		}
+		parent := r.messages[parentState.index]
+		if state.index < 0 || state.index >= len(parent.ToolCalls) {
+			continue
+		}
+		parent.ToolCalls[state.index].Function.Arguments = strings.Clone(state.content.String())
 	}
 }
 
@@ -151,8 +217,8 @@ func (r *reducer) handleTextStart(e *aguievents.TextMessageStartEvent) error {
 	}
 	r.messages = append(r.messages, &aguievents.Message{
 		ID:   e.MessageID,
-		Role: role,
-		Name: &name,
+		Role: types.Role(role),
+		Name: name,
 	})
 	r.texts[e.MessageID] = &textState{
 		role:  role,
@@ -218,8 +284,8 @@ func (r *reducer) handleTextChunk(e *aguievents.TextMessageChunkEvent) error {
 	}
 	r.messages = append(r.messages, &aguievents.Message{
 		ID:      *e.MessageID,
-		Role:    role,
-		Name:    &name,
+		Role:    types.Role(role),
+		Name:    name,
 		Content: &content,
 	})
 	builder := strings.Builder{}
@@ -250,8 +316,8 @@ func (r *reducer) handleToolStart(e *aguievents.ToolCallStartEvent) error {
 		name := r.appName
 		r.messages = append(r.messages, &aguievents.Message{
 			ID:   *e.ParentMessageID,
-			Role: string(model.RoleAssistant),
-			Name: &name,
+			Role: types.Role(string(model.RoleAssistant)),
+			Name: name,
 		})
 		parentState = &textState{
 			role:  string(model.RoleAssistant),
@@ -325,9 +391,9 @@ func (r *reducer) handleToolResult(e *aguievents.ToolCallResultEvent) error {
 	toolCallID := strings.Clone(e.ToolCallID)
 	msg := &aguievents.Message{
 		ID:         e.MessageID,
-		Role:       role,
+		Role:       types.Role(role),
 		Content:    &content,
-		ToolCallID: &toolCallID,
+		ToolCallID: toolCallID,
 	}
 	r.messages = append(r.messages, msg)
 	state.phase = toolCompleted
@@ -341,37 +407,37 @@ func (r *reducer) handleActivity(e aguievents.Event) error {
 	case *aguievents.StepStartedEvent:
 		activity.ID = e.ID()
 		activity.ActivityType = string(e.Type())
-		activity.ActivityContent = map[string]any{
+		activity.Content = map[string]any{
 			"stepName": e.StepName,
 		}
 	case *aguievents.StepFinishedEvent:
 		activity.ID = e.ID()
 		activity.ActivityType = string(e.Type())
-		activity.ActivityContent = map[string]any{
+		activity.Content = map[string]any{
 			"stepName": e.StepName,
 		}
 	case *aguievents.StateSnapshotEvent:
 		activity.ID = e.ID()
 		activity.ActivityType = string(e.Type())
-		activity.ActivityContent = map[string]any{
+		activity.Content = map[string]any{
 			"snapshot": e.Snapshot,
 		}
 	case *aguievents.StateDeltaEvent:
 		activity.ID = e.ID()
 		activity.ActivityType = string(e.Type())
-		activity.ActivityContent = map[string]any{
+		activity.Content = map[string]any{
 			"delta": e.Delta,
 		}
 	case *aguievents.MessagesSnapshotEvent:
 		activity.ID = e.ID()
 		activity.ActivityType = string(e.Type())
-		activity.ActivityContent = map[string]any{
+		activity.Content = map[string]any{
 			"messages": e.Messages,
 		}
 	case *aguievents.ActivitySnapshotEvent:
 		activity.ID = e.ID()
 		activity.ActivityType = string(e.Type())
-		activity.ActivityContent = map[string]any{
+		activity.Content = map[string]any{
 			"messageId":    e.MessageID,
 			"activityType": e.ActivityType,
 			"content":      e.Content,
@@ -380,7 +446,7 @@ func (r *reducer) handleActivity(e aguievents.Event) error {
 	case *aguievents.ActivityDeltaEvent:
 		activity.ID = e.ID()
 		activity.ActivityType = string(e.Type())
-		activity.ActivityContent = map[string]any{
+		activity.Content = map[string]any{
 			"messageId":    e.MessageID,
 			"activityType": e.ActivityType,
 			"patch":        e.Patch,
@@ -388,14 +454,14 @@ func (r *reducer) handleActivity(e aguievents.Event) error {
 	case *aguievents.CustomEvent:
 		activity.ID = e.ID()
 		activity.ActivityType = string(e.Type())
-		activity.ActivityContent = map[string]any{
+		activity.Content = map[string]any{
 			"name":  e.Name,
 			"value": e.Value,
 		}
 	case *aguievents.RawEvent:
 		activity.ID = e.ID()
 		activity.ActivityType = string(e.Type())
-		activity.ActivityContent = map[string]any{
+		activity.Content = map[string]any{
 			"source": e.Source,
 			"event":  e.Event,
 		}

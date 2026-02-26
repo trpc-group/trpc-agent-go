@@ -38,6 +38,8 @@ const (
 	ThinkingTokensKey = "thinking_tokens"
 	// ReasoningContentKey is the key used for reasoning content in API responses.
 	ReasoningContentKey = "reasoning_content"
+	// ReasoningContentKeyAlt is the alternative key used by some providers (e.g. Ollama).
+	ReasoningContentKeyAlt = "reasoning"
 	// EnabledThinkingKey is the key used for enabling thinking mode in API requests e.g. Qwen model.
 	EnabledThinkingKey = "enabled_thinking"
 )
@@ -336,6 +338,68 @@ type GenerationConfig struct {
 
 	// ThinkingTokens controls the length of thinking for Claude and Gemini models via OpenAI API.
 	ThinkingTokens *int `json:"thinking_tokens,omitempty"`
+}
+
+// GenerationConfigPatch selectively overrides fields in GenerationConfig.
+//
+// It is designed for per-request overrides where callers only want to change
+// a subset of parameters (e.g. temperature or max_tokens) without rebuilding
+// agents or graphs.
+//
+// Semantics:
+//   - Pointer fields: nil means "do not override".
+//   - Stop: nil means "do not override"; an empty slice clears Stop.
+//   - Stream: nil means "do not override".
+type GenerationConfigPatch struct {
+	MaxTokens        *int     `json:"max_tokens,omitempty"`
+	Temperature      *float64 `json:"temperature,omitempty"`
+	TopP             *float64 `json:"top_p,omitempty"`
+	Stream           *bool    `json:"stream,omitempty"`
+	Stop             []string `json:"stop,omitempty"`
+	PresencePenalty  *float64 `json:"presence_penalty,omitempty"`
+	FrequencyPenalty *float64 `json:"frequency_penalty,omitempty"`
+	ReasoningEffort  *string  `json:"reasoning_effort,omitempty"`
+	ThinkingEnabled  *bool    `json:"thinking_enabled,omitempty"`
+	ThinkingTokens   *int     `json:"thinking_tokens,omitempty"`
+}
+
+// ApplyGenerationConfigPatch applies patch to base and returns the merged
+// configuration.
+func ApplyGenerationConfigPatch(
+	base GenerationConfig,
+	patch GenerationConfigPatch,
+) GenerationConfig {
+	if patch.MaxTokens != nil {
+		base.MaxTokens = patch.MaxTokens
+	}
+	if patch.Temperature != nil {
+		base.Temperature = patch.Temperature
+	}
+	if patch.TopP != nil {
+		base.TopP = patch.TopP
+	}
+	if patch.Stream != nil {
+		base.Stream = *patch.Stream
+	}
+	if patch.Stop != nil {
+		base.Stop = append([]string{}, patch.Stop...)
+	}
+	if patch.PresencePenalty != nil {
+		base.PresencePenalty = patch.PresencePenalty
+	}
+	if patch.FrequencyPenalty != nil {
+		base.FrequencyPenalty = patch.FrequencyPenalty
+	}
+	if patch.ReasoningEffort != nil {
+		base.ReasoningEffort = patch.ReasoningEffort
+	}
+	if patch.ThinkingEnabled != nil {
+		base.ThinkingEnabled = patch.ThinkingEnabled
+	}
+	if patch.ThinkingTokens != nil {
+		base.ThinkingTokens = patch.ThinkingTokens
+	}
+	return base
 }
 
 // Request is the request to the model.

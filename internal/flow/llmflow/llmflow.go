@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"sort"
 	"time"
 
@@ -23,7 +24,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
@@ -34,6 +37,11 @@ import (
 const (
 	// Timeout for event completion signaling.
 	eventCompletionTimeout = 5 * time.Second
+
+	flowRunPanicLogFmt = "Flow execution panic (invocation: %s, " +
+		"agent: %s): %v\n%s"
+
+	flowRunPanicErrFmt = "flow panic: %v"
 
 	// stateKeyToolsSnapshot is the invocation state key used to cache the
 	// final tool list for a single Invocation. This ensures that the tool
@@ -79,6 +87,7 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
 		defer close(eventChan)
+		defer recoverFlowRunPanic(ctx, invocation, eventChan)
 
 		// Optionally resume from pending tool calls before starting a new
 		// LLM cycle. This covers scenarios where the previous run stopped
@@ -149,6 +158,49 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 	}(runCtx)
 
 	return eventChan, nil
+}
+
+func recoverFlowRunPanic(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	eventChan chan<- *event.Event,
+) {
+	recovered := recover()
+	if recovered == nil {
+		return
+	}
+
+	stack := debug.Stack()
+	log.ErrorfContext(
+		ctx,
+		flowRunPanicLogFmt,
+		flowInvocationID(invocation),
+		flowAgentName(invocation),
+		recovered,
+		string(stack),
+	)
+
+	errorEvent := event.NewErrorEvent(
+		flowInvocationID(invocation),
+		flowAgentName(invocation),
+		model.ErrorTypeFlowError,
+		fmt.Sprintf(flowRunPanicErrFmt, recovered),
+	)
+	agent.EmitEvent(ctx, invocation, eventChan, errorEvent)
+}
+
+func flowInvocationID(invocation *agent.Invocation) string {
+	if invocation == nil {
+		return ""
+	}
+	return invocation.InvocationID
+}
+
+func flowAgentName(invocation *agent.Invocation) string {
+	if invocation == nil {
+		return ""
+	}
+	return invocation.AgentName
 }
 
 // maybeResumePendingToolCalls inspects the latest session events and, when
@@ -249,10 +301,11 @@ func (f *Flow) runOneStep(
 	defer span.End()
 
 	// 2. Call LLM (get response channel).
-	responseChan, err := f.callLLM(ctx, invocation, llmRequest)
+	ctx, responseChan, err := f.callLLM(ctx, invocation, llmRequest)
 	if err != nil {
 		return nil, err
 	}
+
 	// 3. Process streaming responses.
 	return f.processStreamingResponses(ctx, invocation, llmRequest, responseChan, eventChan, span)
 }
@@ -270,7 +323,7 @@ func (f *Flow) processStreamingResponses(
 	timingInfo := invocation.GetOrCreateTimingInfo()
 
 	// Create telemetry tracker and defer metrics recording
-	tracker := itelemetry.NewChatMetricsTracker(ctx, invocation, llmRequest, timingInfo, &err)
+	tracker := itelemetry.NewChatMetricsTracker(ctx, invocation, llmRequest, timingInfo, nil, &err)
 	defer tracker.RecordMetrics()()
 
 	for response := range responseChan {
@@ -292,7 +345,10 @@ func (f *Flow) processStreamingResponses(
 		if customResp != nil {
 			response = customResp
 		}
-
+		// Repair tool call arguments in place when needed.
+		if jsonrepair.IsToolCallArgumentsJSONRepairEnabled(invocation) {
+			jsonrepair.RepairResponseToolCallArgumentsInPlace(ctx, response)
+		}
 		// 4. Create and send LLM response using the clean constructor.
 		llmResponseEvent := f.createLLMResponseEvent(invocation, response, llmRequest)
 		agent.EmitEvent(ctx, invocation, eventChan, llmResponseEvent)
@@ -309,8 +365,13 @@ func (f *Flow) processStreamingResponses(
 			return lastEvent, err
 		}
 
-		itelemetry.TraceChat(span, invocation, llmRequest, response, llmResponseEvent.ID, tracker.FirstTokenTimeDuration())
-
+		itelemetry.TraceChat(span, &itelemetry.TraceChatAttributes{
+			Invocation:       invocation,
+			Request:          llmRequest,
+			Response:         response,
+			EventID:          llmResponseEvent.ID,
+			TimeToFirstToken: tracker.FirstTokenTimeDuration(),
+		})
 	}
 
 	return lastEvent, nil
@@ -461,7 +522,6 @@ func (f *Flow) preprocess(
 	for _, processor := range f.requestProcessors {
 		processor.ProcessRequest(ctx, invocation, llmRequest, eventChan)
 	}
-
 	// Add tools to the request with optional filtering.
 	if invocation.Agent != nil {
 		tools := f.getFilteredTools(ctx, invocation)
@@ -469,6 +529,8 @@ func (f *Flow) preprocess(
 			llmRequest.Tools[t.Declaration().Name] = t
 		}
 	}
+	// Sanitize invalid tool calls in history to avoid poisoning future requests.
+	llmRequest.Messages = toolcall.SanitizeMessagesWithTools(llmRequest.Messages, llmRequest.Tools)
 }
 
 // UserToolsProvider is an optional interface that agents can implement to expose
@@ -574,9 +636,9 @@ func (f *Flow) callLLM(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	llmRequest *model.Request,
-) (<-chan *model.Response, error) {
+) (context.Context, <-chan *model.Response, error) {
 	if invocation.Model == nil {
-		return nil, errors.New("no model available for LLM call")
+		return ctx, nil, errors.New("no model available for LLM call")
 	}
 
 	log.DebugfContext(
@@ -589,7 +651,7 @@ func (f *Flow) callLLM(
 	// configured (<= 0), this is a no-op and preserves existing behavior.
 	if err := invocation.IncLLMCallCount(); err != nil {
 		log.Errorf("LLM call limit exceeded for agent %s: %v", invocation.AgentName, err)
-		return nil, err
+		return ctx, nil, err
 	}
 
 	// Run before model callbacks if they exist.
@@ -607,7 +669,7 @@ func (f *Flow) callLLM(
 					invocation.AgentName,
 					err,
 				)
-				return nil, err
+				return ctx, nil, err
 			}
 			if result != nil && result.Context != nil {
 				ctx = result.Context
@@ -616,7 +678,7 @@ func (f *Flow) callLLM(
 				responseChan := make(chan *model.Response, 1)
 				responseChan <- result.CustomResponse
 				close(responseChan)
-				return responseChan, nil
+				return ctx, responseChan, nil
 			}
 		}
 	}
@@ -632,7 +694,7 @@ func (f *Flow) callLLM(
 				invocation.AgentName,
 				err,
 			)
-			return nil, err
+			return ctx, nil, err
 		}
 		// Use the context from result if provided.
 		if result != nil && result.Context != nil {
@@ -643,7 +705,7 @@ func (f *Flow) callLLM(
 			responseChan := make(chan *model.Response, 1)
 			responseChan <- result.CustomResponse
 			close(responseChan)
-			return responseChan, nil
+			return ctx, responseChan, nil
 		}
 	}
 
@@ -656,10 +718,10 @@ func (f *Flow) callLLM(
 			invocation.AgentName,
 			err,
 		)
-		return nil, err
+		return ctx, nil, err
 	}
 
-	return responseChan, nil
+	return ctx, responseChan, nil
 }
 
 // postprocess handles post-LLM call processing using response processors.

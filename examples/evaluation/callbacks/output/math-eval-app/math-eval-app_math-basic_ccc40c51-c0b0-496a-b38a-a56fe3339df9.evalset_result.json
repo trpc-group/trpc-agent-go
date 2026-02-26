@@ -1,0 +1,127 @@
+{
+  "evalSetResultId": "math-eval-app_math-basic_ccc40c51-c0b0-496a-b38a-a56fe3339df9",
+  "evalSetResultName": "math-eval-app_math-basic_ccc40c51-c0b0-496a-b38a-a56fe3339df9",
+  "evalSetId": "math-basic",
+  "evalCaseResults": [
+    {
+      "evalSetId": "math-basic",
+      "evalId": "calc_add",
+      "finalEvalStatus": "passed",
+      "overallEvalMetricResults": [
+        {
+          "metricName": "tool_trajectory_avg_score",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 1,
+          "criterion": {
+            "toolTrajectory": {
+              "defaultStrategy": {
+                "name": {
+                  "matchStrategy": "exact"
+                },
+                "arguments": {
+                  "matchStrategy": "exact"
+                },
+                "result": {
+                  "matchStrategy": "exact"
+                }
+              }
+            }
+          },
+          "details": {
+            "score": 1
+          }
+        }
+      ],
+      "evalMetricResultPerInvocation": [
+        {
+          "actualInvocation": {
+            "invocationId": "645e16ff-98ce-4dca-b160-65d33438bf31",
+            "userContent": {
+              "role": "user",
+              "content": "calc add 2 3"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "The result of 2 + 3 is **5**."
+            },
+            "tools": [
+              {
+                "id": "call_d49dfef4974f4955a6960694",
+                "name": "calculator",
+                "arguments": {
+                  "a": 2,
+                  "b": 3,
+                  "operation": "add"
+                },
+                "result": {
+                  "a": 2,
+                  "b": 3,
+                  "operation": "add",
+                  "result": 5
+                }
+              }
+            ]
+          },
+          "expectedInvocation": {
+            "invocationId": "calc_add-1",
+            "userContent": {
+              "role": "user",
+              "content": "calc add 2 3"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "calc result: 5"
+            },
+            "tools": [
+              {
+                "id": "tool_use_1",
+                "name": "calculator",
+                "arguments": {
+                  "a": 2,
+                  "b": 3,
+                  "operation": "add"
+                },
+                "result": {
+                  "a": 2,
+                  "b": 3,
+                  "operation": "add",
+                  "result": 5
+                }
+              }
+            ]
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "criterion": {
+                "toolTrajectory": {
+                  "defaultStrategy": {
+                    "name": {
+                      "matchStrategy": "exact"
+                    },
+                    "arguments": {
+                      "matchStrategy": "exact"
+                    },
+                    "result": {
+                      "matchStrategy": "exact"
+                    }
+                  }
+                }
+              },
+              "details": {
+                "score": 1
+              }
+            }
+          ]
+        }
+      ],
+      "sessionId": "da25bf57-2551-4702-8583-eda9d490261c",
+      "userId": "user"
+    }
+  ],
+  "creationTimestamp": 1769417718.8172152
+}

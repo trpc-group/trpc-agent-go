@@ -341,3 +341,418 @@ func TestConstants(t *testing.T) {
 		}
 	}
 }
+
+func TestPlanner_IntentDescriptionDetection(t *testing.T) {
+	p := New()
+	ctx := context.Background()
+	invocation := &agent.Invocation{}
+
+	tests := []struct {
+		name         string
+		content      string
+		done         bool
+		expectedDone bool
+		description  string
+	}{
+		{
+			name:         "intent_description_i_will",
+			content:      "I will fetch the Special:Log page for the Legume article to inspect log entries.",
+			done:         true,
+			expectedDone: false, // Should be marked as not done
+			description:  "Intent description with 'I will' should not be final",
+		},
+		{
+			name:         "intent_with_action_tag",
+			content:      "/*ACTION*/\nI will search for the information.\nfunctions.web_search",
+			done:         true,
+			expectedDone: false,
+			description:  "Content with ACTION tag but no actual tool call should not be final",
+		},
+		{
+			name:         "intent_with_planning_tag",
+			content:      "/*PLANNING*/\n1. First search for the author\n2. Then find their publications",
+			done:         true,
+			expectedDone: false,
+			description:  "Content with PLANNING tag should not be final",
+		},
+		{
+			name:         "final_answer_with_tag",
+			content:      "/*FINAL_ANSWER*/ The answer is 42.",
+			done:         true,
+			expectedDone: true, // Should remain done because it has FINAL_ANSWER tag
+			description:  "Content with FINAL_ANSWER tag should be final",
+		},
+		{
+			name:         "empty_final_answer_tag",
+			content:      FinalAnswerTag,
+			done:         true,
+			expectedDone: false,
+			description:  "Empty FINAL_ANSWER tag should not be final",
+		},
+		{
+			name: "final_answer_tag_then_action",
+			content: strings.Join(
+				[]string{FinalAnswerTag, ActionTag},
+				"\n\n",
+			),
+			done:         true,
+			expectedDone: false,
+			description: "FINAL_ANSWER tag without answer should not " +
+				"be final",
+		},
+		{
+			name: "action_with_final_answer_prefix",
+			content: strings.Join(
+				[]string{
+					ActionTag,
+					finalAnswerPrefix + " 42",
+				},
+				"\n",
+			),
+			done:         true,
+			expectedDone: true,
+			description: "FINAL ANSWER line should allow a final " +
+				"response",
+		},
+		{
+			name:         "intent_with_final_answer",
+			content:      "I will provide the answer now. /*FINAL_ANSWER*/ The result is 42.",
+			done:         true,
+			expectedDone: true, // Has FINAL_ANSWER, so it's final
+			description:  "Content with both intent and FINAL_ANSWER should be final",
+		},
+		{
+			name:         "normal_response_no_intent",
+			content:      "The capital of France is Paris.",
+			done:         true,
+			expectedDone: true, // No intent patterns, should remain as is
+			description:  "Normal response without intent patterns should remain final",
+		},
+		{
+			name:         "empty_content",
+			content:      "",
+			done:         true,
+			expectedDone: true, // Empty content is not an intent description
+			description:  "Empty content should remain final",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			response := &model.Response{
+				Done: tt.done,
+				Choices: []model.Choice{
+					{
+						Message: model.Message{
+							Role:    model.RoleAssistant,
+							Content: tt.content,
+						},
+					},
+				},
+			}
+
+			result := p.ProcessPlanningResponse(ctx, invocation, response)
+			if result == nil {
+				t.Fatal("ProcessPlanningResponse() returned nil")
+			}
+
+			if result.Done != tt.expectedDone {
+				t.Errorf("%s: expected Done=%v, got Done=%v", tt.description, tt.expectedDone, result.Done)
+			}
+		})
+	}
+}
+
+func TestPlanner_IntentDescriptionWithToolCalls(t *testing.T) {
+	p := New()
+	ctx := context.Background()
+	invocation := &agent.Invocation{}
+
+	// When there are valid tool calls, Done should remain unchanged
+	// even if content looks like intent description
+	response := &model.Response{
+		Done: true,
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "I will search for the answer now.",
+					ToolCalls: []model.ToolCall{
+						{
+							Function: model.FunctionDefinitionParam{
+								Name: "web_search",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result := p.ProcessPlanningResponse(ctx, invocation, response)
+	if result == nil {
+		t.Fatal("ProcessPlanningResponse() returned nil")
+	}
+
+	// When there are tool calls, we don't modify Done
+	// (the presence of tool calls will cause IsFinalResponse to return false anyway)
+	if result.Done != true {
+		t.Error("Response with tool calls should keep Done=true (tool calls handle continuation)")
+	}
+}
+
+func TestPlanner_IsIntentDescription(t *testing.T) {
+	p := New()
+
+	tests := []struct {
+		content  string
+		expected bool
+	}{
+		{"I will search for the answer", true},
+		{"I'll fetch the data", true},
+		{"I am going to process this", true},
+		{"I'm going to look this up", true},
+		{"/*ACTION*/ Running search", true},
+		{"/*PLANNING*/ Step 1: Search", true},
+		{"/*REPLANNING*/ New approach", true},
+		{"The answer is 42", false},
+		{"Paris is the capital of France", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		result := p.isIntentDescription(tt.content)
+		if result != tt.expected {
+			t.Errorf("isIntentDescription(%q) = %v, want %v", tt.content, result, tt.expected)
+		}
+	}
+}
+
+// TestPlanner_IsIntentDescription_OnlyAtContentStart tests that intent prefixes
+// only match when they appear at the very beginning of the content (first sentence),
+// not when they appear in later lines or in the middle of a sentence.
+func TestPlanner_IsIntentDescription_OnlyAtContentStart(t *testing.T) {
+	p := New()
+
+	tests := []struct {
+		name     string
+		content  string
+		expected bool
+	}{
+		// Should match: intent prefix at start of content
+		{
+			name:     "I will at content start",
+			content:  "I will search for the answer",
+			expected: true,
+		},
+		{
+			name:     "I'll at content start",
+			content:  "I'll fetch the data now",
+			expected: true,
+		},
+		{
+			name:     "I am going to at content start",
+			content:  "I am going to process this request",
+			expected: true,
+		},
+		{
+			name:     "I'm going to at content start",
+			content:  "I'm going to look this up",
+			expected: true,
+		},
+		// Should match: intent prefix at content start with leading whitespace
+		{
+			name:     "I will with leading spaces",
+			content:  "  I will search for the answer",
+			expected: true,
+		},
+		{
+			name:     "I'll with leading tabs",
+			content:  "\tI'll fetch the data",
+			expected: true,
+		},
+		// Should NOT match: intent prefix at start of later lines (not first sentence)
+		{
+			name:     "I will at line start in multiline",
+			content:  "Here is my analysis:\nI will search for more details.",
+			expected: false,
+		},
+		{
+			name:     "I'll at line start in multiline",
+			content:  "Based on the context:\nI'll proceed with the search.",
+			expected: false,
+		},
+		{
+			name:     "I am going to at line start in multiline",
+			content:  "After reviewing:\nI am going to fetch the data.",
+			expected: false,
+		},
+		{
+			name:     "I'm going to at line start in multiline",
+			content:  "The plan is:\nI'm going to execute step 1.",
+			expected: false,
+		},
+		// Should NOT match: intent prefix in the middle of a sentence
+		{
+			name:     "I will in middle of sentence",
+			content:  "Let me know if I will need to search again.",
+			expected: false,
+		},
+		{
+			name:     "I'll in middle of sentence",
+			content:  "Please tell me what I'll need to do next.",
+			expected: false,
+		},
+		{
+			name:     "I am going to in middle of sentence",
+			content:  "The user asked if I am going to help them.",
+			expected: false,
+		},
+		{
+			name:     "I'm going to in middle of sentence",
+			content:  "They wondered if I'm going to provide an answer.",
+			expected: false,
+		},
+		// Should NOT match: intent phrases as part of quoted text
+		{
+			name:     "I will in quoted text",
+			content:  "The document says \"I will return tomorrow\".",
+			expected: false,
+		},
+		{
+			name:     "I'll in quoted text",
+			content:  "She mentioned \"I'll be there soon\".",
+			expected: false,
+		},
+		// Should NOT match: intent phrases after conjunction
+		{
+			name:     "I will after and",
+			content:  "You should wait and I will respond shortly.",
+			expected: false,
+		},
+		{
+			name:     "I'll after but",
+			content:  "That's incorrect, but I'll help you fix it.",
+			expected: false,
+		},
+		// Should NOT match: normal final answers containing these phrases incidentally
+		{
+			name:     "final answer mentioning I will",
+			content:  "Based on my analysis, the process shows that I will need more data to confirm, but the preliminary answer is 42.",
+			expected: false,
+		},
+		{
+			name:     "explanation with I'll",
+			content:  "The result is correct. Note that I'll highlight the key points: first item is A, second is B.",
+			expected: false,
+		},
+		// Edge cases
+		{
+			name:     "empty content",
+			content:  "",
+			expected: false,
+		},
+		{
+			name:     "only whitespace",
+			content:  "   \n\t  ",
+			expected: false,
+		},
+		{
+			name:     "I will without space (should not match)",
+			content:  "Iwill search",
+			expected: false,
+		},
+		{
+			name:     "I'll without space (should not match)",
+			content:  "I'llfetch",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := p.isIntentDescription(tt.content)
+			if result != tt.expected {
+				t.Errorf("isIntentDescription(%q) = %v, want %v", tt.content, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestPlanner_HasFinalAnswerTag(t *testing.T) {
+	p := New()
+
+	tests := []struct {
+		content  string
+		expected bool
+	}{
+		{"/*FINAL_ANSWER*/ The answer is 42", true},
+		{"Some text /*FINAL_ANSWER*/ with answer", true},
+		{"No final answer here", false},
+		{"", false},
+		{"/*PLANNING*/ Plan here", false},
+	}
+
+	for _, tt := range tests {
+		result := p.hasFinalAnswerTag(tt.content)
+		if result != tt.expected {
+			t.Errorf("hasFinalAnswerTag(%q) = %v, want %v", tt.content, result, tt.expected)
+		}
+	}
+}
+
+func TestPlanner_HasValidToolCalls(t *testing.T) {
+	p := New()
+
+	tests := []struct {
+		name     string
+		response *model.Response
+		expected bool
+	}{
+		{
+			name:     "nil response",
+			response: nil,
+			expected: false,
+		},
+		{
+			name: "empty choices",
+			response: &model.Response{
+				Choices: []model.Choice{},
+			},
+			expected: false,
+		},
+		{
+			name: "no tool calls",
+			response: &model.Response{
+				Choices: []model.Choice{
+					{Message: model.Message{Content: "hello"}},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "with tool calls",
+			response: &model.Response{
+				Choices: []model.Choice{
+					{
+						Message: model.Message{
+							ToolCalls: []model.ToolCall{
+								{Function: model.FunctionDefinitionParam{Name: "test"}},
+							},
+						},
+					},
+				},
+			},
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := p.hasValidToolCalls(tt.response)
+			if result != tt.expected {
+				t.Errorf("hasValidToolCalls() = %v, want %v", result, tt.expected)
+			}
+		})
+	}
+}

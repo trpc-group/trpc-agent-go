@@ -10,6 +10,7 @@ package summary
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,6 +28,14 @@ func TestOptions(t *testing.T) {
 		assert.Equal(t, "test", sm.prompt)
 	})
 
+	t.Run("WithName", func(t *testing.T) {
+		s := NewSummarizer(&testModel{}, WithName("  demo  "))
+		sm, ok := s.(*sessionSummarizer)
+		assert.True(t, ok)
+		assert.Equal(t, "  demo  ", sm.name)
+		assert.Equal(t, "  demo  ", sm.Metadata()[metadataKeySummarizerName])
+	})
+
 	t.Run("WithTokenThreshold", func(t *testing.T) {
 		// Verify metadata increments and logic via isolated checks.
 		s := NewSummarizer(&testModel{}, WithTokenThreshold(2))
@@ -35,8 +44,20 @@ func TestOptions(t *testing.T) {
 
 		sIso := NewSummarizer(&testModel{}, WithTokenThreshold(2))
 		sess := &session.Session{Events: []event.Event{
-			{Response: &model.Response{Usage: &model.Usage{TotalTokens: 2}}, Timestamp: time.Now()},
-			{Response: &model.Response{Usage: &model.Usage{TotalTokens: 3}}, Timestamp: time.Now()},
+			{
+				Author:    "user",
+				Timestamp: time.Now(),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Content: strings.Repeat("a", 40)},
+				}}},
+			},
+			{
+				Author:    "assistant",
+				Timestamp: time.Now(),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Content: strings.Repeat("b", 40)},
+				}}},
+			},
 		}}
 		assert.True(t, sIso.ShouldSummarize(sess))
 	})
@@ -66,8 +87,20 @@ func TestOptions(t *testing.T) {
 		checks := []Checker{CheckEventThreshold(1), CheckTokenThreshold(4)}
 		s := NewSummarizer(&testModel{}, WithChecksAll(checks...))
 		sess := &session.Session{Events: []event.Event{
-			{Response: &model.Response{Usage: &model.Usage{TotalTokens: 5}}, Timestamp: time.Now()},
-			{Response: &model.Response{Usage: &model.Usage{TotalTokens: 5}}, Timestamp: time.Now()},
+			{
+				Author:    "user",
+				Timestamp: time.Now(),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Content: strings.Repeat("a", 40)},
+				}}},
+			},
+			{
+				Author:    "assistant",
+				Timestamp: time.Now(),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Content: strings.Repeat("b", 40)},
+				}}},
+			},
 		}}
 		assert.True(t, s.ShouldSummarize(sess))
 	})

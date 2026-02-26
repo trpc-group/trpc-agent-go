@@ -27,27 +27,30 @@ const defaultNumRuns = 1
 
 // options holds the configuration options for the evaluation.
 type options struct {
-	evalSetManager                   evalset.Manager
-	evalResultManager                evalresult.Manager
-	metricManager                    metric.Manager
-	registry                         registry.Registry
-	evalService                      service.Service
-	numRuns                          int
-	evalCaseParallelism              int
-	evalCaseParallelInferenceEnabled bool
+	evalSetManager                    evalset.Manager
+	evalResultManager                 evalresult.Manager
+	metricManager                     metric.Manager
+	registry                          registry.Registry
+	evalService                       service.Service
+	callbacks                         *service.Callbacks
+	numRuns                           int
+	evalCaseParallelism               int
+	evalCaseParallelInferenceEnabled  bool
+	evalCaseParallelEvaluationEnabled bool
 }
 
 // newOptions creates a new options with the default values.
 func newOptions(opt ...Option) *options {
 	// Initialize options with default values.
 	opts := &options{
-		numRuns:                          defaultNumRuns,
-		evalSetManager:                   evalsetinmemory.New(),
-		evalResultManager:                evalresultinmemory.New(),
-		metricManager:                    metricinmemory.New(),
-		registry:                         registry.New(),
-		evalCaseParallelism:              runtime.GOMAXPROCS(0),
-		evalCaseParallelInferenceEnabled: false,
+		numRuns:                           defaultNumRuns,
+		evalSetManager:                    evalsetinmemory.New(),
+		evalResultManager:                 evalresultinmemory.New(),
+		metricManager:                     metricinmemory.New(),
+		registry:                          registry.New(),
+		evalCaseParallelism:               runtime.GOMAXPROCS(0),
+		evalCaseParallelInferenceEnabled:  false,
+		evalCaseParallelEvaluationEnabled: false,
 	}
 	// Apply user options.
 	for _, o := range opt {
@@ -94,6 +97,13 @@ func WithEvaluationService(s service.Service) Option {
 	}
 }
 
+// WithCallbacks sets evaluation callbacks for evaluation service.
+func WithCallbacks(c *service.Callbacks) Option {
+	return func(o *options) {
+		o.callbacks = c
+	}
+}
+
 // WithNumRuns sets the number of runs.
 func WithNumRuns(numRuns int) Option {
 	return func(o *options) {
@@ -101,7 +111,7 @@ func WithNumRuns(numRuns int) Option {
 	}
 }
 
-// WithEvalCaseParallelism sets the maximum number of eval cases inferred in parallel.
+// WithEvalCaseParallelism sets the maximum number of eval cases processed in parallel.
 func WithEvalCaseParallelism(parallelism int) Option {
 	return func(o *options) {
 		o.evalCaseParallelism = parallelism
@@ -112,5 +122,12 @@ func WithEvalCaseParallelism(parallelism int) Option {
 func WithEvalCaseParallelInferenceEnabled(enabled bool) Option {
 	return func(o *options) {
 		o.evalCaseParallelInferenceEnabled = enabled
+	}
+}
+
+// WithEvalCaseParallelEvaluationEnabled enables or disables parallel evaluation across eval cases.
+func WithEvalCaseParallelEvaluationEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.evalCaseParallelEvaluationEnabled = enabled
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -932,6 +933,74 @@ func TestLLMAgent_OptionsWithCodeExecutor(t *testing.T) {
 	require.Equal(t, mockCE, agt.CodeExecutor())
 }
 
+func TestLLMAgent_EnableCodeExecutionResponseProcessor(t *testing.T) {
+	const codeBlock = "```go\nx\n```"
+
+	newMockModel := func() *mockModelWithResponse {
+		return &mockModelWithResponse{
+			response: &model.Response{
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: codeBlock,
+					},
+				}},
+				Done: true,
+			},
+		}
+	}
+
+	newInvocation := func() *agent.Invocation {
+		return &agent.Invocation{
+			Message:      model.NewUserMessage("hi"),
+			InvocationID: "test-invocation",
+			Session:      &session.Session{ID: "test-session"},
+		}
+	}
+
+	t.Run("default_enabled", func(t *testing.T) {
+		exec := &countingCodeExecutor{}
+		agt := New(
+			"test",
+			WithModel(newMockModel()),
+			WithCodeExecutor(exec),
+		)
+
+		events, err := agt.Run(context.Background(), newInvocation())
+		require.NoError(t, err)
+		for range events {
+		}
+
+		require.Equal(t, 1, exec.CallCount())
+	})
+
+	t.Run("disabled", func(t *testing.T) {
+		exec := &countingCodeExecutor{}
+		agt := New(
+			"test",
+			WithModel(newMockModel()),
+			WithCodeExecutor(exec),
+			WithEnableCodeExecutionResponseProcessor(false),
+		)
+
+		events, err := agt.Run(context.Background(), newInvocation())
+		require.NoError(t, err)
+
+		gotContent := ""
+		for ev := range events {
+			if ev == nil || ev.Response == nil {
+				continue
+			}
+			if ev.IsFinalResponse() && len(ev.Choices) > 0 {
+				gotContent = ev.Choices[0].Message.Content
+			}
+		}
+
+		require.Equal(t, 0, exec.CallCount())
+		require.Equal(t, codeBlock, gotContent)
+	})
+}
+
 // TestLLMAgent_OptionsWithOutputKey tests WithOutputKey option.
 func TestLLMAgent_OptionsWithOutputKey(t *testing.T) {
 	agt := New("test", WithOutputKey("my_output"))
@@ -1273,6 +1342,23 @@ func (m *mockCodeExecutor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter 
 		Start: "```",
 		End:   "```",
 	}
+}
+
+type countingCodeExecutor struct {
+	mockCodeExecutor
+	calls atomic.Int32
+}
+
+func (c *countingCodeExecutor) ExecuteCode(
+	ctx context.Context,
+	input codeexecutor.CodeExecutionInput,
+) (codeexecutor.CodeExecutionResult, error) {
+	c.calls.Add(1)
+	return c.mockCodeExecutor.ExecuteCode(ctx, input)
+}
+
+func (c *countingCodeExecutor) CallCount() int {
+	return int(c.calls.Load())
 }
 
 func (m *mockCodeExecutor) CreateWorkspace(

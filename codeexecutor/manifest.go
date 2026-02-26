@@ -1,5 +1,6 @@
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -8,6 +9,8 @@
 //
 
 package codeexecutor
+
+import "encoding/json"
 
 // InputSpec declares a single input mapping into the workspace.
 //
@@ -40,13 +43,62 @@ type OutputSpec struct {
 	Inline        bool
 }
 
+type outputSpecSnake struct {
+	Globs         []string `json:"globs"`
+	MaxFiles      *int     `json:"max_files"`
+	MaxFileBytes  *int64   `json:"max_file_bytes"`
+	MaxTotalBytes *int64   `json:"max_total_bytes"`
+	Save          *bool    `json:"save"`
+	NameTemplate  *string  `json:"name_template"`
+	Inline        *bool    `json:"inline"`
+}
+
+// UnmarshalJSON accepts both legacy Go-style keys (MaxFiles) and the
+// recommended snake_case keys (max_files).
+func (s *OutputSpec) UnmarshalJSON(data []byte) error {
+	type outputSpecAlias OutputSpec
+	var base outputSpecAlias
+	if err := json.Unmarshal(data, &base); err != nil {
+		return err
+	}
+	var snake outputSpecSnake
+	if err := json.Unmarshal(data, &snake); err != nil {
+		return err
+	}
+	*s = OutputSpec(base)
+	if snake.Globs != nil {
+		s.Globs = snake.Globs
+	}
+	if snake.MaxFiles != nil {
+		s.MaxFiles = *snake.MaxFiles
+	}
+	if snake.MaxFileBytes != nil {
+		s.MaxFileBytes = *snake.MaxFileBytes
+	}
+	if snake.MaxTotalBytes != nil {
+		s.MaxTotalBytes = *snake.MaxTotalBytes
+	}
+	if snake.Save != nil {
+		s.Save = *snake.Save
+	}
+	if snake.NameTemplate != nil {
+		s.NameTemplate = *snake.NameTemplate
+	}
+	if snake.Inline != nil {
+		s.Inline = *snake.Inline
+	}
+	return nil
+}
+
 // FileRef references a file collected from workspace.
 type FileRef struct {
-	Name     string
-	MIMEType string
-	Content  string
-	SavedAs  string
-	Version  int
+	Name      string
+	MIMEType  string
+	Content   string
+	SavedAs   string
+	Version   int
+	SizeBytes int64
+	Truncated bool
 }
 
 // OutputManifest is the structured result of CollectOutputs.

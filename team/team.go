@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -34,11 +35,14 @@ type Team struct {
 	coordinator agent.Agent
 	entryName   string
 
+	mu sync.RWMutex
+
 	members      []agent.Agent
 	memberByName map[string]agent.Agent
 
-	memberToolSet tool.ToolSet
-	swarm         SwarmConfig
+	memberToolSet        tool.ToolSet
+	swarm                SwarmConfig
+	crossRequestTransfer bool
 }
 
 // Mode controls how a Team runs.
@@ -52,6 +56,17 @@ const (
 	// ModeSwarm starts from an entry member and lets members transfer control
 	// to each other via transfer_to_agent.
 	ModeSwarm
+)
+
+const (
+	// SwarmActiveAgentKeyPrefix is the session state key prefix for storing the active agent in a Swarm team.
+	// When a Swarm team member transfers to another member, the target agent name is stored under:
+	// SwarmActiveAgentKeyPrefix + teamName.
+	// The next user message will start from this agent instead of the entry member.
+	SwarmActiveAgentKeyPrefix = "swarm_active_agent:"
+	// SwarmTeamNameKey is the session state key for storing the Swarm team name.
+	// This is used to identify if a session belongs to a Swarm team.
+	SwarmTeamNameKey = "swarm_team_name"
 )
 
 var (
@@ -147,13 +162,14 @@ func NewSwarm(
 	}
 
 	return &Team{
-		name:         name,
-		description:  cfg.description,
-		mode:         ModeSwarm,
-		entryName:    entryName,
-		members:      members,
-		memberByName: memberByName,
-		swarm:        cfg.swarm,
+		name:                 name,
+		description:          cfg.description,
+		mode:                 ModeSwarm,
+		entryName:            entryName,
+		members:              members,
+		memberByName:         memberByName,
+		swarm:                cfg.swarm,
+		crossRequestTransfer: cfg.crossRequestTransfer,
 	}, nil
 }
 
@@ -186,18 +202,65 @@ func (t *Team) runSwarm(
 	ctx context.Context,
 	invocation *agent.Invocation,
 ) (<-chan *event.Event, error) {
-	entry := t.memberByName[t.entryName]
-	if entry == nil {
-		return nil, fmt.Errorf("entry member %q not found", t.entryName)
+	// Mark this session as belonging to a Swarm team for transfer processor to detect.
+	// Only do this if cross-request transfer is enabled.
+	if t.crossRequestTransfer && invocation.Session != nil {
+		invocation.Session.SetState(SwarmTeamNameKey, []byte(t.name))
+	}
+
+	var startAgent agent.Agent
+
+	if t.crossRequestTransfer {
+		// Try to get the active agent from session state (for cross-request transfer).
+		startAgent = t.getActiveAgent(invocation)
+	}
+
+	// If no active agent (either cross-request transfer disabled or no active agent stored),
+	// fall back to entry member.
+	if startAgent == nil {
+		t.mu.RLock()
+		startAgent = t.memberByName[t.entryName]
+		t.mu.RUnlock()
+		if startAgent == nil {
+			return nil, fmt.Errorf("entry member %q not found", t.entryName)
+		}
 	}
 
 	ensureSwarmRuntime(invocation, t.swarm)
 
 	child := invocation.Clone(
-		agent.WithInvocationAgent(entry),
+		agent.WithInvocationAgent(startAgent),
 	)
 	childCtx := agent.NewInvocationContext(ctx, child)
-	return entry.Run(childCtx, child)
+
+	return startAgent.Run(childCtx, child)
+}
+
+// getActiveAgent retrieves the active agent from session state for cross-request transfer.
+// Returns nil if no active agent is stored or if the stored agent doesn't exist.
+func (t *Team) getActiveAgent(invocation *agent.Invocation) agent.Agent {
+	if invocation == nil || invocation.Session == nil {
+		return nil
+	}
+
+	// Get the active agent name from session state.
+	agentNameBytes, ok := invocation.Session.GetState(swarmActiveAgentKey(t.name))
+	if !ok || len(agentNameBytes) == 0 {
+		return nil
+	}
+
+	activeAgentName := string(agentNameBytes)
+
+	// Look up the agent in memberByName.
+	t.mu.RLock()
+	ag := t.memberByName[activeAgentName]
+	t.mu.RUnlock()
+	if ag == nil {
+		// Active agent doesn't exist, return nil to fall back to entry member.
+		return nil
+	}
+
+	return ag
 }
 
 // Tools implements agent.Agent.
@@ -209,7 +272,9 @@ func (t *Team) Tools() []tool.Tool {
 		}
 		return t.coordinator.Tools()
 	case ModeSwarm:
+		t.mu.RLock()
 		entry := t.memberByName[t.entryName]
+		t.mu.RUnlock()
 		if entry == nil {
 			return nil
 		}
@@ -229,6 +294,9 @@ func (t *Team) Info() agent.Info {
 
 // SubAgents implements agent.Agent.
 func (t *Team) SubAgents() []agent.Agent {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
 	if len(t.members) == 0 {
 		return nil
 	}
@@ -242,6 +310,8 @@ func (t *Team) FindSubAgent(name string) agent.Agent {
 	if name == "" {
 		return nil
 	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	return t.memberByName[name]
 }
 
@@ -323,6 +393,7 @@ func (s *staticToolSet) Close() error { return nil }
 func (s *staticToolSet) Name() string { return s.name }
 
 func wireSwarmRoster(members []agent.Agent) error {
+	setters := make([]agent.SubAgentSetter, 0, len(members))
 	for _, m := range members {
 		setter, ok := m.(agent.SubAgentSetter)
 		if !ok {
@@ -331,18 +402,25 @@ func wireSwarmRoster(members []agent.Agent) error {
 				m.Info().Name,
 			)
 		}
+		setters = append(setters, setter)
+	}
 
+	for i := range members {
 		roster := make([]agent.Agent, 0, len(members)-1)
-		for _, other := range members {
-			if other == nil {
-				continue
-			}
-			if other.Info().Name == m.Info().Name {
+		for j, other := range members {
+			if other == nil || i == j {
 				continue
 			}
 			roster = append(roster, other)
 		}
-		setter.SetSubAgents(roster)
+		setters[i].SetSubAgents(roster)
 	}
 	return nil
+}
+
+func swarmActiveAgentKey(teamName string) string {
+	if teamName == "" {
+		return SwarmActiveAgentKeyPrefix
+	}
+	return SwarmActiveAgentKeyPrefix + teamName
 }

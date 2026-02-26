@@ -1,5 +1,6 @@
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -45,7 +46,20 @@ type Runtime struct {
 	ReadOnlyStagedSkill bool
 	InputsHostBase      string
 	AutoInputs          bool
+	Mode                WorkspaceMode
 }
+
+// WorkspaceMode controls how the local runtime chooses workspace roots.
+type WorkspaceMode int
+
+const (
+	// WorkspaceModeIsolated creates a unique workspace directory for each
+	// CreateWorkspace call. This is the default and is safer.
+	WorkspaceModeIsolated WorkspaceMode = iota
+	// WorkspaceModeTrustedLocal reuses WorkRoot as the workspace root.
+	// Cleanup becomes a no-op to avoid deleting user directories.
+	WorkspaceModeTrustedLocal
+)
 
 // NewRuntime creates a new local Runtime. When workRoot is empty, a
 // temporary directory will be used per workspace.
@@ -53,11 +67,17 @@ func NewRuntime(workRoot string) *Runtime {
 	return &Runtime{
 		WorkRoot:   workRoot,
 		AutoInputs: true,
+		Mode:       WorkspaceModeIsolated,
 	}
 }
 
 // RuntimeOption customizes the local Runtime behavior.
 type RuntimeOption func(*Runtime)
+
+// WithRuntimeWorkspaceMode sets the workspace mode for the runtime.
+func WithRuntimeWorkspaceMode(mode WorkspaceMode) RuntimeOption {
+	return func(r *Runtime) { r.Mode = mode }
+}
 
 // WithReadOnlyStagedSkill toggles making staged skill trees read-only.
 func WithReadOnlyStagedSkill(readOnly bool) RuntimeOption {
@@ -85,6 +105,7 @@ func NewRuntimeWithOptions(
 	r := &Runtime{
 		WorkRoot:   workRoot,
 		AutoInputs: true,
+		Mode:       WorkspaceModeIsolated,
 	}
 	for _, o := range opts {
 		o(r)
@@ -101,6 +122,11 @@ func (r *Runtime) CreateWorkspace(
 	_, span := atrace.Tracer.Start(ctx, codeexecutor.SpanWorkspaceCreate)
 	span.SetAttributes(attribute.String(codeexecutor.AttrExecID, execID))
 	defer span.End()
+
+	if r.Mode == WorkspaceModeTrustedLocal {
+		return r.createTrustedWorkspace(ctx, execID)
+	}
+
 	var base string
 	if r.WorkRoot != "" {
 		base = r.WorkRoot
@@ -161,6 +187,43 @@ func (r *Runtime) CreateWorkspace(
 	return ws, nil
 }
 
+func (r *Runtime) createTrustedWorkspace(
+	ctx context.Context,
+	execID string,
+) (codeexecutor.Workspace, error) {
+	root := strings.TrimSpace(r.WorkRoot)
+	if root == "" {
+		return codeexecutor.Workspace{}, errors.New(
+			"trusted local mode requires WorkRoot",
+		)
+	}
+	if !filepath.IsAbs(root) {
+		if abs, err := filepath.Abs(root); err == nil {
+			root = abs
+		}
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return codeexecutor.Workspace{}, err
+	}
+	if _, err := codeexecutor.EnsureLayout(root); err != nil {
+		return codeexecutor.Workspace{}, err
+	}
+	ws := codeexecutor.Workspace{ID: execID, Path: root}
+	if r.AutoInputs && r.InputsHostBase != "" {
+		specs := []codeexecutor.InputSpec{{
+			From: "host://" + r.InputsHostBase,
+			To: filepath.Join(
+				codeexecutor.DirWork, "inputs",
+			),
+			Mode: "link",
+		}}
+		if err := r.StageInputs(ctx, ws, specs); err != nil {
+			return codeexecutor.Workspace{}, err
+		}
+	}
+	return ws, nil
+}
+
 // Cleanup removes workspace directory if it exists.
 func (r *Runtime) Cleanup(
 	ctx context.Context,
@@ -169,6 +232,9 @@ func (r *Runtime) Cleanup(
 	_, span := atrace.Tracer.Start(ctx, codeexecutor.SpanWorkspaceCleanup)
 	span.SetAttributes(attribute.String(codeexecutor.AttrPath, ws.Path))
 	defer span.End()
+	if r.Mode == WorkspaceModeTrustedLocal {
+		return nil
+	}
 	if ws.Path == "" {
 		return nil
 	}
@@ -422,20 +488,77 @@ func (r *Runtime) Collect(
 				continue
 			}
 			seen[name] = true
+			st, statErr := os.Stat(realp)
+			if statErr != nil {
+				if errors.Is(statErr, fs.ErrNotExist) {
+					ls, lsErr := os.Lstat(realp)
+					if lsErr == nil &&
+						ls.Mode()&os.ModeSymlink != 0 {
+						continue
+					}
+				}
+				span.SetStatus(codes.Error, statErr.Error())
+				return nil, statErr
+			}
+			if st.IsDir() {
+				continue
+			}
 			content, mime, err := readLimited(realp)
 			if err != nil {
 				span.SetStatus(codes.Error, err.Error())
 				return nil, err
 			}
+			sizeBytes := st.Size()
+			truncated := sizeBytes > int64(len(content))
 			out = append(out, codeexecutor.File{
-				Name:     name,
-				Content:  string(content),
-				MIMEType: mime,
+				Name:      name,
+				Content:   string(content),
+				MIMEType:  mime,
+				SizeBytes: sizeBytes,
+				Truncated: truncated,
 			})
 		}
 	}
 	span.SetAttributes(attribute.Int(codeexecutor.AttrCount, len(out)))
 	return out, nil
+}
+
+const (
+	inputSchemeArtifact  = "artifact://"
+	inputSchemeHost      = "host://"
+	inputSchemeWorkspace = "workspace://"
+	inputSchemeSkill     = "skill://"
+)
+
+func pinnedArtifactVersion(
+	md codeexecutor.WorkspaceMetadata,
+	name string,
+	to string,
+) *int {
+	if strings.TrimSpace(name) == "" || strings.TrimSpace(to) == "" {
+		return nil
+	}
+	for i := len(md.Inputs) - 1; i >= 0; i-- {
+		rec := md.Inputs[i]
+		if rec.To != to {
+			continue
+		}
+		if rec.Version == nil {
+			continue
+		}
+		if rec.Resolved == name {
+			return rec.Version
+		}
+		if !strings.HasPrefix(rec.From, inputSchemeArtifact) {
+			continue
+		}
+		ref := strings.TrimPrefix(rec.From, inputSchemeArtifact)
+		rname, _, err := codeexecutor.ParseArtifactRef(ref)
+		if err == nil && rname == name {
+			return rec.Version
+		}
+	}
+	return nil
 }
 
 // StageInputs maps external inputs into the workspace.
@@ -453,76 +576,16 @@ func (r *Runtime) StageInputs(
 		if mode == "" {
 			mode = "copy"
 		}
-		to := sp.To
-		if strings.TrimSpace(to) == "" {
+		to := strings.TrimSpace(sp.To)
+		if to == "" {
 			base := inputDefaultName(sp.From)
 			to = filepath.Join(
 				codeexecutor.DirWork, "inputs", base,
 			)
 		}
-		var err error
-		var resolved string
-		var ver *int
-		switch {
-		case strings.HasPrefix(sp.From, "artifact://"):
-			name := strings.TrimPrefix(sp.From, "artifact://")
-			aname, aver, perr := codeexecutor.ParseArtifactRef(name)
-			if perr != nil {
-				return perr
-			}
-			data, _, actual, lerr := codeexecutor.LoadArtifactHelper(
-				ctx, aname, aver,
-			)
-			if lerr != nil {
-				return lerr
-			}
-			resolved = aname
-			if aver != nil {
-				v := *aver
-				ver = &v
-			} else {
-				v := actual
-				ver = &v
-			}
-			err = r.writeFileSafe(ws.Path, codeexecutor.PutFile{
-				Path:    to,
-				Content: data,
-				Mode:    defaultFileMode,
-			})
-		case strings.HasPrefix(sp.From, "host://"):
-			host := strings.TrimPrefix(sp.From, "host://")
-			resolved = host
-			if mode == "link" {
-				err = makeSymlink(ws.Path, to, host)
-			} else {
-				err = r.PutDirectory(ctx, ws, host,
-					filepath.Dir(to))
-			}
-		case strings.HasPrefix(sp.From, "workspace://"):
-			rel := strings.TrimPrefix(sp.From, "workspace://")
-			src := filepath.Join(ws.Path, filepath.Clean(rel))
-			resolved = rel
-			if mode == "link" {
-				err = makeSymlink(ws.Path, to, src)
-			} else {
-				err = copyPath(src,
-					filepath.Join(ws.Path, filepath.Clean(to)))
-			}
-		case strings.HasPrefix(sp.From, "skill://"):
-			rest := strings.TrimPrefix(sp.From, "skill://")
-			src := filepath.Join(
-				ws.Path, codeexecutor.DirSkills, filepath.Clean(rest),
-			)
-			resolved = src
-			if mode == "link" {
-				err = makeSymlink(ws.Path, to, src)
-			} else {
-				err = copyPath(src,
-					filepath.Join(ws.Path, filepath.Clean(to)))
-			}
-		default:
-			return fmt.Errorf("unsupported input: %s", sp.From)
-		}
+		resolved, ver, err := r.stageInput(
+			ctx, ws, md, sp, mode, to,
+		)
 		if err != nil {
 			return err
 		}
@@ -536,6 +599,77 @@ func (r *Runtime) StageInputs(
 		})
 	}
 	return codeexecutor.SaveMetadata(ws.Path, md)
+}
+
+func (r *Runtime) stageInput(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	md codeexecutor.WorkspaceMetadata,
+	sp codeexecutor.InputSpec,
+	mode string,
+	to string,
+) (string, *int, error) {
+	switch {
+	case strings.HasPrefix(sp.From, inputSchemeArtifact):
+		name := strings.TrimPrefix(sp.From, inputSchemeArtifact)
+		aname, aver, err := codeexecutor.ParseArtifactRef(name)
+		if err != nil {
+			return "", nil, err
+		}
+		useVer := aver
+		if useVer == nil && sp.Pin {
+			useVer = pinnedArtifactVersion(md, aname, to)
+		}
+		data, _, actual, err := codeexecutor.LoadArtifactHelper(
+			ctx, aname, useVer,
+		)
+		if err != nil {
+			return "", nil, err
+		}
+		ver := useVer
+		if ver == nil {
+			v := actual
+			ver = &v
+		} else {
+			v := *ver
+			ver = &v
+		}
+		err = r.writeFileSafe(ws.Path, codeexecutor.PutFile{
+			Path:    to,
+			Content: data,
+			Mode:    defaultFileMode,
+		})
+		return aname, ver, err
+	case strings.HasPrefix(sp.From, inputSchemeHost):
+		host := strings.TrimPrefix(sp.From, inputSchemeHost)
+		if mode == "link" {
+			return host, nil, makeSymlink(ws.Path, to, host)
+		}
+		err := r.PutDirectory(ctx, ws, host, filepath.Dir(to))
+		return host, nil, err
+	case strings.HasPrefix(sp.From, inputSchemeWorkspace):
+		rel := strings.TrimPrefix(sp.From, inputSchemeWorkspace)
+		src := filepath.Join(ws.Path, filepath.Clean(rel))
+		if mode == "link" {
+			return rel, nil, makeSymlink(ws.Path, to, src)
+		}
+		err := copyPath(src,
+			filepath.Join(ws.Path, filepath.Clean(to)))
+		return rel, nil, err
+	case strings.HasPrefix(sp.From, inputSchemeSkill):
+		rest := strings.TrimPrefix(sp.From, inputSchemeSkill)
+		src := filepath.Join(
+			ws.Path, codeexecutor.DirSkills, filepath.Clean(rest),
+		)
+		if mode == "link" {
+			return src, nil, makeSymlink(ws.Path, to, src)
+		}
+		err := copyPath(src,
+			filepath.Join(ws.Path, filepath.Clean(to)))
+		return src, nil, err
+	default:
+		return "", nil, fmt.Errorf("unsupported input: %s", sp.From)
+	}
 }
 
 // CollectOutputs implements the declarative collector with limits.
@@ -578,9 +712,14 @@ func (r *Runtime) CollectOutputs(
 				break
 			}
 			mAbs := "/" + strings.TrimPrefix(m, "/")
-			if !strings.HasPrefix(
-				mAbs, ws.Path+string(os.PathSeparator),
-			) && mAbs != ws.Path {
+			if !withinWorkspacePath(ws.Path, mAbs) {
+				continue
+			}
+			st, statErr := os.Stat(mAbs)
+			if statErr != nil {
+				return codeexecutor.OutputManifest{}, statErr
+			}
+			if st.IsDir() {
 				continue
 			}
 			name := strings.TrimPrefix(
@@ -602,8 +741,10 @@ func (r *Runtime) CollectOutputs(
 			leftTotal -= int64(len(data))
 			count++
 			ref := codeexecutor.FileRef{
-				Name:     name,
-				MIMEType: mime,
+				Name:      name,
+				MIMEType:  mime,
+				SizeBytes: st.Size(),
+				Truncated: st.Size() > int64(len(data)),
 			}
 			if spec.Inline {
 				ref.Content = string(data)
@@ -642,6 +783,17 @@ func (r *Runtime) CollectOutputs(
 	})
 	_ = codeexecutor.SaveMetadata(ws.Path, md)
 	return out, nil
+}
+
+func withinWorkspacePath(wsPath string, absPath string) bool {
+	if wsPath == "" || absPath == "" {
+		return false
+	}
+	sep := string(os.PathSeparator)
+	if absPath == wsPath {
+		return true
+	}
+	return strings.HasPrefix(absPath, wsPath+sep)
 }
 
 // ExecuteInline writes temp files for code blocks and runs them.

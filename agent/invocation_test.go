@@ -438,6 +438,46 @@ func TestInvocation_GetEventFilterKey(t *testing.T) {
 	}
 }
 
+func TestInvocation_GetParentInvocation(t *testing.T) {
+	tests := []struct {
+		name     string
+		inv      *Invocation
+		validate func(*testing.T, *Invocation)
+	}{
+		{
+			name: "nil invocation",
+			inv:  nil,
+			validate: func(t *testing.T, parent *Invocation) {
+				require.Nil(t, parent)
+			},
+		},
+		{
+			name: "invocation without parent",
+			inv:  NewInvocation(),
+			validate: func(t *testing.T, parent *Invocation) {
+				require.Nil(t, parent)
+			},
+		},
+		{
+			name: "invocation with parent",
+			inv:  NewInvocation(WithInvocationID("test-inv-id")).Clone(),
+			validate: func(t *testing.T, parent *Invocation) {
+				require.NotNil(t, parent)
+				require.Equal(t, "test-inv-id", parent.InvocationID)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(
+			tt.name, func(t *testing.T) {
+				parent := tt.inv.GetParentInvocation()
+				tt.validate(t, parent)
+			},
+		)
+	}
+}
+
 func TestInjectIntoEvent(t *testing.T) {
 	tests := []struct {
 		name     string

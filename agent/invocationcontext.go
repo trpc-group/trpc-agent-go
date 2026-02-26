@@ -32,6 +32,19 @@ func InvocationFromContext(ctx context.Context) (*Invocation, bool) {
 	return invocation, ok
 }
 
+// EnsureInvocation ensures ctx contains a non-nil invocation and returns the updated context and invocation.
+func EnsureInvocation(ctx context.Context) (context.Context, *Invocation) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	inv, ok := InvocationFromContext(ctx)
+	if ok && inv != nil {
+		return ctx, inv
+	}
+	inv = NewInvocation()
+	return NewInvocationContext(ctx, inv), inv
+}
+
 // GetStateValueFromContext retrieves a typed value from the invocation state
 // stored in the context.
 //

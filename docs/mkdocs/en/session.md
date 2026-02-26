@@ -248,6 +248,33 @@ summarizer := summary.NewSummarizer(
 )
 ```
 
+#### Model callbacks (before/after)
+
+The `summarizer` supports model callbacks (structured signatures) around the underlying `model.GenerateContent` call. This is useful for request mutation, short-circuiting with a custom response, or adding tracing/metrics for summary generation.
+
+```go
+import (
+    "context"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/session/summary"
+)
+
+callbacks := model.NewCallbacks().
+    RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+        // You may mutate args.Request, or return CustomResponse to skip the real model call.
+        return nil, nil
+    }).
+    RegisterAfterModel(func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+        // You may override the response via CustomResponse.
+        return nil, nil
+    })
+
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithModelCallbacks(callbacks),
+)
+```
+
 Notes:
 
 - Pre-hook can mutate `ctx.Text` (preferred) or `ctx.Events`; post-hook can mutate `ctx.Summary`.
@@ -408,7 +435,7 @@ Suitable for development environments and small-scale applications, no external 
 - **`WithSummarizer(s summary.SessionSummarizer)`**: Inject session summarizer.
 - **`WithAsyncSummaryNum(num int)`**: Set number of summary processing workers. Default is 3.
 - **`WithSummaryQueueSize(size int)`**: Set summary task queue size. Default is 100.
-- **`WithSummaryJobTimeout(timeout time.Duration)`**: Set timeout for single summary task. Default is 30 seconds.
+- **`WithSummaryJobTimeout(timeout time.Duration)`**: Set timeout for single summary task. Default is 60 seconds.
 
 ### Basic Configuration Example
 
@@ -459,7 +486,7 @@ sessionService := inmemory.NewSessionService(
     inmemory.WithSummarizer(summarizer),
     inmemory.WithAsyncSummaryNum(2),
     inmemory.WithSummaryQueueSize(100),
-    inmemory.WithSummaryJobTimeout(30*time.Second),
+    inmemory.WithSummaryJobTimeout(60*time.Second),
 )
 ```
 
@@ -478,6 +505,7 @@ Suitable for production environments and distributed applications, provides high
 - **`WithSummarizer(s summary.SessionSummarizer)`**: Inject session summarizer.
 - **`WithAsyncSummaryNum(num int)`**: Set number of summary processing workers. Default is 3.
 - **`WithSummaryQueueSize(size int)`**: Set summary task queue size. Default is 100.
+- **`WithKeyPrefix(prefix string)`**: Set Redis key prefix. All keys will be prefixed with `prefix:`. Default is empty (no prefix).
 - **`WithExtraOptions(extraOptions ...interface{})`**: Set extra options for Redis client.
 
 ### Basic Configuration Example
@@ -604,7 +632,7 @@ Suitable for production environments and applications requiring complex queries,
 - **`WithSummarizer(s summary.SessionSummarizer)`**: Inject session summarizer.
 - **`WithAsyncSummaryNum(num int)`**: Number of summary processing workers. Default is 3.
 - **`WithSummaryQueueSize(size int)`**: Summary task queue size. Default is 100.
-- **`WithSummaryJobTimeout(timeout time.Duration)`**: Set timeout for single summary task. Default is 30 seconds.
+- **`WithSummaryJobTimeout(timeout time.Duration)`**: Set timeout for single summary task. Default is 60 seconds.
 
 **Schema and Table Configuration:**
 
@@ -810,7 +838,7 @@ Suitable for production environments and applications requiring complex queries,
 - **`WithSummarizer(s summary.SessionSummarizer)`**: Inject session summarizer.
 - **`WithAsyncSummaryNum(num int)`**: Number of summary processing workers. Default is 3.
 - **`WithSummaryQueueSize(size int)`**: Summary task queue size. Default is 100.
-- **`WithSummaryJobTimeout(timeout time.Duration)`**: Set timeout for single summary task. Default is 30 seconds.
+- **`WithSummaryJobTimeout(timeout time.Duration)`**: Set timeout for single summary task. Default is 60 seconds.
 
 **Table Configuration:**
 
@@ -970,7 +998,7 @@ Both situations could lead to duplicate data.
 - `idx_*_session_summaries_unique_active(app_name, user_id, session_id, filter_key, deleted_at)` — unique index but includes deleted_at
 - `idx_*_session_summaries_lookup(app_name, user_id, session_id, deleted_at)` — regular index
 
-**New Index**: `idx_*_session_summaries_unique_active(app_name, user_id, session_id, filter_key)` — unique index without deleted_at
+**New Index**: `idx_*_session_summaries_unique_active(app_name(191), user_id(191), session_id(191), filter_key(191))` — unique index without deleted_at (prefix indexes are used to avoid Error 1071).
 
 **Migration Steps**:
 
@@ -1010,7 +1038,7 @@ DROP INDEX idx_session_summaries_lookup ON session_summaries;
 -- Step 5: Create the new unique index (without deleted_at)
 -- Note: Index name may have a table prefix, adjust according to your configuration.
 CREATE UNIQUE INDEX idx_session_summaries_unique_active 
-ON session_summaries(app_name, user_id, session_id, filter_key);
+ON session_summaries(app_name(191), user_id(191), session_id(191), filter_key(191));
 
 -- Step 6: Verify migration results
 SELECT COUNT(*) as duplicate_count FROM (
@@ -1498,7 +1526,7 @@ sessionService := inmemory.NewSessionService(
     inmemory.WithSummarizer(summarizer),
     inmemory.WithAsyncSummaryNum(2),                // 2 async workers.
     inmemory.WithSummaryQueueSize(100),             // Queue size 100.
-    inmemory.WithSummaryJobTimeout(30*time.Second), // 30s timeout per job.
+    inmemory.WithSummaryJobTimeout(60*time.Second), // 60s timeout per job.
 )
 
 // Option 2: Redis session service with summarizer.
@@ -1634,6 +1662,122 @@ Configure the summarizer behavior with the following options:
 - **`WithPrompt(prompt string)`**: Provide a custom summarization prompt. The prompt must include the placeholder `{conversation_text}`, which will be replaced with the conversation content. Optionally include `{max_summary_words}` for word limit instructions.
 - **`WithSkipRecent(skipFunc SkipRecentFunc)`**: Skip the _most recent_ events during summarization using a custom function. The function receives all events and returns how many tail events to skip. Return 0 to skip none. Useful for avoiding summarizing very recent/incomplete conversations, or applying time/content-based skipping strategies.
 
+#### Token Counter Configuration
+
+By default, `CheckTokenThreshold` uses a built-in `SimpleTokenCounter` to estimate tokens based on text length. If you need to customize the token counting behavior (e.g., using a more accurate tokenizer for specific models), you can use `summary.SetTokenCounter` to set a global token counter:
+
+```go
+import (
+    "context"
+    "fmt"
+    "unicode/utf8"
+
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/session/summary"
+)
+
+// Set custom token counter (affects all CheckTokenThreshold evaluations)
+summary.SetTokenCounter(model.NewSimpleTokenCounter())
+
+// Or use custom implementation
+type MyCustomCounter struct{}
+
+func (c *MyCustomCounter) CountTokens(ctx context.Context, message model.Message) (int, error) {
+    _ = ctx
+    // TODO: Replace this with your real tokenizer implementation.
+    return utf8.RuneCountInString(message.Content), nil
+}
+
+func (c *MyCustomCounter) CountTokensRange(ctx context.Context, messages []model.Message, start, end int) (int, error) {
+    if start < 0 || end > len(messages) || start >= end {
+        return 0, fmt.Errorf("invalid range: start=%d, end=%d, len=%d",
+            start, end, len(messages))
+    }
+
+    total := 0
+    for i := start; i < end; i++ {
+        tokens, err := c.CountTokens(ctx, messages[i])
+        if err != nil {
+            return 0, err
+        }
+        total += tokens
+    }
+    return total, nil
+}
+
+summary.SetTokenCounter(&MyCustomCounter{})
+
+// Create summarizer with token threshold checker
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.CheckTokenThreshold(4000),  // Will use your custom counter
+)
+```
+
+**Important Notes:**
+
+- **Global Effect**: `SetTokenCounter` affects all `CheckTokenThreshold` evaluations in the current process. Set it once during application initialization.
+- **Default Counter**: If not set, a `SimpleTokenCounter` with default configuration is used (approx. 4 characters per token).
+- **Use Cases**:
+  - Use accurate tokenizers (tiktoken) when precise estimation is needed
+  - Adjust for language-specific models (Chinese models may have different token densities)
+  - Integrate with model-specific token counting APIs for better accuracy
+
+**Tool Call Formatting:**
+
+By default, the summarizer includes tool calls and tool results in the conversation text sent to the LLM for summarization. The default format is:
+
+- Tool calls: `[Called tool: toolName with args: {"arg": "value"}]`
+- Tool results: `[toolName returned: result content]`
+
+You can customize how tool calls and results are formatted using these options:
+
+- **`WithToolCallFormatter(f ToolCallFormatter)`**: Customize how tool calls are formatted in the summary input. The formatter receives a `model.ToolCall` and returns a formatted string. Return empty string to exclude the tool call.
+- **`WithToolResultFormatter(f ToolResultFormatter)`**: Customize how tool results are formatted in the summary input. The formatter receives the `model.Message` containing the tool result and returns a formatted string. Return empty string to exclude the result.
+
+**Example with custom tool formatters:**
+
+```go
+// Truncate long tool arguments
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithToolCallFormatter(func(tc model.ToolCall) string {
+        name := tc.Function.Name
+        if name == "" {
+            return ""
+        }
+        args := string(tc.Function.Arguments)
+        const maxLen = 100
+        if len(args) > maxLen {
+            args = args[:maxLen] + "...(truncated)"
+        }
+        return fmt.Sprintf("[Tool: %s, Args: %s]", name, args)
+    }),
+    summary.WithEventThreshold(20),
+)
+
+// Exclude tool results from summary
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithToolResultFormatter(func(msg model.Message) string {
+        return "" // Return empty to exclude tool results.
+    }),
+    summary.WithEventThreshold(20),
+)
+
+// Only include tool names, exclude arguments
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithToolCallFormatter(func(tc model.ToolCall) string {
+        if tc.Function.Name == "" {
+            return ""
+        }
+        return fmt.Sprintf("[Used tool: %s]", tc.Function.Name)
+    }),
+    summary.WithEventThreshold(20),
+)
+```
+
 **Example with custom prompt:**
 
 ```go
@@ -1703,9 +1847,9 @@ summarizer := summary.NewSummarizer(
 Configure async summary processing in session services:
 
 - **`WithSummarizer(s summary.SessionSummarizer)`**: Inject the summarizer into the session service.
-- **`WithAsyncSummaryNum(num int)`**: Set the number of async worker goroutines for summary processing. Default is 2. More workers allow higher concurrency but consume more resources.
+- **`WithAsyncSummaryNum(num int)`**: Set the number of async worker goroutines for summary processing. Default is 3. More workers allow higher concurrency but consume more resources.
 - **`WithSummaryQueueSize(size int)`**: Set the size of the summary job queue. Default is 100. Larger queues allow more pending jobs but consume more memory.
-- **`WithSummaryJobTimeout(timeout time.Duration)`**: Set the timeout for processing a single summary job. Default is 30 seconds.
+- **`WithSummaryJobTimeout(timeout time.Duration)`**: Set the timeout for processing a single summary job. Default is 60 seconds.
 
 ### Manual Summarization
 
@@ -1951,7 +2095,7 @@ func main() {
         inmemory.WithSummarizer(summarizer),
         inmemory.WithAsyncSummaryNum(2),
         inmemory.WithSummaryQueueSize(100),
-        inmemory.WithSummaryJobTimeout(30*time.Second),
+        inmemory.WithSummaryJobTimeout(60*time.Second),
     )
 
     // Create agent with summary injection enabled.

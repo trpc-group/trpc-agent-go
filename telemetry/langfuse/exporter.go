@@ -110,6 +110,8 @@ func transformSpan(span *tracepb.Span) {
 		transformCallLLM(span)
 	case itelemetry.OperationExecuteTool:
 		transformExecuteTool(span)
+	case itelemetry.OperationWorkflow:
+		transformWorkflow(span)
 	default:
 	}
 }
@@ -152,7 +154,9 @@ func transformInvokeAgent(span *tracepb.Span) {
 			// InvokeAgent spans (to support Galileo); previously only Chat spans had token usage.
 			// Keeping token attributes on InvokeAgent would make Langfuse double count tokens
 			// compared to the old behavior (Chat-only token accounting).
-		case itelemetry.KeyGenAIUsageInputTokens, itelemetry.KeyGenAIUsageOutputTokens:
+		case itelemetry.KeyGenAIUsageInputTokens, itelemetry.KeyGenAIUsageOutputTokens,
+			itelemetry.KeyGenAIUsageInputTokensCached, itelemetry.KeyGenAIUsageInputTokensCacheRead,
+			itelemetry.KeyGenAIUsageInputTokensCacheCreation:
 		default:
 			newAttributes = append(newAttributes, attr)
 		}
@@ -161,87 +165,176 @@ func transformInvokeAgent(span *tracepb.Span) {
 }
 
 // transformCallLLM transforms LLM call spans for Langfuse
+// llmSpanCollected holds the intermediate values collected from an LLM span's attributes.
+type llmSpanCollected struct {
+	sessionID       *commonpb.AnyValue
+	llmRequest      *string
+	inputMessages   *string
+	toolDefinitions *string
+	usage           usageDetails
+	attrs           []*commonpb.KeyValue // non-LLM attributes to keep
+}
+
+// transformCallLLM transforms LLM call spans for Langfuse.
 func transformCallLLM(span *tracepb.Span) {
-	var newAttributes []*commonpb.KeyValue
+	collected := collectLLMSpanAttributes(span.Attributes)
 
-	// Add observation type
-	newAttributes = append(newAttributes, &commonpb.KeyValue{
-		Key: observationType,
-		Value: &commonpb.AnyValue{
-			Value: &commonpb.AnyValue_StringValue{StringValue: observationTypeGeneration},
-		},
-	})
+	newAttributes := []*commonpb.KeyValue{{
+		Key:   observationType,
+		Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: observationTypeGeneration}},
+	}}
+	newAttributes = append(newAttributes, collected.attrs...)
 
-	// Process existing attributes
-	var llmSessionID *commonpb.AnyValue
-	for _, attr := range span.Attributes {
-		switch attr.Key {
-		case itelemetry.KeyGenAIConversationID, itelemetry.KeyRunnerSessionID, traceSessionID:
-			llmSessionID = attr.Value
-		case itelemetry.KeyRunnerUserID:
-			newAttributes = append(newAttributes, &commonpb.KeyValue{Key: traceUserID, Value: attr.Value})
-		case itelemetry.KeyLLMRequest:
-			if attr.Value != nil {
-				request := attr.Value.GetStringValue()
-				newAttributes = append(newAttributes, &commonpb.KeyValue{
-					Key: observationInput,
-					Value: &commonpb.AnyValue{
-						Value: &commonpb.AnyValue_StringValue{StringValue: request},
-					},
-				})
+	// observation.input
+	newAttributes = append(newAttributes, stringKV(observationInput, buildLLMObservationInput(collected)))
 
-				// Extract generation_config if exists
-				var req map[string]any
-				if err := json.Unmarshal([]byte(request), &req); err == nil {
-					if genConfig, exists := req["generation_config"]; exists {
-						if jsonConfig, err := json.Marshal(genConfig); err == nil {
-							newAttributes = append(newAttributes, &commonpb.KeyValue{
-								Key: observationModelParameters,
-								Value: &commonpb.AnyValue{
-									Value: &commonpb.AnyValue_StringValue{StringValue: string(jsonConfig)},
-								},
-							})
-						}
-					}
-				}
-			} else {
-				newAttributes = append(newAttributes, &commonpb.KeyValue{
-					Key: observationInput,
-					Value: &commonpb.AnyValue{
-						Value: &commonpb.AnyValue_StringValue{StringValue: "N/A"},
-					},
-				})
-			}
+	// observation.model_parameters (generation_config from llm request)
+	if kv := extractModelParameters(collected.llmRequest); kv != nil {
+		newAttributes = append(newAttributes, kv)
+	}
 
-			// Skip this attribute (delete it)
-		case itelemetry.KeyLLMResponse:
-			if attr.Value != nil {
-				newAttributes = append(newAttributes, &commonpb.KeyValue{
-					Key: observationOutput,
-					Value: &commonpb.AnyValue{
-						Value: &commonpb.AnyValue_StringValue{StringValue: attr.Value.GetStringValue()},
-					},
-				})
-			} else {
-				newAttributes = append(newAttributes, &commonpb.KeyValue{
-					Key: observationOutput,
-					Value: &commonpb.AnyValue{
-						Value: &commonpb.AnyValue_StringValue{StringValue: "N/A"},
-					},
-				})
-			}
-			// Skip this attribute (delete it)
-		default:
-			// Keep other attributes
-			newAttributes = append(newAttributes, attr)
+	// observation.usage_details
+	if !collected.usage.empty() {
+		if usageJSON, err := json.Marshal(collected.usage); err == nil {
+			newAttributes = append(newAttributes, stringKV(observationUsageDetails, string(usageJSON)))
 		}
 	}
-	if llmSessionID != nil { // use post set session id
-		newAttributes = append(newAttributes, &commonpb.KeyValue{Key: traceSessionID, Value: llmSessionID})
+
+	if collected.sessionID != nil {
+		newAttributes = append(newAttributes, &commonpb.KeyValue{Key: traceSessionID, Value: collected.sessionID})
 	}
 
-	// Replace span attributes
 	span.Attributes = newAttributes
+}
+
+// collectLLMSpanAttributes iterates over the raw span attributes once, collecting
+// the pieces needed by subsequent build steps and filtering out OTEL-specific keys.
+func collectLLMSpanAttributes(attrs []*commonpb.KeyValue) llmSpanCollected {
+	var c llmSpanCollected
+	for _, attr := range attrs {
+		switch attr.Key {
+		case itelemetry.KeyGenAIConversationID, itelemetry.KeyRunnerSessionID, traceSessionID:
+			c.sessionID = attr.Value
+		case itelemetry.KeyRunnerUserID:
+			c.attrs = append(c.attrs, &commonpb.KeyValue{Key: traceUserID, Value: attr.Value})
+		case itelemetry.KeyLLMRequest:
+			c.llmRequest = getStringPtr(attr.Value)
+		case itelemetry.KeyGenAIInputMessages:
+			c.inputMessages = getStringPtr(attr.Value)
+		case itelemetry.KeyGenAIRequestToolDefinitions:
+			c.toolDefinitions = getStringPtr(attr.Value)
+		case itelemetry.KeyLLMResponse:
+			c.attrs = append(c.attrs, stringKV(observationOutput, stringValueOrNA(attr.Value)))
+		case itelemetry.KeyGenAIUsageInputTokens:
+			c.usage.Input = attr.Value.GetIntValue()
+		case itelemetry.KeyGenAIUsageOutputTokens:
+			c.usage.Output = attr.Value.GetIntValue()
+		case itelemetry.KeyGenAIUsageInputTokensCached:
+			c.usage.InputCached = attr.Value.GetIntValue()
+		case itelemetry.KeyGenAIUsageInputTokensCacheRead:
+			c.usage.InputCacheRead = attr.Value.GetIntValue()
+		case itelemetry.KeyGenAIUsageInputTokensCacheCreation:
+			c.usage.InputCacheCreation = attr.Value.GetIntValue()
+		default:
+			c.attrs = append(c.attrs, attr)
+		}
+	}
+	return c
+}
+
+// buildLLMObservationInput constructs the Langfuse observation.input value from
+// collected LLM span data, wrapping tools+messages when both are present.
+func buildLLMObservationInput(c llmSpanCollected) string {
+	if c.inputMessages != nil && *c.inputMessages != "" {
+		return wrapWithToolsIfPresent(*c.inputMessages, c.toolDefinitions)
+	}
+	if c.llmRequest != nil && *c.llmRequest != "" {
+		if messagesJSON, ok := extractMessagesJSONFromRequestJSON(*c.llmRequest); ok && messagesJSON != "" {
+			return wrapWithToolsIfPresent(messagesJSON, c.toolDefinitions)
+		}
+		return *c.llmRequest
+	}
+	return "N/A"
+}
+
+// wrapWithToolsIfPresent returns messagesJSON as-is, or wraps it with tool
+// definitions into {"tools":..., "messages":...} when toolDefs is non-empty.
+func wrapWithToolsIfPresent(messagesJSON string, toolDefs *string) string {
+	if toolDefs != nil && *toolDefs != "" {
+		if wrapped, err := buildObservationInputPrompt(messagesJSON, *toolDefs); err == nil {
+			return wrapped
+		}
+	}
+	return messagesJSON
+}
+
+// extractModelParameters extracts "generation_config" from the LLM request JSON
+// and returns it as an observation.model_parameters attribute, or nil.
+func extractModelParameters(llmRequest *string) *commonpb.KeyValue {
+	if llmRequest == nil || *llmRequest == "" {
+		return nil
+	}
+	var req map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(*llmRequest), &req); err != nil {
+		return nil
+	}
+	raw, exists := req["generation_config"]
+	if !exists {
+		return nil
+	}
+	return stringKV(observationModelParameters, string(raw))
+}
+
+// stringKV is a helper to build a string-valued KeyValue proto attribute.
+func stringKV(key, value string) *commonpb.KeyValue {
+	return &commonpb.KeyValue{
+		Key:   key,
+		Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: value}},
+	}
+}
+
+// getStringPtr returns a pointer to the string value of v, or nil if v is nil.
+func getStringPtr(v *commonpb.AnyValue) *string {
+	if v == nil {
+		return nil
+	}
+	s := v.GetStringValue()
+	return &s
+}
+
+// stringValueOrNA returns the string value of v, or "N/A" if v is nil.
+func stringValueOrNA(v *commonpb.AnyValue) string {
+	if v == nil {
+		return "N/A"
+	}
+	return v.GetStringValue()
+}
+
+func buildObservationInputPrompt(messagesJSON, toolDefsJSON string) (string, error) {
+	payload := observationInputPrompt{
+		Tools:    json.RawMessage([]byte(toolDefsJSON)),
+		Messages: json.RawMessage([]byte(messagesJSON)),
+	}
+	bts, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	return string(bts), nil
+}
+
+func extractMessagesJSONFromRequestJSON(requestJSON string) (string, bool) {
+	if requestJSON == "" {
+		return "", false
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(requestJSON), &m); err != nil {
+		return "", false
+	}
+	msgs, ok := m["messages"]
+	if !ok || len(msgs) == 0 {
+		return "", false
+	}
+	return string(msgs), true
 }
 
 // transformExecuteTool transforms tool execution spans for Langfuse
@@ -282,6 +375,73 @@ func transformExecuteTool(span *tracepb.Span) {
 			}
 			// Skip this attribute (delete it)
 		case itelemetry.KeyGenAIToolCallResult:
+			if attr.Value != nil {
+				newAttributes = append(newAttributes, &commonpb.KeyValue{
+					Key: observationOutput,
+					Value: &commonpb.AnyValue{
+						Value: &commonpb.AnyValue_StringValue{StringValue: attr.Value.GetStringValue()},
+					},
+				})
+			} else {
+				newAttributes = append(newAttributes, &commonpb.KeyValue{
+					Key: observationOutput,
+					Value: &commonpb.AnyValue{
+						Value: &commonpb.AnyValue_StringValue{StringValue: "N/A"},
+					},
+				})
+			}
+			// Skip this attribute (delete it)
+		default:
+			// Keep other attributes
+			newAttributes = append(newAttributes, attr)
+		}
+	}
+	if llmSessionID != nil { // use post set session id
+		newAttributes = append(newAttributes, &commonpb.KeyValue{Key: traceSessionID, Value: llmSessionID})
+	}
+
+	// Replace span attributes
+	span.Attributes = newAttributes
+}
+
+// transformWorkflow transforms workflow spans for Langfuse.
+func transformWorkflow(span *tracepb.Span) {
+	var newAttributes []*commonpb.KeyValue
+
+	// Add observation type
+	newAttributes = append(newAttributes, &commonpb.KeyValue{
+		Key: observationType,
+		Value: &commonpb.AnyValue{
+			Value: &commonpb.AnyValue_StringValue{StringValue: observationTypeChain},
+		},
+	})
+
+	// Process existing attributes
+	var llmSessionID *commonpb.AnyValue
+	for _, attr := range span.Attributes {
+		switch attr.Key {
+		case itelemetry.KeyGenAIConversationID, itelemetry.KeyRunnerSessionID, traceSessionID:
+			llmSessionID = attr.Value
+		case itelemetry.KeyRunnerUserID:
+			newAttributes = append(newAttributes, &commonpb.KeyValue{Key: traceUserID, Value: attr.Value})
+		case itelemetry.KeyGenAIWorkflowRequest:
+			if attr.Value != nil {
+				newAttributes = append(newAttributes, &commonpb.KeyValue{
+					Key: observationInput,
+					Value: &commonpb.AnyValue{
+						Value: &commonpb.AnyValue_StringValue{StringValue: attr.Value.GetStringValue()},
+					},
+				})
+			} else {
+				newAttributes = append(newAttributes, &commonpb.KeyValue{
+					Key: observationInput,
+					Value: &commonpb.AnyValue{
+						Value: &commonpb.AnyValue_StringValue{StringValue: "N/A"},
+					},
+				})
+			}
+			// Skip this attribute (delete it)
+		case itelemetry.KeyGenAIWorkflowResponse:
 			if attr.Value != nil {
 				newAttributes = append(newAttributes, &commonpb.KeyValue{
 					Key: observationOutput,

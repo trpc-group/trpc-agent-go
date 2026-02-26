@@ -462,11 +462,52 @@ func TestContentRequestProcessor_getFilterIncrementalMessagesWithTime(t *testing
 							},
 						},
 					},
+					{
+						Author:    "tool.call",
+						Timestamp: baseTime.Add(1*time.Hour + time.Second),
+						Response: &model.Response{
+							Choices: []model.Choice{
+								{
+									Message: model.Message{
+										Role: model.RoleAssistant,
+										ToolCalls: []model.ToolCall{
+											{
+												ID: "call_123123",
+												Function: model.FunctionDefinitionParam{
+													Name:      "test_tool",
+													Arguments: []byte(`{"arg":"value"}`),
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+					{
+						Author:    "tool.err",
+						Timestamp: baseTime.Add(1*time.Hour + 2*time.Second),
+						Response: &model.Response{
+							Object: model.ObjectTypeToolResponse,
+							Choices: []model.Choice{
+								{
+									Message: model.Message{
+										Role:   model.RoleTool,
+										ToolID: "call_123123",
+									},
+								},
+							},
+							Error: &model.ResponseError{
+								Message: "call err",
+								Type:    model.ErrorTypeFlowError,
+							},
+						},
+					},
 				},
 			},
 			summaryUpdatedAt: time.Time{},
-			expectedCount:    2,
-			expectedContent:  []string{"old message", "new message"},
+			expectedCount:    4,
+			expectedContent:  []string{"old message", "new message", "", "type: flow_error, message: call err"},
 		},
 		{
 			name: "with summary, include events after summary time",
@@ -916,6 +957,180 @@ func TestContentRequestProcessor_getFilterHistoryMessages(t *testing.T) {
 			assert.Equal(t, tt.expectedCount, len(messages))
 			for i, expectedContent := range tt.expectedContent {
 				assert.Equal(t, expectedContent, messages[i].Content)
+			}
+		})
+	}
+}
+
+// TestContentRequestProcessor_MaxHistoryRuns_SkipsOrphanedToolResults verifies
+// that when MaxHistoryRuns truncation would place an orphaned tool result
+// (whose corresponding tool_use was truncated) at the start of the window,
+// startIdx is advanced past it to avoid a 400 "unexpected tool_use_id" error.
+func TestContentRequestProcessor_MaxHistoryRuns_SkipsOrphanedToolResults(t *testing.T) {
+	baseTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	// Helper to create an assistant event with tool calls.
+	createToolCallEvent := func(content string, ts time.Time, toolCallIDs ...string) event.Event {
+		var toolCalls []model.ToolCall
+		for _, id := range toolCallIDs {
+			toolCalls = append(toolCalls, model.ToolCall{
+				Type: "function",
+				ID:   id,
+				Function: model.FunctionDefinitionParam{
+					Name: "test_func",
+				},
+			})
+		}
+		return event.Event{
+			Author:    "test-agent",
+			FilterKey: "test-filter",
+			Timestamp: ts,
+			Response: &model.Response{
+				Choices: []model.Choice{
+					{
+						Message: model.Message{
+							Role:      model.RoleAssistant,
+							Content:   content,
+							ToolCalls: toolCalls,
+						},
+					},
+				},
+			},
+		}
+	}
+
+	// Helper to create a tool result event.
+	createToolResultEvent := func(toolID, content string, ts time.Time) event.Event {
+		return event.Event{
+			Author:    "test-agent",
+			FilterKey: "test-filter",
+			Timestamp: ts,
+			Response: &model.Response{
+				Choices: []model.Choice{
+					{
+						Message: model.Message{
+							Role:    model.RoleTool,
+							ToolID:  toolID,
+							Content: content,
+						},
+					},
+				},
+			},
+		}
+	}
+
+	tests := []struct {
+		name            string
+		maxHistoryRuns  int
+		events          []event.Event
+		expectedCount   int
+		expectedContent []string
+		description     string
+	}{
+		{
+			name:           "orphaned tool result is skipped",
+			maxHistoryRuns: 2,
+			// Messages produced: [assistant(tool_call:tc1), tool(tc1), user("msg")]
+			// MaxHistoryRuns=2 → startIdx=1 → messages[1] is tool(tc1) whose
+			// tool_use was truncated → advance startIdx to 2.
+			// Result: [user("msg")]
+			events: []event.Event{
+				createToolCallEvent("calling tool", baseTime.Add(-3*time.Hour), "tc1"),
+				createToolResultEvent("tc1", "tool result", baseTime.Add(-2*time.Hour)),
+				createTestEvent("user", "msg", baseTime.Add(-1*time.Hour)),
+			},
+			expectedCount:   1,
+			expectedContent: []string{"msg"},
+			description:     "Single orphaned tool result should be skipped",
+		},
+		{
+			name:           "multiple consecutive orphaned tool results are skipped",
+			maxHistoryRuns: 2,
+			// Messages: [assistant(tc1,tc2), tool(tc1), tool(tc2), user("msg1"), user("msg2")]
+			// MaxHistoryRuns=2 → startIdx=3 → messages[3]=user, not a tool result.
+			// Result: [user("msg1"), user("msg2")]
+			events: []event.Event{
+				createToolCallEvent("calling tools", baseTime.Add(-5*time.Hour), "tc1", "tc2"),
+				createToolResultEvent("tc1", "result1", baseTime.Add(-4*time.Hour)),
+				createToolResultEvent("tc2", "result2", baseTime.Add(-3*time.Hour)),
+				createTestEvent("user", "msg1", baseTime.Add(-2*time.Hour)),
+				createTestEvent("user", "msg2", baseTime.Add(-1*time.Hour)),
+			},
+			expectedCount:   2,
+			expectedContent: []string{"msg1", "msg2"},
+			description:     "Multiple orphaned tool results after truncation cutpoint should be skipped",
+		},
+		{
+			name:           "orphaned results skipped when cutpoint lands on them",
+			maxHistoryRuns: 3,
+			// Messages: [assistant(tc1), tool(tc1), tool(tc2_from_same_assistant), user("a"), user("b"), user("c")]
+			// Wait — tc2 wasn't in the truncated assistant message, so it won't be in truncatedToolIDs.
+			// Let's use: [user("old"), assistant(tc1), tool(tc1), user("a"), user("b")]
+			// MaxHistoryRuns=3 → startIdx=2 → messages[2]=tool(tc1) whose call was at idx=1, which IS truncated.
+			// → advance to 3. Result: [user("a"), user("b")]
+			events: []event.Event{
+				createTestEvent("user", "old", baseTime.Add(-5*time.Hour)),
+				createToolCallEvent("call", baseTime.Add(-4*time.Hour), "tc1"),
+				createToolResultEvent("tc1", "result1", baseTime.Add(-3*time.Hour)),
+				createTestEvent("user", "a", baseTime.Add(-2*time.Hour)),
+				createTestEvent("user", "b", baseTime.Add(-1*time.Hour)),
+			},
+			expectedCount:   2,
+			expectedContent: []string{"a", "b"},
+			description:     "Orphaned tool result at cutpoint is skipped, non-tool messages kept",
+		},
+		{
+			name:           "non-orphaned tool result is preserved",
+			maxHistoryRuns: 3,
+			// Messages: [assistant(tc1), tool(tc1), user("msg")]
+			// MaxHistoryRuns=3 → no truncation needed (3 messages ≤ 3).
+			// Result: [assistant(tc1), tool(tc1), user("msg")]
+			events: []event.Event{
+				createToolCallEvent("calling", baseTime.Add(-3*time.Hour), "tc1"),
+				createToolResultEvent("tc1", "result", baseTime.Add(-2*time.Hour)),
+				createTestEvent("user", "msg", baseTime.Add(-1*time.Hour)),
+			},
+			expectedCount:   3,
+			expectedContent: []string{"calling", "result", "msg"},
+			description:     "Tool result with its call within the window should be preserved",
+		},
+		{
+			name:           "tool result not orphaned when call is in window",
+			maxHistoryRuns: 3,
+			// Messages: [user("old"), assistant(tc1), tool(tc1), user("msg")]
+			// MaxHistoryRuns=3 → startIdx=1 → messages[1]=assistant(tc1), not a tool result.
+			// Result: [assistant(tc1), tool(tc1), user("msg")]
+			events: []event.Event{
+				createTestEvent("user", "old", baseTime.Add(-4*time.Hour)),
+				createToolCallEvent("calling", baseTime.Add(-3*time.Hour), "tc1"),
+				createToolResultEvent("tc1", "result", baseTime.Add(-2*time.Hour)),
+				createTestEvent("user", "msg", baseTime.Add(-1*time.Hour)),
+			},
+			expectedCount:   3,
+			expectedContent: []string{"calling", "result", "msg"},
+			description:     "Tool result should be preserved when its tool call is in the window",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			processor := NewContentRequestProcessor(
+				WithMaxHistoryRuns(tt.maxHistoryRuns),
+			)
+
+			inv := agent.NewInvocation(
+				agent.WithInvocationSession(&session.Session{
+					Events: tt.events,
+				}),
+				agent.WithInvocationEventFilterKey("test-filter"),
+			)
+
+			messages := processor.getIncrementMessages(inv, time.Time{})
+
+			assert.Equal(t, tt.expectedCount, len(messages), tt.description)
+			for i, expectedContent := range tt.expectedContent {
+				assert.Equal(t, expectedContent, messages[i].Content,
+					"message[%d] content mismatch", i)
 			}
 		})
 	}
@@ -2797,6 +3012,31 @@ func TestContentRequestProcessor_getCurrentInvocationMessages(t *testing.T) {
 		}
 	}
 
+	// Helper to create tool result err event
+	createToolResultErrEvent := func(invocationID, author, toolID, errmsg string, ts time.Time) event.Event {
+		return event.Event{
+			Author:       author,
+			InvocationID: invocationID,
+			Timestamp:    ts,
+			Version:      event.CurrentVersion,
+			Response: &model.Response{
+				Object: model.ObjectTypeToolResponse,
+				Choices: []model.Choice{
+					{
+						Message: model.Message{
+							Role:   model.RoleTool,
+							ToolID: toolID,
+						},
+					},
+				},
+				Error: &model.ResponseError{
+					Message: errmsg,
+					Type:    model.ErrorTypeFlowError,
+				},
+			},
+		}
+	}
+
 	// Helper to create assistant event
 	createAssistantEvent := func(invocationID, author, content string, ts time.Time) event.Event {
 		return event.Event{
@@ -2958,6 +3198,17 @@ func TestContentRequestProcessor_getCurrentInvocationMessages(t *testing.T) {
 			invocationID:  "inv1",
 			agentName:     "my_agent",
 			expectedCount: 2,
+		},
+		{
+			name: "fill tool result choice empty content by error",
+			sessionEvents: []event.Event{
+				createToolCallEvent("inv1", "agent1", "call1", baseTime),
+				createToolResultErrEvent("inv1", "agent1", "call1", "call err", baseTime.Add(time.Second)),
+			},
+			invocationID:    "inv1",
+			agentName:       "agent1",
+			expectedCount:   2,
+			expectedContent: []string{"", "type: flow_error, message: call err"},
 		},
 	}
 

@@ -13,6 +13,7 @@ package file
 import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
 )
 
@@ -87,5 +88,18 @@ func WithOCRExtractor(extractor ocr.Extractor) Option {
 func WithTransformers(transformers ...transform.Transformer) Option {
 	return func(s *Source) {
 		s.transformers = append(s.transformers, transformers...)
+	}
+}
+
+// WithFileReaderType overrides the automatic file type detection and forces using the specified file type.
+// This is useful when file extensions don't match the actual content format.
+// Use predefined constants from source package for type safety.
+//
+// Example:
+//
+//	source := file.New([]string{"data.txt"}, file.WithFileReaderType(source.FileReaderTypeJSON))
+func WithFileReaderType(fileType source.FileReaderType) Option {
+	return func(s *Source) {
+		s.fileReaderType = fileType
 	}
 }

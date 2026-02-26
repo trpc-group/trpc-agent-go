@@ -107,6 +107,10 @@ type variantConfig struct {
 	thinkingEnabledKey string
 	// thinkingValueConvertor converts ThinkingEnabled to variant-specific format.
 	thinkingValueConvertor thinkingValueConvertor
+
+	// defaultOptimizeForCache controls the default value for cache optimization
+	// when WithOptimizeForCache is not explicitly set.
+	defaultOptimizeForCache bool
 }
 type fileDeletionBodyConvertor func(body []byte, fileID string) []byte
 
@@ -127,6 +131,7 @@ var variantConfigs = map[Variant]variantConfig{
 		fileDeletionBodyConvertor: defaultFileDeletionBodyConvertor,
 		thinkingEnabledKey:        model.ThinkingEnabledKey,
 		thinkingValueConvertor:    defaultThinkingValueConvertor,
+		defaultOptimizeForCache:   true,
 	},
 	VariantDeepSeek: {
 		fileUploadPath:            "/openapi/v1/files",
@@ -244,8 +249,13 @@ func New(name string, opts ...Option) *Model {
 		opt(&o)
 	}
 
+	cfg, cfgOK := variantConfigs[o.Variant]
+	if !o.optimizeForCacheSet {
+		o.OptimizeForCache = cfgOK && cfg.defaultOptimizeForCache
+	}
+
 	// Set default API key and base URL if not specified.
-	if cfg, ok := variantConfigs[o.Variant]; ok {
+	if cfgOK {
 		if val, ok := os.LookupEnv(cfg.apiKeyName); ok && o.APIKey == "" {
 			o.APIKey = val
 		}
@@ -491,6 +501,11 @@ func (m *Model) buildChatRequest(request *model.Request) (openai.ChatCompletionN
 					Description: openai.String(js.Description),
 				},
 			},
+		}
+		if len(request.Tools) > 0 {
+			// Parallel tool calls can interfere with strict JSON schema
+			// output.
+			chatRequest.ParallelToolCalls = openai.Bool(false)
 		}
 	}
 
@@ -837,6 +852,13 @@ func (m *Model) convertTools(tools map[string]tool.Tool) []openai.ChatCompletion
 			log.Errorf("failed to unmarshal tool schema for %s: %v", declaration.Name, err)
 			continue
 		}
+		// Some OpenAI-compatible proxies require object schemas to include
+		// a `properties` key, even when the tool takes no arguments.
+		if typ, ok := parameters["type"].(string); ok && typ == "object" {
+			if props, exists := parameters["properties"]; !exists || props == nil {
+				parameters["properties"] = map[string]any{}
+			}
+		}
 		result = append(result, openai.ChatCompletionToolParam{
 			Function: openai.FunctionDefinitionParam{
 				Name:        declaration.Name,
@@ -970,13 +992,131 @@ func sanitizeChunkForAccumulator(chunk openai.ChatCompletionChunk) openai.ChatCo
 	return sanitized
 }
 
-// fixToolCallIndices fixes tool call indices for providers that return all
-// indices as 0 when making parallel tool calls. The OpenAI SDK accumulator
-// uses the index field to distinguish different tool calls, so if all tool
-// calls have index 0, their names and arguments get concatenated together.
-//
-// This function detects new tool calls by their ID and assigns them correct
-// sequential indices. It modifies the chunk in place and returns it.
+type toolCallIndexState struct {
+	idToIndexMap map[string]int
+	indexToID    map[int64]string
+	nextIndex    *int
+}
+
+func buildIndexToIDMap(
+	idToIndexMap map[string]int,
+	toolCalls []openai.ChatCompletionChunkChoiceDeltaToolCall,
+) map[int64]string {
+	indexToID := make(map[int64]string, len(toolCalls)+len(idToIndexMap))
+	for id, idx := range idToIndexMap {
+		indexToID[int64(idx)] = id
+	}
+	return indexToID
+}
+
+func checkIfIndexFixNeeded(
+	toolCalls []openai.ChatCompletionChunkChoiceDeltaToolCall,
+	idToIndexMap map[string]int,
+	indexToID map[int64]string,
+) bool {
+	for _, tc := range toolCalls {
+		if tc.ID == "" {
+			continue
+		}
+		if existingIndex, exists := idToIndexMap[tc.ID]; exists {
+			if tc.Index != int64(existingIndex) {
+				return true
+			}
+			indexToID[tc.Index] = tc.ID
+			continue
+		}
+		if existingID, exists := indexToID[tc.Index]; exists && existingID != tc.ID {
+			return true
+		}
+		indexToID[tc.Index] = tc.ID
+	}
+	return false
+}
+
+func updateIDToIndexMapFromToolCalls(
+	toolCalls []openai.ChatCompletionChunkChoiceDeltaToolCall,
+	idToIndexMap map[string]int,
+	nextIndex *int,
+) {
+	for _, tc := range toolCalls {
+		if tc.ID == "" {
+			continue
+		}
+		if _, exists := idToIndexMap[tc.ID]; !exists {
+			idToIndexMap[tc.ID] = int(tc.Index)
+			if int(tc.Index) >= *nextIndex {
+				*nextIndex = int(tc.Index) + 1
+			}
+		}
+	}
+}
+
+func createDeepCopyOfChunkForFix(
+	chunk openai.ChatCompletionChunk,
+	delta openai.ChatCompletionChunkChoiceDelta,
+) openai.ChatCompletionChunk {
+	fixedChunk := chunk
+	fixedChunk.Choices = make([]openai.ChatCompletionChunkChoice, len(chunk.Choices))
+	copy(fixedChunk.Choices, chunk.Choices)
+	fixedChunk.Choices[0].Delta.ToolCalls = make(
+		[]openai.ChatCompletionChunkChoiceDeltaToolCall,
+		len(delta.ToolCalls),
+	)
+	copy(fixedChunk.Choices[0].Delta.ToolCalls, delta.ToolCalls)
+	return fixedChunk
+}
+
+func buildUsedIndicesSet(idToIndexMap map[string]int) map[int64]struct{} {
+	usedIndices := make(map[int64]struct{}, len(idToIndexMap))
+	for _, idx := range idToIndexMap {
+		usedIndices[int64(idx)] = struct{}{}
+	}
+	return usedIndices
+}
+
+func findNextAvailableIndex(usedIndices map[int64]struct{}, startFrom int) int64 {
+	candidate := int64(startFrom)
+	for {
+		if _, used := usedIndices[candidate]; !used {
+			return candidate
+		}
+		candidate++
+	}
+}
+
+func applyToolCallIndexFixes(
+	fixedChunk *openai.ChatCompletionChunk,
+	state *toolCallIndexState,
+	usedIndices map[int64]struct{},
+) {
+	for i := range fixedChunk.Choices[0].Delta.ToolCalls {
+		tc := &fixedChunk.Choices[0].Delta.ToolCalls[i]
+		if tc.ID == "" {
+			continue
+		}
+		if existingIndex, exists := state.idToIndexMap[tc.ID]; exists {
+			tc.Index = int64(existingIndex)
+			continue
+		}
+		if _, used := usedIndices[tc.Index]; used {
+			tc.Index = findNextAvailableIndex(usedIndices, *state.nextIndex)
+		}
+		state.idToIndexMap[tc.ID] = int(tc.Index)
+		usedIndices[tc.Index] = struct{}{}
+		if int(tc.Index) >= *state.nextIndex {
+			*state.nextIndex = int(tc.Index) + 1
+		}
+	}
+}
+
+// fixToolCallIndices normalizes tool call indices in streaming chunks.
+// Some providers incorrectly set ToolCalls[].Index to 0 for every tool call.
+// The upstream openai-go accumulator uses ToolCalls[].Index as the slice position.
+// When indices are wrong, different tool calls get merged by concatenating Name and Arguments.
+// This function uses ToolCalls[].ID as the stable identity and rewrites indices to be consistent.
+// This function also handles the case where a single chunk contains multiple tool calls sharing the same index.
+// The idToIndexMap stores the canonical index for each tool call ID.
+// The nextIndex points to the next available canonical index and is advanced monotonically.
 func fixToolCallIndices(
 	chunk openai.ChatCompletionChunk,
 	idToIndexMap map[string]int,
@@ -985,76 +1125,27 @@ func fixToolCallIndices(
 	if len(chunk.Choices) == 0 {
 		return chunk
 	}
-
 	delta := chunk.Choices[0].Delta
 	if len(delta.ToolCalls) == 0 {
 		return chunk
 	}
 
-	// Check if we need to fix indices. We need to create a copy of the chunk
-	// to avoid modifying the original.
-	needsFix := false
-	for _, tc := range delta.ToolCalls {
-		// If this tool call has an ID we haven't seen before, and its index
-		// is 0, it might need fixing.
-		if tc.ID != "" {
-			if _, exists := idToIndexMap[tc.ID]; !exists {
-				// New tool call ID. Check if index is 0 and we already have
-				// other tool calls (which would indicate incorrect indices).
-				if tc.Index == 0 && *nextIndex > 0 {
-					needsFix = true
-					break
-				}
-			}
-		}
-	}
+	indexToID := buildIndexToIDMap(idToIndexMap, delta.ToolCalls)
+	needsFix := checkIfIndexFixNeeded(delta.ToolCalls, idToIndexMap, indexToID)
 
 	if !needsFix {
-		// Update nextIndex based on the indices we see.
-		for _, tc := range delta.ToolCalls {
-			if tc.ID != "" {
-				if _, exists := idToIndexMap[tc.ID]; !exists {
-					// First time seeing this ID, record its index.
-					idToIndexMap[tc.ID] = int(tc.Index)
-					if int(tc.Index) >= *nextIndex {
-						*nextIndex = int(tc.Index) + 1
-					}
-				}
-			}
-		}
+		updateIDToIndexMapFromToolCalls(delta.ToolCalls, idToIndexMap, nextIndex)
 		return chunk
 	}
 
-	// Create a deep copy of the chunk to modify tool call indices.
-	fixedChunk := chunk
-	fixedChunk.Choices = make([]openai.ChatCompletionChunkChoice, len(chunk.Choices))
-	copy(fixedChunk.Choices, chunk.Choices)
-
-	// Deep copy the tool calls slice.
-	fixedChunk.Choices[0].Delta.ToolCalls = make(
-		[]openai.ChatCompletionChunkChoiceDeltaToolCall,
-		len(delta.ToolCalls),
-	)
-	copy(fixedChunk.Choices[0].Delta.ToolCalls, delta.ToolCalls)
-
-	// Fix indices for tool calls.
-	for i := range fixedChunk.Choices[0].Delta.ToolCalls {
-		tc := &fixedChunk.Choices[0].Delta.ToolCalls[i]
-		if tc.ID == "" {
-			// No ID means this is a continuation chunk, keep original index.
-			continue
-		}
-		if existingIndex, exists := idToIndexMap[tc.ID]; exists {
-			// Use the existing index for this ID.
-			tc.Index = int64(existingIndex)
-		} else {
-			// New tool call ID with index 0, assign next available index.
-			tc.Index = int64(*nextIndex)
-			idToIndexMap[tc.ID] = *nextIndex
-			*nextIndex++
-		}
+	fixedChunk := createDeepCopyOfChunkForFix(chunk, delta)
+	usedIndices := buildUsedIndicesSet(idToIndexMap)
+	state := &toolCallIndexState{
+		idToIndexMap: idToIndexMap,
+		indexToID:    indexToID,
+		nextIndex:    nextIndex,
 	}
-
+	applyToolCallIndexFixes(&fixedChunk, state, usedIndices)
 	return fixedChunk
 }
 
@@ -1259,7 +1350,11 @@ func extractReasoningContent(extraFields map[string]respjson.Field) string {
 	}
 	reasoningField, ok := extraFields[model.ReasoningContentKey]
 	if !ok {
-		return ""
+		// Ollama and some providers use "reasoning" instead of "reasoning_content".
+		reasoningField, ok = extraFields[model.ReasoningContentKeyAlt]
+		if !ok {
+			return ""
+		}
 	}
 	reasoningStr, err := strconv.Unquote(reasoningField.Raw())
 	if err == nil {

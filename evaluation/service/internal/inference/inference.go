@@ -121,11 +121,16 @@ func inferenceInvocation(
 		}
 	}
 	// Convert the final response to invocation.
+	contextPtrs := make([]*model.Message, 0, len(contextMessages))
+	for i := range contextMessages {
+		contextPtrs = append(contextPtrs, &contextMessages[i])
+	}
 	return &evalset.Invocation{
-		InvocationID:  invocationID,
-		UserContent:   invocation.UserContent,
-		FinalResponse: finalResponse,
-		Tools:         tools,
+		InvocationID:    invocationID,
+		ContextMessages: contextPtrs,
+		UserContent:     invocation.UserContent,
+		FinalResponse:   finalResponse,
+		Tools:           tools,
 	}, nil
 }
 

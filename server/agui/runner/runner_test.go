@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/multimodal"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
@@ -451,6 +453,59 @@ func TestRunIgnoresRequestCancelButRespectsBackendTimeout(t *testing.T) {
 	_ = collectEvents(t, eventsCh)
 }
 
+func TestRunCancelsOnRequestCancelWhenEnabled(t *testing.T) {
+	ctxCh := make(chan context.Context, 1)
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			ctxCh <- ctx
+			ch := make(chan *agentevent.Event)
+			go func() {
+				<-ctx.Done()
+				close(ch)
+			}()
+			return ch, nil
+		},
+	}
+	r := New(
+		underlying,
+		WithCancelOnContextDoneEnabled(true),
+		WithTimeout(200*time.Millisecond),
+	)
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	reqCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	eventsCh, err := r.Run(reqCtx, input)
+	require.NoError(t, err)
+
+	select {
+	case evt := <-eventsCh:
+		assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evt)
+	case <-time.After(time.Second):
+		assert.FailNow(t, "timeout waiting for run started event")
+	}
+
+	var runCtx context.Context
+	select {
+	case runCtx = <-ctxCh:
+	case <-time.After(time.Second):
+		assert.FailNow(t, "timeout waiting for underlying runner context")
+	}
+
+	cancel()
+
+	assert.Eventually(t, func() bool {
+		return errors.Is(runCtx.Err(), context.Canceled)
+	}, time.Second, 5*time.Millisecond)
+
+	_ = collectEvents(t, eventsCh)
+}
+
 func TestRunTimeoutUsesMinRequestDeadlineAndBackendTimeout(t *testing.T) {
 	ctxCh := make(chan context.Context, 1)
 	underlying := &fakeRunner{
@@ -534,7 +589,8 @@ func TestRunNoMessages(t *testing.T) {
 	input := &adapter.RunAgentInput{ThreadID: "thread", RunID: "run"}
 	eventsCh, err := r.Run(context.Background(), input)
 	assert.Nil(t, eventsCh)
-	assert.EqualError(t, err, "no messages provided")
+	assert.ErrorContains(t, err, "build input message")
+	assert.ErrorContains(t, err, "no messages provided")
 	assert.Equal(t, 0, underlying.calls)
 }
 
@@ -584,7 +640,34 @@ func TestRunLastMessageNotUser(t *testing.T) {
 	}
 	eventsCh, err := r.Run(context.Background(), input)
 	assert.Nil(t, eventsCh)
-	assert.EqualError(t, err, "last message is not a user message")
+	assert.ErrorContains(t, err, "build input message")
+	assert.ErrorContains(t, err, "last message role must be user or tool")
+	assert.Equal(t, 0, underlying.calls)
+}
+
+func TestRunToolMessageMissingToolCallID(t *testing.T) {
+	underlying := &fakeRunner{}
+	fakeTrans := &fakeTranslator{}
+	r := &runner{
+		runner: underlying,
+		translatorFactory: func(_ context.Context, _ *adapter.RunAgentInput, _ ...translator.Option) (translator.Translator, error) {
+			return fakeTrans, nil
+		},
+		userIDResolver:    NewOptions().UserIDResolver,
+		stateResolver:     defaultStateResolver,
+		runOptionResolver: defaultRunOptionResolver,
+		startSpan:         defaultStartSpan,
+	}
+
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleTool, Content: "ok"}},
+	}
+	eventsCh, err := r.Run(context.Background(), input)
+	assert.Nil(t, eventsCh)
+	assert.ErrorContains(t, err, "build input message")
+	assert.ErrorContains(t, err, "tool message missing tool call id")
 	assert.Equal(t, 0, underlying.calls)
 }
 
@@ -618,6 +701,317 @@ func TestRunUnderlyingRunnerError(t *testing.T) {
 	_, ok := evts[1].(*aguievents.RunErrorEvent)
 	assert.True(t, ok)
 	assert.Equal(t, 1, underlying.calls)
+}
+
+func TestRunToolMessageRecordedInTrackAndForwarded(t *testing.T) {
+	var got model.Message
+	tracker := &recordingTracker{}
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			got = message
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	r := &runner{
+		appName:            "app",
+		runner:             underlying,
+		translatorFactory:  defaultTranslatorFactory,
+		userIDResolver:     defaultUserIDResolver,
+		stateResolver:      defaultStateResolver,
+		runOptionResolver:  defaultRunOptionResolver,
+		tracker:            tracker,
+		startSpan:          defaultStartSpan,
+		translateCallbacks: nil,
+	}
+
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{
+			{
+				ID:         "tool-msg-1",
+				Role:       types.RoleTool,
+				Content:    "result",
+				Name:       "calc",
+				ToolCallID: "call-1",
+			},
+		},
+	}
+
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	evts := collectEvents(t, eventsCh)
+
+	var sseFound bool
+	for _, evt := range evts {
+		res, ok := evt.(*aguievents.ToolCallResultEvent)
+		if !ok {
+			continue
+		}
+		assert.Equal(t, "tool-msg-1", res.MessageID)
+		assert.Equal(t, "call-1", res.ToolCallID)
+		assert.Equal(t, "result", res.Content)
+		sseFound = true
+	}
+	assert.True(t, sseFound)
+
+	assert.Equal(t, model.RoleTool, got.Role)
+	assert.Equal(t, "result", got.Content)
+	assert.Equal(t, "calc", got.ToolName)
+	assert.Equal(t, "call-1", got.ToolID)
+
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	var found bool
+	for _, evt := range tracker.events {
+		res, ok := evt.(*aguievents.ToolCallResultEvent)
+		if !ok {
+			continue
+		}
+		assert.Equal(t, "tool-msg-1", res.MessageID)
+		assert.Equal(t, "call-1", res.ToolCallID)
+		assert.Equal(t, "result", res.Content)
+		found = true
+	}
+	assert.True(t, found)
+}
+
+func TestRecordUserMessageTracksCustomEvent(t *testing.T) {
+	tracker := &recordingTracker{}
+	r := &runner{tracker: tracker}
+	key := session.Key{AppName: "app", UserID: "demo-user", SessionID: "thread"}
+	msg := &types.Message{Role: types.RoleUser, Content: "hi"}
+
+	err := r.recordUserMessage(context.Background(), key, msg)
+	require.NoError(t, err)
+	assert.Empty(t, msg.ID)
+	assert.Empty(t, msg.Name)
+
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	require.Len(t, tracker.events, 1)
+	custom, ok := tracker.events[0].(*aguievents.CustomEvent)
+	require.True(t, ok)
+	assert.Equal(t, multimodal.CustomEventNameUserMessage, custom.Name)
+	userMessage, ok := custom.Value.(types.Message)
+	require.True(t, ok)
+	assert.NotEmpty(t, userMessage.ID)
+	assert.Equal(t, types.RoleUser, userMessage.Role)
+	assert.Equal(t, "demo-user", userMessage.Name)
+	content, ok := userMessage.ContentString()
+	require.True(t, ok)
+	assert.Equal(t, "hi", content)
+}
+
+func TestRecordUserMessageRejectsNilAndNonUserRole(t *testing.T) {
+	r := &runner{}
+	key := session.Key{AppName: "app", UserID: "demo-user", SessionID: "thread"}
+
+	err := r.recordUserMessage(context.Background(), key, nil)
+	assert.ErrorContains(t, err, "user message is nil")
+
+	err = r.recordUserMessage(context.Background(), key, &types.Message{Role: types.RoleTool, Content: "hi"})
+	assert.ErrorContains(t, err, "user message role must be user")
+}
+
+func TestRunUserMessageRecordedInTrackAsCustomEventWithStringContent(t *testing.T) {
+	tracker := &recordingTracker{}
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	r := &runner{
+		appName:            "app",
+		runner:             underlying,
+		translatorFactory:  defaultTranslatorFactory,
+		userIDResolver:     func(context.Context, *adapter.RunAgentInput) (string, error) { return "demo-user", nil },
+		stateResolver:      defaultStateResolver,
+		runOptionResolver:  defaultRunOptionResolver,
+		tracker:            tracker,
+		startSpan:          defaultStartSpan,
+		translateCallbacks: nil,
+	}
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{ID: "user-msg-1", Role: types.RoleUser, Content: "hi"}},
+	}
+
+	ch, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	collectEvents(t, ch)
+
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	var (
+		found bool
+		msg   types.Message
+	)
+	for _, evt := range tracker.events {
+		custom, ok := evt.(*aguievents.CustomEvent)
+		if !ok || custom.Name != multimodal.CustomEventNameUserMessage {
+			continue
+		}
+		value, ok := custom.Value.(types.Message)
+		require.True(t, ok)
+		msg = value
+		found = true
+	}
+	require.True(t, found)
+	assert.Equal(t, "user-msg-1", msg.ID)
+	assert.Equal(t, types.RoleUser, msg.Role)
+	assert.Equal(t, "demo-user", msg.Name)
+	content, ok := msg.ContentString()
+	require.True(t, ok)
+	assert.Equal(t, "hi", content)
+}
+
+func TestRunUserMessageRecordedInTrackAsCustomEventWithInputContents(t *testing.T) {
+	tracker := &recordingTracker{}
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	r := &runner{
+		appName:            "app",
+		runner:             underlying,
+		translatorFactory:  defaultTranslatorFactory,
+		userIDResolver:     func(context.Context, *adapter.RunAgentInput) (string, error) { return "demo-user", nil },
+		stateResolver:      defaultStateResolver,
+		runOptionResolver:  defaultRunOptionResolver,
+		tracker:            tracker,
+		startSpan:          defaultStartSpan,
+		translateCallbacks: nil,
+	}
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{
+			ID:   "user-msg-2",
+			Role: types.RoleUser,
+			Content: []any{
+				map[string]any{"type": "binary", "mimeType": "image/jpeg", "url": "https://example.com/a.jpg"},
+				map[string]any{"type": "text", "text": "hello"},
+			},
+		}},
+	}
+
+	ch, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	collectEvents(t, ch)
+
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	var (
+		found bool
+		msg   types.Message
+	)
+	for _, evt := range tracker.events {
+		custom, ok := evt.(*aguievents.CustomEvent)
+		if !ok || custom.Name != multimodal.CustomEventNameUserMessage {
+			continue
+		}
+		value, ok := custom.Value.(types.Message)
+		require.True(t, ok)
+		msg = value
+		found = true
+	}
+	require.True(t, found)
+	assert.Equal(t, "user-msg-2", msg.ID)
+	assert.Equal(t, types.RoleUser, msg.Role)
+	assert.Equal(t, "demo-user", msg.Name)
+	contents, ok := msg.Content.([]types.InputContent)
+	require.True(t, ok)
+	require.Len(t, contents, 2)
+	assert.Equal(t, types.InputContentTypeBinary, contents[0].Type)
+	assert.Equal(t, "image/jpeg", contents[0].MimeType)
+	assert.Equal(t, "https://example.com/a.jpg", contents[0].URL)
+	assert.Equal(t, types.InputContentTypeText, contents[1].Type)
+	assert.Equal(t, "hello", contents[1].Text)
+}
+
+func TestRunToolMessageSSEOrderAfterRunStarted(t *testing.T) {
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			ch := make(chan *agentevent.Event, 1)
+			ch <- agentevent.New("inv", "assistant")
+			close(ch)
+			return ch, nil
+		},
+	}
+	fakeTrans := &fakeTranslator{
+		events: [][]aguievents.Event{
+			{
+				aguievents.NewActivityDeltaEvent(
+					"activity-1",
+					"graph.node.start",
+					[]aguievents.JSONPatchOperation{
+						{
+							Op:   "add",
+							Path: "/node",
+							Value: map[string]any{
+								"nodeId": "external_tool",
+							},
+						},
+					},
+				),
+				aguievents.NewTextMessageStartEvent("msg-1", aguievents.WithRole("assistant")),
+			},
+		},
+	}
+	r := &runner{
+		runner: underlying,
+		translatorFactory: func(ctx context.Context, input *adapter.RunAgentInput, _ ...translator.Option) (translator.Translator, error) {
+			return fakeTrans, nil
+		},
+		userIDResolver:    NewOptions().UserIDResolver,
+		stateResolver:     defaultStateResolver,
+		runOptionResolver: defaultRunOptionResolver,
+		startSpan:         defaultStartSpan,
+	}
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{
+			{
+				ID:         "tool-msg-1",
+				Role:       types.RoleTool,
+				Content:    "tool result",
+				ToolCallID: "call-1",
+			},
+		},
+	}
+
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	evts := collectEvents(t, eventsCh)
+	require.Len(t, evts, 4)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evts[0])
+	assert.IsType(t, (*aguievents.ToolCallResultEvent)(nil), evts[1])
+	assert.IsType(t, (*aguievents.ActivityDeltaEvent)(nil), evts[2])
+	assert.IsType(t, (*aguievents.TextMessageStartEvent)(nil), evts[3])
+
+	resultEvent, ok := evts[1].(*aguievents.ToolCallResultEvent)
+	require.True(t, ok)
+	assert.Equal(t, "tool-msg-1", resultEvent.MessageID)
+	assert.Equal(t, "call-1", resultEvent.ToolCallID)
+	assert.Equal(t, "tool result", resultEvent.Content)
 }
 
 func TestRunRunOptionResolverError(t *testing.T) {
@@ -680,42 +1074,121 @@ func TestRunStartSpanError(t *testing.T) {
 	assert.Equal(t, 0, underlying.calls)
 }
 
+func TestRunLastMessageContentArray(t *testing.T) {
+	messageCh := make(chan model.Message, 1)
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			messageCh <- message
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{
+			Role: types.RoleUser,
+			Content: []types.InputContent{
+				{Type: types.InputContentTypeBinary, MimeType: "image/jpeg", URL: "https://example.com/resource/download?id=1"},
+				{Type: types.InputContentTypeText, Text: "图中有哪些信息?"},
+			},
+		}},
+	}
+	r := &runner{
+		runner:            underlying,
+		translatorFactory: defaultTranslatorFactory,
+		userIDResolver:    defaultUserIDResolver,
+		stateResolver:     defaultStateResolver,
+		runOptionResolver: defaultRunOptionResolver,
+		startSpan:         defaultStartSpan,
+	}
+
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	require.NotNil(t, eventsCh)
+	collectEvents(t, eventsCh)
+
+	gotMessage := <-messageCh
+	assert.Equal(t, model.RoleUser, gotMessage.Role)
+	assert.Empty(t, gotMessage.Content)
+	require.Len(t, gotMessage.ContentParts, 2)
+	assert.Equal(t, model.ContentTypeImage, gotMessage.ContentParts[0].Type)
+	require.NotNil(t, gotMessage.ContentParts[0].Image)
+	assert.Equal(t, "https://example.com/resource/download?id=1", gotMessage.ContentParts[0].Image.URL)
+	assert.Empty(t, gotMessage.ContentParts[0].Image.Detail)
+	assert.Equal(t, model.ContentTypeText, gotMessage.ContentParts[1].Type)
+	require.NotNil(t, gotMessage.ContentParts[1].Text)
+	assert.Equal(t, "图中有哪些信息?", *gotMessage.ContentParts[1].Text)
+	assert.Equal(t, 1, underlying.calls)
+}
+
+func TestInputMessageFromRunAgentInputConvertsInputContentsFromAny(t *testing.T) {
+	input := &adapter.RunAgentInput{
+		Messages: []types.Message{{
+			ID:   "msg-1",
+			Role: types.RoleUser,
+			Content: []any{
+				map[string]any{"type": "binary", "mimeType": "image/jpeg", "url": "https://example.com/a.jpg"},
+				map[string]any{"type": "text", "text": "hello"},
+			},
+		}},
+	}
+
+	gotMessage, gotID, gotUserMessage, err := inputMessageFromRunAgentInput(input)
+	require.NoError(t, err)
+	require.NotNil(t, gotMessage)
+	assert.Equal(t, "msg-1", gotID)
+	require.NotNil(t, gotUserMessage)
+
+	assert.Equal(t, model.RoleUser, gotMessage.Role)
+	assert.Empty(t, gotMessage.Content)
+	require.Len(t, gotMessage.ContentParts, 2)
+	assert.Equal(t, model.ContentTypeImage, gotMessage.ContentParts[0].Type)
+	require.NotNil(t, gotMessage.ContentParts[0].Image)
+	assert.Equal(t, "https://example.com/a.jpg", gotMessage.ContentParts[0].Image.URL)
+
+	contents, ok := gotUserMessage.Content.([]types.InputContent)
+	require.True(t, ok)
+	require.Len(t, contents, 2)
+	assert.Equal(t, types.InputContentTypeBinary, contents[0].Type)
+	assert.Equal(t, "image/jpeg", contents[0].MimeType)
+	assert.Equal(t, "https://example.com/a.jpg", contents[0].URL)
+	assert.Equal(t, types.InputContentTypeText, contents[1].Type)
+	assert.Equal(t, "hello", contents[1].Text)
+}
+
 func TestRunLastMessageContentNotString(t *testing.T) {
 	underlying := &fakeRunner{}
-	fakeTrans := &fakeTranslator{}
 	input := &adapter.RunAgentInput{
 		ThreadID: "thread",
 		RunID:    "run",
 		Messages: []types.Message{{
 			Role:    types.RoleUser,
-			Content: []types.InputContent{{Type: types.InputContentTypeText, Text: "hi"}},
+			Content: map[string]any{"invalid": "payload"},
 		}},
 	}
 	startSpanCalled := false
-	var span *spySpan
 	r := &runner{
-		runner: underlying,
-		translatorFactory: func(_ context.Context, _ *adapter.RunAgentInput, _ ...translator.Option) (translator.Translator, error) {
-			return fakeTrans, nil
-		},
+		runner:            underlying,
+		translatorFactory: defaultTranslatorFactory,
 		userIDResolver:    defaultUserIDResolver,
 		stateResolver:     defaultStateResolver,
 		runOptionResolver: defaultRunOptionResolver,
 		startSpan: func(ctx context.Context, in *adapter.RunAgentInput) (context.Context, trace.Span, error) {
 			assert.Same(t, input, in)
 			startSpanCalled = true
-			span = &spySpan{Span: trace.SpanFromContext(ctx)}
-			return ctx, span, nil
+			return ctx, trace.SpanFromContext(ctx), nil
 		},
 	}
 
 	eventsCh, err := r.Run(context.Background(), input)
 	assert.Nil(t, eventsCh)
-	assert.EqualError(t, err, "last message content is not a string")
-	assert.True(t, startSpanCalled)
+	assert.ErrorContains(t, err, "build input message")
+	assert.ErrorContains(t, err, "last message content is not a string")
+	assert.False(t, startSpanCalled)
 	assert.Equal(t, 0, underlying.calls)
-	assert.NotNil(t, span)
-	assert.Equal(t, 1, span.endCalls)
 }
 
 func TestRunFlushesTracker(t *testing.T) {
@@ -1433,12 +1906,36 @@ func (f *flushRecorder) AppendEvent(ctx context.Context, key session.Key, event 
 	return nil
 }
 
-func (f *flushRecorder) GetEvents(ctx context.Context, key session.Key) (*session.TrackEvents, error) {
+func (f *flushRecorder) GetEvents(ctx context.Context, key session.Key, opts ...session.Option) (*session.TrackEvents, error) {
 	return nil, nil
 }
 
 func (f *flushRecorder) Flush(ctx context.Context, key session.Key) error {
 	f.flushCount++
+	return nil
+}
+
+type recordingTracker struct {
+	mu         sync.Mutex
+	events     []aguievents.Event
+	flushCount int
+}
+
+func (r *recordingTracker) AppendEvent(ctx context.Context, key session.Key, event aguievents.Event) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, event)
+	return nil
+}
+
+func (r *recordingTracker) GetEvents(ctx context.Context, key session.Key, opts ...session.Option) (*session.TrackEvents, error) {
+	return nil, nil
+}
+
+func (r *recordingTracker) Flush(ctx context.Context, key session.Key) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.flushCount++
 	return nil
 }
 
@@ -1453,7 +1950,7 @@ func (e *errorTracker) AppendEvent(ctx context.Context,
 }
 
 func (e *errorTracker) GetEvents(ctx context.Context,
-	_ session.Key) (*session.TrackEvents, error) {
+	_ session.Key, _ ...session.Option) (*session.TrackEvents, error) {
 	return nil, nil
 }
 

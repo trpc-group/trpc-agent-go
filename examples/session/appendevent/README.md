@@ -125,7 +125,7 @@ For an event to be persisted to session, it must satisfy:
 
 - `Response != nil`
 - `!IsPartial` (or has `StateDelta`)
-- `IsValidContent()` returns `true` (Choices with `Message.Content` or tool calls)
+- `IsValidContent()` returns `true` (Choices with `Message.Content`, `Message.ContentParts`, or tool calls)
 
 ### 5. Optional but Recommended Fields
 

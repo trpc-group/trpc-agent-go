@@ -184,6 +184,18 @@ func (b *blockingTool) Call(ctx context.Context, _ []byte) (any, error) {
 	return b.result, nil
 }
 
+type resultWithErrorTool struct {
+	name   string
+	result any
+	err    error
+}
+
+func (t *resultWithErrorTool) Declaration() *tool.Declaration { return &tool.Declaration{Name: t.name} }
+
+func (t *resultWithErrorTool) Call(_ context.Context, _ []byte) (any, error) {
+	return t.result, t.err
+}
+
 // helper to build tool calls with fixed IDs and names.
 func makeToolCalls(names ...string) []model.ToolCall {
 	calls := make([]model.ToolCall, 0, len(names))
@@ -546,6 +558,139 @@ func TestNewToolsNodeFunc_WithEnableParallelTools(t *testing.T) {
 	close(allowA)
 	close(allowB)
 	<-done
+}
+
+func TestNewToolsNodeFunc_WithToolCallbacks(t *testing.T) {
+	// Track callback invocations.
+	var beforeCalled, afterCalled bool
+	callbacks := tool.NewCallbacks()
+	callbacks.BeforeTool = append(callbacks.BeforeTool,
+		func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+			beforeCalled = true
+			return &tool.BeforeToolResult{Context: ctx}, nil
+		},
+	)
+	callbacks.AfterTool = append(callbacks.AfterTool,
+		func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+			afterCalled = true
+			return &tool.AfterToolResult{Context: ctx}, nil
+		},
+	)
+
+	// Create a simple tool.
+	simpleTool := &dummyTool{name: "simple"}
+	tools := map[string]tool.Tool{"simple": simpleTool}
+
+	// Build node func with tool callbacks configured via WithToolCallbacks option.
+	nf := NewToolsNodeFunc(tools, WithToolCallbacks(callbacks))
+
+	// Prepare state with tool call.
+	state := State{
+		StateKeyMessages: []model.Message{{
+			Role:      model.RoleAssistant,
+			ToolCalls: makeToolCalls("simple"),
+		}},
+	}
+
+	// Run the node function.
+	res, err := nf(context.Background(), state)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+
+	// Verify callbacks were invoked.
+	require.True(t, beforeCalled, "BeforeTool callback should be invoked")
+	require.True(t, afterCalled, "AfterTool callback should be invoked")
+
+	// Verify messages were created.
+	msgs, ok := res.(State)[StateKeyMessages].([]model.Message)
+	require.True(t, ok, "expected messages in result state")
+	require.Len(t, msgs, 1, "expected one tool result message")
+}
+
+func TestNewToolsNodeFunc_ToolCallbacksPrecedence(t *testing.T) {
+	// Test that node-configured callbacks take precedence over state callbacks.
+	var nodeCallbackUsed, stateCallbackUsed bool
+
+	// Node-level callbacks.
+	nodeCallbacks := tool.NewCallbacks()
+	nodeCallbacks.BeforeTool = append(nodeCallbacks.BeforeTool,
+		func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+			nodeCallbackUsed = true
+			return &tool.BeforeToolResult{Context: ctx}, nil
+		},
+	)
+
+	// State-level callbacks.
+	stateCallbacks := tool.NewCallbacks()
+	stateCallbacks.BeforeTool = append(stateCallbacks.BeforeTool,
+		func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+			stateCallbackUsed = true
+			return &tool.BeforeToolResult{Context: ctx}, nil
+		},
+	)
+
+	// Create a simple tool.
+	simpleTool := &dummyTool{name: "simple"}
+	tools := map[string]tool.Tool{"simple": simpleTool}
+
+	// Build node func with node-level callbacks.
+	nf := NewToolsNodeFunc(tools, WithToolCallbacks(nodeCallbacks))
+
+	// Prepare state with tool call and state-level callbacks.
+	state := State{
+		StateKeyMessages: []model.Message{{
+			Role:      model.RoleAssistant,
+			ToolCalls: makeToolCalls("simple"),
+		}},
+		StateKeyToolCallbacks: stateCallbacks,
+	}
+
+	// Run the node function.
+	res, err := nf(context.Background(), state)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+
+	// Verify only node-level callbacks were used.
+	require.True(t, nodeCallbackUsed, "node callback should be used")
+	require.False(t, stateCallbackUsed, "state callback should NOT be used when node callback is configured")
+}
+
+func TestNewToolsNodeFunc_StateCallbacksFallback(t *testing.T) {
+	// Test that state callbacks are used when node callbacks are not configured.
+	var stateCallbackUsed bool
+
+	// State-level callbacks.
+	stateCallbacks := tool.NewCallbacks()
+	stateCallbacks.BeforeTool = append(stateCallbacks.BeforeTool,
+		func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+			stateCallbackUsed = true
+			return &tool.BeforeToolResult{Context: ctx}, nil
+		},
+	)
+
+	// Create a simple tool.
+	simpleTool := &dummyTool{name: "simple"}
+	tools := map[string]tool.Tool{"simple": simpleTool}
+
+	// Build node func WITHOUT node-level callbacks.
+	nf := NewToolsNodeFunc(tools)
+
+	// Prepare state with tool call and state-level callbacks.
+	state := State{
+		StateKeyMessages: []model.Message{{
+			Role:      model.RoleAssistant,
+			ToolCalls: makeToolCalls("simple"),
+		}},
+		StateKeyToolCallbacks: stateCallbacks,
+	}
+
+	// Run the node function.
+	res, err := nf(context.Background(), state)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+
+	// Verify state callbacks were used.
+	require.True(t, stateCallbackUsed, "state callback should be used as fallback")
 }
 
 func TestBuilderEdges(t *testing.T) {
@@ -1481,6 +1626,7 @@ func TestBuildAgentInvocationWithStateAndScope_PreservesRequestID(
 		runtime,
 		&messageEchoAgent{name: "child"},
 		"",
+		"",
 	)
 	require.Equal(t, requestID, childInv.RunOptions.RequestID)
 	require.Equal(t, "model-x", childInv.RunOptions.ModelName)
@@ -1735,7 +1881,13 @@ func TestLLMRunnerSetsLastResponseID(t *testing.T) {
 		{
 			name: "user-input",
 			run: func(r *llmRunner) (State, error) {
-				res, err := r.executeUserInputStage(ctx, State{StateKeyUserInput: "hi"}, "hi", span)
+				res, err := r.executeUserInputStage(
+					ctx,
+					State{StateKeyUserInput: "hi"},
+					StateKeyUserInput,
+					"hi",
+					span,
+				)
 				require.NoError(t, err)
 				return res.(State), nil
 			},
@@ -1760,6 +1912,41 @@ func TestLLMRunnerSetsLastResponseID(t *testing.T) {
 			require.Equal(t, tt.expect, state[StateKeyLastResponseID])
 		})
 	}
+}
+
+func TestLLMRunner_CustomUserInputKey(t *testing.T) {
+	const (
+		testCustomInputKey = "custom_input"
+		testCustomInput    = "from-custom"
+	)
+
+	ctx, span := trace.Tracer.Start(context.Background(), "test")
+	defer span.End()
+
+	runner := newRunner("resp-custom")
+	runner.userInputKey = testCustomInputKey
+
+	res, err := runner.execute(ctx, State{
+		StateKeyMessages:   []model.Message{},
+		StateKeyUserInput:  "from-user",
+		testCustomInputKey: testCustomInput,
+	}, span)
+	require.NoError(t, err)
+
+	state, ok := res.(State)
+	require.True(t, ok)
+	require.Equal(t, "", state[testCustomInputKey])
+	_, hasDefaultKey := state[StateKeyUserInput]
+	require.False(t, hasDefaultKey)
+
+	merged := MessageReducer([]model.Message{}, state[StateKeyMessages])
+	msgs, ok := merged.([]model.Message)
+	require.True(t, ok)
+	require.Len(t, msgs, 2)
+	require.Equal(t, model.RoleUser, msgs[0].Role)
+	require.Equal(t, testCustomInput, msgs[0].Content)
+	require.Equal(t, model.RoleAssistant, msgs[1].Role)
+	require.Equal(t, "ok", msgs[1].Content)
 }
 
 func TestLLMRunner_OverridesStreamFromRunOptions(t *testing.T) {
@@ -1943,6 +2130,177 @@ func TestExecuteSingleToolCallPropagatesResponseID(t *testing.T) {
 			require.True(t, seenPhases[ToolExecutionPhaseComplete])
 		})
 	}
+}
+
+func TestExecuteSingleToolCall_InterruptWithCustomResultEmitsOutput(t *testing.T) {
+	ctx, span := trace.Tracer.Start(context.Background(), "tool")
+	defer span.End()
+
+	ch := make(chan *event.Event, 2)
+
+	callbacks := tool.NewCallbacks()
+	customResult := map[string]any{"reason": "need_user_confirm"}
+	callbacks.RegisterAfterTool(func(
+		_ context.Context,
+		_ *tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		return &tool.AfterToolResult{CustomResult: customResult}, NewInterruptError("pause")
+	})
+
+	_, err := executeSingleToolCall(ctx, singleToolCallConfig{
+		ToolCall: model.ToolCall{
+			ID: "call-1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "echo",
+				Arguments: []byte(`{"x":1}`),
+			},
+		},
+		Tools: map[string]tool.Tool{
+			"echo": &blockingTool{name: "echo", result: map[string]int{"x": 1}},
+		},
+		InvocationID:  "inv-1",
+		EventChan:     ch,
+		Span:          span,
+		ToolCallbacks: callbacks,
+		State:         State{StateKeyCurrentNodeID: "node-1"},
+	})
+	require.Error(t, err)
+	var interruptErr *InterruptError
+	require.ErrorAs(t, err, &interruptErr)
+
+	events := []*event.Event{<-ch, <-ch}
+
+	seenPhases := map[ToolExecutionPhase]bool{}
+	var complete ToolExecutionMetadata
+	for _, evt := range events {
+		raw := evt.StateDelta[MetadataKeyTool]
+		require.NotEmpty(t, raw)
+
+		var meta ToolExecutionMetadata
+		require.NoError(t, json.Unmarshal(raw, &meta))
+		seenPhases[meta.Phase] = true
+		if meta.Phase == ToolExecutionPhaseComplete {
+			complete = meta
+		}
+	}
+
+	require.True(t, seenPhases[ToolExecutionPhaseStart])
+	require.True(t, seenPhases[ToolExecutionPhaseComplete])
+	require.Empty(t, complete.Error)
+	require.JSONEq(t, `{"reason":"need_user_confirm"}`, complete.Output)
+}
+
+func TestExecuteSingleToolCall_InterruptFromToolEmitsOutput(t *testing.T) {
+	ctx, span := trace.Tracer.Start(context.Background(), "tool")
+	defer span.End()
+
+	ch := make(chan *event.Event, 2)
+
+	_, err := executeSingleToolCall(ctx, singleToolCallConfig{
+		ToolCall: model.ToolCall{
+			ID: "call-1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "echo",
+				Arguments: []byte(`{"x":1}`),
+			},
+		},
+		Tools: map[string]tool.Tool{
+			"echo": &resultWithErrorTool{
+				name:   "echo",
+				result: map[string]int{"x": 1},
+				err:    NewInterruptError("pause"),
+			},
+		},
+		InvocationID: "inv-1",
+		EventChan:    ch,
+		Span:         span,
+		State:        State{StateKeyCurrentNodeID: "node-1"},
+	})
+	require.Error(t, err)
+	var interruptErr *InterruptError
+	require.ErrorAs(t, err, &interruptErr)
+
+	events := []*event.Event{<-ch, <-ch}
+
+	seenPhases := map[ToolExecutionPhase]bool{}
+	var complete ToolExecutionMetadata
+	for _, evt := range events {
+		raw := evt.StateDelta[MetadataKeyTool]
+		require.NotEmpty(t, raw)
+
+		var meta ToolExecutionMetadata
+		require.NoError(t, json.Unmarshal(raw, &meta))
+		seenPhases[meta.Phase] = true
+		if meta.Phase == ToolExecutionPhaseComplete {
+			complete = meta
+		}
+	}
+
+	require.True(t, seenPhases[ToolExecutionPhaseStart])
+	require.True(t, seenPhases[ToolExecutionPhaseComplete])
+	require.Empty(t, complete.Error)
+	require.JSONEq(t, `{"x":1}`, complete.Output)
+}
+
+func TestExecuteSingleToolCall_InterruptBeforeCallbackWithCustomResultEmitsOutputAndSkipsTool(t *testing.T) {
+	ctx, span := trace.Tracer.Start(context.Background(), "tool")
+	defer span.End()
+
+	ch := make(chan *event.Event, 2)
+
+	callbacks := tool.NewCallbacks()
+	customResult := map[string]any{"reason": "need_user_confirm"}
+	callbacks.RegisterBeforeTool(func(
+		_ context.Context,
+		_ *tool.BeforeToolArgs,
+	) (*tool.BeforeToolResult, error) {
+		return &tool.BeforeToolResult{CustomResult: customResult}, NewInterruptError("pause")
+	})
+
+	tl := &captureTool{name: "echo", result: map[string]int{"x": 1}}
+
+	_, err := executeSingleToolCall(ctx, singleToolCallConfig{
+		ToolCall: model.ToolCall{
+			ID: "call-1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "echo",
+				Arguments: []byte(`{"x":1}`),
+			},
+		},
+		Tools: map[string]tool.Tool{
+			"echo": tl,
+		},
+		InvocationID:  "inv-1",
+		EventChan:     ch,
+		Span:          span,
+		ToolCallbacks: callbacks,
+		State:         State{StateKeyCurrentNodeID: "node-1"},
+	})
+	require.Error(t, err)
+	var interruptErr *InterruptError
+	require.ErrorAs(t, err, &interruptErr)
+	require.False(t, tl.called)
+
+	events := []*event.Event{<-ch, <-ch}
+
+	seenPhases := map[ToolExecutionPhase]bool{}
+	var complete ToolExecutionMetadata
+	for _, evt := range events {
+		raw := evt.StateDelta[MetadataKeyTool]
+		require.NotEmpty(t, raw)
+
+		var meta ToolExecutionMetadata
+		require.NoError(t, json.Unmarshal(raw, &meta))
+		seenPhases[meta.Phase] = true
+		if meta.Phase == ToolExecutionPhaseComplete {
+			complete = meta
+		}
+	}
+
+	require.True(t, seenPhases[ToolExecutionPhaseStart])
+	require.True(t, seenPhases[ToolExecutionPhaseComplete])
+	require.Empty(t, complete.Error)
+	require.JSONEq(t, `{"reason":"need_user_confirm"}`, complete.Output)
 }
 
 func TestExtractResponseIDNonResponse(t *testing.T) {
@@ -2206,6 +2564,65 @@ func TestNewToolsNodeFunc_RefreshToolSetsOnRun(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, 2, ts.calls)
+}
+
+func TestStateGraph_StaticInterruptNodes_SetFlags(t *testing.T) {
+	const (
+		nodeA = "a"
+		nodeB = "b"
+	)
+
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode(nodeA, func(ctx context.Context, state State) (any, error) {
+		return nil, nil
+	})
+	sg.AddNode(nodeB, func(ctx context.Context, state State) (any, error) {
+		return nil, nil
+	})
+
+	sg.WithInterruptBeforeNodes(nodeA)
+	sg.WithInterruptAfterNodes(nodeB)
+
+	sg.SetEntryPoint(nodeA)
+	sg.AddEdge(nodeA, nodeB)
+	sg.SetFinishPoint(nodeB)
+
+	_, err := sg.Compile()
+	require.NoError(t, err)
+
+	a := sg.graph.nodes[nodeA]
+	b := sg.graph.nodes[nodeB]
+	require.NotNil(t, a)
+	require.NotNil(t, b)
+	require.True(t, a.interruptBefore)
+	require.True(t, b.interruptAfter)
+}
+
+func TestStateGraph_StaticInterruptNodes_UnknownNodeBuildError(t *testing.T) {
+	const (
+		nodeA         = "a"
+		nodeB         = "b"
+		missingBefore = "missing_before"
+		missingAfter  = "missing_after"
+	)
+
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode(nodeA, func(ctx context.Context, state State) (any, error) {
+		return nil, nil
+	})
+	sg.AddNode(nodeB, func(ctx context.Context, state State) (any, error) {
+		return nil, nil
+	})
+
+	sg.WithInterruptBeforeNodes(missingBefore)
+	sg.WithInterruptAfterNodes(missingAfter)
+
+	sg.SetEntryPoint(nodeA)
+	sg.AddEdge(nodeA, nodeB)
+	sg.SetFinishPoint(nodeB)
+
+	_, err := sg.Compile()
+	require.Error(t, err)
 }
 
 type latestCheckpointAgent struct {

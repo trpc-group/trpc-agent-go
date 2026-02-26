@@ -253,6 +253,33 @@ summarizer := summary.NewSummarizer(
 - Pre-hook 主要修改 `ctx.Text`，也可调整 `ctx.Events`；Post-hook 可修改 `ctx.Summary`。
 - 默认忽略 Hook 错误，需中断时使用 `WithSummaryHookAbortOnError(true)`。
 
+#### 模型回调（Before/After Model）
+
+`summarizer` 在调用底层 `model.GenerateContent` 前后支持模型回调（structured 签名），可用于修改请求、短路返回自定义响应、或在摘要请求上做埋点。
+
+```go
+import (
+    "context"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/session/summary"
+)
+
+callbacks := model.NewCallbacks().
+    RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+        // 可修改 args.Request，也可以返回 CustomResponse 来跳过真实 model 调用
+        return nil, nil
+    }).
+    RegisterAfterModel(func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+        // 可通过 CustomResponse 覆盖模型输出
+        return nil, nil
+    })
+
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithModelCallbacks(callbacks),
+)
+```
+
 **上下文注入机制：**
 
 启用摘要后，框架会将摘要作为独立的系统消息插入到第一个现有系统消息之后，同时包含摘要时间点之后的所有增量事件，保证完整上下文：
@@ -415,7 +442,7 @@ tRPC-Agent-Go 提供五种会话存储后端，满足不同场景需求：
 - **`WithSummarizer(s summary.SessionSummarizer)`**：注入会话摘要器。
 - **`WithAsyncSummaryNum(num int)`**：设置摘要处理 worker 数量。默认值为 3。
 - **`WithSummaryQueueSize(size int)`**：设置摘要任务队列大小。默认值为 100。
-- **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 30 秒。
+- **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 60 秒。
 
 ### 基础配置示例
 
@@ -466,7 +493,7 @@ sessionService := inmemory.NewSessionService(
     inmemory.WithSummarizer(summarizer),
     inmemory.WithAsyncSummaryNum(2),
     inmemory.WithSummaryQueueSize(100),
-    inmemory.WithSummaryJobTimeout(30*time.Second),
+    inmemory.WithSummaryJobTimeout(60*time.Second),
 )
 ```
 
@@ -487,7 +514,8 @@ sessionService := inmemory.NewSessionService(
 - **`WithSummarizer(s summary.SessionSummarizer)`**：注入会话摘要器。
 - **`WithAsyncSummaryNum(num int)`**：设置摘要处理 worker 数量。默认值为 3。
 - **`WithSummaryQueueSize(size int)`**：设置摘要任务队列大小。默认值为 100。
-- **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 30 秒。
+- **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 60 秒。
+- **`WithKeyPrefix(prefix string)`**：设置 Redis key 前缀。所有 key 将以 `prefix:` 开头。默认无前缀。
 - **`WithExtraOptions(extraOptions ...interface{})`**：为 Redis 客户端设置额外选项。
 
 ### 基础配置示例
@@ -620,7 +648,7 @@ summary:{appName}:{userID}:{sessionID}:{filterKey} -> String (JSON)
 - **`WithSummarizer(s summary.SessionSummarizer)`**：注入会话摘要器。
 - **`WithAsyncSummaryNum(num int)`**：摘要处理 worker 数量。默认值为 3。
 - **`WithSummaryQueueSize(size int)`**：摘要任务队列大小。默认值为 100。
-- **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 30 秒。
+- **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 60 秒。
 
 **Schema 和表配置：**
 
@@ -811,7 +839,7 @@ sessionService, err := postgres.NewService(
 - **`WithSummarizer(s summary.SessionSummarizer)`**：注入会话摘要器。
 - **`WithAsyncSummaryNum(num int)`**：摘要处理 worker 数量。默认值为 3。
 - **`WithSummaryQueueSize(size int)`**：摘要任务队列大小。默认值为 100。
-- **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 30 秒。
+- **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 60 秒。
 
 **表配置：**
 
@@ -972,7 +1000,7 @@ sessionService, err := mysql.NewService(
 - `idx_*_session_summaries_unique_active(app_name, user_id, session_id, filter_key, deleted_at)` — 唯一索引但包含 deleted_at
 - `idx_*_session_summaries_lookup(app_name, user_id, session_id, deleted_at)` — 普通索引
 
-**新版索引**：`idx_*_session_summaries_unique_active(app_name, user_id, session_id, filter_key)` — 唯一索引，不包含 deleted_at
+**新版索引**：`idx_*_session_summaries_unique_active(app_name(191), user_id(191), session_id(191), filter_key(191))` — 唯一索引，不包含 deleted_at（使用前缀索引以避免 Error 1071）。
 
 **迁移步骤**：
 
@@ -1011,7 +1039,7 @@ DROP INDEX idx_session_summaries_lookup ON session_summaries;
 -- Step 5: 创建新的唯一索引（不包含 deleted_at）
 -- 注意：索引名称可能带有表前缀，请根据实际情况调整。
 CREATE UNIQUE INDEX idx_session_summaries_unique_active 
-ON session_summaries(app_name, user_id, session_id, filter_key);
+ON session_summaries(app_name(191), user_id(191), session_id(191), filter_key(191));
 
 -- Step 6: 验证迁移结果
 SELECT COUNT(*) as duplicate_count FROM (
@@ -1481,7 +1509,7 @@ sessionService := inmemory.NewSessionService(
     inmemory.WithSummarizer(summarizer),
     inmemory.WithAsyncSummaryNum(2),                // 2 个异步 worker
     inmemory.WithSummaryQueueSize(100),             // 队列大小 100
-    inmemory.WithSummaryJobTimeout(30*time.Second), // 单个任务超时 30 秒
+    inmemory.WithSummaryJobTimeout(60*time.Second), // 单个任务超时 60 秒
 )
 
 // Redis 存储（生产环境）
@@ -1738,6 +1766,122 @@ llmagent.WithMaxHistoryRuns(10)  // 限制历史轮次
 - **`WithPrompt(prompt string)`**：提供自定义摘要提示词。提示词必须包含占位符 `{conversation_text}`，它会被对话内容替换。可选包含 `{max_summary_words}` 用于字数限制指令。
 - **`WithSkipRecent(skipFunc SkipRecentFunc)`**：通过自定义函数在摘要时跳过**最近**事件。函数接收所有事件并返回应跳过的尾部事件数量，返回 0 表示不跳过。适合避免总结最近、可能不完整的对话，或实现基于时间/内容的跳过策略。
 
+#### Token 计数器配置（Token Counter Configuration）
+
+默认情况下，`CheckTokenThreshold` 使用内置的 `SimpleTokenCounter` 基于文本长度估算 token 数量。如果您需要自定义 token 计数行为（例如，为特定模型使用更精确的 tokenizer），可以使用 `summary.SetTokenCounter` 设置全局 token 计数器：
+
+```go
+import (
+    "context"
+    "fmt"
+    "unicode/utf8"
+
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/session/summary"
+)
+
+// 设置自定义 token 计数器（影响该进程中的所有 CheckTokenThreshold 评估）
+summary.SetTokenCounter(model.NewSimpleTokenCounter())
+
+// 或者使用自定义实现
+type MyCustomCounter struct{}
+
+func (c *MyCustomCounter) CountTokens(ctx context.Context, message model.Message) (int, error) {
+    _ = ctx
+    // TODO: Replace this with your real tokenizer implementation.
+    return utf8.RuneCountInString(message.Content), nil
+}
+
+func (c *MyCustomCounter) CountTokensRange(ctx context.Context, messages []model.Message, start, end int) (int, error) {
+    if start < 0 || end > len(messages) || start >= end {
+        return 0, fmt.Errorf("invalid range: start=%d, end=%d, len=%d",
+            start, end, len(messages))
+    }
+
+    total := 0
+    for i := start; i < end; i++ {
+        tokens, err := c.CountTokens(ctx, messages[i])
+        if err != nil {
+            return 0, err
+        }
+        total += tokens
+    }
+    return total, nil
+}
+
+summary.SetTokenCounter(&MyCustomCounter{})
+
+// 创建带 token 阈值检查器的摘要器
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.CheckTokenThreshold(4000),  // 将使用您的自定义计数器
+)
+```
+
+**重要说明：**
+
+- **全局影响**：`SetTokenCounter` 会影响当前进程中所有的 `CheckTokenThreshold` 评估。建议在应用初始化时一次性设置。
+- **默认计数器**：如果不设置，将使用默认配置的 `SimpleTokenCounter`（约每 token 对应 4 个字符）。
+- **使用场景**：
+  - 需要精确估算 token 时使用准确的 tokenizer（如 tiktoken）
+  - 针对特定语言的模型进行调整（中文模型的 token 密度可能不同）
+  - 集成模型特定的计数 API 以获得更好的准确性
+
+**工具调用格式化：**
+
+默认情况下，摘要器会将工具调用和工具结果包含在发送给 LLM 进行总结的对话文本中。默认格式为：
+
+- 工具调用：`[Called tool: toolName with args: {"arg": "value"}]`
+- 工具结果：`[toolName returned: result content]`
+
+你可以使用以下选项自定义工具调用和结果的格式化方式：
+
+- **`WithToolCallFormatter(f ToolCallFormatter)`**：自定义工具调用在摘要输入中的格式。格式化器接收 `model.ToolCall` 并返回格式化字符串。返回空字符串可排除该工具调用。
+- **`WithToolResultFormatter(f ToolResultFormatter)`**：自定义工具结果在摘要输入中的格式。格式化器接收包含工具结果的 `model.Message` 并返回格式化字符串。返回空字符串可排除该结果。
+
+**自定义工具格式化器示例：**
+
+```go
+// 截断过长的工具参数
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithToolCallFormatter(func(tc model.ToolCall) string {
+        name := tc.Function.Name
+        if name == "" {
+            return ""
+        }
+        args := string(tc.Function.Arguments)
+        const maxLen = 100
+        if len(args) > maxLen {
+            args = args[:maxLen] + "...(已截断)"
+        }
+        return fmt.Sprintf("[工具: %s, 参数: %s]", name, args)
+    }),
+    summary.WithEventThreshold(20),
+)
+
+// 从摘要中排除工具结果
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithToolResultFormatter(func(msg model.Message) string {
+        return "" // 返回空字符串以排除工具结果。
+    }),
+    summary.WithEventThreshold(20),
+)
+
+// 仅包含工具名称，排除参数
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithToolCallFormatter(func(tc model.ToolCall) string {
+        if tc.Function.Name == "" {
+            return ""
+        }
+        return fmt.Sprintf("[使用工具: %s]", tc.Function.Name)
+    }),
+    summary.WithEventThreshold(20),
+)
+```
+
 **自定义提示词示例：**
 
 ```go
@@ -1806,9 +1950,9 @@ summarizer := summary.NewSummarizer(
 在会话服务中配置异步摘要处理：
 
 - **`WithSummarizer(s summary.SessionSummarizer)`**：将摘要器注入到会话服务中。
-- **`WithAsyncSummaryNum(num int)`**：设置用于摘要处理的异步 worker goroutine 数量。默认为 2。更多 worker 允许更高并发但消耗更多资源。
+- **`WithAsyncSummaryNum(num int)`**：设置用于摘要处理的异步 worker goroutine 数量。默认为 3。更多 worker 允许更高并发但消耗更多资源。
 - **`WithSummaryQueueSize(size int)`**：设置摘要任务队列的大小。默认为 100。更大的队列允许更多待处理任务但消耗更多内存。
-- **`WithSummaryJobTimeout(timeout time.Duration)`**：设置处理单个摘要任务的超时时间。默认为 30 秒。
+- **`WithSummaryJobTimeout(timeout time.Duration)`**：设置处理单个摘要任务的超时时间。默认为 60 秒。
 
 ### 手动触发摘要
 
@@ -2016,7 +2160,7 @@ func main() {
         inmemory.WithSummarizer(summarizer),
         inmemory.WithAsyncSummaryNum(2),
         inmemory.WithSummaryQueueSize(100),
-        inmemory.WithSummaryJobTimeout(30*time.Second),
+        inmemory.WithSummaryJobTimeout(60*time.Second),
     )
 
     // 创建启用摘要注入的 agent

@@ -428,3 +428,75 @@ func TestWithAsyncPersisterNum(t *testing.T) {
 		})
 	}
 }
+
+func TestWithKeyPrefix(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "empty prefix",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "simple prefix",
+			input:    "myapp",
+			expected: "myapp",
+		},
+		{
+			name:     "prefix with special chars",
+			input:    "my-app:v1",
+			expected: "my-app:v1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := ServiceOpts{}
+			WithKeyPrefix(tt.input)(&opts)
+			assert.Equal(t, tt.expected, opts.keyPrefix)
+		})
+	}
+}
+
+func TestKeyPrefixInRedisKeys(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	prefix := "test-prefix"
+	s, err := NewService(WithRedisClientURL(redisURL), WithKeyPrefix(prefix))
+	require.NoError(t, err)
+	defer s.Close()
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
+
+	// Verify that all key generation methods include the prefix
+	assert.Equal(t, "test-prefix:appstate:{app}", s.getAppStateKey(key.AppName))
+	assert.Equal(t, "test-prefix:userstate:{app}:user", s.getUserStateKey(key))
+	assert.Equal(t, "test-prefix:sess:{app}:user", s.getSessionStateKey(key))
+	assert.Equal(t, "test-prefix:sesssum:{app}:user", s.getSessionSummaryKey(key))
+	assert.Equal(t, "test-prefix:event:{app}:user:sid", s.getEventKey(key))
+	assert.Equal(t, "test-prefix:track:{app}:user:sid:alpha", s.getTrackKey(key, "alpha"))
+}
+
+func TestKeyPrefixEmpty(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	// No prefix
+	s, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer s.Close()
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
+
+	// Verify that keys are generated without prefix
+	assert.Equal(t, "appstate:{app}", s.getAppStateKey(key.AppName))
+	assert.Equal(t, "userstate:{app}:user", s.getUserStateKey(key))
+	assert.Equal(t, "sess:{app}:user", s.getSessionStateKey(key))
+	assert.Equal(t, "sesssum:{app}:user", s.getSessionSummaryKey(key))
+	assert.Equal(t, "event:{app}:user:sid", s.getEventKey(key))
+	assert.Equal(t, "track:{app}:user:sid:alpha", s.getTrackKey(key, "alpha"))
+}

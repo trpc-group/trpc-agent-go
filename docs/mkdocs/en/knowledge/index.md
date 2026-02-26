@@ -169,6 +169,10 @@ knowledge/
 │   ├── topk/            # TopK simple truncation implementation
 │   ├── cohere/          # Cohere SaaS Rerank implementation
 │   └── infinity/        # Infinity/TEI standard Rerank API implementation
+├── transform/            # Content transformers
+│   ├── transform.go     # Transformer interface definition
+│   ├── charfilter.go    # Character filter (remove specified characters)
+│   └── chardedup.go     # Character deduplicator (merge consecutive duplicate characters)
 ├── document/             # Document processing
 │   ├── document.go      # Document structure definition
 │   └── reader/          # Document readers (supports txt/md/csv/json/docx/pdf, etc.)
@@ -315,6 +319,34 @@ err := kb.Load(ctx,
 > - Increasing concurrency will increase the call frequency to Embedder services (OpenAI/Gemini), which may trigger rate limiting.
 > - Adjust `WithSourceConcurrency()` and `WithDocConcurrency()` according to throughput, cost, and rate limits.
 > - Default values are balanced for most scenarios; increase for speed if needed, decrease if rate limiting occurs.
+
+## Evaluation and Comparison
+
+We have conducted comprehensive RAG quality evaluation of tRPC-Agent-Go, LangChain, Agno, and CrewAI using the [RAGAS](https://docs.ragas.io/) framework.
+
+> **Detailed Documentation**: For complete evaluation plan, parameter configuration, and result analysis, please refer to [examples/knowledge/evaluation/README.md](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/evaluation/README.md)
+
+
+### Evaluation Plan
+
+- **Dataset**: HuggingFace Documentation Dataset ([m-ric/huggingface_doc](https://huggingface.co/datasets/m-ric/huggingface_doc))
+- **Metrics**: 7 standard RAGAS metrics (Faithfulness, Answer Relevancy, Context Precision, etc.)
+- **Comparison**: tRPC-Agent-Go vs LangChain vs Agno vs CrewAI with identical configuration parameters
+
+### Configuration Alignment
+
+To ensure fair comparison, all four systems use identical configurations:
+
+| Parameter | Configuration |
+|-----------|----------------|
+| **System Prompt** | Unified 5-rule constraint prompt |
+| **Temperature** | 0 |
+| **Chunk Size** | 500 |
+| **Chunk Overlap** | 50 |
+| **Embedding Model** | server:274214 (1024 dims) |
+| **Vector Store** | PGVector (CrewAI uses ChromaDB) |
+| **Agent Model** | DeepSeek-V3.2 |
+
 
 ## More Content
 

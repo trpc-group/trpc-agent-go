@@ -1223,6 +1223,145 @@ func TestSessionServiceAppendTrackEvent(t *testing.T) {
 	assert.Equal(t, []session.Track{"alpha", "beta"}, allTracks)
 }
 
+func TestSessionServiceGetSessionFiltersTrackEvents(t *testing.T) {
+	service := NewSessionService()
+	defer service.Close()
+
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "track-app",
+		UserID:    "track-user",
+		SessionID: "track-session",
+	}
+	sess, err := service.CreateSession(ctx, key, session.StateMap{})
+	require.NoError(t, err)
+
+	base := time.Now().Add(-time.Hour)
+	err = service.AppendTrackEvent(ctx, sess, &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"a1"`),
+		Timestamp: base,
+	})
+	require.NoError(t, err)
+	err = service.AppendTrackEvent(ctx, sess, &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"a2"`),
+		Timestamp: base.Add(time.Second),
+	})
+	require.NoError(t, err)
+	err = service.AppendTrackEvent(ctx, sess, &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"a3"`),
+		Timestamp: base.Add(2 * time.Second),
+	})
+	require.NoError(t, err)
+	err = service.AppendTrackEvent(ctx, sess, &session.TrackEvent{
+		Track:     "beta",
+		Payload:   json.RawMessage(`"b1"`),
+		Timestamp: base.Add(time.Second),
+	})
+	require.NoError(t, err)
+	err = service.AppendTrackEvent(ctx, sess, &session.TrackEvent{
+		Track:     "beta",
+		Payload:   json.RawMessage(`"b2"`),
+		Timestamp: base.Add(2 * time.Second),
+	})
+	require.NoError(t, err)
+
+	t.Run("filters by event time", func(t *testing.T) {
+		got, err := service.GetSession(ctx, key, session.WithEventTime(base.Add(time.Second)))
+		require.NoError(t, err)
+		require.NotNil(t, got)
+
+		alpha, err := got.GetTrackEvents("alpha")
+		require.NoError(t, err)
+		require.Len(t, alpha.Events, 2)
+		assert.Equal(t, json.RawMessage(`"a2"`), alpha.Events[0].Payload)
+		assert.Equal(t, json.RawMessage(`"a3"`), alpha.Events[1].Payload)
+
+		beta, err := got.GetTrackEvents("beta")
+		require.NoError(t, err)
+		require.Len(t, beta.Events, 2)
+		assert.Equal(t, json.RawMessage(`"b1"`), beta.Events[0].Payload)
+		assert.Equal(t, json.RawMessage(`"b2"`), beta.Events[1].Payload)
+	})
+
+	t.Run("filters out all events when event time is after last event", func(t *testing.T) {
+		got, err := service.GetSession(ctx, key, session.WithEventTime(base.Add(3*time.Second)))
+		require.NoError(t, err)
+		require.NotNil(t, got)
+
+		alpha, err := got.GetTrackEvents("alpha")
+		require.NoError(t, err)
+		require.Empty(t, alpha.Events)
+
+		beta, err := got.GetTrackEvents("beta")
+		require.NoError(t, err)
+		require.Empty(t, beta.Events)
+	})
+
+	t.Run("filters by event num", func(t *testing.T) {
+		got, err := service.GetSession(ctx, key, session.WithEventNum(1))
+		require.NoError(t, err)
+		require.NotNil(t, got)
+
+		alpha, err := got.GetTrackEvents("alpha")
+		require.NoError(t, err)
+		require.Len(t, alpha.Events, 1)
+		assert.Equal(t, json.RawMessage(`"a3"`), alpha.Events[0].Payload)
+
+		beta, err := got.GetTrackEvents("beta")
+		require.NoError(t, err)
+		require.Len(t, beta.Events, 1)
+		assert.Equal(t, json.RawMessage(`"b2"`), beta.Events[0].Payload)
+	})
+
+	t.Run("does not truncate when event num exceeds history length", func(t *testing.T) {
+		got, err := service.GetSession(ctx, key, session.WithEventNum(10))
+		require.NoError(t, err)
+		require.NotNil(t, got)
+
+		alpha, err := got.GetTrackEvents("alpha")
+		require.NoError(t, err)
+		require.Len(t, alpha.Events, 3)
+
+		beta, err := got.GetTrackEvents("beta")
+		require.NoError(t, err)
+		require.Len(t, beta.Events, 2)
+	})
+}
+
+func TestSessionServiceListSessionsFiltersTrackEvents(t *testing.T) {
+	service := NewSessionService()
+	defer service.Close()
+
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "track-app",
+		UserID:    "track-user",
+		SessionID: "track-session",
+	}
+	sess, err := service.CreateSession(ctx, key, session.StateMap{})
+	require.NoError(t, err)
+
+	base := time.Now().Add(-time.Hour)
+	err = service.AppendTrackEvent(ctx, sess, &session.TrackEvent{Track: "alpha", Payload: json.RawMessage(`"a1"`), Timestamp: base})
+	require.NoError(t, err)
+	err = service.AppendTrackEvent(ctx, sess, &session.TrackEvent{Track: "alpha", Payload: json.RawMessage(`"a2"`), Timestamp: base.Add(time.Second)})
+	require.NoError(t, err)
+	err = service.AppendTrackEvent(ctx, sess, &session.TrackEvent{Track: "alpha", Payload: json.RawMessage(`"a3"`), Timestamp: base.Add(2 * time.Second)})
+	require.NoError(t, err)
+
+	sessions, err := service.ListSessions(ctx, session.UserKey{AppName: key.AppName, UserID: key.UserID}, session.WithEventNum(1))
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+
+	alpha, err := sessions[0].GetTrackEvents("alpha")
+	require.NoError(t, err)
+	require.Len(t, alpha.Events, 1)
+	assert.Equal(t, json.RawMessage(`"a3"`), alpha.Events[0].Payload)
+}
+
 func TestSessionServiceAppendTrackEventErrors(t *testing.T) {
 	ctx := context.Background()
 

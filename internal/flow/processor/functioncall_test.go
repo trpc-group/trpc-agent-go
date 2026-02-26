@@ -2120,6 +2120,20 @@ func (d *deltaTool) StateDelta(_ []byte, _ []byte) map[string][]byte {
 	return map[string][]byte{"x": []byte("y")}
 }
 
+type errorDeltaTool struct{}
+
+func (e *errorDeltaTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: "errdelta"}
+}
+
+func (e *errorDeltaTool) Call(_ context.Context, _ []byte) (any, error) {
+	return nil, errors.New("boom")
+}
+
+func (e *errorDeltaTool) StateDelta(_ []byte, _ []byte) map[string][]byte {
+	return map[string][]byte{"x": []byte("y")}
+}
+
 func TestExecuteSingleToolCallSequential_AttachesStateDelta(t *testing.T) {
 	p := NewFunctionCallResponseProcessor(false, nil)
 	inv := &agent.Invocation{AgentName: "a", Model: &mockModel{}}
@@ -2140,6 +2154,29 @@ func TestExecuteSingleToolCallSequential_AttachesStateDelta(t *testing.T) {
 	require.NotNil(t, ev)
 	require.NotNil(t, ev.StateDelta)
 	require.Equal(t, []byte("y"), ev.StateDelta["x"])
+}
+
+func TestExecuteSingleToolCallSequential_SkipsStateDeltaOnError(
+	t *testing.T,
+) {
+	p := NewFunctionCallResponseProcessor(false, nil)
+	inv := &agent.Invocation{AgentName: "a", Model: &mockModel{}}
+	rsp := &model.Response{Choices: []model.Choice{{}}}
+	tc := model.ToolCall{
+		ID: "c1",
+		Function: model.FunctionDefinitionParam{
+			Name:      "errdelta",
+			Arguments: []byte(`{}`),
+		},
+	}
+	tools := map[string]tool.Tool{"errdelta": &errorDeltaTool{}}
+	ch := make(chan *event.Event, 4)
+	ev, err := p.executeSingleToolCallSequential(
+		context.Background(), inv, rsp, tools, ch, 0, tc,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, ev)
+	require.Empty(t, ev.StateDelta)
 }
 
 func TestSubAgentCall(t *testing.T) {
@@ -2250,8 +2287,12 @@ func TestExecuteStreamableTool_EmitsPartialEvents(t *testing.T) {
 		require.Equal(t, inv.AgentName, e.Author)
 		require.Equal(t, inv.Branch, e.Branch)
 		require.Len(t, e.Choices, 1)
+		require.Equal(t, model.RoleTool, e.Choices[0].Delta.Role)
+		require.Equal(t, "call-xyz", e.Choices[0].Delta.ToolID)
 		require.Equal(t, "call-xyz", e.Choices[0].Message.ToolID)
 	}
+	require.Equal(t, "hello", evts[0].Choices[0].Delta.Content)
+	require.Equal(t, " world", evts[1].Choices[0].Delta.Content)
 }
 
 func TestExecuteCallableTool_ErrorWrap(t *testing.T) {
@@ -3332,6 +3373,33 @@ func TestExecuteToolWithCallbacks_PluginBeforeToolArgsModified(
 	require.Equal(t, modifiedArgs, localArgs)
 	require.Equal(t, modifiedArgs, toolArgs)
 	require.Equal(t, modifiedArgs, string(gotArgs))
+}
+
+// TestExecuteToolWithCallbacks_RepairsToolCallArgumentsWhenEnabled verifies arguments are repaired before tool execution.
+func TestExecuteToolWithCallbacks_RepairsToolCallArgumentsWhenEnabled(t *testing.T) {
+	proc := NewFunctionCallResponseProcessor(false, nil)
+	repairEnabled := true
+	inv := &agent.Invocation{RunOptions: agent.RunOptions{ToolCallArgumentsJSONRepairEnabled: &repairEnabled}}
+	toolArgs := ""
+	tl := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "t"},
+		callFn: func(_ context.Context, args []byte) (any, error) {
+			toolArgs = string(args)
+			return "ok", nil
+		},
+	}
+	toolCall := model.ToolCall{
+		ID: "call-1",
+		Function: model.FunctionDefinitionParam{
+			Name:      "t",
+			Arguments: []byte("{a:2}"),
+		},
+	}
+
+	_, res, _, err := proc.executeToolWithCallbacks(context.Background(), inv, toolCall, tl, nil)
+	require.NoError(t, err)
+	require.Equal(t, "ok", res)
+	require.Equal(t, "{\"a\":2}", toolArgs)
 }
 
 func TestExecuteToolWithCallbacks_PluginAfterToolError(t *testing.T) {

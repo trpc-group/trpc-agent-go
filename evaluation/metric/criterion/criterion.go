@@ -11,6 +11,7 @@
 package criterion
 
 import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/finalresponse"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory"
 )
@@ -19,6 +20,8 @@ import (
 type Criterion struct {
 	// ToolTrajectory configures checks for tool call and response sequences.
 	ToolTrajectory *tooltrajectory.ToolTrajectoryCriterion `json:"toolTrajectory,omitempty"`
+	// FinalResponse configures checks for the agent final response content.
+	FinalResponse *finalresponse.FinalResponseCriterion `json:"finalResponse,omitempty"`
 	// LLMJudge configures the LLM-based judge criterion.
 	LLMJudge *llm.LLMCriterion `json:"llmJudge,omitempty"`
 }
@@ -28,6 +31,7 @@ func New(opt ...Option) *Criterion {
 	opts := newOptions(opt...)
 	return &Criterion{
 		ToolTrajectory: opts.toolTrajectory,
+		FinalResponse:  opts.finalResponse,
 		LLMJudge:       opts.llmJudge,
 	}
 }

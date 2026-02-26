@@ -23,44 +23,50 @@ import (
 )
 
 const (
-	defaultTimeout                           = time.Hour
-	defaultGraphNodeLifecycleActivityEnabled = false
-	defaultGraphNodeInterruptActivityEnabled = false
+	defaultTimeout                                = time.Hour
+	defaultGraphNodeLifecycleActivityEnabled      = false
+	defaultGraphNodeInterruptActivityEnabled      = false
+	defaultGraphNodeInterruptActivityTopLevelOnly = false
 )
 
 // Options holds the options for the runner.
 type Options struct {
-	TranslatorFactory                 TranslatorFactory     // TranslatorFactory creates a translator for an AG-UI run.
-	UserIDResolver                    UserIDResolver        // UserIDResolver derives the user identifier for an AG-UI run.
-	TranslateCallbacks                *translator.Callbacks // TranslateCallbacks translates the run events to AG-UI events.
-	RunAgentInputHook                 RunAgentInputHook     // RunAgentInputHook allows modifying the run input before processing.
-	AppName                           string                // AppName is the name of the application.
-	SessionService                    session.Service       // SessionService is the session service.
-	StateResolver                     StateResolver         // StateResolver resolves runtime state for an AG-UI run.
-	RunOptionResolver                 RunOptionResolver     // RunOptionResolver resolves the runner options for an AG-UI run.
-	AggregatorFactory                 aggregator.Factory    // AggregatorFactory builds an aggregator for each run.
-	AggregationOption                 []aggregator.Option   // AggregationOption is the aggregation options for each run.
-	FlushInterval                     time.Duration         // FlushInterval controls how often buffered AG-UI events are flushed for a session.
-	StartSpan                         StartSpan             // StartSpan starts a span for an AG-UI run.
-	Timeout                           time.Duration         // Timeout controls how long a run is allowed to execute.
-	GraphNodeLifecycleActivityEnabled bool                  // GraphNodeLifecycleActivityEnabled enables graph node lifecycle activity events.
-	GraphNodeInterruptActivityEnabled bool                  // GraphNodeInterruptActivityEnabled enables graph interrupt activity events.
+	TranslatorFactory                      TranslatorFactory     // TranslatorFactory creates a translator for an AG-UI run.
+	UserIDResolver                         UserIDResolver        // UserIDResolver derives the user identifier for an AG-UI run.
+	TranslateCallbacks                     *translator.Callbacks // TranslateCallbacks translates the run events to AG-UI events.
+	RunAgentInputHook                      RunAgentInputHook     // RunAgentInputHook allows modifying the run input before processing.
+	AppName                                string                // AppName is the name of the application.
+	SessionService                         session.Service       // SessionService is the session service.
+	StateResolver                          StateResolver         // StateResolver resolves runtime state for an AG-UI run.
+	RunOptionResolver                      RunOptionResolver     // RunOptionResolver resolves the runner options for an AG-UI run.
+	AggregatorFactory                      aggregator.Factory    // AggregatorFactory builds an aggregator for each run.
+	AggregationOption                      []aggregator.Option   // AggregationOption is the aggregation options for each run.
+	FlushInterval                          time.Duration         // FlushInterval controls how often buffered AG-UI events are flushed for a session.
+	MessagesSnapshotFollowEnabled          bool                  // MessagesSnapshotFollowEnabled enables tailing persisted AG-UI track events after MESSAGES_SNAPSHOT.
+	MessagesSnapshotFollowMaxDuration      time.Duration         // MessagesSnapshotFollowMaxDuration bounds how long tailing can run before emitting RUN_ERROR.
+	StartSpan                              StartSpan             // StartSpan starts a span for an AG-UI run.
+	Timeout                                time.Duration         // Timeout controls how long a run is allowed to execute.
+	CancelOnContextDoneEnabled             bool                  // CancelOnContextDoneEnabled cancels the run when the parent context is done.
+	GraphNodeLifecycleActivityEnabled      bool                  // GraphNodeLifecycleActivityEnabled enables graph node lifecycle activity events.
+	GraphNodeInterruptActivityEnabled      bool                  // GraphNodeInterruptActivityEnabled enables graph interrupt activity events.
+	GraphNodeInterruptActivityTopLevelOnly bool                  // GraphNodeInterruptActivityTopLevelOnly drops nested graph interrupt activity events.
 }
 
 // NewOptions creates a new options instance.
 func NewOptions(opt ...Option) *Options {
 	opts := &Options{
-		UserIDResolver:                    defaultUserIDResolver,
-		TranslatorFactory:                 defaultTranslatorFactory,
-		RunAgentInputHook:                 defaultRunAgentInputHook,
-		StateResolver:                     defaultStateResolver,
-		RunOptionResolver:                 defaultRunOptionResolver,
-		AggregatorFactory:                 aggregator.New,
-		FlushInterval:                     track.DefaultFlushInterval,
-		StartSpan:                         defaultStartSpan,
-		Timeout:                           defaultTimeout,
-		GraphNodeLifecycleActivityEnabled: defaultGraphNodeLifecycleActivityEnabled,
-		GraphNodeInterruptActivityEnabled: defaultGraphNodeInterruptActivityEnabled,
+		UserIDResolver:                         defaultUserIDResolver,
+		TranslatorFactory:                      defaultTranslatorFactory,
+		RunAgentInputHook:                      defaultRunAgentInputHook,
+		StateResolver:                          defaultStateResolver,
+		RunOptionResolver:                      defaultRunOptionResolver,
+		AggregatorFactory:                      aggregator.New,
+		FlushInterval:                          track.DefaultFlushInterval,
+		StartSpan:                              defaultStartSpan,
+		Timeout:                                defaultTimeout,
+		GraphNodeLifecycleActivityEnabled:      defaultGraphNodeLifecycleActivityEnabled,
+		GraphNodeInterruptActivityEnabled:      defaultGraphNodeInterruptActivityEnabled,
+		GraphNodeInterruptActivityTopLevelOnly: defaultGraphNodeInterruptActivityTopLevelOnly,
 	}
 	for _, o := range opt {
 		o(opts)
@@ -154,6 +160,20 @@ func WithFlushInterval(d time.Duration) Option {
 	}
 }
 
+// WithMessagesSnapshotFollowEnabled enables or disables tailing persisted track events after a snapshot.
+func WithMessagesSnapshotFollowEnabled(enabled bool) Option {
+	return func(o *Options) {
+		o.MessagesSnapshotFollowEnabled = enabled
+	}
+}
+
+// WithMessagesSnapshotFollowMaxDuration sets the maximum duration for snapshot tailing.
+func WithMessagesSnapshotFollowMaxDuration(d time.Duration) Option {
+	return func(o *Options) {
+		o.MessagesSnapshotFollowMaxDuration = d
+	}
+}
+
 // RunOptionResolver is a function that resolves the run options for an AG-UI run.
 type RunOptionResolver func(ctx context.Context, input *adapter.RunAgentInput) ([]agent.RunOption, error)
 
@@ -181,6 +201,13 @@ func WithTimeout(d time.Duration) Option {
 	}
 }
 
+// WithCancelOnContextDoneEnabled controls whether a run is canceled when the parent context is done.
+func WithCancelOnContextDoneEnabled(enabled bool) Option {
+	return func(o *Options) {
+		o.CancelOnContextDoneEnabled = enabled
+	}
+}
+
 // WithGraphNodeLifecycleActivityEnabled enables emitting graph node lifecycle activity events.
 func WithGraphNodeLifecycleActivityEnabled(enabled bool) Option {
 	return func(o *Options) {
@@ -192,6 +219,13 @@ func WithGraphNodeLifecycleActivityEnabled(enabled bool) Option {
 func WithGraphNodeInterruptActivityEnabled(enabled bool) Option {
 	return func(o *Options) {
 		o.GraphNodeInterruptActivityEnabled = enabled
+	}
+}
+
+// WithGraphNodeInterruptActivityTopLevelOnly enables emitting graph interrupt activity events only for the top-level invocation.
+func WithGraphNodeInterruptActivityTopLevelOnly(enabled bool) Option {
+	return func(o *Options) {
+		o.GraphNodeInterruptActivityTopLevelOnly = enabled
 	}
 }
 

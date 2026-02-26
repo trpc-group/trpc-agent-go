@@ -320,6 +320,59 @@ if err != nil {
 - 成员需要支持 `SetSubAgents`（LLMAgent 支持）。Swarm 需要成员之间能“发现彼此”，
   才能正确 transfer。
 
+### 跨请求 transfer（可选）
+
+默认情况下，每次新的用户输入都会从 Swarm 的 entry（入口）成员（`entryName`）开始，
+即使上一轮已经发生过一次或多次 handoff（交接）。
+
+如果你希望“当前接管会话的成员”在多次用户输入间保持不变，可以开启跨请求 transfer：
+
+```go
+tm, err := team.NewSwarm(
+    "team",
+    "researcher",
+    members,
+    team.WithCrossRequestTransfer(true),
+)
+```
+
+开启后：当某个成员通过 `transfer_to_agent` 交接并产出最后一次回复时，
+下一条用户输入将从该成员开始（直到再次发生 `transfer_to_agent`）。该能力通过
+Session State 实现，因此需要复用同一个 session。
+
+### 动态成员（运行时增删）
+
+在长时间运行的服务中，Swarm 的成员列表可能会变化（例如远程 Agent
+上线/下线、服务注册表变更）。
+
+你可以在运行时更新 Swarm Team 的成员列表：
+
+```go
+// 添加一个成员。
+if err := tm.AddSwarmMember(newAgent); err != nil {
+    panic(err)
+}
+
+// 按名称移除一个成员。
+if ok := tm.RemoveSwarmMember("member_name"); !ok {
+    // 未找到，或被拒绝（例如入口成员）。
+}
+
+// 替换整个成员列表。
+if err := tm.UpdateSwarmMembers(members); err != nil {
+    panic(err)
+}
+```
+
+注意：
+
+- 该能力只适用于 Swarm Team（通过 `team.NewSwarm` 创建）。
+- 入口成员（`entryName`）不能被移除；如果你想更换入口成员，请创建新的 Team。
+- 成员被移除后，其他成员的 SubAgents 列表会通过 `SetSubAgents` 重新绑定，
+  因此 `transfer_to_agent` 将无法再 transfer 到该成员。
+- 开启跨请求 transfer 后，如果 Session State 里记录的 active agent
+  已被移除，则下一次运行会回退到入口成员。
+
 ## Swarm 的安全限制
 
 Swarm 的 handoff（交接）如果不加限制，可能会出现来回 transfer 的循环。

@@ -31,6 +31,13 @@ var ModelContextWindows = map[string]int{
 	"o3":         200000,
 	"o4-mini":    200000,
 
+	// OpenAI GPT-5.2
+	"gpt-5.2":           400000,
+	"gpt-5.2-instant":   400000,
+	"gpt-5.2-codex-max": 400000,
+	"gpt-5.2-mini":      400000,
+	"gpt-5.2-nano":      400000,
+
 	// OpenAI GPT-5.1
 	"gpt-5.1":           400000,
 	"gpt-5.1-instant":   400000,
@@ -90,6 +97,8 @@ var ModelContextWindows = map[string]int{
 
 	// Anthropic Claude 4
 	"claude-4-opus":   200000,
+	"claude-opus-4":   200000,
+	"claude-sonnet-4": 200000,
 	"claude-4-sonnet": 200000,
 
 	// Anthropic Claude 3.7
