@@ -2771,6 +2771,173 @@ Metric `toolTrajectory` snippet:
 
 See [examples/evaluation/skill](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/skill) for a runnable example.
 
+### Claude Code Evaluation
+
+The framework provides a Claude Code Agent. It executes a local Claude Code CLI and maps `tool_use` / `tool_result` records from the CLI output into framework tool events. Therefore, when you need to evaluate Claude Code MCP tool calls, Skills, and subagent behaviors, you can reuse the tool trajectory evaluator `tool_trajectory_avg_score` to align tool traces.
+
+When authoring EvalSets and Metrics, note the Claude Code tool naming and normalization rules:
+
+- MCP tool names follow the `mcp__<server>__<tool>` convention, where `<server>` corresponds to the server key in the project `.mcp.json`.
+- Claude Code CLI `Skill` tool calls are normalized to `skill_run`, and `skill` is written into tool arguments `arguments` for matching.
+- Subagent routing is usually represented by a `Task` tool call, with `subagent_type` included in tool arguments `arguments`.
+
+A minimal example is shown below. It demonstrates how to declare the expected tool trajectory in the EvalSet and how to use `onlyTree` / `ignore` in the Metric to assert only stable fields.
+
+EvalSet file example below covers MCP, Skill, and Task tools:
+
+```json
+{
+  "evalSetId": "claudecode-basic",
+  "name": "claudecode-basic",
+  "evalCases": [
+    {
+      "evalId": "mcp_calculator",
+      "conversation": [
+        {
+          "invocationId": "mcp_calculator-1",
+          "userContent": {
+            "role": "user",
+            "content": "Compute 1+2."
+          },
+          "tools": [
+            {
+              "id": "tool_use_1",
+              "name": "mcp__eva_cli_example__calculator",
+              "arguments": {
+                "operation": "add",
+                "a": 1,
+                "b": 2
+              },
+              "result": {
+                "operation": "add",
+                "a": 1,
+                "b": 2,
+                "result": 3
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "claudecode-eval-app",
+        "userId": "user"
+      }
+    },
+    {
+      "evalId": "skill_call",
+      "conversation": [
+        {
+          "invocationId": "skill_call-1",
+          "userContent": {
+            "role": "user",
+            "content": "What's the weather in Shenzhen?"
+          },
+          "tools": [
+            {
+              "id": "tool_use_1",
+              "name": "skill_run",
+              "arguments": {
+                "skill": "weather-query"
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "claudecode-eval-app",
+        "userId": "user"
+      }
+    },
+    {
+      "evalId": "subagent_task",
+      "conversation": [
+        {
+          "invocationId": "subagent_task-1",
+          "userContent": {
+            "role": "user",
+            "content": "Look up the phone number for Alice."
+          },
+          "tools": [
+            {
+              "id": "tool_use_1",
+              "name": "Task",
+              "arguments": {
+                "subagent_type": "contact-lookup-agent"
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "claudecode-eval-app",
+        "userId": "user"
+      }
+    }
+  ],
+  "creationTimestamp": 1771929600
+}
+```
+
+Metric file example below:
+
+```json
+[
+  {
+    "metricName": "tool_trajectory_avg_score",
+    "threshold": 1,
+    "criterion": {
+      "toolTrajectory": {
+        "orderSensitive": true,
+        "subsetMatching": true,
+        "defaultStrategy": {
+          "name": {
+            "matchStrategy": "exact"
+          },
+          "arguments": {
+            "matchStrategy": "exact"
+          },
+          "result": {
+            "matchStrategy": "exact"
+          }
+        },
+        "toolStrategy": {
+          "skill_run": {
+            "name": {
+              "matchStrategy": "exact"
+            },
+            "arguments": {
+              "onlyTree": {
+                "skill": true
+              },
+              "matchStrategy": "exact"
+            },
+            "result": {
+              "ignore": true
+            }
+          },
+          "Task": {
+            "name": {
+              "matchStrategy": "exact"
+            },
+            "arguments": {
+              "onlyTree": {
+                "subagent_type": true
+              },
+              "matchStrategy": "exact"
+            },
+            "result": {
+              "ignore": true
+            }
+          }
+        }
+      }
+    }
+  }
+]
+```
+
+See [examples/evaluation/claudecode](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/claudecode) for a runnable example.
+
 ## Best Practices
 
 Integrating evaluation into engineering workflows often delivers more value than expected. It is not about producing a polished report; it is about turning key Agent behaviors into sustainable regression signals.

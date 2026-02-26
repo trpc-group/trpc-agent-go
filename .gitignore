@@ -40,3 +40,4 @@ __pycache__
 .venv
 examples/knowledge/evaluation/dataset/*
 !examples/claudecode/.claude
+!examples/evaluation/claudecode/.claude

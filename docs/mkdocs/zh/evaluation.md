@@ -2774,6 +2774,173 @@ Metric 的 `toolTrajectory` 配置示例如下：
 
 完整示例参见 [examples/evaluation/skill](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/skill)。
 
+### Claude Code 评估
+
+框架提供了 Claude Code Agent，通过执行本地 Claude Code CLI，并把 CLI 输出中的 `tool_use` / `tool_result` 记录映射为框架工具事件。因此，当需要评估 Claude Code 的 MCP 工具调用、Skill 与 Subagent 行为时，可以直接复用工具轨迹评估器 `tool_trajectory_avg_score` 对齐工具轨迹。
+
+在编写 EvalSet 与 Metric 时，需要注意 Claude Code 侧的工具命名与归一化规则：
+
+- MCP 工具名遵循 `mcp__<server>__<tool>` 规则，其中 `<server>` 对应项目内 `.mcp.json` 的 server key。
+- Claude Code CLI 的 `Skill` 工具会归一化为 `skill_run`，并将 `skill` 写入工具入参 `arguments`，便于与框架侧工具轨迹对齐。
+- Subagent 路由通常体现为 `Task` 工具调用，工具入参 `arguments` 中包含 `subagent_type`。
+
+下面给出一个最小示例，展示如何在 EvalSet 中声明预期的工具轨迹，并在 Metric 中通过 `onlyTree` / `ignore` 仅校验稳定字段。
+
+评估集文件示例如下，覆盖 MCP、Skill 与 Task 三类工具：
+
+```json
+{
+  "evalSetId": "claudecode-basic",
+  "name": "claudecode-basic",
+  "evalCases": [
+    {
+      "evalId": "mcp_calculator",
+      "conversation": [
+        {
+          "invocationId": "mcp_calculator-1",
+          "userContent": {
+            "role": "user",
+            "content": "Compute 1+2."
+          },
+          "tools": [
+            {
+              "id": "tool_use_1",
+              "name": "mcp__eva_cli_example__calculator",
+              "arguments": {
+                "operation": "add",
+                "a": 1,
+                "b": 2
+              },
+              "result": {
+                "operation": "add",
+                "a": 1,
+                "b": 2,
+                "result": 3
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "claudecode-eval-app",
+        "userId": "user"
+      }
+    },
+    {
+      "evalId": "skill_call",
+      "conversation": [
+        {
+          "invocationId": "skill_call-1",
+          "userContent": {
+            "role": "user",
+            "content": "What's the weather in Shenzhen?"
+          },
+          "tools": [
+            {
+              "id": "tool_use_1",
+              "name": "skill_run",
+              "arguments": {
+                "skill": "weather-query"
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "claudecode-eval-app",
+        "userId": "user"
+      }
+    },
+    {
+      "evalId": "subagent_task",
+      "conversation": [
+        {
+          "invocationId": "subagent_task-1",
+          "userContent": {
+            "role": "user",
+            "content": "Look up the phone number for Alice."
+          },
+          "tools": [
+            {
+              "id": "tool_use_1",
+              "name": "Task",
+              "arguments": {
+                "subagent_type": "contact-lookup-agent"
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "claudecode-eval-app",
+        "userId": "user"
+      }
+    }
+  ],
+  "creationTimestamp": 1771929600
+}
+```
+
+评估指标文件示例如下：
+
+```json
+[
+  {
+    "metricName": "tool_trajectory_avg_score",
+    "threshold": 1,
+    "criterion": {
+      "toolTrajectory": {
+        "orderSensitive": true,
+        "subsetMatching": true,
+        "defaultStrategy": {
+          "name": {
+            "matchStrategy": "exact"
+          },
+          "arguments": {
+            "matchStrategy": "exact"
+          },
+          "result": {
+            "matchStrategy": "exact"
+          }
+        },
+        "toolStrategy": {
+          "skill_run": {
+            "name": {
+              "matchStrategy": "exact"
+            },
+            "arguments": {
+              "onlyTree": {
+                "skill": true
+              },
+              "matchStrategy": "exact"
+            },
+            "result": {
+              "ignore": true
+            }
+          },
+          "Task": {
+            "name": {
+              "matchStrategy": "exact"
+            },
+            "arguments": {
+              "onlyTree": {
+                "subagent_type": true
+              },
+              "matchStrategy": "exact"
+            },
+            "result": {
+              "ignore": true
+            }
+          }
+        }
+      }
+    }
+  }
+]
+```
+
+完整可运行示例参见 [examples/evaluation/claudecode](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/claudecode)。
+
 ## 最佳实践
 
 把评估接入工程化流程，价值往往比想象得更大。它不是为了产出一份漂亮报表，而是为了让 Agent 的关键行为变成可持续的回归信号。
