@@ -1030,7 +1030,7 @@ func TestAppendEvent_VersionTagRouting_ZsetSession(t *testing.T) {
 	require.NotNil(t, sess)
 
 	// Append event - should go to zset via version tag
-	evt := createTestEvent("enew", "", "new msg", time.Now(), true)
+	evt := createTestEvent("evt-new", "", "new msg", time.Now(), true)
 	require.NoError(t, svcL.AppendEvent(ctx, sess, evt))
 
 	// Verify event is in zset
@@ -1064,7 +1064,7 @@ func TestAppendEvent_VersionTagRouting_HashidxSession(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
-	evt := createTestEvent("enew", "", "new msg", time.Now(), true)
+	evt := createTestEvent("evt-new", "", "new msg", time.Now(), true)
 	require.NoError(t, svcL.AppendEvent(ctx, sess, evt))
 
 	// Verify event is in hashidx
@@ -1260,7 +1260,7 @@ func TestPreSeeded_ZsetData_LegacyFullWorkflow(t *testing.T) {
 	assert.Equal(t, "old zset summary", text)
 
 	// 3. Append event to old zset session
-	evt := createTestEvent("enew", "", "legacy appended", time.Now(), true)
+	evt := createTestEvent("evt-new", "", "legacy appended", time.Now(), true)
 	require.NoError(t, svcL.AppendEvent(ctx, oldSess, evt))
 
 	// 4. Append track event to old zset session
@@ -1286,7 +1286,7 @@ func TestPreSeeded_ZsetData_LegacyFullWorkflow(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, sessNew)
 
-	evtNew := createTestEvent("enew2", "", "new session msg", time.Now(), true)
+	evtNew := createTestEvent("evt-new-2", "", "new session msg", time.Now(), true)
 	require.NoError(t, svcL.AppendEvent(ctx, sessNew, evtNew))
 
 	// 7. ListSessions: both visible

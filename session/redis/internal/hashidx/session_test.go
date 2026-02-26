@@ -245,7 +245,7 @@ func TestClient_DeleteSession_WithTracks(t *testing.T) {
 	_, rdb := setupMiniredis(t)
 	c := NewClient(rdb, defaultConfig())
 	ctx := context.Background()
-	key := session.Key{AppName: "app", UserID: "u1", SessionID: "delt1"}
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "del-t1"}
 
 	_, err := c.CreateSession(ctx, key, nil)
 	require.NoError(t, err)
@@ -467,4 +467,203 @@ func Test_shouldStoreEventInList(t *testing.T) {
 func Test_boolToInt(t *testing.T) {
 	assert.Equal(t, 1, boolToInt(true))
 	assert.Equal(t, 0, boolToInt(false))
+}
+
+func TestClient_GetSession_WithTracksAndSummary(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "full1"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	// Append event
+	evt := makeTestEvent("e1", time.Now())
+	require.NoError(t, c.AppendEvent(ctx, key, evt))
+
+	// Append track event
+	tracksJSON, _ := json.Marshal([]string{"alpha"})
+	te := &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"trackdata"`),
+		Timestamp: time.Now(),
+	}
+	require.NoError(t, c.AppendTrackEvent(ctx, key, te, tracksJSON))
+
+	// Create summary
+	sum := &session.Summary{Summary: "test-sum", UpdatedAt: time.Now().UTC()}
+	require.NoError(t, c.CreateSummary(ctx, key, "", sum, time.Hour))
+
+	// Full GetSession should return events, tracks, summary
+	sess, err := c.GetSession(ctx, key, 0, time.Time{})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Len(t, sess.Events, 1)
+	assert.NotEmpty(t, sess.Tracks)
+	assert.NotNil(t, sess.Summaries)
+	assert.Equal(t, "test-sum", sess.Summaries[""].Summary)
+}
+
+func TestClient_GetSession_WithEventLimit(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "lim1"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	baseTime := time.Now()
+	for i := 0; i < 5; i++ {
+		require.NoError(t, c.AppendEvent(ctx, key, makeTestEvent(fmt.Sprintf("e%d", i), baseTime.Add(time.Duration(i)*time.Second))))
+	}
+
+	// Get with limit
+	sess, err := c.GetSession(ctx, key, 2, time.Time{})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Len(t, sess.Events, 2)
+}
+
+func TestClient_GetSession_WithAfterTime(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "aft1"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	baseTime := time.Now()
+	for i := 0; i < 5; i++ {
+		require.NoError(t, c.AppendEvent(ctx, key, makeTestEvent(fmt.Sprintf("e%d", i), baseTime.Add(time.Duration(i)*time.Hour))))
+	}
+
+	// Filter by time
+	afterTime := baseTime.Add(2 * time.Hour)
+	sess, err := c.GetSession(ctx, key, 0, afterTime)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	// Should only get events after the threshold
+	for _, evt := range sess.Events {
+		assert.True(t, evt.Timestamp.After(afterTime) || evt.Timestamp.Equal(afterTime))
+	}
+}
+
+func TestClient_GetSession_CorruptedMeta(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "corrupt1"}
+
+	// Write corrupted meta directly
+	metaKey := c.keys.SessionMetaKey(key)
+	rdb.Set(ctx, metaKey, "not-valid-json", 0)
+
+	sess, err := c.GetSession(ctx, key, 0, time.Time{})
+	require.Error(t, err)
+	assert.Nil(t, sess)
+	assert.Contains(t, err.Error(), "unmarshal session meta")
+}
+
+func TestClient_ListSessions_WithEventsAndAppState(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+
+	// Pre-populate app state
+	require.NoError(t, c.UpdateAppState(ctx, "lsapp", session.StateMap{"ak": []byte("av")}, time.Hour))
+
+	// Pre-populate user state
+	userKey := session.UserKey{AppName: "lsapp", UserID: "lsu"}
+	require.NoError(t, c.UpdateUserState(ctx, userKey, session.StateMap{"uk": []byte("uv")}, time.Hour))
+
+	// Create sessions with events and tracks
+	for i := 0; i < 2; i++ {
+		key := session.Key{AppName: "lsapp", UserID: "lsu", SessionID: fmt.Sprintf("lssid%d", i)}
+		_, err := c.CreateSession(ctx, key, nil)
+		require.NoError(t, err)
+
+		evt := makeTestEvent(fmt.Sprintf("e%d", i), time.Now())
+		require.NoError(t, c.AppendEvent(ctx, key, evt))
+
+		// Add track
+		tracksJSON, _ := json.Marshal([]string{"t1"})
+		te := &session.TrackEvent{Track: "t1", Payload: json.RawMessage(`"p"`), Timestamp: time.Now()}
+		require.NoError(t, c.AppendTrackEvent(ctx, key, te, tracksJSON))
+	}
+
+	sessions, err := c.ListSessions(ctx, userKey, 0, time.Time{})
+	require.NoError(t, err)
+	require.Len(t, sessions, 2)
+
+	// Each session should have merged app/user state and tracks
+	for _, s := range sessions {
+		assert.Equal(t, []byte("av"), s.State["app:ak"])
+		assert.Equal(t, []byte("uv"), s.State["user:uk"])
+		assert.NotEmpty(t, s.Tracks)
+	}
+}
+
+func TestClient_loadAndAttachTrackEvents_NilSession(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "nil1"}
+
+	// Should not panic
+	c.loadAndAttachTrackEvents(ctx, key, nil, nil, 0, time.Time{})
+}
+
+func TestClient_loadAndAttachTrackEvents_ResolveFromState(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "resolve1"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	// Append track events
+	tracksJSON, _ := json.Marshal([]string{"gamma"})
+	te := &session.TrackEvent{Track: "gamma", Payload: json.RawMessage(`"gp"`), Timestamp: time.Now()}
+	require.NoError(t, c.AppendTrackEvent(ctx, key, te, tracksJSON))
+
+	// Create session with tracks in state (simulate by setting tracks state)
+	sess := session.NewSession("app", "u1", "resolve1")
+	sess.State = session.StateMap{"tracks": tracksJSON}
+
+	// Pass nil tracks -> should resolve from session state
+	c.loadAndAttachTrackEvents(ctx, key, sess, nil, 0, time.Time{})
+	assert.NotEmpty(t, sess.Tracks)
+}
+
+func TestClient_loadAndMergeAppState_NilSession(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "nil2"}
+
+	// Should not panic
+	c.loadAndMergeAppState(ctx, key, nil)
+}
+
+func Test_parseEvents_EmptyObject(t *testing.T) {
+	// Lua cjson encodes empty arrays as {} (JSON object)
+	r := &sessionDataResult{Events: json.RawMessage(`{}`)}
+	result := r.parseEvents()
+	assert.Nil(t, result)
+}
+
+func Test_parseEvents_EmptyInput(t *testing.T) {
+	r := &sessionDataResult{Events: nil}
+	result := r.parseEvents()
+	assert.Nil(t, result)
+}
+
+func Test_parseEvents_ValidArray(t *testing.T) {
+	r := &sessionDataResult{Events: json.RawMessage(`["a","b"]`)}
+	result := r.parseEvents()
+	assert.Equal(t, []string{"a", "b"}, result)
 }
