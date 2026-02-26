@@ -44,6 +44,18 @@ func TestRun_ParseErrorExitCode(t *testing.T) {
 	require.Equal(t, 2, exitErr.Code)
 }
 
+func TestMain_HelpReturnsUsageCode(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, 2, Main([]string{"-h"}))
+}
+
+func TestMain_InspectDispatches(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, 0, Main([]string{subcmdInspect}))
+}
+
 func TestRun_TelegramProxyErrorExitCode(t *testing.T) {
 	t.Parallel()
 
