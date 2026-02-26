@@ -5,7 +5,7 @@ OpenClaw-like shape on top of `trpc-agent-go`:
 
 - A long-running **gateway** process (HTTP endpoints).
 - A real IM **channel**: Telegram (long polling).
-- A stable **session_id** derived from DM vs group chat.
+- A stable **session_id** derived from DM (direct message) vs group chat.
 - Skills support via the built-in skills tooling in `llmagent`.
 
 It is intended as a starting point for adding more channels
@@ -324,8 +324,8 @@ go run ./cmd/openclaw \
 
 ### Telegram threads and topics
 
-This demo derives `session_id` based on whether the inbound message is a DM
-or a group message:
+This demo derives `session_id` based on whether the inbound message is a
+DM (direct message, i.e. a private chat) or a group message:
 
 - DMs: `thread` is empty, so the session is per-user.
 - Groups: `thread` is the chat ID, so the session is per-group.
