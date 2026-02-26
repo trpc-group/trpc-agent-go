@@ -24,7 +24,14 @@ nav:
       - Artifact: artifact.md
       - Skill: skill.md
       - Tool: tool.md
-      - Session: session.md
+      - Session:
+          - Overview: session/index.md
+          - Session Summary: session/summary.md
+          - Memory Session: session/inmemory.md
+          - Redis Session: session/redis.md
+          - MySQL Session: session/mysql.md
+          - PostgreSQL Session: session/postgres.md
+          - ClickHouse Session: session/clickhouse.md
       - Knowledge:
           - Overview: knowledge/index.md
           - Embedder: knowledge/embedder.md
@@ -86,13 +93,12 @@ plugins:
                 - Tool: tool.md
                 - Session:
                     - Overview: session/index.md
-                    - Memory: session/inmemory.md
-                    - Redis: session/redis.md
-                    - PostgreSQL: session/postgres.md
-                    - MySQL: session/mysql.md
-                    - ClickHouse: session/clickhouse.md
-                    - Summary: session/summary.md
-                    - Track: session/track.md
+                    - Session Summary: session/summary.md
+                    - Memory Session: session/inmemory.md
+                    - Redis Session: session/redis.md
+                    - MySQL Session: session/mysql.md
+                    - PostgreSQL Session: session/postgres.md
+                    - ClickHouse Session: session/clickhouse.md
                 - Knowledge:
                     - 概述: knowledge/index.md
                     - Embedder: knowledge/embedder.md

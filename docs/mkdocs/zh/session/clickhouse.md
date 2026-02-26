@@ -72,7 +72,7 @@ ClickHouse 存储适用于生产环境和海量数据场景，利用 ClickHouse 
 ```go
 import "trpc.group/trpc-go/trpc-agent-go/session/clickhouse"
 
-// Default configuration (minimal)
+// 默认配置（最简）
 sessionService, err := clickhouse.NewService(
     clickhouse.WithClickHouseDSN("clickhouse://default:password@localhost:9000/default"),
 )
@@ -86,12 +86,12 @@ import (
     sessionch "trpc.group/trpc-go/trpc-agent-go/session/clickhouse"
 )
 
-// Register ClickHouse instance
+// 注册 ClickHouse 实例
 clickhouse.RegisterClickHouseInstance("my-clickhouse",
     clickhouse.WithClientBuilderDSN("clickhouse://localhost:9000/default"),
 )
 
-// Use in session service
+// 在会话服务中使用
 sessionService, err := sessionch.NewService(
     sessionch.WithClickHouseInstance("my-clickhouse"),
 )

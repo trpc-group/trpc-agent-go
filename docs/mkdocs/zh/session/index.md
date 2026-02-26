@@ -20,7 +20,6 @@ Session 用于管理当前会话的上下文，隔离维度为 `<appName, userID
 - **并发安全**：内置读写锁保证并发访问安全
 - **自动管理**：集成 Runner 后自动处理会话创建、加载和更新
 - **软删除支持**：PostgreSQL/MySQL/ClickHouse 支持软删除，数据可恢复
-- **Track 事件**：支持独立的轨迹事件存储，用于记录特定类型的事件
 
 ## 快速开始
 
@@ -47,49 +46,51 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/model/openai"
     "trpc.group/trpc-go/trpc-agent-go/runner"
     "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
-    "trpc.group/trpc-go/trpc-agent-go/session/summary"
+    "trpc.group/trpc-go/trpc-agent-go/session/summary" // 可选：启用摘要功能时需要
 )
 
 func main() {
-    // 1. Create LLM model
+    // 1. 创建 LLM 模型
     llm := openai.New("gpt-4", openai.WithAPIKey("your-api-key"))
 
-    // 2. (Optional) Create summarizer - automatically compress long conversation history
+    // 2. （可选）创建摘要器 - 自动压缩长对话历史
     summarizer := summary.NewSummarizer(
-        llm,
-        summary.WithChecksAny(
-            summary.CheckEventThreshold(20),
-            summary.CheckTokenThreshold(4000),
-            summary.CheckTimeThreshold(5*time.Minute),
+        llm, // 使用相同的 LLM 模型生成摘要
+        summary.WithChecksAny( // 任一条件满足即触发摘要
+            summary.CheckEventThreshold(20),           // 超过 20 个事件后触发
+            summary.CheckTokenThreshold(4000),         // 超过 4000 个 token 后触发
+            summary.CheckTimeThreshold(5*time.Minute), // 5 分钟无活动后触发
         ),
-        summary.WithMaxSummaryWords(200),
+        summary.WithMaxSummaryWords(200), // 限制摘要在 200 字以内
     )
 
-    // 3. Create Session Service (optional, defaults to in-memory storage if not configured)
+    // 3. 创建 Session Service（可选，不配置则使用默认内存存储）
     sessionService := inmemory.NewSessionService(
-        inmemory.WithSummarizer(summarizer),
-        inmemory.WithAsyncSummaryNum(2),
-        inmemory.WithSummaryQueueSize(100),
+        inmemory.WithSummarizer(summarizer), // 可选：注入摘要器
+        inmemory.WithAsyncSummaryNum(2),     // 可选：2 个异步 worker
+        inmemory.WithSummaryQueueSize(100),  // 可选：队列大小 100
     )
 
-    // 4. Create Agent
+    // 4. 创建 Agent
     agent := llmagent.New(
         "my-agent",
         llmagent.WithModel(llm),
-        llmagent.WithInstruction("You are an intelligent assistant"),
-        llmagent.WithAddSessionSummary(true),
+        llmagent.WithInstruction("你是一个智能助手"),
+        llmagent.WithAddSessionSummary(true), // 可选：启用摘要注入到上下文
+        // 注意：WithAddSessionSummary(true) 时会忽略 WithMaxHistoryRuns 配置
+        // 摘要会包含所有历史，增量事件会完整保留
     )
 
-    // 5. Create Runner and inject Session Service
+    // 5. 创建 Runner 并注入 Session Service
     r := runner.NewRunner(
         "my-agent",
         agent,
         runner.WithSessionService(sessionService),
     )
 
-    // 6. First conversation
+    // 6. 第一次对话
     ctx := context.Background()
-    userMsg1 := model.NewUserMessage("My name is John")
+    userMsg1 := model.NewUserMessage("我叫张三")
     eventChan, err := r.Run(ctx, "user123", "session-001", userMsg1)
     if err != nil {
         fmt.Printf("Error: %v\n", err)
@@ -106,6 +107,7 @@ func main() {
         }
         if len(event.Response.Choices) > 0 {
             choice := event.Response.Choices[0]
+            // 流式输出，优先使用 Delta.Content，否则使用 Message.Content
             if choice.Delta.Content != "" {
                 fmt.Print(choice.Delta.Content)
             } else if choice.Message.Content != "" {
@@ -118,8 +120,8 @@ func main() {
     }
     fmt.Println()
 
-    // 7. Second conversation - automatically loads history, AI remembers user's name
-    userMsg2 := model.NewUserMessage("What's my name?")
+    // 7. 第二次对话 - 自动加载历史，AI 能记住用户名字
+    userMsg2 := model.NewUserMessage("我叫什么名字？")
     eventChan, err = r.Run(ctx, "user123", "session-001", userMsg2)
     if err != nil {
         fmt.Printf("Error: %v\n", err)
@@ -136,6 +138,7 @@ func main() {
         }
         if len(event.Response.Choices) > 0 {
             choice := event.Response.Choices[0]
+            // 流式输出，优先使用 Delta.Content，否则使用 Message.Content
             if choice.Delta.Content != "" {
                 fmt.Print(choice.Delta.Content)
             } else if choice.Message.Content != "" {
@@ -146,7 +149,7 @@ func main() {
             break
         }
     }
-    fmt.Println() // Output: Your name is John
+    fmt.Println() // 输出：你叫张三
 }
 ```
 
@@ -273,7 +276,7 @@ type Service interface {
 **配置示例：**
 
 ```go
-// Limit each session to 500 events max
+// 限制每个会话最多保存 500 个事件
 sessionService := inmemory.NewSessionService(
     inmemory.WithSessionEventLimit(500),
 )
@@ -368,7 +371,7 @@ type GetSessionHook func(ctx *GetSessionContext, next func() (*Session, error)) 
 ```go
 sessionService := inmemory.NewSessionService(
     inmemory.WithAppendEventHook(func(ctx *session.AppendEventContext, next func() error) error {
-        // Content filtering before storage
+        // 存储前进行内容过滤
         if containsSensitiveContent(ctx.Event) {
             return fmt.Errorf("sensitive content detected")
         }
@@ -379,7 +382,7 @@ sessionService := inmemory.NewSessionService(
         if err != nil {
             return nil, err
         }
-        // Filter events after retrieval
+        // 读取后过滤事件
         sess.Events = filterEvents(sess.Events)
         return sess, nil
     }),
@@ -387,6 +390,8 @@ sessionService := inmemory.NewSessionService(
 ```
 
 **责任链执行**：Hook 通过 `next()` 形成链式调用，可提前返回以短路后续逻辑，错误会向上传递。
+
+**跨后端一致**：内存、Redis、PostgreSQL、MySQL、ClickHouse 所有存储后端均已统一接入 Hook 机制，构造服务时注入 Hook 切片即可，使用方式完全一致。
 
 ## 高级用法
 
@@ -420,18 +425,18 @@ err := sessionService.DeleteSession(ctx, session.Key{
 #### 手动获取会话详情
 
 ```go
-// Get full session
+// 获取完整会话
 sess, err := sessionService.GetSession(ctx, session.Key{
     AppName:   "my-agent",
     UserID:    "user123",
     SessionID: "session-id-123",
 })
 
-// Get session with last 10 events
+// 获取最近 10 个事件的会话
 sess, err := sessionService.GetSession(ctx, key,
     session.WithEventNum(10))
 
-// Get events after a specific time
+// 获取指定时间后的事件
 sess, err := sessionService.GetSession(ctx, key,
     session.WithEventTime(time.Now().Add(-1*time.Hour)))
 ```
@@ -445,6 +450,10 @@ sess, err := sessionService.GetSession(ctx, key,
 - 将用户操作或元数据记录为事件
 - 以编程方式构建对话上下文
 
+**重要提示**：Event 既可以表示用户请求，也可以表示模型响应。当您使用 `Runner.Run()` 时，框架会自动为用户消息和助手回复创建事件。
+
+**示例：追加用户消息**
+
 ```go
 import (
     "context"
@@ -454,7 +463,7 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/session"
 )
 
-// Get or create session
+// 获取或创建会话
 sessionKey := session.Key{
     AppName:   "my-agent",
     UserID:    "user123",
@@ -471,36 +480,149 @@ if sess == nil {
     }
 }
 
-// Create user message
-message := model.NewUserMessage("Hello, I'm learning Go programming.")
+// 创建用户消息
+message := model.NewUserMessage("你好，我正在学习 Go 编程。")
 
-// Create event with required fields
+// 创建事件，必填字段：
+// - invocationID: 唯一标识符（必填）
+// - author: 事件作者，用户消息使用 "user"（必填）
+// - response: *model.Response，包含 Choices 和 Message（必填）
 invocationID := uuid.New().String()
 evt := event.NewResponseEvent(
-    invocationID,
-    "user",
+    invocationID, // 必填：唯一调用标识符
+    "user",       // 必填：事件作者
     &model.Response{
-        Done: false,
+        Done: false, // 推荐：非最终事件设为 false
         Choices: []model.Choice{
             {
-                Index:   0,
-                Message: message,
+                Index:   0,       // 必填：选择索引
+                Message: message, // 必填：包含 Content 或 ContentParts 的消息
             },
         },
     },
 )
-evt.RequestID = uuid.New().String()
+evt.RequestID = uuid.New().String() // 可选：用于追踪
 
-// Append event to session
+// 追加事件到会话
 if err := sessionService.AppendEvent(ctx, sess, evt); err != nil {
     return fmt.Errorf("append event failed: %w", err)
 }
 ```
 
+**示例：追加系统消息**
+
+```go
+systemMessage := model.Message{
+    Role:    model.RoleSystem,
+    Content: "你是一个专门帮助 Go 编程的助手。",
+}
+
+evt := event.NewResponseEvent(
+    uuid.New().String(),
+    "system", // 系统消息的作者
+    &model.Response{
+        Done:    false,
+        Choices: []model.Choice{{Index: 0, Message: systemMessage}},
+    },
+)
+
+if err := sessionService.AppendEvent(ctx, sess, evt); err != nil {
+    return err
+}
+```
+
+**示例：追加助手消息**
+
+```go
+assistantMessage := model.Message{
+    Role:    model.RoleAssistant,
+    Content: "Go 是一种静态类型、编译型的编程语言。",
+}
+
+evt := event.NewResponseEvent(
+    uuid.New().String(),
+    "assistant", // 助手消息的作者（或使用 agent 名称）
+    &model.Response{
+        Done:    false,
+        Choices: []model.Choice{{Index: 0, Message: assistantMessage}},
+    },
+)
+
+if err := sessionService.AppendEvent(ctx, sess, evt); err != nil {
+    return err
+}
+```
+
+**Event 必填字段**
+
+使用 `event.NewResponseEvent()` 创建事件时，以下字段是必填的：
+
+1. **函数参数**：
+   - `invocationID` (string): 唯一标识符，通常使用 `uuid.New().String()`
+   - `author` (string): 事件作者（`"user"`、`"system"` 或 agent 名称）
+   - `response` (*model.Response): 包含 Choices 的响应对象
+
+2. **Response 字段**：
+   - `Choices` ([]model.Choice): 至少包含一个 Choice，包含 `Index` 和 `Message`
+   - `Message`: 必须包含 `Content` 或 `ContentParts`
+
+3. **自动生成字段**（由 `event.NewResponseEvent()` 自动设置）：
+   - `ID`: 自动生成的 UUID
+   - `Timestamp`: 自动设置为当前时间
+   - `Version`: 自动设置为 `CurrentVersion`
+
+4. **持久化要求**：
+   - `Response != nil`
+   - `!IsPartial`（或包含 `StateDelta`）
+   - `IsValidContent()` 返回 `true`
+
+**与 Runner 配合使用**
+
+当您后续使用 `Runner.Run()` 处理同一会话时：
+
+1. Runner 会自动加载会话（包括所有已追加的事件）
+2. 将会话事件转换为消息
+3. 将所有消息（已追加的 + 当前的）包含在对话上下文中
+4. 一起发送给模型
+
+所有已追加的事件都会成为对话历史的一部分，并在后续交互中可供模型使用。
+
+**示例**：见 `examples/session/appendevent`（[代码](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/session/appendevent)）
+
+## Track 事件
+
+Track 事件是 Session 中独立于主对话事件的轨迹存储机制，目前主要用于 AGUI 场景下的事件存储。它允许在会话中记录特定类型的事件，而不影响主对话流程。
+
+**核心结构**：
+
+```go
+type TrackEvent struct {
+    Track     Track           `json:"track"`     // 轨道名称
+    Payload   json.RawMessage `json:"payload"`   // 事件载荷（JSON）
+    Timestamp time.Time       `json:"timestamp"` // 事件时间戳
+}
+```
+
+**基本用法**：
+
+```go
+// 追加 Track 事件
+payload, _ := json.Marshal(map[string]any{"action": "button_click"})
+err := sessionService.AppendTrackEvent(ctx, sess, &session.TrackEvent{
+    Track:     "ui-events",
+    Payload:   payload,
+    Timestamp: time.Now(),
+})
+
+// 从会话中获取 Track 事件
+trackEvents, err := sess.GetTrackEvents("ui-events")
+```
+
+**存储支持**：内存、Redis、PostgreSQL、MySQL 均支持 Track 事件存储，ClickHouse 暂不支持。
+
 ## 相关文档
 
 - [会话摘要](summary.md) - 自动压缩长对话历史
-- [Track 事件](track.md) - 独立的轨迹事件存储
 - [内存存储](inmemory.md) - 开发测试环境
 - [Redis 存储](redis.md) - 生产环境分布式存储
 - [PostgreSQL 存储](postgres.md) - 关系型数据库存储

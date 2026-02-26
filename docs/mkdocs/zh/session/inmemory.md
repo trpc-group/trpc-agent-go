@@ -31,14 +31,14 @@
 ```go
 import "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 
-// Default configuration (development environment)
+// 默认配置（开发环境）
 sessionService := inmemory.NewSessionService()
-// Effect:
-// - Each session stores up to 1000 events
-// - All data never expires
-// - No automatic cleanup
+// 效果：
+// - 每个会话最多存储 1000 个事件
+// - 所有数据永不过期
+// - 不自动清理
 
-// Production environment configuration
+// 生产环境配置
 sessionService := inmemory.NewSessionService(
     inmemory.WithSessionEventLimit(500),
     inmemory.WithSessionTTL(30*time.Minute),
@@ -46,12 +46,12 @@ sessionService := inmemory.NewSessionService(
     inmemory.WithUserStateTTL(7*24*time.Hour),
     inmemory.WithCleanupInterval(10*time.Minute),
 )
-// Effect:
-// - Each session stores up to 500 events
-// - Sessions expire after 30 minutes of inactivity
-// - App state expires after 24 hours
-// - User state expires after 7 days
-// - Expired data is cleaned up every 10 minutes
+// 效果：
+// - 每个会话最多存储 500 个事件
+// - 会话 30 分钟不活动后过期
+// - 应用状态 24 小时后过期
+// - 用户状态 7 天后过期
+// - 每 10 分钟清理过期数据
 ```
 
 ## 配合摘要使用
@@ -62,14 +62,14 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
-// Create summarizer
+// 创建摘要器
 summarizer := summary.NewSummarizer(
     summaryModel,
     summary.WithEventThreshold(20),
     summary.WithMaxSummaryWords(200),
 )
 
-// Create session service with summarizer
+// 创建带摘要器的会话服务
 sessionService := inmemory.NewSessionService(
     inmemory.WithSessionEventLimit(1000),
     inmemory.WithSummarizer(summarizer),
@@ -84,8 +84,8 @@ sessionService := inmemory.NewSessionService(
 ```go
 sessionService := inmemory.NewSessionService(
     inmemory.WithAppendEventHook(func(ctx *session.AppendEventContext, next func() error) error {
-        // Audit logging before storage
-        log.Printf("Appending event for session %s", ctx.Session.ID)
+        // 存储前审计日志
+        log.Printf("正在追加事件到会话 %s", ctx.Session.ID)
         return next()
     }),
     inmemory.WithGetSessionHook(func(ctx *session.GetSessionContext, next func() (*session.Session, error)) (*session.Session, error) {
@@ -93,8 +93,8 @@ sessionService := inmemory.NewSessionService(
         if err != nil {
             return nil, err
         }
-        // Post-processing after retrieval
-        log.Printf("Retrieved session %s with %d events", sess.ID, len(sess.Events))
+        // 读取后处理
+        log.Printf("获取到会话 %s，包含 %d 个事件", sess.ID, len(sess.Events))
         return sess, nil
     }),
 )

@@ -76,33 +76,33 @@ PostgreSQL 存储适用于生产环境和需要复杂查询的应用，提供关
 ```go
 import "trpc.group/trpc-go/trpc-agent-go/session/postgres"
 
-// Default configuration (minimal)
+// 默认配置（最简）
 sessionService, err := postgres.NewService(
     postgres.WithPostgresClientDSN("postgres://user:password@localhost:5432/mydb?sslmode=disable"),
 )
 
-// Production environment full configuration
+// 生产环境完整配置
 sessionService, err := postgres.NewService(
     postgres.WithPostgresClientDSN("postgres://user:password@localhost:5432/trpc_sessions?sslmode=require"),
 
-    // Session configuration
+    // 会话配置
     postgres.WithSessionEventLimit(1000),
     postgres.WithSessionTTL(30*time.Minute),
     postgres.WithAppStateTTL(24*time.Hour),
     postgres.WithUserStateTTL(7*24*time.Hour),
 
-    // TTL cleanup configuration
+    // TTL 清理配置
     postgres.WithCleanupInterval(10*time.Minute),
     postgres.WithSoftDelete(true),
 
-    // Async persistence configuration
+    // 异步持久化配置
     postgres.WithAsyncPersisterNum(4),
 )
-// Effect:
-// - Uses SSL encrypted connection
-// - Sessions expire after 30 minutes of inactivity
-// - Expired data cleaned up every 10 minutes (soft delete)
-// - 4 async workers handle writes
+// 效果：
+// - 使用 SSL 加密连接
+// - 会话 30 分钟不活动后过期
+// - 每 10 分钟清理过期数据（软删除）
+// - 4 个异步 worker 处理写入
 ```
 
 ## 配置复用
@@ -113,12 +113,12 @@ import (
     sessionpg "trpc.group/trpc-go/trpc-agent-go/session/postgres"
 )
 
-// Register PostgreSQL instance
+// 注册 PostgreSQL 实例
 postgres.RegisterPostgresInstance("my-postgres-instance",
     postgres.WithClientConnString("postgres://user:password@localhost:5432/trpc_sessions?sslmode=disable"),
 )
 
-// Use in session service
+// 在会话服务中使用
 sessionService, err := sessionpg.NewService(
     sessionpg.WithPostgresInstance("my-postgres-instance"),
     sessionpg.WithSessionEventLimit(500),
@@ -130,24 +130,24 @@ sessionService, err := sessionpg.NewService(
 PostgreSQL 支持 schema 和表前缀配置，适用于多租户和多环境场景：
 
 ```go
-// Use schema
+// 使用 schema
 sessionService, err := postgres.NewService(
     postgres.WithHost("localhost"),
     postgres.WithDatabase("mydb"),
-    postgres.WithSchema("my_schema"),  // Table name: my_schema.session_states
+    postgres.WithSchema("my_schema"),  // 表名：my_schema.session_states
 )
 
-// Use table prefix
+// 使用表前缀
 sessionService, err := postgres.NewService(
     postgres.WithHost("localhost"),
-    postgres.WithTablePrefix("app1_"),  // Table name: app1_session_states
+    postgres.WithTablePrefix("app1_"),  // 表名：app1_session_states
 )
 
-// Combined usage
+// 组合使用
 sessionService, err := postgres.NewService(
     postgres.WithHost("localhost"),
     postgres.WithSchema("tenant_a"),
-    postgres.WithTablePrefix("app1_"),  // Table name: tenant_a.app1_session_states
+    postgres.WithTablePrefix("app1_"),  // 表名：tenant_a.app1_session_states
 )
 ```
 
@@ -165,13 +165,13 @@ sessionService, err := postgres.NewService(
 ### 软删除配置
 
 ```go
-// Enable soft delete (default)
+// 启用软删除（默认）
 sessionService, err := postgres.NewService(
     postgres.WithHost("localhost"),
     postgres.WithSoftDelete(true),
 )
 
-// Disable soft delete (physical delete)
+// 禁用软删除（物理删除）
 sessionService, err := postgres.NewService(
     postgres.WithHost("localhost"),
     postgres.WithSoftDelete(false),
@@ -196,10 +196,10 @@ sessionService, err := postgres.NewService(
     postgres.WithCleanupInterval(10*time.Minute),
     postgres.WithSoftDelete(true),
 )
-// Cleanup behavior:
-// - softDelete=true: Expired data marked as deleted_at = NOW()
-// - softDelete=false: Expired data physically deleted
-// - Queries always include `WHERE deleted_at IS NULL`
+// 清理行为：
+// - softDelete=true：过期数据标记为 deleted_at = NOW()
+// - softDelete=false：过期数据物理删除
+// - 查询始终包含 `WHERE deleted_at IS NULL`
 ```
 
 ## 配合摘要使用
@@ -211,7 +211,7 @@ sessionService, err := postgres.NewService(
     postgres.WithSessionEventLimit(1000),
     postgres.WithSessionTTL(30*time.Minute),
 
-    // Summary configuration
+    // 摘要配置
     postgres.WithSummarizer(summarizer),
     postgres.WithAsyncSummaryNum(2),
     postgres.WithSummaryQueueSize(100),
@@ -300,11 +300,58 @@ CREATE TABLE IF NOT EXISTS session_track_events (
 );
 ```
 
-### app_states / user_states
+### app_states
 
-存储应用级和用户级状态。
+存储应用级状态。
 
-完整的表定义请参考 [session/postgres/schema.sql](https://github.com/trpc-group/trpc-agent-go/blob/main/session/postgres/schema.sql)
+```sql
+CREATE TABLE IF NOT EXISTS app_states (
+  id BIGSERIAL PRIMARY KEY,
+  app_name VARCHAR(255) NOT NULL,
+  key VARCHAR(255) NOT NULL,
+  value TEXT DEFAULT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  expires_at TIMESTAMP DEFAULT NULL,
+  deleted_at TIMESTAMP DEFAULT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_states_unique_active
+ON app_states(app_name, key)
+WHERE deleted_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_app_states_expires
+ON app_states(expires_at)
+WHERE expires_at IS NOT NULL;
+```
+
+### user_states
+
+存储用户级状态。
+
+```sql
+CREATE TABLE IF NOT EXISTS user_states (
+  id BIGSERIAL PRIMARY KEY,
+  app_name VARCHAR(255) NOT NULL,
+  user_id VARCHAR(255) NOT NULL,
+  key VARCHAR(255) NOT NULL,
+  value TEXT DEFAULT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  expires_at TIMESTAMP DEFAULT NULL,
+  deleted_at TIMESTAMP DEFAULT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_states_unique_active
+ON user_states(app_name, user_id, key)
+WHERE deleted_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_user_states_expires
+ON user_states(expires_at)
+WHERE expires_at IS NOT NULL;
+```
+
+完整的表定义请参考 [session/postgres/init.go](https://github.com/trpc-group/trpc-agent-go/blob/main/session/postgres/init.go)
 
 ## 使用场景
 

@@ -35,13 +35,13 @@ Redis 存储适用于生产环境和分布式应用，提供高性能和自动�
 ```go
 import "trpc.group/trpc-go/trpc-agent-go/session/redis"
 
-// Create using URL (recommended)
+// 通过 URL 创建（推荐）
 sessionService, err := redis.NewService(
     redis.WithRedisClientURL("redis://username:password@127.0.0.1:6379/0"),
     redis.WithSessionEventLimit(500),
 )
 
-// Production environment full configuration
+// 生产环境完整配置
 sessionService, err := redis.NewService(
     redis.WithRedisClientURL("redis://localhost:6379/0"),
     redis.WithSessionEventLimit(1000),
@@ -49,13 +49,13 @@ sessionService, err := redis.NewService(
     redis.WithAppStateTTL(24*time.Hour),
     redis.WithUserStateTTL(7*24*time.Hour),
 )
-// Effect:
-// - Connect to local Redis database 0
-// - Each session stores up to 1000 events
-// - Sessions expire after 30 minutes of inactivity (Redis TTL)
-// - App state expires after 24 hours
-// - User state expires after 7 days
-// - Uses Redis native TTL mechanism, no manual cleanup needed
+// 效果：
+// - 连接本地 Redis 数据库 0
+// - 每个会话最多存储 1000 个事件
+// - 会话 30 分钟不活动后过期（Redis TTL）
+// - 应用状态 24 小时后过期
+// - 用户状态 7 天后过期
+// - 使用 Redis 原生 TTL 机制，无需手动清理
 ```
 
 ## 配置复用
@@ -68,12 +68,12 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/session/redis"
 )
 
-// Register Redis instance
+// 注册 Redis 实例
 redisURL := "redis://127.0.0.1:6379"
 storage.RegisterRedisInstance("my-redis-instance",
     storage.WithClientBuilderURL(redisURL))
 
-// Use in session service
+// 在会话服务中使用
 sessionService, err := redis.NewService(
     redis.WithRedisInstance("my-redis-instance"),
     redis.WithSessionEventLimit(500),
@@ -88,7 +88,7 @@ sessionService, err := redis.NewService(
     redis.WithSessionEventLimit(1000),
     redis.WithSessionTTL(30*time.Minute),
 
-    // Summary configuration
+    // 摘要配置
     redis.WithSummarizer(summarizer),
     redis.WithAsyncSummaryNum(4),
     redis.WithSummaryQueueSize(200),
@@ -112,20 +112,23 @@ sessionService, err := redis.NewService(
 Redis 存储使用以下 Key 结构：
 
 ```
-# App data
-appdata:{appName} -> Hash {key: value}
+# 应用状态
+appstate:{appName} -> Hash {key: value}
 
-# User data
-userdata:{appName}:{userID} -> Hash {key: value}
+# 用户状态
+userstate:{appName}:{userID} -> Hash {key: value}
 
-# Session data
-session:{appName}:{userID} -> Hash {sessionID: SessionData(JSON)}
+# 会话数据
+sess:{appName}:{userID} -> Hash {sessionID: SessionData(JSON)}
 
-# Event records
-events:{appName}:{userID}:{sessionID} -> SortedSet {score: timestamp, value: Event(JSON)}
+# 事件记录
+event:{appName}:{userID}:{sessionID} -> SortedSet {score: timestamp, value: Event(JSON)}
 
-# Summary data (optional)
-summary:{appName}:{userID}:{sessionID}:{filterKey} -> String (JSON)
+# Track 事件
+track:{appName}:{userID}:{sessionID}:{trackName} -> SortedSet {score: timestamp, value: TrackEvent(JSON)}
+
+# 摘要数据（可选）
+sesssum:{appName}:{userID} -> Hash {sessionID:filterKey: Summary(JSON)}
 ```
 
 ## 使用场景

@@ -1,109 +1,96 @@
-# MySQL 存储
+# MySQL Storage
 
-MySQL 存储适用于生产环境和需要复杂查询的应用，MySQL 是广泛使用的关系型数据库。
+MySQL storage is suitable for production environments and applications requiring complex queries. MySQL is a widely used relational database.
 
-## 特点
+## Features
 
-- ✅ 数据持久化
-- ✅ 支持分布式
-- ✅ 支持复杂查询
-- ✅ 支持软删除
-- ✅ 支持表前缀
-- ✅ 支持异步持久化
+- ✅ Data persistence
+- ✅ Distributed support
+- ✅ Complex query support
+- ✅ Soft delete support
+- ✅ Table prefix support
+- ✅ Async persistence support
 
-## 配置选项
+## Configuration Options
 
-### 连接配置
+### Connection Configuration
 
-| 选项 | 类型 | 默认值 | 说明 |
+| Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `WithMySQLClientDSN(dsn string)` | `string` | - | MySQL DSN 连接字符串（推荐），格式：`user:password@tcp(localhost:3306)/db?charset=utf8mb4&parseTime=True&loc=Local` |
-| `WithMySQLInstance(instanceName string)` | `string` | - | 使用预配置的 MySQL 实例（优先级低于 DSN） |
-| `WithExtraOptions(extraOptions ...any)` | `[]any` | `nil` | 为 MySQL 客户端设置额外选项 |
+| `WithMySQLClientDSN(dsn string)` | `string` | - | MySQL DSN (recommended), format: `user:password@tcp(localhost:3306)/db?charset=utf8mb4&parseTime=True&loc=Local` |
+| `WithMySQLInstance(instanceName string)` | `string` | - | Use a pre-configured MySQL instance (lower priority than DSN) |
+| `WithExtraOptions(extraOptions ...any)` | `[]any` | `nil` | Extra options for the MySQL client |
 
-**优先级**：`WithMySQLClientDSN` > `WithMySQLInstance`
+**Priority**: `WithMySQLClientDSN` > `WithMySQLInstance`
 
-### 会话配置
+### Session Configuration
 
-| 选项 | 类型 | 默认值 | 说明 |
+| Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `WithSessionEventLimit(limit int)` | `int` | `1000` | 每个会话最大事件数量 |
-| `WithSessionTTL(ttl time.Duration)` | `time.Duration` | `0`（不过期） | 会话 TTL |
-| `WithAppStateTTL(ttl time.Duration)` | `time.Duration` | `0`（不过期） | 应用状态 TTL |
-| `WithUserStateTTL(ttl time.Duration)` | `time.Duration` | `0`（不过期） | 用户状态 TTL |
-| `WithCleanupInterval(interval time.Duration)` | `time.Duration` | `0`（自动确定） | TTL 清理间隔，默认 5 分钟（如果配置了 TTL） |
-| `WithSoftDelete(enable bool)` | `bool` | `true` | 启用或禁用软删除 |
+| `WithSessionEventLimit(limit int)` | `int` | `1000` | Maximum events per session |
+| `WithSessionTTL(ttl time.Duration)` | `time.Duration` | `0` (no expiry) | Session TTL |
+| `WithAppStateTTL(ttl time.Duration)` | `time.Duration` | `0` (no expiry) | App state TTL |
+| `WithUserStateTTL(ttl time.Duration)` | `time.Duration` | `0` (no expiry) | User state TTL |
+| `WithCleanupInterval(interval time.Duration)` | `time.Duration` | `0` (auto) | TTL cleanup interval; defaults to 5 minutes if TTL is configured |
+| `WithSoftDelete(enable bool)` | `bool` | `true` | Enable or disable soft delete |
 
-### 异步持久化配置
+### Async Persistence Configuration
 
-| 选项 | 类型 | 默认值 | 说明 |
+| Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `WithEnableAsyncPersist(enable bool)` | `bool` | `false` | 启用异步持久化 |
-| `WithAsyncPersisterNum(num int)` | `int` | `10` | 异步持久化 worker 数量 |
+| `WithEnableAsyncPersist(enable bool)` | `bool` | `false` | Enable async persistence |
+| `WithAsyncPersisterNum(num int)` | `int` | `10` | Number of async persistence workers |
 
-### 摘要配置
+### Summary Configuration
 
-| 选项 | 类型 | 默认值 | 说明 |
+| Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `WithSummarizer(s summary.SessionSummarizer)` | `summary.SessionSummarizer` | `nil` | 注入会话摘要器 |
-| `WithAsyncSummaryNum(num int)` | `int` | `3` | 摘要处理 worker 数量 |
-| `WithSummaryQueueSize(size int)` | `int` | `100` | 摘要任务队列大小 |
-| `WithSummaryJobTimeout(timeout time.Duration)` | `time.Duration` | `60s` | 单个摘要任务超时时间 |
+| `WithSummarizer(s summary.SessionSummarizer)` | `summary.SessionSummarizer` | `nil` | Inject session summarizer |
+| `WithAsyncSummaryNum(num int)` | `int` | `3` | Number of summary processing workers |
+| `WithSummaryQueueSize(size int)` | `int` | `100` | Summary task queue size |
+| `WithSummaryJobTimeout(timeout time.Duration)` | `time.Duration` | `60s` | Timeout for a single summary job |
 
-### 表配置
+### Table Configuration
 
-| 选项 | 类型 | 默认值 | 说明 |
+| Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `WithTablePrefix(prefix string)` | `string` | `""` | 表名前缀 |
-| `WithSkipDBInit(skip bool)` | `bool` | `false` | 跳过自动建表 |
+| `WithTablePrefix(prefix string)` | `string` | `""` | Table name prefix |
+| `WithSkipDBInit(skip bool)` | `bool` | `false` | Skip automatic table creation |
 
-### Hook 配置
+### Hook Configuration
 
-| 选项 | 类型 | 默认值 | 说明 |
+| Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `WithAppendEventHook(hooks ...session.AppendEventHook)` | `[]session.AppendEventHook` | `nil` | 添加事件写入 Hook |
-| `WithGetSessionHook(hooks ...session.GetSessionHook)` | `[]session.GetSessionHook` | `nil` | 添加会话读取 Hook |
+| `WithAppendEventHook(hooks ...session.AppendEventHook)` | `[]session.AppendEventHook` | `nil` | Add event write hooks |
+| `WithGetSessionHook(hooks ...session.GetSessionHook)` | `[]session.GetSessionHook` | `nil` | Add session read hooks |
 
-## 基础配置示例
+## Basic Configuration
 
 ```go
 import "trpc.group/trpc-go/trpc-agent-go/session/mysql"
 
-// 默认配置（最简）
+// Minimal configuration
 sessionService, err := mysql.NewService(
     mysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/db?charset=utf8mb4&parseTime=True&loc=Local"),
 )
-// 效果：
-// - 连接 localhost:3306，数据库 db
-// - 每个会话最多存储 1000 个事件
-// - 数据永不过期
-// - 默认不启用异步持久化（通过 WithEnableAsyncPersist 启用）
 
-// 生产环境完整配置
+// Full production configuration
 sessionService, err := mysql.NewService(
-    // 连接配置
     mysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/db?charset=utf8mb4&parseTime=True&loc=Local"),
 
-    // 会话配置
     mysql.WithSessionEventLimit(1000),
     mysql.WithSessionTTL(30*time.Minute),
     mysql.WithAppStateTTL(24*time.Hour),
     mysql.WithUserStateTTL(7*24*time.Hour),
 
-    // TTL 清理配置
     mysql.WithCleanupInterval(10*time.Minute),
     mysql.WithSoftDelete(true),
 
-    // 异步持久化配置
     mysql.WithAsyncPersisterNum(4),
 )
-// 效果：
-// - 会话 30 分钟不活动后过期
-// - 每 10 分钟清理过期数据（软删除）
-// - 4 个异步 worker 处理写入
 ```
 
-## 配置复用
+## Instance Reuse
 
 ```go
 import (
@@ -111,56 +98,53 @@ import (
     sessionmysql "trpc.group/trpc-go/trpc-agent-go/session/mysql"
 )
 
-// 注册 MySQL 实例
 mysql.RegisterMySQLInstance("my-mysql-instance",
     mysql.WithClientBuilderDSN("root:password@tcp(localhost:3306)/trpc_sessions?parseTime=true&charset=utf8mb4"),
 )
 
-// 在会话服务中使用
 sessionService, err := sessionmysql.NewService(
     sessionmysql.WithMySQLInstance("my-mysql-instance"),
     sessionmysql.WithSessionEventLimit(500),
 )
 ```
 
-## 表前缀
+## Table Prefix
 
-MySQL 支持表前缀配置，适用于多应用共享数据库的场景：
+MySQL supports table prefix configuration for multi-application shared database scenarios:
 
 ```go
-// 使用表前缀
 sessionService, err := mysql.NewService(
     mysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/db?charset=utf8mb4&parseTime=True&loc=Local"),
-    mysql.WithTablePrefix("app1_"),  // 表名：app1_session_states
+    mysql.WithTablePrefix("app1_"),
 )
 ```
 
-## 软删除与 TTL 清理
+## Soft Delete and TTL Cleanup
 
-### 软删除配置
+### Soft Delete Configuration
 
 ```go
-// 启用软删除（默认）
+// Enable soft delete (default)
 sessionService, err := mysql.NewService(
     mysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/db?charset=utf8mb4&parseTime=True&loc=Local"),
     mysql.WithSoftDelete(true),
 )
 
-// 禁用软删除（物理删除）
+// Disable soft delete (hard delete)
 sessionService, err := mysql.NewService(
     mysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/db?charset=utf8mb4&parseTime=True&loc=Local"),
     mysql.WithSoftDelete(false),
 )
 ```
 
-**删除行为对比：**
+**Delete behavior comparison:**
 
-| 配置 | 删除操作 | 查询行为 | 数据恢复 |
+| Config | Delete Operation | Query Behavior | Data Recovery |
 | --- | --- | --- | --- |
-| `softDelete=true` | `UPDATE SET deleted_at = NOW()` | 查询附带 `WHERE deleted_at IS NULL` | 可恢复 |
-| `softDelete=false` | `DELETE FROM ...` | 查询所有记录 | 不可恢复 |
+| `softDelete=true` | `UPDATE SET deleted_at = NOW()` | Queries include `WHERE deleted_at IS NULL` | Recoverable |
+| `softDelete=false` | `DELETE FROM ...` | Queries all records | Not recoverable |
 
-### TTL 自动清理
+### TTL Auto Cleanup
 
 ```go
 sessionService, err := mysql.NewService(
@@ -171,13 +155,9 @@ sessionService, err := mysql.NewService(
     mysql.WithCleanupInterval(10*time.Minute),
     mysql.WithSoftDelete(true),
 )
-// 清理行为：
-// - softDelete=true：过期数据标记为 deleted_at = NOW()
-// - softDelete=false：过期数据物理删除
-// - 查询始终包含 `WHERE deleted_at IS NULL`
 ```
 
-## 配合摘要使用
+## With Summary
 
 ```go
 sessionService, err := mysql.NewService(
@@ -185,16 +165,15 @@ sessionService, err := mysql.NewService(
     mysql.WithSessionEventLimit(1000),
     mysql.WithSessionTTL(30*time.Minute),
 
-    // 摘要配置
     mysql.WithSummarizer(summarizer),
     mysql.WithAsyncSummaryNum(2),
     mysql.WithSummaryQueueSize(100),
 )
 ```
 
-## 存储结构
+## Storage Structure
 
-MySQL 使用以下表结构（使用 `{{PREFIX}}` 表示表前缀）：
+MySQL uses the following table structure (`{{PREFIX}}` represents the table prefix):
 
 ### session_states
 
@@ -275,8 +254,6 @@ CREATE TABLE IF NOT EXISTS `{{PREFIX}}session_summaries` (
 
 ### app_states
 
-存储应用级状态。
-
 ```sql
 CREATE TABLE IF NOT EXISTS `{{PREFIX}}app_states` (
     `id` BIGINT NOT NULL AUTO_INCREMENT,
@@ -295,8 +272,6 @@ CREATE TABLE IF NOT EXISTS `{{PREFIX}}app_states` (
 
 ### user_states
 
-存储用户级状态。
-
 ```sql
 CREATE TABLE IF NOT EXISTS `{{PREFIX}}user_states` (
     `id` BIGINT NOT NULL AUTO_INCREMENT,
@@ -314,44 +289,43 @@ CREATE TABLE IF NOT EXISTS `{{PREFIX}}user_states` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 ```
 
-完整的表定义请参考 [session/mysql/schema.sql](https://github.com/trpc-group/trpc-agent-go/blob/main/session/mysql/schema.sql)
+See [session/mysql/schema.sql](https://github.com/trpc-group/trpc-agent-go/blob/main/session/mysql/schema.sql) for full table definitions.
 
-## 版本升级
+## Version Upgrade
 
-### 旧版本数据迁移
+### Legacy Data Migration
 
-如果您的数据库是使用旧版本创建的，需要执行以下迁移步骤。
+If your database was created with an older version, follow these migration steps.
 
-**影响版本**：v1.2.0 之前的版本  
-**修复版本**：v1.2.0 及之后
+**Affected versions**: Before v1.2.0
+**Fixed in**: v1.2.0 and later
 
-**问题背景**：早期版本的 `session_summaries` 表存在索引设计问题：
+**Background**: Early versions of the `session_summaries` table had index design issues:
 
-- 最初版本使用包含 `deleted_at` 列的唯一索引，但 MySQL 中 `NULL != NULL`，导致多条 `deleted_at = NULL` 的记录无法触发唯一约束
-- 后续版本改为普通 lookup 索引（非唯一），同样无法防止重复数据
+- The initial version used a unique index that included the `deleted_at` column, but in MySQL `NULL != NULL`, so multiple records with `deleted_at = NULL` would not trigger the unique constraint
+- A later version changed to a regular lookup index (non-unique), which also could not prevent duplicate data
 
-这两种情况都可能导致重复数据产生。
+Both cases could lead to duplicate data.
 
-**旧版索引**（以下两种之一）：
+**Old indexes** (one of the following):
 
-- `idx_*_session_summaries_unique_active(app_name, user_id, session_id, filter_key, deleted_at)` — 唯一索引但包含 deleted_at
-- `idx_*_session_summaries_lookup(app_name, user_id, session_id, deleted_at)` — 普通索引
+- `idx_*_session_summaries_unique_active(app_name, user_id, session_id, filter_key, deleted_at)` — unique index including deleted_at
+- `idx_*_session_summaries_lookup(app_name, user_id, session_id, deleted_at)` — regular index
 
-**新版索引**：`idx_*_session_summaries_unique_active(app_name, user_id, session_id, filter_key)` — 唯一索引，不包含 deleted_at
+**New index**: `idx_*_session_summaries_unique_active(app_name, user_id, session_id, filter_key)` — unique index without deleted_at
 
-**迁移步骤**：
+**Migration steps**:
 
 ```sql
 -- ============================================================================
--- 迁移脚本：修复 session_summaries 唯一索引问题
--- 执行前请备份数据！
+-- Migration script: Fix session_summaries unique index issue
+-- Back up your data before executing!
 -- ============================================================================
 
--- Step 1: 查看当前索引，确认旧索引名称
+-- Step 1: Check current indexes
 SHOW INDEX FROM session_summaries;
 
--- Step 2: 清理重复数据（保留最新记录）
--- 如果存在多条 deleted_at = NULL 的重复记录，保留 id 最大的那条。
+-- Step 2: Clean up duplicate data (keep newest record)
 DELETE t1 FROM session_summaries t1
 INNER JOIN session_summaries t2
 WHERE t1.app_name = t2.app_name
@@ -362,23 +336,19 @@ WHERE t1.app_name = t2.app_name
   AND t2.deleted_at IS NULL
   AND t1.id < t2.id;
 
--- Step 3: 硬删除软删除记录（summary 数据可再生，无需保留）
--- 如果需要保留软删除记录，可跳过此步骤，但需要在 Step 5 之前手动处理冲突。
+-- Step 3: Hard delete soft-deleted records (summary data is regenerable)
 DELETE FROM session_summaries WHERE deleted_at IS NOT NULL;
 
--- Step 4: 删除旧索引（根据 Step 1 的结果选择正确的索引名）
--- 注意：索引名称可能带有表前缀，请根据实际情况调整。
--- 如果是 lookup 索引：
+-- Step 4: Drop old index (choose based on Step 1 results)
 DROP INDEX idx_session_summaries_lookup ON session_summaries;
--- 如果是旧的 unique_active 索引（包含 deleted_at）：
+-- Or if it's the old unique_active index (with deleted_at):
 -- DROP INDEX idx_session_summaries_unique_active ON session_summaries;
 
--- Step 5: 创建新的唯一索引（不包含 deleted_at）
--- 注意：索引名称可能带有表前缀，请根据实际情况调整。
+-- Step 5: Create new unique index (without deleted_at)
 CREATE UNIQUE INDEX idx_session_summaries_unique_active 
 ON session_summaries(app_name, user_id, session_id, filter_key);
 
--- Step 6: 验证迁移结果
+-- Step 6: Verify migration
 SELECT COUNT(*) as duplicate_count FROM (
     SELECT app_name, user_id, session_id, filter_key, COUNT(*) as cnt
     FROM session_summaries
@@ -386,37 +356,36 @@ SELECT COUNT(*) as duplicate_count FROM (
     GROUP BY app_name, user_id, session_id, filter_key
     HAVING cnt > 1
 ) t;
--- 期望结果：duplicate_count = 0
+-- Expected: duplicate_count = 0
 
--- Step 7: 验证索引是否创建成功
+-- Step 7: Verify index creation
 SHOW INDEX FROM session_summaries WHERE Key_name = 'idx_session_summaries_unique_active';
--- 期望结果：显示新创建的唯一索引，且不包含 deleted_at 列
 ```
 
-**注意事项**：
+**Notes**:
 
-1. 如果使用了 `WithTablePrefix("trpc_")` 配置，表名和索引名会带有前缀：
-   - 表名：`trpc_session_summaries`
-   - 旧索引名：`idx_trpc_session_summaries_lookup` 或 `idx_trpc_session_summaries_unique_active`
-   - 新索引名：`idx_trpc_session_summaries_unique_active`
-   - 请根据实际配置调整上述 SQL 中的表名和索引名。
+1. If you configured `WithTablePrefix("trpc_")`, table and index names will have the prefix:
+   - Table: `trpc_session_summaries`
+   - Old index: `idx_trpc_session_summaries_lookup` or `idx_trpc_session_summaries_unique_active`
+   - New index: `idx_trpc_session_summaries_unique_active`
+   - Adjust the SQL above according to your actual configuration.
 
-2. 新索引不包含 `deleted_at` 列，这意味着软删除的 summary 记录会阻止相同业务键的新记录插入。由于 summary 数据可再生，迁移时建议硬删除软删除记录（Step 3）。如果跳过此步骤，需手动处理冲突。
+2. The new index does not include `deleted_at`, meaning soft-deleted summary records will block new records with the same business key. Since summary data is regenerable, it is recommended to hard delete soft-deleted records during migration (Step 3).
 
-## 使用场景
+## Use Cases
 
-| 场景 | 推荐配置 |
+| Scenario | Recommended Configuration |
 | --- | --- |
-| 生产环境 | 配置 TTL、启用软删除 |
-| 多应用共享数据库 | 使用表前缀区分 |
-| 需要数据恢复 | 启用软删除 |
-| 合规审计 | 启用软删除 + 长 TTL |
+| Production | Configure TTL, enable soft delete |
+| Multi-app shared database | Use table prefix |
+| Data recovery needed | Enable soft delete |
+| Compliance audit | Enable soft delete + long TTL |
 
-## 注意事项
+## Notes
 
-1. **连接配置**：确保 MySQL 服务可访问，建议使用连接池
-2. **字符集**：使用 utf8mb4 支持完整 Unicode（包括 emoji）
-3. **索引优化**：服务会自动创建必要的索引，也可以通过 `WithSkipDBInit(true)` 跳过自动建表
-4. **软删除**：默认启用软删除，查询时自动过滤已删除记录
-5. **MySQL 版本**：需要 MySQL 5.6.5+ 以支持多个 TIMESTAMP 列的 CURRENT_TIMESTAMP
-6. **唯一约束**：MySQL 的 UNIQUE 约束不会阻止多个 NULL 值，应用层处理活跃记录的唯一性
+1. **Connection**: Ensure MySQL service is accessible; use connection pooling
+2. **Character set**: Use utf8mb4 for full Unicode support (including emoji)
+3. **Index optimization**: The service automatically creates necessary indexes; use `WithSkipDBInit(true)` to skip auto table creation
+4. **Soft delete**: Enabled by default; queries automatically filter deleted records
+5. **MySQL version**: Requires MySQL 5.6.5+ for multiple TIMESTAMP columns with CURRENT_TIMESTAMP
+6. **Unique constraint**: MySQL's UNIQUE constraint does not prevent multiple NULL values; the application layer handles active record uniqueness
