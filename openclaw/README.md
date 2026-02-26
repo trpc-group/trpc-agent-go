@@ -80,10 +80,14 @@ Notes:
 - Duration fields use Go-style strings like `60s`, `10m`, `1h`.
 - For secrets (model keys, Telegram tokens), prefer environment variables
   or CLI flags instead of committing config files.
-- Advanced plugin sections:
-  - `channels` and `tools.providers` require a custom binary that imports
-    those plugins. See `openclaw/EXTENDING.md` and
+- Plugin sections:
+  - `channels` enables additional channel plugins and requires a custom
+    binary that imports those plugins. See `openclaw/EXTENDING.md` and
     `openclaw/examples/stdin_chat/`.
+  - `tools.providers` and `tools.toolsets` work out of the box for the
+    built-in types shipped in this repo. Custom types still require a
+    custom binary. See `openclaw/INTEGRATIONS.md` and
+    `openclaw/EXTENDING.md`.
 
 Health check:
 
@@ -553,6 +557,9 @@ OpenClaw demo supports these extension points:
 - **Tool providers**: register with
   `registry.RegisterToolProvider(type, factory)`.
   Enable via YAML `tools.providers: [...]`.
+- **ToolSet providers**: register with
+  `registry.RegisterToolSetProvider(type, factory)`.
+  Enable via YAML `tools.toolsets: [...]`.
 - **Model types**: register with `registry.RegisterModel(type, factory)`.
   Select via `model.mode` (`-mode`) and optional `model.config`.
 - **Session backends**: register with
@@ -622,6 +629,17 @@ go run ./cmd/openclaw \
 The Redis key-space is still isolated by `app_name` and `user_id`. You
 can override `app_name` with `-app-name` (or `app_name` in YAML) to
 match your business identifier.
+
+### SQL backends (MySQL/Postgres/ClickHouse/PGVector)
+
+This demo also supports SQL backends already implemented in
+`trpc-agent-go`:
+
+- Session: `mysql`, `postgres`, `clickhouse`
+- Memory: `mysql`, `postgres`, `pgvector` (vector search via Postgres)
+
+They are configured via `session.config` / `memory.config`. See
+`openclaw/INTEGRATIONS.md` for copy-paste config examples.
 
 ### Session summarization (optional)
 

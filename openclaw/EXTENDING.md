@@ -79,6 +79,7 @@ At a high level:
 
 - `channels` enables channel plugins.
 - `tools.providers` enables tool-provider plugins.
+- `tools.toolsets` enables ToolSet-provider plugins.
 - `model.mode`, `session.backend`, `memory.backend` select implementations.
 
 Example `openclaw.yaml`:
@@ -287,6 +288,93 @@ tools:
     - type: "internal_tools"
       config:
         feature_flag: true
+```
+
+## ToolSet provider plugin (dynamic tool collections)
+
+A **ToolSet provider** contributes one `tool.ToolSet` implementation.
+
+Why ToolSets?
+
+- A ToolSet can expose multiple tools as a unit.
+- A ToolSet can be **dynamic** (for example MCP: tool list changes over
+  time).
+- Tools coming from ToolSets are automatically namespaced by the
+  toolset name to avoid conflicts:
+  `"<toolset>_<tool>"`.
+
+Register a ToolSet provider:
+
+```go
+package internaltoolset
+
+import (
+	"context"
+
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/function"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
+)
+
+const typeName = "internal_toolset"
+
+func init() {
+	if err := registry.RegisterToolSetProvider(typeName, newToolSet); err != nil {
+		panic(err)
+	}
+}
+
+type cfg struct {
+	Message string `yaml:"message"`
+}
+
+type toolSet struct {
+	name  string
+	tools []tool.Tool
+}
+
+func (t *toolSet) Tools(ctx context.Context) []tool.Tool { return t.tools }
+func (t *toolSet) Close() error                          { return nil }
+func (t *toolSet) Name() string                           { return t.name }
+
+func newToolSet(
+	_ registry.ToolSetProviderDeps,
+	spec registry.PluginSpec,
+) (tool.ToolSet, error) {
+	var c cfg
+	if err := registry.DecodeStrict(spec.Config, &c); err != nil {
+		return nil, err
+	}
+
+	name := spec.Name
+	if name == "" {
+		name = "internal"
+	}
+
+	t := function.NewFunctionTool(
+		func(ctx context.Context, _ struct{}) (string, error) {
+			return c.Message, nil
+		},
+		function.WithName("ping"),
+		function.WithDescription("Returns a configured message."),
+	)
+
+	return &toolSet{
+		name:  name,
+		tools: []tool.Tool{t},
+	}, nil
+}
+```
+
+Enable it in YAML:
+
+```yaml
+tools:
+  toolsets:
+    - type: "internal_toolset"
+      name: "corp"
+      config:
+        message: "pong"
 ```
 
 ## Session backend plugin (centralized conversation storage)
