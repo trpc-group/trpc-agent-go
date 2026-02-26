@@ -898,14 +898,19 @@ func (p *ContentRequestProcessor) convertForeignEvent(evt *event.Event) event.Ev
 
 	// Set the converted message.
 	if len(contents) > 0 || len(contentParts) > 0 {
+		msg := model.Message{
+			Role: model.RoleUser,
+		}
+		if len(contents) > 0 {
+			msg.Content = strings.Join(contents, " ")
+		}
+		if len(contentParts) > 0 {
+			msg.ContentParts = contentParts
+		}
 		convertedEvent.Response.Choices = []model.Choice{
 			{
-				Index: 0,
-				Message: model.Message{
-					Role:         model.RoleUser,
-					Content:      strings.Join(contents, " "),
-					ContentParts: contentParts,
-				},
+				Index:   0,
+				Message: msg,
 			},
 		}
 	}
