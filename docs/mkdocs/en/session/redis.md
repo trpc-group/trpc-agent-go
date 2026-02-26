@@ -27,6 +27,7 @@ Redis storage is suitable for production environments and distributed applicatio
 | `WithAsyncSummaryNum(num int)` | `int` | `3` | Number of summary processing workers |
 | `WithSummaryQueueSize(size int)` | `int` | `100` | Summary task queue size |
 | `WithSummaryJobTimeout(timeout time.Duration)` | `time.Duration` | `60s` | Timeout for a single summary job |
+| `WithKeyPrefix(prefix string)` | `string` | `""` | Redis key prefix; all keys will start with `prefix:` |
 | `WithAppendEventHook(hooks ...session.AppendEventHook)` | `[]session.AppendEventHook` | `nil` | Add event write hooks |
 | `WithGetSessionHook(hooks ...session.GetSessionHook)` | `[]session.GetSessionHook` | `nil` | Add session read hooks |
 

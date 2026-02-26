@@ -190,6 +190,84 @@ summary.WithChecksAny(
 | `WithPostSummaryHook(h PostSummaryHook)` | Post-summary hook; can modify output summary |
 | `WithSummaryHookAbortOnError(abort bool)` | Whether to abort on hook error; default `false` (ignore errors) |
 
+### Tool Call Formatting
+
+By default, the summarizer includes tool calls and tool results in the conversation text sent to the LLM for summarization. The default format is:
+
+- Tool calls: `[Called tool: toolName with args: {"arg": "value"}]`
+- Tool results: `[toolName returned: result content]`
+
+| Option | Description |
+| --- | --- |
+| `WithToolCallFormatter(f ToolCallFormatter)` | Customize how tool calls are formatted in summary input. Return empty string to exclude |
+| `WithToolResultFormatter(f ToolResultFormatter)` | Customize how tool results are formatted in summary input. Return empty string to exclude |
+
+```go
+// Truncate long tool arguments
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithToolCallFormatter(func(tc model.ToolCall) string {
+        name := tc.Function.Name
+        if name == "" {
+            return ""
+        }
+        args := string(tc.Function.Arguments)
+        const maxLen = 100
+        if len(args) > maxLen {
+            args = args[:maxLen] + "...(truncated)"
+        }
+        return fmt.Sprintf("[Tool: %s, Args: %s]", name, args)
+    }),
+    summary.WithEventThreshold(20),
+)
+
+// Exclude tool results from summary
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithToolResultFormatter(func(msg model.Message) string {
+        return ""
+    }),
+    summary.WithEventThreshold(20),
+)
+
+// Include only tool name, exclude arguments
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithToolCallFormatter(func(tc model.ToolCall) string {
+        if tc.Function.Name == "" {
+            return ""
+        }
+        return fmt.Sprintf("[Used tool: %s]", tc.Function.Name)
+    }),
+    summary.WithEventThreshold(20),
+)
+```
+
+### Model Callbacks (Before/After Model)
+
+The `summarizer` supports model callbacks around the underlying `model.GenerateContent` call, useful for modifying requests, short-circuiting with custom responses, or instrumentation.
+
+| Option | Description |
+| --- | --- |
+| `WithModelCallbacks(callbacks *model.Callbacks)` | Register Before/After callbacks for the summarizer's underlying model calls |
+
+```go
+callbacks := model.NewCallbacks().
+    RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+        // Modify args.Request, or return CustomResponse to skip the real model call
+        return nil, nil
+    }).
+    RegisterAfterModel(func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+        // Override model output via CustomResponse
+        return nil, nil
+    })
+
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithModelCallbacks(callbacks),
+)
+```
+
 ## Checker Functions
 
 Checker is a function type for determining whether to trigger summarization:
@@ -233,6 +311,56 @@ summarizer := summary.NewSummarizer(
 
 - `{conversation_text}`: Must be included; replaced with conversation content
 - `{max_summary_words}`: Must be included when `maxSummaryWords > 0`
+
+## Token Counter Configuration
+
+By default, `CheckTokenThreshold` uses a built-in `SimpleTokenCounter` that estimates token count based on text length. To customize token counting behavior, use `summary.SetTokenCounter` to set a global token counter:
+
+```go
+import (
+    "context"
+    "fmt"
+    "unicode/utf8"
+
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/session/summary"
+)
+
+// Use the built-in simple token counter
+summary.SetTokenCounter(model.NewSimpleTokenCounter())
+
+// Or use a custom implementation
+type MyCustomCounter struct{}
+
+func (c *MyCustomCounter) CountTokens(ctx context.Context, message model.Message) (int, error) {
+    _ = ctx
+    return utf8.RuneCountInString(message.Content), nil
+}
+
+func (c *MyCustomCounter) CountTokensRange(ctx context.Context, messages []model.Message, start, end int) (int, error) {
+    if start < 0 || end > len(messages) || start >= end {
+        return 0, fmt.Errorf("invalid range: start=%d, end=%d, len=%d",
+            start, end, len(messages))
+    }
+
+    total := 0
+    for i := start; i < end; i++ {
+        tokens, err := c.CountTokens(ctx, messages[i])
+        if err != nil {
+            return 0, err
+        }
+        total += tokens
+    }
+    return total, nil
+}
+
+summary.SetTokenCounter(&MyCustomCounter{})
+```
+
+**Notes**:
+
+- **Global effect**: `SetTokenCounter` affects all `CheckTokenThreshold` evaluations in the current process; set it once during application initialization
+- **Default counter**: If not set, the default `SimpleTokenCounter` is used (approximately 4 characters per token)
 
 ## Skip Recent Events
 

@@ -195,6 +195,84 @@ summary.WithChecksAny(
 | `WithPostSummaryHook(h PostSummaryHook)` | 摘要后的 Hook，可修改输出摘要 |
 | `WithSummaryHookAbortOnError(abort bool)` | Hook 报错时是否中断，默认 `false`（忽略错误） |
 
+### 工具调用格式化
+
+默认情况下，摘要器会将工具调用和工具结果包含在发送给 LLM 进行总结的对话文本中。默认格式为：
+
+- 工具调用：`[Called tool: toolName with args: {"arg": "value"}]`
+- 工具结果：`[toolName returned: result content]`
+
+| 选项 | 说明 |
+| --- | --- |
+| `WithToolCallFormatter(f ToolCallFormatter)` | 自定义工具调用在摘要输入中的格式。返回空字符串可排除该工具调用 |
+| `WithToolResultFormatter(f ToolResultFormatter)` | 自定义工具结果在摘要输入中的格式。返回空字符串可排除该结果 |
+
+```go
+// Truncate long tool arguments
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithToolCallFormatter(func(tc model.ToolCall) string {
+        name := tc.Function.Name
+        if name == "" {
+            return ""
+        }
+        args := string(tc.Function.Arguments)
+        const maxLen = 100
+        if len(args) > maxLen {
+            args = args[:maxLen] + "...(truncated)"
+        }
+        return fmt.Sprintf("[Tool: %s, Args: %s]", name, args)
+    }),
+    summary.WithEventThreshold(20),
+)
+
+// Exclude tool results from summary
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithToolResultFormatter(func(msg model.Message) string {
+        return ""
+    }),
+    summary.WithEventThreshold(20),
+)
+
+// Include only tool name, exclude arguments
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithToolCallFormatter(func(tc model.ToolCall) string {
+        if tc.Function.Name == "" {
+            return ""
+        }
+        return fmt.Sprintf("[Used tool: %s]", tc.Function.Name)
+    }),
+    summary.WithEventThreshold(20),
+)
+```
+
+### 模型回调（Before/After Model）
+
+`summarizer` 在调用底层 `model.GenerateContent` 前后支持模型回调，可用于修改请求、短路返回自定义响应、或在摘要请求上做埋点。
+
+| 选项 | 说明 |
+| --- | --- |
+| `WithModelCallbacks(callbacks *model.Callbacks)` | 为摘要器的底层模型调用注册 Before/After 回调 |
+
+```go
+callbacks := model.NewCallbacks().
+    RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+        // Modify args.Request, or return CustomResponse to skip the real model call
+        return nil, nil
+    }).
+    RegisterAfterModel(func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+        // Override model output via CustomResponse
+        return nil, nil
+    })
+
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithModelCallbacks(callbacks),
+)
+```
+
 ## Checker 函数
 
 Checker 是用于判断是否需要触发摘要的函数类型：
@@ -238,6 +316,56 @@ summarizer := summary.NewSummarizer(
 
 - `{conversation_text}`：必须包含，会被对话内容替换
 - `{max_summary_words}`：当 `maxSummaryWords > 0` 时必须包含
+
+## Token 计数器配置
+
+默认情况下，`CheckTokenThreshold` 使用内置的 `SimpleTokenCounter` 基于文本长度估算 token 数量。如果需要自定义 token 计数行为，可以使用 `summary.SetTokenCounter` 设置全局 token 计数器：
+
+```go
+import (
+    "context"
+    "fmt"
+    "unicode/utf8"
+
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/session/summary"
+)
+
+// Use the built-in simple token counter
+summary.SetTokenCounter(model.NewSimpleTokenCounter())
+
+// Or use a custom implementation
+type MyCustomCounter struct{}
+
+func (c *MyCustomCounter) CountTokens(ctx context.Context, message model.Message) (int, error) {
+    _ = ctx
+    return utf8.RuneCountInString(message.Content), nil
+}
+
+func (c *MyCustomCounter) CountTokensRange(ctx context.Context, messages []model.Message, start, end int) (int, error) {
+    if start < 0 || end > len(messages) || start >= end {
+        return 0, fmt.Errorf("invalid range: start=%d, end=%d, len=%d",
+            start, end, len(messages))
+    }
+
+    total := 0
+    for i := start; i < end; i++ {
+        tokens, err := c.CountTokens(ctx, messages[i])
+        if err != nil {
+            return 0, err
+        }
+        total += tokens
+    }
+    return total, nil
+}
+
+summary.SetTokenCounter(&MyCustomCounter{})
+```
+
+**注意**：
+
+- **全局影响**：`SetTokenCounter` 会影响当前进程中所有的 `CheckTokenThreshold` 评估，建议在应用初始化时一次性设置
+- **默认计数器**：如果不设置，将使用默认的 `SimpleTokenCounter`（约每 token 对应 4 个字符）
 
 ## 跳过最近事件
 
