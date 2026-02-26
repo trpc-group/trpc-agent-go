@@ -3310,16 +3310,17 @@
 </span></code></pre></div></td></tr></table></div>
 <p>当启用 <code>WithRefreshToolSetsOnRun(true)</code> 时：</p>
 <ul>
-<li>LLMAgent 在构造工具列表时，会再次调用
-  <code>ToolSet.Tools(context.Background())</code>；</li>
+<li>LLMAgent 在每次执行前构造工具列表时，会再次调用
+  <code>ToolSet.Tools(ctx)</code>，其中 <code>ctx</code> 为本次执行的上下文；</li>
 <li>如果 MCP 服务器新增或删除了工具，该 Agent <strong>下一次执行</strong> 时，
   会自动使用更新后的工具列表。</li>
+<li>如果你在“非执行期”获取工具（例如直接调用 <code>agent.Tools()</code>），
+  LLMAgent 会使用 <code>context.Background()</code>。</li>
 </ul>
 <p>这个配置项的侧重点是<strong>动态发现工具</strong>。如果你还需要基于
-<code>context.Context</code> 的<strong>每次请求动态 HTTP 请求头</strong>（例如从上下文
-中提取认证信息），仍然可以参考 <code>examples/mcptool/http_headers</code>
-示例，手动调用 <code>toolSet.Tools(ctx)</code>，然后配合
-<code>WithTools</code> 使用。</p>
+<code>context.Context</code> 在初始化或工具发现阶段做更细粒度的控制，同时又不希望
+在每次执行时刷新工具列表，可以参考 <code>examples/mcptool/http_headers</code>
+示例，手动调用 <code>toolSet.Tools(ctx)</code>，然后配合 <code>WithTools</code> 使用。</p>
 <h2 id="agent-agenttool">Agent 工具 (AgentTool)</h2>
 <p>AgentTool 允许把一个现有的 Agent 以工具的形式暴露给上层 Agent 使用。相比普通函数工具，AgentTool 的优势在于：</p>
 <ul>
@@ -4453,7 +4454,7 @@ Model Context Protocol (MCP)）来执行工具。此时可以使用
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年2月10日 02:18:26 UTC">2026-02-10 02:18:26</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年2月26日 14:01:52 UTC">2026-02-26 14:01:52</span>
   </span>
 
     
