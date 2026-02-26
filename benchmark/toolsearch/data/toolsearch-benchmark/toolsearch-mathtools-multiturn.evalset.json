@@ -76,7 +76,7 @@
             "role": "user",
             "content": "Last one: if the relative change is -0.25, what's ln(1 + change)?"
           },
-          "tools": [{ "id": "tool_use_9", "name": "math_Log1p" }]
+          "tools": [{ "id": "tool_use_9", "name": "math_Log1p|math_Log" }]
         }
       ],
       "sessionInput": { "appName": "toolsearch-benchmark", "userId": "user" }
@@ -224,7 +224,7 @@
             "role": "user",
             "content": "Compute 2^16 for me."
           },
-          "tools": [{ "id": "tool_use_8", "name": "math_Pow" }]
+          "tools": [{ "id": "tool_use_8", "name": "math_Pow|math_Exp2" }]
         },
         {
           "invocationId": "pow-09",

@@ -6,7 +6,7 @@
       "toolTrajectory": {
         "defaultStrategy": {
           "name": {
-            "matchStrategy": "exact"
+            "matchStrategy": "regex"
           }
         },
         "subsetMatching": true
