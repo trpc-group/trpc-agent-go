@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func TestRunInspect_DefaultIsPlugins(t *testing.T) {
@@ -96,4 +97,121 @@ func captureInspectOutput(
 	require.NoError(t, err)
 
 	return string(out), string(errOut)
+}
+
+func TestResolveSkillConfigKeys_IncludesPluginAndYAMLKeys(t *testing.T) {
+	myChanConfig := mustYAMLNode(t, `
+enabled: true
+token: x
+list:
+  - 0
+  - 1
+emptymap: {}
+emptyseq: []
+"": true
+`)
+	providerConfig := mustYAMLNode(t, "x: 1\n")
+	toolSetConfig := mustYAMLNode(t, "- true\n")
+
+	opts := runOptions{
+		TelegramToken:       "x",
+		EnableOpenClawTools: true,
+		EnableLocalExec:     true,
+		Channels: []pluginSpec{
+			{Type: "  MyChan ", Config: myChanConfig},
+			{Type: "  ", Config: myChanConfig},
+		},
+		ToolProviders: []pluginSpec{
+			{Type: "Provider", Config: providerConfig},
+		},
+		ToolSets: []pluginSpec{
+			{Type: "ToolSet", Config: toolSetConfig},
+		},
+	}
+
+	keys := resolveSkillConfigKeys(opts)
+
+	require.Contains(t, keys, "channels.mychan")
+	require.Contains(t, keys, "channels.mychan.enabled")
+	require.Contains(t, keys, "channels.mychan.token")
+	require.Contains(t, keys, "channels.mychan.list")
+	require.NotContains(t, keys, "channels.mychan.emptymap")
+	require.NotContains(t, keys, "channels.mychan.emptyseq")
+
+	require.Contains(t, keys, "plugins.entries.mychan.enabled")
+	require.Contains(t, keys, "plugins.entries.mychan.config")
+	require.Contains(t, keys, "plugins.entries.mychan.config.enabled")
+	require.Contains(t, keys, "plugins.entries.mychan.config.token")
+	require.Contains(t, keys, "plugins.entries.mychan.config.list")
+
+	require.Contains(t, keys, "tools.providers.provider")
+	require.Contains(t, keys, "tools.providers.provider.x")
+	require.Contains(t, keys, "plugins.entries.provider.enabled")
+	require.Contains(t, keys, "plugins.entries.provider.config")
+
+	require.Contains(t, keys, "tools.toolsets.toolset")
+	require.Contains(t, keys, "plugins.entries.toolset.enabled")
+
+	require.Contains(t, keys, "tools.exec")
+	require.Contains(t, keys, "tools.local_exec")
+}
+
+func TestAddYAMLConfigKeys_RejectsFalseyMapping(t *testing.T) {
+	set := map[string]struct{}{}
+	node := mustYAMLNode(t, `
+a: false
+b: 0
+c: 0.0
+`)
+	require.False(t, addYAMLConfigKeys(set, "root", node))
+	require.Empty(t, set)
+}
+
+func TestAddYAMLConfigKeys_CoversEdgeCases(t *testing.T) {
+	set := map[string]struct{}{}
+	require.False(t, addYAMLConfigKeys(set, "", &yaml.Node{}))
+	require.False(t, addYAMLConfigKeys(set, "root", nil))
+	require.False(t,
+		addYAMLConfigKeys(set, "root", &yaml.Node{Kind: yaml.DocumentNode}),
+	)
+	require.False(t,
+		addYAMLConfigKeys(set, "root", &yaml.Node{Kind: 123}),
+	)
+}
+
+func TestAddYAMLConfigKeys_AliasUsesTargetNode(t *testing.T) {
+	set := map[string]struct{}{}
+	aliasTarget := &yaml.Node{
+		Kind:  yaml.ScalarNode,
+		Tag:   "!!bool",
+		Value: "true",
+	}
+	aliasNode := &yaml.Node{
+		Kind:  yaml.AliasNode,
+		Alias: aliasTarget,
+	}
+
+	require.True(t, addYAMLConfigKeys(set, "root", aliasNode))
+	_, ok := set["root"]
+	require.True(t, ok)
+}
+
+func TestAddConfigKey_IgnoresNilAndBlank(t *testing.T) {
+	addConfigKey(nil, "x")
+
+	set := map[string]struct{}{}
+	addConfigKey(set, "  ")
+	require.Empty(t, set)
+
+	addConfigKey(set, "  a ")
+	_, ok := set["a"]
+	require.True(t, ok)
+}
+
+func mustYAMLNode(t *testing.T, raw string) *yaml.Node {
+	t.Helper()
+
+	var node yaml.Node
+	require.NoError(t, yaml.Unmarshal([]byte(raw), &node))
+	return &node
 }
