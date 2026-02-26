@@ -335,6 +335,23 @@ func (sess *Session) HasStateKeyWithPrefix(prefix string) bool {
 	return false
 }
 
+// SnapshotTracksState returns a copy of the tracks state value (State["tracks"]).
+// Returns nil if no tracks are registered.
+func (sess *Session) SnapshotTracksState() []byte {
+	sess.stateMu.RLock()
+	defer sess.stateMu.RUnlock()
+	if sess.State == nil {
+		return nil
+	}
+	v, ok := sess.State[tracksStateKey]
+	if !ok || len(v) == 0 {
+		return nil
+	}
+	out := make([]byte, len(v))
+	copy(out, v)
+	return out
+}
+
 // GetEvents returns the session events.
 func (sess *Session) GetEvents() []event.Event {
 	sess.EventMu.RLock()
