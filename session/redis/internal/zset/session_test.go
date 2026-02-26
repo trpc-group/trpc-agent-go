@@ -863,3 +863,305 @@ func TestNewTrackResults(t *testing.T) {
 		assert.Empty(t, r)
 	}
 }
+
+// =============================================================================
+// ExistsPipelined
+// =============================================================================
+
+func TestClient_ExistsPipelined(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "ep1"}
+
+	t.Run("not found", func(t *testing.T) {
+		pipe := rdb.Pipeline()
+		cmd := c.ExistsPipelined(ctx, pipe, key)
+		_, err := pipe.Exec(ctx)
+		require.NoError(t, err)
+
+		exists, err := cmd.Result()
+		require.NoError(t, err)
+		assert.False(t, exists)
+	})
+
+	t.Run("found after create", func(t *testing.T) {
+		_, err := c.CreateSession(ctx, key, nil)
+		require.NoError(t, err)
+
+		pipe := rdb.Pipeline()
+		cmd := c.ExistsPipelined(ctx, pipe, key)
+		_, err = pipe.Exec(ctx)
+		require.NoError(t, err)
+
+		exists, err := cmd.Result()
+		require.NoError(t, err)
+		assert.True(t, exists)
+	})
+}
+
+// =============================================================================
+// processSessionStateCmd - unmarshal error
+// =============================================================================
+
+func TestProcessSessionStateCmd_UnmarshalError(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	ctx := context.Background()
+
+	rdb.(*redis.Client).HSet(ctx, "sess:bad", "s1", "not-valid-json")
+
+	pipe := rdb.(*redis.Client).Pipeline()
+	cmd := pipe.HGet(ctx, "sess:bad", "s1")
+	_, err := pipe.Exec(ctx)
+	require.NoError(t, err)
+
+	state, err := processSessionStateCmd(cmd)
+	require.Error(t, err)
+	assert.Nil(t, state)
+	assert.Contains(t, err.Error(), "unmarshal session state failed")
+}
+
+// =============================================================================
+// processSessStateCmdList - unmarshal error
+// =============================================================================
+
+func TestProcessSessStateCmdList_UnmarshalError(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	ctx := context.Background()
+
+	rdb.(*redis.Client).HSet(ctx, "sess:badlist", "s0", "invalid-json")
+
+	pipe := rdb.(*redis.Client).Pipeline()
+	cmd := pipe.HGetAll(ctx, "sess:badlist")
+	_, err := pipe.Exec(ctx)
+	require.NoError(t, err)
+
+	states, err := processSessStateCmdList(cmd)
+	require.Error(t, err)
+	assert.Nil(t, states)
+	assert.Contains(t, err.Error(), "unmarshal session state failed")
+}
+
+// =============================================================================
+// GetSummary - corrupted data
+// =============================================================================
+
+func TestClient_GetSummary_CorruptedData(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "badsum"}
+	sumKey := c.sessionSummaryKey(key)
+	rdb.(*redis.Client).HSet(ctx, sumKey, key.SessionID, "not-valid-json")
+
+	summaries, err := c.GetSummary(ctx, key)
+	require.Error(t, err)
+	assert.Nil(t, summaries)
+	assert.Contains(t, err.Error(), "unmarshal summary failed")
+}
+
+// =============================================================================
+// listTracksForSession - corrupted session state
+// =============================================================================
+
+func TestClient_listTracksForSession_CorruptedState(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "badtrk"}
+	rdb.(*redis.Client).HSet(ctx, c.sessionStateKey(key), key.SessionID, "invalid-json")
+
+	tracks, err := c.listTracksForSession(ctx, key)
+	require.Error(t, err)
+	assert.Nil(t, tracks)
+}
+
+func TestClient_listTracksForSession_NotFound(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "noexist"}
+	tracks, err := c.listTracksForSession(ctx, key)
+	require.NoError(t, err)
+	assert.Nil(t, tracks)
+}
+
+// =============================================================================
+// Exists / DeleteAppState / DeleteUserState / ListAppStates / ListUserStates
+// with closed Redis to cover error branches
+// =============================================================================
+
+func TestClient_Exists_Error(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "ex-err"}
+
+	mr.Close()
+
+	_, err := c.Exists(ctx, key)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "check session exists (zset)")
+}
+
+func TestClient_DeleteAppState_Error(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+
+	mr.Close()
+
+	err := c.DeleteAppState(ctx, "app", "key")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "delete app state (zset)")
+}
+
+func TestClient_DeleteUserState_Error(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+
+	mr.Close()
+
+	err := c.DeleteUserState(ctx, session.UserKey{AppName: "app", UserID: "u1"}, "key")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "delete user state (zset)")
+}
+
+func TestClient_ListAppStates_Error(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+
+	mr.Close()
+
+	_, err := c.ListAppStates(ctx, "app")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "list app states (zset)")
+}
+
+func TestClient_ListUserStates_Error(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+
+	mr.Close()
+
+	_, err := c.ListUserStates(ctx, session.UserKey{AppName: "app", UserID: "u1"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "list user states (zset)")
+}
+
+func TestClient_CreateSummary_Error(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "sum-err"}
+
+	mr.Close()
+
+	sum := &session.Summary{Summary: "test", UpdatedAt: time.Now().UTC()}
+	err := c.CreateSummary(ctx, key, "", sum, time.Hour)
+	require.Error(t, err)
+}
+
+// =============================================================================
+// CreateSummary with TTL=0 (no expire branch)
+// =============================================================================
+
+func TestClient_CreateSummary_NoTTL(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "sum-nottl"}
+
+	sum := &session.Summary{Summary: "test", UpdatedAt: time.Now().UTC()}
+	require.NoError(t, c.CreateSummary(ctx, key, "", sum, 0))
+
+	summaries, err := c.GetSummary(ctx, key)
+	require.NoError(t, err)
+	require.NotNil(t, summaries)
+	assert.Equal(t, "test", summaries[""].Summary)
+}
+
+// =============================================================================
+// GetSession with corrupted event data
+// =============================================================================
+
+func TestClient_GetSession_CorruptedEventData(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "corrupted-evt"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	// Add a valid event then a corrupted one
+	goodEvt := makeTestEvent("e1", time.Now(), "good")
+	require.NoError(t, c.AppendEvent(ctx, key, goodEvt))
+
+	evtKey := c.eventKey(key)
+	rdb.(*redis.Client).ZAdd(ctx, evtKey, redis.Z{
+		Score:  float64(time.Now().Add(time.Second).UnixNano()),
+		Member: "not-valid-json-event",
+	})
+
+	// Corrupted events are skipped, not returned as error
+	sess, err := c.GetSession(ctx, key, 0, time.Time{})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	// Only the valid event should be returned
+	assert.Len(t, sess.Events, 1)
+	assert.Equal(t, "e1", sess.Events[0].ID)
+}
+
+// =============================================================================
+// Exists after close: error branch coverage
+// =============================================================================
+
+func TestClient_Exists_ClosedRedis(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "close1"}
+
+	mr.Close()
+
+	exists, err := c.Exists(ctx, key)
+	require.Error(t, err)
+	assert.False(t, exists)
+}
+
+// =============================================================================
+// UpdateAppState / UpdateUserState error branches
+// =============================================================================
+
+func TestClient_UpdateAppState_Error(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+
+	mr.Close()
+
+	err := c.UpdateAppState(ctx, "app", session.StateMap{"k": []byte("v")}, time.Hour)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "update app state (zset)")
+}
+
+func TestClient_UpdateUserState_Error(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+
+	mr.Close()
+
+	err := c.UpdateUserState(ctx, session.UserKey{AppName: "app", UserID: "u1"},
+		session.StateMap{"k": []byte("v")}, time.Hour)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "update user state (zset)")
+}
