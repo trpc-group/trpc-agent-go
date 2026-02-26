@@ -21,9 +21,11 @@ The `HTTPBeforeRequest` feature allows you to modify HTTP requests before they a
     - 📌 Use when: per-request authentication, tracing, user context
 
 2. **`WithToolSets([]tool.ToolSet{toolSet})`**
-    - ⚠️ Agent calls `Tools(context.Background())` internally
-    - ✅ Dynamic headers for: `tools/call` only
-    - ❌ No dynamic headers for: `initialize`, `tools/list`, GET SSE
+    - ⚠️ By default, tool discovery uses `context.Background()`
+    - ✅ Dynamic headers for: `tools/call`
+    - ❌ No dynamic headers for: `initialize`, `tools/list`, GET SSE (by default)
+    - 💡 With `WithRefreshToolSetsOnRun(true)`, tool discovery uses the run context
+      (but refreshes the tool list on every run)
     - 📌 Use when: static API keys, simple scenarios
     - 💡 Can combine with `WithRequestHeader` for static headers
 
@@ -166,8 +168,10 @@ eventChan, err := runner.Run(ctx, userID, sessionID, message)
 - ✅ Suitable for static headers (API keys, service names)
 
 **Cons:**
-- ❌ Agent calls `Tools(context.Background())` internally during initialization
-- ❌ initialize, tools/list requests won't have dynamic headers from context
+- ❌ Without `WithRefreshToolSetsOnRun(true)`, initialize/tools/list won't see ctx values
+  because tool discovery uses `context.Background()`
+- ⚠️ With `WithRefreshToolSetsOnRun(true)`, initialize/tools/list can see ctx values,
+  but tool discovery runs on every invocation
 - ⚠️ Can combine with static headers via `WithRequestHeader`
 
 ---
@@ -182,6 +186,10 @@ eventChan, err := runner.Run(ctx, userID, sessionID, message)
 | **tools/call headers** | ✅ Dynamic | ✅ Dynamic |
 | **GET SSE headers** | ✅ Dynamic | ❌ Static only |
 | **Use Case** | Per-request auth tokens | Static API keys |
+
+> Note: If you enable `WithRefreshToolSetsOnRun(true)`, Approach B will also propagate
+> the run context during tool discovery (initialize/tools/list), at the cost of
+> refreshing the tool list on every invocation.
 
 **This example uses Approach A** to demonstrate full dynamic header control.
 
@@ -262,4 +270,3 @@ beforeRequest := compose(
 - It's called for **every** HTTP request (tool calls, notifications, SSE connections)
 - Use context to pass dynamic, per-request data
 - Returning an error from the function will abort the HTTP request
-

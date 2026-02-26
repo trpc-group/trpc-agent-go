@@ -66,6 +66,48 @@ func (m *mockAgentWithUserTools) FindSubAgent(string) agent.Agent {
 	return nil
 }
 
+// mockAgentWithFilterTools implements agent.Agent and ToolFilterProvider.
+type mockAgentWithFilterTools struct {
+	allTools        []tool.Tool
+	filteredTools   []tool.Tool
+	name            string
+	toolsCallCount  int
+	filterCallCount int
+}
+
+func (m *mockAgentWithFilterTools) Run(
+	_ context.Context,
+	_ *agent.Invocation,
+) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event)
+	close(ch)
+	return ch, nil
+}
+
+func (m *mockAgentWithFilterTools) Tools() []tool.Tool {
+	m.toolsCallCount++
+	return m.allTools
+}
+
+func (m *mockAgentWithFilterTools) FilterTools(
+	context.Context,
+) []tool.Tool {
+	m.filterCallCount++
+	return m.filteredTools
+}
+
+func (m *mockAgentWithFilterTools) Info() agent.Info {
+	return agent.Info{Name: m.name}
+}
+
+func (m *mockAgentWithFilterTools) SubAgents() []agent.Agent {
+	return nil
+}
+
+func (m *mockAgentWithFilterTools) FindSubAgent(string) agent.Agent {
+	return nil
+}
+
 // mockAgentWithoutUserTools implements agent.Agent without UserToolsProvider.
 type mockAgentWithoutUserTools struct {
 	allTools []tool.Tool
@@ -154,6 +196,44 @@ func TestGetFilteredTools_CachesPerInvocation(t *testing.T) {
 			"expected Tools() to be called once, got %d",
 			mockAgent.toolsCallCount,
 		)
+	}
+}
+
+func TestGetFilteredTools_UsesFilterToolsWithoutTools(t *testing.T) {
+	f := New(nil, nil, Options{})
+
+	filteredTool := &mockTool{name: "filtered_tool"}
+	allTool := &mockTool{name: "all_tool"}
+
+	mockAgent := &mockAgentWithFilterTools{
+		name:          "test-agent",
+		allTools:      []tool.Tool{allTool},
+		filteredTools: []tool.Tool{filteredTool},
+	}
+
+	inv := agent.NewInvocation()
+	inv.Agent = mockAgent
+	inv.AgentName = "test-agent"
+
+	got := f.getFilteredTools(context.Background(), inv)
+
+	if len(got) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(got))
+	}
+	if got[0].Declaration().Name != "filtered_tool" {
+		t.Fatalf(
+			"expected filtered_tool, got %s",
+			got[0].Declaration().Name,
+		)
+	}
+
+	if mockAgent.toolsCallCount != 0 {
+		t.Fatalf("expected Tools() not called, got %d",
+			mockAgent.toolsCallCount)
+	}
+	if mockAgent.filterCallCount != 1 {
+		t.Fatalf("expected FilterTools() called once, got %d",
+			mockAgent.filterCallCount)
 	}
 }
 

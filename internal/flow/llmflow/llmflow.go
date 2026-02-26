@@ -572,9 +572,11 @@ func (f *Flow) getFilteredTools(ctx context.Context, invocation *agent.Invocatio
 	}
 
 	// Get all tools from the agent.
-	allTools := invocation.Agent.Tools()
+	var allTools []tool.Tool
 	if provider, ok := invocation.Agent.(ToolFilterProvider); ok {
 		allTools = provider.FilterTools(ctx)
+	} else {
+		allTools = invocation.Agent.Tools()
 	}
 
 	// If no filter is specified, return all tools for this invocation.
