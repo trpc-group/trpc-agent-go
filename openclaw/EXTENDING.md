@@ -635,12 +635,19 @@ containing a skills directory tree.
 This is useful when you want to version and ship skill packs as an
 artifact without rebuilding the OpenClaw binary.
 
+URL-based skill roots are cached on disk (under your OS user cache dir by
+default). You can override the cache location with `SKILLS_CACHE_DIR`.
+
 ### Security note
 
 Treat skills as code:
 
 - A skill can instruct the agent to run commands (`skill_run`) and read
   or write files in a workspace.
+- If you need tighter control, restrict `skill_run` using process-level
+  env vars:
+  `TRPC_AGENT_SKILL_RUN_ALLOWED_COMMANDS` /
+  `TRPC_AGENT_SKILL_RUN_DENIED_COMMANDS`.
 - Only load skills from sources you trust.
 - When exposing OpenClaw through external channels (Telegram/webhooks),
   use allowlists/pairing and limit unsafe tools.

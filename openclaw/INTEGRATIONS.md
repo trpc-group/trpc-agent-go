@@ -153,6 +153,24 @@ Now ask the assistant to list and run skills. For example:
 List available skills, then run the hello skill.
 ```
 
+### How `skill_run` runs your command (practical tips)
+
+When the agent runs a skill, it typically calls `skill_run`.
+
+`skill_run` does a few important things behind the scenes:
+
+- It stages the entire skill folder into a per-session workspace.
+- It makes the staged skill files **read-only** (so skills are treated as
+  immutable inputs).
+- It creates convenient writable directories under the skill root:
+  `out/`, `work/`, and `inputs/`.
+
+Practical guidance when writing skills:
+
+- Use relative paths (for example `bash scripts/run.sh ...`).
+- Write outputs under `out/` so the tool can collect and return them.
+- Keep outputs small and text-friendly when possible.
+
 ### OpenClaw metadata gating (optional)
 
 If `SKILL.md` front matter contains `metadata.openclaw`, OpenClaw can
@@ -207,6 +225,17 @@ This demo can enable OpenClaw-compatible tools:
 tools:
   enable_openclaw_tools: true
 ```
+
+To further reduce risk, you can restrict what `skill_run` is allowed to
+execute.
+
+Set either env var on the OpenClaw process:
+
+- `TRPC_AGENT_SKILL_RUN_ALLOWED_COMMANDS`: allowlist (comma/space separated)
+- `TRPC_AGENT_SKILL_RUN_DENIED_COMMANDS`: denylist (comma/space separated)
+
+When either list is set, `skill_run` rejects shell syntax (pipes,
+redirects, `&&`, `||`) and runs exactly one executable + args.
 
 Security note: these tools can execute local commands. Only enable them
 for trusted users/channels.
