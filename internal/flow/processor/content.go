@@ -841,54 +841,76 @@ func (p *ContentRequestProcessor) convertForeignEvent(evt *event.Event) event.Ev
 	convertedEvent.Author = "user"
 
 	// Build content parts for context.
-	var contentParts []string
+	var contents []string
+	var contentParts []model.ContentPart
 	if p.AddContextPrefix {
-		contentParts = append(contentParts, contextPrefix)
+		prefix := contextPrefix
+		contents = append(contents, contextPrefix)
+		contentParts = append(contentParts, model.ContentPart{
+			Type: model.ContentTypeText,
+			Text: &prefix,
+		})
 	}
 
 	for _, choice := range evt.Choices {
+		if len(choice.Message.ContentParts) > 0 {
+			if p.AddContextPrefix {
+				prefix := fmt.Sprintf("[%s] said:", evt.Author)
+				contentParts = append(contentParts, model.ContentPart{
+					Type: model.ContentTypeText,
+					Text: &prefix,
+				})
+			}
+			contentParts = append(contentParts, choice.Message.ContentParts...)
+		}
+
 		if choice.Message.Content != "" {
 			if p.AddContextPrefix {
-				contentParts = append(contentParts,
-					fmt.Sprintf("[%s] said: %s", evt.Author, choice.Message.Content))
+				contents = append(contents, fmt.Sprintf("[%s] said: %s", evt.Author, choice.Message.Content))
 			} else {
 				// When prefix is disabled, pass the content directly.
-				contentParts = append(contentParts, choice.Message.Content)
+				contents = append(contents, choice.Message.Content)
 			}
 		} else if len(choice.Message.ToolCalls) > 0 {
 			for _, toolCall := range choice.Message.ToolCalls {
 				if p.AddContextPrefix {
-					contentParts = append(contentParts,
+					contents = append(contents,
 						fmt.Sprintf("[%s] called tool `%s` with parameters: %s",
 							evt.Author, toolCall.Function.Name, string(toolCall.Function.Arguments)))
 				} else {
 					// When prefix is disabled, pass tool call info directly.
-					contentParts = append(contentParts,
+					contents = append(contents,
 						fmt.Sprintf("Tool `%s` called with parameters: %s",
 							toolCall.Function.Name, string(toolCall.Function.Arguments)))
 				}
 			}
 		} else if choice.Message.ToolID != "" {
 			if p.AddContextPrefix {
-				contentParts = append(contentParts,
+				contents = append(contents,
 					fmt.Sprintf("[%s] `%s` tool returned result: %s",
 						evt.Author, choice.Message.ToolID, choice.Message.Content))
 			} else {
 				// When prefix is disabled, pass tool result directly.
-				contentParts = append(contentParts, choice.Message.Content)
+				contents = append(contents, choice.Message.Content)
 			}
 		}
 	}
 
 	// Set the converted message.
-	if len(contentParts) > 0 {
+	if len(contents) > 0 || len(contentParts) > 0 {
+		msg := model.Message{
+			Role: model.RoleUser,
+		}
+		if len(contents) > 0 {
+			msg.Content = strings.Join(contents, " ")
+		}
+		if len(contentParts) > 0 {
+			msg.ContentParts = contentParts
+		}
 		convertedEvent.Response.Choices = []model.Choice{
 			{
-				Index: 0,
-				Message: model.Message{
-					Role:    model.RoleUser,
-					Content: strings.Join(contentParts, " "),
-				},
+				Index:   0,
+				Message: msg,
 			},
 		}
 	}
