@@ -151,6 +151,19 @@ type ToolProviderFactory func(
 	spec PluginSpec,
 ) ([]tool.Tool, error)
 
+// ToolSetProviderDeps are dependencies passed to tool set factories.
+type ToolSetProviderDeps struct {
+	Model    model.Model
+	StateDir string
+	AppName  string
+}
+
+// ToolSetProviderFactory creates a ToolSet (a dynamic tool collection).
+type ToolSetProviderFactory func(
+	deps ToolSetProviderDeps,
+	spec PluginSpec,
+) (tool.ToolSet, error)
+
 // ModelSpec describes which model to create.
 type ModelSpec struct {
 	Type          string
@@ -171,6 +184,7 @@ var (
 	sessionFactories = map[string]SessionBackendFactory{}
 	memoryFactories  = map[string]MemoryBackendFactory{}
 	toolFactories    = map[string]ToolProviderFactory{}
+	toolSetFactories = map[string]ToolSetProviderFactory{}
 	modelFactories   = map[string]ModelFactory{}
 )
 
@@ -304,6 +318,42 @@ func LookupToolProvider(typeName string) (ToolProviderFactory, bool) {
 	return f, ok
 }
 
+// RegisterToolSetProvider registers a tool set factory under typeName.
+func RegisterToolSetProvider(
+	typeName string,
+	f ToolSetProviderFactory,
+) error {
+	name, err := validateType("toolset provider", typeName)
+	if err != nil {
+		return err
+	}
+	if f == nil {
+		return fmt.Errorf("registry: toolset factory is nil: %s", name)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if _, ok := toolSetFactories[name]; ok {
+		return fmt.Errorf(
+			"registry: toolset provider already registered: %s",
+			name,
+		)
+	}
+	toolSetFactories[name] = f
+	return nil
+}
+
+// LookupToolSetProvider returns a tool set factory by typeName.
+func LookupToolSetProvider(
+	typeName string,
+) (ToolSetProviderFactory, bool) {
+	mu.RLock()
+	defer mu.RUnlock()
+	name := normalizeType(typeName)
+	f, ok := toolSetFactories[name]
+	return f, ok
+}
+
 // RegisterModel registers a model factory under typeName.
 func RegisterModel(typeName string, f ModelFactory) error {
 	name, err := validateType("model", typeName)
@@ -359,6 +409,8 @@ func Types(kind string) []string {
 		keys = mapKeys(memoryFactories)
 	case "tool provider":
 		keys = mapKeys(toolFactories)
+	case "toolset provider":
+		keys = mapKeys(toolSetFactories)
 	case "model":
 		keys = mapKeys(modelFactories)
 	default:
