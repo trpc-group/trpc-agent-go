@@ -8,11 +8,12 @@ This report evaluates the memory capabilities of trpc-agent-go using the **LoCoM
 
 **Key findings:**
 
-- **Long-context baseline** achieves the highest overall F1 (0.472), confirming that full context remains the gold standard when feasible.
-- **Auto memory extraction** (F1=0.357 pgvector) is the strongest memory-based approach, reaching 75.6% of the long-context baseline.
-- **Agentic memory** (F1=0.294 pgvector) shows that LLM-driven memory extraction faces information density challenges.
-- **pgvector consistently outperforms MySQL** by 1-2% F1 across all scenarios, validating the value of vector similarity search.
+- **Long-context baseline** achieves the highest overall F1 (0.474), confirming that full context remains the gold standard when feasible.
+- **Auto memory extraction** (F1=0.363 pgvector) is the strongest memory-based approach, reaching 76.7% of the long-context baseline.
+- **Agentic memory** (F1=0.291 MySQL) shows that LLM-driven memory extraction faces information density challenges.
+- **pgvector outperforms MySQL** for Auto (F1 +0.011), while MySQL slightly leads for Agentic (F1 +0.005); vector similarity search benefits Auto's denser memory entries.
 - **Injecting raw history hurts F1/BLEU but improves LLM Score**, revealing a trade-off between token-level precision and semantic quality.
+- **Token usage** varies dramatically: Long-Context consumes ~18.8K prompt tokens/QA (1 call), while memory-based approaches use ~2K-9K prompt tokens/QA (2 calls).
 
 ---
 
@@ -93,11 +94,11 @@ Aligned with the LoCoMo paper and industry standards (Mem0, MemMachine):
 
 | Scenario | Backend | F1 | BLEU | LLM Score | Avg Latency |
 | --- | --- | ---: | ---: | ---: | ---: |
-| Long-Context | - | **0.472** | **0.429** | **0.523** | 3,485ms |
-| Auto | pgvector | 0.357 | 0.333 | 0.366 | 5,622ms |
-| Auto | MySQL | 0.347 | 0.320 | 0.362 | 5,678ms |
-| Agentic | pgvector | 0.294 | 0.279 | 0.287 | 4,998ms |
-| Agentic | MySQL | 0.286 | 0.271 | 0.285 | 4,392ms |
+| Long-Context | - | **0.474** | **0.431** | **0.527** | 3,063ms |
+| Auto | pgvector | 0.363 | 0.339 | 0.373 | 5,235ms |
+| Auto | MySQL | 0.352 | 0.327 | 0.373 | 4,785ms |
+| Agentic | MySQL | 0.291 | 0.276 | 0.285 | 3,939ms |
+| Agentic | pgvector | 0.287 | 0.273 | 0.280 | 4,704ms |
 
 ### 3.2 History Injection Results
 
@@ -105,18 +106,18 @@ Aligned with the LoCoMo paper and industry standards (Mem0, MemMachine):
 
 | Scenario | Backend | History | F1 | BLEU | LLM Score | Avg Latency |
 | --- | --- | --- | ---: | ---: | ---: | ---: |
-| Agentic | pgvector | None | **0.294** | **0.279** | 0.287 | 4,998ms |
-| Agentic | pgvector | +300 | 0.267 | 0.237 | 0.357 | 6,990ms |
-| Agentic | pgvector | +700 | 0.275 | 0.229 | **0.464** | 5,120ms |
-| Agentic | MySQL | None | **0.286** | **0.271** | 0.285 | 4,392ms |
-| Agentic | MySQL | +300 | 0.275 | 0.245 | 0.365 | 5,817ms |
-| Agentic | MySQL | +700 | 0.277 | 0.231 | **0.460** | 4,956ms |
-| Auto | pgvector | None | **0.357** | **0.333** | 0.366 | 5,622ms |
-| Auto | pgvector | +300 | 0.296 | 0.260 | 0.414 | 6,056ms |
-| Auto | pgvector | +700 | 0.288 | 0.242 | **0.464** | 5,852ms |
-| Auto | MySQL | None | **0.347** | **0.320** | 0.362 | 5,678ms |
-| Auto | MySQL | +300 | 0.280 | 0.246 | 0.399 | 5,547ms |
-| Auto | MySQL | +700 | 0.290 | 0.244 | **0.467** | 5,321ms |
+| Agentic | pgvector | None | **0.287** | **0.273** | 0.280 | 4,704ms |
+| Agentic | pgvector | +300 | 0.272 | 0.242 | 0.365 | 5,201ms |
+| Agentic | pgvector | +700 | 0.274 | 0.228 | **0.459** | 4,641ms |
+| Agentic | MySQL | None | **0.291** | **0.276** | 0.285 | 3,939ms |
+| Agentic | MySQL | +300 | 0.271 | 0.242 | 0.368 | 4,616ms |
+| Agentic | MySQL | +700 | 0.278 | 0.231 | **0.463** | 4,845ms |
+| Auto | pgvector | None | **0.363** | **0.339** | 0.373 | 5,235ms |
+| Auto | pgvector | +300 | 0.294 | 0.259 | 0.410 | 5,474ms |
+| Auto | pgvector | +700 | 0.288 | 0.243 | **0.470** | 5,494ms |
+| Auto | MySQL | None | **0.352** | **0.327** | 0.373 | 4,785ms |
+| Auto | MySQL | +300 | 0.282 | 0.248 | 0.397 | 4,868ms |
+| Auto | MySQL | +700 | 0.290 | 0.244 | **0.477** | 5,133ms |
 
 ### 3.3 Results by Category (No History)
 
@@ -124,21 +125,21 @@ Aligned with the LoCoMo paper and industry standards (Mem0, MemMachine):
 
 | Category | Long-Context | Agentic pgvec | Agentic MySQL | Auto pgvec | Auto MySQL |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| single-hop | 0.330 | 0.146 | 0.168 | 0.272 | 0.306 |
-| multi-hop | 0.319 | 0.178 | 0.135 | 0.088 | 0.101 |
-| temporal | 0.088 | 0.091 | 0.043 | 0.060 | 0.056 |
-| open-domain | 0.518 | 0.126 | 0.146 | 0.302 | 0.325 |
-| adversarial | 0.668 | 0.830 | 0.787 | 0.771 | 0.653 |
+| single-hop | 0.324 | 0.150 | 0.155 | 0.246 | 0.290 |
+| multi-hop | 0.332 | 0.142 | 0.153 | 0.091 | 0.118 |
+| temporal | 0.103 | 0.047 | 0.035 | 0.063 | 0.068 |
+| open-domain | 0.521 | 0.129 | 0.141 | 0.324 | 0.337 |
+| adversarial | 0.663 | 0.825 | 0.816 | 0.771 | 0.650 |
 
 **Table 3: LLM Score by Category**
 
 | Category | Long-Context | Agentic pgvec | Agentic MySQL | Auto pgvec | Auto MySQL |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| single-hop | 0.333 | 0.122 | 0.130 | 0.220 | 0.277 |
-| multi-hop | 0.252 | 0.107 | 0.093 | 0.049 | 0.064 |
-| temporal | 0.155 | 0.137 | 0.057 | 0.068 | 0.083 |
-| open-domain | 0.654 | 0.141 | 0.171 | 0.355 | 0.380 |
-| adversarial | 0.670 | 0.830 | 0.787 | 0.771 | 0.653 |
+| single-hop | 0.330 | 0.101 | 0.112 | 0.209 | 0.259 |
+| multi-hop | 0.264 | 0.078 | 0.086 | 0.051 | 0.090 |
+| temporal | 0.177 | 0.076 | 0.054 | 0.068 | 0.116 |
+| open-domain | 0.661 | 0.150 | 0.164 | 0.376 | 0.401 |
+| adversarial | 0.663 | 0.825 | 0.816 | 0.770 | 0.650 |
 
 ### 3.4 History Injection: Category Breakdown
 
@@ -146,31 +147,31 @@ Aligned with the LoCoMo paper and industry standards (Mem0, MemMachine):
 
 | Category | No History | +300 | +700 |
 | --- | ---: | ---: | ---: |
-| single-hop | **0.146** | 0.156 | 0.185 |
-| multi-hop | **0.178** | 0.123 | 0.112 |
-| temporal | 0.091 | 0.062 | **0.089** |
-| open-domain | 0.126 | 0.239 | **0.331** |
-| adversarial | **0.830** | 0.539 | 0.383 |
+| single-hop | 0.150 | 0.149 | **0.191** |
+| multi-hop | **0.142** | 0.128 | 0.094 |
+| temporal | 0.047 | 0.054 | **0.093** |
+| open-domain | 0.129 | 0.242 | **0.333** |
+| adversarial | **0.825** | 0.559 | 0.384 |
 
 **Table 5: F1 by Category — Auto pgvector**
 
 | Category | No History | +300 | +700 |
 | --- | ---: | ---: | ---: |
-| single-hop | **0.272** | 0.196 | 0.183 |
-| multi-hop | 0.088 | **0.120** | 0.106 |
-| temporal | 0.060 | **0.074** | 0.079 |
-| open-domain | 0.302 | **0.306** | **0.347** |
-| adversarial | **0.771** | 0.514 | 0.418 |
+| single-hop | **0.246** | 0.200 | 0.194 |
+| multi-hop | 0.091 | **0.112** | 0.099 |
+| temporal | 0.063 | 0.079 | **0.093** |
+| open-domain | 0.324 | 0.302 | **0.350** |
+| adversarial | **0.771** | 0.514 | 0.409 |
 
 **Table 6: LLM Score by Category — Auto pgvector**
 
 | Category | No History | +300 | +700 |
 | --- | ---: | ---: | ---: |
-| single-hop | 0.220 | 0.294 | **0.291** |
-| multi-hop | 0.049 | 0.131 | **0.182** |
-| temporal | 0.068 | 0.162 | **0.185** |
-| open-domain | 0.355 | 0.539 | **0.685** |
-| adversarial | **0.771** | 0.513 | 0.419 |
+| single-hop | 0.209 | 0.273 | **0.322** |
+| multi-hop | 0.051 | 0.145 | **0.174** |
+| temporal | 0.068 | 0.138 | **0.225** |
+| open-domain | 0.376 | 0.532 | **0.690** |
+| adversarial | **0.770** | 0.513 | 0.414 |
 
 ### 3.5 Per-Sample Results
 
@@ -178,17 +179,42 @@ Aligned with the LoCoMo paper and industry standards (Mem0, MemMachine):
 
 | Sample | #QA | Long-Context | Auto pgvec | Agentic pgvec |
 | --- | ---: | ---: | ---: | ---: |
-| locomo10_1 | 199 | 0.429 | 0.311 | 0.279 |
-| locomo10_2 | 105 | 0.510 | 0.322 | 0.345 |
-| locomo10_3 | 193 | 0.530 | 0.441 | 0.295 |
-| locomo10_4 | 260 | 0.456 | 0.367 | 0.335 |
-| locomo10_5 | 242 | 0.447 | 0.364 | 0.297 |
-| locomo10_6 | 158 | 0.539 | 0.204 | 0.287 |
-| locomo10_7 | 190 | 0.465 | 0.404 | 0.278 |
-| locomo10_8 | 239 | 0.461 | 0.339 | 0.268 |
-| locomo10_9 | 196 | 0.448 | 0.380 | 0.268 |
-| locomo10_10 | 204 | 0.480 | 0.393 | 0.297 |
-| **Average** | **199** | **0.472** | **0.357** | **0.294** |
+| locomo10_1 | 199 | 0.450 | 0.335 | 0.276 |
+| locomo10_2 | 105 | 0.518 | 0.325 | 0.329 |
+| locomo10_3 | 193 | 0.532 | 0.442 | 0.292 |
+| locomo10_4 | 260 | 0.456 | 0.375 | 0.342 |
+| locomo10_5 | 242 | 0.436 | 0.387 | 0.294 |
+| locomo10_6 | 158 | 0.529 | 0.257 | 0.281 |
+| locomo10_7 | 190 | 0.472 | 0.364 | 0.270 |
+| locomo10_8 | 239 | 0.457 | 0.326 | 0.245 |
+| locomo10_9 | 196 | 0.450 | 0.407 | 0.254 |
+| locomo10_10 | 204 | 0.490 | 0.376 | 0.292 |
+| **Average** | **199** | **0.474** | **0.363** | **0.287** |
+
+### 3.6 Token Usage
+
+**Table 8: Token Usage Summary (No History)**
+
+| Scenario | Backend | Prompt/QA | Completion/QA | Calls/QA | Total Tokens |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Long-Context | - | 18,767 | 8 | 1.0 | 37,288,164 |
+| Auto | pgvector | 1,959 | 29 | 2.0 | 3,948,128 |
+| Auto | MySQL | 9,067 | 30 | 2.1 | 18,067,237 |
+| Agentic | pgvector | 3,102 | 30 | 2.0 | 6,218,740 |
+| Agentic | MySQL | 4,051 | 30 | 2.0 | 8,104,473 |
+
+**Table 9: Token Usage with History Injection**
+
+| Scenario | Backend | History | Prompt/QA | Calls/QA | Total Tokens |
+| --- | --- | --- | ---: | ---: | ---: |
+| Agentic | pgvector | +300 | 17,280 | 1.6 | 34,373,820 |
+| Agentic | pgvector | +700 | 23,103 | 1.2 | 45,923,057 |
+| Agentic | MySQL | +300 | 17,680 | 1.6 | 35,167,001 |
+| Agentic | MySQL | +700 | 23,191 | 1.2 | 46,095,937 |
+| Auto | pgvector | +300 | 15,387 | 1.5 | 30,610,215 |
+| Auto | pgvector | +700 | 21,445 | 1.1 | 42,625,147 |
+| Auto | MySQL | +300 | 17,585 | 1.5 | 34,976,367 |
+| Auto | MySQL | +700 | 21,861 | 1.1 | 43,452,072 |
 
 ---
 
@@ -199,52 +225,52 @@ Aligned with the LoCoMo paper and industry standards (Mem0, MemMachine):
 ```
 F1 Score Comparison (10 samples, 1986 QA pairs)
 
-long_context        |==========================================| 0.472
-auto_pgvec          |================================          | 0.357
-auto_mysql          |===============================           | 0.347
-auto_pgvec +300     |===========================               | 0.296
+long_context        |==========================================| 0.474
+auto_pgvec          |================================          | 0.363
+auto_mysql          |===============================           | 0.352
+auto_pgvec +300     |===========================               | 0.294
+agentic_mysql       |==========================                | 0.291
 auto_mysql +700     |==========================                | 0.290
 auto_pgvec +700     |==========================                | 0.288
-agentic_pgvec       |==========================                | 0.294
-auto_mysql +300     |=========================                 | 0.280
-agentic_mysql +700  |=========================                 | 0.277
-agentic_mysql       |=========================                 | 0.286
-agentic_mysql +300  |========================                  | 0.275
-agentic_pgvec +700  |========================                  | 0.275
-agentic_pgvec +300  |=======================                   | 0.267
+agentic_pgvec       |=========================                 | 0.287
+auto_mysql +300     |=========================                 | 0.282
+agentic_mysql +700  |=========================                 | 0.278
+agentic_pgvec +700  |========================                  | 0.274
+agentic_pgvec +300  |========================                  | 0.272
+agentic_mysql +300  |========================                  | 0.271
                     +------------------------------------------+
                     0.0      0.1      0.2      0.3      0.4   0.5
 
 LLM Score Comparison (10 samples, 1986 QA pairs)
 
-long_context        |==========================================| 0.523
-auto_mysql +700     |=====================================     | 0.467
-auto_pgvec +700     |=====================================     | 0.464
-agentic_pgvec +700  |=====================================     | 0.464
-agentic_mysql +700  |====================================      | 0.460
-auto_pgvec +300     |=================================         | 0.414
-auto_mysql +300     |================================          | 0.399
-auto_pgvec          |=============================             | 0.366
-agentic_mysql +300  |=============================             | 0.365
-auto_mysql          |============================              | 0.362
-agentic_pgvec +300  |============================              | 0.357
-agentic_pgvec       |=======================                   | 0.287
+long_context        |==========================================| 0.527
+auto_mysql +700     |=====================================     | 0.477
+auto_pgvec +700     |=====================================     | 0.470
+agentic_mysql +700  |=====================================     | 0.463
+agentic_pgvec +700  |====================================      | 0.459
+auto_pgvec +300     |=================================         | 0.410
+auto_mysql +300     |================================          | 0.397
+auto_pgvec          |==============================            | 0.373
+auto_mysql          |==============================            | 0.373
+agentic_mysql +300  |=============================             | 0.368
+agentic_pgvec +300  |=============================             | 0.365
 agentic_mysql       |=======================                   | 0.285
+agentic_pgvec       |=======================                   | 0.280
                     +------------------------------------------+
                     0.0      0.1      0.2      0.3      0.4   0.5
 ```
 
 #### 4.1.1 Long-Context is the Gold Standard
 
-Long-context achieves the highest F1 (0.472) across all categories except adversarial. This confirms that when context window permits, providing the full conversation transcript yields the best factual recall. However, this approach does not scale to arbitrarily long conversation histories in production.
+Long-context achieves the highest F1 (0.474) across all categories except adversarial. This confirms that when context window permits, providing the full conversation transcript yields the best factual recall. However, this approach does not scale to arbitrarily long conversation histories in production.
 
 #### 4.1.2 Auto Extraction Outperforms Agentic
 
-Auto memory extraction (F1=0.357) significantly outperforms agentic (0.294). Auto extraction is more systematic—it processes all conversation content rather than relying on the LLM agent's selective tool calls, generating higher-density, semantically richer memories.
+Auto memory extraction (F1=0.363) significantly outperforms agentic (0.287). Auto extraction is more systematic—it processes all conversation content rather than relying on the LLM agent's selective tool calls, generating higher-density, semantically richer memories.
 
 #### 4.1.3 Adversarial Robustness Inversely Correlates with Recall
 
-Memory-based approaches achieve high adversarial F1 (0.653-0.830), while long-context scores only 0.668. This is because memory-based approaches naturally return "information not available" when no relevant memory is retrieved, which is the correct answer for adversarial questions. Long-context, with the full transcript available, more often hallucinates plausible but incorrect answers.
+Memory-based approaches achieve high adversarial F1 (0.650-0.825), while long-context scores only 0.663. This is because memory-based approaches naturally return "information not available" when no relevant memory is retrieved, which is the correct answer for adversarial questions. Long-context, with the full transcript available, more often hallucinates plausible but incorrect answers.
 
 ### 4.2 History Injection Analysis
 
@@ -254,12 +280,12 @@ Across all 4 scenario-backend combinations, injecting conversation history consi
 
 | Scenario | Backend | F1 (None) | F1 (+300) | F1 (+700) | Delta |
 | --- | --- | ---: | ---: | ---: | ---: |
-| Auto | pgvector | 0.357 | 0.296 | 0.288 | -0.069 |
-| Auto | MySQL | 0.347 | 0.280 | 0.290 | -0.057 |
-| Agentic | pgvector | 0.294 | 0.267 | 0.275 | -0.019 |
-| Agentic | MySQL | 0.286 | 0.275 | 0.277 | -0.009 |
+| Auto | pgvector | 0.363 | 0.294 | 0.288 | -0.075 |
+| Auto | MySQL | 0.352 | 0.282 | 0.290 | -0.062 |
+| Agentic | pgvector | 0.287 | 0.272 | 0.274 | -0.013 |
+| Agentic | MySQL | 0.291 | 0.271 | 0.278 | -0.013 |
 
-The primary cause is **adversarial score collapse**. Without history, adversarial F1 ranges 0.653-0.830; with +700 history, it drops to 0.383-0.418. The model, given extensive raw conversation context, attempts to answer questions that should be refused, losing ~0.35-0.45 F1 on the adversarial category (22% of all questions).
+The primary cause is **adversarial score collapse**. Without history, adversarial F1 ranges 0.650-0.825; with +700 history, it drops to 0.384-0.420. The model, given extensive raw conversation context, attempts to answer questions that should be refused, losing ~0.25-0.44 F1 on the adversarial category (22% of all questions).
 
 #### 4.2.2 LLM Score Significantly Improves
 
@@ -267,66 +293,97 @@ While F1/BLEU drop, LLM-as-Judge scores improve substantially:
 
 | Scenario | Backend | LLM (None) | LLM (+300) | LLM (+700) | Delta |
 | --- | --- | ---: | ---: | ---: | ---: |
-| Auto | pgvector | 0.366 | 0.414 | 0.464 | +0.098 |
-| Auto | MySQL | 0.362 | 0.399 | 0.467 | +0.105 |
-| Agentic | pgvector | 0.287 | 0.357 | 0.464 | +0.177 |
-| Agentic | MySQL | 0.285 | 0.365 | 0.460 | +0.175 |
+| Auto | pgvector | 0.373 | 0.410 | 0.470 | +0.097 |
+| Auto | MySQL | 0.373 | 0.397 | 0.477 | +0.104 |
+| Agentic | pgvector | 0.280 | 0.365 | 0.459 | +0.179 |
+| Agentic | MySQL | 0.285 | 0.368 | 0.463 | +0.178 |
 
 This reveals a fundamental tension: injected history makes responses semantically richer and more contextually appropriate (higher LLM Score), but also more verbose and divergent from reference answers (lower F1/BLEU).
 
 #### 4.2.3 Open-Domain Questions Benefit Most
 
 Open-domain LLM Score with Auto pgvector improves dramatically:
-- No history: 0.355
-- +300: 0.539 (+51.8%)
-- +700: 0.685 (+92.9%)
+- No history: 0.376
+- +300: 0.532 (+41.5%)
+- +700: 0.690 (+83.5%)
 
 This makes sense: open-domain questions about preferences, opinions, and experiences are best answered with access to the original conversational nuance that discrete memories may not capture.
 
 #### 4.2.4 Diminishing Returns from 300 to 700 Turns
 
 The improvement from 300 to 700 turns is marginal compared to 0 to 300:
-- Auto pgvector LLM Score: 0.366 → 0.414 (+0.048) → 0.464 (+0.050)
-- Auto pgvector F1: 0.357 → 0.296 (-0.061) → 0.288 (-0.008)
+- Auto pgvector LLM Score: 0.373 → 0.410 (+0.037) → 0.470 (+0.060)
+- Auto pgvector F1: 0.363 → 0.294 (-0.069) → 0.288 (-0.006)
 
 The F1 degradation plateaus after 300 turns, while LLM Score continues to improve linearly. This suggests that ~300 turns captures most of the useful conversational context, with diminishing returns beyond that.
 
-### 4.3 Category-Level Analysis
+### 4.3 Token Usage Analysis
 
-#### 4.3.1 Temporal Reasoning is Universally Weak
+#### 4.3.1 Long-Context Is the Most Token-Expensive
 
-Temporal questions have the lowest F1 across all scenarios (0.043-0.091), including long-context (0.088). This indicates that temporal reasoning is fundamentally hard for gpt-4o-mini, regardless of the memory architecture.
+```
+Prompt Tokens per QA (No History)
+
+long_context        |==========================================| 18,767
+auto_mysql          |====================                      | 9,067
+agentic_mysql       |=========                                 | 4,051
+agentic_pgvec       |=======                                   | 3,102
+auto_pgvec          |====                                      | 1,959
+                    +------------------------------------------+
+                    0         5,000    10,000   15,000   20,000
+```
+
+Long-context uses 18,767 prompt tokens/QA (the full transcript is sent every time), while Auto pgvector is the most token-efficient at only 1,959 tokens/QA—a **9.6x reduction**.
+
+#### 4.3.2 History Injection Shifts Token Profile
+
+With +700 history turns, prompt tokens per QA increase to 21K-23K across all memory scenarios—approaching and even exceeding long-context's 18.8K/QA. This explains why the LLM Score approaches long-context levels while F1 degrades: the model is effectively doing long-context inference but with the added noise of memory retrieval results.
+
+#### 4.3.3 LLM Calls Decrease with History
+
+Memory-only scenarios average 2.0 calls/QA (one for retrieval, one for answering). With +700 history, this drops to 1.1-1.2 calls/QA—the model finds answers in the injected context and skips memory retrieval more often.
+
+#### 4.3.4 MySQL vs pgvector Token Consumption
+
+MySQL consistently uses more prompt tokens than pgvector (e.g., Auto: 9,067 vs 1,959/QA). MySQL's full-text search returns longer text snippets compared to pgvector's concise vector-matched memories. Despite higher token costs, MySQL's F1 is slightly lower, indicating that more tokens do not necessarily mean better answers.
+
+### 4.4 Category-Level Analysis
+
+#### 4.4.1 Temporal Reasoning is Universally Weak
+
+Temporal questions have the lowest F1 across all scenarios (0.035-0.103), including long-context (0.103). This indicates that temporal reasoning is fundamentally hard for gpt-4o-mini, regardless of the memory architecture.
 
 Root causes:
 - Conversations use relative time references ("last year", "next month") that require resolution against session dates.
 - Even with explicit `[DATE:]` prefixes in stored memories, the model struggles to compute temporal relationships.
 
-#### 4.3.2 Multi-hop Benefits from Agentic Memories
+#### 4.4.2 Multi-hop Reasoning Shows Consistent Challenge
 
-Agentic (pgvector) achieves the highest multi-hop F1 (0.178) among memory-based approaches, surpassing Auto (0.088). This suggests that the agentic approach, while extracting fewer memories overall, creates more interconnected knowledge that aids multi-hop reasoning. The `[DATE:]` prefix injected by the date-aware memory service contributes to this advantage.
+Multi-hop F1 ranges 0.091-0.332 across memory-based approaches. Long-context leads (0.332), while Auto pgvector is the weakest (0.091). Agentic pgvector (0.142) outperforms Auto pgvector on multi-hop, suggesting that the agentic approach's more selective memory creation may produce more interconnected knowledge useful for multi-hop reasoning.
 
-#### 4.3.3 Open-Domain Questions Favor Rich Context
+#### 4.4.3 Open-Domain Questions Favor Rich Context
 
-Long-context dominates open-domain questions (F1=0.518), while memory-based approaches struggle (0.126-0.302). Open-domain questions often require nuanced understanding of conversational context, preferences, and attitudes that are difficult to capture in discrete memory entries. History injection partially bridges this gap (Auto pgvector open-domain LLM Score: 0.355 → 0.685).
+Long-context dominates open-domain questions (F1=0.521), while memory-based approaches struggle (0.129-0.337). Open-domain questions often require nuanced understanding of conversational context, preferences, and attitudes that are difficult to capture in discrete memory entries. History injection partially bridges this gap (Auto pgvector open-domain LLM Score: 0.376 → 0.690).
 
-### 4.4 Backend Comparison: pgvector vs MySQL
+### 4.5 Backend Comparison: pgvector vs MySQL
 
 | Scenario | pgvector F1 | MySQL F1 | Delta |
 | --- | ---: | ---: | ---: |
-| Agentic | 0.294 | 0.286 | +0.008 |
-| Auto | 0.357 | 0.347 | +0.010 |
-| Agentic +700 | 0.275 | 0.277 | -0.002 |
+| Agentic | 0.287 | 0.291 | -0.004 |
+| Auto | 0.363 | 0.352 | +0.011 |
+| Agentic +700 | 0.274 | 0.278 | -0.004 |
 | Auto +700 | 0.288 | 0.290 | -0.002 |
 
-pgvector outperforms MySQL without history injection. However, **with history injection, the backend difference vanishes**—the injected conversation context dominates retrieval quality, making the backend choice less important.
+For Auto mode, pgvector outperforms MySQL by 1.1% F1, validating vector similarity search for dense extracted memories. For Agentic mode, MySQL slightly leads, possibly because agentic memories tend to be longer text entries that benefit from BM25-style keyword matching. **With history injection, the backend difference vanishes**—the injected conversation context dominates retrieval quality.
 
-### 4.5 Variance Analysis
+### 4.6 Variance Analysis
 
 Per-sample F1 shows notable variance:
-- **Long-context**: 0.429 - 0.539 (range 0.110), relatively stable.
-- **Auto pgvector**: 0.204 - 0.441 (range 0.237), high variance.
+- **Long-context**: 0.436 - 0.532 (range 0.096), relatively stable.
+- **Auto pgvector**: 0.257 - 0.442 (range 0.185), high variance.
+- **Agentic pgvector**: 0.245 - 0.342 (range 0.097), moderate variance.
 
-The high variance in memory-based approaches suggests that some conversation structures are inherently harder for memory extraction and retrieval. Samples with more complex, interleaved topics (e.g., locomo10_6, locomo10_8) tend to score lower.
+The high variance in Auto extraction suggests that some conversation structures are inherently harder for memory extraction and retrieval. Samples with more complex, interleaved topics (e.g., locomo10_6) tend to score lower.
 
 ---
 
@@ -338,7 +395,7 @@ Source: Mem0 Table 1 & Table 2 (Chhikara et al., 2025, arXiv:2504.19413)
 
 ### 5.1 Per-Category F1 Comparison
 
-**Table 8: F1 by Category (Excluding Adversarial)**
+**Table 10: F1 by Category (Excluding Adversarial)**
 
 | Method | Single-Hop | Multi-Hop | Open-Domain | Temporal | Overall | Source |
 | --- | ---: | ---: | ---: | ---: | ---: | --- |
@@ -347,12 +404,12 @@ Source: Mem0 Table 1 & Table 2 (Chhikara et al., 2025, arXiv:2504.19413)
 | Zep | 0.357 | 0.194 | 0.496 | 0.420 | 0.367 | Mem0 Table 1 |
 | LangMem | 0.355 | 0.260 | 0.409 | 0.308 | 0.333 | Mem0 Table 1 |
 | A-Mem | 0.270 | 0.121 | 0.447 | 0.459 | 0.324 | Mem0 Table 1 |
-| **trpc-agent (LC)** | **0.330** | **0.319** | **0.518** | **0.088** | **0.314** | This work |
+| **trpc-agent (LC)** | **0.324** | **0.332** | **0.521** | **0.103** | **0.320** | This work |
 | OpenAI Memory | 0.343 | 0.201 | 0.393 | 0.140 | 0.269 | Mem0 Table 1 |
 | MemGPT | 0.267 | 0.092 | 0.410 | 0.255 | 0.256 | Mem0 Table 1 |
 | LoCoMo (pipeline) | 0.250 | 0.120 | 0.404 | 0.184 | 0.240 | Mem0 Table 1 |
-| **trpc-agent (Auto)** | **0.272** | **0.088** | **0.302** | **0.060** | **0.181** | This work |
-| **trpc-agent (Agentic)** | **0.146** | **0.178** | **0.126** | **0.091** | **0.135** | This work |
+| **trpc-agent (Auto)** | **0.246** | **0.091** | **0.324** | **0.063** | **0.181** | This work |
+| **trpc-agent (Agentic)** | **0.150** | **0.142** | **0.129** | **0.047** | **0.117** | This work |
 | ReadAgent | 0.092 | 0.053 | 0.097 | 0.126 | 0.092 | Mem0 Table 1 |
 | MemoryBank | 0.050 | 0.056 | 0.066 | 0.097 | 0.067 | Mem0 Table 1 |
 
@@ -364,12 +421,12 @@ Mem0g               |=========================================| 0.381
 Zep                 |======================================   | 0.357
 LangMem             |======================================   | 0.355
 OpenAI Memory       |=====================================    | 0.343
-trpc-agent (LC)     |====================================     | 0.330
+trpc-agent (LC)     |====================================     | 0.324
 A-Mem               |=============================            | 0.270
-trpc-agent (Auto)   |=============================            | 0.272
+trpc-agent (Auto)   |===========================              | 0.246
 MemGPT              |============================             | 0.267
 LoCoMo (pipeline)   |===========================              | 0.250
-trpc-agent (Agentic)|===============                          | 0.146
+trpc-agent (Agentic)|================                         | 0.150
 ReadAgent           |=========                                | 0.092
 MemoryBank          |=====                                    | 0.050
                     +------------------------------------------+
@@ -377,17 +434,17 @@ MemoryBank          |=====                                    | 0.050
 
 Multi-Hop F1 (no adversarial)
 
-trpc-agent (LC)     |==========================================| 0.319
+trpc-agent (LC)     |==========================================| 0.332
 Mem0                |=====================================     | 0.286
 LangMem             |=================================         | 0.260
 Mem0g               |===============================           | 0.243
 OpenAI Memory       |==========================                | 0.201
 Zep                 |=========================                 | 0.194
-trpc-agent (Agentic)|=======================                   | 0.178
+trpc-agent (Agentic)|==================                        | 0.142
 A-Mem               |===============                           | 0.121
 LoCoMo (pipeline)   |===============                           | 0.120
 MemGPT              |===========                               | 0.092
-trpc-agent (Auto)   |===========                               | 0.088
+trpc-agent (Auto)   |===========                               | 0.091
 MemoryBank          |=======                                   | 0.056
 ReadAgent           |======                                    | 0.053
                     +------------------------------------------+
@@ -395,7 +452,7 @@ ReadAgent           |======                                    | 0.053
 
 Open-Domain F1 (no adversarial)
 
-trpc-agent (LC)     |==========================================| 0.518
+trpc-agent (LC)     |==========================================| 0.521
 Zep                 |========================================  | 0.496
 Mem0g               |=======================================   | 0.493
 Mem0                |======================================    | 0.477
@@ -404,8 +461,8 @@ MemGPT              |=================================         | 0.410
 LangMem             |================================          | 0.409
 LoCoMo (pipeline)   |================================          | 0.404
 OpenAI Memory       |===============================           | 0.393
-trpc-agent (Auto)   |========================                  | 0.302
-trpc-agent (Agentic)|==========                                | 0.126
+trpc-agent (Auto)   |=========================                 | 0.324
+trpc-agent (Agentic)|==========                                | 0.129
 ReadAgent           |========                                  | 0.097
 MemoryBank          |=====                                     | 0.066
                     +------------------------------------------+
@@ -422,10 +479,10 @@ MemGPT              |====================                      | 0.255
 LoCoMo (pipeline)   |===============                           | 0.184
 OpenAI Memory       |===========                               | 0.140
 ReadAgent           |==========                                | 0.126
+trpc-agent (LC)     |========                                  | 0.103
 MemoryBank          |========                                  | 0.097
-trpc-agent (Agentic)|=======                                   | 0.091
-trpc-agent (LC)     |=======                                   | 0.088
-trpc-agent (Auto)   |=====                                     | 0.060
+trpc-agent (Auto)   |=====                                     | 0.063
+trpc-agent (Agentic)|====                                      | 0.047
                     +------------------------------------------+
                     0.0     0.1     0.2     0.3     0.4     0.5
 
@@ -436,23 +493,23 @@ Mem0g               |=========================================| 0.408
 Zep                 |=====================================     | 0.367
 LangMem             |=================================         | 0.333
 A-Mem               |================================          | 0.324
-trpc-agent (LC)     |===============================           | 0.314
+trpc-agent (LC)     |===============================           | 0.320
 OpenAI Memory       |===========================               | 0.269
 MemGPT              |==========================                | 0.256
 LoCoMo (pipeline)   |========================                  | 0.240
 trpc-agent (Auto)   |==================                        | 0.181
-trpc-agent (Agentic)|=============                             | 0.135
+trpc-agent (Agentic)|============                              | 0.117
 ReadAgent           |=========                                 | 0.092
 MemoryBank          |======                                    | 0.067
                     +------------------------------------------+
                     0.0       0.1       0.2       0.3       0.4
 ```
 
-> Note: The Mem0 paper does not include adversarial category data, so cross-framework comparison is not possible for adversarial. Our adversarial F1 results are in Section 4 (Long-Context 0.668, Auto pgvec 0.771, Agentic pgvec 0.830). Overall F1 is the simple average of 4 categories.
+> Note: The Mem0 paper does not include adversarial category data, so cross-framework comparison is not possible for adversarial. Our adversarial F1 results are in Section 4 (Long-Context 0.663, Auto pgvec 0.771, Agentic pgvec 0.825). Overall F1 is the simple average of 4 categories.
 
 ### 5.2 Overall LLM-as-Judge Comparison
 
-**Table 9: Overall LLM-as-Judge and Latency**
+**Table 11: Overall LLM-as-Judge and Latency**
 
 | Method | Overall J | p95 Latency (s) | Memory Tokens | Source |
 | --- | ---: | ---: | ---: | --- |
@@ -463,12 +520,12 @@ MemoryBank          |======                                    | 0.067
 | RAG (k=2, 256) | 0.610 | 1.91 | - | Mem0 Table 2 |
 | LangMem | 0.581 | 60.40 | ~127 | Mem0 Table 2 |
 | OpenAI Memory | 0.529 | 0.89 | ~4.4K | Mem0 Table 2 |
-| **trpc-agent (LC)** | **0.480** | **3.49** | **~26K** | This work |
 | A-Mem* | 0.484 | 4.37 | ~2.5K | Mem0 Table 2 |
-| **trpc-agent (Auto)** | **0.249** | **5.62** | **-** | This work |
-| **trpc-agent (Agentic)** | **0.130** | **5.00** | **-** | This work |
+| **trpc-agent (LC)** | **0.487** | **3.06** | **~18.8K** | This work |
+| **trpc-agent (Auto)** | **0.258** | **5.23** | **~2.0K** | This work |
+| **trpc-agent (Agentic)** | **0.121** | **4.70** | **~3.1K** | This work |
 
-> Note: Our Overall J is the weighted LLM Score across 4 categories (excluding adversarial).
+> Note: Our Overall J is the weighted LLM Score across 4 categories (excluding adversarial). Memory Tokens is average prompt tokens per QA.
 
 ```
 Overall LLM-as-Judge — Memory Frameworks (no adversarial)
@@ -480,10 +537,10 @@ Zep                 |=====================================     | 0.660
 RAG (k=2, 256)      |===================================       | 0.610
 LangMem             |================================          | 0.581
 OpenAI Memory       |=============================             | 0.529
+trpc-agent (LC)     |==========================                | 0.487
 A-Mem*              |==========================                | 0.484
-trpc-agent (LC)     |==========================                | 0.480
-trpc-agent (Auto)   |=============                             | 0.249
-trpc-agent (Agentic)|=======                                   | 0.130
+trpc-agent (Auto)   |==============                            | 0.258
+trpc-agent (Agentic)|======                                    | 0.121
                     +------------------------------------------+
                     0.0    0.2    0.4    0.6    0.8
 ```
@@ -492,17 +549,17 @@ trpc-agent (Agentic)|=======                                   | 0.130
 
 **Positioning of trpc-agent-go among memory frameworks:**
 
-1. **Multi-Hop reasoning leads the field**: trpc-agent (LC) achieves 0.319 multi-hop F1, **ranking first among all evaluated frameworks**, surpassing Mem0 (0.286), LangMem (0.260), and other dedicated memory systems. This demonstrates a clear architectural advantage in complex reasoning scenarios that require combining facts across sessions.
+1. **Multi-Hop reasoning leads the field**: trpc-agent (LC) achieves 0.332 multi-hop F1, **ranking first among all evaluated frameworks**, surpassing Mem0 (0.286), LangMem (0.260), and other dedicated memory systems. This demonstrates a clear architectural advantage in complex reasoning scenarios that require combining facts across sessions.
 
-2. **Open-Domain retrieval ranks first**: trpc-agent (LC) achieves the highest open-domain F1 of 0.518, ahead of Zep (0.496) and Mem0g (0.493). Open-domain questions cover fine-grained information such as preferences, attitudes, and life experiences, highlighting the framework's strength in nuanced semantic understanding.
+2. **Open-Domain retrieval ranks first**: trpc-agent (LC) achieves the highest open-domain F1 of 0.521, ahead of Zep (0.496) and Mem0g (0.493). Open-domain questions cover fine-grained information such as preferences, attitudes, and life experiences, highlighting the framework's strength in nuanced semantic understanding.
 
-3. **Single-Hop remains competitive**: trpc-agent (LC) achieves 0.330 single-hop F1, on par with OpenAI Memory (0.343), demonstrating solid baseline fact retrieval capability.
+3. **Single-Hop remains competitive**: trpc-agent (LC) achieves 0.324 single-hop F1, on par with OpenAI Memory (0.343), demonstrating solid baseline fact retrieval capability.
 
-4. **Overall J comparable to A-Mem**: Long-Context mode's Overall J (0.480) is on par with A-Mem (0.484). It should be noted that the Mem0 paper runs the LLM Judge 10 times and averages, while this work uses a single Judge run. This difference in evaluation repetitions has a systematic effect on score stability.
+4. **Overall J comparable to A-Mem**: Long-Context mode's Overall J (0.487) is on par with A-Mem (0.484). It should be noted that the Mem0 paper runs the LLM Judge 10 times and averages, while this work uses a single Judge run. This difference in evaluation repetitions has a systematic effect on score stability.
 
 5. **Temporal category has room for improvement**: Current temporal F1 across all modes remains at a modest level (< 0.1), compared to Mem0g (0.516). Temporal reasoning requires precise resolution of relative time expressions ("last year", "next month") in conversations, which is a key optimization target for subsequent releases. Notably, OpenAI Memory (0.140) also shows limited performance in this category, suggesting that temporal reasoning is challenging for most frameworks.
 
-6. **Adversarial robustness is a distinctive strength**: While the Mem0 paper does not include the adversarial category, this work achieves adversarial F1 of 0.668–0.830 (see Section 4). Memory-based approaches excel at identifying unanswerable questions. This capability is critical for safety and reliability in production environments, and represents an important differentiator for trpc-agent-go compared to pure retrieval-based frameworks.
+6. **Adversarial robustness is a distinctive strength**: While the Mem0 paper does not include the adversarial category, this work achieves adversarial F1 of 0.650–0.825 (see Section 4). Memory-based approaches excel at identifying unanswerable questions. This capability is critical for safety and reliability in production environments, and represents an important differentiator for trpc-agent-go compared to pure retrieval-based frameworks.
 
 7. **Auto/Agentic modes show development potential**: As the memory subsystem of a general-purpose agent framework, the current Auto and Agentic performance reflects the baseline of the first evaluation release. Compared to dedicated memory systems like Mem0 where memory is the core product, trpc-agent-go's memory module already demonstrates competitiveness in key categories such as multi-hop and open-domain, while maintaining overall framework generality. Significant improvements are expected with the introduction of temporal indexing, graph-based memory, and other planned features.
 
@@ -520,6 +577,7 @@ trpc-agent (Agentic)|=======                                   | 0.130
 1. **Date-aware memory service**: The `datePrefixMemoryService` wrapper automatically injects `[DATE: ...]` prefixes into agentic memories, improving temporal reasoning without relying on LLM compliance.
 2. **Strong adversarial robustness**: Memory-based approaches achieve 0.65-0.83 adversarial F1, correctly identifying unanswerable questions.
 3. **Auto extraction**: The background extractor provides a good balance between memory quality and system complexity.
+4. **Token efficiency**: Auto pgvector achieves 76.7% of long-context F1 while using only 10.6% of the prompt tokens.
 
 ### 6.2 The History Injection Trade-off
 
@@ -530,7 +588,18 @@ History injection reveals a key insight for memory system design:
 
 This suggests a **hybrid approach** for production: use memory retrieval as the primary context source, and selectively inject relevant history segments (rather than all 300-700 turns) when open-domain or nuanced questions are detected.
 
-### 6.3 Limitations and Future Work
+### 6.3 Token Cost Implications
+
+| Approach | Prompt Tokens/QA | Relative Cost | F1 | Quality Trade-off |
+| --- | ---: | ---: | ---: | --- |
+| Long-Context | 18,767 | 1.00x | 0.474 | Best quality, highest cost |
+| Auto pgvector | 1,959 | 0.10x | 0.363 | Best cost-efficiency |
+| Auto MySQL | 9,067 | 0.48x | 0.352 | Moderate cost, no embedding needed |
+| Auto pgvec +700 | 21,445 | 1.14x | 0.288 | Higher cost than LC, lower F1 |
+
+Auto pgvector provides the optimal quality-cost trade-off: 76.7% of long-context F1 at only 10.4% of the token cost. History injection with +700 turns is counterproductive from a cost perspective—it exceeds long-context token usage while delivering lower F1.
+
+### 6.4 Limitations and Future Work
 
 1. **Temporal reasoning remains weak** (F1 < 0.1 across all scenarios). Future work should explore dedicated temporal indexing and reasoning modules.
 2. **Multi-hop reasoning gap**: Memory-based approaches struggle to combine facts across sessions. Graph-based memory structures could help.
@@ -538,7 +607,7 @@ This suggests a **hybrid approach** for production: use memory retrieval as the 
 4. **Model capability ceiling**: gpt-4o-mini's extraction and reasoning abilities limit all scenarios. Stronger models (e.g., GPT-4o, Claude) may substantially improve results.
 5. **Selective history injection**: Instead of injecting all turns, use relevance filtering to inject only pertinent conversation segments.
 
-### 6.4 Recommendations for Production Use
+### 6.5 Recommendations for Production Use
 
 | Use Case | Recommended Approach |
 | --- | --- |
@@ -546,21 +615,25 @@ This suggests a **hybrid approach** for production: use memory retrieval as the 
 | Long-running agents (months of history) | Auto extraction + pgvector |
 | Semantic quality priority | Memory + selective history injection |
 | Low latency required | Agentic + MySQL |
+| Cost-sensitive deployment | Auto pgvector (10x token savings) |
 
 ---
 
 ## 7. Conclusion
 
-This evaluation demonstrates that trpc-agent-go's memory system provides effective long-term conversational memory across multiple paradigms. The Auto extraction approach with pgvector backend achieves the best balance of recall and robustness, reaching 75.6% of the long-context baseline's F1 score while maintaining strong adversarial robustness (0.771).
+This evaluation demonstrates that trpc-agent-go's memory system provides effective long-term conversational memory across multiple paradigms. The Auto extraction approach with pgvector backend achieves the best balance of recall and robustness, reaching 76.7% of the long-context baseline's F1 score while maintaining strong adversarial robustness (0.771) and consuming only 10.4% of the prompt tokens.
 
-The history injection experiments reveal an important trade-off: injecting raw conversation history improves semantic quality (LLM Score +0.10~0.18) but degrades token-level precision (F1 -0.02~0.07) and adversarial robustness. This confirms that **structured memory extraction is more effective than brute-force context injection** for factual recall tasks, while history injection adds value for open-domain, nuanced questions.
+The history injection experiments reveal an important trade-off: injecting raw conversation history improves semantic quality (LLM Score +0.10~0.18) but degrades token-level precision (F1 -0.01~0.08) and adversarial robustness. This confirms that **structured memory extraction is more effective than brute-force context injection** for factual recall tasks, while history injection adds value for open-domain, nuanced questions.
+
+Token usage analysis reveals that Auto pgvector is the most cost-efficient approach, using only 1,959 prompt tokens per QA compared to Long-Context's 18,767. With +700 history injection, token costs exceed Long-Context levels (21K+/QA) while F1 remains lower, making full history injection cost-ineffective in practice.
 
 Key takeaways:
 1. **Auto > Agentic** for overall memory effectiveness with gpt-4o-mini.
-2. **pgvector > MySQL** for semantic retrieval quality (without history injection).
+2. **pgvector > MySQL** for Auto mode; MySQL slightly leads for Agentic mode.
 3. **Temporal reasoning** is the primary bottleneck across all approaches.
 4. **Adversarial robustness** is a natural strength of memory-based systems.
 5. **History injection** improves semantic quality but hurts precision—a hybrid selective approach is recommended.
+6. **Token efficiency**: Auto pgvector achieves 76.7% of long-context F1 at 10.4% token cost.
 
 ---
 
@@ -581,47 +654,65 @@ Key takeaways:
 
 | Scenario | single-hop | multi-hop | temporal | open-domain | adversarial |
 | --- | --- | --- | --- | --- | --- |
-| Long-Context | 0.330/0.260/0.333 | 0.319/0.285/0.252 | 0.088/0.069/0.155 | 0.518/0.456/0.654 | 0.668/0.667/0.670 |
-| Agentic pgvec | 0.146/0.106/0.122 | 0.178/0.160/0.107 | 0.091/0.075/0.137 | 0.126/0.114/0.141 | 0.830/0.830/0.830 |
-| Agentic MySQL | 0.168/0.125/0.130 | 0.135/0.119/0.093 | 0.043/0.034/0.057 | 0.146/0.132/0.171 | 0.787/0.787/0.787 |
-| Auto pgvec | 0.272/0.209/0.220 | 0.088/0.081/0.049 | 0.060/0.047/0.068 | 0.302/0.271/0.355 | 0.771/0.771/0.771 |
-| Auto MySQL | 0.306/0.232/0.277 | 0.101/0.092/0.064 | 0.056/0.040/0.083 | 0.325/0.293/0.380 | 0.653/0.653/0.653 |
+| Long-Context | 0.324/0.252/0.330 | 0.332/0.296/0.264 | 0.103/0.080/0.177 | 0.521/0.460/0.661 | 0.663/0.662/0.663 |
+| Agentic pgvec | 0.150/0.110/0.101 | 0.142/0.126/0.078 | 0.047/0.033/0.076 | 0.129/0.118/0.150 | 0.825/0.825/0.825 |
+| Agentic MySQL | 0.155/0.112/0.112 | 0.153/0.136/0.086 | 0.035/0.022/0.054 | 0.141/0.127/0.164 | 0.816/0.816/0.816 |
+| Auto pgvec | 0.246/0.183/0.209 | 0.091/0.085/0.051 | 0.063/0.046/0.068 | 0.324/0.293/0.376 | 0.771/0.771/0.770 |
+| Auto MySQL | 0.290/0.224/0.259 | 0.118/0.106/0.090 | 0.068/0.053/0.116 | 0.337/0.305/0.401 | 0.650/0.650/0.650 |
 
 ### C. Full Category Breakdown — +700 History (F1 / BLEU / LLM)
 
 | Scenario | single-hop | multi-hop | temporal | open-domain | adversarial |
 | --- | --- | --- | --- | --- | --- |
-| Agentic pgvec | 0.185/0.142/0.310 | 0.112/0.085/0.212 | 0.089/0.066/0.225 | 0.331/0.249/0.677 | 0.383/0.382/0.391 |
-| Agentic MySQL | 0.188/0.144/0.290 | 0.096/0.073/0.191 | 0.084/0.064/0.212 | 0.332/0.250/0.675 | 0.403/0.401/0.408 |
-| Auto pgvec | 0.183/0.140/0.291 | 0.106/0.083/0.182 | 0.079/0.057/0.185 | 0.347/0.265/0.685 | 0.418/0.417/0.419 |
-| Auto MySQL | 0.181/0.137/0.297 | 0.100/0.079/0.177 | 0.112/0.090/0.205 | 0.354/0.272/0.692 | 0.412/0.411/0.414 |
+| Agentic pgvec | 0.191/0.145/0.303 | 0.094/0.072/0.196 | 0.093/0.072/0.240 | 0.333/0.249/0.677 | 0.384/0.384/0.385 |
+| Agentic MySQL | 0.181/0.137/0.295 | 0.095/0.072/0.198 | 0.086/0.064/0.209 | 0.338/0.255/0.678 | 0.398/0.397/0.407 |
+| Auto pgvec | 0.194/0.148/0.322 | 0.099/0.078/0.174 | 0.093/0.068/0.225 | 0.350/0.269/0.690 | 0.409/0.409/0.414 |
+| Auto MySQL | 0.185/0.140/0.300 | 0.097/0.077/0.202 | 0.094/0.075/0.227 | 0.352/0.269/0.698 | 0.420/0.419/0.425 |
 
 ### D. Full Category Breakdown — +300 History (F1 / BLEU / LLM)
 
 | Scenario | single-hop | multi-hop | temporal | open-domain | adversarial |
 | --- | --- | --- | --- | --- | --- |
-| Agentic pgvec | 0.156/0.122/0.227 | 0.123/0.096/0.103 | 0.062/0.049/0.114 | 0.239/0.191/0.429 | 0.539/0.539/0.540 |
-| Agentic MySQL | 0.156/0.122/0.215 | 0.117/0.092/0.114 | 0.061/0.047/0.139 | 0.237/0.190/0.423 | 0.579/0.579/0.580 |
-| Auto pgvec | 0.196/0.152/0.294 | 0.120/0.099/0.131 | 0.074/0.058/0.162 | 0.306/0.246/0.539 | 0.514/0.514/0.513 |
-| Auto MySQL | 0.180/0.142/0.261 | 0.095/0.079/0.113 | 0.080/0.065/0.163 | 0.297/0.237/0.534 | 0.488/0.487/0.487 |
+| Agentic pgvec | 0.149/0.117/0.212 | 0.128/0.099/0.117 | 0.054/0.045/0.132 | 0.242/0.192/0.434 | 0.559/0.559/0.558 |
+| Agentic MySQL | 0.156/0.123/0.245 | 0.101/0.078/0.114 | 0.055/0.044/0.136 | 0.238/0.190/0.419 | 0.577/0.577/0.581 |
+| Auto pgvec | 0.200/0.156/0.273 | 0.112/0.092/0.145 | 0.079/0.065/0.138 | 0.302/0.243/0.532 | 0.514/0.514/0.513 |
+| Auto MySQL | 0.184/0.146/0.272 | 0.102/0.084/0.105 | 0.083/0.069/0.151 | 0.287/0.228/0.521 | 0.505/0.505/0.504 |
 
 ### E. Total Evaluation Time
 
 | Scenario | Backend | History | Total Time | Avg Latency/QA |
 | --- | --- | --- | --- | --- |
-| Long-Context | - | - | 1h55m | 3,485ms |
-| Agentic | pgvector | None | 2h45m | 4,998ms |
-| Agentic | MySQL | None | 2h25m | 4,392ms |
-| Auto | pgvector | None | 3h06m | 5,622ms |
-| Auto | MySQL | None | 3h08m | 5,678ms |
-| Agentic | pgvector | +300 | 3h51m | 6,990ms |
-| Agentic | MySQL | +300 | 3h13m | 5,817ms |
-| Auto | pgvector | +300 | 3h20m | 6,056ms |
-| Auto | MySQL | +300 | 3h04m | 5,547ms |
-| Agentic | pgvector | +700 | 2h49m | 5,120ms |
-| Agentic | MySQL | +700 | 2h44m | 4,956ms |
-| Auto | pgvector | +700 | 3h14m | 5,852ms |
-| Auto | MySQL | +700 | 2h56m | 5,321ms |
+| Long-Context | - | - | 1h41m | 3,063ms |
+| Agentic | pgvector | None | 2h35m | 4,704ms |
+| Agentic | MySQL | None | 2h10m | 3,939ms |
+| Auto | pgvector | None | 2h53m | 5,235ms |
+| Auto | MySQL | None | 2h38m | 4,785ms |
+| Agentic | pgvector | +300 | 2h52m | 5,201ms |
+| Agentic | MySQL | +300 | 2h32m | 4,616ms |
+| Auto | pgvector | +300 | 3h01m | 5,474ms |
+| Auto | MySQL | +300 | 2h41m | 4,868ms |
+| Agentic | pgvector | +700 | 2h33m | 4,641ms |
+| Agentic | MySQL | +700 | 2h40m | 4,845ms |
+| Auto | pgvector | +700 | 3h01m | 5,494ms |
+| Auto | MySQL | +700 | 2h50m | 5,133ms |
+
+### F. Token Usage — Full Breakdown
+
+| Scenario | Backend | History | Prompt Tokens | Completion Tokens | Total Tokens | LLM Calls | Calls/QA |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Long-Context | - | - | 37,272,167 | 15,997 | 37,288,164 | 1,986 | 1.0 |
+| Agentic | pgvector | None | 6,159,851 | 58,889 | 6,218,740 | 4,034 | 2.0 |
+| Agentic | MySQL | None | 8,045,416 | 59,057 | 8,104,473 | 4,046 | 2.0 |
+| Auto | pgvector | None | 3,890,627 | 57,501 | 3,948,128 | 4,000 | 2.0 |
+| Auto | MySQL | None | 18,007,763 | 59,474 | 18,067,237 | 4,073 | 2.1 |
+| Agentic | pgvector | +300 | 34,317,758 | 56,062 | 34,373,820 | 3,231 | 1.6 |
+| Agentic | MySQL | +300 | 35,112,488 | 54,513 | 35,167,001 | 3,237 | 1.6 |
+| Auto | pgvector | +300 | 30,557,714 | 52,501 | 30,610,215 | 3,023 | 1.5 |
+| Auto | MySQL | +300 | 34,924,189 | 52,178 | 34,976,367 | 3,016 | 1.5 |
+| Agentic | pgvector | +700 | 45,883,202 | 39,855 | 45,923,057 | 2,302 | 1.2 |
+| Agentic | MySQL | +700 | 46,056,594 | 39,343 | 46,095,937 | 2,299 | 1.2 |
+| Auto | pgvector | +700 | 42,589,275 | 35,872 | 42,625,147 | 2,180 | 1.1 |
+| Auto | MySQL | +700 | 43,416,313 | 35,759 | 43,452,072 | 2,185 | 1.1 |
 
 ---
 
