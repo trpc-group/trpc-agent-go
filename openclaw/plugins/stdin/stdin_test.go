@@ -14,6 +14,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -107,7 +108,14 @@ func TestNewChannel_OverridesFromThreadAndID(t *testing.T) {
 
 func TestChannel_Run_SendsMessagesAndPrintsReply(t *testing.T) {
 	gw := &stubGateway{}
-	c := &channel{id: "x", gw: gw, from: "u", thread: "t"}
+	c := &channel{
+		id:           "x",
+		gw:           gw,
+		from:         "u",
+		thread:       "t",
+		bufBytes:     defaultScannerBufBytes,
+		maxLineBytes: defaultScannerMaxBytes,
+	}
 
 	stdin := os.Stdin
 	stdout := os.Stdout
@@ -159,4 +167,61 @@ func TestChannel_Run_SendsMessagesAndPrintsReply(t *testing.T) {
 	require.Equal(t, "hello", gw.reqs[2].Text)
 	require.Equal(t, "u", gw.reqs[2].From)
 	require.Equal(t, "t", gw.reqs[2].Thread)
+}
+
+func TestChannel_Run_AllowsLongLine(t *testing.T) {
+	gw := &stubGateway{}
+	c := &channel{
+		id:           "x",
+		gw:           gw,
+		from:         "u",
+		thread:       "t",
+		bufBytes:     defaultScannerBufBytes,
+		maxLineBytes: defaultScannerMaxBytes,
+	}
+
+	stdin := os.Stdin
+	stdout := os.Stdout
+	stderr := os.Stderr
+
+	inR, inW, err := os.Pipe()
+	require.NoError(t, err)
+	outR, outW, err := os.Pipe()
+	require.NoError(t, err)
+	errR, errW, err := os.Pipe()
+	require.NoError(t, err)
+
+	os.Stdin = inR
+	os.Stdout = outW
+	os.Stderr = errW
+	t.Cleanup(func() {
+		os.Stdin = stdin
+		os.Stdout = stdout
+		os.Stderr = stderr
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- c.Run(ctx) }()
+
+	longLine := strings.Repeat("a", 70*1024)
+	_, _ = io.WriteString(inW, longLine+"\n/quit\n")
+	require.NoError(t, inW.Close())
+
+	require.NoError(t, <-done)
+
+	require.NoError(t, outW.Close())
+	require.NoError(t, errW.Close())
+
+	_, err = io.ReadAll(outR)
+	require.NoError(t, err)
+
+	errOut, err := io.ReadAll(errR)
+	require.NoError(t, err)
+	require.Empty(t, string(errOut))
+
+	require.Len(t, gw.reqs, 1)
+	require.Equal(t, longLine, gw.reqs[0].Text)
 }

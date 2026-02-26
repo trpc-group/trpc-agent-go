@@ -33,6 +33,8 @@ type Repository struct {
 	baseDirs map[string]string
 
 	debug bool
+
+	configKeys map[string]struct{}
 }
 
 type Option func(*Repository)
@@ -40,6 +42,12 @@ type Option func(*Repository)
 func WithDebug(debug bool) Option {
 	return func(r *Repository) {
 		r.debug = debug
+	}
+}
+
+func WithConfigKeys(keys []string) Option {
+	return func(r *Repository) {
+		r.configKeys = normalizeConfigKeys(keys)
 	}
 }
 
@@ -164,7 +172,7 @@ func (r *Repository) index() {
 		}
 		skillMd := filepath.Join(baseDir, skillFileName)
 
-		eligible, reason := evaluateSkill(skillMd)
+		eligible, reason := evaluateSkill(skillMd, r.configKeys)
 		if !eligible {
 			r.reasons[name] = reason
 			if r.debug && reason != "" {
@@ -182,7 +190,10 @@ func (r *Repository) index() {
 	}
 }
 
-func evaluateSkill(skillMdPath string) (bool, string) {
+func evaluateSkill(
+	skillMdPath string,
+	configKeys map[string]struct{},
+) (bool, string) {
 	fm, err := parseFrontMatterFile(skillMdPath)
 	if err != nil {
 		if errors.Is(err, errNoFrontMatter) {
@@ -195,10 +206,13 @@ func evaluateSkill(skillMdPath string) (bool, string) {
 	if err != nil || !ok {
 		return true, ""
 	}
-	return evaluateOpenClawRequirements(meta)
+	return evaluateOpenClawRequirements(meta, configKeys)
 }
 
-func evaluateOpenClawRequirements(meta openClawMetadata) (bool, string) {
+func evaluateOpenClawRequirements(
+	meta openClawMetadata,
+	configKeys map[string]struct{},
+) (bool, string) {
 	if meta.Always {
 		return true, ""
 	}
@@ -215,6 +229,12 @@ func evaluateOpenClawRequirements(meta openClawMetadata) (bool, string) {
 		return false, reason
 	}
 	if reason := evaluateRequiredEnv(meta.Requires.Env); reason != "" {
+		return false, reason
+	}
+	if reason := evaluateRequiredConfig(
+		meta.Requires.Config,
+		configKeys,
+	); reason != "" {
 		return false, reason
 	}
 	return true, ""
@@ -304,6 +324,65 @@ func evaluateRequiredEnv(names []string) string {
 		"missing env: %s",
 		strings.Join(missing, ", "),
 	)
+}
+
+func evaluateRequiredConfig(
+	keys []string,
+	available map[string]struct{},
+) string {
+	var missing []string
+	for _, raw := range keys {
+		key := normalizeConfigKey(raw)
+		if key == "" {
+			continue
+		}
+		if hasConfigKey(available, key) {
+			continue
+		}
+		missing = append(missing, key)
+	}
+	if len(missing) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(
+		"missing config: %s",
+		strings.Join(missing, ", "),
+	)
+}
+
+func normalizeConfigKeys(keys []string) map[string]struct{} {
+	if len(keys) == 0 {
+		return nil
+	}
+	out := make(map[string]struct{}, len(keys))
+	for _, raw := range keys {
+		key := normalizeConfigKey(raw)
+		if key == "" {
+			continue
+		}
+		out[key] = struct{}{}
+	}
+	return out
+}
+
+func normalizeConfigKey(raw string) string {
+	return strings.ToLower(strings.TrimSpace(raw))
+}
+
+func hasConfigKey(keys map[string]struct{}, want string) bool {
+	if len(keys) == 0 {
+		return false
+	}
+	if _, ok := keys[want]; ok {
+		return true
+	}
+	prefix := want + "."
+	for got := range keys {
+		if strings.HasPrefix(got, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 var _ skill.Repository = (*Repository)(nil)

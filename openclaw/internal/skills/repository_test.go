@@ -123,12 +123,15 @@ func TestEvaluateRequiredEnv(t *testing.T) {
 }
 
 func TestEvaluateOpenClawRequirements_Always(t *testing.T) {
-	ok, reason := evaluateOpenClawRequirements(openClawMetadata{
-		Always: true,
-		Requires: openClawRequires{
-			Bins: []string{"definitely-missing"},
+	ok, reason := evaluateOpenClawRequirements(
+		openClawMetadata{
+			Always: true,
+			Requires: openClawRequires{
+				Bins: []string{"definitely-missing"},
+			},
 		},
-	})
+		nil,
+	)
 	require.True(t, ok)
 	require.Empty(t, reason)
 }
@@ -261,9 +264,73 @@ func TestNormalizeOpenClawOS_Win32(t *testing.T) {
 }
 
 func TestEvaluateSkill_MissingFileIsEligible(t *testing.T) {
-	ok, reason := evaluateSkill("/path/does/not/exist/SKILL.md")
+	ok, reason := evaluateSkill("/path/does/not/exist/SKILL.md", nil)
 	require.True(t, ok)
 	require.Empty(t, reason)
+}
+
+func TestRepository_GatesOnConfig(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, "needcfg", `---
+name: needcfg
+description: test
+metadata:
+  { "openclaw": { "requires": { "config": ["channels.discord.token"] } } }
+---
+
+x
+`)
+
+	r, err := NewRepository([]string{root})
+	require.NoError(t, err)
+	require.Empty(t, r.Summaries())
+
+	_, err = r.Get("needcfg")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "missing config")
+}
+
+func TestRepository_ConfigSatisfied(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, "needcfg", `---
+name: needcfg
+description: test
+metadata:
+  { "openclaw": { "requires": { "config": ["channels.discord.token"] } } }
+---
+
+x
+`)
+
+	r, err := NewRepository(
+		[]string{root},
+		WithConfigKeys([]string{"channels.discord.token"}),
+	)
+	require.NoError(t, err)
+	require.Len(t, r.Summaries(), 1)
+
+	_, err = r.Get("needcfg")
+	require.NoError(t, err)
+}
+
+func TestRepository_ConfigPrefixMatch(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, "needprefix", `---
+name: needprefix
+description: test
+metadata:
+  { "openclaw": { "requires": { "config": ["channels.discord"] } } }
+---
+
+x
+`)
+
+	r, err := NewRepository(
+		[]string{root},
+		WithConfigKeys([]string{"channels.discord.token"}),
+	)
+	require.NoError(t, err)
+	require.Len(t, r.Summaries(), 1)
 }
 
 func TestRepository_GetEmptyName(t *testing.T) {

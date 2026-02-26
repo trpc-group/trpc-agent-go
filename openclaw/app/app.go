@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"net/http"
 	"os"
 	"os/signal"
@@ -28,7 +29,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/spaolacci/murmur3"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
@@ -87,6 +87,8 @@ func Main(args []string) int {
 			return runPairing(args[1:])
 		case subcmdDoctor:
 			return runDoctor(args[1:])
+		case subcmdInspect:
+			return runInspect(args[1:])
 		}
 	}
 
@@ -236,6 +238,7 @@ func run(ctx context.Context, args []string) error {
 		SkillsRoot:           opts.SkillsRoot,
 		SkillsExtraDirs:      splitCSV(opts.SkillsExtraDir),
 		SkillsDebug:          opts.SkillsDebug,
+		SkillConfigKeys:      resolveSkillConfigKeys(opts),
 		StateDir:             resolvedStateDir,
 		EnableLocalExec:      opts.EnableLocalExec,
 		EnableOpenClawTools:  opts.EnableOpenClawTools,
@@ -282,26 +285,14 @@ func run(ctx context.Context, args []string) error {
 		}
 	}
 
+	runCtx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
+
 	httpSrv := &http.Server{
 		Addr:              opts.HTTPAddr,
 		Handler:           gwSrv.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-
-	errBuf := 1 + len(opts.Channels)
-	if strings.TrimSpace(opts.TelegramToken) != "" {
-		errBuf++
-	}
-	errCh := make(chan error, errBuf)
-	go func() {
-		log.Infof("Gateway listening on %s", httpSrv.Addr)
-		log.Infof("Health:   GET  %s", gwSrv.HealthPath())
-		log.Infof("Messages: POST %s", gwSrv.MessagesPath())
-		log.Infof("Status:   GET  %s?request_id=...", gwSrv.StatusPath())
-		log.Infof("Cancel:   POST %s", gwSrv.CancelPath())
-		//nolint:gosec
-		errCh <- httpSrv.ListenAndServe()
-	}()
 
 	var channels []channel.Channel
 	if strings.TrimSpace(opts.TelegramToken) != "" {
@@ -346,20 +337,37 @@ func run(ctx context.Context, args []string) error {
 		channels = append(channels, extra...)
 	}
 
+	workerCount := 1 + len(channels)
+	errCh := make(chan error, workerCount)
+
+	go func() {
+		log.Infof("Gateway listening on %s", httpSrv.Addr)
+		log.Infof("Health:   GET  %s", gwSrv.HealthPath())
+		log.Infof("Messages: POST %s", gwSrv.MessagesPath())
+		log.Infof("Status:   GET  %s?request_id=...", gwSrv.StatusPath())
+		log.Infof("Cancel:   POST %s", gwSrv.CancelPath())
+		//nolint:gosec
+		errCh <- httpSrv.ListenAndServe()
+	}()
+
 	for _, ch := range channels {
 		ch := ch
 		go func() {
-			errCh <- ch.Run(ctx)
+			errCh <- ch.Run(runCtx)
 		}()
 	}
 
+	received := 0
 	select {
 	case <-ctx.Done():
 	case err := <-errCh:
+		received++
 		if err != nil && err != http.ErrServerClosed {
 			log.Errorf("server error: %v", err)
 		}
 	}
+
+	cancelRun()
 
 	shutdownCtx, cancel := context.WithTimeout(
 		context.Background(),
@@ -369,6 +377,18 @@ func run(ctx context.Context, args []string) error {
 
 	_ = httpSrv.Shutdown(shutdownCtx)
 	_ = r.Close()
+
+	for received < workerCount {
+		select {
+		case err := <-errCh:
+			received++
+			if err != nil && err != http.ErrServerClosed {
+				log.Errorf("server error: %v", err)
+			}
+		case <-shutdownCtx.Done():
+			return nil
+		}
+	}
 
 	return nil
 }
@@ -453,6 +473,7 @@ func newAgent(
 	repo, err := ocskills.NewRepository(
 		roots,
 		ocskills.WithDebug(cfg.SkillsDebug),
+		ocskills.WithConfigKeys(cfg.SkillConfigKeys),
 	)
 	if err != nil {
 		return nil, err
@@ -656,6 +677,7 @@ type agentConfig struct {
 	SkillsRoot      string
 	SkillsExtraDirs []string
 	SkillsDebug     bool
+	SkillConfigKeys []string
 
 	StateDir string
 
@@ -738,7 +760,7 @@ func resolveStateDir(raw string) (string, error) {
 
 func configFingerprint(parts ...string) string {
 	joined := strings.Join(parts, "\n")
-	sum := murmur3.Sum32([]byte(joined))
+	sum := crc32.ChecksumIEEE([]byte(joined))
 	return fmt.Sprintf("%08x", sum)
 }
 

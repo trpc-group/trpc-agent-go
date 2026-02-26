@@ -183,6 +183,78 @@ Supported fields:
 - `metadata.openclaw.requires.bins`
 - `metadata.openclaw.requires.anyBins`
 - `metadata.openclaw.requires.env`
+- `metadata.openclaw.requires.config`
+
+#### `requires.config` (config-based gating)
+
+Some skill packs want to be visible only when a certain integration is
+enabled in your OpenClaw config. For example, a Discord skill should not
+show up unless the Discord channel is configured.
+
+To support that, this demo builds a set of **config keys** at startup
+based on your YAML config and enabled plugins. A skill can then require
+one or more keys:
+
+```yaml
+metadata:
+  openclaw:
+    requires:
+      config:
+        - "channels.discord.token"
+        - "tools.providers.mcp"
+```
+
+How keys are derived (practical rules):
+
+- Channels
+  - If a channel plugin exists in `channels:`, this key is present:
+    - `channels.<type>`
+  - If the channel's `config:` contains a truthy value, this key is
+    present:
+    - `channels.<type>.<fieldPath>`
+- Tool providers
+  - `tools.providers.<type>`
+  - `tools.providers.<type>.<fieldPath>` (truthy values only)
+- ToolSets
+  - `tools.toolsets.<type>`
+  - `tools.toolsets.<type>.<fieldPath>` (truthy values only)
+
+Truthy values:
+
+- strings: non-empty (after trimming spaces)
+- bool: `true`
+- numbers: non-zero
+- lists/maps: non-empty
+
+Compatibility aliases (for upstream OpenClaw skill packs):
+
+- For every configured plugin `type`, this demo also adds:
+  - `plugins.entries.<type>.enabled`
+  - `plugins.entries.<type>.config.<fieldPath>`
+
+Built-in integrations:
+
+- If Telegram is enabled (`telegram.token` / `-telegram-token`), this
+  demo adds:
+  - `channels.telegram`
+  - `channels.telegram.token`
+
+Tool surface keys (optional):
+
+- If `tools.enable_openclaw_tools: true`, this demo adds:
+  - `tools.exec`, `tools.bash`, `tools.process`
+- If `tools.enable_local_exec: true`, this demo adds:
+  - `tools.local_exec`
+
+To inspect the derived config keys for your current settings, run:
+
+```bash
+cd openclaw
+go run ./cmd/openclaw inspect config-keys -config ./openclaw.yaml
+```
+
+This prints one key per line, suitable for copy/pasting into
+`metadata.openclaw.requires.config`.
 
 Example (require `curl`):
 

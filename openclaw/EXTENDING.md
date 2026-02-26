@@ -32,6 +32,15 @@ So the typical Go plugin pattern is:
 
 This repo follows that pattern in `openclaw/registry`.
 
+Tip: to see what types are currently registered in your binary, run:
+
+```bash
+openclaw inspect plugins
+```
+
+This is useful when your YAML config references a plugin type and you
+want to confirm it was actually compiled in.
+
 ## Key packages (where to look)
 
 - `openclaw/app`
