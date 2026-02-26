@@ -19,6 +19,24 @@ import (
 	mcp "trpc.group/trpc-go/trpc-mcp-go"
 )
 
+// mcpToolResult wraps MCP tool result for backward compatibility.
+// It marshals as the Content slice, but provides Meta access via GetMeta().
+type mcpToolResult struct {
+	Content []mcp.Content
+	Meta    map[string]any
+}
+
+// MarshalJSON implements json.Marshaler.
+// It marshals only the Content slice for backward compatibility.
+func (r *mcpToolResult) MarshalJSON() ([]byte, error) {
+	return json.Marshal(r.Content)
+}
+
+// GetMeta returns the metadata from the tool result.
+func (r *mcpToolResult) GetMeta() map[string]any {
+	return r.Meta
+}
+
 // mcpTool implements the Tool interface for MCP tools.
 type mcpTool struct {
 	mcpToolRef     *mcp.Tool
@@ -70,13 +88,17 @@ func (t *mcpTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 }
 
 // callOnce performs a single call to the MCP tool.
+// Returns a wrapped result that marshals as Content for backward compatibility.
 func (t *mcpTool) callOnce(ctx context.Context, arguments map[string]any) (any, error) {
-	content, err := t.sessionManager.callTool(ctx, t.mcpToolRef.Name, arguments)
+	result, err := t.sessionManager.callTool(ctx, t.mcpToolRef.Name, arguments)
 	if err != nil {
 		return nil, err
 	}
-
-	return content, nil
+	// Wrap for backward compatibility: marshals as Content array, but Meta is accessible
+	return &mcpToolResult{
+		Content: result.Content,
+		Meta:    result.Meta,
+	}, nil
 }
 
 // Declaration implements the Tool interface.

@@ -11,6 +11,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	mcp "trpc.group/trpc-go/trpc-mcp-go"
@@ -176,5 +177,42 @@ func TestMCPTool_WithSchemas(t *testing.T) {
 	}
 	if decl.Name != "schema_tool" {
 		t.Errorf("expected name 'schema_tool', got %q", decl.Name)
+	}
+}
+
+func TestMCPToolResult_GetMeta(t *testing.T) {
+	// Nil meta
+	result := &mcpToolResult{Meta: nil}
+	if result.GetMeta() != nil {
+		t.Error("expected nil meta")
+	}
+
+	// With meta data
+	result.Meta = map[string]any{"key": "value", "count": 42}
+	meta := result.GetMeta()
+	if meta == nil {
+		t.Fatal("expected non-nil meta")
+	}
+	if meta["key"] != "value" {
+		t.Errorf("expected key='value', got %v", meta["key"])
+	}
+}
+
+func TestMCPToolResult_MarshalJSON(t *testing.T) {
+	// Verify backward compatibility: Meta is not included in JSON
+	result := &mcpToolResult{
+		Content: []mcp.Content{mcp.NewTextContent("hello")},
+		Meta:    map[string]any{"metadata": "ignored"},
+	}
+
+	data, err := result.MarshalJSON()
+	if err != nil {
+		t.Fatalf("MarshalJSON failed: %v", err)
+	}
+
+	// Should match raw Content marshaling
+	expected, _ := json.Marshal([]mcp.Content{mcp.NewTextContent("hello")})
+	if string(data) != string(expected) {
+		t.Errorf("expected %q, got %q", string(expected), string(data))
 	}
 }
