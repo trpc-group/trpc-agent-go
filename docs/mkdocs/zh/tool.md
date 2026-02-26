@@ -399,16 +399,17 @@ agent := llmagent.New(
 
 当启用 `WithRefreshToolSetsOnRun(true)` 时：
 
-- LLMAgent 在构造工具列表时，会再次调用
-  `ToolSet.Tools(context.Background())`；
+- LLMAgent 在每次执行前构造工具列表时，会再次调用
+  `ToolSet.Tools(ctx)`，其中 `ctx` 为本次执行的上下文；
 - 如果 MCP 服务器新增或删除了工具，该 Agent **下一次执行** 时，
   会自动使用更新后的工具列表。
+- 如果你在“非执行期”获取工具（例如直接调用 `agent.Tools()`），
+  LLMAgent 会使用 `context.Background()`。
 
 这个配置项的侧重点是**动态发现工具**。如果你还需要基于
-`context.Context` 的**每次请求动态 HTTP 请求头**（例如从上下文
-中提取认证信息），仍然可以参考 `examples/mcptool/http_headers`
-示例，手动调用 `toolSet.Tools(ctx)`，然后配合
-`WithTools` 使用。
+`context.Context` 在初始化或工具发现阶段做更细粒度的控制，同时又不希望
+在每次执行时刷新工具列表，可以参考 `examples/mcptool/http_headers`
+示例，手动调用 `toolSet.Tools(ctx)`，然后配合 `WithTools` 使用。
 
 ## Agent 工具 (AgentTool)
 

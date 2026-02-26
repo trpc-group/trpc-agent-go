@@ -392,16 +392,18 @@ agent := llmagent.New(
 
 When `WithRefreshToolSetsOnRun(true)` is enabled:
 
-- Each time the LLMAgent builds its tool list, it calls
-  `ToolSet.Tools(context.Background())` again.
+- Each time the LLMAgent builds its tool list for a run, it calls
+  `ToolSet.Tools(ctx)` again, using the current run context.
 - If the MCP server adds or removes tools, the **next run** of this
   LLMAgent will use the updated tool list automatically.
+- If you query tools outside a run (for example, by calling
+  `agent.Tools()` directly), the LLMAgent uses `context.Background()`.
 
 This option focuses on **dynamic discovery** of tools. If you also need
-per-request HTTP headers (for example, authentication headers that come
-from `context.Context`), keep using the pattern shown in the
-`examples/mcptool/http_headers` example, where you manually call
-`toolSet.Tools(ctx)` and pass the tools via `WithTools`.
+ToolSets to honor a specific context for initialization or tool
+discovery without refreshing the tool list on every run, keep using the
+pattern shown in the `examples/mcptool/http_headers` example, where you
+manually call `toolSet.Tools(ctx)` and pass the tools via `WithTools`.
 
 ## Agent Tool (AgentTool)
 
