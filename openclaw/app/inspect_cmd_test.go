@@ -208,6 +208,25 @@ func TestAddConfigKey_IgnoresNilAndBlank(t *testing.T) {
 	require.True(t, ok)
 }
 
+func TestIsTruthyScalar_RejectsNilAndInvalidValues(t *testing.T) {
+	require.False(t, isTruthyScalar(nil))
+	require.False(t, isTruthyScalar(&yaml.Node{
+		Kind:  yaml.ScalarNode,
+		Tag:   "!!bool",
+		Value: "   ",
+	}))
+	require.False(t, isTruthyScalar(&yaml.Node{
+		Kind:  yaml.ScalarNode,
+		Tag:   "!!int",
+		Value: "nope",
+	}))
+	require.False(t, isTruthyScalar(&yaml.Node{
+		Kind:  yaml.ScalarNode,
+		Tag:   "!!float",
+		Value: "nope",
+	}))
+}
+
 func mustYAMLNode(t *testing.T, raw string) *yaml.Node {
 	t.Helper()
 
