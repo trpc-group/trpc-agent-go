@@ -843,12 +843,12 @@ func TestService_ListSessions_EmptyEvents(t *testing.T) {
 		_, err := service.CreateSession(ctx, key, session.StateMap{})
 		require.NoError(t, err)
 
-		// Overwrite the session state with a distinct UpdatedAt.
-		state := fetchSessionState(t, ctx, client, key)
-		state.UpdatedAt = baseTime.Add(time.Duration(i) * time.Minute)
-		stateBytes, err := json.Marshal(state)
+		// Overwrite the session meta with a distinct updatedAt (HashIdx storage: String key + JSON).
+		meta := fetchSessionState(t, ctx, client, key)
+		meta["updatedAt"] = baseTime.Add(time.Duration(i) * time.Minute).Format(time.RFC3339Nano)
+		stateBytes, err := json.Marshal(meta)
 		require.NoError(t, err)
-		err = client.HSet(ctx, getExpectedSessionStateKey(key), key.SessionID, string(stateBytes)).Err()
+		err = client.Set(ctx, getExpectedSessionStateKey(key), stateBytes, 0).Err()
 		require.NoError(t, err)
 	}
 
@@ -980,4 +980,19 @@ func createTestEvent(id, agent, content string, ts time.Time, done bool) *event.
 			},
 		},
 	}
+}
+
+// getExpectedSessionStateKey returns the hashidx meta key for a session (v2 default storage).
+func getExpectedSessionStateKey(key session.Key) string {
+	return hashidx.GetSessionMetaKey("", key)
+}
+
+// fetchSessionState reads the session meta JSON from hashidx storage as a generic map.
+func fetchSessionState(t *testing.T, ctx context.Context, client *redis.Client, key session.Key) map[string]any {
+	t.Helper()
+	raw, err := client.Get(ctx, getExpectedSessionStateKey(key)).Bytes()
+	require.NoError(t, err)
+	var meta map[string]any
+	require.NoError(t, json.Unmarshal(raw, &meta))
+	return meta
 }

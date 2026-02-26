@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -484,6 +485,11 @@ func (c *Client) ListSessions(ctx context.Context, userKey session.UserKey, limi
 	if err := iter.Err(); err != nil {
 		return nil, err
 	}
+
+	// Sort by UpdatedAt descending to match zset/SQL-based implementations.
+	slices.SortFunc(sessions, func(a, b *session.Session) int {
+		return b.UpdatedAt.Compare(a.UpdatedAt)
+	})
 
 	// Post-process: batch load shared app/user state and track events
 	// This is more efficient than loading per-session
