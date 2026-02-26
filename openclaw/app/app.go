@@ -213,16 +213,32 @@ func run(ctx context.Context, args []string) error {
 	}
 	defer closeMemoryService(memSvc)
 
+	toolSets, err := toolSetsFromProviders(
+		mdl,
+		opts.AppName,
+		resolvedStateDir,
+		opts.ToolSets,
+	)
+	if err != nil {
+		return &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("create toolsets failed: %w", err),
+		}
+	}
+	defer closeToolSets(toolSets)
+
 	llm, err := newAgent(mdl, agentConfig{
-		AppName:             opts.AppName,
-		SkillsRoot:          opts.SkillsRoot,
-		SkillsExtraDirs:     splitCSV(opts.SkillsExtraDir),
-		SkillsDebug:         opts.SkillsDebug,
-		StateDir:            resolvedStateDir,
-		EnableLocalExec:     opts.EnableLocalExec,
-		EnableOpenClawTools: opts.EnableOpenClawTools,
-		ToolProviders:       opts.ToolProviders,
-	}, memSvc.Tools())
+		AppName:              opts.AppName,
+		SkillsRoot:           opts.SkillsRoot,
+		SkillsExtraDirs:      splitCSV(opts.SkillsExtraDir),
+		SkillsDebug:          opts.SkillsDebug,
+		StateDir:             resolvedStateDir,
+		EnableLocalExec:      opts.EnableLocalExec,
+		EnableOpenClawTools:  opts.EnableOpenClawTools,
+		ToolProviders:        opts.ToolProviders,
+		ToolSets:             opts.ToolSets,
+		RefreshToolSetsOnRun: opts.RefreshToolSetsOnRun,
+	}, memSvc.Tools(), toolSets)
 	if err != nil {
 		return &exitError{
 			Code: 1,
@@ -375,6 +391,17 @@ func closeMemoryService(svc closeFunc) {
 	}
 }
 
+func closeToolSets(sets []tool.ToolSet) {
+	for _, ts := range sets {
+		if ts == nil {
+			continue
+		}
+		if err := ts.Close(); err != nil {
+			log.Warnf("close toolset %q failed: %v", ts.Name(), err)
+		}
+	}
+}
+
 func defaultOpenAIModelName() string {
 	modelName := strings.TrimSpace(os.Getenv(openAIModelEnvName))
 	if modelName != "" {
@@ -405,6 +432,7 @@ func newAgent(
 	mdl model.Model,
 	cfg agentConfig,
 	extraTools []tool.Tool,
+	toolSets []tool.ToolSet,
 ) (agent.Agent, error) {
 	opts := []llmagent.Option{
 		llmagent.WithModel(mdl),
@@ -448,6 +476,12 @@ func newAgent(
 	}
 	if len(tools) > 0 {
 		opts = append(opts, llmagent.WithTools(tools))
+	}
+	if len(toolSets) > 0 {
+		opts = append(opts, llmagent.WithToolSets(toolSets))
+	}
+	if cfg.RefreshToolSetsOnRun {
+		opts = append(opts, llmagent.WithRefreshToolSetsOnRun(true))
 	}
 	if cfg.EnableLocalExec {
 		exec := localexec.New()
@@ -501,6 +535,58 @@ func toolsFromProviders(
 			)
 		}
 		out = append(out, tools...)
+	}
+	return out, nil
+}
+
+func toolSetsFromProviders(
+	mdl model.Model,
+	appName string,
+	stateDir string,
+	specs []pluginSpec,
+) ([]tool.ToolSet, error) {
+	if len(specs) == 0 {
+		return nil, nil
+	}
+
+	deps := registry.ToolSetProviderDeps{
+		Model:    mdl,
+		StateDir: stateDir,
+		AppName:  appName,
+	}
+
+	out := make([]tool.ToolSet, 0, len(specs))
+	for i := range specs {
+		spec := specs[i]
+		typeName := strings.ToLower(strings.TrimSpace(spec.Type))
+		if typeName == "" {
+			return nil, fmt.Errorf(
+				"tools.toolsets[%d].type is empty",
+				i,
+			)
+		}
+
+		f, ok := registry.LookupToolSetProvider(typeName)
+		if !ok {
+			return nil, fmt.Errorf(
+				"unsupported toolset provider: %s",
+				typeName,
+			)
+		}
+
+		ts, err := f(deps, registry.PluginSpec{
+			Type:   typeName,
+			Name:   strings.TrimSpace(spec.Name),
+			Config: spec.Config,
+		})
+		if err != nil {
+			return nil, fmt.Errorf(
+				"toolset provider %s failed: %w",
+				typeName,
+				err,
+			)
+		}
+		out = append(out, ts)
 	}
 	return out, nil
 }
@@ -567,6 +653,10 @@ type agentConfig struct {
 	EnableOpenClawTools bool
 
 	ToolProviders []pluginSpec
+
+	ToolSets []pluginSpec
+
+	RefreshToolSetsOnRun bool
 }
 
 func resolveSkillRoots(cwd string, cfg agentConfig) []string {

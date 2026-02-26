@@ -25,11 +25,17 @@ import (
 const (
 	openClawConfigEnvName = "OPENCLAW_CONFIG"
 
-	sessionBackendInMemory = "inmemory"
-	sessionBackendRedis    = "redis"
+	sessionBackendInMemory   = "inmemory"
+	sessionBackendRedis      = "redis"
+	sessionBackendMySQL      = "mysql"
+	sessionBackendPostgres   = "postgres"
+	sessionBackendClickHouse = "clickhouse"
 
 	memoryBackendInMemory = "inmemory"
 	memoryBackendRedis    = "redis"
+	memoryBackendMySQL    = "mysql"
+	memoryBackendPostgres = "postgres"
+	memoryBackendPGVector = "pgvector"
 
 	summaryPolicyAny = "any"
 	summaryPolicyAll = "all"
@@ -100,6 +106,9 @@ type runOptions struct {
 	EnableOpenClawTools bool
 
 	ToolProviders []pluginSpec
+	ToolSets      []pluginSpec
+
+	RefreshToolSetsOnRun bool
 }
 
 func parseRunOptions(args []string) (runOptions, error) {
@@ -275,7 +284,7 @@ func parseRunOptions(args []string) (runOptions, error) {
 		&opts.SessionBackend,
 		"session-backend",
 		sessionBackendInMemory,
-		"Session backend: inmemory|redis",
+		"Session backend: inmemory|redis|mysql|postgres|clickhouse",
 	)
 	fs.StringVar(
 		&opts.SessionRedisURL,
@@ -299,7 +308,7 @@ func parseRunOptions(args []string) (runOptions, error) {
 		&opts.MemoryBackend,
 		"memory-backend",
 		memoryBackendInMemory,
-		"Memory backend: inmemory|redis",
+		"Memory backend: inmemory|redis|mysql|postgres|pgvector",
 	)
 	fs.StringVar(
 		&opts.MemoryRedisURL,
@@ -397,6 +406,12 @@ func parseRunOptions(args []string) (runOptions, error) {
 		false,
 		"Enable OpenClaw-compatible exec/process tools (unsafe)",
 	)
+	fs.BoolVar(
+		&opts.RefreshToolSetsOnRun,
+		"refresh-toolsets-on-run",
+		false,
+		"Refresh ToolSets tool list on each run (optional)",
+	)
 
 	if err := fs.Parse(args); err != nil {
 		return runOptions{}, &exitError{Code: 2, Err: err}
@@ -444,13 +459,13 @@ type fileConfig struct {
 	AppName  *string `yaml:"app_name,omitempty"`
 	StateDir *string `yaml:"state_dir,omitempty"`
 
-	HTTP     *httpConfig     `yaml:"http,omitempty"`
-	Model    *modelConfig    `yaml:"model,omitempty"`
-	Gateway  *gatewayConfig  `yaml:"gateway,omitempty"`
-	Telegram *telegramConfig `yaml:"telegram,omitempty"`
-	Channels []pluginSpec    `yaml:"channels,omitempty"`
-	Skills   *skillsConfig   `yaml:"skills,omitempty"`
-	Tools    *toolsConfig    `yaml:"tools,omitempty"`
+	HTTP     *httpConfig      `yaml:"http,omitempty"`
+	Model    *modelConfig     `yaml:"model,omitempty"`
+	Gateway  *gatewayConfig   `yaml:"gateway,omitempty"`
+	Telegram *telegramConfig  `yaml:"telegram,omitempty"`
+	Channels []filePluginSpec `yaml:"channels,omitempty"`
+	Skills   *skillsConfig    `yaml:"skills,omitempty"`
+	Tools    *toolsConfig     `yaml:"tools,omitempty"`
 
 	Session *sessionConfig `yaml:"session,omitempty"`
 	Memory  *memoryConfig  `yaml:"memory,omitempty"`
@@ -461,11 +476,11 @@ type httpConfig struct {
 }
 
 type modelConfig struct {
-	Mode          *string    `yaml:"mode,omitempty"`
-	Name          *string    `yaml:"name,omitempty"`
-	BaseURL       *string    `yaml:"base_url,omitempty"`
-	OpenAIVariant *string    `yaml:"openai_variant,omitempty"`
-	Config        *yaml.Node `yaml:"config,omitempty"`
+	Mode          *string      `yaml:"mode,omitempty"`
+	Name          *string      `yaml:"name,omitempty"`
+	BaseURL       *string      `yaml:"base_url,omitempty"`
+	OpenAIVariant *string      `yaml:"openai_variant,omitempty"`
+	Config        *rawYAMLNode `yaml:"config,omitempty"`
 }
 
 type gatewayConfig struct {
@@ -494,17 +509,19 @@ type skillsConfig struct {
 }
 
 type toolsConfig struct {
-	EnableLocalExec     *bool `yaml:"enable_local_exec,omitempty"`
-	EnableOpenClawTools *bool `yaml:"enable_openclaw_tools,omitempty"`
+	EnableLocalExec      *bool `yaml:"enable_local_exec,omitempty"`
+	EnableOpenClawTools  *bool `yaml:"enable_openclaw_tools,omitempty"`
+	RefreshToolSetsOnRun *bool `yaml:"refresh_toolsets_on_run,omitempty"`
 
-	Providers []pluginSpec `yaml:"providers,omitempty"`
+	Providers []filePluginSpec `yaml:"providers,omitempty"`
+	ToolSets  []filePluginSpec `yaml:"toolsets,omitempty"`
 }
 
 type sessionConfig struct {
 	Backend *string        `yaml:"backend,omitempty"`
 	Redis   *redisConfig   `yaml:"redis,omitempty"`
 	Summary *summaryConfig `yaml:"summary,omitempty"`
-	Config  *yaml.Node     `yaml:"config,omitempty"`
+	Config  *rawYAMLNode   `yaml:"config,omitempty"`
 }
 
 type memoryConfig struct {
@@ -512,13 +529,28 @@ type memoryConfig struct {
 	Redis   *redisConfig `yaml:"redis,omitempty"`
 	Limit   *int         `yaml:"limit,omitempty"`
 	Auto    *memoryAuto  `yaml:"auto,omitempty"`
-	Config  *yaml.Node   `yaml:"config,omitempty"`
+	Config  *rawYAMLNode `yaml:"config,omitempty"`
 }
 
 type pluginSpec struct {
 	Type   string     `yaml:"type,omitempty"`
 	Name   string     `yaml:"name,omitempty"`
 	Config *yaml.Node `yaml:"config,omitempty"`
+}
+
+type rawYAMLNode struct {
+	Node *yaml.Node
+}
+
+func (r *rawYAMLNode) UnmarshalYAML(node *yaml.Node) error {
+	r.Node = node
+	return nil
+}
+
+type filePluginSpec struct {
+	Type   string       `yaml:"type,omitempty"`
+	Name   string       `yaml:"name,omitempty"`
+	Config *rawYAMLNode `yaml:"config,omitempty"`
 }
 
 type redisConfig struct {
@@ -604,7 +636,7 @@ func (cfg *fileConfig) apply(
 			)
 		}
 		if cfg.Model.Config != nil {
-			opts.ModelConfig = cfg.Model.Config
+			opts.ModelConfig = cfg.Model.Config.Node
 		}
 	}
 
@@ -694,7 +726,7 @@ func (cfg *fileConfig) apply(
 	}
 
 	if len(cfg.Channels) > 0 {
-		opts.Channels = cfg.Channels
+		opts.Channels = convertPluginSpecs(cfg.Channels)
 	}
 
 	if cfg.Skills != nil {
@@ -722,8 +754,15 @@ func (cfg *fileConfig) apply(
 			!flagWasSet(set, "enable-openclaw-tools") {
 			opts.EnableOpenClawTools = *cfg.Tools.EnableOpenClawTools
 		}
+		if cfg.Tools.RefreshToolSetsOnRun != nil &&
+			!flagWasSet(set, "refresh-toolsets-on-run") {
+			opts.RefreshToolSetsOnRun = *cfg.Tools.RefreshToolSetsOnRun
+		}
 		if len(cfg.Tools.Providers) > 0 {
-			opts.ToolProviders = cfg.Tools.Providers
+			opts.ToolProviders = convertPluginSpecs(cfg.Tools.Providers)
+		}
+		if len(cfg.Tools.ToolSets) > 0 {
+			opts.ToolSets = convertPluginSpecs(cfg.Tools.ToolSets)
 		}
 	}
 
@@ -764,7 +803,7 @@ func (cfg *fileConfig) apply(
 			}
 		}
 		if cfg.Session.Config != nil {
-			opts.SessionConfig = cfg.Session.Config
+			opts.SessionConfig = cfg.Session.Config.Node
 		}
 	}
 
@@ -806,11 +845,28 @@ func (cfg *fileConfig) apply(
 			}
 		}
 		if cfg.Memory.Config != nil {
-			opts.MemoryConfig = cfg.Memory.Config
+			opts.MemoryConfig = cfg.Memory.Config.Node
 		}
 	}
 
 	return nil
+}
+
+func convertPluginSpecs(specs []filePluginSpec) []pluginSpec {
+	out := make([]pluginSpec, 0, len(specs))
+	for i := range specs {
+		spec := specs[i]
+		var cfg *yaml.Node
+		if spec.Config != nil {
+			cfg = spec.Config.Node
+		}
+		out = append(out, pluginSpec{
+			Type:   spec.Type,
+			Name:   spec.Name,
+			Config: cfg,
+		})
+	}
+	return out
 }
 
 func applySessionSummary(

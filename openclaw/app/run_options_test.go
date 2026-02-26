@@ -123,6 +123,19 @@ skills:
 tools:
   enable_local_exec: true
   enable_openclaw_tools: true
+  refresh_toolsets_on_run: true
+  providers:
+    - type: "duckduckgo"
+      name: "ddg"
+      config:
+        base_url: "https://api.duckduckgo.com"
+  toolsets:
+    - type: "mcp"
+      name: "test_mcp"
+      config:
+        transport: "stdio"
+        command: "echo"
+        args: ["hello"]
 
 session:
   backend: "redis"
@@ -137,6 +150,8 @@ session:
     token_threshold: 100
     idle_threshold: "5m"
     max_words: 200
+  config:
+    dsn: "mysql://example"
 
 memory:
   backend: "redis"
@@ -150,6 +165,8 @@ memory:
     policy: "all"
     message_threshold: 7
     time_interval: "10m"
+  config:
+    dsn: "postgres://example"
 `)
 
 	opts, err := parseRunOptions([]string{"-config", cfgPath})
@@ -184,11 +201,23 @@ memory:
 
 	require.True(t, opts.EnableLocalExec)
 	require.True(t, opts.EnableOpenClawTools)
+	require.True(t, opts.RefreshToolSetsOnRun)
+
+	require.Len(t, opts.ToolProviders, 1)
+	require.Equal(t, "duckduckgo", opts.ToolProviders[0].Type)
+	require.Equal(t, "ddg", opts.ToolProviders[0].Name)
+	require.NotNil(t, opts.ToolProviders[0].Config)
+
+	require.Len(t, opts.ToolSets, 1)
+	require.Equal(t, "mcp", opts.ToolSets[0].Type)
+	require.Equal(t, "test_mcp", opts.ToolSets[0].Name)
+	require.NotNil(t, opts.ToolSets[0].Config)
 
 	require.Equal(t, "redis", opts.SessionBackend)
 	require.Equal(t, "redis://127.0.0.1:6379/0", opts.SessionRedisURL)
 	require.Equal(t, "r1", opts.SessionRedisInstance)
 	require.Equal(t, "sp", opts.SessionRedisKeyPref)
+	require.NotNil(t, opts.SessionConfig)
 
 	require.True(t, opts.SessionSummaryEnabled)
 	require.Equal(t, "all", opts.SessionSummaryPolicy)
@@ -202,6 +231,7 @@ memory:
 	require.Equal(t, "r2", opts.MemoryRedisInstance)
 	require.Equal(t, "mp", opts.MemoryRedisKeyPref)
 	require.Equal(t, 123, opts.MemoryLimit)
+	require.NotNil(t, opts.MemoryConfig)
 
 	require.True(t, opts.MemoryAutoEnabled)
 	require.Equal(t, "all", opts.MemoryAutoPolicy)
