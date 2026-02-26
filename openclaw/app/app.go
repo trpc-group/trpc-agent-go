@@ -228,7 +228,11 @@ func run(ctx context.Context, args []string) error {
 	defer closeToolSets(toolSets)
 
 	llm, err := newAgent(mdl, agentConfig{
-		AppName:              opts.AppName,
+		AppName:           opts.AppName,
+		AddSessionSummary: opts.AddSessionSummary,
+		MaxHistoryRuns:    opts.MaxHistoryRuns,
+		PreloadMemory:     opts.PreloadMemory,
+
 		SkillsRoot:           opts.SkillsRoot,
 		SkillsExtraDirs:      splitCSV(opts.SkillsExtraDir),
 		SkillsDebug:          opts.SkillsDebug,
@@ -439,6 +443,9 @@ func newAgent(
 		llmagent.WithInstruction(
 			"You are a helpful assistant. Keep replies concise.",
 		),
+		llmagent.WithAddSessionSummary(cfg.AddSessionSummary),
+		llmagent.WithMaxHistoryRuns(cfg.MaxHistoryRuns),
+		llmagent.WithPreloadMemory(cfg.PreloadMemory),
 	}
 
 	cwd, _ := os.Getwd()
@@ -641,6 +648,10 @@ func channelsFromRegistry(
 
 type agentConfig struct {
 	AppName string
+
+	AddSessionSummary bool
+	MaxHistoryRuns    int
+	PreloadMemory     int
 
 	SkillsRoot      string
 	SkillsExtraDirs []string

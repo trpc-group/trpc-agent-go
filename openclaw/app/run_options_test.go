@@ -42,14 +42,25 @@ func TestParseRunOptions_FlagOverridesConfig(t *testing.T) {
 	cfgPath := writeTempConfig(t, `
 http:
   addr: ":9999"
+
+agent:
+  add_session_summary: false
+  max_history_runs: 123
+  preload_memory: 2
 `)
 
 	opts, err := parseRunOptions([]string{
 		"-config", cfgPath,
 		"-http-addr", ":7777",
+		"-add-session-summary",
+		"-max-history-runs", "9",
+		"-preload-memory", "-1",
 	})
 	require.NoError(t, err)
 	require.Equal(t, ":7777", opts.HTTPAddr)
+	require.True(t, opts.AddSessionSummary)
+	require.Equal(t, 9, opts.MaxHistoryRuns)
+	require.Equal(t, -1, opts.PreloadMemory)
 }
 
 func TestParseRunOptions_UnknownFieldFails(t *testing.T) {
@@ -92,6 +103,11 @@ state_dir: "/tmp/state"
 
 http:
   addr: ":9000"
+
+agent:
+  add_session_summary: true
+  max_history_runs: 50
+  preload_memory: 10
 
 model:
   mode: "mock"
@@ -175,6 +191,10 @@ memory:
 	require.Equal(t, "demo", opts.AppName)
 	require.Equal(t, "/tmp/state", opts.StateDir)
 	require.Equal(t, ":9000", opts.HTTPAddr)
+
+	require.True(t, opts.AddSessionSummary)
+	require.Equal(t, 50, opts.MaxHistoryRuns)
+	require.Equal(t, 10, opts.PreloadMemory)
 
 	require.Equal(t, modeMock, opts.ModelMode)
 	require.Equal(t, "gpt-5", opts.OpenAIModel)

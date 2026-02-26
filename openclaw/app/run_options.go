@@ -42,6 +42,10 @@ const (
 
 	defaultSessionSummaryEventThreshold = 20
 	defaultMemoryAutoMessageThreshold   = 20
+
+	flagAddSessionSummary = "add-session-summary"
+	flagMaxHistoryRuns    = "max-history-runs"
+	flagPreloadMemory     = "preload-memory"
 )
 
 type runOptions struct {
@@ -49,6 +53,10 @@ type runOptions struct {
 
 	AppName  string
 	HTTPAddr string
+
+	AddSessionSummary bool
+	MaxHistoryRuns    int
+	PreloadMemory     int
 
 	ModelMode      string
 	OpenAIModel    string
@@ -153,6 +161,24 @@ func parseRunOptions(args []string) (runOptions, error) {
 		"http-addr",
 		defaultHTTPAddr,
 		"HTTP listen address for gateway endpoints",
+	)
+	fs.BoolVar(
+		&opts.AddSessionSummary,
+		flagAddSessionSummary,
+		false,
+		"Prepend session summary to the model context (optional)",
+	)
+	fs.IntVar(
+		&opts.MaxHistoryRuns,
+		flagMaxHistoryRuns,
+		0,
+		"Max history messages when add-session-summary=false (0=unlimited)",
+	)
+	fs.IntVar(
+		&opts.PreloadMemory,
+		flagPreloadMemory,
+		0,
+		"Preload N memories into system prompt (0=off, -1=all)",
 	)
 	fs.StringVar(
 		&opts.ModelMode,
@@ -484,6 +510,7 @@ type fileConfig struct {
 	StateDir *string `yaml:"state_dir,omitempty"`
 
 	HTTP     *httpConfig      `yaml:"http,omitempty"`
+	Agent    *agentRunConfig  `yaml:"agent,omitempty"`
 	Model    *modelConfig     `yaml:"model,omitempty"`
 	Gateway  *gatewayConfig   `yaml:"gateway,omitempty"`
 	Telegram *telegramConfig  `yaml:"telegram,omitempty"`
@@ -497,6 +524,12 @@ type fileConfig struct {
 
 type httpConfig struct {
 	Addr *string `yaml:"addr,omitempty"`
+}
+
+type agentRunConfig struct {
+	AddSessionSummary *bool `yaml:"add_session_summary,omitempty"`
+	MaxHistoryRuns    *int  `yaml:"max_history_runs,omitempty"`
+	PreloadMemory     *int  `yaml:"preload_memory,omitempty"`
 }
 
 type modelConfig struct {
@@ -640,6 +673,21 @@ func (cfg *fileConfig) apply(
 
 	if cfg.HTTP != nil && cfg.HTTP.Addr != nil && !flagWasSet(set, "http-addr") {
 		opts.HTTPAddr = strings.TrimSpace(*cfg.HTTP.Addr)
+	}
+
+	if cfg.Agent != nil {
+		if cfg.Agent.AddSessionSummary != nil &&
+			!flagWasSet(set, flagAddSessionSummary) {
+			opts.AddSessionSummary = *cfg.Agent.AddSessionSummary
+		}
+		if cfg.Agent.MaxHistoryRuns != nil &&
+			!flagWasSet(set, flagMaxHistoryRuns) {
+			opts.MaxHistoryRuns = *cfg.Agent.MaxHistoryRuns
+		}
+		if cfg.Agent.PreloadMemory != nil &&
+			!flagWasSet(set, flagPreloadMemory) {
+			opts.PreloadMemory = *cfg.Agent.PreloadMemory
+		}
 	}
 
 	if cfg.Model != nil {
