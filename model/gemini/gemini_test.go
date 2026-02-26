@@ -183,6 +183,30 @@ func (t *Tool) Declaration() *tool.Declaration {
 	}
 }
 
+func TestModel_convertTools_NilInputSchemaIsOmitted(t *testing.T) {
+	m := &Model{}
+	schema = nil
+
+	converted := m.convertTools(map[string]tool.Tool{
+		"tool": &Tool{},
+	})
+	if !assert.Len(t, converted, 1) {
+		return
+	}
+	if !assert.Len(t, converted[0].FunctionDeclarations, 1) {
+		return
+	}
+
+	fd := converted[0].FunctionDeclarations[0]
+	assert.Equal(t, "tool", fd.Name)
+	assert.Nil(t, fd.ParametersJsonSchema)
+
+	body, err := json.Marshal(fd)
+	if assert.NoError(t, err) {
+		assert.NotContains(t, string(body), "parametersJsonSchema")
+	}
+}
+
 func TestModel_buildChatConfig(t *testing.T) {
 	var (
 		MaxTokens        = 10

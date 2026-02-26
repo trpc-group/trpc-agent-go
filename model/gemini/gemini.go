@@ -522,12 +522,16 @@ func (m *Model) convertTools(tools map[string]tool.Tool) []*genai.Tool {
 	for _, t := range tools {
 		decl := t.Declaration()
 		funcDeclaration := &genai.FunctionDeclaration{
-			Description:          decl.Description,
-			Name:                 decl.Name,
-			ParametersJsonSchema: decl.InputSchema,
+			Description: decl.Description,
+			Name:        decl.Name,
+		}
+		if decl.InputSchema != nil {
+			// Avoid sending `"parametersJsonSchema": null` to Gemini when a tool has no input schema.
+			// `ParametersJsonSchema` is `any`, so assigning a typed nil pointer would still marshal as null.
+			funcDeclaration.ParametersJsonSchema = normalizeToolSchema(decl.InputSchema)
 		}
 		if decl.OutputSchema != nil {
-			funcDeclaration.ResponseJsonSchema = decl.OutputSchema
+			funcDeclaration.ResponseJsonSchema = normalizeToolSchema(decl.OutputSchema)
 		}
 		result = append(result, &genai.Tool{
 			FunctionDeclarations: []*genai.FunctionDeclaration{
@@ -536,6 +540,36 @@ func (m *Model) convertTools(tools map[string]tool.Tool) []*genai.Tool {
 		})
 	}
 	return result
+}
+
+func normalizeToolSchema(schema *tool.Schema) any {
+	if schema == nil {
+		return nil
+	}
+	// Marshal/unmarshal to ensure the schema is JSON-serializable and to allow safe normalization
+	// without mutating shared schema instances.
+	schemaBytes, err := json.Marshal(schema)
+	if err != nil {
+		return map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		}
+	}
+	var out map[string]any
+	if err := json.Unmarshal(schemaBytes, &out); err != nil {
+		return map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		}
+	}
+	// Some function-calling implementations are strict about top-level object schemas having
+	// an explicit `properties` key, even for no-arg tools.
+	if typ, ok := out["type"].(string); ok && typ == "object" {
+		if props, exists := out["properties"]; !exists || props == nil {
+			out["properties"] = map[string]any{}
+		}
+	}
+	return out
 }
 
 // convertContentPart converts a single content part to Gemini format.
