@@ -509,3 +509,185 @@ func TestToolsFromProviders(t *testing.T) {
 	require.Len(t, tools, 1)
 	require.Equal(t, "t1", tools[0].Declaration().Name)
 }
+
+func TestToolsFromProviders_EmptyTypeFails(t *testing.T) {
+	t.Parallel()
+
+	mdl, err := modelFromOptions(runOptions{ModelMode: modeMock})
+	require.NoError(t, err)
+
+	_, err = toolsFromProviders(
+		mdl,
+		"demo",
+		"/state",
+		[]pluginSpec{{Type: " "}},
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "tools.providers[0].type is empty")
+}
+
+func TestToolsFromProviders_UnsupportedTypeFails(t *testing.T) {
+	t.Parallel()
+
+	mdl, err := modelFromOptions(runOptions{ModelMode: modeMock})
+	require.NoError(t, err)
+
+	_, err = toolsFromProviders(
+		mdl,
+		"demo",
+		"/state",
+		[]pluginSpec{{Type: "nope"}},
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported tool provider")
+}
+
+func TestToolsFromProviders_ProviderErrorWrapped(t *testing.T) {
+	t.Parallel()
+
+	const typeName = "test_tool_provider_error"
+	require.NoError(t, registry.RegisterToolProvider(
+		typeName,
+		func(
+			_ registry.ToolProviderDeps,
+			_ registry.PluginSpec,
+		) ([]tool.Tool, error) {
+			return nil, errors.New("boom")
+		},
+	))
+
+	mdl, err := modelFromOptions(runOptions{ModelMode: modeMock})
+	require.NoError(t, err)
+
+	_, err = toolsFromProviders(
+		mdl,
+		"demo",
+		"/state",
+		[]pluginSpec{{Type: typeName}},
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "tool provider")
+	require.Contains(t, err.Error(), "boom")
+}
+
+func TestToolSetsFromProviders_EmptySpecsReturnsNil(t *testing.T) {
+	t.Parallel()
+
+	mdl, err := modelFromOptions(runOptions{ModelMode: modeMock})
+	require.NoError(t, err)
+
+	sets, err := toolSetsFromProviders(mdl, "demo", "/state", nil)
+	require.NoError(t, err)
+	require.Nil(t, sets)
+}
+
+func TestToolSetsFromProviders_EmptyTypeFails(t *testing.T) {
+	t.Parallel()
+
+	mdl, err := modelFromOptions(runOptions{ModelMode: modeMock})
+	require.NoError(t, err)
+
+	_, err = toolSetsFromProviders(
+		mdl,
+		"demo",
+		"/state",
+		[]pluginSpec{{Type: " "}},
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "tools.toolsets[0].type is empty")
+}
+
+func TestToolSetsFromProviders_UnsupportedTypeFails(t *testing.T) {
+	t.Parallel()
+
+	mdl, err := modelFromOptions(runOptions{ModelMode: modeMock})
+	require.NoError(t, err)
+
+	_, err = toolSetsFromProviders(
+		mdl,
+		"demo",
+		"/state",
+		[]pluginSpec{{Type: "nope"}},
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported toolset provider")
+}
+
+func TestToolSetsFromProviders_ProviderErrorWrapped(t *testing.T) {
+	t.Parallel()
+
+	const typeName = "test_toolset_provider_error"
+	require.NoError(t, registry.RegisterToolSetProvider(
+		typeName,
+		func(
+			_ registry.ToolSetProviderDeps,
+			_ registry.PluginSpec,
+		) (tool.ToolSet, error) {
+			return nil, errors.New("boom")
+		},
+	))
+
+	mdl, err := modelFromOptions(runOptions{ModelMode: modeMock})
+	require.NoError(t, err)
+
+	_, err = toolSetsFromProviders(
+		mdl,
+		"demo",
+		"/state",
+		[]pluginSpec{{Type: typeName}},
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "toolset provider")
+	require.Contains(t, err.Error(), "boom")
+}
+
+func TestChannelsFromRegistry_EmptyTypeFails(t *testing.T) {
+	t.Parallel()
+
+	_, err := channelsFromRegistry(
+		stubGateway{},
+		"demo",
+		"/state",
+		[]pluginSpec{{Type: " "}},
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "channels[0].type is empty")
+}
+
+func TestChannelsFromRegistry_UnsupportedTypeFails(t *testing.T) {
+	t.Parallel()
+
+	_, err := channelsFromRegistry(
+		stubGateway{},
+		"demo",
+		"/state",
+		[]pluginSpec{{Type: "nope"}},
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported channel type")
+}
+
+func TestChannelsFromRegistry_ChannelErrorWrapped(t *testing.T) {
+	t.Parallel()
+
+	const typeName = "test_channel_error"
+	require.NoError(t, registry.RegisterChannel(
+		typeName,
+		func(
+			_ registry.ChannelDeps,
+			_ registry.PluginSpec,
+		) (occhannel.Channel, error) {
+			return nil, errors.New("boom")
+		},
+	))
+
+	_, err := channelsFromRegistry(
+		stubGateway{},
+		"demo",
+		"/state",
+		[]pluginSpec{{Type: typeName}},
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "channel")
+	require.Contains(t, err.Error(), "boom")
+}

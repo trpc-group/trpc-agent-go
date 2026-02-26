@@ -6,21 +6,17 @@
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
-//
 
-// Package main provides the OpenClaw-like demo binary entrypoint.
 package main
 
 import (
-	"os"
+	"testing"
 
-	"trpc.group/trpc-go/trpc-agent-go/openclaw/app"
+	"github.com/stretchr/testify/require"
 )
 
-func main() {
-	os.Exit(run(os.Args[1:]))
-}
+func TestRun_UnknownFlagReturnsUsageCode(t *testing.T) {
+	t.Parallel()
 
-func run(args []string) int {
-	return app.Main(args)
+	require.Equal(t, 2, run([]string{"-unknown-flag"}))
 }

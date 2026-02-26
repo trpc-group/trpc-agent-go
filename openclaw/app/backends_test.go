@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	redisstorage "trpc.group/trpc-go/trpc-agent-go/storage/redis"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 )
@@ -165,6 +166,62 @@ func TestNewBackends_Redis(t *testing.T) {
 
 	memSvc, err := newMemoryService(mdl, opts)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = memSvc.Close() })
+}
+
+func TestNewBackends_RedisInstance(t *testing.T) {
+	mr, err := miniredis.Run()
+	require.NoError(t, err)
+	t.Cleanup(mr.Close)
+
+	const instanceName = "test_redis_instance"
+	redisstorage.RegisterRedisInstance(
+		instanceName,
+		redisstorage.WithClientBuilderURL("redis://"+mr.Addr()),
+	)
+
+	mdl, err := modelFromOptions(runOptions{ModelMode: modeMock})
+	require.NoError(t, err)
+
+	opts := runOptions{
+		SessionBackend:       sessionBackendRedis,
+		SessionRedisInstance: instanceName,
+		SessionRedisKeyPref:  "sess:",
+		MemoryBackend:        memoryBackendRedis,
+		MemoryRedisInstance:  instanceName,
+		MemoryRedisKeyPref:   "mem:",
+		MemoryLimit:          3,
+	}
+
+	sessionSvc, err := newSessionService(mdl, opts)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sessionSvc.Close() })
+
+	memSvc, err := newMemoryService(mdl, opts)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = memSvc.Close() })
+}
+
+func TestNewBackends_InMemoryWithSummarizerAndExtractor(t *testing.T) {
+	t.Parallel()
+
+	mdl, err := modelFromOptions(runOptions{ModelMode: modeMock})
+	require.NoError(t, err)
+
+	opts := runOptions{
+		SessionSummaryEnabled: true,
+		MemoryAutoEnabled:     true,
+		MemoryLimit:           2,
+	}
+
+	sessionSvc, err := newSessionService(mdl, opts)
+	require.NoError(t, err)
+	require.NotNil(t, sessionSvc)
+	t.Cleanup(func() { _ = sessionSvc.Close() })
+
+	memSvc, err := newMemoryService(mdl, opts)
+	require.NoError(t, err)
+	require.NotNil(t, memSvc)
 	t.Cleanup(func() { _ = memSvc.Close() })
 }
 

@@ -17,7 +17,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
 )
 
 type dummyToolSet struct{}
@@ -27,6 +30,12 @@ func (dummyToolSet) Tools(context.Context) []tool.Tool { return nil }
 func (dummyToolSet) Close() error { return nil }
 
 func (dummyToolSet) Name() string { return "dummy" }
+
+type dummyChannel struct{}
+
+func (dummyChannel) ID() string { return "dummy" }
+
+func (dummyChannel) Run(context.Context) error { return nil }
 
 func resetForTest(t *testing.T) {
 	t.Helper()
@@ -83,6 +92,70 @@ func TestRegisterAndLookup(t *testing.T) {
 	require.True(t, toolSetCalled)
 }
 
+func TestRegisterChannel_ValidatesInputs(t *testing.T) {
+	resetForTest(t)
+
+	err := RegisterChannel(
+		"",
+		func(ChannelDeps, PluginSpec) (channel.Channel, error) {
+			return dummyChannel{}, nil
+		},
+	)
+	require.Error(t, err)
+
+	var nilFactory ChannelFactory
+	require.Error(t, RegisterChannel("x", nilFactory))
+
+	require.NoError(t, RegisterChannel(
+		"TeSt",
+		func(ChannelDeps, PluginSpec) (channel.Channel, error) {
+			return dummyChannel{}, nil
+		},
+	))
+
+	_, ok := LookupChannel("test")
+	require.True(t, ok)
+
+	require.Error(t, RegisterChannel(
+		"test",
+		func(ChannelDeps, PluginSpec) (channel.Channel, error) {
+			return dummyChannel{}, nil
+		},
+	))
+}
+
+func TestRegisterSessionBackend_ValidatesInputs(t *testing.T) {
+	resetForTest(t)
+
+	err := RegisterSessionBackend(
+		"",
+		func(SessionDeps, SessionBackendSpec) (session.Service, error) {
+			return nil, nil
+		},
+	)
+	require.Error(t, err)
+
+	var nilFactory SessionBackendFactory
+	require.Error(t, RegisterSessionBackend("x", nilFactory))
+}
+
+func TestRegisterToolProvider_DuplicateFails(t *testing.T) {
+	resetForTest(t)
+
+	require.NoError(t, RegisterToolProvider(
+		"p",
+		func(ToolProviderDeps, PluginSpec) ([]tool.Tool, error) {
+			return nil, nil
+		},
+	))
+	require.Error(t, RegisterToolProvider(
+		"p",
+		func(ToolProviderDeps, PluginSpec) ([]tool.Tool, error) {
+			return nil, nil
+		},
+	))
+}
+
 func TestTypes(t *testing.T) {
 	resetForTest(t)
 
@@ -115,6 +188,8 @@ func TestTypes(t *testing.T) {
 	))
 
 	require.Equal(t, []string{"a", "b"}, Types("toolset provider"))
+
+	require.Nil(t, Types("unknown kind"))
 }
 
 func TestDecodeStrict(t *testing.T) {
@@ -133,4 +208,48 @@ func TestDecodeStrict(t *testing.T) {
 	require.NoError(t, yaml.Unmarshal([]byte("b: x"), &nodeBad))
 
 	require.Error(t, DecodeStrict(&nodeBad, &got))
+}
+
+func TestDecodeStrict_NilTargetFails(t *testing.T) {
+	resetForTest(t)
+
+	var node yaml.Node
+	require.NoError(t, yaml.Unmarshal([]byte("a: x"), &node))
+
+	require.Error(t, DecodeStrict(&node, nil))
+}
+
+func TestDecodeStrict_NilConfigNoOp(t *testing.T) {
+	resetForTest(t)
+
+	type cfg struct {
+		A string `yaml:"a"`
+	}
+	var got cfg
+	require.NoError(t, DecodeStrict(nil, &got))
+}
+
+func TestDecodeStrict_KindZeroNoOp(t *testing.T) {
+	resetForTest(t)
+
+	type cfg struct {
+		A string `yaml:"a"`
+	}
+	var got cfg
+	require.NoError(t, DecodeStrict(&yaml.Node{}, &got))
+}
+
+func TestDecodeStrict_MarshalErrorBubblesUp(t *testing.T) {
+	resetForTest(t)
+
+	var node yaml.Node
+	node.Kind = yaml.AliasNode
+	node.Value = "bad"
+
+	var out struct {
+		A string `yaml:"a"`
+	}
+	err := DecodeStrict(&node, &out)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unknown")
 }
