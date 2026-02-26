@@ -152,5 +152,3 @@ trpc.group/trpc-go/trpc-agent-go/model/anthropic v0.8.0 h1:cilseWSPEjAD6uPzzIED6
 trpc.group/trpc-go/trpc-agent-go/model/anthropic v0.8.0/go.mod h1:Gi0XtOTXBb4sg78AVWzBLlmfvIlDvHZTLAVNp2+UjZc=
 trpc.group/trpc-go/trpc-agent-go/model/gemini v0.8.1-0.20251222024650-ea147adf3d21 h1:cwrr+QMs9/PPF9sdIoeaPfxFw1Z/1UF1YCHniPUCGYA=
 trpc.group/trpc-go/trpc-agent-go/model/gemini v0.8.1-0.20251222024650-ea147adf3d21/go.mod h1:AKe0sobDAgFfnpdOU0sFm1B8tBrKk/PP1a8QDiqPNeg=
-trpc.group/trpc-go/trpc-agent-go/model/ollama v0.8.0 h1:Vbs6ubvGL0/R4F4Y0ejfS//R+9400HhMVifB+Yz2EOU=
-trpc.group/trpc-go/trpc-agent-go/model/ollama v0.8.0/go.mod h1:0nfbncQ1lcXfQCGMXCLwEdG30lhIpPMLiYGTe5x0cys=
