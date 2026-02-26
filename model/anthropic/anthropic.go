@@ -55,11 +55,9 @@ type Model struct {
 	safetyMarginRatio      float64
 	maxInputTokensRatio    float64
 	// Prompt cache configuration
-	enablePromptCache  bool
-	minCacheableTokens int
-	cacheSystemPrompt  bool
-	cacheTools         bool
-	cacheMessages      bool
+	cacheSystemPrompt bool
+	cacheTools        bool
+	cacheMessages     bool
 }
 
 // New creates a new Anthropic model adapter.
@@ -105,8 +103,6 @@ func New(name string, opts ...Option) *Model {
 		outputTokensFloor:          o.tokenTailoringConfig.OutputTokensFloor,
 		safetyMarginRatio:          o.tokenTailoringConfig.SafetyMarginRatio,
 		maxInputTokensRatio:        o.tokenTailoringConfig.MaxInputTokensRatio,
-		enablePromptCache:          o.enablePromptCache,
-		minCacheableTokens:         o.minCacheableTokens,
 		cacheSystemPrompt:          o.cacheSystemPrompt,
 		cacheTools:                 o.cacheTools,
 		cacheMessages:              o.cacheMessages,
@@ -259,14 +255,13 @@ func (m *Model) buildChatRequest(request *model.Request) (*anthropic.MessageNewP
 	// Convert tools
 	tools := convertTools(request.Tools)
 
-	// Apply automatic optimal cache control if enabled.
-	// Strategy: Use a single cache breakpoint at the optimal position for maximum efficiency.
-	// Priority order (only one breakpoint is used):
-	// 1. If messages caching enabled and has history: cache at last assistant message (covers everything)
-	// 2. If tools exist: cache at last tool (covers System+Tools)
-	// 3. If only system prompt: cache at last system block
-	if m.shouldEnableCache(request) {
-		messages, systemPrompts, tools = m.applyOptimalCacheControl(messages, systemPrompts, tools)
+	// Apply cache control breakpoints if any cache option is enabled.
+	// Uses multiple independent breakpoints (up to 4 allowed by Anthropic) for optimal caching:
+	// - System prompt breakpoint: caches stable system instructions
+	// - Tools breakpoint: caches stable tool definitions
+	// - Messages breakpoint: caches conversation history at last assistant message
+	if m.cacheSystemPrompt || m.cacheTools || m.cacheMessages {
+		systemPrompts, tools, messages = m.applyCacheControl(systemPrompts, tools, messages)
 	}
 
 	// Build chat request.
@@ -302,73 +297,33 @@ func (m *Model) buildChatRequest(request *model.Request) (*anthropic.MessageNewP
 	return chatRequest, nil
 }
 
-// shouldEnableCache determines whether to enable prompt caching for this request.
-func (m *Model) shouldEnableCache(request *model.Request) bool {
-	if !m.enablePromptCache {
-		return false
-	}
-
-	// Estimate total cacheable tokens
-	systemTokens := m.estimateSystemTokens(request.Messages)
-	toolTokens := m.estimateToolTokens(request.Tools)
-	messageTokens := m.estimateMessageTokens(request.Messages)
-
-	// Check if any caching strategy would be beneficial
-	// Priority: messages > tools > system (based on what covers more content)
-	if m.cacheMessages && messageTokens > 0 {
-		// For multi-turn, we cache at the last assistant message
-		// which covers system + tools + all previous messages
-		totalTokens := systemTokens + toolTokens + messageTokens
-		if totalTokens >= m.minCacheableTokens {
-			return true
-		}
-	}
-
-	if m.cacheTools && len(request.Tools) > 0 {
-		totalTokens := systemTokens + toolTokens
-		if totalTokens >= m.minCacheableTokens {
-			return true
-		}
-	}
-
-	if m.cacheSystemPrompt && systemTokens >= m.minCacheableTokens {
-		return true
-	}
-
-	return false
-}
-
-// applyOptimalCacheControl applies the optimal cache control strategy.
-// It uses a single cache breakpoint at the most efficient position.
-// The strategy follows Anthropic's prefix caching model where everything
-// before the cache breakpoint is cached together.
-func (m *Model) applyOptimalCacheControl(
-	messages []anthropic.MessageParam,
+// applyCacheControl applies independent cache control breakpoints.
+// Unlike the previous single-breakpoint strategy, this sets multiple breakpoints
+// independently (Anthropic supports up to 4). This ensures stable content like
+// system prompts and tools always benefit from caching, regardless of whether
+// message caching is also enabled.
+//
+// Breakpoints applied (each independent):
+//   - System prompt: always cached when cacheSystemPrompt is true (stable across turns)
+//   - Tools: always cached when cacheTools is true (stable across turns)
+//   - Last assistant message: cached when cacheMessages is true (opt-in, benefits multi-turn)
+func (m *Model) applyCacheControl(
 	systemPrompts []anthropic.TextBlockParam,
 	tools []anthropic.ToolUnionParam,
-) ([]anthropic.MessageParam, []anthropic.TextBlockParam, []anthropic.ToolUnionParam) {
-	// Strategy 1: Cache at last assistant message (covers System + Tools + Messages)
-	// This is the most efficient for multi-turn conversations
-	if m.cacheMessages && len(messages) > 1 {
-		lastAssistantIdx := m.findLastAssistantMessageIndex(messages)
-		if lastAssistantIdx >= 0 {
-			messages = m.applyCacheControlToMessages(messages, lastAssistantIdx)
-			return messages, systemPrompts, tools
-		}
-	}
-
-	// Strategy 2: Cache at last tool (covers System + Tools)
-	if m.cacheTools && len(tools) > 0 {
-		tools = m.applyCacheControlToTools(tools)
-		return messages, systemPrompts, tools
-	}
-
-	// Strategy 3: Cache at last system block (covers System only)
+	messages []anthropic.MessageParam,
+) ([]anthropic.TextBlockParam, []anthropic.ToolUnionParam, []anthropic.MessageParam) {
 	if m.cacheSystemPrompt && len(systemPrompts) > 0 {
 		systemPrompts = m.applyCacheControlToSystem(systemPrompts)
 	}
-
-	return messages, systemPrompts, tools
+	if m.cacheTools && len(tools) > 0 {
+		tools = m.applyCacheControlToTools(tools)
+	}
+	if m.cacheMessages && len(messages) > 1 {
+		if idx := m.findLastAssistantMessageIndex(messages); idx >= 0 {
+			messages = m.applyCacheControlToMessages(messages, idx)
+		}
+	}
+	return systemPrompts, tools, messages
 }
 
 // findLastAssistantMessageIndex finds the index of the last assistant message
@@ -431,91 +386,40 @@ func (m *Model) applyCacheControlToMessages(messages []anthropic.MessageParam, i
 	return result
 }
 
-// estimateMessageTokens estimates the token count of non-system messages.
-func (m *Model) estimateMessageTokens(messages []model.Message) int {
-	count := 0
-	for _, msg := range messages {
-		if msg.Role == model.RoleSystem {
-			continue
-		}
-		// Rough estimate: 1 token ~= 4 characters
-		count += len(msg.Content) / 4
-		for _, part := range msg.ContentParts {
-			if part.Type == model.ContentTypeText && part.Text != nil {
-				count += len(*part.Text) / 4
-			}
-		}
-	}
-	return count
-}
-
-// estimateSystemTokens estimates the token count of system messages.
-func (m *Model) estimateSystemTokens(messages []model.Message) int {
-	count := 0
-	for _, msg := range messages {
-		if msg.Role == model.RoleSystem {
-			// Rough estimate: 1 token ~= 4 characters
-			count += len(msg.Content) / 4
-			for _, part := range msg.ContentParts {
-				if part.Type == model.ContentTypeText && part.Text != nil {
-					count += len(*part.Text) / 4
-				}
-			}
-		}
-	}
-	return count
-}
-
-// estimateToolTokens estimates the token count of tool definitions.
-func (m *Model) estimateToolTokens(tools map[string]tool.Tool) int {
-	count := 0
-	for _, t := range tools {
-		decl := t.Declaration()
-		// Rough estimate based on JSON schema size
-		count += len(decl.Name) / 4
-		count += len(decl.Description) / 4
-		if decl.InputSchema != nil {
-			// Estimate JSON schema size
-			count += 100 // Base overhead for schema structure
-		}
-	}
-	return count
-}
-
-// applyCacheControlToSystem adds cache control to system prompts.
-// According to Anthropic's docs, we should add cache_control to the last
-// block in system prompts to create a cache breakpoint.
-// This enables prompt caching with up to 90% cost savings on cached tokens.
+// applyCacheControlToSystem adds cache control to the last system prompt block.
 func (m *Model) applyCacheControlToSystem(systemPrompts []anthropic.TextBlockParam) []anthropic.TextBlockParam {
 	if len(systemPrompts) == 0 {
 		return systemPrompts
 	}
 
-	// Add cache control to the last system block to create a cache breakpoint
-	// This tells Anthropic to cache everything up to and including this block
-	lastIdx := len(systemPrompts) - 1
-	systemPrompts[lastIdx].CacheControl = anthropic.NewCacheControlEphemeralParam()
+	// Create a copy to avoid modifying the original slice elements.
+	result := make([]anthropic.TextBlockParam, len(systemPrompts))
+	copy(result, systemPrompts)
 
-	return systemPrompts
+	lastIdx := len(result) - 1
+	result[lastIdx].CacheControl = anthropic.NewCacheControlEphemeralParam()
+
+	return result
 }
 
-// applyCacheControlToTools adds cache control to tool definitions.
-// According to Anthropic's docs, we should add cache_control to the last
-// tool to create a cache breakpoint for all tool definitions.
-// This is particularly useful when you have many tools with large schemas.
+// applyCacheControlToTools adds cache control to the last tool definition.
 func (m *Model) applyCacheControlToTools(tools []anthropic.ToolUnionParam) []anthropic.ToolUnionParam {
-	if len(tools) == 0 || !m.cacheTools {
+	if len(tools) == 0 {
 		return tools
 	}
 
-	// Add cache control to the last tool to create a cache breakpoint
-	// This caches all tool definitions up to and including this one
-	lastIdx := len(tools) - 1
-	if tools[lastIdx].OfTool != nil {
-		tools[lastIdx].OfTool.CacheControl = anthropic.NewCacheControlEphemeralParam()
+	// Create a copy to avoid modifying the original slice elements.
+	result := make([]anthropic.ToolUnionParam, len(tools))
+	copy(result, tools)
+
+	lastIdx := len(result) - 1
+	if result[lastIdx].OfTool != nil {
+		toolCopy := *result[lastIdx].OfTool
+		toolCopy.CacheControl = anthropic.NewCacheControlEphemeralParam()
+		result[lastIdx].OfTool = &toolCopy
 	}
 
-	return tools
+	return result
 }
 
 // handleNonStreamingResponse sends a non-streaming request to the Anthropic API and emits exactly one final response.

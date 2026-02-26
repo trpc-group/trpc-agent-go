@@ -7,9 +7,17 @@
 //
 //
 
-// Package main demonstrates automatic optimal prompt caching with Anthropic Claude.
-// This example shows that with the new auto-cache feature, Anthropic behaves like OpenAI -
-// just enable caching with one switch and the framework handles everything automatically.
+// Package main demonstrates Anthropic prompt caching with three independent controls.
+// The example is structured in three phases to clearly show each cache option's effect:
+//
+//	Phase 1: System prompt caching only - stable system instructions
+//	Phase 2: System + Tools caching - adding tool definitions caching
+//	Phase 3: System + Tools + Messages caching - multi-turn dynamic breakpoint
+//
+// Usage:
+//
+//	export ANTHROPIC_API_KEY=sk-ant-xxx
+//	go run main.go
 package main
 
 import (
@@ -145,28 +153,10 @@ The following design patterns are commonly used in software development:
 ### Common Algorithms
 Understanding these algorithms is essential for efficient problem-solving:
 
-1. Sorting Algorithms:
-   - Quick Sort: O(n log n) average, O(n²) worst
-   - Merge Sort: O(n log n) guaranteed
-   - Heap Sort: O(n log n) with O(1) space
-   - Radix Sort: O(nk) for integers
-
-2. Search Algorithms:
-   - Binary Search: O(log n) for sorted arrays
-   - Depth-First Search: O(V + E) for graphs
-   - Breadth-First Search: O(V + E) for graphs
-   - A* Search: Optimal pathfinding with heuristics
-
-3. Graph Algorithms:
-   - Dijkstra's: Shortest path in weighted graphs
-   - Bellman-Ford: Handles negative weights
-   - Floyd-Warshall: All pairs shortest paths
-   - Kruskal's/Prim's: Minimum spanning trees
-
-4. Dynamic Programming:
-   - Memoization: Top-down approach
-   - Tabulation: Bottom-up approach
-   - Common problems: Knapsack, LCS, Edit Distance
+1. Sorting: Quick Sort, Merge Sort, Heap Sort, Radix Sort
+2. Search: Binary Search, DFS, BFS, A* Search
+3. Graph: Dijkstra, Bellman-Ford, Floyd-Warshall, Kruskal/Prim
+4. Dynamic Programming: Memoization, Tabulation, Knapsack, LCS, Edit Distance
 
 You have access to a calculator tool and a time tool. Use them when users ask for mathematical calculations or current time.
 Always use the calculator tool for any arithmetic operations to ensure accuracy.`
@@ -179,7 +169,6 @@ type CalculatorInput struct {
 	B         float64 `json:"b,omitempty" jsonschema:"description=Second operand (optional for sqrt)"`
 }
 
-// createCalculatorTool creates a calculator tool for mathematical operations.
 func createCalculatorTool() tool.Tool {
 	return function.NewFunctionTool(
 		func(ctx context.Context, input CalculatorInput) (string, error) {
@@ -204,7 +193,7 @@ func createCalculatorTool() tool.Tool {
 			case "power":
 				result = math.Pow(input.A, input.B)
 			default:
-				return fmt.Sprintf("Error: Unknown operation '%s'. Supported: add, subtract, multiply, divide, sqrt, power", input.Operation), nil
+				return fmt.Sprintf("Error: Unknown operation '%s'", input.Operation), nil
 			}
 			return fmt.Sprintf("Result: %.6f", result), nil
 		},
@@ -219,7 +208,6 @@ type TimeInput struct {
 	Timezone string `json:"timezone,omitempty" jsonschema:"description=Timezone name like 'UTC', 'America/New_York', 'Asia/Shanghai'"`
 }
 
-// createTimeTool creates a tool to get current time.
 func createTimeTool() tool.Tool {
 	return function.NewFunctionTool(
 		func(ctx context.Context, input TimeInput) (string, error) {
@@ -231,13 +219,11 @@ func createTimeTool() tool.Tool {
 					return fmt.Sprintf("Error: Invalid timezone '%s'", input.Timezone), nil
 				}
 			}
-
 			now := time.Now().In(loc)
 			format := input.Format
 			if format == "" {
 				format = "full"
 			}
-
 			var result string
 			switch format {
 			case "full":
@@ -251,7 +237,6 @@ func createTimeTool() tool.Tool {
 			default:
 				result = now.Format(format)
 			}
-
 			return fmt.Sprintf("Current time (%s): %s", loc.String(), result), nil
 		},
 		function.WithName("get_current_time"),
@@ -259,311 +244,412 @@ func createTimeTool() tool.Tool {
 	)
 }
 
-// UsageStats tracks token usage across requests.
-type UsageStats struct {
-	// Anthropic reports tokens separately:
-	// - input_tokens: tokens processed (not from cache)
-	// - cache_read_input_tokens: tokens read from cache
-	// - cache_creation_input_tokens: tokens used to create cache
-	// Total input = input_tokens + cache_read_input_tokens
-	TotalInputTokens      int // input_tokens (new tokens processed)
-	TotalCacheReadTokens  int // cache_read_input_tokens
-	TotalRequests         int
-	RequestsWithCacheRead int
+// turnUsage records the cache metrics for a single request turn.
+type turnUsage struct {
+	Turn                int
+	Phase               string
+	Query               string
+	InputTokens         int // new tokens (not cached)
+	CacheReadTokens     int // tokens served from cache
+	CacheCreationTokens int // tokens written to cache
+	Elapsed             time.Duration
 }
 
-func (u *UsageStats) Add(usage *model.Usage) {
+func (t *turnUsage) totalInput() int {
+	return t.InputTokens + t.CacheReadTokens
+}
+
+func (t *turnUsage) cacheHitRate() float64 {
+	total := t.totalInput()
+	if total == 0 {
+		return 0
+	}
+	return float64(t.CacheReadTokens) / float64(total) * 100
+}
+
+// printTurnResult prints the result for a single turn.
+func printTurnResult(tu *turnUsage, response string) {
+	display := response
+	if len(display) > 150 {
+		display = display[:150] + "..."
+	}
+	fmt.Printf("   Response: %s\n", display)
+	fmt.Printf("   Time: %v\n", tu.Elapsed)
+	total := tu.totalInput()
+	fmt.Printf("   Tokens - total_input: %d, new: %d, cache_read: %d, cache_creation: %d\n",
+		total, tu.InputTokens, tu.CacheReadTokens, tu.CacheCreationTokens)
+	if tu.CacheReadTokens > 0 {
+		fmt.Printf("   Cache hit rate: %.1f%%\n", tu.cacheHitRate())
+	}
+}
+
+// printPhaseStats prints aggregate stats for a phase.
+func printPhaseStats(usages []*turnUsage) {
+	var totalInput, totalCacheRead, totalCacheCreation, turns int
+	for _, u := range usages {
+		totalInput += u.InputTokens
+		totalCacheRead += u.CacheReadTokens
+		totalCacheCreation += u.CacheCreationTokens
+		turns++
+	}
+	fmt.Println(strings.Repeat("-", 50))
+	fmt.Printf("Phase stats: %d turns, total_new=%d, cache_read=%d, cache_creation=%d\n",
+		turns, totalInput, totalCacheRead, totalCacheCreation)
+	total := totalInput + totalCacheRead
+	if total > 0 && totalCacheRead > 0 {
+		rate := float64(totalCacheRead) / float64(total) * 100
+		savings := float64(totalCacheRead) * 0.9 / float64(total) * 100
+		fmt.Printf("Overall cache hit rate: %.1f%%, estimated savings: %.1f%%\n", rate, savings)
+	}
+	fmt.Println()
+}
+
+// runTurn executes one turn and collects usage metrics.
+func runTurn(ctx context.Context, r runner.Runner, userID, sessionID, query string) (string, *model.Usage, error) {
+	message := model.NewUserMessage(query)
+	eventChan, err := r.Run(ctx, userID, sessionID, message)
+	if err != nil {
+		return "", nil, err
+	}
+
+	var finalResponse string
+	var usage *model.Usage
+
+	for evt := range eventChan {
+		if evt.Error != nil {
+			fmt.Printf("   Event error: %s\n", evt.Error.Message)
+			continue
+		}
+		if len(evt.Response.Choices) > 0 {
+			if len(evt.Response.Choices[0].Message.ToolCalls) > 0 {
+				for _, tc := range evt.Response.Choices[0].Message.ToolCalls {
+					fmt.Printf("   [tool call] %s\n", tc.Function.Name)
+				}
+			}
+			if content := evt.Response.Choices[0].Message.Content; content != "" {
+				finalResponse = content
+			}
+		}
+		if evt.Response.Usage != nil {
+			usage = evt.Response.Usage
+		}
+		if evt.IsFinalResponse() {
+			break
+		}
+	}
+	return finalResponse, usage, nil
+}
+
+// extractUsage extracts cache-related metrics from model.Usage.
+func extractUsage(usage *model.Usage) (inputTokens, cacheRead, cacheCreation int) {
 	if usage == nil {
 		return
 	}
-	u.TotalRequests++
-	u.TotalInputTokens += usage.PromptTokens // This is input_tokens (not including cache)
-
-	// Anthropic reports cache_read_input_tokens separately
-	if usage.PromptTokensDetails.CachedTokens > 0 {
-		u.TotalCacheReadTokens += usage.PromptTokensDetails.CachedTokens
-		u.RequestsWithCacheRead++
-	}
-}
-
-func (u *UsageStats) Print() {
-	fmt.Println("\n" + strings.Repeat("=", 60))
-	fmt.Println("📊 Anthropic Prompt Cache Statistics")
-	fmt.Println(strings.Repeat("=", 60))
-	fmt.Printf("Total Requests:           %d\n", u.TotalRequests)
-	fmt.Printf("Requests with Cache Read: %d\n", u.RequestsWithCacheRead)
-
-	// Total input = new tokens + cached tokens
-	totalInput := u.TotalInputTokens + u.TotalCacheReadTokens
-	fmt.Printf("Total Input Tokens:       %d\n", totalInput)
-	fmt.Printf("  - New (processed):      %d\n", u.TotalInputTokens)
-	fmt.Printf("  - Cached (read):        %d\n", u.TotalCacheReadTokens)
-
-	if totalInput > 0 {
-		cacheRate := float64(u.TotalCacheReadTokens) / float64(totalInput) * 100
-		fmt.Printf("Cache Hit Rate:           %.2f%%\n", cacheRate)
-	}
-	if u.TotalCacheReadTokens > 0 {
-		// Anthropic cached tokens are 90% cheaper
-		// Cost without cache: totalInput * price
-		// Cost with cache: u.TotalInputTokens * price + u.TotalCacheReadTokens * 0.1 * price
-		// Savings = (totalInput - (u.TotalInputTokens + u.TotalCacheReadTokens * 0.1)) / totalInput
-		costWithoutCache := float64(totalInput)
-		costWithCache := float64(u.TotalInputTokens) + float64(u.TotalCacheReadTokens)*0.1
-		savings := (costWithoutCache - costWithCache) / costWithoutCache * 100
-		fmt.Printf("Estimated Cost Savings:   %.2f%%\n", savings)
-	}
-	fmt.Println(strings.Repeat("=", 60))
+	inputTokens = usage.PromptTokens
+	cacheRead = usage.PromptTokensDetails.CachedTokens
+	// CacheCreationTokens is reported via PromptTokens when cache is first created.
+	// Anthropic SDK reports it separately; we capture it from the raw usage if available.
+	// In the current model.Usage mapping, cache_creation_input_tokens is not directly exposed
+	// as a separate field, but the relationship is:
+	//   total billed input = input_tokens + cache_read + cache_creation
+	// For display purposes, if no cache read and inputTokens is large, that likely includes creation.
+	return
 }
 
 func main() {
-	// Anthropic SDK supports both ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN
-	// ANTHROPIC_API_KEY is the preferred/official one
 	apiKey := os.Getenv("ANTHROPIC_API_KEY")
 	if apiKey == "" {
-		apiKey = os.Getenv("ANTHROPIC_AUTH_TOKEN") // fallback
+		apiKey = os.Getenv("ANTHROPIC_AUTH_TOKEN")
 	}
 	if apiKey == "" {
-		fmt.Println("⚠️  ANTHROPIC_API_KEY not set")
-		fmt.Println("Please set ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) environment variable to run this demo")
+		fmt.Println("Please set ANTHROPIC_API_KEY environment variable")
 		return
 	}
 
-	fmt.Println("=== Anthropic Auto-Optimal Cache Demo ===")
+	fmt.Println("=== Anthropic Prompt Cache - Three Phase Verification ===")
 	fmt.Println()
-	fmt.Println("This demo shows the NEW auto-cache feature for Anthropic:")
-	fmt.Println("  ✓ Just enable caching with WithEnablePromptCache(true)")
-	fmt.Println("  ✓ Framework automatically applies optimal cache strategy")
-	fmt.Println("  ✓ Works like OpenAI - no need to configure individual options")
+	fmt.Println("Three independent cache options:")
+	fmt.Println("  WithCacheSystemPrompt(true) - cache stable system instructions")
+	fmt.Println("  WithCacheTools(true)         - cache tool definitions")
+	fmt.Println("  WithCacheMessages(true)      - cache conversation history (dynamic breakpoint)")
 	fmt.Println()
-	fmt.Println("Auto-cache strategy (in priority order):")
-	fmt.Println("  1. Multi-turn: Cache at last assistant message (covers everything)")
-	fmt.Println("  2. With tools: Cache at last tool (covers system + tools)")
-	fmt.Println("  3. System only: Cache at system prompt")
-	fmt.Println()
-	fmt.Println("Anthropic caching benefits:")
-	fmt.Println("  - Cached tokens are 90% cheaper (vs 50% for OpenAI)")
-	fmt.Println("  - Minimum 1024 tokens required")
+	fmt.Println("Anthropic cache key facts:")
+	fmt.Println("  - Minimum 1024 tokens required for a cache breakpoint")
+	fmt.Println("  - Cache read: 90% cheaper than normal input")
+	fmt.Println("  - Cache creation: 25% extra cost (one-time)")
 	fmt.Println("  - Cache TTL: ~5 minutes")
 	fmt.Println()
 
 	ctx := context.Background()
-
-	// Create model - just one switch to enable caching!
-	// The framework automatically handles:
-	// - System prompt caching
-	// - Tools caching
-	// - Multi-turn message caching
-	llm := anthropic.New("claude-sonnet-4-20250514",
-		anthropic.WithAPIKey(apiKey),
-		anthropic.WithEnablePromptCache(true), // That's all you need!
-	)
-
-	// Create tools
-	tools := []tool.Tool{
-		createCalculatorTool(),
-		createTimeTool(),
-	}
-
-	// Create agent with long system prompt for caching
+	tools := []tool.Tool{createCalculatorTool(), createTimeTool()}
 	longSystemPrompt := generateLongSystemPrompt()
-	maxTokens := 4096 // Required for Anthropic API
-	agentInstance := llmagent.New(
-		"anthropic-cache-demo-agent",
-		llmagent.WithModel(llm),
+	maxTokens := 1024
+
+	// ================================================================
+	// Phase 1: System prompt caching only
+	// ================================================================
+	fmt.Println(strings.Repeat("=", 60))
+	fmt.Println("Phase 1: WithCacheSystemPrompt(true) ONLY")
+	fmt.Println("  - System prompt (~1200 tokens) gets a cache breakpoint")
+	fmt.Println("  - Tools and messages are NOT cached")
+	fmt.Println("  - Expected: Turn 1 creates cache, Turn 2 reads from cache")
+	fmt.Println(strings.Repeat("=", 60))
+
+	llm1 := anthropic.New("claude-4-5-sonnet-20250929",
+		anthropic.WithAPIKey(apiKey),
+		anthropic.WithHeaders(map[string]string{"Venus-Sticky-Routing": "token"}),
+		anthropic.WithCacheSystemPrompt(true),
+	)
+	agent1 := llmagent.New("phase1-agent",
+		llmagent.WithModel(llm1),
 		llmagent.WithInstruction(longSystemPrompt),
-		llmagent.WithDescription("An AI assistant demonstrating auto-optimal prompt caching"),
+		llmagent.WithDescription("Phase 1: system prompt cache only"),
 		llmagent.WithTools(tools),
 		llmagent.WithGenerationConfig(model.GenerationConfig{
-			Stream:    false, // Disable streaming to ensure usage info is available
 			MaxTokens: &maxTokens,
 		}),
 	)
+	session1 := inmemory.NewSessionService()
+	r1 := runner.NewRunner("phase1", agent1, runner.WithSessionService(session1))
+	defer r1.Close()
 
-	// Create session service for multi-turn conversation
-	sessionService := inmemory.NewSessionService()
-
-	// Create runner
-	r := runner.NewRunner(
-		"anthropic-cache-demo",
-		agentInstance,
-		runner.WithSessionService(sessionService),
-	)
-	defer r.Close()
-
-	userID := "demo-user"
-	sessionID := fmt.Sprintf("cache-session-%d", time.Now().Unix())
-
-	// Track usage statistics
-	stats := &UsageStats{}
-
-	// Define test queries - mix of regular questions and tool calls
-	testQueries := []struct {
-		query       string
-		description string
-		expectTool  bool
+	sid1 := fmt.Sprintf("phase1-%d", time.Now().Unix())
+	phase1Queries := []struct {
+		query string
+		desc  string
 	}{
-		{
-			query:       "What is the singleton design pattern? Give a brief explanation.",
-			description: "Turn 1: Regular question (cache creation)",
-			expectTool:  false,
-		},
-		{
-			query:       "Calculate 123 * 456 + 789",
-			description: "Turn 2: Tool call - calculator",
-			expectTool:  true,
-		},
-		{
-			query:       "What time is it now in UTC?",
-			description: "Turn 3: Tool call - time",
-			expectTool:  true,
-		},
-		{
-			query:       "What is the factory method pattern? Brief answer.",
-			description: "Turn 4: Regular question (expecting cache hit on system+tools+history)",
-			expectTool:  false,
-		},
-		{
-			query:       "Calculate the square root of 144",
-			description: "Turn 5: Tool call (expecting cache hit)",
-			expectTool:  true,
-		},
-		{
-			query:       "Explain the observer pattern briefly.",
-			description: "Turn 6: Regular question (expecting cache hit)",
-			expectTool:  false,
-		},
+		{"What is the singleton design pattern? One sentence answer.", "Turn 1: cache creation for system prompt"},
+		{"What is the factory method pattern? One sentence answer.", "Turn 2: system prompt should hit cache"},
 	}
 
-	fmt.Println(strings.Repeat("=", 60))
-	fmt.Println("Starting multi-turn conversation with auto-caching...")
-	fmt.Println(strings.Repeat("=", 60))
-
-	for i, tq := range testQueries {
-		fmt.Printf("\n📝 %s\n", tq.description)
-		fmt.Printf("   Query: %s\n", tq.query)
-		if tq.expectTool {
-			fmt.Println("   [Expecting tool call]")
-		}
+	var phase1Usages []*turnUsage
+	for i, q := range phase1Queries {
+		fmt.Printf("\n[Turn %d] %s\n", i+1, q.desc)
+		fmt.Printf("   Query: %s\n", q.query)
 
 		start := time.Now()
-
-		// Run the agent
-		message := model.NewUserMessage(tq.query)
-		eventChan, err := r.Run(ctx, userID, sessionID, message)
+		resp, usage, err := runTurn(ctx, r1, "user1", sid1, q.query)
+		elapsed := time.Since(start)
 		if err != nil {
-			fmt.Printf("   ❌ Error: %v\n", err)
+			fmt.Printf("   Error: %v\n", err)
 			continue
 		}
 
-		// Collect response
-		var finalResponse string
-		var usage *model.Usage
-		var toolCalled bool
-
-		for evt := range eventChan {
-			// Handle errors
-			if evt.Error != nil {
-				fmt.Printf("   ⚠️  Event error: %s\n", evt.Error.Message)
-				continue
-			}
-
-			// Check for tool calls
-			if len(evt.Response.Choices) > 0 && len(evt.Response.Choices[0].Message.ToolCalls) > 0 {
-				toolCalled = true
-				for _, tc := range evt.Response.Choices[0].Message.ToolCalls {
-					fmt.Printf("   🔧 Tool call: %s\n", tc.Function.Name)
-				}
-			}
-
-			// Collect content
-			if len(evt.Response.Choices) > 0 {
-				content := evt.Response.Choices[0].Message.Content
-				if content != "" {
-					finalResponse = content
-				}
-				// Also check delta for streaming
-				delta := evt.Response.Choices[0].Delta.Content
-				if delta != "" && finalResponse == "" {
-					finalResponse = delta
-				}
-			}
-
-			// Collect usage (usually in final event)
-			if evt.Response.Usage != nil {
-				usage = evt.Response.Usage
-			}
-
-			// Check for final response
-			if evt.IsFinalResponse() {
-				break
-			}
-		}
-
-		elapsed := time.Since(start)
-
-		// Print results
-		if finalResponse != "" {
-			// Truncate long responses
-			displayResp := finalResponse
-			if len(displayResp) > 200 {
-				displayResp = displayResp[:200] + "..."
-			}
-			fmt.Printf("   💬 Response: %s\n", displayResp)
-		}
-
-		if toolCalled {
-			fmt.Println("   ✓ Tool was called")
-		}
-
+		tu := &turnUsage{Turn: i + 1, Phase: "Phase1", Query: q.query, Elapsed: elapsed}
 		if usage != nil {
-			stats.Add(usage)
-			fmt.Printf("   ⏱️  Time: %v\n", elapsed)
-
-			// Anthropic: total input = input_tokens + cache_read_input_tokens
-			totalInput := usage.PromptTokens + usage.PromptTokensDetails.CachedTokens
-			fmt.Printf("   📊 Total input: %d (new: %d, cached: %d)\n",
-				totalInput,
-				usage.PromptTokens,
-				usage.PromptTokensDetails.CachedTokens)
-
-			if usage.PromptTokensDetails.CachedTokens > 0 {
-				cacheRate := float64(usage.PromptTokensDetails.CachedTokens) / float64(totalInput) * 100
-				fmt.Printf("   💰 Cache hit rate: %.2f%% (cached tokens are 90%% cheaper!)\n", cacheRate)
-			}
-		} else {
-			fmt.Printf("   ⏱️  Time: %v\n", elapsed)
-			fmt.Println("   📊 Usage info not available")
+			tu.InputTokens = usage.PromptTokens
+			tu.CacheReadTokens = usage.PromptTokensDetails.CachedTokens
 		}
+		phase1Usages = append(phase1Usages, tu)
+		printTurnResult(tu, resp)
+		time.Sleep(1 * time.Second)
+	}
+	printPhaseStats(phase1Usages)
 
-		// Small delay between requests
-		time.Sleep(500 * time.Millisecond)
+	// ================================================================
+	// Phase 2: System + Tools caching
+	// ================================================================
+	fmt.Println(strings.Repeat("=", 60))
+	fmt.Println("Phase 2: WithCacheSystemPrompt(true) + WithCacheTools(true)")
+	fmt.Println("  - Both system prompt and tool definitions get cache breakpoints")
+	fmt.Println("  - Messages are NOT cached")
+	fmt.Println("  - Expected: more tokens cached (system + tools prefix)")
+	fmt.Println(strings.Repeat("=", 60))
 
-		// Show cache strategy being used
-		if i == 0 {
-			fmt.Println("\n   ℹ️  First turn: Cache breakpoint set at tools (covers system+tools)")
-		} else {
-			fmt.Printf("\n   ℹ️  Turn %d: Cache breakpoint moved to last assistant message\n", i+1)
-			fmt.Println("       (covers system+tools+all previous messages)")
-		}
+	llm2 := anthropic.New("claude-4-5-sonnet-20250929",
+		anthropic.WithAPIKey(apiKey),
+		anthropic.WithHeaders(map[string]string{"Venus-Sticky-Routing": "token"}),
+		anthropic.WithCacheSystemPrompt(true),
+		anthropic.WithCacheTools(true),
+	)
+	agent2 := llmagent.New("phase2-agent",
+		llmagent.WithModel(llm2),
+		llmagent.WithInstruction(longSystemPrompt),
+		llmagent.WithDescription("Phase 2: system + tools cache"),
+		llmagent.WithTools(tools),
+		llmagent.WithGenerationConfig(model.GenerationConfig{
+			MaxTokens: &maxTokens,
+		}),
+	)
+	session2 := inmemory.NewSessionService()
+	r2 := runner.NewRunner("phase2", agent2, runner.WithSessionService(session2))
+	defer r2.Close()
+
+	sid2 := fmt.Sprintf("phase2-%d", time.Now().Unix())
+	phase2Queries := []struct {
+		query string
+		desc  string
+	}{
+		{"Calculate 123 * 456", "Turn 1: cache creation (system + tools)"},
+		{"Calculate 789 + 321", "Turn 2: system + tools should hit cache"},
 	}
 
-	// Print final statistics
-	stats.Print()
+	var phase2Usages []*turnUsage
+	for i, q := range phase2Queries {
+		fmt.Printf("\n[Turn %d] %s\n", i+1, q.desc)
+		fmt.Printf("   Query: %s\n", q.query)
 
-	fmt.Println("\n✅ Demo completed!")
+		start := time.Now()
+		resp, usage, err := runTurn(ctx, r2, "user1", sid2, q.query)
+		elapsed := time.Since(start)
+		if err != nil {
+			fmt.Printf("   Error: %v\n", err)
+			continue
+		}
+
+		tu := &turnUsage{Turn: i + 1, Phase: "Phase2", Query: q.query, Elapsed: elapsed}
+		if usage != nil {
+			tu.InputTokens = usage.PromptTokens
+			tu.CacheReadTokens = usage.PromptTokensDetails.CachedTokens
+		}
+		phase2Usages = append(phase2Usages, tu)
+		printTurnResult(tu, resp)
+		time.Sleep(1 * time.Second)
+	}
+	printPhaseStats(phase2Usages)
+
+	// ================================================================
+	// Phase 3: All three - System + Tools + Messages (dynamic breakpoint)
+	// ================================================================
+	fmt.Println(strings.Repeat("=", 60))
+	fmt.Println("Phase 3: All caching enabled (System + Tools + Messages)")
+	fmt.Println("  - WithCacheMessages(true) adds a dynamic cache breakpoint")
+	fmt.Println("    at the LAST assistant message in conversation history.")
 	fmt.Println()
-	fmt.Println("Key observations:")
-	fmt.Println("• Auto-cache requires just ONE switch: WithEnablePromptCache(true)")
-	fmt.Println("• Framework automatically picks optimal cache strategy")
-	fmt.Println("• Multi-turn conversations get maximum cache benefit")
-	fmt.Println("• Cache hits reduce cost by up to 90% (Anthropic's pricing)")
+	fmt.Println("  How dynamic message caching works:")
+	fmt.Println("    Turn 1: [user] -> no assistant msg yet, only system+tools cached")
+	fmt.Println("    Turn 2: [user, asst, user] -> breakpoint at asst (index 1)")
+	fmt.Println("    Turn 3: [user, asst, user, asst, user] -> breakpoint moves to asst (index 3)")
+	fmt.Println("    Each turn, the breakpoint moves forward to cover more history.")
 	fmt.Println()
-	fmt.Println("Compare with manual configuration (old way):")
-	fmt.Println("  anthropic.WithEnablePromptCache(true)")
-	fmt.Println("  anthropic.WithCacheSystemPrompt(true)")
-	fmt.Println("  anthropic.WithCacheTools(true)")
-	fmt.Println("  anthropic.WithCacheMessages(true)  // NEW!")
+	fmt.Println("  This means:")
+	fmt.Println("    - Turn 1: cache miss (first request, creating cache)")
+	fmt.Println("    - Turn 2: cache HIT on system+tools, new cache created at asst msg")
+	fmt.Println("    - Turn 3: cache HIT on system+tools+msgs up to prev asst msg")
+	fmt.Println("    - Turn N: increasingly more tokens served from cache")
+	fmt.Println(strings.Repeat("=", 60))
+
+	llm3 := anthropic.New("claude-4-5-sonnet-20250929",
+		anthropic.WithAPIKey(apiKey),
+		anthropic.WithHeaders(map[string]string{"Venus-Sticky-Routing": "token"}),
+		anthropic.WithCacheSystemPrompt(true),
+		anthropic.WithCacheTools(true),
+		anthropic.WithCacheMessages(true),
+	)
+	agent3 := llmagent.New("phase3-agent",
+		llmagent.WithModel(llm3),
+		llmagent.WithInstruction(longSystemPrompt),
+		llmagent.WithDescription("Phase 3: full cache with dynamic message breakpoint"),
+		llmagent.WithTools(tools),
+		llmagent.WithGenerationConfig(model.GenerationConfig{
+			MaxTokens: &maxTokens,
+		}),
+	)
+	session3 := inmemory.NewSessionService()
+	r3 := runner.NewRunner("phase3", agent3, runner.WithSessionService(session3))
+	defer r3.Close()
+
+	sid3 := fmt.Sprintf("phase3-%d", time.Now().Unix())
+
+	// 6 turns to clearly show the dynamic breakpoint moving forward
+	phase3Queries := []struct {
+		query string
+		desc  string
+	}{
+		{
+			"What is the observer pattern? One sentence.",
+			"Turn 1: no history yet, cache creation (system+tools)",
+		},
+		{
+			"Please use the calculator tool to add 12345 and 67890.",
+			"Turn 2: system+tools from cache, breakpoint set at Turn 1's assistant msg",
+		},
+		{
+			"Please use the get_current_time tool to tell me the current time in UTC.",
+			"Turn 3: system+tools+Turn1-2 history from cache, breakpoint moves to Turn 2's assistant msg",
+		},
+		{
+			"What is the strategy pattern? One sentence.",
+			"Turn 4: even more history cached, breakpoint moves to Turn 3's assistant msg",
+		},
+		{
+			"Please use the calculator tool to multiply 999 by 111.",
+			"Turn 5: most of the conversation served from cache",
+		},
+		{
+			"Summarize all the design patterns you've mentioned so far in this conversation.",
+			"Turn 6: references prior turns - large context mostly from cache",
+		},
+	}
+
+	var phase3Usages []*turnUsage
+	for i, q := range phase3Queries {
+		fmt.Printf("\n[Turn %d] %s\n", i+1, q.desc)
+		fmt.Printf("   Query: %s\n", q.query)
+
+		start := time.Now()
+		resp, usage, err := runTurn(ctx, r3, "user1", sid3, q.query)
+		elapsed := time.Since(start)
+		if err != nil {
+			fmt.Printf("   Error: %v\n", err)
+			continue
+		}
+
+		tu := &turnUsage{Turn: i + 1, Phase: "Phase3", Query: q.query, Elapsed: elapsed}
+		if usage != nil {
+			tu.InputTokens = usage.PromptTokens
+			tu.CacheReadTokens = usage.PromptTokensDetails.CachedTokens
+		}
+		phase3Usages = append(phase3Usages, tu)
+		printTurnResult(tu, resp)
+		time.Sleep(1 * time.Second)
+	}
+	printPhaseStats(phase3Usages)
+
+	// ================================================================
+	// Final Summary: Compare all three phases
+	// ================================================================
+	fmt.Println(strings.Repeat("=", 60))
+	fmt.Println("FINAL COMPARISON")
+	fmt.Println(strings.Repeat("=", 60))
+	fmt.Printf("%-10s %-8s %-12s %-12s %-10s\n", "Phase", "Turns", "CacheRead", "NewTokens", "HitRate")
+	fmt.Println(strings.Repeat("-", 55))
+
+	allPhases := []struct {
+		name   string
+		usages []*turnUsage
+	}{
+		{"Phase1", phase1Usages},
+		{"Phase2", phase2Usages},
+		{"Phase3", phase3Usages},
+	}
+
+	for _, p := range allPhases {
+		var totalNew, totalCacheRead int
+		for _, u := range p.usages {
+			totalNew += u.InputTokens
+			totalCacheRead += u.CacheReadTokens
+		}
+		total := totalNew + totalCacheRead
+		rate := 0.0
+		if total > 0 {
+			rate = float64(totalCacheRead) / float64(total) * 100
+		}
+		fmt.Printf("%-10s %-8d %-12d %-12d %.1f%%\n",
+			p.name, len(p.usages), totalCacheRead, totalNew, rate)
+	}
+
 	fmt.Println()
-	fmt.Println("Now it's as simple as OpenAI - just enable and forget!")
+	fmt.Println("Key takeaways:")
+	fmt.Println("  Phase 1: Only system prompt cached - baseline savings")
+	fmt.Println("  Phase 2: System + tools cached - more tokens covered")
+	fmt.Println("  Phase 3: Dynamic message caching - cache grows with conversation")
+	fmt.Println("           Breakpoint moves to latest assistant message each turn,")
+	fmt.Println("           so cache hit rate increases as conversation gets longer.")
+	fmt.Println()
+	fmt.Println("When to use each option:")
+	fmt.Println("  WithCacheSystemPrompt(true) - system prompt is stable (recommended)")
+	fmt.Println("  WithCacheTools(true)         - tools don't change often (recommended)")
+	fmt.Println("  WithCacheMessages(true)      - multi-turn conversations with 3+ turns")
+	fmt.Println("                                 (25% creation cost per turn, 90% savings on reads)")
 }

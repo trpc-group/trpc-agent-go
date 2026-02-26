@@ -26,6 +26,7 @@ require (
 	trpc.group/trpc-go/trpc-agent-go v0.8.0
 	trpc.group/trpc-go/trpc-agent-go/codeexecutor/jupyter v1.1.2-0.20260108033914-7a20241f1ad5
 	trpc.group/trpc-go/trpc-agent-go/evaluation v1.1.2-0.20260108033914-7a20241f1ad5
+	trpc.group/trpc-go/trpc-agent-go/model/anthropic v1.1.2-0.20260108033914-7a20241f1ad5
 	trpc.group/trpc-go/trpc-agent-go/tool/openapi v1.1.2-0.20260108033914-7a20241f1ad5
 	trpc.group/trpc-go/trpc-agent-go/tool/wikipedia v1.1.2-0.20260108033914-7a20241f1ad5
 	trpc.group/trpc-go/trpc-mcp-go v0.0.10
@@ -105,7 +106,6 @@ require (
 	google.golang.org/grpc v1.77.0 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	trpc.group/trpc-go/trpc-agent-go/model/anthropic v1.1.2-0.20260108033914-7a20241f1ad5 // indirect
 	trpc.group/trpc-go/trpc-agent-go/model/gemini v1.1.2-0.20260108033914-7a20241f1ad5 // indirect
 	trpc.group/trpc-go/trpc-agent-go/model/ollama v1.1.2-0.20260108033914-7a20241f1ad5 // indirect
 	trpc.group/trpc-go/trpc-agent-go/model/provider v1.1.2-0.20260108033914-7a20241f1ad5 // indirect
