@@ -316,22 +316,6 @@ func (l *dagLoop) queuePlannedTasks() {
 	}
 }
 
-func (l *dagLoop) checkExit() (bool, error) {
-	if len(l.inFlight) != 0 {
-		return false, nil
-	}
-	if l.draining {
-		if l.drainMaxStep {
-			return true, nil
-		}
-		return true, l.drainErr
-	}
-	if len(l.ready) == 0 {
-		return true, nil
-	}
-	return false, nil
-}
-
 func (l *dagLoop) waitForEvent() {
 	select {
 	case res := <-l.done:

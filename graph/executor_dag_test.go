@@ -166,6 +166,73 @@ func TestExecutor_DagEngine_StaticInterruptBefore_EmitsInterrupt(
 	require.Equal(t, dagNodeSlow, meta.NodeID)
 }
 
+func TestExecutor_DagEngine_StaticInterruptAfter_EmitsInterrupt(
+	t *testing.T,
+) {
+	const (
+		nodeEntry = "entry"
+		nodeIntr  = "intr"
+		nodeDown  = "down"
+	)
+
+	downStarted := make(chan struct{}, 1)
+	notify := func(ch chan<- struct{}) {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+
+	schema := NewStateSchema()
+	sg := NewStateGraph(schema)
+	sg.AddNode(
+		nodeEntry,
+		func(context.Context, State) (any, error) {
+			return nil, nil
+		},
+	)
+	sg.AddNode(
+		nodeIntr,
+		func(context.Context, State) (any, error) {
+			return nil, nil
+		},
+		WithInterruptAfter(),
+	)
+	sg.AddNode(
+		nodeDown,
+		func(context.Context, State) (any, error) {
+			notify(downStarted)
+			return nil, nil
+		},
+	)
+	sg.SetEntryPoint(nodeEntry)
+	sg.AddEdge(nodeEntry, nodeIntr)
+	sg.AddEdge(nodeIntr, nodeDown)
+
+	g, err := sg.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g, WithExecutionEngine(ExecutionEngineDAG))
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), dagWaitLong)
+	defer cancel()
+
+	evts, err := exec.Execute(ctx, State{}, &agent.Invocation{
+		InvocationID: "dag-static-after",
+	})
+	require.NoError(t, err)
+
+	meta := waitForNodeInterruptAndDrain(t, evts, dagWaitLong)
+	require.Equal(t, nodeIntr, meta.NodeID)
+
+	select {
+	case <-downStarted:
+		t.Fatal("unexpected downstream start after interrupt")
+	default:
+	}
+}
+
 func TestNewDagLoop_ValidatesInputs(t *testing.T) {
 	ctx := context.Background()
 	inv := &agent.Invocation{InvocationID: "dag-loop"}
@@ -242,6 +309,154 @@ func TestDagLoop_waitForEvent_StartsDrainingOnContextDone(t *testing.T) {
 
 	require.True(t, loop.draining)
 	require.ErrorIs(t, loop.drainErr, context.Canceled)
+}
+
+func TestDagLoop_snapshotNextNodes_CollectsAllSources(t *testing.T) {
+	const (
+		nodeEntry = "entry"
+		nodeA     = "a"
+		nodeB     = "b"
+		nodeC     = "c"
+
+		nodeTriggerName = "trigger_node"
+	)
+
+	schema := NewStateSchema()
+	sg := NewStateGraph(schema)
+	sg.AddNode(
+		nodeEntry,
+		func(context.Context, State) (any, error) {
+			return nil, nil
+		},
+	)
+	sg.AddNode(
+		nodeA,
+		func(context.Context, State) (any, error) {
+			return nil, nil
+		},
+	)
+	sg.AddNode(
+		nodeB,
+		func(context.Context, State) (any, error) {
+			return nil, nil
+		},
+	)
+	sg.AddNode(
+		nodeC,
+		func(context.Context, State) (any, error) {
+			return nil, nil
+		},
+	)
+	sg.AddNode(
+		nodeTriggerName,
+		func(context.Context, State) (any, error) {
+			return nil, nil
+		},
+	)
+	sg.SetEntryPoint(nodeEntry)
+	sg.AddEdge(nodeEntry, nodeA)
+	sg.AddEdge(nodeEntry, nodeB)
+	sg.AddEdge(nodeEntry, nodeC)
+	sg.AddEdge(nodeEntry, nodeTriggerName)
+
+	g, err := sg.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	execCtx := &ExecutionContext{channels: exec.buildChannelManager()}
+	chName := ChannelBranchPrefix + nodeTriggerName
+	ch, ok := execCtx.channels.GetChannel(chName)
+	require.True(t, ok)
+	require.NotNil(t, ch)
+	require.True(t, ch.Update([]any{"update"}, 0))
+
+	g.mu.Lock()
+	g.triggerToNodes = map[string][]string{
+		chName: {nodeB, End, nodeC},
+	}
+	g.mu.Unlock()
+
+	l := &dagLoop{
+		executor: exec,
+		execCtx:  execCtx,
+		ready: []*Task{
+			nil,
+			{NodeID: ""},
+			{NodeID: End},
+			{NodeID: nodeA},
+			{NodeID: nodeA},
+		},
+		waiting: map[string][]*Task{
+			"":    {&Task{NodeID: nodeA}},
+			nodeA: nil,
+			nodeB: {&Task{NodeID: nodeB}, &Task{NodeID: nodeB}},
+			End:   {&Task{NodeID: End}},
+		},
+		rerunNodes: []string{"", End, nodeB},
+	}
+
+	got := l.snapshotNextNodes()
+	want := []string{nodeA, nodeA, nodeB, nodeB, nodeB, nodeC}
+	require.Equal(t, want, got)
+}
+
+func TestDagLoop_recordGraphInterruptInput_UsesFallbackSnapshot(
+	t *testing.T,
+) {
+	const (
+		nodeID = "node"
+		key    = "k"
+		value  = "v"
+	)
+
+	loop := &dagLoop{
+		report: newStepExecutionReport(nil),
+	}
+	loop.recordGraphInterruptInput(&Task{NodeID: nodeID})
+
+	loop.pendingIntr = newExternalInterruptError(false)
+	loop.pendingExtra = forcedExternalInterruptExtra()
+	loop.recordGraphInterruptInput(&Task{NodeID: nodeID})
+
+	inputs := loop.pendingExtra[CheckpointMetaKeyGraphInterruptInputs]
+	inputMap, ok := inputs.(map[string][]any)
+	require.True(t, ok)
+	require.Empty(t, inputMap)
+
+	taskState := State{key: value}
+	task := &Task{NodeID: nodeID, Input: taskState}
+
+	loop.pendingIntr = newExternalInterruptError(true)
+	loop.pendingExtra = map[string]any{
+		CheckpointMetaKeyGraphInterruptInputs: "bad",
+	}
+	loop.recordGraphInterruptInput(task)
+
+	loop.pendingExtra = forcedExternalInterruptExtra()
+	loop.recordGraphInterruptInput(task)
+
+	inputs = loop.pendingExtra[CheckpointMetaKeyGraphInterruptInputs]
+	inputMap, ok = inputs.(map[string][]any)
+	require.True(t, ok)
+	require.Len(t, inputMap[nodeID], 1)
+
+	snapshot, ok := inputMap[nodeID][0].(State)
+	require.True(t, ok)
+
+	taskState[key] = "mutated"
+	require.Equal(t, value, snapshot[key])
+}
+
+func TestIsForcedExternalInterrupt(t *testing.T) {
+	require.False(t, isForcedExternalInterrupt(nil))
+	require.False(t, isForcedExternalInterrupt(&InterruptError{Key: "other"}))
+	require.False(t, isForcedExternalInterrupt(&InterruptError{
+		Key:   ExternalInterruptKey,
+		Value: "bad",
+	}))
+	require.True(t, isForcedExternalInterrupt(newExternalInterruptError(true)))
 }
 
 func TestExecutor_DagEngine_RespectsMaxConcurrency(t *testing.T) {
