@@ -729,6 +729,10 @@ func TestNew(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.wantErr {
+				t.Setenv("GOOGLE_API_KEY", "")
+				t.Setenv("GEMINI_API_KEY", "")
+			}
 			_, err := New(tt.args.ctx, tt.args.name, tt.args.opts...)
 			if tt.wantErr {
 				assert.NotNil(t, err)

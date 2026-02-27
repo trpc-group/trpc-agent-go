@@ -46,6 +46,7 @@ nav:
       - Event: event.md
       - Evaluation: evaluation.md
   - Server:
+    - Gateway: gateway.md
     - AG-UI: agui.md
     - A2A: a2a.md
   - Observability: observability.md
@@ -105,6 +106,7 @@ plugins:
                 - Event: event.md
                 - Evaluation: evaluation.md
             - 服务:
+              - Gateway: gateway.md
               - AG-UI: agui.md
               - A2A: a2a.md
             - 可观测: observability.md

@@ -183,6 +183,7 @@ _ = result.OverallStatus
     - [11. Agent Skills](#11-agent-skills)
     - [12. Artifacts](#12-artifacts)
     - [13. A2A 互通](#13-a2a-互通)
+    - [14. Gateway 服务](#14-gateway-服务)
   - [架构概览](#架构概览)
     - [**执行流程**](#执行流程)
   - [使用内置 Agents](#使用内置-agents)
@@ -547,6 +548,15 @@ sg.SetFinishPoint("A").SetFinishPoint("B")
 - Agent-to-Agent（A2A）与 ADK Python A2A Server 的互通示例。
 - 演示跨运行时的流式输出、工具调用与代码执行。
 
+### 14. Gateway 服务
+
+示例：[openclaw](openclaw)
+
+- 一个最小的 OpenClaw-like gateway 服务。
+- 稳定的 session id，以及同一 session 串行执行。
+- 基础安全控制：allowlist + mention gating。
+- OpenClaw-like demo binary（Telegram + gateway）：[openclaw](openclaw)
+
 其他值得关注的示例：
 
 - [examples/humaninloop](examples/humaninloop) – Human-in-the-loop。
@@ -585,7 +595,7 @@ sg.SetFinishPoint("A").SetFinishPoint("B")
 | `skill`     | 管理并执行以 `SKILL.md` 定义的可复用 Agent Skills。                   |
 | `event`     | 定义 Runner 与各类服务使用的事件结构与流式载荷。                        |
 | `evaluation`| 提供 EvalSet/Metric 驱动的评测框架并管理评测结果。                     |
-| `server`    | 提供 AG-UI、A2A 等 HTTP 服务端能力。                                |
+| `server`    | 提供 Gateway、AG-UI、A2A 等 HTTP 服务端能力。                       |
 | `telemetry` | OpenTelemetry 的 tracing/metrics 采集与接入。                      |
 
 ## 使用内置 Agents
