@@ -11,7 +11,9 @@ Graph combines controllable workflow orchestration with extensible agent capabil
 Highlights:
 
 - Schema‑driven State and Reducers to avoid data races when concurrent branches write the same field.
-- Deterministic parallelism with BSP style (Plan / Execute / Update).
+- Two execution engines:
+  - BSP (default): deterministic supersteps (Plan / Execute / Update)
+  - DAG (opt‑in): eager scheduling without a global superstep barrier
 - Built‑in node types wrap LLM, Tools, and Agent to reduce boilerplate.
 - Streaming events, checkpoints, and interrupts for observability and recovery.
 - Node‑level retry/backoff with exponential delay and jitter, plus executor‑level defaults and rich retry metadata in events.
@@ -871,6 +873,8 @@ graphAgent, err := graphagent.New(
     }),
     graphagent.WithChannelBufferSize(1024),            // Tune event buffer size
     graphagent.WithMaxConcurrency(8),                 // Cap parallel tasks
+    // Execution engine: BSP (default) or DAG (eager).
+    graphagent.WithExecutionEngine(graph.ExecutionEngineBSP),
     graphagent.WithCheckpointSaver(memorySaver),       // Persist checkpoints if needed
     graphagent.WithSubAgents([]agent.Agent{subAgent}), // Register sub-agents by name
     graphagent.WithAddSessionSummary(true),            // Inject session summary as system message
@@ -1313,9 +1317,10 @@ sg.AddMultiConditionalEdges(
 
 Notes:
 
-- Like other routing, targets become runnable in the **next** BSP superstep
-  (after the router node finishes). This can affect latency; see “BSP superstep
-  barrier” below.
+- In the default BSP engine, targets become runnable in the **next** superstep
+  (after the router node finishes). In the DAG engine, targets may become
+  runnable immediately (no global barrier). This can affect latency; see “BSP
+  superstep barrier” below.
 - Results are de‑duplicated before triggering; repeated keys do not trigger a
   target more than once in the same step.
 - Resolution precedence for each branch key mirrors single‑conditional routing:
@@ -1792,7 +1797,7 @@ ctx, interrupt := graph.WithGraphInterrupt(context.Background())
 events, _ := app.Run(ctx, userID, sessionID, model.NewUserMessage("hi"))
 
 // From another goroutine / handler:
-interrupt() // graceful: wait current step finishes, then pause
+interrupt() // graceful: wait in-flight tasks finish, then pause
 
 // Or force after a max wait:
 interrupt(graph.WithGraphInterruptTimeout(2 * time.Second))
@@ -1800,11 +1805,13 @@ interrupt(graph.WithGraphInterruptTimeout(2 * time.Second))
 
 Behavior:
 
-- By default, the executor waits for the current step's tasks to finish and
-  interrupts before starting the next step.
+- By default, the executor pauses at a safe boundary:
+  - BSP: after the current superstep finishes (before the next superstep)
+  - DAG: after in-flight tasks finish (it stops scheduling new tasks once
+    requested)
 - With `WithGraphInterruptTimeout`, the executor cancels in-flight tasks after
   the timeout and interrupts as soon as it can. Nodes that were canceled are
-  re-run when resuming.
+  re-run deterministically when resuming (using saved input snapshots).
 
 Resuming:
 
@@ -2519,6 +2526,74 @@ Tip: setting entry and finish points implicitly connects to virtual Start/End no
 
 Constants: `graph.Start == "__start__"`, `graph.End == "__end__"`.
 
+#### DAG (eager) engine (pipeline without the superstep barrier)
+
+If your graph is mostly a DAG and you care about end‑to‑end latency, the BSP
+barrier can feel “too strict”: a deep node can’t start until *all* nodes in the
+previous superstep finish, even if it only depends on one branch.
+
+The DAG engine removes the global barrier and schedules nodes **eagerly**:
+
+- **BSP (default)**: runnable nodes are computed once per superstep; downstream
+  becomes runnable only in the next superstep.
+- **DAG (opt‑in)**: whenever a node finishes and writes its routing signal
+  (channel update), the executor immediately plans and starts newly runnable
+  nodes (subject to `WithMaxConcurrency`).
+
+This enables pipelining: if branch `B` finishes early, `B_next` can start even
+while unrelated branches are still running.
+
+How to enable (GraphAgent):
+
+```go
+ga, err := graphagent.New(
+    "my-agent",
+    g,
+    graphagent.WithExecutionEngine(graph.ExecutionEngineDAG),
+)
+```
+
+How to enable (Executor directly):
+
+```go
+exec, err := graph.NewExecutor(
+    g,
+    graph.WithExecutionEngine(graph.ExecutionEngineDAG),
+)
+```
+
+Compatibility rule: if you do **not** set the engine, the default BSP behavior
+is **exactly the same** as before.
+
+Current behavior differences and limitations (DAG engine):
+
+- **Checkpoints (supported, different cadence)**: `WithCheckpointSaver` works.
+  DAG execution saves checkpoints at:
+  - startup (`source=input`, `step=-1`) when a saver is configured
+  - interrupts (`source=interrupt`) for internal/static/external interrupts
+  - normal completion (`source=loop`, best effort)
+  DAG does **not** currently create a loop checkpoint after every node
+  execution (unlike BSP, which checkpoints once per superstep).
+- **Interrupts (supported)**:
+  - internal interrupts from `graph.Interrupt` (HITL)
+  - static interrupts from `WithInterruptBefore` / `WithInterruptAfter`
+  - external interrupts from `graph.WithGraphInterrupt` (planned pause and
+    forced timeout)
+  For forced timeouts, in-flight tasks are canceled and the executor stores
+  per-task input snapshots so it can rerun them deterministically on resume.
+- **No StepTimeout**: `WithStepTimeout` applies to BSP supersteps. For DAG,
+  prefer using an overall `context` deadline and/or `WithNodeTimeout`.
+- **MaxSteps meaning differs**: `WithMaxSteps` limits the number of *node
+  executions* in DAG mode (not supersteps).
+- **Single in‑flight per node**: the DAG scheduler runs at most one task per
+  node ID at a time; re‑triggers are queued and run after the current one
+  finishes.
+
+If you need “wait for all branches” fan‑in, keep using `AddJoinEdge` (it works
+in both engines).
+
+Reference examples: `examples/graph/dag_engine`, `examples/graph/dag_interrupt`.
+
 ### Message Visibility Options
 The Agent can dynamically manage the visibility of messages generated by other Agents and historical session messages based on different scenarios. This is configurable through relevant options.
 When interacting with the model, only the visible content is passed as input.
@@ -2804,6 +2879,11 @@ Implements channel‑based, event‑triggered execution. Node results merge into
 `graph/executor.go` — BSP executor  
 Heart of the system, inspired by Google's Pregel. Implements BSP (Bulk Synchronous Parallel) supersteps: Planning → Execution → Update.
 
+`graph/executor_dag.go` — DAG (eager) executor (opt‑in)  
+An eager scheduler that removes the global BSP barrier and starts runnable nodes
+as soon as their trigger channels become available. This mode is designed for
+DAG‑like pipelines and trades step barriers for lower latency.
+
 `graph/checkpoint/*` — Checkpoints and recovery  
 Optional checkpoint persistence (e.g., sqlite). Atomically saves state and pending writes; supports lineage/checkpoint‑based recovery.
 
@@ -2812,7 +2892,17 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
 
 ### Execution Model
 
-GraphAgent adapts Pregel's BSP (Bulk Synchronous Parallel) to a single‑process runtime and adds checkpoints, HITL interrupts/resumes, and time travel:
+GraphAgent supports two execution engines:
+
+- **BSP engine (default)**: Pregel‑style BSP (Bulk Synchronous Parallel)
+  supersteps with a global barrier. This engine supports checkpoints, HITL
+  interrupts/resumes, and time travel.
+- **DAG engine (opt‑in)**: eager scheduling without a global superstep barrier.
+  This engine is designed for DAG‑like pipelines and supports checkpoints and
+  interrupts, with different semantics from BSP (see the “DAG engine” section
+  above).
+
+The sequence diagram below illustrates the BSP engine:
 
 ```mermaid
 sequenceDiagram
@@ -2926,6 +3016,8 @@ This design enables per‑step observability and safe interruption/recovery.
 
 ```go
 exec, err := graph.NewExecutor(g,
+    // Default: BSP supersteps (supports checkpoints / interrupts / time travel).
+    graph.WithExecutionEngine(graph.ExecutionEngineBSP),
     graph.WithChannelBufferSize(1024),              // event channel buffer
     graph.WithMaxSteps(50),                          // max steps
     graph.WithMaxConcurrency(8),                     // task concurrency
@@ -2935,6 +3027,19 @@ exec, err := graph.NewExecutor(g,
     graph.WithCheckpointSaveTimeout(30*time.Second), // checkpoint save timeout
 )
 ```
+
+Enable the DAG (eager) engine:
+
+```go
+exec, err := graph.NewExecutor(g,
+    graph.WithExecutionEngine(graph.ExecutionEngineDAG),
+    graph.WithMaxConcurrency(8),
+    graph.WithNodeTimeout(2*time.Minute),
+)
+```
+
+Note: `WithStepTimeout` applies to BSP supersteps and does not apply to DAG
+execution. Use `context` deadlines and/or `WithNodeTimeout`.
 
 ### Defaults and Notes
 

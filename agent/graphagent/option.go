@@ -85,6 +85,9 @@ type Options struct {
 	MaxConcurrency int
 	// CheckpointSaver is the checkpoint saver for the executor.
 	CheckpointSaver graph.CheckpointSaver
+	// ExecutionEngine controls how the graph is scheduled and executed.
+	// When empty, GraphAgent uses the Executor default (BSP).
+	ExecutionEngine graph.ExecutionEngine
 
 	// AddSessionSummary controls whether to prepend the current branch summary
 	// as a system message when available.
@@ -169,6 +172,15 @@ func WithSubAgents(subAgents []agent.Agent) Option {
 func WithCheckpointSaver(saver graph.CheckpointSaver) Option {
 	return func(opts *Options) {
 		opts.CheckpointSaver = saver
+	}
+}
+
+// WithExecutionEngine sets the execution engine for graph scheduling.
+//
+// When not set, GraphAgent uses the Executor default (BSP).
+func WithExecutionEngine(engine graph.ExecutionEngine) Option {
+	return func(opts *Options) {
+		opts.ExecutionEngine = engine
 	}
 }
 

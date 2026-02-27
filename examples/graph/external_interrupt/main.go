@@ -36,6 +36,7 @@ const (
 	defaultModelName = "deepseek-chat"
 	defaultDemoMode  = "both"
 	defaultUserText  = "Say one short sentence about graphs."
+	defaultEngine    = "bsp"
 
 	envOpenAIAPIKey = "OPENAI_API_KEY"
 	envModelName    = "MODEL_NAME"
@@ -45,6 +46,11 @@ const (
 	demoPlanned = "planned"
 	demoForced  = "forced"
 	demoBoth    = "both"
+)
+
+const (
+	engineBSP = "bsp"
+	engineDAG = "dag"
 )
 
 const (
@@ -73,6 +79,11 @@ var (
 		"demo",
 		defaultDemoMode,
 		"Demo to run: planned|forced|both",
+	)
+	engine = flag.String(
+		"engine",
+		defaultEngine,
+		"Execution engine: bsp|dag",
 	)
 	modelName = flag.String(
 		"model",
@@ -126,13 +137,18 @@ func runPlannedDemo() {
 	}
 
 	saver := inmemory.NewSaver()
-	exec, err := graph.NewExecutor(g, graph.WithCheckpointSaver(saver))
+	exec, err := graph.NewExecutor(
+		g,
+		graph.WithExecutionEngine(parseEngineOrExit()),
+		graph.WithCheckpointSaver(saver),
+	)
 	if err != nil {
 		log.Fatalf("create executor failed: %v", err)
 	}
 
 	lineageID := fmt.Sprintf("external-planned-%d", time.Now().UnixNano())
 	fmt.Printf("Lineage: %s\n", lineageID)
+	fmt.Printf("Engine: %s\n", *engine)
 
 	ctx, interrupt := graph.WithGraphInterrupt(context.Background())
 
@@ -203,13 +219,18 @@ func runForcedDemo() {
 	}
 
 	saver := inmemory.NewSaver()
-	exec, err := graph.NewExecutor(g, graph.WithCheckpointSaver(saver))
+	exec, err := graph.NewExecutor(
+		g,
+		graph.WithExecutionEngine(parseEngineOrExit()),
+		graph.WithCheckpointSaver(saver),
+	)
 	if err != nil {
 		log.Fatalf("create executor failed: %v", err)
 	}
 
 	lineageID := fmt.Sprintf("external-forced-%d", time.Now().UnixNano())
 	fmt.Printf("Lineage: %s\n", lineageID)
+	fmt.Printf("Engine: %s\n", *engine)
 
 	ctx, interrupt := graph.WithGraphInterrupt(context.Background())
 
@@ -559,4 +580,17 @@ func shorten(s string, max int) string {
 		return s
 	}
 	return s[:max] + "..."
+}
+
+func parseEngineOrExit() graph.ExecutionEngine {
+	name := strings.ToLower(strings.TrimSpace(*engine))
+	switch name {
+	case engineBSP:
+		return graph.ExecutionEngineBSP
+	case engineDAG:
+		return graph.ExecutionEngineDAG
+	default:
+		log.Fatalf("unknown -engine value: %q", *engine)
+		return graph.ExecutionEngineBSP
+	}
 }
