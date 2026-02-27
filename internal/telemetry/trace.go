@@ -576,6 +576,7 @@ func buildResponseAttributes(rsp *model.Response) []attribute.KeyValue {
 			attribute.Int(KeyGenAIUsageInputTokens, rsp.Usage.PromptTokens),
 			attribute.Int(KeyGenAIUsageOutputTokens, rsp.Usage.CompletionTokens),
 		)
+		// TODO: 这里需要优化，因为有些模型可能不支持 cache 相关的 token 信息，需要根据模型支持情况来判断是否添加这些属性
 		// Prompt cache tokens (if provided by the model provider)
 		if cached := rsp.Usage.PromptTokensDetails.CachedTokens; cached != 0 {
 			// OpenAI: cached_tokens
