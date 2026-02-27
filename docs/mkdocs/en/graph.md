@@ -3235,7 +3235,75 @@ Constants live in `graph/state.go` and `graph/keys.go`. Prefer referencing const
 
 #### Node‑level Callbacks, Tools & Generation Parameters
 
-Per‑node options (see `graph/state_graph.go`):
+Graph supports **node callbacks** for cross-cutting logic around node execution.
+
+There are two layers:
+
+- **Graph-wide callbacks** (apply to every node in this graph): register once
+  during graph construction via `(*graph.StateGraph).WithNodeCallbacks(...)`.
+- **Per-node callbacks** (apply to one node): attach to a single node via
+  `graph.WithPreNodeCallback` / `graph.WithPostNodeCallback` /
+  `graph.WithNodeErrorCallback` (or `graph.WithNodeCallbacks(...)`).
+
+Note: there are two different APIs named `WithNodeCallbacks`:
+
+- `graph.NewStateGraph(schema).WithNodeCallbacks(...)` is **graph-wide**.
+- `graph.WithNodeCallbacks(...)` is a **per-node option** passed to `AddNode`.
+
+Callback execution order:
+
+- `BeforeNode`: global → per-node
+- `AfterNode`: per-node → global
+- `OnNodeError`: global → per-node
+
+Example: add a graph-wide “aspect” that only targets function nodes:
+
+```go
+global := graph.NewNodeCallbacks().
+	RegisterBeforeNode(func(
+		ctx context.Context,
+		cb *graph.NodeCallbackContext,
+		st graph.State,
+	) (any, error) {
+		if cb == nil || cb.NodeType != graph.NodeTypeFunction {
+			return nil, nil
+		}
+		// Cross-cutting logic for function nodes goes here.
+		return nil, nil
+	})
+
+g, err := graph.NewStateGraph(schema).
+	WithNodeCallbacks(global). // graph-wide
+	AddNode("step1", step1).
+	AddNode("step2", step2,
+		graph.WithPreNodeCallback(func(
+			ctx context.Context,
+			cb *graph.NodeCallbackContext,
+			st graph.State,
+		) (any, error) {
+			// This runs only for "step2".
+			return nil, nil
+		}),
+	).
+	SetEntryPoint("step1").
+	AddEdge("step1", "step2").
+	SetFinishPoint("step2").
+	Compile()
+_ = g
+_ = err
+```
+
+Advanced: you can also provide graph-wide callbacks **per run** by setting
+`graph.StateKeyNodeCallbacks` in `Invocation.RunOptions.RuntimeState`. This is
+useful when you want runner-scoped behavior (for example, injecting node
+callbacks from a Runner plugin). See `plugin.md` for an example.
+
+For runnable examples, see:
+
+- `examples/graph/per_node_callbacks` (graph-wide + per-node callbacks)
+- `examples/graph/runner_plugin_node_callbacks` (inject from a Runner plugin)
+
+Other per-node options (see `graph/state_graph.go`):
 
 - `graph.WithPreNodeCallback` / `graph.WithPostNodeCallback` / `graph.WithNodeErrorCallback`
 - LLM nodes: `graph.WithGenerationConfig`, `graph.WithModelCallbacks`

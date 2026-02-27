@@ -243,6 +243,92 @@ later plugins can depend on earlier ones during shutdown.
 - `OnEvent`: runs for every event emitted by Runner (including runner completion
   events). You can mutate the event in place or return a replacement event.
 
+### Graph node hooks (StateGraph / GraphAgent)
+
+Runner plugins intentionally do **not** expose a `BeforeNode` / `AfterNode`
+hook point.
+
+Graph node execution happens inside the graph engine (`graph.Executor`), which
+has its own callback system: `graph.NodeCallbacks`.
+
+If you want cross-cutting behavior around **graph nodes**, you have three
+common options:
+
+1) **Use graph node callbacks (recommended)**
+
+   Graph supports both:
+
+   - **Graph-wide callbacks**: register once when building the graph via
+     `(*graph.StateGraph).WithNodeCallbacks(...)`.
+   - **Per-node callbacks**: attach to a single node via
+     `graph.WithPreNodeCallback` / `graph.WithPostNodeCallback` /
+     `graph.WithNodeErrorCallback`.
+
+   See `graph.md` for a step-by-step tutorial.
+
+2) **Observe graph node lifecycle events via `OnEvent`**
+
+   Graph emits task lifecycle events like:
+
+   - `graph.node.start`
+   - `graph.node.complete`
+   - `graph.node.error`
+
+   A plugin can tag/log/mutate these events:
+
+   ```go
+   reg.OnEvent(func(
+   	ctx context.Context,
+   	inv *agent.Invocation,
+   	e *event.Event,
+   ) (*event.Event, error) {
+   	if e == nil {
+   		return nil, nil
+   	}
+   	switch e.Object {
+   	case graph.ObjectTypeGraphNodeStart,
+   		graph.ObjectTypeGraphNodeComplete,
+   		graph.ObjectTypeGraphNodeError:
+   		// Observe / tag / log / audit.
+   	}
+   	return nil, nil
+   })
+   ```
+
+   Note: if you **enable StreamMode filtering** for a run, include `tasks`
+   (or `debug`) to forward these events. When StreamMode is not configured,
+   runners do not filter and all events are forwarded. Plugins still see these
+   events because `OnEvent` runs before StreamMode filtering.
+
+3) **Inject graph-wide node callbacks from a plugin (advanced)**
+
+   If you need runner-scoped behavior for GraphAgent runs, you can set
+   `graph.StateKeyNodeCallbacks` in `Invocation.RunOptions.RuntimeState` inside
+   `BeforeAgent`. Graph reads this key as the graph-wide callbacks for the run.
+
+   ```go
+   reg.BeforeAgent(func(
+   	ctx context.Context,
+   	args *agent.BeforeAgentArgs,
+   ) (*agent.BeforeAgentResult, error) {
+   	if args == nil || args.Invocation == nil {
+   		return nil, nil
+   	}
+   	inv := args.Invocation
+   	if inv.RunOptions.RuntimeState == nil {
+   		inv.RunOptions.RuntimeState = make(map[string]any)
+   	}
+   	if inv.RunOptions.RuntimeState[graph.StateKeyNodeCallbacks] == nil {
+   		inv.RunOptions.RuntimeState[graph.StateKeyNodeCallbacks] =
+   			graph.NewNodeCallbacks()
+   	}
+  	return nil, nil
+   })
+   ```
+
+   For a runnable end-to-end example, see
+   `examples/graph/runner_plugin_node_callbacks`.
+
 ## Common Recipes
 
 ### 1) Block certain user inputs (policy)
