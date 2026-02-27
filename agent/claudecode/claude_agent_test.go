@@ -13,7 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -397,12 +397,12 @@ func TestExecCommandRunner_Run(t *testing.T) {
 		dir:  tmp,
 	})
 	require.NoError(t, err)
-	stdoutDir := strings.TrimSpace(string(stdout))
-	wantInfo, err := os.Stat(tmp)
+	got := strings.TrimSpace(string(stdout))
+	gotResolved, err := filepath.EvalSymlinks(got)
 	require.NoError(t, err)
-	gotInfo, err := os.Stat(stdoutDir)
+	wantResolved, err := filepath.EvalSymlinks(tmp)
 	require.NoError(t, err)
-	require.True(t, os.SameFile(wantInfo, gotInfo))
+	require.Equal(t, wantResolved, gotResolved)
 	require.Empty(t, string(stderr))
 }
 

@@ -22,6 +22,7 @@ import (
 const (
 	testToolNameA             = "a"
 	testDummyToolSetName      = "dummy"
+	testCtxToolSetName        = "ctx"
 	testUserToolNameOne       = "user_tool_1"
 	testUserToolNameTwo       = "user_tool_2"
 	testTransferToolName      = "transfer_to_agent"
@@ -32,6 +33,8 @@ const (
 	testPrefixedKnowledgeTail = "_knowledge_search"
 	testFilterAgentName       = "filter-agent"
 	testSubAgentName          = "sub-agent"
+	testToolNameWithCtx       = "tool_with_ctx"
+	testToolNameWithoutCtx    = "tool_without_ctx"
 )
 
 // minimalKnowledge implements knowledge.Knowledge with no-op behaviors for unit tests.
@@ -226,6 +229,29 @@ func (d *dynamicToolSet) Name() string {
 	return d.name
 }
 
+type toolSetContextKey string
+
+const testToolSetContextKey toolSetContextKey = "toolset-context-key"
+
+type ctxSensitiveToolSet struct{ name string }
+
+func (s *ctxSensitiveToolSet) Tools(ctx context.Context) []tool.Tool {
+	toolName := testToolNameWithoutCtx
+	if ctx.Value(testToolSetContextKey) != nil {
+		toolName = testToolNameWithCtx
+	}
+
+	return []tool.Tool{
+		dummyTool{
+			decl: &tool.Declaration{Name: toolName},
+		},
+	}
+}
+
+func (s *ctxSensitiveToolSet) Close() error { return nil }
+
+func (s *ctxSensitiveToolSet) Name() string { return s.name }
+
 func TestLLMAgent_RefreshToolSetsOnRun(t *testing.T) {
 	staticTool := dummyTool{
 		decl: &tool.Declaration{Name: "static_tool"},
@@ -302,6 +328,61 @@ func TestLLMAgent_RefreshToolSetsOnRun(t *testing.T) {
 				name,
 			)
 		}
+	}
+}
+
+func TestLLMAgent_FilterTools_PassesContextToToolSets(t *testing.T) {
+	toolSet := &ctxSensitiveToolSet{name: testCtxToolSetName}
+
+	agt := New(
+		"ctx-agent",
+		WithToolSets([]tool.ToolSet{toolSet}),
+		WithRefreshToolSetsOnRun(true),
+	)
+
+	ctx := context.WithValue(
+		context.Background(),
+		testToolSetContextKey,
+		struct{}{},
+	)
+
+	filtered := agt.FilterTools(ctx)
+
+	expectedWithCtx := testCtxToolSetName + "_" + testToolNameWithCtx
+	foundWithCtx := false
+	for _, tl := range filtered {
+		if tl.Declaration().Name == expectedWithCtx {
+			foundWithCtx = true
+			break
+		}
+	}
+	if !foundWithCtx {
+		t.Fatalf("expected %q in FilterTools output", expectedWithCtx)
+	}
+
+	expectedNoCtx := testCtxToolSetName + "_" + testToolNameWithoutCtx
+	tools := agt.Tools()
+	foundNoCtx := false
+	for _, tl := range tools {
+		if tl.Declaration().Name == expectedNoCtx {
+			foundNoCtx = true
+			break
+		}
+	}
+	if !foundNoCtx {
+		t.Fatalf("expected %q in Tools output", expectedNoCtx)
+	}
+
+	filteredNil := agt.FilterTools(nil)
+	foundNoCtx = false
+	for _, tl := range filteredNil {
+		if tl.Declaration().Name == expectedNoCtx {
+			foundNoCtx = true
+			break
+		}
+	}
+	if !foundNoCtx {
+		t.Fatalf("missing %q from FilterTools(nil)", expectedNoCtx)
 	}
 }
 

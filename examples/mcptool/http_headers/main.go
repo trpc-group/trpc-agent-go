@@ -177,9 +177,11 @@ func (c *httpHeadersChat) setup(ctx context.Context) error {
 		//   - Recommended when you need per-request authentication or tracing
 		//
 		// Approach B (alternative): WithToolSets([]tool.ToolSet{toolSet})
-		//   - Agent calls toolSet.Tools(context.Background()) internally
-		//   - initialize/tools/list won't have dynamic headers from context
-		//   - Only tools/call will have dynamic headers
+		//   - By default, tool discovery uses context.Background(), so
+		//     initialize/tools/list won't see ctx values.
+		//   - WithRefreshToolSetsOnRun(true), tool discovery uses the
+		//     run context (but refreshes tools every run).
+		//   - tools/call will use the run context either way.
 		//   - Suitable when you only need static headers (e.g., API keys)
 		//   - Can combine with WithRequestHeader for static headers
 		//

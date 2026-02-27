@@ -275,6 +275,88 @@ if toolCallID, ok := tool.ToolCallIDFromContext(ctx); ok {
 - `OnEvent`：Runner 发出每一个事件时都会调用（包括 runner completion 事件）。你可以
   原地修改事件，或者返回一个新的事件作为替代。
 
+### Graph 节点 Hook（StateGraph / GraphAgent）
+
+Runner 插件**不会**提供 `BeforeNode` / `AfterNode` 这类“节点级”的 Hook 点。
+
+Graph 的节点执行发生在图引擎内部（`graph.Executor`），它有自己独立的一套回调机制：
+`graph.NodeCallbacks`。
+
+如果你希望对 **Graph 节点** 做“切面/横切”，常见有三种方式：
+
+1) **使用 Graph 节点回调（推荐）**
+
+   Graph 同时支持：
+
+   - **全局（图级）回调**：构图时通过 `(*graph.StateGraph).WithNodeCallbacks(...)`
+     一次性注册，对该图内所有节点生效。
+   - **单节点回调**：通过 `graph.WithPreNodeCallback` /
+     `graph.WithPostNodeCallback` / `graph.WithNodeErrorCallback` 只挂到某个节点上。
+
+   详细的手把手教程见 `graph.md`。
+
+2) **用 `OnEvent` 观测 Graph 节点生命周期事件**
+
+   Graph 会发出任务生命周期事件（event object）：
+
+   - `graph.node.start`
+   - `graph.node.complete`
+   - `graph.node.error`
+
+   插件可以在 `OnEvent` 里对这些事件做打标/日志/审计等：
+
+   ```go
+   reg.OnEvent(func(
+   	ctx context.Context,
+   	inv *agent.Invocation,
+   	e *event.Event,
+   ) (*event.Event, error) {
+   	if e == nil {
+   		return nil, nil
+   	}
+   	switch e.Object {
+   	case graph.ObjectTypeGraphNodeStart,
+   		graph.ObjectTypeGraphNodeComplete,
+   		graph.ObjectTypeGraphNodeError:
+   		// 观测 / 打标 / 日志 / 审计。
+   	}
+   	return nil, nil
+   })
+   ```
+
+   注意：如果你**显式开启了 StreamMode 过滤**，需要在 modes 里包含 `tasks`
+   （或 `debug`）才能把这些事件转发给调用方；如果你没有配置 StreamMode（默认），
+   Runner 不会做过滤，会把所有事件都转发。无论哪种情况，插件都能看到这些事件，
+   因为 `OnEvent` 在 StreamMode 过滤之前执行。
+
+3) **从插件里注入 Graph 全局节点回调（进阶）**
+
+   如果你希望“Runner 作用域”的逻辑也能影响 Graph 节点回调，可以在 `BeforeAgent` 里
+   往 `Invocation.RunOptions.RuntimeState` 写入 `graph.StateKeyNodeCallbacks`。
+   Graph 会把这个 key 当作“本次运行的全局节点回调”来使用。
+
+   ```go
+   reg.BeforeAgent(func(
+   	ctx context.Context,
+   	args *agent.BeforeAgentArgs,
+   ) (*agent.BeforeAgentResult, error) {
+   	if args == nil || args.Invocation == nil {
+   		return nil, nil
+   	}
+   	inv := args.Invocation
+   	if inv.RunOptions.RuntimeState == nil {
+   		inv.RunOptions.RuntimeState = make(map[string]any)
+   	}
+   	if inv.RunOptions.RuntimeState[graph.StateKeyNodeCallbacks] == nil {
+   		inv.RunOptions.RuntimeState[graph.StateKeyNodeCallbacks] =
+   			graph.NewNodeCallbacks()
+   	}
+  	return nil, nil
+   })
+   ```
+
+   可运行的端到端示例见 `examples/graph/runner_plugin_node_callbacks`。
+
 ## 常见用法（Recipes）
 
 ### 1) 拦截输入并短路模型调用（策略）
