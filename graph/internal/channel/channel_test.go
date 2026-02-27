@@ -689,3 +689,46 @@ func TestChannel_VersionIncrement(t *testing.T) {
 		t.Errorf("Version should be 2 after second update, got %d", ch.Version)
 	}
 }
+
+func TestChannel_ConsumeIfAvailable(t *testing.T) {
+	ch := NewChannel("test", BehaviorLastValue)
+
+	if ch.ConsumeIfAvailable() {
+		t.Error("ConsumeIfAvailable should be false when unavailable")
+	}
+
+	ch.Update([]any{"value"}, 1)
+	if !ch.IsAvailable() {
+		t.Error("Channel should be available after update")
+	}
+	if !ch.ConsumeIfAvailable() {
+		t.Error("ConsumeIfAvailable should be true when available")
+	}
+	if ch.IsAvailable() {
+		t.Error("Channel should not be available after consume")
+	}
+	if ch.ConsumeIfAvailable() {
+		t.Error("ConsumeIfAvailable should be false after consume")
+	}
+}
+
+func TestChannel_ConsumeIfAvailable_ClearsBarrierSet(t *testing.T) {
+	ch := NewChannel("barrier", BehaviorBarrier)
+	ch.Update([]any{"a", "b"}, 1)
+	if !ch.IsAvailable() {
+		t.Error("Barrier channel should be available after update")
+	}
+	if len(ch.BarrierSet) == 0 {
+		t.Error("Expected barrier set to contain senders")
+	}
+
+	if !ch.ConsumeIfAvailable() {
+		t.Error("ConsumeIfAvailable should be true for barrier channel")
+	}
+	if ch.IsAvailable() {
+		t.Error("Barrier channel should not be available after consume")
+	}
+	if len(ch.BarrierSet) != 0 {
+		t.Error("ConsumeIfAvailable should clear barrier set")
+	}
+}

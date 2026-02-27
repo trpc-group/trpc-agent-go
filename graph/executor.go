@@ -55,7 +55,8 @@ func defaultMaxConcurrency() int {
 	return maxConcurrency
 }
 
-// Executor executes a graph with the given initial state using Pregel-style BSP execution.
+// Executor executes a graph with the given initial state using the configured
+// execution engine (default: Pregel-style BSP).
 //
 // Runtime isolation principle:
 //   - Executor is designed to be reusable across concurrent runs.
@@ -70,6 +71,7 @@ type Executor struct {
 	channelBufferSize     int
 	maxSteps              int
 	maxConcurrency        int
+	executionEngine       ExecutionEngine
 	stepTimeout           time.Duration
 	nodeTimeout           time.Duration
 	checkpointSaveTimeout time.Duration
@@ -102,6 +104,10 @@ type ExecutorOptions struct {
 	CheckpointSaveTimeout time.Duration
 	// CheckpointSaver is the checkpoint saver for persisting graph state.
 	CheckpointSaver CheckpointSaver
+	// ExecutionEngine controls how the graph is scheduled and executed.
+	//
+	// The default is ExecutionEngineBSP.
+	ExecutionEngine ExecutionEngine
 	// DefaultRetryPolicies are applied to nodes without explicit policies.
 	DefaultRetryPolicies []RetryPolicy
 }
@@ -157,6 +163,15 @@ func WithCheckpointSaveTimeout(timeout time.Duration) ExecutorOption {
 	}
 }
 
+// WithExecutionEngine sets the execution engine for scheduling.
+//
+// The default is ExecutionEngineBSP.
+func WithExecutionEngine(engine ExecutionEngine) ExecutorOption {
+	return func(opts *ExecutorOptions) {
+		opts.ExecutionEngine = engine
+	}
+}
+
 // WithDefaultRetryPolicy sets executor-level retry policies used by nodes
 // that do not define their own. Policies are evaluated in order.
 func WithDefaultRetryPolicy(policies ...RetryPolicy) ExecutorOption {
@@ -179,10 +194,17 @@ func NewExecutor(graph *Graph, opts ...ExecutorOption) (*Executor, error) {
 		MaxConcurrency:        defaultMaxConcurrency(),
 		StepTimeout:           defaultStepTimeout,
 		CheckpointSaveTimeout: defaultCheckpointSaveTimeout,
+		ExecutionEngine:       ExecutionEngineBSP,
 	}
 	// Apply function options.
 	for _, opt := range opts {
 		opt(&options)
+	}
+	if options.ExecutionEngine == "" {
+		options.ExecutionEngine = ExecutionEngineBSP
+	}
+	if err := options.ExecutionEngine.validate(); err != nil {
+		return nil, err
 	}
 	maxConcurrency := options.MaxConcurrency
 	if maxConcurrency <= 0 {
@@ -200,6 +222,7 @@ func NewExecutor(graph *Graph, opts ...ExecutorOption) (*Executor, error) {
 		channelBufferSize:     options.ChannelBufferSize,
 		maxSteps:              options.MaxSteps,
 		maxConcurrency:        maxConcurrency,
+		executionEngine:       options.ExecutionEngine,
 		stepTimeout:           options.StepTimeout,
 		nodeTimeout:           nodeTimeout,
 		checkpointSaveTimeout: options.CheckpointSaveTimeout,
@@ -232,7 +255,7 @@ type Step struct {
 	UpdatedChannels map[string]bool // UpdatedChannels is the updated channels of the step.
 }
 
-// Execute executes the graph with the given initial state using Pregel-style BSP execution.
+// Execute executes the graph with the given initial state.
 func (e *Executor) Execute(
 	ctx context.Context,
 	initialState State,
@@ -300,6 +323,9 @@ func (e *Executor) executeGraph(
 	eventChan chan<- *event.Event,
 	startTime time.Time,
 ) error {
+	if err := e.executionEngine.validate(); err != nil {
+		return err
+	}
 	interruptState := graphInterruptFromContext(ctx)
 	ctx, extInterrupt := newExternalInterruptWatcher(ctx, interruptState)
 	if extInterrupt != nil {
@@ -360,14 +386,28 @@ func (e *Executor) executeGraph(
 		startStep = resumedStep + 1
 	}
 
-	stepsExecuted, err := e.runBspLoop(
-		ctx,
-		invocation,
-		execCtx,
-		&checkpointConfig,
-		startStep,
-		extInterrupt,
-	)
+	var stepsExecuted int
+	var err error
+	switch e.executionEngine {
+	case ExecutionEngineDAG:
+		stepsExecuted, err = e.runDagLoop(
+			ctx,
+			invocation,
+			execCtx,
+			&checkpointConfig,
+			startStep,
+			extInterrupt,
+		)
+	default:
+		stepsExecuted, err = e.runBspLoop(
+			ctx,
+			invocation,
+			execCtx,
+			&checkpointConfig,
+			startStep,
+			extInterrupt,
+		)
+	}
 	if err != nil {
 		return err
 	}

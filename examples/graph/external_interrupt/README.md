@@ -44,6 +44,7 @@ go run .
 Flags:
 
 - `-demo planned|forced|both` (default: `both`)
+- `-engine bsp|dag` (default: `bsp`)
 - `-model <model-name>` (used by the planned demo when a real model is enabled)
 - `-text <user-text>` (the planned demo prompt)
 

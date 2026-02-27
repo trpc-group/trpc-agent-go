@@ -222,6 +222,105 @@ func TestGraphAgent_WithMaxConcurrency(t *testing.T) {
 	require.LessOrEqual(t, maxActive.Load(), int64(maxConcurrency))
 }
 
+func TestGraphAgent_WithExecutionEngine_DagSchedulesEagerly(t *testing.T) {
+	const (
+		nodeEntry      = "preprocess"
+		nodeSlow       = "slow"
+		nodeFast       = "fast"
+		nodeDownstream = "downstream"
+		waitTimeout    = 2 * time.Second
+	)
+
+	slowRelease := make(chan struct{})
+	slowStarted := make(chan struct{}, 1)
+	fastDone := make(chan struct{}, 1)
+	downStarted := make(chan struct{}, 1)
+
+	notify := func(ch chan<- struct{}) {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+
+	stateGraph := graph.NewStateGraph(graph.NewStateSchema())
+	stateGraph.AddNode(nodeEntry, func(context.Context, graph.State) (any, error) {
+		return nil, nil
+	})
+	stateGraph.AddNode(
+		nodeSlow,
+		func(ctx context.Context, state graph.State) (any, error) {
+			notify(slowStarted)
+			select {
+			case <-slowRelease:
+				return nil, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		},
+	)
+	stateGraph.AddNode(
+		nodeFast,
+		func(context.Context, graph.State) (any, error) {
+			notify(fastDone)
+			return nil, nil
+		},
+	)
+	stateGraph.AddNode(
+		nodeDownstream,
+		func(context.Context, graph.State) (any, error) {
+			notify(downStarted)
+			return nil, nil
+		},
+	)
+	stateGraph.SetEntryPoint(nodeEntry)
+	stateGraph.AddEdge(nodeEntry, nodeSlow)
+	stateGraph.AddEdge(nodeEntry, nodeFast)
+	stateGraph.AddEdge(nodeFast, nodeDownstream)
+
+	g, err := stateGraph.Compile()
+	require.NoError(t, err)
+
+	graphAgent, err := New(
+		"test-agent",
+		g,
+		WithExecutionEngine(graph.ExecutionEngineDAG),
+		WithMaxConcurrency(2),
+	)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+
+	invocation := &agent.Invocation{
+		Agent:        graphAgent,
+		AgentName:    "test-agent",
+		InvocationID: "inv-dag-engine",
+	}
+
+	events, err := graphAgent.Run(ctx, invocation)
+	require.NoError(t, err)
+
+	done := make(chan struct{})
+	go func() {
+		for range events {
+		}
+		close(done)
+	}()
+
+	waitForNSignals(t, slowStarted, 1, waitTimeout)
+	waitForNSignals(t, fastDone, 1, waitTimeout)
+	waitForNSignals(t, downStarted, 1, waitTimeout)
+
+	close(slowRelease)
+
+	select {
+	case <-done:
+	case <-time.After(waitTimeout):
+		t.Fatal("timeout waiting for graphagent to complete")
+	}
+}
+
 func updateMaxInt64(max *atomic.Int64, value int64) {
 	for {
 		current := max.Load()

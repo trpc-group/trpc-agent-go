@@ -14,6 +14,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,6 +26,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+const sqliteCGOStubSubstring = "requires cgo"
 
 func TestCheckpointManager_FullFlow_InMemorySaver(t *testing.T) {
 	ctx := context.Background()
@@ -308,6 +311,9 @@ func TestCheckpointManager_BranchFrom_CrossNamespace_SQLite(t *testing.T) {
 	defer cleanup()
 
 	saver, err := sqlite.NewSaver(db)
+	if err != nil && strings.Contains(err.Error(), sqliteCGOStubSubstring) {
+		t.Skip(err.Error())
+	}
 	require.NoError(t, err)
 	defer saver.Close()
 

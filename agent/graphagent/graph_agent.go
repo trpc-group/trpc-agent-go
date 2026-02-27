@@ -69,6 +69,10 @@ func New(name string, g *graph.Graph, opts ...Option) (*GraphAgent, error) {
 		executorOpts = append(executorOpts,
 			graph.WithCheckpointSaver(options.CheckpointSaver))
 	}
+	if options.ExecutionEngine != "" {
+		executorOpts = append(executorOpts,
+			graph.WithExecutionEngine(options.ExecutionEngine))
+	}
 
 	// Then, append user-provided executor options.
 	// These options are applied after the mapped options, so they can override
