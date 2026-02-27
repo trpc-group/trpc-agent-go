@@ -12,6 +12,7 @@ package util
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"strconv"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	_ "github.com/mattn/go-sqlite3"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -31,6 +33,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session/mysql"
 	"trpc.group/trpc-go/trpc-agent-go/session/postgres"
 	"trpc.group/trpc-go/trpc-agent-go/session/redis"
+	sessionsqlite "trpc.group/trpc-go/trpc-agent-go/session/sqlite"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -40,6 +43,7 @@ type SessionType string
 // Session type constants.
 const (
 	SessionInMemory   SessionType = "inmemory"
+	SessionSQLite     SessionType = "sqlite"
 	SessionRedis      SessionType = "redis"
 	SessionPostgres   SessionType = "postgres"
 	SessionMySQL      SessionType = "mysql"
@@ -57,17 +61,20 @@ type SessionServiceConfig struct {
 // NewSessionServiceByType creates a session service based on the specified type.
 //
 // Parameters:
-//   - sessionType: one of inmemory, redis, postgres, mysql, clickhouse
+//   - sessionType: one of inmemory, sqlite, redis, postgres, mysql, clickhouse
 //   - cfg: session service configuration (eventLimit, ttl, hooks)
 //
 // Environment variables by session type:
 //
+//	sqlite:     SQLITE_SESSION_DSN (default: file:sessions.db?_busy_timeout=5000)
 //	redis:      REDIS_ADDR (default: localhost:6379)
 //	postgres:   PG_HOST, PG_PORT, PG_USER, PG_PASSWORD, PG_DATABASE
 //	mysql:      MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE
 //	clickhouse: CLICKHOUSE_HOST, CLICKHOUSE_PORT, CLICKHOUSE_USER, CLICKHOUSE_PASSWORD, CLICKHOUSE_DATABASE
 func NewSessionServiceByType(sessionType SessionType, cfg SessionServiceConfig) (session.Service, error) {
 	switch sessionType {
+	case SessionSQLite:
+		return newSQLiteSessionService(cfg)
 	case SessionRedis:
 		return newRedisSessionService(cfg)
 	case SessionPostgres:
@@ -81,6 +88,37 @@ func NewSessionServiceByType(sessionType SessionType, cfg SessionServiceConfig) 
 	default:
 		return newInMemorySessionService(cfg), nil
 	}
+}
+
+const (
+	sqliteSessionDSNEnvKey    = "SQLITE_SESSION_DSN"
+	defaultSQLiteSessionDBDSN = "file:sessions.db?_busy_timeout=5000"
+	sqliteDriverName          = "sqlite3"
+	defaultSQLiteMaxOpenConns = 1
+	defaultSQLiteMaxIdleConns = 1
+)
+
+func newSQLiteSessionService(cfg SessionServiceConfig) (session.Service, error) {
+	dsn := GetEnvOrDefault(sqliteSessionDSNEnvKey, defaultSQLiteSessionDBDSN)
+	db, err := sql.Open(sqliteDriverName, dsn)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(defaultSQLiteMaxOpenConns)
+	db.SetMaxIdleConns(defaultSQLiteMaxIdleConns)
+
+	svc, err := sessionsqlite.NewService(
+		db,
+		sessionsqlite.WithSessionEventLimit(cfg.EventLimit),
+		sessionsqlite.WithSessionTTL(cfg.TTL),
+		sessionsqlite.WithAppendEventHook(cfg.AppendEventHooks...),
+		sessionsqlite.WithGetSessionHook(cfg.GetSessionHooks...),
+	)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return svc, nil
 }
 
 func newInMemorySessionService(cfg SessionServiceConfig) session.Service {
@@ -199,7 +237,7 @@ type RunnerConfig struct {
 	Instruction string
 	Tools       []tool.Tool
 	MaxTokens   int
-	Temperature float64
+	Temperature *float64
 	Streaming   bool
 }
 
@@ -210,8 +248,8 @@ func DefaultRunnerConfig() RunnerConfig {
 		AgentName:   "demo-assistant",
 		ModelName:   GetEnvOrDefault("MODEL_NAME", "deepseek-chat"),
 		Instruction: "You are a helpful assistant.",
-		MaxTokens:   100,
-		Temperature: 0.1,
+		MaxTokens:   0,
+		Temperature: nil,
 		Streaming:   false,
 	}
 }
@@ -221,9 +259,11 @@ func NewRunner(sessionService session.Service, cfg RunnerConfig) runner.Runner {
 	modelInstance := openai.New(cfg.ModelName, openai.WithVariant(openai.VariantOpenAI))
 
 	genConfig := model.GenerationConfig{
-		MaxTokens:   IntPtr(cfg.MaxTokens),
-		Temperature: FloatPtr(cfg.Temperature),
+		Temperature: cfg.Temperature,
 		Stream:      cfg.Streaming,
+	}
+	if cfg.MaxTokens > 0 {
+		genConfig.MaxTokens = IntPtr(cfg.MaxTokens)
 	}
 
 	agentOpts := []llmagent.Option{
@@ -258,15 +298,24 @@ func RunAgent(ctx context.Context, r runner.Runner, userID, sessionID, message s
 		fmt.Printf("│  User: %s\n", Truncate(message, 55))
 	}
 
-	var response string
+	var (
+		response string
+		runErr   error
+	)
 	for evt := range eventChan {
-		if evt.Error != nil {
-			return "", fmt.Errorf("event error: %s", evt.Error.Message)
+		if evt.Error != nil && runErr == nil {
+			runErr = fmt.Errorf("event error: %s", evt.Error.Message)
+			continue
 		}
-		response = ExtractResponse(evt)
-		if evt.IsFinalResponse() {
-			break
+
+		content := ExtractResponse(evt)
+		if content != "" {
+			response = content
 		}
+	}
+
+	if runErr != nil {
+		return "", runErr
 	}
 
 	if printConversation {

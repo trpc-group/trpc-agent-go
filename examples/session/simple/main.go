@@ -14,12 +14,16 @@
 // Usage:
 //
 //	go run main.go -session=inmemory
+//	go run main.go -session=sqlite
 //	go run main.go -session=redis
 //	go run main.go -session=postgres
 //	go run main.go -session=mysql
 //	go run main.go -session=clickhouse
 //
 // Environment variables by session type (example usage):
+//
+//	sqlite:
+//		export SQLITE_SESSION_DSN="file:sessions.db?_busy_timeout=5000"
 //
 //	redis:
 //		export REDIS_ADDR="localhost:6379"
@@ -69,12 +73,38 @@ import (
 )
 
 var (
-	modelName       = flag.String("model", os.Getenv("MODEL_NAME"), "Name of the model to use (default: MODEL_NAME env var)")
-	sessServiceName = flag.String("session", "inmemory", "Name of the session service to use, inmemory / redis / postgres / mysql / clickhouse")
-	streaming       = flag.Bool("streaming", true, "Enable streaming mode for responses")
-	eventLimit      = flag.Int("event-limit", 1000, "Maximum number of events to store per session")
-	sessionTTL      = flag.Duration("session-ttl", 10*time.Second, "Session time-to-live duration")
-	debugMode       = flag.Bool("debug", true, "Enable debug mode to print session events after each turn")
+	modelName = flag.String(
+		"model",
+		os.Getenv("MODEL_NAME"),
+		"Name of the model to use (default: MODEL_NAME env var)",
+	)
+	sessServiceName = flag.String(
+		"session",
+		"inmemory",
+		"Name of the session service to use, inmemory / "+
+			"sqlite / redis / postgres / mysql / clickhouse",
+	)
+	streaming = flag.Bool(
+		"streaming",
+		true,
+		"Enable streaming mode for responses",
+	)
+	eventLimit = flag.Int(
+		"event-limit",
+		1000,
+		"Maximum number of events to store per session",
+	)
+	sessionTTL = flag.Duration(
+		"session-ttl",
+		10*time.Second,
+		"Session time-to-live duration",
+	)
+	debugMode = flag.Bool(
+		"debug",
+		true,
+		"Enable debug mode to print session events after each "+
+			"turn",
+	)
 )
 
 func main() {

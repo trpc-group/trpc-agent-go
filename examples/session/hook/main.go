@@ -20,6 +20,7 @@
 // Usage:
 //
 //	go run . -session=inmemory
+//	go run . -session=sqlite
 //	go run . -session=redis -consecutive=merge
 //	go run . -session=postgres -consecutive=placeholder
 //	go run . -session=mysql -consecutive=skip
@@ -28,6 +29,7 @@
 // Environment variables:
 //
 //	MODEL_NAME: model name (default: deepseek-chat)
+//	sqlite:     SQLITE_SESSION_DSN (default: file:sessions.db?_busy_timeout=5000)
 //	redis:      REDIS_ADDR (default: localhost:6379)
 //	postgres:   PG_HOST, PG_PORT, PG_USER, PG_PASSWORD, PG_DATABASE
 //	mysql:      MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE
@@ -56,9 +58,24 @@ import (
 )
 
 var (
-	modelName          = flag.String("model", os.Getenv("MODEL_NAME"), "Name of the model to use (default: MODEL_NAME env var or deepseek-chat)")
-	sessionType        = flag.String("session", "inmemory", "Session backend: inmemory / redis / postgres / mysql / clickhouse")
-	consecutiveHandler = flag.String("consecutive", "", "Consecutive user message strategy: merge / placeholder / skip (empty = disabled)")
+	modelName = flag.String(
+		"model",
+		os.Getenv("MODEL_NAME"),
+		"Name of the model to use (default: MODEL_NAME env "+
+			"var or deepseek-chat)",
+	)
+	sessionType = flag.String(
+		"session",
+		"inmemory",
+		"Session backend: inmemory / sqlite / redis / "+
+			"postgres / mysql / clickhouse",
+	)
+	consecutiveHandler = flag.String(
+		"consecutive",
+		"",
+		"Consecutive user message strategy: merge / "+
+			"placeholder / skip (empty = disabled)",
+	)
 )
 
 func getModelName() string {

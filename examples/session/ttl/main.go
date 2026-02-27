@@ -16,6 +16,7 @@
 // Usage:
 //
 //	go run main.go -session=inmemory
+//	go run main.go -session=sqlite
 //	go run main.go -session=redis
 //	go run main.go -session=mysql
 //	go run main.go -session=postgres
@@ -23,6 +24,7 @@
 //
 // Environment variables by session type:
 //
+//	sqlite:     SQLITE_SESSION_DSN (default: file:sessions.db?_busy_timeout=5000)
 //	redis:      REDIS_ADDR (default: localhost:6379)
 //	postgres:   PG_HOST, PG_PORT, PG_USER, PG_PASSWORD, PG_DATABASE
 //	mysql:      MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE
@@ -42,9 +44,23 @@ import (
 )
 
 var (
-	modelName   = flag.String("model", os.Getenv("MODEL_NAME"), "Name of the model to use (default: MODEL_NAME env var)")
-	sessionType = flag.String("session", "inmemory", "Session backend: inmemory/redis/mysql/postgres/clickhouse")
-	ttlSeconds  = flag.Int("ttl", 10, "Session TTL in seconds (should be longer than total conversation time)")
+	modelName = flag.String(
+		"model",
+		os.Getenv("MODEL_NAME"),
+		"Name of the model to use (default: MODEL_NAME env var)",
+	)
+	sessionType = flag.String(
+		"session",
+		"inmemory",
+		"Session backend: inmemory/sqlite/redis/mysql/"+
+			"postgres/clickhouse",
+	)
+	ttlSeconds = flag.Int(
+		"ttl",
+		10,
+		"Session TTL in seconds (should be longer than "+
+			"total conversation time)",
+	)
 )
 
 const (
