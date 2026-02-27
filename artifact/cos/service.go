@@ -35,8 +35,9 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"sort"
+	"os"
 	"strconv"
+	"sort"
 	"strings"
 	"time"
 
@@ -55,6 +56,10 @@ import (
 //     {app_name}/{user_id}/{session_id}/{filename}/{version}
 type Service struct {
 	cosClient client
+	secretID  string
+	secretKey string
+
+	presignExpires time.Duration
 }
 
 const defaultTimeout = 60 * time.Second
@@ -83,6 +88,17 @@ const defaultTimeout = 60 * time.Second
 //	cosClient := cos.NewClient("service-name", baseURL, httpClient)
 //	service := cos.NewService("service-name", cos.WithClient(cosClient))
 func NewService(name, bucketURL string, opts ...Option) (*Service, error) {
+	// capture options for presigning
+	o := &options{
+		timeout:        defaultTimeout,
+		secretID:       os.Getenv("COS_SECRETID"),
+		secretKey:      os.Getenv("COS_SECRETKEY"),
+		presignExpires: 15 * time.Minute,
+	}
+	for _, opt := range opts {
+		opt(o)
+	}
+
 	c, err := globalBuilder(name, bucketURL, opts...)
 	if err != nil {
 		return nil, err
@@ -92,7 +108,10 @@ func NewService(name, bucketURL string, opts ...Option) (*Service, error) {
 		return nil, fmt.Errorf("client builder returned invalid type: expected client interface, got %T", c)
 	}
 	return &Service{
-		cosClient: cli,
+		cosClient:       cli,
+		secretID:        o.secretID,
+		secretKey:       o.secretKey,
+		presignExpires:  o.presignExpires,
 	}, nil
 }
 
@@ -127,8 +146,7 @@ func (s *Service) SaveArtifact(ctx context.Context, sessionInfo artifact.Session
 	return version, nil
 }
 
-// LoadArtifact gets an artifact from Tencent Cloud Object Storage.
-func (s *Service) LoadArtifact(ctx context.Context, sessionInfo artifact.SessionInfo, filename string, version *int) (*artifact.Artifact, error) {
+func (s *Service) ResolveArtifact(ctx context.Context, sessionInfo artifact.SessionInfo, filename string, version *int) (*artifact.ArtifactDescriptor, error) {
 	var targetVersion int
 
 	if version == nil {
@@ -154,33 +172,124 @@ func (s *Service) LoadArtifact(ctx context.Context, sessionInfo artifact.Session
 
 	objectName := iartifact.BuildObjectName(sessionInfo, filename, targetVersion)
 
-	// Download the artifact
-	respBody, respHeader, err := s.cosClient.GetObject(ctx, objectName)
+	h, err := s.cosClient.HeadObject(ctx, objectName)
 	if err != nil {
 		if cos.IsNotFoundError(err) {
-			return nil, nil // Artifact not found
+			return nil, nil
 		}
-		return nil, fmt.Errorf("failed to download artifact: %w", err)
-	}
-	defer respBody.Close()
-
-	// Read the data
-	data, err := io.ReadAll(respBody)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read artifact data: %w", err)
+		return nil, fmt.Errorf("failed to resolve artifact: %w", err)
 	}
 
-	// Get content type from response headers
-	contentType := respHeader.Get("Content-Type")
+	contentType := h.Get("Content-Type")
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
 
-	return &artifact.Artifact{
-		Data:     data,
-		MimeType: contentType,
+	var size int64
+	if cl := h.Get("Content-Length"); cl != "" {
+		if n, err := strconv.ParseInt(cl, 10, 64); err == nil {
+			size = n
+		}
+	}
+
+	desc := &artifact.ArtifactDescriptor{
 		Name:     filename,
-	}, nil
+		Version:  targetVersion,
+		MimeType: contentType,
+		Size:     size,
+	}
+
+	// Best-effort URL: presign if we have credentials, else object URL.
+	if s.secretID != "" && s.secretKey != "" {
+		if u, err := s.cosClient.PresignGetObject(ctx, objectName, s.secretID, s.secretKey, s.presignExpires); err == nil && u != nil {
+			desc.URL = u.String()
+		}
+	}
+	if desc.URL == "" {
+		if u := s.cosClient.ObjectURL(objectName); u != nil {
+			desc.URL = u.String()
+		}
+	}
+
+	return desc, nil
+}
+
+// LoadArtifact opens an artifact stream from Tencent Cloud Object Storage.
+func (s *Service) LoadArtifact(ctx context.Context, sessionInfo artifact.SessionInfo, filename string, version *int) (io.ReadCloser, *artifact.ArtifactDescriptor, error) {
+	var targetVersion int
+
+	if version == nil {
+		versions, err := s.ListVersions(ctx, sessionInfo, filename)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to list versions: %w", err)
+		}
+		if len(versions) == 0 {
+			return nil, nil, nil
+		}
+
+		maxVersion := 0
+		for _, v := range versions {
+			if v > maxVersion {
+				maxVersion = v
+			}
+		}
+		targetVersion = maxVersion
+	} else {
+		targetVersion = *version
+	}
+
+	objectName := iartifact.BuildObjectName(sessionInfo, filename, targetVersion)
+
+	body, header, err := s.cosClient.GetObject(ctx, objectName)
+	if err != nil {
+		if cos.IsNotFoundError(err) {
+			return nil, nil, nil
+		}
+		return nil, nil, fmt.Errorf("failed to download artifact: %w", err)
+	}
+
+	contentType := header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	var size int64
+	if cl := header.Get("Content-Length"); cl != "" {
+		if n, err := strconv.ParseInt(cl, 10, 64); err == nil {
+			size = n
+		}
+	}
+
+	desc := &artifact.ArtifactDescriptor{
+		Name:     filename,
+		Version:  targetVersion,
+		MimeType: contentType,
+		Size:     size,
+	}
+	if s.secretID != "" && s.secretKey != "" {
+		if u, err := s.cosClient.PresignGetObject(ctx, objectName, s.secretID, s.secretKey, s.presignExpires); err == nil && u != nil {
+			desc.URL = u.String()
+		}
+	}
+	if desc.URL == "" {
+		if u := s.cosClient.ObjectURL(objectName); u != nil {
+			desc.URL = u.String()
+		}
+	}
+
+	return body, desc, nil
+}
+
+func (s *Service) LoadArtifactBytes(ctx context.Context, sessionInfo artifact.SessionInfo, filename string, version *int) ([]byte, *artifact.ArtifactDescriptor, error) {
+	rc, desc, err := s.LoadArtifact(ctx, sessionInfo, filename, version)
+	if err != nil || rc == nil {
+		return nil, desc, err
+	}
+	defer rc.Close()
+	data, err := io.ReadAll(rc)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to read artifact data: %w", err)
+	}
+	return data, desc, nil
 }
 
 // ListArtifactKeys lists all the artifact filenames within a session from TCOS.

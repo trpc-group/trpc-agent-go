@@ -39,11 +39,16 @@ func displayImage(ctx context.Context, _ displayImageInput) (displayImageOutput,
 	}
 	var output displayImageOutput
 	for _, key := range stateValue.ImageIDs {
-		a, err := tc.LoadArtifact(key, nil)
+		desc, err := tc.ResolveArtifact(key, nil)
 		if err != nil {
 			output.Result += fmt.Sprintf("failed to load image from artifact %s: %s\n", key, err)
+			continue
 		}
-		output.Result += fmt.Sprintf("Display image MimeType: %s, URL: %s\n", a.MimeType, a.URL)
+		if desc == nil {
+			output.Result += fmt.Sprintf("artifact not found: %s\n", key)
+			continue
+		}
+		output.Result += fmt.Sprintf("Display image MimeType: %s, URL: %s\n", desc.MimeType, desc.URL)
 	}
 	return output, nil
 }

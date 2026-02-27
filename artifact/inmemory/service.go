@@ -11,8 +11,10 @@
 package inmemory
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"sync"
@@ -53,8 +55,7 @@ func (s *Service) SaveArtifact(ctx context.Context, sessionInfo artifact.Session
 	return version, nil
 }
 
-// LoadArtifact gets an artifact from the in-memory storage.
-func (s *Service) LoadArtifact(ctx context.Context, sessionInfo artifact.SessionInfo, filename string, version *int) (*artifact.Artifact, error) {
+func (s *Service) ResolveArtifact(ctx context.Context, sessionInfo artifact.SessionInfo, filename string, version *int) (*artifact.ArtifactDescriptor, error) {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
@@ -75,7 +76,66 @@ func (s *Service) LoadArtifact(ctx context.Context, sessionInfo artifact.Session
 		}
 	}
 
-	return versions[versionIndex], nil
+	art := versions[versionIndex]
+	mt := art.MimeType
+	if mt == "" {
+		mt = "application/octet-stream"
+	}
+
+	return &artifact.ArtifactDescriptor{
+		Name:     filename,
+		Version:  versionIndex,
+		MimeType: mt,
+		Size:     int64(len(art.Data)),
+	}, nil
+}
+
+func (s *Service) LoadArtifact(ctx context.Context, sessionInfo artifact.SessionInfo, filename string, version *int) (io.ReadCloser, *artifact.ArtifactDescriptor, error) {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+
+	path := iartifact.BuildArtifactPath(sessionInfo, filename)
+	versions, exists := s.artifacts[path]
+	if !exists || len(versions) == 0 {
+		return nil, nil, nil
+	}
+
+	var versionIndex int
+	if version == nil {
+		versionIndex = len(versions) - 1
+	} else {
+		versionIndex = *version
+		if versionIndex < 0 || versionIndex >= len(versions) {
+			return nil, nil, fmt.Errorf("version %d does not exist", *version)
+		}
+	}
+
+	art := versions[versionIndex]
+	mt := art.MimeType
+	if mt == "" {
+		mt = "application/octet-stream"
+	}
+	desc := &artifact.ArtifactDescriptor{
+		Name:     filename,
+		Version:  versionIndex,
+		MimeType: mt,
+		Size:     int64(len(art.Data)),
+	}
+
+	return io.NopCloser(bytes.NewReader(art.Data)), desc, nil
+}
+
+func (s *Service) LoadArtifactBytes(ctx context.Context, sessionInfo artifact.SessionInfo, filename string, version *int) ([]byte, *artifact.ArtifactDescriptor, error) {
+	rc, desc, err := s.LoadArtifact(ctx, sessionInfo, filename, version)
+	if err != nil || rc == nil {
+		return nil, desc, err
+	}
+	defer rc.Close()
+	data, err := io.ReadAll(rc)
+	if err != nil {
+		return nil, nil, err
+	}
+	return data, desc, nil
 }
 
 // ListArtifactKeys lists all the artifact filenames within a session.

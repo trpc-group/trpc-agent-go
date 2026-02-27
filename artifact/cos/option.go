@@ -29,6 +29,8 @@ type options struct {
 	timeout   time.Duration
 	secretID  string
 	secretKey string
+
+	presignExpires time.Duration
 }
 
 // WithClient sets the COS client directly.
@@ -69,6 +71,14 @@ func WithSecretKey(secretKey string) Option {
 	}
 }
 
+// WithPresignExpires sets the TTL for generated presigned URLs.
+// If not set, a default is used.
+func WithPresignExpires(expires time.Duration) Option {
+	return func(o *options) {
+		o.presignExpires = expires
+	}
+}
+
 // SetClientBuilder sets the redis client builder.
 // This function signature is unstable and may change in the future.
 // You should not rely on it.
@@ -86,6 +96,7 @@ func defaultClientBuilder(name string, bucketURL string, opts ...Option) (any, e
 		timeout:   defaultTimeout,
 		secretID:  os.Getenv("COS_SECRETID"),
 		secretKey: os.Getenv("COS_SECRETKEY"),
+		presignExpires: 15 * time.Minute,
 	}
 
 	// Apply provided options

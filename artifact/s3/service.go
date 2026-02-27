@@ -16,9 +16,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	iartifact "trpc.group/trpc-go/trpc-agent-go/internal/artifact"
@@ -45,6 +47,7 @@ type Service struct {
 	client     s3storage.Client
 	ownsClient bool // true if we created the client, false if provided via WithClient
 	logger     log.Logger
+	presignExpires time.Duration
 }
 
 // NewService creates a new S3 artifact service.
@@ -52,6 +55,7 @@ type Service struct {
 func NewService(ctx context.Context, bucket string, opts ...Option) (*Service, error) {
 	o := &options{
 		bucket: bucket,
+		presignExpires: 15 * time.Minute,
 	}
 	for _, opt := range opts {
 		opt(o)
@@ -77,6 +81,7 @@ func NewService(ctx context.Context, bucket string, opts ...Option) (*Service, e
 		client:     client,
 		ownsClient: ownsClient,
 		logger:     o.logger,
+		presignExpires: o.presignExpires,
 	}, nil
 }
 
@@ -132,14 +137,12 @@ func (s *Service) SaveArtifact(
 	return version, nil
 }
 
-// LoadArtifact loads an artifact from S3.
-// If version is nil, the latest version is loaded.
-func (s *Service) LoadArtifact(
+func (s *Service) ResolveArtifact(
 	ctx context.Context,
 	sessionInfo artifact.SessionInfo,
 	filename string,
 	version *int,
-) (*artifact.Artifact, error) {
+) (*artifact.ArtifactDescriptor, error) {
 	if err := validateSessionInfo(sessionInfo); err != nil {
 		return nil, err
 	}
@@ -166,7 +169,7 @@ func (s *Service) LoadArtifact(
 	}
 
 	objectKey := iartifact.BuildObjectName(sessionInfo, filename, targetVersion)
-	data, contentType, err := s.client.GetObject(ctx, objectKey)
+	contentType, size, err := s.client.HeadObject(ctx, objectKey)
 	if err != nil {
 		if errors.Is(err, s3storage.ErrNotFound) {
 			if s.logger != nil {
@@ -180,14 +183,101 @@ func (s *Service) LoadArtifact(
 			}
 			return nil, nil
 		}
-		return nil, fmt.Errorf("failed to download artifact: %w", err)
+		return nil, fmt.Errorf("failed to resolve artifact: %w", err)
 	}
 
-	return &artifact.Artifact{
-		Data:     data,
-		MimeType: cmp.Or(contentType, defaultContentType),
+	desc := &artifact.ArtifactDescriptor{
 		Name:     filename,
-	}, nil
+		Version:  targetVersion,
+		MimeType: cmp.Or(contentType, defaultContentType),
+		Size:     size,
+	}
+	if u, err := s.client.PresignGetObject(ctx, objectKey, s.presignExpires); err == nil && u != "" {
+		desc.URL = u
+	}
+	return desc, nil
+}
+
+// LoadArtifact opens a streaming reader for an artifact from S3.
+// If version is nil, the latest version is loaded.
+func (s *Service) LoadArtifact(
+	ctx context.Context,
+	sessionInfo artifact.SessionInfo,
+	filename string,
+	version *int,
+) (io.ReadCloser, *artifact.ArtifactDescriptor, error) {
+	if err := validateSessionInfo(sessionInfo); err != nil {
+		return nil, nil, err
+	}
+	if err := validateFilename(filename); err != nil {
+		return nil, nil, err
+	}
+
+	targetVersion := 0
+	if version != nil {
+		targetVersion = *version
+	} else {
+		versions, err := s.listVersions(ctx, sessionInfo, filename)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to list versions: %w", err)
+		}
+		if len(versions) == 0 {
+			if s.logger != nil {
+				s.logger.Debugf("artifact not found: %s/%s/%s/%s",
+					sessionInfo.AppName, sessionInfo.UserID, sessionInfo.SessionID, filename)
+			}
+			return nil, nil, nil
+		}
+		targetVersion = slices.Max(versions)
+	}
+
+	objectKey := iartifact.BuildObjectName(sessionInfo, filename, targetVersion)
+	body, contentType, size, err := s.client.OpenObject(ctx, objectKey)
+	if err != nil {
+		if errors.Is(err, s3storage.ErrNotFound) {
+			if s.logger != nil {
+				if version != nil {
+					s.logger.Debugf("artifact version not found: %s/%s/%s/%s@%d",
+						sessionInfo.AppName, sessionInfo.UserID, sessionInfo.SessionID, filename, *version)
+				} else {
+					s.logger.Debugf("artifact not found: %s/%s/%s/%s",
+						sessionInfo.AppName, sessionInfo.UserID, sessionInfo.SessionID, filename)
+				}
+			}
+			return nil, nil, nil
+		}
+		return nil, nil, fmt.Errorf("failed to open artifact: %w", err)
+	}
+
+	desc := &artifact.ArtifactDescriptor{
+		Name:     filename,
+		Version:  targetVersion,
+		MimeType: cmp.Or(contentType, defaultContentType),
+		Size:     size,
+	}
+	if u, err := s.client.PresignGetObject(ctx, objectKey, s.presignExpires); err == nil && u != "" {
+		desc.URL = u
+	}
+
+	return body, desc, nil
+}
+
+func (s *Service) LoadArtifactBytes(
+	ctx context.Context,
+	sessionInfo artifact.SessionInfo,
+	filename string,
+	version *int,
+) ([]byte, *artifact.ArtifactDescriptor, error) {
+	rc, desc, err := s.LoadArtifact(ctx, sessionInfo, filename, version)
+	if err != nil || rc == nil {
+		return nil, desc, err
+	}
+	defer rc.Close()
+	data, err := io.ReadAll(rc)
+	if err != nil {
+		return nil, nil, err
+	}
+	return data, desc, nil
 }
 
 // ListArtifactKeys lists all artifact filenames within a session.

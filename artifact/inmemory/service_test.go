@@ -39,9 +39,11 @@ func TestSaveArtifact(t *testing.T) {
 	}
 
 	testArtifact := &artifact.Artifact{
-		Data:     []byte("test data"),
-		MimeType: "text/plain",
-		Name:     "test.txt",
+		ArtifactDescriptor: artifact.ArtifactDescriptor{
+			MimeType: "text/plain",
+			Name:     "test.txt",
+		},
+		Data: []byte("test data"),
 	}
 
 	// Save first version
@@ -51,9 +53,11 @@ func TestSaveArtifact(t *testing.T) {
 
 	// Save second version
 	testArtifact2 := &artifact.Artifact{
-		Data:     []byte("test data v2"),
-		MimeType: "text/plain",
-		Name:     "test.txt",
+		ArtifactDescriptor: artifact.ArtifactDescriptor{
+			MimeType: "text/plain",
+			Name:     "test.txt",
+		},
+		Data: []byte("test data v2"),
 	}
 
 	version, err = service.SaveArtifact(ctx, sessionInfo, "test.txt", testArtifact2)
@@ -72,34 +76,42 @@ func TestLoadArtifact(t *testing.T) {
 	}
 
 	// Test loading non-existent artifact
-	loadedArtifact, err := service.LoadArtifact(ctx, sessionInfo, "nonexistent.txt", nil)
+	data, desc, err := service.LoadArtifactBytes(ctx, sessionInfo, "nonexistent.txt", nil)
 	require.NoError(t, err)
-	assert.Nil(t, loadedArtifact)
+	assert.Nil(t, data)
+	assert.Nil(t, desc)
 
 	// Save an artifact first
 	testArtifact := &artifact.Artifact{
-		Data:     []byte("test data"),
-		MimeType: "text/plain",
-		Name:     "test.txt",
+		ArtifactDescriptor: artifact.ArtifactDescriptor{
+			MimeType: "text/plain",
+			Name:     "test.txt",
+		},
+		Data: []byte("test data"),
 	}
 
 	_, err = service.SaveArtifact(ctx, sessionInfo, "test.txt", testArtifact)
 	require.NoError(t, err)
 
 	// Load latest version (nil version)
-	loadedArtifact, err = service.LoadArtifact(ctx, sessionInfo, "test.txt", nil)
+	data, desc, err = service.LoadArtifactBytes(ctx, sessionInfo, "test.txt", nil)
 	require.NoError(t, err)
-	assert.Equal(t, testArtifact, loadedArtifact)
+	require.NotNil(t, desc)
+	assert.Equal(t, []byte("test data"), data)
+	assert.Equal(t, 0, desc.Version)
+	assert.Equal(t, "text/plain", desc.MimeType)
 
 	// Load specific version
 	version := 0
-	loadedArtifact, err = service.LoadArtifact(ctx, sessionInfo, "test.txt", &version)
+	data, desc, err = service.LoadArtifactBytes(ctx, sessionInfo, "test.txt", &version)
 	require.NoError(t, err)
-	assert.Equal(t, testArtifact, loadedArtifact)
+	require.NotNil(t, desc)
+	assert.Equal(t, []byte("test data"), data)
+	assert.Equal(t, 0, desc.Version)
 
 	// Test loading invalid version
 	invalidVersion := 999
-	_, err = service.LoadArtifact(ctx, sessionInfo, "test.txt", &invalidVersion)
+	_, _, err = service.LoadArtifactBytes(ctx, sessionInfo, "test.txt", &invalidVersion)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "version 999 does not exist")
 }
@@ -116,9 +128,9 @@ func TestLoadArtifactMultipleVersions(t *testing.T) {
 
 	// Save multiple versions
 	artifacts := []*artifact.Artifact{
-		{Data: []byte("version 0"), MimeType: "text/plain", Name: "test.txt"},
-		{Data: []byte("version 1"), MimeType: "text/plain", Name: "test.txt"},
-		{Data: []byte("version 2"), MimeType: "text/plain", Name: "test.txt"},
+		{ArtifactDescriptor: artifact.ArtifactDescriptor{MimeType: "text/plain", Name: "test.txt"}, Data: []byte("version 0")},
+		{ArtifactDescriptor: artifact.ArtifactDescriptor{MimeType: "text/plain", Name: "test.txt"}, Data: []byte("version 1")},
+		{ArtifactDescriptor: artifact.ArtifactDescriptor{MimeType: "text/plain", Name: "test.txt"}, Data: []byte("version 2")},
 	}
 
 	for i, art := range artifacts {
@@ -128,16 +140,21 @@ func TestLoadArtifactMultipleVersions(t *testing.T) {
 	}
 
 	// Load latest version (should be version 2)
-	latestArtifact, err := service.LoadArtifact(ctx, sessionInfo, "test.txt", nil)
+	data, desc, err := service.LoadArtifactBytes(ctx, sessionInfo, "test.txt", nil)
 	require.NoError(t, err)
-	assert.Equal(t, artifacts[2], latestArtifact)
+	require.NotNil(t, desc)
+	assert.Equal(t, artifacts[2].Data, data)
+	assert.Equal(t, 2, desc.Version)
+	assert.Equal(t, "text/plain", desc.MimeType)
 
 	// Load specific versions
 	for i, expectedArt := range artifacts {
 		version := i
-		loadedArtifact, err := service.LoadArtifact(ctx, sessionInfo, "test.txt", &version)
+		data, desc, err := service.LoadArtifactBytes(ctx, sessionInfo, "test.txt", &version)
 		require.NoError(t, err)
-		assert.Equal(t, expectedArt, loadedArtifact)
+		require.NotNil(t, desc)
+		assert.Equal(t, expectedArt.Data, data)
+		assert.Equal(t, i, desc.Version)
 	}
 }
 
@@ -158,9 +175,11 @@ func TestListArtifactKeys(t *testing.T) {
 
 	// Add session-scoped artifacts
 	testArtifact := &artifact.Artifact{
-		Data:     []byte("test data"),
-		MimeType: "text/plain",
-		Name:     "test.txt",
+		ArtifactDescriptor: artifact.ArtifactDescriptor{
+			MimeType: "text/plain",
+			Name:     "test.txt",
+		},
+		Data: []byte("test data"),
 	}
 
 	_, err = service.SaveArtifact(ctx, sessionInfo, "document.pdf", testArtifact)
@@ -201,9 +220,11 @@ func TestListArtifactKeys_DifferentSessions(t *testing.T) {
 	}
 
 	testArtifact := &artifact.Artifact{
-		Data:     []byte("test data"),
-		MimeType: "text/plain",
-		Name:     "test.txt",
+		ArtifactDescriptor: artifact.ArtifactDescriptor{
+			MimeType: "text/plain",
+			Name:     "test.txt",
+		},
+		Data: []byte("test data"),
 	}
 
 	// Add artifacts to different sessions
@@ -244,9 +265,11 @@ func TestDeleteArtifact(t *testing.T) {
 
 	// Save an artifact
 	testArtifact := &artifact.Artifact{
-		Data:     []byte("test data"),
-		MimeType: "text/plain",
-		Name:     "test.txt",
+		ArtifactDescriptor: artifact.ArtifactDescriptor{
+			MimeType: "text/plain",
+			Name:     "test.txt",
+		},
+		Data: []byte("test data"),
 	}
 
 	_, err = service.SaveArtifact(ctx, sessionInfo, "test.txt", testArtifact)
@@ -267,9 +290,10 @@ func TestDeleteArtifact(t *testing.T) {
 	assert.NotContains(t, keys, "test.txt")
 
 	// Try to load deleted artifact
-	loadedArtifact, err := service.LoadArtifact(ctx, sessionInfo, "test.txt", nil)
+	data, desc, err := service.LoadArtifactBytes(ctx, sessionInfo, "test.txt", nil)
 	require.NoError(t, err)
-	assert.Nil(t, loadedArtifact)
+	assert.Nil(t, data)
+	assert.Nil(t, desc)
 }
 
 func TestListVersions(t *testing.T) {
@@ -289,9 +313,11 @@ func TestListVersions(t *testing.T) {
 
 	// Save multiple versions
 	testArtifact := &artifact.Artifact{
-		Data:     []byte("test data"),
-		MimeType: "text/plain",
-		Name:     "test.txt",
+		ArtifactDescriptor: artifact.ArtifactDescriptor{
+			MimeType: "text/plain",
+			Name:     "test.txt",
+		},
+		Data: []byte("test data"),
 	}
 
 	for i := 0; i < 3; i++ {
@@ -322,9 +348,11 @@ func TestUserNamespacedArtifacts(t *testing.T) {
 	}
 
 	testArtifact := &artifact.Artifact{
-		Data:     []byte("user data"),
-		MimeType: "text/plain",
-		Name:     "user:profile.txt",
+		ArtifactDescriptor: artifact.ArtifactDescriptor{
+			MimeType: "text/plain",
+			Name:     "user:profile.txt",
+		},
+		Data: []byte("user data"),
 	}
 
 	// Save user-namespaced artifact in session1
@@ -333,13 +361,15 @@ func TestUserNamespacedArtifacts(t *testing.T) {
 	assert.Equal(t, 0, version)
 
 	// User-namespaced artifact should be accessible from both sessions
-	loadedFromSession1, err := service.LoadArtifact(ctx, sessionInfo1, "user:profile.txt", nil)
+	data, desc, err := service.LoadArtifactBytes(ctx, sessionInfo1, "user:profile.txt", nil)
 	require.NoError(t, err)
-	assert.Equal(t, testArtifact, loadedFromSession1)
+	require.NotNil(t, desc)
+	assert.Equal(t, testArtifact.Data, data)
 
-	loadedFromSession2, err := service.LoadArtifact(ctx, sessionInfo2, "user:profile.txt", nil)
+	data, desc, err = service.LoadArtifactBytes(ctx, sessionInfo2, "user:profile.txt", nil)
 	require.NoError(t, err)
-	assert.Equal(t, testArtifact, loadedFromSession2)
+	require.NotNil(t, desc)
+	assert.Equal(t, testArtifact.Data, data)
 
 	// User-namespaced artifact should appear in both session's key lists
 	keys1, err := service.ListArtifactKeys(ctx, sessionInfo1)
@@ -362,9 +392,11 @@ func TestConcurrentAccess(t *testing.T) {
 	}
 
 	testArtifact := &artifact.Artifact{
-		Data:     []byte("test data"),
-		MimeType: "text/plain",
-		Name:     "test.txt",
+		ArtifactDescriptor: artifact.ArtifactDescriptor{
+			MimeType: "text/plain",
+			Name:     "test.txt",
+		},
+		Data: []byte("test data"),
 	}
 
 	// Test concurrent writes
@@ -392,9 +424,9 @@ func TestConcurrentAccess(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		go func(index int) {
 			filename := fmt.Sprintf("file%d.txt", index)
-			loadedArtifact, err := service.LoadArtifact(ctx, sessionInfo, filename, nil)
+			desc, err := service.ResolveArtifact(ctx, sessionInfo, filename, nil)
 			assert.NoError(t, err)
-			assert.NotNil(t, loadedArtifact)
+			assert.NotNil(t, desc)
 			done <- true
 		}(i)
 	}
@@ -416,9 +448,11 @@ func TestArtifactPathGeneration(t *testing.T) {
 	}
 
 	testArtifact := &artifact.Artifact{
-		Data:     []byte("test data"),
-		MimeType: "text/plain",
-		Name:     "test.txt",
+		ArtifactDescriptor: artifact.ArtifactDescriptor{
+			MimeType: "text/plain",
+			Name:     "test.txt",
+		},
+		Data: []byte("test data"),
 	}
 
 	// Save regular artifact
@@ -433,11 +467,11 @@ func TestArtifactPathGeneration(t *testing.T) {
 	assert.Len(t, service.artifacts, 2)
 
 	// Verify path structure by checking if artifacts can be loaded
-	regularArtifact, err := service.LoadArtifact(ctx, sessionInfo, "regular.txt", nil)
+	desc, err := service.ResolveArtifact(ctx, sessionInfo, "regular.txt", nil)
 	require.NoError(t, err)
-	assert.NotNil(t, regularArtifact)
+	assert.NotNil(t, desc)
 
-	userArtifact, err := service.LoadArtifact(ctx, sessionInfo, "user:namespaced.txt", nil)
+	desc, err = service.ResolveArtifact(ctx, sessionInfo, "user:namespaced.txt", nil)
 	require.NoError(t, err)
-	assert.NotNil(t, userArtifact)
+	assert.NotNil(t, desc)
 }

@@ -237,9 +237,11 @@ func myTool(ctx context.Context, input MyInput) (MyOutput, error) {
 
     // 创建制品
     artifact := &artifact.Artifact{
-        Data:     []byte("你好，世界！"),
-        MimeType: "text/plain",
-        Name:     "greeting.txt",
+        ArtifactDescriptor: artifact.ArtifactDescriptor{
+            MimeType: "text/plain",
+            Name:     "greeting.txt",
+        },
+        Data: []byte("你好，世界！"),
     }
 
     // 保存制品
@@ -248,8 +250,8 @@ func myTool(ctx context.Context, input MyInput) (MyOutput, error) {
         return MyOutput{}, err
     }
 
-    // 稍后加载制品
-    loadedArtifact, err := toolCtx.LoadArtifact("greeting.txt", nil) // nil 表示最新版本
+    // 稍后加载制品（读入内存）
+    data, desc, err := toolCtx.LoadArtifactBytes("greeting.txt", nil) // nil 表示最新版本
     if err != nil {
         return MyOutput{}, err
     }
@@ -291,10 +293,10 @@ v1, _ := toolCtx.SaveArtifact("document.txt", artifact2)
 
 // 加载特定版本
 oldVersion := 0
-artifact, _ := toolCtx.LoadArtifact("document.txt", &oldVersion)
+data, desc, _ := toolCtx.LoadArtifactBytes("document.txt", &oldVersion)
 
 // 加载最新版本
-artifact, _ := toolCtx.LoadArtifact("document.txt", nil)
+data, desc, _ = toolCtx.LoadArtifactBytes("document.txt", nil)
 ```
 
 ## Artifact Service 接口
@@ -306,8 +308,14 @@ type Service interface {
     // 保存制品并返回版本 ID
     SaveArtifact(ctx context.Context, sessionInfo SessionInfo, filename string, artifact *Artifact) (int, error)
     
-    // 加载制品（如果 version 为 nil 则加载最新版本）
-    LoadArtifact(ctx context.Context, sessionInfo SessionInfo, filename string, version *int) (*Artifact, error)
+    // 解析制品元信息与可选 URL（不下载内容）
+    ResolveArtifact(ctx context.Context, sessionInfo SessionInfo, filename string, version *int) (*ArtifactDescriptor, error)
+    
+    // 以流式方式加载制品（如果 version 为 nil 则加载最新版本）
+    LoadArtifact(ctx context.Context, sessionInfo SessionInfo, filename string, version *int) (io.ReadCloser, *ArtifactDescriptor, error)
+    
+    // 便捷方法：把制品完整读入内存
+    LoadArtifactBytes(ctx context.Context, sessionInfo SessionInfo, filename string, version *int) ([]byte, *ArtifactDescriptor, error)
     
     // 列出会话中的所有制品文件名
     ListArtifactKeys(ctx context.Context, sessionInfo SessionInfo) ([]string, error)

@@ -27,42 +27,19 @@ func LoadArtifactHelper(
 		return nil, "", 0, fmt.Errorf("artifact service not in context")
 	}
 	info := artifactSessionFromContext(ctx)
-	art, err := svc.LoadArtifact(ctx, info, name, version)
+	data, desc, err := svc.LoadArtifactBytes(ctx, info, name, version)
 	if err != nil {
 		return nil, "", 0, err
 	}
-	if art == nil {
+	if desc == nil {
 		return nil, "", 0, fmt.Errorf("artifact not found: %s", name)
 	}
-	actual := resolveArtifactVersion(ctx, svc, info, name, version)
-	mt := art.MimeType
+	actual := desc.Version
+	mt := desc.MimeType
 	if mt == "" {
 		mt = "application/octet-stream"
 	}
-	return art.Data, mt, actual, nil
-}
-
-func resolveArtifactVersion(
-	ctx context.Context,
-	svc artifact.Service,
-	info artifact.SessionInfo,
-	name string,
-	version *int,
-) int {
-	if version != nil {
-		return *version
-	}
-	vers, err := svc.ListVersions(ctx, info, name)
-	if err != nil || len(vers) == 0 {
-		return 0
-	}
-	max := vers[0]
-	for _, v := range vers[1:] {
-		if v > max {
-			max = v
-		}
-	}
-	return max
+	return data, mt, actual, nil
 }
 
 // ParseArtifactRef splits "name@version" into name and optional version.
@@ -99,9 +76,11 @@ func SaveArtifactHelper(
 	info := artifactSessionFromContext(ctx)
 	ver, err := svc.SaveArtifact(ctx, info, filename,
 		&artifact.Artifact{
-			Data:     data,
-			MimeType: mime,
-			Name:     filename,
+			ArtifactDescriptor: artifact.ArtifactDescriptor{
+				Name:     filename,
+				MimeType: mime,
+			},
+			Data: data,
 		})
 	if err != nil {
 		return 0, err

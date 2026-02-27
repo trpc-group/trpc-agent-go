@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -62,20 +63,31 @@ func (cc *CallbackContext) SaveArtifact(filename string, artifact *artifact.Arti
 	return service.SaveArtifact(cc.Context, sessionInfo, filename, artifact)
 }
 
-// LoadArtifact loads an artifact attached to the current session.
-//
-// Args:
-//   - filename: The filename of the artifact
-//   - version: The version of the artifact. If nil, the latest version will be returned.
-//
-// Returns:
-//   - The artifact, or nil if not found
-func (cc *CallbackContext) LoadArtifact(filename string, version *int) (*artifact.Artifact, error) {
+// ResolveArtifact resolves artifact metadata and an optional URL.
+func (cc *CallbackContext) ResolveArtifact(filename string, version *int) (*artifact.ArtifactDescriptor, error) {
 	service, sessionInfo, err := cc.getArtifactServiceAndSessionInfo()
 	if err != nil {
 		return nil, err
 	}
+	return service.ResolveArtifact(cc.Context, sessionInfo, filename, version)
+}
+
+// LoadArtifact opens a streaming reader for an artifact.
+func (cc *CallbackContext) LoadArtifact(filename string, version *int) (io.ReadCloser, *artifact.ArtifactDescriptor, error) {
+	service, sessionInfo, err := cc.getArtifactServiceAndSessionInfo()
+	if err != nil {
+		return nil, nil, err
+	}
 	return service.LoadArtifact(cc.Context, sessionInfo, filename, version)
+}
+
+// LoadArtifactBytes loads an artifact into memory and returns its bytes.
+func (cc *CallbackContext) LoadArtifactBytes(filename string, version *int) ([]byte, *artifact.ArtifactDescriptor, error) {
+	service, sessionInfo, err := cc.getArtifactServiceAndSessionInfo()
+	if err != nil {
+		return nil, nil, err
+	}
+	return service.LoadArtifactBytes(cc.Context, sessionInfo, filename, version)
 }
 
 // ListArtifacts lists the filenames of the artifacts attached to the current session.

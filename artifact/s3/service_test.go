@@ -10,12 +10,15 @@
 package s3
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"sort"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -61,6 +64,32 @@ func (m *mockStorage) GetObject(ctx context.Context, key string) ([]byte, string
 		return nil, "", s3storage.ErrNotFound
 	}
 	return append([]byte(nil), obj.data...), obj.contentType, nil
+}
+
+func (m *mockStorage) OpenObject(ctx context.Context, key string) (io.ReadCloser, string, int64, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	obj, ok := m.objects[key]
+	if !ok {
+		return nil, "", 0, s3storage.ErrNotFound
+	}
+	return io.NopCloser(bytes.NewReader(obj.data)), obj.contentType, int64(len(obj.data)), nil
+}
+
+func (m *mockStorage) HeadObject(ctx context.Context, key string) (string, int64, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	obj, ok := m.objects[key]
+	if !ok {
+		return "", 0, s3storage.ErrNotFound
+	}
+	return obj.contentType, int64(len(obj.data)), nil
+}
+
+func (m *mockStorage) PresignGetObject(ctx context.Context, key string, expires time.Duration) (string, error) {
+	return "", errors.New("presign not supported in mock")
 }
 
 func (m *mockStorage) ListObjects(ctx context.Context, prefix string) ([]string, error) {
@@ -148,9 +177,11 @@ func TestSaveArtifact(t *testing.T) {
 		info := testSessionInfo()
 
 		art := &artifact.Artifact{
-			Data:     []byte("hello world"),
-			MimeType: "text/plain",
-			Name:     "test.txt",
+			ArtifactDescriptor: artifact.ArtifactDescriptor{
+				MimeType: "text/plain",
+				Name:     "test.txt",
+			},
+			Data: []byte("hello world"),
 		}
 
 		version, err := svc.SaveArtifact(ctx, info, "test.txt", art)
@@ -164,7 +195,10 @@ func TestSaveArtifact(t *testing.T) {
 		info := testSessionInfo()
 
 		// Save version 0 (first)
-		art := &artifact.Artifact{Data: []byte("v0"), MimeType: "text/plain"}
+		art := &artifact.Artifact{
+			ArtifactDescriptor: artifact.ArtifactDescriptor{MimeType: "text/plain"},
+			Data:               []byte("v0"),
+		}
 		v0, err := svc.SaveArtifact(ctx, info, "doc.txt", art)
 		require.NoError(t, err)
 		assert.Equal(t, 0, v0)
@@ -187,7 +221,10 @@ func TestSaveArtifact(t *testing.T) {
 		ctx := context.Background()
 		info := testSessionInfo()
 
-		art := &artifact.Artifact{Data: []byte("user data"), MimeType: "text/plain"}
+		art := &artifact.Artifact{
+			ArtifactDescriptor: artifact.ArtifactDescriptor{MimeType: "text/plain"},
+			Data:               []byte("user data"),
+		}
 		version, err := svc.SaveArtifact(ctx, info, "user:profile.txt", art)
 		require.NoError(t, err)
 		assert.Equal(t, 0, version) // First version is 0 per interface contract
@@ -198,7 +235,10 @@ func TestSaveArtifact(t *testing.T) {
 		ctx := context.Background()
 		info := testSessionInfo()
 
-		art := &artifact.Artifact{Data: []byte("data"), MimeType: "text/plain"}
+		art := &artifact.Artifact{
+			ArtifactDescriptor: artifact.ArtifactDescriptor{MimeType: "text/plain"},
+			Data:               []byte("data"),
+		}
 		_, err := svc.SaveArtifact(ctx, info, "", art)
 		assert.ErrorIs(t, err, ErrEmptyFilename)
 	})
@@ -207,7 +247,10 @@ func TestSaveArtifact(t *testing.T) {
 		svc, _ := newTestService(t)
 		ctx := context.Background()
 		info := testSessionInfo()
-		art := &artifact.Artifact{Data: []byte("data"), MimeType: "text/plain"}
+		art := &artifact.Artifact{
+			ArtifactDescriptor: artifact.ArtifactDescriptor{MimeType: "text/plain"},
+			Data:               []byte("data"),
+		}
 
 		invalidNames := []string{
 			"path/to/file.txt", // contains /
@@ -235,7 +278,10 @@ func TestSaveArtifact(t *testing.T) {
 		svc, _ := newTestService(t)
 		ctx := context.Background()
 
-		art := &artifact.Artifact{Data: []byte("data"), MimeType: "text/plain"}
+		art := &artifact.Artifact{
+			ArtifactDescriptor: artifact.ArtifactDescriptor{MimeType: "text/plain"},
+			Data:               []byte("data"),
+		}
 
 		// Empty AppName
 		_, err := svc.SaveArtifact(ctx, artifact.SessionInfo{UserID: "u", SessionID: "s"}, "test.txt", art)
@@ -267,11 +313,11 @@ func TestLoadArtifact(t *testing.T) {
 		require.NoError(t, err)
 
 		// Load artifact
-		loaded, err := svc.LoadArtifact(ctx, info, "test.txt", nil)
+		data, desc, err := svc.LoadArtifactBytes(ctx, info, "test.txt", nil)
 		require.NoError(t, err)
-		require.NotNil(t, loaded)
-		assert.Equal(t, original.Data, loaded.Data)
-		assert.Equal(t, original.MimeType, loaded.MimeType)
+		require.NotNil(t, desc)
+		assert.Equal(t, original.Data, data)
+		assert.Equal(t, original.MimeType, desc.MimeType)
 	})
 
 	t.Run("load specific version", func(t *testing.T) {
@@ -291,10 +337,11 @@ func TestLoadArtifact(t *testing.T) {
 
 		// Load version 1
 		version := 1
-		loaded, err := svc.LoadArtifact(ctx, info, "doc.txt", &version)
+		data, desc, err := svc.LoadArtifactBytes(ctx, info, "doc.txt", &version)
 		require.NoError(t, err)
-		require.NotNil(t, loaded)
-		assert.Equal(t, []byte("version 1"), loaded.Data)
+		require.NotNil(t, desc)
+		assert.Equal(t, []byte("version 1"), data)
+		assert.Equal(t, 1, desc.Version)
 	})
 
 	t.Run("load latest version", func(t *testing.T) {
@@ -313,10 +360,11 @@ func TestLoadArtifact(t *testing.T) {
 		}
 
 		// Load latest (should be version 2)
-		loaded, err := svc.LoadArtifact(ctx, info, "doc.txt", nil)
+		data, desc, err := svc.LoadArtifactBytes(ctx, info, "doc.txt", nil)
 		require.NoError(t, err)
-		require.NotNil(t, loaded)
-		assert.Equal(t, []byte("version 2"), loaded.Data)
+		require.NotNil(t, desc)
+		assert.Equal(t, []byte("version 2"), data)
+		assert.Equal(t, 2, desc.Version)
 	})
 
 	t.Run("load non-existent artifact", func(t *testing.T) {
@@ -324,9 +372,10 @@ func TestLoadArtifact(t *testing.T) {
 		ctx := context.Background()
 		info := testSessionInfo()
 
-		loaded, err := svc.LoadArtifact(ctx, info, "nonexistent.txt", nil)
+		data, desc, err := svc.LoadArtifactBytes(ctx, info, "nonexistent.txt", nil)
 		require.NoError(t, err)
-		assert.Nil(t, loaded)
+		assert.Nil(t, data)
+		assert.Nil(t, desc)
 	})
 
 	t.Run("load with user namespace", func(t *testing.T) {
@@ -335,15 +384,18 @@ func TestLoadArtifact(t *testing.T) {
 		info := testSessionInfo()
 
 		// Save with user namespace
-		original := &artifact.Artifact{Data: []byte("user data"), MimeType: "text/plain"}
+		original := &artifact.Artifact{
+			ArtifactDescriptor: artifact.ArtifactDescriptor{MimeType: "text/plain"},
+			Data:               []byte("user data"),
+		}
 		_, err := svc.SaveArtifact(ctx, info, "user:profile.txt", original)
 		require.NoError(t, err)
 
 		// Load with user namespace
-		loaded, err := svc.LoadArtifact(ctx, info, "user:profile.txt", nil)
+		data, desc, err := svc.LoadArtifactBytes(ctx, info, "user:profile.txt", nil)
 		require.NoError(t, err)
-		require.NotNil(t, loaded)
-		assert.Equal(t, original.Data, loaded.Data)
+		require.NotNil(t, desc)
+		assert.Equal(t, original.Data, data)
 	})
 
 	t.Run("load with empty filename returns error", func(t *testing.T) {
@@ -351,7 +403,7 @@ func TestLoadArtifact(t *testing.T) {
 		ctx := context.Background()
 		info := testSessionInfo()
 
-		_, err := svc.LoadArtifact(ctx, info, "", nil)
+		_, _, err := svc.LoadArtifactBytes(ctx, info, "", nil)
 		assert.ErrorIs(t, err, ErrEmptyFilename)
 	})
 
@@ -360,7 +412,7 @@ func TestLoadArtifact(t *testing.T) {
 		ctx := context.Background()
 		info := testSessionInfo()
 
-		_, err := svc.LoadArtifact(ctx, info, "path/to/file.txt", nil)
+		_, _, err := svc.LoadArtifactBytes(ctx, info, "path/to/file.txt", nil)
 		assert.ErrorIs(t, err, ErrInvalidFilename)
 	})
 
@@ -368,7 +420,7 @@ func TestLoadArtifact(t *testing.T) {
 		svc, _ := newTestService(t)
 		ctx := context.Background()
 
-		_, err := svc.LoadArtifact(ctx, artifact.SessionInfo{}, "test.txt", nil)
+		_, _, err := svc.LoadArtifactBytes(ctx, artifact.SessionInfo{}, "test.txt", nil)
 		assert.ErrorIs(t, err, ErrEmptySessionInfo)
 	})
 
@@ -378,16 +430,20 @@ func TestLoadArtifact(t *testing.T) {
 		info := testSessionInfo()
 
 		// Save version 0
-		art := &artifact.Artifact{Data: []byte("v0"), MimeType: "text/plain"}
+		art := &artifact.Artifact{
+			ArtifactDescriptor: artifact.ArtifactDescriptor{MimeType: "text/plain"},
+			Data:               []byte("v0"),
+		}
 		_, err := svc.SaveArtifact(ctx, info, "doc.txt", art)
 		require.NoError(t, err)
 
 		// Try to load version 999 which doesn't exist
 		// Per interface contract: returns nil when not found
 		version := 999
-		loaded, err := svc.LoadArtifact(ctx, info, "doc.txt", &version)
+		data, desc, err := svc.LoadArtifactBytes(ctx, info, "doc.txt", &version)
 		assert.NoError(t, err)
-		assert.Nil(t, loaded)
+		assert.Nil(t, data)
+		assert.Nil(t, desc)
 	})
 
 	t.Run("load latest of non-existent artifact returns nil", func(t *testing.T) {
@@ -396,9 +452,10 @@ func TestLoadArtifact(t *testing.T) {
 		info := testSessionInfo()
 
 		// Load artifact that doesn't exist (no specific version)
-		art, err := svc.LoadArtifact(ctx, info, "nonexistent.txt", nil)
+		data, desc, err := svc.LoadArtifactBytes(ctx, info, "nonexistent.txt", nil)
 		assert.NoError(t, err)
-		assert.Nil(t, art)
+		assert.Nil(t, data)
+		assert.Nil(t, desc)
 	})
 }
 
@@ -421,7 +478,10 @@ func TestListArtifactKeys(t *testing.T) {
 		// Save some artifacts
 		files := []string{"doc1.pdf", "doc2.pdf", "image.png"}
 		for _, name := range files {
-			art := &artifact.Artifact{Data: []byte("data"), MimeType: "application/octet-stream"}
+			art := &artifact.Artifact{
+				ArtifactDescriptor: artifact.ArtifactDescriptor{MimeType: "application/octet-stream"},
+				Data:               []byte("data"),
+			}
 			_, err := svc.SaveArtifact(ctx, info, name, art)
 			require.NoError(t, err)
 		}
@@ -437,7 +497,10 @@ func TestListArtifactKeys(t *testing.T) {
 		info := testSessionInfo()
 
 		// Save session-scoped artifacts
-		art := &artifact.Artifact{Data: []byte("data"), MimeType: "text/plain"}
+		art := &artifact.Artifact{
+			ArtifactDescriptor: artifact.ArtifactDescriptor{MimeType: "text/plain"},
+			Data:               []byte("data"),
+		}
 		_, err := svc.SaveArtifact(ctx, info, "session-doc.txt", art)
 		require.NoError(t, err)
 
@@ -459,7 +522,10 @@ func TestListArtifactKeys(t *testing.T) {
 
 		// Save multiple versions of same file
 		for i := 0; i < 3; i++ {
-			art := &artifact.Artifact{Data: []byte("v"), MimeType: "text/plain"}
+			art := &artifact.Artifact{
+				ArtifactDescriptor: artifact.ArtifactDescriptor{MimeType: "text/plain"},
+				Data:               []byte("v"),
+			}
 			_, err := svc.SaveArtifact(ctx, info, "doc.txt", art)
 			require.NoError(t, err)
 		}
@@ -486,7 +552,10 @@ func TestDeleteArtifact(t *testing.T) {
 		info := testSessionInfo()
 
 		// Save artifact
-		art := &artifact.Artifact{Data: []byte("data"), MimeType: "text/plain"}
+		art := &artifact.Artifact{
+			ArtifactDescriptor: artifact.ArtifactDescriptor{MimeType: "text/plain"},
+			Data:               []byte("data"),
+		}
 		_, err := svc.SaveArtifact(ctx, info, "test.txt", art)
 		require.NoError(t, err)
 
@@ -495,9 +564,10 @@ func TestDeleteArtifact(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify deleted
-		loaded, err := svc.LoadArtifact(ctx, info, "test.txt", nil)
+		data, desc, err := svc.LoadArtifactBytes(ctx, info, "test.txt", nil)
 		require.NoError(t, err)
-		assert.Nil(t, loaded)
+		assert.Nil(t, data)
+		assert.Nil(t, desc)
 	})
 
 	t.Run("delete all versions", func(t *testing.T) {
@@ -507,7 +577,10 @@ func TestDeleteArtifact(t *testing.T) {
 
 		// Save multiple versions
 		for i := 0; i < 3; i++ {
-			art := &artifact.Artifact{Data: []byte("v"), MimeType: "text/plain"}
+			art := &artifact.Artifact{
+				ArtifactDescriptor: artifact.ArtifactDescriptor{MimeType: "text/plain"},
+				Data:               []byte("v"),
+			}
 			_, err := svc.SaveArtifact(ctx, info, "doc.txt", art)
 			require.NoError(t, err)
 		}
@@ -567,7 +640,10 @@ func TestListVersions(t *testing.T) {
 
 		// Save multiple versions
 		for i := 0; i < 5; i++ {
-			art := &artifact.Artifact{Data: []byte("v"), MimeType: "text/plain"}
+			art := &artifact.Artifact{
+				ArtifactDescriptor: artifact.ArtifactDescriptor{MimeType: "text/plain"},
+				Data:               []byte("v"),
+			}
 			_, err := svc.SaveArtifact(ctx, info, "doc.txt", art)
 			require.NoError(t, err)
 		}
@@ -698,6 +774,7 @@ type errorMockStorage struct {
 	listObjectsErr   error
 	putObjectErr     error
 	getObjectErr     error
+	headObjectErr    error
 	deleteObjectsErr error
 }
 
@@ -728,6 +805,24 @@ func (m *errorMockStorage) GetObject(ctx context.Context, key string) ([]byte, s
 		return nil, "", m.getObjectErr
 	}
 	return m.mockStorage.GetObject(ctx, key)
+}
+
+func (m *errorMockStorage) OpenObject(ctx context.Context, key string) (io.ReadCloser, string, int64, error) {
+	if m.getObjectErr != nil {
+		return nil, "", 0, m.getObjectErr
+	}
+	return m.mockStorage.OpenObject(ctx, key)
+}
+
+func (m *errorMockStorage) HeadObject(ctx context.Context, key string) (string, int64, error) {
+	if m.headObjectErr != nil {
+		return "", 0, m.headObjectErr
+	}
+	return m.mockStorage.HeadObject(ctx, key)
+}
+
+func (m *errorMockStorage) PresignGetObject(ctx context.Context, key string, expires time.Duration) (string, error) {
+	return "", errors.New("presign not supported in error mock")
 }
 
 func (m *errorMockStorage) DeleteObjects(ctx context.Context, keys []string) error {
@@ -783,7 +878,7 @@ func TestServiceErrorPaths(t *testing.T) {
 		svc, err := NewService(context.Background(), "test-bucket", WithClient(mock))
 		require.NoError(t, err)
 
-		_, err = svc.LoadArtifact(ctx, sessionInfo, "test.txt", nil)
+		_, _, err = svc.LoadArtifact(ctx, sessionInfo, "test.txt", nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to list versions")
 	})
@@ -805,7 +900,7 @@ func TestServiceErrorPaths(t *testing.T) {
 
 		// Now set the error and try to load
 		mock.getObjectErr = testErr
-		_, err = svc.LoadArtifact(ctx, sessionInfo, "test.txt", nil)
+		_, _, err = svc.LoadArtifact(ctx, sessionInfo, "test.txt", nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to download artifact")
 	})
@@ -825,9 +920,10 @@ func TestServiceErrorPaths(t *testing.T) {
 
 		// Set NotFound error
 		mock.getObjectErr = s3storage.ErrNotFound
-		art, err := svc.LoadArtifact(ctx, sessionInfo, "test.txt", nil)
+		rc, desc, err := svc.LoadArtifact(ctx, sessionInfo, "test.txt", nil)
 		assert.NoError(t, err)
-		assert.Nil(t, art)
+		assert.Nil(t, rc)
+		assert.Nil(t, desc)
 	})
 
 	t.Run("ListArtifactKeys returns error when listing artifacts fails", func(t *testing.T) {
@@ -942,9 +1038,10 @@ func TestWithLogger(t *testing.T) {
 		info := testSessionInfo()
 
 		// Try to load non-existent artifact
-		art, err := svc.LoadArtifact(ctx, info, "nonexistent.txt", nil)
+		data, desc, err := svc.LoadArtifactBytes(ctx, info, "nonexistent.txt", nil)
 		assert.NoError(t, err)
-		assert.Nil(t, art)
+		assert.Nil(t, data)
+		assert.Nil(t, desc)
 		assert.Len(t, logger.debugMessages, 1)
 		assert.Contains(t, logger.debugMessages[0], "artifact not found")
 	})
@@ -962,15 +1059,19 @@ func TestWithLogger(t *testing.T) {
 		info := testSessionInfo()
 
 		// Save version 0
-		art := &artifact.Artifact{Data: []byte("v0"), MimeType: "text/plain"}
+		art := &artifact.Artifact{
+			ArtifactDescriptor: artifact.ArtifactDescriptor{MimeType: "text/plain"},
+			Data:               []byte("v0"),
+		}
 		_, err = svc.SaveArtifact(ctx, info, "doc.txt", art)
 		require.NoError(t, err)
 
 		// Try to load version 999 which doesn't exist
 		version := 999
-		loaded, err := svc.LoadArtifact(ctx, info, "doc.txt", &version)
+		data, desc, err := svc.LoadArtifactBytes(ctx, info, "doc.txt", &version)
 		assert.NoError(t, err)
-		assert.Nil(t, loaded)
+		assert.Nil(t, data)
+		assert.Nil(t, desc)
 		assert.Len(t, logger.debugMessages, 1)
 		assert.Contains(t, logger.debugMessages[0], "artifact version not found")
 	})
@@ -987,8 +1088,9 @@ func TestWithLogger(t *testing.T) {
 		info := testSessionInfo()
 
 		// Should not panic when logger is nil
-		art, err := svc.LoadArtifact(ctx, info, "nonexistent.txt", nil)
+		data, desc, err := svc.LoadArtifactBytes(ctx, info, "nonexistent.txt", nil)
 		assert.NoError(t, err)
-		assert.Nil(t, art)
+		assert.Nil(t, data)
+		assert.Nil(t, desc)
 	})
 }

@@ -52,12 +52,17 @@ func main() {
 	log.Infof("Found %d artifact keys: %v", len(keys), keys)
 	if len(keys) != 0 {
 		for _, key := range keys {
-			a, err := a.artifactService.LoadArtifact(context.Background(),
+			data, desc, err := a.artifactService.LoadArtifactBytes(context.Background(),
 				artifact.SessionInfo{AppName: a.appName, UserID: a.userID, SessionID: a.sessionID}, key, nil)
 			if err != nil {
 				log.Errorf("Failed to load artifact: %v", err)
+				continue
 			}
-			log.Infof("Loaded artifact MimeType: %s, Data: %s", a.MimeType, a.Data)
+			if desc == nil {
+				log.Infof("Artifact not found: %s", key)
+				continue
+			}
+			log.Infof("Loaded artifact MimeType: %s, Data: %s", desc.MimeType, data)
 
 		}
 

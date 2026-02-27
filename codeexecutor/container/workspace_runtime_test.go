@@ -1000,17 +1000,32 @@ func (m *artMem) SaveArtifact(
 	return m.saved, nil
 }
 
+func (*artMem) ResolveArtifact(
+	_ context.Context,
+	_ artifact.SessionInfo,
+	filename string,
+	_ *int,
+) (*artifact.ArtifactDescriptor, error) {
+	return &artifact.ArtifactDescriptor{Name: filename, Version: 0, MimeType: "text/plain"}, nil
+}
+
 func (*artMem) LoadArtifact(
 	_ context.Context,
 	_ artifact.SessionInfo,
-	_ string,
+	filename string,
 	_ *int,
-) (*artifact.Artifact, error) {
-	return &artifact.Artifact{
-		Data:     []byte("A1"),
-		MimeType: "text/plain",
-		Name:     "name",
-	}, nil
+) (io.ReadCloser, *artifact.ArtifactDescriptor, error) {
+	desc := &artifact.ArtifactDescriptor{Name: filename, Version: 0, MimeType: "text/plain"}
+	return io.NopCloser(strings.NewReader("A1")), desc, nil
+}
+
+func (*artMem) LoadArtifactBytes(
+	_ context.Context,
+	_ artifact.SessionInfo,
+	filename string,
+	_ *int,
+) ([]byte, *artifact.ArtifactDescriptor, error) {
+	return []byte("A1"), &artifact.ArtifactDescriptor{Name: filename, Version: 0, MimeType: "text/plain"}, nil
 }
 
 func (*artMem) ListArtifactKeys(
@@ -1049,22 +1064,47 @@ func (*pinnedArtifactService) SaveArtifact(
 	return 0, nil
 }
 
-func (s *pinnedArtifactService) LoadArtifact(
+func (s *pinnedArtifactService) ResolveArtifact(
 	_ context.Context,
 	_ artifact.SessionInfo,
-	_ string,
+	filename string,
 	version *int,
-) (*artifact.Artifact, error) {
+) (*artifact.ArtifactDescriptor, error) {
 	if version == nil {
 		s.loadVersions = append(s.loadVersions, "nil")
 	} else {
 		s.loadVersions = append(s.loadVersions, fmt.Sprint(*version))
 	}
-	return &artifact.Artifact{
-		Data:     []byte("A"),
-		MimeType: "text/plain",
-		Name:     "name",
-	}, nil
+	return &artifact.ArtifactDescriptor{Name: filename, Version: 0, MimeType: "text/plain"}, nil
+}
+
+func (s *pinnedArtifactService) LoadArtifact(
+	_ context.Context,
+	_ artifact.SessionInfo,
+	filename string,
+	version *int,
+) (io.ReadCloser, *artifact.ArtifactDescriptor, error) {
+	if version == nil {
+		s.loadVersions = append(s.loadVersions, "nil")
+	} else {
+		s.loadVersions = append(s.loadVersions, fmt.Sprint(*version))
+	}
+	desc := &artifact.ArtifactDescriptor{Name: filename, Version: 0, MimeType: "text/plain"}
+	return io.NopCloser(strings.NewReader("A")), desc, nil
+}
+
+func (s *pinnedArtifactService) LoadArtifactBytes(
+	_ context.Context,
+	_ artifact.SessionInfo,
+	filename string,
+	version *int,
+) ([]byte, *artifact.ArtifactDescriptor, error) {
+	if version == nil {
+		s.loadVersions = append(s.loadVersions, "nil")
+	} else {
+		s.loadVersions = append(s.loadVersions, fmt.Sprint(*version))
+	}
+	return []byte("A"), &artifact.ArtifactDescriptor{Name: filename, Version: 0, MimeType: "text/plain"}, nil
 }
 
 func (*pinnedArtifactService) ListArtifactKeys(

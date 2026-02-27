@@ -11,6 +11,7 @@ package agent
 
 import (
 	"context"
+	"io"
 	"reflect"
 	"testing"
 
@@ -434,8 +435,16 @@ func (m *mockArtifactService) SaveArtifact(ctx context.Context, info artifact.Se
 	return 1, nil
 }
 
-func (m *mockArtifactService) LoadArtifact(ctx context.Context, info artifact.SessionInfo, filename string, version *int) (*artifact.Artifact, error) {
+func (m *mockArtifactService) ResolveArtifact(ctx context.Context, info artifact.SessionInfo, filename string, version *int) (*artifact.ArtifactDescriptor, error) {
 	return nil, nil
+}
+
+func (m *mockArtifactService) LoadArtifact(ctx context.Context, info artifact.SessionInfo, filename string, version *int) (io.ReadCloser, *artifact.ArtifactDescriptor, error) {
+	return nil, nil, nil
+}
+
+func (m *mockArtifactService) LoadArtifactBytes(ctx context.Context, info artifact.SessionInfo, filename string, version *int) ([]byte, *artifact.ArtifactDescriptor, error) {
+	return nil, nil, nil
 }
 
 func (m *mockArtifactService) ListArtifactKeys(ctx context.Context, info artifact.SessionInfo) ([]string, error) {

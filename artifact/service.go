@@ -9,7 +9,10 @@
 
 package artifact
 
-import "context"
+import (
+	"context"
+	"io"
+)
 
 // Service defines the interface for artifact storage and retrieval operations.
 type Service interface {
@@ -30,26 +33,49 @@ type Service interface {
 	//   This is incremented by 1 after each successful save.
 	SaveArtifact(ctx context.Context, sessionInfo SessionInfo, filename string, artifact *Artifact) (int, error)
 
-	// LoadArtifact gets an artifact from the artifact service storage.
+	// ResolveArtifact resolves an artifact reference to its metadata and an optional URL.
 	//
-	// The artifact is a file identified by the session info and filename.
+	// This method SHOULD NOT download artifact contents.
 	//
 	// Args:
 	//   ctx: The context for the operation
 	//   sessionInfo: The session information (app name, user ID, session ID)
 	//   filename: The filename of the artifact
-	//   version: The version of the artifact. If nil, the latest version will be returned.
+	//   version: The version of the artifact. If nil, the latest version will be resolved.
 	//
 	// Returns:
-	//   The artifact or nil if not found.
-	LoadArtifact(ctx context.Context, sessionInfo SessionInfo, filename string, version *int) (*Artifact, error)
+	//   The descriptor or nil if not found.
+	ResolveArtifact(ctx context.Context, sessionInfo SessionInfo, filename string, version *int) (*ArtifactDescriptor, error)
+
+	// LoadArtifact opens a streaming reader for an artifact.
+	//
+	// This method MUST NOT read the full artifact into memory.
+	//
+	// Args:
+	//   ctx: The context for the operation
+	//   sessionInfo: The session information (app name, user ID, session ID)
+	//   filename: The filename of the artifact
+	//   version: The version of the artifact. If nil, the latest version will be loaded.
+	//
+	// Returns:
+	//   A ReadCloser for the content, a descriptor, or (nil, nil, nil) if not found.
+	LoadArtifact(ctx context.Context, sessionInfo SessionInfo, filename string, version *int) (io.ReadCloser, *ArtifactDescriptor, error)
+
+	// LoadArtifactBytes loads an artifact into memory and returns its bytes.
+	//
+	// This is a convenience method for small artifacts. Callers should prefer
+	// ResolveArtifact + LoadArtifact for large artifacts.
+	//
+	// Returns:
+	//   The bytes and descriptor, or (nil, nil, nil) if not found.
+	LoadArtifactBytes(ctx context.Context, sessionInfo SessionInfo, filename string, version *int) ([]byte, *ArtifactDescriptor, error)
 
 	// ListArtifactKeys lists all the artifact filenames within a session.
 	//
 	// Args:
 	//   ctx: The context for the operation
 	//   sessionInfo: The session information (app name, user ID, session ID)
-	//
+	//   filename: The filename of the artifact
 	// Returns:
 	//   A list of all artifact filenames within a session.
 	ListArtifactKeys(ctx context.Context, sessionInfo SessionInfo) ([]string, error)

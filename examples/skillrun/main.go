@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -437,22 +438,29 @@ func (c *skillChat) handlePull(text string) error {
 	si := artifact.SessionInfo{
 		AppName: appName, UserID: c.userID, SessionID: c.sessionID,
 	}
-	art, err := c.artSvc.LoadArtifact(context.Background(), si, name, verPtr)
+	rc, desc, err := c.artSvc.LoadArtifact(context.Background(), si, name, verPtr)
 	if err != nil {
 		return err
 	}
-	if art == nil || len(art.Data) == 0 {
+	if desc == nil || rc == nil {
 		return fmt.Errorf("artifact not found: %s", name)
 	}
+	defer rc.Close()
 	dir := "downloads"
 	_ = os.MkdirAll(dir, 0o755)
 	out := filepath.Join(dir, filepath.Base(name))
-	if err := os.WriteFile(out, art.Data, 0o644); err != nil {
+	f, err := os.OpenFile(out, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	written, err := io.Copy(f, rc)
+	_ = f.Close()
+	if err != nil {
 		return err
 	}
 	fmt.Printf(
 		"📥 Saved %s (%d bytes, %s)\n",
-		out, len(art.Data), art.MimeType,
+		out, written, desc.MimeType,
 	)
 	return nil
 }

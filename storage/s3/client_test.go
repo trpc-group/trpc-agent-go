@@ -168,6 +168,7 @@ func TestClientBuilderOpts(t *testing.T) {
 type mockS3API struct {
 	putObjectFunc     func(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error)
 	getObjectFunc     func(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+	headObjectFunc    func(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error)
 	deleteObjectsFunc func(ctx context.Context, params *s3.DeleteObjectsInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error)
 	listObjectsV2Func func(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
 }
@@ -184,6 +185,13 @@ func (m *mockS3API) GetObject(ctx context.Context, params *s3.GetObjectInput, op
 		return m.getObjectFunc(ctx, params, optFns...)
 	}
 	return &s3.GetObjectOutput{}, nil
+}
+
+func (m *mockS3API) HeadObject(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
+	if m.headObjectFunc != nil {
+		return m.headObjectFunc(ctx, params, optFns...)
+	}
+	return &s3.HeadObjectOutput{}, nil
 }
 
 func (m *mockS3API) DeleteObjects(ctx context.Context, params *s3.DeleteObjectsInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error) {

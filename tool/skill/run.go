@@ -1498,9 +1498,11 @@ func (t *RunTool) saveArtifacts(
 			name = prefix + name
 		}
 		ver, err := cb.SaveArtifact(name, &artifact.Artifact{
-			Data:     []byte(f.Content),
-			MimeType: f.MIMEType,
-			Name:     name,
+			ArtifactDescriptor: artifact.ArtifactDescriptor{
+				Name:     name,
+				MimeType: f.MIMEType,
+			},
+			Data: []byte(f.Content),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("save artifact %s: %w", name, err)

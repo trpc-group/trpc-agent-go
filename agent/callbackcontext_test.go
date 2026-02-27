@@ -78,11 +78,27 @@ func TestCallbackContext_ArtifactOperations_NoService(t *testing.T) {
 		assert.Equal(t, 0, version)
 	})
 
-	t.Run("LoadArtifact without service", func(t *testing.T) {
-		artifact, err := cc.LoadArtifact("test.txt", nil)
+	t.Run("ResolveArtifact without service", func(t *testing.T) {
+		desc, err := cc.ResolveArtifact("test.txt", nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "artifact service is nil")
-		assert.Nil(t, artifact)
+		assert.Nil(t, desc)
+	})
+
+	t.Run("LoadArtifact without service", func(t *testing.T) {
+		rc, desc, err := cc.LoadArtifact("test.txt", nil)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "artifact service is nil")
+		assert.Nil(t, rc)
+		assert.Nil(t, desc)
+	})
+
+	t.Run("LoadArtifactBytes without service", func(t *testing.T) {
+		data, desc, err := cc.LoadArtifactBytes("test.txt", nil)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "artifact service is nil")
+		assert.Nil(t, data)
+		assert.Nil(t, desc)
 	})
 
 	t.Run("ListArtifacts without service", func(t *testing.T) {
@@ -126,11 +142,27 @@ func TestCallbackContext_ArtifactOperations_NoSession(t *testing.T) {
 		assert.Equal(t, 0, version)
 	})
 
-	t.Run("LoadArtifact without session", func(t *testing.T) {
-		artifact, err := cc.LoadArtifact("test.txt", nil)
+	t.Run("ResolveArtifact without session", func(t *testing.T) {
+		desc, err := cc.ResolveArtifact("test.txt", nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "no session available")
-		assert.Nil(t, artifact)
+		assert.Nil(t, desc)
+	})
+
+	t.Run("LoadArtifact without session", func(t *testing.T) {
+		rc, desc, err := cc.LoadArtifact("test.txt", nil)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "no session available")
+		assert.Nil(t, rc)
+		assert.Nil(t, desc)
+	})
+
+	t.Run("LoadArtifactBytes without session", func(t *testing.T) {
+		data, desc, err := cc.LoadArtifactBytes("test.txt", nil)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "no session available")
+		assert.Nil(t, data)
+		assert.Nil(t, desc)
 	})
 
 	t.Run("ListArtifacts without session", func(t *testing.T) {

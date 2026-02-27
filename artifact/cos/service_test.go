@@ -172,6 +172,31 @@ func (m *MockTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			Header:     make(http.Header),
 			Body:       io.NopCloser(strings.NewReader("")),
 		}, nil
+	case "HEAD":
+		// Object HEAD
+		objectKey := strings.TrimPrefix(req.URL.Path, "/")
+		if data, exists := m.objects[objectKey]; exists {
+			header := make(http.Header)
+			if headers, hasHeaders := m.headers[objectKey]; hasHeaders {
+				for k, v := range headers {
+					header.Set(k, v)
+				}
+			}
+			if header.Get("Content-Type") == "" {
+				header.Set("Content-Type", "application/octet-stream")
+			}
+			header.Set("Content-Length", strconv.Itoa(len(data)))
+			return &http.Response{
+				StatusCode: 200,
+				Header:     header,
+				Body:       io.NopCloser(strings.NewReader("")),
+			}, nil
+		}
+		return &http.Response{
+			StatusCode: 404,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`<?xml version="1.0" encoding="UTF-8"?><Error><Code>NoSuchKey</Code></Error>`)),
+		}, nil
 	}
 
 	return &http.Response{
@@ -213,9 +238,11 @@ func TestArtifact_SessionScope(t *testing.T) {
 	var artifacts []*artifact.Artifact
 	for i := 0; i < 3; i++ {
 		artifacts = append(artifacts, &artifact.Artifact{
-			Data:     []byte("Hello, World!" + strconv.Itoa(i)),
-			MimeType: "text/plain",
-			Name:     "display_name_user_scope_test.txt",
+			ArtifactDescriptor: artifact.ArtifactDescriptor{
+				MimeType: "text/plain",
+				Name:     "display_name_user_scope_test.txt",
+			},
+			Data: []byte("Hello, World!" + strconv.Itoa(i)),
 		})
 	}
 
@@ -232,21 +259,22 @@ func TestArtifact_SessionScope(t *testing.T) {
 	require.ElementsMatch(t, []int{0, 1, 2}, versions)
 
 	// Load latest version (should be version 2)
-	a, err := s.LoadArtifact(ctx, sessionInfo, sessionScopeKey, nil)
+	data, desc, err := s.LoadArtifactBytes(ctx, sessionInfo, sessionScopeKey, nil)
 	require.NoError(t, err)
-	require.EqualValues(t, &artifact.Artifact{
-		Data:     []byte("Hello, World!" + strconv.Itoa(2)),
-		MimeType: "text/plain",
-		Name:     sessionScopeKey,
-	}, a)
+	require.NotNil(t, desc)
+	require.EqualValues(t, []byte("Hello, World!"+strconv.Itoa(2)), data)
+	require.EqualValues(t, "text/plain", desc.MimeType)
+	require.EqualValues(t, 2, desc.Version)
 
 	// Load specific versions
 	for i, wanted := range artifacts {
-		got, err := s.LoadArtifact(ctx, sessionInfo, sessionScopeKey, &i)
+		gotData, gotDesc, err := s.LoadArtifactBytes(ctx, sessionInfo, sessionScopeKey, &i)
 		require.NoError(t, err)
-		require.EqualValues(t, wanted.Data, got.Data)
-		require.EqualValues(t, wanted.MimeType, got.MimeType)
-		require.EqualValues(t, sessionScopeKey, got.Name)
+		require.NotNil(t, gotDesc)
+		require.EqualValues(t, wanted.Data, gotData)
+		require.EqualValues(t, wanted.MimeType, gotDesc.MimeType)
+		require.EqualValues(t, sessionScopeKey, gotDesc.Name)
+		require.EqualValues(t, i, gotDesc.Version)
 	}
 
 	// List artifact keys
@@ -269,9 +297,10 @@ func TestArtifact_SessionScope(t *testing.T) {
 	require.Empty(t, versions)
 
 	// Verify artifact cannot be loaded
-	a, err = s.LoadArtifact(ctx, sessionInfo, sessionScopeKey, nil)
+	data, desc, err = s.LoadArtifactBytes(ctx, sessionInfo, sessionScopeKey, nil)
 	require.NoError(t, err)
-	require.Nil(t, a)
+	require.Nil(t, data)
+	require.Nil(t, desc)
 }
 
 func TestArtifact_UserScope(t *testing.T) {
@@ -289,9 +318,11 @@ func TestArtifact_UserScope(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		data := []byte("Hi, World!" + strconv.Itoa(i))
 		version, err := s.SaveArtifact(ctx, sessionInfo, userScopeKey, &artifact.Artifact{
-			Data:     data,
-			MimeType: "text/plain",
-			Name:     "display_name_user_scope_test.txt",
+			ArtifactDescriptor: artifact.ArtifactDescriptor{
+				MimeType: "text/plain",
+				Name:     "display_name_user_scope_test.txt",
+			},
+			Data: data,
 		})
 		require.NoError(t, err)
 		require.Equal(t, i, version)
@@ -303,23 +334,21 @@ func TestArtifact_UserScope(t *testing.T) {
 	require.ElementsMatch(t, []int{0, 1, 2}, versions)
 
 	// Load latest version
-	a, err := s.LoadArtifact(ctx, sessionInfo, userScopeKey, nil)
+	data, desc, err := s.LoadArtifactBytes(ctx, sessionInfo, userScopeKey, nil)
 	require.NoError(t, err)
-	require.EqualValues(t, &artifact.Artifact{
-		Data:     []byte("Hi, World!" + strconv.Itoa(2)),
-		MimeType: "text/plain",
-		Name:     userScopeKey,
-	}, a)
+	require.NotNil(t, desc)
+	require.EqualValues(t, []byte("Hi, World!"+strconv.Itoa(2)), data)
+	require.EqualValues(t, "text/plain", desc.MimeType)
+	require.EqualValues(t, 2, desc.Version)
 
 	// Load specific versions
 	for i := 0; i < 3; i++ {
-		a, err := s.LoadArtifact(ctx, sessionInfo, userScopeKey, &i)
+		data, desc, err := s.LoadArtifactBytes(ctx, sessionInfo, userScopeKey, &i)
 		require.NoError(t, err)
-		require.EqualValues(t, &artifact.Artifact{
-			Data:     []byte("Hi, World!" + strconv.Itoa(i)),
-			MimeType: "text/plain",
-			Name:     userScopeKey,
-		}, a)
+		require.NotNil(t, desc)
+		require.EqualValues(t, []byte("Hi, World!"+strconv.Itoa(i)), data)
+		require.EqualValues(t, "text/plain", desc.MimeType)
+		require.EqualValues(t, i, desc.Version)
 	}
 
 	// List artifact keys
@@ -342,9 +371,10 @@ func TestArtifact_UserScope(t *testing.T) {
 	require.Empty(t, versions)
 
 	// Verify artifact cannot be loaded
-	a, err = s.LoadArtifact(ctx, sessionInfo, userScopeKey, nil)
+	data, desc, err = s.LoadArtifactBytes(ctx, sessionInfo, userScopeKey, nil)
 	require.NoError(t, err)
-	require.Nil(t, a)
+	require.Nil(t, data)
+	require.Nil(t, desc)
 }
 
 func TestMixedScopeArtifacts(t *testing.T) {
@@ -359,9 +389,11 @@ func TestMixedScopeArtifacts(t *testing.T) {
 
 	// Save session-scoped artifact
 	sessionArtifact := &artifact.Artifact{
-		Data:     []byte("session data"),
-		MimeType: "text/plain",
-		Name:     "session.txt",
+		ArtifactDescriptor: artifact.ArtifactDescriptor{
+			MimeType: "text/plain",
+			Name:     "session.txt",
+		},
+		Data: []byte("session data"),
 	}
 	version, err := s.SaveArtifact(ctx, sessionInfo, "session.txt", sessionArtifact)
 	require.NoError(t, err)
@@ -369,9 +401,11 @@ func TestMixedScopeArtifacts(t *testing.T) {
 
 	// Save user-scoped artifact
 	userArtifact := &artifact.Artifact{
-		Data:     []byte("user data"),
-		MimeType: "text/plain",
-		Name:     "user:profile.txt",
+		ArtifactDescriptor: artifact.ArtifactDescriptor{
+			MimeType: "text/plain",
+			Name:     "user:profile.txt",
+		},
+		Data: []byte("user data"),
 	}
 	version, err = s.SaveArtifact(ctx, sessionInfo, "user:profile.txt", userArtifact)
 	require.NoError(t, err)
@@ -383,13 +417,15 @@ func TestMixedScopeArtifacts(t *testing.T) {
 	assert.ElementsMatch(t, []string{"session.txt", "user:profile.txt"}, keys)
 
 	// Load both artifacts
-	loadedSession, err := s.LoadArtifact(ctx, sessionInfo, "session.txt", nil)
+	loadedSessionData, loadedSessionDesc, err := s.LoadArtifactBytes(ctx, sessionInfo, "session.txt", nil)
 	require.NoError(t, err)
-	assert.Equal(t, sessionArtifact.Data, loadedSession.Data)
+	require.NotNil(t, loadedSessionDesc)
+	assert.Equal(t, sessionArtifact.Data, loadedSessionData)
 
-	loadedUser, err := s.LoadArtifact(ctx, sessionInfo, "user:profile.txt", nil)
+	loadedUserData, loadedUserDesc, err := s.LoadArtifactBytes(ctx, sessionInfo, "user:profile.txt", nil)
 	require.NoError(t, err)
-	assert.Equal(t, userArtifact.Data, loadedUser.Data)
+	require.NotNil(t, loadedUserDesc)
+	assert.Equal(t, userArtifact.Data, loadedUserData)
 }
 
 func TestLoadNonexistentArtifact(t *testing.T) {
@@ -403,15 +439,17 @@ func TestLoadNonexistentArtifact(t *testing.T) {
 	}
 
 	// Load non-existent artifact
-	artifact, err := s.LoadArtifact(ctx, sessionInfo, "nonexistent.txt", nil)
+	data, desc, err := s.LoadArtifactBytes(ctx, sessionInfo, "nonexistent.txt", nil)
 	require.NoError(t, err)
-	assert.Nil(t, artifact)
+	assert.Nil(t, data)
+	assert.Nil(t, desc)
 
 	// Load non-existent version
 	invalidVersion := 999
-	artifact, err = s.LoadArtifact(ctx, sessionInfo, "nonexistent.txt", &invalidVersion)
+	data, desc, err = s.LoadArtifactBytes(ctx, sessionInfo, "nonexistent.txt", &invalidVersion)
 	require.NoError(t, err)
-	assert.Nil(t, artifact)
+	assert.Nil(t, data)
+	assert.Nil(t, desc)
 }
 
 func TestDeleteNonexistentArtifact(t *testing.T) {
@@ -460,9 +498,11 @@ func TestMultipleVersionsAndDeletion(t *testing.T) {
 	// Save multiple versions
 	for i := 0; i < 5; i++ {
 		artifact := &artifact.Artifact{
-			Data:     []byte(fmt.Sprintf("version %d data", i)),
-			MimeType: "text/plain",
-			Name:     filename,
+			ArtifactDescriptor: artifact.ArtifactDescriptor{
+				MimeType: "text/plain",
+				Name:     filename,
+			},
+			Data: []byte(fmt.Sprintf("version %d data", i)),
 		}
 		version, err := s.SaveArtifact(ctx, sessionInfo, filename, artifact)
 		require.NoError(t, err)
@@ -476,10 +516,11 @@ func TestMultipleVersionsAndDeletion(t *testing.T) {
 
 	// Load specific versions
 	for i := 0; i < 5; i++ {
-		loadedArtifact, err := s.LoadArtifact(ctx, sessionInfo, filename, &i)
+		data, desc, err := s.LoadArtifactBytes(ctx, sessionInfo, filename, &i)
 		require.NoError(t, err)
+		require.NotNil(t, desc)
 		expected := fmt.Sprintf("version %d data", i)
-		assert.Equal(t, []byte(expected), loadedArtifact.Data)
+		assert.Equal(t, []byte(expected), data)
 	}
 
 	// Delete all versions

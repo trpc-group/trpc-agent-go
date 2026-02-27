@@ -12,6 +12,8 @@ package codeexecutor
 import (
 	"context"
 	"errors"
+	"io"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -110,13 +112,32 @@ func (*listVersionsErrService) SaveArtifact(
 	return 0, nil
 }
 
+func (*listVersionsErrService) ResolveArtifact(
+	_ context.Context,
+	_ artifact.SessionInfo,
+	filename string,
+	_ *int,
+) (*artifact.ArtifactDescriptor, error) {
+	return &artifact.ArtifactDescriptor{Name: filename, Version: 0}, nil
+}
+
 func (*listVersionsErrService) LoadArtifact(
 	_ context.Context,
 	_ artifact.SessionInfo,
-	_ string,
+	filename string,
 	_ *int,
-) (*artifact.Artifact, error) {
-	return &artifact.Artifact{Data: []byte("x")}, nil
+) (io.ReadCloser, *artifact.ArtifactDescriptor, error) {
+	desc := &artifact.ArtifactDescriptor{Name: filename, Version: 0}
+	return io.NopCloser(strings.NewReader("x")), desc, nil
+}
+
+func (*listVersionsErrService) LoadArtifactBytes(
+	_ context.Context,
+	_ artifact.SessionInfo,
+	filename string,
+	_ *int,
+) ([]byte, *artifact.ArtifactDescriptor, error) {
+	return []byte("x"), &artifact.ArtifactDescriptor{Name: filename, Version: 0}, nil
 }
 
 func (*listVersionsErrService) ListArtifactKeys(

@@ -35,9 +35,11 @@ func TestArtifact_SessionScope(t *testing.T) {
 	var artifacts []*artifact.Artifact
 	for i := 0; i < 3; i++ {
 		artifacts = append(artifacts, &artifact.Artifact{
-			Data:     []byte("Hello, World!" + strconv.Itoa(i)),
-			MimeType: "text/plain",
-			Name:     "display_name_user_scope_test.txt",
+			ArtifactDescriptor: artifact.ArtifactDescriptor{
+				MimeType: "text/plain",
+				Name:     "display_name_user_scope_test.txt",
+			},
+			Data: []byte("Hello, World!" + strconv.Itoa(i)),
 		})
 	}
 	t.Cleanup(func() {
@@ -57,20 +59,18 @@ func TestArtifact_SessionScope(t *testing.T) {
 	require.NoError(t, err)
 	require.ElementsMatch(t, []int{0, 1, 2}, version)
 
-	a, err := s.LoadArtifact(context.Background(), sessionInfo, sessionScopeKey, nil)
+	data, desc, err := s.LoadArtifactBytes(context.Background(), sessionInfo, sessionScopeKey, nil)
 	require.NoError(t, err)
-	require.EqualValues(t, &artifact.Artifact{
-		Data:     []byte("Hello, World!" + strconv.Itoa(2)),
-		MimeType: "text/plain",
-		Name:     sessionScopeKey,
-	}, a)
+	require.NotNil(t, desc)
+	require.EqualValues(t, []byte("Hello, World!"+strconv.Itoa(2)), data)
 	for i, wanted := range artifacts {
-		got, err := s.LoadArtifact(context.Background(),
+		gotData, gotDesc, err := s.LoadArtifactBytes(context.Background(),
 			sessionInfo, sessionScopeKey, &i)
 		require.NoError(t, err)
-		require.EqualValues(t, wanted.Data, got.Data)
-		require.EqualValues(t, wanted.MimeType, got.MimeType)
-		require.EqualValues(t, sessionScopeKey, got.Name)
+		require.NotNil(t, gotDesc)
+		require.EqualValues(t, wanted.Data, gotData)
+		require.EqualValues(t, wanted.MimeType, gotDesc.MimeType)
+		require.EqualValues(t, sessionScopeKey, gotDesc.Name)
 	}
 
 	keys, err := s.ListArtifactKeys(context.Background(), sessionInfo)
@@ -88,9 +88,10 @@ func TestArtifact_SessionScope(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, version)
 
-	a, err = s.LoadArtifact(context.Background(), sessionInfo, sessionScopeKey, nil)
+	data, desc, err = s.LoadArtifactBytes(context.Background(), sessionInfo, sessionScopeKey, nil)
 	require.NoError(t, err)
-	require.Nil(t, a)
+	require.Nil(t, data)
+	require.Nil(t, desc)
 }
 
 func TestArtifact_UserScope(t *testing.T) {
@@ -114,9 +115,11 @@ func TestArtifact_UserScope(t *testing.T) {
 		data := []byte("Hi, World!" + strconv.Itoa(i))
 		version, err := s.SaveArtifact(context.Background(),
 			sessionInfo, userScopeKey, &artifact.Artifact{
-				Data:     data,
-				MimeType: "text/plain",
-				Name:     "display_name_user_scope_test.txt",
+				ArtifactDescriptor: artifact.ArtifactDescriptor{
+					MimeType: "text/plain",
+					Name:     "display_name_user_scope_test.txt",
+				},
+				Data: data,
 			})
 		require.NoError(t, err)
 		require.Equal(t, i, version)
@@ -126,22 +129,16 @@ func TestArtifact_UserScope(t *testing.T) {
 	require.NoError(t, err)
 	require.ElementsMatch(t, []int{0, 1, 2}, version)
 
-	a, err := s.LoadArtifact(context.Background(), sessionInfo, userScopeKey, nil)
+	data, desc, err := s.LoadArtifactBytes(context.Background(), sessionInfo, userScopeKey, nil)
 	require.NoError(t, err)
-	require.EqualValues(t, &artifact.Artifact{
-		Data:     []byte("Hi, World!" + strconv.Itoa(2)),
-		MimeType: "text/plain",
-		Name:     userScopeKey,
-	}, a)
+	require.NotNil(t, desc)
+	require.EqualValues(t, []byte("Hi, World!"+strconv.Itoa(2)), data)
 	for i := 0; i < 3; i++ {
-		a, err := s.LoadArtifact(context.Background(),
+		data, desc, err := s.LoadArtifactBytes(context.Background(),
 			sessionInfo, userScopeKey, &i)
 		require.NoError(t, err)
-		require.EqualValues(t, &artifact.Artifact{
-			Data:     []byte("Hi, World!" + strconv.Itoa(i)),
-			MimeType: "text/plain",
-			Name:     userScopeKey,
-		}, a)
+		require.NotNil(t, desc)
+		require.EqualValues(t, []byte("Hi, World!"+strconv.Itoa(i)), data)
 	}
 
 	keys, err := s.ListArtifactKeys(context.Background(), sessionInfo)
@@ -159,7 +156,8 @@ func TestArtifact_UserScope(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, version)
 
-	a, err = s.LoadArtifact(context.Background(), sessionInfo, userScopeKey, nil)
+	data, desc, err = s.LoadArtifactBytes(context.Background(), sessionInfo, userScopeKey, nil)
 	require.NoError(t, err)
-	require.Nil(t, a)
+	require.Nil(t, data)
+	require.Nil(t, desc)
 }

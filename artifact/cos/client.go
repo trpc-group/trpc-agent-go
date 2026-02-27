@@ -13,6 +13,8 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/url"
+	"time"
 
 	cos "github.com/tencentyun/cos-go-sdk-v5"
 )
@@ -22,6 +24,9 @@ type client interface {
 	GetBucket(ctx context.Context, prefix string) (*cos.BucketGetResult, error)
 	PutObject(ctx context.Context, name string, content io.Reader, mimeType string) error
 	GetObject(ctx context.Context, name string) (body io.ReadCloser, header http.Header, err error)
+	HeadObject(ctx context.Context, name string) (header http.Header, err error)
+	PresignGetObject(ctx context.Context, name, secretID, secretKey string, expires time.Duration) (*url.URL, error)
+	ObjectURL(name string) *url.URL
 	DeleteObject(ctx context.Context, name string) error
 }
 
@@ -54,6 +59,22 @@ func (c *cosClient) GetObject(ctx context.Context, name string) (body io.ReadClo
 		return nil, nil, err
 	}
 	return resp.Body, resp.Header, nil
+}
+
+func (c *cosClient) HeadObject(ctx context.Context, name string) (header http.Header, err error) {
+	resp, err := c.Client.Object.Head(ctx, name, nil)
+	if err != nil {
+		return nil, err
+	}
+	return resp.Header, nil
+}
+
+func (c *cosClient) PresignGetObject(ctx context.Context, name, secretID, secretKey string, expires time.Duration) (*url.URL, error) {
+	return c.Client.Object.GetPresignedURL(ctx, http.MethodGet, name, secretID, secretKey, expires, nil)
+}
+
+func (c *cosClient) ObjectURL(name string) *url.URL {
+	return c.Client.Object.GetObjectURL(name)
 }
 
 func (c *cosClient) DeleteObject(ctx context.Context, name string) error {

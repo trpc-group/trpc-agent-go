@@ -48,9 +48,11 @@ func generateImage(ctx context.Context, input generateImageInput) (generateImage
 	for _, img := range images {
 		output.Result += fmt.Sprintf("Image has been generated at the URL %s.", img.url)
 		a := &artifact.Artifact{
-			MimeType: img.mimeType,
-			URL:      img.url,
-			Data:     img.content,
+			ArtifactDescriptor: artifact.ArtifactDescriptor{
+				MimeType: img.mimeType,
+				URL:      img.url,
+			},
+			Data: img.content,
 		}
 		imageID := generateRandomID()
 		_, err = toolCtx.SaveArtifact(imageID, a)

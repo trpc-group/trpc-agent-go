@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -29,6 +30,9 @@ import (
 type Client interface {
 	PutObject(ctx context.Context, key string, data []byte, contentType string) error
 	GetObject(ctx context.Context, key string) ([]byte, string, error)
+	OpenObject(ctx context.Context, key string) (io.ReadCloser, string, int64, error)
+	HeadObject(ctx context.Context, key string) (string, int64, error)
+	PresignGetObject(ctx context.Context, key string, expires time.Duration) (string, error)
 	ListObjects(ctx context.Context, prefix string) ([]string, error)
 	DeleteObjects(ctx context.Context, keys []string) error
 	Close() error
@@ -39,6 +43,7 @@ type Client interface {
 type s3API interface {
 	PutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error)
 	GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+	HeadObject(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error)
 	DeleteObjects(ctx context.Context, params *s3.DeleteObjectsInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error)
 	ListObjectsV2(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
 }
@@ -46,6 +51,7 @@ type s3API interface {
 // client implements the Client interface using AWS SDK v2.
 type client struct {
 	s3     s3API
+	raw    *s3.Client
 	bucket string
 }
 
@@ -102,13 +108,21 @@ func NewClient(ctx context.Context, opts ...ClientBuilderOpt) (Client, error) {
 	}
 
 	return &client{
-		s3:     s3.NewFromConfig(awsCfg, s3Opts...),
+		raw:    s3.NewFromConfig(awsCfg, s3Opts...),
 		bucket: cfg.Bucket,
 	}, nil
 }
 
+// Ensure the embedded API is set for real clients.
+func (c *client) init() {
+	if c.s3 == nil {
+		c.s3 = c.raw
+	}
+}
+
 // PutObject uploads an object to S3.
 func (c *client) PutObject(ctx context.Context, key string, data []byte, contentType string) error {
+	c.init()
 	input := &s3.PutObjectInput{
 		Bucket: aws.String(c.bucket),
 		Key:    aws.String(key),
@@ -125,25 +139,71 @@ func (c *client) PutObject(ctx context.Context, key string, data []byte, content
 
 // GetObject downloads an object from S3.
 func (c *client) GetObject(ctx context.Context, key string) ([]byte, string, error) {
+	body, contentType, _, err := c.OpenObject(ctx, key)
+	if err != nil {
+		return nil, "", err
+	}
+	if body == nil {
+		return nil, "", nil
+	}
+	defer body.Close()
+
+	data, err := io.ReadAll(body)
+	if err != nil {
+		return nil, "", err
+	}
+	return data, contentType, nil
+}
+
+// OpenObject opens a streaming reader for an object.
+func (c *client) OpenObject(ctx context.Context, key string) (io.ReadCloser, string, int64, error) {
+	c.init()
 	resp, err := c.s3.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(c.bucket),
 		Key:    aws.String(key),
 	})
 	if err != nil {
-		return nil, "", wrapError(err)
+		return nil, "", 0, wrapError(err)
 	}
-	defer resp.Body.Close()
+	return resp.Body, aws.ToString(resp.ContentType), resp.ContentLength, nil
+}
 
-	data, err := io.ReadAll(resp.Body)
+// HeadObject returns metadata for an object without downloading it.
+func (c *client) HeadObject(ctx context.Context, key string) (string, int64, error) {
+	c.init()
+	resp, err := c.s3.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(c.bucket),
+		Key:    aws.String(key),
+	})
 	if err != nil {
-		return nil, "", err
+		return "", 0, wrapError(err)
 	}
+	return aws.ToString(resp.ContentType), resp.ContentLength, nil
+}
 
-	return data, aws.ToString(resp.ContentType), nil
+func (c *client) PresignGetObject(ctx context.Context, key string, expires time.Duration) (string, error) {
+	c.init()
+	if c.raw == nil {
+		return "", errors.New("presign not available")
+	}
+	p := s3.NewPresignClient(c.raw)
+	out, err := p.PresignGetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(c.bucket),
+		Key:    aws.String(key),
+	}, func(po *s3.PresignOptions) {
+		if expires > 0 {
+			po.Expires = expires
+		}
+	})
+	if err != nil {
+		return "", wrapError(err)
+	}
+	return out.URL, nil
 }
 
 // ListObjects lists object keys with the given prefix.
 func (c *client) ListObjects(ctx context.Context, prefix string) ([]string, error) {
+	c.init()
 	var keys []string
 	var continuationToken *string
 
@@ -172,6 +232,7 @@ func (c *client) ListObjects(ctx context.Context, prefix string) ([]string, erro
 
 // DeleteObjects deletes multiple objects in batches of 1000.
 func (c *client) DeleteObjects(ctx context.Context, keys []string) error {
+	c.init()
 	if len(keys) == 0 {
 		return nil
 	}
@@ -240,6 +301,8 @@ func wrapError(err error) error {
 			return errors.Join(ErrNotFound, err)
 		case "NoSuchBucket":
 			return errors.Join(ErrBucketNotFound, err)
+		case "NotFound":
+			return errors.Join(ErrNotFound, err)
 		}
 	}
 

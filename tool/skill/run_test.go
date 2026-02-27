@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path"
@@ -827,11 +828,23 @@ func (e *errArtifactService) SaveArtifact(
 ) (int, error) {
 	return 0, fmt.Errorf("forced-error")
 }
+func (e *errArtifactService) ResolveArtifact(
+	ctx context.Context, sessionInfo artifact.SessionInfo,
+	filename string, version *int,
+) (*artifact.ArtifactDescriptor, error) {
+	return nil, nil
+}
 func (e *errArtifactService) LoadArtifact(
 	ctx context.Context, sessionInfo artifact.SessionInfo,
 	filename string, version *int,
-) (*artifact.Artifact, error) {
-	return nil, nil
+) (io.ReadCloser, *artifact.ArtifactDescriptor, error) {
+	return nil, nil, nil
+}
+func (e *errArtifactService) LoadArtifactBytes(
+	ctx context.Context, sessionInfo artifact.SessionInfo,
+	filename string, version *int,
+) ([]byte, *artifact.ArtifactDescriptor, error) {
+	return nil, nil, nil
 }
 func (e *errArtifactService) ListArtifactKeys(
 	ctx context.Context, sessionInfo artifact.SessionInfo,

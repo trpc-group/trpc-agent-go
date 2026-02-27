@@ -236,9 +236,11 @@ func myTool(ctx context.Context, input MyInput) (MyOutput, error) {
 
     // Create an artifact
     artifact := &artifact.Artifact{
-        Data:     []byte("Hello, World!"),
-        MimeType: "text/plain",
-        Name:     "greeting.txt",
+        ArtifactDescriptor: artifact.ArtifactDescriptor{
+            MimeType: "text/plain",
+            Name:     "greeting.txt",
+        },
+        Data: []byte("Hello, World!"),
     }
 
     // Save the artifact
@@ -247,8 +249,8 @@ func myTool(ctx context.Context, input MyInput) (MyOutput, error) {
         return MyOutput{}, err
     }
 
-    // Load the artifact later
-    loadedArtifact, err := toolCtx.LoadArtifact("greeting.txt", nil) // nil for latest version
+    // Load the artifact later (into memory)
+    data, desc, err := toolCtx.LoadArtifactBytes("greeting.txt", nil) // nil for latest version
     if err != nil {
         return MyOutput{}, err
     }
@@ -290,10 +292,10 @@ v1, _ := toolCtx.SaveArtifact("document.txt", artifact2)
 
 // Load specific version
 oldVersion := 0
-artifact, _ := toolCtx.LoadArtifact("document.txt", &oldVersion)
+data, desc, _ := toolCtx.LoadArtifactBytes("document.txt", &oldVersion)
 
 // Load latest version
-artifact, _ := toolCtx.LoadArtifact("document.txt", nil)
+data, desc, _ = toolCtx.LoadArtifactBytes("document.txt", nil)
 ```
 
 ## Artifact Service Interface
@@ -305,8 +307,14 @@ type Service interface {
     // Save an artifact and return the version ID
     SaveArtifact(ctx context.Context, sessionInfo SessionInfo, filename string, artifact *Artifact) (int, error)
     
-    // Load an artifact (latest version if version is nil)
-    LoadArtifact(ctx context.Context, sessionInfo SessionInfo, filename string, version *int) (*Artifact, error)
+    // Resolve artifact metadata + optional URL (no download)
+    ResolveArtifact(ctx context.Context, sessionInfo SessionInfo, filename string, version *int) (*ArtifactDescriptor, error)
+    
+    // Load an artifact as a stream (latest version if version is nil)
+    LoadArtifact(ctx context.Context, sessionInfo SessionInfo, filename string, version *int) (io.ReadCloser, *ArtifactDescriptor, error)
+    
+    // Convenience: load artifact into memory
+    LoadArtifactBytes(ctx context.Context, sessionInfo SessionInfo, filename string, version *int) ([]byte, *ArtifactDescriptor, error)
     
     // List all artifact filenames in a session
     ListArtifactKeys(ctx context.Context, sessionInfo SessionInfo) ([]string, error)
