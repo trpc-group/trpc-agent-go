@@ -1,0 +1,21 @@
+app_name: "openclaw"
+
+http:
+  addr: ":8080"
+
+model:
+  mode: "openai"
+  name: "gpt-5"
+  openai_variant: "auto"
+
+tools:
+  refresh_toolsets_on_run: true
+  toolsets:
+    - type: "mcp"
+      name: "demo_mcp"
+      config:
+        transport: "stdio"
+        command: "go"
+        args: ["run", "./examples/mcp_stdio_server"]
+        timeout: "60s"
+

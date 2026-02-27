@@ -185,6 +185,7 @@ _ = result.OverallStatus
     - [11. Agent Skills](#11-agent-skills)
     - [12. Artifacts](#12-artifacts)
     - [13. A2A Interop](#13-a2a-interop)
+    - [14. Gateway Server](#14-gateway-server)
   - [Architecture Overview](#architecture-overview)
     - [**Execution Flow**](#execution-flow)
   - [Using Built-in Agents](#using-built-in-agents)
@@ -561,6 +562,15 @@ Example: [examples/a2aadk](examples/a2aadk)
 - Agent-to-Agent (A2A) interop with an ADK Python A2A server.
 - Demonstrates streaming, tool calls, and code execution across runtimes.
 
+### 14. Gateway Server
+
+Example: [openclaw](openclaw)
+
+- A minimal OpenClaw-like gateway server.
+- Stable session ids and per-session serialization.
+- Basic safety controls: allowlist + mention gating.
+- OpenClaw-like demo binary (Telegram + gateway): [openclaw](openclaw)
+
 Other notable examples:
 
 - [examples/humaninloop](examples/humaninloop) – Human in the loop.
@@ -599,7 +609,7 @@ Key packages:
 | `skill`     | Loads and executes reusable Agent Skills defined by `SKILL.md`.                                             |
 | `event`     | Defines event types and streaming payloads used across Runner and servers.                                  |
 | `evaluation` | Evaluates agents on eval sets using pluggable metrics and stores results.                                  |
-| `server`    | Exposes HTTP servers (AG-UI, A2A) for integration and UIs.                                                  |
+| `server`    | Exposes HTTP servers (Gateway, AG-UI, A2A) for integration and UIs.                                         |
 | `telemetry` | OpenTelemetry tracing and metrics instrumentation.                                                          |
 
 
