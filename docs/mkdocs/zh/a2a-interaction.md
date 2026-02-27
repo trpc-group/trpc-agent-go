@@ -5,19 +5,91 @@
 
 ## 背景
 
-[A2A (Agent-to-Agent) 协议](https://a2a-protocol.org/latest/specification/) 定义了 Agent 间通信的基础数据模型（Message、Task、Part 等）和操作接口（SendMessage、StreamMessage 等），但**没有规定**以下应用层的具体行为：
+[A2A (Agent-to-Agent) 协议](https://a2a-protocol.org/latest/specification/) 定义了 Agent 间通信的基础数据模型（Message、Task、Part 等）和操作接口（SendMessage、StreamMessage 等）。A2A 规范在开篇明确了协议的设计目标：
 
-- 工具调用（Function Call / Response）如何通过 A2A Part 传递
-- 代码执行事件如何编码
-- 模型思考内容（Reasoning）如何标记
-- 流式交互中 Client 端应如何处理控制信号
-- Metadata 中应携带哪些追踪和聚合字段
+> *The Agent2Agent (A2A) Protocol is an open standard designed to facilitate communication and interoperability between independent, potentially opaque AI agent systems.*
+>
+> *Its primary goal is to enable agents to:*
+>
+> - *Discover each other's capabilities.*
+> - *Negotiate interaction modalities (text, files, structured data).*
+> - *Manage collaborative tasks.*
+> - *Securely exchange information to achieve user goals without needing access to each other's internal state, memory, or tools.*
+>
+> — [A2A Protocol Specification](https://a2a-protocol.org/latest/specification/)
 
-本文档定义了 trpc-agent-go 在 A2A 协议之上的**交互规范**，作为 Client 和 Server 实现的标准参考。当 A2A 协议升级（如 v1.0）时，本文档将同步更新。
+可以看到，A2A 期望 Agent 之间以「黑盒」方式协作——彼此发现能力、协商交互模式、管理协作任务，但不需要访问对方的工具（Tools）、记忆（Memory）和内部状态（Internal State）。基于这一设计理念，Agent 执行过程中的 trace 数据——如工具调用链路（Function Call / Response）、代码执行过程、模型推理步骤（Reasoning）等——并不在 A2A 协议的规范范围内，协议也没有定义这些数据应如何传递。
+
+然而在实际的多 Agent 编排场景中，部分用户希望能够看到远程 Agent 的执行路径，以便进行调试、审计或更精细的协同。考虑到这一需求，trpc-agent-go 利用 A2A 协议预留的扩展机制（`DataPart`、`Message.metadata` 等），在不违背协议规范的前提下支持了这些数据的传递。
+
+本文档定义了 trpc-agent-go 在 A2A 协议之上的**交互规范**，作为 Client 和 Server 实现的标准参考。当 A2A 协议升级时，本文档将同步更新。
+
+!!! info "后续规划"
+    为了更好地符合 A2A 规范的设计理念，工具调用等执行过程数据的跨 Agent 传递，后续将设计为独立的 **extension**，用户可通过配置自行决定是否开启。如果希望严格遵循 A2A 的黑盒协作模式、不暴露内部执行细节，关闭即可，此时仅传递最终结果。
 
 > 完整的 A2A 协议规范请参考：https://a2a-protocol.org/latest/specification/
 >
 > 框架使用指南请参考：[A2A 集成指南](a2a.md)
+
+---
+
+## 版本标识
+
+**当前交互规范版本：`0.1`**
+
+trpc-agent-go 通过 A2A 协议标准的 `AgentCard.capabilities.extensions` 字段声明交互规范版本，使 Client 端在发现远程 Agent 时即可感知对端支持的规范版本，从而在后续升级时实现兼容处理。
+
+此 extension 标识的是 **Agent 交互规范**——即消息编码格式、流式控制约定、metadata 字段定义等整体协议层面的约定。工具调用链路（tool call trace）等执行过程数据的跨 Agent 传递属于独立的能力，后续将通过单独的 extension 来声明和控制开关，不在此 extension 的范围内。
+
+### AgentCard 中的声明
+
+A2A Server 自动生成的 AgentCard 中会包含以下 extension：
+
+```json
+{
+  "capabilities": {
+    "streaming": true,
+    "extensions": [
+      {
+        "uri": "trpc-agent-go:interaction-spec",
+        "params": {
+          "version": "0.1"
+        }
+      }
+    ]
+  }
+}
+```
+
+| 字段       | 说明                                                                 |
+| ---------- | -------------------------------------------------------------------- |
+| `uri`      | 扩展标识，固定为 `trpc-agent-go:interaction-spec`                    |
+| `required` | 省略（默认 `false`），表示该扩展为声明性的，不强制 Client 必须支持。不认识该扩展的标准 A2A Client 仍可正常进行基础交互 |
+| `params.version` | 交互规范版本号，遵循语义化版本（当前为 `0.1`）                |
+
+### 请求中的版本声明
+
+A2A Client 在发送请求（`message/send` 或 `message/stream`）时，会在 Message 的 `metadata` 中携带自身支持的交互规范版本：
+
+```json
+{
+  "role": "user",
+  "parts": [...],
+  "metadata": {
+    "interaction_spec_version": "0.1",
+    "invocation_id": "...",
+    "user_id": "..."
+  }
+}
+```
+
+| 字段                          | 说明                                                                 |
+| ----------------------------- | -------------------------------------------------------------------- |
+| `interaction_spec_version`    | Client 支持的交互规范版本号，Server 可据此决定响应的编码方式          |
+
+Server 端可以根据此字段判断 Client 的能力：
+- **字段存在**：Client 是 trpc-agent-go 客户端，支持对应版本的交互规范（如 tool call、reasoning content 等扩展编码）
+- **字段不存在**：Client 是标准 A2A 客户端或其他框架的客户端
 
 ---
 

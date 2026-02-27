@@ -228,6 +228,7 @@ func (d *defaultEventA2AConverter) ConvertToA2AMessage(
 	if sess != nil && sess.UserID != "" {
 		message.Metadata["user_id"] = sess.UserID
 	}
+	message.Metadata[ia2a.MessageMetadataInteractionSpecVersionKey] = ia2a.InteractionSpecVersion
 
 	return &message, nil
 }

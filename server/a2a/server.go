@@ -81,6 +81,14 @@ func buildAgentCard(options *options) a2a.AgentCard {
 		URL:         url,
 		Capabilities: a2a.AgentCapabilities{
 			Streaming: &options.enableStreaming,
+			Extensions: []a2a.AgentExtension{
+				{
+					URI: ia2a.ExtensionURIInteractionSpec,
+					Params: map[string]interface{}{
+						"version": ia2a.InteractionSpecVersion,
+					},
+				},
+			},
 		},
 		Skills:             skills,
 		DefaultInputModes:  []string{"text"},
