@@ -12,6 +12,7 @@ package evaluation
 import (
 	"runtime"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	evalresultinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
@@ -37,6 +38,7 @@ type options struct {
 	evalCaseParallelism               int
 	evalCaseParallelInferenceEnabled  bool
 	evalCaseParallelEvaluationEnabled bool
+	runOptions                        []agent.RunOption
 }
 
 // newOptions creates a new options with the default values.
@@ -129,5 +131,12 @@ func WithEvalCaseParallelInferenceEnabled(enabled bool) Option {
 func WithEvalCaseParallelEvaluationEnabled(enabled bool) Option {
 	return func(o *options) {
 		o.evalCaseParallelEvaluationEnabled = enabled
+	}
+}
+
+// WithRunOptions appends agent.RunOption values that will be applied to every runner.Run call during inference.
+func WithRunOptions(opt ...agent.RunOption) Option {
+	return func(o *options) {
+		o.runOptions = append(o.runOptions, opt...)
 	}
 }

@@ -1107,40 +1107,40 @@ func TestLocalEvaluatePerCaseErrors(t *testing.T) {
 	tests := []struct {
 		name      string
 		expectErr bool
-		setup     func(t *testing.T) (*local, *service.InferenceResult, *service.EvaluateConfig)
+		setup     func(t *testing.T) (*local, evalset.Manager, registry.Registry, *service.InferenceResult, *service.EvaluateConfig)
 	}{
 		{
 			name:      "nil inference result",
 			expectErr: true,
-			setup: func(t *testing.T) (*local, *service.InferenceResult, *service.EvaluateConfig) {
-				svc, _, _ := prepare(t)
-				return svc, nil, &service.EvaluateConfig{}
+			setup: func(t *testing.T) (*local, evalset.Manager, registry.Registry, *service.InferenceResult, *service.EvaluateConfig) {
+				svc, mgr, reg := prepare(t)
+				return svc, mgr, reg, nil, &service.EvaluateConfig{}
 			},
 		},
 		{
 			name:      "nil evaluate config",
 			expectErr: true,
-			setup: func(t *testing.T) (*local, *service.InferenceResult, *service.EvaluateConfig) {
-				svc, _, _ := prepare(t)
+			setup: func(t *testing.T) (*local, evalset.Manager, registry.Registry, *service.InferenceResult, *service.EvaluateConfig) {
+				svc, mgr, reg := prepare(t)
 				inference := makeInferenceResult(appName, evalSetID, "case", "session", nil)
-				return svc, inference, nil
+				return svc, mgr, reg, inference, nil
 			},
 		},
 		{
 			name:      "missing eval case",
 			expectErr: true,
-			setup: func(t *testing.T) (*local, *service.InferenceResult, *service.EvaluateConfig) {
-				svc, _, _ := prepare(t)
+			setup: func(t *testing.T) (*local, evalset.Manager, registry.Registry, *service.InferenceResult, *service.EvaluateConfig) {
+				svc, mgr, reg := prepare(t)
 				inference := makeInferenceResult(appName, evalSetID, "missing", "session", []*evalset.Invocation{})
 				config := &service.EvaluateConfig{EvalMetrics: []*metric.EvalMetric{}}
-				return svc, inference, config
+				return svc, mgr, reg, inference, config
 			},
 		},
 		{
 			name:      "invalid eval case",
 			expectErr: true,
-			setup: func(t *testing.T) (*local, *service.InferenceResult, *service.EvaluateConfig) {
-				svc, mgr, _ := prepare(t)
+			setup: func(t *testing.T) (*local, evalset.Manager, registry.Registry, *service.InferenceResult, *service.EvaluateConfig) {
+				svc, mgr, reg := prepare(t)
 				_, err := mgr.Create(ctx, appName, evalSetID)
 				assert.NoError(t, err)
 				invalid := &evalset.EvalCase{
@@ -1152,14 +1152,14 @@ func TestLocalEvaluatePerCaseErrors(t *testing.T) {
 				actual := makeActualInvocation("actual-1", "prompt", "answer")
 				inference := makeInferenceResult(appName, evalSetID, "invalid", "session", []*evalset.Invocation{actual})
 				config := &service.EvaluateConfig{EvalMetrics: []*metric.EvalMetric{}}
-				return svc, inference, config
+				return svc, mgr, reg, inference, config
 			},
 		},
 		{
 			name:      "nil session input",
 			expectErr: true,
-			setup: func(t *testing.T) (*local, *service.InferenceResult, *service.EvaluateConfig) {
-				svc, mgr, _ := prepare(t)
+			setup: func(t *testing.T) (*local, evalset.Manager, registry.Registry, *service.InferenceResult, *service.EvaluateConfig) {
+				svc, mgr, reg := prepare(t)
 				_, err := mgr.Create(ctx, appName, evalSetID)
 				assert.NoError(t, err)
 				invalid := &evalset.EvalCase{
@@ -1171,40 +1171,40 @@ func TestLocalEvaluatePerCaseErrors(t *testing.T) {
 				actual := makeActualInvocation("actual-1", "prompt", "answer")
 				inference := makeInferenceResult(appName, evalSetID, "nil-session", "session", []*evalset.Invocation{actual})
 				config := &service.EvaluateConfig{EvalMetrics: []*metric.EvalMetric{}}
-				return svc, inference, config
+				return svc, mgr, reg, inference, config
 			},
 		},
 		{
 			name:      "mismatched inference count",
 			expectErr: true,
-			setup: func(t *testing.T) (*local, *service.InferenceResult, *service.EvaluateConfig) {
-				svc, mgr, _ := prepare(t)
+			setup: func(t *testing.T) (*local, evalset.Manager, registry.Registry, *service.InferenceResult, *service.EvaluateConfig) {
+				svc, mgr, reg := prepare(t)
 				_, err := mgr.Create(ctx, appName, evalSetID)
 				assert.NoError(t, err)
 				assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, makeEvalCase(appName, "case-mismatch", "prompt")))
 				inference := makeInferenceResult(appName, evalSetID, "case-mismatch", "session", []*evalset.Invocation{})
 				config := &service.EvaluateConfig{EvalMetrics: []*metric.EvalMetric{}}
-				return svc, inference, config
+				return svc, mgr, reg, inference, config
 			},
 		},
 		{
 			name:      "missing evaluator",
 			expectErr: false,
-			setup: func(t *testing.T) (*local, *service.InferenceResult, *service.EvaluateConfig) {
-				svc, mgr, _ := prepare(t)
+			setup: func(t *testing.T) (*local, evalset.Manager, registry.Registry, *service.InferenceResult, *service.EvaluateConfig) {
+				svc, mgr, reg := prepare(t)
 				_, err := mgr.Create(ctx, appName, evalSetID)
 				assert.NoError(t, err)
 				assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, makeEvalCase(appName, "case-evaluator", "prompt")))
 				actual := makeActualInvocation("actual-1", "prompt", "answer")
 				inference := makeInferenceResult(appName, evalSetID, "case-evaluator", "session", []*evalset.Invocation{actual})
 				config := &service.EvaluateConfig{EvalMetrics: []*metric.EvalMetric{{MetricName: "missing_metric", Threshold: 1}}}
-				return svc, inference, config
+				return svc, mgr, reg, inference, config
 			},
 		},
 		{
 			name:      "per invocation mismatch",
 			expectErr: true,
-			setup: func(t *testing.T) (*local, *service.InferenceResult, *service.EvaluateConfig) {
+			setup: func(t *testing.T) (*local, evalset.Manager, registry.Registry, *service.InferenceResult, *service.EvaluateConfig) {
 				svc, mgr, reg := prepare(t)
 				_, err := mgr.Create(ctx, appName, evalSetID)
 				assert.NoError(t, err)
@@ -1222,13 +1222,13 @@ func TestLocalEvaluatePerCaseErrors(t *testing.T) {
 				actual := makeActualInvocation("actual-1", "prompt", "answer")
 				inference := makeInferenceResult(appName, evalSetID, "case-per", "session", []*evalset.Invocation{actual})
 				config := &service.EvaluateConfig{EvalMetrics: []*metric.EvalMetric{{MetricName: metricName, Threshold: 1}}}
-				return svc, inference, config
+				return svc, mgr, reg, inference, config
 			},
 		},
 		{
 			name:      "summarize failure",
 			expectErr: true,
-			setup: func(t *testing.T) (*local, *service.InferenceResult, *service.EvaluateConfig) {
+			setup: func(t *testing.T) (*local, evalset.Manager, registry.Registry, *service.InferenceResult, *service.EvaluateConfig) {
 				svc, mgr, reg := prepare(t)
 				_, err := mgr.Create(ctx, appName, evalSetID)
 				assert.NoError(t, err)
@@ -1246,13 +1246,13 @@ func TestLocalEvaluatePerCaseErrors(t *testing.T) {
 				actual := makeActualInvocation("actual-1", "prompt", "answer")
 				inference := makeInferenceResult(appName, evalSetID, "case-summary", "session", []*evalset.Invocation{actual})
 				config := &service.EvaluateConfig{EvalMetrics: []*metric.EvalMetric{{MetricName: metricName, Threshold: 1}}}
-				return svc, inference, config
+				return svc, mgr, reg, inference, config
 			},
 		},
 		{
 			name:      "evaluator error",
 			expectErr: true,
-			setup: func(t *testing.T) (*local, *service.InferenceResult, *service.EvaluateConfig) {
+			setup: func(t *testing.T) (*local, evalset.Manager, registry.Registry, *service.InferenceResult, *service.EvaluateConfig) {
 				svc, mgr, reg := prepare(t)
 				_, err := mgr.Create(ctx, appName, evalSetID)
 				assert.NoError(t, err)
@@ -1263,15 +1263,16 @@ func TestLocalEvaluatePerCaseErrors(t *testing.T) {
 				actual := makeActualInvocation("actual-1", "prompt", "answer")
 				inference := makeInferenceResult(appName, evalSetID, "case-eval-error", "session", []*evalset.Invocation{actual})
 				config := &service.EvaluateConfig{EvalMetrics: []*metric.EvalMetric{{MetricName: metricName, Threshold: 1}}}
-				return svc, inference, config
+				return svc, mgr, reg, inference, config
 			},
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			svc, inference, config := tc.setup(t)
-			_, err := svc.evaluatePerCase(ctx, inference, config)
+			svc, mgr, reg, inference, config := tc.setup(t)
+			opts := &service.Options{EvalSetManager: mgr, Registry: reg}
+			_, err := svc.evaluatePerCase(ctx, inference, config, opts)
 			if tc.expectErr {
 				assert.Error(t, err)
 			} else {

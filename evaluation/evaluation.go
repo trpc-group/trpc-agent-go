@@ -34,7 +34,7 @@ import (
 // AgentEvaluator evaluates an agent against configured evaluation sets.
 type AgentEvaluator interface {
 	// Evaluate runs evaluation against the specified eval set.
-	Evaluate(ctx context.Context, evalSetID string) (*EvaluationResult, error)
+	Evaluate(ctx context.Context, evalSetID string, opt ...Option) (*EvaluationResult, error)
 	// Close closes the evaluator and releases owned resources.
 	Close() error
 }
@@ -54,6 +54,7 @@ func New(appName string, runner runner.Runner, opt ...Option) (AgentEvaluator, e
 		registry:          opts.registry,
 		evalService:       opts.evalService,
 		numRuns:           opts.numRuns,
+		runOptions:        opts.runOptions,
 	}
 	if a.numRuns <= 0 {
 		return nil, errors.New("num runs must be greater than 0")
@@ -99,6 +100,7 @@ type agentEvaluator struct {
 	registry          registry.Registry
 	evalService       service.Service
 	numRuns           int
+	runOptions        []agent.RunOption
 }
 
 // EvaluationResult contains the aggregated outcome of running an evaluation across multiple runs.
@@ -120,14 +122,18 @@ type EvaluationCaseResult struct {
 }
 
 // Evaluate evaluates agent against the specified eval set across multiple runs.
-func (a *agentEvaluator) Evaluate(ctx context.Context, evalSetID string) (*EvaluationResult, error) {
+func (a *agentEvaluator) Evaluate(ctx context.Context, evalSetID string, opt ...Option) (*EvaluationResult, error) {
 	if evalSetID == "" {
 		return nil, errors.New("eval set id is not configured")
 	}
 	ctx, _ = agent.EnsureInvocation(ctx)
+	callOpts, err := a.resolveCallOptions(opt...)
+	if err != nil {
+		return nil, err
+	}
 	start := time.Now()
 	// Gather per-case results.
-	evalCases, evalSetResult, err := a.collectCaseResults(ctx, evalSetID)
+	evalCases, evalSetResult, err := a.collectCaseResults(ctx, evalSetID, callOpts)
 	if err != nil {
 		return nil, fmt.Errorf("collect eval case results: %w", err)
 	}
@@ -144,6 +150,40 @@ func (a *agentEvaluator) Evaluate(ctx context.Context, evalSetID string) (*Evalu
 		EvalCases:     evalCases,
 		EvalResult:    evalSetResult,
 	}, nil
+}
+
+func (a *agentEvaluator) resolveCallOptions(opt ...Option) (*options, error) {
+	callOpts := &options{
+		evalSetManager:    a.evalSetManager,
+		evalResultManager: a.evalResultManager,
+		metricManager:     a.metricManager,
+		registry:          a.registry,
+		evalService:       a.evalService,
+		numRuns:           a.numRuns,
+		runOptions:        append([]agent.RunOption(nil), a.runOptions...),
+	}
+	for _, o := range opt {
+		o(callOpts)
+	}
+	if callOpts.numRuns <= 0 {
+		return nil, errors.New("num runs must be greater than 0")
+	}
+	if callOpts.evalSetManager == nil {
+		return nil, errors.New("eval set manager is nil")
+	}
+	if callOpts.metricManager == nil {
+		return nil, errors.New("metric manager is nil")
+	}
+	if callOpts.evalResultManager == nil {
+		return nil, errors.New("eval result manager is nil")
+	}
+	if callOpts.registry == nil {
+		return nil, errors.New("registry is nil")
+	}
+	if callOpts.evalService == nil {
+		return nil, errors.New("eval service is nil")
+	}
+	return callOpts, nil
 }
 
 // Close closes the evaluator and releases owned resources.
@@ -173,11 +213,11 @@ func (a *agentEvaluator) Close() error {
 }
 
 // collectCaseResults runs evaluation on the specified eval set across multiple runs and groups results by case ID.
-func (a *agentEvaluator) collectCaseResults(ctx context.Context, evalSetID string) ([]*EvaluationCaseResult, *evalresult.EvalSetResult, error) {
+func (a *agentEvaluator) collectCaseResults(ctx context.Context, evalSetID string, opts *options) ([]*EvaluationCaseResult, *evalresult.EvalSetResult, error) {
 	// Determine eval case ordering from the eval set definition when possible.
 	evalSetIndex := make(map[string]int)
-	if a.evalSetManager != nil {
-		evalSet, err := a.evalSetManager.Get(ctx, a.appName, evalSetID)
+	if opts.evalSetManager != nil {
+		evalSet, err := opts.evalSetManager.Get(ctx, a.appName, evalSetID)
 		if err != nil {
 			return nil, nil, fmt.Errorf("get eval set: %w", err)
 		}
@@ -190,7 +230,7 @@ func (a *agentEvaluator) collectCaseResults(ctx context.Context, evalSetID strin
 	// caseResultsByID is a map from case ID to a list of eval case results.
 	caseResultsByID := make(map[string][]*evalresult.EvalCaseResult)
 	// Run evaluation on the specified eval set across multiple inference runs.
-	evalSetResult, err := a.runEvaluation(ctx, evalSetID)
+	evalSetResult, err := a.runEvaluation(ctx, evalSetID, opts)
 	if err != nil {
 		return nil, nil, fmt.Errorf("run evaluation: %w", err)
 	}
@@ -222,27 +262,32 @@ func (a *agentEvaluator) collectCaseResults(ctx context.Context, evalSetID strin
 }
 
 // runEvaluation runs inference and evaluation on the specified eval set.
-func (a *agentEvaluator) runEvaluation(ctx context.Context, evalSetID string) (*evalresult.EvalSetResult, error) {
+func (a *agentEvaluator) runEvaluation(ctx context.Context, evalSetID string, opts *options) (*evalresult.EvalSetResult, error) {
 	// Fetch the metric configuration that will be applied to these runs.
-	metricNames, err := a.metricManager.List(ctx, a.appName, evalSetID)
+	metricNames, err := opts.metricManager.List(ctx, a.appName, evalSetID)
 	if err != nil {
 		return nil, fmt.Errorf("list metrics: %w", err)
 	}
 	evalMetrics := make([]*metric.EvalMetric, 0, len(metricNames))
 	for _, metricName := range metricNames {
-		metric, err := a.metricManager.Get(ctx, a.appName, evalSetID, metricName)
+		metric, err := opts.metricManager.Get(ctx, a.appName, evalSetID, metricName)
 		if err != nil {
 			return nil, fmt.Errorf("get metric %s: %w", metricName, err)
 		}
 		evalMetrics = append(evalMetrics, metric)
 	}
 	allCaseResults := make([]*evalresult.EvalCaseResult, 0)
-	for runID := 1; runID <= a.numRuns; runID++ {
+	for runID := 1; runID <= opts.numRuns; runID++ {
 		inferenceRequest := &service.InferenceRequest{
 			AppName:   a.appName,
 			EvalSetID: evalSetID,
 		}
-		runInferenceResults, err := a.evalService.Inference(ctx, inferenceRequest)
+		runInferenceResults, err := opts.evalService.Inference(
+			ctx,
+			inferenceRequest,
+			service.WithEvalSetManager(opts.evalSetManager),
+			service.WithRunOptions(opts.runOptions...),
+		)
 		if err != nil {
 			return nil, fmt.Errorf("inference: %w", err)
 		}
@@ -254,7 +299,12 @@ func (a *agentEvaluator) runEvaluation(ctx context.Context, evalSetID string) (*
 				EvalMetrics: evalMetrics,
 			},
 		}
-		runResult, err := a.evalService.Evaluate(ctx, evaluateRequest)
+		runResult, err := opts.evalService.Evaluate(
+			ctx,
+			evaluateRequest,
+			service.WithEvalSetManager(opts.evalSetManager),
+			service.WithRegistry(opts.registry),
+		)
 		if err != nil {
 			return nil, fmt.Errorf("evaluate: %w", err)
 		}
@@ -273,10 +323,10 @@ func (a *agentEvaluator) runEvaluation(ctx context.Context, evalSetID string) (*
 		EvalSetID:       evalSetID,
 		EvalCaseResults: allCaseResults,
 	}
-	if err := multirun.SummarizeMultiRun(evalSetResult, a.numRuns); err != nil {
+	if err := multirun.SummarizeMultiRun(evalSetResult, opts.numRuns); err != nil {
 		return nil, fmt.Errorf("summarize eval set result: %w", err)
 	}
-	evalSetResultID, err := a.evalResultManager.Save(ctx, a.appName, evalSetResult)
+	evalSetResultID, err := opts.evalResultManager.Save(ctx, a.appName, evalSetResult)
 	if err != nil {
 		return nil, fmt.Errorf("save eval set result: %w", err)
 	}

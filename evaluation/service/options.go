@@ -14,6 +14,7 @@ import (
 	"runtime"
 
 	"github.com/google/uuid"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	evalresultinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
@@ -28,6 +29,7 @@ type Options struct {
 	Registry                          registry.Registry                // Registry is used to store and retrieve evaluator.
 	SessionIDSupplier                 func(ctx context.Context) string // SessionIDSupplier is used to generate session IDs.
 	Callbacks                         *Callbacks                       // Callbacks holds evaluation callbacks.
+	RunOptions                        []agent.RunOption                // RunOptions configures runner.Run calls during inference.
 	EvalCaseParallelism               int                              // EvalCaseParallelism controls concurrent eval case processing.
 	EvalCaseParallelInferenceEnabled  bool                             // EvalCaseParallelInferenceEnabled toggles parallel inference across eval cases.
 	EvalCaseParallelEvaluationEnabled bool                             // EvalCaseParallelEvaluationEnabled toggles parallel evaluation across eval cases.
@@ -91,6 +93,13 @@ func WithSessionIDSupplier(s func(ctx context.Context) string) Option {
 func WithCallbacks(c *Callbacks) Option {
 	return func(o *Options) {
 		o.Callbacks = c
+	}
+}
+
+// WithRunOptions appends agent.RunOption values that will be applied to every runner.Run call during inference.
+func WithRunOptions(opt ...agent.RunOption) Option {
+	return func(o *Options) {
+		o.RunOptions = append(o.RunOptions, opt...)
 	}
 }
 

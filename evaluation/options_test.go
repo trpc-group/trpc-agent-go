@@ -25,11 +25,11 @@ import (
 
 type stubService struct{}
 
-func (stubService) Inference(ctx context.Context, req *service.InferenceRequest) ([]*service.InferenceResult, error) {
+func (stubService) Inference(ctx context.Context, req *service.InferenceRequest, opt ...service.Option) ([]*service.InferenceResult, error) {
 	return nil, nil
 }
 
-func (stubService) Evaluate(ctx context.Context, req *service.EvaluateRequest) (*service.EvalSetRunResult, error) {
+func (stubService) Evaluate(ctx context.Context, req *service.EvaluateRequest, opt ...service.Option) (*service.EvalSetRunResult, error) {
 	return nil, nil
 }
 
