@@ -886,10 +886,10 @@ func TestBuildResponseAttributes(t *testing.T) {
 						require.True(t, hasAttr(attrs, KeyGenAIUsageInputTokensCached, int64(tt.rsp.Usage.PromptTokensDetails.CachedTokens)))
 					}
 					if tt.rsp.Usage.PromptTokensDetails.CacheReadTokens != 0 {
-						require.True(t, hasAttr(attrs, KeyGenAIUsageInputTokensCacheRead, int64(tt.rsp.Usage.PromptTokensDetails.CacheReadTokens)))
+						require.True(t, hasAttr(attrs, KeyGenAIUsageCacheReadInputTokens, int64(tt.rsp.Usage.PromptTokensDetails.CacheReadTokens)))
 					}
 					if tt.rsp.Usage.PromptTokensDetails.CacheCreationTokens != 0 {
-						require.True(t, hasAttr(attrs, KeyGenAIUsageInputTokensCacheCreation, int64(tt.rsp.Usage.PromptTokensDetails.CacheCreationTokens)))
+						require.True(t, hasAttr(attrs, KeyGenAIUsageCacheCreationInputTokens, int64(tt.rsp.Usage.PromptTokensDetails.CacheCreationTokens)))
 					}
 				}
 			}

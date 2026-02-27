@@ -155,8 +155,8 @@ func transformInvokeAgent(span *tracepb.Span) {
 			// Keeping token attributes on InvokeAgent would make Langfuse double count tokens
 			// compared to the old behavior (Chat-only token accounting).
 		case itelemetry.KeyGenAIUsageInputTokens, itelemetry.KeyGenAIUsageOutputTokens,
-			itelemetry.KeyGenAIUsageInputTokensCached, itelemetry.KeyGenAIUsageInputTokensCacheRead,
-			itelemetry.KeyGenAIUsageInputTokensCacheCreation:
+			itelemetry.KeyGenAIUsageInputTokensCached, itelemetry.KeyGenAIUsageCacheReadInputTokens,
+			itelemetry.KeyGenAIUsageCacheCreationInputTokens:
 		default:
 			newAttributes = append(newAttributes, attr)
 		}
@@ -231,9 +231,9 @@ func collectLLMSpanAttributes(attrs []*commonpb.KeyValue) llmSpanCollected {
 			c.usage.Output = attr.Value.GetIntValue()
 		case itelemetry.KeyGenAIUsageInputTokensCached:
 			c.usage.InputCached = attr.Value.GetIntValue()
-		case itelemetry.KeyGenAIUsageInputTokensCacheRead:
+		case itelemetry.KeyGenAIUsageCacheReadInputTokens:
 			c.usage.InputCacheRead = attr.Value.GetIntValue()
-		case itelemetry.KeyGenAIUsageInputTokensCacheCreation:
+		case itelemetry.KeyGenAIUsageCacheCreationInputTokens:
 			c.usage.InputCacheCreation = attr.Value.GetIntValue()
 		default:
 			c.attrs = append(c.attrs, attr)

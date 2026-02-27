@@ -581,13 +581,13 @@ func TestTransformCallLLM_UsageDetails(t *testing.T) {
 			}
 			if tt.cacheReadTokens != 0 {
 				attrs = append(attrs, &commonpb.KeyValue{
-					Key:   itelemetry.KeyGenAIUsageInputTokensCacheRead,
+					Key:   itelemetry.KeyGenAIUsageCacheReadInputTokens,
 					Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: tt.cacheReadTokens}},
 				})
 			}
 			if tt.cacheCreationTokens != 0 {
 				attrs = append(attrs, &commonpb.KeyValue{
-					Key:   itelemetry.KeyGenAIUsageInputTokensCacheCreation,
+					Key:   itelemetry.KeyGenAIUsageCacheCreationInputTokens,
 					Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: tt.cacheCreationTokens}},
 				})
 			}
@@ -600,8 +600,8 @@ func TestTransformCallLLM_UsageDetails(t *testing.T) {
 				assert.NotEqual(t, itelemetry.KeyGenAIUsageInputTokens, attr.Key)
 				assert.NotEqual(t, itelemetry.KeyGenAIUsageOutputTokens, attr.Key)
 				assert.NotEqual(t, itelemetry.KeyGenAIUsageInputTokensCached, attr.Key)
-				assert.NotEqual(t, itelemetry.KeyGenAIUsageInputTokensCacheRead, attr.Key)
-				assert.NotEqual(t, itelemetry.KeyGenAIUsageInputTokensCacheCreation, attr.Key)
+				assert.NotEqual(t, itelemetry.KeyGenAIUsageCacheReadInputTokens, attr.Key)
+				assert.NotEqual(t, itelemetry.KeyGenAIUsageCacheCreationInputTokens, attr.Key)
 			}
 
 			// Check usage_details attribute
@@ -654,11 +654,11 @@ func TestTransformInvokeAgent_CacheTokensFiltered(t *testing.T) {
 				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: 30}},
 			},
 			{
-				Key:   itelemetry.KeyGenAIUsageInputTokensCacheRead,
+				Key:   itelemetry.KeyGenAIUsageCacheReadInputTokens,
 				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: 20}},
 			},
 			{
-				Key:   itelemetry.KeyGenAIUsageInputTokensCacheCreation,
+				Key:   itelemetry.KeyGenAIUsageCacheCreationInputTokens,
 				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: 10}},
 			},
 		},
@@ -671,8 +671,8 @@ func TestTransformInvokeAgent_CacheTokensFiltered(t *testing.T) {
 		assert.NotEqual(t, itelemetry.KeyGenAIUsageInputTokens, attr.Key)
 		assert.NotEqual(t, itelemetry.KeyGenAIUsageOutputTokens, attr.Key)
 		assert.NotEqual(t, itelemetry.KeyGenAIUsageInputTokensCached, attr.Key)
-		assert.NotEqual(t, itelemetry.KeyGenAIUsageInputTokensCacheRead, attr.Key)
-		assert.NotEqual(t, itelemetry.KeyGenAIUsageInputTokensCacheCreation, attr.Key)
+		assert.NotEqual(t, itelemetry.KeyGenAIUsageCacheReadInputTokens, attr.Key)
+		assert.NotEqual(t, itelemetry.KeyGenAIUsageCacheCreationInputTokens, attr.Key)
 	}
 }
 
