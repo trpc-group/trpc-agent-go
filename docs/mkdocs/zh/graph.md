@@ -3158,11 +3158,80 @@ Graph 的状态底层是 `map[string]any`，通过 `StateSchema` 提供运行时
 
 #### 节点级回调、工具与生成参数
 
-节点可通过可选项注册回调或参数（见 `graph/state_graph.go`）：
+Graph 支持 **节点回调（node callbacks）**，用于在节点执行前/后做“横切逻辑”（例如
+统一日志、打点、校验、策略拦截等）。
+
+节点回调分两层：
+
+- **全局（图级）回调**：构图时通过 `(*graph.StateGraph).WithNodeCallbacks(...)`
+  一次性注册，对该图里每一个节点生效。
+- **单节点回调**：通过 `graph.WithPreNodeCallback` /
+  `graph.WithPostNodeCallback` / `graph.WithNodeErrorCallback`
+  （或 `graph.WithNodeCallbacks(...)`）只挂到某一个节点上。
+
+注意：这里有两个不同的 `WithNodeCallbacks`：
+
+- `graph.NewStateGraph(schema).WithNodeCallbacks(...)` 是**图级全局**。
+- `graph.WithNodeCallbacks(...)` 是**单节点 option**（作为 `AddNode` 参数传入）。
+
+回调执行顺序：
+
+- `BeforeNode`：全局 → 单节点
+- `AfterNode`：单节点 → 全局
+- `OnNodeError`：全局 → 单节点
+
+示例：注册一个“全局切面”，只对 function 节点生效：
+
+```go
+global := graph.NewNodeCallbacks().
+	RegisterBeforeNode(func(
+		ctx context.Context,
+		cb *graph.NodeCallbackContext,
+		st graph.State,
+	) (any, error) {
+		if cb == nil || cb.NodeType != graph.NodeTypeFunction {
+			return nil, nil
+		}
+		// 这里写你的 function 节点横切逻辑。
+		return nil, nil
+	})
+
+g, err := graph.NewStateGraph(schema).
+	WithNodeCallbacks(global). // 图级全局
+	AddNode("step1", step1).
+	AddNode("step2", step2,
+		graph.WithPreNodeCallback(func(
+			ctx context.Context,
+			cb *graph.NodeCallbackContext,
+			st graph.State,
+		) (any, error) {
+			// 这里只对 "step2" 生效。
+			return nil, nil
+		}),
+	).
+	SetEntryPoint("step1").
+	AddEdge("step1", "step2").
+	SetFinishPoint("step2").
+	Compile()
+_ = g
+_ = err
+```
+
+进阶：你也可以在**每次 run** 的维度提供全局节点回调：往
+`Invocation.RunOptions.RuntimeState` 写入 `graph.StateKeyNodeCallbacks`。
+这在“希望 Runner 作用域的逻辑影响 Graph（例如通过 Runner 插件注入节点回调）”时很
+有用。示例可参考 `plugin.md`。
+
+可运行示例参考：
+
+- `examples/graph/per_node_callbacks`（图级全局 + 单节点回调）
+- `examples/graph/runner_plugin_node_callbacks`（通过 Runner 插件注入）
+
+其它节点可选项（见 `graph/state_graph.go`）：
 
 - `graph.WithPreNodeCallback` / `graph.WithPostNodeCallback` / `graph.WithNodeErrorCallback`
 - LLM 节点可用 `graph.WithGenerationConfig`、`graph.WithModelCallbacks`
-- 工具相关：`graph.WithToolCallbacks`、`graph.WithToolSets`（除 `tools []tool.Tool` 外，再额外提供 ToolSet`）、
+- 工具相关：`graph.WithToolCallbacks`、`graph.WithToolSets`（除 `tools []tool.Tool` 外，再额外提供 `tool.ToolSet` 列表）、
   `graph.WithRefreshToolSetsOnRun`（在每次运行时从 ToolSet 重新构造工具列表，适合 MCP 等动态工具源）
 - Agent 节点可用 `graph.WithAgentNodeEventCallback`
 
