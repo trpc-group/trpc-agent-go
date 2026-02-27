@@ -1,5 +1,6 @@
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -145,9 +146,12 @@ func (c *memoryChat) run() error {
 func (c *memoryChat) setup(_ context.Context) error {
 	memoryType := util.MemoryType(c.memServiceName)
 
-	memoryService, err := util.NewMemoryServiceByType(memoryType, util.MemoryServiceConfig{
-		SoftDelete: *softDelete,
-	})
+	memoryService, err := util.NewMemoryServiceByType(
+		memoryType,
+		util.MemoryServiceConfig{
+			SoftDelete: *softDelete,
+		},
+	)
 	if err != nil {
 		return fmt.Errorf("failed to create memory service: %w", err)
 	}
@@ -168,8 +172,10 @@ func (c *memoryChat) setup(_ context.Context) error {
 	llmAgent := llmagent.New(
 		agentName,
 		llmagent.WithModel(modelInstance),
-		llmagent.WithDescription("A helpful AI assistant with memory capabilities. "+
-			"I can remember important information about you and recall it when needed."),
+		llmagent.WithDescription(
+			"A helpful AI assistant with memory. I remember key facts and "+
+				"recall them when needed.",
+		),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithTools(memoryService.Tools()),
 	)
@@ -231,7 +237,10 @@ func (c *memoryChat) startChat(ctx context.Context) error {
 	return nil
 }
 
-func (c *memoryChat) processMessage(ctx context.Context, userMessage string) error {
+func (c *memoryChat) processMessage(
+	ctx context.Context,
+	userMessage string,
+) error {
 	message := model.NewUserMessage(userMessage)
 
 	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message)
@@ -295,7 +304,10 @@ func (c *memoryChat) processResponse(eventChan <-chan *event.Event) error {
 }
 
 func (c *memoryChat) hasToolCalls(event *event.Event) bool {
-	return len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0
+	if event.Response == nil || len(event.Response.Choices) == 0 {
+		return false
+	}
+	return len(event.Response.Choices[0].Message.ToolCalls) > 0
 }
 
 func (c *memoryChat) hasToolResponses(event *event.Event) bool {
@@ -310,12 +322,17 @@ func (c *memoryChat) hasToolResponses(event *event.Event) bool {
 	return false
 }
 
-func (c *memoryChat) handleToolCalls(event *event.Event, assistantStarted bool) {
+func (c *memoryChat) handleToolCalls(
+	event *event.Event,
+	assistantStarted bool,
+) {
 	if assistantStarted {
 		fmt.Printf("\n")
 	}
 	fmt.Printf("🔧 Memory tool calls initiated:\n")
-	fmt.Printf("%s", util.FormatToolCalls(event.Response.Choices[0].Message.ToolCalls))
+
+	toolCalls := event.Response.Choices[0].Message.ToolCalls
+	fmt.Printf("%s", util.FormatToolCalls(toolCalls))
 	fmt.Printf("\n🔄 Executing memory tools...\n")
 }
 
@@ -341,6 +358,6 @@ func (c *memoryChat) startNewSession() {
 	fmt.Printf("🆕 Started new memory session!\n")
 	fmt.Printf("   Previous: %s\n", oldSessionID)
 	fmt.Printf("   Current:  %s\n", c.sessionID)
-	fmt.Printf("   (Conversation history has been reset, memories are preserved)\n")
+	fmt.Printf("   (Session history reset; memories preserved)\n")
 	fmt.Println()
 }

@@ -1,5 +1,6 @@
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -157,14 +158,18 @@ func (c *autoMemoryChat) setup(_ context.Context) error {
 
 	// Create memory service with auto extraction enabled.
 	// When extractor is set, write tools (add/update/delete) are hidden, but
-	// search and clear tools remain available. Load tool is also hidden in auto mode.
+	// search and clear tools remain available. Load tool is also hidden in
+	// auto mode.
 	var err error
-	c.memoryService, err = util.NewMemoryServiceByType(c.memoryType, util.MemoryServiceConfig{
-		Extractor:        memExtractor,
-		AsyncMemoryNum:   3,
-		MemoryQueueSize:  100,
-		MemoryJobTimeout: 30 * time.Second,
-	})
+	c.memoryService, err = util.NewMemoryServiceByType(
+		c.memoryType,
+		util.MemoryServiceConfig{
+			Extractor:        memExtractor,
+			AsyncMemoryNum:   3,
+			MemoryQueueSize:  100,
+			MemoryJobTimeout: 30 * time.Second,
+		},
+	)
 	if err != nil {
 		return fmt.Errorf("failed to create memory service: %w", err)
 	}
@@ -184,14 +189,24 @@ func (c *autoMemoryChat) setup(_ context.Context) error {
 	var modelCallbacks *model.Callbacks
 	if c.debug {
 		modelCallbacks = model.NewCallbacks()
-		modelCallbacks.RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
-			fmt.Println("🔍 Debug: Messages sent to model:")
-			for i, msg := range args.Request.Messages {
-				fmt.Printf("   [%d] %s: %s\n", i+1, msg.Role, msg.Content)
-			}
-			fmt.Println()
-			return nil, nil
-		})
+		modelCallbacks.RegisterBeforeModel(
+			func(
+				ctx context.Context,
+				args *model.BeforeModelArgs,
+			) (*model.BeforeModelResult, error) {
+				fmt.Println("🔍 Debug: Messages sent to model:")
+				for i, msg := range args.Request.Messages {
+					fmt.Printf(
+						"   [%d] %s: %s\n",
+						i+1,
+						msg.Role,
+						msg.Content,
+					)
+				}
+				fmt.Println()
+				return nil, nil
+			},
+		)
 	}
 
 	llmAgent := llmagent.New(
@@ -202,7 +217,8 @@ func (c *autoMemoryChat) setup(_ context.Context) error {
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithTools(c.memoryService.Tools()),
 		llmagent.WithModelCallbacks(modelCallbacks),
-		// Memory preloading: inject memories into system prompt before each request.
+		// Memory preloading: inject memories into system prompt before each
+		// request.
 		// Use WithPreloadMemory(N) to load the most recent N memories.
 		// Use WithPreloadMemory(-1) to load all memories.
 		// Default is 0 (disabled, use memory_search/memory_load tools instead).
@@ -301,7 +317,10 @@ func (c *autoMemoryChat) showMemories(ctx context.Context) {
 }
 
 // processMessage handles a single message exchange.
-func (c *autoMemoryChat) processMessage(ctx context.Context, userMessage string) error {
+func (c *autoMemoryChat) processMessage(
+	ctx context.Context,
+	userMessage string,
+) error {
 	message := model.NewUserMessage(userMessage)
 
 	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message)
@@ -313,7 +332,9 @@ func (c *autoMemoryChat) processMessage(ctx context.Context, userMessage string)
 }
 
 // processResponse handles both streaming and non-streaming responses.
-func (c *autoMemoryChat) processResponse(eventChan <-chan *event.Event) error {
+func (c *autoMemoryChat) processResponse(
+	eventChan <-chan *event.Event,
+) error {
 	fmt.Print("🤖 Assistant: ")
 
 	var (
@@ -365,8 +386,10 @@ func (c *autoMemoryChat) processResponse(eventChan <-chan *event.Event) error {
 
 // hasToolCalls checks if the event contains tool calls.
 func (c *autoMemoryChat) hasToolCalls(evt *event.Event) bool {
-	return len(evt.Response.Choices) > 0 &&
-		len(evt.Response.Choices[0].Message.ToolCalls) > 0
+	if evt.Response == nil || len(evt.Response.Choices) == 0 {
+		return false
+	}
+	return len(evt.Response.Choices[0].Message.ToolCalls) > 0
 }
 
 // hasToolResponses checks if the event contains tool responses.
@@ -383,7 +406,10 @@ func (c *autoMemoryChat) hasToolResponses(evt *event.Event) bool {
 }
 
 // handleToolCalls displays tool call information.
-func (c *autoMemoryChat) handleToolCalls(evt *event.Event, assistantStarted bool) {
+func (c *autoMemoryChat) handleToolCalls(
+	evt *event.Event,
+	assistantStarted bool,
+) {
 	if assistantStarted {
 		fmt.Printf("\n")
 	}

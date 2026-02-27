@@ -1,5 +1,6 @@
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -58,20 +59,28 @@ type SessionServiceConfig struct {
 	GetSessionHooks  []session.GetSessionHook
 }
 
-// NewSessionServiceByType creates a session service based on the specified type.
+// NewSessionServiceByType creates a session service based on the specified
+// type.
 //
 // Parameters:
-//   - sessionType: one of inmemory, sqlite, redis, postgres, mysql, clickhouse
+//   - sessionType: one of inmemory, sqlite, redis, postgres, mysql,
+//     clickhouse
 //   - cfg: session service configuration (eventLimit, ttl, hooks)
 //
 // Environment variables by session type:
 //
-//	sqlite:     SQLITE_SESSION_DSN (default: file:sessions.db?_busy_timeout=5000)
+//	sqlite:     SQLITE_SESSION_DSN (default:
+//	  file:sessions.db?_busy_timeout=5000)
 //	redis:      REDIS_ADDR (default: localhost:6379)
 //	postgres:   PG_HOST, PG_PORT, PG_USER, PG_PASSWORD, PG_DATABASE
-//	mysql:      MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE
-//	clickhouse: CLICKHOUSE_HOST, CLICKHOUSE_PORT, CLICKHOUSE_USER, CLICKHOUSE_PASSWORD, CLICKHOUSE_DATABASE
-func NewSessionServiceByType(sessionType SessionType, cfg SessionServiceConfig) (session.Service, error) {
+//	mysql:      MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD,
+//	  MYSQL_DATABASE
+//	clickhouse: CLICKHOUSE_HOST, CLICKHOUSE_PORT, CLICKHOUSE_USER,
+//	  CLICKHOUSE_PASSWORD, CLICKHOUSE_DATABASE
+func NewSessionServiceByType(
+	sessionType SessionType,
+	cfg SessionServiceConfig,
+) (session.Service, error) {
 	switch sessionType {
 	case SessionSQLite:
 		return newSQLiteSessionService(cfg)
@@ -98,7 +107,9 @@ const (
 	defaultSQLiteMaxIdleConns = 1
 )
 
-func newSQLiteSessionService(cfg SessionServiceConfig) (session.Service, error) {
+func newSQLiteSessionService(
+	cfg SessionServiceConfig,
+) (session.Service, error) {
 	dsn := GetEnvOrDefault(sqliteSessionDSNEnvKey, defaultSQLiteSessionDBDSN)
 	db, err := sql.Open(sqliteDriverName, dsn)
 	if err != nil {
@@ -133,7 +144,9 @@ func newInMemorySessionService(cfg SessionServiceConfig) session.Service {
 // newRedisSessionService creates a Redis session service.
 // Environment variables:
 //   - REDIS_ADDR: Redis server address (default: localhost:6379)
-func newRedisSessionService(cfg SessionServiceConfig) (session.Service, error) {
+func newRedisSessionService(
+	cfg SessionServiceConfig,
+) (session.Service, error) {
 	addr := GetEnvOrDefault("REDIS_ADDR", "localhost:6379")
 	redisURL := fmt.Sprintf("redis://%s", addr)
 
@@ -153,7 +166,9 @@ func newRedisSessionService(cfg SessionServiceConfig) (session.Service, error) {
 //   - PG_USER: PostgreSQL user (default: root)
 //   - PG_PASSWORD: PostgreSQL password (default: empty)
 //   - PG_DATABASE: PostgreSQL database (default: trpc_agent_go)
-func newPostgresSessionService(cfg SessionServiceConfig) (session.Service, error) {
+func newPostgresSessionService(
+	cfg SessionServiceConfig,
+) (session.Service, error) {
 	host := GetEnvOrDefault("PG_HOST", "localhost")
 	portStr := GetEnvOrDefault("PG_PORT", "5432")
 	port, _ := strconv.Atoi(portStr)
@@ -182,7 +197,9 @@ func newPostgresSessionService(cfg SessionServiceConfig) (session.Service, error
 //   - MYSQL_USER: MySQL user (default: root)
 //   - MYSQL_PASSWORD: MySQL password (default: empty)
 //   - MYSQL_DATABASE: MySQL database (default: trpc_agent_go)
-func newMySQLSessionService(cfg SessionServiceConfig) (session.Service, error) {
+func newMySQLSessionService(
+	cfg SessionServiceConfig,
+) (session.Service, error) {
 	host := GetEnvOrDefault("MYSQL_HOST", "localhost")
 	port := GetEnvOrDefault("MYSQL_PORT", "3306")
 	user := GetEnvOrDefault("MYSQL_USER", "root")
@@ -209,7 +226,9 @@ func newMySQLSessionService(cfg SessionServiceConfig) (session.Service, error) {
 //   - CLICKHOUSE_USER: ClickHouse user (default: default)
 //   - CLICKHOUSE_PASSWORD: ClickHouse password (default: empty)
 //   - CLICKHOUSE_DATABASE: ClickHouse database (default: trpc_agent_go)
-func newClickHouseSessionService(cfg SessionServiceConfig) (session.Service, error) {
+func newClickHouseSessionService(
+	cfg SessionServiceConfig,
+) (session.Service, error) {
 	host := GetEnvOrDefault("CLICKHOUSE_HOST", "localhost")
 	port := GetEnvOrDefault("CLICKHOUSE_PORT", "9000")
 	user := GetEnvOrDefault("CLICKHOUSE_USER", "default")
@@ -254,9 +273,16 @@ func DefaultRunnerConfig() RunnerConfig {
 	}
 }
 
-// NewRunner creates a runner with the given session service and configuration.
-func NewRunner(sessionService session.Service, cfg RunnerConfig) runner.Runner {
-	modelInstance := openai.New(cfg.ModelName, openai.WithVariant(openai.VariantOpenAI))
+// NewRunner creates a runner with the given session service and
+// configuration.
+func NewRunner(
+	sessionService session.Service,
+	cfg RunnerConfig,
+) runner.Runner {
+	modelInstance := openai.New(
+		cfg.ModelName,
+		openai.WithVariant(openai.VariantOpenAI),
+	)
 
 	genConfig := model.GenerationConfig{
 		Temperature: cfg.Temperature,
@@ -284,12 +310,26 @@ func NewRunner(sessionService session.Service, cfg RunnerConfig) runner.Runner {
 	)
 }
 
-// RunAgent runs the agent with the given message and optionally prints the conversation.
-func RunAgent(ctx context.Context, r runner.Runner, userID, sessionID, message string, printConversation bool) (string, error) {
+// RunAgent runs the agent with the given message and optionally prints
+// the conversation.
+func RunAgent(
+	ctx context.Context,
+	r runner.Runner,
+	userID string,
+	sessionID string,
+	message string,
+	printConversation bool,
+) (string, error) {
 	msg := model.NewUserMessage(message)
 	requestID := uuid.New().String()
 
-	eventChan, err := r.Run(ctx, userID, sessionID, msg, agent.WithRequestID(requestID))
+	eventChan, err := r.Run(
+		ctx,
+		userID,
+		sessionID,
+		msg,
+		agent.WithRequestID(requestID),
+	)
 	if err != nil {
 		return "", fmt.Errorf("run agent failed: %w", err)
 	}
@@ -333,7 +373,8 @@ func ExtractResponse(evt *event.Event) string {
 	return evt.Response.Choices[0].Message.Content
 }
 
-// GetEnvOrDefault retrieves the value of an environment variable or returns a default value if not set.
+// GetEnvOrDefault retrieves the value of an environment variable or returns a
+// default value if not set.
 func GetEnvOrDefault(key, defaultValue string) string {
 	if value, ok := os.LookupEnv(key); ok {
 		return value
@@ -360,8 +401,15 @@ func FloatPtr(v float64) *float64 {
 }
 
 // PrintSessionEvents prints all events for a session in debug mode.
-// It retrieves the session from the service and prints each event's role and content.
-func PrintSessionEvents(ctx context.Context, svc session.Service, appName, userID, sessionID string) error {
+// It retrieves the session from the service and prints each event's
+// role and content.
+func PrintSessionEvents(
+	ctx context.Context,
+	svc session.Service,
+	appName string,
+	userID string,
+	sessionID string,
+) error {
 	key := session.Key{
 		AppName:   appName,
 		UserID:    userID,
