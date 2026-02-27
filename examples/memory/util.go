@@ -11,12 +11,14 @@
 package util
 
 import (
+	"database/sql"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	_ "github.com/mattn/go-sqlite3"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -26,6 +28,7 @@ import (
 	memorypgvector "trpc.group/trpc-go/trpc-agent-go/memory/pgvector"
 	memorypostgres "trpc.group/trpc-go/trpc-agent-go/memory/postgres"
 	memoryredis "trpc.group/trpc-go/trpc-agent-go/memory/redis"
+	memorysqlite "trpc.group/trpc-go/trpc-agent-go/memory/sqlite"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -38,6 +41,7 @@ type MemoryType string
 // Memory type constants.
 const (
 	MemoryInMemory MemoryType = "inmemory"
+	MemorySQLite   MemoryType = "sqlite"
 	MemoryRedis    MemoryType = "redis"
 	MemoryPostgres MemoryType = "postgres"
 	MemoryPGVector MemoryType = "pgvector"
@@ -87,7 +91,7 @@ func DefaultRunnerConfig() RunnerConfig {
 // - Auto mode: cfg.Extractor != nil, automatically extracts memories from conversations
 //
 // Parameters:
-//   - memoryType: one of inmemory, redis, postgres, pgvector, mysql
+//   - memoryType: one of inmemory, sqlite, redis, postgres, pgvector, mysql
 //   - cfg: memory service configuration
 //   - SoftDelete: enable soft delete for SQL backends
 //   - Extractor: memory extractor for auto mode (nil = manual mode)
@@ -97,12 +101,15 @@ func DefaultRunnerConfig() RunnerConfig {
 //
 // Environment variables by memory type:
 //
+//	sqlite:     SQLITE_MEMORY_DSN (default: file:memories.db?_busy_timeout=5000)
 //	redis:      REDIS_ADDR (default: localhost:6379)
 //	postgres:   PG_HOST, PG_PORT, PG_USER, PG_PASSWORD, PG_DATABASE
 //	pgvector:   PGVECTOR_HOST, PGVECTOR_PORT, PGVECTOR_USER, PGVECTOR_PASSWORD, PGVECTOR_DATABASE, PGVECTOR_EMBEDDER_MODEL
 //	mysql:      MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE
 func NewMemoryServiceByType(memoryType MemoryType, cfg MemoryServiceConfig) (memory.Service, error) {
 	switch memoryType {
+	case MemorySQLite:
+		return newSQLiteMemoryService(cfg)
 	case MemoryRedis:
 		return newRedisMemoryService(cfg)
 	case MemoryPostgres:
@@ -116,6 +123,58 @@ func NewMemoryServiceByType(memoryType MemoryType, cfg MemoryServiceConfig) (mem
 	default:
 		return newInMemoryMemoryService(cfg), nil
 	}
+}
+
+const (
+	sqliteMemoryDSNEnvKey     = "SQLITE_MEMORY_DSN"
+	defaultSQLiteMemoryDBDSN  = "file:memories.db?_busy_timeout=5000"
+	sqliteDriverName          = "sqlite3"
+	defaultSQLiteMaxOpenConns = 1
+	defaultSQLiteMaxIdleConns = 1
+)
+
+func newSQLiteMemoryService(cfg MemoryServiceConfig) (memory.Service, error) {
+	dsn := GetEnvOrDefault(sqliteMemoryDSNEnvKey, defaultSQLiteMemoryDBDSN)
+	db, err := sql.Open(sqliteDriverName, dsn)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(defaultSQLiteMaxOpenConns)
+	db.SetMaxIdleConns(defaultSQLiteMaxIdleConns)
+
+	opts := []memorysqlite.ServiceOpt{
+		memorysqlite.WithSoftDelete(cfg.SoftDelete),
+	}
+
+	if cfg.Extractor != nil {
+		opts = append(opts, memorysqlite.WithExtractor(cfg.Extractor))
+		if cfg.AsyncMemoryNum > 0 {
+			opts = append(
+				opts,
+				memorysqlite.WithAsyncMemoryNum(cfg.AsyncMemoryNum),
+			)
+		}
+		if cfg.MemoryQueueSize > 0 {
+			opts = append(
+				opts,
+				memorysqlite.WithMemoryQueueSize(cfg.MemoryQueueSize),
+			)
+		}
+		if cfg.MemoryJobTimeout > 0 {
+			opts = append(
+				opts,
+				memorysqlite.WithMemoryJobTimeout(cfg.MemoryJobTimeout),
+			)
+		}
+	}
+
+	svc, err := memorysqlite.NewService(db, opts...)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+
+	return svc, nil
 }
 
 // newInMemoryMemoryService creates an in-memory memory service.
@@ -357,6 +416,10 @@ func FloatPtr(v float64) *float64 {
 // PrintMemoryInfo prints memory service information based on type.
 func PrintMemoryInfo(memoryType MemoryType, softDelete bool) {
 	switch memoryType {
+	case MemorySQLite:
+		dsn := GetEnvOrDefault(sqliteMemoryDSNEnvKey, defaultSQLiteMemoryDBDSN)
+		fmt.Printf("SQLite: %s\n", dsn)
+		fmt.Printf("Soft delete: %t\n", softDelete)
 	case MemoryRedis:
 		addr := GetEnvOrDefault("REDIS_ADDR", "localhost:6379")
 		fmt.Printf("Redis: %s\n", addr)

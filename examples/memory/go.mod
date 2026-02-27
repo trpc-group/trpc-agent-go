@@ -8,16 +8,19 @@ replace (
 	trpc.group/trpc-go/trpc-agent-go/memory/pgvector => ../../memory/pgvector
 	trpc.group/trpc-go/trpc-agent-go/memory/postgres => ../../memory/postgres
 	trpc.group/trpc-go/trpc-agent-go/memory/redis => ../../memory/redis
+	trpc.group/trpc-go/trpc-agent-go/memory/sqlite => ../../memory/sqlite
 	trpc.group/trpc-go/trpc-agent-go/storage/mysql => ../../storage/mysql
 	trpc.group/trpc-go/trpc-agent-go/storage/postgres => ../../storage/postgres
 )
 
 require (
+	github.com/mattn/go-sqlite3 v1.14.32
 	trpc.group/trpc-go/trpc-agent-go v1.1.1
 	trpc.group/trpc-go/trpc-agent-go/memory/mysql v1.1.1
 	trpc.group/trpc-go/trpc-agent-go/memory/pgvector v1.1.1
 	trpc.group/trpc-go/trpc-agent-go/memory/postgres v1.1.1
 	trpc.group/trpc-go/trpc-agent-go/memory/redis v1.1.1
+	trpc.group/trpc-go/trpc-agent-go/memory/sqlite v1.1.1
 )
 
 require (

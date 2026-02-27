@@ -85,6 +85,7 @@ runner := runner.NewRunner(
 
 | Variable                  | Description                  | Default Value            |
 | ------------------------- | ---------------------------- | ------------------------ |
+| `SQLITE_MEMORY_DSN`       | SQLite DSN                   | `file:memories.db?_busy_timeout=5000` |
 | `REDIS_ADDR`              | Redis server address         | `localhost:6379`         |
 | `PG_HOST`                 | PostgreSQL host              | `localhost`              |
 | `PG_PORT`                 | PostgreSQL port              | `5432`                   |
@@ -108,8 +109,8 @@ runner := runner.NewRunner(
 | Argument       | Description                                                             | Default Value   |
 | -------------- | ----------------------------------------------------------------------- | --------------- |
 | `-model`       | Name of the model to use                                                | `deepseek-chat` |
-| `-memory`      | Memory service: `inmemory`, `redis`, `mysql`, `postgres`, or `pgvector` | `inmemory`      |
-| `-soft-delete` | Enable soft delete for MySQL/PostgreSQL/pgvector memory service         | `false`         |
+| `-memory`      | Memory service: `inmemory`, `sqlite`, `redis`, `mysql`, `postgres`, or `pgvector` | `inmemory` |
+| `-soft-delete` | Enable soft delete for SQLite/MySQL/PostgreSQL/pgvector memory service  | `false`         |
 | `-streaming`   | Enable streaming mode for responses                                     | `true`          |
 
 ## Usage
@@ -154,11 +155,15 @@ go run main.go -model gpt-4o -streaming=false
 
 ### Service Configuration
 
-The example supports five memory service backends: in-memory, Redis, MySQL, PostgreSQL, and pgvector:
+The example supports six memory service backends: in-memory, SQLite, Redis, MySQL, PostgreSQL, and pgvector:
 
 ```bash
 # Default in-memory memory service
 go run main.go
+
+# SQLite memory service (local file)
+export SQLITE_MEMORY_DSN="file:memories.db?_busy_timeout=5000"
+go run main.go -memory sqlite
 
 # Redis memory service (using default or environment variable)
 go run main.go -memory redis

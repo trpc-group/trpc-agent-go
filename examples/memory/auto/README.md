@@ -193,6 +193,7 @@ memoryService := memoryinmemory.NewMemoryService(
 | ------------------------- | ---------------------------------------- | --------------------------- |
 | `OPENAI_API_KEY`          | API key for the model service (required) | ``                          |
 | `OPENAI_BASE_URL`         | Base URL for the model API endpoint      | `https://api.openai.com/v1` |
+| `SQLITE_MEMORY_DSN`       | SQLite DSN                               | `file:memories.db?_busy_timeout=5000` |
 | `REDIS_ADDR`              | Redis server address                     | `localhost:6379`            |
 | `PG_HOST`                 | PostgreSQL host                          | `localhost`                 |
 | `PG_PORT`                 | PostgreSQL port                          | `5432`                      |
@@ -217,7 +218,7 @@ memoryService := memoryinmemory.NewMemoryService(
 | ------------ | ------------------------------------------------------------------------- | ---------------- |
 | `-model`     | Name of the model for chat responses                                      | `deepseek-chat`  |
 | `-ext-model` | Name of the model for memory extraction                                   | Same as `-model` |
-| `-memory`    | Memory service type: `inmemory`, `redis`, `postgres`, `pgvector`, `mysql` | `inmemory`       |
+| `-memory`    | Memory service type: `inmemory`, `sqlite`, `redis`, `postgres`, `pgvector`, `mysql` | `inmemory` |
 | `-streaming` | Enable streaming mode for responses                                       | `true`           |
 | `-debug`     | Enable debug mode to print messages sent to model                         | `false`          |
 
@@ -245,6 +246,10 @@ The auto memory example supports multiple memory backends. Configure the appropr
 ```bash
 # Default in-memory memory service
 go run . -memory inmemory
+
+# SQLite memory service (local file)
+export SQLITE_MEMORY_DSN="file:memories.db?_busy_timeout=5000"
+go run . -memory sqlite
 
 # Redis memory service (requires Redis server)
 export REDIS_ADDR=localhost:6379
@@ -360,6 +365,9 @@ work at TechCorp as a backend engineer.
 - `/memory` - Show stored memories for the current user
 - `/new` - Start a new session (memories persist across sessions)
 - `/exit` - End the conversation
+
+**Note**: Memory extraction runs asynchronously after each assistant response.
+If `/memory` shows no entries, wait a few seconds and try again.
 
 ## How Auto Memory Works
 

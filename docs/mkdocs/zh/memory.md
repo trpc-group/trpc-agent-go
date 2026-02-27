@@ -301,9 +301,11 @@ Memory 模块采用分层设计，由以下核心组件组成：
 ┌─────────────────────────────────────────────────────────────┐
 │                   Storage Backends                           │
 │  • InMemory: 内存存储（开发/测试）                          │
+│  • SQLite: 本地文件数据库（单机持久化）                     │
 │  • Redis: 高性能缓存（生产环境）                            │
 │  • MySQL: 关系型数据库（ACID 保证）                        │
 │  • PostgreSQL: 关系型数据库（JSONB 支持）                  │
+│  • pgvector: PostgreSQL + 向量检索（语义搜索）              │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -325,7 +327,7 @@ Memory 模块采用分层设计，由以下核心组件组成：
 | **Memory ID**       | 记忆的唯一标识符                          | 基于内容 + 主题的 SHA256 哈希，相同内容产生相同 ID |
 | **Topics**          | 记忆的主题标签                            | 用于分类和检索，支持多个标签                       |
 | **Memory Tools**    | Agent 可调用的记忆操作工具                | 包括 add、update、delete、search、load、clear      |
-| **Storage Backend** | 存储后端实现                              | 支持 InMemory、Redis、MySQL、PostgreSQL            |
+| **Storage Backend** | 存储后端实现                              | 支持 InMemory、SQLite、Redis、MySQL、PostgreSQL、pgvector |
 
 ### 关键流程
 
@@ -343,7 +345,7 @@ Memory 模块采用分层设计，由以下核心组件组成：
        │
        ↓
 ┌──────────────┐
-│ 3. 存储记忆   │  Entry → Storage Backend（InMemory/Redis/MySQL/PostgreSQL）
+│ 3. 存储记忆   │  Entry → Storage Backend（InMemory/SQLite/Redis/MySQL/PostgreSQL/pgvector）
 └──────┬───────┘
        │
        ↓
@@ -437,7 +439,7 @@ appRunner := runner.NewRunner(
 
 ### 记忆服务 (Memory Service)
 
-记忆服务支持五种存储后端，可根据场景选择。
+记忆服务支持多种存储后端（InMemory、SQLite、Redis、MySQL、PostgreSQL、pgvector），可根据场景选择。
 
 #### 配置示例
 
@@ -867,6 +869,51 @@ memoryService := memoryinmemory.NewMemoryService()
 
 **特点**：零配置，高性能，无持久化
 
+### SQLite 存储
+
+**适用场景**：本地持久化、单机部署、Demo
+
+SQLite 将数据保存在单个文件中，适用于不想运维 MySQL/PostgreSQL/Redis
+但希望进程重启后仍能保留记忆数据的场景。
+
+```go
+import (
+    "database/sql"
+
+    _ "github.com/mattn/go-sqlite3"
+    memorysqlite "trpc.group/trpc-go/trpc-agent-go/memory/sqlite"
+)
+
+db, err := sql.Open("sqlite3", "file:memories.db?_busy_timeout=5000")
+if err != nil {
+    // 处理错误
+}
+
+memoryService, err := memorysqlite.NewService(
+    db,
+    memorysqlite.WithSoftDelete(true),
+    memorysqlite.WithMemoryLimit(200),
+)
+if err != nil {
+    // 处理错误
+}
+defer memoryService.Close()
+```
+
+**配置选项**：
+
+- `WithTableName(name)`: 表名（默认 "memories"）
+- `WithSoftDelete(enabled)`: 软删除（默认 false）
+- `WithMemoryLimit(limit)`: 每用户记忆上限
+- `WithSkipDBInit(skip)`: 跳过表初始化
+- Auto 模式：`WithExtractor`、`WithAsyncMemoryNum`、`WithMemoryQueueSize`、`WithMemoryJobTimeout`
+- 工具：`WithCustomTool`、`WithToolEnabled`
+
+**注意事项**：
+
+- 该后端使用 `github.com/mattn/go-sqlite3`，需要 CGO。
+- `NewService` 会在 `Close()` 时关闭传入的 `*sql.DB`。
+
 ### Redis 存储
 
 **适用场景**：生产环境、高并发、分布式部署
@@ -1084,22 +1131,23 @@ defer pgvectorService.Close()
 
 ### 后端对比与选择
 
-| 特性         | InMemory | Redis  | MySQL    | PostgreSQL | pgvector |
-| ------------ | -------- | ------ | -------- | ---------- | -------- |
-| **持久化**   | ❌       | ✅     | ✅       | ✅         | ✅       |
-| **分布式**   | ❌       | ✅     | ✅       | ✅         | ✅       |
-| **事务**     | ❌       | 部分   | ✅ ACID  | ✅ ACID    | ✅ ACID  |
-| **查询**     | 简单     | 中等   | SQL      | SQL        | SQL+向量 |
-| **JSON**     | ❌       | 基础   | JSON     | JSONB      | JSONB    |
-| **性能**     | 极高     | 高     | 中高     | 中高       | 中高     |
-| **配置**     | 零配置   | 简单   | 中等     | 中等       | 中等     |
-| **软删除**   | ❌       | ❌     | ✅       | ✅         | ✅       |
-| **适用场景** | 开发测试 | 高并发 | 企业应用 | 高级特性   | 向量搜索 |
+| 特性         | InMemory | SQLite     | Redis  | MySQL    | PostgreSQL | pgvector |
+| ------------ | -------- | ---------- | ------ | -------- | ---------- | -------- |
+| **持久化**   | ❌       | ✅         | ✅     | ✅       | ✅         | ✅       |
+| **分布式**   | ❌       | ❌         | ✅     | ✅       | ✅         | ✅       |
+| **事务**     | ❌       | ✅ ACID    | 部分   | ✅ ACID  | ✅ ACID    | ✅ ACID  |
+| **查询**     | 简单     | SQL        | 中等   | SQL      | SQL        | SQL+向量 |
+| **JSON**     | ❌       | 基础       | 基础   | JSON     | JSONB      | JSONB    |
+| **性能**     | 极高     | 中高       | 高     | 中高     | 中高       | 中高     |
+| **配置**     | 零配置   | 简单       | 简单   | 中等     | 中等       | 中等     |
+| **软删除**   | ❌       | ✅         | ❌     | ✅       | ✅         | ✅       |
+| **适用场景** | 开发测试 | 本地持久化 | 高并发 | 企业应用 | 高级特性   | 向量搜索 |
 
 **选择建议**：
 
 ```
 开发/测试 → InMemory（零配置，快速启动）
+本地持久化 → SQLite（单文件数据库，易部署）
 高并发读写 → Redis（内存级性能）
 需要 ACID → MySQL/PostgreSQL（事务保证）
 复杂 JSON → PostgreSQL（JSONB 索引和查询）
@@ -1199,7 +1247,7 @@ memory.AddMemory(ctx, userKey, "用户喜欢编程", []string{"爱好"})
 
 **支持情况**：
 
-- ✅ MySQL、PostgreSQL、pgvector：支持软删除
+- ✅ MySQL、PostgreSQL、pgvector、SQLite：支持软删除
 - ❌ InMemory、Redis：不支持（只有硬删除）
 
 **软删除配置**：
