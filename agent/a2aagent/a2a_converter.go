@@ -11,6 +11,7 @@ package a2aagent
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -123,8 +124,14 @@ func (d *defaultA2AEventConverter) ConvertStreamingToEvents(
 	case *protocol.Task:
 		responseMsg = convertTaskToMessage(v)
 	case *protocol.TaskStatusUpdateEvent:
-		responseMsg = convertTaskStatusToMessage(v)
+		// Status updates (submitted/completed) are control signals, not user-facing content.
+		return nil, nil
 	case *protocol.TaskArtifactUpdateEvent:
+		if v.IsFinal() {
+			// Final artifact chunk is either an aggregated result or a termination signal,
+			// not incremental content for the user.
+			return nil, nil
+		}
 		responseMsg = convertTaskArtifactToMessage(v)
 	default:
 		log.Infof("unexpected event type: %T", result.Result)
@@ -213,6 +220,15 @@ func (d *defaultEventA2AConverter) ConvertToA2AMessage(
 	if sess != nil {
 		message.ContextID = &sess.ID
 	}
+
+	message.Metadata = make(map[string]any)
+	if invocation.InvocationID != "" {
+		message.Metadata["invocation_id"] = invocation.InvocationID
+	}
+	if sess != nil && sess.UserID != "" {
+		message.Metadata["user_id"] = sess.UserID
+	}
+
 	return &message, nil
 }
 
@@ -256,6 +272,9 @@ type parseResult struct {
 
 	// tag holds the event tag from A2A message metadata
 	tag string
+
+	// responseID holds the original LLM Response.ID from A2A message metadata
+	responseID string
 }
 
 // toolResponseData holds tool response information
@@ -292,6 +311,9 @@ func parseA2AMessageParts(msg *protocol.Message) *parseResult {
 		}
 		if tag, ok := msg.Metadata[ia2a.MessageMetadataTagKey].(string); ok {
 			result.tag = tag
+		}
+		if responseID, ok := msg.Metadata[ia2a.MessageMetadataResponseIDKey].(string); ok {
+			result.responseID = responseID
 		}
 	}
 
@@ -384,8 +406,19 @@ func processFunctionCall(d *protocol.DataPart) *model.ToolCall {
 		toolCall.Function.Name = name
 	}
 
-	if args, ok := data[ia2a.ToolCallFieldArgs].(string); ok {
-		toolCall.Function.Arguments = []byte(args)
+	if args, ok := data[ia2a.ToolCallFieldArgs]; ok {
+		switch v := args.(type) {
+		case string:
+			toolCall.Function.Arguments = []byte(v)
+		case map[string]any:
+			if jsonBytes, err := json.Marshal(v); err == nil {
+				toolCall.Function.Arguments = jsonBytes
+			} else {
+				log.Warnf("Failed to marshal tool call arguments: %v", err)
+			}
+		default:
+			log.Warnf("Tool call arguments has unexpected type: %T", v)
+		}
 	}
 
 	// Validate that we have at least a name
@@ -484,10 +517,17 @@ func buildEventResponse(
 
 	evt := event.New(invocation.InvocationID, agentName, opts...)
 
+	// Use llm_response_id from metadata when available (preserves original LLM Response.ID),
+	// fall back to messageID (which is ArtifactID in streaming, or Message.MessageID in unary).
+	respID := messageID
+	if result.responseID != "" {
+		respID = result.responseID
+	}
+
 	if isStreaming {
-		evt.Response = buildStreamingResponse(messageID, result, role)
+		evt.Response = buildStreamingResponse(respID, result, role)
 	} else {
-		evt.Response = buildNonStreamingResponse(messageID, result, role)
+		evt.Response = buildNonStreamingResponse(respID, result, role)
 	}
 
 	return evt
@@ -536,7 +576,7 @@ func buildStreamingResponse(messageID string, result *parseResult, role protocol
 		return &model.Response{
 			ID:        messageID,
 			Choices:   choices,
-			Object:    model.ObjectTypeChatCompletion,
+			Object:    model.ObjectTypeToolResponse,
 			Timestamp: now,
 			Created:   now.Unix(),
 			IsPartial: false,
@@ -590,8 +630,10 @@ func extractObjectType(result *parseResult) string {
 		return model.ObjectTypeChatCompletion
 	}
 
-	// Both code execution and code execution result use the same ObjectType.
-	// The distinction is made via the Tag field.
+	if len(result.toolResponses) > 0 {
+		return model.ObjectTypeToolResponse
+	}
+
 	if len(result.codeExecution) > 0 || len(result.codeExecutionResult) > 0 {
 		return model.ObjectTypePostprocessingCodeExecution
 	}

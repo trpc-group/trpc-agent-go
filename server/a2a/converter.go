@@ -163,20 +163,29 @@ type defaultEventToA2AMessage struct {
 	streamingEventType StreamingEventType
 }
 
-// getMetadataTypeKey returns the appropriate metadata type key based on ADK compatibility setting
-func (c *defaultEventToA2AMessage) getMetadataTypeKey() string {
+// setMetadata writes value under the standard key, and additionally under the
+// ADK-prefixed key when ADK compatibility is enabled.
+func (c *defaultEventToA2AMessage) setMetadata(m map[string]any, key string, value any) {
+	m[key] = value
 	if c.adkCompatibility {
-		return ia2a.GetADKMetadataKey(ia2a.DataPartMetadataTypeKey)
+		m[ia2a.GetADKMetadataKey(key)] = value
 	}
-	return ia2a.DataPartMetadataTypeKey
 }
 
-// getThoughtMetadataKey returns the appropriate thought metadata key based on ADK compatibility setting
-func (c *defaultEventToA2AMessage) getThoughtMetadataKey() string {
-	if c.adkCompatibility {
-		return ia2a.GetADKMetadataKey(ia2a.TextPartMetadataThoughtKey)
+// setPartTypeMetadata sets the DataPart type metadata.
+func (c *defaultEventToA2AMessage) setPartTypeMetadata(dataPart *protocol.DataPart, typeValue string) {
+	if dataPart.Metadata == nil {
+		dataPart.Metadata = make(map[string]any)
 	}
-	return ia2a.TextPartMetadataThoughtKey
+	c.setMetadata(dataPart.Metadata, ia2a.DataPartMetadataTypeKey, typeValue)
+}
+
+// setThoughtMetadata sets the thought metadata on a TextPart.
+func (c *defaultEventToA2AMessage) setThoughtMetadata(textPart *protocol.TextPart) {
+	if textPart.Metadata == nil {
+		textPart.Metadata = make(map[string]any)
+	}
+	c.setMetadata(textPart.Metadata, ia2a.TextPartMetadataThoughtKey, true)
 }
 
 // ConvertToA2AMessage converts an Agent event to an A2A protocol message.
@@ -238,51 +247,31 @@ func (c *defaultEventToA2AMessage) convertCodeExecutionToA2AMessage(
 		return nil, nil
 	}
 
-	var parts []protocol.Part
 	var dataPart protocol.DataPart
-	metadataTypeKey := c.getMetadataTypeKey()
 
 	if evt.ContainsTag(event.CodeExecutionResultTag) {
-		// Code execution result event
-		if c.adkCompatibility {
-			dataPart = protocol.NewDataPart(map[string]any{
-				ia2a.CodeExecutionFieldOutcome: "",
-				ia2a.CodeExecutionFieldOutput:  choice.Message.Content,
-			})
-		} else {
-			dataPart = protocol.NewDataPart(map[string]any{
-				ia2a.CodeExecutionFieldContent: choice.Message.Content,
-			})
-		}
-		// set metadata type key
-		dataPart.Metadata = map[string]any{
-			metadataTypeKey: ia2a.DataPartMetadataTypeCodeExecutionResult,
-		}
+		dataPart = protocol.NewDataPart(map[string]any{
+			ia2a.CodeExecutionFieldOutput:  choice.Message.Content,
+			ia2a.CodeExecutionFieldOutcome: "",
+		})
+		c.setPartTypeMetadata(&dataPart, ia2a.DataPartMetadataTypeCodeExecutionResult)
 	} else if evt.ContainsTag(event.CodeExecutionTag) {
-		// Code execution event
-		if c.adkCompatibility {
-			dataPart = protocol.NewDataPart(map[string]any{
-				ia2a.CodeExecutionFieldCode:     choice.Message.Content,
-				ia2a.CodeExecutionFieldLanguage: "unknown",
-			})
-		} else {
-			dataPart = protocol.NewDataPart(map[string]any{
-				ia2a.CodeExecutionFieldContent: choice.Message.Content,
-			})
-		}
-		// set metadata type key
-		dataPart.Metadata = map[string]any{
-			metadataTypeKey: ia2a.DataPartMetadataTypeExecutableCode,
-		}
+		dataPart = protocol.NewDataPart(map[string]any{
+			ia2a.CodeExecutionFieldCode:     choice.Message.Content,
+			ia2a.CodeExecutionFieldLanguage: "unknown",
+		})
+		c.setPartTypeMetadata(&dataPart, ia2a.DataPartMetadataTypeExecutableCode)
+	} else {
+		return nil, nil
 	}
 
-	parts = append(parts, &dataPart)
+	parts := []protocol.Part{&dataPart}
 	msg := protocol.NewMessage(protocol.MessageRoleAgent, parts)
 
-	// Pass Tag field to A2A metadata for client to restore event tag
 	msg.Metadata = map[string]any{
 		ia2a.MessageMetadataObjectTypeKey: evt.Response.Object,
 		ia2a.MessageMetadataTagKey:        evt.Tag,
+		ia2a.MessageMetadataResponseIDKey: evt.Response.ID,
 	}
 	return &msg, nil
 }
@@ -301,9 +290,7 @@ func (c *defaultEventToA2AMessage) convertContentToA2AMessage(
 	// Following ADK pattern: thought content is stored in TextPart metadata
 	if choice.Message.ReasoningContent != "" {
 		reasoningPart := protocol.NewTextPart(choice.Message.ReasoningContent)
-		reasoningPart.Metadata = map[string]any{
-			c.getThoughtMetadataKey(): true,
-		}
+		c.setThoughtMetadata(&reasoningPart)
 		parts = append(parts, reasoningPart)
 	}
 
@@ -317,6 +304,7 @@ func (c *defaultEventToA2AMessage) convertContentToA2AMessage(
 		msg.Metadata = map[string]any{
 			ia2a.MessageMetadataObjectTypeKey: event.Response.Object,
 			ia2a.MessageMetadataTagKey:        event.Tag,
+			ia2a.MessageMetadataResponseIDKey: event.Response.ID,
 		}
 		return &msg, nil
 	}
@@ -399,6 +387,7 @@ func (c *defaultEventToA2AMessage) convertPartsToA2AStreamingResult(
 		msg.Metadata = map[string]any{
 			ia2a.MessageMetadataObjectTypeKey: evt.Response.Object,
 			ia2a.MessageMetadataTagKey:        evt.Tag,
+			ia2a.MessageMetadataResponseIDKey: evt.Response.ID,
 		}
 		return &msg
 	}
@@ -415,6 +404,7 @@ func (c *defaultEventToA2AMessage) convertPartsToA2AStreamingResult(
 	taskArtifact.Metadata = map[string]any{
 		ia2a.MessageMetadataObjectTypeKey: evt.Response.Object,
 		ia2a.MessageMetadataTagKey:        evt.Tag,
+		ia2a.MessageMetadataResponseIDKey: evt.Response.ID,
 	}
 	return &taskArtifact
 }
@@ -433,9 +423,7 @@ func (c *defaultEventToA2AMessage) convertDeltaContentToA2AStreamingMessage(
 	// Add reasoning content as a separate TextPart with thought metadata
 	if choice.Delta.ReasoningContent != "" {
 		reasoningPart := protocol.NewTextPart(choice.Delta.ReasoningContent)
-		reasoningPart.Metadata = map[string]any{
-			c.getThoughtMetadataKey(): true,
-		}
+		c.setThoughtMetadata(&reasoningPart)
 		parts = append(parts, reasoningPart)
 	}
 
@@ -515,12 +503,8 @@ func (c *defaultEventToA2AMessage) convertToolCallToA2AMessage(
 				ia2a.ToolCallFieldArgs: string(toolCall.Function.Arguments),
 			}
 
-			// Create DataPart with metadata indicating this is a function call
 			dataPart := protocol.NewDataPart(toolCallData)
-
-			dataPart.Metadata = map[string]any{
-				c.getMetadataTypeKey(): ia2a.DataPartMetadataTypeFunctionCall,
-			}
+			c.setPartTypeMetadata(&dataPart, ia2a.DataPartMetadataTypeFunctionCall)
 			parts = append(parts, dataPart)
 		}
 	}
@@ -541,12 +525,8 @@ func (c *defaultEventToA2AMessage) convertToolCallToA2AMessage(
 				toolResponseData[ia2a.ToolCallFieldResponse] = choice.Message.Content
 			}
 
-			// Create DataPart with metadata indicating this is a function response
 			dataPart := protocol.NewDataPart(toolResponseData)
-
-			dataPart.Metadata = map[string]any{
-				c.getMetadataTypeKey(): ia2a.DataPartMetadataTypeFunctionResp,
-			}
+			c.setPartTypeMetadata(&dataPart, ia2a.DataPartMetadataTypeFunctionResp)
 			parts = append(parts, dataPart)
 		}
 	}
@@ -559,6 +539,7 @@ func (c *defaultEventToA2AMessage) convertToolCallToA2AMessage(
 	msg.Metadata = map[string]any{
 		ia2a.MessageMetadataObjectTypeKey: event.Response.Object,
 		ia2a.MessageMetadataTagKey:        event.Tag,
+		ia2a.MessageMetadataResponseIDKey: event.Response.ID,
 	}
 	return &msg, nil
 }

@@ -852,8 +852,8 @@ func buildSkillsFromTools(agent agent.Agent, agentName, agentDesc string) []a2a.
 }
 
 // addTaskMetadata adds ADK-compatible metadata to task status update events.
-// When ADK compatibility mode is enabled, it adds metadata with "adk_" prefix
-// (e.g., "adk_app_name", "adk_user_id", "adk_session_id") to match ADK Python implementation.
+// Only writes metadata when ADK compatibility is enabled, using ADK-prefixed keys
+// (adk_app_name, adk_user_id, adk_session_id) for interoperability with ADK clients.
 func (m *messageProcessor) addTaskMetadata(event *protocol.TaskStatusUpdateEvent, userID, sessionID string) {
 	if !m.adkCompatibility {
 		return
@@ -863,7 +863,6 @@ func (m *messageProcessor) addTaskMetadata(event *protocol.TaskStatusUpdateEvent
 		event.Metadata = make(map[string]any)
 	}
 
-	// Add ADK-compatible metadata keys
 	event.Metadata[ia2a.GetADKMetadataKey("app_name")] = m.agentName
 	event.Metadata[ia2a.GetADKMetadataKey("user_id")] = userID
 	event.Metadata[ia2a.GetADKMetadataKey("session_id")] = sessionID

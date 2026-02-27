@@ -78,6 +78,11 @@ const (
 	// allowing A2A clients to restore the tag information for business-specific labeling.
 	MessageMetadataTagKey = "tag"
 
+	// MessageMetadataResponseIDKey is the metadata key for the LLM response ID.
+	// This preserves the original LLM Response.ID (e.g. OpenAI's "chatcmpl-xxx") across
+	// A2A transport, enabling clients to group incremental chunks from the same LLM call.
+	MessageMetadataResponseIDKey = "llm_response_id"
+
 	// TextPartMetadataThoughtKey is the metadata key for thought/reasoning content in TextPart.
 	TextPartMetadataThoughtKey = "thought"
 

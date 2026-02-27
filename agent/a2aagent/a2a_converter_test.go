@@ -314,18 +314,8 @@ func TestDefaultA2AEventConverter_ConvertStreamingToEvents(t *testing.T) {
 				if err != nil {
 					t.Errorf("expected no error, got %v", err)
 				}
-				if len(events) == 0 {
-					t.Fatal("expected at least one event, got none")
-				}
-				evt := events[0]
-				if evt.Response == nil {
-					t.Fatal("expected response, got nil")
-				}
-				if evt.Response.ID != "status-1" {
-					t.Errorf("expected response ID 'status-1', got %s", evt.Response.ID)
-				}
-				if evt.Response.Object != model.ObjectTypeChatCompletionChunk {
-					t.Errorf("expected response object %s, got %s", model.ObjectTypeChatCompletionChunk, evt.Response.Object)
+				if len(events) != 0 {
+					t.Fatalf("expected no events (status updates are filtered), got %d", len(events))
 				}
 			},
 		},
@@ -2266,7 +2256,7 @@ func TestBuildStreamingResponse_ToolResponses(t *testing.T) {
 	if resp == nil {
 		t.Fatalf("expected response, got nil")
 	}
-	if resp.Object != model.ObjectTypeChatCompletion {
+	if resp.Object != model.ObjectTypeToolResponse {
 		t.Fatalf("unexpected object type: %s", resp.Object)
 	}
 	if len(resp.Choices) != 1 {
