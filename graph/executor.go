@@ -206,14 +206,6 @@ func NewExecutor(graph *Graph, opts ...ExecutorOption) (*Executor, error) {
 	if err := options.ExecutionEngine.validate(); err != nil {
 		return nil, err
 	}
-	if options.ExecutionEngine == ExecutionEngineDAG &&
-		options.CheckpointSaver != nil {
-		return nil, ErrDagEngineCheckpointUnsupported
-	}
-	if options.ExecutionEngine == ExecutionEngineDAG &&
-		hasStaticInterrupts(graph) {
-		return nil, ErrDagEngineInterruptUnsupported
-	}
 	maxConcurrency := options.MaxConcurrency
 	if maxConcurrency <= 0 {
 		maxConcurrency = defaultMaxConcurrency()
@@ -334,21 +326,10 @@ func (e *Executor) executeGraph(
 	if err := e.executionEngine.validate(); err != nil {
 		return err
 	}
-	if e.executionEngine == ExecutionEngineDAG {
-		if e.checkpointSaver != nil {
-			return ErrDagEngineCheckpointUnsupported
-		}
-		if hasStaticInterrupts(e.graph) {
-			return ErrDagEngineInterruptUnsupported
-		}
-	}
 	interruptState := graphInterruptFromContext(ctx)
 	ctx, extInterrupt := newExternalInterruptWatcher(ctx, interruptState)
 	if extInterrupt != nil {
 		defer extInterrupt.stop()
-	}
-	if e.executionEngine == ExecutionEngineDAG && extInterrupt != nil {
-		return ErrDagEngineInterruptUnsupported
 	}
 
 	execState, checkpointConfig, resumed, resumedStep, lastCkpt,
@@ -413,6 +394,9 @@ func (e *Executor) executeGraph(
 			ctx,
 			invocation,
 			execCtx,
+			&checkpointConfig,
+			startStep,
+			extInterrupt,
 		)
 	default:
 		stepsExecuted, err = e.runBspLoop(
