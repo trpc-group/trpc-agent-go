@@ -11,7 +11,9 @@ Graph 将可控的工作流编排与可扩展的 Agent 能力结合，适用于�
 特点：
 
 - Schema 驱动的 State 与 Reducer，避免并发分支写入同一字段时的数据竞争；
-- BSP 风格（计划/执行/合并）的确定性并行；
+- 两种执行引擎：
+  - BSP（默认）：超步（计划/执行/合并）的确定性并行
+  - DAG（可选）：去掉全局超步屏障的即时调度（eager）
 - 内置节点类型封装 LLM、工具与 Agent，减少重复代码；
 - 流式事件、检查点与中断，便于观测与恢复。
 - 节点级重试/退避（指数退避与抖动），支持执行器默认重试策略与带重试元数据的事件观测。
@@ -943,6 +945,8 @@ graphAgent, err := graphagent.New(
 	}),
 	graphagent.WithChannelBufferSize(1024),            // 调整事件通道缓冲区
 	graphagent.WithMaxConcurrency(8),                  // 限制并行任务数
+	// 执行引擎：BSP（默认）或 DAG（eager）。
+	graphagent.WithExecutionEngine(graph.ExecutionEngineBSP),
 	graphagent.WithCheckpointSaver(memorySaver),       // 使用持久化检查点
 	graphagent.WithSubAgents([]agent.Agent{subAgent}), // 配置子 Agent
 	graphagent.WithAddSessionSummary(true),            // 将会话摘要注入 system 消息
@@ -1377,8 +1381,9 @@ sg.AddMultiConditionalEdges(
 
 说明：
 
-- 与其他路由一样，扇出的目标节点会在 **下一步** BSP 超步（superstep）才变为可运行
-  （router 节点完成之后）。这会影响端到端延迟，见下文“BSP 超步屏障”。
+- 在默认 BSP 引擎中，扇出的目标节点会在 **下一步** 超步（superstep）才变为可运行
+  （router 节点完成之后）。在 DAG 引擎中，目标节点可能会在 router 完成后立刻变为可运行
+  （没有全局屏障）。这会影响端到端延迟，见下文“BSP 超步屏障”。
 - 返回结果会先去重，同一分支键在同一步内只触发一次；
 - 每个分支键的解析优先级与单条件路由一致：
   1. 条件边 `pathMap`；2) 节点 Ends；3) 直接当作节点 ID；
@@ -1773,7 +1778,7 @@ ctx, interrupt := graph.WithGraphInterrupt(context.Background())
 events, _ := app.Run(ctx, userID, sessionID, model.NewUserMessage("hi"))
 
 // 在另一个 goroutine / handler 中触发：
-interrupt() // 优雅中断：等待当前 step 的任务结束后暂停
+interrupt() // 优雅中断：等待 in-flight 任务结束后暂停
 
 // 或者设置最大等待时间，超时后强制中断：
 interrupt(graph.WithGraphInterruptTimeout(2 * time.Second))
@@ -1781,10 +1786,11 @@ interrupt(graph.WithGraphInterruptTimeout(2 * time.Second))
 
 行为说明：
 
-- 默认情况下，执行器会等待当前 step 的任务执行完成，然后在开始下一步
-  之前中断。
+- 默认情况下，执行器会在“安全边界”暂停：
+  - BSP：等待当前超步结束（在下一超步开始之前暂停）
+  - DAG：停止调度新任务，并等待 in-flight 任务结束后暂停
 - 使用 `WithGraphInterruptTimeout` 时，执行器会在超时后取消正在运行的任务，
-  并尽快中断；被取消的节点会在恢复时重新执行。
+  并尽快中断；被取消的节点会在恢复时进行确定性 rerun（使用输入快照）。
 
 恢复方式：
 
@@ -2487,6 +2493,64 @@ flowchart LR
   - `AddEdge(from, to)` 适合增量触发（`to` 可能执行多次）；
   - `AddJoinEdge([...], to)` 适合“等待全部，再执行一次”。
 
+#### DAG（eager）引擎（去掉超步屏障）
+
+如果你的编排基本是 DAG（无环/少环），并且更关注端到端延迟，那么 BSP 的“超步屏障”
+可能会显得过于保守：深层节点无法在自己依赖满足后立刻执行，而要等待同一超步里的其他
+并行分支全部结束。
+
+DAG 引擎去掉了全局屏障，采用 **即时调度（eager scheduling）**：
+
+- **BSP（默认）**：每个超步只做一次规划；下游只能在下一超步变为可运行。
+- **DAG（可选）**：节点一旦完成并写入路由信号（channel update），执行器会立刻规划并
+  启动新变为可运行的节点（受 `WithMaxConcurrency` 限制）。
+
+开启方式（GraphAgent）：
+
+```go
+ga, err := graphagent.New(
+    "my-agent",
+    g,
+    graphagent.WithExecutionEngine(graph.ExecutionEngineDAG),
+)
+```
+
+开启方式（直接使用 Executor）：
+
+```go
+exec, err := graph.NewExecutor(
+    g,
+    graph.WithExecutionEngine(graph.ExecutionEngineDAG),
+)
+```
+
+兼容性原则：如果你不设置引擎选项，默认的 BSP 语义与此前 **完全一致**。
+
+当前差异与限制（DAG 引擎）：
+
+- **检查点（支持，但频率不同）**：DAG 模式支持 `WithCheckpointSaver`，会在以下时机写入
+  checkpoint：
+  - 启动时（`source=input`，`step=-1`，配置了 saver 才会写）
+  - 发生中断时（`source=interrupt`，覆盖内部/静态/外部中断）
+  - 正常完成时（`source=loop`，best effort）
+  但 DAG 模式**不会**像 BSP 那样“每个超步写一次 loop checkpoint”，因此时间旅行的粒度
+  也会不同（详见上文 BSP/Checkpoint 章节）。
+- **中断（支持）**：
+  - 内部中断：节点内调用 `graph.Interrupt`
+  - 静态中断：`WithInterruptBefore` / `WithInterruptAfter`
+  - 外部中断：`graph.WithGraphInterrupt`（planned pause 与 timeout forced）
+  对于 forced timeout，执行器会取消 in-flight 任务，并记录每个任务的输入快照，用于
+  resume 时的确定性 rerun。
+- **不支持 StepTimeout**：`WithStepTimeout` 是 BSP 超步的概念；DAG 模式下建议使用整体
+  `context` deadline 和/或 `WithNodeTimeout`。
+- **MaxSteps 含义不同**：DAG 模式下 `WithMaxSteps` 限制的是“节点执行次数”（而不是超步）。
+- **同一节点单并发**：DAG 调度器同一时刻最多只运行一个相同 nodeID 的任务；若被重复触发，
+  会排队等待当前执行结束后再运行。
+
+如果需要“等待所有分支再汇聚”，请继续使用 `AddJoinEdge`（两种引擎都支持）。
+
+参考示例：`examples/graph/dag_engine`、`examples/graph/dag_interrupt`。
+
 ### 消息可见性选项
 当前Agent可在需要时根据不同场景控制其对其他Agent生成的消息以及历史会话消息的可见性进行管理，可通过相关选项配置进行管理。
 在与model交互时仅将可见的内容输入给模型。 
@@ -2766,6 +2830,9 @@ flowchart TB
 **`graph/executor.go`** - BSP 执行器  
 这是系统心脏，借鉴了 [Google Pregel](https://research.google/pubs/pub37252/) 论文。实现 BSP（Bulk Synchronous Parallel）风格的三阶段循环：Planning → Execution → Update。
 
+**`graph/executor_dag.go`** - DAG（eager）执行器（可选）  
+提供去掉 BSP 全局屏障的即时调度：当触发通道变为可用时，尽快启动可运行节点以降低端到端延迟。该模式更适合 DAG‑like 编排，强调“降低端到端延迟”而不是“超步对齐”。
+
 **`graph/checkpoint/*`** - 检查点和恢复机制  
 提供可选的检查点持久化（如 sqlite），原子保存状态与待写入动作，支持按谱系/检查点恢复。
 
@@ -2774,7 +2841,14 @@ flowchart TB
 
 ### 执行模型
 
-GraphAgent 借鉴了 Google Pregel 的 BSP（Bulk Synchronous Parallel）模型，但适配到了单进程环境；在此基础上还支持检查点、HITL 中断/恢复与时间旅行：
+GraphAgent 支持两种执行引擎：
+
+- **BSP 引擎（默认）**：Pregel 风格的 BSP（Bulk Synchronous Parallel）超步，并带有全局屏障。
+  该引擎支持检查点、HITL 中断/恢复与时间旅行。
+- **DAG 引擎（可选）**：去掉全局超步屏障的即时调度，更适合 DAG‑like 的低延迟编排。
+  该引擎支持检查点与中断，但语义与 BSP 有差异（见上文 DAG 引擎说明）。
+
+下图展示 BSP 引擎的执行过程：
 
 ```mermaid
 sequenceDiagram
@@ -2888,6 +2962,8 @@ flowchart TB
 
 ```go
 exec, err := graph.NewExecutor(g,
+    // 默认：BSP 超步（支持 checkpoint / interrupt / time travel）。
+    graph.WithExecutionEngine(graph.ExecutionEngineBSP),
     graph.WithChannelBufferSize(1024),              // 事件通道缓冲
     graph.WithMaxSteps(50),                          // 最大步数
     graph.WithMaxConcurrency(8),                     // 并行任务数
@@ -2897,6 +2973,19 @@ exec, err := graph.NewExecutor(g,
     graph.WithCheckpointSaveTimeout(30*time.Second), // 检查点保存超时
 )
 ```
+
+开启 DAG（eager）引擎：
+
+```go
+exec, err := graph.NewExecutor(g,
+    graph.WithExecutionEngine(graph.ExecutionEngineDAG),
+    graph.WithMaxConcurrency(8),
+    graph.WithNodeTimeout(2*time.Minute),
+)
+```
+
+注意：DAG 模式下 `WithStepTimeout` 不生效；建议使用整体 `context` deadline 和/或
+`WithNodeTimeout`。
 
 ## 与多 Agent 系统集成
 

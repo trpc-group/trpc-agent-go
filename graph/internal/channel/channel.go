@@ -226,6 +226,27 @@ func (c *Channel) Acknowledge() {
 	c.mu.Unlock()
 }
 
+// ConsumeIfAvailable atomically consumes the availability marker.
+//
+// This is similar to IsAvailable() followed by Acknowledge(), but it avoids
+// losing updates when planning runs concurrently with channel updates.
+func (c *Channel) ConsumeIfAvailable() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if !c.Available {
+		return false
+	}
+
+	c.Available = false
+	if c.Behavior == BehaviorBarrier {
+		for k := range c.BarrierSet {
+			delete(c.BarrierSet, k)
+		}
+	}
+	return true
+}
+
 func (c *Channel) isBarrierSatisfiedLocked() bool {
 	if len(c.BarrierExpected) == 0 {
 		return true
