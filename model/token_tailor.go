@@ -504,16 +504,20 @@ func (s *MiddleOutStrategy) TailorMessages(ctx context.Context, messages []Messa
 		keep[i] = true
 	}
 
+	// Compute initial total once; subsequent updates are O(1) via prefix sums.
+	headTokens := prefixSum[preservedHead]
+	allRoundsTokens := countTokensForRounds(prefixSum, rounds, keep)
+	currentTotal := headTokens + allRoundsTokens
+
 	lastRoundIdx := len(rounds) - 1
+	// Pre-allocate once, reuse each iteration to avoid repeated allocations.
+	keptNonLast := make([]int, 0, lastRoundIdx)
 	for {
-		headTokens := prefixSum[preservedHead]
-		roundTokens := countTokensForRounds(prefixSum, rounds, keep)
-		total := headTokens + roundTokens
-		if total <= maxTokens {
+		if currentTotal <= maxTokens {
 			break
 		}
 
-		keptNonLast := make([]int, 0, len(rounds)-1)
+		keptNonLast = keptNonLast[:0]
 		for i := 0; i < lastRoundIdx; i++ {
 			if keep[i] {
 				keptNonLast = append(keptNonLast, i)
@@ -524,7 +528,11 @@ func (s *MiddleOutStrategy) TailorMessages(ctx context.Context, messages []Messa
 		}
 
 		midPos := len(keptNonLast) / 2
-		keep[keptNonLast[midPos]] = false
+		removeIdx := keptNonLast[midPos]
+		// O(1) incremental update: subtract the removed round's tokens.
+		removedTokens := countTokensWithPrefixSum(prefixSum, rounds[removeIdx].start, rounds[removeIdx].end)
+		currentTotal -= removedTokens
+		keep[removeIdx] = false
 	}
 
 	result := buildRoundTailoredResult(messages, preservedHead, rounds, keep)
@@ -571,18 +579,23 @@ func (s *HeadOutStrategy) TailorMessages(ctx context.Context, messages []Message
 		keep[i] = true
 	}
 
+	// Compute initial total once; subsequent updates are O(1) via prefix sums.
+	headTokens := prefixSum[preservedHead]
+	allRoundsTokens := countTokensForRounds(prefixSum, rounds, keep)
+	currentTotal := headTokens + allRoundsTokens
+
 	lastRoundIdx := len(rounds) - 1
 	dropIdx := 0
 	for {
-		headTokens := prefixSum[preservedHead]
-		roundTokens := countTokensForRounds(prefixSum, rounds, keep)
-		total := headTokens + roundTokens
-		if total <= maxTokens {
+		if currentTotal <= maxTokens {
 			break
 		}
 		if dropIdx >= lastRoundIdx {
 			break
 		}
+		// O(1) incremental update.
+		removedTokens := countTokensWithPrefixSum(prefixSum, rounds[dropIdx].start, rounds[dropIdx].end)
+		currentTotal -= removedTokens
 		keep[dropIdx] = false
 		dropIdx++
 	}
@@ -631,18 +644,23 @@ func (s *TailOutStrategy) TailorMessages(ctx context.Context, messages []Message
 		keep[i] = true
 	}
 
+	// Compute initial total once; subsequent updates are O(1) via prefix sums.
+	headTokens := prefixSum[preservedHead]
+	allRoundsTokens := countTokensForRounds(prefixSum, rounds, keep)
+	currentTotal := headTokens + allRoundsTokens
+
 	lastRoundIdx := len(rounds) - 1
 	dropIdx := lastRoundIdx - 1
 	for {
-		headTokens := prefixSum[preservedHead]
-		roundTokens := countTokensForRounds(prefixSum, rounds, keep)
-		total := headTokens + roundTokens
-		if total <= maxTokens {
+		if currentTotal <= maxTokens {
 			break
 		}
 		if dropIdx < 0 {
 			break
 		}
+		// O(1) incremental update.
+		removedTokens := countTokensWithPrefixSum(prefixSum, rounds[dropIdx].start, rounds[dropIdx].end)
+		currentTotal -= removedTokens
 		keep[dropIdx] = false
 		dropIdx--
 	}
