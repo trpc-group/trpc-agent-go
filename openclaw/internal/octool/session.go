@@ -36,6 +36,8 @@ type session struct {
 	cancel  context.CancelFunc
 
 	doneCh chan struct{}
+	ioDone chan struct{}
+	ioWG   sync.WaitGroup
 
 	mu       sync.Mutex
 	started  time.Time
@@ -54,6 +56,7 @@ func newSession(id, command string, maxLines int) *session {
 		id:       id,
 		command:  command,
 		doneCh:   make(chan struct{}),
+		ioDone:   make(chan struct{}),
 		started:  time.Now(),
 		maxLines: maxLines,
 	}

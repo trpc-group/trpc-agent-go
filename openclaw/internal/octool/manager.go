@@ -30,6 +30,7 @@ const (
 	defaultMaxLines  = 20_000
 	defaultJobTTL    = 30 * time.Minute
 	defaultKillGrace = 2 * time.Second
+	defaultIODrain   = 1 * time.Second
 )
 
 type Manager struct {
@@ -263,7 +264,11 @@ func (m *Manager) startBackground(
 		}
 		sess.stdin = master
 		sess.closeIO = closeIO
-		go sess.readFrom(master)
+		sess.ioWG.Add(1)
+		go func() {
+			defer sess.ioWG.Done()
+			sess.readFrom(master)
+		}()
 	} else {
 		stdin, stdout, stderr, err := startPipes(cmd)
 		if err != nil {
@@ -277,14 +282,26 @@ func (m *Manager) startBackground(
 			_ = stderr.Close()
 			return nil
 		}
-		go sess.readFrom(stdout)
-		go sess.readFrom(stderr)
+		sess.ioWG.Add(2)
+		go func() {
+			defer sess.ioWG.Done()
+			sess.readFrom(stdout)
+		}()
+		go func() {
+			defer sess.ioWG.Done()
+			sess.readFrom(stderr)
+		}()
 		if err := cmd.Start(); err != nil {
 			cancel()
 			_ = sess.closeIO()
 			return nil, err
 		}
 	}
+
+	go func() {
+		sess.ioWG.Wait()
+		close(sess.ioDone)
+	}()
 
 	sess.cmd = cmd
 	m.mu.Lock()
@@ -293,12 +310,25 @@ func (m *Manager) startBackground(
 
 	go func() {
 		err := cmd.Wait()
+		waitDone(sess.ioDone, defaultIODrain)
 		sess.markDone(exitCode(err))
 		cancel()
 		_ = sess.closeIO()
 	}()
 
 	return sess, nil
+}
+
+func waitDone(done <-chan struct{}, timeout time.Duration) {
+	if done == nil {
+		return
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+	}
 }
 
 func startPipes(
