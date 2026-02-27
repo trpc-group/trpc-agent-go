@@ -561,8 +561,19 @@ Input:
   inline content. Use `output_files[*].ref` with `read_file` when you
   need text content later.
 - `artifact_prefix` (optional): prefix for the legacy artifact path
-  - If the Artifact service is not configured, `skill_run` keeps
-    returning `output_files` and reports a `warnings` entry.
+  - `save_as_artifacts` is best-effort. If `skill_run` cannot access an
+    Artifact service from the current tool context, it keeps returning
+    `output_files` and adds a `warnings` entry (no hard error).
+  - Common causes:
+    - `skill_run` is invoked outside a Runner invocation (missing
+      `agent.InvocationFromContext(ctx)`)
+    - Artifact service is not configured (missing
+      `runner.WithArtifactService(...)`)
+    - Session identifiers are empty (for example, calling
+      `Runner.Run(ctx, "", "", ...)`, or an AG-UI request missing
+      `thread_id`)
+  - Example warning:
+    - `save_as_artifacts requested but session app/user/session IDs are missing; outputs are not persisted`
 
 Guidance:
 - Prefer using `skill_run` only for commands explicitly required by the
@@ -765,6 +776,12 @@ Common spans:
 - Timeouts/non‑zero exit codes: inspect command/deps/`timeout`; in
   container mode, network is disabled by default
 - Missing output files: check your glob patterns and output locations
+- Artifacts not saved (for example, COS/S3): check `artifact_files` and
+  `warnings` in the `skill_run` result; `save_as_artifacts` is skipped
+  when the invocation/session info is missing, and COS/S3 paths are
+  derived from `{app_name}/{user_id}/{session_id}` (or `{app_name}/{user_id}/user`
+  for `user:` artifacts) and the returned `artifact_files[*].name` +
+  `artifact_files[*].version`.
 
 ## References and Examples
 

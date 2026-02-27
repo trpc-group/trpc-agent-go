@@ -542,8 +542,17 @@ agent := llmagent.New(
   非文本输出的 `content` 也会始终为空。需要文本内容时，可用
   `output_files[*].ref` 配合 `read_file` 按需读取。
 - `artifact_prefix`（可选）：与 `save_as_artifacts` 配合的前缀。
-  - 若未配置制品服务（Artifact service），`skill_run` 会继续
-    返回 `output_files`，并在 `warnings` 中给出提示。
+  - `save_as_artifacts` 为 best-effort：当 `skill_run` 无法从当前
+    工具上下文访问制品服务时，不会报硬错误，仍会返回
+    `output_files`，并在 `warnings` 中给出原因。
+  - 常见原因：
+    - `skill_run` 未在 Runner 的 invocation 上下文中执行
+      （缺少 `agent.InvocationFromContext(ctx)`）
+    - 未配置制品服务（未设置 `runner.WithArtifactService(...)`）
+    - 会话标识为空（例如调用 `Runner.Run(ctx, "", "", ...)`，
+      或 AG-UI 请求缺少 `thread_id`）
+  - 示例 warning：
+    - `save_as_artifacts requested but session app/user/session IDs are missing; outputs are not persisted`
 
 建议：
 - 建议 `skill_run` 尽量只用于执行 Skill 文档里描述的流程
@@ -744,6 +753,11 @@ agent := llmagent.New(
 - 超时/非零退出码：检查命令、依赖与 `timeout` 参数；容器模式下
   网络默认关闭，避免依赖网络的脚本
 - 输出文件未返回：检查 `output_files` 通配符是否指向正确位置
+- 制品未落 COS/S3：检查 `skill_run` 返回的 `artifact_files` 与
+  `warnings`；若 invocation/session 信息缺失，`save_as_artifacts`
+  会被跳过；在 COS/S3 中可按 `{app_name}/{user_id}/{session_id}`
+  （或 `user:` 制品的 `{app_name}/{user_id}/user`）+
+  `artifact_files[*].name` + `artifact_files[*].version` 的结构定位。
 
 ## 参考与示例
 
