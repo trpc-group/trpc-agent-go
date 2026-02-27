@@ -24,7 +24,7 @@ A simple example that demonstrates manual memory tool integration where LLM agen
   delete, clear)
 - Custom tool implementations
 - Streaming and non-streaming response modes
-- Multiple storage backends (in-memory, Redis, MySQL, PostgreSQL)
+- Multiple storage backends (in-memory, SQLite, Redis, MySQL, PostgreSQL, pgvector)
 
 **Use Cases:**
 
@@ -83,6 +83,7 @@ All examples support multiple storage backends:
 | Backend    | Description                                 | Usage              |
 | ---------- | ------------------------------------------- | ------------------ |
 | `inmemory` | In-memory storage (default)                 | `-memory=inmemory` |
+| `sqlite`   | SQLite file storage                         | `-memory=sqlite`   |
 | `redis`    | Redis-based storage                         | `-memory=redis`    |
 | `mysql`    | MySQL-based storage                         | `-memory=mysql`    |
 | `postgres` | PostgreSQL-based storage                    | `-memory=postgres` |
@@ -160,6 +161,7 @@ Memory provides 6 tools with different availability in each mode:
 | Variable                  | Description                  | Default                     |
 | ------------------------- | ---------------------------- | --------------------------- |
 | `OPENAI_BASE_URL`         | Base URL for model API       | `https://api.openai.com/v1` |
+| `SQLITE_MEMORY_DSN`       | SQLite DSN for memory store  | `file:memories.db?_busy_timeout=5000` |
 | `REDIS_ADDR`              | Redis server address         | `localhost:6379`            |
 | `PG_HOST`                 | PostgreSQL host              | `localhost`                 |
 | `PG_PORT`                 | PostgreSQL port              | `5432`                      |
