@@ -111,6 +111,8 @@ var (
 		PreloadMemory: 0,
 
 		SkillLoadMode: SkillLoadModeTurn,
+
+		SkipSkillsFallbackOnSessionSummary: true,
 	}
 )
 
@@ -269,6 +271,13 @@ type Options struct {
 	// result messages (skill_load / skill_select_docs). This keeps the
 	// system prompt more stable for prompt caching.
 	SkillsLoadedContentInToolResults bool
+
+	// SkipSkillsFallbackOnSessionSummary controls whether the framework
+	// skips the "Loaded skill context" system-message fallback when a
+	// session summary is present in the request.
+	//
+	// Default: true.
+	SkipSkillsFallbackOnSessionSummary bool
 
 	// skillsRepository enables agent skills when non-nil.
 	skillsRepository skill.Repository
@@ -463,6 +472,19 @@ func WithSkillLoadMode(mode string) Option {
 func WithSkillsLoadedContentInToolResults(enable bool) Option {
 	return func(opts *Options) {
 		opts.SkillsLoadedContentInToolResults = enable
+	}
+}
+
+// WithSkipSkillsFallbackOnSessionSummary controls whether the agent
+// skips the "Loaded skill context" system-message fallback when a session
+// summary is present in the request.
+//
+// Default: true.
+func WithSkipSkillsFallbackOnSessionSummary(
+	skip bool,
+) Option {
+	return func(opts *Options) {
+		opts.SkipSkillsFallbackOnSessionSummary = skip
 	}
 }
 

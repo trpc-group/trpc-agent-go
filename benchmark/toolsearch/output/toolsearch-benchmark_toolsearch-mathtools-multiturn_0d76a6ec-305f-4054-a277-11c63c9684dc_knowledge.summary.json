@@ -1,0 +1,378 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-02-26T16:30:26.619631627+08:00",
+  "config": {
+    "appName": "toolsearch-benchmark",
+    "evalSetId": "toolsearch-mathtools-multiturn",
+    "mode": "knowledge",
+    "modelName": "deepseek-v3.2",
+    "embedModel": "text-embedding-3-small",
+    "maxTools": 3,
+    "numRuns": 1,
+    "dataDir": "/data/workspace/trpc-agent-go/benchmark/toolsearch/data",
+    "outputDir": "/data/workspace/trpc-agent-go/benchmark/toolsearch/output"
+  },
+  "result": {
+    "overallStatus": "passed",
+    "executionTimeMs": 453656,
+    "wallTimeMs": 453656,
+    "evalSetResultId": "toolsearch-benchmark_toolsearch-mathtools-multiturn_0d76a6ec-305f-4054-a277-11c63c9684dc"
+  },
+  "tokens": {
+    "chat": {
+      "prompt": 82648,
+      "completion": 2389,
+      "total": 85037
+    },
+    "toolsearch": {
+      "prompt": 8961,
+      "completion": 2254,
+      "total": 11215
+    },
+    "total": {
+      "prompt": 91609,
+      "completion": 4643,
+      "total": 96252
+    }
+  },
+  "cases": [
+    {
+      "evalCaseId": "log-exp",
+      "overallStatus": "passed",
+      "runs": [
+        {
+          "runId": 1,
+          "finalEvalStatus": "passed",
+          "sessionId": "ed121e5e-14e7-4bba-a5de-851975cca764",
+          "turns": [
+            {
+              "turnId": "log-exp-01",
+              "metricScore": 1,
+              "expectedTool": "math_Log10",
+              "actualTools": [
+                "math_Log10"
+              ],
+              "durationMs": 45153,
+              "chatTokens": 1801,
+              "toolsearchTokens": 3336
+            },
+            {
+              "turnId": "log-exp-02",
+              "metricScore": 1,
+              "expectedTool": "math_Log",
+              "actualTools": [
+                "math_Log"
+              ],
+              "durationMs": 6700,
+              "chatTokens": 2134,
+              "toolsearchTokens": 216
+            },
+            {
+              "turnId": "log-exp-03",
+              "metricScore": 1,
+              "expectedTool": "math_Log2",
+              "actualTools": [
+                "math_Log2"
+              ],
+              "durationMs": 13563,
+              "chatTokens": 2366,
+              "toolsearchTokens": 336
+            },
+            {
+              "turnId": "log-exp-04",
+              "metricScore": 1,
+              "expectedTool": "math_Log1p",
+              "actualTools": [
+                "math_Log1p"
+              ],
+              "durationMs": 21557,
+              "chatTokens": 2667,
+              "toolsearchTokens": 670
+            },
+            {
+              "turnId": "log-exp-05",
+              "metricScore": 1,
+              "expectedTool": "math_Expm1",
+              "actualTools": [
+                "math_Expm1"
+              ],
+              "durationMs": 10787,
+              "chatTokens": 3011,
+              "toolsearchTokens": 454
+            },
+            {
+              "turnId": "log-exp-06",
+              "metricScore": 1,
+              "expectedTool": "math_Exp",
+              "actualTools": [
+                "math_Exp"
+              ],
+              "durationMs": 17927,
+              "chatTokens": 3255,
+              "toolsearchTokens": 454
+            },
+            {
+              "turnId": "log-exp-07",
+              "metricScore": 1,
+              "expectedTool": "math_Exp2",
+              "actualTools": [
+                "math_Exp2"
+              ],
+              "durationMs": 8965,
+              "chatTokens": 3508,
+              "toolsearchTokens": 239
+            },
+            {
+              "turnId": "log-exp-08",
+              "metricScore": 1,
+              "expectedTool": "math_Log10",
+              "actualTools": [
+                "math_Log10"
+              ],
+              "durationMs": 8060,
+              "chatTokens": 3733,
+              "toolsearchTokens": 245
+            },
+            {
+              "turnId": "log-exp-09",
+              "metricScore": 1,
+              "expectedTool": "math_Log1p|math_Log",
+              "actualTools": [
+                "math_Log"
+              ],
+              "durationMs": 20576,
+              "chatTokens": 4048,
+              "toolsearchTokens": 497
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "evalCaseId": "trig-hyperbolic",
+      "overallStatus": "passed",
+      "runs": [
+        {
+          "runId": 1,
+          "finalEvalStatus": "passed",
+          "sessionId": "d2125c2b-b316-4a6f-8538-153212ea319f",
+          "turns": [
+            {
+              "turnId": "trig-01",
+              "metricScore": 1,
+              "expectedTool": "math_Sin",
+              "actualTools": [
+                "math_Sin"
+              ],
+              "durationMs": 13785,
+              "chatTokens": 1838,
+              "toolsearchTokens": 218
+            },
+            {
+              "turnId": "trig-02",
+              "metricScore": 1,
+              "expectedTool": "math_Cos",
+              "actualTools": [
+                "math_Cos"
+              ],
+              "durationMs": 8106,
+              "chatTokens": 2101,
+              "toolsearchTokens": 208
+            },
+            {
+              "turnId": "trig-03",
+              "metricScore": 1,
+              "expectedTool": "math_Tan",
+              "actualTools": [
+                "math_Tan"
+              ],
+              "durationMs": 7862,
+              "chatTokens": 2327,
+              "toolsearchTokens": 192
+            },
+            {
+              "turnId": "trig-04",
+              "metricScore": 1,
+              "expectedTool": "math_Sincos",
+              "actualTools": [
+                "math_Sincos"
+              ],
+              "durationMs": 22158,
+              "chatTokens": 2647,
+              "toolsearchTokens": 284
+            },
+            {
+              "turnId": "trig-05",
+              "metricScore": 1,
+              "expectedTool": "math_Sinh",
+              "actualTools": [
+                "math_Sinh"
+              ],
+              "durationMs": 11227,
+              "chatTokens": 2863,
+              "toolsearchTokens": 224
+            },
+            {
+              "turnId": "trig-06",
+              "metricScore": 1,
+              "expectedTool": "math_Cosh",
+              "actualTools": [
+                "math_Cosh"
+              ],
+              "durationMs": 15457,
+              "chatTokens": 3071,
+              "toolsearchTokens": 182
+            },
+            {
+              "turnId": "trig-07",
+              "metricScore": 1,
+              "expectedTool": "math_Tanh",
+              "actualTools": [
+                "math_Tanh"
+              ],
+              "durationMs": 7297,
+              "chatTokens": 3273,
+              "toolsearchTokens": 212
+            },
+            {
+              "turnId": "trig-08",
+              "metricScore": 1,
+              "expectedTool": "math_Cos",
+              "actualTools": [
+                "math_Cos"
+              ],
+              "durationMs": 15445,
+              "chatTokens": 3519,
+              "toolsearchTokens": 271
+            },
+            {
+              "turnId": "trig-09",
+              "metricScore": 1,
+              "expectedTool": "math_Sincos",
+              "actualTools": [
+                "math_Sincos"
+              ],
+              "durationMs": 20733,
+              "chatTokens": 3774,
+              "toolsearchTokens": 224
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "evalCaseId": "pow-root",
+      "overallStatus": "passed",
+      "runs": [
+        {
+          "runId": 1,
+          "finalEvalStatus": "passed",
+          "sessionId": "fbd2cce8-05f9-4f9c-824a-7c7fdf32f42e",
+          "turns": [
+            {
+              "turnId": "pow-01",
+              "metricScore": 1,
+              "expectedTool": "math_Sqrt",
+              "actualTools": [
+                "math_Sqrt"
+              ],
+              "durationMs": 7431,
+              "chatTokens": 1781,
+              "toolsearchTokens": 182
+            },
+            {
+              "turnId": "pow-02",
+              "metricScore": 1,
+              "expectedTool": "math_Cbrt",
+              "actualTools": [
+                "math_Cbrt"
+              ],
+              "durationMs": 32171,
+              "chatTokens": 2105,
+              "toolsearchTokens": 235
+            },
+            {
+              "turnId": "pow-03",
+              "metricScore": 1,
+              "expectedTool": "math_Pow10",
+              "actualTools": [
+                "math_Pow10"
+              ],
+              "durationMs": 7785,
+              "chatTokens": 2394,
+              "toolsearchTokens": 220
+            },
+            {
+              "turnId": "pow-04",
+              "metricScore": 1,
+              "expectedTool": "math_Pow",
+              "actualTools": [
+                "math_Pow",
+                "math_Log",
+                "math_Exp"
+              ],
+              "durationMs": 58768,
+              "chatTokens": 6186,
+              "toolsearchTokens": 454
+            },
+            {
+              "turnId": "pow-05",
+              "metricScore": 1,
+              "expectedTool": "math_Pow10",
+              "actualTools": [
+                "math_Pow10"
+              ],
+              "durationMs": 15892,
+              "chatTokens": 3624,
+              "toolsearchTokens": 255
+            },
+            {
+              "turnId": "pow-06",
+              "metricScore": 1,
+              "expectedTool": "math_Sqrt",
+              "actualTools": [
+                "math_Sqrt"
+              ],
+              "durationMs": 12069,
+              "chatTokens": 3869,
+              "toolsearchTokens": 366
+            },
+            {
+              "turnId": "pow-07",
+              "metricScore": 1,
+              "expectedTool": "math_Cbrt",
+              "actualTools": [
+                "math_Cbrt"
+              ],
+              "durationMs": 19810,
+              "chatTokens": 4123,
+              "toolsearchTokens": 514
+            },
+            {
+              "turnId": "pow-08",
+              "metricScore": 1,
+              "expectedTool": "math_Pow|math_Exp2",
+              "actualTools": [
+                "math_Exp2"
+              ],
+              "durationMs": 16418,
+              "chatTokens": 4387,
+              "toolsearchTokens": 256
+            },
+            {
+              "turnId": "pow-09",
+              "metricScore": 1,
+              "expectedTool": "math_Pow10",
+              "actualTools": [
+                "math_Pow10"
+              ],
+              "durationMs": 7940,
+              "chatTokens": 4632,
+              "toolsearchTokens": 271
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

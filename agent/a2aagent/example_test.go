@@ -26,6 +26,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+const loopbackHost = "127.0.0.1"
+
 // TestA2AAgentExample demonstrates full integration testing with real A2A server
 func TestA2AAgentExample(t *testing.T) {
 	tests := []struct {
@@ -63,7 +65,7 @@ func TestA2AAgentExample(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
-			host := fmt.Sprintf("localhost:%d", tt.port)
+			host := fmt.Sprintf("%s:%d", loopbackHost, tt.port)
 			t.Logf("Testing %s (streaming=%v) on %s", tt.name, tt.streaming, host)
 
 			// Step 1: Create mock backend agent for the server
@@ -158,7 +160,7 @@ func TestA2AAgentExample_WithCustomHandler(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	host := "localhost:28883"
+	host := fmt.Sprintf("%s:%d", loopbackHost, 28883)
 
 	// Create backend agent
 	backendAgent := createExampleBackendAgent("custom-handler-agent", "Agent with custom handler", true)
@@ -399,7 +401,7 @@ func TestA2AAgentExample_ErrorHandling(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	host := "localhost:28884"
+	host := fmt.Sprintf("%s:%d", loopbackHost, 28884)
 
 	// Create error-throwing backend agent
 	backendAgent := &errorBackendAgent{name: "error-agent"}

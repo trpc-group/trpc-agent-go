@@ -340,7 +340,7 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequential(
 	index int,
 	toolCall model.ToolCall,
 ) (*event.Event, error) {
-	_, span := trace.Tracer.Start(ctx, itelemetry.NewExecuteToolSpanName(toolCall.Function.Name))
+	ctx, span := trace.Tracer.Start(ctx, itelemetry.NewExecuteToolSpanName(toolCall.Function.Name))
 	defer span.End()
 	startTime := time.Now()
 	ctx, choices, modifiedArgs, shouldIgnoreError, err := p.executeToolCall(
@@ -503,7 +503,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	}()
 
 	// Trace the tool execution for observability.
-	_, span := trace.Tracer.Start(ctx, itelemetry.NewExecuteToolSpanName(tc.Function.Name))
+	ctx, span := trace.Tracer.Start(ctx, itelemetry.NewExecuteToolSpanName(tc.Function.Name))
 	defer span.End()
 	startTime := time.Now()
 	// Execute the tool (streamable or callable) with callbacks.
@@ -803,6 +803,7 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 	}
 
 	// Marshal the result to JSON for the default tool message.
+	// Note: mcpToolResult implements MarshalJSON to only marshal Content for backward compatibility.
 	resultBytes, err := json.Marshal(result)
 	if err != nil {
 		// Marshal failures (for example, NaN in floats) do not
@@ -1115,6 +1116,7 @@ func (p *FunctionCallResponseProcessor) runAfterToolCallbacks(
 		Arguments:   toolCall.Function.Arguments,
 		Result:      toolResult,
 		Error:       toolErr,
+		Meta:        extractMetaFromResult(toolResult),
 	}
 	afterResult, err := p.toolCallbacks.RunAfterTool(ctx, args)
 	if err != nil {
@@ -1134,6 +1136,22 @@ func (p *FunctionCallResponseProcessor) runAfterToolCallbacks(
 		toolResult = afterResult.CustomResult
 	}
 	return ctx, toolResult, nil
+}
+
+// extractMetaFromResult extracts metadata from tool result.
+// For MCP mcpToolResult, returns the Meta field.
+func extractMetaFromResult(result any) map[string]any {
+	if result == nil {
+		return nil
+	}
+	// Check for our wrapped mcpToolResult type (from tool/mcp package)
+	type metaGetter interface {
+		GetMeta() map[string]any
+	}
+	if mg, ok := result.(metaGetter); ok {
+		return mg.GetMeta()
+	}
+	return nil
 }
 
 // executeToolWithCallbacks executes a tool with before/after callbacks.

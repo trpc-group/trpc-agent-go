@@ -1,0 +1,19 @@
+app_name: "openclaw-stdin"
+
+http:
+  addr: ":8080"
+
+model:
+  mode: "mock"
+
+channels:
+  - type: "stdin"
+    name: "terminal"
+    config:
+      from: "alice"
+
+tools:
+  providers:
+    - type: "echotool"
+      config:
+        name: "echo"

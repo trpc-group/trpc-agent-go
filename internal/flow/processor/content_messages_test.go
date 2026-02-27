@@ -562,6 +562,9 @@ func TestProcessRequest_SessionSummary_InsertAsSeparateSystemMessage(t *testing.
 
 	p1 := NewContentRequestProcessor(WithAddSessionSummary(true))
 	p1.ProcessRequest(context.Background(), inv1, req1, nil)
+	raw, ok := inv1.GetState(contentHasSessionSummaryStateKey)
+	require.True(t, ok)
+	require.Equal(t, true, raw)
 
 	// Should have 4 messages: system, summary system, user, current request
 	require.Equal(t, 4, len(req1.Messages))
@@ -590,6 +593,9 @@ func TestProcessRequest_SessionSummary_InsertAsSeparateSystemMessage(t *testing.
 
 	p2 := NewContentRequestProcessor(WithAddSessionSummary(true))
 	p2.ProcessRequest(context.Background(), inv2, req2, nil)
+	raw, ok = inv2.GetState(contentHasSessionSummaryStateKey)
+	require.True(t, ok)
+	require.Equal(t, true, raw)
 
 	// Should have 3 messages: summary system, user, current request
 	require.Equal(t, 3, len(req2.Messages))
@@ -618,6 +624,9 @@ func TestProcessRequest_SessionSummary_InsertAsSeparateSystemMessage(t *testing.
 
 	p3 := NewContentRequestProcessor(WithAddSessionSummary(true))
 	p3.ProcessRequest(context.Background(), inv3, req3, nil)
+	raw, ok = inv3.GetState(contentHasSessionSummaryStateKey)
+	require.True(t, ok)
+	require.Equal(t, true, raw)
 
 	// Should have 5 messages: system1, system2, summary system, user, current
 	// request.
@@ -666,6 +675,9 @@ func TestProcessRequest_SessionSummary_EdgeCases(t *testing.T) {
 
 	p1 := NewContentRequestProcessor(WithAddSessionSummary(true))
 	p1.ProcessRequest(context.Background(), inv1, req1, nil)
+	raw, ok := inv1.GetState(contentHasSessionSummaryStateKey)
+	require.True(t, ok)
+	require.Equal(t, true, raw)
 
 	// Should have 2 messages: summary system, current request
 	require.Equal(t, 2, len(req1.Messages))
@@ -690,6 +702,9 @@ func TestProcessRequest_SessionSummary_EdgeCases(t *testing.T) {
 
 	p2 := NewContentRequestProcessor(WithAddSessionSummary(true))
 	p2.ProcessRequest(context.Background(), inv2, req2, nil)
+	raw, ok = inv2.GetState(contentHasSessionSummaryStateKey)
+	require.True(t, ok)
+	require.Equal(t, true, raw)
 
 	// Should have 3 messages: system, summary system, current request
 	require.Equal(t, 3, len(req2.Messages))

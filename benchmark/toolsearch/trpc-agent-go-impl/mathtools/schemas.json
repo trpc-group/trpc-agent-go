@@ -1,0 +1,2243 @@
+[
+  {
+    "name": "Abs",
+    "description": "Abs returns the absolute value of x. Signature: func Abs(x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Abs",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Abs",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Acos",
+    "description": "Acos returns the arccosine, in radians, of x. Signature: func Acos(x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Acos",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Acos",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Acosh",
+    "description": "Acosh returns the inverse hyperbolic cosine of x. Signature: func Acosh(x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Acosh",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Acosh",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Asin",
+    "description": "Asin returns the arcsine, in radians, of x. Signature: func Asin(x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Asin",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Asin",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Asinh",
+    "description": "Asinh returns the inverse hyperbolic sine of x. Signature: func Asinh(x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Asinh",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Asinh",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Atan",
+    "description": "Atan returns the arctangent, in radians, of x. Signature: func Atan(x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Atan",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Atan",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Atan2",
+    "description": "Atan2 returns the arc tangent of y/x, using the signs of the two to Signature: func Atan2(y, x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Atan2",
+      "additionalProperties": false,
+      "properties": {
+        "y": {
+          "type": "number",
+          "description": "float64 parameter"
+        },
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "y",
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Atan2",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Atanh",
+    "description": "Atanh returns the inverse hyperbolic tangent of x. Signature: func Atanh(x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Atanh",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Atanh",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Cbrt",
+    "description": "Cbrt returns the cube root of x. Signature: func Cbrt(x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Cbrt",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Cbrt",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Ceil",
+    "description": "Ceil returns the least integer value greater than or equal to x. Signature: func Ceil(x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Ceil",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Ceil",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Copysign",
+    "description": "Copysign returns a value with the magnitude of f and the sign of sign. Signature: func Copysign(f, sign float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Copysign",
+      "additionalProperties": false,
+      "properties": {
+        "f": {
+          "type": "number",
+          "description": "float64 parameter"
+        },
+        "sign": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "f",
+        "sign"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Copysign",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Cos",
+    "description": "Cos returns the cosine of the radian argument x. Signature: func Cos(x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Cos",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Cos",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Cosh",
+    "description": "Cosh returns the hyperbolic cosine of x. Signature: func Cosh(x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Cosh",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Cosh",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Dim",
+    "description": "Dim returns the maximum of x-y or 0. Signature: func Dim(x, y float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Dim",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        },
+        "y": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Dim",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Erf",
+    "description": "Erf returns the error function of x. Signature: func Erf(x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Erf",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Erf",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Erfc",
+    "description": "Erfc returns the complementary error function of x. Signature: func Erfc(x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Erfc",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Erfc",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Erfcinv",
+    "description": "Erfcinv returns the inverse of Erfc(x). Signature: func Erfcinv(x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Erfcinv",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Erfcinv",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Erfinv",
+    "description": "Erfinv returns the inverse error function of x. Signature: func Erfinv(x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Erfinv",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Erfinv",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Exp",
+    "description": "Exp returns e**x, the base-e exponential of x. Signature: func Exp(x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Exp",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Exp",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Exp2",
+    "description": "Exp2 returns 2**x, the base-2 exponential of x. Signature: func Exp2(x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Exp2",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Exp2",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Expm1",
+    "description": "Expm1 returns e**x - 1, the base-e exponential of x minus 1. It is more Signature: func Expm1(x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Expm1",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Expm1",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "FMA",
+    "description": "FMA returns x * y + z, computed with only one rounding. (That is, FMA Signature: func FMA(x, y, z float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for FMA",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        },
+        "y": {
+          "type": "number",
+          "description": "float64 parameter"
+        },
+        "z": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for FMA",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Float32bits",
+    "description": "Float32bits returns the IEEE 754 binary representation of f, Signature: func Float32bits(f float32) uint32",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Float32bits",
+      "additionalProperties": false,
+      "properties": {
+        "f": {
+          "type": "number",
+          "description": "float32 parameter"
+        }
+      },
+      "required": [
+        "f"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Float32bits",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "integer",
+          "description": "uint32 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Float32frombits",
+    "description": "Float32frombits returns the floating-point number corresponding to the IEEE Signature: func Float32frombits(b uint32) float32",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Float32frombits",
+      "additionalProperties": false,
+      "properties": {
+        "b": {
+          "type": "integer",
+          "description": "uint32 parameter"
+        }
+      },
+      "required": [
+        "b"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Float32frombits",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float32 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Float64bits",
+    "description": "Float64bits returns the IEEE 754 binary representation of f, Signature: func Float64bits(f float64) uint64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Float64bits",
+      "additionalProperties": false,
+      "properties": {
+        "f": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "f"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Float64bits",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "integer",
+          "description": "uint64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Float64frombits",
+    "description": "Float64frombits returns the floating-point number corresponding to the IEEE Signature: func Float64frombits(b uint64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Float64frombits",
+      "additionalProperties": false,
+      "properties": {
+        "b": {
+          "type": "integer",
+          "description": "uint64 parameter"
+        }
+      },
+      "required": [
+        "b"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Float64frombits",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Floor",
+    "description": "Floor returns the greatest integer value less than or equal to x. Signature: func Floor(x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Floor",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Floor",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Frexp",
+    "description": "Frexp breaks f into a normalized fraction and an integral power of two. Signature: func Frexp(f float64) (frac float64, exp int)",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Frexp",
+      "additionalProperties": false,
+      "properties": {
+        "f": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "f"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Frexp",
+      "additionalProperties": false,
+      "properties": {
+        "frac": {
+          "type": "number",
+          "description": "float64 result"
+        },
+        "exp": {
+          "type": "integer",
+          "description": "int result"
+        }
+      },
+      "required": [
+        "frac",
+        "exp"
+      ]
+    }
+  },
+  {
+    "name": "Gamma",
+    "description": "Gamma returns the Gamma function of x. Signature: func Gamma(x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Gamma",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Gamma",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Hypot",
+    "description": "Hypot returns Sqrt(p*p + q*q), taking care to avoid unnecessary overflow and Signature: func Hypot(p, q float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Hypot",
+      "additionalProperties": false,
+      "properties": {
+        "p": {
+          "type": "number",
+          "description": "float64 parameter"
+        },
+        "q": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "p",
+        "q"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Hypot",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Ilogb",
+    "description": "Ilogb returns the binary exponent of x as an integer. Signature: func Ilogb(x float64) int",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Ilogb",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Ilogb",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "integer",
+          "description": "int result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Inf",
+    "description": "Inf returns positive infinity if sign >= 0, negative infinity if sign < 0. Signature: func Inf(sign int) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Inf",
+      "additionalProperties": false,
+      "properties": {
+        "sign": {
+          "type": "integer",
+          "description": "int parameter"
+        }
+      },
+      "required": [
+        "sign"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Inf",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "IsInf",
+    "description": "IsInf reports whether f is an infinity, according to sign. If sign > 0, Signature: func IsInf(f float64, sign int) bool",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for IsInf",
+      "additionalProperties": false,
+      "properties": {
+        "f": {
+          "type": "number",
+          "description": "float64 parameter"
+        },
+        "sign": {
+          "type": "integer",
+          "description": "int parameter"
+        }
+      },
+      "required": [
+        "f",
+        "sign"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for IsInf",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "boolean",
+          "description": "bool result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "IsNaN",
+    "description": "IsNaN reports whether f is an IEEE 754 “not-a-number” value. Signature: func IsNaN(f float64) (is bool)",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for IsNaN",
+      "additionalProperties": false,
+      "properties": {
+        "f": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "f"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for IsNaN",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "boolean",
+          "description": "bool result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "J0",
+    "description": "J0 returns the order-zero Bessel function of the first kind. Signature: func J0(x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for J0",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for J0",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "J1",
+    "description": "J1 returns the order-one Bessel function of the first kind. Signature: func J1(x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for J1",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for J1",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Jn",
+    "description": "Jn returns the order-n Bessel function of the first kind. Signature: func Jn(n int, x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Jn",
+      "additionalProperties": false,
+      "properties": {
+        "n": {
+          "type": "integer",
+          "description": "int parameter"
+        },
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "n",
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Jn",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Ldexp",
+    "description": "Ldexp is the inverse of Frexp. It returns frac × 2**exp. Signature: func Ldexp(frac float64, exp int) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Ldexp",
+      "additionalProperties": false,
+      "properties": {
+        "frac": {
+          "type": "number",
+          "description": "float64 parameter"
+        },
+        "exp": {
+          "type": "integer",
+          "description": "int parameter"
+        }
+      },
+      "required": [
+        "frac",
+        "exp"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Ldexp",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Lgamma",
+    "description": "Lgamma returns the natural logarithm and sign (-1 or +1) of Gamma(x). Signature: func Lgamma(x float64) (lgamma float64, sign int)",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Lgamma",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Lgamma",
+      "additionalProperties": false,
+      "properties": {
+        "lgamma": {
+          "type": "number",
+          "description": "float64 result"
+        },
+        "sign": {
+          "type": "integer",
+          "description": "int result"
+        }
+      },
+      "required": [
+        "lgamma",
+        "sign"
+      ]
+    }
+  },
+  {
+    "name": "Log",
+    "description": "Log returns the natural logarithm of x. Signature: func Log(x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Log",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Log",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Log10",
+    "description": "Log10 returns the decimal logarithm of x. The special cases are the same as Signature: func Log10(x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Log10",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Log10",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Log1p",
+    "description": "Log1p returns the natural logarithm of 1 plus its argument x. It is more Signature: func Log1p(x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Log1p",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Log1p",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Log2",
+    "description": "Log2 returns the binary logarithm of x. The special cases are the same as Signature: func Log2(x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Log2",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Log2",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Logb",
+    "description": "Logb returns the binary exponent of x. Signature: func Logb(x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Logb",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Logb",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Max",
+    "description": "Max returns the larger of x or y. Signature: func Max(x, y float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Max",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        },
+        "y": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Max",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Min",
+    "description": "Min returns the smaller of x or y. Signature: func Min(x, y float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Min",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        },
+        "y": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Min",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Mod",
+    "description": "Mod returns the floating-point remainder of x/y. The magnitude of the result Signature: func Mod(x, y float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Mod",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        },
+        "y": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Mod",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Modf",
+    "description": "Modf returns integer and fractional floating-point numbers that sum to f. Signature: func Modf(f float64) (integer float64, fractional float64)",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Modf",
+      "additionalProperties": false,
+      "properties": {
+        "f": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "f"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Modf",
+      "additionalProperties": false,
+      "properties": {
+        "integer": {
+          "type": "number",
+          "description": "float64 result"
+        },
+        "fractional": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "integer",
+        "fractional"
+      ]
+    }
+  },
+  {
+    "name": "NaN",
+    "description": "NaN returns an IEEE 754 “not-a-number” value. Signature: func NaN() float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for NaN",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for NaN",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Nextafter",
+    "description": "Nextafter returns the next representable float64 value after x towards y. Signature: func Nextafter(x, y float64) (r float64)",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Nextafter",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        },
+        "y": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Nextafter",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Nextafter32",
+    "description": "Nextafter32 returns the next representable float32 value after x towards y. Signature: func Nextafter32(x, y float32) (r float32)",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Nextafter32",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float32 parameter"
+        },
+        "y": {
+          "type": "number",
+          "description": "float32 parameter"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Nextafter32",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float32 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Pow",
+    "description": "Pow returns x**y, the base-x exponential of y. Signature: func Pow(x, y float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Pow",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        },
+        "y": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Pow",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Pow10",
+    "description": "Pow10 returns 10**n, the base-10 exponential of n. Signature: func Pow10(n int) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Pow10",
+      "additionalProperties": false,
+      "properties": {
+        "n": {
+          "type": "integer",
+          "description": "int parameter"
+        }
+      },
+      "required": [
+        "n"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Pow10",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Remainder",
+    "description": "Remainder returns the IEEE 754 floating-point remainder of x/y. Signature: func Remainder(x, y float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Remainder",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        },
+        "y": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Remainder",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Round",
+    "description": "Round returns the nearest integer, rounding half away from zero. Signature: func Round(x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Round",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Round",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "RoundToEven",
+    "description": "RoundToEven returns the nearest integer, rounding ties to even. Signature: func RoundToEven(x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for RoundToEven",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for RoundToEven",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Signbit",
+    "description": "Signbit reports whether x is negative or negative zero. Signature: func Signbit(x float64) bool",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Signbit",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Signbit",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "boolean",
+          "description": "bool result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Sin",
+    "description": "Sin returns the sine of the radian argument x. Signature: func Sin(x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Sin",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Sin",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Sincos",
+    "description": "Sincos returns Sin(x), Cos(x). Signature: func Sincos(x float64) (sin, cos float64)",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Sincos",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Sincos",
+      "additionalProperties": false,
+      "properties": {
+        "sin": {
+          "type": "number",
+          "description": "float64 result"
+        },
+        "cos": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "sin",
+        "cos"
+      ]
+    }
+  },
+  {
+    "name": "Sinh",
+    "description": "Sinh returns the hyperbolic sine of x. Signature: func Sinh(x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Sinh",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Sinh",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Sqrt",
+    "description": "Sqrt returns the square root of x. Signature: func Sqrt(x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Sqrt",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Sqrt",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Tan",
+    "description": "Tan returns the tangent of the radian argument x. Signature: func Tan(x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Tan",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Tan",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Tanh",
+    "description": "Tanh returns the hyperbolic tangent of x. Signature: func Tanh(x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Tanh",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Tanh",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Trunc",
+    "description": "Trunc returns the integer value of x. Signature: func Trunc(x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Trunc",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Trunc",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Y0",
+    "description": "Y0 returns the order-zero Bessel function of the second kind. Signature: func Y0(x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Y0",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Y0",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Y1",
+    "description": "Y1 returns the order-one Bessel function of the second kind. Signature: func Y1(x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Y1",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Y1",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "Yn",
+    "description": "Yn returns the order-n Bessel function of the second kind. Signature: func Yn(n int, x float64) float64",
+    "inputSchema": {
+      "type": "object",
+      "description": "Input for Yn",
+      "additionalProperties": false,
+      "properties": {
+        "n": {
+          "type": "integer",
+          "description": "int parameter"
+        },
+        "x": {
+          "type": "number",
+          "description": "float64 parameter"
+        }
+      },
+      "required": [
+        "n",
+        "x"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Output for Yn",
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "type": "number",
+          "description": "float64 result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  }
+]
