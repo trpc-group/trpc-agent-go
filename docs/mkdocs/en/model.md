@@ -481,6 +481,50 @@ model := openai.New("deepseek-chat",
 )
 ```
 
+##### Dynamically Modifying Request Body via Callback
+
+`WithChatRequestCallback` receives a `*openai.ChatCompletionNewParams` pointer,
+allowing you to dynamically add or modify fields in the HTTP request body
+before each request is sent. Use `SetExtraFields` on the params to inject
+custom JSON fields:
+
+```go
+import (
+    "context"
+
+    openai "github.com/openai/openai-go"
+    oaimodel "trpc.group/trpc-go/trpc-agent-go/model/openai"
+)
+
+model := oaimodel.New("deepseek-chat",
+    oaimodel.WithChatRequestCallback(func(ctx context.Context, req *openai.ChatCompletionNewParams) {
+        // Dynamically set extra fields based on runtime context.
+        userID, _ := ctx.Value("user_id").(string)
+        req.SetExtraFields(map[string]any{
+            "user":            userID,
+            "custom_metadata": map[string]string{"session_id": "abc"},
+        })
+    }),
+)
+```
+
+**Difference between `SetExtraFields` in callback and `WithExtraFields`**:
+
+| Aspect | `WithExtraFields` | `SetExtraFields` in `WithChatRequestCallback` |
+| --- | --- | --- |
+| Timing | Set once at model creation | Called before every request |
+| Dynamism | Static values only | Dynamic values based on `ctx` or runtime state |
+| Mechanism | Injected via `openaiopt.WithJSONSet` (RequestOption layer) | Set on the `ChatCompletionNewParams` struct (serialization layer) |
+| Same key conflict | `WithExtraFields` wins (applied later, overwrites same keys) | Overwritten by `WithExtraFields` if same key exists |
+
+When both are used with **different keys**, all fields appear in the final
+JSON body without conflict. When both set the **same key**,
+`WithExtraFields` takes precedence because `WithJSONSet` is applied after
+struct serialization.
+
+For most dynamic per-request customization, `SetExtraFields` in the callback
+is the recommended approach.
+
 #### 2. Model Switching
 
 Model switching allows dynamically changing the LLM model used by an Agent at runtime. The framework provides two approaches: agent-level switching (affects all subsequent requests) and per-request switching (affects only a single request).
