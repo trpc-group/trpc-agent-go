@@ -940,13 +940,21 @@ func (r *runner) handleEventPersistence(
 		return
 	}
 
-	// Trigger summarization only after final assistant responses.
-	// Skip user messages, tool calls, and tool results to ensure summary
-	// always contains complete Q&A pairs (including tool call round-trips).
+	// Skip user messages, tool call events, and invalid content.
+	// These should not trigger summarization.
 	if agentEvent.IsUserMessage() ||
 		agentEvent.IsToolCallResponse() ||
-		agentEvent.IsToolResultResponse() ||
 		!agentEvent.IsValidContent() {
+		return
+	}
+
+	// Trigger summary check after tool results to handle long tool call
+	// sequences (ReAct loops). The existing ShouldSummarize checker
+	// (event count / token threshold) decides whether to actually run.
+	// Also trigger after final assistant text responses as before.
+	// Skip if the event explicitly opts out of summarization.
+	if agentEvent.Actions != nil &&
+		agentEvent.Actions.SkipSummarization {
 		return
 	}
 
