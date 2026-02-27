@@ -490,6 +490,8 @@ custom JSON fields:
 
 ```go
 import (
+    "context"
+
     openai "github.com/openai/openai-go"
     oaimodel "trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
