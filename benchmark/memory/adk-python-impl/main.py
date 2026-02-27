@@ -25,6 +25,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+import litellm
 from openai import OpenAI
 
 import dataset
@@ -379,6 +380,13 @@ async def evaluate_memory(
                 qa.question_id, e,
             )
             prediction = ""
+            try:
+                await litellm.close_litellm_async_clients()
+            except Exception as close_err:
+                log.debug(
+                    "Failed to close litellm async clients: %s",
+                    close_err,
+                )
 
         prediction = prediction.strip()
         m = metrics.compute_f1(prediction, qa.answer)
@@ -412,6 +420,7 @@ async def evaluate_memory(
             llm_score=llm_score,
         ))
 
+    await litellm.close_litellm_async_clients()
     return SampleResult(
         sample_id=sample.sample_id,
         qa_results=qa_results,
@@ -649,113 +658,131 @@ async def main_async() -> None:
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
 
-    # Sync OPENAI_API_BASE from OPENAI_BASE_URL for litellm.
-    base_url = os.environ.get("OPENAI_BASE_URL", "")
-    if base_url and not os.environ.get("OPENAI_API_BASE"):
-        os.environ["OPENAI_API_BASE"] = base_url
+    openai_client = None
+    try:
+        # Sync OPENAI_API_BASE from OPENAI_BASE_URL for litellm.
+        base_url = os.environ.get("OPENAI_BASE_URL", "")
+        if base_url and not os.environ.get("OPENAI_API_BASE"):
+            os.environ["OPENAI_API_BASE"] = base_url
 
-    model_name = get_model_name(args)
-    eval_model_name = get_eval_model_name(args, model_name)
-    output_dir = args.output
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
+        model_name = get_model_name(args)
+        eval_model_name = get_eval_model_name(args, model_name)
+        output_dir = args.output
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-    log.info("=== ADK Python Memory Evaluation (LoCoMo) ===")
-    log.info("Model: %s", model_name)
-    log.info("Eval Model: %s", eval_model_name)
-    log.info("Scenario: %s", args.scenario)
-    log.info("LLM Judge: %s", args.llm_judge)
-    log.info("Output: %s", output_dir)
+        log.info("=== ADK Python Memory Evaluation (LoCoMo) ===")
+        log.info("Model: %s", model_name)
+        log.info("Eval Model: %s", eval_model_name)
+        log.info("Scenario: %s", args.scenario)
+        log.info("LLM Judge: %s", args.llm_judge)
+        log.info("Output: %s", output_dir)
 
-    # Load dataset.
-    samples = dataset.load_samples(args.dataset, args.data_file)
-    log.info("Loaded %d samples", len(samples))
+        # Load dataset.
+        samples = dataset.load_samples(args.dataset, args.data_file)
+        log.info("Loaded %d samples", len(samples))
 
-    # Filter.
-    if args.sample_id:
-        samples = [
-            s for s in samples if s.sample_id == args.sample_id
-        ]
-        log.info(
-            "Filtered to %d samples (sample_id=%s)",
-            len(samples), args.sample_id,
-        )
-    if not samples:
-        log.error("No samples to evaluate")
-        sys.exit(1)
-    if args.max_tasks > 0:
-        samples = samples[:args.max_tasks]
-        log.info("Limited to %d samples", len(samples))
-
-    # Prepare clients.
-    openai_client = create_openai_client()
-    eval_client = openai_client if args.llm_judge else None
-
-    scenarios = get_scenarios(args.scenario)
-
-    for scenario in scenarios:
-        log.info("")
-        log.info("=== Running: %s ===", scenario)
-        start_time = time.time()
-        sample_results: list[SampleResult] = []
-
-        for i, sample in enumerate(samples):
+        # Filter.
+        if args.sample_id:
+            samples = [
+                s for s in samples if s.sample_id == args.sample_id
+            ]
             log.info(
-                "[%d/%d] Evaluating sample: %s (%d QA)",
-                i + 1, len(samples),
-                sample.sample_id, len(sample.qa),
+                "Filtered to %d samples (sample_id=%s)",
+                len(samples), args.sample_id,
             )
-            sample_start = time.time()
+        if not samples:
+            log.error("No samples to evaluate")
+            sys.exit(1)
+        if args.max_tasks > 0:
+            samples = samples[:args.max_tasks]
+            log.info("Limited to %d samples", len(samples))
 
-            if scenario == "baseline":
-                sr = evaluate_baseline(
-                    sample, openai_client, model_name,
-                    eval_client, eval_model_name,
-                    args.llm_judge,
+        # Prepare clients.
+        openai_client = create_openai_client()
+        eval_client = openai_client if args.llm_judge else None
+
+        scenarios = get_scenarios(args.scenario)
+
+        for scenario in scenarios:
+            log.info("")
+            log.info("=== Running: %s ===", scenario)
+            start_time = time.time()
+            sample_results: list[SampleResult] = []
+
+            for i, sample in enumerate(samples):
+                log.info(
+                    "[%d/%d] Evaluating sample: %s (%d QA)",
+                    i + 1, len(samples),
+                    sample.sample_id, len(sample.qa),
                 )
-            elif scenario == "memory":
-                sr = await evaluate_memory(
-                    sample, model_name,
-                    eval_client, eval_model_name,
-                    args.llm_judge,
+                sample_start = time.time()
+
+                if scenario == "baseline":
+                    sr = evaluate_baseline(
+                        sample, openai_client, model_name,
+                        eval_client, eval_model_name,
+                        args.llm_judge,
+                    )
+                elif scenario == "memory":
+                    sr = await evaluate_memory(
+                        sample, model_name,
+                        eval_client, eval_model_name,
+                        args.llm_judge,
+                    )
+                else:
+                    continue
+
+                # Compute per-sample aggregates.
+                if sr.qa_results:
+                    sr.overall_f1 = sum(
+                        q.f1 for q in sr.qa_results
+                    ) / len(sr.qa_results)
+                    sr.overall_bleu = sum(
+                        q.bleu for q in sr.qa_results
+                    ) / len(sr.qa_results)
+                sr.total_time_ms = int(
+                    (time.time() - sample_start) * 1000
                 )
-            else:
-                continue
+                sample_results.append(sr)
+                log.info(
+                    "  Completed in %dms | F1=%.3f BLEU=%.3f",
+                    sr.total_time_ms, sr.overall_f1, sr.overall_bleu,
+                )
 
-            # Compute per-sample aggregates.
-            if sr.qa_results:
-                sr.overall_f1 = sum(
-                    q.f1 for q in sr.qa_results
-                ) / len(sr.qa_results)
-                sr.overall_bleu = sum(
-                    q.bleu for q in sr.qa_results
-                ) / len(sr.qa_results)
-            sr.total_time_ms = int(
-                (time.time() - sample_start) * 1000
+            # Aggregate and save.
+            result = aggregate_results(
+                sample_results, scenario,
+                model_name, eval_model_name,
+                args.llm_judge,
             )
-            sample_results.append(sr)
-            log.info(
-                "  Completed in %dms | F1=%.3f BLEU=%.3f",
-                sr.total_time_ms, sr.overall_f1, sr.overall_bleu,
+            total_time = time.time() - start_time
+            result["summary"]["total_time_ms"] = int(total_time * 1000)
+
+            # Save JSON.
+            scenario_dir = Path(output_dir) / scenario
+            scenario_dir.mkdir(parents=True, exist_ok=True)
+            result_path = scenario_dir / "results.json"
+            with open(result_path, "w") as f:
+                json.dump(result, f, indent=2)
+            log.info("Results saved to: %s", result_path)
+
+            print_summary(result)
+    finally:
+        try:
+            await litellm.close_litellm_async_clients()
+        except Exception as close_err:
+            log.debug(
+                "Failed to close litellm async clients: %s",
+                close_err,
             )
-
-        # Aggregate and save.
-        result = aggregate_results(
-            sample_results, scenario,
-            model_name, eval_model_name,
-            args.llm_judge,
-        )
-        total_time = time.time() - start_time
-        result["summary"]["total_time_ms"] = int(total_time * 1000)
-
-        # Save JSON.
-        scenario_dir = Path(output_dir) / scenario
-        scenario_dir.mkdir(parents=True, exist_ok=True)
-        result_path = scenario_dir / "results.json"
-        with open(result_path, "w") as f:
-            json.dump(result, f, indent=2)
-        log.info("Results saved to: %s", result_path)
-
-        print_summary(result)
+        if openai_client is not None:
+            try:
+                openai_client.close()
+            except Exception as close_err:
+                log.debug(
+                    "Failed to close OpenAI client: %s",
+                    close_err,
+                )
 
 
 def main() -> None:
