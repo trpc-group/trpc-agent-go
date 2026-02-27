@@ -51,7 +51,10 @@ The program prints timestamps for each node start/end.
 
 ## Notes and limitations
 
-- BSP is the default engine and supports checkpoints and HITL interrupts.
-- DAG is opt‑in and currently does **not** support checkpoints or interrupts.
-  See the Graph docs for details.
-
+- BSP is the default engine. DAG is opt‑in.
+- In DAG mode, `WithStepTimeout` does not apply. Prefer a `context` deadline
+  and/or `WithNodeTimeout`.
+- In DAG mode, `WithMaxSteps` limits the number of **node executions** (not
+  supersteps).
+- DAG supports checkpoints and interrupts, but the cadence/semantics differ
+  from BSP. See the Graph docs for details.
