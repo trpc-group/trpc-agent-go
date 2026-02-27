@@ -1790,7 +1790,8 @@ func TestEvalCaseInferencePoolHandlesNilEvalCase(t *testing.T) {
 		idx:      0,
 		ctx:      context.Background(),
 		req:      &service.InferenceRequest{AppName: "app", EvalSetID: "set"},
-		svc:      &local{sessionIDSupplier: func(ctx context.Context) string { return "session" }},
+		opts:     &service.Options{SessionIDSupplier: func(ctx context.Context) string { return "session" }},
+		svc:      &local{},
 		results:  results,
 		wg:       &wg,
 		evalCase: nil,
@@ -2134,7 +2135,7 @@ func TestLocalRunAfterEvaluateCaseCallbacksNilInferenceResultIncludesEmptyEvalCa
 	})
 
 	svc := &local{callbacks: callbacks}
-	err := svc.runAfterEvaluateCaseCallbacks(ctx, &service.EvaluateRequest{AppName: "app", EvalSetID: "set", EvaluateConfig: &service.EvaluateConfig{}}, nil, nil, nil, time.Unix(123, 0))
+	err := svc.runAfterEvaluateCaseCallbacks(ctx, callbacks, &service.EvaluateRequest{AppName: "app", EvalSetID: "set", EvaluateConfig: &service.EvaluateConfig{}}, nil, nil, nil, time.Unix(123, 0))
 	assert.Error(t, err)
 	if err == nil {
 		return
@@ -2286,7 +2287,7 @@ func TestRunAfterEvaluateSetCallbacksPassesArgs(t *testing.T) {
 	})
 
 	svc := &local{callbacks: callbacks}
-	err := svc.runAfterEvaluateSetCallbacks(ctx, req, result, wantErr, startTime)
+	err := svc.runAfterEvaluateSetCallbacks(ctx, callbacks, req, result, wantErr, startTime)
 	assert.NoError(t, err)
 	assert.NotNil(t, got)
 	assert.Same(t, req, got.Request)
@@ -2311,7 +2312,7 @@ func TestLocalEvaluateAfterEvaluateSetReceivesNilResultWhenEvaluateFails(t *test
 		return nil, nil
 	})
 
-	svc := &local{callbacks: callbacks}
+	svc := &local{callbacks: callbacks, evalSetManager: evalsetinmemory.New(), registry: registry.New()}
 	_, err := svc.Evaluate(ctx, req)
 	assert.Error(t, err)
 	assert.NotNil(t, got)
@@ -2349,7 +2350,7 @@ func TestLocalEvaluateAfterEvaluateSetReceivesRunResultOnSuccess(t *testing.T) {
 		return nil, nil
 	})
 
-	svc := &local{callbacks: callbacks}
+	svc := &local{callbacks: callbacks, evalSetManager: evalsetinmemory.New(), registry: registry.New()}
 	res, err := svc.Evaluate(ctx, req)
 	assert.NoError(t, err)
 	assert.NotNil(t, res)
@@ -2374,7 +2375,7 @@ func TestRunAfterEvaluateSetCallbacksWrapsErrorWithContext(t *testing.T) {
 	})
 
 	svc := &local{callbacks: callbacks}
-	err := svc.runAfterEvaluateSetCallbacks(ctx, req, nil, nil, startTime)
+	err := svc.runAfterEvaluateSetCallbacks(ctx, callbacks, req, nil, nil, startTime)
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, sentinel)
 	assert.Contains(t, err.Error(), "run after evaluate set callbacks")

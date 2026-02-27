@@ -53,10 +53,13 @@ type fakeService struct {
 
 	inferenceRequests []*service.InferenceRequest
 	evaluateRequests  []*service.EvaluateRequest
+	inferenceOptions  []*service.Options
+	evaluateOptions   []*service.Options
 }
 
 func (f *fakeService) Inference(ctx context.Context, req *service.InferenceRequest, opt ...service.Option) ([]*service.InferenceResult, error) {
 	f.inferenceRequests = append(f.inferenceRequests, req)
+	f.inferenceOptions = append(f.inferenceOptions, service.NewOptions(opt...))
 	if f.inferenceErr != nil {
 		return nil, f.inferenceErr
 	}
@@ -69,6 +72,7 @@ func (f *fakeService) Inference(ctx context.Context, req *service.InferenceReque
 
 func (f *fakeService) Evaluate(ctx context.Context, req *service.EvaluateRequest, opt ...service.Option) (*service.EvalSetRunResult, error) {
 	f.evaluateRequests = append(f.evaluateRequests, req)
+	f.evaluateOptions = append(f.evaluateOptions, service.NewOptions(opt...))
 	if f.evaluateErr != nil {
 		return nil, f.evaluateErr
 	}
@@ -457,6 +461,62 @@ func TestNewAgentEvaluatorWithCallbacksPassesThroughToEvalService(t *testing.T) 
 	assert.Len(t, results, 1)
 	assert.Equal(t, int32(1), atomic.LoadInt32(&called))
 	assert.Same(t, req, gotReq)
+}
+
+func TestAgentEvaluatorEvaluatePassesServiceCallOptions(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	evalSetMgr := evalsetinmemory.New()
+	_, err := evalSetMgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+
+	svc := &fakeService{}
+	callbacks := service.NewCallbacks()
+	reg := registry.New()
+
+	ae, err := New(
+		appName,
+		stubRunner{},
+		WithEvalSetManager(evalSetMgr),
+		WithEvalResultManager(evalresultinmemory.New()),
+		WithMetricManager(metricinmemory.New()),
+		WithRegistry(reg),
+		WithEvaluationService(svc),
+		WithCallbacks(callbacks),
+		WithEvalCaseParallelism(2),
+		WithEvalCaseParallelInferenceEnabled(true),
+		WithEvalCaseParallelEvaluationEnabled(true),
+		WithRunOptions(agent.WithInstruction("prompt")),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	defer func() {
+		assert.NoError(t, ae.Close())
+	}()
+
+	_, err = ae.Evaluate(ctx, evalSetID)
+	assert.NoError(t, err)
+
+	assert.Len(t, svc.inferenceOptions, 1)
+	assert.Len(t, svc.evaluateOptions, 1)
+
+	inferenceOpts := svc.inferenceOptions[0]
+	assert.Same(t, evalSetMgr, inferenceOpts.EvalSetManager)
+	assert.Same(t, callbacks, inferenceOpts.Callbacks)
+	assert.Len(t, inferenceOpts.RunOptions, 1)
+	assert.Equal(t, 2, inferenceOpts.EvalCaseParallelism)
+	assert.True(t, inferenceOpts.EvalCaseParallelInferenceEnabled)
+
+	evaluateOpts := svc.evaluateOptions[0]
+	assert.Same(t, evalSetMgr, evaluateOpts.EvalSetManager)
+	assert.Same(t, reg, evaluateOpts.Registry)
+	assert.Same(t, callbacks, evaluateOpts.Callbacks)
+	assert.Equal(t, 2, evaluateOpts.EvalCaseParallelism)
+	assert.True(t, evaluateOpts.EvalCaseParallelEvaluationEnabled)
 }
 
 func TestAgentEvaluatorCloseLifecycle(t *testing.T) {

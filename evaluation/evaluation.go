@@ -45,43 +45,43 @@ func New(appName string, runner runner.Runner, opt ...Option) (AgentEvaluator, e
 		return nil, errors.New("runner is nil")
 	}
 	opts := newOptions(opt...)
+	if err := opts.validate(); err != nil {
+		return nil, err
+	}
 	a := &agentEvaluator{
-		appName:           appName,
-		runner:            runner,
-		evalSetManager:    opts.evalSetManager,
-		evalResultManager: opts.evalResultManager,
-		metricManager:     opts.metricManager,
-		registry:          opts.registry,
-		evalService:       opts.evalService,
-		numRuns:           opts.numRuns,
-		runOptions:        opts.runOptions,
-	}
-	if a.numRuns <= 0 {
-		return nil, errors.New("num runs must be greater than 0")
-	}
-	if (opts.evalCaseParallelInferenceEnabled || opts.evalCaseParallelEvaluationEnabled) && opts.evalCaseParallelism <= 0 {
-		return nil, errors.New("eval case parallelism must be greater than 0")
-	}
-	if a.evalSetManager == nil {
-		return nil, errors.New("eval set manager is nil")
-	}
-	if a.metricManager == nil {
-		return nil, errors.New("metric manager is nil")
-	}
-	if a.evalResultManager == nil {
-		return nil, errors.New("eval result manager is nil")
+		appName:                           appName,
+		runner:                            runner,
+		evalSetManager:                    opts.evalSetManager,
+		evalResultManager:                 opts.evalResultManager,
+		metricManager:                     opts.metricManager,
+		registry:                          opts.registry,
+		evalService:                       opts.evalService,
+		callbacks:                         opts.callbacks,
+		numRuns:                           opts.numRuns,
+		runOptions:                        opts.runOptions,
+		evalCaseParallelism:               opts.evalCaseParallelism,
+		evalCaseParallelInferenceEnabled:  opts.evalCaseParallelInferenceEnabled,
+		evalCaseParallelEvaluationEnabled: opts.evalCaseParallelEvaluationEnabled,
 	}
 	if a.evalService == nil {
-		evalService, err := local.New(
-			a.runner,
+		serviceOpts := []service.Option{
 			service.WithEvalSetManager(a.evalSetManager),
 			service.WithEvalResultManager(a.evalResultManager),
 			service.WithRegistry(a.registry),
-			service.WithCallbacks(opts.callbacks),
-			service.WithEvalCaseParallelism(opts.evalCaseParallelism),
-			service.WithEvalCaseParallelInferenceEnabled(opts.evalCaseParallelInferenceEnabled),
-			service.WithEvalCaseParallelEvaluationEnabled(opts.evalCaseParallelEvaluationEnabled),
-		)
+		}
+		if opts.callbacks != nil {
+			serviceOpts = append(serviceOpts, service.WithCallbacks(opts.callbacks))
+		}
+		if opts.evalCaseParallelism != nil {
+			serviceOpts = append(serviceOpts, service.WithEvalCaseParallelism(*opts.evalCaseParallelism))
+		}
+		if opts.evalCaseParallelInferenceEnabled != nil {
+			serviceOpts = append(serviceOpts, service.WithEvalCaseParallelInferenceEnabled(*opts.evalCaseParallelInferenceEnabled))
+		}
+		if opts.evalCaseParallelEvaluationEnabled != nil {
+			serviceOpts = append(serviceOpts, service.WithEvalCaseParallelEvaluationEnabled(*opts.evalCaseParallelEvaluationEnabled))
+		}
+		evalService, err := local.New(a.runner, serviceOpts...)
 		if err != nil {
 			return nil, fmt.Errorf("create eval service: %w", err)
 		}
@@ -92,15 +92,19 @@ func New(appName string, runner runner.Runner, opt ...Option) (AgentEvaluator, e
 
 // agentEvaluator is the default implementation of AgentEvaluator.
 type agentEvaluator struct {
-	appName           string
-	runner            runner.Runner
-	evalSetManager    evalset.Manager
-	evalResultManager evalresult.Manager
-	metricManager     metric.Manager
-	registry          registry.Registry
-	evalService       service.Service
-	numRuns           int
-	runOptions        []agent.RunOption
+	appName                           string
+	runner                            runner.Runner
+	evalSetManager                    evalset.Manager
+	evalResultManager                 evalresult.Manager
+	metricManager                     metric.Manager
+	registry                          registry.Registry
+	evalService                       service.Service
+	callbacks                         *service.Callbacks
+	numRuns                           int
+	runOptions                        []agent.RunOption
+	evalCaseParallelism               *int
+	evalCaseParallelInferenceEnabled  *bool
+	evalCaseParallelEvaluationEnabled *bool
 }
 
 // EvaluationResult contains the aggregated outcome of running an evaluation across multiple runs.
@@ -127,7 +131,7 @@ func (a *agentEvaluator) Evaluate(ctx context.Context, evalSetID string, opt ...
 		return nil, errors.New("eval set id is not configured")
 	}
 	ctx, _ = agent.EnsureInvocation(ctx)
-	callOpts, err := a.resolveCallOptions(opt...)
+	callOpts, err := a.mergeCallOptions(opt...)
 	if err != nil {
 		return nil, err
 	}
@@ -152,36 +156,25 @@ func (a *agentEvaluator) Evaluate(ctx context.Context, evalSetID string, opt ...
 	}, nil
 }
 
-func (a *agentEvaluator) resolveCallOptions(opt ...Option) (*options, error) {
+func (a *agentEvaluator) mergeCallOptions(opt ...Option) (*options, error) {
 	callOpts := &options{
-		evalSetManager:    a.evalSetManager,
-		evalResultManager: a.evalResultManager,
-		metricManager:     a.metricManager,
-		registry:          a.registry,
-		evalService:       a.evalService,
-		numRuns:           a.numRuns,
-		runOptions:        append([]agent.RunOption(nil), a.runOptions...),
+		evalSetManager:                    a.evalSetManager,
+		evalResultManager:                 a.evalResultManager,
+		metricManager:                     a.metricManager,
+		registry:                          a.registry,
+		evalService:                       a.evalService,
+		callbacks:                         a.callbacks,
+		numRuns:                           a.numRuns,
+		runOptions:                        append([]agent.RunOption(nil), a.runOptions...),
+		evalCaseParallelism:               a.evalCaseParallelism,
+		evalCaseParallelInferenceEnabled:  a.evalCaseParallelInferenceEnabled,
+		evalCaseParallelEvaluationEnabled: a.evalCaseParallelEvaluationEnabled,
 	}
 	for _, o := range opt {
 		o(callOpts)
 	}
-	if callOpts.numRuns <= 0 {
-		return nil, errors.New("num runs must be greater than 0")
-	}
-	if callOpts.evalSetManager == nil {
-		return nil, errors.New("eval set manager is nil")
-	}
-	if callOpts.metricManager == nil {
-		return nil, errors.New("metric manager is nil")
-	}
-	if callOpts.evalResultManager == nil {
-		return nil, errors.New("eval result manager is nil")
-	}
-	if callOpts.registry == nil {
-		return nil, errors.New("registry is nil")
-	}
-	if callOpts.evalService == nil {
-		return nil, errors.New("eval service is nil")
+	if err := callOpts.validate(); err != nil {
+		return nil, err
 	}
 	return callOpts, nil
 }
@@ -282,12 +275,20 @@ func (a *agentEvaluator) runEvaluation(ctx context.Context, evalSetID string, op
 			AppName:   a.appName,
 			EvalSetID: evalSetID,
 		}
-		runInferenceResults, err := opts.evalService.Inference(
-			ctx,
-			inferenceRequest,
+		inferenceOpts := []service.Option{
 			service.WithEvalSetManager(opts.evalSetManager),
 			service.WithRunOptions(opts.runOptions...),
-		)
+		}
+		if opts.callbacks != nil {
+			inferenceOpts = append(inferenceOpts, service.WithCallbacks(opts.callbacks))
+		}
+		if opts.evalCaseParallelism != nil {
+			inferenceOpts = append(inferenceOpts, service.WithEvalCaseParallelism(*opts.evalCaseParallelism))
+		}
+		if opts.evalCaseParallelInferenceEnabled != nil {
+			inferenceOpts = append(inferenceOpts, service.WithEvalCaseParallelInferenceEnabled(*opts.evalCaseParallelInferenceEnabled))
+		}
+		runInferenceResults, err := opts.evalService.Inference(ctx, inferenceRequest, inferenceOpts...)
 		if err != nil {
 			return nil, fmt.Errorf("inference: %w", err)
 		}
@@ -299,12 +300,20 @@ func (a *agentEvaluator) runEvaluation(ctx context.Context, evalSetID string, op
 				EvalMetrics: evalMetrics,
 			},
 		}
-		runResult, err := opts.evalService.Evaluate(
-			ctx,
-			evaluateRequest,
+		evaluateOpts := []service.Option{
 			service.WithEvalSetManager(opts.evalSetManager),
 			service.WithRegistry(opts.registry),
-		)
+		}
+		if opts.callbacks != nil {
+			evaluateOpts = append(evaluateOpts, service.WithCallbacks(opts.callbacks))
+		}
+		if opts.evalCaseParallelism != nil {
+			evaluateOpts = append(evaluateOpts, service.WithEvalCaseParallelism(*opts.evalCaseParallelism))
+		}
+		if opts.evalCaseParallelEvaluationEnabled != nil {
+			evaluateOpts = append(evaluateOpts, service.WithEvalCaseParallelEvaluationEnabled(*opts.evalCaseParallelEvaluationEnabled))
+		}
+		runResult, err := opts.evalService.Evaluate(ctx, evaluateRequest, evaluateOpts...)
 		if err != nil {
 			return nil, fmt.Errorf("evaluate: %w", err)
 		}

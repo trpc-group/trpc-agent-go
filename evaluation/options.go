@@ -10,6 +10,7 @@
 package evaluation
 
 import (
+	"errors"
 	"runtime"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -23,8 +24,16 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
 )
 
-// defaultNumRuns is the default number of runs.
-const defaultNumRuns = 1
+var (
+	// defaultNumRuns is the default number of runs.
+	defaultNumRuns = 1
+	// defaultEvalCaseParallelism is the default number of eval cases processed in parallel.
+	defaultEvalCaseParallelism = runtime.GOMAXPROCS(0)
+	// defaultEvalCaseParallelInferenceEnabled is the default value for eval case parallel inference enabled.
+	defaultEvalCaseParallelInferenceEnabled = false
+	// defaultEvalCaseParallelEvaluationEnabled is the default value for eval case parallel evaluation enabled.
+	defaultEvalCaseParallelEvaluationEnabled = false
+)
 
 // options holds the configuration options for the evaluation.
 type options struct {
@@ -35,9 +44,9 @@ type options struct {
 	evalService                       service.Service
 	callbacks                         *service.Callbacks
 	numRuns                           int
-	evalCaseParallelism               int
-	evalCaseParallelInferenceEnabled  bool
-	evalCaseParallelEvaluationEnabled bool
+	evalCaseParallelism               *int
+	evalCaseParallelInferenceEnabled  *bool
+	evalCaseParallelEvaluationEnabled *bool
 	runOptions                        []agent.RunOption
 }
 
@@ -50,9 +59,9 @@ func newOptions(opt ...Option) *options {
 		evalResultManager:                 evalresultinmemory.New(),
 		metricManager:                     metricinmemory.New(),
 		registry:                          registry.New(),
-		evalCaseParallelism:               runtime.GOMAXPROCS(0),
-		evalCaseParallelInferenceEnabled:  false,
-		evalCaseParallelEvaluationEnabled: false,
+		evalCaseParallelism:               &defaultEvalCaseParallelism,
+		evalCaseParallelInferenceEnabled:  &defaultEvalCaseParallelInferenceEnabled,
+		evalCaseParallelEvaluationEnabled: &defaultEvalCaseParallelEvaluationEnabled,
 	}
 	// Apply user options.
 	for _, o := range opt {
@@ -116,21 +125,21 @@ func WithNumRuns(numRuns int) Option {
 // WithEvalCaseParallelism sets the maximum number of eval cases processed in parallel.
 func WithEvalCaseParallelism(parallelism int) Option {
 	return func(o *options) {
-		o.evalCaseParallelism = parallelism
+		o.evalCaseParallelism = &parallelism
 	}
 }
 
 // WithEvalCaseParallelInferenceEnabled enables or disables parallel inference across eval cases.
 func WithEvalCaseParallelInferenceEnabled(enabled bool) Option {
 	return func(o *options) {
-		o.evalCaseParallelInferenceEnabled = enabled
+		o.evalCaseParallelInferenceEnabled = &enabled
 	}
 }
 
 // WithEvalCaseParallelEvaluationEnabled enables or disables parallel evaluation across eval cases.
 func WithEvalCaseParallelEvaluationEnabled(enabled bool) Option {
 	return func(o *options) {
-		o.evalCaseParallelEvaluationEnabled = enabled
+		o.evalCaseParallelEvaluationEnabled = &enabled
 	}
 }
 
@@ -139,4 +148,38 @@ func WithRunOptions(opt ...agent.RunOption) Option {
 	return func(o *options) {
 		o.runOptions = append(o.runOptions, opt...)
 	}
+}
+
+func (o *options) validate() error {
+	if o == nil {
+		return errors.New("options is nil")
+	}
+	if o.numRuns <= 0 {
+		return errors.New("num runs must be greater than 0")
+	}
+	if o.evalCaseParallelism != nil && *o.evalCaseParallelism <= 0 {
+		return errors.New("eval case parallelism must be greater than 0")
+	}
+	if o.evalCaseParallelInferenceEnabled != nil && *o.evalCaseParallelInferenceEnabled && o.evalCaseParallelism == nil {
+		return errors.New("eval case parallelism must be set when parallel inference is enabled")
+	}
+	if o.evalCaseParallelEvaluationEnabled != nil && *o.evalCaseParallelEvaluationEnabled && o.evalCaseParallelism == nil {
+		return errors.New("eval case parallelism must be set when parallel evaluation is enabled")
+	}
+	if o.evalSetManager == nil {
+		return errors.New("eval set manager is nil")
+	}
+	if o.metricManager == nil {
+		return errors.New("metric manager is nil")
+	}
+	if o.evalResultManager == nil {
+		return errors.New("eval result manager is nil")
+	}
+	if o.registry == nil {
+		return errors.New("registry is nil")
+	}
+	if o.evalService == nil {
+		return errors.New("eval service is nil")
+	}
+	return nil
 }
