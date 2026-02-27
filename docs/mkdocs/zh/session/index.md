@@ -593,22 +593,38 @@ if err := sessionService.AppendEvent(ctx, sess, evt); err != nil {
 
 Track 事件是 Session 中独立于主对话事件的轨迹存储机制，目前主要用于 AGUI 场景下的事件存储。它允许在会话中记录特定类型的事件，而不影响主对话流程。
 
-**核心结构**：
+**接口说明**：
+
+Track 事件的 API 定义在 `session.TrackService` 接口上，它独立于 `session.Service`：
 
 ```go
-type TrackEvent struct {
-    Track     Track           `json:"track"`     // 轨道名称
-    Payload   json.RawMessage `json:"payload"`   // 事件载荷（JSON）
-    Timestamp time.Time       `json:"timestamp"` // 事件时间戳
+type TrackService interface {
+    AppendTrackEvent(ctx context.Context, sess *Session, event *TrackEvent, opts ...Option) error
 }
 ```
+
+并非所有存储后端都实现了 `TrackService`。使用时需要通过类型断言获取：
+
+| 存储后端 | 是否实现 TrackService |
+| --- | --- |
+| 内存存储（inmemory） | ✅ |
+| Redis 存储 | ✅ |
+| PostgreSQL 存储 | ✅ |
+| MySQL 存储 | ✅ |
+| ClickHouse 存储 | ❌ |
 
 **基本用法**：
 
 ```go
+// 通过类型断言获取 TrackService
+trackService, ok := sessionService.(session.TrackService)
+if !ok {
+    log.Fatal("当前存储后端不支持 TrackService")
+}
+
 // 追加 Track 事件
 payload, _ := json.Marshal(map[string]any{"action": "button_click"})
-err := sessionService.AppendTrackEvent(ctx, sess, &session.TrackEvent{
+err := trackService.AppendTrackEvent(ctx, sess, &session.TrackEvent{
     Track:     "ui-events",
     Payload:   payload,
     Timestamp: time.Now(),
@@ -617,8 +633,6 @@ err := sessionService.AppendTrackEvent(ctx, sess, &session.TrackEvent{
 // 从会话中获取 Track 事件
 trackEvents, err := sess.GetTrackEvents("ui-events")
 ```
-
-**存储支持**：内存、Redis、PostgreSQL、MySQL 均支持 Track 事件存储，ClickHouse 暂不支持。
 
 ## 相关文档
 

@@ -581,30 +581,46 @@ All appended events become part of the conversation history and are available to
 
 Track events are a trajectory storage mechanism in Session that is independent of the main conversation events. They are primarily used for event storage in AGUI scenarios, allowing specific types of events to be recorded in a session without affecting the main conversation flow.
 
-**Core structure**:
+**Interface**:
+
+The Track event API is defined on the `session.TrackService` interface, which is separate from `session.Service`:
 
 ```go
-type TrackEvent struct {
-    Track     Track           `json:"track"`
-    Payload   json.RawMessage `json:"payload"`
-    Timestamp time.Time       `json:"timestamp"`
+type TrackService interface {
+    AppendTrackEvent(ctx context.Context, sess *Session, event *TrackEvent, opts ...Option) error
 }
 ```
+
+Not all storage backends implement `TrackService`. A type assertion is required:
+
+| Storage Backend | Implements TrackService |
+| --- | --- |
+| Memory (inmemory) | ✅ |
+| Redis | ✅ |
+| PostgreSQL | ✅ |
+| MySQL | ✅ |
+| ClickHouse | ❌ |
 
 **Basic usage**:
 
 ```go
+// Obtain TrackService via type assertion
+trackService, ok := sessionService.(session.TrackService)
+if !ok {
+    log.Fatal("current storage backend does not support TrackService")
+}
+
+// Append a track event
 payload, _ := json.Marshal(map[string]any{"action": "button_click"})
-err := sessionService.AppendTrackEvent(ctx, sess, &session.TrackEvent{
+err := trackService.AppendTrackEvent(ctx, sess, &session.TrackEvent{
     Track:     "ui-events",
     Payload:   payload,
     Timestamp: time.Now(),
 })
 
+// Retrieve track events from session
 trackEvents, err := sess.GetTrackEvents("ui-events")
 ```
-
-**Storage support**: Memory, Redis, PostgreSQL, and MySQL all support Track event storage. ClickHouse does not support Track events yet.
 
 ## Related Documentation
 
