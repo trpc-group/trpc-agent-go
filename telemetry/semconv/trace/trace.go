@@ -73,12 +73,12 @@ const (
 	// KeyGenAIUsageInputTokensCached is the attribute key for cached input token count.
 	// Note: This is an extension field used to report prompt cache tokens; it is not part of the upstream GenAI semantic conventions yet.
 	KeyGenAIUsageInputTokensCached = "gen_ai.usage.input_tokens.cached" // #nosec G101 - this is a metric key name, not a credential.
-	// KeyGenAIUsageInputTokensCacheRead is the attribute key for tokens read from cache (Anthropic).
-	// Note: This is an extension field; it is not part of the upstream GenAI semantic conventions yet.
-	KeyGenAIUsageInputTokensCacheRead = "gen_ai.usage.input_tokens.cache_read" // #nosec G101 - this is a metric key name, not a credential.
-	// KeyGenAIUsageInputTokensCacheCreation is the attribute key for tokens used to create cache (Anthropic).
-	// Note: This is an extension field; it is not part of the upstream GenAI semantic conventions yet.
-	KeyGenAIUsageInputTokensCacheCreation = "gen_ai.usage.input_tokens.cache_creation" // #nosec G101 - this is a metric key name, not a credential.
+	// KeyGenAIUsageCacheReadInputTokens is the attribute key for tokens read from cache (Anthropic).
+	// Reference: https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/
+	KeyGenAIUsageCacheReadInputTokens = "gen_ai.usage.cache_read.input_tokens" // #nosec G101 - this is a metric key name, not a credential.
+	// KeyGenAIUsageCacheCreationInputTokens is the attribute key for tokens used to create cache (Anthropic).
+	// Reference: https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/
+	KeyGenAIUsageCacheCreationInputTokens = "gen_ai.usage.cache_creation.input_tokens" // #nosec G101 - this is a metric key name, not a credential.
 	// KeyGenAIProviderName is the attribute key for provider name.
 	KeyGenAIProviderName = "gen_ai.provider.name"
 	// KeyGenAIAgentDescription is the attribute key for agent description.

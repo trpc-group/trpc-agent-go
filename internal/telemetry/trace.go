@@ -172,8 +172,8 @@ var (
 	KeyGenAIUsageOutputTokens             = semconvtrace.KeyGenAIUsageOutputTokens
 	KeyGenAIUsageInputTokens              = semconvtrace.KeyGenAIUsageInputTokens
 	KeyGenAIUsageInputTokensCached        = semconvtrace.KeyGenAIUsageInputTokensCached
-	KeyGenAIUsageInputTokensCacheRead     = semconvtrace.KeyGenAIUsageInputTokensCacheRead
-	KeyGenAIUsageInputTokensCacheCreation = semconvtrace.KeyGenAIUsageInputTokensCacheCreation
+	KeyGenAIUsageCacheReadInputTokens     = semconvtrace.KeyGenAIUsageCacheReadInputTokens
+	KeyGenAIUsageCacheCreationInputTokens = semconvtrace.KeyGenAIUsageCacheCreationInputTokens
 	KeyGenAIProviderName                  = semconvtrace.KeyGenAIProviderName
 	KeyGenAIAgentDescription              = semconvtrace.KeyGenAIAgentDescription
 	KeyGenAIResponseFinishReasons         = semconvtrace.KeyGenAIResponseFinishReasons
@@ -583,11 +583,11 @@ func buildResponseAttributes(rsp *model.Response) []attribute.KeyValue {
 		}
 		if cacheRead := rsp.Usage.PromptTokensDetails.CacheReadTokens; cacheRead != 0 {
 			// Anthropic: cache_read_tokens
-			attrs = append(attrs, attribute.Int(KeyGenAIUsageInputTokensCacheRead, cacheRead))
+			attrs = append(attrs, attribute.Int(KeyGenAIUsageCacheReadInputTokens, cacheRead))
 		}
 		if cacheCreation := rsp.Usage.PromptTokensDetails.CacheCreationTokens; cacheCreation != 0 {
 			// Anthropic: cache_creation_tokens
-			attrs = append(attrs, attribute.Int(KeyGenAIUsageInputTokensCacheCreation, cacheCreation))
+			attrs = append(attrs, attribute.Int(KeyGenAIUsageCacheCreationInputTokens, cacheCreation))
 		}
 	}
 
