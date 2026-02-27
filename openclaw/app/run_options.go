@@ -58,6 +58,14 @@ type runOptions struct {
 	MaxHistoryRuns    int
 	PreloadMemory     int
 
+	AgentType string
+
+	ClaudeBin          string
+	ClaudeOutputFormat string
+	ClaudeExtraArgs    string
+	ClaudeEnv          string
+	ClaudeWorkDir      string
+
 	ModelMode      string
 	OpenAIModel    string
 	OpenAIVariant  string
@@ -127,6 +135,8 @@ func parseRunOptions(args []string) (runOptions, error) {
 		AppName:  appName,
 		HTTPAddr: defaultHTTPAddr,
 
+		AgentType: agentTypeLLM,
+
 		ModelMode:     modeOpenAI,
 		OpenAIModel:   defaultOpenAIModelName(),
 		OpenAIVariant: defaultOpenAIVariant,
@@ -162,6 +172,12 @@ func parseRunOptions(args []string) (runOptions, error) {
 		defaultHTTPAddr,
 		"HTTP listen address for gateway endpoints",
 	)
+	fs.StringVar(
+		&opts.AgentType,
+		"agent-type",
+		agentTypeLLM,
+		"Agent type: llm|claude-code",
+	)
 	fs.BoolVar(
 		&opts.AddSessionSummary,
 		flagAddSessionSummary,
@@ -179,6 +195,36 @@ func parseRunOptions(args []string) (runOptions, error) {
 		flagPreloadMemory,
 		0,
 		"Preload N memories into system prompt (0=off, -1=all)",
+	)
+	fs.StringVar(
+		&opts.ClaudeBin,
+		"claude-bin",
+		"",
+		"Claude Code CLI executable (agent-type=claude-code)",
+	)
+	fs.StringVar(
+		&opts.ClaudeOutputFormat,
+		"claude-output-format",
+		"",
+		"Claude Code output format: json|stream-json",
+	)
+	fs.StringVar(
+		&opts.ClaudeExtraArgs,
+		"claude-extra-args",
+		"",
+		"Extra Claude args (comma-separated)",
+	)
+	fs.StringVar(
+		&opts.ClaudeEnv,
+		"claude-env",
+		"",
+		"Extra Claude env (comma-separated KEY=VALUE)",
+	)
+	fs.StringVar(
+		&opts.ClaudeWorkDir,
+		"claude-workdir",
+		"",
+		"Claude Code working dir (optional)",
 	)
 	fs.StringVar(
 		&opts.ModelMode,
@@ -527,9 +573,17 @@ type httpConfig struct {
 }
 
 type agentRunConfig struct {
+	Type *string `yaml:"type,omitempty"`
+
 	AddSessionSummary *bool `yaml:"add_session_summary,omitempty"`
 	MaxHistoryRuns    *int  `yaml:"max_history_runs,omitempty"`
 	PreloadMemory     *int  `yaml:"preload_memory,omitempty"`
+
+	ClaudeBin          *string  `yaml:"claude_bin,omitempty"`
+	ClaudeOutputFormat *string  `yaml:"claude_output_format,omitempty"`
+	ClaudeExtraArgs    []string `yaml:"claude_extra_args,omitempty"`
+	ClaudeEnv          []string `yaml:"claude_env,omitempty"`
+	ClaudeWorkDir      *string  `yaml:"claude_work_dir,omitempty"`
 }
 
 type modelConfig struct {
@@ -676,6 +730,9 @@ func (cfg *fileConfig) apply(
 	}
 
 	if cfg.Agent != nil {
+		if cfg.Agent.Type != nil && !flagWasSet(set, "agent-type") {
+			opts.AgentType = strings.TrimSpace(*cfg.Agent.Type)
+		}
 		if cfg.Agent.AddSessionSummary != nil &&
 			!flagWasSet(set, flagAddSessionSummary) {
 			opts.AddSessionSummary = *cfg.Agent.AddSessionSummary
@@ -687,6 +744,36 @@ func (cfg *fileConfig) apply(
 		if cfg.Agent.PreloadMemory != nil &&
 			!flagWasSet(set, flagPreloadMemory) {
 			opts.PreloadMemory = *cfg.Agent.PreloadMemory
+		}
+		if cfg.Agent.ClaudeBin != nil &&
+			!flagWasSet(set, "claude-bin") {
+			opts.ClaudeBin = strings.TrimSpace(*cfg.Agent.ClaudeBin)
+		}
+		if cfg.Agent.ClaudeOutputFormat != nil &&
+			!flagWasSet(set, "claude-output-format") {
+			opts.ClaudeOutputFormat = strings.TrimSpace(
+				*cfg.Agent.ClaudeOutputFormat,
+			)
+		}
+		if len(cfg.Agent.ClaudeExtraArgs) > 0 &&
+			!flagWasSet(set, "claude-extra-args") {
+			opts.ClaudeExtraArgs = strings.Join(
+				cfg.Agent.ClaudeExtraArgs,
+				csvDelimiter,
+			)
+		}
+		if len(cfg.Agent.ClaudeEnv) > 0 &&
+			!flagWasSet(set, "claude-env") {
+			opts.ClaudeEnv = strings.Join(
+				cfg.Agent.ClaudeEnv,
+				csvDelimiter,
+			)
+		}
+		if cfg.Agent.ClaudeWorkDir != nil &&
+			!flagWasSet(set, "claude-workdir") {
+			opts.ClaudeWorkDir = strings.TrimSpace(
+				*cfg.Agent.ClaudeWorkDir,
+			)
 		}
 	}
 

@@ -44,6 +44,12 @@ http:
   addr: ":9999"
 
 agent:
+  type: "claude-code"
+  claude_bin: "/bin/claude"
+  claude_output_format: "stream-json"
+  claude_extra_args: ["--permission-mode","bypassPermissions"]
+  claude_env: ["A=B"]
+  claude_work_dir: "/tmp/work"
   add_session_summary: false
   max_history_runs: 123
   preload_memory: 2
@@ -52,12 +58,16 @@ agent:
 	opts, err := parseRunOptions([]string{
 		"-config", cfgPath,
 		"-http-addr", ":7777",
+		"-agent-type", agentTypeLLM,
+		"-claude-bin", "/tmp/claude",
 		"-add-session-summary",
 		"-max-history-runs", "9",
 		"-preload-memory", "-1",
 	})
 	require.NoError(t, err)
 	require.Equal(t, ":7777", opts.HTTPAddr)
+	require.Equal(t, agentTypeLLM, opts.AgentType)
+	require.Equal(t, "/tmp/claude", opts.ClaudeBin)
 	require.True(t, opts.AddSessionSummary)
 	require.Equal(t, 9, opts.MaxHistoryRuns)
 	require.Equal(t, -1, opts.PreloadMemory)
@@ -105,6 +115,12 @@ http:
   addr: ":9000"
 
 agent:
+  type: "claude-code"
+  claude_bin: "/bin/claude"
+  claude_output_format: "stream-json"
+  claude_extra_args: ["--permission-mode","bypassPermissions"]
+  claude_env: ["FOO=bar","X=1"]
+  claude_work_dir: "/tmp/work"
   add_session_summary: true
   max_history_runs: 50
   preload_memory: 10
@@ -191,6 +207,17 @@ memory:
 	require.Equal(t, "demo", opts.AppName)
 	require.Equal(t, "/tmp/state", opts.StateDir)
 	require.Equal(t, ":9000", opts.HTTPAddr)
+
+	require.Equal(t, agentTypeClaudeCode, opts.AgentType)
+	require.Equal(t, "/bin/claude", opts.ClaudeBin)
+	require.Equal(t, "stream-json", opts.ClaudeOutputFormat)
+	require.Equal(
+		t,
+		"--permission-mode,bypassPermissions",
+		opts.ClaudeExtraArgs,
+	)
+	require.Equal(t, "FOO=bar,X=1", opts.ClaudeEnv)
+	require.Equal(t, "/tmp/work", opts.ClaudeWorkDir)
 
 	require.True(t, opts.AddSessionSummary)
 	require.Equal(t, 50, opts.MaxHistoryRuns)

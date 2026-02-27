@@ -25,6 +25,35 @@ go run ./cmd/openclaw \
 Note: by default, this demo uses `-mode openai` and `-model gpt-5`.
 If you do not have model credentials, keep using `-mode mock`.
 
+## Agent types
+
+By default, OpenClaw runs the `llm` agent (the built-in `llmagent`),
+which uses your `model` config and supports skills/tools.
+
+If you have Claude Code installed locally and want OpenClaw to drive
+messages through the Claude Code CLI, use `claude-code`:
+
+```bash
+cd openclaw
+go run ./cmd/openclaw \
+  -agent-type claude-code \
+  -http-addr :8080
+```
+
+YAML equivalent:
+
+```yaml
+agent:
+  type: "claude-code"
+  claude_output_format: "stream-json"
+```
+
+Notes:
+
+- In `claude-code` mode, OpenClaw's `tools:` section is not supported.
+- `model:` is optional unless you enable model-backed features like
+  `session.summary.enabled` or `memory.auto.enabled`.
+
 ## Configuration (YAML)
 
 This demo supports a YAML config file to avoid a long list of CLI flags.

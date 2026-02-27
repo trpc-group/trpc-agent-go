@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent/claudecode"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -90,6 +91,66 @@ func TestRun_CreateAgentFailsExitCode(t *testing.T) {
 		"-mode", modeMock,
 		"-state-dir", t.TempDir(),
 		"-skills-root", "http://[::1",
+	})
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+}
+
+func TestRun_ClaudeCode_Smoke(t *testing.T) {
+	dir := t.TempDir()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	time.AfterFunc(50*time.Millisecond, cancel)
+
+	err := run(ctx, []string{
+		"-agent-type", agentTypeClaudeCode,
+		"-http-addr", "127.0.0.1:0",
+		"-state-dir", dir,
+	})
+	require.NoError(t, err)
+}
+
+func TestRun_ClaudeCode_WithSessionSummary_Smoke(t *testing.T) {
+	dir := t.TempDir()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	time.AfterFunc(50*time.Millisecond, cancel)
+
+	err := run(ctx, []string{
+		"-agent-type", agentTypeClaudeCode,
+		"-mode", modeMock,
+		"-session-summary",
+		"-http-addr", "127.0.0.1:0",
+		"-state-dir", dir,
+	})
+	require.NoError(t, err)
+}
+
+func TestRun_ClaudeCode_UnsupportedOptionsExitCode(t *testing.T) {
+	t.Parallel()
+
+	err := run(context.Background(), []string{
+		"-agent-type", agentTypeClaudeCode,
+		"-enable-openclaw-tools",
+	})
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+}
+
+func TestRun_ClaudeCode_InvalidOutputFormatExitCode(t *testing.T) {
+	t.Parallel()
+
+	err := run(context.Background(), []string{
+		"-agent-type", agentTypeClaudeCode,
+		"-claude-output-format", "nope",
 	})
 	require.Error(t, err)
 
@@ -181,6 +242,164 @@ func TestSplitCSV(t *testing.T) {
 	require.Nil(t, splitCSV("  "))
 	require.Equal(t, []string{"a", "b"}, splitCSV(" a , b "))
 	require.Equal(t, []string{"a"}, splitCSV("a,, ,"))
+}
+
+func TestNormalizeAgentType(t *testing.T) {
+	t.Parallel()
+
+	typ, err := normalizeAgentType("")
+	require.NoError(t, err)
+	require.Equal(t, agentTypeLLM, typ)
+
+	typ, err = normalizeAgentType(" LLM ")
+	require.NoError(t, err)
+	require.Equal(t, agentTypeLLM, typ)
+
+	typ, err = normalizeAgentType("claude-code")
+	require.NoError(t, err)
+	require.Equal(t, agentTypeClaudeCode, typ)
+
+	typ, err = normalizeAgentType("ClaudeCode")
+	require.NoError(t, err)
+	require.Equal(t, agentTypeClaudeCode, typ)
+
+	_, err = normalizeAgentType("nope")
+	require.Error(t, err)
+}
+
+func TestValidateAgentRunOptions(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		agentType string
+		opts      runOptions
+		wantErr   bool
+	}{
+		{
+			name:      "llm ok",
+			agentType: agentTypeLLM,
+		},
+		{
+			name:      "claude ok",
+			agentType: agentTypeClaudeCode,
+		},
+		{
+			name:      "unknown agent",
+			agentType: "x",
+			wantErr:   true,
+		},
+		{
+			name:      "add-session-summary",
+			agentType: agentTypeClaudeCode,
+			opts: runOptions{
+				AddSessionSummary: true,
+			},
+			wantErr: true,
+		},
+		{
+			name:      "max-history-runs",
+			agentType: agentTypeClaudeCode,
+			opts: runOptions{
+				MaxHistoryRuns: 1,
+			},
+			wantErr: true,
+		},
+		{
+			name:      "preload-memory",
+			agentType: agentTypeClaudeCode,
+			opts: runOptions{
+				PreloadMemory: 1,
+			},
+			wantErr: true,
+		},
+		{
+			name:      "enable-local-exec",
+			agentType: agentTypeClaudeCode,
+			opts: runOptions{
+				EnableLocalExec: true,
+			},
+			wantErr: true,
+		},
+		{
+			name:      "enable-openclaw-tools",
+			agentType: agentTypeClaudeCode,
+			opts: runOptions{
+				EnableOpenClawTools: true,
+			},
+			wantErr: true,
+		},
+		{
+			name:      "tools.providers",
+			agentType: agentTypeClaudeCode,
+			opts: runOptions{
+				ToolProviders: []pluginSpec{{Type: "x"}},
+			},
+			wantErr: true,
+		},
+		{
+			name:      "tools.toolsets",
+			agentType: agentTypeClaudeCode,
+			opts: runOptions{
+				ToolSets: []pluginSpec{{Type: "x"}},
+			},
+			wantErr: true,
+		},
+		{
+			name:      "refresh-toolsets-on-run",
+			agentType: agentTypeClaudeCode,
+			opts: runOptions{
+				RefreshToolSetsOnRun: true,
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := validateAgentRunOptions(tc.agentType, tc.opts)
+			if tc.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestParseClaudeOutputFormat(t *testing.T) {
+	t.Parallel()
+
+	format, err := parseClaudeOutputFormat("json")
+	require.NoError(t, err)
+	require.Equal(t, claudecode.OutputFormatJSON, format)
+
+	format, err = parseClaudeOutputFormat(" stream-json ")
+	require.NoError(t, err)
+	require.Equal(t, claudecode.OutputFormatStreamJSON, format)
+
+	_, err = parseClaudeOutputFormat("")
+	require.Error(t, err)
+
+	_, err = parseClaudeOutputFormat("nope")
+	require.Error(t, err)
+}
+
+func TestNewClaudeCodeAgent(t *testing.T) {
+	t.Parallel()
+
+	ag, err := newClaudeCodeAgent(runOptions{
+		ClaudeBin:          "claude",
+		ClaudeOutputFormat: "stream-json",
+		ClaudeExtraArgs:    "--help",
+		ClaudeEnv:          "A=B",
+		ClaudeWorkDir:      "/tmp",
+	})
+	require.NoError(t, err)
+	require.Equal(t, defaultAgentName, ag.Info().Name)
 }
 
 func TestResolveStateDir_Custom(t *testing.T) {

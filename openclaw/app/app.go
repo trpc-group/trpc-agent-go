@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/claudecode"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -61,6 +62,11 @@ const (
 	defaultAgentsDir = ".agents"
 
 	csvDelimiter = ","
+
+	defaultAgentName = "assistant"
+
+	agentTypeLLM        = "llm"
+	agentTypeClaudeCode = "claude-code"
 
 	defaultTelegramMaxRetries = 3
 	defaultTelegramStreaming  = "progress"
@@ -129,6 +135,20 @@ func run(ctx context.Context, args []string) error {
 		return err
 	}
 
+	agentType, err := normalizeAgentType(opts.AgentType)
+	if err != nil {
+		return &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("agent config failed: %w", err),
+		}
+	}
+	if err := validateAgentRunOptions(agentType, opts); err != nil {
+		return &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("agent config failed: %w", err),
+		}
+	}
+
 	var (
 		telegramBot tgch.BotInfo
 		tgapiOpts   []telegramAPIOption
@@ -177,14 +197,6 @@ func run(ctx context.Context, args []string) error {
 		mentionPatterns = []string{telegramBot.Mention}
 	}
 
-	mdl, err := modelFromOptions(opts)
-	if err != nil {
-		return &exitError{
-			Code: 1,
-			Err:  fmt.Errorf("create model failed: %w", err),
-		}
-	}
-
 	resolvedStateDir, err := resolveStateDir(opts.StateDir)
 	if err != nil {
 		return &exitError{
@@ -192,10 +204,43 @@ func run(ctx context.Context, args []string) error {
 			Err:  fmt.Errorf("resolve state dir failed: %w", err),
 		}
 	}
-	log.Infof(
-		"Instance: %s",
-		configFingerprint(opts.ModelMode, opts.OpenAIModel, resolvedStateDir),
-	)
+
+	needsModel := agentType == agentTypeLLM ||
+		opts.SessionSummaryEnabled ||
+		opts.MemoryAutoEnabled
+
+	var mdl model.Model
+	if needsModel {
+		mdl, err = modelFromOptions(opts)
+		if err != nil {
+			return &exitError{
+				Code: 1,
+				Err:  fmt.Errorf("create model failed: %w", err),
+			}
+		}
+	}
+
+	if agentType == agentTypeLLM {
+		log.Infof(
+			"Instance: %s",
+			configFingerprint(
+				opts.ModelMode,
+				opts.OpenAIModel,
+				resolvedStateDir,
+			),
+		)
+	} else {
+		parts := []string{
+			agentType,
+			strings.TrimSpace(opts.ClaudeBin),
+			strings.TrimSpace(opts.ClaudeOutputFormat),
+			resolvedStateDir,
+		}
+		if needsModel {
+			parts = append(parts, opts.ModelMode, opts.OpenAIModel)
+		}
+		log.Infof("Instance: %s", configFingerprint(parts...))
+	}
 
 	sessionSvc, err := newSessionService(mdl, opts)
 	if err != nil {
@@ -215,37 +260,49 @@ func run(ctx context.Context, args []string) error {
 	}
 	defer closeMemoryService(memSvc)
 
-	toolSets, err := toolSetsFromProviders(
-		mdl,
-		opts.AppName,
-		resolvedStateDir,
-		opts.ToolSets,
+	var (
+		toolSets []tool.ToolSet
+		ag       agent.Agent
 	)
-	if err != nil {
-		return &exitError{
-			Code: 1,
-			Err:  fmt.Errorf("create toolsets failed: %w", err),
+	defer func() {
+		closeToolSets(toolSets)
+	}()
+	if agentType == agentTypeClaudeCode {
+		ag, err = newClaudeCodeAgent(opts)
+	} else {
+		toolSets, err = toolSetsFromProviders(
+			mdl,
+			opts.AppName,
+			resolvedStateDir,
+			opts.ToolSets,
+		)
+		if err != nil {
+			return &exitError{
+				Code: 1,
+				Err:  fmt.Errorf("create toolsets failed: %w", err),
+			}
 		}
+		ag, err = newAgent(mdl, agentConfig{
+			AppName:           opts.AppName,
+			AddSessionSummary: opts.AddSessionSummary,
+			MaxHistoryRuns:    opts.MaxHistoryRuns,
+			PreloadMemory:     opts.PreloadMemory,
+
+			SkillsRoot:      opts.SkillsRoot,
+			SkillsExtraDirs: splitCSV(opts.SkillsExtraDir),
+			SkillsDebug:     opts.SkillsDebug,
+			SkillConfigKeys: resolveSkillConfigKeys(opts),
+			StateDir:        resolvedStateDir,
+
+			EnableLocalExec:     opts.EnableLocalExec,
+			EnableOpenClawTools: opts.EnableOpenClawTools,
+
+			ToolProviders: opts.ToolProviders,
+			ToolSets:      opts.ToolSets,
+
+			RefreshToolSetsOnRun: opts.RefreshToolSetsOnRun,
+		}, memSvc.Tools(), toolSets)
 	}
-	defer closeToolSets(toolSets)
-
-	llm, err := newAgent(mdl, agentConfig{
-		AppName:           opts.AppName,
-		AddSessionSummary: opts.AddSessionSummary,
-		MaxHistoryRuns:    opts.MaxHistoryRuns,
-		PreloadMemory:     opts.PreloadMemory,
-
-		SkillsRoot:           opts.SkillsRoot,
-		SkillsExtraDirs:      splitCSV(opts.SkillsExtraDir),
-		SkillsDebug:          opts.SkillsDebug,
-		SkillConfigKeys:      resolveSkillConfigKeys(opts),
-		StateDir:             resolvedStateDir,
-		EnableLocalExec:      opts.EnableLocalExec,
-		EnableOpenClawTools:  opts.EnableOpenClawTools,
-		ToolProviders:        opts.ToolProviders,
-		ToolSets:             opts.ToolSets,
-		RefreshToolSetsOnRun: opts.RefreshToolSetsOnRun,
-	}, memSvc.Tools(), toolSets)
 	if err != nil {
 		return &exitError{
 			Code: 1,
@@ -255,7 +312,7 @@ func run(ctx context.Context, args []string) error {
 
 	r := runner.NewRunner(
 		opts.AppName,
-		llm,
+		ag,
 		runner.WithSessionService(sessionSvc),
 		runner.WithMemoryService(memSvc),
 	)
@@ -452,6 +509,123 @@ func makeGatewayOptions(
 	return opts
 }
 
+func normalizeAgentType(raw string) (string, error) {
+	v := strings.ToLower(strings.TrimSpace(raw))
+	if v == "" {
+		return agentTypeLLM, nil
+	}
+	switch v {
+	case agentTypeLLM:
+		return agentTypeLLM, nil
+	case agentTypeClaudeCode, "claudecode":
+		return agentTypeClaudeCode, nil
+	default:
+		return "", fmt.Errorf("unsupported agent type: %s", raw)
+	}
+}
+
+func validateAgentRunOptions(agentType string, opts runOptions) error {
+	if agentType == agentTypeLLM {
+		return nil
+	}
+	if agentType != agentTypeClaudeCode {
+		return fmt.Errorf("unsupported agent type: %s", agentType)
+	}
+
+	if opts.AddSessionSummary {
+		return errors.New(
+			"claude-code agent does not support add-session-summary",
+		)
+	}
+	if opts.MaxHistoryRuns != 0 {
+		return errors.New(
+			"claude-code agent does not support max-history-runs",
+		)
+	}
+	if opts.PreloadMemory != 0 {
+		return errors.New(
+			"claude-code agent does not support preload-memory",
+		)
+	}
+	if opts.EnableLocalExec {
+		return errors.New(
+			"claude-code agent does not support enable-local-exec",
+		)
+	}
+	if opts.EnableOpenClawTools {
+		return errors.New(
+			"claude-code agent does not support enable-openclaw-tools",
+		)
+	}
+	if len(opts.ToolProviders) > 0 {
+		return errors.New(
+			"claude-code agent does not support tools.providers",
+		)
+	}
+	if len(opts.ToolSets) > 0 {
+		return errors.New(
+			"claude-code agent does not support tools.toolsets",
+		)
+	}
+	if opts.RefreshToolSetsOnRun {
+		return errors.New(
+			"claude-code agent does not support refresh-toolsets-on-run",
+		)
+	}
+	return nil
+}
+
+func parseClaudeOutputFormat(
+	raw string,
+) (claudecode.OutputFormat, error) {
+	v := strings.ToLower(strings.TrimSpace(raw))
+	if v == "" {
+		return "", errors.New("claude output format is empty")
+	}
+	format := claudecode.OutputFormat(v)
+	switch format {
+	case claudecode.OutputFormatJSON,
+		claudecode.OutputFormatStreamJSON:
+		return format, nil
+	default:
+		return "", fmt.Errorf(
+			"unsupported claude output format: %s",
+			raw,
+		)
+	}
+}
+
+func newClaudeCodeAgent(opts runOptions) (agent.Agent, error) {
+	claudeOpts := make([]claudecode.Option, 0, 6)
+	claudeOpts = append(claudeOpts, claudecode.WithName(defaultAgentName))
+
+	if v := strings.TrimSpace(opts.ClaudeBin); v != "" {
+		claudeOpts = append(claudeOpts, claudecode.WithBin(v))
+	}
+
+	if v := strings.TrimSpace(opts.ClaudeOutputFormat); v != "" {
+		format, err := parseClaudeOutputFormat(v)
+		if err != nil {
+			return nil, err
+		}
+		claudeOpts = append(
+			claudeOpts,
+			claudecode.WithOutputFormat(format),
+		)
+	}
+
+	if args := splitCSV(opts.ClaudeExtraArgs); len(args) > 0 {
+		claudeOpts = append(claudeOpts, claudecode.WithExtraArgs(args...))
+	}
+	if env := splitCSV(opts.ClaudeEnv); len(env) > 0 {
+		claudeOpts = append(claudeOpts, claudecode.WithEnv(env...))
+	}
+	if v := strings.TrimSpace(opts.ClaudeWorkDir); v != "" {
+		claudeOpts = append(claudeOpts, claudecode.WithWorkDir(v))
+	}
+	return claudecode.New(claudeOpts...)
+}
+
 func newAgent(
 	mdl model.Model,
 	cfg agentConfig,
@@ -516,7 +690,7 @@ func newAgent(
 		opts = append(opts, llmagent.WithCodeExecutor(exec))
 	}
 
-	return llmagent.New("assistant", opts...), nil
+	return llmagent.New(defaultAgentName, opts...), nil
 }
 
 func toolsFromProviders(

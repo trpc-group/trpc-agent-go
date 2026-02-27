@@ -51,6 +51,66 @@ CLI flags always override YAML values.
 
 Duration values use Go-style strings like `30s`, `10m`, `1h`.
 
+## Agent selection (LLM vs Claude Code)
+
+An **agent** is the component that decides how to answer a message.
+
+OpenClaw supports two agent types:
+
+- `llm` (default): uses `llmagent` + your `model` config and supports
+  skills and tools.
+- `claude-code`: invokes a locally installed Claude Code CLI (`claude`)
+  via the existing `agent/claudecode` implementation in this repo.
+
+### Use the Claude Code agent
+
+YAML:
+
+```yaml
+agent:
+  type: "claude-code"
+
+  # Optional. Default is "claude" (looked up in $PATH).
+  claude_bin: "claude"
+
+  # Optional. Supported: "json" or "stream-json".
+  claude_output_format: "stream-json"
+
+  # Optional. Extra CLI args added before the session flags + prompt.
+  claude_extra_args:
+    - "--permission-mode"
+    - "bypassPermissions"
+
+  # Optional. Extra env vars passed to the CLI process.
+  claude_env:
+    - "KEY=VALUE"
+
+  # Optional. Working directory for the CLI process.
+  claude_work_dir: "."
+```
+
+CLI flags:
+
+- `-agent-type claude-code`
+- `-claude-bin <PATH>`
+- `-claude-output-format json|stream-json`
+- `-claude-extra-args <A,B,C>` (comma-separated)
+- `-claude-env <K=V,K=V>` (comma-separated)
+- `-claude-workdir <DIR>`
+
+Notes and limitations:
+
+- In `claude-code` mode, OpenClaw's `tools:` section is not supported
+  and these flags must be off:
+  - `-enable-local-exec`
+  - `-enable-openclaw-tools`
+  - `-refresh-toolsets-on-run`
+- `agent.add_session_summary`, `agent.max_history_runs`, and
+  `agent.preload_memory` are LLM-only knobs.
+- You can omit `model:` in `claude-code` mode unless you enable
+  model-backed features like `session.summary.enabled` or
+  `memory.auto.enabled`.
+
 ## Skills (SKILL.md skill packs)
 
 ### What is a skill?
