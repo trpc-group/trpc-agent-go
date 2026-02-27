@@ -31,7 +31,7 @@ func Inference(
 	invocations []*evalset.Invocation,
 	initialSession *evalset.SessionInput,
 	sessionID string,
-	contextMessages []*model.Message,
+	runOptions []agent.RunOption,
 ) ([]*evalset.Invocation, error) {
 	if len(invocations) == 0 {
 		return nil, errors.New("invocations are empty")
@@ -39,14 +39,10 @@ func Inference(
 	if initialSession == nil {
 		return nil, errors.New("session input is nil")
 	}
-	seedMessages, err := buildSeedMessages(contextMessages)
-	if err != nil {
-		return nil, err
-	}
 	// Accumulate each invocation response.
 	responseInvocations := make([]*evalset.Invocation, 0, len(invocations))
 	for _, invocation := range invocations {
-		responseInvocation, err := inferenceInvocation(ctx, runner, sessionID, initialSession, invocation, seedMessages)
+		responseInvocation, err := inferenceInvocation(ctx, runner, sessionID, initialSession, invocation, runOptions)
 		if err != nil {
 			return nil, err
 		}
@@ -62,18 +58,20 @@ func inferenceInvocation(
 	sessionID string,
 	initialSession *evalset.SessionInput,
 	invocation *evalset.Invocation,
-	contextMessages []model.Message,
+	runOptions []agent.RunOption,
 ) (*evalset.Invocation, error) {
 	if invocation.UserContent == nil {
 		return nil, fmt.Errorf("invocation user content is nil for eval case invocation %q", invocation.InvocationID)
 	}
+	mergedOpts := make([]agent.RunOption, 0, 1+len(runOptions))
+	mergedOpts = append(mergedOpts, agent.WithRuntimeState(initialSession.State))
+	mergedOpts = append(mergedOpts, runOptions...)
 	events, err := r.Run(
 		ctx,
 		initialSession.UserID,
 		sessionID,
 		*invocation.UserContent,
-		agent.WithRuntimeState(initialSession.State),
-		agent.WithInjectedContextMessages(contextMessages),
+		mergedOpts...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("runner run: %w", err)
@@ -120,17 +118,11 @@ func inferenceInvocation(
 			}
 		}
 	}
-	// Convert the final response to invocation.
-	contextPtrs := make([]*model.Message, 0, len(contextMessages))
-	for i := range contextMessages {
-		contextPtrs = append(contextPtrs, &contextMessages[i])
-	}
 	return &evalset.Invocation{
-		InvocationID:    invocationID,
-		ContextMessages: contextPtrs,
-		UserContent:     invocation.UserContent,
-		FinalResponse:   finalResponse,
-		Tools:           tools,
+		InvocationID:  invocationID,
+		UserContent:   invocation.UserContent,
+		FinalResponse: finalResponse,
+		Tools:         tools,
 	}, nil
 }
 
@@ -181,18 +173,4 @@ func parseToolResultContent(content string) any {
 		return value
 	}
 	return content
-}
-
-func buildSeedMessages(messages []*model.Message) ([]model.Message, error) {
-	if len(messages) == 0 {
-		return nil, nil
-	}
-	seed := make([]model.Message, 0, len(messages))
-	for idx, message := range messages {
-		if message == nil {
-			return nil, fmt.Errorf("context message is nil at index %d", idx)
-		}
-		seed = append(seed, *message)
-	}
-	return seed, nil
 }

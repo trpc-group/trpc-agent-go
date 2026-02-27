@@ -11,7 +11,6 @@ package evaluation
 
 import (
 	"context"
-	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -25,11 +24,11 @@ import (
 
 type stubService struct{}
 
-func (stubService) Inference(ctx context.Context, req *service.InferenceRequest) ([]*service.InferenceResult, error) {
+func (stubService) Inference(ctx context.Context, req *service.InferenceRequest, opt ...service.Option) ([]*service.InferenceResult, error) {
 	return nil, nil
 }
 
-func (stubService) Evaluate(ctx context.Context, req *service.EvaluateRequest) (*service.EvalSetRunResult, error) {
+func (stubService) Evaluate(ctx context.Context, req *service.EvaluateRequest, opt ...service.Option) (*service.EvalSetRunResult, error) {
 	return nil, nil
 }
 
@@ -47,10 +46,9 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.NotNil(t, opts.registry)
 	assert.Nil(t, opts.evalService)
 	assert.Nil(t, opts.callbacks)
-	assert.Nil(t, opts.judgeRunner)
-	assert.Equal(t, runtime.GOMAXPROCS(0), opts.evalCaseParallelism)
-	assert.False(t, opts.evalCaseParallelInferenceEnabled)
-	assert.False(t, opts.evalCaseParallelEvaluationEnabled)
+	assert.Nil(t, opts.evalCaseParallelism)
+	assert.Nil(t, opts.evalCaseParallelInferenceEnabled)
+	assert.Nil(t, opts.evalCaseParallelEvaluationEnabled)
 }
 
 func TestWithEvalSetManager(t *testing.T) {
@@ -108,15 +106,21 @@ func TestWithNumRuns(t *testing.T) {
 
 func TestWithEvalCaseParallelism(t *testing.T) {
 	opts := newOptions(WithEvalCaseParallelism(8))
-	assert.Equal(t, 8, opts.evalCaseParallelism)
+	if assert.NotNil(t, opts.evalCaseParallelism) {
+		assert.Equal(t, 8, *opts.evalCaseParallelism)
+	}
 }
 
 func TestWithEvalCaseParallelInferenceEnabled(t *testing.T) {
 	opts := newOptions(WithEvalCaseParallelInferenceEnabled(true))
-	assert.True(t, opts.evalCaseParallelInferenceEnabled)
+	if assert.NotNil(t, opts.evalCaseParallelInferenceEnabled) {
+		assert.True(t, *opts.evalCaseParallelInferenceEnabled)
+	}
 }
 
 func TestWithEvalCaseParallelEvaluationEnabled(t *testing.T) {
 	opts := newOptions(WithEvalCaseParallelEvaluationEnabled(true))
-	assert.True(t, opts.evalCaseParallelEvaluationEnabled)
+	if assert.NotNil(t, opts.evalCaseParallelEvaluationEnabled) {
+		assert.True(t, *opts.evalCaseParallelEvaluationEnabled)
+	}
 }

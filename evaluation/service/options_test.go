@@ -16,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	evalresultinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/inmemory"
 	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
@@ -76,6 +77,12 @@ func TestWithCallbacks(t *testing.T) {
 	opts := NewOptions(WithCallbacks(callbacks))
 
 	assert.Same(t, callbacks, opts.Callbacks)
+}
+
+func TestWithRunOptions(t *testing.T) {
+	opts := NewOptions(WithRunOptions(agent.WithInstruction("prompt")))
+
+	assert.Len(t, opts.RunOptions, 1)
 }
 
 func TestWithEvalCaseParallelism(t *testing.T) {

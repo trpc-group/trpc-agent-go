@@ -40,7 +40,7 @@ func TestRunAfterInferenceSetCallbacksPassesArgs(t *testing.T) {
 	})
 
 	svc := &local{callbacks: callbacks}
-	err := svc.runAfterInferenceSetCallbacks(ctx, req, results, wantErr, startTime)
+	err := svc.runAfterInferenceSetCallbacks(ctx, callbacks, req, results, wantErr, startTime)
 	assert.NoError(t, err)
 	assert.NotNil(t, got)
 	assert.Same(t, req, got.Request)
@@ -62,12 +62,149 @@ func TestRunAfterInferenceSetCallbacksWrapsErrorWithContext(t *testing.T) {
 	})
 
 	svc := &local{callbacks: callbacks}
-	err := svc.runAfterInferenceSetCallbacks(ctx, req, nil, nil, startTime)
+	err := svc.runAfterInferenceSetCallbacks(ctx, callbacks, req, nil, nil, startTime)
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, sentinel)
 	assert.Contains(t, err.Error(), "run after inference set callbacks")
 	assert.Contains(t, err.Error(), "app=app")
 	assert.Contains(t, err.Error(), "evalSetID=set")
+}
+
+func TestLocalInferencePerCallSessionIDSupplierOverridesDefault(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+
+	evalCase := makeEvalCase(appName, "case-1", "prompt")
+	evalCase.EvalMode = evalset.EvalModeTrace
+	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, evalCase))
+
+	svc, err := New(
+		&fakeRunner{},
+		service.WithEvalSetManager(mgr),
+		service.WithEvalResultManager(evalresultinmemory.New()),
+		service.WithRegistry(registry.New()),
+		service.WithSessionIDSupplier(func(ctx context.Context) string { return "default-session" }),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	defer func() {
+		assert.NoError(t, svc.Close())
+	}()
+
+	results, err := svc.Inference(
+		ctx,
+		&service.InferenceRequest{AppName: appName, EvalSetID: evalSetID},
+		service.WithSessionIDSupplier(func(ctx context.Context) string { return "call-session" }),
+	)
+	assert.NoError(t, err)
+	assert.Len(t, results, 1)
+	if len(results) != 1 {
+		return
+	}
+	assert.Equal(t, "call-session", results[0].SessionID)
+}
+
+func TestLocalInferencePerCallCallbacksOverrideDefault(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+
+	evalCase := makeEvalCase(appName, "case-1", "prompt")
+	evalCase.EvalMode = evalset.EvalModeTrace
+	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, evalCase))
+
+	svc, err := New(
+		&fakeRunner{},
+		service.WithEvalSetManager(mgr),
+		service.WithEvalResultManager(evalresultinmemory.New()),
+		service.WithRegistry(registry.New()),
+		service.WithSessionIDSupplier(func(ctx context.Context) string { return "session" }),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	defer func() {
+		assert.NoError(t, svc.Close())
+	}()
+
+	called := false
+	callbacks := service.NewCallbacks()
+	callbacks.RegisterBeforeInferenceSet("probe", func(ctx context.Context, args *service.BeforeInferenceSetArgs) (*service.BeforeInferenceSetResult, error) {
+		called = true
+		return nil, nil
+	})
+
+	_, err = svc.Inference(
+		ctx,
+		&service.InferenceRequest{AppName: appName, EvalSetID: evalSetID},
+		service.WithCallbacks(callbacks),
+	)
+	assert.NoError(t, err)
+	assert.True(t, called)
+}
+
+func TestLocalInferenceAfterInferenceCaseCallbackReceivesError(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+
+	evalCase := makeEvalCase(appName, "case-1", "prompt")
+	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, evalCase))
+
+	callbacks := &service.Callbacks{}
+	callbacks.Register("probe", &service.Callback{
+		AfterInferenceCase: func(ctx context.Context, args *service.AfterInferenceCaseArgs) (*service.AfterInferenceCaseResult, error) {
+			assert.Error(t, args.Error)
+			if args.Error != nil {
+				assert.Contains(t, args.Error.Error(), "boom")
+			}
+			assert.NotNil(t, args.Result)
+			if args.Result != nil {
+				assert.Contains(t, args.Result.ErrorMessage, "boom")
+			}
+			return nil, nil
+		},
+	})
+
+	svc, err := New(
+		&fakeRunner{err: errors.New("boom")},
+		service.WithEvalSetManager(mgr),
+		service.WithEvalResultManager(evalresultinmemory.New()),
+		service.WithRegistry(registry.New()),
+		service.WithCallbacks(callbacks),
+		service.WithSessionIDSupplier(func(ctx context.Context) string { return "session" }),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	defer func() {
+		assert.NoError(t, svc.Close())
+	}()
+
+	results, err := svc.Inference(ctx, &service.InferenceRequest{AppName: appName, EvalSetID: evalSetID})
+	assert.NoError(t, err)
+	assert.Len(t, results, 1)
+	if len(results) != 1 {
+		return
+	}
+	assert.Equal(t, status.EvalStatusFailed, results[0].Status)
 }
 
 func TestLocalInferenceBeforeInferenceSetCanFilterEvalCaseIDs(t *testing.T) {
