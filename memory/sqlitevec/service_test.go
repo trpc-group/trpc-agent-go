@@ -15,6 +15,7 @@ import (
 	"database/sql"
 	"os"
 	"testing"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/require"
@@ -23,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 type mockEmbedder struct {
@@ -214,6 +216,160 @@ func TestService_Search_EmptyQuery(t *testing.T) {
 	require.Empty(t, results)
 }
 
+func TestService_Search_SoftDeleteFiltered(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mockEmbedder{dimension: 2}),
+		WithSoftDelete(true),
+		WithIndexDimension(2),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "u1"}
+
+	require.NoError(t, svc.AddMemory(ctx, userKey, "alpha", nil))
+
+	entries, err := svc.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+
+	memKey := memory.Key{
+		AppName:  userKey.AppName,
+		UserID:   userKey.UserID,
+		MemoryID: entries[0].ID,
+	}
+	require.NoError(t, svc.DeleteMemory(ctx, memKey))
+
+	results, err := svc.SearchMemories(ctx, userKey, "alpha")
+	require.NoError(t, err)
+	require.Empty(t, results)
+}
+
+func TestService_AddMemory_DimensionMismatch(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mockEmbedder{dimension: 2}),
+		WithIndexDimension(3),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	err = svc.AddMemory(
+		context.Background(),
+		memory.UserKey{AppName: "app", UserID: "u1"},
+		"alpha",
+		nil,
+	)
+	require.Error(t, err)
+}
+
+func TestService_WithMaxResults(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mockEmbedder{dimension: 2}),
+		WithIndexDimension(2),
+		WithMaxResults(1),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "u1"}
+
+	require.NoError(t, svc.AddMemory(ctx, userKey, "alpha", nil))
+	require.NoError(t, svc.AddMemory(ctx, userKey, "beta", nil))
+
+	results, err := svc.SearchMemories(ctx, userKey, "alpha")
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Equal(t, "alpha", results[0].Memory.Memory)
+}
+
+func TestService_ClearMemories_HardDelete(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mockEmbedder{dimension: 2}),
+		WithIndexDimension(2),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "u1"}
+
+	require.NoError(t, svc.AddMemory(ctx, userKey, "alpha", nil))
+	require.NoError(t, svc.AddMemory(ctx, userKey, "beta", nil))
+
+	require.NoError(t, svc.ClearMemories(ctx, userKey))
+
+	entries, err := svc.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	require.Empty(t, entries)
+}
+
+func TestService_ClearMemories_SoftDelete(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mockEmbedder{dimension: 2}),
+		WithSoftDelete(true),
+		WithIndexDimension(2),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "u1"}
+
+	require.NoError(t, svc.AddMemory(ctx, userKey, "alpha", nil))
+	require.NoError(t, svc.AddMemory(ctx, userKey, "beta", nil))
+
+	require.NoError(t, svc.ClearMemories(ctx, userKey))
+
+	entries, err := svc.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	require.Empty(t, entries)
+}
+
+func TestService_ReadMemories_Limit(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mockEmbedder{dimension: 2}),
+		WithIndexDimension(2),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "u1"}
+
+	require.NoError(t, svc.AddMemory(ctx, userKey, "alpha", nil))
+	require.NoError(t, svc.AddMemory(ctx, userKey, "beta", nil))
+
+	entries, err := svc.ReadMemories(ctx, userKey, 1)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+}
+
 func TestService_UpdateMemory_NotFound(t *testing.T) {
 	db, cleanup := openTempSQLiteDB(t)
 	defer cleanup()
@@ -311,4 +467,125 @@ func TestServiceOpts_WithEmbedder(t *testing.T) {
 
 	WithEmbedder(e)(&opts)
 	require.Equal(t, e, opts.embedder)
+}
+
+func TestServiceOpts_Coverage(t *testing.T) {
+	opts := defaultOptions.clone()
+
+	WithTableName("memories_v2")(&opts)
+	require.Equal(t, "memories_v2", opts.tableName)
+
+	WithIndexDimension(123)(&opts)
+	require.Equal(t, 123, opts.indexDimension)
+
+	WithMaxResults(7)(&opts)
+	require.Equal(t, 7, opts.maxResults)
+
+	WithMemoryLimit(9)(&opts)
+	require.Equal(t, 9, opts.memoryLimit)
+
+	WithSoftDelete(true)(&opts)
+	require.True(t, opts.softDelete)
+
+	WithSkipDBInit(true)(&opts)
+	require.True(t, opts.skipDBInit)
+
+	WithExtractor(&fakeExtractor{})(&opts)
+	require.NotNil(t, opts.extractor)
+
+	WithAsyncMemoryNum(0)(&opts)
+	require.Equal(t, imemory.DefaultAsyncMemoryNum, opts.asyncMemoryNum)
+	WithAsyncMemoryNum(2)(&opts)
+	require.Equal(t, 2, opts.asyncMemoryNum)
+
+	WithMemoryQueueSize(0)(&opts)
+	require.Equal(t, imemory.DefaultMemoryQueueSize, opts.memoryQueueSize)
+	WithMemoryQueueSize(3)(&opts)
+	require.Equal(t, 3, opts.memoryQueueSize)
+
+	WithMemoryJobTimeout(time.Second)(&opts)
+	require.Equal(t, time.Second, opts.memoryJobTimeout)
+
+	WithCustomTool(
+		memory.ClearToolName,
+		func() tool.Tool { return nil },
+	)(&opts)
+	_, ok := opts.toolCreators[memory.ClearToolName]
+	require.True(t, ok)
+	_, ok = opts.enabledTools[memory.ClearToolName]
+	require.True(t, ok)
+
+	WithCustomTool("bad_tool", func() tool.Tool { return nil })(&opts)
+	WithCustomTool(memory.ClearToolName, nil)(&opts)
+
+	opts2 := ServiceOpts{}
+	WithToolEnabled(memory.LoadToolName, true)(&opts2)
+	_, ok = opts2.enabledTools[memory.LoadToolName]
+	require.True(t, ok)
+	require.True(t, opts2.userExplicitlySet[memory.LoadToolName])
+
+	WithToolEnabled(memory.LoadToolName, false)(&opts2)
+	_, ok = opts2.enabledTools[memory.LoadToolName]
+	require.False(t, ok)
+	require.True(t, opts2.userExplicitlySet[memory.LoadToolName])
+
+	WithToolEnabled("bad_tool", true)(&opts2)
+}
+
+func TestNewService_SkipDBInit(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mockEmbedder{dimension: 2}),
+		WithIndexDimension(2),
+		WithSkipDBInit(true),
+	)
+	require.NoError(t, err)
+	require.NoError(t, svc.Close())
+}
+
+func TestService_EnqueueAutoMemoryJob_NoWorker(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mockEmbedder{dimension: 2}),
+		WithIndexDimension(2),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	require.NoError(t, svc.EnqueueAutoMemoryJob(context.Background(), nil))
+}
+
+func TestService_Close_NilDB(t *testing.T) {
+	noop := &Service{}
+	require.NoError(t, noop.Close())
+}
+
+func TestParseTopics(t *testing.T) {
+	out, err := parseTopics("")
+	require.NoError(t, err)
+	require.Nil(t, out)
+
+	out, err = parseTopics("{")
+	require.Error(t, err)
+	require.Nil(t, out)
+}
+
+func TestNewService_InitDBError(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+	require.NoError(t, db.Close())
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mockEmbedder{dimension: 2}),
+		WithIndexDimension(2),
+	)
+	require.Error(t, err)
+	require.Nil(t, svc)
 }

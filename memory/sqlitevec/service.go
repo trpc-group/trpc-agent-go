@@ -399,7 +399,10 @@ WHERE app_name = ? AND user_id = ? AND memory_id = ?`
 }
 
 // DeleteMemory deletes a memory for a user.
-func (s *Service) DeleteMemory(ctx context.Context, memoryKey memory.Key) error {
+func (s *Service) DeleteMemory(
+	ctx context.Context,
+	memoryKey memory.Key,
+) error {
 	if err := memoryKey.CheckMemoryKey(); err != nil {
 		return err
 	}
@@ -439,7 +442,10 @@ func (s *Service) DeleteMemory(ctx context.Context, memoryKey memory.Key) error 
 }
 
 // ClearMemories clears all memories for a user.
-func (s *Service) ClearMemories(ctx context.Context, userKey memory.UserKey) error {
+func (s *Service) ClearMemories(
+	ctx context.Context,
+	userKey memory.UserKey,
+) error {
 	if err := userKey.CheckUserKey(); err != nil {
 		return err
 	}
@@ -549,7 +555,7 @@ func (s *Service) SearchMemories(
 	}
 
 	const searchSQL = `SELECT
-memory_id, memory_content, topics, created_at, updated_at, distance
+memory_id, memory_content, topics, created_at, updated_at
 FROM %s
 WHERE embedding MATCH ` + sqlVectorFromBlob + `
 AND k = ?
@@ -573,7 +579,7 @@ AND app_name = ? AND user_id = ?`
 
 	results := make([]*memory.Entry, 0)
 	for rows.Next() {
-		entry, err := scanEntryWithDistance(rows, userKey.AppName, userKey.UserID)
+		entry, err := scanEntry(rows, userKey.AppName, userKey.UserID)
 		if err != nil {
 			return nil, err
 		}
@@ -607,54 +613,6 @@ func scanEntry(
 	); err != nil {
 		return nil, fmt.Errorf("scan memory entry: %w", err)
 	}
-
-	topics, err := parseTopics(topicsJSON)
-	if err != nil {
-		return nil, err
-	}
-
-	createdAt := time.Unix(0, createdAtNs).UTC()
-	updatedAt := time.Unix(0, updatedAtNs).UTC()
-
-	return &memory.Entry{
-		ID:      memoryID,
-		AppName: appName,
-		UserID:  userID,
-		Memory: &memory.Memory{
-			Memory:      memoryContent,
-			Topics:      topics,
-			LastUpdated: &updatedAt,
-		},
-		CreatedAt: createdAt,
-		UpdatedAt: updatedAt,
-	}, nil
-}
-
-func scanEntryWithDistance(
-	rows *sql.Rows,
-	appName string,
-	userID string,
-) (*memory.Entry, error) {
-	var distance float64
-
-	var (
-		memoryID      string
-		memoryContent string
-		topicsJSON    string
-		createdAtNs   int64
-		updatedAtNs   int64
-	)
-	if err := rows.Scan(
-		&memoryID,
-		&memoryContent,
-		&topicsJSON,
-		&createdAtNs,
-		&updatedAtNs,
-		&distance,
-	); err != nil {
-		return nil, fmt.Errorf("scan memory entry with distance: %w", err)
-	}
-	_ = distance
 
 	topics, err := parseTopics(topicsJSON)
 	if err != nil {

@@ -122,7 +122,7 @@ func TestService_SoftDelete(t *testing.T) {
 	require.Len(t, entries, 0)
 }
 
-func TestService_MemoryLimitExceeded(t *testing.T) {
+func TestService_MemoryLimitExceeded_NewOnly(t *testing.T) {
 	db, cleanup := openTempSQLiteDB(t)
 	defer cleanup()
 
@@ -134,7 +134,44 @@ func TestService_MemoryLimitExceeded(t *testing.T) {
 	userKey := memory.UserKey{AppName: "app", UserID: "u1"}
 
 	require.NoError(t, svc.AddMemory(ctx, userKey, "A", nil))
+
+	require.NoError(t, svc.AddMemory(ctx, userKey, "A", nil))
+
 	err = svc.AddMemory(ctx, userKey, "B", nil)
+	require.Error(t, err)
+}
+
+func TestService_SoftDelete_MemoryLimit_ResurrectBlocked(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		db,
+		WithSoftDelete(true),
+		WithMemoryLimit(1),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "u1"}
+
+	require.NoError(t, svc.AddMemory(ctx, userKey, "A", nil))
+
+	entries, err := svc.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+
+	memKey := memory.Key{
+		AppName:  userKey.AppName,
+		UserID:   userKey.UserID,
+		MemoryID: entries[0].ID,
+	}
+	require.NoError(t, svc.DeleteMemory(ctx, memKey))
+
+	require.NoError(t, svc.AddMemory(ctx, userKey, "B", nil))
+
+	err = svc.AddMemory(ctx, userKey, "A", nil)
 	require.Error(t, err)
 }
 
@@ -172,6 +209,52 @@ func TestService_ClearMemories_HardDelete(t *testing.T) {
 	require.Len(t, entries, 0)
 }
 
+func TestService_Search_EmptyQuery(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(db)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	results, err := svc.SearchMemories(
+		context.Background(),
+		memory.UserKey{AppName: "app", UserID: "u1"},
+		" ",
+	)
+	require.NoError(t, err)
+	require.Empty(t, results)
+}
+
+func TestService_Search_SoftDeleteFiltered(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(db, WithSoftDelete(true))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "u1"}
+
+	require.NoError(t, svc.AddMemory(ctx, userKey, "A", nil))
+
+	entries, err := svc.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+
+	memKey := memory.Key{
+		AppName:  userKey.AppName,
+		UserID:   userKey.UserID,
+		MemoryID: entries[0].ID,
+	}
+	require.NoError(t, svc.DeleteMemory(ctx, memKey))
+
+	results, err := svc.SearchMemories(ctx, userKey, "A")
+	require.NoError(t, err)
+	require.Empty(t, results)
+}
+
 func TestService_Tools_EnqueueAutoMemoryJob(t *testing.T) {
 	db, cleanup := openTempSQLiteDB(t)
 	defer cleanup()
@@ -191,6 +274,16 @@ func TestWithTableName_InvalidPanics(t *testing.T) {
 		opt := WithTableName("bad-name")
 		opt(&ServiceOpts{})
 	})
+}
+
+func TestNewService_InitDBError(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+	require.NoError(t, db.Close())
+
+	svc, err := NewService(db)
+	require.Error(t, err)
+	require.Nil(t, svc)
 }
 
 type fakeExtractor struct{}
