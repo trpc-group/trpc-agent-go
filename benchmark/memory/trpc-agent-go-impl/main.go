@@ -17,7 +17,10 @@
 //
 // Memory Backends:
 //   - inmemory: In-memory storage (keyword-based).
+//   - sqlite: SQLite storage (keyword-based).
+//   - sqlitevec: SQLite + sqlite-vec (vector similarity).
 //   - pgvector: PostgreSQL with vector similarity.
+//   - mysql: MySQL storage (full-text search).
 //
 // Metrics (aligned with LoCoMo paper):
 //   - F1 Score: Token-level F1.
@@ -67,7 +70,8 @@ var (
 	flagMemoryBackends = flag.String(
 		"memory-backend",
 		"inmemory",
-		"Memory backends (comma-separated): inmemory, pgvector, mysql",
+		"Memory backends (comma-separated): "+
+			"inmemory, sqlite, sqlitevec, pgvector, mysql",
 	)
 	flagPGVectorDSN = flag.String(
 		"pgvector-dsn",
@@ -77,7 +81,8 @@ var (
 	flagEmbedModel = flag.String(
 		"embed-model",
 		"",
-		"Embedding model for pgvector (env EMBED_MODEL_NAME or text-embedding-3-small)",
+		"Embedding model for vector backends (pgvector, sqlitevec) "+
+			"(env EMBED_MODEL_NAME or text-embedding-3-small)",
 	)
 	flagMySQLDSN = flag.String(
 		"mysql-dsn",
@@ -104,10 +109,14 @@ var (
 )
 
 const (
-	pgvectorTableDefault = "memory_eval"
-	pgvectorTableAuto    = "memory_eval_auto"
-	mysqlTableDefault    = "memory_eval_mysql"
-	mysqlTableAuto       = "memory_eval_auto_mysql"
+	pgvectorTableDefault  = "memory_eval"
+	pgvectorTableAuto     = "memory_eval_auto"
+	mysqlTableDefault     = "memory_eval_mysql"
+	mysqlTableAuto        = "memory_eval_auto_mysql"
+	sqliteTableDefault    = "memory_eval_sqlite"
+	sqliteTableAuto       = "memory_eval_auto_sqlite"
+	sqliteVecTableDefault = "memory_eval_sqlitevec"
+	sqliteVecTableAuto    = "memory_eval_auto_sqlitevec"
 
 	autoMemoryAsyncWorkers = 3
 	autoMemoryQueueSize    = 200
@@ -437,9 +446,11 @@ func validateFlags() {
 	}
 
 	validBackends := map[string]bool{
-		"inmemory": true,
-		"pgvector": true,
-		"mysql":    true,
+		"inmemory":  true,
+		"sqlite":    true,
+		"sqlitevec": true,
+		"pgvector":  true,
+		"mysql":     true,
 	}
 	for _, b := range parseMemoryBackends(*flagMemoryBackends) {
 		if !validBackends[b] {
@@ -483,6 +494,32 @@ func getEmbedModelName() string {
 		return env
 	}
 	return "text-embedding-3-small"
+}
+
+const (
+	envOpenAIBaseURL          = "OPENAI_BASE_URL"
+	envOpenAIEmbeddingAPIKey  = "OPENAI_EMBEDDING_API_KEY"
+	envOpenAIEmbeddingBaseURL = "OPENAI_EMBEDDING_BASE_URL"
+)
+
+func newEmbeddingEmbedder(modelName string) *openai.Embedder {
+	opts := []openai.Option{
+		openai.WithModel(modelName),
+	}
+
+	if apiKey := os.Getenv(envOpenAIEmbeddingAPIKey); apiKey != "" {
+		opts = append(opts, openai.WithAPIKey(apiKey))
+	}
+
+	baseURL := os.Getenv(envOpenAIEmbeddingBaseURL)
+	if baseURL == "" {
+		baseURL = os.Getenv(envOpenAIBaseURL)
+	}
+	if baseURL != "" {
+		opts = append(opts, openai.WithBaseURL(baseURL))
+	}
+
+	return openai.New(opts...)
 }
 
 func getPGVectorDSN() string {
@@ -548,6 +585,10 @@ func createMemoryService(
 		return createPGVectorService(opts)
 	case "mysql":
 		return createMySQLService(opts)
+	case "sqlite":
+		return createSQLiteService(opts)
+	case "sqlitevec":
+		return createSQLiteVecService(opts)
 	default:
 		return createInMemoryService(opts), nil
 	}
@@ -563,7 +604,7 @@ func createPGVectorService(
 		)
 	}
 	embedModelName := getEmbedModelName()
-	emb := openai.New(openai.WithModel(embedModelName))
+	emb := newEmbeddingEmbedder(embedModelName)
 	tableName := pgvectorTableDefault
 	var ext extractor.MemoryExtractor
 	if opts.enableExtractor {

@@ -6,16 +6,22 @@ replace (
 	trpc.group/trpc-go/trpc-agent-go => ../../../
 	trpc.group/trpc-go/trpc-agent-go/memory/mysql => ../../../memory/mysql
 	trpc.group/trpc-go/trpc-agent-go/memory/pgvector => ../../../memory/pgvector
+	trpc.group/trpc-go/trpc-agent-go/memory/sqlite => ../../../memory/sqlite
+	trpc.group/trpc-go/trpc-agent-go/memory/sqlitevec => ../../../memory/sqlitevec
 )
 
 require (
+	github.com/mattn/go-sqlite3 v1.14.32
 	trpc.group/trpc-go/trpc-agent-go v1.5.0
 	trpc.group/trpc-go/trpc-agent-go/memory/mysql v1.5.0
 	trpc.group/trpc-go/trpc-agent-go/memory/pgvector v1.5.0
+	trpc.group/trpc-go/trpc-agent-go/memory/sqlite v1.5.0
+	trpc.group/trpc-go/trpc-agent-go/memory/sqlitevec v1.5.0
 )
 
 require (
 	filippo.io/edwards25519 v1.1.0 // indirect
+	github.com/asg017/sqlite-vec-go-bindings v0.1.6 // indirect
 	github.com/bmatcuk/doublestar/v4 v4.9.1 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/go-logr/logr v1.4.2 // indirect
