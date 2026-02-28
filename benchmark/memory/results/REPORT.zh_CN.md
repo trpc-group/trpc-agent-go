@@ -476,7 +476,7 @@ Agentic（pgvector）在记忆方案中取得最高多跳 F1（0.178），超越
 
 ### 5.1 各类别 F1 对比
 
-**表 8：各类别 F1（不含 adversarial）**
+**表 10：各类别 F1（不含 adversarial）**
 
 | 方法 | Single-Hop | Multi-Hop | Open-Domain | Temporal | Overall | 来源 |
 | --- | ---: | ---: | ---: | ---: | ---: | --- |
@@ -590,7 +590,7 @@ MemoryBank          |======                                    | 0.067
 
 ### 5.2 Overall LLM-as-Judge 对比
 
-**表 9：Overall LLM-as-Judge 与延迟**
+**表 11：Overall LLM-as-Judge 与延迟**
 
 | 方法 | Overall J | p95 延迟 (s) | 记忆 Tokens | 来源 |
 | --- | ---: | ---: | ---: | --- |

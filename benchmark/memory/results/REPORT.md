@@ -485,7 +485,7 @@ Source: Mem0 Table 1 & Table 2 (Chhikara et al., 2025, arXiv:2504.19413)
 
 ### 5.1 Per-Category F1 Comparison
 
-**Table 8: F1 by Category (Excluding Adversarial)**
+**Table 10: F1 by Category (Excluding Adversarial)**
 
 | Method | Single-Hop | Multi-Hop | Open-Domain | Temporal | Overall | Source |
 | --- | ---: | ---: | ---: | ---: | ---: | --- |
@@ -599,7 +599,7 @@ MemoryBank          |======                                    | 0.067
 
 ### 5.2 Overall LLM-as-Judge Comparison
 
-**Table 9: Overall LLM-as-Judge and Latency**
+**Table 11: Overall LLM-as-Judge and Latency**
 
 | Method | Overall J | p95 Latency (s) | Memory Tokens | Source |
 | --- | ---: | ---: | ---: | --- |
