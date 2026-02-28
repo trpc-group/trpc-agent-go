@@ -217,7 +217,7 @@
 作为参考，表 7 中 Auto pgvector 在 `locomo10_1` 的 F1 为 **0.311**，
 在 `locomo10_6` 的 F1 为 **0.204**（同数据集/模型）。
 
-**表 8A：总体指标与 token 消耗（Auto / 199 QA）**
+**端到端结果：总体指标与 token 消耗（Auto / 199 QA）**
 
 | 后端 | #QA | F1 | BLEU | LLM Score | Prompt Tokens | Completion Tokens | Total Tokens | LLM Calls | 平均延迟 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -235,7 +235,7 @@
 
 - 样本：`locomo10_6`（158 个 QA，包含全部类别）
 
-**表 8B：总体指标与 token 消耗（Auto / 158 QA）**
+**端到端结果：总体指标与 token 消耗（Auto / 158 QA）**
 
 | 后端 | #QA | F1 | BLEU | LLM Score | Prompt Tokens | Completion Tokens | Total Tokens | LLM Calls | 平均延迟 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -251,7 +251,7 @@
 
 **总体结论（locomo10_1 + locomo10_6）**：
 
-- SQLiteVec 在我们的子集实验中稳定地将 prompt token 降低到约 1/3～1/4。
+- SQLiteVec 在我们的子集实验中稳定地将 prompt token 降低到约 1/3 到 1/4。
 - 默认 top-k=10 下，答案质量的变化与样本相关；调大 top-k 可能提升召回，
   但也会增加 prompt token。
 

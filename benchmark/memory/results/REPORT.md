@@ -218,7 +218,7 @@ main experiments, but limits to a single sample to control cost.
 For reference, Table 7 reports Auto pgvector F1 of **0.311** on `locomo10_1`
 and **0.204** on `locomo10_6` (same dataset/model).
 
-**Table 8A: Overall Metrics and Token Usage (Auto / 199 QA)**
+**End-to-end results: Overall Metrics and Token Usage (Auto / 199 QA)**
 
 | Backend | #QA | F1 | BLEU | LLM Score | Prompt Tokens | Completion Tokens | Total Tokens | LLM Calls | Avg Latency |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -238,7 +238,7 @@ We also rerun the same configuration on another representative sample.
 
 - Sample: `locomo10_6` (158 QA, all categories)
 
-**Table 8B: Overall Metrics and Token Usage (Auto / 158 QA)**
+**End-to-end results: Overall Metrics and Token Usage (Auto / 158 QA)**
 
 | Backend | #QA | F1 | BLEU | LLM Score | Prompt Tokens | Completion Tokens | Total Tokens | LLM Calls | Avg Latency |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
