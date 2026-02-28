@@ -289,6 +289,45 @@ We also rerun the same configuration on another representative sample.
   top-k retrieval set (default 10), while the SQLite backend can return a much
   larger set of keyword matches.
 
+**Subset run C: Vector top-k sweep + multi-search ablation (Auto / Full categories)**
+
+The previous subset runs compare `sqlite` vs `sqlitevec` at the default
+configuration (top-k=10, single search). To understand whether "more retrieved
+memories" (higher top-k) or "more searches" (multiple memory_search calls)
+improves end-to-end answer quality, we run a small sweep on a single sample.
+
+**Configuration**:
+
+- Dataset: LoCoMo `locomo10.json`
+- Sample: `locomo10_1` (199 QA, all categories)
+- Scenario: `auto`
+- Model: `gpt-4o-mini`
+- LLM Judge: disabled (F1/BLEU only, to control cost)
+
+**Table 9: Top-k and Multi-search Sweep (Auto / locomo10_1 / 199 QA)**
+
+| Backend | vector-topk | qa-search-passes | F1 | BLEU | Prompt Tokens | Avg Prompt/QA | Avg Latency |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| SQLite | - | 1 | 0.299 | 0.283 | 1,322,360 | 6,645 | 3,316ms |
+| SQLiteVec | 5 | 1 | 0.320 | 0.296 | 346,253 | 1,740 | 4,182ms |
+| SQLiteVec | 10 | 1 | 0.343 | 0.315 | 398,751 | 2,004 | 4,352ms |
+| SQLiteVec | 20 | 1 | 0.329 | 0.308 | 621,790 | 3,125 | 4,180ms |
+| SQLiteVec | 40 | 1 | 0.327 | 0.303 | 965,423 | 4,851 | 4,460ms |
+| SQLiteVec | 10 | 2 | 0.342 | 0.312 | 659,981 | 3,316 | 5,198ms |
+
+**Interpretation**:
+
+- In this run, **SQLiteVec (top-k=10) improves F1** over SQLite
+  (**0.343 vs 0.299**) while using **~3.3x fewer prompt tokens**
+  (bounded retrieval).
+- Simply **increasing top-k does not monotonically improve quality** in this
+  benchmark setup: top-k=20/40 increases prompt tokens, but slightly lowers
+  F1/BLEU. This suggests the QA agent can be sensitive to noise in retrieved
+  memories, not just recall.
+- `qa-search-passes=2` (forced double search) improves some categories (e.g.
+  multi-hop) but does **not improve overall F1**, and increases both tokens and
+  latency. It is useful as a diagnostic tool rather than a default.
+
 **Retrieval microbenchmark (curated queries)**:
 
 To isolate retrieval quality from the end-to-end QA pipeline, we also run a

@@ -65,6 +65,22 @@ Note: token usage above counts QA agent model calls only; it excludes
 embedding requests and LLM-as-Judge calls. See `REPORT.md` for full
 configuration and breakdown.
 
+**Top-k sweep (Auto / locomo10_1 / LLM Judge disabled)**:
+
+To understand how `sqlitevec` quality changes with retrieval size, we run a
+small sweep on `locomo10_1` (199 QA). In this run, `sqlitevec` achieves the
+best quality at the default top-k=10; increasing top-k increases tokens but
+does not improve F1.
+
+| Backend | vector-topk | qa-search-passes | F1 | Prompt Tokens | Avg Prompt/QA |
+|---------|------------:|-----------------:|---:|--------------:|--------------:|
+| sqlite | - | 1 | 0.299 | 1,322,360 | 6,645 |
+| sqlitevec | 5 | 1 | 0.320 | 346,253 | 1,740 |
+| sqlitevec | 10 | 1 | 0.343 | 398,751 | 2,004 |
+| sqlitevec | 20 | 1 | 0.329 | 621,790 | 3,125 |
+| sqlitevec | 40 | 1 | 0.327 | 965,423 | 4,851 |
+| sqlitevec | 10 | 2 | 0.342 | 659,981 | 3,316 |
+
 ## Directory Structure
 
 Note: `data_*` and `log_*.log` are large, machine-generated artifacts and are

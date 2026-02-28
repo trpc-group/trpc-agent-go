@@ -90,6 +90,25 @@ We also rerun the same configuration on `locomo10_6` (158 QA):
 | sqlite | 0.116 | 80,184 | 6,168 |
 | sqlitevec | 0.116 | 26,483 | 2,037 |
 
+**Subset run C (top-k sweep + multi-search ablation)**:
+
+To study whether "retrieving more memories" (higher top-k) or "searching more
+times" (multiple `memory_search` calls) improves answer quality, we run a small
+sweep on `locomo10_1` (LLM Judge disabled; F1/BLEU only).
+
+| Backend | vector-topk | qa-search-passes | F1 | Prompt Tokens | Avg Prompt/QA |
+|---------|------------:|-----------------:|---:|--------------:|--------------:|
+| sqlite | - | 1 | 0.299 | 1,322,360 | 6,645 |
+| sqlitevec | 5 | 1 | 0.320 | 346,253 | 1,740 |
+| sqlitevec | 10 | 1 | 0.343 | 398,751 | 2,004 |
+| sqlitevec | 20 | 1 | 0.329 | 621,790 | 3,125 |
+| sqlitevec | 40 | 1 | 0.327 | 965,423 | 4,851 |
+| sqlitevec | 10 | 2 | 0.342 | 659,981 | 3,316 |
+
+Takeaway: top-k does not monotonically improve quality in this setup; higher
+top-k increases tokens and can slightly reduce F1. See `results/REPORT.md` for
+details.
+
 ## Evaluation Metrics
 
 Aligned with LoCoMo paper and industry standards (Mem0, MemMachine):
@@ -175,7 +194,9 @@ go run . -scenario agentic,auto -memory-backend pgvector,mysql
 | `-pgvector-dsn`     | (env)                  | PostgreSQL DSN for pgvector            |
 | `-mysql-dsn`        | (env)                  | MySQL DSN for mysql backend            |
 | `-embed-model`      | text-embedding-3-small | Embedding model for vector backends    |
+| `-vector-topk`      | 10                     | Top-k results for vector backends      |
 | `-qa-history-turns` | 0                      | Inject N conversation turns as context |
+| `-qa-search-passes` | 1                      | memory_search calls per QA             |
 | `-sample-id`        |                        | Filter by sample ID                    |
 | `-max-tasks`        | 0                      | Maximum tasks (0=all)                  |
 | `-llm-judge`        | false                  | Enable LLM-as-Judge                    |

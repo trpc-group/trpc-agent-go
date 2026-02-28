@@ -283,6 +283,43 @@
 - 在该子集中，答案质量（F1/BLEU）一致，但 **SQLiteVec 的 prompt token 消耗约为 SQLite 的 1/3**。
   主要原因是 SQLiteVec 返回的是有界的 top-k 结果（默认 10），而 SQLite 后端可能返回更大规模的关键词匹配集合。
 
+**子集实验 C：向量 top-k 扫参 + 多次检索消融（Auto / 全类别）**
+
+前面的子集实验主要对比 `sqlite` 与 `sqlitevec` 在默认配置下的表现
+（top-k=10、单次检索）。为了回答“多取一些记忆（更大的 top-k）”或“多检索几次
+（多次 memory_search）”是否能提升端到端答案质量，我们在单个样本上做了一个小
+范围扫参。
+
+**实验配置**：
+
+- 数据集：LoCoMo `locomo10.json`
+- 样本：`locomo10_1`（199 个 QA，包含全部类别）
+- 场景：`auto`
+- 模型：`gpt-4o-mini`
+- LLM 评判：关闭（仅统计 F1/BLEU，以控制成本）
+
+**表 9：Top-k 与多次检索扫参结果（Auto / locomo10_1 / 199 QA）**
+
+| 后端 | vector-topk | qa-search-passes | F1 | BLEU | Prompt Tokens | Avg Prompt/QA | 平均延迟 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| SQLite | - | 1 | 0.299 | 0.283 | 1,322,360 | 6,645 | 3,316ms |
+| SQLiteVec | 5 | 1 | 0.320 | 0.296 | 346,253 | 1,740 | 4,182ms |
+| SQLiteVec | 10 | 1 | 0.343 | 0.315 | 398,751 | 2,004 | 4,352ms |
+| SQLiteVec | 20 | 1 | 0.329 | 0.308 | 621,790 | 3,125 | 4,180ms |
+| SQLiteVec | 40 | 1 | 0.327 | 0.303 | 965,423 | 4,851 | 4,460ms |
+| SQLiteVec | 10 | 2 | 0.342 | 0.312 | 659,981 | 3,316 | 5,198ms |
+
+**解读**：
+
+- 在该次运行中，**SQLiteVec（top-k=10）在 F1 上优于 SQLite**
+  （**0.343 vs 0.299**），同时 **prompt token 约减少 ~3.3x**
+  （有界检索带来的 token 控制）。
+- 在当前 benchmark 设置下，**top-k 并非越大越好**：top-k=20/40 虽然显著增加了
+  prompt token，但 F1/BLEU 略有下降。说明 QA Agent 对检索噪声较敏感，端到端质量
+  不是单纯由召回率决定。
+- `qa-search-passes=2`（强制两次检索）在部分类别上有改善（例如 multi-hop），但
+  **总体 F1 没有提升**，同时 token 与延迟都会上升，更适合作为诊断手段而非默认配置。
+
 **检索微基准（curated queries）**：
 
 为了将“检索效果”与端到端 QA 解耦，我们还运行了一个面向检索的示例
