@@ -42,6 +42,29 @@ This directory stores memory benchmark evaluation results.
    to answer unanswerable questions).
 4. Open-domain LLM Score improves dramatically with history (+92.9%).
 
+## SQLite vs SQLiteVec (Subset Runs)
+
+We also run focused subset experiments comparing local SQLite keyword
+matching (`sqlite`) vs sqlite-vec semantic search (`sqlitevec`).
+
+**End-to-end QA subset (Auto / locomo10_1 / 199 QA, LLM Judge enabled)**:
+
+| Backend | F1 | LLM Score | Prompt Tokens | Avg Prompt/QA |
+|---------|---:|----------:|--------------:|--------------:|
+| sqlite | 0.327 | 0.370 | 1,287,813 | 6,471 |
+| sqlitevec | 0.307 | 0.325 | 407,969 | 2,050 |
+
+**End-to-end QA subset (Auto / locomo10_6 / 158 QA, LLM Judge enabled)**:
+
+| Backend | F1 | LLM Score | Prompt Tokens | Avg Prompt/QA |
+|---------|---:|----------:|--------------:|--------------:|
+| sqlite | 0.269 | 0.289 | 1,296,580 | 8,206 |
+| sqlitevec | 0.274 | 0.295 | 362,903 | 2,297 |
+
+Note: token usage above counts QA agent model calls only; it excludes
+embedding requests and LLM-as-Judge calls. See `REPORT.md` for full
+configuration and breakdown.
+
 ## Directory Structure
 
 Note: `data_*` and `log_*.log` are large, machine-generated artifacts and are
