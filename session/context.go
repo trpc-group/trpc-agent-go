@@ -31,9 +31,15 @@ func (sess *Session) MaskEvents(ids ...string) int {
 		sess.maskedEventIDs = make(map[string]bool, len(ids))
 	}
 
+	// Build a set of existing event IDs so we only mask IDs that are present.
+	existingIDs := make(map[string]struct{}, len(sess.Events))
+	for _, e := range sess.Events {
+		existingIDs[e.ID] = struct{}{}
+	}
+
 	masked := 0
 	for _, id := range ids {
-		if !sess.maskedEventIDs[id] {
+		if _, exists := existingIDs[id]; exists && !sess.maskedEventIDs[id] {
 			sess.maskedEventIDs[id] = true
 			masked++
 		}
@@ -121,4 +127,18 @@ func (sess *Session) MaskedEventCount() int {
 		}
 	}
 	return count
+}
+
+// IsEventMasked returns whether a given event ID is currently masked.
+//
+// IMPORTANT: This method does NOT acquire EventMu. The caller MUST hold
+// EventMu (at least RLock) before calling this method. This design allows
+// ContentRequestProcessor (which already locks EventMu when iterating
+// sess.Events) to check mask status without a nested lock.
+func (sess *Session) IsEventMasked(id string) bool {
+	if sess == nil || len(sess.maskedEventIDs) == 0 {
+		return false
+	}
+
+	return sess.maskedEventIDs[id]
 }

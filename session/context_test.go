@@ -72,6 +72,25 @@ func TestMaskEvents(t *testing.T) {
 			t.Fatalf("expected 0, got %d", n)
 		}
 	})
+
+	t.Run("ignores non-existent event IDs", func(t *testing.T) {
+		sess := NewSession("app", "user", "sess-nonexist")
+		sess.Events = []event.Event{
+			newTestEvent("e1"),
+			newTestEvent("e2"),
+		}
+
+		// "e3" does not exist in Events — should not be counted.
+		n := sess.MaskEvents("e1", "e3")
+		if n != 1 {
+			t.Fatalf("expected 1 masked (only e1), got %d", n)
+		}
+
+		visible := sess.GetVisibleEvents()
+		if len(visible) != 1 || visible[0].ID != "e2" {
+			t.Fatalf("expected only e2 visible, got %v", visible)
+		}
+	})
 }
 
 func TestUnmaskEvents(t *testing.T) {
@@ -210,5 +229,73 @@ func TestClonePreservesMaskedEvents(t *testing.T) {
 	cloned.MaskEvents("e3")
 	if sess.MaskedEventCount() != 1 {
 		t.Fatal("original mask should be unaffected by clone mutation")
+	}
+}
+
+func TestIsEventMasked(t *testing.T) {
+	sess := NewSession("app", "user", "sess-masked")
+	sess.Events = []event.Event{
+		newTestEvent("e1"),
+		newTestEvent("e2"),
+		newTestEvent("e3"),
+	}
+	sess.MaskEvents("e1", "e3")
+
+	tests := []struct {
+		name    string
+		session *Session
+		id      string
+		want    bool
+	}{
+		{
+			name:    "masked event returns true",
+			session: sess,
+			id:      "e1",
+			want:    true,
+		},
+		{
+			name:    "another masked event returns true",
+			session: sess,
+			id:      "e3",
+			want:    true,
+		},
+		{
+			name:    "unmasked event returns false",
+			session: sess,
+			id:      "e2",
+			want:    false,
+		},
+		{
+			name:    "non-existent event returns false",
+			session: sess,
+			id:      "e999",
+			want:    false,
+		},
+		{
+			name:    "nil session returns false",
+			session: nil,
+			id:      "e1",
+			want:    false,
+		},
+		{
+			name:    "empty mask map returns false",
+			session: NewSession("app", "user", "sess-empty-mask"),
+			id:      "e1",
+			want:    false,
+		},
+		{
+			name:    "empty string ID returns false",
+			session: sess,
+			want:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.session.IsEventMasked(tt.id)
+			if got != tt.want {
+				t.Fatalf("IsEventMasked(%q) = %v, want %v", tt.id, got, tt.want)
+			}
+		})
 	}
 }

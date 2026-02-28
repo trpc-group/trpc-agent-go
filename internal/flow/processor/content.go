@@ -457,6 +457,10 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 	var events []event.Event
 	inv.Session.EventMu.RLock()
 	for _, evt := range inv.Session.Events {
+		// Skip events that have been masked via Pensieve delete_context.
+		if inv.Session.IsEventMasked(evt.ID) {
+			continue
+		}
 		shouldInclude, isInvocationMessage := p.shouldIncludeEvent(evt, inv, filter, isZeroTime, since)
 		if !shouldInclude {
 			continue
@@ -605,6 +609,10 @@ func (p *ContentRequestProcessor) getCurrentInvocationMessages(inv *agent.Invoca
 	var events []event.Event
 	inv.Session.EventMu.RLock()
 	for _, evt := range inv.Session.Events {
+		// Skip events that have been masked via Pensieve delete_context.
+		if inv.Session.IsEventMasked(evt.ID) {
+			continue
+		}
 		// Only include events from current invocation
 		if evt.InvocationID != inv.InvocationID {
 			continue
