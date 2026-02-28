@@ -6,6 +6,10 @@ http:
 model:
   mode: "mock"
 
+agent:
+  instruction: "You are a helpful assistant for terminal chat."
+  system_prompt_dir: "./examples/stdin_chat/prompts/system"
+
 channels:
   - type: "stdin"
     name: "terminal"

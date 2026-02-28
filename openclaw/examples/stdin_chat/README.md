@@ -47,6 +47,8 @@ To stop, type `/quit` or `/exit`.
 
 - `channels`: starts the `stdin` channel.
 - `tools.providers`: loads the `echotool` tool provider.
+- `agent.system_prompt_dir`: loads multiple `.md` files into the agent's
+  system prompt (alphabetical order).
 
 ## Notes
 
