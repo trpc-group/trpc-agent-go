@@ -11,12 +11,14 @@
 package util
 
 import (
+	"database/sql"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	_ "github.com/mattn/go-sqlite3"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -26,6 +28,8 @@ import (
 	memorypgvector "trpc.group/trpc-go/trpc-agent-go/memory/pgvector"
 	memorypostgres "trpc.group/trpc-go/trpc-agent-go/memory/postgres"
 	memoryredis "trpc.group/trpc-go/trpc-agent-go/memory/redis"
+	memorysqlite "trpc.group/trpc-go/trpc-agent-go/memory/sqlite"
+	memorysqlitevec "trpc.group/trpc-go/trpc-agent-go/memory/sqlitevec"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -37,11 +41,13 @@ type MemoryType string
 
 // Memory type constants.
 const (
-	MemoryInMemory MemoryType = "inmemory"
-	MemoryRedis    MemoryType = "redis"
-	MemoryPostgres MemoryType = "postgres"
-	MemoryPGVector MemoryType = "pgvector"
-	MemoryMySQL    MemoryType = "mysql"
+	MemoryInMemory  MemoryType = "inmemory"
+	MemorySQLite    MemoryType = "sqlite"
+	MemorySQLiteVec MemoryType = "sqlitevec"
+	MemoryRedis     MemoryType = "redis"
+	MemoryPostgres  MemoryType = "postgres"
+	MemoryPGVector  MemoryType = "pgvector"
+	MemoryMySQL     MemoryType = "mysql"
 )
 
 // MemoryServiceConfig holds configuration for creating a memory service.
@@ -87,7 +93,8 @@ func DefaultRunnerConfig() RunnerConfig {
 // - Auto mode: cfg.Extractor != nil, automatically extracts memories from conversations
 //
 // Parameters:
-//   - memoryType: one of inmemory, redis, postgres, pgvector, mysql
+//   - memoryType: one of inmemory, sqlite, sqlitevec, redis, postgres,
+//     pgvector, mysql
 //   - cfg: memory service configuration
 //   - SoftDelete: enable soft delete for SQL backends
 //   - Extractor: memory extractor for auto mode (nil = manual mode)
@@ -97,12 +104,18 @@ func DefaultRunnerConfig() RunnerConfig {
 //
 // Environment variables by memory type:
 //
+//	sqlite:     SQLITE_MEMORY_DSN (default: file:memories.db?_busy_timeout=5000)
+//	sqlitevec:  SQLITEVEC_MEMORY_DSN (default: file:memories_vec.db?_busy_timeout=5000)
 //	redis:      REDIS_ADDR (default: localhost:6379)
 //	postgres:   PG_HOST, PG_PORT, PG_USER, PG_PASSWORD, PG_DATABASE
 //	pgvector:   PGVECTOR_HOST, PGVECTOR_PORT, PGVECTOR_USER, PGVECTOR_PASSWORD, PGVECTOR_DATABASE, PGVECTOR_EMBEDDER_MODEL
 //	mysql:      MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE
 func NewMemoryServiceByType(memoryType MemoryType, cfg MemoryServiceConfig) (memory.Service, error) {
 	switch memoryType {
+	case MemorySQLite:
+		return newSQLiteMemoryService(cfg)
+	case MemorySQLiteVec:
+		return newSQLiteVecMemoryService(cfg)
 	case MemoryRedis:
 		return newRedisMemoryService(cfg)
 	case MemoryPostgres:
@@ -116,6 +129,151 @@ func NewMemoryServiceByType(memoryType MemoryType, cfg MemoryServiceConfig) (mem
 	default:
 		return newInMemoryMemoryService(cfg), nil
 	}
+}
+
+const (
+	sqliteMemoryDSNEnvKey     = "SQLITE_MEMORY_DSN"
+	defaultSQLiteMemoryDBDSN  = "file:memories.db?_busy_timeout=5000"
+	sqliteDriverName          = "sqlite3"
+	defaultSQLiteMaxOpenConns = 1
+	defaultSQLiteMaxIdleConns = 1
+)
+
+func newSQLiteMemoryService(cfg MemoryServiceConfig) (memory.Service, error) {
+	dsn := GetEnvOrDefault(sqliteMemoryDSNEnvKey, defaultSQLiteMemoryDBDSN)
+	db, err := sql.Open(sqliteDriverName, dsn)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(defaultSQLiteMaxOpenConns)
+	db.SetMaxIdleConns(defaultSQLiteMaxIdleConns)
+
+	opts := []memorysqlite.ServiceOpt{
+		memorysqlite.WithSoftDelete(cfg.SoftDelete),
+	}
+
+	if cfg.Extractor != nil {
+		opts = append(opts, memorysqlite.WithExtractor(cfg.Extractor))
+		if cfg.AsyncMemoryNum > 0 {
+			opts = append(
+				opts,
+				memorysqlite.WithAsyncMemoryNum(cfg.AsyncMemoryNum),
+			)
+		}
+		if cfg.MemoryQueueSize > 0 {
+			opts = append(
+				opts,
+				memorysqlite.WithMemoryQueueSize(cfg.MemoryQueueSize),
+			)
+		}
+		if cfg.MemoryJobTimeout > 0 {
+			opts = append(
+				opts,
+				memorysqlite.WithMemoryJobTimeout(cfg.MemoryJobTimeout),
+			)
+		}
+	}
+
+	svc, err := memorysqlite.NewService(db, opts...)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+
+	return svc, nil
+}
+
+const (
+	sqliteVecMemoryDSNEnvKey    = "SQLITEVEC_MEMORY_DSN"
+	defaultSQLiteVecMemoryDBDSN = "file:memories_vec.db?_busy_timeout=5000"
+
+	sqliteVecEmbedderModelEnvKey = "SQLITEVEC_EMBEDDER_MODEL"
+
+	openAIEmbeddingAPIKeyEnvKey  = "OPENAI_EMBEDDING_API_KEY"
+	openAIEmbeddingBaseURLEnvKey = "OPENAI_EMBEDDING_BASE_URL"
+	openAIEmbeddingModelEnvKey   = "OPENAI_EMBEDDING_MODEL"
+)
+
+func getEmbeddingModel(defaultModel string) string {
+	if env := os.Getenv(openAIEmbeddingModelEnvKey); env != "" {
+		return env
+	}
+	return defaultModel
+}
+
+func newOpenAIEmbedder(defaultModel string) *openaiembedder.Embedder {
+	modelName := getEmbeddingModel(defaultModel)
+	opts := []openaiembedder.Option{
+		openaiembedder.WithModel(modelName),
+	}
+
+	if apiKey := os.Getenv(openAIEmbeddingAPIKeyEnvKey); apiKey != "" {
+		opts = append(opts, openaiembedder.WithAPIKey(apiKey))
+	}
+
+	baseURL := os.Getenv(openAIEmbeddingBaseURLEnvKey)
+	if baseURL == "" {
+		baseURL = os.Getenv("OPENAI_BASE_URL")
+	}
+	if baseURL != "" {
+		opts = append(opts, openaiembedder.WithBaseURL(baseURL))
+	}
+
+	return openaiembedder.New(opts...)
+}
+
+func newSQLiteVecMemoryService(cfg MemoryServiceConfig) (memory.Service, error) {
+	dsn := GetEnvOrDefault(
+		sqliteVecMemoryDSNEnvKey,
+		defaultSQLiteVecMemoryDBDSN,
+	)
+	db, err := sql.Open(sqliteDriverName, dsn)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(defaultSQLiteMaxOpenConns)
+	db.SetMaxIdleConns(defaultSQLiteMaxIdleConns)
+
+	embedderModel := GetEnvOrDefault(
+		sqliteVecEmbedderModelEnvKey,
+		openaiembedder.DefaultModel,
+	)
+	emb := newOpenAIEmbedder(embedderModel)
+
+	opts := []memorysqlitevec.ServiceOpt{
+		memorysqlitevec.WithEmbedder(emb),
+		memorysqlitevec.WithSoftDelete(cfg.SoftDelete),
+	}
+
+	if cfg.Extractor != nil {
+		opts = append(opts, memorysqlitevec.WithExtractor(cfg.Extractor))
+		if cfg.AsyncMemoryNum > 0 {
+			opts = append(
+				opts,
+				memorysqlitevec.WithAsyncMemoryNum(cfg.AsyncMemoryNum),
+			)
+		}
+		if cfg.MemoryQueueSize > 0 {
+			opts = append(
+				opts,
+				memorysqlitevec.WithMemoryQueueSize(cfg.MemoryQueueSize),
+			)
+		}
+		if cfg.MemoryJobTimeout > 0 {
+			opts = append(
+				opts,
+				memorysqlitevec.WithMemoryJobTimeout(cfg.MemoryJobTimeout),
+			)
+		}
+	}
+
+	svc, err := memorysqlitevec.NewService(db, opts...)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+
+	return svc, nil
 }
 
 // newInMemoryMemoryService creates an in-memory memory service.
@@ -240,7 +398,7 @@ func newPGVectorMemoryService(cfg MemoryServiceConfig) (memory.Service, error) {
 	embedderModel := GetEnvOrDefault("PGVECTOR_EMBEDDER_MODEL", "text-embedding-3-small")
 
 	// Create embedder - for simplicity, we'll use OpenAI embedder
-	embedder := openaiembedder.New(openaiembedder.WithModel(embedderModel))
+	embedder := newOpenAIEmbedder(embedderModel)
 
 	opts := []memorypgvector.ServiceOpt{
 		memorypgvector.WithHost(host),
@@ -357,6 +515,22 @@ func FloatPtr(v float64) *float64 {
 // PrintMemoryInfo prints memory service information based on type.
 func PrintMemoryInfo(memoryType MemoryType, softDelete bool) {
 	switch memoryType {
+	case MemorySQLite:
+		dsn := GetEnvOrDefault(sqliteMemoryDSNEnvKey, defaultSQLiteMemoryDBDSN)
+		fmt.Printf("SQLite: %s\n", dsn)
+		fmt.Printf("Soft delete: %t\n", softDelete)
+	case MemorySQLiteVec:
+		dsn := GetEnvOrDefault(
+			sqliteVecMemoryDSNEnvKey,
+			defaultSQLiteVecMemoryDBDSN,
+		)
+		embedderModel := GetEnvOrDefault(
+			sqliteVecEmbedderModelEnvKey,
+			openaiembedder.DefaultModel,
+		)
+		fmt.Printf("SQLiteVec: %s\n", dsn)
+		fmt.Printf("Embedder model: %s\n", getEmbeddingModel(embedderModel))
+		fmt.Printf("Soft delete: %t\n", softDelete)
 	case MemoryRedis:
 		addr := GetEnvOrDefault("REDIS_ADDR", "localhost:6379")
 		fmt.Printf("Redis: %s\n", addr)
@@ -370,9 +544,12 @@ func PrintMemoryInfo(memoryType MemoryType, softDelete bool) {
 		host := GetEnvOrDefault("PGVECTOR_HOST", "localhost")
 		port := GetEnvOrDefault("PGVECTOR_PORT", "5432")
 		database := GetEnvOrDefault("PGVECTOR_DATABASE", "trpc-agent-go-pgmemory")
-		embedderModel := GetEnvOrDefault("PGVECTOR_EMBEDDER_MODEL", "text-embedding-3-small")
+		embedderModel := GetEnvOrDefault(
+			"PGVECTOR_EMBEDDER_MODEL",
+			"text-embedding-3-small",
+		)
 		fmt.Printf("pgvector: %s:%s/%s\n", host, port, database)
-		fmt.Printf("Embedder model: %s\n", embedderModel)
+		fmt.Printf("Embedder model: %s\n", getEmbeddingModel(embedderModel))
 		fmt.Printf("Soft delete: %t\n", softDelete)
 	case MemoryMySQL:
 		host := GetEnvOrDefault("MYSQL_HOST", "localhost")

@@ -35,11 +35,32 @@ import (
 )
 
 var (
-	modelName = flag.String("model", "deepseek-chat", "Model for chat responses")
-	extModel  = flag.String("ext-model", "", "Model for memory extraction (defaults to chat model)")
-	streaming = flag.Bool("streaming", true, "Enable streaming mode for responses")
-	debug     = flag.Bool("debug", false, "Enable debug mode to print messages sent to model")
-	memType   = flag.String("memory", "inmemory", "Memory service type: inmemory, redis, postgres, pgvector, mysql")
+	modelName = flag.String(
+		"model",
+		"deepseek-chat",
+		"Model for chat responses",
+	)
+	extModel = flag.String(
+		"ext-model",
+		"",
+		"Model for memory extraction (defaults to chat model)",
+	)
+	streaming = flag.Bool(
+		"streaming",
+		true,
+		"Enable streaming mode for responses",
+	)
+	debug = flag.Bool(
+		"debug",
+		false,
+		"Enable debug mode to print messages sent to model",
+	)
+	memType = flag.String(
+		"memory",
+		"inmemory",
+		"Memory service type: inmemory, sqlite, sqlitevec, redis, "+
+			"postgres, pgvector, mysql",
+	)
 )
 
 func main() {
@@ -155,9 +176,8 @@ func (c *autoMemoryChat) setup(_ context.Context) error {
 	// Create LLM agent with memory tools.
 	// Only search tool is available since extractor is set.
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(2000),
-		Temperature: floatPtr(0.7),
-		Stream:      c.streaming,
+		MaxTokens: intPtr(2000),
+		Stream:    c.streaming,
 	}
 
 	// Create model callbacks for debug mode.
@@ -265,7 +285,8 @@ func (c *autoMemoryChat) showMemories(ctx context.Context) {
 
 	if len(entries) == 0 {
 		fmt.Println("📭 No memories stored yet.")
-		fmt.Println("   (Memories are extracted automatically from conversations)")
+		fmt.Println("   (Extraction runs asynchronously; wait a bit and")
+		fmt.Println("   try /memory again.)")
 		fmt.Println()
 		return
 	}
@@ -298,11 +319,16 @@ func (c *autoMemoryChat) processResponse(eventChan <-chan *event.Event) error {
 	var (
 		fullContent      string
 		assistantStarted bool
+		finalSeen        bool
 	)
 
 	for evt := range eventChan {
 		if evt.Error != nil {
 			fmt.Printf("\n❌ Error: %s\n", evt.Error.Message)
+			continue
+		}
+
+		if finalSeen {
 			continue
 		}
 
@@ -330,7 +356,7 @@ func (c *autoMemoryChat) processResponse(eventChan <-chan *event.Event) error {
 
 		if evt.IsFinalResponse() {
 			fmt.Printf("\n")
-			break
+			finalSeen = true
 		}
 	}
 
