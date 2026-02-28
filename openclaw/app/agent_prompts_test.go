@@ -57,6 +57,15 @@ func TestResolveAgentPrompts_MergesInlineFilesAndDir(t *testing.T) {
 	)
 }
 
+func TestResolveAgentPrompts_InstructionReadErrorReturnsError(t *testing.T) {
+	t.Parallel()
+
+	_, err := resolveAgentPrompts(runOptions{
+		AgentInstructionFiles: "/no/such/file.md",
+	})
+	require.Error(t, err)
+}
+
 func TestResolveAgentPrompts_DirWithoutMDReturnsError(t *testing.T) {
 	t.Parallel()
 
@@ -76,6 +85,58 @@ func TestResolveAgentPrompts_MissingFileReturnsError(t *testing.T) {
 		AgentSystemPromptFiles: "/no/such/file.md",
 	})
 	require.Error(t, err)
+}
+
+func TestReadAgentPromptFile_EmptyPathReturnsError(t *testing.T) {
+	t.Parallel()
+
+	_, err := readAgentPromptFile(" ")
+	require.Error(t, err)
+}
+
+func TestReadAgentPromptDir_EmptyPathReturnsError(t *testing.T) {
+	t.Parallel()
+
+	_, err := readAgentPromptDir(" ")
+	require.Error(t, err)
+}
+
+func TestReadAgentPromptDir_MissingDirReturnsError(t *testing.T) {
+	t.Parallel()
+
+	_, err := readAgentPromptDir("/no/such/dir")
+	require.Error(t, err)
+}
+
+func TestBuildAgentPrompt_SkipsEmptyPathsAndEmptyContent(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	emptyFile := writeTempPromptFile(t, dir, "empty.md", " \n")
+	nonEmptyFile := writeTempPromptFile(t, dir, "ok.md", "ok")
+
+	p, err := buildAgentPrompt("", []string{
+		"",
+		" ",
+		emptyFile,
+		nonEmptyFile,
+	}, "")
+	require.NoError(t, err)
+	require.Equal(t, "ok", p)
+}
+
+func TestReadAgentPromptDir_SkipsSubdirsAndEmptyFiles(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "sub"), 0o700))
+
+	_ = writeTempPromptFile(t, dir, "01_empty.md", " \n")
+	_ = writeTempPromptFile(t, dir, "02_ok.md", "ok")
+
+	parts, err := readAgentPromptDir(dir)
+	require.NoError(t, err)
+	require.Equal(t, []string{"ok"}, parts)
 }
 
 func writeTempPromptFile(
