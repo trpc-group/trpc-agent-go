@@ -817,8 +817,15 @@ func fileToParams(file *model.File) openai.ChatCompletionContentPartFileFilePara
 			FileID: openai.String(file.FileID),
 		}
 	}
+	const (
+		fileDataPrefix = "data:"
+		fileDataBase64 = ";base64,"
+	)
+	encoded := base64.StdEncoding.EncodeToString(file.Data)
+	fileData := fileDataPrefix + file.MimeType + fileDataBase64 +
+		encoded
 	return openai.ChatCompletionContentPartFileFileParam{
-		FileData: openai.String(base64.StdEncoding.EncodeToString(file.Data)),
+		FileData: openai.String(fileData),
 		Filename: openai.String(file.Name),
 	}
 }

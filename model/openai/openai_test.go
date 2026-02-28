@@ -12,6 +12,7 @@ package openai
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -6577,4 +6578,33 @@ func TestGenerateContent_OptimizeForCache_Disabled(t *testing.T) {
 
 	// Verify original order is preserved (user, system, assistant)
 	assert.Equal(t, []string{"user", "system", "assistant"}, capturedRoles)
+}
+
+func TestFileToParams_FileDataUsesDataURL(t *testing.T) {
+	f := &model.File{
+		Name:     "notes.txt",
+		Data:     []byte("hello"),
+		MimeType: "text/plain",
+	}
+	p := fileToParams(f)
+	require.True(t, p.FileData.Valid())
+	require.Equal(t, "notes.txt", p.Filename.Value)
+	const wantPrefix = "data:text/plain;base64,"
+	want := wantPrefix + base64.StdEncoding.EncodeToString([]byte("hello"))
+	require.Equal(t, want, p.FileData.Value)
+	require.False(t, p.FileID.Valid())
+}
+
+func TestFileToParams_FileIDWins(t *testing.T) {
+	f := &model.File{
+		Name:     "notes.txt",
+		Data:     []byte("hello"),
+		MimeType: "text/plain",
+		FileID:   "file_123",
+	}
+	p := fileToParams(f)
+	require.True(t, p.FileID.Valid())
+	require.Equal(t, "file_123", p.FileID.Value)
+	require.False(t, p.FileData.Valid())
+	require.False(t, p.Filename.Valid())
 }
