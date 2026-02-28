@@ -13,6 +13,7 @@ package sqlitevec
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -58,6 +59,32 @@ func (m *mockEmbedder) GetEmbeddingWithUsage(
 
 func (m *mockEmbedder) GetDimensions() int {
 	return m.dimension
+}
+
+type errorEmbedder struct {
+	dimension int
+	err       error
+}
+
+func (e *errorEmbedder) GetEmbedding(
+	ctx context.Context,
+	text string,
+) ([]float64, error) {
+	_ = ctx
+	_ = text
+	return nil, e.err
+}
+
+func (e *errorEmbedder) GetEmbeddingWithUsage(
+	ctx context.Context,
+	text string,
+) ([]float64, map[string]any, error) {
+	emb, err := e.GetEmbedding(ctx, text)
+	return emb, nil, err
+}
+
+func (e *errorEmbedder) GetDimensions() int {
+	return e.dimension
 }
 
 func openTempSQLiteDB(t *testing.T) (*sql.DB, func()) {
@@ -269,6 +296,134 @@ func TestService_AddMemory_DimensionMismatch(t *testing.T) {
 		nil,
 	)
 	require.Error(t, err)
+}
+
+func TestService_InvalidUserKey(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mockEmbedder{dimension: 2}),
+		WithIndexDimension(2),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	invalid := memory.UserKey{AppName: "", UserID: "u1"}
+
+	require.Error(t, svc.AddMemory(ctx, invalid, "alpha", nil))
+	require.Error(t, svc.ClearMemories(ctx, invalid))
+
+	_, err = svc.ReadMemories(ctx, invalid, 0)
+	require.Error(t, err)
+
+	_, err = svc.SearchMemories(ctx, invalid, "alpha")
+	require.Error(t, err)
+}
+
+func TestService_InvalidMemoryKey(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mockEmbedder{dimension: 2}),
+		WithIndexDimension(2),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	require.Error(t, svc.UpdateMemory(ctx, memory.Key{}, "alpha", nil))
+	require.Error(t, svc.DeleteMemory(ctx, memory.Key{}))
+}
+
+func TestService_SearchMemories_EmbedderError(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	expectedErr := errors.New("embedder error")
+	svc, err := NewService(
+		db,
+		WithEmbedder(&errorEmbedder{dimension: 2, err: expectedErr}),
+		WithIndexDimension(2),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	_, err = svc.SearchMemories(
+		context.Background(),
+		memory.UserKey{AppName: "app", UserID: "u1"},
+		"alpha",
+	)
+	require.Error(t, err)
+}
+
+func TestService_UpdateMemory_SoftDeleteNotFound(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mockEmbedder{dimension: 2}),
+		WithSoftDelete(true),
+		WithIndexDimension(2),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "u1"}
+
+	require.NoError(t, svc.AddMemory(ctx, userKey, "alpha", nil))
+	entries, err := svc.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+
+	memKey := memory.Key{
+		AppName:  userKey.AppName,
+		UserID:   userKey.UserID,
+		MemoryID: entries[0].ID,
+	}
+	require.NoError(t, svc.DeleteMemory(ctx, memKey))
+
+	err = svc.UpdateMemory(ctx, memKey, "alpha", nil)
+	require.Error(t, err)
+}
+
+func TestService_AddMemory_SoftDelete_MemoryLimitResurrect(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mockEmbedder{dimension: 2}),
+		WithSoftDelete(true),
+		WithMemoryLimit(1),
+		WithIndexDimension(2),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "u1"}
+
+	require.NoError(t, svc.AddMemory(ctx, userKey, "alpha", nil))
+
+	entries, err := svc.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+
+	memKey := memory.Key{
+		AppName:  userKey.AppName,
+		UserID:   userKey.UserID,
+		MemoryID: entries[0].ID,
+	}
+	require.NoError(t, svc.DeleteMemory(ctx, memKey))
+
+	require.NoError(t, svc.AddMemory(ctx, userKey, "alpha", nil))
 }
 
 func TestService_WithMaxResults(t *testing.T) {

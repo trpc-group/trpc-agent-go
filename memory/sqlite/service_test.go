@@ -255,6 +255,80 @@ func TestService_Search_SoftDeleteFiltered(t *testing.T) {
 	require.Empty(t, results)
 }
 
+func TestService_InvalidKeys(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(db)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	invalidUserKey := memory.UserKey{AppName: "", UserID: "u1"}
+
+	require.Error(t, svc.AddMemory(ctx, invalidUserKey, "A", nil))
+	require.Error(t, svc.ClearMemories(ctx, invalidUserKey))
+
+	_, err = svc.ReadMemories(ctx, invalidUserKey, 0)
+	require.Error(t, err)
+
+	_, err = svc.SearchMemories(ctx, invalidUserKey, "A")
+	require.Error(t, err)
+
+	require.Error(t, svc.UpdateMemory(ctx, memory.Key{}, "A", nil))
+	require.Error(t, svc.DeleteMemory(ctx, memory.Key{}))
+}
+
+func TestService_ReadMemories_Limit(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(db)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "u1"}
+
+	require.NoError(t, svc.AddMemory(ctx, userKey, "A", nil))
+	require.NoError(t, svc.AddMemory(ctx, userKey, "B", nil))
+
+	entries, err := svc.ReadMemories(ctx, userKey, 1)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+}
+
+func TestService_SoftDelete_MemoryLimit_ResurrectAllowed(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		db,
+		WithSoftDelete(true),
+		WithMemoryLimit(1),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "u1"}
+
+	require.NoError(t, svc.AddMemory(ctx, userKey, "A", nil))
+
+	entries, err := svc.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+
+	memKey := memory.Key{
+		AppName:  userKey.AppName,
+		UserID:   userKey.UserID,
+		MemoryID: entries[0].ID,
+	}
+	require.NoError(t, svc.DeleteMemory(ctx, memKey))
+
+	require.NoError(t, svc.AddMemory(ctx, userKey, "A", nil))
+}
+
 func TestService_Tools_EnqueueAutoMemoryJob(t *testing.T) {
 	db, cleanup := openTempSQLiteDB(t)
 	defer cleanup()
