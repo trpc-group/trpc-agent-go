@@ -45,6 +45,12 @@ http:
 
 agent:
   type: "claude-code"
+  instruction: "cfg instruction"
+  instruction_files: ["cfg_1.md","cfg_2.md"]
+  instruction_dir: "cfg_instr_dir"
+  system_prompt: "cfg system"
+  system_prompt_files: ["cfg_sys_1.md","cfg_sys_2.md"]
+  system_prompt_dir: "cfg_sys_dir"
   claude_bin: "/bin/claude"
   claude_output_format: "stream-json"
   claude_extra_args: ["--permission-mode","bypassPermissions"]
@@ -59,6 +65,8 @@ agent:
 		"-config", cfgPath,
 		"-http-addr", ":7777",
 		"-agent-type", agentTypeLLM,
+		"-agent-instruction", "flag instruction",
+		"-agent-system-prompt", "flag system",
 		"-claude-bin", "/tmp/claude",
 		"-add-session-summary",
 		"-max-history-runs", "9",
@@ -67,6 +75,8 @@ agent:
 	require.NoError(t, err)
 	require.Equal(t, ":7777", opts.HTTPAddr)
 	require.Equal(t, agentTypeLLM, opts.AgentType)
+	require.Equal(t, "flag instruction", opts.AgentInstruction)
+	require.Equal(t, "flag system", opts.AgentSystemPrompt)
 	require.Equal(t, "/tmp/claude", opts.ClaudeBin)
 	require.True(t, opts.AddSessionSummary)
 	require.Equal(t, 9, opts.MaxHistoryRuns)
@@ -124,6 +134,12 @@ agent:
   add_session_summary: true
   max_history_runs: 50
   preload_memory: 10
+  instruction: "instruction"
+  instruction_files: ["i1.md","i2.md"]
+  instruction_dir: "/instruction_dir"
+  system_prompt: "system prompt"
+  system_prompt_files: ["s1.md","s2.md"]
+  system_prompt_dir: "/system_prompt_dir"
 
 model:
   mode: "mock"
@@ -222,6 +238,12 @@ memory:
 	require.True(t, opts.AddSessionSummary)
 	require.Equal(t, 50, opts.MaxHistoryRuns)
 	require.Equal(t, 10, opts.PreloadMemory)
+	require.Equal(t, "instruction", opts.AgentInstruction)
+	require.Equal(t, "i1.md,i2.md", opts.AgentInstructionFiles)
+	require.Equal(t, "/instruction_dir", opts.AgentInstructionDir)
+	require.Equal(t, "system prompt", opts.AgentSystemPrompt)
+	require.Equal(t, "s1.md,s2.md", opts.AgentSystemPromptFiles)
+	require.Equal(t, "/system_prompt_dir", opts.AgentSystemPromptDir)
 
 	require.Equal(t, modeMock, opts.ModelMode)
 	require.Equal(t, "gpt-5", opts.OpenAIModel)
