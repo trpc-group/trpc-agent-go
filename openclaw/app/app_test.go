@@ -159,6 +159,20 @@ func TestRun_ClaudeCode_InvalidOutputFormatExitCode(t *testing.T) {
 	require.Equal(t, 1, exitErr.Code)
 }
 
+func TestRun_ClaudeCode_UnsupportedPromptOptionsExitCode(t *testing.T) {
+	t.Parallel()
+
+	err := run(context.Background(), []string{
+		"-agent-type", agentTypeClaudeCode,
+		"-agent-instruction", "x",
+	})
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+}
+
 func TestRun_HTTPListenErrorPath(t *testing.T) {
 	t.Parallel()
 
