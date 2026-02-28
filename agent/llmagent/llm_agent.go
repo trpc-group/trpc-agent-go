@@ -313,6 +313,8 @@ func appendPostToolProcessor(options *Options, requestProcessors []flow.RequestP
 	var postToolOpts []processor.PostToolOption
 	if options.postToolPromptEnabled != nil &&
 		!*options.postToolPromptEnabled {
+		// PostToolRequestProcessor treats an empty prompt as "disabled".
+		// Keep the processor registered, but skip prompt injection.
 		postToolOpts = append(
 			postToolOpts,
 			processor.WithPostToolPrompt(""),
