@@ -237,6 +237,12 @@ go run . -scenario auto -memory-backend sqlite
 # Run auto evaluation with sqlitevec backend (requires embeddings).
 go run . -scenario auto -memory-backend sqlitevec
 
+# Run auto evaluation with sqlite backend.
+go run main.go -scenario auto -memory-backend sqlite
+
+# Run auto evaluation with sqlitevec backend (requires embeddings).
+go run main.go -scenario auto -memory-backend sqlitevec
+
 # Run all scenarios.
 go run . -scenario all -output ../results/full_eval
 

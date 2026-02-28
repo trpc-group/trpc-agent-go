@@ -159,6 +159,72 @@ func TestRun_ClaudeCode_InvalidOutputFormatExitCode(t *testing.T) {
 	require.Equal(t, 1, exitErr.Code)
 }
 
+func TestRun_ClaudeCode_UnsupportedPromptOptionsExitCode(t *testing.T) {
+	t.Parallel()
+
+	err := run(context.Background(), []string{
+		"-agent-type", agentTypeClaudeCode,
+		"-agent-instruction", "x",
+	})
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+}
+
+func TestRun_ClaudeCode_UnsupportedSystemPromptOptionsExitCode(t *testing.T) {
+	t.Parallel()
+
+	err := run(context.Background(), []string{
+		"-agent-type", agentTypeClaudeCode,
+		"-agent-system-prompt", "x",
+	})
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+}
+
+func TestRun_PromptDirWithoutMarkdownExitCode(t *testing.T) {
+	t.Parallel()
+
+	promptDir := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(promptDir, "note.txt"),
+		[]byte("ignored"),
+		0o600,
+	))
+
+	err := run(context.Background(), []string{
+		"-http-addr", "127.0.0.1:0",
+		"-mode", modeMock,
+		"-state-dir", t.TempDir(),
+		"-skills-root", t.TempDir(),
+		"-agent-system-prompt-dir", promptDir,
+	})
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+}
+
+func TestNewAgent_EmptyInstructionUsesDefault(t *testing.T) {
+	t.Parallel()
+
+	agt, err := newAgent(&echoModel{name: "mock"}, agentConfig{
+		AppName:      "demo",
+		SkillsRoot:   t.TempDir(),
+		StateDir:     t.TempDir(),
+		Instruction:  "",
+		SystemPrompt: "sys",
+	}, nil, nil)
+	require.NoError(t, err)
+	require.NotNil(t, agt)
+}
+
 func TestRun_HTTPListenErrorPath(t *testing.T) {
 	t.Parallel()
 
