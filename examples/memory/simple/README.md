@@ -86,6 +86,8 @@ runner := runner.NewRunner(
 | Variable                  | Description                  | Default Value            |
 | ------------------------- | ---------------------------- | ------------------------ |
 | `SQLITE_MEMORY_DSN`       | SQLite DSN                   | `file:memories.db?_busy_timeout=5000` |
+| `SQLITEVEC_MEMORY_DSN`    | SQLiteVec DSN                | `file:memories_vec.db?_busy_timeout=5000` |
+| `SQLITEVEC_EMBEDDER_MODEL` | SQLiteVec embedder model     | `text-embedding-3-small` |
 | `REDIS_ADDR`              | Redis server address         | `localhost:6379`         |
 | `PG_HOST`                 | PostgreSQL host              | `localhost`              |
 | `PG_PORT`                 | PostgreSQL port              | `5432`                   |
@@ -104,13 +106,24 @@ runner := runner.NewRunner(
 | `MYSQL_PASSWORD`          | MySQL password               | ``                       |
 | `MYSQL_DATABASE`          | MySQL database name          | `trpc_agent_go`          |
 
+### Embedding Environment Variables (Optional)
+
+When using vector backends (`sqlitevec`, `pgvector`), you can configure a
+separate embedding endpoint / API key:
+
+| Variable                  | Description                      | Default Value |
+| ------------------------- | -------------------------------- | ------------- |
+| `OPENAI_EMBEDDING_API_KEY` | API key for embedding model      | (empty)       |
+| `OPENAI_EMBEDDING_BASE_URL` | Base URL for embedding endpoint  | (empty)       |
+| `OPENAI_EMBEDDING_MODEL`  | Override embedding model name     | (empty)       |
+
 ## Command Line Arguments
 
 | Argument       | Description                                                             | Default Value   |
 | -------------- | ----------------------------------------------------------------------- | --------------- |
 | `-model`       | Name of the model to use                                                | `deepseek-chat` |
-| `-memory`      | Memory service: `inmemory`, `sqlite`, `redis`, `mysql`, `postgres`, or `pgvector` | `inmemory` |
-| `-soft-delete` | Enable soft delete for SQLite/MySQL/PostgreSQL/pgvector memory service  | `false`         |
+| `-memory`      | Memory service: `inmemory`, `sqlite`, `sqlitevec`, `redis`, `mysql`, `postgres`, or `pgvector` | `inmemory` |
+| `-soft-delete` | Enable soft delete for SQLite/SQLiteVec/MySQL/PostgreSQL/pgvector memory service  | `false`         |
 | `-streaming`   | Enable streaming mode for responses                                     | `true`          |
 
 ## Usage
@@ -155,7 +168,7 @@ go run main.go -model gpt-4o -streaming=false
 
 ### Service Configuration
 
-The example supports six memory service backends: in-memory, SQLite, Redis, MySQL, PostgreSQL, and pgvector:
+The example supports multiple memory service backends:
 
 ```bash
 # Default in-memory memory service
@@ -164,6 +177,11 @@ go run main.go
 # SQLite memory service (local file)
 export SQLITE_MEMORY_DSN="file:memories.db?_busy_timeout=5000"
 go run main.go -memory sqlite
+
+# SQLiteVec memory service (local file + vector search)
+export SQLITEVEC_MEMORY_DSN="file:memories_vec.db?_busy_timeout=5000"
+export SQLITEVEC_EMBEDDER_MODEL="text-embedding-3-small"
+go run main.go -memory sqlitevec
 
 # Redis memory service (using default or environment variable)
 go run main.go -memory redis

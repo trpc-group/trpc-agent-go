@@ -14,6 +14,7 @@
 //
 //	go run main.go -memory=inmemory
 //	go run main.go -memory=sqlite
+//	go run main.go -memory=sqlitevec
 //	go run main.go -memory=redis
 //	go run main.go -memory=mysql
 //	go run main.go -memory=postgres
@@ -23,6 +24,10 @@
 //
 //	sqlite:
 //		export SQLITE_MEMORY_DSN="file:memories.db?_busy_timeout=5000"
+//
+//	sqlitevec:
+//		export SQLITEVEC_MEMORY_DSN="file:memories_vec.db?_busy_timeout=5000"
+//		export SQLITEVEC_EMBEDDER_MODEL="text-embedding-3-small"
 //
 //	redis:
 //		export REDIS_ADDR="localhost:6379"
@@ -80,8 +85,8 @@ var (
 		"memory",
 		"inmemory",
 		"Name of the memory service to use, "+
-			"inmemory / sqlite / redis / mysql / "+
-			"postgres / pgvector",
+			"inmemory / sqlite / sqlitevec / redis / "+
+			"mysql / postgres / pgvector",
 	)
 	streaming = flag.Bool(
 		"streaming",
@@ -91,8 +96,8 @@ var (
 	softDelete = flag.Bool(
 		"soft-delete",
 		false,
-		"Enable soft delete for SQLite/MySQL/"+
-			"PostgreSQL/pgvector memory service",
+		"Enable soft delete for SQLite/SQLiteVec/"+
+			"MySQL/PostgreSQL/pgvector memory service",
 	)
 )
 

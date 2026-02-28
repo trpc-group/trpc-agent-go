@@ -58,7 +58,7 @@ var (
 	memType = flag.String(
 		"memory",
 		"inmemory",
-		"Memory service type: inmemory, sqlite, redis, "+
+		"Memory service type: inmemory, sqlite, sqlitevec, redis, "+
 			"postgres, pgvector, mysql",
 	)
 )
