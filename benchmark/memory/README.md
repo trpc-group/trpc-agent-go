@@ -50,6 +50,19 @@ Based on:
 4. pgvector > MySQL for retrieval quality; gap vanishes with history
    injection.
 
+## SQLite vs SQLiteVec (Subset)
+
+This is a small subset run to compare local SQLite keyword matching (`sqlite`)
+vs sqlite-vec semantic search (`sqlitevec`).
+
+**Configuration**: Model=gpt-4o-mini, scenario=auto, sample=locomo10_1,
+category=temporal (13 QA), LLM Judge disabled.
+
+| Backend | F1 | Prompt Tokens | Avg Prompt/QA |
+|---------|---:|--------------:|--------------:|
+| sqlite | 0.116 | 80,184 | 6,168 |
+| sqlitevec | 0.116 | 26,483 | 2,037 |
+
 ## Evaluation Metrics
 
 Aligned with LoCoMo paper and industry standards (Mem0, MemMachine):
@@ -134,7 +147,7 @@ go run main.go -scenario agentic,auto -memory-backend pgvector,mysql
 | `-memory-backend`   | inmemory               | Memory backend (comma-separated)       |
 | `-pgvector-dsn`     | (env)                  | PostgreSQL DSN for pgvector            |
 | `-mysql-dsn`        | (env)                  | MySQL DSN for mysql backend            |
-| `-embed-model`      | text-embedding-3-small | Embedding model for pgvector           |
+| `-embed-model`      | text-embedding-3-small | Embedding model for vector backends    |
 | `-qa-history-turns` | 0                      | Inject N conversation turns as context |
 | `-sample-id`        |                        | Filter by sample ID                    |
 | `-max-tasks`        | 0                      | Maximum tasks (0=all)                  |
@@ -144,14 +157,18 @@ go run main.go -scenario agentic,auto -memory-backend pgvector,mysql
 
 ## Environment Variables
 
-| Variable           | Description                         |
-| ------------------ | ----------------------------------- |
-| `MODEL_NAME`       | Default model name                  |
-| `EVAL_MODEL_NAME`  | Evaluation model name               |
-| `OPENAI_API_KEY`   | OpenAI API key                      |
-| `PGVECTOR_DSN`     | PostgreSQL DSN for pgvector backend |
-| `MYSQL_DSN`        | MySQL DSN for mysql backend         |
-| `EMBED_MODEL_NAME` | Embedding model for pgvector        |
+| Variable                    | Description                               |
+| --------------------------- | ----------------------------------------- |
+| `MODEL_NAME`                | Default model name                        |
+| `EVAL_MODEL_NAME`           | Evaluation model name                     |
+| `OPENAI_API_KEY`            | OpenAI API key                            |
+| `PGVECTOR_DSN`              | PostgreSQL DSN for pgvector backend       |
+| `MYSQL_DSN`                 | MySQL DSN for mysql backend               |
+| `SQLITE_DSN`                | SQLite DSN for sqlite backend (optional)  |
+| `SQLITEVEC_DSN`             | SQLite DSN for sqlitevec backend (optional) |
+| `EMBED_MODEL_NAME`          | Embedding model for vector backends       |
+| `OPENAI_EMBEDDING_API_KEY`  | API key for embedding model (optional)    |
+| `OPENAI_EMBEDDING_BASE_URL` | Base URL for embedding API (optional)     |
 
 ## Dataset Setup
 
@@ -186,6 +203,12 @@ go run main.go -llm-judge -model gpt-4o
 export PGVECTOR_DSN="postgres://user:password@localhost:5432/memory_eval\
 ?sslmode=disable"
 go run main.go -scenario agentic -memory-backend pgvector
+
+# Run auto evaluation with sqlite backend.
+go run main.go -scenario auto -memory-backend sqlite
+
+# Run auto evaluation with sqlitevec backend (requires embeddings).
+go run main.go -scenario auto -memory-backend sqlitevec
 
 # Run all scenarios.
 go run main.go -scenario all -output ../results/full_eval

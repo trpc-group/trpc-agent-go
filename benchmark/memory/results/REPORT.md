@@ -12,6 +12,7 @@ This report evaluates the memory capabilities of trpc-agent-go using the **LoCoM
 - **Auto memory extraction** (F1=0.357 pgvector) is the strongest memory-based approach, reaching 75.6% of the long-context baseline.
 - **Agentic memory** (F1=0.294 pgvector) shows that LLM-driven memory extraction faces information density challenges.
 - **pgvector consistently outperforms MySQL** by 1-2% F1 across all scenarios, validating the value of vector similarity search.
+- **SQLiteVec enables local semantic search** and can reduce prompt tokens by returning a top-k result set instead of unbounded keyword matches (see Section 3.6).
 - **Injecting raw history hurts F1/BLEU but improves LLM Score**, revealing a trade-off between token-level precision and semantic quality.
 
 ---
@@ -40,6 +41,8 @@ We use the **LoCoMo** dataset (Maharana et al., 2024), which contains multi-sess
 
 | Backend | Retrieval Method | Embedding Model |
 | --- | --- | --- |
+| **SQLite** | Token-based matching | N/A |
+| **SQLiteVec** | Vector similarity (cosine) via sqlite-vec | text-embedding-3-small |
 | **pgvector** | Vector similarity (cosine) | text-embedding-3-small |
 | **MySQL** | Full-text search (BM25-like) | N/A |
 
@@ -191,6 +194,46 @@ Aligned with the LoCoMo paper and industry standards (Mem0, MemMachine):
 | **Average** | **199** | **0.472** | **0.357** | **0.294** |
 
 ---
+
+### 3.6 SQLite vs SQLiteVec (Subset Run)
+
+This subsection compares `sqlite` (keyword matching) and `sqlitevec`
+(semantic vector search via sqlite-vec) on a small, controlled subset.
+
+**Configuration**:
+
+- Dataset: LoCoMo `locomo10.json`
+- Sample: `locomo10_1`
+- Category filter: `temporal` (13 QA)
+- Scenario: `auto`
+- Model: `gpt-4o-mini`
+- LLM Judge: disabled
+- Embedding model (SQLiteVec): `text-embedding-3-small`
+
+**Table 8: Overall Metrics and Token Usage (Auto / Temporal / 13 QA)**
+
+| Backend | F1 | BLEU | Prompt Tokens | Completion Tokens | Total Tokens | LLM Calls | Avg Latency |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| SQLite | 0.116 | 0.082 | 80,184 | 352 | 80,536 | 26 | 12,352ms |
+| SQLiteVec | 0.116 | 0.082 | 26,483 | 353 | 26,836 | 26 | 17,817ms |
+
+**Interpretation**:
+
+- In this subset, answer quality (F1/BLEU) is the same, but **SQLiteVec uses
+  ~3x fewer prompt tokens**. This is mainly because SQLiteVec returns a bounded
+  top-k retrieval set (default 10), while the SQLite backend can return a much
+  larger set of keyword matches.
+
+**Retrieval microbenchmark (curated queries)**:
+
+To isolate retrieval quality from the end-to-end QA pipeline, we also run a
+small retrieval-focused example (`examples/memory/compare`) where queries are
+paraphrases with low lexical overlap.
+
+| Backend | Hit@3 | Notes |
+| --- | ---: | --- |
+| SQLite | 2/4 | Misses some paraphrases due to token matching |
+| SQLiteVec | 4/4 | Recovers paraphrases via semantic similarity |
 
 ## 4. Analysis
 
