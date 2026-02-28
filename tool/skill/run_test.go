@@ -30,8 +30,10 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcache"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
@@ -1683,6 +1685,109 @@ func TestRunTool_StageInputs_FromSkill(t *testing.T) {
 	require.Contains(t, out.OutputFiles[0].Content, contentMsg)
 }
 
+func TestRunTool_StagesUserFileInputs_FileData(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	rt := NewRunTool(repo, localexec.New())
+
+	user := model.NewUserMessage("upload")
+	user.AddFileData(
+		"notes.txt",
+		[]byte(contentHello+"\n"),
+		"text/plain",
+	)
+	sess := &session.Session{
+		Events: []event.Event{
+			{
+				Response: &model.Response{
+					Done: true,
+					Choices: []model.Choice{
+						{Index: 0, Message: user},
+					},
+				},
+				Author: "user",
+			},
+		},
+	}
+	inv := agent.NewInvocation(agent.WithInvocationSession(sess))
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args := runInput{
+		Skill:       testSkillName,
+		Command:     "cat work/inputs/notes.txt > " + outATxt,
+		OutputFiles: []string{outATxt},
+		Timeout:     timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Len(t, out.OutputFiles, 1)
+	require.Contains(t, out.OutputFiles[0].Content, contentHello)
+	require.Len(t, out.StagedInputs, 1)
+	require.Equal(t, "work/inputs/notes.txt", out.StagedInputs[0].Name)
+}
+
+func TestRunTool_StagesUserFileInputs_FileID(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	rt := NewRunTool(repo, localexec.New())
+
+	const (
+		fileID   = "file_x"
+		fileName = "notes.txt"
+	)
+	user := model.NewUserMessage("upload")
+	user.AddFileIDWithName(fileID, fileName)
+	sess := &session.Session{
+		Events: []event.Event{
+			{
+				Response: &model.Response{
+					Done: true,
+					Choices: []model.Choice{
+						{Index: 0, Message: user},
+					},
+				},
+				Author: "user",
+			},
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationModel(&stubDownloadModel{
+			data: map[string][]byte{
+				fileID: []byte(contentHello + "\n"),
+			},
+		}),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args := runInput{
+		Skill:       testSkillName,
+		Command:     "cat work/inputs/" + fileName + " > " + outATxt,
+		OutputFiles: []string{outATxt},
+		Timeout:     timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Len(t, out.OutputFiles, 1)
+	require.Contains(t, out.OutputFiles[0].Content, contentHello)
+	require.Len(t, out.StagedInputs, 1)
+	require.Equal(t, "work/inputs/"+fileName, out.StagedInputs[0].Name)
+}
+
 func TestRunTool_Call_InvalidInputSpec_Error(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, testSkillName)
@@ -1704,6 +1809,37 @@ func TestRunTool_Call_InvalidInputSpec_Error(t *testing.T) {
 	require.NoError(t, err)
 	_, err = rt.Call(context.Background(), enc)
 	require.Error(t, err)
+}
+
+type stubDownloadModel struct {
+	data map[string][]byte
+}
+
+func (m *stubDownloadModel) GenerateContent(
+	_ context.Context,
+	_ *model.Request,
+) (<-chan *model.Response, error) {
+	ch := make(chan *model.Response)
+	close(ch)
+	return ch, nil
+}
+
+func (m *stubDownloadModel) Info() model.Info {
+	return model.Info{Name: "stub"}
+}
+
+func (m *stubDownloadModel) DownloadFile(
+	_ context.Context,
+	fileID string,
+) ([]byte, string, error) {
+	if m == nil {
+		return nil, "", fmt.Errorf("nil model")
+	}
+	b, ok := m.data[fileID]
+	if !ok {
+		return nil, "", fmt.Errorf("not found: %s", fileID)
+	}
+	return b, "text/plain", nil
 }
 
 func TestRunTool_stageSkill_WorkspaceRootFileError(t *testing.T) {

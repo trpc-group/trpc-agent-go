@@ -2468,6 +2468,29 @@ func TestGetFile_Success(t *testing.T) {
 	assert.Equalf(t, "file_x", obj.ID, "unexpected file object: %#v", obj)
 }
 
+func TestDownloadFile_Success(t *testing.T) {
+	const (
+		fileID   = "file_x"
+		wantPath = "/openapi/v1/files/" + fileID + "/content"
+		wantMime = "application/octet-stream"
+	)
+	want := []byte("hello")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodGet, r.Method)
+		require.Equal(t, wantPath, r.URL.Path)
+		w.Header().Set("Content-Type", wantMime)
+		_, _ = w.Write(want)
+	}))
+	defer server.Close()
+
+	m := New("test-model", WithAPIKey("k"), WithBaseURL(server.URL))
+	got, mime, err := m.DownloadFile(context.Background(), fileID)
+	require.NoErrorf(t, err, "DownloadFile failed: %v", err)
+	require.Equal(t, want, got)
+	require.Equal(t, wantMime, mime)
+}
+
 // TestDeleteFile_Success tests DeleteFile using a mock server.
 func TestDeleteFile_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -3004,6 +3027,19 @@ func TestConvertUserMessageContent_AllContentTypes(t *testing.T) {
 		assert.Empty(t, extraFields, "expected no extra fields")
 		assert.Len(t, content.OfArrayOfContentParts, 3, "expected 3 content parts")
 	})
+}
+
+func TestConvertUserMessageContent_OmitFileContentParts(t *testing.T) {
+	m := New("test-model", WithOmitFileContentParts(true))
+	message := model.NewUserMessage("Uploaded file: notes.txt")
+	message.AddFileData("notes.txt", []byte("hello"), "text/plain")
+
+	content, extraFields := m.convertUserMessageContent(message)
+	assert.Empty(t, extraFields, "expected no extra fields")
+	require.True(t, content.OfString.Valid(), "expected string content")
+	assert.Equal(t, message.Content, content.OfString.Value)
+	assert.Empty(t, content.OfArrayOfContentParts,
+		"expected no content parts")
 }
 
 // TestBuildChatRequest_EdgeCases tests edge cases in buildChatRequest.

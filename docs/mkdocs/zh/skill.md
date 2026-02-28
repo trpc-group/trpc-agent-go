@@ -521,6 +521,15 @@ agent := llmagent.New(
   - `pin`：当 `from=artifact://name` 未指定 `@version` 时，
     尝试复用同一 `to` 路径第一次解析到的版本（best effort）。
 
+- 会话文件输入（自动 stage）：
+  - 如果当前会话的用户消息中包含文件输入（`content_parts` 中
+    `type=file` 的条目），`skill_run` 会在执行命令前自动把它们
+    写入 `work/inputs/`（也会出现在 `inputs/`）。
+  - 文件名会清洗为安全的 basename，并在重名时追加数字后缀。
+  - 若文件输入包含原始字节（`data`），会直接写入工作区。
+  - 若文件输入仅包含 `file_id`，框架会在模型支持下载时拉取
+    内容并写入工作区。
+
 - `outputs`（可选，声明式输出）：使用清单（manifest）收集输出。
   字段：
   - `globs`：通配符数组（相对工作区，支持 `**`，也支持
@@ -571,6 +580,8 @@ agent := llmagent.New(
 
 输出：
 - `stdout`、`stderr`、`exit_code`、`timed_out`、`duration_ms`
+- `staged_inputs`（可选）：本次执行前从对话自动 stage 进
+  `work/inputs/` 的文件列表
 - `primary_output`（可选）：包含 `name`、`ref`、`content`、`mime_type`、
   `size_bytes`、`truncated`
   - 便捷字段：指向“最合适的”小型文本输出文件（若存在）。当只有一个主要输出时
