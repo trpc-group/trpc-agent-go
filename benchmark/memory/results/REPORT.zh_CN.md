@@ -257,7 +257,7 @@
 
 > 注：`Prompt Tokens`、`LLM Calls` 仅统计 QA 阶段 Agent 的模型调用，
 > 不包含 embedding 请求与 LLM-as-Judge 调用。`平均延迟` 为端到端总耗时
-> 按 #QA 平均（包含 auto extraction）。
+> 按 #QA 平均（包含 embedding、LLM-as-Judge 以及 auto extraction）。
 
 **子集实验 B：Temporal-only token 成本微基准**
 

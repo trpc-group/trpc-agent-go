@@ -260,7 +260,8 @@ We also rerun the same configuration on another representative sample.
 
 > Note: `Prompt Tokens`, `LLM Calls` count only the QA agent model calls.
 > They exclude embedding requests and LLM-as-Judge calls. `Avg Latency`
-> reflects end-to-end time averaged by #QA (including auto extraction).
+> reflects end-to-end time averaged by #QA (including embeddings, judge,
+> and auto extraction).
 
 **Subset run B: Temporal-only token-cost micro-run**
 
