@@ -748,52 +748,92 @@ func (p *ContentRequestProcessor) mergeUserMessages(
 	return merged
 }
 
+// shouldIncludeEvent decides whether an event should be included in the model
+// request and whether that event should be treated as the invocation message.
+//
+// The second return value (isInvocationMessage) is intentionally strict: only
+// exact invocation-message matches return true. Mid-turn user-message
+// protection may still include an event, but returns false for this flag to
+// avoid conflating inclusion with strict message equality.
 func (p *ContentRequestProcessor) shouldIncludeEvent(evt event.Event, inv *agent.Invocation, filter string,
 	isZeroTime bool, since time.Time) (bool, bool) {
-	if evt.Response == nil || evt.IsPartial || !evt.IsValidContent() {
+	// Fast reject malformed, partial, or empty-content events.
+	if !isEventEligibleForInclusion(evt) {
 		return false, false
 	}
-
-	// check is invocation message
-	if inv.RunOptions.RequestID == evt.RequestID &&
-		len(evt.Choices) > 0 &&
-		invocationMessageEqual(inv.Message, evt.Choices[0].Message) {
+	// Exact invocation message match keeps existing semantics.
+	if isStrictInvocationMessage(evt, inv) {
 		return true, true
 	}
-
+	// Keep the current invocation user message even when summary UpdatedAt
+	// would otherwise exclude it.
+	if isCurrentInvocationUserMessage(evt, inv) {
+		return true, false
+	}
 	// Use strict After so events stamped exactly at summary UpdatedAt are
 	// treated as already summarized and not re-sent.
 	if !isZeroTime && !evt.Timestamp.After(since) {
 		return false, false
 	}
+	if !p.passTimelineFilter(evt, inv) {
+		return false, false
+	}
+	if !p.passBranchFilter(evt, filter) {
+		return false, false
+	}
+	return true, false
+}
 
-	// Check timeline filter
+// isEventEligibleForInclusion checks basic event validity before expensive
+// filtering logic runs.
+func isEventEligibleForInclusion(evt event.Event) bool {
+	return evt.Response != nil && !evt.IsPartial && evt.IsValidContent()
+}
+
+// isStrictInvocationMessage checks whether the event exactly matches the
+// current invocation message, including content equality semantics.
+func isStrictInvocationMessage(evt event.Event, inv *agent.Invocation) bool {
+	return inv.RunOptions.RequestID == evt.RequestID &&
+		len(evt.Choices) > 0 &&
+		invocationMessageEqual(inv.Message, evt.Choices[0].Message)
+}
+
+// isCurrentInvocationUserMessage keeps the current invocation's user message
+// even when summary UpdatedAt would exclude it by timestamp.
+//
+// RequestID + InvocationID matching avoids preserving unrelated user messages
+// from other invocations that may share the same request scope.
+func isCurrentInvocationUserMessage(evt event.Event, inv *agent.Invocation) bool {
+	return inv.RunOptions.RequestID != "" &&
+		inv.RunOptions.RequestID == evt.RequestID &&
+		inv.InvocationID != "" &&
+		inv.InvocationID == evt.InvocationID &&
+		len(evt.Choices) > 0 &&
+		evt.Choices[0].Message.Role == model.RoleUser
+}
+
+// passTimelineFilter applies request/invocation timeline constraints.
+func (p *ContentRequestProcessor) passTimelineFilter(evt event.Event, inv *agent.Invocation) bool {
 	switch p.TimelineFilterMode {
 	case TimelineFilterCurrentRequest:
-		if inv.RunOptions.RequestID != evt.RequestID {
-			return false, false
-		}
+		return inv.RunOptions.RequestID == evt.RequestID
 	case TimelineFilterCurrentInvocation:
-		if evt.InvocationID != inv.InvocationID {
-			return false, false
-		}
+		return evt.InvocationID == inv.InvocationID
 	default:
+		return true
 	}
+}
 
-	// Check branch filter
+// passBranchFilter applies branch-scoping constraints.
+func (p *ContentRequestProcessor) passBranchFilter(evt event.Event, filter string) bool {
 	switch p.BranchFilterMode {
 	case BranchFilterModeExact:
-		if evt.FilterKey != filter {
-			return false, false
-		}
+		return evt.FilterKey == filter
 	case BranchFilterModePrefix:
-		if !evt.Filter(filter) {
-			return false, false
-		}
+		return evt.Filter(filter)
 	default:
+		return true
 	}
-
-	return true, false
 }
 
 func invocationMessageEqual(invMsg model.Message, evtMsg model.Message) bool {
