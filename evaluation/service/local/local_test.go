@@ -345,9 +345,12 @@ func TestLocalNewParallelInferenceCreatesPool(t *testing.T) {
 	assert.True(t, ok)
 	assert.True(t, localSvc.evalCaseParallelInferenceEnabled)
 	assert.NotNil(t, localSvc.evalCaseInferencePools)
-	if assert.NotNil(t, localSvc.evalCaseInferencePools[2]) {
-		assert.Equal(t, 2, localSvc.evalCaseInferencePools[2].Cap())
+	pool := localSvc.evalCaseInferencePools[2]
+	assert.NotNil(t, pool)
+	if pool == nil {
+		return
 	}
+	assert.Equal(t, 2, pool.Cap())
 
 	assert.NoError(t, svc.Close())
 }
@@ -365,9 +368,12 @@ func TestLocalNewParallelEvaluationCreatesPool(t *testing.T) {
 	assert.True(t, ok)
 	assert.True(t, localSvc.evalCaseParallelEvaluationEnabled)
 	assert.NotNil(t, localSvc.evalCaseEvaluationPools)
-	if assert.NotNil(t, localSvc.evalCaseEvaluationPools[2]) {
-		assert.Equal(t, 2, localSvc.evalCaseEvaluationPools[2].Cap())
+	pool := localSvc.evalCaseEvaluationPools[2]
+	assert.NotNil(t, pool)
+	if pool == nil {
+		return
 	}
+	assert.Equal(t, 2, pool.Cap())
 
 	assert.NoError(t, svc.Close())
 }
@@ -610,14 +616,18 @@ func TestLocalInferenceParallelInvokeFailureAddsContext(t *testing.T) {
 	}()
 
 	localSvc, ok := svc.(*local)
-	if assert.True(t, ok) {
-		localSvc.evalCaseInferencePoolsMu.Lock()
-		pool := localSvc.evalCaseInferencePools[1]
-		localSvc.evalCaseInferencePoolsMu.Unlock()
-		if assert.NotNil(t, pool) {
-			pool.Release()
-		}
+	assert.True(t, ok)
+	if !ok {
+		return
 	}
+	localSvc.evalCaseInferencePoolsMu.Lock()
+	pool := localSvc.evalCaseInferencePools[1]
+	localSvc.evalCaseInferencePoolsMu.Unlock()
+	assert.NotNil(t, pool)
+	if pool == nil {
+		return
+	}
+	pool.Release()
 
 	results, err := svc.Inference(ctx, &service.InferenceRequest{AppName: appName, EvalSetID: evalSetID})
 	assert.NoError(t, err)
@@ -2599,12 +2609,13 @@ func TestLocalEvaluateDoesNotPersistEvalSetResult(t *testing.T) {
 	})
 	assert.NoError(t, err)
 	assert.NotNil(t, res)
-	if assert.NotNil(t, res) {
-		assert.Len(t, res.EvalCaseResults, 1)
-		assert.Equal(t, "case-1", res.EvalCaseResults[0].EvalID)
-		assert.Equal(t, status.EvalStatusFailed, res.EvalCaseResults[0].FinalEvalStatus)
-		assert.Equal(t, "failed", res.EvalCaseResults[0].ErrorMessage)
+	if res == nil {
+		return
 	}
+	assert.Len(t, res.EvalCaseResults, 1)
+	assert.Equal(t, "case-1", res.EvalCaseResults[0].EvalID)
+	assert.Equal(t, status.EvalStatusFailed, res.EvalCaseResults[0].FinalEvalStatus)
+	assert.Equal(t, "failed", res.EvalCaseResults[0].ErrorMessage)
 }
 
 func TestLocalEvaluatePerCaseErrorMarksCaseFailed(t *testing.T) {

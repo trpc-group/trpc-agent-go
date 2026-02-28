@@ -52,7 +52,7 @@ func (f fakeRunner) Close() error {
 }
 
 func TestInferenceSuccess(t *testing.T) {
-	// Arrange.
+	// Arrange the test inputs.
 	args, err := json.Marshal(map[string]any{"foo": "bar"})
 	assert.NoError(t, err)
 	toolEvent := &event.Event{
@@ -97,7 +97,7 @@ func TestInferenceSuccess(t *testing.T) {
 		UserID: "user-1",
 	}
 	systemMsg := model.NewSystemMessage("You are a helpful assistant.")
-	// Act.
+	// Call the function under test.
 	results, err := Inference(
 		context.Background(),
 		r,
@@ -109,7 +109,7 @@ func TestInferenceSuccess(t *testing.T) {
 			agent.WithInstruction("test-instruction"),
 		},
 	)
-	// Assert.
+	// Assert the results.
 	assert.NoError(t, err)
 	assert.Len(t, results, 1)
 	assert.Equal(t, "generated-inv", results[0].InvocationID)
@@ -124,10 +124,10 @@ func TestInferenceSuccess(t *testing.T) {
 }
 
 func TestInferenceValidation(t *testing.T) {
-	// Missing invocations.
+	// It should reject missing invocations.
 	_, err := Inference(context.Background(), &fakeRunner{}, nil, &evalset.SessionInput{}, "session", nil)
 	assert.Error(t, err)
-	// Missing session input.
+	// It should reject a missing session input.
 	_, err = Inference(context.Background(), &fakeRunner{}, []*evalset.Invocation{
 		{
 			InvocationID: "inv",
@@ -135,7 +135,7 @@ func TestInferenceValidation(t *testing.T) {
 		},
 	}, nil, "session", nil)
 	assert.Error(t, err)
-	// Runner error.
+	// It should surface runner errors.
 	input := []*evalset.Invocation{
 		{
 			InvocationID: "input",
@@ -149,17 +149,17 @@ func TestInferenceValidation(t *testing.T) {
 func TestInferencePerInvocationErrors(t *testing.T) {
 	ctx := context.Background()
 	session := &evalset.SessionInput{UserID: "user"}
-	// Missing user content.
+	// It should reject invocations with missing user content.
 	_, err := inferenceInvocation(ctx, &fakeRunner{}, "session", session, &evalset.Invocation{}, nil)
 	assert.Error(t, err)
-	// Empty event stream.
+	// It should handle an empty event stream.
 	result, err := inferenceInvocation(ctx, &fakeRunner{}, "session", session, &evalset.Invocation{
 		InvocationID: "inv",
 		UserContent:  &model.Message{},
 	}, nil)
 	assert.NoError(t, err)
 	assert.Nil(t, result.FinalResponse)
-	// Empty content parts.
+	// It should handle empty content parts.
 	result, err = inferenceInvocation(ctx, &fakeRunner{}, "session", session, &evalset.Invocation{
 		InvocationID: "inv",
 		UserContent: &model.Message{
@@ -169,7 +169,7 @@ func TestInferencePerInvocationErrors(t *testing.T) {
 	}, nil)
 	assert.NoError(t, err)
 	assert.Nil(t, result.FinalResponse)
-	// Error event.
+	// It should return an error when an error event is received.
 	errorEvent := &event.Event{
 		Response: &model.Response{
 			Error: &model.ResponseError{Message: "failed"},
@@ -183,7 +183,7 @@ func TestInferencePerInvocationErrors(t *testing.T) {
 		},
 	}, nil)
 	assert.Error(t, err)
-	// Runner error.
+	// It should return an error when the runner fails.
 	_, err = inferenceInvocation(ctx, &fakeRunner{runErr: errors.New("boom")}, "session", session, &evalset.Invocation{
 		InvocationID: "inv",
 		UserContent: &model.Message{
@@ -192,13 +192,13 @@ func TestInferencePerInvocationErrors(t *testing.T) {
 		},
 	}, nil)
 	assert.Error(t, err)
-	// Ensure session input validation executed in parent function.
+	// This ensures the parent function validates the session input.
 	_, err = Inference(ctx, &fakeRunner{}, []*evalset.Invocation{}, nil, "session", nil)
 	assert.Error(t, err)
 }
 
 func TestConvertToolCallResponse(t *testing.T) {
-	// Arrange.
+	// Arrange the test inputs.
 	args, err := json.Marshal(map[string]any{"count": 1})
 	assert.NoError(t, err)
 	ev := &event.Event{
@@ -220,9 +220,9 @@ func TestConvertToolCallResponse(t *testing.T) {
 			},
 		},
 	}
-	// Act.
+	// Call the function under test.
 	result, err := convertTools(ev)
-	// Assert.
+	// Assert the results.
 	assert.NoError(t, err)
 	assert.Len(t, result, 1)
 	assert.Equal(t, "tool", result[0].Name)

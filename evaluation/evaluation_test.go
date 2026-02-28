@@ -411,16 +411,21 @@ func TestAgentEvaluatorEvaluateDoesNotOverrideServiceCallOptionsByDefault(t *tes
 	_, err = ae.Evaluate(ctx, evalSetID)
 	assert.NoError(t, err)
 
-	if assert.NotNil(t, probeSvc.lastInferenceOptions) {
-		assert.Equal(t, -123, probeSvc.lastInferenceOptions.EvalCaseParallelism)
-		assert.True(t, probeSvc.lastInferenceOptions.EvalCaseParallelInferenceEnabled)
-		assert.True(t, probeSvc.lastInferenceOptions.EvalCaseParallelEvaluationEnabled)
+	assert.NotNil(t, probeSvc.lastInferenceOptions)
+	if probeSvc.lastInferenceOptions == nil {
+		return
 	}
-	if assert.NotNil(t, probeSvc.lastEvaluateOptions) {
-		assert.Equal(t, -456, probeSvc.lastEvaluateOptions.EvalCaseParallelism)
-		assert.True(t, probeSvc.lastEvaluateOptions.EvalCaseParallelInferenceEnabled)
-		assert.True(t, probeSvc.lastEvaluateOptions.EvalCaseParallelEvaluationEnabled)
+	assert.Equal(t, -123, probeSvc.lastInferenceOptions.EvalCaseParallelism)
+	assert.True(t, probeSvc.lastInferenceOptions.EvalCaseParallelInferenceEnabled)
+	assert.True(t, probeSvc.lastInferenceOptions.EvalCaseParallelEvaluationEnabled)
+
+	assert.NotNil(t, probeSvc.lastEvaluateOptions)
+	if probeSvc.lastEvaluateOptions == nil {
+		return
 	}
+	assert.Equal(t, -456, probeSvc.lastEvaluateOptions.EvalCaseParallelism)
+	assert.True(t, probeSvc.lastEvaluateOptions.EvalCaseParallelInferenceEnabled)
+	assert.True(t, probeSvc.lastEvaluateOptions.EvalCaseParallelEvaluationEnabled)
 }
 
 func TestAgentEvaluatorClose_CollectsErrors(t *testing.T) {
@@ -1079,9 +1084,10 @@ func TestAgentEvaluatorRunEvaluationSaveFailureLeavesResultIDUnset(t *testing.T)
 	assert.Contains(t, err.Error(), "save eval set result")
 	assert.Contains(t, err.Error(), "save failed")
 	assert.NotNil(t, resultMgr.last)
-	if assert.NotNil(t, resultMgr.last) {
-		assert.Empty(t, resultMgr.last.EvalSetResultID)
+	if resultMgr.last == nil {
+		return
 	}
+	assert.Empty(t, resultMgr.last.EvalSetResultID)
 }
 
 func TestAgentEvaluatorRunEvaluationSummarizeError(t *testing.T) {
@@ -1232,15 +1238,17 @@ func TestAgentEvaluatorRunEvaluationPersistsSingleResultWithSummary(t *testing.T
 
 	assert.Equal(t, int32(1), atomic.LoadInt32(&resultMgr.saves))
 	assert.NotNil(t, resultMgr.last)
-	if assert.NotNil(t, resultMgr.last) {
-		assert.NotNil(t, resultMgr.last.Summary)
-		if assert.NotNil(t, resultMgr.last.Summary) {
-			assert.Equal(t, 2, resultMgr.last.Summary.NumRuns)
-			assert.Equal(t, status.EvalStatusFailed, resultMgr.last.Summary.OverallStatus)
-			assert.Len(t, resultMgr.last.Summary.RunSummaries, 2)
-			assert.Len(t, resultMgr.last.Summary.EvalCaseSummaries, 2)
-		}
+	if resultMgr.last == nil {
+		return
 	}
+	assert.NotNil(t, resultMgr.last.Summary)
+	if resultMgr.last.Summary == nil {
+		return
+	}
+	assert.Equal(t, 2, resultMgr.last.Summary.NumRuns)
+	assert.Equal(t, status.EvalStatusFailed, resultMgr.last.Summary.OverallStatus)
+	assert.Len(t, resultMgr.last.Summary.RunSummaries, 2)
+	assert.Len(t, resultMgr.last.Summary.EvalCaseSummaries, 2)
 }
 
 func TestAgentEvaluatorRunEvaluationPersistsSummaryWhenNumRunsIsOne(t *testing.T) {

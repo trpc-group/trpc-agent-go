@@ -106,21 +106,27 @@ func TestWithNumRuns(t *testing.T) {
 
 func TestWithEvalCaseParallelism(t *testing.T) {
 	opts := newOptions(WithEvalCaseParallelism(8))
-	if assert.NotNil(t, opts.evalCaseParallelism) {
-		assert.Equal(t, 8, *opts.evalCaseParallelism)
+	assert.NotNil(t, opts.evalCaseParallelism)
+	if opts.evalCaseParallelism == nil {
+		return
 	}
+	assert.Equal(t, 8, *opts.evalCaseParallelism)
 }
 
 func TestWithEvalCaseParallelInferenceEnabled(t *testing.T) {
 	opts := newOptions(WithEvalCaseParallelInferenceEnabled(true))
-	if assert.NotNil(t, opts.evalCaseParallelInferenceEnabled) {
-		assert.True(t, *opts.evalCaseParallelInferenceEnabled)
+	assert.NotNil(t, opts.evalCaseParallelInferenceEnabled)
+	if opts.evalCaseParallelInferenceEnabled == nil {
+		return
 	}
+	assert.True(t, *opts.evalCaseParallelInferenceEnabled)
 }
 
 func TestWithEvalCaseParallelEvaluationEnabled(t *testing.T) {
 	opts := newOptions(WithEvalCaseParallelEvaluationEnabled(true))
-	if assert.NotNil(t, opts.evalCaseParallelEvaluationEnabled) {
-		assert.True(t, *opts.evalCaseParallelEvaluationEnabled)
+	assert.NotNil(t, opts.evalCaseParallelEvaluationEnabled)
+	if opts.evalCaseParallelEvaluationEnabled == nil {
+		return
 	}
+	assert.True(t, *opts.evalCaseParallelEvaluationEnabled)
 }
