@@ -70,19 +70,21 @@ func createEvalCaseInferencePool(size int) (*ants.PoolWithFunc, error) {
 	return pool, nil
 }
 
-func (s *local) ensureEvalCaseInferencePool() error {
-	s.evalCaseInferencePoolOnce.Do(func() {
-		if s.evalCaseInferencePool != nil {
-			return
-		}
-		pool, err := createEvalCaseInferencePool(s.evalCaseParallelism)
-		if err != nil {
-			s.evalCaseInferencePoolErr = err
-			return
-		}
-		s.evalCaseInferencePool = pool
-	})
-	return s.evalCaseInferencePoolErr
+func (s *local) ensureEvalCaseInferencePool(size int) (*ants.PoolWithFunc, error) {
+	s.evalCaseInferencePoolsMu.Lock()
+	defer s.evalCaseInferencePoolsMu.Unlock()
+	if s.evalCaseInferencePools == nil {
+		s.evalCaseInferencePools = make(map[int]*ants.PoolWithFunc)
+	}
+	if pool := s.evalCaseInferencePools[size]; pool != nil {
+		return pool, nil
+	}
+	pool, err := createEvalCaseInferencePool(size)
+	if err != nil {
+		return nil, err
+	}
+	s.evalCaseInferencePools[size] = pool
+	return pool, nil
 }
 
 type evalCaseEvaluationParam struct {
@@ -147,17 +149,19 @@ func createEvalCaseEvaluationPool(size int) (*ants.PoolWithFunc, error) {
 	return pool, nil
 }
 
-func (s *local) ensureEvalCaseEvaluationPool() error {
-	s.evalCaseEvaluationPoolOnce.Do(func() {
-		if s.evalCaseEvaluationPool != nil {
-			return
-		}
-		pool, err := createEvalCaseEvaluationPool(s.evalCaseParallelism)
-		if err != nil {
-			s.evalCaseEvaluationPoolErr = err
-			return
-		}
-		s.evalCaseEvaluationPool = pool
-	})
-	return s.evalCaseEvaluationPoolErr
+func (s *local) ensureEvalCaseEvaluationPool(size int) (*ants.PoolWithFunc, error) {
+	s.evalCaseEvaluationPoolsMu.Lock()
+	defer s.evalCaseEvaluationPoolsMu.Unlock()
+	if s.evalCaseEvaluationPools == nil {
+		s.evalCaseEvaluationPools = make(map[int]*ants.PoolWithFunc)
+	}
+	if pool := s.evalCaseEvaluationPools[size]; pool != nil {
+		return pool, nil
+	}
+	pool, err := createEvalCaseEvaluationPool(size)
+	if err != nil {
+		return nil, err
+	}
+	s.evalCaseEvaluationPools[size] = pool
+	return pool, nil
 }

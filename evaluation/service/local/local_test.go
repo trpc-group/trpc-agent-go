@@ -326,8 +326,8 @@ func TestLocalNewDefaultOptions(t *testing.T) {
 	assert.True(t, ok)
 	assert.False(t, localSvc.evalCaseParallelInferenceEnabled)
 	assert.False(t, localSvc.evalCaseParallelEvaluationEnabled)
-	assert.Nil(t, localSvc.evalCaseInferencePool)
-	assert.Nil(t, localSvc.evalCaseEvaluationPool)
+	assert.Nil(t, localSvc.evalCaseInferencePools)
+	assert.Nil(t, localSvc.evalCaseEvaluationPools)
 
 	assert.NoError(t, svc.Close())
 }
@@ -344,8 +344,10 @@ func TestLocalNewParallelInferenceCreatesPool(t *testing.T) {
 	localSvc, ok := svc.(*local)
 	assert.True(t, ok)
 	assert.True(t, localSvc.evalCaseParallelInferenceEnabled)
-	assert.NotNil(t, localSvc.evalCaseInferencePool)
-	assert.Equal(t, 2, localSvc.evalCaseInferencePool.Cap())
+	assert.NotNil(t, localSvc.evalCaseInferencePools)
+	if assert.NotNil(t, localSvc.evalCaseInferencePools[2]) {
+		assert.Equal(t, 2, localSvc.evalCaseInferencePools[2].Cap())
+	}
 
 	assert.NoError(t, svc.Close())
 }
@@ -362,8 +364,10 @@ func TestLocalNewParallelEvaluationCreatesPool(t *testing.T) {
 	localSvc, ok := svc.(*local)
 	assert.True(t, ok)
 	assert.True(t, localSvc.evalCaseParallelEvaluationEnabled)
-	assert.NotNil(t, localSvc.evalCaseEvaluationPool)
-	assert.Equal(t, 2, localSvc.evalCaseEvaluationPool.Cap())
+	assert.NotNil(t, localSvc.evalCaseEvaluationPools)
+	if assert.NotNil(t, localSvc.evalCaseEvaluationPools[2]) {
+		assert.Equal(t, 2, localSvc.evalCaseEvaluationPools[2].Cap())
+	}
 
 	assert.NoError(t, svc.Close())
 }
@@ -918,6 +922,111 @@ func TestLocalInferenceParallelismOneRunsSerial(t *testing.T) {
 	assert.Equal(t, "case-fast", got.results[1].EvalCaseID)
 }
 
+func TestLocalInferencePerCallParallelismCanChange(t *testing.T) {
+	ctx := context.Background()
+	appName := "math-app"
+	evalSetID := "math-set"
+
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+
+	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, makeEvalCase(appName, "case-slow", "slow")))
+	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, makeEvalCase(appName, "case-fast", "fast")))
+
+	runnerStub := &controlledRunner{
+		started:     make(chan string, 2),
+		finished:    make(chan string, 2),
+		fastRelease: make(chan struct{}, 1),
+		slowRelease: make(chan struct{}, 1),
+	}
+	defer func() {
+		select {
+		case runnerStub.fastRelease <- struct{}{}:
+		default:
+		}
+		select {
+		case runnerStub.slowRelease <- struct{}{}:
+		default:
+		}
+	}()
+
+	reg := registry.New()
+	svc, err := New(
+		runnerStub,
+		service.WithEvalSetManager(mgr),
+		service.WithRegistry(reg),
+		service.WithEvalCaseParallelism(1),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	if svc == nil {
+		return
+	}
+	defer func() { assert.NoError(t, svc.Close()) }()
+
+	type outcome struct {
+		results []*service.InferenceResult
+		err     error
+	}
+	outCh := make(chan outcome, 1)
+	go func() {
+		results, err := svc.Inference(ctx, &service.InferenceRequest{
+			AppName:   appName,
+			EvalSetID: evalSetID,
+		},
+			service.WithEvalCaseParallelInferenceEnabled(true),
+			service.WithEvalCaseParallelism(2),
+		)
+		outCh <- outcome{results: results, err: err}
+	}()
+
+	started := make(map[string]struct{})
+	deadline := time.After(2 * time.Second)
+	for len(started) < 2 {
+		select {
+		case msg := <-runnerStub.started:
+			started[msg] = struct{}{}
+		case <-deadline:
+			assert.FailNow(t, "timeout waiting for runner start")
+		}
+	}
+	_, slowStarted := started["slow"]
+	_, fastStarted := started["fast"]
+	assert.True(t, slowStarted)
+	assert.True(t, fastStarted)
+	assert.Equal(t, int32(2), atomic.LoadInt32(&runnerStub.maxConcurrent))
+
+	runnerStub.fastRelease <- struct{}{}
+	select {
+	case msg := <-runnerStub.finished:
+		assert.Equal(t, "fast", msg)
+	case <-time.After(2 * time.Second):
+		assert.FailNow(t, "timeout waiting for fast case completion")
+	}
+
+	runnerStub.slowRelease <- struct{}{}
+	select {
+	case msg := <-runnerStub.finished:
+		assert.Equal(t, "slow", msg)
+	case <-time.After(2 * time.Second):
+		assert.FailNow(t, "timeout waiting for slow case completion")
+	}
+
+	var got outcome
+	select {
+	case got = <-outCh:
+	case <-time.After(2 * time.Second):
+		assert.FailNow(t, "timeout waiting for inference results")
+	}
+	assert.NoError(t, got.err)
+	assert.Len(t, got.results, 2)
+	assert.Equal(t, "case-slow", got.results[0].EvalCaseID)
+	assert.Equal(t, "case-fast", got.results[1].EvalCaseID)
+}
+
 func TestLocalEvaluateRequestValidation(t *testing.T) {
 	ctx := context.Background()
 	mgr := evalsetinmemory.New()
@@ -1125,6 +1234,89 @@ func TestLocalEvaluatePerCallParallelEvaluationEnabledPreservesOrder(t *testing.
 	respCh := make(chan response, 1)
 	go func() {
 		result, err := svc.Evaluate(ctx, req, service.WithEvalCaseParallelEvaluationEnabled(true))
+		respCh <- response{result: result, err: err}
+	}()
+
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+	for i := 0; i < 2; i++ {
+		select {
+		case <-blocking.started:
+		case <-deadline.C:
+			assert.FailNow(t, "timeout waiting for evaluator calls")
+		}
+	}
+	close(blocking.release)
+
+	resp := <-respCh
+	assert.NoError(t, resp.err)
+	assert.NotNil(t, resp.result)
+	if resp.result == nil {
+		return
+	}
+	assert.Len(t, resp.result.EvalCaseResults, 2)
+	assert.Equal(t, "case-1", resp.result.EvalCaseResults[0].EvalID)
+	assert.Equal(t, "case-2", resp.result.EvalCaseResults[1].EvalID)
+	assert.GreaterOrEqual(t, atomic.LoadInt32(&blocking.maxConcurrent), int32(2))
+}
+
+func TestLocalEvaluatePerCallParallelismCanChange(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, makeEvalCase(appName, "case-1", "prompt-1")))
+	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, makeEvalCase(appName, "case-2", "prompt-2")))
+
+	reg := registry.New()
+	metricName := "blocking_metric"
+	blocking := newBlockingEvaluator(metricName, 2)
+	assert.NoError(t, reg.Register(metricName, blocking))
+
+	svc, err := New(
+		&fakeRunner{},
+		service.WithEvalSetManager(mgr),
+		service.WithRegistry(reg),
+		service.WithSessionIDSupplier(func(ctx context.Context) string { return "session-xyz" }),
+		service.WithEvalCaseParallelism(1),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	if svc == nil {
+		return
+	}
+	defer func() { assert.NoError(t, svc.Close()) }()
+
+	inference1 := makeInferenceResult(appName, evalSetID, "case-1", "session-xyz", []*evalset.Invocation{
+		makeActualInvocation("case-1-actual", "prompt-1", "resp-1"),
+	})
+	inference2 := makeInferenceResult(appName, evalSetID, "case-2", "session-xyz", []*evalset.Invocation{
+		makeActualInvocation("case-2-actual", "prompt-2", "resp-2"),
+	})
+	req := &service.EvaluateRequest{
+		AppName:          appName,
+		EvalSetID:        evalSetID,
+		InferenceResults: []*service.InferenceResult{inference1, inference2},
+		EvaluateConfig: &service.EvaluateConfig{
+			EvalMetrics: []*metric.EvalMetric{{MetricName: metricName, Threshold: 0.5}},
+		},
+	}
+
+	type response struct {
+		result *service.EvalSetRunResult
+		err    error
+	}
+	respCh := make(chan response, 1)
+	go func() {
+		result, err := svc.Evaluate(ctx, req,
+			service.WithEvalCaseParallelEvaluationEnabled(true),
+			service.WithEvalCaseParallelism(2),
+		)
 		respCh <- response{result: result, err: err}
 	}()
 

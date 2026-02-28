@@ -39,16 +39,8 @@ func (s *local) resolveInferenceOptions(opt ...service.Option) (*service.Options
 		if callOpts.EvalCaseParallelism <= 0 {
 			return nil, errors.New("eval case parallelism must be greater than 0")
 		}
-		if callOpts.EvalCaseParallelism != s.evalCaseParallelism {
-			return nil, errors.New("eval case parallelism cannot be changed per call")
-		}
-		if s.evalCaseInferencePool == nil {
-			if err := s.ensureEvalCaseInferencePool(); err != nil {
-				return nil, err
-			}
-		}
-		if s.evalCaseInferencePool == nil {
-			return nil, errors.New("eval case inference pool is not initialized")
+		if _, err := s.ensureEvalCaseInferencePool(callOpts.EvalCaseParallelism); err != nil {
+			return nil, err
 		}
 	}
 	return callOpts, nil
@@ -76,16 +68,8 @@ func (s *local) resolveEvaluateOptions(opt ...service.Option) (*service.Options,
 		if callOpts.EvalCaseParallelism <= 0 {
 			return nil, errors.New("eval case parallelism must be greater than 0")
 		}
-		if callOpts.EvalCaseParallelism != s.evalCaseParallelism {
-			return nil, errors.New("eval case parallelism cannot be changed per call")
-		}
-		if s.evalCaseEvaluationPool == nil {
-			if err := s.ensureEvalCaseEvaluationPool(); err != nil {
-				return nil, err
-			}
-		}
-		if s.evalCaseEvaluationPool == nil {
-			return nil, errors.New("eval case evaluation pool is not initialized")
+		if _, err := s.ensureEvalCaseEvaluationPool(callOpts.EvalCaseParallelism); err != nil {
+			return nil, err
 		}
 	}
 	return callOpts, nil

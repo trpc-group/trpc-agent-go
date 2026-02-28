@@ -64,8 +64,10 @@ func inferenceInvocation(
 		return nil, fmt.Errorf("invocation user content is nil for eval case invocation %q", invocation.InvocationID)
 	}
 	mergedOpts := make([]agent.RunOption, 0, 1+len(runOptions))
-	mergedOpts = append(mergedOpts, agent.WithRuntimeState(initialSession.State))
 	mergedOpts = append(mergedOpts, runOptions...)
+	if initialSession.State != nil {
+		mergedOpts = append(mergedOpts, agent.WithRuntimeState(initialSession.State))
+	}
 	events, err := r.Run(
 		ctx,
 		initialSession.UserID,

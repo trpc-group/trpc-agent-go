@@ -181,7 +181,7 @@ func (s *local) loadInferenceEvalCases(ctx context.Context, req *service.Inferen
 }
 
 func (s *local) inferEvalCases(ctx context.Context, req *service.InferenceRequest, evalCases []*evalset.EvalCase, opts *service.Options) ([]*service.InferenceResult, error) {
-	if opts.EvalCaseParallelInferenceEnabled && s.evalCaseInferencePool != nil {
+	if opts.EvalCaseParallelInferenceEnabled {
 		return s.inferEvalCasesParallel(ctx, req, evalCases, opts)
 	}
 	return s.inferEvalCasesSerial(ctx, req, evalCases, opts)
@@ -197,6 +197,10 @@ func (s *local) inferEvalCasesSerial(ctx context.Context, req *service.Inference
 }
 
 func (s *local) inferEvalCasesParallel(ctx context.Context, req *service.InferenceRequest, evalCases []*evalset.EvalCase, opts *service.Options) ([]*service.InferenceResult, error) {
+	pool, err := s.ensureEvalCaseInferencePool(opts.EvalCaseParallelism)
+	if err != nil {
+		return nil, err
+	}
 	results := make([]*service.InferenceResult, len(evalCases))
 	var wg sync.WaitGroup
 	for idx, evalCase := range evalCases {
@@ -210,7 +214,7 @@ func (s *local) inferEvalCasesParallel(ctx context.Context, req *service.Inferen
 		param.svc = s
 		param.results = results
 		param.wg = &wg
-		if err := s.evalCaseInferencePool.Invoke(param); err != nil {
+		if err := pool.Invoke(param); err != nil {
 			wg.Done()
 			sessionID := opts.SessionIDSupplier(ctx)
 			results[idx] = newFailedInferenceResult(
@@ -306,10 +310,10 @@ func (s *local) inferenceEvalCase(ctx context.Context, req *service.InferenceReq
 		return newFailedInferenceResult(result, err)
 	}
 	mergedRunOptions := make([]agent.RunOption, 0, len(opts.RunOptions)+1)
+	mergedRunOptions = append(mergedRunOptions, opts.RunOptions...)
 	if len(seedMessages) > 0 {
 		mergedRunOptions = append(mergedRunOptions, agent.WithInjectedContextMessages(seedMessages))
 	}
-	mergedRunOptions = append(mergedRunOptions, opts.RunOptions...)
 	inferences, err := inference.Inference(
 		ctx,
 		s.runner,

@@ -48,12 +48,10 @@ type local struct {
 	evalCaseParallelism               int
 	evalCaseParallelInferenceEnabled  bool
 	evalCaseParallelEvaluationEnabled bool
-	evalCaseInferencePool             *ants.PoolWithFunc
-	evalCaseInferencePoolOnce         sync.Once
-	evalCaseInferencePoolErr          error
-	evalCaseEvaluationPool            *ants.PoolWithFunc
-	evalCaseEvaluationPoolOnce        sync.Once
-	evalCaseEvaluationPoolErr         error
+	evalCaseInferencePoolsMu          sync.Mutex
+	evalCaseInferencePools            map[int]*ants.PoolWithFunc
+	evalCaseEvaluationPoolsMu         sync.Mutex
+	evalCaseEvaluationPools           map[int]*ants.PoolWithFunc
 }
 
 // New returns a new local evaluation service.
@@ -91,29 +89,39 @@ func New(runner runner.Runner, opt ...service.Option) (service.Service, error) {
 		evalCaseParallelEvaluationEnabled: opts.EvalCaseParallelEvaluationEnabled,
 	}
 	if service.evalCaseParallelInferenceEnabled {
-		pool, err := createEvalCaseInferencePool(service.evalCaseParallelism)
-		if err != nil {
+		if _, err := service.ensureEvalCaseInferencePool(service.evalCaseParallelism); err != nil {
 			return nil, fmt.Errorf("create eval case inference pool: %w", err)
 		}
-		service.evalCaseInferencePool = pool
 	}
 	if service.evalCaseParallelEvaluationEnabled {
-		pool, err := createEvalCaseEvaluationPool(service.evalCaseParallelism)
-		if err != nil {
+		if _, err := service.ensureEvalCaseEvaluationPool(service.evalCaseParallelism); err != nil {
 			return nil, fmt.Errorf("create eval case evaluation pool: %w", err)
 		}
-		service.evalCaseEvaluationPool = pool
 	}
 	return service, nil
 }
 
 // Close closes the eval service and releases owned resources.
 func (s *local) Close() error {
-	if s.evalCaseInferencePool != nil {
-		s.evalCaseInferencePool.Release()
+	s.evalCaseInferencePoolsMu.Lock()
+	inferencePools := s.evalCaseInferencePools
+	s.evalCaseInferencePools = nil
+	s.evalCaseInferencePoolsMu.Unlock()
+
+	s.evalCaseEvaluationPoolsMu.Lock()
+	evaluationPools := s.evalCaseEvaluationPools
+	s.evalCaseEvaluationPools = nil
+	s.evalCaseEvaluationPoolsMu.Unlock()
+
+	for _, pool := range inferencePools {
+		if pool != nil {
+			pool.Release()
+		}
 	}
-	if s.evalCaseEvaluationPool != nil {
-		s.evalCaseEvaluationPool.Release()
+	for _, pool := range evaluationPools {
+		if pool != nil {
+			pool.Release()
+		}
 	}
 	return nil
 }
@@ -235,6 +243,11 @@ func (s *local) evaluateCaseResults(ctx context.Context, req *service.EvaluateRe
 }
 
 func (s *local) evaluateCaseResultsParallel(ctx context.Context, req *service.EvaluateRequest, opts *service.Options) ([]*evalresult.EvalCaseResult, error) {
+	pool, err := s.ensureEvalCaseEvaluationPool(opts.EvalCaseParallelism)
+	if err != nil {
+		return nil, err
+	}
+
 	results := make([]*evalresult.EvalCaseResult, len(req.InferenceResults))
 	evalErrors := make([]error, len(req.InferenceResults))
 	var wg sync.WaitGroup
@@ -250,7 +263,7 @@ func (s *local) evaluateCaseResultsParallel(ctx context.Context, req *service.Ev
 		param.results = results
 		param.errs = evalErrors
 		param.wg = &wg
-		if err := s.evalCaseEvaluationPool.Invoke(param); err != nil {
+		if err := pool.Invoke(param); err != nil {
 			wg.Done()
 			evalCaseID := ""
 			if inferenceResult != nil {

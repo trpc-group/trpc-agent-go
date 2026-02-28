@@ -12,17 +12,21 @@ package local
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	evalresultinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 func TestRunAfterInferenceSetCallbacksPassesArgs(t *testing.T) {
@@ -574,4 +578,95 @@ func TestLocalInferenceEmptyConversationMarksCaseFailed(t *testing.T) {
 	assert.Equal(t, status.EvalStatusFailed, results[0].Status)
 	assert.Nil(t, results[0].Inferences)
 	assert.Contains(t, results[0].ErrorMessage, "invocations are empty")
+}
+
+type runOptionProbeRunner struct {
+	events []*event.Event
+
+	mu          sync.Mutex
+	lastOptions agent.RunOptions
+}
+
+func (r *runOptionProbeRunner) Run(ctx context.Context, userID string, sessionID string, message model.Message, runOpts ...agent.RunOption) (<-chan *event.Event, error) {
+	var opts agent.RunOptions
+	for _, opt := range runOpts {
+		opt(&opts)
+	}
+
+	r.mu.Lock()
+	r.lastOptions = opts
+	r.mu.Unlock()
+
+	ch := make(chan *event.Event, len(r.events))
+	for _, evt := range r.events {
+		ch <- evt
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (r *runOptionProbeRunner) Close() error {
+	return nil
+}
+
+func TestLocalInferenceRunOptionsInjectionOrder(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+
+	evalCase := makeEvalCase(appName, "case-1", "prompt")
+	evalCase.ContextMessages = []*model.Message{
+		{Role: model.RoleSystem, Content: "case system"},
+		{Role: model.RoleUser, Content: "case user"},
+	}
+	evalCase.SessionInput.State = map[string]any{
+		"from_session": "yes",
+	}
+	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, evalCase))
+
+	globalInjected := model.NewSystemMessage("global injected")
+	overrideState := map[string]any{
+		"from_run_option": "yes",
+	}
+
+	probeRunner := &runOptionProbeRunner{
+		events: []*event.Event{makeFinalEvent("ok")},
+	}
+	svc, err := New(
+		probeRunner,
+		service.WithEvalSetManager(mgr),
+		service.WithEvalResultManager(evalresultinmemory.New()),
+		service.WithRegistry(registry.New()),
+		service.WithSessionIDSupplier(func(ctx context.Context) string { return "session" }),
+		service.WithRunOptions(
+			agent.WithInjectedContextMessages([]model.Message{globalInjected}),
+			agent.WithRuntimeState(overrideState),
+		),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	defer func() { assert.NoError(t, svc.Close()) }()
+
+	results, err := svc.Inference(ctx, &service.InferenceRequest{AppName: appName, EvalSetID: evalSetID})
+	assert.NoError(t, err)
+	assert.Len(t, results, 1)
+
+	probeRunner.mu.Lock()
+	got := probeRunner.lastOptions
+	probeRunner.mu.Unlock()
+
+	expectedInjected := []model.Message{
+		globalInjected,
+		{Role: model.RoleSystem, Content: "case system"},
+		{Role: model.RoleUser, Content: "case user"},
+	}
+	assert.Equal(t, expectedInjected, got.InjectedContextMessages)
+	assert.Equal(t, evalCase.SessionInput.State, got.RuntimeState)
+	assert.NotEqual(t, overrideState, got.RuntimeState)
 }
