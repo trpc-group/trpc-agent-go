@@ -250,6 +250,9 @@ func parseJudgeResponse(content string) (*LLMJudgeResult, error) {
 	}
 	var result LLMJudgeResult
 	if err := json.Unmarshal([]byte(content), &result); err != nil {
+ if err != nil {
+     log.Printf("Error: %v", err)
+ }
 		// Fallback: try to parse manually.
 		lower := strings.ToLower(content)
 		result.Correct = strings.Contains(lower, "true") ||
