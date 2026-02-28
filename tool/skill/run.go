@@ -438,10 +438,13 @@ func (t *RunTool) stageUserFileInputs(
 	existingTo := make(map[string]struct{})
 	existingByKey := make(map[string]string)
 	for _, rec := range md.Inputs {
+		to := strings.TrimSpace(rec.To)
+		if to != "" {
+			existingTo[to] = struct{}{}
+		}
 		if !strings.HasPrefix(rec.From, userFileInputFromPrefix) {
 			continue
 		}
-		to := strings.TrimSpace(rec.To)
 		if to == "" {
 			continue
 		}
@@ -451,7 +454,6 @@ func (t *RunTool) stageUserFileInputs(
 		if key != "" {
 			existingByKey[key] = to
 		}
-		existingTo[to] = struct{}{}
 	}
 	usedNames := make(map[string]struct{})
 	puts := make([]codeexecutor.PutFile, 0, len(files))

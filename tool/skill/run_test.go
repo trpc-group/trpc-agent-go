@@ -1905,6 +1905,74 @@ func TestRunTool_StagesUserFileInputs_UsesMetadataCache(t *testing.T) {
 	require.Equal(t, len(md1.Inputs), len(md2.Inputs))
 }
 
+func TestRunTool_StagesUserFileInputs_DedupesAllMetadataInputs(t *testing.T) {
+	root := t.TempDir()
+	dir := writeSkill(t, root, testSkillName)
+	scripts := filepath.Join(dir, scriptsDir)
+	require.NoError(t, os.MkdirAll(scripts, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(scripts, "seed.txt"),
+		[]byte(contentMsg+"\n"),
+		0o644,
+	))
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	args1 := runInput{
+		Skill:   testSkillName,
+		Command: "cat work/inputs/" + uploadNotesTxt + " > " + outATxt,
+		Inputs: []codeexecutor.InputSpec{
+			{
+				From: "skill://" + testSkillName + "/" + scriptsDir +
+					"/seed.txt",
+				To:   "work/inputs/" + uploadNotesTxt,
+				Mode: "copy",
+			},
+		},
+		OutputFiles: []string{outATxt},
+		Timeout:     timeoutSecSmall,
+	}
+	enc1, err := jsonMarshal(args1)
+	require.NoError(t, err)
+	res1, err := rt.Call(context.Background(), enc1)
+	require.NoError(t, err)
+	out1 := res1.(runOutput)
+	require.Contains(t, out1.OutputFiles[0].Content, contentMsg)
+
+	user := model.NewUserMessage("upload")
+	user.AddFileData(
+		uploadNotesTxt,
+		[]byte(contentHello+"\n"),
+		"text/plain",
+	)
+	inv := agent.NewInvocation(agent.WithInvocationMessage(user))
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	cmd2 := strings.Join([]string{
+		"cat work/inputs/" + uploadNotesTxt,
+		"work/inputs/" + uploadNotes2Txt,
+		"> " + outBTxt,
+	}, " ")
+	args2 := runInput{
+		Skill:       testSkillName,
+		Command:     cmd2,
+		OutputFiles: []string{outBTxt},
+		Timeout:     timeoutSecSmall,
+	}
+	enc2, err := jsonMarshal(args2)
+	require.NoError(t, err)
+	res2, err := rt.Call(ctx, enc2)
+	require.NoError(t, err)
+	out2 := res2.(runOutput)
+	require.Len(t, out2.StagedInputs, 1)
+	require.Equal(t, "work/inputs/"+uploadNotes2Txt, out2.StagedInputs[0].Name)
+	require.Contains(t, out2.OutputFiles[0].Content, contentMsg)
+	require.Contains(t, out2.OutputFiles[0].Content, contentHello)
+}
+
 func TestRunTool_StagesUserFileInputs_MissingRef_Warn(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, testSkillName)
