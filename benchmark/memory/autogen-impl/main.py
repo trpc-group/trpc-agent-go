@@ -5,9 +5,9 @@ Evaluates long-term conversational memory using the LoCoMo dataset.
 
 Evaluation Scenarios:
   - baseline: Full conversation as context (no memory system).
-  - memory: AutoGen ChromaDBVectorMemory with SentenceTransformer
-    embeddings. Conversation turns are ingested as MemoryContent
-    entries. During QA the AssistantAgent automatically retrieves
+  - memory: AutoGen ChromaDBVectorMemory with OpenAI embeddings.
+    Conversation turns are ingested as MemoryContent entries.
+    During QA the AssistantAgent automatically retrieves
     relevant memories via vector similarity search.
 
 Metrics (aligned with LoCoMo paper):
@@ -39,11 +39,15 @@ import metrics
 # AutoGen imports.
 # ---------------------------------------------------------------------------
 from autogen_agentchat.agents import AssistantAgent
+from autogen_core import CancellationToken
 from autogen_core.memory import MemoryContent, MemoryMimeType
 from autogen_ext.memory.chromadb import (
     ChromaDBVectorMemory,
+    CustomEmbeddingFunctionConfig,
     PersistentChromaDBVectorMemoryConfig,
-    SentenceTransformerEmbeddingFunctionConfig,
+)
+from chromadb.utils.embedding_functions import (
+    OpenAIEmbeddingFunction,
 )
 from autogen_ext.models.openai import (
     OpenAIChatCompletionClient,
@@ -62,11 +66,8 @@ warnings.filterwarnings(
     message="Pydantic serializer warnings",
     category=UserWarning,
 )
-# Quiet chromadb and sentence-transformers logs.
+# Quiet chromadb logs.
 logging.getLogger("chromadb").setLevel(logging.WARNING)
-logging.getLogger(
-    "sentence_transformers"
-).setLevel(logging.WARNING)
 
 # ---------------------------------------------------------------------------
 # Constants.
@@ -81,8 +82,8 @@ _MEMORY_TOP_K = 30
 # Similarity score threshold.
 _MEMORY_SCORE_THRESHOLD = 0.3
 
-# Embedding model for ChromaDB.
-_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+# Embedding model for ChromaDB (OpenAI).
+_EMBEDDING_MODEL = "text-embedding-3-small"
 
 # Base directory for per-sample ChromaDB storage.
 _MEMORY_DB_BASE = "/tmp/autogen_memory_eval"
@@ -355,6 +356,10 @@ async def evaluate_memory(
     os.makedirs(db_dir, exist_ok=True)
 
     # Create ChromaDB vector memory.
+    api_key = os.environ.get(
+        "OPENAI_API_KEY", "EMPTY",
+    )
+    base_url = os.environ.get("OPENAI_BASE_URL", None)
     chroma_memory = ChromaDBVectorMemory(
         config=PersistentChromaDBVectorMemoryConfig(
             collection_name="conversations",
@@ -362,8 +367,13 @@ async def evaluate_memory(
             k=_MEMORY_TOP_K,
             score_threshold=_MEMORY_SCORE_THRESHOLD,
             embedding_function_config=(
-                SentenceTransformerEmbeddingFunctionConfig(
-                    model_name=_EMBEDDING_MODEL,
+                CustomEmbeddingFunctionConfig(
+                    function=OpenAIEmbeddingFunction,
+                    params={
+                        "api_key": api_key,
+                        "model_name": _EMBEDDING_MODEL,
+                        "api_base": base_url,
+                    },
                 )
             ),
         ),
@@ -385,10 +395,6 @@ async def evaluate_memory(
     )
 
     # Build the OpenAI-compatible model client.
-    base_url = os.environ.get("OPENAI_BASE_URL", None)
-    api_key = os.environ.get(
-        "OPENAI_API_KEY", "EMPTY",
-    )
     model_client = OpenAIChatCompletionClient(
         model=model_name,
         base_url=base_url,
@@ -464,7 +470,9 @@ async def evaluate_memory(
 
         # Reset agent for next question to avoid
         # context accumulation.
-        await qa_agent.reset()
+        await qa_agent.on_reset(
+            CancellationToken(),
+        )
 
         m = metrics.compute_f1(prediction, qa.answer)
         bleu = metrics.compute_bleu1(
