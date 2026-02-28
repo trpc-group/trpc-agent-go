@@ -1,6 +1,5 @@
 //
-// Tencent is pleased to support the open source community by making
-// trpc-agent-go available.
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -15,6 +14,7 @@
 //
 //	go run main.go -memory=inmemory
 //	go run main.go -memory=sqlite
+//	go run main.go -memory=sqlitevec
 //	go run main.go -memory=redis
 //	go run main.go -memory=mysql
 //	go run main.go -memory=postgres
@@ -24,6 +24,10 @@
 //
 //	sqlite:
 //		export SQLITE_MEMORY_DSN="file:memories.db?_busy_timeout=5000"
+//
+//	sqlitevec:
+//		export SQLITEVEC_MEMORY_DSN="file:memories_vec.db?_busy_timeout=5000"
+//		export SQLITEVEC_EMBEDDER_MODEL="text-embedding-3-small"
 //
 //	redis:
 //		export REDIS_ADDR="localhost:6379"
@@ -81,8 +85,8 @@ var (
 		"memory",
 		"inmemory",
 		"Name of the memory service to use, "+
-			"inmemory / sqlite / redis / mysql / "+
-			"postgres / pgvector",
+			"inmemory / sqlite / sqlitevec / redis / "+
+			"mysql / postgres / pgvector",
 	)
 	streaming = flag.Bool(
 		"streaming",
@@ -92,8 +96,8 @@ var (
 	softDelete = flag.Bool(
 		"soft-delete",
 		false,
-		"Enable soft delete for SQLite/MySQL/"+
-			"PostgreSQL/pgvector memory service",
+		"Enable soft delete for SQLite/SQLiteVec/"+
+			"MySQL/PostgreSQL/pgvector memory service",
 	)
 )
 
@@ -146,12 +150,9 @@ func (c *memoryChat) run() error {
 func (c *memoryChat) setup(_ context.Context) error {
 	memoryType := util.MemoryType(c.memServiceName)
 
-	memoryService, err := util.NewMemoryServiceByType(
-		memoryType,
-		util.MemoryServiceConfig{
-			SoftDelete: *softDelete,
-		},
-	)
+	memoryService, err := util.NewMemoryServiceByType(memoryType, util.MemoryServiceConfig{
+		SoftDelete: *softDelete,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to create memory service: %w", err)
 	}
@@ -172,10 +173,8 @@ func (c *memoryChat) setup(_ context.Context) error {
 	llmAgent := llmagent.New(
 		agentName,
 		llmagent.WithModel(modelInstance),
-		llmagent.WithDescription(
-			"A helpful AI assistant with memory. I remember key facts and "+
-				"recall them when needed.",
-		),
+		llmagent.WithDescription("A helpful AI assistant with memory capabilities. "+
+			"I can remember important information about you and recall it when needed."),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithTools(memoryService.Tools()),
 	)
@@ -237,10 +236,7 @@ func (c *memoryChat) startChat(ctx context.Context) error {
 	return nil
 }
 
-func (c *memoryChat) processMessage(
-	ctx context.Context,
-	userMessage string,
-) error {
+func (c *memoryChat) processMessage(ctx context.Context, userMessage string) error {
 	message := model.NewUserMessage(userMessage)
 
 	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message)
@@ -304,10 +300,7 @@ func (c *memoryChat) processResponse(eventChan <-chan *event.Event) error {
 }
 
 func (c *memoryChat) hasToolCalls(event *event.Event) bool {
-	if event.Response == nil || len(event.Response.Choices) == 0 {
-		return false
-	}
-	return len(event.Response.Choices[0].Message.ToolCalls) > 0
+	return len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0
 }
 
 func (c *memoryChat) hasToolResponses(event *event.Event) bool {
@@ -322,17 +315,12 @@ func (c *memoryChat) hasToolResponses(event *event.Event) bool {
 	return false
 }
 
-func (c *memoryChat) handleToolCalls(
-	event *event.Event,
-	assistantStarted bool,
-) {
+func (c *memoryChat) handleToolCalls(event *event.Event, assistantStarted bool) {
 	if assistantStarted {
 		fmt.Printf("\n")
 	}
 	fmt.Printf("🔧 Memory tool calls initiated:\n")
-
-	toolCalls := event.Response.Choices[0].Message.ToolCalls
-	fmt.Printf("%s", util.FormatToolCalls(toolCalls))
+	fmt.Printf("%s", util.FormatToolCalls(event.Response.Choices[0].Message.ToolCalls))
 	fmt.Printf("\n🔄 Executing memory tools...\n")
 }
 
@@ -358,6 +346,6 @@ func (c *memoryChat) startNewSession() {
 	fmt.Printf("🆕 Started new memory session!\n")
 	fmt.Printf("   Previous: %s\n", oldSessionID)
 	fmt.Printf("   Current:  %s\n", c.sessionID)
-	fmt.Printf("   (Session history reset; memories preserved)\n")
+	fmt.Printf("   (Conversation history has been reset, memories are preserved)\n")
 	fmt.Println()
 }

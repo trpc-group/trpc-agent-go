@@ -17,4 +17,10 @@ var (
 	ErrLineageIDEmpty                   = errors.New("lineage_id cannot be empty")
 	ErrLineageIDAndCheckpointIDRequired = errors.New("lineage_id and checkpoint_id are required")
 	ErrCheckpointNotFound               = errors.New("checkpoint not found")
+	ErrDagEngineCheckpointUnsupported   = errors.New(
+		"dag engine does not support checkpoints yet",
+	)
+	ErrDagEngineInterruptUnsupported = errors.New(
+		"dag engine does not support interrupts yet",
+	)
 )

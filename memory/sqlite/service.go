@@ -112,18 +112,37 @@ func (s *Service) AddMemory(
 		return err
 	}
 
-	if err := s.enforceMemoryLimit(ctx, userKey); err != nil {
-		return err
-	}
-
 	now := time.Now()
 	mem := &memory.Memory{
 		Memory:      memoryStr,
 		Topics:      topics,
 		LastUpdated: &now,
 	}
+	memoryID := imemory.GenerateMemoryID(mem, userKey.AppName, userKey.UserID)
+
+	if s.opts.memoryLimit > 0 {
+		deletedAt, exists, err := s.getDeletedAt(
+			ctx,
+			userKey,
+			memoryID,
+		)
+		if err != nil {
+			return err
+		}
+
+		needLimit := !exists
+		if exists && s.opts.softDelete && deletedAt.Valid {
+			needLimit = true
+		}
+		if needLimit {
+			if err := s.enforceMemoryLimit(ctx, userKey); err != nil {
+				return err
+			}
+		}
+	}
+
 	entry := &memory.Entry{
-		ID:        imemory.GenerateMemoryID(mem, userKey.AppName, userKey.UserID),
+		ID:        memoryID,
 		AppName:   userKey.AppName,
 		Memory:    mem,
 		UserID:    userKey.UserID,
@@ -162,6 +181,35 @@ ON CONFLICT(memory_id) DO UPDATE SET
 	}
 
 	return nil
+}
+
+func (s *Service) getDeletedAt(
+	ctx context.Context,
+	userKey memory.UserKey,
+	memoryID string,
+) (sql.NullInt64, bool, error) {
+	const selectSQL = `SELECT deleted_at FROM %s
+WHERE app_name = ? AND user_id = ? AND memory_id = ?
+LIMIT 1`
+	query := fmt.Sprintf(selectSQL, s.tableName)
+	row := s.db.QueryRowContext(
+		ctx,
+		query,
+		userKey.AppName,
+		userKey.UserID,
+		memoryID,
+	)
+
+	var deletedAt sql.NullInt64
+	if err := row.Scan(&deletedAt); errors.Is(err, sql.ErrNoRows) {
+		return sql.NullInt64{}, false, nil
+	} else if err != nil {
+		return sql.NullInt64{}, false, fmt.Errorf(
+			"select existing memory: %w",
+			err,
+		)
+	}
+	return deletedAt, true, nil
 }
 
 func (s *Service) enforceMemoryLimit(

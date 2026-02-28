@@ -194,6 +194,11 @@ memoryService := memoryinmemory.NewMemoryService(
 | `OPENAI_API_KEY`          | API key for the model service (required) | ``                          |
 | `OPENAI_BASE_URL`         | Base URL for the model API endpoint      | `https://api.openai.com/v1` |
 | `SQLITE_MEMORY_DSN`       | SQLite DSN                               | `file:memories.db?_busy_timeout=5000` |
+| `SQLITEVEC_MEMORY_DSN`    | SQLiteVec DSN                            | `file:memories_vec.db?_busy_timeout=5000` |
+| `SQLITEVEC_EMBEDDER_MODEL` | SQLiteVec embedder model                 | `text-embedding-3-small`    |
+| `OPENAI_EMBEDDING_API_KEY` | API key for embedding model (optional)   | (empty)                     |
+| `OPENAI_EMBEDDING_BASE_URL` | Base URL for embedding endpoint (optional) | (empty)                   |
+| `OPENAI_EMBEDDING_MODEL`  | Override embedding model name (optional) | (empty)                     |
 | `REDIS_ADDR`              | Redis server address                     | `localhost:6379`            |
 | `PG_HOST`                 | PostgreSQL host                          | `localhost`                 |
 | `PG_PORT`                 | PostgreSQL port                          | `5432`                      |
@@ -218,7 +223,7 @@ memoryService := memoryinmemory.NewMemoryService(
 | ------------ | ------------------------------------------------------------------------- | ---------------- |
 | `-model`     | Name of the model for chat responses                                      | `deepseek-chat`  |
 | `-ext-model` | Name of the model for memory extraction                                   | Same as `-model` |
-| `-memory`    | Memory service type: `inmemory`, `sqlite`, `redis`, `postgres`, `pgvector`, `mysql` | `inmemory` |
+| `-memory`    | Memory service type: `inmemory`, `sqlite`, `sqlitevec`, `redis`, `postgres`, `pgvector`, `mysql` | `inmemory` |
 | `-streaming` | Enable streaming mode for responses                                       | `true`           |
 | `-debug`     | Enable debug mode to print messages sent to model                         | `false`          |
 
@@ -250,6 +255,11 @@ go run . -memory inmemory
 # SQLite memory service (local file)
 export SQLITE_MEMORY_DSN="file:memories.db?_busy_timeout=5000"
 go run . -memory sqlite
+
+# SQLiteVec memory service (local file + vector search)
+export SQLITEVEC_MEMORY_DSN="file:memories_vec.db?_busy_timeout=5000"
+export SQLITEVEC_EMBEDDER_MODEL="text-embedding-3-small"
+go run . -memory sqlitevec
 
 # Redis memory service (requires Redis server)
 export REDIS_ADDR=localhost:6379
@@ -300,7 +310,7 @@ Usage of ./auto:
   -ext-model string
         Model for memory extraction (defaults to chat model)
   -memory string
-        Memory service type: inmemory, redis, postgres, pgvector, mysql (default "inmemory")
+        Memory service type: inmemory, sqlite, sqlitevec, redis, postgres, pgvector, mysql (default "inmemory")
   -model string
         Model for chat responses (default "deepseek-chat")
   -streaming

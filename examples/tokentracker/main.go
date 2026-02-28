@@ -72,6 +72,9 @@ type tokenTrackerChat struct {
 // SessionTokenUsage tracks token usage for the entire session.
 type SessionTokenUsage struct {
 	TotalPromptTokens     int
+	TotalPromptCached     int
+	TotalPromptCacheRead  int
+	TotalPromptCacheWrite int
 	TotalCompletionTokens int
 	TotalTokens           int
 	TurnCount             int
@@ -82,6 +85,9 @@ type SessionTokenUsage struct {
 type TurnUsage struct {
 	TurnNumber        int
 	PromptTokens      int
+	PromptCached      int
+	PromptCacheRead   int
+	PromptCacheWrite  int
 	CompletionTokens  int
 	TotalTokens       int
 	Model             string
@@ -240,6 +246,9 @@ func (c *tokenTrackerChat) processResponse(eventChan <-chan *event.Event, userMe
 
 			// Update token usage (use the latest values from the event).
 			turnUsage.PromptTokens = event.Response.Usage.PromptTokens
+			turnUsage.PromptCached = event.Response.Usage.PromptTokensDetails.CachedTokens
+			turnUsage.PromptCacheRead = event.Response.Usage.PromptTokensDetails.CacheReadTokens
+			turnUsage.PromptCacheWrite = event.Response.Usage.PromptTokensDetails.CacheCreationTokens
 			turnUsage.CompletionTokens = event.Response.Usage.CompletionTokens
 			turnUsage.TotalTokens = event.Response.Usage.TotalTokens
 		}
@@ -265,8 +274,11 @@ func (c *tokenTrackerChat) processResponse(eventChan <-chan *event.Event, userMe
 			// Show turn-specific token usage.
 			if turnUsage != nil {
 				fmt.Printf("\n📊 Turn %d Token Usage:\n", c.turnCount)
-				fmt.Printf("   Prompt: %d, Completion: %d, Total: %d\n",
+				fmt.Printf("   Prompt: %d (cached: %d, cache_read: %d, cache_write: %d), Completion: %d, Total: %d\n",
 					turnUsage.PromptTokens,
+					turnUsage.PromptCached,
+					turnUsage.PromptCacheRead,
+					turnUsage.PromptCacheWrite,
 					turnUsage.CompletionTokens,
 					turnUsage.TotalTokens)
 			}
@@ -282,6 +294,9 @@ func (c *tokenTrackerChat) processResponse(eventChan <-chan *event.Event, userMe
 // addTurnUsage adds token usage for a single turn to the session tracking.
 func (c *tokenTrackerChat) addTurnUsage(usage TurnUsage) {
 	c.sessionUsage.TotalPromptTokens += usage.PromptTokens
+	c.sessionUsage.TotalPromptCached += usage.PromptCached
+	c.sessionUsage.TotalPromptCacheRead += usage.PromptCacheRead
+	c.sessionUsage.TotalPromptCacheWrite += usage.PromptCacheWrite
 	c.sessionUsage.TotalCompletionTokens += usage.CompletionTokens
 	c.sessionUsage.TotalTokens += usage.TotalTokens
 	c.sessionUsage.TurnCount++
@@ -293,15 +308,24 @@ func (c *tokenTrackerChat) showStats() {
 	fmt.Printf("\n📊 Session Token Usage Statistics:\n")
 	fmt.Printf("   Total Turns: %d\n", c.sessionUsage.TurnCount)
 	fmt.Printf("   Total Prompt Tokens: %d\n", c.sessionUsage.TotalPromptTokens)
+	fmt.Printf("   Total Prompt Cached Tokens: %d\n", c.sessionUsage.TotalPromptCached)
+	fmt.Printf("   Total Prompt Cache Read Tokens: %d\n", c.sessionUsage.TotalPromptCacheRead)
+	fmt.Printf("   Total Prompt Cache Write Tokens: %d\n", c.sessionUsage.TotalPromptCacheWrite)
 	fmt.Printf("   Total Completion Tokens: %d\n", c.sessionUsage.TotalCompletionTokens)
 	fmt.Printf("   Total Tokens: %d\n", c.sessionUsage.TotalTokens)
 
 	if c.sessionUsage.TurnCount > 0 {
 		avgPrompt := float64(c.sessionUsage.TotalPromptTokens) / float64(c.sessionUsage.TurnCount)
+		avgPromptCached := float64(c.sessionUsage.TotalPromptCached) / float64(c.sessionUsage.TurnCount)
+		avgPromptCacheRead := float64(c.sessionUsage.TotalPromptCacheRead) / float64(c.sessionUsage.TurnCount)
+		avgPromptCacheWrite := float64(c.sessionUsage.TotalPromptCacheWrite) / float64(c.sessionUsage.TurnCount)
 		avgCompletion := float64(c.sessionUsage.TotalCompletionTokens) / float64(c.sessionUsage.TurnCount)
 		avgTotal := float64(c.sessionUsage.TotalTokens) / float64(c.sessionUsage.TurnCount)
 
 		fmt.Printf("   Average Prompt Tokens per Turn: %.1f\n", avgPrompt)
+		fmt.Printf("   Average Prompt Cached Tokens per Turn: %.1f\n", avgPromptCached)
+		fmt.Printf("   Average Prompt Cache Read Tokens per Turn: %.1f\n", avgPromptCacheRead)
+		fmt.Printf("   Average Prompt Cache Write Tokens per Turn: %.1f\n", avgPromptCacheWrite)
 		fmt.Printf("   Average Completion Tokens per Turn: %.1f\n", avgCompletion)
 		fmt.Printf("   Average Total Tokens per Turn: %.1f\n", avgTotal)
 	}
