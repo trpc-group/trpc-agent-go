@@ -159,7 +159,7 @@ func TestLocalInferencePerCallCallbacksOverrideDefault(t *testing.T) {
 	assert.True(t, called)
 }
 
-func TestLocalInferenceAfterInferenceCaseCallbackReceivesError(t *testing.T) {
+func TestLocalInferenceAfterInferenceCaseCallbackDoesNotReceivePerCaseError(t *testing.T) {
 	ctx := context.Background()
 	appName := "app"
 	evalSetID := "set"
@@ -174,10 +174,7 @@ func TestLocalInferenceAfterInferenceCaseCallbackReceivesError(t *testing.T) {
 	callbacks := &service.Callbacks{}
 	callbacks.Register("probe", &service.Callback{
 		AfterInferenceCase: func(ctx context.Context, args *service.AfterInferenceCaseArgs) (*service.AfterInferenceCaseResult, error) {
-			assert.Error(t, args.Error)
-			if args.Error != nil {
-				assert.Contains(t, args.Error.Error(), "boom")
-			}
+			assert.NoError(t, args.Error)
 			assert.NotNil(t, args.Result)
 			if args.Result != nil {
 				assert.Contains(t, args.Result.ErrorMessage, "boom")

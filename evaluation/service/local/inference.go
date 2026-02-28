@@ -254,7 +254,7 @@ func (s *local) inferenceEvalCase(ctx context.Context, req *service.InferenceReq
 	}
 	caseStartTime := time.Now()
 	defer func() {
-		afterErr := s.runAfterInferenceCaseCallbacks(ctx, opts.Callbacks, req, evalCase.EvalID, result, err, caseStartTime)
+		afterErr := s.runAfterInferenceCaseCallbacks(ctx, opts.Callbacks, req, evalCase.EvalID, result, nil, caseStartTime)
 		if afterErr != nil {
 			result = newFailedInferenceResult(result, errors.Join(err, afterErr))
 		}

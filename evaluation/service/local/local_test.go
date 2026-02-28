@@ -605,7 +605,19 @@ func TestLocalInferenceParallelInvokeFailureAddsContext(t *testing.T) {
 		service.WithEvalCaseParallelism(1),
 	)
 	assert.NoError(t, err)
-	assert.NoError(t, svc.Close())
+	defer func() {
+		assert.NoError(t, svc.Close())
+	}()
+
+	localSvc, ok := svc.(*local)
+	if assert.True(t, ok) {
+		localSvc.evalCaseInferencePoolsMu.Lock()
+		pool := localSvc.evalCaseInferencePools[1]
+		localSvc.evalCaseInferencePoolsMu.Unlock()
+		if assert.NotNil(t, pool) {
+			pool.Release()
+		}
+	}
 
 	results, err := svc.Inference(ctx, &service.InferenceRequest{AppName: appName, EvalSetID: evalSetID})
 	assert.NoError(t, err)
