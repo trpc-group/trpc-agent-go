@@ -521,9 +521,6 @@ func stageUserFileInput(
 	if warn != "" {
 		return nil, warn
 	}
-	if key == "" {
-		key = userFileInputKey(f, data)
-	}
 	name := sanitizeUserFileName(rawName)
 	name = uniqueUserFileName(usedNames, existingTo, name)
 	to := path.Join(codeexecutor.DirWork, skillDirInputs, name)
@@ -680,15 +677,6 @@ func userFileInputBytes(
 		)
 	}
 	return data, mime, ""
-}
-
-func userFileInputKey(f model.File, data []byte) string {
-	id := strings.TrimSpace(f.FileID)
-	if id != "" {
-		return userFileInputKeyFileIDPrefix + id
-	}
-	sum := sha256.Sum256(data)
-	return userFileInputKeySHA256Prefix + hex.EncodeToString(sum[:])
 }
 
 func (t *RunTool) autoExportWorkspaceOut(

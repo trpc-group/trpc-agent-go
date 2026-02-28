@@ -2491,6 +2491,72 @@ func TestDownloadFile_Success(t *testing.T) {
 	require.Equal(t, wantMime, mime)
 }
 
+func TestDownloadFile_EmptyID_Error(t *testing.T) {
+	m := New("test-model", WithAPIKey("k"), WithBaseURL("http://x"))
+	_, _, err := m.DownloadFile(context.Background(), " ")
+	require.Error(t, err)
+}
+
+func TestDownloadFile_NoContentType_Detects(t *testing.T) {
+	const (
+		fileID   = "file_x"
+		wantPath = "/openapi/v1/files/" + fileID + "/content"
+	)
+	want := []byte("hello")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodGet, r.Method)
+		require.Equal(t, wantPath, r.URL.Path)
+		_, _ = w.Write(want)
+	}))
+	defer server.Close()
+
+	m := New("test-model", WithAPIKey("k"), WithBaseURL(server.URL))
+	got, mime, err := m.DownloadFile(context.Background(), fileID)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	require.True(t, strings.HasPrefix(mime, "text/plain"))
+}
+
+func TestDownloadFile_ErrorStatus(t *testing.T) {
+	const (
+		fileID   = "file_x"
+		wantPath = "/openapi/v1/files/" + fileID + "/content"
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodGet, r.Method)
+		require.Equal(t, wantPath, r.URL.Path)
+		http.Error(w, "bad", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	m := New("test-model", WithAPIKey("k"), WithBaseURL(server.URL))
+	_, _, err := m.DownloadFile(context.Background(), fileID)
+	require.Error(t, err)
+}
+
+func TestDownloadFile_HunyuanVariant(t *testing.T) {
+	const (
+		fileID   = "file_x"
+		wantPath = "/openapi/v1/files/" + fileID + "/content"
+	)
+	want := []byte("hello")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodGet, r.Method)
+		require.Equal(t, wantPath, r.URL.Path)
+		_, _ = w.Write(want)
+	}))
+	defer server.Close()
+
+	m := New("test-model", WithAPIKey("k"), WithBaseURL(server.URL),
+		WithVariant(VariantHunyuan))
+	got, _, err := m.DownloadFile(context.Background(), fileID)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+}
+
 // TestDeleteFile_Success tests DeleteFile using a mock server.
 func TestDeleteFile_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
