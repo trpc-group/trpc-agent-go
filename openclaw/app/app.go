@@ -63,7 +63,8 @@ const (
 
 	csvDelimiter = ","
 
-	defaultAgentName = "assistant"
+	defaultAgentName        = "assistant"
+	defaultAgentInstruction = "You are a helpful assistant. Keep replies concise."
 
 	agentTypeLLM        = "llm"
 	agentTypeClaudeCode = "claude-code"
@@ -81,6 +82,8 @@ const (
 
 	openAIBaseURLEnvName = "OPENAI_BASE_URL"
 	openAIModelEnvName   = "OPENAI_MODEL"
+
+	errClaudeCodeAgentNoPrompts = "claude-code agent does not support agent prompts"
 )
 
 // Main runs the OpenClaw-like CLI and returns an exit code.
@@ -260,6 +263,14 @@ func run(ctx context.Context, args []string) error {
 	}
 	defer closeMemoryService(memSvc)
 
+	prompts, err := resolveAgentPrompts(opts)
+	if err != nil {
+		return &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("agent prompt config failed: %w", err),
+		}
+	}
+
 	var (
 		toolSets []tool.ToolSet
 		ag       agent.Agent
@@ -287,6 +298,8 @@ func run(ctx context.Context, args []string) error {
 			AddSessionSummary: opts.AddSessionSummary,
 			MaxHistoryRuns:    opts.MaxHistoryRuns,
 			PreloadMemory:     opts.PreloadMemory,
+			Instruction:       prompts.Instruction,
+			SystemPrompt:      prompts.SystemPrompt,
 
 			SkillsRoot:      opts.SkillsRoot,
 			SkillsExtraDirs: splitCSV(opts.SkillsExtraDir),
@@ -547,6 +560,16 @@ func validateAgentRunOptions(agentType string, opts runOptions) error {
 			"claude-code agent does not support preload-memory",
 		)
 	}
+	if strings.TrimSpace(opts.AgentInstruction) != "" ||
+		strings.TrimSpace(opts.AgentInstructionFiles) != "" ||
+		strings.TrimSpace(opts.AgentInstructionDir) != "" {
+		return errors.New(errClaudeCodeAgentNoPrompts)
+	}
+	if strings.TrimSpace(opts.AgentSystemPrompt) != "" ||
+		strings.TrimSpace(opts.AgentSystemPromptFiles) != "" ||
+		strings.TrimSpace(opts.AgentSystemPromptDir) != "" {
+		return errors.New(errClaudeCodeAgentNoPrompts)
+	}
 	if opts.EnableLocalExec {
 		return errors.New(
 			"claude-code agent does not support enable-local-exec",
@@ -632,11 +655,15 @@ func newAgent(
 	extraTools []tool.Tool,
 	toolSets []tool.ToolSet,
 ) (agent.Agent, error) {
+	instruction := strings.TrimSpace(cfg.Instruction)
+	if instruction == "" {
+		instruction = defaultAgentInstruction
+	}
+
 	opts := []llmagent.Option{
 		llmagent.WithModel(mdl),
-		llmagent.WithInstruction(
-			"You are a helpful assistant. Keep replies concise.",
-		),
+		llmagent.WithInstruction(instruction),
+		llmagent.WithGlobalInstruction(strings.TrimSpace(cfg.SystemPrompt)),
 		llmagent.WithAddSessionSummary(cfg.AddSessionSummary),
 		llmagent.WithMaxHistoryRuns(cfg.MaxHistoryRuns),
 		llmagent.WithPreloadMemory(cfg.PreloadMemory),
@@ -847,6 +874,8 @@ type agentConfig struct {
 	AddSessionSummary bool
 	MaxHistoryRuns    int
 	PreloadMemory     int
+	Instruction       string
+	SystemPrompt      string
 
 	SkillsRoot      string
 	SkillsExtraDirs []string

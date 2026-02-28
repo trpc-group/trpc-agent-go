@@ -46,6 +46,13 @@ const (
 	flagAddSessionSummary = "add-session-summary"
 	flagMaxHistoryRuns    = "max-history-runs"
 	flagPreloadMemory     = "preload-memory"
+
+	flagAgentInstruction       = "agent-instruction"
+	flagAgentInstructionFiles  = "agent-instruction-files"
+	flagAgentInstructionDir    = "agent-instruction-dir"
+	flagAgentSystemPrompt      = "agent-system-prompt"
+	flagAgentSystemPromptFiles = "agent-system-prompt-files"
+	flagAgentSystemPromptDir   = "agent-system-prompt-dir"
 )
 
 type runOptions struct {
@@ -57,6 +64,13 @@ type runOptions struct {
 	AddSessionSummary bool
 	MaxHistoryRuns    int
 	PreloadMemory     int
+
+	AgentInstruction       string
+	AgentInstructionFiles  string
+	AgentInstructionDir    string
+	AgentSystemPrompt      string
+	AgentSystemPromptFiles string
+	AgentSystemPromptDir   string
 
 	AgentType string
 
@@ -195,6 +209,42 @@ func parseRunOptions(args []string) (runOptions, error) {
 		flagPreloadMemory,
 		0,
 		"Preload N memories into system prompt (0=off, -1=all)",
+	)
+	fs.StringVar(
+		&opts.AgentInstruction,
+		flagAgentInstruction,
+		"",
+		"Agent instruction (system-level guidance)",
+	)
+	fs.StringVar(
+		&opts.AgentInstructionFiles,
+		flagAgentInstructionFiles,
+		"",
+		"Comma-separated files merged into agent instruction",
+	)
+	fs.StringVar(
+		&opts.AgentInstructionDir,
+		flagAgentInstructionDir,
+		"",
+		"Dir of .md files merged into agent instruction",
+	)
+	fs.StringVar(
+		&opts.AgentSystemPrompt,
+		flagAgentSystemPrompt,
+		"",
+		"Agent system prompt (prepended to instruction)",
+	)
+	fs.StringVar(
+		&opts.AgentSystemPromptFiles,
+		flagAgentSystemPromptFiles,
+		"",
+		"Comma-separated files merged into system prompt",
+	)
+	fs.StringVar(
+		&opts.AgentSystemPromptDir,
+		flagAgentSystemPromptDir,
+		"",
+		"Dir of .md files merged into system prompt",
 	)
 	fs.StringVar(
 		&opts.ClaudeBin,
@@ -579,6 +629,14 @@ type agentRunConfig struct {
 	MaxHistoryRuns    *int  `yaml:"max_history_runs,omitempty"`
 	PreloadMemory     *int  `yaml:"preload_memory,omitempty"`
 
+	Instruction      *string  `yaml:"instruction,omitempty"`
+	InstructionFiles []string `yaml:"instruction_files,omitempty"`
+	InstructionDir   *string  `yaml:"instruction_dir,omitempty"`
+
+	SystemPrompt      *string  `yaml:"system_prompt,omitempty"`
+	SystemPromptFiles []string `yaml:"system_prompt_files,omitempty"`
+	SystemPromptDir   *string  `yaml:"system_prompt_dir,omitempty"`
+
 	ClaudeBin          *string  `yaml:"claude_bin,omitempty"`
 	ClaudeOutputFormat *string  `yaml:"claude_output_format,omitempty"`
 	ClaudeExtraArgs    []string `yaml:"claude_extra_args,omitempty"`
@@ -744,6 +802,44 @@ func (cfg *fileConfig) apply(
 		if cfg.Agent.PreloadMemory != nil &&
 			!flagWasSet(set, flagPreloadMemory) {
 			opts.PreloadMemory = *cfg.Agent.PreloadMemory
+		}
+		if cfg.Agent.Instruction != nil &&
+			!flagWasSet(set, flagAgentInstruction) {
+			opts.AgentInstruction = strings.TrimSpace(
+				*cfg.Agent.Instruction,
+			)
+		}
+		if len(cfg.Agent.InstructionFiles) > 0 &&
+			!flagWasSet(set, flagAgentInstructionFiles) {
+			opts.AgentInstructionFiles = strings.Join(
+				cfg.Agent.InstructionFiles,
+				csvDelimiter,
+			)
+		}
+		if cfg.Agent.InstructionDir != nil &&
+			!flagWasSet(set, flagAgentInstructionDir) {
+			opts.AgentInstructionDir = strings.TrimSpace(
+				*cfg.Agent.InstructionDir,
+			)
+		}
+		if cfg.Agent.SystemPrompt != nil &&
+			!flagWasSet(set, flagAgentSystemPrompt) {
+			opts.AgentSystemPrompt = strings.TrimSpace(
+				*cfg.Agent.SystemPrompt,
+			)
+		}
+		if len(cfg.Agent.SystemPromptFiles) > 0 &&
+			!flagWasSet(set, flagAgentSystemPromptFiles) {
+			opts.AgentSystemPromptFiles = strings.Join(
+				cfg.Agent.SystemPromptFiles,
+				csvDelimiter,
+			)
+		}
+		if cfg.Agent.SystemPromptDir != nil &&
+			!flagWasSet(set, flagAgentSystemPromptDir) {
+			opts.AgentSystemPromptDir = strings.TrimSpace(
+				*cfg.Agent.SystemPromptDir,
+			)
 		}
 		if cfg.Agent.ClaudeBin != nil &&
 			!flagWasSet(set, "claude-bin") {
