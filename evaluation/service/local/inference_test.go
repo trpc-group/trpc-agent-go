@@ -667,3 +667,126 @@ func TestLocalInferenceRunOptionsInjectionOrder(t *testing.T) {
 	assert.Equal(t, evalCase.SessionInput.State, got.RuntimeState)
 	assert.NotEqual(t, overrideState, got.RuntimeState)
 }
+
+func TestLocalInferenceRejectsNilEvalSetManagerOption(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+
+	svc, err := New(
+		&fakeRunner{},
+		service.WithEvalSetManager(mgr),
+		service.WithEvalResultManager(evalresultinmemory.New()),
+		service.WithRegistry(registry.New()),
+		service.WithSessionIDSupplier(func(ctx context.Context) string { return "session" }),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	defer func() { assert.NoError(t, svc.Close()) }()
+
+	_, err = svc.Inference(
+		ctx,
+		&service.InferenceRequest{AppName: appName, EvalSetID: evalSetID},
+		service.WithEvalSetManager(nil),
+	)
+	assert.Error(t, err)
+	if err != nil {
+		assert.Contains(t, err.Error(), "eval set manager is nil")
+	}
+}
+
+func TestLocalInferenceRejectsMissingSessionIDSupplierOption(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+
+	svc, err := New(
+		&fakeRunner{},
+		service.WithEvalSetManager(mgr),
+		service.WithEvalResultManager(evalresultinmemory.New()),
+		service.WithRegistry(registry.New()),
+		service.WithSessionIDSupplier(func(ctx context.Context) string { return "session" }),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	defer func() { assert.NoError(t, svc.Close()) }()
+
+	_, err = svc.Inference(
+		ctx,
+		&service.InferenceRequest{AppName: appName, EvalSetID: evalSetID},
+		service.WithSessionIDSupplier(nil),
+	)
+	assert.Error(t, err)
+	if err != nil {
+		assert.Contains(t, err.Error(), "session id supplier is nil")
+	}
+}
+
+func TestLocalInferenceRejectsInvalidParallelismOption(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+
+	svc, err := New(
+		&fakeRunner{},
+		service.WithEvalSetManager(mgr),
+		service.WithEvalResultManager(evalresultinmemory.New()),
+		service.WithRegistry(registry.New()),
+		service.WithSessionIDSupplier(func(ctx context.Context) string { return "session" }),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	defer func() { assert.NoError(t, svc.Close()) }()
+
+	_, err = svc.Inference(
+		ctx,
+		&service.InferenceRequest{AppName: appName, EvalSetID: evalSetID},
+		service.WithEvalCaseParallelInferenceEnabled(true),
+		service.WithEvalCaseParallelism(0),
+	)
+	assert.Error(t, err)
+	if err != nil {
+		assert.Contains(t, err.Error(), "eval case parallelism must be greater than 0")
+	}
+}
+
+func TestLocalInferenceRejectsNilContextMessage(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	svc := &local{runner: &fakeRunner{}}
+	req := &service.InferenceRequest{AppName: appName, EvalSetID: evalSetID}
+	evalCase := makeEvalCase(appName, "case-1", "prompt")
+	evalCase.ContextMessages = []*model.Message{nil}
+	opts := &service.Options{
+		SessionIDSupplier: func(ctx context.Context) string { return "session" },
+	}
+
+	result := svc.inferenceEvalCase(ctx, req, evalCase, opts)
+
+	assert.NotNil(t, result)
+	if result == nil {
+		return
+	}
+	assert.Equal(t, status.EvalStatusFailed, result.Status)
+	assert.Contains(t, result.ErrorMessage, "context message is nil at index 0")
+}

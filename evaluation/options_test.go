@@ -130,3 +130,31 @@ func TestWithEvalCaseParallelEvaluationEnabled(t *testing.T) {
 	}
 	assert.True(t, *opts.evalCaseParallelEvaluationEnabled)
 }
+
+func TestOptionsValidateRejectsNilOptions(t *testing.T) {
+	var opts *options
+
+	err := opts.validate(false)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "options is nil")
+}
+
+func TestOptionsValidateRejectsNilRegistry(t *testing.T) {
+	opts := newOptions()
+	opts.registry = nil
+
+	err := opts.validate(false)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "registry is nil")
+}
+
+func TestOptionsValidateRejectsNilEvalServiceWhenRequired(t *testing.T) {
+	opts := newOptions()
+
+	err := opts.validate(true)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "eval service is nil")
+}

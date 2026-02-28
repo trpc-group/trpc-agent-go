@@ -290,6 +290,14 @@ func TestLocalNewValidationErrors(t *testing.T) {
 			wantErr: "eval set manager is nil",
 		},
 		{
+			name: "nil_eval_result_manager",
+			r:    &fakeRunner{},
+			options: []service.Option{
+				service.WithEvalResultManager(nil),
+			},
+			wantErr: "eval result manager is nil",
+		},
+		{
 			name: "nil_registry",
 			r:    &fakeRunner{},
 			options: []service.Option{
@@ -1066,6 +1074,105 @@ func TestLocalEvaluateRequestValidation(t *testing.T) {
 	result, err = svc.Evaluate(ctx, &service.EvaluateRequest{AppName: "app"})
 	assert.Error(t, err)
 	assert.Nil(t, result)
+
+	result, err = svc.Evaluate(ctx, &service.EvaluateRequest{AppName: "app", EvalSetID: "set"})
+	assert.Error(t, err)
+	assert.Nil(t, result)
+
+	result, err = svc.Evaluate(
+		ctx,
+		&service.EvaluateRequest{
+			AppName:          "app",
+			EvalSetID:        "set",
+			InferenceResults: []*service.InferenceResult{},
+			EvaluateConfig:   &service.EvaluateConfig{EvalMetrics: []*metric.EvalMetric{}},
+		},
+		service.WithEvalSetManager(nil),
+	)
+	assert.Error(t, err)
+	assert.Nil(t, result)
+
+	result, err = svc.Evaluate(
+		ctx,
+		&service.EvaluateRequest{
+			AppName:          "app",
+			EvalSetID:        "set",
+			InferenceResults: []*service.InferenceResult{},
+			EvaluateConfig:   &service.EvaluateConfig{EvalMetrics: []*metric.EvalMetric{}},
+		},
+		service.WithRegistry(nil),
+	)
+	assert.Error(t, err)
+	assert.Nil(t, result)
+
+	result, err = svc.Evaluate(
+		ctx,
+		&service.EvaluateRequest{
+			AppName:          "app",
+			EvalSetID:        "set",
+			InferenceResults: []*service.InferenceResult{},
+			EvaluateConfig:   &service.EvaluateConfig{EvalMetrics: []*metric.EvalMetric{}},
+		},
+		service.WithEvalCaseParallelEvaluationEnabled(true),
+		service.WithEvalCaseParallelism(0),
+	)
+	assert.Error(t, err)
+	assert.Nil(t, result)
+}
+
+func TestLocalEvaluateParallelInvokeFailureAddsContext(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+
+	reg := registry.New()
+	svc, err := New(
+		&fakeRunner{},
+		service.WithEvalSetManager(mgr),
+		service.WithRegistry(reg),
+		service.WithSessionIDSupplier(func(ctx context.Context) string { return "session-123" }),
+		service.WithEvalCaseParallelEvaluationEnabled(true),
+		service.WithEvalCaseParallelism(1),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	defer func() { assert.NoError(t, svc.Close()) }()
+
+	localSvc, ok := svc.(*local)
+	assert.True(t, ok)
+	if !ok {
+		return
+	}
+	localSvc.evalCaseEvaluationPoolsMu.Lock()
+	pool := localSvc.evalCaseEvaluationPools[1]
+	localSvc.evalCaseEvaluationPoolsMu.Unlock()
+	assert.NotNil(t, pool)
+	if pool == nil {
+		return
+	}
+	pool.Release()
+
+	req := &service.EvaluateRequest{
+		AppName:   appName,
+		EvalSetID: evalSetID,
+		InferenceResults: []*service.InferenceResult{
+			{AppName: appName, EvalSetID: evalSetID, EvalCaseID: "case", Status: status.EvalStatusPassed},
+		},
+		EvaluateConfig: &service.EvaluateConfig{EvalMetrics: []*metric.EvalMetric{}},
+	}
+	result, err := svc.Evaluate(ctx, req)
+
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	if err != nil {
+		assert.Contains(t, err.Error(), "submit evaluation task for eval case case")
+	}
 }
 
 func TestLocalEvaluateSuccess(t *testing.T) {
@@ -1675,6 +1782,32 @@ func TestLocalEvaluatePerCaseErrors(t *testing.T) {
 				assert.NoError(t, err)
 			}
 		})
+	}
+}
+
+func TestLocalEvaluatePerCaseRejectsNilManagers(t *testing.T) {
+	ctx := context.Background()
+
+	svc := &local{}
+	inference := &service.InferenceResult{EvalCaseID: "case"}
+	config := &service.EvaluateConfig{EvalMetrics: []*metric.EvalMetric{}}
+
+	_, err := svc.evaluatePerCase(ctx, inference, config, &service.Options{
+		EvalSetManager: nil,
+		Registry:       registry.New(),
+	})
+	assert.Error(t, err)
+	if err != nil {
+		assert.Contains(t, err.Error(), "eval set manager is nil")
+	}
+
+	_, err = svc.evaluatePerCase(ctx, inference, config, &service.Options{
+		EvalSetManager: evalsetinmemory.New(),
+		Registry:       nil,
+	})
+	assert.Error(t, err)
+	if err != nil {
+		assert.Contains(t, err.Error(), "registry is nil")
 	}
 }
 

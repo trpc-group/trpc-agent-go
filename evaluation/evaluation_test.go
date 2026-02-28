@@ -344,6 +344,22 @@ func TestNewAgentEvaluatorValidation(t *testing.T) {
 	assert.NoError(t, ae.Close())
 }
 
+func TestNewAgentEvaluatorWithParallelOptionsBuildsLocalService(t *testing.T) {
+	ae, err := New(
+		"app",
+		stubRunner{},
+		WithEvalCaseParallelism(2),
+		WithEvalCaseParallelInferenceEnabled(true),
+		WithEvalCaseParallelEvaluationEnabled(true),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+
+	assert.NoError(t, ae.Close())
+}
+
 type optionProbeService struct {
 	lastInferenceOptions *service.Options
 	lastEvaluateOptions  *service.Options
@@ -609,6 +625,102 @@ func TestAgentEvaluatorEvaluatePassesServiceCallOptions(t *testing.T) {
 	assert.Same(t, callbacks, evaluateOpts.Callbacks)
 	assert.Equal(t, 2, evaluateOpts.EvalCaseParallelism)
 	assert.True(t, evaluateOpts.EvalCaseParallelEvaluationEnabled)
+}
+
+func TestAgentEvaluatorEvaluateAppliesPerCallNumRuns(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	evalSetMgr := evalsetinmemory.New()
+	_, err := evalSetMgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+
+	svc := &fakeService{
+		inferenceResults: [][]*service.InferenceResult{
+			{},
+			{},
+		},
+		evaluateResults: []*service.EvalSetRunResult{
+			{
+				AppName:   appName,
+				EvalSetID: evalSetID,
+				EvalCaseResults: []*evalresult.EvalCaseResult{
+					makeEvalCaseResult(evalSetID, "case-1", "metric", 0.9, 0.5, status.EvalStatusPassed),
+				},
+			},
+			{
+				AppName:   appName,
+				EvalSetID: evalSetID,
+				EvalCaseResults: []*evalresult.EvalCaseResult{
+					makeEvalCaseResult(evalSetID, "case-1", "metric", 0.9, 0.5, status.EvalStatusPassed),
+				},
+			},
+		},
+	}
+	ae, err := New(
+		appName,
+		stubRunner{},
+		WithEvalSetManager(evalSetMgr),
+		WithEvalResultManager(evalresultinmemory.New()),
+		WithMetricManager(metricinmemory.New()),
+		WithRegistry(registry.New()),
+		WithEvaluationService(svc),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	defer func() {
+		assert.NoError(t, ae.Close())
+	}()
+
+	_, err = ae.Evaluate(ctx, evalSetID, WithNumRuns(2))
+	assert.NoError(t, err)
+
+	assert.Len(t, svc.inferenceRequests, 2)
+	assert.Len(t, svc.evaluateRequests, 2)
+}
+
+func TestAgentEvaluatorEvaluateRejectsInvalidPerCallOptions(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	evalSetMgr := evalsetinmemory.New()
+	_, err := evalSetMgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+
+	svc := &fakeService{
+		inferenceResults: [][]*service.InferenceResult{{}},
+		evaluateResults: []*service.EvalSetRunResult{
+			{AppName: appName, EvalSetID: evalSetID, EvalCaseResults: []*evalresult.EvalCaseResult{}},
+		},
+	}
+	ae, err := New(
+		appName,
+		stubRunner{},
+		WithEvalSetManager(evalSetMgr),
+		WithEvalResultManager(evalresultinmemory.New()),
+		WithMetricManager(metricinmemory.New()),
+		WithRegistry(registry.New()),
+		WithEvaluationService(svc),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	defer func() {
+		assert.NoError(t, ae.Close())
+	}()
+
+	_, err = ae.Evaluate(ctx, evalSetID, WithRegistry(nil))
+	assert.Error(t, err)
+	if err != nil {
+		assert.Contains(t, err.Error(), "registry is nil")
+	}
+	assert.Len(t, svc.inferenceRequests, 0)
+	assert.Len(t, svc.evaluateRequests, 0)
 }
 
 func TestAgentEvaluatorCloseLifecycle(t *testing.T) {

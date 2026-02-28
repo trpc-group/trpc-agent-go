@@ -27,6 +27,7 @@ type fakeRunner struct {
 	runErr                      error
 	lastInjectedContextMessages []model.Message
 	lastInstruction             string
+	lastRuntimeState            map[string]any
 }
 
 func (f *fakeRunner) Run(ctx context.Context, userID string, sessionID string, message model.Message, runOpts ...agent.RunOption) (<-chan *event.Event, error) {
@@ -39,6 +40,7 @@ func (f *fakeRunner) Run(ctx context.Context, userID string, sessionID string, m
 	}
 	f.lastInjectedContextMessages = opts.InjectedContextMessages
 	f.lastInstruction = opts.Instruction
+	f.lastRuntimeState = opts.RuntimeState
 	ch := make(chan *event.Event, len(f.events))
 	for _, evt := range f.events {
 		ch <- evt
@@ -144,6 +146,70 @@ func TestInferenceValidation(t *testing.T) {
 	}
 	_, err = Inference(context.Background(), &fakeRunner{runErr: errors.New("boom")}, input, &evalset.SessionInput{UserID: "user"}, "session", nil)
 	assert.Error(t, err)
+}
+
+func TestInferenceInvocationAppendsSessionRuntimeState(t *testing.T) {
+	ctx := context.Background()
+	sessionState := map[string]any{"from_session": "yes"}
+	overrideState := map[string]any{"from_run_option": "yes"}
+	session := &evalset.SessionInput{UserID: "user", State: sessionState}
+	r := &fakeRunner{events: []*event.Event{makeFinalEvent("done")}}
+
+	_, err := inferenceInvocation(ctx, r, "session", session, &evalset.Invocation{
+		InvocationID: "inv",
+		UserContent:  &model.Message{Role: model.RoleUser, Content: "hi"},
+	}, []agent.RunOption{agent.WithRuntimeState(overrideState)})
+
+	assert.NoError(t, err)
+	assert.Equal(t, sessionState, r.lastRuntimeState)
+	assert.NotEqual(t, overrideState, r.lastRuntimeState)
+}
+
+func TestInferenceInvocationSkipsNilEvent(t *testing.T) {
+	ctx := context.Background()
+	session := &evalset.SessionInput{UserID: "user"}
+	r := &fakeRunner{events: []*event.Event{nil, makeFinalEvent("ok")}}
+
+	result, err := inferenceInvocation(ctx, r, "session", session, &evalset.Invocation{
+		InvocationID: "inv",
+		UserContent:  &model.Message{Role: model.RoleUser, Content: "hi"},
+	}, nil)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, result.FinalResponse)
+	if result.FinalResponse == nil {
+		return
+	}
+	assert.Equal(t, "ok", result.FinalResponse.Content)
+}
+
+func TestInferenceInvocationRejectsUnexpectedToolResultResponse(t *testing.T) {
+	ctx := context.Background()
+	session := &evalset.SessionInput{UserID: "user"}
+	toolResultEvent := &event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{
+					Message: model.Message{
+						ToolID:   "missing",
+						ToolName: "tool",
+						Content:  `{}`,
+					},
+				},
+			},
+		},
+	}
+	r := &fakeRunner{events: []*event.Event{toolResultEvent}}
+
+	_, err := inferenceInvocation(ctx, r, "session", session, &evalset.Invocation{
+		InvocationID: "inv",
+		UserContent:  &model.Message{Role: model.RoleUser, Content: "hi"},
+	}, nil)
+
+	assert.Error(t, err)
+	if err != nil {
+		assert.Contains(t, err.Error(), "convert tool result response")
+	}
 }
 
 func TestInferencePerInvocationErrors(t *testing.T) {
@@ -283,6 +349,34 @@ func TestConvertToolCallResponseInvalidJSONArguments(t *testing.T) {
 	assert.Equal(t, "a=1", result[0].Arguments)
 }
 
+func TestConvertToolCallResponseEmptyArguments(t *testing.T) {
+	ev := &event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{
+					Message: model.Message{
+						ToolCalls: []model.ToolCall{
+							{
+								ID: "call-1",
+								Function: model.FunctionDefinitionParam{
+									Name:      "tool",
+									Arguments: []byte(" "),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := convertTools(ev)
+
+	assert.NoError(t, err)
+	assert.Len(t, result, 1)
+	assert.Equal(t, map[string]any{}, result[0].Arguments)
+}
+
 func TestMergeToolResultResponse(t *testing.T) {
 	ev := &event.Event{
 		Response: &model.Response{
@@ -388,4 +482,15 @@ func TestMergeToolResultResponseArrayContent(t *testing.T) {
 
 func ptr[T any](v T) *T {
 	return &v
+}
+
+func makeFinalEvent(content string) *event.Event {
+	return &event.Event{
+		Response: &model.Response{
+			Done: true,
+			Choices: []model.Choice{
+				{Message: model.Message{Content: content, Role: model.RoleAssistant}},
+			},
+		},
+	}
 }
