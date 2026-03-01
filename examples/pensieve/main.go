@@ -28,6 +28,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -388,61 +389,206 @@ func (c *pensieveChat) processMessage(ctx context.Context, userMessage string) e
 	if err != nil {
 		return fmt.Errorf("failed to run agent: %w", err)
 	}
-	return c.processResponse(eventChan)
+	_, err = c.processResponse(eventChan)
+	return err
 }
 
-// runAutoMode executes the predefined autoQueries in sequence and exits.
+// runAutoMode executes the predefined autoQueries twice:
+//  1. BASELINE — only web_search tool, no context management.
+//  2. PENSIEVE — web_search + all four Pensieve tools.
+//
+// After both runs, it prints a comparison showing how Pensieve reduces
+// visible context by masking raw search results after distilling notes.
 func (c *pensieveChat) runAutoMode(ctx context.Context) error {
 	fmt.Println("🤖 Running in AUTO mode — no human input required.")
-	fmt.Printf("📋 Will execute %d predefined queries:\n", len(autoQueries))
+	fmt.Printf("📋 Will execute %d predefined queries in two modes:\n", len(autoQueries))
 	for i, q := range autoQueries {
 		fmt.Printf("   %d. %q\n", i+1, q)
 	}
 	fmt.Println()
 
-	for i, query := range autoQueries {
-		fmt.Printf("━━━ Query %d/%d ━━━\n", i+1, len(autoQueries))
-		fmt.Printf("👤 You: %s\n", query)
+	// ── Phase 1: BASELINE (no Pensieve tools) ──────────────────────
+	fmt.Println("╔══════════════════════════════════════════════════════════════╗")
+	fmt.Println("║  PHASE 1: BASELINE — web_search only, no context management║")
+	fmt.Println("╚══════════════════════════════════════════════════════════════╝")
+	fmt.Println()
 
-		if err := c.processMessage(ctx, query); err != nil {
-			fmt.Printf("❌ Error on query %d: %v\n", i+1, err)
-			// Continue to next query instead of stopping.
+	baselineRunner, baselineSessionID, err := c.createRunner(false)
+	if err != nil {
+		return fmt.Errorf("baseline setup failed: %w", err)
+	}
+	defer baselineRunner.Close()
+
+	var baselineStats runStats
+	// Run only the first 3 research queries for baseline (skip summarise).
+	researchQueries := autoQueries[:3]
+	for i, query := range researchQueries {
+		fmt.Printf("━━━ Baseline Query %d/%d ━━━\n", i+1, len(researchQueries))
+		fmt.Printf("👤 You: %s\n", query)
+		msg := model.NewUserMessage(query)
+		eventChan, runErr := baselineRunner.Run(ctx, c.userID, baselineSessionID, msg)
+		if runErr != nil {
+			fmt.Printf("❌ Error: %v\n", runErr)
+			baselineStats.errors++
+			continue
+		}
+		s, procErr := c.processResponse(eventChan)
+		baselineStats.add(s)
+		if procErr != nil {
+			fmt.Printf("❌ Error: %v\n", procErr)
+			baselineStats.errors++
 		}
 		fmt.Println()
 	}
 
+	// ── Phase 2: PENSIEVE (with context management) ────────────────
+	fmt.Println()
+	fmt.Println("╔══════════════════════════════════════════════════════════════╗")
+	fmt.Println("║  PHASE 2: PENSIEVE — web_search + context management tools ║")
+	fmt.Println("╚══════════════════════════════════════════════════════════════╝")
+	fmt.Println()
+
+	var pensieveStats runStats
+	// The main runner (c.runner) was already set up with Pensieve tools.
+	for i, query := range autoQueries {
+		fmt.Printf("━━━ Pensieve Query %d/%d ━━━\n", i+1, len(autoQueries))
+		fmt.Printf("👤 You: %s\n", query)
+		msg := model.NewUserMessage(query)
+		eventChan, runErr := c.runner.Run(ctx, c.userID, c.sessionID, msg)
+		if runErr != nil {
+			fmt.Printf("❌ Error: %v\n", runErr)
+			pensieveStats.errors++
+			continue
+		}
+		s, procErr := c.processResponse(eventChan)
+		pensieveStats.add(s)
+		if procErr != nil {
+			fmt.Printf("❌ Error: %v\n", procErr)
+			pensieveStats.errors++
+		}
+		fmt.Println()
+	}
+
+	// ── Comparison ─────────────────────────────────────────────────
+	fmt.Println("╔══════════════════════════════════════════════════════════════╗")
+	fmt.Println("║                    COMPARISON RESULTS                       ║")
+	fmt.Println("╚══════════════════════════════════════════════════════════════╝")
+	fmt.Println()
+	fmt.Printf("  %-30s %12s %12s\n", "Metric", "Baseline", "Pensieve")
+	fmt.Printf("  %-30s %12s %12s\n", strings.Repeat("─", 30), strings.Repeat("─", 12), strings.Repeat("─", 12))
+	fmt.Printf("  %-30s %12d %12d\n", "Queries", len(researchQueries), len(autoQueries))
+	fmt.Printf("  %-30s %12d %12d\n", "Total events streamed", baselineStats.events, pensieveStats.events)
+	fmt.Printf("  %-30s %12d %12d\n", "Tool calls made", baselineStats.toolCalls, pensieveStats.toolCalls)
+	fmt.Printf("  %-30s %12d %12d\n", "Tool responses received", baselineStats.toolResponses, pensieveStats.toolResponses)
+	fmt.Printf("  %-30s %12d %12d\n", "Events masked (pruned)", 0, pensieveStats.eventsMasked)
+	fmt.Printf("  %-30s %12d %12d\n", "Notes saved", 0, pensieveStats.notesSaved)
+	fmt.Printf("  %-30s %12d %12d\n", "Tool result chars received", baselineStats.toolResultChars, pensieveStats.toolResultChars)
+	fmt.Printf("  %-30s %12d %12d\n", "Errors", baselineStats.errors, pensieveStats.errors)
+	fmt.Println()
+	if pensieveStats.eventsMasked > 0 {
+		fmt.Printf("  💡 Pensieve pruned %d events, keeping context lean while\n", pensieveStats.eventsMasked)
+		fmt.Println("     saving key findings in persistent notes.")
+	}
+	fmt.Println()
 	fmt.Println("━━━ AUTO MODE COMPLETE ━━━")
-	fmt.Println("✅ All predefined queries executed.")
 	return nil
+}
+
+// runStats tracks numeric stats from processResponse for comparison.
+type runStats struct {
+	events          int // total events seen in the stream
+	toolCalls       int // number of tool calls
+	toolResponses   int // number of tool responses
+	eventsMasked    int // number of events masked (from delete_context results)
+	notesSaved      int // number of notes saved
+	toolResultChars int // total characters in tool results
+	errors          int
+}
+
+func (s *runStats) add(other runStats) {
+	s.events += other.events
+	s.toolCalls += other.toolCalls
+	s.toolResponses += other.toolResponses
+	s.eventsMasked += other.eventsMasked
+	s.notesSaved += other.notesSaved
+	s.toolResultChars += other.toolResultChars
+	s.errors += other.errors
+}
+
+// createRunner creates a new agent+runner pair. When withPensieve is true,
+// it includes the four context-management tools; otherwise only web_search.
+func (c *pensieveChat) createRunner(withPensieve bool) (runner.Runner, string, error) {
+	modelInstance := openai.New(c.modelName)
+	genConfig := model.GenerationConfig{
+		MaxTokens:   intPtr(2000),
+		Temperature: floatPtr(0.7),
+		Stream:      c.streaming,
+	}
+
+	tools := []tool.Tool{
+		createWebSearchTool(),
+	}
+	var instruction string
+	var agentName, appName string
+
+	if withPensieve {
+		tools = append(tools, ctxtools.Tools()...)
+		instruction = pensieveInstruction
+		agentName = "pensieve-research-agent"
+		appName = "pensieve-research-demo"
+	} else {
+		instruction = `You are a research assistant. Use web_search to find information on topics the user asks about. Summarise your findings clearly.`
+		agentName = "baseline-research-agent"
+		appName = "baseline-research-demo"
+	}
+
+	llmAgent := llmagent.New(
+		agentName,
+		llmagent.WithModel(modelInstance),
+		llmagent.WithDescription("A research assistant"),
+		llmagent.WithInstruction(instruction),
+		llmagent.WithGenerationConfig(genConfig),
+		llmagent.WithTools(tools),
+		llmagent.WithAnnotateEventIDs(withPensieve),
+	)
+
+	r := runner.NewRunner(appName, llmAgent)
+	sessionID := fmt.Sprintf("%s-%d", agentName, time.Now().Unix())
+	fmt.Printf("✅ %s ready! Session: %s\n\n", agentName, sessionID)
+	return r, sessionID, nil
 }
 
 // ---------------------------------------------------------------------------
 // Response / event processing
 // ---------------------------------------------------------------------------
 
-func (c *pensieveChat) processResponse(eventChan <-chan *event.Event) error {
+func (c *pensieveChat) processResponse(eventChan <-chan *event.Event) (runStats, error) {
 	fmt.Print("🤖 Assistant: ")
 
 	var (
+		stats            runStats
 		fullContent      string
 		toolCallDetected bool
 		assistantStarted bool
 	)
 
 	for evt := range eventChan {
+		stats.events++
+
 		if evt.Error != nil {
 			if evt.Error.Type == agent.ErrorTypeStopAgentError {
 				fmt.Printf("\n🛑 Agent stopped: %s\n", evt.Error.Message)
-				return agent.NewStopError(evt.Error.Message)
+				return stats, agent.NewStopError(evt.Error.Message)
 			}
 			fmt.Printf("\n❌ Error: %s\n", evt.Error.Message)
+			stats.errors++
 			continue
 		}
 
-		if c.handleToolCalls(evt, &toolCallDetected, &assistantStarted) {
+		if c.handleToolCalls(evt, &toolCallDetected, &assistantStarted, &stats) {
 			continue
 		}
-		if c.handleToolResponses(evt) {
+		if c.handleToolResponses(evt, &stats) {
 			continue
 		}
 		c.processStreamingContent(evt, &toolCallDetected, &assistantStarted, &fullContent)
@@ -452,13 +598,14 @@ func (c *pensieveChat) processResponse(eventChan <-chan *event.Event) error {
 			break
 		}
 	}
-	return nil
+	return stats, nil
 }
 
 func (c *pensieveChat) handleToolCalls(
 	evt *event.Event,
 	toolCallDetected *bool,
 	assistantStarted *bool,
+	stats *runStats,
 ) bool {
 	if len(evt.Response.Choices) == 0 || len(evt.Response.Choices[0].Message.ToolCalls) == 0 {
 		return false
@@ -469,6 +616,7 @@ func (c *pensieveChat) handleToolCalls(
 	}
 	fmt.Println("🔧 Tool calls:")
 	for _, tc := range evt.Response.Choices[0].Message.ToolCalls {
+		stats.toolCalls++
 		icon := toolIcon(tc.Function.Name)
 		fmt.Printf("   %s %s (ID: %s)\n", icon, tc.Function.Name, tc.ID)
 		if len(tc.Function.Arguments) > 0 {
@@ -479,7 +627,7 @@ func (c *pensieveChat) handleToolCalls(
 	return true
 }
 
-func (c *pensieveChat) handleToolResponses(evt *event.Event) bool {
+func (c *pensieveChat) handleToolResponses(evt *event.Event, stats *runStats) bool {
 	if evt.Response == nil || len(evt.Response.Choices) == 0 {
 		return false
 	}
@@ -487,6 +635,22 @@ func (c *pensieveChat) handleToolResponses(evt *event.Event) bool {
 	for _, choice := range evt.Response.Choices {
 		if choice.Message.Role == model.RoleTool && choice.Message.ToolID != "" {
 			result := choice.Message.Content
+			stats.toolResponses++
+			stats.toolResultChars += len(result)
+
+			// Parse stats from known tool outputs.
+			if strings.Contains(result, `"masked":`) {
+				var v struct {
+					Masked int `json:"masked"`
+				}
+				if json.Unmarshal([]byte(result), &v) == nil {
+					stats.eventsMasked += v.Masked
+				}
+			}
+			if strings.Contains(result, `saved`) && strings.Contains(result, `note`) {
+				stats.notesSaved++
+			}
+
 			if len(result) > 300 {
 				result = result[:300] + "…(truncated)"
 			}
