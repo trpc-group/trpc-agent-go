@@ -378,6 +378,32 @@ Notes:
 - These options do not change the actual handoff logic; they only affect user‑visible texts or whether a fallback `message` is injected.
 - Transfer announcements are emitted as Events with `Response.Object == "agent.transfer"`. If your UI should not display system‑level notices, filter this object type at the renderer/service layer.
 
+### Post-tool Prompt Injection
+
+When the model calls tools, the tool outputs are added to the conversation as
+`role=tool` messages. Some models may respond with meta commentary like “based
+on the tool result…”, or reveal internal process details.
+
+To make the assistant respond more naturally after tool calls, LLMAgent
+injects a short “post-tool” dynamic prompt into the system message **only when
+tool results are present**.
+
+- Default: enabled, using the built-in prompt.
+- Customize the injected text: `llmagent.WithPostToolPrompt("...")`.
+- Disable injection entirely: `llmagent.WithEnablePostToolPrompt(false)`.
+
+Example:
+
+```go
+agent := llmagent.New(
+  "assistant",
+  llmagent.WithModel(modelInstance),
+  llmagent.WithTools([]tool.Tool{myTool}),
+  // Disable the framework's default post-tool prompt injection.
+  llmagent.WithEnablePostToolPrompt(false),
+)
+```
+
 ### Handling Event Stream
 
 The `eventChan` returned by `runner.Run()` is an event channel. The Agent continuously sends Event objects to this channel during execution.
