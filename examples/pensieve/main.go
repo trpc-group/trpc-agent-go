@@ -33,8 +33,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -61,32 +59,6 @@ var autoQueries = []string{
 	"Now research climate change and carbon emissions",
 	"Also look into quantum computing progress",
 	"Summarise all your findings so far",
-}
-
-// loadEnvFile loads KEY=VALUE pairs from a .env file into os environment.
-func loadEnvFile() {
-	// Resolve relative to this source file's directory.
-	_, thisFile, _, _ := runtime.Caller(0)
-	envPath := filepath.Join(filepath.Dir(thisFile), "..", "..", "..", "..", "appcd-dev", ".env")
-	data, err := os.ReadFile(envPath)
-	if err != nil {
-		return // silently skip if not found
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		key := strings.TrimSpace(parts[0])
-		val := strings.Trim(strings.TrimSpace(parts[1]), `"'`)
-		if os.Getenv(key) == "" { // don't override existing env vars
-			os.Setenv(key, val)
-		}
-	}
 }
 
 // ---------------------------------------------------------------------------
@@ -267,7 +239,6 @@ func simulateSearch(query string) []WebSearchResult {
 
 func main() {
 	flag.Parse()
-	loadEnvFile()
 
 	fmt.Println("🧠 Pensieve Research Assistant")
 	fmt.Printf("Model: %s | Streaming: %t | Auto: %t\n", *modelName, *streaming, *autoMode)
