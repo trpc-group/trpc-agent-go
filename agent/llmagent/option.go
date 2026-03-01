@@ -303,10 +303,20 @@ type Options struct {
 	// When < 0, all memories are loaded.
 	PreloadMemory int
 
+	// postToolPromptEnabled controls whether the post-tool dynamic prompt
+	// injection is enabled. When nil (default), injection is enabled to
+	// preserve existing behavior.
+	postToolPromptEnabled *bool
+
 	// PostToolPrompt overrides the default dynamic prompt injected when
-	// tool results are detected. When empty, the built-in default prompt
-	// from processor.DefaultPostToolPrompt is used. Set to a non-empty
-	// string to customize the guidance given to the model after tool calls.
+	// tool results are detected.
+	//
+	// When empty (default), the built-in default prompt is used.
+	// To disable prompt injection entirely, use
+	// WithEnablePostToolPrompt(false).
+	//
+	// Set to a non-empty string to customize the guidance given to the
+	// model after tool calls.
 	PostToolPrompt string
 }
 
@@ -857,6 +867,8 @@ func WithPreloadMemory(limit int) Option {
 // WithPostToolPrompt overrides the default dynamic prompt injected when tool
 // results are detected in the conversation. The default prompt guides the
 // model to synthesize results naturally without meta-commentary.
+// To disable post-tool prompt injection entirely, use
+// WithEnablePostToolPrompt(false).
 //
 // Example usage:
 //
@@ -864,6 +876,15 @@ func WithPreloadMemory(limit int) Option {
 func WithPostToolPrompt(prompt string) Option {
 	return func(opts *Options) {
 		opts.PostToolPrompt = prompt
+	}
+}
+
+// WithEnablePostToolPrompt enables or disables post-tool prompt injection.
+// When disabled, no prompt is injected after tool results, even if a custom
+// PostToolPrompt is configured.
+func WithEnablePostToolPrompt(enable bool) Option {
+	return func(opts *Options) {
+		opts.postToolPromptEnabled = &enable
 	}
 }
 

@@ -380,3 +380,17 @@ func TestBuildRequestProcessorsWithSummaryFormatter(t *testing.T) {
 		})
 	}
 }
+
+func TestWithEnablePostToolPrompt(t *testing.T) {
+	opts := &Options{}
+	WithEnablePostToolPrompt(false)(opts)
+
+	require.NotNil(t, opts.postToolPromptEnabled)
+	require.False(t, *opts.postToolPromptEnabled)
+
+	opts = &Options{}
+	WithEnablePostToolPrompt(true)(opts)
+
+	require.NotNil(t, opts.postToolPromptEnabled)
+	require.True(t, *opts.postToolPromptEnabled)
+}
