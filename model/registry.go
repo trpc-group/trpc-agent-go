@@ -30,3 +30,10 @@ func RegisterModelContextWindows(models map[string]int) {
 		imodel.ModelContextWindows[modelName] = contextWindowSize
 	}
 }
+
+// ResolveModelContextWindow returns the context window size (in tokens) for a
+// given model name. It performs case-insensitive exact matching first, then
+// prefix-based fallback, and defaults to 8192 if the model is unknown.
+func ResolveModelContextWindow(modelName string) int {
+	return imodel.ResolveContextWindow(modelName)
+}

@@ -79,7 +79,7 @@ func (sess *Session) UnmaskEvents(ids ...string) int {
 // accessing Events directly when building LLM prompts.
 //
 // Thread-safe: protected by EventMu.
-func (sess *Session) GetVisibleEvents() []event.Event {
+func (sess *Session) GetVisibleEvents() event.Events {
 	if sess == nil {
 		return nil
 	}
@@ -89,12 +89,12 @@ func (sess *Session) GetVisibleEvents() []event.Event {
 
 	if len(sess.maskedEventIDs) == 0 {
 		// Fast path: no masking, return a copy of all events.
-		out := make([]event.Event, len(sess.Events))
+		out := make(event.Events, len(sess.Events))
 		copy(out, sess.Events)
 		return out
 	}
 
-	out := make([]event.Event, 0, len(sess.Events))
+	out := make(event.Events, 0, len(sess.Events))
 	for _, e := range sess.Events {
 		if !sess.maskedEventIDs[e.ID] {
 			out = append(out, e)

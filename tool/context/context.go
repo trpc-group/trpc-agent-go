@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
@@ -88,9 +89,11 @@ type CheckBudgetInput struct{}
 
 // CheckBudgetOutput is the output for the check_budget tool.
 type CheckBudgetOutput struct {
-	TotalEvents   int `json:"total_events"`
-	VisibleEvents int `json:"visible_events"`
-	MaskedEvents  int `json:"masked_events"`
+	TotalEvents         int `json:"total_events"`
+	VisibleEvents       int `json:"visible_events"`
+	MaskedEvents        int `json:"masked_events"`
+	EstimatedTokens     int `json:"estimated_visible_tokens,omitempty"`
+	ContextWindowTokens int `json:"context_window_tokens,omitempty"`
 }
 
 // NewCheckBudgetTool creates a tool that reports the current context budget.
@@ -104,18 +107,28 @@ func NewCheckBudgetTool() tool.CallableTool {
 			}
 
 			total := sess.GetEventCount()
-			visible := len(sess.GetVisibleEvents())
+			visibleEvents := sess.GetVisibleEvents()
 
-			return CheckBudgetOutput{
+			out := CheckBudgetOutput{
 				TotalEvents:   total,
-				VisibleEvents: visible,
-				MaskedEvents:  total - visible,
-			}, nil
+				VisibleEvents: len(visibleEvents),
+				MaskedEvents:  total - len(visibleEvents),
+			}
+
+			// Estimate token usage from visible events.
+			out.EstimatedTokens = visibleEvents.EstimateEventTokens(ctx)
+
+			// Resolve context window from model name if available.
+			if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil && inv.Model != nil {
+				out.ContextWindowTokens = model.ResolveModelContextWindow(inv.Model.Info().Name)
+			}
+
+			return out, nil
 		},
 		function.WithName("check_budget"),
 		function.WithDescription(
-			"Check how much context budget remains. Returns the total number of events, "+
-				"visible events (sent to LLM), and masked events (hidden). "+
+			"Check how much context budget remains. Returns event counts plus "+
+				"estimated token usage and the model's context window size. "+
 				"Use this proactively to decide when to prune context via delete_context.",
 		),
 	)

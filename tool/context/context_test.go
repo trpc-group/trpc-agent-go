@@ -18,10 +18,31 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
+// testModel is a minimal model.Model stub for tests.
+type testModel struct {
+	name string
+}
+
+func (m *testModel) GenerateContent(_ context.Context, _ *model.Request) (<-chan *model.Response, error) {
+	return nil, nil
+}
+
+func (m *testModel) Info() model.Info {
+	return model.Info{Name: m.name}
+}
+
 // ctxWithSession creates a context containing an Invocation with a real Session.
 func ctxWithSession(sess *session.Session) context.Context {
 	inv := agent.NewInvocation()
 	inv.Session = sess
+	return agent.NewInvocationContext(context.Background(), inv)
+}
+
+// ctxWithSessionAndModel creates a context with both a Session and a Model.
+func ctxWithSessionAndModel(sess *session.Session, m model.Model) context.Context {
+	inv := agent.NewInvocation()
+	inv.Session = sess
+	inv.Model = m
 	return agent.NewInvocationContext(context.Background(), inv)
 }
 
@@ -148,6 +169,63 @@ func TestCheckBudgetTool(t *testing.T) {
 		}
 		if out.MaskedEvents != 1 {
 			t.Fatalf("expected 1 masked, got %d", out.MaskedEvents)
+		}
+	})
+
+	t.Run("reports estimated tokens and context window", func(t *testing.T) {
+		sess := session.NewSession("app", "user", "s2-tokens")
+		// Add events with actual message content to generate token estimates.
+		sess.Events = []event.Event{
+			{
+				ID:     "e1",
+				Author: "test",
+				Response: &model.Response{
+					Choices: []model.Choice{
+						{Message: model.Message{Role: model.RoleUser, Content: "Hello world, this is a test message."}},
+					},
+				},
+			},
+			{
+				ID:     "e2",
+				Author: "test",
+				Response: &model.Response{
+					Choices: []model.Choice{
+						{Message: model.Message{Role: model.RoleAssistant, Content: "Sure, I can help with that."}},
+					},
+				},
+			},
+		}
+		ctx := ctxWithSessionAndModel(sess, &testModel{name: "gpt-4o"})
+
+		tool := NewCheckBudgetTool()
+		result, err := tool.Call(ctx, []byte(`{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		out := result.(CheckBudgetOutput)
+		if out.EstimatedTokens <= 0 {
+			t.Fatalf("expected positive estimated tokens, got %d", out.EstimatedTokens)
+		}
+		if out.ContextWindowTokens != 128000 {
+			t.Fatalf("expected gpt-4o context window 128000, got %d", out.ContextWindowTokens)
+		}
+	})
+
+	t.Run("no model returns zero context window", func(t *testing.T) {
+		sess := session.NewSession("app", "user", "s2-nomodel")
+		sess.Events = []event.Event{newTestEvent("e1")}
+		ctx := ctxWithSession(sess)
+
+		tool := NewCheckBudgetTool()
+		result, err := tool.Call(ctx, []byte(`{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		out := result.(CheckBudgetOutput)
+		if out.ContextWindowTokens != 0 {
+			t.Fatalf("expected 0 context window without model, got %d", out.ContextWindowTokens)
 		}
 	})
 }

@@ -783,3 +783,98 @@ func TestEvent_Filter_LegacyBranchCompatibility(t *testing.T) {
 	require.True(t, legacy.Filter("legacy/branch/sub"))
 	require.False(t, legacy.Filter("legacy-other"))
 }
+
+func TestEstimateEventTokens(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("nil events returns zero", func(t *testing.T) {
+		var events Events
+		require.Equal(t, 0, events.EstimateEventTokens(ctx))
+	})
+
+	t.Run("empty events returns zero", func(t *testing.T) {
+		events := Events{}
+		require.Equal(t, 0, events.EstimateEventTokens(ctx))
+	})
+
+	t.Run("events without responses are skipped", func(t *testing.T) {
+		events := Events{
+			{Response: nil, ID: "e1"},
+			{Response: nil, ID: "e2"},
+		}
+		require.Equal(t, 0, events.EstimateEventTokens(ctx))
+	})
+
+	t.Run("events with empty responses return zero", func(t *testing.T) {
+		events := Events{
+			{Response: &model.Response{}, ID: "e1"},
+		}
+		require.Equal(t, 0, events.EstimateEventTokens(ctx))
+	})
+
+	t.Run("events with content return positive tokens", func(t *testing.T) {
+		events := Events{
+			{
+				Response: &model.Response{
+					Choices: []model.Choice{
+						{Message: model.Message{Role: model.RoleUser, Content: "Hello world, this is a test message with some content."}},
+					},
+				},
+				ID: "e1",
+			},
+			{
+				Response: &model.Response{
+					Choices: []model.Choice{
+						{Message: model.Message{Role: model.RoleAssistant, Content: "Sure, I can help you with that request."}},
+					},
+				},
+				ID: "e2",
+			},
+		}
+		tokens := events.EstimateEventTokens(ctx)
+		require.Positive(t, tokens, "expected positive token count for events with content")
+	})
+
+	t.Run("mixed events with and without responses", func(t *testing.T) {
+		events := Events{
+			{Response: nil, ID: "e-nil"},
+			{
+				Response: &model.Response{
+					Choices: []model.Choice{
+						{Message: model.Message{Role: model.RoleUser, Content: "Some text here."}},
+					},
+				},
+				ID: "e-content",
+			},
+			{Response: &model.Response{}, ID: "e-empty"},
+		}
+		tokens := events.EstimateEventTokens(ctx)
+		require.Positive(t, tokens, "should count tokens from the event with content")
+	})
+
+	t.Run("multi-choice event sums all choices", func(t *testing.T) {
+		singleChoice := Events{
+			{
+				Response: &model.Response{
+					Choices: []model.Choice{
+						{Message: model.Message{Role: model.RoleAssistant, Content: "First answer."}},
+					},
+				},
+				ID: "e-single",
+			},
+		}
+		multiChoice := Events{
+			{
+				Response: &model.Response{
+					Choices: []model.Choice{
+						{Message: model.Message{Role: model.RoleAssistant, Content: "First answer."}},
+						{Message: model.Message{Role: model.RoleAssistant, Content: "Second answer with more text."}},
+					},
+				},
+				ID: "e-multi",
+			},
+		}
+		require.Greater(t, multiChoice.EstimateEventTokens(ctx), singleChoice.EstimateEventTokens(ctx),
+			"multi-choice should have more tokens than single-choice")
+	})
+}

@@ -53,6 +53,30 @@ const (
 	TransferTag = "transfer"
 )
 
+type Events []Event
+
+// EstimateEventTokens returns a rough token estimate for the given events
+// using the framework's SimpleTokenCounter heuristic.
+func (events Events) EstimateEventTokens(ctx context.Context) int {
+	if len(events) == 0 {
+		return 0
+	}
+	counter := model.NewSimpleTokenCounter()
+	total := 0
+	for _, evt := range events {
+		if evt.Response == nil {
+			continue
+		}
+		for _, choice := range evt.Response.Choices {
+			tokens, err := counter.CountTokens(ctx, choice.Message)
+			if err == nil {
+				total += tokens
+			}
+		}
+	}
+	return total
+}
+
 // Event represents an event in conversation between agents and users.
 type Event struct {
 	// Response is the base struct for all LLM response functionality.
