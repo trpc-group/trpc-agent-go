@@ -129,6 +129,17 @@ end
 return 1
 `)
 
+func ttlMilliseconds(ttl time.Duration) int64 {
+	if ttl <= 0 {
+		return 0
+	}
+	ttlMs := ttl.Milliseconds()
+	if ttlMs == 0 {
+		return 1
+	}
+	return ttlMs
+}
+
 func checkpointKey(lineageID, checkpointNS, checkpointID string) string {
 	return fmt.Sprintf("%s{%s}:%s:%s", keyPrefixCheckpoint, lineageID, checkpointNS, checkpointID)
 }
@@ -432,7 +443,7 @@ func (s *Saver) Put(ctx context.Context, req graph.PutRequest) (map[string]any, 
 		lineageNSKey(lineageID),
 	}
 	args := []any{
-		s.opts.ttl.Milliseconds(),
+		ttlMilliseconds(s.opts.ttl),
 		lineageID,
 		checkpointNS,
 		checkpointID,
@@ -526,7 +537,7 @@ func (s *Saver) PutFull(ctx context.Context, req graph.PutFullRequest) (map[stri
 		writeKey,
 	}
 	args := []any{
-		s.opts.ttl.Milliseconds(),
+		ttlMilliseconds(s.opts.ttl),
 		lineageID,
 		checkpointNS,
 		checkpointID,
