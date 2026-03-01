@@ -12,6 +12,7 @@
 - **自动记忆提取**（F1=0.357 pgvector）是最强的记忆方案，达到长上下文基线的 75.6%
 - **Agentic 记忆**（F1=0.294 pgvector）显示 LLM 驱动的记忆提取面临信息密度挑战
 - **pgvector 始终优于 MySQL** 1-2% F1，验证了向量相似度搜索的价值
+- **SQLiteVec 支持本地语义检索**，并且可以通过返回 top-k 结果集显著降低 prompt token 消耗（见 3.6）
 - **注入原始历史降低 F1/BLEU 但提升 LLM Score**，揭示了 Token 级精度与语义质量之间的权衡
 
 ---
@@ -40,6 +41,8 @@
 
 | 后端 | 检索方式 | Embedding 模型 |
 | --- | --- | --- |
+| **SQLite** | Token 匹配 | 无 |
+| **SQLiteVec** | 向量相似度（余弦），sqlite-vec | text-embedding-3-small |
 | **pgvector** | 向量相似度（余弦） | text-embedding-3-small |
 | **MySQL** | 全文搜索（类 BM25） | 无 |
 
@@ -191,6 +194,43 @@
 | **平均** | **199** | **0.472** | **0.357** | **0.294** |
 
 ---
+
+### 3.6 SQLite vs SQLiteVec（子集实验）
+
+本小节对比 `sqlite`（关键词/Token 匹配）与 `sqlitevec`（sqlite-vec 语义向量检索）
+在一个小规模子集上的表现，用于观察 token 成本与检索差异。
+
+**实验配置**：
+
+- 数据集：LoCoMo `locomo10.json`
+- 样本：`locomo10_1`
+- 类别过滤：`temporal`（13 个 QA）
+- 场景：`auto`
+- 模型：`gpt-4o-mini`
+- LLM 评判：关闭
+- SQLiteVec embedding 模型：`text-embedding-3-small`
+
+**表 8：总体指标与 token 消耗（Auto / Temporal / 13 QA）**
+
+| 后端 | F1 | BLEU | Prompt Tokens | Completion Tokens | Total Tokens | LLM Calls | 平均延迟 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| SQLite | 0.116 | 0.082 | 80,184 | 352 | 80,536 | 26 | 12,352ms |
+| SQLiteVec | 0.116 | 0.082 | 26,483 | 353 | 26,836 | 26 | 17,817ms |
+
+**解读**：
+
+- 在该子集中，答案质量（F1/BLEU）一致，但 **SQLiteVec 的 prompt token 消耗约为 SQLite 的 1/3**。
+  主要原因是 SQLiteVec 返回的是有界的 top-k 结果（默认 10），而 SQLite 后端可能返回更大规模的关键词匹配集合。
+
+**检索微基准（curated queries）**：
+
+为了将“检索效果”与端到端 QA 解耦，我们还运行了一个面向检索的示例
+（`examples/memory/compare`），其中查询使用了较低词面重叠的改写/同义表达。
+
+| 后端 | Hit@3 | 说明 |
+| --- | ---: | --- |
+| SQLite | 2/4 | Token 匹配对部分改写不敏感 |
+| SQLiteVec | 4/4 | 语义相似度可召回改写 |
 
 ## 4. 分析
 

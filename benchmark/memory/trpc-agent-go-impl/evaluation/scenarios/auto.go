@@ -297,9 +297,10 @@ func (e *AutoEvaluator) waitForAutoExtraction(
 	deadline := time.Now().Add(timeout)
 
 	var (
-		lastCount      = -1
-		stableCount    = 0
-		sawAnyMemories = false
+		lastCount           = -1
+		lastLatestUpdatedAt time.Time
+		stableCount         = 0
+		sawAnyMemories      = false
 	)
 
 	for {
@@ -316,14 +317,21 @@ func (e *AutoEvaluator) waitForAutoExtraction(
 		}
 
 		cur := len(entries)
+		var latestUpdatedAt time.Time
+		if cur > 0 {
+			latestUpdatedAt = entries[0].UpdatedAt
+		}
 		if cur > 0 {
 			sawAnyMemories = true
 		}
-		if cur == lastCount {
+
+		if cur == lastCount &&
+			latestUpdatedAt.Equal(lastLatestUpdatedAt) {
 			stableCount++
 		} else {
 			stableCount = 0
 			lastCount = cur
+			lastLatestUpdatedAt = latestUpdatedAt
 		}
 
 		if sawAnyMemories && stableCount >= stableRounds {

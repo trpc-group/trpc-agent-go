@@ -24,7 +24,7 @@ A simple example that demonstrates manual memory tool integration where LLM agen
   delete, clear)
 - Custom tool implementations
 - Streaming and non-streaming response modes
-- Multiple storage backends (in-memory, Redis, MySQL, PostgreSQL)
+- Multiple storage backends (in-memory, SQLite, Redis, MySQL, PostgreSQL, pgvector)
 
 **Use Cases:**
 
@@ -72,9 +72,26 @@ go run main.go
 
 [Read full documentation →](./auto/README.md)
 
+### 📁 compare/
+
+**Retrieval Comparison - SQLite vs SQLiteVec**
+
+A small example that compares keyword-based SQLite memory (`sqlite`) with
+semantic vector memory (`sqlitevec`) powered by `sqlite-vec`.
+
+**Getting Started:**
+
+```bash
+cd examples/memory/compare
+export OPENAI_API_KEY="your-api-key"
+go run .
+```
+
+[Read full documentation →](./compare/README.md)
+
 ## Common Features
 
-Both examples share the following capabilities:
+The chat examples (`simple/` and `auto/`) share the following capabilities:
 
 ### Memory Services
 
@@ -83,6 +100,8 @@ All examples support multiple storage backends:
 | Backend    | Description                                 | Usage              |
 | ---------- | ------------------------------------------- | ------------------ |
 | `inmemory` | In-memory storage (default)                 | `-memory=inmemory` |
+| `sqlite`   | SQLite file storage                         | `-memory=sqlite`   |
+| `sqlitevec` | SQLite + sqlite-vec vector search (embeddings) | `-memory=sqlitevec` |
 | `redis`    | Redis-based storage                         | `-memory=redis`    |
 | `mysql`    | MySQL-based storage                         | `-memory=mysql`    |
 | `postgres` | PostgreSQL-based storage                    | `-memory=postgres` |
@@ -125,7 +144,7 @@ Memory provides 6 tools with different availability in each mode:
 | --------------- | -------------- | --------------------- | --------------------------- | ----------------------- |
 | `memory_add`    | Add new memory | ✅ Default            | ❌ Unavailable              | Create new memory entry |
 | `memory_update` | Update memory  | ✅ Default            | ❌ Unavailable              | Modify existing memory  |
-| `memory_search` | Search memory  | ✅ Default            | ✅ Default                  | Find by keywords        |
+| `memory_search` | Search memory  | ✅ Default            | ✅ Default                  | Search relevant memories |
 | `memory_load`   | Load memories  | ✅ Default            | ⚙️ Configurable             | Load recent memories    |
 | `memory_delete` | Delete memory  | ⚙️ Configurable       | ❌ Unavailable              | Delete single memory    |
 | `memory_clear`  | Clear memories | ⚙️ Configurable       | ❌ Unavailable              | Delete all memories     |
@@ -160,6 +179,12 @@ Memory provides 6 tools with different availability in each mode:
 | Variable                  | Description                  | Default                     |
 | ------------------------- | ---------------------------- | --------------------------- |
 | `OPENAI_BASE_URL`         | Base URL for model API       | `https://api.openai.com/v1` |
+| `SQLITE_MEMORY_DSN`       | SQLite DSN for memory store  | `file:memories.db?_busy_timeout=5000` |
+| `SQLITEVEC_MEMORY_DSN`    | SQLiteVec DSN for memory store | `file:memories_vec.db?_busy_timeout=5000` |
+| `SQLITEVEC_EMBEDDER_MODEL` | Embedder model for SQLiteVec | `text-embedding-3-small` |
+| `OPENAI_EMBEDDING_API_KEY` | API key for embedding model (optional) | (empty) |
+| `OPENAI_EMBEDDING_BASE_URL` | Base URL for embedding API (optional) | (empty) |
+| `OPENAI_EMBEDDING_MODEL`  | Override embedding model name (optional) | (empty) |
 | `REDIS_ADDR`              | Redis server address         | `localhost:6379`            |
 | `PG_HOST`                 | PostgreSQL host              | `localhost`                 |
 | `PG_PORT`                 | PostgreSQL port              | `5432`                      |
