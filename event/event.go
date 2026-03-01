@@ -53,6 +53,7 @@ const (
 	TransferTag = "transfer"
 )
 
+// Events is a slice of Event values with convenience methods for batch operations.
 type Events []Event
 
 // EstimateEventTokens returns a rough token estimate for the given events
