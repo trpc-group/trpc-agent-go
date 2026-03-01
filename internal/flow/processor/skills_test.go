@@ -690,6 +690,144 @@ func TestSkillsRequestProcessor_MaxLoadedSkills_ToolResultMode_EvictsOldest(
 	require.Equal(t, model.ObjectTypePreprocessingInstruction, ev2.Object)
 }
 
+func TestKeepMostRecentSkills_FillsAlphabeticallyWhenNoEvents(t *testing.T) {
+	inv := &agent.Invocation{
+		Session: &session.Session{},
+	}
+
+	loaded := []string{"d", "b", "a", "b", " ", "c"}
+	const max = 3
+
+	keep := keepMostRecentSkills(inv, loaded, max)
+	require.Equal(t, []string{"a", "b", "c"}, keep)
+}
+
+func TestKeepMostRecentSkills_EarlyReturns(t *testing.T) {
+	keep := keepMostRecentSkills(nil, []string{"a"}, 1)
+	require.Nil(t, keep)
+
+	inv := &agent.Invocation{Session: nil}
+	keep = keepMostRecentSkills(inv, []string{"a"}, 1)
+	require.Nil(t, keep)
+
+	inv = &agent.Invocation{Session: &session.Session{}}
+	keep = keepMostRecentSkills(inv, []string{"a"}, 0)
+	require.Nil(t, keep)
+
+	keep = keepMostRecentSkills(inv, []string{" ", ""}, 1)
+	require.Nil(t, keep)
+}
+
+func TestAppendSkillsFromToolResponseEvent_EarlyReturns(t *testing.T) {
+	loadedSet := map[string]struct{}{
+		"a": {},
+	}
+	seen := map[string]struct{}{}
+	const max = 3
+
+	keep := appendSkillsFromToolResponseEvent(
+		event.Event{},
+		loadedSet,
+		seen,
+		nil,
+		max,
+	)
+	require.Nil(t, keep)
+
+	keep = appendSkillsFromToolResponseEvent(
+		event.Event{
+			Response: &model.Response{
+				Object: "not_tool_response",
+			},
+		},
+		loadedSet,
+		seen,
+		nil,
+		max,
+	)
+	require.Nil(t, keep)
+
+	keep = appendSkillsFromToolResponseEvent(
+		event.Event{
+			Response: &model.Response{
+				Object: model.ObjectTypeToolResponse,
+			},
+		},
+		loadedSet,
+		seen,
+		nil,
+		max,
+	)
+	require.Nil(t, keep)
+}
+
+func TestAppendSkillsFromToolResponseEvent_SkipsInvalidMessages(t *testing.T) {
+	loadedSet := map[string]struct{}{
+		"a": {},
+		"b": {},
+	}
+	seen := map[string]struct{}{
+		"b": {},
+	}
+
+	ev := event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeToolResponse,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+				},
+			}, {
+				Message: model.Message{
+					Role:     model.RoleTool,
+					ToolName: "other_tool",
+				},
+			}, {
+				Message: model.Message{
+					Role:     model.RoleTool,
+					ToolName: skillToolSelectDocs,
+					Content:  "not json",
+				},
+			}, {
+				Message: model.Message{
+					Role:     model.RoleTool,
+					ToolName: skillToolLoad,
+					Content:  loadedPrefix + " c",
+				},
+			}, {
+				Message: model.Message{
+					Role:     model.RoleTool,
+					ToolName: skillToolLoad,
+					Content:  loadedPrefix + " b",
+				},
+			}, {
+				Message: model.Message{
+					Role:     model.RoleTool,
+					ToolName: skillToolLoad,
+					Content:  loadedPrefix + " a",
+				},
+			}},
+		},
+	}
+
+	keep := appendSkillsFromToolResponseEvent(
+		ev,
+		loadedSet,
+		seen,
+		nil,
+		10,
+	)
+	require.Equal(t, []string{"a"}, keep)
+}
+
+func TestSkillNameFromToolResponse_UnknownTool(t *testing.T) {
+	name := skillNameFromToolResponse(model.Message{
+		ToolName: "unknown_tool",
+		Content:  "ignored",
+	})
+	require.Empty(t, name)
+}
+
 func TestSkillsToolResultRequestProcessor_MaterializesIntoLastToolMsg(
 	t *testing.T,
 ) {
