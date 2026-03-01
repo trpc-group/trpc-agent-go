@@ -472,7 +472,6 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 	var events []event.Event
 	inv.Session.EventMu.RLock()
 	for _, evt := range inv.Session.Events {
-		// Skip events that have been masked via Pensieve delete_context.
 		if inv.Session.IsEventMasked(evt.ID) {
 			continue
 		}
@@ -483,17 +482,11 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 		if isInvocationMessage {
 			includedInvocationMessage = true
 		}
-		// use error fill message content if message content is empty
-		if len(evt.Response.Choices) > 0 && evt.Response.Choices[0].Message.Content == "" && evt.Response.Error != nil {
-			rsp := evt.Response.Clone()
-			rsp.Choices[0].Message.Content = fmt.Sprintf("type: %s, message: %s", rsp.Error.Type, rsp.Error.Message)
-			evt.Response = rsp
-		}
+		evt.FillErrorContent()
 		events = append(events, evt)
 	}
 	inv.Session.EventMu.RUnlock()
 
-	// insert invocation message
 	if !includedInvocationMessage && model.HasPayload(inv.Message) {
 		events = p.insertInvocationMessage(events, inv)
 	}
@@ -501,37 +494,8 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 	resultEvents := p.rearrangeLatestFuncResp(events)
 	resultEvents = p.rearrangeAsyncFuncRespHist(resultEvents)
 
-	// Get current request ID for reasoning content filtering.
-	currentRequestID := inv.RunOptions.RequestID
-
-	// Convert events to messages with reasoning content handling.
-	var messages []model.Message
-	for _, evt := range resultEvents {
-		// Convert foreign events or keep as-is.
-		ev := evt
-		if p.isOtherAgentReply(inv.AgentName, inv.Branch, &ev) {
-			ev = p.convertForeignEvent(&ev)
-		}
-		if len(ev.Choices) > 0 {
-			for _, choice := range ev.Choices {
-				msg := choice.Message
-				// Apply reasoning content stripping based on mode.
-				msg = p.processReasoningContent(msg, evt.RequestID, currentRequestID)
-				if isEmptyAssistantMessage(msg) {
-					continue
-				}
-				if p.AnnotateEventIDs && evt.ID != "" {
-					msg = annotateMessageWithEventID(msg, evt.ID)
-				}
-				messages = append(messages, msg)
-			}
-		}
-	}
-
-	messages = p.mergeUserMessages(messages)
-
-	// Repair orphaned tool calls caused by masked events.
-	messages = repairOrphanedToolCalls(messages)
+	messages := p.eventsToMessages(resultEvents, inv)
+	messages = p.postProcessMessages(messages)
 
 	// Apply MaxHistoryRuns limit when AddSessionSummary is false.
 	if !p.AddSessionSummary && p.MaxHistoryRuns > 0 {
@@ -701,29 +665,21 @@ func (p *ContentRequestProcessor) getCurrentInvocationMessages(inv *agent.Invoca
 	var events []event.Event
 	inv.Session.EventMu.RLock()
 	for _, evt := range inv.Session.Events {
-		// Skip events that have been masked via Pensieve delete_context.
 		if inv.Session.IsEventMasked(evt.ID) {
 			continue
 		}
-		// Only include events from current invocation
 		if evt.InvocationID != inv.InvocationID {
 			continue
 		}
-		// Skip invalid events
 		if evt.Response == nil || evt.IsPartial || !evt.IsValidContent() {
 			continue
 		}
-		// use error fill message content if message content is empty
-		if len(evt.Response.Choices) > 0 && evt.Response.Choices[0].Message.Content == "" && evt.Response.Error != nil {
-			rsp := evt.Response.Clone()
-			rsp.Choices[0].Message.Content = fmt.Sprintf("type: %s, message: %s", rsp.Error.Type, rsp.Error.Message)
-			evt.Response = rsp
-		}
+		evt.FillErrorContent()
 		events = append(events, evt)
 	}
 	inv.Session.EventMu.RUnlock()
 
-	// insert invocation message if not already included
+	// Insert invocation message if not already included.
 	var hasInvocationMessage bool
 	for _, evt := range events {
 		if invocationMessageEqual(inv.Message, evt.Choices[0].Message) {
@@ -738,38 +694,40 @@ func (p *ContentRequestProcessor) getCurrentInvocationMessages(inv *agent.Invoca
 	resultEvents := p.rearrangeLatestFuncResp(events)
 	resultEvents = p.rearrangeAsyncFuncRespHist(resultEvents)
 
-	// Get current request ID for reasoning content filtering.
-	currentRequestID := inv.RunOptions.RequestID
+	messages := p.eventsToMessages(resultEvents, inv)
+	return p.postProcessMessages(messages)
+}
 
-	// Convert events to messages with reasoning content handling.
+// eventsToMessages converts a slice of events into model messages, handling
+// foreign agent replies, reasoning content stripping, empty message filtering,
+// and optional event ID annotation.
+func (p *ContentRequestProcessor) eventsToMessages(events []event.Event, inv *agent.Invocation) []model.Message {
+	currentRequestID := inv.RunOptions.RequestID
 	var messages []model.Message
-	for _, evt := range resultEvents {
-		// Convert foreign events or keep as-is (consistent with getIncrementMessages).
+	for _, evt := range events {
 		ev := evt
 		if p.isOtherAgentReply(inv.AgentName, inv.Branch, &ev) {
 			ev = p.convertForeignEvent(&ev)
 		}
-		if len(ev.Choices) > 0 {
-			for _, choice := range ev.Choices {
-				msg := choice.Message
-				msg = p.processReasoningContent(msg, evt.RequestID, currentRequestID)
-				if isEmptyAssistantMessage(msg) {
-					continue
-				}
-				if p.AnnotateEventIDs && evt.ID != "" {
-					msg = annotateMessageWithEventID(msg, evt.ID)
-				}
-				messages = append(messages, msg)
+		for _, choice := range ev.Choices {
+			msg := p.processReasoningContent(choice.Message, evt.RequestID, currentRequestID)
+			if isEmptyAssistantMessage(msg) {
+				continue
 			}
+			if p.AnnotateEventIDs && evt.ID != "" {
+				msg = annotateMessageWithEventID(msg, evt.ID)
+			}
+			messages = append(messages, msg)
 		}
 	}
-
-	messages = p.mergeUserMessages(messages)
-
-	// Repair orphaned tool calls caused by masked events.
-	messages = repairOrphanedToolCalls(messages)
-
 	return messages
+}
+
+// postProcessMessages applies user message merging and repairs orphaned tool
+// calls that may result from masked events.
+func (p *ContentRequestProcessor) postProcessMessages(messages []model.Message) []model.Message {
+	messages = p.mergeUserMessages(messages)
+	return repairOrphanedToolCalls(messages)
 }
 
 func (p *ContentRequestProcessor) insertInvocationMessage(

@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -106,6 +107,19 @@ type Event struct {
 
 	// version for handling version compatibility issues.
 	Version int `json:"version,omitempty"`
+}
+
+// FillErrorContent replaces empty message content with the error details when
+// the event has an error response. This is used in both getIncrementMessages
+// and getCurrentInvocationMessages.
+func (evt *Event) FillErrorContent() {
+	if len(evt.Response.Choices) > 0 &&
+		evt.Response.Choices[0].Message.Content == "" &&
+		evt.Response.Error != nil {
+		rsp := evt.Response.Clone()
+		rsp.Choices[0].Message.Content = fmt.Sprintf("type: %s, message: %s", rsp.Error.Type, rsp.Error.Message)
+		evt.Response = rsp
+	}
 }
 
 // ContainsTag checks if the event contains the specified tag.
