@@ -445,12 +445,35 @@ Notes:
 - `SkillLoadModeSession` keeps them across turns, so the loaded list can
   remain non-empty until you clear it (or the session expires).
 
+#### Built-in option: cap loaded skills (TopK)
+
+If your goal is simply “keep only the most recent N loaded skills”, use
+the built-in option:
+
+- `llmagent.WithMaxLoadedSkills(N)`
+
+This enforces the cap **before every model request** by clearing older
+`temp:skill:*` state keys, based on recent `skill_load` /
+`skill_select_docs` tool responses in the session.
+
+Example:
+
+```go
+agt := llmagent.New(
+    "skills-assistant",
+    llmagent.WithModel(m),
+    llmagent.WithSkills(repo),
+    llmagent.WithMaxLoadedSkills(3),
+)
+_ = agt
+```
+
 #### Custom policy: cap loaded skills (e.g., keep the most recent 3)
 
-`SkillLoadMode` controls **lifetime** (once/turn/session). If you also
-want to control **quantity** (for example, “at most 3 loaded skills”),
-use an `AppendEventHook` on your session service to modify the state
-deltas written by `skill_load`.
+`SkillLoadMode` controls **lifetime** (once/turn/session). If you need
+full manual control beyond `llmagent.WithMaxLoadedSkills` (for example,
+custom eviction policy), use an `AppendEventHook` on your session
+service to modify the state deltas written by `skill_load`.
 
 The core idea:
 

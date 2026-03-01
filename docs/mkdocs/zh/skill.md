@@ -433,12 +433,35 @@ _ = agt
 - `SkillLoadModeSession` 会跨轮保留这些 key，所以“已加载列表”会一直
   非空，直到你手动清空（或会话过期）。
 
+#### 内置选项：限制已加载技能数量（TopK）
+
+如果你的需求只是“最多保留最近 N 个已加载 skills”，可以直接使用内置
+option：
+
+- `llmagent.WithMaxLoadedSkills(N)`
+
+它会在**每次模型请求前**检查当前 loaded skills，并根据 session 中最近
+的 `skill_load` / `skill_select_docs` tool result，清空更老的
+`temp:skill:*` state key，从而把 loaded skills 数量控制在 N 以内。
+
+示例：
+
+```go
+agt := llmagent.New(
+    "skills-assistant",
+    llmagent.WithModel(m),
+    llmagent.WithSkills(repo),
+    llmagent.WithMaxLoadedSkills(3),
+)
+_ = agt
+```
+
 #### 自定义策略：限制已加载技能数量（比如最多保留最近 3 个）
 
 `SkillLoadMode` 解决的是“驻留多久”（once/turn/session），不解决
-“最多加载多少个”。如果你希望做“最多 N 个、超过就淘汰历史”的策略，
-推荐在 session service 上加 `AppendEventHook`，去修改 `skill_load`
-写入的 state delta。
+“最多加载多少个”。如果你需要在 `llmagent.WithMaxLoadedSkills` 之外
+做更细粒度的手动控制（比如自定义淘汰策略），推荐在 session service
+上加 `AppendEventHook`，去修改 `skill_load` 写入的 state delta。
 
 核心思路：
 
