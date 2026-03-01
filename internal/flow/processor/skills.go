@@ -310,66 +310,110 @@ func keepMostRecentSkills(
 	if inv == nil || inv.Session == nil || max <= 0 {
 		return nil
 	}
-	loadedSet := make(map[string]struct{}, len(loaded))
-	for _, name := range loaded {
-		if strings.TrimSpace(name) == "" {
-			continue
-		}
-		loadedSet[name] = struct{}{}
+
+	loadedSet := loadedSkillSet(loaded)
+	if len(loadedSet) == 0 {
+		return nil
 	}
 
-	events := inv.Session.GetEvents()
-	keep := make([]string, 0, max)
-	seen := make(map[string]struct{}, max)
-	for i := len(events) - 1; i >= 0 && len(keep) < max; i-- {
-		ev := events[i]
-		if ev.Response == nil {
-			continue
-		}
-		if ev.Object != model.ObjectTypeToolResponse {
-			continue
-		}
-		if len(ev.Choices) == 0 {
-			continue
-		}
-		for j := len(ev.Choices) - 1; j >= 0; j-- {
-			msg := ev.Choices[j].Message
-			if msg.Role != model.RoleTool {
-				continue
-			}
-			if msg.ToolName != skillToolLoad &&
-				msg.ToolName != skillToolSelectDocs {
-				continue
-			}
-			name := skillNameFromToolResponse(msg)
-			if name == "" {
-				continue
-			}
-			if _, ok := loadedSet[name]; !ok {
-				continue
-			}
-			if _, ok := seen[name]; ok {
-				continue
-			}
-			keep = append(keep, name)
-			seen[name] = struct{}{}
-			if len(keep) == max {
-				break
-			}
-		}
-	}
-
+	keep, seen := mostRecentSkillsFromEvents(
+		inv.Session.GetEvents(),
+		loadedSet,
+		max,
+	)
 	if len(keep) >= max {
 		return keep
 	}
+	return fillSkillsAlphabetically(keep, seen, loaded, max)
+}
 
+func loadedSkillSet(loaded []string) map[string]struct{} {
+	out := make(map[string]struct{}, len(loaded))
+	for _, name := range loaded {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		out[name] = struct{}{}
+	}
+	return out
+}
+
+func mostRecentSkillsFromEvents(
+	events []event.Event,
+	loadedSet map[string]struct{},
+	max int,
+) ([]string, map[string]struct{}) {
+	keep := make([]string, 0, max)
+	seen := make(map[string]struct{}, max)
+	for i := len(events) - 1; i >= 0 && len(keep) < max; i-- {
+		keep = appendSkillsFromToolResponseEvent(
+			events[i],
+			loadedSet,
+			seen,
+			keep,
+			max,
+		)
+	}
+	return keep, seen
+}
+
+func appendSkillsFromToolResponseEvent(
+	ev event.Event,
+	loadedSet map[string]struct{},
+	seen map[string]struct{},
+	keep []string,
+	max int,
+) []string {
+	if ev.Response == nil {
+		return keep
+	}
+	if ev.Object != model.ObjectTypeToolResponse {
+		return keep
+	}
+	if len(ev.Choices) == 0 {
+		return keep
+	}
+
+	for j := len(ev.Choices) - 1; j >= 0 && len(keep) < max; j-- {
+		msg := ev.Choices[j].Message
+		if msg.Role != model.RoleTool {
+			continue
+		}
+		if msg.ToolName != skillToolLoad &&
+			msg.ToolName != skillToolSelectDocs {
+			continue
+		}
+		name := skillNameFromToolResponse(msg)
+		if name == "" {
+			continue
+		}
+		if _, ok := loadedSet[name]; !ok {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		keep = append(keep, name)
+		seen[name] = struct{}{}
+	}
+	return keep
+}
+
+func fillSkillsAlphabetically(
+	keep []string,
+	seen map[string]struct{},
+	loaded []string,
+	max int,
+) []string {
 	sorted := append([]string(nil), loaded...)
 	sort.Strings(sorted)
 	for _, name := range sorted {
 		if len(keep) == max {
 			break
 		}
-		if strings.TrimSpace(name) == "" {
+		name = strings.TrimSpace(name)
+		if name == "" {
 			continue
 		}
 		if _, ok := seen[name]; ok {
