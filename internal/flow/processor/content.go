@@ -104,6 +104,11 @@ type ContentRequestProcessor struct {
 	// SummaryFormatter allows custom formatting of session summary content.
 	// When nil (default), uses the default formatSummaryContent function.
 	SummaryFormatter func(summary string) string
+	// AnnotateEventIDs controls whether event IDs are prepended to message
+	// content (e.g. "[event_id:abc123] ..."). When enabled, the LLM can
+	// see real event IDs and pass them to delete_context for Pensieve-style
+	// context pruning.
+	AnnotateEventIDs bool
 }
 
 // ContentOption is a functional option for configuring the ContentRequestProcessor.
@@ -194,6 +199,16 @@ func WithPreloadMemory(limit int) ContentOption {
 func WithSummaryFormatter(formatter func(summary string) string) ContentOption {
 	return func(p *ContentRequestProcessor) {
 		p.SummaryFormatter = formatter
+	}
+}
+
+// WithAnnotateEventIDs controls whether event IDs are prepended to each
+// message's content (e.g. "[event_id:abc123] Hello"). When enabled, the
+// LLM can see real event IDs in its context and pass them to
+// delete_context for Pensieve-style context pruning.
+func WithAnnotateEventIDs(annotate bool) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.AnnotateEventIDs = annotate
 	}
 }
 
@@ -505,12 +520,18 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 				if isEmptyAssistantMessage(msg) {
 					continue
 				}
+				if p.AnnotateEventIDs && evt.ID != "" {
+					msg = annotateMessageWithEventID(msg, evt.ID)
+				}
 				messages = append(messages, msg)
 			}
 		}
 	}
 
 	messages = p.mergeUserMessages(messages)
+
+	// Repair orphaned tool calls caused by masked events.
+	messages = repairOrphanedToolCalls(messages)
 
 	// Apply MaxHistoryRuns limit when AddSessionSummary is false.
 	if !p.AddSessionSummary && p.MaxHistoryRuns > 0 {
@@ -598,6 +619,77 @@ func isEmptyAssistantMessage(msg model.Message) bool {
 		msg.ReasoningContent == ""
 }
 
+// annotateMessageWithEventID prepends the event ID to the message content
+// so the LLM can reference real event IDs for delete_context calls.
+func annotateMessageWithEventID(msg model.Message, eventID string) model.Message {
+	prefix := fmt.Sprintf("[event_id:%s] ", eventID)
+	if msg.Content != "" {
+		msg.Content = prefix + msg.Content
+	} else if len(msg.ContentParts) > 0 {
+		// For multimodal messages, prepend as a text content part.
+		textPart := model.ContentPart{
+			Type: model.ContentTypeText,
+			Text: &prefix,
+		}
+		msg.ContentParts = append([]model.ContentPart{textPart}, msg.ContentParts...)
+	}
+	return msg
+}
+
+// repairOrphanedToolCalls ensures every tool_call_id in assistant messages
+// has a matching tool-role response. When delete_context masks a tool-result
+// event, the assistant message still references the tool_call_id but the
+// response is gone. LLM APIs (e.g. OpenAI) reject such payloads.
+//
+// For any orphaned tool_call_id, a synthetic placeholder response is inserted
+// immediately after the assistant message.
+func repairOrphanedToolCalls(messages []model.Message) []model.Message {
+	// Build set of tool_call_ids that have responses.
+	respondedIDs := make(map[string]bool)
+	for _, msg := range messages {
+		if msg.Role == model.RoleTool && msg.ToolID != "" {
+			respondedIDs[msg.ToolID] = true
+		}
+	}
+
+	// Check if any assistant tool_calls are orphaned.
+	hasOrphans := false
+	for _, msg := range messages {
+		if msg.Role == model.RoleAssistant {
+			for _, tc := range msg.ToolCalls {
+				if !respondedIDs[tc.ID] {
+					hasOrphans = true
+					break
+				}
+			}
+		}
+		if hasOrphans {
+			break
+		}
+	}
+	if !hasOrphans {
+		return messages
+	}
+
+	// Rebuild with placeholders inserted after orphaning assistant messages.
+	result := make([]model.Message, 0, len(messages))
+	for _, msg := range messages {
+		result = append(result, msg)
+		if msg.Role == model.RoleAssistant {
+			for _, tc := range msg.ToolCalls {
+				if !respondedIDs[tc.ID] {
+					result = append(result, model.Message{
+						Role:    model.RoleTool,
+						ToolID:  tc.ID,
+						Content: "[content pruned by context management]",
+					})
+				}
+			}
+		}
+	}
+	return result
+}
+
 // getCurrentInvocationMessages gets messages only from the current invocation.
 // This is used when include_contents=none to preserve tool call history within
 // the current ReAct loop while isolating from parent/other branch history.
@@ -664,12 +756,19 @@ func (p *ContentRequestProcessor) getCurrentInvocationMessages(inv *agent.Invoca
 				if isEmptyAssistantMessage(msg) {
 					continue
 				}
+				if p.AnnotateEventIDs && evt.ID != "" {
+					msg = annotateMessageWithEventID(msg, evt.ID)
+				}
 				messages = append(messages, msg)
 			}
 		}
 	}
 
 	messages = p.mergeUserMessages(messages)
+
+	// Repair orphaned tool calls caused by masked events.
+	messages = repairOrphanedToolCalls(messages)
+
 	return messages
 }
 

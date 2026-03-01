@@ -250,3 +250,62 @@ func TestToolsReturnsAllFour(t *testing.T) {
 		}
 	}
 }
+
+// --- noteTool StateDelta tests ---
+
+func TestNoteTool_StateDelta(t *testing.T) {
+	nt := NewNoteTool().(*noteTool)
+
+	tests := []struct {
+		name      string
+		args      string
+		wantKey   string
+		wantValue string
+		wantNil   bool
+	}{
+		{
+			name:      "returns correct delta",
+			args:      `{"key":"findings","content":"LLMs are cool"}`,
+			wantKey:   "note:findings",
+			wantValue: "LLMs are cool",
+		},
+		{
+			name:    "empty key returns nil",
+			args:    `{"key":"","content":"whatever"}`,
+			wantNil: true,
+		},
+		{
+			name:    "invalid JSON returns nil",
+			args:    `{broken`,
+			wantNil: true,
+		},
+		{
+			name:      "empty content stores empty string",
+			args:      `{"key":"empty","content":""}`,
+			wantKey:   "note:empty",
+			wantValue: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			delta := nt.StateDelta([]byte(tt.args), nil)
+			if tt.wantNil {
+				if delta != nil {
+					t.Fatalf("expected nil delta, got %v", delta)
+				}
+				return
+			}
+			if delta == nil {
+				t.Fatal("expected non-nil delta")
+			}
+			val, ok := delta[tt.wantKey]
+			if !ok {
+				t.Fatalf("expected key %q in delta", tt.wantKey)
+			}
+			if string(val) != tt.wantValue {
+				t.Fatalf("expected value %q, got %q", tt.wantValue, string(val))
+			}
+		})
+	}
+}

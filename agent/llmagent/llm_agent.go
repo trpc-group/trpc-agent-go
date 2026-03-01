@@ -290,6 +290,10 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		contentOpts = append(contentOpts,
 			processor.WithSummaryFormatter(options.summaryFormatter))
 	}
+	if options.AnnotateEventIDs {
+		contentOpts = append(contentOpts,
+			processor.WithAnnotateEventIDs(true))
+	}
 	contentProcessor := processor.NewContentRequestProcessor(contentOpts...)
 	requestProcessors = append(requestProcessors, contentProcessor)
 

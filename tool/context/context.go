@@ -18,6 +18,7 @@ package context
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -135,19 +136,56 @@ type NoteOutput struct {
 	Message string `json:"message"`
 }
 
+// noteTool wraps a FunctionTool to add StateDelta support.
+// The FunctionCallResponseProcessor auto-attaches StateDelta to events,
+// so notes persist via the runner's normal event→session pipeline
+// across requests without needing direct sess.SetState calls.
+type noteTool struct {
+	inner *function.FunctionTool[NoteInput, NoteOutput]
+}
+
+// Declaration delegates to the inner FunctionTool.
+func (t *noteTool) Declaration() *tool.Declaration {
+	return t.inner.Declaration()
+}
+
+// Call delegates to the inner FunctionTool.
+func (t *noteTool) Call(ctx context.Context, args []byte) (any, error) {
+	return t.inner.Call(ctx, args)
+}
+
+// StateDelta returns the note key/content pair so the runner persists it
+// to session state via the event pipeline. This is the standard framework
+// pattern used by tools like skill_load.
+func (t *noteTool) StateDelta(args []byte, _ []byte) map[string][]byte {
+	var input NoteInput
+	if err := json.Unmarshal(args, &input); err != nil || input.Key == "" {
+		return nil
+	}
+	return map[string][]byte{
+		noteKeyPrefix + input.Key: []byte(input.Content),
+	}
+}
+
 // NewNoteTool creates a tool that writes a persistent note to session state.
 // Notes survive context pruning (delete_context) — they are stored in session
-// state, not in the event stream. Use this to distill key information before
-// pruning the raw context that contained it.
+// state via StateDelta, not in the event stream. Use this to distill key
+// information before pruning the raw context that contained it.
+//
+// Persistence: The tool implements the StateDelta interface, so the
+// FunctionCallResponseProcessor automatically attaches note data to the
+// tool-response event. The runner then persists it to session state,
+// making notes available across requests via read_notes.
 func NewNoteTool() tool.CallableTool {
-	return function.NewFunctionTool(
+	inner := function.NewFunctionTool(
 		func(ctx context.Context, input NoteInput) (NoteOutput, error) {
+			// Also set state directly on the session for immediate
+			// availability within the same request (before the event
+			// pipeline flushes the StateDelta).
 			sess := sessionFromContext(ctx)
-			if sess == nil {
-				return NoteOutput{Message: "no session available"}, nil
+			if sess != nil {
+				sess.SetState(noteKeyPrefix+input.Key, []byte(input.Content))
 			}
-
-			sess.SetState(noteKeyPrefix+input.Key, []byte(input.Content))
 			return NoteOutput{
 				Message: fmt.Sprintf("note '%s' saved (%d bytes)", input.Key, len(input.Content)),
 			}, nil
@@ -160,6 +198,7 @@ func NewNoteTool() tool.CallableTool {
 				"Notes are stored by key and can be overwritten.",
 		),
 	)
+	return &noteTool{inner: inner}
 }
 
 // ReadNotesInput is the input for the read_notes tool.

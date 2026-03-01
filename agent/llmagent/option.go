@@ -308,6 +308,12 @@ type Options struct {
 	// from processor.DefaultPostToolPrompt is used. Set to a non-empty
 	// string to customize the guidance given to the model after tool calls.
 	PostToolPrompt string
+
+	// AnnotateEventIDs controls whether event IDs are prepended to message
+	// content in the LLM context. When enabled, the LLM sees tags like
+	// [event_id:abc123] and can pass real IDs to delete_context for
+	// Pensieve-style context pruning. Default: false.
+	AnnotateEventIDs bool
 }
 
 // WithModel sets the model to use.
@@ -864,6 +870,16 @@ func WithPreloadMemory(limit int) Option {
 func WithPostToolPrompt(prompt string) Option {
 	return func(opts *Options) {
 		opts.PostToolPrompt = prompt
+	}
+}
+
+// WithAnnotateEventIDs controls whether event IDs are prepended to each
+// message's content in the LLM context. When enabled, the LLM sees tags
+// like [event_id:abc123] and can pass real IDs to delete_context for
+// Pensieve-style context pruning.
+func WithAnnotateEventIDs(annotate bool) Option {
+	return func(opts *Options) {
+		opts.AnnotateEventIDs = annotate
 	}
 }
 
