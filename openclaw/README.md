@@ -71,6 +71,13 @@ app_name: "openclaw"
 http:
   addr: ":8080"
 
+agent:
+  # Short instruction text (optional).
+  instruction: "You are a helpful assistant. Reply in a friendly tone."
+  # Optional: load and merge multiple markdown files into the system prompt.
+  # Files are read in alphabetical order.
+  # system_prompt_dir: "./prompts/system"
+
 model:
   mode: "openai"
   name: "gpt-5"
@@ -117,6 +124,24 @@ Notes:
     built-in types shipped in this repo. Custom types still require a
     custom binary. See `openclaw/INTEGRATIONS.md` and
     `openclaw/EXTENDING.md`.
+
+## Customize prompts
+
+OpenClaw supports customizing the main agent's prompt with either:
+
+- Inline config fields (`agent.instruction`, `agent.system_prompt`), or
+- File-based prompts (`agent.*_files`, `agent.*_dir`) to keep long prompts
+  out of YAML.
+
+CLI equivalents:
+
+```bash
+cd openclaw
+go run ./cmd/openclaw \
+  -mode mock \
+  -agent-instruction "You are a helpful assistant." \
+  -agent-system-prompt-dir ./examples/stdin_chat/prompts/system
+```
 
 Health check:
 
