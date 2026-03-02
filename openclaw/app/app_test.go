@@ -24,7 +24,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/claudecode"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -50,6 +52,8 @@ func TestNewRuntime_BuildsGatewayHandler(t *testing.T) {
 
 	rt, err := NewRuntime(context.Background(), []string{
 		"-mode", "mock",
+		"-state-dir", t.TempDir(),
+		"-skills-root", t.TempDir(),
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -62,6 +66,362 @@ func TestNewRuntime_BuildsGatewayHandler(t *testing.T) {
 	require.NotEmpty(t, rt.Gateway.StatusPath)
 	require.NotEmpty(t, rt.Gateway.CancelPath)
 	require.Empty(t, rt.Channels)
+}
+
+func TestNewRuntime_ClaudeCode_Smoke(t *testing.T) {
+	t.Parallel()
+
+	rt, err := NewRuntime(context.Background(), []string{
+		"-agent-type", agentTypeClaudeCode,
+		"-state-dir", t.TempDir(),
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = rt.Close()
+	})
+	require.NotNil(t, rt.Gateway.Handler)
+}
+
+func TestNewRuntime_ClaudeCode_WithSessionSummary_Smoke(t *testing.T) {
+	dir := t.TempDir()
+
+	rt, err := NewRuntime(context.Background(), []string{
+		"-agent-type", agentTypeClaudeCode,
+		"-mode", modeMock,
+		"-session-summary",
+		"-state-dir", dir,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = rt.Close()
+	})
+	require.NotNil(t, rt.Gateway.Handler)
+}
+
+func TestNewRuntime_WithTelegram_BuildsChannel(t *testing.T) {
+	dir := t.TempDir()
+	token := "token"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		switch r.URL.Path {
+		case "/bot" + token + "/getMe":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w,
+				`{"ok":true,"result":{"id":1,"username":"bot"}}`,
+			)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	t.Setenv(telegramBaseURLEnvName, srv.URL)
+
+	rt, err := NewRuntime(context.Background(), []string{
+		"-mode", modeMock,
+		"-state-dir", dir,
+		"-skills-root", t.TempDir(),
+		"-telegram-token", token,
+		"-require-mention",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = rt.Close()
+	})
+
+	require.NotNil(t, rt.Gateway.Handler)
+	require.Len(t, rt.Channels, 1)
+	require.Equal(t, registry.ChannelTypeTelegram, rt.Channels[0].ID())
+}
+
+func TestNewRuntime_TelegramProxyErrorExitCode(t *testing.T) {
+	rt, err := NewRuntime(context.Background(), []string{
+		"-mode", modeMock,
+		"-telegram-token", "x",
+		"-telegram-proxy", "://bad",
+	})
+	require.Nil(t, rt)
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+}
+
+func TestNewRuntime_ClosesResourcesOnError(t *testing.T) {
+	const toolSetType = "test_runtime_toolset_cleanup"
+	const badChannelType = "test_runtime_channel_missing"
+
+	toolSetClosed := false
+	toolSetCloseErr := errors.New("close toolset boom")
+	require.NoError(t, registry.RegisterToolSetProvider(
+		toolSetType,
+		func(
+			_ registry.ToolSetProviderDeps,
+			_ registry.PluginSpec,
+		) (tool.ToolSet, error) {
+			return &stubToolSet{
+				name:     toolSetType,
+				closeErr: toolSetCloseErr,
+				closed:   &toolSetClosed,
+			}, nil
+		},
+	))
+
+	stateDir := t.TempDir()
+	cfg := map[string]any{
+		"state_dir": stateDir,
+		"tools": map[string]any{
+			"toolsets": []any{
+				map[string]any{"type": toolSetType},
+			},
+		},
+		"channels": []any{
+			map[string]any{"type": badChannelType},
+		},
+	}
+
+	cfgData, err := yaml.Marshal(cfg)
+	require.NoError(t, err)
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(cfgPath, cfgData, 0o600))
+
+	rt, err := NewRuntime(context.Background(), []string{
+		"-mode", modeMock,
+		"-config", cfgPath,
+	})
+	require.Nil(t, rt)
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+	require.True(t, toolSetClosed)
+}
+
+func TestNewRuntime_WithExtraChannels(t *testing.T) {
+	const typeName = "test_runtime_channel"
+	const channelName = "c1"
+
+	require.NoError(t, registry.RegisterChannel(
+		typeName,
+		func(
+			deps registry.ChannelDeps,
+			spec registry.PluginSpec,
+		) (occhannel.Channel, error) {
+			id := typeName
+			if spec.Name != "" {
+				id = spec.Name
+			}
+			return &stubChannel{id: id, deps: deps}, nil
+		},
+	))
+
+	stateDir := t.TempDir()
+	cfg := map[string]any{
+		"state_dir": stateDir,
+		"channels": []any{
+			map[string]any{
+				"type": typeName,
+				"name": channelName,
+			},
+		},
+	}
+
+	cfgData, err := yaml.Marshal(cfg)
+	require.NoError(t, err)
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(cfgPath, cfgData, 0o600))
+
+	rt, err := NewRuntime(context.Background(), []string{
+		"-mode", modeMock,
+		"-config", cfgPath,
+		"-skills-root", t.TempDir(),
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = rt.Close()
+	})
+
+	require.Len(t, rt.Channels, 1)
+	ch, ok := rt.Channels[0].(*stubChannel)
+	require.True(t, ok)
+	require.Equal(t, channelName, ch.ID())
+	require.Equal(t, stateDir, ch.deps.StateDir)
+	require.Equal(t, appName, ch.deps.AppName)
+}
+
+func TestNewRuntime_ErrorPathsExitCode(t *testing.T) {
+	const token = "token"
+
+	makeBotServer := func(t *testing.T, ok bool) string {
+		t.Helper()
+
+		srv := httptest.NewServer(http.HandlerFunc(func(
+			w http.ResponseWriter,
+			r *http.Request,
+		) {
+			switch r.URL.Path {
+			case "/bot" + token + "/getMe":
+				if !ok {
+					http.Error(w, "boom", http.StatusInternalServerError)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w,
+					`{"ok":true,"result":{"id":1,"username":"bot"}}`,
+				)
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		t.Cleanup(srv.Close)
+		return srv.URL
+	}
+
+	cases := []struct {
+		name     string
+		args     func(t *testing.T) []string
+		wantCode int
+	}{
+		{
+			name: "parse error",
+			args: func(*testing.T) []string {
+				return []string{"-unknown-flag"}
+			},
+			wantCode: 2,
+		},
+		{
+			name: "unsupported agent type",
+			args: func(*testing.T) []string {
+				return []string{"-agent-type", "nope"}
+			},
+			wantCode: 1,
+		},
+		{
+			name: "unsupported model mode",
+			args: func(t *testing.T) []string {
+				return []string{
+					"-mode", "nope",
+					"-state-dir", t.TempDir(),
+				}
+			},
+			wantCode: 1,
+		},
+		{
+			name: "unsupported memory backend",
+			args: func(t *testing.T) []string {
+				return []string{
+					"-mode", modeMock,
+					"-state-dir", t.TempDir(),
+					"-skills-root", t.TempDir(),
+					"-memory-backend", "nope",
+				}
+			},
+			wantCode: 1,
+		},
+		{
+			name: "prompt dir without markdown",
+			args: func(t *testing.T) []string {
+				promptDir := t.TempDir()
+				require.NoError(t, os.WriteFile(
+					filepath.Join(promptDir, "note.txt"),
+					[]byte("ignored"),
+					0o600,
+				))
+				return []string{
+					"-mode", modeMock,
+					"-state-dir", t.TempDir(),
+					"-skills-root", t.TempDir(),
+					"-agent-system-prompt-dir", promptDir,
+				}
+			},
+			wantCode: 1,
+		},
+		{
+			name: "unsupported toolset provider",
+			args: func(t *testing.T) []string {
+				stateDir := t.TempDir()
+				cfg := map[string]any{
+					"state_dir": stateDir,
+					"tools": map[string]any{
+						"toolsets": []any{
+							map[string]any{
+								"type": "missing_toolset",
+							},
+						},
+					},
+				}
+
+				cfgData, err := yaml.Marshal(cfg)
+				require.NoError(t, err)
+				cfgPath := filepath.Join(
+					t.TempDir(),
+					"config.yaml",
+				)
+				require.NoError(t, os.WriteFile(
+					cfgPath,
+					cfgData,
+					0o600,
+				))
+				return []string{
+					"-mode", modeMock,
+					"-config", cfgPath,
+					"-skills-root", t.TempDir(),
+				}
+			},
+			wantCode: 1,
+		},
+		{
+			name: "probe telegram bot fails",
+			args: func(t *testing.T) []string {
+				t.Setenv(
+					telegramBaseURLEnvName,
+					makeBotServer(t, false),
+				)
+				return []string{
+					"-mode", modeMock,
+					"-state-dir", t.TempDir(),
+					"-skills-root", t.TempDir(),
+					"-telegram-token", token,
+				}
+			},
+			wantCode: 1,
+		},
+		{
+			name: "create telegram channel fails",
+			args: func(t *testing.T) []string {
+				t.Setenv(
+					telegramBaseURLEnvName,
+					makeBotServer(t, true),
+				)
+				return []string{
+					"-mode", modeMock,
+					"-state-dir", t.TempDir(),
+					"-skills-root", t.TempDir(),
+					"-telegram-token", token,
+					"-telegram-pairing-ttl", "0s",
+				}
+			},
+			wantCode: 1,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			rt, err := NewRuntime(context.Background(), tc.args(t))
+			require.Nil(t, rt)
+			require.Error(t, err)
+
+			var exitErr *exitError
+			require.True(t, errors.As(err, &exitErr))
+			require.Equal(t, tc.wantCode, exitErr.Code)
+		})
+	}
 }
 
 func TestMain_HelpReturnsUsageCode(t *testing.T) {
@@ -562,6 +922,17 @@ func TestExitError_Error(t *testing.T) {
 	require.Equal(t, "x", (&exitError{Err: errors.New("x")}).Error())
 }
 
+func TestExitError_ExitCode(t *testing.T) {
+	t.Parallel()
+
+	var e *exitError
+	require.Equal(t, 1, e.ExitCode())
+
+	require.Equal(t, 1, (&exitError{}).ExitCode())
+	require.Equal(t, 1, (&exitError{Code: 0}).ExitCode())
+	require.Equal(t, 2, (&exitError{Code: 2}).ExitCode())
+}
+
 func TestNewModel_OpenAI(t *testing.T) {
 	mdl, err := modelFromOptions(runOptions{
 		ModelMode:     modeOpenAI,
@@ -895,6 +1266,109 @@ func TestToolSetsFromProviders_EmptySpecsReturnsNil(t *testing.T) {
 	sets, err := toolSetsFromProviders(mdl, "demo", "/state", nil)
 	require.NoError(t, err)
 	require.Nil(t, sets)
+}
+
+func TestCloseSessionService_CloseErrorDoesNotPanic(t *testing.T) {
+	t.Parallel()
+
+	closeSessionService(stubCloser{closeErr: errors.New("boom")})
+}
+
+func TestCloseMemoryService_CloseErrorDoesNotPanic(t *testing.T) {
+	t.Parallel()
+
+	closeMemoryService(stubCloser{closeErr: errors.New("boom")})
+}
+
+func TestCloseToolSets_CloseErrorDoesNotPanic(t *testing.T) {
+	t.Parallel()
+
+	toolSetClosed := false
+	closeToolSets([]tool.ToolSet{
+		nil,
+		&stubToolSet{
+			name:     "stub",
+			closeErr: errors.New("boom"),
+			closed:   &toolSetClosed,
+		},
+	})
+	require.True(t, toolSetClosed)
+}
+
+func TestRuntime_Close_ReturnsRunnerCloseError(t *testing.T) {
+	t.Parallel()
+
+	closeErr := errors.New("runner close boom")
+	runnerClosed := false
+
+	rt := &Runtime{
+		runner: &stubRunner{
+			closeErr: closeErr,
+			closed:   &runnerClosed,
+		},
+	}
+
+	require.ErrorIs(t, rt.Close(), closeErr)
+	require.True(t, runnerClosed)
+}
+
+func TestRuntime_Close_NilIsNoop(t *testing.T) {
+	t.Parallel()
+
+	var rt *Runtime
+	require.NoError(t, rt.Close())
+}
+
+func TestRuntime_Close_NilRunnerIsNoop(t *testing.T) {
+	t.Parallel()
+
+	rt := &Runtime{}
+	require.NoError(t, rt.Close())
+}
+
+type stubCloser struct {
+	closeErr error
+}
+
+func (s stubCloser) Close() error { return s.closeErr }
+
+type stubToolSet struct {
+	name     string
+	closeErr error
+	closed   *bool
+}
+
+func (s *stubToolSet) Tools(context.Context) []tool.Tool { return nil }
+
+func (s *stubToolSet) Close() error {
+	if s.closed != nil {
+		*s.closed = true
+	}
+	return s.closeErr
+}
+
+func (s *stubToolSet) Name() string { return s.name }
+
+type stubRunner struct {
+	closeErr error
+	closed   *bool
+}
+
+func (s *stubRunner) Run(
+	_ context.Context,
+	_ string,
+	_ string,
+	_ model.Message,
+	_ ...agent.RunOption,
+) (<-chan *event.Event, error) {
+	return nil, nil
+}
+
+func (s *stubRunner) Close() error {
+	if s.closed != nil {
+		*s.closed = true
+	}
+	return s.closeErr
 }
 
 func TestToolSetsFromProviders_EmptyTypeFails(t *testing.T) {

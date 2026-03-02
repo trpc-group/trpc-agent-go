@@ -64,7 +64,8 @@ const (
 	csvDelimiter = ","
 
 	defaultAgentName        = "assistant"
-	defaultAgentInstruction = "You are a helpful assistant. Keep replies concise."
+	defaultAgentInstruction = "You are a helpful assistant. " +
+		"Keep replies concise."
 
 	agentTypeLLM        = "llm"
 	agentTypeClaudeCode = "claude-code"
@@ -83,7 +84,8 @@ const (
 	openAIBaseURLEnvName = "OPENAI_BASE_URL"
 	openAIModelEnvName   = "OPENAI_MODEL"
 
-	errClaudeCodeAgentNoPrompts = "claude-code agent does not support agent prompts"
+	errClaudeCodeAgentNoPrompts = "claude-code agent does not support " +
+		"agent prompts"
 )
 
 // Main runs the OpenClaw-like CLI and returns an exit code.
@@ -174,9 +176,10 @@ func NewRuntime(
 	args []string,
 ) (rt *Runtime, err error) {
 	rt = &Runtime{}
+	cleanup := rt
 	defer func() {
 		if err != nil {
-			_ = rt.Close()
+			_ = cleanup.Close()
 		}
 	}()
 
@@ -199,11 +202,14 @@ func NewRuntime(
 		}
 	}
 
+	telegramToken := strings.TrimSpace(opts.TelegramToken)
+	telegramEnabled := telegramToken != ""
+
 	var (
 		telegramBot tgch.BotInfo
 		tgapiOpts   []telegramAPIOption
 	)
-	if strings.TrimSpace(opts.TelegramToken) != "" {
+	if telegramEnabled {
 		tgapiOpts, err = makeTelegramAPIOptions(
 			opts.TelegramProxy,
 			opts.TelegramHTTPTimeout,
@@ -218,7 +224,7 @@ func NewRuntime(
 
 		telegramBot, err = tgch.ProbeBotInfo(
 			ctx,
-			opts.TelegramToken,
+			telegramToken,
 			tgapiOpts...,
 		)
 		if err != nil {
@@ -409,11 +415,11 @@ func NewRuntime(
 		}
 	}
 
-	if strings.TrimSpace(opts.TelegramToken) != "" {
+	if telegramEnabled {
 		users := splitCSV(opts.AllowUsers)
 		threads := splitCSV(opts.TelegramAllowThreads)
 		ch, err := tgch.New(
-			opts.TelegramToken,
+			telegramToken,
 			telegramBot,
 			gw,
 			tgch.WithAPIOptions(tgapiOpts...),
@@ -464,10 +470,10 @@ func (r *Runtime) Close() error {
 	closeMemoryService(r.memorySvc)
 	closeSessionService(r.sessionSvc)
 
-	if r.runner != nil {
-		_ = r.runner.Close()
+	if r.runner == nil {
+		return nil
 	}
-	return nil
+	return r.runner.Close()
 }
 
 func run(ctx context.Context, args []string) error {
@@ -490,11 +496,14 @@ func run(ctx context.Context, args []string) error {
 		}
 	}
 
+	telegramToken := strings.TrimSpace(opts.TelegramToken)
+	telegramEnabled := telegramToken != ""
+
 	var (
 		telegramBot tgch.BotInfo
 		tgapiOpts   []telegramAPIOption
 	)
-	if strings.TrimSpace(opts.TelegramToken) != "" {
+	if telegramEnabled {
 		tgapiOpts, err = makeTelegramAPIOptions(
 			opts.TelegramProxy,
 			opts.TelegramHTTPTimeout,
@@ -509,7 +518,7 @@ func run(ctx context.Context, args []string) error {
 
 		telegramBot, err = tgch.ProbeBotInfo(
 			ctx,
-			opts.TelegramToken,
+			telegramToken,
 			tgapiOpts...,
 		)
 		if err != nil {
@@ -703,11 +712,11 @@ func run(ctx context.Context, args []string) error {
 	}
 
 	var channels []channel.Channel
-	if strings.TrimSpace(opts.TelegramToken) != "" {
+	if telegramEnabled {
 		users := splitCSV(opts.AllowUsers)
 		threads := splitCSV(opts.TelegramAllowThreads)
 		ch, err := tgch.New(
-			opts.TelegramToken,
+			telegramToken,
 			telegramBot,
 			gw,
 			tgch.WithAPIOptions(tgapiOpts...),
