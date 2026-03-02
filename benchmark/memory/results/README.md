@@ -42,6 +42,45 @@ This directory stores memory benchmark evaluation results.
    to answer unanswerable questions).
 4. Open-domain LLM Score improves dramatically with history (+92.9%).
 
+## SQLite vs SQLiteVec (Subset Runs)
+
+We also run focused subset experiments comparing local SQLite keyword
+matching (`sqlite`) vs sqlite-vec semantic search (`sqlitevec`).
+
+**End-to-end QA subset (Auto / locomo10_1 / 199 QA, LLM Judge enabled)**:
+
+| Backend | F1 | LLM Score | Prompt Tokens | Avg Prompt/QA |
+|---------|---:|----------:|--------------:|--------------:|
+| sqlite | 0.327 | 0.370 | 1,287,813 | 6,471 |
+| sqlitevec | 0.307 | 0.325 | 407,969 | 2,050 |
+
+**End-to-end QA subset (Auto / locomo10_6 / 158 QA, LLM Judge enabled)**:
+
+| Backend | F1 | LLM Score | Prompt Tokens | Avg Prompt/QA |
+|---------|---:|----------:|--------------:|--------------:|
+| sqlite | 0.269 | 0.289 | 1,296,580 | 8,206 |
+| sqlitevec | 0.274 | 0.295 | 362,903 | 2,297 |
+
+Note: token usage above counts QA agent model calls only; it excludes
+embedding requests and LLM-as-Judge calls. See `REPORT.md` for full
+configuration and breakdown.
+
+**Top-k sweep (Auto / locomo10_1 / LLM Judge disabled)**:
+
+To understand how `sqlitevec` quality changes with retrieval size, we run a
+small sweep on `locomo10_1` (199 QA). In this run, `sqlitevec` achieves the
+best quality at the default top-k=10; increasing top-k increases tokens but
+does not improve F1.
+
+| Backend | vector-topk | qa-search-passes | F1 | Prompt Tokens | Avg Prompt/QA |
+|---------|------------:|-----------------:|---:|--------------:|--------------:|
+| sqlite | - | 1 | 0.299 | 1,322,360 | 6,645 |
+| sqlitevec | 5 | 1 | 0.320 | 346,253 | 1,740 |
+| sqlitevec | 10 | 1 | 0.343 | 398,751 | 2,004 |
+| sqlitevec | 20 | 1 | 0.329 | 621,790 | 3,125 |
+| sqlitevec | 40 | 1 | 0.327 | 965,423 | 4,851 |
+| sqlitevec | 10 | 2 | 0.342 | 659,981 | 3,316 |
+
 ## Directory Structure
 
 Note: `data_*` and `log_*.log` are large, machine-generated artifacts and are
