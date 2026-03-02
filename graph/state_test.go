@@ -11,12 +11,14 @@ package graph
 
 import (
 	"encoding/json"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -458,4 +460,126 @@ func TestOneShotMessagesByNodeCoveragePaths(t *testing.T) {
 		require.True(t, ok)
 		require.Equal(t, "hi", merged["llm1"][0].Content)
 	})
+}
+
+func TestSafeClone_FiltersUnsafeKeys(t *testing.T) {
+	ch := make(chan<- *event.Event, 1)
+	execCtx := &ExecutionContext{
+		InvocationID: "inv-1",
+		EventChan:    ch,
+	}
+	state := State{
+		StateKeyExecContext:   execCtx,
+		StateKeyCurrentNodeID: "node-1",
+		StateKeyUserInput:     "hello",
+		"custom_key":          42,
+	}
+
+	clone := state.safeClone()
+
+	// Unsafe keys must be absent.
+	require.NotContains(t, clone, StateKeyExecContext)
+	require.NotContains(t, clone, StateKeyCurrentNodeID)
+
+	// Safe keys must be present.
+	require.Equal(t, "hello", clone[StateKeyUserInput])
+	require.Equal(t, 42, clone["custom_key"])
+}
+
+func TestSafeClone_DeepCopiesValues(t *testing.T) {
+	inner := map[string]any{"a": 1, "b": 2}
+	state := State{
+		"data": inner,
+	}
+
+	clone := state.safeClone()
+
+	// Mutate original; clone must not be affected.
+	inner["a"] = 999
+	clonedData := clone["data"].(map[string]any)
+	require.Equal(t, 1, clonedData["a"])
+	require.Equal(t, 2, clonedData["b"])
+}
+
+func TestSafeClone_NestedChannelBecomesNilAndSerializable(t *testing.T) {
+	// Simulate a value stored under a safe key that happens to
+	// contain a channel (e.g. a struct with mixed fields).
+	type config struct {
+		Name    string
+		Notify  chan<- *event.Event
+		Counter int
+	}
+
+	ch := make(chan<- *event.Event, 1)
+	state := State{
+		"config": config{
+			Name:    "test",
+			Notify:  ch,
+			Counter: 10,
+		},
+	}
+
+	clone := state.safeClone()
+
+	// jsonSafeCopy converts structs with channel fields into
+	// map[string]any, omitting the channel field entirely.
+	cloned, ok := clone["config"].(map[string]any)
+	require.True(t, ok, "expected map[string]any, got %T",
+		clone["config"])
+	require.Equal(t, "test", cloned["Name"])
+	require.Equal(t, 10, cloned["Counter"])
+	_, hasChan := cloned["Notify"]
+	require.False(t, hasChan,
+		"channel field should be omitted")
+
+	// The cloned state must be JSON-serializable.
+	_, err := json.Marshal(clone)
+	require.NoError(t, err)
+}
+
+func TestSafeClone_NestedFuncAndMutexBecomeZero(t *testing.T) {
+	type wrapper struct {
+		Label  string
+		Action func() string
+		Mu     sync.Mutex
+	}
+
+	state := State{
+		"wrap": wrapper{
+			Label:  "w",
+			Action: func() string { return "hi" },
+		},
+	}
+
+	clone := state.safeClone()
+
+	// Struct with func field is converted to map[string]any.
+	cloned, ok := clone["wrap"].(map[string]any)
+	require.True(t, ok, "expected map[string]any, got %T",
+		clone["wrap"])
+	require.Equal(t, "w", cloned["Label"])
+	_, hasAction := cloned["Action"]
+	require.False(t, hasAction,
+		"func field should be omitted")
+
+	// The cloned state must be JSON-serializable.
+	_, err := json.Marshal(clone)
+	require.NoError(t, err)
+}
+
+func TestSafeClone_EmptyState(t *testing.T) {
+	state := State{}
+	clone := state.safeClone()
+	require.NotNil(t, clone)
+	require.Empty(t, clone)
+}
+
+func TestSafeClone_NilValues(t *testing.T) {
+	state := State{
+		"nil_val": nil,
+		"str_val": "hello",
+	}
+	clone := state.safeClone()
+	require.Nil(t, clone["nil_val"])
+	require.Equal(t, "hello", clone["str_val"])
 }

@@ -218,7 +218,10 @@ func (s State) safeClone() State {
 		if isUnsafeStateKey(k) {
 			continue
 		}
-		clone[k] = v
+		// Use jsonSafeCopy so that nested non-serializable
+		// types (chan, func, sync.Mutex, etc.) are stripped
+		// and the result is safe for json.Marshal.
+		clone[k] = jsonSafeCopy(v)
 	}
 	return clone
 }
