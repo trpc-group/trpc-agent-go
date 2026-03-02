@@ -75,6 +75,8 @@ type Invocation struct {
 	EndInvocation bool
 	// Session is the session that is being used for the invocation.
 	Session *session.Session
+	// SessionService is the session service used by this invocation.
+	SessionService session.Service
 	// Model is the model that is being used for the invocation.
 	Model model.Model
 	// Message is the message that is being sent to the agent.
@@ -722,6 +724,7 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 	newInv := &Invocation{
 		InvocationID:    uuid.NewString(),
 		Session:         inv.Session,
+		SessionService:  inv.SessionService,
 		Message:         inv.Message,
 		RunOptions:      inv.RunOptions,
 		MemoryService:   inv.MemoryService,

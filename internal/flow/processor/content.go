@@ -752,7 +752,7 @@ func (p *ContentRequestProcessor) mergeUserMessages(
 // request and whether that event should be treated as the invocation message.
 //
 // The second return value (isInvocationMessage) is intentionally strict: only
-// exact invocation-message matches return true. Mid-turn user-message
+// exact invocation-message matches return true. Current-invocation event
 // protection may still include an event, but returns false for this flag to
 // avoid conflating inclusion with strict message equality.
 func (p *ContentRequestProcessor) shouldIncludeEvent(evt event.Event, inv *agent.Invocation, filter string,
@@ -765,9 +765,13 @@ func (p *ContentRequestProcessor) shouldIncludeEvent(evt event.Event, inv *agent
 	if isStrictInvocationMessage(evt, inv) {
 		return true, true
 	}
-	// Keep the current invocation user message even when summary UpdatedAt
-	// would otherwise exclude it.
-	if isCurrentInvocationUserMessage(evt, inv) {
+	// When a summary exists (!isZeroTime), it may exclude events that belong
+	// to the current invocation by timestamp. Protect all events from the
+	// current invocation so the model retains tool-call context across
+	// intra-run iterations and keeps the original user message during
+	// mid-turn async summary. This guard runs only when a summary is active;
+	// otherwise normal timeline/branch filtering applies unmodified.
+	if !isZeroTime && isCurrentInvocationEvent(evt, inv) {
 		return true, false
 	}
 	// Use strict After so events stamped exactly at summary UpdatedAt are
@@ -798,18 +802,24 @@ func isStrictInvocationMessage(evt event.Event, inv *agent.Invocation) bool {
 		invocationMessageEqual(inv.Message, evt.Choices[0].Message)
 }
 
-// isCurrentInvocationUserMessage keeps the current invocation's user message
-// even when summary UpdatedAt would exclude it by timestamp.
+// isCurrentInvocationEvent keeps events that belong to the current
+// invocation even when summary UpdatedAt would exclude them by timestamp.
 //
-// RequestID + InvocationID matching avoids preserving unrelated user messages
+// This protects two scenarios:
+//  1. Async mid-turn summary: the user message is preserved so the model
+//     always sees the original request.
+//  2. Intra-run synchronous summary: assistant and tool-result messages
+//     produced in earlier iterations of the same run are preserved so the
+//     model retains tool-call context across iterations.
+//
+// RequestID + InvocationID matching avoids preserving unrelated events
 // from other invocations that may share the same request scope.
-func isCurrentInvocationUserMessage(evt event.Event, inv *agent.Invocation) bool {
+func isCurrentInvocationEvent(evt event.Event, inv *agent.Invocation) bool {
 	return inv.RunOptions.RequestID != "" &&
 		inv.RunOptions.RequestID == evt.RequestID &&
 		inv.InvocationID != "" &&
 		inv.InvocationID == evt.InvocationID &&
-		len(evt.Choices) > 0 &&
-		evt.Choices[0].Message.Role == model.RoleUser
+		len(evt.Choices) > 0
 }
 
 // passTimelineFilter applies request/invocation timeline constraints.

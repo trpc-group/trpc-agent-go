@@ -365,6 +365,7 @@ func (r *runner) Run(
 
 	invocation := agent.NewInvocation(
 		agent.WithInvocationSession(sess),
+		agent.WithInvocationSessionService(r.sessionService),
 		agent.WithInvocationMessage(message),
 		agent.WithInvocationAgent(ag),
 		agent.WithInvocationRunOptions(ro),

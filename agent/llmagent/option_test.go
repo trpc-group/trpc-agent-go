@@ -54,6 +54,15 @@ func TestWithChannelBufferSize(t *testing.T) {
 	}
 }
 
+func TestWithIntraRunSummary(t *testing.T) {
+	opts := &Options{}
+	WithIntraRunSummary(true)(opts)
+	require.True(t, opts.IntraRunSummary)
+
+	WithIntraRunSummary(false)(opts)
+	require.False(t, opts.IntraRunSummary)
+}
+
 func TestWithMessageFilterMode(t *testing.T) {
 	tests := []struct {
 		name                   string

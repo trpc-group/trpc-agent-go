@@ -53,8 +53,9 @@ const (
 
 // Options contains configuration options for creating a Flow.
 type Options struct {
-	ChannelBufferSize int // Buffer size for event channels (default: 256)
+	ChannelBufferSize int // Buffer size for event channels (default: 256).
 	ModelCallbacks    *model.Callbacks
+	IntraRunSummary   bool
 }
 
 // Flow provides the basic flow implementation.
@@ -63,6 +64,7 @@ type Flow struct {
 	responseProcessors []flow.ResponseProcessor
 	channelBufferSize  int
 	modelCallbacks     *model.Callbacks
+	intraRunSummary    bool
 }
 
 // New creates a new basic flow instance with the provided processors.
@@ -77,6 +79,7 @@ func New(
 		responseProcessors: responseProcessors,
 		channelBufferSize:  opts.ChannelBufferSize,
 		modelCallbacks:     opts.ModelCallbacks,
+		intraRunSummary:    opts.IntraRunSummary,
 	}
 }
 
@@ -94,11 +97,18 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 		// after an assistant tool_call response but before tools executed.
 		f.maybeResumePendingToolCalls(ctx, invocation, eventChan)
 
+		firstIteration := true
 		for {
 			// emit start event and wait for completion notice.
 			if err := f.emitStartEventAndWait(ctx, invocation, eventChan); err != nil {
 				return
 			}
+
+			// Run intra-run summary only between iterations.
+			if !firstIteration {
+				f.maybeIntraRunSummary(ctx, invocation)
+			}
+			firstIteration = false
 
 			// Run one step (one LLM call cycle).
 			lastEvent, err := f.runOneStep(ctx, invocation, eventChan)
@@ -248,6 +258,27 @@ func (f *Flow) maybeResumePendingToolCalls(
 			toolRP.ProcessResponse(ctx, invocation, req, lastResp, eventChan)
 			break
 		}
+	}
+}
+
+func (f *Flow) maybeIntraRunSummary(ctx context.Context, invocation *agent.Invocation) {
+	if !f.intraRunSummary || invocation == nil || invocation.Session == nil ||
+		invocation.SessionService == nil {
+		return
+	}
+
+	if err := invocation.SessionService.CreateSessionSummary(
+		ctx,
+		invocation.Session,
+		invocation.GetEventFilterKey(),
+		false,
+	); err != nil {
+		log.DebugfContext(
+			ctx,
+			"Intra-run summary skipped or failed for agent %s: %v",
+			invocation.AgentName,
+			err,
+		)
 	}
 }
 

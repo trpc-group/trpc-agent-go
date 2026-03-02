@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
@@ -1235,6 +1237,145 @@ func TestRun_WithResumeExecutesPendingToolCalls(t *testing.T) {
 	require.True(t, sawToolResult, "expected tool result event when resuming")
 	require.Len(t, toolCalls, 1)
 	require.Equal(t, "resume", toolCalls[0])
+}
+
+type countingSessionService struct {
+	session.Service
+	mu         sync.Mutex
+	calls      int
+	filterKeys []string
+}
+
+func (c *countingSessionService) CreateSessionSummary(
+	ctx context.Context,
+	sess *session.Session,
+	filterKey string,
+	force bool,
+) error {
+	c.mu.Lock()
+	c.calls++
+	c.filterKeys = append(c.filterKeys, filterKey)
+	c.mu.Unlock()
+	return c.Service.CreateSessionSummary(ctx, sess, filterKey, force)
+}
+
+func (c *countingSessionService) snapshot() (int, []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	keys := make([]string, len(c.filterKeys))
+	copy(keys, c.filterKeys)
+	return c.calls, keys
+}
+
+type twoStepToolCallModel struct {
+	mu      sync.Mutex
+	callNum int
+}
+
+func (m *twoStepToolCallModel) Info() model.Info {
+	return model.Info{Name: "two-step"}
+}
+
+func (m *twoStepToolCallModel) GenerateContent(
+	ctx context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	m.mu.Lock()
+	m.callNum++
+	callNum := m.callNum
+	m.mu.Unlock()
+
+	response := &model.Response{Done: true}
+	if callNum == 1 {
+		response.Choices = []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID: "call-1",
+					Function: model.FunctionDefinitionParam{
+						Name:      "intra_run_tool",
+						Arguments: []byte("{}"),
+					},
+				}},
+			},
+		}}
+	} else {
+		response.Choices = []model.Choice{{
+			Message: model.NewAssistantMessage("done"),
+		}}
+	}
+
+	ch := make(chan *model.Response, 1)
+	ch <- response
+	close(ch)
+	return ch, nil
+}
+
+func (m *twoStepToolCallModel) Calls() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.callNum
+}
+
+func TestRun_IntraRunSummary_TriggersBetweenIterations(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	baseSvc := inmemory.NewSessionService()
+	t.Cleanup(func() {
+		require.NoError(t, baseSvc.Close())
+	})
+
+	sess, err := baseSvc.CreateSession(
+		ctx,
+		session.Key{AppName: "app", UserID: "user", SessionID: "sess"},
+		nil,
+	)
+	require.NoError(t, err)
+
+	countingSvc := &countingSessionService{Service: baseSvc}
+	modelStub := &twoStepToolCallModel{}
+	toolStub := function.NewFunctionTool(
+		func(_ context.Context, req *struct{}) (*struct{}, error) {
+			return &struct{}{}, nil
+		},
+		function.WithName("intra_run_tool"),
+		function.WithDescription("intra run tool"),
+	)
+	agentWithTool := &mockAgentWithTools{
+		name:  "agent-intra-run",
+		tools: []tool.Tool{toolStub},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("inv-intra-run"),
+		agent.WithInvocationAgent(agentWithTool),
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationSessionService(countingSvc),
+		agent.WithInvocationModel(modelStub),
+		agent.WithInvocationEventFilterKey("branch/agent-intra-run"),
+	)
+
+	llmFlow := New(
+		nil,
+		[]flow.ResponseProcessor{
+			processor.NewFunctionCallResponseProcessor(false, nil),
+		},
+		Options{IntraRunSummary: true},
+	)
+
+	eventCh, err := llmFlow.Run(ctx, inv)
+	require.NoError(t, err)
+	for evt := range eventCh {
+		if evt.RequiresCompletion {
+			key := agent.AppendEventNoticeKeyPrefix + evt.ID
+			_ = inv.NotifyCompletion(ctx, key)
+		}
+	}
+
+	calls, filterKeys := countingSvc.snapshot()
+	require.Equal(t, 2, modelStub.Calls())
+	require.Equal(t, 1, calls)
+	require.Equal(t, []string{"branch/agent-intra-run"}, filterKeys)
 }
 
 func TestWaitEventTimeout(t *testing.T) {
