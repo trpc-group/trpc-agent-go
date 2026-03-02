@@ -9,9 +9,10 @@
 package s3
 
 import (
+	"time"
+
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	s3storage "trpc.group/trpc-go/trpc-agent-go/storage/s3"
-	"time"
 )
 
 type options struct {
