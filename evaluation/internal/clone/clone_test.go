@@ -16,6 +16,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -653,6 +654,312 @@ func TestCloneEvalSetResult_DeepCopyFullSummary(t *testing.T) {
 
 	dst.EvalCaseResults[0].EvalMetricResultPerInvocation[1].ActualInvocation.UserContent.ContentParts[0].Audio.Data[0] = 0
 	assert.Equal(t, byte(1), src.EvalCaseResults[0].EvalMetricResultPerInvocation[1].ActualInvocation.UserContent.ContentParts[0].Audio.Data[0])
+}
+
+func TestCloneHelpers_NilInputs(t *testing.T) {
+	assert.Nil(t, cloneBytes(nil))
+	assert.Nil(t, cloneStringSlice(nil))
+	assert.Nil(t, cloneBoolPtr(nil))
+	assert.Nil(t, cloneStringPtr(nil))
+	assert.Nil(t, cloneImage(nil))
+	assert.Nil(t, cloneAudio(nil))
+	assert.Nil(t, cloneFile(nil))
+}
+
+func TestCloneAny_UnsupportedTypes(t *testing.T) {
+	_, err := cloneAny(make(chan int))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported value type")
+
+	_, err = cloneAny(func() {})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported value type")
+
+	var v int
+	_, err = cloneAny(unsafe.Pointer(&v))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported value type")
+}
+
+func TestCloneEvalCase_ErrorFromContextMessages(t *testing.T) {
+	src := &evalset.EvalCase{
+		EvalID: "case-err-context-messages",
+		ContextMessages: []*model.Message{
+			{
+				Role:    model.RoleUser,
+				Content: "prompt",
+				ToolCalls: []model.ToolCall{
+					{
+						Type: "function",
+						Function: model.FunctionDefinitionParam{
+							Name: "f",
+						},
+						ExtraFields: map[string]any{
+							"bad": make(chan int),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	dst, err := CloneEvalCase(src)
+	require.Error(t, err)
+	assert.Nil(t, dst)
+}
+
+func TestCloneEvalCase_ErrorFromConversation(t *testing.T) {
+	src := &evalset.EvalCase{
+		EvalID: "case-err-conversation",
+		Conversation: []*evalset.Invocation{
+			{
+				InvocationID: "inv-1",
+				Tools: []*evalset.Tool{
+					{
+						ID:        "tool-1",
+						Name:      "tool",
+						Arguments: map[string]any{"bad": make(chan int)},
+					},
+				},
+			},
+		},
+	}
+
+	dst, err := CloneEvalCase(src)
+	require.Error(t, err)
+	assert.Nil(t, dst)
+}
+
+func TestCloneEvalCase_ErrorFromActualConversation(t *testing.T) {
+	src := &evalset.EvalCase{
+		EvalID:            "case-err-actual-conversation",
+		Conversation:      []*evalset.Invocation{nil},
+		SessionInput:      &evalset.SessionInput{},
+		CreationTimestamp: &epochtime.EpochTime{Time: time.Unix(1, 0).UTC()},
+		ActualConversation: []*evalset.Invocation{
+			{
+				InvocationID: "inv-actual-1",
+				Tools: []*evalset.Tool{
+					nil,
+					{
+						ID:        "tool-1",
+						Name:      "tool",
+						Arguments: map[string]any{"bad": func() {}},
+					},
+				},
+			},
+		},
+	}
+
+	dst, err := CloneEvalCase(src)
+	require.Error(t, err)
+	assert.Nil(t, dst)
+}
+
+func TestCloneEvalCase_ErrorFromSessionInput(t *testing.T) {
+	src := &evalset.EvalCase{
+		EvalID: "case-err-session-input",
+		SessionInput: &evalset.SessionInput{
+			AppName: "app",
+			UserID:  "user",
+			State: map[string]any{
+				"bad": make(chan int),
+			},
+		},
+	}
+
+	dst, err := CloneEvalCase(src)
+	require.Error(t, err)
+	assert.Nil(t, dst)
+}
+
+func TestCloneEvalSet_ErrorFromEvalCase(t *testing.T) {
+	src := &evalset.EvalSet{
+		EvalSetID: "set-err",
+		EvalCases: []*evalset.EvalCase{
+			{EvalID: "ok"},
+			{
+				EvalID: "bad",
+				ContextMessages: []*model.Message{
+					{
+						Role:    model.RoleUser,
+						Content: "prompt",
+						ToolCalls: []model.ToolCall{
+							{
+								Type: "function",
+								Function: model.FunctionDefinitionParam{
+									Name: "f",
+								},
+								ExtraFields: map[string]any{
+									"bad": make(chan int),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	dst, err := CloneEvalSet(src)
+	require.Error(t, err)
+	assert.Nil(t, dst)
+}
+
+func TestCloneEvalMetric_NilCriterion(t *testing.T) {
+	src := &metric.EvalMetric{
+		MetricName: "metric-nil-criterion",
+		Threshold:  0.5,
+	}
+
+	dst, err := CloneEvalMetric(src)
+	require.NoError(t, err)
+	require.NotNil(t, dst)
+	assert.Nil(t, dst.Criterion)
+}
+
+func TestCloneEvalMetric_ErrorFromCriterionJSON(t *testing.T) {
+	src := &metric.EvalMetric{
+		MetricName: "metric-err-json",
+		Threshold:  0.5,
+		Criterion: &criterion.Criterion{
+			FinalResponse: &finalresponse.FinalResponseCriterion{
+				JSON: &criterionjson.JSONCriterion{
+					IgnoreTree: map[string]any{
+						"bad": make(chan int),
+					},
+				},
+			},
+		},
+	}
+
+	dst, err := CloneEvalMetric(src)
+	require.Error(t, err)
+	assert.Nil(t, dst)
+}
+
+func TestCloneEvalMetric_ToolTrajectoryNilStrategies(t *testing.T) {
+	src := &metric.EvalMetric{
+		MetricName: "metric-nil-strategies",
+		Threshold:  0.5,
+		Criterion: &criterion.Criterion{
+			ToolTrajectory: &tooltrajectory.ToolTrajectoryCriterion{
+				ToolStrategy: map[string]*tooltrajectory.ToolTrajectoryStrategy{
+					"tool": nil,
+				},
+			},
+			FinalResponse: &finalresponse.FinalResponseCriterion{
+				Text: &text.TextCriterion{},
+			},
+			LLMJudge: &criterionllm.LLMCriterion{
+				Rubrics: []*criterionllm.Rubric{
+					{
+						ID: "r1",
+					},
+				},
+				JudgeModel: &criterionllm.JudgeModelOptions{
+					ProviderName: "provider",
+					ModelName:    "model",
+					APIKey:       "secret",
+					Generation:   &model.GenerationConfig{},
+				},
+			},
+		},
+	}
+
+	dst, err := CloneEvalMetric(src)
+	require.NoError(t, err)
+	require.NotNil(t, dst)
+	require.NotNil(t, dst.Criterion)
+	require.NotNil(t, dst.Criterion.ToolTrajectory)
+	assert.Nil(t, dst.Criterion.ToolTrajectory.DefaultStrategy)
+	assert.Contains(t, dst.Criterion.ToolTrajectory.ToolStrategy, "tool")
+	assert.Nil(t, dst.Criterion.ToolTrajectory.ToolStrategy["tool"])
+
+	require.NotNil(t, dst.Criterion.LLMJudge)
+	require.NotNil(t, dst.Criterion.LLMJudge.Rubrics)
+	require.Len(t, dst.Criterion.LLMJudge.Rubrics, 1)
+	assert.Nil(t, dst.Criterion.LLMJudge.Rubrics[0].Content)
+
+	require.NotNil(t, dst.Criterion.LLMJudge.JudgeModel)
+	assert.Nil(t, dst.Criterion.LLMJudge.JudgeModel.NumSamples)
+	require.NotNil(t, dst.Criterion.LLMJudge.JudgeModel.Generation)
+	assert.Nil(t, dst.Criterion.LLMJudge.JudgeModel.Generation.Stop)
+	assert.Nil(t, dst.Criterion.LLMJudge.JudgeModel.Generation.ReasoningEffort)
+	assert.Nil(t, dst.Criterion.LLMJudge.JudgeModel.Generation.ThinkingEnabled)
+}
+
+func TestCloneEvalMetric_ErrorFromJudgeModelExtraFields(t *testing.T) {
+	src := &metric.EvalMetric{
+		MetricName: "metric-err-extra-fields",
+		Threshold:  0.5,
+		Criterion: &criterion.Criterion{
+			LLMJudge: &criterionllm.LLMCriterion{
+				JudgeModel: &criterionllm.JudgeModelOptions{
+					ProviderName: "provider",
+					ModelName:    "model",
+					APIKey:       "secret",
+					ExtraFields: map[string]any{
+						"bad": make(chan int),
+					},
+				},
+			},
+		},
+	}
+
+	dst, err := CloneEvalMetric(src)
+	require.Error(t, err)
+	assert.Nil(t, dst)
+}
+
+func TestCloneEvalSetResult_NilFields(t *testing.T) {
+	src := &evalresult.EvalSetResult{
+		EvalSetResultID:   "result-nil-fields",
+		EvalSetResultName: "result-nil-fields",
+		EvalSetID:         "set-1",
+		Summary: &evalresult.EvalSetResultSummary{
+			RunStatusCounts:   nil,
+			RunSummaries:      nil,
+			EvalCaseSummaries: nil,
+		},
+	}
+
+	dst, err := CloneEvalSetResult(src)
+	require.NoError(t, err)
+	require.NotNil(t, dst)
+	require.NotNil(t, dst.Summary)
+	assert.Nil(t, dst.Summary.RunStatusCounts)
+	assert.Nil(t, dst.Summary.RunSummaries)
+	assert.Nil(t, dst.Summary.EvalCaseSummaries)
+}
+
+func TestCloneEvalSetResult_ErrorFromInvocationTools(t *testing.T) {
+	src := &evalresult.EvalSetResult{
+		EvalSetResultID: "result-err-invocation",
+		EvalCaseResults: []*evalresult.EvalCaseResult{
+			{
+				EvalID: "case-1",
+				EvalMetricResultPerInvocation: []*evalresult.EvalMetricResultPerInvocation{
+					{
+						ActualInvocation: &evalset.Invocation{
+							InvocationID: "inv-1",
+							Tools: []*evalset.Tool{
+								{
+									ID:        "tool-1",
+									Name:      "tool",
+									Arguments: map[string]any{"bad": make(chan int)},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	dst, err := CloneEvalSetResult(src)
+	require.Error(t, err)
+	assert.Nil(t, dst)
 }
 
 func assertNotAliasedAndEqual(t *testing.T, src, dst any) {
