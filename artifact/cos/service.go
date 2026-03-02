@@ -57,7 +57,11 @@ type Service struct {
 	cosClient client
 }
 
-const defaultTimeout = 60 * time.Second
+const (
+	defaultTimeout     = 60 * time.Second
+	defaultContentType = "application/octet-stream"
+	objectKeySep       = "/"
+)
 
 // NewService creates a new TCOS artifact service with optional configurations.
 //
@@ -97,7 +101,21 @@ func NewService(name, bucketURL string, opts ...Option) (*Service, error) {
 }
 
 // SaveArtifact saves an artifact to Tencent Cloud Object Storage.
-func (s *Service) SaveArtifact(ctx context.Context, sessionInfo artifact.SessionInfo, filename string, art *artifact.Artifact) (int, error) {
+func (s *Service) SaveArtifact(
+	ctx context.Context,
+	sessionInfo artifact.SessionInfo,
+	filename string,
+	art *artifact.Artifact,
+) (int, error) {
+	if err := validateSessionInfo(sessionInfo); err != nil {
+		return 0, err
+	}
+	if err := validateFilename(filename); err != nil {
+		return 0, err
+	}
+	if art == nil {
+		return 0, ErrNilArtifact
+	}
 	// Get existing versions to determine the next version number
 	versions, err := s.ListVersions(ctx, sessionInfo, filename)
 	if err != nil {
@@ -128,7 +146,18 @@ func (s *Service) SaveArtifact(ctx context.Context, sessionInfo artifact.Session
 }
 
 // LoadArtifact gets an artifact from Tencent Cloud Object Storage.
-func (s *Service) LoadArtifact(ctx context.Context, sessionInfo artifact.SessionInfo, filename string, version *int) (*artifact.Artifact, error) {
+func (s *Service) LoadArtifact(
+	ctx context.Context,
+	sessionInfo artifact.SessionInfo,
+	filename string,
+	version *int,
+) (*artifact.Artifact, error) {
+	if err := validateSessionInfo(sessionInfo); err != nil {
+		return nil, err
+	}
+	if err := validateFilename(filename); err != nil {
+		return nil, err
+	}
 	var targetVersion int
 
 	if version == nil {
@@ -173,7 +202,7 @@ func (s *Service) LoadArtifact(ctx context.Context, sessionInfo artifact.Session
 	// Get content type from response headers
 	contentType := respHeader.Get("Content-Type")
 	if contentType == "" {
-		contentType = "application/octet-stream"
+		contentType = defaultContentType
 	}
 
 	return &artifact.Artifact{
@@ -184,8 +213,15 @@ func (s *Service) LoadArtifact(ctx context.Context, sessionInfo artifact.Session
 }
 
 // ListArtifactKeys lists all the artifact filenames within a session from TCOS.
-func (s *Service) ListArtifactKeys(ctx context.Context, sessionInfo artifact.SessionInfo) ([]string, error) {
-	filenameSet := make(map[string]bool)
+func (s *Service) ListArtifactKeys(
+	ctx context.Context,
+	sessionInfo artifact.SessionInfo,
+) ([]string, error) {
+	if err := validateSessionInfo(sessionInfo); err != nil {
+		return nil, err
+	}
+
+	filenameSet := make(map[string]struct{})
 
 	// List session-scoped artifacts
 	sessionPrefix := iartifact.BuildSessionPrefix(sessionInfo)
@@ -196,11 +232,14 @@ func (s *Service) ListArtifactKeys(ctx context.Context, sessionInfo artifact.Ses
 
 	if sessionResult != nil {
 		for _, obj := range sessionResult.Contents {
-			parts := strings.Split(obj.Key, "/")
-			if len(parts) >= 4 {
-				filename := parts[len(parts)-2] // filename is before version
-				filenameSet[filename] = true
+			filename := extractFilenameFromObjectKey(
+				obj.Key,
+				sessionPrefix,
+			)
+			if filename == "" {
+				continue
 			}
+			filenameSet[filename] = struct{}{}
 		}
 	}
 
@@ -213,11 +252,14 @@ func (s *Service) ListArtifactKeys(ctx context.Context, sessionInfo artifact.Ses
 
 	if userResult != nil {
 		for _, obj := range userResult.Contents {
-			parts := strings.Split(obj.Key, "/")
-			if len(parts) >= 4 {
-				filename := parts[len(parts)-2] // filename is before version
-				filenameSet[filename] = true
+			filename := extractFilenameFromObjectKey(
+				obj.Key,
+				userPrefix,
+			)
+			if filename == "" {
+				continue
 			}
+			filenameSet[filename] = struct{}{}
 		}
 	}
 
@@ -232,7 +274,18 @@ func (s *Service) ListArtifactKeys(ctx context.Context, sessionInfo artifact.Ses
 }
 
 // DeleteArtifact deletes an artifact from Tencent Cloud Object Storage.
-func (s *Service) DeleteArtifact(ctx context.Context, sessionInfo artifact.SessionInfo, filename string) error {
+func (s *Service) DeleteArtifact(
+	ctx context.Context,
+	sessionInfo artifact.SessionInfo,
+	filename string,
+) error {
+	if err := validateSessionInfo(sessionInfo); err != nil {
+		return err
+	}
+	if err := validateFilename(filename); err != nil {
+		return err
+	}
+
 	// Get all versions of the artifact
 	versions, err := s.ListVersions(ctx, sessionInfo, filename)
 	if err != nil {
@@ -252,7 +305,18 @@ func (s *Service) DeleteArtifact(ctx context.Context, sessionInfo artifact.Sessi
 }
 
 // ListVersions lists all versions of an artifact from TCOS.
-func (s *Service) ListVersions(ctx context.Context, sessionInfo artifact.SessionInfo, filename string) ([]int, error) {
+func (s *Service) ListVersions(
+	ctx context.Context,
+	sessionInfo artifact.SessionInfo,
+	filename string,
+) ([]int, error) {
+	if err := validateSessionInfo(sessionInfo); err != nil {
+		return nil, err
+	}
+	if err := validateFilename(filename); err != nil {
+		return nil, err
+	}
+
 	prefix := iartifact.BuildObjectNamePrefix(sessionInfo, filename)
 	result, err := s.cosClient.GetBucket(ctx, prefix)
 	if err != nil {
@@ -264,7 +328,7 @@ func (s *Service) ListVersions(ctx context.Context, sessionInfo artifact.Session
 
 	var versions []int
 	for _, obj := range result.Contents {
-		parts := strings.Split(obj.Key, "/")
+		parts := strings.Split(obj.Key, objectKeySep)
 		if len(parts) > 0 {
 			versionStr := parts[len(parts)-1]
 			if version, err := strconv.Atoi(versionStr); err == nil {
@@ -273,4 +337,37 @@ func (s *Service) ListVersions(ctx context.Context, sessionInfo artifact.Session
 		}
 	}
 	return versions, nil
+}
+
+func validateSessionInfo(info artifact.SessionInfo) error {
+	if info.AppName == "" || info.UserID == "" || info.SessionID == "" {
+		return ErrEmptySessionInfo
+	}
+	return nil
+}
+
+func validateFilename(filename string) error {
+	if strings.TrimSpace(filename) == "" {
+		return ErrEmptyFilename
+	}
+	if strings.Contains(filename, "\x00") {
+		return ErrInvalidFilename
+	}
+	return nil
+}
+
+func extractFilenameFromObjectKey(objectKey, prefix string) string {
+	if !strings.HasPrefix(objectKey, prefix) {
+		return ""
+	}
+	rel := strings.TrimPrefix(objectKey, prefix)
+	if rel == "" {
+		return ""
+	}
+	parts := strings.Split(rel, objectKeySep)
+	if len(parts) < 2 {
+		return ""
+	}
+	name := strings.Join(parts[:len(parts)-1], objectKeySep)
+	return strings.TrimSpace(name)
 }

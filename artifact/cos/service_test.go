@@ -392,6 +392,71 @@ func TestMixedScopeArtifacts(t *testing.T) {
 	assert.Equal(t, userArtifact.Data, loadedUser.Data)
 }
 
+func TestListArtifactKeys_PreservesNestedFilenames(t *testing.T) {
+	s, _ := createMockService()
+	ctx := context.Background()
+
+	sessionInfo := artifact.SessionInfo{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session456",
+	}
+
+	_, err := s.SaveArtifact(ctx, sessionInfo, "out/a.txt", &artifact.Artifact{
+		Data:     []byte("a"),
+		MimeType: "text/plain",
+		Name:     "out/a.txt",
+	})
+	require.NoError(t, err)
+
+	_, err = s.SaveArtifact(
+		ctx,
+		sessionInfo,
+		"user:out/b.txt",
+		&artifact.Artifact{
+			Data:     []byte("b"),
+			MimeType: "text/plain",
+			Name:     "user:out/b.txt",
+		},
+	)
+	require.NoError(t, err)
+
+	keys, err := s.ListArtifactKeys(ctx, sessionInfo)
+	require.NoError(t, err)
+	assert.ElementsMatch(
+		t,
+		[]string{"out/a.txt", "user:out/b.txt"},
+		keys,
+	)
+}
+
+func TestSaveArtifact_ValidatesInputs(t *testing.T) {
+	s, _ := createMockService()
+	ctx := context.Background()
+
+	_, err := s.SaveArtifact(
+		ctx,
+		artifact.SessionInfo{},
+		"test.txt",
+		&artifact.Artifact{Data: []byte("x")},
+	)
+	require.ErrorIs(t, err, ErrEmptySessionInfo)
+
+	sessionInfo := artifact.SessionInfo{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session456",
+	}
+	_, err = s.SaveArtifact(ctx, sessionInfo, "", &artifact.Artifact{})
+	require.ErrorIs(t, err, ErrEmptyFilename)
+
+	_, err = s.SaveArtifact(ctx, sessionInfo, "a\x00b", &artifact.Artifact{})
+	require.ErrorIs(t, err, ErrInvalidFilename)
+
+	_, err = s.SaveArtifact(ctx, sessionInfo, "test.txt", nil)
+	require.ErrorIs(t, err, ErrNilArtifact)
+}
+
 func TestLoadNonexistentArtifact(t *testing.T) {
 	s, _ := createMockService()
 	ctx := context.Background()
