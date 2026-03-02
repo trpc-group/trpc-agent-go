@@ -13,6 +13,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"math"
 	"os"
@@ -299,6 +300,9 @@ func (u *UsageStats) Print() {
 }
 
 func main() {
+	modelName := flag.String("model", "gpt-4o", "Model name to use (e.g. gpt-4o)")
+	flag.Parse()
+
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
 		fmt.Println("⚠️  OPENAI_API_KEY not set")
@@ -324,7 +328,7 @@ func main() {
 
 	// Cache optimization is enabled by default for OpenAI.
 	llm := openai.New(
-		"gpt-4o",
+		*modelName,
 		openai.WithAPIKey(apiKey),
 	)
 
@@ -343,7 +347,7 @@ func main() {
 		llmagent.WithDescription("An AI assistant demonstrating prompt caching with tools"),
 		llmagent.WithTools(tools),
 		llmagent.WithGenerationConfig(model.GenerationConfig{
-			Stream: false, // Disable streaming to ensure usage info is available
+			Stream: true,
 		}),
 	)
 
