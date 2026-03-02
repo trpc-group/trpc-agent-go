@@ -154,7 +154,8 @@ go run ./cmd/openclaw \
 ## Ralph Loop (optional)
 
 Ralph Loop is an outer loop that reruns the agent until a verifiable
-completion condition is met (or until max iterations is reached).
+completion condition is met (or until the maximum number of iterations is
+reached).
 
 This demo supports it only for `agent.type: llm`, because the `claude-code`
 agent does not consume session history (so loop feedback would be ignored).
