@@ -78,6 +78,8 @@ func newServer(t *testing.T) *cstServer {
 		},
 		baseURL:    fmt.Sprintf("http://%s:%d", s.host, s.port),
 		httpClient: s.Server.Client(),
+		// Avoid flakes: waitForReady uses time.After(c.waitReadyTimeout).
+		waitReadyTimeout: 10 * time.Second,
 	}
 	wsUrl := fmt.Sprintf("ws://%s:%d/api/kernels/123/channels", s.host, s.port)
 	ws, _, err := websocket.DefaultDialer.Dial(wsUrl, nil)
