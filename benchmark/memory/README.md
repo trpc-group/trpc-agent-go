@@ -52,16 +52,62 @@ Based on:
 
 ## SQLite vs SQLiteVec (Subset)
 
-This is a small subset run to compare local SQLite keyword matching (`sqlite`)
-vs sqlite-vec semantic search (`sqlitevec`).
+This is a set of subset runs to compare local SQLite keyword matching
+(`sqlite`) vs sqlite-vec semantic search (`sqlitevec`).
 
-**Configuration**: Model=gpt-4o-mini, scenario=auto, sample=locomo10_1,
-category=temporal (13 QA), LLM Judge disabled.
+**Subset run A (end-to-end QA)**:
+
+- Model: gpt-4o-mini
+- Scenario: auto
+- Sample: locomo10_1 (199 QA, all categories)
+- LLM Judge: enabled
+
+| Backend | #QA | F1 | LLM Score | Prompt Tokens | Avg Prompt/QA | Avg Latency |
+|---------|---:|---:|----------:|--------------:|--------------:|------------:|
+| sqlite | 199 | 0.327 | 0.370 | 1,287,813 | 6,471 | 5,805ms |
+| sqlitevec | 199 | 0.307 | 0.325 | 407,969 | 2,050 | 6,327ms |
+
+Note: `Prompt Tokens` and `Avg Prompt/QA` count only QA agent calls.
+They exclude embedding requests and LLM-as-Judge calls.
+
+We also rerun the same configuration on `locomo10_6` (158 QA):
+
+| Backend | #QA | F1 | Prompt Tokens | Avg Prompt/QA |
+|---------|---:|---:|--------------:|--------------:|
+| sqlite | 158 | 0.269 | 1,296,580 | 8,206 |
+| sqlitevec | 158 | 0.274 | 362,903 | 2,297 |
+
+**Subset run B (temporal token-cost micro-run)**:
+
+- Model: gpt-4o-mini
+- Scenario: auto
+- Sample: locomo10_1
+- Category filter: temporal (13 QA)
+- LLM Judge: disabled
 
 | Backend | F1 | Prompt Tokens | Avg Prompt/QA |
 |---------|---:|--------------:|--------------:|
 | sqlite | 0.116 | 80,184 | 6,168 |
 | sqlitevec | 0.116 | 26,483 | 2,037 |
+
+**Subset run C (top-k sweep + multi-search ablation)**:
+
+To study whether "retrieving more memories" (higher top-k) or "searching more
+times" (multiple `memory_search` calls) improves answer quality, we run a small
+sweep on `locomo10_1` (LLM Judge disabled; F1/BLEU only).
+
+| Backend | vector-topk | qa-search-passes | F1 | Prompt Tokens | Avg Prompt/QA |
+|---------|------------:|-----------------:|---:|--------------:|--------------:|
+| sqlite | - | 1 | 0.299 | 1,322,360 | 6,645 |
+| sqlitevec | 5 | 1 | 0.320 | 346,253 | 1,740 |
+| sqlitevec | 10 | 1 | 0.343 | 398,751 | 2,004 |
+| sqlitevec | 20 | 1 | 0.329 | 621,790 | 3,125 |
+| sqlitevec | 40 | 1 | 0.327 | 965,423 | 4,851 |
+| sqlitevec | 10 | 2 | 0.342 | 659,981 | 3,316 |
+
+Takeaway: top-k does not monotonically improve quality in this setup; higher
+top-k increases tokens and can slightly reduce F1. See `results/REPORT.md` for
+details.
 
 ## Evaluation Metrics
 
@@ -90,7 +136,7 @@ Aligned with LoCoMo paper and industry standards (Mem0, MemMachine):
 Full conversation as context, evaluates model's native long-context ability.
 
 ```bash
-go run main.go -scenario long_context
+go run . -scenario long_context
 ```
 
 ### 2. Agentic (Memory Tools)
@@ -99,7 +145,7 @@ Agent uses memory tools to add and search memories. The agent processes each
 conversation session separately and decides what to store.
 
 ```bash
-go run main.go -scenario agentic
+go run . -scenario agentic
 ```
 
 ### 3. Auto (Memory Extractor + Search)
@@ -108,7 +154,7 @@ Auto mode uses the built-in memory extractor to generate memories in the
 background. The QA stage only performs memory search.
 
 ```bash
-go run main.go -scenario auto
+go run . -scenario auto
 ```
 
 Memory backends apply to `agentic` and `auto` scenarios.
@@ -119,10 +165,10 @@ Auto mode uses the built-in extractor provided by the memory service.
 Run all scenarios for comparison.
 
 ```bash
-go run main.go -scenario all
+go run . -scenario all
 
 # Run all scenarios on both backends.
-go run main.go -scenario all -memory-backend inmemory,pgvector
+go run . -scenario all -memory-backend inmemory,pgvector
 ```
 
 ### 5. Comma-Separated Scenarios
@@ -131,7 +177,7 @@ Run specific combinations of scenarios.
 
 ```bash
 # Run agentic and auto only.
-go run main.go -scenario agentic,auto -memory-backend pgvector,mysql
+go run . -scenario agentic,auto -memory-backend pgvector,mysql
 ```
 
 ## Command-Line Options
@@ -148,7 +194,9 @@ go run main.go -scenario agentic,auto -memory-backend pgvector,mysql
 | `-pgvector-dsn`     | (env)                  | PostgreSQL DSN for pgvector            |
 | `-mysql-dsn`        | (env)                  | MySQL DSN for mysql backend            |
 | `-embed-model`      | text-embedding-3-small | Embedding model for vector backends    |
+| `-vector-topk`      | 10                     | Top-k results for vector backends      |
 | `-qa-history-turns` | 0                      | Inject N conversation turns as context |
+| `-qa-search-passes` | 1                      | memory_search calls per QA             |
 | `-sample-id`        |                        | Filter by sample ID                    |
 | `-max-tasks`        | 0                      | Maximum tasks (0=all)                  |
 | `-llm-judge`        | false                  | Enable LLM-as-Judge                    |
@@ -194,15 +242,21 @@ cd benchmark/memory/trpc-agent-go-impl
 go mod tidy
 
 # Run with default settings (long_context + inmemory).
-go run main.go
+go run .
 
 # Run with LLM judge enabled.
-go run main.go -llm-judge -model gpt-4o
+go run . -llm-judge -model gpt-4o
 
 # Run agentic evaluation with pgvector backend.
 export PGVECTOR_DSN="postgres://user:password@localhost:5432/memory_eval\
 ?sslmode=disable"
-go run main.go -scenario agentic -memory-backend pgvector
+go run . -scenario agentic -memory-backend pgvector
+
+# Run auto evaluation with sqlite backend.
+go run . -scenario auto -memory-backend sqlite
+
+# Run auto evaluation with sqlitevec backend (requires embeddings).
+go run . -scenario auto -memory-backend sqlitevec
 
 # Run auto evaluation with sqlite backend.
 go run main.go -scenario auto -memory-backend sqlite
@@ -211,10 +265,10 @@ go run main.go -scenario auto -memory-backend sqlite
 go run main.go -scenario auto -memory-backend sqlitevec
 
 # Run all scenarios.
-go run main.go -scenario all -output ../results/full_eval
+go run . -scenario all -output ../results/full_eval
 
 # Run with history injection (300 turns).
-go run main.go \
+go run . \
   -scenario agentic,auto \
   -memory-backend pgvector,mysql \
   -qa-history-turns 300 \

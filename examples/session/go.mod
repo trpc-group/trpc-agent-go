@@ -8,6 +8,7 @@ replace (
 	trpc.group/trpc-go/trpc-agent-go/session/mysql => ../../session/mysql
 	trpc.group/trpc-go/trpc-agent-go/session/postgres => ../../session/postgres
 	trpc.group/trpc-go/trpc-agent-go/session/redis => ../../session/redis/
+	trpc.group/trpc-go/trpc-agent-go/session/sqlite => ../../session/sqlite
 	trpc.group/trpc-go/trpc-agent-go/storage/clickhouse => ../../storage/clickhouse
 	trpc.group/trpc-go/trpc-agent-go/storage/mysql => ../../storage/mysql
 	trpc.group/trpc-go/trpc-agent-go/storage/postgres => ../../storage/postgres
@@ -16,11 +17,13 @@ replace (
 
 require (
 	github.com/google/uuid v1.6.0
+	github.com/mattn/go-sqlite3 v1.14.32
 	trpc.group/trpc-go/trpc-agent-go v0.5.0
 	trpc.group/trpc-go/trpc-agent-go/session/clickhouse v0.0.0-20260107012516-0827a2e089f0
 	trpc.group/trpc-go/trpc-agent-go/session/mysql v0.0.0-20251126064502-c8c2594d2519
 	trpc.group/trpc-go/trpc-agent-go/session/postgres v0.0.0-20251126064502-c8c2594d2519
 	trpc.group/trpc-go/trpc-agent-go/session/redis v0.0.0-20251126064502-c8c2594d2519
+	trpc.group/trpc-go/trpc-agent-go/session/sqlite v0.0.0-20251126064502-c8c2594d2519
 )
 
 require (

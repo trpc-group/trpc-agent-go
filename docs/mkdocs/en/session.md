@@ -16,10 +16,10 @@ Within the same conversation, it allows for seamless transitions between multipl
 - **Session Summary**: Automatically compress long conversation history using LLM while preserving key context and significantly reducing token consumption
 - **Event Limiting**: Control maximum number of events stored per session to prevent memory overflow
 - **TTL Management**: Support automatic expiration and cleanup of session data
-- **Multiple Storage Backends**: Support Memory, Redis, PostgreSQL, MySQL, ClickHouse storage
+- **Multiple Storage Backends**: Support Memory, SQLite, Redis, PostgreSQL, MySQL, ClickHouse storage
 - **Concurrency Safety**: Built-in read-write locks ensure safe concurrent access
 - **Automatic Management**: Automatically handle session creation, loading, and updates after Runner integration
-- **Soft Delete Support**: PostgreSQL/MySQL support soft delete with data recovery capability
+- **Soft Delete Support**: PostgreSQL/MySQL/SQLite support soft delete with data recovery capability
 
 ## Quick Start
 
@@ -27,7 +27,7 @@ Within the same conversation, it allows for seamless transitions between multipl
 
 tRPC-Agent-Go's session management integrates with Runner through `runner.WithSessionService`. Runner automatically handles session creation, loading, updates, and persistence.
 
-**Supported Storage Backends:** Memory, Redis, PostgreSQL, MySQL, ClickHouse
+**Supported Storage Backends:** Memory, SQLite, Redis, PostgreSQL, MySQL, ClickHouse
 
 **Default Behavior:** If `runner.WithSessionService` is not configured, Runner defaults to using memory storage (Memory), and data will be lost after process restarts.
 
@@ -406,16 +406,18 @@ sessionService := inmemory.NewSessionService(
 | ------------ | ---------------------------------------------- | ------------ |
 | Memory       | Periodic scanning + access-time checking       | Yes          |
 | Redis        | Redis native TTL                               | Yes          |
+| SQLite       | Periodic scanning (soft delete or hard delete) | Yes          |
 | PostgreSQL   | Periodic scanning (soft delete or hard delete) | Yes          |
 | MySQL        | Periodic scanning (soft delete or hard delete) | Yes          |
 
 ## Storage Backend Comparison
 
-tRPC-Agent-Go provides five session storage backends to meet different scenario requirements:
+tRPC-Agent-Go provides six session storage backends to meet different scenario requirements:
 
 | Storage Type | Use Case                         |
 | ------------ | -------------------------------- |
 | Memory       | Development/testing, small-scale |
+| SQLite       | Local persistence, single-node   |
 | Redis        | Production, distributed          |
 | PostgreSQL   | Production, complex queries      |
 | MySQL        | Production, complex queries      |
@@ -489,6 +491,66 @@ sessionService := inmemory.NewSessionService(
     inmemory.WithSummaryJobTimeout(60*time.Second),
 )
 ```
+
+## SQLite Storage
+
+SQLite is an embedded database stored in a single file. It is a good fit for:
+
+- Local development and demos (no external database needed)
+- Single-node deployments that still want persistence across restarts
+- Lightweight persistence for CLI tools or small services
+
+### Requirements
+
+This backend uses the `github.com/mattn/go-sqlite3` driver, which requires CGO
+(a C compiler). Make sure your environment can build CGO code.
+
+### Basic Configuration Example
+
+```go
+import (
+    "database/sql"
+    "time"
+
+    _ "github.com/mattn/go-sqlite3"
+    sessionsqlite "trpc.group/trpc-go/trpc-agent-go/session/sqlite"
+)
+
+db, err := sql.Open("sqlite3", "file:sessions.db?_busy_timeout=5000")
+if err != nil {
+    // handle error
+}
+
+sessionService, err := sessionsqlite.NewService(
+    db,
+    sessionsqlite.WithSessionEventLimit(1000),
+    sessionsqlite.WithSessionTTL(30*time.Minute),
+    sessionsqlite.WithSoftDelete(true),
+)
+if err != nil {
+    // handle error
+}
+defer sessionService.Close()
+```
+
+**Notes**:
+
+- `NewService` accepts a `*sql.DB`. The session service owns the DB and will
+  close it in `Close()`. Do not close the DB twice.
+- For better concurrency on a single machine, consider enabling WAL mode
+  (e.g. `_journal_mode=WAL`) and setting `_busy_timeout` in your DSN.
+
+### Configuration Options
+
+- **TTL and cleanup**: `WithSessionTTL`, `WithAppStateTTL`, `WithUserStateTTL`,
+  `WithCleanupInterval`
+- **Retention**: `WithSessionEventLimit`
+- **Persistence**: `WithEnableAsyncPersist`, `WithAsyncPersisterNum`
+- **Soft delete**: `WithSoftDelete` (default is enabled)
+- **Summaries**: `WithSummarizer`, `WithAsyncSummaryNum`, `WithSummaryQueueSize`,
+  `WithSummaryJobTimeout`
+- **Schema/DDL**: `WithSkipDBInit`, `WithTablePrefix`
+- **Hooks**: `WithAppendEventHook`, `WithGetSessionHook`
 
 ## Redis Storage
 
@@ -1265,7 +1327,7 @@ COMMENT 'User states table';
 - **AppendEventHook**: Intercept/modify/abort events before they are stored. Useful for content safety or auditing (e.g., tagging `violation=<word>`), or short-circuiting persistence. For filterKey usage, see the “Session Summarization / FilterKey with AppendEventHook” section below.
 - **GetSessionHook**: Intercept/modify/filter sessions after they are read. Useful for removing tagged events or dynamically augmenting the returned session state.
 - **Chain-of-responsibility**: Hooks call `next()` to continue; returning early short-circuits later hooks, and errors bubble up.
-- **Backend parity**: Memory, Redis, MySQL, and PostgreSQL share the same hook interface—inject hook slices when constructing the service.
+- **Backend parity**: Memory, SQLite, Redis, MySQL, and PostgreSQL share the same hook interface—inject hook slices when constructing the service.
 - **Example**: See `examples/session/hook` ([code](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/session/hook))
 
 ### Direct Use of Session Service API

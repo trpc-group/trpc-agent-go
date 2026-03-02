@@ -198,7 +198,68 @@
 ### 3.6 SQLite vs SQLiteVec（子集实验）
 
 本小节对比 `sqlite`（关键词/Token 匹配）与 `sqlitevec`（sqlite-vec 语义向量检索）
-在一个小规模子集上的表现，用于观察 token 成本与检索差异。
+在若干个可控的子集实验上的表现，用于观察 token 成本与检索差异。
+
+**子集实验 A：端到端 QA（Auto / 全类别）**
+
+该实验保持端到端流程与主要实验一致，但仅评估单个样本以控制成本。
+
+**实验配置**：
+
+- 数据集：LoCoMo `locomo10.json`
+- 样本：`locomo10_1`（199 个 QA，包含全部类别）
+- 场景：`auto`
+- 模型：`gpt-4o-mini`
+- LLM 评判：启用
+- SQLiteVec embedding 模型：`text-embedding-3-small`
+- SQLiteVec 检索 top-k：10（默认值）
+
+作为参考，表 7 中 Auto pgvector 在 `locomo10_1` 的 F1 为 **0.311**，
+在 `locomo10_6` 的 F1 为 **0.204**（同数据集/模型）。
+
+**端到端结果：总体指标与 token 消耗（Auto / 199 QA）**
+
+| 后端 | #QA | F1 | BLEU | LLM Score | Prompt Tokens | Completion Tokens | Total Tokens | LLM Calls | 平均延迟 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| SQLite | 199 | 0.327 | 0.301 | 0.370 | 1,287,813 | 5,624 | 1,293,437 | 398 | 5,805ms |
+| SQLiteVec | 199 | 0.307 | 0.285 | 0.325 | 407,969 | 5,556 | 413,525 | 396 | 6,327ms |
+
+**解读（locomo10_1）**：
+
+- **SQLiteVec 的 prompt token 约减少 3.2x**（top-k 有界检索），但在该样本上
+  **F1/BLEU/LLM Score 略低**（默认 top-k=10）。
+- 类别层面的表现存在差异：`sqlitevec` 在 `adversarial` 上更好（更多正确拒答），
+  但当关键信息未进入 top-k 时，其他类别会出现召回不足导致的下降。
+
+我们也在另一个代表性样本上复现相同配置。
+
+- 样本：`locomo10_6`（158 个 QA，包含全部类别）
+
+**端到端结果：总体指标与 token 消耗（Auto / 158 QA）**
+
+| 后端 | #QA | F1 | BLEU | LLM Score | Prompt Tokens | Completion Tokens | Total Tokens | LLM Calls | 平均延迟 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| SQLite | 158 | 0.269 | 0.243 | 0.289 | 1,296,580 | 5,103 | 1,301,683 | 340 | 6,359ms |
+| SQLiteVec | 158 | 0.274 | 0.254 | 0.295 | 362,903 | 4,773 | 367,676 | 324 | 6,928ms |
+
+**解读（locomo10_6）**：
+
+- **SQLiteVec 的 prompt token 约减少 3.6x**，同时 F1/BLEU/LLM Score 在该样本上
+  略有提升，但延迟会有小幅增加。
+- 与 `locomo10_1` 类似，`sqlitevec` 在 `adversarial` 上更强，但在当前设置下
+  `temporal`、`multi-hop` 仍然偏弱。
+
+**总体结论（locomo10_1 + locomo10_6）**：
+
+- SQLiteVec 在我们的子集实验中稳定地将 prompt token 降低到约 1/3 到 1/4。
+- 默认 top-k=10 下，答案质量的变化与样本相关；调大 top-k 可能提升召回，
+  但也会增加 prompt token。
+
+> 注：`Prompt Tokens`、`LLM Calls` 仅统计 QA 阶段 Agent 的模型调用，
+> 不包含 embedding 请求与 LLM-as-Judge 调用。`平均延迟` 为端到端总耗时
+> 按 #QA 平均（包含 embedding、LLM-as-Judge 以及 auto extraction）。
+
+**子集实验 B：Temporal-only token 成本微基准**
 
 **实验配置**：
 
@@ -221,6 +282,43 @@
 
 - 在该子集中，答案质量（F1/BLEU）一致，但 **SQLiteVec 的 prompt token 消耗约为 SQLite 的 1/3**。
   主要原因是 SQLiteVec 返回的是有界的 top-k 结果（默认 10），而 SQLite 后端可能返回更大规模的关键词匹配集合。
+
+**子集实验 C：向量 top-k 扫参 + 多次检索消融（Auto / 全类别）**
+
+前面的子集实验主要对比 `sqlite` 与 `sqlitevec` 在默认配置下的表现
+（top-k=10、单次检索）。为了回答“多取一些记忆（更大的 top-k）”或“多检索几次
+（多次 memory_search）”是否能提升端到端答案质量，我们在单个样本上做了一个小
+范围扫参。
+
+**实验配置**：
+
+- 数据集：LoCoMo `locomo10.json`
+- 样本：`locomo10_1`（199 个 QA，包含全部类别）
+- 场景：`auto`
+- 模型：`gpt-4o-mini`
+- LLM 评判：关闭（仅统计 F1/BLEU，以控制成本）
+
+**表 9：Top-k 与多次检索扫参结果（Auto / locomo10_1 / 199 QA）**
+
+| 后端 | vector-topk | qa-search-passes | F1 | BLEU | Prompt Tokens | Avg Prompt/QA | 平均延迟 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| SQLite | - | 1 | 0.299 | 0.283 | 1,322,360 | 6,645 | 3,316ms |
+| SQLiteVec | 5 | 1 | 0.320 | 0.296 | 346,253 | 1,740 | 4,182ms |
+| SQLiteVec | 10 | 1 | 0.343 | 0.315 | 398,751 | 2,004 | 4,352ms |
+| SQLiteVec | 20 | 1 | 0.329 | 0.308 | 621,790 | 3,125 | 4,180ms |
+| SQLiteVec | 40 | 1 | 0.327 | 0.303 | 965,423 | 4,851 | 4,460ms |
+| SQLiteVec | 10 | 2 | 0.342 | 0.312 | 659,981 | 3,316 | 5,198ms |
+
+**解读**：
+
+- 在该次运行中，**SQLiteVec（top-k=10）在 F1 上优于 SQLite**
+  （**0.343 vs 0.299**），同时 **prompt token 约减少 ~3.3x**
+  （有界检索带来的 token 控制）。
+- 在当前 benchmark 设置下，**top-k 并非越大越好**：top-k=20/40 虽然显著增加了
+  prompt token，但 F1/BLEU 略有下降。说明 QA Agent 对检索噪声较敏感，端到端质量
+  不是单纯由召回率决定。
+- `qa-search-passes=2`（强制两次检索）在部分类别上有改善（例如 multi-hop），但
+  **总体 F1 没有提升**，同时 token 与延迟都会上升，更适合作为诊断手段而非默认配置。
 
 **检索微基准（curated queries）**：
 
@@ -378,7 +476,7 @@ Agentic（pgvector）在记忆方案中取得最高多跳 F1（0.178），超越
 
 ### 5.1 各类别 F1 对比
 
-**表 8：各类别 F1（不含 adversarial）**
+**表 10：各类别 F1（不含 adversarial）**
 
 | 方法 | Single-Hop | Multi-Hop | Open-Domain | Temporal | Overall | 来源 |
 | --- | ---: | ---: | ---: | ---: | ---: | --- |
@@ -492,7 +590,7 @@ MemoryBank          |======                                    | 0.067
 
 ### 5.2 Overall LLM-as-Judge 对比
 
-**表 9：Overall LLM-as-Judge 与延迟**
+**表 11：Overall LLM-as-Judge 与延迟**
 
 | 方法 | Overall J | p95 延迟 (s) | 记忆 Tokens | 来源 |
 | --- | ---: | ---: | ---: | --- |

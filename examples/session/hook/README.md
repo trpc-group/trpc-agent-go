@@ -16,6 +16,7 @@ This example shows how to use session hooks for:
   - `OPENAI_API_KEY`
   - `OPENAI_BASE_URL` (default `https://api.openai.com/v1`)
 - Optional: `MODEL_NAME` (default `deepseek-chat`)
+- Optional (SQLite backend): `SQLITE_SESSION_DSN` (default: `file:sessions.db?_busy_timeout=5000`)
 
 ## Quick start
 ```bash
@@ -25,6 +26,10 @@ export OPENAI_BASE_URL="https://api.openai.com/v1"
 
 # Basic content filtering.
 go run . -model="${MODEL_NAME:-deepseek-chat}"
+
+# Use SQLite backend (persists to a local file).
+export SQLITE_SESSION_DSN="file:sessions.db?_busy_timeout=5000"
+go run . -session=sqlite
 
 # With consecutive user message handling (merge strategy).
 go run . -consecutive=merge
@@ -74,7 +79,7 @@ Console snippets you should notice:
 
 ## Files of interest
 - `hooks.go`: hook implementations (`MarkViolationHook`, `FilterViolationHook`, `FixConsecutiveUserMessagesHook`), tag parsing/append helpers.
-- `main.go`: wires hooks into in-memory session service and runs the demo conversation.
+- `main.go`: wires hooks into the session service (selected by `-session`) and runs the demo conversation.
 
 ## Sample output (abridged)
 ```text
@@ -116,4 +121,3 @@ Assistant: ...
 [4] user: Tell me a short joke
 [5] assistant: I told my wife she was drawing her eyebrows too ...
 ```
-

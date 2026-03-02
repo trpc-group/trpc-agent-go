@@ -1,5 +1,6 @@
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -9,13 +10,14 @@
 
 // Package main demonstrates session TTL (Time-To-Live) functionality.
 //
-// This example shows a chatbot that remembers conversation history within a session,
-// but the session expires after a configured TTL duration. After expiration,
-// the chatbot loses all memory of the previous conversation.
+// This example shows a chatbot that remembers conversation history within a
+// session, but the session expires after a configured TTL duration. After
+// expiration, the chatbot loses all memory of the previous conversation.
 //
 // Usage:
 //
 //	go run main.go -session=inmemory
+//	go run main.go -session=sqlite
 //	go run main.go -session=redis
 //	go run main.go -session=mysql
 //	go run main.go -session=postgres
@@ -23,10 +25,14 @@
 //
 // Environment variables by session type:
 //
+//	sqlite:     SQLITE_SESSION_DSN (default:
+//	  file:sessions.db?_busy_timeout=5000)
 //	redis:      REDIS_ADDR (default: localhost:6379)
 //	postgres:   PG_HOST, PG_PORT, PG_USER, PG_PASSWORD, PG_DATABASE
-//	mysql:      MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE
-//	clickhouse: CLICKHOUSE_HOST, CLICKHOUSE_PORT, CLICKHOUSE_USER, CLICKHOUSE_PASSWORD, CLICKHOUSE_DATABASE
+//	mysql:      MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD,
+//	  MYSQL_DATABASE
+//	clickhouse: CLICKHOUSE_HOST, CLICKHOUSE_PORT, CLICKHOUSE_USER,
+//	  CLICKHOUSE_PASSWORD, CLICKHOUSE_DATABASE
 package main
 
 import (
@@ -35,6 +41,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	util "trpc.group/trpc-go/trpc-agent-go/examples/session"
@@ -42,9 +49,23 @@ import (
 )
 
 var (
-	modelName   = flag.String("model", os.Getenv("MODEL_NAME"), "Name of the model to use (default: MODEL_NAME env var)")
-	sessionType = flag.String("session", "inmemory", "Session backend: inmemory/redis/mysql/postgres/clickhouse")
-	ttlSeconds  = flag.Int("ttl", 10, "Session TTL in seconds (should be longer than total conversation time)")
+	modelName = flag.String(
+		"model",
+		os.Getenv("MODEL_NAME"),
+		"Name of the model to use (default: MODEL_NAME env var)",
+	)
+	sessionType = flag.String(
+		"session",
+		"inmemory",
+		"Session backend: inmemory/sqlite/redis/mysql/"+
+			"postgres/clickhouse",
+	)
+	ttlSeconds = flag.Int(
+		"ttl",
+		10,
+		"Session TTL in seconds (should be longer than "+
+			"total conversation time)",
+	)
 )
 
 const (
@@ -57,22 +78,26 @@ func main() {
 
 	ttl := time.Duration(*ttlSeconds) * time.Second
 
-	fmt.Println("╔══════════════════════════════════════════════════════════════╗")
-	fmt.Println("║           Session TTL (Time-To-Live) Demo                    ║")
-	fmt.Println("╚══════════════════════════════════════════════════════════════╝")
-	fmt.Printf("\nBackend: %s | TTL: %v\n", *sessionType, ttl)
+	const bannerWidth = 50
+	fmt.Println(strings.Repeat("=", bannerWidth))
+	fmt.Println("Session TTL (Time-To-Live) Demo")
+	fmt.Println(strings.Repeat("=", bannerWidth))
+	fmt.Printf("Backend: %s | TTL: %v\n\n", *sessionType, ttl)
 
-	sessionService, err := util.NewSessionServiceByType(util.SessionType(*sessionType), util.SessionServiceConfig{
-		EventLimit: 100,
-		TTL:        ttl,
-	})
+	sessionService, err := util.NewSessionServiceByType(
+		util.SessionType(*sessionType),
+		util.SessionServiceConfig{
+			EventLimit: 100,
+			TTL:        ttl,
+		},
+	)
 	if err != nil {
 		log.Fatalf("Failed to create session service: %v", err)
 	}
 
 	cfg := util.DefaultRunnerConfig()
 	cfg.AppName = appName
-	cfg.Instruction = "You are a helpful assistant. Keep responses brief (1-2 sentences)."
+	cfg.Instruction = "You are a helpful assistant. Keep responses brief."
 	if *modelName != "" {
 		cfg.ModelName = *modelName
 	}
@@ -84,7 +109,7 @@ func main() {
 	key := session.Key{AppName: appName, UserID: userID, SessionID: sessionID}
 
 	// ========== Phase 1: Build conversation history ==========
-	fmt.Println("\n┌─ Phase 1: Building conversation history ─────────────────────┐")
+	fmt.Println("Phase 1: building conversation history")
 
 	messages := []string{
 		"My name is Alice and I'm a software engineer.",
@@ -109,24 +134,36 @@ func main() {
 	}
 	eventCount := len(sess.Events)
 	if eventCount < 6 {
-		log.Fatalf("VERIFY FAILED: expected at least 6 events (3 user + 3 assistant), got %d", eventCount)
+		log.Fatalf(
+			"VERIFY FAILED: expected >= 6 events, got %d",
+			eventCount,
+		)
 	}
 
 	// Debug: print all session events
-	if err := util.PrintSessionEvents(ctx, sessionService, appName, userID, sessionID); err != nil {
+	if err := util.PrintSessionEvents(
+		ctx,
+		sessionService,
+		appName,
+		userID,
+		sessionID,
+	); err != nil {
 		log.Printf("PrintSessionEvents failed: %v", err)
 	}
-	fmt.Printf("└─ Phase 1 Complete: %d events stored ─────────────────────────┘\n", eventCount)
+	fmt.Printf(
+		"Phase 1 complete: %d events stored\n\n",
+		eventCount,
+	)
 
 	// ========== Phase 2: Wait for TTL expiration ==========
-	fmt.Println("\n┌─ Phase 2: Waiting for session to expire ─────────────────────┐")
+	fmt.Println("Phase 2: waiting for session to expire")
 
 	waitTime := ttl + 2*time.Second
 	for remaining := int(waitTime.Seconds()); remaining > 0; remaining-- {
-		fmt.Printf("\r│  Countdown: %2d seconds remaining...                          │", remaining)
+		fmt.Printf("\rWaiting... %2d seconds remaining", remaining)
 		time.Sleep(1 * time.Second)
 	}
-	fmt.Printf("\r│  TTL expired! Session should be cleaned up.                  │\n")
+	fmt.Println("\nTTL expired. Session should be cleaned up.")
 
 	// Verify: session should be gone
 	sess, err = sessionService.GetSession(ctx, key)
@@ -134,13 +171,16 @@ func main() {
 		log.Fatalf("GetSession failed: %v", err)
 	}
 	if sess != nil {
-		log.Fatalf("VERIFY FAILED: session should be nil after TTL, but has %d events", len(sess.Events))
+		log.Fatalf(
+			"VERIFY FAILED: expected expired session to be nil, got %d events",
+			len(sess.Events),
+		)
 	}
-	fmt.Println("└─ Phase 2 Complete: Session cleaned up ───────────────────────┘")
+	fmt.Println("Phase 2 complete: session cleaned up\n")
 
 	// ========== Phase 3: New session after expiry ==========
-	fmt.Println("\n┌─ Phase 3: Fresh conversation after expiry ───────────────────┐")
-	fmt.Println("│  (The assistant should NOT remember Alice)                   │")
+	fmt.Println("Phase 3: fresh conversation after expiry")
+	fmt.Println("(The assistant should NOT remember Alice.)")
 
 	_, err = util.RunAgent(ctx, r, userID, sessionID, "What's my name?", true)
 	if err != nil {
@@ -156,20 +196,35 @@ func main() {
 		log.Fatal("VERIFY FAILED: new session should be created")
 	}
 	if len(sess.Events) < 2 {
-		log.Fatalf("VERIFY FAILED: new session should have at least 2 events, got %d", len(sess.Events))
+		log.Fatalf(
+			"VERIFY FAILED: expected >= 2 events, got %d",
+			len(sess.Events),
+		)
 	}
 	if len(sess.Events) >= eventCount {
-		log.Fatalf("VERIFY FAILED: new session should have fewer events than before expiry (%d >= %d)",
-			len(sess.Events), eventCount)
+		log.Fatalf(
+			"VERIFY FAILED: expected fewer events than before expiry (%d >= %d)",
+			len(sess.Events),
+			eventCount,
+		)
 	}
 
 	// Debug: print new session events
-	if err := util.PrintSessionEvents(ctx, sessionService, appName, userID, sessionID); err != nil {
+	if err := util.PrintSessionEvents(
+		ctx,
+		sessionService,
+		appName,
+		userID,
+		sessionID,
+	); err != nil {
 		log.Printf("PrintSessionEvents failed: %v", err)
 	}
-	fmt.Printf("└─ Phase 3 Complete: %d events (fresh start) ──────────────────┘\n", len(sess.Events))
+	fmt.Printf(
+		"Phase 3 complete: %d events (fresh start)\n\n",
+		len(sess.Events),
+	)
 
 	// ========== Summary ==========
-	fmt.Println("\n=== Demo Complete ===")
-	fmt.Println("Verified: session storage, TTL expiration, fresh start after expiry")
+	fmt.Println("Demo complete.")
+	fmt.Println("Verified: storage, TTL expiration, fresh start.")
 }
