@@ -726,8 +726,35 @@ func TestValidateAgentRunOptions(t *testing.T) {
 			agentType: agentTypeLLM,
 		},
 		{
+			name:      "llm ralph loop missing stop condition",
+			agentType: agentTypeLLM,
+			opts: runOptions{
+				RalphLoopEnabled: true,
+			},
+			wantErr: true,
+		},
+		{
+			name:      "llm ralph loop invalid env",
+			agentType: agentTypeLLM,
+			opts: runOptions{
+				RalphLoopEnabled:       true,
+				RalphLoopVerifyCommand: "echo ok",
+				RalphLoopVerifyEnv:     "A",
+			},
+			wantErr: true,
+		},
+		{
 			name:      "claude ok",
 			agentType: agentTypeClaudeCode,
+		},
+		{
+			name:      "claude ralph loop",
+			agentType: agentTypeClaudeCode,
+			opts: runOptions{
+				RalphLoopEnabled:       true,
+				RalphLoopVerifyCommand: "echo ok",
+			},
+			wantErr: true,
 		},
 		{
 			name:      "unknown agent",
@@ -813,6 +840,36 @@ func TestValidateAgentRunOptions(t *testing.T) {
 			require.NoError(t, err)
 		})
 	}
+}
+
+func TestRalphLoopConfigFromRunOptions_ParsesVerifyEnv(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := ralphLoopConfigFromRunOptions(runOptions{
+		RalphLoopEnabled:       true,
+		RalphLoopMaxIterations: 7,
+		RalphLoopVerifyCommand: "echo ok",
+		RalphLoopVerifyEnv:     "A=B,X=1",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	require.Equal(t, 7, cfg.MaxIterations)
+	require.Equal(t, "echo ok", cfg.VerifyCommand)
+	require.Equal(t, map[string]string{
+		"A": "B",
+		"X": "1",
+	}, cfg.VerifyEnv)
+}
+
+func TestRalphLoopConfigFromRunOptions_NegativeTimeoutFails(t *testing.T) {
+	t.Parallel()
+
+	_, err := ralphLoopConfigFromRunOptions(runOptions{
+		RalphLoopEnabled:       true,
+		RalphLoopVerifyCommand: "echo ok",
+		RalphLoopVerifyTimeout: -1 * time.Second,
+	})
+	require.Error(t, err)
 }
 
 func TestParseClaudeOutputFormat(t *testing.T) {
