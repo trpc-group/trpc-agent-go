@@ -332,13 +332,58 @@ func (t *RunTool) Call(
 	if err != nil {
 		return nil, err
 	}
-	forceSave := t.forceSaveArtifacts
-	if forceSave && len(in.OutputFiles) > 0 {
-		in.SaveArtifacts = true
+	in, saveRequested, outputsSaveSkipReason := t.applyArtifactSaveOverrides(
+		ctx,
+		in,
+	)
+	eng, ws, ctxIO, err := t.prepareWorkspaceForRun(ctx, in)
+	if err != nil {
+		return nil, err
 	}
-	if forceSave && in.Outputs != nil && len(in.OutputFiles) == 0 {
-		in.Outputs.Save = true
+	cwd := resolveCWD(in.Cwd, in.Skill)
+	rr, err := t.runProgram(ctx, eng, ws, cwd, in)
+	if err != nil {
+		return nil, err
 	}
+
+	autoFiles := t.autoExportWorkspaceOut(ctxIO, eng, ws, in)
+	files, manifest, err := t.prepareOutputs(ctxIO, eng, ws, in)
+	if err != nil {
+		return nil, err
+	}
+	out, err := t.buildRunOutput(
+		ctx,
+		rr,
+		autoFiles,
+		files,
+		manifest,
+		in,
+		saveRequested,
+		outputsSaveSkipReason,
+	)
+	if err != nil {
+		return nil, err
+	}
+	toolcache.StoreSkillRunOutputFilesFromContext(ctx, files)
+	return out, nil
+}
+
+var _ tool.Tool = (*RunTool)(nil)
+var _ tool.CallableTool = (*RunTool)(nil)
+
+func (t *RunTool) applyArtifactSaveOverrides(
+	ctx context.Context,
+	in runInput,
+) (runInput, bool, string) {
+	if t.forceSaveArtifacts {
+		if len(in.OutputFiles) > 0 {
+			in.SaveArtifacts = true
+		}
+		if in.Outputs != nil && len(in.OutputFiles) == 0 {
+			in.Outputs.Save = true
+		}
+	}
+
 	saveRequested := (in.SaveArtifacts && len(in.OutputFiles) > 0) ||
 		(in.Outputs != nil && in.Outputs.Save)
 	var outputsSaveSkipReason string
@@ -348,51 +393,58 @@ func (t *RunTool) Call(
 			in.Outputs.Save = false
 		}
 	}
+	return in, saveRequested, outputsSaveSkipReason
+}
+
+func (t *RunTool) prepareWorkspaceForRun(
+	ctx context.Context,
+	in runInput,
+) (codeexecutor.Engine, codeexecutor.Workspace, context.Context, error) {
 	root, err := t.repo.Path(in.Skill)
 	if err != nil {
-		return nil, err
+		return nil, codeexecutor.Workspace{}, nil, err
 	}
 	eng := t.ensureEngine()
 	ws, err := t.createWorkspace(ctx, eng, in.Skill)
 	if err != nil {
-		return nil, err
+		return nil, codeexecutor.Workspace{}, nil, err
 	}
 	if err := t.stageSkill(ctx, eng, ws, root, in.Skill); err != nil {
-		return nil, err
+		return nil, codeexecutor.Workspace{}, nil, err
 	}
-	// Prepare IO context and stage declared inputs.
 	ctxIO := withArtifactContext(ctx)
 	if len(in.Inputs) > 0 {
 		if err := eng.FS().StageInputs(ctxIO, ws, in.Inputs); err != nil {
-			return nil, err
+			return nil, codeexecutor.Workspace{}, nil, err
 		}
 	}
-	// Compute CWD and execute program.
-	cwd := resolveCWD(in.Cwd, in.Skill)
-	rr, err := t.runProgram(ctx, eng, ws, cwd, in)
-	if err != nil {
-		return nil, err
-	}
+	return eng, ws, ctxIO, nil
+}
 
-	autoFiles := t.autoExportWorkspaceOut(ctxIO, eng, ws, in)
-
-	// Collect outputs via spec or legacy globs.
-	files, manifest, err := t.prepareOutputs(
-		ctxIO, eng, ws, in,
-	)
-	if err != nil {
-		return nil, err
-	}
+func (t *RunTool) buildRunOutput(
+	ctx context.Context,
+	rr codeexecutor.RunResult,
+	autoFiles []codeexecutor.File,
+	files []codeexecutor.File,
+	manifest *codeexecutor.OutputManifest,
+	in runInput,
+	saveRequested bool,
+	outputsSaveSkipReason string,
+) (runOutput, error) {
 	trimTruncatedUTF8TextFiles(files)
 	out := buildRunOutput(rr, files)
 	mergeAutoPrimaryOutput(autoFiles, &out)
 	appendOutputsSaveWarning(&out, outputsSaveSkipReason)
 	saveArtifacts := in.SaveArtifacts && len(in.OutputFiles) > 0
 	if err := t.attachArtifactsIfRequested(
-		ctx, &out, files, in.ArtifactPrefix, saveArtifacts,
+		ctx,
+		&out,
+		files,
+		in.ArtifactPrefix,
+		saveArtifacts,
 		in.OmitInline,
 	); err != nil {
-		return nil, err
+		return runOutput{}, err
 	}
 	mergeManifestArtifactRefs(manifest, &out)
 	if len(out.OutputFiles) > 0 && !saveRequested {
@@ -400,12 +452,8 @@ func (t *RunTool) Call(
 			warnOutputFilesWorkspaceOnly)
 	}
 	applyOmitInlineContent(ctx, &out, in.OmitInline)
-	toolcache.StoreSkillRunOutputFilesFromContext(ctx, files)
 	return out, nil
 }
-
-var _ tool.Tool = (*RunTool)(nil)
-var _ tool.CallableTool = (*RunTool)(nil)
 
 func (t *RunTool) autoExportWorkspaceOut(
 	ctx context.Context,
