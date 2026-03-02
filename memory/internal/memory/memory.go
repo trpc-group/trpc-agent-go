@@ -28,13 +28,17 @@ import (
 var (
 	seg     gse.Segmenter
 	segOnce sync.Once
+	segErr  error
 )
 
-func getSegmenter() *gse.Segmenter {
+func getSegmenter() (*gse.Segmenter, error) {
 	segOnce.Do(func() {
-		seg.LoadDict()
+		segErr = seg.LoadDict()
 	})
-	return &seg
+	if segErr != nil {
+		return nil, fmt.Errorf("load segmenter dict failed: %w", segErr)
+	}
+	return &seg, nil
 }
 
 const (
@@ -234,12 +238,19 @@ func BuildSearchTokens(query string) []string {
 		}
 	}
 	if hasCJK {
-		s := getSegmenter()
+		s, err := getSegmenter()
+		if err != nil {
+			return nil
+		}
 		words := s.CutSearch(q, true)
 		toks := make([]string, 0, len(words))
 		for _, w := range words {
 			w = strings.TrimSpace(w)
 			if w == "" || isCJKStopword(w) {
+				continue
+			}
+			// Skip tokens that are purely punctuation or symbols.
+			if isPunctToken(w) {
 				continue
 			}
 			toks = append(toks, w)
@@ -296,6 +307,18 @@ func isPunct(r rune) bool {
 	return unicode.IsPunct(r) || unicode.IsSymbol(r)
 }
 
+// isPunctToken reports if the string consists entirely of punctuation or
+// symbol runes. This is used to filter out tokens like "，" or "！" that
+// jieba may produce from CJK text.
+func isPunctToken(s string) bool {
+	for _, r := range s {
+		if !isPunct(r) {
+			return false
+		}
+	}
+	return true
+}
+
 // dedupStrings returns a deduplicated copy of the input slice.
 func dedupStrings(in []string) []string {
 	seen := make(map[string]struct{}, len(in))
@@ -347,15 +370,18 @@ func ScoreMemoryEntry(entry *memory.Entry, query string) float64 {
 
 	tokens := BuildSearchTokens(query)
 	if len(tokens) == 0 {
-		// Fallback to substring match.
+		// Fallback to substring match with a lower score to avoid
+		// distorting ranking when no tokens can be generated (e.g.
+		// short queries or stopword-only queries).
+		const fallbackScore = 0.5
 		ql := strings.ToLower(query)
 		contentLower := strings.ToLower(entry.Memory.Memory)
 		if strings.Contains(contentLower, ql) {
-			return 1
+			return fallbackScore
 		}
 		for _, topic := range entry.Memory.Topics {
 			if strings.Contains(strings.ToLower(topic), ql) {
-				return 1
+				return fallbackScore
 			}
 		}
 		return 0

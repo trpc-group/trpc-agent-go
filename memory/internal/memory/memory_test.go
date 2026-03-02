@@ -488,16 +488,33 @@ func TestMatchMemoryEntry_FallbackNoTokens(t *testing.T) {
 }
 
 func TestBuildSearchTokens_Duplicates(t *testing.T) {
-	result := BuildSearchTokens("中中中中")
-	assert.NotNil(t, result)
-	// Jieba segments repeated characters; dedup should still work.
-	for i, tok := range result {
-		for j, other := range result {
-			if i != j {
-				assert.NotEqual(t, tok, other, "duplicate token found")
-			}
+	t.Run("english duplicates", func(t *testing.T) {
+		result := BuildSearchTokens("foo foo bar foo bar baz")
+		assert.Equal(t, []string{"foo", "bar", "baz"}, result)
+	})
+
+	t.Run("chinese duplicates", func(t *testing.T) {
+		result := BuildSearchTokens("中中中中")
+		assert.NotNil(t, result)
+		// Verify no duplicate tokens exist.
+		seen := make(map[string]struct{})
+		for _, tok := range result {
+			_, exists := seen[tok]
+			assert.False(t, exists, "duplicate token found: %s", tok)
+			seen[tok] = struct{}{}
 		}
-	}
+	})
+
+	t.Run("mixed duplicates", func(t *testing.T) {
+		result := BuildSearchTokens("hello hello 世界 世界")
+		assert.NotNil(t, result)
+		seen := make(map[string]struct{})
+		for _, tok := range result {
+			_, exists := seen[tok]
+			assert.False(t, exists, "duplicate token found: %s", tok)
+			seen[tok] = struct{}{}
+		}
+	})
 }
 
 func TestMatchMemoryEntry_EmptyTokensWithTopics(t *testing.T) {

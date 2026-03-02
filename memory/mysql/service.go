@@ -30,9 +30,9 @@ var _ memory.Service = (*Service)(nil)
 
 const (
 	// minSearchScore is the minimum relevance score for a memory to be
-	// included in search results. With bigram tokenization a single
-	// common token (e.g. "用户") matching yields ~0.2 for a typical
-	// 5-token query; the threshold filters out such noise.
+	// included in search results. With jieba (gse) tokenization a single
+	// common token matching yields a low fraction for a typical
+	// multi-token query; the threshold filters out such noise.
 	minSearchScore = 0.3
 
 	// defaultMaxSearchResults caps the number of search results.
