@@ -116,6 +116,21 @@ func (m *Message) AddFileID(fileID string) {
 	})
 }
 
+// AddFileIDWithName adds a file ID and filename to the message.
+//
+// The filename is not always sent to the model provider when FileID is used,
+// but it can be useful for downstream tooling (for example, staging user file
+// inputs into a skill workspace).
+func (m *Message) AddFileIDWithName(fileID, name string) {
+	m.ContentParts = append(m.ContentParts, ContentPart{
+		Type: ContentTypeFile,
+		File: &File{
+			Name:   name,
+			FileID: fileID,
+		},
+	})
+}
+
 // AddImageURL adds an image URL to the message.
 // The argument of detail is the detail level: "low", "high", "auto".
 // If detail is empty, it will be set to "auto".

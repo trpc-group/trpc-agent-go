@@ -12,6 +12,7 @@ package openai
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -2468,6 +2469,95 @@ func TestGetFile_Success(t *testing.T) {
 	assert.Equalf(t, "file_x", obj.ID, "unexpected file object: %#v", obj)
 }
 
+func TestDownloadFile_Success(t *testing.T) {
+	const (
+		fileID   = "file_x"
+		wantPath = "/openapi/v1/files/" + fileID + "/content"
+		wantMime = "application/octet-stream"
+	)
+	want := []byte("hello")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodGet, r.Method)
+		require.Equal(t, wantPath, r.URL.Path)
+		w.Header().Set("Content-Type", wantMime)
+		_, _ = w.Write(want)
+	}))
+	defer server.Close()
+
+	m := New("test-model", WithAPIKey("k"), WithBaseURL(server.URL))
+	got, mime, err := m.DownloadFile(context.Background(), fileID)
+	require.NoErrorf(t, err, "DownloadFile failed: %v", err)
+	require.Equal(t, want, got)
+	require.Equal(t, wantMime, mime)
+}
+
+func TestDownloadFile_EmptyID_Error(t *testing.T) {
+	m := New("test-model", WithAPIKey("k"), WithBaseURL("http://x"))
+	_, _, err := m.DownloadFile(context.Background(), " ")
+	require.Error(t, err)
+}
+
+func TestDownloadFile_NoContentType_Detects(t *testing.T) {
+	const (
+		fileID   = "file_x"
+		wantPath = "/openapi/v1/files/" + fileID + "/content"
+	)
+	want := []byte("hello")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodGet, r.Method)
+		require.Equal(t, wantPath, r.URL.Path)
+		_, _ = w.Write(want)
+	}))
+	defer server.Close()
+
+	m := New("test-model", WithAPIKey("k"), WithBaseURL(server.URL))
+	got, mime, err := m.DownloadFile(context.Background(), fileID)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	require.True(t, strings.HasPrefix(mime, "text/plain"))
+}
+
+func TestDownloadFile_ErrorStatus(t *testing.T) {
+	const (
+		fileID   = "file_x"
+		wantPath = "/openapi/v1/files/" + fileID + "/content"
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodGet, r.Method)
+		require.Equal(t, wantPath, r.URL.Path)
+		http.Error(w, "bad", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	m := New("test-model", WithAPIKey("k"), WithBaseURL(server.URL))
+	_, _, err := m.DownloadFile(context.Background(), fileID)
+	require.Error(t, err)
+}
+
+func TestDownloadFile_HunyuanVariant(t *testing.T) {
+	const (
+		fileID   = "file_x"
+		wantPath = "/openapi/v1/files/" + fileID + "/content"
+	)
+	want := []byte("hello")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodGet, r.Method)
+		require.Equal(t, wantPath, r.URL.Path)
+		_, _ = w.Write(want)
+	}))
+	defer server.Close()
+
+	m := New("test-model", WithAPIKey("k"), WithBaseURL(server.URL),
+		WithVariant(VariantHunyuan))
+	got, _, err := m.DownloadFile(context.Background(), fileID)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+}
+
 // TestDeleteFile_Success tests DeleteFile using a mock server.
 func TestDeleteFile_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -3004,6 +3094,19 @@ func TestConvertUserMessageContent_AllContentTypes(t *testing.T) {
 		assert.Empty(t, extraFields, "expected no extra fields")
 		assert.Len(t, content.OfArrayOfContentParts, 3, "expected 3 content parts")
 	})
+}
+
+func TestConvertUserMessageContent_OmitFileContentParts(t *testing.T) {
+	m := New("test-model", WithOmitFileContentParts(true))
+	message := model.NewUserMessage("Uploaded file: notes.txt")
+	message.AddFileData("notes.txt", []byte("hello"), "text/plain")
+
+	content, extraFields := m.convertUserMessageContent(message)
+	assert.Empty(t, extraFields, "expected no extra fields")
+	require.True(t, content.OfString.Valid(), "expected string content")
+	assert.Equal(t, message.Content, content.OfString.Value)
+	assert.Empty(t, content.OfArrayOfContentParts,
+		"expected no content parts")
 }
 
 // TestBuildChatRequest_EdgeCases tests edge cases in buildChatRequest.
@@ -6475,4 +6578,33 @@ func TestGenerateContent_OptimizeForCache_Disabled(t *testing.T) {
 
 	// Verify original order is preserved (user, system, assistant)
 	assert.Equal(t, []string{"user", "system", "assistant"}, capturedRoles)
+}
+
+func TestFileToParams_FileDataUsesDataURL(t *testing.T) {
+	f := &model.File{
+		Name:     "notes.txt",
+		Data:     []byte("hello"),
+		MimeType: "text/plain",
+	}
+	p := fileToParams(f)
+	require.True(t, p.FileData.Valid())
+	require.Equal(t, "notes.txt", p.Filename.Value)
+	const wantPrefix = "data:text/plain;base64,"
+	want := wantPrefix + base64.StdEncoding.EncodeToString([]byte("hello"))
+	require.Equal(t, want, p.FileData.Value)
+	require.False(t, p.FileID.Valid())
+}
+
+func TestFileToParams_FileIDWins(t *testing.T) {
+	f := &model.File{
+		Name:     "notes.txt",
+		Data:     []byte("hello"),
+		MimeType: "text/plain",
+		FileID:   "file_123",
+	}
+	p := fileToParams(f)
+	require.True(t, p.FileID.Valid())
+	require.Equal(t, "file_123", p.FileID.Value)
+	require.False(t, p.FileData.Valid())
+	require.False(t, p.Filename.Valid())
 }
