@@ -134,7 +134,7 @@ func TestService_getSessionSummaryTTL(t *testing.T) {
 	err = client.Set(ctx, summaryKey, summaryBytes, 0).Err()
 	require.NoError(t, err)
 
-	_, err = service.getSession(ctx, key, 0, time.Time{})
+	_, err = service.GetSession(ctx, key)
 	require.NoError(t, err)
 
 	ttlVal := client.TTL(ctx, summaryKey).Val()

@@ -260,3 +260,38 @@ func TestService_AppendTrackEventRecover(t *testing.T) {
 	})
 	assert.NoError(t, err)
 }
+
+func TestService_AppendTrackEvent_Async_ContextCancelled(t *testing.T) {
+	// Create a service with unbuffered channel and no consumer
+	// to simulate blocking on channel write
+	ch := make(chan *trackEventPair) // Unbuffered channel
+
+	service := &Service{
+		opts: ServiceOpts{
+			enableAsyncPersist: true,
+		},
+		trackEventChans: []chan *trackEventPair{ch},
+	}
+
+	sess := &session.Session{
+		ID:      "sess",
+		AppName: "app",
+		UserID:  "user",
+		State:   make(session.StateMap),
+	}
+
+	trackEvent := &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"test"`),
+		Timestamp: time.Now(),
+	}
+
+	// Create a cancelled context
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	// When context is cancelled, enqueue should return ctx.Err()
+	err := service.AppendTrackEvent(cancelledCtx, sess, trackEvent)
+	require.Error(t, err)
+	assert.Equal(t, context.Canceled, err)
+}

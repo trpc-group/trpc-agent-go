@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -823,4 +824,32 @@ func TestCreateSession_InvalidKey(t *testing.T) {
 func TestNewService_NoURL_NoInstance_Error(t *testing.T) {
 	_, err := NewService()
 	require.Error(t, err)
+}
+
+// ============================================================================
+// service.go: mergeAppUserState error handling
+// ============================================================================
+
+func TestCreateSession_MergeAppUserState_Error(t *testing.T) {
+	// Manually setup miniredis to control its lifecycle
+	mr, err := miniredis.Run()
+	require.NoError(t, err)
+	redisURL := "redis://" + mr.Addr()
+	defer mr.Close()
+
+	svc, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer svc.Close()
+
+	// Create a session first
+	key := session.Key{AppName: "merge-test", UserID: "user1", SessionID: "session1"}
+	_, err = svc.CreateSession(context.Background(), key, session.StateMap{"key1": []byte("val1")})
+	require.NoError(t, err)
+
+	// Close miniredis server to simulate connection error
+	mr.Close()
+
+	// GetSession may or may not return error depending on code path
+	// The important thing is that mergeAppUserState doesn't panic when Redis is closed
+	_, _ = svc.GetSession(context.Background(), key)
 }

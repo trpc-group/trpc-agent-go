@@ -134,6 +134,30 @@ func TestClient_ListUserStates_Empty(t *testing.T) {
 	assert.Empty(t, result)
 }
 
+func TestClient_ListAppStates_Error(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+
+	// Close miniredis to simulate connection error
+	mr.Close()
+
+	_, err := c.ListAppStates(ctx, "myapp")
+	require.Error(t, err)
+}
+
+func TestClient_ListUserStates_Error(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+
+	// Close miniredis to simulate connection error
+	mr.Close()
+
+	_, err := c.ListUserStates(ctx, session.UserKey{AppName: "x", UserID: "y"})
+	require.Error(t, err)
+}
+
 func TestClient_RefreshAppStateTTL(t *testing.T) {
 	mr, rdb := setupMiniredis(t)
 	c := NewClient(rdb, Config{AppStateTTL: 5 * time.Second})

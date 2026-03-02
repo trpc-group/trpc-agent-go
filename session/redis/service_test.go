@@ -622,7 +622,7 @@ func TestDeleteSessionState(t *testing.T) {
 	require.NotNil(t, retrievedSess)
 
 	// Delete session state
-	err = service.deleteSessionState(ctx, key)
+	err = service.DeleteSession(ctx, key)
 	require.NoError(t, err)
 
 	// Verify session is deleted

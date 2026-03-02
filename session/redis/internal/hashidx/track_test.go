@@ -185,3 +185,27 @@ func TestClient_AppendTrackEvent_MultipleTracksOnSameSession(t *testing.T) {
 	assert.Len(t, results["alpha"], 1)
 	assert.Len(t, results["beta"], 1)
 }
+
+func TestClient_GetTrackEvents_Error(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "err1"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	tracksJSON, _ := json.Marshal([]string{"alpha"})
+	te := &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"payload"`),
+		Timestamp: time.Now(),
+	}
+	require.NoError(t, c.AppendTrackEvent(ctx, key, te, tracksJSON))
+
+	// Close miniredis to simulate connection error
+	mr.Close()
+
+	_, err = c.GetTrackEvents(ctx, key, []session.Track{"alpha"}, 0, time.Time{})
+	require.Error(t, err)
+}
