@@ -45,6 +45,25 @@ func TestRun_ParseErrorExitCode(t *testing.T) {
 	require.Equal(t, 2, exitErr.Code)
 }
 
+func TestNewRuntime_BuildsGatewayHandler(t *testing.T) {
+	t.Parallel()
+
+	rt, err := NewRuntime(context.Background(), []string{
+		"-mode", "mock",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = rt.Close()
+	})
+
+	require.NotNil(t, rt.Gateway.Handler)
+	require.NotEmpty(t, rt.Gateway.HealthPath)
+	require.NotEmpty(t, rt.Gateway.MessagesPath)
+	require.NotEmpty(t, rt.Gateway.StatusPath)
+	require.NotEmpty(t, rt.Gateway.CancelPath)
+	require.Empty(t, rt.Channels)
+}
+
 func TestMain_HelpReturnsUsageCode(t *testing.T) {
 	t.Parallel()
 
