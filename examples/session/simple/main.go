@@ -1,5 +1,6 @@
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -14,12 +15,16 @@
 // Usage:
 //
 //	go run main.go -session=inmemory
+//	go run main.go -session=sqlite
 //	go run main.go -session=redis
 //	go run main.go -session=postgres
 //	go run main.go -session=mysql
 //	go run main.go -session=clickhouse
 //
 // Environment variables by session type (example usage):
+//
+//	sqlite:
+//		export SQLITE_SESSION_DSN="file:sessions.db?_busy_timeout=5000"
 //
 //	redis:
 //		export REDIS_ADDR="localhost:6379"
@@ -69,12 +74,38 @@ import (
 )
 
 var (
-	modelName       = flag.String("model", os.Getenv("MODEL_NAME"), "Name of the model to use (default: MODEL_NAME env var)")
-	sessServiceName = flag.String("session", "inmemory", "Name of the session service to use, inmemory / redis / postgres / mysql / clickhouse")
-	streaming       = flag.Bool("streaming", true, "Enable streaming mode for responses")
-	eventLimit      = flag.Int("event-limit", 1000, "Maximum number of events to store per session")
-	sessionTTL      = flag.Duration("session-ttl", 10*time.Second, "Session time-to-live duration")
-	debugMode       = flag.Bool("debug", true, "Enable debug mode to print session events after each turn")
+	modelName = flag.String(
+		"model",
+		os.Getenv("MODEL_NAME"),
+		"Name of the model to use (default: MODEL_NAME env var)",
+	)
+	sessServiceName = flag.String(
+		"session",
+		"inmemory",
+		"Name of the session service to use, inmemory / "+
+			"sqlite / redis / postgres / mysql / clickhouse",
+	)
+	streaming = flag.Bool(
+		"streaming",
+		true,
+		"Enable streaming mode for responses",
+	)
+	eventLimit = flag.Int(
+		"event-limit",
+		1000,
+		"Maximum number of events to store per session",
+	)
+	sessionTTL = flag.Duration(
+		"session-ttl",
+		10*time.Second,
+		"Session time-to-live duration",
+	)
+	debugMode = flag.Bool(
+		"debug",
+		true,
+		"Enable debug mode to print session events after each "+
+			"turn",
+	)
 )
 
 func main() {
@@ -127,10 +158,13 @@ func (c *multiTurnChat) run() error {
 func (c *multiTurnChat) setup(_ context.Context) error {
 	// Create session service using util.
 	sessionType := util.SessionType(*sessServiceName)
-	sessionService, err := util.NewSessionServiceByType(sessionType, util.SessionServiceConfig{
-		EventLimit: *eventLimit,
-		TTL:        *sessionTTL,
-	})
+	sessionService, err := util.NewSessionServiceByType(
+		sessionType,
+		util.SessionServiceConfig{
+			EventLimit: *eventLimit,
+			TTL:        *sessionTTL,
+		},
+	)
 	if err != nil {
 		return fmt.Errorf("failed to create session service: %w", err)
 	}
@@ -142,19 +176,15 @@ func (c *multiTurnChat) setup(_ context.Context) error {
 		Stream: c.streaming,
 	}
 
+	const agentDescription = "A helpful AI assistant demonstrating sessions."
+	const agentInstruction = "Remember context per session. " +
+		"If asked for history, list prior messages verbatim."
+
 	llmAgent := llmagent.New(
 		"session-assistant",
 		llmagent.WithModel(modelInstance),
-		llmagent.WithDescription("A helpful AI assistant demonstrating session management capabilities."),
-		llmagent.WithInstruction("You are demonstrating multi-session conversation capabilities. "+
-			"Remember context within each session and engage naturally with users. "+
-			"ONLY when users explicitly ask about conversation history (e.g., 'show history', 'what did we discuss'), "+
-			"display the complete original conversation history in a clear list format:\n"+
-			"1. Show each exchange with clear user/assistant labels\n"+
-			"2. Present the exact original messages without summarization\n"+
-			"3. Use numbered lists for clarity\n"+
-			"4. Maintain chronological order\n"+
-			"Otherwise, respond naturally to user queries without repeating history."),
+		llmagent.WithDescription(agentDescription),
+		llmagent.WithInstruction(agentInstruction),
 		llmagent.WithGenerationConfig(genConfig),
 	)
 
@@ -224,7 +254,13 @@ func (c *multiTurnChat) startChat(ctx context.Context) error {
 
 		// Print session events in debug mode.
 		if *debugMode {
-			if err := util.PrintSessionEvents(ctx, c.sessionService, "session-demo", c.userID, c.sessionID); err != nil {
+			if err := util.PrintSessionEvents(
+				ctx,
+				c.sessionService,
+				"session-demo",
+				c.userID,
+				c.sessionID,
+			); err != nil {
 				fmt.Printf("Debug error: %v\n", err)
 			}
 		}
@@ -240,12 +276,21 @@ func (c *multiTurnChat) startChat(ctx context.Context) error {
 }
 
 // processMessage handles a single message exchange.
-func (c *multiTurnChat) processMessage(ctx context.Context, userMessage string) error {
+func (c *multiTurnChat) processMessage(
+	ctx context.Context,
+	userMessage string,
+) error {
 	message := model.NewUserMessage(userMessage)
 
 	requestID := uuid.New().String()
 	// Run the agent through the runner.
-	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message, agent.WithRequestID(requestID))
+	eventChan, err := c.runner.Run(
+		ctx,
+		c.userID,
+		c.sessionID,
+		message,
+		agent.WithRequestID(requestID),
+	)
 	if err != nil {
 		return fmt.Errorf("failed to run agent: %w", err)
 	}
@@ -254,7 +299,8 @@ func (c *multiTurnChat) processMessage(ctx context.Context, userMessage string) 
 	return c.processResponse(eventChan)
 }
 
-// processResponse handles both streaming and non-streaming responses with tool call visualization.
+// processResponse handles streaming and non-streaming responses, with
+// tool call visualization.
 func (c *multiTurnChat) processResponse(eventChan <-chan *event.Event) error {
 	fmt.Print("Assistant: ")
 
@@ -265,12 +311,18 @@ func (c *multiTurnChat) processResponse(eventChan <-chan *event.Event) error {
 	)
 
 	for event := range eventChan {
-		if err := c.handleEvent(event, &toolCallsDetected, &assistantStarted, &fullContent); err != nil {
+		if err := c.handleEvent(
+			event,
+			&toolCallsDetected,
+			&assistantStarted,
+			&fullContent,
+		); err != nil {
 			return err
 		}
 
 		// Check if this is the final event.
-		// Do not break on tool response events (Done=true but not final assistant response).
+		// Do not break on tool response events (Done=true but not the
+		// final assistant response).
 		if event.IsFinalResponse() {
 			fmt.Printf("\n")
 			break
@@ -315,22 +367,28 @@ func (c *multiTurnChat) handleToolCalls(
 	toolCallsDetected *bool,
 	assistantStarted *bool,
 ) bool {
-	if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
-		*toolCallsDetected = true
-		if *assistantStarted {
-			fmt.Printf("\n")
-		}
-		fmt.Printf("Tool calls initiated:\n")
-		for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
-			fmt.Printf("   - %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
-			if len(toolCall.Function.Arguments) > 0 {
-				fmt.Printf("     Args: %s\n", string(toolCall.Function.Arguments))
-			}
-		}
-		fmt.Printf("\nExecuting tools...\n")
-		return true
+	if event.Response == nil || len(event.Response.Choices) == 0 {
+		return false
 	}
-	return false
+
+	toolCalls := event.Response.Choices[0].Message.ToolCalls
+	if len(toolCalls) == 0 {
+		return false
+	}
+
+	*toolCallsDetected = true
+	if *assistantStarted {
+		fmt.Printf("\n")
+	}
+	fmt.Printf("Tool calls initiated:\n")
+	for _, toolCall := range toolCalls {
+		fmt.Printf("   - %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
+		if len(toolCall.Function.Arguments) > 0 {
+			fmt.Printf("     Args: %s\n", string(toolCall.Function.Arguments))
+		}
+	}
+	fmt.Printf("\nExecuting tools...\n")
+	return true
 }
 
 // handleToolResponses detects and displays tool responses.
@@ -428,7 +486,12 @@ func (c *multiTurnChat) listSessions() {
 		if sess.ID == c.sessionID {
 			marker = "*"
 		}
-		fmt.Printf("   %s %s (updated: %s)\n", marker, sess.ID, sess.UpdatedAt.Format(time.RFC3339))
+		fmt.Printf(
+			"   %s %s (updated: %s)\n",
+			marker,
+			sess.ID,
+			sess.UpdatedAt.Format(time.RFC3339),
+		)
 	}
 	fmt.Println()
 }

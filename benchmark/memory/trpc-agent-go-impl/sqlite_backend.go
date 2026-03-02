@@ -118,6 +118,7 @@ func createSQLiteVecService(
 	svcOpts := []memorysqlitevec.ServiceOpt{
 		memorysqlitevec.WithTableName(tableName),
 		memorysqlitevec.WithEmbedder(emb),
+		memorysqlitevec.WithMaxResults(opts.vectorTopK),
 		memorysqlitevec.WithExtractor(ext),
 	}
 	if opts.enableExtractor {
