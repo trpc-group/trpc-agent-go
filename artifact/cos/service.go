@@ -36,8 +36,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strconv"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -108,10 +108,10 @@ func NewService(name, bucketURL string, opts ...Option) (*Service, error) {
 		return nil, fmt.Errorf("client builder returned invalid type: expected client interface, got %T", c)
 	}
 	return &Service{
-		cosClient:       cli,
-		secretID:        o.secretID,
-		secretKey:       o.secretKey,
-		presignExpires:  o.presignExpires,
+		cosClient:      cli,
+		secretID:       o.secretID,
+		secretKey:      o.secretKey,
+		presignExpires: o.presignExpires,
 	}, nil
 }
 

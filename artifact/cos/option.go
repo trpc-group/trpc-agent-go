@@ -93,9 +93,9 @@ type clientBuilder = func(name string, bucketURL string, opts ...Option) (any, e
 func defaultClientBuilder(name string, bucketURL string, opts ...Option) (any, error) {
 	// Set default options
 	options := &options{
-		timeout:   defaultTimeout,
-		secretID:  os.Getenv("COS_SECRETID"),
-		secretKey: os.Getenv("COS_SECRETKEY"),
+		timeout:        defaultTimeout,
+		secretID:       os.Getenv("COS_SECRETID"),
+		secretKey:      os.Getenv("COS_SECRETKEY"),
 		presignExpires: 15 * time.Minute,
 	}
 

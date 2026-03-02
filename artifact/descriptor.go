@@ -23,4 +23,3 @@ type ArtifactDescriptor struct {
 	// URL is an optional URL where the artifact can be accessed (e.g. presigned).
 	URL string `json:"url,omitempty"`
 }
-
