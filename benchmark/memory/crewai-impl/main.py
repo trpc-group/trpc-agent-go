@@ -365,6 +365,19 @@ def evaluate_memory(
         prediction = ""
         qa_usage = TokenUsage()
         try:
+            # Snapshot cumulative counters before kickoff so
+            # we can compute the incremental delta afterwards.
+            # CrewAI's TokenProcess is cumulative and never
+            # resets, so result.token_usage returns the running
+            # total since agent creation, not the per-call cost.
+            prev_pt = prev_ct = prev_tt = prev_req = 0
+            tp = getattr(agent, "_token_process", None)
+            if tp is not None:
+                prev_pt = tp.prompt_tokens
+                prev_ct = tp.completion_tokens
+                prev_tt = tp.total_tokens
+                prev_req = tp.successful_requests
+
             task = Task(
                 description=(
                     f"Answer the following question based on "
@@ -392,8 +405,22 @@ def evaluate_memory(
             result = crew.kickoff()
             prediction = (result.raw or "").strip()
 
-            # Extract token usage from CrewAI metrics.
-            if result.token_usage:
+            # Compute incremental token usage as the delta
+            # between current and previous cumulative totals.
+            if tp is not None:
+                qa_usage.prompt_tokens = (
+                    tp.prompt_tokens - prev_pt
+                )
+                qa_usage.completion_tokens = (
+                    tp.completion_tokens - prev_ct
+                )
+                qa_usage.total_tokens = (
+                    tp.total_tokens - prev_tt
+                )
+                qa_usage.llm_calls = (
+                    tp.successful_requests - prev_req
+                )
+            elif result.token_usage:
                 tu = result.token_usage
                 qa_usage.prompt_tokens = tu.prompt_tokens
                 qa_usage.completion_tokens = (
