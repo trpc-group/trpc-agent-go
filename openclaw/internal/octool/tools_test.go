@@ -67,7 +67,11 @@ func TestExecTool_YieldBackgroundAndPoll(t *testing.T) {
 	require.Equal(t, "running", res.Status)
 	require.NotEmpty(t, res.SessionID)
 
-	deadline := time.Now().Add(2 * time.Second)
+	const (
+		pollDeadline = 2 * time.Second
+		pollInterval = 50 * time.Millisecond
+	)
+	deadline := time.Now().Add(pollDeadline)
 	var all string
 	for time.Now().Before(deadline) {
 		pollArgs := mustJSON(t, map[string]any{
@@ -86,7 +90,7 @@ func TestExecTool_YieldBackgroundAndPoll(t *testing.T) {
 			require.Contains(t, all, "end")
 			return
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(pollInterval)
 	}
 	t.Fatalf("process did not exit; output: %s", all)
 }
@@ -119,8 +123,13 @@ func TestProcessTool_Submit(t *testing.T) {
 	_, err = procTool.Call(context.Background(), submitArgs)
 	require.NoError(t, err)
 
-	deadline := time.Now().Add(2 * time.Second)
+	const (
+		pollDeadline = 2 * time.Second
+		pollInterval = 50 * time.Millisecond
+	)
+	deadline := time.Now().Add(pollDeadline)
 	var all string
+	var exited bool
 	for time.Now().Before(deadline) {
 		pollArgs := mustJSON(t, map[string]any{
 			"action":    "poll",
@@ -134,10 +143,15 @@ func TestProcessTool_Submit(t *testing.T) {
 			all += "\n" + poll.Output
 		}
 		if poll.Status == "exited" {
-			require.Contains(t, all, "got:hi")
-			return
+			exited = true
+			if strings.Contains(all, "got:hi") {
+				return
+			}
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(pollInterval)
+	}
+	if exited {
+		t.Fatalf("process exited; output: %s", all)
 	}
 	t.Fatalf("process did not exit; output: %s", all)
 }

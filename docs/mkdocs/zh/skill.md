@@ -341,6 +341,326 @@ https://github.com/anthropics/skills
   - 可选：追加到对应 tool result 消息
     (`llmagent.WithSkillsLoadedContentInToolResults(true)`)
 
+#### 在每次模型请求前获取“已加载技能列表”
+
+如果你希望在**每次模型请求前**拿到当前 `llmagent` 已加载的 skill 列表
+（包括一次 `Runner.Run` 内的 tool loop 里每一步），推荐使用
+`ModelCallbacks` 的 `BeforeModel`，并通过 `context` 取出当前
+`Invocation`。
+
+从最基本的机制出发理解：
+
+- `skill_load` 并不会把完整的 `SKILL.md` 正文写进 session 的事件记录里。
+- 它只会往 session state 写入一些很小的“标记键”：
+  - Loaded 标记：前缀为 `skill.StateKeyLoadedPrefix` 的 key
+  - Docs 选择：前缀为 `skill.StateKeyDocsPrefix` 的 key
+- Skills 的请求处理器会读取这些键，把正文/文档物化到**下一次**
+  outbound 模型请求里。
+
+因此，如果你只是想拿到“当前哪些 skills 已加载”，只需要读 session
+state 即可：
+
+下面的代码片段中，`m` 表示你的模型实例，`repo` 表示 skills 仓库。
+
+```go
+import (
+    "context"
+    "fmt"
+    "sort"
+    "strings"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/skill"
+)
+
+func loadedSkillNames(inv *agent.Invocation) []string {
+    if inv == nil || inv.Session == nil {
+        return nil
+    }
+    state := inv.Session.SnapshotState()
+    if len(state) == 0 {
+        return nil
+    }
+
+    var out []string
+    for k, v := range state {
+        if !strings.HasPrefix(k, skill.StateKeyLoadedPrefix) {
+            continue
+        }
+        if len(v) == 0 {
+            continue
+        }
+        name := strings.TrimPrefix(k, skill.StateKeyLoadedPrefix)
+        if strings.TrimSpace(name) == "" {
+            continue
+        }
+        out = append(out, name)
+    }
+    sort.Strings(out)
+    return out
+}
+
+modelCallbacks := model.NewCallbacks().
+    RegisterBeforeModel(func(
+        ctx context.Context,
+        args *model.BeforeModelArgs,
+    ) (*model.BeforeModelResult, error) {
+        _ = args
+        inv, ok := agent.InvocationFromContext(ctx)
+        if !ok {
+            return nil, nil
+        }
+        fmt.Printf("loaded skills: %v\n", loadedSkillNames(inv))
+        return nil, nil
+    })
+
+agt := llmagent.New(
+    "skills-assistant",
+    llmagent.WithModel(m),
+    llmagent.WithSkills(repo),
+    llmagent.WithModelCallbacks(modelCallbacks),
+)
+_ = agt
+```
+
+注意：
+
+- 默认 `SkillLoadModeTurn` 会在**下一轮** `Runner.Run` 开始前清空这些
+  `temp:skill:*` state key，所以“已加载列表”通常只在当前这轮
+  tool loop 里非空。
+- `SkillLoadModeSession` 会跨轮保留这些 key，所以“已加载列表”会一直
+  非空，直到你手动清空（或会话过期）。
+
+#### 内置选项：限制已加载技能数量（TopK）
+
+如果你的需求只是“最多保留最近 N 个已加载 skills”，可以直接使用内置
+option：
+
+- `llmagent.WithMaxLoadedSkills(N)`
+
+它会在**每次模型请求前**检查当前 loaded skills，并根据 session 中最近
+的 `skill_load` / `skill_select_docs` tool result，清空更老的
+`temp:skill:*` state key，从而把 loaded skills 数量控制在 N 以内。
+
+示例：
+
+```go
+agt := llmagent.New(
+    "skills-assistant",
+    llmagent.WithModel(m),
+    llmagent.WithSkills(repo),
+    llmagent.WithMaxLoadedSkills(3),
+)
+_ = agt
+```
+
+#### 自定义策略：限制已加载技能数量（比如最多保留最近 3 个）
+
+`SkillLoadMode` 解决的是“驻留多久”（once/turn/session），不解决
+“最多加载多少个”。如果你需要在 `llmagent.WithMaxLoadedSkills` 之外
+做更细粒度的手动控制（比如自定义淘汰策略），推荐在 session service
+上加 `AppendEventHook`，去修改 `skill_load` 写入的 state delta。
+
+核心思路：
+
+1) 识别“加载 skill”的事件（state delta 里包含
+   `skill.StateKeyLoadedPrefix+<name>`）。
+2) 计算“应用该 delta 后”会有哪些 skills 处于 loaded 状态。
+3) 如果数量超过阈值，在同一个 `StateDelta` 里把要淘汰的 skills 对应
+   key 置为 `nil`（清空）。
+
+示例（inmemory session service，最多保留最近 3 个 loaded skills）：
+
+```go
+import (
+    "encoding/json"
+    "sort"
+    "strings"
+
+    "trpc.group/trpc-go/trpc-agent-go/event"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/session"
+    "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+    "trpc.group/trpc-go/trpc-agent-go/skill"
+)
+
+const (
+    maxLoadedSkills = 3
+    toolSkillLoad   = "skill_load"
+)
+
+type skillLoadArgs struct {
+    Skill string `json:"skill"`
+}
+
+func loadedSkillsFromState(state session.StateMap) []string {
+    if len(state) == 0 {
+        return nil
+    }
+    var out []string
+    for k, v := range state {
+        if !strings.HasPrefix(k, skill.StateKeyLoadedPrefix) {
+            continue
+        }
+        if len(v) == 0 {
+            continue
+        }
+        name := strings.TrimPrefix(k, skill.StateKeyLoadedPrefix)
+        if strings.TrimSpace(name) == "" {
+            continue
+        }
+        out = append(out, name)
+    }
+    sort.Strings(out)
+    return out
+}
+
+func capLoadedSkills(
+    sess *session.Session,
+    ev *event.Event,
+    max int,
+) {
+    if sess == nil || ev == nil || max <= 0 {
+        return
+    }
+    if len(ev.StateDelta) == 0 {
+        return
+    }
+
+    // Only enforce when this event loads a skill.
+    var newlyLoaded []string
+    for k, v := range ev.StateDelta {
+        if !strings.HasPrefix(k, skill.StateKeyLoadedPrefix) {
+            continue
+        }
+        if len(v) == 0 {
+            continue
+        }
+        name := strings.TrimPrefix(k, skill.StateKeyLoadedPrefix)
+        if strings.TrimSpace(name) == "" {
+            continue
+        }
+        newlyLoaded = append(newlyLoaded, name)
+    }
+    if len(newlyLoaded) == 0 {
+        return
+    }
+
+    // Predict the "post-append" state by applying delta to a copy.
+    nextState := sess.SnapshotState()
+    for k, v := range ev.StateDelta {
+        nextState[k] = v
+    }
+
+    loaded := loadedSkillsFromState(nextState)
+    if len(loaded) <= max {
+        return
+    }
+
+    loadedSet := make(map[string]struct{}, len(loaded))
+    for _, name := range loaded {
+        loadedSet[name] = struct{}{}
+    }
+
+    // Keep the most recent loaded skills by scanning recent events.
+    keep := make([]string, 0, max)
+    keepSet := make(map[string]struct{}, max)
+
+    // 1) Always keep the skill(s) loaded by this delta.
+    sort.Strings(newlyLoaded)
+    for _, name := range newlyLoaded {
+        if _, ok := loadedSet[name]; !ok {
+            continue
+        }
+        if _, ok := keepSet[name]; ok {
+            continue
+        }
+        keep = append(keep, name)
+        keepSet[name] = struct{}{}
+        if len(keep) >= max {
+            break
+        }
+    }
+
+    // 2) Fill from newest skill_load calls in the transcript.
+    events := sess.GetEvents()
+    for i := len(events) - 1; i >= 0 && len(keep) < max; i-- {
+        rsp := events[i].Response
+        if rsp == nil || len(rsp.Choices) == 0 {
+            continue
+        }
+        msg := rsp.Choices[0].Message
+        if msg.Role != model.RoleAssistant {
+            continue
+        }
+        for _, tc := range msg.ToolCalls {
+            if tc.Function.Name != toolSkillLoad {
+                continue
+            }
+            var in skillLoadArgs
+            if err := json.Unmarshal(
+                []byte(tc.Function.Arguments),
+                &in,
+            ); err != nil {
+                continue
+            }
+            name := strings.TrimSpace(in.Skill)
+            if name == "" {
+                continue
+            }
+            if _, ok := loadedSet[name]; !ok {
+                continue
+            }
+            if _, ok := keepSet[name]; ok {
+                continue
+            }
+            keep = append(keep, name)
+            keepSet[name] = struct{}{}
+            if len(keep) >= max {
+                break
+            }
+        }
+    }
+
+    // 3) Fallback: fill deterministically from the loaded list.
+    for _, name := range loaded {
+        if len(keep) >= max {
+            break
+        }
+        if _, ok := keepSet[name]; ok {
+            continue
+        }
+        keep = append(keep, name)
+        keepSet[name] = struct{}{}
+    }
+
+    // Evict everything else by clearing the same state keys.
+    for _, name := range loaded {
+        if _, ok := keepSet[name]; ok {
+            continue
+        }
+        ev.StateDelta[skill.StateKeyLoadedPrefix+name] = nil
+        ev.StateDelta[skill.StateKeyDocsPrefix+name] = nil
+    }
+}
+
+svc := inmemory.NewSessionService(
+    inmemory.WithAppendEventHook(func(
+        ctx *session.AppendEventContext,
+        next func() error,
+    ) error {
+        capLoadedSkills(ctx.Session, ctx.Event, maxLoadedSkills)
+        return next()
+    }),
+)
+_ = svc
+```
+
+`AppendEventHook` 的接口说明见 `docs/mkdocs/zh/session.md`，也可以参考
+可运行示例 `examples/session/hook`。
+
 说明：
 - 建议采用“渐进式披露”：默认只传 `skill` 加载正文；需要文档时先
   `skill_list_docs` 再 `skill_select_docs`，只选必要文档；除非确
