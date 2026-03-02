@@ -1188,9 +1188,9 @@ func applyOpenAISDKTokenDetailsAccumulationFix(
 	acc *openai.ChatCompletionAccumulator,
 	chunk openai.ChatCompletionChunk,
 ) {
-	// fix  https://github.com/trpc-group/trpc-agent-go/issues/1270
-	// This is a temporary fix to ensure the token details are accumulated correctly.
-	// We should remove this once we update to openai-go the v3.10.0.
+	// Temporary workaround for token details accumulation.
+	// See https://github.com/trpc-group/trpc-agent-go/issues/1270.
+	// Remove this after upgrading openai-go to v3.10.0.
 	acc.Usage.CompletionTokensDetails.AcceptedPredictionTokens += chunk.Usage.CompletionTokensDetails.AcceptedPredictionTokens
 	acc.Usage.CompletionTokensDetails.AudioTokens += chunk.Usage.CompletionTokensDetails.AudioTokens
 	acc.Usage.CompletionTokensDetails.ReasoningTokens += chunk.Usage.CompletionTokensDetails.ReasoningTokens
