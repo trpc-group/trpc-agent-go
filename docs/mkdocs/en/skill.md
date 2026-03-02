@@ -541,6 +541,18 @@ Input:
   - `pin`: for `artifact://name` without `@version`, reuse the first
     resolved version for the same `to` path (best effort)
 
+- Conversation file inputs (automatic staging):
+  - If the current session contains user messages with file inputs
+    (`content_parts` items of type `file`), `skill_run` automatically
+    stages them into `work/inputs/` (and thus `inputs/`) before the
+    command runs.
+  - Filenames are sanitized to a safe basename and de-duplicated with a
+    numeric suffix when needed.
+  - If a file input includes raw bytes (`data`), those bytes are written
+    directly into the workspace.
+  - If a file input is referenced only by `file_id`, the framework
+    downloads the content via the configured model when supported.
+
 - `outputs` (optional, declarative outputs): a manifest to collect
   results with limits and persistence:
   - `globs` workspace‑relative patterns (supports `**` and env‑style
@@ -592,6 +604,8 @@ Optional safety restriction (denylist):
 
 Output:
 - `stdout`, `stderr`, `exit_code`, `timed_out`, `duration_ms`
+- `staged_inputs` (optional): files staged from the conversation into
+  `work/inputs/` for this run
 - `primary_output` (optional) with `name`, `ref`, `content`, `mime_type`,
   `size_bytes`, `truncated`
   - Convenience pointer to the "best" small text output file (when one
