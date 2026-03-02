@@ -114,4 +114,3 @@ func applyDeleteOptions(opts ...DeleteOption) DeleteOptions {
 	}
 	return o
 }
-

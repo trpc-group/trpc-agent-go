@@ -36,7 +36,8 @@ func BuildArtifactPath(key artifact.Key) string {
 
 // BuildObjectName constructs the object name for versioned storage (like COS).
 // The object name format is:
-//   {artifact_path}/{version_id}
+//
+//	{artifact_path}/{version_id}
 func BuildObjectName(key artifact.Key, version artifact.VersionID) string {
 	return fmt.Sprintf("%s/%s", BuildArtifactPath(key), version)
 }

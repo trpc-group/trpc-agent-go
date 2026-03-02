@@ -69,21 +69,21 @@ type SkillMeta struct {
 
 // InputRecord tracks a staged input resolution.
 type InputRecord struct {
-	From      string    `json:"from"`
-	To        string    `json:"to"`
-	Resolved  string    `json:"resolved,omitempty"`
+	From      string              `json:"from"`
+	To        string              `json:"to"`
+	Resolved  string              `json:"resolved,omitempty"`
 	Version   *artifact.VersionID `json:"version,omitempty"`
-	Mode      string    `json:"mode,omitempty"`
-	Timestamp time.Time `json:"ts"`
+	Mode      string              `json:"mode,omitempty"`
+	Timestamp time.Time           `json:"ts"`
 }
 
 // OutputRecord tracks an output collection run.
 type OutputRecord struct {
-	Globs     []string  `json:"globs"`
-	SavedAs   []string  `json:"saved_as,omitempty"`
+	Globs     []string             `json:"globs"`
+	SavedAs   []string             `json:"saved_as,omitempty"`
 	Versions  []artifact.VersionID `json:"versions,omitempty"`
-	LimitsHit bool      `json:"limits_hit"`
-	Timestamp time.Time `json:"ts"`
+	LimitsHit bool                 `json:"limits_hit"`
+	Timestamp time.Time            `json:"ts"`
 }
 
 // EnsureLayout creates standard workspace subdirectories and a

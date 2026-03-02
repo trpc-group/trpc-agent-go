@@ -221,7 +221,7 @@ type runFile struct {
 }
 
 type artifactRef struct {
-	Name    string `json:"name"`
+	Name    string             `json:"name"`
 	Version artifact.VersionID `json:"version"`
 }
 
@@ -1501,7 +1501,7 @@ func (t *RunTool) saveArtifacts(
 		}
 		ver, err := cb.SaveArtifact(name, &artifact.Artifact{
 			MimeType: f.MIMEType,
-			Data: []byte(f.Content),
+			Data:     []byte(f.Content),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("save artifact %s: %w", name, err)

@@ -45,4 +45,3 @@ func (o DeleteOptions) Validate() error {
 		return fmt.Errorf("unknown delete mode: %d", int(o.Mode))
 	}
 }
-

@@ -11,8 +11,8 @@ package artifact
 
 import (
 	"context"
-	"io"
 	"errors"
+	"io"
 )
 
 // ErrNotFound indicates the requested artifact or version does not exist.
