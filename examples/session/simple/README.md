@@ -7,7 +7,7 @@ This example demonstrates advanced session management capabilities using the `Ru
 This implementation highlights the power of session management in conversational AI:
 
 - **Multiple Sessions**: Create and switch between multiple independent conversation contexts
-- **Persistent Storage**: Support for Redis, PostgreSQL, and MySQL backends
+- **Persistent Storage**: Support for SQLite, Redis, PostgreSQL, MySQL, and ClickHouse backends
 - **Session Discovery**: List and switch between existing sessions
 
 
@@ -17,14 +17,14 @@ This implementation highlights the power of session management in conversational
 - **Session Switching**: Switch between sessions with `/use <id>`
 - **Session Listing**: View all active sessions with `/sessions`
 - **History Recap**: Ask the agent to summarize conversation with `/history`
-- **Backend Flexibility**: Choose from in-memory, Redis, PostgreSQL, or MySQL storage
+- **Backend Flexibility**: Choose from in-memory, SQLite, Redis, PostgreSQL, MySQL, or ClickHouse storage
 - **Context Preservation**: Each session maintains independent conversation history
 
 ## Prerequisites
 
 - Go 1.21 or later
 - Valid OpenAI API key (or compatible API endpoint)
-- Optional: Redis/PostgreSQL/MySQL server (depending on backend choice)
+- Optional: SQLite file or Redis/PostgreSQL/MySQL/ClickHouse server (depending on backend choice)
 
 ## Environment Variables
 
@@ -36,6 +36,11 @@ This implementation highlights the power of session management in conversational
 | `OPENAI_BASE_URL`       | Base URL for the openai model API endpoint     | **Yes**  | `https://api.openai.com/v1` |
 
 ### Backend-Specific Variables
+
+**SQLite:**
+| Variable             | Description     | Default Value                          |
+| -------------------- | --------------- | -------------------------------------- |
+| `SQLITE_SESSION_DSN` | SQLite DSN      | `file:sessions.db?_busy_timeout=5000`  |
 
 **Redis:**
 | Variable      | Description           | Default Value     |
@@ -64,21 +69,22 @@ This implementation highlights the power of session management in conversational
 
 | Argument           | Description                                         | Default Value    |
 | ------------------ | --------------------------------------------------- | ---------------- |
-| `-model`           | Name of the model to use                            | `deepseek-chat`  |
-| `-session`         | Session backend: inmemory/redis/pgsql/mysql         | `inmemory`       |
+| `-model`           | Name of the model to use                            | `MODEL_NAME` env var |
+| `-session`         | Session backend: inmemory/sqlite/redis/postgres/mysql/clickhouse | `inmemory` |
 | `-streaming`       | Enable streaming mode for responses                 | `true`           |
-| `-event-limit`     | Maximum number of events to store per session       | `100`            |
-| `-session-ttl`     | Session time-to-live duration                       | `24h`            |
+| `-event-limit`     | Maximum number of events to store per session       | `1000`           |
+| `-session-ttl`     | Session time-to-live duration                       | `10s`            |
+| `-debug`           | Enable debug mode to print session events           | `true`           |
 
 ## Usage
 
 ### Basic Usage with In-Memory Backend
 
 ```bash
-cd examples/session
+cd examples/session/simple
 export OPENAI_API_KEY="your-api-key-here"
 export OPENAI_BASE_URL="https://api.openai.com/v1"
-go run .
+go run . -session inmemory
 ```
 
 ### Custom Event Limit and Session TTL
@@ -119,7 +125,7 @@ go run . -session redis
 export OPENAI_API_KEY="your-api-key"
 export OPENAI_BASE_URL="https://api.openai.com/v1"
 export PG_PASSWORD="your-password"
-go run . -session pgsql
+go run . -session postgres
 ```
 
 Custom PostgreSQL configuration:
@@ -130,7 +136,7 @@ export PG_HOST="localhost"
 export PG_USER="postgres"
 export PG_PASSWORD="your-password"
 export PG_DATABASE="sessions_db"
-go run . -session pgsql
+go run . -session postgres
 ```
 
 ### With MySQL Backend
@@ -151,6 +157,18 @@ export MYSQL_USER="root"
 export MYSQL_PASSWORD="your-password"
 export MYSQL_DATABASE="sessions_db"
 go run . -session mysql
+```
+
+### With SQLite Backend
+
+SQLite is a good default choice for local persistence without running an
+external database server.
+
+```bash
+export OPENAI_API_KEY="your-api-key"
+export OPENAI_BASE_URL="https://api.openai.com/v1"
+export SQLITE_SESSION_DSN="file:sessions.db?_busy_timeout=5000"
+go run . -session sqlite
 ```
 
 ## Session Commands

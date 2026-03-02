@@ -261,6 +261,15 @@ type Options struct {
 	// available in the system prompt.
 	SkillLoadMode string
 
+	// MaxLoadedSkills caps how many skills remain "loaded" in session
+	// state at the same time.
+	//
+	// When > 0, only the most-recently loaded skills are kept, and older
+	// loaded skills are offloaded (cleared) from session state.
+	//
+	// When <= 0, no cap is applied (default behavior).
+	MaxLoadedSkills int
+
 	// SkillsLoadedContentInToolResults controls where loaded skill bodies
 	// and selected docs are materialized.
 	//
@@ -476,6 +485,16 @@ func WithSkills(repo skill.Repository) Option {
 func WithSkillLoadMode(mode string) Option {
 	return func(opts *Options) {
 		opts.SkillLoadMode = mode
+	}
+}
+
+// WithMaxLoadedSkills caps how many skills remain "loaded" in session
+// state at the same time.
+//
+// When max <= 0, no cap is applied (default behavior).
+func WithMaxLoadedSkills(max int) Option {
+	return func(opts *Options) {
+		opts.MaxLoadedSkills = max
 	}
 }
 

@@ -84,6 +84,11 @@ var (
 		"Embedding model for vector backends (pgvector, sqlitevec) "+
 			"(env EMBED_MODEL_NAME or text-embedding-3-small)",
 	)
+	flagVectorTopK = flag.Int(
+		"vector-topk",
+		10,
+		"Top-k results for vector backends (pgvector, sqlitevec)",
+	)
 	flagMySQLDSN = flag.String(
 		"mysql-dsn",
 		"",
@@ -98,6 +103,12 @@ var (
 	flagQAHistoryTurns    = flag.Int(
 		"qa-history-turns", 0,
 		"Recent conversation turns injected as context during QA (0=none, auto/agentic only)",
+	)
+	flagQASearchPasses = flag.Int(
+		"qa-search-passes",
+		1,
+		"Number of memory_search calls per QA "+
+			"(1=single search, auto/agentic only)",
 	)
 	flagLLMJudge = flag.Bool("llm-judge", false, "Enable LLM-as-Judge evaluation")
 	flagVerbose  = flag.Bool("verbose", false, "Verbose output")
@@ -121,6 +132,8 @@ const (
 	autoMemoryAsyncWorkers = 3
 	autoMemoryQueueSize    = 200
 	autoMemoryJobTimeout   = 2 * time.Minute
+
+	maxQASearchPasses = 3
 )
 
 // benchmarkExtractorPrompt is optimized for retrieval-based benchmark evaluation.
@@ -187,6 +200,7 @@ type EvalMetadata struct {
 	MemoryBackend  string    `json:"memory_backend,omitempty"`
 	MaxContext     int       `json:"max_context"`
 	QAHistoryTurns int       `json:"qa_history_turns,omitempty"`
+	QASearchPasses int       `json:"qa_search_passes,omitempty"`
 	LLMJudge       bool      `json:"llm_judge"`
 }
 
@@ -234,6 +248,12 @@ func main() {
 	if *flagQAHistoryTurns > 0 {
 		log.Printf("QA History Turns: %d", *flagQAHistoryTurns)
 	}
+	if *flagQASearchPasses > 1 {
+		log.Printf(
+			"QA Search Passes: %d",
+			*flagQASearchPasses,
+		)
+	}
 	log.Printf("Output: %s", outputDir)
 	if *flagResume {
 		log.Printf("Resume mode: enabled (checkpoint will be loaded if exists)")
@@ -273,6 +293,7 @@ func main() {
 		Verbose:           *flagVerbose,
 		SessionEventLimit: *flagSessionEventLimit,
 		QAHistoryTurns:    *flagQAHistoryTurns,
+		QASearchPasses:    *flagQASearchPasses,
 		DebugDumpMemories: *flagDebugDumpMemories,
 		DebugMemLimit:     *flagDebugMemLimit,
 		DebugQALimit:      *flagDebugQALimit,
@@ -432,6 +453,18 @@ func buildScenarioDir(outputDir string, scenario scenarios.ScenarioType, backend
 }
 
 func validateFlags() {
+	if *flagVectorTopK < 1 {
+		log.Fatalf("Invalid vector-topk: %d", *flagVectorTopK)
+	}
+	if *flagQASearchPasses < 1 ||
+		*flagQASearchPasses > maxQASearchPasses {
+		log.Fatalf(
+			"Invalid qa-search-passes: %d (range: 1-%d)",
+			*flagQASearchPasses,
+			maxQASearchPasses,
+		)
+	}
+
 	validScenarios := map[string]bool{
 		"long_context": true,
 		"agentic":      true,
@@ -562,18 +595,19 @@ func buildMemoryServiceOptions(
 	cfg memoryConfig,
 	extractorModel model.Model,
 ) memoryServiceOptions {
+	opts := memoryServiceOptions{vectorTopK: *flagVectorTopK}
 	if cfg.mode != memoryModeAuto {
-		return memoryServiceOptions{}
+		return opts
 	}
-	return memoryServiceOptions{
-		enableExtractor: true,
-		extractorModel:  extractorModel,
-	}
+	opts.enableExtractor = true
+	opts.extractorModel = extractorModel
+	return opts
 }
 
 type memoryServiceOptions struct {
 	enableExtractor bool
 	extractorModel  model.Model
+	vectorTopK      int
 }
 
 func createMemoryService(
@@ -624,6 +658,7 @@ func createPGVectorService(
 	svcOpts := []memorypgvector.ServiceOpt{
 		memorypgvector.WithPGVectorClientDSN(dsn),
 		memorypgvector.WithEmbedder(emb),
+		memorypgvector.WithMaxResults(opts.vectorTopK),
 		memorypgvector.WithTableName(tableName),
 		memorypgvector.WithExtractor(ext),
 	}
@@ -752,6 +787,7 @@ func runEvaluation(
 			MemoryBackend:  backend,
 			MaxContext:     config.MaxContext,
 			QAHistoryTurns: config.QAHistoryTurns,
+			QASearchPasses: config.QASearchPasses,
 			LLMJudge:       config.EnableLLMJudge,
 		},
 		Summary: &EvalSummary{
@@ -816,6 +852,10 @@ func printSummary(result *EvaluationResult) {
 	if result.Metadata.QAHistoryTurns > 0 {
 		fmt.Printf("QA History Turns: %d\n",
 			result.Metadata.QAHistoryTurns)
+	}
+	if result.Metadata.QASearchPasses > 1 {
+		fmt.Printf("QA Search Passes: %d\n",
+			result.Metadata.QASearchPasses)
 	}
 	fmt.Printf("Samples: %d | Questions: %d\n",
 		result.Summary.TotalSamples, result.Summary.TotalQuestions)
