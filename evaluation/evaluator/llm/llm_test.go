@@ -16,14 +16,17 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/provider"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
 type fakeLLMEvaluator struct {
@@ -101,6 +104,25 @@ func (f *fakeModel) GenerateContent(_ context.Context, _ *model.Request) (<-chan
 func (f *fakeModel) Info() model.Info {
 	return model.Info{Name: "fake"}
 }
+
+type fakeJudgeRunner struct {
+	events   []*event.Event
+	runCalls int
+}
+
+func (f *fakeJudgeRunner) Run(_ context.Context, _ string, _ string, _ model.Message, _ ...agent.RunOption) (<-chan *event.Event, error) {
+	f.runCalls++
+	ch := make(chan *event.Event, len(f.events))
+	for _, e := range f.events {
+		ch <- e
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (f *fakeJudgeRunner) Close() error { return nil }
+
+var _ runner.Runner = (*fakeJudgeRunner)(nil)
 
 func buildEvalMetric(providerName string, numSamples int) *metric.EvalMetric {
 	return &metric.EvalMetric{
@@ -358,4 +380,60 @@ func TestLLMBaseEvaluator_New(t *testing.T) {
 	base, ok := res.(*LLMBaseEvaluator)
 	require.True(t, ok)
 	assert.Equal(t, stub, base.LLMEvaluator)
+}
+
+func TestLLMBaseEvaluator_UsesJudgeRunnerAndIgnoresJudgeModelNumSamples(t *testing.T) {
+	stub := &fakeLLMEvaluator{}
+	base := &LLMBaseEvaluator{LLMEvaluator: stub}
+	evalMetric := buildEvalMetric("unknown-provider", 3)
+
+	r := &fakeJudgeRunner{
+		events: []*event.Event{
+			event.NewResponseEvent("inv", "judge", &model.Response{
+				Choices: []model.Choice{{Message: model.Message{Content: "ok"}}},
+				Done:    true,
+			}),
+		},
+	}
+	evalMetric.Criterion.LLMJudge.JudgeRunnerOptions = &llm.JudgeRunnerOptions{Runner: r}
+
+	_, err := base.Evaluate(
+		context.Background(),
+		[]*evalset.Invocation{{InvocationID: "a"}},
+		[]*evalset.Invocation{{InvocationID: "b"}},
+		evalMetric,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 1, r.runCalls)
+}
+
+func TestLLMBaseEvaluator_AllowsJudgeRunnerWithoutJudgeModel(t *testing.T) {
+	stub := &fakeLLMEvaluator{}
+	base := &LLMBaseEvaluator{LLMEvaluator: stub}
+
+	r := &fakeJudgeRunner{
+		events: []*event.Event{
+			event.NewResponseEvent("inv", "judge", &model.Response{
+				Choices: []model.Choice{{Message: model.Message{Content: "ok"}}},
+				Done:    true,
+			}),
+		},
+	}
+
+	evalMetric := &metric.EvalMetric{
+		Threshold: 0.5,
+		Criterion: &criterion.Criterion{
+			LLMJudge: &llm.LLMCriterion{},
+		},
+	}
+	evalMetric.Criterion.LLMJudge.JudgeRunnerOptions = &llm.JudgeRunnerOptions{Runner: r}
+
+	_, err := base.Evaluate(
+		context.Background(),
+		[]*evalset.Invocation{{InvocationID: "a"}},
+		[]*evalset.Invocation{{InvocationID: "b"}},
+		evalMetric,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 1, r.runCalls)
 }

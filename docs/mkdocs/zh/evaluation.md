@@ -1794,6 +1794,30 @@ type InvocationsAggregator interface {
 
 框架内置 `invocationsaggregator/average` 实现，也是当前内置评估器的默认实现。它会对已评估轮次的分数做算术平均得到整体分数，并按 `threshold` 输出整体状态。
 
+##### 裁判 Runner
+
+LLM Judge 类评估器默认通过 `criterion.llmJudge.judgeModel` 直连裁判模型获取裁判输出。也可以通过 `evaluation.WithJudgeRunner` 注入一个裁判 Runner，用 runner 的最终 `*model.Response` 替代直连模型。
+
+启用后 `judgeModel` 被忽略，每个 invocation 默调用 judge runner 1 次。
+
+示例片段如下：
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+judgeRunner := runner.NewRunner("judge-app", newJudgeAgent())
+defer judgeRunner.Close()
+
+agentEvaluator, err := evaluation.New(
+	appName,
+	agentRunner,
+	evaluation.WithJudgeRunner(judgeRunner),
+)
+```
+
 ##### 自定义组合
 
 LLM Judge 类评估器支持通过 `Option` 注入不同算子实现，用于在不改动评估器主体的前提下调整评估逻辑。下面示例片段将采样聚合策略替换为最小值策略，只要有一次采样失败就视为失败。
