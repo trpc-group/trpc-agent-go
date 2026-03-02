@@ -157,7 +157,9 @@ func (c *defaultA2AMessageToAgentMessage) ConvertToAgentMessage(
 
 // defaultEventToA2AMessage is the default implementation of EventToA2AMessageConverter.
 type defaultEventToA2AMessage struct {
-	adkCompatibility   bool // Enable ADK-compatible metadata keys (e.g., "adk_type" instead of "type")
+	// Enable ADK-compatible metadata keys (for example, "adk_type" instead
+	// of "type").
+	adkCompatibility   bool
 	streamingEventType StreamingEventType
 }
 

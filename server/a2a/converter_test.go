@@ -661,7 +661,7 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage_MessageType(
 	}
 }
 
-func TestDefaultEventToA2AMessage_convertPartsToA2AStreamingResult_EarlyReturn(
+func TestDefaultEventToA2AMessage_convertPartsToA2AStreamingResult_Nil(
 	t *testing.T,
 ) {
 	converter := &defaultEventToA2AMessage{
