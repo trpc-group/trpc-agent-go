@@ -11,18 +11,24 @@ package cos
 
 import "errors"
 
+const (
+	msgEmptyFilename = "cos artifact: filename cannot be empty"
+	msgInvalidName   = "cos artifact: filename contains invalid characters"
+	msgNilArtifact   = "cos artifact: artifact cannot be nil"
+	msgEmptySession  = "cos artifact: session info fields cannot be empty"
+)
+
 // Sentinel errors for input validation.
 var (
-	ErrEmptyFilename = errors.New(
-		"cos artifact: filename cannot be empty",
-	)
-	ErrInvalidFilename = errors.New(
-		"cos artifact: filename contains invalid characters",
-	)
-	ErrNilArtifact = errors.New(
-		"cos artifact: artifact cannot be nil",
-	)
-	ErrEmptySessionInfo = errors.New(
-		"cos artifact: session info fields cannot be empty",
-	)
+	ErrEmptyFilename    error
+	ErrInvalidFilename  error
+	ErrNilArtifact      error
+	ErrEmptySessionInfo error
 )
+
+func init() {
+	ErrEmptyFilename = errors.New(msgEmptyFilename)
+	ErrInvalidFilename = errors.New(msgInvalidName)
+	ErrNilArtifact = errors.New(msgNilArtifact)
+	ErrEmptySessionInfo = errors.New(msgEmptySession)
+}

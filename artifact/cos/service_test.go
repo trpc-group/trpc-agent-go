@@ -457,6 +457,93 @@ func TestSaveArtifact_ValidatesInputs(t *testing.T) {
 	require.ErrorIs(t, err, ErrNilArtifact)
 }
 
+func TestService_ValidatesInputs(t *testing.T) {
+	s, _ := createMockService()
+	ctx := context.Background()
+
+	_, err := s.ListArtifactKeys(ctx, artifact.SessionInfo{})
+	require.ErrorIs(t, err, ErrEmptySessionInfo)
+
+	_, err = s.LoadArtifact(ctx, artifact.SessionInfo{}, "x", nil)
+	require.ErrorIs(t, err, ErrEmptySessionInfo)
+
+	err = s.DeleteArtifact(ctx, artifact.SessionInfo{}, "x")
+	require.ErrorIs(t, err, ErrEmptySessionInfo)
+
+	_, err = s.ListVersions(ctx, artifact.SessionInfo{}, "x")
+	require.ErrorIs(t, err, ErrEmptySessionInfo)
+
+	sessionInfo := artifact.SessionInfo{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session456",
+	}
+
+	_, err = s.LoadArtifact(ctx, sessionInfo, "", nil)
+	require.ErrorIs(t, err, ErrEmptyFilename)
+
+	err = s.DeleteArtifact(ctx, sessionInfo, "")
+	require.ErrorIs(t, err, ErrEmptyFilename)
+
+	_, err = s.ListVersions(ctx, sessionInfo, "")
+	require.ErrorIs(t, err, ErrEmptyFilename)
+
+	const invalidName = "a\x00b"
+
+	_, err = s.LoadArtifact(ctx, sessionInfo, invalidName, nil)
+	require.ErrorIs(t, err, ErrInvalidFilename)
+
+	err = s.DeleteArtifact(ctx, sessionInfo, invalidName)
+	require.ErrorIs(t, err, ErrInvalidFilename)
+
+	_, err = s.ListVersions(ctx, sessionInfo, invalidName)
+	require.ErrorIs(t, err, ErrInvalidFilename)
+}
+
+func TestValidateSessionInfo(t *testing.T) {
+	require.ErrorIs(t, validateSessionInfo(artifact.SessionInfo{}),
+		ErrEmptySessionInfo)
+
+	info := artifact.SessionInfo{
+		UserID:    "u",
+		SessionID: "s",
+	}
+	require.ErrorIs(t, validateSessionInfo(info), ErrEmptySessionInfo)
+
+	info = artifact.SessionInfo{
+		AppName:   "a",
+		SessionID: "s",
+	}
+	require.ErrorIs(t, validateSessionInfo(info), ErrEmptySessionInfo)
+
+	info = artifact.SessionInfo{
+		AppName: "a",
+		UserID:  "u",
+	}
+	require.ErrorIs(t, validateSessionInfo(info), ErrEmptySessionInfo)
+
+	info = artifact.SessionInfo{
+		AppName:   "a",
+		UserID:    "u",
+		SessionID: "s",
+	}
+	require.NoError(t, validateSessionInfo(info))
+}
+
+func TestExtractFilenameFromObjectKey(t *testing.T) {
+	const prefix = "p/"
+
+	assert.Empty(t, extractFilenameFromObjectKey("x/out/0", prefix))
+	assert.Empty(t, extractFilenameFromObjectKey(prefix, prefix))
+	assert.Empty(t, extractFilenameFromObjectKey(prefix+"file", prefix))
+
+	got := extractFilenameFromObjectKey(prefix+"out/a.txt/0", prefix)
+	assert.Equal(t, "out/a.txt", got)
+
+	got = extractFilenameFromObjectKey(prefix+" out/a.txt /0", prefix)
+	assert.Equal(t, "out/a.txt", got)
+}
+
 func TestLoadNonexistentArtifact(t *testing.T) {
 	s, _ := createMockService()
 	ctx := context.Background()
