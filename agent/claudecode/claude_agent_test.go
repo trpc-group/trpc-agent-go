@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -396,7 +397,12 @@ func TestExecCommandRunner_Run(t *testing.T) {
 		dir:  tmp,
 	})
 	require.NoError(t, err)
-	require.Equal(t, tmp, strings.TrimSpace(string(stdout)))
+	got := strings.TrimSpace(string(stdout))
+	gotResolved, err := filepath.EvalSymlinks(got)
+	require.NoError(t, err)
+	wantResolved, err := filepath.EvalSymlinks(tmp)
+	require.NoError(t, err)
+	require.Equal(t, wantResolved, gotResolved)
 	require.Empty(t, string(stderr))
 }
 

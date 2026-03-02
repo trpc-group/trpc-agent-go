@@ -420,7 +420,220 @@ type errorMockSessionService struct {
 }
 
 func (m *errorMockSessionService) EnqueueSummaryJob(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
-	// Call parent to record the call
+	// Call parent to record the call.
 	m.mockSessionService.EnqueueSummaryJob(ctx, sess, filterKey, force)
-	return assert.AnError // Return error
+	return assert.AnError // Return error.
+}
+
+// toolCallMockAgent generates a tool call sequence:
+// assistant(tool_call) -> tool(result) -> assistant(text).
+type toolCallMockAgent struct {
+	name string
+}
+
+func (m *toolCallMockAgent) Info() agent.Info {
+	return agent.Info{
+		Name:        m.name,
+		Description: "Mock agent that produces tool call events",
+	}
+}
+
+func (m *toolCallMockAgent) SubAgents() []agent.Agent { return nil }
+
+func (m *toolCallMockAgent) FindSubAgent(string) agent.Agent { return nil }
+
+func (m *toolCallMockAgent) Tools() []tool.Tool { return nil }
+
+func (m *toolCallMockAgent) Run(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 3)
+
+	// 1. assistant tool_call event.
+	ch <- &event.Event{
+		Response: &model.Response{
+			ID:    "tc-resp",
+			Model: "test-model",
+			Done:  true,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{{
+						ID:   "call_1",
+						Type: "function",
+						Function: model.FunctionDefinitionParam{
+							Name:      "get_weather",
+							Arguments: []byte(`{"city":"Beijing"}`),
+						},
+					}},
+				},
+			}},
+		},
+		InvocationID: invocation.InvocationID,
+		Author:       m.name,
+		ID:           "evt-tc",
+		Timestamp:    time.Now(),
+	}
+
+	// 2. tool result event.
+	ch <- &event.Event{
+		Response: &model.Response{
+			ID:    "tr-resp",
+			Model: "test-model",
+			Done:  true,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:     model.RoleTool,
+					ToolID:   "call_1",
+					ToolName: "get_weather",
+					Content:  `{"temp":25}`,
+				},
+			}},
+		},
+		InvocationID: invocation.InvocationID,
+		Author:       "get_weather",
+		ID:           "evt-tr",
+		Timestamp:    time.Now(),
+	}
+
+	// 3. final assistant text response.
+	ch <- &event.Event{
+		Response: &model.Response{
+			ID:    "final-resp",
+			Model: "test-model",
+			Done:  true,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "The weather is 25 degrees.",
+				},
+			}},
+		},
+		InvocationID: invocation.InvocationID,
+		Author:       m.name,
+		ID:           "evt-final",
+		Timestamp:    time.Now(),
+	}
+
+	close(ch)
+	return ch, nil
+}
+
+// skipSummarizationMockAgent generates a tool result with
+// SkipSummarization action set.
+type skipSummarizationMockAgent struct {
+	name string
+}
+
+func (m *skipSummarizationMockAgent) Info() agent.Info {
+	return agent.Info{
+		Name:        m.name,
+		Description: "Mock agent for SkipSummarization test",
+	}
+}
+
+func (m *skipSummarizationMockAgent) SubAgents() []agent.Agent { return nil }
+
+func (m *skipSummarizationMockAgent) FindSubAgent(string) agent.Agent { return nil }
+
+func (m *skipSummarizationMockAgent) Tools() []tool.Tool { return nil }
+
+func (m *skipSummarizationMockAgent) Run(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 1)
+
+	// Final assistant response with SkipSummarization.
+	ch <- &event.Event{
+		Response: &model.Response{
+			ID:    "skip-resp",
+			Model: "test-model",
+			Done:  true,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "Skipped summary response.",
+				},
+			}},
+		},
+		Actions: &event.EventActions{
+			SkipSummarization: true,
+		},
+		InvocationID: invocation.InvocationID,
+		Author:       m.name,
+		ID:           "evt-skip",
+		Timestamp:    time.Now(),
+	}
+
+	close(ch)
+	return ch, nil
+}
+
+func TestRunner_EnqueueSummaryJob_ToolResultTrigger(t *testing.T) {
+	t.Run(
+		"tool result events trigger EnqueueSummaryJob",
+		func(t *testing.T) {
+			svc := &mockSessionService{}
+			r := NewRunner(
+				"test-app",
+				&toolCallMockAgent{name: "tc-agent"},
+				WithSessionService(svc),
+			)
+			_, err := RunWithMessages(
+				context.Background(), r,
+				"user1", "sess1",
+				[]model.Message{{
+					Role:    model.RoleUser,
+					Content: "weather?",
+				}},
+			)
+			require.NoError(t, err)
+			time.Sleep(100 * time.Millisecond)
+
+			// Expect 2 calls: one for tool result, one for
+			// final assistant text. Tool call events are still
+			// skipped.
+			require.Len(
+				t,
+				svc.enqueueSummaryJobCalls,
+				2,
+				"tool result + final text should each "+
+					"trigger EnqueueSummaryJob",
+			)
+		},
+	)
+
+	t.Run(
+		"SkipSummarization action prevents EnqueueSummaryJob",
+		func(t *testing.T) {
+			svc := &mockSessionService{}
+			r := NewRunner(
+				"test-app",
+				&skipSummarizationMockAgent{
+					name: "skip-agent",
+				},
+				WithSessionService(svc),
+			)
+			_, err := RunWithMessages(
+				context.Background(), r,
+				"user1", "sess1",
+				[]model.Message{{
+					Role:    model.RoleUser,
+					Content: "hello",
+				}},
+			)
+			require.NoError(t, err)
+			time.Sleep(100 * time.Millisecond)
+
+			assert.Len(
+				t,
+				svc.enqueueSummaryJobCalls,
+				0,
+				"SkipSummarization should prevent "+
+					"EnqueueSummaryJob",
+			)
+		},
+	)
 }

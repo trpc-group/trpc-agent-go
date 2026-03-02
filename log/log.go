@@ -258,6 +258,9 @@ func Tracef(format string, args ...any) {
 var TracefContext = func(
 	_ context.Context, format string, args ...any,
 ) {
+	if !traceEnabled {
+		return
+	}
 	ContextDefault.Debugf("[TRACE] "+format, args...)
 }
 

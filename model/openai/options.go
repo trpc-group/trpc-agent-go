@@ -108,6 +108,13 @@ type options struct {
 	// but message ordering affects cache effectiveness.
 	OptimizeForCache    bool
 	optimizeForCacheSet bool
+
+	// OmitFileContentParts controls whether file content parts are removed
+	// from requests sent to the model provider.
+	//
+	// This can be useful when a provider rejects file inputs in chat messages,
+	// while still keeping the file parts in-memory for downstream tools.
+	OmitFileContentParts bool
 }
 
 var (
@@ -257,6 +264,14 @@ func WithVariant(variant Variant) Option {
 	}
 }
 
+// WithOmitFileContentParts controls whether file content parts are removed
+// from requests sent to the model provider.
+func WithOmitFileContentParts(omit bool) Option {
+	return func(opts *options) {
+		opts.OmitFileContentParts = omit
+	}
+}
+
 // WithBatchCompletionWindow sets the batch completion window.
 func WithBatchCompletionWindow(window openai.BatchNewParamsCompletionWindow) Option {
 	return func(opts *options) {
@@ -316,6 +331,9 @@ func inverseOpenAISDKAddChunkUsage(u model.Usage, delta model.Usage) model.Usage
 		PromptTokens:     u.PromptTokens - delta.PromptTokens,
 		CompletionTokens: u.CompletionTokens - delta.CompletionTokens,
 		TotalTokens:      u.TotalTokens - delta.TotalTokens,
+		PromptTokensDetails: model.PromptTokensDetails{
+			CachedTokens: int(u.PromptTokensDetails.CachedTokens - delta.PromptTokensDetails.CachedTokens),
+		},
 	}
 }
 

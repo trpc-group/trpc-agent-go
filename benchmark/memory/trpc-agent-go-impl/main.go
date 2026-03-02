@@ -17,7 +17,10 @@
 //
 // Memory Backends:
 //   - inmemory: In-memory storage (keyword-based).
+//   - sqlite: SQLite storage (keyword-based).
+//   - sqlitevec: SQLite + sqlite-vec (vector similarity).
 //   - pgvector: PostgreSQL with vector similarity.
+//   - mysql: MySQL storage (full-text search).
 //
 // Metrics (aligned with LoCoMo paper):
 //   - F1 Score: Token-level F1.
@@ -67,7 +70,8 @@ var (
 	flagMemoryBackends = flag.String(
 		"memory-backend",
 		"inmemory",
-		"Memory backends (comma-separated): inmemory, pgvector, mysql",
+		"Memory backends (comma-separated): "+
+			"inmemory, sqlite, sqlitevec, pgvector, mysql",
 	)
 	flagPGVectorDSN = flag.String(
 		"pgvector-dsn",
@@ -77,7 +81,13 @@ var (
 	flagEmbedModel = flag.String(
 		"embed-model",
 		"",
-		"Embedding model for pgvector (env EMBED_MODEL_NAME or text-embedding-3-small)",
+		"Embedding model for vector backends (pgvector, sqlitevec) "+
+			"(env EMBED_MODEL_NAME or text-embedding-3-small)",
+	)
+	flagVectorTopK = flag.Int(
+		"vector-topk",
+		10,
+		"Top-k results for vector backends (pgvector, sqlitevec)",
 	)
 	flagMySQLDSN = flag.String(
 		"mysql-dsn",
@@ -94,6 +104,12 @@ var (
 		"qa-history-turns", 0,
 		"Recent conversation turns injected as context during QA (0=none, auto/agentic only)",
 	)
+	flagQASearchPasses = flag.Int(
+		"qa-search-passes",
+		1,
+		"Number of memory_search calls per QA "+
+			"(1=single search, auto/agentic only)",
+	)
 	flagLLMJudge = flag.Bool("llm-judge", false, "Enable LLM-as-Judge evaluation")
 	flagVerbose  = flag.Bool("verbose", false, "Verbose output")
 	// Debug flags (auto scenario diagnosis).
@@ -104,14 +120,20 @@ var (
 )
 
 const (
-	pgvectorTableDefault = "memory_eval"
-	pgvectorTableAuto    = "memory_eval_auto"
-	mysqlTableDefault    = "memory_eval_mysql"
-	mysqlTableAuto       = "memory_eval_auto_mysql"
+	pgvectorTableDefault  = "memory_eval"
+	pgvectorTableAuto     = "memory_eval_auto"
+	mysqlTableDefault     = "memory_eval_mysql"
+	mysqlTableAuto        = "memory_eval_auto_mysql"
+	sqliteTableDefault    = "memory_eval_sqlite"
+	sqliteTableAuto       = "memory_eval_auto_sqlite"
+	sqliteVecTableDefault = "memory_eval_sqlitevec"
+	sqliteVecTableAuto    = "memory_eval_auto_sqlitevec"
 
 	autoMemoryAsyncWorkers = 3
 	autoMemoryQueueSize    = 200
 	autoMemoryJobTimeout   = 2 * time.Minute
+
+	maxQASearchPasses = 3
 )
 
 // benchmarkExtractorPrompt is optimized for retrieval-based benchmark evaluation.
@@ -178,6 +200,7 @@ type EvalMetadata struct {
 	MemoryBackend  string    `json:"memory_backend,omitempty"`
 	MaxContext     int       `json:"max_context"`
 	QAHistoryTurns int       `json:"qa_history_turns,omitempty"`
+	QASearchPasses int       `json:"qa_search_passes,omitempty"`
 	LLMJudge       bool      `json:"llm_judge"`
 }
 
@@ -225,6 +248,12 @@ func main() {
 	if *flagQAHistoryTurns > 0 {
 		log.Printf("QA History Turns: %d", *flagQAHistoryTurns)
 	}
+	if *flagQASearchPasses > 1 {
+		log.Printf(
+			"QA Search Passes: %d",
+			*flagQASearchPasses,
+		)
+	}
 	log.Printf("Output: %s", outputDir)
 	if *flagResume {
 		log.Printf("Resume mode: enabled (checkpoint will be loaded if exists)")
@@ -264,6 +293,7 @@ func main() {
 		Verbose:           *flagVerbose,
 		SessionEventLimit: *flagSessionEventLimit,
 		QAHistoryTurns:    *flagQAHistoryTurns,
+		QASearchPasses:    *flagQASearchPasses,
 		DebugDumpMemories: *flagDebugDumpMemories,
 		DebugMemLimit:     *flagDebugMemLimit,
 		DebugQALimit:      *flagDebugQALimit,
@@ -423,6 +453,18 @@ func buildScenarioDir(outputDir string, scenario scenarios.ScenarioType, backend
 }
 
 func validateFlags() {
+	if *flagVectorTopK < 1 {
+		log.Fatalf("Invalid vector-topk: %d", *flagVectorTopK)
+	}
+	if *flagQASearchPasses < 1 ||
+		*flagQASearchPasses > maxQASearchPasses {
+		log.Fatalf(
+			"Invalid qa-search-passes: %d (range: 1-%d)",
+			*flagQASearchPasses,
+			maxQASearchPasses,
+		)
+	}
+
 	validScenarios := map[string]bool{
 		"long_context": true,
 		"agentic":      true,
@@ -437,9 +479,11 @@ func validateFlags() {
 	}
 
 	validBackends := map[string]bool{
-		"inmemory": true,
-		"pgvector": true,
-		"mysql":    true,
+		"inmemory":  true,
+		"sqlite":    true,
+		"sqlitevec": true,
+		"pgvector":  true,
+		"mysql":     true,
 	}
 	for _, b := range parseMemoryBackends(*flagMemoryBackends) {
 		if !validBackends[b] {
@@ -485,6 +529,32 @@ func getEmbedModelName() string {
 	return "text-embedding-3-small"
 }
 
+const (
+	envOpenAIBaseURL          = "OPENAI_BASE_URL"
+	envOpenAIEmbeddingAPIKey  = "OPENAI_EMBEDDING_API_KEY"
+	envOpenAIEmbeddingBaseURL = "OPENAI_EMBEDDING_BASE_URL"
+)
+
+func newEmbeddingEmbedder(modelName string) *openai.Embedder {
+	opts := []openai.Option{
+		openai.WithModel(modelName),
+	}
+
+	if apiKey := os.Getenv(envOpenAIEmbeddingAPIKey); apiKey != "" {
+		opts = append(opts, openai.WithAPIKey(apiKey))
+	}
+
+	baseURL := os.Getenv(envOpenAIEmbeddingBaseURL)
+	if baseURL == "" {
+		baseURL = os.Getenv(envOpenAIBaseURL)
+	}
+	if baseURL != "" {
+		opts = append(opts, openai.WithBaseURL(baseURL))
+	}
+
+	return openai.New(opts...)
+}
+
 func getPGVectorDSN() string {
 	if *flagPGVectorDSN != "" {
 		return *flagPGVectorDSN
@@ -525,18 +595,19 @@ func buildMemoryServiceOptions(
 	cfg memoryConfig,
 	extractorModel model.Model,
 ) memoryServiceOptions {
+	opts := memoryServiceOptions{vectorTopK: *flagVectorTopK}
 	if cfg.mode != memoryModeAuto {
-		return memoryServiceOptions{}
+		return opts
 	}
-	return memoryServiceOptions{
-		enableExtractor: true,
-		extractorModel:  extractorModel,
-	}
+	opts.enableExtractor = true
+	opts.extractorModel = extractorModel
+	return opts
 }
 
 type memoryServiceOptions struct {
 	enableExtractor bool
 	extractorModel  model.Model
+	vectorTopK      int
 }
 
 func createMemoryService(
@@ -548,6 +619,10 @@ func createMemoryService(
 		return createPGVectorService(opts)
 	case "mysql":
 		return createMySQLService(opts)
+	case "sqlite":
+		return createSQLiteService(opts)
+	case "sqlitevec":
+		return createSQLiteVecService(opts)
 	default:
 		return createInMemoryService(opts), nil
 	}
@@ -563,7 +638,7 @@ func createPGVectorService(
 		)
 	}
 	embedModelName := getEmbedModelName()
-	emb := openai.New(openai.WithModel(embedModelName))
+	emb := newEmbeddingEmbedder(embedModelName)
 	tableName := pgvectorTableDefault
 	var ext extractor.MemoryExtractor
 	if opts.enableExtractor {
@@ -583,6 +658,7 @@ func createPGVectorService(
 	svcOpts := []memorypgvector.ServiceOpt{
 		memorypgvector.WithPGVectorClientDSN(dsn),
 		memorypgvector.WithEmbedder(emb),
+		memorypgvector.WithMaxResults(opts.vectorTopK),
 		memorypgvector.WithTableName(tableName),
 		memorypgvector.WithExtractor(ext),
 	}
@@ -711,6 +787,7 @@ func runEvaluation(
 			MemoryBackend:  backend,
 			MaxContext:     config.MaxContext,
 			QAHistoryTurns: config.QAHistoryTurns,
+			QASearchPasses: config.QASearchPasses,
 			LLMJudge:       config.EnableLLMJudge,
 		},
 		Summary: &EvalSummary{
@@ -775,6 +852,10 @@ func printSummary(result *EvaluationResult) {
 	if result.Metadata.QAHistoryTurns > 0 {
 		fmt.Printf("QA History Turns: %d\n",
 			result.Metadata.QAHistoryTurns)
+	}
+	if result.Metadata.QASearchPasses > 1 {
+		fmt.Printf("QA Search Passes: %d\n",
+			result.Metadata.QASearchPasses)
 	}
 	fmt.Printf("Samples: %d | Questions: %d\n",
 		result.Summary.TotalSamples, result.Summary.TotalQuestions)

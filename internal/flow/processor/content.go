@@ -200,6 +200,8 @@ func WithSummaryFormatter(formatter func(summary string) string) ContentOption {
 const (
 	mergedUserSeparator = "\n\n"
 	contextPrefix       = "For context:"
+
+	contentHasSessionSummaryStateKey = "processor:content:has_session_summary"
 )
 
 // NewContentRequestProcessor creates a new content request processor.
@@ -296,6 +298,10 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		}
 
 		if summaryMsg != nil {
+			invocation.SetState(
+				contentHasSessionSummaryStateKey,
+				true,
+			)
 			// Insert summary as a separate system message after the last
 			// system message to keep stable instructions cacheable.
 			systemMsgIndex := findLastSystemMessageIndex(req.Messages)
@@ -742,52 +748,92 @@ func (p *ContentRequestProcessor) mergeUserMessages(
 	return merged
 }
 
+// shouldIncludeEvent decides whether an event should be included in the model
+// request and whether that event should be treated as the invocation message.
+//
+// The second return value (isInvocationMessage) is intentionally strict: only
+// exact invocation-message matches return true. Mid-turn user-message
+// protection may still include an event, but returns false for this flag to
+// avoid conflating inclusion with strict message equality.
 func (p *ContentRequestProcessor) shouldIncludeEvent(evt event.Event, inv *agent.Invocation, filter string,
 	isZeroTime bool, since time.Time) (bool, bool) {
-	if evt.Response == nil || evt.IsPartial || !evt.IsValidContent() {
+	// Fast reject malformed, partial, or empty-content events.
+	if !isEventEligibleForInclusion(evt) {
 		return false, false
 	}
-
-	// check is invocation message
-	if inv.RunOptions.RequestID == evt.RequestID &&
-		len(evt.Choices) > 0 &&
-		invocationMessageEqual(inv.Message, evt.Choices[0].Message) {
+	// Exact invocation message match keeps existing semantics.
+	if isStrictInvocationMessage(evt, inv) {
 		return true, true
 	}
-
+	// Keep the current invocation user message even when summary UpdatedAt
+	// would otherwise exclude it.
+	if isCurrentInvocationUserMessage(evt, inv) {
+		return true, false
+	}
 	// Use strict After so events stamped exactly at summary UpdatedAt are
 	// treated as already summarized and not re-sent.
 	if !isZeroTime && !evt.Timestamp.After(since) {
 		return false, false
 	}
+	if !p.passTimelineFilter(evt, inv) {
+		return false, false
+	}
+	if !p.passBranchFilter(evt, filter) {
+		return false, false
+	}
+	return true, false
+}
 
-	// Check timeline filter
+// isEventEligibleForInclusion checks basic event validity before expensive
+// filtering logic runs.
+func isEventEligibleForInclusion(evt event.Event) bool {
+	return evt.Response != nil && !evt.IsPartial && evt.IsValidContent()
+}
+
+// isStrictInvocationMessage checks whether the event exactly matches the
+// current invocation message, including content equality semantics.
+func isStrictInvocationMessage(evt event.Event, inv *agent.Invocation) bool {
+	return inv.RunOptions.RequestID == evt.RequestID &&
+		len(evt.Choices) > 0 &&
+		invocationMessageEqual(inv.Message, evt.Choices[0].Message)
+}
+
+// isCurrentInvocationUserMessage keeps the current invocation's user message
+// even when summary UpdatedAt would exclude it by timestamp.
+//
+// RequestID + InvocationID matching avoids preserving unrelated user messages
+// from other invocations that may share the same request scope.
+func isCurrentInvocationUserMessage(evt event.Event, inv *agent.Invocation) bool {
+	return inv.RunOptions.RequestID != "" &&
+		inv.RunOptions.RequestID == evt.RequestID &&
+		inv.InvocationID != "" &&
+		inv.InvocationID == evt.InvocationID &&
+		len(evt.Choices) > 0 &&
+		evt.Choices[0].Message.Role == model.RoleUser
+}
+
+// passTimelineFilter applies request/invocation timeline constraints.
+func (p *ContentRequestProcessor) passTimelineFilter(evt event.Event, inv *agent.Invocation) bool {
 	switch p.TimelineFilterMode {
 	case TimelineFilterCurrentRequest:
-		if inv.RunOptions.RequestID != evt.RequestID {
-			return false, false
-		}
+		return inv.RunOptions.RequestID == evt.RequestID
 	case TimelineFilterCurrentInvocation:
-		if evt.InvocationID != inv.InvocationID {
-			return false, false
-		}
+		return evt.InvocationID == inv.InvocationID
 	default:
+		return true
 	}
+}
 
-	// Check branch filter
+// passBranchFilter applies branch-scoping constraints.
+func (p *ContentRequestProcessor) passBranchFilter(evt event.Event, filter string) bool {
 	switch p.BranchFilterMode {
 	case BranchFilterModeExact:
-		if evt.FilterKey != filter {
-			return false, false
-		}
+		return evt.FilterKey == filter
 	case BranchFilterModePrefix:
-		if !evt.Filter(filter) {
-			return false, false
-		}
+		return evt.Filter(filter)
 	default:
+		return true
 	}
-
-	return true, false
 }
 
 func invocationMessageEqual(invMsg model.Message, evtMsg model.Message) bool {
@@ -835,54 +881,76 @@ func (p *ContentRequestProcessor) convertForeignEvent(evt *event.Event) event.Ev
 	convertedEvent.Author = "user"
 
 	// Build content parts for context.
-	var contentParts []string
+	var contents []string
+	var contentParts []model.ContentPart
 	if p.AddContextPrefix {
-		contentParts = append(contentParts, contextPrefix)
+		prefix := contextPrefix
+		contents = append(contents, contextPrefix)
+		contentParts = append(contentParts, model.ContentPart{
+			Type: model.ContentTypeText,
+			Text: &prefix,
+		})
 	}
 
 	for _, choice := range evt.Choices {
+		if len(choice.Message.ContentParts) > 0 {
+			if p.AddContextPrefix {
+				prefix := fmt.Sprintf("[%s] said:", evt.Author)
+				contentParts = append(contentParts, model.ContentPart{
+					Type: model.ContentTypeText,
+					Text: &prefix,
+				})
+			}
+			contentParts = append(contentParts, choice.Message.ContentParts...)
+		}
+
 		if choice.Message.Content != "" {
 			if p.AddContextPrefix {
-				contentParts = append(contentParts,
-					fmt.Sprintf("[%s] said: %s", evt.Author, choice.Message.Content))
+				contents = append(contents, fmt.Sprintf("[%s] said: %s", evt.Author, choice.Message.Content))
 			} else {
 				// When prefix is disabled, pass the content directly.
-				contentParts = append(contentParts, choice.Message.Content)
+				contents = append(contents, choice.Message.Content)
 			}
 		} else if len(choice.Message.ToolCalls) > 0 {
 			for _, toolCall := range choice.Message.ToolCalls {
 				if p.AddContextPrefix {
-					contentParts = append(contentParts,
+					contents = append(contents,
 						fmt.Sprintf("[%s] called tool `%s` with parameters: %s",
 							evt.Author, toolCall.Function.Name, string(toolCall.Function.Arguments)))
 				} else {
 					// When prefix is disabled, pass tool call info directly.
-					contentParts = append(contentParts,
+					contents = append(contents,
 						fmt.Sprintf("Tool `%s` called with parameters: %s",
 							toolCall.Function.Name, string(toolCall.Function.Arguments)))
 				}
 			}
 		} else if choice.Message.ToolID != "" {
 			if p.AddContextPrefix {
-				contentParts = append(contentParts,
+				contents = append(contents,
 					fmt.Sprintf("[%s] `%s` tool returned result: %s",
 						evt.Author, choice.Message.ToolID, choice.Message.Content))
 			} else {
 				// When prefix is disabled, pass tool result directly.
-				contentParts = append(contentParts, choice.Message.Content)
+				contents = append(contents, choice.Message.Content)
 			}
 		}
 	}
 
 	// Set the converted message.
-	if len(contentParts) > 0 {
+	if len(contents) > 0 || len(contentParts) > 0 {
+		msg := model.Message{
+			Role: model.RoleUser,
+		}
+		if len(contents) > 0 {
+			msg.Content = strings.Join(contents, " ")
+		}
+		if len(contentParts) > 0 {
+			msg.ContentParts = contentParts
+		}
 		convertedEvent.Response.Choices = []model.Choice{
 			{
-				Index: 0,
-				Message: model.Message{
-					Role:    model.RoleUser,
-					Content: strings.Join(contentParts, " "),
-				},
+				Index:   0,
+				Message: msg,
 			},
 		}
 	}

@@ -1493,350 +1493,42 @@ func TestWithEnableTokenTailoring_EmptyMessages(t *testing.T) {
 // Prompt Cache Tests
 // ============================================================================
 
-// TestWithEnablePromptCache tests the WithEnablePromptCache option.
-func TestWithEnablePromptCache(t *testing.T) {
-	tests := []struct {
-		name     string
-		enabled  bool
-		expected bool
-	}{
-		{
-			name:     "enable prompt cache",
-			enabled:  true,
-			expected: true,
-		},
-		{
-			name:     "disable prompt cache",
-			enabled:  false,
-			expected: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			opts := &options{}
-			WithEnablePromptCache(tt.enabled)(opts)
-			assert.Equal(t, tt.expected, opts.enablePromptCache)
-		})
-	}
-}
-
-// TestPromptCache_DefaultEnabled tests that prompt cache is enabled by default.
-func TestPromptCache_DefaultEnabled(t *testing.T) {
+// TestPromptCache_DefaultDisabled tests that prompt cache is disabled by default.
+func TestPromptCache_DefaultDisabled(t *testing.T) {
 	m := New("claude-3-5-sonnet")
-	assert.True(t, m.enablePromptCache, "prompt cache should be enabled by default")
-	assert.True(t, m.cacheSystemPrompt, "cache system prompt should be enabled by default")
-	assert.True(t, m.cacheTools, "cache tools should be enabled by default")
-	assert.Equal(t, 1024, m.minCacheableTokens, "min cacheable tokens should be 1024 by default")
-}
-
-// TestWithMinCacheableTokens tests the WithMinCacheableTokens option.
-func TestWithMinCacheableTokens(t *testing.T) {
-	tests := []struct {
-		name     string
-		tokens   int
-		expected int
-	}{
-		{
-			name:     "set valid tokens",
-			tokens:   2048,
-			expected: 2048,
-		},
-		{
-			name:     "set below minimum - should clamp to 1024",
-			tokens:   500,
-			expected: 1024,
-		},
-		{
-			name:     "set exactly 1024",
-			tokens:   1024,
-			expected: 1024,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			opts := &options{}
-			WithMinCacheableTokens(tt.tokens)(opts)
-			assert.Equal(t, tt.expected, opts.minCacheableTokens)
-		})
-	}
+	assert.False(t, m.cacheSystemPrompt, "cache system prompt should be disabled by default")
+	assert.False(t, m.cacheTools, "cache tools should be disabled by default")
+	assert.False(t, m.cacheMessages, "cache messages should be disabled by default")
 }
 
 // TestWithCacheSystemPrompt tests the WithCacheSystemPrompt option.
 func TestWithCacheSystemPrompt(t *testing.T) {
-	tests := []struct {
-		name     string
-		cache    bool
-		expected bool
-	}{
-		{
-			name:     "enable cache system prompt",
-			cache:    true,
-			expected: true,
-		},
-		{
-			name:     "disable cache system prompt",
-			cache:    false,
-			expected: false,
-		},
-	}
+	t.Run("enable cache system prompt", func(t *testing.T) {
+		opts := &options{}
+		WithCacheSystemPrompt(true)(opts)
+		assert.True(t, opts.cacheSystemPrompt)
+	})
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			opts := &options{}
-			WithCacheSystemPrompt(tt.cache)(opts)
-			assert.Equal(t, tt.expected, opts.cacheSystemPrompt)
-		})
-	}
+	t.Run("disable cache system prompt", func(t *testing.T) {
+		opts := &options{}
+		WithCacheSystemPrompt(false)(opts)
+		assert.False(t, opts.cacheSystemPrompt)
+	})
 }
 
 // TestWithCacheTools tests the WithCacheTools option.
 func TestWithCacheTools(t *testing.T) {
-	tests := []struct {
-		name     string
-		cache    bool
-		expected bool
-	}{
-		{
-			name:     "enable cache tools",
-			cache:    true,
-			expected: true,
-		},
-		{
-			name:     "disable cache tools",
-			cache:    false,
-			expected: false,
-		},
-	}
+	t.Run("enable cache tools", func(t *testing.T) {
+		opts := &options{}
+		WithCacheTools(true)(opts)
+		assert.True(t, opts.cacheTools)
+	})
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			opts := &options{}
-			WithCacheTools(tt.cache)(opts)
-			assert.Equal(t, tt.expected, opts.cacheTools)
-		})
-	}
-}
-
-// TestShouldEnableCache tests the shouldEnableCache method.
-func TestShouldEnableCache(t *testing.T) {
-	largeSystemContent := strings.Repeat("This is a large system prompt. ", 200) // ~6000 chars = ~1500 tokens
-
-	tests := []struct {
-		name     string
-		model    *Model
-		request  *model.Request
-		expected bool
-	}{
-		{
-			name:     "cache disabled - should return false",
-			model:    New("claude-3-5-sonnet", WithEnablePromptCache(false)),
-			request:  &model.Request{Messages: []model.Message{{Role: model.RoleSystem, Content: largeSystemContent}}},
-			expected: false,
-		},
-		{
-			name:     "small system prompt - should return false",
-			model:    New("claude-3-5-sonnet", WithEnablePromptCache(true)),
-			request:  &model.Request{Messages: []model.Message{{Role: model.RoleSystem, Content: "Short prompt"}}},
-			expected: false,
-		},
-		{
-			name:     "large system prompt - should return true",
-			model:    New("claude-3-5-sonnet", WithEnablePromptCache(true)),
-			request:  &model.Request{Messages: []model.Message{{Role: model.RoleSystem, Content: largeSystemContent}}},
-			expected: true,
-		},
-		{
-			name:     "cache system prompt disabled - should return false",
-			model:    New("claude-3-5-sonnet", WithEnablePromptCache(true), WithCacheSystemPrompt(false)),
-			request:  &model.Request{Messages: []model.Message{{Role: model.RoleSystem, Content: largeSystemContent}}},
-			expected: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := tt.model.shouldEnableCache(tt.request)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
-// TestShouldEnableCache_WithTools tests shouldEnableCache with tools.
-func TestShouldEnableCache_WithTools(t *testing.T) {
-	largeSystemContent := strings.Repeat("This is a large system prompt. ", 200)
-
-	toolMap := map[string]tool.Tool{
-		"calculator": stubTool{decl: &tool.Declaration{
-			Name:        "calculator",
-			Description: strings.Repeat("A calculator tool that performs math. ", 50),
-		}},
-	}
-
-	tests := []struct {
-		name     string
-		model    *Model
-		request  *model.Request
-		expected bool
-	}{
-		{
-			name:  "tools with cache enabled",
-			model: New("claude-3-5-sonnet", WithEnablePromptCache(true), WithCacheTools(true)),
-			request: &model.Request{
-				Messages: []model.Message{{Role: model.RoleSystem, Content: largeSystemContent}},
-				Tools:    toolMap,
-			},
-			expected: true,
-		},
-		{
-			name:  "tools with cache disabled",
-			model: New("claude-3-5-sonnet", WithEnablePromptCache(true), WithCacheTools(false)),
-			request: &model.Request{
-				Messages: []model.Message{{Role: model.RoleSystem, Content: largeSystemContent}},
-				Tools:    toolMap,
-			},
-			expected: true, // Still true because system prompt is large enough
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := tt.model.shouldEnableCache(tt.request)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
-// TestEstimateSystemTokens tests the estimateSystemTokens method.
-func TestEstimateSystemTokens(t *testing.T) {
-	m := New("claude-3-5-sonnet")
-
-	tests := []struct {
-		name      string
-		messages  []model.Message
-		minTokens int
-		maxTokens int
-	}{
-		{
-			name:      "empty messages",
-			messages:  []model.Message{},
-			minTokens: 0,
-			maxTokens: 0,
-		},
-		{
-			name: "no system messages",
-			messages: []model.Message{
-				{Role: model.RoleUser, Content: "Hello"},
-			},
-			minTokens: 0,
-			maxTokens: 0,
-		},
-		{
-			name: "system message with content",
-			messages: []model.Message{
-				{Role: model.RoleSystem, Content: "You are a helpful assistant"},
-			},
-			minTokens: 5, // ~28 chars / 4 = 7
-			maxTokens: 10,
-		},
-		{
-			name: "system message with content parts",
-			messages: []model.Message{
-				{Role: model.RoleSystem, ContentParts: []model.ContentPart{
-					{Type: model.ContentTypeText, Text: ptrString("Part 1 content")},
-					{Type: model.ContentTypeText, Text: ptrString("Part 2 content")},
-				}},
-			},
-			minTokens: 5,
-			maxTokens: 15,
-		},
-		{
-			name: "multiple system messages",
-			messages: []model.Message{
-				{Role: model.RoleSystem, Content: "System 1"},
-				{Role: model.RoleUser, Content: "User message"},
-				{Role: model.RoleSystem, Content: "System 2"},
-			},
-			minTokens: 3,
-			maxTokens: 10,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := m.estimateSystemTokens(tt.messages)
-			assert.GreaterOrEqual(t, result, tt.minTokens)
-			assert.LessOrEqual(t, result, tt.maxTokens)
-		})
-	}
-}
-
-// TestEstimateToolTokens tests the estimateToolTokens method.
-func TestEstimateToolTokens(t *testing.T) {
-	m := New("claude-3-5-sonnet")
-
-	tests := []struct {
-		name      string
-		tools     map[string]tool.Tool
-		minTokens int
-		maxTokens int
-	}{
-		{
-			name:      "empty tools",
-			tools:     nil,
-			minTokens: 0,
-			maxTokens: 0,
-		},
-		{
-			name: "single tool without schema",
-			tools: map[string]tool.Tool{
-				"calc": stubTool{decl: &tool.Declaration{
-					Name:        "calculator",
-					Description: "Performs calculations",
-				}},
-			},
-			minTokens: 5, // name + description / 4
-			maxTokens: 20,
-		},
-		{
-			name: "single tool with schema",
-			tools: map[string]tool.Tool{
-				"calc": stubTool{decl: &tool.Declaration{
-					Name:        "calculator",
-					Description: "Performs calculations",
-					InputSchema: &tool.Schema{Type: "object"},
-				}},
-			},
-			minTokens: 100, // Base overhead for schema
-			maxTokens: 150,
-		},
-		{
-			name: "multiple tools with schema",
-			tools: map[string]tool.Tool{
-				"calc": stubTool{decl: &tool.Declaration{
-					Name:        "calculator",
-					Description: "Performs calculations",
-					InputSchema: &tool.Schema{Type: "object"},
-				}},
-				"time": stubTool{decl: &tool.Declaration{
-					Name:        "get_time",
-					Description: "Gets current time",
-					InputSchema: &tool.Schema{Type: "object"},
-				}},
-			},
-			minTokens: 200,
-			maxTokens: 300,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := m.estimateToolTokens(tt.tools)
-			assert.GreaterOrEqual(t, result, tt.minTokens)
-			assert.LessOrEqual(t, result, tt.maxTokens)
-		})
-	}
+	t.Run("disable cache tools", func(t *testing.T) {
+		opts := &options{}
+		WithCacheTools(false)(opts)
+		assert.False(t, opts.cacheTools)
+	})
 }
 
 // TestApplyCacheControlToSystem tests the applyCacheControlToSystem method.
@@ -1876,21 +1568,11 @@ func TestApplyCacheControlToSystem(t *testing.T) {
 // TestApplyCacheControlToTools tests the applyCacheControlToTools method.
 func TestApplyCacheControlToTools(t *testing.T) {
 	m := New("claude-3-5-sonnet", WithCacheTools(true))
-	mNoCacheTools := New("claude-3-5-sonnet", WithCacheTools(false))
 
 	t.Run("empty tools", func(t *testing.T) {
 		tools := []anthropic.ToolUnionParam{}
 		result := m.applyCacheControlToTools(tools)
 		assert.Empty(t, result)
-	})
-
-	t.Run("cache tools disabled", func(t *testing.T) {
-		tools := []anthropic.ToolUnionParam{
-			{OfTool: &anthropic.ToolParam{Name: "calc"}},
-		}
-		result := mNoCacheTools.applyCacheControlToTools(tools)
-		// When cache is disabled, should return original without modification
-		assert.Len(t, result, 1)
 	})
 
 	t.Run("single tool", func(t *testing.T) {
@@ -1911,8 +1593,19 @@ func TestApplyCacheControlToTools(t *testing.T) {
 		}
 		result := m.applyCacheControlToTools(tools)
 		assert.Len(t, result, 3)
-		// Check that cache control is set on the last item
-		assert.NotNil(t, result[2].OfTool.CacheControl)
+		// Check that cache control is set on the last item only
+		assert.NotEmpty(t, result[2].OfTool.CacheControl.Type)
+		assert.Empty(t, result[0].OfTool.CacheControl.Type)
+		assert.Empty(t, result[1].OfTool.CacheControl.Type)
+	})
+
+	t.Run("does not modify original", func(t *testing.T) {
+		original := []anthropic.ToolUnionParam{
+			{OfTool: &anthropic.ToolParam{Name: "calc"}},
+		}
+		_ = m.applyCacheControlToTools(original)
+		// Original should not be modified
+		assert.Empty(t, original[0].OfTool.CacheControl.Type)
 	})
 }
 
@@ -1923,36 +1616,23 @@ func ptrString(s string) *string {
 
 // TestWithCacheMessages tests the WithCacheMessages option.
 func TestWithCacheMessages(t *testing.T) {
-	tests := []struct {
-		name     string
-		cache    bool
-		expected bool
-	}{
-		{
-			name:     "enable cache messages",
-			cache:    true,
-			expected: true,
-		},
-		{
-			name:     "disable cache messages",
-			cache:    false,
-			expected: false,
-		},
-	}
+	t.Run("enable cache messages", func(t *testing.T) {
+		opts := &options{}
+		WithCacheMessages(true)(opts)
+		assert.True(t, opts.cacheMessages)
+	})
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			opts := &options{}
-			WithCacheMessages(tt.cache)(opts)
-			assert.Equal(t, tt.expected, opts.cacheMessages)
-		})
-	}
+	t.Run("disable cache messages", func(t *testing.T) {
+		opts := &options{}
+		WithCacheMessages(false)(opts)
+		assert.False(t, opts.cacheMessages)
+	})
 }
 
-// TestCacheMessages_DefaultEnabled tests that cache messages is enabled by default.
-func TestCacheMessages_DefaultEnabled(t *testing.T) {
+// TestCacheMessages_DefaultDisabled tests that cache messages is disabled by default.
+func TestCacheMessages_DefaultDisabled(t *testing.T) {
 	m := New("claude-3-5-sonnet")
-	assert.True(t, m.cacheMessages, "cache messages should be enabled by default")
+	assert.False(t, m.cacheMessages, "cache messages should be disabled by default")
 }
 
 // TestFindLastAssistantMessageIndex tests the findLastAssistantMessageIndex method.
@@ -2059,77 +1739,10 @@ func TestApplyCacheControlToMessages(t *testing.T) {
 	})
 }
 
-// TestEstimateMessageTokens tests the estimateMessageTokens method.
-func TestEstimateMessageTokens(t *testing.T) {
-	m := New("claude-3-5-sonnet")
-
-	tests := []struct {
-		name      string
-		messages  []model.Message
-		minTokens int
-		maxTokens int
-	}{
-		{
-			name:      "empty messages",
-			messages:  []model.Message{},
-			minTokens: 0,
-			maxTokens: 0,
-		},
-		{
-			name: "only system messages - should return 0",
-			messages: []model.Message{
-				{Role: model.RoleSystem, Content: "System prompt"},
-			},
-			minTokens: 0,
-			maxTokens: 0,
-		},
-		{
-			name: "user message",
-			messages: []model.Message{
-				{Role: model.RoleUser, Content: "Hello, how are you?"},
-			},
-			minTokens: 3,
-			maxTokens: 10,
-		},
-		{
-			name: "mixed messages",
-			messages: []model.Message{
-				{Role: model.RoleSystem, Content: "System prompt"},
-				{Role: model.RoleUser, Content: "User message"},
-				{Role: model.RoleAssistant, Content: "Assistant response"},
-			},
-			minTokens: 5,
-			maxTokens: 20,
-		},
-		{
-			name: "message with content parts",
-			messages: []model.Message{
-				{Role: model.RoleUser, ContentParts: []model.ContentPart{
-					{Type: model.ContentTypeText, Text: ptrString("Part 1")},
-					{Type: model.ContentTypeText, Text: ptrString("Part 2")},
-				}},
-			},
-			minTokens: 2,
-			maxTokens: 10,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := m.estimateMessageTokens(tt.messages)
-			assert.GreaterOrEqual(t, result, tt.minTokens)
-			assert.LessOrEqual(t, result, tt.maxTokens)
-		})
-	}
-}
-
-// TestApplyOptimalCacheControl tests the applyOptimalCacheControl method.
-func TestApplyOptimalCacheControl(t *testing.T) {
-	largeSystemContent := strings.Repeat("This is a large system prompt. ", 200)
-
-	t.Run("cache at messages when multi-turn", func(t *testing.T) {
+// TestApplyCacheControl tests the applyCacheControl method with independent multi-breakpoint strategy.
+func TestApplyCacheControl(t *testing.T) {
+	t.Run("all breakpoints applied when multi-turn with tools", func(t *testing.T) {
 		m := New("claude-3-5-sonnet",
-			WithEnablePromptCache(true),
 			WithCacheMessages(true),
 			WithCacheTools(true),
 			WithCacheSystemPrompt(true),
@@ -2147,79 +1760,22 @@ func TestApplyOptimalCacheControl(t *testing.T) {
 			}},
 		}
 		systemPrompts := []anthropic.TextBlockParam{
-			{Text: largeSystemContent},
-		}
-		tools := []anthropic.ToolUnionParam{}
-
-		resultMsgs, resultSys, resultTools := m.applyOptimalCacheControl(messages, systemPrompts, tools)
-
-		// Should cache at assistant message (index 1)
-		assert.Len(t, resultMsgs, 3)
-		assert.NotNil(t, resultMsgs[1].Content[0].OfText.CacheControl)
-		// System prompts should not have cache control (messages take priority)
-		assert.Empty(t, resultSys[0].CacheControl.Type)
-		assert.Empty(t, resultTools)
-	})
-
-	t.Run("cache at tools when no multi-turn history", func(t *testing.T) {
-		m := New("claude-3-5-sonnet",
-			WithEnablePromptCache(true),
-			WithCacheMessages(true),
-			WithCacheTools(true),
-			WithCacheSystemPrompt(true),
-		)
-
-		messages := []anthropic.MessageParam{
-			{Role: "user", Content: []anthropic.ContentBlockParamUnion{
-				{OfText: &anthropic.TextBlockParam{Text: "Hello"}},
-			}},
-		}
-		systemPrompts := []anthropic.TextBlockParam{
-			{Text: largeSystemContent},
+			{Text: "You are a helpful assistant."},
 		}
 		tools := []anthropic.ToolUnionParam{
 			{OfTool: &anthropic.ToolParam{Name: "calc"}},
 		}
 
-		resultMsgs, resultSys, resultTools := m.applyOptimalCacheControl(messages, systemPrompts, tools)
+		resultSys, resultTools, resultMsgs := m.applyCacheControl(systemPrompts, tools, messages)
 
-		// Should cache at tools
-		assert.Len(t, resultMsgs, 1)
-		assert.Len(t, resultTools, 1)
-		assert.NotNil(t, resultTools[0].OfTool.CacheControl)
-		// System prompts should not have cache control (tools take priority)
-		assert.Empty(t, resultSys[0].CacheControl.Type)
+		// All three breakpoints should be set independently
+		assert.NotEmpty(t, resultSys[0].CacheControl.Type, "system should have cache control")
+		assert.NotNil(t, resultTools[0].OfTool.CacheControl, "tools should have cache control")
+		assert.NotNil(t, resultMsgs[1].Content[0].OfText.CacheControl, "assistant message should have cache control")
 	})
 
-	t.Run("cache at system when no tools and no multi-turn", func(t *testing.T) {
+	t.Run("system and tools cached even when messages disabled", func(t *testing.T) {
 		m := New("claude-3-5-sonnet",
-			WithEnablePromptCache(true),
-			WithCacheMessages(true),
-			WithCacheTools(true),
-			WithCacheSystemPrompt(true),
-		)
-
-		messages := []anthropic.MessageParam{
-			{Role: "user", Content: []anthropic.ContentBlockParamUnion{
-				{OfText: &anthropic.TextBlockParam{Text: "Hello"}},
-			}},
-		}
-		systemPrompts := []anthropic.TextBlockParam{
-			{Text: largeSystemContent},
-		}
-		tools := []anthropic.ToolUnionParam{}
-
-		resultMsgs, resultSys, resultTools := m.applyOptimalCacheControl(messages, systemPrompts, tools)
-
-		// Should cache at system
-		assert.Len(t, resultMsgs, 1)
-		assert.Empty(t, resultTools)
-		assert.NotEmpty(t, resultSys[0].CacheControl.Type)
-	})
-
-	t.Run("messages caching disabled - fallback to tools", func(t *testing.T) {
-		m := New("claude-3-5-sonnet",
-			WithEnablePromptCache(true),
 			WithCacheMessages(false),
 			WithCacheTools(true),
 			WithCacheSystemPrompt(true),
@@ -2237,72 +1793,71 @@ func TestApplyOptimalCacheControl(t *testing.T) {
 			}},
 		}
 		systemPrompts := []anthropic.TextBlockParam{
-			{Text: largeSystemContent},
+			{Text: "You are a helpful assistant."},
 		}
 		tools := []anthropic.ToolUnionParam{
 			{OfTool: &anthropic.ToolParam{Name: "calc"}},
 		}
 
-		resultMsgs, resultSys, resultTools := m.applyOptimalCacheControl(messages, systemPrompts, tools)
+		resultSys, resultTools, resultMsgs := m.applyCacheControl(systemPrompts, tools, messages)
 
-		// Should cache at tools (messages caching disabled)
-		assert.NotNil(t, resultTools[0].OfTool.CacheControl)
-		// Messages should not have cache control
-		for _, msg := range resultMsgs {
-			if msg.Role == "assistant" && len(msg.Content) > 0 && msg.Content[0].OfText != nil {
-				assert.Empty(t, msg.Content[0].OfText.CacheControl.Type)
-			}
-		}
-		// System should not have cache control (tools take priority)
-		assert.Empty(t, resultSys[0].CacheControl.Type)
+		// System and tools should have cache control
+		assert.NotEmpty(t, resultSys[0].CacheControl.Type, "system should have cache control")
+		assert.NotNil(t, resultTools[0].OfTool.CacheControl, "tools should have cache control")
+		// Messages should NOT have cache control
+		assert.Empty(t, resultMsgs[1].Content[0].OfText.CacheControl.Type, "assistant message should not have cache control")
 	})
-}
 
-// TestShouldEnableCache_WithMessages tests shouldEnableCache with message history.
-func TestShouldEnableCache_WithMessages(t *testing.T) {
-	// Need at least 1024 tokens, 1 token ≈ 4 chars, so need ~4100 chars
-	largeContent := strings.Repeat("This is a message with content. ", 150)
+	t.Run("only system when no tools and messages disabled", func(t *testing.T) {
+		m := New("claude-3-5-sonnet",
+			WithCacheMessages(false),
+			WithCacheTools(true),
+			WithCacheSystemPrompt(true),
+		)
 
-	tests := []struct {
-		name     string
-		model    *Model
-		request  *model.Request
-		expected bool
-	}{
-		{
-			name:  "multi-turn conversation with sufficient tokens",
-			model: New("claude-3-5-sonnet", WithEnablePromptCache(true), WithCacheMessages(true)),
-			request: &model.Request{
-				Messages: []model.Message{
-					{Role: model.RoleSystem, Content: largeContent},
-					{Role: model.RoleUser, Content: "Hello"},
-					{Role: model.RoleAssistant, Content: largeContent},
-					{Role: model.RoleUser, Content: "How are you?"},
-				},
-			},
-			expected: true,
-		},
-		{
-			name:  "multi-turn with messages caching disabled",
-			model: New("claude-3-5-sonnet", WithEnablePromptCache(true), WithCacheMessages(false), WithCacheSystemPrompt(true)),
-			request: &model.Request{
-				Messages: []model.Message{
-					{Role: model.RoleSystem, Content: largeContent},
-					{Role: model.RoleUser, Content: "Hello"},
-					{Role: model.RoleAssistant, Content: "Hi"},
-					{Role: model.RoleUser, Content: "How are you?"},
-				},
-			},
-			expected: true, // Still true because system prompt is large enough (>1024 tokens)
-		},
-	}
+		messages := []anthropic.MessageParam{
+			{Role: "user", Content: []anthropic.ContentBlockParamUnion{
+				{OfText: &anthropic.TextBlockParam{Text: "Hello"}},
+			}},
+		}
+		systemPrompts := []anthropic.TextBlockParam{
+			{Text: "You are a helpful assistant."},
+		}
+		tools := []anthropic.ToolUnionParam{}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := tt.model.shouldEnableCache(tt.request)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
+		resultSys, resultTools, _ := m.applyCacheControl(systemPrompts, tools, messages)
+
+		assert.NotEmpty(t, resultSys[0].CacheControl.Type, "system should have cache control")
+		assert.Empty(t, resultTools)
+	})
+
+	t.Run("no breakpoints when all caching disabled", func(t *testing.T) {
+		m := New("claude-3-5-sonnet")
+
+		messages := []anthropic.MessageParam{
+			{Role: "user", Content: []anthropic.ContentBlockParamUnion{
+				{OfText: &anthropic.TextBlockParam{Text: "Hello"}},
+			}},
+			{Role: "assistant", Content: []anthropic.ContentBlockParamUnion{
+				{OfText: &anthropic.TextBlockParam{Text: "Hi"}},
+			}},
+			{Role: "user", Content: []anthropic.ContentBlockParamUnion{
+				{OfText: &anthropic.TextBlockParam{Text: "Bye"}},
+			}},
+		}
+		systemPrompts := []anthropic.TextBlockParam{
+			{Text: "System"},
+		}
+		tools := []anthropic.ToolUnionParam{
+			{OfTool: &anthropic.ToolParam{Name: "calc"}},
+		}
+
+		resultSys, resultTools, resultMsgs := m.applyCacheControl(systemPrompts, tools, messages)
+
+		assert.Empty(t, resultSys[0].CacheControl.Type, "system should not have cache control")
+		assert.Empty(t, resultTools[0].OfTool.CacheControl.Type, "tools should not have cache control")
+		assert.Empty(t, resultMsgs[1].Content[0].OfText.CacheControl.Type, "messages should not have cache control")
+	})
 }
 
 // TestIntegration_AutoOptimalCacheStrategy tests the full integration of auto cache optimization.
@@ -2336,7 +1891,8 @@ func TestIntegration_AutoOptimalCacheStrategy(t *testing.T) {
 	}
 
 	m := New("claude-3-5-sonnet",
-		WithEnablePromptCache(true), // Just one switch like OpenAI
+		WithCacheSystemPrompt(true),
+		WithCacheMessages(true),
 		WithHTTPClientOptions(),
 		WithChatRequestCallback(func(ctx context.Context, req *anthropic.MessageNewParams) {
 			captured = req
@@ -2362,8 +1918,10 @@ func TestIntegration_AutoOptimalCacheStrategy(t *testing.T) {
 
 	require.NotNil(t, captured, "expected request callback to capture request")
 
-	// Verify that cache control was automatically applied
-	// With multi-turn, it should be on the last assistant message
+	// Verify that cache control was applied to system prompt
+	assert.NotEmpty(t, captured.System[0].CacheControl.Type, "expected cache control on system prompt")
+
+	// Verify that cache control was applied to assistant message
 	foundCacheControl := false
 	for _, msg := range captured.Messages {
 		if msg.Role == "assistant" {

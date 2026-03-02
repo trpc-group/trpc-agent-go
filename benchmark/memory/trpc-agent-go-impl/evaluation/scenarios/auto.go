@@ -33,28 +33,6 @@ const (
 	autoQAMaxToolIterations = 8
 )
 
-// autoQAInstruction is a strict instruction for the auto QA agent
-// to produce concise answers using memory_search tool.
-const autoQAInstruction = `You are a memory retrieval assistant. Your ONLY job is to search memories and output a short factual answer.
-
-WORKFLOW:
-1. Call memory_search with the question as query.
-2. Read the returned memories. Prefer facts that include an explicit date prefix like "[DATE: ...]".
-3. Output ONLY the answer - no explanations, no context, no questions.
-
-RULES:
-- Your answer MUST be 1-8 words maximum.
-- For time questions, use the absolute date/year that appears in the memory text (e.g. "[DATE: 7 May 2023]" or "2022").
-- Do NOT use memory database timestamps (CreatedAt/UpdatedAt) or the current system date.
-- If a memory uses a relative phrase (like "last year"), resolve it ONLY using explicit dates found in the memories (e.g. the session date).
-- If memories contradict each other, prefer the one with the latest "[DATE: ...]".
-- If no relevant memory is found, output "` + fallbackAnswer + `" exactly.
-- Do NOT ask follow-up questions. Do NOT say "Could you provide more context".
-- Do NOT explain your reasoning. Do NOT add any prefix like "The answer is" or "Based on".
-- Output the bare answer only.
-
-EXAMPLES of good answers: "Paris", "2021", "7 May 2023", "Toyota Camry", "` + fallbackAnswer + `"`
-
 // AutoEvaluator evaluates using automatic memory extraction.
 // Memories are extracted by Runner and stored by the memory service.
 type AutoEvaluator struct {
@@ -139,7 +117,11 @@ func (e *AutoEvaluator) Evaluate(
 
 	// Phase 2: Answer questions via agent with memory_search.
 	qaMemSvc := &noAutoMemoryService{inner: e.memoryService}
-	qaAgent := newAutoQAAgent(e.model, qaMemSvc.Tools())
+	qaAgent := newAutoQAAgent(
+		e.model,
+		qaMemSvc.Tools(),
+		e.config.QASearchPasses,
+	)
 	qaRunner := runner.NewRunner(
 		autoAppName,
 		qaAgent,
@@ -185,7 +167,9 @@ func (e *AutoEvaluator) Evaluate(
 }
 
 func newAutoQAAgent(
-	m model.Model, tools []tool.Tool,
+	m model.Model,
+	tools []tool.Tool,
+	searchPasses int,
 ) agent.Agent {
 	genConfig := model.GenerationConfig{
 		Stream:      false,
@@ -195,7 +179,9 @@ func newAutoQAAgent(
 	return llmagent.New(
 		defaultAgentName,
 		llmagent.WithModel(m),
-		llmagent.WithInstruction(autoQAInstruction),
+		llmagent.WithInstruction(
+			qaMemorySearchInstruction(searchPasses),
+		),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithTools(tools),
 		llmagent.WithMaxToolIterations(autoQAMaxToolIterations),
@@ -297,9 +283,10 @@ func (e *AutoEvaluator) waitForAutoExtraction(
 	deadline := time.Now().Add(timeout)
 
 	var (
-		lastCount      = -1
-		stableCount    = 0
-		sawAnyMemories = false
+		lastCount           = -1
+		lastLatestUpdatedAt time.Time
+		stableCount         = 0
+		sawAnyMemories      = false
 	)
 
 	for {
@@ -316,14 +303,21 @@ func (e *AutoEvaluator) waitForAutoExtraction(
 		}
 
 		cur := len(entries)
+		var latestUpdatedAt time.Time
+		if cur > 0 {
+			latestUpdatedAt = entries[0].UpdatedAt
+		}
 		if cur > 0 {
 			sawAnyMemories = true
 		}
-		if cur == lastCount {
+
+		if cur == lastCount &&
+			latestUpdatedAt.Equal(lastLatestUpdatedAt) {
 			stableCount++
 		} else {
 			stableCount = 0
 			lastCount = cur
+			lastLatestUpdatedAt = latestUpdatedAt
 		}
 
 		if sawAnyMemories && stableCount >= stableRounds {

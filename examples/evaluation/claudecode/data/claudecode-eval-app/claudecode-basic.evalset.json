@@ -1,0 +1,90 @@
+{
+  "evalSetId": "claudecode-basic",
+  "name": "claudecode-basic",
+  "evalCases": [
+    {
+      "evalId": "mcp_calculator",
+      "conversation": [
+        {
+          "invocationId": "mcp_calculator-1",
+          "userContent": {
+            "role": "user",
+            "content": "Compute 1+2."
+          },
+          "tools": [
+            {
+              "id": "tool_use_1",
+              "name": "mcp__eva_cli_example__calculator",
+              "arguments": {
+                "operation": "add",
+                "a": 1,
+                "b": 2
+              },
+              "result": {
+                "operation": "add",
+                "a": 1,
+                "b": 2,
+                "result": 3
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "claudecode-eval-app",
+        "userId": "user"
+      }
+    },
+    {
+      "evalId": "skill_call",
+      "conversation": [
+        {
+          "invocationId": "skill_call-1",
+          "userContent": {
+            "role": "user",
+            "content": "What's the weather in Shenzhen?"
+          },
+          "tools": [
+            {
+              "id": "tool_use_1",
+              "name": "skill_run",
+              "arguments": {
+                "skill": "weather-query"
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "claudecode-eval-app",
+        "userId": "user"
+      }
+    },
+    {
+      "evalId": "subagent_task",
+      "conversation": [
+        {
+          "invocationId": "subagent_task-1",
+          "userContent": {
+            "role": "user",
+            "content": "Look up the phone number for Alice."
+          },
+          "tools": [
+            {
+              "id": "tool_use_1",
+              "name": "Task",
+              "arguments": {
+                "subagent_type": "contact-lookup-agent"
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "claudecode-eval-app",
+        "userId": "user"
+      }
+    }
+  ],
+  "creationTimestamp": 1771929600
+}

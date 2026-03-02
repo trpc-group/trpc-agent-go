@@ -446,6 +446,388 @@ func TestSkillsRequestProcessor_ToolResultMode_OverviewOnly(
 	require.Equal(t, model.ObjectTypePreprocessingInstruction, ev.Object)
 }
 
+func TestSkillsRequestProcessor_MaxLoadedSkills_EvictsOldest(
+	t *testing.T,
+) {
+	repo := &mockRepo{
+		sums: []skill.Summary{
+			{Name: "a", Description: "A"},
+			{Name: "b", Description: "B"},
+			{Name: "c", Description: "C"},
+			{Name: "d", Description: "D"},
+		},
+		full: map[string]*skill.Skill{
+			"a": {Summary: skill.Summary{Name: "a"}, Body: "A body"},
+			"b": {Summary: skill.Summary{Name: "b"}, Body: "B body"},
+			"c": {Summary: skill.Summary{Name: "c"}, Body: "C body"},
+			"d": {Summary: skill.Summary{Name: "d"}, Body: "D body"},
+		},
+	}
+
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.StateKeyLoadedPrefix + "a": []byte("1"),
+				skill.StateKeyLoadedPrefix + "b": []byte("1"),
+				skill.StateKeyLoadedPrefix + "c": []byte("1"),
+				skill.StateKeyLoadedPrefix + "d": []byte("1"),
+			},
+			Events: []event.Event{
+				toolResponseEvent(
+					skillToolLoad,
+					loadedPrefix+" a",
+				),
+				toolResponseEvent(
+					skillToolLoad,
+					loadedPrefix+" b",
+				),
+				toolResponseEvent(
+					skillToolLoad,
+					loadedPrefix+" c",
+				),
+				toolResponseEvent(
+					skillToolLoad,
+					loadedPrefix+" d",
+				),
+			},
+		},
+	}
+
+	req := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("base sys"),
+	}}
+	ch := make(chan *event.Event, 3)
+	p := NewSkillsRequestProcessor(
+		repo,
+		WithSkillLoadMode(SkillLoadModeSession),
+		WithMaxLoadedSkills(3),
+	)
+	p.ProcessRequest(context.Background(), inv, req, ch)
+
+	sys := req.Messages[0].Content
+	require.NotContains(t, sys, "[Loaded] a")
+	require.Contains(t, sys, "[Loaded] b")
+	require.Contains(t, sys, "[Loaded] c")
+	require.Contains(t, sys, "[Loaded] d")
+
+	v, ok := inv.Session.GetState(skill.StateKeyLoadedPrefix + "a")
+	require.True(t, ok)
+	require.Empty(t, v)
+
+	v, ok = inv.Session.GetState(skill.StateKeyLoadedPrefix + "b")
+	require.True(t, ok)
+	require.Equal(t, []byte("1"), v)
+
+	ev1 := <-ch
+	require.NotNil(t, ev1)
+	require.Equal(t, model.ObjectTypeStateUpdate, ev1.Object)
+	require.Contains(t, ev1.StateDelta, skill.StateKeyLoadedPrefix+"a")
+	require.Contains(t, ev1.StateDelta, skill.StateKeyDocsPrefix+"a")
+
+	ev2 := <-ch
+	require.NotNil(t, ev2)
+	require.Equal(t, model.ObjectTypePreprocessingInstruction, ev2.Object)
+}
+
+func TestSkillsRequestProcessor_MaxLoadedSkills_SelectDocsTouchesSkill(
+	t *testing.T,
+) {
+	repo := &mockRepo{
+		sums: []skill.Summary{
+			{Name: "a", Description: "A"},
+			{Name: "b", Description: "B"},
+			{Name: "c", Description: "C"},
+			{Name: "d", Description: "D"},
+		},
+		full: map[string]*skill.Skill{
+			"a": {Summary: skill.Summary{Name: "a"}, Body: "A body"},
+			"b": {Summary: skill.Summary{Name: "b"}, Body: "B body"},
+			"c": {Summary: skill.Summary{Name: "c"}, Body: "C body"},
+			"d": {Summary: skill.Summary{Name: "d"}, Body: "D body"},
+		},
+	}
+
+	args, err := json.Marshal(skillNameInput{Skill: "a"})
+	require.NoError(t, err)
+
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.StateKeyLoadedPrefix + "a": []byte("1"),
+				skill.StateKeyLoadedPrefix + "b": []byte("1"),
+				skill.StateKeyLoadedPrefix + "c": []byte("1"),
+				skill.StateKeyLoadedPrefix + "d": []byte("1"),
+			},
+			Events: []event.Event{
+				toolResponseEvent(
+					skillToolLoad,
+					loadedPrefix+" a",
+				),
+				toolResponseEvent(
+					skillToolLoad,
+					loadedPrefix+" b",
+				),
+				toolResponseEvent(
+					skillToolLoad,
+					loadedPrefix+" c",
+				),
+				toolResponseEvent(
+					skillToolLoad,
+					loadedPrefix+" d",
+				),
+				toolResponseEvent(
+					skillToolSelectDocs,
+					string(args),
+				),
+			},
+		},
+	}
+
+	req := &model.Request{Messages: nil}
+	ch := make(chan *event.Event, 3)
+	p := NewSkillsRequestProcessor(
+		repo,
+		WithSkillLoadMode(SkillLoadModeSession),
+		WithMaxLoadedSkills(3),
+	)
+	p.ProcessRequest(context.Background(), inv, req, ch)
+
+	sys := req.Messages[0].Content
+	require.Contains(t, sys, "[Loaded] a")
+	require.NotContains(t, sys, "[Loaded] b")
+	require.Contains(t, sys, "[Loaded] c")
+	require.Contains(t, sys, "[Loaded] d")
+
+	v, ok := inv.Session.GetState(skill.StateKeyLoadedPrefix + "b")
+	require.True(t, ok)
+	require.Empty(t, v)
+}
+
+func TestSkillsRequestProcessor_MaxLoadedSkills_ToolResultMode_EvictsOldest(
+	t *testing.T,
+) {
+	repo := &mockRepo{
+		sums: []skill.Summary{
+			{Name: "a", Description: "A"},
+			{Name: "b", Description: "B"},
+			{Name: "c", Description: "C"},
+			{Name: "d", Description: "D"},
+		},
+		full: map[string]*skill.Skill{
+			"a": {Summary: skill.Summary{Name: "a"}, Body: "A body"},
+			"b": {Summary: skill.Summary{Name: "b"}, Body: "B body"},
+			"c": {Summary: skill.Summary{Name: "c"}, Body: "C body"},
+			"d": {Summary: skill.Summary{Name: "d"}, Body: "D body"},
+		},
+	}
+
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.StateKeyLoadedPrefix + "a": []byte("1"),
+				skill.StateKeyLoadedPrefix + "b": []byte("1"),
+				skill.StateKeyLoadedPrefix + "c": []byte("1"),
+				skill.StateKeyLoadedPrefix + "d": []byte("1"),
+			},
+			Events: []event.Event{
+				toolResponseEvent(
+					skillToolLoad,
+					loadedPrefix+" a",
+				),
+				toolResponseEvent(
+					skillToolLoad,
+					loadedPrefix+" b",
+				),
+				toolResponseEvent(
+					skillToolLoad,
+					loadedPrefix+" c",
+				),
+				toolResponseEvent(
+					skillToolLoad,
+					loadedPrefix+" d",
+				),
+			},
+		},
+	}
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("base sys"),
+		},
+	}
+	ch := make(chan *event.Event, 3)
+	p := NewSkillsRequestProcessor(
+		repo,
+		WithSkillLoadMode(SkillLoadModeSession),
+		WithSkillsLoadedContentInToolResults(true),
+		WithMaxLoadedSkills(3),
+	)
+	p.ProcessRequest(context.Background(), inv, req, ch)
+
+	sys := req.Messages[0].Content
+	require.Contains(t, sys, skillsOverviewHeader)
+	require.NotContains(t, sys, "[Loaded] a")
+	require.NotContains(t, sys, "[Loaded] b")
+	require.NotContains(t, sys, "[Loaded] c")
+	require.NotContains(t, sys, "[Loaded] d")
+
+	v, ok := inv.Session.GetState(skill.StateKeyLoadedPrefix + "a")
+	require.True(t, ok)
+	require.Empty(t, v)
+
+	ev1 := <-ch
+	require.NotNil(t, ev1)
+	require.Equal(t, model.ObjectTypeStateUpdate, ev1.Object)
+
+	ev2 := <-ch
+	require.NotNil(t, ev2)
+	require.Equal(t, model.ObjectTypePreprocessingInstruction, ev2.Object)
+}
+
+func TestKeepMostRecentSkills_FillsAlphabeticallyWhenNoEvents(t *testing.T) {
+	inv := &agent.Invocation{
+		Session: &session.Session{},
+	}
+
+	loaded := []string{"d", "b", "a", "b", " ", "c"}
+	const max = 3
+
+	keep := keepMostRecentSkills(inv, loaded, max)
+	require.Equal(t, []string{"a", "b", "c"}, keep)
+}
+
+func TestKeepMostRecentSkills_EarlyReturns(t *testing.T) {
+	keep := keepMostRecentSkills(nil, []string{"a"}, 1)
+	require.Nil(t, keep)
+
+	inv := &agent.Invocation{Session: nil}
+	keep = keepMostRecentSkills(inv, []string{"a"}, 1)
+	require.Nil(t, keep)
+
+	inv = &agent.Invocation{Session: &session.Session{}}
+	keep = keepMostRecentSkills(inv, []string{"a"}, 0)
+	require.Nil(t, keep)
+
+	keep = keepMostRecentSkills(inv, []string{" ", ""}, 1)
+	require.Nil(t, keep)
+}
+
+func TestAppendSkillsFromToolResponseEvent_EarlyReturns(t *testing.T) {
+	loadedSet := map[string]struct{}{
+		"a": {},
+	}
+	seen := map[string]struct{}{}
+	const max = 3
+
+	keep := appendSkillsFromToolResponseEvent(
+		event.Event{},
+		loadedSet,
+		seen,
+		nil,
+		max,
+	)
+	require.Nil(t, keep)
+
+	keep = appendSkillsFromToolResponseEvent(
+		event.Event{
+			Response: &model.Response{
+				Object: "not_tool_response",
+			},
+		},
+		loadedSet,
+		seen,
+		nil,
+		max,
+	)
+	require.Nil(t, keep)
+
+	keep = appendSkillsFromToolResponseEvent(
+		event.Event{
+			Response: &model.Response{
+				Object: model.ObjectTypeToolResponse,
+			},
+		},
+		loadedSet,
+		seen,
+		nil,
+		max,
+	)
+	require.Nil(t, keep)
+}
+
+func TestAppendSkillsFromToolResponseEvent_SkipsInvalidMessages(t *testing.T) {
+	loadedSet := map[string]struct{}{
+		"a": {},
+		"b": {},
+	}
+	seen := map[string]struct{}{
+		"b": {},
+	}
+
+	ev := event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeToolResponse,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+				},
+			}, {
+				Message: model.Message{
+					Role:     model.RoleTool,
+					ToolName: "other_tool",
+				},
+			}, {
+				Message: model.Message{
+					Role:     model.RoleTool,
+					ToolName: skillToolSelectDocs,
+					Content:  "not json",
+				},
+			}, {
+				Message: model.Message{
+					Role:     model.RoleTool,
+					ToolName: skillToolLoad,
+					Content:  loadedPrefix + " c",
+				},
+			}, {
+				Message: model.Message{
+					Role:     model.RoleTool,
+					ToolName: skillToolLoad,
+					Content:  loadedPrefix + " b",
+				},
+			}, {
+				Message: model.Message{
+					Role:     model.RoleTool,
+					ToolName: skillToolLoad,
+					Content:  loadedPrefix + " a",
+				},
+			}},
+		},
+	}
+
+	keep := appendSkillsFromToolResponseEvent(
+		ev,
+		loadedSet,
+		seen,
+		nil,
+		10,
+	)
+	require.Equal(t, []string{"a"}, keep)
+}
+
+func TestSkillNameFromToolResponse_UnknownTool(t *testing.T) {
+	name := skillNameFromToolResponse(model.Message{
+		ToolName: "unknown_tool",
+		Content:  "ignored",
+	})
+	require.Empty(t, name)
+}
+
 func TestSkillsToolResultRequestProcessor_MaterializesIntoLastToolMsg(
 	t *testing.T,
 ) {
@@ -602,6 +984,110 @@ func TestSkillsToolResultRequestProcessor_FallbackSystemMessageAdded(
 		}
 		require.NotContains(t, m.Content, skillsLoadedContextHeader)
 	}
+}
+
+func TestSkillsToolResultRequestProcessor_SessionSummary_DisablesFallback(
+	t *testing.T,
+) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "calc", Description: "math"}},
+		full: map[string]*skill.Skill{
+			"calc": {Summary: skill.Summary{Name: "calc"}, Body: "B"},
+		},
+	}
+
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.StateKeyLoadedPrefix + "calc": []byte("1"),
+			},
+		},
+	}
+	inv.SetState(contentHasSessionSummaryStateKey, true)
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("sys"),
+			model.NewUserMessage("u"),
+		},
+	}
+
+	p := NewSkillsToolResultRequestProcessor(
+		repo,
+		WithSkillsToolResultLoadMode(SkillLoadModeSession),
+	)
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	for _, m := range req.Messages {
+		if m.Role != model.RoleSystem {
+			continue
+		}
+		require.NotContains(t, m.Content, skillsLoadedContextHeader)
+	}
+}
+
+func TestSkillsToolResultRequestProcessor_SessionSummary_AllowsFallback(
+	t *testing.T,
+) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "calc", Description: "math"}},
+		full: map[string]*skill.Skill{
+			"calc": {Summary: skill.Summary{Name: "calc"}, Body: "B"},
+		},
+	}
+
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.StateKeyLoadedPrefix + "calc": []byte("1"),
+			},
+		},
+	}
+	inv.SetState(contentHasSessionSummaryStateKey, true)
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("sys"),
+			model.NewUserMessage("u"),
+		},
+	}
+
+	p := NewSkillsToolResultRequestProcessor(
+		repo,
+		WithSkillsToolResultLoadMode(SkillLoadModeSession),
+		WithSkipSkillsFallbackOnSessionSummary(false),
+	)
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	var matchCount int
+	for _, m := range req.Messages {
+		if m.Role != model.RoleSystem {
+			continue
+		}
+		if strings.Contains(m.Content, skillsLoadedContextHeader) {
+			matchCount++
+			require.Contains(t, m.Content, "[Loaded] calc")
+			require.Contains(t, m.Content, "B")
+		}
+	}
+	require.Equal(t, 1, matchCount)
+}
+
+func TestHasSessionSummary(t *testing.T) {
+	require.False(t, hasSessionSummary(nil))
+
+	inv := &agent.Invocation{}
+	require.False(t, hasSessionSummary(inv))
+
+	inv.SetState(contentHasSessionSummaryStateKey, "true")
+	require.False(t, hasSessionSummary(inv))
+
+	inv.SetState(contentHasSessionSummaryStateKey, true)
+	require.True(t, hasSessionSummary(inv))
 }
 
 func TestSkillsToolResultRequestProcessor_BuildToolResultContent_Base(
@@ -921,4 +1407,20 @@ func TestSkillsToolResultRequestProcessor_MaybeOffload_NoOpWhenNotOnce(
 	require.True(t, ok)
 	require.Equal(t, []byte("1"), v)
 	require.Len(t, ch, 0)
+}
+
+func toolResponseEvent(toolName string, content string) event.Event {
+	return event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeToolResponse,
+			Choices: []model.Choice{{
+				Index: 0,
+				Message: model.Message{
+					Role:     model.RoleTool,
+					ToolName: toolName,
+					Content:  content,
+				},
+			}},
+		},
+	}
 }

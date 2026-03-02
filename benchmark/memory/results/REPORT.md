@@ -12,6 +12,7 @@ This report evaluates the memory capabilities of trpc-agent-go using the **LoCoM
 - **Auto memory extraction** (F1=0.363 pgvector) is the strongest memory-based approach, reaching 76.7% of the long-context baseline.
 - **Agentic memory** (F1=0.291 MySQL) shows that LLM-driven memory extraction faces information density challenges.
 - **pgvector outperforms MySQL** for Auto (F1 +0.011), while MySQL slightly leads for Agentic (F1 +0.005); vector similarity search benefits Auto's denser memory entries.
+- **SQLiteVec enables local semantic search** and can reduce prompt tokens by returning a top-k result set instead of unbounded keyword matches (see Section 3.6).
 - **Injecting raw history hurts F1/BLEU but improves LLM Score**, revealing a trade-off between token-level precision and semantic quality.
 - **Token usage** varies dramatically: Long-Context consumes ~18.8K prompt tokens/QA (1 call), while memory-based approaches use ~2K-9K prompt tokens/QA (2 calls).
 
@@ -41,6 +42,8 @@ We use the **LoCoMo** dataset (Maharana et al., 2024), which contains multi-sess
 
 | Backend | Retrieval Method | Embedding Model |
 | --- | --- | --- |
+| **SQLite** | Token-based matching | N/A |
+| **SQLiteVec** | Vector similarity (cosine) via sqlite-vec | text-embedding-3-small |
 | **pgvector** | Vector similarity (cosine) | text-embedding-3-small |
 | **MySQL** | Full-text search (BM25-like) | N/A |
 
@@ -217,6 +220,150 @@ Aligned with the LoCoMo paper and industry standards (Mem0, MemMachine):
 | Auto | MySQL | +700 | 21,861 | 1.1 | 43,452,072 |
 
 ---
+
+### 3.7 SQLite vs SQLiteVec (Subset Run)
+
+This subsection compares `sqlite` (keyword matching) and `sqlitevec`
+(semantic vector search via sqlite-vec) on a few controlled subset runs.
+
+**Subset run A: End-to-end QA (Auto / Full categories)**
+
+This run keeps the same end-to-end pipeline and evaluation settings as the
+main experiments, but limits to a single sample to control cost.
+
+**Configuration**:
+
+- Dataset: LoCoMo `locomo10.json`
+- Sample: `locomo10_1` (199 QA, all categories)
+- Scenario: `auto`
+- Model: `gpt-4o-mini`
+- LLM Judge: enabled
+- Embedding model (SQLiteVec): `text-embedding-3-small`
+- SQLiteVec retrieval top-k: 10 (default)
+
+For reference, Table 7 reports Auto pgvector F1 of **0.311** on `locomo10_1`
+and **0.204** on `locomo10_6` (same dataset/model).
+
+**End-to-end results: Overall Metrics and Token Usage (Auto / 199 QA)**
+
+| Backend | #QA | F1 | BLEU | LLM Score | Prompt Tokens | Completion Tokens | Total Tokens | LLM Calls | Avg Latency |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| SQLite | 199 | 0.327 | 0.301 | 0.370 | 1,287,813 | 5,624 | 1,293,437 | 398 | 5,805ms |
+| SQLiteVec | 199 | 0.307 | 0.285 | 0.325 | 407,969 | 5,556 | 413,525 | 396 | 6,327ms |
+
+**Interpretation (locomo10_1)**:
+
+- **SQLiteVec reduces prompt tokens by ~3.2x** (bounded top-k retrieval),
+  but **F1/BLEU/LLM Score are slightly lower** on this sample at the
+  default top-k=10 setting.
+- Category-level behavior differs: `sqlitevec` improves `adversarial`
+  (more correct refusals), but underperforms on other categories when the
+  needed evidence is not retrieved within top-k.
+
+We also rerun the same configuration on another representative sample.
+
+- Sample: `locomo10_6` (158 QA, all categories)
+
+**End-to-end results: Overall Metrics and Token Usage (Auto / 158 QA)**
+
+| Backend | #QA | F1 | BLEU | LLM Score | Prompt Tokens | Completion Tokens | Total Tokens | LLM Calls | Avg Latency |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| SQLite | 158 | 0.269 | 0.243 | 0.289 | 1,296,580 | 5,103 | 1,301,683 | 340 | 6,359ms |
+| SQLiteVec | 158 | 0.274 | 0.254 | 0.295 | 362,903 | 4,773 | 367,676 | 324 | 6,928ms |
+
+**Interpretation (locomo10_6)**:
+
+- **SQLiteVec reduces prompt tokens by ~3.6x** and slightly improves
+  F1/BLEU/LLM Score on this sample, while adding a small latency overhead.
+- Similar to `locomo10_1`, `sqlitevec` improves `adversarial` but is still
+  weak on `temporal` and `multi-hop` in our current setup.
+
+**Overall takeaway (locomo10_1 + locomo10_6)**:
+
+- SQLiteVec consistently reduces prompt tokens by ~3x-4x in our runs.
+- Answer quality changes are sample-dependent at the default top-k=10;
+  increasing top-k can improve recall but will also increase prompt tokens.
+
+> Note: `Prompt Tokens`, `LLM Calls` count only the QA agent model calls.
+> They exclude embedding requests and LLM-as-Judge calls. `Avg Latency`
+> reflects end-to-end time averaged by #QA (including embeddings, judge,
+> and auto extraction).
+
+**Subset run B: Temporal-only token-cost micro-run**
+
+**Configuration**:
+
+- Dataset: LoCoMo `locomo10.json`
+- Sample: `locomo10_1`
+- Category filter: `temporal` (13 QA)
+- Scenario: `auto`
+- Model: `gpt-4o-mini`
+- LLM Judge: disabled
+- Embedding model (SQLiteVec): `text-embedding-3-small`
+
+**Table 8: Overall Metrics and Token Usage (Auto / Temporal / 13 QA)**
+
+| Backend | F1 | BLEU | Prompt Tokens | Completion Tokens | Total Tokens | LLM Calls | Avg Latency |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| SQLite | 0.116 | 0.082 | 80,184 | 352 | 80,536 | 26 | 12,352ms |
+| SQLiteVec | 0.116 | 0.082 | 26,483 | 353 | 26,836 | 26 | 17,817ms |
+
+**Interpretation**:
+
+- In this subset, answer quality (F1/BLEU) is the same, but **SQLiteVec uses
+  ~3x fewer prompt tokens**. This is mainly because SQLiteVec returns a bounded
+  top-k retrieval set (default 10), while the SQLite backend can return a much
+  larger set of keyword matches.
+
+**Subset run C: Vector top-k sweep + multi-search ablation (Auto / Full categories)**
+
+The previous subset runs compare `sqlite` vs `sqlitevec` at the default
+configuration (top-k=10, single search). To understand whether "more retrieved
+memories" (higher top-k) or "more searches" (multiple memory_search calls)
+improves end-to-end answer quality, we run a small sweep on a single sample.
+
+**Configuration**:
+
+- Dataset: LoCoMo `locomo10.json`
+- Sample: `locomo10_1` (199 QA, all categories)
+- Scenario: `auto`
+- Model: `gpt-4o-mini`
+- LLM Judge: disabled (F1/BLEU only, to control cost)
+
+**Table 9: Top-k and Multi-search Sweep (Auto / locomo10_1 / 199 QA)**
+
+| Backend | vector-topk | qa-search-passes | F1 | BLEU | Prompt Tokens | Avg Prompt/QA | Avg Latency |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| SQLite | - | 1 | 0.299 | 0.283 | 1,322,360 | 6,645 | 3,316ms |
+| SQLiteVec | 5 | 1 | 0.320 | 0.296 | 346,253 | 1,740 | 4,182ms |
+| SQLiteVec | 10 | 1 | 0.343 | 0.315 | 398,751 | 2,004 | 4,352ms |
+| SQLiteVec | 20 | 1 | 0.329 | 0.308 | 621,790 | 3,125 | 4,180ms |
+| SQLiteVec | 40 | 1 | 0.327 | 0.303 | 965,423 | 4,851 | 4,460ms |
+| SQLiteVec | 10 | 2 | 0.342 | 0.312 | 659,981 | 3,316 | 5,198ms |
+
+**Interpretation**:
+
+- In this run, **SQLiteVec (top-k=10) improves F1** over SQLite
+  (**0.343 vs 0.299**) while using **~3.3x fewer prompt tokens**
+  (bounded retrieval).
+- Simply **increasing top-k does not monotonically improve quality** in this
+  benchmark setup: top-k=20/40 increases prompt tokens, but slightly lowers
+  F1/BLEU. This suggests the QA agent can be sensitive to noise in retrieved
+  memories, not just recall.
+- `qa-search-passes=2` (forced double search) improves some categories (e.g.
+  multi-hop) but does **not improve overall F1**, and increases both tokens and
+  latency. It is useful as a diagnostic tool rather than a default.
+
+**Retrieval microbenchmark (curated queries)**:
+
+To isolate retrieval quality from the end-to-end QA pipeline, we also run a
+small retrieval-focused example (`examples/memory/compare`) where queries are
+paraphrases with low lexical overlap.
+
+| Backend | Hit@3 | Notes |
+| --- | ---: | --- |
+| SQLite | 2/4 | Misses some paraphrases due to token matching |
+| SQLiteVec | 4/4 | Recovers paraphrases via semantic similarity |
 
 ## 4. Analysis
 

@@ -1,0 +1,23 @@
+app_name: "openclaw-stdin"
+
+http:
+  addr: ":8080"
+
+model:
+  mode: "mock"
+
+agent:
+  instruction: "You are a helpful assistant for terminal chat."
+  system_prompt_dir: "./examples/stdin_chat/prompts/system"
+
+channels:
+  - type: "stdin"
+    name: "terminal"
+    config:
+      from: "alice"
+
+tools:
+  providers:
+    - type: "echotool"
+      config:
+        name: "echo"
