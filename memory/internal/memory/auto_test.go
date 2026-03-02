@@ -76,6 +76,7 @@ type mockOperator struct {
 	deleteCalls int
 	clearCalls  int
 	readErr     error
+	searchErr   error
 	addErr      error
 	updateErr   error
 	deleteErr   error
@@ -108,6 +109,17 @@ func (m *mockOperator) ReadMemories(
 		}
 	}
 	return results, nil
+}
+
+func (m *mockOperator) SearchMemories(
+	ctx context.Context,
+	userKey memory.UserKey,
+	query string,
+) ([]*memory.Entry, error) {
+	if m.searchErr != nil {
+		return nil, m.searchErr
+	}
+	return m.ReadMemories(ctx, userKey, 0)
 }
 
 func (m *mockOperator) AddMemory(

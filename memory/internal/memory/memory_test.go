@@ -119,10 +119,10 @@ func TestBuildSearchTokens(t *testing.T) {
 		{"english with numbers", "test123 abc456", []string{"test123", "abc456"}},
 		{"mixed case", "Hello World", []string{"hello", "world"}},
 		{"chinese single character", "中", []string{"中"}},
-		{"chinese bigrams", "中文测试", []string{"中文", "文测", "测试"}},
-		{"chinese with punctuation", "中文，测试！", []string{"中文", "文测", "测试"}},
-		{"chinese with spaces", "中文 测试", []string{"中文", "文测", "测试"}},
-		{"mixed chinese and english", "hello中文world", []string{"he", "el", "ll", "lo", "o中", "中文", "文w", "wo", "or", "rl", "ld"}},
+		{"chinese words", "中文测试", []string{"中文", "测试"}},
+		{"chinese with punctuation", "中文，测试！", []string{"中文", "测试"}},
+		{"chinese with spaces", "中文 测试", []string{"中文", "测试"}},
+		{"mixed chinese and english", "hello中文world", []string{"hello", "中文", "world"}},
 		{"only punctuation", "!@#$%", []string{}},
 		{"only stopwords", "the and or", []string{}},
 	}
@@ -158,7 +158,7 @@ func TestBuildSearchTokens_EdgeCases(t *testing.T) {
 
 	t.Run("mixed CJK and punctuation", func(t *testing.T) {
 		result := BuildSearchTokens("中文，测试！")
-		expected := []string{"中文", "文测", "测试"}
+		expected := []string{"中文", "测试"}
 		assert.Equal(t, expected, result)
 	})
 }
@@ -488,12 +488,16 @@ func TestMatchMemoryEntry_FallbackNoTokens(t *testing.T) {
 }
 
 func TestBuildSearchTokens_Duplicates(t *testing.T) {
-	// Test deduplication in bigrams.
 	result := BuildSearchTokens("中中中中")
 	assert.NotNil(t, result)
-	// Should have deduplicated "中中" bigram.
-	assert.Len(t, result, 1)
-	assert.Equal(t, "中中", result[0])
+	// Jieba segments repeated characters; dedup should still work.
+	for i, tok := range result {
+		for j, other := range result {
+			if i != j {
+				assert.NotEqual(t, tok, other, "duplicate token found")
+			}
+		}
+	}
 }
 
 func TestMatchMemoryEntry_EmptyTokensWithTopics(t *testing.T) {
@@ -652,20 +656,19 @@ func TestGenerateMemoryID(t *testing.T) {
 		assert.NotEqual(t, id1, id2)
 	})
 
-	t.Run("same content different topics produce different IDs", func(t *testing.T) {
+	t.Run("same content different topics produce same ID", func(t *testing.T) {
 		mem1 := &memory.Memory{Memory: "User likes coffee", Topics: []string{"food"}}
 		mem2 := &memory.Memory{Memory: "User likes coffee", Topics: []string{"drink"}}
 		id1 := GenerateMemoryID(mem1, testAppName, testUserID)
 		id2 := GenerateMemoryID(mem2, testAppName, testUserID)
-		assert.NotEqual(t, id1, id2)
+		assert.Equal(t, id1, id2)
 	})
 
-	t.Run("topics order does not affect ID", func(t *testing.T) {
+	t.Run("topics do not affect ID", func(t *testing.T) {
 		mem1 := &memory.Memory{Memory: "User likes coffee", Topics: []string{"a", "b"}}
 		mem2 := &memory.Memory{Memory: "User likes coffee", Topics: []string{"b", "a"}}
 		id1 := GenerateMemoryID(mem1, testAppName, testUserID)
 		id2 := GenerateMemoryID(mem2, testAppName, testUserID)
-		// Same order after sorting produces same IDs.
 		assert.Equal(t, id1, id2)
 	})
 
