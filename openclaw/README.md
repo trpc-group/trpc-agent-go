@@ -77,6 +77,14 @@ agent:
   # Optional: load and merge multiple markdown files into the system prompt.
   # Files are read in alphabetical order.
   # system_prompt_dir: "./prompts/system"
+  # Optional: enable an outer verification loop. Unsafe because it can
+  # execute host commands.
+  # ralph_loop:
+  #   enabled: true
+  #   max_iterations: 5
+  #   verify:
+  #     command: "go test ./..."
+  #     timeout: "2m"
 
 model:
   mode: "openai"
@@ -141,6 +149,42 @@ go run ./cmd/openclaw \
   -mode mock \
   -agent-instruction "You are a helpful assistant." \
   -agent-system-prompt-dir ./examples/stdin_chat/prompts/system
+```
+
+## Ralph Loop (optional)
+
+Ralph Loop is an outer loop that reruns the agent until a verifiable
+completion condition is met (or until the maximum number of iterations is
+reached).
+
+This demo supports it only for `agent.type: llm`, because the `claude-code`
+agent does not consume session history (so loop feedback would be ignored).
+
+Ralph Loop is considered unsafe because it can execute a host command
+after each iteration.
+
+YAML example:
+
+```yaml
+agent:
+  ralph_loop:
+    enabled: true
+    max_iterations: 5
+    verify:
+      command: "go test ./..."
+      timeout: "2m"
+      env: ["CGO_ENABLED=1"]
+```
+
+CLI example:
+
+```bash
+cd openclaw
+go run ./cmd/openclaw \
+  -mode mock \
+  -agent-ralph-loop \
+  -agent-ralph-verify-command 'go test ./...' \
+  -agent-ralph-verify-timeout 2m
 ```
 
 Health check:

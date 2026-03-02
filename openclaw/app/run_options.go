@@ -53,6 +53,16 @@ const (
 	flagAgentSystemPrompt      = "agent-system-prompt"
 	flagAgentSystemPromptFiles = "agent-system-prompt-files"
 	flagAgentSystemPromptDir   = "agent-system-prompt-dir"
+
+	flagAgentRalphLoopEnabled           = "agent-ralph-loop"
+	flagAgentRalphLoopMaxIterations     = "agent-ralph-max-iterations"
+	flagAgentRalphLoopCompletionPromise = "agent-ralph-completion-promise"
+	flagAgentRalphLoopPromiseTagOpen    = "agent-ralph-promise-tag-open"
+	flagAgentRalphLoopPromiseTagClose   = "agent-ralph-promise-tag-close"
+	flagAgentRalphLoopVerifyCommand     = "agent-ralph-verify-command"
+	flagAgentRalphLoopVerifyWorkDir     = "agent-ralph-verify-workdir"
+	flagAgentRalphLoopVerifyTimeout     = "agent-ralph-verify-timeout"
+	flagAgentRalphLoopVerifyEnv         = "agent-ralph-verify-env"
 )
 
 type runOptions struct {
@@ -73,6 +83,16 @@ type runOptions struct {
 	AgentSystemPromptDir   string
 
 	AgentType string
+
+	RalphLoopEnabled           bool
+	RalphLoopMaxIterations     int
+	RalphLoopCompletionPromise string
+	RalphLoopPromiseTagOpen    string
+	RalphLoopPromiseTagClose   string
+	RalphLoopVerifyCommand     string
+	RalphLoopVerifyWorkDir     string
+	RalphLoopVerifyTimeout     time.Duration
+	RalphLoopVerifyEnv         string
 
 	ClaudeBin          string
 	ClaudeOutputFormat string
@@ -245,6 +265,60 @@ func parseRunOptions(args []string) (runOptions, error) {
 		flagAgentSystemPromptDir,
 		"",
 		"Dir of .md files merged into system prompt",
+	)
+	fs.BoolVar(
+		&opts.RalphLoopEnabled,
+		flagAgentRalphLoopEnabled,
+		false,
+		"Enable Ralph Loop outer verification loop (unsafe)",
+	)
+	fs.IntVar(
+		&opts.RalphLoopMaxIterations,
+		flagAgentRalphLoopMaxIterations,
+		0,
+		"Ralph Loop max iterations (0 uses default)",
+	)
+	fs.StringVar(
+		&opts.RalphLoopCompletionPromise,
+		flagAgentRalphLoopCompletionPromise,
+		"",
+		"Ralph Loop completion promise (optional)",
+	)
+	fs.StringVar(
+		&opts.RalphLoopPromiseTagOpen,
+		flagAgentRalphLoopPromiseTagOpen,
+		"",
+		"Ralph Loop promise open tag (optional)",
+	)
+	fs.StringVar(
+		&opts.RalphLoopPromiseTagClose,
+		flagAgentRalphLoopPromiseTagClose,
+		"",
+		"Ralph Loop promise close tag (optional)",
+	)
+	fs.StringVar(
+		&opts.RalphLoopVerifyCommand,
+		flagAgentRalphLoopVerifyCommand,
+		"",
+		"Ralph Loop verify command (optional, host shell)",
+	)
+	fs.StringVar(
+		&opts.RalphLoopVerifyWorkDir,
+		flagAgentRalphLoopVerifyWorkDir,
+		"",
+		"Ralph Loop verify command working dir (optional)",
+	)
+	fs.DurationVar(
+		&opts.RalphLoopVerifyTimeout,
+		flagAgentRalphLoopVerifyTimeout,
+		0,
+		"Ralph Loop verify command timeout (0 disables)",
+	)
+	fs.StringVar(
+		&opts.RalphLoopVerifyEnv,
+		flagAgentRalphLoopVerifyEnv,
+		"",
+		"Ralph Loop verify env overrides (KEY=VALUE, comma-separated)",
 	)
 	fs.StringVar(
 		&opts.ClaudeBin,
@@ -637,11 +711,30 @@ type agentRunConfig struct {
 	SystemPromptFiles []string `yaml:"system_prompt_files,omitempty"`
 	SystemPromptDir   *string  `yaml:"system_prompt_dir,omitempty"`
 
+	RalphLoop *ralphLoopConfig `yaml:"ralph_loop,omitempty"`
+
 	ClaudeBin          *string  `yaml:"claude_bin,omitempty"`
 	ClaudeOutputFormat *string  `yaml:"claude_output_format,omitempty"`
 	ClaudeExtraArgs    []string `yaml:"claude_extra_args,omitempty"`
 	ClaudeEnv          []string `yaml:"claude_env,omitempty"`
 	ClaudeWorkDir      *string  `yaml:"claude_work_dir,omitempty"`
+}
+
+type ralphLoopConfig struct {
+	Enabled           *bool   `yaml:"enabled,omitempty"`
+	MaxIterations     *int    `yaml:"max_iterations,omitempty"`
+	CompletionPromise *string `yaml:"completion_promise,omitempty"`
+	PromiseTagOpen    *string `yaml:"promise_tag_open,omitempty"`
+	PromiseTagClose   *string `yaml:"promise_tag_close,omitempty"`
+
+	Verify *ralphLoopVerifyConfig `yaml:"verify,omitempty"`
+}
+
+type ralphLoopVerifyConfig struct {
+	Command *string  `yaml:"command,omitempty"`
+	WorkDir *string  `yaml:"work_dir,omitempty"`
+	Timeout *string  `yaml:"timeout,omitempty"`
+	Env     []string `yaml:"env,omitempty"`
 }
 
 type modelConfig struct {
@@ -840,6 +933,15 @@ func (cfg *fileConfig) apply(
 			opts.AgentSystemPromptDir = strings.TrimSpace(
 				*cfg.Agent.SystemPromptDir,
 			)
+		}
+		if cfg.Agent.RalphLoop != nil {
+			if err := applyRalphLoopConfig(
+				cfg.Agent.RalphLoop,
+				opts,
+				set,
+			); err != nil {
+				return err
+			}
 		}
 		if cfg.Agent.ClaudeBin != nil &&
 			!flagWasSet(set, "claude-bin") {
@@ -1102,6 +1204,80 @@ func (cfg *fileConfig) apply(
 		if cfg.Memory.Config != nil {
 			opts.MemoryConfig = cfg.Memory.Config.Node
 		}
+	}
+
+	return nil
+}
+
+func applyRalphLoopConfig(
+	cfg *ralphLoopConfig,
+	opts *runOptions,
+	set map[string]struct{},
+) error {
+	if cfg == nil || opts == nil {
+		return nil
+	}
+
+	if cfg.Enabled != nil &&
+		!flagWasSet(set, flagAgentRalphLoopEnabled) {
+		opts.RalphLoopEnabled = *cfg.Enabled
+	}
+	if cfg.MaxIterations != nil &&
+		!flagWasSet(set, flagAgentRalphLoopMaxIterations) {
+		opts.RalphLoopMaxIterations = *cfg.MaxIterations
+	}
+	if cfg.CompletionPromise != nil &&
+		!flagWasSet(set, flagAgentRalphLoopCompletionPromise) {
+		opts.RalphLoopCompletionPromise = strings.TrimSpace(
+			*cfg.CompletionPromise,
+		)
+	}
+	if cfg.PromiseTagOpen != nil &&
+		!flagWasSet(set, flagAgentRalphLoopPromiseTagOpen) {
+		opts.RalphLoopPromiseTagOpen = strings.TrimSpace(
+			*cfg.PromiseTagOpen,
+		)
+	}
+	if cfg.PromiseTagClose != nil &&
+		!flagWasSet(set, flagAgentRalphLoopPromiseTagClose) {
+		opts.RalphLoopPromiseTagClose = strings.TrimSpace(
+			*cfg.PromiseTagClose,
+		)
+	}
+
+	if cfg.Verify == nil {
+		return nil
+	}
+
+	if cfg.Verify.Command != nil &&
+		!flagWasSet(set, flagAgentRalphLoopVerifyCommand) {
+		opts.RalphLoopVerifyCommand = strings.TrimSpace(
+			*cfg.Verify.Command,
+		)
+	}
+	if cfg.Verify.WorkDir != nil &&
+		!flagWasSet(set, flagAgentRalphLoopVerifyWorkDir) {
+		opts.RalphLoopVerifyWorkDir = strings.TrimSpace(
+			*cfg.Verify.WorkDir,
+		)
+	}
+	if cfg.Verify.Timeout != nil &&
+		!flagWasSet(set, flagAgentRalphLoopVerifyTimeout) {
+		dur, err := parseDuration(*cfg.Verify.Timeout)
+		if err != nil {
+			return fmt.Errorf(
+				"agent.ralph_loop.verify.timeout: %w",
+				err,
+			)
+		}
+		opts.RalphLoopVerifyTimeout = dur
+	}
+	if len(cfg.Verify.Env) > 0 &&
+		!flagWasSet(set, flagAgentRalphLoopVerifyEnv) {
+		opts.RalphLoopVerifyEnv = strings.Join(
+			cfg.Verify.Env,
+			csvDelimiter,
+		)
 	}
 
 	return nil
