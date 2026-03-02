@@ -47,6 +47,7 @@ type skillsRequestProcessorOptions struct {
 	toolingGuidance *string
 	loadMode        string
 	toolResultMode  bool
+	maxLoadedSkills int
 }
 
 // SkillsRequestProcessorOption configures SkillsRequestProcessor.
@@ -97,6 +98,20 @@ func WithSkillsLoadedContentInToolResults(
 	}
 }
 
+// WithMaxLoadedSkills caps how many skills remain "loaded" in session
+// state.
+//
+// When max <= 0, no cap is applied (default behavior).
+//
+// When max > 0, the processor keeps at most max most-recently loaded
+// skills (skill_load / skill_select_docs) and offloads the rest by
+// clearing their state keys.
+func WithMaxLoadedSkills(max int) SkillsRequestProcessorOption {
+	return func(o *skillsRequestProcessorOptions) {
+		o.maxLoadedSkills = max
+	}
+}
+
 // SkillsRequestProcessor injects skill overviews and loaded contents.
 //
 // Behavior:
@@ -113,6 +128,7 @@ type SkillsRequestProcessor struct {
 	toolingGuidance *string
 	loadMode        string
 	toolResultMode  bool
+	maxLoadedSkills int
 }
 
 const (
@@ -136,6 +152,7 @@ func NewSkillsRequestProcessor(
 		toolingGuidance: options.toolingGuidance,
 		loadMode:        normalizeSkillLoadMode(options.loadMode),
 		toolResultMode:  options.toolResultMode,
+		maxLoadedSkills: options.maxLoadedSkills,
 	}
 }
 
@@ -168,6 +185,9 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 	//    message. Merge into existing system message if present.
 	p.injectOverview(req)
 
+	loaded := p.getLoadedSkills(inv)
+	loaded = p.maybeCapLoadedSkills(ctx, inv, loaded, ch)
+
 	if p.toolResultMode {
 		// Loaded skill bodies/docs are materialized into tool results by a
 		// post-content request processor.
@@ -179,7 +199,6 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 	}
 
 	// 2) Loaded skills full content (merge into existing system message).
-	loaded := p.getLoadedSkills(inv)
 	sort.Strings(loaded) // stable prompt order
 
 	var lb strings.Builder
@@ -229,6 +248,196 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 		inv.InvocationID, inv.AgentName,
 		event.WithObject(model.ObjectTypePreprocessingInstruction),
 	))
+}
+
+func (p *SkillsRequestProcessor) maybeCapLoadedSkills(
+	ctx context.Context,
+	inv *agent.Invocation,
+	loaded []string,
+	ch chan<- *event.Event,
+) []string {
+	if p.maxLoadedSkills <= 0 || len(loaded) <= p.maxLoadedSkills {
+		return loaded
+	}
+	if inv == nil || inv.Session == nil {
+		return loaded
+	}
+
+	keep := keepMostRecentSkills(
+		inv,
+		loaded,
+		p.maxLoadedSkills,
+	)
+	if len(keep) == 0 {
+		return loaded
+	}
+	keepSet := make(map[string]struct{}, len(keep))
+	for _, name := range keep {
+		keepSet[name] = struct{}{}
+	}
+
+	delta := make(map[string][]byte, len(loaded)*2)
+	var kept []string
+	for _, name := range loaded {
+		if _, ok := keepSet[name]; ok {
+			kept = append(kept, name)
+			continue
+		}
+		loadedKey := skill.StateKeyLoadedPrefix + name
+		inv.Session.SetState(loadedKey, nil)
+		delta[loadedKey] = nil
+
+		docsKey := skill.StateKeyDocsPrefix + name
+		inv.Session.SetState(docsKey, nil)
+		delta[docsKey] = nil
+	}
+	if len(delta) > 0 {
+		agent.EmitEvent(ctx, inv, ch, event.New(
+			inv.InvocationID,
+			inv.AgentName,
+			event.WithObject(model.ObjectTypeStateUpdate),
+			event.WithStateDelta(delta),
+		))
+	}
+	return kept
+}
+
+func keepMostRecentSkills(
+	inv *agent.Invocation,
+	loaded []string,
+	max int,
+) []string {
+	if inv == nil || inv.Session == nil || max <= 0 {
+		return nil
+	}
+
+	loadedSet := loadedSkillSet(loaded)
+	if len(loadedSet) == 0 {
+		return nil
+	}
+
+	keep, seen := mostRecentSkillsFromEvents(
+		inv.Session.GetEvents(),
+		loadedSet,
+		max,
+	)
+	if len(keep) >= max {
+		return keep
+	}
+	return fillSkillsAlphabetically(keep, seen, loaded, max)
+}
+
+func loadedSkillSet(loaded []string) map[string]struct{} {
+	out := make(map[string]struct{}, len(loaded))
+	for _, name := range loaded {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		out[name] = struct{}{}
+	}
+	return out
+}
+
+func mostRecentSkillsFromEvents(
+	events []event.Event,
+	loadedSet map[string]struct{},
+	max int,
+) ([]string, map[string]struct{}) {
+	keep := make([]string, 0, max)
+	seen := make(map[string]struct{}, max)
+	for i := len(events) - 1; i >= 0 && len(keep) < max; i-- {
+		keep = appendSkillsFromToolResponseEvent(
+			events[i],
+			loadedSet,
+			seen,
+			keep,
+			max,
+		)
+	}
+	return keep, seen
+}
+
+func appendSkillsFromToolResponseEvent(
+	ev event.Event,
+	loadedSet map[string]struct{},
+	seen map[string]struct{},
+	keep []string,
+	max int,
+) []string {
+	if ev.Response == nil {
+		return keep
+	}
+	if ev.Object != model.ObjectTypeToolResponse {
+		return keep
+	}
+	if len(ev.Choices) == 0 {
+		return keep
+	}
+
+	for j := len(ev.Choices) - 1; j >= 0 && len(keep) < max; j-- {
+		msg := ev.Choices[j].Message
+		if msg.Role != model.RoleTool {
+			continue
+		}
+		if msg.ToolName != skillToolLoad &&
+			msg.ToolName != skillToolSelectDocs {
+			continue
+		}
+		name := skillNameFromToolResponse(msg)
+		if name == "" {
+			continue
+		}
+		if _, ok := loadedSet[name]; !ok {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		keep = append(keep, name)
+		seen[name] = struct{}{}
+	}
+	return keep
+}
+
+func fillSkillsAlphabetically(
+	keep []string,
+	seen map[string]struct{},
+	loaded []string,
+	max int,
+) []string {
+	sorted := append([]string(nil), loaded...)
+	sort.Strings(sorted)
+	for _, name := range sorted {
+		if len(keep) == max {
+			break
+		}
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		keep = append(keep, name)
+		seen[name] = struct{}{}
+	}
+	return keep
+}
+
+func skillNameFromToolResponse(msg model.Message) string {
+	switch msg.ToolName {
+	case skillToolLoad:
+		return parseLoadedSkillFromText(msg.Content)
+	case skillToolSelectDocs:
+		var in skillNameInput
+		if err := json.Unmarshal([]byte(msg.Content), &in); err != nil {
+			return ""
+		}
+		return strings.TrimSpace(in.Skill)
+	default:
+		return ""
+	}
 }
 
 func (p *SkillsRequestProcessor) maybeClearSkillStateForTurn(
@@ -368,6 +577,9 @@ func defaultToolingAndWorkspaceGuidance() string {
 	b.WriteString("directory) as the place where tools stage user or ")
 	b.WriteString("host input files. Avoid overwriting or mutating ")
 	b.WriteString("these inputs directly.\n")
+	b.WriteString("- User-uploaded file inputs in the conversation ")
+	b.WriteString("are automatically staged into $WORK_DIR/inputs ")
+	b.WriteString("when skill_run executes.\n")
 	b.WriteString("- When the user mentions external files, ")
 	b.WriteString("directories, artifacts, or URLs, decide whether to ")
 	b.WriteString("stage them into $WORK_DIR/inputs via available ")

@@ -15,6 +15,7 @@ When building LLM-powered applications, conversation history can grow indefinite
 ```bash
 # Run with different backends
 go run main.go -session=inmemory
+go run main.go -session=sqlite
 go run main.go -session=redis
 go run main.go -session=mysql
 go run main.go -session=postgres

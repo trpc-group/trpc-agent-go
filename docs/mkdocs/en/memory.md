@@ -776,6 +776,108 @@ memoryService := memoryinmemory.NewMemoryService()
 
 **Features**: Zero config, high performance, no persistence
 
+### SQLite Storage
+
+**Use case**: Local persistence, single-node deployments, demos
+
+SQLite stores data in a single file. It is useful when you want persistence
+without operating MySQL/PostgreSQL/Redis.
+
+```go
+import (
+    "database/sql"
+
+    _ "github.com/mattn/go-sqlite3"
+    memorysqlite "trpc.group/trpc-go/trpc-agent-go/memory/sqlite"
+)
+
+db, err := sql.Open("sqlite3", "file:memories.db?_busy_timeout=5000")
+if err != nil {
+    // handle error
+}
+
+memoryService, err := memorysqlite.NewService(
+    db,
+    memorysqlite.WithSoftDelete(true),
+    memorysqlite.WithMemoryLimit(200),
+)
+if err != nil {
+    // handle error
+}
+defer memoryService.Close()
+```
+
+**Configuration options**:
+
+- `WithTableName(name)`: Table name (default "memories")
+- `WithSoftDelete(enabled)`: Enable soft delete (default false)
+- `WithMemoryLimit(limit)`: Memory limit per user
+- `WithSkipDBInit(skip)`: Skip table initialization
+- Auto mode: `WithExtractor`, `WithAsyncMemoryNum`, `WithMemoryQueueSize`, `WithMemoryJobTimeout`
+- Tools: `WithCustomTool`, `WithToolEnabled`
+
+**Notes**:
+
+- This backend uses `github.com/mattn/go-sqlite3` and requires CGO.
+- `NewService` owns the `*sql.DB` and closes it in `Close()`.
+
+### SQLiteVec (sqlite-vec) Storage
+
+**Use case**: Local persistence + semantic memory search on a single node
+
+SQLiteVec stores memories in a SQLite file and uses `sqlite-vec` to do
+vector similarity search (semantic search). Compared to the plain SQLite
+backend, it requires an **embedder** to generate embeddings.
+
+```go
+import (
+    "database/sql"
+
+    _ "github.com/mattn/go-sqlite3"
+    openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
+    memorysqlitevec "trpc.group/trpc-go/trpc-agent-go/memory/sqlitevec"
+)
+
+db, err := sql.Open("sqlite3", "file:memories_vec.db?_busy_timeout=5000")
+if err != nil {
+    // handle error
+}
+
+emb := openaiembedder.New(
+    openaiembedder.WithModel("text-embedding-3-small"),
+)
+
+memoryService, err := memorysqlitevec.NewService(
+    db,
+    memorysqlitevec.WithEmbedder(emb),
+    memorysqlitevec.WithSoftDelete(true),
+    memorysqlitevec.WithMemoryLimit(200),
+)
+if err != nil {
+    // handle error
+}
+defer memoryService.Close()
+```
+
+**Configuration options**:
+
+- `WithTableName(name)`: Table name (default "memories")
+- `WithEmbedder(embedder)`: Text embedder for vector generation (required)
+- `WithIndexDimension(dim)`: Vector dimension (default is embedder dimension)
+- `WithMaxResults(limit)`: Max search results (default 10)
+- `WithSoftDelete(enabled)`: Enable soft delete (default false)
+- `WithMemoryLimit(limit)`: Memory limit per user
+- `WithSkipDBInit(skip)`: Skip table initialization
+- Auto mode: `WithExtractor`, `WithAsyncMemoryNum`, `WithMemoryQueueSize`,
+  `WithMemoryJobTimeout`
+- Tools: `WithCustomTool`, `WithToolEnabled`
+
+**Notes**:
+
+- This backend uses `github.com/mattn/go-sqlite3` and requires CGO.
+- The `sqlite-vec` extension is compiled and registered in-process via Go
+  bindings (no external `.so/.dylib` download at runtime).
+
 ### Redis Storage
 
 **Use case**: Production, high concurrency, distributed deployment
@@ -993,22 +1095,24 @@ defer pgvectorService.Close()
 
 ### Backend Comparison
 
-| Feature           | InMemory  | Redis            | MySQL      | PostgreSQL        | pgvector      |
-| ----------------- | --------- | ---------------- | ---------- | ----------------- | ------------- |
-| **Persistence**   | ❌        | ✅               | ✅         | ✅                | ✅            |
-| **Distributed**   | ❌        | ✅               | ✅         | ✅                | ✅            |
-| **Transactions**  | ❌        | Partial          | ✅ ACID    | ✅ ACID           | ✅ ACID       |
-| **Queries**       | Simple    | Medium           | SQL        | SQL               | SQL + Vector  |
-| **JSON**          | ❌        | Basic            | JSON       | JSONB             | JSONB         |
-| **Performance**   | Very High | High             | Med-High   | Med-High          | Med-High      |
-| **Configuration** | Zero      | Simple           | Medium     | Medium            | Medium        |
-| **Soft Delete**   | ❌        | ❌               | ✅         | ✅                | ✅            |
-| **Use Case**      | Dev/Test  | High Concurrency | Enterprise | Advanced Features | Vector Search |
+| Feature           | InMemory  | SQLite            | SQLiteVec        | Redis            | MySQL      | PostgreSQL        | pgvector      |
+| ----------------- | --------- | ----------------- | ---------------- | ---------------- | ---------- | ----------------- | ------------- |
+| **Persistence**   | ❌        | ✅                | ✅               | ✅               | ✅         | ✅                | ✅            |
+| **Distributed**   | ❌        | ❌                | ❌               | ✅               | ✅         | ✅                | ✅            |
+| **Transactions**  | ❌        | ✅ ACID           | ✅ ACID          | Partial          | ✅ ACID    | ✅ ACID           | ✅ ACID       |
+| **Queries**       | Simple    | SQL               | SQL + Vector     | Medium           | SQL        | SQL               | SQL + Vector  |
+| **JSON**          | ❌        | Basic             | Basic            | Basic            | JSON       | JSONB             | JSONB         |
+| **Performance**   | Very High | Med-High          | Med-High         | High             | Med-High   | Med-High          | Med-High      |
+| **Configuration** | Zero      | Simple            | Medium           | Simple           | Medium     | Medium            | Medium        |
+| **Soft Delete**   | ❌        | ✅                | ✅               | ❌               | ✅         | ✅                | ✅            |
+| **Use Case**      | Dev/Test  | Local Persistence | Local Vector     | High Concurrency | Enterprise | Advanced Features | Vector Search |
 
 **Selection guide**:
 
 ```
 Development/Testing → InMemory (zero config, fast)
+Local Persistence → SQLite (single-file DB, easy setup)
+Local Vector Search → SQLiteVec (single-file DB + embeddings)
 High Concurrency → Redis (memory-level performance)
 ACID Requirements → MySQL/PostgreSQL (transaction guarantees)
 Complex JSON → PostgreSQL (JSONB indexing and queries)
@@ -1037,21 +1141,23 @@ postgresService, err := memorypostgres.NewService(
 
 ### Storage Backend Comparison
 
-| Feature                  | In-Memory | Redis      | MySQL          | PostgreSQL     | pgvector      |
-| ------------------------ | --------- | ---------- | -------------- | -------------- | ------------- |
-| Data Persistence         | ❌        | ✅         | ✅             | ✅             | ✅            |
-| Distributed Support      | ❌        | ✅         | ✅             | ✅             | ✅            |
-| Transaction Support      | ❌        | Partial    | ✅ (ACID)      | ✅ (ACID)      | ✅ (ACID)     |
-| Query Capability         | Simple    | Medium     | Powerful (SQL) | Powerful (SQL) | SQL + Vectors |
-| JSON Support             | ❌        | Partial    | ✅ (JSON)      | ✅ (JSONB)     | ✅ (JSONB)    |
-| Performance              | Very High | High       | Medium-High    | Medium-High    | Medium-High   |
-| Configuration Complexity | Low       | Medium     | Medium         | Medium         | Medium        |
-| Use Case                 | Dev/Test  | Production | Production     | Production     | Vector Search |
-| Monitoring Tools         | None      | Rich       | Very Rich      | Very Rich      | Very Rich     |
+| Feature                  | In-Memory | SQLite     | SQLiteVec    | Redis      | MySQL          | PostgreSQL     | pgvector      |
+| ------------------------ | --------- | ---------- | ----------- | ---------- | -------------- | -------------- | ------------- |
+| Data Persistence         | ❌        | ✅         | ✅          | ✅         | ✅             | ✅             | ✅            |
+| Distributed Support      | ❌        | ❌         | ❌          | ✅         | ✅             | ✅             | ✅            |
+| Transaction Support      | ❌        | ✅ (ACID)  | ✅ (ACID)   | Partial    | ✅ (ACID)      | ✅ (ACID)      | ✅ (ACID)     |
+| Query Capability         | Simple    | SQL        | SQL + Vector | Medium     | Powerful (SQL) | Powerful (SQL) | SQL + Vectors |
+| JSON Support             | ❌        | Basic      | Basic       | Partial    | ✅ (JSON)      | ✅ (JSONB)     | ✅ (JSONB)    |
+| Performance              | Very High | Med-High   | Medium-High | High       | Medium-High    | Medium-High    | Medium-High   |
+| Configuration Complexity | Low       | Low        | Medium      | Medium     | Medium         | Medium         | Medium        |
+| Use Case                 | Dev/Test  | Local Dev  | Local Vector | Production | Production     | Production     | Vector Search |
+| Monitoring Tools         | None      | None       | None        | Rich       | Very Rich      | Very Rich      | Very Rich     |
 
 **Selection Guide:**
 
 - **Development/Testing**: Use in-memory storage for fast iteration
+- **Local Development (Persistent)**: Use SQLite when you want persistence without operating an external database
+- **Local Development (Vector Search)**: Use SQLiteVec when you want semantic search in a single-file SQLite DB
 - **Production (High Performance)**: Use Redis storage for high concurrency scenarios
 - **Production (Data Integrity)**: Use MySQL storage when ACID guarantees and complex queries are needed
 - **Production (PostgreSQL)**: Use PostgreSQL storage when JSONB support and advanced PostgreSQL features are needed

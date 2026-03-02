@@ -325,6 +325,71 @@ func TestBuildRequestProcessors_PreserveSameBranchWiring(t *testing.T) {
 	require.False(t, crp.PreserveSameBranch)
 }
 
+func TestBuildRequestProcessors_PostToolPromptInjection(t *testing.T) {
+	const (
+		systemContent = "system"
+		toolContent   = "tool"
+		customPrompt  = "[Custom Prompt] Do not mention tools."
+	)
+
+	run := func(t *testing.T, opts *Options) string {
+		t.Helper()
+
+		procs := buildRequestProcessors("tester", opts)
+		var ptp *processor.PostToolRequestProcessor
+		for _, p := range procs {
+			if v, ok := p.(*processor.PostToolRequestProcessor); ok {
+				ptp = v
+				break
+			}
+		}
+		require.NotNil(t, ptp)
+
+		req := &model.Request{
+			Messages: []model.Message{
+				{Role: model.RoleSystem, Content: systemContent},
+				{Role: model.RoleTool, Content: toolContent},
+			},
+		}
+		ptp.ProcessRequest(
+			context.Background(),
+			&agent.Invocation{},
+			req,
+			make(chan *event.Event, 1),
+		)
+		return req.Messages[0].Content
+	}
+
+	t.Run("default prompt injected", func(t *testing.T) {
+		opts := &Options{}
+		got := run(t, opts)
+		require.Contains(t, got, processor.DefaultPostToolPrompt)
+	})
+
+	t.Run("custom prompt injected", func(t *testing.T) {
+		opts := &Options{}
+		WithPostToolPrompt(customPrompt)(opts)
+		got := run(t, opts)
+		require.Contains(t, got, customPrompt)
+		require.NotContains(t, got, processor.DefaultPostToolPrompt)
+	})
+
+	t.Run("injection disabled", func(t *testing.T) {
+		opts := &Options{}
+		WithEnablePostToolPrompt(false)(opts)
+		got := run(t, opts)
+		require.Equal(t, systemContent, got)
+	})
+
+	t.Run("disable overrides custom prompt", func(t *testing.T) {
+		opts := &Options{}
+		WithPostToolPrompt(customPrompt)(opts)
+		WithEnablePostToolPrompt(false)(opts)
+		got := run(t, opts)
+		require.Equal(t, systemContent, got)
+	})
+}
+
 // Test that WithPreserveSameBranch option sets the corresponding
 // field in Options correctly.
 func TestWithPreserveSameBranch_Option(t *testing.T) {

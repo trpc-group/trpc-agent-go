@@ -352,6 +352,327 @@ Behavior:
   - Optional: appended to the matching tool result message
     (`llmagent.WithSkillsLoadedContentInToolResults(true)`)
 
+#### Get the currently loaded skills (before every model call)
+
+If you want the **current loaded skills list** right before *each* model
+request (including every step inside a tool loop), register a
+`BeforeModel` callback and read the `Invocation` from context.
+
+From first principles:
+
+- `skill_load` does **not** inject the full `SKILL.md` text into the
+  session transcript.
+- Instead, it writes small “flags” into the session state:
+  - Loaded flag: keys with prefix `skill.StateKeyLoadedPrefix`
+  - Docs selection: keys with prefix `skill.StateKeyDocsPrefix`
+- The Skills request processors read those keys and materialize bodies
+  / docs into the **next** outbound model request.
+
+So, to observe the loaded skills list, you only need to inspect session
+state:
+
+In the snippet below, `m` is your model and `repo` is your skills
+repository.
+
+```go
+import (
+    "context"
+    "fmt"
+    "sort"
+    "strings"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/skill"
+)
+
+func loadedSkillNames(inv *agent.Invocation) []string {
+    if inv == nil || inv.Session == nil {
+        return nil
+    }
+    state := inv.Session.SnapshotState()
+    if len(state) == 0 {
+        return nil
+    }
+
+    var out []string
+    for k, v := range state {
+        if !strings.HasPrefix(k, skill.StateKeyLoadedPrefix) {
+            continue
+        }
+        if len(v) == 0 {
+            continue
+        }
+        name := strings.TrimPrefix(k, skill.StateKeyLoadedPrefix)
+        if strings.TrimSpace(name) == "" {
+            continue
+        }
+        out = append(out, name)
+    }
+    sort.Strings(out)
+    return out
+}
+
+modelCallbacks := model.NewCallbacks().
+    RegisterBeforeModel(func(
+        ctx context.Context,
+        args *model.BeforeModelArgs,
+    ) (*model.BeforeModelResult, error) {
+        _ = args
+        inv, ok := agent.InvocationFromContext(ctx)
+        if !ok {
+            return nil, nil
+        }
+        fmt.Printf("loaded skills: %v\n", loadedSkillNames(inv))
+        return nil, nil
+    })
+
+agt := llmagent.New(
+    "skills-assistant",
+    llmagent.WithModel(m),
+    llmagent.WithSkills(repo),
+    llmagent.WithModelCallbacks(modelCallbacks),
+)
+_ = agt
+```
+
+Notes:
+
+- `SkillLoadModeTurn` (default) clears those `temp:skill:*` keys at the
+  start of the **next** `Runner.Run` call, so the loaded list is usually
+  non-empty only within the current turn/tool loop.
+- `SkillLoadModeSession` keeps them across turns, so the loaded list can
+  remain non-empty until you clear it (or the session expires).
+
+#### Built-in option: cap loaded skills (TopK)
+
+If your goal is simply “keep only the most recent N loaded skills”, use
+the built-in option:
+
+- `llmagent.WithMaxLoadedSkills(N)`
+
+This enforces the cap **before every model request** by clearing older
+`temp:skill:*` state keys, based on recent `skill_load` /
+`skill_select_docs` tool responses in the session.
+
+Example:
+
+```go
+agt := llmagent.New(
+    "skills-assistant",
+    llmagent.WithModel(m),
+    llmagent.WithSkills(repo),
+    llmagent.WithMaxLoadedSkills(3),
+)
+_ = agt
+```
+
+#### Custom policy: cap loaded skills (e.g., keep the most recent 3)
+
+`SkillLoadMode` controls **lifetime** (once/turn/session). If you need
+full manual control beyond `llmagent.WithMaxLoadedSkills` (for example,
+custom eviction policy), use an `AppendEventHook` on your session
+service to modify the state deltas written by `skill_load`.
+
+The core idea:
+
+1) Detect events that load a skill (state delta contains
+   `skill.StateKeyLoadedPrefix+<name>`).
+2) Compute which skills would be loaded *after* applying the delta.
+3) If the count exceeds your limit, clear the older skills by adding
+   `nil` entries into the same `StateDelta` map.
+
+Example (inmemory session service, keep the most recent 3 loaded skills):
+
+```go
+import (
+    "encoding/json"
+    "sort"
+    "strings"
+
+    "trpc.group/trpc-go/trpc-agent-go/event"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/session"
+    "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+    "trpc.group/trpc-go/trpc-agent-go/skill"
+)
+
+const (
+    maxLoadedSkills = 3
+    toolSkillLoad   = "skill_load"
+)
+
+type skillLoadArgs struct {
+    Skill string `json:"skill"`
+}
+
+func loadedSkillsFromState(state session.StateMap) []string {
+    if len(state) == 0 {
+        return nil
+    }
+    var out []string
+    for k, v := range state {
+        if !strings.HasPrefix(k, skill.StateKeyLoadedPrefix) {
+            continue
+        }
+        if len(v) == 0 {
+            continue
+        }
+        name := strings.TrimPrefix(k, skill.StateKeyLoadedPrefix)
+        if strings.TrimSpace(name) == "" {
+            continue
+        }
+        out = append(out, name)
+    }
+    sort.Strings(out)
+    return out
+}
+
+func capLoadedSkills(
+    sess *session.Session,
+    ev *event.Event,
+    max int,
+) {
+    if sess == nil || ev == nil || max <= 0 {
+        return
+    }
+    if len(ev.StateDelta) == 0 {
+        return
+    }
+
+    // Only enforce when this event loads a skill.
+    var newlyLoaded []string
+    for k, v := range ev.StateDelta {
+        if !strings.HasPrefix(k, skill.StateKeyLoadedPrefix) {
+            continue
+        }
+        if len(v) == 0 {
+            continue
+        }
+        name := strings.TrimPrefix(k, skill.StateKeyLoadedPrefix)
+        if strings.TrimSpace(name) == "" {
+            continue
+        }
+        newlyLoaded = append(newlyLoaded, name)
+    }
+    if len(newlyLoaded) == 0 {
+        return
+    }
+
+    // Predict the "post-append" state by applying delta to a copy.
+    nextState := sess.SnapshotState()
+    for k, v := range ev.StateDelta {
+        nextState[k] = v
+    }
+
+    loaded := loadedSkillsFromState(nextState)
+    if len(loaded) <= max {
+        return
+    }
+
+    loadedSet := make(map[string]struct{}, len(loaded))
+    for _, name := range loaded {
+        loadedSet[name] = struct{}{}
+    }
+
+    // Keep the most recent loaded skills by scanning recent events.
+    keep := make([]string, 0, max)
+    keepSet := make(map[string]struct{}, max)
+
+    // 1) Always keep the skill(s) loaded by this delta.
+    sort.Strings(newlyLoaded)
+    for _, name := range newlyLoaded {
+        if _, ok := loadedSet[name]; !ok {
+            continue
+        }
+        if _, ok := keepSet[name]; ok {
+            continue
+        }
+        keep = append(keep, name)
+        keepSet[name] = struct{}{}
+        if len(keep) >= max {
+            break
+        }
+    }
+
+    // 2) Fill from newest skill_load calls in the transcript.
+    events := sess.GetEvents()
+    for i := len(events) - 1; i >= 0 && len(keep) < max; i-- {
+        rsp := events[i].Response
+        if rsp == nil || len(rsp.Choices) == 0 {
+            continue
+        }
+        msg := rsp.Choices[0].Message
+        if msg.Role != model.RoleAssistant {
+            continue
+        }
+        for _, tc := range msg.ToolCalls {
+            if tc.Function.Name != toolSkillLoad {
+                continue
+            }
+            var in skillLoadArgs
+            if err := json.Unmarshal(
+                []byte(tc.Function.Arguments),
+                &in,
+            ); err != nil {
+                continue
+            }
+            name := strings.TrimSpace(in.Skill)
+            if name == "" {
+                continue
+            }
+            if _, ok := loadedSet[name]; !ok {
+                continue
+            }
+            if _, ok := keepSet[name]; ok {
+                continue
+            }
+            keep = append(keep, name)
+            keepSet[name] = struct{}{}
+            if len(keep) >= max {
+                break
+            }
+        }
+    }
+
+    // 3) Fallback: fill deterministically from the loaded list.
+    for _, name := range loaded {
+        if len(keep) >= max {
+            break
+        }
+        if _, ok := keepSet[name]; ok {
+            continue
+        }
+        keep = append(keep, name)
+        keepSet[name] = struct{}{}
+    }
+
+    // Evict everything else by clearing the same state keys.
+    for _, name := range loaded {
+        if _, ok := keepSet[name]; ok {
+            continue
+        }
+        ev.StateDelta[skill.StateKeyLoadedPrefix+name] = nil
+        ev.StateDelta[skill.StateKeyDocsPrefix+name] = nil
+    }
+}
+
+svc := inmemory.NewSessionService(
+    inmemory.WithAppendEventHook(func(
+        ctx *session.AppendEventContext,
+        next func() error,
+    ) error {
+        capLoadedSkills(ctx.Session, ctx.Event, maxLoadedSkills)
+        return next()
+    }),
+)
+_ = svc
+```
+
+See `docs/mkdocs/en/session.md` (“AppendEventHook”) for the hook API, and
+`examples/session/hook` for a runnable example.
+
 Notes:
 - Prefer progressive disclosure: load only the body first, then list and
   select only the docs you need. Avoid `include_all_docs` unless you
@@ -541,6 +862,18 @@ Input:
   - `pin`: for `artifact://name` without `@version`, reuse the first
     resolved version for the same `to` path (best effort)
 
+- Conversation file inputs (automatic staging):
+  - If the current session contains user messages with file inputs
+    (`content_parts` items of type `file`), `skill_run` automatically
+    stages them into `work/inputs/` (and thus `inputs/`) before the
+    command runs.
+  - Filenames are sanitized to a safe basename and de-duplicated with a
+    numeric suffix when needed.
+  - If a file input includes raw bytes (`data`), those bytes are written
+    directly into the workspace.
+  - If a file input is referenced only by `file_id`, the framework
+    downloads the content via the configured model when supported.
+
 - `outputs` (optional, declarative outputs): a manifest to collect
   results with limits and persistence:
   - `globs` workspace‑relative patterns (supports `**` and env‑style
@@ -590,8 +923,16 @@ Optional safety restriction (denylist):
 - You can also configure this in code via
   `llmagent.WithSkillRunDeniedCommands(...)`.
 
+Optional behavior (force artifact persistence):
+- In code, you can force `skill_run` to persist collected outputs as
+  artifacts (best effort) even if the model omits `save_as_artifacts`
+  / `outputs.save`:
+  - `llmagent.WithSkillRunForceSaveArtifacts(true)`
+
 Output:
 - `stdout`, `stderr`, `exit_code`, `timed_out`, `duration_ms`
+- `staged_inputs` (optional): files staged from the conversation into
+  `work/inputs/` for this run
 - `primary_output` (optional) with `name`, `ref`, `content`, `mime_type`,
   `size_bytes`, `truncated`
   - Convenience pointer to the "best" small text output file (when one

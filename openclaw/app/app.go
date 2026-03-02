@@ -63,7 +63,9 @@ const (
 
 	csvDelimiter = ","
 
-	defaultAgentName = "assistant"
+	defaultAgentName        = "assistant"
+	defaultAgentInstruction = "You are a helpful assistant. " +
+		"Keep replies concise."
 
 	agentTypeLLM        = "llm"
 	agentTypeClaudeCode = "claude-code"
@@ -81,6 +83,9 @@ const (
 
 	openAIBaseURLEnvName = "OPENAI_BASE_URL"
 	openAIModelEnvName   = "OPENAI_MODEL"
+
+	errClaudeCodeAgentNoPrompts = "claude-code agent does not support " +
+		"agent prompts"
 )
 
 // Main runs the OpenClaw-like CLI and returns an exit code.
@@ -129,6 +134,361 @@ func (e *exitError) Error() string {
 	return e.Err.Error()
 }
 
+// ExitCode returns the suggested process exit code for this error.
+func (e *exitError) ExitCode() int {
+	if e == nil {
+		return 1
+	}
+	if e.Code == 0 {
+		return 1
+	}
+	return e.Code
+}
+
+// Runtime wires OpenClaw components without owning the HTTP listener.
+//
+// Downstream distributions can mount Gateway.Handler into any HTTP server
+// implementation (including framework-managed servers) while reusing the
+// default OpenClaw runner + channel wiring.
+type Runtime struct {
+	Gateway  Gateway
+	Channels []channel.Channel
+
+	runner     runner.Runner
+	sessionSvc closeFunc
+	memorySvc  closeFunc
+	toolSets   []tool.ToolSet
+}
+
+// Gateway provides the HTTP handler and routes served by OpenClaw.
+type Gateway struct {
+	Handler      http.Handler
+	HealthPath   string
+	MessagesPath string
+	StatusPath   string
+	CancelPath   string
+}
+
+// NewRuntime constructs an OpenClaw runtime based on CLI args / config file,
+// but does not start an HTTP server.
+func NewRuntime(
+	ctx context.Context,
+	args []string,
+) (rt *Runtime, err error) {
+	rt = &Runtime{}
+	cleanup := rt
+	defer func() {
+		if err != nil {
+			_ = cleanup.Close()
+		}
+	}()
+
+	opts, err := parseRunOptions(args)
+	if err != nil {
+		return nil, err
+	}
+
+	agentType, err := normalizeAgentType(opts.AgentType)
+	if err != nil {
+		return nil, &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("agent config failed: %w", err),
+		}
+	}
+	if err := validateAgentRunOptions(agentType, opts); err != nil {
+		return nil, &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("agent config failed: %w", err),
+		}
+	}
+
+	telegramToken := strings.TrimSpace(opts.TelegramToken)
+	telegramEnabled := telegramToken != ""
+
+	var (
+		telegramBot tgch.BotInfo
+		tgapiOpts   []telegramAPIOption
+	)
+	if telegramEnabled {
+		tgapiOpts, err = makeTelegramAPIOptions(
+			opts.TelegramProxy,
+			opts.TelegramHTTPTimeout,
+			opts.TelegramMaxRetries,
+		)
+		if err != nil {
+			return nil, &exitError{
+				Code: 1,
+				Err:  fmt.Errorf("telegram config failed: %w", err),
+			}
+		}
+
+		telegramBot, err = tgch.ProbeBotInfo(
+			ctx,
+			telegramToken,
+			tgapiOpts...,
+		)
+		if err != nil {
+			return nil, &exitError{
+				Code: 1,
+				Err:  fmt.Errorf("probe telegram bot failed: %w", err),
+			}
+		}
+
+		if strings.TrimSpace(telegramBot.Username) != "" {
+			log.Infof(
+				"Telegram enabled as @%s",
+				telegramBot.Username,
+			)
+		} else if telegramBot.ID != 0 {
+			log.Infof("Telegram enabled as id %d", telegramBot.ID)
+		} else {
+			log.Infof("Telegram enabled")
+		}
+	}
+
+	mentionPatterns := splitCSV(opts.Mention)
+	if opts.RequireMention &&
+		len(mentionPatterns) == 0 &&
+		telegramBot.Mention != "" {
+		mentionPatterns = []string{telegramBot.Mention}
+	}
+
+	resolvedStateDir, err := resolveStateDir(opts.StateDir)
+	if err != nil {
+		return nil, &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("resolve state dir failed: %w", err),
+		}
+	}
+
+	needsModel := agentType == agentTypeLLM ||
+		opts.SessionSummaryEnabled ||
+		opts.MemoryAutoEnabled
+
+	var mdl model.Model
+	if needsModel {
+		mdl, err = modelFromOptions(opts)
+		if err != nil {
+			return nil, &exitError{
+				Code: 1,
+				Err:  fmt.Errorf("create model failed: %w", err),
+			}
+		}
+	}
+
+	if agentType == agentTypeLLM {
+		log.Infof(
+			"Instance: %s",
+			configFingerprint(
+				opts.ModelMode,
+				opts.OpenAIModel,
+				resolvedStateDir,
+			),
+		)
+	} else {
+		parts := []string{
+			agentType,
+			strings.TrimSpace(opts.ClaudeBin),
+			strings.TrimSpace(opts.ClaudeOutputFormat),
+			resolvedStateDir,
+		}
+		if needsModel {
+			parts = append(parts, opts.ModelMode, opts.OpenAIModel)
+		}
+		log.Infof("Instance: %s", configFingerprint(parts...))
+	}
+
+	sessionSvc, err := newSessionService(mdl, opts)
+	if err != nil {
+		return nil, &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("create session service failed: %w", err),
+		}
+	}
+	rt.sessionSvc = sessionSvc
+
+	memSvc, err := newMemoryService(mdl, opts)
+	if err != nil {
+		return nil, &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("create memory service failed: %w", err),
+		}
+	}
+	rt.memorySvc = memSvc
+
+	prompts, err := resolveAgentPrompts(opts)
+	if err != nil {
+		return nil, &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("agent prompt config failed: %w", err),
+		}
+	}
+
+	var (
+		toolSets []tool.ToolSet
+		ag       agent.Agent
+	)
+	if agentType == agentTypeClaudeCode {
+		ag, err = newClaudeCodeAgent(opts)
+	} else {
+		toolSets, err = toolSetsFromProviders(
+			mdl,
+			opts.AppName,
+			resolvedStateDir,
+			opts.ToolSets,
+		)
+		if err != nil {
+			return nil, &exitError{
+				Code: 1,
+				Err:  fmt.Errorf("create toolsets failed: %w", err),
+			}
+		}
+		ag, err = newAgent(mdl, agentConfig{
+			AppName:           opts.AppName,
+			AddSessionSummary: opts.AddSessionSummary,
+			MaxHistoryRuns:    opts.MaxHistoryRuns,
+			PreloadMemory:     opts.PreloadMemory,
+			Instruction:       prompts.Instruction,
+			SystemPrompt:      prompts.SystemPrompt,
+
+			SkillsRoot:      opts.SkillsRoot,
+			SkillsExtraDirs: splitCSV(opts.SkillsExtraDir),
+			SkillsDebug:     opts.SkillsDebug,
+			SkillConfigKeys: resolveSkillConfigKeys(opts),
+			StateDir:        resolvedStateDir,
+
+			EnableLocalExec:     opts.EnableLocalExec,
+			EnableOpenClawTools: opts.EnableOpenClawTools,
+
+			ToolProviders: opts.ToolProviders,
+			ToolSets:      opts.ToolSets,
+
+			RefreshToolSetsOnRun: opts.RefreshToolSetsOnRun,
+		}, memSvc.Tools(), toolSets)
+	}
+	if err != nil {
+		closeToolSets(toolSets)
+		return nil, &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("create agent failed: %w", err),
+		}
+	}
+	rt.toolSets = toolSets
+
+	runnerOpts := []runner.Option{
+		runner.WithSessionService(sessionSvc),
+		runner.WithMemoryService(memSvc),
+	}
+	rlCfg, err := ralphLoopConfigFromRunOptions(opts)
+	if err != nil {
+		return nil, &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("agent ralph loop config failed: %w", err),
+		}
+	}
+	if rlCfg != nil {
+		runnerOpts = append(
+			runnerOpts,
+			runner.WithRalphLoop(*rlCfg),
+		)
+	}
+
+	r := runner.NewRunner(opts.AppName, ag, runnerOpts...)
+	rt.runner = r
+
+	gwOpts := makeGatewayOptions(
+		splitCSV(opts.AllowUsers),
+		opts.RequireMention,
+		mentionPatterns,
+	)
+	gwSrv, err := gateway.New(r, gwOpts...)
+	if err != nil {
+		return nil, &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("create gateway failed: %w", err),
+		}
+	}
+	rt.Gateway = Gateway{
+		Handler:      gwSrv.Handler(),
+		HealthPath:   gwSrv.HealthPath(),
+		MessagesPath: gwSrv.MessagesPath(),
+		StatusPath:   gwSrv.StatusPath(),
+		CancelPath:   gwSrv.CancelPath(),
+	}
+
+	gw, err := gwclient.New(
+		gwSrv.Handler(),
+		gwSrv.MessagesPath(),
+		gwSrv.CancelPath(),
+	)
+	if err != nil {
+		return nil, &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("create gateway client failed: %w", err),
+		}
+	}
+
+	if telegramEnabled {
+		users := splitCSV(opts.AllowUsers)
+		threads := splitCSV(opts.TelegramAllowThreads)
+		ch, err := tgch.New(
+			telegramToken,
+			telegramBot,
+			gw,
+			tgch.WithAPIOptions(tgapiOpts...),
+			tgch.WithStateDir(resolvedStateDir),
+			tgch.WithStartFromLatest(opts.TelegramStartFromLatest),
+			tgch.WithStreamingMode(opts.TelegramStreaming),
+			tgch.WithDMPolicy(opts.TelegramDMPolicy),
+			tgch.WithGroupPolicy(opts.TelegramGroupPolicy),
+			tgch.WithAllowUsers(users...),
+			tgch.WithAllowThreads(threads...),
+			tgch.WithPairingTTL(opts.TelegramPairingTTL),
+		)
+		if err != nil {
+			return nil, &exitError{
+				Code: 1,
+				Err:  fmt.Errorf("create telegram channel failed: %w", err),
+			}
+		}
+		rt.Channels = append(rt.Channels, ch)
+	}
+
+	if len(opts.Channels) > 0 {
+		extra, err := channelsFromRegistry(
+			gw,
+			opts.AppName,
+			resolvedStateDir,
+			opts.Channels,
+		)
+		if err != nil {
+			return nil, &exitError{
+				Code: 1,
+				Err:  fmt.Errorf("create channels failed: %w", err),
+			}
+		}
+		rt.Channels = append(rt.Channels, extra...)
+	}
+
+	return rt, nil
+}
+
+// Close releases owned resources (session/memory services, toolsets, runner).
+func (r *Runtime) Close() error {
+	if r == nil {
+		return nil
+	}
+
+	closeToolSets(r.toolSets)
+	closeMemoryService(r.memorySvc)
+	closeSessionService(r.sessionSvc)
+
+	if r.runner == nil {
+		return nil
+	}
+	return r.runner.Close()
+}
+
 func run(ctx context.Context, args []string) error {
 	opts, err := parseRunOptions(args)
 	if err != nil {
@@ -149,11 +509,14 @@ func run(ctx context.Context, args []string) error {
 		}
 	}
 
+	telegramToken := strings.TrimSpace(opts.TelegramToken)
+	telegramEnabled := telegramToken != ""
+
 	var (
 		telegramBot tgch.BotInfo
 		tgapiOpts   []telegramAPIOption
 	)
-	if strings.TrimSpace(opts.TelegramToken) != "" {
+	if telegramEnabled {
 		tgapiOpts, err = makeTelegramAPIOptions(
 			opts.TelegramProxy,
 			opts.TelegramHTTPTimeout,
@@ -168,7 +531,7 @@ func run(ctx context.Context, args []string) error {
 
 		telegramBot, err = tgch.ProbeBotInfo(
 			ctx,
-			opts.TelegramToken,
+			telegramToken,
 			tgapiOpts...,
 		)
 		if err != nil {
@@ -260,6 +623,14 @@ func run(ctx context.Context, args []string) error {
 	}
 	defer closeMemoryService(memSvc)
 
+	prompts, err := resolveAgentPrompts(opts)
+	if err != nil {
+		return &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("agent prompt config failed: %w", err),
+		}
+	}
+
 	var (
 		toolSets []tool.ToolSet
 		ag       agent.Agent
@@ -287,6 +658,8 @@ func run(ctx context.Context, args []string) error {
 			AddSessionSummary: opts.AddSessionSummary,
 			MaxHistoryRuns:    opts.MaxHistoryRuns,
 			PreloadMemory:     opts.PreloadMemory,
+			Instruction:       prompts.Instruction,
+			SystemPrompt:      prompts.SystemPrompt,
 
 			SkillsRoot:      opts.SkillsRoot,
 			SkillsExtraDirs: splitCSV(opts.SkillsExtraDir),
@@ -310,12 +683,24 @@ func run(ctx context.Context, args []string) error {
 		}
 	}
 
-	r := runner.NewRunner(
-		opts.AppName,
-		ag,
+	runnerOpts := []runner.Option{
 		runner.WithSessionService(sessionSvc),
 		runner.WithMemoryService(memSvc),
-	)
+	}
+	rlCfg, err := ralphLoopConfigFromRunOptions(opts)
+	if err != nil {
+		return &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("agent ralph loop config failed: %w", err),
+		}
+	}
+	if rlCfg != nil {
+		runnerOpts = append(
+			runnerOpts,
+			runner.WithRalphLoop(*rlCfg),
+		)
+	}
+	r := runner.NewRunner(opts.AppName, ag, runnerOpts...)
 
 	gwOpts := makeGatewayOptions(
 		splitCSV(opts.AllowUsers),
@@ -352,11 +737,11 @@ func run(ctx context.Context, args []string) error {
 	}
 
 	var channels []channel.Channel
-	if strings.TrimSpace(opts.TelegramToken) != "" {
+	if telegramEnabled {
 		users := splitCSV(opts.AllowUsers)
 		threads := splitCSV(opts.TelegramAllowThreads)
 		ch, err := tgch.New(
-			opts.TelegramToken,
+			telegramToken,
 			telegramBot,
 			gw,
 			tgch.WithAPIOptions(tgapiOpts...),
@@ -525,6 +910,17 @@ func normalizeAgentType(raw string) (string, error) {
 }
 
 func validateAgentRunOptions(agentType string, opts runOptions) error {
+	if opts.RalphLoopEnabled && agentType != agentTypeLLM {
+		return errors.New(
+			"claude-code agent does not support ralph loop",
+		)
+	}
+	if opts.RalphLoopEnabled {
+		if _, err := ralphLoopConfigFromRunOptions(opts); err != nil {
+			return err
+		}
+	}
+
 	if agentType == agentTypeLLM {
 		return nil
 	}
@@ -546,6 +942,16 @@ func validateAgentRunOptions(agentType string, opts runOptions) error {
 		return errors.New(
 			"claude-code agent does not support preload-memory",
 		)
+	}
+	if strings.TrimSpace(opts.AgentInstruction) != "" ||
+		strings.TrimSpace(opts.AgentInstructionFiles) != "" ||
+		strings.TrimSpace(opts.AgentInstructionDir) != "" {
+		return errors.New(errClaudeCodeAgentNoPrompts)
+	}
+	if strings.TrimSpace(opts.AgentSystemPrompt) != "" ||
+		strings.TrimSpace(opts.AgentSystemPromptFiles) != "" ||
+		strings.TrimSpace(opts.AgentSystemPromptDir) != "" {
+		return errors.New(errClaudeCodeAgentNoPrompts)
 	}
 	if opts.EnableLocalExec {
 		return errors.New(
@@ -573,6 +979,81 @@ func validateAgentRunOptions(agentType string, opts runOptions) error {
 		)
 	}
 	return nil
+}
+
+func ralphLoopConfigFromRunOptions(
+	opts runOptions,
+) (*runner.RalphLoopConfig, error) {
+	if !opts.RalphLoopEnabled {
+		return nil, nil
+	}
+
+	promise := strings.TrimSpace(opts.RalphLoopCompletionPromise)
+	verifyCmd := strings.TrimSpace(opts.RalphLoopVerifyCommand)
+	if promise == "" && verifyCmd == "" {
+		return nil, errors.New(
+			"agent.ralph_loop requires completion_promise or verify.command",
+		)
+	}
+
+	if opts.RalphLoopMaxIterations < 0 {
+		return nil, errors.New(
+			"agent.ralph_loop.max_iterations must be >= 0",
+		)
+	}
+	if opts.RalphLoopVerifyTimeout < 0 {
+		return nil, errors.New(
+			"agent.ralph_loop.verify.timeout must be >= 0",
+		)
+	}
+
+	env, err := parseKVOverrides(splitCSV(opts.RalphLoopVerifyEnv))
+	if err != nil {
+		return nil, fmt.Errorf(
+			"agent.ralph_loop.verify.env: %w",
+			err,
+		)
+	}
+
+	cfg := &runner.RalphLoopConfig{
+		MaxIterations:     opts.RalphLoopMaxIterations,
+		CompletionPromise: promise,
+		PromiseTagOpen: strings.TrimSpace(
+			opts.RalphLoopPromiseTagOpen,
+		),
+		PromiseTagClose: strings.TrimSpace(
+			opts.RalphLoopPromiseTagClose,
+		),
+		VerifyCommand: verifyCmd,
+		VerifyWorkDir: strings.TrimSpace(opts.RalphLoopVerifyWorkDir),
+		VerifyTimeout: opts.RalphLoopVerifyTimeout,
+		VerifyEnv:     env,
+	}
+	return cfg, nil
+}
+
+func parseKVOverrides(items []string) (map[string]string, error) {
+	if len(items) == 0 {
+		return nil, nil
+	}
+
+	out := make(map[string]string, len(items))
+	for _, item := range items {
+		key, val, ok := strings.Cut(item, "=")
+		if !ok {
+			return nil, fmt.Errorf("invalid override: %q", item)
+		}
+		key = strings.TrimSpace(key)
+		if key == "" {
+			return nil, fmt.Errorf("empty key in override: %q", item)
+		}
+		out[key] = val
+	}
+
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
 }
 
 func parseClaudeOutputFormat(
@@ -632,11 +1113,15 @@ func newAgent(
 	extraTools []tool.Tool,
 	toolSets []tool.ToolSet,
 ) (agent.Agent, error) {
+	instruction := strings.TrimSpace(cfg.Instruction)
+	if instruction == "" {
+		instruction = defaultAgentInstruction
+	}
+
 	opts := []llmagent.Option{
 		llmagent.WithModel(mdl),
-		llmagent.WithInstruction(
-			"You are a helpful assistant. Keep replies concise.",
-		),
+		llmagent.WithInstruction(instruction),
+		llmagent.WithGlobalInstruction(strings.TrimSpace(cfg.SystemPrompt)),
 		llmagent.WithAddSessionSummary(cfg.AddSessionSummary),
 		llmagent.WithMaxHistoryRuns(cfg.MaxHistoryRuns),
 		llmagent.WithPreloadMemory(cfg.PreloadMemory),
@@ -847,6 +1332,8 @@ type agentConfig struct {
 	AddSessionSummary bool
 	MaxHistoryRuns    int
 	PreloadMemory     int
+	Instruction       string
+	SystemPrompt      string
 
 	SkillsRoot      string
 	SkillsExtraDirs []string

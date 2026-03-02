@@ -259,6 +259,14 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 			skillsOpts,
 			processor.WithSkillLoadMode(options.SkillLoadMode),
 		)
+		if options.MaxLoadedSkills > 0 {
+			skillsOpts = append(
+				skillsOpts,
+				processor.WithMaxLoadedSkills(
+					options.MaxLoadedSkills,
+				),
+			)
+		}
 		if options.SkillsLoadedContentInToolResults {
 			skillsOpts = append(
 				skillsOpts,
@@ -311,9 +319,19 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 
 func appendPostToolProcessor(options *Options, requestProcessors []flow.RequestProcessor) []flow.RequestProcessor {
 	var postToolOpts []processor.PostToolOption
-	if options.PostToolPrompt != "" {
-		postToolOpts = append(postToolOpts,
-			processor.WithPostToolPrompt(options.PostToolPrompt))
+	if options.postToolPromptEnabled != nil &&
+		!*options.postToolPromptEnabled {
+		// PostToolRequestProcessor treats an empty prompt as "disabled".
+		// Keep the processor registered, but skip prompt injection.
+		postToolOpts = append(
+			postToolOpts,
+			processor.WithPostToolPrompt(""),
+		)
+	} else if options.PostToolPrompt != "" {
+		postToolOpts = append(
+			postToolOpts,
+			processor.WithPostToolPrompt(options.PostToolPrompt),
+		)
 	}
 	postToolProcessor := processor.NewPostToolRequestProcessor(postToolOpts...)
 	return append(requestProcessors, postToolProcessor)
@@ -495,6 +513,11 @@ func registerTools(options *Options) ([]tool.Tool, map[string]bool) {
 				toolskill.WithDeniedCommands(
 					options.skillRunDeniedCommands...,
 				),
+			)
+		}
+		if options.skillRunForceSaveArtifacts {
+			runOpts = append(runOpts,
+				toolskill.WithForceSaveArtifacts(true),
 			)
 		}
 		allTools = append(allTools, toolskill.NewRunTool(

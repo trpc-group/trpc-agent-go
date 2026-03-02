@@ -572,6 +572,37 @@ func TestMessage_AddFileID(t *testing.T) {
 	}
 }
 
+func TestMessage_AddFileIDWithName(t *testing.T) {
+	tests := []struct {
+		name   string
+		fileID string
+		file   string
+	}{
+		{
+			name:   "add file id with name",
+			fileID: "file-abc123",
+			file:   "notes.txt",
+		},
+		{
+			name:   "empty name",
+			fileID: "file-abc123",
+			file:   "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := &Message{}
+			msg.AddFileIDWithName(tt.fileID, tt.file)
+
+			require.Len(t, msg.ContentParts, 1)
+			assert.Equal(t, ContentTypeFile, msg.ContentParts[0].Type)
+			require.NotNil(t, msg.ContentParts[0].File)
+			assert.Equal(t, tt.fileID, msg.ContentParts[0].File.FileID)
+			assert.Equal(t, tt.file, msg.ContentParts[0].File.Name)
+		})
+	}
+}
+
 func TestMessage_AddImageURL(t *testing.T) {
 	tests := []struct {
 		name   string

@@ -46,6 +46,23 @@ const (
 	flagAddSessionSummary = "add-session-summary"
 	flagMaxHistoryRuns    = "max-history-runs"
 	flagPreloadMemory     = "preload-memory"
+
+	flagAgentInstruction       = "agent-instruction"
+	flagAgentInstructionFiles  = "agent-instruction-files"
+	flagAgentInstructionDir    = "agent-instruction-dir"
+	flagAgentSystemPrompt      = "agent-system-prompt"
+	flagAgentSystemPromptFiles = "agent-system-prompt-files"
+	flagAgentSystemPromptDir   = "agent-system-prompt-dir"
+
+	flagAgentRalphLoopEnabled           = "agent-ralph-loop"
+	flagAgentRalphLoopMaxIterations     = "agent-ralph-max-iterations"
+	flagAgentRalphLoopCompletionPromise = "agent-ralph-completion-promise"
+	flagAgentRalphLoopPromiseTagOpen    = "agent-ralph-promise-tag-open"
+	flagAgentRalphLoopPromiseTagClose   = "agent-ralph-promise-tag-close"
+	flagAgentRalphLoopVerifyCommand     = "agent-ralph-verify-command"
+	flagAgentRalphLoopVerifyWorkDir     = "agent-ralph-verify-workdir"
+	flagAgentRalphLoopVerifyTimeout     = "agent-ralph-verify-timeout"
+	flagAgentRalphLoopVerifyEnv         = "agent-ralph-verify-env"
 )
 
 type runOptions struct {
@@ -58,7 +75,24 @@ type runOptions struct {
 	MaxHistoryRuns    int
 	PreloadMemory     int
 
+	AgentInstruction       string
+	AgentInstructionFiles  string
+	AgentInstructionDir    string
+	AgentSystemPrompt      string
+	AgentSystemPromptFiles string
+	AgentSystemPromptDir   string
+
 	AgentType string
+
+	RalphLoopEnabled           bool
+	RalphLoopMaxIterations     int
+	RalphLoopCompletionPromise string
+	RalphLoopPromiseTagOpen    string
+	RalphLoopPromiseTagClose   string
+	RalphLoopVerifyCommand     string
+	RalphLoopVerifyWorkDir     string
+	RalphLoopVerifyTimeout     time.Duration
+	RalphLoopVerifyEnv         string
 
 	ClaudeBin          string
 	ClaudeOutputFormat string
@@ -195,6 +229,96 @@ func parseRunOptions(args []string) (runOptions, error) {
 		flagPreloadMemory,
 		0,
 		"Preload N memories into system prompt (0=off, -1=all)",
+	)
+	fs.StringVar(
+		&opts.AgentInstruction,
+		flagAgentInstruction,
+		"",
+		"Agent instruction (system-level guidance)",
+	)
+	fs.StringVar(
+		&opts.AgentInstructionFiles,
+		flagAgentInstructionFiles,
+		"",
+		"Comma-separated files merged into agent instruction",
+	)
+	fs.StringVar(
+		&opts.AgentInstructionDir,
+		flagAgentInstructionDir,
+		"",
+		"Dir of .md files merged into agent instruction",
+	)
+	fs.StringVar(
+		&opts.AgentSystemPrompt,
+		flagAgentSystemPrompt,
+		"",
+		"Agent system prompt (prepended to instruction)",
+	)
+	fs.StringVar(
+		&opts.AgentSystemPromptFiles,
+		flagAgentSystemPromptFiles,
+		"",
+		"Comma-separated files merged into system prompt",
+	)
+	fs.StringVar(
+		&opts.AgentSystemPromptDir,
+		flagAgentSystemPromptDir,
+		"",
+		"Dir of .md files merged into system prompt",
+	)
+	fs.BoolVar(
+		&opts.RalphLoopEnabled,
+		flagAgentRalphLoopEnabled,
+		false,
+		"Enable Ralph Loop outer verification loop (unsafe)",
+	)
+	fs.IntVar(
+		&opts.RalphLoopMaxIterations,
+		flagAgentRalphLoopMaxIterations,
+		0,
+		"Ralph Loop max iterations (0 uses default)",
+	)
+	fs.StringVar(
+		&opts.RalphLoopCompletionPromise,
+		flagAgentRalphLoopCompletionPromise,
+		"",
+		"Ralph Loop completion promise (optional)",
+	)
+	fs.StringVar(
+		&opts.RalphLoopPromiseTagOpen,
+		flagAgentRalphLoopPromiseTagOpen,
+		"",
+		"Ralph Loop promise open tag (optional)",
+	)
+	fs.StringVar(
+		&opts.RalphLoopPromiseTagClose,
+		flagAgentRalphLoopPromiseTagClose,
+		"",
+		"Ralph Loop promise close tag (optional)",
+	)
+	fs.StringVar(
+		&opts.RalphLoopVerifyCommand,
+		flagAgentRalphLoopVerifyCommand,
+		"",
+		"Ralph Loop verify command (optional, host shell)",
+	)
+	fs.StringVar(
+		&opts.RalphLoopVerifyWorkDir,
+		flagAgentRalphLoopVerifyWorkDir,
+		"",
+		"Ralph Loop verify command working dir (optional)",
+	)
+	fs.DurationVar(
+		&opts.RalphLoopVerifyTimeout,
+		flagAgentRalphLoopVerifyTimeout,
+		0,
+		"Ralph Loop verify command timeout (0 disables)",
+	)
+	fs.StringVar(
+		&opts.RalphLoopVerifyEnv,
+		flagAgentRalphLoopVerifyEnv,
+		"",
+		"Ralph Loop verify env overrides (KEY=VALUE, comma-separated)",
 	)
 	fs.StringVar(
 		&opts.ClaudeBin,
@@ -579,11 +703,38 @@ type agentRunConfig struct {
 	MaxHistoryRuns    *int  `yaml:"max_history_runs,omitempty"`
 	PreloadMemory     *int  `yaml:"preload_memory,omitempty"`
 
+	Instruction      *string  `yaml:"instruction,omitempty"`
+	InstructionFiles []string `yaml:"instruction_files,omitempty"`
+	InstructionDir   *string  `yaml:"instruction_dir,omitempty"`
+
+	SystemPrompt      *string  `yaml:"system_prompt,omitempty"`
+	SystemPromptFiles []string `yaml:"system_prompt_files,omitempty"`
+	SystemPromptDir   *string  `yaml:"system_prompt_dir,omitempty"`
+
+	RalphLoop *ralphLoopConfig `yaml:"ralph_loop,omitempty"`
+
 	ClaudeBin          *string  `yaml:"claude_bin,omitempty"`
 	ClaudeOutputFormat *string  `yaml:"claude_output_format,omitempty"`
 	ClaudeExtraArgs    []string `yaml:"claude_extra_args,omitempty"`
 	ClaudeEnv          []string `yaml:"claude_env,omitempty"`
 	ClaudeWorkDir      *string  `yaml:"claude_work_dir,omitempty"`
+}
+
+type ralphLoopConfig struct {
+	Enabled           *bool   `yaml:"enabled,omitempty"`
+	MaxIterations     *int    `yaml:"max_iterations,omitempty"`
+	CompletionPromise *string `yaml:"completion_promise,omitempty"`
+	PromiseTagOpen    *string `yaml:"promise_tag_open,omitempty"`
+	PromiseTagClose   *string `yaml:"promise_tag_close,omitempty"`
+
+	Verify *ralphLoopVerifyConfig `yaml:"verify,omitempty"`
+}
+
+type ralphLoopVerifyConfig struct {
+	Command *string  `yaml:"command,omitempty"`
+	WorkDir *string  `yaml:"work_dir,omitempty"`
+	Timeout *string  `yaml:"timeout,omitempty"`
+	Env     []string `yaml:"env,omitempty"`
 }
 
 type modelConfig struct {
@@ -744,6 +895,53 @@ func (cfg *fileConfig) apply(
 		if cfg.Agent.PreloadMemory != nil &&
 			!flagWasSet(set, flagPreloadMemory) {
 			opts.PreloadMemory = *cfg.Agent.PreloadMemory
+		}
+		if cfg.Agent.Instruction != nil &&
+			!flagWasSet(set, flagAgentInstruction) {
+			opts.AgentInstruction = strings.TrimSpace(
+				*cfg.Agent.Instruction,
+			)
+		}
+		if len(cfg.Agent.InstructionFiles) > 0 &&
+			!flagWasSet(set, flagAgentInstructionFiles) {
+			opts.AgentInstructionFiles = strings.Join(
+				cfg.Agent.InstructionFiles,
+				csvDelimiter,
+			)
+		}
+		if cfg.Agent.InstructionDir != nil &&
+			!flagWasSet(set, flagAgentInstructionDir) {
+			opts.AgentInstructionDir = strings.TrimSpace(
+				*cfg.Agent.InstructionDir,
+			)
+		}
+		if cfg.Agent.SystemPrompt != nil &&
+			!flagWasSet(set, flagAgentSystemPrompt) {
+			opts.AgentSystemPrompt = strings.TrimSpace(
+				*cfg.Agent.SystemPrompt,
+			)
+		}
+		if len(cfg.Agent.SystemPromptFiles) > 0 &&
+			!flagWasSet(set, flagAgentSystemPromptFiles) {
+			opts.AgentSystemPromptFiles = strings.Join(
+				cfg.Agent.SystemPromptFiles,
+				csvDelimiter,
+			)
+		}
+		if cfg.Agent.SystemPromptDir != nil &&
+			!flagWasSet(set, flagAgentSystemPromptDir) {
+			opts.AgentSystemPromptDir = strings.TrimSpace(
+				*cfg.Agent.SystemPromptDir,
+			)
+		}
+		if cfg.Agent.RalphLoop != nil {
+			if err := applyRalphLoopConfig(
+				cfg.Agent.RalphLoop,
+				opts,
+				set,
+			); err != nil {
+				return err
+			}
 		}
 		if cfg.Agent.ClaudeBin != nil &&
 			!flagWasSet(set, "claude-bin") {
@@ -1006,6 +1204,80 @@ func (cfg *fileConfig) apply(
 		if cfg.Memory.Config != nil {
 			opts.MemoryConfig = cfg.Memory.Config.Node
 		}
+	}
+
+	return nil
+}
+
+func applyRalphLoopConfig(
+	cfg *ralphLoopConfig,
+	opts *runOptions,
+	set map[string]struct{},
+) error {
+	if cfg == nil || opts == nil {
+		return nil
+	}
+
+	if cfg.Enabled != nil &&
+		!flagWasSet(set, flagAgentRalphLoopEnabled) {
+		opts.RalphLoopEnabled = *cfg.Enabled
+	}
+	if cfg.MaxIterations != nil &&
+		!flagWasSet(set, flagAgentRalphLoopMaxIterations) {
+		opts.RalphLoopMaxIterations = *cfg.MaxIterations
+	}
+	if cfg.CompletionPromise != nil &&
+		!flagWasSet(set, flagAgentRalphLoopCompletionPromise) {
+		opts.RalphLoopCompletionPromise = strings.TrimSpace(
+			*cfg.CompletionPromise,
+		)
+	}
+	if cfg.PromiseTagOpen != nil &&
+		!flagWasSet(set, flagAgentRalphLoopPromiseTagOpen) {
+		opts.RalphLoopPromiseTagOpen = strings.TrimSpace(
+			*cfg.PromiseTagOpen,
+		)
+	}
+	if cfg.PromiseTagClose != nil &&
+		!flagWasSet(set, flagAgentRalphLoopPromiseTagClose) {
+		opts.RalphLoopPromiseTagClose = strings.TrimSpace(
+			*cfg.PromiseTagClose,
+		)
+	}
+
+	if cfg.Verify == nil {
+		return nil
+	}
+
+	if cfg.Verify.Command != nil &&
+		!flagWasSet(set, flagAgentRalphLoopVerifyCommand) {
+		opts.RalphLoopVerifyCommand = strings.TrimSpace(
+			*cfg.Verify.Command,
+		)
+	}
+	if cfg.Verify.WorkDir != nil &&
+		!flagWasSet(set, flagAgentRalphLoopVerifyWorkDir) {
+		opts.RalphLoopVerifyWorkDir = strings.TrimSpace(
+			*cfg.Verify.WorkDir,
+		)
+	}
+	if cfg.Verify.Timeout != nil &&
+		!flagWasSet(set, flagAgentRalphLoopVerifyTimeout) {
+		dur, err := parseDuration(*cfg.Verify.Timeout)
+		if err != nil {
+			return fmt.Errorf(
+				"agent.ralph_loop.verify.timeout: %w",
+				err,
+			)
+		}
+		opts.RalphLoopVerifyTimeout = dur
+	}
+	if len(cfg.Verify.Env) > 0 &&
+		!flagWasSet(set, flagAgentRalphLoopVerifyEnv) {
+		opts.RalphLoopVerifyEnv = strings.Join(
+			cfg.Verify.Env,
+			csvDelimiter,
+		)
 	}
 
 	return nil
