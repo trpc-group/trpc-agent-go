@@ -3,3 +3,5 @@ checkpoint.json
 results.json
 *.log
 *.pdf
+tmp/
+tools/
