@@ -661,6 +661,76 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage_MessageType(
 	}
 }
 
+func TestDefaultEventToA2AMessage_convertPartsToA2AStreamingResult_EarlyReturn(
+	t *testing.T,
+) {
+	converter := &defaultEventToA2AMessage{
+		streamingEventType: StreamingEventTypeMessage,
+	}
+	opts := EventToA2AStreamingOptions{CtxID: "ctx", TaskID: "task"}
+	parts := []protocol.Part{protocol.NewTextPart("hi")}
+
+	if got := converter.convertPartsToA2AStreamingResult(
+		nil,
+		opts,
+		parts,
+	); got != nil {
+		t.Fatalf("expected nil, got %T", got)
+	}
+
+	if got := converter.convertPartsToA2AStreamingResult(
+		&event.Event{},
+		opts,
+		parts,
+	); got != nil {
+		t.Fatalf("expected nil, got %T", got)
+	}
+
+	if got := converter.convertPartsToA2AStreamingResult(
+		&event.Event{Response: &model.Response{}},
+		opts,
+		nil,
+	); got != nil {
+		t.Fatalf("expected nil, got %T", got)
+	}
+}
+
+func TestDefaultEventToA2AMessage_convertPartsToA2AStreamingResult_MessageID(
+	t *testing.T,
+) {
+	ctxID := "test-ctx"
+	taskID := "test-task"
+	converter := &defaultEventToA2AMessage{
+		streamingEventType: StreamingEventTypeMessage,
+	}
+
+	evt := &event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+		},
+	}
+	parts := []protocol.Part{protocol.NewTextPart("hi")}
+
+	got := converter.convertPartsToA2AStreamingResult(
+		evt,
+		EventToA2AStreamingOptions{CtxID: ctxID, TaskID: taskID},
+		parts,
+	)
+	msg, ok := got.(*protocol.Message)
+	if !ok {
+		t.Fatalf("expected Message, got %T", got)
+	}
+	if msg.MessageID == "" {
+		t.Fatalf("expected generated MessageID")
+	}
+	if msg.TaskID == nil || *msg.TaskID != taskID {
+		t.Fatalf("expected TaskID %q", taskID)
+	}
+	if msg.ContextID == nil || *msg.ContextID != ctxID {
+		t.Fatalf("expected ContextID %q", ctxID)
+	}
+}
+
 func TestIsToolCallEvent(t *testing.T) {
 	tests := []struct {
 		name     string
