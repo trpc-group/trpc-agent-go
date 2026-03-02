@@ -708,3 +708,17 @@ Licensed under the **Apache 2.0 License** - see [LICENSE](LICENSE) file for deta
 _Empowering developers to build the next generation of intelligent applications_
 
 </div>
+
+
+## Installation
+
+```bash
+# Installation instructions
+```
+
+
+## Usage
+
+```python
+# Usage examples
+```
