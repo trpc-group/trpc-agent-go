@@ -375,12 +375,25 @@ func NewRuntime(
 	}
 	rt.toolSets = toolSets
 
-	r := runner.NewRunner(
-		opts.AppName,
-		ag,
+	runnerOpts := []runner.Option{
 		runner.WithSessionService(sessionSvc),
 		runner.WithMemoryService(memSvc),
-	)
+	}
+	rlCfg, err := ralphLoopConfigFromRunOptions(opts)
+	if err != nil {
+		return nil, &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("agent ralph loop config failed: %w", err),
+		}
+	}
+	if rlCfg != nil {
+		runnerOpts = append(
+			runnerOpts,
+			runner.WithRalphLoop(*rlCfg),
+		)
+	}
+
+	r := runner.NewRunner(opts.AppName, ag, runnerOpts...)
 	rt.runner = r
 
 	gwOpts := makeGatewayOptions(
@@ -670,12 +683,24 @@ func run(ctx context.Context, args []string) error {
 		}
 	}
 
-	r := runner.NewRunner(
-		opts.AppName,
-		ag,
+	runnerOpts := []runner.Option{
 		runner.WithSessionService(sessionSvc),
 		runner.WithMemoryService(memSvc),
-	)
+	}
+	rlCfg, err := ralphLoopConfigFromRunOptions(opts)
+	if err != nil {
+		return &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("agent ralph loop config failed: %w", err),
+		}
+	}
+	if rlCfg != nil {
+		runnerOpts = append(
+			runnerOpts,
+			runner.WithRalphLoop(*rlCfg),
+		)
+	}
+	r := runner.NewRunner(opts.AppName, ag, runnerOpts...)
 
 	gwOpts := makeGatewayOptions(
 		splitCSV(opts.AllowUsers),
@@ -885,6 +910,17 @@ func normalizeAgentType(raw string) (string, error) {
 }
 
 func validateAgentRunOptions(agentType string, opts runOptions) error {
+	if opts.RalphLoopEnabled && agentType != agentTypeLLM {
+		return errors.New(
+			"claude-code agent does not support ralph loop",
+		)
+	}
+	if opts.RalphLoopEnabled {
+		if _, err := ralphLoopConfigFromRunOptions(opts); err != nil {
+			return err
+		}
+	}
+
 	if agentType == agentTypeLLM {
 		return nil
 	}
@@ -943,6 +979,81 @@ func validateAgentRunOptions(agentType string, opts runOptions) error {
 		)
 	}
 	return nil
+}
+
+func ralphLoopConfigFromRunOptions(
+	opts runOptions,
+) (*runner.RalphLoopConfig, error) {
+	if !opts.RalphLoopEnabled {
+		return nil, nil
+	}
+
+	promise := strings.TrimSpace(opts.RalphLoopCompletionPromise)
+	verifyCmd := strings.TrimSpace(opts.RalphLoopVerifyCommand)
+	if promise == "" && verifyCmd == "" {
+		return nil, errors.New(
+			"agent.ralph_loop requires completion_promise or verify.command",
+		)
+	}
+
+	if opts.RalphLoopMaxIterations < 0 {
+		return nil, errors.New(
+			"agent.ralph_loop.max_iterations must be >= 0",
+		)
+	}
+	if opts.RalphLoopVerifyTimeout < 0 {
+		return nil, errors.New(
+			"agent.ralph_loop.verify.timeout must be >= 0",
+		)
+	}
+
+	env, err := parseKVOverrides(splitCSV(opts.RalphLoopVerifyEnv))
+	if err != nil {
+		return nil, fmt.Errorf(
+			"agent.ralph_loop.verify.env: %w",
+			err,
+		)
+	}
+
+	cfg := &runner.RalphLoopConfig{
+		MaxIterations:     opts.RalphLoopMaxIterations,
+		CompletionPromise: promise,
+		PromiseTagOpen: strings.TrimSpace(
+			opts.RalphLoopPromiseTagOpen,
+		),
+		PromiseTagClose: strings.TrimSpace(
+			opts.RalphLoopPromiseTagClose,
+		),
+		VerifyCommand: verifyCmd,
+		VerifyWorkDir: strings.TrimSpace(opts.RalphLoopVerifyWorkDir),
+		VerifyTimeout: opts.RalphLoopVerifyTimeout,
+		VerifyEnv:     env,
+	}
+	return cfg, nil
+}
+
+func parseKVOverrides(items []string) (map[string]string, error) {
+	if len(items) == 0 {
+		return nil, nil
+	}
+
+	out := make(map[string]string, len(items))
+	for _, item := range items {
+		key, val, ok := strings.Cut(item, "=")
+		if !ok {
+			return nil, fmt.Errorf("invalid override: %q", item)
+		}
+		key = strings.TrimSpace(key)
+		if key == "" {
+			return nil, fmt.Errorf("empty key in override: %q", item)
+		}
+		out[key] = val
+	}
+
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
 }
 
 func parseClaudeOutputFormat(

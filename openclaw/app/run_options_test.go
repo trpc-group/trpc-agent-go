@@ -51,6 +51,17 @@ agent:
   system_prompt: "cfg system"
   system_prompt_files: ["cfg_sys_1.md","cfg_sys_2.md"]
   system_prompt_dir: "cfg_sys_dir"
+  ralph_loop:
+    enabled: false
+    max_iterations: 99
+    completion_promise: "cfg promise"
+    promise_tag_open: "<cfg>"
+    promise_tag_close: "</cfg>"
+    verify:
+      command: "cfg cmd"
+      work_dir: "/cfg/work"
+      timeout: "10s"
+      env: ["A=B"]
   claude_bin: "/bin/claude"
   claude_output_format: "stream-json"
   claude_extra_args: ["--permission-mode","bypassPermissions"]
@@ -67,6 +78,15 @@ agent:
 		"-agent-type", agentTypeLLM,
 		"-agent-instruction", "flag instruction",
 		"-agent-system-prompt", "flag system",
+		"-agent-ralph-loop",
+		"-agent-ralph-max-iterations", "7",
+		"-agent-ralph-completion-promise", "flag promise",
+		"-agent-ralph-promise-tag-open", "<flag>",
+		"-agent-ralph-promise-tag-close", "</flag>",
+		"-agent-ralph-verify-command", "flag cmd",
+		"-agent-ralph-verify-workdir", "/tmp/flag",
+		"-agent-ralph-verify-timeout", "30s",
+		"-agent-ralph-verify-env", "X=1",
 		"-claude-bin", "/tmp/claude",
 		"-add-session-summary",
 		"-max-history-runs", "9",
@@ -77,6 +97,15 @@ agent:
 	require.Equal(t, agentTypeLLM, opts.AgentType)
 	require.Equal(t, "flag instruction", opts.AgentInstruction)
 	require.Equal(t, "flag system", opts.AgentSystemPrompt)
+	require.True(t, opts.RalphLoopEnabled)
+	require.Equal(t, 7, opts.RalphLoopMaxIterations)
+	require.Equal(t, "flag promise", opts.RalphLoopCompletionPromise)
+	require.Equal(t, "<flag>", opts.RalphLoopPromiseTagOpen)
+	require.Equal(t, "</flag>", opts.RalphLoopPromiseTagClose)
+	require.Equal(t, "flag cmd", opts.RalphLoopVerifyCommand)
+	require.Equal(t, "/tmp/flag", opts.RalphLoopVerifyWorkDir)
+	require.Equal(t, 30*time.Second, opts.RalphLoopVerifyTimeout)
+	require.Equal(t, "X=1", opts.RalphLoopVerifyEnv)
 	require.Equal(t, "/tmp/claude", opts.ClaudeBin)
 	require.True(t, opts.AddSessionSummary)
 	require.Equal(t, 9, opts.MaxHistoryRuns)
@@ -114,6 +143,26 @@ telegram:
 	require.Equal(t, 1, exitErr.Code)
 }
 
+func TestParseRunOptions_RalphLoopInvalidDurationFails(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+agent:
+  ralph_loop:
+    enabled: true
+    verify:
+      command: "echo ok"
+      timeout: "bad"
+`)
+
+	_, err := parseRunOptions([]string{"-config", cfgPath})
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+}
+
 func TestParseRunOptions_ConfigAppliesAllSections(t *testing.T) {
 	t.Parallel()
 
@@ -140,6 +189,17 @@ agent:
   system_prompt: "system prompt"
   system_prompt_files: ["s1.md","s2.md"]
   system_prompt_dir: "/system_prompt_dir"
+  ralph_loop:
+    enabled: true
+    max_iterations: 5
+    completion_promise: "done"
+    promise_tag_open: "<p>"
+    promise_tag_close: "</p>"
+    verify:
+      command: "echo ok"
+      work_dir: "/tmp"
+      timeout: "90s"
+      env: ["A=B"]
 
 model:
   mode: "mock"
@@ -244,6 +304,15 @@ memory:
 	require.Equal(t, "system prompt", opts.AgentSystemPrompt)
 	require.Equal(t, "s1.md,s2.md", opts.AgentSystemPromptFiles)
 	require.Equal(t, "/system_prompt_dir", opts.AgentSystemPromptDir)
+	require.True(t, opts.RalphLoopEnabled)
+	require.Equal(t, 5, opts.RalphLoopMaxIterations)
+	require.Equal(t, "done", opts.RalphLoopCompletionPromise)
+	require.Equal(t, "<p>", opts.RalphLoopPromiseTagOpen)
+	require.Equal(t, "</p>", opts.RalphLoopPromiseTagClose)
+	require.Equal(t, "echo ok", opts.RalphLoopVerifyCommand)
+	require.Equal(t, "/tmp", opts.RalphLoopVerifyWorkDir)
+	require.Equal(t, 90*time.Second, opts.RalphLoopVerifyTimeout)
+	require.Equal(t, "A=B", opts.RalphLoopVerifyEnv)
 
 	require.Equal(t, modeMock, opts.ModelMode)
 	require.Equal(t, "gpt-5", opts.OpenAIModel)
