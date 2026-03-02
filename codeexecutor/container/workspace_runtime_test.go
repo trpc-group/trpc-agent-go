@@ -1208,14 +1208,14 @@ func TestStageInputs_ArtifactPinFromMetadata(t *testing.T) {
 			From:      "artifact://demo.txt@1",
 			To:        to,
 			Resolved:  "other",
-			Version:   verPtr("3"),
+			Version:   verPtr("2"),
 			Mode:      "copy",
 			Timestamp: time.Time{},
 		}, {
-			From:      "artifact://demo.txt@bad",
+			From:      "artifact://demo.txt@not-bad",
 			To:        to,
 			Resolved:  "other",
-			Version:   verPtr("2"),
+			Version:   verPtr("3"),
 			Mode:      "copy",
 			Timestamp: time.Time{},
 		}, {
@@ -1337,7 +1337,12 @@ func TestStageInputs_ArtifactPinFromMetadata(t *testing.T) {
 	}
 	err = rt.StageInputs(ctx, ws, []codeexecutor.InputSpec{spec})
 	require.NoError(t, err)
-	require.Equal(t, []string{"3"}, svc.loadVersions)
+	require.Equalf(
+		t,
+		[]string{"3"},
+		svc.loadVersions,
+		"VersionID is an opaque string, so an input like artifact://demo.txt@not-bad is still parseable",
+	)
 }
 
 func TestStageInputs_LoadWorkspaceMetadataError(t *testing.T) {
