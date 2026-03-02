@@ -714,9 +714,12 @@ func TestRuntime_StageInputs_ArtifactAndLinks(t *testing.T) {
 	// Prepare artifact service in context and save an artifact.
 	svc := inmemory.NewService()
 	actx := codeexecutor.WithArtifactService(ctx, svc)
-	actx = codeexecutor.WithArtifactSession(
-		actx, artifact.SessionInfo{AppName: "a", UserID: "u", SessionID: "s"},
-	)
+	actx = codeexecutor.WithArtifactBaseKey(actx, artifact.Key{
+		AppName:   "a",
+		UserID:    "u",
+		SessionID: "s",
+		Scope:     artifact.ScopeSession,
+	})
 	_, err = codeexecutor.SaveArtifactHelper(
 		actx, "a.txt", []byte("AX"), "text/plain",
 	)
@@ -830,9 +833,12 @@ func TestRuntime_CollectOutputs_SaveAndInline(t *testing.T) {
 	// Attach artifact service to save outputs.
 	svc := inmemory.NewService()
 	actx := codeexecutor.WithArtifactService(ctx, svc)
-	actx = codeexecutor.WithArtifactSession(
-		actx, artifact.SessionInfo{AppName: "a", UserID: "u", SessionID: "s"},
-	)
+	actx = codeexecutor.WithArtifactBaseKey(actx, artifact.Key{
+		AppName:   "a",
+		UserID:    "u",
+		SessionID: "s",
+		Scope:     artifact.ScopeSession,
+	})
 	mf, err := rt.CollectOutputs(actx, ws, codeexecutor.OutputSpec{
 		Globs:         []string{filepath.Join(codeexecutor.DirOut, "*")},
 		Inline:        true,

@@ -222,7 +222,7 @@ type runFile struct {
 
 type artifactRef struct {
 	Name    string `json:"name"`
-	Version int    `json:"version"`
+	Version artifact.VersionID `json:"version"`
 }
 
 // Declaration implements tool.Tool.
@@ -1105,11 +1105,13 @@ func withArtifactContext(ctx context.Context) context.Context {
 		ctxIO = codeexecutor.WithArtifactService(
 			ctxIO, inv.ArtifactService,
 		)
-		ctxIO = codeexecutor.WithArtifactSession(
-			ctxIO, artifact.SessionInfo{
+		ctxIO = codeexecutor.WithArtifactBaseKey(
+			ctxIO,
+			artifact.Key{
 				AppName:   inv.Session.AppName,
 				UserID:    inv.Session.UserID,
 				SessionID: inv.Session.ID,
+				Scope:     artifact.ScopeSession,
 			},
 		)
 	}
@@ -1498,10 +1500,7 @@ func (t *RunTool) saveArtifacts(
 			name = prefix + name
 		}
 		ver, err := cb.SaveArtifact(name, &artifact.Artifact{
-			ArtifactDescriptor: artifact.ArtifactDescriptor{
-				Name:     name,
-				MimeType: f.MIMEType,
-			},
+			MimeType: f.MIMEType,
 			Data: []byte(f.Content),
 		})
 		if err != nil {

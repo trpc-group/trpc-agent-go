@@ -31,7 +31,7 @@ The artifact system provides:
 
 - **Versioned Storage**: Each artifact is automatically versioned, allowing you to track changes over time
 - **Session-based Organization**: Artifacts can be scoped to specific user sessions
-- **User-persistent Storage**: Artifacts can be stored persistently for users across sessions using the `user:` namespace
+- **User-persistent Storage**: Artifacts can be stored persistently across sessions by using `ScopeUser` in `artifact.Key`
 - **Multiple Storage Backends**: Support for in-memory storage (development) and cloud storage (production)
 - **MIME Type Support**: Proper content type handling for different file formats
 
@@ -43,27 +43,34 @@ An Artifact is the fundamental data object that contains your content:
 
 ```go
 type Artifact struct {
-    // Data contains the raw bytes (required)
-    Data []byte `json:"data,omitempty"`
-    // MimeType is the IANA standard MIME type (required)
+    // MimeType is the IANA standard MIME type (optional; defaults to application/octet-stream)
     MimeType string `json:"mime_type,omitempty"`
-    // URL is the optional URL where the artifact can be accessed
+    // URL is an optional URL where the artifact can be accessed (best-effort)
     URL string `json:"url,omitempty"`
-    // Name is an optional display name of the artifact
-    Name string `json:"name,omitempty"`
+    // Data contains the raw bytes
+    Data []byte `json:"data,omitempty"`
 }
 ```
 
-### Session Information
+### Key / Descriptor / Version
 
 ```go
-type SessionInfo struct {
-    // AppName is the name of the application
-    AppName string
-    // UserID is the ID of the user
-    UserID string
-    // SessionID is the ID of the session
+type VersionID string
+
+type Key struct {
+    AppName   string
+    UserID    string
     SessionID string
+    Scope     Scope // ScopeSession or ScopeUser
+    Name      string
+}
+
+type Descriptor struct {
+    Key      Key
+    Version  VersionID
+    MimeType string
+    Size     int64
+    URL      string
 }
 ```
 
@@ -236,10 +243,7 @@ func myTool(ctx context.Context, input MyInput) (MyOutput, error) {
 
     // Create an artifact
     artifact := &artifact.Artifact{
-        ArtifactDescriptor: artifact.ArtifactDescriptor{
-            MimeType: "text/plain",
-            Name:     "greeting.txt",
-        },
+        MimeType: "text/plain",
         Data: []byte("Hello, World!"),
     }
 
@@ -272,11 +276,11 @@ version, err := toolCtx.SaveArtifact("session-file.txt", artifact)
 
 ### User-persistent Artifacts
 
-Use the `user:` prefix to create artifacts that persist across sessions:
+User-persistent artifacts are explicitly controlled by `artifact.Key.Scope = artifact.ScopeUser`.
 
 ```go
-// This file persists across all sessions for the user
-version, err := toolCtx.SaveArtifact("user:profile.json", artifact)
+// ToolContext.SaveArtifact writes to ScopeSession by default.
+// For ScopeUser, use artifact.Service directly (Put/Head/Open/...) with Key{Scope: ScopeUser}.
 ```
 
 ### Version Management
@@ -291,7 +295,7 @@ v0, _ := toolCtx.SaveArtifact("document.txt", artifact1)
 v1, _ := toolCtx.SaveArtifact("document.txt", artifact2)
 
 // Load specific version
-oldVersion := 0
+oldVersion := v0
 data, desc, _ := toolCtx.LoadArtifactBytes("document.txt", &oldVersion)
 
 // Load latest version
@@ -304,26 +308,23 @@ The Artifact Service provides the following operations for managing artifacts:
 
 ```go
 type Service interface {
-    // Save an artifact and return the version ID
-    SaveArtifact(ctx context.Context, sessionInfo SessionInfo, filename string, artifact *Artifact) (int, error)
+    // Put stores a new immutable version.
+    Put(ctx context.Context, key Key, r io.Reader, opts ...PutOption) (Descriptor, error)
     
-    // Resolve artifact metadata + optional URL (no download)
-    ResolveArtifact(ctx context.Context, sessionInfo SessionInfo, filename string, version *int) (*ArtifactDescriptor, error)
+    // Head resolves metadata (no content download); version=nil means latest.
+    Head(ctx context.Context, key Key, version *VersionID) (Descriptor, error)
     
-    // Load an artifact as a stream (latest version if version is nil)
-    LoadArtifact(ctx context.Context, sessionInfo SessionInfo, filename string, version *int) (io.ReadCloser, *ArtifactDescriptor, error)
+    // Open streams artifact content; version=nil means latest.
+    Open(ctx context.Context, key Key, version *VersionID) (io.ReadCloser, Descriptor, error)
     
-    // Convenience: load artifact into memory
-    LoadArtifactBytes(ctx context.Context, sessionInfo SessionInfo, filename string, version *int) ([]byte, *ArtifactDescriptor, error)
+    // List returns latest descriptors for artifacts under prefix (paginated).
+    List(ctx context.Context, prefix KeyPrefix, opts ...ListOption) ([]Descriptor, string, error)
     
-    // List all artifact filenames in a session
-    ListArtifactKeys(ctx context.Context, sessionInfo SessionInfo) ([]string, error)
+    // Delete deletes artifact versions (all/latest/specific).
+    Delete(ctx context.Context, key Key, opts ...DeleteOption) error
     
-    // Delete an artifact (all versions)
-    DeleteArtifact(ctx context.Context, sessionInfo SessionInfo, filename string) error
-    
-    // List all versions of an artifact
-    ListVersions(ctx context.Context, sessionInfo SessionInfo, filename string) ([]int, error)
+    // Versions lists all version IDs.
+    Versions(ctx context.Context, key Key) ([]VersionID, error)
 }
 ```
 
@@ -341,7 +342,6 @@ func generateImageTool(ctx context.Context, input GenerateImageInput) (GenerateI
     artifact := &artifact.Artifact{
         Data:     imageData,
         MimeType: "image/png",
-        Name:     "generated-image.png",
     }
     
     // Save to artifacts
@@ -367,12 +367,11 @@ func processTextTool(ctx context.Context, input ProcessTextInput) (ProcessTextOu
     artifact := &artifact.Artifact{
         Data:     []byte(processedText),
         MimeType: "text/plain",
-        Name:     "processed-text.txt",
     }
     
-    // Save to user namespace for persistence
+    // Save (session-scoped by default). For ScopeUser, use artifact.Service with Key{Scope: ScopeUser}.
     toolCtx, _ := agent.NewToolContext(ctx)
-    version, err := toolCtx.SaveArtifact("user:processed-text.txt", artifact)
+    version, err := toolCtx.SaveArtifact("processed-text.txt", artifact)
     
     return ProcessTextOutput{
         ProcessedText: processedText,

@@ -10,6 +10,7 @@
 package local_test
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -41,11 +42,22 @@ func TestStageInputs_WorkspaceAndArtifact(t *testing.T) {
 
 	// Prepare an in-memory artifact and context.
 	svc := inmemory.NewService()
-	_, err = svc.SaveArtifact(ctx, artifact.SessionInfo{},
-		"demo.txt", &artifact.Artifact{Data: []byte("beta")})
+	baseKey := artifact.Key{
+		AppName:   "app",
+		UserID:    "u",
+		SessionID: "s",
+		Scope:     artifact.ScopeSession,
+	}
+	_, err = svc.Put(ctx, artifact.Key{
+		AppName:   baseKey.AppName,
+		UserID:    baseKey.UserID,
+		SessionID: baseKey.SessionID,
+		Scope:     baseKey.Scope,
+		Name:      "demo.txt",
+	}, bytes.NewReader([]byte("beta")), artifact.WithPutMimeType("text/plain"))
 	require.NoError(t, err)
 	ctxIO := codeexecutor.WithArtifactService(ctx, svc)
-	ctxIO = codeexecutor.WithArtifactSession(ctxIO, artifact.SessionInfo{})
+	ctxIO = codeexecutor.WithArtifactBaseKey(ctxIO, baseKey)
 
 	specs := []codeexecutor.InputSpec{
 		{From: "workspace://work/seed.txt",
@@ -176,13 +188,17 @@ func TestStageInputs_DefaultTo_Artifact(t *testing.T) {
 
 	// Prepare artifact service and one artifact.
 	svc := inmemory.NewService()
-	_, err = svc.SaveArtifact(ctx, artifact.SessionInfo{},
-		"foo.txt", &artifact.Artifact{Data: []byte("z")})
+	baseKey := artifact.Key{AppName: "app", UserID: "u", SessionID: "s", Scope: artifact.ScopeSession}
+	_, err = svc.Put(ctx, artifact.Key{
+		AppName:   baseKey.AppName,
+		UserID:    baseKey.UserID,
+		SessionID: baseKey.SessionID,
+		Scope:     baseKey.Scope,
+		Name:      "foo.txt",
+	}, bytes.NewReader([]byte("z")), artifact.WithPutMimeType("text/plain"))
 	require.NoError(t, err)
 	ctxIO := codeexecutor.WithArtifactService(ctx, svc)
-	ctxIO = codeexecutor.WithArtifactSession(
-		ctxIO, artifact.SessionInfo{},
-	)
+	ctxIO = codeexecutor.WithArtifactBaseKey(ctxIO, baseKey)
 
 	// No To specified; should map to work/inputs/foo.txt.
 	specs := []codeexecutor.InputSpec{{
@@ -206,15 +222,24 @@ func TestStageInputs_ArtifactPinReusesVersion(t *testing.T) {
 
 	svc := inmemory.NewService()
 	ctxIO := codeexecutor.WithArtifactService(ctx, svc)
-	ctxIO = codeexecutor.WithArtifactSession(
-		ctxIO, artifact.SessionInfo{},
-	)
+	baseKey := artifact.Key{AppName: "app", UserID: "u", SessionID: "s", Scope: artifact.ScopeSession}
+	ctxIO = codeexecutor.WithArtifactBaseKey(ctxIO, baseKey)
 
-	_, err = svc.SaveArtifact(ctx, artifact.SessionInfo{},
-		"demo.txt", &artifact.Artifact{Data: []byte("v0")})
+	_, err = svc.Put(ctx, artifact.Key{
+		AppName:   baseKey.AppName,
+		UserID:    baseKey.UserID,
+		SessionID: baseKey.SessionID,
+		Scope:     baseKey.Scope,
+		Name:      "demo.txt",
+	}, bytes.NewReader([]byte("v0")), artifact.WithPutMimeType("text/plain"))
 	require.NoError(t, err)
-	_, err = svc.SaveArtifact(ctx, artifact.SessionInfo{},
-		"demo.txt", &artifact.Artifact{Data: []byte("v1")})
+	_, err = svc.Put(ctx, artifact.Key{
+		AppName:   baseKey.AppName,
+		UserID:    baseKey.UserID,
+		SessionID: baseKey.SessionID,
+		Scope:     baseKey.Scope,
+		Name:      "demo.txt",
+	}, bytes.NewReader([]byte("v1")), artifact.WithPutMimeType("text/plain"))
 	require.NoError(t, err)
 
 	spec := []codeexecutor.InputSpec{{
@@ -231,8 +256,13 @@ func TestStageInputs_ArtifactPinReusesVersion(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "v1", string(got))
 
-	_, err = svc.SaveArtifact(ctx, artifact.SessionInfo{},
-		"demo.txt", &artifact.Artifact{Data: []byte("v2")})
+	_, err = svc.Put(ctx, artifact.Key{
+		AppName:   baseKey.AppName,
+		UserID:    baseKey.UserID,
+		SessionID: baseKey.SessionID,
+		Scope:     baseKey.Scope,
+		Name:      "demo.txt",
+	}, bytes.NewReader([]byte("v2")), artifact.WithPutMimeType("text/plain"))
 	require.NoError(t, err)
 	require.NoError(t, rt.StageInputs(ctxIO, ws, spec))
 	got, err = os.ReadFile(filepath.Join(
@@ -303,9 +333,12 @@ func TestCollectOutputs_SaveInlineTemplateAndLimits(t *testing.T) {
 	// Artifact service for Save.
 	svc := inmemory.NewService()
 	ctxIO := codeexecutor.WithArtifactService(ctx, svc)
-	ctxIO = codeexecutor.WithArtifactSession(
-		ctxIO, artifact.SessionInfo{},
-	)
+	ctxIO = codeexecutor.WithArtifactBaseKey(ctxIO, artifact.Key{
+		AppName:   "app",
+		UserID:    "u",
+		SessionID: "s",
+		Scope:     artifact.ScopeSession,
+	})
 
 	man, err := rt.CollectOutputs(ctxIO, ws, codeexecutor.OutputSpec{
 		Globs:         []string{filepath.Join(outDir, "*.txt")},

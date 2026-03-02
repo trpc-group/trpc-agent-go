@@ -33,8 +33,10 @@ package cos
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"sort"
 	"strconv"
@@ -63,6 +65,9 @@ type Service struct {
 }
 
 const defaultTimeout = 60 * time.Second
+
+// Compile-time check that Service implements artifact.Service.
+var _ artifact.Service = (*Service)(nil)
 
 // NewService creates a new TCOS artifact service with optional configurations.
 //
@@ -115,271 +120,398 @@ func NewService(name, bucketURL string, opts ...Option) (*Service, error) {
 	}, nil
 }
 
-// SaveArtifact saves an artifact to Tencent Cloud Object Storage.
-func (s *Service) SaveArtifact(ctx context.Context, sessionInfo artifact.SessionInfo, filename string, art *artifact.Artifact) (int, error) {
-	// Get existing versions to determine the next version number
-	versions, err := s.ListVersions(ctx, sessionInfo, filename)
-	if err != nil {
-		return 0, fmt.Errorf("failed to list versions: %w", err)
+func (s *Service) Put(ctx context.Context, key artifact.Key, r io.Reader, opts ...artifact.PutOption) (artifact.Descriptor, error) {
+	if err := validateKey(key); err != nil {
+		return artifact.Descriptor{}, err
 	}
 
-	version := 0
-	if len(versions) > 0 {
-		maxVersion := 0
-		for _, v := range versions {
-			if v > maxVersion {
-				maxVersion = v
-			}
+	o := artifact.PutOptions{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&o)
 		}
-		version = maxVersion + 1
 	}
 
-	objectName := iartifact.BuildObjectName(sessionInfo, filename, version)
-
-	// Upload the artifact data
-	reader := bytes.NewReader(art.Data)
-	err = s.cosClient.PutObject(ctx, objectName, reader, art.MimeType)
+	v, err := artifact.NewVersionID()
 	if err != nil {
-		return 0, fmt.Errorf("failed to upload artifact: %w", err)
+		return artifact.Descriptor{}, err
 	}
+	objectName := iartifact.BuildObjectName(key, v)
 
-	return version, nil
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return artifact.Descriptor{}, err
+	}
+	mt := o.MimeType
+	if mt == "" {
+		mt = "application/octet-stream"
+	}
+	if err := s.cosClient.PutObject(ctx, objectName, bytes.NewReader(data), mt); err != nil {
+		return artifact.Descriptor{}, fmt.Errorf("failed to upload artifact: %w", err)
+	}
+	return artifact.Descriptor{Key: key, Version: v, MimeType: mt, Size: int64(len(data))}, nil
 }
 
-func (s *Service) ResolveArtifact(ctx context.Context, sessionInfo artifact.SessionInfo, filename string, version *int) (*artifact.ArtifactDescriptor, error) {
-	var targetVersion int
+func (s *Service) Head(ctx context.Context, key artifact.Key, version *artifact.VersionID) (artifact.Descriptor, error) {
+	if err := validateKey(key); err != nil {
+		return artifact.Descriptor{}, err
+	}
+	target, err := s.resolveVersion(ctx, key, version)
+	if err != nil {
+		return artifact.Descriptor{}, err
+	}
+	objectName := iartifact.BuildObjectName(key, target)
+	h, err := s.cosClient.HeadObject(ctx, objectName)
+	if err != nil {
+		if cos.IsNotFoundError(err) {
+			return artifact.Descriptor{}, artifact.ErrNotFound
+		}
+		return artifact.Descriptor{}, fmt.Errorf("failed to head artifact: %w", err)
+	}
+	desc := descriptorFromHeader(key, target, h)
+	s.bestEffortURL(ctx, &desc, objectName)
+	return desc, nil
+}
 
-	if version == nil {
-		// Get the latest version
-		versions, err := s.ListVersions(ctx, sessionInfo, filename)
-		if err != nil {
-			return nil, fmt.Errorf("failed to list versions: %w", err)
+func (s *Service) Open(ctx context.Context, key artifact.Key, version *artifact.VersionID) (io.ReadCloser, artifact.Descriptor, error) {
+	if err := validateKey(key); err != nil {
+		return nil, artifact.Descriptor{}, err
+	}
+	target, err := s.resolveVersion(ctx, key, version)
+	if err != nil {
+		return nil, artifact.Descriptor{}, err
+	}
+	objectName := iartifact.BuildObjectName(key, target)
+	body, header, err := s.cosClient.GetObject(ctx, objectName)
+	if err != nil {
+		if cos.IsNotFoundError(err) {
+			return nil, artifact.Descriptor{}, artifact.ErrNotFound
 		}
-		if len(versions) == 0 {
-			return nil, nil // Artifact not found
-		}
+		return nil, artifact.Descriptor{}, fmt.Errorf("failed to download artifact: %w", err)
+	}
+	desc := descriptorFromHeader(key, target, header)
+	s.bestEffortURL(ctx, &desc, objectName)
+	return body, desc, nil
+}
 
-		maxVersion := 0
-		for _, v := range versions {
-			if v > maxVersion {
-				maxVersion = v
-			}
-		}
-		targetVersion = maxVersion
-	} else {
-		targetVersion = *version
+// LoadArtifactBytes is replaced by artifact.ReadAll helper.
+
+func (s *Service) List(ctx context.Context, prefix artifact.KeyPrefix, opts ...artifact.ListOption) ([]artifact.Descriptor, string, error) {
+	if err := validatePrefix(prefix); err != nil {
+		return nil, "", err
 	}
 
-	objectName := iartifact.BuildObjectName(sessionInfo, filename, targetVersion)
+	o := artifact.ListOptions{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&o)
+		}
+	}
 
-	h, err := s.cosClient.HeadObject(ctx, objectName)
+	scopePrefix := iartifact.BuildListPrefix(prefix)
+	result, err := s.cosClient.GetBucket(ctx, scopePrefix)
+	if err != nil {
+		if cos.IsNotFoundError(err) {
+			return nil, "", nil
+		}
+		return nil, "", fmt.Errorf("failed to list artifacts: %w", err)
+	}
+	if result == nil {
+		return nil, "", nil
+	}
+
+	type latest struct{ version artifact.VersionID }
+	latestByName := make(map[string]latest)
+	names := make([]string, 0)
+	for _, obj := range result.Contents {
+		name, ver, ok := parseNameAndVersion(obj.Key, scopePrefix)
+		if !ok {
+			continue
+		}
+		if prefix.NamePrefix != "" && !strings.HasPrefix(name, prefix.NamePrefix) {
+			continue
+		}
+		if cur, exists := latestByName[name]; !exists {
+			latestByName[name] = latest{version: ver}
+			names = append(names, name)
+		} else if artifact.CompareVersion(ver, cur.version) > 0 {
+			latestByName[name] = latest{version: ver}
+		}
+	}
+	sort.Strings(names)
+
+	start := 0
+	if o.PageToken != "" {
+		i := sort.SearchStrings(names, o.PageToken)
+		start = i
+		for start < len(names) && names[start] <= o.PageToken {
+			start++
+		}
+	}
+	limit := o.Limit
+	if limit <= 0 || limit > len(names)-start {
+		limit = len(names) - start
+	}
+	end := start + limit
+	page := names[start:end]
+
+	out := make([]artifact.Descriptor, 0, len(page))
+	for _, name := range page {
+		key := artifact.Key{AppName: prefix.AppName, UserID: prefix.UserID, SessionID: prefix.SessionID, Scope: prefix.Scope, Name: name}
+		ver := latestByName[name].version
+		desc, err := s.Head(ctx, key, &ver)
+		if err != nil {
+			if errors.Is(err, artifact.ErrNotFound) {
+				continue
+			}
+			return nil, "", err
+		}
+		out = append(out, desc)
+	}
+
+	next := ""
+	if end < len(names) && len(page) > 0 {
+		next = page[len(page)-1]
+	}
+	return out, next, nil
+}
+
+func (s *Service) Delete(ctx context.Context, key artifact.Key, opts ...artifact.DeleteOption) error {
+	if err := validateKey(key); err != nil {
+		return err
+	}
+
+	o := artifact.DeleteOptions{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&o)
+		}
+	}
+	if err := o.Validate(); err != nil {
+		return err
+	}
+
+	switch o.Mode {
+	case artifact.DeleteAll:
+		versions, err := s.listVersions(ctx, key)
+		if err != nil {
+			return err
+		}
+		if len(versions) == 0 {
+			return artifact.ErrNotFound
+		}
+		for _, v := range versions {
+			objectName := iartifact.BuildObjectName(key, v)
+			if err := s.cosClient.DeleteObject(ctx, objectName); err != nil && !cos.IsNotFoundError(err) {
+				return fmt.Errorf("failed to delete artifact version %s: %w", v, err)
+			}
+		}
+		return nil
+	case artifact.DeleteLatest:
+		ver, err := s.resolveVersion(ctx, key, nil)
+		if err != nil {
+			return err
+		}
+		objectName := iartifact.BuildObjectName(key, ver)
+		if err := s.cosClient.DeleteObject(ctx, objectName); err != nil {
+			if cos.IsNotFoundError(err) {
+				return artifact.ErrNotFound
+			}
+			return fmt.Errorf("failed to delete artifact version %s: %w", ver, err)
+		}
+		return nil
+	case artifact.DeleteVersion:
+		objectName := iartifact.BuildObjectName(key, o.Version)
+		if err := s.cosClient.DeleteObject(ctx, objectName); err != nil {
+			if cos.IsNotFoundError(err) {
+				return artifact.ErrNotFound
+			}
+			return fmt.Errorf("failed to delete artifact version %s: %w", o.Version, err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unknown delete mode: %d", int(o.Mode))
+	}
+}
+
+func (s *Service) Versions(ctx context.Context, key artifact.Key) ([]artifact.VersionID, error) {
+	if err := validateKey(key); err != nil {
+		return nil, err
+	}
+	versions, err := s.listVersions(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	if len(versions) == 0 {
+		return nil, artifact.ErrNotFound
+	}
+	return versions, nil
+}
+
+func (s *Service) resolveVersion(ctx context.Context, key artifact.Key, version *artifact.VersionID) (artifact.VersionID, error) {
+	if version != nil {
+		return *version, nil
+	}
+	versions, err := s.listVersions(ctx, key)
+	if err != nil {
+		return "", err
+	}
+	if len(versions) == 0 {
+		return "", artifact.ErrNotFound
+	}
+	latest := versions[0]
+	for _, v := range versions[1:] {
+		if artifact.CompareVersion(v, latest) > 0 {
+			latest = v
+		}
+	}
+	return latest, nil
+}
+
+func (s *Service) listVersions(ctx context.Context, key artifact.Key) ([]artifact.VersionID, error) {
+	prefix := iartifact.BuildObjectNamePrefix(key)
+	result, err := s.cosClient.GetBucket(ctx, prefix)
 	if err != nil {
 		if cos.IsNotFoundError(err) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("failed to resolve artifact: %w", err)
+		return nil, fmt.Errorf("failed to list versions: %w", err)
 	}
+	if result == nil {
+		return nil, nil
+	}
+	versions := make([]artifact.VersionID, 0, len(result.Contents))
+	for _, obj := range result.Contents {
+		parts := strings.Split(obj.Key, "/")
+		if len(parts) == 0 {
+			continue
+		}
+		v := parts[len(parts)-1]
+		if v != "" {
+			versions = append(versions, artifact.VersionID(v))
+		}
+	}
+	sort.Slice(versions, func(i, j int) bool { return artifact.CompareVersion(versions[i], versions[j]) < 0 })
+	return versions, nil
+}
 
+func parseNameAndVersion(objectKey, scopePrefix string) (string, artifact.VersionID, bool) {
+	if !strings.HasPrefix(objectKey, scopePrefix) {
+		return "", "", false
+	}
+	rel := strings.TrimPrefix(objectKey, scopePrefix)
+	parts := strings.Split(rel, "/")
+	if len(parts) < 2 {
+		return "", "", false
+	}
+	name := strings.Join(parts[:len(parts)-1], "/")
+	ver := parts[len(parts)-1]
+	if name == "" || ver == "" {
+		return "", "", false
+	}
+	return name, artifact.VersionID(ver), true
+}
+
+func descriptorFromHeader(key artifact.Key, version artifact.VersionID, h http.Header) artifact.Descriptor {
 	contentType := h.Get("Content-Type")
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
-
 	var size int64
 	if cl := h.Get("Content-Length"); cl != "" {
 		if n, err := strconv.ParseInt(cl, 10, 64); err == nil {
 			size = n
 		}
 	}
-
-	desc := &artifact.ArtifactDescriptor{
-		Name:     filename,
-		Version:  targetVersion,
-		MimeType: contentType,
-		Size:     size,
-	}
-
-	// Best-effort URL: presign if we have credentials, else object URL.
-	if s.secretID != "" && s.secretKey != "" {
-		if u, err := s.cosClient.PresignGetObject(ctx, objectName, s.secretID, s.secretKey, s.presignExpires); err == nil && u != nil {
-			desc.URL = u.String()
-		}
-	}
-	if desc.URL == "" {
-		if u := s.cosClient.ObjectURL(objectName); u != nil {
-			desc.URL = u.String()
-		}
-	}
-
-	return desc, nil
+	return artifact.Descriptor{Key: key, Version: version, MimeType: contentType, Size: size}
 }
 
-// LoadArtifact opens an artifact stream from Tencent Cloud Object Storage.
-func (s *Service) LoadArtifact(ctx context.Context, sessionInfo artifact.SessionInfo, filename string, version *int) (io.ReadCloser, *artifact.ArtifactDescriptor, error) {
-	var targetVersion int
-
-	if version == nil {
-		versions, err := s.ListVersions(ctx, sessionInfo, filename)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to list versions: %w", err)
-		}
-		if len(versions) == 0 {
-			return nil, nil, nil
-		}
-
-		maxVersion := 0
-		for _, v := range versions {
-			if v > maxVersion {
-				maxVersion = v
-			}
-		}
-		targetVersion = maxVersion
-	} else {
-		targetVersion = *version
-	}
-
-	objectName := iartifact.BuildObjectName(sessionInfo, filename, targetVersion)
-
-	body, header, err := s.cosClient.GetObject(ctx, objectName)
-	if err != nil {
-		if cos.IsNotFoundError(err) {
-			return nil, nil, nil
-		}
-		return nil, nil, fmt.Errorf("failed to download artifact: %w", err)
-	}
-
-	contentType := header.Get("Content-Type")
-	if contentType == "" {
-		contentType = "application/octet-stream"
-	}
-	var size int64
-	if cl := header.Get("Content-Length"); cl != "" {
-		if n, err := strconv.ParseInt(cl, 10, 64); err == nil {
-			size = n
-		}
-	}
-
-	desc := &artifact.ArtifactDescriptor{
-		Name:     filename,
-		Version:  targetVersion,
-		MimeType: contentType,
-		Size:     size,
+func (s *Service) bestEffortURL(ctx context.Context, desc *artifact.Descriptor, objectName string) {
+	if desc == nil {
+		return
 	}
 	if s.secretID != "" && s.secretKey != "" {
 		if u, err := s.cosClient.PresignGetObject(ctx, objectName, s.secretID, s.secretKey, s.presignExpires); err == nil && u != nil {
 			desc.URL = u.String()
+			return
 		}
 	}
-	if desc.URL == "" {
-		if u := s.cosClient.ObjectURL(objectName); u != nil {
-			desc.URL = u.String()
-		}
+	if u := s.cosClient.ObjectURL(objectName); u != nil {
+		desc.URL = u.String()
 	}
-
-	return body, desc, nil
 }
 
-func (s *Service) LoadArtifactBytes(ctx context.Context, sessionInfo artifact.SessionInfo, filename string, version *int) ([]byte, *artifact.ArtifactDescriptor, error) {
-	rc, desc, err := s.LoadArtifact(ctx, sessionInfo, filename, version)
-	if err != nil || rc == nil {
-		return nil, desc, err
+func validateKey(k artifact.Key) error {
+	if k.AppName == "" || k.UserID == "" {
+		return fmt.Errorf("invalid key: missing appName or userID")
 	}
-	defer rc.Close()
-	data, err := io.ReadAll(rc)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to read artifact data: %w", err)
+	switch k.Scope {
+	case artifact.ScopeSession:
+		if k.SessionID == "" {
+			return fmt.Errorf("invalid key: missing sessionID for session scope")
+		}
+	case artifact.ScopeUser:
+	default:
+		return fmt.Errorf("invalid key: unknown scope")
 	}
-	return data, desc, nil
+	return validateName(k.Name)
 }
 
-// ListArtifactKeys lists all the artifact filenames within a session from TCOS.
-func (s *Service) ListArtifactKeys(ctx context.Context, sessionInfo artifact.SessionInfo) ([]string, error) {
-	filenameSet := make(map[string]bool)
-
-	// List session-scoped artifacts
-	sessionPrefix := iartifact.BuildSessionPrefix(sessionInfo)
-	sessionResult, err := s.cosClient.GetBucket(ctx, sessionPrefix)
-	if err != nil && !cos.IsNotFoundError(err) {
-		return nil, fmt.Errorf("failed to list session artifacts: %w", err)
+func validatePrefix(p artifact.KeyPrefix) error {
+	if p.AppName == "" || p.UserID == "" {
+		return fmt.Errorf("invalid prefix: missing appName or userID")
 	}
-
-	if sessionResult != nil {
-		for _, obj := range sessionResult.Contents {
-			parts := strings.Split(obj.Key, "/")
-			if len(parts) >= 4 {
-				filename := parts[len(parts)-2] // filename is before version
-				filenameSet[filename] = true
-			}
+	switch p.Scope {
+	case artifact.ScopeSession:
+		if p.SessionID == "" {
+			return fmt.Errorf("invalid prefix: missing sessionID for session scope")
 		}
+	case artifact.ScopeUser:
+	default:
+		return fmt.Errorf("invalid prefix: unknown scope")
 	}
-
-	// List user-namespaced artifacts
-	userPrefix := iartifact.BuildUserNamespacePrefix(sessionInfo)
-	userResult, err := s.cosClient.GetBucket(ctx, userPrefix)
-	if err != nil && !cos.IsNotFoundError(err) {
-		return nil, fmt.Errorf("failed to list user artifacts: %w", err)
+	if p.NamePrefix == "" {
+		return nil
 	}
-
-	if userResult != nil {
-		for _, obj := range userResult.Contents {
-			parts := strings.Split(obj.Key, "/")
-			if len(parts) >= 4 {
-				filename := parts[len(parts)-2] // filename is before version
-				filenameSet[filename] = true
-			}
-		}
-	}
-
-	// Convert set to sorted slice
-	filenames := make([]string, 0, len(filenameSet))
-	for filename := range filenameSet {
-		filenames = append(filenames, filename)
-	}
-	sort.Strings(filenames)
-
-	return filenames, nil
+	return validateNamePrefix(p.NamePrefix)
 }
 
-// DeleteArtifact deletes an artifact from Tencent Cloud Object Storage.
-func (s *Service) DeleteArtifact(ctx context.Context, sessionInfo artifact.SessionInfo, filename string) error {
-	// Get all versions of the artifact
-	versions, err := s.ListVersions(ctx, sessionInfo, filename)
-	if err != nil {
-		return fmt.Errorf("failed to list versions: %w", err)
+func validateName(name string) error {
+	if name == "" {
+		return fmt.Errorf("invalid name: empty")
 	}
-
-	// Delete all versions
-	for _, version := range versions {
-		objectName := iartifact.BuildObjectName(sessionInfo, filename, version)
-		err := s.cosClient.DeleteObject(ctx, objectName)
-		if err != nil && !cos.IsNotFoundError(err) {
-			return fmt.Errorf("failed to delete artifact version %d: %w", version, err)
+	if strings.HasPrefix(name, "/") ||
+		strings.Contains(name, "\\") ||
+		strings.Contains(name, "\x00") {
+		return fmt.Errorf("invalid name")
+	}
+	parts := strings.Split(name, "/")
+	for _, p := range parts {
+		if p == "" || p == "." || p == ".." {
+			return fmt.Errorf("invalid name")
 		}
 	}
-
 	return nil
 }
 
-// ListVersions lists all versions of an artifact from TCOS.
-func (s *Service) ListVersions(ctx context.Context, sessionInfo artifact.SessionInfo, filename string) ([]int, error) {
-	prefix := iartifact.BuildObjectNamePrefix(sessionInfo, filename)
-	result, err := s.cosClient.GetBucket(ctx, prefix)
-	if err != nil {
-		if cos.IsNotFoundError(err) {
-			return []int{}, nil // No versions found
-		}
-		return nil, fmt.Errorf("failed to list versions: %w", err)
+func validateNamePrefix(prefix string) error {
+	if prefix == "" {
+		return nil
 	}
-
-	var versions []int
-	for _, obj := range result.Contents {
-		parts := strings.Split(obj.Key, "/")
-		if len(parts) > 0 {
-			versionStr := parts[len(parts)-1]
-			if version, err := strconv.Atoi(versionStr); err == nil {
-				versions = append(versions, version)
-			}
+	if strings.HasPrefix(prefix, "/") ||
+		strings.Contains(prefix, "\\") ||
+		strings.Contains(prefix, "\x00") {
+		return fmt.Errorf("invalid name")
+	}
+	parts := strings.Split(prefix, "/")
+	for i, p := range parts {
+		if p == "." || p == ".." {
+			return fmt.Errorf("invalid name")
+		}
+		// Allow trailing slash.
+		if p == "" && i != len(parts)-1 {
+			return fmt.Errorf("invalid name")
 		}
 	}
-	return versions, nil
+	return nil
 }

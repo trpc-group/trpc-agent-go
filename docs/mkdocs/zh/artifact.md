@@ -31,7 +31,7 @@ Artifact Service（制品服务）是后端系统，负责：
 
 - **版本化存储**：每个制品都会自动版本化，允许您跟踪随时间的变化
 - **基于会话的组织**：制品可以限定在特定用户会话范围内
-- **用户持久化存储**：制品可以使用 `user:` 命名空间为用户跨会话持久化存储
+- **用户持久化存储**：通过在 `artifact.Key` 中使用 `ScopeUser` 来实现跨会话持久化
 - **多种存储后端**：支持内存存储（开发环境）和云存储（生产环境）
 - **MIME 类型支持**：为不同文件格式提供适当的内容类型处理
 
@@ -43,27 +43,34 @@ Artifact（制品）是包含您内容的基本数据对象：
 
 ```go
 type Artifact struct {
-    // Data 包含原始字节数据（必需）
-    Data []byte `json:"data,omitempty"`
-    // MimeType 是 IANA 标准 MIME 类型（必需）
+    // MimeType 是 IANA 标准 MIME 类型（可选，默认 application/octet-stream）
     MimeType string `json:"mime_type,omitempty"`
-    // URL 是可访问制品的可选 URL
+    // URL 是可访问制品的可选 URL（例如预签名链接；由后端尽力返回）
     URL string `json:"url,omitempty"`
-    // Name 是制品的可选显示名称
-    Name string `json:"name,omitempty"`
+    // Data 包含原始字节数据
+    Data []byte `json:"data,omitempty"`
 }
 ```
 
-### 会话信息
+### Key / Descriptor / Version
 
 ```go
-type SessionInfo struct {
-    // AppName 是应用程序名称
-    AppName string
-    // UserID 是用户 ID
-    UserID string
-    // SessionID 是会话 ID
+type VersionID string
+
+type Key struct {
+    AppName   string
+    UserID    string
     SessionID string
+    Scope     Scope // ScopeSession 或 ScopeUser
+    Name      string
+}
+
+type Descriptor struct {
+    Key      Key
+    Version  VersionID
+    MimeType string
+    Size     int64
+    URL      string
 }
 ```
 
@@ -237,10 +244,7 @@ func myTool(ctx context.Context, input MyInput) (MyOutput, error) {
 
     // 创建制品
     artifact := &artifact.Artifact{
-        ArtifactDescriptor: artifact.ArtifactDescriptor{
-            MimeType: "text/plain",
-            Name:     "greeting.txt",
-        },
+        MimeType: "text/plain",
         Data: []byte("你好，世界！"),
     }
 
@@ -271,14 +275,12 @@ func myTool(ctx context.Context, input MyInput) (MyOutput, error) {
 version, err := toolCtx.SaveArtifact("session-file.txt", artifact)
 ```
 
-### 用户持久化制品
+### 用户持久化制品（ScopeUser）
 
-使用 `user:` 前缀创建跨会话持久化的制品：
+用户级（跨 session）持久化由 `artifact.Key.Scope = artifact.ScopeUser` 显式控制。
 
-```go
-// 此文件在用户的所有会话中持久化
-version, err := toolCtx.SaveArtifact("user:profile.json", artifact)
-```
+- `ToolContext.SaveArtifact` 默认写入 **ScopeSession**。
+- 如果需要写入/读取 **ScopeUser**，请直接使用底层 `artifact.Service`（`Put/Head/Open/...`）并构造 `artifact.Key{Scope: artifact.ScopeUser, ...}`。
 
 ### 版本管理
 
@@ -292,7 +294,7 @@ v0, _ := toolCtx.SaveArtifact("document.txt", artifact1)
 v1, _ := toolCtx.SaveArtifact("document.txt", artifact2)
 
 // 加载特定版本
-oldVersion := 0
+oldVersion := v0
 data, desc, _ := toolCtx.LoadArtifactBytes("document.txt", &oldVersion)
 
 // 加载最新版本
@@ -305,26 +307,23 @@ Artifact Service 提供以下操作来管理制品：
 
 ```go
 type Service interface {
-    // 保存制品并返回版本 ID
-    SaveArtifact(ctx context.Context, sessionInfo SessionInfo, filename string, artifact *Artifact) (int, error)
+    // 写入一个新版本（不覆盖老版本）
+    Put(ctx context.Context, key Key, r io.Reader, opts ...PutOption) (Descriptor, error)
     
-    // 解析制品元信息与可选 URL（不下载内容）
-    ResolveArtifact(ctx context.Context, sessionInfo SessionInfo, filename string, version *int) (*ArtifactDescriptor, error)
+    // 只读元信息（不下载内容）；version=nil 表示 latest
+    Head(ctx context.Context, key Key, version *VersionID) (Descriptor, error)
     
-    // 以流式方式加载制品（如果 version 为 nil 则加载最新版本）
-    LoadArtifact(ctx context.Context, sessionInfo SessionInfo, filename string, version *int) (io.ReadCloser, *ArtifactDescriptor, error)
+    // 流式读取内容；version=nil 表示 latest
+    Open(ctx context.Context, key Key, version *VersionID) (io.ReadCloser, Descriptor, error)
     
-    // 便捷方法：把制品完整读入内存
-    LoadArtifactBytes(ctx context.Context, sessionInfo SessionInfo, filename string, version *int) ([]byte, *ArtifactDescriptor, error)
+    // 分页列出（每个 name 返回 latest 的 Descriptor）
+    List(ctx context.Context, prefix KeyPrefix, opts ...ListOption) ([]Descriptor, string, error)
     
-    // 列出会话中的所有制品文件名
-    ListArtifactKeys(ctx context.Context, sessionInfo SessionInfo) ([]string, error)
+    // 删除制品版本（全部/最新/指定版本）
+    Delete(ctx context.Context, key Key, opts ...DeleteOption) error
     
-    // 删除制品（所有版本）
-    DeleteArtifact(ctx context.Context, sessionInfo SessionInfo, filename string) error
-    
-    // 列出制品的所有版本
-    ListVersions(ctx context.Context, sessionInfo SessionInfo, filename string) ([]int, error)
+    // 列出全部版本 ID
+    Versions(ctx context.Context, key Key) ([]VersionID, error)
 }
 ```
 
@@ -342,7 +341,6 @@ func generateImageTool(ctx context.Context, input GenerateImageInput) (GenerateI
     artifact := &artifact.Artifact{
         Data:     imageData,
         MimeType: "image/png",
-        Name:     "generated-image.png",
     }
     
     // 保存到制品存储
@@ -368,12 +366,11 @@ func processTextTool(ctx context.Context, input ProcessTextInput) (ProcessTextOu
     artifact := &artifact.Artifact{
         Data:     []byte(processedText),
         MimeType: "text/plain",
-        Name:     "processed-text.txt",
     }
     
-    // 保存到用户命名空间以实现持久化
+    // 保存（默认 session scope）。如需 ScopeUser，请直接使用 artifact.Service + Key{Scope: ScopeUser}。
     toolCtx, _ := agent.NewToolContext(ctx)
-    version, err := toolCtx.SaveArtifact("user:processed-text.txt", artifact)
+    version, err := toolCtx.SaveArtifact("processed-text.txt", artifact)
     
     return ProcessTextOutput{
         ProcessedText: processedText,

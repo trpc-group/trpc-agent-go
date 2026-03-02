@@ -12,58 +12,59 @@ package artifact
 
 import (
 	"fmt"
-	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 )
 
-// FileHasUserNamespace checks if the filename has a user namespace.
-// Files with user namespace start with "user:" prefix.
-func FileHasUserNamespace(filename string) bool {
-	return strings.HasPrefix(filename, "user:")
-}
-
 // BuildArtifactPath constructs the artifact path for storage.
-// The path format depends on whether the filename has a user namespace:
-//   - For files with user namespace (starting with "user:"):
-//     {app_name}/{user_id}/user/{filename}
-//   - For regular session-scoped files:
-//     {app_name}/{user_id}/{session_id}/{filename}
-func BuildArtifactPath(sessionInfo artifact.SessionInfo, filename string) string {
-	if FileHasUserNamespace(filename) {
-		return fmt.Sprintf("%s/%s/user/%s", sessionInfo.AppName, sessionInfo.UserID, filename)
+// The path format depends on the scope:
+//   - User scope:
+//     {app_name}/{user_id}/user/{name}
+//   - Session scope:
+//     {app_name}/{user_id}/{session_id}/{name}
+func BuildArtifactPath(key artifact.Key) string {
+	switch key.Scope {
+	case artifact.ScopeUser:
+		return fmt.Sprintf("%s/%s/user/%s", key.AppName, key.UserID, key.Name)
+	case artifact.ScopeSession:
+		return fmt.Sprintf("%s/%s/%s/%s", key.AppName, key.UserID, key.SessionID, key.Name)
+	default:
+		// Default to session-style to avoid accidental cross-user collisions.
+		return fmt.Sprintf("%s/%s/%s/%s", key.AppName, key.UserID, key.SessionID, key.Name)
 	}
-	return fmt.Sprintf("%s/%s/%s/%s", sessionInfo.AppName, sessionInfo.UserID, sessionInfo.SessionID, filename)
 }
 
 // BuildObjectName constructs the object name for versioned storage (like COS).
-// The object name format depends on whether the filename has a user namespace:
-//   - For files with user namespace (starting with "user:"):
-//     {app_name}/{user_id}/user/{filename}/{version}
-//   - For regular session-scoped files:
-//     {app_name}/{user_id}/{session_id}/{filename}/{version}
-func BuildObjectName(sessionInfo artifact.SessionInfo, filename string, version int) string {
-	if FileHasUserNamespace(filename) {
-		return fmt.Sprintf("%s/%s/user/%s/%d", sessionInfo.AppName, sessionInfo.UserID, filename, version)
-	}
-	return fmt.Sprintf("%s/%s/%s/%s/%d", sessionInfo.AppName, sessionInfo.UserID, sessionInfo.SessionID, filename, version)
+// The object name format is:
+//   {artifact_path}/{version_id}
+func BuildObjectName(key artifact.Key, version artifact.VersionID) string {
+	return fmt.Sprintf("%s/%s", BuildArtifactPath(key), version)
 }
 
 // BuildObjectNamePrefix constructs the object name prefix for listing versions.
 // This is used to list all versions of a specific artifact.
-func BuildObjectNamePrefix(sessionInfo artifact.SessionInfo, filename string) string {
-	if FileHasUserNamespace(filename) {
-		return fmt.Sprintf("%s/%s/user/%s/", sessionInfo.AppName, sessionInfo.UserID, filename)
-	}
-	return fmt.Sprintf("%s/%s/%s/%s/", sessionInfo.AppName, sessionInfo.UserID, sessionInfo.SessionID, filename)
+func BuildObjectNamePrefix(key artifact.Key) string {
+	return fmt.Sprintf("%s/", BuildArtifactPath(key))
 }
 
 // BuildSessionPrefix constructs the prefix for session-scoped artifacts.
-func BuildSessionPrefix(sessionInfo artifact.SessionInfo) string {
-	return fmt.Sprintf("%s/%s/%s/", sessionInfo.AppName, sessionInfo.UserID, sessionInfo.SessionID)
+func BuildSessionPrefix(appName, userID, sessionID string) string {
+	return fmt.Sprintf("%s/%s/%s/", appName, userID, sessionID)
 }
 
 // BuildUserNamespacePrefix constructs the prefix for user-namespaced artifacts.
-func BuildUserNamespacePrefix(sessionInfo artifact.SessionInfo) string {
-	return fmt.Sprintf("%s/%s/user/", sessionInfo.AppName, sessionInfo.UserID)
+func BuildUserNamespacePrefix(appName, userID string) string {
+	return fmt.Sprintf("%s/%s/user/", appName, userID)
+}
+
+// BuildListPrefix builds the object prefix for listing artifacts under a KeyPrefix.
+func BuildListPrefix(p artifact.KeyPrefix) string {
+	switch p.Scope {
+	case artifact.ScopeUser:
+		return fmt.Sprintf("%s/%s/user/", p.AppName, p.UserID)
+	case artifact.ScopeSession:
+		return fmt.Sprintf("%s/%s/%s/", p.AppName, p.UserID, p.SessionID)
+	default:
+		return fmt.Sprintf("%s/%s/%s/", p.AppName, p.UserID, p.SessionID)
+	}
 }

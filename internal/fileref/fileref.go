@@ -51,7 +51,7 @@ type Ref struct {
 	Scheme          string
 	Path            string
 	ArtifactName    string
-	ArtifactVersion *int
+	ArtifactVersion *artifact.VersionID
 	Raw             string
 }
 
@@ -196,8 +196,8 @@ func WorkspaceFiles(
 func loadArtifactFromContext(
 	ctx context.Context,
 	name string,
-	version *int,
-) ([]byte, string, int, error) {
+	version *artifact.VersionID,
+) ([]byte, string, artifact.VersionID, error) {
 	ctxIO := withArtifactContext(ctx)
 	return codeexecutor.LoadArtifactHelper(ctxIO, name, version)
 }
@@ -212,11 +212,11 @@ func withArtifactContext(ctx context.Context) context.Context {
 		inv.Session == nil {
 		return ctx
 	}
-	info := artifact.SessionInfo{
+	ctx = codeexecutor.WithArtifactService(ctx, inv.ArtifactService)
+	return codeexecutor.WithArtifactBaseKey(ctx, artifact.Key{
 		AppName:   inv.Session.AppName,
 		UserID:    inv.Session.UserID,
 		SessionID: inv.Session.ID,
-	}
-	ctx = codeexecutor.WithArtifactService(ctx, inv.ArtifactService)
-	return codeexecutor.WithArtifactSession(ctx, info)
+		Scope:     artifact.ScopeSession,
+	})
 }

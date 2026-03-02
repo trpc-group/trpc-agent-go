@@ -13,6 +13,7 @@ import (
 	"context"
 	"io"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -431,30 +432,34 @@ func (m *mockMemoryService) Close() error {
 
 type mockArtifactService struct{}
 
-func (m *mockArtifactService) SaveArtifact(ctx context.Context, info artifact.SessionInfo, filename string, artifact *artifact.Artifact) (int, error) {
-	return 1, nil
+func (m *mockArtifactService) Put(ctx context.Context, key artifact.Key, r io.Reader, opts ...artifact.PutOption) (artifact.Descriptor, error) {
+	return artifact.Descriptor{Key: key, Version: "1"}, nil
 }
 
-func (m *mockArtifactService) ResolveArtifact(ctx context.Context, info artifact.SessionInfo, filename string, version *int) (*artifact.ArtifactDescriptor, error) {
-	return nil, nil
+func (m *mockArtifactService) Head(ctx context.Context, key artifact.Key, version *artifact.VersionID) (artifact.Descriptor, error) {
+	if version == nil {
+		v := artifact.VersionID("1")
+		version = &v
+	}
+	return artifact.Descriptor{Key: key, Version: *version}, nil
 }
 
-func (m *mockArtifactService) LoadArtifact(ctx context.Context, info artifact.SessionInfo, filename string, version *int) (io.ReadCloser, *artifact.ArtifactDescriptor, error) {
-	return nil, nil, nil
+func (m *mockArtifactService) Open(ctx context.Context, key artifact.Key, version *artifact.VersionID) (io.ReadCloser, artifact.Descriptor, error) {
+	d, err := m.Head(ctx, key, version)
+	if err != nil {
+		return nil, artifact.Descriptor{}, err
+	}
+	return io.NopCloser(strings.NewReader("")), d, nil
 }
 
-func (m *mockArtifactService) LoadArtifactBytes(ctx context.Context, info artifact.SessionInfo, filename string, version *int) ([]byte, *artifact.ArtifactDescriptor, error) {
-	return nil, nil, nil
+func (m *mockArtifactService) List(ctx context.Context, prefix artifact.KeyPrefix, opts ...artifact.ListOption) ([]artifact.Descriptor, string, error) {
+	return nil, "", nil
 }
 
-func (m *mockArtifactService) ListArtifactKeys(ctx context.Context, info artifact.SessionInfo) ([]string, error) {
-	return nil, nil
-}
-
-func (m *mockArtifactService) DeleteArtifact(ctx context.Context, info artifact.SessionInfo, filename string) error {
+func (m *mockArtifactService) Delete(ctx context.Context, key artifact.Key, opts ...artifact.DeleteOption) error {
 	return nil
 }
 
-func (m *mockArtifactService) ListVersions(ctx context.Context, info artifact.SessionInfo, filename string) ([]int, error) {
-	return nil, nil
+func (m *mockArtifactService) Versions(ctx context.Context, key artifact.Key) ([]artifact.VersionID, error) {
+	return []artifact.VersionID{"1"}, nil
 }

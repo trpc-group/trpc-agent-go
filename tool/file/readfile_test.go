@@ -652,13 +652,13 @@ func TestFileTool_ReadFile_ArtifactRef(t *testing.T) {
 	inv.ArtifactService = svc
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 
-	info := artifact.SessionInfo{
+	ctxIO := codeexecutor.WithArtifactService(ctx, svc)
+	ctxIO = codeexecutor.WithArtifactBaseKey(ctxIO, artifact.Key{
 		AppName:   sess.AppName,
 		UserID:    sess.UserID,
 		SessionID: sess.ID,
-	}
-	ctxIO := codeexecutor.WithArtifactService(ctx, svc)
-	ctxIO = codeexecutor.WithArtifactSession(ctxIO, info)
+		Scope:     artifact.ScopeSession,
+	})
 	_, err = codeexecutor.SaveArtifactHelper(
 		ctxIO,
 		"x.txt",

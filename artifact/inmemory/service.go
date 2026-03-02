@@ -13,6 +13,7 @@ package inmemory
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -29,168 +30,419 @@ type Service struct {
 	// mutex protects concurrent access to the artifacts map
 	mutex sync.RWMutex
 	// artifacts stores artifacts by path, with each path containing a list of versions
-	artifacts map[string][]*artifact.Artifact
+	artifacts map[string][]stored
+}
+
+type stored struct {
+	version artifact.VersionID
+	mime    string
+	data    []byte
 }
 
 // NewService creates a new in-memory artifact service.
 func NewService() *Service {
 	return &Service{
-		artifacts: make(map[string][]*artifact.Artifact),
+		artifacts: make(map[string][]stored),
 	}
 }
 
-// SaveArtifact saves an artifact to the in-memory storage.
-func (s *Service) SaveArtifact(ctx context.Context, sessionInfo artifact.SessionInfo, filename string, art *artifact.Artifact) (int, error) {
+var _ artifact.Service = (*Service)(nil)
+
+func (s *Service) Put(
+	ctx context.Context,
+	key artifact.Key,
+	r io.Reader,
+	opts ...artifact.PutOption,
+) (artifact.Descriptor, error) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	path := iartifact.BuildArtifactPath(sessionInfo, filename)
-	if s.artifacts[path] == nil {
-		s.artifacts[path] = make([]*artifact.Artifact, 0)
+	if err := validateKey(key); err != nil {
+		return artifact.Descriptor{}, err
 	}
 
-	version := len(s.artifacts[path])
-	s.artifacts[path] = append(s.artifacts[path], art)
-
-	return version, nil
-}
-
-func (s *Service) ResolveArtifact(ctx context.Context, sessionInfo artifact.SessionInfo, filename string, version *int) (*artifact.ArtifactDescriptor, error) {
-	s.mutex.RLock()
-	defer s.mutex.RUnlock()
-
-	path := iartifact.BuildArtifactPath(sessionInfo, filename)
-	versions, exists := s.artifacts[path]
-	if !exists || len(versions) == 0 {
-		return nil, nil
-	}
-
-	var versionIndex int
-	if version == nil {
-		// Get the latest version (last element)
-		versionIndex = len(versions) - 1
-	} else {
-		versionIndex = *version
-		if versionIndex < 0 || versionIndex >= len(versions) {
-			return nil, fmt.Errorf("version %d does not exist", *version)
+	o := artifact.PutOptions{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&o)
 		}
 	}
 
-	art := versions[versionIndex]
-	mt := art.MimeType
-	if mt == "" {
-		mt = "application/octet-stream"
+	path := iartifact.BuildArtifactPath(key)
+	v, err := artifact.NewVersionID()
+	if err != nil {
+		return artifact.Descriptor{}, err
 	}
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return artifact.Descriptor{}, err
+	}
+	s.artifacts[path] = append(s.artifacts[path], stored{
+		version: v,
+		mime:    o.MimeType,
+		data:    data,
+	})
 
-	return &artifact.ArtifactDescriptor{
-		Name:     filename,
-		Version:  versionIndex,
-		MimeType: mt,
-		Size:     int64(len(art.Data)),
+	return artifact.Descriptor{
+		Key:      key,
+		Version:  v,
+		MimeType: mimeOrDefault(o.MimeType),
+		Size:     int64(len(data)),
 	}, nil
 }
 
-func (s *Service) LoadArtifact(ctx context.Context, sessionInfo artifact.SessionInfo, filename string, version *int) (io.ReadCloser, *artifact.ArtifactDescriptor, error) {
+func (s *Service) Head(
+	ctx context.Context,
+	key artifact.Key,
+	version *artifact.VersionID,
+) (artifact.Descriptor, error) {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
-	path := iartifact.BuildArtifactPath(sessionInfo, filename)
+	if err := validateKey(key); err != nil {
+		return artifact.Descriptor{}, err
+	}
+	path := iartifact.BuildArtifactPath(key)
 	versions, exists := s.artifacts[path]
 	if !exists || len(versions) == 0 {
-		return nil, nil, nil
+		return artifact.Descriptor{}, artifact.ErrNotFound
 	}
 
-	var versionIndex int
-	if version == nil {
-		versionIndex = len(versions) - 1
-	} else {
-		versionIndex = *version
-		if versionIndex < 0 || versionIndex >= len(versions) {
-			return nil, nil, fmt.Errorf("version %d does not exist", *version)
-		}
+	st, ok := resolveVersion(versions, version)
+	if !ok {
+		return artifact.Descriptor{}, artifact.ErrNotFound
 	}
 
-	art := versions[versionIndex]
-	mt := art.MimeType
-	if mt == "" {
-		mt = "application/octet-stream"
-	}
-	desc := &artifact.ArtifactDescriptor{
-		Name:     filename,
-		Version:  versionIndex,
-		MimeType: mt,
-		Size:     int64(len(art.Data)),
-	}
-
-	return io.NopCloser(bytes.NewReader(art.Data)), desc, nil
+	return artifact.Descriptor{
+		Key:      key,
+		Version:  st.version,
+		MimeType: mimeOrDefault(st.mime),
+		Size:     int64(len(st.data)),
+	}, nil
 }
 
-func (s *Service) LoadArtifactBytes(ctx context.Context, sessionInfo artifact.SessionInfo, filename string, version *int) ([]byte, *artifact.ArtifactDescriptor, error) {
-	rc, desc, err := s.LoadArtifact(ctx, sessionInfo, filename, version)
-	if err != nil || rc == nil {
-		return nil, desc, err
-	}
-	defer rc.Close()
-	data, err := io.ReadAll(rc)
-	if err != nil {
-		return nil, nil, err
-	}
-	return data, desc, nil
-}
-
-// ListArtifactKeys lists all the artifact filenames within a session.
-func (s *Service) ListArtifactKeys(ctx context.Context, sessionInfo artifact.SessionInfo) ([]string, error) {
+func (s *Service) Open(
+	ctx context.Context,
+	key artifact.Key,
+	version *artifact.VersionID,
+) (io.ReadCloser, artifact.Descriptor, error) {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
-	sessionPrefix := iartifact.BuildSessionPrefix(sessionInfo)
-	usernamespacePrefix := iartifact.BuildUserNamespacePrefix(sessionInfo)
+	if err := validateKey(key); err != nil {
+		return nil, artifact.Descriptor{}, err
+	}
+	path := iartifact.BuildArtifactPath(key)
+	versions, exists := s.artifacts[path]
+	if !exists || len(versions) == 0 {
+		return nil, artifact.Descriptor{}, artifact.ErrNotFound
+	}
 
-	var filenames []string
-	for path := range s.artifacts {
-		if strings.HasPrefix(path, sessionPrefix) {
-			filename := strings.TrimPrefix(path, sessionPrefix)
-			filenames = append(filenames, filename)
-		} else if strings.HasPrefix(path, usernamespacePrefix) {
-			filename := strings.TrimPrefix(path, usernamespacePrefix)
-			filenames = append(filenames, filename)
+	st, ok := resolveVersion(versions, version)
+	if !ok {
+		return nil, artifact.Descriptor{}, artifact.ErrNotFound
+	}
+
+	desc := artifact.Descriptor{
+		Key:      key,
+		Version:  st.version,
+		MimeType: mimeOrDefault(st.mime),
+		Size:     int64(len(st.data)),
+	}
+	return io.NopCloser(bytes.NewReader(st.data)), desc, nil
+}
+
+func (s *Service) List(
+	ctx context.Context,
+	prefix artifact.KeyPrefix,
+	opts ...artifact.ListOption,
+) ([]artifact.Descriptor, string, error) {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+
+	if err := validatePrefix(prefix); err != nil {
+		return nil, "", err
+	}
+
+	o := artifact.ListOptions{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&o)
 		}
 	}
 
-	sort.Strings(filenames)
-	return filenames, nil
+	scopePrefix := iartifact.BuildListPrefix(prefix)
+	names := make([]string, 0)
+	latest := make(map[string]stored)
+	for path, versions := range s.artifacts {
+		if !strings.HasPrefix(path, scopePrefix) {
+			continue
+		}
+		rel := strings.TrimPrefix(path, scopePrefix)
+		if rel == "" {
+			continue
+		}
+		if prefix.NamePrefix != "" && !strings.HasPrefix(rel, prefix.NamePrefix) {
+			continue
+		}
+		st, ok := resolveVersion(versions, nil)
+		if !ok {
+			continue
+		}
+		if _, exists := latest[rel]; !exists {
+			names = append(names, rel)
+			latest[rel] = st
+			continue
+		}
+		if artifact.CompareVersion(st.version, latest[rel].version) > 0 {
+			latest[rel] = st
+		}
+	}
+
+	sort.Strings(names)
+	start := 0
+	if o.PageToken != "" {
+		i := sort.SearchStrings(names, o.PageToken)
+		for i < len(names) && names[i] <= o.PageToken {
+			i++
+		}
+		start = i
+	}
+	limit := o.Limit
+	if limit <= 0 || limit > len(names)-start {
+		limit = len(names) - start
+	}
+	end := start + limit
+	page := names[start:end]
+
+	out := make([]artifact.Descriptor, 0, len(page))
+	for _, name := range page {
+		st := latest[name]
+		key := artifact.Key{
+			AppName:   prefix.AppName,
+			UserID:    prefix.UserID,
+			SessionID: prefix.SessionID,
+			Scope:     prefix.Scope,
+			Name:      name,
+		}
+		out = append(out, artifact.Descriptor{
+			Key:      key,
+			Version:  st.version,
+			MimeType: mimeOrDefault(st.mime),
+			Size:     int64(len(st.data)),
+		})
+	}
+
+	next := ""
+	if end < len(names) {
+		next = page[len(page)-1]
+	}
+	return out, next, nil
 }
 
-// DeleteArtifact deletes an artifact.
-func (s *Service) DeleteArtifact(ctx context.Context, sessionInfo artifact.SessionInfo, filename string) error {
+func (s *Service) Delete(ctx context.Context, key artifact.Key, opts ...artifact.DeleteOption) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	path := iartifact.BuildArtifactPath(sessionInfo, filename)
-	if _, exists := s.artifacts[path]; !exists {
-		// Artifact doesn't exist, but this is not an error in the Python implementation
-		return nil
+	if err := validateKey(key); err != nil {
+		return err
 	}
 
-	delete(s.artifacts, path)
+	o := artifact.DeleteOptions{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&o)
+		}
+	}
+	if err := o.Validate(); err != nil {
+		return err
+	}
+	path := iartifact.BuildArtifactPath(key)
+	versions, exists := s.artifacts[path]
+	if !exists || len(versions) == 0 {
+		return artifact.ErrNotFound
+	}
+
+	switch o.Mode {
+	case artifact.DeleteAll:
+		delete(s.artifacts, path)
+		return nil
+	case artifact.DeleteLatest:
+		latest, ok := resolveVersion(versions, nil)
+		if !ok {
+			return artifact.ErrNotFound
+		}
+		return deleteOneVersionLocked(s.artifacts, path, latest.version)
+	case artifact.DeleteVersion:
+		return deleteOneVersionLocked(s.artifacts, path, o.Version)
+	default:
+		return fmt.Errorf("unknown delete mode: %d", int(o.Mode))
+	}
+}
+
+func deleteOneVersionLocked(m map[string][]stored, path string, ver artifact.VersionID) error {
+	versions, ok := m[path]
+	if !ok || len(versions) == 0 {
+		return artifact.ErrNotFound
+	}
+	out := make([]stored, 0, len(versions))
+	found := false
+	for _, st := range versions {
+		if st.version == ver {
+			found = true
+			continue
+		}
+		out = append(out, st)
+	}
+	if !found {
+		return artifact.ErrNotFound
+	}
+	if len(out) == 0 {
+		delete(m, path)
+		return nil
+	}
+	m[path] = out
 	return nil
 }
 
-// ListVersions lists all versions of an artifact.
-func (s *Service) ListVersions(ctx context.Context, sessionInfo artifact.SessionInfo, filename string) ([]int, error) {
+func (s *Service) Versions(ctx context.Context, key artifact.Key) ([]artifact.VersionID, error) {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
-	path := iartifact.BuildArtifactPath(sessionInfo, filename)
+	if err := validateKey(key); err != nil {
+		return nil, err
+	}
+	path := iartifact.BuildArtifactPath(key)
 	versions, exists := s.artifacts[path]
 	if !exists || len(versions) == 0 {
-		return []int{}, nil
+		return nil, artifact.ErrNotFound
 	}
 
-	result := make([]int, len(versions))
-	for i := range versions {
-		result[i] = i
+	result := make([]artifact.VersionID, 0, len(versions))
+	for _, st := range versions {
+		result = append(result, st.version)
 	}
-
+	sort.Slice(result, func(i, j int) bool {
+		return artifact.CompareVersion(result[i], result[j]) < 0
+	})
 	return result, nil
+}
+
+func resolveVersion(versions []stored, version *artifact.VersionID) (stored, bool) {
+	if len(versions) == 0 {
+		return stored{}, false
+	}
+	if version == nil {
+		latest := versions[0]
+		for _, st := range versions[1:] {
+			if artifact.CompareVersion(st.version, latest.version) > 0 {
+				latest = st
+			}
+		}
+		return latest, true
+	}
+	for _, st := range versions {
+		if st.version == *version {
+			return st, true
+		}
+	}
+	return stored{}, false
+}
+
+func mimeOrDefault(mt string) string {
+	if mt == "" {
+		return "application/octet-stream"
+	}
+	return mt
+}
+
+func validateKey(k artifact.Key) error {
+	if k.AppName == "" || k.UserID == "" {
+		return fmt.Errorf("invalid key: missing appName or userID")
+	}
+	switch k.Scope {
+	case artifact.ScopeSession:
+		if k.SessionID == "" {
+			return fmt.Errorf("invalid key: missing sessionID for session scope")
+		}
+	case artifact.ScopeUser:
+		// ok
+	default:
+		return fmt.Errorf("invalid key: unknown scope %v", k.Scope)
+	}
+	if k.Name == "" {
+		return fmt.Errorf("invalid key: empty name")
+	}
+	if err := validateObjectName(k.Name); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validatePrefix(p artifact.KeyPrefix) error {
+	if p.AppName == "" || p.UserID == "" {
+		return fmt.Errorf("invalid prefix: missing appName or userID")
+	}
+	switch p.Scope {
+	case artifact.ScopeSession:
+		if p.SessionID == "" {
+			return fmt.Errorf("invalid prefix: missing sessionID for session scope")
+		}
+	case artifact.ScopeUser:
+		// ok
+	default:
+		return fmt.Errorf("invalid prefix: unknown scope %v", p.Scope)
+	}
+	if p.NamePrefix != "" {
+		if err := validateObjectPrefix(p.NamePrefix); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) mustHaveArtifact(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, artifact.ErrNotFound) {
+		return err
+	}
+	return err
+}
+
+func validateObjectName(name string) error {
+	if strings.HasPrefix(name, "/") {
+		return fmt.Errorf("invalid key: invalid name")
+	}
+	if strings.Contains(name, "\\") || strings.Contains(name, "\x00") {
+		return fmt.Errorf("invalid key: invalid name")
+	}
+	parts := strings.Split(name, "/")
+	for _, p := range parts {
+		if p == "" || p == "." || p == ".." {
+			return fmt.Errorf("invalid key: invalid name")
+		}
+	}
+	return nil
+}
+
+func validateObjectPrefix(prefix string) error {
+	if strings.HasPrefix(prefix, "/") {
+		return fmt.Errorf("invalid prefix: invalid namePrefix")
+	}
+	if strings.Contains(prefix, "\\") || strings.Contains(prefix, "\x00") {
+		return fmt.Errorf("invalid prefix: invalid namePrefix")
+	}
+	parts := strings.Split(prefix, "/")
+	for i, p := range parts {
+		if p == "." || p == ".." {
+			return fmt.Errorf("invalid prefix: invalid namePrefix")
+		}
+		// Allow trailing slash: last segment may be empty.
+		if p == "" && i != len(parts)-1 {
+			return fmt.Errorf("invalid prefix: invalid namePrefix")
+		}
+	}
+	return nil
 }

@@ -12,93 +12,62 @@ package artifact
 import (
 	"context"
 	"io"
+	"errors"
 )
+
+// ErrNotFound indicates the requested artifact or version does not exist.
+var ErrNotFound = errors.New("artifact not found")
 
 // Service defines the interface for artifact storage and retrieval operations.
 type Service interface {
-	// SaveArtifact saves an artifact to the artifact service storage.
+	// Put stores a new version of the artifact content and returns its descriptor.
 	//
-	// The artifact is a file identified by the session info and filename.
-	// After saving the artifact, a revision ID is returned to identify
-	// the artifact version.
-	//
-	// Args:
-	//   ctx: The context for the operation
-	//   sessionInfo: The session information (app name, user ID, session ID)
-	//   filename: The filename of the artifact
-	//   artifact: The artifact to save
-	//
-	// Returns:
-	//   The revision ID. The first version of the artifact has a revision ID of 0.
-	//   This is incremented by 1 after each successful save.
-	SaveArtifact(ctx context.Context, sessionInfo SessionInfo, filename string, artifact *Artifact) (int, error)
+	// The implementation MUST create a new immutable version (not overwrite an existing version).
+	Put(ctx context.Context, key Key, r io.Reader, opts ...PutOption) (Descriptor, error)
 
-	// ResolveArtifact resolves an artifact reference to its metadata and an optional URL.
+	// Head resolves an artifact version to its metadata and an optional URL.
 	//
 	// This method SHOULD NOT download artifact contents.
-	//
-	// Args:
-	//   ctx: The context for the operation
-	//   sessionInfo: The session information (app name, user ID, session ID)
-	//   filename: The filename of the artifact
-	//   version: The version of the artifact. If nil, the latest version will be resolved.
-	//
-	// Returns:
-	//   The descriptor or nil if not found.
-	ResolveArtifact(ctx context.Context, sessionInfo SessionInfo, filename string, version *int) (*ArtifactDescriptor, error)
+	// When version is nil, Head MUST resolve the latest version.
+	Head(ctx context.Context, key Key, version *VersionID) (Descriptor, error)
 
-	// LoadArtifact opens a streaming reader for an artifact.
+	// Open opens a streaming reader for an artifact version.
 	//
 	// This method MUST NOT read the full artifact into memory.
-	//
-	// Args:
-	//   ctx: The context for the operation
-	//   sessionInfo: The session information (app name, user ID, session ID)
-	//   filename: The filename of the artifact
-	//   version: The version of the artifact. If nil, the latest version will be loaded.
-	//
-	// Returns:
-	//   A ReadCloser for the content, a descriptor, or (nil, nil, nil) if not found.
-	LoadArtifact(ctx context.Context, sessionInfo SessionInfo, filename string, version *int) (io.ReadCloser, *ArtifactDescriptor, error)
+	// When version is nil, Open MUST open the latest version.
+	Open(ctx context.Context, key Key, version *VersionID) (io.ReadCloser, Descriptor, error)
 
-	// LoadArtifactBytes loads an artifact into memory and returns its bytes.
+	// List lists artifacts within the given prefix, returning descriptors for the latest version
+	// of each artifact.
 	//
-	// This is a convenience method for small artifacts. Callers should prefer
-	// ResolveArtifact + LoadArtifact for large artifacts.
-	//
-	// Returns:
-	//   The bytes and descriptor, or (nil, nil, nil) if not found.
-	LoadArtifactBytes(ctx context.Context, sessionInfo SessionInfo, filename string, version *int) ([]byte, *ArtifactDescriptor, error)
+	// Implementations may require multiple backend calls. The returned nextPageToken is empty
+	// when there are no more results.
+	List(ctx context.Context, prefix KeyPrefix, opts ...ListOption) ([]Descriptor, string, error)
 
-	// ListArtifactKeys lists all the artifact filenames within a session.
+	// Delete deletes artifact versions identified by key.
 	//
-	// Args:
-	//   ctx: The context for the operation
-	//   sessionInfo: The session information (app name, user ID, session ID)
-	//   filename: The filename of the artifact
-	// Returns:
-	//   A list of all artifact filenames within a session.
-	ListArtifactKeys(ctx context.Context, sessionInfo SessionInfo) ([]string, error)
+	// By default (no opts, or DeleteAllOpt), it deletes all versions.
+	//
+	// When the artifact does not exist, it SHOULD return ErrNotFound.
+	Delete(ctx context.Context, key Key, opts ...DeleteOption) error
 
-	// DeleteArtifact deletes an artifact.
+	// Versions lists all versions of an artifact.
 	//
-	// Args:
-	//   ctx: The context for the operation
-	//   sessionInfo: The session information (app name, user ID, session ID)
-	//   filename: The name of the artifact file
-	//
-	// Returns:
-	//   An error if the operation fails.
-	DeleteArtifact(ctx context.Context, sessionInfo SessionInfo, filename string) error
+	// When the artifact does not exist, it SHOULD return ErrNotFound.
+	Versions(ctx context.Context, key Key) ([]VersionID, error)
+}
 
-	// ListVersions lists all versions of an artifact.
-	//
-	// Args:
-	//   ctx: The context for the operation
-	//   sessionInfo: The session information (app name, user ID, session ID)
-	//   filename: The name of the artifact file
-	//
-	// Returns:
-	//   A list of all available versions of the artifact.
-	ListVersions(ctx context.Context, sessionInfo SessionInfo, filename string) ([]int, error)
+// ReadAll opens an artifact version and reads it into memory.
+// This is a convenience helper for small artifacts.
+func ReadAll(ctx context.Context, svc Service, key Key, version *VersionID) ([]byte, Descriptor, error) {
+	rc, desc, err := svc.Open(ctx, key, version)
+	if err != nil {
+		return nil, Descriptor{}, err
+	}
+	defer rc.Close()
+	b, err := io.ReadAll(rc)
+	if err != nil {
+		return nil, Descriptor{}, err
+	}
+	return b, desc, nil
 }

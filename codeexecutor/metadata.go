@@ -20,6 +20,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/artifact"
 )
 
 // Well-known subdirectories in a workspace.
@@ -70,7 +72,7 @@ type InputRecord struct {
 	From      string    `json:"from"`
 	To        string    `json:"to"`
 	Resolved  string    `json:"resolved,omitempty"`
-	Version   *int      `json:"version,omitempty"`
+	Version   *artifact.VersionID `json:"version,omitempty"`
 	Mode      string    `json:"mode,omitempty"`
 	Timestamp time.Time `json:"ts"`
 }
@@ -79,7 +81,7 @@ type InputRecord struct {
 type OutputRecord struct {
 	Globs     []string  `json:"globs"`
 	SavedAs   []string  `json:"saved_as,omitempty"`
-	Versions  []int     `json:"versions,omitempty"`
+	Versions  []artifact.VersionID `json:"versions,omitempty"`
 	LimitsHit bool      `json:"limits_hit"`
 	Timestamp time.Time `json:"ts"`
 }

@@ -13,7 +13,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/xml"
-	"fmt"
 	"hash/crc64"
 	"io"
 	"net/http"
@@ -224,313 +223,71 @@ func createMockService() (*Service, *MockTransport) {
 	return service, mockTransport
 }
 
-func TestArtifact_SessionScope(t *testing.T) {
+func TestCOSService_PutHeadOpenVersionsListDelete(t *testing.T) {
 	s, _ := createMockService()
 	ctx := context.Background()
 
-	sessionInfo := artifact.SessionInfo{
+	key := artifact.Key{
 		AppName:   "testapp",
 		UserID:    "user1",
 		SessionID: "session1",
-	}
-	sessionScopeKey := "test.txt"
-
-	var artifacts []*artifact.Artifact
-	for i := 0; i < 3; i++ {
-		artifacts = append(artifacts, &artifact.Artifact{
-			ArtifactDescriptor: artifact.ArtifactDescriptor{
-				MimeType: "text/plain",
-				Name:     "display_name_user_scope_test.txt",
-			},
-			Data: []byte("Hello, World!" + strconv.Itoa(i)),
-		})
+		Scope:     artifact.ScopeSession,
+		Name:      "test.txt",
 	}
 
-	// Save artifacts and verify versions
-	for i, a := range artifacts {
-		version, err := s.SaveArtifact(ctx, sessionInfo, sessionScopeKey, a)
-		require.NoError(t, err)
-		require.Equal(t, i, version)
-	}
-
-	// List versions
-	versions, err := s.ListVersions(ctx, sessionInfo, sessionScopeKey)
+	desc1, err := s.Put(ctx, key, bytes.NewReader([]byte("v1")), artifact.WithPutMimeType("text/plain"))
 	require.NoError(t, err)
-	require.ElementsMatch(t, []int{0, 1, 2}, versions)
-
-	// Load latest version (should be version 2)
-	data, desc, err := s.LoadArtifactBytes(ctx, sessionInfo, sessionScopeKey, nil)
+	desc2, err := s.Put(ctx, key, bytes.NewReader([]byte("v2")), artifact.WithPutMimeType("text/plain"))
 	require.NoError(t, err)
-	require.NotNil(t, desc)
-	require.EqualValues(t, []byte("Hello, World!"+strconv.Itoa(2)), data)
-	require.EqualValues(t, "text/plain", desc.MimeType)
-	require.EqualValues(t, 2, desc.Version)
+	require.NotEqual(t, desc1.Version, desc2.Version)
 
-	// Load specific versions
-	for i, wanted := range artifacts {
-		gotData, gotDesc, err := s.LoadArtifactBytes(ctx, sessionInfo, sessionScopeKey, &i)
-		require.NoError(t, err)
-		require.NotNil(t, gotDesc)
-		require.EqualValues(t, wanted.Data, gotData)
-		require.EqualValues(t, wanted.MimeType, gotDesc.MimeType)
-		require.EqualValues(t, sessionScopeKey, gotDesc.Name)
-		require.EqualValues(t, i, gotDesc.Version)
-	}
-
-	// List artifact keys
-	keys, err := s.ListArtifactKeys(ctx, sessionInfo)
+	h, err := s.Head(ctx, key, nil)
 	require.NoError(t, err)
-	require.ElementsMatch(t, []string{sessionScopeKey}, keys)
+	require.Equal(t, desc2.Version, h.Version)
 
-	// Delete artifact
-	err = s.DeleteArtifact(ctx, sessionInfo, sessionScopeKey)
+	rc, od, err := s.Open(ctx, key, &desc1.Version)
 	require.NoError(t, err)
+	b, err := io.ReadAll(rc)
+	require.NoError(t, err)
+	_ = rc.Close()
+	require.Equal(t, []byte("v1"), b)
+	require.Equal(t, desc1.Version, od.Version)
 
-	// Verify artifact is deleted
-	keys, err = s.ListArtifactKeys(ctx, sessionInfo)
+	vers, err := s.Versions(ctx, key)
 	require.NoError(t, err)
-	require.Empty(t, keys)
+	require.Len(t, vers, 2)
 
-	// Verify versions are empty
-	versions, err = s.ListVersions(ctx, sessionInfo, sessionScopeKey)
+	items, next, err := s.List(ctx, artifact.KeyPrefix{
+		AppName:   key.AppName,
+		UserID:    key.UserID,
+		SessionID: key.SessionID,
+		Scope:     key.Scope,
+	}, artifact.WithListLimit(10))
 	require.NoError(t, err)
-	require.Empty(t, versions)
+	require.Empty(t, next)
+	require.Len(t, items, 1)
+	require.Equal(t, "test.txt", items[0].Key.Name)
 
-	// Verify artifact cannot be loaded
-	data, desc, err = s.LoadArtifactBytes(ctx, sessionInfo, sessionScopeKey, nil)
-	require.NoError(t, err)
-	require.Nil(t, data)
-	require.Nil(t, desc)
+	require.NoError(t, s.Delete(ctx, key, artifact.DeleteAllOpt()))
+	_, err = s.Head(ctx, key, nil)
+	require.ErrorIs(t, err, artifact.ErrNotFound)
 }
 
-func TestArtifact_UserScope(t *testing.T) {
+func TestCOSService_UserScopeIgnoresSessionID(t *testing.T) {
 	s, _ := createMockService()
 	ctx := context.Background()
 
-	sessionInfo := artifact.SessionInfo{
-		AppName:   "testapp",
-		UserID:    "user2",
-		SessionID: "session1",
-	}
-	userScopeKey := "user:test.txt"
-
-	// Save multiple versions
-	for i := 0; i < 3; i++ {
-		data := []byte("Hi, World!" + strconv.Itoa(i))
-		version, err := s.SaveArtifact(ctx, sessionInfo, userScopeKey, &artifact.Artifact{
-			ArtifactDescriptor: artifact.ArtifactDescriptor{
-				MimeType: "text/plain",
-				Name:     "display_name_user_scope_test.txt",
-			},
-			Data: data,
-		})
-		require.NoError(t, err)
-		require.Equal(t, i, version)
-	}
-
-	// List versions
-	versions, err := s.ListVersions(ctx, sessionInfo, userScopeKey)
-	require.NoError(t, err)
-	require.ElementsMatch(t, []int{0, 1, 2}, versions)
-
-	// Load latest version
-	data, desc, err := s.LoadArtifactBytes(ctx, sessionInfo, userScopeKey, nil)
-	require.NoError(t, err)
-	require.NotNil(t, desc)
-	require.EqualValues(t, []byte("Hi, World!"+strconv.Itoa(2)), data)
-	require.EqualValues(t, "text/plain", desc.MimeType)
-	require.EqualValues(t, 2, desc.Version)
-
-	// Load specific versions
-	for i := 0; i < 3; i++ {
-		data, desc, err := s.LoadArtifactBytes(ctx, sessionInfo, userScopeKey, &i)
-		require.NoError(t, err)
-		require.NotNil(t, desc)
-		require.EqualValues(t, []byte("Hi, World!"+strconv.Itoa(i)), data)
-		require.EqualValues(t, "text/plain", desc.MimeType)
-		require.EqualValues(t, i, desc.Version)
-	}
-
-	// List artifact keys
-	keys, err := s.ListArtifactKeys(ctx, sessionInfo)
-	require.NoError(t, err)
-	require.ElementsMatch(t, []string{userScopeKey}, keys)
-
-	// Delete artifact
-	err = s.DeleteArtifact(ctx, sessionInfo, userScopeKey)
+	putKey := artifact.Key{AppName: "testapp", UserID: "user1", SessionID: "s1", Scope: artifact.ScopeUser, Name: "profile.txt"}
+	_, err := s.Put(ctx, putKey, bytes.NewReader([]byte("u")), artifact.WithPutMimeType("text/plain"))
 	require.NoError(t, err)
 
-	// Verify artifact is deleted
-	keys, err = s.ListArtifactKeys(ctx, sessionInfo)
+	getKey := artifact.Key{AppName: "testapp", UserID: "user1", SessionID: "s2", Scope: artifact.ScopeUser, Name: "profile.txt"}
+	rc, _, err := s.Open(ctx, getKey, nil)
 	require.NoError(t, err)
-	require.Empty(t, keys)
-
-	// Verify versions are empty
-	versions, err = s.ListVersions(ctx, sessionInfo, userScopeKey)
+	b, err := io.ReadAll(rc)
 	require.NoError(t, err)
-	require.Empty(t, versions)
-
-	// Verify artifact cannot be loaded
-	data, desc, err = s.LoadArtifactBytes(ctx, sessionInfo, userScopeKey, nil)
-	require.NoError(t, err)
-	require.Nil(t, data)
-	require.Nil(t, desc)
-}
-
-func TestMixedScopeArtifacts(t *testing.T) {
-	s, _ := createMockService()
-	ctx := context.Background()
-
-	sessionInfo := artifact.SessionInfo{
-		AppName:   "testapp",
-		UserID:    "user123",
-		SessionID: "session456",
-	}
-
-	// Save session-scoped artifact
-	sessionArtifact := &artifact.Artifact{
-		ArtifactDescriptor: artifact.ArtifactDescriptor{
-			MimeType: "text/plain",
-			Name:     "session.txt",
-		},
-		Data: []byte("session data"),
-	}
-	version, err := s.SaveArtifact(ctx, sessionInfo, "session.txt", sessionArtifact)
-	require.NoError(t, err)
-	assert.Equal(t, 0, version)
-
-	// Save user-scoped artifact
-	userArtifact := &artifact.Artifact{
-		ArtifactDescriptor: artifact.ArtifactDescriptor{
-			MimeType: "text/plain",
-			Name:     "user:profile.txt",
-		},
-		Data: []byte("user data"),
-	}
-	version, err = s.SaveArtifact(ctx, sessionInfo, "user:profile.txt", userArtifact)
-	require.NoError(t, err)
-	assert.Equal(t, 0, version)
-
-	// List all keys should include both
-	keys, err := s.ListArtifactKeys(ctx, sessionInfo)
-	require.NoError(t, err)
-	assert.ElementsMatch(t, []string{"session.txt", "user:profile.txt"}, keys)
-
-	// Load both artifacts
-	loadedSessionData, loadedSessionDesc, err := s.LoadArtifactBytes(ctx, sessionInfo, "session.txt", nil)
-	require.NoError(t, err)
-	require.NotNil(t, loadedSessionDesc)
-	assert.Equal(t, sessionArtifact.Data, loadedSessionData)
-
-	loadedUserData, loadedUserDesc, err := s.LoadArtifactBytes(ctx, sessionInfo, "user:profile.txt", nil)
-	require.NoError(t, err)
-	require.NotNil(t, loadedUserDesc)
-	assert.Equal(t, userArtifact.Data, loadedUserData)
-}
-
-func TestLoadNonexistentArtifact(t *testing.T) {
-	s, _ := createMockService()
-	ctx := context.Background()
-
-	sessionInfo := artifact.SessionInfo{
-		AppName:   "testapp",
-		UserID:    "user123",
-		SessionID: "session456",
-	}
-
-	// Load non-existent artifact
-	data, desc, err := s.LoadArtifactBytes(ctx, sessionInfo, "nonexistent.txt", nil)
-	require.NoError(t, err)
-	assert.Nil(t, data)
-	assert.Nil(t, desc)
-
-	// Load non-existent version
-	invalidVersion := 999
-	data, desc, err = s.LoadArtifactBytes(ctx, sessionInfo, "nonexistent.txt", &invalidVersion)
-	require.NoError(t, err)
-	assert.Nil(t, data)
-	assert.Nil(t, desc)
-}
-
-func TestDeleteNonexistentArtifact(t *testing.T) {
-	s, _ := createMockService()
-	ctx := context.Background()
-
-	sessionInfo := artifact.SessionInfo{
-		AppName:   "testapp",
-		UserID:    "user123",
-		SessionID: "session456",
-	}
-
-	// Delete non-existent artifact should not error
-	err := s.DeleteArtifact(ctx, sessionInfo, "nonexistent.txt")
-	require.NoError(t, err)
-}
-
-func TestListVersionsNonexistentArtifact(t *testing.T) {
-	s, _ := createMockService()
-	ctx := context.Background()
-
-	sessionInfo := artifact.SessionInfo{
-		AppName:   "testapp",
-		UserID:    "user123",
-		SessionID: "session456",
-	}
-
-	// List versions for non-existent artifact
-	versions, err := s.ListVersions(ctx, sessionInfo, "nonexistent.txt")
-	require.NoError(t, err)
-	assert.Empty(t, versions)
-}
-
-func TestMultipleVersionsAndDeletion(t *testing.T) {
-	s, _ := createMockService()
-	ctx := context.Background()
-
-	sessionInfo := artifact.SessionInfo{
-		AppName:   "testapp",
-		UserID:    "user123",
-		SessionID: "session456",
-	}
-
-	filename := "versioned.txt"
-
-	// Save multiple versions
-	for i := 0; i < 5; i++ {
-		artifact := &artifact.Artifact{
-			ArtifactDescriptor: artifact.ArtifactDescriptor{
-				MimeType: "text/plain",
-				Name:     filename,
-			},
-			Data: []byte(fmt.Sprintf("version %d data", i)),
-		}
-		version, err := s.SaveArtifact(ctx, sessionInfo, filename, artifact)
-		require.NoError(t, err)
-		assert.Equal(t, i, version)
-	}
-
-	// List all versions
-	versions, err := s.ListVersions(ctx, sessionInfo, filename)
-	require.NoError(t, err)
-	assert.ElementsMatch(t, []int{0, 1, 2, 3, 4}, versions)
-
-	// Load specific versions
-	for i := 0; i < 5; i++ {
-		data, desc, err := s.LoadArtifactBytes(ctx, sessionInfo, filename, &i)
-		require.NoError(t, err)
-		require.NotNil(t, desc)
-		expected := fmt.Sprintf("version %d data", i)
-		assert.Equal(t, []byte(expected), data)
-	}
-
-	// Delete all versions
-	err = s.DeleteArtifact(ctx, sessionInfo, filename)
-	require.NoError(t, err)
-
-	// Verify all versions are deleted
-	versions, err = s.ListVersions(ctx, sessionInfo, filename)
-	require.NoError(t, err)
-	assert.Empty(t, versions)
+	_ = rc.Close()
+	require.Equal(t, []byte("u"), b)
 }
 
 func TestNewServiceWithOptions(t *testing.T) {

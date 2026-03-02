@@ -9,17 +9,20 @@
 
 package artifact
 
-// ArtifactDescriptor describes an artifact without requiring its bytes.
+// Descriptor describes a specific artifact version without requiring its bytes.
 // It can be used to implement deferred and/or streaming downloads.
-type ArtifactDescriptor struct {
-	// Name is the artifact filename (as requested).
-	Name string `json:"name,omitempty"`
+type Descriptor struct {
+	Key Key `json:"key,omitempty"`
+
 	// Version is the resolved artifact version.
-	Version int `json:"version,omitempty"`
+	Version VersionID `json:"version,omitempty"`
+
 	// MimeType is the IANA standard MIME type of the artifact.
 	MimeType string `json:"mime_type,omitempty"`
+
 	// Size is the artifact size in bytes if known, otherwise 0.
 	Size int64 `json:"size,omitempty"`
+
 	// URL is an optional URL where the artifact can be accessed (e.g. presigned).
 	URL string `json:"url,omitempty"`
 }

@@ -11,9 +11,6 @@ package codeexecutor
 
 import (
 	"context"
-	"errors"
-	"io"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -27,15 +24,19 @@ func TestParseArtifactRef(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "item", name)
 	require.NotNil(t, ver)
-	require.Equal(t, 123, *ver)
+	require.Equal(t, artifact.VersionID("123"), *ver)
 
 	name, ver, err = ParseArtifactRef("plain")
 	require.NoError(t, err)
 	require.Equal(t, "plain", name)
 	require.Nil(t, ver)
 
-	_, _, err = ParseArtifactRef("bad@v1")
-	require.Error(t, err)
+	name, ver, err = ParseArtifactRef("bad@v1")
+	require.NoError(t, err)
+	require.Equal(t, "bad", name)
+	require.NotNil(t, ver)
+	require.Equal(t, artifact.VersionID("v1"), *ver)
+
 	_, _, err = ParseArtifactRef("a@b@c")
 	require.Error(t, err)
 }
@@ -45,8 +46,11 @@ func TestArtifactHelpers_SaveAndLoad(t *testing.T) {
 	svc := inmemory.NewService()
 	// Attach service and a dummy session to context.
 	ctx = WithArtifactService(ctx, svc)
-	ctx = WithArtifactSession(ctx, artifact.SessionInfo{
-		AppName: "app", UserID: "u", SessionID: "s",
+	ctx = WithArtifactBaseKey(ctx, artifact.Key{
+		AppName:   "app",
+		UserID:    "u",
+		SessionID: "s",
+		Scope:     artifact.ScopeSession,
 	})
 
 	dataV0 := []byte("abc")
@@ -87,10 +91,8 @@ func TestArtifactHelpers_SaveAndLoad(t *testing.T) {
 
 	// Save without a session to exercise the nil-branch.
 	ctxNoSess := WithArtifactService(context.Background(), svc)
-	_, err = SaveArtifactHelper(
-		ctxNoSess, "b.bin", []byte{1, 2}, "application/octet-stream",
-	)
-	require.NoError(t, err)
+	_, err = SaveArtifactHelper(ctxNoSess, "b.bin", []byte{1, 2}, "application/octet-stream")
+	require.Error(t, err)
 }
 
 func TestArtifactHelpers_NoServiceInContext(t *testing.T) {
@@ -99,77 +101,4 @@ func TestArtifactHelpers_NoServiceInContext(t *testing.T) {
 	require.Error(t, err)
 	_, err = SaveArtifactHelper(ctx, "x", nil, "")
 	require.Error(t, err)
-}
-
-type listVersionsErrService struct{}
-
-func (*listVersionsErrService) SaveArtifact(
-	_ context.Context,
-	_ artifact.SessionInfo,
-	_ string,
-	_ *artifact.Artifact,
-) (int, error) {
-	return 0, nil
-}
-
-func (*listVersionsErrService) ResolveArtifact(
-	_ context.Context,
-	_ artifact.SessionInfo,
-	filename string,
-	_ *int,
-) (*artifact.ArtifactDescriptor, error) {
-	return &artifact.ArtifactDescriptor{Name: filename, Version: 0}, nil
-}
-
-func (*listVersionsErrService) LoadArtifact(
-	_ context.Context,
-	_ artifact.SessionInfo,
-	filename string,
-	_ *int,
-) (io.ReadCloser, *artifact.ArtifactDescriptor, error) {
-	desc := &artifact.ArtifactDescriptor{Name: filename, Version: 0}
-	return io.NopCloser(strings.NewReader("x")), desc, nil
-}
-
-func (*listVersionsErrService) LoadArtifactBytes(
-	_ context.Context,
-	_ artifact.SessionInfo,
-	filename string,
-	_ *int,
-) ([]byte, *artifact.ArtifactDescriptor, error) {
-	return []byte("x"), &artifact.ArtifactDescriptor{Name: filename, Version: 0}, nil
-}
-
-func (*listVersionsErrService) ListArtifactKeys(
-	_ context.Context,
-	_ artifact.SessionInfo,
-) ([]string, error) {
-	return nil, nil
-}
-
-func (*listVersionsErrService) DeleteArtifact(
-	_ context.Context,
-	_ artifact.SessionInfo,
-	_ string,
-) error {
-	return nil
-}
-
-func (*listVersionsErrService) ListVersions(
-	_ context.Context,
-	_ artifact.SessionInfo,
-	_ string,
-) ([]int, error) {
-	return nil, errors.New("list versions failed")
-}
-
-func TestLoadArtifactHelper_LatestVersionUnknown_ReturnsZero(t *testing.T) {
-	ctx := WithArtifactService(
-		context.Background(), &listVersionsErrService{},
-	)
-	out, mt, actual, err := LoadArtifactHelper(ctx, "a.txt", nil)
-	require.NoError(t, err)
-	require.Equal(t, []byte("x"), out)
-	require.Equal(t, "application/octet-stream", mt)
-	require.Equal(t, 0, actual)
 }

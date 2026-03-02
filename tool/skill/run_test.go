@@ -557,7 +557,7 @@ func TestRunTool_SaveAsArtifacts_AndOmitInline(t *testing.T) {
 	require.Equal(t, 0, out.ExitCode)
 	require.Len(t, out.ArtifactFiles, 1)
 	require.Equal(t, outATxt, out.ArtifactFiles[0].Name)
-	require.Equal(t, 0, out.ArtifactFiles[0].Version)
+	require.NotEmpty(t, out.ArtifactFiles[0].Version)
 	// OmitInline should clear inline file contents.
 	require.Len(t, out.OutputFiles, 1)
 	require.Equal(t, "", out.OutputFiles[0].Content)
@@ -822,46 +822,28 @@ func TestRunTool_OutputsSpec_AcceptsSnakeCaseJSON(t *testing.T) {
 // errArtifactService always fails on save to cover error path.
 type errArtifactService struct{}
 
-func (e *errArtifactService) SaveArtifact(
-	ctx context.Context, sessionInfo artifact.SessionInfo,
-	filename string, a *artifact.Artifact,
-) (int, error) {
-	return 0, fmt.Errorf("forced-error")
+func (e *errArtifactService) Put(ctx context.Context, key artifact.Key, r io.Reader, opts ...artifact.PutOption) (artifact.Descriptor, error) {
+	return artifact.Descriptor{}, fmt.Errorf("forced-error")
 }
-func (e *errArtifactService) ResolveArtifact(
-	ctx context.Context, sessionInfo artifact.SessionInfo,
-	filename string, version *int,
-) (*artifact.ArtifactDescriptor, error) {
-	return nil, nil
+
+func (e *errArtifactService) Head(ctx context.Context, key artifact.Key, version *artifact.VersionID) (artifact.Descriptor, error) {
+	return artifact.Descriptor{}, artifact.ErrNotFound
 }
-func (e *errArtifactService) LoadArtifact(
-	ctx context.Context, sessionInfo artifact.SessionInfo,
-	filename string, version *int,
-) (io.ReadCloser, *artifact.ArtifactDescriptor, error) {
-	return nil, nil, nil
+
+func (e *errArtifactService) Open(ctx context.Context, key artifact.Key, version *artifact.VersionID) (io.ReadCloser, artifact.Descriptor, error) {
+	return nil, artifact.Descriptor{}, artifact.ErrNotFound
 }
-func (e *errArtifactService) LoadArtifactBytes(
-	ctx context.Context, sessionInfo artifact.SessionInfo,
-	filename string, version *int,
-) ([]byte, *artifact.ArtifactDescriptor, error) {
-	return nil, nil, nil
+
+func (e *errArtifactService) List(ctx context.Context, prefix artifact.KeyPrefix, opts ...artifact.ListOption) ([]artifact.Descriptor, string, error) {
+	return nil, "", nil
 }
-func (e *errArtifactService) ListArtifactKeys(
-	ctx context.Context, sessionInfo artifact.SessionInfo,
-) ([]string, error) {
-	return nil, nil
+
+func (e *errArtifactService) Delete(ctx context.Context, key artifact.Key, opts ...artifact.DeleteOption) error {
+	return artifact.ErrNotFound
 }
-func (e *errArtifactService) DeleteArtifact(
-	ctx context.Context, sessionInfo artifact.SessionInfo,
-	filename string,
-) error {
-	return nil
-}
-func (e *errArtifactService) ListVersions(
-	ctx context.Context, sessionInfo artifact.SessionInfo,
-	filename string,
-) ([]int, error) {
-	return nil, nil
+
+func (e *errArtifactService) Versions(ctx context.Context, key artifact.Key) ([]artifact.VersionID, error) {
+	return nil, artifact.ErrNotFound
 }
 
 func TestRunTool_SaveAsArtifacts_SaveError(t *testing.T) {
@@ -2138,7 +2120,7 @@ func TestMergeManifestArtifactRefs_Appends(t *testing.T) {
 		Files: []codeexecutor.FileRef{{
 			Name:     "out/a.txt",
 			SavedAs:  "prefix-out/a.txt",
-			Version:  2,
+			Version:  artifact.VersionID("2"),
 			MIMEType: "text/plain",
 		}},
 	}
@@ -2146,7 +2128,7 @@ func TestMergeManifestArtifactRefs_Appends(t *testing.T) {
 	mergeManifestArtifactRefs(mf, out)
 	require.Len(t, out.ArtifactFiles, 1)
 	require.Equal(t, "prefix-out/a.txt", out.ArtifactFiles[0].Name)
-	require.Equal(t, 2, out.ArtifactFiles[0].Version)
+	require.Equal(t, artifact.VersionID("2"), out.ArtifactFiles[0].Version)
 }
 
 // Test that workspace persists across calls within the same session,
