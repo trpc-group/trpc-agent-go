@@ -518,7 +518,15 @@ arXiv:2504.19413)。所有系统均使用 GPT-4o-mini。为跨系统可比性，
    注入 top-30 检索结果（1.0 call/QA），在多跳问题中能把更多相关片段
    同时送入上下文，提升了跨片段推理能力。trpc-agent-go 采用 Agent
    工具调用模式（retrieve + answer, 2.0 calls/QA），在多跳场景中
-   单次检索覆盖不足。这是已识别的改进方向（见第 7 点）。
+   单次检索覆盖不足。这是已识别的改进方向（见第 6 点）。
+
+   **为什么 AutoGen 预注入记忆反而 token 更少：** AutoGen 的单次调用
+   架构（1.0 call/QA）只需发送一次 system prompt + 检索结果 + 问题。
+   trpc-agent-go 的工具调用模式（2.0 calls/QA）在第二次调用时需要
+   重复发送完整的 system prompt、tool definitions 和消息历史，额外
+   增加约 286 tokens/QA。代价换来的是灵活性：工具调用模式支持动态
+   检索策略、多轮搜索、运行时可配后端——这些在固定预注入管线中无法
+   实现。
 
    **trpc-agent-go 的核心优势：**
    - **Token 效率极高：** F1/1M Tokens 达 182.6，是 Agno 的 21 倍、

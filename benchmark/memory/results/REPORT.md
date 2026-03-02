@@ -562,6 +562,16 @@ it).
    multi-hop questions. This is an identified improvement area
    (see point 6).
 
+   **Why AutoGen uses fewer tokens despite pre-injecting memories:**
+   AutoGen's single-pass architecture (1.0 call/QA) sends the system
+   prompt, retrieved memories, and question only once. trpc-agent-go's
+   tool-call pattern (2.0 calls/QA) must re-send the full system
+   prompt, tool definitions, and message history on the second call,
+   adding ~286 tokens/QA of overhead. The trade-off is flexibility:
+   the tool-call pattern allows dynamic retrieval strategies, multiple
+   search passes, and runtime-configurable backends — capabilities
+   unavailable in a fixed pre-injection pipeline.
+
    **trpc-agent-go's core strengths:**
    - **Extreme token efficiency:** F1/1M Tokens of 182.6 is 21x
      Agno's and 40x ADK's. The entire 1,986-QA evaluation costs
