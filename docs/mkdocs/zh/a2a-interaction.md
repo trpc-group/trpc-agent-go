@@ -526,7 +526,7 @@ data: {"kind":"artifact-update","taskId":"task-003","contextId":"ctx-001","artif
 分布式追踪通过 HTTP Header 传播，遵循 [W3C Trace Context](https://www.w3.org/TR/trace-context/) 标准：
 
 - **Client 端**：通过 OpenTelemetry 的 `TextMapPropagator` 自动将 `traceparent` header 注入到 HTTP 请求中
-- **Server 端**：从 HTTP 请求的 `traceparent` header 中提取 trace context，注入到 `context.Context` 中，后续全链路可用
+- **Server 端**：自动从 HTTP 请求的 `traceparent` header 中提取 trace context，注入到 `context.Context` 中，后续全链路可用
 
 ### 应用层追踪字段
 

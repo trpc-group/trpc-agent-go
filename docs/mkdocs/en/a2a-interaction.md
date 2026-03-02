@@ -533,7 +533,7 @@ data: {"kind":"artifact-update","taskId":"task-003","contextId":"ctx-001","artif
 Distributed tracing is propagated through HTTP Headers, following the [W3C Trace Context](https://www.w3.org/TR/trace-context/) standard:
 
 - **Client side**: Automatically injects the `traceparent` header into HTTP requests via OpenTelemetry's `TextMapPropagator`
-- **Server side**: Extracts trace context from the `traceparent` HTTP request header and injects it into `context.Context`, making it available throughout the entire call chain
+- **Server side**: Automatically extracts trace context from the `traceparent` HTTP request header and injects it into `context.Context`, making it available throughout the entire call chain
 
 ### Application-Layer Tracing Fields
 
