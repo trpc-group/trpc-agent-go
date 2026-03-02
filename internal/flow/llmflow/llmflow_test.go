@@ -1385,6 +1385,84 @@ func TestRun_IntraRunSummary_TriggersBetweenIterations(t *testing.T) {
 	require.True(t, intraRun)
 }
 
+// errSessionService wraps a real session.Service but forces
+// CreateSessionSummary to return an error for testing the
+// error-log branch in maybeIntraRunSummary.
+type errSessionService struct {
+	session.Service
+}
+
+func (e *errSessionService) CreateSessionSummary(
+	_ context.Context,
+	_ *session.Session,
+	_ string,
+	_ bool,
+) error {
+	return errors.New("forced summary error")
+}
+
+func TestMaybeIntraRunSummary_GuardClauses(t *testing.T) {
+	f := &Flow{intraRunSummary: true}
+	ctx := context.Background()
+
+	// nil invocation — should not panic.
+	f.maybeIntraRunSummary(ctx, nil)
+
+	// Non-nil invocation with nil Session.
+	inv := agent.NewInvocation()
+	inv.Session = nil
+	f.maybeIntraRunSummary(ctx, inv)
+
+	// Non-nil invocation with session but nil SessionService.
+	inv.Session = &session.Session{}
+	inv.SessionService = nil
+	f.maybeIntraRunSummary(ctx, inv)
+
+	// intraRunSummary disabled — should skip even with full
+	// invocation.
+	fOff := &Flow{intraRunSummary: false}
+	inv.SessionService = inmemory.NewSessionService()
+	t.Cleanup(func() {
+		_ = inv.SessionService.Close()
+	})
+	fOff.maybeIntraRunSummary(ctx, inv)
+}
+
+func TestMaybeIntraRunSummary_ErrorBranch(t *testing.T) {
+	f := &Flow{intraRunSummary: true}
+	ctx := context.Background()
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{}),
+		agent.WithInvocationSessionService(
+			&errSessionService{},
+		),
+		agent.WithInvocationEventFilterKey("branch/err"),
+	)
+
+	// Should not panic; just logs the error internally.
+	f.maybeIntraRunSummary(ctx, inv)
+}
+
+func TestRun_IntraRunSummary_NilInvocation(t *testing.T) {
+	// When invocation is nil and intraRunSummary is true,
+	// the SetState guard should prevent a nil-pointer panic.
+	llmFlow := New(
+		nil,
+		nil,
+		Options{IntraRunSummary: true},
+	)
+	eventCh, err := llmFlow.Run(
+		context.Background(), nil,
+	)
+	require.NoError(t, err)
+
+	// Drain events; the flow should exit quickly since there is
+	// no model to call.
+	for range eventCh {
+	}
+}
+
 func TestWaitEventTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
