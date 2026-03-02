@@ -569,6 +569,11 @@ agent := llmagent.New(
     执行黑名单中的命令名
 - 代码侧也可通过 `llmagent.WithSkillRunDeniedCommands(...)` 配置。
 
+可选行为（强制保存到制品）：
+- 代码侧可配置强制让 `skill_run` 尽量把收集到的输出保存到制品服务，
+  即便模型未显式设置 `save_as_artifacts` / `outputs.save`：
+  - `llmagent.WithSkillRunForceSaveArtifacts(true)`
+
 输出：
 - `stdout`、`stderr`、`exit_code`、`timed_out`、`duration_ms`
 - `primary_output`（可选）：包含 `name`、`ref`、`content`、`mime_type`、

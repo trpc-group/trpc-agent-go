@@ -590,6 +590,12 @@ Optional safety restriction (denylist):
 - You can also configure this in code via
   `llmagent.WithSkillRunDeniedCommands(...)`.
 
+Optional behavior (force artifact persistence):
+- In code, you can force `skill_run` to persist collected outputs as
+  artifacts (best effort) even if the model omits `save_as_artifacts`
+  / `outputs.save`:
+  - `llmagent.WithSkillRunForceSaveArtifacts(true)`
+
 Output:
 - `stdout`, `stderr`, `exit_code`, `timed_out`, `duration_ms`
 - `primary_output` (optional) with `name`, `ref`, `content`, `mime_type`,

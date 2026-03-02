@@ -43,6 +43,8 @@ type RunTool struct {
 
 	allowedCmds map[string]struct{}
 	deniedCmds  map[string]struct{}
+
+	forceSaveArtifacts bool
 }
 
 // NewRunTool creates a new RunTool.
@@ -109,6 +111,18 @@ func WithAllowedCommands(cmds ...string) func(*RunTool) {
 func WithDeniedCommands(cmds ...string) func(*RunTool) {
 	return func(t *RunTool) {
 		t.setDeniedCommands(cmds)
+	}
+}
+
+// WithForceSaveArtifacts forces skill_run to persist collected outputs
+// via the artifact service when possible.
+//
+// It applies to both:
+//   - legacy output_files + save_as_artifacts
+//   - declarative outputs.save
+func WithForceSaveArtifacts(enable bool) func(*RunTool) {
+	return func(t *RunTool) {
+		t.forceSaveArtifacts = enable
 	}
 }
 
@@ -318,6 +332,22 @@ func (t *RunTool) Call(
 	if err != nil {
 		return nil, err
 	}
+	forceSave := t.forceSaveArtifacts
+	if forceSave && len(in.OutputFiles) > 0 {
+		in.SaveArtifacts = true
+	}
+	if forceSave && in.Outputs != nil && len(in.OutputFiles) == 0 {
+		in.Outputs.Save = true
+	}
+	saveRequested := (in.SaveArtifacts && len(in.OutputFiles) > 0) ||
+		(in.Outputs != nil && in.Outputs.Save)
+	var outputsSaveSkipReason string
+	if in.Outputs != nil && in.Outputs.Save {
+		outputsSaveSkipReason = artifactSaveSkipReason(ctx)
+		if outputsSaveSkipReason != "" {
+			in.Outputs.Save = false
+		}
+	}
 	root, err := t.repo.Path(in.Skill)
 	if err != nil {
 		return nil, err
@@ -356,17 +386,19 @@ func (t *RunTool) Call(
 	trimTruncatedUTF8TextFiles(files)
 	out := buildRunOutput(rr, files)
 	mergeAutoPrimaryOutput(autoFiles, &out)
-	if len(files) > 0 && !in.SaveArtifacts {
-		out.Warnings = append(out.Warnings,
-			warnOutputFilesWorkspaceOnly)
-	}
+	appendOutputsSaveWarning(&out, outputsSaveSkipReason)
+	saveArtifacts := in.SaveArtifacts && len(in.OutputFiles) > 0
 	if err := t.attachArtifactsIfRequested(
-		ctx, &out, files, in.ArtifactPrefix, in.SaveArtifacts,
+		ctx, &out, files, in.ArtifactPrefix, saveArtifacts,
 		in.OmitInline,
 	); err != nil {
 		return nil, err
 	}
 	mergeManifestArtifactRefs(manifest, &out)
+	if len(out.OutputFiles) > 0 && !saveRequested {
+		out.Warnings = append(out.Warnings,
+			warnOutputFilesWorkspaceOnly)
+	}
 	applyOmitInlineContent(ctx, &out, in.OmitInline)
 	toolcache.StoreSkillRunOutputFilesFromContext(ctx, files)
 	return out, nil
@@ -1335,6 +1367,9 @@ func (t *RunTool) attachArtifactsIfRequested(
 const warnSaveArtifactsSkippedTmpl = "save_as_artifacts requested but " +
 	"%s; outputs are not persisted"
 
+const warnOutputsSaveSkippedTmpl = "outputs.save requested but " +
+	"%s; outputs are not persisted"
+
 const warnOutputFilesWorkspaceOnly = "output_files are workspace-" +
 	"relative; prefer output_files content; when you need a " +
 	"stable reference, use output_files[*].ref (workspace://...)"
@@ -1371,6 +1406,16 @@ func appendWarning(out *runOutput, reason string) {
 	out.Warnings = append(
 		out.Warnings,
 		fmt.Sprintf(warnSaveArtifactsSkippedTmpl, reason),
+	)
+}
+
+func appendOutputsSaveWarning(out *runOutput, reason string) {
+	if out == nil || reason == "" {
+		return
+	}
+	out.Warnings = append(
+		out.Warnings,
+		fmt.Sprintf(warnOutputsSaveSkippedTmpl, reason),
 	)
 }
 
