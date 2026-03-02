@@ -3360,6 +3360,10 @@ option：</p>
   - 启用后同样会拒绝 Shell 语法（仅允许“单条命令”），并拒绝
     执行黑名单中的命令名
 - 代码侧也可通过 <code>llmagent.WithSkillRunDeniedCommands(...)</code> 配置。</p>
+<p>可选行为（强制保存到制品）：
+- 代码侧可配置强制让 <code>skill_run</code> 尽量把收集到的输出保存到制品服务，
+  即便模型未显式设置 <code>save_as_artifacts</code> / <code>outputs.save</code>：
+  - <code>llmagent.WithSkillRunForceSaveArtifacts(true)</code></p>
 <p>输出：
 - <code>stdout</code>、<code>stderr</code>、<code>exit_code</code>、<code>timed_out</code>、<code>duration_ms</code>
 - <code>staged_inputs</code>（可选）：本次执行前从对话自动 stage 进
@@ -3595,7 +3599,7 @@ option：</p>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年3月2日 07:46:10 UTC">2026-03-02 07:46:10</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年3月2日 10:59:29 UTC">2026-03-02 10:59:29</span>
   </span>
 
     
