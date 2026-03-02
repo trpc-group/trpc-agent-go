@@ -120,6 +120,7 @@ func NewService(name, bucketURL string, opts ...Option) (*Service, error) {
 	}, nil
 }
 
+// Put stores artifact content and returns its descriptor.
 func (s *Service) Put(ctx context.Context, key artifact.Key, r io.Reader, opts ...artifact.PutOption) (artifact.Descriptor, error) {
 	if err := validateKey(key); err != nil {
 		return artifact.Descriptor{}, err
@@ -152,6 +153,7 @@ func (s *Service) Put(ctx context.Context, key artifact.Key, r io.Reader, opts .
 	return artifact.Descriptor{Key: key, Version: v, MimeType: mt, Size: int64(len(data))}, nil
 }
 
+// Head resolves an artifact version to its metadata and an optional URL.
 func (s *Service) Head(ctx context.Context, key artifact.Key, version *artifact.VersionID) (artifact.Descriptor, error) {
 	if err := validateKey(key); err != nil {
 		return artifact.Descriptor{}, err
@@ -173,6 +175,7 @@ func (s *Service) Head(ctx context.Context, key artifact.Key, version *artifact.
 	return desc, nil
 }
 
+// Open returns a streaming reader for the artifact content and its descriptor.
 func (s *Service) Open(ctx context.Context, key artifact.Key, version *artifact.VersionID) (io.ReadCloser, artifact.Descriptor, error) {
 	if err := validateKey(key); err != nil {
 		return nil, artifact.Descriptor{}, err
@@ -196,6 +199,7 @@ func (s *Service) Open(ctx context.Context, key artifact.Key, version *artifact.
 
 // LoadArtifactBytes is replaced by artifact.ReadAll helper.
 
+// List returns the latest version descriptor for each artifact name under the given prefix.
 func (s *Service) List(ctx context.Context, prefix artifact.KeyPrefix, opts ...artifact.ListOption) ([]artifact.Descriptor, string, error) {
 	if err := validatePrefix(prefix); err != nil {
 		return nil, "", err
@@ -276,6 +280,7 @@ func (s *Service) List(ctx context.Context, prefix artifact.KeyPrefix, opts ...a
 	return out, next, nil
 }
 
+// Delete removes artifact content according to the provided delete options.
 func (s *Service) Delete(ctx context.Context, key artifact.Key, opts ...artifact.DeleteOption) error {
 	if err := validateKey(key); err != nil {
 		return err
@@ -334,6 +339,7 @@ func (s *Service) Delete(ctx context.Context, key artifact.Key, opts ...artifact
 	}
 }
 
+// Versions lists all versions available for the provided artifact key.
 func (s *Service) Versions(ctx context.Context, key artifact.Key) ([]artifact.VersionID, error) {
 	if err := validateKey(key); err != nil {
 		return nil, err

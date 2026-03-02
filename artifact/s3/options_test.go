@@ -10,7 +10,9 @@ package s3
 
 import (
 	"context"
+	"io"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -253,6 +255,18 @@ func (m *mockTestClient) PutObject(ctx context.Context, key string, data []byte,
 
 func (m *mockTestClient) GetObject(ctx context.Context, key string) ([]byte, string, error) {
 	return nil, "", nil
+}
+
+func (m *mockTestClient) OpenObject(ctx context.Context, key string) (io.ReadCloser, string, int64, error) {
+	return nil, "", 0, nil
+}
+
+func (m *mockTestClient) HeadObject(ctx context.Context, key string) (string, int64, error) {
+	return "", 0, nil
+}
+
+func (m *mockTestClient) PresignGetObject(ctx context.Context, key string, expires time.Duration) (string, error) {
+	return "", nil
 }
 
 func (m *mockTestClient) ListObjects(ctx context.Context, prefix string) ([]string, error) {

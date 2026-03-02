@@ -48,6 +48,7 @@ func NewService() *Service {
 
 var _ artifact.Service = (*Service)(nil)
 
+// Put stores artifact content and returns its descriptor.
 func (s *Service) Put(
 	ctx context.Context,
 	key artifact.Key,
@@ -91,6 +92,7 @@ func (s *Service) Put(
 	}, nil
 }
 
+// Head resolves an artifact version to its descriptor.
 func (s *Service) Head(
 	ctx context.Context,
 	key artifact.Key,
@@ -121,6 +123,7 @@ func (s *Service) Head(
 	}, nil
 }
 
+// Open returns a streaming reader for the artifact content and its descriptor.
 func (s *Service) Open(
 	ctx context.Context,
 	key artifact.Key,
@@ -152,6 +155,7 @@ func (s *Service) Open(
 	return io.NopCloser(bytes.NewReader(st.data)), desc, nil
 }
 
+// List returns the latest version descriptor for each artifact name under the given prefix.
 func (s *Service) List(
 	ctx context.Context,
 	prefix artifact.KeyPrefix,
@@ -240,6 +244,7 @@ func (s *Service) List(
 	return out, next, nil
 }
 
+// Delete removes artifact content according to the provided delete options.
 func (s *Service) Delete(ctx context.Context, key artifact.Key, opts ...artifact.DeleteOption) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
@@ -305,6 +310,7 @@ func deleteOneVersionLocked(m map[string][]stored, path string, ver artifact.Ver
 	return nil
 }
 
+// Versions lists all versions available for the provided artifact key.
 func (s *Service) Versions(ctx context.Context, key artifact.Key) ([]artifact.VersionID, error) {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()

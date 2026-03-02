@@ -165,7 +165,7 @@ func (c *client) OpenObject(ctx context.Context, key string) (io.ReadCloser, str
 	if err != nil {
 		return nil, "", 0, wrapError(err)
 	}
-	return resp.Body, aws.ToString(resp.ContentType), resp.ContentLength, nil
+	return resp.Body, aws.ToString(resp.ContentType), aws.ToInt64(resp.ContentLength), nil
 }
 
 // HeadObject returns metadata for an object without downloading it.
@@ -178,7 +178,7 @@ func (c *client) HeadObject(ctx context.Context, key string) (string, int64, err
 	if err != nil {
 		return "", 0, wrapError(err)
 	}
-	return aws.ToString(resp.ContentType), resp.ContentLength, nil
+	return aws.ToString(resp.ContentType), aws.ToInt64(resp.ContentLength), nil
 }
 
 func (c *client) PresignGetObject(ctx context.Context, key string, expires time.Duration) (string, error) {

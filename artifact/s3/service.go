@@ -43,9 +43,9 @@ var _ artifact.Service = (*Service)(nil)
 //   - For regular session-scoped files:
 //     {app_name}/{user_id}/{session_id}/{filename}/{version}
 type Service struct {
-	client     s3storage.Client
-	ownsClient bool // true if we created the client, false if provided via WithClient
-	logger     log.Logger
+	client         s3storage.Client
+	ownsClient     bool // true if we created the client, false if provided via WithClient
+	logger         log.Logger
 	presignExpires time.Duration
 }
 
@@ -53,7 +53,7 @@ type Service struct {
 // When using WithClient, the bucket parameter is ignored as the client already has one configured.
 func NewService(ctx context.Context, bucket string, opts ...Option) (*Service, error) {
 	o := &options{
-		bucket: bucket,
+		bucket:         bucket,
 		presignExpires: 15 * time.Minute,
 	}
 	for _, opt := range opts {
@@ -77,9 +77,9 @@ func NewService(ctx context.Context, bucket string, opts ...Option) (*Service, e
 	}
 
 	return &Service{
-		client:     client,
-		ownsClient: ownsClient,
-		logger:     o.logger,
+		client:         client,
+		ownsClient:     ownsClient,
+		logger:         o.logger,
 		presignExpires: o.presignExpires,
 	}, nil
 }
@@ -93,6 +93,7 @@ func (s *Service) Close() error {
 	return s.client.Close()
 }
 
+// Put stores artifact content and returns its descriptor.
 func (s *Service) Put(
 	ctx context.Context,
 	key artifact.Key,
@@ -132,6 +133,7 @@ func (s *Service) Put(
 	}, nil
 }
 
+// Head resolves an artifact version to its metadata and an optional URL.
 func (s *Service) Head(
 	ctx context.Context,
 	key artifact.Key,
@@ -164,6 +166,7 @@ func (s *Service) Head(
 	return desc, nil
 }
 
+// Open returns a streaming reader for the artifact content and its descriptor.
 func (s *Service) Open(
 	ctx context.Context,
 	key artifact.Key,
@@ -196,6 +199,7 @@ func (s *Service) Open(
 	return body, desc, nil
 }
 
+// List returns the latest version descriptor for each artifact name under the given prefix.
 func (s *Service) List(
 	ctx context.Context,
 	prefix artifact.KeyPrefix,
@@ -297,6 +301,7 @@ func (s *Service) List(
 	return out, next, nil
 }
 
+// Delete removes artifact content according to the provided delete options.
 func (s *Service) Delete(ctx context.Context, key artifact.Key, opts ...artifact.DeleteOption) error {
 	if err := validateKey(key); err != nil {
 		return err
@@ -359,6 +364,7 @@ func (s *Service) Delete(ctx context.Context, key artifact.Key, opts ...artifact
 	}
 }
 
+// Versions lists all versions available for the provided artifact key.
 func (s *Service) Versions(ctx context.Context, key artifact.Key) ([]artifact.VersionID, error) {
 	if err := validateKey(key); err != nil {
 		return nil, err
