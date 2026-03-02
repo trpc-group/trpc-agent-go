@@ -3,11 +3,18 @@
 This example demonstrates summary generation during a single run where the
 assistant performs multiple tool calls in the same turn.
 
-It is useful for validating:
+It validates two summary strategies:
 
-- Summary jobs are triggered by tool-result events during ReAct loops.
-- The model can continue the same turn after summary processing starts.
-- The user message is still present in later in-turn model requests.
+- **Async summary** (default): A background worker generates summaries after
+  tool-result events. The summary appears in later LLM requests once the async
+  job completes.
+- **Intra-run (synchronous) summary** (`-intra-run-summary`): A synchronous
+  summary is generated between each LLM loop iteration. The summary is
+  guaranteed to be present from the second LLM request onward.
+
+When intra-run summary is enabled, the framework automatically skips redundant
+async summary enqueue during the same run, so only one summarization path is
+active at a time.
 
 ## Prerequisites
 
@@ -21,10 +28,18 @@ Environment variables:
 
 ## Run
 
+Async summary (default):
+
 ```bash
 cd examples/summary/toolcalls
 export OPENAI_API_KEY="your-api-key"
-go run main.go -model deepseek-chat -steps 5
+go run . -model deepseek-chat -steps 5
+```
+
+Intra-run synchronous summary:
+
+```bash
+go run . -model deepseek-chat -steps 5 -intra-run-summary
 ```
 
 Optional flags:
@@ -33,6 +48,8 @@ Optional flags:
 - `-steps`: Number of required sequential tool calls in one run.
 - `-query`: User message for the run.
 - `-wait-sec`: Max wait time for async summary generation.
+- `-intra-run-summary`: Enable synchronous summary between LLM iterations
+  (automatically suppresses async summary enqueue).
 
 ## What to Observe
 
@@ -41,32 +58,42 @@ Use this checklist to validate behavior:
 1. **Same-turn proof.**
    - `Request IDs observed` contains exactly one ID.
    - `Invocation IDs observed` contains exactly one ID.
-   - The output includes `✅ Turn check: single RequestID observed; this is one turn.`
+   - The output includes `✅ Turn check: single RequestID observed; this is
+     one turn.`
 
 2. **Mid-turn summary injection.**
    - `BeforeModel request #1` usually has only system + user messages.
    - A later `BeforeModel` request contains a second system message with
      `<summary_of_previous_interactions> ... </summary_of_previous_interactions>`.
 
-3. **User message retention after summary.**
+3. **Async vs intra-run timing.**
+   - Without `-intra-run-summary`: the summary system message may not appear
+     until request #3 or later, depending on when the async worker finishes.
+   - With `-intra-run-summary`: the summary system message appears from
+     request #2 onward, because it is generated synchronously before each LLM
+     call.
+
+4. **User message retention after summary.**
    - In requests that already include the summary system message, the same
      original user message is still present in the message list.
 
-4. **Context compaction after summary.**
+5. **Context compaction after summary.**
    - After summary appears, older tool interactions are represented by the
      summary text instead of being sent as full raw history.
    - Only recent assistant/tool interactions are kept as raw messages.
 
-5. **No orphan tool context.**
+6. **No orphan tool context.**
    - Tool messages shown in `BeforeModel` are accompanied by matching recent
      assistant progression text (for example, "Now I'll proceed to step N").
    - There should be no isolated tool result that lacks nearby assistant
      context for the current step.
 
-6. **ReAct loop completion.**
+7. **ReAct loop completion.**
    - Tool call count reaches the configured `-steps` value.
    - The final answer is produced after the last required tool call.
 
-7. **Asynchronous summary note.**
-   - The final printed `📝 Summary` is fetched asynchronously and may lag one
-     update behind the very latest in-turn state, depending on timing.
+8. **Post-run summary.**
+   - Without `-intra-run-summary`: the final printed `📝 Summary` is fetched
+     asynchronously and may lag behind the latest in-turn state.
+   - With `-intra-run-summary`: the summary is already up-to-date at the end
+     of the run; the async wait should find it immediately.

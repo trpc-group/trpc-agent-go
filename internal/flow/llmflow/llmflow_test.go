@@ -1376,6 +1376,13 @@ func TestRun_IntraRunSummary_TriggersBetweenIterations(t *testing.T) {
 	require.Equal(t, 2, modelStub.Calls())
 	require.Equal(t, 1, calls)
 	require.Equal(t, []string{"branch/agent-intra-run"}, filterKeys)
+
+	// Verify the state key is set so the runner can skip async enqueue.
+	intraRun, ok := agent.GetStateValue[bool](
+		inv, agent.IntraRunSummaryStateKey,
+	)
+	require.True(t, ok, "IntraRunSummaryStateKey should be set")
+	require.True(t, intraRun)
 }
 
 func TestWaitEventTimeout(t *testing.T) {

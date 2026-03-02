@@ -92,6 +92,14 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 		defer close(eventChan)
 		defer recoverFlowRunPanic(ctx, invocation, eventChan)
 
+		// Mark the invocation so the runner skips redundant async
+		// summary enqueue when intra-run summary handles it.
+		if f.intraRunSummary && invocation != nil {
+			invocation.SetState(
+				agent.IntraRunSummaryStateKey, true,
+			)
+		}
+
 		// Optionally resume from pending tool calls before starting a new
 		// LLM cycle. This covers scenarios where the previous run stopped
 		// after an assistant tool_call response but before tools executed.

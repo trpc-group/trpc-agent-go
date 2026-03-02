@@ -759,7 +759,7 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 	r.recordEmittedAssistantResponseID(loop, agentEvent)
 
 	// Append qualifying events to session and trigger summarization.
-	r.handleEventPersistence(ctx, loop.sess, agentEvent)
+	r.handleEventPersistence(ctx, loop.invocation, loop.sess, agentEvent)
 
 	// Capture graph-level completion snapshot for final event.
 	if isGraphCompletionEvent(agentEvent) {
@@ -913,6 +913,7 @@ func (r *runner) handleFlushRequest(ctx context.Context, loop *eventLoopContext,
 // asynchronous summarization.
 func (r *runner) handleEventPersistence(
 	ctx context.Context,
+	invocation *agent.Invocation,
 	sess *session.Session,
 	agentEvent *event.Event,
 ) {
@@ -956,6 +957,18 @@ func (r *runner) handleEventPersistence(
 	// Skip if the event explicitly opts out of summarization.
 	if agentEvent.Actions != nil &&
 		agentEvent.Actions.SkipSummarization {
+		return
+	}
+
+	// When intra-run (synchronous) summary is active for this
+	// invocation, the flow already summarises between LLM
+	// iterations. Skip redundant async enqueue for intermediate
+	// tool-result events but still allow the final assistant
+	// response to trigger an async job so the session summary
+	// is up-to-date at turn end.
+	if intraRun, ok := agent.GetStateValue[bool](
+		invocation, agent.IntraRunSummaryStateKey,
+	); ok && intraRun && agentEvent.IsToolResultResponse() {
 		return
 	}
 
