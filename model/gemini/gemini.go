@@ -408,6 +408,12 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 			maxOutputTokens = imodel.CalculateMaxOutputTokens(contextWindow, usedTokens)
 		}
 		if maxOutputTokens > 0 {
+			// Cap to model's known max output tokens if applicable.
+			// Gemini models have very large context windows (1-2M) but
+			// much smaller max output token limits (8K-65K).
+			if modelCap := imodel.ResolveMaxOutputTokens(m.name); modelCap > 0 && maxOutputTokens > modelCap {
+				maxOutputTokens = modelCap
+			}
 			request.GenerationConfig.MaxTokens = &maxOutputTokens
 			log.DebugfContext(
 				ctx,

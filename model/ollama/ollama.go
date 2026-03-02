@@ -262,6 +262,10 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 			maxOutputTokens = imodel.CalculateMaxOutputTokens(m.contextWindow, usedTokens)
 		}
 		if maxOutputTokens > 0 {
+			// Cap to model's known max output tokens if applicable.
+			if modelCap := imodel.ResolveMaxOutputTokens(m.name); modelCap > 0 && maxOutputTokens > modelCap {
+				maxOutputTokens = modelCap
+			}
 			request.GenerationConfig.MaxTokens = &maxOutputTokens
 			log.DebugfContext(
 				ctx,
