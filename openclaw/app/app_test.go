@@ -68,6 +68,23 @@ func TestNewRuntime_BuildsGatewayHandler(t *testing.T) {
 	require.Empty(t, rt.Channels)
 }
 
+func TestNewRuntime_WithRalphLoop_Smoke(t *testing.T) {
+	t.Parallel()
+
+	rt, err := NewRuntime(context.Background(), []string{
+		"-mode", modeMock,
+		"-state-dir", t.TempDir(),
+		"-skills-root", t.TempDir(),
+		"-agent-ralph-loop",
+		"-agent-ralph-completion-promise", "done",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = rt.Close()
+	})
+	require.NotNil(t, rt.Gateway.Handler)
+}
+
 func TestNewRuntime_ClaudeCode_Smoke(t *testing.T) {
 	t.Parallel()
 
@@ -633,6 +650,8 @@ func TestRun_Smoke(t *testing.T) {
 		"-skills-root", t.TempDir(),
 		"-skills-extra-dirs", t.TempDir() + "," + t.TempDir(),
 		"-skills-debug",
+		"-agent-ralph-loop",
+		"-agent-ralph-completion-promise", "done",
 		"-allow-users", "u1,u2",
 		"-require-mention",
 		"-mention", "@bot",
@@ -842,6 +861,26 @@ func TestValidateAgentRunOptions(t *testing.T) {
 	}
 }
 
+func TestRalphLoopConfigFromRunOptions_NoStopConditionFails(t *testing.T) {
+	t.Parallel()
+
+	_, err := ralphLoopConfigFromRunOptions(runOptions{
+		RalphLoopEnabled: true,
+	})
+	require.Error(t, err)
+}
+
+func TestRalphLoopConfigFromRunOptions_NegativeIterationsFails(t *testing.T) {
+	t.Parallel()
+
+	_, err := ralphLoopConfigFromRunOptions(runOptions{
+		RalphLoopEnabled:       true,
+		RalphLoopMaxIterations: -1,
+		RalphLoopVerifyCommand: "echo ok",
+	})
+	require.Error(t, err)
+}
+
 func TestRalphLoopConfigFromRunOptions_ParsesVerifyEnv(t *testing.T) {
 	t.Parallel()
 
@@ -869,6 +908,13 @@ func TestRalphLoopConfigFromRunOptions_NegativeTimeoutFails(t *testing.T) {
 		RalphLoopVerifyCommand: "echo ok",
 		RalphLoopVerifyTimeout: -1 * time.Second,
 	})
+	require.Error(t, err)
+}
+
+func TestParseKVOverrides_EmptyKeyFails(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseKVOverrides([]string{"=B"})
 	require.Error(t, err)
 }
 
