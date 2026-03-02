@@ -343,7 +343,7 @@ func main() {
 		llmagent.WithDescription("An AI assistant demonstrating prompt caching with tools"),
 		llmagent.WithTools(tools),
 		llmagent.WithGenerationConfig(model.GenerationConfig{
-			Stream: false, // Disable streaming to ensure usage info is available
+			Stream: true,
 		}),
 	)
 
