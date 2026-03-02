@@ -1209,6 +1209,21 @@ func (m *Model) collectExtraFieldsFromChunk(
 	}
 }
 
+func applyOpenAISDKTokenDetailsAccumulationFix(
+	acc *openai.ChatCompletionAccumulator,
+	chunk openai.ChatCompletionChunk,
+) {
+	// Temporary workaround for token details accumulation.
+	// See https://github.com/trpc-group/trpc-agent-go/issues/1270.
+	// Remove this after upgrading openai-go to v3.10.0.
+	acc.Usage.CompletionTokensDetails.AcceptedPredictionTokens += chunk.Usage.CompletionTokensDetails.AcceptedPredictionTokens
+	acc.Usage.CompletionTokensDetails.AudioTokens += chunk.Usage.CompletionTokensDetails.AudioTokens
+	acc.Usage.CompletionTokensDetails.ReasoningTokens += chunk.Usage.CompletionTokensDetails.ReasoningTokens
+	acc.Usage.CompletionTokensDetails.RejectedPredictionTokens += chunk.Usage.CompletionTokensDetails.RejectedPredictionTokens
+	acc.Usage.PromptTokensDetails.AudioTokens += chunk.Usage.PromptTokensDetails.AudioTokens
+	acc.Usage.PromptTokensDetails.CachedTokens += chunk.Usage.PromptTokensDetails.CachedTokens
+}
+
 // accumulateChunk accumulates the chunk into the accumulator and reasoning buffer.
 func (m *Model) accumulateChunk(
 	chunk openai.ChatCompletionChunk,
@@ -1222,7 +1237,10 @@ func (m *Model) accumulateChunk(
 		// avoid known panics when JSON.ToolCalls is marked present but the
 		// typed ToolCalls slice is empty, especially on finish_reason chunks.
 		sanitizedChunk := sanitizeChunkForAccumulator(chunk)
-		acc.AddChunk(sanitizedChunk)
+		if acc.AddChunk(sanitizedChunk) {
+			applyOpenAISDKTokenDetailsAccumulationFix(acc, chunk)
+		}
+
 		if m.accumulateChunkUsage != nil {
 			accUsage, chunkUsage := completionUsageToModelUsage(acc.Usage), completionUsageToModelUsage(chunk.Usage)
 			usage := inverseOpenAISDKAddChunkUsage(accUsage, chunkUsage)
