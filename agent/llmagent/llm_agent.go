@@ -259,6 +259,14 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 			skillsOpts,
 			processor.WithSkillLoadMode(options.SkillLoadMode),
 		)
+		if options.MaxLoadedSkills > 0 {
+			skillsOpts = append(
+				skillsOpts,
+				processor.WithMaxLoadedSkills(
+					options.MaxLoadedSkills,
+				),
+			)
+		}
 		if options.SkillsLoadedContentInToolResults {
 			skillsOpts = append(
 				skillsOpts,
@@ -505,6 +513,11 @@ func registerTools(options *Options) ([]tool.Tool, map[string]bool) {
 				toolskill.WithDeniedCommands(
 					options.skillRunDeniedCommands...,
 				),
+			)
+		}
+		if options.skillRunForceSaveArtifacts {
+			runOpts = append(runOpts,
+				toolskill.WithForceSaveArtifacts(true),
 			)
 		}
 		allTools = append(allTools, toolskill.NewRunTool(

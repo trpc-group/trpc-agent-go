@@ -44,25 +44,51 @@ func main() {
 			}
 		}()
 	}
-	keys, err := a.artifactService.ListArtifactKeys(context.Background(),
-		artifact.SessionInfo{AppName: a.appName, UserID: a.userID, SessionID: a.sessionID})
-	if err != nil {
-		log.Errorf("Failed to list artifact keys: %v", err)
+	ctx := context.Background()
+	prefix := artifact.KeyPrefix{
+		AppName:    a.appName,
+		UserID:     a.userID,
+		SessionID:  a.sessionID,
+		Scope:      artifact.ScopeSession,
+		NamePrefix: "",
+	}
+	var (
+		descs     []artifact.Descriptor
+		pageToken string
+	)
+	for {
+		items, next, err := a.artifactService.List(
+			ctx,
+			prefix,
+			artifact.WithListLimit(200),
+			artifact.WithListPageToken(pageToken),
+		)
+		if err != nil {
+			log.Errorf("Failed to list artifact keys: %v", err)
+			break
+		}
+		descs = append(descs, items...)
+		if next == "" {
+			break
+		}
+		pageToken = next
+	}
+	keys := make([]string, 0, len(descs))
+	for _, d := range descs {
+		keys = append(keys, d.Key.Name)
 	}
 	log.Infof("Found %d artifact keys: %v", len(keys), keys)
-	if len(keys) != 0 {
-		for _, key := range keys {
-			data, desc, err := a.artifactService.LoadArtifactBytes(context.Background(),
-				artifact.SessionInfo{AppName: a.appName, UserID: a.userID, SessionID: a.sessionID}, key, nil)
+	if len(descs) != 0 {
+		for _, d := range descs {
+			data, desc, err := artifact.ReadAll(ctx, a.artifactService, d.Key, &d.Version)
 			if err != nil {
 				log.Errorf("Failed to load artifact: %v", err)
 				continue
 			}
-			if desc == nil {
-				log.Infof("Artifact not found: %s", key)
-				continue
-			}
-			log.Infof("Loaded artifact MimeType: %s, Data: %s", desc.MimeType, data)
+			log.Infof(
+				"Loaded artifact %s@%s MimeType: %s, Data: %s",
+				desc.Key.Name, desc.Version, desc.MimeType, data,
+			)
 
 		}
 

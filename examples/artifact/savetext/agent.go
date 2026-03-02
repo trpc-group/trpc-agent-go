@@ -40,10 +40,8 @@ type logQueryOutput struct{}
 // logQuery is the function to log the query
 func logQuery(ctx context.Context, query logQueryInput) (logQueryOutput, error) {
 	a := &artifact.Artifact{
-		ArtifactDescriptor: artifact.ArtifactDescriptor{
-			MimeType: "text/plain",
-		},
-		Data: []byte(query.Query),
+		MimeType: "text/plain",
+		Data:     []byte(query.Query),
 	}
 	toolCtx, err := agent.NewToolContext(ctx)
 	if err != nil {

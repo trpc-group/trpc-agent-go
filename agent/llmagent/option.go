@@ -261,6 +261,15 @@ type Options struct {
 	// available in the system prompt.
 	SkillLoadMode string
 
+	// MaxLoadedSkills caps how many skills remain "loaded" in session
+	// state at the same time.
+	//
+	// When > 0, only the most-recently loaded skills are kept, and older
+	// loaded skills are offloaded (cleared) from session state.
+	//
+	// When <= 0, no cap is applied (default behavior).
+	MaxLoadedSkills int
+
 	// SkillsLoadedContentInToolResults controls where loaded skill bodies
 	// and selected docs are materialized.
 	//
@@ -286,9 +295,13 @@ type Options struct {
 	// skillRunAllowedCommands restricts skill_run to allowlisted commands.
 	skillRunAllowedCommands []string
 	// skillRunDeniedCommands rejects denylisted commands for skill_run.
-	skillRunDeniedCommands    []string
-	messageTimelineFilterMode string
-	messageBranchFilterMode   string
+	skillRunDeniedCommands []string
+
+	// skillRunForceSaveArtifacts forces skill_run to persist collected
+	// outputs via the artifact service when possible.
+	skillRunForceSaveArtifacts bool
+	messageTimelineFilterMode  string
+	messageBranchFilterMode    string
 
 	// ReasoningContentMode controls how reasoning_content is handled in
 	// multi-turn conversations. This is particularly important for DeepSeek
@@ -475,6 +488,16 @@ func WithSkillLoadMode(mode string) Option {
 	}
 }
 
+// WithMaxLoadedSkills caps how many skills remain "loaded" in session
+// state at the same time.
+//
+// When max <= 0, no cap is applied (default behavior).
+func WithMaxLoadedSkills(max int) Option {
+	return func(opts *Options) {
+		opts.MaxLoadedSkills = max
+	}
+}
+
 // WithSkillsLoadedContentInToolResults enables an alternative injection
 // mode where loaded skill bodies/docs are materialized into tool result
 // messages (skill_load / skill_select_docs) instead of being appended
@@ -531,6 +554,14 @@ func WithSkillRunDeniedCommands(cmds ...string) Option {
 		opts.skillRunDeniedCommands = append(
 			[]string(nil), cmds...,
 		)
+	}
+}
+
+// WithSkillRunForceSaveArtifacts forces skill_run to persist collected
+// outputs via the artifact service when possible.
+func WithSkillRunForceSaveArtifacts(enable bool) Option {
+	return func(opts *Options) {
+		opts.skillRunForceSaveArtifacts = enable
 	}
 }
 

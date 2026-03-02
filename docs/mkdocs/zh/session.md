@@ -16,10 +16,10 @@ Session 用于管理当前会话的上下文，隔离维度为 `<appName, userID
 - **会话摘要**：使用 LLM 自动压缩长对话历史，在保留关键上下文的同时显著降低 token 消耗
 - **事件限制**：控制每个会话存储的最大事件数量，防止内存溢出
 - **TTL 管理**：支持会话数据的自动过期清理
-- **多存储后端**：支持内存、Redis、PostgreSQL、MySQL 存储
+- **多存储后端**：支持内存、SQLite、Redis、PostgreSQL、MySQL、ClickHouse 存储
 - **并发安全**：内置读写锁保证并发访问安全
 - **自动管理**：集成 Runner 后自动处理会话创建、加载和更新
-- **软删除支持**：PostgreSQL/MySQL 支持软删除，数据可恢复
+- **软删除支持**：PostgreSQL/MySQL/SQLite 支持软删除，数据可恢复
 
 ## 快速开始
 
@@ -27,7 +27,7 @@ Session 用于管理当前会话的上下文，隔离维度为 `<appName, userID
 
 tRPC-Agent-Go 的会话管理通过 `runner.WithSessionService` 集成到 Runner 中，Runner 会自动处理会话的创建、加载、更新和持久化。
 
-**支持的存储后端：** 内存（Memory）、Redis、PostgreSQL、MySQL、ClickHouse
+**支持的存储后端：** 内存（Memory）、SQLite、Redis、PostgreSQL、MySQL、ClickHouse
 
 **默认行为：** 如果不配置 `runner.WithSessionService`，Runner 会默认使用内存存储（Memory），数据在进程重启后会丢失。
 
@@ -413,16 +413,18 @@ sessionService := inmemory.NewSessionService(
 | ---------- | -------------------------- | -------- |
 | 内存存储   | 定期扫描 + 访问时检查      | 是       |
 | Redis 存储 | Redis 原生 TTL             | 是       |
+| SQLite     | 定期扫描（软删除或硬删除） | 是       |
 | PostgreSQL | 定期扫描（软删除或硬删除） | 是       |
 | MySQL      | 定期扫描（软删除或硬删除） | 是       |
 
 ## 存储后端对比
 
-tRPC-Agent-Go 提供五种会话存储后端，满足不同场景需求：
+tRPC-Agent-Go 提供六种会话存储后端，满足不同场景需求：
 
 | 存储类型   | 适用场景           |
 | ---------- | ------------------ |
 | 内存存储   | 开发测试、小规模   |
+| SQLite     | 本地持久化、单机   |
 | Redis 存储 | 生产环境、分布式   |
 | PostgreSQL | 生产环境、复杂查询 |
 | MySQL      | 生产环境、复杂查询 |
@@ -496,6 +498,61 @@ sessionService := inmemory.NewSessionService(
     inmemory.WithSummaryJobTimeout(60*time.Second),
 )
 ```
+
+## SQLite 存储
+
+SQLite 是一种嵌入式数据库，数据保存在单个文件中，适合：
+
+- 本地开发和 Demo（不需要额外部署数据库）
+- 单机部署但希望进程重启后仍保留会话数据
+- 轻量级 CLI/小服务的持久化
+
+### 依赖与构建要求
+
+该后端使用 `github.com/mattn/go-sqlite3` 驱动，需要开启 CGO（需要 C 编译器）。
+
+### 基础配置示例
+
+```go
+import (
+    "database/sql"
+    "time"
+
+    _ "github.com/mattn/go-sqlite3"
+    sessionsqlite "trpc.group/trpc-go/trpc-agent-go/session/sqlite"
+)
+
+db, err := sql.Open("sqlite3", "file:sessions.db?_busy_timeout=5000")
+if err != nil {
+    // handle error
+}
+
+sessionService, err := sessionsqlite.NewService(
+    db,
+    sessionsqlite.WithSessionEventLimit(1000),
+    sessionsqlite.WithSessionTTL(30*time.Minute),
+    sessionsqlite.WithSoftDelete(true),
+)
+if err != nil {
+    // handle error
+}
+defer sessionService.Close()
+```
+
+**注意事项**：
+
+- `NewService` 接收 `*sql.DB`。Session Service 会在 `Close()` 时关闭该 DB，避免重复关闭。
+- 如果单机并发较高，可以考虑在 DSN 中开启 WAL（例如 `_journal_mode=WAL`）并设置 `_busy_timeout`。
+
+### 配置选项
+
+- TTL 与清理：`WithSessionTTL`、`WithAppStateTTL`、`WithUserStateTTL`、`WithCleanupInterval`
+- 保留策略：`WithSessionEventLimit`
+- 异步持久化：`WithEnableAsyncPersist`、`WithAsyncPersisterNum`
+- 软删除：`WithSoftDelete`（默认开启）
+- 摘要：`WithSummarizer`、`WithAsyncSummaryNum`、`WithSummaryQueueSize`、`WithSummaryJobTimeout`
+- DDL/命名：`WithSkipDBInit`、`WithTablePrefix`
+- Hooks：`WithAppendEventHook`、`WithGetSessionHook`
 
 ## Redis 存储
 
@@ -1248,7 +1305,7 @@ COMMENT 'User states table';
 - **AppendEventHook**：事件写入前的拦截/修改/终止。可用于内容安全、审计打标（如写入 `violation=<word>`），或直接阻断存储。关于 filterKey 的赋值请见下文“会话摘要 / FilterKey 与 AppendEventHook”。
 - **GetSessionHook**：会话读取后的拦截/修改/过滤。可用来剔除带特定标签的事件，或动态补充返回的 Session 状态。
 - **责任链执行**：Hook 通过 `next()` 形成链式调用，可提前返回以短路后续逻辑，错误会向上传递。
-- **跨后端一致**：内存、Redis、MySQL、PostgreSQL 实现已统一接入 Hook，构造服务时注入 Hook 切片即可。
+- **跨后端一致**：内存、SQLite、Redis、MySQL、PostgreSQL 实现已统一接入 Hook，构造服务时注入 Hook 切片即可。
 - **示例**：见 `examples/session/hook`（[代码](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/session/hook)）
 
 ### 直接使用 Session Service API

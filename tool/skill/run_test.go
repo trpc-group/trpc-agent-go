@@ -31,8 +31,10 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcache"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
@@ -47,6 +49,8 @@ const (
 	outAPng          = "out/a.png"
 	outBTxt          = "out/b.txt"
 	scriptsDir       = "scripts"
+	uploadNotesTxt   = "notes.txt"
+	uploadNotes2Txt  = "notes_2.txt"
 	contentHi        = "hi"
 	contentHello     = "hello"
 	contentMsg       = "msg"
@@ -720,6 +724,141 @@ func TestRunTool_SaveAsArtifacts_SessionMissingIDs(t *testing.T) {
 	require.Contains(t, out.Warnings[0], reasonNoSessionIDs)
 	require.Len(t, out.OutputFiles, 1)
 	require.Equal(t, "", out.OutputFiles[0].Content)
+}
+
+func TestRunTool_ForceSaveArtifacts_OutputFiles(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(
+		repo,
+		exec,
+		WithForceSaveArtifacts(true),
+	)
+
+	args := runInput{
+		Skill: testSkillName,
+		Command: "mkdir -p out; echo " + contentHi +
+			" > " + outATxt,
+		OutputFiles: []string{outGlobTxt},
+		Timeout:     timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{
+			AppName: "app", UserID: "u", ID: "s1",
+			State: session.StateMap{},
+		}),
+		agent.WithInvocationArtifactService(inmemory.NewService()),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Len(t, out.ArtifactFiles, 1)
+	require.Equal(t, outATxt, out.ArtifactFiles[0].Name)
+}
+
+func TestRunTool_ForceSaveArtifacts_OutputsSpec(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(
+		repo,
+		exec,
+		WithForceSaveArtifacts(true),
+	)
+
+	args := runInput{
+		Skill: testSkillName,
+		Command: "mkdir -p out; echo " + contentHi +
+			" > " + outATxt,
+		Outputs: &codeexecutor.OutputSpec{
+			Globs:        []string{outGlobTxt},
+			Inline:       true,
+			Save:         false,
+			NameTemplate: "pref/",
+		},
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{
+			AppName: "app", UserID: "u", ID: "s1",
+			State: session.StateMap{},
+		}),
+		agent.WithInvocationArtifactService(inmemory.NewService()),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Len(t, out.ArtifactFiles, 1)
+	require.Equal(t, "pref/"+outATxt, out.ArtifactFiles[0].Name)
+}
+
+func TestRunTool_ForceSaveArtifacts_OutputsSpec_NoService(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(
+		repo,
+		exec,
+		WithForceSaveArtifacts(true),
+	)
+
+	args := runInput{
+		Skill: testSkillName,
+		Command: "mkdir -p out; echo " + contentHi +
+			" > " + outATxt,
+		Outputs: &codeexecutor.OutputSpec{
+			Globs:        []string{outGlobTxt},
+			Inline:       true,
+			Save:         false,
+			NameTemplate: "pref/",
+		},
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{
+			AppName: "app", UserID: "u", ID: "s1",
+			State: session.StateMap{},
+		}),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Empty(t, out.ArtifactFiles)
+	require.Len(t, out.Warnings, 1)
+	require.Contains(t, out.Warnings[0], "artifact service")
+	require.Len(t, out.OutputFiles, 1)
+	require.Contains(t, out.OutputFiles[0].Content, contentHi)
 }
 
 func TestRunTool_OmitInlineContent_AllowsReadByRef(t *testing.T) {
@@ -1678,6 +1817,376 @@ func TestRunTool_StageInputs_FromSkill(t *testing.T) {
 	require.Contains(t, out.OutputFiles[0].Content, contentMsg)
 }
 
+func TestRunTool_StagesUserFileInputs_FileData(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	rt := NewRunTool(repo, localexec.New())
+
+	user := model.NewUserMessage("upload")
+	user.AddFileData(
+		uploadNotesTxt,
+		[]byte(contentHello+"\n"),
+		"text/plain",
+	)
+	sess := &session.Session{
+		Events: []event.Event{
+			{
+				Response: &model.Response{
+					Done: true,
+					Choices: []model.Choice{
+						{Index: 0, Message: user},
+					},
+				},
+				Author: "user",
+			},
+		},
+	}
+	inv := agent.NewInvocation(agent.WithInvocationSession(sess))
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args := runInput{
+		Skill:       testSkillName,
+		Command:     "cat work/inputs/" + uploadNotesTxt + " > " + outATxt,
+		OutputFiles: []string{outATxt},
+		Timeout:     timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Len(t, out.OutputFiles, 1)
+	require.Contains(t, out.OutputFiles[0].Content, contentHello)
+	require.Len(t, out.StagedInputs, 1)
+	require.Equal(t, "work/inputs/"+uploadNotesTxt, out.StagedInputs[0].Name)
+}
+
+func TestRunTool_StagesUserFileInputs_FileID(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	rt := NewRunTool(repo, localexec.New())
+
+	const (
+		fileID = "file_x"
+	)
+	user := model.NewUserMessage("upload")
+	user.AddFileIDWithName(fileID, uploadNotesTxt)
+	sess := &session.Session{
+		Events: []event.Event{
+			{
+				Response: &model.Response{
+					Done: true,
+					Choices: []model.Choice{
+						{Index: 0, Message: user},
+					},
+				},
+				Author: "user",
+			},
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationModel(&stubDownloadModel{
+			data: map[string][]byte{
+				fileID: []byte(contentHello + "\n"),
+			},
+		}),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args := runInput{
+		Skill:       testSkillName,
+		Command:     "cat work/inputs/" + uploadNotesTxt + " > " + outATxt,
+		OutputFiles: []string{outATxt},
+		Timeout:     timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Len(t, out.OutputFiles, 1)
+	require.Contains(t, out.OutputFiles[0].Content, contentHello)
+	require.Len(t, out.StagedInputs, 1)
+	require.Equal(t, "work/inputs/"+uploadNotesTxt, out.StagedInputs[0].Name)
+}
+
+func TestRunTool_StagesUserFileInputs_FromInvocationMessage(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	rt := NewRunTool(repo, localexec.New())
+
+	user := model.NewUserMessage("upload")
+	user.AddFileData(
+		uploadNotesTxt,
+		[]byte(contentHello+"\n"),
+		"text/plain",
+	)
+	inv := agent.NewInvocation(agent.WithInvocationMessage(user))
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args := runInput{
+		Skill:       testSkillName,
+		Command:     "cat work/inputs/" + uploadNotesTxt + " > " + outATxt,
+		OutputFiles: []string{outATxt},
+		Timeout:     timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Len(t, out.OutputFiles, 1)
+	require.Contains(t, out.OutputFiles[0].Content, contentHello)
+	require.Len(t, out.StagedInputs, 1)
+	require.Equal(t, "work/inputs/"+uploadNotesTxt, out.StagedInputs[0].Name)
+}
+
+func TestRunTool_StagesUserFileInputs_DedupesNames(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	rt := NewRunTool(repo, localexec.New())
+
+	user := model.NewUserMessage("upload")
+	user.AddFileData(uploadNotesTxt, []byte(contentHello+"\n"), "text/plain")
+	user.AddFileData(uploadNotesTxt, []byte(contentHi+"\n"), "text/plain")
+	inv := agent.NewInvocation(agent.WithInvocationMessage(user))
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	cmd := strings.Join([]string{
+		"cat work/inputs/" + uploadNotesTxt,
+		"work/inputs/" + uploadNotes2Txt,
+		"> " + outATxt,
+	}, " ")
+	args := runInput{
+		Skill:       testSkillName,
+		Command:     cmd,
+		OutputFiles: []string{outATxt},
+		Timeout:     timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Len(t, out.StagedInputs, 2)
+	require.Equal(t, "work/inputs/"+uploadNotesTxt, out.StagedInputs[0].Name)
+	require.Equal(t, "work/inputs/"+uploadNotes2Txt, out.StagedInputs[1].Name)
+	require.Len(t, out.OutputFiles, 1)
+	require.Contains(t, out.OutputFiles[0].Content, contentHello)
+	require.Contains(t, out.OutputFiles[0].Content, contentHi)
+}
+
+func TestRunTool_StagesUserFileInputs_UsesMetadataCache(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	user := model.NewUserMessage("upload")
+	user.AddFileData(
+		uploadNotesTxt,
+		[]byte(contentHello+"\n"),
+		"text/plain",
+	)
+	inv := agent.NewInvocation(agent.WithInvocationMessage(user))
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args := runInput{
+		Skill:   testSkillName,
+		Command: echoOK,
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	_, err = rt.Call(ctx, enc)
+	require.NoError(t, err)
+
+	ws, err := rt.createWorkspace(ctx, exec.Engine(), testSkillName)
+	require.NoError(t, err)
+	md1, err := codeexecutor.LoadMetadata(ws.Path)
+	require.NoError(t, err)
+	require.NotEmpty(t, md1.Inputs)
+
+	_, err = rt.Call(ctx, enc)
+	require.NoError(t, err)
+
+	md2, err := codeexecutor.LoadMetadata(ws.Path)
+	require.NoError(t, err)
+	require.Equal(t, len(md1.Inputs), len(md2.Inputs))
+}
+
+func TestRunTool_StagesUserFileInputs_DedupesAllMetadataInputs(t *testing.T) {
+	root := t.TempDir()
+	dir := writeSkill(t, root, testSkillName)
+	scripts := filepath.Join(dir, scriptsDir)
+	require.NoError(t, os.MkdirAll(scripts, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(scripts, "seed.txt"),
+		[]byte(contentMsg+"\n"),
+		0o644,
+	))
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	args1 := runInput{
+		Skill:   testSkillName,
+		Command: "cat work/inputs/" + uploadNotesTxt + " > " + outATxt,
+		Inputs: []codeexecutor.InputSpec{
+			{
+				From: "skill://" + testSkillName + "/" + scriptsDir +
+					"/seed.txt",
+				To:   "work/inputs/" + uploadNotesTxt,
+				Mode: "copy",
+			},
+		},
+		OutputFiles: []string{outATxt},
+		Timeout:     timeoutSecSmall,
+	}
+	enc1, err := jsonMarshal(args1)
+	require.NoError(t, err)
+	res1, err := rt.Call(context.Background(), enc1)
+	require.NoError(t, err)
+	out1 := res1.(runOutput)
+	require.Contains(t, out1.OutputFiles[0].Content, contentMsg)
+
+	user := model.NewUserMessage("upload")
+	user.AddFileData(
+		uploadNotesTxt,
+		[]byte(contentHello+"\n"),
+		"text/plain",
+	)
+	inv := agent.NewInvocation(agent.WithInvocationMessage(user))
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	cmd2 := strings.Join([]string{
+		"cat work/inputs/" + uploadNotesTxt,
+		"work/inputs/" + uploadNotes2Txt,
+		"> " + outBTxt,
+	}, " ")
+	args2 := runInput{
+		Skill:       testSkillName,
+		Command:     cmd2,
+		OutputFiles: []string{outBTxt},
+		Timeout:     timeoutSecSmall,
+	}
+	enc2, err := jsonMarshal(args2)
+	require.NoError(t, err)
+	res2, err := rt.Call(ctx, enc2)
+	require.NoError(t, err)
+	out2 := res2.(runOutput)
+	require.Len(t, out2.StagedInputs, 1)
+	require.Equal(t, "work/inputs/"+uploadNotes2Txt, out2.StagedInputs[0].Name)
+	require.Contains(t, out2.OutputFiles[0].Content, contentMsg)
+	require.Contains(t, out2.OutputFiles[0].Content, contentHello)
+}
+
+func TestRunTool_StagesUserFileInputs_MissingRef_Warn(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	rt := NewRunTool(repo, localexec.New())
+
+	user := model.NewUserMessage("upload")
+	user.ContentParts = append(user.ContentParts, model.ContentPart{
+		Type: model.ContentTypeFile,
+		File: &model.File{Name: uploadNotesTxt},
+	})
+	inv := agent.NewInvocation(agent.WithInvocationMessage(user))
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args := runInput{Skill: testSkillName, Command: echoOK,
+		Timeout: timeoutSecSmall}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Empty(t, out.StagedInputs)
+	require.Contains(t, out.Warnings, userFileInputWarnMissingRef)
+}
+
+func TestRunTool_StagesUserFileInputs_NoDownloader_Warn(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	rt := NewRunTool(repo, localexec.New())
+
+	const fileID = "file_x"
+	user := model.NewUserMessage("upload")
+	user.AddFileIDWithName(fileID, uploadNotesTxt)
+	inv := agent.NewInvocation(agent.WithInvocationMessage(user))
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args := runInput{Skill: testSkillName, Command: echoOK,
+		Timeout: timeoutSecSmall}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Empty(t, out.StagedInputs)
+	require.Contains(t, out.Warnings, userFileInputWarnNoDownloader)
+}
+
+func TestRunTool_StagesUserFileInputs_DownloadError_Warn(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	rt := NewRunTool(repo, localexec.New())
+
+	const fileID = "file_x"
+	user := model.NewUserMessage("upload")
+	user.AddFileIDWithName(fileID, uploadNotesTxt)
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(user),
+		agent.WithInvocationModel(&stubDownloadModel{}),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args := runInput{Skill: testSkillName, Command: echoOK,
+		Timeout: timeoutSecSmall}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Empty(t, out.StagedInputs)
+	require.NotEmpty(t, out.Warnings)
+	require.Contains(t, out.Warnings[0], fileID)
+}
+
 func TestRunTool_Call_InvalidInputSpec_Error(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, testSkillName)
@@ -1699,6 +2208,250 @@ func TestRunTool_Call_InvalidInputSpec_Error(t *testing.T) {
 	require.NoError(t, err)
 	_, err = rt.Call(context.Background(), enc)
 	require.Error(t, err)
+}
+
+type stubDownloadModel struct {
+	data map[string][]byte
+}
+
+func (m *stubDownloadModel) GenerateContent(
+	_ context.Context,
+	_ *model.Request,
+) (<-chan *model.Response, error) {
+	ch := make(chan *model.Response)
+	close(ch)
+	return ch, nil
+}
+
+func (m *stubDownloadModel) Info() model.Info {
+	return model.Info{Name: "stub"}
+}
+
+func (m *stubDownloadModel) DownloadFile(
+	_ context.Context,
+	fileID string,
+) ([]byte, string, error) {
+	if m == nil {
+		return nil, "", fmt.Errorf("nil model")
+	}
+	b, ok := m.data[fileID]
+	if !ok {
+		return nil, "", fmt.Errorf("not found: %s", fileID)
+	}
+	return b, "text/plain", nil
+}
+
+func TestRunTool_stageUserFileInputs_NoInvocation(t *testing.T) {
+	rt := &RunTool{}
+	staged, warnings := rt.stageUserFileInputs(
+		context.Background(),
+		nil,
+		codeexecutor.Workspace{},
+	)
+	require.Nil(t, staged)
+	require.Nil(t, warnings)
+}
+
+func TestRunTool_stageUserFileInputs_NoFiles(t *testing.T) {
+	rt := &RunTool{}
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("hi")),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	staged, warnings := rt.stageUserFileInputs(
+		ctx,
+		nil,
+		codeexecutor.Workspace{},
+	)
+	require.Nil(t, staged)
+	require.Nil(t, warnings)
+}
+
+func TestRunTool_stageUserFileInputs_MetadataError_Warn(t *testing.T) {
+	rt := &RunTool{}
+	user := model.NewUserMessage("upload")
+	user.AddFileData(
+		uploadNotesTxt,
+		[]byte(contentHi),
+		"text/plain",
+	)
+	inv := agent.NewInvocation(agent.WithInvocationMessage(user))
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	_, warnings := rt.stageUserFileInputs(
+		ctx,
+		nil,
+		codeexecutor.Workspace{},
+	)
+	require.Len(t, warnings, 1)
+	require.Contains(t, warnings[0], "load metadata")
+}
+
+func TestSanitizeUserFileName(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "empty", in: "", want: userFileInputDefaultName},
+		{name: "spaces", in: "  ", want: userFileInputDefaultName},
+		{name: "dot", in: ".", want: userFileInputDefaultName},
+		{name: "dotdot", in: "..", want: userFileInputDefaultName},
+		{name: "slash", in: "/", want: userFileInputDefaultName},
+		{name: "clean", in: uploadNotesTxt, want: uploadNotesTxt},
+		{name: "relative", in: "../" + uploadNotesTxt, want: uploadNotesTxt},
+		{name: "windows", in: "C:\\tmp\\" + uploadNotesTxt,
+			want: uploadNotesTxt},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, sanitizeUserFileName(tt.in))
+		})
+	}
+}
+
+func TestUniqueUserFileName(t *testing.T) {
+	require.Equal(t, userFileInputDefaultName,
+		uniqueUserFileName(nil, nil, ""))
+
+	used := map[string]struct{}{}
+	require.Equal(t, uploadNotesTxt,
+		uniqueUserFileName(used, nil, uploadNotesTxt))
+	require.Equal(t, uploadNotes2Txt,
+		uniqueUserFileName(used, nil, uploadNotesTxt))
+
+	existingTo := map[string]struct{}{
+		path.Join(codeexecutor.DirWork, skillDirInputs,
+			uploadNotesTxt): {},
+	}
+	used = map[string]struct{}{}
+	require.Equal(t, uploadNotes2Txt,
+		uniqueUserFileName(used, existingTo, uploadNotesTxt))
+}
+
+func TestUserFileInputsFromMessage(t *testing.T) {
+	msg := model.NewUserMessage("hi")
+	require.Empty(t, userFileInputsFromMessage(msg))
+
+	txt := "hello"
+	msg.ContentParts = []model.ContentPart{
+		{Type: model.ContentTypeText, Text: &txt},
+	}
+	require.Empty(t, userFileInputsFromMessage(msg))
+
+	msg.ContentParts = append(msg.ContentParts, model.ContentPart{
+		Type: model.ContentTypeFile,
+		File: &model.File{Name: uploadNotesTxt, Data: []byte(contentHi)},
+	})
+	got := userFileInputsFromMessage(msg)
+	require.Len(t, got, 1)
+	require.Equal(t, uploadNotesTxt, got[0].Name)
+}
+
+func TestUserFileInputsFromSession(t *testing.T) {
+	txt := "hello"
+	user := model.NewUserMessage("upload")
+	user.AddFileData(uploadNotesTxt, []byte(contentHi), "text/plain")
+	sess := &session.Session{
+		Events: []event.Event{
+			{Response: nil},
+			{
+				Response: &model.Response{
+					Done: true,
+					Choices: []model.Choice{
+						{Index: 0, Message: model.NewAssistantMessage("a")},
+					},
+				},
+				Author: "assistant",
+			},
+			{
+				Response: &model.Response{
+					Done: true,
+					Choices: []model.Choice{
+						{
+							Index: 0,
+							Message: model.Message{
+								Role: model.RoleUser,
+								ContentParts: []model.ContentPart{
+									{
+										Type: model.ContentTypeText,
+										Text: &txt,
+									},
+								},
+							},
+						},
+					},
+				},
+				Author: "user",
+			},
+			{
+				Response: &model.Response{
+					Done: true,
+					Choices: []model.Choice{
+						{Index: 0, Message: user},
+					},
+				},
+				Author: "user",
+			},
+		},
+	}
+	got := userFileInputsFromSession(sess)
+	require.Len(t, got, 1)
+	require.Equal(t, uploadNotesTxt, got[0].Name)
+}
+
+func TestUserFileInputBytes(t *testing.T) {
+	t.Run("data", func(t *testing.T) {
+		f := model.File{Data: []byte(contentHi), MimeType: "text/plain"}
+		got, mime, warn := userFileInputBytes(context.Background(),
+			nil, f)
+		require.Equal(t, []byte(contentHi), got)
+		require.Equal(t, "text/plain", mime)
+		require.Empty(t, warn)
+	})
+
+	t.Run("missing-ref", func(t *testing.T) {
+		_, _, warn := userFileInputBytes(
+			context.Background(),
+			nil,
+			model.File{Name: uploadNotesTxt},
+		)
+		require.Equal(t, userFileInputWarnMissingRef, warn)
+	})
+
+	t.Run("no-downloader", func(t *testing.T) {
+		f := model.File{FileID: "file_x"}
+		_, _, warn := userFileInputBytes(
+			context.Background(),
+			nil,
+			f,
+		)
+		require.Equal(t, userFileInputWarnNoDownloader, warn)
+	})
+
+	t.Run("download-error", func(t *testing.T) {
+		f := model.File{FileID: "file_x"}
+		_, _, warn := userFileInputBytes(
+			context.Background(),
+			&stubDownloadModel{},
+			f,
+		)
+		require.Contains(t, warn, "download file_x")
+	})
+
+	t.Run("download-ok", func(t *testing.T) {
+		f := model.File{FileID: "file_x"}
+		got, mime, warn := userFileInputBytes(
+			context.Background(),
+			&stubDownloadModel{
+				data: map[string][]byte{"file_x": []byte(contentHi)},
+			},
+			f,
+		)
+		require.Equal(t, []byte(contentHi), got)
+		require.Equal(t, "text/plain", mime)
+		require.Empty(t, warn)
+	})
 }
 
 func TestRunTool_stageSkill_WorkspaceRootFileError(t *testing.T) {

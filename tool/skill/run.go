@@ -14,6 +14,8 @@ package skill
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -27,9 +29,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcache"
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -43,6 +48,8 @@ type RunTool struct {
 
 	allowedCmds map[string]struct{}
 	deniedCmds  map[string]struct{}
+
+	forceSaveArtifacts bool
 }
 
 // NewRunTool creates a new RunTool.
@@ -109,6 +116,18 @@ func WithAllowedCommands(cmds ...string) func(*RunTool) {
 func WithDeniedCommands(cmds ...string) func(*RunTool) {
 	return func(t *RunTool) {
 		t.setDeniedCommands(cmds)
+	}
+}
+
+// WithForceSaveArtifacts forces skill_run to persist collected outputs
+// via the artifact service when possible.
+//
+// It applies to both:
+//   - legacy output_files + save_as_artifacts
+//   - declarative outputs.save
+func WithForceSaveArtifacts(enable bool) func(*RunTool) {
+	return func(t *RunTool) {
+		t.forceSaveArtifacts = enable
 	}
 }
 
@@ -204,6 +223,7 @@ type runInput struct {
 
 // runOutput is the structured result returned by skill_run.
 type runOutput struct {
+	StagedInputs  []stagedInput `json:"staged_inputs,omitempty"`
 	OutputFiles   []runFile     `json:"output_files"`
 	PrimaryOutput *runFile      `json:"primary_output,omitempty"`
 	Stdout        string        `json:"stdout"`
@@ -213,6 +233,13 @@ type runOutput struct {
 	Duration      int64         `json:"duration_ms"`
 	ArtifactFiles []artifactRef `json:"artifact_files,omitempty"`
 	Warnings      []string      `json:"warnings,omitempty"`
+}
+
+type stagedInput struct {
+	Name         string `json:"name"`
+	OriginalName string `json:"original_name,omitempty"`
+	MIMEType     string `json:"mime_type,omitempty"`
+	SizeBytes    int64  `json:"size_bytes,omitempty"`
 }
 
 type runFile struct {
@@ -230,6 +257,8 @@ func (t *RunTool) Declaration() *tool.Declaration {
 	desc := "Run a command inside a skill workspace. " +
 		"Use it only for commands required by the skill " +
 		"docs (not for generic shell tasks). " +
+		"User-uploaded file inputs are staged under " +
+		"$WORK_DIR/inputs (also visible as inputs/). " +
 		"Returns stdout/stderr, a primary_output " +
 		"(best small text file), and collected output_files " +
 		"(text inline by default, with workspace:// refs). " +
@@ -318,26 +347,17 @@ func (t *RunTool) Call(
 	if err != nil {
 		return nil, err
 	}
-	root, err := t.repo.Path(in.Skill)
+	in, saveRequested, outputsSaveSkipReason := t.applyArtifactSaveOverrides(
+		ctx,
+		in,
+	)
+	eng, ws, ctxIO, staged, stageWarn, err := t.prepareWorkspaceForRun(
+		ctx,
+		in,
+	)
 	if err != nil {
 		return nil, err
 	}
-	eng := t.ensureEngine()
-	ws, err := t.createWorkspace(ctx, eng, in.Skill)
-	if err != nil {
-		return nil, err
-	}
-	if err := t.stageSkill(ctx, eng, ws, root, in.Skill); err != nil {
-		return nil, err
-	}
-	// Prepare IO context and stage declared inputs.
-	ctxIO := withArtifactContext(ctx)
-	if len(in.Inputs) > 0 {
-		if err := eng.FS().StageInputs(ctxIO, ws, in.Inputs); err != nil {
-			return nil, err
-		}
-	}
-	// Compute CWD and execute program.
 	cwd := resolveCWD(in.Cwd, in.Skill)
 	rr, err := t.runProgram(ctx, eng, ws, cwd, in)
 	if err != nil {
@@ -345,35 +365,409 @@ func (t *RunTool) Call(
 	}
 
 	autoFiles := t.autoExportWorkspaceOut(ctxIO, eng, ws, in)
-
-	// Collect outputs via spec or legacy globs.
-	files, manifest, err := t.prepareOutputs(
-		ctxIO, eng, ws, in,
+	files, manifest, err := t.prepareOutputs(ctxIO, eng, ws, in)
+	if err != nil {
+		return nil, err
+	}
+	out, err := t.buildRunOutput(
+		ctx,
+		rr,
+		autoFiles,
+		files,
+		manifest,
+		in,
+		saveRequested,
+		outputsSaveSkipReason,
 	)
 	if err != nil {
 		return nil, err
 	}
-	trimTruncatedUTF8TextFiles(files)
-	out := buildRunOutput(rr, files)
-	mergeAutoPrimaryOutput(autoFiles, &out)
-	if len(files) > 0 && !in.SaveArtifacts {
-		out.Warnings = append(out.Warnings,
-			warnOutputFilesWorkspaceOnly)
+	out.StagedInputs = staged
+	if len(stageWarn) > 0 {
+		out.Warnings = append(out.Warnings, stageWarn...)
 	}
-	if err := t.attachArtifactsIfRequested(
-		ctx, &out, files, in.ArtifactPrefix, in.SaveArtifacts,
-		in.OmitInline,
-	); err != nil {
-		return nil, err
-	}
-	mergeManifestArtifactRefs(manifest, &out)
-	applyOmitInlineContent(ctx, &out, in.OmitInline)
 	toolcache.StoreSkillRunOutputFilesFromContext(ctx, files)
 	return out, nil
 }
 
 var _ tool.Tool = (*RunTool)(nil)
 var _ tool.CallableTool = (*RunTool)(nil)
+
+func (t *RunTool) applyArtifactSaveOverrides(
+	ctx context.Context,
+	in runInput,
+) (runInput, bool, string) {
+	if t.forceSaveArtifacts {
+		if len(in.OutputFiles) > 0 {
+			in.SaveArtifacts = true
+		}
+		if in.Outputs != nil && len(in.OutputFiles) == 0 {
+			in.Outputs.Save = true
+		}
+	}
+
+	saveRequested := (in.SaveArtifacts && len(in.OutputFiles) > 0) ||
+		(in.Outputs != nil && in.Outputs.Save)
+	var outputsSaveSkipReason string
+	if in.Outputs != nil && in.Outputs.Save {
+		outputsSaveSkipReason = artifactSaveSkipReason(ctx)
+		if outputsSaveSkipReason != "" {
+			in.Outputs.Save = false
+		}
+	}
+	return in, saveRequested, outputsSaveSkipReason
+}
+
+func (t *RunTool) prepareWorkspaceForRun(
+	ctx context.Context,
+	in runInput,
+) (
+	codeexecutor.Engine,
+	codeexecutor.Workspace,
+	context.Context,
+	[]stagedInput,
+	[]string,
+	error,
+) {
+	root, err := t.repo.Path(in.Skill)
+	if err != nil {
+		return nil, codeexecutor.Workspace{}, nil, nil, nil, err
+	}
+	eng := t.ensureEngine()
+	ws, err := t.createWorkspace(ctx, eng, in.Skill)
+	if err != nil {
+		return nil, codeexecutor.Workspace{}, nil, nil, nil, err
+	}
+	if err := t.stageSkill(ctx, eng, ws, root, in.Skill); err != nil {
+		return nil, codeexecutor.Workspace{}, nil, nil, nil, err
+	}
+	staged, stageWarn := t.stageUserFileInputs(ctx, eng, ws)
+	ctxIO := withArtifactContext(ctx)
+	if len(in.Inputs) > 0 {
+		if err := eng.FS().StageInputs(ctxIO, ws, in.Inputs); err != nil {
+			return nil, codeexecutor.Workspace{}, nil, nil, nil, err
+		}
+	}
+	return eng, ws, ctxIO, staged, stageWarn, nil
+}
+
+func (t *RunTool) buildRunOutput(
+	ctx context.Context,
+	rr codeexecutor.RunResult,
+	autoFiles []codeexecutor.File,
+	files []codeexecutor.File,
+	manifest *codeexecutor.OutputManifest,
+	in runInput,
+	saveRequested bool,
+	outputsSaveSkipReason string,
+) (runOutput, error) {
+	trimTruncatedUTF8TextFiles(files)
+	out := buildRunOutput(rr, files)
+	mergeAutoPrimaryOutput(autoFiles, &out)
+	appendOutputsSaveWarning(&out, outputsSaveSkipReason)
+	saveArtifacts := in.SaveArtifacts && len(in.OutputFiles) > 0
+	if err := t.attachArtifactsIfRequested(
+		ctx,
+		&out,
+		files,
+		in.ArtifactPrefix,
+		saveArtifacts,
+		in.OmitInline,
+	); err != nil {
+		return runOutput{}, err
+	}
+	mergeManifestArtifactRefs(manifest, &out)
+	if len(out.OutputFiles) > 0 && !saveRequested {
+		out.Warnings = append(out.Warnings,
+			warnOutputFilesWorkspaceOnly)
+	}
+	applyOmitInlineContent(ctx, &out, in.OmitInline)
+	return out, nil
+}
+
+const (
+	userFileInputFromPrefix  = "user_message://"
+	userFileInputModePut     = "put"
+	userFileInputNameFmt     = "upload_%d"
+	userFileInputDefaultName = "upload"
+
+	userFileInputKeyFileIDPrefix = "file_id/"
+	userFileInputKeySHA256Prefix = "sha256/"
+
+	userFileInputWarnPrefix     = "user file input:"
+	userFileInputWarnMissingRef = userFileInputWarnPrefix +
+		" missing bytes and file_id"
+	userFileInputWarnNoDownloader = userFileInputWarnPrefix +
+		" model does not support file download"
+)
+
+func (t *RunTool) stageUserFileInputs(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	ws codeexecutor.Workspace,
+) ([]stagedInput, []string) {
+	inv, ok := agent.InvocationFromContext(ctx)
+	if !ok || inv == nil {
+		return nil, nil
+	}
+	files := userFileInputsFromSession(inv.Session)
+	if len(files) == 0 {
+		files = userFileInputsFromMessage(inv.Message)
+	}
+	if len(files) == 0 {
+		return nil, nil
+	}
+	md, err := t.loadWorkspaceMetadata(ctx, eng, ws)
+	if err != nil {
+		return nil, []string{
+			fmt.Sprintf("user file input: load metadata: %v", err),
+		}
+	}
+	existingTo := make(map[string]struct{})
+	existingByKey := make(map[string]string)
+	for _, rec := range md.Inputs {
+		to := strings.TrimSpace(rec.To)
+		if to != "" {
+			existingTo[to] = struct{}{}
+		}
+		if !strings.HasPrefix(rec.From, userFileInputFromPrefix) {
+			continue
+		}
+		if to == "" {
+			continue
+		}
+		key := strings.TrimSpace(strings.TrimPrefix(
+			rec.From, userFileInputFromPrefix,
+		))
+		if key != "" {
+			existingByKey[key] = to
+		}
+	}
+	usedNames := make(map[string]struct{})
+	puts := make([]codeexecutor.PutFile, 0, len(files))
+	staged := make([]stagedInput, 0, len(files))
+	var warnings []string
+	for i, f := range files {
+		st, warn := stageUserFileInput(
+			ctx,
+			inv.Model,
+			f,
+			i,
+			usedNames,
+			existingTo,
+			existingByKey,
+			&puts,
+			&md,
+		)
+		if warn != "" {
+			warnings = append(warnings, warn)
+		}
+		if st != nil {
+			staged = append(staged, *st)
+		}
+	}
+	if len(puts) == 0 {
+		return staged, warnings
+	}
+	if err := eng.FS().PutFiles(ctx, ws, puts); err != nil {
+		return nil, []string{
+			fmt.Sprintf("user file input: stage files: %v", err),
+		}
+	}
+	if err := t.saveWorkspaceMetadata(ctx, eng, ws, md); err != nil {
+		warnings = append(warnings, fmt.Sprintf(
+			"user file input: save metadata: %v",
+			err,
+		))
+	}
+	return staged, warnings
+}
+
+func stageUserFileInput(
+	ctx context.Context,
+	mdl model.Model,
+	f model.File,
+	idx int,
+	usedNames map[string]struct{},
+	existingTo map[string]struct{},
+	existingByKey map[string]string,
+	puts *[]codeexecutor.PutFile,
+	md *codeexecutor.WorkspaceMetadata,
+) (*stagedInput, string) {
+	rawName := strings.TrimSpace(f.Name)
+	if rawName == "" {
+		rawName = fmt.Sprintf(userFileInputNameFmt, idx+1)
+	}
+	key, ok := userFileInputFastKey(f)
+	if ok {
+		if to, ok := existingByKey[key]; ok {
+			return &stagedInput{
+				Name:         to,
+				OriginalName: rawName,
+			}, ""
+		}
+	}
+	data, mime, warn := userFileInputBytes(ctx, mdl, f)
+	if warn != "" {
+		return nil, warn
+	}
+	name := sanitizeUserFileName(rawName)
+	name = uniqueUserFileName(usedNames, existingTo, name)
+	to := path.Join(codeexecutor.DirWork, skillDirInputs, name)
+	*puts = append(*puts, codeexecutor.PutFile{
+		Path:    to,
+		Content: data,
+		Mode:    codeexecutor.DefaultScriptFileMode,
+	})
+	existingTo[to] = struct{}{}
+	if existingByKey != nil {
+		existingByKey[key] = to
+	}
+	if md != nil {
+		md.Inputs = append(md.Inputs, codeexecutor.InputRecord{
+			From:      userFileInputFromPrefix + key,
+			To:        to,
+			Resolved:  name,
+			Mode:      userFileInputModePut,
+			Timestamp: time.Now(),
+		})
+	}
+	return &stagedInput{
+		Name:         to,
+		OriginalName: rawName,
+		MIMEType:     mime,
+		SizeBytes:    int64(len(data)),
+	}, ""
+}
+
+func sanitizeUserFileName(name string) string {
+	s := strings.TrimSpace(name)
+	s = strings.ReplaceAll(s, "\\", "/")
+	s = path.Base(path.Clean(s))
+	if s == "." || s == ".." || s == "/" {
+		return userFileInputDefaultName
+	}
+	s = strings.TrimPrefix(s, "/")
+	if strings.TrimSpace(s) == "" {
+		return userFileInputDefaultName
+	}
+	return s
+}
+
+func uniqueUserFileName(
+	used map[string]struct{},
+	existingTo map[string]struct{},
+	name string,
+) string {
+	if strings.TrimSpace(name) == "" {
+		name = userFileInputDefaultName
+	}
+	ext := path.Ext(name)
+	base := strings.TrimSuffix(name, ext)
+	for i := 1; ; i++ {
+		candidate := name
+		if i > 1 {
+			candidate = fmt.Sprintf("%s_%d%s", base, i, ext)
+		}
+		key := strings.ToLower(candidate)
+		if used != nil {
+			if _, ok := used[key]; ok {
+				continue
+			}
+		}
+		to := path.Join(codeexecutor.DirWork, skillDirInputs, candidate)
+		if existingTo != nil {
+			if _, ok := existingTo[to]; ok {
+				continue
+			}
+		}
+		if used != nil {
+			used[key] = struct{}{}
+		}
+		return candidate
+	}
+}
+
+func userFileInputFastKey(f model.File) (string, bool) {
+	id := strings.TrimSpace(f.FileID)
+	if id != "" {
+		return userFileInputKeyFileIDPrefix + id, true
+	}
+	if len(f.Data) == 0 {
+		return "", false
+	}
+	sum := sha256.Sum256(f.Data)
+	return userFileInputKeySHA256Prefix + hex.EncodeToString(sum[:]),
+		true
+}
+
+func userFileInputsFromSession(sess *session.Session) []model.File {
+	if sess == nil {
+		return nil
+	}
+	sess.EventMu.RLock()
+	events := append([]event.Event(nil), sess.Events...)
+	sess.EventMu.RUnlock()
+	var out []model.File
+	for _, ev := range events {
+		if ev.Response == nil {
+			continue
+		}
+		for _, c := range ev.Response.Choices {
+			if c.Message.Role != model.RoleUser {
+				continue
+			}
+			for _, part := range c.Message.ContentParts {
+				if part.Type != model.ContentTypeFile ||
+					part.File == nil {
+					continue
+				}
+				out = append(out, *part.File)
+			}
+		}
+	}
+	return out
+}
+
+func userFileInputsFromMessage(msg model.Message) []model.File {
+	if len(msg.ContentParts) == 0 {
+		return nil
+	}
+	var out []model.File
+	for _, part := range msg.ContentParts {
+		if part.Type != model.ContentTypeFile || part.File == nil {
+			continue
+		}
+		out = append(out, *part.File)
+	}
+	return out
+}
+
+func userFileInputBytes(
+	ctx context.Context,
+	mdl model.Model,
+	f model.File,
+) ([]byte, string, string) {
+	if len(f.Data) > 0 {
+		return f.Data, strings.TrimSpace(f.MimeType), ""
+	}
+	if strings.TrimSpace(f.FileID) == "" {
+		return nil, "", userFileInputWarnMissingRef
+	}
+	dl, ok := mdl.(model.FileDownloader)
+	if !ok || dl == nil {
+		return nil, "", userFileInputWarnNoDownloader
+	}
+	data, mime, err := dl.DownloadFile(ctx, f.FileID)
+	if err != nil {
+		return nil, "", fmt.Sprintf(
+			"user file input: download %s: %v",
+			f.FileID,
+			err,
+		)
+	}
+	return data, mime, ""
+}
 
 func (t *RunTool) autoExportWorkspaceOut(
 	ctx context.Context,
@@ -657,12 +1051,14 @@ func (t *RunTool) linkWorkspaceDirs(
 	toOut := path.Join("..", "..", codeexecutor.DirOut)
 	toWork := path.Join("..", "..", codeexecutor.DirWork)
 	toInputs := path.Join(
-		"..", "..", codeexecutor.DirWork, "inputs",
+		"..", "..", codeexecutor.DirWork, skillDirInputs,
 	)
 	var sb strings.Builder
 	sb.WriteString("set -e; cd ")
 	sb.WriteString(shellQuote(skillRoot))
-	sb.WriteString("; rm -rf out work inputs ")
+	sb.WriteString("; rm -rf out work ")
+	sb.WriteString(skillDirInputs)
+	sb.WriteString(" ")
 	sb.WriteString(shellQuote(skillDirVenv))
 	sb.WriteString("; mkdir -p ")
 	sb.WriteString(shellQuote(toInputs))
@@ -1337,6 +1733,9 @@ func (t *RunTool) attachArtifactsIfRequested(
 const warnSaveArtifactsSkippedTmpl = "save_as_artifacts requested but " +
 	"%s; outputs are not persisted"
 
+const warnOutputsSaveSkippedTmpl = "outputs.save requested but " +
+	"%s; outputs are not persisted"
+
 const warnOutputFilesWorkspaceOnly = "output_files are workspace-" +
 	"relative; prefer output_files content; when you need a " +
 	"stable reference, use output_files[*].ref (workspace://...)"
@@ -1373,6 +1772,16 @@ func appendWarning(out *runOutput, reason string) {
 	out.Warnings = append(
 		out.Warnings,
 		fmt.Sprintf(warnSaveArtifactsSkippedTmpl, reason),
+	)
+}
+
+func appendOutputsSaveWarning(out *runOutput, reason string) {
+	if out == nil || reason == "" {
+		return
+	}
+	out.Warnings = append(
+		out.Warnings,
+		fmt.Sprintf(warnOutputsSaveSkippedTmpl, reason),
 	)
 }
 

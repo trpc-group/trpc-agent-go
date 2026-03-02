@@ -32,6 +32,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 
+	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
 
@@ -579,7 +580,7 @@ func (r *workspaceRuntime) stageInput(
 	sp codeexecutor.InputSpec,
 	mode string,
 	to string,
-) (string, *int, error) {
+) (string, *artifact.VersionID, error) {
 	dest := path.Join(ws.Path, to)
 	switch {
 	case strings.HasPrefix(sp.From, inputSchemeArtifact):
@@ -601,7 +602,7 @@ func (r *workspaceRuntime) stageArtifactInput(
 	sp codeexecutor.InputSpec,
 	to string,
 	dest string,
-) (string, *int, error) {
+) (string, *artifact.VersionID, error) {
 	name := strings.TrimPrefix(sp.From, inputSchemeArtifact)
 	aname, aver, err := codeexecutor.ParseArtifactRef(name)
 	if err != nil {
@@ -617,7 +618,7 @@ func (r *workspaceRuntime) stageArtifactInput(
 	if err != nil {
 		return "", nil, err
 	}
-	var ver *int
+	var ver *artifact.VersionID
 	if useVer != nil {
 		v := *useVer
 		ver = &v
@@ -638,7 +639,7 @@ func (r *workspaceRuntime) stageHostInput(
 	mode string,
 	to string,
 	dest string,
-) (string, *int, error) {
+) (string, *artifact.VersionID, error) {
 	host := strings.TrimPrefix(sp.From, inputSchemeHost)
 	// If under inputsHostBase, prefer symlink/cp (zero-copy).
 	if r.cfg.inputsHostBase != "" {
@@ -680,7 +681,7 @@ func (r *workspaceRuntime) stageWorkspaceInput(
 	sp codeexecutor.InputSpec,
 	mode string,
 	dest string,
-) (string, *int, error) {
+) (string, *artifact.VersionID, error) {
 	rel := strings.TrimPrefix(sp.From, inputSchemeWorkspace)
 	src := path.Join(ws.Path, filepath.ToSlash(rel))
 	var cmd []string
@@ -704,7 +705,7 @@ func (r *workspaceRuntime) stageSkillInput(
 	sp codeexecutor.InputSpec,
 	mode string,
 	dest string,
-) (string, *int, error) {
+) (string, *artifact.VersionID, error) {
 	rest := strings.TrimPrefix(sp.From, inputSchemeSkill)
 	src := path.Join(ws.Path, codeexecutor.DirSkills,
 		filepath.ToSlash(rest))
@@ -727,7 +728,7 @@ func pinnedArtifactVersion(
 	md codeexecutor.WorkspaceMetadata,
 	name string,
 	to string,
-) *int {
+) *artifact.VersionID {
 	if strings.TrimSpace(name) == "" || strings.TrimSpace(to) == "" {
 		return nil
 	}

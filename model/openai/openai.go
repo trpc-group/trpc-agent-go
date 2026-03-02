@@ -23,6 +23,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	openai "github.com/openai/openai-go"
@@ -240,6 +241,7 @@ type Model struct {
 
 	accumulateChunkUsage AccumulateChunkUsage
 	optimizeForCache     bool // Optimize message structure for prompt caching
+	omitFileContentParts bool
 }
 
 // New creates a new OpenAI-like model.
@@ -312,6 +314,7 @@ func New(name string, opts ...Option) *Model {
 		maxInputTokensRatio:        o.TokenTailoringConfig.MaxInputTokensRatio,
 		accumulateChunkUsage:       o.accumulateChunkUsage,
 		optimizeForCache:           o.OptimizeForCache,
+		omitFileContentParts:       o.OmitFileContentParts,
 	}
 }
 
@@ -669,7 +672,7 @@ func (m *Model) convertUserMessageContent(
 	}
 	var (
 		contentParts []openai.ChatCompletionContentPartUnionParam
-		extraFields  = make(map[string]any)
+		extraFields  map[string]any
 	)
 	// Add Content as a text part if present.
 	if msg.Content != "" {
@@ -683,6 +686,10 @@ func (m *Model) convertUserMessageContent(
 		)
 	}
 	for _, part := range msg.ContentParts {
+		if part.Type == model.ContentTypeFile &&
+			m.omitFileContentParts {
+			continue
+		}
 		contentPart := m.convertContentPart(part)
 		if contentPart == nil {
 			continue
@@ -690,6 +697,9 @@ func (m *Model) convertUserMessageContent(
 		// Handle file content parts based on variant configuration.
 		if part.Type == model.ContentTypeFile && m.variantConfig.skipFileTypeInContent {
 			const fileIDsKey = "file_ids"
+			if extraFields == nil {
+				extraFields = make(map[string]any)
+			}
 			// Collect file IDs in extraFields under "file_ids".
 			fileIDs, ok := extraFields[fileIDsKey].([]string)
 			if !ok {
@@ -701,6 +711,14 @@ func (m *Model) convertUserMessageContent(
 		}
 		// For non-file or non-skipped file types, add to contentParts.
 		contentParts = append(contentParts, *contentPart)
+	}
+	if msg.Content != "" && extraFields == nil &&
+		len(contentParts) == 1 &&
+		contentParts[0].OfText != nil &&
+		contentParts[0].OfText.Text == msg.Content {
+		return openai.ChatCompletionUserMessageParamContentUnion{
+			OfString: openai.String(msg.Content),
+		}, nil
 	}
 	return openai.ChatCompletionUserMessageParamContentUnion{
 		OfArrayOfContentParts: contentParts,
@@ -799,8 +817,15 @@ func fileToParams(file *model.File) openai.ChatCompletionContentPartFileFilePara
 			FileID: openai.String(file.FileID),
 		}
 	}
+	const (
+		fileDataPrefix = "data:"
+		fileDataBase64 = ";base64,"
+	)
+	encoded := base64.StdEncoding.EncodeToString(file.Data)
+	fileData := fileDataPrefix + file.MimeType + fileDataBase64 +
+		encoded
 	return openai.ChatCompletionContentPartFileFileParam{
-		FileData: openai.String("data:" + file.MimeType + ";base64," + base64.StdEncoding.EncodeToString(file.Data)),
+		FileData: openai.String(fileData),
 		Filename: openai.String(file.Name),
 	}
 }
@@ -1184,6 +1209,21 @@ func (m *Model) collectExtraFieldsFromChunk(
 	}
 }
 
+func applyOpenAISDKTokenDetailsAccumulationFix(
+	acc *openai.ChatCompletionAccumulator,
+	chunk openai.ChatCompletionChunk,
+) {
+	// Temporary workaround for token details accumulation.
+	// See https://github.com/trpc-group/trpc-agent-go/issues/1270.
+	// Remove this after upgrading openai-go to v3.10.0.
+	acc.Usage.CompletionTokensDetails.AcceptedPredictionTokens += chunk.Usage.CompletionTokensDetails.AcceptedPredictionTokens
+	acc.Usage.CompletionTokensDetails.AudioTokens += chunk.Usage.CompletionTokensDetails.AudioTokens
+	acc.Usage.CompletionTokensDetails.ReasoningTokens += chunk.Usage.CompletionTokensDetails.ReasoningTokens
+	acc.Usage.CompletionTokensDetails.RejectedPredictionTokens += chunk.Usage.CompletionTokensDetails.RejectedPredictionTokens
+	acc.Usage.PromptTokensDetails.AudioTokens += chunk.Usage.PromptTokensDetails.AudioTokens
+	acc.Usage.PromptTokensDetails.CachedTokens += chunk.Usage.PromptTokensDetails.CachedTokens
+}
+
 // accumulateChunk accumulates the chunk into the accumulator and reasoning buffer.
 func (m *Model) accumulateChunk(
 	chunk openai.ChatCompletionChunk,
@@ -1197,7 +1237,10 @@ func (m *Model) accumulateChunk(
 		// avoid known panics when JSON.ToolCalls is marked present but the
 		// typed ToolCalls slice is empty, especially on finish_reason chunks.
 		sanitizedChunk := sanitizeChunkForAccumulator(chunk)
-		acc.AddChunk(sanitizedChunk)
+		if acc.AddChunk(sanitizedChunk) {
+			applyOpenAISDKTokenDetailsAccumulationFix(acc, chunk)
+		}
+
 		if m.accumulateChunkUsage != nil {
 			accUsage, chunkUsage := completionUsageToModelUsage(acc.Usage), completionUsageToModelUsage(chunk.Usage)
 			usage := inverseOpenAISDKAddChunkUsage(accUsage, chunkUsage)
@@ -1997,4 +2040,47 @@ func (m *Model) GetFile(
 		return nil, fmt.Errorf("failed to get file: %w", err)
 	}
 	return fileObj, nil
+}
+
+// DownloadFile downloads the content for the given file ID.
+func (m *Model) DownloadFile(
+	ctx context.Context,
+	fileID string,
+) ([]byte, string, error) {
+	id := strings.TrimSpace(fileID)
+	if id == "" {
+		return nil, "", fmt.Errorf("file_id is required")
+	}
+	basePath := strings.TrimSpace(m.variantConfig.fileDeletionPath)
+	if basePath == "" {
+		basePath = strings.TrimSpace(m.variantConfig.fileUploadPath)
+	}
+	basePath = strings.TrimRight(basePath, "/")
+	mw := openaiopt.WithMiddleware(
+		func(r *http.Request, next openaiopt.MiddlewareNext) (
+			*http.Response, error,
+		) {
+			if basePath != "" {
+				r.URL.Path = basePath + "/" + id + "/content"
+			}
+			return next(r)
+		},
+	)
+	resp, err := m.client.Files.Content(ctx, id, mw)
+	if err != nil {
+		return nil, "", fmt.Errorf("download file: %w", err)
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", fmt.Errorf("read file: %w", err)
+	}
+	mime := strings.TrimSpace(resp.Header.Get("Content-Type"))
+	if mime == "" {
+		mime = http.DetectContentType(data)
+	}
+	if mime == "" {
+		mime = "application/octet-stream"
+	}
+	return data, mime, nil
 }

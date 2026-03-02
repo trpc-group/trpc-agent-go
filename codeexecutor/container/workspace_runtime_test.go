@@ -664,8 +664,11 @@ func TestWorkspaceRuntime_StageInputs_ArtifactAndWorkspace(t *testing.T) {
 	ctx := codeexecutor.WithArtifactService(
 		context.Background(), svc,
 	)
-	ctx = codeexecutor.WithArtifactSession(ctx, artifact.SessionInfo{
-		AppName: "a", UserID: "u", SessionID: "s",
+	ctx = codeexecutor.WithArtifactBaseKey(ctx, artifact.Key{
+		AppName:   "a",
+		UserID:    "u",
+		SessionID: "s",
+		Scope:     artifact.ScopeSession,
 	})
 	_, err := codeexecutor.SaveArtifactHelper(
 		ctx, "z.txt", []byte("Z"), "text/plain",
@@ -990,144 +993,141 @@ func TestTarFromFiles_InvalidPath(t *testing.T) {
 // A minimal artifact service for tests.
 type artMem struct{ saved int }
 
-func (m *artMem) SaveArtifact(
+func (m *artMem) Put(
 	_ context.Context,
-	_ artifact.SessionInfo,
-	_ string,
-	_ *artifact.Artifact,
-) (int, error) {
+	key artifact.Key,
+	r io.Reader,
+	opts ...artifact.PutOption,
+) (artifact.Descriptor, error) {
 	m.saved++
-	return m.saved, nil
+	o := artifact.PutOptions{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&o)
+		}
+	}
+	mt := o.MimeType
+	if strings.TrimSpace(mt) == "" {
+		mt = "application/octet-stream"
+	}
+	b, _ := io.ReadAll(r)
+	return artifact.Descriptor{
+		Key:      key,
+		Version:  artifact.VersionID(fmt.Sprint(m.saved)),
+		MimeType: mt,
+		Size:     int64(len(b)),
+	}, nil
 }
 
-func (*artMem) ResolveArtifact(
+func (*artMem) Head(
 	_ context.Context,
-	_ artifact.SessionInfo,
-	filename string,
-	_ *int,
-) (*artifact.ArtifactDescriptor, error) {
-	return &artifact.ArtifactDescriptor{Name: filename, Version: 0, MimeType: "text/plain"}, nil
+	key artifact.Key,
+	version *artifact.VersionID,
+) (artifact.Descriptor, error) {
+	v := artifact.VersionID("1")
+	if version != nil {
+		v = *version
+	}
+	return artifact.Descriptor{Key: key, Version: v, MimeType: "text/plain"}, nil
 }
 
-func (*artMem) LoadArtifact(
+func (*artMem) Open(
 	_ context.Context,
-	_ artifact.SessionInfo,
-	filename string,
-	_ *int,
-) (io.ReadCloser, *artifact.ArtifactDescriptor, error) {
-	desc := &artifact.ArtifactDescriptor{Name: filename, Version: 0, MimeType: "text/plain"}
-	return io.NopCloser(strings.NewReader("A1")), desc, nil
+	key artifact.Key,
+	version *artifact.VersionID,
+) (io.ReadCloser, artifact.Descriptor, error) {
+	v := artifact.VersionID("1")
+	if version != nil {
+		v = *version
+	}
+	return io.NopCloser(strings.NewReader("A1")),
+		artifact.Descriptor{Key: key, Version: v, MimeType: "text/plain", Size: 2},
+		nil
 }
 
-func (*artMem) LoadArtifactBytes(
+func (*artMem) List(
 	_ context.Context,
-	_ artifact.SessionInfo,
-	filename string,
-	_ *int,
-) ([]byte, *artifact.ArtifactDescriptor, error) {
-	return []byte("A1"), &artifact.ArtifactDescriptor{Name: filename, Version: 0, MimeType: "text/plain"}, nil
+	_ artifact.KeyPrefix,
+	_ ...artifact.ListOption,
+) ([]artifact.Descriptor, string, error) {
+	return nil, "", nil
 }
 
-func (*artMem) ListArtifactKeys(
+func (*artMem) Delete(
 	_ context.Context,
-	_ artifact.SessionInfo,
-) ([]string, error) {
-	return nil, nil
-}
-
-func (*artMem) DeleteArtifact(
-	_ context.Context,
-	_ artifact.SessionInfo,
-	_ string,
+	_ artifact.Key,
+	_ ...artifact.DeleteOption,
 ) error {
 	return nil
 }
 
-func (*artMem) ListVersions(
+func (*artMem) Versions(
 	_ context.Context,
-	_ artifact.SessionInfo,
-	_ string,
-) ([]int, error) {
-	return nil, nil
+	_ artifact.Key,
+) ([]artifact.VersionID, error) {
+	return []artifact.VersionID{"1"}, nil
 }
 
 type pinnedArtifactService struct {
 	loadVersions []string
 }
 
-func (*pinnedArtifactService) SaveArtifact(
+func (*pinnedArtifactService) Put(
 	_ context.Context,
-	_ artifact.SessionInfo,
-	_ string,
-	_ *artifact.Artifact,
-) (int, error) {
-	return 0, nil
+	key artifact.Key,
+	_ io.Reader,
+	_ ...artifact.PutOption,
+) (artifact.Descriptor, error) {
+	return artifact.Descriptor{Key: key, Version: "0"}, nil
 }
 
-func (s *pinnedArtifactService) ResolveArtifact(
+func (*pinnedArtifactService) Head(
 	_ context.Context,
-	_ artifact.SessionInfo,
-	filename string,
-	version *int,
-) (*artifact.ArtifactDescriptor, error) {
+	key artifact.Key,
+	version *artifact.VersionID,
+) (artifact.Descriptor, error) {
+	v := artifact.VersionID("7")
+	if version != nil {
+		v = *version
+	}
+	return artifact.Descriptor{Key: key, Version: v, MimeType: "text/plain"}, nil
+}
+
+func (s *pinnedArtifactService) Open(
+	_ context.Context,
+	key artifact.Key,
+	version *artifact.VersionID,
+) (io.ReadCloser, artifact.Descriptor, error) {
 	if version == nil {
 		s.loadVersions = append(s.loadVersions, "nil")
 	} else {
-		s.loadVersions = append(s.loadVersions, fmt.Sprint(*version))
+		s.loadVersions = append(s.loadVersions, string(*version))
 	}
-	return &artifact.ArtifactDescriptor{Name: filename, Version: 0, MimeType: "text/plain"}, nil
-}
-
-func (s *pinnedArtifactService) LoadArtifact(
-	_ context.Context,
-	_ artifact.SessionInfo,
-	filename string,
-	version *int,
-) (io.ReadCloser, *artifact.ArtifactDescriptor, error) {
-	if version == nil {
-		s.loadVersions = append(s.loadVersions, "nil")
-	} else {
-		s.loadVersions = append(s.loadVersions, fmt.Sprint(*version))
-	}
-	desc := &artifact.ArtifactDescriptor{Name: filename, Version: 0, MimeType: "text/plain"}
+	desc := artifact.Descriptor{Key: key, Version: "7", MimeType: "text/plain", Size: 1}
 	return io.NopCloser(strings.NewReader("A")), desc, nil
 }
 
-func (s *pinnedArtifactService) LoadArtifactBytes(
+func (*pinnedArtifactService) List(
 	_ context.Context,
-	_ artifact.SessionInfo,
-	filename string,
-	version *int,
-) ([]byte, *artifact.ArtifactDescriptor, error) {
-	if version == nil {
-		s.loadVersions = append(s.loadVersions, "nil")
-	} else {
-		s.loadVersions = append(s.loadVersions, fmt.Sprint(*version))
-	}
-	return []byte("A"), &artifact.ArtifactDescriptor{Name: filename, Version: 0, MimeType: "text/plain"}, nil
+	_ artifact.KeyPrefix,
+	_ ...artifact.ListOption,
+) ([]artifact.Descriptor, string, error) {
+	return nil, "", nil
 }
 
-func (*pinnedArtifactService) ListArtifactKeys(
+func (*pinnedArtifactService) Delete(
 	_ context.Context,
-	_ artifact.SessionInfo,
-) ([]string, error) {
-	return nil, nil
-}
-
-func (*pinnedArtifactService) DeleteArtifact(
-	_ context.Context,
-	_ artifact.SessionInfo,
-	_ string,
+	_ artifact.Key,
+	_ ...artifact.DeleteOption,
 ) error {
 	return nil
 }
 
-func (*pinnedArtifactService) ListVersions(
+func (*pinnedArtifactService) Versions(
 	_ context.Context,
-	_ artifact.SessionInfo,
-	_ string,
-) ([]int, error) {
-	return []int{7}, nil
+	_ artifact.Key,
+) ([]artifact.VersionID, error) {
+	return []artifact.VersionID{"7"}, nil
 }
 
 func TestStageInputs_ArtifactPinUsesPinnedVersion(t *testing.T) {
@@ -1164,6 +1164,12 @@ func TestStageInputs_ArtifactPinUsesPinnedVersion(t *testing.T) {
 	ctx := codeexecutor.WithArtifactService(
 		context.Background(), svc,
 	)
+	ctx = codeexecutor.WithArtifactBaseKey(ctx, artifact.Key{
+		AppName:   "a",
+		UserID:    "u",
+		SessionID: "s",
+		Scope:     artifact.ScopeSession,
+	})
 
 	rt := &workspaceRuntime{
 		ce: &CodeExecutor{
@@ -1190,7 +1196,10 @@ func TestStageInputs_ArtifactPinUsesPinnedVersion(t *testing.T) {
 func TestStageInputs_ArtifactPinFromMetadata(t *testing.T) {
 	const to = "work/inputs/demo.txt"
 
-	intPtr := func(v int) *int { return &v }
+	verPtr := func(v string) *artifact.VersionID {
+		ver := artifact.VersionID(v)
+		return &ver
+	}
 	md := codeexecutor.WorkspaceMetadata{
 		Version:   0,
 		CreatedAt: time.Time{},
@@ -1199,21 +1208,21 @@ func TestStageInputs_ArtifactPinFromMetadata(t *testing.T) {
 			From:      "artifact://demo.txt@1",
 			To:        to,
 			Resolved:  "other",
-			Version:   intPtr(3),
+			Version:   verPtr("3"),
 			Mode:      "copy",
 			Timestamp: time.Time{},
 		}, {
 			From:      "artifact://demo.txt@bad",
 			To:        to,
 			Resolved:  "other",
-			Version:   intPtr(2),
+			Version:   verPtr("2"),
 			Mode:      "copy",
 			Timestamp: time.Time{},
 		}, {
 			From:      "workspace://x",
 			To:        to,
 			Resolved:  "other",
-			Version:   intPtr(5),
+			Version:   verPtr("5"),
 			Mode:      "copy",
 			Timestamp: time.Time{},
 		}, {
@@ -1227,7 +1236,7 @@ func TestStageInputs_ArtifactPinFromMetadata(t *testing.T) {
 			From:      "artifact://demo.txt@1",
 			To:        "work/inputs/other.txt",
 			Resolved:  "other",
-			Version:   intPtr(4),
+			Version:   verPtr("4"),
 			Mode:      "copy",
 			Timestamp: time.Time{},
 		}},
@@ -1307,6 +1316,12 @@ func TestStageInputs_ArtifactPinFromMetadata(t *testing.T) {
 	ctx := codeexecutor.WithArtifactService(
 		context.Background(), svc,
 	)
+	ctx = codeexecutor.WithArtifactBaseKey(ctx, artifact.Key{
+		AppName:   "a",
+		UserID:    "u",
+		SessionID: "s",
+		Scope:     artifact.ScopeSession,
+	})
 
 	rt := &workspaceRuntime{
 		ce: &CodeExecutor{
@@ -1402,6 +1417,12 @@ func TestStageInputs_AllBranches(t *testing.T) {
 	ctx := codeexecutor.WithArtifactService(
 		context.Background(), svc,
 	)
+	ctx = codeexecutor.WithArtifactBaseKey(ctx, artifact.Key{
+		AppName:   "a",
+		UserID:    "u",
+		SessionID: "s",
+		Scope:     artifact.ScopeSession,
+	})
 
 	specs := []codeexecutor.InputSpec{
 		{From: "artifact://name@1", To: "work/a.txt",
@@ -1471,6 +1492,12 @@ func TestCollectOutputs_SaveInlineLimits(t *testing.T) {
 	ctx := codeexecutor.WithArtifactService(
 		context.Background(), svc,
 	)
+	ctx = codeexecutor.WithArtifactBaseKey(ctx, artifact.Key{
+		AppName:   "a",
+		UserID:    "u",
+		SessionID: "s",
+		Scope:     artifact.ScopeSession,
+	})
 
 	rt := &workspaceRuntime{
 		ce: &CodeExecutor{

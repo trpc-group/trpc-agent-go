@@ -9,8 +9,8 @@ replace (
 
 require (
 	github.com/google/uuid v1.6.0
-	trpc.group/trpc-go/trpc-agent-go v0.5.0
-	trpc.group/trpc-go/trpc-agent-go/codeexecutor/container v0.5.0
+	trpc.group/trpc-go/trpc-agent-go v0.2.0
+	trpc.group/trpc-go/trpc-agent-go/codeexecutor/container v0.0.0-00010101000000-000000000000
 )
 
 require (
@@ -62,7 +62,7 @@ require (
 	golang.org/x/sync v0.10.0 // indirect
 	golang.org/x/sys v0.35.0 // indirect
 	golang.org/x/text v0.21.0 // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20240903143218-8af14fe29dc1 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20240822170219-fc7c04adadcd // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240903143218-8af14fe29dc1 // indirect
 	google.golang.org/grpc v1.67.0 // indirect
 	google.golang.org/protobuf v1.34.2 // indirect

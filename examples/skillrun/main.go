@@ -18,9 +18,12 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"mime"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,6 +53,11 @@ var (
 		"skills-guidance",
 		true,
 		"include built-in skills tooling/workspace guidance",
+	)
+	flagSendFileInputs = flag.Bool(
+		"send-file-inputs",
+		false,
+		"send file inputs to the model provider (may be unsupported)",
 	)
 	flagExec = flag.String(
 		"executor", "local",
@@ -95,6 +103,8 @@ Summarize results, note saved files, and propose next steps briefly.
 Inside a skill workspace, treat inputs/ and work/inputs/ as read-only
 views of host files unless skill docs say they are writable. Do not
 create, move, or modify files under inputs/ or work/inputs/.
+User-uploaded file inputs from the conversation are also staged under
+work/inputs/ when skill_run executes.
 
 When chaining multiple skills, read previous results directly from
 out/ (or $OUTPUT_DIR) and write new files back to out/. Prefer using
@@ -136,6 +146,8 @@ type skillChat struct {
 	sessionID  string
 	executor   string
 	artSvc     artifact.Service
+	model      *openai.Model
+	uploaded   []string
 }
 
 func (c *skillChat) run() error {
@@ -143,12 +155,21 @@ func (c *skillChat) run() error {
 	if err := c.setup(ctx); err != nil {
 		return err
 	}
+	defer c.cleanupUploads(ctx)
 	return c.startChat(ctx)
 }
 
 func (c *skillChat) setup(_ context.Context) error {
 	// Model.
-	mdl := openai.New(c.modelName)
+	var mdlOpts []openai.Option
+	if !*flagSendFileInputs {
+		mdlOpts = append(
+			mdlOpts,
+			openai.WithOmitFileContentParts(true),
+		)
+	}
+	mdl := openai.New(c.modelName, mdlOpts...)
+	c.model = mdl
 
 	// Skills repository.
 	repo, err := skill.NewFSRepository(c.skillsRoot)
@@ -214,9 +235,8 @@ func (c *skillChat) setup(_ context.Context) error {
 
 	// Agent with skills enabled; skill_load + skill_run get registered.
 	gen := model.GenerationConfig{
-		MaxTokens:   intPtr(2000),
-		Temperature: floatPtr(0.4),
-		Stream:      c.stream,
+		MaxTokens: intPtr(2000),
+		Stream:    c.stream,
 	}
 
 	llm := llmagent.New(
@@ -251,6 +271,12 @@ func (c *skillChat) setup(_ context.Context) error {
 	fmt.Println(
 		" - No need to type 'load'; the assistant loads skills when " +
 			"needed.",
+	)
+	fmt.Println(
+		" - /upload <path> attaches a local file (inline bytes).",
+	)
+	fmt.Println(
+		" - /upload_id <path> uploads a file and attaches file_id.",
 	)
 	fmt.Println(
 		" - Ask to run a command exactly as in the docs.",
@@ -361,6 +387,20 @@ func (c *skillChat) startChat(ctx context.Context) error {
 			fmt.Println("👋 Bye!")
 			return nil
 		}
+		if strings.HasPrefix(text, "/upload_id ") {
+			if err := c.handleUpload(ctx, text, true); err != nil {
+				fmt.Printf("❌ Upload error: %v\n", err)
+			}
+			fmt.Println()
+			continue
+		}
+		if strings.HasPrefix(text, "/upload ") {
+			if err := c.handleUpload(ctx, text, false); err != nil {
+				fmt.Printf("❌ Upload error: %v\n", err)
+			}
+			fmt.Println()
+			continue
+		}
 		if strings.HasPrefix(text, "/pull ") {
 			if err := c.handlePull(text); err != nil {
 				fmt.Printf("❌ Pull error: %v\n", err)
@@ -387,6 +427,12 @@ func (c *skillChat) processMessage(
 	ctx context.Context, userMessage string,
 ) error {
 	msg := model.NewUserMessage(userMessage)
+	return c.processModelMessage(ctx, msg)
+}
+
+func (c *skillChat) processModelMessage(
+	ctx context.Context, msg model.Message,
+) error {
 	reqID := uuid.New().String()
 	ch, err := c.runner.Run(
 		ctx, c.userID, c.sessionID, msg, agent.WithRequestID(reqID),
@@ -418,6 +464,66 @@ func (c *skillChat) processResponse(
 	return nil
 }
 
+func (c *skillChat) handleUpload(
+	ctx context.Context,
+	text string,
+	useFileIDs bool,
+) error {
+	cmd := "/upload "
+	if useFileIDs {
+		cmd = "/upload_id "
+	}
+	raw := strings.TrimSpace(strings.TrimPrefix(text, cmd))
+	if raw == "" {
+		return fmt.Errorf("usage: %s<path>", cmd)
+	}
+	base := filepath.Base(raw)
+	msg := model.NewUserMessage("Uploaded file: " + base)
+	if useFileIDs {
+		if c.model == nil {
+			return fmt.Errorf("model is not configured")
+		}
+		id, err := c.model.UploadFile(ctx, raw)
+		if err != nil {
+			return err
+		}
+		c.uploaded = append(c.uploaded, id)
+		msg.AddFileIDWithName(id, base)
+		fmt.Printf("📤 Uploaded as %s\n", id)
+		return c.processModelMessage(ctx, msg)
+	}
+	data, err := os.ReadFile(raw)
+	if err != nil {
+		return err
+	}
+	msg.AddFileData(base, data, guessMimeType(base, data))
+	fmt.Printf("📎 Attached %s (%d bytes)\n", base, len(data))
+	return c.processModelMessage(ctx, msg)
+}
+
+func guessMimeType(name string, data []byte) string {
+	mt := mime.TypeByExtension(strings.ToLower(filepath.Ext(name)))
+	if i := strings.Index(mt, ";"); i >= 0 {
+		mt = mt[:i]
+	}
+	if strings.TrimSpace(mt) != "" {
+		return mt
+	}
+	if len(data) == 0 {
+		return "application/octet-stream"
+	}
+	return http.DetectContentType(data)
+}
+
+func (c *skillChat) cleanupUploads(ctx context.Context) {
+	if c.model == nil || len(c.uploaded) == 0 {
+		return
+	}
+	for _, id := range c.uploaded {
+		_ = c.model.DeleteFile(ctx, id)
+	}
+}
+
 // handlePull downloads an artifact from the service and writes it to disk.
 // Usage: /pull <name> [version]
 func (c *skillChat) handlePull(text string) error {
@@ -429,21 +535,26 @@ func (c *skillChat) handlePull(text string) error {
 		return fmt.Errorf("usage: /pull <name> [version]")
 	}
 	name := fields[1]
-	var verPtr *int
+	var verPtr *artifact.VersionID
 	if len(fields) >= 3 {
-		if v, err := parseInt(fields[2]); err == nil {
+		v := artifact.VersionID(strings.TrimSpace(fields[2]))
+		if v != "" && !strings.EqualFold(string(v), "latest") {
 			verPtr = &v
 		}
 	}
-	si := artifact.SessionInfo{
-		AppName: appName, UserID: c.userID, SessionID: c.sessionID,
+	key := artifact.Key{
+		AppName:   appName,
+		UserID:    c.userID,
+		SessionID: c.sessionID,
+		Scope:     artifact.ScopeSession,
+		Name:      name,
 	}
-	rc, desc, err := c.artSvc.LoadArtifact(context.Background(), si, name, verPtr)
+	rc, desc, err := c.artSvc.Open(context.Background(), key, verPtr)
 	if err != nil {
+		if errors.Is(err, artifact.ErrNotFound) {
+			return fmt.Errorf("artifact not found: %s", name)
+		}
 		return err
-	}
-	if desc == nil || rc == nil {
-		return fmt.Errorf("artifact not found: %s", name)
 	}
 	defer rc.Close()
 	dir := "downloads"
@@ -470,12 +581,34 @@ func (c *skillChat) handleListArtifacts() error {
 	if c.artSvc == nil {
 		return fmt.Errorf("artifact service not available")
 	}
-	si := artifact.SessionInfo{
-		AppName: appName, UserID: c.userID, SessionID: c.sessionID,
+	prefix := artifact.KeyPrefix{
+		AppName:    appName,
+		UserID:     c.userID,
+		SessionID:  c.sessionID,
+		Scope:      artifact.ScopeSession,
+		NamePrefix: "",
 	}
-	keys, err := c.artSvc.ListArtifactKeys(context.Background(), si)
-	if err != nil {
-		return err
+	var (
+		keys      []string
+		pageToken string
+	)
+	for {
+		items, next, err := c.artSvc.List(
+			context.Background(),
+			prefix,
+			artifact.WithListLimit(200),
+			artifact.WithListPageToken(pageToken),
+		)
+		if err != nil {
+			return err
+		}
+		for _, d := range items {
+			keys = append(keys, d.Key.Name)
+		}
+		if next == "" {
+			break
+		}
+		pageToken = next
 	}
 	if len(keys) == 0 {
 		fmt.Println("(no artifacts)")
@@ -486,17 +619,6 @@ func (c *skillChat) handleListArtifacts() error {
 		fmt.Printf("- %s\n", k)
 	}
 	return nil
-}
-
-func parseInt(s string) (int, error) {
-	var n int
-	for _, ch := range s {
-		if ch < '0' || ch > '9' {
-			return 0, fmt.Errorf("invalid int: %s", s)
-		}
-		n = n*10 + int(ch-'0')
-	}
-	return n, nil
 }
 
 func (c *skillChat) handleEvent(
@@ -550,15 +672,15 @@ func (c *skillChat) handleToolResponses(ev *event.Event) bool {
 				// Try to surface artifact refs if present.
 				var v struct {
 					ArtifactFiles []struct {
-						Name    string `json:"name"`
-						Version int    `json:"version"`
+						Name    string             `json:"name"`
+						Version artifact.VersionID `json:"version"`
 					} `json:"artifact_files"`
 				}
 				if json.Unmarshal([]byte(ch.Message.Content), &v) == nil &&
 					len(v.ArtifactFiles) > 0 {
 					fmt.Printf("   Saved artifacts:\n")
 					for _, a := range v.ArtifactFiles {
-						fmt.Printf("   - %s (v%d)\n", a.Name, a.Version)
+						fmt.Printf("   - %s (@%s)\n", a.Name, a.Version)
 					}
 				}
 				has = true
@@ -597,5 +719,4 @@ func (c *skillChat) handleContent(
 	*full += content
 }
 
-func intPtr(i int) *int           { return &i }
-func floatPtr(f float64) *float64 { return &f }
+func intPtr(i int) *int { return &i }
