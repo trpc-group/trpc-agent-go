@@ -16,7 +16,7 @@ Within the same conversation, it enables natural continuity between turns, preve
 - **Session Summary**: Uses LLM to automatically compress long conversation history, significantly reducing token consumption while preserving key context
 - **Event Limit**: Controls the maximum number of events stored per session to prevent memory overflow
 - **TTL Management**: Supports automatic expiration and cleanup of session data
-- **Multiple Storage Backends**: Supports Memory, Redis, PostgreSQL, MySQL, and ClickHouse
+- **Multiple Storage Backends**: Supports Memory, SQLite, Redis, PostgreSQL, MySQL, and ClickHouse
 - **Concurrency Safe**: Built-in read-write locks ensure safe concurrent access
 - **Automatic Management**: Automatically handles session creation, loading, and updates when integrated with Runner
 - **Soft Delete Support**: PostgreSQL/MySQL/ClickHouse support soft delete for data recovery
@@ -320,11 +320,12 @@ sessionService := inmemory.NewSessionService(
 
 ## Storage Backend Comparison
 
-tRPC-Agent-Go provides five session storage backends for different scenarios:
+tRPC-Agent-Go provides six session storage backends for different scenarios:
 
 | Storage Type | Use Case | Persistence | Distributed | Complex Queries |
 | --- | --- | --- | --- | --- |
 | [Memory](inmemory.md) | Dev/Test, small scale | ❌ | ❌ | ❌ |
+| [SQLite](sqlite.md) | Local persistence, single-node | ✅ | ❌ | ✅ |
 | [Redis](redis.md) | Production, distributed | ✅ | ✅ | ❌ |
 | [PostgreSQL](postgres.md) | Production, complex queries | ✅ | ✅ | ✅ |
 | [MySQL](mysql.md) | Production, complex queries | ✅ | ✅ | ✅ |
@@ -626,6 +627,7 @@ trackEvents, err := sess.GetTrackEvents("ui-events")
 
 - [Session Summary](summary.md) - Automatic compression of long conversation history
 - [Memory Storage](inmemory.md) - Development and testing environment
+- [SQLite Storage](sqlite.md) - Local persistence, single-node
 - [Redis Storage](redis.md) - Production distributed storage
 - [PostgreSQL Storage](postgres.md) - Relational database storage
 - [MySQL Storage](mysql.md) - Relational database storage

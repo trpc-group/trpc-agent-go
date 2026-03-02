@@ -16,7 +16,7 @@ Session 用于管理当前会话的上下文，隔离维度为 `<appName, userID
 - **会话摘要**：使用 LLM 自动压缩长对话历史，在保留关键上下文的同时显著降低 token 消耗
 - **事件限制**：控制每个会话存储的最大事件数量，防止内存溢出
 - **TTL 管理**：支持会话数据的自动过期清理
-- **多存储后端**：支持内存、Redis、PostgreSQL、MySQL、ClickHouse 存储
+- **多存储后端**：支持内存、SQLite、Redis、PostgreSQL、MySQL、ClickHouse 存储
 - **并发安全**：内置读写锁保证并发访问安全
 - **自动管理**：集成 Runner 后自动处理会话创建、加载和更新
 - **软删除支持**：PostgreSQL/MySQL/ClickHouse 支持软删除，数据可恢复
@@ -27,7 +27,7 @@ Session 用于管理当前会话的上下文，隔离维度为 `<appName, userID
 
 tRPC-Agent-Go 的会话管理通过 `runner.WithSessionService` 集成到 Runner 中，Runner 会自动处理会话的创建、加载、更新和持久化。
 
-**支持的存储后端：** 内存（Memory）、Redis、PostgreSQL、MySQL、ClickHouse
+**支持的存储后端：** 内存（Memory）、SQLite、Redis、PostgreSQL、MySQL、ClickHouse
 
 **默认行为：** 如果不配置 `runner.WithSessionService`，Runner 会默认使用内存存储（Memory），数据在进程重启后会丢失。
 
@@ -316,6 +316,7 @@ sessionService := inmemory.NewSessionService(
 | 存储类型 | 过期机制 | 自动清理 |
 | --- | --- | --- |
 | 内存存储 | 定期扫描 + 访问时检查 | 是 |
+| SQLite | 定期扫描（软删除或硬删除） | 是 |
 | Redis 存储 | Redis 原生 TTL | 是 |
 | PostgreSQL | 定期扫描（软删除或硬删除） | 是 |
 | MySQL | 定期扫描（软删除或硬删除） | 是 |
@@ -323,11 +324,12 @@ sessionService := inmemory.NewSessionService(
 
 ## 存储后端对比
 
-tRPC-Agent-Go 提供五种会话存储后端，满足不同场景需求：
+tRPC-Agent-Go 提供六种会话存储后端，满足不同场景需求：
 
 | 存储类型 | 适用场景 | 持久化 | 分布式 | 复杂查询 |
 | --- | --- | --- | --- | --- |
 | [内存存储](inmemory.md) | 开发测试、小规模 | ❌ | ❌ | ❌ |
+| [SQLite](sqlite.md) | 本地持久化、单机 | ✅ | ❌ | ✅ |
 | [Redis 存储](redis.md) | 生产环境、分布式 | ✅ | ✅ | ❌ |
 | [PostgreSQL](postgres.md) | 生产环境、复杂查询 | ✅ | ✅ | ✅ |
 | [MySQL](mysql.md) | 生产环境、复杂查询 | ✅ | ✅ | ✅ |
@@ -638,6 +640,7 @@ trackEvents, err := sess.GetTrackEvents("ui-events")
 
 - [会话摘要](summary.md) - 自动压缩长对话历史
 - [内存存储](inmemory.md) - 开发测试环境
+- [SQLite 存储](sqlite.md) - 本地持久化、单机
 - [Redis 存储](redis.md) - 生产环境分布式存储
 - [PostgreSQL 存储](postgres.md) - 关系型数据库存储
 - [MySQL 存储](mysql.md) - 关系型数据库存储
