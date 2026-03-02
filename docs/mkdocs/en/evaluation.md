@@ -622,6 +622,8 @@ type Manager interface {
 	UpdateCase(ctx context.Context, appName, evalSetID string, evalCase *EvalCase) error
 	// DeleteCase deletes an evaluation case.
 	DeleteCase(ctx context.Context, appName, evalSetID, evalCaseID string) error
+	// Close releases resources.
+	Close() error
 }
 ```
 
@@ -693,6 +695,110 @@ evalSetManager := local.New(
 )
 ```
 
+##### MySQL Implementation
+
+The MySQL implementation of EvalSetManager persists EvalSet and EvalCase to MySQL.
+
+It stores evaluation sets and evaluation cases in two tables, and returns cases in insertion order when reading an evaluation set.
+
+###### Configuration Options
+
+**Connection:**
+
+- **`WithMySQLClientDSN(dsn string)`**: Connect using DSN directly (recommended). Consider enabling `parseTime=true`.
+- **`WithMySQLInstance(instanceName string)`**: Use a registered MySQL instance. You must register it via `storage/mysql.RegisterMySQLInstance` before use. Note: `WithMySQLClientDSN` has higher priority; if both are set, DSN wins.
+- **`WithExtraOptions(extraOptions ...any)`**: Extra options passed to the MySQL client builder. Note: When using `WithMySQLInstance`, the registered instance configuration takes precedence and this option will not take effect.
+
+**Tables:**
+
+- **`WithTablePrefix(prefix string)`**: Table name prefix. An empty prefix means no prefix. A non-empty prefix must start with a letter or underscore and contain only letters/numbers/underscores. `trpc` and `trpc_` are equivalent; an underscore separator is added automatically.
+
+**Initialization:**
+
+- **`WithSkipDBInit(skip bool)`**: Skip automatic table creation. Default is `false`.
+- **`WithInitTimeout(timeout time.Duration)`**: Automatic table creation timeout. Default is `30s`.
+
+###### Code Example
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation"
+	evalsetmysql "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/mysql"
+)
+
+evalSetManager, err := evalsetmysql.New(
+	evalsetmysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/dbname?parseTime=true&charset=utf8mb4"),
+	evalsetmysql.WithTablePrefix("trpc_"),
+)
+if err != nil {
+	log.Fatalf("create mysql evalset manager: %v", err)
+}
+
+agentEvaluator, err := evaluation.New(
+	appName,
+	runner,
+	evaluation.WithEvalSetManager(evalSetManager),
+)
+if err != nil {
+	log.Fatalf("create evaluator: %v", err)
+}
+defer agentEvaluator.Close()
+```
+
+###### Configuration Reuse
+
+```go
+import (
+	storagemysql "trpc.group/trpc-go/trpc-agent-go/storage/mysql"
+	evalsetmysql "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/mysql"
+)
+
+// Register MySQL instance.
+storagemysql.RegisterMySQLInstance(
+	"my-evaluation-mysql",
+	storagemysql.WithClientBuilderDSN("user:password@tcp(localhost:3306)/dbname?parseTime=true&charset=utf8mb4"),
+)
+
+// Reuse it in EvalSetManager.
+evalSetManager, err := evalsetmysql.New(evalsetmysql.WithMySQLInstance("my-evaluation-mysql"))
+if err != nil {
+	log.Fatalf("create mysql evalset manager: %v", err)
+}
+```
+
+###### Storage Layout
+
+When `skipDBInit=false`, the manager creates required tables during initialization. The default value is `false`. If `skipDBInit=true`, you need to create tables yourself. You can use the SQL below, which is identical to `evaluation/evalset/mysql/schema.sql`. Replace `{{PREFIX}}` with the actual table prefix, e.g. `trpc_`. If you don't use a prefix, replace it with an empty string.
+
+```sql
+CREATE TABLE IF NOT EXISTS `{{PREFIX}}evaluation_eval_sets` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT,
+  `app_name` VARCHAR(255) NOT NULL,
+  `eval_set_id` VARCHAR(255) NOT NULL,
+  `name` VARCHAR(255) NOT NULL,
+  `description` TEXT DEFAULT NULL,
+  `created_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_eval_sets_app_eval_set` (`app_name`, `eval_set_id`),
+  KEY `idx_eval_sets_app_created` (`app_name`, `created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `{{PREFIX}}evaluation_eval_cases` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT,
+  `app_name` VARCHAR(255) NOT NULL,
+  `eval_set_id` VARCHAR(255) NOT NULL,
+  `eval_id` VARCHAR(255) NOT NULL,
+  `eval_mode` VARCHAR(32) NOT NULL DEFAULT '',
+  `eval_case` JSON NOT NULL,
+  `created_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_eval_cases_app_set_case` (`app_name`, `eval_set_id`, `eval_id`),
+  KEY `idx_eval_cases_app_set_order` (`app_name`, `eval_set_id`, `id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+```
+
 ### EvalMetric
 
 EvalMetric defines evaluation metrics. It selects an evaluator implementation by `metricName`, describes criteria with `criterion`, and defines thresholds with `threshold`. A single evaluation can configure multiple metrics. The evaluation run applies them in order and produces scores and statuses for each.
@@ -755,7 +861,9 @@ The framework includes the following criterion types:
 |--------------------------|-----------------------------------------|
 | TextCriterion            | Text strings                            |
 | JSONCriterion            | JSON objects                            |
+| RougeCriterion           | ROUGE text scoring                      |
 | ToolTrajectoryCriterion  | Tool call trajectories                  |
+| FinalResponseCriterion   | Final response content                  |
 | LLMCriterion             | LLM-based evaluation models             |
 | Criterion                | Aggregation of multiple criteria        |
 
@@ -819,6 +927,7 @@ JSONCriterion compares two JSON values, commonly used for tool arguments and too
 type JSONCriterion struct {
 	Ignore          bool                                     // Ignore indicates skipping comparison.
 	IgnoreTree      map[string]any                           // IgnoreTree indicates the field tree to ignore.
+	OnlyTree        map[string]any                           // OnlyTree indicates the only field tree to compare.
 	MatchStrategy   JSONMatchStrategy                        // MatchStrategy is the matching strategy.
 	NumberTolerance *float64                                 // NumberTolerance is the numeric tolerance.
 	Compare         func(actual, expected any) (bool, error) // Compare is custom comparison logic.
@@ -830,7 +939,7 @@ type JSONMatchStrategy string
 
 Currently, `matchStrategy` only supports `exact`, with default `exact`.
 
-During comparison, `actual` is the actual value and `expected` is the expected value. Object comparison requires identical key sets. Array comparison requires identical length and order. Numeric comparison supports a tolerance, default `1e-6`. `ignoreTree` ignores unstable fields; a leaf node set to true ignores that field and its subtree.
+During comparison, `actual` is the actual value and `expected` is the expected value. Object comparison requires identical key sets. Array comparison requires identical length and order. Numeric comparison supports a tolerance, default `1e-6`. `ignoreTree` ignores unstable fields; a leaf node set to true ignores that field and its subtree. `onlyTree` compares only selected fields; keys not present in the tree are ignored. A leaf node set to true compares that field and its subtree. `onlyTree` and `ignoreTree` cannot be set at the same time when both are non-empty.
 
 Example configuration ignores `id` and `metadata.timestamp`, and relaxes numeric tolerance.
 
@@ -843,6 +952,19 @@ Example configuration ignores `id` and `metadata.timestamp`, and relaxes numeric
     }
   },
   "numberTolerance": 1e-2
+}
+```
+
+Example configuration compares only `name` and `metadata.id`, and ignores all other fields.
+
+```json
+{
+  "onlyTree": {
+    "name": true,
+    "metadata": {
+      "id": true
+    }
+  }
 }
 ```
 
@@ -872,6 +994,94 @@ jsonCriterion := cjson.New(
 		return true, nil
 	}),
 )
+```
+
+##### RougeCriterion
+
+RougeCriterion scores two strings using ROUGE and treats the pair as a match when the scores meet the configured thresholds.
+
+See [examples/evaluation/rouge](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/rouge) for a complete example.
+
+```go
+import crouge "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/rouge"
+
+// RougeCriterion defines ROUGE scoring and threshold checks.
+type RougeCriterion struct {
+	Ignore         bool         // Ignore indicates skipping comparison.
+	RougeType      string       // RougeType selects the ROUGE variant.
+	Measure        RougeMeasure // Measure selects the primary scalar measure.
+	Threshold      Score        // Threshold defines minimum scores to pass.
+	UseStemmer     bool         // UseStemmer enables Porter stemming in the built-in tokenizer.
+	SplitSummaries bool         // SplitSummaries enables sentence splitting for rougeLsum.
+	Tokenizer      Tokenizer    // Tokenizer overrides the built-in tokenizer.
+}
+
+// RougeMeasure represents the scalar measure used as the primary score.
+type RougeMeasure string
+
+const (
+	RougeMeasureF1        RougeMeasure = "f1"
+	RougeMeasurePrecision RougeMeasure = "precision"
+	RougeMeasureRecall    RougeMeasure = "recall"
+)
+
+// Score holds ROUGE precision, recall and F1.
+type Score struct {
+	Precision float64
+	Recall    float64
+	F1        float64
+}
+```
+
+RougeType supports `rougeN`, `rougeL`, and `rougeLsum`, where N is a positive integer. For example: `rouge1`, `rouge2`, `rouge3`, `rougeL`, `rougeLsum`.
+
+Measure supports `f1`, `precision`, and `recall`, with a default of `f1` when unset.
+
+Threshold defines minimum requirements. Precision, recall, and f1 all participate in the pass check. Unset fields default to 0. ROUGE scores are in range `[0, 1]`.
+
+UseStemmer enables Porter stemming for the built-in tokenizer. When Tokenizer is set, UseStemmer is ignored.
+
+SplitSummaries controls sentence splitting for `rougeLsum` only.
+
+Tokenizer injects a custom tokenizer.
+
+The following snippet configures FinalResponseCriterion to match by rougeLsum with thresholds.
+
+```go
+import (
+	cfinalresponse "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/finalresponse"
+	crouge "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/rouge"
+)
+
+finalResponseCriterion := cfinalresponse.New(
+	cfinalresponse.WithRougeCriterion(&crouge.RougeCriterion{
+		RougeType:      "rougeLsum",
+		Measure:        crouge.RougeMeasureF1,
+		Threshold:      crouge.Score{Precision: 0.3, Recall: 0.6, F1: 0.4},
+		UseStemmer:     true,
+		SplitSummaries: true,
+	}),
+)
+```
+
+Example metric JSON config:
+
+```json
+{
+  "finalResponse": {
+    "rouge": {
+      "rougeType": "rougeLsum",
+      "measure": "f1",
+      "threshold": {
+        "precision": 0.3,
+        "recall": 0.6,
+        "f1": 0.4
+      },
+      "useStemmer": true,
+      "splitSummaries": true
+    }
+  }
+}
 ```
 
 ##### ToolTrajectoryCriterion
@@ -1013,12 +1223,13 @@ Assuming `A`, `B`, `C`, and `D` are tool calls, matching examples are as follows
 
 ##### FinalResponseCriterion
 
-FinalResponseCriterion compares final responses per turn. It supports text comparison and also JSON structural comparison after parsing content. The structure is defined as follows.
+FinalResponseCriterion compares final responses per turn. It supports text comparison, JSON structural comparison after parsing content, and ROUGE scoring. The structure is defined as follows.
 
 ```go
 import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	cjson "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
+	crouge "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/rouge"
 	ctext "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
 )
 
@@ -1026,13 +1237,16 @@ import (
 type FinalResponseCriterion struct {
 	Text    *ctext.TextCriterion                                      // Text compares final response text.
 	JSON    *cjson.JSONCriterion                                      // JSON compares final response JSON.
+	Rouge   *crouge.RougeCriterion                                    // Rouge scores final response text with ROUGE.
 	Compare func(actual, expected *evalset.Invocation) (bool, error) // Compare is custom comparison logic.
 }
 ```
 
 When using this criterion, you need to fill `finalResponse` on the expected side for the corresponding turn in EvalSet.
 
-`text` and `json` can be configured together, and both must match when both are set. When `json` is configured, the content must be parseable as JSON.
+`text`, `json`, and `rouge` can be configured together, and all configured sub-criteria must match. When `json` is configured, the content must be parseable as JSON.
+
+To match by ROUGE, configure `rouge` and see RougeCriterion for details.
 
 The following example selects `final_response_avg_score` and configures FinalResponseCriterion to compare final responses by text containment.
 
@@ -1097,6 +1311,7 @@ type LLMCriterion struct {
 type JudgeModelOptions struct {
 	ProviderName string                  // ProviderName is the model provider.
 	ModelName    string                  // ModelName is the model name.
+	Variant      string                  // Variant is optional and selects the OpenAI-compatible variant when ProviderName is openai.
 	BaseURL      string                  // BaseURL is a custom endpoint.
 	APIKey       string                  // APIKey is the access key.
 	ExtraFields  map[string]any          // ExtraFields are extra fields.
@@ -1117,7 +1332,9 @@ type RubricContent struct {
 }
 ```
 
-`judgeModel` supports environment variable references in `providerName`, `modelName`, `baseURL`, and `apiKey`, which are expanded at runtime. For security, avoid writing `judgeModel.apiKey` or `judgeModel.baseURL` in plain text in metric configuration files or code.
+`judgeModel` supports environment variable references in `providerName`, `modelName`, `variant`, `baseURL`, and `apiKey`, which are expanded at runtime. For security, avoid writing `judgeModel.apiKey` or `judgeModel.baseURL` in plain text in metric configuration files or code.
+
+`variant` is optional and selects the OpenAI-compatible variant, for example `openai`, `hunyuan`, `deepseek`, `qwen`. It is only effective when `providerName` is `openai`. When omitted, the default variant is `openai`.
 
 `Generation` defaults to `MaxTokens=2000`, `Temperature=0.8`, `Stream=false`.
 
@@ -1183,6 +1400,8 @@ type Manager interface {
 	Delete(ctx context.Context, appName, evalSetID, metricName string) error
 	// Update updates an evaluation metric.
 	Update(ctx context.Context, appName, evalSetID string, metric *EvalMetric) error
+	// Close releases resources.
+	Close() error
 }
 ```
 
@@ -1226,6 +1445,94 @@ metricManager := metriclocal.New(
 	metric.WithBaseDir(dataDir),
 	metric.WithLocator(&customMetricLocator{}),
 )
+```
+
+##### MySQL Implementation
+
+The MySQL implementation of MetricManager persists metric configuration to MySQL.
+
+###### Configuration Options
+
+**Connection:**
+
+- **`WithMySQLClientDSN(dsn string)`**: Connect using DSN directly (recommended). Consider enabling `parseTime=true`.
+- **`WithMySQLInstance(instanceName string)`**: Use a registered MySQL instance. You must register it via `storage/mysql.RegisterMySQLInstance` before use. Note: `WithMySQLClientDSN` has higher priority; if both are set, DSN wins.
+- **`WithExtraOptions(extraOptions ...any)`**: Extra options passed to the MySQL client builder. Note: When using `WithMySQLInstance`, the registered instance configuration takes precedence and this option will not take effect.
+
+**Tables:**
+
+- **`WithTablePrefix(prefix string)`**: Table name prefix. An empty prefix means no prefix. A non-empty prefix must start with a letter or underscore and contain only letters/numbers/underscores. `trpc` and `trpc_` are equivalent; an underscore separator is added automatically.
+
+**Initialization:**
+
+- **`WithSkipDBInit(skip bool)`**: Skip automatic table creation. Default is `false`.
+- **`WithInitTimeout(timeout time.Duration)`**: Automatic table creation timeout. Default is `30s`, consistent with components such as memory/mysql.
+
+###### Code Example
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation"
+	metricmysql "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/mysql"
+)
+
+metricManager, err := metricmysql.New(
+	metricmysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/dbname?parseTime=true&charset=utf8mb4"),
+	metricmysql.WithTablePrefix("trpc_"),
+)
+if err != nil {
+	log.Fatalf("create mysql metric manager: %v", err)
+}
+
+agentEvaluator, err := evaluation.New(
+	appName,
+	runner,
+	evaluation.WithMetricManager(metricManager),
+)
+if err != nil {
+	log.Fatalf("create evaluator: %v", err)
+}
+defer agentEvaluator.Close()
+```
+
+###### Configuration Reuse
+
+```go
+import (
+	storagemysql "trpc.group/trpc-go/trpc-agent-go/storage/mysql"
+	metricmysql "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/mysql"
+)
+
+// Register MySQL instance.
+storagemysql.RegisterMySQLInstance(
+	"my-evaluation-mysql",
+	storagemysql.WithClientBuilderDSN("user:password@tcp(localhost:3306)/dbname?parseTime=true&charset=utf8mb4"),
+)
+
+// Reuse it in MetricManager.
+metricManager, err := metricmysql.New(metricmysql.WithMySQLInstance("my-evaluation-mysql"))
+if err != nil {
+	log.Fatalf("create mysql metric manager: %v", err)
+}
+```
+
+###### Storage Layout
+
+When `skipDBInit=false`, the manager creates required tables during initialization. The default value is `false`. If `skipDBInit=true`, you need to create tables yourself. You can use the SQL below, which is identical to `evaluation/metric/mysql/schema.sql`. Replace `{{PREFIX}}` with the actual table prefix, e.g. `trpc_`. If you don't use a prefix, replace it with an empty string.
+
+```sql
+CREATE TABLE IF NOT EXISTS `{{PREFIX}}evaluation_metrics` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT,
+  `app_name` VARCHAR(255) NOT NULL,
+  `eval_set_id` VARCHAR(255) NOT NULL,
+  `metric_name` VARCHAR(255) NOT NULL,
+  `metric` JSON NOT NULL,
+  `created_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_metrics_app_set_name` (`app_name`, `eval_set_id`, `metric_name`),
+  KEY `idx_metrics_app_set` (`app_name`, `eval_set_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 ```
 
 ### Evaluator
@@ -1793,6 +2100,8 @@ type Manager interface {
 	Get(ctx context.Context, appName, evalSetResultID string) (*EvalSetResult, error)
 	// List lists evaluation result IDs.
 	List(ctx context.Context, appName string) ([]string, error)
+	// Close releases resources.
+	Close() error
 }
 ```
 
@@ -1857,6 +2166,96 @@ evalResultManager := local.New(
 	evalresult.WithBaseDir(dataDir),
 	evalresult.WithLocator(&customResultLocator{}),
 )
+```
+
+##### MySQL Implementation
+
+The MySQL implementation of EvalResultManager persists evaluation results to MySQL.
+
+###### Configuration Options
+
+**Connection:**
+
+- **`WithMySQLClientDSN(dsn string)`**: Connect using DSN directly (recommended). Consider enabling `parseTime=true`.
+- **`WithMySQLInstance(instanceName string)`**: Use a registered MySQL instance. You must register it via `storage/mysql.RegisterMySQLInstance` before use. Note: `WithMySQLClientDSN` has higher priority; if both are set, DSN wins.
+- **`WithExtraOptions(extraOptions ...any)`**: Extra options passed to the MySQL client builder. Note: When using `WithMySQLInstance`, the registered instance configuration takes precedence and this option will not take effect.
+
+**Tables:**
+
+- **`WithTablePrefix(prefix string)`**: Table name prefix. An empty prefix means no prefix. A non-empty prefix must start with a letter or underscore and contain only letters/numbers/underscores. `trpc` and `trpc_` are equivalent; an underscore separator is added automatically.
+
+**Initialization:**
+
+- **`WithSkipDBInit(skip bool)`**: Skip automatic table creation. Default is `false`.
+- **`WithInitTimeout(timeout time.Duration)`**: Automatic table creation timeout. Default is `30s`, consistent with components such as memory/mysql.
+
+###### Code Example
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation"
+	evalresultmysql "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/mysql"
+)
+
+evalResultManager, err := evalresultmysql.New(
+	evalresultmysql.WithMySQLClientDSN("user:password@tcp(localhost:3306)/dbname?parseTime=true&charset=utf8mb4"),
+	evalresultmysql.WithTablePrefix("trpc_"),
+)
+if err != nil {
+	log.Fatalf("create mysql evalresult manager: %v", err)
+}
+
+agentEvaluator, err := evaluation.New(
+	appName,
+	runner,
+	evaluation.WithEvalResultManager(evalResultManager),
+)
+if err != nil {
+	log.Fatalf("create evaluator: %v", err)
+}
+defer agentEvaluator.Close()
+```
+
+###### Configuration Reuse
+
+```go
+import (
+	storagemysql "trpc.group/trpc-go/trpc-agent-go/storage/mysql"
+	evalresultmysql "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/mysql"
+)
+
+// Register MySQL instance.
+storagemysql.RegisterMySQLInstance(
+	"my-evaluation-mysql",
+	storagemysql.WithClientBuilderDSN("user:password@tcp(localhost:3306)/dbname?parseTime=true&charset=utf8mb4"),
+)
+
+// Reuse it in EvalResultManager.
+evalResultManager, err := evalresultmysql.New(evalresultmysql.WithMySQLInstance("my-evaluation-mysql"))
+if err != nil {
+	log.Fatalf("create mysql evalresult manager: %v", err)
+}
+```
+
+###### Storage Layout
+
+When `skipDBInit=false`, the manager creates required tables during initialization. The default value is `false`. If `skipDBInit=true`, you need to create tables yourself. You can use the SQL below, which is identical to `evaluation/evalresult/mysql/schema.sql`. Replace `{{PREFIX}}` with the actual table prefix, e.g. `trpc_`. If you don't use a prefix, replace it with an empty string.
+
+```sql
+CREATE TABLE IF NOT EXISTS `{{PREFIX}}evaluation_eval_set_results` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT,
+  `app_name` VARCHAR(255) NOT NULL,
+  `eval_set_result_id` VARCHAR(255) NOT NULL,
+  `eval_set_id` VARCHAR(255) NOT NULL,
+  `eval_set_result_name` VARCHAR(255) NOT NULL,
+  `eval_case_results` JSON NOT NULL,
+  `summary` JSON DEFAULT NULL,
+  `created_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_results_app_result_id` (`app_name`, `eval_set_result_id`),
+  KEY `idx_results_app_set_created` (`app_name`, `eval_set_id`, `created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 ```
 
 ### Evaluation Service
@@ -2282,6 +2681,262 @@ passHatK, err := evaluation.PassHatK(n, c, k)
 ```
 
 The computation of pass@k and pass^k relies on independence and identical distribution across runs. When doing repeated runs, ensure each run is independently sampled with necessary state reset, and avoid reusing session memory, tool caches, or external dependencies that would systematically inflate the metrics.
+
+### Skills Evaluation
+
+Agent Skills are exposed as built-in tools: `skill_load` and `skill_run`, so you can evaluate whether the agent uses Skills correctly with the same tool trajectory evaluator. In practice, `skill_run` results contain volatile fields such as `stdout`, `stderr`, `duration_ms`, and inline `output_files` content. Prefer using `onlyTree` in a per-tool strategy to assert only stable fields such as `skill`, requested `output_files`, and `exit_code` and `timed_out`, letting other volatile keys be ignored.
+
+A minimal example is shown below.
+
+EvalSet `tools` snippet:
+
+```json
+{
+  "invocationId": "write_ok-1",
+  "userContent": {
+    "role": "user",
+    "content": "Use skills to generate an OK file and confirm when done."
+  },
+  "tools": [
+    {
+      "id": "tool_use_1",
+      "name": "skill_load",
+      "arguments": {
+        "skill": "write-ok"
+      }
+    },
+    {
+      "id": "tool_use_2",
+      "name": "skill_run",
+      "arguments": {
+        "skill": "write-ok",
+        "output_files": [
+          "out/ok.txt"
+        ]
+      },
+      "result": {
+        "exit_code": 0,
+        "timed_out": false
+      }
+    }
+  ]
+}
+```
+
+Metric `toolTrajectory` snippet:
+
+```json
+[
+  {
+    "metricName": "tool_trajectory_avg_score",
+    "threshold": 1,
+    "criterion": {
+      "toolTrajectory": {
+        "orderSensitive": true,
+        "subsetMatching": true,
+        "toolStrategy": {
+          "skill_load": {
+            "arguments": {
+              "onlyTree": {
+                "skill": true
+              },
+              "matchStrategy": "exact"
+            },
+            "result": {
+              "ignore": true
+            }
+          },
+          "skill_run": {
+            "arguments": {
+              "onlyTree": {
+                "skill": true,
+                "output_files": true
+              },
+              "matchStrategy": "exact"
+            },
+            "result": {
+              "onlyTree": {
+                "exit_code": true,
+                "timed_out": true
+              },
+              "matchStrategy": "exact"
+            }
+          }
+        }
+      }
+    }
+  }
+]
+```
+
+See [examples/evaluation/skill](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/skill) for a runnable example.
+
+### Claude Code Evaluation
+
+The framework provides a Claude Code Agent. It executes a local Claude Code CLI and maps `tool_use` / `tool_result` records from the CLI output into framework tool events. Therefore, when you need to evaluate Claude Code MCP tool calls, Skills, and subagent behaviors, you can reuse the tool trajectory evaluator `tool_trajectory_avg_score` to align tool traces.
+
+When authoring EvalSets and Metrics, note the Claude Code tool naming and normalization rules:
+
+- MCP tool names follow the `mcp__<server>__<tool>` convention, where `<server>` corresponds to the server key in the project `.mcp.json`.
+- Claude Code CLI `Skill` tool calls are normalized to `skill_run`, and `skill` is written into tool arguments `arguments` for matching.
+- Subagent routing is usually represented by a `Task` tool call, with `subagent_type` included in tool arguments `arguments`.
+
+A minimal example is shown below. It demonstrates how to declare the expected tool trajectory in the EvalSet and how to use `onlyTree` / `ignore` in the Metric to assert only stable fields.
+
+EvalSet file example below covers MCP, Skill, and Task tools:
+
+```json
+{
+  "evalSetId": "claudecode-basic",
+  "name": "claudecode-basic",
+  "evalCases": [
+    {
+      "evalId": "mcp_calculator",
+      "conversation": [
+        {
+          "invocationId": "mcp_calculator-1",
+          "userContent": {
+            "role": "user",
+            "content": "Compute 1+2."
+          },
+          "tools": [
+            {
+              "id": "tool_use_1",
+              "name": "mcp__eva_cli_example__calculator",
+              "arguments": {
+                "operation": "add",
+                "a": 1,
+                "b": 2
+              },
+              "result": {
+                "operation": "add",
+                "a": 1,
+                "b": 2,
+                "result": 3
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "claudecode-eval-app",
+        "userId": "user"
+      }
+    },
+    {
+      "evalId": "skill_call",
+      "conversation": [
+        {
+          "invocationId": "skill_call-1",
+          "userContent": {
+            "role": "user",
+            "content": "What's the weather in Shenzhen?"
+          },
+          "tools": [
+            {
+              "id": "tool_use_1",
+              "name": "skill_run",
+              "arguments": {
+                "skill": "weather-query"
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "claudecode-eval-app",
+        "userId": "user"
+      }
+    },
+    {
+      "evalId": "subagent_task",
+      "conversation": [
+        {
+          "invocationId": "subagent_task-1",
+          "userContent": {
+            "role": "user",
+            "content": "Look up the phone number for Alice."
+          },
+          "tools": [
+            {
+              "id": "tool_use_1",
+              "name": "Task",
+              "arguments": {
+                "subagent_type": "contact-lookup-agent"
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "claudecode-eval-app",
+        "userId": "user"
+      }
+    }
+  ],
+  "creationTimestamp": 1771929600
+}
+```
+
+Metric file example below:
+
+```json
+[
+  {
+    "metricName": "tool_trajectory_avg_score",
+    "threshold": 1,
+    "criterion": {
+      "toolTrajectory": {
+        "orderSensitive": true,
+        "subsetMatching": true,
+        "defaultStrategy": {
+          "name": {
+            "matchStrategy": "exact"
+          },
+          "arguments": {
+            "matchStrategy": "exact"
+          },
+          "result": {
+            "matchStrategy": "exact"
+          }
+        },
+        "toolStrategy": {
+          "skill_run": {
+            "name": {
+              "matchStrategy": "exact"
+            },
+            "arguments": {
+              "onlyTree": {
+                "skill": true
+              },
+              "matchStrategy": "exact"
+            },
+            "result": {
+              "ignore": true
+            }
+          },
+          "Task": {
+            "name": {
+              "matchStrategy": "exact"
+            },
+            "arguments": {
+              "onlyTree": {
+                "subagent_type": true
+              },
+              "matchStrategy": "exact"
+            },
+            "result": {
+              "ignore": true
+            }
+          }
+        }
+      }
+    }
+  }
+]
+```
+
+See [examples/evaluation/claudecode](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/claudecode) for a runnable example.
 
 ## Best Practices
 

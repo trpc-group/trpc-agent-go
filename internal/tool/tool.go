@@ -155,13 +155,42 @@ func generateDefName(t reflect.Type) string {
 	return "anonymousStruct"
 }
 
-// parseJSONSchemaTag parses jsonschema struct tag and applies the settings to the schema.
-// Supported struct tags:
-// 1. jsonschema: "description=xxx"
-// 2. jsonschema: "enum=xxx,enum=yyy", or "enum=1,enum=2", or "enum=3.14,enum=3.15", etc.
-// NOTE: will convert actual enum value such as "1" or "3.14" to actual field type defined in struct.
-// NOTE: enum only supports string, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64, bool.
-// 3. jsonschema: "required"
+// applyFieldTags parses all supported struct tags and applies them to the schema.
+//
+// It handles:
+//   - jsonschema:"description=xxx,enum=yyy,required" (primary, canonical form)
+//   - description:"xxx"             (legacy compat, widely used in examples)
+//
+// Description priority (highest → lowest):
+//  1. jsonschema:"description=..."
+//  2. description:"..."
+//
+// Returns true if the field is explicitly marked required via jsonschema:"required".
+func applyFieldTags(fieldType reflect.Type, tag reflect.StructTag, schema *tool.Schema) (bool, error) {
+	isRequired, err := parseJSONSchemaTag(fieldType, tag, schema)
+	if err != nil {
+		return false, err
+	}
+
+	// If jsonschema tag already set the description, we're done.
+	if schema.Description != "" {
+		return isRequired, nil
+	}
+
+	// Fallback: description:"..."
+	if desc := strings.TrimSpace(tag.Get("description")); desc != "" {
+		schema.Description = desc
+	}
+
+	return isRequired, nil
+}
+
+// parseJSONSchemaTag parses the jsonschema struct tag and applies settings to the schema.
+//
+// Supported key-value pairs (comma-separated):
+//   - description=xxx
+//   - enum=xxx  (repeatable; type-aware conversion)
+//   - required  (standalone flag)
 func parseJSONSchemaTag(fieldType reflect.Type, tag reflect.StructTag, schema *tool.Schema) (bool, error) {
 	jsonSchemaTag := tag.Get("jsonschema")
 	if len(jsonSchemaTag) == 0 {
@@ -169,53 +198,66 @@ func parseJSONSchemaTag(fieldType reflect.Type, tag reflect.StructTag, schema *t
 	}
 
 	isRequiredByTag := false
-	tags := strings.Split(jsonSchemaTag, ",")
-	for _, tagItem := range tags {
-		kv := strings.Split(tagItem, "=")
+	for _, tagItem := range strings.Split(jsonSchemaTag, ",") {
+		tagItem = strings.TrimSpace(tagItem)
+		if tagItem == "" {
+			continue
+		}
+		kv := strings.SplitN(tagItem, "=", 2)
 		if len(kv) == 2 {
-			key, value := kv[0], kv[1]
-			if key == "description" {
-				schema.Description = value
-			} else if key == "enum" {
-				if schema.Enum == nil {
-					schema.Enum = make([]any, 0)
-				}
-
-				switch fieldType.Kind() {
-				case reflect.String:
-					schema.Enum = append(schema.Enum, value)
-				case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-					reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-					v, err := strconv.ParseInt(value, 10, 64)
-					if err != nil {
-						return false, fmt.Errorf("parse enum value %v to int64 failed: %w", value, err)
-					}
-					schema.Enum = append(schema.Enum, v)
-				case reflect.Float32, reflect.Float64:
-					v, err := strconv.ParseFloat(value, 64)
-					if err != nil {
-						return false, fmt.Errorf("parse enum value %v to float64 failed: %w", value, err)
-					}
-					schema.Enum = append(schema.Enum, v)
-				case reflect.Bool:
-					v, err := strconv.ParseBool(value)
-					if err != nil {
-						return false, fmt.Errorf("parse enum value %v to bool failed: %w", value, err)
-					}
-					schema.Enum = append(schema.Enum, v)
-				default:
-					return false, fmt.Errorf("enum tag unsupported for field type: %v", fieldType)
-				}
+			if err := applyKVTag(fieldType, strings.TrimSpace(kv[0]), strings.TrimSpace(kv[1]), schema); err != nil {
+				return false, err
 			}
-		} else if len(kv) == 1 {
-			key := kv[0]
-			if key == "required" {
-				isRequiredByTag = true
-			}
+		} else if strings.TrimSpace(kv[0]) == "required" {
+			isRequiredByTag = true
 		}
 	}
 
 	return isRequiredByTag, nil
+}
+
+// applyKVTag applies a single key=value pair from the jsonschema tag.
+func applyKVTag(fieldType reflect.Type, key, value string, schema *tool.Schema) error {
+	switch key {
+	case "description":
+		schema.Description = value
+	case "enum":
+		return appendEnumValue(fieldType, value, schema)
+	}
+	return nil
+}
+
+// appendEnumValue parses and appends a typed enum value to the schema.
+func appendEnumValue(fieldType reflect.Type, value string, schema *tool.Schema) error {
+	if schema.Enum == nil {
+		schema.Enum = make([]any, 0)
+	}
+	switch fieldType.Kind() {
+	case reflect.String:
+		schema.Enum = append(schema.Enum, value)
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		v, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return fmt.Errorf("parse enum value %v to int64 failed: %w", value, err)
+		}
+		schema.Enum = append(schema.Enum, v)
+	case reflect.Float32, reflect.Float64:
+		v, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return fmt.Errorf("parse enum value %v to float64 failed: %w", value, err)
+		}
+		schema.Enum = append(schema.Enum, v)
+	case reflect.Bool:
+		v, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("parse enum value %v to bool failed: %w", value, err)
+		}
+		schema.Enum = append(schema.Enum, v)
+	default:
+		return fmt.Errorf("enum tag unsupported for field type: %v", fieldType)
+	}
+	return nil
 }
 
 // generateFieldSchema generates schema for a specific field type with recursion handling.
@@ -318,11 +360,11 @@ func appendRequiredField(
 	isOmitEmpty bool,
 ) []string {
 	if fieldSchema.Ref == "" {
-		isRequiredByTag, err := parseJSONSchemaTag(
+		isRequiredByTag, err := applyFieldTags(
 			field.Type, field.Tag, fieldSchema,
 		)
 		if err != nil {
-			log.Errorf("parseJSONSchemaTag error for field %s: %v", fieldName, err)
+			log.Errorf("applyFieldTags error for field %s: %v", fieldName, err)
 		}
 
 		if (field.Type.Kind() != reflect.Ptr && !isOmitEmpty) ||

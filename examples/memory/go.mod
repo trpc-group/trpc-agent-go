@@ -8,20 +8,26 @@ replace (
 	trpc.group/trpc-go/trpc-agent-go/memory/pgvector => ../../memory/pgvector
 	trpc.group/trpc-go/trpc-agent-go/memory/postgres => ../../memory/postgres
 	trpc.group/trpc-go/trpc-agent-go/memory/redis => ../../memory/redis
+	trpc.group/trpc-go/trpc-agent-go/memory/sqlite => ../../memory/sqlite
+	trpc.group/trpc-go/trpc-agent-go/memory/sqlitevec => ../../memory/sqlitevec
 	trpc.group/trpc-go/trpc-agent-go/storage/mysql => ../../storage/mysql
 	trpc.group/trpc-go/trpc-agent-go/storage/postgres => ../../storage/postgres
 )
 
 require (
+	github.com/mattn/go-sqlite3 v1.14.32
 	trpc.group/trpc-go/trpc-agent-go v1.1.1
 	trpc.group/trpc-go/trpc-agent-go/memory/mysql v1.1.1
 	trpc.group/trpc-go/trpc-agent-go/memory/pgvector v1.1.1
 	trpc.group/trpc-go/trpc-agent-go/memory/postgres v1.1.1
 	trpc.group/trpc-go/trpc-agent-go/memory/redis v1.1.1
+	trpc.group/trpc-go/trpc-agent-go/memory/sqlite v1.1.1
+	trpc.group/trpc-go/trpc-agent-go/memory/sqlitevec v1.1.1
 )
 
 require (
 	filippo.io/edwards25519 v1.1.0 // indirect
+	github.com/asg017/sqlite-vec-go-bindings v0.1.6 // indirect
 	github.com/bmatcuk/doublestar/v4 v4.9.1 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -40,7 +46,6 @@ require (
 	github.com/panjf2000/ants/v2 v2.10.0 // indirect
 	github.com/pgvector/pgvector-go v0.2.3 // indirect
 	github.com/redis/go-redis/v9 v9.11.0 // indirect
-	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	github.com/tidwall/gjson v1.14.4 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect

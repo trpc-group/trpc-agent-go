@@ -174,6 +174,64 @@ func TestRunner_SessionIntegration(t *testing.T) {
 	assert.Contains(t, agentEvent.Response.Choices[0].Message.Content, "Hello, world!")
 }
 
+func TestRunner_SessionIntegration_MultimodalUserMessage(t *testing.T) {
+	// Create an in-memory session service.
+	sessionService := sessioninmemory.NewSessionService()
+
+	// Create a mock agent.
+	mockAgent := &mockAgent{name: "test-agent"}
+
+	// Create runner with session service.
+	runner := NewRunner("test-app", mockAgent, WithSessionService(sessionService))
+
+	ctx := context.Background()
+	userID := "test-user"
+	sessionID := "test-session-multimodal"
+
+	message := model.Message{Role: model.RoleUser}
+	message.AddImageURL("https://example.com/image.png", "auto")
+
+	// Run the agent.
+	eventCh, err := runner.Run(ctx, userID, sessionID, message)
+	require.NoError(t, err)
+	require.NotNil(t, eventCh)
+
+	// Drain all events to ensure persistence is complete.
+	for range eventCh {
+	}
+
+	// Verify session was created and contains events.
+	sessionKey := session.Key{
+		AppName:   "test-app",
+		UserID:    userID,
+		SessionID: sessionID,
+	}
+
+	sess, err := sessionService.GetSession(ctx, sessionKey)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	// Verify session contains both user message and agent response.
+	require.Len(t, sess.Events, 2)
+
+	// Verify user event.
+	userEvent := sess.Events[0]
+	assert.Equal(t, authorUser, userEvent.Author)
+	require.True(t, userEvent.IsUserMessage())
+	require.Len(t, userEvent.Response.Choices, 1)
+	assert.Equal(t, model.RoleUser, userEvent.Response.Choices[0].Message.Role)
+	assert.Empty(t, userEvent.Response.Choices[0].Message.Content)
+	require.Len(t, userEvent.Response.Choices[0].Message.ContentParts, 1)
+	assert.Equal(t, model.ContentTypeImage, userEvent.Response.Choices[0].Message.ContentParts[0].Type)
+	require.NotNil(t, userEvent.Response.Choices[0].Message.ContentParts[0].Image)
+	assert.Equal(t, "https://example.com/image.png", userEvent.Response.Choices[0].Message.ContentParts[0].Image.URL)
+
+	// Verify agent event.
+	agentEvent := sess.Events[1]
+	assert.Equal(t, "test-agent", agentEvent.Author)
+	assert.Contains(t, agentEvent.Response.Choices[0].Message.Content, "Hello! I received your message:")
+}
+
 type testPlugin struct {
 	name string
 	reg  func(r *plugin.Registry)

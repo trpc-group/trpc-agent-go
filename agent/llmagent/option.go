@@ -111,6 +111,8 @@ var (
 		PreloadMemory: 0,
 
 		SkillLoadMode: SkillLoadModeTurn,
+
+		SkipSkillsFallbackOnSessionSummary: true,
 	}
 )
 
@@ -259,6 +261,24 @@ type Options struct {
 	// available in the system prompt.
 	SkillLoadMode string
 
+	// SkillsLoadedContentInToolResults controls where loaded skill bodies
+	// and selected docs are materialized.
+	//
+	// When false (default), loaded content is appended to the system
+	// message (legacy behavior).
+	//
+	// When true, loaded content is appended to the corresponding tool
+	// result messages (skill_load / skill_select_docs). This keeps the
+	// system prompt more stable for prompt caching.
+	SkillsLoadedContentInToolResults bool
+
+	// SkipSkillsFallbackOnSessionSummary controls whether the framework
+	// skips the "Loaded skill context" system-message fallback when a
+	// session summary is present in the request.
+	//
+	// Default: true.
+	SkipSkillsFallbackOnSessionSummary bool
+
 	// skillsRepository enables agent skills when non-nil.
 	skillsRepository skill.Repository
 	// skillsToolingGuidance overrides the built-in skills guidance block.
@@ -282,6 +302,22 @@ type Options struct {
 	// When 0 (default), no memories are preloaded (use tools instead).
 	// When < 0, all memories are loaded.
 	PreloadMemory int
+
+	// postToolPromptEnabled controls whether the post-tool dynamic prompt
+	// injection is enabled. When nil (default), injection is enabled to
+	// preserve existing behavior.
+	postToolPromptEnabled *bool
+
+	// PostToolPrompt overrides the default dynamic prompt injected when
+	// tool results are detected.
+	//
+	// When empty (default), the built-in default prompt is used.
+	// To disable prompt injection entirely, use
+	// WithEnablePostToolPrompt(false).
+	//
+	// Set to a non-empty string to customize the guidance given to the
+	// model after tool calls.
+	PostToolPrompt string
 }
 
 // WithModel sets the model to use.
@@ -436,6 +472,29 @@ func WithSkills(repo skill.Repository) Option {
 func WithSkillLoadMode(mode string) Option {
 	return func(opts *Options) {
 		opts.SkillLoadMode = mode
+	}
+}
+
+// WithSkillsLoadedContentInToolResults enables an alternative injection
+// mode where loaded skill bodies/docs are materialized into tool result
+// messages (skill_load / skill_select_docs) instead of being appended
+// to the system prompt.
+func WithSkillsLoadedContentInToolResults(enable bool) Option {
+	return func(opts *Options) {
+		opts.SkillsLoadedContentInToolResults = enable
+	}
+}
+
+// WithSkipSkillsFallbackOnSessionSummary controls whether the agent
+// skips the "Loaded skill context" system-message fallback when a session
+// summary is present in the request.
+//
+// Default: true.
+func WithSkipSkillsFallbackOnSessionSummary(
+	skip bool,
+) Option {
+	return func(opts *Options) {
+		opts.SkipSkillsFallbackOnSessionSummary = skip
 	}
 }
 
@@ -802,6 +861,30 @@ func WithMessageFilterMode(mode MessageFilterMode) Option {
 func WithPreloadMemory(limit int) Option {
 	return func(opts *Options) {
 		opts.PreloadMemory = limit
+	}
+}
+
+// WithPostToolPrompt overrides the default dynamic prompt injected when tool
+// results are detected in the conversation. The default prompt guides the
+// model to synthesize results naturally without meta-commentary.
+// To disable post-tool prompt injection entirely, use
+// WithEnablePostToolPrompt(false).
+//
+// Example usage:
+//
+//	llmagent.WithPostToolPrompt("[Dynamic Prompt] Summarize the tool output concisely.")
+func WithPostToolPrompt(prompt string) Option {
+	return func(opts *Options) {
+		opts.PostToolPrompt = prompt
+	}
+}
+
+// WithEnablePostToolPrompt enables or disables post-tool prompt injection.
+// When disabled, no prompt is injected after tool results, even if a custom
+// PostToolPrompt is configured.
+func WithEnablePostToolPrompt(enable bool) Option {
+	return func(opts *Options) {
+		opts.postToolPromptEnabled = &enable
 	}
 }
 

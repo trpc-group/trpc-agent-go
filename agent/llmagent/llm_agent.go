@@ -260,6 +260,12 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 			skillsOpts,
 			processor.WithSkillLoadMode(options.SkillLoadMode),
 		)
+		if options.SkillsLoadedContentInToolResults {
+			skillsOpts = append(
+				skillsOpts,
+				processor.WithSkillsLoadedContentInToolResults(true),
+			)
+		}
 		skillsProcessor := processor.NewSkillsRequestProcessor(
 			options.skillsRepository,
 			skillsOpts...,
@@ -288,20 +294,70 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	contentProcessor := processor.NewContentRequestProcessor(contentOpts...)
 	requestProcessors = append(requestProcessors, contentProcessor)
 
-	// 7. Time processor - adds current time information if enabled.
+	// 7. Post-tool processor - injects dynamic prompt after tool results.
+	requestProcessors = appendPostToolProcessor(options, requestProcessors)
+
+	// 8. Skills tool result processor - materializes loaded skill content
+	// into tool result messages.
+	requestProcessors = appendSkillsToolResultProcessor(options, requestProcessors)
+
+	// 9. Time processor - adds current time information if enabled.
 	// Moved after content processor to avoid invalidating system message cache.
 	// Time information changes frequently, so placing it last allows previous
 	// stable content (instructions, identity, skills, history) to be cached.
-	if options.AddCurrentTime {
-		timeProcessor := processor.NewTimeRequestProcessor(
-			processor.WithAddCurrentTime(true),
-			processor.WithTimezone(options.Timezone),
-			processor.WithTimeFormat(options.TimeFormat),
-		)
-		requestProcessors = append(requestProcessors, timeProcessor)
-	}
+	requestProcessors = appendTimeProcessor(options, requestProcessors)
 
 	return requestProcessors
+}
+
+func appendPostToolProcessor(options *Options, requestProcessors []flow.RequestProcessor) []flow.RequestProcessor {
+	var postToolOpts []processor.PostToolOption
+	if options.postToolPromptEnabled != nil &&
+		!*options.postToolPromptEnabled {
+		// PostToolRequestProcessor treats an empty prompt as "disabled".
+		// Keep the processor registered, but skip prompt injection.
+		postToolOpts = append(
+			postToolOpts,
+			processor.WithPostToolPrompt(""),
+		)
+	} else if options.PostToolPrompt != "" {
+		postToolOpts = append(
+			postToolOpts,
+			processor.WithPostToolPrompt(options.PostToolPrompt),
+		)
+	}
+	postToolProcessor := processor.NewPostToolRequestProcessor(postToolOpts...)
+	return append(requestProcessors, postToolProcessor)
+}
+
+func appendSkillsToolResultProcessor(options *Options, requestProcessors []flow.RequestProcessor) []flow.RequestProcessor {
+	if options.skillsRepository == nil ||
+		!options.SkillsLoadedContentInToolResults {
+		return requestProcessors
+	}
+	skillsToolResultProcessor :=
+		processor.NewSkillsToolResultRequestProcessor(
+			options.skillsRepository,
+			processor.WithSkillsToolResultLoadMode(
+				options.SkillLoadMode,
+			),
+			processor.WithSkipSkillsFallbackOnSessionSummary(
+				options.SkipSkillsFallbackOnSessionSummary,
+			),
+		)
+	return append(requestProcessors, skillsToolResultProcessor)
+}
+
+func appendTimeProcessor(options *Options, requestProcessors []flow.RequestProcessor) []flow.RequestProcessor {
+	if !options.AddCurrentTime {
+		return requestProcessors
+	}
+	timeProcessor := processor.NewTimeRequestProcessor(
+		processor.WithAddCurrentTime(true),
+		processor.WithTimezone(options.Timezone),
+		processor.WithTimeFormat(options.TimeFormat),
+	)
+	return append(requestProcessors, timeProcessor)
 }
 
 // buildRequestProcessors preserves the original helper signature for tests and
@@ -709,7 +765,21 @@ func (a *LLMAgent) Info() agent.Info {
 // under the caller's read lock. It always returns a fresh slice so
 // callers can safely use it after releasing the lock without data
 // races.
+//
+// This variant is used by methods that don't accept a context (for
+// example, Tools()). It uses context.Background() when refreshing tools
+// from ToolSets.
 func (a *LLMAgent) getAllToolsLocked() []tool.Tool {
+	return a.getAllToolsLockedWithContext(context.Background())
+}
+
+func (a *LLMAgent) getAllToolsLockedWithContext(
+	ctx context.Context,
+) []tool.Tool {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	base := make([]tool.Tool, len(a.tools))
 	copy(base, a.tools)
 
@@ -717,8 +787,6 @@ func (a *LLMAgent) getAllToolsLocked() []tool.Tool {
 	// on each call to keep ToolSet-provided tools in sync with their
 	// underlying dynamic source (for example, MCP ListTools).
 	if a.option.RefreshToolSetsOnRun && len(a.option.ToolSets) > 0 {
-		ctx := context.Background()
-
 		dynamic := make([]tool.Tool, 0)
 		for _, toolSet := range a.option.ToolSets {
 			namedToolSet := itool.NewNamedToolSet(toolSet)
@@ -843,7 +911,7 @@ func (a *LLMAgent) UserTools() []tool.Tool {
 // function.
 func (a *LLMAgent) FilterTools(ctx context.Context) []tool.Tool {
 	a.mu.RLock()
-	tools := a.getAllToolsLocked()
+	tools := a.getAllToolsLockedWithContext(ctx)
 	userToolNames := make(map[string]bool, len(a.userToolNames))
 	for name, isUser := range a.userToolNames {
 		userToolNames[name] = isUser

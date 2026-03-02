@@ -47,6 +47,11 @@ func New(opt ...evalset.Option) evalset.Manager {
 	}
 }
 
+// Close implements evalset.Manager.
+func (m *manager) Close() error {
+	return nil
+}
+
 // Get gets an EvalSet identified by evalSetID.
 // Returns an error if the EvalSet does not exist.
 func (m *manager) Get(_ context.Context, appName, evalSetID string) (*evalset.EvalSet, error) {

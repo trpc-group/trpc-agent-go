@@ -282,12 +282,27 @@ func (m *Model) buildChatCompletionResponse(
 		IsPartial: isPartial,
 	}
 	message, finishReason := m.convertContentBlock(rsp.Candidates)
-	response.Choices = []model.Choice{
-		{
-			Index:   0,
-			Message: message,
-			Delta:   message,
-		},
+	if isPartial {
+		// Streaming chunk: only populate Delta (not Message).
+		// This matches the OpenAI and Anthropic patterns where streaming
+		// chunks carry incremental deltas. Setting both Message and Delta
+		// to the same value caused downstream consumers to double-emit
+		// content — the chunk's Message.Content was treated as a full
+		// response and re-emitted alongside the final accumulated response.
+		response.Choices = []model.Choice{
+			{
+				Index: 0,
+				Delta: message,
+			},
+		}
+	} else {
+		// Final/non-streaming response: populate Message (the full content).
+		response.Choices = []model.Choice{
+			{
+				Index:   0,
+				Message: message,
+			},
+		}
 	}
 	// Set finish reason.
 	if finishReason != "" {
@@ -507,12 +522,16 @@ func (m *Model) convertTools(tools map[string]tool.Tool) []*genai.Tool {
 	for _, t := range tools {
 		decl := t.Declaration()
 		funcDeclaration := &genai.FunctionDeclaration{
-			Description:          decl.Description,
-			Name:                 decl.Name,
-			ParametersJsonSchema: decl.InputSchema,
+			Description: decl.Description,
+			Name:        decl.Name,
+		}
+		if decl.InputSchema != nil {
+			// Avoid sending `"parametersJsonSchema": null` to Gemini when a tool has no input schema.
+			// `ParametersJsonSchema` is `any`, so assigning a typed nil pointer would still marshal as null.
+			funcDeclaration.ParametersJsonSchema = normalizeToolSchema(decl.Name, "input", decl.InputSchema)
 		}
 		if decl.OutputSchema != nil {
-			funcDeclaration.ResponseJsonSchema = decl.OutputSchema
+			funcDeclaration.ResponseJsonSchema = normalizeToolSchema(decl.Name, "output", decl.OutputSchema)
 		}
 		result = append(result, &genai.Tool{
 			FunctionDeclarations: []*genai.FunctionDeclaration{
@@ -521,6 +540,53 @@ func (m *Model) convertTools(tools map[string]tool.Tool) []*genai.Tool {
 		})
 	}
 	return result
+}
+
+func normalizeToolSchema(toolName, schemaKind string, schema *tool.Schema) any {
+	if schema == nil {
+		return nil
+	}
+	// Marshal/unmarshal to ensure the schema is JSON-serializable and to allow safe normalization
+	// without mutating shared schema instances.
+	schemaBytes, err := json.Marshal(schema)
+	if err != nil {
+		log.Warnf(
+			"failed to marshal %s schema for tool %q: %v",
+			schemaKind,
+			toolName,
+			err,
+		)
+		return emptyObjectSchema()
+	}
+	return normalizeToolSchemaBytes(toolName, schemaKind, schemaBytes)
+}
+
+func normalizeToolSchemaBytes(toolName, schemaKind string, schemaBytes []byte) any {
+	var out map[string]any
+	if err := json.Unmarshal(schemaBytes, &out); err != nil {
+		log.Warnf(
+			"failed to unmarshal %s schema for tool %q: %v",
+			schemaKind,
+			toolName,
+			err,
+		)
+		return emptyObjectSchema()
+	}
+	// Some function-calling implementations are strict about top-level object schemas having
+	// an explicit `properties` key, even for no-arg tools.
+	if typ, ok := out["type"].(string); ok && typ == "object" {
+		if props, exists := out["properties"]; !exists || props == nil {
+			out["properties"] = map[string]any{}
+		}
+	}
+	return out
+}
+
+func emptyObjectSchema() map[string]any {
+	return map[string]any{
+		"type":       "object",
+		"properties": map[string]any{},
+	}
 }
 
 // convertContentPart converts a single content part to Gemini format.

@@ -99,14 +99,17 @@ func (a chatAttributes) toAttributes() []attribute.KeyValue {
 
 // ChatMetricsTracker tracks metrics for a single chat request lifecycle.
 type ChatMetricsTracker struct {
-	ctx                    context.Context
-	start                  time.Time
-	isFirstToken           bool
-	firstTokenTimeDuration time.Duration
-	firstCompleteToken     int
-	totalCompletionTokens  int
-	totalPromptTokens      int
-	lastEvent              *event.Event
+	ctx                            context.Context
+	start                          time.Time
+	isFirstToken                   bool
+	firstTokenTimeDuration         time.Duration
+	firstCompleteToken             int
+	totalCompletionTokens          int
+	totalPromptTokens              int
+	totalPromptCachedTokens        int
+	totalPromptCacheReadTokens     int
+	totalPromptCacheCreationTokens int
+	lastEvent                      *event.Event
 
 	// Timing tracking for streaming reasoning phases
 	firstReasoningTime time.Time
@@ -152,13 +155,14 @@ func (t *ChatMetricsTracker) TrackResponse(response *model.Response) {
 	if response == nil {
 		return
 	}
-
-	now := time.Now()
-
+	var now time.Time
 	// Track first token timing (for both metrics and timing info)
 	if t.isFirstToken {
+		if now.IsZero() {
+			now = time.Now()
+		}
 		// Always record firstTokenTimeDuration for metrics (even if no content)
-		t.firstTokenTimeDuration = time.Since(t.start)
+		t.firstTokenTimeDuration = now.Sub(t.start)
 		t.isFirstToken = false
 
 		// Update FirstTokenDuration in TimingInfo only if not already recorded (first LLM call only)
@@ -176,6 +180,10 @@ func (t *ChatMetricsTracker) TrackResponse(response *model.Response) {
 	if response.Usage != nil {
 		t.totalPromptTokens = response.Usage.PromptTokens
 		t.totalCompletionTokens = response.Usage.CompletionTokens
+		totalDetails := response.Usage.PromptTokensDetails
+		t.totalPromptCachedTokens = totalDetails.CachedTokens
+		t.totalPromptCacheReadTokens = totalDetails.CacheReadTokens
+		t.totalPromptCacheCreationTokens = totalDetails.CacheCreationTokens
 	}
 
 	// Track reasoning duration (streaming mode only, first LLM call only)
@@ -189,6 +197,9 @@ func (t *ChatMetricsTracker) TrackResponse(response *model.Response) {
 		hasReasoningContent := choice.Delta.ReasoningContent != "" || choice.Message.ReasoningContent != ""
 
 		if hasReasoningContent {
+			if now.IsZero() {
+				now = time.Now()
+			}
 			// Track reasoning phase start and continuation
 			if t.firstReasoningTime.IsZero() {
 				t.firstReasoningTime = now
@@ -216,9 +227,22 @@ func (t *ChatMetricsTracker) GetTimingInfo() *model.TimingInfo {
 	return t.timingInfo
 }
 
+func chatMetricsEnabled() bool {
+	return ChatMetricTRPCAgentGoClientRequestCnt != nil ||
+		ChatMetricGenAIClientTokenUsage != nil ||
+		ChatMetricGenAIClientOperationDuration != nil ||
+		ChatMetricGenAIServerTimeToFirstToken != nil ||
+		ChatMetricTRPCAgentGoClientTimeToFirstToken != nil ||
+		ChatMetricTRPCAgentGoClientTimePerOutputToken != nil ||
+		ChatMetricTRPCAgentGoClientOutputTokenPerTime != nil
+}
+
 // RecordMetrics returns a defer function that records all telemetry metrics.
 // Should be called with defer immediately after creating the tracker.
 func (t *ChatMetricsTracker) RecordMetrics() func() {
+	if !chatMetricsEnabled() {
+		return func() {}
+	}
 	return func() {
 		attrs := t.buildAttributes()
 		requestDuration := time.Since(t.start)
@@ -248,6 +272,21 @@ func (t *ChatMetricsTracker) RecordMetrics() func() {
 		if ChatMetricGenAIClientTokenUsage != nil {
 			ChatMetricGenAIClientTokenUsage.Record(t.ctx, int64(t.totalPromptTokens),
 				metric.WithAttributes(append(otelAttrs, attribute.String(KeyGenAITokenType, metrics.KeyTRPCAgentGoInputTokenType))...))
+		}
+		// Record cached prompt token usage (subset of input tokens)
+		if ChatMetricGenAIClientTokenUsage != nil {
+			ChatMetricGenAIClientTokenUsage.Record(t.ctx, int64(t.totalPromptCachedTokens),
+				metric.WithAttributes(append(otelAttrs, attribute.String(KeyGenAITokenType, metrics.KeyTRPCAgentGoInputCachedTokenType))...))
+		}
+		// Record tokens read from prompt cache (Anthropic)
+		if ChatMetricGenAIClientTokenUsage != nil {
+			ChatMetricGenAIClientTokenUsage.Record(t.ctx, int64(t.totalPromptCacheReadTokens),
+				metric.WithAttributes(append(otelAttrs, attribute.String(KeyGenAITokenType, metrics.KeyTRPCAgentGoInputCacheReadTokenType))...))
+		}
+		// Record tokens used to create prompt cache (Anthropic)
+		if ChatMetricGenAIClientTokenUsage != nil {
+			ChatMetricGenAIClientTokenUsage.Record(t.ctx, int64(t.totalPromptCacheCreationTokens),
+				metric.WithAttributes(append(otelAttrs, attribute.String(KeyGenAITokenType, metrics.KeyTRPCAgentGoInputCacheCreationTokenType))...))
 		}
 
 		// Record output token usage

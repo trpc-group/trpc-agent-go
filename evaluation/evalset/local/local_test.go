@@ -318,6 +318,10 @@ func TestLocalManagerEmptyInputs(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestClose_NoError(t *testing.T) {
+	assert.NoError(t, New().Close())
+}
+
 func TestLocalManagerAddCaseSetsCreationTimestampForActualConversation(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()

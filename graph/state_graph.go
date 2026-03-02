@@ -34,6 +34,7 @@ import (
 	stateinject "trpc.group/trpc-go/trpc-agent-go/internal/state"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
 	"trpc.group/trpc-go/trpc-agent-go/internal/util"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -1181,6 +1182,8 @@ func (r *llmRunner) executeModel(
 		Tools:            tools,
 		GenerationConfig: r.generationConfig,
 	}
+	// Sanitize invalid tool calls in history to avoid poisoning future requests.
+	request.Messages = toolcall.SanitizeMessagesWithTools(request.Messages, request.Tools)
 	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
 		if opts := graphCallOptionsFromConfigs(
 			inv.RunOptions.CustomAgentConfigs,
@@ -3178,7 +3181,7 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 	}
 
 	// Execute the tool with callbacks and get modified arguments.
-	_, span := trace.Tracer.Start(ctx, itelemetry.NewExecuteToolSpanName(config.ToolCall.Function.Name))
+	ctx, span := trace.Tracer.Start(ctx, itelemetry.NewExecuteToolSpanName(config.ToolCall.Function.Name))
 	ctx, result, modifiedArgs, err := runTool(ctx, config.ToolCall, config.ToolCallbacks, t, config.State)
 
 	// Emit tool execution start event with modified arguments.

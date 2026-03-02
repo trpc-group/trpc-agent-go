@@ -188,9 +188,6 @@ model := anthropic.New("claude-3-5-sonnet-20241022",
     // Enable/disable caching
     anthropic.WithEnablePromptCache(true),
     
-    // Minimum tokens to trigger caching
-    anthropic.WithMinCacheableTokens(2048),
-    
     // Cache specific content types
     anthropic.WithCacheSystemPrompt(true),
     anthropic.WithCacheTools(true),

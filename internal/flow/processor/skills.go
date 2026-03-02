@@ -46,6 +46,7 @@ const (
 type skillsRequestProcessorOptions struct {
 	toolingGuidance *string
 	loadMode        string
+	toolResultMode  bool
 }
 
 // SkillsRequestProcessorOption configures SkillsRequestProcessor.
@@ -80,6 +81,22 @@ func WithSkillsToolingGuidance(
 	}
 }
 
+// WithSkillsLoadedContentInToolResults enables an alternative injection
+// mode where loaded SKILL.md bodies and selected docs are materialized
+// into the corresponding tool result messages
+// (skill_load / skill_select_docs) instead of being appended to the
+// system prompt.
+//
+// This keeps the system prompt more stable for prompt caching while
+// preserving the progressive disclosure behavior.
+func WithSkillsLoadedContentInToolResults(
+	enable bool,
+) SkillsRequestProcessorOption {
+	return func(o *skillsRequestProcessorOptions) {
+		o.toolResultMode = enable
+	}
+}
+
 // SkillsRequestProcessor injects skill overviews and loaded contents.
 //
 // Behavior:
@@ -95,6 +112,7 @@ type SkillsRequestProcessor struct {
 	repo            skill.Repository
 	toolingGuidance *string
 	loadMode        string
+	toolResultMode  bool
 }
 
 const (
@@ -117,6 +135,7 @@ func NewSkillsRequestProcessor(
 		repo:            repo,
 		toolingGuidance: options.toolingGuidance,
 		loadMode:        normalizeSkillLoadMode(options.loadMode),
+		toolResultMode:  options.toolResultMode,
 	}
 }
 
@@ -148,6 +167,16 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 	// 1) Always inject overview (names + descriptions) into system
 	//    message. Merge into existing system message if present.
 	p.injectOverview(req)
+
+	if p.toolResultMode {
+		// Loaded skill bodies/docs are materialized into tool results by a
+		// post-content request processor.
+		agent.EmitEvent(ctx, inv, ch, event.New(
+			inv.InvocationID, inv.AgentName,
+			event.WithObject(model.ObjectTypePreprocessingInstruction),
+		))
+		return
+	}
 
 	// 2) Loaded skills full content (merge into existing system message).
 	loaded := p.getLoadedSkills(inv)

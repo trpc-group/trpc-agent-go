@@ -21,6 +21,7 @@ const (
 	suiteAgent       = "agent"
 	suiteAll         = "all"
 	suiteTokenReport = "token-report"
+	suitePromptCache = "prompt-cache"
 
 	envModelName     = "MODEL_NAME"
 	fallbackModel    = "gpt-5"

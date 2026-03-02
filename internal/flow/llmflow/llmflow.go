@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"sort"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
@@ -35,6 +37,11 @@ import (
 const (
 	// Timeout for event completion signaling.
 	eventCompletionTimeout = 5 * time.Second
+
+	flowRunPanicLogFmt = "Flow execution panic (invocation: %s, " +
+		"agent: %s): %v\n%s"
+
+	flowRunPanicErrFmt = "flow panic: %v"
 
 	// stateKeyToolsSnapshot is the invocation state key used to cache the
 	// final tool list for a single Invocation. This ensures that the tool
@@ -80,6 +87,7 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
 		defer close(eventChan)
+		defer recoverFlowRunPanic(ctx, invocation, eventChan)
 
 		// Optionally resume from pending tool calls before starting a new
 		// LLM cycle. This covers scenarios where the previous run stopped
@@ -150,6 +158,49 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 	}(runCtx)
 
 	return eventChan, nil
+}
+
+func recoverFlowRunPanic(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	eventChan chan<- *event.Event,
+) {
+	recovered := recover()
+	if recovered == nil {
+		return
+	}
+
+	stack := debug.Stack()
+	log.ErrorfContext(
+		ctx,
+		flowRunPanicLogFmt,
+		flowInvocationID(invocation),
+		flowAgentName(invocation),
+		recovered,
+		string(stack),
+	)
+
+	errorEvent := event.NewErrorEvent(
+		flowInvocationID(invocation),
+		flowAgentName(invocation),
+		model.ErrorTypeFlowError,
+		fmt.Sprintf(flowRunPanicErrFmt, recovered),
+	)
+	agent.EmitEvent(ctx, invocation, eventChan, errorEvent)
+}
+
+func flowInvocationID(invocation *agent.Invocation) string {
+	if invocation == nil {
+		return ""
+	}
+	return invocation.InvocationID
+}
+
+func flowAgentName(invocation *agent.Invocation) string {
+	if invocation == nil {
+		return ""
+	}
+	return invocation.AgentName
 }
 
 // maybeResumePendingToolCalls inspects the latest session events and, when
@@ -471,7 +522,6 @@ func (f *Flow) preprocess(
 	for _, processor := range f.requestProcessors {
 		processor.ProcessRequest(ctx, invocation, llmRequest, eventChan)
 	}
-
 	// Add tools to the request with optional filtering.
 	if invocation.Agent != nil {
 		tools := f.getFilteredTools(ctx, invocation)
@@ -479,6 +529,8 @@ func (f *Flow) preprocess(
 			llmRequest.Tools[t.Declaration().Name] = t
 		}
 	}
+	// Sanitize invalid tool calls in history to avoid poisoning future requests.
+	llmRequest.Messages = toolcall.SanitizeMessagesWithTools(llmRequest.Messages, llmRequest.Tools)
 }
 
 // UserToolsProvider is an optional interface that agents can implement to expose
@@ -520,9 +572,11 @@ func (f *Flow) getFilteredTools(ctx context.Context, invocation *agent.Invocatio
 	}
 
 	// Get all tools from the agent.
-	allTools := invocation.Agent.Tools()
+	var allTools []tool.Tool
 	if provider, ok := invocation.Agent.(ToolFilterProvider); ok {
 		allTools = provider.FilterTools(ctx)
+	} else {
+		allTools = invocation.Agent.Tools()
 	}
 
 	// If no filter is specified, return all tools for this invocation.

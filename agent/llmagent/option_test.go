@@ -160,6 +160,25 @@ func TestWithSkillLoadMode(t *testing.T) {
 	require.Equal(t, SkillLoadModeSession, b.option.SkillLoadMode)
 }
 
+func TestWithSkillsLoadedContentInToolResults(t *testing.T) {
+	a := New("test-agent")
+	require.False(t, a.option.SkillsLoadedContentInToolResults)
+
+	b := New("test-agent", WithSkillsLoadedContentInToolResults(true))
+	require.True(t, b.option.SkillsLoadedContentInToolResults)
+}
+
+func TestWithSkipSkillsFallbackOnSessionSummary(t *testing.T) {
+	a := New("test-agent")
+	require.True(t, a.option.SkipSkillsFallbackOnSessionSummary)
+
+	b := New(
+		"test-agent",
+		WithSkipSkillsFallbackOnSessionSummary(false),
+	)
+	require.False(t, b.option.SkipSkillsFallbackOnSessionSummary)
+}
+
 func TestWithMaxLimits_OnOptions(t *testing.T) {
 	opts := &Options{}
 
@@ -360,4 +379,18 @@ func TestBuildRequestProcessorsWithSummaryFormatter(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestWithEnablePostToolPrompt(t *testing.T) {
+	opts := &Options{}
+	WithEnablePostToolPrompt(false)(opts)
+
+	require.NotNil(t, opts.postToolPromptEnabled)
+	require.False(t, *opts.postToolPromptEnabled)
+
+	opts = &Options{}
+	WithEnablePostToolPrompt(true)(opts)
+
+	require.NotNil(t, opts.postToolPromptEnabled)
+	require.True(t, *opts.postToolPromptEnabled)
 }

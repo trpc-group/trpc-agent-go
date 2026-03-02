@@ -41,6 +41,10 @@ type stubSpan struct {
 	called bool
 }
 
+func (s *stubSpan) IsRecording() bool {
+	return true
+}
+
 func (s *stubSpan) SetAttributes(kv ...attribute.KeyValue) {
 	s.called = true
 	// Forward to the underlying noop span so behaviour remains unchanged.
@@ -74,6 +78,10 @@ type recordingSpan struct {
 	status         codes.Code
 	statusDesc     string
 	recordedErrors []error
+}
+
+func (s *recordingSpan) IsRecording() bool {
+	return true
 }
 
 func (s *recordingSpan) SetAttributes(kv ...attribute.KeyValue) {
@@ -238,6 +246,16 @@ func TestTraceFunctions_NoPanics(t *testing.T) {
 		TimeToFirstToken: 0,
 	})
 	require.True(t, span.called, "expected SetAttributes in TraceChat")
+}
+
+func TestTraceFunctions_NonRecordingSpan_ReturnsEarly(t *testing.T) {
+	_, span := trace.NewNoopTracerProvider().Tracer("test").Start(context.Background(), "op")
+	require.False(t, span.IsRecording(), "expected noop span to be non-recording")
+
+	TraceWorkflow(span, &Workflow{Name: "wf", ID: "wf-1"})
+	TraceBeforeInvokeAgent(span, nil, "", "", nil)
+	TraceAfterInvokeAgent(span, nil, nil, 0)
+	TraceChat(span, nil)
 }
 
 func TestTraceBeforeAfter_Tool_Merged_Chat_Embedding(t *testing.T) {
@@ -825,6 +843,11 @@ func TestBuildResponseAttributes(t *testing.T) {
 				Usage: &model.Usage{
 					PromptTokens:     10,
 					CompletionTokens: 20,
+					PromptTokensDetails: model.PromptTokensDetails{
+						CachedTokens:        7,
+						CacheReadTokens:     11,
+						CacheCreationTokens: 13,
+					},
 				},
 			},
 		},
@@ -856,6 +879,19 @@ func TestBuildResponseAttributes(t *testing.T) {
 				// Verify basic attributes
 				require.True(t, hasAttr(attrs, KeyGenAIResponseModel, tt.rsp.Model))
 				require.True(t, hasAttr(attrs, KeyGenAIResponseID, tt.rsp.ID))
+
+				// Verify cached prompt tokens attribute when provided
+				if tt.rsp.Usage != nil {
+					if tt.rsp.Usage.PromptTokensDetails.CachedTokens != 0 {
+						require.True(t, hasAttr(attrs, KeyGenAIUsageInputTokensCached, int64(tt.rsp.Usage.PromptTokensDetails.CachedTokens)))
+					}
+					if tt.rsp.Usage.PromptTokensDetails.CacheReadTokens != 0 {
+						require.True(t, hasAttr(attrs, KeyGenAIUsageInputTokensCacheRead, int64(tt.rsp.Usage.PromptTokensDetails.CacheReadTokens)))
+					}
+					if tt.rsp.Usage.PromptTokensDetails.CacheCreationTokens != 0 {
+						require.True(t, hasAttr(attrs, KeyGenAIUsageInputTokensCacheCreation, int64(tt.rsp.Usage.PromptTokensDetails.CacheCreationTokens)))
+					}
+				}
 			}
 		})
 	}

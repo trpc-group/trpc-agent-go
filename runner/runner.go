@@ -420,8 +420,8 @@ func (r *runner) Run(
 		}
 	}
 
-	// Append the incoming user message to the session if it has content.
-	if message.Content != "" && shouldAppendUserMessage(message, ro.Messages) {
+	// Append the incoming message to the session if it has payload.
+	if model.HasPayload(message) && shouldAppendUserMessage(message, ro.Messages) {
 		evt := event.NewResponseEvent(
 			invocation.InvocationID,
 			authorUser,
@@ -708,9 +708,9 @@ func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
 		// Disable further flush requests for this invocation.
 		flush.Clear(loop.invocation)
 		appender.Clear(loop.invocation)
+		r.unregisterRun(loop.invocation.RunOptions.RequestID)
 		close(loop.processedEventCh)
 		loop.invocation.CleanupNotice(ctx)
-		r.unregisterRun(loop.invocation.RunOptions.RequestID)
 		if loop.runHandle != nil {
 			loop.runHandle.cancel()
 		}
@@ -940,13 +940,21 @@ func (r *runner) handleEventPersistence(
 		return
 	}
 
-	// Trigger summarization only after final assistant responses.
-	// Skip user messages, tool calls, and tool results to ensure summary
-	// always contains complete Q&A pairs (including tool call round-trips).
+	// Skip user messages, tool call events, and invalid content.
+	// These should not trigger summarization.
 	if agentEvent.IsUserMessage() ||
 		agentEvent.IsToolCallResponse() ||
-		agentEvent.IsToolResultResponse() ||
 		!agentEvent.IsValidContent() {
+		return
+	}
+
+	// Trigger summary check after tool results to handle long tool call
+	// sequences (ReAct loops). The existing ShouldSummarize checker
+	// (event count / token threshold) decides whether to actually run.
+	// Also trigger after final assistant text responses as before.
+	// Skip if the event explicitly opts out of summarization.
+	if agentEvent.Actions != nil &&
+		agentEvent.Actions.SkipSummarization {
 		return
 	}
 
@@ -1208,7 +1216,7 @@ func RunWithMessages(
 	// (e.g., used by GraphAgent to set initial user_input).
 	var latestUser model.Message
 	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == model.RoleUser && (messages[i].Content != "" || len(messages[i].ContentParts) > 0) {
+		if messages[i].Role == model.RoleUser && model.HasPayload(messages[i]) {
 			latestUser = messages[i]
 			break
 		}

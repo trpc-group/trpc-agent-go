@@ -363,6 +363,28 @@ coordinator := llmagent.New(
 - 这些选项不会改变真实的委托/切换逻辑，只影响“对外可见的提示文本”或“是否注入默认占位消息”。
 - 转移提示事件统一以 `Response.Object == "agent.transfer"` 输出；如需在 UI 层隐藏系统级提示，可直接过滤该对象类型的事件。
 
+### 工具后提示词注入（Post-tool Prompt）
+
+当模型调用工具时，工具输出会以 `role=tool` 消息追加到对话中。某些模型在看到工具结果后，可能会输出“基于工具结果……”这类元说明，或暴露内部过程。
+
+为了让工具调用后的回复更自然，LLMAgent 会在检测到工具结果时，向系统消息注入一段“工具后（post-tool）”动态提示词。
+
+- 默认：开启，使用框架内置提示词。
+- 自定义注入文本：`llmagent.WithPostToolPrompt("...")`。
+- 完全禁用注入：`llmagent.WithEnablePostToolPrompt(false)`。
+
+示例：
+
+```go
+agent := llmagent.New(
+  "assistant",
+  llmagent.WithModel(modelInstance),
+  llmagent.WithTools([]tool.Tool{myTool}),
+  // 禁用框架默认的工具后提示词注入。
+  llmagent.WithEnablePostToolPrompt(false),
+)
+```
+
 ### 处理事件流
 
 `runner.Run()` 返回的 `eventChan` 是一个事件通道，Agent 执行过程中会持续向这个通道发送 Event 对象。

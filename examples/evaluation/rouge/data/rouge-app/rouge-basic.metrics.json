@@ -1,0 +1,19 @@
+[
+  {
+    "metricName": "final_response_avg_score",
+    "threshold": 1,
+    "criterion": {
+      "finalResponse": {
+        "rouge": {
+          "rougeType": "rouge1",
+          "measure": "f1",
+          "threshold": {
+            "precision": 0.3,
+            "recall": 0.6,
+            "f1": 0.4
+          }
+        }
+      }
+    }
+  }
+]

@@ -736,7 +736,8 @@ func (dk *BuiltinKnowledge) addDocument(ctx context.Context, doc *document.Docum
 	var embedding []float64
 	if dk.embedder != nil {
 		var err error
-		embedding, err = dk.embedder.GetEmbedding(ctx, doc.Content)
+		embeddingText := buildEmbeddingText(doc)
+		embedding, err = dk.embedder.GetEmbedding(ctx, embeddingText)
 		if err != nil {
 			return fmt.Errorf("failed to generate embedding: %w", err)
 		}
@@ -749,6 +750,48 @@ func (dk *BuiltinKnowledge) addDocument(ctx context.Context, doc *document.Docum
 		return fmt.Errorf("failed to store embedding: %w", err)
 	}
 	return nil
+}
+
+// buildEmbeddingText constructs the text used for embedding by prepending
+// metadata context (file name, chunk index, header path) to the document content.
+// This enriches the embedding vector with structural information, improving
+// retrieval accuracy without altering the stored content.
+func buildEmbeddingText(doc *document.Document) string {
+	if doc.Metadata == nil {
+		return doc.Content
+	}
+
+	var prefix strings.Builder
+
+	// Append file name if available.
+	if fileName, ok := doc.Metadata[source.MetaFileName].(string); ok && fileName != "" {
+		prefix.WriteString("file: ")
+		prefix.WriteString(fileName)
+	}
+
+	// Append chunk index if available (handles both int and float64 from JSON round-trip).
+	if chunkIndex, ok := convertToInt(doc.Metadata[source.MetaChunkIndex]); ok && chunkIndex > 0 {
+		if prefix.Len() > 0 {
+			prefix.WriteString(" | ")
+		}
+		prefix.WriteString("chunk: ")
+		prefix.WriteString(strconv.Itoa(chunkIndex))
+	}
+
+	// Append header path if available.
+	if headerPath, ok := doc.Metadata[source.MetaMarkdownHeaderPath].(string); ok && headerPath != "" {
+		if prefix.Len() > 0 {
+			prefix.WriteString(" | ")
+		}
+		prefix.WriteString("section: ")
+		prefix.WriteString(headerPath)
+	}
+
+	if prefix.Len() == 0 {
+		return doc.Content
+	}
+
+	return prefix.String() + "\n" + doc.Content
 }
 
 func (dk *BuiltinKnowledge) resetDocumentID(doc *document.Document, src source.Source) error {

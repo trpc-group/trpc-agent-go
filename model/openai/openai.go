@@ -852,6 +852,13 @@ func (m *Model) convertTools(tools map[string]tool.Tool) []openai.ChatCompletion
 			log.Errorf("failed to unmarshal tool schema for %s: %v", declaration.Name, err)
 			continue
 		}
+		// Some OpenAI-compatible proxies require object schemas to include
+		// a `properties` key, even when the tool takes no arguments.
+		if typ, ok := parameters["type"].(string); ok && typ == "object" {
+			if props, exists := parameters["properties"]; !exists || props == nil {
+				parameters["properties"] = map[string]any{}
+			}
+		}
 		result = append(result, openai.ChatCompletionToolParam{
 			Function: openai.FunctionDefinitionParam{
 				Name:        declaration.Name,
@@ -1343,7 +1350,11 @@ func extractReasoningContent(extraFields map[string]respjson.Field) string {
 	}
 	reasoningField, ok := extraFields[model.ReasoningContentKey]
 	if !ok {
-		return ""
+		// Ollama and some providers use "reasoning" instead of "reasoning_content".
+		reasoningField, ok = extraFields[model.ReasoningContentKeyAlt]
+		if !ok {
+			return ""
+		}
 	}
 	reasoningStr, err := strconv.Unquote(reasoningField.Raw())
 	if err == nil {

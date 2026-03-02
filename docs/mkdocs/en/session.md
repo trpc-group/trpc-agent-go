@@ -998,7 +998,7 @@ Both situations could lead to duplicate data.
 - `idx_*_session_summaries_unique_active(app_name, user_id, session_id, filter_key, deleted_at)` — unique index but includes deleted_at
 - `idx_*_session_summaries_lookup(app_name, user_id, session_id, deleted_at)` — regular index
 
-**New Index**: `idx_*_session_summaries_unique_active(app_name, user_id, session_id, filter_key)` — unique index without deleted_at
+**New Index**: `idx_*_session_summaries_unique_active(app_name(191), user_id(191), session_id(191), filter_key(191))` — unique index without deleted_at (prefix indexes are used to avoid Error 1071).
 
 **Migration Steps**:
 
@@ -1038,7 +1038,7 @@ DROP INDEX idx_session_summaries_lookup ON session_summaries;
 -- Step 5: Create the new unique index (without deleted_at)
 -- Note: Index name may have a table prefix, adjust according to your configuration.
 CREATE UNIQUE INDEX idx_session_summaries_unique_active 
-ON session_summaries(app_name, user_id, session_id, filter_key);
+ON session_summaries(app_name(191), user_id(191), session_id(191), filter_key(191));
 
 -- Step 6: Verify migration results
 SELECT COUNT(*) as duplicate_count FROM (

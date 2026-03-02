@@ -120,3 +120,9 @@ func TestWithCancelEnabled(t *testing.T) {
 	opts := newOptions(WithCancelEnabled(true))
 	assert.True(t, opts.cancelEnabled)
 }
+
+func TestWithCancelOnContextDoneEnabled(t *testing.T) {
+	opts := newOptions(WithCancelOnContextDoneEnabled(true))
+	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
+	assert.True(t, ro.CancelOnContextDoneEnabled)
+}

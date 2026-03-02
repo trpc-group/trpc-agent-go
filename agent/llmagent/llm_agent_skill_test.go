@@ -22,6 +22,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
@@ -377,4 +378,25 @@ func TestLLMAgent_WithSkills_InsertsOverview(t *testing.T) {
 	require.NotEmpty(t, sys)
 	require.Contains(t, sys, "Available skills:")
 	require.Contains(t, sys, "echoer")
+}
+
+func TestLLMAgent_WithSkillsLoadedContentInToolResults_WiresProcessor(
+	t *testing.T,
+) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	opts := &Options{}
+	WithSkills(repo)(opts)
+	WithSkillsLoadedContentInToolResults(true)(opts)
+
+	procs := buildRequestProcessors("tester", opts)
+	var saw bool
+	for _, p := range procs {
+		if _, ok := p.(*processor.SkillsToolResultRequestProcessor); ok {
+			saw = true
+		}
+	}
+	require.True(t, saw)
 }

@@ -4,6 +4,17 @@
 
 Reranker 用于对检索出的候选结果进行精排，提升相关性。可与任何向量存储搭配使用，通过 `knowledge.WithReranker` 注入。
 
+## 注入 Knowledge
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/knowledge"
+
+kb := knowledge.New(
+    knowledge.WithReranker(rerank),
+    // ... 其他配置（VectorStore、Embedder、Sources 等）
+)
+```
+
 ## 支持的 Reranker
 
 ### TopK（简单截断）
@@ -90,21 +101,3 @@ if err != nil {
 | `WithHTTPClient(*http.Client)` | 自定义 HTTP 客户端 | 否 |
 
 详细的服务部署方法和示例请参考 [examples/knowledge/reranker/infinity/](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/reranker/infinity) 目录。
-
-
-
-## 注入 Knowledge
-
-```go
-import "trpc.group/trpc-go/trpc-agent-go/knowledge"
-
-kb := knowledge.New(
-    knowledge.WithReranker(rerank),
-    // ... 其他配置（VectorStore、Embedder、Sources 等）
-)
-```
-
-## 注意事项
-- Cohere 需提供有效的 API Key。
-- Infinity/TEI 需保证端点可达、模型已加载；`WithModel` 可选，但建议与服务端模型一致。
-- TopK 无需额外依赖，适合离线或受限环境。
