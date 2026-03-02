@@ -48,6 +48,8 @@ type RunTool struct {
 
 	allowedCmds map[string]struct{}
 	deniedCmds  map[string]struct{}
+
+	forceSaveArtifacts bool
 }
 
 // NewRunTool creates a new RunTool.
@@ -114,6 +116,18 @@ func WithAllowedCommands(cmds ...string) func(*RunTool) {
 func WithDeniedCommands(cmds ...string) func(*RunTool) {
 	return func(t *RunTool) {
 		t.setDeniedCommands(cmds)
+	}
+}
+
+// WithForceSaveArtifacts forces skill_run to persist collected outputs
+// via the artifact service when possible.
+//
+// It applies to both:
+//   - legacy output_files + save_as_artifacts
+//   - declarative outputs.save
+func WithForceSaveArtifacts(enable bool) func(*RunTool) {
+	return func(t *RunTool) {
+		t.forceSaveArtifacts = enable
 	}
 }
 
@@ -333,29 +347,17 @@ func (t *RunTool) Call(
 	if err != nil {
 		return nil, err
 	}
-	root, err := t.repo.Path(in.Skill)
+	in, saveRequested, outputsSaveSkipReason := t.applyArtifactSaveOverrides(
+		ctx,
+		in,
+	)
+	eng, ws, ctxIO, staged, stageWarn, err := t.prepareWorkspaceForRun(
+		ctx,
+		in,
+	)
 	if err != nil {
 		return nil, err
 	}
-	eng := t.ensureEngine()
-	ws, err := t.createWorkspace(ctx, eng, in.Skill)
-	if err != nil {
-		return nil, err
-	}
-	if err := t.stageSkill(ctx, eng, ws, root, in.Skill); err != nil {
-		return nil, err
-	}
-
-	staged, stageWarn := t.stageUserFileInputs(ctx, eng, ws)
-
-	// Prepare IO context and stage declared inputs.
-	ctxIO := withArtifactContext(ctx)
-	if len(in.Inputs) > 0 {
-		if err := eng.FS().StageInputs(ctxIO, ws, in.Inputs); err != nil {
-			return nil, err
-		}
-	}
-	// Compute CWD and execute program.
 	cwd := resolveCWD(in.Cwd, in.Skill)
 	rr, err := t.runProgram(ctx, eng, ws, cwd, in)
 	if err != nil {
@@ -363,39 +365,125 @@ func (t *RunTool) Call(
 	}
 
 	autoFiles := t.autoExportWorkspaceOut(ctxIO, eng, ws, in)
-
-	// Collect outputs via spec or legacy globs.
-	files, manifest, err := t.prepareOutputs(
-		ctxIO, eng, ws, in,
+	files, manifest, err := t.prepareOutputs(ctxIO, eng, ws, in)
+	if err != nil {
+		return nil, err
+	}
+	out, err := t.buildRunOutput(
+		ctx,
+		rr,
+		autoFiles,
+		files,
+		manifest,
+		in,
+		saveRequested,
+		outputsSaveSkipReason,
 	)
 	if err != nil {
 		return nil, err
 	}
-	trimTruncatedUTF8TextFiles(files)
-	out := buildRunOutput(rr, files)
 	out.StagedInputs = staged
-	mergeAutoPrimaryOutput(autoFiles, &out)
 	if len(stageWarn) > 0 {
 		out.Warnings = append(out.Warnings, stageWarn...)
 	}
-	if len(files) > 0 && !in.SaveArtifacts {
-		out.Warnings = append(out.Warnings,
-			warnOutputFilesWorkspaceOnly)
-	}
-	if err := t.attachArtifactsIfRequested(
-		ctx, &out, files, in.ArtifactPrefix, in.SaveArtifacts,
-		in.OmitInline,
-	); err != nil {
-		return nil, err
-	}
-	mergeManifestArtifactRefs(manifest, &out)
-	applyOmitInlineContent(ctx, &out, in.OmitInline)
 	toolcache.StoreSkillRunOutputFilesFromContext(ctx, files)
 	return out, nil
 }
 
 var _ tool.Tool = (*RunTool)(nil)
 var _ tool.CallableTool = (*RunTool)(nil)
+
+func (t *RunTool) applyArtifactSaveOverrides(
+	ctx context.Context,
+	in runInput,
+) (runInput, bool, string) {
+	if t.forceSaveArtifacts {
+		if len(in.OutputFiles) > 0 {
+			in.SaveArtifacts = true
+		}
+		if in.Outputs != nil && len(in.OutputFiles) == 0 {
+			in.Outputs.Save = true
+		}
+	}
+
+	saveRequested := (in.SaveArtifacts && len(in.OutputFiles) > 0) ||
+		(in.Outputs != nil && in.Outputs.Save)
+	var outputsSaveSkipReason string
+	if in.Outputs != nil && in.Outputs.Save {
+		outputsSaveSkipReason = artifactSaveSkipReason(ctx)
+		if outputsSaveSkipReason != "" {
+			in.Outputs.Save = false
+		}
+	}
+	return in, saveRequested, outputsSaveSkipReason
+}
+
+func (t *RunTool) prepareWorkspaceForRun(
+	ctx context.Context,
+	in runInput,
+) (
+	codeexecutor.Engine,
+	codeexecutor.Workspace,
+	context.Context,
+	[]stagedInput,
+	[]string,
+	error,
+) {
+	root, err := t.repo.Path(in.Skill)
+	if err != nil {
+		return nil, codeexecutor.Workspace{}, nil, nil, nil, err
+	}
+	eng := t.ensureEngine()
+	ws, err := t.createWorkspace(ctx, eng, in.Skill)
+	if err != nil {
+		return nil, codeexecutor.Workspace{}, nil, nil, nil, err
+	}
+	if err := t.stageSkill(ctx, eng, ws, root, in.Skill); err != nil {
+		return nil, codeexecutor.Workspace{}, nil, nil, nil, err
+	}
+	staged, stageWarn := t.stageUserFileInputs(ctx, eng, ws)
+	ctxIO := withArtifactContext(ctx)
+	if len(in.Inputs) > 0 {
+		if err := eng.FS().StageInputs(ctxIO, ws, in.Inputs); err != nil {
+			return nil, codeexecutor.Workspace{}, nil, nil, nil, err
+		}
+	}
+	return eng, ws, ctxIO, staged, stageWarn, nil
+}
+
+func (t *RunTool) buildRunOutput(
+	ctx context.Context,
+	rr codeexecutor.RunResult,
+	autoFiles []codeexecutor.File,
+	files []codeexecutor.File,
+	manifest *codeexecutor.OutputManifest,
+	in runInput,
+	saveRequested bool,
+	outputsSaveSkipReason string,
+) (runOutput, error) {
+	trimTruncatedUTF8TextFiles(files)
+	out := buildRunOutput(rr, files)
+	mergeAutoPrimaryOutput(autoFiles, &out)
+	appendOutputsSaveWarning(&out, outputsSaveSkipReason)
+	saveArtifacts := in.SaveArtifacts && len(in.OutputFiles) > 0
+	if err := t.attachArtifactsIfRequested(
+		ctx,
+		&out,
+		files,
+		in.ArtifactPrefix,
+		saveArtifacts,
+		in.OmitInline,
+	); err != nil {
+		return runOutput{}, err
+	}
+	mergeManifestArtifactRefs(manifest, &out)
+	if len(out.OutputFiles) > 0 && !saveRequested {
+		out.Warnings = append(out.Warnings,
+			warnOutputFilesWorkspaceOnly)
+	}
+	applyOmitInlineContent(ctx, &out, in.OmitInline)
+	return out, nil
+}
 
 const (
 	userFileInputFromPrefix  = "user_message://"
@@ -1643,6 +1731,9 @@ func (t *RunTool) attachArtifactsIfRequested(
 const warnSaveArtifactsSkippedTmpl = "save_as_artifacts requested but " +
 	"%s; outputs are not persisted"
 
+const warnOutputsSaveSkippedTmpl = "outputs.save requested but " +
+	"%s; outputs are not persisted"
+
 const warnOutputFilesWorkspaceOnly = "output_files are workspace-" +
 	"relative; prefer output_files content; when you need a " +
 	"stable reference, use output_files[*].ref (workspace://...)"
@@ -1679,6 +1770,16 @@ func appendWarning(out *runOutput, reason string) {
 	out.Warnings = append(
 		out.Warnings,
 		fmt.Sprintf(warnSaveArtifactsSkippedTmpl, reason),
+	)
+}
+
+func appendOutputsSaveWarning(out *runOutput, reason string) {
+	if out == nil || reason == "" {
+		return
+	}
+	out.Warnings = append(
+		out.Warnings,
+		fmt.Sprintf(warnOutputsSaveSkippedTmpl, reason),
 	)
 }
 
