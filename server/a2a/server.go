@@ -87,7 +87,7 @@ func buildAgentCard(options *options) a2a.AgentCard {
 			Extensions: []a2a.AgentExtension{
 				{
 					URI: ia2a.ExtensionURIInteractionSpec,
-					Params: map[string]interface{}{
+					Params: map[string]any{
 						"version": ia2a.InteractionSpecVersion,
 					},
 				},
