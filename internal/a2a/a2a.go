@@ -91,15 +91,15 @@ const (
 	// This ensures compatibility with ADK's part converter which expects "adk_type" instead of "type".
 	ADKMetadataKeyPrefix = "adk_"
 
-	// ExtensionURIInteractionSpec is the URI for the trpc-agent-go interaction specification extension.
+	// ExtensionTRPCA2AVersion is the URI for the trpc-a2a interaction version extension.
 	// Declared in AgentCard.Capabilities.Extensions so that clients can detect which version of the
-	// interaction spec the server supports and apply compatible conversion logic.
-	ExtensionURIInteractionSpec = "trpc-agent-go:interaction-spec"
+	// interaction protocol the server supports and apply compatible conversion logic.
+	ExtensionTRPCA2AVersion = "trpc-a2a-version"
 
-	// InteractionSpecVersion is the current version of the trpc-agent-go interaction specification.
+	// InteractionVersion is the current version of the trpc-agent-go interaction specification.
 	// Bump this when the metadata schema, part encoding, or streaming conventions change in a
 	// backward-incompatible way.
-	InteractionSpecVersion = "0.1"
+	InteractionVersion = "0.1"
 
 	// MessageMetadataInteractionSpecVersionKey is the metadata key sent by the client in
 	// request messages to declare which interaction spec version it supports.

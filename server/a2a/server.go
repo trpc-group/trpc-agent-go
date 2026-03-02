@@ -86,9 +86,9 @@ func buildAgentCard(options *options) a2a.AgentCard {
 			Streaming: &options.enableStreaming,
 			Extensions: []a2a.AgentExtension{
 				{
-					URI: ia2a.ExtensionURIInteractionSpec,
+					URI: ia2a.ExtensionTRPCA2AVersion,
 					Params: map[string]any{
-						"version": ia2a.InteractionSpecVersion,
+						"version": ia2a.InteractionVersion,
 					},
 				},
 			},

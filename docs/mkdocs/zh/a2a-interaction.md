@@ -51,7 +51,7 @@ A2A Server 自动生成的 AgentCard 中会包含以下 extension：
     "streaming": true,
     "extensions": [
       {
-        "uri": "trpc-agent-go:interaction-spec",
+        "uri": "trpc-a2a-version",
         "params": {
           "version": "0.1"
         }
@@ -63,7 +63,7 @@ A2A Server 自动生成的 AgentCard 中会包含以下 extension：
 
 | 字段       | 说明                                                                 |
 | ---------- | -------------------------------------------------------------------- |
-| `uri`      | 扩展标识，固定为 `trpc-agent-go:interaction-spec`                    |
+| `uri`      | 扩展标识，固定为 `trpc-a2a-version`                    |
 | `required` | 省略（默认 `false`），表示该扩展为声明性的，不强制 Client 必须支持。不认识该扩展的标准 A2A Client 仍可正常进行基础交互 |
 | `params.version` | 交互规范版本号，遵循语义化版本（当前为 `0.1`）                |
 
