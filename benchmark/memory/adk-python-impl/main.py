@@ -59,6 +59,67 @@ warnings.filterwarnings(
 logging.getLogger("LiteLLM").setLevel(logging.WARNING)
 logging.getLogger("litellm").setLevel(logging.WARNING)
 
+
+# ---------------------------------------------------------------------------
+# LiteLLM callback tracker.
+# ADK's Runner.run_async() returns ev.usage=None for memory-
+# augmented calls.  We work around this by hooking litellm's
+# CustomLogger callback to capture token usage from the
+# underlying async LLM calls.
+# ---------------------------------------------------------------------------
+import threading
+
+from litellm.integrations.custom_logger import CustomLogger
+
+
+class _LiteLLMUsageTracker(CustomLogger):
+    """Thread-safe accumulator reset before each QA question."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._lock = threading.Lock()
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.total_tokens = 0
+        self.llm_calls = 0
+
+    def reset(self) -> None:
+        with self._lock:
+            self.prompt_tokens = 0
+            self.completion_tokens = 0
+            self.total_tokens = 0
+            self.llm_calls = 0
+
+    def snapshot(self) -> "TokenUsage":
+        with self._lock:
+            return TokenUsage(
+                prompt_tokens=self.prompt_tokens,
+                completion_tokens=self.completion_tokens,
+                total_tokens=self.total_tokens,
+                llm_calls=self.llm_calls,
+            )
+
+    async def async_log_success_event(
+        self, kwargs, response_obj, start_time, end_time,
+    ):
+        """Async callback fired by litellm after acompletion."""
+        usage = getattr(response_obj, "usage", None)
+        if usage is None:
+            return
+        pt = getattr(usage, "prompt_tokens", 0) or 0
+        ct = getattr(usage, "completion_tokens", 0) or 0
+        tt = getattr(usage, "total_tokens", 0) or 0
+        with self._lock:
+            self.prompt_tokens += pt
+            self.completion_tokens += ct
+            self.total_tokens += tt
+            self.llm_calls += 1
+
+
+_usage_tracker = _LiteLLMUsageTracker()
+litellm.callbacks = [_usage_tracker]
+
+
 # ---------------------------------------------------------------------------
 # Constants.
 # ---------------------------------------------------------------------------
@@ -145,6 +206,10 @@ class QAResult:
     f1: float = 0.0
     bleu: float = 0.0
     llm_score: float = 0.0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    llm_calls: int = 0
 
 
 @dataclass
@@ -240,13 +305,13 @@ def evaluate_baseline(
                 max_tokens=200,
             )
             llm_score = metrics.parse_llm_judge_response(judge_resp)
-            total_usage.prompt_tokens += judge_usage.prompt_tokens
-            total_usage.completion_tokens += (
-                judge_usage.completion_tokens
-            )
-            total_usage.total_tokens += judge_usage.total_tokens
-            total_usage.llm_calls += judge_usage.llm_calls
 
+        log.info(
+            "    %s: prompt=%d comp=%d total=%d calls=%d",
+            qa.question_id, usage.prompt_tokens,
+            usage.completion_tokens, usage.total_tokens,
+            usage.llm_calls,
+        )
         qa_results.append(QAResult(
             question_id=qa.question_id,
             category=qa.category,
@@ -256,6 +321,10 @@ def evaluate_baseline(
             f1=m.f1,
             bleu=bleu,
             llm_score=llm_score,
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            total_tokens=usage.total_tokens,
+            llm_calls=usage.llm_calls,
         ))
     return SampleResult(
         sample_id=sample.sample_id,
@@ -345,6 +414,7 @@ async def evaluate_memory(
         )
 
         prediction = ""
+        _usage_tracker.reset()
         try:
             async for ev in runner.run_async(
                 user_id=user_id,
@@ -359,21 +429,6 @@ async def evaluate_memory(
                     for part in ev.content.parts:
                         if part.text:
                             prediction += part.text
-                # Track token usage from model responses.
-                if hasattr(ev, "usage") and ev.usage:
-                    total_usage.prompt_tokens += (
-                        getattr(ev.usage, "prompt_tokens", 0)
-                        or 0
-                    )
-                    total_usage.completion_tokens += (
-                        getattr(ev.usage, "completion_tokens", 0)
-                        or 0
-                    )
-                    total_usage.total_tokens += (
-                        getattr(ev.usage, "total_tokens", 0)
-                        or 0
-                    )
-                    total_usage.llm_calls += 1
         except Exception as e:
             log.warning(
                 "Error evaluating QA %s: %s",
@@ -388,6 +443,17 @@ async def evaluate_memory(
                     close_err,
                 )
 
+        # Snapshot QA inference tokens from litellm callback.
+        qa_usage = _usage_tracker.snapshot()
+
+        # Accumulate only QA inference tokens.
+        total_usage.prompt_tokens += qa_usage.prompt_tokens
+        total_usage.completion_tokens += (
+            qa_usage.completion_tokens
+        )
+        total_usage.total_tokens += qa_usage.total_tokens
+        total_usage.llm_calls += qa_usage.llm_calls
+
         prediction = prediction.strip()
         m = metrics.compute_f1(prediction, qa.answer)
         bleu = metrics.compute_bleu1(prediction, qa.answer)
@@ -401,14 +467,16 @@ async def evaluate_memory(
                 eval_client, eval_model, judge_prompt,
                 max_tokens=200,
             )
-            llm_score = metrics.parse_llm_judge_response(judge_resp)
-            total_usage.prompt_tokens += judge_usage.prompt_tokens
-            total_usage.completion_tokens += (
-                judge_usage.completion_tokens
+            llm_score = metrics.parse_llm_judge_response(
+                judge_resp,
             )
-            total_usage.total_tokens += judge_usage.total_tokens
-            total_usage.llm_calls += judge_usage.llm_calls
 
+        log.info(
+            "    %s: prompt=%d comp=%d total=%d calls=%d",
+            qa.question_id, qa_usage.prompt_tokens,
+            qa_usage.completion_tokens,
+            qa_usage.total_tokens, qa_usage.llm_calls,
+        )
         qa_results.append(QAResult(
             question_id=qa.question_id,
             category=qa.category,
@@ -418,6 +486,10 @@ async def evaluate_memory(
             f1=m.f1,
             bleu=bleu,
             llm_score=llm_score,
+            prompt_tokens=qa_usage.prompt_tokens,
+            completion_tokens=qa_usage.completion_tokens,
+            total_tokens=qa_usage.total_tokens,
+            llm_calls=qa_usage.llm_calls,
         ))
 
     await litellm.close_litellm_async_clients()

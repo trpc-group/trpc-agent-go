@@ -152,6 +152,10 @@ class QAResult:
     f1: float = 0.0
     bleu: float = 0.0
     llm_score: float = 0.0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    llm_calls: int = 0
 
 
 @dataclass
@@ -249,17 +253,13 @@ def evaluate_baseline(
             llm_score = metrics.parse_llm_judge_response(
                 judge_resp,
             )
-            total_usage.prompt_tokens += (
-                judge_usage.prompt_tokens
-            )
-            total_usage.completion_tokens += (
-                judge_usage.completion_tokens
-            )
-            total_usage.total_tokens += (
-                judge_usage.total_tokens
-            )
-            total_usage.llm_calls += judge_usage.llm_calls
 
+        log.info(
+            "    %s: prompt=%d comp=%d total=%d calls=%d",
+            qa.question_id, usage.prompt_tokens,
+            usage.completion_tokens, usage.total_tokens,
+            usage.llm_calls,
+        )
         qa_results.append(QAResult(
             question_id=qa.question_id,
             category=qa.category,
@@ -269,6 +269,10 @@ def evaluate_baseline(
             f1=m.f1,
             bleu=bleu,
             llm_score=llm_score,
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            total_tokens=usage.total_tokens,
+            llm_calls=usage.llm_calls,
         ))
     return SampleResult(
         sample_id=sample.sample_id,
@@ -359,6 +363,7 @@ def evaluate_memory(
 
     for qa in sample.qa:
         prediction = ""
+        qa_usage = TokenUsage()
         try:
             task = Task(
                 description=(
@@ -390,16 +395,12 @@ def evaluate_memory(
             # Extract token usage from CrewAI metrics.
             if result.token_usage:
                 tu = result.token_usage
-                total_usage.prompt_tokens += (
-                    tu.prompt_tokens
-                )
-                total_usage.completion_tokens += (
+                qa_usage.prompt_tokens = tu.prompt_tokens
+                qa_usage.completion_tokens = (
                     tu.completion_tokens
                 )
-                total_usage.total_tokens += (
-                    tu.total_tokens
-                )
-                total_usage.llm_calls += (
+                qa_usage.total_tokens = tu.total_tokens
+                qa_usage.llm_calls = (
                     tu.successful_requests
                 )
         except Exception as e:
@@ -408,6 +409,18 @@ def evaluate_memory(
                 qa.question_id, e,
             )
             prediction = ""
+
+        # Accumulate only QA inference tokens.
+        total_usage.prompt_tokens += (
+            qa_usage.prompt_tokens
+        )
+        total_usage.completion_tokens += (
+            qa_usage.completion_tokens
+        )
+        total_usage.total_tokens += (
+            qa_usage.total_tokens
+        )
+        total_usage.llm_calls += qa_usage.llm_calls
 
         m = metrics.compute_f1(prediction, qa.answer)
         bleu = metrics.compute_bleu1(prediction, qa.answer)
@@ -424,17 +437,13 @@ def evaluate_memory(
             llm_score = metrics.parse_llm_judge_response(
                 judge_resp,
             )
-            total_usage.prompt_tokens += (
-                judge_usage.prompt_tokens
-            )
-            total_usage.completion_tokens += (
-                judge_usage.completion_tokens
-            )
-            total_usage.total_tokens += (
-                judge_usage.total_tokens
-            )
-            total_usage.llm_calls += judge_usage.llm_calls
 
+        log.info(
+            "    %s: prompt=%d comp=%d total=%d calls=%d",
+            qa.question_id, qa_usage.prompt_tokens,
+            qa_usage.completion_tokens,
+            qa_usage.total_tokens, qa_usage.llm_calls,
+        )
         qa_results.append(QAResult(
             question_id=qa.question_id,
             category=qa.category,
@@ -444,6 +453,10 @@ def evaluate_memory(
             f1=m.f1,
             bleu=bleu,
             llm_score=llm_score,
+            prompt_tokens=qa_usage.prompt_tokens,
+            completion_tokens=qa_usage.completion_tokens,
+            total_tokens=qa_usage.total_tokens,
+            llm_calls=qa_usage.llm_calls,
         ))
 
     # Clean up.

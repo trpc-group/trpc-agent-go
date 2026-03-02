@@ -169,6 +169,10 @@ class QAResult:
     f1: float = 0.0
     bleu: float = 0.0
     llm_score: float = 0.0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    llm_calls: int = 0
 
 
 @dataclass
@@ -270,17 +274,13 @@ def evaluate_baseline(
             llm_score = metrics.parse_llm_judge_response(
                 judge_resp,
             )
-            total_usage.prompt_tokens += (
-                judge_usage.prompt_tokens
-            )
-            total_usage.completion_tokens += (
-                judge_usage.completion_tokens
-            )
-            total_usage.total_tokens += (
-                judge_usage.total_tokens
-            )
-            total_usage.llm_calls += judge_usage.llm_calls
 
+        log.info(
+            "    %s: prompt=%d comp=%d total=%d calls=%d",
+            qa.question_id, usage.prompt_tokens,
+            usage.completion_tokens, usage.total_tokens,
+            usage.llm_calls,
+        )
         qa_results.append(QAResult(
             question_id=qa.question_id,
             category=qa.category,
@@ -290,6 +290,10 @@ def evaluate_baseline(
             f1=m.f1,
             bleu=bleu,
             llm_score=llm_score,
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            total_tokens=usage.total_tokens,
+            llm_calls=usage.llm_calls,
         ))
     return SampleResult(
         sample_id=sample.sample_id,
@@ -418,6 +422,7 @@ async def evaluate_memory(
 
     for qa in sample.qa:
         prediction = ""
+        qa_usage = TokenUsage()
         try:
             result = await qa_agent.run(
                 task=qa.question,
@@ -429,44 +434,40 @@ async def evaluate_memory(
                     prediction = text.strip()
                     break
 
-            # Extract token usage from model_usage.
-            if hasattr(result, "model_usage") and (
-                result.model_usage
-            ):
-                for model_key, usage_data in (
-                    result.model_usage.items()
-                ):
-                    total_usage.prompt_tokens += (
-                        getattr(
-                            usage_data, "prompt_tokens", 0,
-                        ) or 0
-                    )
-                    total_usage.completion_tokens += (
-                        getattr(
-                            usage_data,
-                            "completion_tokens", 0,
-                        ) or 0
-                    )
-                    total_usage.llm_calls += 1
-                    total_usage.total_tokens += (
-                        (
-                            getattr(
-                                usage_data,
-                                "prompt_tokens", 0,
-                            ) or 0
-                        ) + (
-                            getattr(
-                                usage_data,
-                                "completion_tokens", 0,
-                            ) or 0
-                        )
-                    )
+            # Extract token usage from message-level
+            # models_usage (TaskResult has no model_usage
+            # when memory is attached).
+            for msg in result.messages:
+                mu = getattr(msg, "models_usage", None)
+                if mu is None:
+                    continue
+                pt = getattr(mu, "prompt_tokens", 0) or 0
+                ct = (
+                    getattr(mu, "completion_tokens", 0)
+                    or 0
+                )
+                qa_usage.prompt_tokens += pt
+                qa_usage.completion_tokens += ct
+                qa_usage.total_tokens += pt + ct
+                qa_usage.llm_calls += 1
         except Exception as e:
             log.warning(
                 "Error evaluating QA %s: %s",
                 qa.question_id, e,
             )
             prediction = ""
+
+        # Accumulate only QA inference tokens.
+        total_usage.prompt_tokens += (
+            qa_usage.prompt_tokens
+        )
+        total_usage.completion_tokens += (
+            qa_usage.completion_tokens
+        )
+        total_usage.total_tokens += (
+            qa_usage.total_tokens
+        )
+        total_usage.llm_calls += qa_usage.llm_calls
 
         # Reset agent for next question to avoid
         # context accumulation.
@@ -491,17 +492,13 @@ async def evaluate_memory(
             llm_score = metrics.parse_llm_judge_response(
                 judge_resp,
             )
-            total_usage.prompt_tokens += (
-                judge_usage.prompt_tokens
-            )
-            total_usage.completion_tokens += (
-                judge_usage.completion_tokens
-            )
-            total_usage.total_tokens += (
-                judge_usage.total_tokens
-            )
-            total_usage.llm_calls += judge_usage.llm_calls
 
+        log.info(
+            "    %s: prompt=%d comp=%d total=%d calls=%d",
+            qa.question_id, qa_usage.prompt_tokens,
+            qa_usage.completion_tokens,
+            qa_usage.total_tokens, qa_usage.llm_calls,
+        )
         qa_results.append(QAResult(
             question_id=qa.question_id,
             category=qa.category,
@@ -511,6 +508,10 @@ async def evaluate_memory(
             f1=m.f1,
             bleu=bleu,
             llm_score=llm_score,
+            prompt_tokens=qa_usage.prompt_tokens,
+            completion_tokens=qa_usage.completion_tokens,
+            total_tokens=qa_usage.total_tokens,
+            llm_calls=qa_usage.llm_calls,
         ))
 
     # Clean up.
