@@ -437,3 +437,93 @@ func TestLLMBaseEvaluator_AllowsJudgeRunnerWithoutJudgeModel(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, r.runCalls)
 }
+
+func TestLLMBaseEvaluator_EvaluateMissingJudgeModelAndRunner(t *testing.T) {
+	base := &LLMBaseEvaluator{LLMEvaluator: &scriptedLLMEvaluator{scoreValue: 1}}
+	evalMetric := &metric.EvalMetric{
+		Threshold: 0.5,
+		Criterion: &criterion.Criterion{
+			LLMJudge: &llm.LLMCriterion{},
+		},
+	}
+
+	_, err := base.Evaluate(
+		context.Background(),
+		[]*evalset.Invocation{{InvocationID: "a"}},
+		[]*evalset.Invocation{{InvocationID: "b"}},
+		evalMetric,
+	)
+	require.Error(t, err)
+}
+
+func TestLLMBaseEvaluator_EvaluateUsesDefaultNumSamplesWhenNil(t *testing.T) {
+	provider.Register("llm-default-num-samples-provider", func(_ *provider.Options) (model.Model, error) {
+		return &fakeModel{responses: []*model.Response{{
+			Choices: []model.Choice{{Message: model.Message{Content: "ok"}}},
+			Done:    true,
+		}}}, nil
+	})
+	stub := &fakeLLMEvaluator{}
+	base := &LLMBaseEvaluator{LLMEvaluator: stub}
+	evalMetric := buildEvalMetric("llm-default-num-samples-provider", 3)
+	evalMetric.Criterion.LLMJudge.JudgeModel.NumSamples = nil
+
+	_, err := base.Evaluate(
+		context.Background(),
+		[]*evalset.Invocation{{InvocationID: "a"}},
+		[]*evalset.Invocation{{InvocationID: "b"}},
+		evalMetric,
+	)
+	require.NoError(t, err)
+}
+
+func TestJudgeModelResponse_JudgeModelNil(t *testing.T) {
+	evalMetric := &metric.EvalMetric{
+		Threshold: 0.5,
+		Criterion: &criterion.Criterion{
+			LLMJudge: &llm.LLMCriterion{},
+		},
+	}
+
+	_, err := judgeModelResponse(context.Background(), []model.Message{}, evalMetric)
+	require.Error(t, err)
+}
+
+func TestJudgeRunnerResponse_JudgeRunnerNil(t *testing.T) {
+	_, err := judgeRunnerResponse(context.Background(), nil, []model.Message{})
+	require.Error(t, err)
+}
+
+func TestJudgeRunnerResponse_EventError(t *testing.T) {
+	r := &fakeJudgeRunner{
+		events: []*event.Event{
+			nil,
+			event.NewErrorEvent("inv", "judge", model.ErrorTypeRunError, "bad"),
+		},
+	}
+
+	_, err := judgeRunnerResponse(
+		context.Background(),
+		r,
+		[]model.Message{{Role: model.RoleUser, Content: "prompt"}},
+	)
+	require.Error(t, err)
+}
+
+func TestJudgeRunnerResponse_NoFinalResponse(t *testing.T) {
+	r := &fakeJudgeRunner{
+		events: []*event.Event{
+			event.NewResponseEvent("inv", "judge", &model.Response{
+				Choices: []model.Choice{{Message: model.Message{Content: "partial"}}},
+				Done:    false,
+			}),
+		},
+	}
+
+	_, err := judgeRunnerResponse(
+		context.Background(),
+		r,
+		[]model.Message{{Role: model.RoleUser, Content: "prompt"}},
+	)
+	require.Error(t, err)
+}

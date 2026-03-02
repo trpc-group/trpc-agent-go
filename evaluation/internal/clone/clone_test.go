@@ -29,7 +29,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/finalresponse"
 	criterionjson "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
 	criterionllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
+	criterionrouge "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/rouge"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -49,6 +51,10 @@ var _ runner.Runner = (*stubRunner)(nil)
 func intPtr(v int) *int { return &v }
 
 func float64Ptr(v float64) *float64 { return &v }
+
+func boolPtr(v bool) *bool { return &v }
+
+func stringPtr(v string) *string { return &v }
 
 func TestCloneEvalCase_NilInput(t *testing.T) {
 	got, err := CloneEvalCase(nil)
@@ -76,6 +82,8 @@ func TestCloneEvalSetResult_NilInput(t *testing.T) {
 
 func TestCloneEvalCase_DeepCopy(t *testing.T) {
 	srcText := "hello"
+	audioBytes := []byte{3, 2, 1}
+	fileBytes := []byte{7, 8, 9}
 	src := &evalset.EvalCase{
 		EvalID: "case-1",
 		ContextMessages: []*model.Message{
@@ -85,6 +93,8 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 				ContentParts: []model.ContentPart{
 					{Type: model.ContentTypeText, Text: &srcText},
 					{Type: model.ContentTypeImage, Image: &model.Image{Data: []byte{1, 2, 3}}},
+					{Type: model.ContentTypeAudio, Audio: &model.Audio{Data: audioBytes, Format: "wav"}},
+					{Type: model.ContentTypeFile, File: &model.File{Name: "input.txt", Data: fileBytes, MimeType: "text/plain"}},
 				},
 				ToolCalls: []model.ToolCall{
 					{
@@ -104,6 +114,20 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 		Conversation: []*evalset.Invocation{
 			{
 				InvocationID: "inv-1",
+				ContextMessages: []*model.Message{
+					{
+						Role:    model.RoleSystem,
+						Content: "context",
+					},
+				},
+				UserContent: &model.Message{
+					Role:    model.RoleUser,
+					Content: "user input",
+				},
+				FinalResponse: &model.Message{
+					Role:    model.RoleAssistant,
+					Content: "assistant output",
+				},
 				Tools: []*evalset.Tool{
 					{
 						ID:   "tool-1",
@@ -111,10 +135,21 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 						Arguments: map[string]any{
 							"a":      1,
 							"nested": map[string]any{"b": true},
+							"list":   []any{"x", map[string]any{"y": []byte{4, 5}}},
 						},
-						Result: map[string]any{"ok": true},
+						Result: []any{"ok", []byte{6, 7, 8}},
 					},
 				},
+				IntermediateResponses: []*model.Message{
+					{
+						Role:    model.RoleAssistant,
+						Content: "thinking",
+						ContentParts: []model.ContentPart{
+							{Type: model.ContentTypeAudio, Audio: &model.Audio{Data: []byte{9}, Format: "wav"}},
+						},
+					},
+				},
+				CreationTimestamp: &epochtime.EpochTime{Time: time.Unix(1, 0).UTC()},
 			},
 		},
 		ActualConversation: []*evalset.Invocation{
@@ -148,6 +183,12 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 	dst.ContextMessages[0].ContentParts[1].Image.Data[0] = 99
 	assert.Equal(t, byte(1), src.ContextMessages[0].ContentParts[1].Image.Data[0])
 
+	dst.ContextMessages[0].ContentParts[2].Audio.Data[0] = 0
+	assert.Equal(t, byte(3), src.ContextMessages[0].ContentParts[2].Audio.Data[0])
+
+	dst.ContextMessages[0].ContentParts[3].File.Data[0] = 0
+	assert.Equal(t, byte(7), src.ContextMessages[0].ContentParts[3].File.Data[0])
+
 	dst.ContextMessages[0].ToolCalls[0].Function.Arguments[0] = 'X'
 	assert.Equal(t, byte('{'), src.ContextMessages[0].ToolCalls[0].Function.Arguments[0])
 
@@ -156,6 +197,9 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 
 	dst.Conversation[0].Tools[0].Arguments.(map[string]any)["a"] = 2
 	assert.Equal(t, 1, src.Conversation[0].Tools[0].Arguments.(map[string]any)["a"])
+
+	dst.Conversation[0].IntermediateResponses[0].ContentParts[0].Audio.Data[0] = 0
+	assert.Equal(t, byte(9), src.Conversation[0].IntermediateResponses[0].ContentParts[0].Audio.Data[0])
 
 	dst.SessionInput.State["bytes"].([]byte)[0] = 0
 	assert.Equal(t, byte(9), src.SessionInput.State["bytes"].([]byte)[0])
@@ -190,6 +234,34 @@ func TestCloneEvalMetric_DeepCopyKeepsAPIKeyAndDropsJudgeRunnerOptions(t *testin
 		MetricName: "metric-1",
 		Threshold:  0.5,
 		Criterion: &criterion.Criterion{
+			ToolTrajectory: &tooltrajectory.ToolTrajectoryCriterion{
+				DefaultStrategy: &tooltrajectory.ToolTrajectoryStrategy{
+					Name: &text.TextCriterion{
+						CaseInsensitive: true,
+					},
+					Arguments: &criterionjson.JSONCriterion{
+						IgnoreTree: map[string]any{"a": true},
+					},
+					Result: &criterionjson.JSONCriterion{
+						OnlyTree: map[string]any{"b": true},
+					},
+				},
+				ToolStrategy: map[string]*tooltrajectory.ToolTrajectoryStrategy{
+					"tool": {
+						Name: &text.TextCriterion{
+							MatchStrategy: text.TextMatchStrategyContains,
+						},
+						Arguments: &criterionjson.JSONCriterion{
+							OnlyTree: map[string]any{"x": true},
+						},
+						Result: &criterionjson.JSONCriterion{
+							IgnoreTree: map[string]any{"y": true},
+						},
+					},
+				},
+				OrderSensitive: true,
+				SubsetMatching: true,
+			},
 			FinalResponse: &finalresponse.FinalResponseCriterion{
 				Text: &text.TextCriterion{
 					CaseInsensitive: true,
@@ -202,6 +274,11 @@ func TestCloneEvalMetric_DeepCopyKeepsAPIKeyAndDropsJudgeRunnerOptions(t *testin
 						"x": []any{"y"},
 					},
 					NumberTolerance: float64Ptr(0.1),
+				},
+				Rouge: &criterionrouge.RougeCriterion{
+					RougeType: "rouge1",
+					Measure:   criterionrouge.RougeMeasureF1,
+					Threshold: criterionrouge.Score{Precision: 0.1, Recall: 0.2, F1: 0.3},
 				},
 			},
 			LLMJudge: &criterionllm.LLMCriterion{
@@ -222,8 +299,15 @@ func TestCloneEvalMetric_DeepCopyKeepsAPIKeyAndDropsJudgeRunnerOptions(t *testin
 					},
 					NumSamples: intPtr(2),
 					Generation: &model.GenerationConfig{
-						MaxTokens: intPtr(100),
-						Stop:      []string{"s1"},
+						MaxTokens:        intPtr(100),
+						Temperature:      float64Ptr(0.7),
+						TopP:             float64Ptr(0.9),
+						Stop:             []string{"s1"},
+						PresencePenalty:  float64Ptr(1.1),
+						FrequencyPenalty: float64Ptr(0.2),
+						ReasoningEffort:  stringPtr("low"),
+						ThinkingEnabled:  boolPtr(true),
+						ThinkingTokens:   intPtr(10),
 					},
 				},
 			},
@@ -253,6 +337,12 @@ func TestCloneEvalMetric_DeepCopyKeepsAPIKeyAndDropsJudgeRunnerOptions(t *testin
 
 	dst.Criterion.LLMJudge.JudgeModel.Generation.Stop[0] = "changed"
 	assert.Equal(t, "s1", src.Criterion.LLMJudge.JudgeModel.Generation.Stop[0])
+
+	dst.Criterion.ToolTrajectory.ToolStrategy["tool"].Name.MatchStrategy = text.TextMatchStrategyExact
+	assert.Equal(t, text.TextMatchStrategyContains, src.Criterion.ToolTrajectory.ToolStrategy["tool"].Name.MatchStrategy)
+
+	dst.Criterion.FinalResponse.Rouge.RougeType = "rougeL"
+	assert.Equal(t, "rouge1", src.Criterion.FinalResponse.Rouge.RougeType)
 }
 
 func TestCloneEvalSetResult_DeepCopy(t *testing.T) {
@@ -363,6 +453,206 @@ func TestCloneEvalSetResult_DeepCopy(t *testing.T) {
 
 	dst.Summary.RunStatusCounts.Passed = 2
 	assert.Equal(t, 1, src.Summary.RunStatusCounts.Passed)
+}
+
+func TestCloneEvalSetResult_DeepCopyFullSummary(t *testing.T) {
+	src := &evalresult.EvalSetResult{
+		EvalSetResultID:   "result-1",
+		EvalSetResultName: "result-1",
+		EvalSetID:         "set-1",
+		EvalCaseResults: []*evalresult.EvalCaseResult{
+			{
+				EvalSetID: "set-1",
+				EvalID:    "case-1",
+				RunID:     1,
+				OverallEvalMetricResults: []*evalresult.EvalMetricResult{
+					{
+						MetricName: "metric-1",
+						Score:      0.9,
+						EvalStatus: status.EvalStatusPassed,
+						Threshold:  0.5,
+						Criterion: &criterion.Criterion{
+							ToolTrajectory: &tooltrajectory.ToolTrajectoryCriterion{
+								DefaultStrategy: &tooltrajectory.ToolTrajectoryStrategy{
+									Name: &text.TextCriterion{
+										CaseInsensitive: true,
+									},
+								},
+								ToolStrategy: map[string]*tooltrajectory.ToolTrajectoryStrategy{
+									"tool": {
+										Arguments: &criterionjson.JSONCriterion{
+											OnlyTree: map[string]any{
+												"x": true,
+											},
+										},
+									},
+								},
+								OrderSensitive: true,
+							},
+							FinalResponse: &finalresponse.FinalResponseCriterion{
+								Rouge: &criterionrouge.RougeCriterion{
+									RougeType: "rouge1",
+								},
+							},
+							LLMJudge: &criterionllm.LLMCriterion{
+								JudgeModel: &criterionllm.JudgeModelOptions{
+									ProviderName: "provider",
+									ModelName:    "model",
+									APIKey:       "secret",
+								},
+							},
+						},
+						Details: &evalresult.EvalMetricResultDetails{
+							Reason: "ok",
+							Score:  0.9,
+							RubricScores: []*evalresult.RubricScore{
+								nil,
+								{
+									ID:     "r1",
+									Reason: "good",
+									Score:  1,
+								},
+							},
+						},
+					},
+					nil,
+				},
+				EvalMetricResultPerInvocation: []*evalresult.EvalMetricResultPerInvocation{
+					nil,
+					{
+						ActualInvocation: &evalset.Invocation{
+							InvocationID: "inv-1",
+							UserContent: &model.Message{
+								Role:    model.RoleUser,
+								Content: "user",
+								ContentParts: []model.ContentPart{
+									{Type: model.ContentTypeAudio, Audio: &model.Audio{Data: []byte{1}, Format: "wav"}},
+									{Type: model.ContentTypeFile, File: &model.File{Name: "f", Data: []byte{2}}},
+								},
+							},
+							FinalResponse: &model.Message{
+								Role:    model.RoleAssistant,
+								Content: "assistant",
+							},
+							IntermediateResponses: []*model.Message{
+								{
+									Role:    model.RoleAssistant,
+									Content: "intermediate",
+								},
+							},
+							Tools: []*evalset.Tool{
+								{
+									ID:        "tool-1",
+									Name:      "tool",
+									Arguments: map[string]any{"k": []any{"v", map[string]any{"bytes": []byte{3}}}},
+									Result:    map[string]any{"ok": true},
+								},
+							},
+						},
+						ExpectedInvocation: &evalset.Invocation{
+							InvocationID: "inv-expected-1",
+							Tools: []*evalset.Tool{
+								{
+									ID:        "tool-1",
+									Name:      "tool",
+									Arguments: map[string]any{"k": "v"},
+									Result:    map[string]any{"ok": true},
+								},
+							},
+						},
+						EvalMetricResults: []*evalresult.EvalMetricResult{
+							{
+								MetricName: "metric-1",
+								Score:      0.9,
+								EvalStatus: status.EvalStatusPassed,
+								Threshold:  0.5,
+							},
+							nil,
+						},
+					},
+				},
+				SessionID: "session",
+				UserID:    "user",
+			},
+			nil,
+		},
+		Summary: &evalresult.EvalSetResultSummary{
+			OverallStatus: status.EvalStatusPassed,
+			NumRuns:       1,
+			RunStatusCounts: &evalresult.EvalStatusCounts{
+				Passed: 1,
+				Failed: 1,
+			},
+			RunSummaries: []*evalresult.EvalSetRunSummary{
+				nil,
+				{
+					RunID:         1,
+					OverallStatus: status.EvalStatusPassed,
+					CaseStatusCounts: &evalresult.EvalStatusCounts{
+						Passed: 1,
+					},
+					MetricSummaries: []*evalresult.EvalMetricSummary{
+						nil,
+						{
+							MetricName: "metric-1",
+							StatusCounts: &evalresult.EvalStatusCounts{
+								Passed: 1,
+							},
+						},
+					},
+				},
+			},
+			EvalCaseSummaries: []*evalresult.EvalCaseResultSummary{
+				nil,
+				{
+					EvalID:        "case-1",
+					OverallStatus: status.EvalStatusPassed,
+					RunStatusCounts: &evalresult.EvalStatusCounts{
+						Passed: 1,
+					},
+					MetricSummaries: []*evalresult.EvalMetricSummary{
+						{
+							MetricName: "metric-1",
+							StatusCounts: &evalresult.EvalStatusCounts{
+								Passed: 1,
+							},
+						},
+					},
+					RunSummaries: []*evalresult.EvalCaseRunSummary{
+						nil,
+						{
+							RunID:           1,
+							FinalEvalStatus: status.EvalStatusPassed,
+							MetricResults: []*evalresult.EvalMetricRunSummary{
+								nil,
+								{
+									MetricName: "metric-1",
+									Score:      0.9,
+									EvalStatus: status.EvalStatusPassed,
+									Threshold:  0.5,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		CreationTimestamp: &epochtime.EpochTime{Time: time.Unix(1, 0).UTC()},
+	}
+
+	dst, err := CloneEvalSetResult(src)
+	require.NoError(t, err)
+	require.NotNil(t, dst)
+	assertNotAliasedAndEqual(t, src, dst)
+
+	dst.Summary.RunSummaries[1].MetricSummaries[1].StatusCounts.Passed = 2
+	assert.Equal(t, 1, src.Summary.RunSummaries[1].MetricSummaries[1].StatusCounts.Passed)
+
+	dst.EvalCaseResults[0].OverallEvalMetricResults[0].Details.RubricScores[1].Reason = "changed"
+	assert.Equal(t, "good", src.EvalCaseResults[0].OverallEvalMetricResults[0].Details.RubricScores[1].Reason)
+
+	dst.EvalCaseResults[0].EvalMetricResultPerInvocation[1].ActualInvocation.UserContent.ContentParts[0].Audio.Data[0] = 0
+	assert.Equal(t, byte(1), src.EvalCaseResults[0].EvalMetricResultPerInvocation[1].ActualInvocation.UserContent.ContentParts[0].Audio.Data[0])
 }
 
 func assertNotAliasedAndEqual(t *testing.T, src, dst any) {
