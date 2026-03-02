@@ -63,8 +63,24 @@ func eventMessageText(e event.Event) (role string, text string) {
 		return role, strings.Join(parts, "\n")
 	}
 
-	// Regular message.
-	return role, strings.TrimSpace(msg.Content)
+	// Regular message: prefer Content, fall back to ContentParts.
+	if c := strings.TrimSpace(msg.Content); c != "" {
+		return role, c
+	}
+	if len(msg.ContentParts) > 0 {
+		var textParts []string
+		for _, p := range msg.ContentParts {
+			if p.Text != nil && *p.Text != "" {
+				textParts = append(textParts, *p.Text)
+			}
+		}
+		if joined := strings.TrimSpace(
+			strings.Join(textParts, "\n"),
+		); joined != "" {
+			return role, joined
+		}
+	}
+	return role, ""
 }
 
 func toUnixMs(t time.Time) int64 {

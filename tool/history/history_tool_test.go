@@ -208,6 +208,70 @@ func TestGetEventsTool_DeclarationAndValidation(t *testing.T) {
 	require.Contains(t, res.Message, "empty")
 }
 
+func TestSearchTool_PaginationWithFilteredEvents(t *testing.T) {
+	// Build 6 events: only e0, e3, e5 contain keyword "match".
+	sess := newTestSessionWithEvents([]event.Event{
+		msgEvent("e0", model.RoleUser, "match zero"),
+		msgEvent("e1", model.RoleUser, "skip one"),
+		msgEvent("e2", model.RoleUser, "skip two"),
+		msgEvent("e3", model.RoleUser, "match three"),
+		msgEvent("e4", model.RoleUser, "skip four"),
+		msgEvent("e5", model.RoleUser, "match five"),
+	})
+	inv := &agent.Invocation{Session: sess}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	search := newSearchTool()
+
+	// Page 1: limit=2, should return e0 and e3.
+	args1, _ := json.Marshal(map[string]any{
+		"query": "match", "limit": 2, "maxChars": 200,
+	})
+	res1Any, err := search.Call(ctx, args1)
+	require.NoError(t, err)
+	res1 := res1Any.(searchResult)
+	require.True(t, res1.Success)
+	require.Len(t, res1.Items, 2)
+	require.Equal(t, "e0", res1.Items[0].EventID)
+	require.Equal(t, "e3", res1.Items[1].EventID)
+	require.NotEmpty(t, res1.NextCursor, "should have next page")
+
+	// Page 2: use cursor, should return e5 only (no duplicates).
+	args2, _ := json.Marshal(map[string]any{
+		"query": "match", "limit": 2, "maxChars": 200,
+		"cursor": res1.NextCursor,
+	})
+	res2Any, err := search.Call(ctx, args2)
+	require.NoError(t, err)
+	res2 := res2Any.(searchResult)
+	require.True(t, res2.Success)
+	require.Len(t, res2.Items, 1)
+	require.Equal(t, "e5", res2.Items[0].EventID)
+	require.Empty(t, res2.NextCursor, "no more pages")
+}
+
+func TestEventMessageText_ContentParts(t *testing.T) {
+	hello := "hello from parts"
+	e := event.Event{
+		ID:        "cp1",
+		Timestamp: time.Now(),
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleUser,
+					Content: "", // Empty Content field.
+					ContentParts: []model.ContentPart{
+						{Type: "text", Text: &hello},
+					},
+				},
+			}},
+		},
+	}
+	role, txt := eventMessageText(e)
+	require.Equal(t, "user", role)
+	require.Equal(t, "hello from parts", txt)
+}
+
 func TestGetEventsTool_DedupeClampAndBudgetChars(t *testing.T) {
 	large := strings.Repeat("y", 500)
 	sess := newTestSessionWithEvents([]event.Event{

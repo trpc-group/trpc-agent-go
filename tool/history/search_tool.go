@@ -129,17 +129,17 @@ func (t *searchTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 	roles := normalizeRoles(args.Roles)
 
 	events := snapshotEvents(inv)
-	items, spentChars := filterSearchItems(events, roles, args.Query, args.SinceMs, args.UntilMs, offset, limit, maxChars)
+	fr := filterSearchItems(events, roles, args.Query, args.SinceMs, args.UntilMs, offset, limit, maxChars)
 
-	if err := spendChars(budget, spentChars); err != nil {
+	if err := spendChars(budget, fr.spentChars); err != nil {
 		return searchResult{Success: false, Message: "history budget exceeded", BudgetRemaining: budget}, nil
 	}
 	budget.SearchCallsRemaining--
 
 	return searchResult{
 		Success:         true,
-		Items:           items,
-		NextCursor:      buildNextCursor(offset, len(items), len(events)),
+		Items:           fr.items,
+		NextCursor:      buildNextCursor(fr.nextIdx, len(events)),
 		BudgetRemaining: budget,
 	}, nil
 }
@@ -177,11 +177,11 @@ func parseSearchCursor(cursor string) int {
 	}
 	if b, err := base64.StdEncoding.DecodeString(cursor); err == nil {
 		if n, err2 := strconv.Atoi(string(b)); err2 == nil {
-			return maxInt(0, n)
+			return max(0, n)
 		}
 	}
 	if n, err := strconv.Atoi(cursor); err == nil {
-		return maxInt(0, n)
+		return max(0, n)
 	}
 	return 0
 }
@@ -201,6 +201,15 @@ func snapshotEvents(inv *agent.Invocation) []toolEventView {
 	return events
 }
 
+// filterResult holds the output of filterSearchItems.
+type filterResult struct {
+	items      []searchItem
+	spentChars int
+	// nextIdx is the events-array index to resume scanning from.
+	// It equals len(events) when all events have been examined.
+	nextIdx int
+}
+
 func filterSearchItems(
 	events []toolEventView,
 	roles map[string]struct{},
@@ -210,7 +219,7 @@ func filterSearchItems(
 	offset int,
 	limit int,
 	maxChars int,
-) ([]searchItem, int) {
+) filterResult {
 	q := strings.TrimSpace(query)
 	qLower := strings.ToLower(q)
 
@@ -225,7 +234,11 @@ func filterSearchItems(
 
 	items := make([]searchItem, 0, limit)
 	spentChars := 0
-	for i := offset; i < len(events); i++ {
+	i := offset
+	for ; i < len(events); i++ {
+		if len(items) >= limit {
+			break
+		}
 		ev := events[i]
 		if ev.Text == "" {
 			continue
@@ -255,25 +268,14 @@ func filterSearchItems(
 			Truncated:   truncated,
 			TotalChars:  len(ev.Text),
 		})
-		if len(items) >= limit {
-			break
-		}
 	}
-	return items, spentChars
+	return filterResult{items: items, spentChars: spentChars, nextIdx: i}
 }
 
-func buildNextCursor(offset, returned, total int) string {
-	nextOffset := offset + returned
-	if returned == 0 || nextOffset >= total {
+func buildNextCursor(nextIdx, total int) string {
+	if nextIdx >= total {
 		return ""
 	}
-	b := []byte(fmt.Sprintf("%d", nextOffset))
+	b := fmt.Appendf(nil, "%d", nextIdx)
 	return base64.StdEncoding.EncodeToString(b)
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
