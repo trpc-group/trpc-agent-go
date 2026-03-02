@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -966,4 +967,62 @@ func TestRedisService_CreateAndGetSessionSummaryWithKeyPrefix(t *testing.T) {
 	unprefixedExists, err := client.Exists(context.Background(), unprefixedKey).Result()
 	require.NoError(t, err)
 	require.Equal(t, int64(0), unprefixedExists, "unprefixed summary key should not exist")
+}
+
+func TestRedisService_GetSessionSummaryText_HashIdxError(t *testing.T) {
+	// Manually setup miniredis to control its lifecycle
+	mr, err := miniredis.Run()
+	require.NoError(t, err)
+	redisURL := "redis://" + mr.Addr()
+
+	s, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer s.Close()
+
+	// Create a session with hashidx version tag (but no local summaries)
+	key := session.Key{AppName: "app", UserID: "u", SessionID: "hashidx-err"}
+	sess := &session.Session{
+		ID:          key.SessionID,
+		AppName:     key.AppName,
+		UserID:      key.UserID,
+		CreatedAt:   time.Now(),
+		Summaries:   nil, // No local summaries to force Redis lookup
+		ServiceMeta: map[string]string{"storage_type": "hashidx"},
+	}
+
+	// Close miniredis server to simulate connection error
+	mr.Close()
+
+	// GetSessionSummaryText should handle the error gracefully and return false
+	_, ok := s.GetSessionSummaryText(context.Background(), sess)
+	require.False(t, ok, "should return false when hashidx GetSummary fails")
+}
+
+func TestRedisService_GetSessionSummaryText_ZSetError(t *testing.T) {
+	// Manually setup miniredis to control its lifecycle
+	mr, err := miniredis.Run()
+	require.NoError(t, err)
+	redisURL := "redis://" + mr.Addr()
+
+	s, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer s.Close()
+
+	// Create a session with zset version tag (but no local summaries)
+	key := session.Key{AppName: "app", UserID: "u", SessionID: "zset-err"}
+	sess := &session.Session{
+		ID:          key.SessionID,
+		AppName:     key.AppName,
+		UserID:      key.UserID,
+		CreatedAt:   time.Now(),
+		Summaries:   nil, // No local summaries to force Redis lookup
+		ServiceMeta: map[string]string{"storage_type": "zset"},
+	}
+
+	// Close miniredis server to simulate connection error
+	mr.Close()
+
+	// GetSessionSummaryText should handle the error gracefully and return false
+	_, ok := s.GetSessionSummaryText(context.Background(), sess)
+	require.False(t, ok, "should return false when zset GetSummary fails")
 }

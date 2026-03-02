@@ -667,3 +667,39 @@ func Test_parseEvents_ValidArray(t *testing.T) {
 	result := r.parseEvents()
 	assert.Equal(t, []string{"a", "b"}, result)
 }
+
+func TestClient_DeleteEvent_Error(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "del-err"}
+
+	// Create session first
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	// Close miniredis to simulate connection error
+	mr.Close()
+
+	// DeleteEvent should return error when Redis is unavailable
+	err = c.DeleteEvent(ctx, key, "evt1")
+	require.Error(t, err)
+}
+
+func TestClient_Exists_Error(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "exists-err"}
+
+	// Create session first
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	// Close miniredis to simulate connection error
+	mr.Close()
+
+	// Exists should return error when Redis is unavailable
+	_, err = c.Exists(ctx, key)
+	require.Error(t, err)
+}
