@@ -295,9 +295,13 @@ type Options struct {
 	// skillRunAllowedCommands restricts skill_run to allowlisted commands.
 	skillRunAllowedCommands []string
 	// skillRunDeniedCommands rejects denylisted commands for skill_run.
-	skillRunDeniedCommands    []string
-	messageTimelineFilterMode string
-	messageBranchFilterMode   string
+	skillRunDeniedCommands []string
+
+	// skillRunForceSaveArtifacts forces skill_run to persist collected
+	// outputs via the artifact service when possible.
+	skillRunForceSaveArtifacts bool
+	messageTimelineFilterMode  string
+	messageBranchFilterMode    string
 
 	// ReasoningContentMode controls how reasoning_content is handled in
 	// multi-turn conversations. This is particularly important for DeepSeek
@@ -550,6 +554,14 @@ func WithSkillRunDeniedCommands(cmds ...string) Option {
 		opts.skillRunDeniedCommands = append(
 			[]string(nil), cmds...,
 		)
+	}
+}
+
+// WithSkillRunForceSaveArtifacts forces skill_run to persist collected
+// outputs via the artifact service when possible.
+func WithSkillRunForceSaveArtifacts(enable bool) Option {
+	return func(opts *Options) {
+		opts.skillRunForceSaveArtifacts = enable
 	}
 }
 

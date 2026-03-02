@@ -725,6 +725,141 @@ func TestRunTool_SaveAsArtifacts_SessionMissingIDs(t *testing.T) {
 	require.Equal(t, "", out.OutputFiles[0].Content)
 }
 
+func TestRunTool_ForceSaveArtifacts_OutputFiles(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(
+		repo,
+		exec,
+		WithForceSaveArtifacts(true),
+	)
+
+	args := runInput{
+		Skill: testSkillName,
+		Command: "mkdir -p out; echo " + contentHi +
+			" > " + outATxt,
+		OutputFiles: []string{outGlobTxt},
+		Timeout:     timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{
+			AppName: "app", UserID: "u", ID: "s1",
+			State: session.StateMap{},
+		}),
+		agent.WithInvocationArtifactService(inmemory.NewService()),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Len(t, out.ArtifactFiles, 1)
+	require.Equal(t, outATxt, out.ArtifactFiles[0].Name)
+}
+
+func TestRunTool_ForceSaveArtifacts_OutputsSpec(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(
+		repo,
+		exec,
+		WithForceSaveArtifacts(true),
+	)
+
+	args := runInput{
+		Skill: testSkillName,
+		Command: "mkdir -p out; echo " + contentHi +
+			" > " + outATxt,
+		Outputs: &codeexecutor.OutputSpec{
+			Globs:        []string{outGlobTxt},
+			Inline:       true,
+			Save:         false,
+			NameTemplate: "pref/",
+		},
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{
+			AppName: "app", UserID: "u", ID: "s1",
+			State: session.StateMap{},
+		}),
+		agent.WithInvocationArtifactService(inmemory.NewService()),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Len(t, out.ArtifactFiles, 1)
+	require.Equal(t, "pref/"+outATxt, out.ArtifactFiles[0].Name)
+}
+
+func TestRunTool_ForceSaveArtifacts_OutputsSpec_NoService(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(
+		repo,
+		exec,
+		WithForceSaveArtifacts(true),
+	)
+
+	args := runInput{
+		Skill: testSkillName,
+		Command: "mkdir -p out; echo " + contentHi +
+			" > " + outATxt,
+		Outputs: &codeexecutor.OutputSpec{
+			Globs:        []string{outGlobTxt},
+			Inline:       true,
+			Save:         false,
+			NameTemplate: "pref/",
+		},
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{
+			AppName: "app", UserID: "u", ID: "s1",
+			State: session.StateMap{},
+		}),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Empty(t, out.ArtifactFiles)
+	require.Len(t, out.Warnings, 1)
+	require.Contains(t, out.Warnings[0], "artifact service")
+	require.Len(t, out.OutputFiles, 1)
+	require.Contains(t, out.OutputFiles[0].Content, contentHi)
+}
+
 func TestRunTool_OmitInlineContent_AllowsReadByRef(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, testSkillName)

@@ -265,6 +265,15 @@ func TestWithSkillRunDeniedCommands_CopiesSlice(t *testing.T) {
 	require.Equal(t, []string{"echo", "ls"}, opts.skillRunDeniedCommands)
 }
 
+func TestWithSkillRunForceSaveArtifacts(t *testing.T) {
+	opts := &Options{}
+	WithSkillRunForceSaveArtifacts(true)(opts)
+	require.True(t, opts.skillRunForceSaveArtifacts)
+
+	WithSkillRunForceSaveArtifacts(false)(opts)
+	require.False(t, opts.skillRunForceSaveArtifacts)
+}
+
 func TestWithSummaryFormatter(t *testing.T) {
 	tests := []struct {
 		name      string
