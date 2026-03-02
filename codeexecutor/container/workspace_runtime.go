@@ -859,7 +859,7 @@ func (r *workspaceRuntime) CollectOutputs(
 	left := maxTotal
 	mf := codeexecutor.OutputManifest{}
 	var savedN []string
-	var savedV []int
+	var savedV []artifact.VersionID
 	count := 0
 	for _, line := range strings.Split(outS, "\n") {
 		line = strings.TrimSpace(line)

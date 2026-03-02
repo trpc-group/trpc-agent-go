@@ -197,20 +197,13 @@ func (s *Service) Open(ctx context.Context, key artifact.Key, version *artifact.
 	return body, desc, nil
 }
 
-// LoadArtifactBytes is replaced by artifact.ReadAll helper.
-
 // List returns the latest version descriptor for each artifact name under the given prefix.
 func (s *Service) List(ctx context.Context, prefix artifact.KeyPrefix, opts ...artifact.ListOption) ([]artifact.Descriptor, string, error) {
 	if err := validatePrefix(prefix); err != nil {
 		return nil, "", err
 	}
 
-	o := artifact.ListOptions{}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(&o)
-		}
-	}
+	o := applyListOptions(opts)
 
 	scopePrefix := iartifact.BuildListPrefix(prefix)
 	result, err := s.cosClient.GetBucket(ctx, scopePrefix)
@@ -224,26 +217,62 @@ func (s *Service) List(ctx context.Context, prefix artifact.KeyPrefix, opts ...a
 		return nil, "", nil
 	}
 
-	type latest struct{ version artifact.VersionID }
-	latestByName := make(map[string]latest)
+	names, latestByName := collectLatestByName(result.Contents, scopePrefix, prefix.NamePrefix)
+	if len(names) == 0 {
+		return nil, "", nil
+	}
+
+	page, next := paginateNames(names, o)
+
+	out := make([]artifact.Descriptor, 0, len(page))
+	for _, name := range page {
+		key := artifact.Key{AppName: prefix.AppName, UserID: prefix.UserID, SessionID: prefix.SessionID, Scope: prefix.Scope, Name: name}
+		ver := latestByName[name]
+		desc, err := s.Head(ctx, key, &ver)
+		if err != nil {
+			if errors.Is(err, artifact.ErrNotFound) {
+				continue
+			}
+			return nil, "", err
+		}
+		out = append(out, desc)
+	}
+	return out, next, nil
+}
+
+func applyListOptions(opts []artifact.ListOption) artifact.ListOptions {
+	o := artifact.ListOptions{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&o)
+		}
+	}
+	return o
+}
+
+func collectLatestByName(contents []cos.Object, scopePrefix string, namePrefix string) ([]string, map[string]artifact.VersionID) {
+	latestByName := make(map[string]artifact.VersionID)
 	names := make([]string, 0)
-	for _, obj := range result.Contents {
+	for _, obj := range contents {
 		name, ver, ok := parseNameAndVersion(obj.Key, scopePrefix)
 		if !ok {
 			continue
 		}
-		if prefix.NamePrefix != "" && !strings.HasPrefix(name, prefix.NamePrefix) {
+		if namePrefix != "" && !strings.HasPrefix(name, namePrefix) {
 			continue
 		}
 		if cur, exists := latestByName[name]; !exists {
-			latestByName[name] = latest{version: ver}
+			latestByName[name] = ver
 			names = append(names, name)
-		} else if artifact.CompareVersion(ver, cur.version) > 0 {
-			latestByName[name] = latest{version: ver}
+		} else if artifact.CompareVersion(ver, cur) > 0 {
+			latestByName[name] = ver
 		}
 	}
 	sort.Strings(names)
+	return names, latestByName
+}
 
+func paginateNames(names []string, o artifact.ListOptions) (page []string, next string) {
 	start := 0
 	if o.PageToken != "" {
 		i := sort.SearchStrings(names, o.PageToken)
@@ -257,27 +286,13 @@ func (s *Service) List(ctx context.Context, prefix artifact.KeyPrefix, opts ...a
 		limit = len(names) - start
 	}
 	end := start + limit
-	page := names[start:end]
+	page = names[start:end]
 
-	out := make([]artifact.Descriptor, 0, len(page))
-	for _, name := range page {
-		key := artifact.Key{AppName: prefix.AppName, UserID: prefix.UserID, SessionID: prefix.SessionID, Scope: prefix.Scope, Name: name}
-		ver := latestByName[name].version
-		desc, err := s.Head(ctx, key, &ver)
-		if err != nil {
-			if errors.Is(err, artifact.ErrNotFound) {
-				continue
-			}
-			return nil, "", err
-		}
-		out = append(out, desc)
-	}
-
-	next := ""
+	next = ""
 	if end < len(names) && len(page) > 0 {
 		next = page[len(page)-1]
 	}
-	return out, next, nil
+	return page, next
 }
 
 // Delete removes artifact content according to the provided delete options.
