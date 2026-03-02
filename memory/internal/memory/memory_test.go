@@ -11,7 +11,9 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -887,6 +889,93 @@ func TestShouldIncludeTool(t *testing.T) {
 	})
 }
 
+func TestScoreMemoryEntry_FallbackTopicMatch(t *testing.T) {
+	// When tokens are empty (e.g. single char query), fallback to substring
+	// matching. This test covers the topic match branch in fallback.
+	entry := &memory.Entry{
+		Memory: &memory.Memory{
+			Memory: "Some unrelated content",
+			Topics: []string{"special!topic"},
+		},
+	}
+
+	// "!" produces no tokens, so fallback is used.
+	// "special!" should match the topic via substring.
+	score := ScoreMemoryEntry(entry, "!")
+	assert.Equal(t, 0.5, score)
+}
+
+func TestScoreMemoryEntry_FallbackContentMatch(t *testing.T) {
+	entry := &memory.Entry{
+		Memory: &memory.Memory{
+			Memory: "Test! content",
+			Topics: []string{"other"},
+		},
+	}
+	// "!" produces no tokens, fallback matches content substring.
+	score := ScoreMemoryEntry(entry, "!")
+	assert.Equal(t, 0.5, score)
+}
+
+func TestScoreMemoryEntry_FallbackNoMatch(t *testing.T) {
+	entry := &memory.Entry{
+		Memory: &memory.Memory{
+			Memory: "Some content",
+			Topics: []string{"topic"},
+		},
+	}
+	// "~" produces no tokens and doesn't match content or topics.
+	score := ScoreMemoryEntry(entry, "~")
+	assert.Equal(t, 0.0, score)
+}
+
+func TestScoreMemoryEntry_PartialTokenMatch(t *testing.T) {
+	entry := &memory.Entry{
+		Memory: &memory.Memory{
+			Memory: "User likes coffee and hiking",
+			Topics: []string{"preferences"},
+		},
+	}
+	// "coffee tea" -> tokens ["coffee", "tea"], only "coffee" matches.
+	score := ScoreMemoryEntry(entry, "coffee tea")
+	assert.Equal(t, 0.5, score)
+}
+
+func TestScoreMemoryEntry_TopicOnlyMatch(t *testing.T) {
+	entry := &memory.Entry{
+		Memory: &memory.Memory{
+			Memory: "Some content",
+			Topics: []string{"preferences", "hobbies"},
+		},
+	}
+	// "preferences xyz" -> tokens ["preferences", "xyz"],
+	// only "preferences" matches (in topics).
+	score := ScoreMemoryEntry(entry, "preferences xyz")
+	assert.Equal(t, 0.5, score)
+}
+
+func TestIsPunctToken(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected bool
+	}{
+		{"chinese comma", "，", true},
+		{"chinese period", "。", true},
+		{"mixed", "，a", false},
+		{"letters", "abc", false},
+		{"multiple punct", "!@#", true},
+		{"empty string", "", true}, // vacuously true
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isPunctToken(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
 func TestShouldIncludeAutoMemoryTool(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -907,4 +996,54 @@ func TestShouldIncludeAutoMemoryTool(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestGetSegmenter_ErrorPath(t *testing.T) {
+	// Save original state.
+	origOnce := segOnce
+	origErr := segErr
+
+	// Restore after test.
+	defer func() {
+		segOnce = origOnce
+		segErr = origErr
+	}()
+
+	// Simulate a failed LoadDict by setting segErr and marking Once as done.
+	segOnce = sync.Once{}
+	segOnce.Do(func() {
+		segErr = errors.New("mock dict load failure")
+	})
+
+	s, err := getSegmenter()
+	assert.Nil(t, s)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "load segmenter dict failed")
+}
+
+func TestBuildSearchTokens_SegmenterError(t *testing.T) {
+	// Save original state.
+	origOnce := segOnce
+	origErr := segErr
+
+	defer func() {
+		segOnce = origOnce
+		segErr = origErr
+	}()
+
+	// Simulate segmenter error.
+	segOnce = sync.Once{}
+	segOnce.Do(func() {
+		segErr = errors.New("mock error")
+	})
+
+	// CJK query triggers getSegmenter, which returns error -> nil result.
+	result := BuildSearchTokens("中文测试")
+	assert.Nil(t, result)
+}
+
+func TestBuildSearchTokens_CJKAllStopwords(t *testing.T) {
+	// CJK input where all tokens are stopwords -> toks is empty -> returns nil.
+	result := BuildSearchTokens("的了是在")
+	assert.Nil(t, result)
 }
