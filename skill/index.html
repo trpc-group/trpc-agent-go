@@ -2694,6 +2694,21 @@ them directly when driving the conversation naturally.</p>
   - <code>pin</code>: for <code>artifact://name</code> without <code>@version</code>, reuse the first
     resolved version for the same <code>to</code> path (best effort)</p>
 <ul>
+<li>Conversation file inputs (automatic staging):<ul>
+<li>If the current session contains user messages with file inputs
+  (<code>content_parts</code> items of type <code>file</code>), <code>skill_run</code> automatically
+  stages them into <code>work/inputs/</code> (and thus <code>inputs/</code>) before the
+  command runs.</li>
+<li>Filenames are sanitized to a safe basename and de-duplicated with a
+  numeric suffix when needed.</li>
+<li>If a file input includes raw bytes (<code>data</code>), those bytes are written
+  directly into the workspace.</li>
+<li>If a file input is referenced only by <code>file_id</code>, the framework
+  downloads the content via the configured model when supported.</li>
+</ul>
+</li>
+</ul>
+<ul>
 <li><code>outputs</code> (optional, declarative outputs): a manifest to collect
   results with limits and persistence:<ul>
 <li><code>globs</code> workspace‑relative patterns (supports <code>**</code> and env‑style
@@ -2747,6 +2762,8 @@ them directly when driving the conversation naturally.</p>
   <code>llmagent.WithSkillRunDeniedCommands(...)</code>.</p>
 <p>Output:
 - <code>stdout</code>, <code>stderr</code>, <code>exit_code</code>, <code>timed_out</code>, <code>duration_ms</code>
+- <code>staged_inputs</code> (optional): files staged from the conversation into
+  <code>work/inputs/</code> for this run
 - <code>primary_output</code> (optional) with <code>name</code>, <code>ref</code>, <code>content</code>, <code>mime_type</code>,
   <code>size_bytes</code>, <code>truncated</code>
   - Convenience pointer to the "best" small text output file (when one
@@ -2980,7 +2997,7 @@ in tools like <code>read_file</code>.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="February 26, 2026 01:58:46 UTC">2026-02-26 01:58:46</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="March 2, 2026 07:44:47 UTC">2026-03-02 07:44:47</span>
   </span>
 
     
