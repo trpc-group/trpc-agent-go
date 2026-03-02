@@ -1212,8 +1212,9 @@ func (m *Model) accumulateChunk(
 		// avoid known panics when JSON.ToolCalls is marked present but the
 		// typed ToolCalls slice is empty, especially on finish_reason chunks.
 		sanitizedChunk := sanitizeChunkForAccumulator(chunk)
-		acc.AddChunk(sanitizedChunk)
-		applyOpenAISDKTokenDetailsAccumulationFix(acc, chunk)
+		if acc.AddChunk(sanitizedChunk) {
+			applyOpenAISDKTokenDetailsAccumulationFix(acc, chunk)
+		}
 
 		if m.accumulateChunkUsage != nil {
 			accUsage, chunkUsage := completionUsageToModelUsage(acc.Usage), completionUsageToModelUsage(chunk.Usage)
