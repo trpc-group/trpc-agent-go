@@ -428,6 +428,7 @@ func formatExistingMemory(entry *memory.Entry) string {
 const defaultPrompt = `You are a Memory Manager for an AI Assistant.
 Your task is to extract and manage memories from the conversation.
 You must classify each memory as either a FACT or an EPISODE.
+Today's date is {current_date}. Use this date to resolve all relative time references.
 
 <instructions>
 1. Thoroughly analyze the conversation to extract ALL noteworthy information
@@ -448,7 +449,6 @@ You must classify each memory as either a FACT or an EPISODE.
 </instructions>
 
 <guidelines>
-- Today's date is {current_date}.
 - **COMPLETENESS**: Extract every distinct fact, event, preference, and
   relationship mentioned in the conversation. When in doubt, create a
   memory rather than skip it. Missing information is worse than having
