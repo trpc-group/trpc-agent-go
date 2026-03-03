@@ -75,13 +75,13 @@ const (
 type RRFParams struct {
 	// K is the RRF constant (default: 60).
 	// Smaller values give more weight to top-ranked results.
-	// Typical range: [1, 100]
+	// Must be > 0. Typical range: [1, 100].
 	K int
 
 	// CandidateRatio controls how many candidates to fetch from each sub-search.
 	// For RRF, we fetch (limit * CandidateRatio) candidates from each search.
 	// Larger values improve fusion quality but increase query cost.
-	// Default: 3 (fetch 3x candidates).
+	// Must be > 0. Default: 3 (fetch 3x candidates).
 	CandidateRatio int
 }
 
@@ -323,6 +323,7 @@ func WithHybridFusionMode(mode HybridFusionMode) Option {
 }
 
 // WithRRFParams sets the parameters for Reciprocal Rank Fusion.
+// Values <= 0 are ignored (defaults are kept).
 // Note: This option only applies when fusionMode is HybridFusionRRF.
 func WithRRFParams(params *RRFParams) Option {
 	return func(o *options) {

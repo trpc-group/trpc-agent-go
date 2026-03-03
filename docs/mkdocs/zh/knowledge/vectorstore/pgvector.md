@@ -378,8 +378,8 @@ score(d) = sum(1 / (k + rank_i))  for each ranking list i
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
-| `K` | RRF 常数。越小则排名靠前的结果权重越大 | `60` |
-| `CandidateRatio` | 候选倍率。每个子搜索取 `limit × CandidateRatio` 条候选 | `3` |
+| `K` | RRF 常数，必须 > 0。越小则排名靠前的结果权重越大 | `60` |
+| `CandidateRatio` | 候选倍率，必须 > 0。每个子搜索取 `limit × CandidateRatio` 条候选 | `3` |
 
 **K 值的影响**:
 - `K=1`: 排名第 1 得分 `1/2 = 0.500`，排名第 10 得分 `1/11 ≈ 0.091`，差距 ~5.5x

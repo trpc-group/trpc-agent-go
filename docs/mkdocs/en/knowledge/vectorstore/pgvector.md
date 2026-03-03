@@ -378,8 +378,8 @@ score(d) = sum(1 / (k + rank_i))  for each ranking list i
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `K` | RRF constant. Smaller values give more weight to top-ranked results | `60` |
-| `CandidateRatio` | Candidate multiplier. Each sub-search fetches `limit × CandidateRatio` candidates | `3` |
+| `K` | RRF constant, must be > 0. Smaller values give more weight to top-ranked results | `60` |
+| `CandidateRatio` | Candidate multiplier, must be > 0. Each sub-search fetches `limit × CandidateRatio` candidates | `3` |
 
 **Effect of K**:
 - `K=1`: Rank 1 scores `1/2 = 0.500`, rank 10 scores `1/11 ≈ 0.091`, gap ~5.5x

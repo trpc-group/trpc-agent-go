@@ -620,12 +620,9 @@ func (vs *VectorStore) searchByHybridRRF(ctx context.Context, query *vectorstore
 		}, nil
 	}
 
-	// Build score lookup for final results.
-	scoreLookup := make(map[string]idScore, len(ranked))
 	fetchIDs := make([]any, len(ranked))
 	for i, r := range ranked {
 		fetchIDs[i] = r.id
-		scoreLookup[r.id] = r
 	}
 
 	// Fetch full documents by IDs.
