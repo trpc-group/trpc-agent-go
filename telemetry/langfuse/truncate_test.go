@@ -70,3 +70,40 @@ func TestSafeUTF8PrefixSuffix_DoNotSplitRune(t *testing.T) {
 	require.True(t, utf8.Valid(s))
 	require.Equal(t, "a中", string(s))
 }
+
+func TestTruncateStringBytes_NonPositiveMaxBytes_ReturnsEmpty(t *testing.T) {
+	require.Equal(t, "", truncateStringBytes("abc", 0))
+	require.Equal(t, "", truncateStringBytes("abc", -1))
+}
+
+func TestTruncateStringBytes_ShortString_NoTruncation(t *testing.T) {
+	require.Equal(t, "abc", truncateStringBytes("abc", 3))
+	require.Equal(t, "abc", truncateStringBytes("abc", 100))
+}
+
+func TestSafeUTF8PrefixSuffix_Boundaries(t *testing.T) {
+	b := []byte("abc")
+	require.Nil(t, safeUTF8Prefix(b, 0))
+	require.Nil(t, safeUTF8Suffix(b, 0))
+
+	require.Equal(t, b, safeUTF8Prefix(b, len(b)))
+	require.Equal(t, b, safeUTF8Prefix(b, len(b)+10))
+	require.Equal(t, b, safeUTF8Suffix(b, len(b)))
+	require.Equal(t, b, safeUTF8Suffix(b, len(b)+10))
+}
+
+func TestTruncateStringBytes_InvalidUTF8_FallsBackToPrefix(t *testing.T) {
+	// Go strings can contain invalid UTF-8. This covers the fallback branch
+	// when the constructed output is not valid UTF-8.
+	b := make([]byte, 0, 256)
+	for i := 0; i < 200; i++ {
+		b = append(b, 0xff) // invalid UTF-8 byte
+	}
+	in := string(b)
+	maxBytes := 64
+
+	out := truncateStringBytes(in, maxBytes)
+	require.Equal(t, string(safeUTF8Prefix(b, maxBytes)), out)
+	require.LessOrEqual(t, len([]byte(out)), maxBytes)
+	require.False(t, strings.Contains(out, "[truncated]"))
+}
