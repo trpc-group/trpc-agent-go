@@ -53,16 +53,18 @@ const (
 
 // Options contains configuration options for creating a Flow.
 type Options struct {
-	ChannelBufferSize int // Buffer size for event channels (default: 256)
-	ModelCallbacks    *model.Callbacks
+	ChannelBufferSize   int // Buffer size for event channels (default: 256).
+	ModelCallbacks      *model.Callbacks
+	SyncSummaryIntraRun bool
 }
 
 // Flow provides the basic flow implementation.
 type Flow struct {
-	requestProcessors  []flow.RequestProcessor
-	responseProcessors []flow.ResponseProcessor
-	channelBufferSize  int
-	modelCallbacks     *model.Callbacks
+	requestProcessors   []flow.RequestProcessor
+	responseProcessors  []flow.ResponseProcessor
+	channelBufferSize   int
+	modelCallbacks      *model.Callbacks
+	syncSummaryIntraRun bool
 }
 
 // New creates a new basic flow instance with the provided processors.
@@ -73,10 +75,11 @@ func New(
 	opts Options,
 ) *Flow {
 	return &Flow{
-		requestProcessors:  requestProcessors,
-		responseProcessors: responseProcessors,
-		channelBufferSize:  opts.ChannelBufferSize,
-		modelCallbacks:     opts.ModelCallbacks,
+		requestProcessors:   requestProcessors,
+		responseProcessors:  responseProcessors,
+		channelBufferSize:   opts.ChannelBufferSize,
+		modelCallbacks:      opts.ModelCallbacks,
+		syncSummaryIntraRun: opts.SyncSummaryIntraRun,
 	}
 }
 
@@ -89,16 +92,31 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 		defer close(eventChan)
 		defer recoverFlowRunPanic(ctx, invocation, eventChan)
 
+		// Mark the invocation so the runner skips redundant async
+		// summary enqueue when sync intra-run summary handles it.
+		if f.syncSummaryIntraRun && invocation != nil {
+			invocation.SetState(
+				agent.SyncSummaryIntraRunStateKey, true,
+			)
+		}
+
 		// Optionally resume from pending tool calls before starting a new
 		// LLM cycle. This covers scenarios where the previous run stopped
 		// after an assistant tool_call response but before tools executed.
 		f.maybeResumePendingToolCalls(ctx, invocation, eventChan)
 
+		firstIteration := true
 		for {
 			// emit start event and wait for completion notice.
 			if err := f.emitStartEventAndWait(ctx, invocation, eventChan); err != nil {
 				return
 			}
+
+			// Run sync intra-run summary only between iterations.
+			if !firstIteration {
+				f.maybeSyncSummaryIntraRun(ctx, invocation)
+			}
+			firstIteration = false
 
 			// Run one step (one LLM call cycle).
 			lastEvent, err := f.runOneStep(ctx, invocation, eventChan)
@@ -248,6 +266,30 @@ func (f *Flow) maybeResumePendingToolCalls(
 			toolRP.ProcessResponse(ctx, invocation, req, lastResp, eventChan)
 			break
 		}
+	}
+}
+
+func (f *Flow) maybeSyncSummaryIntraRun(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) {
+	if !f.syncSummaryIntraRun || invocation == nil || invocation.Session == nil ||
+		invocation.SessionService == nil {
+		return
+	}
+
+	if err := invocation.SessionService.CreateSessionSummary(
+		ctx,
+		invocation.Session,
+		invocation.GetEventFilterKey(),
+		false,
+	); err != nil {
+		log.DebugfContext(
+			ctx,
+			"Intra-run summary skipped or failed for agent %s: %v",
+			invocation.AgentName,
+			err,
+		)
 	}
 }
 
