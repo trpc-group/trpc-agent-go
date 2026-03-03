@@ -13,6 +13,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -57,6 +58,8 @@ type searchItem struct {
 	Truncated bool `json:"truncated"`
 	// TotalChars is the original text length before truncation.
 	TotalChars int `json:"totalChars"`
+	// Score is the BM25 relevance score (omitted when zero).
+	Score float64 `json:"score,omitempty"`
 }
 
 // searchResult is the structured output of search_history.
@@ -214,6 +217,13 @@ type filterResult struct {
 	nextIdx int
 }
 
+// searchCandidate pairs an event with its index in the
+// original events slice after role/time pre-filtering.
+type searchCandidate struct {
+	idx int
+	ev  toolEventView
+}
+
 func filterSearchItems(
 	events []toolEventView,
 	roles map[string]struct{},
@@ -225,7 +235,6 @@ func filterSearchItems(
 	maxChars int,
 ) filterResult {
 	q := strings.TrimSpace(query)
-	qLower := strings.ToLower(q)
 
 	since := int64(0)
 	until := int64(0)
@@ -236,13 +245,9 @@ func filterSearchItems(
 		until = *untilMs
 	}
 
-	items := make([]searchItem, 0, limit)
-	spentChars := 0
-	i := offset
-	for ; i < len(events); i++ {
-		if len(items) >= limit {
-			break
-		}
+	// Pre-filter events by role and time range.
+	var candidates []searchCandidate
+	for i := range events {
 		ev := events[i]
 		if ev.Text == "" {
 			continue
@@ -258,22 +263,117 @@ func filterSearchItems(
 				continue
 			}
 		}
-		if qLower != "" && !strings.Contains(strings.ToLower(ev.Text), qLower) {
-			continue
-		}
+		candidates = append(candidates, searchCandidate{idx: i, ev: ev})
+	}
 
-		snippet, truncated := truncate(ev.Text, maxChars)
+	// When no query is provided, fall back to time-ordered
+	// pagination (original behaviour).
+	if q == "" {
+		return paginateByOffset(candidates, offset, limit, maxChars)
+	}
+
+	// Tokenize query and all candidate texts for BM25.
+	queryTokens := tokenizeText(q)
+	if len(queryTokens) == 0 {
+		return paginateByOffset(candidates, offset, limit, maxChars)
+	}
+	docTokens := make([][]string, len(candidates))
+	for i, c := range candidates {
+		docTokens[i] = tokenizeText(c.ev.Text)
+	}
+
+	scorer := newBM25Scorer(docTokens)
+
+	// Score each candidate and keep only those with score > 0.
+	type scored struct {
+		searchCandidate
+		score float64
+	}
+	var hits []scored
+	for i, c := range candidates {
+		s := scorer.score(i, queryTokens)
+		if s > 0 {
+			hits = append(hits, scored{searchCandidate: c, score: s})
+		}
+	}
+
+	// Sort by BM25 score descending.
+	sort.Slice(hits, func(i, j int) bool {
+		return hits[i].score > hits[j].score
+	})
+
+	// Paginate within scored results.
+	if offset >= len(hits) {
+		return filterResult{
+			items: nil, spentChars: 0, nextIdx: len(events),
+		}
+	}
+	end := offset + limit
+	if end > len(hits) {
+		end = len(hits)
+	}
+	page := hits[offset:end]
+
+	items := make([]searchItem, 0, len(page))
+	spentChars := 0
+	for _, h := range page {
+		snippet, truncated := truncate(h.ev.Text, maxChars)
 		spentChars += len(snippet)
 		items = append(items, searchItem{
-			EventID:     ev.ID,
-			TimestampMs: ev.TimestampMs,
-			Role:        ev.Role,
+			EventID:     h.ev.ID,
+			TimestampMs: h.ev.TimestampMs,
+			Role:        h.ev.Role,
 			Snippet:     snippet,
 			Truncated:   truncated,
-			TotalChars:  len(ev.Text),
+			TotalChars:  len(h.ev.Text),
+			Score:       h.score,
 		})
 	}
-	return filterResult{items: items, spentChars: spentChars, nextIdx: i}
+
+	nextIdx := len(events)
+	if end < len(hits) {
+		nextIdx = end
+	}
+	return filterResult{
+		items: items, spentChars: spentChars, nextIdx: nextIdx,
+	}
+}
+
+// paginateByOffset returns events in original order using
+// simple offset-based pagination (used when query is empty).
+func paginateByOffset(
+	candidates []searchCandidate,
+	offset, limit, maxChars int,
+) filterResult {
+	if offset >= len(candidates) {
+		return filterResult{nextIdx: len(candidates)}
+	}
+	end := offset + limit
+	if end > len(candidates) {
+		end = len(candidates)
+	}
+	page := candidates[offset:end]
+	items := make([]searchItem, 0, len(page))
+	spentChars := 0
+	for _, c := range page {
+		snippet, truncated := truncate(c.ev.Text, maxChars)
+		spentChars += len(snippet)
+		items = append(items, searchItem{
+			EventID:     c.ev.ID,
+			TimestampMs: c.ev.TimestampMs,
+			Role:        c.ev.Role,
+			Snippet:     snippet,
+			Truncated:   truncated,
+			TotalChars:  len(c.ev.Text),
+		})
+	}
+	nextIdx := len(candidates)
+	if end < len(candidates) {
+		nextIdx = end
+	}
+	return filterResult{
+		items: items, spentChars: spentChars, nextIdx: nextIdx,
+	}
 }
 
 func buildNextCursor(nextIdx, total int) string {

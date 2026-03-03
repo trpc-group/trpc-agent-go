@@ -53,7 +53,10 @@ func toolResultEvent(id string, content string, toolID string) event.Event {
 }
 
 func TestHistoryTools_SearchAndGet_WithBudgetAndTruncation(t *testing.T) {
-	large := strings.Repeat("x", 10000)
+	// Build a large payload by repeating a realistic sentence.
+	large := strings.Repeat(
+		"The quick brown fox jumps over the lazy dog. ", 200,
+	)
 	sess := newTestSessionWithEvents([]event.Event{
 		msgEvent("e1", model.RoleUser, "hello world"),
 		toolResultEvent("e2", large, "tool-1"),
@@ -73,8 +76,11 @@ func TestHistoryTools_SearchAndGet_WithBudgetAndTruncation(t *testing.T) {
 	require.NotNil(t, res.BudgetRemaining)
 	require.Equal(t, 2, res.BudgetRemaining.SearchCallsRemaining)
 
-	// Search tool should not blow up on huge tool output, and should return snippets.
-	args2, _ := json.Marshal(map[string]any{"query": "x", "limit": 1, "maxChars": 100})
+	// Search tool should not blow up on huge tool output,
+	// and should return snippets.
+	args2, _ := json.Marshal(map[string]any{
+		"query": "fox jumps", "limit": 1, "maxChars": 100,
+	})
 	resAny2, err := search.Call(ctx, args2)
 	require.NoError(t, err)
 	res2 := resAny2.(searchResult)
@@ -83,7 +89,7 @@ func TestHistoryTools_SearchAndGet_WithBudgetAndTruncation(t *testing.T) {
 	require.Equal(t, "e2", res2.Items[0].EventID)
 	require.True(t, res2.Items[0].Truncated)
 	require.LessOrEqual(t, len(res2.Items[0].Snippet), 100)
-	// budget decremented again
+	// Budget decremented again.
 	require.Equal(t, 1, res2.BudgetRemaining.SearchCallsRemaining)
 
 	get := newGetEventsTool()
