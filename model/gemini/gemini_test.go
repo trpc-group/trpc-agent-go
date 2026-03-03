@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"iter"
 	"net/http"
 	"reflect"
@@ -1310,4 +1311,80 @@ func TestModel_convertContentPartNil(t *testing.T) {
 			assert.Equalf(t, tt.want, m.convertContentPart(tt.args.part), "convertContentPart(%v)", tt.args.part)
 		})
 	}
+}
+
+// testStubCounter is a stub TokenCounter for testing token tailoring.
+type testStubCounter struct{}
+
+func (testStubCounter) CountTokens(
+	ctx context.Context,
+	message model.Message,
+) (int, error) {
+	return 1, nil
+}
+
+func (testStubCounter) CountTokensRange(
+	ctx context.Context,
+	messages []model.Message,
+	start,
+	end int,
+) (int, error) {
+	if start < 0 || end > len(messages) || start >= end {
+		return 0, fmt.Errorf("invalid range: start=%d, end=%d, len=%d", start, end, len(messages))
+	}
+	return end - start, nil
+}
+
+// emptyTailoringStrategy returns empty slice always.
+type emptyTailoringStrategy struct{}
+
+func (emptyTailoringStrategy) TailorMessages(
+	ctx context.Context,
+	messages []model.Message,
+	maxTokens int,
+) ([]model.Message, error) {
+	return []model.Message{}, nil
+}
+
+// TestWithEnableTokenTailoring_TailoredToEmpty tests tailoring dropping all messages.
+func TestWithEnableTokenTailoring_TailoredToEmpty(t *testing.T) {
+	var captured []*genai.Content
+	m := &Model{
+		enableTokenTailoring: true,
+		maxInputTokens:       100,
+		tokenCounter:         testStubCounter{},
+		tailoringStrategy:    emptyTailoringStrategy{},
+		chatRequestCallback: func(ctx context.Context, chatRequest []*genai.Content) {
+			captured = chatRequest
+		},
+		channelBufferSize: 1,
+	}
+
+	req := &model.Request{Messages: []model.Message{
+		model.NewUserMessage("A"),
+	}}
+
+	// Mocking is required for Gemini since GenerateContent initiates API call.
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockClient := NewMockClient(ctrl)
+	mockModels := NewMockModels(ctrl)
+	mockClient.EXPECT().Models().Return(mockModels).AnyTimes()
+	// Provide a dummy response to make the method return properly.
+	mockModels.EXPECT().
+		GenerateContent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(&genai.GenerateContentResponse{}, nil).AnyTimes()
+	m.client = mockClient
+
+	ch, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err, "GenerateContent")
+
+	select {
+	case <-ch:
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	require.NotNil(t, captured, "expected request callback to capture request")
+	require.Len(t, captured, 0, "expected messages to be empty")
 }

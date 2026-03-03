@@ -442,10 +442,14 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	request.Messages = tailored
 
 	// Calculate remaining tokens for output based on context window.
-	usedTokens, err := m.tokenCounter.CountTokensRange(ctx, request.Messages, 0, len(request.Messages))
-	if err != nil {
-		log.Warn("failed to count tokens after tailoring", err)
-		return
+	usedTokens := 0
+	if len(request.Messages) > 0 {
+		var err error
+		usedTokens, err = m.tokenCounter.CountTokensRange(ctx, request.Messages, 0, len(request.Messages))
+		if err != nil {
+			log.Warn("failed to count tokens after tailoring", err)
+			return
+		}
 	}
 
 	// Set max output tokens only if user hasn't specified it.

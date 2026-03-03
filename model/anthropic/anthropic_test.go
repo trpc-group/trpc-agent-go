@@ -1489,6 +1489,46 @@ func TestWithEnableTokenTailoring_EmptyMessages(t *testing.T) {
 	require.Nil(t, ch, "expected nil channel with empty messages")
 }
 
+// emptyTailoringStrategy returns empty slice always.
+type emptyTailoringStrategy struct{}
+
+func (emptyTailoringStrategy) TailorMessages(
+	ctx context.Context,
+	messages []model.Message,
+	maxTokens int,
+) ([]model.Message, error) {
+	return []model.Message{}, nil
+}
+
+// TestWithEnableTokenTailoring_TailoredToEmpty tests tailoring dropping all messages.
+func TestWithEnableTokenTailoring_TailoredToEmpty(t *testing.T) {
+	var captured *anthropic.MessageNewParams
+	m := New("claude-3-5-sonnet",
+		WithEnableTokenTailoring(true),
+		WithMaxInputTokens(100),
+		WithTokenCounter(testStubCounter{}),
+		WithTailoringStrategy(emptyTailoringStrategy{}),
+		WithChatRequestCallback(func(ctx context.Context, req *anthropic.MessageNewParams) {
+			captured = req
+		}),
+	)
+
+	req := &model.Request{Messages: []model.Message{
+		model.NewUserMessage("A"),
+	}}
+
+	ch, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err, "GenerateContent")
+
+	select {
+	case <-ch:
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	require.NotNil(t, captured, "expected request callback to capture request")
+	require.Len(t, captured.Messages, 0, "expected messages to be empty")
+}
+
 // ============================================================================
 // Prompt Cache Tests
 // ============================================================================

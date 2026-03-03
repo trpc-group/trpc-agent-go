@@ -559,7 +559,7 @@ func newSummaryRequest(prompt string) *model.Request {
 			Content: prompt,
 		}},
 		GenerationConfig: model.GenerationConfig{
-			Stream: false, // Non-streaming for summarization.
+			Stream: true,
 		},
 	}
 }
