@@ -1099,9 +1099,11 @@ func withObservationMaxBytes(t *testing.T, maxBytes int) {
 }
 
 func TestTruncateObservationValue_DisabledByNil(t *testing.T) {
+	const maxBytes = 32 * 1024
+
 	setObservationMaxBytes(nil)
 
-	big := strings.Repeat("a", defaultMaxObservationBytes*2)
+	big := strings.Repeat("a", maxBytes*2)
 	out := truncateObservationValue(big)
 	require.Equal(t, big, out)
 }
@@ -1114,21 +1116,25 @@ func TestTruncateObservationValue_ZeroMeansTruncateAll(t *testing.T) {
 }
 
 func TestTruncateObservationValue_UTF8AndMaxBytes(t *testing.T) {
-	withObservationMaxBytes(t, defaultMaxObservationBytes)
+	const maxBytes = 32 * 1024
+
+	withObservationMaxBytes(t, maxBytes)
 
 	// Use multi-byte characters to ensure we never cut into an invalid UTF-8 rune.
-	big := strings.Repeat("中", defaultMaxObservationBytes)
+	big := strings.Repeat("中", maxBytes)
 	out := truncateObservationValue(big)
-	require.LessOrEqual(t, len([]byte(out)), defaultMaxObservationBytes)
+	require.LessOrEqual(t, len([]byte(out)), maxBytes)
 	require.True(t, utf8.ValidString(out))
 	require.Contains(t, out, defaultTruncateMarker)
 }
 
 func TestTransformInvokeAgent_TruncatesObservationInputOutput(t *testing.T) {
-	withObservationMaxBytes(t, defaultMaxObservationBytes)
+	const maxBytes = 32 * 1024
 
-	bigIn := strings.Repeat("in-", defaultMaxObservationBytes)
-	bigOut := strings.Repeat("out-", defaultMaxObservationBytes)
+	withObservationMaxBytes(t, maxBytes)
+
+	bigIn := strings.Repeat("in-", maxBytes)
+	bigOut := strings.Repeat("out-", maxBytes)
 	span := &tracepb.Span{
 		Name: "agent-span",
 		Attributes: []*commonpb.KeyValue{
@@ -1152,17 +1158,19 @@ func TestTransformInvokeAgent_TruncatesObservationInputOutput(t *testing.T) {
 
 	in := attrMap[observationInput]
 	out := attrMap[observationOutput]
-	require.LessOrEqual(t, len([]byte(in)), defaultMaxObservationBytes)
-	require.LessOrEqual(t, len([]byte(out)), defaultMaxObservationBytes)
+	require.LessOrEqual(t, len([]byte(in)), maxBytes)
+	require.LessOrEqual(t, len([]byte(out)), maxBytes)
 	require.True(t, utf8.ValidString(in))
 	require.True(t, utf8.ValidString(out))
 }
 
 func TestTransformCallLLM_TruncatesObservationInputOutput(t *testing.T) {
-	withObservationMaxBytes(t, defaultMaxObservationBytes)
+	const maxBytes = 32 * 1024
 
-	bigReq := strings.Repeat("req-", defaultMaxObservationBytes)
-	bigResp := strings.Repeat("resp-", defaultMaxObservationBytes)
+	withObservationMaxBytes(t, maxBytes)
+
+	bigReq := strings.Repeat("req-", maxBytes)
+	bigResp := strings.Repeat("resp-", maxBytes)
 	span := &tracepb.Span{
 		Name: "llm-call",
 		Attributes: []*commonpb.KeyValue{
@@ -1190,17 +1198,19 @@ func TestTransformCallLLM_TruncatesObservationInputOutput(t *testing.T) {
 
 	in := attrMap[observationInput]
 	out := attrMap[observationOutput]
-	require.LessOrEqual(t, len([]byte(in)), defaultMaxObservationBytes)
-	require.LessOrEqual(t, len([]byte(out)), defaultMaxObservationBytes)
+	require.LessOrEqual(t, len([]byte(in)), maxBytes)
+	require.LessOrEqual(t, len([]byte(out)), maxBytes)
 	require.True(t, utf8.ValidString(in))
 	require.True(t, utf8.ValidString(out))
 }
 
 func TestTransformExecuteTool_TruncatesObservationInputOutput(t *testing.T) {
-	withObservationMaxBytes(t, defaultMaxObservationBytes)
+	const maxBytes = 32 * 1024
 
-	bigArgs := strings.Repeat("arg-", defaultMaxObservationBytes)
-	bigRes := strings.Repeat("res-", defaultMaxObservationBytes)
+	withObservationMaxBytes(t, maxBytes)
+
+	bigArgs := strings.Repeat("arg-", maxBytes)
+	bigRes := strings.Repeat("res-", maxBytes)
 	span := &tracepb.Span{
 		Name: "tool-call",
 		Attributes: []*commonpb.KeyValue{
@@ -1224,17 +1234,19 @@ func TestTransformExecuteTool_TruncatesObservationInputOutput(t *testing.T) {
 
 	in := attrMap[observationInput]
 	out := attrMap[observationOutput]
-	require.LessOrEqual(t, len([]byte(in)), defaultMaxObservationBytes)
-	require.LessOrEqual(t, len([]byte(out)), defaultMaxObservationBytes)
+	require.LessOrEqual(t, len([]byte(in)), maxBytes)
+	require.LessOrEqual(t, len([]byte(out)), maxBytes)
 	require.True(t, utf8.ValidString(in))
 	require.True(t, utf8.ValidString(out))
 }
 
 func TestTransformWorkflow_TruncatesObservationInputOutput(t *testing.T) {
-	withObservationMaxBytes(t, defaultMaxObservationBytes)
+	const maxBytes = 32 * 1024
 
-	bigReq := strings.Repeat("req-", defaultMaxObservationBytes)
-	bigResp := strings.Repeat("resp-", defaultMaxObservationBytes)
+	withObservationMaxBytes(t, maxBytes)
+
+	bigReq := strings.Repeat("req-", maxBytes)
+	bigResp := strings.Repeat("resp-", maxBytes)
 	span := &tracepb.Span{
 		Name: "workflow-span",
 		Attributes: []*commonpb.KeyValue{
@@ -1258,8 +1270,8 @@ func TestTransformWorkflow_TruncatesObservationInputOutput(t *testing.T) {
 
 	in := attrMap[observationInput]
 	out := attrMap[observationOutput]
-	require.LessOrEqual(t, len([]byte(in)), defaultMaxObservationBytes)
-	require.LessOrEqual(t, len([]byte(out)), defaultMaxObservationBytes)
+	require.LessOrEqual(t, len([]byte(in)), maxBytes)
+	require.LessOrEqual(t, len([]byte(out)), maxBytes)
 	require.True(t, utf8.ValidString(in))
 	require.True(t, utf8.ValidString(out))
 }

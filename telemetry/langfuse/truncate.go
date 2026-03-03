@@ -14,10 +14,7 @@ import (
 	"unicode/utf8"
 )
 
-const (
-	defaultMaxObservationBytes = 32 * 1024
-	defaultTruncateMarker      = "…[truncated]…"
-)
+const defaultTruncateMarker = "…[truncated]…"
 
 // observationMaxBytes stores the configured truncation max bytes.
 //
