@@ -571,6 +571,145 @@ func (m *skipSummarizationMockAgent) Run(
 	return ch, nil
 }
 
+// syncSummaryIntraRunMockAgent sets SyncSummaryIntraRunStateKey on the
+// invocation before emitting events, simulating the behavior of llmflow when
+// sync intra-run summary is active. It emits a tool-call sequence
+// (tool_call -> tool result) followed by a final assistant text response so
+// the test can verify that intermediate events are skipped while the final
+// response still triggers an async enqueue.
+type syncSummaryIntraRunMockAgent struct {
+	name string
+}
+
+func (m *syncSummaryIntraRunMockAgent) Info() agent.Info {
+	return agent.Info{
+		Name:        m.name,
+		Description: "Mock agent that sets sync intra-run summary state",
+	}
+}
+
+func (m *syncSummaryIntraRunMockAgent) SubAgents() []agent.Agent { return nil }
+
+func (m *syncSummaryIntraRunMockAgent) FindSubAgent(string) agent.Agent {
+	return nil
+}
+
+func (m *syncSummaryIntraRunMockAgent) Tools() []tool.Tool { return nil }
+
+func (m *syncSummaryIntraRunMockAgent) Run(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (<-chan *event.Event, error) {
+	// Simulate flow setting the sync intra-run summary state key.
+	invocation.SetState(agent.SyncSummaryIntraRunStateKey, true)
+
+	ch := make(chan *event.Event, 3)
+
+	// 1. assistant tool_call event (skipped by IsToolCallResponse).
+	ch <- &event.Event{
+		Response: &model.Response{
+			ID:    "intra-tc-resp",
+			Model: "test-model",
+			Done:  true,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{{
+						ID:   "call_intra",
+						Type: "function",
+						Function: model.FunctionDefinitionParam{
+							Name:      "step_worker",
+							Arguments: []byte(`{"step":1}`),
+						},
+					}},
+				},
+			}},
+		},
+		InvocationID: invocation.InvocationID,
+		Author:       m.name,
+		ID:           "evt-intra-tc",
+		Timestamp:    time.Now(),
+	}
+
+	// 2. tool result event (intermediate, should be skipped
+	// by intra-run check).
+	ch <- &event.Event{
+		Response: &model.Response{
+			ID:    "intra-tr-resp",
+			Model: "test-model",
+			Done:  true,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:     model.RoleTool,
+					ToolID:   "call_intra",
+					ToolName: "step_worker",
+					Content:  `{"step":1,"status":"ok"}`,
+				},
+			}},
+		},
+		InvocationID: invocation.InvocationID,
+		Author:       "step_worker",
+		ID:           "evt-intra-tr",
+		Timestamp:    time.Now(),
+	}
+
+	// 3. final assistant text response (should still trigger
+	// async enqueue).
+	ch <- &event.Event{
+		Response: &model.Response{
+			ID:    "intra-final-resp",
+			Model: "test-model",
+			Done:  true,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "Done with intra-run summary active.",
+				},
+			}},
+		},
+		InvocationID: invocation.InvocationID,
+		Author:       m.name,
+		ID:           "evt-intra-final",
+		Timestamp:    time.Now(),
+	}
+
+	close(ch)
+	return ch, nil
+}
+
+func TestRunner_SyncSummaryIntraRun_SkipsIntermediateButAllowsFinal(
+	t *testing.T,
+) {
+	svc := &mockSessionService{}
+	r := NewRunner(
+		"test-app",
+		&syncSummaryIntraRunMockAgent{name: "sync-intra-agent"},
+		WithSessionService(svc),
+	)
+	_, err := RunWithMessages(
+		context.Background(), r,
+		"user1", "sess1",
+		[]model.Message{{
+			Role:    model.RoleUser,
+			Content: "hello",
+		}},
+	)
+	require.NoError(t, err)
+	time.Sleep(100 * time.Millisecond)
+
+	// Intermediate tool result should be skipped, but the final
+	// assistant response should still trigger exactly one async
+	// EnqueueSummaryJob so the session summary is up-to-date at
+	// turn end.
+	require.Len(
+		t,
+		svc.enqueueSummaryJobCalls,
+		1,
+		"final response should trigger EnqueueSummaryJob "+
+			"even with sync intra-run summary active",
+	)
+}
+
 func TestRunner_EnqueueSummaryJob_ToolResultTrigger(t *testing.T) {
 	t.Run(
 		"tool result events trigger EnqueueSummaryJob",

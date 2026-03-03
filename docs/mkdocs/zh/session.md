@@ -355,6 +355,50 @@ agent := llmagent.New(
 - 默认格式设计为与大多数模型和使用场景兼容
 - 当使用 `WithAddSessionSummary(false)` 时，格式化器**不会生效**
 
+#### 同步摘要刷新（SyncSummaryIntraRun）
+
+默认情况下，会话摘要由后台工作线程在工具调用结果事件后异步生成。这意味着 LLM 可用的摘要可能滞后于当前对话状态。如果需要在同一轮次内的每次 LLM 调用前确保摘要是最新的，可以启用同步摘要刷新。
+
+**适用场景：**
+
+- 长工具调用链（ReAct 循环），中间上下文很重要
+- 需要 LLM 始终看到最新摘要的场景
+- 需要最小化摘要延迟的场景
+
+**配置示例：**
+
+```go
+agent := llmagent.New(
+    "my-agent",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithAddSessionSummary(true),
+    llmagent.WithSyncSummaryIntraRun(true), // 启用同步摘要刷新
+)
+```
+
+**工作机制：**
+
+启用 `SyncSummaryIntraRun` 后：
+
+1. **首次 LLM 调用**：从会话加载摘要（可能为空或过期）
+2. **迭代之间**：在每次后续 LLM 调用前同步刷新摘要
+3. **最终响应**：仍会触发异步摘要入队，确保会话摘要完整
+
+框架会自动跳过同一轮次内中间工具结果事件的冗余异步摘要入队，避免重复工作，同时确保最终摘要是完整的。
+
+**行为对比：**
+
+| 模式 | 摘要时机 | 延迟 | 资源消耗 |
+|------|---------|------|---------|
+| 异步（默认） | 后台工作线程 | 可能滞后 | 每次迭代较低 |
+| 同步轮内 | 每次 LLM 调用前 | 始终最新 | 较高（同步） |
+
+**重要注意事项：**
+
+- `SyncSummaryIntraRun` 需要启用 `AddSessionSummary`
+- 同步摘要刷新会增加每次 LLM 迭代的延迟
+- 对于大多数场景，异步摘要（默认）已足够
+
 **重要提示：** 启用 `WithAddSessionSummary(true)` 时，`WithMaxHistoryRuns` 参数将被忽略，摘要后的所有事件都会完整保留。
 
 详细配置和高级用法请参见 [会话摘要](#会话摘要) 章节。
