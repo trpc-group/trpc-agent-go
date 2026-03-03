@@ -2149,6 +2149,54 @@ if found {
 
 要实现这个功能，需要为事件设置 `FilterKey` 字段来标识事件类型。
 
+#### FilterKey、EventFilterKey 与 BranchFilterMode（先搞懂再用）
+
+很多同学第一次接触 FilterKey 会觉得难理解，主要原因是它同时参与两类能力：
+
+1. **会话摘要**：用某个 filterKey 生成/读取摘要（`CreateSessionSummary`、
+   `GetSessionSummaryText` + `WithSummaryFilterKey`）。
+2. **历史可见性**：构建下一次 Prompt 时，决定“哪些历史事件会被放进上下文”
+   （`WithMessageBranchFilterMode`）。
+
+你可以把 `FilterKey` 当成一个**分层路径**（像文件路径一样）：
+
+- `my-app/user-messages`
+- `my-app/tool-calls`
+- `my-app/auth/role_admin`
+
+`/` 是分隔符，因此这些 key 会形成一棵“树”：
+
+```text
+my-app
+├── user-messages
+├── tool-calls
+└── auth
+    ├── role_admin
+    └── role_viewer
+```
+
+这里还有一个容易混淆的概念：`EventFilterKey`。
+
+- `Event.FilterKey`：每条事件自带的 key（你可以在 `AppendEventHook` 里设置）。
+- `Invocation.eventFilterKey`：本次运行的“视图 key”，用于筛选历史事件；可通过
+  `agent.WithEventFilterKey(...)` 在 `runner.Run(...)` 时设置。
+
+当框架把历史事件注入到 Prompt 时，会用 `WithMessageBranchFilterMode` 选择匹配
+规则：
+
+| 模式 | 直觉解释 | 会包含哪些事件（相对当前 EventFilterKey） |
+|------|----------|------------------------------------------|
+| `prefix`（默认） | **同一条祖先链都算** | 祖先、自己、子孙 |
+| `subtree` | **只看当前子树** | 自己、子孙（不含祖先） |
+| `exact` | **必须完全相等** | 仅自己 |
+| `all` | **不做隔离** | 全部 |
+
+**注意：** 为了兼容旧行为，当 `EventFilterKey==""` 或 `Event.FilterKey==""` 时，
+框架会把它当作“匹配所有”，因此这些模式都会倾向于包含更多历史。
+
+> 小结：FilterKey 不只是“分类标签”，它更像“会话视图/作用域”。想做权限隔离时，
+> 一定要同时考虑匹配模式（尤其是 `prefix` vs `subtree`）以及摘要注入行为。
+
 #### 使用 AppendEventHook 设置 FilterKey
 
 推荐使用 `AppendEventHook` 在事件写入前自动设置 `FilterKey`：
@@ -2157,7 +2205,7 @@ if found {
 sessionService := inmemory.NewSessionService(
     inmemory.WithAppendEventHook(func(ctx *session.AppendEventContext, next func() error) error {
         // 根据事件作者自动分类
-        prefix := "my-app/"  // 必须添加 appName 前缀
+        prefix := "my-app/"  // 推荐：以 appName 作为根前缀
         switch ctx.Event.Author {
         case "user":
             ctx.Event.FilterKey = prefix + "user-messages"
@@ -2187,9 +2235,14 @@ userSummary, found := sessionService.GetSessionSummaryText(
 
 #### FilterKey 前缀规范
 
-**⚠️ 重要：FilterKey 必须添加 `appName + "/"` 前缀。**
+**强烈推荐：让 FilterKey 以 `appName/` 开头（或等于 `appName`）。**
 
-**原因：** Runner 在过滤事件时使用 `appName + "/"` 作为过滤前缀，如果 FilterKey 没有这个前缀，事件会被过滤掉，导致：
+**原因：**
+
+- Runner 默认会把本次运行的 `EventFilterKey` 设为 `appName`（除非你显式传入
+  `agent.WithEventFilterKey(...)`）。
+- 历史注入与摘要都依赖“层级匹配”：如果你的事件 `FilterKey` 不在 `appName` 这棵树
+  下，那么在默认配置下它很可能不会进入 Prompt，进而导致：
 
 - LLM 看不到历史对话，可能重复触发工具调用
 - 摘要内容不完整，丢失重要上下文
@@ -2204,7 +2257,11 @@ evt.FilterKey = "my-app/user-messages"
 evt.FilterKey = "user-messages"
 ```
 
-**技术细节：** 框架使用前缀匹配机制（`strings.HasPrefix`）来判断事件是否应该被包含在上下文中。详见 `ContentRequestProcessor` 的过滤逻辑。
+**技术细节：**
+
+- `prefix` 模式使用 `event.Event.Filter(filterKey)` 做层级匹配：只要两者存在祖先/
+  后代关系就算匹配（基于 `/` 分隔符的前缀判断）。
+- `subtree` 模式只包含“当前 key 及其子孙”，不包含父级（更适合严格隔离）。
 
 #### 完整示例
 

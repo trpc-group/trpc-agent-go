@@ -2089,6 +2089,59 @@ In real-world applications, you may want to generate separate summaries for diff
 
 To achieve this, you need to set the `FilterKey` field on events to identify their type.
 
+#### FilterKey, EventFilterKey, and BranchFilterMode (read this first)
+
+FilterKey often feels confusing at first because it participates in **two**
+different capabilities:
+
+1. **Session summaries**: generate/retrieve a summary for a given filterKey
+   (`CreateSessionSummary`, `GetSessionSummaryText` + `WithSummaryFilterKey`).
+2. **History visibility**: when building the next prompt, decide which historical
+   events are allowed to be injected into context (`WithMessageBranchFilterMode`).
+
+Think of `FilterKey` as a **hierarchical path** (like a file path):
+
+- `my-app/user-messages`
+- `my-app/tool-calls`
+- `my-app/auth/role_admin`
+
+`/` is the delimiter, so keys form a tree:
+
+```text
+my-app
+├── user-messages
+├── tool-calls
+└── auth
+    ├── role_admin
+    └── role_viewer
+```
+
+Another concept you will see is `EventFilterKey`:
+
+- `Event.FilterKey`: the key stored on each event (you can set it in
+  `AppendEventHook`).
+- `Invocation.eventFilterKey`: the “view key” for the current run; it is used
+  to filter historical events and can be set via `agent.WithEventFilterKey(...)`
+  when calling `runner.Run(...)`.
+
+When the framework injects history into the prompt, `WithMessageBranchFilterMode`
+controls the matching rule:
+
+| Mode | Intuition | Which events are included (relative to EventFilterKey) |
+|------|----------|---------------------------------------------------------|
+| `prefix` (default) | **Same ancestry chain counts** | ancestors, self, descendants |
+| `subtree` | **Only this subtree** | self, descendants (no ancestors) |
+| `exact` | **Must be identical** | self only |
+| `all` | **No isolation** | everything |
+
+**Note:** for backward compatibility, if `EventFilterKey==""` or
+`Event.FilterKey==""`, the framework treats it as “match all”, so these modes
+will tend to include more history.
+
+> Summary: FilterKey is not only a “category label” — it is also a “session view
+> / scope key”. For authorization isolation, always consider the match mode
+> (especially `prefix` vs `subtree`) and summary injection behavior.
+
 #### Setting FilterKey with AppendEventHook
 
 The recommended approach is to use `AppendEventHook` to automatically set `FilterKey` before events are persisted:
@@ -2097,7 +2150,7 @@ The recommended approach is to use `AppendEventHook` to automatically set `Filte
 sessionService := inmemory.NewSessionService(
     inmemory.WithAppendEventHook(func(ctx *session.AppendEventContext, next func() error) error {
         // Auto-categorize by event author
-        prefix := "my-app/"  // Must add appName prefix
+        prefix := "my-app/"  // Recommended: use appName as the root prefix
         switch ctx.Event.Author {
         case "user":
             ctx.Event.FilterKey = prefix + "user-messages"
@@ -2127,9 +2180,16 @@ userSummary, found := sessionService.GetSessionSummaryText(
 
 #### FilterKey Prefix Convention
 
-**⚠️ Important: FilterKey must include the `appName + "/"` prefix.**
+**Strongly recommended: make your FilterKey start with `appName/` (or equal to
+`appName`).**
 
-**Why:** The Runner uses `appName + "/"` as the filter prefix when filtering events. If your FilterKey lacks this prefix, events will be filtered out, causing:
+**Why:**
+
+- By default, the Runner sets the current run's `EventFilterKey` to `appName`
+  (unless you explicitly pass `agent.WithEventFilterKey(...)`).
+- Both history injection and summaries rely on hierarchical matching. If your
+  event `FilterKey` is not under the `appName` tree, it will likely be excluded
+  from the prompt under default settings, causing:
 
 - LLM cannot see conversation history, may repeatedly trigger tool calls
 - Summary content is incomplete, losing important context
@@ -2144,7 +2204,12 @@ evt.FilterKey = "my-app/user-messages"
 evt.FilterKey = "user-messages"
 ```
 
-**Technical Details:** The framework uses prefix matching (`strings.HasPrefix`) to determine which events should be included in the context. See `ContentRequestProcessor` filtering logic for details.
+**Technical Details:**
+
+- `prefix` mode uses `event.Event.Filter(filterKey)` hierarchical matching:
+  ancestor/self/descendant all count as “match” (based on `/` path prefixes).
+- `subtree` mode only includes “self and descendants” (no ancestors), which is
+  better for strict isolation.
 
 #### Complete Examples
 
