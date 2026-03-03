@@ -117,17 +117,24 @@ var (
 	flagDebugMemLimit     = flag.Int("debug-mem-limit", 200, "Max memories to dump when debug-dump-memories is enabled")
 	flagDebugQALimit      = flag.Int("debug-qa-limit", 5, "Dump retrieval hits for the first N questions (auto scenario only)")
 	flagResume            = flag.Bool("resume", false, "Resume from checkpoint (TODO: implement)")
+	flagTableSuffix       = flag.String(
+		"table-suffix",
+		"",
+		"Suffix appended to all DB table names for parallel runs "+
+			"(e.g. _v2 → memory_eval_auto_v2)",
+	)
 )
 
+// Base table name constants (before suffix).
 const (
-	pgvectorTableDefault  = "memory_eval"
-	pgvectorTableAuto     = "memory_eval_auto"
-	mysqlTableDefault     = "memory_eval_mysql"
-	mysqlTableAuto        = "memory_eval_auto_mysql"
-	sqliteTableDefault    = "memory_eval_sqlite"
-	sqliteTableAuto       = "memory_eval_auto_sqlite"
-	sqliteVecTableDefault = "memory_eval_sqlitevec"
-	sqliteVecTableAuto    = "memory_eval_auto_sqlitevec"
+	pgvectorTableDefaultBase  = "memory_eval"
+	pgvectorTableAutoBase     = "memory_eval_auto"
+	mysqlTableDefaultBase     = "memory_eval_mysql"
+	mysqlTableAutoBase        = "memory_eval_auto_mysql"
+	sqliteTableDefaultBase    = "memory_eval_sqlite"
+	sqliteTableAutoBase       = "memory_eval_auto_sqlite"
+	sqliteVecTableDefaultBase = "memory_eval_sqlitevec"
+	sqliteVecTableAutoBase    = "memory_eval_auto_sqlitevec"
 
 	autoMemoryAsyncWorkers = 3
 	autoMemoryQueueSize    = 200
@@ -135,6 +142,14 @@ const (
 
 	maxQASearchPasses = 3
 )
+
+// tableNameWithSuffix appends the user-specified suffix to a base table name.
+func tableNameWithSuffix(base string) string {
+	if *flagTableSuffix == "" {
+		return base
+	}
+	return base + *flagTableSuffix
+}
 
 // benchmarkExtractorPrompt is optimized for retrieval-based benchmark evaluation.
 // The default memory extractor prompt is user-profile oriented; for benchmarks we
@@ -286,6 +301,9 @@ func main() {
 		)
 	}
 	log.Printf("Output: %s", outputDir)
+	if *flagTableSuffix != "" {
+		log.Printf("Table Suffix: %s", *flagTableSuffix)
+	}
 	if *flagResume {
 		log.Printf("Resume mode: enabled (checkpoint will be loaded if exists)")
 	}
@@ -672,7 +690,7 @@ func createPGVectorService(
 	}
 	embedModelName := getEmbedModelName()
 	emb := newEmbeddingEmbedder(embedModelName)
-	tableName := pgvectorTableDefault
+	tableName := tableNameWithSuffix(pgvectorTableDefaultBase)
 	var ext extractor.MemoryExtractor
 	if opts.enableExtractor {
 		log.Printf(
@@ -680,7 +698,7 @@ func createPGVectorService(
 				"(embed_model=%s)",
 			embedModelName,
 		)
-		tableName = pgvectorTableAuto
+		tableName = tableNameWithSuffix(pgvectorTableAutoBase)
 		ext = extractor.NewExtractor(opts.extractorModel, extractor.WithPrompt(benchmarkExtractorPrompt))
 	} else {
 		log.Printf(
@@ -715,11 +733,11 @@ func createMySQLService(
 		)
 	}
 
-	tableName := mysqlTableDefault
+	tableName := tableNameWithSuffix(mysqlTableDefaultBase)
 	var ext extractor.MemoryExtractor
 	if opts.enableExtractor {
 		log.Printf("Creating mysql memory service with extractor")
-		tableName = mysqlTableAuto
+		tableName = tableNameWithSuffix(mysqlTableAutoBase)
 		ext = extractor.NewExtractor(opts.extractorModel, extractor.WithPrompt(benchmarkExtractorPrompt))
 	} else {
 		log.Printf("Creating mysql memory service")

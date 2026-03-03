@@ -41,6 +41,41 @@ const (
 	seedSessionDateLabel = "SessionDate"
 )
 
+// sessionDateLayouts lists date formats found in LoCoMo dataset.
+var sessionDateLayouts = []string{
+	// "8 May, 2023" / "25 May, 2023"
+	"2 January, 2006",
+	// "8 May 2023" (no comma)
+	"2 January 2006",
+	// ISO "2023-05-08"
+	time.DateOnly,
+	// RFC3339 "2023-05-08T13:56:00Z"
+	time.RFC3339,
+}
+
+// parseSessionDate parses the SessionDate string from LoCoMo
+// dataset into a time.Time. It handles formats like
+// "1:56 pm on 8 May, 2023" and "8 May, 2023".
+// Returns zero time and false if parsing fails.
+func parseSessionDate(raw string) (time.Time, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, false
+	}
+	// Strip "<time> on " prefix if present.
+	if idx := strings.Index(
+		strings.ToLower(raw), " on ",
+	); idx >= 0 {
+		raw = strings.TrimSpace(raw[idx+len(" on "):])
+	}
+	for _, layout := range sessionDateLayouts {
+		if t, err := time.Parse(layout, raw); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
+}
+
 // noAutoMemoryService wraps a memory service and disables auto extraction.
 // This prevents QA interactions from contaminating the memory store.
 type noAutoMemoryService struct {

@@ -37,11 +37,11 @@ const (
 func createSQLiteService(
 	opts memoryServiceOptions,
 ) (memory.Service, error) {
-	tableName := sqliteTableDefault
+	tableName := tableNameWithSuffix(sqliteTableDefaultBase)
 	var ext extractor.MemoryExtractor
 	if opts.enableExtractor {
 		log.Printf("Creating sqlite memory service with extractor")
-		tableName = sqliteTableAuto
+		tableName = tableNameWithSuffix(sqliteTableAutoBase)
 		ext = extractor.NewExtractor(
 			opts.extractorModel,
 			extractor.WithPrompt(benchmarkExtractorPrompt),
@@ -87,11 +87,11 @@ func createSQLiteService(
 func createSQLiteVecService(
 	opts memoryServiceOptions,
 ) (memory.Service, error) {
-	tableName := sqliteVecTableDefault
+	tableName := tableNameWithSuffix(sqliteVecTableDefaultBase)
 	var ext extractor.MemoryExtractor
 	if opts.enableExtractor {
 		log.Printf("Creating sqlitevec memory service with extractor")
-		tableName = sqliteVecTableAuto
+		tableName = tableNameWithSuffix(sqliteVecTableAutoBase)
 		ext = extractor.NewExtractor(
 			opts.extractorModel,
 			extractor.WithPrompt(benchmarkExtractorPrompt),
