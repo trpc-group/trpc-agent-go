@@ -25,6 +25,7 @@ import (
 	istatus "trpc.group/trpc-go/trpc-agent-go/evaluation/internal/status"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	metricllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service/local"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
@@ -48,6 +49,7 @@ func New(appName string, runner runner.Runner, opt ...Option) (AgentEvaluator, e
 	a := &agentEvaluator{
 		appName:           appName,
 		runner:            runner,
+		judgeRunner:       opts.judgeRunner,
 		evalSetManager:    opts.evalSetManager,
 		evalResultManager: opts.evalResultManager,
 		metricManager:     opts.metricManager,
@@ -93,6 +95,7 @@ func New(appName string, runner runner.Runner, opt ...Option) (AgentEvaluator, e
 type agentEvaluator struct {
 	appName           string
 	runner            runner.Runner
+	judgeRunner       runner.Runner
 	evalSetManager    evalset.Manager
 	evalResultManager evalresult.Manager
 	metricManager     metric.Manager
@@ -230,11 +233,16 @@ func (a *agentEvaluator) runEvaluation(ctx context.Context, evalSetID string) (*
 	}
 	evalMetrics := make([]*metric.EvalMetric, 0, len(metricNames))
 	for _, metricName := range metricNames {
-		metric, err := a.metricManager.Get(ctx, a.appName, evalSetID, metricName)
+		evalMetric, err := a.metricManager.Get(ctx, a.appName, evalSetID, metricName)
 		if err != nil {
 			return nil, fmt.Errorf("get metric %s: %w", metricName, err)
 		}
-		evalMetrics = append(evalMetrics, metric)
+		if a.judgeRunner != nil && evalMetric != nil && evalMetric.Criterion != nil && evalMetric.Criterion.LLMJudge != nil {
+			evalMetric.Criterion.LLMJudge.JudgeRunnerOptions = &metricllm.JudgeRunnerOptions{
+				Runner: a.judgeRunner,
+			}
+		}
+		evalMetrics = append(evalMetrics, evalMetric)
 	}
 	allCaseResults := make([]*evalresult.EvalCaseResult, 0)
 	for runID := 1; runID <= a.numRuns; runID++ {

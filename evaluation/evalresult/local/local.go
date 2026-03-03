@@ -72,7 +72,7 @@ func (m *manager) Save(_ context.Context, appName string, evalSetResult *evalres
 	if evalSetResultID == "" {
 		evalSetResultID = fmt.Sprintf("%s_%s_%s", appName, evalSetResult.EvalSetID, uuid.New().String())
 	}
-	cloned, err := clone.Clone(evalSetResult)
+	cloned, err := clone.CloneEvalSetResult(evalSetResult)
 	if err != nil {
 		return "", fmt.Errorf("clone eval set result: %w", err)
 	}

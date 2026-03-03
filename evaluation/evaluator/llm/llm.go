@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/invocationsaggregator"
@@ -25,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/provider"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
 // LLMEvaluator defines the LLM-backed evaluator contract.
@@ -59,18 +61,27 @@ func (r *LLMBaseEvaluator) Description() string {
 // Evaluate runs the judge model over paired invocations and aggregates results.
 func (r *LLMBaseEvaluator) Evaluate(ctx context.Context, actuals, expecteds []*evalset.Invocation,
 	evalMetric *metric.EvalMetric) (*evaluator.EvaluateResult, error) {
-	if evalMetric == nil ||
-		evalMetric.Criterion == nil ||
-		evalMetric.Criterion.LLMJudge == nil ||
-		evalMetric.Criterion.LLMJudge.JudgeModel == nil {
+	if evalMetric == nil || evalMetric.Criterion == nil || evalMetric.Criterion.LLMJudge == nil {
 		return nil, fmt.Errorf("missing required fields in eval metric")
 	}
-	numSamples := evalMetric.Criterion.LLMJudge.JudgeModel.NumSamples
-	if numSamples == nil {
-		defaultNumSamples := llm.DefaultNumSamples
-		numSamples = &defaultNumSamples
+	judgeCriterion := evalMetric.Criterion.LLMJudge
+	var judgeRunner runner.Runner
+	if judgeCriterion.JudgeRunnerOptions != nil {
+		judgeRunner = judgeCriterion.JudgeRunnerOptions.Runner
 	}
-	if *numSamples <= 0 {
+	if judgeRunner == nil && judgeCriterion.JudgeModel == nil {
+		return nil, fmt.Errorf("missing required fields in eval metric")
+	}
+	numSamples := 1
+	if judgeRunner == nil {
+		numSamplesPtr := judgeCriterion.JudgeModel.NumSamples
+		if numSamplesPtr == nil {
+			defaultNumSamples := llm.DefaultNumSamples
+			numSamplesPtr = &defaultNumSamples
+		}
+		numSamples = *numSamplesPtr
+	}
+	if numSamples <= 0 {
 		return nil, fmt.Errorf("num samples must be greater than 0")
 	}
 	if len(actuals) != len(expecteds) {
@@ -85,11 +96,11 @@ func (r *LLMBaseEvaluator) Evaluate(ctx context.Context, actuals, expecteds []*e
 		if err != nil {
 			return nil, fmt.Errorf("construct messages: %w", err)
 		}
-		samples := make([]*evaluator.PerInvocationResult, 0, *numSamples)
-		for range *numSamples {
+		samples := make([]*evaluator.PerInvocationResult, 0, numSamples)
+		for range numSamples {
 			response, err := judgeModelResponse(ctx, messages, evalMetric)
 			if err != nil {
-				return nil, fmt.Errorf("judge model response: %w", err)
+				return nil, fmt.Errorf("judge response: %w", err)
 			}
 			score, err := r.ScoreBasedOnResponse(ctx, response, evalMetric)
 			if err != nil {
@@ -147,8 +158,15 @@ func (r *LLMBaseEvaluator) ConstructMessages(ctx context.Context, actuals, expec
 // judgeModelResponse calls the judge model and returns the final response.
 func judgeModelResponse(ctx context.Context, messages []model.Message,
 	evalMetric *metric.EvalMetric) (*model.Response, error) {
-	judgeModel := evalMetric.Criterion.LLMJudge.JudgeModel
-	generation := evalMetric.Criterion.LLMJudge.JudgeModel.Generation
+	judgeCriterion := evalMetric.Criterion.LLMJudge
+	if judgeRunnerOptions := judgeCriterion.JudgeRunnerOptions; judgeRunnerOptions != nil && judgeRunnerOptions.Runner != nil {
+		return judgeRunnerResponse(ctx, judgeRunnerOptions.Runner, messages)
+	}
+	judgeModel := judgeCriterion.JudgeModel
+	if judgeModel == nil {
+		return nil, fmt.Errorf("judge model is nil")
+	}
+	generation := judgeModel.Generation
 	if generation == nil {
 		generation = &llm.DefaultGeneration
 	}
@@ -181,4 +199,36 @@ func judgeModelResponse(ctx context.Context, messages []model.Message,
 		}
 	}
 	return nil, fmt.Errorf("no final response")
+}
+
+func judgeRunnerResponse(ctx context.Context, judgeRunner runner.Runner, messages []model.Message) (*model.Response, error) {
+	if judgeRunner == nil {
+		return nil, fmt.Errorf("judge runner is nil")
+	}
+	events, err := runner.RunWithMessages(
+		ctx,
+		judgeRunner,
+		uuid.NewString(),
+		uuid.NewString(),
+		messages,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("runner run: %w", err)
+	}
+	var finalResponse *model.Response
+	for event := range events {
+		if event == nil {
+			continue
+		}
+		if event.Error != nil {
+			return nil, fmt.Errorf("event: %v", event.Error)
+		}
+		if event.Response != nil && event.IsFinalResponse() {
+			finalResponse = event.Response.Clone()
+		}
+	}
+	if finalResponse == nil {
+		return nil, fmt.Errorf("no final response")
+	}
+	return finalResponse, nil
 }
