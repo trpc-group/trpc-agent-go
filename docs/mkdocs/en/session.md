@@ -2213,6 +2213,24 @@ ag := llmagent.New(
 _ = ag
 ```
 
+**Note: Session Summary and `subtree`**
+
+If you enable `WithAddSessionSummary(true)`, the framework injects the session
+summary as a system message. Be aware that summary generation currently filters
+events using `event.Filter`'s hierarchical matching rules, which also treat
+**ancestor FilterKeys** as matching (for example, `my-app` matches
+`my-app/auth/...`).
+
+In “permission view isolation” scenarios, if your session history contains
+ancestor events, the injected summary may still pull ancestor content into the
+prompt and weaken isolation.
+
+For strict isolation, consider:
+
+- Keep `AddSessionSummary=false` (default).
+- Switch `sessionID` when permissions change (Option A).
+- Avoid persisting sensitive events under ancestor FilterKeys.
+
 ### Performance Considerations
 
 - **LLM costs**: Each summary generation calls the LLM. Monitor your trigger conditions to balance cost and context preservation.

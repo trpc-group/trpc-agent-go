@@ -2286,6 +2286,20 @@ _ = ag
 `subtree` 的语义是：只包含“当前 FilterKey 本身及其子节点”的事件，不包含父级。
 这对“权限视图隔离”非常重要。
 
+**补充：Session Summary 与 subtree**
+
+如果你启用了 `WithAddSessionSummary(true)`，框架会把会话摘要注入到 system 消息。
+需要注意：当前摘要生成按 `event.Filter` 的层级匹配规则过滤事件，
+这会把**父级 FilterKey** 的事件也算作“匹配”（例如 `my-app` 会匹配
+`my-app/auth/...`）。因此在“权限视图隔离”场景下，如果历史里存在父级事件，
+摘要可能仍会把父级内容带入上下文，从而削弱隔离效果。
+
+对需要严格隔离的场景，建议：
+
+- 保持 `AddSessionSummary=false`（默认）；
+- 或在权限变更时切换 `sessionID`（方案 A）；
+- 或确保不会写入父级 FilterKey 的敏感事件。
+
 **注意：这不是替代权限校验。**  
 你仍然需要在工具执行层做真实的鉴权（例如在 `BeforeToolCallback` 或工具实现内部），
 FilterKey 视图隔离只是为了避免模型在 Prompt 里看到不该看到的历史。
