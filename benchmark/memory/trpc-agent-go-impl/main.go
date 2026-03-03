@@ -141,37 +141,55 @@ const (
 // need dense, queryable, factual memories (entities, dates, relations).
 const benchmarkExtractorPrompt = `You are a memory extraction engine for retrieval-based QA benchmarks.
 
-Goal: Extract factual, queryable memories from multi-session conversations so that downstream QA can answer questions by searching memories.
+The <session_date> above is the CURRENT DATE of the conversation you are analyzing.
+IMPORTANT: This conversation did NOT happen today. It happened on the date shown
+in <session_date>. You MUST use that date (not the real current date) to resolve
+all relative time references.
 
-CRITICAL RULES (TIME):
-- Do NOT use relative time words like "yesterday", "last week", "two days ago", "next month".
-- Always write an ABSOLUTE DATE when possible:
-  - Prefer ISO date: YYYY-MM-DD.
-  - If only a textual date is available, keep it as-is (e.g., "7 May 2023", "late June 2023").
-- Every memory MUST start with a date prefix:
-  - Format: [DATE: <absolute-date-or-unknown>]
-  - Examples: [DATE: 2023-05-07] ... , [DATE: 7 May 2023] ... , [DATE: late June 2023] ...
-  - Use [DATE: unknown] only if no absolute date can be inferred from the provided context.
+Goal: Extract factual, queryable memories from multi-session conversations so
+that downstream QA can answer questions by searching memories.
+
+CRITICAL RULES (DATE RESOLUTION):
+- The conversation date is given in <session_date> above. Use ONLY that date
+  to resolve relative references:
+  - "yesterday" = <session_date> minus 1 day
+  - "last week" = approximately <session_date> minus 7 days
+  - "last month" = approximately <session_date> minus 30 days
+  - "last year" = <session_date> minus 1 year
+  - "next month" = <session_date> plus 30 days
+- NEVER use the real system date (which may be years different).
+- When the conversation explicitly states a year or date (e.g., "in 2022",
+  "on May 7th"), preserve that exact year/date. The session_date is ONLY for
+  resolving relative references.
+- When someone mentions a duration (e.g., "I've been painting for 7 years",
+  "married for 5 years"), subtract the duration from the <session_date> year
+  to calculate the start year.
+- Every memory MUST include the resolved absolute date in the memory text.
+  Example: If session_date is "8 May 2023" and speaker says "yesterday",
+  write "on 7 May 2023" in the memory text and set event_time to 2023-05-07.
+
+CRITICAL RULES (TIME FORMAT):
+- Do NOT use relative time words in memories. Always write ABSOLUTE DATES.
+- Prefer ISO date for event_time: YYYY-MM-DD.
+- Include the date in the memory text too (e.g., "Caroline attended an LGBTQ
+  support group on 7 May 2023" not just "Caroline attended an LGBTQ support group").
 
 CRITICAL RULES (EPISODIC FIELDS):
 - Classify each memory as memory_kind="fact" or memory_kind="episode".
-  - Facts: personal attributes, preferences, relationships, background (stable over time).
-  - Episodes: specific events, experiences, milestones that happened at a particular time.
-- For episodes, ALWAYS set event_time to an absolute ISO date (YYYY-MM-DD).
-  Use the session date context to resolve relative time references.
-- For episodes, set participants (people involved) and location (where it happened) when available.
+  - Facts: personal attributes, preferences, relationships, background.
+    Facts with time references should also set event_time when derivable.
+  - Episodes: specific events that happened at a particular time.
+- For episodes, ALWAYS set event_time to a correct absolute ISO date.
+- For episodes, set participants and location when available.
 
 EXTRACTION RULES (CONTENT):
 - Prefer atomic memories: one fact per memory.
-- Extract concrete facts that can answer future questions: who/what/when/where/relationships/preferences/attributes/events.
-- Include facts about ALL mentioned people (not only the user). Messages may be
-  prefixed with [SpeakerName]. Attribute facts to the correct person by name.
+- Extract concrete facts: who/what/when/where/relationships/preferences/events.
+- Include facts about ALL mentioned people. Attribute facts to the correct
+  person by name.
 - Extract specific details: book titles, movie names, restaurant names, city
-  names, relationship statuses (married, single, dating), children's names and
-  preferences, hobbies with specific objects (e.g., "reads 'The Great Gatsby'",
-  "son likes dinosaurs", "camped at the beach and mountains").
-- Be comprehensive rather than conservative: store many small facts.
-  - Aim for at least 5-10 atomic memories per session when possible.
+  names, relationship statuses, children's names, hobbies with specifics.
+- Be comprehensive: aim for 5-10 atomic memories per session.
 - Do NOT guess. If not stated, omit it.
 - Avoid vague summaries like "They discussed their plans".
 - Avoid duplicates: update existing memories when the same fact is refined.

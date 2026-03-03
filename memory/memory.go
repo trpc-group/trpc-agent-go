@@ -185,6 +185,19 @@ type SearchOptions struct {
 	// after time-ordered entries. This is useful for temporal sequence
 	// questions ("what happened first/next/after X?").
 	OrderByEventTime bool
+
+	// KindFallback enables automatic fallback when Kind is set but
+	// returns too few results. When true, the service performs a second
+	// search without the kind filter and merges both result sets,
+	// prioritizing results that match the requested kind. This prevents
+	// missed results when the kind classification is uncertain.
+	KindFallback bool
+
+	// Deduplicate enables content-based deduplication of search results.
+	// When true, near-duplicate memories (high word overlap) are removed,
+	// keeping only the highest-scored version. This reduces redundant
+	// context in retrieval-augmented generation scenarios.
+	Deduplicate bool
 }
 
 func checkMemoryKey(appName, userID, memoryID string) error {

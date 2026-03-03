@@ -265,17 +265,17 @@ func (e *memoryExtractor) buildSystemPrompt(
 	sessionDate string,
 ) string {
 	var sb strings.Builder
-	sb.WriteString(e.prompt)
 
-	// Inject session date so the LLM can resolve relative time
-	// expressions (e.g. "yesterday", "last week") to absolute dates.
-	// Prefer an explicit session date from the conversation when
-	// available; fall back to the current system date.
+	// Inject session date FIRST so the LLM sees the date context
+	// before any instructions that reference it. This is critical
+	// for resolving relative time expressions correctly.
 	date := sessionDate
 	if date == "" {
 		date = time.Now().Format("2006-01-02")
 	}
-	fmt.Fprintf(&sb, "\n<session_date>%s</session_date>\n", date)
+	fmt.Fprintf(&sb, "<session_date>%s</session_date>\n\n", date)
+
+	sb.WriteString(e.prompt)
 
 	// Append available actions.
 	sb.WriteString("\n<available_actions>\n")
@@ -513,7 +513,13 @@ For EPISODES (memory_kind="episode"):
 - Always provide event_time as an absolute date (ISO 8601: YYYY-MM-DD or
   YYYY-MM-DDTHH:MM:SS). NEVER use relative time words like "yesterday",
   "last week", or "two months ago". If a relative time is mentioned,
-  resolve it using the <session_date> provided above.
+  resolve it using the <session_date> at the top of this prompt.
+  For example, if <session_date> is "2024-06-10" and the user says
+  "yesterday", that means 2024-06-09.
+- When the conversation explicitly mentions a date or year (e.g., "in 2022",
+  "on May 7, 2023", "three years ago"), ALWAYS preserve that original date
+  in both the memory text and event_time field. Include the date/year
+  directly in the memory content so it can be retrieved by text search.
 - Capture WHO was involved in the participants field.
 - Capture WHERE it happened in the location field.
 - Each distinct event should be a separate episode memory.
@@ -524,6 +530,9 @@ For EPISODES (memory_kind="episode"):
 
 For FACTS (memory_kind="fact"):
 - Set memory_kind to "fact" (or omit it, as it defaults to "fact").
+- Facts that include a specific time reference (e.g., "married for 5 years",
+  "started painting in 2022") should preserve the time information in the
+  memory text AND also set event_time if an absolute date can be derived.
 - Facts can be deduplicated and merged. Prefer updating existing
   facts over creating near-duplicates.
 - Create separate fact memories for:

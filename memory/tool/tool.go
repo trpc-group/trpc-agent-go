@@ -247,7 +247,8 @@ func NewSearchTool() tool.CallableTool {
 			"For multi-part questions, search for each sub-question separately and combine the results. "+
 			"For temporal questions (e.g. 'when did X happen', 'what did user do in May 2023'), "+
 			"use time_after/time_before filters and consider setting order_by_event_time=true. "+
-			"Use 'kind' to filter by 'fact' or 'episode' when you know the answer type."),
+			"The 'kind' filter is optional and acts as a preference with automatic fallback; "+
+			"omit it when uncertain whether the answer is stored as a fact or episode."),
 	)
 }
 
@@ -368,8 +369,15 @@ func buildEpisodicFields(kind, eventTimeStr string, participants []string, locat
 // buildSearchOptions constructs SearchOptions from a SearchMemoryRequest.
 func buildSearchOptions(req *SearchMemoryRequest) memory.SearchOptions {
 	opts := memory.SearchOptions{
-		Query: req.Query,
-		Kind:  memory.MemoryKind(req.Kind),
+		Query:       req.Query,
+		Kind:        memory.MemoryKind(req.Kind),
+		Deduplicate: true,
+	}
+	// Enable kind fallback when a kind filter is requested so that
+	// results of the other kind are still included if the filtered
+	// set is too small.
+	if opts.Kind != "" {
+		opts.KindFallback = true
 	}
 	for _, pair := range []struct {
 		raw    string
