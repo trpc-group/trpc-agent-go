@@ -1317,7 +1317,7 @@ func (m *twoStepToolCallModel) Calls() int {
 	return m.callNum
 }
 
-func TestRun_IntraRunSummary_TriggersBetweenIterations(t *testing.T) {
+func TestRun_SyncSummaryIntraRun_TriggersBetweenIterations(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
@@ -1360,7 +1360,7 @@ func TestRun_IntraRunSummary_TriggersBetweenIterations(t *testing.T) {
 		[]flow.ResponseProcessor{
 			processor.NewFunctionCallResponseProcessor(false, nil),
 		},
-		Options{IntraRunSummary: true},
+		Options{SyncSummaryIntraRun: true},
 	)
 
 	eventCh, err := llmFlow.Run(ctx, inv)
@@ -1378,11 +1378,11 @@ func TestRun_IntraRunSummary_TriggersBetweenIterations(t *testing.T) {
 	require.Equal(t, []string{"branch/agent-intra-run"}, filterKeys)
 
 	// Verify the state key is set so the runner can skip async enqueue.
-	intraRun, ok := agent.GetStateValue[bool](
-		inv, agent.IntraRunSummaryStateKey,
+	syncSummaryIntraRun, ok := agent.GetStateValue[bool](
+		inv, agent.SyncSummaryIntraRunStateKey,
 	)
-	require.True(t, ok, "IntraRunSummaryStateKey should be set")
-	require.True(t, intraRun)
+	require.True(t, ok, "SyncSummaryIntraRunStateKey should be set")
+	require.True(t, syncSummaryIntraRun)
 }
 
 // errSessionService wraps a real session.Service but forces
@@ -1401,35 +1401,35 @@ func (e *errSessionService) CreateSessionSummary(
 	return errors.New("forced summary error")
 }
 
-func TestMaybeIntraRunSummary_GuardClauses(t *testing.T) {
-	f := &Flow{intraRunSummary: true}
+func TestMaybeSyncSummaryIntraRun_GuardClauses(t *testing.T) {
+	f := &Flow{syncSummaryIntraRun: true}
 	ctx := context.Background()
 
 	// nil invocation — should not panic.
-	f.maybeIntraRunSummary(ctx, nil)
+	f.maybeSyncSummaryIntraRun(ctx, nil)
 
 	// Non-nil invocation with nil Session.
 	inv := agent.NewInvocation()
 	inv.Session = nil
-	f.maybeIntraRunSummary(ctx, inv)
+	f.maybeSyncSummaryIntraRun(ctx, inv)
 
 	// Non-nil invocation with session but nil SessionService.
 	inv.Session = &session.Session{}
 	inv.SessionService = nil
-	f.maybeIntraRunSummary(ctx, inv)
+	f.maybeSyncSummaryIntraRun(ctx, inv)
 
-	// intraRunSummary disabled — should skip even with full
+	// syncSummaryIntraRun disabled — should skip even with full
 	// invocation.
-	fOff := &Flow{intraRunSummary: false}
+	fOff := &Flow{syncSummaryIntraRun: false}
 	inv.SessionService = inmemory.NewSessionService()
 	t.Cleanup(func() {
 		_ = inv.SessionService.Close()
 	})
-	fOff.maybeIntraRunSummary(ctx, inv)
+	fOff.maybeSyncSummaryIntraRun(ctx, inv)
 }
 
-func TestMaybeIntraRunSummary_ErrorBranch(t *testing.T) {
-	f := &Flow{intraRunSummary: true}
+func TestMaybeSyncSummaryIntraRun_ErrorBranch(t *testing.T) {
+	f := &Flow{syncSummaryIntraRun: true}
 	ctx := context.Background()
 
 	inv := agent.NewInvocation(
@@ -1441,16 +1441,16 @@ func TestMaybeIntraRunSummary_ErrorBranch(t *testing.T) {
 	)
 
 	// Should not panic; just logs the error internally.
-	f.maybeIntraRunSummary(ctx, inv)
+	f.maybeSyncSummaryIntraRun(ctx, inv)
 }
 
-func TestRun_IntraRunSummary_NilInvocation(t *testing.T) {
-	// When invocation is nil and intraRunSummary is true,
+func TestRun_SyncSummaryIntraRun_NilInvocation(t *testing.T) {
+	// When invocation is nil and syncSummaryIntraRun is true,
 	// the SetState guard should prevent a nil-pointer panic.
 	llmFlow := New(
 		nil,
 		nil,
-		Options{IntraRunSummary: true},
+		Options{SyncSummaryIntraRun: true},
 	)
 	eventCh, err := llmFlow.Run(
 		context.Background(), nil,

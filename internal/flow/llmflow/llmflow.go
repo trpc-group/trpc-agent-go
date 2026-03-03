@@ -53,18 +53,18 @@ const (
 
 // Options contains configuration options for creating a Flow.
 type Options struct {
-	ChannelBufferSize int // Buffer size for event channels (default: 256).
-	ModelCallbacks    *model.Callbacks
-	IntraRunSummary   bool
+	ChannelBufferSize   int // Buffer size for event channels (default: 256).
+	ModelCallbacks      *model.Callbacks
+	SyncSummaryIntraRun bool
 }
 
 // Flow provides the basic flow implementation.
 type Flow struct {
-	requestProcessors  []flow.RequestProcessor
-	responseProcessors []flow.ResponseProcessor
-	channelBufferSize  int
-	modelCallbacks     *model.Callbacks
-	intraRunSummary    bool
+	requestProcessors   []flow.RequestProcessor
+	responseProcessors  []flow.ResponseProcessor
+	channelBufferSize   int
+	modelCallbacks      *model.Callbacks
+	syncSummaryIntraRun bool
 }
 
 // New creates a new basic flow instance with the provided processors.
@@ -75,11 +75,11 @@ func New(
 	opts Options,
 ) *Flow {
 	return &Flow{
-		requestProcessors:  requestProcessors,
-		responseProcessors: responseProcessors,
-		channelBufferSize:  opts.ChannelBufferSize,
-		modelCallbacks:     opts.ModelCallbacks,
-		intraRunSummary:    opts.IntraRunSummary,
+		requestProcessors:   requestProcessors,
+		responseProcessors:  responseProcessors,
+		channelBufferSize:   opts.ChannelBufferSize,
+		modelCallbacks:      opts.ModelCallbacks,
+		syncSummaryIntraRun: opts.SyncSummaryIntraRun,
 	}
 }
 
@@ -93,10 +93,10 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 		defer recoverFlowRunPanic(ctx, invocation, eventChan)
 
 		// Mark the invocation so the runner skips redundant async
-		// summary enqueue when intra-run summary handles it.
-		if f.intraRunSummary && invocation != nil {
+		// summary enqueue when sync intra-run summary handles it.
+		if f.syncSummaryIntraRun && invocation != nil {
 			invocation.SetState(
-				agent.IntraRunSummaryStateKey, true,
+				agent.SyncSummaryIntraRunStateKey, true,
 			)
 		}
 
@@ -112,9 +112,9 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 				return
 			}
 
-			// Run intra-run summary only between iterations.
+			// Run sync intra-run summary only between iterations.
 			if !firstIteration {
-				f.maybeIntraRunSummary(ctx, invocation)
+				f.maybeSyncSummaryIntraRun(ctx, invocation)
 			}
 			firstIteration = false
 
@@ -269,8 +269,11 @@ func (f *Flow) maybeResumePendingToolCalls(
 	}
 }
 
-func (f *Flow) maybeIntraRunSummary(ctx context.Context, invocation *agent.Invocation) {
-	if !f.intraRunSummary || invocation == nil || invocation.Session == nil ||
+func (f *Flow) maybeSyncSummaryIntraRun(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) {
+	if !f.syncSummaryIntraRun || invocation == nil || invocation.Session == nil ||
 		invocation.SessionService == nil {
 		return
 	}

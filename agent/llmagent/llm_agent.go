@@ -172,9 +172,9 @@ func New(name string, opts ...Option) *LLMAgent {
 
 	// Create flow with the provided processors and options.
 	flowOpts := llmflow.Options{
-		ChannelBufferSize: options.ChannelBufferSize,
-		ModelCallbacks:    options.ModelCallbacks,
-		IntraRunSummary:   options.IntraRunSummary,
+		ChannelBufferSize:   options.ChannelBufferSize,
+		ModelCallbacks:      options.ModelCallbacks,
+		SyncSummaryIntraRun: options.SyncSummaryIntraRun,
 	}
 
 	a.flow = llmflow.New(

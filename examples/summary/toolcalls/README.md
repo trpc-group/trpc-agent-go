@@ -8,13 +8,15 @@ It validates two summary strategies:
 - **Async summary** (default): A background worker generates summaries after
   tool-result events. The summary appears in later LLM requests once the async
   job completes.
-- **Intra-run (synchronous) summary** (`-intra-run-summary`): A synchronous
-  summary is generated between each LLM loop iteration. The summary is
+- **Sync intra-run summary** (`-sync-summary-intra-run`): A synchronous
+  summary refresh is triggered between each LLM loop iteration. The summary is
   guaranteed to be present from the second LLM request onward.
 
-When intra-run summary is enabled, the framework automatically skips redundant
-async summary enqueue during the same run, so only one summarization path is
-active at a time.
+When sync intra-run summary is enabled, the framework automatically skips
+redundant async summary enqueue for intermediate tool-result events during the
+same run, while still allowing the final assistant response to trigger an async
+job. This ensures the session summary is up-to-date at turn end without
+duplicate summarization work.
 
 ## Prerequisites
 
@@ -36,10 +38,10 @@ export OPENAI_API_KEY="your-api-key"
 go run . -model deepseek-chat -steps 5
 ```
 
-Intra-run synchronous summary:
+Sync intra-run summary:
 
 ```bash
-go run . -model deepseek-chat -steps 5 -intra-run-summary
+go run . -model deepseek-chat -steps 5 -sync-summary-intra-run
 ```
 
 Optional flags:
@@ -48,8 +50,9 @@ Optional flags:
 - `-steps`: Number of required sequential tool calls in one run.
 - `-query`: User message for the run.
 - `-wait-sec`: Max wait time for async summary generation.
-- `-intra-run-summary`: Enable synchronous summary between LLM iterations
-  (automatically suppresses async summary enqueue).
+- `-sync-summary-intra-run`: Enable synchronous summary refresh between LLM
+  iterations (automatically suppresses async summary enqueue for intermediate
+  tool-result events).
 
 ## What to Observe
 
@@ -66,10 +69,11 @@ Use this checklist to validate behavior:
    - A later `BeforeModel` request contains a second system message with
      `<summary_of_previous_interactions> ... </summary_of_previous_interactions>`.
 
-3. **Async vs intra-run timing.**
-   - Without `-intra-run-summary`: the summary system message may not appear
-     until request #3 or later, depending on when the async worker finishes.
-   - With `-intra-run-summary`: the summary system message appears from
+3. **Async vs sync intra-run timing.**
+   - Without `-sync-summary-intra-run`: the summary system message may not
+     appear until request #3 or later, depending on when the async worker
+     finishes.
+   - With `-sync-summary-intra-run`: the summary system message appears from
      request #2 onward, because it is generated synchronously before each LLM
      call.
 
@@ -93,7 +97,7 @@ Use this checklist to validate behavior:
    - The final answer is produced after the last required tool call.
 
 8. **Post-run summary.**
-   - Without `-intra-run-summary`: the final printed `📝 Summary` is fetched
-     asynchronously and may lag behind the latest in-turn state.
-   - With `-intra-run-summary`: the summary is already up-to-date at the end
-     of the run; the async wait should find it immediately.
+   - Without `-sync-summary-intra-run`: the final printed `📝 Summary` is
+     fetched asynchronously and may lag behind the latest in-turn state.
+   - With `-sync-summary-intra-run`: the summary is already up-to-date at the
+     end of the run; the async wait should find it immediately.

@@ -960,15 +960,15 @@ func (r *runner) handleEventPersistence(
 		return
 	}
 
-	// When intra-run (synchronous) summary is active for this
+	// When sync intra-run summary is active for this
 	// invocation, the flow already summarises between LLM
 	// iterations. Skip redundant async enqueue for intermediate
 	// tool-result events but still allow the final assistant
 	// response to trigger an async job so the session summary
 	// is up-to-date at turn end.
-	if intraRun, ok := agent.GetStateValue[bool](
-		invocation, agent.IntraRunSummaryStateKey,
-	); ok && intraRun && agentEvent.IsToolResultResponse() {
+	if syncSummaryIntraRun, ok := agent.GetStateValue[bool](
+		invocation, agent.SyncSummaryIntraRunStateKey,
+	); ok && syncSummaryIntraRun && agentEvent.IsToolResultResponse() {
 		return
 	}
 

@@ -51,11 +51,11 @@ const (
 	// attachment (see internal/state/appender).
 	appenderStateKey = "__append_event__"
 
-	// IntraRunSummaryStateKey is set on the invocation by the
-	// flow when intra-run (synchronous) summary is active.
+	// SyncSummaryIntraRunStateKey is set on the invocation by the
+	// flow when sync intra-run summary is active.
 	// Runner checks this key to skip redundant async summary
 	// enqueue during the same run.
-	IntraRunSummaryStateKey = "__intra_run_summary__"
+	SyncSummaryIntraRunStateKey = "__sync_summary_intra_run__"
 )
 
 // TransferInfo contains information about a pending agent transfer.

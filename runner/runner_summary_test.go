@@ -571,35 +571,37 @@ func (m *skipSummarizationMockAgent) Run(
 	return ch, nil
 }
 
-// intraRunSummaryMockAgent sets IntraRunSummaryStateKey on the invocation
-// before emitting events, simulating the behavior of llmflow when intra-run
-// summary is active. It emits a tool-call sequence (tool_call -> tool result)
-// followed by a final assistant text response so the test can verify that
-// intermediate events are skipped while the final response still triggers
-// an async enqueue.
-type intraRunSummaryMockAgent struct {
+// syncSummaryIntraRunMockAgent sets SyncSummaryIntraRunStateKey on the
+// invocation before emitting events, simulating the behavior of llmflow when
+// sync intra-run summary is active. It emits a tool-call sequence
+// (tool_call -> tool result) followed by a final assistant text response so
+// the test can verify that intermediate events are skipped while the final
+// response still triggers an async enqueue.
+type syncSummaryIntraRunMockAgent struct {
 	name string
 }
 
-func (m *intraRunSummaryMockAgent) Info() agent.Info {
+func (m *syncSummaryIntraRunMockAgent) Info() agent.Info {
 	return agent.Info{
 		Name:        m.name,
-		Description: "Mock agent that sets intra-run summary state",
+		Description: "Mock agent that sets sync intra-run summary state",
 	}
 }
 
-func (m *intraRunSummaryMockAgent) SubAgents() []agent.Agent { return nil }
+func (m *syncSummaryIntraRunMockAgent) SubAgents() []agent.Agent { return nil }
 
-func (m *intraRunSummaryMockAgent) FindSubAgent(string) agent.Agent { return nil }
+func (m *syncSummaryIntraRunMockAgent) FindSubAgent(string) agent.Agent {
+	return nil
+}
 
-func (m *intraRunSummaryMockAgent) Tools() []tool.Tool { return nil }
+func (m *syncSummaryIntraRunMockAgent) Tools() []tool.Tool { return nil }
 
-func (m *intraRunSummaryMockAgent) Run(
+func (m *syncSummaryIntraRunMockAgent) Run(
 	ctx context.Context,
 	invocation *agent.Invocation,
 ) (<-chan *event.Event, error) {
-	// Simulate flow setting the intra-run summary state key.
-	invocation.SetState(agent.IntraRunSummaryStateKey, true)
+	// Simulate flow setting the sync intra-run summary state key.
+	invocation.SetState(agent.SyncSummaryIntraRunStateKey, true)
 
 	ch := make(chan *event.Event, 3)
 
@@ -675,13 +677,13 @@ func (m *intraRunSummaryMockAgent) Run(
 	return ch, nil
 }
 
-func TestRunner_IntraRunSummary_SkipsIntermediateButAllowsFinal(
+func TestRunner_SyncSummaryIntraRun_SkipsIntermediateButAllowsFinal(
 	t *testing.T,
 ) {
 	svc := &mockSessionService{}
 	r := NewRunner(
 		"test-app",
-		&intraRunSummaryMockAgent{name: "intra-agent"},
+		&syncSummaryIntraRunMockAgent{name: "sync-intra-agent"},
 		WithSessionService(svc),
 	)
 	_, err := RunWithMessages(
@@ -704,7 +706,7 @@ func TestRunner_IntraRunSummary_SkipsIntermediateButAllowsFinal(
 		svc.enqueueSummaryJobCalls,
 		1,
 		"final response should trigger EnqueueSummaryJob "+
-			"even with intra-run summary active",
+			"even with sync intra-run summary active",
 	)
 }
 

@@ -45,11 +45,11 @@ var (
 	query     = flag.String("query",
 		"Plan and execute the task using the required step tool calls.",
 		"User message for the run")
-	waitSec         = flag.Int("wait-sec", 8, "Wait seconds for async summary")
-	intraRunSummary = flag.Bool(
-		"intra-run-summary",
+	waitSec             = flag.Int("wait-sec", 8, "Wait seconds for async summary")
+	syncSummaryIntraRun = flag.Bool(
+		"sync-summary-intra-run",
 		false,
-		"Enable synchronous summary between LLM iterations in a single run",
+		"Enable synchronous summary refresh between LLM iterations in a single run",
 	)
 )
 
@@ -60,9 +60,9 @@ func main() {
 		os.Exit(1)
 	}
 	d := &sameTurnDemo{
-		modelName:       *modelName,
-		steps:           *steps,
-		intraRunSummary: *intraRunSummary,
+		modelName:           *modelName,
+		steps:               *steps,
+		syncSummaryIntraRun: *syncSummaryIntraRun,
 	}
 	if err := d.run(context.Background(), *query, time.Duration(*waitSec)*time.Second); err != nil {
 		fmt.Printf("❌ Error: %v\n", err)
@@ -71,15 +71,15 @@ func main() {
 }
 
 type sameTurnDemo struct {
-	modelName       string
-	steps           int
-	intraRunSummary bool
-	runner          runner.Runner
-	sessionService  session.Service
-	app             string
-	userID          string
-	sessionID       string
-	requestSeq      int64
+	modelName           string
+	steps               int
+	syncSummaryIntraRun bool
+	runner              runner.Runner
+	sessionService      session.Service
+	app                 string
+	userID              string
+	sessionID           string
+	requestSeq          int64
 }
 
 func (d *sameTurnDemo) run(ctx context.Context, input string, wait time.Duration) error {
@@ -91,7 +91,7 @@ func (d *sameTurnDemo) run(ctx context.Context, input string, wait time.Duration
 	fmt.Printf("Model: %s\n", d.modelName)
 	fmt.Printf("Session: %s\n", d.sessionID)
 	fmt.Printf("Configured step count: %d\n", d.steps)
-	fmt.Printf("IntraRunSummary: %v\n", d.intraRunSummary)
+	fmt.Printf("SyncSummaryIntraRun: %v\n", d.syncSummaryIntraRun)
 	fmt.Println(strings.Repeat("=", 70))
 	if err := d.runSingleTurn(ctx, input); err != nil {
 		return err
@@ -157,7 +157,7 @@ func (d *sameTurnDemo) setup() error {
 		llmagent.WithTools(tools),
 		llmagent.WithModelCallbacks(callbacks),
 		llmagent.WithAddSessionSummary(true),
-		llmagent.WithIntraRunSummary(d.intraRunSummary),
+		llmagent.WithSyncSummaryIntraRun(d.syncSummaryIntraRun),
 		llmagent.WithMaxToolIterations(maxToolIterations),
 		llmagent.WithMaxLLMCalls(maxLLMCalls),
 	)
