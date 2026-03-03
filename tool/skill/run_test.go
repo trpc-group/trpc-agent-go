@@ -124,6 +124,26 @@ func TestRunTool_ExecutesAndCollectsOutputFiles(t *testing.T) {
 	require.Contains(t, out.PrimaryOutput.Content, contentHi)
 }
 
+func TestRunTool_StateDelta_EmitsArtifactRefs(t *testing.T) {
+	rt := &RunTool{}
+	out := runOutput{
+		ArtifactFiles: []artifactRef{
+			{Name: "out/a.txt", Version: 3},
+			{Name: "out/b.txt", Version: 0},
+		},
+	}
+	b, err := json.Marshal(out)
+	require.NoError(t, err)
+
+	delta := rt.StateDelta("call-1", nil, b)
+	require.Len(t, delta, 1)
+	v, ok := delta[skill.StateKeyArtifacts]
+	require.True(t, ok)
+	require.Contains(t, string(v), `"tool_call_id":"call-1"`)
+	require.Contains(t, string(v), `"ref":"artifact://out/a.txt@3"`)
+	require.Contains(t, string(v), `"ref":"artifact://out/b.txt@0"`)
+}
+
 func TestRunTool_DoesNotInlineNonTextOutputs(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, testSkillName)
