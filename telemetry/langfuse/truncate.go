@@ -64,10 +64,10 @@ func truncateStringBytes(s string, maxBytes int) string {
 	if maxBytes <= 0 {
 		return ""
 	}
-	b := []byte(s)
-	if len(b) <= maxBytes {
+	if len(s) <= maxBytes {
 		return s
 	}
+	b := []byte(s)
 
 	marker := []byte(defaultTruncateMarker)
 	if len(marker) >= maxBytes {
