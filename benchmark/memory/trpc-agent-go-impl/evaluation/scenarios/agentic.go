@@ -119,6 +119,65 @@ func (s *datePrefixMemoryService) Close() error {
 	return s.inner.Close()
 }
 
+func (s *datePrefixMemoryService) AddMemoryWithEpisodic(
+	ctx context.Context,
+	userKey memory.UserKey,
+	mem string,
+	topics []string,
+	ep *memory.EpisodicFields,
+) error {
+	ep = s.enrichEpisodicWithSessionDate(ep)
+	return s.inner.AddMemoryWithEpisodic(ctx, userKey, s.withDatePrefix(mem), topics, ep)
+}
+
+func (s *datePrefixMemoryService) UpdateMemoryWithEpisodic(
+	ctx context.Context,
+	memoryKey memory.Key,
+	mem string,
+	topics []string,
+	ep *memory.EpisodicFields,
+) error {
+	ep = s.enrichEpisodicWithSessionDate(ep)
+	return s.inner.UpdateMemoryWithEpisodic(ctx, memoryKey, s.withDatePrefix(mem), topics, ep)
+}
+
+func (s *datePrefixMemoryService) SearchMemoriesWithOptions(
+	ctx context.Context,
+	userKey memory.UserKey,
+	opts memory.SearchOptions,
+) ([]*memory.Entry, error) {
+	return s.inner.SearchMemoriesWithOptions(ctx, userKey, opts)
+}
+
+// enrichEpisodicWithSessionDate fills in EventTime from the session date
+// when the LLM provided an episode but failed to set event_time.
+func (s *datePrefixMemoryService) enrichEpisodicWithSessionDate(
+	ep *memory.EpisodicFields,
+) *memory.EpisodicFields {
+	if ep == nil {
+		return ep
+	}
+	if ep.Kind == memory.MemoryKindEpisode && ep.EventTime == nil {
+		s.mu.RLock()
+		dateStr := s.sessionDate
+		s.mu.RUnlock()
+		if dateStr != "" {
+			if t, err := time.Parse("2 January 2006", dateStr); err == nil {
+				ep.EventTime = &t
+			} else if t, err := time.Parse("2006-01-02", dateStr); err == nil {
+				ep.EventTime = &t
+			} else if t, err := time.Parse("January 2, 2006", dateStr); err == nil {
+				ep.EventTime = &t
+			} else if t, err := time.Parse("Jan 2, 2006", dateStr); err == nil {
+				ep.EventTime = &t
+			} else if t, err := time.Parse("2 Jan 2006", dateStr); err == nil {
+				ep.EventTime = &t
+			}
+		}
+	}
+	return ep
+}
+
 func (s *datePrefixMemoryService) withDatePrefix(mem string) string {
 	trimmed := strings.TrimSpace(mem)
 	if strings.HasPrefix(trimmed, "[DATE:") {
@@ -304,13 +363,20 @@ func (e *AgenticEvaluator) processConversation(
 		"- Store one fact per memory_add call.\n" +
 		"- Include facts about ALL speakers, not just the " +
 		"primary one.\n" +
+		"- Classify each memory:\n" +
+		"  - memory_kind=\"fact\" for stable personal attributes, " +
+		"preferences, relationships.\n" +
+		"  - memory_kind=\"episode\" for specific events that " +
+		"happened at a particular time.\n" +
+		"- For episodes, ALWAYS set event_time to an absolute " +
+		"date (ISO 8601: YYYY-MM-DD). Use the SessionDate to " +
+		"resolve relative times (\"last year\", \"next month\").\n" +
+		"- For episodes, set participants (people involved) " +
+		"and location (where it happened) when mentioned.\n" +
 		"- Store events with specific details " +
 		"(what happened, who, where).\n" +
 		"- Store personal traits, preferences, relationships, " +
 		"plans, and emotions.\n" +
-		"- If the conversation mentions a relative time " +
-		"(\"last year\", \"next month\"), resolve it to an " +
-		"absolute date/year using the SessionDate.\n" +
 		"- After storing all memories, reply 'Done.' only.\n\n" +
 		"IMPORTANT: Extract as many facts as possible. " +
 		"Aim for 3-8 memories per session."

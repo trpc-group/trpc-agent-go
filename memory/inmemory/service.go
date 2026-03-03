@@ -342,3 +342,21 @@ func (s *MemoryService) Close() error {
 	}
 	return nil
 }
+
+// AddMemoryWithEpisodic delegates to AddMemory (episodic fields ignored for inmemory backend).
+func (s *MemoryService) AddMemoryWithEpisodic(ctx context.Context, userKey memory.UserKey,
+	memoryStr string, topics []string, _ *memory.EpisodicFields) error {
+	return s.AddMemory(ctx, userKey, memoryStr, topics)
+}
+
+// UpdateMemoryWithEpisodic delegates to UpdateMemory (episodic fields ignored for inmemory backend).
+func (s *MemoryService) UpdateMemoryWithEpisodic(ctx context.Context, memoryKey memory.Key,
+	memoryStr string, topics []string, _ *memory.EpisodicFields) error {
+	return s.UpdateMemory(ctx, memoryKey, memoryStr, topics)
+}
+
+// SearchMemoriesWithOptions delegates to SearchMemories (advanced filtering ignored for inmemory backend).
+func (s *MemoryService) SearchMemoriesWithOptions(ctx context.Context, userKey memory.UserKey,
+	opts memory.SearchOptions) ([]*memory.Entry, error) {
+	return s.SearchMemories(ctx, userKey, opts.Query)
+}

@@ -241,13 +241,13 @@ func (e *memoryExtractor) buildSystemPrompt(
 	sb.WriteString(e.availableActionsBlock())
 	sb.WriteString("</available_actions>\n")
 
-	// Append existing memories.
+	// Append existing memories with episodic metadata so the LLM can
+	// properly deduplicate and avoid re-creating the same episodes.
 	if len(existing) > 0 {
 		sb.WriteString("\n<existing_memories>\n")
 		for _, entry := range existing {
 			if entry.Memory != nil {
-				fmt.Fprintf(&sb,
-					"- [%s] %s\n", entry.ID, entry.Memory.Memory)
+				sb.WriteString(formatExistingMemory(entry))
 			}
 		}
 		sb.WriteString("</existing_memories>\n")
@@ -375,13 +375,43 @@ func (e *memoryExtractor) runAfterModelCallbacks(
 	return ctx, response, nil
 }
 
+// formatExistingMemory formats a single memory entry for inclusion in the
+// system prompt. For episodic memories it appends kind, event_time,
+// participants and location so the LLM can properly deduplicate.
+func formatExistingMemory(entry *memory.Entry) string {
+	m := entry.Memory
+	base := fmt.Sprintf("- [%s] %s", entry.ID, m.Memory)
+	if m.Kind == "" || m.Kind == memory.MemoryKindFact {
+		return base + "\n"
+	}
+	// Append episodic metadata.
+	var meta []string
+	meta = append(meta, fmt.Sprintf("kind=%s", m.Kind))
+	if m.EventTime != nil {
+		meta = append(meta, fmt.Sprintf("event_time=%s", m.EventTime.Format("2006-01-02")))
+	}
+	if len(m.Participants) > 0 {
+		meta = append(meta, fmt.Sprintf("participants=%s", strings.Join(m.Participants, ",")))
+	}
+	if m.Location != "" {
+		meta = append(meta, fmt.Sprintf("location=%s", m.Location))
+	}
+	return fmt.Sprintf("%s (%s)\n", base, strings.Join(meta, "; "))
+}
+
 // defaultPrompt is the default system prompt for memory extraction.
 const defaultPrompt = `You are a Memory Manager for an AI Assistant.
 Your task is to analyze the conversation and manage user memories.
+You must distinguish between two types of memories: facts and episodes.
 
 <instructions>
-1. Analyze the conversation to identify any new or updated information about the
-   user that should be remembered.
+1. Analyze the conversation to identify TWO types of information:
+   a. **Facts** (memory_kind="fact"): Stable personal attributes, preferences,
+      or background that are generally true about the user.
+      Example: "User is a software engineer at Google."
+   b. **Episodes** (memory_kind="episode"): Specific events, experiences, or
+      interactions that happened at a particular time and place.
+      Example: "On 2024-05-07, User went hiking at Mt. Fuji with Alice."
 2. Check if this information is already captured in existing memories.
 3. Determine if any memories need to be added, updated, or deleted.
 4. You can call multiple tools in parallel to handle all necessary changes at once.
@@ -411,15 +441,41 @@ Your task is to analyze the conversation and manage user memories.
   - Generic conversation that doesn't reveal personal information
 </guidelines>
 
+<episodic_memory_rules>
+For EPISODES (memory_kind="episode"):
+- Always set memory_kind to "episode".
+- Always provide event_time as an absolute date (ISO 8601: YYYY-MM-DD or
+  YYYY-MM-DDTHH:MM:SS). NEVER use relative time words like "yesterday",
+  "last week", or "two months ago". If a relative time is mentioned,
+  resolve it using the session date or conversation context.
+- Capture WHO was involved in the participants field.
+- Capture WHERE it happened in the location field.
+- Each distinct event should be a separate episode memory.
+  Do NOT merge multiple events into one memory.
+- Episode memories should describe WHAT happened concretely, not
+  abstract summaries.
+
+For FACTS (memory_kind="fact"):
+- Set memory_kind to "fact" (or omit it, as it defaults to "fact").
+- Facts can be deduplicated and merged. Prefer updating existing
+  facts over creating near-duplicates.
+</episodic_memory_rules>
+
 <memory_types>
-Capture meaningful personal information such as:
+**Facts** (memory_kind="fact"):
 - Personal details: name, age, location, occupation
 - Preferences: likes, dislikes, favorites
 - Interests and hobbies
 - Goals and aspirations
 - Important relationships
-- Significant life events
 - Opinions and beliefs
 - Work and education background
+
+**Episodes** (memory_kind="episode"):
+- Specific events: trips, meetings, outings, activities
+- Life milestones: graduation, job changes, moves
+- Shared experiences with specific people
+- Emotional moments: arguments, celebrations, surprises
+- Health events: doctor visits, illnesses, recoveries
 </memory_types>
 `

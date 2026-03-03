@@ -45,13 +45,30 @@ var (
 	ErrMemoryIDRequired = errors.New("memoryID is required")
 )
 
+// EpisodicFields holds optional episodic memory metadata.
+// When Kind is empty or MemoryKindFact, episodic fields are ignored.
+type EpisodicFields struct {
+	Kind         MemoryKind // Memory kind: "fact" or "episode".
+	EventTime    *time.Time // When the event occurred (required for episodes).
+	Participants []string   // People involved in the event.
+	Location     string     // Where the event took place.
+}
+
 // Service defines the interface for memory service operations.
 type Service interface {
 	// AddMemory adds or updates a memory for a user (idempotent).
 	AddMemory(ctx context.Context, userKey UserKey, memory string, topics []string) error
 
+	// AddMemoryWithEpisodic adds a memory with optional episodic fields.
+	AddMemoryWithEpisodic(ctx context.Context, userKey UserKey, memory string,
+		topics []string, ep *EpisodicFields) error
+
 	// UpdateMemory updates an existing memory for a user.
 	UpdateMemory(ctx context.Context, memoryKey Key, memory string, topics []string) error
+
+	// UpdateMemoryWithEpisodic updates an existing memory with optional episodic fields.
+	UpdateMemoryWithEpisodic(ctx context.Context, memoryKey Key, memory string,
+		topics []string, ep *EpisodicFields) error
 
 	// DeleteMemory deletes a memory for a user.
 	DeleteMemory(ctx context.Context, memoryKey Key) error
@@ -64,6 +81,10 @@ type Service interface {
 
 	// SearchMemories searches memories for a user.
 	SearchMemories(ctx context.Context, userKey UserKey, query string) ([]*Entry, error)
+
+	// SearchMemoriesWithOptions searches memories with advanced filtering.
+	SearchMemoriesWithOptions(ctx context.Context, userKey UserKey,
+		opts SearchOptions) ([]*Entry, error)
 
 	// Tools returns the list of available memory tools.
 	Tools() []tool.Tool
@@ -82,11 +103,29 @@ type Service interface {
 // This type can be shared by different implementations.
 type ToolCreator func() tool.Tool
 
+// MemoryKind distinguishes between semantic facts and episodic memories.
+type MemoryKind string
+
+const (
+	// MemoryKindFact represents stable personal attributes, preferences, or background.
+	// Example: "User is a software engineer."
+	MemoryKindFact MemoryKind = "fact"
+	// MemoryKindEpisode represents a specific event that happened at a particular time.
+	// Example: "On 2024-05-07, User went hiking at Mt. Fuji with Alice."
+	MemoryKindEpisode MemoryKind = "episode"
+)
+
 // Memory represents a memory entry with content and metadata.
 type Memory struct {
 	Memory      string     `json:"memory"`                 // Memory content.
 	Topics      []string   `json:"topics,omitempty"`       // Memory topics (array).
 	LastUpdated *time.Time `json:"last_updated,omitempty"` // Last update time.
+
+	// Episodic memory fields.
+	Kind         MemoryKind `json:"kind,omitempty"`         // Memory kind: "fact" or "episode".
+	EventTime    *time.Time `json:"event_time,omitempty"`   // When the event occurred.
+	Participants []string   `json:"participants,omitempty"` // People involved in the event.
+	Location     string     `json:"location,omitempty"`     // Where the event took place.
 }
 
 // Entry represents a memory entry stored in the system.
@@ -125,6 +164,22 @@ type UserKey struct {
 // CheckUserKey checks if a user key is valid.
 func (u *UserKey) CheckUserKey() error {
 	return checkUserKey(u.AppName, u.UserID)
+}
+
+// SearchOptions provides advanced filtering for memory search.
+type SearchOptions struct {
+	Query      string     // Semantic search query (required).
+	Kind       MemoryKind // Filter by memory kind ("fact" or "episode"). Empty means all.
+	TimeAfter  *time.Time // Filter episodes with event_time >= TimeAfter.
+	TimeBefore *time.Time // Filter episodes with event_time <= TimeBefore.
+	MaxResults int        // Override default max results. 0 means use default.
+
+	// OrderByEventTime orders results by event_time (ascending) instead
+	// of the default embedding similarity order. Only affects episodes
+	// that have event_time set; entries without event_time are appended
+	// after time-ordered entries. This is useful for temporal sequence
+	// questions ("what happened first/next/after X?").
+	OrderByEventTime bool
 }
 
 func checkMemoryKey(appName, userID, memoryID string) error {

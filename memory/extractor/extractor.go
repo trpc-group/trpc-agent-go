@@ -12,6 +12,7 @@ package extractor
 
 import (
 	"context"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -58,6 +59,12 @@ type Operation struct {
 	MemoryID string
 	// Topics are optional topics for the memory.
 	Topics []string
+
+	// Episodic memory fields.
+	MemoryKind   memory.MemoryKind // "fact" or "episode".
+	EventTime    *time.Time        // When the event occurred.
+	Participants []string          // People involved in the event.
+	Location     string            // Where the event took place.
 }
 
 // OperationType defines the type of memory operation.

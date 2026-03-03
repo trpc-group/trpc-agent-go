@@ -29,6 +29,10 @@ const (
 		"memory_content TEXT NOT NULL," +
 		"topics TEXT[]," +
 		"embedding vector(%d)," +
+		"memory_kind TEXT NOT NULL DEFAULT 'fact'," +
+		"event_time TIMESTAMP NULL," +
+		"participants TEXT[]," +
+		"location TEXT NULL," +
 		"created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP," +
 		"updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP," +
 		"deleted_at TIMESTAMP NULL DEFAULT NULL" +
@@ -37,6 +41,8 @@ const (
 	sqlCreateAppUserIndexPattern   = "CREATE INDEX IF NOT EXISTS %s ON %s(app_name, user_id)"
 	sqlCreateUpdatedAtIndexPattern = "CREATE INDEX IF NOT EXISTS %s ON %s(updated_at DESC)"
 	sqlCreateDeletedAtIndexPattern = "CREATE INDEX IF NOT EXISTS %s ON %s(deleted_at)"
+	sqlCreateEventTimeIndexPattern = "CREATE INDEX IF NOT EXISTS %s ON %s(event_time DESC) WHERE event_time IS NOT NULL"
+	sqlCreateKindIndexPattern      = "CREATE INDEX IF NOT EXISTS %s ON %s(app_name, user_id, memory_kind)"
 
 	sqlCreateHNSWIndexPattern = "CREATE INDEX IF NOT EXISTS %s ON %s USING hnsw " +
 		"(embedding vector_cosine_ops) WITH (m = %d, ef_construction = %d)"
@@ -138,11 +144,28 @@ func (s *Service) initDB(ctx context.Context) error {
 	}
 	log.InfofContext(ctx, "created table: %s", fullTableName)
 
+	// Migrate existing tables: add episodic columns if they don't exist.
+	// This is safe to run on both new and existing tables because
+	// ADD COLUMN IF NOT EXISTS is a no-op when the column already exists.
+	episodicColumns := []string{
+		fmt.Sprintf("ALTER TABLE %s ADD COLUMN IF NOT EXISTS memory_kind TEXT NOT NULL DEFAULT 'fact'", fullTableName),
+		fmt.Sprintf("ALTER TABLE %s ADD COLUMN IF NOT EXISTS event_time TIMESTAMP NULL", fullTableName),
+		fmt.Sprintf("ALTER TABLE %s ADD COLUMN IF NOT EXISTS participants TEXT[]", fullTableName),
+		fmt.Sprintf("ALTER TABLE %s ADD COLUMN IF NOT EXISTS location TEXT NULL", fullTableName),
+	}
+	for _, ddl := range episodicColumns {
+		if _, err := s.db.ExecContext(ctx, ddl); err != nil {
+			return fmt.Errorf("add episodic column on table %s failed: %w", fullTableName, err)
+		}
+	}
+
 	// Index suffix constants.
 	const (
 		indexSuffixAppUser   = "app_user"
 		indexSuffixUpdatedAt = "updated_at"
 		indexSuffixDeletedAt = "deleted_at"
+		indexSuffixEventTime = "event_time"
+		indexSuffixKind      = "kind"
 	)
 
 	// Create regular indexes.
@@ -153,6 +176,8 @@ func (s *Service) initDB(ctx context.Context) error {
 		{indexSuffixAppUser, sqlCreateAppUserIndexPattern},
 		{indexSuffixUpdatedAt, sqlCreateUpdatedAtIndexPattern},
 		{indexSuffixDeletedAt, sqlCreateDeletedAtIndexPattern},
+		{indexSuffixEventTime, sqlCreateEventTimeIndexPattern},
+		{indexSuffixKind, sqlCreateKindIndexPattern},
 	}
 
 	for _, idx := range indexes {
