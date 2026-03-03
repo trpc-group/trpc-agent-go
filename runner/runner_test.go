@@ -166,12 +166,56 @@ func TestRunner_SessionIntegration(t *testing.T) {
 	// Verify user event.
 	userEvent := sess.Events[0]
 	assert.Equal(t, authorUser, userEvent.Author)
+	assert.Equal(t, "test-app", userEvent.FilterKey)
 	assert.Equal(t, "Hello, world!", userEvent.Response.Choices[0].Message.Content)
 
 	// Verify agent event.
 	agentEvent := sess.Events[1]
 	assert.Equal(t, "test-agent", agentEvent.Author)
 	assert.Contains(t, agentEvent.Response.Choices[0].Message.Content, "Hello, world!")
+}
+
+func TestRunner_Run_WithEventFilterKey(t *testing.T) {
+	sessionService := sessioninmemory.NewSessionService()
+	mockAgent := &mockAgent{name: "test-agent"}
+	runner := NewRunner(
+		"test-app",
+		mockAgent,
+		WithSessionService(sessionService),
+	)
+
+	ctx := context.Background()
+	userID := "test-user"
+	sessionID := "test-session"
+	message := model.NewUserMessage("Hello, world!")
+	const filterKey = "test-app/role/admin"
+
+	eventCh, err := runner.Run(
+		ctx,
+		userID,
+		sessionID,
+		message,
+		agent.WithEventFilterKey(filterKey),
+	)
+	require.NoError(t, err)
+
+	// Drain all events to ensure persistence is complete.
+	for range eventCh {
+	}
+
+	sessionKey := session.Key{
+		AppName:   "test-app",
+		UserID:    userID,
+		SessionID: sessionID,
+	}
+	sess, err := sessionService.GetSession(ctx, sessionKey)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, sess.Events, 2)
+
+	userEvent := sess.Events[0]
+	assert.Equal(t, authorUser, userEvent.Author)
+	assert.Equal(t, filterKey, userEvent.FilterKey)
 }
 
 func TestRunner_SessionIntegration_MultimodalUserMessage(t *testing.T) {
