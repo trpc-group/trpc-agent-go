@@ -121,13 +121,13 @@ var (
 
 const (
 	pgvectorTableDefault  = "memory_eval"
-	pgvectorTableAuto     = "memory_eval_auto_v2"
+	pgvectorTableAuto     = "memory_eval_auto"
 	mysqlTableDefault     = "memory_eval_mysql"
-	mysqlTableAuto        = "memory_eval_auto_mysql_v2"
+	mysqlTableAuto        = "memory_eval_auto_mysql"
 	sqliteTableDefault    = "memory_eval_sqlite"
-	sqliteTableAuto       = "memory_eval_auto_sqlite_v2"
+	sqliteTableAuto       = "memory_eval_auto_sqlite"
 	sqliteVecTableDefault = "memory_eval_sqlitevec"
-	sqliteVecTableAuto    = "memory_eval_auto_sqlitevec_v2"
+	sqliteVecTableAuto    = "memory_eval_auto_sqlitevec"
 
 	autoMemoryAsyncWorkers = 3
 	autoMemoryQueueSize    = 200
