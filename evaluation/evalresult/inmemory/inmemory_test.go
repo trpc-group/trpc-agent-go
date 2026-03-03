@@ -105,7 +105,7 @@ func TestManagerListErrors(t *testing.T) {
 func TestManagerSaveCloneError(t *testing.T) {
 	ctx := context.Background()
 	mgr := New().(*manager)
-	// channel value cannot be gob-encoded, forcing clone failure.
+	// Unsupported value types should fail cloning.
 	badResult := &evalresult.EvalSetResult{
 		EvalSetID: "set",
 		EvalCaseResults: []*evalresult.EvalCaseResult{

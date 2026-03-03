@@ -272,7 +272,7 @@ func (m *manager) AddCase(ctx context.Context, appName, evalSetID string, evalCa
 	if err := m.ensureEvalSetExists(ctx, appName, evalSetID); err != nil {
 		return err
 	}
-	cloned, err := clone.Clone(evalCase)
+	cloned, err := clone.CloneEvalCase(evalCase)
 	if err != nil {
 		return fmt.Errorf("clone evalcase: %w", err)
 	}

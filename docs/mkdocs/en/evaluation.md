@@ -1792,6 +1792,30 @@ type InvocationsAggregator interface {
 
 The framework includes `invocationsaggregator/average`, which is the default for built-in evaluators. It averages scores of evaluated turns and determines overall status based on `threshold`.
 
+##### Judge Runner
+
+By default, LLM Judge evaluators call the judge model directly via `criterion.llmJudge.judgeModel`. You can also inject a judge runner with `evaluation.WithJudgeRunner`, and use the runner's final `*model.Response` instead of a direct model call.
+
+When enabled, `judgeModel` is ignored. Each invocation calls the judge runner once.
+
+Example snippet:
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+judgeRunner := runner.NewRunner("judge-app", newJudgeAgent())
+defer judgeRunner.Close()
+
+agentEvaluator, err := evaluation.New(
+	appName,
+	agentRunner,
+	evaluation.WithJudgeRunner(judgeRunner),
+)
+```
+
 ##### Custom Composition
 
 LLM Judge evaluators support injecting different operator implementations via `Option` to adjust evaluation logic without modifying the evaluator itself. The example below replaces the sample aggregation strategy with a minimum strategy, which fails if any sample fails.

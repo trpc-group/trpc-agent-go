@@ -91,7 +91,7 @@ func (m *manager) Get(_ context.Context, appName, evalSetID, metricName string) 
 	}
 	for _, evalMetric := range metrics {
 		if evalMetric != nil && evalMetric.MetricName == metricName {
-			cloned, err := clone.Clone(evalMetric)
+			cloned, err := clone.CloneEvalMetric(evalMetric)
 			if err != nil {
 				return nil, fmt.Errorf("clone metric: %w", err)
 			}
@@ -128,7 +128,7 @@ func (m *manager) Add(_ context.Context, appName, evalSetID string, metricInput 
 			return fmt.Errorf("metric %s.%s.%s already exists", appName, evalSetID, metricInput.MetricName)
 		}
 	}
-	cloned, err := clone.Clone(metricInput)
+	cloned, err := clone.CloneEvalMetric(metricInput)
 	if err != nil {
 		return fmt.Errorf("clone metric: %w", err)
 	}
@@ -192,7 +192,7 @@ func (m *manager) Update(_ context.Context, appName, evalSetID string, metricInp
 	}
 	for i, evalMetric := range metrics {
 		if evalMetric != nil && evalMetric.MetricName == metricInput.MetricName {
-			cloned, err := clone.Clone(metricInput)
+			cloned, err := clone.CloneEvalMetric(metricInput)
 			if err != nil {
 				return fmt.Errorf("clone metric: %w", err)
 			}

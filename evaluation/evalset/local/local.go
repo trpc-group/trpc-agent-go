@@ -183,7 +183,7 @@ func (m *manager) AddCase(_ context.Context, appName, evalSetID string, evalCase
 			return fmt.Errorf("eval case %s.%s.%s already exists", appName, evalSetID, evalCase.EvalID)
 		}
 	}
-	cloned, err := clone.Clone(evalCase)
+	cloned, err := clone.CloneEvalCase(evalCase)
 	if err != nil {
 		return fmt.Errorf("clone evalcase: %w", err)
 	}
