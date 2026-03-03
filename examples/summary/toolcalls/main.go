@@ -34,13 +34,23 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
+const (
+	defaultToolIterationSlack = 3
+	defaultLLMCallSlack       = 6
+)
+
 var (
 	modelName = flag.String("model", "deepseek-chat", "Model name to use")
 	steps     = flag.Int("steps", 5, "Sequential tool calls required in one turn")
 	query     = flag.String("query",
 		"Plan and execute the task using the required step tool calls.",
 		"User message for the run")
-	waitSec = flag.Int("wait-sec", 8, "Wait seconds for async summary")
+	waitSec             = flag.Int("wait-sec", 8, "Wait seconds for async summary")
+	syncSummaryIntraRun = flag.Bool(
+		"sync-summary-intra-run",
+		false,
+		"Enable synchronous summary refresh between LLM iterations in a single run",
+	)
 )
 
 func main() {
@@ -50,8 +60,9 @@ func main() {
 		os.Exit(1)
 	}
 	d := &sameTurnDemo{
-		modelName: *modelName,
-		steps:     *steps,
+		modelName:           *modelName,
+		steps:               *steps,
+		syncSummaryIntraRun: *syncSummaryIntraRun,
 	}
 	if err := d.run(context.Background(), *query, time.Duration(*waitSec)*time.Second); err != nil {
 		fmt.Printf("❌ Error: %v\n", err)
@@ -60,14 +71,15 @@ func main() {
 }
 
 type sameTurnDemo struct {
-	modelName      string
-	steps          int
-	runner         runner.Runner
-	sessionService session.Service
-	app            string
-	userID         string
-	sessionID      string
-	requestSeq     int64
+	modelName           string
+	steps               int
+	syncSummaryIntraRun bool
+	runner              runner.Runner
+	sessionService      session.Service
+	app                 string
+	userID              string
+	sessionID           string
+	requestSeq          int64
 }
 
 func (d *sameTurnDemo) run(ctx context.Context, input string, wait time.Duration) error {
@@ -79,6 +91,7 @@ func (d *sameTurnDemo) run(ctx context.Context, input string, wait time.Duration
 	fmt.Printf("Model: %s\n", d.modelName)
 	fmt.Printf("Session: %s\n", d.sessionID)
 	fmt.Printf("Configured step count: %d\n", d.steps)
+	fmt.Printf("SyncSummaryIntraRun: %v\n", d.syncSummaryIntraRun)
 	fmt.Println(strings.Repeat("=", 70))
 	if err := d.runSingleTurn(ctx, input); err != nil {
 		return err
@@ -129,6 +142,8 @@ func (d *sameTurnDemo) setup() error {
 			function.WithDescription("Executes one deterministic step and returns a verbose output."),
 		),
 	}
+	maxToolIterations := d.steps + defaultToolIterationSlack
+	maxLLMCalls := d.steps + maxToolIterations + defaultLLMCallSlack
 	ag := llmagent.New(
 		"same-turn-summary-agent",
 		llmagent.WithModel(agentModel),
@@ -142,6 +157,9 @@ func (d *sameTurnDemo) setup() error {
 		llmagent.WithTools(tools),
 		llmagent.WithModelCallbacks(callbacks),
 		llmagent.WithAddSessionSummary(true),
+		llmagent.WithSyncSummaryIntraRun(d.syncSummaryIntraRun),
+		llmagent.WithMaxToolIterations(maxToolIterations),
+		llmagent.WithMaxLLMCalls(maxLLMCalls),
 	)
 	d.app = "summary-same-turn-demo-app"
 	d.userID = "user"

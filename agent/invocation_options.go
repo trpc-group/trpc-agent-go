@@ -59,6 +59,13 @@ func WithInvocationSession(session *session.Session) InvocationOptions {
 	}
 }
 
+// WithInvocationSessionService set session service for the Invocation.
+func WithInvocationSessionService(sessionService session.Service) InvocationOptions {
+	return func(inv *Invocation) {
+		inv.SessionService = sessionService
+	}
+}
+
 // WithInvocationModel set model for the Invocation.
 func WithInvocationModel(model model.Model) InvocationOptions {
 	return func(inv *Invocation) {

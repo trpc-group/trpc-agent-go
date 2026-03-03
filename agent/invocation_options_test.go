@@ -336,6 +336,12 @@ func TestWithInvocationArtifactService(t *testing.T) {
 	assert.Equal(t, mockArtifactService, inv.ArtifactService)
 }
 
+func TestWithInvocationSessionService(t *testing.T) {
+	inv := NewInvocation(WithInvocationSessionService(nil))
+	require.NotNil(t, inv)
+	assert.Nil(t, inv.SessionService)
+}
+
 func TestWithInvocationEventFilterKey(t *testing.T) {
 	inv := NewInvocation(
 		WithInvocationEventFilterKey("test-filter-key"),
