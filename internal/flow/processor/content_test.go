@@ -2318,11 +2318,12 @@ func TestContentRequestProcessor_getFilterIncrementMessages(t *testing.T) {
 		{
 			name:             "BranchFilterModeAll and TimelineFilterAll and has time",
 			summaryUpdatedAt: baseTime,
-			expectedCount:    9,
+			expectedCount:    12,
 			expectedContent: []string{
 				"message2", "message3", "message4",
 				"message8", "message9", "message10",
 				"message14", "message15", "message16",
+				"message17", "message18", "message19",
 			},
 			branchFilterMode:   BranchFilterModeAll,
 			timelineFilterMode: TimelineFilterAll,
@@ -2415,7 +2416,7 @@ func TestContentRequestProcessor_shouldIncludeEvent(t *testing.T) {
 			expected: false,
 		},
 		{
-			name: "timestamp before since when not zero time",
+			name: "timestamp before since when not zero time, same invocation preserved",
 			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
 				p := &ContentRequestProcessor{}
 				evt := event.Event{
@@ -2436,10 +2437,10 @@ func TestContentRequestProcessor_shouldIncludeEvent(t *testing.T) {
 				inv := &agent.Invocation{InvocationID: "123", RunOptions: agent.RunOptions{RequestID: "123"}}
 				return p, evt, inv, "", false, sinceTime
 			},
-			expected: false,
+			expected: true,
 		},
 		{
-			name: "timestamp equal since when not zero time",
+			name: "timestamp equal since when not zero time, same invocation preserved",
 			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
 				p := &ContentRequestProcessor{}
 				evt := event.Event{
@@ -2456,6 +2457,30 @@ func TestContentRequestProcessor_shouldIncludeEvent(t *testing.T) {
 						},
 					},
 					Timestamp: sinceTime,
+				}
+				inv := &agent.Invocation{InvocationID: "123", RunOptions: agent.RunOptions{RequestID: "123"}}
+				return p, evt, inv, "", false, sinceTime
+			},
+			expected: true,
+		},
+		{
+			name: "timestamp before since when not zero time, different invocation excluded",
+			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
+				p := &ContentRequestProcessor{}
+				evt := event.Event{
+					RequestID:    "123",
+					InvocationID: "other-inv",
+					Version:      event.CurrentVersion,
+					Response: &model.Response{
+						Choices: []model.Choice{
+							{
+								Message: model.Message{
+									Content: "content",
+								},
+							},
+						},
+					},
+					Timestamp: sinceTime.Add(-time.Hour),
 				}
 				inv := &agent.Invocation{InvocationID: "123", RunOptions: agent.RunOptions{RequestID: "123"}}
 				return p, evt, inv, "", false, sinceTime
@@ -2919,7 +2944,7 @@ func TestContentRequestProcessor_shouldIncludeEvent(t *testing.T) {
 			expected: false,
 		},
 		{
-			name: "mid-turn summary: assistant event before since with same request ID excluded",
+			name: "mid-turn summary: assistant event before since with same request ID but no invocation ID excluded",
 			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
 				p := &ContentRequestProcessor{}
 				evt := event.Event{
@@ -2943,6 +2968,103 @@ func TestContentRequestProcessor_shouldIncludeEvent(t *testing.T) {
 						Content: "user request",
 						Role:    model.RoleUser,
 					},
+				}
+				return p, evt, inv, "", false, sinceTime
+			},
+			expected: false,
+		},
+		{
+			name: "intra-run summary: assistant event before since with same invocation preserved",
+			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
+				p := &ContentRequestProcessor{}
+				evt := event.Event{
+					RequestID:    "req1",
+					InvocationID: "inv1",
+					Version:      event.CurrentVersion,
+					Response: &model.Response{
+						Choices: []model.Choice{
+							{Message: model.Message{
+								Content: "assistant tool call",
+								Role:    model.RoleAssistant,
+							}},
+						},
+					},
+					Timestamp: sinceTime.Add(-time.Hour),
+				}
+				inv := agent.NewInvocation(
+					agent.WithInvocationID("inv1"),
+					agent.WithInvocationRunOptions(agent.RunOptions{
+						RequestID: "req1",
+					}),
+				)
+				inv.Message = model.Message{
+					Content: "user request",
+					Role:    model.RoleUser,
+				}
+				return p, evt, inv, "", false, sinceTime
+			},
+			expected: true,
+		},
+		{
+			name: "intra-run summary: tool result before since with same invocation preserved",
+			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
+				p := &ContentRequestProcessor{}
+				evt := event.Event{
+					RequestID:    "req1",
+					InvocationID: "inv1",
+					Version:      event.CurrentVersion,
+					Response: &model.Response{
+						Choices: []model.Choice{
+							{Message: model.Message{
+								Content: `{"result":"ok"}`,
+								Role:    model.RoleTool,
+								ToolID:  "call-1",
+							}},
+						},
+					},
+					Timestamp: sinceTime.Add(-time.Hour),
+				}
+				inv := agent.NewInvocation(
+					agent.WithInvocationID("inv1"),
+					agent.WithInvocationRunOptions(agent.RunOptions{
+						RequestID: "req1",
+					}),
+				)
+				inv.Message = model.Message{
+					Content: "user request",
+					Role:    model.RoleUser,
+				}
+				return p, evt, inv, "", false, sinceTime
+			},
+			expected: true,
+		},
+		{
+			name: "intra-run summary: assistant event from different invocation excluded",
+			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
+				p := &ContentRequestProcessor{}
+				evt := event.Event{
+					RequestID:    "req1",
+					InvocationID: "inv-other",
+					Version:      event.CurrentVersion,
+					Response: &model.Response{
+						Choices: []model.Choice{
+							{Message: model.Message{
+								Content: "other invocation reply",
+								Role:    model.RoleAssistant,
+							}},
+						},
+					},
+					Timestamp: sinceTime.Add(-time.Hour),
+				}
+				inv := agent.NewInvocation(
+					agent.WithInvocationID("inv1"),
+					agent.WithInvocationRunOptions(agent.RunOptions{
+						RequestID: "req1",
+					}),
+				)
+				inv.Message = model.Message{
+					Content: "user request",
+					Role:    model.RoleUser,
 				}
 				return p, evt, inv, "", false, sinceTime
 			},
@@ -3933,4 +4055,75 @@ func TestContentRequestProcessor_FormatSummary_DefaultFormatter(t *testing.T) {
 		"default formatter should contain header")
 	assert.Contains(t, result, "<summary_of_previous_interactions>",
 		"default formatter should use XML tags")
+}
+
+func TestContentRequestProcessor_AnnotatesUserFileInputs(t *testing.T) {
+	p := NewContentRequestProcessor()
+
+	const (
+		invocationID = "inv"
+		pdfMimeType  = "application/pdf"
+		fileAName    = "a.pdf"
+		fileBName    = "b.pdf"
+	)
+
+	userMsg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name:     fileAName,
+					Data:     []byte("a"),
+					MimeType: pdfMimeType,
+				},
+			},
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name:     fileBName,
+					Data:     []byte("b"),
+					MimeType: pdfMimeType,
+				},
+			},
+		},
+	}
+	ev := event.NewResponseEvent(invocationID, "user", &model.Response{
+		Choices: []model.Choice{{Message: userMsg}},
+	})
+	inv := &agent.Invocation{
+		InvocationID: invocationID,
+		AgentName:    "agent",
+		Session: &session.Session{
+			Events: []event.Event{*ev},
+		},
+	}
+	req := &model.Request{}
+	ch := make(chan *event.Event, 1)
+	p.ProcessRequest(context.Background(), inv, req, ch)
+
+	if !assert.Len(t, req.Messages, 1) {
+		return
+	}
+	msg := req.Messages[0]
+	assert.Equal(t, model.RoleUser, msg.Role)
+
+	if !assert.GreaterOrEqual(t, len(msg.ContentParts), 3) {
+		return
+	}
+	first := msg.ContentParts[0]
+	assert.Equal(t, model.ContentTypeText, first.Type)
+	if assert.NotNil(t, first.Text) {
+		assert.Contains(t, *first.Text, attachedFilesAnnotationPrefix)
+		assert.Contains(t, *first.Text, fileAName)
+		assert.Contains(t, *first.Text, fileBName)
+	}
+
+	fileParts := 0
+	for _, part := range msg.ContentParts {
+		if part.Type == model.ContentTypeFile && part.File != nil {
+			fileParts++
+		}
+	}
+	assert.Equal(t, 2, fileParts)
 }

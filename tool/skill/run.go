@@ -499,6 +499,8 @@ const (
 		" missing bytes and file_id"
 	userFileInputWarnNoDownloader = userFileInputWarnPrefix +
 		" model does not support file download"
+	userFileInputWarnArtifactNoService = userFileInputWarnPrefix +
+		" artifact service is not configured"
 )
 
 func (t *RunTool) stageUserFileInputs(
@@ -751,18 +753,55 @@ func userFileInputBytes(
 	if len(f.Data) > 0 {
 		return f.Data, strings.TrimSpace(f.MimeType), ""
 	}
-	if strings.TrimSpace(f.FileID) == "" {
+	fileID := strings.TrimSpace(f.FileID)
+	if fileID == "" {
 		return nil, "", userFileInputWarnMissingRef
+	}
+	if strings.HasPrefix(fileID, fileref.ArtifactPrefix) {
+		return userFileInputArtifactBytes(ctx, fileID)
 	}
 	dl, ok := mdl.(model.FileDownloader)
 	if !ok || dl == nil {
 		return nil, "", userFileInputWarnNoDownloader
 	}
-	data, mime, err := dl.DownloadFile(ctx, f.FileID)
+	data, mime, err := dl.DownloadFile(ctx, fileID)
 	if err != nil {
 		return nil, "", fmt.Sprintf(
 			"user file input: download %s: %v",
-			f.FileID,
+			fileID,
+			err,
+		)
+	}
+	return data, mime, ""
+}
+
+func userFileInputArtifactBytes(
+	ctx context.Context,
+	fileID string,
+) ([]byte, string, string) {
+	ctxIO := withArtifactContext(ctx)
+	if svc, ok := codeexecutor.ArtifactServiceFromContext(ctxIO); !ok ||
+		svc == nil {
+		return nil, "", userFileInputWarnArtifactNoService
+	}
+	ref := strings.TrimPrefix(fileID, fileref.ArtifactPrefix)
+	name, ver, err := codeexecutor.ParseArtifactRef(ref)
+	if err != nil {
+		return nil, "", fmt.Sprintf(
+			"user file input: parse artifact ref %s: %v",
+			fileID,
+			err,
+		)
+	}
+	data, mime, _, err := codeexecutor.LoadArtifactHelper(
+		ctxIO,
+		name,
+		ver,
+	)
+	if err != nil {
+		return nil, "", fmt.Sprintf(
+			"user file input: load artifact %s: %v",
+			fileID,
 			err,
 		)
 	}

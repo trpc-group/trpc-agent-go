@@ -50,6 +50,12 @@ const (
 	// appenderStateKey is the invocation state key used by internal appender
 	// attachment (see internal/state/appender).
 	appenderStateKey = "__append_event__"
+
+	// SyncSummaryIntraRunStateKey is set on the invocation by the
+	// flow when sync intra-run summary is active.
+	// Runner checks this key to skip redundant async summary
+	// enqueue during the same run.
+	SyncSummaryIntraRunStateKey = "__sync_summary_intra_run__"
 )
 
 // TransferInfo contains information about a pending agent transfer.
@@ -75,6 +81,8 @@ type Invocation struct {
 	EndInvocation bool
 	// Session is the session that is being used for the invocation.
 	Session *session.Session
+	// SessionService is the session service used by this invocation.
+	SessionService session.Service
 	// Model is the model that is being used for the invocation.
 	Model model.Model
 	// Message is the message that is being sent to the agent.
@@ -722,6 +730,7 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 	newInv := &Invocation{
 		InvocationID:    uuid.NewString(),
 		Session:         inv.Session,
+		SessionService:  inv.SessionService,
 		Message:         inv.Message,
 		RunOptions:      inv.RunOptions,
 		MemoryService:   inv.MemoryService,
