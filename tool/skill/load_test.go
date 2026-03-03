@@ -46,7 +46,7 @@ func TestLoadTool_Call_ValidatesAndDelta(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "loaded: calc", res)
 
-	delta := lt.StateDelta(b, nil)
+	delta := lt.StateDelta("call-1", b, nil)
 	require.Equal(t, []byte("1"),
 		delta[skill.StateKeyLoadedPrefix+"calc"])
 	require.Equal(t, []byte("*"),
@@ -55,13 +55,13 @@ func TestLoadTool_Call_ValidatesAndDelta(t *testing.T) {
 	// docs array path
 	args = loadInput{Skill: "calc", Docs: []string{"A.md"}}
 	b, _ = json.Marshal(args)
-	delta = lt.StateDelta(b, nil)
+	delta = lt.StateDelta("call-2", b, nil)
 	require.NotNil(t, delta[skill.StateKeyDocsPrefix+"calc"])
 
 	// only loaded, no docs selection
 	args = loadInput{Skill: "calc"}
 	b, _ = json.Marshal(args)
-	delta = lt.StateDelta(b, nil)
+	delta = lt.StateDelta("call-3", b, nil)
 	require.Equal(t, []byte("1"),
 		delta[skill.StateKeyLoadedPrefix+"calc"])
 	_, ok := delta[skill.StateKeyDocsPrefix+"calc"]
@@ -91,7 +91,7 @@ func TestLoadTool_Declaration(t *testing.T) {
 func TestLoadTool_StateDelta_InvalidArgs(t *testing.T) {
 	lt := NewLoadTool(nil)
 	// invalid json should return nil delta
-	delta := lt.StateDelta([]byte("{"), nil)
+	delta := lt.StateDelta("call-err", []byte("{"), nil)
 	require.Nil(t, delta)
 }
 

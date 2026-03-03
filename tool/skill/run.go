@@ -252,6 +252,17 @@ type artifactRef struct {
 	Version int    `json:"version"`
 }
 
+type artifactStateRef struct {
+	Name    string `json:"name"`
+	Version int    `json:"version"`
+	Ref     string `json:"ref"`
+}
+
+type skillRunArtifactsDelta struct {
+	ToolCallID string             `json:"tool_call_id"`
+	Artifacts  []artifactStateRef `json:"artifacts"`
+}
+
 // Declaration implements tool.Tool.
 func (t *RunTool) Declaration() *tool.Declaration {
 	desc := "Run a command inside a skill workspace. " +
@@ -392,6 +403,58 @@ func (t *RunTool) Call(
 
 var _ tool.Tool = (*RunTool)(nil)
 var _ tool.CallableTool = (*RunTool)(nil)
+
+// StateDelta returns a stable, replayable artifact ref list when skill_run
+// persisted outputs via Artifact service.
+//
+// It is consumed by the flow to attach StateDelta onto tool.response events.
+func (t *RunTool) StateDelta(
+	toolCallID string,
+	_ []byte,
+	resultJSON []byte,
+) map[string][]byte {
+	toolCallID = strings.TrimSpace(toolCallID)
+	if toolCallID == "" {
+		return nil
+	}
+	if len(resultJSON) == 0 {
+		return nil
+	}
+	var out runOutput
+	if err := json.Unmarshal(resultJSON, &out); err != nil {
+		return nil
+	}
+	if len(out.ArtifactFiles) == 0 {
+		return nil
+	}
+	refs := make([]artifactStateRef, 0, len(out.ArtifactFiles))
+	for _, f := range out.ArtifactFiles {
+		name := strings.TrimSpace(f.Name)
+		if name == "" || f.Version < 0 {
+			continue
+		}
+		refs = append(refs, artifactStateRef{
+			Name:    name,
+			Version: f.Version,
+			Ref:     fmt.Sprintf("artifact://%s@%d", name, f.Version),
+		})
+	}
+	if len(refs) == 0 {
+		return nil
+	}
+	b, err := json.Marshal(skillRunArtifactsDelta{
+		ToolCallID: toolCallID,
+		Artifacts:  refs,
+	})
+	if err != nil {
+		return nil
+	}
+	return map[string][]byte{
+		skill.StateKeyArtifacts: b,
+	}
+}
+
+var _ stateDeltaProvider = (*RunTool)(nil)
 
 func (t *RunTool) applyArtifactSaveOverrides(
 	ctx context.Context,
