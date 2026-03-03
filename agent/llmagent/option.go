@@ -204,6 +204,12 @@ type Options struct {
 	// AddSessionSummary controls whether to prepend the current branch summary
 	// as a system message when available (default: false).
 	AddSessionSummary bool
+	// SyncSummaryIntraRun controls whether to refresh session summary
+	// synchronously between LLM loop iterations inside the same run.
+	// When false (default), summary refresh happens asynchronously and
+	// may lag behind the current iteration. This option does not affect
+	// cross-run async summary behavior.
+	SyncSummaryIntraRun bool
 	// MaxHistoryRuns sets the maximum number of history messages when AddSessionSummary is false.
 	// When 0 (default), no limit is applied.
 	MaxHistoryRuns int
@@ -755,6 +761,16 @@ func WithAddContextPrefix(addPrefix bool) Option {
 func WithAddSessionSummary(addSummary bool) Option {
 	return func(opts *Options) {
 		opts.AddSessionSummary = addSummary
+	}
+}
+
+// WithSyncSummaryIntraRun enables synchronous summary refresh between LLM loop
+// iterations in the same run. When enabled, the summary is updated before each
+// LLM call within a run, ensuring the model sees the most recent summary.
+// When disabled (default), summary refresh happens asynchronously.
+func WithSyncSummaryIntraRun(enable bool) Option {
+	return func(opts *Options) {
+		opts.SyncSummaryIntraRun = enable
 	}
 }
 
