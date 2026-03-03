@@ -2153,6 +2153,66 @@ See the following examples for complete FilterKey usage scenarios:
 - [examples/session/hook](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/session/hook) - Hook basics
 - [examples/summary/filterkey](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/summary/filterkey) - Summarizing by FilterKey
 
+### Permission Changes and History Isolation
+
+Many applications enforce authorization in `BeforeToolCallback`: when the model
+calls a tool, you validate the user's permissions and only execute the tool if
+allowed.
+
+This is correct *when a tool is actually called*, but there is a common pitfall:
+
+- In the same session, the user asks a question when they had permission.
+- The tool result (and the assistant answer) is persisted into session history.
+- Later, the user's permission is revoked/changed, and the user asks the same
+  question again.
+- The model may answer **directly from history** and skip calling the tool.
+- Your `BeforeToolCallback` does **not** run, so old privileged information can
+  be reused.
+
+To address this, keep tool-level authorization (defense in depth) and also
+control what history is included in the prompt.
+
+#### Option A: Start a new session (simplest)
+
+When permission changes, switch to a new `sessionID` (or disable history
+injection for that request). This is the least error-prone approach, but it
+trades off some conversation continuity for safety.
+
+#### Option B: Use FilterKey as a "permission view" (recommended)
+
+Treat a permission snapshot/version as a **session view** and encode it into
+the event FilterKey prefix:
+
+```go
+appName := "my-app"
+viewKey := "auth/role_admin" // example: role / permission version
+filterKey := appName + "/" + viewKey
+
+events, err := app.Run(
+    ctx,
+    userID,
+    sessionID,
+    msg,
+    agent.WithEventFilterKey(filterKey),
+)
+_ = events
+_ = err
+```
+
+When permissions change, change `viewKey`. Old-view events won't be included in
+the prompt, so the model can't reuse them.
+
+If you previously wrote coarse FilterKeys (for example just `my-app`), configure
+the agent to use `subtree` branch filtering to avoid inheriting parent keys:
+
+```go
+ag := llmagent.New(
+    "assistant",
+    llmagent.WithMessageBranchFilterMode(llmagent.BranchFilterModeSubtree),
+)
+_ = ag
+```
+
 ### Performance Considerations
 
 - **LLM costs**: Each summary generation calls the LLM. Monitor your trigger conditions to balance cost and context preservation.

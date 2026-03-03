@@ -2794,6 +2794,69 @@ func TestContentRequestProcessor_shouldIncludeEvent(t *testing.T) {
 			expected: true,
 		},
 		{
+			name: "BranchFilterModeSubtree excludes ancestor filter key",
+			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
+				p := &ContentRequestProcessor{
+					BranchFilterMode: BranchFilterModeSubtree,
+				}
+				evt := event.Event{
+					Version:   event.CurrentVersion,
+					FilterKey: "filter",
+					Response: &model.Response{
+						Choices: []model.Choice{
+							{Message: model.Message{Content: "test content"}},
+						},
+					},
+					Timestamp: baseTime,
+				}
+				inv := &agent.Invocation{}
+				return p, evt, inv, "filter/a", true, baseTime
+			},
+			expected: false,
+		},
+		{
+			name: "BranchFilterModeSubtree includes descendants",
+			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
+				p := &ContentRequestProcessor{
+					BranchFilterMode: BranchFilterModeSubtree,
+				}
+				evt := event.Event{
+					Version:   event.CurrentVersion,
+					FilterKey: "filter/a",
+					Response: &model.Response{
+						Choices: []model.Choice{
+							{Message: model.Message{Content: "test content"}},
+						},
+					},
+					Timestamp: baseTime,
+				}
+				inv := &agent.Invocation{}
+				return p, evt, inv, "filter", true, baseTime
+			},
+			expected: true,
+		},
+		{
+			name: "BranchFilterModeSubtree excludes siblings",
+			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
+				p := &ContentRequestProcessor{
+					BranchFilterMode: BranchFilterModeSubtree,
+				}
+				evt := event.Event{
+					Version:   event.CurrentVersion,
+					FilterKey: "filter/b",
+					Response: &model.Response{
+						Choices: []model.Choice{
+							{Message: model.Message{Content: "test content"}},
+						},
+					},
+					Timestamp: baseTime,
+				}
+				inv := &agent.Invocation{}
+				return p, evt, inv, "filter/a", true, baseTime
+			},
+			expected: false,
+		},
+		{
 			name: "all conditions satisfied",
 			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
 				p := &ContentRequestProcessor{
