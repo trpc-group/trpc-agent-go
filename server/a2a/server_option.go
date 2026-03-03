@@ -86,6 +86,7 @@ type options struct {
 	sessionService      session.Service
 	agent               agent.Agent
 	enableStreaming     bool
+	streamingEventType  StreamingEventType
 	agentCard           *a2a.AgentCard
 	processorBuilder    ProcessorBuilder
 	processorHook       ProcessMessageHook
@@ -102,6 +103,23 @@ type options struct {
 
 // Option is a function that configures a Server.
 type Option func(*options)
+
+// StreamingEventType controls how the A2A server emits agent output events in
+// streaming mode.
+//
+// By default, streaming output is emitted as TaskArtifactUpdateEvent.
+// This follows the ADK pattern: artifacts for content, status for state
+// changes.
+type StreamingEventType int
+
+const (
+	// StreamingEventTypeTaskArtifactUpdate emits agent output as
+	// TaskArtifactUpdateEvent (default).
+	StreamingEventTypeTaskArtifactUpdate StreamingEventType = iota
+
+	// StreamingEventTypeMessage emits agent output as Message.
+	StreamingEventTypeMessage
+)
 
 // WithSessionService sets the session service to use.
 func WithSessionService(service session.Service) Option {
@@ -227,6 +245,18 @@ func WithErrorHandler(handler ErrorHandler) Option {
 func WithADKCompatibility(enabled bool) Option {
 	return func(opts *options) {
 		opts.adkCompatibility = enabled
+	}
+}
+
+// WithStreamingEventType configures which A2A protocol type is used to emit
+// agent output in streaming mode.
+//
+// This option only affects streaming output events converted from agent
+// events (assistant text/tool calls/code execution). Task status updates
+// (submitted/completed) are still emitted as TaskStatusUpdateEvent.
+func WithStreamingEventType(eventType StreamingEventType) Option {
+	return func(opts *options) {
+		opts.streamingEventType = eventType
 	}
 }
 

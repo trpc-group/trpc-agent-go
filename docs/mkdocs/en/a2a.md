@@ -73,13 +73,40 @@ func main() {
 	// 2. Convert to A2A service with one click
 	server, _ := a2aserver.New(
 		a2aserver.WithHost("localhost:8080"),
-		a2aserver.WithAgent(agent), // Pass in any Agent
+		a2aserver.WithAgent(agent, true), // Enable streaming
 	)
 
 	// 3. Start the service to accept A2A requests
 	server.Start(":8080")
 }
 ```
+
+#### Streaming output event type (Message vs Artifact)
+
+When streaming is enabled, A2A allows the server to emit incremental output in
+different ways:
+
+- **TaskArtifactUpdateEvent (default)**: ADK-style streaming. Chunks are sent
+  as task artifact updates (`artifact-update`).
+- **Message**: Lightweight streaming. Chunks are sent as `message`, so clients
+  can render `Message.parts` directly without treating output as a persisted
+  artifact.
+
+To stream agent output as `message` instead of `artifact-update`, configure the
+server with:
+
+```go
+server, _ := a2aserver.New(
+	a2aserver.WithHost("localhost:8080"),
+	a2aserver.WithAgent(agent, true),
+	a2aserver.WithStreamingEventType(
+		a2aserver.StreamingEventTypeMessage,
+	),
+)
+```
+
+Task state updates (`submitted`, `completed`) are still emitted as
+`TaskStatusUpdateEvent`.
 
 #### Direct A2A Protocol Client Call
 
