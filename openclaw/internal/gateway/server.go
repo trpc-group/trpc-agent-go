@@ -165,6 +165,20 @@ func New(r runner.Runner, opts ...Option) (*Server, error) {
 		managed = mr
 	}
 
+	policy := partURLPolicy{
+		allowPrivate:    options.allowPrivatePartURLs,
+		allowedPatterns: options.allowedPartPatterns,
+	}
+	fetcher := options.partFetcher
+	if fetcher == nil {
+		fetcher = newURLPartFetcher(policy)
+	} else {
+		fetcher = validatingFetcher{
+			next:   fetcher,
+			policy: policy,
+		}
+	}
+
 	s := &Server{
 		basePath:        options.basePath,
 		messagesPath:    messagesPath,
@@ -173,7 +187,7 @@ func New(r runner.Runner, opts ...Option) (*Server, error) {
 		healthPath:      options.healthPath,
 		maxBodyBytes:    options.maxBodyBytes,
 		maxPartBytes:    options.maxPartBytes,
-		partFetcher:     options.partFetcher,
+		partFetcher:     fetcher,
 		runner:          r,
 		managed:         managed,
 		sessionIDFunc:   sessionIDFunc,

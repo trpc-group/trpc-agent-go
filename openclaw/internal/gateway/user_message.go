@@ -16,7 +16,9 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"path"
 	"strings"
@@ -54,17 +56,192 @@ type fetched struct {
 	Filename    string
 }
 
+type partURLPolicy struct {
+	allowPrivate    bool
+	allowedPatterns []string
+	resolver        hostResolver
+}
+
+type hostResolver interface {
+	LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error)
+}
+
+func (p partURLPolicy) Validate(
+	ctx context.Context,
+	u *url.URL,
+) error {
+	if u == nil {
+		return errors.New("nil url")
+	}
+
+	scheme := strings.ToLower(strings.TrimSpace(u.Scheme))
+	if scheme != "http" && scheme != "https" {
+		return errors.New("unsupported url scheme")
+	}
+	host := strings.TrimSpace(u.Hostname())
+	if host == "" {
+		return errors.New("missing url host")
+	}
+
+	if len(p.allowedPatterns) > 0 &&
+		!matchesAnyPattern(u, p.allowedPatterns) {
+		return errors.New("url does not match any allowed pattern")
+	}
+	if p.allowPrivate {
+		return nil
+	}
+	return validatePublicHost(ctx, host, p.resolver)
+}
+
+func matchesAnyPattern(u *url.URL, patterns []string) bool {
+	for _, pattern := range patterns {
+		pattern = strings.TrimSpace(pattern)
+		if pattern == "" {
+			continue
+		}
+		if matchPattern(u, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchPattern(u *url.URL, pattern string) bool {
+	var host, prefix string
+	if idx := strings.Index(pattern, "/"); idx != -1 {
+		host = pattern[:idx]
+		prefix = pattern[idx:]
+	} else {
+		host = pattern
+	}
+
+	if !matchHost(u.Hostname(), host) {
+		return false
+	}
+	if prefix == "" {
+		return true
+	}
+	uPath := u.Path
+	if uPath == "" {
+		uPath = "/"
+	}
+	if !strings.HasPrefix(uPath, "/") {
+		uPath = "/" + uPath
+	}
+	if !strings.HasPrefix(uPath, prefix) {
+		return false
+	}
+	if len(uPath) == len(prefix) {
+		return true
+	}
+	if strings.HasSuffix(prefix, "/") {
+		return true
+	}
+	return uPath[len(prefix)] == '/'
+}
+
+func matchHost(hostname, target string) bool {
+	hostname = strings.ToLower(strings.TrimSpace(hostname))
+	target = strings.ToLower(strings.TrimSpace(target))
+	if hostname == "" || target == "" {
+		return false
+	}
+	if hostname == target {
+		return true
+	}
+	return strings.HasSuffix(hostname, "."+target)
+}
+
+func validatePublicHost(
+	ctx context.Context,
+	host string,
+	resolver hostResolver,
+) error {
+	if strings.EqualFold(host, "localhost") {
+		return errors.New("url host resolves to private address")
+	}
+	ip, err := netip.ParseAddr(host)
+	if err == nil {
+		if isPrivateOrLocalIP(ip) {
+			return fmt.Errorf(
+				"url host resolves to private address: %s",
+				host,
+			)
+		}
+		return nil
+	}
+
+	if resolver == nil {
+		resolver = net.DefaultResolver
+	}
+	addrs, err := resolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return fmt.Errorf("resolve host: %w", err)
+	}
+	if len(addrs) == 0 {
+		return errors.New("resolve host: no addresses")
+	}
+	for _, addr := range addrs {
+		parsed, ok := netip.AddrFromSlice(addr.IP)
+		if !ok {
+			continue
+		}
+		if isPrivateOrLocalIP(parsed) {
+			return fmt.Errorf(
+				"url host resolves to private address: %s",
+				host,
+			)
+		}
+	}
+	return nil
+}
+
+func isPrivateOrLocalIP(addr netip.Addr) bool {
+	return addr.IsLoopback() ||
+		addr.IsPrivate() ||
+		addr.IsLinkLocalUnicast() ||
+		addr.IsLinkLocalMulticast() ||
+		addr.IsInterfaceLocalMulticast() ||
+		addr.IsMulticast() ||
+		addr.IsUnspecified()
+}
+
+type validatingFetcher struct {
+	next   partFetcher
+	policy partURLPolicy
+}
+
+func (f validatingFetcher) Fetch(
+	ctx context.Context,
+	rawURL string,
+	maxBytes int64,
+) (fetched, error) {
+	if f.next == nil {
+		return fetched{}, errors.New("missing fetcher")
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return fetched{}, fmt.Errorf("parse url: %w", err)
+	}
+	if err := f.policy.Validate(ctx, parsed); err != nil {
+		return fetched{}, err
+	}
+	return f.next.Fetch(ctx, rawURL, maxBytes)
+}
+
 type urlPartFetcher struct {
 	client       *http.Client
 	maxRedirects int
+	policy       partURLPolicy
 }
 
-func newURLPartFetcher() *urlPartFetcher {
+func newURLPartFetcher(policy partURLPolicy) *urlPartFetcher {
 	return &urlPartFetcher{
 		client: &http.Client{
 			Timeout: defaultContentPartTimeout,
 		},
 		maxRedirects: defaultMaxRedirects,
+		policy:       policy,
 	}
 }
 
@@ -77,11 +254,8 @@ func (f *urlPartFetcher) Fetch(
 	if err != nil {
 		return fetched{}, fmt.Errorf("parse url: %w", err)
 	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return fetched{}, errors.New("unsupported url scheme")
-	}
-	if strings.TrimSpace(parsed.Host) == "" {
-		return fetched{}, errors.New("missing url host")
+	if err := f.policy.Validate(ctx, parsed); err != nil {
+		return fetched{}, err
 	}
 
 	req, err := http.NewRequestWithContext(
@@ -102,13 +276,13 @@ func (f *urlPartFetcher) Fetch(
 
 	copied := *c
 	copied.CheckRedirect = func(
-		_ *http.Request,
+		req *http.Request,
 		via []*http.Request,
 	) error {
 		if len(via) > f.maxRedirects {
 			return errors.New("too many redirects")
 		}
-		return nil
+		return f.policy.Validate(req.Context(), req.URL)
 	}
 
 	resp, err := copied.Do(req)
@@ -571,7 +745,7 @@ func (s *Server) fetchContentPart(
 ) (fetched, error) {
 	fetcher := s.partFetcher
 	if fetcher == nil {
-		fetcher = newURLPartFetcher()
+		fetcher = newURLPartFetcher(partURLPolicy{})
 	}
 	maxBytes := s.maxPartBytes
 	if maxBytes <= 0 {

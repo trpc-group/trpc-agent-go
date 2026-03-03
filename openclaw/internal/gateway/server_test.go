@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -346,7 +347,10 @@ func TestServer_Messages_ContentParts_TextOnly(t *testing.T) {
 	t.Parallel()
 
 	r := &recordingRunner{}
-	srv, err := New(r)
+	srv, err := New(
+		r,
+		WithAllowPrivateContentPartURLs(true),
+	)
 	require.NoError(t, err)
 
 	reqBody, err := json.Marshal(gwproto.MessageRequest{
@@ -457,7 +461,10 @@ func TestServer_Messages_ContentParts_URLFetch(t *testing.T) {
 	t.Cleanup(ts.Close)
 
 	r := &recordingRunner{}
-	srv, err := New(r)
+	srv, err := New(
+		r,
+		WithAllowPrivateContentPartURLs(true),
+	)
 	require.NoError(t, err)
 
 	reqBody, err := json.Marshal(gwproto.MessageRequest{
@@ -507,6 +514,188 @@ func TestServer_Messages_ContentParts_URLFetch(t *testing.T) {
 		msg.ContentParts[1].File.MimeType,
 	)
 	require.Equal(t, []byte("%PDF-1.4"), msg.ContentParts[1].File.Data)
+}
+
+func TestServer_Messages_ContentParts_URLFetch_BlocksPrivateByDefault(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	const testPath = "/a.wav"
+
+	var hits atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		req *http.Request,
+	) {
+		hits.Add(1)
+		switch req.URL.Path {
+		case testPath:
+			w.Header().Set(headerContentType, "audio/wav")
+			_, _ = w.Write([]byte("wavdata"))
+		default:
+			http.NotFound(w, req)
+		}
+	}))
+	t.Cleanup(ts.Close)
+
+	r := &recordingRunner{}
+	srv, err := New(r)
+	require.NoError(t, err)
+
+	reqBody, err := json.Marshal(gwproto.MessageRequest{
+		From: "u1",
+		ContentParts: []gwproto.ContentPart{
+			{
+				Type: gwproto.PartTypeAudio,
+				Audio: &gwproto.AudioPart{
+					URL: ts.URL + testPath,
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodPost,
+		srv.MessagesPath(),
+		bytes.NewReader(reqBody),
+	)
+	srv.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	require.Equal(t, 0, r.Calls())
+	require.Equal(t, int32(0), hits.Load())
+
+	var rsp gwproto.MessageResponse
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &rsp))
+	require.NotNil(t, rsp.Error)
+	require.Equal(t, errTypeInvalidRequest, rsp.Error.Type)
+	require.Contains(t, rsp.Error.Message, "private address")
+}
+
+func TestServer_Messages_ContentParts_URLFetch_AllowedDomains_Blocks(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	const testPath = "/docs/a.wav"
+
+	ts := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		req *http.Request,
+	) {
+		switch req.URL.Path {
+		case testPath:
+			w.Header().Set(headerContentType, "audio/wav")
+			_, _ = w.Write([]byte("wavdata"))
+		default:
+			http.NotFound(w, req)
+		}
+	}))
+	t.Cleanup(ts.Close)
+
+	r := &recordingRunner{}
+	srv, err := New(
+		r,
+		WithAllowPrivateContentPartURLs(true),
+		WithAllowedContentPartDomains("example.com"),
+	)
+	require.NoError(t, err)
+
+	reqBody, err := json.Marshal(gwproto.MessageRequest{
+		From: "u1",
+		ContentParts: []gwproto.ContentPart{
+			{
+				Type: gwproto.PartTypeAudio,
+				Audio: &gwproto.AudioPart{
+					URL: ts.URL + testPath,
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodPost,
+		srv.MessagesPath(),
+		bytes.NewReader(reqBody),
+	)
+	srv.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	require.Equal(t, 0, r.Calls())
+
+	var rsp gwproto.MessageResponse
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &rsp))
+	require.NotNil(t, rsp.Error)
+	require.Equal(t, errTypeInvalidRequest, rsp.Error.Type)
+	require.Contains(t, rsp.Error.Message, "allowed pattern")
+}
+
+func TestServer_Messages_ContentParts_URLFetch_AllowedDomains_Allows(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	const (
+		allowPattern = "127.0.0.1/docs"
+		testPath     = "/docs/a.wav"
+	)
+
+	ts := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		req *http.Request,
+	) {
+		switch req.URL.Path {
+		case testPath:
+			w.Header().Set(headerContentType, "audio/wav")
+			_, _ = w.Write([]byte("wavdata"))
+		default:
+			http.NotFound(w, req)
+		}
+	}))
+	t.Cleanup(ts.Close)
+
+	r := &recordingRunner{}
+	srv, err := New(
+		r,
+		WithAllowPrivateContentPartURLs(true),
+		WithAllowedContentPartDomains(allowPattern),
+	)
+	require.NoError(t, err)
+
+	reqBody, err := json.Marshal(gwproto.MessageRequest{
+		From: "u1",
+		ContentParts: []gwproto.ContentPart{
+			{
+				Type: gwproto.PartTypeAudio,
+				Audio: &gwproto.AudioPart{
+					URL: ts.URL + testPath,
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodPost,
+		srv.MessagesPath(),
+		bytes.NewReader(reqBody),
+	)
+	srv.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(t, 1, r.Calls())
+
+	msg := r.Last()
+	require.Len(t, msg.ContentParts, 1)
+	require.Equal(t, model.ContentTypeAudio, msg.ContentParts[0].Type)
+	require.NotNil(t, msg.ContentParts[0].Audio)
+	require.Equal(t, []byte("wavdata"), msg.ContentParts[0].Audio.Data)
 }
 
 func TestServer_New_RequireMentionWithoutPatterns(t *testing.T) {
@@ -1224,6 +1413,8 @@ func TestNewOptions_DefaultsAndNormalization(t *testing.T) {
 		WithMaxBodyBytes(0),
 		WithMaxContentPartBytes(maxPartBytes),
 		WithContentPartFetcher(fetcher),
+		WithAllowPrivateContentPartURLs(true),
+		WithAllowedContentPartDomains(" example.com ", "", " "),
 		WithSessionIDFunc(sessionFn),
 		WithAllowUsers(" a ", "", "b"),
 		WithRequireMentionInThreads(true),
@@ -1240,6 +1431,8 @@ func TestNewOptions_DefaultsAndNormalization(t *testing.T) {
 	typedFetcher, ok := o.partFetcher.(*staticFetcher)
 	require.True(t, ok)
 	require.Same(t, fetcher, typedFetcher)
+	require.True(t, o.allowPrivatePartURLs)
+	require.Equal(t, []string{"example.com"}, o.allowedPartPatterns)
 	require.NotNil(t, o.sessionIDFunc)
 
 	require.NotNil(t, o.allowUsers)

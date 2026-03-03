@@ -25,7 +25,9 @@ type options struct {
 	maxBodyBytes int64
 	maxPartBytes int64
 
-	partFetcher partFetcher
+	partFetcher          partFetcher
+	allowPrivatePartURLs bool
+	allowedPartPatterns  []string
 
 	sessionIDFunc SessionIDFunc
 
@@ -131,6 +133,40 @@ func WithMaxContentPartBytes(max int64) Option {
 func WithContentPartFetcher(fetcher partFetcher) Option {
 	return func(o *options) {
 		o.partFetcher = fetcher
+	}
+}
+
+// WithAllowPrivateContentPartURLs allows content parts to fetch URLs that
+// resolve to loopback or private network addresses.
+func WithAllowPrivateContentPartURLs(enabled bool) Option {
+	return func(o *options) {
+		o.allowPrivatePartURLs = enabled
+	}
+}
+
+// WithAllowedContentPartDomains restricts content-part URL fetches to the
+// provided domains or URL patterns.
+//
+// Each entry is either:
+//   - "example.com" (allows all paths), or
+//   - "example.com/path" (allows /path/...).
+//
+// The host match is case-insensitive and allows subdomains.
+func WithAllowedContentPartDomains(domains ...string) Option {
+	return func(o *options) {
+		if len(domains) == 0 {
+			o.allowedPartPatterns = nil
+			return
+		}
+		out := make([]string, 0, len(domains))
+		for _, domain := range domains {
+			domain = strings.TrimSpace(domain)
+			if domain == "" {
+				continue
+			}
+			out = append(out, domain)
+		}
+		o.allowedPartPatterns = out
 	}
 }
 

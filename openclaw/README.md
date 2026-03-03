@@ -206,6 +206,13 @@ Send a multimodal message via HTTP:
 - Use `text` for the main text message.
 - Use `content_parts` for additional inputs (images, audio, files, links, etc.).
 
+Security note: for URL-based parts (`audio.url`, `file.url`, `video.url`),
+the gateway downloads the content. By default, it blocks URLs that resolve
+to loopback/private addresses to reduce SSRF risk. If you embed the gateway
+server in your own program, you can adjust this via gateway options (for
+example, `gateway.WithAllowPrivateContentPartURLs(true)` or
+`gateway.WithAllowedContentPartDomains(...)`).
+
 Example (text + image URL):
 
 ```bash

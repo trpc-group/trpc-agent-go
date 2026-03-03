@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -68,6 +69,18 @@ func (rt roundTripperFunc) RoundTrip(
 	req *http.Request,
 ) (*http.Response, error) {
 	return rt(req)
+}
+
+type staticResolver struct {
+	addrs []net.IPAddr
+	err   error
+}
+
+func (r staticResolver) LookupIPAddr(
+	_ context.Context,
+	_ string,
+) ([]net.IPAddr, error) {
+	return r.addrs, r.err
 }
 
 func TestNormalizeContentPart_FileID(t *testing.T) {
@@ -304,6 +317,57 @@ func TestNormalizeContentType(t *testing.T) {
 	)
 }
 
+func TestValidatePublicHost_ResolverPublic(t *testing.T) {
+	t.Parallel()
+
+	const host = "example.com"
+	r := staticResolver{
+		addrs: []net.IPAddr{
+			{IP: net.ParseIP("192.0.2.1")},
+		},
+	}
+	require.NoError(
+		t,
+		validatePublicHost(context.Background(), host, r),
+	)
+}
+
+func TestValidatePublicHost_ResolverPrivate(t *testing.T) {
+	t.Parallel()
+
+	const host = "example.com"
+	r := staticResolver{
+		addrs: []net.IPAddr{
+			{IP: net.ParseIP("127.0.0.1")},
+		},
+	}
+	err := validatePublicHost(context.Background(), host, r)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "private address")
+}
+
+func TestValidatePublicHost_ResolverError(t *testing.T) {
+	t.Parallel()
+
+	const host = "example.com"
+	r := staticResolver{
+		err: errors.New("dns failure"),
+	}
+	err := validatePublicHost(context.Background(), host, r)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "resolve host")
+}
+
+func TestValidatePublicHost_ResolverNoAddresses(t *testing.T) {
+	t.Parallel()
+
+	const host = "example.com"
+	r := staticResolver{}
+	err := validatePublicHost(context.Background(), host, r)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "no addresses")
+}
+
 func TestFilenameFromHeaders_NilArgs(t *testing.T) {
 	t.Parallel()
 
@@ -419,7 +483,7 @@ func TestNormalizeContentPart_Link_MissingURL(t *testing.T) {
 func TestURLPartFetcher_Fetch_InvalidURL(t *testing.T) {
 	t.Parallel()
 
-	f := newURLPartFetcher()
+	f := newURLPartFetcher(partURLPolicy{allowPrivate: true})
 	_, err := f.Fetch(context.Background(), "http://\x00", 1)
 	require.Error(t, err)
 }
@@ -427,7 +491,7 @@ func TestURLPartFetcher_Fetch_InvalidURL(t *testing.T) {
 func TestURLPartFetcher_Fetch_UnsupportedScheme(t *testing.T) {
 	t.Parallel()
 
-	f := newURLPartFetcher()
+	f := newURLPartFetcher(partURLPolicy{allowPrivate: true})
 	_, err := f.Fetch(context.Background(), "file://example.com/a", 1)
 	require.Error(t, err)
 }
@@ -435,7 +499,7 @@ func TestURLPartFetcher_Fetch_UnsupportedScheme(t *testing.T) {
 func TestURLPartFetcher_Fetch_MissingHost(t *testing.T) {
 	t.Parallel()
 
-	f := newURLPartFetcher()
+	f := newURLPartFetcher(partURLPolicy{allowPrivate: true})
 	_, err := f.Fetch(context.Background(), "http:///a", 1)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "missing url host")
@@ -451,7 +515,7 @@ func TestURLPartFetcher_Fetch_UnexpectedStatus(t *testing.T) {
 	))
 	t.Cleanup(srv.Close)
 
-	f := newURLPartFetcher()
+	f := newURLPartFetcher(partURLPolicy{allowPrivate: true})
 	_, err := f.Fetch(context.Background(), srv.URL, 1)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unexpected status")
@@ -468,7 +532,7 @@ func TestURLPartFetcher_Fetch_TooManyRedirects(t *testing.T) {
 	))
 	t.Cleanup(srv.Close)
 
-	f := newURLPartFetcher()
+	f := newURLPartFetcher(partURLPolicy{allowPrivate: true})
 	f.maxRedirects = 0
 	_, err := f.Fetch(context.Background(), srv.URL, 1)
 	require.Error(t, err)
@@ -489,6 +553,9 @@ func TestURLPartFetcher_Fetch_UsesDefaultClient(t *testing.T) {
 	f := &urlPartFetcher{
 		client:       nil,
 		maxRedirects: defaultMaxRedirects,
+		policy: partURLPolicy{
+			allowPrivate: true,
+		},
 	}
 	resp, err := f.Fetch(context.Background(), srv.URL, 1<<10)
 	require.NoError(t, err)
@@ -507,8 +574,11 @@ func TestURLPartFetcher_Fetch_TransportError(t *testing.T) {
 			),
 		},
 		maxRedirects: defaultMaxRedirects,
+		policy: partURLPolicy{
+			allowPrivate: true,
+		},
 	}
-	_, err := f.Fetch(context.Background(), "https://example.com/a", 1)
+	_, err := f.Fetch(context.Background(), "https://192.0.2.1/a", 1)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "fetch:")
 }
@@ -523,7 +593,7 @@ func TestURLPartFetcher_Fetch_InvalidMaxBytes(t *testing.T) {
 	))
 	t.Cleanup(srv.Close)
 
-	f := newURLPartFetcher()
+	f := newURLPartFetcher(partURLPolicy{allowPrivate: true})
 	_, err := f.Fetch(context.Background(), srv.URL, 0)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid max bytes")
@@ -539,10 +609,47 @@ func TestURLPartFetcher_Fetch_ContentTooLarge(t *testing.T) {
 	))
 	t.Cleanup(srv.Close)
 
-	f := newURLPartFetcher()
+	f := newURLPartFetcher(partURLPolicy{allowPrivate: true})
 	_, err := f.Fetch(context.Background(), srv.URL, 2)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "too large")
+}
+
+func TestValidatingFetcher_Fetch_MissingFetcher(t *testing.T) {
+	t.Parallel()
+
+	f := validatingFetcher{
+		next: nil,
+		policy: partURLPolicy{
+			allowPrivate: true,
+		},
+	}
+	_, err := f.Fetch(context.Background(), "https://192.0.2.1/a", 1)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "missing fetcher")
+}
+
+func TestValidatingFetcher_Fetch_Delegates(t *testing.T) {
+	t.Parallel()
+
+	const (
+		rawURL   = "https://192.0.2.1/a"
+		maxBytes = 123
+	)
+	next := &recordingFetcher{
+		resp: fetched{
+			Data: []byte("data"),
+		},
+	}
+	f := validatingFetcher{
+		next:   next,
+		policy: partURLPolicy{},
+	}
+	out, err := f.Fetch(context.Background(), rawURL, maxBytes)
+	require.NoError(t, err)
+	require.Equal(t, []byte("data"), out.Data)
+	require.Equal(t, rawURL, next.gotURL)
+	require.Equal(t, int64(maxBytes), next.gotMax)
 }
 
 func TestFetchContentPart_DefaultMaxBytes(t *testing.T) {
