@@ -2019,6 +2019,36 @@ func TestGraphNodeCustomEvents_EmptyStateDelta(t *testing.T) {
 	assert.Empty(t, events)
 }
 
+func TestTranslate_ToolArtifactsFromStateDelta_NoResponse(t *testing.T) {
+	tr := newTranslatorImplForTest(t)
+	if tr == nil {
+		return
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"tool_call_id": "call-1",
+		"artifacts": []map[string]any{
+			{"name": "out/a.txt", "version": 3, "ref": "artifact://out/a.txt@3"},
+		},
+	})
+	assert.NoError(t, err)
+
+	evt := &agentevent.Event{
+		ID: "evt-1",
+		StateDelta: map[string][]byte{
+			skillRunArtifactsStateKey: payload,
+		},
+	}
+
+	events, err := tr.Translate(context.Background(), evt)
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+
+	ce, ok := events[0].(*aguievents.CustomEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "tool.artifacts", ce.Name)
+}
+
 func TestStreamToolResultEvent(t *testing.T) {
 	tr := newTranslatorImplForTest(t)
 	if tr == nil {

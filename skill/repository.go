@@ -335,8 +335,12 @@ func isDocFile(name string) bool {
 	return strings.HasSuffix(n, ".md") || strings.HasSuffix(n, ".txt")
 }
 
-// State key prefixes used for skills.
+// State keys used for skills.
 const (
 	StateKeyLoadedPrefix = "temp:skill:loaded:"
 	StateKeyDocsPrefix   = "temp:skill:docs:"
+	// StateKeyArtifacts stores per-tool-call artifact refs for replay. The value
+	// is a JSON object like:
+	// {"tool_call_id":"...","artifacts":[{"name":"...","version":3,"ref":"artifact://...@3"}]}
+	StateKeyArtifacts = "temp:skill:artifacts"
 )

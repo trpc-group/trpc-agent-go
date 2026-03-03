@@ -5,6 +5,7 @@ This directory shows AG-UI servers that can talk to the AG-UI client examples.
 ## Available Servers
 
 - [`default/`](default/) – Minimal AG-UI server that wires the `tRPC-Agent-Go` runner.
+- [`skill_artifacts/`](skill_artifacts/) – Demonstrates `skill_run` output artifacts surfaced as `CustomEvent("tool.artifacts")`.
 - [`event_emitter/`](event_emitter/) – Demonstrates Node EventEmitter for emitting custom events, progress updates, and streaming text from NodeFunc.
 - [`finishresult/`](finishresult/) – Demonstrates populating `RUN_FINISHED.result` by wrapping the default translator.
 - [`externaltool/`](externaltool/) – Demonstrates a two-call external tool workflow (`role=user` then `role=tool`) backed by `GraphAgent` interrupts.

@@ -73,13 +73,36 @@ func main() {
 	// 2. 一键转换为 A2A 服务
 	server, _ := a2aserver.New(
 		a2aserver.WithHost("localhost:8080"),
-		a2aserver.WithAgent(agent), // 传入任意 Agent
+		a2aserver.WithAgent(agent, true), // 开启 streaming
 	)
 
 	// 3. 启动服务，即可接受 A2A 请求
 	server.Start(":8080")
 }
 ```
+
+#### 流式输出事件类型（Message vs Artifact）
+
+当开启 streaming 时，A2A 允许服务端用不同的方式下发增量输出：
+
+- **TaskArtifactUpdateEvent（默认）**：ADK 风格。把增量内容作为任务的
+  artifact 更新事件（`artifact-update`）下发。
+- **Message**：轻量模式。把增量内容作为 `message` 下发，客户端可以直接渲染
+  `Message.parts`，无需把输出当作“可持久化 artifact”来处理。
+
+如果你的业务更希望把流式内容直接当作 `message` 来消费，可以这样配置：
+
+```go
+server, _ := a2aserver.New(
+	a2aserver.WithHost("localhost:8080"),
+	a2aserver.WithAgent(agent, true),
+	a2aserver.WithStreamingEventType(
+		a2aserver.StreamingEventTypeMessage,
+	),
+)
+```
+
+任务状态更新（`submitted`、`completed`）仍然会以 `TaskStatusUpdateEvent` 的形式下发。
 
 #### 直接使用 A2A 协议客户端调用
 

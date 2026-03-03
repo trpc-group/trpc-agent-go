@@ -315,11 +315,11 @@ the same 10 samples (1,986 QA), and LLM-as-Judge evaluation.
 
 | Framework | F1 | BLEU | LLM Score | Tokens/QA | Latency | Cost ($) | Total Time |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| AutoGen | **0.442** | **0.376** | 0.932 | 1,702 | 4,408ms | 0.51 | 2h23m |
-| Agno | 0.382 | 0.323 | 0.934 | 43,944 | 19,728ms | 13.31 | 10h53m |
+| AutoGen | **0.442** | **0.376** | 0.932 | 1,702 | 4,315ms | 0.51 | 2h22m |
+| Agno | 0.383 | 0.323 | 0.935 | 10,127 | 21,711ms | 3.03 | 11h58m |
 | trpc-agent-go | 0.363 | 0.339 | 0.373† | 1,988 | 5,235ms | 0.62 | 2h53m |
-| ADK | 0.301 | 0.248 | 0.936 | 65,076 | 10,487ms | 19.42 | 4h42m |
-| CrewAI | 0.267 | 0.229 | 0.920 | 33,306‡ | 8,703ms | 10.00‡ | 4h48m |
+| ADK | 0.301 | 0.248 | 0.936 | 65,076 | 8,531ms | 19.42 | 4h42m |
+| CrewAI | 0.247 | 0.215 | 0.918 | 49,336‡ | 9,311ms | 14.71‡ | 5h08m |
 
 > **† LLM Score aggregation difference.** trpc-agent-go uses an
 > all-sample denominator (accuracy-style: `sum / total_qa`), while
@@ -331,9 +331,9 @@ the same 10 samples (1,986 QA), and LLM-as-Judge evaluation.
 > | Framework | Reported | Normalized (positive-only) |
 > | --- | ---: | ---: |
 > | ADK | 0.936 | 0.936 |
-> | Agno | 0.934 | 0.934 |
+> | Agno | 0.935 | 0.935 |
 > | AutoGen | 0.932 | 0.932 |
-> | CrewAI | 0.920 | 0.920 |
+> | CrewAI | 0.918 | 0.918 |
 > | **trpc-agent-go** | **0.373** | **0.967** |
 >
 > The reported 0.373 reflects that 61.4% of QA pairs received no
@@ -342,38 +342,35 @@ the same 10 samples (1,986 QA), and LLM-as-Judge evaluation.
 > of 0.967 — the **highest** among all frameworks.
 
 > Cost estimated using GPT-4o-mini pricing (prompt $0.15/1M,
-> completion $0.60/1M). Token counts are QA-inference only; Agno's
-> memory ingestion (~87M additional tokens) and judge tokens are
-> excluded. CrewAI values marked ‡ are corrected; see note below.
+> completion $0.60/1M). Token counts are QA-inference only; judge
+> tokens are excluded. CrewAI values marked ‡ are from OpenAI API
+> usage logs; see note below.
 
 > **‡ CrewAI token accounting bug.** CrewAI's `TokenProcess`
-> counter is cumulative and never resets across QA iterations. Our
-> harness reuses the same `Agent` object, so each `crew.kickoff()`
-> reports the running total since agent creation rather than the
-> incremental cost. Summing these running totals produces an
-> **O(N^2) over-count**: reported 6.9B prompt tokens / 416K calls,
-> actual ~66M prompt tokens / ~4K calls. The corrected values above
-> (33,306 tokens/QA, $10.00, 2.01 calls/QA) are derived by dividing
-> the reported totals by Σ N_i(N_i+1)/2 and multiplying by N.
-> Log evidence confirms: prompt tokens grow linearly from 610 to
-> 128K within a single sample (conv-42), with exactly one context
-> overflow at 128,034 tokens.
+> counter does not expose per-QA token counts in the results JSON
+> (all values are 0). The token figures above (49,336 tokens/QA,
+> $14.71, 1.04 calls/QA) are derived from OpenAI API usage lines
+> in the evaluation log. The `short_term_memory` accumulates all
+> prior QA dialogue linearly in the prompt — prompt tokens grow
+> from ~737 to ~94K within a single sample (conv-50). In conv-42
+> (260 QA), the prompt exceeds GPT-4o-mini's 128K limit, causing
+> a context overflow fallback (343 calls for 260 QA, 1.32
+> calls/QA).
 >
-> Despite the corrected token count, CrewAI still scores lowest F1:
-> **Memory F1 (0.267) < Baseline F1 (0.488)**. The built-in
-> `short_term_memory` accumulates all prior QA dialogue linearly in
-> the prompt, degrading quality as history grows. Only adversarial
-> F1 improves (0.815 vs baseline 0.431) because the noisy context
-> causes the model to default to "information not available".
+> CrewAI still scores lowest F1: **Memory F1 (0.247) < Baseline
+> F1 (0.490)**. The linear prompt accumulation degrades quality
+> as history grows. Only adversarial F1 improves (0.823 vs
+> baseline 0.431) because the noisy context causes the model to
+> default to "information not available".
 
 ```
 Memory F1 (10 samples, 1986 QA)
 
 AutoGen             |==========================================| 0.442
-Agno                |====================================      | 0.382
+Agno                |====================================      | 0.383
 trpc-agent-go       |=================================         | 0.363
 ADK                 |==========================                | 0.301
-CrewAI              |======================                    | 0.267
+CrewAI              |=====================                     | 0.247
                     +------------------------------------------+
                     0.0      0.1      0.2      0.3      0.4   0.5
 ```
@@ -384,8 +381,8 @@ CrewAI              |======================                    | 0.267
 | --- | ---: | ---: | ---: | ---: |
 | AutoGen | 0.442 | 1,702 | **259.5** | #1 |
 | trpc-agent-go | 0.363 | 1,988 | **182.6** | #2 |
-| Agno | 0.382 | 43,944 | 8.7 | #3 |
-| CrewAI | 0.267 | 33,306 | 8.0 | #4 |
+| Agno | 0.383 | 10,127 | 37.8 | #3 |
+| CrewAI | 0.247 | 49,336 | 5.0 | #4 |
 | ADK | 0.301 | 65,076 | 4.6 | #5 |
 
 ```
@@ -393,19 +390,19 @@ F1 per 1M Tokens (higher = better)
 
 AutoGen             |==========================================| 259.5
 trpc-agent-go       |=============================             | 182.6
-Agno                |=                                         | 8.7
-CrewAI              |=                                         | 8.0
+Agno                |======                                    | 37.8
+CrewAI              |                                          | 5.0
 ADK                 |                                          | 4.6
                     +------------------------------------------+
                     0        50       100      150      200    260
 ```
 
-> trpc-agent-go's F1/1M (182.6) is **21x** Agno's/CrewAI's, and
-> **40x** ADK's. The gap with AutoGen (259.5) stems from retrieval
-> strategy: AutoGen uses single-pass top-30 injection (1.0 call/QA);
-> trpc-agent-go uses a two-call agent pattern (retrieve + answer,
-> 2.0 calls/QA) that is more flexible for production agent
-> workflows.
+> trpc-agent-go's F1/1M (182.6) is **4.8x** Agno's, and
+> **40x** ADK's/CrewAI's. The gap with AutoGen (259.5) stems from
+> retrieval strategy: AutoGen uses single-pass top-30 injection
+> (1.0 call/QA); trpc-agent-go uses a two-call agent pattern
+> (retrieve + answer, 2.0 calls/QA) that is more flexible for
+> production agent workflows.
 
 ### 4.4 Reliability and Robustness
 
@@ -413,9 +410,9 @@ ADK                 |                                          | 4.6
 | --- | ---: | ---: | ---: | ---: |
 | trpc-agent-go | 0 | 0.0% | **0.771** | 76.6% |
 | AutoGen | 0 | 0.0% | 0.395 | **90.0%** |
-| Agno | 0 | 0.0% | 0.623 | 78.1% |
-| ADK | **122** | **6.1%** | 0.306 | 61.6% |
-| CrewAI | 0 | 0.0% | **0.815** | 54.7% |
+| Agno | 0 | 0.0% | 0.639 | 78.2% |
+| ADK | **122** | **6.1%** | 0.306 | 61.5% |
+| CrewAI | 0 | 0.0% | **0.823** | 50.4% |
 
 > ADK's 122 failures come from `ContextWindowExceededError` — loading
 > full conversation history as session events pushes context up to
@@ -429,7 +426,7 @@ ADK                 |                                          | 4.6
 > tokens). However, the fallback silently clears accumulated short-term
 > memory, causing the agent to lose context and answer nearly all
 > subsequent questions with "information not available". In conv-42
-> (260 QA), 152 QA scored F1=0 — the bulk of which are non-adversarial
+> (260 QA), 159 QA scored F1=0 — the bulk of which are non-adversarial
 > questions incorrectly refused after memory was lost.
 >
 > trpc-agent-go's adversarial F1 (0.771) leads AutoGen by **95%**,
@@ -440,11 +437,11 @@ ADK                 |                                          | 4.6
 
 | Category | AutoGen | Agno | trpc-agent-go | ADK | CrewAI |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| single-hop | **0.340** | 0.268 | 0.246 | 0.197 | 0.080 |
-| multi-hop | **0.499** | 0.280 | 0.091 | 0.367 | 0.104 |
-| temporal | **0.170** | 0.109 | 0.063 | 0.088 | 0.026 |
-| open-domain | **0.510** | 0.363 | 0.324 | 0.331 | 0.128 |
-| adversarial | 0.395 | 0.623 | **0.771** | 0.306 | **0.815** |
+| single-hop | **0.340** | 0.286 | 0.246 | 0.197 | 0.054 |
+| multi-hop | **0.499** | 0.297 | 0.091 | 0.367 | 0.098 |
+| temporal | **0.170** | 0.124 | 0.063 | 0.088 | 0.015 |
+| open-domain | **0.510** | 0.341 | 0.324 | 0.331 | 0.090 |
+| adversarial | 0.395 | 0.639 | **0.771** | 0.306 | **0.823** |
 
 ### 4.6 Composite Score
 
@@ -453,28 +450,28 @@ Reliability (15%).
 
 | Framework | Composite | Rank |
 | --- | ---: | ---: |
-| AutoGen | **0.897** | #1 |
-| **trpc-agent-go** | **0.844** | **#2** |
-| Agno | 0.657 | #3 |
-| CrewAI | 0.599 | #4 |
-| ADK | 0.493 | #5 |
+| AutoGen | **0.896** | #1 |
+| **trpc-agent-go** | **0.842** | **#2** |
+| Agno | 0.688 | #3 |
+| CrewAI | 0.578 | #4 |
+| ADK | 0.492 | #5 |
 
 ```
 Composite Score (weighted multi-dimensional)
 
-AutoGen             |==========================================| 0.897
-trpc-agent-go       |=======================================   | 0.844
-Agno                |==============================            | 0.657
-CrewAI              |============================              | 0.599
-ADK                 |=======================                   | 0.493
+AutoGen             |==========================================| 0.896
+trpc-agent-go       |=======================================   | 0.842
+Agno                |================================          | 0.688
+CrewAI              |===========================               | 0.578
+ADK                 |=======================                   | 0.492
                     +------------------------------------------+
                     0.0      0.2      0.4      0.6      0.8   1.0
 ```
 
-> trpc-agent-go (0.844) trails AutoGen (0.897) by only 5.3%. The gap
+> trpc-agent-go (0.842) trails AutoGen (0.896) by only 5.4%. The gap
 > is concentrated in F1 (0.363 vs 0.442); trpc-agent-go leads in
 > adversarial robustness (0.771 vs 0.395) and cost ($0.62 vs $0.51
-> — comparable, while ADK costs $19.42 and Agno $13.31).
+> — comparable, while ADK costs $19.42 and CrewAI $14.71).
 
 ---
 
@@ -550,7 +547,7 @@ it).
    adversarial robustness (0.771).
 
 3. **trpc-agent-go ranks #2 among agent frameworks** in composite
-   score (0.844), trailing AutoGen (0.897) by 5.3%.
+   score (0.842), trailing AutoGen (0.896) by 5.4%.
 
    **Gap analysis vs AutoGen:** The F1 gap (0.363 vs 0.442) is
    primarily driven by multi-hop (0.091 vs 0.499). AutoGen's
@@ -573,11 +570,11 @@ it).
    unavailable in a fixed pre-injection pipeline.
 
    **trpc-agent-go's core strengths:**
-   - **Extreme token efficiency:** F1/1M Tokens of 182.6 is 21x
-     Agno's and 40x ADK's. The entire 1,986-QA evaluation costs
-     $0.62 (ADK $19.42, Agno $13.31).
+   - **Extreme token efficiency:** F1/1M Tokens of 182.6 is 4.8x
+     Agno's and 40x ADK's/CrewAI's. The entire 1,986-QA evaluation
+     costs $0.62 (ADK $19.42, CrewAI $14.71).
    - **Fast evaluation:** Total time 2h53m, second only to AutoGen
-     (2h23m), well ahead of ADK (4h42m) and Agno (10h53m).
+     (2h22m), well ahead of ADK (4h42m) and Agno (11h58m).
    - **100% reliability:** Zero failed QA, while ADK has 122 context
      overflows (6.1% failure rate) and CrewAI silently loses memory
      after overflow.
@@ -590,7 +587,7 @@ it).
 4. **LLM-as-Judge quality is on par with all frameworks.** When
    normalized to the same positive-only aggregation, trpc-agent-go's
    LLM Score reaches **0.967** — the highest among all five
-   frameworks (AutoGen 0.932, ADK 0.936, Agno 0.934, CrewAI 0.920).
+   frameworks (AutoGen 0.932, ADK 0.936, Agno 0.935, CrewAI 0.918).
    The low reported value (0.373) reflects the all-sample denominator
    used by the Go implementation, not answer quality.
 
@@ -680,17 +677,17 @@ it).
 
 | Sample | #QA | AutoGen | Agno | trpc-agent-go | ADK | CrewAI |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| conv-26 | 199 | 0.434 | 0.360 | 0.335 | 0.327 | 0.220 |
-| conv-30 | 105 | 0.453 | 0.452 | 0.325 | 0.372 | 0.334 |
-| conv-41 | 193 | **0.513** | 0.419 | 0.442 | 0.282 | 0.227 |
-| conv-42 | 260 | 0.380 | 0.371 | 0.375 | 0.293 | 0.305 |
-| conv-43 | 242 | **0.445** | 0.364 | 0.387 | 0.301 | 0.301 |
-| conv-44 | 158 | **0.460** | 0.375 | 0.257 | 0.326 | 0.348 |
-| conv-47 | 190 | **0.463** | 0.364 | 0.364 | 0.275 | 0.202 |
-| conv-48 | 239 | **0.461** | 0.375 | 0.326 | 0.326 | 0.235 |
-| conv-49 | 196 | 0.397 | **0.401** | 0.407 | 0.291 | 0.272 |
-| conv-50 | 204 | **0.437** | 0.381 | 0.376 | 0.249 | 0.255 |
-| **Average** | **199** | **0.444** | **0.386** | **0.359** | **0.304** | **0.270** |
+| conv-26 | 199 | 0.434 | 0.356 | 0.335 | 0.327 | 0.229 |
+| conv-30 | 105 | 0.453 | 0.414 | 0.325 | 0.372 | 0.336 |
+| conv-41 | 193 | **0.513** | 0.419 | 0.442 | 0.282 | 0.233 |
+| conv-42 | 260 | 0.380 | 0.368 | 0.375 | 0.293 | 0.287 |
+| conv-43 | 242 | **0.445** | 0.369 | 0.387 | 0.301 | 0.264 |
+| conv-44 | 158 | **0.460** | 0.390 | 0.257 | 0.326 | 0.273 |
+| conv-47 | 190 | **0.463** | 0.401 | 0.364 | 0.275 | 0.199 |
+| conv-48 | 239 | **0.461** | 0.433 | 0.326 | 0.326 | 0.222 |
+| conv-49 | 196 | 0.397 | 0.331 | 0.407 | 0.291 | 0.219 |
+| conv-50 | 204 | **0.437** | 0.360 | 0.376 | 0.249 | 0.240 |
+| **Average** | **199** | **0.444** | **0.384** | **0.359** | **0.304** | **0.250** |
 
 ### D. Token Usage — Full Breakdown
 
@@ -718,29 +715,29 @@ same model GPT-4o-mini):
 ```
 Total Evaluation Time (memory scenario, 1986 QA)
 
-AutoGen         |==========                                | 2h23m
+AutoGen         |==========                                | 2h22m
 trpc-agent-go   |============                              | 2h53m
 ADK             |===================                       | 4h42m
-CrewAI          |====================                      | 4h48m
-Agno            |=============================================| 10h53m
+CrewAI          |=====================                     | 5h08m
+Agno            |=============================================| 11h58m
                 +------------------------------------------+
-                0h       2h       4h       6h       8h    11h
+                0h       2h       4h       6h       8h    12h
 ```
 
 | Framework | Total Time | Avg Latency/QA | vs trpc-agent-go |
 | --- | ---: | ---: | ---: |
-| AutoGen | 2h23m | 4,315ms | 0.83x |
+| AutoGen | 2h22m | 4,315ms | 0.82x |
 | trpc-agent-go | 2h53m | 5,235ms | 1.00x |
 | ADK | 4h42m | 8,531ms | 1.63x |
-| CrewAI | 4h48m | 8,703ms | 1.66x |
-| Agno | 10h53m | 19,728ms | 3.77x |
+| CrewAI | 5h08m | 9,311ms | 1.78x |
+| Agno | 11h58m | 21,711ms | 4.15x |
 
 > AutoGen is fastest due to single-pass retrieval (1.0 LLM call/QA).
 > trpc-agent-go is second despite using 2.0 calls/QA — the Go
 > runtime's lower overhead and parallel-friendly design keep total
 > time competitive. Agno is slowest because its LLM-based fact
-> extraction during memory ingestion adds ~87M extra tokens of
-> processing.
+> extraction during memory ingestion adds significant processing
+> overhead.
 
 **trpc-agent-go configuration breakdown:**
 
