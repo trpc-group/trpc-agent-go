@@ -609,7 +609,7 @@ func parseRunOptions(args []string) (runOptions, error) {
 		&opts.EnableParallelTools,
 		flagEnableParallelTools,
 		false,
-		"Enable parallel tool execution (requires concurrency-safe tools)",
+		"Enable parallel tool calls (not supported by claude-code)",
 	)
 	fs.BoolVar(
 		&opts.RefreshToolSetsOnRun,
