@@ -795,12 +795,13 @@ func TestRunTool_ForceSaveArtifacts_OutputsSpec(t *testing.T) {
 	enc, err := jsonMarshal(args)
 	require.NoError(t, err)
 
+	svc := inmemory.NewService()
 	inv := agent.NewInvocation(
 		agent.WithInvocationSession(&session.Session{
 			AppName: "app", UserID: "u", ID: "s1",
 			State: session.StateMap{},
 		}),
-		agent.WithInvocationArtifactService(inmemory.NewService()),
+		agent.WithInvocationArtifactService(svc),
 	)
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 
@@ -809,7 +810,21 @@ func TestRunTool_ForceSaveArtifacts_OutputsSpec(t *testing.T) {
 
 	out := res.(runOutput)
 	require.Len(t, out.ArtifactFiles, 1)
-	require.Equal(t, "pref/"+outATxt, out.ArtifactFiles[0].Name)
+	savedName := "pref/" + outATxt
+	require.Equal(t, savedName, out.ArtifactFiles[0].Name)
+	got, err := svc.LoadArtifact(
+		ctx,
+		artifact.SessionInfo{
+			AppName:   "app",
+			UserID:    "u",
+			SessionID: "s1",
+		},
+		savedName,
+		nil,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Contains(t, string(got.Data), contentHi)
 }
 
 func TestRunTool_ForceSaveArtifacts_OutputsSpec_NoService(t *testing.T) {
