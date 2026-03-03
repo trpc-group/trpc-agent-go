@@ -126,7 +126,6 @@ func (s *datePrefixMemoryService) AddMemoryWithEpisodic(
 	topics []string,
 	ep *memory.EpisodicFields,
 ) error {
-	ep = s.enrichEpisodicWithSessionDate(ep)
 	return s.inner.AddMemoryWithEpisodic(ctx, userKey, s.withDatePrefix(mem), topics, ep)
 }
 
@@ -137,7 +136,6 @@ func (s *datePrefixMemoryService) UpdateMemoryWithEpisodic(
 	topics []string,
 	ep *memory.EpisodicFields,
 ) error {
-	ep = s.enrichEpisodicWithSessionDate(ep)
 	return s.inner.UpdateMemoryWithEpisodic(ctx, memoryKey, s.withDatePrefix(mem), topics, ep)
 }
 
@@ -147,35 +145,6 @@ func (s *datePrefixMemoryService) SearchMemoriesWithOptions(
 	opts memory.SearchOptions,
 ) ([]*memory.Entry, error) {
 	return s.inner.SearchMemoriesWithOptions(ctx, userKey, opts)
-}
-
-// enrichEpisodicWithSessionDate fills in EventTime from the session date
-// when the LLM provided an episode but failed to set event_time.
-func (s *datePrefixMemoryService) enrichEpisodicWithSessionDate(
-	ep *memory.EpisodicFields,
-) *memory.EpisodicFields {
-	if ep == nil {
-		return ep
-	}
-	if ep.Kind == memory.MemoryKindEpisode && ep.EventTime == nil {
-		s.mu.RLock()
-		dateStr := s.sessionDate
-		s.mu.RUnlock()
-		if dateStr != "" {
-			if t, err := time.Parse("2 January 2006", dateStr); err == nil {
-				ep.EventTime = &t
-			} else if t, err := time.Parse("2006-01-02", dateStr); err == nil {
-				ep.EventTime = &t
-			} else if t, err := time.Parse("January 2, 2006", dateStr); err == nil {
-				ep.EventTime = &t
-			} else if t, err := time.Parse("Jan 2, 2006", dateStr); err == nil {
-				ep.EventTime = &t
-			} else if t, err := time.Parse("2 Jan 2006", dateStr); err == nil {
-				ep.EventTime = &t
-			}
-		}
-	}
-	return ep
 }
 
 func (s *datePrefixMemoryService) withDatePrefix(mem string) string {
@@ -356,29 +325,26 @@ func (e *AgenticEvaluator) processConversation(
 	userKey memory.UserKey,
 	sample *dataset.LoCoMoSample,
 ) error {
+	// The memory tools already carry jsonschema descriptions for
+	// episodic fields (memory_kind, event_time, participants, location),
+	// so the instruction only covers extraction strategy -- not episodic
+	// classification rules, which are the framework's responsibility.
 	writeInstruction := "You are a memory extraction assistant. " +
-		"Extract ALL distinct facts from the conversation " +
-		"and store EACH fact as a separate memory_add call.\n\n" +
+		"Extract ALL distinct facts and events from the conversation " +
+		"and store EACH as a separate memory_add call.\n\n" +
 		"RULES:\n" +
-		"- Store one fact per memory_add call.\n" +
-		"- Include facts about ALL speakers, not just the " +
+		"- Store one piece of information per memory_add call.\n" +
+		"- Include information about ALL speakers, not just the " +
 		"primary one.\n" +
-		"- Classify each memory:\n" +
-		"  - memory_kind=\"fact\" for stable personal attributes, " +
-		"preferences, relationships.\n" +
-		"  - memory_kind=\"episode\" for specific events that " +
-		"happened at a particular time.\n" +
-		"- For episodes, ALWAYS set event_time to an absolute " +
-		"date (ISO 8601: YYYY-MM-DD). Use the SessionDate to " +
-		"resolve relative times (\"last year\", \"next month\").\n" +
-		"- For episodes, set participants (people involved) " +
-		"and location (where it happened) when mentioned.\n" +
 		"- Store events with specific details " +
 		"(what happened, who, where).\n" +
 		"- Store personal traits, preferences, relationships, " +
 		"plans, and emotions.\n" +
+		"- Use the SessionDate in context to resolve any relative " +
+		"time references (\"last year\", \"next month\") into " +
+		"absolute dates.\n" +
 		"- After storing all memories, reply 'Done.' only.\n\n" +
-		"IMPORTANT: Extract as many facts as possible. " +
+		"IMPORTANT: Extract as many facts and events as possible. " +
 		"Aim for 3-8 memories per session."
 
 	for _, sess := range sample.Conversation {
