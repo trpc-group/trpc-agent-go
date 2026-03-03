@@ -106,6 +106,21 @@ func TestContentRequestProcessor_DefaultBehavior(t *testing.T) {
 	}
 }
 
+func TestFilterSubtree(t *testing.T) {
+	const (
+		filterRoot = "filter"
+		filterA    = "filter/a"
+		filterB    = "filter/b"
+	)
+
+	assert.True(t, filterSubtree(filterA, ""))
+	assert.True(t, filterSubtree("", filterA))
+	assert.True(t, filterSubtree(filterA, filterA))
+	assert.True(t, filterSubtree(filterA+"/x", filterA))
+	assert.False(t, filterSubtree(filterRoot, filterA))
+	assert.False(t, filterSubtree(filterB, filterA))
+}
+
 func TestContentRequestProcessor_ToolCalls(t *testing.T) {
 	tests := []struct {
 		name           string
