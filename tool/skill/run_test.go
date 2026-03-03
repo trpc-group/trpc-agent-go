@@ -2162,6 +2162,82 @@ func TestRunTool_StagesUserFileInputs_NoDownloader_Warn(t *testing.T) {
 	require.Contains(t, out.Warnings, userFileInputWarnNoDownloader)
 }
 
+func TestRunTool_StagesUserFileInputs_ArtifactRef_OK(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	rt := NewRunTool(repo, localexec.New())
+
+	svc := inmemory.NewService()
+	sess := &session.Session{
+		AppName: "app",
+		UserID:  "u",
+		ID:      "s1",
+		State:   session.StateMap{},
+	}
+	info := artifact.SessionInfo{
+		AppName:   sess.AppName,
+		UserID:    sess.UserID,
+		SessionID: sess.ID,
+	}
+	const artifactName = "uploads/notes.txt"
+	ver, err := svc.SaveArtifact(
+		context.Background(),
+		info,
+		artifactName,
+		&artifact.Artifact{
+			Data:     []byte(contentHi),
+			MimeType: "text/plain",
+			Name:     artifactName,
+		},
+	)
+	require.NoError(t, err)
+
+	ref := fmt.Sprintf(
+		"%s%s@%d",
+		fileref.ArtifactPrefix,
+		artifactName,
+		ver,
+	)
+	user := model.NewUserMessage("upload")
+	user.AddFileIDWithName(ref, uploadNotesTxt)
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(user),
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationArtifactService(svc),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args := runInput{
+		Skill: testSkillName,
+		Command: "mkdir -p out; cat work/inputs/" +
+			uploadNotesTxt + " > " + outATxt,
+		OutputFiles: []string{outATxt},
+		Timeout:     timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Len(t, out.StagedInputs, 1)
+	require.Equal(t, "work/inputs/"+uploadNotesTxt,
+		out.StagedInputs[0].Name)
+	require.Equal(t, uploadNotesTxt, out.StagedInputs[0].OriginalName)
+	require.Equal(t, "text/plain", out.StagedInputs[0].MIMEType)
+	require.Equal(
+		t,
+		int64(len(contentHi)),
+		out.StagedInputs[0].SizeBytes,
+	)
+	require.Len(t, out.OutputFiles, 1)
+	require.Equal(t, outATxt, out.OutputFiles[0].Name)
+	require.Contains(t, out.OutputFiles[0].Content, contentHi)
+}
+
 func TestRunTool_StagesUserFileInputs_DownloadError_Warn(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, testSkillName)
@@ -2432,6 +2508,85 @@ func TestUserFileInputBytes(t *testing.T) {
 			f,
 		)
 		require.Equal(t, userFileInputWarnNoDownloader, warn)
+	})
+
+	t.Run("artifact-no-service", func(t *testing.T) {
+		f := model.File{
+			FileID: fileref.ArtifactPrefix + "uploads/x.txt@0",
+		}
+		_, _, warn := userFileInputBytes(
+			context.Background(),
+			nil,
+			f,
+		)
+		require.Equal(t, userFileInputWarnArtifactNoService, warn)
+	})
+
+	t.Run("artifact-parse-error", func(t *testing.T) {
+		svc := inmemory.NewService()
+		sess := &session.Session{
+			AppName: "app",
+			UserID:  "u",
+			ID:      "s1",
+			State:   session.StateMap{},
+		}
+		inv := agent.NewInvocation(
+			agent.WithInvocationSession(sess),
+			agent.WithInvocationArtifactService(svc),
+		)
+		ctx := agent.NewInvocationContext(context.Background(), inv)
+		f := model.File{
+			FileID: fileref.ArtifactPrefix + "uploads/x.txt@x",
+		}
+		_, _, warn := userFileInputBytes(
+			ctx,
+			nil,
+			f,
+		)
+		require.Contains(t, warn, "parse artifact ref")
+	})
+
+	t.Run("artifact-ok", func(t *testing.T) {
+		svc := inmemory.NewService()
+		sess := &session.Session{
+			AppName: "app",
+			UserID:  "u",
+			ID:      "s1",
+			State:   session.StateMap{},
+		}
+		info := artifact.SessionInfo{
+			AppName:   sess.AppName,
+			UserID:    sess.UserID,
+			SessionID: sess.ID,
+		}
+		const artifactName = "uploads/notes.txt"
+		ver, err := svc.SaveArtifact(
+			context.Background(),
+			info,
+			artifactName,
+			&artifact.Artifact{
+				Data:     []byte(contentHi),
+				MimeType: "text/plain",
+				Name:     artifactName,
+			},
+		)
+		require.NoError(t, err)
+		ref := fmt.Sprintf(
+			"%s%s@%d",
+			fileref.ArtifactPrefix,
+			artifactName,
+			ver,
+		)
+		inv := agent.NewInvocation(
+			agent.WithInvocationSession(sess),
+			agent.WithInvocationArtifactService(svc),
+		)
+		ctx := agent.NewInvocationContext(context.Background(), inv)
+		f := model.File{FileID: ref}
+		got, mime, warn := userFileInputBytes(ctx, nil, f)
+		require.Equal(t, []byte(contentHi), got)
+		require.Equal(t, "text/plain", mime)
+		require.Empty(t, warn)
 	})
 
 	t.Run("download-error", func(t *testing.T) {
