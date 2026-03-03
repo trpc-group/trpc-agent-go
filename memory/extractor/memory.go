@@ -28,6 +28,12 @@ const (
 	metadataKeyModelAvailable = "model_available"
 )
 
+// sessionDatePrefix is the prefix used to identify session date system
+// messages in the conversation. When a message starts with this prefix,
+// the date portion is extracted and used as <session_date> in the
+// extraction prompt instead of the current system time.
+const sessionDatePrefix = "SessionDate:"
+
 // memoryExtractor implements the MemoryExtractor interface.
 type memoryExtractor struct {
 	model    model.Model
@@ -218,9 +224,12 @@ func (e *memoryExtractor) buildMessages(
 ) []model.Message {
 	result := make([]model.Message, 0, len(messages)+1)
 
+	// Extract session date from conversation messages if available.
+	sessionDate := extractSessionDateFromMessages(messages)
+
 	// Add system prompt with existing memories.
 	result = append(result, model.NewSystemMessage(
-		e.buildSystemPrompt(existing),
+		e.buildSystemPrompt(existing, sessionDate),
 	))
 
 	// Add conversation messages.
@@ -229,18 +238,44 @@ func (e *memoryExtractor) buildMessages(
 	return result
 }
 
+// extractSessionDateFromMessages scans messages for a system message
+// starting with sessionDatePrefix (e.g. "SessionDate: 7 May 2023").
+// Returns the trimmed date string if found, or "" if not present.
+func extractSessionDateFromMessages(messages []model.Message) string {
+	for _, msg := range messages {
+		if msg.Role != model.RoleSystem {
+			continue
+		}
+		content := strings.TrimSpace(msg.Content)
+		if strings.HasPrefix(content, sessionDatePrefix) {
+			return strings.TrimSpace(
+				strings.TrimPrefix(content, sessionDatePrefix),
+			)
+		}
+	}
+	return ""
+}
+
 // buildSystemPrompt builds the system prompt with existing memories
 // and available actions based on enabled tools.
+// sessionDate overrides the <session_date> tag when non-empty;
+// otherwise the current system date is used as fallback.
 func (e *memoryExtractor) buildSystemPrompt(
 	existing []*memory.Entry,
+	sessionDate string,
 ) string {
 	var sb strings.Builder
 	sb.WriteString(e.prompt)
 
-	// Inject current date so the LLM can resolve relative time
+	// Inject session date so the LLM can resolve relative time
 	// expressions (e.g. "yesterday", "last week") to absolute dates.
-	fmt.Fprintf(&sb, "\n<session_date>%s</session_date>\n",
-		time.Now().Format("2006-01-02"))
+	// Prefer an explicit session date from the conversation when
+	// available; fall back to the current system date.
+	date := sessionDate
+	if date == "" {
+		date = time.Now().Format("2006-01-02")
+	}
+	fmt.Fprintf(&sb, "\n<session_date>%s</session_date>\n", date)
 
 	// Append available actions.
 	sb.WriteString("\n<available_actions>\n")
@@ -436,6 +471,16 @@ You must distinguish between two types of memories: facts and episodes.
 - **DETAIL**: Include specific names, quantities, dates, and concrete
   details. "User's favorite coffee shop is Blue Bottle on Market St."
   is much better than "User likes coffee."
+- **SPECIFICITY**: Always capture specific names, titles, and identifiers.
+  "User read 'The Great Gatsby' by F. Scott Fitzgerald" is much better
+  than "User enjoys reading books." Include book titles, movie names,
+  restaurant names, city names, activity details, and similar specifics.
+- **ALL SPEAKERS**: Extract information about ALL people in the
+  conversation, not just the primary speaker. If the conversation is
+  between two people, capture facts, preferences, events, and actions
+  of both speakers. Attribute information to the correct person by name
+  when names are available (e.g., "Alice enjoys pottery" rather than
+  "User's friend enjoys pottery").
 - **RELATIONSHIPS**: When someone is mentioned, always capture who
   they are in relation to the user in a SEPARATE fact memory.
   For example: "Alice is User's college roommate from Stanford."
@@ -457,9 +502,9 @@ You must distinguish between two types of memories: facts and episodes.
   input message. For example, if the user writes in Chinese, write
   memories and topics in Chinese.
 - Do not create memories for:
-  - Transient requests or questions
+  - Transient requests or questions (e.g., "What time is it?")
   - Information already captured in existing memories
-  - Generic conversation that doesn't reveal personal information
+  - Pure greetings or small talk that contain no factual content
 </guidelines>
 
 <episodic_memory_rules>

@@ -484,7 +484,7 @@ func TestExtractor_BuildSystemPrompt_WithExistingMemories(t *testing.T) {
 		},
 	}
 
-	prompt := extractor.buildSystemPrompt(existing)
+	prompt := extractor.buildSystemPrompt(existing, "")
 
 	assert.Contains(t, prompt, defaultPrompt)
 	assert.Contains(t, prompt, "<existing_memories>")
@@ -498,7 +498,7 @@ func TestExtractor_BuildSystemPrompt_EmptyExisting(t *testing.T) {
 	e := NewExtractor(m)
 	extractor := e.(*memoryExtractor)
 
-	prompt := extractor.buildSystemPrompt(nil)
+	prompt := extractor.buildSystemPrompt(nil, "")
 
 	// Prompt always includes available_actions now.
 	assert.Contains(t, prompt, defaultPrompt)
@@ -523,7 +523,7 @@ func TestExtractor_BuildSystemPrompt_NilMemory(t *testing.T) {
 		},
 	}
 
-	prompt := extractor.buildSystemPrompt(existing)
+	prompt := extractor.buildSystemPrompt(existing, "")
 
 	assert.Contains(t, prompt, "[mem-2] Valid memory.")
 	assert.NotContains(t, prompt, "[mem-1]")
@@ -729,4 +729,52 @@ func TestExtractor_EnabledToolsConfigurer(t *testing.T) {
 	ext := e.(*memoryExtractor)
 	_, hasAdd := ext.enabledTools[memory.AddToolName]
 	assert.True(t, hasAdd)
+}
+
+func TestExtractSessionDateFromMessages(t *testing.T) {
+	t.Run("finds session date", func(t *testing.T) {
+		msgs := []model.Message{
+			model.NewSystemMessage("SessionDate: 7 May 2023"),
+			model.NewUserMessage("Hello"),
+		}
+		assert.Equal(t, "7 May 2023", extractSessionDateFromMessages(msgs))
+	})
+
+	t.Run("no session date", func(t *testing.T) {
+		msgs := []model.Message{
+			model.NewUserMessage("Hello"),
+		}
+		assert.Equal(t, "", extractSessionDateFromMessages(msgs))
+	})
+
+	t.Run("system message without prefix", func(t *testing.T) {
+		msgs := []model.Message{
+			model.NewSystemMessage("You are a helpful assistant"),
+		}
+		assert.Equal(t, "", extractSessionDateFromMessages(msgs))
+	})
+
+	t.Run("empty messages", func(t *testing.T) {
+		assert.Equal(t, "", extractSessionDateFromMessages(nil))
+	})
+}
+
+func TestExtractor_BuildSystemPrompt_WithSessionDate(t *testing.T) {
+	m := &mockModel{name: "test-model"}
+	e := NewExtractor(m)
+	extractor := e.(*memoryExtractor)
+
+	prompt := extractor.buildSystemPrompt(nil, "7 May 2023")
+	assert.Contains(t, prompt, "<session_date>7 May 2023</session_date>")
+}
+
+func TestExtractor_BuildSystemPrompt_FallbackToCurrentDate(t *testing.T) {
+	m := &mockModel{name: "test-model"}
+	e := NewExtractor(m)
+	extractor := e.(*memoryExtractor)
+
+	prompt := extractor.buildSystemPrompt(nil, "")
+	assert.Contains(t, prompt, "<session_date>")
+	// Should not contain a fixed future date.
+	assert.NotContains(t, prompt, "<session_date></session_date>")
 }
