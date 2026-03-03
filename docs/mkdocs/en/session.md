@@ -348,6 +348,50 @@ agent := llmagent.New(
 - The default format is designed to be compatible with most models and use cases
 - When `WithAddSessionSummary(false)` is used, the formatter is **never invoked**
 
+#### Synchronous Summary Refresh (SyncSummaryIntraRun)
+
+By default, session summaries are generated asynchronously by background workers after tool-result events. This means the summary available to the LLM may lag behind the current conversation state. For scenarios where you need the summary to be up-to-date before each LLM call within a single run, you can enable synchronous summary refresh.
+
+**When to Use:**
+
+- Long tool-call chains (ReAct loops) where intermediate context is important
+- Scenarios requiring the LLM to always see the most recent summary
+- When summary latency must be minimized
+
+**Configuration:**
+
+```go
+agent := llmagent.New(
+    "my-agent",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithAddSessionSummary(true),
+    llmagent.WithSyncSummaryIntraRun(true), // Enable sync summary refresh
+)
+```
+
+**How it Works:**
+
+When `SyncSummaryIntraRun` is enabled:
+
+1. **First LLM call**: Summary is loaded from session (may be stale or empty)
+2. **Between iterations**: Summary is synchronously refreshed before each subsequent LLM call
+3. **Final response**: Still triggers async summary enqueue to ensure session is up-to-date
+
+The framework automatically skips redundant async summary enqueue for intermediate tool-result events during the same run, avoiding duplicate work while ensuring the final summary is always complete.
+
+**Behavior Comparison:**
+
+| Mode | Summary Timing | Latency | Resource Usage |
+|------|---------------|---------|----------------|
+| Async (default) | Background worker | May lag | Lower per-iteration |
+| Sync Intra-Run | Before each LLM call | Always current | Higher (synchronous) |
+
+**Important Notes:**
+
+- `SyncSummaryIntraRun` requires `AddSessionSummary` to be enabled
+- Synchronous summary refresh adds latency to each LLM iteration
+- For most use cases, async summary (default) is sufficient
+
 **Important Note:** When `WithAddSessionSummary(true)` is enabled, the `WithMaxHistoryRuns` parameter is ignored, and all events after the summary are fully retained.
 
 For detailed configuration and advanced usage, see the [Session Summary](#session-summary) section.
