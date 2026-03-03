@@ -95,9 +95,93 @@ func TestMCPImageResultMessages_BadBase64FallsBack(t *testing.T) {
 	require.Nil(t, got)
 }
 
+func TestMCPImageResultMessages_NilInputFallsBack(t *testing.T) {
+	t.Parallel()
+
+	got, err := mcpImageResultMessages(context.Background(), nil)
+	require.NoError(t, err)
+	require.Nil(t, got)
+}
+
+func TestMCPImageResultMessages_BadDefaultMessageFallsBack(t *testing.T) {
+	t.Parallel()
+
+	raw := []byte("fake image bytes")
+	encoded := base64.StdEncoding.EncodeToString(raw)
+
+	in := &tool.ToolResultMessagesInput{
+		DefaultToolMessage: "not a model.Message",
+		Result: []mcpContentItem{{
+			Type:     "image",
+			Data:     encoded,
+			MimeType: "image/png",
+		}},
+	}
+
+	got, err := mcpImageResultMessages(context.Background(), in)
+	require.NoError(t, err)
+	require.Nil(t, got)
+}
+
+func TestExtractMCPImages_NilResultReturnsNil(t *testing.T) {
+	t.Parallel()
+
+	images := extractMCPImages(context.Background(), nil)
+	require.Nil(t, images)
+}
+
+func TestExtractMCPImages_MarshalErrorReturnsNil(t *testing.T) {
+	t.Parallel()
+
+	images := extractMCPImages(context.Background(), func() {})
+	require.Nil(t, images)
+}
+
+func TestExtractMCPImages_UnmarshalErrorReturnsNil(t *testing.T) {
+	t.Parallel()
+
+	images := extractMCPImages(context.Background(), "not an array")
+	require.Nil(t, images)
+}
+
+func TestExtractMCPImages_UnsupportedMimeIsSkipped(t *testing.T) {
+	t.Parallel()
+
+	raw := []byte("fake image bytes")
+	encoded := base64.StdEncoding.EncodeToString(raw)
+
+	images := extractMCPImages(context.Background(), []mcpContentItem{{
+		Type:     "image",
+		Data:     encoded,
+		MimeType: "image/tiff",
+	}})
+	require.Nil(t, images)
+}
+
 func TestMCPImageFormatFromMime_Unsupported(t *testing.T) {
 	t.Parallel()
 
 	_, ok := mcpImageFormatFromMime("application/octet-stream")
 	require.False(t, ok)
+}
+
+func TestMCPImageFormatFromMime_Supported(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		mime   string
+		format string
+	}{
+		{mime: "image/png", format: "png"},
+		{mime: "image/jpg", format: "jpg"},
+		{mime: "image/jpeg", format: "jpeg"},
+		{mime: "image/webp", format: "webp"},
+		{mime: "image/gif", format: "gif"},
+	}
+
+	for _, tt := range tests {
+		format, ok := mcpImageFormatFromMime(tt.mime)
+		require.True(t, ok)
+		require.Equal(t, tt.format, format)
+	}
 }
