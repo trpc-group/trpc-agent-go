@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"hash/crc64"
 	"io"
@@ -197,6 +198,63 @@ func createMockService() (*Service, *MockTransport) {
 	service, _ := NewService("cos-service", "", WithClient(mockCosClient))
 
 	return service, mockTransport
+}
+
+type stubClient struct {
+	getBucketFn    func(context.Context, string) (*cos.BucketGetResult, error)
+	putObjectFn    func(context.Context, string, io.Reader, string) error
+	getObjectFn    func(context.Context, string) (io.ReadCloser, http.Header, error)
+	deleteObjectFn func(context.Context, string) error
+}
+
+func (c *stubClient) GetBucket(
+	ctx context.Context,
+	prefix string,
+) (*cos.BucketGetResult, error) {
+	if c.getBucketFn == nil {
+		return nil, nil
+	}
+	return c.getBucketFn(ctx, prefix)
+}
+
+func (c *stubClient) PutObject(
+	ctx context.Context,
+	name string,
+	content io.Reader,
+	mimeType string,
+) error {
+	if c.putObjectFn == nil {
+		return nil
+	}
+	return c.putObjectFn(ctx, name, content, mimeType)
+}
+
+func (c *stubClient) GetObject(
+	ctx context.Context,
+	name string,
+) (io.ReadCloser, http.Header, error) {
+	if c.getObjectFn == nil {
+		return nil, nil, nil
+	}
+	return c.getObjectFn(ctx, name)
+}
+
+func (c *stubClient) DeleteObject(
+	ctx context.Context,
+	name string,
+) error {
+	if c.deleteObjectFn == nil {
+		return nil
+	}
+	return c.deleteObjectFn(ctx, name)
+}
+
+func newNotFoundError() error {
+	return &cos.ErrorResponse{
+		Response: &http.Response{
+			StatusCode: http.StatusNotFound,
+		},
+	}
 }
 
 func TestArtifact_SessionScope(t *testing.T) {
@@ -540,6 +598,196 @@ func TestSaveArtifact_UsesMaxVersionAcrossLayouts(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, latest)
 	assert.Equal(t, []byte("new2"), latest.Data)
+}
+
+func TestLoadArtifact_UnexpectedGetObjectError(t *testing.T) {
+	s := &Service{
+		cosClient: &stubClient{
+			getObjectFn: func(
+				ctx context.Context,
+				name string,
+			) (io.ReadCloser, http.Header, error) {
+				return nil, nil, errors.New("boom")
+			},
+		},
+	}
+
+	sessionInfo := artifact.SessionInfo{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session456",
+	}
+	filename := "out/a.txt"
+	version := 0
+
+	_, err := s.LoadArtifact(
+		context.Background(),
+		sessionInfo,
+		filename,
+		&version,
+	)
+	require.Error(t, err)
+}
+
+func TestListArtifactKeys_SkipsNilResults(t *testing.T) {
+	s := &Service{
+		cosClient: &stubClient{
+			getBucketFn: func(
+				ctx context.Context,
+				prefix string,
+			) (*cos.BucketGetResult, error) {
+				return nil, nil
+			},
+		},
+	}
+
+	keys, err := s.ListArtifactKeys(
+		context.Background(),
+		artifact.SessionInfo{
+			AppName:   "testapp",
+			UserID:    "user123",
+			SessionID: "session456",
+		},
+	)
+	require.NoError(t, err)
+	require.Empty(t, keys)
+}
+
+func TestListArtifactKeys_SessionGetBucketError(t *testing.T) {
+	s := &Service{
+		cosClient: &stubClient{
+			getBucketFn: func(
+				ctx context.Context,
+				prefix string,
+			) (*cos.BucketGetResult, error) {
+				return nil, errors.New("boom")
+			},
+		},
+	}
+
+	_, err := s.ListArtifactKeys(
+		context.Background(),
+		artifact.SessionInfo{
+			AppName:   "testapp",
+			UserID:    "user123",
+			SessionID: "session456",
+		},
+	)
+	require.Error(t, err)
+}
+
+func TestListArtifactKeys_UserGetBucketError(t *testing.T) {
+	s := &Service{
+		cosClient: &stubClient{
+			getBucketFn: func(
+				ctx context.Context,
+				prefix string,
+			) (*cos.BucketGetResult, error) {
+				if strings.HasSuffix(prefix, objectKeySep+"user"+objectKeySep) {
+					return nil, errors.New("boom")
+				}
+				return &cos.BucketGetResult{}, nil
+			},
+		},
+	}
+
+	_, err := s.ListArtifactKeys(
+		context.Background(),
+		artifact.SessionInfo{
+			AppName:   "testapp",
+			UserID:    "user123",
+			SessionID: "session456",
+		},
+	)
+	require.Error(t, err)
+}
+
+func TestListVersions_ReturnsEmptyOnNotFound(t *testing.T) {
+	s := &Service{
+		cosClient: &stubClient{
+			getBucketFn: func(
+				ctx context.Context,
+				prefix string,
+			) (*cos.BucketGetResult, error) {
+				return nil, newNotFoundError()
+			},
+		},
+	}
+
+	versions, err := s.ListVersions(
+		context.Background(),
+		artifact.SessionInfo{
+			AppName:   "testapp",
+			UserID:    "user123",
+			SessionID: "session456",
+		},
+		"out/a.txt",
+	)
+	require.NoError(t, err)
+	require.Empty(t, versions)
+}
+
+func TestListVersions_UnexpectedGetBucketError(t *testing.T) {
+	s := &Service{
+		cosClient: &stubClient{
+			getBucketFn: func(
+				ctx context.Context,
+				prefix string,
+			) (*cos.BucketGetResult, error) {
+				return nil, errors.New("boom")
+			},
+		},
+	}
+
+	_, err := s.ListVersions(
+		context.Background(),
+		artifact.SessionInfo{
+			AppName:   "testapp",
+			UserID:    "user123",
+			SessionID: "session456",
+		},
+		"out/a.txt",
+	)
+	require.Error(t, err)
+}
+
+func TestDeleteArtifact_UnexpectedDeleteError(t *testing.T) {
+	callCount := 0
+	s := &Service{
+		cosClient: &stubClient{
+			getBucketFn: func(
+				ctx context.Context,
+				prefix string,
+			) (*cos.BucketGetResult, error) {
+				return &cos.BucketGetResult{
+					Contents: []cos.Object{
+						{Key: prefix + "out/a.txt/0"},
+					},
+				}, nil
+			},
+			deleteObjectFn: func(
+				ctx context.Context,
+				name string,
+			) error {
+				callCount++
+				if callCount == 1 {
+					return errors.New("boom")
+				}
+				return nil
+			},
+		},
+	}
+
+	err := s.DeleteArtifact(
+		context.Background(),
+		artifact.SessionInfo{
+			AppName:   "testapp",
+			UserID:    "user123",
+			SessionID: "session456",
+		},
+		"out/a.txt",
+	)
+	require.Error(t, err)
 }
 
 func TestSaveArtifact_ValidatesInputs(t *testing.T) {
