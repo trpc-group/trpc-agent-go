@@ -201,6 +201,78 @@ curl -sS 'http://127.0.0.1:8080/v1/gateway/messages' \
   -d '{"from":"alice","text":"Hello"}'
 ```
 
+Send a multimodal message via HTTP:
+
+- Use `text` for the main text message.
+- Use `content_parts` for additional inputs (images, audio, files, links, etc.).
+
+Security note: for URL-based parts (`audio.url`, `file.url`, `video.url`),
+the gateway downloads the content. By default, it blocks URLs that resolve
+to loopback/private addresses to reduce SSRF risk. If you embed the gateway
+server in your own program, you can adjust this via gateway options (for
+example, `gateway.WithAllowPrivateContentPartURLs(true)` or
+`gateway.WithAllowedContentPartDomains(...)`).
+
+Example (text + image URL):
+
+```bash
+curl -sS 'http://127.0.0.1:8080/v1/gateway/messages' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "from": "alice",
+    "text": "What is in this image?",
+    "content_parts": [
+      {
+        "type": "image",
+        "image": {
+          "url": "https://example.com/image.png",
+          "detail": "auto"
+        }
+      }
+    ]
+  }'
+```
+
+Example (audio by URL):
+
+```bash
+curl -sS 'http://127.0.0.1:8080/v1/gateway/messages' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "from": "alice",
+    "content_parts": [
+      {
+        "type": "audio",
+        "audio": {
+          "url": "https://example.com/voice.wav"
+        }
+      }
+    ]
+  }'
+```
+
+Example (file by URL):
+
+```bash
+curl -sS 'http://127.0.0.1:8080/v1/gateway/messages' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "from": "alice",
+    "text": "Summarize this document.",
+    "content_parts": [
+      {
+        "type": "file",
+        "file": {
+          "url": "https://example.com/report.pdf"
+        }
+      }
+    ]
+  }'
+```
+
+If you send non-text inputs (`image`, `audio`, `file`, `video`), make sure
+the configured model supports those input types.
+
 ## Run with a real model (OpenAI)
 
 This demo uses the `model/openai` implementation with provider variants.
