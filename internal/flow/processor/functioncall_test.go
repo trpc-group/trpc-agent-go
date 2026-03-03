@@ -2116,7 +2116,7 @@ func (d *deltaTool) Declaration() *tool.Declaration {
 func (d *deltaTool) Call(ctx context.Context, _ []byte) (any, error) {
 	return "ok", nil
 }
-func (d *deltaTool) StateDelta(_ []byte, _ []byte) map[string][]byte {
+func (d *deltaTool) StateDelta(_ string, _ []byte, _ []byte) map[string][]byte {
 	return map[string][]byte{"x": []byte("y")}
 }
 
@@ -2130,7 +2130,7 @@ func (e *errorDeltaTool) Call(_ context.Context, _ []byte) (any, error) {
 	return nil, errors.New("boom")
 }
 
-func (e *errorDeltaTool) StateDelta(_ []byte, _ []byte) map[string][]byte {
+func (e *errorDeltaTool) StateDelta(_ string, _ []byte, _ []byte) map[string][]byte {
 	return map[string][]byte{"x": []byte("y")}
 }
 

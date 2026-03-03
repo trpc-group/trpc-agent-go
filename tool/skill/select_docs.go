@@ -131,7 +131,7 @@ func (t *SelectDocsTool) Call(
 
 // StateDelta writes the selection using the tool result JSON.
 func (t *SelectDocsTool) StateDelta(
-	_ []byte, resultJSON []byte,
+	_ string, _ []byte, resultJSON []byte,
 ) map[string][]byte {
 	var out selectDocsOutput
 	if err := json.Unmarshal(resultJSON, &out); err != nil {

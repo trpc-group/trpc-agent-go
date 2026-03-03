@@ -583,14 +583,11 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 		}
 	}
 	// Attach state delta if the tool provides it.
-	if err == nil {
-		if tl, ok := tools[tc.Function.Name]; ok {
-			// Use the first choice as the canonical tool result for state
-			// delta.
-			p.attachStateDelta(
-				tl, modifiedArgs, &choices[0], toolCallResponseEvent,
-			)
-		}
+	if tl, ok := tools[tc.Function.Name]; ok {
+		// Use the first choice as the canonical tool result for state delta.
+		p.attachStateDelta(
+			tl, modifiedArgs, &choices[0], toolCallResponseEvent,
+		)
 	}
 	itelemetry.TraceToolCall(span, sess, decl, modifiedArgs, toolCallResponseEvent, err)
 	itelemetry.ReportExecuteToolMetrics(ctx, itelemetry.ExecuteToolAttributes{
@@ -619,15 +616,17 @@ func (p *FunctionCallResponseProcessor) attachStateDelta(
 	if nameTool, ok := tl.(*itool.NamedTool); ok {
 		original = nameTool.Original()
 	}
+	b := []byte(choice.Message.Content)
+	toolCallID := choice.Message.ToolID
+
 	type stateDeltaProvider interface {
-		StateDelta([]byte, []byte) map[string][]byte
+		StateDelta(string, []byte, []byte) map[string][]byte
 	}
 	sdp, ok := original.(stateDeltaProvider)
 	if !ok {
 		return
 	}
-	b := []byte(choice.Message.Content)
-	delta := sdp.StateDelta(args, b)
+	delta := sdp.StateDelta(toolCallID, args, b)
 	if len(delta) == 0 {
 		return
 	}
