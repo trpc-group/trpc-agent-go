@@ -14,7 +14,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1080,6 +1082,198 @@ func TestTransformationPipeline(t *testing.T) {
 	assert.True(t, hasObservationInput, "should have observation input")
 	assert.True(t, hasObservationOutput, "should have observation output")
 	assert.True(t, hasServiceName, "should keep other attributes like service.name")
+}
+
+func withObservationMaxBytes(t *testing.T, maxBytes int) {
+	old := getObservationMaxBytes()
+	v := maxBytes
+	setObservationMaxBytes(&v)
+	t.Cleanup(func() {
+		if old < 0 {
+			setObservationMaxBytes(nil)
+			return
+		}
+		ov := old
+		setObservationMaxBytes(&ov)
+	})
+}
+
+func TestTruncateObservationValue_DisabledByNil(t *testing.T) {
+	const maxBytes = 32 * 1024
+
+	setObservationMaxBytes(nil)
+
+	big := strings.Repeat("a", maxBytes*2)
+	out := truncateObservationValue(big)
+	require.Equal(t, big, out)
+}
+
+func TestTruncateObservationValue_ZeroMeansTruncateAll(t *testing.T) {
+	withObservationMaxBytes(t, 0)
+
+	out := truncateObservationValue("abc")
+	require.Equal(t, "", out)
+}
+
+func TestTruncateObservationValue_UTF8AndMaxBytes(t *testing.T) {
+	const maxBytes = 32 * 1024
+
+	withObservationMaxBytes(t, maxBytes)
+
+	// Use multi-byte characters to ensure we never cut into an invalid UTF-8 rune.
+	big := strings.Repeat("中", maxBytes)
+	out := truncateObservationValue(big)
+	require.LessOrEqual(t, len([]byte(out)), maxBytes)
+	require.True(t, utf8.ValidString(out))
+	require.Contains(t, out, defaultTruncateMarker)
+}
+
+func TestTransformInvokeAgent_TruncatesObservationInputOutput(t *testing.T) {
+	const maxBytes = 32 * 1024
+
+	withObservationMaxBytes(t, maxBytes)
+
+	bigIn := strings.Repeat("in-", maxBytes)
+	bigOut := strings.Repeat("out-", maxBytes)
+	span := &tracepb.Span{
+		Name: "agent-span",
+		Attributes: []*commonpb.KeyValue{
+			{
+				Key:   itelemetry.KeyGenAIInputMessages,
+				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: bigIn}},
+			},
+			{
+				Key:   itelemetry.KeyGenAIOutputMessages,
+				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: bigOut}},
+			},
+		},
+	}
+
+	transformInvokeAgent(span)
+
+	attrMap := make(map[string]string)
+	for _, attr := range span.Attributes {
+		attrMap[attr.Key] = attr.Value.GetStringValue()
+	}
+
+	in := attrMap[observationInput]
+	out := attrMap[observationOutput]
+	require.LessOrEqual(t, len([]byte(in)), maxBytes)
+	require.LessOrEqual(t, len([]byte(out)), maxBytes)
+	require.True(t, utf8.ValidString(in))
+	require.True(t, utf8.ValidString(out))
+}
+
+func TestTransformCallLLM_TruncatesObservationInputOutput(t *testing.T) {
+	const maxBytes = 32 * 1024
+
+	withObservationMaxBytes(t, maxBytes)
+
+	bigReq := strings.Repeat("req-", maxBytes)
+	bigResp := strings.Repeat("resp-", maxBytes)
+	span := &tracepb.Span{
+		Name: "llm-call",
+		Attributes: []*commonpb.KeyValue{
+			{
+				Key:   itelemetry.KeyGenAIOperationName,
+				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: itelemetry.OperationChat}},
+			},
+			{
+				Key:   itelemetry.KeyLLMRequest,
+				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: bigReq}},
+			},
+			{
+				Key:   itelemetry.KeyLLMResponse,
+				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: bigResp}},
+			},
+		},
+	}
+
+	transformCallLLM(span)
+
+	attrMap := make(map[string]string)
+	for _, attr := range span.Attributes {
+		attrMap[attr.Key] = attr.Value.GetStringValue()
+	}
+
+	in := attrMap[observationInput]
+	out := attrMap[observationOutput]
+	require.LessOrEqual(t, len([]byte(in)), maxBytes)
+	require.LessOrEqual(t, len([]byte(out)), maxBytes)
+	require.True(t, utf8.ValidString(in))
+	require.True(t, utf8.ValidString(out))
+}
+
+func TestTransformExecuteTool_TruncatesObservationInputOutput(t *testing.T) {
+	const maxBytes = 32 * 1024
+
+	withObservationMaxBytes(t, maxBytes)
+
+	bigArgs := strings.Repeat("arg-", maxBytes)
+	bigRes := strings.Repeat("res-", maxBytes)
+	span := &tracepb.Span{
+		Name: "tool-call",
+		Attributes: []*commonpb.KeyValue{
+			{
+				Key:   itelemetry.KeyGenAIToolCallArguments,
+				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: bigArgs}},
+			},
+			{
+				Key:   itelemetry.KeyGenAIToolCallResult,
+				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: bigRes}},
+			},
+		},
+	}
+
+	transformExecuteTool(span)
+
+	attrMap := make(map[string]string)
+	for _, attr := range span.Attributes {
+		attrMap[attr.Key] = attr.Value.GetStringValue()
+	}
+
+	in := attrMap[observationInput]
+	out := attrMap[observationOutput]
+	require.LessOrEqual(t, len([]byte(in)), maxBytes)
+	require.LessOrEqual(t, len([]byte(out)), maxBytes)
+	require.True(t, utf8.ValidString(in))
+	require.True(t, utf8.ValidString(out))
+}
+
+func TestTransformWorkflow_TruncatesObservationInputOutput(t *testing.T) {
+	const maxBytes = 32 * 1024
+
+	withObservationMaxBytes(t, maxBytes)
+
+	bigReq := strings.Repeat("req-", maxBytes)
+	bigResp := strings.Repeat("resp-", maxBytes)
+	span := &tracepb.Span{
+		Name: "workflow-span",
+		Attributes: []*commonpb.KeyValue{
+			{
+				Key:   itelemetry.KeyGenAIWorkflowRequest,
+				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: bigReq}},
+			},
+			{
+				Key:   itelemetry.KeyGenAIWorkflowResponse,
+				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: bigResp}},
+			},
+		},
+	}
+
+	transformWorkflow(span)
+
+	attrMap := make(map[string]string)
+	for _, attr := range span.Attributes {
+		attrMap[attr.Key] = attr.Value.GetStringValue()
+	}
+
+	in := attrMap[observationInput]
+	out := attrMap[observationOutput]
+	require.LessOrEqual(t, len([]byte(in)), maxBytes)
+	require.LessOrEqual(t, len([]byte(out)), maxBytes)
+	require.True(t, utf8.ValidString(in))
+	require.True(t, utf8.ValidString(out))
 }
 
 // Benchmark tests
