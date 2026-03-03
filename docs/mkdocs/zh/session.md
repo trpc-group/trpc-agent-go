@@ -556,25 +556,42 @@ defer sessionService.Close()
 
 ## Redis 存储
 
-适用于生产环境和分布式应用，提供高性能和自动过期能力。
+适用于生产环境和分布式应用，提供高性能和自动过期能力。Redis Session Service 内部维护两套存储引擎：**HashIdx**（新，默认）和 **ZSet**（旧），通过兼容模式（CompatMode）实现平滑迁移。
 
 ### 配置选项
 
+**连接配置：**
+
 - **`WithRedisClientURL(url string)`**：通过 URL 创建 Redis 客户端。格式：`redis://[username:password@]host:port[/database]`。
 - **`WithRedisInstance(instanceName string)`**：使用预配置的 Redis 实例。注意：`WithRedisClientURL` 的优先级高于 `WithRedisInstance`。
+- **`WithExtraOptions(extraOptions ...interface{})`**：为 Redis 客户端设置额外选项，会传递给底层的 client builder。
+
+**会话配置：**
+
 - **`WithSessionEventLimit(limit int)`**：设置每个会话存储的最大事件数量。默认值为 1000。
-- **`WithSessionTTL(ttl time.Duration)`**：设置会话状态和事件的 TTL。默认值为 0（不过期）。
+- **`WithSessionTTL(ttl time.Duration)`**：设置会话状态和事件的 TTL。默认值为 0（不过期）。负值等同于 0。
 - **`WithAppStateTTL(ttl time.Duration)`**：设置应用级状态的 TTL。默认值为 0（不过期）。
 - **`WithUserStateTTL(ttl time.Duration)`**：设置用户级状态的 TTL。默认值为 0（不过期）。
-- **`WithEnableAsyncPersist(enable bool)`**：启用异步持久化。默认值为 `false`。
-- **`WithAsyncPersisterNum(num int)`**：异步持久化 worker 数量。默认值为 10。
-- **`WithSummarizer(s summary.SessionSummarizer)`**：注入会话摘要器。
+- **`WithKeyPrefix(prefix string)`**：设置 Redis key 前缀。所有 key 将以 `prefix:` 开头。默认无前缀。适用于多应用共享同一 Redis 实例的场景。
+- **`WithCompatMode(mode CompatMode)`**：设置存储兼容模式。可选值：`CompatModeNone`、`CompatModeLegacy`（默认）、`CompatModeTransition`。详见下方[存储方式与版本迁移](#存储方式与版本迁移)。
+
+**异步持久化配置：**
+
+- **`WithEnableAsyncPersist(enable bool)`**：启用异步持久化。默认值为 `false`。启用后，`AppendEvent` 和 `AppendTrackEvent` 会将事件写入内部 channel，由后台 worker 异步写入 Redis，降低请求延迟。
+- **`WithAsyncPersisterNum(num int)`**：异步持久化 worker 数量。默认值为 10。每个 worker 同时处理 Event 和 TrackEvent 各一个 channel，channel 缓冲区大小为 100。
+
+**摘要配置：**
+
+- **`WithSummarizer(s summary.SessionSummarizer)`**：注入会话摘要器。未设置时摘要相关操作为空操作。
 - **`WithAsyncSummaryNum(num int)`**：设置摘要处理 worker 数量。默认值为 3。
 - **`WithSummaryQueueSize(size int)`**：设置摘要任务队列大小。默认值为 100。
 - **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 60 秒。
-- **`WithKeyPrefix(prefix string)`**：设置 Redis key 前缀。所有 key 将以 `prefix:` 开头。默认无前缀。
-- **`WithCompatMode(mode CompatMode)`**：设置存储兼容模式。可选值：`CompatModeNone`、`CompatModeLegacy`（默认）、`CompatModeTransition`。详见下方[存储方式与版本迁移](#存储方式与版本迁移)。
-- **`WithExtraOptions(extraOptions ...interface{})`**：为 Redis 客户端设置额外选项。
+
+**Hook 配置：**
+
+- **`WithAppendEventHook(hooks ...session.AppendEventHook)`**：添加 `AppendEvent` 钩子。
+- **`WithGetSessionHook(hooks ...session.GetSessionHook)`**：添加 `GetSession` 钩子。
+- Hook 机制是所有 Session 后端的通用能力，详见[高级用法 - Hook 能力](#hook-能力appendget)。
 
 ### 基础配置示例
 
@@ -638,29 +655,59 @@ sessionService, err := redis.NewService(
     redis.WithSummarizer(summarizer),
     redis.WithAsyncSummaryNum(4),
     redis.WithSummaryQueueSize(200),
+    redis.WithSummaryJobTimeout(120*time.Second),
 )
 ```
 
+### 异步持久化
+
+启用异步持久化后，`AppendEvent` 和 `AppendTrackEvent` 不再同步写入 Redis，而是将事件投递到内部 channel，由后台 worker 协程消费并写入 Redis。这样可以显著降低请求延迟，适用于对写入延迟敏感的场景。
+
+```go
+sessionService, err := redis.NewService(
+    redis.WithRedisClientURL("redis://localhost:6379"),
+    redis.WithEnableAsyncPersist(true),
+    redis.WithAsyncPersisterNum(10), // 10 个 worker 协程
+)
+```
+
+工作原理：
+
+- 每个 worker 协程持有一个 Event channel 和一个 TrackEvent channel（缓冲区大小 100）。
+- `AppendEvent` 根据 `session.Hash % workerNum` 选择 channel，保证同一会话的事件有序写入。
+- 如果 channel 已满且 context 被取消，会返回 `context.Canceled` 错误。
+- 异步写入超时时间为 2 秒（`defaultAsyncPersistTimeout`）。
+- 调用 `Close()` 时会关闭所有 channel 并等待 worker 完成剩余任务。
+
+!!! warning "注意"
+异步持久化模式下，如果服务进程异常退出，channel 中尚未消费的事件可能会丢失。请根据业务对数据一致性的要求评估是否启用。
+
 ### 存储方式与版本迁移
 
-Redis Session 存储有两种数据存储方式：
+Redis Session 存储有两种数据存储引擎，内部通过 `ServiceMeta` 中的 `storage_type` 标记每个 session 所属的存储版本，实现操作路由：
 
 
-| 存储方式                | Hash Tag           | 特点                                                    |
-| ------------------------- | -------------------- | --------------------------------------------------------- |
-| **ZSet**（旧）          | `{appName}`        | 所有用户数据集中在同一 Cluster slot，大规模下有热点风险 |
-| **HashIdx**（新，默认） | `{userID}` | 按用户散列，消除热点；数据与索引分离，支持自定义索引    |
+| 存储方式    | 版本             | Hash Tag    | 特点                                                                                                                                            |
+| ------------- | ------------------ | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **ZSet**    | 旧版（legacy）   | `{appName}` | 所有用户数据集中在同一 Cluster slot，大规模下有热点风险。数据结构简单，Event 直接存储完整 JSON 在 SortedSet 中。                                |
+| **HashIdx** | **新版（默认）** | `{userID}`  | 按用户散列，消除热点；数据与索引分离（Hash 存数据 + ZSet 存索引），ZSet 中只存 eventID 避免内存膨胀；Session 元数据独立存储，支持更灵活的查询。 |
+
+* !!! info "如何区分新旧模式"
+    - **HashIdx 是新模式**：Session 相关 key 以 `hashidx:` 为前缀，使用 `{userID}` 作为 hash tag，按用户维度散列到不同的 Redis Cluster slot。
+    - **ZSet 是旧模式**：Session 相关 key 使用 `{appName}` 作为 hash tag，同一应用的所有用户数据集中在同一个 slot。
+    - **AppState 是例外**：`appstate:{appName}` 在两种模式下格式完全一致（没有 `hashidx:` 前缀），因此 AppState 不受存储版本迁移影响，零迁移成本。
+    - 新创建的 session 在 `CompatModeLegacy`（默认）和 `CompatModeNone` 模式下使用 HashIdx 存储。
 
 新版本通过 **CompatMode**（兼容模式）实现从旧存储方式到新存储方式的平滑迁移，无需停服。
 
 #### 三种兼容模式
 
 
-| 模式                            | 读行为                  | 写行为     | 适用阶段                               |
-| --------------------------------- | ------------------------- | ------------ | ---------------------------------------- |
-| `CompatModeTransition`          | 仅 ZSet                 | 仅 ZSet    | 滚动升级中，新旧版本实例混合部署       |
-| `CompatModeLegacy` **（默认）** | HashIdx 优先，ZSet 回退 | 仅 HashIdx | 所有实例已升级，但旧 ZSet 数据尚未过期 |
-| `CompatModeNone`                | 仅 HashIdx              | 仅 HashIdx | ZSet 数据已全部过期，纯新存储模式      |
+| 模式 | Session 读行为 | Session 写行为 | UserState 行为 | 适用阶段 |
+| --- | --- | --- | --- | --- |
+| `CompatModeTransition` | Pipeline 同时检查 HashIdx 和 ZSet 是否存在；若 ZSet 存在则读 ZSet，否则读 HashIdx | 仅 ZSet | 写：双写（HashIdx + ZSet）；读：HashIdx 优先，为空回退 ZSet | 滚动升级中，新旧版本实例混合部署 |
+| `CompatModeLegacy` **（默认）** | Pipeline 同时检查 HashIdx 和 ZSet 是否存在；若 ZSet 存在则读 ZSet，否则读 HashIdx | 仅 HashIdx | 写：仅 HashIdx；读：HashIdx 优先，为空回退 ZSet | 所有实例已升级，但旧 ZSet 数据尚未过期 |
+| `CompatModeNone` | 仅 HashIdx（不检查 ZSet） | 仅 HashIdx | 写：仅 HashIdx；读：仅 HashIdx | ZSet 数据已全部过期，纯新存储模式 |
 
 #### 迁移步骤
 
@@ -676,7 +723,7 @@ CompatModeTransition         CompatModeLegacy (default)   CompatModeNone
 
 **阶段 1：滚动升级（新旧实例共存）**
 
-使用 `CompatModeTransition`，新实例的读写行为与旧实例完全一致（都走 ZSet），保证混合部署下数据完全兼容。
+使用 `CompatModeTransition`，新实例的读写行为与旧实例完全一致（Session 创建走 ZSet，UserState 双写），保证混合部署下数据完全兼容。
 
 ```go
 sessionService, err := redis.NewService(
@@ -686,7 +733,13 @@ sessionService, err := redis.NewService(
 ```
 
 !!! tip "何时需要阶段 1"
-只有在**灰度发布或新旧版本混合部署**场景下才需要使用 `CompatModeTransition`。如果能够一次性将所有实例升级到新版本（例如全量发布），可以跳过阶段 1，直接使用默认的 `CompatModeLegacy` 即可。
+    只有在**灰度发布或新旧版本混合部署**场景下才需要使用 `CompatModeTransition`。如果能够一次性将所有实例升级到新版本（例如全量发布），可以跳过阶段 1，直接使用默认的 `CompatModeLegacy` 即可。
+
+**UserState 注意事项：** 新旧存储方式的 UserState 使用了**不同的 Redis Key**（旧：`userstate:{appName}:{userID}`，新：`hashidx:userstate:appName:{userID}`）。升级到新版本后，通过 HashIdx 创建的新 session 在合并 UserState 时**只会读取新 key**，无法读到旧 key 中的数据。
+
+- 在 `CompatModeTransition` 模式下，`UpdateUserState` 会**同时写入新旧两种 key**，确保新旧实例都能读取。因此**建议在 Transition 阶段通过 `UpdateUserState` 重新写入一次 UserState**，将数据同步到新 key 中。
+- 直接调用 `ListUserStates` API 在 Transition 和 Legacy 模式下会先尝试新 key，为空时自动回退到旧 key。但 `CreateSession`/`GetSession` 内部合并 UserState 时不经过此回退逻辑，仅读取新 key。
+- **AppState 不受影响**——两种存储方式的 `appstate:{appName}` Key 格式完全一致，无需额外处理。
 
 **阶段 2：全部升级完成**
 
@@ -724,52 +777,6 @@ sessionService, err := redis.NewService(
     redis.WithCompatMode(redis.CompatModeNone),
 )
 ```
-
-#### UserState 迁移说明
-
-由于新旧存储方式的 UserState 使用了不同的 Redis Key（旧：`userstate:{appName}:{userID}`，新：`hashidx:userstate:appName:{userID}`），升级后新存储方式**无法自动读取**旧格式的 UserState 数据。
-
-如果您的业务使用了 UserState，在迁移到新版本后需要**重新设置 UserState**（通过 `UpdateUserState` 接口写入），新数据会自动存储到新格式的 Key 中。
-
-#### 存储结构对比
-
-**ZSet 存储方式（旧）：**
-
-```
-appstate:{appName}                            -> Hash {key: value}
-userstate:{appName}:{userID}                  -> Hash {key: value}
-sess:{appName}:{userID}                       -> Hash {sessionID: SessionState(JSON)}
-event:{appName}:{userID}:{sessionID}          -> SortedSet {score: timestamp, value: Event(JSON)}
-sesssum:{appName}:{userID}                    -> Hash {sessionID: Summaries(JSON)}
-track:{appName}:{userID}:{sessionID}:{track}  -> SortedSet {score: timestamp, value: TrackEvent(JSON)}
-```
-
-**HashIdx 存储方式（新）：**
-
-```
-appstate:{appName}                                         -> Hash   {key: value}
-hashidx:userstate:appName:{userID}                         -> Hash   {key: value}
-hashidx:meta:appName:{userID}:sessionID                    -> String sessionMeta(JSON)
-hashidx:evtdata:appName:{userID}:sessionID                 -> Hash   {eventID: Event(JSON), _seq: counter}
-hashidx:evtidx:time:appName:{userID}:sessionID             -> ZSet   {score: timestamp(UnixNano), member: eventID}
-hashidx:sesssum:appName:{userID}:sessionID                 -> String JSON(map[filterKey]*Summary)
-hashidx:trkdata:appName:{userID}:sessionID:trackName       -> Hash   {eventID: TrackEvent(JSON), _seq: counter}
-hashidx:trkidx:time:appName:{userID}:sessionID:trackName   -> ZSet   {score: timestamp(UnixNano), member: eventID}
-```
-
-> **Hash Tag 策略**：Session 相关 key 中的 `{userID}` 是 Redis Cluster hash tag，保证同一用户的所有数据落在同一个 slot，从而支持 Lua 脚本跨 key 原子操作。AppState 使用 `{appName}` 作为 hash tag。
->
-> **数据与索引分离**：Event 和 Track 均采用 Hash（数据）+ ZSet（时间索引）的双 key 结构。ZSet 中只存储 eventID 作为 member（而非完整 JSON），避免了大 value 导致的 ZSet 内存膨胀。读取时先从 ZSet 获取 eventID 列表，再通过 HMGET 批量获取数据。
->
-> **Session 元数据**：`hashidx:meta` 使用 String 类型存储完整的 sessionMeta JSON（包含 id、appName、userID、state、createdAt、updatedAt），通过 SetNX 保证创建的原子性。
->
-> **Summary 存储**：`hashidx:sesssum` 使用 String 类型存储整个 filterKey → Summary 的 JSON map，通过 Lua 脚本实现 set-if-newer 的原子更新语义。
->
-> **Track 自增 ID**：Track data Hash 中使用保留字段 `_seq`（通过 HINCRBY）作为自增计数器生成 eventID，无需额外的 key。
-
-> **AppState 兼容**：两种存储方式的 `appstate:{appName}` Key 格式和内容完全一致，迁移时无需额外处理。
-
-> **Key 前缀**：如果配置了 `WithKeyPrefix("myapp")`，所有 key 会自动加上 `myapp:` 前缀。
 
 ## PostgreSQL 存储
 

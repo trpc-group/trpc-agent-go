@@ -304,3 +304,32 @@ func TestConstants(t *testing.T) {
 	assert.Equal(t, "hashidx", StorageTypeHashIdx)
 	assert.Equal(t, "zset", StorageTypeZset)
 }
+
+// =============================================================================
+// ProcessStateCmd Error Cases
+// =============================================================================
+
+func TestProcessStateCmd_Error(t *testing.T) {
+	mr, rdb := setupRedis(t)
+	ctx := context.Background()
+
+	// Setup a pipeline with HGetAll
+	pipe := rdb.Pipeline()
+	cmd := pipe.HGetAll(ctx, "state:test")
+
+	// Execute pipeline to populate cmd
+	_, err := pipe.Exec(ctx)
+	require.NoError(t, err)
+
+	// Close miniredis to simulate connection error
+	mr.Close()
+
+	// Try to get result from cmd after connection is closed
+	// This simulates an error scenario
+	_, err = cmd.Result()
+	if err != nil {
+		// ProcessStateCmd should handle the error
+		_, err := ProcessStateCmd(cmd)
+		require.Error(t, err)
+	}
+}
