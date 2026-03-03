@@ -430,6 +430,118 @@ func TestListArtifactKeys_PreservesNestedFilenames(t *testing.T) {
 	)
 }
 
+func TestService_LegacyObjectKeysAreSupported(t *testing.T) {
+	s, transport := createMockService()
+	ctx := context.Background()
+
+	sessionInfo := artifact.SessionInfo{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session456",
+	}
+
+	sessionFilename := "out/a.txt"
+	userFilename := "user:out/b.txt"
+
+	_, legacyV0 := buildObjectNameCandidates(
+		sessionInfo,
+		sessionFilename,
+		0,
+	)
+	_, legacyV1 := buildObjectNameCandidates(
+		sessionInfo,
+		sessionFilename,
+		1,
+	)
+	transport.objects[legacyV0] = []byte("v0")
+	transport.objects[legacyV1] = []byte("v1")
+	transport.headers[legacyV0] = map[string]string{
+		"Content-Type": "text/plain",
+	}
+	transport.headers[legacyV1] = map[string]string{
+		"Content-Type": "text/plain",
+	}
+
+	_, legacyUserV0 := buildObjectNameCandidates(
+		sessionInfo,
+		userFilename,
+		0,
+	)
+	transport.objects[legacyUserV0] = []byte("u0")
+	transport.headers[legacyUserV0] = map[string]string{
+		"Content-Type": "text/plain",
+	}
+
+	keys, err := s.ListArtifactKeys(ctx, sessionInfo)
+	require.NoError(t, err)
+	assert.ElementsMatch(
+		t,
+		[]string{sessionFilename, userFilename},
+		keys,
+	)
+
+	got, err := s.LoadArtifact(ctx, sessionInfo, sessionFilename, nil)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, []byte("v1"), got.Data)
+	assert.Equal(t, "text/plain", got.MimeType)
+
+	version := 0
+	got, err = s.LoadArtifact(ctx, sessionInfo, userFilename, &version)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, []byte("u0"), got.Data)
+	assert.Equal(t, "text/plain", got.MimeType)
+
+	err = s.DeleteArtifact(ctx, sessionInfo, sessionFilename)
+	require.NoError(t, err)
+	err = s.DeleteArtifact(ctx, sessionInfo, userFilename)
+	require.NoError(t, err)
+
+	keys, err = s.ListArtifactKeys(ctx, sessionInfo)
+	require.NoError(t, err)
+	require.Empty(t, keys)
+}
+
+func TestSaveArtifact_UsesMaxVersionAcrossLayouts(t *testing.T) {
+	s, transport := createMockService()
+	ctx := context.Background()
+
+	sessionInfo := artifact.SessionInfo{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session456",
+	}
+	filename := "out/a.txt"
+
+	_, legacyV0 := buildObjectNameCandidates(sessionInfo, filename, 0)
+	_, legacyV1 := buildObjectNameCandidates(sessionInfo, filename, 1)
+	transport.objects[legacyV0] = []byte("legacy0")
+	transport.objects[legacyV1] = []byte("legacy1")
+
+	gotVersion, err := s.SaveArtifact(
+		ctx,
+		sessionInfo,
+		filename,
+		&artifact.Artifact{
+			Data:     []byte("new2"),
+			MimeType: "text/plain",
+			Name:     filename,
+		},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 2, gotVersion)
+
+	newV2, _ := buildObjectNameCandidates(sessionInfo, filename, 2)
+	_, ok := transport.objects[newV2]
+	require.True(t, ok)
+
+	latest, err := s.LoadArtifact(ctx, sessionInfo, filename, nil)
+	require.NoError(t, err)
+	require.NotNil(t, latest)
+	assert.Equal(t, []byte("new2"), latest.Data)
+}
+
 func TestSaveArtifact_ValidatesInputs(t *testing.T) {
 	s, _ := createMockService()
 	ctx := context.Background()

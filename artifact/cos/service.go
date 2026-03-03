@@ -11,9 +11,9 @@
 //
 // The object name format used depends on whether the filename has a user namespace:
 //   - For files with user namespace (starting with "user:"):
-//     {app_name}/{user_id}/user/{filename}/{version}
+//     artifact/{app_name}/{user_id}/user/{filename}/{version}
 //   - For regular session-scoped files:
-//     {app_name}/{user_id}/{session_id}/{filename}/{version}
+//     artifact/{app_name}/{user_id}/{session_id}/{filename}/{version}
 //
 // Authentication:
 // The service requires COS credentials which can be provided via:
@@ -50,9 +50,9 @@ import (
 // It provides cloud-based storage for artifacts using Tencent COS.
 // The Object name format used depends on whether the filename has a user namespace:
 //   - For files with user namespace (starting with "user:"):
-//     {app_name}/{user_id}/user/{filename}/{version}
+//     artifact/{app_name}/{user_id}/user/{filename}/{version}
 //   - For regular session-scoped files:
-//     {app_name}/{user_id}/{session_id}/{filename}/{version}
+//     artifact/{app_name}/{user_id}/{session_id}/{filename}/{version}
 type Service struct {
 	cosClient client
 }
@@ -61,6 +61,7 @@ const (
 	defaultTimeout     = 60 * time.Second
 	defaultContentType = "application/octet-stream"
 	objectKeySep       = "/"
+	artifactRootDir    = "artifact"
 )
 
 // NewService creates a new TCOS artifact service with optional configurations.
@@ -133,7 +134,11 @@ func (s *Service) SaveArtifact(
 		version = maxVersion + 1
 	}
 
-	objectName := iartifact.BuildObjectName(sessionInfo, filename, version)
+	objectName, _ := buildObjectNameCandidates(
+		sessionInfo,
+		filename,
+		version,
+	)
 
 	// Upload the artifact data
 	reader := bytes.NewReader(art.Data)
@@ -181,15 +186,29 @@ func (s *Service) LoadArtifact(
 		targetVersion = *version
 	}
 
-	objectName := iartifact.BuildObjectName(sessionInfo, filename, targetVersion)
+	objectName, legacyObjectName := buildObjectNameCandidates(
+		sessionInfo,
+		filename,
+		targetVersion,
+	)
 
 	// Download the artifact
 	respBody, respHeader, err := s.cosClient.GetObject(ctx, objectName)
 	if err != nil {
-		if cos.IsNotFoundError(err) {
-			return nil, nil // Artifact not found
+		if !cos.IsNotFoundError(err) {
+			return nil, fmt.Errorf("failed to download artifact: %w", err)
 		}
-		return nil, fmt.Errorf("failed to download artifact: %w", err)
+
+		respBody, respHeader, err = s.cosClient.GetObject(
+			ctx,
+			legacyObjectName,
+		)
+		if err != nil {
+			if cos.IsNotFoundError(err) {
+				return nil, nil // Artifact not found
+			}
+			return nil, fmt.Errorf("failed to download artifact: %w", err)
+		}
 	}
 	defer respBody.Close()
 
@@ -224,18 +243,27 @@ func (s *Service) ListArtifactKeys(
 	filenameSet := make(map[string]struct{})
 
 	// List session-scoped artifacts
-	sessionPrefix := iartifact.BuildSessionPrefix(sessionInfo)
-	sessionResult, err := s.cosClient.GetBucket(ctx, sessionPrefix)
-	if err != nil && !cos.IsNotFoundError(err) {
-		return nil, fmt.Errorf("failed to list session artifacts: %w", err)
+	sessionPrefix, legacySessionPrefix := buildSessionPrefixCandidates(
+		sessionInfo,
+	)
+	sessionPrefixes := []string{
+		sessionPrefix,
+		legacySessionPrefix,
 	}
-
-	if sessionResult != nil {
-		for _, obj := range sessionResult.Contents {
-			filename := extractFilenameFromObjectKey(
-				obj.Key,
-				sessionPrefix,
+	for _, prefix := range sessionPrefixes {
+		sessionResult, err := s.cosClient.GetBucket(ctx, prefix)
+		if err != nil && !cos.IsNotFoundError(err) {
+			return nil, fmt.Errorf(
+				"failed to list session artifacts: %w",
+				err,
 			)
+		}
+		if sessionResult == nil {
+			continue
+		}
+
+		for _, obj := range sessionResult.Contents {
+			filename := extractFilenameFromObjectKey(obj.Key, prefix)
 			if filename == "" {
 				continue
 			}
@@ -244,18 +272,27 @@ func (s *Service) ListArtifactKeys(
 	}
 
 	// List user-namespaced artifacts
-	userPrefix := iartifact.BuildUserNamespacePrefix(sessionInfo)
-	userResult, err := s.cosClient.GetBucket(ctx, userPrefix)
-	if err != nil && !cos.IsNotFoundError(err) {
-		return nil, fmt.Errorf("failed to list user artifacts: %w", err)
+	userPrefix, legacyUserPrefix := buildUserNamespacePrefixCandidates(
+		sessionInfo,
+	)
+	userPrefixes := []string{
+		userPrefix,
+		legacyUserPrefix,
 	}
-
-	if userResult != nil {
-		for _, obj := range userResult.Contents {
-			filename := extractFilenameFromObjectKey(
-				obj.Key,
-				userPrefix,
+	for _, prefix := range userPrefixes {
+		userResult, err := s.cosClient.GetBucket(ctx, prefix)
+		if err != nil && !cos.IsNotFoundError(err) {
+			return nil, fmt.Errorf(
+				"failed to list user artifacts: %w",
+				err,
 			)
+		}
+		if userResult == nil {
+			continue
+		}
+
+		for _, obj := range userResult.Contents {
+			filename := extractFilenameFromObjectKey(obj.Key, prefix)
 			if filename == "" {
 				continue
 			}
@@ -294,10 +331,21 @@ func (s *Service) DeleteArtifact(
 
 	// Delete all versions
 	for _, version := range versions {
-		objectName := iartifact.BuildObjectName(sessionInfo, filename, version)
-		err := s.cosClient.DeleteObject(ctx, objectName)
-		if err != nil && !cos.IsNotFoundError(err) {
-			return fmt.Errorf("failed to delete artifact version %d: %w", version, err)
+		objectName, legacyObjectName := buildObjectNameCandidates(
+			sessionInfo,
+			filename,
+			version,
+		)
+		objectNames := []string{objectName, legacyObjectName}
+		for _, name := range objectNames {
+			err := s.cosClient.DeleteObject(ctx, name)
+			if err != nil && !cos.IsNotFoundError(err) {
+				return fmt.Errorf(
+					"failed to delete artifact version %d: %w",
+					version,
+					err,
+				)
+			}
 		}
 	}
 
@@ -317,25 +365,51 @@ func (s *Service) ListVersions(
 		return nil, err
 	}
 
-	prefix := iartifact.BuildObjectNamePrefix(sessionInfo, filename)
-	result, err := s.cosClient.GetBucket(ctx, prefix)
-	if err != nil {
-		if cos.IsNotFoundError(err) {
-			return []int{}, nil // No versions found
+	prefix, legacyPrefix := buildObjectNamePrefixCandidates(
+		sessionInfo,
+		filename,
+	)
+	results := []*cos.BucketGetResult{}
+	prefixes := []string{prefix, legacyPrefix}
+	for _, p := range prefixes {
+		result, err := s.cosClient.GetBucket(ctx, p)
+		if err != nil {
+			if cos.IsNotFoundError(err) {
+				continue
+			}
+			return nil, fmt.Errorf("failed to list versions: %w", err)
 		}
-		return nil, fmt.Errorf("failed to list versions: %w", err)
+
+		if result != nil {
+			results = append(results, result)
+		}
 	}
 
-	var versions []int
-	for _, obj := range result.Contents {
-		parts := strings.Split(obj.Key, objectKeySep)
-		if len(parts) > 0 {
-			versionStr := parts[len(parts)-1]
-			if version, err := strconv.Atoi(versionStr); err == nil {
-				versions = append(versions, version)
+	if len(results) == 0 {
+		return []int{}, nil
+	}
+
+	versionSet := make(map[int]struct{})
+	for _, result := range results {
+		for _, obj := range result.Contents {
+			parts := strings.Split(obj.Key, objectKeySep)
+			if len(parts) == 0 {
+				continue
 			}
+			versionStr := parts[len(parts)-1]
+			version, err := strconv.Atoi(versionStr)
+			if err != nil {
+				continue
+			}
+			versionSet[version] = struct{}{}
 		}
 	}
+
+	versions := make([]int, 0, len(versionSet))
+	for version := range versionSet {
+		versions = append(versions, version)
+	}
+	sort.Ints(versions)
 	return versions, nil
 }
 
@@ -370,4 +444,40 @@ func extractFilenameFromObjectKey(objectKey, prefix string) string {
 	}
 	name := strings.Join(parts[:len(parts)-1], objectKeySep)
 	return strings.TrimSpace(name)
+}
+
+func buildObjectNameCandidates(
+	sessionInfo artifact.SessionInfo,
+	filename string,
+	version int,
+) (string, string) {
+	legacy := iartifact.BuildObjectName(sessionInfo, filename, version)
+	return withArtifactRoot(legacy), legacy
+}
+
+func buildObjectNamePrefixCandidates(
+	sessionInfo artifact.SessionInfo,
+	filename string,
+) (string, string) {
+	legacy := iartifact.BuildObjectNamePrefix(sessionInfo, filename)
+	return withArtifactRoot(legacy), legacy
+}
+
+func buildSessionPrefixCandidates(
+	sessionInfo artifact.SessionInfo,
+) (string, string) {
+	legacy := iartifact.BuildSessionPrefix(sessionInfo)
+	return withArtifactRoot(legacy), legacy
+}
+
+func buildUserNamespacePrefixCandidates(
+	sessionInfo artifact.SessionInfo,
+) (string, string) {
+	legacy := iartifact.BuildUserNamespacePrefix(sessionInfo)
+	return withArtifactRoot(legacy), legacy
+}
+
+func withArtifactRoot(key string) string {
+	key = strings.TrimPrefix(key, objectKeySep)
+	return artifactRootDir + objectKeySep + key
 }
