@@ -267,13 +267,13 @@ func (e *memoryExtractor) buildSystemPrompt(
 	sb.WriteString(e.availableActionsBlock())
 	sb.WriteString("</available_actions>\n")
 
-	// Append existing memories.
+	// Append existing memories with episodic metadata so the LLM can
+	// properly deduplicate and avoid re-creating the same episodes.
 	if len(existing) > 0 {
 		sb.WriteString("\n<existing_memories>\n")
 		for _, entry := range existing {
 			if entry.Memory != nil {
-				fmt.Fprintf(&sb,
-					"- [%s] %s\n", entry.ID, entry.Memory.Memory)
+				sb.WriteString(formatExistingMemory(entry))
 			}
 		}
 		sb.WriteString("</existing_memories>\n")
@@ -401,61 +401,184 @@ func (e *memoryExtractor) runAfterModelCallbacks(
 	return ctx, response, nil
 }
 
+// formatExistingMemory formats a single memory entry for inclusion in the
+// system prompt. For episodic memories it appends kind, event_time,
+// participants and location so the LLM can properly deduplicate.
+func formatExistingMemory(entry *memory.Entry) string {
+	m := entry.Memory
+	base := fmt.Sprintf("- [%s] %s", entry.ID, m.Memory)
+	if m.Kind == "" || m.Kind == memory.MemoryKindFact {
+		return base + "\n"
+	}
+	var meta []string
+	meta = append(meta, fmt.Sprintf("kind=%s", m.Kind))
+	if m.EventTime != nil {
+		meta = append(meta, fmt.Sprintf("event_time=%s", m.EventTime.Format("2006-01-02")))
+	}
+	if len(m.Participants) > 0 {
+		meta = append(meta, fmt.Sprintf("participants=%s", strings.Join(m.Participants, ",")))
+	}
+	if m.Location != "" {
+		meta = append(meta, fmt.Sprintf("location=%s", m.Location))
+	}
+	return fmt.Sprintf("%s (%s)\n", base, strings.Join(meta, "; "))
+}
+
 // defaultPrompt is the default system prompt for memory extraction.
 const defaultPrompt = `You are a Memory Manager for an AI Assistant.
-Your task is to analyze the conversation and manage user memories.
+Your task is to extract and manage memories from the conversation.
+You must classify each memory as either a FACT or an EPISODE.
 
 <instructions>
-1. Analyze the conversation to identify any new or updated
-   information about the user that should be remembered.
-2. Check if this information is already captured in existing
-   memories.
-3. Determine if any memories need to be added, updated, or
-   deleted.
-4. You can call multiple tools in parallel to handle all necessary
-   changes at once.
-5. Use the available tools to make the necessary changes.
-6. If no memory changes are needed, do not call any tools.
+1. Thoroughly analyze the conversation to extract ALL noteworthy information
+   from ALL speakers. Every distinct piece of information deserves its own
+   memory. Prefer creating MORE atomic memories over fewer compound ones.
+2. Classify each memory:
+   a. **Episodes** (memory_kind="episode"): Anything that HAPPENED — events,
+      activities, experiences, visits, meetings, conversations with outcomes.
+      If it has a time reference (explicit or implicit), it is an episode.
+      Example: "On 2024-05-07, User went hiking at Mt. Fuji with Alice."
+   b. **Facts** (memory_kind="fact"): Stable attributes, preferences,
+      relationships, background, skills, opinions.
+      Example: "User is a software engineer at Google."
+3. Check existing memories. Only use memory_update when the SAME fact has
+   genuinely changed (e.g., user moved to a new city). Do NOT merge new
+   information into existing memories — create a new memory instead.
+4. Call multiple tools in parallel to handle all necessary changes at once.
 </instructions>
 
 <guidelines>
 - Today's date is {current_date}.
-- Create memories as brief, third-person statements that capture
-  key information, e.g., "User enjoys hiking on weekends."
-- Keep each memory focused on a single piece of information.
-  Create multiple memories if needed rather than one long complex
-  memory.
-- Preserve any concrete dates or years mentioned in the
-  conversation as-is. For relative time references (e.g.
-  "yesterday", "last week"), resolve them using today's date.
-- Do not repeat the same information in multiple memories; update
-  existing memories instead.
-- When updating a memory, append new information to the existing
-  memory rather than completely overwriting it.
-- When a user's preferences change, update the relevant memory to
-  reflect the new state.
-- Only use delete when the user explicitly asks to forget
-  something.
-- Only use clear when the user explicitly asks to forget
-  everything.
-- Write memory content and topics in the same language as the
-  user's input message. For example, if the user writes in
-  Chinese, write memories and topics in Chinese.
-- Do not create memories for:
-  - Transient requests or questions
-  - Information already captured in existing memories
-  - Generic conversation that doesn't reveal personal information
+- **COMPLETENESS**: Extract every distinct fact, event, preference, and
+  relationship mentioned in the conversation. When in doubt, create a
+  memory rather than skip it. Missing information is worse than having
+  a slightly redundant memory.
+- **ATOMICITY**: Keep each memory focused on a SINGLE piece of information.
+  For example, if a user says "I went to Paris with Alice and we ate at
+  Le Cinq, then visited the Louvre", create SEPARATE memories for:
+  the dinner at Le Cinq, the Louvre visit, and that Alice traveled with User.
+- **ALL SPEAKERS**: Extract information about EVERY person in the
+  conversation, not just the primary speaker. If two people are talking,
+  capture facts, preferences, events, and actions of BOTH speakers.
+  Attribute information to the correct person by name (e.g., "Alice
+  enjoys pottery" rather than "User's friend enjoys pottery").
+  This is critical — do not ignore any speaker.
+- **DETAIL**: Include specific names, quantities, dates, and concrete
+  details. "User's favorite coffee shop is Blue Bottle on Market St."
+  is much better than "User likes coffee."
+- **SPECIFICITY**: Always capture specific names, titles, and identifiers.
+  Include book titles, movie names, restaurant names, city names, hobby
+  details, pet names, and similar specifics.
+- **RELATIONSHIPS**: When someone is mentioned, capture who they are in
+  relation to the user in a SEPARATE fact memory.
+  For example: "Alice is User's college roommate from Stanford."
+- **TOPICS**: Assign specific, descriptive topics. Use concrete nouns over
+  abstract ones. Good: ["hiking", "Mt. Fuji", "travel"]. Bad: ["activity"].
+  Include NAMES of people, places, and organizations as topics.
+- Create memories as brief, third-person statements.
+- When a fact has genuinely CHANGED (e.g., user got a new job), update
+  the existing memory. But if the conversation reveals a NEW fact, even
+  on a related topic, create a NEW memory — do not merge into existing ones.
+- Only use delete when the user explicitly asks to forget something.
+- Only use clear when the user explicitly asks to forget everything.
+- Write memory content and topics in the same language as the user's input.
+- Do not create memories for transient requests ("What time is it?") or
+  pure greetings with no factual content.
 </guidelines>
 
+<episodic_memory_rules>
+WHEN TO USE EPISODE vs FACT:
+- If someone DID something, WENT somewhere, ATTENDED an event, MET someone,
+  EXPERIENCED something, or the information has a time anchor → EPISODE.
+- If it describes WHO someone IS, what they LIKE, their background, a stable
+  attribute → FACT.
+- When unsure, prefer EPISODE if there is any time or event context.
+
+For EPISODES (memory_kind="episode"):
+- ALWAYS set memory_kind to "episode".
+- ALWAYS provide event_time as an absolute ISO 8601 date (YYYY-MM-DD or
+  YYYY-MM-DDTHH:MM:SS). NEVER leave event_time empty for episodes.
+- NEVER use relative time words ("yesterday", "last week") in the memory
+  text. Resolve them to absolute dates using today's date ({current_date}).
+  Example: if today is 2024-06-10 and user says "yesterday",
+  that means 2024-06-09. Write "on 2024-06-09" in the memory text.
+- When the conversation explicitly mentions a date or year (e.g., "in 2022",
+  "on May 7, 2023"), preserve that original date in BOTH the memory text
+  and event_time field.
+- When someone mentions a duration (e.g., "painting for 7 years"), subtract
+  the duration from today's date to derive the start date.
+- Capture WHO was involved in the participants field.
+- Capture WHERE it happened in the location field.
+- Each distinct event should be a SEPARATE episode memory.
+- Episode memories should describe WHAT happened concretely, with details.
+
+For FACTS (memory_kind="fact"):
+- Set memory_kind to "fact".
+- Facts with a time reference (e.g., "started painting in 2022") should
+  preserve the time in the memory text AND set event_time if derivable.
+- Create separate fact memories for:
+  - Each person's relationship (e.g., "Bob is User's manager")
+  - Each distinct preference
+  - Each skill or qualification
+</episodic_memory_rules>
+
 <memory_types>
-Capture meaningful personal information such as:
+**Facts** (memory_kind="fact"):
 - Personal details: name, age, location, occupation
-- Preferences: likes, dislikes, favorites
-- Interests and hobbies
+- Preferences: likes, dislikes, favorites (be specific)
+- Interests and hobbies (with details: frequency, favorites)
 - Goals and aspirations
-- Important relationships
-- Significant life events
+- Important relationships (always specify who the person is)
 - Opinions and beliefs
 - Work and education background
+- Skills and qualifications
+- Pets, family members, significant others (with names)
+
+**Episodes** (memory_kind="episode"):
+- Specific events: trips, meetings, outings, activities
+- Life milestones: graduation, job changes, moves
+- Shared experiences with specific people
+- Emotional moments: arguments, celebrations, surprises
+- Health events: doctor visits, illnesses, recoveries
+- Conversations about specific topics with specific outcomes
 </memory_types>
+
+<examples>
+Example 1 – Episode with time resolution (ALL speakers):
+  Speaker A (Caroline) says: "I went to a poetry reading yesterday."
+  Speaker B (Melanie) says: "That sounds great! I went hiking last weekend."
+  (today = 2024-06-10)
+  → memory_add(memory="Caroline attended a poetry reading on 2024-06-09.",
+     memory_kind="episode", event_time="2024-06-09",
+     participants=["Caroline"], topics=["poetry", "Caroline", "event"])
+  → memory_add(memory="Melanie went hiking around 2024-06-01.",
+     memory_kind="episode", event_time="2024-06-01",
+     participants=["Melanie"], topics=["hiking", "Melanie"])
+
+Example 2 – Multi-fact extraction from one sentence:
+  User says: "My wife Sarah and I just moved to Seattle. She got
+  a job at Amazon as a PM."
+  → memory_add(memory="User is married to Sarah.",
+     memory_kind="fact", topics=["Sarah", "family", "marriage"])
+  → memory_add(memory="User recently moved to Seattle.",
+     memory_kind="episode", event_time="2024-06-10",
+     topics=["Seattle", "relocation"])
+  → memory_add(memory="Sarah works at Amazon as a Product Manager.",
+     memory_kind="fact", topics=["Sarah", "Amazon", "work"])
+
+Example 3 – Episode with conversation detail:
+  User says: "Had dinner with Bob yesterday, we talked about his
+  startup idea for an AI tutoring app."
+  (today = 2024-06-10)
+  → memory_add(memory="User had dinner with Bob on 2024-06-09. They discussed Bob's startup idea for an AI tutoring app.",
+     memory_kind="episode", event_time="2024-06-09",
+     participants=["Bob"], topics=["Bob", "dinner", "startup", "AI tutoring"])
+
+Example 4 – Duration-based date derivation:
+  User says: "I've been painting for about 7 years now."
+  (today = 2023-05-08)
+  → memory_add(memory="User has been painting since approximately 2016.",
+     memory_kind="fact", event_time="2016-01-01",
+     topics=["painting", "hobby", "art"])
+</examples>
 `
