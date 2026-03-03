@@ -130,12 +130,13 @@ type Memory struct {
 
 // Entry represents a memory entry stored in the system.
 type Entry struct {
-	ID        string    `json:"id"`         // ID is the unique identifier of the memory.
-	AppName   string    `json:"app_name"`   // App name is the name of the application.
-	Memory    *Memory   `json:"memory"`     // Memory is the memory content.
-	UserID    string    `json:"user_id"`    // User ID is the unique identifier of the user.
-	CreatedAt time.Time `json:"created_at"` // CreatedAt is the creation time.
-	UpdatedAt time.Time `json:"updated_at"` // UpdatedAt is the last update time.
+	ID        string    `json:"id"`                  // ID is the unique identifier of the memory.
+	AppName   string    `json:"app_name"`            // App name is the name of the application.
+	Memory    *Memory   `json:"memory"`              // Memory is the memory content.
+	UserID    string    `json:"user_id"`             // User ID is the unique identifier of the user.
+	CreatedAt time.Time `json:"created_at"`          // CreatedAt is the creation time.
+	UpdatedAt time.Time `json:"updated_at"`          // UpdatedAt is the last update time.
+	Score     float64   `json:"score,omitempty"`     // Score is the similarity score from vector search (0-1).
 }
 
 // Key is the key for a memory.
@@ -173,6 +174,10 @@ type SearchOptions struct {
 	TimeAfter  *time.Time // Filter episodes with event_time >= TimeAfter.
 	TimeBefore *time.Time // Filter episodes with event_time <= TimeBefore.
 	MaxResults int        // Override default max results. 0 means use default.
+
+	// SimilarityThreshold sets the minimum similarity score for results.
+	// Results below this threshold are filtered out. 0 means use service default.
+	SimilarityThreshold float64
 
 	// OrderByEventTime orders results by event_time (ascending) instead
 	// of the default embedding similarity order. Only affects episodes

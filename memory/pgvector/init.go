@@ -41,8 +41,9 @@ const (
 	sqlCreateAppUserIndexPattern   = "CREATE INDEX IF NOT EXISTS %s ON %s(app_name, user_id)"
 	sqlCreateUpdatedAtIndexPattern = "CREATE INDEX IF NOT EXISTS %s ON %s(updated_at DESC)"
 	sqlCreateDeletedAtIndexPattern = "CREATE INDEX IF NOT EXISTS %s ON %s(deleted_at)"
-	sqlCreateEventTimeIndexPattern = "CREATE INDEX IF NOT EXISTS %s ON %s(event_time DESC) WHERE event_time IS NOT NULL"
-	sqlCreateKindIndexPattern      = "CREATE INDEX IF NOT EXISTS %s ON %s(app_name, user_id, memory_kind)"
+	sqlCreateEventTimeIndexPattern    = "CREATE INDEX IF NOT EXISTS %s ON %s(event_time DESC) WHERE event_time IS NOT NULL"
+	sqlCreateKindIndexPattern         = "CREATE INDEX IF NOT EXISTS %s ON %s(app_name, user_id, memory_kind)"
+	sqlCreateParticipantsIndexPattern = "CREATE INDEX IF NOT EXISTS %s ON %s USING gin(participants) WHERE participants IS NOT NULL"
 
 	sqlCreateHNSWIndexPattern = "CREATE INDEX IF NOT EXISTS %s ON %s USING hnsw " +
 		"(embedding vector_cosine_ops) WITH (m = %d, ef_construction = %d)"
@@ -161,11 +162,12 @@ func (s *Service) initDB(ctx context.Context) error {
 
 	// Index suffix constants.
 	const (
-		indexSuffixAppUser   = "app_user"
-		indexSuffixUpdatedAt = "updated_at"
-		indexSuffixDeletedAt = "deleted_at"
-		indexSuffixEventTime = "event_time"
-		indexSuffixKind      = "kind"
+		indexSuffixAppUser      = "app_user"
+		indexSuffixUpdatedAt    = "updated_at"
+		indexSuffixDeletedAt    = "deleted_at"
+		indexSuffixEventTime    = "event_time"
+		indexSuffixKind         = "kind"
+		indexSuffixParticipants = "participants"
 	)
 
 	// Create regular indexes.
@@ -178,6 +180,7 @@ func (s *Service) initDB(ctx context.Context) error {
 		{indexSuffixDeletedAt, sqlCreateDeletedAtIndexPattern},
 		{indexSuffixEventTime, sqlCreateEventTimeIndexPattern},
 		{indexSuffixKind, sqlCreateKindIndexPattern},
+		{indexSuffixParticipants, sqlCreateParticipantsIndexPattern},
 	}
 
 	for _, idx := range indexes {

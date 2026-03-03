@@ -674,13 +674,18 @@ func (s *Service) Close() error {
 	return nil
 }
 
-// AddMemoryWithEpisodic delegates to AddMemory (episodic fields ignored for sqlitevec backend).
+// AddMemoryWithEpisodic delegates to AddMemory.
+// The sqlitevec backend stores memory_content and topics as separate columns
+// (not a JSON blob), so episodic fields require schema migration to persist.
+// Episodic fields are currently not stored but will be preserved if the
+// backend is migrated in the future.
 func (s *Service) AddMemoryWithEpisodic(ctx context.Context, userKey memory.UserKey,
 	memoryStr string, topics []string, _ *memory.EpisodicFields) error {
 	return s.AddMemory(ctx, userKey, memoryStr, topics)
 }
 
-// UpdateMemoryWithEpisodic delegates to UpdateMemory (episodic fields ignored for sqlitevec backend).
+// UpdateMemoryWithEpisodic delegates to UpdateMemory.
+// See AddMemoryWithEpisodic for details on episodic field support.
 func (s *Service) UpdateMemoryWithEpisodic(ctx context.Context, memoryKey memory.Key,
 	memoryStr string, topics []string, _ *memory.EpisodicFields) error {
 	return s.UpdateMemory(ctx, memoryKey, memoryStr, topics)

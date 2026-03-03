@@ -67,6 +67,21 @@ func (m *mockMemoryServiceForAutoMemory) Close() error {
 	return nil
 }
 
+func (m *mockMemoryServiceForAutoMemory) AddMemoryWithEpisodic(ctx context.Context, userKey memory.UserKey,
+	memoryStr string, topics []string, _ *memory.EpisodicFields) error {
+	return m.AddMemory(ctx, userKey, memoryStr, topics)
+}
+
+func (m *mockMemoryServiceForAutoMemory) UpdateMemoryWithEpisodic(ctx context.Context, memoryKey memory.Key,
+	memoryStr string, topics []string, _ *memory.EpisodicFields) error {
+	return m.UpdateMemory(ctx, memoryKey, memoryStr, topics)
+}
+
+func (m *mockMemoryServiceForAutoMemory) SearchMemoriesWithOptions(ctx context.Context, userKey memory.UserKey,
+	opts memory.SearchOptions) ([]*memory.Entry, error) {
+	return m.SearchMemories(ctx, userKey, opts.Query)
+}
+
 func TestEnqueueAutoMemoryJob(t *testing.T) {
 	t.Run("nil memory service", func(t *testing.T) {
 		r := &runner{memoryService: nil}

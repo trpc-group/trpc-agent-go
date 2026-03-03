@@ -1652,10 +1652,11 @@ func TestAutoMemoryWorker_ExecuteOperation_UpdateNotFound_AddEnabled(t *testing.
 }
 
 func TestOpToEpisodicFields(t *testing.T) {
-	t.Run("all empty returns nil", func(t *testing.T) {
+	t.Run("all empty returns fact default", func(t *testing.T) {
 		op := &extractor.Operation{}
 		got := opToEpisodicFields(op)
-		assert.Nil(t, got)
+		require.NotNil(t, got)
+		assert.Equal(t, memory.MemoryKindFact, got.Kind)
 	})
 
 	t.Run("fact kind", func(t *testing.T) {
