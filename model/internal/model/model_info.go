@@ -251,6 +251,23 @@ var ModelMaxOutputTokens = map[string]int{
 	"gpt-4.1-mini": 32768,
 	"gpt-4.1-nano": 32768,
 
+	// OpenAI GPT-4.5
+	"gpt-4.5-preview": 16384,
+
+	// OpenAI GPT-4o family: 128K/200K context but 16K max completion tokens.
+	"gpt-4o":      16384,
+	"gpt-4o-mini": 16384,
+
+	// OpenAI GPT-4 Turbo: 128K context but 4K max output.
+	"gpt-4-turbo": 4096,
+
+	// OpenAI O-series: 200K context but 100K max output.
+	"o1":      100000,
+	"o1-mini": 65536,
+	"o3":      100000,
+	"o3-mini": 100000,
+	"o4-mini": 100000,
+
 	// Claude models: 200K context but 64K max output.
 	"claude-4.5-opus":   64000,
 	"claude-4.5-sonnet": 64000,
