@@ -1,0 +1,585 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
+package gateway
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"mime"
+	"net/http"
+	"net/url"
+	"path"
+	"strings"
+	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
+)
+
+const (
+	defaultMaxContentPartBytes int64 = 8 << 20
+
+	defaultContentPartTimeout = 15 * time.Second
+	defaultMaxRedirects       = 5
+
+	headerUserAgent = "User-Agent"
+
+	contentPartUserAgent = "trpc-agent-go/openclaw-gateway"
+
+	imageDetailAuto = "auto"
+
+	mimeOctetStream = "application/octet-stream"
+
+	audioFormatWAV = "wav"
+	audioFormatMP3 = "mp3"
+)
+
+type partFetcher interface {
+	Fetch(ctx context.Context, rawURL string, maxBytes int64) (fetched, error)
+}
+
+type fetched struct {
+	Data        []byte
+	ContentType string
+	Filename    string
+}
+
+type urlPartFetcher struct {
+	client       *http.Client
+	maxRedirects int
+}
+
+func newURLPartFetcher() *urlPartFetcher {
+	return &urlPartFetcher{
+		client: &http.Client{
+			Timeout: defaultContentPartTimeout,
+		},
+		maxRedirects: defaultMaxRedirects,
+	}
+}
+
+func (f *urlPartFetcher) Fetch(
+	ctx context.Context,
+	rawURL string,
+	maxBytes int64,
+) (fetched, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return fetched{}, fmt.Errorf("parse url: %w", err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fetched{}, errors.New("unsupported url scheme")
+	}
+	if strings.TrimSpace(parsed.Host) == "" {
+		return fetched{}, errors.New("missing url host")
+	}
+
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		rawURL,
+		nil,
+	)
+	if err != nil {
+		return fetched{}, fmt.Errorf("new request: %w", err)
+	}
+	req.Header.Set(headerUserAgent, contentPartUserAgent)
+
+	c := f.client
+	if c == nil {
+		c = http.DefaultClient
+	}
+
+	copied := *c
+	copied.CheckRedirect = func(
+		_ *http.Request,
+		via []*http.Request,
+	) error {
+		if len(via) > f.maxRedirects {
+			return errors.New("too many redirects")
+		}
+		return nil
+	}
+
+	resp, err := copied.Do(req)
+	if err != nil {
+		return fetched{}, fmt.Errorf("fetch: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < http.StatusOK ||
+		resp.StatusCode >= http.StatusMultipleChoices {
+		return fetched{}, fmt.Errorf("unexpected status: %d", resp.StatusCode)
+	}
+
+	body, err := readLimited(resp.Body, maxBytes)
+	if err != nil {
+		return fetched{}, err
+	}
+
+	contentType := normalizeContentType(resp.Header.Get(headerContentType))
+	filename := filenameFromHeaders(resp, parsed)
+	return fetched{
+		Data:        body,
+		ContentType: contentType,
+		Filename:    filename,
+	}, nil
+}
+
+func normalizeContentType(raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		return ""
+	}
+	mediaType := strings.Split(raw, ";")[0]
+	return strings.TrimSpace(mediaType)
+}
+
+func filenameFromHeaders(resp *http.Response, u *url.URL) string {
+	if resp == nil || u == nil {
+		return ""
+	}
+	_, params, err := mime.ParseMediaType(
+		resp.Header.Get("Content-Disposition"),
+	)
+	if err == nil {
+		name := strings.TrimSpace(params["filename"])
+		if name != "" {
+			return name
+		}
+	}
+	name := strings.TrimSpace(path.Base(u.Path))
+	if name == "." || name == "/" {
+		return ""
+	}
+	return name
+}
+
+func readLimited(r io.Reader, maxBytes int64) ([]byte, error) {
+	if r == nil {
+		return nil, errors.New("nil reader")
+	}
+	if maxBytes <= 0 {
+		return nil, errors.New("invalid max bytes")
+	}
+	limited := io.LimitReader(r, maxBytes+1)
+	body, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, fmt.Errorf("read body: %w", err)
+	}
+	if int64(len(body)) > maxBytes {
+		return nil, errors.New("content part too large")
+	}
+	return body, nil
+}
+
+func inboundFromRequest(
+	req gwproto.MessageRequest,
+	text string,
+) InboundMessage {
+	channel := strings.TrimSpace(req.Channel)
+	if channel == "" {
+		channel = defaultChannelName
+	}
+	return InboundMessage{
+		Channel:   channel,
+		From:      strings.TrimSpace(req.From),
+		To:        strings.TrimSpace(req.To),
+		Thread:    strings.TrimSpace(req.Thread),
+		MessageID: strings.TrimSpace(req.MessageID),
+		Text:      strings.TrimSpace(text),
+	}
+}
+
+func (s *Server) normalizeUserMessage(
+	ctx context.Context,
+	req gwproto.MessageRequest,
+) (model.Message, string, error) {
+	text := strings.TrimSpace(req.Text)
+	parts, partsText, err := s.normalizeContentParts(
+		ctx,
+		req.ContentParts,
+	)
+	if err != nil {
+		return model.Message{}, "", err
+	}
+
+	mentionText := strings.TrimSpace(joinText(text, partsText))
+	if text == "" && len(parts) == 0 {
+		return model.Message{}, "", errors.New("missing text")
+	}
+	return model.Message{
+		Role:         model.RoleUser,
+		Content:      text,
+		ContentParts: parts,
+	}, mentionText, nil
+}
+
+func joinText(a, b string) string {
+	a = strings.TrimSpace(a)
+	b = strings.TrimSpace(b)
+	if a == "" {
+		return b
+	}
+	if b == "" {
+		return a
+	}
+	return a + "\n" + b
+}
+
+func (s *Server) normalizeContentParts(
+	ctx context.Context,
+	parts []gwproto.ContentPart,
+) ([]model.ContentPart, string, error) {
+	if len(parts) == 0 {
+		return nil, "", nil
+	}
+	out := make([]model.ContentPart, 0, len(parts))
+	textParts := make([]string, 0, len(parts))
+
+	for i, part := range parts {
+		normalized, text, err := s.normalizeContentPart(ctx, part)
+		if err != nil {
+			return nil, "", fmt.Errorf("content_parts[%d]: %w", i, err)
+		}
+		if normalized == nil {
+			continue
+		}
+		out = append(out, *normalized)
+		if text != "" {
+			textParts = append(textParts, text)
+		}
+	}
+	return out, strings.Join(textParts, "\n"), nil
+}
+
+func (s *Server) normalizeContentPart(
+	ctx context.Context,
+	part gwproto.ContentPart,
+) (*model.ContentPart, string, error) {
+	switch part.Type {
+	case gwproto.PartTypeText:
+		return normalizeTextPart(part)
+	case gwproto.PartTypeImage:
+		return normalizeImagePart(part)
+	case gwproto.PartTypeAudio, gwproto.PartTypeVoice:
+		return s.normalizeAudioPart(ctx, part)
+	case gwproto.PartTypeFile, gwproto.PartTypeVideo:
+		return s.normalizeFilePart(ctx, part)
+	case gwproto.PartTypeLink:
+		return normalizeLinkPart(part)
+	case gwproto.PartTypeLocation:
+		return normalizeLocationPart(part)
+	default:
+		return nil, "", errors.New("unsupported content part type")
+	}
+}
+
+func normalizeTextPart(
+	part gwproto.ContentPart,
+) (*model.ContentPart, string, error) {
+	if part.Text == nil {
+		return nil, "", errors.New("missing text")
+	}
+	text := strings.TrimSpace(*part.Text)
+	if text == "" {
+		return nil, "", errors.New("empty text")
+	}
+	return &model.ContentPart{
+		Type: model.ContentTypeText,
+		Text: &text,
+	}, text, nil
+}
+
+func normalizeImagePart(
+	part gwproto.ContentPart,
+) (*model.ContentPart, string, error) {
+	if part.Image == nil {
+		return nil, "", errors.New("missing image")
+	}
+	detail := strings.TrimSpace(part.Image.Detail)
+	if detail == "" {
+		detail = imageDetailAuto
+	}
+
+	if strings.TrimSpace(part.Image.URL) != "" {
+		return &model.ContentPart{
+			Type: model.ContentTypeImage,
+			Image: &model.Image{
+				URL:    strings.TrimSpace(part.Image.URL),
+				Detail: detail,
+			},
+		}, "", nil
+	}
+
+	if len(part.Image.Data) == 0 {
+		return nil, "", errors.New("missing image url or data")
+	}
+	format := strings.TrimSpace(part.Image.Format)
+	if format == "" {
+		return nil, "", errors.New("missing image format")
+	}
+	return &model.ContentPart{
+		Type: model.ContentTypeImage,
+		Image: &model.Image{
+			Data:   part.Image.Data,
+			Detail: detail,
+			Format: format,
+		},
+	}, "", nil
+}
+
+func (s *Server) normalizeAudioPart(
+	ctx context.Context,
+	part gwproto.ContentPart,
+) (*model.ContentPart, string, error) {
+	if part.Audio == nil {
+		return nil, "", errors.New("missing audio")
+	}
+
+	if strings.TrimSpace(part.Audio.URL) != "" {
+		return s.normalizeAudioURL(ctx, part.Audio)
+	}
+	if len(part.Audio.Data) == 0 {
+		return nil, "", errors.New("missing audio url or data")
+	}
+	format := strings.TrimSpace(part.Audio.Format)
+	if format == "" {
+		return nil, "", errors.New("missing audio format")
+	}
+	if !isSupportedAudioFormat(format) {
+		return nil, "", errors.New("unsupported audio format")
+	}
+	return &model.ContentPart{
+		Type: model.ContentTypeAudio,
+		Audio: &model.Audio{
+			Data:   part.Audio.Data,
+			Format: format,
+		},
+	}, "", nil
+}
+
+func (s *Server) normalizeAudioURL(
+	ctx context.Context,
+	audio *gwproto.AudioPart,
+) (*model.ContentPart, string, error) {
+	f, err := s.fetchContentPart(ctx, audio.URL)
+	if err != nil {
+		return nil, "", err
+	}
+	format := strings.TrimSpace(audio.Format)
+	if format == "" {
+		format = inferAudioFormat(f)
+	}
+	if format == "" {
+		return nil, "", errors.New("missing audio format")
+	}
+	if !isSupportedAudioFormat(format) {
+		return nil, "", errors.New("unsupported audio format")
+	}
+	return &model.ContentPart{
+		Type: model.ContentTypeAudio,
+		Audio: &model.Audio{
+			Data:   f.Data,
+			Format: format,
+		},
+	}, "", nil
+}
+
+func inferAudioFormat(f fetched) string {
+	ext := strings.ToLower(path.Ext(f.Filename))
+	switch ext {
+	case ".wav":
+		return audioFormatWAV
+	case ".mp3":
+		return audioFormatMP3
+	}
+	switch f.ContentType {
+	case "audio/wav", "audio/x-wav":
+		return audioFormatWAV
+	case "audio/mpeg", "audio/mp3":
+		return audioFormatMP3
+	}
+	return ""
+}
+
+func isSupportedAudioFormat(format string) bool {
+	switch format {
+	case audioFormatWAV, audioFormatMP3:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Server) normalizeFilePart(
+	ctx context.Context,
+	part gwproto.ContentPart,
+) (*model.ContentPart, string, error) {
+	if part.File == nil {
+		return nil, "", errors.New("missing file")
+	}
+
+	if strings.TrimSpace(part.File.FileID) != "" {
+		return normalizeFileID(part.File), "", nil
+	}
+	if strings.TrimSpace(part.File.URL) != "" {
+		return s.normalizeFileURL(ctx, part.File)
+	}
+	if len(part.File.Data) == 0 {
+		return nil, "", errors.New("missing file url, data, or file_id")
+	}
+	return normalizeFileData(part.File)
+}
+
+func normalizeFileID(file *gwproto.FilePart) *model.ContentPart {
+	name := strings.TrimSpace(file.Filename)
+	id := strings.TrimSpace(file.FileID)
+	return &model.ContentPart{
+		Type: model.ContentTypeFile,
+		File: &model.File{
+			Name:   name,
+			FileID: id,
+		},
+	}
+}
+
+func (s *Server) normalizeFileURL(
+	ctx context.Context,
+	file *gwproto.FilePart,
+) (*model.ContentPart, string, error) {
+	f, err := s.fetchContentPart(ctx, file.URL)
+	if err != nil {
+		return nil, "", err
+	}
+	name := strings.TrimSpace(file.Filename)
+	if name == "" {
+		name = strings.TrimSpace(f.Filename)
+	}
+	if name == "" {
+		name = "attachment"
+	}
+	mimeType := strings.TrimSpace(file.Format)
+	if mimeType == "" {
+		mimeType = strings.TrimSpace(f.ContentType)
+	}
+	if mimeType == "" {
+		mimeType = inferMimeTypeFromName(name)
+	}
+	if mimeType == "" {
+		mimeType = mimeOctetStream
+	}
+	return &model.ContentPart{
+		Type: model.ContentTypeFile,
+		File: &model.File{
+			Name:     name,
+			Data:     f.Data,
+			MimeType: mimeType,
+		},
+	}, "", nil
+}
+
+func normalizeFileData(
+	file *gwproto.FilePart,
+) (*model.ContentPart, string, error) {
+	name := strings.TrimSpace(file.Filename)
+	if name == "" {
+		return nil, "", errors.New("missing filename")
+	}
+	mimeType := strings.TrimSpace(file.Format)
+	if mimeType == "" {
+		mimeType = inferMimeTypeFromName(name)
+	}
+	if mimeType == "" {
+		mimeType = mimeOctetStream
+	}
+	return &model.ContentPart{
+		Type: model.ContentTypeFile,
+		File: &model.File{
+			Name:     name,
+			Data:     file.Data,
+			MimeType: mimeType,
+		},
+	}, "", nil
+}
+
+func inferMimeTypeFromName(name string) string {
+	ext := strings.ToLower(path.Ext(name))
+	if ext == "" {
+		return ""
+	}
+	mimeType := mime.TypeByExtension(ext)
+	if mimeType == "" {
+		return ""
+	}
+	return normalizeContentType(mimeType)
+}
+
+func normalizeLinkPart(
+	part gwproto.ContentPart,
+) (*model.ContentPart, string, error) {
+	if part.Link == nil {
+		return nil, "", errors.New("missing link")
+	}
+	linkURL := strings.TrimSpace(part.Link.URL)
+	if linkURL == "" {
+		return nil, "", errors.New("missing link url")
+	}
+	title := strings.TrimSpace(part.Link.Title)
+	text := strings.TrimSpace(joinText(title, linkURL))
+	if text == "" {
+		return nil, "", errors.New("empty link")
+	}
+	return &model.ContentPart{
+		Type: model.ContentTypeText,
+		Text: &text,
+	}, text, nil
+}
+
+func normalizeLocationPart(
+	part gwproto.ContentPart,
+) (*model.ContentPart, string, error) {
+	if part.Location == nil {
+		return nil, "", errors.New("missing location")
+	}
+	name := strings.TrimSpace(part.Location.Name)
+	location := fmt.Sprintf(
+		"%s\nlatitude=%v\nlongitude=%v",
+		name,
+		part.Location.Latitude,
+		part.Location.Longitude,
+	)
+	location = strings.TrimSpace(location)
+	return &model.ContentPart{
+		Type: model.ContentTypeText,
+		Text: &location,
+	}, location, nil
+}
+
+func (s *Server) fetchContentPart(
+	ctx context.Context,
+	rawURL string,
+) (fetched, error) {
+	fetcher := s.partFetcher
+	if fetcher == nil {
+		fetcher = newURLPartFetcher()
+	}
+	maxBytes := s.maxPartBytes
+	if maxBytes <= 0 {
+		maxBytes = defaultMaxContentPartBytes
+	}
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return fetched{}, errors.New("missing url")
+	}
+	return fetcher.Fetch(ctx, rawURL, maxBytes)
+}

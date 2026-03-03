@@ -23,6 +23,9 @@ type options struct {
 	healthPath   string
 
 	maxBodyBytes int64
+	maxPartBytes int64
+
+	partFetcher partFetcher
 
 	sessionIDFunc SessionIDFunc
 
@@ -42,6 +45,7 @@ func newOptions(opts ...Option) options {
 		cancelPath:     defaultCancelPath,
 		healthPath:     defaultHealthPath,
 		maxBodyBytes:   defaultMaxBodyBytes,
+		maxPartBytes:   defaultMaxContentPartBytes,
 		sessionIDFunc:  nil,
 		allowUsers:     nil,
 		requireMention: false,
@@ -66,6 +70,9 @@ func newOptions(opts ...Option) options {
 	}
 	if o.maxBodyBytes <= 0 {
 		o.maxBodyBytes = defaultMaxBodyBytes
+	}
+	if o.maxPartBytes <= 0 {
+		o.maxPartBytes = defaultMaxContentPartBytes
 	}
 	return o
 }
@@ -109,6 +116,21 @@ func WithHealthPath(path string) Option {
 func WithMaxBodyBytes(max int64) Option {
 	return func(o *options) {
 		o.maxBodyBytes = max
+	}
+}
+
+// WithMaxContentPartBytes sets the maximum bytes to fetch for one
+// content part.
+func WithMaxContentPartBytes(max int64) Option {
+	return func(o *options) {
+		o.maxPartBytes = max
+	}
+}
+
+// WithContentPartFetcher sets a custom content-part fetcher.
+func WithContentPartFetcher(fetcher partFetcher) Option {
+	return func(o *options) {
+		o.partFetcher = fetcher
 	}
 }
 

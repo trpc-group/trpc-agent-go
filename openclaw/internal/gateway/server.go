@@ -34,6 +34,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
@@ -110,6 +111,9 @@ type Server struct {
 	healthPath   string
 
 	maxBodyBytes int64
+	maxPartBytes int64
+
+	partFetcher partFetcher
 
 	runner  runner.Runner
 	managed runner.ManagedRunner
@@ -168,6 +172,8 @@ func New(r runner.Runner, opts ...Option) (*Server, error) {
 		cancelPath:      cancelPath,
 		healthPath:      options.healthPath,
 		maxBodyBytes:    options.maxBodyBytes,
+		maxPartBytes:    options.maxPartBytes,
+		partFetcher:     options.partFetcher,
 		runner:          r,
 		managed:         managed,
 		sessionIDFunc:   sessionIDFunc,
@@ -231,47 +237,6 @@ func joinURLPath(basePath, path string) (string, error) {
 	return url.JoinPath(basePath, path)
 }
 
-type sendMessageRequest struct {
-	Channel   string `json:"channel,omitempty"`
-	From      string `json:"from,omitempty"`
-	To        string `json:"to,omitempty"`
-	Thread    string `json:"thread,omitempty"`
-	MessageID string `json:"message_id,omitempty"`
-	Text      string `json:"text,omitempty"`
-
-	UserID    string `json:"user_id,omitempty"`
-	SessionID string `json:"session_id,omitempty"`
-	RequestID string `json:"request_id,omitempty"`
-}
-
-type apiError struct {
-	Type    string `json:"type"`
-	Message string `json:"message"`
-}
-
-type sendMessageResponse struct {
-	SessionID string    `json:"session_id,omitempty"`
-	RequestID string    `json:"request_id,omitempty"`
-	Reply     string    `json:"reply,omitempty"`
-	Ignored   bool      `json:"ignored,omitempty"`
-	Error     *apiError `json:"error,omitempty"`
-}
-
-func (r sendMessageRequest) inbound() InboundMessage {
-	channel := strings.TrimSpace(r.Channel)
-	if channel == "" {
-		channel = defaultChannelName
-	}
-	return InboundMessage{
-		Channel:   channel,
-		From:      strings.TrimSpace(r.From),
-		To:        strings.TrimSpace(r.To),
-		Thread:    strings.TrimSpace(r.Thread),
-		MessageID: strings.TrimSpace(r.MessageID),
-		Text:      r.Text,
-	}
-}
-
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set(headerAllow, methodGet)
@@ -290,7 +255,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.managed == nil {
-		s.writeError(w, apiError{
+		s.writeError(w, gwproto.APIError{
 			Type:    errTypeUnsupported,
 			Message: "runner does not support status",
 		}, http.StatusNotImplemented)
@@ -299,7 +264,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	requestID := strings.TrimSpace(r.URL.Query().Get(queryRequestID))
 	if requestID == "" {
-		s.writeError(w, apiError{
+		s.writeError(w, gwproto.APIError{
 			Type:    errTypeInvalidRequest,
 			Message: "missing request_id",
 		}, http.StatusBadRequest)
@@ -328,7 +293,7 @@ func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.managed == nil {
-		s.writeError(w, apiError{
+		s.writeError(w, gwproto.APIError{
 			Type:    errTypeUnsupported,
 			Message: "runner does not support cancel",
 		}, http.StatusNotImplemented)
@@ -337,7 +302,7 @@ func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
 
 	var req cancelRequest
 	if err := s.decodeJSON(r, &req); err != nil {
-		s.writeError(w, apiError{
+		s.writeError(w, gwproto.APIError{
 			Type:    errTypeInvalidRequest,
 			Message: err.Error(),
 		}, http.StatusBadRequest)
@@ -346,7 +311,7 @@ func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
 
 	requestID := strings.TrimSpace(req.RequestID)
 	if requestID == "" {
-		s.writeError(w, apiError{
+		s.writeError(w, gwproto.APIError{
 			Type:    errTypeInvalidRequest,
 			Message: "missing request_id",
 		}, http.StatusBadRequest)
@@ -366,31 +331,35 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req sendMessageRequest
+	var req gwproto.MessageRequest
 	if err := s.decodeJSON(r, &req); err != nil {
-		s.writeError(w, apiError{
+		s.writeError(w, gwproto.APIError{
 			Type:    errTypeInvalidRequest,
 			Message: err.Error(),
 		}, http.StatusBadRequest)
 		return
 	}
 
-	msg := req.inbound()
-	msg.Text = strings.TrimSpace(msg.Text)
-	if msg.Text == "" {
-		s.writeError(w, apiError{
+	userMsg, mentionText, err := s.normalizeUserMessage(
+		r.Context(),
+		req,
+	)
+	if err != nil {
+		s.writeError(w, gwproto.APIError{
 			Type:    errTypeInvalidRequest,
-			Message: "missing text",
+			Message: err.Error(),
 		}, http.StatusBadRequest)
 		return
 	}
+
+	msg := inboundFromRequest(req, mentionText)
 
 	userID := strings.TrimSpace(req.UserID)
 	if userID == "" {
 		userID = msg.From
 	}
 	if userID == "" {
-		s.writeError(w, apiError{
+		s.writeError(w, gwproto.APIError{
 			Type:    errTypeInvalidRequest,
 			Message: "missing user_id or from",
 		}, http.StatusBadRequest)
@@ -398,7 +367,7 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !s.isUserAllowed(userID) {
-		s.writeError(w, apiError{
+		s.writeError(w, gwproto.APIError{
 			Type:    errTypeUnauthorized,
 			Message: "user is not allowed",
 		}, http.StatusForbidden)
@@ -407,7 +376,7 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 
 	if s.requireMention && msg.Thread != "" {
 		if !containsAny(msg.Text, s.mentionPatterns) {
-			s.writeJSON(w, sendMessageResponse{
+			s.writeJSON(w, gwproto.MessageResponse{
 				Ignored: true,
 			}, http.StatusOK)
 			return
@@ -419,7 +388,7 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		var err error
 		sessionID, err = s.sessionIDFunc(msg)
 		if err != nil {
-			s.writeError(w, apiError{
+			s.writeError(w, gwproto.APIError{
 				Type:    errTypeInvalidRequest,
 				Message: err.Error(),
 			}, http.StatusBadRequest)
@@ -433,7 +402,7 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		userID,
 		sessionID,
 		requestID,
-		msg.Text,
+		userMsg,
 	)
 	if err != nil {
 		log.WarnfContext(
@@ -441,14 +410,14 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 			"gateway: run failed: %v",
 			err,
 		)
-		s.writeError(w, apiError{
+		s.writeError(w, gwproto.APIError{
 			Type:    errTypeInternal,
 			Message: err.Error(),
 		}, http.StatusInternalServerError)
 		return
 	}
 
-	s.writeJSON(w, sendMessageResponse{
+	s.writeJSON(w, gwproto.MessageResponse{
 		SessionID: sessionID,
 		RequestID: resolvedRequestID,
 		Reply:     reply,
@@ -493,8 +462,16 @@ func (s *Server) writeJSON(w http.ResponseWriter, payload any, status int) {
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
-func (s *Server) writeError(w http.ResponseWriter, err apiError, status int) {
-	s.writeJSON(w, sendMessageResponse{Error: &err}, status)
+func (s *Server) writeError(
+	w http.ResponseWriter,
+	err gwproto.APIError,
+	status int,
+) {
+	s.writeJSON(
+		w,
+		gwproto.MessageResponse{Error: &err},
+		status,
+	)
 }
 
 func (s *Server) run(
@@ -502,7 +479,7 @@ func (s *Server) run(
 	userID string,
 	sessionID string,
 	requestID string,
-	text string,
+	msg model.Message,
 ) (string, string, error) {
 	var (
 		reply    string
@@ -515,7 +492,7 @@ func (s *Server) run(
 			userID,
 			sessionID,
 			requestID,
-			text,
+			msg,
 		)
 	})
 	return reply, resolved, runErr
@@ -526,20 +503,14 @@ func (s *Server) runLocked(
 	userID string,
 	sessionID string,
 	requestID string,
-	text string,
+	msg model.Message,
 ) (string, string, error) {
 	runOpts := make([]agent.RunOption, 0, 1)
 	if requestID != "" {
 		runOpts = append(runOpts, agent.WithRequestID(requestID))
 	}
 
-	events, err := s.runner.Run(
-		ctx,
-		userID,
-		sessionID,
-		model.NewUserMessage(text),
-		runOpts...,
-	)
+	events, err := s.runner.Run(ctx, userID, sessionID, msg, runOpts...)
 	if err != nil {
 		return "", "", err
 	}
