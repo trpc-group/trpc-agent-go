@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
 // Translator translates trpc-agent-go events to AG-UI events.
@@ -60,6 +61,8 @@ type translator struct {
 	graphNodeInterruptActivityTopLevelOnly bool
 }
 
+const skillRunArtifactsStateKey = skill.StateKeyArtifacts
+
 // Translate translates one trpc-agent-go event into zero or more AG-UI events.
 func (t *translator) Translate(ctx context.Context, event *agentevent.Event) ([]aguievents.Event, error) {
 	if event == nil {
@@ -85,6 +88,7 @@ func (t *translator) Translate(ctx context.Context, event *agentevent.Event) ([]
 	events = append(events, t.graphToolEvents(event)...)
 	// Handle node custom events (progress, text, custom).
 	events = append(events, t.graphNodeCustomEvents(event)...)
+	events = append(events, t.toolArtifactsEvents(event)...)
 
 	rsp := event.Response
 	if rsp == nil {
@@ -126,6 +130,51 @@ func (t *translator) Translate(ctx context.Context, event *agentevent.Event) ([]
 		events = append(events, aguievents.NewRunFinishedEvent(t.threadID, t.runID))
 	}
 	return events, nil
+}
+
+type artifactRef struct {
+	Name    string `json:"name"`
+	Version int    `json:"version"`
+	Ref     string `json:"ref"`
+}
+
+type skillRunArtifactsDelta struct {
+	ToolCallID string        `json:"tool_call_id"`
+	Artifacts  []artifactRef `json:"artifacts"`
+}
+
+func (t *translator) toolArtifactsEvents(evt *agentevent.Event) []aguievents.Event {
+	if t == nil || evt == nil || len(evt.StateDelta) == 0 {
+		return nil
+	}
+
+	raw, ok := evt.StateDelta[skillRunArtifactsStateKey]
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	var delta skillRunArtifactsDelta
+	if err := json.Unmarshal(raw, &delta); err != nil || len(delta.Artifacts) == 0 {
+		return nil
+	}
+	toolCallID := strings.TrimSpace(delta.ToolCallID)
+	if toolCallID == "" {
+		return nil
+	}
+	payload := map[string]any{
+		"threadId":   t.threadID,
+		"runId":      t.runID,
+		"toolCallId": toolCallID,
+		"artifacts":  delta.Artifacts,
+	}
+	if evt.ID != "" {
+		payload["messageId"] = evt.ID
+	}
+	return []aguievents.Event{
+		aguievents.NewCustomEvent(
+			"tool.artifacts",
+			aguievents.WithValue(payload),
+		),
+	}
 }
 
 const (
