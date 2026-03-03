@@ -63,6 +63,8 @@ const (
 	flagAgentRalphLoopVerifyWorkDir     = "agent-ralph-verify-workdir"
 	flagAgentRalphLoopVerifyTimeout     = "agent-ralph-verify-timeout"
 	flagAgentRalphLoopVerifyEnv         = "agent-ralph-verify-env"
+
+	flagEnableParallelTools = "enable-parallel-tools"
 )
 
 type runOptions struct {
@@ -154,6 +156,7 @@ type runOptions struct {
 
 	EnableLocalExec     bool
 	EnableOpenClawTools bool
+	EnableParallelTools bool
 
 	ToolProviders []pluginSpec
 	ToolSets      []pluginSpec
@@ -603,6 +606,12 @@ func parseRunOptions(args []string) (runOptions, error) {
 		"Enable OpenClaw-compatible exec/process tools (unsafe)",
 	)
 	fs.BoolVar(
+		&opts.EnableParallelTools,
+		flagEnableParallelTools,
+		false,
+		"Enable parallel tool execution (requires concurrency-safe tools)",
+	)
+	fs.BoolVar(
 		&opts.RefreshToolSetsOnRun,
 		"refresh-toolsets-on-run",
 		false,
@@ -773,6 +782,7 @@ type skillsConfig struct {
 type toolsConfig struct {
 	EnableLocalExec      *bool `yaml:"enable_local_exec,omitempty"`
 	EnableOpenClawTools  *bool `yaml:"enable_openclaw_tools,omitempty"`
+	EnableParallelTools  *bool `yaml:"enable_parallel_tools,omitempty"`
 	RefreshToolSetsOnRun *bool `yaml:"refresh_toolsets_on_run,omitempty"`
 
 	Providers []filePluginSpec `yaml:"providers,omitempty"`
@@ -1110,6 +1120,10 @@ func (cfg *fileConfig) apply(
 		if cfg.Tools.EnableOpenClawTools != nil &&
 			!flagWasSet(set, "enable-openclaw-tools") {
 			opts.EnableOpenClawTools = *cfg.Tools.EnableOpenClawTools
+		}
+		if cfg.Tools.EnableParallelTools != nil &&
+			!flagWasSet(set, flagEnableParallelTools) {
+			opts.EnableParallelTools = *cfg.Tools.EnableParallelTools
 		}
 		if cfg.Tools.RefreshToolSetsOnRun != nil &&
 			!flagWasSet(set, "refresh-toolsets-on-run") {

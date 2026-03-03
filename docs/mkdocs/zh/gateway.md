@@ -114,6 +114,10 @@ curl -sS 'http://127.0.0.1:8080/v1/gateway/messages' \
 
 不同 session 之间仍然可以并行执行。
 
+注意：这里的串行是针对同一 session 的多次 **run**。在单次 run 内，如果开启
+并行工具执行（例如 LLMAgent `WithEnableParallelTools(true)` 或 OpenClaw
+的 `-enable-parallel-tools`），同一轮 step 里的多个 tool call 仍然可以并行。
+
 ## 安全默认值
 
 外部消息输入属于不可信输入。Gateway 提供两个常见的安全控制：
