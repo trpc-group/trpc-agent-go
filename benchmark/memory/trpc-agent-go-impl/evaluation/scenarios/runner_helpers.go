@@ -11,7 +11,9 @@ package scenarios
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -24,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	"trpc.group/trpc-go/trpc-agent-go/benchmark/memory/trpc-agent-go-impl/evaluation/dataset"
+	"trpc.group/trpc-go/trpc-agent-go/benchmark/memory/trpc-agent-go-impl/evaluation/metrics"
 )
 
 func newSessionService(cfg Config) session.Service {
@@ -281,16 +284,37 @@ const (
 	rateLimitBackoffMultiplier = 2
 )
 
+// ToolCallTrace records a single tool invocation within a QA step.
+type ToolCallTrace struct {
+	Name   string `json:"name"`
+	Args   string `json:"args,omitempty"`
+	Result string `json:"result,omitempty"`
+}
+
+// StepTrace records one LLM round-trip (request → response).
+type StepTrace struct {
+	Step             int             `json:"step"`
+	PromptTokens     int             `json:"prompt_tokens"`
+	CompletionTokens int             `json:"completion_tokens"`
+	TotalTokens      int             `json:"total_tokens"`
+	ToolCalls        []ToolCallTrace `json:"tool_calls,omitempty"`
+}
+
 // collectResult holds the output of collecting events from a runner.
 type collectResult struct {
 	text  string
 	usage TokenUsage
+	steps []StepTrace
 }
 
 func collectFinalTextAndUsage(
 	eventChan <-chan *event.Event,
 ) (collectResult, error) {
 	var res collectResult
+	step := 0
+	// pendingCalls tracks tool calls from the latest assistant
+	// response that have not yet been matched with results.
+	var pendingCalls []ToolCallTrace
 	for ev := range eventChan {
 		if ev == nil {
 			continue
@@ -303,6 +327,55 @@ func collectFinalTextAndUsage(
 		if ev.Response != nil {
 			if len(ev.Response.Choices) > 0 {
 				msg := ev.Response.Choices[0].Message
+				// Assistant message with tool calls.
+				if len(msg.ToolCalls) > 0 {
+					step++
+					st := StepTrace{Step: step}
+					if ev.Response.Usage != nil {
+						st.PromptTokens =
+							ev.Response.Usage.PromptTokens
+						st.CompletionTokens =
+							ev.Response.Usage.CompletionTokens
+						st.TotalTokens =
+							ev.Response.Usage.TotalTokens
+					}
+					pendingCalls = make(
+						[]ToolCallTrace, 0, len(msg.ToolCalls),
+					)
+					for _, tc := range msg.ToolCalls {
+						pendingCalls = append(pendingCalls,
+							ToolCallTrace{
+								Name: tc.Function.Name,
+								Args: string(tc.Function.Arguments),
+							})
+					}
+					st.ToolCalls = pendingCalls
+					res.steps = append(res.steps, st)
+				}
+				// Tool response event.
+				if ev.Response.Object ==
+					model.ObjectTypeToolResponse &&
+					msg.Role == model.RoleTool {
+					content := msg.Content
+					// Attach result to the matching pending call.
+					matched := false
+					for i := range pendingCalls {
+						if pendingCalls[i].Result == "" {
+							pendingCalls[i].Result = content
+							matched = true
+							break
+						}
+					}
+					if !matched && len(res.steps) > 0 {
+						last := &res.steps[len(res.steps)-1]
+						last.ToolCalls = append(last.ToolCalls,
+							ToolCallTrace{
+								Name:   msg.ToolName,
+								Result: content,
+							})
+					}
+				}
+				// Final assistant text.
 				if msg.Role == model.RoleAssistant &&
 					msg.Content != "" {
 					res.text = msg.Content
@@ -329,6 +402,88 @@ func collectFinalTextAndUsage(
 func collectFinalText(eventChan <-chan *event.Event) (string, error) {
 	res, err := collectFinalTextAndUsage(eventChan)
 	return res.text, err
+}
+
+// memorySearchResult matches the JSON structure returned by
+// memory_search tool for parsing in logs.
+type memorySearchResult struct {
+	Query   string `json:"query"`
+	Results []struct {
+		ID       string `json:"id"`
+		Memory   string `json:"memory"`
+		Score    any    `json:"score"`
+		Metadata any    `json:"metadata,omitempty"`
+	} `json:"results"`
+}
+
+// logQATrace prints detailed per-step tool call traces for a QA.
+func logQATrace(
+	questionID, question, expected, predicted string,
+	m metrics.QAMetrics,
+	res collectResult,
+	latencyMs int64,
+) {
+	_ = questionID
+	log.Printf("    📋 Question: %s", question)
+	log.Printf("    🎯 Expected: %s", expected)
+	for _, st := range res.steps {
+		log.Printf(
+			"    🔹 Step %d | Tokens: %d (in:%d out:%d)",
+			st.Step, st.TotalTokens,
+			st.PromptTokens, st.CompletionTokens,
+		)
+		if len(st.ToolCalls) > 0 {
+			log.Printf(
+				"    🔧 Tool Calls: %d", len(st.ToolCalls),
+			)
+			for i, tc := range st.ToolCalls {
+				log.Printf(
+					"      [%d] %s", i+1, tc.Name,
+				)
+				if tc.Args != "" {
+					log.Printf(
+						"          Args: %s", tc.Args,
+					)
+				}
+				if tc.Result != "" {
+					log.Printf(
+						"      ✅ Tool Result [%s]:",
+						tc.Name,
+					)
+					// Special formatting for memory_search.
+					if tc.Name == "memory_search" {
+						formatMemorySearchResult(tc.Result)
+					} else {
+						log.Printf("          %s", tc.Result)
+					}
+				}
+			}
+		}
+	}
+	log.Printf(
+		"    💬 Predicted: %s", predicted,
+	)
+	log.Printf(
+		"    📊 F1=%.3f BLEU=%.3f LLM=%.3f | %dms",
+		m.F1, m.BLEU, m.LLMScore, latencyMs,
+	)
+}
+
+// formatMemorySearchResult parses and pretty-prints memory_search
+// results, showing each recalled memory on its own line.
+func formatMemorySearchResult(result string) {
+	var msr memorySearchResult
+	if err := json.Unmarshal([]byte(result), &msr); err != nil {
+		log.Printf("          %s", result)
+		return
+	}
+	if len(msr.Results) == 0 {
+		log.Printf("          (no results)")
+		return
+	}
+	for j, r := range msr.Results {
+		log.Printf("          [%d] %s", j+1, r.Memory)
+	}
 }
 
 func isRateLimitError(err error) bool {

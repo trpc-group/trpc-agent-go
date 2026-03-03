@@ -84,6 +84,7 @@ type QAResult struct {
 	LatencyMs  int64             `json:"latency_ms"`
 	TokensUsed int               `json:"tokens_used,omitempty"`
 	TokenUsage *TokenUsage       `json:"token_usage,omitempty"`
+	Steps      []StepTrace       `json:"steps,omitempty"`
 }
 
 // SampleResult holds evaluation results for a single sample.
