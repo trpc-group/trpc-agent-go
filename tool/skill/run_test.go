@@ -144,6 +144,59 @@ func TestRunTool_StateDelta_EmitsArtifactRefs(t *testing.T) {
 	require.Contains(t, string(v), `"ref":"artifact://out/b.txt@0"`)
 }
 
+func TestRunTool_StateDelta_EdgeCases(t *testing.T) {
+	rt := &RunTool{}
+
+	t.Run("empty toolCallID returns nil", func(t *testing.T) {
+		delta := rt.StateDelta("   ", nil, []byte(
+			`{"artifact_files":[{"name":"out/a.txt","version":0}]}`,
+		))
+		require.Nil(t, delta)
+	})
+
+	t.Run("empty result JSON returns nil", func(t *testing.T) {
+		delta := rt.StateDelta("call-1", nil, nil)
+		require.Nil(t, delta)
+	})
+
+	t.Run("invalid JSON returns nil", func(t *testing.T) {
+		delta := rt.StateDelta("call-1", nil, []byte("{"))
+		require.Nil(t, delta)
+	})
+
+	t.Run("no artifact_files returns nil", func(t *testing.T) {
+		delta := rt.StateDelta("call-1", nil, []byte(`{}`))
+		require.Nil(t, delta)
+	})
+
+	t.Run("all invalid artifact files returns nil", func(t *testing.T) {
+		delta := rt.StateDelta("call-1", nil, []byte(
+			`{"artifact_files":[{"name":"","version":0},{"name":"x","version":-1},{"name":"   ","version":3}]}`,
+		))
+		require.Nil(t, delta)
+	})
+
+	t.Run("trims toolCallID and filters invalid entries", func(t *testing.T) {
+		delta := rt.StateDelta(" call-1 ", nil, []byte(
+			`{"artifact_files":[{"name":"  out/a.txt  ","version":1},{"name":"","version":2},{"name":"x","version":-1}]}`,
+		))
+		require.Len(t, delta, 1)
+
+		raw, ok := delta[skill.StateKeyArtifacts]
+		require.True(t, ok)
+
+		var got skillRunArtifactsDelta
+		require.NoError(t, json.Unmarshal(raw, &got))
+		require.Equal(t, "call-1", got.ToolCallID)
+		require.Len(t, got.Artifacts, 1)
+		require.Equal(t, artifactStateRef{
+			Name:    "out/a.txt",
+			Version: 1,
+			Ref:     "artifact://out/a.txt@1",
+		}, got.Artifacts[0])
+	})
+}
+
 func TestRunTool_DoesNotInlineNonTextOutputs(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, testSkillName)
