@@ -403,7 +403,7 @@ func inferAudioFormat(f fetched) string {
 	case ".mp3":
 		return audioFormatMP3
 	}
-	switch f.ContentType {
+	switch normalizeContentType(f.ContentType) {
 	case "audio/wav", "audio/x-wav":
 		return audioFormatWAV
 	case "audio/mpeg", "audio/mp3":
@@ -468,9 +468,9 @@ func (s *Server) normalizeFileURL(
 	if name == "" {
 		name = "attachment"
 	}
-	mimeType := strings.TrimSpace(file.Format)
+	mimeType := normalizeContentType(file.Format)
 	if mimeType == "" {
-		mimeType = strings.TrimSpace(f.ContentType)
+		mimeType = normalizeContentType(f.ContentType)
 	}
 	if mimeType == "" {
 		mimeType = inferMimeTypeFromName(name)
@@ -495,7 +495,7 @@ func normalizeFileData(
 	if name == "" {
 		return nil, "", errors.New("missing filename")
 	}
-	mimeType := strings.TrimSpace(file.Format)
+	mimeType := normalizeContentType(file.Format)
 	if mimeType == "" {
 		mimeType = inferMimeTypeFromName(name)
 	}

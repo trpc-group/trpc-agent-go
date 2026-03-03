@@ -1212,6 +1212,8 @@ func TestNewOptions_DefaultsAndNormalization(t *testing.T) {
 	sessionFn := func(InboundMessage) (string, error) {
 		return "s", nil
 	}
+	fetcher := &staticFetcher{}
+	const maxPartBytes int64 = 123
 
 	o := newOptions(
 		WithBasePath(" "),
@@ -1220,6 +1222,8 @@ func TestNewOptions_DefaultsAndNormalization(t *testing.T) {
 		WithCancelPath(" "),
 		WithHealthPath(" "),
 		WithMaxBodyBytes(0),
+		WithMaxContentPartBytes(maxPartBytes),
+		WithContentPartFetcher(fetcher),
 		WithSessionIDFunc(sessionFn),
 		WithAllowUsers(" a ", "", "b"),
 		WithRequireMentionInThreads(true),
@@ -1232,10 +1236,14 @@ func TestNewOptions_DefaultsAndNormalization(t *testing.T) {
 	require.Equal(t, defaultCancelPath, o.cancelPath)
 	require.Equal(t, defaultHealthPath, o.healthPath)
 	require.Equal(t, defaultMaxBodyBytes, o.maxBodyBytes)
+	require.Equal(t, maxPartBytes, o.maxPartBytes)
+	typedFetcher, ok := o.partFetcher.(*staticFetcher)
+	require.True(t, ok)
+	require.Same(t, fetcher, typedFetcher)
 	require.NotNil(t, o.sessionIDFunc)
 
 	require.NotNil(t, o.allowUsers)
-	_, ok := o.allowUsers["a"]
+	_, ok = o.allowUsers["a"]
 	require.True(t, ok)
 	_, ok = o.allowUsers["b"]
 	require.True(t, ok)
