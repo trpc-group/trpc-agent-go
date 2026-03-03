@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
 )
 
 const (
@@ -56,23 +58,10 @@ func New(
 }
 
 // MessageRequest matches the gateway /messages JSON payload.
-type MessageRequest struct {
-	Channel   string `json:"channel,omitempty"`
-	From      string `json:"from,omitempty"`
-	Thread    string `json:"thread,omitempty"`
-	MessageID string `json:"message_id,omitempty"`
-	Text      string `json:"text,omitempty"`
-
-	UserID    string `json:"user_id,omitempty"`
-	SessionID string `json:"session_id,omitempty"`
-	RequestID string `json:"request_id,omitempty"`
-}
+type MessageRequest = gwproto.MessageRequest
 
 // APIError matches gateway error payloads.
-type APIError struct {
-	Type    string `json:"type"`
-	Message string `json:"message"`
-}
+type APIError = gwproto.APIError
 
 // MessageResponse matches the gateway /messages response JSON.
 type MessageResponse struct {
