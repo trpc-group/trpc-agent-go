@@ -22,17 +22,21 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
+// referenceDate returns the reference date for the extraction.
+// It first checks the context for a date set via WithReferenceDate,
+// falling back to time.Now().UTC().
+func referenceDate(ctx context.Context) time.Time {
+	if t, ok := ReferenceDateFromContext(ctx); ok {
+		return t
+	}
+	return time.Now().UTC()
+}
+
 // Common metadata field keys.
 const (
 	metadataKeyModelName      = "model_name"
 	metadataKeyModelAvailable = "model_available"
 )
-
-// sessionDatePrefix is the prefix used to identify session date system
-// messages in the conversation. When a message starts with this prefix,
-// the date portion is extracted and used as <session_date> in the
-// extraction prompt instead of the current system time.
-const sessionDatePrefix = "SessionDate:"
 
 // memoryExtractor implements the MemoryExtractor interface.
 type memoryExtractor struct {
@@ -121,7 +125,7 @@ func (e *memoryExtractor) Extract(
 		tools = filterTools(backgroundTools, e.enabledTools)
 	}
 	req := &model.Request{
-		Messages: e.buildMessages(messages, existing),
+		Messages: e.buildMessages(ctx, messages, existing),
 		Tools:    tools,
 	}
 
@@ -219,17 +223,17 @@ func (e *memoryExtractor) Metadata() map[string]any {
 
 // buildMessages builds messages for auto memory extraction.
 func (e *memoryExtractor) buildMessages(
+	ctx context.Context,
 	messages []model.Message,
 	existing []*memory.Entry,
 ) []model.Message {
 	result := make([]model.Message, 0, len(messages)+1)
 
-	// Extract session date from conversation messages if available.
-	sessionDate := extractSessionDateFromMessages(messages)
+	refDate := referenceDate(ctx)
 
 	// Add system prompt with existing memories.
 	result = append(result, model.NewSystemMessage(
-		e.buildSystemPrompt(existing, sessionDate),
+		e.buildSystemPrompt(refDate, existing),
 	))
 
 	// Add conversation messages.
@@ -238,57 +242,38 @@ func (e *memoryExtractor) buildMessages(
 	return result
 }
 
-// extractSessionDateFromMessages scans messages for a system message
-// starting with sessionDatePrefix (e.g. "SessionDate: 7 May 2023").
-// Returns the trimmed date string if found, or "" if not present.
-func extractSessionDateFromMessages(messages []model.Message) string {
-	for _, msg := range messages {
-		if msg.Role != model.RoleSystem {
-			continue
-		}
-		content := strings.TrimSpace(msg.Content)
-		if strings.HasPrefix(content, sessionDatePrefix) {
-			return strings.TrimSpace(
-				strings.TrimPrefix(content, sessionDatePrefix),
-			)
-		}
-	}
-	return ""
-}
+// currentDatePlaceholder is replaced in the prompt template with
+// the actual reference date.
+const currentDatePlaceholder = "{current_date}"
 
 // buildSystemPrompt builds the system prompt with existing memories
 // and available actions based on enabled tools.
-// sessionDate overrides the <session_date> tag when non-empty;
-// otherwise the current system date is used as fallback.
+// refDate is substituted into the prompt's {current_date} placeholder
+// so the extractor can resolve relative time references.
 func (e *memoryExtractor) buildSystemPrompt(
+	refDate time.Time,
 	existing []*memory.Entry,
-	sessionDate string,
 ) string {
 	var sb strings.Builder
 
-	// Inject session date FIRST so the LLM sees the date context
-	// before any instructions that reference it. This is critical
-	// for resolving relative time expressions correctly.
-	date := sessionDate
-	if date == "" {
-		date = time.Now().Format("2006-01-02")
-	}
-	fmt.Fprintf(&sb, "<session_date>%s</session_date>\n\n", date)
-
-	sb.WriteString(e.prompt)
+	// Substitute the {current_date} placeholder in the prompt.
+	dateStr := refDate.UTC().Format(time.DateOnly)
+	sb.WriteString(strings.ReplaceAll(
+		e.prompt, currentDatePlaceholder, dateStr,
+	))
 
 	// Append available actions.
 	sb.WriteString("\n<available_actions>\n")
 	sb.WriteString(e.availableActionsBlock())
 	sb.WriteString("</available_actions>\n")
 
-	// Append existing memories with episodic metadata so the LLM can
-	// properly deduplicate and avoid re-creating the same episodes.
+	// Append existing memories.
 	if len(existing) > 0 {
 		sb.WriteString("\n<existing_memories>\n")
 		for _, entry := range existing {
 			if entry.Memory != nil {
-				sb.WriteString(formatExistingMemory(entry))
+				fmt.Fprintf(&sb,
+					"- [%s] %s\n", entry.ID, entry.Memory.Memory)
 			}
 		}
 		sb.WriteString("</existing_memories>\n")
@@ -416,186 +401,61 @@ func (e *memoryExtractor) runAfterModelCallbacks(
 	return ctx, response, nil
 }
 
-// formatExistingMemory formats a single memory entry for inclusion in the
-// system prompt. For episodic memories it appends kind, event_time,
-// participants and location so the LLM can properly deduplicate.
-func formatExistingMemory(entry *memory.Entry) string {
-	m := entry.Memory
-	base := fmt.Sprintf("- [%s] %s", entry.ID, m.Memory)
-	if m.Kind == "" || m.Kind == memory.MemoryKindFact {
-		return base + "\n"
-	}
-	// Append episodic metadata.
-	var meta []string
-	meta = append(meta, fmt.Sprintf("kind=%s", m.Kind))
-	if m.EventTime != nil {
-		meta = append(meta, fmt.Sprintf("event_time=%s", m.EventTime.Format("2006-01-02")))
-	}
-	if len(m.Participants) > 0 {
-		meta = append(meta, fmt.Sprintf("participants=%s", strings.Join(m.Participants, ",")))
-	}
-	if m.Location != "" {
-		meta = append(meta, fmt.Sprintf("location=%s", m.Location))
-	}
-	return fmt.Sprintf("%s (%s)\n", base, strings.Join(meta, "; "))
-}
-
 // defaultPrompt is the default system prompt for memory extraction.
 const defaultPrompt = `You are a Memory Manager for an AI Assistant.
 Your task is to analyze the conversation and manage user memories.
-You must distinguish between two types of memories: facts and episodes.
 
 <instructions>
-1. Analyze the conversation to identify TWO types of information:
-   a. **Facts** (memory_kind="fact"): Stable personal attributes, preferences,
-      or background that are generally true about the user.
-      Example: "User is a software engineer at Google."
-   b. **Episodes** (memory_kind="episode"): Specific events, experiences, or
-      interactions that happened at a particular time and place.
-      Example: "On 2024-05-07, User went hiking at Mt. Fuji with Alice."
-2. Check if this information is already captured in existing memories.
-3. Determine if any memories need to be added, updated, or deleted.
-4. You can call multiple tools in parallel to handle all necessary changes at once.
+1. Analyze the conversation to identify any new or updated
+   information about the user that should be remembered.
+2. Check if this information is already captured in existing
+   memories.
+3. Determine if any memories need to be added, updated, or
+   deleted.
+4. You can call multiple tools in parallel to handle all necessary
+   changes at once.
 5. Use the available tools to make the necessary changes.
 6. If no memory changes are needed, do not call any tools.
 </instructions>
 
 <guidelines>
-- Create memories as brief, third-person statements that capture key
-  information, e.g., "User enjoys hiking on weekends."
-- **ATOMICITY**: Keep each memory focused on a SINGLE piece of information.
-  Create multiple memories if needed rather than one long complex memory.
-  For example, if a user says "I went to Paris with Alice and we ate at
-  Le Cinq, then visited the Louvre", create separate memories for the
-  dinner at Le Cinq and the Louvre visit.
-- **DETAIL**: Include specific names, quantities, dates, and concrete
-  details. "User's favorite coffee shop is Blue Bottle on Market St."
-  is much better than "User likes coffee."
-- **SPECIFICITY**: Always capture specific names, titles, and identifiers.
-  "User read 'The Great Gatsby' by F. Scott Fitzgerald" is much better
-  than "User enjoys reading books." Include book titles, movie names,
-  restaurant names, city names, activity details, and similar specifics.
-- **ALL SPEAKERS**: Extract information about ALL people in the
-  conversation, not just the primary speaker. If the conversation is
-  between two people, capture facts, preferences, events, and actions
-  of both speakers. Attribute information to the correct person by name
-  when names are available (e.g., "Alice enjoys pottery" rather than
-  "User's friend enjoys pottery").
-- **RELATIONSHIPS**: When someone is mentioned, always capture who
-  they are in relation to the user in a SEPARATE fact memory.
-  For example: "Alice is User's college roommate from Stanford."
-  This ensures relationship context is retrievable even when later
-  questions ask "who is Alice?" or "who did User go to college with?"
-- **TOPICS**: Assign specific, descriptive topics that help retrieval.
-  Use concrete nouns over abstract ones. Good topics: ["hiking",
-  "Mt. Fuji", "travel"]. Bad topics: ["activity", "outdoors"].
-  Include NAMES of people, places, and organizations as topics.
+- Today's date is {current_date}.
+- Create memories as brief, third-person statements that capture
+  key information, e.g., "User enjoys hiking on weekends."
+- Keep each memory focused on a single piece of information.
+  Create multiple memories if needed rather than one long complex
+  memory.
+- Preserve any concrete dates or years mentioned in the
+  conversation as-is. For relative time references (e.g.
+  "yesterday", "last week"), resolve them using today's date.
 - Do not repeat the same information in multiple memories; update
   existing memories instead.
 - When updating a memory, append new information to the existing
   memory rather than completely overwriting it.
 - When a user's preferences change, update the relevant memory to
   reflect the new state.
-- Only use delete when the user explicitly asks to forget something.
-- Only use clear when the user explicitly asks to forget everything.
-- Write memory content and topics in the same language as the user's
-  input message. For example, if the user writes in Chinese, write
-  memories and topics in Chinese.
+- Only use delete when the user explicitly asks to forget
+  something.
+- Only use clear when the user explicitly asks to forget
+  everything.
+- Write memory content and topics in the same language as the
+  user's input message. For example, if the user writes in
+  Chinese, write memories and topics in Chinese.
 - Do not create memories for:
-  - Transient requests or questions (e.g., "What time is it?")
+  - Transient requests or questions
   - Information already captured in existing memories
-  - Pure greetings or small talk that contain no factual content
+  - Generic conversation that doesn't reveal personal information
 </guidelines>
 
-<episodic_memory_rules>
-For EPISODES (memory_kind="episode"):
-- Always set memory_kind to "episode".
-- Always provide event_time as an absolute date (ISO 8601: YYYY-MM-DD or
-  YYYY-MM-DDTHH:MM:SS). NEVER use relative time words like "yesterday",
-  "last week", or "two months ago". If a relative time is mentioned,
-  resolve it using the <session_date> at the top of this prompt.
-  For example, if <session_date> is "2024-06-10" and the user says
-  "yesterday", that means 2024-06-09.
-- When the conversation explicitly mentions a date or year (e.g., "in 2022",
-  "on May 7, 2023", "three years ago"), ALWAYS preserve that original date
-  in both the memory text and event_time field. Include the date/year
-  directly in the memory content so it can be retrieved by text search.
-- Capture WHO was involved in the participants field.
-- Capture WHERE it happened in the location field.
-- Each distinct event should be a separate episode memory.
-  Do NOT merge multiple events into one memory.
-- Episode memories should describe WHAT happened concretely, not
-  abstract summaries. Include details like what was discussed, what
-  activity was done, what was the outcome.
-
-For FACTS (memory_kind="fact"):
-- Set memory_kind to "fact" (or omit it, as it defaults to "fact").
-- Facts that include a specific time reference (e.g., "married for 5 years",
-  "started painting in 2022") should preserve the time information in the
-  memory text AND also set event_time if an absolute date can be derived.
-- Facts can be deduplicated and merged. Prefer updating existing
-  facts over creating near-duplicates.
-- Create separate fact memories for:
-  - Each person's relationship to User (e.g., "Bob is User's manager
-    at work")
-  - Each distinct preference (e.g., "User prefers Italian food" and
-    "User's favorite restaurant is Olive Garden" as two memories)
-  - Each skill or qualification
-</episodic_memory_rules>
-
 <memory_types>
-**Facts** (memory_kind="fact"):
+Capture meaningful personal information such as:
 - Personal details: name, age, location, occupation
-- Preferences: likes, dislikes, favorites (be specific)
-- Interests and hobbies (with details: frequency, favorites)
+- Preferences: likes, dislikes, favorites
+- Interests and hobbies
 - Goals and aspirations
-- Important relationships (always specify who the person is)
+- Important relationships
+- Significant life events
 - Opinions and beliefs
 - Work and education background
-- Skills and qualifications
-- Pets, family members, significant others (with names)
-
-**Episodes** (memory_kind="episode"):
-- Specific events: trips, meetings, outings, activities
-- Life milestones: graduation, job changes, moves
-- Shared experiences with specific people
-- Emotional moments: arguments, celebrations, surprises
-- Health events: doctor visits, illnesses, recoveries
-- Conversations about specific topics with specific outcomes
 </memory_types>
-
-<examples>
-Example 1 – Fact about user:
-  User says: "I'm a software engineer at Google."
-  → memory_add(memory="User is a software engineer at Google.",
-     memory_kind="fact", topics=["work", "Google", "software engineer"])
-
-Example 2 – Episode with details:
-  User says: "I went hiking at Mt. Fuji with Alice last Saturday."
-  (session_date = 2024-06-10)
-  → memory_add(memory="User went hiking at Mt. Fuji with Alice.",
-     memory_kind="episode", event_time="2024-06-08",
-     participants=["Alice"], location="Mt. Fuji",
-     topics=["hiking", "Mt. Fuji", "Alice", "travel"])
-  → memory_add(memory="Alice is User's friend who enjoys hiking.",
-     memory_kind="fact", topics=["Alice", "friendship", "hiking"])
-
-Example 3 – Multi-fact extraction:
-  User says: "My wife Sarah and I just moved to Seattle. She got
-  a job at Amazon as a PM."
-  → memory_add(memory="User is married to Sarah.",
-     memory_kind="fact", topics=["Sarah", "family", "marriage"])
-  → memory_add(memory="User recently moved to Seattle.",
-     memory_kind="fact", topics=["Seattle", "location", "relocation"])
-  → memory_add(memory="Sarah works at Amazon as a Product Manager.",
-     memory_kind="fact", topics=["Sarah", "Amazon", "work"])
-
-Example 4 – Episode with conversation detail:
-  User says: "Had dinner with Bob yesterday, we talked about his
-  startup idea for an AI tutoring app."
-  (session_date = 2024-06-10)
-  → memory_add(memory="User had dinner with Bob. They discussed Bob's startup idea for an AI tutoring app.",
-     memory_kind="episode", event_time="2024-06-09",
-     participants=["Bob"], topics=["Bob", "dinner", "startup", "AI tutoring"])
-</examples>
 `
