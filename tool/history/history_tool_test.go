@@ -96,7 +96,7 @@ func TestHistoryTools_SearchAndGet_WithBudgetAndTruncation(t *testing.T) {
 	require.Equal(t, "e2", getRes.Items[0].EventID)
 	require.True(t, getRes.Items[0].Truncated)
 	require.LessOrEqual(t, len(getRes.Items[0].Content), 2000)
-	require.Equal(t, 1, getRes.BudgetRemaining.GetCallsRemaining)
+	require.Equal(t, 2, getRes.BudgetRemaining.GetCallsRemaining)
 }
 
 func TestHistoryTools_BudgetExhausted(t *testing.T) {

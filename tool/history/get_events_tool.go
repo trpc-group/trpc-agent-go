@@ -82,8 +82,10 @@ func (t *getEventsTool) Declaration() *tool.Declaration {
 		Required: []string{"eventIds"},
 	}
 	return &tool.Declaration{
-		Name:        GetEventsToolName,
-		Description: "Get bounded event content from current session by event ID",
+		Name: GetEventsToolName,
+		Description: "Retrieve full bounded content of specific conversation " +
+			"events by their IDs (returned by search_history). Use after " +
+			"search_history to get the complete text of matched events.",
 		InputSchema: schema,
 	}
 }
@@ -103,7 +105,7 @@ func (t *getEventsTool) Call(ctx context.Context, jsonArgs []byte) (any, error) 
 		return getEventsResult{Success: false, Message: "history get budget exceeded", BudgetRemaining: budget}, nil
 	}
 
-	maxChars := clamp(args.MaxChars, 200, 3000)
+	maxChars := clamp(args.MaxChars, 200, 6000)
 
 	// De-dup and clamp ids.
 	seen := map[string]struct{}{}

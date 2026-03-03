@@ -32,8 +32,8 @@ type budget struct {
 func defaultBudget() *budget {
 	return &budget{
 		SearchCallsRemaining: 3,
-		GetCallsRemaining:    2,
-		CharsRemaining:       6000,
+		GetCallsRemaining:    3,
+		CharsRemaining:       12000,
 	}
 }
 

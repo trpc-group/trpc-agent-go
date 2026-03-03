@@ -100,8 +100,12 @@ func (t *searchTool) Declaration() *tool.Declaration {
 		},
 	}
 	return &tool.Declaration{
-		Name:        SearchToolName,
-		Description: "Search current session history and return small snippets with stable event IDs",
+		Name: SearchToolName,
+		Description: "Search earlier conversation turns that may have been " +
+			"compressed by the session summary. Returns small snippets with " +
+			"stable event IDs. Use this tool whenever the user references " +
+			"prior details, or when you need the original context before " +
+			"answering.",
 		InputSchema: schema,
 	}
 }

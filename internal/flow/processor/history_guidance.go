@@ -10,9 +10,20 @@ package processor
 
 import "trpc.group/trpc-go/trpc-agent-go/model"
 
-const historyToolGuidanceContent = "When a session summary is present, earlier details may not be included in the prompt. " +
-	"If you need older context, do not guess: first call search_history to locate relevant eventIds, then call get_history_events to fetch the bounded content you need. " +
-	"Use the minimum necessary scope because history tools have a budget."
+const historyToolGuidanceContent = "" +
+	"A session summary is present above. The summary is a compressed " +
+	"version of earlier turns, so specific details (exact names, " +
+	"lists, numbers, recommendations) may be missing. " +
+	"When answering a question that depends on such details, call " +
+	"search_history to find the relevant eventIds, then call " +
+	"get_history_events to retrieve the full content. " +
+	"After retrieving history, incorporate the recovered details " +
+	"into your response naturally—give a thorough, complete answer " +
+	"as if you had the full conversation context. " +
+	"Do not use history tools when the summary already contains " +
+	"enough information to answer accurately. " +
+	"History tools have a limited budget; use the minimum scope " +
+	"needed."
 
 func historyToolGuidanceMessage() *model.Message {
 	return &model.Message{Role: model.RoleSystem, Content: historyToolGuidanceContent}
