@@ -216,10 +216,10 @@ func TestParseToolCallArgs_UnknownTool(t *testing.T) {
 func TestParseEpisodicArgs_EpisodeWithTime(t *testing.T) {
 	op := &Operation{}
 	args := map[string]any{
-		"memory_kind": "episode",
-		"event_time":  "2024-05-07",
+		"memory_kind":  "episode",
+		"event_time":   "2024-05-07",
 		"participants": []any{"Alice", "Bob"},
-		"location":    "Mt. Fuji",
+		"location":     "Mt. Fuji",
 	}
 	parseEpisodicArgs(op, args)
 
@@ -233,7 +233,7 @@ func TestParseEpisodicArgs_EpisodeWithTime(t *testing.T) {
 func TestParseEpisodicArgs_EpisodeWithoutTime_RemainsEpisode(t *testing.T) {
 	op := &Operation{}
 	args := map[string]any{
-		"memory_kind": "episode",
+		"memory_kind":  "episode",
 		"participants": []any{"Alice"},
 	}
 	parseEpisodicArgs(op, args)

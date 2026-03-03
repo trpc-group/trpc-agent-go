@@ -219,18 +219,18 @@ func (s *Service) AddMemoryWithEpisodic(
 
 	var insertQuery string
 	args := []any{
-		memoryID,               // $1
-		userKey.AppName,        // $2
-		userKey.UserID,         // $3
-		memoryStr,              // $4
-		pq.Array(topics),       // $5
-		vector,                 // $6
-		ef.kind,                // $7
-		ef.eventTime,           // $8
+		memoryID,                  // $1
+		userKey.AppName,           // $2
+		userKey.UserID,            // $3
+		memoryStr,                 // $4
+		pq.Array(topics),          // $5
+		vector,                    // $6
+		ef.kind,                   // $7
+		ef.eventTime,              // $8
 		pq.Array(ef.participants), // $9
-		ef.location,            // $10
-		now,                    // $11
-		now,                    // $12
+		ef.location,               // $10
+		now,                       // $11
+		now,                       // $12
 	}
 	if s.opts.memoryLimit > 0 {
 		deletedFilter := ""
