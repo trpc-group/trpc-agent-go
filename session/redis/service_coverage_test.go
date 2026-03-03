@@ -853,3 +853,61 @@ func TestCreateSession_MergeAppUserState_Error(t *testing.T) {
 	// The important thing is that mergeAppUserState doesn't panic when Redis is closed
 	_, _ = svc.GetSession(context.Background(), key)
 }
+
+// ============================================================================
+// service.go: mergeAppUserState with nil session
+// ============================================================================
+
+func TestMergeAppUserState_NilSession(t *testing.T) {
+	// This test indirectly covers mergeAppUserState with nil session
+	// by testing the code paths that could potentially pass nil
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	svc, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer svc.Close()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "test", UserID: "user", SessionID: "sess"}
+
+	// Create session - this triggers mergeAppUserState
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	// Verify session has expected fields even with nil input state
+	assert.Equal(t, key.SessionID, sess.ID)
+	assert.Equal(t, key.AppName, sess.AppName)
+	assert.Equal(t, key.UserID, sess.UserID)
+}
+
+// ============================================================================
+// service.go: ListSessions with transition mode
+// ============================================================================
+
+func TestListSessions_TransitionMode(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithCompatMode(CompatModeTransition),
+	)
+	require.NoError(t, err)
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := session.UserKey{AppName: "test", UserID: "user"}
+
+	// Create a session in transition mode (goes to zset)
+	sessionKey := session.Key{AppName: "test", UserID: "user", SessionID: "sess1"}
+	_, err = svc.CreateSession(ctx, sessionKey, nil)
+	require.NoError(t, err)
+
+	// ListSessions should find it
+	sessions, err := svc.ListSessions(ctx, userKey)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Equal(t, "sess1", sessions[0].ID)
+}

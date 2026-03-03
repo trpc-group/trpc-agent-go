@@ -214,3 +214,21 @@ func TestClient_ExistsPipelined(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), cmd.Val())
 }
+
+func TestClient_UpdateSessionState_ConnectionError(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "uss-err"}
+
+	// Create session first
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	// Close miniredis to simulate connection error
+	mr.Close()
+
+	// UpdateSessionState should return error when Redis is unavailable
+	err = c.UpdateSessionState(ctx, key, session.StateMap{"k": []byte("v")})
+	require.Error(t, err)
+}

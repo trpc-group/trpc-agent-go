@@ -210,3 +210,87 @@ func TestRedisService_DeleteSession(t *testing.T) {
 	err = service.DeleteSession(ctx, session.Key{AppName: "app", UserID: "user", SessionID: ""})
 	require.Error(t, err)
 }
+
+func TestRedisService_UpdateUserState_TransitionMode(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	// Create service with transition mode
+	service, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithCompatMode(CompatModeTransition),
+	)
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	userKey := session.UserKey{
+		AppName: "test-app",
+		UserID:  "test-user",
+	}
+
+	// Create user state in transition mode (writes to both hashidx and zset)
+	state := session.StateMap{"pref1": []byte("dark")}
+	err = service.UpdateUserState(ctx, userKey, state)
+	require.NoError(t, err)
+
+	// Verify state can be read back
+	states, err := service.ListUserStates(ctx, userKey)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("dark"), states["pref1"])
+}
+
+func TestRedisService_ListUserStates_FallbackToZSet(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	// Create service with legacy mode to enable zset fallback
+	service, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithCompatMode(CompatModeLegacy),
+	)
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	userKey := session.UserKey{
+		AppName: "test-app",
+		UserID:  "test-user",
+	}
+
+	// Create user state
+	state := session.StateMap{"pref1": []byte("light")}
+	err = service.UpdateUserState(ctx, userKey, state)
+	require.NoError(t, err)
+
+	// List should return the state
+	states, err := service.ListUserStates(ctx, userKey)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("light"), states["pref1"])
+}
+
+func TestRedisService_UpdateAppState_TransitionMode(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	// Create service with transition mode
+	service, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithCompatMode(CompatModeTransition),
+	)
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	appName := "test-app"
+
+	// Create app state in transition mode (writes to both hashidx and zset)
+	state := session.StateMap{"key1": []byte("value1")}
+	err = service.UpdateAppState(ctx, appName, state)
+	require.NoError(t, err)
+
+	// Verify state can be read back
+	states, err := service.ListAppStates(ctx, appName)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("value1"), states["key1"])
+}

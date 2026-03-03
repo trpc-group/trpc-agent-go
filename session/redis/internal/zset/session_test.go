@@ -1165,3 +1165,31 @@ func TestClient_UpdateUserState_Error(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "update user state (zset)")
 }
+
+// TestGetSession_WithTracks_Error tests GetSession error handling when fetching tracks
+func TestGetSession_WithTracks_Error(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "track-err"}
+
+	// Create session
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	// Append a track event to create track state
+	trackEvt := &session.TrackEvent{
+		Track:     "monitor",
+		Payload:   json.RawMessage(`{"cpu":80}`),
+		Timestamp: time.Now(),
+	}
+	err = c.AppendTrackEvent(ctx, key, trackEvt)
+	require.NoError(t, err)
+
+	// Close miniredis to simulate connection error
+	mr.Close()
+
+	// GetSession should return error when track events fetch fails
+	_, err = c.GetSession(ctx, key, 0, time.Time{})
+	require.Error(t, err)
+}
