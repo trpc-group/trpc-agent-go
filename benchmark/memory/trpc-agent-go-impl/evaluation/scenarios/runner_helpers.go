@@ -216,6 +216,11 @@ func sessionMessages(sample *dataset.LoCoMoSample, sess dataset.Session) []model
 		if content == "" {
 			continue
 		}
+		// Prefix with speaker name so the extractor and QA agent
+		// know who said what in multi-speaker conversations.
+		if turn.Speaker != "" {
+			content = fmt.Sprintf("[%s]: %s", turn.Speaker, content)
+		}
 		msgs = append(msgs, model.Message{Role: role, Content: content})
 	}
 	return msgs
@@ -258,17 +263,19 @@ WORKFLOW:
 6. Output ONLY the answer - no explanations, no context, no questions.
 
 RULES:
-- Your answer MUST be 1-8 words maximum.
+- Your answer MUST be 1-15 words maximum.
 - For time questions, use the absolute date/year that appears in the memory text (e.g. "[DATE: 7 May 2023]" or "2022") or from the event_time field.
 - Do NOT use memory database timestamps (CreatedAt/UpdatedAt) or the current system date.
 - If a memory uses a relative phrase (like "last year"), resolve it ONLY using explicit dates found in the memories (e.g. the session date).
 - If memories contradict each other, prefer the one with the latest "[DATE: ...]" or event_time.
-- If no relevant memory is found, output "` + fallbackAnswer + `" exactly.
+- If memories contain related but indirect information, make a reasonable inference. For example, if asked "What does Alice think about hiking?" and a memory says "Alice went hiking at Mt. Fuji and loved it", answer "She loves it."
+- For temporal questions, combine dates from multiple memories if needed to determine chronological order or calculate durations.
+- If no relevant memory is found after searching, output "` + fallbackAnswer + `" exactly.
 - Do NOT ask follow-up questions. Do NOT say "Could you provide more context".
 - Do NOT explain your reasoning. Do NOT add any prefix like "The answer is" or "Based on".
 - Output the bare answer only.
 
-EXAMPLES of good answers: "Paris", "2021", "7 May 2023", "Toyota Camry", "` + fallbackAnswer + `"`
+EXAMPLES of good answers: "Paris", "2021", "7 May 2023", "Toyota Camry", "She loves hiking", "` + fallbackAnswer + `"`
 
 // qaMultiSearchInstruction is a strict instruction for the QA agent to
 // call memory_search multiple times before answering.
@@ -286,17 +293,19 @@ WORKFLOW:
 5. Output ONLY the answer - no explanations, no context, no questions.
 
 RULES:
-- Your answer MUST be 1-8 words maximum.
+- Your answer MUST be 1-15 words maximum.
 - For time questions, use the absolute date/year that appears in the memory text (e.g. "[DATE: 7 May 2023]" or "2022") or from the event_time field.
 - Do NOT use memory database timestamps (CreatedAt/UpdatedAt) or the current system date.
 - If a memory uses a relative phrase (like "last year"), resolve it ONLY using explicit dates found in the memories (e.g. the session date).
 - If memories contradict each other, prefer the one with the latest "[DATE: ...]" or event_time.
-- If no relevant memory is found, output "` + fallbackAnswer + `" exactly.
+- If memories contain related but indirect information, make a reasonable inference. For example, if asked "What does Alice think about hiking?" and a memory says "Alice went hiking at Mt. Fuji and loved it", answer "She loves it."
+- For temporal questions, combine dates from multiple memories if needed to determine chronological order or calculate durations.
+- If no relevant memory is found after all searches, output "` + fallbackAnswer + `" exactly.
 - Do NOT ask follow-up questions. Do NOT say "Could you provide more context".
 - Do NOT explain your reasoning. Do NOT add any prefix like "The answer is" or "Based on".
 - Output the bare answer only.
 
-EXAMPLES of good answers: "Paris", "2021", "7 May 2023", "Toyota Camry", "` + fallbackAnswer + `"`
+EXAMPLES of good answers: "Paris", "2021", "7 May 2023", "Toyota Camry", "She loves hiking", "` + fallbackAnswer + `"`
 
 func qaMemorySearchInstruction(searchPasses int) string {
 	if searchPasses <= 1 {

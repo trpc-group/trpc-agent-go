@@ -106,7 +106,7 @@ var (
 	)
 	flagQASearchPasses = flag.Int(
 		"qa-search-passes",
-		1,
+		2,
 		"Number of memory_search calls per QA "+
 			"(1=single search, auto/agentic only)",
 	)
@@ -164,9 +164,14 @@ CRITICAL RULES (EPISODIC FIELDS):
 EXTRACTION RULES (CONTENT):
 - Prefer atomic memories: one fact per memory.
 - Extract concrete facts that can answer future questions: who/what/when/where/relationships/preferences/attributes/events.
-- Include facts about all mentioned people (not only the user).
+- Include facts about ALL mentioned people (not only the user). Messages may be
+  prefixed with [SpeakerName]. Attribute facts to the correct person by name.
+- Extract specific details: book titles, movie names, restaurant names, city
+  names, relationship statuses (married, single, dating), children's names and
+  preferences, hobbies with specific objects (e.g., "reads 'The Great Gatsby'",
+  "son likes dinosaurs", "camped at the beach and mountains").
 - Be comprehensive rather than conservative: store many small facts.
-  - Aim for at least 3-8 atomic memories per session when possible.
+  - Aim for at least 5-10 atomic memories per session when possible.
 - Do NOT guess. If not stated, omit it.
 - Avoid vague summaries like "They discussed their plans".
 - Avoid duplicates: update existing memories when the same fact is refined.
