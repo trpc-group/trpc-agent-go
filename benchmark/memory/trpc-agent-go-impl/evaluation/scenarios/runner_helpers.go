@@ -259,10 +259,10 @@ const qaSingleSearchInstruction = `You are a memory retrieval assistant. Your ON
 
 WORKFLOW:
 1. Analyze the question. If it involves a specific time period or asks "when" something happened, include time_after and/or time_before parameters (ISO 8601: YYYY-MM-DD) in your memory_search call.
-2. If the question targets a specific type of information, use kind="episode" for events or kind="fact" for personal attributes.
+2. Do NOT use the kind filter unless you are very confident. Information may be stored as either "fact" or "episode" regardless of what you expect. Omitting kind gives the best recall.
 3. If the question asks about temporal order (what happened first, next, before/after something), set order_by_event_time=true to get results sorted chronologically.
 4. Call memory_search with the question as query (and optional filters above).
-5. Read the returned memories. Prefer facts that include an explicit date prefix like "[DATE: ...]" or have event_time set.
+5. Read the returned memories carefully. Look at both the memory text AND the event_time field for date information.
 6. Output ONLY the answer - no explanations, no context, no questions.
 
 RULES:
@@ -286,13 +286,13 @@ const qaMultiSearchInstruction = `You are a memory retrieval assistant. Your ONL
 
 WORKFLOW:
 1. You MUST call memory_search exactly %d times before answering.
-2. Search #1: Call memory_search with the full question as query. If the question involves a specific time period or asks "when", include time_after/time_before (ISO 8601: YYYY-MM-DD). Use kind="episode" for events, kind="fact" for personal attributes. For temporal order questions (what happened first/next/before/after), set order_by_event_time=true.
+2. Search #1: Call memory_search with the full question as query. Do NOT use the kind filter for the first search - information may be stored as either fact or episode. If the question involves a specific time period or asks "when", include time_after/time_before (ISO 8601: YYYY-MM-DD). For temporal order questions (what happened first/next/before/after), set order_by_event_time=true.
 3. For the remaining searches: rewrite the query to maximize recall.
-   - Keep named entities (people, places), numbers, and dates.
-   - Remove filler words.
-   - Prefer short, keyword-like phrases.
-   - Try different time ranges or kind filters if previous searches returned no relevant results.
-4. Read the returned memories from ALL searches. Prefer facts that include an explicit date prefix like "[DATE: ...]" or have event_time set.
+   - Focus on the KEY ENTITIES mentioned in the question (person names, specific objects, activities).
+   - Use short, specific phrases (e.g., "Melanie sunrise painting" instead of "When did Melanie paint a sunrise?").
+   - Try different angle: if the first search didn't find relevant results, try searching for the specific person + activity without time constraints.
+   - Only use kind filter if previous search returned many irrelevant results of one type.
+4. Read the returned memories from ALL searches. Look at both memory text AND event_time fields.
 5. Output ONLY the answer - no explanations, no context, no questions.
 
 RULES:

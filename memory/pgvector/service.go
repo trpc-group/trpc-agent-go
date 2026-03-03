@@ -490,6 +490,10 @@ func (s *Service) SearchMemories(
 	})
 }
 
+// minKindFallbackResults is the threshold below which a kind-filtered
+// search triggers a fallback unfiltered search when KindFallback is enabled.
+const minKindFallbackResults = 3
+
 // SearchMemoriesWithOptions searches memories with advanced filtering.
 func (s *Service) SearchMemoriesWithOptions(
 	ctx context.Context,
@@ -505,7 +509,7 @@ func (s *Service) SearchMemoriesWithOptions(
 		return []*memory.Entry{}, nil
 	}
 
-	// Generate embedding for the query.
+	// Generate embedding for the query (reused across fallback searches).
 	queryEmbedding, err := s.opts.embedder.GetEmbedding(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("generate query embedding failed: %w", err)
@@ -517,7 +521,61 @@ func (s *Service) SearchMemoriesWithOptions(
 
 	vector := pgvector.NewVector(convertToFloat32(queryEmbedding))
 
-	// Build query with optional episodic filters.
+	maxResults := s.opts.maxResults
+	if opts.MaxResults > 0 {
+		maxResults = opts.MaxResults
+	}
+
+	results, err := s.executeVectorSearch(ctx, userKey, opts, vector, maxResults)
+	if err != nil {
+		return nil, err
+	}
+
+	// Kind fallback: when kind filter was applied but returned too few
+	// results, retry without the kind filter and merge both result sets.
+	if opts.Kind != "" && opts.KindFallback && len(results) < minKindFallbackResults {
+		fallbackOpts := opts
+		fallbackOpts.Kind = ""
+		fallbackOpts.KindFallback = false
+		fallbackResults, fallbackErr := s.executeVectorSearch(
+			ctx, userKey, fallbackOpts, vector, maxResults,
+		)
+		if fallbackErr == nil && len(fallbackResults) > 0 {
+			results = mergeSearchResults(results, fallbackResults, opts.Kind, maxResults)
+		}
+	}
+
+	// Apply similarity threshold filtering.
+	threshold := s.opts.similarityThreshold
+	if opts.SimilarityThreshold > 0 {
+		threshold = opts.SimilarityThreshold
+	}
+	if threshold > 0 && len(results) > 0 {
+		filtered := results[:0]
+		for _, r := range results {
+			if r.Score >= threshold {
+				filtered = append(filtered, r)
+			}
+		}
+		results = filtered
+	}
+
+	// Content-based deduplication of near-identical memories.
+	if opts.Deduplicate && len(results) > 1 {
+		results = deduplicateResults(results)
+	}
+
+	return results, nil
+}
+
+// executeVectorSearch runs a single vector similarity search against pgvector.
+func (s *Service) executeVectorSearch(
+	ctx context.Context,
+	userKey memory.UserKey,
+	opts memory.SearchOptions,
+	vector pgvector.Vector,
+	maxResults int,
+) ([]*memory.Entry, error) {
 	var searchQuery strings.Builder
 	args := []any{vector, userKey.AppName, userKey.UserID}
 	argIdx := 4
@@ -533,14 +591,12 @@ func (s *Service) SearchMemoriesWithOptions(
 		searchQuery.WriteString(" AND deleted_at IS NULL")
 	}
 
-	// Filter by memory kind.
 	if opts.Kind != "" {
 		fmt.Fprintf(&searchQuery, " AND memory_kind = $%d", argIdx)
 		args = append(args, string(opts.Kind))
 		argIdx++
 	}
 
-	// Filter by event_time range.
 	if opts.TimeAfter != nil {
 		fmt.Fprintf(&searchQuery, " AND event_time >= $%d", argIdx)
 		args = append(args, *opts.TimeAfter)
@@ -552,26 +608,19 @@ func (s *Service) SearchMemoriesWithOptions(
 		argIdx++
 	}
 
-	// Order results.
 	if opts.OrderByEventTime {
-		// Order by event_time ascending, with NULL event_time entries last.
 		searchQuery.WriteString(" ORDER BY event_time ASC NULLS LAST, embedding <=> $1")
 	} else {
 		searchQuery.WriteString(" ORDER BY embedding <=> $1")
 	}
-
-	maxResults := s.opts.maxResults
-	if opts.MaxResults > 0 {
-		maxResults = opts.MaxResults
-	}
 	fmt.Fprintf(&searchQuery, " LIMIT %d", maxResults)
 
 	results := make([]*memory.Entry, 0)
-	err = s.db.Query(ctx, func(rows *sql.Rows) error {
+	err := s.db.Query(ctx, func(rows *sql.Rows) error {
 		for rows.Next() {
-			entry, err := scanMemoryEntryWithSimilarity(rows)
-			if err != nil {
-				return err
+			entry, scanErr := scanMemoryEntryWithSimilarity(rows)
+			if scanErr != nil {
+				return scanErr
 			}
 			results = append(results, entry)
 		}
@@ -581,24 +630,112 @@ func (s *Service) SearchMemoriesWithOptions(
 	if err != nil {
 		return nil, fmt.Errorf("search memories failed: %w", err)
 	}
+	return results, nil
+}
 
-	// Apply similarity threshold filtering if configured.
-	// Per-query threshold takes precedence over service-level default.
-	threshold := s.opts.similarityThreshold
-	if opts.SimilarityThreshold > 0 {
-		threshold = opts.SimilarityThreshold
+// mergeSearchResults merges kind-filtered results with fallback results.
+// Results matching the preferred kind are ranked higher. Duplicates are
+// removed by memory ID.
+func mergeSearchResults(
+	primary, fallback []*memory.Entry,
+	preferredKind memory.MemoryKind,
+	maxResults int,
+) []*memory.Entry {
+	seen := make(map[string]bool, len(primary))
+	for _, e := range primary {
+		seen[e.ID] = true
 	}
-	if threshold > 0 && len(results) > 0 {
-		filtered := results[:0]
-		for _, r := range results {
-			if r.Score >= threshold {
-				filtered = append(filtered, r)
+
+	// Split fallback into matching-kind and other-kind.
+	var kindMatch, kindOther []*memory.Entry
+	for _, e := range fallback {
+		if seen[e.ID] {
+			continue
+		}
+		if e.Memory != nil && e.Memory.Kind == preferredKind {
+			kindMatch = append(kindMatch, e)
+		} else {
+			kindOther = append(kindOther, e)
+		}
+	}
+
+	// Build merged list: primary (kind-filtered) → fallback matching kind → fallback other kind.
+	merged := make([]*memory.Entry, 0, len(primary)+len(kindMatch)+len(kindOther))
+	merged = append(merged, primary...)
+	merged = append(merged, kindMatch...)
+	merged = append(merged, kindOther...)
+
+	if len(merged) > maxResults {
+		merged = merged[:maxResults]
+	}
+	return merged
+}
+
+// deduplicateResults removes near-duplicate memories based on word-level
+// Jaccard similarity. When two results have >80% word overlap, the
+// lower-scored one is dropped.
+func deduplicateResults(results []*memory.Entry) []*memory.Entry {
+	const jaccardThreshold = 0.80
+
+	type wordSet map[string]struct{}
+	sets := make([]wordSet, len(results))
+	for i, r := range results {
+		ws := make(wordSet)
+		for _, w := range strings.Fields(strings.ToLower(r.Memory.Memory)) {
+			ws[w] = struct{}{}
+		}
+		sets[i] = ws
+	}
+
+	keep := make([]bool, len(results))
+	for i := range keep {
+		keep[i] = true
+	}
+
+	for i := 0; i < len(results); i++ {
+		if !keep[i] {
+			continue
+		}
+		for j := i + 1; j < len(results); j++ {
+			if !keep[j] {
+				continue
+			}
+			if jaccardSimilarity(sets[i], sets[j]) >= jaccardThreshold {
+				// Drop the lower-scored duplicate.
+				if results[i].Score >= results[j].Score {
+					keep[j] = false
+				} else {
+					keep[i] = false
+					break
+				}
 			}
 		}
-		results = filtered
 	}
 
-	return results, nil
+	deduped := make([]*memory.Entry, 0, len(results))
+	for i, r := range results {
+		if keep[i] {
+			deduped = append(deduped, r)
+		}
+	}
+	return deduped
+}
+
+func jaccardSimilarity(a, b map[string]struct{}) float64 {
+	if len(a) == 0 && len(b) == 0 {
+		return 1.0
+	}
+	intersection := 0
+	for w := range a {
+		if _, ok := b[w]; ok {
+			intersection++
+		}
+	}
+	union := len(a) + len(b) - intersection
+	if union == 0 {
+		return 0
+	}
+	return float64(intersection) / float64(union)
 }
 
 // Tools returns the list of available memory tools.

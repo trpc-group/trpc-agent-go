@@ -32,7 +32,7 @@ const (
 const (
 	defaultTableName      = "memories"
 	defaultIndexDimension = 1536
-	defaultMaxResults     = 30
+	defaultMaxResults     = 10
 )
 
 // Default HNSW index parameters.
@@ -43,8 +43,9 @@ const (
 
 // Default similarity threshold. Results with cosine similarity below this
 // are filtered out even if within the top-K limit. A value of 0 disables
-// threshold filtering.
-const defaultSimilarityThreshold = 0.0
+// threshold filtering. The default of 0.35 removes very low relevance
+// results that add noise without contributing useful information.
+const defaultSimilarityThreshold = 0.35
 
 // Default timeout settings.
 const (
