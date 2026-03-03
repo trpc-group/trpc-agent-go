@@ -104,6 +104,7 @@ Notes and limitations:
   and these flags must be off:
   - `-enable-local-exec`
   - `-enable-openclaw-tools`
+  - `-enable-parallel-tools`
   - `-refresh-toolsets-on-run`
 - `agent.add_session_summary`, `agent.max_history_runs`, and
   `agent.preload_memory` are LLM-only knobs.
@@ -692,6 +693,36 @@ Tool naming:
 
 If you set `tools.refresh_toolsets_on_run: true`, ToolSet tools are
 reloaded on each agent run (useful for MCP where tools can change).
+
+### Parallel tool execution (optional)
+
+By default, OpenClaw executes tool calls **serially**.
+
+If you enable parallel tool execution, and the model returns **multiple
+tool calls in one step**, OpenClaw runs them concurrently. This can be
+useful when:
+
+- the tool calls are independent, and
+- you want to reduce end-to-end latency (for example, multiple sub-agent
+  calls via AgentTool).
+
+YAML:
+
+```yaml
+tools:
+  enable_parallel_tools: true
+```
+
+CLI:
+
+- `-enable-parallel-tools`
+
+Important notes:
+
+- Parallel tools require each tool implementation to be safe for
+  concurrent use.
+- This only affects tool calls inside one model step. The gateway still
+  runs **one request at a time per session** (history/state safety).
 
 ## Built-in tool providers
 

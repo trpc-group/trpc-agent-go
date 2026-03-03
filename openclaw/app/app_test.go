@@ -821,6 +821,14 @@ func TestValidateAgentRunOptions(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:      "enable-parallel-tools",
+			agentType: agentTypeClaudeCode,
+			opts: runOptions{
+				EnableParallelTools: true,
+			},
+			wantErr: true,
+		},
+		{
 			name:      "tools.providers",
 			agentType: agentTypeClaudeCode,
 			opts: runOptions{
