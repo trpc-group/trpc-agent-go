@@ -871,8 +871,12 @@ Input:
     numeric suffix when needed.
   - If a file input includes raw bytes (`data`), those bytes are written
     directly into the workspace.
-  - If a file input is referenced only by `file_id`, the framework
-    downloads the content via the configured model when supported.
+  - If a file input is referenced only by `file_id`:
+    - When `file_id` starts with `artifact://`, `skill_run` loads it
+      from the Artifact service (useful when user uploads are stored as
+      artifacts and only referenced in messages).
+    - Otherwise, the framework downloads the content via the configured
+      model when supported.
 
 - `outputs` (optional, declarative outputs): a manifest to collect
   results with limits and persistence:
