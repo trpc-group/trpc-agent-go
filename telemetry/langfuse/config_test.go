@@ -22,6 +22,22 @@ func TestWithInsecure(t *testing.T) {
 	assert.True(t, cfg.insecure)
 }
 
+func TestWithMaxObservationBytes_SetsPointer(t *testing.T) {
+	cfg := &config{}
+	WithMaxObservationBytes(123)(cfg)
+	if assert.NotNil(t, cfg.maxObservationBytes) {
+		assert.Equal(t, 123, *cfg.maxObservationBytes)
+	}
+}
+
+func TestWithMaxObservationBytes_ZeroMeansTruncateAll(t *testing.T) {
+	cfg := &config{}
+	WithMaxObservationBytes(0)(cfg)
+	if assert.NotNil(t, cfg.maxObservationBytes) {
+		assert.Equal(t, 0, *cfg.maxObservationBytes)
+	}
+}
+
 func TestNewConfigFromEnv(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -69,6 +85,8 @@ func TestNewConfigFromEnv(t *testing.T) {
 			os.Unsetenv("LANGFUSE_SECRET_KEY")
 			os.Unsetenv("LANGFUSE_PUBLIC_KEY")
 			os.Unsetenv("LANGFUSE_HOST")
+			os.Unsetenv("LANGFUSE_INSECURE")
+			os.Unsetenv("LANGFUSE_MAX_OBSERVATION_BYTES")
 
 			// Set test environment variables
 			for key, value := range tt.envVars {
@@ -86,6 +104,68 @@ func TestNewConfigFromEnv(t *testing.T) {
 			assert.Equal(t, tt.expected, config)
 		})
 	}
+}
+
+func TestNewConfigFromEnv_MaxObservationBytes(t *testing.T) {
+	// Ensure env is clean
+	os.Unsetenv("LANGFUSE_MAX_OBSERVATION_BYTES")
+	cfg := newConfigFromEnv()
+	assert.Nil(t, cfg.maxObservationBytes)
+
+	t.Run("invalid is ignored", func(t *testing.T) {
+		os.Setenv("LANGFUSE_MAX_OBSERVATION_BYTES", "nope")
+		defer os.Unsetenv("LANGFUSE_MAX_OBSERVATION_BYTES")
+		cfg := newConfigFromEnv()
+		assert.Nil(t, cfg.maxObservationBytes)
+	})
+
+	t.Run("zero means truncate all", func(t *testing.T) {
+		os.Setenv("LANGFUSE_MAX_OBSERVATION_BYTES", "0")
+		defer os.Unsetenv("LANGFUSE_MAX_OBSERVATION_BYTES")
+		cfg := newConfigFromEnv()
+		if assert.NotNil(t, cfg.maxObservationBytes) {
+			assert.Equal(t, 0, *cfg.maxObservationBytes)
+		}
+	})
+
+	t.Run("positive value", func(t *testing.T) {
+		os.Setenv("LANGFUSE_MAX_OBSERVATION_BYTES", "123")
+		defer os.Unsetenv("LANGFUSE_MAX_OBSERVATION_BYTES")
+		cfg := newConfigFromEnv()
+		if assert.NotNil(t, cfg.maxObservationBytes) {
+			assert.Equal(t, 123, *cfg.maxObservationBytes)
+		}
+	})
+
+	t.Run("negative disables truncation", func(t *testing.T) {
+		os.Setenv("LANGFUSE_MAX_OBSERVATION_BYTES", "-1")
+		defer os.Unsetenv("LANGFUSE_MAX_OBSERVATION_BYTES")
+		cfg := newConfigFromEnv()
+		if assert.NotNil(t, cfg.maxObservationBytes) {
+			assert.Equal(t, -1, *cfg.maxObservationBytes)
+		}
+	})
+}
+
+func TestGetEnvIntPtr(t *testing.T) {
+	key := "TEST_INT_PTR"
+
+	// not set => nil
+	_ = os.Unsetenv(key)
+	assert.Nil(t, getEnvIntPtr(key))
+
+	// invalid => nil
+	_ = os.Setenv(key, "abc")
+	assert.Nil(t, getEnvIntPtr(key))
+	_ = os.Unsetenv(key)
+
+	// valid => pointer value
+	_ = os.Setenv(key, "42")
+	p := getEnvIntPtr(key)
+	if assert.NotNil(t, p) {
+		assert.Equal(t, 42, *p)
+	}
+	_ = os.Unsetenv(key)
 }
 
 func TestGetEnv(t *testing.T) {

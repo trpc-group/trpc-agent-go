@@ -10,7 +10,10 @@
 // Package langfuse provides Langfuse integration with custom span transformations.
 package langfuse
 
-import "os"
+import (
+	"os"
+	"strconv"
+)
 
 // Option is a function that configures Start options.
 type Option func(*config)
@@ -53,12 +56,25 @@ func WithInsecure() Option {
 	}
 }
 
+// WithMaxObservationBytes configures the max byte size for Langfuse observation input/output.
+//
+// If this option is not set, truncation is disabled by default.
+// If maxBytes is 0, it truncates everything.
+// If maxBytes < 0, truncation is disabled.
+func WithMaxObservationBytes(maxBytes int) Option {
+	return func(cfg *config) {
+		v := maxBytes
+		cfg.maxObservationBytes = &v
+	}
+}
+
 // config holds Langfuse configuration options.
 type config struct {
-	secretKey string
-	publicKey string
-	host      string
-	insecure  bool
+	secretKey           string
+	publicKey           string
+	host                string
+	insecure            bool
+	maxObservationBytes *int
 }
 
 // newConfigFromEnv creates a Langfuse config from environment variables.
@@ -68,12 +84,14 @@ type config struct {
 //	LANGFUSE_PUBLIC_KEY: Langfuse public key
 //	LANGFUSE_HOST: Langfuse host in "hostname:port" format (e.g., "cloud.langfuse.com:443")
 //	LANGFUSE_INSECURE: Set to "true" for insecure connections (development only)
+//	LANGFUSE_MAX_OBSERVATION_BYTES: Optional; max byte size for observation.input/output (unset by default)
 func newConfigFromEnv() *config {
 	return &config{
-		secretKey: getEnv("LANGFUSE_SECRET_KEY", ""),
-		publicKey: getEnv("LANGFUSE_PUBLIC_KEY", ""),
-		host:      getEnv("LANGFUSE_HOST", ""),
-		insecure:  getEnv("LANGFUSE_INSECURE", "") == "true",
+		secretKey:           getEnv("LANGFUSE_SECRET_KEY", ""),
+		publicKey:           getEnv("LANGFUSE_PUBLIC_KEY", ""),
+		host:                getEnv("LANGFUSE_HOST", ""),
+		insecure:            getEnv("LANGFUSE_INSECURE", "") == "true",
+		maxObservationBytes: getEnvIntPtr("LANGFUSE_MAX_OBSERVATION_BYTES"),
 	}
 }
 
@@ -83,4 +101,16 @@ func getEnv(key, defaultValue string) string {
 		return v
 	}
 	return defaultValue
+}
+
+func getEnvIntPtr(key string) *int {
+	v := getEnv(key, "")
+	if v == "" {
+		return nil
+	}
+	i, err := strconv.Atoi(v)
+	if err != nil {
+		return nil
+	}
+	return &i
 }
