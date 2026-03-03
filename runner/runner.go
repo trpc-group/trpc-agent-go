@@ -363,6 +363,11 @@ func (r *runner) Run(
 		return nil, fmt.Errorf("select agent: %w", err)
 	}
 
+	eventFilterKey := r.appName
+	if ro.EventFilterKey != "" {
+		eventFilterKey = ro.EventFilterKey
+	}
+
 	invocation := agent.NewInvocation(
 		agent.WithInvocationSession(sess),
 		agent.WithInvocationSessionService(r.sessionService),
@@ -371,7 +376,7 @@ func (r *runner) Run(
 		agent.WithInvocationRunOptions(ro),
 		agent.WithInvocationMemoryService(r.memoryService),
 		agent.WithInvocationArtifactService(r.artifactService),
-		agent.WithInvocationEventFilterKey(r.appName),
+		agent.WithInvocationEventFilterKey(eventFilterKey),
 		agent.WithInvocationPlugins(r.pluginManager),
 	)
 

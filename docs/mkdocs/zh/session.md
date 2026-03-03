@@ -2149,6 +2149,54 @@ if found {
 
 要实现这个功能，需要为事件设置 `FilterKey` 字段来标识事件类型。
 
+#### FilterKey、EventFilterKey 与 BranchFilterMode（先搞懂再用）
+
+很多同学第一次接触 FilterKey 会觉得难理解，主要原因是它同时参与两类能力：
+
+1. **会话摘要**：用某个 filterKey 生成/读取摘要（`CreateSessionSummary`、
+   `GetSessionSummaryText` + `WithSummaryFilterKey`）。
+2. **历史可见性**：构建下一次 Prompt 时，决定“哪些历史事件会被放进上下文”
+   （`WithMessageBranchFilterMode`）。
+
+你可以把 `FilterKey` 当成一个**分层路径**（像文件路径一样）：
+
+- `my-app/user-messages`
+- `my-app/tool-calls`
+- `my-app/auth/role_admin`
+
+`/` 是分隔符，因此这些 key 会形成一棵“树”：
+
+```text
+my-app
+├── user-messages
+├── tool-calls
+└── auth
+    ├── role_admin
+    └── role_viewer
+```
+
+这里还有一个容易混淆的概念：`EventFilterKey`。
+
+- `Event.FilterKey`：每条事件自带的 key（你可以在 `AppendEventHook` 里设置）。
+- `Invocation.eventFilterKey`：本次运行的“视图 key”，用于筛选历史事件；可通过
+  `agent.WithEventFilterKey(...)` 在 `runner.Run(...)` 时设置。
+
+当框架把历史事件注入到 Prompt 时，会用 `WithMessageBranchFilterMode` 选择匹配
+规则：
+
+| 模式 | 直觉解释 | 会包含哪些事件（相对当前 EventFilterKey） |
+|------|----------|------------------------------------------|
+| `prefix`（默认） | **同一条祖先链都算** | 祖先、自己、子孙 |
+| `subtree` | **只看当前子树** | 自己、子孙（不含祖先） |
+| `exact` | **必须完全相等** | 仅自己 |
+| `all` | **不做隔离** | 全部 |
+
+**注意：** 为了兼容旧行为，当 `EventFilterKey==""` 或 `Event.FilterKey==""` 时，
+框架会把它当作“匹配所有”，因此这些模式都会倾向于包含更多历史。
+
+> 小结：FilterKey 不只是“分类标签”，它更像“会话视图/作用域”。想做权限隔离时，
+> 一定要同时考虑匹配模式（尤其是 `prefix` vs `subtree`）以及摘要注入行为。
+
 #### 使用 AppendEventHook 设置 FilterKey
 
 推荐使用 `AppendEventHook` 在事件写入前自动设置 `FilterKey`：
@@ -2157,7 +2205,7 @@ if found {
 sessionService := inmemory.NewSessionService(
     inmemory.WithAppendEventHook(func(ctx *session.AppendEventContext, next func() error) error {
         // 根据事件作者自动分类
-        prefix := "my-app/"  // 必须添加 appName 前缀
+        prefix := "my-app/"  // 推荐：以 appName 作为根前缀
         switch ctx.Event.Author {
         case "user":
             ctx.Event.FilterKey = prefix + "user-messages"
@@ -2187,9 +2235,14 @@ userSummary, found := sessionService.GetSessionSummaryText(
 
 #### FilterKey 前缀规范
 
-**⚠️ 重要：FilterKey 必须添加 `appName + "/"` 前缀。**
+**强烈推荐：让 FilterKey 以 `appName/` 开头（或等于 `appName`）。**
 
-**原因：** Runner 在过滤事件时使用 `appName + "/"` 作为过滤前缀，如果 FilterKey 没有这个前缀，事件会被过滤掉，导致：
+**原因：**
+
+- Runner 默认会把本次运行的 `EventFilterKey` 设为 `appName`（除非你显式传入
+  `agent.WithEventFilterKey(...)`）。
+- 历史注入与摘要都依赖“层级匹配”：如果你的事件 `FilterKey` 不在 `appName` 这棵树
+  下，那么在默认配置下它很可能不会进入 Prompt，进而导致：
 
 - LLM 看不到历史对话，可能重复触发工具调用
 - 摘要内容不完整，丢失重要上下文
@@ -2204,7 +2257,11 @@ evt.FilterKey = "my-app/user-messages"
 evt.FilterKey = "user-messages"
 ```
 
-**技术细节：** 框架使用前缀匹配机制（`strings.HasPrefix`）来判断事件是否应该被包含在上下文中。详见 `ContentRequestProcessor` 的过滤逻辑。
+**技术细节：**
+
+- `prefix` 模式使用 `event.Event.Filter(filterKey)` 做层级匹配：只要两者存在祖先/
+  后代关系就算匹配（基于 `/` 分隔符的前缀判断）。
+- `subtree` 模式只包含“当前 key 及其子孙”，不包含父级（更适合严格隔离）。
 
 #### 完整示例
 
@@ -2212,6 +2269,97 @@ evt.FilterKey = "user-messages"
 
 - [examples/session/hook](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/session/hook) - Hook 基础用法
 - [examples/summary/filterkey](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/summary/filterkey) - 按 FilterKey 生成摘要
+
+### 权限变更与历史隔离（避免“旧权限答案复用”）
+
+很多业务会把**权限校验**放在 `BeforeToolCallback` 里：模型要调用工具 → 回调里校验权限 → 通过才执行工具。
+
+这在“工具确实被调用”的情况下是可靠的，但会遇到一个容易被忽略的问题：
+
+- 同一个 session 里，用户问过一次问题（当时有权限），工具返回了结果并写入了历史。
+- 后来用户权限被撤销/变更，但仍在同一个 session 里再次问同样的问题。
+- 模型可能**直接根据历史消息作答**，不再触发工具调用。
+- 这时你的 `BeforeToolCallback` **不会执行**，从而出现“旧权限结果被复用”的风险。
+
+要从根上解决，关键点不是“让模型一定调用工具”，而是：
+
+1. **工具层仍然做权限校验**（防线 1）。
+2. **Prompt 构建时不要把旧权限下的敏感历史放进上下文**（防线 2）。
+
+下面给出两种常见做法。
+
+#### 方案 A：权限变更时切换会话（最简单）
+
+当检测到权限发生变化（角色变了、权限版本号变了等）时，直接使用新的 `sessionID`，
+或在该次请求中禁用历史注入（只保留本轮消息和本轮工具回合上下文）。
+
+优点：简单直接，最不容易出错。  
+缺点：会丢失旧会话上下文（这是安全设计下常见的权衡）。
+
+#### 方案 B：用 FilterKey 给“同一 session”做权限视图隔离（推荐）
+
+核心思路：把“权限快照”当成一个**会话视图（view）**，写入 FilterKey。
+
+- 权限快照未变化：继续使用相同的 FilterKey，历史可复用。
+- 权限快照变化：切换到新的 FilterKey，旧视图下的历史不会进入上下文。
+
+**第 1 步：Run 时传入 EventFilterKey**
+
+Runner 支持在每次 `Run` 时指定本次请求使用的 FilterKey 前缀：
+
+```go
+appName := "my-app"
+viewKey := "auth/role_admin" // 示例：用角色/权限版本构造
+filterKey := appName + "/" + viewKey
+
+events, err := app.Run(
+    ctx,
+    userID,
+    sessionID,
+    msg,
+    agent.WithEventFilterKey(filterKey),
+)
+_ = events
+_ = err
+```
+
+你只需要保证：当权限发生变化时，`viewKey` 也跟着变化即可。
+
+**第 2 步：使用 Subtree 分支过滤模式（避免继承父级 FilterKey）**
+
+如果你的历史里曾经写入过更“粗”的 FilterKey（比如仅 `my-app`），
+那么在默认的 Prefix 模式下，`my-app` 可能会被视为 `my-app/auth/...` 的父级而被包含进来。
+
+此时可以把 Agent 的消息分支过滤模式设置为 `subtree`：
+
+```go
+ag := llmagent.New(
+    "assistant",
+    llmagent.WithMessageBranchFilterMode(llmagent.BranchFilterModeSubtree),
+)
+_ = ag
+```
+
+`subtree` 的语义是：只包含“当前 FilterKey 本身及其子节点”的事件，不包含父级。
+这对“权限视图隔离”非常重要。
+
+**补充：Session Summary 与 subtree**
+
+如果你启用了 `WithAddSessionSummary(true)`，框架会把会话摘要注入到 system 消息。
+需要注意：当前摘要生成按 `event.Filter` 的层级匹配规则过滤事件，
+这会把**父级 FilterKey** 的事件也算作“匹配”（例如 `my-app` 会匹配
+`my-app/auth/...`）。因此在“权限视图隔离”场景下，如果历史里存在父级事件，
+摘要可能仍会把父级内容带入上下文，从而削弱隔离效果。
+
+对需要严格隔离的场景，建议：
+
+- 保持 `AddSessionSummary=false`（默认）；
+- 或在权限变更时切换 `sessionID`（方案 A）；
+- 或确保不会写入父级 FilterKey 的敏感事件。
+
+**注意：这不是替代权限校验。**  
+你仍然需要在工具执行层做真实的鉴权（例如在 `BeforeToolCallback` 或工具实现内部），
+FilterKey 视图隔离只是为了避免模型在 Prompt 里看到不该看到的历史。
 
 ### 性能考虑
 
