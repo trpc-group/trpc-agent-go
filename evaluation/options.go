@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	metricinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
 // defaultNumRuns is the default number of runs.
@@ -33,6 +34,7 @@ type options struct {
 	registry                          registry.Registry
 	evalService                       service.Service
 	callbacks                         *service.Callbacks
+	judgeRunner                       runner.Runner
 	numRuns                           int
 	evalCaseParallelism               int
 	evalCaseParallelInferenceEnabled  bool
@@ -101,6 +103,13 @@ func WithEvaluationService(s service.Service) Option {
 func WithCallbacks(c *service.Callbacks) Option {
 	return func(o *options) {
 		o.callbacks = c
+	}
+}
+
+// WithJudgeRunner injects a judge runner for all LLM judge evaluators.
+func WithJudgeRunner(judge runner.Runner) Option {
+	return func(o *options) {
+		o.judgeRunner = judge
 	}
 }
 
