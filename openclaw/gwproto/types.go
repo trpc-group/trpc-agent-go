@@ -1,0 +1,126 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
+// Package gwproto defines the JSON payloads used by the OpenClaw gateway.
+package gwproto
+
+// MessageRequest matches the gateway /messages JSON payload.
+//
+// The request supports both:
+//   - Text-only messages via the "text" field, and
+//   - Multimodal messages via "content_parts".
+//
+// When both are present, "text" is treated as an additional text part.
+type MessageRequest struct {
+	Channel   string `json:"channel,omitempty"`
+	From      string `json:"from,omitempty"`
+	To        string `json:"to,omitempty"`
+	Thread    string `json:"thread,omitempty"`
+	MessageID string `json:"message_id,omitempty"`
+	Text      string `json:"text,omitempty"`
+
+	ContentParts []ContentPart `json:"content_parts,omitempty"`
+
+	UserID    string `json:"user_id,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+	RequestID string `json:"request_id,omitempty"`
+}
+
+// APIError matches gateway error payloads.
+type APIError struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
+}
+
+// MessageResponse matches the gateway /messages response JSON.
+type MessageResponse struct {
+	SessionID string    `json:"session_id,omitempty"`
+	RequestID string    `json:"request_id,omitempty"`
+	Reply     string    `json:"reply,omitempty"`
+	Ignored   bool      `json:"ignored,omitempty"`
+	Error     *APIError `json:"error,omitempty"`
+}
+
+// ContentPartType is the type discriminator for ContentPart.
+type ContentPartType string
+
+const (
+	PartTypeText     ContentPartType = "text"
+	PartTypeImage    ContentPartType = "image"
+	PartTypeAudio    ContentPartType = "audio"
+	PartTypeVoice    ContentPartType = "voice"
+	PartTypeFile     ContentPartType = "file"
+	PartTypeVideo    ContentPartType = "video"
+	PartTypeLocation ContentPartType = "location"
+	PartTypeLink     ContentPartType = "link"
+)
+
+// ContentPart is one structured input item in a user message.
+//
+// Only one of the typed payload fields should be set based on Type.
+type ContentPart struct {
+	Type ContentPartType `json:"type"`
+
+	Text     *string       `json:"text,omitempty"`
+	Image    *ImagePart    `json:"image,omitempty"`
+	Audio    *AudioPart    `json:"audio,omitempty"`
+	File     *FilePart     `json:"file,omitempty"`
+	Location *LocationPart `json:"location,omitempty"`
+	Link     *LinkPart     `json:"link,omitempty"`
+}
+
+// ImagePart describes an image input.
+//
+// Use URL to reference an image by URL, or Data to inline bytes.
+type ImagePart struct {
+	URL    string `json:"url,omitempty"`
+	Data   []byte `json:"data,omitempty"`
+	Detail string `json:"detail,omitempty"`
+	Format string `json:"format,omitempty"`
+}
+
+// AudioPart describes an audio input.
+//
+// Use URL to reference audio by URL, or Data to inline bytes.
+// Format is required when Data is used (e.g. "wav", "mp3").
+type AudioPart struct {
+	URL    string `json:"url,omitempty"`
+	Data   []byte `json:"data,omitempty"`
+	Format string `json:"format,omitempty"`
+}
+
+// FilePart describes a file input.
+//
+// Use one of:
+//   - FileID: reference a pre-uploaded file ID.
+//   - URL: download file content from a URL.
+//   - Data: inline file bytes.
+//
+// Filename is required for Data. Format is the MIME type for Data/URL.
+type FilePart struct {
+	Filename string `json:"filename,omitempty"`
+	Data     []byte `json:"data,omitempty"`
+	FileID   string `json:"file_id,omitempty"`
+	Format   string `json:"format,omitempty"`
+	URL      string `json:"url,omitempty"`
+}
+
+// LocationPart describes a location input.
+type LocationPart struct {
+	Latitude  float64 `json:"latitude,omitempty"`
+	Longitude float64 `json:"longitude,omitempty"`
+	Name      string  `json:"name,omitempty"`
+}
+
+// LinkPart describes a link input.
+type LinkPart struct {
+	URL   string `json:"url,omitempty"`
+	Title string `json:"title,omitempty"`
+}
