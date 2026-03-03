@@ -77,6 +77,14 @@ agent:
   # Optional: load and merge multiple markdown files into the system prompt.
   # Files are read in alphabetical order.
   # system_prompt_dir: "./prompts/system"
+  # Optional: enable an outer verification loop. Unsafe because it can
+  # execute host commands.
+  # ralph_loop:
+  #   enabled: true
+  #   max_iterations: 5
+  #   verify:
+  #     command: "go test ./..."
+  #     timeout: "2m"
 
 model:
   mode: "openai"
@@ -143,6 +151,42 @@ go run ./cmd/openclaw \
   -agent-system-prompt-dir ./examples/stdin_chat/prompts/system
 ```
 
+## Ralph Loop (optional)
+
+Ralph Loop is an outer loop that reruns the agent until a verifiable
+completion condition is met (or until the maximum number of iterations is
+reached).
+
+This demo supports it only for `agent.type: llm`, because the `claude-code`
+agent does not consume session history (so loop feedback would be ignored).
+
+Ralph Loop is considered unsafe because it can execute a host command
+after each iteration.
+
+YAML example:
+
+```yaml
+agent:
+  ralph_loop:
+    enabled: true
+    max_iterations: 5
+    verify:
+      command: "go test ./..."
+      timeout: "2m"
+      env: ["CGO_ENABLED=1"]
+```
+
+CLI example:
+
+```bash
+cd openclaw
+go run ./cmd/openclaw \
+  -mode mock \
+  -agent-ralph-loop \
+  -agent-ralph-verify-command 'go test ./...' \
+  -agent-ralph-verify-timeout 2m
+```
+
 Health check:
 
 ```bash
@@ -156,6 +200,78 @@ curl -sS 'http://127.0.0.1:8080/v1/gateway/messages' \
   -H 'Content-Type: application/json' \
   -d '{"from":"alice","text":"Hello"}'
 ```
+
+Send a multimodal message via HTTP:
+
+- Use `text` for the main text message.
+- Use `content_parts` for additional inputs (images, audio, files, links, etc.).
+
+Security note: for URL-based parts (`audio.url`, `file.url`, `video.url`),
+the gateway downloads the content. By default, it blocks URLs that resolve
+to loopback/private addresses to reduce SSRF risk. If you embed the gateway
+server in your own program, you can adjust this via gateway options (for
+example, `gateway.WithAllowPrivateContentPartURLs(true)` or
+`gateway.WithAllowedContentPartDomains(...)`).
+
+Example (text + image URL):
+
+```bash
+curl -sS 'http://127.0.0.1:8080/v1/gateway/messages' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "from": "alice",
+    "text": "What is in this image?",
+    "content_parts": [
+      {
+        "type": "image",
+        "image": {
+          "url": "https://example.com/image.png",
+          "detail": "auto"
+        }
+      }
+    ]
+  }'
+```
+
+Example (audio by URL):
+
+```bash
+curl -sS 'http://127.0.0.1:8080/v1/gateway/messages' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "from": "alice",
+    "content_parts": [
+      {
+        "type": "audio",
+        "audio": {
+          "url": "https://example.com/voice.wav"
+        }
+      }
+    ]
+  }'
+```
+
+Example (file by URL):
+
+```bash
+curl -sS 'http://127.0.0.1:8080/v1/gateway/messages' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "from": "alice",
+    "text": "Summarize this document.",
+    "content_parts": [
+      {
+        "type": "file",
+        "file": {
+          "url": "https://example.com/report.pdf"
+        }
+      }
+    ]
+  }'
+```
+
+If you send non-text inputs (`image`, `audio`, `file`, `video`), make sure
+the configured model supports those input types.
 
 ## Run with a real model (OpenAI)
 

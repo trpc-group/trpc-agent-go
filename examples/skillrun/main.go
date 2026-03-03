@@ -89,6 +89,11 @@ var (
 const defaultSkillsDir = "skills"
 const appName = "skill-run-chat"
 
+const (
+	artifactRefPrefix    = "artifact://"
+	artifactUploadPrefix = "uploads/"
+)
+
 // instructionText guides the assistant behavior in a general way so it
 // works with different skills repositories without assuming specifics.
 const instructionText = `
@@ -279,6 +284,10 @@ func (c *skillChat) setup(_ context.Context) error {
 		" - /upload_id <path> uploads a file and attaches file_id.",
 	)
 	fmt.Println(
+		" - /upload_artifact <path> uploads to the artifact " +
+			"service and attaches artifact:// file_id.",
+	)
+	fmt.Println(
 		" - Ask to run a command exactly as in the docs.",
 	)
 	fmt.Println(
@@ -386,6 +395,13 @@ func (c *skillChat) startChat(ctx context.Context) error {
 		if strings.EqualFold(text, "/exit") {
 			fmt.Println("👋 Bye!")
 			return nil
+		}
+		if strings.HasPrefix(text, "/upload_artifact ") {
+			if err := c.handleUploadArtifact(ctx, text); err != nil {
+				fmt.Printf("❌ Upload error: %v\n", err)
+			}
+			fmt.Println()
+			continue
 		}
 		if strings.HasPrefix(text, "/upload_id ") {
 			if err := c.handleUpload(ctx, text, true); err != nil {
@@ -498,6 +514,58 @@ func (c *skillChat) handleUpload(
 	}
 	msg.AddFileData(base, data, guessMimeType(base, data))
 	fmt.Printf("📎 Attached %s (%d bytes)\n", base, len(data))
+	return c.processModelMessage(ctx, msg)
+}
+
+func (c *skillChat) handleUploadArtifact(
+	ctx context.Context,
+	text string,
+) error {
+	if c.artSvc == nil {
+		return fmt.Errorf("artifact service not available")
+	}
+	raw := strings.TrimSpace(strings.TrimPrefix(
+		text,
+		"/upload_artifact ",
+	))
+	if raw == "" {
+		return fmt.Errorf("usage: /upload_artifact <path>")
+	}
+	base := filepath.Base(raw)
+	data, err := os.ReadFile(raw)
+	if err != nil {
+		return err
+	}
+	name := artifactUploadPrefix + uuid.NewString() + "_" +
+		base
+	info := artifact.SessionInfo{
+		AppName:   appName,
+		UserID:    c.userID,
+		SessionID: c.sessionID,
+	}
+	mt := guessMimeType(base, data)
+	ver, err := c.artSvc.SaveArtifact(
+		ctx,
+		info,
+		name,
+		&artifact.Artifact{
+			Data:     data,
+			MimeType: mt,
+			Name:     base,
+		},
+	)
+	if err != nil {
+		return err
+	}
+	ref := fmt.Sprintf(
+		"%s%s@%d",
+		artifactRefPrefix,
+		name,
+		ver,
+	)
+	msg := model.NewUserMessage("Uploaded file: " + base)
+	msg.AddFileIDWithName(ref, base)
+	fmt.Printf("📤 Uploaded to %s@%d\n", name, ver)
 	return c.processModelMessage(ctx, msg)
 }
 

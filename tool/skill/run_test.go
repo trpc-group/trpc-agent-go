@@ -125,6 +125,79 @@ func TestRunTool_ExecutesAndCollectsOutputFiles(t *testing.T) {
 	require.Contains(t, out.PrimaryOutput.Content, contentHi)
 }
 
+func TestRunTool_StateDelta_EmitsArtifactRefs(t *testing.T) {
+	rt := &RunTool{}
+	out := runOutput{
+		ArtifactFiles: []artifactRef{
+			{Name: "out/a.txt", Version: "3"},
+			{Name: "out/b.txt", Version: "0"},
+		},
+	}
+	b, err := json.Marshal(out)
+	require.NoError(t, err)
+
+	delta := rt.StateDelta("call-1", nil, b)
+	require.Len(t, delta, 1)
+	v, ok := delta[skill.StateKeyArtifacts]
+	require.True(t, ok)
+	require.Contains(t, string(v), `"tool_call_id":"call-1"`)
+	require.Contains(t, string(v), `"ref":"artifact://out/a.txt@3"`)
+	require.Contains(t, string(v), `"ref":"artifact://out/b.txt@0"`)
+}
+
+func TestRunTool_StateDelta_EdgeCases(t *testing.T) {
+	rt := &RunTool{}
+
+	t.Run("empty toolCallID returns nil", func(t *testing.T) {
+		delta := rt.StateDelta("   ", nil, []byte(
+			`{"artifact_files":[{"name":"out/a.txt","version":"0"}]}`,
+		))
+		require.Nil(t, delta)
+	})
+
+	t.Run("empty result JSON returns nil", func(t *testing.T) {
+		delta := rt.StateDelta("call-1", nil, nil)
+		require.Nil(t, delta)
+	})
+
+	t.Run("invalid JSON returns nil", func(t *testing.T) {
+		delta := rt.StateDelta("call-1", nil, []byte("{"))
+		require.Nil(t, delta)
+	})
+
+	t.Run("no artifact_files returns nil", func(t *testing.T) {
+		delta := rt.StateDelta("call-1", nil, []byte(`{}`))
+		require.Nil(t, delta)
+	})
+
+	t.Run("all invalid artifact files returns nil", func(t *testing.T) {
+		delta := rt.StateDelta("call-1", nil, []byte(
+			`{"artifact_files":[{"name":"","version":"0"},{"name":"x","version":""},{"name":"   ","version":"3"}]}`,
+		))
+		require.Nil(t, delta)
+	})
+
+	t.Run("trims toolCallID and filters invalid entries", func(t *testing.T) {
+		delta := rt.StateDelta(" call-1 ", nil, []byte(
+			`{"artifact_files":[{"name":"  out/a.txt  ","version":"1"},{"name":"","version":"2"},{"name":"x","version":""}]}`,
+		))
+		require.Len(t, delta, 1)
+
+		raw, ok := delta[skill.StateKeyArtifacts]
+		require.True(t, ok)
+
+		var got skillRunArtifactsDelta
+		require.NoError(t, json.Unmarshal(raw, &got))
+		require.Equal(t, "call-1", got.ToolCallID)
+		require.Len(t, got.Artifacts, 1)
+		require.Equal(t, artifactStateRef{
+			Name:    "out/a.txt",
+			Version: "1",
+			Ref:     "artifact://out/a.txt@1",
+		}, got.Artifacts[0])
+	})
+}
+
 func TestRunTool_DoesNotInlineNonTextOutputs(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, testSkillName)
@@ -796,12 +869,14 @@ func TestRunTool_ForceSaveArtifacts_OutputsSpec(t *testing.T) {
 	enc, err := jsonMarshal(args)
 	require.NoError(t, err)
 
+	svc := inmemory.NewService()
+	sess := &session.Session{
+		AppName: "app", UserID: "u", ID: "s1",
+		State: session.StateMap{},
+	}
 	inv := agent.NewInvocation(
-		agent.WithInvocationSession(&session.Session{
-			AppName: "app", UserID: "u", ID: "s1",
-			State: session.StateMap{},
-		}),
-		agent.WithInvocationArtifactService(inmemory.NewService()),
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationArtifactService(svc),
 	)
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 
@@ -810,7 +885,17 @@ func TestRunTool_ForceSaveArtifacts_OutputsSpec(t *testing.T) {
 
 	out := res.(runOutput)
 	require.Len(t, out.ArtifactFiles, 1)
-	require.Equal(t, "pref/"+outATxt, out.ArtifactFiles[0].Name)
+	savedName := "pref/" + outATxt
+	require.Equal(t, savedName, out.ArtifactFiles[0].Name)
+	got, _, err := artifact.ReadAll(ctx, svc, artifact.Key{
+		AppName:   sess.AppName,
+		UserID:    sess.UserID,
+		SessionID: sess.ID,
+		Scope:     artifact.ScopeSession,
+		Name:      savedName,
+	}, nil)
+	require.NoError(t, err)
+	require.Contains(t, string(got), contentHi)
 }
 
 func TestRunTool_ForceSaveArtifacts_OutputsSpec_NoService(t *testing.T) {
@@ -2157,6 +2242,74 @@ func TestRunTool_StagesUserFileInputs_NoDownloader_Warn(t *testing.T) {
 	require.Contains(t, out.Warnings, userFileInputWarnNoDownloader)
 }
 
+func TestRunTool_StagesUserFileInputs_ArtifactRef_OK(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	rt := NewRunTool(repo, localexec.New())
+
+	svc := inmemory.NewService()
+	sess := &session.Session{
+		AppName: "app",
+		UserID:  "u",
+		ID:      "s1",
+		State:   session.StateMap{},
+	}
+	const artifactName = "uploads/notes.txt"
+	desc, err := svc.Put(context.Background(), artifact.Key{
+		AppName:   sess.AppName,
+		UserID:    sess.UserID,
+		SessionID: sess.ID,
+		Scope:     artifact.ScopeSession,
+		Name:      artifactName,
+	}, strings.NewReader(contentHi), artifact.WithPutMimeType("text/plain"))
+	require.NoError(t, err)
+
+	ref := fmt.Sprintf(
+		"%s%s@%s",
+		fileref.ArtifactPrefix,
+		artifactName,
+		desc.Version,
+	)
+	user := model.NewUserMessage("upload")
+	user.AddFileIDWithName(ref, uploadNotesTxt)
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(user),
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationArtifactService(svc),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args := runInput{
+		Skill: testSkillName,
+		Command: "mkdir -p out; cat work/inputs/" +
+			uploadNotesTxt + " > " + outATxt,
+		OutputFiles: []string{outATxt},
+		Timeout:     timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Len(t, out.StagedInputs, 1)
+	require.Equal(t, "work/inputs/"+uploadNotesTxt,
+		out.StagedInputs[0].Name)
+	require.Equal(t, uploadNotesTxt, out.StagedInputs[0].OriginalName)
+	require.Equal(t, "text/plain", out.StagedInputs[0].MIMEType)
+	require.Equal(
+		t,
+		int64(len(contentHi)),
+		out.StagedInputs[0].SizeBytes,
+	)
+	require.Len(t, out.OutputFiles, 1)
+	require.Equal(t, outATxt, out.OutputFiles[0].Name)
+	require.Contains(t, out.OutputFiles[0].Content, contentHi)
+}
+
 func TestRunTool_StagesUserFileInputs_DownloadError_Warn(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, testSkillName)
@@ -2427,6 +2580,77 @@ func TestUserFileInputBytes(t *testing.T) {
 			f,
 		)
 		require.Equal(t, userFileInputWarnNoDownloader, warn)
+	})
+
+	t.Run("artifact-no-service", func(t *testing.T) {
+		f := model.File{
+			FileID: fileref.ArtifactPrefix + "uploads/x.txt@0",
+		}
+		_, _, warn := userFileInputBytes(
+			context.Background(),
+			nil,
+			f,
+		)
+		require.Equal(t, userFileInputWarnArtifactNoService, warn)
+	})
+
+	t.Run("artifact-parse-error", func(t *testing.T) {
+		svc := inmemory.NewService()
+		sess := &session.Session{
+			AppName: "app",
+			UserID:  "u",
+			ID:      "s1",
+			State:   session.StateMap{},
+		}
+		inv := agent.NewInvocation(
+			agent.WithInvocationSession(sess),
+			agent.WithInvocationArtifactService(svc),
+		)
+		ctx := agent.NewInvocationContext(context.Background(), inv)
+		f := model.File{
+			FileID: fileref.ArtifactPrefix + "uploads/x.txt@",
+		}
+		_, _, warn := userFileInputBytes(
+			ctx,
+			nil,
+			f,
+		)
+		require.Contains(t, warn, "parse artifact ref")
+	})
+
+	t.Run("artifact-ok", func(t *testing.T) {
+		svc := inmemory.NewService()
+		sess := &session.Session{
+			AppName: "app",
+			UserID:  "u",
+			ID:      "s1",
+			State:   session.StateMap{},
+		}
+		const artifactName = "uploads/notes.txt"
+		desc, err := svc.Put(context.Background(), artifact.Key{
+			AppName:   sess.AppName,
+			UserID:    sess.UserID,
+			SessionID: sess.ID,
+			Scope:     artifact.ScopeSession,
+			Name:      artifactName,
+		}, strings.NewReader(contentHi), artifact.WithPutMimeType("text/plain"))
+		require.NoError(t, err)
+		ref := fmt.Sprintf(
+			"%s%s@%s",
+			fileref.ArtifactPrefix,
+			artifactName,
+			desc.Version,
+		)
+		inv := agent.NewInvocation(
+			agent.WithInvocationSession(sess),
+			agent.WithInvocationArtifactService(svc),
+		)
+		ctx := agent.NewInvocationContext(context.Background(), inv)
+		f := model.File{FileID: ref}
+		got, mime, warn := userFileInputBytes(ctx, nil, f)
+		require.Equal(t, []byte(contentHi), got)
+		require.Equal(t, "text/plain", mime)
+		require.Empty(t, warn)
 	})
 
 	t.Run("download-error", func(t *testing.T) {

@@ -21,7 +21,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tencentyun/cos-go-sdk-v5"
 
@@ -206,7 +205,9 @@ func (m *MockTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 // createMockService creates a Service instance using mock COS client
-func createMockService() (*Service, *MockTransport) {
+func createMockService(t *testing.T) (*Service, *MockTransport) {
+	t.Helper()
+
 	mockTransport := NewMockTransport()
 
 	mockClient := &http.Client{
@@ -218,13 +219,14 @@ func createMockService() (*Service, *MockTransport) {
 	mockCosClient := cos.NewClient(&cos.BaseURL{BucketURL: mockBucketURL}, mockClient)
 
 	// Use WithClient option to inject the mock COS client
-	service, _ := NewService("cos-service", "", WithClient(mockCosClient))
+	service, err := NewService("cos-service", "", WithClient(mockCosClient))
+	require.NoError(t, err)
 
 	return service, mockTransport
 }
 
 func TestCOSService_PutHeadOpenVersionsListDelete(t *testing.T) {
-	s, _ := createMockService()
+	s, transport := createMockService(t)
 	ctx := context.Background()
 
 	key := artifact.Key{
@@ -241,6 +243,10 @@ func TestCOSService_PutHeadOpenVersionsListDelete(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, desc1.Version, desc2.Version)
 
+	for objectKey := range transport.objects {
+		require.True(t, strings.HasPrefix(objectKey, "artifact/"), "objectKey=%s", objectKey)
+	}
+
 	h, err := s.Head(ctx, key, nil)
 	require.NoError(t, err)
 	require.Equal(t, desc2.Version, h.Version)
@@ -249,7 +255,7 @@ func TestCOSService_PutHeadOpenVersionsListDelete(t *testing.T) {
 	require.NoError(t, err)
 	b, err := io.ReadAll(rc)
 	require.NoError(t, err)
-	_ = rc.Close()
+	require.NoError(t, rc.Close())
 	require.Equal(t, []byte("v1"), b)
 	require.Equal(t, desc1.Version, od.Version)
 
@@ -274,7 +280,7 @@ func TestCOSService_PutHeadOpenVersionsListDelete(t *testing.T) {
 }
 
 func TestCOSService_UserScopeIgnoresSessionID(t *testing.T) {
-	s, _ := createMockService()
+	s, _ := createMockService(t)
 	ctx := context.Background()
 
 	putKey := artifact.Key{AppName: "testapp", UserID: "user1", SessionID: "s1", Scope: artifact.ScopeUser, Name: "profile.txt"}
@@ -286,7 +292,7 @@ func TestCOSService_UserScopeIgnoresSessionID(t *testing.T) {
 	require.NoError(t, err)
 	b, err := io.ReadAll(rc)
 	require.NoError(t, err)
-	_ = rc.Close()
+	require.NoError(t, rc.Close())
 	require.Equal(t, []byte("u"), b)
 }
 
@@ -333,8 +339,8 @@ func TestNewServiceWithOptions(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			service, err := NewService(tt.name, tt.bucketURL, tt.options...)
 			require.NoError(t, err)
-			assert.NotNil(t, service)
-			assert.NotNil(t, service.cosClient)
+			require.NotNil(t, service)
+			require.NotNil(t, service.cosClient)
 		})
 	}
 }

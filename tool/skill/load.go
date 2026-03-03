@@ -24,7 +24,7 @@ import (
 // stateDeltaProvider is consumed by the flow to attach state delta
 // on tool.response events.
 type stateDeltaProvider interface {
-	StateDelta(args []byte, resultJSON []byte) map[string][]byte
+	StateDelta(toolCallID string, args []byte, resultJSON []byte) map[string][]byte
 }
 
 // LoadTool enables loading a skill into session state.
@@ -103,7 +103,7 @@ func (t *LoadTool) Call(ctx context.Context, args []byte) (any, error) {
 }
 
 // StateDelta builds delta keys to mark loaded skill and doc selection.
-func (t *LoadTool) StateDelta(args []byte, _ []byte) map[string][]byte {
+func (t *LoadTool) StateDelta(_ string, args []byte, _ []byte) map[string][]byte {
 	var in loadInput
 	if err := json.Unmarshal(args, &in); err != nil {
 		log.Warnf("skill_load state parse failed: %v", err)

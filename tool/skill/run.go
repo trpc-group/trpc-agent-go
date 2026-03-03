@@ -252,6 +252,17 @@ type artifactRef struct {
 	Version artifact.VersionID `json:"version"`
 }
 
+type artifactStateRef struct {
+	Name    string             `json:"name"`
+	Version artifact.VersionID `json:"version"`
+	Ref     string             `json:"ref"`
+}
+
+type skillRunArtifactsDelta struct {
+	ToolCallID string             `json:"tool_call_id"`
+	Artifacts  []artifactStateRef `json:"artifacts"`
+}
+
 // Declaration implements tool.Tool.
 func (t *RunTool) Declaration() *tool.Declaration {
 	desc := "Run a command inside a skill workspace. " +
@@ -359,7 +370,7 @@ func (t *RunTool) Call(
 		return nil, err
 	}
 	cwd := resolveCWD(in.Cwd, in.Skill)
-	rr, err := t.runProgram(ctx, eng, ws, cwd, in)
+	rr, err := t.runProgram(ctxIO, eng, ws, cwd, in)
 	if err != nil {
 		return nil, err
 	}
@@ -392,6 +403,59 @@ func (t *RunTool) Call(
 
 var _ tool.Tool = (*RunTool)(nil)
 var _ tool.CallableTool = (*RunTool)(nil)
+
+// StateDelta returns a stable, replayable artifact ref list when skill_run
+// persisted outputs via Artifact service.
+//
+// It is consumed by the flow to attach StateDelta onto tool.response events.
+func (t *RunTool) StateDelta(
+	toolCallID string,
+	_ []byte,
+	resultJSON []byte,
+) map[string][]byte {
+	toolCallID = strings.TrimSpace(toolCallID)
+	if toolCallID == "" {
+		return nil
+	}
+	if len(resultJSON) == 0 {
+		return nil
+	}
+	var out runOutput
+	if err := json.Unmarshal(resultJSON, &out); err != nil {
+		return nil
+	}
+	if len(out.ArtifactFiles) == 0 {
+		return nil
+	}
+	refs := make([]artifactStateRef, 0, len(out.ArtifactFiles))
+	for _, f := range out.ArtifactFiles {
+		name := strings.TrimSpace(f.Name)
+		ver := artifact.VersionID(strings.TrimSpace(string(f.Version)))
+		if name == "" || ver == "" {
+			continue
+		}
+		refs = append(refs, artifactStateRef{
+			Name:    name,
+			Version: ver,
+			Ref:     fmt.Sprintf("artifact://%s@%s", name, ver),
+		})
+	}
+	if len(refs) == 0 {
+		return nil
+	}
+	b, err := json.Marshal(skillRunArtifactsDelta{
+		ToolCallID: toolCallID,
+		Artifacts:  refs,
+	})
+	if err != nil {
+		return nil
+	}
+	return map[string][]byte{
+		skill.StateKeyArtifacts: b,
+	}
+}
+
+var _ stateDeltaProvider = (*RunTool)(nil)
 
 func (t *RunTool) applyArtifactSaveOverrides(
 	ctx context.Context,
@@ -499,6 +563,8 @@ const (
 		" missing bytes and file_id"
 	userFileInputWarnNoDownloader = userFileInputWarnPrefix +
 		" model does not support file download"
+	userFileInputWarnArtifactNoService = userFileInputWarnPrefix +
+		" artifact service is not configured"
 )
 
 func (t *RunTool) stageUserFileInputs(
@@ -751,18 +817,55 @@ func userFileInputBytes(
 	if len(f.Data) > 0 {
 		return f.Data, strings.TrimSpace(f.MimeType), ""
 	}
-	if strings.TrimSpace(f.FileID) == "" {
+	fileID := strings.TrimSpace(f.FileID)
+	if fileID == "" {
 		return nil, "", userFileInputWarnMissingRef
+	}
+	if strings.HasPrefix(fileID, fileref.ArtifactPrefix) {
+		return userFileInputArtifactBytes(ctx, fileID)
 	}
 	dl, ok := mdl.(model.FileDownloader)
 	if !ok || dl == nil {
 		return nil, "", userFileInputWarnNoDownloader
 	}
-	data, mime, err := dl.DownloadFile(ctx, f.FileID)
+	data, mime, err := dl.DownloadFile(ctx, fileID)
 	if err != nil {
 		return nil, "", fmt.Sprintf(
 			"user file input: download %s: %v",
-			f.FileID,
+			fileID,
+			err,
+		)
+	}
+	return data, mime, ""
+}
+
+func userFileInputArtifactBytes(
+	ctx context.Context,
+	fileID string,
+) ([]byte, string, string) {
+	ctxIO := withArtifactContext(ctx)
+	if svc, ok := codeexecutor.ArtifactServiceFromContext(ctxIO); !ok ||
+		svc == nil {
+		return nil, "", userFileInputWarnArtifactNoService
+	}
+	ref := strings.TrimPrefix(fileID, fileref.ArtifactPrefix)
+	name, ver, err := codeexecutor.ParseArtifactRef(ref)
+	if err != nil {
+		return nil, "", fmt.Sprintf(
+			"user file input: parse artifact ref %s: %v",
+			fileID,
+			err,
+		)
+	}
+	data, mime, _, err := codeexecutor.LoadArtifactHelper(
+		ctxIO,
+		name,
+		ver,
+	)
+	if err != nil {
+		return nil, "", fmt.Sprintf(
+			"user file input: load artifact %s: %v",
+			fileID,
 			err,
 		)
 	}
