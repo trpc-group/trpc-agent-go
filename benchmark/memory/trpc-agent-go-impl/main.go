@@ -121,13 +121,13 @@ var (
 
 const (
 	pgvectorTableDefault  = "memory_eval"
-	pgvectorTableAuto     = "memory_eval_auto"
+	pgvectorTableAuto     = "memory_eval_auto_v2"
 	mysqlTableDefault     = "memory_eval_mysql"
-	mysqlTableAuto        = "memory_eval_auto_mysql"
+	mysqlTableAuto        = "memory_eval_auto_mysql_v2"
 	sqliteTableDefault    = "memory_eval_sqlite"
-	sqliteTableAuto       = "memory_eval_auto_sqlite"
+	sqliteTableAuto       = "memory_eval_auto_sqlite_v2"
 	sqliteVecTableDefault = "memory_eval_sqlitevec"
-	sqliteVecTableAuto    = "memory_eval_auto_sqlitevec"
+	sqliteVecTableAuto    = "memory_eval_auto_sqlitevec_v2"
 
 	autoMemoryAsyncWorkers = 3
 	autoMemoryQueueSize    = 200
@@ -435,7 +435,9 @@ func runScenario(
 	log.Printf("")
 	log.Printf("=== Running: %s (backend=%s) ===", evaluator.Name(), backend)
 
-	result := runEvaluation(samples, evaluator, config, backend)
+	result := runEvaluation(
+		samples, evaluator, config, backend, scenarioDir,
+	)
 	saveResults(scenarioDir, result)
 	printSummary(result)
 
@@ -721,11 +723,18 @@ func createInMemoryService(opts memoryServiceOptions) memory.Service {
 	return inmemory.NewMemoryService()
 }
 
+// standardCategories is the ordered list of QA categories.
+var standardCategories = []string{
+	"single-hop", "multi-hop", "temporal",
+	"open-domain", "adversarial",
+}
+
 func runEvaluation(
 	samples []*dataset.LoCoMoSample,
 	evaluator scenarios.Evaluator,
 	config scenarios.Config,
 	backend string,
+	scenarioDir string,
 ) *EvaluationResult {
 	startTime := time.Now()
 	catAgg := metrics.NewCategoryAggregator()
@@ -770,11 +779,59 @@ func runEvaluation(
 				result.TokenUsage.LLMCalls,
 			)
 		}
+
+		// Log per-sample category breakdown.
+		logSampleCategoryBreakdown(result)
+
+		// Incremental checkpoint: save partial results after
+		// each sample so progress is not lost.
+		partial := buildEvaluationResult(
+			config, backend, startTime,
+			sampleResults, catAgg, totalQuestions, totalUsage,
+		)
+		saveResults(scenarioDir, partial)
 	}
 
+	return buildEvaluationResult(
+		config, backend, startTime,
+		sampleResults, catAgg, totalQuestions, totalUsage,
+	)
+}
+
+// logSampleCategoryBreakdown prints a one-line per-category
+// summary for the completed sample.
+func logSampleCategoryBreakdown(result *scenarios.SampleResult) {
+	if len(result.ByCategory) == 0 {
+		return
+	}
+	parts := make([]string, 0, len(standardCategories))
+	for _, cat := range standardCategories {
+		m, ok := result.ByCategory[cat]
+		if !ok {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf(
+			"%s: F1=%.3f", cat, m.F1,
+		))
+	}
+	if len(parts) > 0 {
+		log.Printf("  Categories: %s", strings.Join(parts, " | "))
+	}
+}
+
+// buildEvaluationResult constructs the full result from
+// accumulated data.
+func buildEvaluationResult(
+	config scenarios.Config,
+	backend string,
+	startTime time.Time,
+	sampleResults []*scenarios.SampleResult,
+	catAgg *metrics.CategoryAggregator,
+	totalQuestions int,
+	totalUsage scenarios.TokenUsage,
+) *EvaluationResult {
 	totalTime := time.Since(startTime)
 	overall := catAgg.GetOverall()
-
 	qCount := max(totalQuestions, 1)
 	return &EvaluationResult{
 		Metadata: &EvalMetadata{
