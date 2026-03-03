@@ -26,6 +26,8 @@ import (
 	evalsetlocal "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/local"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	criterionllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
 	metricinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/inmemory"
 	metriclocal "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/local"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
@@ -758,6 +760,86 @@ func TestAgentEvaluatorRunEvaluationErrors(t *testing.T) {
 			assert.Error(t, err)
 		})
 	}
+}
+
+func TestAgentEvaluatorRunEvaluationInjectsJudgeRunnerIntoLLMJudgeMetrics(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	svc := &fakeService{
+		inferenceResults: [][]*service.InferenceResult{{}},
+	}
+	metricMgr := metricinmemory.New()
+	numSamples := 1
+	err := metricMgr.Add(ctx, appName, evalSetID, &metric.EvalMetric{
+		MetricName: "metric",
+		Threshold:  0.5,
+		Criterion: &criterion.Criterion{
+			LLMJudge: &criterionllm.LLMCriterion{
+				JudgeModel: &criterionllm.JudgeModelOptions{
+					ProviderName: "provider",
+					ModelName:    "model",
+					NumSamples:   &numSamples,
+					Generation:   &model.GenerationConfig{},
+				},
+			},
+		},
+	})
+	if !assert.NoError(t, err) {
+		return
+	}
+
+	agentRunner := &stubRunner{}
+	judgeRunner := &stubRunner{}
+	res, err := New(
+		appName,
+		agentRunner,
+		WithEvaluationService(svc),
+		WithMetricManager(metricMgr),
+		WithJudgeRunner(judgeRunner),
+	)
+	if !assert.NoError(t, err) {
+		return
+	}
+	ae, ok := res.(*agentEvaluator)
+	if !assert.True(t, ok) {
+		return
+	}
+
+	_, err = ae.runEvaluation(ctx, evalSetID)
+	if !assert.NoError(t, err) {
+		return
+	}
+	if !assert.Len(t, svc.evaluateRequests, 1) {
+		return
+	}
+
+	req := svc.evaluateRequests[0]
+	if !assert.NotNil(t, req) {
+		return
+	}
+	if !assert.NotNil(t, req.EvaluateConfig) {
+		return
+	}
+	if !assert.Len(t, req.EvaluateConfig.EvalMetrics, 1) {
+		return
+	}
+
+	gotMetric := req.EvaluateConfig.EvalMetrics[0]
+	if !assert.NotNil(t, gotMetric) {
+		return
+	}
+	if !assert.NotNil(t, gotMetric.Criterion) {
+		return
+	}
+	if !assert.NotNil(t, gotMetric.Criterion.LLMJudge) {
+		return
+	}
+	if !assert.NotNil(t, gotMetric.Criterion.LLMJudge.JudgeRunnerOptions) {
+		return
+	}
+	assert.Equal(t, judgeRunner, gotMetric.Criterion.LLMJudge.JudgeRunnerOptions.Runner)
 }
 
 func TestAgentEvaluatorRunEvaluationNilRunResult(t *testing.T) {
