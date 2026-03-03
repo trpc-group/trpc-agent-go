@@ -359,7 +359,7 @@ func (t *RunTool) Call(
 		return nil, err
 	}
 	cwd := resolveCWD(in.Cwd, in.Skill)
-	rr, err := t.runProgram(ctx, eng, ws, cwd, in)
+	rr, err := t.runProgram(ctxIO, eng, ws, cwd, in)
 	if err != nil {
 		return nil, err
 	}
