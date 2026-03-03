@@ -231,6 +231,7 @@ skills:
 tools:
   enable_local_exec: true
   enable_openclaw_tools: true
+  enable_parallel_tools: true
   refresh_toolsets_on_run: true
   providers:
     - type: "duckduckgo"
@@ -339,6 +340,7 @@ memory:
 
 	require.True(t, opts.EnableLocalExec)
 	require.True(t, opts.EnableOpenClawTools)
+	require.True(t, opts.EnableParallelTools)
 	require.True(t, opts.RefreshToolSetsOnRun)
 
 	require.Len(t, opts.ToolProviders, 1)
