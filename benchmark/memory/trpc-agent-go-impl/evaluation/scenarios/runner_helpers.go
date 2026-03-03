@@ -107,6 +107,34 @@ func (s *noAutoMemoryService) Close() error {
 	return s.inner.Close()
 }
 
+func (s *noAutoMemoryService) AddMemoryWithEpisodic(
+	ctx context.Context,
+	userKey memory.UserKey,
+	mem string,
+	topics []string,
+	ep *memory.EpisodicFields,
+) error {
+	return s.inner.AddMemoryWithEpisodic(ctx, userKey, mem, topics, ep)
+}
+
+func (s *noAutoMemoryService) UpdateMemoryWithEpisodic(
+	ctx context.Context,
+	memoryKey memory.Key,
+	mem string,
+	topics []string,
+	ep *memory.EpisodicFields,
+) error {
+	return s.inner.UpdateMemoryWithEpisodic(ctx, memoryKey, mem, topics, ep)
+}
+
+func (s *noAutoMemoryService) SearchMemoriesWithOptions(
+	ctx context.Context,
+	userKey memory.UserKey,
+	opts memory.SearchOptions,
+) ([]*memory.Entry, error) {
+	return s.inner.SearchMemoriesWithOptions(ctx, userKey, opts)
+}
+
 // seedAgent is a minimal agent used to trigger Runner's auto memory enqueue.
 // It does not call an LLM and produces a deterministic response.
 type seedAgent struct{}
@@ -222,16 +250,19 @@ const fallbackAnswer = "The information is not available."
 const qaSingleSearchInstruction = `You are a memory retrieval assistant. Your ONLY job is to search memories and output a short factual answer.
 
 WORKFLOW:
-1. Call memory_search with the question as query.
-2. Read the returned memories. Prefer facts that include an explicit date prefix like "[DATE: ...]".
-3. Output ONLY the answer - no explanations, no context, no questions.
+1. Analyze the question. If it involves a specific time period or asks "when" something happened, include time_after and/or time_before parameters (ISO 8601: YYYY-MM-DD) in your memory_search call.
+2. If the question targets a specific type of information, use kind="episode" for events or kind="fact" for personal attributes.
+3. If the question asks about temporal order (what happened first, next, before/after something), set order_by_event_time=true to get results sorted chronologically.
+4. Call memory_search with the question as query (and optional filters above).
+5. Read the returned memories. Prefer facts that include an explicit date prefix like "[DATE: ...]" or have event_time set.
+6. Output ONLY the answer - no explanations, no context, no questions.
 
 RULES:
 - Your answer MUST be 1-8 words maximum.
-- For time questions, use the absolute date/year that appears in the memory text (e.g. "[DATE: 7 May 2023]" or "2022").
+- For time questions, use the absolute date/year that appears in the memory text (e.g. "[DATE: 7 May 2023]" or "2022") or from the event_time field.
 - Do NOT use memory database timestamps (CreatedAt/UpdatedAt) or the current system date.
 - If a memory uses a relative phrase (like "last year"), resolve it ONLY using explicit dates found in the memories (e.g. the session date).
-- If memories contradict each other, prefer the one with the latest "[DATE: ...]".
+- If memories contradict each other, prefer the one with the latest "[DATE: ...]" or event_time.
 - If no relevant memory is found, output "` + fallbackAnswer + `" exactly.
 - Do NOT ask follow-up questions. Do NOT say "Could you provide more context".
 - Do NOT explain your reasoning. Do NOT add any prefix like "The answer is" or "Based on".
@@ -245,20 +276,21 @@ const qaMultiSearchInstruction = `You are a memory retrieval assistant. Your ONL
 
 WORKFLOW:
 1. You MUST call memory_search exactly %d times before answering.
-2. Search #1: Call memory_search with the full question as query.
+2. Search #1: Call memory_search with the full question as query. If the question involves a specific time period or asks "when", include time_after/time_before (ISO 8601: YYYY-MM-DD). Use kind="episode" for events, kind="fact" for personal attributes. For temporal order questions (what happened first/next/before/after), set order_by_event_time=true.
 3. For the remaining searches: rewrite the query to maximize recall.
    - Keep named entities (people, places), numbers, and dates.
    - Remove filler words.
    - Prefer short, keyword-like phrases.
-4. Read the returned memories from ALL searches. Prefer facts that include an explicit date prefix like "[DATE: ...]".
+   - Try different time ranges or kind filters if previous searches returned no relevant results.
+4. Read the returned memories from ALL searches. Prefer facts that include an explicit date prefix like "[DATE: ...]" or have event_time set.
 5. Output ONLY the answer - no explanations, no context, no questions.
 
 RULES:
 - Your answer MUST be 1-8 words maximum.
-- For time questions, use the absolute date/year that appears in the memory text (e.g. "[DATE: 7 May 2023]" or "2022").
+- For time questions, use the absolute date/year that appears in the memory text (e.g. "[DATE: 7 May 2023]" or "2022") or from the event_time field.
 - Do NOT use memory database timestamps (CreatedAt/UpdatedAt) or the current system date.
 - If a memory uses a relative phrase (like "last year"), resolve it ONLY using explicit dates found in the memories (e.g. the session date).
-- If memories contradict each other, prefer the one with the latest "[DATE: ...]".
+- If memories contradict each other, prefer the one with the latest "[DATE: ...]" or event_time.
 - If no relevant memory is found, output "` + fallbackAnswer + `" exactly.
 - Do NOT ask follow-up questions. Do NOT say "Could you provide more context".
 - Do NOT explain your reasoning. Do NOT add any prefix like "The answer is" or "Based on".

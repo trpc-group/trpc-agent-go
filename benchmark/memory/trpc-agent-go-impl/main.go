@@ -153,6 +153,14 @@ CRITICAL RULES (TIME):
   - Examples: [DATE: 2023-05-07] ... , [DATE: 7 May 2023] ... , [DATE: late June 2023] ...
   - Use [DATE: unknown] only if no absolute date can be inferred from the provided context.
 
+CRITICAL RULES (EPISODIC FIELDS):
+- Classify each memory as memory_kind="fact" or memory_kind="episode".
+  - Facts: personal attributes, preferences, relationships, background (stable over time).
+  - Episodes: specific events, experiences, milestones that happened at a particular time.
+- For episodes, ALWAYS set event_time to an absolute ISO date (YYYY-MM-DD).
+  Use the session date context to resolve relative time references.
+- For episodes, set participants (people involved) and location (where it happened) when available.
+
 EXTRACTION RULES (CONTENT):
 - Prefer atomic memories: one fact per memory.
 - Extract concrete facts that can answer future questions: who/what/when/where/relationships/preferences/attributes/events.

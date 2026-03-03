@@ -178,6 +178,17 @@ func (s *Service) AddMemory(
 	memoryStr string,
 	topics []string,
 ) error {
+	return s.AddMemoryWithEpisodic(ctx, userKey, memoryStr, topics, nil)
+}
+
+// AddMemoryWithEpisodic adds or updates a memory with optional episodic fields.
+func (s *Service) AddMemoryWithEpisodic(
+	ctx context.Context,
+	userKey memory.UserKey,
+	memoryStr string,
+	topics []string,
+	ep *memory.EpisodicFields,
+) error {
 	if err := userKey.CheckUserKey(); err != nil {
 		return err
 	}
@@ -203,16 +214,23 @@ func (s *Service) AddMemory(
 	// Convert embedding to pgvector format.
 	vector := pgvector.NewVector(convertToFloat32(embedding))
 
+	// Resolve episodic fields for SQL parameters.
+	ef := resolveEpisodicFields(ep)
+
 	var insertQuery string
 	args := []any{
-		memoryID,
-		userKey.AppName,
-		userKey.UserID,
-		memoryStr,
-		pq.Array(topics),
-		vector,
-		now,
-		now,
+		memoryID,               // $1
+		userKey.AppName,        // $2
+		userKey.UserID,         // $3
+		memoryStr,              // $4
+		pq.Array(topics),       // $5
+		vector,                 // $6
+		ef.kind,                // $7
+		ef.eventTime,           // $8
+		pq.Array(ef.participants), // $9
+		ef.location,            // $10
+		now,                    // $11
+		now,                    // $12
 	}
 	if s.opts.memoryLimit > 0 {
 		deletedFilter := ""
@@ -228,14 +246,19 @@ func (s *Service) AddMemory(
 				"WHERE app_name = $2 AND user_id = $3%s"+
 				") "+
 				"INSERT INTO %s (memory_id, app_name, user_id, memory_content, topics, "+
-				"embedding, created_at, updated_at) "+
-				"SELECT $1, $2, $3, $4, $5, $6, $7, $8 "+
+				"embedding, memory_kind, event_time, participants, location, "+
+				"created_at, updated_at) "+
+				"SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12 "+
 				"WHERE (EXISTS (SELECT 1 FROM existing) OR "+
-				"(SELECT c FROM cnt) < $9) "+
+				"(SELECT c FROM cnt) < $13) "+
 				"ON CONFLICT (memory_id) DO UPDATE SET "+
 				"memory_content = EXCLUDED.memory_content, "+
 				"topics = EXCLUDED.topics, "+
 				"embedding = EXCLUDED.embedding, "+
+				"memory_kind = EXCLUDED.memory_kind, "+
+				"event_time = EXCLUDED.event_time, "+
+				"participants = EXCLUDED.participants, "+
+				"location = EXCLUDED.location, "+
 				"deleted_at = NULL, "+
 				"updated_at = EXCLUDED.updated_at",
 			s.tableName,
@@ -248,12 +271,17 @@ func (s *Service) AddMemory(
 	} else {
 		insertQuery = fmt.Sprintf(
 			"INSERT INTO %s (memory_id, app_name, user_id, memory_content, topics, "+
-				"embedding, created_at, updated_at) "+
-				"VALUES ($1, $2, $3, $4, $5, $6, $7, $8) "+
+				"embedding, memory_kind, event_time, participants, location, "+
+				"created_at, updated_at) "+
+				"VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) "+
 				"ON CONFLICT (memory_id) DO UPDATE SET "+
 				"memory_content = EXCLUDED.memory_content, "+
 				"topics = EXCLUDED.topics, "+
 				"embedding = EXCLUDED.embedding, "+
+				"memory_kind = EXCLUDED.memory_kind, "+
+				"event_time = EXCLUDED.event_time, "+
+				"participants = EXCLUDED.participants, "+
+				"location = EXCLUDED.location, "+
 				"deleted_at = NULL, "+
 				"updated_at = EXCLUDED.updated_at",
 			s.tableName,
@@ -285,6 +313,17 @@ func (s *Service) UpdateMemory(
 	memoryStr string,
 	topics []string,
 ) error {
+	return s.UpdateMemoryWithEpisodic(ctx, memoryKey, memoryStr, topics, nil)
+}
+
+// UpdateMemoryWithEpisodic updates an existing memory with optional episodic fields.
+func (s *Service) UpdateMemoryWithEpisodic(
+	ctx context.Context,
+	memoryKey memory.Key,
+	memoryStr string,
+	topics []string,
+	ep *memory.EpisodicFields,
+) error {
 	if err := memoryKey.CheckMemoryKey(); err != nil {
 		return err
 	}
@@ -302,17 +341,22 @@ func (s *Service) UpdateMemory(
 	now := time.Now()
 	vector := pgvector.NewVector(convertToFloat32(embedding))
 
+	// Resolve episodic fields for SQL parameters.
+	ef := resolveEpisodicFields(ep)
+
 	var updateQuery strings.Builder
 	fmt.Fprintf(&updateQuery,
 		"UPDATE %s SET memory_content = $1, topics = $2, embedding = $3, "+
-			"updated_at = $4 WHERE memory_id = $5 AND app_name = $6 AND user_id = $7",
+			"memory_kind = $4, event_time = $5, participants = $6, location = $7, "+
+			"updated_at = $8 WHERE memory_id = $9 AND app_name = $10 AND user_id = $11",
 		s.tableName,
 	)
 	if s.opts.softDelete {
 		updateQuery.WriteString(" AND deleted_at IS NULL")
 	}
 	res, err := s.db.ExecContext(ctx, updateQuery.String(),
-		memoryStr, pq.Array(topics), vector, now,
+		memoryStr, pq.Array(topics), vector,
+		ef.kind, ef.eventTime, pq.Array(ef.participants), ef.location, now,
 		memoryKey.MemoryID, memoryKey.AppName, memoryKey.UserID)
 	if err != nil {
 		return fmt.Errorf("update memory entry failed: %w", err)
@@ -403,8 +447,9 @@ func (s *Service) ReadMemories(
 
 	var query strings.Builder
 	fmt.Fprintf(&query,
-		"SELECT memory_id, app_name, user_id, memory_content, topics, created_at, "+
-			"updated_at FROM %s WHERE app_name = $1 AND user_id = $2",
+		"SELECT memory_id, app_name, user_id, memory_content, topics, "+
+			"memory_kind, event_time, participants, location, "+
+			"created_at, updated_at FROM %s WHERE app_name = $1 AND user_id = $2",
 		s.tableName,
 	)
 	if s.opts.softDelete {
@@ -440,11 +485,22 @@ func (s *Service) SearchMemories(
 	userKey memory.UserKey,
 	query string,
 ) ([]*memory.Entry, error) {
+	return s.SearchMemoriesWithOptions(ctx, userKey, memory.SearchOptions{
+		Query: query,
+	})
+}
+
+// SearchMemoriesWithOptions searches memories with advanced filtering.
+func (s *Service) SearchMemoriesWithOptions(
+	ctx context.Context,
+	userKey memory.UserKey,
+	opts memory.SearchOptions,
+) ([]*memory.Entry, error) {
 	if err := userKey.CheckUserKey(); err != nil {
 		return nil, err
 	}
 
-	query = strings.TrimSpace(query)
+	query := strings.TrimSpace(opts.Query)
 	if query == "" {
 		return []*memory.Entry{}, nil
 	}
@@ -461,20 +517,54 @@ func (s *Service) SearchMemories(
 
 	vector := pgvector.NewVector(convertToFloat32(queryEmbedding))
 
-	// Use cosine distance for similarity search.
-	// Order by distance ascending (smaller distance = more similar).
+	// Build query with optional episodic filters.
 	var searchQuery strings.Builder
+	args := []any{vector, userKey.AppName, userKey.UserID}
+	argIdx := 4
+
 	fmt.Fprintf(&searchQuery,
-		"SELECT memory_id, app_name, user_id, memory_content, topics, created_at, "+
-			"updated_at, 1 - (embedding <=> $1) AS similarity "+
+		"SELECT memory_id, app_name, user_id, memory_content, topics, "+
+			"memory_kind, event_time, participants, location, "+
+			"created_at, updated_at, 1 - (embedding <=> $1) AS similarity "+
 			"FROM %s WHERE app_name = $2 AND user_id = $3",
 		s.tableName,
 	)
 	if s.opts.softDelete {
 		searchQuery.WriteString(" AND deleted_at IS NULL")
 	}
-	searchQuery.WriteString(" ORDER BY embedding <=> $1")
-	fmt.Fprintf(&searchQuery, " LIMIT %d", s.opts.maxResults)
+
+	// Filter by memory kind.
+	if opts.Kind != "" {
+		fmt.Fprintf(&searchQuery, " AND memory_kind = $%d", argIdx)
+		args = append(args, string(opts.Kind))
+		argIdx++
+	}
+
+	// Filter by event_time range.
+	if opts.TimeAfter != nil {
+		fmt.Fprintf(&searchQuery, " AND event_time >= $%d", argIdx)
+		args = append(args, *opts.TimeAfter)
+		argIdx++
+	}
+	if opts.TimeBefore != nil {
+		fmt.Fprintf(&searchQuery, " AND event_time <= $%d", argIdx)
+		args = append(args, *opts.TimeBefore)
+		argIdx++
+	}
+
+	// Order results.
+	if opts.OrderByEventTime {
+		// Order by event_time ascending, with NULL event_time entries last.
+		searchQuery.WriteString(" ORDER BY event_time ASC NULLS LAST, embedding <=> $1")
+	} else {
+		searchQuery.WriteString(" ORDER BY embedding <=> $1")
+	}
+
+	maxResults := s.opts.maxResults
+	if opts.MaxResults > 0 {
+		maxResults = opts.MaxResults
+	}
+	fmt.Fprintf(&searchQuery, " LIMIT %d", maxResults)
 
 	results := make([]*memory.Entry, 0)
 	err = s.db.Query(ctx, func(rows *sql.Rows) error {
@@ -486,7 +576,7 @@ func (s *Service) SearchMemories(
 			results = append(results, entry)
 		}
 		return nil
-	}, searchQuery.String(), vector, userKey.AppName, userKey.UserID)
+	}, searchQuery.String(), args...)
 
 	if err != nil {
 		return nil, fmt.Errorf("search memories failed: %w", err)
@@ -535,29 +625,25 @@ func scanMemoryEntry(rows *sql.Rows) (*memory.Entry, error) {
 		userID        string
 		memoryContent string
 		topics        pq.StringArray
+		memoryKind    string
+		eventTime     sql.NullTime
+		participants  pq.StringArray
+		location      sql.NullString
 		createdAt     time.Time
 		updatedAt     time.Time
 	)
 
 	if err := rows.Scan(
 		&memoryID, &appName, &userID, &memoryContent, &topics,
+		&memoryKind, &eventTime, &participants, &location,
 		&createdAt, &updatedAt,
 	); err != nil {
 		return nil, fmt.Errorf("scan memory entry failed: %w", err)
 	}
 
-	return &memory.Entry{
-		ID:      memoryID,
-		AppName: appName,
-		UserID:  userID,
-		Memory: &memory.Memory{
-			Memory:      memoryContent,
-			Topics:      []string(topics),
-			LastUpdated: &updatedAt,
-		},
-		CreatedAt: createdAt,
-		UpdatedAt: updatedAt,
-	}, nil
+	return buildEntry(memoryID, appName, userID, memoryContent,
+		topics, memoryKind, eventTime, participants, location,
+		createdAt, updatedAt), nil
 }
 
 // scanMemoryEntryWithSimilarity scans a memory entry with similarity score.
@@ -569,6 +655,10 @@ func scanMemoryEntryWithSimilarity(rows *sql.Rows) (*memory.Entry, error) {
 		userID        string
 		memoryContent string
 		topics        pq.StringArray
+		memoryKind    string
+		eventTime     sql.NullTime
+		participants  pq.StringArray
+		location      sql.NullString
 		createdAt     time.Time
 		updatedAt     time.Time
 		similarity    float64
@@ -576,6 +666,7 @@ func scanMemoryEntryWithSimilarity(rows *sql.Rows) (*memory.Entry, error) {
 
 	if err := rows.Scan(
 		&memoryID, &appName, &userID, &memoryContent, &topics,
+		&memoryKind, &eventTime, &participants, &location,
 		&createdAt, &updatedAt, &similarity,
 	); err != nil {
 		return nil, fmt.Errorf("scan memory entry with similarity failed: %w", err)
@@ -585,18 +676,45 @@ func scanMemoryEntryWithSimilarity(rows *sql.Rows) (*memory.Entry, error) {
 	// It could be added to metadata if needed in the future.
 	_ = similarity
 
+	return buildEntry(memoryID, appName, userID, memoryContent,
+		topics, memoryKind, eventTime, participants, location,
+		createdAt, updatedAt), nil
+}
+
+// buildEntry constructs a memory.Entry from scanned row fields.
+func buildEntry(
+	memoryID, appName, userID, memoryContent string,
+	topics pq.StringArray,
+	memoryKind string,
+	eventTime sql.NullTime,
+	participants pq.StringArray,
+	location sql.NullString,
+	createdAt, updatedAt time.Time,
+) *memory.Entry {
+	mem := &memory.Memory{
+		Memory:      memoryContent,
+		Topics:      []string(topics),
+		LastUpdated: &updatedAt,
+		Kind:        memory.MemoryKind(memoryKind),
+	}
+	if eventTime.Valid {
+		mem.EventTime = &eventTime.Time
+	}
+	if len(participants) > 0 {
+		mem.Participants = []string(participants)
+	}
+	if location.Valid {
+		mem.Location = location.String
+	}
+
 	return &memory.Entry{
-		ID:      memoryID,
-		AppName: appName,
-		UserID:  userID,
-		Memory: &memory.Memory{
-			Memory:      memoryContent,
-			Topics:      []string(topics),
-			LastUpdated: &updatedAt,
-		},
+		ID:        memoryID,
+		AppName:   appName,
+		UserID:    userID,
+		Memory:    mem,
 		CreatedAt: createdAt,
 		UpdatedAt: updatedAt,
-	}, nil
+	}
 }
 
 // convertToFloat32 converts a float64 slice to float32 slice.
@@ -606,4 +724,35 @@ func convertToFloat32(embedding []float64) []float32 {
 		result[i] = float32(v)
 	}
 	return result
+}
+
+// episodicSQLFields holds episodic field values resolved for SQL parameters.
+type episodicSQLFields struct {
+	kind         string
+	eventTime    *time.Time
+	participants []string
+	location     *string
+}
+
+// resolveEpisodicFields converts EpisodicFields to SQL-ready values.
+// Returns default (fact, nil, empty, nil) when ep is nil.
+func resolveEpisodicFields(ep *memory.EpisodicFields) episodicSQLFields {
+	f := episodicSQLFields{
+		kind:         string(memory.MemoryKindFact),
+		participants: []string{},
+	}
+	if ep == nil {
+		return f
+	}
+	if ep.Kind != "" {
+		f.kind = string(ep.Kind)
+	}
+	f.eventTime = ep.EventTime
+	if len(ep.Participants) > 0 {
+		f.participants = ep.Participants
+	}
+	if ep.Location != "" {
+		f.location = &ep.Location
+	}
+	return f
 }
