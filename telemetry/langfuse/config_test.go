@@ -69,6 +69,8 @@ func TestNewConfigFromEnv(t *testing.T) {
 			os.Unsetenv("LANGFUSE_SECRET_KEY")
 			os.Unsetenv("LANGFUSE_PUBLIC_KEY")
 			os.Unsetenv("LANGFUSE_HOST")
+			os.Unsetenv("LANGFUSE_INSECURE")
+			os.Unsetenv("LANGFUSE_MAX_OBSERVATION_BYTES")
 
 			// Set test environment variables
 			for key, value := range tt.envVars {
