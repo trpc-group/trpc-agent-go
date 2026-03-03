@@ -224,7 +224,7 @@ func (e *AgenticEvaluator) Evaluate(
 		sample, e.config.QAHistoryTurns,
 	)
 
-	for _, qa := range sample.QA {
+	for i, qa := range sample.QA {
 		qaResult, err := e.evaluateQA(
 			ctx, qaRunner, userKey, qa, historyMsgs,
 		)
@@ -236,6 +236,22 @@ func (e *AgenticEvaluator) Evaluate(
 				)
 			}
 			qaResult = qaResultFromError(qa, err)
+		}
+		if e.config.Verbose {
+			log.Printf("  [QA %d/%d] %s (%s)",
+				i+1, len(sample.QA),
+				qa.QuestionID, qa.Category,
+			)
+			if qaResult.Steps != nil {
+				logQATrace(
+					qa.QuestionID, qa.Question,
+					qa.Answer, qaResult.Predicted,
+					qaResult.Metrics, collectResult{
+						steps: qaResult.Steps,
+					},
+					qaResult.LatencyMs,
+				)
+			}
 		}
 		result.QAResults = append(result.QAResults, qaResult)
 		catAgg.Add(qa.Category, qaResult.Metrics)
@@ -400,5 +416,6 @@ func (e *AgenticEvaluator) evaluateQA(
 		Metrics:    m,
 		LatencyMs:  time.Since(start).Milliseconds(),
 		TokenUsage: &tu,
+		Steps:      res.steps,
 	}, nil
 }
