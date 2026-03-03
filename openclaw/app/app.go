@@ -359,6 +359,7 @@ func NewRuntime(
 
 			EnableLocalExec:     opts.EnableLocalExec,
 			EnableOpenClawTools: opts.EnableOpenClawTools,
+			EnableParallelTools: opts.EnableParallelTools,
 
 			ToolProviders: opts.ToolProviders,
 			ToolSets:      opts.ToolSets,
@@ -669,6 +670,7 @@ func run(ctx context.Context, args []string) error {
 
 			EnableLocalExec:     opts.EnableLocalExec,
 			EnableOpenClawTools: opts.EnableOpenClawTools,
+			EnableParallelTools: opts.EnableParallelTools,
 
 			ToolProviders: opts.ToolProviders,
 			ToolSets:      opts.ToolSets,
@@ -963,6 +965,11 @@ func validateAgentRunOptions(agentType string, opts runOptions) error {
 			"claude-code agent does not support enable-openclaw-tools",
 		)
 	}
+	if opts.EnableParallelTools {
+		return errors.New(
+			"claude-code agent does not support enable-parallel-tools",
+		)
+	}
 	if len(opts.ToolProviders) > 0 {
 		return errors.New(
 			"claude-code agent does not support tools.providers",
@@ -1125,6 +1132,7 @@ func newAgent(
 		llmagent.WithAddSessionSummary(cfg.AddSessionSummary),
 		llmagent.WithMaxHistoryRuns(cfg.MaxHistoryRuns),
 		llmagent.WithPreloadMemory(cfg.PreloadMemory),
+		llmagent.WithEnableParallelTools(cfg.EnableParallelTools),
 	}
 
 	cwd, _ := os.Getwd()
@@ -1345,6 +1353,7 @@ type agentConfig struct {
 	EnableLocalExec bool
 
 	EnableOpenClawTools bool
+	EnableParallelTools bool
 
 	ToolProviders []pluginSpec
 

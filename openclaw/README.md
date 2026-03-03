@@ -91,6 +91,12 @@ model:
   name: "gpt-5"
   openai_variant: "auto"
 
+tools:
+  # Optional; default is serial execution.
+  # When enabled and the model returns multiple tool calls in one step,
+  # OpenClaw executes them concurrently.
+  enable_parallel_tools: true
+
 gateway:
   allow_users: ["123456789"]
   require_mention: false
@@ -128,6 +134,8 @@ Notes:
   - `channels` enables additional channel plugins and requires a custom
     binary that imports those plugins. See `openclaw/EXTENDING.md` and
     `openclaw/examples/stdin_chat/`.
+  - `tools.enable_parallel_tools` toggles parallel tool execution for one
+    model step (optional).
   - `tools.providers` and `tools.toolsets` work out of the box for the
     built-in types shipped in this repo. Custom types still require a
     custom binary. See `openclaw/INTEGRATIONS.md` and
