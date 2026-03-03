@@ -24,6 +24,7 @@ import (
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -1162,6 +1163,84 @@ func TestTransformInvokeAgent_TruncatesObservationInputOutput(t *testing.T) {
 	require.LessOrEqual(t, len([]byte(out)), maxBytes)
 	require.True(t, utf8.ValidString(in))
 	require.True(t, utf8.ValidString(out))
+}
+
+func TestTransformInvokeAgent_TruncateUsesTypedMessages(t *testing.T) {
+	const maxBytes = 1024
+
+	withObservationMaxBytes(t, maxBytes)
+
+	text := strings.Repeat("中", maxBytes)
+	input := []model.Message{{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeText,
+				Text: &text,
+			},
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name:     "large.bin",
+					Data:     []byte(strings.Repeat("a", maxBytes*8)),
+					MimeType: "application/octet-stream",
+				},
+			},
+		},
+	}}
+	inputJSON, err := json.Marshal(input)
+	require.NoError(t, err)
+
+	output := []model.Choice{{
+		Index: 0,
+		Message: model.Message{
+			Role:    model.RoleAssistant,
+			Content: strings.Repeat("resp-", maxBytes),
+		},
+	}}
+	outputJSON, err := json.Marshal(output)
+	require.NoError(t, err)
+
+	span := &tracepb.Span{
+		Name: "agent-span-typed",
+		Attributes: []*commonpb.KeyValue{
+			{
+				Key:   itelemetry.KeyGenAIInputMessages,
+				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: string(inputJSON)}},
+			},
+			{
+				Key:   itelemetry.KeyGenAIOutputMessages,
+				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: string(outputJSON)}},
+			},
+		},
+	}
+
+	transformInvokeAgent(span)
+
+	attrMap := make(map[string]string)
+	for _, attr := range span.Attributes {
+		attrMap[attr.Key] = attr.Value.GetStringValue()
+	}
+
+	in := attrMap[observationInput]
+	out := attrMap[observationOutput]
+
+	var gotIn []model.Message
+	require.NoError(t, json.Unmarshal([]byte(in), &gotIn))
+	require.Len(t, gotIn, 1)
+	require.Equal(t, model.RoleUser, gotIn[0].Role)
+	require.NotNil(t, gotIn[0].ContentParts[0].Text)
+	require.LessOrEqual(t, len([]byte(*gotIn[0].ContentParts[0].Text)), maxBytes)
+	require.NotNil(t, gotIn[0].ContentParts[1].File)
+	require.Less(t, len(gotIn[0].ContentParts[1].File.Data), maxBytes*8)
+	require.LessOrEqual(t, len(gotIn[0].ContentParts[1].File.Data), maxBytes)
+
+	var gotOut []model.Choice
+	require.NoError(t, json.Unmarshal([]byte(out), &gotOut))
+	if len(gotOut) > 0 {
+		require.Equal(t, model.RoleAssistant, gotOut[0].Message.Role)
+		require.LessOrEqual(t, len([]byte(gotOut[0].Message.Content)), maxBytes)
+	}
 }
 
 func TestTransformCallLLM_TruncatesObservationInputOutput(t *testing.T) {
