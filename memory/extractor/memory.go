@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"maps"
 	"strings"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -236,6 +237,11 @@ func (e *memoryExtractor) buildSystemPrompt(
 	var sb strings.Builder
 	sb.WriteString(e.prompt)
 
+	// Inject current date so the LLM can resolve relative time
+	// expressions (e.g. "yesterday", "last week") to absolute dates.
+	fmt.Fprintf(&sb, "\n<session_date>%s</session_date>\n",
+		time.Now().Format("2006-01-02"))
+
 	// Append available actions.
 	sb.WriteString("\n<available_actions>\n")
 	sb.WriteString(e.availableActionsBlock())
@@ -422,8 +428,23 @@ You must distinguish between two types of memories: facts and episodes.
 <guidelines>
 - Create memories as brief, third-person statements that capture key
   information, e.g., "User enjoys hiking on weekends."
-- Keep each memory focused on a single piece of information. Create
-  multiple memories if needed rather than one long complex memory.
+- **ATOMICITY**: Keep each memory focused on a SINGLE piece of information.
+  Create multiple memories if needed rather than one long complex memory.
+  For example, if a user says "I went to Paris with Alice and we ate at
+  Le Cinq, then visited the Louvre", create separate memories for the
+  dinner at Le Cinq and the Louvre visit.
+- **DETAIL**: Include specific names, quantities, dates, and concrete
+  details. "User's favorite coffee shop is Blue Bottle on Market St."
+  is much better than "User likes coffee."
+- **RELATIONSHIPS**: When someone is mentioned, always capture who
+  they are in relation to the user in a SEPARATE fact memory.
+  For example: "Alice is User's college roommate from Stanford."
+  This ensures relationship context is retrievable even when later
+  questions ask "who is Alice?" or "who did User go to college with?"
+- **TOPICS**: Assign specific, descriptive topics that help retrieval.
+  Use concrete nouns over abstract ones. Good topics: ["hiking",
+  "Mt. Fuji", "travel"]. Bad topics: ["activity", "outdoors"].
+  Include NAMES of people, places, and organizations as topics.
 - Do not repeat the same information in multiple memories; update
   existing memories instead.
 - When updating a memory, append new information to the existing
@@ -447,29 +468,38 @@ For EPISODES (memory_kind="episode"):
 - Always provide event_time as an absolute date (ISO 8601: YYYY-MM-DD or
   YYYY-MM-DDTHH:MM:SS). NEVER use relative time words like "yesterday",
   "last week", or "two months ago". If a relative time is mentioned,
-  resolve it using the session date or conversation context.
+  resolve it using the <session_date> provided above.
 - Capture WHO was involved in the participants field.
 - Capture WHERE it happened in the location field.
 - Each distinct event should be a separate episode memory.
   Do NOT merge multiple events into one memory.
 - Episode memories should describe WHAT happened concretely, not
-  abstract summaries.
+  abstract summaries. Include details like what was discussed, what
+  activity was done, what was the outcome.
 
 For FACTS (memory_kind="fact"):
 - Set memory_kind to "fact" (or omit it, as it defaults to "fact").
 - Facts can be deduplicated and merged. Prefer updating existing
   facts over creating near-duplicates.
+- Create separate fact memories for:
+  - Each person's relationship to User (e.g., "Bob is User's manager
+    at work")
+  - Each distinct preference (e.g., "User prefers Italian food" and
+    "User's favorite restaurant is Olive Garden" as two memories)
+  - Each skill or qualification
 </episodic_memory_rules>
 
 <memory_types>
 **Facts** (memory_kind="fact"):
 - Personal details: name, age, location, occupation
-- Preferences: likes, dislikes, favorites
-- Interests and hobbies
+- Preferences: likes, dislikes, favorites (be specific)
+- Interests and hobbies (with details: frequency, favorites)
 - Goals and aspirations
-- Important relationships
+- Important relationships (always specify who the person is)
 - Opinions and beliefs
 - Work and education background
+- Skills and qualifications
+- Pets, family members, significant others (with names)
 
 **Episodes** (memory_kind="episode"):
 - Specific events: trips, meetings, outings, activities
@@ -477,5 +507,41 @@ For FACTS (memory_kind="fact"):
 - Shared experiences with specific people
 - Emotional moments: arguments, celebrations, surprises
 - Health events: doctor visits, illnesses, recoveries
+- Conversations about specific topics with specific outcomes
 </memory_types>
+
+<examples>
+Example 1 – Fact about user:
+  User says: "I'm a software engineer at Google."
+  → memory_add(memory="User is a software engineer at Google.",
+     memory_kind="fact", topics=["work", "Google", "software engineer"])
+
+Example 2 – Episode with details:
+  User says: "I went hiking at Mt. Fuji with Alice last Saturday."
+  (session_date = 2024-06-10)
+  → memory_add(memory="User went hiking at Mt. Fuji with Alice.",
+     memory_kind="episode", event_time="2024-06-08",
+     participants=["Alice"], location="Mt. Fuji",
+     topics=["hiking", "Mt. Fuji", "Alice", "travel"])
+  → memory_add(memory="Alice is User's friend who enjoys hiking.",
+     memory_kind="fact", topics=["Alice", "friendship", "hiking"])
+
+Example 3 – Multi-fact extraction:
+  User says: "My wife Sarah and I just moved to Seattle. She got
+  a job at Amazon as a PM."
+  → memory_add(memory="User is married to Sarah.",
+     memory_kind="fact", topics=["Sarah", "family", "marriage"])
+  → memory_add(memory="User recently moved to Seattle.",
+     memory_kind="fact", topics=["Seattle", "location", "relocation"])
+  → memory_add(memory="Sarah works at Amazon as a Product Manager.",
+     memory_kind="fact", topics=["Sarah", "Amazon", "work"])
+
+Example 4 – Episode with conversation detail:
+  User says: "Had dinner with Bob yesterday, we talked about his
+  startup idea for an AI tutoring app."
+  (session_date = 2024-06-10)
+  → memory_add(memory="User had dinner with Bob. They discussed Bob's startup idea for an AI tutoring app.",
+     memory_kind="episode", event_time="2024-06-09",
+     participants=["Bob"], topics=["Bob", "dinner", "startup", "AI tutoring"])
+</examples>
 `

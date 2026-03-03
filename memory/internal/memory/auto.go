@@ -437,13 +437,15 @@ func (w *AutoMemoryWorker) executeOperation(
 }
 
 // opToEpisodicFields converts extractor.Operation episodic fields to memory.EpisodicFields.
-// Returns nil if no episodic data is present (backward compatible).
+// Always returns a non-nil value; defaults to Kind=MemoryKindFact when no
+// episodic data is present so that backends do not need nil-guard logic.
 func opToEpisodicFields(op *extractor.Operation) *memory.EpisodicFields {
-	if op.MemoryKind == "" && op.EventTime == nil && len(op.Participants) == 0 && op.Location == "" {
-		return nil
+	kind := op.MemoryKind
+	if kind == "" {
+		kind = memory.MemoryKindFact
 	}
 	return &memory.EpisodicFields{
-		Kind:         op.MemoryKind,
+		Kind:         kind,
 		EventTime:    op.EventTime,
 		Participants: op.Participants,
 		Location:     op.Location,

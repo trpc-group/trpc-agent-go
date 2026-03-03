@@ -242,11 +242,12 @@ func NewSearchTool() tool.CallableTool {
 		searchFunc,
 		function.WithName(memory.SearchToolName),
 		function.WithDescription("Search for relevant memories about the user. "+
-			"Use this tool to find stored information that matches the query. "+
-			"Supports optional episodic filtering: use 'kind' to filter by 'fact' or 'episode', "+
-			"and 'time_after'/'time_before' (ISO 8601 YYYY-MM-DD) to narrow results by event date. "+
+			"Returns memories ranked by semantic similarity, each with: id, memory text, topics, kind (fact/episode), "+
+			"event_time, participants, location, and similarity score. "+
+			"For multi-part questions, search for each sub-question separately and combine the results. "+
 			"For temporal questions (e.g. 'when did X happen', 'what did user do in May 2023'), "+
-			"consider using time_after/time_before to improve accuracy."),
+			"use time_after/time_before filters and consider setting order_by_event_time=true. "+
+			"Use 'kind' to filter by 'fact' or 'episode' when you know the answer type."),
 	)
 }
 
@@ -293,8 +294,10 @@ func NewLoadTool() tool.CallableTool {
 	return function.NewFunctionTool(
 		loadFunc,
 		function.WithName(memory.LoadToolName),
-		function.WithDescription("Load recent memories about the user. Use this tool to retrieve "+
-			"stored information to provide context for the conversation."),
+		function.WithDescription("Load the most recent memories about the user. "+
+			"Returns memories ordered by last update time. Each memory includes: id, text, topics, "+
+			"kind (fact/episode), event_time, participants, and location. "+
+			"Use this to get a broad overview of what is known about the user."),
 	)
 }
 
@@ -464,5 +467,6 @@ func entryToResult(e *memory.Entry) Result {
 	if e.Memory.Location != "" {
 		r.Location = e.Memory.Location
 	}
+	r.Score = e.Score
 	return r
 }

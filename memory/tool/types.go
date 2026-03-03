@@ -24,6 +24,7 @@ type Result struct {
 	EventTime    string    `json:"event_time,omitempty"`    // EventTime is when the event occurred.
 	Participants []string  `json:"participants,omitempty"`  // Participants involved in the event.
 	Location     string    `json:"location,omitempty"`      // Location where the event took place.
+	Score        float64   `json:"score,omitempty"`         // Score is the similarity score from vector search (0-1).
 }
 
 // AddMemoryRequest represents the input for the add memory tool.

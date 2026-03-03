@@ -582,6 +582,22 @@ func (s *Service) SearchMemoriesWithOptions(
 		return nil, fmt.Errorf("search memories failed: %w", err)
 	}
 
+	// Apply similarity threshold filtering if configured.
+	// Per-query threshold takes precedence over service-level default.
+	threshold := s.opts.similarityThreshold
+	if opts.SimilarityThreshold > 0 {
+		threshold = opts.SimilarityThreshold
+	}
+	if threshold > 0 && len(results) > 0 {
+		filtered := results[:0]
+		for _, r := range results {
+			if r.Score >= threshold {
+				filtered = append(filtered, r)
+			}
+		}
+		results = filtered
+	}
+
 	return results, nil
 }
 
@@ -672,13 +688,11 @@ func scanMemoryEntryWithSimilarity(rows *sql.Rows) (*memory.Entry, error) {
 		return nil, fmt.Errorf("scan memory entry with similarity failed: %w", err)
 	}
 
-	// Note: similarity score is available but not stored in Entry.
-	// It could be added to metadata if needed in the future.
-	_ = similarity
-
-	return buildEntry(memoryID, appName, userID, memoryContent,
+	entry := buildEntry(memoryID, appName, userID, memoryContent,
 		topics, memoryKind, eventTime, participants, location,
-		createdAt, updatedAt), nil
+		createdAt, updatedAt)
+	entry.Score = similarity
+	return entry, nil
 }
 
 // buildEntry constructs a memory.Entry from scanned row fields.
