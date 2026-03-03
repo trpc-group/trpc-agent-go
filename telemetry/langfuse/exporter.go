@@ -133,7 +133,7 @@ func transformInvokeAgent(span *tracepb.Span) {
 				newAttributes = append(newAttributes, &commonpb.KeyValue{
 					Key: observationInput,
 					Value: &commonpb.AnyValue{
-						Value: &commonpb.AnyValue_StringValue{StringValue: attr.Value.GetStringValue()},
+						Value: &commonpb.AnyValue_StringValue{StringValue: truncateObservationValue(attr.Value.GetStringValue())},
 					},
 				})
 			}
@@ -143,7 +143,7 @@ func transformInvokeAgent(span *tracepb.Span) {
 				newAttributes = append(newAttributes, &commonpb.KeyValue{
 					Key: observationOutput,
 					Value: &commonpb.AnyValue{
-						Value: &commonpb.AnyValue_StringValue{StringValue: attr.Value.GetStringValue()},
+						Value: &commonpb.AnyValue_StringValue{StringValue: truncateObservationValue(attr.Value.GetStringValue())},
 					},
 				})
 			}
@@ -186,7 +186,7 @@ func transformCallLLM(span *tracepb.Span) {
 	newAttributes = append(newAttributes, collected.attrs...)
 
 	// observation.input
-	newAttributes = append(newAttributes, stringKV(observationInput, buildLLMObservationInput(collected)))
+	newAttributes = append(newAttributes, stringKV(observationInput, truncateObservationValue(buildLLMObservationInput(collected))))
 
 	// observation.model_parameters (generation_config from llm request)
 	if kv := extractModelParameters(collected.llmRequest); kv != nil {
@@ -224,7 +224,8 @@ func collectLLMSpanAttributes(attrs []*commonpb.KeyValue) llmSpanCollected {
 		case itelemetry.KeyGenAIRequestToolDefinitions:
 			c.toolDefinitions = getStringPtr(attr.Value)
 		case itelemetry.KeyLLMResponse:
-			c.attrs = append(c.attrs, stringKV(observationOutput, stringValueOrNA(attr.Value)))
+			c.attrs = append(c.attrs, stringKV(observationOutput, truncateObservationValue(stringValueOrNA(attr.Value))))
+
 		case itelemetry.KeyGenAIUsageInputTokens:
 			c.usage.Input = attr.Value.GetIntValue()
 		case itelemetry.KeyGenAIUsageOutputTokens:
@@ -362,7 +363,7 @@ func transformExecuteTool(span *tracepb.Span) {
 				newAttributes = append(newAttributes, &commonpb.KeyValue{
 					Key: observationInput,
 					Value: &commonpb.AnyValue{
-						Value: &commonpb.AnyValue_StringValue{StringValue: attr.Value.GetStringValue()},
+						Value: &commonpb.AnyValue_StringValue{StringValue: truncateObservationValue(attr.Value.GetStringValue())},
 					},
 				})
 			} else {
@@ -379,7 +380,7 @@ func transformExecuteTool(span *tracepb.Span) {
 				newAttributes = append(newAttributes, &commonpb.KeyValue{
 					Key: observationOutput,
 					Value: &commonpb.AnyValue{
-						Value: &commonpb.AnyValue_StringValue{StringValue: attr.Value.GetStringValue()},
+						Value: &commonpb.AnyValue_StringValue{StringValue: truncateObservationValue(attr.Value.GetStringValue())},
 					},
 				})
 			} else {
@@ -429,7 +430,7 @@ func transformWorkflow(span *tracepb.Span) {
 				newAttributes = append(newAttributes, &commonpb.KeyValue{
 					Key: observationInput,
 					Value: &commonpb.AnyValue{
-						Value: &commonpb.AnyValue_StringValue{StringValue: attr.Value.GetStringValue()},
+						Value: &commonpb.AnyValue_StringValue{StringValue: truncateObservationValue(attr.Value.GetStringValue())},
 					},
 				})
 			} else {
@@ -446,7 +447,7 @@ func transformWorkflow(span *tracepb.Span) {
 				newAttributes = append(newAttributes, &commonpb.KeyValue{
 					Key: observationOutput,
 					Value: &commonpb.AnyValue{
-						Value: &commonpb.AnyValue_StringValue{StringValue: attr.Value.GetStringValue()},
+						Value: &commonpb.AnyValue_StringValue{StringValue: truncateObservationValue(attr.Value.GetStringValue())},
 					},
 				})
 			} else {

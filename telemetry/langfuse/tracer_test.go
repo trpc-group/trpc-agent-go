@@ -35,6 +35,7 @@ func TestStart_MissingConfig(t *testing.T) {
 	_ = os.Unsetenv("LANGFUSE_PUBLIC_KEY")
 	_ = os.Unsetenv("LANGFUSE_HOST")
 	_ = os.Unsetenv("LANGFUSE_INSECURE")
+	_ = os.Unsetenv("LANGFUSE_MAX_OBSERVATION_BYTES")
 
 	t.Run("all missing", func(t *testing.T) {
 		clean, err := Start(ctx)
@@ -62,4 +63,30 @@ func TestStart_MissingConfig(t *testing.T) {
 			t.Fatalf("Start() expected error for missing keys, got nil")
 		}
 	})
+}
+
+func TestStart_WithMaxObservationBytesOption(t *testing.T) {
+	ctx := context.Background()
+
+	old := getObservationMaxBytes()
+	defer func() {
+		if old < 0 {
+			setObservationMaxBytes(nil)
+			return
+		}
+		ov := old
+		setObservationMaxBytes(&ov)
+	}()
+
+	// We don't need a successful Start to verify the option wiring.
+	_, err := Start(ctx, WithMaxObservationBytes(1024))
+	if err == nil {
+		t.Fatalf("Start() expected error due to missing config, got nil")
+	}
+
+	in := strings.Repeat("a", 2000)
+	out := truncateObservationValue(in)
+	if len([]byte(out)) > 1024 {
+		t.Fatalf("truncateObservationValue() got %d bytes, want <= %d", len([]byte(out)), 1024)
+	}
 }

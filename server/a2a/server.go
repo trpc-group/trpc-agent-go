@@ -35,8 +35,11 @@ import (
 // New creates a new a2a server.
 func New(opts ...Option) (*a2a.A2AServer, error) {
 	options := &options{
-		errorHandler:     defaultErrorHandler,
-		adkCompatibility: true, // Enable ADK compatibility by default
+		errorHandler: defaultErrorHandler,
+		// Enable ADK compatibility by default.
+		adkCompatibility: true,
+		// Default to ADK-style streaming: artifacts for content.
+		streamingEventType: StreamingEventTypeTaskArtifactUpdate,
 	}
 	for _, opt := range opts {
 		opt(options)
@@ -97,7 +100,10 @@ func buildProcessor(agent agent.Agent, sessionService session.Service, options *
 
 	eventToA2AConverter := options.eventToA2AConverter
 	if eventToA2AConverter == nil {
-		eventToA2AConverter = &defaultEventToA2AMessage{adkCompatibility: options.adkCompatibility}
+		eventToA2AConverter = &defaultEventToA2AMessage{
+			adkCompatibility:   options.adkCompatibility,
+			streamingEventType: options.streamingEventType,
+		}
 	}
 
 	return &messageProcessor{
@@ -107,6 +113,7 @@ func buildProcessor(agent agent.Agent, sessionService session.Service, options *
 		errorHandler:        options.errorHandler,
 		debugLogging:        options.debugLogging,
 		adkCompatibility:    options.adkCompatibility,
+		streamingEventType:  options.streamingEventType,
 		agentName:           agentName,
 	}
 }
@@ -201,6 +208,7 @@ type messageProcessor struct {
 	errorHandler        ErrorHandler
 	debugLogging        bool
 	adkCompatibility    bool
+	streamingEventType  StreamingEventType
 	agentName           string
 }
 
@@ -494,16 +502,23 @@ func (m *messageProcessor) processAgentStreamingEvents(
 		m.handleStreamingProcessingError(ctx, a2aMsg, subscriber, err)
 	}
 
-	finalArtifact := protocol.NewTaskArtifactUpdateEvent(taskID, *a2aMsg.ContextID, protocol.Artifact{
-		Parts: []protocol.Part{},
-	}, true)
-	if err := subscriber.Send(protocol.StreamingMessageEvent{Result: &finalArtifact}); err != nil {
-		log.ErrorfContext(
-			ctx,
-			"failed to send final artifact message: %v",
-			err,
+	if m.streamingEventType != StreamingEventTypeMessage {
+		finalArtifact := protocol.NewTaskArtifactUpdateEvent(
+			taskID,
+			*a2aMsg.ContextID,
+			protocol.Artifact{Parts: []protocol.Part{}},
+			true,
 		)
-		m.handleStreamingProcessingError(ctx, a2aMsg, subscriber, err)
+		if err := subscriber.Send(protocol.StreamingMessageEvent{
+			Result: &finalArtifact,
+		}); err != nil {
+			log.ErrorfContext(
+				ctx,
+				"failed to send final artifact message: %v",
+				err,
+			)
+			m.handleStreamingProcessingError(ctx, a2aMsg, subscriber, err)
+		}
 	}
 
 	taskCompleted := protocol.NewTaskStatusUpdateEvent(

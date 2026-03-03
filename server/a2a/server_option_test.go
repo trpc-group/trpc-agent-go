@@ -622,3 +622,9 @@ func TestWithADKCompatibility(t *testing.T) {
 		})
 	}
 }
+
+func TestWithStreamingEventType(t *testing.T) {
+	opts := &options{}
+	WithStreamingEventType(StreamingEventTypeMessage)(opts)
+	assert.Equal(t, StreamingEventTypeMessage, opts.streamingEventType)
+}
