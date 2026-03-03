@@ -1279,6 +1279,60 @@ func TestProcessAgentStreamingEvents_FinalSendFailureAndCleanFailure(
 	assert.True(t, cleaned)
 }
 
+func TestProcessAgentStreamingEvents_MessageTypeSkipsFinalArtifact(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	ctxID := "ctx"
+	msg := &protocol.Message{ContextID: &ctxID}
+	events := make(chan *event.Event)
+	close(events)
+
+	proc := createTestMessageProcessor()
+	proc.streamingEventType = StreamingEventTypeMessage
+
+	var results []protocol.StreamingMessageResult
+	sub := &mockTaskSubscriber{
+		sendFunc: func(evt protocol.StreamingMessageEvent) error {
+			if evt.Result != nil {
+				results = append(results, evt.Result)
+			}
+			return nil
+		},
+	}
+
+	proc.processAgentStreamingEvents(
+		ctx,
+		"task",
+		"user1",
+		"session1",
+		msg,
+		events,
+		sub,
+		&mockTaskHandler{},
+	)
+
+	if len(results) != 2 {
+		t.Fatalf("expected 2 events, got %d", len(results))
+	}
+
+	if _, ok := results[0].(*protocol.TaskStatusUpdateEvent); !ok {
+		t.Fatalf("expected TaskStatusUpdateEvent, got %T", results[0])
+	}
+	if _, ok := results[1].(*protocol.TaskStatusUpdateEvent); !ok {
+		t.Fatalf("expected TaskStatusUpdateEvent, got %T", results[1])
+	}
+
+	for i, res := range results {
+		if _, ok := res.(*protocol.TaskArtifactUpdateEvent); ok {
+			t.Fatalf(
+				"did not expect TaskArtifactUpdateEvent at %d",
+				i,
+			)
+		}
+	}
+}
+
 func TestMessageProcessor_ProcessMessage_Streaming_BuildTaskError(
 	t *testing.T,
 ) {
