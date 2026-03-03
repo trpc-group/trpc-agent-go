@@ -204,6 +204,12 @@ const (
 	contentHasSessionSummaryStateKey = "processor:content:has_session_summary"
 )
 
+const (
+	attachedFilesAnnotationPrefix = "Attached files"
+	attachedFileNameFallbackFmt   = "upload_%d"
+	attachedFilesMaxPreview       = 20
+)
+
 // NewContentRequestProcessor creates a new content request processor.
 func NewContentRequestProcessor(opts ...ContentOption) *ContentRequestProcessor {
 	processor := &ContentRequestProcessor{
@@ -327,7 +333,8 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	}
 
 	if model.HasPayload(invocation.Message) && needToAddInvocationMessage {
-		req.Messages = append(req.Messages, invocation.Message)
+		msg := annotateUserMessageWithAttachedFiles(invocation.Message)
+		req.Messages = append(req.Messages, msg)
 		log.DebugfContext(
 			ctx,
 			"Content request processor: added invocation message with "+
@@ -512,7 +519,106 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 	if !p.AddSessionSummary && p.MaxHistoryRuns > 0 {
 		messages = applyMaxHistoryRuns(messages, p.MaxHistoryRuns)
 	}
+	messages = annotateUserMessagesWithAttachedFiles(messages)
 	return messages
+}
+
+func annotateUserMessagesWithAttachedFiles(
+	messages []model.Message,
+) []model.Message {
+	if len(messages) == 0 {
+		return messages
+	}
+	for i := range messages {
+		messages[i] = annotateUserMessageWithAttachedFiles(messages[i])
+	}
+	return messages
+}
+
+func annotateUserMessageWithAttachedFiles(
+	msg model.Message,
+) model.Message {
+	if msg.Role != model.RoleUser && msg.Role != "" {
+		return msg
+	}
+	if len(msg.ContentParts) == 0 {
+		return msg
+	}
+	if hasAttachedFilesAnnotation(msg.ContentParts) {
+		return msg
+	}
+	text := buildAttachedFilesAnnotationText(msg.ContentParts)
+	if text == "" {
+		return msg
+	}
+	annotation := model.ContentPart{
+		Type: model.ContentTypeText,
+		Text: &text,
+	}
+	parts := make([]model.ContentPart, 0, len(msg.ContentParts)+1)
+	parts = append(parts, annotation)
+	parts = append(parts, msg.ContentParts...)
+	msg.ContentParts = parts
+	return msg
+}
+
+func hasAttachedFilesAnnotation(parts []model.ContentPart) bool {
+	for _, part := range parts {
+		if part.Type != model.ContentTypeText || part.Text == nil {
+			continue
+		}
+		if strings.HasPrefix(
+			strings.TrimSpace(*part.Text),
+			attachedFilesAnnotationPrefix,
+		) {
+			return true
+		}
+	}
+	return false
+}
+
+func buildAttachedFilesAnnotationText(
+	parts []model.ContentPart,
+) string {
+	names, count := fileNamesForAnnotation(parts)
+	if count == 0 {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(
+		&b,
+		"%s (%d): ",
+		attachedFilesAnnotationPrefix,
+		count,
+	)
+	b.WriteString(strings.Join(names, ", "))
+	if count > len(names) {
+		fmt.Fprintf(&b, " (+%d more)", count-len(names))
+	}
+	b.WriteString("\n")
+	return b.String()
+}
+
+func fileNamesForAnnotation(
+	parts []model.ContentPart,
+) ([]string, int) {
+	names := make([]string, 0, len(parts))
+	count := 0
+	for _, part := range parts {
+		if part.Type != model.ContentTypeFile || part.File == nil {
+			continue
+		}
+		count++
+		if len(names) >= attachedFilesMaxPreview {
+			continue
+		}
+		name := strings.TrimSpace(part.File.Name)
+		if name == "" {
+			name = fmt.Sprintf(attachedFileNameFallbackFmt, count)
+		}
+		names = append(names, name)
+	}
+	return names, count
 }
 
 // applyMaxHistoryRuns trims messages to at most maxRuns entries from the tail.
@@ -662,6 +768,7 @@ func (p *ContentRequestProcessor) getCurrentInvocationMessages(inv *agent.Invoca
 	}
 
 	messages = p.mergeUserMessages(messages)
+	messages = annotateUserMessagesWithAttachedFiles(messages)
 	return messages
 }
 

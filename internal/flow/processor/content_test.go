@@ -3934,3 +3934,74 @@ func TestContentRequestProcessor_FormatSummary_DefaultFormatter(t *testing.T) {
 	assert.Contains(t, result, "<summary_of_previous_interactions>",
 		"default formatter should use XML tags")
 }
+
+func TestContentRequestProcessor_AnnotatesUserFileInputs(t *testing.T) {
+	p := NewContentRequestProcessor()
+
+	const (
+		invocationID = "inv"
+		pdfMimeType  = "application/pdf"
+		fileAName    = "a.pdf"
+		fileBName    = "b.pdf"
+	)
+
+	userMsg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name:     fileAName,
+					Data:     []byte("a"),
+					MimeType: pdfMimeType,
+				},
+			},
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name:     fileBName,
+					Data:     []byte("b"),
+					MimeType: pdfMimeType,
+				},
+			},
+		},
+	}
+	ev := event.NewResponseEvent(invocationID, "user", &model.Response{
+		Choices: []model.Choice{{Message: userMsg}},
+	})
+	inv := &agent.Invocation{
+		InvocationID: invocationID,
+		AgentName:    "agent",
+		Session: &session.Session{
+			Events: []event.Event{*ev},
+		},
+	}
+	req := &model.Request{}
+	ch := make(chan *event.Event, 1)
+	p.ProcessRequest(context.Background(), inv, req, ch)
+
+	if !assert.Len(t, req.Messages, 1) {
+		return
+	}
+	msg := req.Messages[0]
+	assert.Equal(t, model.RoleUser, msg.Role)
+
+	if !assert.GreaterOrEqual(t, len(msg.ContentParts), 3) {
+		return
+	}
+	first := msg.ContentParts[0]
+	assert.Equal(t, model.ContentTypeText, first.Type)
+	if assert.NotNil(t, first.Text) {
+		assert.Contains(t, *first.Text, attachedFilesAnnotationPrefix)
+		assert.Contains(t, *first.Text, fileAName)
+		assert.Contains(t, *first.Text, fileBName)
+	}
+
+	fileParts := 0
+	for _, part := range msg.ContentParts {
+		if part.Type == model.ContentTypeFile && part.File != nil {
+			fileParts++
+		}
+	}
+	assert.Equal(t, 2, fileParts)
+}
