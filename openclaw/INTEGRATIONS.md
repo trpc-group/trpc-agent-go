@@ -815,6 +815,39 @@ tools:
           max_attempts: 3
 ```
 
+Example: Playwright MCP "browser use" (stdio) via `npx`:
+
+This starts the Playwright MCP server as a subprocess and exposes its browser
+tools under the `browser_` namespace prefix.
+
+It is also a practical example of **MCP image forwarding**:
+
+- Some MCP tools (for example browser screenshots) return `{type:"image", ...}`
+  items.
+- OpenClaw forwards those images back to the model as real image messages, so
+  vision models can use them.
+
+Runnable example: `openclaw/examples/playwright_mcp_browser/`.
+
+```yaml
+tools:
+  refresh_toolsets_on_run: true
+  toolsets:
+    - type: "mcp"
+      name: "browser"
+      config:
+        transport: "stdio"
+        command: "npx"
+        args:
+          - "--yes"
+          - "@playwright/mcp@latest"
+          - "--headless"
+          - "--isolated"
+          - "--caps"
+          - "vision"
+        timeout: "5m"
+```
+
 Supported transports:
 
 - `stdio`

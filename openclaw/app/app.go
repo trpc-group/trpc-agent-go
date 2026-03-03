@@ -1183,6 +1183,10 @@ func newAgent(
 		opts = append(opts, llmagent.WithCodeExecutor(exec))
 	}
 
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterToolResultMessages(mcpImageResultMessages)
+	opts = append(opts, llmagent.WithToolCallbacks(callbacks))
+
 	return llmagent.New(defaultAgentName, opts...), nil
 }
 

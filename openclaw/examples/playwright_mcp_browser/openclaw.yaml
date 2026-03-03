@@ -1,0 +1,37 @@
+app_name: "openclaw"
+
+http:
+  addr: ":8080"
+
+agent:
+  instruction: |
+    You are a helpful assistant.
+    When a task needs real website interaction (JS-heavy pages, clicks, forms),
+    use the browser toolset.
+    When a tool returns a screenshot image, use it to verify the page.
+
+model:
+  mode: "openai"
+  name: "gpt-5"
+  openai_variant: "auto"
+
+tools:
+  refresh_toolsets_on_run: true
+  toolsets:
+    - type: "mcp"
+      name: "browser"
+      config:
+        transport: "stdio"
+        command: "npx"
+        args:
+          - "--yes"
+          - "@playwright/mcp@latest"
+          - "--headless"
+          - "--isolated"
+          - "--caps"
+          - "vision"
+        timeout: "5m"
+        reconnect:
+          enabled: true
+          max_attempts: 3
+
