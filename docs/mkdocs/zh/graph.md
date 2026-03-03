@@ -951,21 +951,25 @@ graphAgent, err := graphagent.New(
 	graphagent.WithSubAgents([]agent.Agent{subAgent}), // 配置子 Agent
 	graphagent.WithAddSessionSummary(true),            // 将会话摘要注入 system 消息
 	graphagent.WithMaxHistoryRuns(5),                  // 未开启摘要时截断历史轮次
-	// 设置传给模型的消息过滤模式，最终传给模型的消息需同时满足WithMessageTimelineFilterMode与WithMessageBranchFilterMode条件
+	// 设置传给模型的消息过滤模式，最终传给模型的消息需同时满足
+	// WithMessageTimelineFilterMode 与 WithMessageBranchFilterMode 条件
 	// 时间维度过滤条件
 	// 默认值: graphagent.TimelineFilterAll
 	// 可选值:
 	//  - graphagent.TimelineFilterAll: 包含历史消息以及当前请求中所生成的消息
 	//  - graphagent.TimelineFilterCurrentRequest: 仅包含当前请求中所生成的消息
-	//  - graphagent.TimelineFilterCurrentInvocation: 仅包含当前invocation上下文中生成的消息
-	graphagent.WithMessageTimelineFilterMode(graphagent.BranchFilterModeAll),
-	// 分支维度过滤条件
+	//  - graphagent.TimelineFilterCurrentInvocation: 仅包含当前 invocation
+	//    上下文中生成的消息
+	graphagent.WithMessageTimelineFilterMode(graphagent.TimelineFilterAll),
+	// FilterKey 层级过滤条件
 	// 默认值: graphagent.BranchFilterModePrefix
 	// 可选值:
-	//  - graphagent.BranchFilterModeAll: 包含所有agent的消息, 当前agent与模型交互时,如需将所有agent生成的有效内容消息同步给模型时可设置该值
-	//  - graphagent.BranchFilterModePrefix: 通过Event.FilterKey与Invocation.eventFilterKey做前缀匹配过滤消息, 期望将与当前agent以及相关上下游agent生成的消息传递给模型时，可设置该值
-	//  - graphagent.BranchFilterModeExact: 通过Event.FilterKey==Invocation.eventFilterKey过滤消息，当前agent与模型交互时,仅需使用当前agent生成的消息时可设置该值
-	graphagent.WithMessageBranchFilterMode(graphagent.TimelineFilterAll),
+	//  - graphagent.BranchFilterModePrefix: 层级匹配（祖先/自己/子孙都算匹配）
+	//  - graphagent.BranchFilterModeSubtree: 仅包含当前 key 及其子孙（不含父级）
+	//  - graphagent.BranchFilterModeExact: 仅包含
+	//    Event.FilterKey == Invocation.eventFilterKey
+	//  - graphagent.BranchFilterModeAll: 忽略 FilterKey，包含全部消息
+	graphagent.WithMessageBranchFilterMode(graphagent.BranchFilterModePrefix),
 	// 推理内容模式（DeepSeek 思考模式）
 	// 默认值: graphagent.ReasoningContentModeDiscardPreviousTurns
 	// 可选值:
@@ -1839,21 +1843,25 @@ ga, err := graphagent.New(
     graphagent.WithCheckpointSaver(saver),
     graphagent.WithSubAgents([]agent.Agent{subAgent}), // 配置子 Agent
     graphagent.WithAgentCallbacks(agent.NewCallbacks()), // 注意：结构化回调 API 需要 trpc-agent-go >= 0.6.0
-    // 设置传给模型的消息过滤模式，最终传给模型的消息需同时满足WithMessageTimelineFilterMode与WithMessageBranchFilterMode条件
+    // 设置传给模型的消息过滤模式，最终传给模型的消息需同时满足
+    // WithMessageTimelineFilterMode 与 WithMessageBranchFilterMode 条件
     // 时间维度过滤条件
     // 默认值: graphagent.TimelineFilterAll
     // 可选值:
     //  - graphagent.TimelineFilterAll: 包含历史消息以及当前请求中所生成的消息
     //  - graphagent.TimelineFilterCurrentRequest: 仅包含当前请求中所生成的消息
-    //  - graphagent.TimelineFilterCurrentInvocation: 仅包含当前invocation上下文中生成的消息
-    graphagent.WithMessageTimelineFilterMode(graphagent.BranchFilterModeAll),
-    // 分支维度过滤条件
+    //  - graphagent.TimelineFilterCurrentInvocation: 仅包含当前 invocation
+    //    上下文中生成的消息
+    graphagent.WithMessageTimelineFilterMode(graphagent.TimelineFilterAll),
+    // FilterKey 层级过滤条件
     // 默认值: graphagent.BranchFilterModePrefix
     // 可选值:
-    //  - graphagent.BranchFilterModeAll: 包含所有agent的消息, 当前agent与模型交互时,如需将所有agent生成的有效内容消息同步给模型时可设置该值
-    //  - graphagent.BranchFilterModePrefix: 通过Event.FilterKey与Invocation.eventFilterKey做前缀匹配过滤消息, 期望将与当前agent以及相关上下游agent生成的消息传递给模型时，可设置该值
-    //  - graphagent.BranchFilterModeExact: 通过Event.FilterKey==Invocation.eventFilterKey过滤消息，当前agent与模型交互时,仅需使用当前agent生成的消息时可设置该值
-    graphagent.WithMessageBranchFilterMode(graphagent.TimelineFilterAll),
+    //  - graphagent.BranchFilterModePrefix: 层级匹配（祖先/自己/子孙都算匹配）
+    //  - graphagent.BranchFilterModeSubtree: 仅包含当前 key 及其子孙（不含父级）
+    //  - graphagent.BranchFilterModeExact: 仅包含
+    //    Event.FilterKey == Invocation.eventFilterKey
+    //  - graphagent.BranchFilterModeAll: 忽略 FilterKey，包含全部消息
+    graphagent.WithMessageBranchFilterMode(graphagent.BranchFilterModePrefix),
 )
 ```
 
@@ -2687,18 +2695,22 @@ sg.AddNode("taskB", func(ctx context.Context, state graph.State) (any, error){
 ```
 
 高阶用法示例：
-可以单独通过 `WithMessageTimelineFilterMode`、`WithMessageBranchFilterMode`控制当前agent对历史消息与其他agent生成的消息可见性。
-当前agent在与模型交互时，最终将同时满足两个条件的消息输入给模型。
+可以单独通过 `WithMessageTimelineFilterMode`、`WithMessageBranchFilterMode`
+控制当前 agent 对历史消息与其他 agent 生成消息的可见性。
+当前 agent 在与模型交互时，最终将同时满足两个条件的消息输入给模型。
 
 `配置:`
 - `WithMessageTimelineFilterMode`: 时间维度可见性控制
   - `TimelineFilterAll`: 包含历史消息以及当前请求中所生成的消息
-  - `TimelineFilterCurrentRequest`: 仅包含当前请求(一次runner.Run为一次请求)中所生成的消息
-  - `TimelineFilterCurrentInvocation`: 仅包含当前invocation上下文中生成的消息
-- `WithMessageBranchFilterMode`: 分支维度可见性控制（用于控制对其他agent生成消息的可见性）
-  - `BranchFilterModePrefix`: 通过Event.FilterKey与Invocation.eventFilterKey做前缀匹配
-  - `BranchFilterModeAll`: 所有agent的均消息
-  - `BranchFilterModeExact`: 仅自己生成的消息可见
+  - `TimelineFilterCurrentRequest`: 仅包含当前请求（一次 runner.Run 为一次请求）
+    中所生成的消息
+  - `TimelineFilterCurrentInvocation`: 仅包含当前 invocation 上下文中生成的消息
+- `WithMessageBranchFilterMode`: 按 FilterKey 层级控制可见性
+  - `BranchFilterModePrefix`（默认）：层级匹配（祖先/自己/子孙都算匹配）
+  - `BranchFilterModeSubtree`：仅包含当前 key 及其子孙（不含父级，更适合严格隔离）
+  - `BranchFilterModeExact`：仅包含
+    `Event.FilterKey == Invocation.eventFilterKey`
+  - `BranchFilterModeAll`：忽略 FilterKey，包含全部消息
   
 ```go
 llmAgent := llmagent.New(
@@ -2708,21 +2720,25 @@ llmAgent := llmagent.New(
     llmagent.WithInstruction("Be helpful, concise, and informative in your responses"), // 设置指令
     llmagent.WithGenerationConfig(genConfig),                                           // 设置生成参数
 
-    // 设置传给模型的消息过滤模式，最终传给模型的消息需同时满足WithMessageTimelineFilterMode与WithMessageBranchFilterMode条件
+    // 设置传给模型的消息过滤模式，最终传给模型的消息需同时满足
+    // WithMessageTimelineFilterMode 与 WithMessageBranchFilterMode 条件
     // 时间维度过滤条件
     // 默认值: llmagent.TimelineFilterAll
     // 可选值:
     //  - llmagent.TimelineFilterAll: 包含历史消息以及当前请求中所生成的消息
     //  - llmagent.TimelineFilterCurrentRequest: 仅包含当前请求中所生成的消息
-    //  - llmagent.TimelineFilterCurrentInvocation: 仅包含当前invocation上下文中生成的消息
-    llmagent.WithMessageTimelineFilterMode(llmagent.BranchFilterModeAll),
-    // 分支维度过滤条件
+    //  - llmagent.TimelineFilterCurrentInvocation: 仅包含当前 invocation
+    //    上下文中生成的消息
+    llmagent.WithMessageTimelineFilterMode(llmagent.TimelineFilterAll),
+    // FilterKey 层级过滤条件
     // 默认值: llmagent.BranchFilterModePrefix
     // 可选值:
-    //  - llmagent.BranchFilterModeAll: 包含所有agent的消息, 当前agent与模型交互时,如需将所有agent生成的有效内容消息同步给模型时可设置该值
-    //  - llmagent.BranchFilterModePrefix: 通过Event.FilterKey与Invocation.eventFilterKey做前缀匹配过滤消息, 期望将与当前agent以及相关上下游agent生成的消息传递给模型时，可设置该值
-    //  - llmagent.BranchFilterModeExact: 通过Event.FilterKey==Invocation.eventFilterKey过滤消息，当前agent与模型交互时,仅需使用当前agent生成的消息时可设置该值
-    llmagent.WithMessageBranchFilterMode(llmagent.TimelineFilterAll),
+    //  - llmagent.BranchFilterModePrefix: 层级匹配（祖先/自己/子孙都算匹配）
+    //  - llmagent.BranchFilterModeSubtree: 仅包含当前 key 及其子孙（不含父级）
+    //  - llmagent.BranchFilterModeExact: 仅包含
+    //    Event.FilterKey == Invocation.eventFilterKey
+    //  - llmagent.BranchFilterModeAll: 忽略 FilterKey，包含全部消息
+    llmagent.WithMessageBranchFilterMode(llmagent.BranchFilterModePrefix),
 )
 ```
 

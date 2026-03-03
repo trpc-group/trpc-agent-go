@@ -34,6 +34,9 @@ const (
 
 	// BranchFilterModePrefix Prefix matching pattern
 	BranchFilterModePrefix = processor.BranchFilterModePrefix
+	// BranchFilterModeSubtree includes only events whose FilterKey is the
+	// same as the current filter key or is a descendant of it.
+	BranchFilterModeSubtree = processor.BranchFilterModeSubtree
 	// BranchFilterModeAll include all
 	BranchFilterModeAll = processor.BranchFilterModeAll
 	// BranchFilterModeExact exact match

@@ -38,6 +38,9 @@ type Event struct {
     // Branch is a branch identifier for multi-Agent collaboration.
     Branch string `json:"branch,omitempty"`
 
+    // Tag uses tags to annotate events with business-specific labels.
+    Tag string `json:"tag,omitempty"`
+
     // RequiresCompletion indicates whether this event requires a completion signal.
     RequiresCompletion bool `json:"requiresCompletion,omitempty"`
 
@@ -54,6 +57,9 @@ type Event struct {
 
     // Actions carry flow-level hints (e.g., skip post-tool summarization).
     Actions *EventActions `json:"actions,omitempty"`
+
+    // FilterKey is an identifier for hierarchical event filtering.
+    FilterKey string `json:"filterKey,omitempty"`
 }
 
 // EventActions provides optional behavior hints attached to the event.
@@ -63,6 +69,27 @@ type EventActions struct {
     SkipSummarization bool `json:"skipSummarization,omitempty"`
 }
 ```
+
+#### FilterKey (hierarchical scope key)
+
+`FilterKey` is an optional string field on each event. Think of it as a
+path-like label, mainly used for:
+
+- Filtering which historical events are visible to the model when building the
+  next prompt (`WithMessageBranchFilterMode`).
+- Generating / retrieving per-scope session summaries (`WithSummaryFilterKey`).
+
+Keys are hierarchical paths separated by `/`, for example:
+
+- `my-app/user-messages`
+- `my-app/auth/role_admin`
+
+In `prefix` mode, matching is **hierarchical**: two keys match if one is an
+ancestor of the other (for example, `my-app` matches `my-app/auth/...`).
+
+For strict isolation (do not inherit ancestors), use `BranchFilterModeSubtree`.
+For a beginner-friendly explanation, see Session docs:
+`FilterKey, EventFilterKey, and BranchFilterMode`.
 
 `model.Response` is the basic response structure of Event, carrying LLM responses, tool calls, and error information, defined as follows:
 

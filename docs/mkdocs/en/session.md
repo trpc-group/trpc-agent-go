@@ -2089,6 +2089,59 @@ In real-world applications, you may want to generate separate summaries for diff
 
 To achieve this, you need to set the `FilterKey` field on events to identify their type.
 
+#### FilterKey, EventFilterKey, and BranchFilterMode (read this first)
+
+FilterKey often feels confusing at first because it participates in **two**
+different capabilities:
+
+1. **Session summaries**: generate/retrieve a summary for a given filterKey
+   (`CreateSessionSummary`, `GetSessionSummaryText` + `WithSummaryFilterKey`).
+2. **History visibility**: when building the next prompt, decide which historical
+   events are allowed to be injected into context (`WithMessageBranchFilterMode`).
+
+Think of `FilterKey` as a **hierarchical path** (like a file path):
+
+- `my-app/user-messages`
+- `my-app/tool-calls`
+- `my-app/auth/role_admin`
+
+`/` is the delimiter, so keys form a tree:
+
+```text
+my-app
+├── user-messages
+├── tool-calls
+└── auth
+    ├── role_admin
+    └── role_viewer
+```
+
+Another concept you will see is `EventFilterKey`:
+
+- `Event.FilterKey`: the key stored on each event (you can set it in
+  `AppendEventHook`).
+- `Invocation.eventFilterKey`: the “view key” for the current run; it is used
+  to filter historical events and can be set via `agent.WithEventFilterKey(...)`
+  when calling `runner.Run(...)`.
+
+When the framework injects history into the prompt, `WithMessageBranchFilterMode`
+controls the matching rule:
+
+| Mode | Intuition | Which events are included (relative to EventFilterKey) |
+|------|----------|---------------------------------------------------------|
+| `prefix` (default) | **Same ancestry chain counts** | ancestors, self, descendants |
+| `subtree` | **Only this subtree** | self, descendants (no ancestors) |
+| `exact` | **Must be identical** | self only |
+| `all` | **No isolation** | everything |
+
+**Note:** for backward compatibility, if `EventFilterKey==""` or
+`Event.FilterKey==""`, the framework treats it as “match all”, so these modes
+will tend to include more history.
+
+> Summary: FilterKey is not only a “category label” — it is also a “session view
+> / scope key”. For authorization isolation, always consider the match mode
+> (especially `prefix` vs `subtree`) and summary injection behavior.
+
 #### Setting FilterKey with AppendEventHook
 
 The recommended approach is to use `AppendEventHook` to automatically set `FilterKey` before events are persisted:
@@ -2097,7 +2150,7 @@ The recommended approach is to use `AppendEventHook` to automatically set `Filte
 sessionService := inmemory.NewSessionService(
     inmemory.WithAppendEventHook(func(ctx *session.AppendEventContext, next func() error) error {
         // Auto-categorize by event author
-        prefix := "my-app/"  // Must add appName prefix
+        prefix := "my-app/"  // Recommended: use appName as the root prefix
         switch ctx.Event.Author {
         case "user":
             ctx.Event.FilterKey = prefix + "user-messages"
@@ -2127,9 +2180,16 @@ userSummary, found := sessionService.GetSessionSummaryText(
 
 #### FilterKey Prefix Convention
 
-**⚠️ Important: FilterKey must include the `appName + "/"` prefix.**
+**Strongly recommended: make your FilterKey start with `appName/` (or equal to
+`appName`).**
 
-**Why:** The Runner uses `appName + "/"` as the filter prefix when filtering events. If your FilterKey lacks this prefix, events will be filtered out, causing:
+**Why:**
+
+- By default, the Runner sets the current run's `EventFilterKey` to `appName`
+  (unless you explicitly pass `agent.WithEventFilterKey(...)`).
+- Both history injection and summaries rely on hierarchical matching. If your
+  event `FilterKey` is not under the `appName` tree, it will likely be excluded
+  from the prompt under default settings, causing:
 
 - LLM cannot see conversation history, may repeatedly trigger tool calls
 - Summary content is incomplete, losing important context
@@ -2144,7 +2204,12 @@ evt.FilterKey = "my-app/user-messages"
 evt.FilterKey = "user-messages"
 ```
 
-**Technical Details:** The framework uses prefix matching (`strings.HasPrefix`) to determine which events should be included in the context. See `ContentRequestProcessor` filtering logic for details.
+**Technical Details:**
+
+- `prefix` mode uses `event.Event.Filter(filterKey)` hierarchical matching:
+  ancestor/self/descendant all count as “match” (based on `/` path prefixes).
+- `subtree` mode only includes “self and descendants” (no ancestors), which is
+  better for strict isolation.
 
 #### Complete Examples
 
@@ -2152,6 +2217,84 @@ See the following examples for complete FilterKey usage scenarios:
 
 - [examples/session/hook](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/session/hook) - Hook basics
 - [examples/summary/filterkey](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/summary/filterkey) - Summarizing by FilterKey
+
+### Permission Changes and History Isolation
+
+Many applications enforce authorization in `BeforeToolCallback`: when the model
+calls a tool, you validate the user's permissions and only execute the tool if
+allowed.
+
+This is correct *when a tool is actually called*, but there is a common pitfall:
+
+- In the same session, the user asks a question when they had permission.
+- The tool result (and the assistant answer) is persisted into session history.
+- Later, the user's permission is revoked/changed, and the user asks the same
+  question again.
+- The model may answer **directly from history** and skip calling the tool.
+- Your `BeforeToolCallback` does **not** run, so old privileged information can
+  be reused.
+
+To address this, keep tool-level authorization (defense in depth) and also
+control what history is included in the prompt.
+
+#### Option A: Start a new session (simplest)
+
+When permission changes, switch to a new `sessionID` (or disable history
+injection for that request). This is the least error-prone approach, but it
+trades off some conversation continuity for safety.
+
+#### Option B: Use FilterKey as a "permission view" (recommended)
+
+Treat a permission snapshot/version as a **session view** and encode it into
+the event FilterKey prefix:
+
+```go
+appName := "my-app"
+viewKey := "auth/role_admin" // example: role / permission version
+filterKey := appName + "/" + viewKey
+
+events, err := app.Run(
+    ctx,
+    userID,
+    sessionID,
+    msg,
+    agent.WithEventFilterKey(filterKey),
+)
+_ = events
+_ = err
+```
+
+When permissions change, change `viewKey`. Old-view events won't be included in
+the prompt, so the model can't reuse them.
+
+If you previously wrote coarse FilterKeys (for example just `my-app`), configure
+the agent to use `subtree` branch filtering to avoid inheriting parent keys:
+
+```go
+ag := llmagent.New(
+    "assistant",
+    llmagent.WithMessageBranchFilterMode(llmagent.BranchFilterModeSubtree),
+)
+_ = ag
+```
+
+**Note: Session Summary and `subtree`**
+
+If you enable `WithAddSessionSummary(true)`, the framework injects the session
+summary as a system message. Be aware that summary generation currently filters
+events using `event.Filter`'s hierarchical matching rules, which also treat
+**ancestor FilterKeys** as matching (for example, `my-app` matches
+`my-app/auth/...`).
+
+In “permission view isolation” scenarios, if your session history contains
+ancestor events, the injected summary may still pull ancestor content into the
+prompt and weaken isolation.
+
+For strict isolation, consider:
+
+- Keep `AddSessionSummary=false` (default).
+- Switch `sessionID` when permissions change (Option A).
+- Avoid persisting sensitive events under ancestor FilterKeys.
 
 ### Performance Considerations
 

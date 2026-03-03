@@ -106,6 +106,21 @@ func TestContentRequestProcessor_DefaultBehavior(t *testing.T) {
 	}
 }
 
+func TestFilterSubtree(t *testing.T) {
+	const (
+		filterRoot = "filter"
+		filterA    = "filter/a"
+		filterB    = "filter/b"
+	)
+
+	assert.True(t, filterSubtree(filterA, ""))
+	assert.True(t, filterSubtree("", filterA))
+	assert.True(t, filterSubtree(filterA, filterA))
+	assert.True(t, filterSubtree(filterA+"/x", filterA))
+	assert.False(t, filterSubtree(filterRoot, filterA))
+	assert.False(t, filterSubtree(filterB, filterA))
+}
+
 func TestContentRequestProcessor_ToolCalls(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -2792,6 +2807,69 @@ func TestContentRequestProcessor_shouldIncludeEvent(t *testing.T) {
 				return p, evt, inv, "filter", true, baseTime
 			},
 			expected: true,
+		},
+		{
+			name: "BranchFilterModeSubtree excludes ancestor filter key",
+			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
+				p := &ContentRequestProcessor{
+					BranchFilterMode: BranchFilterModeSubtree,
+				}
+				evt := event.Event{
+					Version:   event.CurrentVersion,
+					FilterKey: "filter",
+					Response: &model.Response{
+						Choices: []model.Choice{
+							{Message: model.Message{Content: "test content"}},
+						},
+					},
+					Timestamp: baseTime,
+				}
+				inv := &agent.Invocation{}
+				return p, evt, inv, "filter/a", true, baseTime
+			},
+			expected: false,
+		},
+		{
+			name: "BranchFilterModeSubtree includes descendants",
+			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
+				p := &ContentRequestProcessor{
+					BranchFilterMode: BranchFilterModeSubtree,
+				}
+				evt := event.Event{
+					Version:   event.CurrentVersion,
+					FilterKey: "filter/a",
+					Response: &model.Response{
+						Choices: []model.Choice{
+							{Message: model.Message{Content: "test content"}},
+						},
+					},
+					Timestamp: baseTime,
+				}
+				inv := &agent.Invocation{}
+				return p, evt, inv, "filter", true, baseTime
+			},
+			expected: true,
+		},
+		{
+			name: "BranchFilterModeSubtree excludes siblings",
+			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
+				p := &ContentRequestProcessor{
+					BranchFilterMode: BranchFilterModeSubtree,
+				}
+				evt := event.Event{
+					Version:   event.CurrentVersion,
+					FilterKey: "filter/b",
+					Response: &model.Response{
+						Choices: []model.Choice{
+							{Message: model.Message{Content: "test content"}},
+						},
+					},
+					Timestamp: baseTime,
+				}
+				inv := &agent.Invocation{}
+				return p, evt, inv, "filter/a", true, baseTime
+			},
+			expected: false,
 		},
 		{
 			name: "all conditions satisfied",

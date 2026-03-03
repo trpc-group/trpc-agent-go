@@ -33,6 +33,13 @@ import (
 const (
 	// BranchFilterModePrefix Prefix matching pattern
 	BranchFilterModePrefix = "prefix"
+	// BranchFilterModeSubtree includes only events whose FilterKey is the
+	// same as the current filter key or is a descendant of it.
+	//
+	// Unlike BranchFilterModePrefix, it does not include ancestor FilterKeys.
+	// This is useful for isolating history across independent scopes
+	// (e.g., permission/tenant views) within the same session.
+	BranchFilterModeSubtree = "subtree"
 	// BranchFilterModeAll include all
 	BranchFilterModeAll = "all"
 	// BranchFilterModeExact exact match
@@ -112,7 +119,9 @@ type ContentOption func(*ContentRequestProcessor)
 // WithBranchFilterMode sets how to include content from session events.
 func WithBranchFilterMode(mode string) ContentOption {
 	return func(p *ContentRequestProcessor) {
-		if mode != BranchFilterModeAll && mode != BranchFilterModeExact {
+		if mode != BranchFilterModeAll &&
+			mode != BranchFilterModeExact &&
+			mode != BranchFilterModeSubtree {
 			mode = BranchFilterModePrefix
 		}
 		p.BranchFilterMode = mode
@@ -948,9 +957,23 @@ func (p *ContentRequestProcessor) passBranchFilter(evt event.Event, filter strin
 		return evt.FilterKey == filter
 	case BranchFilterModePrefix:
 		return evt.Filter(filter)
+	case BranchFilterModeSubtree:
+		return filterSubtree(evt.FilterKey, filter)
 	default:
 		return true
 	}
+}
+
+func filterSubtree(eventFilterKey, filterKey string) bool {
+	if filterKey == "" || eventFilterKey == "" {
+		return true
+	}
+	if eventFilterKey == filterKey {
+		return true
+	}
+	filterKey += agent.EventFilterKeyDelimiter
+	eventFilterKey += agent.EventFilterKeyDelimiter
+	return strings.HasPrefix(eventFilterKey, filterKey)
 }
 
 func invocationMessageEqual(invMsg model.Message, evtMsg model.Message) bool {
