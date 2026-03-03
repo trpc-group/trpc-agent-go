@@ -38,9 +38,9 @@ const (
 		"deleted_at TIMESTAMP NULL DEFAULT NULL" +
 		")"
 
-	sqlCreateAppUserIndexPattern   = "CREATE INDEX IF NOT EXISTS %s ON %s(app_name, user_id)"
-	sqlCreateUpdatedAtIndexPattern = "CREATE INDEX IF NOT EXISTS %s ON %s(updated_at DESC)"
-	sqlCreateDeletedAtIndexPattern = "CREATE INDEX IF NOT EXISTS %s ON %s(deleted_at)"
+	sqlCreateAppUserIndexPattern      = "CREATE INDEX IF NOT EXISTS %s ON %s(app_name, user_id)"
+	sqlCreateUpdatedAtIndexPattern    = "CREATE INDEX IF NOT EXISTS %s ON %s(updated_at DESC)"
+	sqlCreateDeletedAtIndexPattern    = "CREATE INDEX IF NOT EXISTS %s ON %s(deleted_at)"
 	sqlCreateEventTimeIndexPattern    = "CREATE INDEX IF NOT EXISTS %s ON %s(event_time DESC) WHERE event_time IS NOT NULL"
 	sqlCreateKindIndexPattern         = "CREATE INDEX IF NOT EXISTS %s ON %s(app_name, user_id, memory_kind)"
 	sqlCreateParticipantsIndexPattern = "CREATE INDEX IF NOT EXISTS %s ON %s USING gin(participants) WHERE participants IS NOT NULL"

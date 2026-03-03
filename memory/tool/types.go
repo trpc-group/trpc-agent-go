@@ -16,15 +16,15 @@ import (
 
 // Result represents a single memory result.
 type Result struct {
-	ID           string    `json:"id"`                      // ID is the memory ID.
-	Memory       string    `json:"memory"`                  // Memory is the memory content.
-	Topics       []string  `json:"topics"`                  // Topics is the memory topics.
-	Created      time.Time `json:"created"`                 // Created is the creation time.
-	Kind         string    `json:"kind,omitempty"`          // Kind is the memory kind (fact/episode).
-	EventTime    string    `json:"event_time,omitempty"`    // EventTime is when the event occurred.
-	Participants []string  `json:"participants,omitempty"`  // Participants involved in the event.
-	Location     string    `json:"location,omitempty"`      // Location where the event took place.
-	Score        float64   `json:"score,omitempty"`         // Score is the similarity score from vector search (0-1).
+	ID           string    `json:"id"`                     // ID is the memory ID.
+	Memory       string    `json:"memory"`                 // Memory is the memory content.
+	Topics       []string  `json:"topics"`                 // Topics is the memory topics.
+	Created      time.Time `json:"created"`                // Created is the creation time.
+	Kind         string    `json:"kind,omitempty"`         // Kind is the memory kind (fact/episode).
+	EventTime    string    `json:"event_time,omitempty"`   // EventTime is when the event occurred.
+	Participants []string  `json:"participants,omitempty"` // Participants involved in the event.
+	Location     string    `json:"location,omitempty"`     // Location where the event took place.
+	Score        float64   `json:"score,omitempty"`        // Score is the similarity score from vector search (0-1).
 }
 
 // AddMemoryRequest represents the input for the add memory tool.

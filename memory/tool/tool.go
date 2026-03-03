@@ -380,9 +380,9 @@ func buildSearchOptions(req *SearchMemoryRequest) memory.SearchOptions {
 		opts.KindFallback = true
 	}
 	for _, pair := range []struct {
-		raw    string
-		dst    **time.Time
-		isEnd  bool
+		raw   string
+		dst   **time.Time
+		isEnd bool
 	}{
 		{req.TimeAfter, &opts.TimeAfter, false},
 		{req.TimeBefore, &opts.TimeBefore, true},
