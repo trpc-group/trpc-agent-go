@@ -229,3 +229,90 @@ func TestAppendTrackEvent_AsyncRecover(t *testing.T) {
 		require.NoError(t, err)
 	})
 }
+
+// TestEnqueueTrackEvent_SendOnClosedChannel tests enqueueTrackEvent recovers from closed channel panic
+func TestEnqueueTrackEvent_SendOnClosedChannel(t *testing.T) {
+	ch := make(chan *trackEventPair, 1)
+	close(ch)
+
+	service := &Service{
+		opts: ServiceOpts{
+			enableAsyncPersist: true,
+		},
+		trackEventChans: []chan *trackEventPair{ch},
+	}
+
+	sess := &session.Session{
+		ID:      "sess",
+		AppName: "app",
+		UserID:  "user",
+		Hash:    0, // will use channel index 0
+		State:   make(session.StateMap),
+	}
+	trackEvent := &session.TrackEvent{
+		Track:     "alpha",
+		Timestamp: time.Now(),
+	}
+
+	// Should not panic when sending on closed channel
+	assert.NotPanics(t, func() {
+		err := service.enqueueTrackEvent(context.Background(), sess, session.Key{}, trackEvent, nil)
+		// Error is expected since channel is closed, but function logs it and returns nil
+		require.NoError(t, err)
+	})
+}
+
+// TestEnqueueTrackEvent_ContextCancelled tests enqueueTrackEvent when context is cancelled
+func TestEnqueueTrackEvent_ContextCancelled(t *testing.T) {
+	// Create a full buffer channel so send blocks
+	ch := make(chan *trackEventPair, 0)
+
+	service := &Service{
+		opts: ServiceOpts{
+			enableAsyncPersist: true,
+		},
+		trackEventChans: []chan *trackEventPair{ch},
+	}
+
+	sess := &session.Session{
+		ID:      "sess",
+		AppName: "app",
+		UserID:  "user",
+		Hash:    0,
+		State:   make(session.StateMap),
+	}
+	trackEvent := &session.TrackEvent{
+		Track:     "alpha",
+		Timestamp: time.Now(),
+	}
+
+	// Cancelled context
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	// Should return context error when context is cancelled
+	err := service.enqueueTrackEvent(ctx, sess, session.Key{}, trackEvent, nil)
+	require.Error(t, err)
+	assert.Equal(t, context.Canceled, err)
+}
+
+// TestStartAsyncPersistWorker_WithTrackEvents tests startAsyncPersistWorker handles track events
+func TestStartAsyncPersistWorker_WithTrackEvents(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithEnableAsyncPersist(true),
+		WithAsyncPersisterNum(2),
+	)
+	require.NoError(t, err)
+	defer service.Close()
+
+	// Verify that track event channels are initialized
+	assert.Len(t, service.trackEventChans, 2)
+	for i, ch := range service.trackEventChans {
+		assert.NotNil(t, ch, "Track event channel %d should not be nil", i)
+		assert.Equal(t, defaultChanBufferSize, cap(ch), "Track event channel %d should have buffer size %d", i, defaultChanBufferSize)
+	}
+}
