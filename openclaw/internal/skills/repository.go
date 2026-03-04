@@ -11,6 +11,7 @@
 package skills
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -24,6 +25,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
+type SkillConfig struct {
+	Enabled *bool
+	APIKey  string
+	Env     map[string]string
+}
+
 type Repository struct {
 	base skill.Repository
 
@@ -32,9 +39,17 @@ type Repository struct {
 
 	baseDirs map[string]string
 
+	metas    map[string]*openClawMetadata
+	skillKey map[string]string
+
 	debug bool
 
 	configKeys map[string]struct{}
+
+	allowBundled map[string]struct{}
+	bundledRoot  string
+
+	skillConfigs map[string]SkillConfig
 }
 
 type Option func(*Repository)
@@ -51,6 +66,24 @@ func WithConfigKeys(keys []string) Option {
 	}
 }
 
+func WithBundledSkillsRoot(root string) Option {
+	return func(r *Repository) {
+		r.bundledRoot = strings.TrimSpace(root)
+	}
+}
+
+func WithAllowBundled(allow []string) Option {
+	return func(r *Repository) {
+		r.allowBundled = normalizeAllowlist(allow)
+	}
+}
+
+func WithSkillConfigs(cfg map[string]SkillConfig) Option {
+	return func(r *Repository) {
+		r.skillConfigs = normalizeSkillConfigs(cfg)
+	}
+}
+
 func NewRepository(roots []string, opts ...Option) (*Repository, error) {
 	base, err := skill.NewFSRepository(roots...)
 	if err != nil {
@@ -62,6 +95,8 @@ func NewRepository(roots []string, opts ...Option) (*Repository, error) {
 		eligible: map[string]struct{}{},
 		reasons:  map[string]string{},
 		baseDirs: map[string]string{},
+		metas:    map[string]*openClawMetadata{},
+		skillKey: map[string]string{},
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -150,6 +185,47 @@ func (r *Repository) Path(name string) (string, error) {
 	return r.base.Path(name)
 }
 
+func (r *Repository) SkillRunEnv(
+	_ context.Context,
+	skillName string,
+) (map[string]string, error) {
+	if r == nil || r.base == nil {
+		return nil, nil
+	}
+	name := strings.TrimSpace(skillName)
+	if name == "" {
+		return nil, nil
+	}
+
+	meta := r.metas[name]
+	primaryEnv := ""
+	if meta != nil {
+		primaryEnv = strings.TrimSpace(meta.PrimaryEnv)
+	}
+	skillKey := strings.TrimSpace(r.skillKey[name])
+	cfg, ok := r.resolveSkillConfig(skillKey, name)
+	if !ok {
+		return nil, nil
+	}
+
+	out := map[string]string{}
+	for k, v := range cfg.Env {
+		key := strings.TrimSpace(k)
+		if key == "" || strings.TrimSpace(v) == "" {
+			continue
+		}
+		out[key] = v
+	}
+
+	apiKey := strings.TrimSpace(cfg.APIKey)
+	if primaryEnv != "" && apiKey != "" {
+		if _, ok := out[primaryEnv]; !ok {
+			out[primaryEnv] = apiKey
+		}
+	}
+	return out, nil
+}
+
 func (r *Repository) index() {
 	if r.base == nil {
 		return
@@ -171,8 +247,44 @@ func (r *Repository) index() {
 			continue
 		}
 		skillMd := filepath.Join(baseDir, skillFileName)
+		fm, err := parseFrontMatterFile(skillMd)
+		if err != nil {
+			fm = parsedFrontMatter{}
+		}
 
-		eligible, reason := evaluateSkill(skillMd, r.configKeys)
+		meta, ok, err := parseOpenClawMetadata(fm)
+		if err != nil || !ok {
+			meta = openClawMetadata{}
+			ok = false
+		}
+
+		meta.SkillKey = strings.TrimSpace(meta.SkillKey)
+		meta.PrimaryEnv = strings.TrimSpace(meta.PrimaryEnv)
+		meta.Emoji = strings.TrimSpace(meta.Emoji)
+		meta.Homepage = strings.TrimSpace(meta.Homepage)
+
+		skillKey := name
+		if meta.SkillKey != "" {
+			skillKey = meta.SkillKey
+		}
+		r.skillKey[name] = skillKey
+
+		if ok {
+			m := meta
+			r.metas[name] = &m
+		}
+
+		cfg, _ := r.resolveSkillConfig(skillKey, name)
+
+		eligible, reason := evaluateSkill(
+			name,
+			meta,
+			ok,
+			r.configKeys,
+			cfg,
+			r.isBundledSkill(baseDir),
+			r.allowBundled,
+		)
 		if !eligible {
 			r.reasons[name] = reason
 			if r.debug && reason != "" {
@@ -191,27 +303,39 @@ func (r *Repository) index() {
 }
 
 func evaluateSkill(
-	skillMdPath string,
+	skillName string,
+	meta openClawMetadata,
+	hasOpenClawMeta bool,
 	configKeys map[string]struct{},
+	cfg SkillConfig,
+	isBundled bool,
+	allowBundled map[string]struct{},
 ) (bool, string) {
-	fm, err := parseFrontMatterFile(skillMdPath)
-	if err != nil {
-		if errors.Is(err, errNoFrontMatter) {
+	if cfg.Enabled != nil && !*cfg.Enabled {
+		return false, "disabled by config"
+	}
+	if isBundled && len(allowBundled) > 0 {
+		key := strings.TrimSpace(meta.SkillKey)
+		if key == "" {
+			key = strings.TrimSpace(skillName)
+		}
+		if key == "" {
 			return true, ""
 		}
+		if !isAllowedByAllowlist(allowBundled, key, skillName) {
+			return false, "blocked by allow_bundled"
+		}
+	}
+	if !hasOpenClawMeta {
 		return true, ""
 	}
-
-	meta, ok, err := parseOpenClawMetadata(fm)
-	if err != nil || !ok {
-		return true, ""
-	}
-	return evaluateOpenClawRequirements(meta, configKeys)
+	return evaluateOpenClawRequirements(meta, configKeys, cfg)
 }
 
 func evaluateOpenClawRequirements(
 	meta openClawMetadata,
 	configKeys map[string]struct{},
+	cfg SkillConfig,
 ) (bool, string) {
 	if meta.Always {
 		return true, ""
@@ -228,7 +352,11 @@ func evaluateOpenClawRequirements(
 	if reason := evaluateRequiredAnyBins(meta.Requires.AnyBins); reason != "" {
 		return false, reason
 	}
-	if reason := evaluateRequiredEnv(meta.Requires.Env); reason != "" {
+	if reason := evaluateRequiredEnv(
+		meta.Requires.Env,
+		meta.PrimaryEnv,
+		cfg,
+	); reason != "" {
 		return false, reason
 	}
 	if reason := evaluateRequiredConfig(
@@ -305,14 +433,27 @@ func evaluateRequiredAnyBins(bins []string) string {
 	)
 }
 
-func evaluateRequiredEnv(names []string) string {
+func evaluateRequiredEnv(
+	names []string,
+	primaryEnv string,
+	cfg SkillConfig,
+) string {
 	var missing []string
 	for _, name := range names {
 		key := strings.TrimSpace(name)
 		if key == "" {
 			continue
 		}
-		if _, ok := os.LookupEnv(key); ok {
+		if v, ok := os.LookupEnv(key); ok &&
+			strings.TrimSpace(v) != "" {
+			continue
+		}
+		if strings.TrimSpace(cfg.Env[key]) != "" {
+			continue
+		}
+		if strings.TrimSpace(cfg.APIKey) != "" &&
+			primaryEnv != "" &&
+			key == primaryEnv {
 			continue
 		}
 		missing = append(missing, key)
@@ -383,6 +524,111 @@ func hasConfigKey(keys map[string]struct{}, want string) bool {
 		}
 	}
 	return false
+}
+
+func (r *Repository) resolveSkillConfig(
+	skillKey string,
+	skillName string,
+) (SkillConfig, bool) {
+	if r == nil || len(r.skillConfigs) == 0 {
+		return SkillConfig{}, false
+	}
+	key := strings.TrimSpace(skillKey)
+	if key != "" {
+		if cfg, ok := r.skillConfigs[key]; ok {
+			return cfg, true
+		}
+	}
+	name := strings.TrimSpace(skillName)
+	if name != "" {
+		if cfg, ok := r.skillConfigs[name]; ok {
+			return cfg, true
+		}
+	}
+	return SkillConfig{}, false
+}
+
+func (r *Repository) isBundledSkill(baseDir string) bool {
+	root := strings.TrimSpace(r.bundledRoot)
+	if root == "" || strings.TrimSpace(baseDir) == "" {
+		return false
+	}
+	rel, err := filepath.Rel(root, baseDir)
+	if err != nil {
+		return false
+	}
+	rel = filepath.ToSlash(rel)
+	if rel == "." {
+		return false
+	}
+	return !strings.HasPrefix(rel, "../")
+}
+
+func normalizeAllowlist(allow []string) map[string]struct{} {
+	if len(allow) == 0 {
+		return nil
+	}
+	out := map[string]struct{}{}
+	for _, raw := range allow {
+		key := strings.TrimSpace(raw)
+		if key == "" {
+			continue
+		}
+		out[key] = struct{}{}
+	}
+	return out
+}
+
+func isAllowedByAllowlist(
+	allow map[string]struct{},
+	skillKey string,
+	skillName string,
+) bool {
+	if len(allow) == 0 {
+		return true
+	}
+	if _, ok := allow[skillKey]; ok {
+		return true
+	}
+	_, ok := allow[skillName]
+	return ok
+}
+
+func normalizeSkillConfigs(
+	cfg map[string]SkillConfig,
+) map[string]SkillConfig {
+	if len(cfg) == 0 {
+		return nil
+	}
+	out := make(map[string]SkillConfig, len(cfg))
+	for rawKey, rawCfg := range cfg {
+		key := strings.TrimSpace(rawKey)
+		if key == "" {
+			continue
+		}
+		out[key] = SkillConfig{
+			Enabled: rawCfg.Enabled,
+			APIKey:  strings.TrimSpace(rawCfg.APIKey),
+			Env:     copySkillEnv(rawCfg.Env),
+		}
+	}
+	return out
+}
+
+func copySkillEnv(env map[string]string) map[string]string {
+	if len(env) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(env))
+	for k, v := range env {
+		key := strings.TrimSpace(k)
+		val := strings.TrimSpace(v)
+		if key == "" || val == "" {
+			continue
+		}
+		out[key] = val
+	}
+	return out
 }
 
 var _ skill.Repository = (*Repository)(nil)

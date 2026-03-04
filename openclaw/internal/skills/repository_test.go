@@ -11,6 +11,7 @@
 package skills
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -118,8 +119,52 @@ func TestEvaluateRequiredAnyBins(t *testing.T) {
 func TestEvaluateRequiredEnv(t *testing.T) {
 	t.Setenv("SKILLS_TEST_OK", "1")
 
-	require.Empty(t, evaluateRequiredEnv([]string{"SKILLS_TEST_OK"}))
-	require.NotEmpty(t, evaluateRequiredEnv([]string{"SKILLS_TEST_MISSING"}))
+	require.Empty(t, evaluateRequiredEnv(
+		[]string{"SKILLS_TEST_OK"},
+		"",
+		SkillConfig{},
+	))
+	require.NotEmpty(t, evaluateRequiredEnv(
+		[]string{"SKILLS_TEST_MISSING"},
+		"",
+		SkillConfig{},
+	))
+}
+
+func TestEvaluateRequiredEnv_EmptyHostEnvIsMissing(t *testing.T) {
+	t.Setenv("SKILLS_TEST_EMPTY", "")
+
+	require.NotEmpty(t, evaluateRequiredEnv(
+		[]string{"SKILLS_TEST_EMPTY"},
+		"",
+		SkillConfig{},
+	))
+}
+
+func TestEvaluateRequiredEnv_SatisfiedByConfigEnv(t *testing.T) {
+	os.Unsetenv("SKILLS_TEST_CFG_ENV")
+
+	require.Empty(t, evaluateRequiredEnv(
+		[]string{"SKILLS_TEST_CFG_ENV"},
+		"",
+		SkillConfig{
+			Env: map[string]string{
+				"SKILLS_TEST_CFG_ENV": "1",
+			},
+		},
+	))
+}
+
+func TestEvaluateRequiredEnv_SatisfiedByAPIKeyForPrimaryEnv(t *testing.T) {
+	os.Unsetenv("SKILLS_TEST_PRIMARY_ENV")
+
+	require.Empty(t, evaluateRequiredEnv(
+		[]string{"SKILLS_TEST_PRIMARY_ENV"},
+		"SKILLS_TEST_PRIMARY_ENV",
+		SkillConfig{
+			APIKey: "k",
+		},
+	))
 }
 
 func TestEvaluateOpenClawRequirements_Always(t *testing.T) {
@@ -131,6 +176,7 @@ func TestEvaluateOpenClawRequirements_Always(t *testing.T) {
 			},
 		},
 		nil,
+		SkillConfig{},
 	)
 	require.True(t, ok)
 	require.Empty(t, reason)
@@ -263,10 +309,33 @@ func TestNormalizeOpenClawOS_Win32(t *testing.T) {
 	require.Equal(t, "windows", normalizeOpenClawOS(" win32 "))
 }
 
-func TestEvaluateSkill_MissingFileIsEligible(t *testing.T) {
-	ok, reason := evaluateSkill("/path/does/not/exist/SKILL.md", nil)
+func TestEvaluateSkill_NoOpenClawMetadata_IsEligible(t *testing.T) {
+	ok, reason := evaluateSkill(
+		"demo",
+		openClawMetadata{},
+		false,
+		nil,
+		SkillConfig{},
+		false,
+		nil,
+	)
 	require.True(t, ok)
 	require.Empty(t, reason)
+}
+
+func TestEvaluateSkill_DisabledByConfig(t *testing.T) {
+	enabled := false
+	ok, reason := evaluateSkill(
+		"demo",
+		openClawMetadata{},
+		false,
+		nil,
+		SkillConfig{Enabled: &enabled},
+		false,
+		nil,
+	)
+	require.False(t, ok)
+	require.Contains(t, reason, "config")
 }
 
 func TestRepository_GatesOnConfig(t *testing.T) {
@@ -375,6 +444,68 @@ run from {baseDir}
 	s, err := r.Get("basedir")
 	require.NoError(t, err)
 	require.Contains(t, s.Body, dir)
+}
+
+func TestRepository_SkillRunEnv_ConfigEnvAndAPIKey(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, "needkey", `---
+name: needkey
+description: test
+metadata:
+  { "openclaw": { "primaryEnv": "SKILLS_TEST_PRIMARY_ENV" } }
+---
+
+x
+`)
+
+	r, err := NewRepository(
+		[]string{root},
+		WithSkillConfigs(map[string]SkillConfig{
+			"needkey": {
+				APIKey: "k",
+				Env: map[string]string{
+					"SKILLS_TEST_ENV_A": "a",
+				},
+			},
+		}),
+	)
+	require.NoError(t, err)
+
+	env, err := r.SkillRunEnv(context.Background(), "needkey")
+	require.NoError(t, err)
+	require.Equal(t, "a", env["SKILLS_TEST_ENV_A"])
+	require.Equal(t, "k", env["SKILLS_TEST_PRIMARY_ENV"])
+}
+
+func TestBundledSkills_ParseFrontMatterAndMetadata(t *testing.T) {
+	_, file, _, ok := runtime.Caller(0)
+	require.True(t, ok)
+
+	root := filepath.Join(filepath.Dir(file), "..", "..", "skills")
+	entries, err := os.ReadDir(root)
+	require.NoError(t, err)
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		skillMd := filepath.Join(root, entry.Name(), skillFileName)
+		data, err := os.ReadFile(skillMd)
+		require.NoError(t, err, entry.Name())
+
+		fm, err := parseFrontMatter(string(data))
+		if err != nil {
+			require.True(
+				t,
+				errors.Is(err, errNoFrontMatter),
+				entry.Name(),
+			)
+			continue
+		}
+
+		_, _, err = parseOpenClawMetadata(fm)
+		require.NoError(t, err, entry.Name())
+	}
 }
 
 func writeSkill(t *testing.T, root, name, skillMd string) string {
