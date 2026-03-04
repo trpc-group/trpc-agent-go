@@ -20,6 +20,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
 )
 
 const (
@@ -63,6 +65,10 @@ const (
 	flagAgentRalphLoopVerifyWorkDir     = "agent-ralph-verify-workdir"
 	flagAgentRalphLoopVerifyTimeout     = "agent-ralph-verify-timeout"
 	flagAgentRalphLoopVerifyEnv         = "agent-ralph-verify-env"
+
+	flagEnableParallelTools = "enable-parallel-tools"
+
+	flagSkillsAllowBundled = "skills-allow-bundled"
 )
 
 type runOptions struct {
@@ -100,30 +106,21 @@ type runOptions struct {
 	ClaudeEnv          string
 	ClaudeWorkDir      string
 
-	ModelMode      string
-	OpenAIModel    string
-	OpenAIVariant  string
-	OpenAIBaseURL  string
-	ModelConfig    *yaml.Node
-	TelegramToken  string
-	SkillsRoot     string
-	SkillsExtraDir string
-	SkillsDebug    bool
-	StateDir       string
+	ModelMode          string
+	OpenAIModel        string
+	OpenAIVariant      string
+	OpenAIBaseURL      string
+	ModelConfig        *yaml.Node
+	SkillsRoot         string
+	SkillsExtraDir     string
+	SkillsDebug        bool
+	SkillsAllowBundled string
+	SkillConfigs       map[string]ocskills.SkillConfig
+	StateDir           string
 
 	AllowUsers     string
 	RequireMention bool
 	Mention        string
-
-	TelegramStartFromLatest bool
-	TelegramProxy           string
-	TelegramHTTPTimeout     time.Duration
-	TelegramMaxRetries      int
-	TelegramStreaming       string
-	TelegramDMPolicy        string
-	TelegramGroupPolicy     string
-	TelegramAllowThreads    string
-	TelegramPairingTTL      time.Duration
 
 	Channels []pluginSpec
 
@@ -154,6 +151,7 @@ type runOptions struct {
 
 	EnableLocalExec     bool
 	EnableOpenClawTools bool
+	EnableParallelTools bool
 
 	ToolProviders []pluginSpec
 	ToolSets      []pluginSpec
@@ -174,11 +172,6 @@ func parseRunOptions(args []string) (runOptions, error) {
 		ModelMode:     modeOpenAI,
 		OpenAIModel:   defaultOpenAIModelName(),
 		OpenAIVariant: defaultOpenAIVariant,
-
-		TelegramStartFromLatest: true,
-		TelegramMaxRetries:      defaultTelegramMaxRetries,
-		TelegramStreaming:       defaultTelegramStreaming,
-		TelegramPairingTTL:      time.Hour,
 
 		SessionBackend: sessionBackendInMemory,
 		MemoryBackend:  memoryBackendInMemory,
@@ -375,66 +368,6 @@ func parseRunOptions(args []string) (runOptions, error) {
 		"OpenAI base URL override (mode=openai, optional)",
 	)
 	fs.StringVar(
-		&opts.TelegramToken,
-		"telegram-token",
-		"",
-		"Telegram bot token; empty disables Telegram",
-	)
-	fs.BoolVar(
-		&opts.TelegramStartFromLatest,
-		"telegram-start-from-latest",
-		true,
-		"Drain pending updates on first start (no offset)",
-	)
-	fs.StringVar(
-		&opts.TelegramProxy,
-		"telegram-proxy",
-		"",
-		"HTTP proxy URL for Telegram API calls (optional)",
-	)
-	fs.DurationVar(
-		&opts.TelegramHTTPTimeout,
-		"telegram-http-timeout",
-		0,
-		"HTTP client timeout for Telegram API calls (optional)",
-	)
-	fs.IntVar(
-		&opts.TelegramMaxRetries,
-		"telegram-max-retries",
-		defaultTelegramMaxRetries,
-		"Max retries for Telegram API calls (429/5xx/transport errors)",
-	)
-	fs.StringVar(
-		&opts.TelegramStreaming,
-		"telegram-streaming",
-		defaultTelegramStreaming,
-		"Telegram reply streaming: off|block|progress",
-	)
-	fs.StringVar(
-		&opts.TelegramDMPolicy,
-		"telegram-dm-policy",
-		"",
-		"Telegram DM policy: disabled|open|allowlist|pairing",
-	)
-	fs.StringVar(
-		&opts.TelegramGroupPolicy,
-		"telegram-group-policy",
-		"",
-		"Telegram group policy: disabled|open|allowlist",
-	)
-	fs.StringVar(
-		&opts.TelegramAllowThreads,
-		"telegram-allow-threads",
-		"",
-		"Comma-separated allowlist of chat/topic threads",
-	)
-	fs.DurationVar(
-		&opts.TelegramPairingTTL,
-		"telegram-pairing-ttl",
-		time.Hour,
-		"How long pairing codes stay valid",
-	)
-	fs.StringVar(
 		&opts.AllowUsers,
 		"allow-users",
 		"",
@@ -469,6 +402,12 @@ func parseRunOptions(args []string) (runOptions, error) {
 		"skills-debug",
 		false,
 		"Log skill gating decisions",
+	)
+	fs.StringVar(
+		&opts.SkillsAllowBundled,
+		flagSkillsAllowBundled,
+		"",
+		"Comma-separated allowlist of bundled skills",
 	)
 	fs.StringVar(
 		&opts.StateDir,
@@ -603,6 +542,12 @@ func parseRunOptions(args []string) (runOptions, error) {
 		"Enable OpenClaw-compatible exec/process tools (unsafe)",
 	)
 	fs.BoolVar(
+		&opts.EnableParallelTools,
+		flagEnableParallelTools,
+		false,
+		"Enable parallel tool calls (not supported by claude-code)",
+	)
+	fs.BoolVar(
 		&opts.RefreshToolSetsOnRun,
 		"refresh-toolsets-on-run",
 		false,
@@ -683,7 +628,6 @@ type fileConfig struct {
 	Agent    *agentRunConfig  `yaml:"agent,omitempty"`
 	Model    *modelConfig     `yaml:"model,omitempty"`
 	Gateway  *gatewayConfig   `yaml:"gateway,omitempty"`
-	Telegram *telegramConfig  `yaml:"telegram,omitempty"`
 	Channels []filePluginSpec `yaml:"channels,omitempty"`
 	Skills   *skillsConfig    `yaml:"skills,omitempty"`
 	Tools    *toolsConfig     `yaml:"tools,omitempty"`
@@ -751,28 +695,28 @@ type gatewayConfig struct {
 	MentionPatterns []string `yaml:"mention_patterns,omitempty"`
 }
 
-type telegramConfig struct {
-	Token           *string  `yaml:"token,omitempty"`
-	StartFromLatest *bool    `yaml:"start_from_latest,omitempty"`
-	Proxy           *string  `yaml:"proxy,omitempty"`
-	HTTPTimeout     *string  `yaml:"http_timeout,omitempty"`
-	MaxRetries      *int     `yaml:"max_retries,omitempty"`
-	Streaming       *string  `yaml:"streaming,omitempty"`
-	DMPolicy        *string  `yaml:"dm_policy,omitempty"`
-	GroupPolicy     *string  `yaml:"group_policy,omitempty"`
-	AllowThreads    []string `yaml:"allow_threads,omitempty"`
-	PairingTTL      *string  `yaml:"pairing_ttl,omitempty"`
-}
-
 type skillsConfig struct {
 	Root      *string  `yaml:"root,omitempty"`
 	ExtraDirs []string `yaml:"extra_dirs,omitempty"`
 	Debug     *bool    `yaml:"debug,omitempty"`
+
+	AllowBundled      []string `yaml:"allow_bundled,omitempty"`
+	AllowBundledCamel []string `yaml:"allowBundled,omitempty"`
+
+	Entries map[string]skillEntryConfig `yaml:"entries,omitempty"`
+}
+
+type skillEntryConfig struct {
+	Enabled     *bool             `yaml:"enabled,omitempty"`
+	APIKey      string            `yaml:"api_key,omitempty"`
+	APIKeyCamel string            `yaml:"apiKey,omitempty"`
+	Env         map[string]string `yaml:"env,omitempty"`
 }
 
 type toolsConfig struct {
 	EnableLocalExec      *bool `yaml:"enable_local_exec,omitempty"`
 	EnableOpenClawTools  *bool `yaml:"enable_openclaw_tools,omitempty"`
+	EnableParallelTools  *bool `yaml:"enable_parallel_tools,omitempty"`
 	RefreshToolSetsOnRun *bool `yaml:"refresh_toolsets_on_run,omitempty"`
 
 	Providers []filePluginSpec `yaml:"providers,omitempty"`
@@ -1018,70 +962,6 @@ func (cfg *fileConfig) apply(
 		}
 	}
 
-	if cfg.Telegram != nil {
-		if cfg.Telegram.Token != nil &&
-			!flagWasSet(set, "telegram-token") {
-			opts.TelegramToken = strings.TrimSpace(
-				*cfg.Telegram.Token,
-			)
-		}
-		if cfg.Telegram.StartFromLatest != nil &&
-			!flagWasSet(set, "telegram-start-from-latest") {
-			opts.TelegramStartFromLatest = *cfg.Telegram.StartFromLatest
-		}
-		if cfg.Telegram.Proxy != nil &&
-			!flagWasSet(set, "telegram-proxy") {
-			opts.TelegramProxy = strings.TrimSpace(
-				*cfg.Telegram.Proxy,
-			)
-		}
-		if cfg.Telegram.HTTPTimeout != nil &&
-			!flagWasSet(set, "telegram-http-timeout") {
-			dur, err := parseDuration(*cfg.Telegram.HTTPTimeout)
-			if err != nil {
-				return fmt.Errorf("telegram.http_timeout: %w", err)
-			}
-			opts.TelegramHTTPTimeout = dur
-		}
-		if cfg.Telegram.MaxRetries != nil &&
-			!flagWasSet(set, "telegram-max-retries") {
-			opts.TelegramMaxRetries = *cfg.Telegram.MaxRetries
-		}
-		if cfg.Telegram.Streaming != nil &&
-			!flagWasSet(set, "telegram-streaming") {
-			opts.TelegramStreaming = strings.TrimSpace(
-				*cfg.Telegram.Streaming,
-			)
-		}
-		if cfg.Telegram.DMPolicy != nil &&
-			!flagWasSet(set, "telegram-dm-policy") {
-			opts.TelegramDMPolicy = strings.TrimSpace(
-				*cfg.Telegram.DMPolicy,
-			)
-		}
-		if cfg.Telegram.GroupPolicy != nil &&
-			!flagWasSet(set, "telegram-group-policy") {
-			opts.TelegramGroupPolicy = strings.TrimSpace(
-				*cfg.Telegram.GroupPolicy,
-			)
-		}
-		if len(cfg.Telegram.AllowThreads) > 0 &&
-			!flagWasSet(set, "telegram-allow-threads") {
-			opts.TelegramAllowThreads = strings.Join(
-				cfg.Telegram.AllowThreads,
-				csvDelimiter,
-			)
-		}
-		if cfg.Telegram.PairingTTL != nil &&
-			!flagWasSet(set, "telegram-pairing-ttl") {
-			dur, err := parseDuration(*cfg.Telegram.PairingTTL)
-			if err != nil {
-				return fmt.Errorf("telegram.pairing_ttl: %w", err)
-			}
-			opts.TelegramPairingTTL = dur
-		}
-	}
-
 	if len(cfg.Channels) > 0 {
 		opts.Channels = convertPluginSpecs(cfg.Channels)
 	}
@@ -1100,6 +980,22 @@ func (cfg *fileConfig) apply(
 		if cfg.Skills.Debug != nil && !flagWasSet(set, "skills-debug") {
 			opts.SkillsDebug = *cfg.Skills.Debug
 		}
+		allowBundled := cfg.Skills.AllowBundled
+		if len(allowBundled) == 0 {
+			allowBundled = cfg.Skills.AllowBundledCamel
+		}
+		if len(allowBundled) > 0 &&
+			!flagWasSet(set, flagSkillsAllowBundled) {
+			opts.SkillsAllowBundled = strings.Join(
+				allowBundled,
+				csvDelimiter,
+			)
+		}
+		if len(cfg.Skills.Entries) > 0 {
+			opts.SkillConfigs = convertSkillConfigs(
+				cfg.Skills.Entries,
+			)
+		}
 	}
 
 	if cfg.Tools != nil {
@@ -1110,6 +1006,10 @@ func (cfg *fileConfig) apply(
 		if cfg.Tools.EnableOpenClawTools != nil &&
 			!flagWasSet(set, "enable-openclaw-tools") {
 			opts.EnableOpenClawTools = *cfg.Tools.EnableOpenClawTools
+		}
+		if cfg.Tools.EnableParallelTools != nil &&
+			!flagWasSet(set, flagEnableParallelTools) {
+			opts.EnableParallelTools = *cfg.Tools.EnableParallelTools
 		}
 		if cfg.Tools.RefreshToolSetsOnRun != nil &&
 			!flagWasSet(set, "refresh-toolsets-on-run") {
@@ -1296,6 +1196,36 @@ func convertPluginSpecs(specs []filePluginSpec) []pluginSpec {
 			Name:   spec.Name,
 			Config: cfg,
 		})
+	}
+	return out
+}
+
+func convertSkillConfigs(
+	entries map[string]skillEntryConfig,
+) map[string]ocskills.SkillConfig {
+	if len(entries) == 0 {
+		return nil
+	}
+
+	out := make(map[string]ocskills.SkillConfig, len(entries))
+	for rawKey, rawCfg := range entries {
+		key := strings.TrimSpace(rawKey)
+		if key == "" {
+			continue
+		}
+
+		apiKey := strings.TrimSpace(rawCfg.APIKey)
+		if apiKey == "" {
+			apiKey = strings.TrimSpace(rawCfg.APIKeyCamel)
+		}
+		out[key] = ocskills.SkillConfig{
+			Enabled: rawCfg.Enabled,
+			APIKey:  apiKey,
+			Env:     rawCfg.Env,
+		}
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }

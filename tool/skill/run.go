@@ -50,6 +50,21 @@ type RunTool struct {
 	deniedCmds  map[string]struct{}
 
 	forceSaveArtifacts bool
+	requireSkillLoaded bool
+}
+
+// SkillRunEnvProvider is an optional interface for skill repositories that
+// want to inject environment variables into skill_run executions.
+//
+// Returned variables are merged into runInput.Env with least privilege:
+// - Never overrides explicit tool-call env (runInput.Env)
+// - Never overrides existing host env (os.LookupEnv)
+// - Blocks known-dangerous env keys
+type SkillRunEnvProvider interface {
+	SkillRunEnv(
+		ctx context.Context,
+		skillName string,
+	) (map[string]string, error)
 }
 
 // NewRunTool creates a new RunTool.
@@ -93,6 +108,15 @@ const (
 	envVirtualEnv = "VIRTUAL_ENV"
 )
 
+const (
+	envLDPreload           = "LD_PRELOAD"
+	envLDLibraryPath       = "LD_LIBRARY_PATH"
+	envDYLDInsertLibraries = "DYLD_INSERT_LIBRARIES"
+	envDYLDLibraryPath     = "DYLD_LIBRARY_PATH"
+	envDYLDForceFlatNS     = "DYLD_FORCE_FLAT_NAMESPACE"
+	envOpenSSLConf         = "OPENSSL_CONF"
+)
+
 const workspaceMetadataFileMode uint32 = 0o600
 
 const workspaceMetadataTmpFile = ".metadata.tmp"
@@ -128,6 +152,17 @@ func WithDeniedCommands(cmds ...string) func(*RunTool) {
 func WithForceSaveArtifacts(enable bool) func(*RunTool) {
 	return func(t *RunTool) {
 		t.forceSaveArtifacts = enable
+	}
+}
+
+// WithRequireSkillLoaded rejects skill_run calls unless the skill has been
+// loaded via skill_load in the current session state.
+//
+// When enabled, models must call skill_load first to bring SKILL.md (and any
+// selected docs) into context, reducing hallucinated commands/scripts.
+func WithRequireSkillLoaded(enable bool) func(*RunTool) {
+	return func(t *RunTool) {
+		t.requireSkillLoaded = enable
 	}
 }
 
@@ -279,11 +314,16 @@ func (t *RunTool) Declaration() *tool.Declaration {
 		"other tools."
 	cmdDesc := "Shell command"
 	if len(t.allowedCmds) > 0 || len(t.deniedCmds) > 0 {
-		desc += " Restrictions enabled when allowed_commands/denied_commands are set: " +
-			"no shell; one executable + args only; no > < | ; && ||."
-		cmdDesc = "Command string (no shell syntax when allowed_commands/denied_commands are set)"
+		desc += " Restrictions enabled when " +
+			"allowed_commands/denied_commands are set: " +
+			"no shell; one executable + args only; " +
+			"no > < | ; && ||."
+		cmdDesc = "Command string (no shell syntax " +
+			"when allowed_commands/denied_commands are set)"
 		if len(t.allowedCmds) > 0 {
-			desc += " Allowed commands: " + formatCommandPreview(t.allowedCmds, 20) + "."
+			desc += " Allowed commands: " +
+				formatCommandPreview(t.allowedCmds, 20) +
+				"."
 		}
 	}
 	return &tool.Declaration{
@@ -358,6 +398,12 @@ func (t *RunTool) Call(
 	if err != nil {
 		return nil, err
 	}
+	if t.requireSkillLoaded && !isSkillLoadedInContext(ctx, in.Skill) {
+		return nil, fmt.Errorf(
+			"skill_run requires skill_load first for %q",
+			in.Skill,
+		)
+	}
 	in, saveRequested, outputsSaveSkipReason := t.applyArtifactSaveOverrides(
 		ctx,
 		in,
@@ -403,6 +449,16 @@ func (t *RunTool) Call(
 
 var _ tool.Tool = (*RunTool)(nil)
 var _ tool.CallableTool = (*RunTool)(nil)
+
+func isSkillLoadedInContext(ctx context.Context, name string) bool {
+	inv, ok := agent.InvocationFromContext(ctx)
+	if !ok || inv == nil || inv.Session == nil {
+		return true
+	}
+	key := skill.StateKeyLoadedPrefix + strings.TrimSpace(name)
+	v, ok := inv.Session.GetState(key)
+	return ok && len(v) > 0
+}
 
 // StateDelta returns a stable, replayable artifact ref list when skill_run
 // persisted outputs via Artifact service.
@@ -661,6 +717,9 @@ func stageUserFileInput(
 ) (*stagedInput, string) {
 	rawName := strings.TrimSpace(f.Name)
 	if rawName == "" {
+		rawName = fileNameFromArtifactRef(f.FileID)
+	}
+	if rawName == "" {
 		rawName = fmt.Sprintf(userFileInputNameFmt, idx+1)
 	}
 	key, ok := userFileInputFastKey(f)
@@ -703,6 +762,23 @@ func stageUserFileInput(
 		MIMEType:     mime,
 		SizeBytes:    int64(len(data)),
 	}, ""
+}
+
+func fileNameFromArtifactRef(fileID string) string {
+	s := strings.TrimSpace(fileID)
+	if !strings.HasPrefix(s, fileref.ArtifactPrefix) {
+		return ""
+	}
+	rest := strings.TrimPrefix(s, fileref.ArtifactPrefix)
+	name, _, err := codeexecutor.ParseArtifactRef(rest)
+	if err != nil {
+		return ""
+	}
+	base := path.Base(strings.TrimSpace(name))
+	if base == "." || base == "/" || base == ".." {
+		return ""
+	}
+	return base
 }
 
 func sanitizeUserFileName(name string) string {
@@ -1289,13 +1365,17 @@ func isWorkspaceEnvPath(s string) bool {
 
 func isAllowedWorkspacePath(rel string) bool {
 	switch {
-	case rel == codeexecutor.DirSkills || strings.HasPrefix(rel, codeexecutor.DirSkills+"/"):
+	case rel == codeexecutor.DirSkills ||
+		strings.HasPrefix(rel, codeexecutor.DirSkills+"/"):
 		return true
-	case rel == codeexecutor.DirWork || strings.HasPrefix(rel, codeexecutor.DirWork+"/"):
+	case rel == codeexecutor.DirWork ||
+		strings.HasPrefix(rel, codeexecutor.DirWork+"/"):
 		return true
-	case rel == codeexecutor.DirOut || strings.HasPrefix(rel, codeexecutor.DirOut+"/"):
+	case rel == codeexecutor.DirOut ||
+		strings.HasPrefix(rel, codeexecutor.DirOut+"/"):
 		return true
-	case rel == codeexecutor.DirRuns || strings.HasPrefix(rel, codeexecutor.DirRuns+"/"):
+	case rel == codeexecutor.DirRuns ||
+		strings.HasPrefix(rel, codeexecutor.DirRuns+"/"):
 		return true
 	default:
 		return false
@@ -1378,6 +1458,7 @@ func (t *RunTool) runProgram(
 	if env == nil {
 		env = map[string]string{}
 	}
+	t.maybeInjectSkillEnv(ctx, in.Skill, env)
 	if _, ok := env[codeexecutor.EnvSkillName]; !ok {
 		env[codeexecutor.EnvSkillName] = in.Skill
 	}
@@ -1438,6 +1519,80 @@ func venvRelPaths(cwd string, skillName string) (string, string) {
 	relVenv := slashRel(base, venv)
 	relBin := slashRel(base, venvBin)
 	return relVenv, relBin
+}
+
+func (t *RunTool) maybeInjectSkillEnv(
+	ctx context.Context,
+	skillName string,
+	env map[string]string,
+) {
+	p, ok := t.repo.(SkillRunEnvProvider)
+	if !ok || p == nil {
+		return
+	}
+
+	overrides, err := p.SkillRunEnv(ctx, skillName)
+	if err != nil {
+		log.WarnfContext(
+			ctx,
+			"skill_run: env provider failed for %q: %v",
+			skillName,
+			err,
+		)
+		return
+	}
+	for k, v := range overrides {
+		key := strings.TrimSpace(k)
+		if key == "" || strings.TrimSpace(v) == "" {
+			continue
+		}
+		if !isValidEnvVarName(key) {
+			continue
+		}
+		if isBlockedSkillEnvKey(key) {
+			continue
+		}
+		if _, ok := env[key]; ok {
+			continue
+		}
+		if v, ok := os.LookupEnv(key); ok &&
+			strings.TrimSpace(v) != "" {
+			continue
+		}
+		env[key] = v
+	}
+}
+
+func isBlockedSkillEnvKey(key string) bool {
+	switch strings.ToUpper(strings.TrimSpace(key)) {
+	case envLDPreload,
+		envLDLibraryPath,
+		envDYLDInsertLibraries,
+		envDYLDLibraryPath,
+		envDYLDForceFlatNS,
+		envOpenSSLConf:
+		return true
+	default:
+		return false
+	}
+}
+
+func isValidEnvVarName(key string) bool {
+	if key == "" {
+		return false
+	}
+	for i, r := range key {
+		switch {
+		case r == '_' || ('A' <= r && r <= 'Z') ||
+			('a' <= r && r <= 'z'):
+			continue
+		case i > 0 && '0' <= r && r <= '9':
+			continue
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func slashRel(base string, target string) string {
@@ -1519,7 +1674,17 @@ func wrapWithVenvPrefix(cmd string, venv string, venvBin string) string {
 	return sb.String()
 }
 
-const disallowedShellMeta = "\n\r;&|<>"
+const (
+	disallowedShellMeta = "\n\r;&|<>"
+
+	errShellMetaFmt = "skill_run: shell metacharacter %q is not allowed " +
+		"when command restrictions are enabled " +
+		"(allowed_commands/denied_commands set). " +
+		"Use a single executable with args only " +
+		"(no redirects/pipes/chaining). " +
+		"To allow shell syntax, clear " +
+		"allowed_commands/denied_commands in the tool config"
+)
 
 func cmdInList(list map[string]struct{}, cmd string) bool {
 	if len(list) == 0 {
@@ -1539,10 +1704,7 @@ func splitCommandLine(s string) ([]string, error) {
 	}
 	if idx := strings.IndexAny(s, disallowedShellMeta); idx >= 0 {
 		meta := s[idx : idx+1]
-		return nil, fmt.Errorf(
-			"skill_run: shell metacharacter %q is not allowed when command restrictions are enabled (allowed_commands/denied_commands set). Use a single executable with args only (no redirects/pipes/chaining). To allow shell syntax, clear allowed_commands/denied_commands in the tool config",
-			meta,
-		)
+		return nil, fmt.Errorf(errShellMetaFmt, meta)
 	}
 	var args []string
 	var cur strings.Builder

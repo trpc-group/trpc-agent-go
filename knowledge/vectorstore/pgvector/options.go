@@ -58,6 +58,33 @@ type IVFFlatIndexParams struct {
 	Lists int
 }
 
+// HybridFusionMode represents the fusion mode for hybrid search.
+type HybridFusionMode int
+
+const (
+	// HybridFusionWeighted uses weighted fusion (default).
+	// Formula: score = vector_score * vectorWeight + text_score * textWeight
+	HybridFusionWeighted HybridFusionMode = iota
+
+	// HybridFusionRRF uses Reciprocal Rank Fusion.
+	// Formula: score = sum(1 / (k + rank_i)) for each ranking list
+	HybridFusionRRF
+)
+
+// RRFParams contains parameters for Reciprocal Rank Fusion.
+type RRFParams struct {
+	// K is the RRF constant (default: 60).
+	// Smaller values give more weight to top-ranked results.
+	// Must be > 0. Typical range: [1, 100].
+	K int
+
+	// CandidateRatio controls how many candidates to fetch from each sub-search.
+	// For RRF, we fetch (limit * CandidateRatio) candidates from each search.
+	// Larger values improve fusion quality but increase query cost.
+	// Must be > 0. Default: 3 (fetch 3x candidates).
+	CandidateRatio int
+}
+
 // DocBuilderFunc is the document builder function.
 type DocBuilderFunc func(row pgx.Row) (*vectorstore.ScoredDocument, []float64, error)
 
@@ -120,6 +147,10 @@ type options struct {
 	textWeight   float64 // Weight for text relevance (0.0-1.0)
 	language     string  // Default: english, if you install zhparser or jieba, you can set it to your configuration
 
+	// Hybrid search fusion mode
+	fusionMode HybridFusionMode // Fusion mode for hybrid search (weighted or RRF)
+	rrfParams  *RRFParams       // RRF parameters (K and CandidateRatio)
+
 	// Sparse (text) score configuration (internal use only, not exposed as public options)
 	sparseRankFunc     string  // PostgreSQL ranking function: ts_rank or ts_rank_cd (default: ts_rank)
 	sparseQueryFunc    string  // PostgreSQL query parsing function: plainto_tsquery, phraseto_tsquery, or websearch_to_tsquery (default: websearch_to_tsquery)
@@ -161,6 +192,13 @@ var defaultOptions = options{
 	language:           "english",
 	maxResults:         defaultMaxResults,
 	docBuilder:         defaultDocBuilder,
+
+	// Hybrid fusion defaults
+	fusionMode: HybridFusionWeighted, // Default: weighted fusion
+	rrfParams: &RRFParams{
+		K:              60, // Default: RRF constant k=60
+		CandidateRatio: 3,  // Default: fetch 3x candidates for RRF
+	},
 
 	// Vector index defaults (HNSW)
 	vectorIndexType: VectorIndexHNSW,
@@ -259,6 +297,7 @@ func WithEnableTSVector(enableTSVector bool) Option {
 // vectorWeight: Weight for vector similarity (0.0-1.0)
 // textWeight: Weight for text relevance (0.0-1.0)
 // Note: weights will be normalized to sum to 1.0
+// Note: This option only applies when fusionMode is HybridFusionWeighted
 func WithHybridSearchWeights(vectorWeight, textWeight float64) Option {
 	return func(o *options) {
 		// Normalize weights to sum to 1.0
@@ -270,6 +309,32 @@ func WithHybridSearchWeights(vectorWeight, textWeight float64) Option {
 			// Fallback to defaults if invalid weights
 			o.vectorWeight = 0.7
 			o.textWeight = 0.3
+		}
+	}
+}
+
+// WithHybridFusionMode sets the fusion mode for hybrid search.
+// Default is HybridFusionWeighted.
+// Use HybridFusionRRF for Reciprocal Rank Fusion.
+func WithHybridFusionMode(mode HybridFusionMode) Option {
+	return func(o *options) {
+		o.fusionMode = mode
+	}
+}
+
+// WithRRFParams sets the parameters for Reciprocal Rank Fusion.
+// Values <= 0 are ignored (defaults are kept).
+// Note: This option only applies when fusionMode is HybridFusionRRF.
+func WithRRFParams(params *RRFParams) Option {
+	return func(o *options) {
+		if params == nil {
+			return
+		}
+		if params.K > 0 {
+			o.rrfParams.K = params.K
+		}
+		if params.CandidateRatio > 0 {
+			o.rrfParams.CandidateRatio = params.CandidateRatio
 		}
 	}
 }

@@ -12,11 +12,14 @@ package app
 import (
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
+
+	_ "trpc.group/trpc-go/trpc-agent-go/openclaw/plugins/telegram"
 )
 
 func TestRunInspect_DefaultIsPlugins(t *testing.T) {
@@ -40,11 +43,25 @@ func TestRunInspect_UnknownCommand(t *testing.T) {
 }
 
 func TestRunInspect_ConfigKeys(t *testing.T) {
+	cfgData, err := yaml.Marshal(map[string]any{
+		"channels": []any{
+			map[string]any{
+				"type": telegramChannelType,
+				"config": map[string]any{
+					"token": "x",
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(cfgPath, cfgData, 0o600))
+
 	stdout, stderr := captureInspectOutput(t, func() {
 		require.Equal(t, 0, runInspect([]string{
 			inspectCmdConfigKeys,
-			"-telegram-token",
-			"x",
+			"-config",
+			cfgPath,
 			"-enable-openclaw-tools",
 		}))
 	})
@@ -114,7 +131,6 @@ emptyseq: []
 	toolSetConfig := mustYAMLNode(t, "- true\n")
 
 	opts := runOptions{
-		TelegramToken:       "x",
 		EnableOpenClawTools: true,
 		EnableLocalExec:     true,
 		Channels: []pluginSpec{

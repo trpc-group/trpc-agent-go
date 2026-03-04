@@ -53,7 +53,7 @@ func (m *manager) Get(_ context.Context, appName, evalSetID string) (*evalset.Ev
 	if err != nil {
 		return nil, fmt.Errorf("load eval set %s.%s: %w", appName, evalSetID, err)
 	}
-	cloned, err := clone.Clone(evalSet)
+	cloned, err := clone.CloneEvalSet(evalSet)
 	if err != nil {
 		return nil, fmt.Errorf("clone eval set %s.%s: %w", appName, evalSetID, err)
 	}
@@ -77,7 +77,7 @@ func (m *manager) Create(_ context.Context, appName, evalSetID string) (*evalset
 	}
 	m.evalSets[appName][evalSetID] = evalSet
 	m.evalCases[appName][evalSetID] = make(map[string]*evalset.EvalCase)
-	cloned, err := clone.Clone(evalSet)
+	cloned, err := clone.CloneEvalSet(evalSet)
 	if err != nil {
 		return nil, fmt.Errorf("clone eval set %s.%s: %w", appName, evalSetID, err)
 	}
@@ -124,7 +124,7 @@ func (m *manager) GetCase(_ context.Context, appName, evalSetID, evalCaseID stri
 	if err != nil {
 		return nil, fmt.Errorf("load eval case %s.%s.%s: %w", appName, evalSetID, evalCaseID, err)
 	}
-	cloned, err := clone.Clone(evalCase)
+	cloned, err := clone.CloneEvalCase(evalCase)
 	if err != nil {
 		return nil, fmt.Errorf("clone eval case %s.%s.%s: %w", appName, evalSetID, evalCaseID, err)
 	}
@@ -150,7 +150,7 @@ func (m *manager) AddCase(_ context.Context, appName, evalSetID string, evalCase
 	if _, exists := m.evalCases[appName][evalSetID][evalCase.EvalID]; exists {
 		return fmt.Errorf("eval case %s.%s.%s already exists", appName, evalSetID, evalCase.EvalID)
 	}
-	cloned, err := clone.Clone(evalCase)
+	cloned, err := clone.CloneEvalCase(evalCase)
 	if err != nil {
 		return fmt.Errorf("clone eval case %s.%s.%s: %w", appName, evalSetID, evalCase.EvalID, err)
 	}
@@ -194,7 +194,7 @@ func (m *manager) UpdateCase(_ context.Context, appName, evalSetID string, evalC
 	if _, exists := m.evalCases[appName][evalSetID][evalCase.EvalID]; !exists {
 		return fmt.Errorf("eval case %s.%s.%s not found: %w", appName, evalSetID, evalCase.EvalID, os.ErrNotExist)
 	}
-	cloned, err := clone.Clone(evalCase)
+	cloned, err := clone.CloneEvalCase(evalCase)
 	if err != nil {
 		return fmt.Errorf("clone eval case %s.%s.%s: %w", appName, evalSetID, evalCase.EvalID, err)
 	}

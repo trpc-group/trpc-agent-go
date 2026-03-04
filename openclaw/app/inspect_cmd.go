@@ -63,10 +63,7 @@ func runInspectPlugins(args []string) int {
 		return 2
 	}
 
-	printInspectList("Built-in channels", []string{
-		registry.ChannelTypeTelegram,
-	})
-	printInspectList("Channel plugins", registry.Types(registryKindChannel))
+	printInspectList("Channels", registry.Types(registryKindChannel))
 	printInspectList("Model types", registry.Types(registryKindModel))
 	printInspectList(
 		"Session backends",

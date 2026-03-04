@@ -20,6 +20,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -104,6 +105,21 @@ func TestContentRequestProcessor_DefaultBehavior(t *testing.T) {
 	if actualContent != expectedContent {
 		t.Errorf("Expected default content '%s', got '%s'", expectedContent, actualContent)
 	}
+}
+
+func TestFilterSubtree(t *testing.T) {
+	const (
+		filterRoot = "filter"
+		filterA    = "filter/a"
+		filterB    = "filter/b"
+	)
+
+	assert.True(t, filterSubtree(filterA, ""))
+	assert.True(t, filterSubtree("", filterA))
+	assert.True(t, filterSubtree(filterA, filterA))
+	assert.True(t, filterSubtree(filterA+"/x", filterA))
+	assert.False(t, filterSubtree(filterRoot, filterA))
+	assert.False(t, filterSubtree(filterB, filterA))
 }
 
 func TestContentRequestProcessor_ToolCalls(t *testing.T) {
@@ -2794,6 +2810,69 @@ func TestContentRequestProcessor_shouldIncludeEvent(t *testing.T) {
 			expected: true,
 		},
 		{
+			name: "BranchFilterModeSubtree excludes ancestor filter key",
+			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
+				p := &ContentRequestProcessor{
+					BranchFilterMode: BranchFilterModeSubtree,
+				}
+				evt := event.Event{
+					Version:   event.CurrentVersion,
+					FilterKey: "filter",
+					Response: &model.Response{
+						Choices: []model.Choice{
+							{Message: model.Message{Content: "test content"}},
+						},
+					},
+					Timestamp: baseTime,
+				}
+				inv := &agent.Invocation{}
+				return p, evt, inv, "filter/a", true, baseTime
+			},
+			expected: false,
+		},
+		{
+			name: "BranchFilterModeSubtree includes descendants",
+			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
+				p := &ContentRequestProcessor{
+					BranchFilterMode: BranchFilterModeSubtree,
+				}
+				evt := event.Event{
+					Version:   event.CurrentVersion,
+					FilterKey: "filter/a",
+					Response: &model.Response{
+						Choices: []model.Choice{
+							{Message: model.Message{Content: "test content"}},
+						},
+					},
+					Timestamp: baseTime,
+				}
+				inv := &agent.Invocation{}
+				return p, evt, inv, "filter", true, baseTime
+			},
+			expected: true,
+		},
+		{
+			name: "BranchFilterModeSubtree excludes siblings",
+			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
+				p := &ContentRequestProcessor{
+					BranchFilterMode: BranchFilterModeSubtree,
+				}
+				evt := event.Event{
+					Version:   event.CurrentVersion,
+					FilterKey: "filter/b",
+					Response: &model.Response{
+						Choices: []model.Choice{
+							{Message: model.Message{Content: "test content"}},
+						},
+					},
+					Timestamp: baseTime,
+				}
+				inv := &agent.Invocation{}
+				return p, evt, inv, "filter/a", true, baseTime
+			},
+			expected: false,
+		},
+		{
 			name: "all conditions satisfied",
 			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
 				p := &ContentRequestProcessor{
@@ -4126,4 +4205,87 @@ func TestContentRequestProcessor_AnnotatesUserFileInputs(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 2, fileParts)
+}
+
+func TestContentRequestProcessor_AnnotatesUserFileInputs_ArtifactRef(t *testing.T) {
+	p := NewContentRequestProcessor()
+
+	const (
+		invocationID = "inv"
+		fileARef     = "artifact://uploads/a.pdf@0"
+		fileBRef     = "artifact://uploads/b.pdf@0"
+	)
+
+	userMsg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					FileID: fileARef,
+				},
+			},
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					FileID: fileBRef,
+				},
+			},
+		},
+	}
+	ev := event.NewResponseEvent(invocationID, "user", &model.Response{
+		Choices: []model.Choice{{Message: userMsg}},
+	})
+	inv := &agent.Invocation{
+		InvocationID: invocationID,
+		AgentName:    "agent",
+		Session: &session.Session{
+			Events: []event.Event{*ev},
+		},
+	}
+	req := &model.Request{}
+	ch := make(chan *event.Event, 1)
+	p.ProcessRequest(context.Background(), inv, req, ch)
+
+	if !assert.Len(t, req.Messages, 1) {
+		return
+	}
+	msg := req.Messages[0]
+	assert.Equal(t, model.RoleUser, msg.Role)
+
+	if !assert.GreaterOrEqual(t, len(msg.ContentParts), 3) {
+		return
+	}
+	first := msg.ContentParts[0]
+	assert.Equal(t, model.ContentTypeText, first.Type)
+	if assert.NotNil(t, first.Text) {
+		assert.Contains(t, *first.Text, attachedFilesAnnotationPrefix)
+		assert.Contains(t, *first.Text, "a.pdf")
+		assert.Contains(t, *first.Text, "b.pdf")
+		assert.NotContains(t, *first.Text, "upload_1")
+	}
+
+	fileParts := 0
+	for _, part := range msg.ContentParts {
+		if part.Type == model.ContentTypeFile && part.File != nil {
+			fileParts++
+		}
+	}
+	assert.Equal(t, 2, fileParts)
+}
+
+func TestFileNameFromArtifactRef_EdgeCases(t *testing.T) {
+	t.Run("non-artifact ref returns empty", func(t *testing.T) {
+		assert.Equal(t, "", fileNameFromArtifactRef("file-123"))
+	})
+
+	t.Run("invalid version returns empty", func(t *testing.T) {
+		ref := fileref.ArtifactPrefix + "a@x"
+		assert.Equal(t, "", fileNameFromArtifactRef(ref))
+	})
+
+	t.Run("invalid base returns empty", func(t *testing.T) {
+		ref := fileref.ArtifactPrefix + "..@0"
+		assert.Equal(t, "", fileNameFromArtifactRef(ref))
+	})
 }

@@ -150,6 +150,17 @@ In chat:
   hand-crafting JSON arguments in chat:
   `-artifacts -omit-inline -artifact-prefix user:`
 
+### Use with OpenClaw skills
+
+This repo vendors the upstream OpenClaw skill pack under `openclaw/skills/`.
+You can point this example at it:
+
+```bash
+cd examples/skillrun
+export SKILLS_ROOT="../../openclaw/skills"
+go run .
+```
+
 List and download saved artifacts:
 
 - `/artifacts` lists all artifact keys saved in this session.

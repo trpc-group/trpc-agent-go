@@ -13,6 +13,7 @@ package skill
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -124,6 +125,165 @@ func TestRunTool_ExecutesAndCollectsOutputFiles(t *testing.T) {
 	require.Contains(t, out.PrimaryOutput.Content, contentHi)
 }
 
+type envRepo struct {
+	skill.Repository
+	env map[string]string
+	err error
+}
+
+func (r *envRepo) SkillRunEnv(
+	ctx context.Context,
+	skillName string,
+) (map[string]string, error) {
+	return r.env, r.err
+}
+
+func TestRunTool_SkillRunEnvProvider(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	base, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	repo := &envRepo{
+		Repository: base,
+		env: map[string]string{
+			"FOO":           "from-repo",
+			envOpenSSLConf:  "blocked",
+			"INVALID KEY=":  "ignored",
+			"EMPTY_VALUE":   "",
+			"SPACE_VALUE":   "   ",
+			"NEWLINE_VALUE": "\n",
+		},
+	}
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	t.Run("injects when unset", func(t *testing.T) {
+		os.Unsetenv("FOO")
+		os.Unsetenv(envOpenSSLConf)
+
+		outA := "out/env_inject/a.txt"
+		outB := "out/env_inject/b.txt"
+		glob := "out/env_inject/*.txt"
+
+		args := runInput{
+			Skill: testSkillName,
+			Command: "mkdir -p out/env_inject; " +
+				"echo \"$FOO\" > " + outA + "; " +
+				"echo \"${OPENSSL_CONF:-}\" > " + outB,
+			OutputFiles: []string{glob},
+		}
+
+		enc, err := jsonMarshal(args)
+		require.NoError(t, err)
+
+		res, err := rt.Call(context.Background(), enc)
+		require.NoError(t, err)
+
+		out := res.(runOutput)
+		require.Equal(t, 0, out.ExitCode)
+		require.Len(t, out.OutputFiles, 2)
+
+		got := map[string]string{}
+		for _, f := range out.OutputFiles {
+			got[f.Name] = f.Content
+		}
+		require.Contains(t, got[outA], "from-repo")
+		require.Equal(t, "\n", got[outB])
+	})
+
+	t.Run("does not override explicit tool env", func(t *testing.T) {
+		os.Unsetenv("FOO")
+
+		outA := "out/env_explicit/a.txt"
+		glob := "out/env_explicit/*.txt"
+
+		args := runInput{
+			Skill: testSkillName,
+			Command: "mkdir -p out/env_explicit; " +
+				"echo \"$FOO\" > " + outA,
+			Env: map[string]string{
+				"FOO": "explicit",
+			},
+			OutputFiles: []string{glob},
+		}
+
+		enc, err := jsonMarshal(args)
+		require.NoError(t, err)
+
+		res, err := rt.Call(context.Background(), enc)
+		require.NoError(t, err)
+
+		out := res.(runOutput)
+		require.Equal(t, 0, out.ExitCode)
+		require.Len(t, out.OutputFiles, 1)
+		require.Equal(t, outA, out.OutputFiles[0].Name)
+		require.Contains(t, out.OutputFiles[0].Content, "explicit")
+	})
+
+	t.Run("does not override host env", func(t *testing.T) {
+		t.Setenv("FOO", "host")
+
+		outA := "out/env_host/a.txt"
+		glob := "out/env_host/*.txt"
+
+		args := runInput{
+			Skill: testSkillName,
+			Command: "mkdir -p out/env_host; " +
+				"echo \"$FOO\" > " + outA,
+			OutputFiles: []string{glob},
+		}
+
+		enc, err := jsonMarshal(args)
+		require.NoError(t, err)
+
+		res, err := rt.Call(context.Background(), enc)
+		require.NoError(t, err)
+
+		out := res.(runOutput)
+		require.Equal(t, 0, out.ExitCode)
+		require.Len(t, out.OutputFiles, 1)
+		require.Equal(t, outA, out.OutputFiles[0].Name)
+		require.Contains(t, out.OutputFiles[0].Content, "host")
+	})
+
+	t.Run("skips injection on provider error", func(t *testing.T) {
+		os.Unsetenv("FOO")
+		repo.err = errors.New("provider failed")
+
+		outA := "out/env_err/a.txt"
+		glob := "out/env_err/*.txt"
+
+		args := runInput{
+			Skill: testSkillName,
+			Command: "mkdir -p out/env_err; " +
+				"echo \"$FOO\" > " + outA,
+			OutputFiles: []string{glob},
+		}
+
+		enc, err := jsonMarshal(args)
+		require.NoError(t, err)
+
+		res, err := rt.Call(context.Background(), enc)
+		require.NoError(t, err)
+
+		out := res.(runOutput)
+		require.Equal(t, 0, out.ExitCode)
+		require.Len(t, out.OutputFiles, 1)
+		require.Equal(t, outA, out.OutputFiles[0].Name)
+		require.Empty(t, strings.TrimSpace(out.OutputFiles[0].Content))
+	})
+}
+
+func TestIsValidEnvVarName(t *testing.T) {
+	require.False(t, isValidEnvVarName(""))
+	require.False(t, isValidEnvVarName("0ABC"))
+	require.False(t, isValidEnvVarName("A-B"))
+	require.True(t, isValidEnvVarName("A0_B"))
+}
+
 func TestRunTool_StateDelta_EmitsArtifactRefs(t *testing.T) {
 	rt := &RunTool{}
 	out := runOutput{
@@ -170,16 +330,22 @@ func TestRunTool_StateDelta_EdgeCases(t *testing.T) {
 	})
 
 	t.Run("all invalid artifact files returns nil", func(t *testing.T) {
-		delta := rt.StateDelta("call-1", nil, []byte(
-			`{"artifact_files":[{"name":"","version":0},{"name":"x","version":-1},{"name":"   ","version":3}]}`,
-		))
+		input := `{"artifact_files":[` +
+			`{"name":"","version":0},` +
+			`{"name":"x","version":-1},` +
+			`{"name":"   ","version":3}` +
+			`]}`
+		delta := rt.StateDelta("call-1", nil, []byte(input))
 		require.Nil(t, delta)
 	})
 
 	t.Run("trims toolCallID and filters invalid entries", func(t *testing.T) {
-		delta := rt.StateDelta(" call-1 ", nil, []byte(
-			`{"artifact_files":[{"name":"  out/a.txt  ","version":1},{"name":"","version":2},{"name":"x","version":-1}]}`,
-		))
+		input := `{"artifact_files":[` +
+			`{"name":"  out/a.txt  ","version":1},` +
+			`{"name":"","version":2},` +
+			`{"name":"x","version":-1}` +
+			`]}`
+		delta := rt.StateDelta(" call-1 ", nil, []byte(input))
 		require.Len(t, delta, 1)
 
 		raw, ok := delta[skill.StateKeyArtifacts]
@@ -1618,23 +1784,30 @@ func TestRunTool_RelativeCWD_TraversalDoesNotEscapeWorkspace(t *testing.T) {
 
 func TestResolveCWD_WorkspaceEnvPathAllowlist(t *testing.T) {
 	base := path.Join(codeexecutor.DirSkills, "x")
+	wsEnv := "$" + codeexecutor.WorkspaceEnvDirKey
 
 	// traversal should fallback
-	require.Equal(t, base, resolveCWD("$"+codeexecutor.WorkspaceEnvDirKey+"/../..", "x"))
-	require.Equal(t, base, resolveCWD("$"+codeexecutor.WorkspaceEnvDirKey+"\\..\\..", "x"))
+	require.Equal(t, base, resolveCWD(wsEnv+"/../..", "x"))
+	require.Equal(t, base, resolveCWD(wsEnv+"\\..\\..", "x"))
 
 	// allowed roots under workspace
-	require.Equal(t, codeexecutor.DirWork, resolveCWD("$"+codeexecutor.WorkspaceEnvDirKey+"/"+codeexecutor.DirWork, "x"))
-	require.Equal(t, codeexecutor.DirSkills+"/x", resolveCWD("$"+codeexecutor.WorkspaceEnvDirKey+"/"+codeexecutor.DirSkills+"/x", "x"))
+	workDir := wsEnv + "/" + codeexecutor.DirWork
+	skillDir := wsEnv + "/" + codeexecutor.DirSkills + "/x"
+	require.Equal(t, codeexecutor.DirWork, resolveCWD(workDir, "x"))
+	require.Equal(t, codeexecutor.DirSkills+"/x", resolveCWD(skillDir, "x"))
 
 	// disallowed root under workspace falls back to base
-	require.Equal(t, base, resolveCWD("$"+codeexecutor.WorkspaceEnvDirKey+"/etc", "x"))
+	require.Equal(t, base, resolveCWD(wsEnv+"/etc", "x"))
 }
 
 func TestResolveCWD_AbsPathAllowlist(t *testing.T) {
 	base := path.Join(codeexecutor.DirSkills, "x")
 
-	require.Equal(t, codeexecutor.DirWork, resolveCWD("/"+codeexecutor.DirWork, "x"))
+	require.Equal(
+		t,
+		codeexecutor.DirWork,
+		resolveCWD("/"+codeexecutor.DirWork, "x"),
+	)
 	require.Equal(t, base, resolveCWD("/etc", "x"))
 	require.Equal(t, ".", resolveCWD("/", "x"))
 }
@@ -1655,7 +1828,8 @@ func TestRunTool_Declaration(t *testing.T) {
 	require.NotNil(t, d.InputSchema)
 	require.Contains(t, d.InputSchema.Required, "skill")
 	require.Contains(t, d.InputSchema.Required, "command")
-	require.Equal(t, "Shell command", d.InputSchema.Properties["command"].Description)
+	cmdDesc := d.InputSchema.Properties["command"].Description
+	require.Equal(t, "Shell command", cmdDesc)
 }
 
 func TestRunTool_Declaration_IncludesAllowedCommandsPreview(t *testing.T) {
@@ -1672,7 +1846,8 @@ func TestRunTool_Declaration_IncludesAllowedCommandsPreview(t *testing.T) {
 	require.Contains(t, d.Description, "cmd19")
 	require.Contains(t, d.Description, "(+5 more)")
 	require.NotContains(t, d.Description, "cmd24")
-	require.Contains(t, d.InputSchema.Properties["command"].Description, "no shell syntax")
+	cmdDesc := d.InputSchema.Properties["command"].Description
+	require.Contains(t, cmdDesc, "no shell syntax")
 }
 
 // Ensure parseRunArgs rejects invalid JSON and missing fields.
@@ -2324,6 +2499,166 @@ func TestRunTool_StagesUserFileInputs_ArtifactRef_OK(t *testing.T) {
 	require.Len(t, out.OutputFiles, 1)
 	require.Equal(t, outATxt, out.OutputFiles[0].Name)
 	require.Contains(t, out.OutputFiles[0].Content, contentHi)
+}
+
+func TestRunTool_StagesUserFileInputs_ArtifactRef_InfersName(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	rt := NewRunTool(repo, localexec.New())
+
+	svc := inmemory.NewService()
+	sess := &session.Session{
+		AppName: "app",
+		UserID:  "u",
+		ID:      "s1",
+		State:   session.StateMap{},
+	}
+	info := artifact.SessionInfo{
+		AppName:   sess.AppName,
+		UserID:    sess.UserID,
+		SessionID: sess.ID,
+	}
+	const artifactName = "uploads/notes.txt"
+	ver, err := svc.SaveArtifact(
+		context.Background(),
+		info,
+		artifactName,
+		&artifact.Artifact{
+			Data:     []byte(contentHi),
+			MimeType: "text/plain",
+			Name:     artifactName,
+		},
+	)
+	require.NoError(t, err)
+
+	ref := fmt.Sprintf(
+		"%s%s@%d",
+		fileref.ArtifactPrefix,
+		artifactName,
+		ver,
+	)
+	user := model.NewUserMessage("upload")
+	user.AddFileID(ref)
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(user),
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationArtifactService(svc),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args := runInput{
+		Skill: testSkillName,
+		Command: "mkdir -p out; cat work/inputs/" +
+			uploadNotesTxt + " > " + outATxt,
+		OutputFiles: []string{outATxt},
+		Timeout:     timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Len(t, out.StagedInputs, 1)
+	require.Equal(t, "work/inputs/"+uploadNotesTxt,
+		out.StagedInputs[0].Name)
+	require.Equal(t, uploadNotesTxt, out.StagedInputs[0].OriginalName)
+}
+
+func TestRunTool_RequireSkillLoaded_NotLoaded_Error(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	rt := NewRunTool(
+		repo,
+		localexec.New(),
+		WithRequireSkillLoaded(true),
+	)
+
+	sess := &session.Session{
+		State: session.StateMap{},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("hi")),
+		agent.WithInvocationSession(sess),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args := runInput{Skill: testSkillName, Command: echoOK,
+		Timeout: timeoutSecSmall}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	_, err = rt.Call(ctx, enc)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "skill_load")
+}
+
+func TestRunTool_RequireSkillLoaded_NoInvocation_OK(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	rt := NewRunTool(
+		repo,
+		localexec.New(),
+		WithRequireSkillLoaded(true),
+	)
+
+	args := runInput{Skill: testSkillName, Command: echoOK,
+		Timeout: timeoutSecSmall}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	_, err = rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+}
+
+func TestRunTool_RequireSkillLoaded_Loaded_OK(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	rt := NewRunTool(
+		repo,
+		localexec.New(),
+		WithRequireSkillLoaded(true),
+	)
+
+	sess := &session.Session{
+		State: session.StateMap{},
+	}
+	sess.SetState(
+		skill.StateKeyLoadedPrefix+testSkillName,
+		[]byte("1"),
+	)
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("hi")),
+		agent.WithInvocationSession(sess),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args := runInput{Skill: testSkillName, Command: echoOK,
+		Timeout: timeoutSecSmall}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	_, err = rt.Call(ctx, enc)
+	require.NoError(t, err)
+}
+
+func TestFileNameFromArtifactRef_EdgeCases(t *testing.T) {
+	require.Equal(t, "", fileNameFromArtifactRef("file-123"))
+
+	invalidVer := fileref.ArtifactPrefix + "a@x"
+	require.Equal(t, "", fileNameFromArtifactRef(invalidVer))
+
+	invalidBase := fileref.ArtifactPrefix + "..@0"
+	require.Equal(t, "", fileNameFromArtifactRef(invalidBase))
 }
 
 func TestRunTool_StagesUserFileInputs_DownloadError_Warn(t *testing.T) {
