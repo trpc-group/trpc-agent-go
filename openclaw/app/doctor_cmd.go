@@ -44,11 +44,7 @@ func runDoctor(args []string) int {
 		return 1
 	}
 
-	specs, err := resolveTelegramChannelSpecs(opts.Channels)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
+	specs := resolveTelegramChannelSpecs(opts.Channels)
 	if len(specs) == 0 {
 		fmt.Println("Telegram: not configured")
 		return 0

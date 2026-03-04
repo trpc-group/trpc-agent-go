@@ -225,3 +225,72 @@ func TestCheckWebhook_Error(t *testing.T) {
 
 	require.False(t, checkWebhook(context.Background(), c))
 }
+
+func TestRunDoctor_ParseRunOptionsError(t *testing.T) {
+	stderr := os.Stderr
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stderr = w
+	t.Cleanup(func() { os.Stderr = stderr })
+
+	cfgPath := filepath.Join(t.TempDir(), "missing.yaml")
+	require.Equal(t, 1, runDoctor([]string{"-config", cfgPath}))
+
+	require.NoError(t, w.Close())
+	out, err := io.ReadAll(r)
+	require.NoError(t, err)
+	require.Contains(t, string(out), "load config failed")
+}
+
+func TestRunDoctor_MultipleTelegramChannels(t *testing.T) {
+	cfgData := []byte(`channels:
+  - type: telegram
+    config:
+      token: x
+  - type: telegram
+    name: other
+    config:
+      token: y
+`)
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(cfgPath, cfgData, 0o600))
+
+	require.Equal(t, 1, runDoctor([]string{"-config", cfgPath}))
+}
+
+func TestRunDoctor_TelegramDecodeError(t *testing.T) {
+	cfgData := []byte(`channels:
+  - type: telegram
+    config:
+      token: x
+      unknown: 1
+`)
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(cfgPath, cfgData, 0o600))
+
+	require.Equal(t, 1, runDoctor([]string{"-config", cfgPath}))
+}
+
+func TestRunDoctor_MissingToken(t *testing.T) {
+	cfgData := []byte(`channels:
+  - type: telegram
+    config: {}
+`)
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(cfgPath, cfgData, 0o600))
+
+	require.Equal(t, 1, runDoctor([]string{"-config", cfgPath}))
+}
+
+func TestRunDoctor_InvalidHTTPTimeout(t *testing.T) {
+	cfgData := []byte(`channels:
+  - type: telegram
+    config:
+      token: x
+      http_timeout: bad
+`)
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(cfgPath, cfgData, 0o600))
+
+	require.Equal(t, 1, runDoctor([]string{"-config", cfgPath}))
+}

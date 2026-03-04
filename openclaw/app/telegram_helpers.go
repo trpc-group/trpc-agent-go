@@ -41,7 +41,7 @@ type telegramChannelConfig struct {
 	PairingTTL   string   `yaml:"pairing_ttl"`
 }
 
-func resolveTelegramChannelSpecs(specs []pluginSpec) ([]pluginSpec, error) {
+func resolveTelegramChannelSpecs(specs []pluginSpec) []pluginSpec {
 	out := make([]pluginSpec, 0, len(specs))
 	for _, spec := range specs {
 		typeName := strings.ToLower(strings.TrimSpace(spec.Type))
@@ -49,7 +49,7 @@ func resolveTelegramChannelSpecs(specs []pluginSpec) ([]pluginSpec, error) {
 			out = append(out, spec)
 		}
 	}
-	return out, nil
+	return out
 }
 
 func pairingStorePath(stateDir string, me tgapi.User) (string, error) {

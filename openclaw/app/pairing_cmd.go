@@ -137,13 +137,10 @@ func runPairing(args []string) int {
 		return 1
 	}
 
-	switch action {
-	case pairingCmdList:
+	if action == pairingCmdList {
 		return runPairingList(ctx, store)
-	case pairingCmdApprove:
-		return runPairingApprove(ctx, store, code)
 	}
-	return 2
+	return runPairingApprove(ctx, store, code)
 }
 
 func printPairingUsage() {
@@ -265,10 +262,7 @@ func resolveTelegramPairingChannel(
 	opts runOptions,
 	wantChannel string,
 ) (pluginSpec, error) {
-	specs, err := resolveTelegramChannelSpecs(opts.Channels)
-	if err != nil {
-		return pluginSpec{}, err
-	}
+	specs := resolveTelegramChannelSpecs(opts.Channels)
 
 	if len(specs) == 0 {
 		return pluginSpec{}, errors.New("pairing: telegram not configured")

@@ -72,3 +72,17 @@ func TestBuildClientOptionsFromEnv_OptionsCount(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, opts, 3)
 }
+
+func TestBuildHTTPClient_DefaultTransportType(t *testing.T) {
+	orig := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = orig })
+	http.DefaultTransport = roundTripperFunc(func(
+		_ *http.Request,
+	) (*http.Response, error) {
+		return nil, nil
+	})
+
+	_, err := BuildHTTPClient("", time.Second)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), errDefaultTransportType)
+}
