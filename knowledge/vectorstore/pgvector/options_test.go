@@ -307,4 +307,3 @@ func TestWithHybridFusionMode(t *testing.T) {
 		assert.Equal(t, HybridFusionWeighted, opts.fusionMode)
 	})
 }
-
