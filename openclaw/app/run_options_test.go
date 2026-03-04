@@ -453,6 +453,45 @@ session:
 	require.Equal(t, 1, exitErr.Code)
 }
 
+func TestConvertSkillConfigs_EmptyAndBlankKeys(t *testing.T) {
+	require.Nil(t, convertSkillConfigs(nil))
+	require.Nil(t, convertSkillConfigs(map[string]skillEntryConfig{}))
+
+	got := convertSkillConfigs(map[string]skillEntryConfig{
+		" ": {},
+	})
+	require.Nil(t, got)
+}
+
+func TestParseRunOptions_AllowBundledSnakeCase(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+skills:
+  allow_bundled: ["a","b"]
+`)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.Equal(t, "a,b", opts.SkillsAllowBundled)
+}
+
+func TestParseRunOptions_SkillsAllowBundledFlagOverridesConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+skills:
+  allow_bundled: ["a"]
+`)
+
+	opts, err := parseRunOptions([]string{
+		"-config", cfgPath,
+		"-skills-allow-bundled", "b,c",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "b,c", opts.SkillsAllowBundled)
+}
+
 func writeTempConfig(t *testing.T, body string) string {
 	t.Helper()
 

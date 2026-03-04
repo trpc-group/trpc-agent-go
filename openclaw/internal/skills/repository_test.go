@@ -69,6 +69,12 @@ func TestParseFrontMatter_NoFrontMatter(t *testing.T) {
 	require.True(t, errors.Is(err, errNoFrontMatter))
 }
 
+func TestParseFrontMatterFile_ReadError(t *testing.T) {
+	root := t.TempDir()
+	_, err := parseFrontMatterFile(filepath.Join(root, "missing.md"))
+	require.Error(t, err)
+}
+
 func TestNormalizeStringAnyMap_MapAnyAny(t *testing.T) {
 	in := map[any]any{
 		"openclaw": map[any]any{
@@ -86,6 +92,42 @@ func TestParseOpenClawMetadata_NoMetadata(t *testing.T) {
 		Metadata: nil,
 	})
 	require.NoError(t, err)
+	require.False(t, ok)
+	require.Equal(t, openClawMetadata{}, meta)
+}
+
+func TestParseOpenClawMetadata_NoOpenClawKey(t *testing.T) {
+	meta, ok, err := parseOpenClawMetadata(parsedFrontMatter{
+		Name: "x",
+		Metadata: map[string]any{
+			"other": map[string]any{"a": 1},
+		},
+	})
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Equal(t, openClawMetadata{}, meta)
+}
+
+func TestParseOpenClawMetadata_MarshalError(t *testing.T) {
+	meta, ok, err := parseOpenClawMetadata(parsedFrontMatter{
+		Name: "x",
+		Metadata: map[string]any{
+			openClawMetadataKey: marshalTextErr{},
+		},
+	})
+	require.Error(t, err)
+	require.False(t, ok)
+	require.Equal(t, openClawMetadata{}, meta)
+}
+
+func TestParseOpenClawMetadata_UnmarshalError(t *testing.T) {
+	meta, ok, err := parseOpenClawMetadata(parsedFrontMatter{
+		Name: "x",
+		Metadata: map[string]any{
+			openClawMetadataKey: []string{"not a map"},
+		},
+	})
+	require.Error(t, err)
 	require.False(t, ok)
 	require.Equal(t, openClawMetadata{}, meta)
 }
@@ -264,6 +306,10 @@ func TestEvaluateRequiredEnv_SatisfiedByAPIKeyForPrimaryEnv(t *testing.T) {
 	))
 }
 
+func TestNormalizeMetadata_InvalidString(t *testing.T) {
+	require.Nil(t, normalizeMetadata("openclaw: ["))
+}
+
 func TestRepository_SkillKey_ConfigResolution(t *testing.T) {
 	os.Unsetenv("SKILLS_TEST_SKILLKEY_ENV")
 
@@ -418,6 +464,56 @@ x
 
 	_, err = r.Path("missing")
 	require.Error(t, err)
+}
+
+func TestRepository_PathDisabledHasReason(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, "needenv", `---
+name: needenv
+description: test
+metadata:
+  { "openclaw": { "requires": { "env": ["SKILLS_TEST_NEEDENV"] } } }
+---
+
+x
+`)
+
+	r, err := NewRepository([]string{root})
+	require.NoError(t, err)
+
+	_, err = r.Path("needenv")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "missing env")
+}
+
+func TestWithBundledSkillsRoot_Empty(t *testing.T) {
+	r := &Repository{bundledRoot: "x"}
+	WithBundledSkillsRoot(" ")(r)
+	require.Empty(t, r.bundledRoot)
+}
+
+func TestWithBundledSkillsRoot_MissingPath(t *testing.T) {
+	r := &Repository{}
+	missing := filepath.Join(t.TempDir(), "missing")
+	WithBundledSkillsRoot(missing)(r)
+	require.Equal(t, missing, r.bundledRoot)
+}
+
+func TestRepository_resolveSkillConfig_FallbackToName(t *testing.T) {
+	r := &Repository{
+		skillConfigs: map[string]SkillConfig{
+			"skill": {APIKey: "k"},
+		},
+	}
+	cfg, ok := r.resolveSkillConfig("missing", "skill")
+	require.True(t, ok)
+	require.Equal(t, "k", cfg.APIKey)
+}
+
+func TestRepository_resolveSkillConfig_NilReceiver(t *testing.T) {
+	var r *Repository
+	_, ok := r.resolveSkillConfig("k", "n")
+	require.False(t, ok)
 }
 
 func TestRepository_PrecedenceNoFallback(t *testing.T) {
@@ -715,4 +811,10 @@ func writeSkill(t *testing.T, root, name, skillMd string) string {
 	)
 	require.NoError(t, err)
 	return dir
+}
+
+type marshalTextErr struct{}
+
+func (marshalTextErr) MarshalText() ([]byte, error) {
+	return nil, errors.New("boom")
 }

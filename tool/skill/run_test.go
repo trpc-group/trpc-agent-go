@@ -13,6 +13,7 @@ package skill
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -247,6 +248,40 @@ func TestRunTool_SkillRunEnvProvider(t *testing.T) {
 		require.Equal(t, outA, out.OutputFiles[0].Name)
 		require.Contains(t, out.OutputFiles[0].Content, "host")
 	})
+
+	t.Run("skips injection on provider error", func(t *testing.T) {
+		os.Unsetenv("FOO")
+		repo.err = errors.New("provider failed")
+
+		outA := "out/env_err/a.txt"
+		glob := "out/env_err/*.txt"
+
+		args := runInput{
+			Skill: testSkillName,
+			Command: "mkdir -p out/env_err; " +
+				"echo \"$FOO\" > " + outA,
+			OutputFiles: []string{glob},
+		}
+
+		enc, err := jsonMarshal(args)
+		require.NoError(t, err)
+
+		res, err := rt.Call(context.Background(), enc)
+		require.NoError(t, err)
+
+		out := res.(runOutput)
+		require.Equal(t, 0, out.ExitCode)
+		require.Len(t, out.OutputFiles, 1)
+		require.Equal(t, outA, out.OutputFiles[0].Name)
+		require.Empty(t, strings.TrimSpace(out.OutputFiles[0].Content))
+	})
+}
+
+func TestIsValidEnvVarName(t *testing.T) {
+	require.False(t, isValidEnvVarName(""))
+	require.False(t, isValidEnvVarName("0ABC"))
+	require.False(t, isValidEnvVarName("A-B"))
+	require.True(t, isValidEnvVarName("A0_B"))
 }
 
 func TestRunTool_StateDelta_EmitsArtifactRefs(t *testing.T) {
