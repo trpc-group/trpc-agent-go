@@ -16,6 +16,7 @@ import (
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -203,4 +204,21 @@ func TestUserMessageFromInputContentsBinaryIDFile_ArtifactRef(t *testing.T) {
 	require.NotNil(t, msg.ContentParts[0].File)
 	assert.Equal(t, "demo.pdf", msg.ContentParts[0].File.Name)
 	assert.Equal(t, artifactRef, msg.ContentParts[0].File.FileID)
+}
+
+func TestFileFromBinaryID_NonBinaryNil(t *testing.T) {
+	got := fileFromBinaryID(types.InputContent{
+		Type: types.InputContentTypeText,
+	})
+	assert.Nil(t, got)
+}
+
+func TestFileNameFromArtifactRef_EdgeCases(t *testing.T) {
+	assert.Equal(t, "", fileNameFromArtifactRef("file-123"))
+
+	invalidVer := fileref.ArtifactPrefix + "a@x"
+	assert.Equal(t, "", fileNameFromArtifactRef(invalidVer))
+
+	invalidBase := fileref.ArtifactPrefix + "..@0"
+	assert.Equal(t, "", fileNameFromArtifactRef(invalidBase))
 }

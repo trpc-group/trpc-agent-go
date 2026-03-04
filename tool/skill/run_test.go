@@ -2598,6 +2598,26 @@ func TestRunTool_RequireSkillLoaded_NotLoaded_Error(t *testing.T) {
 	require.Contains(t, err.Error(), "skill_load")
 }
 
+func TestRunTool_RequireSkillLoaded_NoInvocation_OK(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	rt := NewRunTool(
+		repo,
+		localexec.New(),
+		WithRequireSkillLoaded(true),
+	)
+
+	args := runInput{Skill: testSkillName, Command: echoOK,
+		Timeout: timeoutSecSmall}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	_, err = rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+}
+
 func TestRunTool_RequireSkillLoaded_Loaded_OK(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, testSkillName)
@@ -2629,6 +2649,16 @@ func TestRunTool_RequireSkillLoaded_Loaded_OK(t *testing.T) {
 
 	_, err = rt.Call(ctx, enc)
 	require.NoError(t, err)
+}
+
+func TestFileNameFromArtifactRef_EdgeCases(t *testing.T) {
+	require.Equal(t, "", fileNameFromArtifactRef("file-123"))
+
+	invalidVer := fileref.ArtifactPrefix + "a@x"
+	require.Equal(t, "", fileNameFromArtifactRef(invalidVer))
+
+	invalidBase := fileref.ArtifactPrefix + "..@0"
+	require.Equal(t, "", fileNameFromArtifactRef(invalidBase))
 }
 
 func TestRunTool_StagesUserFileInputs_DownloadError_Warn(t *testing.T) {
