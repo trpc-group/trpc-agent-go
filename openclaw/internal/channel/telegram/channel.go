@@ -63,6 +63,8 @@ const (
 	defaultGroupPolicy = groupPolicyDisabled
 
 	defaultPairingTTL = time.Hour
+
+	defaultMaxDownloadBytes int64 = 8 << 20
 )
 
 const (
@@ -74,6 +76,8 @@ Code: %s
 
 Ask the operator to approve:
 openclaw pairing approve %s -config <CONFIG>`
+
+	errNonPositiveMaxDownloadBytes = "telegram: non-positive max download bytes"
 )
 
 type gatewayClient interface {
@@ -106,6 +110,12 @@ type botAPI interface {
 		ctx context.Context,
 		params tgapi.SendChatActionParams,
 	) error
+
+	DownloadFileByID(
+		ctx context.Context,
+		fileID string,
+		maxBytes int64,
+	) (tgapi.File, []byte, error)
 }
 
 // BotInfo represents Telegram bot metadata used by the channel.
@@ -163,6 +173,8 @@ type config struct {
 	pairingTTL time.Duration
 
 	apiOptions []tgapi.Option
+
+	maxDownloadBytes int64
 
 	streamingMode string
 }
@@ -257,6 +269,12 @@ func WithAPIOptions(opts ...tgapi.Option) Option {
 	return func(c *config) { c.apiOptions = append(c.apiOptions, opts...) }
 }
 
+// WithMaxDownloadBytes sets the per-file download limit for Telegram
+// attachments.
+func WithMaxDownloadBytes(maxBytes int64) Option {
+	return func(c *config) { c.maxDownloadBytes = maxBytes }
+}
+
 // WithStreamingMode controls how replies are delivered to Telegram.
 func WithStreamingMode(mode string) Option {
 	return func(c *config) { c.streamingMode = mode }
@@ -289,6 +307,8 @@ type Channel struct {
 
 	pairing pairingStore
 
+	maxDownloadBytes int64
+
 	streamingMode string
 
 	lanes    *laneLocker
@@ -311,13 +331,14 @@ func New(
 	}
 
 	cfg := config{
-		startFromLatest: true,
-		pollTimeout:     25 * time.Second,
-		errorBackoff:    1 * time.Second,
-		dmPolicy:        defaultDMPolicy,
-		groupPolicy:     defaultGroupPolicy,
-		pairingTTL:      defaultPairingTTL,
-		streamingMode:   defaultStreamingMode,
+		startFromLatest:  true,
+		pollTimeout:      25 * time.Second,
+		errorBackoff:     1 * time.Second,
+		dmPolicy:         defaultDMPolicy,
+		groupPolicy:      defaultGroupPolicy,
+		pairingTTL:       defaultPairingTTL,
+		maxDownloadBytes: defaultMaxDownloadBytes,
+		streamingMode:    defaultStreamingMode,
 	}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -338,6 +359,9 @@ func New(
 	}
 	if cfg.pairingTTL <= 0 {
 		return nil, errors.New("telegram: non-positive pairing ttl")
+	}
+	if cfg.maxDownloadBytes <= 0 {
+		return nil, errors.New(errNonPositiveMaxDownloadBytes)
 	}
 
 	streamingMode, err := parseStreamingMode(cfg.streamingMode)
@@ -371,21 +395,22 @@ func New(
 	}
 
 	return &Channel{
-		bot:             api,
-		info:            bot,
-		gw:              gw,
-		store:           store,
-		startFromLatest: cfg.startFromLatest,
-		pollTimeout:     cfg.pollTimeout,
-		errorBackoff:    cfg.errorBackoff,
-		dmPolicy:        dmPolicy,
-		groupPolicy:     groupPolicy,
-		allowUsers:      cfg.allowUsers,
-		allowThreads:    cfg.allowThreads,
-		pairing:         dmPairing,
-		streamingMode:   streamingMode,
-		lanes:           newLaneLocker(),
-		inflight:        newInflightRequests(),
+		bot:              api,
+		info:             bot,
+		gw:               gw,
+		store:            store,
+		startFromLatest:  cfg.startFromLatest,
+		pollTimeout:      cfg.pollTimeout,
+		errorBackoff:     cfg.errorBackoff,
+		dmPolicy:         dmPolicy,
+		groupPolicy:      groupPolicy,
+		allowUsers:       cfg.allowUsers,
+		allowThreads:     cfg.allowThreads,
+		pairing:          dmPairing,
+		maxDownloadBytes: cfg.maxDownloadBytes,
+		streamingMode:    streamingMode,
+		lanes:            newLaneLocker(),
+		inflight:         newInflightRequests(),
 	}, nil
 }
 
@@ -476,7 +501,7 @@ func (c *Channel) handleMessage(
 	requestID := buildRequestID(chatID, messageThreadID, msg.MessageID)
 	sessionID := buildSessionID(fromID, thread)
 
-	cmd := parseCommand(msg.Text, c.info)
+	cmd := parseCommand(joinMessageText(msg.Text, msg.Caption), c.info)
 	if cmd != "" {
 		switch cmd {
 		case commandHelp:
@@ -516,8 +541,7 @@ func (c *Channel) handleMessage(
 			fromID,
 			thread,
 			requestID,
-			msg.MessageID,
-			msg.Text,
+			msg,
 		)
 	})
 }

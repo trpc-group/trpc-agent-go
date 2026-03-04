@@ -273,6 +273,142 @@ func TestClient_SendChatAction(t *testing.T) {
 	))
 }
 
+func TestClient_GetFile(t *testing.T) {
+	t.Parallel()
+
+	const (
+		testFileID   = "file_1"
+		testFilePath = "photos/file_1.jpg"
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		require.Equal(t, methodGet, r.Method)
+		require.Equal(t, "/bot"+testToken+"/"+pathGetFile, r.URL.Path)
+		require.Equal(t, testFileID, r.URL.Query().Get(queryFileID))
+
+		_ = json.NewEncoder(w).Encode(apiResponse[File]{
+			OK: true,
+			Result: File{
+				FileID:   testFileID,
+				FilePath: testFilePath,
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := New(
+		testToken,
+		WithBaseURL(srv.URL),
+		WithHTTPClient(srv.Client()),
+	)
+	require.NoError(t, err)
+
+	f, err := c.GetFile(context.Background(), testFileID)
+	require.NoError(t, err)
+	require.Equal(t, testFileID, f.FileID)
+	require.Equal(t, testFilePath, f.FilePath)
+}
+
+func TestClient_DownloadFileByID(t *testing.T) {
+	t.Parallel()
+
+	const (
+		testFileID   = "file_1"
+		testFilePath = "photos/file_1.jpg"
+	)
+
+	expected := []byte("abc")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		switch r.URL.Path {
+		case "/bot" + testToken + "/" + pathGetFile:
+			_ = json.NewEncoder(w).Encode(apiResponse[File]{
+				OK: true,
+				Result: File{
+					FileID:   testFileID,
+					FilePath: testFilePath,
+				},
+			})
+			return
+		case "/file/bot" + testToken + "/" + testFilePath:
+			_, _ = w.Write(expected)
+			return
+		default:
+			http.NotFound(w, r)
+			return
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := New(
+		testToken,
+		WithBaseURL(srv.URL),
+		WithHTTPClient(srv.Client()),
+	)
+	require.NoError(t, err)
+
+	f, data, err := c.DownloadFileByID(
+		context.Background(),
+		testFileID,
+		int64(len(expected)),
+	)
+	require.NoError(t, err)
+	require.Equal(t, testFilePath, f.FilePath)
+	require.Equal(t, expected, data)
+}
+
+func TestClient_DownloadFileByID_TooLarge(t *testing.T) {
+	t.Parallel()
+
+	const (
+		testFileID   = "file_1"
+		testFilePath = "photos/file_1.jpg"
+	)
+
+	body := []byte("abcd")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		switch r.URL.Path {
+		case "/bot" + testToken + "/" + pathGetFile:
+			_ = json.NewEncoder(w).Encode(apiResponse[File]{
+				OK: true,
+				Result: File{
+					FileID:   testFileID,
+					FilePath: testFilePath,
+				},
+			})
+			return
+		case "/file/bot" + testToken + "/" + testFilePath:
+			_, _ = w.Write(body)
+			return
+		default:
+			http.NotFound(w, r)
+			return
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := New(
+		testToken,
+		WithBaseURL(srv.URL),
+		WithHTTPClient(srv.Client()),
+	)
+	require.NoError(t, err)
+
+	_, _, err = c.DownloadFileByID(context.Background(), testFileID, 3)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "too large")
+}
+
 func TestClient_GetWebhookInfo(t *testing.T) {
 	t.Parallel()
 

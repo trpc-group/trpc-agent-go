@@ -13,6 +13,7 @@ package telegram
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -34,7 +35,7 @@ type UpdatesClient interface {
 type MessageHandler func(ctx context.Context, msg Message) error
 
 // Poller consumes updates via getUpdates and calls the handler for
-// each text message.
+// each message with user content.
 type Poller struct {
 	client          UpdatesClient
 	timeout         time.Duration
@@ -164,12 +165,12 @@ func (p *Poller) Run(ctx context.Context) error {
 				p.persistOffset(ctx, offset)
 				continue
 			}
-			if msg.Text == "" {
+			if msg.From != nil && msg.From.IsBot {
 				offset = nextOffset
 				p.persistOffset(ctx, offset)
 				continue
 			}
-			if msg.From != nil && msg.From.IsBot {
+			if !hasUserContent(msg) {
 				offset = nextOffset
 				p.persistOffset(ctx, offset)
 				continue
@@ -185,6 +186,34 @@ func (p *Poller) Run(ctx context.Context) error {
 			p.persistOffset(ctx, offset)
 		}
 	}
+}
+
+func hasUserContent(msg *Message) bool {
+	if msg == nil {
+		return false
+	}
+	if strings.TrimSpace(msg.Text) != "" {
+		return true
+	}
+	if strings.TrimSpace(msg.Caption) != "" {
+		return true
+	}
+	if len(msg.Photo) > 0 {
+		return true
+	}
+	if msg.Document != nil {
+		return true
+	}
+	if msg.Audio != nil {
+		return true
+	}
+	if msg.Voice != nil {
+		return true
+	}
+	if msg.Video != nil {
+		return true
+	}
+	return false
 }
 
 func (p *Poller) bootstrapOffset(

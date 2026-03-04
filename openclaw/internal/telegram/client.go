@@ -39,12 +39,28 @@ const (
 	methodPost = "POST"
 
 	pathEditMessageText = "editMessageText"
+	pathGetFile         = "getFile"
 	pathGetMe           = "getMe"
 	pathGetUpdate       = "getUpdates"
 	pathGetWebhookInfo  = "getWebhookInfo"
 	pathSendChatAction  = "sendChatAction"
 	pathSendMsg         = "sendMessage"
 )
+
+const queryFileID = "file_id"
+
+const (
+	errEmptyFileID     = "telegram: empty file id"
+	errEmptyFilePath   = "telegram: empty file path"
+	errInvalidMaxBytes = "telegram: non-positive max bytes"
+	errFileTooLarge    = "telegram: file too large"
+)
+
+// ErrFileTooLarge is returned when a downloaded file exceeds the configured
+// maximum size.
+var ErrFileTooLarge = errors.New(errFileTooLarge)
+
+const maxErrorBodyBytes int64 = 4 << 10
 
 type redactedError struct {
 	msg string
@@ -363,6 +379,110 @@ func (c *Client) SendChatAction(
 	})
 }
 
+// GetFile resolves a file ID into a downloadable file path.
+func (c *Client) GetFile(ctx context.Context, fileID string) (File, error) {
+	fileID = strings.TrimSpace(fileID)
+	if fileID == "" {
+		return File{}, errors.New(errEmptyFileID)
+	}
+
+	values := url.Values{}
+	values.Set(queryFileID, fileID)
+
+	var rsp apiResponse[File]
+	err := c.doWithRetry(ctx, func(ctx context.Context) error {
+		status, err := c.doOnce(
+			ctx,
+			methodGet,
+			pathGetFile,
+			values,
+			nil,
+			&rsp,
+		)
+		if err != nil {
+			return err
+		}
+		return validateResponse(status, rsp)
+	})
+	if err != nil {
+		return File{}, err
+	}
+	return rsp.Result, nil
+}
+
+// DownloadFile downloads the file content by its Telegram file path.
+func (c *Client) DownloadFile(
+	ctx context.Context,
+	filePath string,
+	maxBytes int64,
+) ([]byte, error) {
+	filePath = strings.TrimSpace(filePath)
+	if filePath == "" {
+		return nil, errors.New(errEmptyFilePath)
+	}
+	if maxBytes <= 0 {
+		return nil, errors.New(errInvalidMaxBytes)
+	}
+
+	u, err := url.Parse(c.baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("telegram: parse base url: %w", err)
+	}
+
+	filePath = strings.TrimPrefix(filePath, "/")
+	u = u.JoinPath("file", "bot"+c.token, filePath)
+
+	req, err := http.NewRequestWithContext(ctx, methodGet, u.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("telegram: new request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, c.redactErr(fmt.Errorf("telegram: request: %w", err))
+	}
+	defer resp.Body.Close()
+
+	if resp.ContentLength > maxBytes && resp.ContentLength > 0 {
+		return nil, ErrFileTooLarge
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		raw, err := readLimited(resp.Body, maxErrorBodyBytes)
+		if err != nil {
+			return nil, fmt.Errorf("telegram: read response: %w", err)
+		}
+		return nil, statusError{
+			status: resp.StatusCode,
+			body:   strings.TrimSpace(string(raw)),
+		}
+	}
+
+	return readLimited(resp.Body, maxBytes)
+}
+
+// DownloadFileByID resolves the file ID and downloads its content.
+func (c *Client) DownloadFileByID(
+	ctx context.Context,
+	fileID string,
+	maxBytes int64,
+) (File, []byte, error) {
+	f, err := c.GetFile(ctx, fileID)
+	if err != nil {
+		return File{}, nil, err
+	}
+
+	filePath := strings.TrimSpace(f.FilePath)
+	if filePath == "" {
+		return File{}, nil, errors.New(errEmptyFilePath)
+	}
+	data, err := c.DownloadFile(ctx, filePath, maxBytes)
+	if err != nil {
+		return File{}, nil, err
+	}
+	return f, data, nil
+}
+
 type apiResponse[T any] struct {
 	OK          bool           `json:"ok"`
 	Result      T              `json:"result,omitempty"`
@@ -488,6 +608,27 @@ func (c *Client) doOnce(
 		}
 	}
 	return resp.StatusCode, nil
+}
+
+func readLimited(r io.Reader, maxBytes int64) ([]byte, error) {
+	if maxBytes <= 0 {
+		return nil, errors.New(errInvalidMaxBytes)
+	}
+
+	limit := maxBytes + 1
+	if limit <= 0 {
+		return nil, errors.New(errInvalidMaxBytes)
+	}
+
+	lr := &io.LimitedReader{R: r, N: limit}
+	data, err := io.ReadAll(lr)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, ErrFileTooLarge
+	}
+	return data, nil
 }
 
 func (c *Client) redactErr(err error) error {

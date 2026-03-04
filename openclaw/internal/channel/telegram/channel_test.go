@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwclient"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
 	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
 )
 
@@ -87,7 +88,21 @@ type stubBot struct {
 	updates   [][]tgapi.Update
 	getError  error
 
+	downloads map[string]stubDownload
+	dlCalls   []downloadCall
+
 	nextMessageID int
+}
+
+type downloadCall struct {
+	fileID   string
+	maxBytes int64
+}
+
+type stubDownload struct {
+	file tgapi.File
+	data []byte
+	err  error
 }
 
 func (b *stubBot) GetUpdates(
@@ -150,6 +165,29 @@ func (b *stubBot) SendChatAction(
 	defer b.mu.Unlock()
 	b.actions = append(b.actions, params)
 	return b.actionErr
+}
+
+func (b *stubBot) DownloadFileByID(
+	_ context.Context,
+	fileID string,
+	maxBytes int64,
+) (tgapi.File, []byte, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	b.dlCalls = append(b.dlCalls, downloadCall{
+		fileID:   fileID,
+		maxBytes: maxBytes,
+	})
+
+	if b.downloads == nil {
+		return tgapi.File{}, nil, errors.New("download not configured")
+	}
+	res, ok := b.downloads[fileID]
+	if !ok {
+		return tgapi.File{}, nil, errors.New("unknown file id")
+	}
+	return res.file, res.data, res.err
 }
 
 type stubOffsetStore struct {
@@ -318,6 +356,178 @@ func TestChannel_HandleMessage_PrivateChat(t *testing.T) {
 	require.Equal(t, 0, sent.MessageThreadID)
 	require.Equal(t, 3, sent.ReplyToMessageID)
 	require.Equal(t, "ok", sent.Text)
+}
+
+func TestChannel_HandleMessage_PhotoWithCaption_BuildsImagePart(t *testing.T) {
+	t.Parallel()
+
+	photoBytes := []byte{0xff, 0xd8, 0xff, 0xd9}
+
+	gw := &stubGateway{
+		rsp: gwclient.MessageResponse{
+			StatusCode: http.StatusOK,
+			Reply:      "ok",
+		},
+	}
+	dir := t.TempDir()
+	ch, err := New(
+		testToken,
+		BotInfo{Username: "bot"},
+		gw,
+		WithStateDir(dir),
+		WithDMPolicy(dmPolicyOpen),
+	)
+	require.NoError(t, err)
+
+	bot := &stubBot{
+		downloads: map[string]stubDownload{
+			"p1": {
+				file: tgapi.File{FilePath: "photos/file_1.jpg"},
+				data: photoBytes,
+			},
+		},
+	}
+	ch.bot = bot
+
+	err = ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID: 3,
+		From:      &tgapi.User{ID: 2},
+		Chat:      &tgapi.Chat{ID: 1, Type: chatTypePrivate},
+		Caption:   "hi",
+		Photo: []tgapi.PhotoSize{
+			{FileID: "p1", FileSize: int64(len(photoBytes))},
+		},
+	})
+	require.NoError(t, err)
+
+	gw.mu.Lock()
+	require.Len(t, gw.reqs, 1)
+	req := gw.reqs[0]
+	gw.mu.Unlock()
+
+	require.Equal(t, "hi", req.Text)
+	require.Len(t, req.ContentParts, 1)
+
+	part := req.ContentParts[0]
+	require.Equal(t, gwproto.PartTypeImage, part.Type)
+	require.NotNil(t, part.Image)
+	require.Equal(t, photoBytes, part.Image.Data)
+	require.Equal(t, "jpeg", part.Image.Format)
+}
+
+func TestChannel_HandleMessage_Document_BuildsFilePart(t *testing.T) {
+	t.Parallel()
+
+	docBytes := []byte("hello")
+
+	gw := &stubGateway{
+		rsp: gwclient.MessageResponse{
+			StatusCode: http.StatusOK,
+			Reply:      "ok",
+		},
+	}
+	dir := t.TempDir()
+	ch, err := New(
+		testToken,
+		BotInfo{Username: "bot"},
+		gw,
+		WithStateDir(dir),
+		WithDMPolicy(dmPolicyOpen),
+	)
+	require.NoError(t, err)
+
+	bot := &stubBot{
+		downloads: map[string]stubDownload{
+			"d1": {
+				file: tgapi.File{FilePath: "docs/doc.txt"},
+				data: docBytes,
+			},
+		},
+	}
+	ch.bot = bot
+
+	err = ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID: 3,
+		From:      &tgapi.User{ID: 2},
+		Chat:      &tgapi.Chat{ID: 1, Type: chatTypePrivate},
+		Document: &tgapi.Document{
+			FileID:   "d1",
+			FileName: "doc.txt",
+			MimeType: "text/plain",
+			FileSize: int64(len(docBytes)),
+		},
+	})
+	require.NoError(t, err)
+
+	gw.mu.Lock()
+	require.Len(t, gw.reqs, 1)
+	req := gw.reqs[0]
+	gw.mu.Unlock()
+
+	require.Len(t, req.ContentParts, 1)
+	part := req.ContentParts[0]
+	require.Equal(t, gwproto.PartTypeFile, part.Type)
+	require.NotNil(t, part.File)
+	require.Equal(t, "doc.txt", part.File.Filename)
+	require.Equal(t, "text/plain", part.File.Format)
+	require.Equal(t, docBytes, part.File.Data)
+}
+
+func TestChannel_HandleMessage_AudioMP3_BuildsAudioPart(t *testing.T) {
+	t.Parallel()
+
+	audioBytes := []byte("mp3")
+
+	gw := &stubGateway{
+		rsp: gwclient.MessageResponse{
+			StatusCode: http.StatusOK,
+			Reply:      "ok",
+		},
+	}
+	dir := t.TempDir()
+	ch, err := New(
+		testToken,
+		BotInfo{Username: "bot"},
+		gw,
+		WithStateDir(dir),
+		WithDMPolicy(dmPolicyOpen),
+	)
+	require.NoError(t, err)
+
+	bot := &stubBot{
+		downloads: map[string]stubDownload{
+			"a1": {
+				file: tgapi.File{FilePath: "audio/song.mp3"},
+				data: audioBytes,
+			},
+		},
+	}
+	ch.bot = bot
+
+	err = ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID: 3,
+		From:      &tgapi.User{ID: 2},
+		Chat:      &tgapi.Chat{ID: 1, Type: chatTypePrivate},
+		Audio: &tgapi.Audio{
+			FileID:   "a1",
+			FileName: "song.mp3",
+			MimeType: "audio/mpeg",
+			FileSize: int64(len(audioBytes)),
+		},
+	})
+	require.NoError(t, err)
+
+	gw.mu.Lock()
+	require.Len(t, gw.reqs, 1)
+	req := gw.reqs[0]
+	gw.mu.Unlock()
+
+	require.Len(t, req.ContentParts, 1)
+	part := req.ContentParts[0]
+	require.Equal(t, gwproto.PartTypeAudio, part.Type)
+	require.NotNil(t, part.Audio)
+	require.Equal(t, audioBytes, part.Audio.Data)
+	require.Equal(t, "mp3", part.Audio.Format)
 }
 
 func TestChannel_HandleMessage_DMPolicyAllowlist_NoAllowUsers(t *testing.T) {

@@ -12,16 +12,15 @@ package telegram
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 
-	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwclient"
 	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
 )
 
@@ -66,8 +65,7 @@ func (c *Channel) callGatewayAndReply(
 	fromID string,
 	thread string,
 	requestID string,
-	messageID int,
-	text string,
+	msg tgapi.Message,
 ) error {
 	mode := strings.TrimSpace(c.streamingMode)
 	if mode == "" {
@@ -90,15 +88,35 @@ func (c *Channel) callGatewayAndReply(
 		mode,
 	)
 
-	rsp, err := c.gw.SendMessage(ctx, gwclient.MessageRequest{
-		Channel:   channelID,
-		From:      fromID,
-		Thread:    thread,
-		MessageID: strconv.Itoa(messageID),
-		Text:      text,
-		UserID:    fromID,
-		RequestID: requestID,
-	})
+	req, err := c.buildGatewayRequest(ctx, fromID, thread, requestID, msg)
+	if err != nil {
+		if progressCancel != nil {
+			progressCancel()
+		}
+		if progressWG != nil {
+			progressWG.Wait()
+		}
+
+		userMsg := "Failed to process message."
+		var uerr *userError
+		if errors.As(err, &uerr) &&
+			strings.TrimSpace(uerr.userMessage) != "" {
+			userMsg = uerr.userMessage
+		}
+
+		if hasPreview {
+			_ = c.editPreview(ctx, chatID, preview.MessageID, userMsg)
+		} else {
+			c.reply(ctx, chatID, messageThreadID, replyTo, userMsg)
+		}
+
+		if errors.As(err, &uerr) {
+			return nil
+		}
+		return err
+	}
+
+	rsp, err := c.gw.SendMessage(ctx, req)
 
 	if progressCancel != nil {
 		progressCancel()

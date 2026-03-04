@@ -54,6 +54,8 @@ type channelCfg struct {
 	GroupPolicy  string   `yaml:"group_policy"`
 	AllowThreads []string `yaml:"allow_threads"`
 	PairingTTL   string   `yaml:"pairing_ttl"`
+
+	MaxDownloadBytes *int64 `yaml:"max_download_bytes"`
 }
 
 func newChannel(
@@ -125,6 +127,12 @@ func newChannel(
 			return nil, err
 		}
 		chOpts = append(chOpts, tgch.WithPairingTTL(ttl))
+	}
+	if cfg.MaxDownloadBytes != nil {
+		chOpts = append(
+			chOpts,
+			tgch.WithMaxDownloadBytes(*cfg.MaxDownloadBytes),
+		)
 	}
 
 	return tgch.New(token, bot, deps.Gateway, chOpts...)

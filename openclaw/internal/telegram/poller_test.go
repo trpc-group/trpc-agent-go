@@ -113,6 +113,98 @@ func TestPoller_BootstrapAndHandleMessage(t *testing.T) {
 	require.Equal(t, 3*time.Second, client.timeouts[2])
 }
 
+func TestPoller_HandlesCaptionMessage(t *testing.T) {
+	t.Parallel()
+
+	client := &stubUpdatesClient{
+		results: [][]Update{
+			{
+				{
+					UpdateID: 1,
+					Message: &Message{
+						MessageID: 1,
+						From:      &User{ID: 1},
+						Chat:      &Chat{ID: 2, Type: chatTypePrivate},
+						Caption:   "cap",
+					},
+				},
+			},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	handled := make(chan struct{}, 1)
+	poller, err := NewPoller(
+		client,
+		WithStartFromLatest(false),
+		WithPollTimeout(0),
+		WithMessageHandler(func(_ context.Context, msg Message) error {
+			require.Equal(t, "cap", msg.Caption)
+			handled <- struct{}{}
+			cancel()
+			return nil
+		}),
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, poller.Run(ctx))
+
+	select {
+	case <-handled:
+	default:
+		t.Fatal("expected handler to be called")
+	}
+}
+
+func TestPoller_HandlesPhotoMessage(t *testing.T) {
+	t.Parallel()
+
+	client := &stubUpdatesClient{
+		results: [][]Update{
+			{
+				{
+					UpdateID: 1,
+					Message: &Message{
+						MessageID: 1,
+						From:      &User{ID: 1},
+						Chat:      &Chat{ID: 2, Type: chatTypePrivate},
+						Photo: []PhotoSize{
+							{FileID: "p1"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	handled := make(chan struct{}, 1)
+	poller, err := NewPoller(
+		client,
+		WithStartFromLatest(false),
+		WithPollTimeout(0),
+		WithMessageHandler(func(_ context.Context, msg Message) error {
+			require.Len(t, msg.Photo, 1)
+			handled <- struct{}{}
+			cancel()
+			return nil
+		}),
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, poller.Run(ctx))
+
+	select {
+	case <-handled:
+	default:
+		t.Fatal("expected handler to be called")
+	}
+}
+
 type stubOffsetStore struct {
 	mu         sync.Mutex
 	readOffset int

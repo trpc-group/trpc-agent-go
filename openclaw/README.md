@@ -403,6 +403,7 @@ channels:
       # proxy: "http://127.0.0.1:7890"
       # http_timeout: "60s"
       # max_retries: 3
+      # max_download_bytes: 8388608
 ```
 
 Run:
@@ -422,6 +423,8 @@ Configure Telegram networking under the Telegram channel `config:`:
 - `proxy`: HTTP proxy URL (optional)
 - `http_timeout`: HTTP client timeout (optional; should be > 25s long polling)
 - `max_retries`: retry count for transient failures (optional; default: 3)
+- `max_download_bytes`: per-file download limit for inbound attachments
+  (optional; default: 8388608)
 
 To override the Telegram API base URL (for testing), set
 `OPENCLAW_TELEGRAM_BASE_URL`.
@@ -437,7 +440,13 @@ go run ./cmd/openclaw doctor -config ./openclaw.yaml
 
 ### 5) Send a message
 
-Open a chat with your bot (or add it into a group) and send a text message.
+Open a chat with your bot (or add it into a group) and send:
+
+- a text message, or
+- a photo, document, audio, voice note, or video.
+
+Inbound attachments are downloaded from Telegram and forwarded to the gateway
+as multimodal `content_parts`.
 
 By default, DMs are **fail-closed** and require pairing.
 

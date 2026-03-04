@@ -63,8 +63,7 @@ func TestChannel_CallGatewayAndReply_4xxEditsPreviewAndDrops(t *testing.T) {
 		"u1",
 		"",
 		"rid",
-		2,
-		"hi",
+		tgapi.Message{MessageID: 2, Text: "hi"},
 	)
 	require.NoError(t, err)
 
@@ -100,8 +99,7 @@ func TestChannel_CallGatewayAndReply_5xxReturnsError(t *testing.T) {
 		"u1",
 		"",
 		"rid",
-		2,
-		"hi",
+		tgapi.Message{MessageID: 2, Text: "hi"},
 	)
 	require.Error(t, err)
 
@@ -135,8 +133,7 @@ func TestChannel_CallGatewayAndReply_IgnoredEditsPreview(t *testing.T) {
 		"u1",
 		"",
 		"rid",
-		2,
-		"hi",
+		tgapi.Message{MessageID: 2, Text: "hi"},
 	)
 	require.NoError(t, err)
 
@@ -172,8 +169,7 @@ func TestChannel_CallGatewayAndReply_NoReplyEditsPreview(t *testing.T) {
 		"u1",
 		"",
 		"rid",
-		2,
-		"hi",
+		tgapi.Message{MessageID: 2, Text: "hi"},
 	)
 	require.NoError(t, err)
 
@@ -207,8 +203,7 @@ func TestChannel_CallGatewayAndReply_StreamingOff(t *testing.T) {
 		"u1",
 		"",
 		"rid",
-		2,
-		"hi",
+		tgapi.Message{MessageID: 2, Text: "hi"},
 	)
 	require.NoError(t, err)
 
@@ -244,8 +239,7 @@ func TestChannel_CallGatewayAndReply_SplitsReplyForPreview(t *testing.T) {
 		"u1",
 		"",
 		"rid",
-		2,
-		"hi",
+		tgapi.Message{MessageID: 2, Text: "hi"},
 	)
 	require.NoError(t, err)
 
