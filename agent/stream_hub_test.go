@@ -49,7 +49,9 @@ func TestStreamHub_GetOrCreateStreamHub_NilInvocation(t *testing.T) {
 	require.False(t, ok)
 }
 
-func TestStreamHub_OpenWriterAndReader_NilContextUsesBackground(t *testing.T) {
+func TestStreamHub_OpenWriterAndReader_NilContextUsesBackground(
+	t *testing.T,
+) {
 	hub := newStreamHub()
 	require.NotNil(t, hub)
 

@@ -2773,6 +2773,114 @@ func TestLLMNode_StreamOutput_NodeToNode(t *testing.T) {
 	require.Equal(t, dm.final, final[stateKeyOut])
 }
 
+func TestLLMNode_StreamOutput_WritesFinalWhenNoDeltas(t *testing.T) {
+	const (
+		nodeSetup   = "setup"
+		nodeLLM     = "llm"
+		nodeConsume = "consume"
+		nodeFinish  = "finish"
+
+		streamName   = "out"
+		userInput    = "hi"
+		invocationID = "inv-stream-final-only"
+		stateKeyOut  = "captured"
+	)
+
+	dm := &deltaModel{
+		final: "final",
+	}
+
+	sg := NewStateGraph(MessagesStateSchema())
+	sg.AddNode(nodeSetup, func(context.Context, State) (any, error) {
+		return State{}, nil
+	})
+	sg.AddLLMNode(
+		nodeLLM,
+		dm,
+		"ignore",
+		nil,
+		WithStreamOutput(streamName),
+	)
+	sg.AddNode(nodeConsume, func(ctx context.Context, _ State) (any, error) {
+		r, err := OpenStreamReader(ctx, streamName)
+		if err != nil {
+			return nil, err
+		}
+		defer r.Close()
+
+		b, err := io.ReadAll(r)
+		if err != nil {
+			return nil, err
+		}
+		return State{stateKeyOut: string(b)}, nil
+	})
+	sg.AddNode(nodeFinish, func(context.Context, State) (any, error) {
+		return State{}, nil
+	})
+
+	sg.SetEntryPoint(nodeSetup)
+	sg.SetFinishPoint(nodeFinish)
+	sg.AddEdge(nodeSetup, nodeLLM)
+	sg.AddEdge(nodeSetup, nodeConsume)
+	sg.AddJoinEdge([]string{nodeLLM, nodeConsume}, nodeFinish)
+
+	g, err := sg.Compile()
+	require.NoError(t, err)
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(agent.WithInvocationID(invocationID))
+	ch, err := exec.Execute(
+		context.Background(),
+		State{StateKeyUserInput: userInput},
+		inv,
+	)
+	require.NoError(t, err)
+
+	final := make(State)
+	for ev := range ch {
+		if ev.Done && ev.StateDelta != nil {
+			for k, vb := range ev.StateDelta {
+				if k == MetadataKeyNode ||
+					k == MetadataKeyPregel ||
+					k == MetadataKeyChannel ||
+					k == MetadataKeyState ||
+					k == MetadataKeyCompletion {
+					continue
+				}
+				var v any
+				if err := json.Unmarshal(vb, &v); err == nil {
+					final[k] = v
+				}
+			}
+		}
+	}
+
+	require.Equal(t, dm.final, final[stateKeyOut])
+}
+
+func TestOpenStreamWriter_DelegatesToAgent(t *testing.T) {
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	const streamName = "s"
+	w, err := OpenStreamWriter(ctx, streamName)
+	require.NoError(t, err)
+
+	r, err := OpenStreamReader(ctx, streamName)
+	require.NoError(t, err)
+	defer r.Close()
+
+	const want = "x"
+	_, err = io.WriteString(w, want)
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+
+	b, err := io.ReadAll(r)
+	require.NoError(t, err)
+	require.Equal(t, want, string(b))
+}
+
 func TestNewToolsNodeFunc_StaticToolSets(t *testing.T) {
 	schema := MessagesStateSchema()
 	sg := NewStateGraph(schema)
