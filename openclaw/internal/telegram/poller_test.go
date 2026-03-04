@@ -205,6 +205,108 @@ func TestPoller_HandlesPhotoMessage(t *testing.T) {
 	}
 }
 
+func TestPoller_HandlesMediaMessages(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		check func(t *testing.T, msg Message)
+		msg   *Message
+	}{
+		{
+			name: "document",
+			msg: &Message{
+				MessageID: 1,
+				From:      &User{ID: 1},
+				Chat:      &Chat{ID: 2, Type: chatTypePrivate},
+				Document:  &Document{FileID: "d1"},
+			},
+			check: func(t *testing.T, msg Message) {
+				require.NotNil(t, msg.Document)
+			},
+		},
+		{
+			name: "audio",
+			msg: &Message{
+				MessageID: 1,
+				From:      &User{ID: 1},
+				Chat:      &Chat{ID: 2, Type: chatTypePrivate},
+				Audio:     &Audio{FileID: "a1"},
+			},
+			check: func(t *testing.T, msg Message) {
+				require.NotNil(t, msg.Audio)
+			},
+		},
+		{
+			name: "voice",
+			msg: &Message{
+				MessageID: 1,
+				From:      &User{ID: 1},
+				Chat:      &Chat{ID: 2, Type: chatTypePrivate},
+				Voice:     &Voice{FileID: "v1"},
+			},
+			check: func(t *testing.T, msg Message) {
+				require.NotNil(t, msg.Voice)
+			},
+		},
+		{
+			name: "video",
+			msg: &Message{
+				MessageID: 1,
+				From:      &User{ID: 1},
+				Chat:      &Chat{ID: 2, Type: chatTypePrivate},
+				Video:     &Video{FileID: "vid1"},
+			},
+			check: func(t *testing.T, msg Message) {
+				require.NotNil(t, msg.Video)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			client := &stubUpdatesClient{
+				results: [][]Update{
+					{
+						{UpdateID: 1, Message: tt.msg},
+					},
+				},
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+
+			handled := make(chan struct{}, 1)
+			poller, err := NewPoller(
+				client,
+				WithStartFromLatest(false),
+				WithPollTimeout(0),
+				WithMessageHandler(func(
+					_ context.Context,
+					msg Message,
+				) error {
+					tt.check(t, msg)
+					handled <- struct{}{}
+					cancel()
+					return nil
+				}),
+			)
+			require.NoError(t, err)
+
+			require.NoError(t, poller.Run(ctx))
+
+			select {
+			case <-handled:
+			default:
+				t.Fatal("expected handler to be called")
+			}
+		})
+	}
+}
+
 type stubOffsetStore struct {
 	mu         sync.Mutex
 	readOffset int

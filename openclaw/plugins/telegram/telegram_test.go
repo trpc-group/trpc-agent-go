@@ -85,6 +85,7 @@ group_policy: allowlist
 allow_threads:
   - "x"
 pairing_ttl: 30m
+max_download_bytes: 123
 `),
 	}
 

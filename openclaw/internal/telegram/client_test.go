@@ -19,6 +19,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -516,6 +517,171 @@ func TestClient_New_ValidationErrors(t *testing.T) {
 
 	_, err = New(testToken, WithRetryMaxDelay(-time.Second))
 	require.Error(t, err)
+}
+
+func TestClient_GetFile_EmptyFileID(t *testing.T) {
+	t.Parallel()
+
+	c, err := New(testToken)
+	require.NoError(t, err)
+
+	_, err = c.GetFile(context.Background(), " ")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), errEmptyFileID)
+}
+
+func TestClient_DownloadFile_ValidationErrors(t *testing.T) {
+	t.Parallel()
+
+	c, err := New(testToken)
+	require.NoError(t, err)
+
+	_, err = c.DownloadFile(context.Background(), " ", 1)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), errEmptyFilePath)
+
+	_, err = c.DownloadFile(context.Background(), "x", 0)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), errInvalidMaxBytes)
+}
+
+func TestClient_DownloadFile_ParseBaseURLError(t *testing.T) {
+	t.Parallel()
+
+	c := &Client{
+		baseURL:    "http://[::1",
+		token:      testToken,
+		httpClient: http.DefaultClient,
+	}
+
+	_, err := c.DownloadFile(context.Background(), "x", 1)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "parse base url")
+}
+
+func TestClient_DownloadFile_ContentLengthTooLarge(t *testing.T) {
+	t.Parallel()
+
+	const filePath = "photos/file_1.jpg"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		require.Equal(
+			t,
+			"/file/bot"+testToken+"/"+filePath,
+			r.URL.Path,
+		)
+		w.Header().Set("Content-Length", "4")
+		_, _ = io.WriteString(w, "abcd")
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := New(
+		testToken,
+		WithBaseURL(srv.URL),
+		WithHTTPClient(srv.Client()),
+	)
+	require.NoError(t, err)
+
+	_, err = c.DownloadFile(context.Background(), filePath, 3)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, ErrFileTooLarge))
+}
+
+func TestClient_DownloadFile_StatusError(t *testing.T) {
+	t.Parallel()
+
+	const filePath = "photos/file_1.jpg"
+	const errBody = "nope"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		w.WriteHeader(http.StatusTeapot)
+		_, _ = io.WriteString(w, errBody)
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := New(
+		testToken,
+		WithBaseURL(srv.URL),
+		WithHTTPClient(srv.Client()),
+	)
+	require.NoError(t, err)
+
+	_, err = c.DownloadFile(context.Background(), filePath, 10)
+	require.Error(t, err)
+
+	var se statusError
+	require.True(t, errors.As(err, &se))
+	require.Equal(t, http.StatusTeapot, se.status)
+	require.Equal(t, errBody, se.body)
+}
+
+func TestClient_DownloadFileByID_EmptyFilePath(t *testing.T) {
+	t.Parallel()
+
+	const fileID = "file_1"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		require.Equal(t, "/bot"+testToken+"/"+pathGetFile, r.URL.Path)
+		require.Equal(t, fileID, r.URL.Query().Get(queryFileID))
+
+		_ = json.NewEncoder(w).Encode(apiResponse[File]{
+			OK: true,
+			Result: File{
+				FileID:   fileID,
+				FilePath: " ",
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := New(
+		testToken,
+		WithBaseURL(srv.URL),
+		WithHTTPClient(srv.Client()),
+	)
+	require.NoError(t, err)
+
+	_, _, err = c.DownloadFileByID(context.Background(), fileID, 1)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), errEmptyFilePath)
+}
+
+func TestReadLimited_Errors(t *testing.T) {
+	t.Parallel()
+
+	_, err := readLimited(strings.NewReader("x"), 0)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), errInvalidMaxBytes)
+
+	const maxInt64 = int64(^uint64(0) >> 1)
+	_, err = readLimited(strings.NewReader(""), maxInt64)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), errInvalidMaxBytes)
+}
+
+func TestValidateResponse_RetryAfter(t *testing.T) {
+	t.Parallel()
+
+	err := validateResponse(http.StatusTooManyRequests, apiResponse[bool]{
+		OK:          false,
+		ErrorCode:   429,
+		Description: "too many requests",
+		Parameters:  &apiParameters{RetryAfter: 2},
+	})
+	require.Error(t, err)
+
+	var apiErr *apiCallError
+	require.True(t, errors.As(err, &apiErr))
+	require.Equal(t, 2*time.Second, apiErr.retryAfter)
 }
 
 func TestClient_doOnce_NilResponseTarget(t *testing.T) {

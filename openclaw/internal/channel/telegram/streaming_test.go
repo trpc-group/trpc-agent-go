@@ -252,6 +252,131 @@ func TestChannel_CallGatewayAndReply_SplitsReplyForPreview(t *testing.T) {
 	bot.mu.Unlock()
 }
 
+func TestChannel_CallGatewayAndReply_AttachmentTooLargeEditsPreview(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	gw := &stubGateway{}
+	bot := &stubBot{}
+	ch := &Channel{
+		bot:              bot,
+		gw:               gw,
+		streamingMode:    streamingBlock,
+		maxDownloadBytes: 3,
+	}
+
+	err := ch.callGatewayAndReply(
+		context.Background(),
+		1,
+		0,
+		2,
+		"u1",
+		"",
+		"rid",
+		tgapi.Message{
+			MessageID: 2,
+			Photo: []tgapi.PhotoSize{
+				{FileID: "p1", FileSize: 4},
+			},
+		},
+	)
+	require.NoError(t, err)
+
+	gw.mu.Lock()
+	require.Empty(t, gw.reqs)
+	gw.mu.Unlock()
+
+	bot.mu.Lock()
+	require.Len(t, bot.sent, 1)
+	require.Equal(t, processingMessage, bot.sent[0].Text)
+	require.Len(t, bot.edits, 1)
+	require.Equal(t, attachmentTooLargeMsg, bot.edits[0].Text)
+	bot.mu.Unlock()
+}
+
+func TestChannel_CallGatewayAndReply_DownloadFailedEditsPreview(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	gw := &stubGateway{}
+	bot := &stubBot{
+		downloads: map[string]stubDownload{
+			"p1": {err: errors.New("download failed")},
+		},
+	}
+	ch := &Channel{
+		bot:              bot,
+		gw:               gw,
+		streamingMode:    streamingBlock,
+		maxDownloadBytes: 10,
+	}
+
+	err := ch.callGatewayAndReply(
+		context.Background(),
+		1,
+		0,
+		2,
+		"u1",
+		"",
+		"rid",
+		tgapi.Message{
+			MessageID: 2,
+			Photo: []tgapi.PhotoSize{
+				{FileID: "p1"},
+			},
+		},
+	)
+	require.NoError(t, err)
+
+	gw.mu.Lock()
+	require.Empty(t, gw.reqs)
+	gw.mu.Unlock()
+
+	bot.mu.Lock()
+	require.Len(t, bot.edits, 1)
+	require.Equal(t, downloadFailedMessage, bot.edits[0].Text)
+	bot.mu.Unlock()
+}
+
+func TestChannel_CallGatewayAndReply_StreamingOffRepliesOnUserError(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	gw := &stubGateway{}
+	bot := &stubBot{}
+	ch := &Channel{
+		bot:              bot,
+		gw:               gw,
+		streamingMode:    streamingOff,
+		maxDownloadBytes: 3,
+	}
+
+	err := ch.callGatewayAndReply(
+		context.Background(),
+		1,
+		0,
+		2,
+		"u1",
+		"",
+		"rid",
+		tgapi.Message{
+			MessageID: 2,
+			Photo: []tgapi.PhotoSize{
+				{FileID: "p1", FileSize: 4},
+			},
+		},
+	)
+	require.NoError(t, err)
+
+	bot.mu.Lock()
+	require.Len(t, bot.sent, 1)
+	require.Equal(t, attachmentTooLargeMsg, bot.sent[0].Text)
+	bot.mu.Unlock()
+}
+
 func TestChannel_ProgressLoop_EditsAtLeastOnce(t *testing.T) {
 	t.Parallel()
 

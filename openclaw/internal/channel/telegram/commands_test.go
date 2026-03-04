@@ -54,6 +54,41 @@ func TestChannel_HandleMessage_CommandHelp(t *testing.T) {
 	bot.mu.Unlock()
 }
 
+func TestChannel_HandleMessage_CommandHelp_FromCaption(t *testing.T) {
+	t.Parallel()
+
+	gw := &stubGateway{}
+	dir := t.TempDir()
+	ch, err := New(
+		testToken,
+		BotInfo{Username: "bot"},
+		gw,
+		WithStateDir(dir),
+		WithDMPolicy(dmPolicyOpen),
+	)
+	require.NoError(t, err)
+
+	bot := &stubBot{}
+	ch.bot = bot
+
+	err = ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID: 3,
+		From:      &tgapi.User{ID: 2},
+		Chat:      &tgapi.Chat{ID: 1, Type: chatTypePrivate},
+		Caption:   "/help",
+	})
+	require.NoError(t, err)
+
+	gw.mu.Lock()
+	require.Empty(t, gw.reqs)
+	gw.mu.Unlock()
+
+	bot.mu.Lock()
+	require.Len(t, bot.sent, 1)
+	require.Contains(t, bot.sent[0].Text, "Commands:")
+	bot.mu.Unlock()
+}
+
 func TestChannel_HandleMessage_CommandCancel_NoInflight(t *testing.T) {
 	t.Parallel()
 
