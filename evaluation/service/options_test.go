@@ -36,7 +36,6 @@ func (stubRunner) Close() error {
 
 func TestNewOptionsDefaults(t *testing.T) {
 	opts := NewOptions()
-
 	assert.NotNil(t, opts.EvalSetManager)
 	assert.NotNil(t, opts.EvalResultManager)
 	assert.NotNil(t, opts.Registry)
@@ -46,7 +45,6 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.Equal(t, runtime.GOMAXPROCS(0), opts.EvalCaseParallelism)
 	assert.False(t, opts.EvalCaseParallelInferenceEnabled)
 	assert.False(t, opts.EvalCaseParallelEvaluationEnabled)
-
 	sessionID := opts.SessionIDSupplier(context.Background())
 	assert.NotEmpty(t, sessionID)
 }
@@ -54,21 +52,18 @@ func TestNewOptionsDefaults(t *testing.T) {
 func TestWithEvalSetManager(t *testing.T) {
 	custom := evalsetinmemory.New()
 	opts := NewOptions(WithEvalSetManager(custom))
-
 	assert.Equal(t, custom, opts.EvalSetManager)
 }
 
 func TestWithEvalResultManager(t *testing.T) {
 	custom := evalresultinmemory.New()
 	opts := NewOptions(WithEvalResultManager(custom))
-
 	assert.Equal(t, custom, opts.EvalResultManager)
 }
 
 func TestWithRegistry(t *testing.T) {
 	custom := registry.New()
 	opts := NewOptions(WithRegistry(custom))
-
 	assert.Equal(t, custom, opts.Registry)
 }
 
@@ -78,7 +73,6 @@ func TestWithSessionIDSupplier(t *testing.T) {
 		called = true
 		return "session-custom"
 	}
-
 	opts := NewOptions(WithSessionIDSupplier(supplier))
 	assert.Equal(t, "session-custom", opts.SessionIDSupplier(context.Background()))
 	assert.True(t, called)
@@ -86,9 +80,7 @@ func TestWithSessionIDSupplier(t *testing.T) {
 
 func TestWithCallbacks(t *testing.T) {
 	callbacks := &Callbacks{}
-
 	opts := NewOptions(WithCallbacks(callbacks))
-
 	assert.Same(t, callbacks, opts.Callbacks)
 }
 
@@ -96,6 +88,11 @@ func TestWithExpectedRunner(t *testing.T) {
 	custom := stubRunner{}
 	opts := NewOptions(WithExpectedRunner(custom))
 	assert.Equal(t, custom, opts.ExpectedRunner)
+}
+
+func TestWithRunOptions(t *testing.T) {
+	opts := NewOptions(WithRunOptions(agent.WithInstruction("prompt")))
+	assert.Len(t, opts.RunOptions, 1)
 }
 
 func TestWithEvalCaseParallelism(t *testing.T) {

@@ -10,8 +10,9 @@
 package evaluation
 
 import (
-	"runtime"
+	"errors"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	evalresultinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
@@ -37,23 +38,21 @@ type options struct {
 	callbacks                         *service.Callbacks
 	judgeRunner                       runner.Runner
 	numRuns                           int
-	evalCaseParallelism               int
-	evalCaseParallelInferenceEnabled  bool
-	evalCaseParallelEvaluationEnabled bool
+	evalCaseParallelism               *int
+	evalCaseParallelInferenceEnabled  *bool
+	evalCaseParallelEvaluationEnabled *bool
+	runOptions                        []agent.RunOption
 }
 
 // newOptions creates a new options with the default values.
 func newOptions(opt ...Option) *options {
 	// Initialize options with default values.
 	opts := &options{
-		numRuns:                           defaultNumRuns,
-		evalSetManager:                    evalsetinmemory.New(),
-		evalResultManager:                 evalresultinmemory.New(),
-		metricManager:                     metricinmemory.New(),
-		registry:                          registry.New(),
-		evalCaseParallelism:               runtime.GOMAXPROCS(0),
-		evalCaseParallelInferenceEnabled:  false,
-		evalCaseParallelEvaluationEnabled: false,
+		numRuns:           defaultNumRuns,
+		evalSetManager:    evalsetinmemory.New(),
+		evalResultManager: evalresultinmemory.New(),
+		metricManager:     metricinmemory.New(),
+		registry:          registry.New(),
 	}
 	// Apply user options.
 	for _, o := range opt {
@@ -131,20 +130,57 @@ func WithNumRuns(numRuns int) Option {
 // WithEvalCaseParallelism sets the maximum number of eval cases processed in parallel.
 func WithEvalCaseParallelism(parallelism int) Option {
 	return func(o *options) {
-		o.evalCaseParallelism = parallelism
+		o.evalCaseParallelism = &parallelism
 	}
 }
 
 // WithEvalCaseParallelInferenceEnabled enables or disables parallel inference across eval cases.
 func WithEvalCaseParallelInferenceEnabled(enabled bool) Option {
 	return func(o *options) {
-		o.evalCaseParallelInferenceEnabled = enabled
+		o.evalCaseParallelInferenceEnabled = &enabled
 	}
 }
 
 // WithEvalCaseParallelEvaluationEnabled enables or disables parallel evaluation across eval cases.
 func WithEvalCaseParallelEvaluationEnabled(enabled bool) Option {
 	return func(o *options) {
-		o.evalCaseParallelEvaluationEnabled = enabled
+		o.evalCaseParallelEvaluationEnabled = &enabled
 	}
+}
+
+// WithRunOptions appends agent.RunOption values that will be applied to every runner.Run call during inference.
+func WithRunOptions(opt ...agent.RunOption) Option {
+	return func(o *options) {
+		o.runOptions = append(o.runOptions, opt...)
+	}
+}
+
+func (o *options) validate(requireEvalService bool) error {
+	if o == nil {
+		return errors.New("options is nil")
+	}
+	if o.numRuns <= 0 {
+		return errors.New("num runs must be greater than 0")
+	}
+	parallelInferenceEnabled := o.evalCaseParallelInferenceEnabled != nil && *o.evalCaseParallelInferenceEnabled
+	parallelEvaluationEnabled := o.evalCaseParallelEvaluationEnabled != nil && *o.evalCaseParallelEvaluationEnabled
+	if (parallelInferenceEnabled || parallelEvaluationEnabled) && o.evalCaseParallelism != nil && *o.evalCaseParallelism <= 0 {
+		return errors.New("eval case parallelism must be greater than 0")
+	}
+	if o.evalSetManager == nil {
+		return errors.New("eval set manager is nil")
+	}
+	if o.metricManager == nil {
+		return errors.New("metric manager is nil")
+	}
+	if o.evalResultManager == nil {
+		return errors.New("eval result manager is nil")
+	}
+	if o.registry == nil {
+		return errors.New("registry is nil")
+	}
+	if requireEvalService && o.evalService == nil {
+		return errors.New("eval service is nil")
+	}
+	return nil
 }
