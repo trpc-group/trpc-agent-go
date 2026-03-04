@@ -11,6 +11,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -73,41 +74,34 @@ func TestCallbackContext_ArtifactOperations_NoService(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, cc)
 
-	t.Run("SaveArtifact without service", func(t *testing.T) {
-		version, err := cc.SaveArtifact("test.txt", nil)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "artifact service is nil")
-		assert.Equal(t, artifact.VersionID(""), version)
-	})
-
-	t.Run("ResolveArtifact without service", func(t *testing.T) {
-		desc, err := cc.ResolveArtifact("test.txt", nil)
+	t.Run("PutArtifact without service", func(t *testing.T) {
+		desc, err := cc.PutArtifact("test.txt", strings.NewReader(""))
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "artifact service is nil")
 		assert.Equal(t, artifact.Descriptor{}, desc)
 	})
 
-	t.Run("LoadArtifact without service", func(t *testing.T) {
-		rc, desc, err := cc.LoadArtifact("test.txt", nil)
+	t.Run("HeadArtifact without service", func(t *testing.T) {
+		desc, err := cc.HeadArtifact("test.txt", nil)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "artifact service is nil")
+		assert.Equal(t, artifact.Descriptor{}, desc)
+	})
+
+	t.Run("OpenArtifact without service", func(t *testing.T) {
+		rc, desc, err := cc.OpenArtifact("test.txt", nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "artifact service is nil")
 		assert.Nil(t, rc)
 		assert.Equal(t, artifact.Descriptor{}, desc)
 	})
 
-	t.Run("LoadArtifactBytes without service", func(t *testing.T) {
-		data, desc, err := cc.LoadArtifactBytes("test.txt", nil)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "artifact service is nil")
-		assert.Nil(t, data)
-		assert.Equal(t, artifact.Descriptor{}, desc)
-	})
-
 	t.Run("ListArtifacts without service", func(t *testing.T) {
-		artifacts, err := cc.ListArtifacts()
+		artifacts, next, err := cc.ListArtifacts("")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "artifact service is nil")
 		assert.Nil(t, artifacts)
+		assert.Equal(t, "", next)
 	})
 
 	t.Run("DeleteArtifact without service", func(t *testing.T) {
@@ -137,41 +131,34 @@ func TestCallbackContext_ArtifactOperations_NoSession(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, cc)
 
-	t.Run("SaveArtifact without session", func(t *testing.T) {
-		version, err := cc.SaveArtifact("test.txt", nil)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "no session available")
-		assert.Equal(t, artifact.VersionID(""), version)
-	})
-
-	t.Run("ResolveArtifact without session", func(t *testing.T) {
-		desc, err := cc.ResolveArtifact("test.txt", nil)
+	t.Run("PutArtifact without session", func(t *testing.T) {
+		desc, err := cc.PutArtifact("test.txt", strings.NewReader(""))
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "no session available")
 		assert.Equal(t, artifact.Descriptor{}, desc)
 	})
 
-	t.Run("LoadArtifact without session", func(t *testing.T) {
-		rc, desc, err := cc.LoadArtifact("test.txt", nil)
+	t.Run("HeadArtifact without session", func(t *testing.T) {
+		desc, err := cc.HeadArtifact("test.txt", nil)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "no session available")
+		assert.Equal(t, artifact.Descriptor{}, desc)
+	})
+
+	t.Run("OpenArtifact without session", func(t *testing.T) {
+		rc, desc, err := cc.OpenArtifact("test.txt", nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "no session available")
 		assert.Nil(t, rc)
 		assert.Equal(t, artifact.Descriptor{}, desc)
 	})
 
-	t.Run("LoadArtifactBytes without session", func(t *testing.T) {
-		data, desc, err := cc.LoadArtifactBytes("test.txt", nil)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "no session available")
-		assert.Nil(t, data)
-		assert.Equal(t, artifact.Descriptor{}, desc)
-	})
-
 	t.Run("ListArtifacts without session", func(t *testing.T) {
-		artifacts, err := cc.ListArtifacts()
+		artifacts, next, err := cc.ListArtifacts("")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "no session available")
 		assert.Nil(t, artifacts)
+		assert.Equal(t, "", next)
 	})
 
 	t.Run("DeleteArtifact without session", func(t *testing.T) {

@@ -12,9 +12,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
@@ -39,13 +41,13 @@ func displayImage(ctx context.Context, _ displayImageInput) (displayImageOutput,
 	}
 	var output displayImageOutput
 	for _, key := range stateValue.ImageIDs {
-		desc, err := tc.ResolveArtifact(key, nil)
+		desc, err := tc.HeadArtifact(key, nil)
 		if err != nil {
+			if errors.Is(err, artifact.ErrNotFound) {
+				output.Result += fmt.Sprintf("artifact not found: %s\n", key)
+				continue
+			}
 			output.Result += fmt.Sprintf("failed to load image from artifact %s: %s\n", key, err)
-			continue
-		}
-		if desc == nil {
-			output.Result += fmt.Sprintf("artifact not found: %s\n", key)
 			continue
 		}
 		output.Result += fmt.Sprintf("Display image MimeType: %s, URL: %s\n", desc.MimeType, desc.URL)

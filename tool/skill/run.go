@@ -2011,14 +2011,11 @@ func (t *RunTool) saveArtifacts(
 		if prefix != "" {
 			name = prefix + name
 		}
-		ver, err := cb.SaveArtifact(name, &artifact.Artifact{
-			MimeType: f.MIMEType,
-			Data:     []byte(f.Content),
-		})
+		desc, err := cb.PutArtifact(name, strings.NewReader(f.Content), artifact.WithPutMimeType(f.MIMEType))
 		if err != nil {
 			return nil, fmt.Errorf("save artifact %s: %w", name, err)
 		}
-		refs = append(refs, artifactRef{Name: name, Version: ver})
+		refs = append(refs, artifactRef{Name: name, Version: desc.Version})
 	}
 	return refs, nil
 }

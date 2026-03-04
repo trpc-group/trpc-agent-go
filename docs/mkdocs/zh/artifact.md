@@ -99,7 +99,10 @@ import "trpc.group/trpc-go/trpc-agent-go/artifact/cos"
 // export COS_SECRETID="your-secret-id"
 // export COS_SECRETKEY="your-secret-key"
 
-service := cos.NewService("https://bucket.cos.region.myqcloud.com")
+service, err := cos.NewService("my-service", "https://bucket.cos.region.myqcloud.com")
+if err != nil {
+    panic(err)
+}
 ```
 
 ### S3 兼容存储
@@ -242,24 +245,30 @@ func myTool(ctx context.Context, input MyInput) (MyOutput, error) {
         return MyOutput{}, err
     }
 
-    // 创建制品
-    artifact := &artifact.Artifact{
-        MimeType: "text/plain",
-        Data: []byte("你好，世界！"),
-    }
-
     // 保存制品
-    version, err := toolCtx.SaveArtifact("greeting.txt", artifact)
+    desc, err := toolCtx.PutArtifact(
+        "greeting.txt",
+        bytes.NewReader([]byte("你好，世界！")),
+        artifact.WithPutMimeType("text/plain"),
+    )
     if err != nil {
         return MyOutput{}, err
     }
 
     // 稍后加载制品（读入内存）
-    data, desc, err := toolCtx.LoadArtifactBytes("greeting.txt", nil) // nil 表示最新版本
+    rc, got, err := toolCtx.OpenArtifact("greeting.txt", nil) // nil 表示最新版本
+    if err != nil {
+        return MyOutput{}, err
+    }
+    defer rc.Close()
+    data, err := io.ReadAll(rc)
     if err != nil {
         return MyOutput{}, err
     }
 
+    _ = desc
+    _ = got
+    _ = data
     return MyOutput{}, nil
 }
 ```
@@ -272,14 +281,14 @@ func myTool(ctx context.Context, input MyInput) (MyOutput, error) {
 
 ```go
 // 此文件只能在当前会话中访问
-version, err := toolCtx.SaveArtifact("session-file.txt", artifact)
+desc, err := toolCtx.PutArtifact("session-file.txt", bytes.NewReader([]byte("hello")), artifact.WithPutMimeType("text/plain"))
 ```
 
 ### 用户持久化制品（ScopeUser）
 
 用户级（跨 session）持久化由 `artifact.Key.Scope = artifact.ScopeUser` 显式控制。
 
-- `ToolContext.SaveArtifact` 默认写入 **ScopeSession**。
+- `ToolContext.PutArtifact` 默认写入 **ScopeSession**。
 - 如果需要写入/读取 **ScopeUser**，请直接使用底层 `artifact.Service`（`Put/Head/Open/...`）并构造 `artifact.Key{Scope: artifact.ScopeUser, ...}`。
 
 ### 版本管理
@@ -288,17 +297,21 @@ version, err := toolCtx.SaveArtifact("session-file.txt", artifact)
 
 ```go
 // 保存版本 0
-v0, _ := toolCtx.SaveArtifact("document.txt", artifact1)
+d0, _ := toolCtx.PutArtifact("document.txt", strings.NewReader("v0"), artifact.WithPutMimeType("text/plain"))
 
 // 保存版本 1
-v1, _ := toolCtx.SaveArtifact("document.txt", artifact2)
+d1, _ := toolCtx.PutArtifact("document.txt", strings.NewReader("v1"), artifact.WithPutMimeType("text/plain"))
 
 // 加载特定版本
-oldVersion := v0
-data, desc, _ := toolCtx.LoadArtifactBytes("document.txt", &oldVersion)
+v0 := d0.Version
+rc, desc, _ := toolCtx.OpenArtifact("document.txt", &v0)
+data, _ := io.ReadAll(rc)
+_ = rc.Close()
 
 // 加载最新版本
-data, desc, _ = toolCtx.LoadArtifactBytes("document.txt", nil)
+rc, desc, _ = toolCtx.OpenArtifact("document.txt", nil)
+data, _ = io.ReadAll(rc)
+_ = rc.Close()
 ```
 
 ## Artifact Service 接口
@@ -337,19 +350,17 @@ func generateImageTool(ctx context.Context, input GenerateImageInput) (GenerateI
     // 生成图像（实现细节省略）
     imageData := generateImage(input.Prompt)
     
-    // 创建制品
-    artifact := &artifact.Artifact{
-        Data:     imageData,
-        MimeType: "image/png",
-    }
-    
     // 保存到制品存储
     toolCtx, _ := agent.NewToolContext(ctx)
-    version, err := toolCtx.SaveArtifact("generated-image.png", artifact)
+    desc, err := toolCtx.PutArtifact(
+        "generated-image.png",
+        bytes.NewReader(imageData),
+        artifact.WithPutMimeType("image/png"),
+    )
     
     return GenerateImageOutput{
         ImagePath: "generated-image.png",
-        Version:   version,
+        Version:   desc.Version,
     }, err
 }
 ```
@@ -362,19 +373,17 @@ func processTextTool(ctx context.Context, input ProcessTextInput) (ProcessTextOu
     // 处理文本
     processedText := strings.ToUpper(input.Text)
     
-    // 创建制品
-    artifact := &artifact.Artifact{
-        Data:     []byte(processedText),
-        MimeType: "text/plain",
-    }
-    
     // 保存（默认 session scope）。如需 ScopeUser，请直接使用 artifact.Service + Key{Scope: ScopeUser}。
     toolCtx, _ := agent.NewToolContext(ctx)
-    version, err := toolCtx.SaveArtifact("processed-text.txt", artifact)
+    desc, err := toolCtx.PutArtifact(
+        "processed-text.txt",
+        strings.NewReader(processedText),
+        artifact.WithPutMimeType("text/plain"),
+    )
     
     return ProcessTextOutput{
         ProcessedText: processedText,
-        Version:       version,
+        Version:       desc.Version,
     }, err
 }
 ```

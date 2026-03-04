@@ -99,7 +99,10 @@ import "trpc.group/trpc-go/trpc-agent-go/artifact/cos"
 // export COS_SECRETID="your-secret-id"
 // export COS_SECRETKEY="your-secret-key"
 
-service := cos.NewService("https://bucket.cos.region.myqcloud.com")
+service, err := cos.NewService("my-service", "https://bucket.cos.region.myqcloud.com")
+if err != nil {
+    panic(err)
+}
 ```
 
 ### S3-Compatible Storage
@@ -241,24 +244,31 @@ func myTool(ctx context.Context, input MyInput) (MyOutput, error) {
         return MyOutput{}, err
     }
 
-    // Create an artifact
-    artifact := &artifact.Artifact{
-        MimeType: "text/plain",
-        Data: []byte("Hello, World!"),
-    }
-
     // Save the artifact
-    version, err := toolCtx.SaveArtifact("greeting.txt", artifact)
+    data := []byte("Hello, World!")
+    desc, err := toolCtx.PutArtifact(
+        "greeting.txt",
+        bytes.NewReader(data),
+        artifact.WithPutMimeType("text/plain"),
+    )
     if err != nil {
         return MyOutput{}, err
     }
 
-    // Load the artifact later (into memory)
-    data, desc, err := toolCtx.LoadArtifactBytes("greeting.txt", nil) // nil for latest version
+    // Load the artifact later (into memory). nil means latest version.
+    rc, got, err := toolCtx.OpenArtifact("greeting.txt", nil)
+    if err != nil {
+        return MyOutput{}, err
+    }
+    defer rc.Close()
+    data, err := io.ReadAll(rc)
     if err != nil {
         return MyOutput{}, err
     }
 
+    _ = desc
+    _ = got
+    _ = data
     return MyOutput{}, nil
 }
 ```
@@ -271,7 +281,7 @@ By default, artifacts are scoped to the current session:
 
 ```go
 // This file is only accessible within the current session
-version, err := toolCtx.SaveArtifact("session-file.txt", artifact)
+desc, err := toolCtx.PutArtifact("session-file.txt", bytes.NewReader([]byte("hello")), artifact.WithPutMimeType("text/plain"))
 ```
 
 ### User-persistent Artifacts
@@ -279,7 +289,7 @@ version, err := toolCtx.SaveArtifact("session-file.txt", artifact)
 User-persistent artifacts are explicitly controlled by `artifact.Key.Scope = artifact.ScopeUser`.
 
 ```go
-// ToolContext.SaveArtifact writes to ScopeSession by default.
+// ToolContext.PutArtifact writes to ScopeSession by default.
 // For ScopeUser, use artifact.Service directly (Put/Head/Open/...) with Key{Scope: ScopeUser}.
 ```
 
@@ -289,17 +299,21 @@ Each save operation creates a new version:
 
 ```go
 // Save version 0
-v0, _ := toolCtx.SaveArtifact("document.txt", artifact1)
+d0, _ := toolCtx.PutArtifact("document.txt", strings.NewReader("v0"), artifact.WithPutMimeType("text/plain"))
 
 // Save version 1
-v1, _ := toolCtx.SaveArtifact("document.txt", artifact2)
+d1, _ := toolCtx.PutArtifact("document.txt", strings.NewReader("v1"), artifact.WithPutMimeType("text/plain"))
 
 // Load specific version
-oldVersion := v0
-data, desc, _ := toolCtx.LoadArtifactBytes("document.txt", &oldVersion)
+v0 := d0.Version
+rc, desc, _ := toolCtx.OpenArtifact("document.txt", &v0)
+data, _ := io.ReadAll(rc)
+_ = rc.Close()
 
 // Load latest version
-data, desc, _ = toolCtx.LoadArtifactBytes("document.txt", nil)
+rc, desc, _ = toolCtx.OpenArtifact("document.txt", nil)
+data, _ = io.ReadAll(rc)
+_ = rc.Close()
 ```
 
 ## Artifact Service Interface
@@ -338,19 +352,17 @@ func generateImageTool(ctx context.Context, input GenerateImageInput) (GenerateI
     // Generate image (implementation details omitted)
     imageData := generateImage(input.Prompt)
     
-    // Create artifact
-    artifact := &artifact.Artifact{
-        Data:     imageData,
-        MimeType: "image/png",
-    }
-    
     // Save to artifacts
     toolCtx, _ := agent.NewToolContext(ctx)
-    version, err := toolCtx.SaveArtifact("generated-image.png", artifact)
+    desc, err := toolCtx.PutArtifact(
+        "generated-image.png",
+        bytes.NewReader(imageData),
+        artifact.WithPutMimeType("image/png"),
+    )
     
     return GenerateImageOutput{
         ImagePath: "generated-image.png",
-        Version:   version,
+        Version:   desc.Version,
     }, err
 }
 ```
@@ -363,19 +375,17 @@ func processTextTool(ctx context.Context, input ProcessTextInput) (ProcessTextOu
     // Process the text
     processedText := strings.ToUpper(input.Text)
     
-    // Create artifact
-    artifact := &artifact.Artifact{
-        Data:     []byte(processedText),
-        MimeType: "text/plain",
-    }
-    
     // Save (session-scoped by default). For ScopeUser, use artifact.Service with Key{Scope: ScopeUser}.
     toolCtx, _ := agent.NewToolContext(ctx)
-    version, err := toolCtx.SaveArtifact("processed-text.txt", artifact)
+    desc, err := toolCtx.PutArtifact(
+        "processed-text.txt",
+        strings.NewReader(processedText),
+        artifact.WithPutMimeType("text/plain"),
+    )
     
     return ProcessTextOutput{
         ProcessedText: processedText,
-        Version:       version,
+        Version:       desc.Version,
     }, err
 }
 ```

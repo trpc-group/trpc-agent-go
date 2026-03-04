@@ -10,7 +10,6 @@
 package agent
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -48,124 +47,78 @@ func NewCallbackContext(ctx context.Context) (*CallbackContext, error) {
 	}, nil
 }
 
-// SaveArtifact saves an artifact and records it for the current session.
-//
-// Args:
-//   - filename: The filename of the artifact
-//   - artifact: The artifact to save
-//
-// Returns:
-//   - The version of the artifact
-func (cc *CallbackContext) SaveArtifact(filename string, art *artifact.Artifact) (artifact.VersionID, error) {
-	service, baseKey, err := cc.getArtifactServiceAndBaseKey()
-	if err != nil {
-		return "", err
-	}
-	if art == nil {
-		return "", errors.New("artifact is nil")
-	}
-	desc, err := service.Put(
-		cc.Context,
-		withName(baseKey, filename),
-		bytesReader(art.Data),
-		artifact.WithPutMimeType(art.MimeType),
-	)
-	if err != nil {
-		return "", err
-	}
-	return desc.Version, nil
-}
-
-// ResolveArtifact resolves artifact metadata and an optional URL.
-func (cc *CallbackContext) ResolveArtifact(filename string, version *artifact.VersionID) (artifact.Descriptor, error) {
+// PutArtifact stores a new version of the artifact content and returns its descriptor.
+func (cc *CallbackContext) PutArtifact(name string, r io.Reader, opts ...artifact.PutOption) (artifact.Descriptor, error) {
 	service, baseKey, err := cc.getArtifactServiceAndBaseKey()
 	if err != nil {
 		return artifact.Descriptor{}, err
 	}
-	return service.Head(cc.Context, withName(baseKey, filename), version)
+	if r == nil {
+		return artifact.Descriptor{}, errors.New("artifact reader is nil")
+	}
+	return service.Put(cc.Context, withName(baseKey, name), r, opts...)
 }
 
-// LoadArtifact opens a streaming reader for an artifact.
-func (cc *CallbackContext) LoadArtifact(filename string, version *artifact.VersionID) (io.ReadCloser, artifact.Descriptor, error) {
+// HeadArtifact resolves an artifact version to its metadata and an optional URL.
+func (cc *CallbackContext) HeadArtifact(name string, version *artifact.VersionID) (artifact.Descriptor, error) {
+	service, baseKey, err := cc.getArtifactServiceAndBaseKey()
+	if err != nil {
+		return artifact.Descriptor{}, err
+	}
+	return service.Head(cc.Context, withName(baseKey, name), version)
+}
+
+// OpenArtifact opens a streaming reader for an artifact version.
+func (cc *CallbackContext) OpenArtifact(name string, version *artifact.VersionID) (io.ReadCloser, artifact.Descriptor, error) {
 	service, baseKey, err := cc.getArtifactServiceAndBaseKey()
 	if err != nil {
 		return nil, artifact.Descriptor{}, err
 	}
-	return service.Open(cc.Context, withName(baseKey, filename), version)
+	return service.Open(cc.Context, withName(baseKey, name), version)
 }
 
-// LoadArtifactBytes loads an artifact into memory and returns its bytes.
-func (cc *CallbackContext) LoadArtifactBytes(filename string, version *artifact.VersionID) ([]byte, artifact.Descriptor, error) {
+// ListArtifacts lists artifacts within the current session scope.
+//
+// It returns descriptors for the latest version of each artifact and a nextPageToken.
+// nextPageToken is empty when there are no more results.
+func (cc *CallbackContext) ListArtifacts(namePrefix string, opts ...artifact.ListOption) ([]artifact.Descriptor, string, error) {
 	service, baseKey, err := cc.getArtifactServiceAndBaseKey()
 	if err != nil {
-		return nil, artifact.Descriptor{}, err
+		return nil, "", err
 	}
-	return artifact.ReadAll(cc.Context, service, withName(baseKey, filename), version)
+	return service.List(cc.Context, artifact.KeyPrefix{
+		AppName:    baseKey.AppName,
+		UserID:     baseKey.UserID,
+		SessionID:  baseKey.SessionID,
+		Scope:      baseKey.Scope,
+		NamePrefix: namePrefix,
+	}, opts...)
 }
 
-// ListArtifacts lists the filenames of the artifacts attached to the current session.
+// DeleteArtifact deletes artifact versions identified by name within the current session scope.
 //
-// Returns:
-//   - A list of artifact filenames
-func (cc *CallbackContext) ListArtifacts() ([]string, error) {
-	service, baseKey, err := cc.getArtifactServiceAndBaseKey()
-	if err != nil {
-		return nil, err
-	}
-	var (
-		out       []string
-		pageToken string
-	)
-	for {
-		items, next, err := service.List(cc.Context, artifact.KeyPrefix{
-			AppName:    baseKey.AppName,
-			UserID:     baseKey.UserID,
-			SessionID:  baseKey.SessionID,
-			Scope:      baseKey.Scope,
-			NamePrefix: "",
-		}, artifact.WithListLimit(200), artifact.WithListPageToken(pageToken))
-		if err != nil {
-			return nil, err
-		}
-		for _, d := range items {
-			out = append(out, d.Key.Name)
-		}
-		if next == "" {
-			break
-		}
-		pageToken = next
-	}
-	return out, nil
-}
-
-// DeleteArtifact deletes an artifact from the current session.
-//
-// Args:
-//   - filename: The filename of the artifact to delete
-//
-// Returns:
-//   - An error if the operation fails
-func (cc *CallbackContext) DeleteArtifact(filename string) error {
+// By default (no opts), it deletes all versions.
+func (cc *CallbackContext) DeleteArtifact(name string, opts ...artifact.DeleteOption) error {
 	service, baseKey, err := cc.getArtifactServiceAndBaseKey()
 	if err != nil {
 		return err
 	}
-	return service.Delete(cc.Context, withName(baseKey, filename), artifact.DeleteAllOpt())
+	return service.Delete(cc.Context, withName(baseKey, name), opts...)
 }
 
 // ListArtifactVersions lists all versions of an artifact.
 //
 // Args:
-//   - filename: The filename of the artifact
+//   - name: The name of the artifact
 //
 // Returns:
 //   - A list of all available versions of the artifact
-func (cc *CallbackContext) ListArtifactVersions(filename string) ([]artifact.VersionID, error) {
+func (cc *CallbackContext) ListArtifactVersions(name string) ([]artifact.VersionID, error) {
 	service, baseKey, err := cc.getArtifactServiceAndBaseKey()
 	if err != nil {
 		return nil, err
 	}
-	return service.Versions(cc.Context, withName(baseKey, filename))
+	return service.Versions(cc.Context, withName(baseKey, name))
 }
 
 // getArtifactServiceAndBaseKey extracts common logic for getting artifact service and the session base key.
@@ -208,11 +161,4 @@ func (cc *CallbackContext) appUserSession() (appName, userID, sessionID string, 
 func withName(base artifact.Key, name string) artifact.Key {
 	base.Name = name
 	return base
-}
-
-func bytesReader(b []byte) io.Reader {
-	if len(b) == 0 {
-		return bytes.NewReader(nil)
-	}
-	return bytes.NewReader(b)
 }
