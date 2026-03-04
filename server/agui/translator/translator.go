@@ -134,9 +134,9 @@ func (t *translator) Translate(ctx context.Context, event *agentevent.Event) ([]
 }
 
 type artifactRef struct {
-	Name    string `json:"name"`
+	Name    string             `json:"name"`
 	Version artifact.VersionID `json:"version"`
-	Ref     string `json:"ref"`
+	Ref     string             `json:"ref"`
 }
 
 type skillRunArtifactsDelta struct {
