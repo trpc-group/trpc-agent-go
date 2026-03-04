@@ -65,6 +65,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	alog "trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -72,6 +73,10 @@ import (
 
 	util "trpc.group/trpc-go/trpc-agent-go/examples/session"
 )
+
+type ctxKey string
+
+const requestIDKey ctxKey = "requestID"
 
 var (
 	modelName = flag.String(
@@ -110,6 +115,16 @@ var (
 
 func main() {
 	flag.Parse()
+
+	// Replace the default log functions to inject RequestID from context.
+	origInfofContext := alog.InfofContext
+	alog.InfofContext = func(ctx context.Context, format string, args ...any) {
+		reqID, _ := ctx.Value(requestIDKey).(string)
+		if reqID != "" {
+			format = fmt.Sprintf("[req:%s] %s", reqID, format)
+		}
+		origInfofContext(ctx, format, args...)
+	}
 
 	fmt.Printf("Session Management Demo\n")
 	fmt.Printf("Model: %s\n", *modelName)
@@ -284,6 +299,10 @@ func (c *multiTurnChat) processMessage(
 	message := model.NewUserMessage(userMessage)
 
 	requestID := uuid.New().String()
+
+	// Inject requestID into context for logging.
+	ctx = context.WithValue(ctx, requestIDKey, requestID)
+
 	// Run the agent through the runner.
 	eventChan, err := c.runner.Run(
 		ctx,
