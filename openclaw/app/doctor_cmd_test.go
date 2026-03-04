@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -36,11 +37,11 @@ func TestCheckTimeout(t *testing.T) {
 }
 
 func TestCheckPolicies(t *testing.T) {
-	require.True(t, checkPolicies("", "", "", ""))
-	require.False(t, checkPolicies("allowlist", "", "", ""))
-	require.True(t, checkPolicies("allowlist", "", "1", ""))
-	require.False(t, checkPolicies("", "allowlist", "", ""))
-	require.True(t, checkPolicies("", "allowlist", "", "10"))
+	require.True(t, checkPolicies("", "", nil, nil))
+	require.False(t, checkPolicies("allowlist", "", nil, nil))
+	require.True(t, checkPolicies("allowlist", "", []string{"1"}, nil))
+	require.False(t, checkPolicies("", "allowlist", nil, nil))
+	require.True(t, checkPolicies("", "allowlist", nil, []string{"10"}))
 }
 
 func TestPrintBot(t *testing.T) {
@@ -68,6 +69,7 @@ func TestCheckPairingStore(t *testing.T) {
 		context.Background(),
 		stateDir,
 		"open",
+		"",
 		me,
 	))
 
@@ -81,6 +83,7 @@ func TestCheckPairingStore(t *testing.T) {
 		context.Background(),
 		stateDir,
 		"",
+		"",
 		me,
 	))
 
@@ -91,22 +94,19 @@ func TestCheckPairingStore(t *testing.T) {
 }
 
 func TestRunDoctor_TelegramDisabled(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-
 	stdout := os.Stdout
 	r, w, err := os.Pipe()
 	require.NoError(t, err)
 	os.Stdout = w
 	t.Cleanup(func() { os.Stdout = stdout })
 
-	code := runDoctor([]string{"-telegram-token", ""})
+	code := runDoctor(nil)
 	require.Equal(t, 0, code)
 
 	require.NoError(t, w.Close())
 	out, err := io.ReadAll(r)
 	require.NoError(t, err)
-	require.Contains(t, string(out), "Telegram: disabled")
+	require.Contains(t, string(out), "Telegram: not configured")
 }
 
 func TestRunDoctor_WithTelegram_BaseURLOverride(t *testing.T) {
@@ -135,10 +135,18 @@ func TestRunDoctor_WithTelegram_BaseURLOverride(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	t.Setenv(telegramBaseURLEnvName, srv.URL)
+	t.Setenv(tgapi.BaseURLEnvName, srv.URL)
+
+	cfgData := []byte(`channels:
+  - type: telegram
+    config:
+      token: "` + token + `"
+`)
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(cfgPath, cfgData, 0o600))
 
 	code := runDoctor([]string{
-		"-telegram-token", token,
+		"-config", cfgPath,
 		"-state-dir", t.TempDir(),
 	})
 	require.Equal(t, 0, code)

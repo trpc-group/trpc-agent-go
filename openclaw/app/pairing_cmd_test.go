@@ -14,11 +14,14 @@ import (
 	"context"
 	"io"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 
 	tgch "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/channel/telegram"
+	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
 )
 
 func TestRunPairing_ParseError(t *testing.T) {
@@ -26,14 +29,14 @@ func TestRunPairing_ParseError(t *testing.T) {
 }
 
 func TestRunPairing_NoAction(t *testing.T) {
-	require.Equal(t, 2, runPairing([]string{"-telegram-token", "x"}))
+	require.Equal(t, 2, runPairing(nil))
 }
 
 func TestRunPairing_UnknownAction(t *testing.T) {
 	require.Equal(
 		t,
 		2,
-		runPairing([]string{"-telegram-token", "x", "nope"}),
+		runPairing([]string{"nope"}),
 	)
 }
 
@@ -41,19 +44,14 @@ func TestRunPairingApprove_MissingCode(t *testing.T) {
 	require.Equal(
 		t,
 		2,
-		runPairing([]string{
-			"-telegram-token", "x",
-			"approve",
-		}),
+		runPairing([]string{"approve"}),
 	)
 }
 
-func TestRunPairingList_TokenRequired(t *testing.T) {
-	require.Equal(
-		t,
-		1,
-		runPairingList(context.Background(), "", t.TempDir()),
-	)
+func TestRunPairingList_TelegramNotConfigured(t *testing.T) {
+	t.Setenv(openClawConfigEnvName, "")
+
+	require.Equal(t, 1, runPairing([]string{"list"}))
 }
 
 func TestRunPairingListAndApprove_WithStubProbe(t *testing.T) {
@@ -62,12 +60,23 @@ func TestRunPairingListAndApprove_WithStubProbe(t *testing.T) {
 	probeBotInfo = func(
 		_ context.Context,
 		_ string,
+		_ ...tgapi.Option,
 	) (tgch.BotInfo, error) {
 		return tgch.BotInfo{ID: 123, Username: "bot"}, nil
 	}
 
 	stateDir := t.TempDir()
-	store, err := openPairingStore(context.Background(), "x", stateDir)
+
+	var node yaml.Node
+	require.NoError(t, yaml.Unmarshal([]byte("token: x"), &node))
+
+	store, err := openPairingStore(context.Background(), runOptions{
+		StateDir: stateDir,
+		Channels: []pluginSpec{{
+			Type:   telegramChannelType,
+			Config: &node,
+		}},
+	}, "")
 	require.NoError(t, err)
 
 	code, approved, err := store.Request(context.Background(), "u1")
@@ -84,12 +93,12 @@ func TestRunPairingListAndApprove_WithStubProbe(t *testing.T) {
 	require.Equal(
 		t,
 		0,
-		runPairingList(context.Background(), "x", stateDir),
+		runPairingList(context.Background(), store),
 	)
 	require.Equal(
 		t,
 		0,
-		runPairingApprove(context.Background(), "x", stateDir, code),
+		runPairingApprove(context.Background(), store, code),
 	)
 
 	require.NoError(t, w.Close())
@@ -105,12 +114,29 @@ func TestRunPairing_FlagsAfterAction(t *testing.T) {
 	probeBotInfo = func(
 		_ context.Context,
 		_ string,
+		_ ...tgapi.Option,
 	) (tgch.BotInfo, error) {
 		return tgch.BotInfo{ID: 123, Username: "bot"}, nil
 	}
 
 	stateDir := t.TempDir()
-	store, err := openPairingStore(context.Background(), "x", stateDir)
+
+	cfgData := []byte(`state_dir: "` + stateDir + `"
+channels:
+  - type: telegram
+    config:
+      token: x
+`)
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(cfgPath, cfgData, 0o600))
+
+	runOpts, err := parseRunOptions([]string{
+		"-config", cfgPath,
+		"-state-dir", stateDir,
+	})
+	require.NoError(t, err)
+
+	store, err := openPairingStore(context.Background(), runOpts, "")
 	require.NoError(t, err)
 
 	code, approved, err := store.Request(context.Background(), "u1")
@@ -128,7 +154,7 @@ func TestRunPairing_FlagsAfterAction(t *testing.T) {
 		0,
 		runPairing([]string{
 			"list",
-			"-telegram-token", "x",
+			"-config", cfgPath,
 			"-state-dir", stateDir,
 		}),
 	)
@@ -137,7 +163,7 @@ func TestRunPairing_FlagsAfterAction(t *testing.T) {
 		0,
 		runPairing([]string{
 			"approve", code,
-			"-telegram-token", "x",
+			"-config", cfgPath,
 			"-state-dir", stateDir,
 		}),
 	)

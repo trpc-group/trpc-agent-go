@@ -8,7 +8,7 @@
 //
 //
 
-package app
+package telegram
 
 import (
 	"net/http"
@@ -18,19 +18,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestMakeTelegramHTTPClient_NoOverrides(t *testing.T) {
-	client, err := makeTelegramHTTPClient("", 0)
+func TestBuildHTTPClient_NoOverrides(t *testing.T) {
+	client, err := BuildHTTPClient("", 0)
 	require.NoError(t, err)
 	require.Nil(t, client)
 }
 
-func TestMakeTelegramHTTPClient_InvalidProxy(t *testing.T) {
-	_, err := makeTelegramHTTPClient("://bad", 0)
+func TestBuildHTTPClient_InvalidProxy(t *testing.T) {
+	_, err := BuildHTTPClient("://bad", 0)
 	require.Error(t, err)
 }
 
-func TestMakeTelegramHTTPClient_TimeoutAndProxy(t *testing.T) {
-	client, err := makeTelegramHTTPClient("http://127.0.0.1:8080", time.Second)
+func TestBuildHTTPClient_TimeoutAndProxy(t *testing.T) {
+	client, err := BuildHTTPClient("http://127.0.0.1:8080", time.Second)
 	require.NoError(t, err)
 	require.NotNil(t, client)
 	require.Equal(t, time.Second, client.Timeout)
@@ -40,24 +40,35 @@ func TestMakeTelegramHTTPClient_TimeoutAndProxy(t *testing.T) {
 	require.NotNil(t, transport.Proxy)
 }
 
-func TestMakeTelegramAPIOptions_PropagatesProxyError(t *testing.T) {
-	_, err := makeTelegramAPIOptions("://bad", 0, 1)
+func TestBuildClientOptionsFromEnv_PropagatesProxyError(t *testing.T) {
+	_, err := BuildClientOptionsFromEnv(ClientNetOptions{
+		ProxyURL:   "://bad",
+		MaxRetries: 1,
+	})
 	require.Error(t, err)
 }
 
-func TestMakeTelegramAPIOptions_OptionsCount(t *testing.T) {
+func TestBuildClientOptionsFromEnv_OptionsCount(t *testing.T) {
 	t.Setenv(telegramBaseURLEnvName, "")
 
-	opts, err := makeTelegramAPIOptions("", 0, 3)
+	opts, err := BuildClientOptionsFromEnv(ClientNetOptions{
+		MaxRetries: 3,
+	})
 	require.NoError(t, err)
 	require.Len(t, opts, 1)
 
 	t.Setenv(telegramBaseURLEnvName, "http://127.0.0.1:1")
-	opts, err = makeTelegramAPIOptions("", 0, 3)
+	opts, err = BuildClientOptionsFromEnv(ClientNetOptions{
+		MaxRetries: 3,
+	})
 	require.NoError(t, err)
 	require.Len(t, opts, 2)
 
-	opts, err = makeTelegramAPIOptions("http://127.0.0.1:8080", time.Second, 3)
+	opts, err = BuildClientOptionsFromEnv(ClientNetOptions{
+		ProxyURL:   "http://127.0.0.1:8080",
+		Timeout:    time.Second,
+		MaxRetries: 3,
+	})
 	require.NoError(t, err)
 	require.Len(t, opts, 3)
 }
