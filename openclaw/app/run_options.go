@@ -111,7 +111,6 @@ type runOptions struct {
 	OpenAIVariant      string
 	OpenAIBaseURL      string
 	ModelConfig        *yaml.Node
-	TelegramToken      string
 	SkillsRoot         string
 	SkillsExtraDir     string
 	SkillsDebug        bool
@@ -122,16 +121,6 @@ type runOptions struct {
 	AllowUsers     string
 	RequireMention bool
 	Mention        string
-
-	TelegramStartFromLatest bool
-	TelegramProxy           string
-	TelegramHTTPTimeout     time.Duration
-	TelegramMaxRetries      int
-	TelegramStreaming       string
-	TelegramDMPolicy        string
-	TelegramGroupPolicy     string
-	TelegramAllowThreads    string
-	TelegramPairingTTL      time.Duration
 
 	Channels []pluginSpec
 
@@ -183,11 +172,6 @@ func parseRunOptions(args []string) (runOptions, error) {
 		ModelMode:     modeOpenAI,
 		OpenAIModel:   defaultOpenAIModelName(),
 		OpenAIVariant: defaultOpenAIVariant,
-
-		TelegramStartFromLatest: true,
-		TelegramMaxRetries:      defaultTelegramMaxRetries,
-		TelegramStreaming:       defaultTelegramStreaming,
-		TelegramPairingTTL:      time.Hour,
 
 		SessionBackend: sessionBackendInMemory,
 		MemoryBackend:  memoryBackendInMemory,
@@ -382,66 +366,6 @@ func parseRunOptions(args []string) (runOptions, error) {
 		"openai-base-url",
 		"",
 		"OpenAI base URL override (mode=openai, optional)",
-	)
-	fs.StringVar(
-		&opts.TelegramToken,
-		"telegram-token",
-		"",
-		"Telegram bot token; empty disables Telegram",
-	)
-	fs.BoolVar(
-		&opts.TelegramStartFromLatest,
-		"telegram-start-from-latest",
-		true,
-		"Drain pending updates on first start (no offset)",
-	)
-	fs.StringVar(
-		&opts.TelegramProxy,
-		"telegram-proxy",
-		"",
-		"HTTP proxy URL for Telegram API calls (optional)",
-	)
-	fs.DurationVar(
-		&opts.TelegramHTTPTimeout,
-		"telegram-http-timeout",
-		0,
-		"HTTP client timeout for Telegram API calls (optional)",
-	)
-	fs.IntVar(
-		&opts.TelegramMaxRetries,
-		"telegram-max-retries",
-		defaultTelegramMaxRetries,
-		"Max retries for Telegram API calls (429/5xx/transport errors)",
-	)
-	fs.StringVar(
-		&opts.TelegramStreaming,
-		"telegram-streaming",
-		defaultTelegramStreaming,
-		"Telegram reply streaming: off|block|progress",
-	)
-	fs.StringVar(
-		&opts.TelegramDMPolicy,
-		"telegram-dm-policy",
-		"",
-		"Telegram DM policy: disabled|open|allowlist|pairing",
-	)
-	fs.StringVar(
-		&opts.TelegramGroupPolicy,
-		"telegram-group-policy",
-		"",
-		"Telegram group policy: disabled|open|allowlist",
-	)
-	fs.StringVar(
-		&opts.TelegramAllowThreads,
-		"telegram-allow-threads",
-		"",
-		"Comma-separated allowlist of chat/topic threads",
-	)
-	fs.DurationVar(
-		&opts.TelegramPairingTTL,
-		"telegram-pairing-ttl",
-		time.Hour,
-		"How long pairing codes stay valid",
 	)
 	fs.StringVar(
 		&opts.AllowUsers,
@@ -704,7 +628,6 @@ type fileConfig struct {
 	Agent    *agentRunConfig  `yaml:"agent,omitempty"`
 	Model    *modelConfig     `yaml:"model,omitempty"`
 	Gateway  *gatewayConfig   `yaml:"gateway,omitempty"`
-	Telegram *telegramConfig  `yaml:"telegram,omitempty"`
 	Channels []filePluginSpec `yaml:"channels,omitempty"`
 	Skills   *skillsConfig    `yaml:"skills,omitempty"`
 	Tools    *toolsConfig     `yaml:"tools,omitempty"`
@@ -770,19 +693,6 @@ type gatewayConfig struct {
 	AllowUsers      []string `yaml:"allow_users,omitempty"`
 	RequireMention  *bool    `yaml:"require_mention,omitempty"`
 	MentionPatterns []string `yaml:"mention_patterns,omitempty"`
-}
-
-type telegramConfig struct {
-	Token           *string  `yaml:"token,omitempty"`
-	StartFromLatest *bool    `yaml:"start_from_latest,omitempty"`
-	Proxy           *string  `yaml:"proxy,omitempty"`
-	HTTPTimeout     *string  `yaml:"http_timeout,omitempty"`
-	MaxRetries      *int     `yaml:"max_retries,omitempty"`
-	Streaming       *string  `yaml:"streaming,omitempty"`
-	DMPolicy        *string  `yaml:"dm_policy,omitempty"`
-	GroupPolicy     *string  `yaml:"group_policy,omitempty"`
-	AllowThreads    []string `yaml:"allow_threads,omitempty"`
-	PairingTTL      *string  `yaml:"pairing_ttl,omitempty"`
 }
 
 type skillsConfig struct {
@@ -1049,70 +959,6 @@ func (cfg *fileConfig) apply(
 				cfg.Gateway.MentionPatterns,
 				csvDelimiter,
 			)
-		}
-	}
-
-	if cfg.Telegram != nil {
-		if cfg.Telegram.Token != nil &&
-			!flagWasSet(set, "telegram-token") {
-			opts.TelegramToken = strings.TrimSpace(
-				*cfg.Telegram.Token,
-			)
-		}
-		if cfg.Telegram.StartFromLatest != nil &&
-			!flagWasSet(set, "telegram-start-from-latest") {
-			opts.TelegramStartFromLatest = *cfg.Telegram.StartFromLatest
-		}
-		if cfg.Telegram.Proxy != nil &&
-			!flagWasSet(set, "telegram-proxy") {
-			opts.TelegramProxy = strings.TrimSpace(
-				*cfg.Telegram.Proxy,
-			)
-		}
-		if cfg.Telegram.HTTPTimeout != nil &&
-			!flagWasSet(set, "telegram-http-timeout") {
-			dur, err := parseDuration(*cfg.Telegram.HTTPTimeout)
-			if err != nil {
-				return fmt.Errorf("telegram.http_timeout: %w", err)
-			}
-			opts.TelegramHTTPTimeout = dur
-		}
-		if cfg.Telegram.MaxRetries != nil &&
-			!flagWasSet(set, "telegram-max-retries") {
-			opts.TelegramMaxRetries = *cfg.Telegram.MaxRetries
-		}
-		if cfg.Telegram.Streaming != nil &&
-			!flagWasSet(set, "telegram-streaming") {
-			opts.TelegramStreaming = strings.TrimSpace(
-				*cfg.Telegram.Streaming,
-			)
-		}
-		if cfg.Telegram.DMPolicy != nil &&
-			!flagWasSet(set, "telegram-dm-policy") {
-			opts.TelegramDMPolicy = strings.TrimSpace(
-				*cfg.Telegram.DMPolicy,
-			)
-		}
-		if cfg.Telegram.GroupPolicy != nil &&
-			!flagWasSet(set, "telegram-group-policy") {
-			opts.TelegramGroupPolicy = strings.TrimSpace(
-				*cfg.Telegram.GroupPolicy,
-			)
-		}
-		if len(cfg.Telegram.AllowThreads) > 0 &&
-			!flagWasSet(set, "telegram-allow-threads") {
-			opts.TelegramAllowThreads = strings.Join(
-				cfg.Telegram.AllowThreads,
-				csvDelimiter,
-			)
-		}
-		if cfg.Telegram.PairingTTL != nil &&
-			!flagWasSet(set, "telegram-pairing-ttl") {
-			dur, err := parseDuration(*cfg.Telegram.PairingTTL)
-			if err != nil {
-				return fmt.Errorf("telegram.pairing_ttl: %w", err)
-			}
-			opts.TelegramPairingTTL = dur
 		}
 	}
 

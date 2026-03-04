@@ -33,6 +33,7 @@ import (
 
 	occhannel "trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwclient"
+	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 )
 
@@ -135,14 +136,29 @@ func TestNewRuntime_WithTelegram_BuildsChannel(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	t.Setenv(telegramBaseURLEnvName, srv.URL)
+	t.Setenv(tgapi.BaseURLEnvName, srv.URL)
+
+	cfgData, err := yaml.Marshal(map[string]any{
+		"channels": []any{
+			map[string]any{
+				"type": telegramChannelType,
+				"config": map[string]any{
+					"token": token,
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(cfgPath, cfgData, 0o600))
 
 	rt, err := NewRuntime(context.Background(), []string{
 		"-mode", modeMock,
 		"-state-dir", dir,
 		"-skills-root", t.TempDir(),
-		"-telegram-token", token,
+		"-config", cfgPath,
 		"-require-mention",
+		"-mention", "@bot",
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -151,14 +167,29 @@ func TestNewRuntime_WithTelegram_BuildsChannel(t *testing.T) {
 
 	require.NotNil(t, rt.Gateway.Handler)
 	require.Len(t, rt.Channels, 1)
-	require.Equal(t, registry.ChannelTypeTelegram, rt.Channels[0].ID())
+	require.Equal(t, telegramChannelType, rt.Channels[0].ID())
 }
 
 func TestNewRuntime_TelegramProxyErrorExitCode(t *testing.T) {
+	cfgData, err := yaml.Marshal(map[string]any{
+		"channels": []any{
+			map[string]any{
+				"type": telegramChannelType,
+				"config": map[string]any{
+					"token": "x",
+					"proxy": "://bad",
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(cfgPath, cfgData, 0o600))
+
 	rt, err := NewRuntime(context.Background(), []string{
 		"-mode", modeMock,
-		"-telegram-token", "x",
-		"-telegram-proxy", "://bad",
+		"-config", cfgPath,
+		"-skills-root", t.TempDir(),
 	})
 	require.Nil(t, rt)
 	require.Error(t, err)
@@ -396,14 +427,35 @@ func TestNewRuntime_ErrorPathsExitCode(t *testing.T) {
 			name: "probe telegram bot fails",
 			args: func(t *testing.T) []string {
 				t.Setenv(
-					telegramBaseURLEnvName,
+					tgapi.BaseURLEnvName,
 					makeBotServer(t, false),
 				)
+
+				cfgData, err := yaml.Marshal(map[string]any{
+					"channels": []any{
+						map[string]any{
+							"type": telegramChannelType,
+							"config": map[string]any{
+								"token": token,
+							},
+						},
+					},
+				})
+				require.NoError(t, err)
+				cfgPath := filepath.Join(
+					t.TempDir(),
+					"config.yaml",
+				)
+				require.NoError(t, os.WriteFile(
+					cfgPath,
+					cfgData,
+					0o600,
+				))
 				return []string{
 					"-mode", modeMock,
 					"-state-dir", t.TempDir(),
 					"-skills-root", t.TempDir(),
-					"-telegram-token", token,
+					"-config", cfgPath,
 				}
 			},
 			wantCode: 1,
@@ -412,15 +464,36 @@ func TestNewRuntime_ErrorPathsExitCode(t *testing.T) {
 			name: "create telegram channel fails",
 			args: func(t *testing.T) []string {
 				t.Setenv(
-					telegramBaseURLEnvName,
+					tgapi.BaseURLEnvName,
 					makeBotServer(t, true),
 				)
+
+				cfgData, err := yaml.Marshal(map[string]any{
+					"channels": []any{
+						map[string]any{
+							"type": telegramChannelType,
+							"config": map[string]any{
+								"token":       token,
+								"pairing_ttl": "0s",
+							},
+						},
+					},
+				})
+				require.NoError(t, err)
+				cfgPath := filepath.Join(
+					t.TempDir(),
+					"config.yaml",
+				)
+				require.NoError(t, os.WriteFile(
+					cfgPath,
+					cfgData,
+					0o600,
+				))
 				return []string{
 					"-mode", modeMock,
 					"-state-dir", t.TempDir(),
 					"-skills-root", t.TempDir(),
-					"-telegram-token", token,
-					"-telegram-pairing-ttl", "0s",
+					"-config", cfgPath,
 				}
 			},
 			wantCode: 1,
@@ -456,9 +529,26 @@ func TestMain_InspectDispatches(t *testing.T) {
 func TestRun_TelegramProxyErrorExitCode(t *testing.T) {
 	t.Parallel()
 
-	err := run(context.Background(), []string{
-		"-telegram-token", "x",
-		"-telegram-proxy", "://bad",
+	cfgData, err := yaml.Marshal(map[string]any{
+		"channels": []any{
+			map[string]any{
+				"type": telegramChannelType,
+				"config": map[string]any{
+					"token": "x",
+					"proxy": "://bad",
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(cfgPath, cfgData, 0o600))
+
+	err = run(context.Background(), []string{
+		"-config", cfgPath,
+		"-mode", modeMock,
+		"-skills-root", t.TempDir(),
+		"-state-dir", t.TempDir(),
 	})
 	require.Error(t, err)
 
@@ -684,21 +774,36 @@ func TestRun_WithTelegram_BaseURLOverride(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	t.Setenv(telegramBaseURLEnvName, srv.URL)
+	t.Setenv(tgapi.BaseURLEnvName, srv.URL)
+
+	cfgData, err := yaml.Marshal(map[string]any{
+		"channels": []any{
+			map[string]any{
+				"type": telegramChannelType,
+				"config": map[string]any{
+					"token": token,
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(cfgPath, cfgData, 0o600))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	time.AfterFunc(50*time.Millisecond, cancel)
 
-	err := run(ctx, []string{
+	runErr := run(ctx, []string{
 		"-http-addr", "127.0.0.1:0",
 		"-mode", modeMock,
 		"-state-dir", dir,
 		"-skills-root", t.TempDir(),
-		"-telegram-token", token,
+		"-config", cfgPath,
 		"-require-mention",
+		"-mention", "@bot",
 	})
-	require.NoError(t, err)
+	require.NoError(t, runErr)
 }
 
 func TestSplitCSV(t *testing.T) {
@@ -1236,9 +1341,11 @@ func TestChannelsFromRegistry(t *testing.T) {
 	require.NoError(t, yaml.Unmarshal([]byte("greeting: hi"), &node))
 
 	channels, err := channelsFromRegistry(
+		context.Background(),
 		stubGateway{},
 		"demo",
 		"/state",
+		nil,
 		[]pluginSpec{{
 			Type:   typeName,
 			Name:   "c1",
@@ -1546,9 +1653,11 @@ func TestChannelsFromRegistry_EmptyTypeFails(t *testing.T) {
 	t.Parallel()
 
 	_, err := channelsFromRegistry(
+		context.Background(),
 		stubGateway{},
 		"demo",
 		"/state",
+		nil,
 		[]pluginSpec{{Type: " "}},
 	)
 	require.Error(t, err)
@@ -1559,9 +1668,11 @@ func TestChannelsFromRegistry_UnsupportedTypeFails(t *testing.T) {
 	t.Parallel()
 
 	_, err := channelsFromRegistry(
+		context.Background(),
 		stubGateway{},
 		"demo",
 		"/state",
+		nil,
 		[]pluginSpec{{Type: "nope"}},
 	)
 	require.Error(t, err)
@@ -1583,9 +1694,11 @@ func TestChannelsFromRegistry_ChannelErrorWrapped(t *testing.T) {
 	))
 
 	_, err := channelsFromRegistry(
+		context.Background(),
 		stubGateway{},
 		"demo",
 		"/state",
+		nil,
 		[]pluginSpec{{Type: typeName}},
 	)
 	require.Error(t, err)
