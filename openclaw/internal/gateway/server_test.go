@@ -698,6 +698,52 @@ func TestServer_Messages_ContentParts_URLFetch_AllowedDomains_Allows(
 	require.Equal(t, []byte("wavdata"), msg.ContentParts[0].Audio.Data)
 }
 
+func TestServer_ProcessMessage_LargeInlineData(t *testing.T) {
+	t.Parallel()
+
+	r := &recordingRunner{}
+	srv, err := New(r)
+	require.NoError(t, err)
+
+	data := bytes.Repeat([]byte("a"), int(defaultMaxBodyBytes))
+	req := gwproto.MessageRequest{
+		From: "u1",
+		ContentParts: []gwproto.ContentPart{
+			{
+				Type: gwproto.PartTypeFile,
+				File: &gwproto.FilePart{
+					Filename: "a.txt",
+					Data:     data,
+				},
+			},
+		},
+	}
+
+	rsp, status := srv.ProcessMessage(context.Background(), req)
+	require.Equal(t, http.StatusOK, status)
+	require.Equal(t, "ok", rsp.Reply)
+	require.Equal(t, "req-1", rsp.RequestID)
+
+	msg := r.Last()
+	require.Len(t, msg.ContentParts, 1)
+	require.Equal(t, model.ContentTypeFile, msg.ContentParts[0].Type)
+	require.NotNil(t, msg.ContentParts[0].File)
+	require.Len(t, msg.ContentParts[0].File.Data, len(data))
+
+	body, err := json.Marshal(req)
+	require.NoError(t, err)
+
+	rr := httptest.NewRecorder()
+	httpReq := httptest.NewRequest(
+		http.MethodPost,
+		srv.MessagesPath(),
+		bytes.NewReader(body),
+	)
+	srv.Handler().ServeHTTP(rr, httpReq)
+
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
 func TestServer_New_RequireMentionWithoutPatterns(t *testing.T) {
 	t.Parallel()
 
