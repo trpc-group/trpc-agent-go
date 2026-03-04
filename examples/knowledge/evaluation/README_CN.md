@@ -269,6 +269,18 @@ CRITICAL RULES(IMPORTANT !!!):
 
 #### RGB 综合分析
 
+**3 个子集平均值对比 (en + en_int + en_fact)：**
+
+| 指标 | LangChain | tRPC-Agent-Go | Agno | CrewAI | 胜者 |
+|------|-----------|---------------|------|--------|------|
+| **Faithfulness (忠实度)** | 0.9612 | **0.9716** | 0.7712 | **0.9741** | ✅ CrewAI |
+| **Answer Relevancy (相关性)** | 0.9333 | **0.9355** | **0.9358** | 0.8991 | ✅ Agno |
+| **Answer Correctness (正确性)** | 0.7721 | **0.8329** | 0.7053 | 0.7430 | ✅ tRPC-Agent-Go |
+| **Answer Similarity (相似度)** | 0.5416 | **0.5585** | 0.5219 | 0.5458 | ✅ tRPC-Agent-Go |
+| **Context Precision (精确率)** | 0.6976 | **0.7099** | 0.7064 | 0.7052 | ✅ tRPC-Agent-Go |
+| **Context Recall (召回率)** | 0.9678 | **0.9711** | 0.9667 | **0.9717** | ✅ CrewAI |
+| **Context Entity Recall (实体召回)** | 0.6665 | **0.6793** | 0.6678 | 0.6728 | ✅ tRPC-Agent-Go |
+
 **各子集第一名统计**（3 个子集 x 7 项指标 = 21 次比较）：
 
 | 框架 | 第一名次数 | 优势领域 |

@@ -269,6 +269,18 @@ Tests whether the model can identify and reject counterfactual (altered facts) i
 
 #### RGB Summary & Analysis
 
+**Average Across All 3 Subsets (en + en_int + en_fact):**
+
+| Metric | LangChain | tRPC-Agent-Go | Agno | CrewAI | Best |
+|--------|-----------|---------------|------|--------|------|
+| **Faithfulness** | 0.9612 | **0.9716** | 0.7712 | **0.9741** | ✅ CrewAI |
+| **Answer Relevancy** | 0.9333 | **0.9355** | **0.9358** | 0.8991 | ✅ Agno |
+| **Answer Correctness** | 0.7721 | **0.8329** | 0.7053 | 0.7430 | ✅ tRPC-Agent-Go |
+| **Answer Similarity** | 0.5416 | **0.5585** | 0.5219 | 0.5458 | ✅ tRPC-Agent-Go |
+| **Context Precision** | 0.6976 | **0.7099** | 0.7064 | 0.7052 | ✅ tRPC-Agent-Go |
+| **Context Recall** | 0.9678 | **0.9711** | 0.9667 | **0.9717** | ✅ CrewAI |
+| **Context Entity Recall** | 0.6665 | **0.6793** | 0.6678 | 0.6728 | ✅ tRPC-Agent-Go |
+
 **Cross-subset Winner Count** (1st place across all 3 subsets x 7 metrics = 21 comparisons):
 
 | Framework | 1st Place Count | Strongest Areas |
