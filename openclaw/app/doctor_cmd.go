@@ -12,15 +12,15 @@ package app
 
 import (
 	"context"
-	"flag"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
-	tgch "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/channel/telegram"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/pairing"
 	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 )
 
 const subcmdDoctor = "doctor"
@@ -31,68 +31,61 @@ const (
 )
 
 func runDoctor(args []string) int {
-	fs := flag.NewFlagSet(subcmdDoctor, flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-
-	token := fs.String("telegram-token", "", "Telegram bot token")
-	stateDir := fs.String(
-		"state-dir",
-		"",
-		"State dir (default: $HOME/.trpc-agent-go/openclaw)",
-	)
-	proxy := fs.String(
-		"telegram-proxy",
-		"",
-		"HTTP proxy URL for Telegram API calls (optional)",
-	)
-	httpTimeout := fs.Duration(
-		"telegram-http-timeout",
-		0,
-		"HTTP client timeout for Telegram API calls (optional)",
-	)
-	maxRetries := fs.Int(
-		"telegram-max-retries",
-		defaultTelegramMaxRetries,
-		"Max retries for Telegram API calls",
-	)
-
-	dmPolicy := fs.String(
-		"telegram-dm-policy",
-		"",
-		"Telegram DM policy: disabled|open|allowlist|pairing",
-	)
-	groupPolicy := fs.String(
-		"telegram-group-policy",
-		"",
-		"Telegram group policy: disabled|open|allowlist",
-	)
-	allowUsers := fs.String(
-		"allow-users",
-		"",
-		"Comma-separated allowlist; empty allows all",
-	)
-	allowThreads := fs.String(
-		"telegram-allow-threads",
-		"",
-		"Comma-separated allowlist of chat/topic threads",
-	)
-
-	if err := fs.Parse(args); err != nil {
-		return 2
+	opts, err := parseRunOptions(args)
+	if err != nil {
+		var exitErr *exitError
+		if errors.As(err, &exitErr) {
+			if exitErr.Code != 2 {
+				fmt.Fprintln(os.Stderr, exitErr.Err)
+			}
+			return exitErr.Code
+		}
+		fmt.Fprintln(os.Stderr, err)
+		return 1
 	}
-	if strings.TrimSpace(*token) == "" {
-		fmt.Println("Telegram: disabled")
+
+	specs := resolveTelegramChannelSpecs(opts.Channels)
+	if len(specs) == 0 {
+		fmt.Println("Telegram: not configured")
 		return 0
+	}
+	if len(specs) > 1 {
+		fmt.Fprintln(
+			os.Stderr,
+			"doctor: multiple telegram channels configured",
+		)
+		return 1
+	}
+	spec := specs[0]
+
+	var cfg telegramChannelConfig
+	if err := registry.DecodeStrict(spec.Config, &cfg); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	token := strings.TrimSpace(cfg.Token)
+	if token == "" {
+		fmt.Fprintln(
+			os.Stderr,
+			"doctor: missing channels[].config.token for telegram channel",
+		)
+		return 1
 	}
 
 	ctx := context.Background()
-	opts, err := makeTelegramAPIOptions(*proxy, *httpTimeout, *maxRetries)
+
+	netOpts, err := telegramClientNetOptions(cfg)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	apiOpts, err := tgapi.BuildClientOptionsFromEnv(netOpts)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 
-	c, err := tgapi.New(*token, opts...)
+	c, err := tgapi.New(token, apiOpts...)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -106,24 +99,25 @@ func runDoctor(args []string) int {
 	printBot(me)
 
 	ok := true
-	if !checkTimeout(*httpTimeout) {
+	if !checkTimeout(netOpts.Timeout) {
 		ok = false
 	}
 	if !checkWebhook(ctx, c) {
 		ok = false
 	}
 	if !checkPolicies(
-		*dmPolicy,
-		*groupPolicy,
-		*allowUsers,
-		*allowThreads,
+		cfg.DMPolicy,
+		cfg.GroupPolicy,
+		splitCSV(opts.AllowUsers),
+		cfg.AllowThreads,
 	) {
 		ok = false
 	}
 	if !checkPairingStore(
 		ctx,
-		*stateDir,
-		*dmPolicy,
+		opts.StateDir,
+		cfg.DMPolicy,
+		cfg.PairingTTL,
 		me,
 	) {
 		ok = false
@@ -155,7 +149,7 @@ func checkTimeout(timeout time.Duration) bool {
 	}
 	fmt.Fprintf(
 		os.Stderr,
-		"WARN: telegram-http-timeout=%s may be too low for long polling\n",
+		"WARN: channels[].config.http_timeout=%s may be too low for long polling\n",
 		timeout,
 	)
 	return false
@@ -196,22 +190,23 @@ func checkWebhook(ctx context.Context, c *tgapi.Client) bool {
 func checkPolicies(
 	dmPolicy string,
 	groupPolicy string,
-	rawAllowUsers string,
-	rawAllowThreads string,
+	allowUsers []string,
+	allowThreads []string,
 ) bool {
 	ok := true
 
-	if isPolicy(dmPolicy, "allowlist") && len(splitCSV(rawAllowUsers)) == 0 {
-		fmt.Fprintln(os.Stderr,
-			"WARN: telegram-dm-policy=allowlist but allow-users is empty",
+	if isPolicy(dmPolicy, "allowlist") && len(allowUsers) == 0 {
+		fmt.Fprintln(
+			os.Stderr,
+			"WARN: telegram dm_policy=allowlist but allow-users is empty",
 		)
 		ok = false
 	}
 	if isPolicy(groupPolicy, "allowlist") &&
-		len(splitCSV(rawAllowThreads)) == 0 {
-		fmt.Fprintln(os.Stderr,
-			"WARN: telegram-group-policy=allowlist but "+
-				"telegram-allow-threads is empty",
+		len(allowThreads) == 0 {
+		fmt.Fprintln(
+			os.Stderr,
+			"WARN: telegram group_policy=allowlist but allow_threads is empty",
 		)
 		ok = false
 	}
@@ -222,6 +217,7 @@ func checkPairingStore(
 	ctx context.Context,
 	rawStateDir string,
 	dmPolicy string,
+	rawPairingTTL string,
 	me tgapi.User,
 ) bool {
 	if dmPolicy != "" && !isPolicy(dmPolicy, "pairing") {
@@ -234,17 +230,19 @@ func checkPairingStore(
 		return false
 	}
 
-	bot := tgch.BotInfo{
-		ID:       me.ID,
-		Username: strings.TrimSpace(me.Username),
-	}
-	path, err := tgch.PairingStorePath(stateDir, bot)
+	path, err := pairingStorePath(stateDir, me)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return false
 	}
 
-	store, err := pairing.NewFileStore(path)
+	storeOpts, err := pairingStoreOptions(rawPairingTTL)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return false
+	}
+
+	store, err := pairing.NewFileStore(path, storeOpts...)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return false
