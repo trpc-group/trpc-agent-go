@@ -23,7 +23,6 @@ import (
 	"sync"
 	"time"
 
-	vec "github.com/asg017/sqlite-vec-go-bindings/cgo"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -58,7 +57,7 @@ func NewService(db *sql.DB, options ...ServiceOpt) (*Service, error) {
 		return nil, errors.New("db is nil")
 	}
 
-	vecInitOnce.Do(func() { vec.Auto() })
+	vecInitOnce.Do(vecAuto)
 
 	opts := defaultOptions.clone()
 	for _, option := range options {
@@ -264,7 +263,7 @@ func (s *Service) serializeEmbedding(embedding []float64) ([]byte, error) {
 	for i, v := range embedding {
 		out[i] = float32(v)
 	}
-	return vec.SerializeFloat32(out)
+	return vecSerializeFloat32(out)
 }
 
 func (s *Service) getDeletedAtTx(
