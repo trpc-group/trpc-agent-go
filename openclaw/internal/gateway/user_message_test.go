@@ -121,6 +121,23 @@ func TestNormalizeContentPart_FileData_InferMimeType(t *testing.T) {
 	require.Equal(t, "text/plain", out.File.MimeType)
 }
 
+func TestNormalizeContentPart_FileData_TooLarge(t *testing.T) {
+	t.Parallel()
+
+	s := &Server{maxPartBytes: 1}
+	part := gwproto.ContentPart{
+		Type: gwproto.PartTypeFile,
+		File: &gwproto.FilePart{
+			Filename: "a.txt",
+			Data:     []byte("hi"),
+		},
+	}
+
+	_, _, err := s.normalizeContentPart(context.Background(), part)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), errContentPartTooLarge)
+}
+
 func TestNormalizeContentPart_FileURL_DefaultMimeType(t *testing.T) {
 	t.Parallel()
 
@@ -164,6 +181,23 @@ func TestNormalizeContentPart_ImageData(t *testing.T) {
 	require.Equal(t, imageDetailAuto, out.Image.Detail)
 }
 
+func TestNormalizeContentPart_ImageData_TooLarge(t *testing.T) {
+	t.Parallel()
+
+	s := &Server{maxPartBytes: 1}
+	part := gwproto.ContentPart{
+		Type: gwproto.PartTypeImage,
+		Image: &gwproto.ImagePart{
+			Data:   []byte{0x1, 0x2},
+			Format: "png",
+		},
+	}
+
+	_, _, err := s.normalizeContentPart(context.Background(), part)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), errContentPartTooLarge)
+}
+
 func TestNormalizeContentPart_AudioData(t *testing.T) {
 	t.Parallel()
 
@@ -180,6 +214,23 @@ func TestNormalizeContentPart_AudioData(t *testing.T) {
 	require.NotNil(t, out)
 	require.NotNil(t, out.Audio)
 	require.Equal(t, "mp3", out.Audio.Format)
+}
+
+func TestNormalizeContentPart_AudioData_TooLarge(t *testing.T) {
+	t.Parallel()
+
+	s := &Server{maxPartBytes: 1}
+	part := gwproto.ContentPart{
+		Type: gwproto.PartTypeAudio,
+		Audio: &gwproto.AudioPart{
+			Data:   []byte("hi"),
+			Format: "mp3",
+		},
+	}
+
+	_, _, err := s.normalizeContentPart(context.Background(), part)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), errContentPartTooLarge)
 }
 
 func TestNormalizeContentPart_AudioURL_InferFromContentType(t *testing.T) {
