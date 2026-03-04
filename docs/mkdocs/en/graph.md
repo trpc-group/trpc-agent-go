@@ -792,7 +792,7 @@ Recipe (fan-out + join)
 - Connect a common upstream node to both `producer` and `consumer`.
 - Use `AddJoinEdge([]string{producer, consumer}, finish)` to converge.
 
-Key code (simplified)
+Example A: LLM node produces, function node consumes
 
 ```go
 const streamName = "llm:deltas"
@@ -829,6 +829,96 @@ sg.AddNode("consume", func(ctx context.Context, state graph.State) (any, error) 
 sg.AddEdge("setup", "llm")
 sg.AddEdge("setup", "consume")
 sg.AddJoinEdge([]string{"llm", "consume"}, "finish")
+```
+
+Example B: Agent node produces, function node consumes
+
+An Agent node invokes a sub-agent by name. In `StateGraph`, the node ID must
+match the sub-agent name registered on the parent `GraphAgent`.
+
+```go
+const streamName = "writer:deltas"
+
+// Producer: stream sub-agent deltas into StreamHub.
+sg.AddAgentNode(
+	"writer",
+	graph.WithStreamOutput(streamName),
+)
+
+// Consumer: read the bytes incrementally.
+sg.AddNode("consume", func(ctx context.Context, state graph.State) (any, error) {
+	r, err := graph.OpenStreamReader(ctx, streamName)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+	_, err = io.Copy(io.Discard, r)
+	return graph.State{}, err
+})
+
+sg.AddEdge("setup", "writer")
+sg.AddEdge("setup", "consume")
+sg.AddJoinEdge([]string{"writer", "consume"}, "finish")
+```
+
+When you construct the `GraphAgent`, register the sub-agent:
+
+```go
+sub := llmagent.New(
+	"writer",
+	llmagent.WithModel(llm),
+)
+
+ga, _ := graphagent.New(
+	"workflow",
+	g,
+	graphagent.WithSubAgents([]agent.Agent{sub}),
+)
+```
+
+Note: To get true incremental deltas, the sub-agent must run with streaming
+enabled (for example, `agent.WithStream(true)`). Otherwise the StreamHub stream
+only receives the final message at the end.
+
+Example C: Function node produces, function node consumes
+
+```go
+const streamName = "produce:lines"
+
+sg.AddNode("produce", func(ctx context.Context, state graph.State) (any, error) {
+	w, err := graph.OpenStreamWriter(ctx, streamName)
+	if err != nil {
+		return nil, err
+	}
+	defer w.Close()
+
+	lines := []string{"a\n", "b\n"}
+	for _, line := range lines {
+		if _, err := io.WriteString(w, line); err != nil {
+			return nil, err
+		}
+	}
+	return graph.State{}, nil
+})
+
+sg.AddNode("consume", func(ctx context.Context, state graph.State) (any, error) {
+	r, err := graph.OpenStreamReader(ctx, streamName)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+
+	b, err := io.ReadAll(r)
+	if err != nil {
+		return nil, err
+	}
+	_ = string(b) // parse it
+	return graph.State{}, nil
+})
+
+sg.AddEdge("setup", "produce")
+sg.AddEdge("setup", "consume")
+sg.AddJoinEdge([]string{"produce", "consume"}, "finish")
 ```
 
 Notes
