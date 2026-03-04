@@ -280,6 +280,21 @@ func TestEvaluateRequiredEnv_EmptyHostEnvIsMissing(t *testing.T) {
 	))
 }
 
+func TestEvaluateRequiredEnv_BlockedKeyNotSatisfiedByConfig(t *testing.T) {
+	os.Unsetenv(envLDPreload)
+
+	reason := evaluateRequiredEnv(
+		[]string{envLDPreload},
+		"",
+		SkillConfig{
+			Env: map[string]string{
+				envLDPreload: "x",
+			},
+		},
+	)
+	require.Contains(t, reason, envLDPreload)
+}
+
 func TestEvaluateRequiredEnv_SatisfiedByConfigEnv(t *testing.T) {
 	os.Unsetenv("SKILLS_TEST_CFG_ENV")
 
@@ -766,6 +781,34 @@ x
 	env, err := r.SkillRunEnv(context.Background(), "needkey")
 	require.NoError(t, err)
 	require.Equal(t, "from-env", env["SKILLS_TEST_PRIMARY_ENV"])
+}
+
+func TestRepository_SkillRunEnv_FiltersBlockedEnvKeys(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, "needkey", `---
+name: needkey
+description: test
+---
+
+x
+`)
+
+	r, err := NewRepository(
+		[]string{root},
+		WithSkillConfigs(map[string]SkillConfig{
+			"needkey": {
+				Env: map[string]string{
+					envLDPreload: "x",
+				},
+			},
+		}),
+	)
+	require.NoError(t, err)
+
+	env, err := r.SkillRunEnv(context.Background(), "needkey")
+	require.NoError(t, err)
+	_, ok := env[envLDPreload]
+	require.False(t, ok)
 }
 
 func TestBundledSkills_ParseFrontMatterAndMetadata(t *testing.T) {

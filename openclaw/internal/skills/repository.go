@@ -223,11 +223,17 @@ func (r *Repository) SkillRunEnv(
 		if key == "" || strings.TrimSpace(v) == "" {
 			continue
 		}
+		if isBlockedSkillEnvKey(key) {
+			continue
+		}
 		out[key] = v
 	}
 
 	apiKey := strings.TrimSpace(cfg.APIKey)
 	if primaryEnv != "" && apiKey != "" {
+		if isBlockedSkillEnvKey(primaryEnv) {
+			return out, nil
+		}
 		if _, ok := out[primaryEnv]; !ok {
 			out[primaryEnv] = apiKey
 		}
@@ -457,6 +463,10 @@ func evaluateRequiredEnv(
 			strings.TrimSpace(v) != "" {
 			continue
 		}
+		if isBlockedSkillEnvKey(key) {
+			missing = append(missing, key)
+			continue
+		}
 		if strings.TrimSpace(cfg.Env[key]) != "" {
 			continue
 		}
@@ -638,6 +648,29 @@ func copySkillEnv(env map[string]string) map[string]string {
 		out[key] = val
 	}
 	return out
+}
+
+const (
+	envLDPreload           = "LD_PRELOAD"
+	envLDLibraryPath       = "LD_LIBRARY_PATH"
+	envDYLDInsertLibraries = "DYLD_INSERT_LIBRARIES"
+	envDYLDLibraryPath     = "DYLD_LIBRARY_PATH"
+	envDYLDForceFlatNS     = "DYLD_FORCE_FLAT_NAMESPACE"
+	envOpenSSLConf         = "OPENSSL_CONF"
+)
+
+func isBlockedSkillEnvKey(key string) bool {
+	switch strings.ToUpper(strings.TrimSpace(key)) {
+	case envLDPreload,
+		envLDLibraryPath,
+		envDYLDInsertLibraries,
+		envDYLDLibraryPath,
+		envDYLDForceFlatNS,
+		envOpenSSLConf:
+		return true
+	default:
+		return false
+	}
 }
 
 var _ skill.Repository = (*Repository)(nil)
