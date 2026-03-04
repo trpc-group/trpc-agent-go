@@ -298,22 +298,33 @@ WORKFLOW:
 3. If the question asks about temporal order (what happened first, next, before/after something), set order_by_event_time=true to get results sorted chronologically.
 4. Call memory_search with the question as query (and optional filters above).
 5. Read the returned memories carefully. Look at both the memory text AND the event_time field for date information.
-6. Output ONLY the answer - no explanations, no context, no questions.
+6. BEFORE answering, verify that the retrieved memories DIRECTLY contain the specific information asked about. If they do not, output "` + fallbackAnswer + `".
+7. Output ONLY the answer - no explanations, no context, no questions.
 
 RULES:
-- Your answer MUST be 1-15 words maximum.
-- For time questions, use the absolute date/year that appears in the memory text (e.g. "[DATE: 7 May 2023]" or "2022") or from the event_time field.
+- Your answer MUST be 1-10 words maximum. Prefer the SHORTEST correct answer.
+- PREFER the exact words used in the memories. Do NOT paraphrase or use synonyms.
+  If a memory says someone felt "happy", answer "happy" -- not "fulfilled and content".
+  If a memory says something was "amazing", answer "amazing" -- not "an incredible experience".
+- For time questions, use the absolute date/year that appears in the memory text (e.g. "7 May 2023" or "2022") or from the event_time field.
 - Do NOT use memory database timestamps (CreatedAt/UpdatedAt) or the current system date.
 - If a memory uses a relative phrase (like "last year"), resolve it ONLY using explicit dates found in the memories (e.g. the session date).
-- If memories contradict each other, prefer the one with the latest "[DATE: ...]" or event_time.
-- If memories contain related but indirect information, make a reasonable inference. For example, if asked "What does Alice think about hiking?" and a memory says "Alice went hiking at Mt. Fuji and loved it", answer "She loves it."
+- If memories contradict each other, prefer the one with the latest event_time.
+- CRITICAL: A memory is only relevant if it contains the SPECIFIC detail asked about.
+  If asked "What book did X read?", a memory about "X enjoys reading" does NOT answer the question.
+  If asked "What did X do after Y?", a memory about X doing something unrelated is NOT relevant.
+  If asked about person A but only memories about person B are found, that is NOT relevant.
+  Having memories about a person does NOT mean you have the specific detail asked about.
+- Only make an inference when a memory CLOSELY matches the question. For example, if asked "What does Alice think about hiking?" and a memory says "Alice went hiking and loved it", answer "She loves it." But do NOT infer when the memories only mention the topic in passing.
+- For hypothetical questions ("Would X...?", "Could X...?", "Is X likely to...?"), use available memories to reason about the answer rather than defaulting to not available. Combine facts logically: e.g., if someone wants to be a counselor, they would likely NOT pursue writing as a career.
 - For temporal questions, combine dates from multiple memories if needed to determine chronological order or calculate durations.
-- If no relevant memory is found after searching, output "` + fallbackAnswer + `" exactly.
+- If no memory DIRECTLY answers the question after searching, output "` + fallbackAnswer + `" exactly.
 - Do NOT ask follow-up questions. Do NOT say "Could you provide more context".
 - Do NOT explain your reasoning. Do NOT add any prefix like "The answer is" or "Based on".
 - Output the bare answer only.
 
-EXAMPLES of good answers: "Paris", "2021", "7 May 2023", "Toyota Camry", "She loves hiking", "` + fallbackAnswer + `"`
+GOOD answers: "Paris", "2021", "7 May 2023", "happy", "hiking", "adoption agencies", "` + fallbackAnswer + `"
+BAD answers: "She felt passionate and fulfilled about it", "Based on the memories, the answer is Paris", "It was their go-to spot for self-expression"`
 
 // qaMultiSearchInstruction is a strict instruction for the QA agent to
 // call memory_search multiple times before answering.
@@ -323,27 +334,38 @@ WORKFLOW:
 1. You MUST call memory_search exactly %d times before answering.
 2. Search #1: Call memory_search with the full question as query. Do NOT use the kind filter for the first search - information may be stored as either fact or episode. If the question involves a specific time period or asks "when", include time_after/time_before (ISO 8601: YYYY-MM-DD). For temporal order questions (what happened first/next/before/after), set order_by_event_time=true.
 3. For the remaining searches: rewrite the query to maximize recall.
+   - Use short keyword-style phrases (e.g., "Melanie sunrise painting" instead of "When did Melanie paint a sunrise?").
    - Focus on the KEY ENTITIES mentioned in the question (person names, specific objects, activities).
-   - Use short, specific phrases (e.g., "Melanie sunrise painting" instead of "When did Melanie paint a sunrise?").
-   - Try different angle: if the first search didn't find relevant results, try searching for the specific person + activity without time constraints.
+   - Try different angles: if the first search didn't find relevant results, try the specific person + activity without time constraints.
    - Only use kind filter if previous search returned many irrelevant results of one type.
 4. Read the returned memories from ALL searches. Look at both memory text AND event_time fields.
-5. Output ONLY the answer - no explanations, no context, no questions.
+5. BEFORE answering, verify that the retrieved memories DIRECTLY contain the specific information asked about. If they do not, output "` + fallbackAnswer + `".
+6. Output ONLY the answer - no explanations, no context, no questions.
 
 RULES:
-- Your answer MUST be 1-15 words maximum.
-- For time questions, use the absolute date/year that appears in the memory text (e.g. "[DATE: 7 May 2023]" or "2022") or from the event_time field.
+- Your answer MUST be 1-10 words maximum. Prefer the SHORTEST correct answer.
+- PREFER the exact words used in the memories. Do NOT paraphrase or use synonyms.
+  If a memory says someone felt "happy", answer "happy" -- not "fulfilled and content".
+  If a memory says something was "amazing", answer "amazing" -- not "an incredible experience".
+- For time questions, use the absolute date/year that appears in the memory text (e.g. "7 May 2023" or "2022") or from the event_time field.
 - Do NOT use memory database timestamps (CreatedAt/UpdatedAt) or the current system date.
 - If a memory uses a relative phrase (like "last year"), resolve it ONLY using explicit dates found in the memories (e.g. the session date).
-- If memories contradict each other, prefer the one with the latest "[DATE: ...]" or event_time.
-- If memories contain related but indirect information, make a reasonable inference. For example, if asked "What does Alice think about hiking?" and a memory says "Alice went hiking at Mt. Fuji and loved it", answer "She loves it."
+- If memories contradict each other, prefer the one with the latest event_time.
+- CRITICAL: A memory is only relevant if it contains the SPECIFIC detail asked about.
+  If asked "What book did X read?", a memory about "X enjoys reading" does NOT answer the question.
+  If asked "What did X do after Y?", a memory about X doing something unrelated is NOT relevant.
+  If asked about person A but only memories about person B are found, that is NOT relevant.
+  Having memories about a person does NOT mean you have the specific detail asked about.
+- Only make an inference when a memory CLOSELY matches the question. For example, if asked "What does Alice think about hiking?" and a memory says "Alice went hiking and loved it", answer "She loves it." But do NOT infer when the memories only mention the topic in passing.
+- For hypothetical questions ("Would X...?", "Could X...?", "Is X likely to...?"), use available memories to reason about the answer rather than defaulting to not available. Combine facts logically: e.g., if someone wants to be a counselor, they would likely NOT pursue writing as a career.
 - For temporal questions, combine dates from multiple memories if needed to determine chronological order or calculate durations.
-- If no relevant memory is found after all searches, output "` + fallbackAnswer + `" exactly.
+- If no memory DIRECTLY answers the question after all searches, output "` + fallbackAnswer + `" exactly.
 - Do NOT ask follow-up questions. Do NOT say "Could you provide more context".
 - Do NOT explain your reasoning. Do NOT add any prefix like "The answer is" or "Based on".
 - Output the bare answer only.
 
-EXAMPLES of good answers: "Paris", "2021", "7 May 2023", "Toyota Camry", "She loves hiking", "` + fallbackAnswer + `"`
+GOOD answers: "Paris", "2021", "7 May 2023", "happy", "hiking", "adoption agencies", "` + fallbackAnswer + `"
+BAD answers: "She felt passionate and fulfilled about it", "Based on the memories, the answer is Paris", "It was their go-to spot for self-expression"`
 
 func qaMemorySearchInstruction(searchPasses int) string {
 	if searchPasses <= 1 {

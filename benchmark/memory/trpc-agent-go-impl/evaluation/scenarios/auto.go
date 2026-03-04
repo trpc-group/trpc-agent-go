@@ -30,8 +30,8 @@ import (
 const (
 	autoAppName = "memory-eval-auto"
 
-	autoQAMaxTokens         = 100
-	autoQAMaxToolIterations = 8
+	autoQAMaxTokens         = 50
+	autoQAMaxToolIterations = 10
 )
 
 // AutoEvaluator evaluates using automatic memory extraction.
