@@ -284,6 +284,7 @@ func defaultTestOptions(ae *agentEvaluator) *options {
 		metricManager:     ae.metricManager,
 		registry:          ae.registry,
 		evalService:       ae.evalService,
+		judgeRunner:       ae.judgeRunner,
 		numRuns:           ae.numRuns,
 		runOptions:        append([]agent.RunOption(nil), ae.runOptions...),
 	}
@@ -1086,7 +1087,7 @@ func TestAgentEvaluatorRunEvaluationInjectsJudgeRunnerIntoLLMJudgeMetrics(t *tes
 		return
 	}
 
-	_, err = ae.runEvaluation(ctx, evalSetID)
+	_, err = ae.runEvaluation(ctx, evalSetID, defaultTestOptions(ae))
 	if !assert.NoError(t, err) {
 		return
 	}
