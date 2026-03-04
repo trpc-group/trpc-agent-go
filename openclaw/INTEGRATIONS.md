@@ -324,10 +324,9 @@ Compatibility aliases (for upstream OpenClaw skill packs):
   - `plugins.entries.<type>.enabled`
   - `plugins.entries.<type>.config.<fieldPath>`
 
-Built-in integrations:
+Telegram:
 
-- If Telegram is enabled (`telegram.token` / `-telegram-token`), this
-  demo adds:
+- If a Telegram channel is configured in `channels:`, this demo adds:
   - `channels.telegram`
   - `channels.telegram.token`
 

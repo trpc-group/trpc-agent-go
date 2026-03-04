@@ -73,7 +73,7 @@ const (
 Code: %s
 
 Ask the operator to approve:
-openclaw pairing approve %s -telegram-token <TOKEN>`
+openclaw pairing approve %s -config <CONFIG>`
 )
 
 type gatewayClient interface {
