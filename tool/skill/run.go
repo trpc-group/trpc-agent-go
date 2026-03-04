@@ -50,6 +50,7 @@ type RunTool struct {
 	deniedCmds  map[string]struct{}
 
 	forceSaveArtifacts bool
+	requireSkillLoaded bool
 }
 
 // SkillRunEnvProvider is an optional interface for skill repositories that
@@ -151,6 +152,17 @@ func WithDeniedCommands(cmds ...string) func(*RunTool) {
 func WithForceSaveArtifacts(enable bool) func(*RunTool) {
 	return func(t *RunTool) {
 		t.forceSaveArtifacts = enable
+	}
+}
+
+// WithRequireSkillLoaded rejects skill_run calls unless the skill has been
+// loaded via skill_load in the current session state.
+//
+// When enabled, models must call skill_load first to bring SKILL.md (and any
+// selected docs) into context, reducing hallucinated commands/scripts.
+func WithRequireSkillLoaded(enable bool) func(*RunTool) {
+	return func(t *RunTool) {
+		t.requireSkillLoaded = enable
 	}
 }
 
@@ -386,6 +398,12 @@ func (t *RunTool) Call(
 	if err != nil {
 		return nil, err
 	}
+	if t.requireSkillLoaded && !isSkillLoadedInContext(ctx, in.Skill) {
+		return nil, fmt.Errorf(
+			"skill_run requires skill_load first for %q",
+			in.Skill,
+		)
+	}
 	in, saveRequested, outputsSaveSkipReason := t.applyArtifactSaveOverrides(
 		ctx,
 		in,
@@ -431,6 +449,16 @@ func (t *RunTool) Call(
 
 var _ tool.Tool = (*RunTool)(nil)
 var _ tool.CallableTool = (*RunTool)(nil)
+
+func isSkillLoadedInContext(ctx context.Context, name string) bool {
+	inv, ok := agent.InvocationFromContext(ctx)
+	if !ok || inv == nil || inv.Session == nil {
+		return true
+	}
+	key := skill.StateKeyLoadedPrefix + strings.TrimSpace(name)
+	v, ok := inv.Session.GetState(key)
+	return ok && len(v) > 0
+}
 
 // StateDelta returns a stable, replayable artifact ref list when skill_run
 // persisted outputs via Artifact service.
@@ -690,6 +718,9 @@ func stageUserFileInput(
 ) (*stagedInput, string) {
 	rawName := strings.TrimSpace(f.Name)
 	if rawName == "" {
+		rawName = fileNameFromArtifactRef(f.FileID)
+	}
+	if rawName == "" {
 		rawName = fmt.Sprintf(userFileInputNameFmt, idx+1)
 	}
 	key, ok := userFileInputFastKey(f)
@@ -732,6 +763,23 @@ func stageUserFileInput(
 		MIMEType:     mime,
 		SizeBytes:    int64(len(data)),
 	}, ""
+}
+
+func fileNameFromArtifactRef(fileID string) string {
+	s := strings.TrimSpace(fileID)
+	if !strings.HasPrefix(s, fileref.ArtifactPrefix) {
+		return ""
+	}
+	rest := strings.TrimPrefix(s, fileref.ArtifactPrefix)
+	name, _, err := codeexecutor.ParseArtifactRef(rest)
+	if err != nil {
+		return ""
+	}
+	base := path.Base(strings.TrimSpace(name))
+	if base == "." || base == "/" || base == ".." {
+		return ""
+	}
+	return base
 }
 
 func sanitizeUserFileName(name string) string {
