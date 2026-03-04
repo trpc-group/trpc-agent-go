@@ -635,7 +635,10 @@ borrows a few design ideas from OpenClaw:
 
 ### Bundled skills
 
-This demo includes a few simple bundled skills under `openclaw/skills/`:
+This demo vendors the upstream OpenClaw skill pack under `openclaw/skills/`
+(see `openclaw/skills/README.md` for attribution and license).
+
+It also includes a few simple demo skills:
 
 - `hello`: write a small file to `out/`.
 - `envdump`: dump environment info to `out/env.txt`.
@@ -664,8 +667,30 @@ demo can filter the skill at load time based on the local environment:
 - `metadata.openclaw.requires.bins`
 - `metadata.openclaw.requires.anyBins`
 - `metadata.openclaw.requires.env`
+- `metadata.openclaw.requires.config`
 
 Enable `-skills-debug` to log which skills are skipped and why.
+
+### OpenClaw-style skill config (`skills.entries`)
+
+Upstream OpenClaw supports providing per-skill environment variables and
+API keys via config. This demo supports the same idea in YAML:
+
+```yaml
+skills:
+  # Optional: restrict which bundled skills are enabled by default.
+  # Applies only to bundled skills under ./openclaw/skills.
+  allowBundled: ["gh-issues", "notion"]
+
+  # Optional: per-skill config (by skillKey or skill name).
+  entries:
+    gh-issues:
+      # Injected into metadata.openclaw.primaryEnv when present.
+      apiKey: "..."
+      # Injected into skill_run env (never overrides host env).
+      env:
+        GH_TOKEN: "..."
+```
 
 ### `{baseDir}` placeholder
 

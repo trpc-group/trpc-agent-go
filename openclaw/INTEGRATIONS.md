@@ -158,6 +158,18 @@ skills:
   extra_dirs:
     - "/path/to/team/skills"      # optional; lowest precedence
   debug: false                   # log gating decisions when true
+
+  # Optional: restrict which bundled skills are enabled by default.
+  # Applies only to bundled skills under ./openclaw/skills.
+  allowBundled: ["gh-issues", "notion"]
+
+  # Optional: per-skill config (by skillKey or skill name).
+  entries:
+    gh-issues:
+      enabled: true              # optional; default true
+      apiKey: "..."              # optional; injected into primaryEnv
+      env:                       # optional; injected into skill_run
+        GH_TOKEN: "..."
 ```
 
 CLI equivalents:
@@ -165,6 +177,23 @@ CLI equivalents:
 - `-skills-root <DIR>`
 - `-skills-extra-dirs <A,B,C>` (comma-separated)
 - `-skills-debug`
+- `-skills-allow-bundled <A,B,C>` (comma-separated; bundled skills only)
+
+#### `skills.entries` and OpenClaw metadata
+
+This demo supports OpenClaw-style per-skill configuration:
+
+- `skills.entries.<key>.enabled: false` disables that skill.
+- `skills.entries.<key>.env` can satisfy `metadata.openclaw.requires.env`
+  and is injected into `skill_run` (never overrides host env).
+- `skills.entries.<key>.apiKey` is injected into
+  `metadata.openclaw.primaryEnv` when that field is present in the skill.
+
+Key resolution:
+
+- If a skill sets `metadata.openclaw.skillKey`, that value is preferred
+  for `skills.entries.<key>`.
+- Otherwise the skill `name` is used.
 
 ### Minimal `SKILL.md` template
 
@@ -241,6 +270,8 @@ Supported fields:
 
 - `metadata.openclaw.always`
 - `metadata.openclaw.os` (`darwin`, `linux`, `win32`)
+- `metadata.openclaw.skillKey`
+- `metadata.openclaw.primaryEnv`
 - `metadata.openclaw.requires.bins`
 - `metadata.openclaw.requires.anyBins`
 - `metadata.openclaw.requires.env`

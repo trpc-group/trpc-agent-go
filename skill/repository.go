@@ -10,8 +10,11 @@
 //
 
 // Package skill provides a model-agnostic Agent Skills repository.
-// A skill is a folder containing a SKILL.md file with YAML front
-// matter and a Markdown body, plus optional doc files.
+// A skill is a folder containing a SKILL.md file with an optional YAML front
+// matter block and a Markdown body, plus optional doc files.
+//
+// If the front matter is missing or does not specify `name`, the skill name
+// falls back to the folder name.
 package skill
 
 import (
@@ -128,12 +131,19 @@ func (r *FSRepository) scan() error {
 				return nil
 			}
 			sum, err3 := parseSummary(sf)
-			if err3 != nil || sum.Name == "" {
+			if err3 != nil {
+				return nil
+			}
+			name := strings.TrimSpace(sum.Name)
+			if name == "" {
+				name = filepath.Base(p)
+			}
+			if strings.TrimSpace(name) == "" {
 				return nil
 			}
 			// Record first occurrence; later ones ignored.
-			if _, ok := r.index[sum.Name]; !ok {
-				r.index[sum.Name] = p
+			if _, ok := r.index[name]; !ok {
+				r.index[name] = p
 			}
 			return nil
 		})
@@ -214,16 +224,11 @@ func (r *FSRepository) readDocs(dir string) []Doc {
 
 // parseSummary returns front matter name/description only.
 func parseSummary(path string) (Summary, error) {
-	f, err := os.Open(path)
+	b, err := os.ReadFile(path)
 	if err != nil {
 		return Summary{}, err
 	}
-	defer f.Close()
-	rd := bufio.NewReader(f)
-	fm, _, err := readFrontMatter(rd)
-	if err != nil {
-		return Summary{}, err
-	}
+	fm, _ := splitFrontMatter(string(b))
 	s := Summary{
 		Name:        fm["name"],
 		Description: fm["description"],
@@ -341,6 +346,7 @@ const (
 	StateKeyDocsPrefix   = "temp:skill:docs:"
 	// StateKeyArtifacts stores per-tool-call artifact refs for replay. The value
 	// is a JSON object like:
-	// {"tool_call_id":"...","artifacts":[{"name":"...","version":3,"ref":"artifact://...@3"}]}
+	// {"tool_call_id":"...","artifacts":[{"name":"...","version":3,
+	// "ref":"artifact://...@3"}]}
 	StateKeyArtifacts = "temp:skill:artifacts"
 )

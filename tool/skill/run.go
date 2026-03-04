@@ -52,6 +52,20 @@ type RunTool struct {
 	forceSaveArtifacts bool
 }
 
+// SkillRunEnvProvider is an optional interface for skill repositories that
+// want to inject environment variables into skill_run executions.
+//
+// Returned variables are merged into runInput.Env with least privilege:
+// - Never overrides explicit tool-call env (runInput.Env)
+// - Never overrides existing host env (os.LookupEnv)
+// - Blocks known-dangerous env keys
+type SkillRunEnvProvider interface {
+	SkillRunEnv(
+		ctx context.Context,
+		skillName string,
+	) (map[string]string, error)
+}
+
 // NewRunTool creates a new RunTool.
 func NewRunTool(
 	repo skill.Repository,
@@ -91,6 +105,15 @@ const (
 const (
 	envPath       = "PATH"
 	envVirtualEnv = "VIRTUAL_ENV"
+)
+
+const (
+	envLDPreload           = "LD_PRELOAD"
+	envLDLibraryPath       = "LD_LIBRARY_PATH"
+	envDYLDInsertLibraries = "DYLD_INSERT_LIBRARIES"
+	envDYLDLibraryPath     = "DYLD_LIBRARY_PATH"
+	envDYLDForceFlatNS     = "DYLD_FORCE_FLAT_NAMESPACE"
+	envOpenSSLConf         = "OPENSSL_CONF"
 )
 
 const workspaceMetadataFileMode uint32 = 0o600
@@ -279,11 +302,16 @@ func (t *RunTool) Declaration() *tool.Declaration {
 		"other tools."
 	cmdDesc := "Shell command"
 	if len(t.allowedCmds) > 0 || len(t.deniedCmds) > 0 {
-		desc += " Restrictions enabled when allowed_commands/denied_commands are set: " +
-			"no shell; one executable + args only; no > < | ; && ||."
-		cmdDesc = "Command string (no shell syntax when allowed_commands/denied_commands are set)"
+		desc += " Restrictions enabled when " +
+			"allowed_commands/denied_commands are set: " +
+			"no shell; one executable + args only; " +
+			"no > < | ; && ||."
+		cmdDesc = "Command string (no shell syntax " +
+			"when allowed_commands/denied_commands are set)"
 		if len(t.allowedCmds) > 0 {
-			desc += " Allowed commands: " + formatCommandPreview(t.allowedCmds, 20) + "."
+			desc += " Allowed commands: " +
+				formatCommandPreview(t.allowedCmds, 20) +
+				"."
 		}
 	}
 	return &tool.Declaration{
@@ -1289,13 +1317,17 @@ func isWorkspaceEnvPath(s string) bool {
 
 func isAllowedWorkspacePath(rel string) bool {
 	switch {
-	case rel == codeexecutor.DirSkills || strings.HasPrefix(rel, codeexecutor.DirSkills+"/"):
+	case rel == codeexecutor.DirSkills ||
+		strings.HasPrefix(rel, codeexecutor.DirSkills+"/"):
 		return true
-	case rel == codeexecutor.DirWork || strings.HasPrefix(rel, codeexecutor.DirWork+"/"):
+	case rel == codeexecutor.DirWork ||
+		strings.HasPrefix(rel, codeexecutor.DirWork+"/"):
 		return true
-	case rel == codeexecutor.DirOut || strings.HasPrefix(rel, codeexecutor.DirOut+"/"):
+	case rel == codeexecutor.DirOut ||
+		strings.HasPrefix(rel, codeexecutor.DirOut+"/"):
 		return true
-	case rel == codeexecutor.DirRuns || strings.HasPrefix(rel, codeexecutor.DirRuns+"/"):
+	case rel == codeexecutor.DirRuns ||
+		strings.HasPrefix(rel, codeexecutor.DirRuns+"/"):
 		return true
 	default:
 		return false
@@ -1378,6 +1410,7 @@ func (t *RunTool) runProgram(
 	if env == nil {
 		env = map[string]string{}
 	}
+	t.maybeInjectSkillEnv(ctx, in.Skill, env)
 	if _, ok := env[codeexecutor.EnvSkillName]; !ok {
 		env[codeexecutor.EnvSkillName] = in.Skill
 	}
@@ -1438,6 +1471,80 @@ func venvRelPaths(cwd string, skillName string) (string, string) {
 	relVenv := slashRel(base, venv)
 	relBin := slashRel(base, venvBin)
 	return relVenv, relBin
+}
+
+func (t *RunTool) maybeInjectSkillEnv(
+	ctx context.Context,
+	skillName string,
+	env map[string]string,
+) {
+	p, ok := t.repo.(SkillRunEnvProvider)
+	if !ok || p == nil {
+		return
+	}
+
+	overrides, err := p.SkillRunEnv(ctx, skillName)
+	if err != nil {
+		log.WarnfContext(
+			ctx,
+			"skill_run: env provider failed for %q: %v",
+			skillName,
+			err,
+		)
+		return
+	}
+	for k, v := range overrides {
+		key := strings.TrimSpace(k)
+		if key == "" || strings.TrimSpace(v) == "" {
+			continue
+		}
+		if !isValidEnvVarName(key) {
+			continue
+		}
+		if isBlockedSkillEnvKey(key) {
+			continue
+		}
+		if _, ok := env[key]; ok {
+			continue
+		}
+		if v, ok := os.LookupEnv(key); ok &&
+			strings.TrimSpace(v) != "" {
+			continue
+		}
+		env[key] = v
+	}
+}
+
+func isBlockedSkillEnvKey(key string) bool {
+	switch strings.ToUpper(strings.TrimSpace(key)) {
+	case envLDPreload,
+		envLDLibraryPath,
+		envDYLDInsertLibraries,
+		envDYLDLibraryPath,
+		envDYLDForceFlatNS,
+		envOpenSSLConf:
+		return true
+	default:
+		return false
+	}
+}
+
+func isValidEnvVarName(key string) bool {
+	if key == "" {
+		return false
+	}
+	for i, r := range key {
+		switch {
+		case r == '_' || ('A' <= r && r <= 'Z') ||
+			('a' <= r && r <= 'z'):
+			continue
+		case i > 0 && '0' <= r && r <= '9':
+			continue
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func slashRel(base string, target string) string {
@@ -1519,7 +1626,17 @@ func wrapWithVenvPrefix(cmd string, venv string, venvBin string) string {
 	return sb.String()
 }
 
-const disallowedShellMeta = "\n\r;&|<>"
+const (
+	disallowedShellMeta = "\n\r;&|<>"
+
+	errShellMetaFmt = "skill_run: shell metacharacter %q is not allowed " +
+		"when command restrictions are enabled " +
+		"(allowed_commands/denied_commands set). " +
+		"Use a single executable with args only " +
+		"(no redirects/pipes/chaining). " +
+		"To allow shell syntax, clear " +
+		"allowed_commands/denied_commands in the tool config"
+)
 
 func cmdInList(list map[string]struct{}, cmd string) bool {
 	if len(list) == 0 {
@@ -1539,10 +1656,7 @@ func splitCommandLine(s string) ([]string, error) {
 	}
 	if idx := strings.IndexAny(s, disallowedShellMeta); idx >= 0 {
 		meta := s[idx : idx+1]
-		return nil, fmt.Errorf(
-			"skill_run: shell metacharacter %q is not allowed when command restrictions are enabled (allowed_commands/denied_commands set). Use a single executable with args only (no redirects/pipes/chaining). To allow shell syntax, clear allowed_commands/denied_commands in the tool config",
-			meta,
-		)
+		return nil, fmt.Errorf(errShellMetaFmt, meta)
 	}
 	var args []string
 	var cur strings.Builder
