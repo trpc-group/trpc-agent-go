@@ -16,10 +16,23 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	evalresultinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/inmemory"
 	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
+
+type stubRunner struct{}
+
+func (stubRunner) Run(ctx context.Context, userID string, sessionID string, message model.Message, runOpts ...agent.RunOption) (<-chan *event.Event, error) {
+	return nil, nil
+}
+
+func (stubRunner) Close() error {
+	return nil
+}
 
 func TestNewOptionsDefaults(t *testing.T) {
 	opts := NewOptions()
@@ -28,6 +41,7 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.NotNil(t, opts.EvalResultManager)
 	assert.NotNil(t, opts.Registry)
 	assert.NotNil(t, opts.SessionIDSupplier)
+	assert.Nil(t, opts.ExpectedRunner)
 	assert.Nil(t, opts.Callbacks)
 	assert.Equal(t, runtime.GOMAXPROCS(0), opts.EvalCaseParallelism)
 	assert.False(t, opts.EvalCaseParallelInferenceEnabled)
@@ -76,6 +90,12 @@ func TestWithCallbacks(t *testing.T) {
 	opts := NewOptions(WithCallbacks(callbacks))
 
 	assert.Same(t, callbacks, opts.Callbacks)
+}
+
+func TestWithExpectedRunner(t *testing.T) {
+	custom := stubRunner{}
+	opts := NewOptions(WithExpectedRunner(custom))
+	assert.Equal(t, custom, opts.ExpectedRunner)
 }
 
 func TestWithEvalCaseParallelism(t *testing.T) {
