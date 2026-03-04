@@ -28,6 +28,7 @@ import (
 	istatus "trpc.group/trpc-go/trpc-agent-go/evaluation/internal/status"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/service/internal/inference"
 	evalstatus "trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -38,6 +39,7 @@ const reasonSeparator = ";"
 // local is a local implementation of service.Service.
 type local struct {
 	runner                            runner.Runner
+	expectedRunner                    runner.Runner
 	evalSetManager                    evalset.Manager
 	evalResultManager                 evalresult.Manager
 	registry                          registry.Registry
@@ -74,6 +76,7 @@ func New(runner runner.Runner, opt ...service.Option) (service.Service, error) {
 	}
 	service := &local{
 		runner:                            runner,
+		expectedRunner:                    opts.ExpectedRunner,
 		evalSetManager:                    opts.EvalSetManager,
 		evalResultManager:                 opts.EvalResultManager,
 		registry:                          opts.Registry,
@@ -335,7 +338,7 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 			err,
 		)
 	}
-	inputs, err := prepareCaseEvaluationInputs(inferenceResult, evalCase)
+	inputs, err := s.prepareCaseEvaluationInputs(ctx, inferenceResult, evalCase)
 	if err != nil {
 		return nil, fmt.Errorf("prepare case evaluation inputs (evalCaseID=%s): %w", inferenceResult.EvalCaseID, err)
 	}
@@ -431,12 +434,24 @@ type caseEvaluationInputs struct {
 	userID    string
 }
 
-func prepareCaseEvaluationInputs(inferenceResult *service.InferenceResult, evalCase *evalset.EvalCase) (*caseEvaluationInputs, error) {
+func (s *local) prepareCaseEvaluationInputs(
+	ctx context.Context,
+	inferenceResult *service.InferenceResult,
+	evalCase *evalset.EvalCase,
+) (*caseEvaluationInputs, error) {
 	if evalCase.SessionInput == nil {
 		return nil, errors.New("session input is nil")
 	}
 	actuals := inferenceResult.Inferences
-	expecteds, err := buildExpectedsForEval(evalCase)
+	var (
+		expecteds []*evalset.Invocation
+		err       error
+	)
+	if evalCase.ExpectedRunnerEnabled {
+		expecteds, err = s.inferExpectedsForEval(ctx, inferenceResult, evalCase, actuals)
+	} else {
+		expecteds, err = buildExpectedsForEval(evalCase)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("build expecteds for eval (evalCaseID=%s): %w", evalCase.EvalID, err)
 	}
@@ -451,6 +466,41 @@ func prepareCaseEvaluationInputs(inferenceResult *service.InferenceResult, evalC
 		expecteds: expecteds,
 		userID:    evalCase.SessionInput.UserID,
 	}, nil
+}
+
+func (s *local) inferExpectedsForEval(
+	ctx context.Context,
+	inferenceResult *service.InferenceResult,
+	evalCase *evalset.EvalCase,
+	actuals []*evalset.Invocation,
+) ([]*evalset.Invocation, error) {
+	if s.expectedRunner == nil {
+		return nil, errors.New("expected runner is nil")
+	}
+	if len(actuals) == 0 {
+		return nil, errors.New("actual invocations are empty")
+	}
+	for idx, actual := range actuals {
+		if actual == nil {
+			return nil, fmt.Errorf("actual invocation is nil at index %d", idx)
+		}
+		if actual.UserContent == nil {
+			return nil, fmt.Errorf("actual invocation user content is nil at index %d", idx)
+		}
+	}
+	inputs := traceExpectedsForEval(actuals)
+	expecteds, err := inference.Inference(
+		ctx,
+		s.expectedRunner,
+		inputs,
+		evalCase.SessionInput,
+		inferenceResult.SessionID,
+		evalCase.ContextMessages,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("run expected runner: %w", err)
+	}
+	return expecteds, nil
 }
 
 func attachContextMessages(invocations []*evalset.Invocation, contextMessages []*model.Message) {
