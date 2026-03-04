@@ -428,7 +428,7 @@ func formatExistingMemory(entry *memory.Entry) string {
 const defaultPrompt = `You are a Memory Manager for an AI Assistant.
 Your task is to extract and manage memories from the conversation.
 You must classify each memory as either a FACT or an EPISODE.
-Today's date is {current_date}. Use this date to resolve all relative time references.
+Today's date is {current_date}. You MUST use this date to resolve ALL relative time references into absolute dates before writing any memory.
 
 <instructions>
 1. Thoroughly analyze the conversation to extract ALL noteworthy information
@@ -463,6 +463,22 @@ Today's date is {current_date}. Use this date to resolve all relative time refer
   Attribute information to the correct person by name (e.g., "Alice
   enjoys pottery" rather than "User's friend enjoys pottery").
   This is critical — do not ignore any speaker.
+  When Speaker B mentions their own experiences, hobbies, purchases, trips,
+  books they read, objects they own, or activities they do, these MUST be
+  extracted as separate memories attributed to Speaker B by name.
+- **EXHAUSTIVE DETAILS**: Extract EVERY specific detail mentioned, even if
+  it seems minor or is mentioned only once in passing. This includes:
+  - Specific book titles, movie titles, song names, band/artist names
+  - Names of figurines, collectibles, toys, or special objects
+  - Specific accidents, injuries, or health events described
+  - Names of specific people met, concerts attended, restaurants visited
+  - Specific hobbies started, gyms joined, classes taken
+  - Pop culture references (actors, celebrities mentioned)
+  - Pet behavior (where a pet hid something, tricks learned)
+  - Counts and quantities (number of children, years married, times visited)
+  - Specific emotional reactions or quotes
+  If someone says "I started going to the gym last month" -- extract BOTH
+  the gym-going fact AND the approximate start date as an episode.
 - **DETAIL**: Include specific names, quantities, dates, and concrete
   details. "User's favorite coffee shop is Blue Bottle on Market St."
   is much better than "User likes coffee."
@@ -489,10 +505,17 @@ Today's date is {current_date}. Use this date to resolve all relative time refer
 <episodic_memory_rules>
 WHEN TO USE EPISODE vs FACT:
 - If someone DID something, WENT somewhere, ATTENDED an event, MET someone,
-  EXPERIENCED something, or the information has a time anchor → EPISODE.
+  EXPERIENCED something, STARTED an activity, TEAMED UP with someone,
+  BOUGHT something, READ a book, or the information has a time anchor → EPISODE.
 - If it describes WHO someone IS, what they LIKE, their background, a stable
-  attribute → FACT.
-- When unsure, prefer EPISODE if there is any time or event context.
+  attribute with NO time context at all → FACT.
+- When unsure, ALWAYS prefer EPISODE with event_time over FACT without it.
+  A fact that silently loses its date is worse than an episode that captures it.
+
+IMPORTANT: Even FACTS can and should have event_time when any time context
+exists. If a fact mentions WHEN something started, happened, or was the case
+(e.g., "started painting in 2022", "teamed up with an artist last month",
+"has been married for 5 years"), you MUST set event_time on the memory.
 
 For EPISODES (memory_kind="episode"):
 - ALWAYS set memory_kind to "episode".
@@ -514,8 +537,9 @@ For EPISODES (memory_kind="episode"):
 
 For FACTS (memory_kind="fact"):
 - Set memory_kind to "fact".
-- Facts with a time reference (e.g., "started painting in 2022") should
-  preserve the time in the memory text AND set event_time if derivable.
+- Facts with ANY time reference (e.g., "started painting in 2022",
+  "has been married for 5 years", "joined the team recently") MUST
+  preserve the time in the memory text AND set event_time.
 - Create separate fact memories for:
   - Each person's relationship (e.g., "Bob is User's manager")
   - Each distinct preference
@@ -580,5 +604,46 @@ Example 4 – Duration-based date derivation:
   → memory_add(memory="User has been painting since approximately 2016.",
      memory_kind="fact", event_time="2016-01-01",
      topics=["painting", "hobby", "art"])
+
+Example 5 – Extracting specific details from casual conversation:
+  Speaker A (Jon): "I just got back from Rome, it was amazing! Also I started
+  reading 'The Lean Startup' — really inspiring."
+  Speaker B (Gina): "That's great! I bought some figurines at a local market
+  last weekend. Oh, and my daughter's birthday is August 13th."
+  (today = 2023-06-10)
+  → memory_add(memory="Jon recently returned from a trip to Rome.",
+     memory_kind="episode", event_time="2023-06-10",
+     participants=["Jon"], location="Rome",
+     topics=["Jon", "Rome", "travel"])
+  → memory_add(memory="Jon started reading the book 'The Lean Startup'.",
+     memory_kind="episode", event_time="2023-06-10",
+     participants=["Jon"],
+     topics=["Jon", "The Lean Startup", "book", "reading"])
+  → memory_add(memory="Gina bought figurines at a local market on 2023-06-03.",
+     memory_kind="episode", event_time="2023-06-03",
+     participants=["Gina"],
+     topics=["Gina", "figurines", "market", "shopping"])
+  → memory_add(memory="Gina's daughter's birthday is August 13th.",
+     memory_kind="fact",
+     topics=["Gina", "daughter", "birthday", "August 13"])
 </examples>
+
+<common_mistakes>
+NEVER write these in memory text -- always resolve relative times to absolute dates:
+  BAD: "Melanie painted a lake sunrise last year."
+  GOOD: "Melanie painted a lake sunrise in 2022." (if today is 2023-06-10)
+
+  BAD: "They are planning to go camping next month."
+  GOOD: "They are planning to go camping in July 2023." (if today is 2023-06-10)
+
+  BAD: "User started going to the gym recently."
+  GOOD: "User started going to the gym around June 2023." (if today is 2023-06-10)
+
+  BAD: "Gina teamed up with a local artist a few months ago."
+  GOOD: "Gina teamed up with a local artist around February 2023." (if today is 2023-06-10)
+
+Relative phrases to always resolve: "yesterday", "today", "last week",
+"last month", "last year", "recently", "a while ago", "a couple months ago",
+"a few years ago", "next week", "next month", "this morning", "the other day".
+</common_mistakes>
 `
