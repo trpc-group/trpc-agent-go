@@ -8,7 +8,7 @@
 //
 //
 
-package app
+package telegram
 
 import (
 	"errors"
@@ -17,38 +17,41 @@ import (
 	"os"
 	"strings"
 	"time"
-
-	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
 )
 
-type telegramAPIOption = tgapi.Option
+const (
+	BaseURLEnvName         = "OPENCLAW_TELEGRAM_BASE_URL"
+	telegramBaseURLEnvName = BaseURLEnvName
 
-const telegramBaseURLEnvName = "OPENCLAW_TELEGRAM_BASE_URL"
+	errDefaultTransportType = "telegram: default transport is not http.Transport"
+)
 
-func makeTelegramAPIOptions(
-	rawProxyURL string,
-	httpTimeout time.Duration,
-	maxRetries int,
-) ([]telegramAPIOption, error) {
-	opts := make([]telegramAPIOption, 0, 3)
-	opts = append(opts, tgapi.WithMaxRetries(maxRetries))
+type ClientNetOptions struct {
+	ProxyURL   string
+	Timeout    time.Duration
+	MaxRetries int
+}
+
+func BuildClientOptionsFromEnv(cfg ClientNetOptions) ([]Option, error) {
+	opts := make([]Option, 0, 3)
+	opts = append(opts, WithMaxRetries(cfg.MaxRetries))
 
 	baseURL := strings.TrimSpace(os.Getenv(telegramBaseURLEnvName))
 	if baseURL != "" {
-		opts = append(opts, tgapi.WithBaseURL(baseURL))
+		opts = append(opts, WithBaseURL(baseURL))
 	}
 
-	client, err := makeTelegramHTTPClient(rawProxyURL, httpTimeout)
+	client, err := BuildHTTPClient(cfg.ProxyURL, cfg.Timeout)
 	if err != nil {
 		return nil, err
 	}
 	if client != nil {
-		opts = append(opts, tgapi.WithHTTPClient(client))
+		opts = append(opts, WithHTTPClient(client))
 	}
 	return opts, nil
 }
 
-func makeTelegramHTTPClient(
+func BuildHTTPClient(
 	rawProxyURL string,
 	httpTimeout time.Duration,
 ) (*http.Client, error) {
@@ -64,7 +67,7 @@ func makeTelegramHTTPClient(
 
 	transport, ok := http.DefaultTransport.(*http.Transport)
 	if !ok {
-		return nil, errors.New("telegram: default transport is not http.Transport")
+		return nil, errors.New(errDefaultTransportType)
 	}
 
 	cloned := transport.Clone()
