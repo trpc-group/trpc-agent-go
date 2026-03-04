@@ -227,6 +227,18 @@ skills:
   root: "/skills"
   extra_dirs: ["/extra1","/extra2"]
   debug: true
+  allowBundled: ["gh-issues","notion"]
+  entries:
+    gh-issues:
+      enabled: false
+      apiKey: "k1"
+      env:
+        GH_TOKEN: "t1"
+    notion:
+      enabled: true
+      api_key: "k2"
+      env:
+        NOTION_API_KEY: "t2"
 
 tools:
   enable_local_exec: true
@@ -337,6 +349,22 @@ memory:
 	require.Equal(t, "/skills", opts.SkillsRoot)
 	require.Equal(t, "/extra1,/extra2", opts.SkillsExtraDir)
 	require.True(t, opts.SkillsDebug)
+	require.Equal(t, "gh-issues,notion", opts.SkillsAllowBundled)
+
+	require.Len(t, opts.SkillConfigs, 2)
+	require.NotNil(t, opts.SkillConfigs["gh-issues"].Enabled)
+	require.False(t, *opts.SkillConfigs["gh-issues"].Enabled)
+	require.Equal(t, "k1", opts.SkillConfigs["gh-issues"].APIKey)
+	require.Equal(t, "t1", opts.SkillConfigs["gh-issues"].Env["GH_TOKEN"])
+
+	require.NotNil(t, opts.SkillConfigs["notion"].Enabled)
+	require.True(t, *opts.SkillConfigs["notion"].Enabled)
+	require.Equal(t, "k2", opts.SkillConfigs["notion"].APIKey)
+	require.Equal(
+		t,
+		"t2",
+		opts.SkillConfigs["notion"].Env["NOTION_API_KEY"],
+	)
 
 	require.True(t, opts.EnableLocalExec)
 	require.True(t, opts.EnableOpenClawTools)
@@ -423,6 +451,45 @@ session:
 	var exitErr *exitError
 	require.True(t, errors.As(err, &exitErr))
 	require.Equal(t, 1, exitErr.Code)
+}
+
+func TestConvertSkillConfigs_EmptyAndBlankKeys(t *testing.T) {
+	require.Nil(t, convertSkillConfigs(nil))
+	require.Nil(t, convertSkillConfigs(map[string]skillEntryConfig{}))
+
+	got := convertSkillConfigs(map[string]skillEntryConfig{
+		" ": {},
+	})
+	require.Nil(t, got)
+}
+
+func TestParseRunOptions_AllowBundledSnakeCase(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+skills:
+  allow_bundled: ["a","b"]
+`)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.Equal(t, "a,b", opts.SkillsAllowBundled)
+}
+
+func TestParseRunOptions_SkillsAllowBundledFlagOverridesConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+skills:
+  allow_bundled: ["a"]
+`)
+
+	opts, err := parseRunOptions([]string{
+		"-config", cfgPath,
+		"-skills-allow-bundled", "b,c",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "b,c", opts.SkillsAllowBundled)
 }
 
 func writeTempConfig(t *testing.T, body string) string {

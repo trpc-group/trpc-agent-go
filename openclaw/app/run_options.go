@@ -20,6 +20,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
 )
 
 const (
@@ -65,6 +67,8 @@ const (
 	flagAgentRalphLoopVerifyEnv         = "agent-ralph-verify-env"
 
 	flagEnableParallelTools = "enable-parallel-tools"
+
+	flagSkillsAllowBundled = "skills-allow-bundled"
 )
 
 type runOptions struct {
@@ -102,16 +106,18 @@ type runOptions struct {
 	ClaudeEnv          string
 	ClaudeWorkDir      string
 
-	ModelMode      string
-	OpenAIModel    string
-	OpenAIVariant  string
-	OpenAIBaseURL  string
-	ModelConfig    *yaml.Node
-	TelegramToken  string
-	SkillsRoot     string
-	SkillsExtraDir string
-	SkillsDebug    bool
-	StateDir       string
+	ModelMode          string
+	OpenAIModel        string
+	OpenAIVariant      string
+	OpenAIBaseURL      string
+	ModelConfig        *yaml.Node
+	TelegramToken      string
+	SkillsRoot         string
+	SkillsExtraDir     string
+	SkillsDebug        bool
+	SkillsAllowBundled string
+	SkillConfigs       map[string]ocskills.SkillConfig
+	StateDir           string
 
 	AllowUsers     string
 	RequireMention bool
@@ -474,6 +480,12 @@ func parseRunOptions(args []string) (runOptions, error) {
 		"Log skill gating decisions",
 	)
 	fs.StringVar(
+		&opts.SkillsAllowBundled,
+		flagSkillsAllowBundled,
+		"",
+		"Comma-separated allowlist of bundled skills",
+	)
+	fs.StringVar(
 		&opts.StateDir,
 		"state-dir",
 		"",
@@ -777,6 +789,18 @@ type skillsConfig struct {
 	Root      *string  `yaml:"root,omitempty"`
 	ExtraDirs []string `yaml:"extra_dirs,omitempty"`
 	Debug     *bool    `yaml:"debug,omitempty"`
+
+	AllowBundled      []string `yaml:"allow_bundled,omitempty"`
+	AllowBundledCamel []string `yaml:"allowBundled,omitempty"`
+
+	Entries map[string]skillEntryConfig `yaml:"entries,omitempty"`
+}
+
+type skillEntryConfig struct {
+	Enabled     *bool             `yaml:"enabled,omitempty"`
+	APIKey      string            `yaml:"api_key,omitempty"`
+	APIKeyCamel string            `yaml:"apiKey,omitempty"`
+	Env         map[string]string `yaml:"env,omitempty"`
 }
 
 type toolsConfig struct {
@@ -1110,6 +1134,22 @@ func (cfg *fileConfig) apply(
 		if cfg.Skills.Debug != nil && !flagWasSet(set, "skills-debug") {
 			opts.SkillsDebug = *cfg.Skills.Debug
 		}
+		allowBundled := cfg.Skills.AllowBundled
+		if len(allowBundled) == 0 {
+			allowBundled = cfg.Skills.AllowBundledCamel
+		}
+		if len(allowBundled) > 0 &&
+			!flagWasSet(set, flagSkillsAllowBundled) {
+			opts.SkillsAllowBundled = strings.Join(
+				allowBundled,
+				csvDelimiter,
+			)
+		}
+		if len(cfg.Skills.Entries) > 0 {
+			opts.SkillConfigs = convertSkillConfigs(
+				cfg.Skills.Entries,
+			)
+		}
 	}
 
 	if cfg.Tools != nil {
@@ -1310,6 +1350,36 @@ func convertPluginSpecs(specs []filePluginSpec) []pluginSpec {
 			Name:   spec.Name,
 			Config: cfg,
 		})
+	}
+	return out
+}
+
+func convertSkillConfigs(
+	entries map[string]skillEntryConfig,
+) map[string]ocskills.SkillConfig {
+	if len(entries) == 0 {
+		return nil
+	}
+
+	out := make(map[string]ocskills.SkillConfig, len(entries))
+	for rawKey, rawCfg := range entries {
+		key := strings.TrimSpace(rawKey)
+		if key == "" {
+			continue
+		}
+
+		apiKey := strings.TrimSpace(rawCfg.APIKey)
+		if apiKey == "" {
+			apiKey = strings.TrimSpace(rawCfg.APIKeyCamel)
+		}
+		out[key] = ocskills.SkillConfig{
+			Enabled: rawCfg.Enabled,
+			APIKey:  apiKey,
+			Env:     rawCfg.Env,
+		}
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }

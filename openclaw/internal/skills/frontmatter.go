@@ -35,9 +35,14 @@ type parsedFrontMatter struct {
 }
 
 type openClawMetadata struct {
-	Always   bool             `yaml:"always"`
-	OS       []string         `yaml:"os"`
-	Requires openClawRequires `yaml:"requires"`
+	Always     bool                `yaml:"always"`
+	SkillKey   string              `yaml:"skillKey"`
+	PrimaryEnv string              `yaml:"primaryEnv"`
+	Emoji      string              `yaml:"emoji"`
+	Homepage   string              `yaml:"homepage"`
+	OS         []string            `yaml:"os"`
+	Requires   openClawRequires    `yaml:"requires"`
+	Install    []openClawInstallID `yaml:"install"`
 }
 
 type openClawRequires struct {
@@ -45,6 +50,10 @@ type openClawRequires struct {
 	AnyBins []string `yaml:"anyBins"`
 	Env     []string `yaml:"env"`
 	Config  []string `yaml:"config"`
+}
+
+type openClawInstallID struct {
+	ID string `yaml:"id"`
 }
 
 func parseFrontMatterFile(path string) (parsedFrontMatter, error) {
@@ -75,7 +84,7 @@ func parseFrontMatter(content string) (parsedFrontMatter, error) {
 	out := parsedFrontMatter{
 		Name:        strings.TrimSpace(asString(m["name"])),
 		Description: strings.TrimSpace(asString(m["description"])),
-		Metadata:    normalizeStringAnyMap(m["metadata"]),
+		Metadata:    normalizeMetadata(m["metadata"]),
 	}
 	return out, nil
 }
@@ -127,4 +136,24 @@ func normalizeStringAnyMap(v any) map[string]any {
 	default:
 		return nil
 	}
+}
+
+func normalizeMetadata(v any) map[string]any {
+	out := normalizeStringAnyMap(v)
+	if len(out) > 0 {
+		return out
+	}
+	text, ok := v.(string)
+	if !ok {
+		return nil
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	m := map[string]any{}
+	if err := yaml.Unmarshal([]byte(text), &m); err != nil {
+		return nil
+	}
+	return normalizeStringAnyMap(m)
 }
