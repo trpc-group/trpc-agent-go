@@ -2501,6 +2501,136 @@ func TestRunTool_StagesUserFileInputs_ArtifactRef_OK(t *testing.T) {
 	require.Contains(t, out.OutputFiles[0].Content, contentHi)
 }
 
+func TestRunTool_StagesUserFileInputs_ArtifactRef_InfersName(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	rt := NewRunTool(repo, localexec.New())
+
+	svc := inmemory.NewService()
+	sess := &session.Session{
+		AppName: "app",
+		UserID:  "u",
+		ID:      "s1",
+		State:   session.StateMap{},
+	}
+	info := artifact.SessionInfo{
+		AppName:   sess.AppName,
+		UserID:    sess.UserID,
+		SessionID: sess.ID,
+	}
+	const artifactName = "uploads/notes.txt"
+	ver, err := svc.SaveArtifact(
+		context.Background(),
+		info,
+		artifactName,
+		&artifact.Artifact{
+			Data:     []byte(contentHi),
+			MimeType: "text/plain",
+			Name:     artifactName,
+		},
+	)
+	require.NoError(t, err)
+
+	ref := fmt.Sprintf(
+		"%s%s@%d",
+		fileref.ArtifactPrefix,
+		artifactName,
+		ver,
+	)
+	user := model.NewUserMessage("upload")
+	user.AddFileID(ref)
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(user),
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationArtifactService(svc),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args := runInput{
+		Skill: testSkillName,
+		Command: "mkdir -p out; cat work/inputs/" +
+			uploadNotesTxt + " > " + outATxt,
+		OutputFiles: []string{outATxt},
+		Timeout:     timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Len(t, out.StagedInputs, 1)
+	require.Equal(t, "work/inputs/"+uploadNotesTxt,
+		out.StagedInputs[0].Name)
+	require.Equal(t, uploadNotesTxt, out.StagedInputs[0].OriginalName)
+}
+
+func TestRunTool_RequireSkillLoaded_NotLoaded_Error(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	rt := NewRunTool(
+		repo,
+		localexec.New(),
+		WithRequireSkillLoaded(true),
+	)
+
+	sess := &session.Session{
+		State: session.StateMap{},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("hi")),
+		agent.WithInvocationSession(sess),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args := runInput{Skill: testSkillName, Command: echoOK,
+		Timeout: timeoutSecSmall}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	_, err = rt.Call(ctx, enc)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "skill_load")
+}
+
+func TestRunTool_RequireSkillLoaded_Loaded_OK(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	rt := NewRunTool(
+		repo,
+		localexec.New(),
+		WithRequireSkillLoaded(true),
+	)
+
+	sess := &session.Session{
+		State: session.StateMap{},
+	}
+	sess.SetState(
+		skill.StateKeyLoadedPrefix+testSkillName,
+		[]byte("1"),
+	)
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("hi")),
+		agent.WithInvocationSession(sess),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args := runInput{Skill: testSkillName, Command: echoOK,
+		Timeout: timeoutSecSmall}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	_, err = rt.Call(ctx, enc)
+	require.NoError(t, err)
+}
+
 func TestRunTool_StagesUserFileInputs_DownloadError_Warn(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, testSkillName)

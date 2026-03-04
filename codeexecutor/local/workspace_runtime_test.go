@@ -13,6 +13,7 @@ package local_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -735,6 +736,24 @@ func TestRuntime_StageInputs_ArtifactAndLinks(t *testing.T) {
 	b, err := os.ReadFile(target)
 	require.NoError(t, err)
 	require.Equal(t, "AX", string(b))
+
+	// Stage artifact ref with explicit version and nested name.
+	ver, err := codeexecutor.SaveArtifactHelper(
+		actx, "uploads/b.txt", []byte("BX"), "text/plain",
+	)
+	require.NoError(t, err)
+	ref := fmt.Sprintf("artifact://uploads/b.txt@%d", ver)
+	err = rt.StageInputs(actx, ws, []codeexecutor.InputSpec{{
+		From: ref,
+		Mode: "copy",
+	}})
+	require.NoError(t, err)
+	target = filepath.Join(
+		ws.Path, codeexecutor.DirWork, "inputs", "b.txt",
+	)
+	b, err = os.ReadFile(target)
+	require.NoError(t, err)
+	require.Equal(t, "BX", string(b))
 
 	// host:// path with link mode creates a symlink.
 	src := t.TempDir()
