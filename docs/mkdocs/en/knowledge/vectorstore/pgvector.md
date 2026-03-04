@@ -106,7 +106,9 @@ pgVS, err := vectorpgvector.New(
 | Option | Description | Default Value |
 |--------|-------------|---------------|
 | `WithEnableTSVector(enabled)` | Enable text search vector | `true` |
-| `WithHybridSearchWeights(vector, text)` | Hybrid search weights (vector/text) | `0.7, 0.3` |
+| `WithHybridSearchWeights(vector, text)` | Hybrid search weights (vector/text), only applies in Weighted mode | `0.7, 0.3` |
+| `WithHybridFusionMode(mode)` | Hybrid search fusion mode (`HybridFusionWeighted` / `HybridFusionRRF`) | `HybridFusionWeighted` |
+| `WithRRFParams(params)` | RRF parameters (K and CandidateRatio), only applies in RRF mode | `K=60, CandidateRatio=3` |
 | `WithLanguageExtension(lang)` | Text tokenization language extension (e.g., zhparser/jieba) | `"english"` |
 
 ### Search Configuration
@@ -136,12 +138,25 @@ PGVector supports full-text search (TSVector), which can be used for Keyword Sea
 > **⚠️ Important**: Keyword Search and Hybrid Search require enabling PostgreSQL full-text search functionality via `WithEnableTSVector(true)`.
 
 ```go
+// Option 1: Weighted fusion (default)
 pgVS, err := vectorpgvector.New(
     vectorpgvector.WithPGVectorClientDSN(dsn),
     vectorpgvector.WithIndexDimension(1536),
     vectorpgvector.WithEnableTSVector(true),           // ✅ Enable full-text search
     vectorpgvector.WithHybridSearchWeights(0.7, 0.3),  // Set hybrid search weights (70% vector + 30% text)
     vectorpgvector.WithLanguageExtension("english"),   // Set tokenization language (Chinese requires zhparser/jieba)
+)
+
+// Option 2: Reciprocal Rank Fusion (RRF)
+pgVS, err := vectorpgvector.New(
+    vectorpgvector.WithPGVectorClientDSN(dsn),
+    vectorpgvector.WithIndexDimension(1536),
+    vectorpgvector.WithEnableTSVector(true),
+    vectorpgvector.WithHybridFusionMode(vectorpgvector.HybridFusionRRF),
+    vectorpgvector.WithRRFParams(&vectorpgvector.RRFParams{
+        K:              60, // RRF constant, smaller = more weight to top results
+        CandidateRatio: 3,  // fetch 3x candidates from each sub-search
+    }),
 )
 ```
 
@@ -276,16 +291,23 @@ text_score = 2.5 / (2.5 + 0.1) = 0.961
 
 ### 3. Hybrid Search
 
+Hybrid Search supports two fusion modes, switchable via `WithHybridFusionMode()`.
+
+#### 3a. Weighted Fusion (default)
+
 **SQL Template** (using subquery to avoid duplicate calculations):
 ```sql
-SELECT *, (vector_score * 0.7 + text_score * 0.3) as score
+SELECT *, (vector_score * 0.700 + text_score * 0.300) as score
 FROM (
-  SELECT *, 
+  SELECT *,
          (1.0 - (embedding <=> $1) / 2.0) as vector_score,
-         (COALESCE(ts_rank(...), 0) / (COALESCE(ts_rank(...), 0) + 0.1)) as text_score
-  FROM table_name
-  WHERE [metadata_filters]
-  ORDER BY ((1.0 - (embedding <=> $1) / 2.0) * 0.7 + (ts_rank_expr) * 0.3) DESC
+         (COALESCE(ts_rank(to_tsvector('english', content),
+                           websearch_to_tsquery('english', $2)), 0)
+          / (COALESCE(ts_rank(...), 0) + 0.1000)) as text_score
+  FROM documents
+  WHERE ...
+  ORDER BY ((1.0 - (embedding <=> $1) / 2.0) * 0.700
+            + (ts_rank_expr / (ts_rank_expr + 0.1000)) * 0.300) DESC
   LIMIT 10
 ) subq
 ```
@@ -312,6 +334,63 @@ Case 2: High vector similarity but no text match
   vector_score = 0.95, text_score = 0.0
   hybrid_score = 0.95 × 0.7 + 0.0 × 0.3 = 0.665  -- Still returns high-quality result
 ```
+
+#### 3b. Reciprocal Rank Fusion (RRF)
+
+RRF is a rank-based fusion strategy that does not rely on score normalization. Instead, it computes the final score based on each document's rank in the sub-searches. It is suitable for scenarios where vector scores and text scores have very different scales and are hard to combine via direct weighting.
+
+**Execution Flow** (parallel sub-queries + Go-level fusion):
+
+RRF mode splits vector search and text search into two independent SQL queries executed in parallel, then performs RRF score fusion in Go code:
+
+```sql
+-- Query 1: Vector rank sub-search (parallel)
+SELECT id, ROW_NUMBER() OVER (ORDER BY embedding <=> $1) as rank
+FROM documents WHERE ... LIMIT 30  -- limit * CandidateRatio
+
+-- Query 2: Text rank sub-search (parallel)
+SELECT id, ROW_NUMBER() OVER (
+  ORDER BY ts_rank(to_tsvector('english', content),
+                   websearch_to_tsquery('english', $1)) DESC
+) as rank
+FROM documents
+WHERE ... AND to_tsvector('english', content) @@ websearch_to_tsquery('english', $1)
+LIMIT 30
+
+-- Query 3: Fetch full documents by fused top-N IDs
+SELECT * FROM documents WHERE id IN ($1, $2, ...)
+```
+
+```go
+// Go-level RRF fusion:
+// 1. Merge (id, rank) pairs from both sub-searches
+// 2. Compute RRF score: score(d) = 1/(k + rank_v) + 1/(k + rank_t)
+// 3. Sort by score DESC, take top N
+// 4. Fetch full documents by IDs
+```
+
+**RRF Formula**:
+```
+score(d) = sum(1 / (k + rank_i))  for each ranking list i
+```
+
+**Parameters**:
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `K` | RRF constant, must be > 0. Smaller values give more weight to top-ranked results | `60` |
+| `CandidateRatio` | Candidate multiplier, must be > 0. Each sub-search fetches `limit × CandidateRatio` candidates | `3` |
+
+**Effect of K**:
+- `K=1`: Rank 1 scores `1/2 = 0.500`, rank 10 scores `1/11 ≈ 0.091`, gap ~5.5x
+- `K=60` (default): Rank 1 scores `1/61 ≈ 0.016`, rank 10 scores `1/70 ≈ 0.014`, gap ~1.15x
+
+K=60 is the widely used default in academic literature, making fusion more "democratic" by not over-favoring results that rank very high in a single ranking list.
+
+**Notes**:
+- In RRF mode, `WithHybridSearchWeights()` has no effect; RRF scores from both ranking lists are summed directly
+- In RRF mode, `MinScore` has no effect. RRF scores are rank-based (max ~0.033 for K=60) and are incompatible with the [0,1] similarity score semantics
+- The two sub-queries execute in parallel, latency = max(vector_latency, text_latency), more efficient than a single complex CTE
 
 ---
 
