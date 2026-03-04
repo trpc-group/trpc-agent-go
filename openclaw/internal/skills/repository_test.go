@@ -45,6 +45,25 @@ metadata:
 	require.Equal(t, []string{"codex"}, meta.Requires.AnyBins)
 }
 
+func TestParseFrontMatter_OpenClawMetadata_MetadataAsString(t *testing.T) {
+	content := `---
+name: coding-agent
+description: "Test skill"
+metadata: '{"openclaw":{"requires":{"anyBins":["codex"]}}}'
+---
+
+# Body
+`
+	fm, err := parseFrontMatter(content)
+	require.NoError(t, err)
+	require.Equal(t, "coding-agent", fm.Name)
+
+	meta, ok, err := parseOpenClawMetadata(fm)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, []string{"codex"}, meta.Requires.AnyBins)
+}
+
 func TestParseFrontMatter_NoFrontMatter(t *testing.T) {
 	_, err := parseFrontMatter("hello\n")
 	require.True(t, errors.Is(err, errNoFrontMatter))
@@ -100,6 +119,84 @@ hello
 	_, err = r.Get("needsbin")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "disabled")
+}
+
+func TestRepository_AllowBundled_BlocksBundledSkill(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, "bundled", `---
+name: bundled
+description: test
+---
+
+x
+`)
+
+	r, err := NewRepository(
+		[]string{root},
+		WithBundledSkillsRoot(root),
+		WithAllowBundled([]string{"other"}),
+	)
+	require.NoError(t, err)
+	require.Empty(t, r.Summaries())
+
+	_, err = r.Get("bundled")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "allow_bundled")
+}
+
+func TestRepository_AllowBundled_AllowsBySkillKey(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, "bundled", `---
+name: bundled
+description: test
+metadata:
+  { "openclaw": { "skillKey": "key1" } }
+---
+
+x
+`)
+
+	r, err := NewRepository(
+		[]string{root},
+		WithBundledSkillsRoot(root),
+		WithAllowBundled([]string{"key1"}),
+	)
+	require.NoError(t, err)
+
+	sums := r.Summaries()
+	require.Len(t, sums, 1)
+	require.Equal(t, "bundled", sums[0].Name)
+}
+
+func TestRepository_AllowBundled_DoesNotAffectExternalSkills(t *testing.T) {
+	bundledRoot := t.TempDir()
+	otherRoot := t.TempDir()
+
+	writeSkill(t, bundledRoot, "bundled", `---
+name: bundled
+description: test
+---
+
+x
+`)
+	writeSkill(t, otherRoot, "external", `---
+name: external
+description: test
+---
+
+x
+`)
+
+	r, err := NewRepository(
+		[]string{bundledRoot, otherRoot},
+		WithBundledSkillsRoot(bundledRoot),
+		WithAllowBundled([]string{"external"}),
+	)
+	require.NoError(t, err)
+
+	sums := r.Summaries()
+	require.Len(t, sums, 1)
+	require.Equal(t, "external", sums[0].Name)
 }
 
 func TestEvaluateRequiredAnyBins(t *testing.T) {
@@ -165,6 +262,74 @@ func TestEvaluateRequiredEnv_SatisfiedByAPIKeyForPrimaryEnv(t *testing.T) {
 			APIKey: "k",
 		},
 	))
+}
+
+func TestRepository_SkillKey_ConfigResolution(t *testing.T) {
+	os.Unsetenv("SKILLS_TEST_SKILLKEY_ENV")
+
+	root := t.TempDir()
+	writeSkill(t, root, "needkey", `---
+name: needkey
+description: test
+metadata:
+  {
+    "openclaw": {
+      "skillKey": "key1",
+      "primaryEnv": "SKILLS_TEST_SKILLKEY_ENV",
+      "requires": { "env": ["SKILLS_TEST_SKILLKEY_ENV"] }
+    }
+  }
+---
+
+x
+`)
+
+	r, err := NewRepository(
+		[]string{root},
+		WithSkillConfigs(map[string]SkillConfig{
+			"key1": {APIKey: "k"},
+		}),
+	)
+	require.NoError(t, err)
+
+	require.Len(t, r.Summaries(), 1)
+
+	env, err := r.SkillRunEnv(context.Background(), "needkey")
+	require.NoError(t, err)
+	require.Equal(t, "k", env["SKILLS_TEST_SKILLKEY_ENV"])
+}
+
+func TestRepository_SkillConfigs_NormalizeKeyAndEnvKey(t *testing.T) {
+	os.Unsetenv("SKILLS_TEST_TRIM_ENV")
+
+	root := t.TempDir()
+	writeSkill(t, root, "trim", `---
+name: trim
+description: test
+metadata:
+  { "openclaw": { "skillKey": "key1",
+    "requires": { "env": ["SKILLS_TEST_TRIM_ENV"] } } }
+---
+
+x
+`)
+
+	r, err := NewRepository(
+		[]string{root},
+		WithSkillConfigs(map[string]SkillConfig{
+			" key1 ": {
+				Env: map[string]string{
+					" SKILLS_TEST_TRIM_ENV ": " v ",
+				},
+			},
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, r.Summaries(), 1)
+
+	env, err := r.SkillRunEnv(context.Background(), "trim")
+	require.NoError(t, err)
+	require.Equal(t, "v", env["SKILLS_TEST_TRIM_ENV"])
 }
 
 func TestEvaluateOpenClawRequirements_Always(t *testing.T) {
@@ -475,6 +640,36 @@ x
 	require.NoError(t, err)
 	require.Equal(t, "a", env["SKILLS_TEST_ENV_A"])
 	require.Equal(t, "k", env["SKILLS_TEST_PRIMARY_ENV"])
+}
+
+func TestRepository_SkillRunEnv_PrimaryEnvNoOverride(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, "needkey", `---
+name: needkey
+description: test
+metadata:
+  { "openclaw": { "primaryEnv": "SKILLS_TEST_PRIMARY_ENV" } }
+---
+
+x
+`)
+
+	r, err := NewRepository(
+		[]string{root},
+		WithSkillConfigs(map[string]SkillConfig{
+			"needkey": {
+				APIKey: "k",
+				Env: map[string]string{
+					"SKILLS_TEST_PRIMARY_ENV": "from-env",
+				},
+			},
+		}),
+	)
+	require.NoError(t, err)
+
+	env, err := r.SkillRunEnv(context.Background(), "needkey")
+	require.NoError(t, err)
+	require.Equal(t, "from-env", env["SKILLS_TEST_PRIMARY_ENV"])
 }
 
 func TestBundledSkills_ParseFrontMatterAndMetadata(t *testing.T) {

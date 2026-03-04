@@ -68,7 +68,16 @@ func WithConfigKeys(keys []string) Option {
 
 func WithBundledSkillsRoot(root string) Option {
 	return func(r *Repository) {
-		r.bundledRoot = strings.TrimSpace(root)
+		cleaned := strings.TrimSpace(root)
+		if cleaned == "" {
+			r.bundledRoot = ""
+			return
+		}
+		resolved, err := filepath.EvalSymlinks(cleaned)
+		if err == nil && strings.TrimSpace(resolved) != "" {
+			cleaned = resolved
+		}
+		r.bundledRoot = cleaned
 	}
 }
 
