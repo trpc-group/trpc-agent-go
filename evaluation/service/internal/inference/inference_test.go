@@ -23,10 +23,11 @@ import (
 )
 
 type fakeRunner struct {
-	events []*event.Event
-	runErr error
-
+	events                      []*event.Event
+	runErr                      error
 	lastInjectedContextMessages []model.Message
+	lastInstruction             string
+	lastRuntimeState            map[string]any
 }
 
 func (f *fakeRunner) Run(ctx context.Context, userID string, sessionID string, message model.Message, runOpts ...agent.RunOption) (<-chan *event.Event, error) {
@@ -38,6 +39,8 @@ func (f *fakeRunner) Run(ctx context.Context, userID string, sessionID string, m
 		opt(&opts)
 	}
 	f.lastInjectedContextMessages = opts.InjectedContextMessages
+	f.lastInstruction = opts.Instruction
+	f.lastRuntimeState = opts.RuntimeState
 	ch := make(chan *event.Event, len(f.events))
 	for _, evt := range f.events {
 		ch <- evt
@@ -51,7 +54,7 @@ func (f fakeRunner) Close() error {
 }
 
 func TestInferenceSuccess(t *testing.T) {
-
+	// Arrange the test inputs.
 	args, err := json.Marshal(map[string]any{"foo": "bar"})
 	assert.NoError(t, err)
 	toolEvent := &event.Event{
@@ -83,7 +86,6 @@ func TestInferenceSuccess(t *testing.T) {
 		},
 	}
 	r := &fakeRunner{events: []*event.Event{toolEvent, finalEvent}}
-
 	input := []*evalset.Invocation{
 		{
 			InvocationID: "input",
@@ -96,30 +98,38 @@ func TestInferenceSuccess(t *testing.T) {
 	session := &evalset.SessionInput{
 		UserID: "user-1",
 	}
-
 	systemMsg := model.NewSystemMessage("You are a helpful assistant.")
-	contextMessages := []*model.Message{&systemMsg}
-	results, err := Inference(context.Background(), r, input, session, "session-1", contextMessages)
+	// Call the function under test.
+	results, err := Inference(
+		context.Background(),
+		r,
+		input,
+		session,
+		"session-1",
+		[]agent.RunOption{
+			agent.WithInjectedContextMessages([]model.Message{systemMsg}),
+			agent.WithInstruction("test-instruction"),
+		},
+	)
+	// Assert the results.
 	assert.NoError(t, err)
 	assert.Len(t, results, 1)
 	assert.Equal(t, "generated-inv", results[0].InvocationID)
-	assert.Len(t, results[0].ContextMessages, 1)
-	assert.Equal(t, model.RoleSystem, results[0].ContextMessages[0].Role)
-	assert.Equal(t, "You are a helpful assistant.", results[0].ContextMessages[0].Content)
 	assert.Equal(t, input[0].UserContent, results[0].UserContent)
 	assert.NotNil(t, results[0].FinalResponse)
 	assert.Equal(t, "answer", results[0].FinalResponse.Content)
 	assert.Len(t, results[0].Tools, 1)
 	assert.Equal(t, "lookup", results[0].Tools[0].Name)
 	assert.Equal(t, map[string]any{"foo": "bar"}, results[0].Tools[0].Arguments)
-	assert.Equal(t, []model.Message{*contextMessages[0]}, r.lastInjectedContextMessages)
+	assert.Equal(t, []model.Message{systemMsg}, r.lastInjectedContextMessages)
+	assert.Equal(t, "test-instruction", r.lastInstruction)
 }
 
 func TestInferenceValidation(t *testing.T) {
-
+	// It should reject missing invocations.
 	_, err := Inference(context.Background(), &fakeRunner{}, nil, &evalset.SessionInput{}, "session", nil)
 	assert.Error(t, err)
-
+	// It should reject a missing session input.
 	_, err = Inference(context.Background(), &fakeRunner{}, []*evalset.Invocation{
 		{
 			InvocationID: "inv",
@@ -127,7 +137,7 @@ func TestInferenceValidation(t *testing.T) {
 		},
 	}, nil, "session", nil)
 	assert.Error(t, err)
-
+	// It should surface runner errors.
 	input := []*evalset.Invocation{
 		{
 			InvocationID: "input",
@@ -138,32 +148,84 @@ func TestInferenceValidation(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestInferenceRejectsNilContextMessage(t *testing.T) {
-	input := []*evalset.Invocation{
-		{
-			InvocationID: "input",
-			UserContent:  &model.Message{Role: model.RoleUser, Content: "question"},
+func TestInferenceInvocationAppendsSessionRuntimeState(t *testing.T) {
+	ctx := context.Background()
+	sessionState := map[string]any{"from_session": "yes"}
+	overrideState := map[string]any{"from_run_option": "yes"}
+	session := &evalset.SessionInput{UserID: "user", State: sessionState}
+	r := &fakeRunner{events: []*event.Event{makeFinalEvent("done")}}
+
+	_, err := inferenceInvocation(ctx, r, "session", session, &evalset.Invocation{
+		InvocationID: "inv",
+		UserContent:  &model.Message{Role: model.RoleUser, Content: "hi"},
+	}, []agent.RunOption{agent.WithRuntimeState(overrideState)})
+
+	assert.NoError(t, err)
+	assert.Equal(t, sessionState, r.lastRuntimeState)
+	assert.NotEqual(t, overrideState, r.lastRuntimeState)
+}
+
+func TestInferenceInvocationSkipsNilEvent(t *testing.T) {
+	ctx := context.Background()
+	session := &evalset.SessionInput{UserID: "user"}
+	r := &fakeRunner{events: []*event.Event{nil, makeFinalEvent("ok")}}
+
+	result, err := inferenceInvocation(ctx, r, "session", session, &evalset.Invocation{
+		InvocationID: "inv",
+		UserContent:  &model.Message{Role: model.RoleUser, Content: "hi"},
+	}, nil)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, result.FinalResponse)
+	if result.FinalResponse == nil {
+		return
+	}
+	assert.Equal(t, "ok", result.FinalResponse.Content)
+}
+
+func TestInferenceInvocationRejectsUnexpectedToolResultResponse(t *testing.T) {
+	ctx := context.Background()
+	session := &evalset.SessionInput{UserID: "user"}
+	toolResultEvent := &event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{
+					Message: model.Message{
+						ToolID:   "missing",
+						ToolName: "tool",
+						Content:  `{}`,
+					},
+				},
+			},
 		},
 	}
-	_, err := Inference(context.Background(), &fakeRunner{}, input, &evalset.SessionInput{UserID: "user"}, "session", []*model.Message{nil})
+	r := &fakeRunner{events: []*event.Event{toolResultEvent}}
+
+	_, err := inferenceInvocation(ctx, r, "session", session, &evalset.Invocation{
+		InvocationID: "inv",
+		UserContent:  &model.Message{Role: model.RoleUser, Content: "hi"},
+	}, nil)
+
 	assert.Error(t, err)
+	if err != nil {
+		assert.Contains(t, err.Error(), "convert tool result response")
+	}
 }
 
 func TestInferencePerInvocationErrors(t *testing.T) {
-
 	ctx := context.Background()
 	session := &evalset.SessionInput{UserID: "user"}
-
+	// It should reject invocations with missing user content.
 	_, err := inferenceInvocation(ctx, &fakeRunner{}, "session", session, &evalset.Invocation{}, nil)
 	assert.Error(t, err)
-
+	// It should handle an empty event stream.
 	result, err := inferenceInvocation(ctx, &fakeRunner{}, "session", session, &evalset.Invocation{
 		InvocationID: "inv",
 		UserContent:  &model.Message{},
 	}, nil)
 	assert.NoError(t, err)
 	assert.Nil(t, result.FinalResponse)
-
+	// It should handle empty content parts.
 	result, err = inferenceInvocation(ctx, &fakeRunner{}, "session", session, &evalset.Invocation{
 		InvocationID: "inv",
 		UserContent: &model.Message{
@@ -173,7 +235,7 @@ func TestInferencePerInvocationErrors(t *testing.T) {
 	}, nil)
 	assert.NoError(t, err)
 	assert.Nil(t, result.FinalResponse)
-
+	// It should return an error when an error event is received.
 	errorEvent := &event.Event{
 		Response: &model.Response{
 			Error: &model.ResponseError{Message: "failed"},
@@ -187,7 +249,7 @@ func TestInferencePerInvocationErrors(t *testing.T) {
 		},
 	}, nil)
 	assert.Error(t, err)
-
+	// It should return an error when the runner fails.
 	_, err = inferenceInvocation(ctx, &fakeRunner{runErr: errors.New("boom")}, "session", session, &evalset.Invocation{
 		InvocationID: "inv",
 		UserContent: &model.Message{
@@ -196,14 +258,13 @@ func TestInferencePerInvocationErrors(t *testing.T) {
 		},
 	}, nil)
 	assert.Error(t, err)
-
-	// Ensure session input validation executed in parent function.
+	// This ensures the parent function validates the session input.
 	_, err = Inference(ctx, &fakeRunner{}, []*evalset.Invocation{}, nil, "session", nil)
 	assert.Error(t, err)
 }
 
 func TestConvertToolCallResponse(t *testing.T) {
-
+	// Arrange the test inputs.
 	args, err := json.Marshal(map[string]any{"count": 1})
 	assert.NoError(t, err)
 	ev := &event.Event{
@@ -225,7 +286,9 @@ func TestConvertToolCallResponse(t *testing.T) {
 			},
 		},
 	}
+	// Call the function under test.
 	result, err := convertTools(ev)
+	// Assert the results.
 	assert.NoError(t, err)
 	assert.Len(t, result, 1)
 	assert.Equal(t, "tool", result[0].Name)
@@ -284,6 +347,34 @@ func TestConvertToolCallResponseInvalidJSONArguments(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, result, 1)
 	assert.Equal(t, "a=1", result[0].Arguments)
+}
+
+func TestConvertToolCallResponseEmptyArguments(t *testing.T) {
+	ev := &event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{
+					Message: model.Message{
+						ToolCalls: []model.ToolCall{
+							{
+								ID: "call-1",
+								Function: model.FunctionDefinitionParam{
+									Name:      "tool",
+									Arguments: []byte(" "),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := convertTools(ev)
+
+	assert.NoError(t, err)
+	assert.Len(t, result, 1)
+	assert.Equal(t, map[string]any{}, result[0].Arguments)
 }
 
 func TestMergeToolResultResponse(t *testing.T) {
@@ -391,4 +482,15 @@ func TestMergeToolResultResponseArrayContent(t *testing.T) {
 
 func ptr[T any](v T) *T {
 	return &v
+}
+
+func makeFinalEvent(content string) *event.Event {
+	return &event.Event{
+		Response: &model.Response{
+			Done: true,
+			Choices: []model.Choice{
+				{Message: model.Message{Content: content, Role: model.RoleAssistant}},
+			},
+		},
+	}
 }

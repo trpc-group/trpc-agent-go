@@ -2302,9 +2302,9 @@ import (
 
 // Service 是评估服务接口
 type Service interface {
-	Inference(ctx context.Context, request *InferenceRequest) ([]*InferenceResult, error) // Inference 执行推理阶段
-	Evaluate(ctx context.Context, request *EvaluateRequest) (*EvalSetRunResult, error)    // Evaluate 执行评估阶段
-	Close() error                                                                         // Close 释放资源
+	Inference(ctx context.Context, request *InferenceRequest, opt ...Option) ([]*InferenceResult, error) // Inference 执行推理阶段
+	Evaluate(ctx context.Context, request *EvaluateRequest, opt ...Option) (*EvalSetRunResult, error)    // Evaluate 执行评估阶段
+	Close() error                                                                                        // Close 释放资源
 }
 
 // InferenceRequest 是推理请求
@@ -2380,7 +2380,7 @@ AgentEvaluator 的接口定义如下。
 
 ```go
 type AgentEvaluator interface {
-	Evaluate(ctx context.Context, evalSetID string) (*EvaluationResult, error) // Evaluate 执行评估并返回聚合结果
+	Evaluate(ctx context.Context, evalSetID string, opt ...Option) (*EvaluationResult, error) // Evaluate 执行评估并返回聚合结果
 	Close() error                                                              // Close 释放资源
 }
 ```

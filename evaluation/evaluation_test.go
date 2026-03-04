@@ -55,10 +55,13 @@ type fakeService struct {
 
 	inferenceRequests []*service.InferenceRequest
 	evaluateRequests  []*service.EvaluateRequest
+	inferenceOptions  []*service.Options
+	evaluateOptions   []*service.Options
 }
 
-func (f *fakeService) Inference(ctx context.Context, req *service.InferenceRequest) ([]*service.InferenceResult, error) {
+func (f *fakeService) Inference(ctx context.Context, req *service.InferenceRequest, opt ...service.Option) ([]*service.InferenceResult, error) {
 	f.inferenceRequests = append(f.inferenceRequests, req)
+	f.inferenceOptions = append(f.inferenceOptions, service.NewOptions(opt...))
 	if f.inferenceErr != nil {
 		return nil, f.inferenceErr
 	}
@@ -69,8 +72,9 @@ func (f *fakeService) Inference(ctx context.Context, req *service.InferenceReque
 	return []*service.InferenceResult{}, nil
 }
 
-func (f *fakeService) Evaluate(ctx context.Context, req *service.EvaluateRequest) (*service.EvalSetRunResult, error) {
+func (f *fakeService) Evaluate(ctx context.Context, req *service.EvaluateRequest, opt ...service.Option) (*service.EvalSetRunResult, error) {
 	f.evaluateRequests = append(f.evaluateRequests, req)
+	f.evaluateOptions = append(f.evaluateOptions, service.NewOptions(opt...))
 	if f.evaluateErr != nil {
 		return nil, f.evaluateErr
 	}
@@ -89,11 +93,11 @@ type countingService struct {
 	closed int32
 }
 
-func (c *countingService) Inference(ctx context.Context, req *service.InferenceRequest) ([]*service.InferenceResult, error) {
+func (c *countingService) Inference(ctx context.Context, req *service.InferenceRequest, opt ...service.Option) ([]*service.InferenceResult, error) {
 	return []*service.InferenceResult{}, nil
 }
 
-func (c *countingService) Evaluate(ctx context.Context, req *service.EvaluateRequest) (*service.EvalSetRunResult, error) {
+func (c *countingService) Evaluate(ctx context.Context, req *service.EvaluateRequest, opt ...service.Option) (*service.EvalSetRunResult, error) {
 	return &service.EvalSetRunResult{AppName: req.AppName, EvalSetID: req.EvalSetID, EvalCaseResults: []*evalresult.EvalCaseResult{}}, nil
 }
 
@@ -108,7 +112,7 @@ type invocationProbeService struct {
 	evaluateHasKey      bool
 }
 
-func (s *invocationProbeService) Inference(ctx context.Context, req *service.InferenceRequest) ([]*service.InferenceResult, error) {
+func (s *invocationProbeService) Inference(ctx context.Context, req *service.InferenceRequest, opt ...service.Option) ([]*service.InferenceResult, error) {
 	inv, _ := agent.InvocationFromContext(ctx)
 	s.inferenceInvocation = inv
 	if inv != nil {
@@ -117,7 +121,7 @@ func (s *invocationProbeService) Inference(ctx context.Context, req *service.Inf
 	return []*service.InferenceResult{}, nil
 }
 
-func (s *invocationProbeService) Evaluate(ctx context.Context, req *service.EvaluateRequest) (*service.EvalSetRunResult, error) {
+func (s *invocationProbeService) Evaluate(ctx context.Context, req *service.EvaluateRequest, opt ...service.Option) (*service.EvalSetRunResult, error) {
 	inv, _ := agent.InvocationFromContext(ctx)
 	s.evaluateInvocation = inv
 	if inv != nil {
@@ -273,12 +277,31 @@ func makeEvalCaseResult(evalSetID, caseID string, metricName string, score float
 	}
 }
 
+func defaultTestOptions(ae *agentEvaluator) *options {
+	return &options{
+		evalSetManager:    ae.evalSetManager,
+		evalResultManager: ae.evalResultManager,
+		metricManager:     ae.metricManager,
+		registry:          ae.registry,
+		evalService:       ae.evalService,
+		judgeRunner:       ae.judgeRunner,
+		numRuns:           ae.numRuns,
+		runOptions:        append([]agent.RunOption(nil), ae.runOptions...),
+	}
+}
+
 func TestNewAgentEvaluatorValidation(t *testing.T) {
 	_, err := New("app", nil)
 	assert.Error(t, err)
 
 	_, err = New("app", stubRunner{}, WithNumRuns(0))
 	assert.Error(t, err)
+
+	ae, err := New("app", stubRunner{}, WithEvalCaseParallelism(0))
+	assert.NoError(t, err)
+	if err == nil {
+		assert.NoError(t, ae.Close())
+	}
 
 	_, err = New(
 		"app",
@@ -314,12 +337,112 @@ func TestNewAgentEvaluatorValidation(t *testing.T) {
 		assert.Contains(t, err.Error(), "eval set manager is nil")
 	}
 
-	ae, err := New("app", stubRunner{})
+	ae, err = New("app", stubRunner{})
 	assert.NoError(t, err)
 	impl, ok := ae.(*agentEvaluator)
 	assert.True(t, ok)
 	assert.NotNil(t, impl.evalService)
 	assert.NoError(t, ae.Close())
+}
+
+func TestNewAgentEvaluatorWithParallelOptionsBuildsLocalService(t *testing.T) {
+	ae, err := New(
+		"app",
+		stubRunner{},
+		WithEvalCaseParallelism(2),
+		WithEvalCaseParallelInferenceEnabled(true),
+		WithEvalCaseParallelEvaluationEnabled(true),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+
+	assert.NoError(t, ae.Close())
+}
+
+type optionProbeService struct {
+	lastInferenceOptions *service.Options
+	lastEvaluateOptions  *service.Options
+}
+
+func (s *optionProbeService) Inference(ctx context.Context, req *service.InferenceRequest, opt ...service.Option) ([]*service.InferenceResult, error) {
+	options := &service.Options{
+		EvalCaseParallelism:               -123,
+		EvalCaseParallelInferenceEnabled:  true,
+		EvalCaseParallelEvaluationEnabled: true,
+	}
+	for _, o := range opt {
+		o(options)
+	}
+	s.lastInferenceOptions = options
+	return []*service.InferenceResult{}, nil
+}
+
+func (s *optionProbeService) Evaluate(ctx context.Context, req *service.EvaluateRequest, opt ...service.Option) (*service.EvalSetRunResult, error) {
+	options := &service.Options{
+		EvalCaseParallelism:               -456,
+		EvalCaseParallelInferenceEnabled:  true,
+		EvalCaseParallelEvaluationEnabled: true,
+	}
+	for _, o := range opt {
+		o(options)
+	}
+	s.lastEvaluateOptions = options
+	return &service.EvalSetRunResult{
+		AppName:         req.AppName,
+		EvalSetID:       req.EvalSetID,
+		EvalCaseResults: []*evalresult.EvalCaseResult{},
+	}, nil
+}
+
+func (s *optionProbeService) Close() error { return nil }
+
+func TestAgentEvaluatorEvaluateDoesNotOverrideServiceCallOptionsByDefault(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	evalSetMgr := evalsetinmemory.New()
+	_, err := evalSetMgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+
+	probeSvc := &optionProbeService{}
+	ae, err := New(
+		appName,
+		stubRunner{},
+		WithEvalSetManager(evalSetMgr),
+		WithEvalResultManager(evalresultinmemory.New()),
+		WithMetricManager(metricinmemory.New()),
+		WithRegistry(registry.New()),
+		WithEvaluationService(probeSvc),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	defer func() {
+		assert.NoError(t, ae.Close())
+	}()
+
+	_, err = ae.Evaluate(ctx, evalSetID)
+	assert.NoError(t, err)
+
+	assert.NotNil(t, probeSvc.lastInferenceOptions)
+	if probeSvc.lastInferenceOptions == nil {
+		return
+	}
+	assert.Equal(t, -123, probeSvc.lastInferenceOptions.EvalCaseParallelism)
+	assert.True(t, probeSvc.lastInferenceOptions.EvalCaseParallelInferenceEnabled)
+	assert.True(t, probeSvc.lastInferenceOptions.EvalCaseParallelEvaluationEnabled)
+
+	assert.NotNil(t, probeSvc.lastEvaluateOptions)
+	if probeSvc.lastEvaluateOptions == nil {
+		return
+	}
+	assert.Equal(t, -456, probeSvc.lastEvaluateOptions.EvalCaseParallelism)
+	assert.True(t, probeSvc.lastEvaluateOptions.EvalCaseParallelInferenceEnabled)
+	assert.True(t, probeSvc.lastEvaluateOptions.EvalCaseParallelEvaluationEnabled)
 }
 
 func TestAgentEvaluatorClose_CollectsErrors(t *testing.T) {
@@ -356,15 +479,20 @@ func TestAgentEvaluatorEvaluateAttachesInvocation(t *testing.T) {
 	appName := "app"
 
 	svc := &invocationProbeService{}
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, "set")
+	assert.NoError(t, err)
 	ae := &agentEvaluator{
 		appName:           appName,
 		evalService:       svc,
+		evalSetManager:    mgr,
 		metricManager:     metricinmemory.New(),
 		evalResultManager: evalresultinmemory.New(),
+		registry:          registry.New(),
 		numRuns:           1,
 	}
 
-	_, err := ae.Evaluate(ctx, "set")
+	_, err = ae.Evaluate(ctx, "set")
 	assert.NoError(t, err)
 	assert.NotNil(t, svc.inferenceInvocation)
 	assert.Same(t, svc.inferenceInvocation, svc.evaluateInvocation)
@@ -444,6 +572,158 @@ func TestNewAgentEvaluatorWithCallbacksPassesThroughToEvalService(t *testing.T) 
 	assert.Same(t, req, gotReq)
 }
 
+func TestAgentEvaluatorEvaluatePassesServiceCallOptions(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	evalSetMgr := evalsetinmemory.New()
+	_, err := evalSetMgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+
+	svc := &fakeService{}
+	callbacks := service.NewCallbacks()
+	reg := registry.New()
+
+	ae, err := New(
+		appName,
+		stubRunner{},
+		WithEvalSetManager(evalSetMgr),
+		WithEvalResultManager(evalresultinmemory.New()),
+		WithMetricManager(metricinmemory.New()),
+		WithRegistry(reg),
+		WithEvaluationService(svc),
+		WithCallbacks(callbacks),
+		WithEvalCaseParallelism(2),
+		WithEvalCaseParallelInferenceEnabled(true),
+		WithEvalCaseParallelEvaluationEnabled(true),
+		WithRunOptions(agent.WithInstruction("prompt")),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	defer func() {
+		assert.NoError(t, ae.Close())
+	}()
+
+	_, err = ae.Evaluate(ctx, evalSetID)
+	assert.NoError(t, err)
+
+	assert.Len(t, svc.inferenceOptions, 1)
+	assert.Len(t, svc.evaluateOptions, 1)
+
+	inferenceOpts := svc.inferenceOptions[0]
+	assert.Same(t, evalSetMgr, inferenceOpts.EvalSetManager)
+	assert.Same(t, callbacks, inferenceOpts.Callbacks)
+	assert.Len(t, inferenceOpts.RunOptions, 1)
+	assert.Equal(t, 2, inferenceOpts.EvalCaseParallelism)
+	assert.True(t, inferenceOpts.EvalCaseParallelInferenceEnabled)
+
+	evaluateOpts := svc.evaluateOptions[0]
+	assert.Same(t, evalSetMgr, evaluateOpts.EvalSetManager)
+	assert.Same(t, reg, evaluateOpts.Registry)
+	assert.Same(t, callbacks, evaluateOpts.Callbacks)
+	assert.Equal(t, 2, evaluateOpts.EvalCaseParallelism)
+	assert.True(t, evaluateOpts.EvalCaseParallelEvaluationEnabled)
+}
+
+func TestAgentEvaluatorEvaluateAppliesPerCallNumRuns(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	evalSetMgr := evalsetinmemory.New()
+	_, err := evalSetMgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+
+	svc := &fakeService{
+		inferenceResults: [][]*service.InferenceResult{
+			{},
+			{},
+		},
+		evaluateResults: []*service.EvalSetRunResult{
+			{
+				AppName:   appName,
+				EvalSetID: evalSetID,
+				EvalCaseResults: []*evalresult.EvalCaseResult{
+					makeEvalCaseResult(evalSetID, "case-1", "metric", 0.9, 0.5, status.EvalStatusPassed),
+				},
+			},
+			{
+				AppName:   appName,
+				EvalSetID: evalSetID,
+				EvalCaseResults: []*evalresult.EvalCaseResult{
+					makeEvalCaseResult(evalSetID, "case-1", "metric", 0.9, 0.5, status.EvalStatusPassed),
+				},
+			},
+		},
+	}
+	ae, err := New(
+		appName,
+		stubRunner{},
+		WithEvalSetManager(evalSetMgr),
+		WithEvalResultManager(evalresultinmemory.New()),
+		WithMetricManager(metricinmemory.New()),
+		WithRegistry(registry.New()),
+		WithEvaluationService(svc),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	defer func() {
+		assert.NoError(t, ae.Close())
+	}()
+
+	_, err = ae.Evaluate(ctx, evalSetID, WithNumRuns(2))
+	assert.NoError(t, err)
+
+	assert.Len(t, svc.inferenceRequests, 2)
+	assert.Len(t, svc.evaluateRequests, 2)
+}
+
+func TestAgentEvaluatorEvaluateRejectsInvalidPerCallOptions(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	evalSetMgr := evalsetinmemory.New()
+	_, err := evalSetMgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+
+	svc := &fakeService{
+		inferenceResults: [][]*service.InferenceResult{{}},
+		evaluateResults: []*service.EvalSetRunResult{
+			{AppName: appName, EvalSetID: evalSetID, EvalCaseResults: []*evalresult.EvalCaseResult{}},
+		},
+	}
+	ae, err := New(
+		appName,
+		stubRunner{},
+		WithEvalSetManager(evalSetMgr),
+		WithEvalResultManager(evalresultinmemory.New()),
+		WithMetricManager(metricinmemory.New()),
+		WithRegistry(registry.New()),
+		WithEvaluationService(svc),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	defer func() {
+		assert.NoError(t, ae.Close())
+	}()
+
+	_, err = ae.Evaluate(ctx, evalSetID, WithRegistry(nil))
+	assert.Error(t, err)
+	if err != nil {
+		assert.Contains(t, err.Error(), "registry is nil")
+	}
+	assert.Len(t, svc.inferenceRequests, 0)
+	assert.Len(t, svc.evaluateRequests, 0)
+}
+
 func TestAgentEvaluatorCloseLifecycle(t *testing.T) {
 	customSvc := &countingService{}
 	ae := &agentEvaluator{
@@ -475,7 +755,7 @@ func TestAgentEvaluatorCollectCaseResultsGetEvalSetError(t *testing.T) {
 		evalSetManager: evalsetinmemory.New(),
 		numRuns:        1,
 	}
-	_, _, err := ae.collectCaseResults(ctx, "set")
+	_, _, err := ae.collectCaseResults(ctx, "set", defaultTestOptions(ae))
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "get eval set")
 	assert.ErrorIs(t, err, os.ErrNotExist)
@@ -511,7 +791,7 @@ func TestAgentEvaluatorCollectCaseResultsSortByEvalSetOrder(t *testing.T) {
 		evalResultManager: evalresultinmemory.New(),
 		numRuns:           1,
 	}
-	results, _, err := ae.collectCaseResults(ctx, evalSetID)
+	results, _, err := ae.collectCaseResults(ctx, evalSetID, defaultTestOptions(ae))
 	assert.NoError(t, err)
 	assert.Len(t, results, 2)
 	assert.Equal(t, "B", results[0].EvalCaseID)
@@ -547,7 +827,7 @@ func TestAgentEvaluatorCollectCaseResultsSortKnownCaseFirst(t *testing.T) {
 		evalResultManager: evalresultinmemory.New(),
 		numRuns:           1,
 	}
-	results, _, err := ae.collectCaseResults(ctx, evalSetID)
+	results, _, err := ae.collectCaseResults(ctx, evalSetID, defaultTestOptions(ae))
 	assert.NoError(t, err)
 	assert.Len(t, results, 2)
 	assert.Equal(t, "A", results[0].EvalCaseID)
@@ -577,7 +857,7 @@ func TestAgentEvaluatorCollectCaseResultsSortLexicographically(t *testing.T) {
 		evalResultManager: evalresultinmemory.New(),
 		numRuns:           1,
 	}
-	results, _, err := ae.collectCaseResults(ctx, evalSetID)
+	results, _, err := ae.collectCaseResults(ctx, evalSetID, defaultTestOptions(ae))
 	assert.NoError(t, err)
 	assert.Len(t, results, 2)
 	assert.Equal(t, "a", results[0].EvalCaseID)
@@ -756,7 +1036,7 @@ func TestAgentEvaluatorRunEvaluationErrors(t *testing.T) {
 				registry:          registry.New(),
 				numRuns:           1,
 			}
-			_, err := ae.runEvaluation(ctx, evalSetID)
+			_, err := ae.runEvaluation(ctx, evalSetID, defaultTestOptions(ae))
 			assert.Error(t, err)
 		})
 	}
@@ -807,7 +1087,7 @@ func TestAgentEvaluatorRunEvaluationInjectsJudgeRunnerIntoLLMJudgeMetrics(t *tes
 		return
 	}
 
-	_, err = ae.runEvaluation(ctx, evalSetID)
+	_, err = ae.runEvaluation(ctx, evalSetID, defaultTestOptions(ae))
 	if !assert.NoError(t, err) {
 		return
 	}
@@ -860,7 +1140,7 @@ func TestAgentEvaluatorRunEvaluationNilRunResult(t *testing.T) {
 		evalResultManager: resultMgr,
 		numRuns:           1,
 	}
-	_, err := ae.runEvaluation(ctx, evalSetID)
+	_, err := ae.runEvaluation(ctx, evalSetID, defaultTestOptions(ae))
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "eval set run result is nil")
 	assert.Equal(t, int32(0), atomic.LoadInt32(&resultMgr.saves))
@@ -912,14 +1192,15 @@ func TestAgentEvaluatorRunEvaluationSaveFailureLeavesResultIDUnset(t *testing.T)
 		evalResultManager: resultMgr,
 		numRuns:           1,
 	}
-	_, err := ae.runEvaluation(ctx, evalSetID)
+	_, err := ae.runEvaluation(ctx, evalSetID, defaultTestOptions(ae))
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "save eval set result")
 	assert.Contains(t, err.Error(), "save failed")
 	assert.NotNil(t, resultMgr.last)
-	if assert.NotNil(t, resultMgr.last) {
-		assert.Empty(t, resultMgr.last.EvalSetResultID)
+	if resultMgr.last == nil {
+		return
 	}
+	assert.Empty(t, resultMgr.last.EvalSetResultID)
 }
 
 func TestAgentEvaluatorRunEvaluationSummarizeError(t *testing.T) {
@@ -953,7 +1234,7 @@ func TestAgentEvaluatorRunEvaluationSummarizeError(t *testing.T) {
 		evalResultManager: resultMgr,
 		numRuns:           2,
 	}
-	_, err := ae.runEvaluation(ctx, evalSetID)
+	_, err := ae.runEvaluation(ctx, evalSetID, defaultTestOptions(ae))
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "summarize eval set result")
 	assert.Equal(t, int32(0), atomic.LoadInt32(&resultMgr.saves))
@@ -986,7 +1267,7 @@ func TestAgentEvaluatorRunEvaluationConcatsInferenceResultsAcrossRuns(t *testing
 		numRuns:           2,
 	}
 
-	_, err := ae.runEvaluation(ctx, evalSetID)
+	_, err := ae.runEvaluation(ctx, evalSetID, defaultTestOptions(ae))
 	assert.NoError(t, err)
 
 	assert.Len(t, svc.inferenceRequests, 2)
@@ -1053,7 +1334,7 @@ func TestAgentEvaluatorRunEvaluationPersistsSingleResultWithSummary(t *testing.T
 		numRuns:           2,
 	}
 
-	res, err := ae.runEvaluation(ctx, evalSetID)
+	res, err := ae.runEvaluation(ctx, evalSetID, defaultTestOptions(ae))
 	assert.NoError(t, err)
 	assert.NotNil(t, res)
 	assert.Len(t, res.EvalCaseResults, 4)
@@ -1070,15 +1351,17 @@ func TestAgentEvaluatorRunEvaluationPersistsSingleResultWithSummary(t *testing.T
 
 	assert.Equal(t, int32(1), atomic.LoadInt32(&resultMgr.saves))
 	assert.NotNil(t, resultMgr.last)
-	if assert.NotNil(t, resultMgr.last) {
-		assert.NotNil(t, resultMgr.last.Summary)
-		if assert.NotNil(t, resultMgr.last.Summary) {
-			assert.Equal(t, 2, resultMgr.last.Summary.NumRuns)
-			assert.Equal(t, status.EvalStatusFailed, resultMgr.last.Summary.OverallStatus)
-			assert.Len(t, resultMgr.last.Summary.RunSummaries, 2)
-			assert.Len(t, resultMgr.last.Summary.EvalCaseSummaries, 2)
-		}
+	if resultMgr.last == nil {
+		return
 	}
+	assert.NotNil(t, resultMgr.last.Summary)
+	if resultMgr.last.Summary == nil {
+		return
+	}
+	assert.Equal(t, 2, resultMgr.last.Summary.NumRuns)
+	assert.Equal(t, status.EvalStatusFailed, resultMgr.last.Summary.OverallStatus)
+	assert.Len(t, resultMgr.last.Summary.RunSummaries, 2)
+	assert.Len(t, resultMgr.last.Summary.EvalCaseSummaries, 2)
 }
 
 func TestAgentEvaluatorRunEvaluationPersistsSummaryWhenNumRunsIsOne(t *testing.T) {
@@ -1112,7 +1395,7 @@ func TestAgentEvaluatorRunEvaluationPersistsSummaryWhenNumRunsIsOne(t *testing.T
 		numRuns:           1,
 	}
 
-	res, err := ae.runEvaluation(ctx, evalSetID)
+	res, err := ae.runEvaluation(ctx, evalSetID, defaultTestOptions(ae))
 	assert.NoError(t, err)
 	assert.NotNil(t, res)
 	if res == nil {
@@ -1165,7 +1448,7 @@ func TestAgentEvaluatorRunEvaluationSkipsNilCaseResults(t *testing.T) {
 		numRuns:           1,
 	}
 
-	res, err := ae.runEvaluation(ctx, evalSetID)
+	res, err := ae.runEvaluation(ctx, evalSetID, defaultTestOptions(ae))
 	assert.NoError(t, err)
 	assert.NotNil(t, res)
 	if res == nil {

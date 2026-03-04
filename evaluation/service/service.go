@@ -24,9 +24,9 @@ import (
 // score those responses with the configured metrics.
 type Service interface {
 	// Inference runs the agent for the requested eval cases and returns the inference results for each case.
-	Inference(ctx context.Context, request *InferenceRequest) ([]*InferenceResult, error)
+	Inference(ctx context.Context, request *InferenceRequest, opt ...Option) ([]*InferenceResult, error)
 	// Evaluate runs the evaluation on the inference results and returns the eval set run result.
-	Evaluate(ctx context.Context, request *EvaluateRequest) (*EvalSetRunResult, error)
+	Evaluate(ctx context.Context, request *EvaluateRequest, opt ...Option) (*EvalSetRunResult, error)
 	// Close releases resources owned by the service.
 	Close() error
 }
