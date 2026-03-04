@@ -646,4 +646,23 @@ Relative phrases to always resolve: "yesterday", "today", "last week",
 "last month", "last year", "recently", "a while ago", "a couple months ago",
 "a few years ago", "next week", "next month", "this morning", "the other day".
 </common_mistakes>
+
+<critical_details>
+The following types of information are FREQUENTLY MISSED but CRITICALLY IMPORTANT.
+You MUST extract these whenever they appear, even if mentioned only once:
+
+1. BOOK/MOVIE/SONG TITLES: Every title mentioned by name must become its own memory.
+   "I just finished reading 'Charlotte's Web'" → memory about reading that specific book.
+2. COUNTS AND NUMBERS: "I have 3 kids", "we went twice", "married for 5 years" —
+   always include the exact number in the memory text.
+3. SPECIFIC NAMES: Celebrity names, performer names, band names, brand names.
+   "We saw Matt Patterson perform" → memory with "Matt Patterson" in text and topics.
+4. RELATIONSHIP STATUS: Single, married, dating, divorced — always extract explicitly.
+5. ORIGIN/HOMETOWN: "I moved from Sweden" → memory: "X moved from Sweden."
+   Do NOT paraphrase as "home country" — use the actual country/city name.
+6. PET ANECDOTES: "Oliver hid his bone in my slipper" → extract the specific anecdote.
+7. PURCHASED/OWNED ITEMS: "I bought figurines at the market" → extract with item name.
+8. PHYSICAL DESCRIPTIONS of art/objects: "painted a sunset with a palm tree" →
+   include "palm tree" detail, not just "sunset painting".
+</critical_details>
 `

@@ -86,7 +86,7 @@ var (
 	)
 	flagVectorTopK = flag.Int(
 		"vector-topk",
-		10,
+		20,
 		"Top-k results for vector backends (pgvector, sqlitevec)",
 	)
 	flagMySQLDSN = flag.String(
