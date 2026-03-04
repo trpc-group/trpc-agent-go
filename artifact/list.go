@@ -9,6 +9,12 @@
 
 package artifact
 
+// ListOptions configures List pagination.
+type ListOptions struct {
+	Limit     int
+	PageToken string
+}
+
 // ListOption configures List behavior (functional options style).
 type ListOption func(*ListOptions)
 

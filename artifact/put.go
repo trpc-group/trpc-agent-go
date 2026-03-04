@@ -9,6 +9,11 @@
 
 package artifact
 
+// PutOptions configures Put behavior.
+type PutOptions struct {
+	MimeType string
+}
+
 // PutOption configures Put behavior (functional options style).
 type PutOption func(*PutOptions)
 

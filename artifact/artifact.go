@@ -65,17 +65,6 @@ type KeyPrefix struct {
 	IncludeSession bool // reserved for future use; keep false for now.
 }
 
-// PutOptions configures Put behavior.
-type PutOptions struct {
-	MimeType string
-}
-
-// ListOptions configures List pagination.
-type ListOptions struct {
-	Limit     int
-	PageToken string
-}
-
 // Artifact is a convenience container for artifact bytes with optional metadata.
 // Services operate on streaming readers; use this type in higher-level helpers.
 type Artifact struct {
