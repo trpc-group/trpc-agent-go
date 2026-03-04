@@ -270,11 +270,14 @@ func TestBuildRequestProcessors_SingleSystemMessageWiring(t *testing.T) {
 	WithSingleSystemMessage(true)(opts)
 	procs := buildRequestProcessors("test-agent", opts)
 	var crp *processor.ContentRequestProcessor
+	var crpCount int
 	for _, p := range procs {
 		if v, ok := p.(*processor.ContentRequestProcessor); ok {
 			crp = v
+			crpCount++
 		}
 	}
+	require.Equal(t, 1, crpCount, "expected exactly one ContentRequestProcessor")
 	require.NotNil(t, crp)
 	require.True(t, crp.SingleSystemMessage)
 
@@ -282,11 +285,14 @@ func TestBuildRequestProcessors_SingleSystemMessageWiring(t *testing.T) {
 	WithSingleSystemMessage(false)(opts)
 	procs = buildRequestProcessors("test-agent", opts)
 	crp = nil
+	crpCount = 0
 	for _, p := range procs {
 		if v, ok := p.(*processor.ContentRequestProcessor); ok {
 			crp = v
+			crpCount++
 		}
 	}
+	require.Equal(t, 1, crpCount, "expected exactly one ContentRequestProcessor")
 	require.NotNil(t, crp)
 	require.False(t, crp.SingleSystemMessage)
 }
