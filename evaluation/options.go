@@ -34,6 +34,7 @@ type options struct {
 	metricManager                     metric.Manager
 	registry                          registry.Registry
 	evalService                       service.Service
+	expectedRunner                    runner.Runner
 	callbacks                         *service.Callbacks
 	judgeRunner                       runner.Runner
 	numRuns                           int
@@ -109,6 +110,13 @@ func WithCallbacks(c *service.Callbacks) Option {
 func WithJudgeRunner(judge runner.Runner) Option {
 	return func(o *options) {
 		o.judgeRunner = judge
+	}
+}
+
+// WithExpectedRunner sets the runner used to generate dynamic expected outputs.
+func WithExpectedRunner(r runner.Runner) Option {
+	return func(o *options) {
+		o.expectedRunner = r
 	}
 }
 

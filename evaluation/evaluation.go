@@ -74,6 +74,9 @@ func New(appName string, runner runner.Runner, opt ...Option) (AgentEvaluator, e
 		if opts.callbacks != nil {
 			serviceOpts = append(serviceOpts, service.WithCallbacks(opts.callbacks))
 		}
+		if opts.expectedRunner != nil {
+			serviceOpts = append(serviceOpts, service.WithExpectedRunner(opts.expectedRunner))
+		}
 		if opts.evalCaseParallelism != nil {
 			serviceOpts = append(serviceOpts, service.WithEvalCaseParallelism(*opts.evalCaseParallelism))
 		}

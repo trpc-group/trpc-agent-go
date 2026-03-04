@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
 // Options holds the options for the evaluation service.
@@ -28,6 +29,7 @@ type Options struct {
 	EvalResultManager                 evalresult.Manager               // EvalResultManager is used to store and retrieve eval results.
 	Registry                          registry.Registry                // Registry is used to store and retrieve evaluator.
 	SessionIDSupplier                 func(ctx context.Context) string // SessionIDSupplier is used to generate session IDs.
+	ExpectedRunner                    runner.Runner                    // ExpectedRunner is used to generate dynamic expected outputs.
 	Callbacks                         *Callbacks                       // Callbacks holds evaluation callbacks.
 	RunOptions                        []agent.RunOption                // RunOptions configures runner.Run calls during inference.
 	EvalCaseParallelism               int                              // EvalCaseParallelism controls concurrent eval case processing.
@@ -86,6 +88,13 @@ func WithRegistry(r registry.Registry) Option {
 func WithSessionIDSupplier(s func(ctx context.Context) string) Option {
 	return func(o *Options) {
 		o.SessionIDSupplier = s
+	}
+}
+
+// WithExpectedRunner sets the runner used to generate dynamic expected outputs.
+func WithExpectedRunner(r runner.Runner) Option {
+	return func(o *Options) {
+		o.ExpectedRunner = r
 	}
 }
 
