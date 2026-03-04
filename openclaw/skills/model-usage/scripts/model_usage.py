@@ -31,7 +31,15 @@ def eprint(msg: str) -> None:
     print(msg, file=sys.stderr)
 
 
+ALLOWED_PROVIDERS = frozenset({"codex", "claude"})
+
+
 def run_codexbar_cost(provider: str) -> List[Dict[str, Any]]:
+    if provider not in ALLOWED_PROVIDERS:
+        raise ValueError(
+            f"Invalid provider: {provider!r}. "
+            f"Must be one of: {', '.join(sorted(ALLOWED_PROVIDERS))}"
+        )
     cmd = ["codexbar", "cost", "--format", "json", "--provider", provider]
     try:
         output = subprocess.check_output(cmd, text=True)
