@@ -29,10 +29,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	occhannel "trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwclient"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
 	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 )
@@ -1544,6 +1546,110 @@ func TestRuntime_Close_NilRunnerIsNoop(t *testing.T) {
 	require.NoError(t, rt.Close())
 }
 
+func TestInProcGatewayClient_SendMessage_OK(t *testing.T) {
+	t.Parallel()
+
+	const (
+		testReply     = "ok"
+		testRequestID = "req-1"
+	)
+
+	srv, err := gateway.New(&inProcGWTestRunner{
+		reply:     testReply,
+		requestID: testRequestID,
+	})
+	require.NoError(t, err)
+
+	c := newInProcGatewayClient(srv)
+
+	rsp, err := c.SendMessage(context.Background(), gwclient.MessageRequest{
+		From: "u1",
+		Text: "hi",
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, rsp.StatusCode)
+	require.Equal(t, testReply, rsp.Reply)
+	require.Equal(t, testRequestID, rsp.RequestID)
+	require.NotEmpty(t, rsp.SessionID)
+}
+
+func TestInProcGatewayClient_SendMessage_StatusError(t *testing.T) {
+	t.Parallel()
+
+	const (
+		wantErr = "gwclient: status 400: invalid_request: " +
+			"missing user_id or from"
+	)
+
+	srv, err := gateway.New(&inProcGWTestRunner{})
+	require.NoError(t, err)
+
+	c := newInProcGatewayClient(srv)
+
+	_, err = c.SendMessage(context.Background(), gwclient.MessageRequest{
+		Text: "hi",
+	})
+	require.Error(t, err)
+	require.Equal(t, wantErr, err.Error())
+}
+
+func TestInProcGatewayClient_NilServerFails(t *testing.T) {
+	t.Parallel()
+
+	var c *inProcGatewayClient
+
+	_, err := c.SendMessage(context.Background(), gwclient.MessageRequest{
+		From: "u1",
+		Text: "hi",
+	})
+	require.Error(t, err)
+	require.Equal(t, errNilGatewayServer, err.Error())
+
+	_, err = c.Cancel(context.Background(), "req-1")
+	require.Error(t, err)
+	require.Equal(t, errNilGatewayServer, err.Error())
+}
+
+func TestInProcGatewayClient_Cancel_OK(t *testing.T) {
+	t.Parallel()
+
+	const testRequestID = "req-1"
+
+	r := &inProcGWTestManagedRunner{cancelOK: testRequestID}
+	srv, err := gateway.New(r)
+	require.NoError(t, err)
+
+	c := newInProcGatewayClient(srv)
+
+	canceled, err := c.Cancel(context.Background(), testRequestID)
+	require.NoError(t, err)
+	require.True(t, canceled)
+}
+
+func TestInProcGatewayClient_Cancel_Unsupported(t *testing.T) {
+	t.Parallel()
+
+	const wantErr = "gwclient: status 501: unsupported: " +
+		"runner does not support cancel"
+
+	srv, err := gateway.New(&inProcGWTestRunner{})
+	require.NoError(t, err)
+
+	c := newInProcGatewayClient(srv)
+
+	_, err = c.Cancel(context.Background(), "req-1")
+	require.Error(t, err)
+	require.Equal(t, wantErr, err.Error())
+}
+
+func TestErrorForGWStatus_NilAPIError(t *testing.T) {
+	t.Parallel()
+
+	err := errorForGWStatus(http.StatusInternalServerError, nil)
+	require.Error(t, err)
+	require.Equal(t, "gwclient: status 500", err.Error())
+}
+
 type stubCloser struct {
 	closeErr error
 }
@@ -1587,6 +1693,59 @@ func (s *stubRunner) Close() error {
 		*s.closed = true
 	}
 	return s.closeErr
+}
+
+type inProcGWTestRunner struct {
+	reply     string
+	requestID string
+}
+
+func (r *inProcGWTestRunner) Run(
+	_ context.Context,
+	_ string,
+	_ string,
+	_ model.Message,
+	_ ...agent.RunOption,
+) (<-chan *event.Event, error) {
+	reply := r.reply
+	if reply == "" {
+		reply = "ok"
+	}
+	requestID := r.requestID
+	if requestID == "" {
+		requestID = "req-1"
+	}
+
+	ch := make(chan *event.Event, 1)
+	ch <- &event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{
+				{Message: model.NewAssistantMessage(reply)},
+			},
+			Done: true,
+		},
+		RequestID: requestID,
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (r *inProcGWTestRunner) Close() error { return nil }
+
+type inProcGWTestManagedRunner struct {
+	inProcGWTestRunner
+	cancelOK string
+}
+
+func (r *inProcGWTestManagedRunner) Cancel(requestID string) bool {
+	return requestID == r.cancelOK
+}
+
+func (r *inProcGWTestManagedRunner) RunStatus(
+	string,
+) (runner.RunStatus, bool) {
+	return runner.RunStatus{}, false
 }
 
 func TestToolSetsFromProviders_EmptyTypeFails(t *testing.T) {

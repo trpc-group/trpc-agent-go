@@ -44,6 +44,8 @@ const (
 
 	audioFormatWAV = "wav"
 	audioFormatMP3 = "mp3"
+
+	errContentPartTooLarge = "content part too large"
 )
 
 type partFetcher interface {
@@ -351,7 +353,7 @@ func readLimited(r io.Reader, maxBytes int64) ([]byte, error) {
 		return nil, fmt.Errorf("read body: %w", err)
 	}
 	if int64(len(body)) > maxBytes {
-		return nil, errors.New("content part too large")
+		return nil, errors.New(errContentPartTooLarge)
 	}
 	return body, nil
 }
@@ -440,14 +442,34 @@ func (s *Server) normalizeContentPart(
 	ctx context.Context,
 	part gwproto.ContentPart,
 ) (*model.ContentPart, string, error) {
+	maxBytes := s.maxPartBytes
+	if maxBytes <= 0 {
+		maxBytes = defaultMaxContentPartBytes
+	}
+
 	switch part.Type {
 	case gwproto.PartTypeText:
 		return normalizeTextPart(part)
 	case gwproto.PartTypeImage:
+		if part.Image != nil &&
+			len(part.Image.Data) > 0 &&
+			int64(len(part.Image.Data)) > maxBytes {
+			return nil, "", errors.New(errContentPartTooLarge)
+		}
 		return normalizeImagePart(part)
 	case gwproto.PartTypeAudio, gwproto.PartTypeVoice:
+		if part.Audio != nil &&
+			len(part.Audio.Data) > 0 &&
+			int64(len(part.Audio.Data)) > maxBytes {
+			return nil, "", errors.New(errContentPartTooLarge)
+		}
 		return s.normalizeAudioPart(ctx, part)
 	case gwproto.PartTypeFile, gwproto.PartTypeVideo:
+		if part.File != nil &&
+			len(part.File.Data) > 0 &&
+			int64(len(part.File.Data)) > maxBytes {
+			return nil, "", errors.New(errContentPartTooLarge)
+		}
 		return s.normalizeFilePart(ctx, part)
 	case gwproto.PartTypeLink:
 		return normalizeLinkPart(part)
