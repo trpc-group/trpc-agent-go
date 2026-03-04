@@ -104,6 +104,7 @@ Notes and limitations:
   and these flags must be off:
   - `-enable-local-exec`
   - `-enable-openclaw-tools`
+  - `-enable-parallel-tools`
   - `-refresh-toolsets-on-run`
 - `agent.add_session_summary`, `agent.max_history_runs`, and
   `agent.preload_memory` are LLM-only knobs.
@@ -157,6 +158,18 @@ skills:
   extra_dirs:
     - "/path/to/team/skills"      # optional; lowest precedence
   debug: false                   # log gating decisions when true
+
+  # Optional: restrict which bundled skills are enabled by default.
+  # Applies only to bundled skills under ./openclaw/skills.
+  allowBundled: ["gh-issues", "notion"]
+
+  # Optional: per-skill config (by skillKey or skill name).
+  entries:
+    gh-issues:
+      enabled: true              # optional; default true
+      apiKey: "..."              # optional; injected into primaryEnv
+      env:                       # optional; injected into skill_run
+        GH_TOKEN: "..."
 ```
 
 CLI equivalents:
@@ -164,6 +177,23 @@ CLI equivalents:
 - `-skills-root <DIR>`
 - `-skills-extra-dirs <A,B,C>` (comma-separated)
 - `-skills-debug`
+- `-skills-allow-bundled <A,B,C>` (comma-separated; bundled skills only)
+
+#### `skills.entries` and OpenClaw metadata
+
+This demo supports OpenClaw-style per-skill configuration:
+
+- `skills.entries.<key>.enabled: false` disables that skill.
+- `skills.entries.<key>.env` can satisfy `metadata.openclaw.requires.env`
+  and is injected into `skill_run` (never overrides host env).
+- `skills.entries.<key>.apiKey` is injected into
+  `metadata.openclaw.primaryEnv` when that field is present in the skill.
+
+Key resolution:
+
+- If a skill sets `metadata.openclaw.skillKey`, that value is preferred
+  for `skills.entries.<key>`.
+- Otherwise the skill `name` is used.
 
 ### Minimal `SKILL.md` template
 
@@ -240,6 +270,8 @@ Supported fields:
 
 - `metadata.openclaw.always`
 - `metadata.openclaw.os` (`darwin`, `linux`, `win32`)
+- `metadata.openclaw.skillKey`
+- `metadata.openclaw.primaryEnv`
 - `metadata.openclaw.requires.bins`
 - `metadata.openclaw.requires.anyBins`
 - `metadata.openclaw.requires.env`
@@ -693,6 +725,36 @@ Tool naming:
 If you set `tools.refresh_toolsets_on_run: true`, ToolSet tools are
 reloaded on each agent run (useful for MCP where tools can change).
 
+### Parallel tool execution (optional)
+
+By default, OpenClaw executes tool calls **serially**.
+
+If you enable parallel tool execution, and the model returns **multiple
+tool calls in one step**, OpenClaw runs them concurrently. This can be
+useful when:
+
+- the tool calls are independent, and
+- you want to reduce end-to-end latency (for example, multiple sub-agent
+  calls via AgentTool).
+
+YAML:
+
+```yaml
+tools:
+  enable_parallel_tools: true
+```
+
+CLI:
+
+- `-enable-parallel-tools`
+
+Important notes:
+
+- Parallel tools require each tool implementation to be safe for
+  concurrent use.
+- This only affects tool calls inside one model step. The gateway still
+  runs **one request at a time per session** (history/state safety).
+
 ## Built-in tool providers
 
 These providers are built in to the OpenClaw demo binary.
@@ -782,6 +844,39 @@ tools:
         reconnect:
           enabled: true
           max_attempts: 3
+```
+
+Example: Playwright MCP "browser use" (stdio) via `npx`:
+
+This starts the Playwright MCP server as a subprocess and exposes its browser
+tools under the `browser_` namespace prefix.
+
+It is also a practical example of **MCP image forwarding**:
+
+- Some MCP tools (for example browser screenshots) return `{type:"image", ...}`
+  items.
+- OpenClaw forwards those images back to the model as real image messages, so
+  vision models can use them.
+
+Runnable example: `openclaw/examples/playwright_mcp_browser/`.
+
+```yaml
+tools:
+  refresh_toolsets_on_run: true
+  toolsets:
+    - type: "mcp"
+      name: "browser"
+      config:
+        transport: "stdio"
+        command: "npx"
+        args:
+          - "--yes"
+          - "@playwright/mcp@latest"
+          - "--headless"
+          - "--isolated"
+          - "--caps"
+          - "vision"
+        timeout: "5m"
 ```
 
 Supported transports:

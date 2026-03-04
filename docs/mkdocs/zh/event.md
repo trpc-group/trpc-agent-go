@@ -38,6 +38,9 @@ type Event struct {
     // Branch 是分支标识符，用于多 Agent 协作
     Branch string `json:"branch,omitempty"`
 
+    // Tag 使用 tags 为事件打业务标签
+    Tag string `json:"tag,omitempty"`
+
     // RequiresCompletion 表示此事件是否需要完成信号
     RequiresCompletion bool `json:"requiresCompletion,omitempty"`
 
@@ -54,6 +57,9 @@ type Event struct {
 
     // Actions 携带对 Flow 的行为提示（例如：跳过工具后的总结）
     Actions *EventActions `json:"actions,omitempty"`
+
+    // FilterKey 是用于事件层级过滤的标识
+    FilterKey string `json:"filterKey,omitempty"`
 }
 
 // EventActions 为事件附带的可选行为提示
@@ -62,6 +68,25 @@ type EventActions struct {
     SkipSummarization bool `json:"skipSummarization,omitempty"`
 }
 ```
+
+#### FilterKey（层级作用域 key）
+
+`FilterKey` 是每条事件上的可选字段。你可以把它理解成“像路径一样的标签”，主要用在：
+
+- 构建下一次 Prompt 时，筛选哪些历史事件允许进入上下文（`WithMessageBranchFilterMode`）。
+- 生成/读取按作用域拆分的会话摘要（`WithSummaryFilterKey`）。
+
+FilterKey 通过 `/` 做层级分隔，例如：
+
+- `my-app/user-messages`
+- `my-app/auth/role_admin`
+
+在 `prefix` 模式下，匹配规则是**层级匹配**：只要两者存在祖先/后代关系就算匹配
+（例如 `my-app` 会匹配 `my-app/auth/...`）。
+
+如果你需要严格隔离（不希望继承父级内容），请使用 `BranchFilterModeSubtree`。
+更详细的入门说明见 Session 文档：
+`FilterKey、EventFilterKey 与 BranchFilterMode`。
 
 `model.Response` 是 Event 的基础响应结构，承载了 LLM 的响应、工具调用以及错误等信息，定义如下：
 

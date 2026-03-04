@@ -354,11 +354,16 @@ func NewRuntime(
 			SkillsRoot:      opts.SkillsRoot,
 			SkillsExtraDirs: splitCSV(opts.SkillsExtraDir),
 			SkillsDebug:     opts.SkillsDebug,
+			SkillsAllowBundled: splitCSV(
+				opts.SkillsAllowBundled,
+			),
+			SkillConfigs:    opts.SkillConfigs,
 			SkillConfigKeys: resolveSkillConfigKeys(opts),
 			StateDir:        resolvedStateDir,
 
 			EnableLocalExec:     opts.EnableLocalExec,
 			EnableOpenClawTools: opts.EnableOpenClawTools,
+			EnableParallelTools: opts.EnableParallelTools,
 
 			ToolProviders: opts.ToolProviders,
 			ToolSets:      opts.ToolSets,
@@ -664,11 +669,16 @@ func run(ctx context.Context, args []string) error {
 			SkillsRoot:      opts.SkillsRoot,
 			SkillsExtraDirs: splitCSV(opts.SkillsExtraDir),
 			SkillsDebug:     opts.SkillsDebug,
+			SkillsAllowBundled: splitCSV(
+				opts.SkillsAllowBundled,
+			),
+			SkillConfigs:    opts.SkillConfigs,
 			SkillConfigKeys: resolveSkillConfigKeys(opts),
 			StateDir:        resolvedStateDir,
 
 			EnableLocalExec:     opts.EnableLocalExec,
 			EnableOpenClawTools: opts.EnableOpenClawTools,
+			EnableParallelTools: opts.EnableParallelTools,
 
 			ToolProviders: opts.ToolProviders,
 			ToolSets:      opts.ToolSets,
@@ -963,6 +973,11 @@ func validateAgentRunOptions(agentType string, opts runOptions) error {
 			"claude-code agent does not support enable-openclaw-tools",
 		)
 	}
+	if opts.EnableParallelTools {
+		return errors.New(
+			"claude-code agent does not support enable-parallel-tools",
+		)
+	}
 	if len(opts.ToolProviders) > 0 {
 		return errors.New(
 			"claude-code agent does not support tools.providers",
@@ -1125,14 +1140,19 @@ func newAgent(
 		llmagent.WithAddSessionSummary(cfg.AddSessionSummary),
 		llmagent.WithMaxHistoryRuns(cfg.MaxHistoryRuns),
 		llmagent.WithPreloadMemory(cfg.PreloadMemory),
+		llmagent.WithEnableParallelTools(cfg.EnableParallelTools),
 	}
 
 	cwd, _ := os.Getwd()
 	roots := resolveSkillRoots(cwd, cfg)
+	bundledRoot := filepath.Join(cwd, appName, defaultSkillsDir)
 	repo, err := ocskills.NewRepository(
 		roots,
 		ocskills.WithDebug(cfg.SkillsDebug),
 		ocskills.WithConfigKeys(cfg.SkillConfigKeys),
+		ocskills.WithBundledSkillsRoot(bundledRoot),
+		ocskills.WithAllowBundled(cfg.SkillsAllowBundled),
+		ocskills.WithSkillConfigs(cfg.SkillConfigs),
 	)
 	if err != nil {
 		return nil, err
@@ -1174,6 +1194,10 @@ func newAgent(
 		exec := localexec.New()
 		opts = append(opts, llmagent.WithCodeExecutor(exec))
 	}
+
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterToolResultMessages(mcpImageResultMessages)
+	opts = append(opts, llmagent.WithToolCallbacks(callbacks))
 
 	return llmagent.New(defaultAgentName, opts...), nil
 }
@@ -1335,16 +1359,19 @@ type agentConfig struct {
 	Instruction       string
 	SystemPrompt      string
 
-	SkillsRoot      string
-	SkillsExtraDirs []string
-	SkillsDebug     bool
-	SkillConfigKeys []string
+	SkillsRoot         string
+	SkillsExtraDirs    []string
+	SkillsDebug        bool
+	SkillsAllowBundled []string
+	SkillConfigs       map[string]ocskills.SkillConfig
+	SkillConfigKeys    []string
 
 	StateDir string
 
 	EnableLocalExec bool
 
 	EnableOpenClawTools bool
+	EnableParallelTools bool
 
 	ToolProviders []pluginSpec
 

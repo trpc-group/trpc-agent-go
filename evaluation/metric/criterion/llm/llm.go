@@ -15,12 +15,14 @@ import (
 	"os"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
 // LLMCriterion configures an LLM judge for evaluation.
 type LLMCriterion struct {
-	Rubrics    []*Rubric          `json:"rubrics,omitempty"`
-	JudgeModel *JudgeModelOptions `json:"judgeModel,omitempty"` // JudgeModel holds configuration for the judge model.
+	Rubrics            []*Rubric           `json:"rubrics,omitempty"`
+	JudgeModel         *JudgeModelOptions  `json:"judgeModel,omitempty"` // JudgeModel holds configuration for the judge model.
+	JudgeRunnerOptions *JudgeRunnerOptions `json:"-"`                    // JudgeRunnerOptions holds runtime judge runner configuration.
 }
 
 // Rubric defines a single judging rubric item for LLM-based evaluation.
@@ -34,6 +36,11 @@ type Rubric struct {
 // RubricContent provides the judge-readable content for a rubric item.
 type RubricContent struct {
 	Text string `json:"text,omitempty"`
+}
+
+// JudgeRunnerOptions configures how judge responses are obtained via a runner at runtime.
+type JudgeRunnerOptions struct {
+	Runner runner.Runner // Runner is the runner to use for judge responses.
 }
 
 // JudgeModelOptions captures model and generation configuration for the judge.
