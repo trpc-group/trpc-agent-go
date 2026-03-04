@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -446,11 +447,21 @@ func (vs *VectorStore) searchByKeyword(ctx context.Context, query *vectorstore.S
 }
 
 // searchByHybrid combines vector similarity and keyword matching.
+// Dispatches to weighted fusion or RRF based on fusionMode.
 func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
 	if len(query.Vector) == 0 {
 		return nil, errors.New("pgvector vector is required for hybrid search")
 	}
 
+	if vs.option.fusionMode == HybridFusionRRF {
+		return vs.searchByHybridRRF(ctx, query)
+	}
+
+	return vs.searchByHybridWeighted(ctx, query)
+}
+
+// searchByHybridWeighted performs hybrid search using weighted score fusion.
+func (vs *VectorStore) searchByHybridWeighted(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
 	vectorWeight := vs.option.vectorWeight
 	textWeight := vs.option.textWeight
 	if query.Query == "" {
@@ -458,11 +469,9 @@ func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.Se
 		textWeight = 0.0
 	}
 
-	// Build hybrid search query.
 	qb := newHybridQueryBuilder(vs.option, vectorWeight, textWeight)
 	qb.addVectorArg(pgvector.NewVector(convertToFloat32Vector(query.Vector)))
 
-	// Add full-text search condition only if query text is provided.
 	if query.Query != "" {
 		qb.addHybridFtsCondition(query.Query)
 	}
@@ -471,13 +480,214 @@ func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.Se
 		qb.addScoreFilter(query.MinScore)
 	}
 
-	// Add filters
 	if err := vs.buildQueryFilter(qb, query.Filter); err != nil {
 		return nil, err
 	}
 
-	sql, args := qb.build(vs.getMaxResult(query.Limit))
-	return vs.executeSearch(ctx, sql, args, vectorstore.SearchModeHybrid)
+	sqlStr, args := qb.build(vs.getMaxResult(query.Limit))
+	return vs.executeSearch(ctx, sqlStr, args, vectorstore.SearchModeHybrid)
+}
+
+// rrfRankedID holds an ID and its rank from a sub-search.
+type rrfRankedID struct {
+	id   string
+	rank int
+}
+
+// searchByHybridRRF performs hybrid search using Reciprocal Rank Fusion.
+// It runs vector and text sub-searches in parallel, fuses ranks in Go, then
+// fetches full documents for the top-N fused results.
+func (vs *VectorStore) searchByHybridRRF(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
+	limit := vs.getMaxResult(query.Limit)
+	rrfK := vs.option.rrfParams.K
+	candidateLimit := limit * vs.option.rrfParams.CandidateRatio
+
+	vector := pgvector.NewVector(convertToFloat32Vector(query.Vector))
+
+	// Build vector rank query.
+	vectorRB := newRRFRankQueryBuilder(vs.option)
+	vectorRB.args = append(vectorRB.args, vector)
+	vectorRB.argIndex++
+	if err := vs.buildQueryFilter(vectorRB, query.Filter); err != nil {
+		return nil, err
+	}
+	vectorSQL, vectorArgs := vectorRB.buildVectorRankQuery(candidateLimit)
+
+	// Build text rank query (if text query is provided).
+	hasTextQuery := query.Query != ""
+	var textSQL string
+	var textArgs []any
+	if hasTextQuery {
+		textRB := newRRFRankQueryBuilder(vs.option)
+		textRB.args = append(textRB.args, query.Query)
+		textQueryPos := textRB.argIndex
+		textRB.argIndex++
+		if err := vs.buildQueryFilter(textRB, query.Filter); err != nil {
+			return nil, err
+		}
+		textSQL, textArgs = textRB.buildTextRankQuery(textQueryPos, candidateLimit)
+	}
+
+	// Execute sub-searches in parallel.
+	type rankResult struct {
+		ranks []rrfRankedID
+		err   error
+	}
+
+	vectorCh := make(chan rankResult, 1)
+	textCh := make(chan rankResult, 1)
+
+	go func() {
+		ranks, err := vs.executeRankQuery(ctx, vectorSQL, vectorArgs)
+		vectorCh <- rankResult{ranks: ranks, err: err}
+	}()
+
+	if hasTextQuery {
+		go func() {
+			ranks, err := vs.executeRankQuery(ctx, textSQL, textArgs)
+			textCh <- rankResult{ranks: ranks, err: err}
+		}()
+	} else {
+		textCh <- rankResult{}
+	}
+
+	vectorResult := <-vectorCh
+	textResult := <-textCh
+
+	if vectorResult.err != nil {
+		return nil, fmt.Errorf("pgvector rrf vector search: %w", vectorResult.err)
+	}
+	if textResult.err != nil {
+		return nil, fmt.Errorf("pgvector rrf text search: %w", textResult.err)
+	}
+
+	// Fuse ranks using RRF formula: score(d) = sum(1/(k + rank_i))
+	type rrfScore struct {
+		vectorScore float64
+		textScore   float64
+	}
+	scoreMap := make(map[string]*rrfScore)
+
+	for _, r := range vectorResult.ranks {
+		s, ok := scoreMap[r.id]
+		if !ok {
+			s = &rrfScore{}
+			scoreMap[r.id] = s
+		}
+		s.vectorScore = 1.0 / float64(rrfK+r.rank)
+	}
+	for _, r := range textResult.ranks {
+		s, ok := scoreMap[r.id]
+		if !ok {
+			s = &rrfScore{}
+			scoreMap[r.id] = s
+		}
+		s.textScore = 1.0 / float64(rrfK+r.rank)
+	}
+
+	// Sort by combined RRF score descending.
+	type idScore struct {
+		id          string
+		vectorScore float64
+		textScore   float64
+		score       float64
+	}
+	ranked := make([]idScore, 0, len(scoreMap))
+	for id, s := range scoreMap {
+		ranked = append(ranked, idScore{
+			id:          id,
+			vectorScore: s.vectorScore,
+			textScore:   s.textScore,
+			score:       s.vectorScore + s.textScore,
+		})
+	}
+	sort.Slice(ranked, func(i, j int) bool {
+		return ranked[i].score > ranked[j].score
+	})
+
+	// Note: MinScore is intentionally NOT applied in RRF mode.
+	// RRF scores are rank-based (e.g. ~0.03 for K=60) and incompatible with
+	// the [0,1] similarity score semantics that MinScore expects.
+
+	// Take top N.
+	if len(ranked) > limit {
+		ranked = ranked[:limit]
+	}
+
+	if len(ranked) == 0 {
+		return &vectorstore.SearchResult{
+			Results: make([]*vectorstore.ScoredDocument, 0),
+		}, nil
+	}
+
+	fetchIDs := make([]any, len(ranked))
+	for i, r := range ranked {
+		fetchIDs[i] = r.id
+	}
+
+	// Fetch full documents by IDs.
+	fetchSQL := buildFetchByIDsQuery(vs.option, len(fetchIDs))
+	docMap := make(map[string]*vectorstore.ScoredDocument)
+
+	err := vs.client.Query(ctx, func(rows *sql.Rows) error {
+		for rows.Next() {
+			scoredDoc, _, err := vs.option.docBuilder(rows)
+			if err != nil {
+				return fmt.Errorf("parse document: %w", err)
+			}
+			if scoredDoc != nil && scoredDoc.Document != nil {
+				docMap[scoredDoc.Document.ID] = scoredDoc
+			}
+		}
+		return nil
+	}, fetchSQL, fetchIDs...)
+
+	if err != nil {
+		return nil, fmt.Errorf("pgvector rrf fetch documents: %w", err)
+	}
+
+	// Assemble final results in ranked order, attaching RRF scores.
+	results := make([]*vectorstore.ScoredDocument, 0, len(ranked))
+	for _, r := range ranked {
+		doc, ok := docMap[r.id]
+		if !ok {
+			continue
+		}
+		doc.Score = r.score
+		if doc.Document.Metadata == nil {
+			doc.Document.Metadata = make(map[string]any)
+		}
+		doc.Document.Metadata[source.MetadataDenseScore] = r.vectorScore
+		doc.Document.Metadata[source.MetadataSparseScore] = r.textScore
+
+		log.DebugfContext(ctx,
+			"pgvector rrf result: score: %v (dense: %v, sparse: %v) id: %v",
+			r.score, r.vectorScore, r.textScore, r.id)
+
+		results = append(results, doc)
+	}
+
+	return &vectorstore.SearchResult{Results: results}, nil
+}
+
+// executeRankQuery executes a rank query and returns (id, rank) pairs.
+func (vs *VectorStore) executeRankQuery(ctx context.Context, query string, args []any) ([]rrfRankedID, error) {
+	var ranks []rrfRankedID
+	err := vs.client.Query(ctx, func(rows *sql.Rows) error {
+		for rows.Next() {
+			var id string
+			var rank int
+			if err := rows.Scan(&id, &rank); err != nil {
+				return fmt.Errorf("scan rank result: %w", err)
+			}
+			ranks = append(ranks, rrfRankedID{id: id, rank: rank})
+		}
+		return nil
+	}, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	return ranks, nil
 }
 
 // searchByFilter returns documents based on filters only

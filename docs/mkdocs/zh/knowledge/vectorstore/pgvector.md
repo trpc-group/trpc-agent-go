@@ -106,7 +106,9 @@ pgVS, err := vectorpgvector.New(
 | 选项 | 说明 | 默认值 |
 |------|------|--------|
 | `WithEnableTSVector(enabled)` | 启用文本检索向量 | `true` |
-| `WithHybridSearchWeights(vector, text)` | 混合检索权重（向量/文本） | `0.7, 0.3` |
+| `WithHybridSearchWeights(vector, text)` | 混合检索权重（向量/文本），仅 Weighted 模式生效 | `0.7, 0.3` |
+| `WithHybridFusionMode(mode)` | 混合检索融合模式（`HybridFusionWeighted` / `HybridFusionRRF`） | `HybridFusionWeighted` |
+| `WithRRFParams(params)` | RRF 参数（K 和 CandidateRatio），仅 RRF 模式生效 | `K=60, CandidateRatio=3` |
 | `WithLanguageExtension(lang)` | 文本分词语言扩展（如 zhparser/jieba） | `"english"` |
 
 ### 搜索配置
@@ -136,12 +138,25 @@ PGVector 支持全文检索（TSVector），可用于 Keyword Search 和 Hybrid 
 > **⚠️ 重要提示**: Keyword Search 和 Hybrid Search 需要通过 `WithEnableTSVector(true)` 启用 PostgreSQL 全文检索功能。
 
 ```go
+// Option 1: Weighted fusion (default)
 pgVS, err := vectorpgvector.New(
     vectorpgvector.WithPGVectorClientDSN(dsn),
     vectorpgvector.WithIndexDimension(1536),
     vectorpgvector.WithEnableTSVector(true),           // ✅ 开启全文检索支持
     vectorpgvector.WithHybridSearchWeights(0.7, 0.3),  // 设置混合检索权重 (70% 向量 + 30% 文本)
     vectorpgvector.WithLanguageExtension("english"),   // 设置分词语言（支持中文需安装 zhparser/jieba）
+)
+
+// Option 2: Reciprocal Rank Fusion (RRF)
+pgVS, err := vectorpgvector.New(
+    vectorpgvector.WithPGVectorClientDSN(dsn),
+    vectorpgvector.WithIndexDimension(1536),
+    vectorpgvector.WithEnableTSVector(true),
+    vectorpgvector.WithHybridFusionMode(vectorpgvector.HybridFusionRRF),
+    vectorpgvector.WithRRFParams(&vectorpgvector.RRFParams{
+        K:              60, // RRF constant, smaller = more weight to top results
+        CandidateRatio: 3,  // fetch 3x candidates from each sub-search
+    }),
 )
 ```
 
@@ -276,16 +291,23 @@ text_score = 2.5 / (2.5 + 0.1) = 0.961
 
 ### 3. Hybrid Search (混合搜索)
 
+Hybrid Search 支持两种融合模式，通过 `WithHybridFusionMode()` 切换。
+
+#### 3a. Weighted Fusion（加权融合，默认）
+
 **SQL 模板** (使用子查询避免重复计算):
 ```sql
-SELECT *, (vector_score * 0.7 + text_score * 0.3) as score
+SELECT *, (vector_score * 0.700 + text_score * 0.300) as score
 FROM (
-  SELECT *, 
+  SELECT *,
          (1.0 - (embedding <=> $1) / 2.0) as vector_score,
-         (COALESCE(ts_rank(...), 0) / (COALESCE(ts_rank(...), 0) + 0.1)) as text_score
-  FROM table_name
+         (COALESCE(ts_rank(to_tsvector('english', content),
+                           websearch_to_tsquery('english', $2)), 0)
+          / (COALESCE(ts_rank(...), 0) + 0.1000)) as text_score
+  FROM documents
   WHERE ...
-  ORDER BY ((1.0 - (embedding <=> $1) / 2.0) * 0.7 + (ts_rank_expr) * 0.3) DESC
+  ORDER BY ((1.0 - (embedding <=> $1) / 2.0) * 0.700
+            + (ts_rank_expr / (ts_rank_expr + 0.1000)) * 0.300) DESC
   LIMIT 10
 ) subq
 ```
@@ -312,6 +334,63 @@ Case 2: High vector similarity but no text match
   vector_score = 0.95, text_score = 0.0
   hybrid_score = 0.95 × 0.7 + 0.0 × 0.3 = 0.665  -- Still returns high-quality result
 ```
+
+#### 3b. Reciprocal Rank Fusion (RRF)
+
+RRF 是一种基于排名的融合策略，不依赖分数归一化，而是根据文档在各子搜索中的排名来计算最终得分。适用于向量分数和文本分数量纲差异大、难以直接加权的场景。
+
+**执行流程** (并行子查询 + Go 代码融合):
+
+RRF 模式将向量搜索和文本搜索拆分为两个独立的 SQL 查询并行执行，然后在 Go 代码层完成 RRF 分数融合：
+
+```sql
+-- Query 1: Vector rank sub-search (parallel)
+SELECT id, ROW_NUMBER() OVER (ORDER BY embedding <=> $1) as rank
+FROM documents WHERE ... LIMIT 30  -- limit * CandidateRatio
+
+-- Query 2: Text rank sub-search (parallel)
+SELECT id, ROW_NUMBER() OVER (
+  ORDER BY ts_rank(to_tsvector('english', content),
+                   websearch_to_tsquery('english', $1)) DESC
+) as rank
+FROM documents
+WHERE ... AND to_tsvector('english', content) @@ websearch_to_tsquery('english', $1)
+LIMIT 30
+
+-- Query 3: Fetch full documents by fused top-N IDs
+SELECT * FROM documents WHERE id IN ($1, $2, ...)
+```
+
+```go
+// Go-level RRF fusion:
+// 1. Merge (id, rank) pairs from both sub-searches
+// 2. Compute RRF score: score(d) = 1/(k + rank_v) + 1/(k + rank_t)
+// 3. Sort by score DESC, take top N
+// 4. Fetch full documents by IDs
+```
+
+**RRF 公式**:
+```
+score(d) = sum(1 / (k + rank_i))  for each ranking list i
+```
+
+**参数说明**:
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `K` | RRF 常数，必须 > 0。越小则排名靠前的结果权重越大 | `60` |
+| `CandidateRatio` | 候选倍率，必须 > 0。每个子搜索取 `limit × CandidateRatio` 条候选 | `3` |
+
+**K 值的影响**:
+- `K=1`: 排名第 1 得分 `1/2 = 0.500`，排名第 10 得分 `1/11 ≈ 0.091`，差距 ~5.5x
+- `K=60`（默认）: 排名第 1 得分 `1/61 ≈ 0.016`，排名第 10 得分 `1/70 ≈ 0.014`，差距 ~1.15x
+
+K=60 是学术界广泛使用的默认值，让融合更"民主"，不会过度偏向某个单一排序列表中排名特别靠前的结果。
+
+**注意事项**:
+- RRF 模式下 `WithHybridSearchWeights()` 不生效，两个排序列表的 RRF 分数直接相加
+- RRF 模式下 `MinScore` 不生效。RRF 分数是基于排名的（K=60 时最大约 0.033），与 [0,1] 范围的相似度分数语义不兼容
+- 两个子查询并行执行，延迟 = max(vector_latency, text_latency)，比单条复杂 CTE 更高效
 
 ---
 

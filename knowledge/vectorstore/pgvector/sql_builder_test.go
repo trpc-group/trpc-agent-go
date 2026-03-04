@@ -944,3 +944,116 @@ func TestUpdateByFilterBuilder(t *testing.T) {
 		}
 	})
 }
+
+// TestRRFRankQueryBuilder tests the RRF rank query builder functionality
+func TestRRFRankQueryBuilder(t *testing.T) {
+	vector := pgvector.NewVector([]float32{0.1, 0.2, 0.3})
+
+	t.Run("vector_rank_query_basic", func(t *testing.T) {
+		rb := newRRFRankQueryBuilder(defaultOptions)
+		rb.args = append(rb.args, vector)
+		rb.argIndex++
+
+		sql, args := rb.buildVectorRankQuery(30)
+
+		assert.Contains(t, sql, "SELECT id, ROW_NUMBER()")
+		assert.Contains(t, sql, "ORDER BY embedding <=> $1")
+		assert.Contains(t, sql, "LIMIT 30")
+		assert.Len(t, args, 1)
+	})
+
+	t.Run("vector_rank_query_with_filter", func(t *testing.T) {
+		rb := newRRFRankQueryBuilder(defaultOptions)
+		rb.args = append(rb.args, vector)
+		rb.argIndex++
+		rb.addMetadataFilter(map[string]any{"category": "AI"})
+
+		sql, args := rb.buildVectorRankQuery(30)
+
+		assert.Contains(t, sql, "metadata @>")
+		assert.Contains(t, sql, "LIMIT 30")
+		assert.Len(t, args, 2) // vector + metadata
+	})
+
+	t.Run("text_rank_query_basic", func(t *testing.T) {
+		rb := newRRFRankQueryBuilder(defaultOptions)
+		rb.args = append(rb.args, "test query")
+		textQueryPos := rb.argIndex
+		rb.argIndex++
+
+		sql, args := rb.buildTextRankQuery(textQueryPos, 30)
+
+		assert.Contains(t, sql, "SELECT id, ROW_NUMBER()")
+		assert.Contains(t, sql, "to_tsvector")
+		assert.Contains(t, sql, "ts_rank")
+		assert.Contains(t, sql, "LIMIT 30")
+		assert.Len(t, args, 1)
+	})
+
+	t.Run("text_rank_query_with_filter", func(t *testing.T) {
+		rb := newRRFRankQueryBuilder(defaultOptions)
+		rb.args = append(rb.args, "test query")
+		textQueryPos := rb.argIndex
+		rb.argIndex++
+		rb.addMetadataFilter(map[string]any{"category": "AI"})
+
+		sql, args := rb.buildTextRankQuery(textQueryPos, 30)
+
+		assert.Contains(t, sql, "metadata @>")
+		assert.Contains(t, sql, "to_tsvector")
+		assert.Contains(t, sql, "LIMIT 30")
+		assert.Len(t, args, 2) // text query + metadata
+	})
+
+	t.Run("text_rank_query_with_id_filter", func(t *testing.T) {
+		rb := newRRFRankQueryBuilder(defaultOptions)
+		rb.args = append(rb.args, "test query")
+		textQueryPos := rb.argIndex
+		rb.argIndex++
+		rb.addIDFilter([]string{"doc1", "doc2"})
+
+		sql, args := rb.buildTextRankQuery(textQueryPos, 50)
+
+		assert.Contains(t, sql, "id IN")
+		assert.Contains(t, sql, "to_tsvector")
+		assert.Contains(t, sql, "LIMIT 50")
+		assert.Len(t, args, 3) // text query + 2 ids
+	})
+
+	t.Run("weighted_fusion_mode_unchanged", func(t *testing.T) {
+		o := defaultOptions
+		o.fusionMode = HybridFusionWeighted
+
+		qb := newHybridQueryBuilder(o, 0.7, 0.3)
+		qb.addVectorArg(vector)
+		qb.addHybridFtsCondition("test query")
+
+		sql, _ := qb.build(10)
+
+		assert.Contains(t, sql, "vector_score * 0.700")
+		assert.Contains(t, sql, "text_score * 0.300")
+	})
+}
+
+// TestBuildFetchByIDsQuery tests the fetch-by-IDs query builder
+func TestBuildFetchByIDsQuery(t *testing.T) {
+	t.Run("single_id", func(t *testing.T) {
+		sql := buildFetchByIDsQuery(defaultOptions, 1)
+		assert.Contains(t, sql, "WHERE id IN ($1)")
+		assert.Contains(t, sql, "0.0 as vector_score")
+		assert.Contains(t, sql, "0.0 as text_score")
+		assert.Contains(t, sql, "0.0 as score")
+	})
+
+	t.Run("multiple_ids", func(t *testing.T) {
+		sql := buildFetchByIDsQuery(defaultOptions, 3)
+		assert.Contains(t, sql, "WHERE id IN ($1, $2, $3)")
+	})
+
+	t.Run("custom_table", func(t *testing.T) {
+		o := defaultOptions
+		o.table = "custom_docs"
+		sql := buildFetchByIDsQuery(o, 2)
+		assert.Contains(t, sql, "FROM custom_docs")
+	})
+}
