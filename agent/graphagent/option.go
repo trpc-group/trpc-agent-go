@@ -92,6 +92,9 @@ type Options struct {
 	// AddSessionSummary controls whether to prepend the current branch summary
 	// as a system message when available.
 	AddSessionSummary bool
+	// singleSystemMessage controls whether summary is merged into an existing
+	// system message when possible.
+	singleSystemMessage bool
 	// MaxHistoryRuns sets the maximum number of history messages when AddSessionSummary is false.
 	// When 0 (default), no limit is applied.
 	MaxHistoryRuns int
@@ -189,6 +192,14 @@ func WithExecutionEngine(engine graph.ExecutionEngine) Option {
 func WithAddSessionSummary(addSummary bool) Option {
 	return func(opts *Options) {
 		opts.AddSessionSummary = addSummary
+	}
+}
+
+// WithSingleSystemMessage controls whether summary is merged into an
+// existing system message when possible.
+func WithSingleSystemMessage(single bool) Option {
+	return func(opts *Options) {
+		opts.singleSystemMessage = single
 	}
 }
 

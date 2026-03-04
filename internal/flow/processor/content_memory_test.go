@@ -499,3 +499,78 @@ func TestProcessRequest_WithPreloadMemory(t *testing.T) {
 		assert.Contains(t, req.Messages[0].Content, "User Memories")
 	})
 }
+
+func TestProcessRequest_WithSingleSystemMessage_MergesPreloadMemory(t *testing.T) {
+	p := NewContentRequestProcessor(
+		WithPreloadMemory(-1),
+		WithSingleSystemMessage(true),
+	)
+	mockSvc := &mockMemoryService{
+		memories: []*memory.Entry{
+			{ID: "mem-1", Memory: &memory.Memory{Memory: "User likes tea"}},
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{
+			AppName: "app",
+			UserID:  "user",
+		}),
+	)
+	inv.MemoryService = mockSvc
+	req := &model.Request{
+		Messages: []model.Message{
+			{Role: model.RoleSystem, Content: "Base system prompt"},
+			{Role: model.RoleUser, Content: "hello"},
+		},
+	}
+
+	p.ProcessRequest(context.Background(), inv, req, nil)
+	assert.True(t, mockSvc.readCalled)
+
+	systemCount := 0
+	for _, msg := range req.Messages {
+		if msg.Role == model.RoleSystem {
+			systemCount++
+			assert.Contains(t, msg.Content, "Base system prompt")
+			assert.Contains(t, msg.Content, "User Memories")
+			assert.Contains(t, msg.Content, "User likes tea")
+		}
+	}
+	assert.Equal(t, 1, systemCount)
+}
+
+func TestProcessRequest_WithSingleSystemMessage_MergesSummary(t *testing.T) {
+	p := NewContentRequestProcessor(
+		WithAddSessionSummary(true),
+		WithSingleSystemMessage(true),
+	)
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{
+			Summaries: map[string]*session.Summary{
+				"": {
+					Summary: "summary text",
+				},
+			},
+		}),
+	)
+	req := &model.Request{
+		Messages: []model.Message{
+			{Role: model.RoleSystem, Content: "Base system prompt"},
+			{Role: model.RoleUser, Content: "hello"},
+		},
+	}
+
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	systemCount := 0
+	for _, msg := range req.Messages {
+		if msg.Role == model.RoleSystem {
+			systemCount++
+			assert.Contains(t, msg.Content, "Base system prompt")
+			assert.Contains(t, msg.Content, "summary text")
+			assert.Contains(t, msg.Content,
+				"summary_of_previous_interactions")
+		}
+	}
+	assert.Equal(t, 1, systemCount)
+}

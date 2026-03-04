@@ -256,6 +256,15 @@ func TestWithPreloadMemory(t *testing.T) {
 	}
 }
 
+func TestWithSingleSystemMessage(t *testing.T) {
+	opts := &Options{}
+	WithSingleSystemMessage(true)(opts)
+	require.True(t, opts.singleSystemMessage)
+
+	WithSingleSystemMessage(false)(opts)
+	require.False(t, opts.singleSystemMessage)
+}
+
 func TestWithSkillRunAllowedCommands_CopiesSlice(t *testing.T) {
 	in := []string{"echo", "ls"}
 	opts := &Options{}

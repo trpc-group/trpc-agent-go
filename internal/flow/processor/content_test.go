@@ -290,6 +290,14 @@ func TestContentRequestProcessor_WithAddSessionSummary_Option(t *testing.T) {
 	assert.True(t, p.AddSessionSummary)
 }
 
+func TestContentRequestProcessor_WithSingleSystemMessage_Option(t *testing.T) {
+	p := NewContentRequestProcessor(WithSingleSystemMessage(true))
+	assert.True(t, p.SingleSystemMessage)
+
+	p = NewContentRequestProcessor(WithSingleSystemMessage(false))
+	assert.False(t, p.SingleSystemMessage)
+}
+
 func TestContentRequestProcessor_getSessionSummaryMessageWithTime(t *testing.T) {
 	tests := []struct {
 		name            string

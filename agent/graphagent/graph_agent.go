@@ -244,6 +244,7 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 		// Default processor: include (possibly overridden) + preserve same branch.
 		contentOpts := []processor.ContentOption{
 			processor.WithAddSessionSummary(ga.options.AddSessionSummary),
+			processor.WithSingleSystemMessage(ga.options.singleSystemMessage),
 			processor.WithMaxHistoryRuns(ga.options.MaxHistoryRuns),
 			processor.WithPreserveSameBranch(true),
 			processor.WithTimelineFilterMode(ga.options.messageTimelineFilterMode),
