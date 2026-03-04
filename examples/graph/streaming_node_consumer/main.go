@@ -56,6 +56,7 @@ const (
 	nodeFinish  = "finish"
 
 	envOpenAIKey   = "OPENAI_API_KEY"
+	envModelName   = "MODEL_NAME"
 	envOpenAIModel = "OPENAI_MODEL"
 
 	defaultModel  = "gpt-5"
@@ -159,6 +160,9 @@ func main() {
 }
 
 func defaultModelName() string {
+	if v := strings.TrimSpace(os.Getenv(envModelName)); v != "" {
+		return v
+	}
 	if v := strings.TrimSpace(os.Getenv(envOpenAIModel)); v != "" {
 		return v
 	}

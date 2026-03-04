@@ -2881,6 +2881,30 @@ func TestOpenStreamWriter_DelegatesToAgent(t *testing.T) {
 	require.Equal(t, want, string(b))
 }
 
+func TestModelDeltaAndMessageFromResponse(t *testing.T) {
+	require.Equal(t, "", modelDeltaFromResponse(nil))
+	require.Equal(t, "", modelDeltaFromResponse(&model.Response{}))
+	require.Equal(t, "", modelDeltaFromResponse(&model.Response{
+		Choices: []model.Choice{},
+	}))
+	require.Equal(t, "d", modelDeltaFromResponse(&model.Response{
+		Choices: []model.Choice{{
+			Delta: model.NewAssistantMessage("d"),
+		}},
+	}))
+
+	require.Equal(t, "", modelMessageFromResponse(nil))
+	require.Equal(t, "", modelMessageFromResponse(&model.Response{}))
+	require.Equal(t, "", modelMessageFromResponse(&model.Response{
+		Choices: []model.Choice{},
+	}))
+	require.Equal(t, "m", modelMessageFromResponse(&model.Response{
+		Choices: []model.Choice{{
+			Message: model.NewAssistantMessage("m"),
+		}},
+	}))
+}
+
 func TestNewToolsNodeFunc_StaticToolSets(t *testing.T) {
 	schema := MessagesStateSchema()
 	sg := NewStateGraph(schema)

@@ -768,16 +768,75 @@ Common approaches:
 
 Tip: node-to-node streaming inside the graph
 
+Why this exists
+
 - Graph state (for example, `last_response` and `node_responses[nodeID]`) is
-  committed only after a node finishes. Downstream nodes cannot read partial
-  streaming text from those keys.
-- If you need a downstream node to react while an upstream LLM (or Agent node)
-  is still streaming, use the StreamHub APIs:
-  - Producer node: `graph.WithStreamOutput("name")`
-  - Consumer node: `graph.OpenStreamReader(ctx, "name")`
-- Streams are ephemeral (in-memory) and are not checkpointed. To consume in
-  real time, run the consumer node in parallel and join afterwards.
-- See `examples/graph/streaming_node_consumer`.
+  committed only after a node finishes.
+- Edges are triggered only when a node finishes. So a strictly serial edge
+  like `llm -> parse` always means the downstream node gets the full output.
+
+If you need a downstream node to react while an upstream LLM (or Agent node)
+is still streaming, use the StreamHub APIs.
+
+Recipe (fan-out + join)
+
+1) Pick a stream name (unique within a single invocation).
+
+2) Make the producer publish streaming output:
+
+- LLM / Agent node: `graph.WithStreamOutput(streamName)`
+- Function node: `w, _ := graph.OpenStreamWriter(ctx, streamName)`
+
+3) Run the consumer node in parallel (same step), then join afterwards:
+
+- Connect a common upstream node to both `producer` and `consumer`.
+- Use `AddJoinEdge([]string{producer, consumer}, finish)` to converge.
+
+Key code (simplified)
+
+```go
+const streamName = "llm:deltas"
+
+sg.AddLLMNode(
+	"llm",
+	llm,
+	instruction,
+	nil,
+	graph.WithStreamOutput(streamName),
+)
+
+sg.AddNode("consume", func(ctx context.Context, state graph.State) (any, error) {
+	r, err := graph.OpenStreamReader(ctx, streamName)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+
+	const maxLineBytes = 1024 * 1024
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(nil, maxLineBytes)
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		// Parse / handle line here.
+	}
+	return graph.State{}, scanner.Err()
+})
+
+sg.AddEdge("setup", "llm")
+sg.AddEdge("setup", "consume")
+sg.AddJoinEdge([]string{"llm", "consume"}, "finish")
+```
+
+Notes
+
+- StreamHub streams are in-memory and are not checkpointed.
+- Only one reader and one writer may be opened per stream name.
+- The stream is bytes. For text, pick a framing (lines, NDJSON, etc).
+- See `examples/graph/streaming_node_consumer` for a runnable demo.
 
 #### Three input paradigms
 

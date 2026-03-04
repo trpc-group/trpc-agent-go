@@ -52,8 +52,9 @@ Requirements:
 ```bash
 cd examples/graph/streaming_node_consumer
 
+export OPENAI_BASE_URL="..."  # optional (OpenAI-compatible gateway)
 export OPENAI_API_KEY="..."
-export OPENAI_MODEL="gpt-5"  # optional
+export MODEL_NAME="gpt-5"  # optional
 
 go run . \
   -prompt "Write a 6-line welcome script for a podcast." \
@@ -63,7 +64,7 @@ go run . \
 Optional:
 
 - `-print-llm`: also print raw `chat.completion.chunk` deltas
-- `-model`: override `OPENAI_MODEL`
+- `-model`: override `MODEL_NAME` (or `OPENAI_MODEL`)
 
 ## What You Should See
 

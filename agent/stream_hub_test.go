@@ -302,3 +302,73 @@ func TestStreamHub_CloseAll_WithNilErrorReturnsEOF(t *testing.T) {
 	_, err = r.Read(buf)
 	require.ErrorIs(t, err, io.EOF)
 }
+
+func TestStreamHub_CloseAll_NilHubNoPanic(t *testing.T) {
+	var hub *StreamHub
+	hub.CloseAll(nil)
+}
+
+func TestStreamHub_OpenWriter_InitializesNilMap(t *testing.T) {
+	hub := &StreamHub{}
+	require.NotNil(t, hub)
+
+	w, err := hub.OpenWriter(context.Background(), "s")
+	require.NoError(t, err)
+
+	r, err := hub.OpenReader(context.Background(), "s")
+	require.NoError(t, err)
+	defer r.Close()
+
+	_, err = w.WriteString("x")
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+
+	b, err := io.ReadAll(r)
+	require.NoError(t, err)
+	require.Equal(t, "x", string(b))
+}
+
+func TestStreamHub_InternalNilBranches(t *testing.T) {
+	s := newStream("s", 0)
+	require.NotNil(t, s)
+	require.Equal(t, defaultStreamBufferSize, cap(s.ch))
+
+	var ns *stream
+	require.Error(t, ns.markWriterOpen())
+	require.Error(t, ns.markReaderOpen())
+	ns.closeWithError(nil)
+	require.ErrorIs(t, ns.writerErr(), io.ErrClosedPipe)
+	require.ErrorIs(t, ns.readerErr(), io.EOF)
+	require.True(t, ns.doneClosed())
+
+	var w *StreamWriter
+	require.NoError(t, w.Close())
+	require.NoError(t, w.CloseWithError(errors.New("x")))
+
+	var r *StreamReader
+	require.NoError(t, r.Close())
+}
+
+func TestStreamHub_WriterCloseWithErrorStopsWrites(t *testing.T) {
+	inv := NewInvocation()
+	ctx := NewInvocationContext(context.Background(), inv)
+
+	const streamName = "s"
+	w, err := OpenStreamWriter(ctx, streamName)
+	require.NoError(t, err)
+
+	r, err := OpenStreamReader(ctx, streamName)
+	require.NoError(t, err)
+	defer r.Close()
+
+	wantErr := context.Canceled
+	require.NoError(t, w.CloseWithError(wantErr))
+
+	n, err := w.WriteString("x")
+	require.ErrorIs(t, err, wantErr)
+	require.Equal(t, 0, n)
+
+	buf := make([]byte, 1)
+	_, err = r.Read(buf)
+	require.ErrorIs(t, err, wantErr)
+}
