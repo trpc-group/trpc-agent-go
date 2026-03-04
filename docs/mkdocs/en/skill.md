@@ -869,6 +869,9 @@ Input:
     command runs.
   - Filenames are sanitized to a safe basename and de-duplicated with a
     numeric suffix when needed.
+  - If a file input has no filename and `file_id` is an `artifact://...`
+    reference, the framework infers the basename from the artifact name.
+    Otherwise, it falls back to `upload_N`.
   - If a file input includes raw bytes (`data`), those bytes are written
     directly into the workspace.
   - If a file input is referenced only by `file_id`:
@@ -958,6 +961,10 @@ Output:
 
 Typical flow:
 1) Call `skill_load` to inject body/docs
+   - When using `llmagent.LLMAgent`, this step is required by default:
+     `skill_run` rejects calls unless `skill_load` has been called for
+     that skill. Disable with:
+     `llmagent.WithSkillRunRequireSkillLoaded(false)`.
 2) Call `skill_run` and collect outputs:
    - Legacy: use `output_files` globs
    - Declarative: use `outputs` to drive collect/inline/save

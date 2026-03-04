@@ -174,11 +174,33 @@ func TestUserMessageFromInputContentsBinaryDataFile(t *testing.T) {
 
 func TestUserMessageFromInputContentsBinaryIDFile(t *testing.T) {
 	msg, err := UserMessageFromInputContents([]types.InputContent{
-		{Type: types.InputContentTypeBinary, ID: "file-123"},
+		{
+			Type:     types.InputContentTypeBinary,
+			ID:       "file-123",
+			Filename: "demo.pdf",
+		},
 	})
 	require.NoError(t, err)
 	require.Len(t, msg.ContentParts, 1)
 	assert.Equal(t, model.ContentTypeFile, msg.ContentParts[0].Type)
 	require.NotNil(t, msg.ContentParts[0].File)
+	assert.Equal(t, "demo.pdf", msg.ContentParts[0].File.Name)
 	assert.Equal(t, "file-123", msg.ContentParts[0].File.FileID)
+}
+
+func TestUserMessageFromInputContentsBinaryIDFile_ArtifactRef(t *testing.T) {
+	const artifactRef = "artifact://uploads/demo.pdf@0"
+
+	msg, err := UserMessageFromInputContents([]types.InputContent{
+		{
+			Type: types.InputContentTypeBinary,
+			ID:   artifactRef,
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, msg.ContentParts, 1)
+	assert.Equal(t, model.ContentTypeFile, msg.ContentParts[0].Type)
+	require.NotNil(t, msg.ContentParts[0].File)
+	assert.Equal(t, "demo.pdf", msg.ContentParts[0].File.Name)
+	assert.Equal(t, artifactRef, msg.ContentParts[0].File.FileID)
 }

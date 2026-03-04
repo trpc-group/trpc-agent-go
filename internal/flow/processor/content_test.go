@@ -4205,3 +4205,70 @@ func TestContentRequestProcessor_AnnotatesUserFileInputs(t *testing.T) {
 	}
 	assert.Equal(t, 2, fileParts)
 }
+
+func TestContentRequestProcessor_AnnotatesUserFileInputs_ArtifactRef(t *testing.T) {
+	p := NewContentRequestProcessor()
+
+	const (
+		invocationID = "inv"
+		fileARef     = "artifact://uploads/a.pdf@0"
+		fileBRef     = "artifact://uploads/b.pdf@0"
+	)
+
+	userMsg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					FileID: fileARef,
+				},
+			},
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					FileID: fileBRef,
+				},
+			},
+		},
+	}
+	ev := event.NewResponseEvent(invocationID, "user", &model.Response{
+		Choices: []model.Choice{{Message: userMsg}},
+	})
+	inv := &agent.Invocation{
+		InvocationID: invocationID,
+		AgentName:    "agent",
+		Session: &session.Session{
+			Events: []event.Event{*ev},
+		},
+	}
+	req := &model.Request{}
+	ch := make(chan *event.Event, 1)
+	p.ProcessRequest(context.Background(), inv, req, ch)
+
+	if !assert.Len(t, req.Messages, 1) {
+		return
+	}
+	msg := req.Messages[0]
+	assert.Equal(t, model.RoleUser, msg.Role)
+
+	if !assert.GreaterOrEqual(t, len(msg.ContentParts), 3) {
+		return
+	}
+	first := msg.ContentParts[0]
+	assert.Equal(t, model.ContentTypeText, first.Type)
+	if assert.NotNil(t, first.Text) {
+		assert.Contains(t, *first.Text, attachedFilesAnnotationPrefix)
+		assert.Contains(t, *first.Text, "a.pdf")
+		assert.Contains(t, *first.Text, "b.pdf")
+		assert.NotContains(t, *first.Text, "upload_1")
+	}
+
+	fileParts := 0
+	for _, part := range msg.ContentParts {
+		if part.Type == model.ContentTypeFile && part.File != nil {
+			fileParts++
+		}
+	}
+	assert.Equal(t, 2, fileParts)
+}
