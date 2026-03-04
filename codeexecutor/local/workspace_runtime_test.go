@@ -788,6 +788,23 @@ func TestRuntime_StageInputs_ArtifactAndLinks(t *testing.T) {
 	require.Equal(t, "W", string(b))
 }
 
+func TestRuntime_StageInputs_NoSlash_DefaultNamePath(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-stage-noslash", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	err = rt.StageInputs(ctx, ws, []codeexecutor.InputSpec{{
+		From: "noslash",
+		Mode: "copy",
+	}})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported input")
+}
+
 func TestRuntime_CreateWorkspace_AutoInputsHost(t *testing.T) {
 	host := t.TempDir()
 	hfile := filepath.Join(host, "auto.txt")

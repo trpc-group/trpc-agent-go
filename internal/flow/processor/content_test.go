@@ -20,6 +20,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -4271,4 +4272,20 @@ func TestContentRequestProcessor_AnnotatesUserFileInputs_ArtifactRef(t *testing.
 		}
 	}
 	assert.Equal(t, 2, fileParts)
+}
+
+func TestFileNameFromArtifactRef_EdgeCases(t *testing.T) {
+	t.Run("non-artifact ref returns empty", func(t *testing.T) {
+		assert.Equal(t, "", fileNameFromArtifactRef("file-123"))
+	})
+
+	t.Run("invalid version returns empty", func(t *testing.T) {
+		ref := fileref.ArtifactPrefix + "a@x"
+		assert.Equal(t, "", fileNameFromArtifactRef(ref))
+	})
+
+	t.Run("invalid base returns empty", func(t *testing.T) {
+		ref := fileref.ArtifactPrefix + "..@0"
+		assert.Equal(t, "", fileNameFromArtifactRef(ref))
+	})
 }
