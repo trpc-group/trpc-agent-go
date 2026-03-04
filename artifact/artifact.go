@@ -56,13 +56,11 @@ type Key struct {
 
 // KeyPrefix narrows listing to a namespace and optional name prefix.
 type KeyPrefix struct {
-	AppName        string
-	UserID         string
-	SessionID      string // Only meaningful when Scope is ScopeSession.
-	Scope          Scope
-	NamePrefix     string
-	IncludeUser    bool // reserved for future use; keep false for now.
-	IncludeSession bool // reserved for future use; keep false for now.
+	AppName    string
+	UserID     string
+	SessionID  string // Only meaningful when Scope is ScopeSession.
+	Scope      Scope
+	NamePrefix string
 }
 
 // Artifact is a convenience container for artifact bytes with optional metadata.
