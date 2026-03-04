@@ -283,6 +283,15 @@ func TestWithSkillRunForceSaveArtifacts(t *testing.T) {
 	require.False(t, opts.skillRunForceSaveArtifacts)
 }
 
+func TestWithSkillRunRequireSkillLoaded(t *testing.T) {
+	opts := &Options{}
+	WithSkillRunRequireSkillLoaded(true)(opts)
+	require.True(t, opts.skillRunRequireSkillLoaded)
+
+	WithSkillRunRequireSkillLoaded(false)(opts)
+	require.False(t, opts.skillRunRequireSkillLoaded)
+}
+
 func TestWithSummaryFormatter(t *testing.T) {
 	tests := []struct {
 		name      string

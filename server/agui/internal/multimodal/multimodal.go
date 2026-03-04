@@ -14,9 +14,12 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"path"
 	"strings"
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -119,10 +122,39 @@ func contentPartFromBinaryInput(part types.InputContent) (*model.ContentPart, er
 	}
 	return &model.ContentPart{
 		Type: model.ContentTypeFile,
-		File: &model.File{
-			FileID: part.ID,
-		},
+		File: fileFromBinaryID(part),
 	}, nil
+}
+
+func fileFromBinaryID(part types.InputContent) *model.File {
+	if part.Type != types.InputContentTypeBinary {
+		return nil
+	}
+	file := &model.File{
+		Name:   strings.TrimSpace(part.Filename),
+		FileID: part.ID,
+	}
+	if file.Name == "" {
+		file.Name = fileNameFromArtifactRef(part.ID)
+	}
+	return file
+}
+
+func fileNameFromArtifactRef(fileID string) string {
+	s := strings.TrimSpace(fileID)
+	if !strings.HasPrefix(s, fileref.ArtifactPrefix) {
+		return ""
+	}
+	rest := strings.TrimPrefix(s, fileref.ArtifactPrefix)
+	name, _, err := codeexecutor.ParseArtifactRef(rest)
+	if err != nil {
+		return ""
+	}
+	base := path.Base(strings.TrimSpace(name))
+	if base == "." || base == "/" || base == ".." {
+		return ""
+	}
+	return base
 }
 
 func decodeBase64Payload(payload string) ([]byte, error) {

@@ -846,6 +846,8 @@ agent := llmagent.New(
     `type=file` 的条目），`skill_run` 会在执行命令前自动把它们
     写入 `work/inputs/`（也会出现在 `inputs/`）。
   - 文件名会清洗为安全的 basename，并在重名时追加数字后缀。
+  - 若文件输入未提供文件名且 `file_id` 为 `artifact://...` 引用，
+    框架会从制品名推断 basename；否则回退为 `upload_N`。
   - 若文件输入包含原始字节（`data`），会直接写入工作区。
   - 若文件输入仅包含 `file_id`：
     - 当 `file_id` 以 `artifact://` 开头时，`skill_run` 会通过制品
@@ -929,6 +931,10 @@ agent := llmagent.New(
 
 典型流程：
 1) 模型先调用 `skill_load` 注入正文/文档
+   - 当使用 `llmagent.LLMAgent` 时，这一步默认是必需的：
+     `skill_run` 会拒绝执行尚未通过 `skill_load` 加载过的技能。
+     如需关闭，可用：
+     `llmagent.WithSkillRunRequireSkillLoaded(false)`。
 2) 随后调用 `skill_run` 执行命令并收集输出文件：
    - 传统：用 `output_files` 指定通配符
    - 声明式：用 `outputs` 统一控制收集/内联/保存

@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -991,12 +992,24 @@ func copyPath(src, dst string) error {
 }
 
 func inputDefaultName(from string) string {
-	// Strip scheme and keep tail element as default name.
-	i := strings.LastIndex(from, "/")
-	if i >= 0 && i+1 < len(from) {
-		return from[i+1:]
+	s := strings.TrimSpace(from)
+	if strings.HasPrefix(s, inputSchemeArtifact) {
+		rest := strings.TrimPrefix(s, inputSchemeArtifact)
+		name, _, err := codeexecutor.ParseArtifactRef(rest)
+		if err == nil {
+			base := path.Base(strings.TrimSpace(name))
+			if base != "." && base != "/" && base != ".." && base != "" {
+				return base
+			}
+		}
 	}
-	return from
+
+	// Strip scheme and keep tail element as default name.
+	i := strings.LastIndex(s, "/")
+	if i >= 0 && i+1 < len(s) {
+		return s[i+1:]
+	}
+	return s
 }
 
 // makeTreeReadOnly removes write bits from the entire tree.
