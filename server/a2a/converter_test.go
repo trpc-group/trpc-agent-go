@@ -570,6 +570,7 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage_MessageType(
 				msg.Metadata = map[string]any{
 					ia2a.MessageMetadataObjectTypeKey: "",
 					ia2a.MessageMetadataTagKey:        "",
+					ia2a.MessageMetadataResponseIDKey: "resp-123",
 				}
 				return &msg
 			}(),
@@ -623,6 +624,7 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage_MessageType(
 				msg.Metadata = map[string]any{
 					ia2a.MessageMetadataObjectTypeKey: "",
 					ia2a.MessageMetadataTagKey:        "",
+					ia2a.MessageMetadataResponseIDKey: "resp-stc1",
 				}
 				return &msg
 			}(),
