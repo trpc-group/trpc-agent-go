@@ -520,13 +520,22 @@ func (s *local) inferExpectedsForEval(
 		}
 	}
 	inputs := traceExpectedsForEval(actuals)
+	seedMessages, err := seedMessagesFromPointers(evalCase.ContextMessages)
+	if err != nil {
+		return nil, fmt.Errorf("seed context messages: %w", err)
+	}
+	mergedRunOptions := make([]agent.RunOption, 0, len(s.runOptions)+1)
+	mergedRunOptions = append(mergedRunOptions, s.runOptions...)
+	if len(seedMessages) > 0 {
+		mergedRunOptions = append(mergedRunOptions, agent.WithInjectedContextMessages(seedMessages))
+	}
 	expecteds, err := inference.Inference(
 		ctx,
 		s.expectedRunner,
 		inputs,
 		evalCase.SessionInput,
 		inferenceResult.SessionID,
-		evalCase.ContextMessages,
+		mergedRunOptions,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("run expected runner: %w", err)
