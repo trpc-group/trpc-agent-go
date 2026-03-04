@@ -85,9 +85,9 @@ type config struct {
 //	LANGFUSE_PUBLIC_KEY: Langfuse public key
 //	LANGFUSE_HOST: Langfuse host in "hostname:port" format (e.g., "cloud.langfuse.com:443")
 //	LANGFUSE_INSECURE: Set to "true" for insecure connections (development only)
-//	LANGFUSE_MAX_OBSERVATION_LEAF_VALUE_BYTES: Optional; max byte length for each observation JSON leaf value (unset by default)
+//	LANGFUSE_OBSERVATION_LEAF_VALUE_MAX_BYTES: Optional; max byte length for each observation JSON leaf value (unset by default)
 func newConfigFromEnv() *config {
-	leafBytes := getEnvIntPtr("LANGFUSE_MAX_OBSERVATION_LEAF_VALUE_BYTES")
+	leafBytes := getEnvIntPtr("LANGFUSE_OBSERVATION_LEAF_VALUE_MAX_BYTES")
 	return &config{
 		secretKey:                    getEnv("LANGFUSE_SECRET_KEY", ""),
 		publicKey:                    getEnv("LANGFUSE_PUBLIC_KEY", ""),

@@ -35,7 +35,7 @@ func TestStart_MissingConfig(t *testing.T) {
 	_ = os.Unsetenv("LANGFUSE_PUBLIC_KEY")
 	_ = os.Unsetenv("LANGFUSE_HOST")
 	_ = os.Unsetenv("LANGFUSE_INSECURE")
-	_ = os.Unsetenv("LANGFUSE_MAX_OBSERVATION_LEAF_VALUE_BYTES")
+	_ = os.Unsetenv("LANGFUSE_OBSERVATION_LEAF_VALUE_MAX_BYTES")
 
 	t.Run("all missing", func(t *testing.T) {
 		clean, err := Start(ctx)
