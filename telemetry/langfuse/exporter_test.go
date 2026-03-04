@@ -1420,3 +1420,173 @@ func BenchmarkTransform(b *testing.B) {
 		transform(spans)
 	}
 }
+
+func TestTruncateObservationLLMInput_Branches(t *testing.T) {
+	withObservationMaxBytes(t, 64)
+
+	messages := `[{"role":"user","content":"` + strings.Repeat("中", 200) + `"}]`
+	tools := `[{"name":"` + strings.Repeat("tool", 40) + `"}]`
+
+	t.Run("prompt with tools and messages", func(t *testing.T) {
+		raw, err := buildObservationInputPrompt(messages, tools)
+		require.NoError(t, err)
+
+		out := truncateObservationLLMInput(raw)
+		require.True(t, utf8.ValidString(out))
+		require.Less(t, len([]byte(out)), len([]byte(raw)))
+		require.Contains(t, out, "truncated")
+		var v map[string]any
+		require.NoError(t, json.Unmarshal([]byte(out), &v))
+	})
+
+	t.Run("plain messages array", func(t *testing.T) {
+		out := truncateObservationLLMInput(messages)
+		require.True(t, utf8.ValidString(out))
+		require.Less(t, len([]byte(out)), len([]byte(messages)))
+		require.Contains(t, out, "truncated")
+		var v []map[string]any
+		require.NoError(t, json.Unmarshal([]byte(out), &v))
+	})
+
+	t.Run("fallback json leaf truncation", func(t *testing.T) {
+		raw := `{"k":"` + strings.Repeat("v", 200) + `"}`
+		out := truncateObservationLLMInput(raw)
+		require.True(t, utf8.ValidString(out))
+		require.Less(t, len([]byte(out)), len([]byte(raw)))
+		require.Contains(t, out, "truncated")
+		var v map[string]any
+		require.NoError(t, json.Unmarshal([]byte(out), &v))
+	})
+}
+
+func TestTruncateObservationJSONLeafValues_And_TruncateJSONLeafValue(t *testing.T) {
+	withObservationMaxBytes(t, 32)
+
+	nested := `{"a":"` + strings.Repeat("x", 120) + `","b":["` + strings.Repeat("y", 120) + `"],"c":{"d":"` + strings.Repeat("z", 120) + `"}}`
+	out := truncateObservationJSONLeafValues(nested)
+	require.True(t, utf8.ValidString(out))
+	require.Contains(t, out, "truncated")
+	var parsed map[string]any
+	require.NoError(t, json.Unmarshal([]byte(out), &parsed))
+
+	invalid := strings.Repeat("not-json", 20)
+	outInvalid := truncateObservationJSONLeafValues(invalid)
+	require.LessOrEqual(t, len([]byte(outInvalid)), 32)
+	require.True(t, utf8.ValidString(outInvalid))
+}
+
+func TestBuildAndExtractHelpers_Branches(t *testing.T) {
+	_, err := buildObservationInputPrompt(`[{"role":"user"}]`, `{`)
+	require.Error(t, err)
+
+	msgs, ok := extractMessagesJSONFromRequestJSON("")
+	require.False(t, ok)
+	require.Equal(t, "", msgs)
+
+	msgs, ok = extractMessagesJSONFromRequestJSON("not-json")
+	require.False(t, ok)
+	require.Equal(t, "", msgs)
+
+	msgs, ok = extractMessagesJSONFromRequestJSON(`{"prompt":"hi"}`)
+	require.False(t, ok)
+	require.Equal(t, "", msgs)
+
+	msgs, ok = extractMessagesJSONFromRequestJSON(`{"messages":[{"role":"user","content":"hi"}]}`)
+	require.True(t, ok)
+	require.Contains(t, msgs, "role")
+}
+
+func TestBuildLLMObservationInput_And_WrapWithToolsBranches(t *testing.T) {
+	toolDefs := `[{"name":"tool-a"}]`
+	invalidToolDefs := `{`
+	messages := `[{"role":"user","content":"hello"}]`
+
+	withInput := llmSpanCollected{inputMessages: strPtr(messages), toolDefinitions: strPtr(toolDefs)}
+	out := buildLLMObservationInput(withInput)
+	require.Contains(t, out, `"tools"`)
+	require.Contains(t, out, `"messages"`)
+
+	withLLMReqMessages := llmSpanCollected{llmRequest: strPtr(`{"messages":[{"role":"user","content":"from-request"}]}`)}
+	out = buildLLMObservationInput(withLLMReqMessages)
+	require.Contains(t, out, "from-request")
+
+	withLLMReqNoMessages := llmSpanCollected{llmRequest: strPtr(`{"prompt":"raw-request"}`)}
+	out = buildLLMObservationInput(withLLMReqNoMessages)
+	require.Equal(t, `{"prompt":"raw-request"}`, out)
+
+	out = wrapWithToolsIfPresent(messages, strPtr(invalidToolDefs))
+	require.Equal(t, messages, out)
+
+	out = buildLLMObservationInput(llmSpanCollected{})
+	require.Equal(t, "N/A", out)
+}
+
+func TestSanitizeSingleMessageForObservation_AndTruncateBytesHeadTail(t *testing.T) {
+	msg := model.Message{
+		Content:          strings.Repeat("content", 20),
+		ReasoningContent: strings.Repeat("reason", 20),
+		ToolID:           strings.Repeat("id", 30),
+		ToolName:         strings.Repeat("tool", 20),
+		ToolCalls: []model.ToolCall{{
+			ID: strings.Repeat("call", 20),
+			Function: model.FunctionDefinitionParam{
+				Name:        strings.Repeat("name", 20),
+				Description: strings.Repeat("desc", 20),
+				Arguments:   []byte(strings.Repeat("arg", 40)),
+			},
+		}},
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeText, Text: strPtr(strings.Repeat("text", 30))},
+			{Type: model.ContentTypeFile, File: &model.File{
+				Name:     strings.Repeat("file", 20),
+				FileID:   strings.Repeat("id", 20),
+				MimeType: strings.Repeat("mime", 20),
+				Data:     []byte(strings.Repeat("f", 200)),
+			}},
+			{Type: model.ContentTypeImage, Image: &model.Image{
+				URL:    strings.Repeat("url", 20),
+				Detail: strings.Repeat("detail", 20),
+				Format: strings.Repeat("format", 20),
+				Data:   []byte(strings.Repeat("i", 200)),
+			}},
+			{Type: model.ContentTypeAudio, Audio: &model.Audio{
+				Format: strings.Repeat("audio", 20),
+				Data:   []byte(strings.Repeat("a", 200)),
+			}},
+		},
+	}
+
+	sanitizeSingleMessageForObservation(&msg, truncateMessagesPlan{textLimit: 16, binaryLimit: 16})
+
+	require.LessOrEqual(t, len([]byte(msg.Content)), 16)
+	require.LessOrEqual(t, len([]byte(msg.ReasoningContent)), 16)
+	require.LessOrEqual(t, len([]byte(msg.ToolCalls[0].Function.Name)), 16)
+	require.LessOrEqual(t, len(msg.ToolCalls[0].Function.Arguments), 16)
+	require.LessOrEqual(t, len(msg.ContentParts[1].File.Data), 16)
+	require.LessOrEqual(t, len(msg.ContentParts[2].Image.Data), 16)
+	require.LessOrEqual(t, len(msg.ContentParts[3].Audio.Data), 16)
+
+	tooSmall := truncateBytesHeadTail([]byte(strings.Repeat("b", 100)), 5)
+	require.Equal(t, "...[t", string(tooSmall))
+}
+
+func TestExporterLifecycle_ErrorBranches(t *testing.T) {
+	exp := &exporter{client: &mockStartStopErrorClient{}}
+	err := exp.Start(context.Background())
+	require.Error(t, err)
+	require.True(t, exp.started)
+
+	err = exp.Shutdown(context.Background())
+	require.Error(t, err)
+	require.False(t, exp.started)
+}
+
+func strPtr(s string) *string { return &s }
+
+type mockStartStopErrorClient struct{}
+
+func (m *mockStartStopErrorClient) Start(context.Context) error { return fmt.Errorf("start failed") }
+func (m *mockStartStopErrorClient) Stop(context.Context) error  { return fmt.Errorf("stop failed") }
+func (m *mockStartStopErrorClient) UploadTraces(context.Context, []*tracepb.ResourceSpans) error {
+	return nil
+}
