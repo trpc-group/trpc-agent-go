@@ -29,6 +29,42 @@ type DeleteOptions struct {
 	Version VersionID
 }
 
+// DeleteOption configures Delete behavior (functional options style).
+type DeleteOption func(*DeleteOptions)
+
+// DeleteAllOpt sets Mode=DeleteAll (default).
+func DeleteAllOpt() DeleteOption {
+	return func(o *DeleteOptions) {
+		if o == nil {
+			return
+		}
+		o.Mode = DeleteAll
+		o.Version = ""
+	}
+}
+
+// DeleteLatestOpt sets Mode=DeleteLatest.
+func DeleteLatestOpt() DeleteOption {
+	return func(o *DeleteOptions) {
+		if o == nil {
+			return
+		}
+		o.Mode = DeleteLatest
+		o.Version = ""
+	}
+}
+
+// DeleteVersionOpt sets Mode=DeleteVersion and the target version.
+func DeleteVersionOpt(ver VersionID) DeleteOption {
+	return func(o *DeleteOptions) {
+		if o == nil {
+			return
+		}
+		o.Mode = DeleteVersion
+		o.Version = ver
+	}
+}
+
 // Validate returns an error when options are invalid.
 func (o DeleteOptions) Validate() error {
 	switch o.Mode {
