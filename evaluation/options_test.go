@@ -95,6 +95,12 @@ func TestWithCallbacks(t *testing.T) {
 	assert.Same(t, custom, opts.callbacks)
 }
 
+func TestWithExpectedRunner(t *testing.T) {
+	custom := stubRunner{}
+	opts := newOptions(WithExpectedRunner(custom))
+	assert.Equal(t, custom, opts.expectedRunner)
+}
+
 func TestWithJudgeRunner(t *testing.T) {
 	custom := stubRunner{}
 	opts := newOptions(WithJudgeRunner(custom))
