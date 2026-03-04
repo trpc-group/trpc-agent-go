@@ -203,14 +203,14 @@ func (s *Service) Open(ctx context.Context, key artifact.Key, version *artifact.
 }
 
 // List returns the latest version descriptor for each artifact name under the given prefix.
-func (s *Service) List(ctx context.Context, prefix artifact.KeyPrefix, opts ...artifact.ListOption) ([]artifact.Descriptor, string, error) {
-	if err := validatePrefix(prefix); err != nil {
+func (s *Service) List(ctx context.Context, key artifact.Key, opts ...artifact.ListOption) ([]artifact.Descriptor, string, error) {
+	if err := validateListKey(key); err != nil {
 		return nil, "", err
 	}
 
 	o := applyListOptions(opts)
 
-	scopePrefix := withArtifactRoot(iartifact.BuildListPrefix(prefix))
+	scopePrefix := withArtifactRoot(iartifact.BuildListPrefix(key))
 	result, err := s.cosClient.GetBucket(ctx, scopePrefix)
 	if err != nil {
 		if cos.IsNotFoundError(err) {
@@ -222,7 +222,7 @@ func (s *Service) List(ctx context.Context, prefix artifact.KeyPrefix, opts ...a
 		return nil, "", nil
 	}
 
-	names, latestByName := collectLatestByName(result.Contents, scopePrefix, prefix.NamePrefix)
+	names, latestByName := collectLatestByName(result.Contents, scopePrefix)
 	if len(names) == 0 {
 		return nil, "", nil
 	}
@@ -231,9 +231,9 @@ func (s *Service) List(ctx context.Context, prefix artifact.KeyPrefix, opts ...a
 
 	out := make([]artifact.Descriptor, 0, len(page))
 	for _, name := range page {
-		key := artifact.Key{AppName: prefix.AppName, UserID: prefix.UserID, SessionID: prefix.SessionID, Scope: prefix.Scope, Name: name}
+		itemKey := artifact.Key{AppName: key.AppName, UserID: key.UserID, SessionID: key.SessionID, Scope: key.Scope, Name: name}
 		ver := latestByName[name]
-		desc, err := s.Head(ctx, key, &ver)
+		desc, err := s.Head(ctx, itemKey, &ver)
 		if err != nil {
 			if errors.Is(err, artifact.ErrNotFound) {
 				continue
@@ -329,15 +329,12 @@ func applyListOptions(opts []artifact.ListOption) artifact.ListOptions {
 	return o
 }
 
-func collectLatestByName(contents []cos.Object, scopePrefix string, namePrefix string) ([]string, map[string]artifact.VersionID) {
+func collectLatestByName(contents []cos.Object, scopePrefix string) ([]string, map[string]artifact.VersionID) {
 	latestByName := make(map[string]artifact.VersionID)
 	names := make([]string, 0)
 	for _, obj := range contents {
 		name, ver, ok := parseNameAndVersion(obj.Key, scopePrefix)
 		if !ok {
-			continue
-		}
-		if namePrefix != "" && !strings.HasPrefix(name, namePrefix) {
 			continue
 		}
 		if cur, exists := latestByName[name]; !exists {
@@ -483,23 +480,20 @@ func validateKey(k artifact.Key) error {
 	return validateName(k.Name)
 }
 
-func validatePrefix(p artifact.KeyPrefix) error {
-	if p.AppName == "" || p.UserID == "" {
+func validateListKey(k artifact.Key) error {
+	if k.AppName == "" || k.UserID == "" {
 		return fmt.Errorf("invalid prefix: missing appName or userID")
 	}
-	switch p.Scope {
+	switch k.Scope {
 	case artifact.ScopeSession:
-		if p.SessionID == "" {
+		if k.SessionID == "" {
 			return fmt.Errorf("invalid prefix: missing sessionID for session scope")
 		}
 	case artifact.ScopeUser:
 	default:
 		return fmt.Errorf("invalid prefix: unknown scope")
 	}
-	if p.NamePrefix == "" {
-		return nil
-	}
-	return validateNamePrefix(p.NamePrefix)
+	return nil
 }
 
 func validateName(name string) error {

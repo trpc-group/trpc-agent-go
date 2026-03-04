@@ -202,10 +202,10 @@ func (s *Service) Open(
 // List returns the latest version descriptor for each artifact name under the given prefix.
 func (s *Service) List(
 	ctx context.Context,
-	prefix artifact.KeyPrefix,
+	key artifact.Key,
 	opts ...artifact.ListOption,
 ) ([]artifact.Descriptor, string, error) {
-	if err := validatePrefix(prefix); err != nil {
+	if err := validateListKey(key); err != nil {
 		return nil, "", err
 	}
 
@@ -216,7 +216,7 @@ func (s *Service) List(
 		}
 	}
 
-	scopePrefix := iartifact.BuildListPrefix(prefix)
+	scopePrefix := iartifact.BuildListPrefix(key)
 	keys, err := s.client.ListObjects(ctx, scopePrefix)
 	if err != nil {
 		if errors.Is(err, s3storage.ErrNotFound) {
@@ -234,9 +234,6 @@ func (s *Service) List(
 	for _, objectKey := range keys {
 		name, ver, ok := parseNameAndVersion(objectKey, scopePrefix)
 		if !ok {
-			continue
-		}
-		if prefix.NamePrefix != "" && !strings.HasPrefix(name, prefix.NamePrefix) {
 			continue
 		}
 		if cur, exists := latestByName[name]; !exists {
@@ -266,15 +263,15 @@ func (s *Service) List(
 
 	out := make([]artifact.Descriptor, 0, len(page))
 	for _, name := range page {
-		key := artifact.Key{
-			AppName:   prefix.AppName,
-			UserID:    prefix.UserID,
-			SessionID: prefix.SessionID,
-			Scope:     prefix.Scope,
+		itemKey := artifact.Key{
+			AppName:   key.AppName,
+			UserID:    key.UserID,
+			SessionID: key.SessionID,
+			Scope:     key.Scope,
 			Name:      name,
 		}
 		ver := latestByName[name].version
-		objectKey := iartifact.BuildObjectName(key, ver)
+		objectKey := iartifact.BuildObjectName(itemKey, ver)
 		contentType, size, err := s.client.HeadObject(ctx, objectKey)
 		if err != nil {
 			if errors.Is(err, s3storage.ErrNotFound) {
@@ -283,7 +280,7 @@ func (s *Service) List(
 			return nil, "", fmt.Errorf("failed to head listed artifact: %w", err)
 		}
 		desc := artifact.Descriptor{
-			Key:      key,
+			Key:      itemKey,
 			Version:  ver,
 			MimeType: cmp.Or(contentType, defaultContentType),
 			Size:     size,
@@ -459,22 +456,19 @@ func validateKey(k artifact.Key) error {
 	return validateName(k.Name)
 }
 
-func validatePrefix(p artifact.KeyPrefix) error {
-	if p.AppName == "" || p.UserID == "" {
+func validateListKey(k artifact.Key) error {
+	if k.AppName == "" || k.UserID == "" {
 		return ErrEmptySessionInfo
 	}
-	switch p.Scope {
+	switch k.Scope {
 	case artifact.ScopeSession:
-		if p.SessionID == "" {
+		if k.SessionID == "" {
 			return ErrEmptySessionInfo
 		}
 	case artifact.ScopeUser:
 		// ok
 	default:
 		return ErrEmptySessionInfo
-	}
-	if p.NamePrefix != "" {
-		return validateNamePrefix(p.NamePrefix)
 	}
 	return nil
 }

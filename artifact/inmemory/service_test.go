@@ -81,13 +81,13 @@ func TestListPagination(t *testing.T) {
 	_, err = service.Put(ctx, artifact.Key{AppName: base.AppName, UserID: base.UserID, SessionID: base.SessionID, Scope: base.Scope, Name: "b.txt"}, bytes.NewReader([]byte("b")))
 	require.NoError(t, err)
 
-	prefix := artifact.KeyPrefix{AppName: base.AppName, UserID: base.UserID, SessionID: base.SessionID, Scope: base.Scope}
-	page1, next, err := service.List(ctx, prefix, artifact.WithListLimit(1))
+	ns := artifact.Key{AppName: base.AppName, UserID: base.UserID, SessionID: base.SessionID, Scope: base.Scope}
+	page1, next, err := service.List(ctx, ns, artifact.WithListLimit(1))
 	require.NoError(t, err)
 	require.Len(t, page1, 1)
 	require.NotEmpty(t, next)
 
-	page2, next2, err := service.List(ctx, prefix, artifact.WithListLimit(10), artifact.WithListPageToken(next))
+	page2, next2, err := service.List(ctx, ns, artifact.WithListLimit(10), artifact.WithListPageToken(next))
 	require.NoError(t, err)
 	require.Len(t, page2, 1)
 	require.Empty(t, next2)

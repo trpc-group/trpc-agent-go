@@ -182,20 +182,19 @@ func TestService_List_Paginates(t *testing.T) {
 	_, _ = svc.Put(ctx, testKey("b.txt"), strings.NewReader("b"))
 	_, _ = svc.Put(ctx, testKey("c.txt"), strings.NewReader("c"))
 
-	prefix := artifact.KeyPrefix{
-		AppName:    "test-app",
-		UserID:     "user-123",
-		SessionID:  "session-456",
-		Scope:      artifact.ScopeSession,
-		NamePrefix: "",
+	ns := artifact.Key{
+		AppName:   "test-app",
+		UserID:    "user-123",
+		SessionID: "session-456",
+		Scope:     artifact.ScopeSession,
 	}
 
-	page1, next, err := svc.List(ctx, prefix, artifact.WithListLimit(2))
+	page1, next, err := svc.List(ctx, ns, artifact.WithListLimit(2))
 	require.NoError(t, err)
 	require.Len(t, page1, 2)
 	require.NotEmpty(t, next)
 
-	page2, next2, err := svc.List(ctx, prefix, artifact.WithListLimit(2), artifact.WithListPageToken(next))
+	page2, next2, err := svc.List(ctx, ns, artifact.WithListLimit(2), artifact.WithListPageToken(next))
 	require.NoError(t, err)
 	require.Len(t, page2, 1)
 	require.Empty(t, next2)

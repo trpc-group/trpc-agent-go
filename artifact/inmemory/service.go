@@ -158,13 +158,13 @@ func (s *Service) Open(
 // List returns the latest version descriptor for each artifact name under the given prefix.
 func (s *Service) List(
 	ctx context.Context,
-	prefix artifact.KeyPrefix,
+	key artifact.Key,
 	opts ...artifact.ListOption,
 ) ([]artifact.Descriptor, string, error) {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
-	if err := validatePrefix(prefix); err != nil {
+	if err := validateListKey(key); err != nil {
 		return nil, "", err
 	}
 
@@ -175,7 +175,7 @@ func (s *Service) List(
 		}
 	}
 
-	scopePrefix := iartifact.BuildListPrefix(prefix)
+	scopePrefix := iartifact.BuildListPrefix(key)
 	names := make([]string, 0)
 	latest := make(map[string]stored)
 	for path, versions := range s.artifacts {
@@ -184,9 +184,6 @@ func (s *Service) List(
 		}
 		rel := strings.TrimPrefix(path, scopePrefix)
 		if rel == "" {
-			continue
-		}
-		if prefix.NamePrefix != "" && !strings.HasPrefix(rel, prefix.NamePrefix) {
 			continue
 		}
 		st, ok := resolveVersion(versions, nil)
@@ -222,15 +219,15 @@ func (s *Service) List(
 	out := make([]artifact.Descriptor, 0, len(page))
 	for _, name := range page {
 		st := latest[name]
-		key := artifact.Key{
-			AppName:   prefix.AppName,
-			UserID:    prefix.UserID,
-			SessionID: prefix.SessionID,
-			Scope:     prefix.Scope,
+		itemKey := artifact.Key{
+			AppName:   key.AppName,
+			UserID:    key.UserID,
+			SessionID: key.SessionID,
+			Scope:     key.Scope,
 			Name:      name,
 		}
 		out = append(out, artifact.Descriptor{
-			Key:      key,
+			Key:      itemKey,
 			Version:  st.version,
 			MimeType: mimeOrDefault(st.mime),
 			Size:     int64(len(st.data)),
@@ -385,24 +382,19 @@ func validateKey(k artifact.Key) error {
 	return nil
 }
 
-func validatePrefix(p artifact.KeyPrefix) error {
-	if p.AppName == "" || p.UserID == "" {
+func validateListKey(k artifact.Key) error {
+	if k.AppName == "" || k.UserID == "" {
 		return fmt.Errorf("invalid prefix: missing appName or userID")
 	}
-	switch p.Scope {
+	switch k.Scope {
 	case artifact.ScopeSession:
-		if p.SessionID == "" {
+		if k.SessionID == "" {
 			return fmt.Errorf("invalid prefix: missing sessionID for session scope")
 		}
 	case artifact.ScopeUser:
 		// ok
 	default:
-		return fmt.Errorf("invalid prefix: unknown scope %v", p.Scope)
-	}
-	if p.NamePrefix != "" {
-		if err := validateObjectPrefix(p.NamePrefix); err != nil {
-			return err
-		}
+		return fmt.Errorf("invalid prefix: unknown scope %v", k.Scope)
 	}
 	return nil
 }

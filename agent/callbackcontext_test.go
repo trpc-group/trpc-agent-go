@@ -97,7 +97,7 @@ func TestCallbackContext_ArtifactOperations_NoService(t *testing.T) {
 	})
 
 	t.Run("ListArtifacts without service", func(t *testing.T) {
-		artifacts, next, err := cc.ListArtifacts("")
+		artifacts, next, err := cc.ListArtifacts()
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "artifact service is nil")
 		assert.Nil(t, artifacts)
@@ -154,7 +154,7 @@ func TestCallbackContext_ArtifactOperations_NoSession(t *testing.T) {
 	})
 
 	t.Run("ListArtifacts without session", func(t *testing.T) {
-		artifacts, next, err := cc.ListArtifacts("")
+		artifacts, next, err := cc.ListArtifacts()
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "no session available")
 		assert.Nil(t, artifacts)

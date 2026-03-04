@@ -84,12 +84,11 @@ func TestArtifact_SessionScope(t *testing.T) {
 		require.EqualValues(t, wanted, got)
 	}
 
-	items, _, err := s.List(context.Background(), artifact.KeyPrefix{
-		AppName:    key.AppName,
-		UserID:     key.UserID,
-		SessionID:  key.SessionID,
-		Scope:      key.Scope,
-		NamePrefix: "",
+	items, _, err := s.List(context.Background(), artifact.Key{
+		AppName:   key.AppName,
+		UserID:    key.UserID,
+		SessionID: key.SessionID,
+		Scope:     key.Scope,
 	})
 	require.NoError(t, err)
 	require.Len(t, items, 1)
@@ -98,12 +97,11 @@ func TestArtifact_SessionScope(t *testing.T) {
 	err = s.Delete(context.Background(), key, artifact.DeleteAllOpt())
 	require.NoError(t, err)
 
-	items, _, err = s.List(context.Background(), artifact.KeyPrefix{
-		AppName:    key.AppName,
-		UserID:     key.UserID,
-		SessionID:  key.SessionID,
-		Scope:      key.Scope,
-		NamePrefix: "",
+	items, _, err = s.List(context.Background(), artifact.Key{
+		AppName:   key.AppName,
+		UserID:    key.UserID,
+		SessionID: key.SessionID,
+		Scope:     key.Scope,
 	})
 	require.NoError(t, err)
 	require.Empty(t, items)
@@ -224,12 +222,11 @@ func TestArtifact_UserScope(t *testing.T) {
 		require.EqualValues(t, artifacts[i], got)
 	}
 
-	items, _, err := s.List(context.Background(), artifact.KeyPrefix{
-		AppName:    key.AppName,
-		UserID:     key.UserID,
-		SessionID:  "", // not used for user scope
-		Scope:      key.Scope,
-		NamePrefix: "",
+	items, _, err := s.List(context.Background(), artifact.Key{
+		AppName:   key.AppName,
+		UserID:    key.UserID,
+		SessionID: "", // not used for user scope
+		Scope:     key.Scope,
 	})
 	require.NoError(t, err)
 	require.Len(t, items, 1)
@@ -238,12 +235,11 @@ func TestArtifact_UserScope(t *testing.T) {
 	err = s.Delete(context.Background(), key, artifact.DeleteAllOpt())
 	require.NoError(t, err)
 
-	items, _, err = s.List(context.Background(), artifact.KeyPrefix{
-		AppName:    key.AppName,
-		UserID:     key.UserID,
-		SessionID:  "",
-		Scope:      key.Scope,
-		NamePrefix: "",
+	items, _, err = s.List(context.Background(), artifact.Key{
+		AppName:   key.AppName,
+		UserID:    key.UserID,
+		SessionID: "",
+		Scope:     key.Scope,
 	})
 	require.NoError(t, err)
 	require.Empty(t, items)

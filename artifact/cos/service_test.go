@@ -263,7 +263,7 @@ func TestCOSService_PutHeadOpenVersionsListDelete(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, vers, 2)
 
-	items, next, err := s.List(ctx, artifact.KeyPrefix{
+	items, next, err := s.List(ctx, artifact.Key{
 		AppName:   key.AppName,
 		UserID:    key.UserID,
 		SessionID: key.SessionID,

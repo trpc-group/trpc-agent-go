@@ -1047,7 +1047,7 @@ func (*artMem) Open(
 
 func (*artMem) List(
 	_ context.Context,
-	_ artifact.KeyPrefix,
+	_ artifact.Key,
 	_ ...artifact.ListOption,
 ) ([]artifact.Descriptor, string, error) {
 	return nil, "", nil
@@ -1109,7 +1109,7 @@ func (s *pinnedArtifactService) Open(
 
 func (*pinnedArtifactService) List(
 	_ context.Context,
-	_ artifact.KeyPrefix,
+	_ artifact.Key,
 	_ ...artifact.ListOption,
 ) ([]artifact.Descriptor, string, error) {
 	return nil, "", nil

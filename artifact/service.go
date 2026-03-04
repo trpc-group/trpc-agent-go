@@ -42,7 +42,9 @@ type Service interface {
 	//
 	// Implementations may require multiple backend calls. The returned nextPageToken is empty
 	// when there are no more results.
-	List(ctx context.Context, prefix KeyPrefix, opts ...ListOption) ([]Descriptor, string, error)
+	//
+	// The key identifies the namespace (AppName/UserID/SessionID/Scope). key.Name is ignored.
+	List(ctx context.Context, key Key, opts ...ListOption) ([]Descriptor, string, error)
 
 	// Delete deletes artifact versions identified by key.
 	//

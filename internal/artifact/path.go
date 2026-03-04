@@ -58,14 +58,16 @@ func BuildUserNamespacePrefix(appName, userID string) string {
 	return fmt.Sprintf("%s/%s/user/", appName, userID)
 }
 
-// BuildListPrefix builds the object prefix for listing artifacts under a KeyPrefix.
-func BuildListPrefix(p artifact.KeyPrefix) string {
-	switch p.Scope {
+// BuildListPrefix builds the object prefix for listing artifacts under a namespace key.
+//
+// key.Name is ignored.
+func BuildListPrefix(key artifact.Key) string {
+	switch key.Scope {
 	case artifact.ScopeUser:
-		return fmt.Sprintf("%s/%s/user/", p.AppName, p.UserID)
+		return fmt.Sprintf("%s/%s/user/", key.AppName, key.UserID)
 	case artifact.ScopeSession:
-		return fmt.Sprintf("%s/%s/%s/", p.AppName, p.UserID, p.SessionID)
+		return fmt.Sprintf("%s/%s/%s/", key.AppName, key.UserID, key.SessionID)
 	default:
-		return fmt.Sprintf("%s/%s/%s/", p.AppName, p.UserID, p.SessionID)
+		return fmt.Sprintf("%s/%s/%s/", key.AppName, key.UserID, key.SessionID)
 	}
 }

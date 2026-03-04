@@ -745,7 +745,7 @@ func TestRuntime_StageInputs_ArtifactAndLinks(t *testing.T) {
 		actx, "uploads/b.txt", []byte("BX"), "text/plain",
 	)
 	require.NoError(t, err)
-	ref := fmt.Sprintf("artifact://uploads/b.txt@%d", ver)
+	ref := fmt.Sprintf("artifact://uploads/b.txt@%s", string(ver))
 	err = rt.StageInputs(actx, ws, []codeexecutor.InputSpec{{
 		From: ref,
 		Mode: "copy",

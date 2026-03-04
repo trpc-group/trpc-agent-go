@@ -330,7 +330,8 @@ type Service interface {
     Open(ctx context.Context, key Key, version *VersionID) (io.ReadCloser, Descriptor, error)
     
     // 分页列出（每个 name 返回 latest 的 Descriptor）
-    List(ctx context.Context, prefix KeyPrefix, opts ...ListOption) ([]Descriptor, string, error)
+    // key.Name 会被忽略。
+    List(ctx context.Context, key Key, opts ...ListOption) ([]Descriptor, string, error)
     
     // 删除制品版本（全部/最新/指定版本）
     Delete(ctx context.Context, key Key, opts ...DeleteOption) error

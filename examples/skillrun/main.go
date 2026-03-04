@@ -643,12 +643,11 @@ func (c *skillChat) handleListArtifacts() error {
 	if c.artSvc == nil {
 		return fmt.Errorf("artifact service not available")
 	}
-	prefix := artifact.KeyPrefix{
-		AppName:    appName,
-		UserID:     c.userID,
-		SessionID:  c.sessionID,
-		Scope:      artifact.ScopeSession,
-		NamePrefix: "",
+	ns := artifact.Key{
+		AppName:   appName,
+		UserID:    c.userID,
+		SessionID: c.sessionID,
+		Scope:     artifact.ScopeSession,
 	}
 	var (
 		keys      []string
@@ -657,7 +656,7 @@ func (c *skillChat) handleListArtifacts() error {
 	for {
 		items, next, err := c.artSvc.List(
 			context.Background(),
-			prefix,
+			ns,
 			artifact.WithListLimit(200),
 			artifact.WithListPageToken(pageToken),
 		)

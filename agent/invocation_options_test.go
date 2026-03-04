@@ -458,7 +458,7 @@ func (m *mockArtifactService) Open(ctx context.Context, key artifact.Key, versio
 	return io.NopCloser(strings.NewReader("")), d, nil
 }
 
-func (m *mockArtifactService) List(ctx context.Context, prefix artifact.KeyPrefix, opts ...artifact.ListOption) ([]artifact.Descriptor, string, error) {
+func (m *mockArtifactService) List(ctx context.Context, key artifact.Key, opts ...artifact.ListOption) ([]artifact.Descriptor, string, error) {
 	return nil, "", nil
 }
 

@@ -81,18 +81,12 @@ func (cc *CallbackContext) OpenArtifact(name string, version *artifact.VersionID
 //
 // It returns descriptors for the latest version of each artifact and a nextPageToken.
 // nextPageToken is empty when there are no more results.
-func (cc *CallbackContext) ListArtifacts(namePrefix string, opts ...artifact.ListOption) ([]artifact.Descriptor, string, error) {
+func (cc *CallbackContext) ListArtifacts(opts ...artifact.ListOption) ([]artifact.Descriptor, string, error) {
 	service, baseKey, err := cc.getArtifactServiceAndBaseKey()
 	if err != nil {
 		return nil, "", err
 	}
-	return service.List(cc.Context, artifact.KeyPrefix{
-		AppName:    baseKey.AppName,
-		UserID:     baseKey.UserID,
-		SessionID:  baseKey.SessionID,
-		Scope:      baseKey.Scope,
-		NamePrefix: namePrefix,
-	}, opts...)
+	return service.List(cc.Context, baseKey, opts...)
 }
 
 // DeleteArtifact deletes artifact versions identified by name within the current session scope.

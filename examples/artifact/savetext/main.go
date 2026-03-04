@@ -45,12 +45,11 @@ func main() {
 		}()
 	}
 	ctx := context.Background()
-	prefix := artifact.KeyPrefix{
-		AppName:    a.appName,
-		UserID:     a.userID,
-		SessionID:  a.sessionID,
-		Scope:      artifact.ScopeSession,
-		NamePrefix: "",
+	ns := artifact.Key{
+		AppName:   a.appName,
+		UserID:    a.userID,
+		SessionID: a.sessionID,
+		Scope:     artifact.ScopeSession,
 	}
 	var (
 		descs     []artifact.Descriptor
@@ -59,7 +58,7 @@ func main() {
 	for {
 		items, next, err := a.artifactService.List(
 			ctx,
-			prefix,
+			ns,
 			artifact.WithListLimit(200),
 			artifact.WithListPageToken(pageToken),
 		)

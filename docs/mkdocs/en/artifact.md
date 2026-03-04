@@ -331,8 +331,9 @@ type Service interface {
     // Open streams artifact content; version=nil means latest.
     Open(ctx context.Context, key Key, version *VersionID) (io.ReadCloser, Descriptor, error)
     
-    // List returns latest descriptors for artifacts under prefix (paginated).
-    List(ctx context.Context, prefix KeyPrefix, opts ...ListOption) ([]Descriptor, string, error)
+    // List returns latest descriptors for artifacts under a namespace (paginated).
+    // key.Name is ignored.
+    List(ctx context.Context, key Key, opts ...ListOption) ([]Descriptor, string, error)
     
     // Delete deletes artifact versions (all/latest/specific).
     Delete(ctx context.Context, key Key, opts ...DeleteOption) error

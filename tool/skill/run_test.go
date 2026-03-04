@@ -1224,7 +1224,7 @@ func (e *errArtifactService) Open(ctx context.Context, key artifact.Key, version
 	return nil, artifact.Descriptor{}, artifact.ErrNotFound
 }
 
-func (e *errArtifactService) List(ctx context.Context, prefix artifact.KeyPrefix, opts ...artifact.ListOption) ([]artifact.Descriptor, string, error) {
+func (e *errArtifactService) List(ctx context.Context, key artifact.Key, opts ...artifact.ListOption) ([]artifact.Descriptor, string, error) {
 	return nil, "", nil
 }
 
@@ -2499,29 +2499,21 @@ func TestRunTool_StagesUserFileInputs_ArtifactRef_InfersName(t *testing.T) {
 		ID:      "s1",
 		State:   session.StateMap{},
 	}
-	info := artifact.SessionInfo{
+	const artifactName = "uploads/notes.txt"
+	desc, err := svc.Put(context.Background(), artifact.Key{
 		AppName:   sess.AppName,
 		UserID:    sess.UserID,
 		SessionID: sess.ID,
-	}
-	const artifactName = "uploads/notes.txt"
-	ver, err := svc.SaveArtifact(
-		context.Background(),
-		info,
-		artifactName,
-		&artifact.Artifact{
-			Data:     []byte(contentHi),
-			MimeType: "text/plain",
-			Name:     artifactName,
-		},
-	)
+		Scope:     artifact.ScopeSession,
+		Name:      artifactName,
+	}, strings.NewReader(contentHi), artifact.WithPutMimeType("text/plain"))
 	require.NoError(t, err)
 
 	ref := fmt.Sprintf(
-		"%s%s@%d",
+		"%s%s@%s",
 		fileref.ArtifactPrefix,
 		artifactName,
-		ver,
+		string(desc.Version),
 	)
 	user := model.NewUserMessage("upload")
 	user.AddFileID(ref)
@@ -2639,7 +2631,7 @@ func TestFileNameFromArtifactRef_EdgeCases(t *testing.T) {
 	require.Equal(t, "", fileNameFromArtifactRef("file-123"))
 
 	invalidVer := fileref.ArtifactPrefix + "a@x"
-	require.Equal(t, "", fileNameFromArtifactRef(invalidVer))
+	require.Equal(t, "a", fileNameFromArtifactRef(invalidVer))
 
 	invalidBase := fileref.ArtifactPrefix + "..@0"
 	require.Equal(t, "", fileNameFromArtifactRef(invalidBase))
