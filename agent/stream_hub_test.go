@@ -19,6 +19,55 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestStreamHub_OpenStreamWriterAndReader_RequireInvocation(
+	t *testing.T,
+) {
+	_, err := OpenStreamWriter(context.Background(), "s")
+	require.Error(t, err)
+	require.ErrorContains(t, err, "missing invocation")
+
+	_, err = OpenStreamReader(context.Background(), "s")
+	require.Error(t, err)
+	require.ErrorContains(t, err, "missing invocation")
+}
+
+func TestStreamHub_OpenStreamWriterAndReader_EmptyName(t *testing.T) {
+	inv := NewInvocation()
+	ctx := NewInvocationContext(context.Background(), inv)
+
+	_, err := OpenStreamWriter(ctx, "")
+	require.ErrorIs(t, err, ErrStreamNameEmpty)
+
+	_, err = OpenStreamReader(ctx, "")
+	require.ErrorIs(t, err, ErrStreamNameEmpty)
+}
+
+func TestStreamHub_GetOrCreateStreamHub_NilInvocation(t *testing.T) {
+	require.Nil(t, GetOrCreateStreamHub(nil))
+
+	_, ok := StreamHubFromContext(context.Background())
+	require.False(t, ok)
+}
+
+func TestStreamHub_OpenWriterAndReader_NilContextUsesBackground(t *testing.T) {
+	hub := newStreamHub()
+	require.NotNil(t, hub)
+
+	w, err := hub.OpenWriter(nil, "s")
+	require.NoError(t, err)
+
+	r, err := hub.OpenReader(nil, "s")
+	require.NoError(t, err)
+
+	_, err = w.WriteString("x")
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+
+	b, err := io.ReadAll(r)
+	require.NoError(t, err)
+	require.Equal(t, "x", string(b))
+}
+
 func TestStreamHub_BasicReadWrite(t *testing.T) {
 	inv := NewInvocation()
 	ctx := NewInvocationContext(context.Background(), inv)
@@ -50,6 +99,28 @@ func TestStreamHub_BasicReadWrite(t *testing.T) {
 	require.Equal(t, want, string(b))
 }
 
+func TestStreamHub_BasicReadWrite_UsesWrite(t *testing.T) {
+	inv := NewInvocation()
+	ctx := NewInvocationContext(context.Background(), inv)
+
+	const streamName = "s"
+	w, err := OpenStreamWriter(ctx, streamName)
+	require.NoError(t, err)
+
+	r, err := OpenStreamReader(ctx, streamName)
+	require.NoError(t, err)
+
+	const want = "hello"
+	n, err := w.Write([]byte(want))
+	require.NoError(t, err)
+	require.Equal(t, len(want), n)
+	require.NoError(t, w.Close())
+
+	b, err := io.ReadAll(r)
+	require.NoError(t, err)
+	require.Equal(t, want, string(b))
+}
+
 func TestStreamHub_SingleWriterAndReader(t *testing.T) {
 	inv := NewInvocation()
 	ctx := NewInvocationContext(context.Background(), inv)
@@ -68,6 +139,45 @@ func TestStreamHub_SingleWriterAndReader(t *testing.T) {
 	require.ErrorIs(t, err, ErrStreamReaderAlreadySet)
 }
 
+func TestStreamHub_ReaderPartialReads(t *testing.T) {
+	inv := NewInvocation()
+	ctx := NewInvocationContext(context.Background(), inv)
+
+	const streamName = "s"
+	w, err := OpenStreamWriter(ctx, streamName)
+	require.NoError(t, err)
+	defer w.Close()
+
+	r, err := OpenStreamReader(ctx, streamName)
+	require.NoError(t, err)
+	defer r.Close()
+
+	const want = "abcd"
+	_, err = w.WriteString(want)
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+
+	empty := make([]byte, 0)
+	n, err := r.Read(empty)
+	require.NoError(t, err)
+	require.Equal(t, 0, n)
+
+	buf := make([]byte, 2)
+	n, err = r.Read(buf)
+	require.NoError(t, err)
+	require.Equal(t, 2, n)
+	require.Equal(t, "ab", string(buf))
+
+	n, err = r.Read(buf)
+	require.NoError(t, err)
+	require.Equal(t, 2, n)
+	require.Equal(t, "cd", string(buf))
+
+	n, err = r.Read(buf)
+	require.ErrorIs(t, err, io.EOF)
+	require.Equal(t, 0, n)
+}
+
 func TestStreamHub_ReaderCloseStopsWriter(t *testing.T) {
 	inv := NewInvocation()
 	ctx := NewInvocationContext(context.Background(), inv)
@@ -83,6 +193,73 @@ func TestStreamHub_ReaderCloseStopsWriter(t *testing.T) {
 
 	_, err = w.Write([]byte("x"))
 	require.True(t, errors.Is(err, io.ErrClosedPipe))
+}
+
+func TestStreamHub_WriterNilAndEmptyInputs(t *testing.T) {
+	var w *StreamWriter
+	n, err := w.Write([]byte("x"))
+	require.ErrorIs(t, err, io.ErrClosedPipe)
+	require.Equal(t, 0, n)
+
+	n, err = w.WriteString("x")
+	require.ErrorIs(t, err, io.ErrClosedPipe)
+	require.Equal(t, 0, n)
+
+	s := newStream("s", 1)
+	w = &StreamWriter{ctx: context.Background(), s: s}
+	n, err = w.Write(nil)
+	require.NoError(t, err)
+	require.Equal(t, 0, n)
+
+	n, err = w.WriteString("")
+	require.NoError(t, err)
+	require.Equal(t, 0, n)
+}
+
+func TestStreamHub_WriterContextCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	s := newStream("s", 1)
+	s.ch <- []byte("x")
+	w := &StreamWriter{ctx: ctx, s: s}
+
+	n, err := w.Write([]byte("y"))
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, 0, n)
+
+	n, err = w.WriteString("y")
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, 0, n)
+}
+
+func TestStreamHub_WriterCloseWithError(t *testing.T) {
+	inv := NewInvocation()
+	ctx := NewInvocationContext(context.Background(), inv)
+
+	const streamName = "s"
+	w, err := OpenStreamWriter(ctx, streamName)
+	require.NoError(t, err)
+
+	r, err := OpenStreamReader(ctx, streamName)
+	require.NoError(t, err)
+
+	wantErr := context.Canceled
+	require.NoError(t, w.CloseWithError(wantErr))
+
+	buf := make([]byte, 1)
+	_, err = r.Read(buf)
+	require.ErrorIs(t, err, wantErr)
+}
+
+func TestStreamHub_ReaderContextCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	r := &StreamReader{ctx: ctx, s: newStream("s", 1)}
+	buf := make([]byte, 1)
+	_, err := r.Read(buf)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestStreamHub_CloseAll(t *testing.T) {
@@ -103,4 +280,23 @@ func TestStreamHub_CloseAll(t *testing.T) {
 	buf := make([]byte, 1)
 	_, err = r.Read(buf)
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestStreamHub_CloseAll_WithNilErrorReturnsEOF(t *testing.T) {
+	inv := NewInvocation()
+	ctx := NewInvocationContext(context.Background(), inv)
+	hub := GetOrCreateStreamHub(inv)
+
+	const streamName = "s"
+	_, err := OpenStreamWriter(ctx, streamName)
+	require.NoError(t, err)
+
+	r, err := OpenStreamReader(ctx, streamName)
+	require.NoError(t, err)
+
+	hub.CloseAll(nil)
+
+	buf := make([]byte, 1)
+	_, err = r.Read(buf)
+	require.ErrorIs(t, err, io.EOF)
 }

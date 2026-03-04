@@ -439,7 +439,7 @@ func TestProcessAgentEventStream_StreamOutputWritesDeltas(t *testing.T) {
 	agent.GetOrCreateStreamHub(inv)
 
 	const streamName = "s"
-	r, err := agent.OpenStreamReader(ctx, streamName)
+	r, err := OpenStreamReader(ctx, streamName)
 	require.NoError(t, err)
 	defer r.Close()
 
@@ -488,6 +488,114 @@ func TestProcessAgentEventStream_StreamOutputWritesDeltas(t *testing.T) {
 	b, err := io.ReadAll(r)
 	require.NoError(t, err)
 	require.Equal(t, "a\nb\n", string(b))
+}
+
+func TestProcessAgentEventStream_StreamOutputWritesFinalWhenNoDeltas(
+	t *testing.T,
+) {
+	inv := agent.NewInvocation(agent.WithInvocationID("inv-stream-final"))
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	agent.GetOrCreateStreamHub(inv)
+
+	const streamName = "s"
+	r, err := OpenStreamReader(ctx, streamName)
+	require.NoError(t, err)
+	defer r.Close()
+
+	agentEvents := make(chan *event.Event, 1)
+	parentEventChan := make(chan *event.Event, 1)
+	agentEvents <- &event.Event{
+		Response: &model.Response{
+			IsPartial: false,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("final"),
+			}},
+		},
+	}
+	close(agentEvents)
+
+	_, err = processAgentEventStream(
+		ctx,
+		agentEvents,
+		nil,
+		"node",
+		State{},
+		parentEventChan,
+		"agent",
+		streamName,
+		&itelemetry.InvokeAgentTracker{},
+	)
+	require.NoError(t, err)
+
+	b, err := io.ReadAll(r)
+	require.NoError(t, err)
+	require.Equal(t, "final", string(b))
+}
+
+func TestProcessAgentEventStream_StreamOutputCloseWithError(
+	t *testing.T,
+) {
+	inv := agent.NewInvocation(agent.WithInvocationID("inv-stream-err"))
+	base := agent.NewInvocationContext(context.Background(), inv)
+	agent.GetOrCreateStreamHub(inv)
+
+	ctx, cancel := context.WithCancel(base)
+	cancel()
+
+	const streamName = "s"
+	r, err := OpenStreamReader(base, streamName)
+	require.NoError(t, err)
+	defer r.Close()
+
+	agentEvents := make(chan *event.Event, 1)
+	parentEventChan := make(chan *event.Event, 1)
+	agentEvents <- &event.Event{
+		Response: &model.Response{
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Delta: model.NewAssistantMessage("x"),
+			}},
+		},
+	}
+	close(agentEvents)
+
+	_, err = processAgentEventStream(
+		ctx,
+		agentEvents,
+		nil,
+		"node",
+		State{},
+		parentEventChan,
+		"agent",
+		streamName,
+		&itelemetry.InvokeAgentTracker{},
+	)
+	require.ErrorIs(t, err, context.Canceled)
+
+	buf := make([]byte, 1)
+	_, err = r.Read(buf)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestAgentDeltaFromEvent(t *testing.T) {
+	require.Equal(t, "", agentDeltaFromEvent(nil))
+	require.Equal(t, "", agentDeltaFromEvent(&event.Event{}))
+
+	require.Equal(t, "", agentDeltaFromEvent(&event.Event{
+		Response: &model.Response{},
+	}))
+	require.Equal(t, "", agentDeltaFromEvent(&event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{},
+		},
+	}))
+	require.Equal(t, "x", agentDeltaFromEvent(&event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Delta: model.NewAssistantMessage("x"),
+			}},
+		},
+	}))
 }
 
 func TestProcessAgentEventStream_CapturesStructuredOutput(t *testing.T) {
