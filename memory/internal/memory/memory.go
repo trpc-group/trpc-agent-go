@@ -15,14 +15,31 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"unicode"
-	"unicode/utf8"
 
+	"github.com/go-ego/gse"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	memorytool "trpc.group/trpc-go/trpc-agent-go/memory/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
+
+var (
+	seg     gse.Segmenter
+	segOnce sync.Once
+	segErr  error
+)
+
+func getSegmenter() (*gse.Segmenter, error) {
+	segOnce.Do(func() {
+		segErr = seg.LoadDict()
+	})
+	if segErr != nil {
+		return nil, fmt.Errorf("load segmenter dict failed: %w", segErr)
+	}
+	return &seg, nil
+}
 
 const (
 	// DefaultMemoryLimit is the default limit of memories per user.
@@ -30,23 +47,14 @@ const (
 )
 
 // GenerateMemoryID generates a unique ID for memory based on content and user context.
-// Uses SHA256 hash of memory content, sorted topics, app name, and user ID for consistent ID generation.
-// This ensures that:
-// 1. Same content with different topic order produces the same ID.
-// 2. Different users with same content produce different IDs.
+// Uses SHA256 hash of memory content, app name, and user ID.
+// Topics are intentionally excluded so that the same content always
+// produces the same ID regardless of topic variations, ensuring that
+// ON CONFLICT upsert deduplication works correctly.
 func GenerateMemoryID(mem *memory.Memory, appName, userID string) string {
 	var builder strings.Builder
 	builder.WriteString("memory:")
 	builder.WriteString(mem.Memory)
-
-	if len(mem.Topics) > 0 {
-		// Sort topics to ensure consistent ordering.
-		sortedTopics := make([]string, len(mem.Topics))
-		copy(sortedTopics, mem.Topics)
-		slices.Sort(sortedTopics)
-		builder.WriteString("|topics:")
-		builder.WriteString(strings.Join(sortedTopics, ","))
-	}
 
 	// Include app name and user ID to prevent cross-user conflicts.
 	builder.WriteString("|app:")
@@ -214,17 +222,14 @@ func shouldIncludeAutoMemoryTool(
 }
 
 // BuildSearchTokens builds tokens for searching memory content.
-// Notes:
-//   - Stopwords and minimum token length are fixed defaults for now; future versions may expose configuration.
-//   - CJK handling currently treats only unicode.Han as CJK. This is not the full CJK range
-//     (does not include Hiragana/Katakana/Hangul). Adjust if broader coverage is desired.
+// CJK text is segmented using jieba (gse) for accurate word boundaries.
+// English text uses whitespace splitting with stopword removal.
 func BuildSearchTokens(query string) []string {
 	const minTokenLen = 2
 	q := strings.TrimSpace(strings.ToLower(query))
 	if q == "" {
 		return nil
 	}
-	// Detect if contains any CJK rune.
 	hasCJK := false
 	for _, r := range q {
 		if isCJK(r) {
@@ -233,28 +238,28 @@ func BuildSearchTokens(query string) []string {
 		}
 	}
 	if hasCJK {
-		// Build bigrams over CJK runes.
-		runes := make([]rune, 0, utf8.RuneCountInString(q))
-		for _, r := range q {
-			if unicode.IsSpace(r) || isPunct(r) {
-				continue
-			}
-			runes = append(runes, r)
-		}
-		if len(runes) == 0 {
+		s, err := getSegmenter()
+		if err != nil {
 			return nil
 		}
-		if len(runes) == 1 {
-			return []string{string(runes[0])}
+		words := s.CutSearch(q, true)
+		toks := make([]string, 0, len(words))
+		for _, w := range words {
+			w = strings.TrimSpace(w)
+			if w == "" || isCJKStopword(w) {
+				continue
+			}
+			// Skip tokens that are purely punctuation or symbols.
+			if isPunctToken(w) {
+				continue
+			}
+			toks = append(toks, w)
 		}
-		toks := make([]string, 0, len(runes)-1)
-		for i := 0; i < len(runes)-1; i++ {
-			toks = append(toks, string([]rune{runes[i], runes[i+1]}))
+		if len(toks) == 0 {
+			return nil
 		}
 		return dedupStrings(toks)
 	}
-	// English-like tokenization.
-	// Replace non letter/digit with space.
 	b := make([]rune, 0, len(q))
 	for _, r := range q {
 		if unicode.IsLetter(r) || unicode.IsDigit(r) {
@@ -279,15 +284,39 @@ func BuildSearchTokens(query string) []string {
 
 // isCJK reports if the rune is a CJK character.
 func isCJK(r rune) bool {
-	if unicode.Is(unicode.Han, r) {
-		return true
-	}
-	return false
+	return unicode.Is(unicode.Han, r)
+}
+
+// cjkStopwords contains high-frequency CJK words that carry little
+// search value. In memory entries, "用户" appears in nearly every
+// record because the extraction prompt writes third-person statements.
+var cjkStopwords = map[string]struct{}{
+	"的": {}, "了": {}, "是": {}, "在": {}, "和": {},
+	"有": {}, "我": {}, "他": {}, "她": {}, "它": {},
+	"这": {}, "那": {}, "都": {}, "也": {}, "就": {},
+	"不": {}, "会": {}, "到": {}, "说": {}, "对": {},
+}
+
+func isCJKStopword(w string) bool {
+	_, ok := cjkStopwords[w]
+	return ok
 }
 
 // isPunct reports if the rune is punctuation or symbol.
 func isPunct(r rune) bool {
 	return unicode.IsPunct(r) || unicode.IsSymbol(r)
+}
+
+// isPunctToken reports if the string consists entirely of punctuation or
+// symbol runes. This is used to filter out tokens like "，" or "！" that
+// jieba may produce from CJK text.
+func isPunctToken(s string) bool {
+	for _, r := range s {
+		if !isPunct(r) {
+			return false
+		}
+	}
+	return true
 }
 
 // dedupStrings returns a deduplicated copy of the input slice.
@@ -319,60 +348,66 @@ func isStopword(s string) bool {
 }
 
 // MatchMemoryEntry checks if a memory entry matches the given query.
-// It uses token-based matching for better search accuracy.
-// The function returns true if the query matches either the memory content or any of the topics.
+// Kept for backward compatibility; returns true when the relevance
+// score is above the minimum threshold.
 func MatchMemoryEntry(entry *memory.Entry, query string) bool {
+	return ScoreMemoryEntry(entry, query) > 0
+}
+
+// ScoreMemoryEntry returns a relevance score in [0, 1] indicating how
+// well the entry matches the query. The score is the fraction of query
+// tokens that appear in the entry's content or topics. A score of 0
+// means no meaningful match.
+func ScoreMemoryEntry(entry *memory.Entry, query string) float64 {
 	if entry == nil || entry.Memory == nil {
-		return false
+		return 0
 	}
 
-	// Handle empty or whitespace-only queries.
 	query = strings.TrimSpace(query)
 	if query == "" {
-		return false
+		return 0
 	}
 
-	// Build tokens with shared EN and CJK handling.
 	tokens := BuildSearchTokens(query)
-	hasTokens := len(tokens) > 0
+	if len(tokens) == 0 {
+		// Fallback to substring match with a lower score to avoid
+		// distorting ranking when no tokens can be generated (e.g.
+		// short queries or stopword-only queries).
+		const fallbackScore = 0.5
+		ql := strings.ToLower(query)
+		contentLower := strings.ToLower(entry.Memory.Memory)
+		if strings.Contains(contentLower, ql) {
+			return fallbackScore
+		}
+		for _, topic := range entry.Memory.Topics {
+			if strings.Contains(strings.ToLower(topic), ql) {
+				return fallbackScore
+			}
+		}
+		return 0
+	}
 
 	contentLower := strings.ToLower(entry.Memory.Memory)
-	matched := false
-
-	if hasTokens {
-		// OR match on any token against content or topics.
-		for _, tk := range tokens {
-			if tk == "" {
-				continue
-			}
-			if strings.Contains(contentLower, tk) {
-				matched = true
-				break
-			}
-			for _, topic := range entry.Memory.Topics {
-				if strings.Contains(strings.ToLower(topic), tk) {
-					matched = true
-					break
-				}
-			}
-			if matched {
-				break
-			}
+	matched := 0
+	for _, tk := range tokens {
+		if tk == "" {
+			continue
 		}
-	} else {
-		// Fallback to original substring match when no tokens built.
-		ql := strings.ToLower(query)
-		if strings.Contains(contentLower, ql) {
-			matched = true
+		hit := false
+		if strings.Contains(contentLower, tk) {
+			hit = true
 		} else {
 			for _, topic := range entry.Memory.Topics {
-				if strings.Contains(strings.ToLower(topic), ql) {
-					matched = true
+				if strings.Contains(strings.ToLower(topic), tk) {
+					hit = true
 					break
 				}
 			}
+		}
+		if hit {
+			matched++
 		}
 	}
 
-	return matched
+	return float64(matched) / float64(len(tokens))
 }

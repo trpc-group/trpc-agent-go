@@ -28,6 +28,17 @@ import (
 
 var _ memory.Service = (*Service)(nil)
 
+const (
+	// minSearchScore is the minimum relevance score for a memory to be
+	// included in search results. With jieba (gse) tokenization a single
+	// common token matching yields a low fraction for a typical
+	// multi-token query; the threshold filters out such noise.
+	minSearchScore = 0.3
+
+	// defaultMaxSearchResults caps the number of search results.
+	defaultMaxSearchResults = 10
+)
+
 // Service is the mysql memory service.
 // Storage structure:
 //
@@ -331,12 +342,14 @@ func (s *Service) ReadMemories(ctx context.Context, userKey memory.UserKey, limi
 }
 
 // SearchMemories searches memories for a user.
+// Results are ranked by relevance score (fraction of query tokens
+// matched) and only the top entries above the minimum threshold are
+// returned.
 func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, query string) ([]*memory.Entry, error) {
 	if err := userKey.CheckUserKey(); err != nil {
 		return nil, err
 	}
 
-	// Get all memories for the user.
 	selectQuery := fmt.Sprintf(
 		"SELECT memory_data FROM %s WHERE app_name = ? AND user_id = ?",
 		s.tableName,
@@ -345,7 +358,12 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 		selectQuery += " AND deleted_at IS NULL"
 	}
 
-	results := make([]*memory.Entry, 0)
+	type scored struct {
+		entry *memory.Entry
+		score float64
+	}
+	var candidates []scored
+
 	err := s.db.Query(ctx, func(rows *sql.Rows) error {
 		var memoryData []byte
 		if err := rows.Scan(&memoryData); err != nil {
@@ -357,8 +375,8 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 			return fmt.Errorf("unmarshal memory entry failed: %w", err)
 		}
 
-		if imemory.MatchMemoryEntry(e, query) {
-			results = append(results, e)
+		if score := imemory.ScoreMemoryEntry(e, query); score >= minSearchScore {
+			candidates = append(candidates, scored{entry: e, score: score})
 		}
 		return nil
 	}, selectQuery, userKey.AppName, userKey.UserID)
@@ -367,14 +385,25 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 		return nil, fmt.Errorf("search memories failed: %w", err)
 	}
 
-	// Stable sort by updated time desc.
-	sort.Slice(results, func(i, j int) bool {
-		if results[i].UpdatedAt.Equal(results[j].UpdatedAt) {
-			return results[i].CreatedAt.After(results[j].CreatedAt)
+	// Sort by score desc, then by updated_at desc, then created_at desc.
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].score != candidates[j].score {
+			return candidates[i].score > candidates[j].score
 		}
-		return results[i].UpdatedAt.After(results[j].UpdatedAt)
+		if !candidates[i].entry.UpdatedAt.Equal(candidates[j].entry.UpdatedAt) {
+			return candidates[i].entry.UpdatedAt.After(candidates[j].entry.UpdatedAt)
+		}
+		return candidates[i].entry.CreatedAt.After(candidates[j].entry.CreatedAt)
 	})
 
+	limit := defaultMaxSearchResults
+	if len(candidates) < limit {
+		limit = len(candidates)
+	}
+	results := make([]*memory.Entry, limit)
+	for i := 0; i < limit; i++ {
+		results[i] = candidates[i].entry
+	}
 	return results, nil
 }
 

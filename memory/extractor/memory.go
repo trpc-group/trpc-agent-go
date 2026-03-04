@@ -241,13 +241,22 @@ func (e *memoryExtractor) buildSystemPrompt(
 	sb.WriteString(e.availableActionsBlock())
 	sb.WriteString("</available_actions>\n")
 
-	// Append existing memories.
+	// Append existing memories with topics visible so the model can
+	// reuse consistent topic names.
 	if len(existing) > 0 {
 		sb.WriteString("\n<existing_memories>\n")
 		for _, entry := range existing {
 			if entry.Memory != nil {
-				fmt.Fprintf(&sb,
-					"- [%s] %s\n", entry.ID, entry.Memory.Memory)
+				if len(entry.Memory.Topics) > 0 {
+					fmt.Fprintf(&sb,
+						"- [%s] %s (topics: %s)\n",
+						entry.ID,
+						entry.Memory.Memory,
+						strings.Join(entry.Memory.Topics, ", "))
+				} else {
+					fmt.Fprintf(&sb,
+						"- [%s] %s\n", entry.ID, entry.Memory.Memory)
+				}
 			}
 		}
 		sb.WriteString("</existing_memories>\n")
@@ -265,7 +274,8 @@ var toolActionDescriptions = map[string]string{
 		"with new or corrected information. " +
 		"Prefer updating over adding a near-duplicate.",
 	memory.DeleteToolName: "Delete a memory " +
-		"when the user explicitly asks to forget something.",
+		"when the user asks to forget something, or when it is " +
+		"clearly outdated or contradicted by newer information.",
 	memory.ClearToolName: "Clear all memories " +
 		"only when the user explicitly asks to forget everything.",
 }
@@ -390,8 +400,14 @@ Your task is to analyze the conversation and manage user memories.
 </instructions>
 
 <guidelines>
-- Create memories as brief, third-person statements that capture key
-  information, e.g., "User enjoys hiking on weekends."
+- Create memories as brief, concise statements that directly describe
+  attributes or facts WITHOUT a subject prefix. Omit "User", "The user",
+  or any equivalent pronoun/noun at the start, because each memory is
+  already bound to a specific user. Examples:
+    Good: "Enjoys hiking on weekends"
+    Good: "Works as a backend engineer at Tencent"
+    Bad:  "User enjoys hiking on weekends"
+    Bad:  "The user works at Tencent"
 - Keep each memory focused on a single piece of information. Create
   multiple memories if needed rather than one long complex memory.
 - Do not repeat the same information in multiple memories; update
@@ -400,11 +416,18 @@ Your task is to analyze the conversation and manage user memories.
   memory rather than completely overwriting it.
 - When a user's preferences change, update the relevant memory to
   reflect the new state.
-- Only use delete when the user explicitly asks to forget something.
+- Use delete when the user explicitly asks to forget something, or when
+  an existing memory is clearly outdated or contradicted by newer
+  information in the conversation (e.g., the user changed jobs, moved
+  to a new city, or reversed a preference).
 - Only use clear when the user explicitly asks to forget everything.
 - Write memory content and topics in the same language as the user's
   input message. For example, if the user writes in Chinese, write
   memories and topics in Chinese.
+- When assigning topics, prefer reusing topic names that already appear
+  in existing memories rather than inventing synonyms. For example, if
+  existing memories use "work", do not use "job" or "career" for the
+  same concept.
 - Do not create memories for:
   - Transient requests or questions
   - Information already captured in existing memories

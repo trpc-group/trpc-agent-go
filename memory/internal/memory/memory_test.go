@@ -11,7 +11,9 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -119,10 +121,10 @@ func TestBuildSearchTokens(t *testing.T) {
 		{"english with numbers", "test123 abc456", []string{"test123", "abc456"}},
 		{"mixed case", "Hello World", []string{"hello", "world"}},
 		{"chinese single character", "中", []string{"中"}},
-		{"chinese bigrams", "中文测试", []string{"中文", "文测", "测试"}},
-		{"chinese with punctuation", "中文，测试！", []string{"中文", "文测", "测试"}},
-		{"chinese with spaces", "中文 测试", []string{"中文", "文测", "测试"}},
-		{"mixed chinese and english", "hello中文world", []string{"he", "el", "ll", "lo", "o中", "中文", "文w", "wo", "or", "rl", "ld"}},
+		{"chinese words", "中文测试", []string{"中文", "测试"}},
+		{"chinese with punctuation", "中文，测试！", []string{"中文", "测试"}},
+		{"chinese with spaces", "中文 测试", []string{"中文", "测试"}},
+		{"mixed chinese and english", "hello中文world", []string{"hello", "中文", "world"}},
 		{"only punctuation", "!@#$%", []string{}},
 		{"only stopwords", "the and or", []string{}},
 	}
@@ -158,7 +160,7 @@ func TestBuildSearchTokens_EdgeCases(t *testing.T) {
 
 	t.Run("mixed CJK and punctuation", func(t *testing.T) {
 		result := BuildSearchTokens("中文，测试！")
-		expected := []string{"中文", "文测", "测试"}
+		expected := []string{"中文", "测试"}
 		assert.Equal(t, expected, result)
 	})
 }
@@ -488,12 +490,33 @@ func TestMatchMemoryEntry_FallbackNoTokens(t *testing.T) {
 }
 
 func TestBuildSearchTokens_Duplicates(t *testing.T) {
-	// Test deduplication in bigrams.
-	result := BuildSearchTokens("中中中中")
-	assert.NotNil(t, result)
-	// Should have deduplicated "中中" bigram.
-	assert.Len(t, result, 1)
-	assert.Equal(t, "中中", result[0])
+	t.Run("english duplicates", func(t *testing.T) {
+		result := BuildSearchTokens("foo foo bar foo bar baz")
+		assert.Equal(t, []string{"foo", "bar", "baz"}, result)
+	})
+
+	t.Run("chinese duplicates", func(t *testing.T) {
+		result := BuildSearchTokens("中中中中")
+		assert.NotNil(t, result)
+		// Verify no duplicate tokens exist.
+		seen := make(map[string]struct{})
+		for _, tok := range result {
+			_, exists := seen[tok]
+			assert.False(t, exists, "duplicate token found: %s", tok)
+			seen[tok] = struct{}{}
+		}
+	})
+
+	t.Run("mixed duplicates", func(t *testing.T) {
+		result := BuildSearchTokens("hello hello 世界 世界")
+		assert.NotNil(t, result)
+		seen := make(map[string]struct{})
+		for _, tok := range result {
+			_, exists := seen[tok]
+			assert.False(t, exists, "duplicate token found: %s", tok)
+			seen[tok] = struct{}{}
+		}
+	})
 }
 
 func TestMatchMemoryEntry_EmptyTokensWithTopics(t *testing.T) {
@@ -652,20 +675,19 @@ func TestGenerateMemoryID(t *testing.T) {
 		assert.NotEqual(t, id1, id2)
 	})
 
-	t.Run("same content different topics produce different IDs", func(t *testing.T) {
+	t.Run("same content different topics produce same ID", func(t *testing.T) {
 		mem1 := &memory.Memory{Memory: "User likes coffee", Topics: []string{"food"}}
 		mem2 := &memory.Memory{Memory: "User likes coffee", Topics: []string{"drink"}}
 		id1 := GenerateMemoryID(mem1, testAppName, testUserID)
 		id2 := GenerateMemoryID(mem2, testAppName, testUserID)
-		assert.NotEqual(t, id1, id2)
+		assert.Equal(t, id1, id2)
 	})
 
-	t.Run("topics order does not affect ID", func(t *testing.T) {
+	t.Run("topics do not affect ID", func(t *testing.T) {
 		mem1 := &memory.Memory{Memory: "User likes coffee", Topics: []string{"a", "b"}}
 		mem2 := &memory.Memory{Memory: "User likes coffee", Topics: []string{"b", "a"}}
 		id1 := GenerateMemoryID(mem1, testAppName, testUserID)
 		id2 := GenerateMemoryID(mem2, testAppName, testUserID)
-		// Same order after sorting produces same IDs.
 		assert.Equal(t, id1, id2)
 	})
 
@@ -867,6 +889,93 @@ func TestShouldIncludeTool(t *testing.T) {
 	})
 }
 
+func TestScoreMemoryEntry_FallbackTopicMatch(t *testing.T) {
+	// When tokens are empty (e.g. single char query), fallback to substring
+	// matching. This test covers the topic match branch in fallback.
+	entry := &memory.Entry{
+		Memory: &memory.Memory{
+			Memory: "Some unrelated content",
+			Topics: []string{"special!topic"},
+		},
+	}
+
+	// "!" produces no tokens, so fallback is used.
+	// "special!" should match the topic via substring.
+	score := ScoreMemoryEntry(entry, "!")
+	assert.Equal(t, 0.5, score)
+}
+
+func TestScoreMemoryEntry_FallbackContentMatch(t *testing.T) {
+	entry := &memory.Entry{
+		Memory: &memory.Memory{
+			Memory: "Test! content",
+			Topics: []string{"other"},
+		},
+	}
+	// "!" produces no tokens, fallback matches content substring.
+	score := ScoreMemoryEntry(entry, "!")
+	assert.Equal(t, 0.5, score)
+}
+
+func TestScoreMemoryEntry_FallbackNoMatch(t *testing.T) {
+	entry := &memory.Entry{
+		Memory: &memory.Memory{
+			Memory: "Some content",
+			Topics: []string{"topic"},
+		},
+	}
+	// "~" produces no tokens and doesn't match content or topics.
+	score := ScoreMemoryEntry(entry, "~")
+	assert.Equal(t, 0.0, score)
+}
+
+func TestScoreMemoryEntry_PartialTokenMatch(t *testing.T) {
+	entry := &memory.Entry{
+		Memory: &memory.Memory{
+			Memory: "User likes coffee and hiking",
+			Topics: []string{"preferences"},
+		},
+	}
+	// "coffee tea" -> tokens ["coffee", "tea"], only "coffee" matches.
+	score := ScoreMemoryEntry(entry, "coffee tea")
+	assert.Equal(t, 0.5, score)
+}
+
+func TestScoreMemoryEntry_TopicOnlyMatch(t *testing.T) {
+	entry := &memory.Entry{
+		Memory: &memory.Memory{
+			Memory: "Some content",
+			Topics: []string{"preferences", "hobbies"},
+		},
+	}
+	// "preferences xyz" -> tokens ["preferences", "xyz"],
+	// only "preferences" matches (in topics).
+	score := ScoreMemoryEntry(entry, "preferences xyz")
+	assert.Equal(t, 0.5, score)
+}
+
+func TestIsPunctToken(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected bool
+	}{
+		{"chinese comma", "，", true},
+		{"chinese period", "。", true},
+		{"mixed", "，a", false},
+		{"letters", "abc", false},
+		{"multiple punct", "!@#", true},
+		{"empty string", "", true}, // vacuously true
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isPunctToken(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
 func TestShouldIncludeAutoMemoryTool(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -887,4 +996,54 @@ func TestShouldIncludeAutoMemoryTool(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestGetSegmenter_ErrorPath(t *testing.T) {
+	// Save original state.
+	origOnce := segOnce
+	origErr := segErr
+
+	// Restore after test.
+	defer func() {
+		segOnce = origOnce
+		segErr = origErr
+	}()
+
+	// Simulate a failed LoadDict by setting segErr and marking Once as done.
+	segOnce = sync.Once{}
+	segOnce.Do(func() {
+		segErr = errors.New("mock dict load failure")
+	})
+
+	s, err := getSegmenter()
+	assert.Nil(t, s)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "load segmenter dict failed")
+}
+
+func TestBuildSearchTokens_SegmenterError(t *testing.T) {
+	// Save original state.
+	origOnce := segOnce
+	origErr := segErr
+
+	defer func() {
+		segOnce = origOnce
+		segErr = origErr
+	}()
+
+	// Simulate segmenter error.
+	segOnce = sync.Once{}
+	segOnce.Do(func() {
+		segErr = errors.New("mock error")
+	})
+
+	// CJK query triggers getSegmenter, which returns error -> nil result.
+	result := BuildSearchTokens("中文测试")
+	assert.Nil(t, result)
+}
+
+func TestBuildSearchTokens_CJKAllStopwords(t *testing.T) {
+	// CJK input where all tokens are stopwords -> toks is empty -> returns nil.
+	result := BuildSearchTokens("的了是在")
+	assert.Nil(t, result)
 }
