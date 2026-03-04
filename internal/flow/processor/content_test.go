@@ -4207,7 +4207,7 @@ func TestContentRequestProcessor_AnnotatesUserFileInputs(t *testing.T) {
 	assert.Equal(t, 2, fileParts)
 }
 
-func TestContentRequestProcessor_AnnotatesUserFileInputs_ArtifactRef(t *testing.T) {
+func TestContentRequestProcessor_AnnotatesArtifactRefInputs(t *testing.T) {
 	p := NewContentRequestProcessor()
 
 	const (
