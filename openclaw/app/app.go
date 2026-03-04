@@ -40,7 +40,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
-	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwclient"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/octool"
 	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
@@ -368,17 +367,7 @@ func NewRuntime(
 		CancelPath:   gwSrv.CancelPath(),
 	}
 
-	gw, err := gwclient.New(
-		gwSrv.Handler(),
-		gwSrv.MessagesPath(),
-		gwSrv.CancelPath(),
-	)
-	if err != nil {
-		return nil, &exitError{
-			Code: 1,
-			Err:  fmt.Errorf("create gateway client failed: %w", err),
-		}
-	}
+	gw := newInProcGatewayClient(gwSrv)
 
 	if len(opts.Channels) > 0 {
 		extra, err := channelsFromRegistry(
@@ -599,17 +588,7 @@ func run(ctx context.Context, args []string) error {
 		}
 	}
 
-	gw, err := gwclient.New(
-		gwSrv.Handler(),
-		gwSrv.MessagesPath(),
-		gwSrv.CancelPath(),
-	)
-	if err != nil {
-		return &exitError{
-			Code: 1,
-			Err:  fmt.Errorf("create gateway client failed: %w", err),
-		}
-	}
+	gw := newInProcGatewayClient(gwSrv)
 
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()

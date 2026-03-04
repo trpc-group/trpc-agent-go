@@ -698,6 +698,52 @@ func TestServer_Messages_ContentParts_URLFetch_AllowedDomains_Allows(
 	require.Equal(t, []byte("wavdata"), msg.ContentParts[0].Audio.Data)
 }
 
+func TestServer_ProcessMessage_LargeInlineData(t *testing.T) {
+	t.Parallel()
+
+	r := &recordingRunner{}
+	srv, err := New(r)
+	require.NoError(t, err)
+
+	data := bytes.Repeat([]byte("a"), int(defaultMaxBodyBytes))
+	req := gwproto.MessageRequest{
+		From: "u1",
+		ContentParts: []gwproto.ContentPart{
+			{
+				Type: gwproto.PartTypeFile,
+				File: &gwproto.FilePart{
+					Filename: "a.txt",
+					Data:     data,
+				},
+			},
+		},
+	}
+
+	rsp, status := srv.ProcessMessage(context.Background(), req)
+	require.Equal(t, http.StatusOK, status)
+	require.Equal(t, "ok", rsp.Reply)
+	require.Equal(t, "req-1", rsp.RequestID)
+
+	msg := r.Last()
+	require.Len(t, msg.ContentParts, 1)
+	require.Equal(t, model.ContentTypeFile, msg.ContentParts[0].Type)
+	require.NotNil(t, msg.ContentParts[0].File)
+	require.Len(t, msg.ContentParts[0].File.Data, len(data))
+
+	body, err := json.Marshal(req)
+	require.NoError(t, err)
+
+	rr := httptest.NewRecorder()
+	httpReq := httptest.NewRequest(
+		http.MethodPost,
+		srv.MessagesPath(),
+		bytes.NewReader(body),
+	)
+	srv.Handler().ServeHTTP(rr, httpReq)
+
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
 func TestServer_New_RequireMentionWithoutPatterns(t *testing.T) {
 	t.Parallel()
 
@@ -1169,6 +1215,17 @@ func TestServer_Messages_EventError(t *testing.T) {
 	require.Equal(t, errTypeInternal, rsp.Error.Type)
 }
 
+func TestServer_ProcessMessage_NilServer(t *testing.T) {
+	t.Parallel()
+
+	var srv *Server
+	rsp, status := srv.ProcessMessage(nil, gwproto.MessageRequest{})
+	require.Equal(t, http.StatusInternalServerError, status)
+	require.NotNil(t, rsp.Error)
+	require.Equal(t, errTypeInternal, rsp.Error.Type)
+	require.Equal(t, "nil server", rsp.Error.Message)
+}
+
 func TestServer_Messages_EmptyReply(t *testing.T) {
 	t.Parallel()
 
@@ -1227,6 +1284,45 @@ func TestServer_Status_MissingRequestID(t *testing.T) {
 	srv.Handler().ServeHTTP(rr, req)
 
 	require.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+func TestServer_CancelRequest_NilContext(t *testing.T) {
+	t.Parallel()
+
+	r := &managedRunnerStub{
+		status: runner.RunStatus{
+			RequestID: "req-1",
+			AgentName: "agent",
+		},
+	}
+	srv, err := New(r)
+	require.NoError(t, err)
+
+	canceled, apiErr, status := srv.CancelRequest(nil, "req-1")
+	require.True(t, canceled)
+	require.Nil(t, apiErr)
+	require.Equal(t, http.StatusOK, status)
+}
+
+func TestServer_CancelRequest_NoMatchReturnsFalse(t *testing.T) {
+	t.Parallel()
+
+	r := &managedRunnerStub{
+		status: runner.RunStatus{
+			RequestID: "req-1",
+			AgentName: "agent",
+		},
+	}
+	srv, err := New(r)
+	require.NoError(t, err)
+
+	canceled, apiErr, status := srv.CancelRequest(
+		context.Background(),
+		"missing",
+	)
+	require.False(t, canceled)
+	require.Nil(t, apiErr)
+	require.Equal(t, http.StatusOK, status)
 }
 
 func TestServer_Cancel_MissingRequestID(t *testing.T) {
