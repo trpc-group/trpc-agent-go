@@ -26,4 +26,3 @@ func WithPutMimeType(mimeType string) PutOption {
 		o.MimeType = mimeType
 	}
 }
-
