@@ -9,7 +9,7 @@ replace (
 
 require (
 	github.com/google/uuid v1.6.0
-	trpc.group/trpc-go/trpc-agent-go v0.2.0
+	trpc.group/trpc-go/trpc-agent-go v0.5.0
 	trpc.group/trpc-go/trpc-agent-go/codeexecutor/container v0.5.0
 )
 

@@ -16,6 +16,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -538,34 +539,27 @@ func (c *skillChat) handleUploadArtifact(
 	}
 	name := artifactUploadPrefix + uuid.NewString() + "_" +
 		base
-	info := artifact.SessionInfo{
+	key := artifact.Key{
 		AppName:   appName,
 		UserID:    c.userID,
 		SessionID: c.sessionID,
+		Scope:     artifact.ScopeSession,
+		Name:      name,
 	}
 	mt := guessMimeType(base, data)
-	ver, err := c.artSvc.SaveArtifact(
-		ctx,
-		info,
-		name,
-		&artifact.Artifact{
-			Data:     data,
-			MimeType: mt,
-			Name:     base,
-		},
-	)
+	desc, err := c.artSvc.Put(ctx, key, bytes.NewReader(data), artifact.WithPutMimeType(mt))
 	if err != nil {
 		return err
 	}
 	ref := fmt.Sprintf(
-		"%s%s@%d",
+		"%s%s@%s",
 		artifactRefPrefix,
 		name,
-		ver,
+		desc.Version,
 	)
 	msg := model.NewUserMessage("Uploaded file: " + base)
 	msg.AddFileIDWithName(ref, base)
-	fmt.Printf("📤 Uploaded to %s@%d\n", name, ver)
+	fmt.Printf("📤 Uploaded to %s@%s\n", name, desc.Version)
 	return c.processModelMessage(ctx, msg)
 }
 
