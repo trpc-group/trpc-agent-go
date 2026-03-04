@@ -117,6 +117,11 @@ request waits until the first finishes. This keeps:
 
 Different sessions can still run in parallel.
 
+Note: This is per-session **run** serialization. Inside one run, you can
+still execute multiple tool calls concurrently if you enable parallel
+tool execution (for example, LLMAgent `WithEnableParallelTools(true)` or
+the OpenClaw flag `-enable-parallel-tools`).
+
 ## Safety defaults
 
 External messages are untrusted input. The gateway provides two common safety

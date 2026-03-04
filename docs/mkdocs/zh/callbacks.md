@@ -752,6 +752,12 @@ toolCallbacks := tool.NewCallbacks().
 用户认证与授权示例（使用 Invocation State 进行权限检查和审计日志）请参考：
 [examples/callbacks/auth](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/auth)
 
+注意：`BeforeToolCallback` 只会在“模型实际发起工具调用”时触发。
+如果你把工具结果写入 session 历史，而权限会在同一 session 中发生变化，
+模型可能复用历史答案而不再调用工具，从而绕过工具前回调的鉴权。
+这类场景需要在 Prompt 构建阶段做历史隔离/过滤，参考 Session 文档中的
+「权限变更与历史隔离」章节。
+
 ---
 
 ## 全局回调与链式注册

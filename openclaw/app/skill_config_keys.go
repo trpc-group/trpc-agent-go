@@ -29,9 +29,6 @@ const (
 	configKeyPluginsEnabledSuffix = ".enabled"
 	configKeyPluginsConfigPrefix  = ".config"
 
-	configKeyTelegram = "telegram"
-	configKeyToken    = "token"
-
 	configKeyExec      = "exec"
 	configKeyBash      = "bash"
 	configKeyProcess   = "process"
@@ -41,7 +38,6 @@ const (
 func resolveSkillConfigKeys(opts runOptions) []string {
 	set := map[string]struct{}{}
 
-	addTelegramConfigKeys(set, opts)
 	addPluginSpecsConfigKeys(set, configKeyChannelsPrefix, opts.Channels)
 	addPluginSpecsConfigKeys(
 		set,
@@ -57,23 +53,6 @@ func resolveSkillConfigKeys(opts runOptions) []string {
 	}
 	sort.Strings(out)
 	return out
-}
-
-func addTelegramConfigKeys(set map[string]struct{}, opts runOptions) {
-	if strings.TrimSpace(opts.TelegramToken) == "" {
-		return
-	}
-
-	chBase := configKeyChannelsPrefix + configKeyTelegram
-	addConfigKey(set, chBase)
-	addConfigKey(set, chBase+"."+configKeyToken)
-
-	entryBase := configKeyPluginsEntriesPrefix + configKeyTelegram
-	addConfigKey(set, entryBase+configKeyPluginsEnabledSuffix)
-
-	cfgBase := entryBase + configKeyPluginsConfigPrefix
-	addConfigKey(set, cfgBase)
-	addConfigKey(set, cfgBase+"."+configKeyToken)
 }
 
 func addPluginSpecsConfigKeys(

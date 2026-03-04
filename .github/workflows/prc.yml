@@ -245,6 +245,17 @@ jobs:
           go-version: "1.21"
       - name: Check examples go.mod, go.sum and build
         run: bash .github/scripts/check-examples.sh
+  check-examples-build-script:
+    name: check examples build script
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+      - name: Build examples with CGO disabled
+        shell: bash
+        run: bash .github/scripts/check-examples-build.sh
   check-lfs-excluded:
     name: check git lfs excluded
     runs-on: ubuntu-latest

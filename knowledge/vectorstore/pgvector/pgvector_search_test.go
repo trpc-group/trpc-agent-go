@@ -522,3 +522,373 @@ func TestVectorStore_Search_InvalidMode(t *testing.T) {
 	require.Nil(t, result)
 	tc.AssertExpectations(t)
 }
+
+// TestVectorStore_SearchByHybridRRF tests RRF hybrid search with mock DB
+func TestVectorStore_SearchByHybridRRF(t *testing.T) {
+	t.Run("rrf_basic_vector_and_text", func(t *testing.T) {
+		vs, tc := newTestVectorStoreWithTSVector(t,
+			WithHybridFusionMode(HybridFusionRRF),
+			WithRRFParams(&RRFParams{K: 60, CandidateRatio: 3}),
+		)
+		defer tc.Close()
+
+		// RRF sub-queries run in parallel goroutines, so disable ordered matching.
+		tc.mock.MatchExpectationsInOrder(false)
+
+		// Mock vector rank sub-query: returns (id, rank)
+		vectorRankRows := sqlmock.NewRows([]string{"id", "rank"}).
+			AddRow("doc_1", 1).
+			AddRow("doc_2", 2).
+			AddRow("doc_3", 3)
+		tc.mock.ExpectQuery("SELECT id, ROW_NUMBER.+ORDER BY embedding").
+			WillReturnRows(vectorRankRows)
+
+		// Mock text rank sub-query: returns (id, rank)
+		textRankRows := sqlmock.NewRows([]string{"id", "rank"}).
+			AddRow("doc_2", 1).
+			AddRow("doc_1", 2).
+			AddRow("doc_4", 3)
+		tc.mock.ExpectQuery("SELECT id, ROW_NUMBER.+ts_rank").
+			WillReturnRows(textRankRows)
+
+		// Mock fetch-by-IDs query
+		fetchRows := sqlmock.NewRows([]string{
+			"id", "name", "content", "embedding", "metadata",
+			"created_at", "updated_at", "vector_score", "text_score", "score",
+		}).
+			AddRow("doc_1", "Doc 1", "content 1", "[0.1,0.2]", `{}`, 1000, 2000, 0.0, 0.0, 0.0).
+			AddRow("doc_2", "Doc 2", "content 2", "[0.3,0.4]", `{}`, 1000, 2000, 0.0, 0.0, 0.0).
+			AddRow("doc_3", "Doc 3", "content 3", "[0.5,0.6]", `{}`, 1000, 2000, 0.0, 0.0, 0.0).
+			AddRow("doc_4", "Doc 4", "content 4", "[0.7,0.8]", `{}`, 1000, 2000, 0.0, 0.0, 0.0)
+		tc.mock.ExpectQuery("SELECT .+ FROM documents WHERE id IN").
+			WillReturnRows(fetchRows)
+
+		query := &vectorstore.SearchQuery{
+			Vector:     []float64{0.1, 0.2},
+			Query:      "test query",
+			Limit:      10,
+			SearchMode: vectorstore.SearchModeHybrid,
+		}
+
+		result, err := vs.Search(context.Background(), query)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		// doc_2 appears in both lists (rank 2 vector + rank 1 text) => highest RRF score
+		// doc_1 appears in both lists (rank 1 vector + rank 2 text)
+		// doc_2: 1/(60+2) + 1/(60+1) = 1/62 + 1/61
+		// doc_1: 1/(60+1) + 1/(60+2) = 1/61 + 1/62
+		// They have the same score, but order may vary; both should be present
+		assert.GreaterOrEqual(t, len(result.Results), 3)
+
+		// Verify all results have RRF scores set
+		for _, doc := range result.Results {
+			assert.Greater(t, doc.Score, 0.0)
+			assert.Contains(t, doc.Document.Metadata, "trpc_agent_go_dense_score")
+			assert.Contains(t, doc.Document.Metadata, "trpc_agent_go_sparse_score")
+		}
+
+		tc.AssertExpectations(t)
+	})
+
+	t.Run("rrf_vector_only_no_text_query", func(t *testing.T) {
+		vs, tc := newTestVectorStoreWithTSVector(t,
+			WithHybridFusionMode(HybridFusionRRF),
+		)
+		defer tc.Close()
+
+		// Only vector rank sub-query expected (no text query)
+		vectorRankRows := sqlmock.NewRows([]string{"id", "rank"}).
+			AddRow("doc_1", 1).
+			AddRow("doc_2", 2)
+		tc.mock.ExpectQuery("SELECT id, ROW_NUMBER.+ORDER BY embedding").
+			WillReturnRows(vectorRankRows)
+
+		// Mock fetch-by-IDs query
+		fetchRows := sqlmock.NewRows([]string{
+			"id", "name", "content", "embedding", "metadata",
+			"created_at", "updated_at", "vector_score", "text_score", "score",
+		}).
+			AddRow("doc_1", "Doc 1", "content 1", "[0.1,0.2]", `{}`, 1000, 2000, 0.0, 0.0, 0.0).
+			AddRow("doc_2", "Doc 2", "content 2", "[0.3,0.4]", `{}`, 1000, 2000, 0.0, 0.0, 0.0)
+		tc.mock.ExpectQuery("SELECT .+ FROM documents WHERE id IN").
+			WillReturnRows(fetchRows)
+
+		query := &vectorstore.SearchQuery{
+			Vector:     []float64{0.1, 0.2},
+			Query:      "", // no text query
+			Limit:      5,
+			SearchMode: vectorstore.SearchModeHybrid,
+		}
+
+		result, err := vs.Search(context.Background(), query)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assert.Len(t, result.Results, 2)
+
+		// doc_1 rank=1 => score = 1/(60+1) ≈ 0.01639
+		// doc_2 rank=2 => score = 1/(60+2) ≈ 0.01613
+		assert.Greater(t, result.Results[0].Score, result.Results[1].Score)
+		// text_score should be 0 for all docs
+		for _, doc := range result.Results {
+			assert.Equal(t, 0.0, doc.Document.Metadata["trpc_agent_go_sparse_score"])
+		}
+
+		tc.AssertExpectations(t)
+	})
+
+	t.Run("rrf_empty_results", func(t *testing.T) {
+		vs, tc := newTestVectorStoreWithTSVector(t,
+			WithHybridFusionMode(HybridFusionRRF),
+		)
+		defer tc.Close()
+
+		tc.mock.MatchExpectationsInOrder(false)
+
+		// Both sub-queries return empty
+		vectorRankRows := sqlmock.NewRows([]string{"id", "rank"})
+		tc.mock.ExpectQuery("SELECT id, ROW_NUMBER.+ORDER BY embedding").
+			WillReturnRows(vectorRankRows)
+
+		textRankRows := sqlmock.NewRows([]string{"id", "rank"})
+		tc.mock.ExpectQuery("SELECT id, ROW_NUMBER.+ts_rank").
+			WillReturnRows(textRankRows)
+
+		query := &vectorstore.SearchQuery{
+			Vector:     []float64{0.1, 0.2},
+			Query:      "no match",
+			Limit:      5,
+			SearchMode: vectorstore.SearchModeHybrid,
+		}
+
+		result, err := vs.Search(context.Background(), query)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assert.Empty(t, result.Results)
+
+		tc.AssertExpectations(t)
+	})
+
+	t.Run("rrf_vector_query_error", func(t *testing.T) {
+		vs, tc := newTestVectorStoreWithTSVector(t,
+			WithHybridFusionMode(HybridFusionRRF),
+		)
+		defer tc.Close()
+
+		tc.mock.MatchExpectationsInOrder(false)
+
+		tc.mock.ExpectQuery("SELECT id, ROW_NUMBER.+ORDER BY embedding").
+			WillReturnError(errors.New("db connection lost"))
+
+		textRankRows := sqlmock.NewRows([]string{"id", "rank"}).
+			AddRow("doc_1", 1)
+		tc.mock.ExpectQuery("SELECT id, ROW_NUMBER.+ts_rank").
+			WillReturnRows(textRankRows)
+
+		query := &vectorstore.SearchQuery{
+			Vector:     []float64{0.1, 0.2},
+			Query:      "test",
+			Limit:      5,
+			SearchMode: vectorstore.SearchModeHybrid,
+		}
+
+		result, err := vs.Search(context.Background(), query)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "rrf vector search")
+		assert.Nil(t, result)
+	})
+
+	t.Run("rrf_text_query_error", func(t *testing.T) {
+		vs, tc := newTestVectorStoreWithTSVector(t,
+			WithHybridFusionMode(HybridFusionRRF),
+		)
+		defer tc.Close()
+
+		tc.mock.MatchExpectationsInOrder(false)
+
+		vectorRankRows := sqlmock.NewRows([]string{"id", "rank"}).
+			AddRow("doc_1", 1)
+		tc.mock.ExpectQuery("SELECT id, ROW_NUMBER.+ORDER BY embedding").
+			WillReturnRows(vectorRankRows)
+
+		tc.mock.ExpectQuery("SELECT id, ROW_NUMBER.+ts_rank").
+			WillReturnError(errors.New("text search failed"))
+
+		query := &vectorstore.SearchQuery{
+			Vector:     []float64{0.1, 0.2},
+			Query:      "test",
+			Limit:      5,
+			SearchMode: vectorstore.SearchModeHybrid,
+		}
+
+		result, err := vs.Search(context.Background(), query)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "rrf text search")
+		assert.Nil(t, result)
+	})
+
+	t.Run("rrf_missing_vector_returns_error", func(t *testing.T) {
+		vs, tc := newTestVectorStoreWithTSVector(t,
+			WithHybridFusionMode(HybridFusionRRF),
+		)
+		defer tc.Close()
+
+		query := &vectorstore.SearchQuery{
+			Vector:     nil, // no vector
+			Query:      "test",
+			Limit:      5,
+			SearchMode: vectorstore.SearchModeHybrid,
+		}
+
+		result, err := vs.Search(context.Background(), query)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "vector is required")
+		assert.Nil(t, result)
+	})
+
+	t.Run("rrf_respects_limit", func(t *testing.T) {
+		vs, tc := newTestVectorStoreWithTSVector(t,
+			WithHybridFusionMode(HybridFusionRRF),
+			WithRRFParams(&RRFParams{K: 60, CandidateRatio: 2}),
+		)
+		defer tc.Close()
+
+		// Return many candidates
+		vectorRankRows := sqlmock.NewRows([]string{"id", "rank"}).
+			AddRow("doc_1", 1).
+			AddRow("doc_2", 2).
+			AddRow("doc_3", 3).
+			AddRow("doc_4", 4).
+			AddRow("doc_5", 5)
+		tc.mock.ExpectQuery("SELECT id, ROW_NUMBER.+ORDER BY embedding").
+			WillReturnRows(vectorRankRows)
+
+		// Mock fetch-by-IDs (only top 2 should be fetched)
+		fetchRows := sqlmock.NewRows([]string{
+			"id", "name", "content", "embedding", "metadata",
+			"created_at", "updated_at", "vector_score", "text_score", "score",
+		}).
+			AddRow("doc_1", "Doc 1", "c1", "[0.1,0.2]", `{}`, 1000, 2000, 0.0, 0.0, 0.0).
+			AddRow("doc_2", "Doc 2", "c2", "[0.3,0.4]", `{}`, 1000, 2000, 0.0, 0.0, 0.0)
+		tc.mock.ExpectQuery("SELECT .+ FROM documents WHERE id IN").
+			WillReturnRows(fetchRows)
+
+		query := &vectorstore.SearchQuery{
+			Vector:     []float64{0.1, 0.2},
+			Query:      "", // no text
+			Limit:      2,  // only want 2
+			SearchMode: vectorstore.SearchModeHybrid,
+		}
+
+		result, err := vs.Search(context.Background(), query)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assert.Len(t, result.Results, 2)
+
+		tc.AssertExpectations(t)
+	})
+
+	t.Run("rrf_fetch_documents_error", func(t *testing.T) {
+		vs, tc := newTestVectorStoreWithTSVector(t,
+			WithHybridFusionMode(HybridFusionRRF),
+		)
+		defer tc.Close()
+
+		vectorRankRows := sqlmock.NewRows([]string{"id", "rank"}).
+			AddRow("doc_1", 1)
+		tc.mock.ExpectQuery("SELECT id, ROW_NUMBER.+ORDER BY embedding").
+			WillReturnRows(vectorRankRows)
+
+		tc.mock.ExpectQuery("SELECT .+ FROM documents WHERE id IN").
+			WillReturnError(errors.New("fetch failed"))
+
+		query := &vectorstore.SearchQuery{
+			Vector:     []float64{0.1, 0.2},
+			Query:      "", // no text
+			Limit:      5,
+			SearchMode: vectorstore.SearchModeHybrid,
+		}
+
+		result, err := vs.Search(context.Background(), query)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "rrf fetch documents")
+		assert.Nil(t, result)
+	})
+
+	t.Run("rrf_score_calculation_correctness", func(t *testing.T) {
+		vs, tc := newTestVectorStoreWithTSVector(t,
+			WithHybridFusionMode(HybridFusionRRF),
+			WithRRFParams(&RRFParams{K: 60, CandidateRatio: 3}),
+		)
+		defer tc.Close()
+
+		tc.mock.MatchExpectationsInOrder(false)
+
+		// doc_A: vector rank=1, text rank=3
+		// doc_B: vector rank=2, text rank=1
+		// doc_C: vector rank=3, no text match
+		vectorRankRows := sqlmock.NewRows([]string{"id", "rank"}).
+			AddRow("doc_A", 1).
+			AddRow("doc_B", 2).
+			AddRow("doc_C", 3)
+		tc.mock.ExpectQuery("SELECT id, ROW_NUMBER.+ORDER BY embedding").
+			WillReturnRows(vectorRankRows)
+
+		textRankRows := sqlmock.NewRows([]string{"id", "rank"}).
+			AddRow("doc_B", 1).
+			AddRow("doc_A", 3)
+		tc.mock.ExpectQuery("SELECT id, ROW_NUMBER.+ts_rank").
+			WillReturnRows(textRankRows)
+
+		fetchRows := sqlmock.NewRows([]string{
+			"id", "name", "content", "embedding", "metadata",
+			"created_at", "updated_at", "vector_score", "text_score", "score",
+		}).
+			AddRow("doc_A", "A", "a", "[0.1]", `{}`, 1000, 2000, 0.0, 0.0, 0.0).
+			AddRow("doc_B", "B", "b", "[0.2]", `{}`, 1000, 2000, 0.0, 0.0, 0.0).
+			AddRow("doc_C", "C", "c", "[0.3]", `{}`, 1000, 2000, 0.0, 0.0, 0.0)
+		tc.mock.ExpectQuery("SELECT .+ FROM documents WHERE id IN").
+			WillReturnRows(fetchRows)
+
+		query := &vectorstore.SearchQuery{
+			Vector:     []float64{0.1},
+			Query:      "test",
+			Limit:      10,
+			SearchMode: vectorstore.SearchModeHybrid,
+		}
+
+		result, err := vs.Search(context.Background(), query)
+		require.NoError(t, err)
+		require.Len(t, result.Results, 3)
+
+		// Expected scores:
+		// doc_B: 1/(60+2) + 1/(60+1) = 1/62 + 1/61 ≈ 0.03252
+		// doc_A: 1/(60+1) + 1/(60+3) = 1/61 + 1/63 ≈ 0.03228
+		// doc_C: 1/(60+3) + 0         = 1/63       ≈ 0.01587
+		expectedScoreB := 1.0/62.0 + 1.0/61.0
+		expectedScoreA := 1.0/61.0 + 1.0/63.0
+		expectedScoreC := 1.0 / 63.0
+
+		// doc_B should be ranked first (highest combined RRF score)
+		assert.Equal(t, "doc_B", result.Results[0].Document.ID)
+		assert.InDelta(t, expectedScoreB, result.Results[0].Score, 1e-10)
+
+		assert.Equal(t, "doc_A", result.Results[1].Document.ID)
+		assert.InDelta(t, expectedScoreA, result.Results[1].Score, 1e-10)
+
+		assert.Equal(t, "doc_C", result.Results[2].Document.ID)
+		assert.InDelta(t, expectedScoreC, result.Results[2].Score, 1e-10)
+
+		// Verify dense/sparse score metadata
+		assert.InDelta(t, 1.0/62.0, result.Results[0].Document.Metadata["trpc_agent_go_dense_score"], 1e-10)
+		assert.InDelta(t, 1.0/61.0, result.Results[0].Document.Metadata["trpc_agent_go_sparse_score"], 1e-10)
+
+		assert.InDelta(t, 1.0/61.0, result.Results[1].Document.Metadata["trpc_agent_go_dense_score"], 1e-10)
+		assert.InDelta(t, 1.0/63.0, result.Results[1].Document.Metadata["trpc_agent_go_sparse_score"], 1e-10)
+
+		assert.InDelta(t, 1.0/63.0, result.Results[2].Document.Metadata["trpc_agent_go_dense_score"], 1e-10)
+		assert.Equal(t, 0.0, result.Results[2].Document.Metadata["trpc_agent_go_sparse_score"])
+
+		tc.AssertExpectations(t)
+	})
+}

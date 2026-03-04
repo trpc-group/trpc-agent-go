@@ -757,6 +757,13 @@ For a complete timing example with OpenTelemetry integration, see:
 For an authentication and authorization example using Invocation State for permission checks and audit logging, see:
 [examples/callbacks/auth](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/auth)
 
+Note: `BeforeToolCallback` only runs when the model actually calls a tool. If
+you persist tool results into session history and permissions can change within
+the same session, the model may answer from history and skip the tool call,
+effectively bypassing tool callbacks. In those cases, you should also isolate
+or filter history at prompt-build time (see the “Permission Changes and History
+Isolation” section in the Session docs).
+
 ---
 
 ## Global Callbacks and Chain Registration
