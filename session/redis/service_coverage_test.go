@@ -1640,3 +1640,241 @@ func TestListSessions_EmptyResult(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, sessions)
 }
+
+// ============================================================================
+// Additional tests for uncovered lines in service.go
+// ============================================================================
+
+// TestMergeAppUserState_ListAppStatesError tests mergeAppUserState when ListAppStates returns error
+func TestMergeAppUserState_ListAppStatesError(t *testing.T) {
+	mr, err := miniredis.Run()
+	require.NoError(t, err)
+	redisURL := "redis://" + mr.Addr()
+	defer mr.Close()
+
+	svc, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithAppStateTTL(time.Hour),
+		WithUserStateTTL(time.Hour),
+	)
+	require.NoError(t, err)
+	defer svc.Close()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "test", UserID: "user", SessionID: "session1"}
+
+	// Create a session
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	// Pre-populate user state before closing Redis
+	userKey := session.UserKey{AppName: "test", UserID: "user"}
+	err = svc.UpdateUserState(ctx, userKey, session.StateMap{"uk": []byte("uv")})
+	require.NoError(t, err)
+
+	// Close Redis to cause ListAppStates to fail
+	mr.Close()
+
+	// mergeAppUserState should handle error gracefully (just log warning)
+	mergedSess, err := svc.mergeAppUserState(ctx, key, sess)
+	// Should not return error, just skip app state merge
+	require.NoError(t, err)
+	require.NotNil(t, mergedSess)
+}
+
+// TestMergeAppUserState_ListUserStatesError tests mergeAppUserState when ListUserStates returns error
+func TestMergeAppUserState_ListUserStatesError(t *testing.T) {
+	mr, err := miniredis.Run()
+	require.NoError(t, err)
+	redisURL := "redis://" + mr.Addr()
+	defer mr.Close()
+
+	svc, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithAppStateTTL(time.Hour),
+		WithUserStateTTL(time.Hour),
+	)
+	require.NoError(t, err)
+	defer svc.Close()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "test", UserID: "user", SessionID: "session2"}
+
+	// Create a session
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	// Pre-populate app state before closing Redis
+	err = svc.UpdateAppState(ctx, "test", session.StateMap{"ak": []byte("av")})
+	require.NoError(t, err)
+
+	// Close Redis to cause ListUserStates to fail
+	mr.Close()
+
+	// mergeAppUserState should handle error gracefully (just log warning)
+	mergedSess, err := svc.mergeAppUserState(ctx, key, sess)
+	// Should not return error, just skip user state merge
+	require.NoError(t, err)
+	require.NotNil(t, mergedSess)
+}
+
+// TestMergeAppUserState_RefreshTTLsError tests mergeAppUserState when Refresh TTLs fail
+func TestMergeAppUserState_RefreshTTLsError(t *testing.T) {
+	mr, err := miniredis.Run()
+	require.NoError(t, err)
+	redisURL := "redis://" + mr.Addr()
+	defer mr.Close()
+
+	svc, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithAppStateTTL(time.Hour),
+		WithUserStateTTL(time.Hour),
+	)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	key := session.Key{AppName: "test", UserID: "user", SessionID: "session3"}
+
+	// Pre-populate states
+	err = svc.UpdateAppState(ctx, "test", session.StateMap{"ak": []byte("av")})
+	require.NoError(t, err)
+	userKey := session.UserKey{AppName: "test", UserID: "user"}
+	err = svc.UpdateUserState(ctx, userKey, session.StateMap{"uk": []byte("uv")})
+	require.NoError(t, err)
+
+	// Create session
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	// Close Redis to cause Refresh TTL to fail
+	mr.Close()
+
+	// mergeAppUserState should handle error gracefully
+	mergedSess, err := svc.mergeAppUserState(ctx, key, sess)
+	// Should not return error even if Refresh TTL fails
+	require.NoError(t, err)
+	require.NotNil(t, mergedSess)
+	svc.Close()
+}
+
+// TestPersistEvent_SlowPath_HashidxError tests persistEvent slow path when hashidx AppendEvent fails
+func TestPersistEvent_SlowPath_HashidxError(t *testing.T) {
+	mr, err := miniredis.Run()
+	require.NoError(t, err)
+	redisURL := "redis://" + mr.Addr()
+	defer mr.Close()
+
+	// Create service in None mode (hashidx only)
+	svc, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeNone))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess1"}
+
+	// Create session
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	// Close Redis to cause AppendEvent to fail
+	mr.Close()
+
+	// Clear ServiceMeta to force slow path
+	sess.ServiceMeta = nil
+
+	e := createTestEvent("pe1", "agent", "content", time.Now(), false)
+	err = svc.AppendEvent(ctx, sess, e)
+	// Should return error when hashidx fails
+	require.Error(t, err)
+	svc.Close()
+}
+
+// TestCheckSessionExists_HashidxError tests checkSessionExists when hashidx check fails
+func TestCheckSessionExists_HashidxError(t *testing.T) {
+	mr, err := miniredis.Run()
+	require.NoError(t, err)
+	redisURL := "redis://" + mr.Addr()
+	defer mr.Close()
+
+	svc, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeLegacy))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "checkerr"}
+
+	// Close Redis to cause checkSessionExists to fail
+	mr.Close()
+
+	_, _, err = svc.checkSessionExists(ctx, key)
+	// Should return error when pipeline fails
+	require.Error(t, err)
+	svc.Close()
+}
+
+// TestPersistEvent_HashidxErrorPath tests persistEvent hashidx error path
+func TestPersistEvent_HashidxErrorPath(t *testing.T) {
+	mr, err := miniredis.Run()
+	require.NoError(t, err)
+	redisURL := "redis://" + mr.Addr()
+	defer mr.Close()
+
+	// Create service in None mode
+	svc, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeNone))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "hasherr"}
+
+	// Create session
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	// Set version tag to hashidx to use fast path
+	sess.ServiceMeta = map[string]string{"storage_type": "hashidx"}
+
+	// Close Redis to cause AppendEvent to fail
+	mr.Close()
+
+	e := createTestEvent("e1", "agent", "content", time.Now(), false)
+	err = svc.persistEvent(ctx, "hashidx", e, key)
+	// Should return error when hashidx fails
+	require.Error(t, err)
+	svc.Close()
+}
+
+// TestPersistEvent_ZsetErrorPath tests persistEvent zset error path
+func TestPersistEvent_ZsetErrorPath(t *testing.T) {
+	mr, err := miniredis.Run()
+	require.NoError(t, err)
+	redisURL := "redis://" + mr.Addr()
+	defer mr.Close()
+
+	// Create service in Legacy mode
+	svc, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeLegacy))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "zseterr"}
+
+	// Create zset session
+	svcT, _ := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeTransition))
+	sess, _ := svcT.CreateSession(ctx, key, nil)
+	svcT.Close()
+	require.NotNil(t, sess)
+
+	// Set version tag to zset to use fast path
+	sess.ServiceMeta = map[string]string{"storage_type": "zset"}
+
+	// Close Redis to cause AppendEvent to fail
+	mr.Close()
+
+	e := createTestEvent("e1", "agent", "content", time.Now(), false)
+	err = svc.persistEvent(ctx, "zset", e, key)
+	// Should return error when zset fails
+	require.Error(t, err)
+	svc.Close()
+}

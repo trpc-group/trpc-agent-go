@@ -12,6 +12,7 @@ package zset
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -693,4 +695,173 @@ func TestCov_ListTracksForSession_WithTracks(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, tracks, 1)
 	assert.Equal(t, session.Track("t1"), tracks[0])
+}
+
+// ============================================================================
+// collectTrackQueryResults error path: non-redis.Nil error
+// ============================================================================
+
+func TestCov_CollectTrackQueryResults_RedisError(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "trackrediserr"}
+
+	// Create session with track
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	te := &session.TrackEvent{
+		Track:     "mytrack",
+		Payload:   json.RawMessage(`"data"`),
+		Timestamp: time.Now(),
+	}
+	err = c.AppendTrackEvent(ctx, key, te)
+	require.NoError(t, err)
+
+	// Close Redis to cause error in getTrackEvents -> collectTrackQueryResults
+	mr.Close()
+
+	// GetSession -> getTrackEvents -> collectTrackQueryResults should return error
+	_, err = c.GetSession(ctx, key, 0, time.Time{})
+	require.Error(t, err)
+}
+
+// ============================================================================
+// GetSummary error paths
+// ============================================================================
+
+func TestCov_GetSummary_UnmarshalError(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "sumunmarshal"}
+
+	// Create session first
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	// Write invalid JSON to summary key
+	sumKey := c.sessionSummaryKey(key)
+	err = rdb.HSet(ctx, sumKey, key.SessionID, "invalid json").Err()
+	require.NoError(t, err)
+
+	// GetSummary should return error for invalid JSON
+	_, err = c.GetSummary(ctx, key)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unmarshal")
+}
+
+// ============================================================================
+// TrimConversations edge cases
+// ============================================================================
+
+func TestCov_TrimConversations_NoEvents(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "trimnoev"}
+
+	// Create session without events
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	// Trim should return nil when no events exist
+	deleted, err := c.TrimConversations(ctx, key, 1)
+	require.NoError(t, err)
+	assert.Nil(t, deleted)
+}
+
+func TestCov_TrimConversations_EventsWithoutRequestID(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "trimnoreq"}
+
+	// Create session
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	// Add event without RequestID
+	evt := &event.Event{
+		ID:        "e1",
+		Timestamp: time.Now(),
+		Response: &model.Response{
+			Done: true,
+			Choices: []model.Choice{
+				{Message: model.Message{Role: model.RoleUser, Content: "test"}},
+			},
+		},
+		// No RequestID set
+	}
+	err = c.AppendEvent(ctx, key, evt)
+	require.NoError(t, err)
+
+	// Trim should skip events without RequestID
+	deleted, err := c.TrimConversations(ctx, key, 1)
+	require.NoError(t, err)
+	assert.Empty(t, deleted)
+}
+
+// ============================================================================
+// getEventsList with session event limit from config
+// ============================================================================
+
+func TestCov_GetEventsList_ConfigEventLimit(t *testing.T) {
+	cfg := Config{
+		SessionTTL:        time.Hour,
+		SessionEventLimit: 2, // limit to 2 events
+	}
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, cfg)
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "evlimit"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	// Add 5 events
+	baseTime := time.Now()
+	for i := 0; i < 5; i++ {
+		evt := &event.Event{
+			ID:        fmt.Sprintf("e%d", i),
+			Timestamp: baseTime.Add(time.Duration(i) * time.Second),
+			Response: &model.Response{
+				Done: true,
+				Choices: []model.Choice{
+					{Message: model.Message{Role: model.RoleUser, Content: fmt.Sprintf("msg%d", i)}},
+				},
+			},
+		}
+		err = c.AppendEvent(ctx, key, evt)
+		require.NoError(t, err)
+	}
+
+	// GetSession with limit=0 should use config limit (2)
+	sess, err := c.GetSession(ctx, key, 0, time.Time{})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Len(t, sess.Events, 2)
+}
+
+// ============================================================================
+// CreateSession with nil state value
+// ============================================================================
+
+func TestCov_CreateSession_NilStateValue(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "nilstateval"}
+
+	// Create session with nil state value
+	state := session.StateMap{
+		"normal": []byte("value"),
+		"nilkey": nil,
+	}
+	sess, err := c.CreateSession(ctx, key, state)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, []byte("value"), sess.State["normal"])
+	assert.Nil(t, sess.State["nilkey"])
 }

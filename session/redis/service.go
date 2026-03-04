@@ -225,11 +225,13 @@ func (s *Service) CreateSession(
 		// If either side exists, return existing session (no supplementary creation)
 		// This ensures session "belongs" to whichever storage created it first.
 		if zsetExists || hashidxExists {
-			sess, err := s.getSessionInternal(ctx, key, applyOptions(opts...), zsetExists, hashidxExists)
+			sess, storageType, err := s.getSessionInternal(ctx, key, applyOptions(opts...), zsetExists, hashidxExists)
 			if err != nil {
 				return nil, fmt.Errorf("get existing session: %w", err)
 			}
 			if sess != nil {
+				log.InfofContext(ctx, "create_session: app=%s user=%s session=%s storage=%s (existing)",
+					key.AppName, key.UserID, key.SessionID, storageType)
 				return sess, nil
 			}
 		}
@@ -246,7 +248,13 @@ func (s *Service) CreateSession(
 		if err != nil {
 			return nil, err
 		}
-		return s.mergeAppUserState(ctx, key, sess)
+		sess, err = s.mergeAppUserState(ctx, key, sess)
+		if err != nil {
+			return nil, err
+		}
+		log.InfofContext(ctx, "create_session: app=%s user=%s session=%s storage=zset",
+			key.AppName, key.UserID, key.SessionID)
+		return sess, nil
 	}
 
 	// Default: create new session in hashidx
@@ -256,7 +264,13 @@ func (s *Service) CreateSession(
 	}
 
 	// Merge appState and userState into session (matches zset behavior)
-	return s.mergeAppUserState(ctx, key, sess)
+	sess, err = s.mergeAppUserState(ctx, key, sess)
+	if err != nil {
+		return nil, err
+	}
+	log.InfofContext(ctx, "create_session: app=%s user=%s session=%s storage=hashidx",
+		key.AppName, key.UserID, key.SessionID)
+	return sess, nil
 }
 
 // mergeAppUserState queries and merges appState and userState into the session.
@@ -326,7 +340,15 @@ func (s *Service) GetSession(
 		if err != nil {
 			log.WarnfContext(c.Context, "checkSessionExists failed: %v", err)
 		}
-		return s.getSessionInternal(c.Context, c.Key, c.Options, zsetExists, hashidxExists)
+		sess, storageType, err := s.getSessionInternal(c.Context, c.Key, c.Options, zsetExists, hashidxExists)
+		if err != nil {
+			return nil, err
+		}
+		if sess != nil {
+			log.InfofContext(c.Context, "get_session: app=%s user=%s session=%s storage=%s",
+				c.Key.AppName, c.Key.UserID, c.Key.SessionID, storageType)
+		}
+		return sess, nil
 	}
 	sess, err := hook.RunGetSessionHooks(s.opts.getSessionHooks, hctx, final)
 	if err != nil {
@@ -347,22 +369,20 @@ func (s *Service) getSessionInternal(
 	key session.Key,
 	opts *session.Options,
 	zsetExists, hashidxExists bool,
-) (*session.Session, error) {
-	// Use sessionEventLimit as default if EventNum is not specified
+) (*session.Session, string, error) {
 	eventLimit := s.getEffectiveEventLimit(opts.EventNum)
 
-	// zset priority: if zset exists and zset awareness is enabled, read zset
-	// This ensures data completeness during migration (old instances may only write zset)
 	if s.compatEnabled() && zsetExists {
-		return s.zsetClient.GetSession(ctx, key, eventLimit, opts.EventTime)
+		sess, err := s.zsetClient.GetSession(ctx, key, eventLimit, opts.EventTime)
+		return sess, util.StorageTypeZset, err
 	}
 
-	// hashidx read
 	if hashidxExists {
-		return s.hashidxClient.GetSession(ctx, key, eventLimit, opts.EventTime)
+		sess, err := s.hashidxClient.GetSession(ctx, key, eventLimit, opts.EventTime)
+		return sess, util.StorageTypeHashIdx, err
 	}
 
-	return nil, nil // Not found
+	return nil, "", nil
 }
 
 // getEffectiveEventLimit returns the effective event limit.
@@ -539,9 +559,21 @@ func (s *Service) persistEvent(ctx context.Context, ver string, e *event.Event, 
 	// fast path: use version tag
 	switch ver {
 	case util.StorageTypeHashIdx:
-		return s.hashidxClient.AppendEvent(ctx, key, e)
+		err := s.hashidxClient.AppendEvent(ctx, key, e)
+		if err != nil {
+			log.WarnfContext(ctx, "append_event failed: storage=hashidx err=%v", err)
+			return err
+		}
+		log.InfofContext(ctx, "append_event: session=%s storage=hashidx", key.SessionID)
+		return nil
 	case util.StorageTypeZset:
-		return s.zsetClient.AppendEvent(ctx, key, e)
+		err := s.zsetClient.AppendEvent(ctx, key, e)
+		if err != nil {
+			log.WarnfContext(ctx, "append_event failed: storage=zset err=%v", err)
+			return err
+		}
+		log.InfofContext(ctx, "append_event: session=%s storage=zset", key.SessionID)
+		return nil
 	}
 
 	// Slow path: no version tag, check storage.
@@ -551,10 +583,22 @@ func (s *Service) persistEvent(ctx context.Context, ver string, e *event.Event, 
 	}
 
 	if s.compatEnabled() && zsetExists {
-		return s.zsetClient.AppendEvent(ctx, key, e)
+		err := s.zsetClient.AppendEvent(ctx, key, e)
+		if err != nil {
+			log.WarnfContext(ctx, "append_event failed: storage=zset err=%v", err)
+			return err
+		}
+		log.InfofContext(ctx, "append_event: session=%s storage=zset", key.SessionID)
+		return nil
 	}
 	if hashidxExists {
-		return s.hashidxClient.AppendEvent(ctx, key, e)
+		err := s.hashidxClient.AppendEvent(ctx, key, e)
+		if err != nil {
+			log.WarnfContext(ctx, "append_event failed: storage=hashidx err=%v", err)
+			return err
+		}
+		log.InfofContext(ctx, "append_event: session=%s storage=hashidx", key.SessionID)
+		return nil
 	}
 
 	return fmt.Errorf("session not found: %s/%s/%s", key.AppName, key.UserID, key.SessionID)
