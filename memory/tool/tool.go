@@ -244,6 +244,7 @@ func NewSearchTool() tool.CallableTool {
 		function.WithDescription("Search for relevant memories about the user. "+
 			"Returns memories ranked by semantic similarity, each with: id, memory text, topics, kind (fact/episode), "+
 			"event_time, participants, location, and similarity score (0-1, higher = more relevant). "+
+			"IMPORTANT: Check the 'participants' field to verify the memory is about the correct person before using it as evidence. "+
 			"Use short keyword-style queries for best results (e.g. 'Alice hiking trip' instead of 'When did Alice go hiking?'). "+
 			"For multi-part questions, search for each sub-question separately and combine the results. "+
 			"For temporal questions (e.g. 'when did X happen', 'what did user do in May 2023'), "+
