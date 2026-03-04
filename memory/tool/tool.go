@@ -41,7 +41,7 @@ func NewAddTool() tool.CallableTool {
 		}
 
 		// Validate input.
-		if req.Memory == "" {
+		if req == nil || req.Memory == "" {
 			return nil, fmt.Errorf("memory add tool: memory content is required for app %s and user %s", appName, userID)
 		}
 
@@ -88,7 +88,7 @@ func NewUpdateTool() tool.CallableTool {
 		}
 
 		// Validate input.
-		if req.MemoryID == "" {
+		if req == nil || req.MemoryID == "" {
 			return nil, fmt.Errorf("memory update tool: memory ID is required for app %s and user %s", appName, userID)
 		}
 
@@ -140,7 +140,7 @@ func NewDeleteTool() tool.CallableTool {
 		}
 
 		// Validate input.
-		if req.MemoryID == "" {
+		if req == nil || req.MemoryID == "" {
 			return nil, fmt.Errorf("memory delete tool: memory ID is required for app %s and user %s", appName, userID)
 		}
 
@@ -214,7 +214,7 @@ func NewSearchTool() tool.CallableTool {
 		}
 
 		// Validate input.
-		if req.Query == "" {
+		if req == nil || req.Query == "" {
 			return nil, fmt.Errorf("memory search tool: query is required for app %s and user %s", appName, userID)
 		}
 
