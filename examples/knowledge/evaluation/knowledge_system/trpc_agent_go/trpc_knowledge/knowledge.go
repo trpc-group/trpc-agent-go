@@ -120,7 +120,7 @@ func (s *KnowledgeService) newPGVectorStore() (vectorstore.VectorStore, error) {
 	port, _ := strconv.Atoi(portStr)
 	user := getEnvOrDefault("PGVECTOR_USER", "root")
 	password := getEnvOrDefault("PGVECTOR_PASSWORD", "123")
-	database := getEnvOrDefault("PGVECTOR_DATABASE", "vector")
+	database := getEnvOrDefault("PGVECTOR_DATABASE", "rgb")
 	table := getEnvOrDefault("PGVECTOR_TABLE", "trpc_agent_go_eval")
 
 	encodedUser := url.QueryEscape(user)
