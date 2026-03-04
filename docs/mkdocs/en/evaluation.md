@@ -2300,9 +2300,9 @@ import (
 
 // Service is the evaluation service interface.
 type Service interface {
-	Inference(ctx context.Context, request *InferenceRequest) ([]*InferenceResult, error) // Inference runs inference phase.
-	Evaluate(ctx context.Context, request *EvaluateRequest) (*EvalSetRunResult, error)    // Evaluate runs evaluation phase.
-	Close() error                                                                         // Close releases resources.
+	Inference(ctx context.Context, request *InferenceRequest, opt ...Option) ([]*InferenceResult, error) // Inference runs inference phase.
+	Evaluate(ctx context.Context, request *EvaluateRequest, opt ...Option) (*EvalSetRunResult, error)    // Evaluate runs evaluation phase.
+	Close() error                                                                                        // Close releases resources.
 }
 
 // InferenceRequest is the inference request.
@@ -2378,7 +2378,7 @@ The AgentEvaluator interface is defined as follows.
 
 ```go
 type AgentEvaluator interface {
-	Evaluate(ctx context.Context, evalSetID string) (*EvaluationResult, error) // Evaluate runs evaluation and returns aggregated results.
+	Evaluate(ctx context.Context, evalSetID string, opt ...Option) (*EvaluationResult, error) // Evaluate runs evaluation and returns aggregated results.
 	Close() error                                                              // Close releases resources.
 }
 ```
