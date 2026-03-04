@@ -354,6 +354,10 @@ func NewRuntime(
 			SkillsRoot:      opts.SkillsRoot,
 			SkillsExtraDirs: splitCSV(opts.SkillsExtraDir),
 			SkillsDebug:     opts.SkillsDebug,
+			SkillsAllowBundled: splitCSV(
+				opts.SkillsAllowBundled,
+			),
+			SkillConfigs:    opts.SkillConfigs,
 			SkillConfigKeys: resolveSkillConfigKeys(opts),
 			StateDir:        resolvedStateDir,
 
@@ -665,6 +669,10 @@ func run(ctx context.Context, args []string) error {
 			SkillsRoot:      opts.SkillsRoot,
 			SkillsExtraDirs: splitCSV(opts.SkillsExtraDir),
 			SkillsDebug:     opts.SkillsDebug,
+			SkillsAllowBundled: splitCSV(
+				opts.SkillsAllowBundled,
+			),
+			SkillConfigs:    opts.SkillConfigs,
 			SkillConfigKeys: resolveSkillConfigKeys(opts),
 			StateDir:        resolvedStateDir,
 
@@ -1137,10 +1145,14 @@ func newAgent(
 
 	cwd, _ := os.Getwd()
 	roots := resolveSkillRoots(cwd, cfg)
+	bundledRoot := filepath.Join(cwd, appName, defaultSkillsDir)
 	repo, err := ocskills.NewRepository(
 		roots,
 		ocskills.WithDebug(cfg.SkillsDebug),
 		ocskills.WithConfigKeys(cfg.SkillConfigKeys),
+		ocskills.WithBundledSkillsRoot(bundledRoot),
+		ocskills.WithAllowBundled(cfg.SkillsAllowBundled),
+		ocskills.WithSkillConfigs(cfg.SkillConfigs),
 	)
 	if err != nil {
 		return nil, err
@@ -1347,10 +1359,12 @@ type agentConfig struct {
 	Instruction       string
 	SystemPrompt      string
 
-	SkillsRoot      string
-	SkillsExtraDirs []string
-	SkillsDebug     bool
-	SkillConfigKeys []string
+	SkillsRoot         string
+	SkillsExtraDirs    []string
+	SkillsDebug        bool
+	SkillsAllowBundled []string
+	SkillConfigs       map[string]ocskills.SkillConfig
+	SkillConfigKeys    []string
 
 	StateDir string
 
