@@ -969,6 +969,51 @@ ga := graphagent.New(
 - The default format is designed to be compatible with most models and use cases
 - When `WithAddSessionSummary(false)` is used, the formatter is never invoked
 
+#### Single System Message Mode
+
+By default, session summaries are injected as separate system messages. In some scenarios, you may want to merge them into an existing system message to reduce message count and maintain a cleaner prompt structure.
+
+**Why This Matters:**
+
+Some LLM providers have strict requirements for system message placement and count. For example:
+
+- **Qwen3.5 series** and similar models require the system message to be at the beginning of the conversation and do not support multiple system messages. Without this option, you may encounter errors like:
+  ```
+  System message must be at the beginning
+  ```
+- **API constraints**: Certain APIs reject requests with multiple system messages or system messages placed after user/assistant messages
+- **Model behavior**: Some models give higher priority to the first system message and may ignore subsequent ones
+
+**Configuration:**
+
+```go
+ga := graphagent.New(
+    "my-graph",
+    graphagent.WithInitialState(initialState),
+    graphagent.WithAddSessionSummary(true),
+    graphagent.WithSingleSystemMessage(true), // Merge into existing system message
+)
+```
+
+**How it Works:**
+
+- When `WithSingleSystemMessage(true)` is set and an existing system message exists, the summary content will be appended to that system message instead of creating a new one
+- If no system message exists, the summary is still injected as a separate system message at the beginning
+- The `WithSummaryFormatter` is still applied before merging
+
+**Use Cases:**
+
+- **Compatibility**: Ensure compatibility with models that require a single system message at the beginning (e.g., Qwen3.5, some Alibaba Cloud models)
+- **Reduce message count**: Minimize the number of system messages in the prompt
+- **Coherent prompting**: Maintain a single coherent system prompt that includes both instructions and context
+- **API compliance**: Meet API requirements that restrict system message placement
+
+**Important Notes:**
+
+- This option requires `WithAddSessionSummary(true)` to be set
+- When `WithSingleSystemMessage(false)` (default), summaries are always injected as separate system messages
+- If your model does not support multiple system messages, enabling this option is strongly recommended
+
 #### Executor Advanced Configuration
 
 `WithExecutorOptions` allows you to pass executor options directly to configure the behavior of the underlying executor. This is useful for scenarios that require fine-grained control over executor behavior, such as:
