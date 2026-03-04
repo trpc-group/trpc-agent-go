@@ -233,7 +233,6 @@ func TestCOSService_PutHeadOpenVersionsListDelete(t *testing.T) {
 		AppName:   "testapp",
 		UserID:    "user1",
 		SessionID: "session1",
-		Scope:     artifact.ScopeSession,
 		Name:      "test.txt",
 	}
 
@@ -267,7 +266,6 @@ func TestCOSService_PutHeadOpenVersionsListDelete(t *testing.T) {
 		AppName:   key.AppName,
 		UserID:    key.UserID,
 		SessionID: key.SessionID,
-		Scope:     key.Scope,
 	}, artifact.WithListLimit(10))
 	require.NoError(t, err)
 	require.Empty(t, next)
@@ -283,11 +281,11 @@ func TestCOSService_UserScopeIgnoresSessionID(t *testing.T) {
 	s, _ := createMockService(t)
 	ctx := context.Background()
 
-	putKey := artifact.Key{AppName: "testapp", UserID: "user1", SessionID: "s1", Scope: artifact.ScopeUser, Name: "profile.txt"}
+	putKey := artifact.Key{AppName: "testapp", UserID: "user1", SessionID: "", Name: "profile.txt"}
 	_, err := s.Put(ctx, putKey, bytes.NewReader([]byte("u")), artifact.WithPutMimeType("text/plain"))
 	require.NoError(t, err)
 
-	getKey := artifact.Key{AppName: "testapp", UserID: "user1", SessionID: "s2", Scope: artifact.ScopeUser, Name: "profile.txt"}
+	getKey := artifact.Key{AppName: "testapp", UserID: "user1", SessionID: "", Name: "profile.txt"}
 	rc, _, err := s.Open(ctx, getKey, nil)
 	require.NoError(t, err)
 	b, err := io.ReadAll(rc)

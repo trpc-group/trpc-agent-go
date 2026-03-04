@@ -1057,7 +1057,6 @@ func TestRunTool_ForceSaveArtifacts_OutputsSpec(t *testing.T) {
 		AppName:   sess.AppName,
 		UserID:    sess.UserID,
 		SessionID: sess.ID,
-		Scope:     artifact.ScopeSession,
 		Name:      savedName,
 	}, nil)
 	require.NoError(t, err)
@@ -2436,7 +2435,6 @@ func TestRunTool_StagesUserFileInputs_ArtifactRef_OK(t *testing.T) {
 		AppName:   sess.AppName,
 		UserID:    sess.UserID,
 		SessionID: sess.ID,
-		Scope:     artifact.ScopeSession,
 		Name:      artifactName,
 	}, strings.NewReader(contentHi), artifact.WithPutMimeType("text/plain"))
 	require.NoError(t, err)
@@ -2504,7 +2502,6 @@ func TestRunTool_StagesUserFileInputs_ArtifactRef_InfersName(t *testing.T) {
 		AppName:   sess.AppName,
 		UserID:    sess.UserID,
 		SessionID: sess.ID,
-		Scope:     artifact.ScopeSession,
 		Name:      artifactName,
 	}, strings.NewReader(contentHi), artifact.WithPutMimeType("text/plain"))
 	require.NoError(t, err)
@@ -2958,7 +2955,6 @@ func TestUserFileInputBytes(t *testing.T) {
 			AppName:   sess.AppName,
 			UserID:    sess.UserID,
 			SessionID: sess.ID,
-			Scope:     artifact.ScopeSession,
 			Name:      artifactName,
 		}, strings.NewReader(contentHi), artifact.WithPutMimeType("text/plain"))
 		require.NoError(t, err)

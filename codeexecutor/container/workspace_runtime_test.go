@@ -668,7 +668,6 @@ func TestWorkspaceRuntime_StageInputs_ArtifactAndWorkspace(t *testing.T) {
 		AppName:   "a",
 		UserID:    "u",
 		SessionID: "s",
-		Scope:     artifact.ScopeSession,
 	})
 	_, err := codeexecutor.SaveArtifactHelper(
 		ctx, "z.txt", []byte("Z"), "text/plain",
@@ -1168,7 +1167,6 @@ func TestStageInputs_ArtifactPinUsesPinnedVersion(t *testing.T) {
 		AppName:   "a",
 		UserID:    "u",
 		SessionID: "s",
-		Scope:     artifact.ScopeSession,
 	})
 
 	rt := &workspaceRuntime{
@@ -1320,7 +1318,6 @@ func TestStageInputs_ArtifactPinFromMetadata(t *testing.T) {
 		AppName:   "a",
 		UserID:    "u",
 		SessionID: "s",
-		Scope:     artifact.ScopeSession,
 	})
 
 	rt := &workspaceRuntime{
@@ -1426,7 +1423,6 @@ func TestStageInputs_AllBranches(t *testing.T) {
 		AppName:   "a",
 		UserID:    "u",
 		SessionID: "s",
-		Scope:     artifact.ScopeSession,
 	})
 
 	specs := []codeexecutor.InputSpec{
@@ -1501,7 +1497,6 @@ func TestCollectOutputs_SaveInlineLimits(t *testing.T) {
 		AppName:   "a",
 		UserID:    "u",
 		SessionID: "s",
-		Scope:     artifact.ScopeSession,
 	})
 
 	rt := &workspaceRuntime{

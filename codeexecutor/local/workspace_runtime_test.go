@@ -719,7 +719,6 @@ func TestRuntime_StageInputs_ArtifactAndLinks(t *testing.T) {
 		AppName:   "a",
 		UserID:    "u",
 		SessionID: "s",
-		Scope:     artifact.ScopeSession,
 	})
 	_, err = codeexecutor.SaveArtifactHelper(
 		actx, "a.txt", []byte("AX"), "text/plain",
@@ -873,7 +872,6 @@ func TestRuntime_CollectOutputs_SaveAndInline(t *testing.T) {
 		AppName:   "a",
 		UserID:    "u",
 		SessionID: "s",
-		Scope:     artifact.ScopeSession,
 	})
 	mf, err := rt.CollectOutputs(actx, ws, codeexecutor.OutputSpec{
 		Globs:         []string{filepath.Join(codeexecutor.DirOut, "*")},

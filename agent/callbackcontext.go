@@ -131,7 +131,6 @@ func (cc *CallbackContext) getArtifactServiceAndBaseKey() (s artifact.Service, b
 		AppName:   appName,
 		UserID:    userID,
 		SessionID: sessionID,
-		Scope:     artifact.ScopeSession,
 	}, nil
 }
 

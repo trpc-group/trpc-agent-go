@@ -17,21 +17,17 @@ import (
 )
 
 // BuildArtifactPath constructs the artifact path for storage.
-// The path format depends on the scope:
-//   - User scope:
+//
+// Built-in implementations use SessionID presence to select the namespace:
+//   - If SessionID is empty:
 //     {app_name}/{user_id}/user/{name}
-//   - Session scope:
+//   - If SessionID is not empty:
 //     {app_name}/{user_id}/{session_id}/{name}
 func BuildArtifactPath(key artifact.Key) string {
-	switch key.Scope {
-	case artifact.ScopeUser:
+	if key.SessionID == "" {
 		return fmt.Sprintf("%s/%s/user/%s", key.AppName, key.UserID, key.Name)
-	case artifact.ScopeSession:
-		return fmt.Sprintf("%s/%s/%s/%s", key.AppName, key.UserID, key.SessionID, key.Name)
-	default:
-		// Default to session-style to avoid accidental cross-user collisions.
-		return fmt.Sprintf("%s/%s/%s/%s", key.AppName, key.UserID, key.SessionID, key.Name)
 	}
+	return fmt.Sprintf("%s/%s/%s/%s", key.AppName, key.UserID, key.SessionID, key.Name)
 }
 
 // BuildObjectName constructs the object name for versioned storage (like COS).
@@ -62,12 +58,8 @@ func BuildUserNamespacePrefix(appName, userID string) string {
 //
 // key.Name is ignored.
 func BuildListPrefix(key artifact.Key) string {
-	switch key.Scope {
-	case artifact.ScopeUser:
+	if key.SessionID == "" {
 		return fmt.Sprintf("%s/%s/user/", key.AppName, key.UserID)
-	case artifact.ScopeSession:
-		return fmt.Sprintf("%s/%s/%s/", key.AppName, key.UserID, key.SessionID)
-	default:
-		return fmt.Sprintf("%s/%s/%s/", key.AppName, key.UserID, key.SessionID)
 	}
+	return fmt.Sprintf("%s/%s/%s/", key.AppName, key.UserID, key.SessionID)
 }

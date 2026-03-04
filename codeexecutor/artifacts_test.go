@@ -50,7 +50,6 @@ func TestArtifactHelpers_SaveAndLoad(t *testing.T) {
 		AppName:   "app",
 		UserID:    "u",
 		SessionID: "s",
-		Scope:     artifact.ScopeSession,
 	})
 
 	dataV0 := []byte("abc")

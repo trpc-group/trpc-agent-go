@@ -31,7 +31,7 @@ Artifact Service（制品服务）是后端系统，负责：
 
 - **版本化存储**：每个制品都会自动版本化，允许您跟踪随时间的变化
 - **基于会话的组织**：制品可以限定在特定用户会话范围内
-- **用户持久化存储**：通过在 `artifact.Key` 中使用 `ScopeUser` 来实现跨会话持久化
+- **用户持久化存储**：对内置后端而言，省略 `SessionID` 即可实现跨会话持久化
 - **多种存储后端**：支持内存存储（开发环境）和云存储（生产环境）
 - **MIME 类型支持**：为不同文件格式提供适当的内容类型处理
 
@@ -61,7 +61,6 @@ type Key struct {
     AppName   string
     UserID    string
     SessionID string
-    Scope     Scope // ScopeSession 或 ScopeUser
     Name      string
 }
 
@@ -284,12 +283,12 @@ func myTool(ctx context.Context, input MyInput) (MyOutput, error) {
 desc, err := toolCtx.PutArtifact("session-file.txt", bytes.NewReader([]byte("hello")), artifact.WithPutMimeType("text/plain"))
 ```
 
-### 用户持久化制品（ScopeUser）
+### 用户持久化制品
 
-用户级（跨 session）持久化由 `artifact.Key.Scope = artifact.ScopeUser` 显式控制。
+对内置后端而言，用户级（跨 session）持久化通过将 `SessionID` 留空来选择。
 
-- `ToolContext.PutArtifact` 默认写入 **ScopeSession**。
-- 如果需要写入/读取 **ScopeUser**，请直接使用底层 `artifact.Service`（`Put/Head/Open/...`）并构造 `artifact.Key{Scope: artifact.ScopeUser, ...}`。
+- `ToolContext.PutArtifact` 默认写入当前会话命名空间。
+- 如需跨 session 持久化，请直接使用底层 `artifact.Service`（`Put/Head/Open/...`）并构造 `artifact.Key{SessionID: \"\", ...}`。
 
 ### 版本管理
 
@@ -374,7 +373,7 @@ func processTextTool(ctx context.Context, input ProcessTextInput) (ProcessTextOu
     // 处理文本
     processedText := strings.ToUpper(input.Text)
     
-    // 保存（默认 session scope）。如需 ScopeUser，请直接使用 artifact.Service + Key{Scope: ScopeUser}。
+    // 保存（默认写入当前会话命名空间）。如需跨 session 持久化，请直接使用 artifact.Service + Key{SessionID: ""}。
     toolCtx, _ := agent.NewToolContext(ctx)
     desc, err := toolCtx.PutArtifact(
         "processed-text.txt",

@@ -122,7 +122,6 @@ func testKey(name string) artifact.Key {
 		AppName:   "test-app",
 		UserID:    "user-123",
 		SessionID: "session-456",
-		Scope:     artifact.ScopeSession,
 		Name:      name,
 	}
 }
@@ -186,7 +185,6 @@ func TestService_List_Paginates(t *testing.T) {
 		AppName:   "test-app",
 		UserID:    "user-123",
 		SessionID: "session-456",
-		Scope:     artifact.ScopeSession,
 	}
 
 	page1, next, err := svc.List(ctx, ns, artifact.WithListLimit(2))
@@ -204,12 +202,12 @@ func TestService_Put_ValidatesKey(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()
 
-	_, err := svc.Put(ctx, artifact.Key{Name: "x", Scope: artifact.ScopeSession}, strings.NewReader("x"))
+	_, err := svc.Put(ctx, artifact.Key{Name: "x"}, strings.NewReader("x"))
 	assert.ErrorIs(t, err, ErrEmptySessionInfo)
 
-	_, err = svc.Put(ctx, artifact.Key{AppName: "a", UserID: "u", Scope: artifact.ScopeSession, Name: "x"}, strings.NewReader("x"))
-	assert.ErrorIs(t, err, ErrEmptySessionInfo)
+	_, err = svc.Put(ctx, artifact.Key{AppName: "a", UserID: "u", Name: "x"}, strings.NewReader("x"))
+	assert.NoError(t, err)
 
-	_, err = svc.Put(ctx, artifact.Key{AppName: "a", UserID: "u", SessionID: "s", Scope: artifact.ScopeSession, Name: ""}, strings.NewReader("x"))
+	_, err = svc.Put(ctx, artifact.Key{AppName: "a", UserID: "u", SessionID: "s", Name: ""}, strings.NewReader("x"))
 	assert.ErrorIs(t, err, ErrEmptyFilename)
 }

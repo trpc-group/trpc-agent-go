@@ -31,7 +31,7 @@ The artifact system provides:
 
 - **Versioned Storage**: Each artifact is automatically versioned, allowing you to track changes over time
 - **Session-based Organization**: Artifacts can be scoped to specific user sessions
-- **User-persistent Storage**: Artifacts can be stored persistently across sessions by using `ScopeUser` in `artifact.Key`
+- **User-persistent Storage**: For built-in backends, omit `SessionID` to store artifacts persistently across sessions
 - **Multiple Storage Backends**: Support for in-memory storage (development) and cloud storage (production)
 - **MIME Type Support**: Proper content type handling for different file formats
 
@@ -61,7 +61,6 @@ type Key struct {
     AppName   string
     UserID    string
     SessionID string
-    Scope     Scope // ScopeSession or ScopeUser
     Name      string
 }
 
@@ -286,11 +285,11 @@ desc, err := toolCtx.PutArtifact("session-file.txt", bytes.NewReader([]byte("hel
 
 ### User-persistent Artifacts
 
-User-persistent artifacts are explicitly controlled by `artifact.Key.Scope = artifact.ScopeUser`.
+For built-in backends, user-persistent artifacts are selected by leaving `SessionID` empty.
 
 ```go
-// ToolContext.PutArtifact writes to ScopeSession by default.
-// For ScopeUser, use artifact.Service directly (Put/Head/Open/...) with Key{Scope: ScopeUser}.
+// ToolContext.PutArtifact writes to the current session namespace by default.
+// For user-persistent artifacts, use artifact.Service directly (Put/Head/Open/...) with Key{SessionID: ""}.
 ```
 
 ### Version Management
@@ -376,7 +375,7 @@ func processTextTool(ctx context.Context, input ProcessTextInput) (ProcessTextOu
     // Process the text
     processedText := strings.ToUpper(input.Text)
     
-    // Save (session-scoped by default). For ScopeUser, use artifact.Service with Key{Scope: ScopeUser}.
+    // Save (session-scoped by default). For user-persistent, use artifact.Service with Key{SessionID: ""}.
     toolCtx, _ := agent.NewToolContext(ctx)
     desc, err := toolCtx.PutArtifact(
         "processed-text.txt",

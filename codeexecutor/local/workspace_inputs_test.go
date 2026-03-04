@@ -46,13 +46,11 @@ func TestStageInputs_WorkspaceAndArtifact(t *testing.T) {
 		AppName:   "app",
 		UserID:    "u",
 		SessionID: "s",
-		Scope:     artifact.ScopeSession,
 	}
 	_, err = svc.Put(ctx, artifact.Key{
 		AppName:   baseKey.AppName,
 		UserID:    baseKey.UserID,
 		SessionID: baseKey.SessionID,
-		Scope:     baseKey.Scope,
 		Name:      "demo.txt",
 	}, bytes.NewReader([]byte("beta")), artifact.WithPutMimeType("text/plain"))
 	require.NoError(t, err)
@@ -188,12 +186,11 @@ func TestStageInputs_DefaultTo_Artifact(t *testing.T) {
 
 	// Prepare artifact service and one artifact.
 	svc := inmemory.NewService()
-	baseKey := artifact.Key{AppName: "app", UserID: "u", SessionID: "s", Scope: artifact.ScopeSession}
+	baseKey := artifact.Key{AppName: "app", UserID: "u", SessionID: "s"}
 	_, err = svc.Put(ctx, artifact.Key{
 		AppName:   baseKey.AppName,
 		UserID:    baseKey.UserID,
 		SessionID: baseKey.SessionID,
-		Scope:     baseKey.Scope,
 		Name:      "foo.txt",
 	}, bytes.NewReader([]byte("z")), artifact.WithPutMimeType("text/plain"))
 	require.NoError(t, err)
@@ -222,14 +219,13 @@ func TestStageInputs_ArtifactPinReusesVersion(t *testing.T) {
 
 	svc := inmemory.NewService()
 	ctxIO := codeexecutor.WithArtifactService(ctx, svc)
-	baseKey := artifact.Key{AppName: "app", UserID: "u", SessionID: "s", Scope: artifact.ScopeSession}
+	baseKey := artifact.Key{AppName: "app", UserID: "u", SessionID: "s"}
 	ctxIO = codeexecutor.WithArtifactBaseKey(ctxIO, baseKey)
 
 	_, err = svc.Put(ctx, artifact.Key{
 		AppName:   baseKey.AppName,
 		UserID:    baseKey.UserID,
 		SessionID: baseKey.SessionID,
-		Scope:     baseKey.Scope,
 		Name:      "demo.txt",
 	}, bytes.NewReader([]byte("v0")), artifact.WithPutMimeType("text/plain"))
 	require.NoError(t, err)
@@ -237,7 +233,6 @@ func TestStageInputs_ArtifactPinReusesVersion(t *testing.T) {
 		AppName:   baseKey.AppName,
 		UserID:    baseKey.UserID,
 		SessionID: baseKey.SessionID,
-		Scope:     baseKey.Scope,
 		Name:      "demo.txt",
 	}, bytes.NewReader([]byte("v1")), artifact.WithPutMimeType("text/plain"))
 	require.NoError(t, err)
@@ -260,7 +255,6 @@ func TestStageInputs_ArtifactPinReusesVersion(t *testing.T) {
 		AppName:   baseKey.AppName,
 		UserID:    baseKey.UserID,
 		SessionID: baseKey.SessionID,
-		Scope:     baseKey.Scope,
 		Name:      "demo.txt",
 	}, bytes.NewReader([]byte("v2")), artifact.WithPutMimeType("text/plain"))
 	require.NoError(t, err)
@@ -337,7 +331,6 @@ func TestCollectOutputs_SaveInlineTemplateAndLimits(t *testing.T) {
 		AppName:   "app",
 		UserID:    "u",
 		SessionID: "s",
-		Scope:     artifact.ScopeSession,
 	})
 
 	man, err := rt.CollectOutputs(ctxIO, ws, codeexecutor.OutputSpec{

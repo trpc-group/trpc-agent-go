@@ -36,7 +36,6 @@ func TestPutOpenHeadVersionsDelete(t *testing.T) {
 		AppName:   "testapp",
 		UserID:    "user123",
 		SessionID: "session456",
-		Scope:     artifact.ScopeSession,
 		Name:      "test.txt",
 	}
 
@@ -75,13 +74,13 @@ func TestListPagination(t *testing.T) {
 	service := NewService()
 	ctx := context.Background()
 
-	base := artifact.Key{AppName: "testapp", UserID: "user123", SessionID: "s1", Scope: artifact.ScopeSession}
-	_, err := service.Put(ctx, artifact.Key{AppName: base.AppName, UserID: base.UserID, SessionID: base.SessionID, Scope: base.Scope, Name: "a.txt"}, bytes.NewReader([]byte("a")))
+	base := artifact.Key{AppName: "testapp", UserID: "user123", SessionID: "s1"}
+	_, err := service.Put(ctx, artifact.Key{AppName: base.AppName, UserID: base.UserID, SessionID: base.SessionID, Name: "a.txt"}, bytes.NewReader([]byte("a")))
 	require.NoError(t, err)
-	_, err = service.Put(ctx, artifact.Key{AppName: base.AppName, UserID: base.UserID, SessionID: base.SessionID, Scope: base.Scope, Name: "b.txt"}, bytes.NewReader([]byte("b")))
+	_, err = service.Put(ctx, artifact.Key{AppName: base.AppName, UserID: base.UserID, SessionID: base.SessionID, Name: "b.txt"}, bytes.NewReader([]byte("b")))
 	require.NoError(t, err)
 
-	ns := artifact.Key{AppName: base.AppName, UserID: base.UserID, SessionID: base.SessionID, Scope: base.Scope}
+	ns := artifact.Key{AppName: base.AppName, UserID: base.UserID, SessionID: base.SessionID}
 	page1, next, err := service.List(ctx, ns, artifact.WithListLimit(1))
 	require.NoError(t, err)
 	require.Len(t, page1, 1)
@@ -97,11 +96,11 @@ func TestUserScopeIgnoresSessionID(t *testing.T) {
 	service := NewService()
 	ctx := context.Background()
 
-	putKey := artifact.Key{AppName: "testapp", UserID: "user123", SessionID: "s1", Scope: artifact.ScopeUser, Name: "profile.txt"}
+	putKey := artifact.Key{AppName: "testapp", UserID: "user123", SessionID: "", Name: "profile.txt"}
 	_, err := service.Put(ctx, putKey, bytes.NewReader([]byte("u")), artifact.WithPutMimeType("text/plain"))
 	require.NoError(t, err)
 
-	getKey := artifact.Key{AppName: "testapp", UserID: "user123", SessionID: "s2", Scope: artifact.ScopeUser, Name: "profile.txt"}
+	getKey := artifact.Key{AppName: "testapp", UserID: "user123", SessionID: "", Name: "profile.txt"}
 	data, _, err := artifact.ReadAll(ctx, service, getKey, nil)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("u"), data)

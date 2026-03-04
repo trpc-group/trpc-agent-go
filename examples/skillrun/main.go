@@ -543,7 +543,6 @@ func (c *skillChat) handleUploadArtifact(
 		AppName:   appName,
 		UserID:    c.userID,
 		SessionID: c.sessionID,
-		Scope:     artifact.ScopeSession,
 		Name:      name,
 	}
 	mt := guessMimeType(base, data)
@@ -608,7 +607,6 @@ func (c *skillChat) handlePull(text string) error {
 		AppName:   appName,
 		UserID:    c.userID,
 		SessionID: c.sessionID,
-		Scope:     artifact.ScopeSession,
 		Name:      name,
 	}
 	rc, desc, err := c.artSvc.Open(context.Background(), key, verPtr)
@@ -647,7 +645,6 @@ func (c *skillChat) handleListArtifacts() error {
 		AppName:   appName,
 		UserID:    c.userID,
 		SessionID: c.sessionID,
-		Scope:     artifact.ScopeSession,
 	}
 	var (
 		keys      []string

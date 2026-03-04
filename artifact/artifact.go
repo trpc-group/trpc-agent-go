@@ -24,33 +24,11 @@ import (
 // to choose safe versioning strategies (monotonic timestamps, UUIDs, etc.).
 type VersionID string
 
-// Scope defines the artifact namespace.
-type Scope int
-
-const (
-	// ScopeSession stores artifacts within a single session.
-	ScopeSession Scope = iota
-	// ScopeUser stores artifacts persistently across sessions for a user.
-	ScopeUser
-)
-
-func (s Scope) String() string {
-	switch s {
-	case ScopeSession:
-		return "session"
-	case ScopeUser:
-		return "user"
-	default:
-		return fmt.Sprintf("scope(%d)", int(s))
-	}
-}
-
 // Key identifies an artifact (all versions) in a namespace.
 type Key struct {
 	AppName   string
 	UserID    string
-	SessionID string // Only meaningful when Scope is ScopeSession.
-	Scope     Scope
+	SessionID string // Optional. When set, services may use it to namespace artifacts.
 	Name      string
 }
 

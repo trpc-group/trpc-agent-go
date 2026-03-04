@@ -49,7 +49,6 @@ func main() {
 		AppName:   a.appName,
 		UserID:    a.userID,
 		SessionID: a.sessionID,
-		Scope:     artifact.ScopeSession,
 	}
 	var (
 		descs     []artifact.Descriptor

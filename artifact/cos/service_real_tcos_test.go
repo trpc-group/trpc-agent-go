@@ -42,7 +42,6 @@ func TestArtifact_SessionScope(t *testing.T) {
 		AppName:   "testapp",
 		UserID:    "user1",
 		SessionID: "session1",
-		Scope:     artifact.ScopeSession,
 		Name:      "test.txt",
 	}
 	var artifacts [][]byte
@@ -88,7 +87,6 @@ func TestArtifact_SessionScope(t *testing.T) {
 		AppName:   key.AppName,
 		UserID:    key.UserID,
 		SessionID: key.SessionID,
-		Scope:     key.Scope,
 	})
 	require.NoError(t, err)
 	require.Len(t, items, 1)
@@ -101,7 +99,6 @@ func TestArtifact_SessionScope(t *testing.T) {
 		AppName:   key.AppName,
 		UserID:    key.UserID,
 		SessionID: key.SessionID,
-		Scope:     key.Scope,
 	})
 	require.NoError(t, err)
 	require.Empty(t, items)
@@ -134,7 +131,6 @@ func TestArtifact_SessionScope_PutHeadDelete(t *testing.T) {
 		AppName:   "testapp",
 		UserID:    "user1",
 		SessionID: "session1",
-		Scope:     artifact.ScopeSession,
 		Name:      "put-head-delete.txt",
 	}
 
@@ -180,8 +176,7 @@ func TestArtifact_UserScope(t *testing.T) {
 	key := artifact.Key{
 		AppName:   "testapp",
 		UserID:    "user2",
-		SessionID: "session1",
-		Scope:     artifact.ScopeUser,
+		SessionID: "",
 		Name:      "test.txt",
 	}
 	t.Cleanup(func() {
@@ -226,7 +221,6 @@ func TestArtifact_UserScope(t *testing.T) {
 		AppName:   key.AppName,
 		UserID:    key.UserID,
 		SessionID: "", // not used for user scope
-		Scope:     key.Scope,
 	})
 	require.NoError(t, err)
 	require.Len(t, items, 1)
@@ -239,7 +233,6 @@ func TestArtifact_UserScope(t *testing.T) {
 		AppName:   key.AppName,
 		UserID:    key.UserID,
 		SessionID: "",
-		Scope:     key.Scope,
 	})
 	require.NoError(t, err)
 	require.Empty(t, items)

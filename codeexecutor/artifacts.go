@@ -109,12 +109,12 @@ func WithArtifactBaseKey(ctx context.Context, key artifact.Key) context.Context 
 func artifactBaseKeyFromContext(ctx context.Context) artifact.Key {
 	v := ctx.Value(artifactBaseKey{})
 	if v == nil {
-		return artifact.Key{Scope: artifact.ScopeSession}
+		return artifact.Key{}
 	}
 	if k, ok := v.(artifact.Key); ok {
 		return k
 	}
-	return artifact.Key{Scope: artifact.ScopeSession}
+	return artifact.Key{}
 }
 
 func withName(base artifact.Key, name string) artifact.Key {

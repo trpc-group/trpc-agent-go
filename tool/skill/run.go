@@ -1772,7 +1772,6 @@ func withArtifactContext(ctx context.Context) context.Context {
 				AppName:   inv.Session.AppName,
 				UserID:    inv.Session.UserID,
 				SessionID: inv.Session.ID,
-				Scope:     artifact.ScopeSession,
 			},
 		)
 	}

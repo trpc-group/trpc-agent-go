@@ -657,7 +657,6 @@ func TestFileTool_ReadFile_ArtifactRef(t *testing.T) {
 		AppName:   sess.AppName,
 		UserID:    sess.UserID,
 		SessionID: sess.ID,
-		Scope:     artifact.ScopeSession,
 	})
 	_, err = codeexecutor.SaveArtifactHelper(
 		ctxIO,

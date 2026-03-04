@@ -163,7 +163,6 @@ func TestTryRead_Artifact_WithService(t *testing.T) {
 		AppName:   sess.AppName,
 		UserID:    sess.UserID,
 		SessionID: sess.ID,
-		Scope:     artifact.ScopeSession,
 	})
 	_, err := codeexecutor.SaveArtifactHelper(
 		ctxIO,
@@ -211,7 +210,6 @@ func TestTryRead_Artifact_WithServiceInContext(t *testing.T) {
 		AppName:   "app",
 		UserID:    "user",
 		SessionID: "sess",
-		Scope:     artifact.ScopeSession,
 	})
 
 	_, err := codeexecutor.SaveArtifactHelper(

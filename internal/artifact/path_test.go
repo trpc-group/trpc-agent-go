@@ -23,17 +23,17 @@ func TestBuildArtifactPath(t *testing.T) {
 	}{
 		{
 			name:     "regular file",
-			key:      artifact.Key{AppName: "testapp", UserID: "user123", SessionID: "session456", Scope: artifact.ScopeSession, Name: "test.txt"},
+			key:      artifact.Key{AppName: "testapp", UserID: "user123", SessionID: "session456", Name: "test.txt"},
 			expected: "testapp/user123/session456/test.txt",
 		},
 		{
 			name:     "user-scoped file",
-			key:      artifact.Key{AppName: "testapp", UserID: "user123", Scope: artifact.ScopeUser, Name: "document.pdf"},
+			key:      artifact.Key{AppName: "testapp", UserID: "user123", Name: "document.pdf"},
 			expected: "testapp/user123/user/document.pdf",
 		},
 		{
 			name:     "empty name",
-			key:      artifact.Key{AppName: "testapp", UserID: "user123", SessionID: "session456", Scope: artifact.ScopeSession, Name: ""},
+			key:      artifact.Key{AppName: "testapp", UserID: "user123", SessionID: "session456", Name: ""},
 			expected: "testapp/user123/session456/",
 		},
 	}
@@ -57,19 +57,19 @@ func TestBuildObjectName(t *testing.T) {
 	}{
 		{
 			name:     "regular file",
-			key:      artifact.Key{AppName: "testapp", UserID: "user123", SessionID: "session456", Scope: artifact.ScopeSession, Name: "test.txt"},
+			key:      artifact.Key{AppName: "testapp", UserID: "user123", SessionID: "session456", Name: "test.txt"},
 			version:  "1",
 			expected: "testapp/user123/session456/test.txt/1",
 		},
 		{
 			name:     "user-scoped file",
-			key:      artifact.Key{AppName: "testapp", UserID: "user123", Scope: artifact.ScopeUser, Name: "document.pdf"},
+			key:      artifact.Key{AppName: "testapp", UserID: "user123", Name: "document.pdf"},
 			version:  "5",
 			expected: "testapp/user123/user/document.pdf/5",
 		},
 		{
 			name:     "version 0",
-			key:      artifact.Key{AppName: "testapp", UserID: "user123", SessionID: "session456", Scope: artifact.ScopeSession, Name: "test.txt"},
+			key:      artifact.Key{AppName: "testapp", UserID: "user123", SessionID: "session456", Name: "test.txt"},
 			version:  "0",
 			expected: "testapp/user123/session456/test.txt/0",
 		},
@@ -93,12 +93,12 @@ func TestBuildObjectNamePrefix(t *testing.T) {
 	}{
 		{
 			name:     "regular file",
-			key:      artifact.Key{AppName: "testapp", UserID: "user123", SessionID: "session456", Scope: artifact.ScopeSession, Name: "test.txt"},
+			key:      artifact.Key{AppName: "testapp", UserID: "user123", SessionID: "session456", Name: "test.txt"},
 			expected: "testapp/user123/session456/test.txt/",
 		},
 		{
 			name:     "user-scoped file",
-			key:      artifact.Key{AppName: "testapp", UserID: "user123", Scope: artifact.ScopeUser, Name: "document.pdf"},
+			key:      artifact.Key{AppName: "testapp", UserID: "user123", Name: "document.pdf"},
 			expected: "testapp/user123/user/document.pdf/",
 		},
 	}

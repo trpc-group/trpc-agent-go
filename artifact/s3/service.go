@@ -267,7 +267,6 @@ func (s *Service) List(
 			AppName:   key.AppName,
 			UserID:    key.UserID,
 			SessionID: key.SessionID,
-			Scope:     key.Scope,
 			Name:      name,
 		}
 		ver := latestByName[name].version
@@ -443,31 +442,11 @@ func validateKey(k artifact.Key) error {
 	if k.AppName == "" || k.UserID == "" {
 		return ErrEmptySessionInfo
 	}
-	switch k.Scope {
-	case artifact.ScopeSession:
-		if k.SessionID == "" {
-			return ErrEmptySessionInfo
-		}
-	case artifact.ScopeUser:
-		// ok
-	default:
-		return ErrEmptySessionInfo
-	}
 	return validateName(k.Name)
 }
 
 func validateListKey(k artifact.Key) error {
 	if k.AppName == "" || k.UserID == "" {
-		return ErrEmptySessionInfo
-	}
-	switch k.Scope {
-	case artifact.ScopeSession:
-		if k.SessionID == "" {
-			return ErrEmptySessionInfo
-		}
-	case artifact.ScopeUser:
-		// ok
-	default:
 		return ErrEmptySessionInfo
 	}
 	return nil

@@ -223,7 +223,6 @@ func (s *Service) List(
 			AppName:   key.AppName,
 			UserID:    key.UserID,
 			SessionID: key.SessionID,
-			Scope:     key.Scope,
 			Name:      name,
 		}
 		out = append(out, artifact.Descriptor{
@@ -363,16 +362,6 @@ func validateKey(k artifact.Key) error {
 	if k.AppName == "" || k.UserID == "" {
 		return fmt.Errorf("invalid key: missing appName or userID")
 	}
-	switch k.Scope {
-	case artifact.ScopeSession:
-		if k.SessionID == "" {
-			return fmt.Errorf("invalid key: missing sessionID for session scope")
-		}
-	case artifact.ScopeUser:
-		// ok
-	default:
-		return fmt.Errorf("invalid key: unknown scope %v", k.Scope)
-	}
 	if k.Name == "" {
 		return fmt.Errorf("invalid key: empty name")
 	}
@@ -385,16 +374,6 @@ func validateKey(k artifact.Key) error {
 func validateListKey(k artifact.Key) error {
 	if k.AppName == "" || k.UserID == "" {
 		return fmt.Errorf("invalid prefix: missing appName or userID")
-	}
-	switch k.Scope {
-	case artifact.ScopeSession:
-		if k.SessionID == "" {
-			return fmt.Errorf("invalid prefix: missing sessionID for session scope")
-		}
-	case artifact.ScopeUser:
-		// ok
-	default:
-		return fmt.Errorf("invalid prefix: unknown scope %v", k.Scope)
 	}
 	return nil
 }
