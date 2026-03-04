@@ -3,6 +3,7 @@ package redis
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -910,4 +911,732 @@ func TestListSessions_TransitionMode(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, sessions, 1)
 	assert.Equal(t, "sess1", sessions[0].ID)
+}
+
+// ============================================================================
+// Additional coverage tests for 90% target
+// ============================================================================
+
+// TestUpdateUserState_Transition_DualWrite tests UpdateUserState in Transition mode writes to both storages
+func TestUpdateUserState_Transition_DualWrite(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	svcT, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeTransition))
+	require.NoError(t, err)
+	defer svcT.Close()
+
+	ctx := context.Background()
+	userKey := session.UserKey{AppName: "app1", UserID: "u1"}
+
+	// Write user state in transition mode - should write to both zset and hashidx
+	err = svcT.UpdateUserState(ctx, userKey, session.StateMap{"key": []byte("value")})
+	require.NoError(t, err)
+
+	// Verify zset has the data
+	zsetClient := zset.NewClient(buildRedisClient(t, redisURL), zset.Config{KeyPrefix: ""})
+	zsetStates, err := zsetClient.ListUserStates(ctx, userKey)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("value"), zsetStates["key"])
+
+	// Verify hashidx has the data
+	hashidxClient := hashidx.NewClient(buildRedisClient(t, redisURL), hashidx.Config{KeyPrefix: ""})
+	hashidxStates, err := hashidxClient.ListUserStates(ctx, userKey)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("value"), hashidxStates["key"])
+}
+
+// TestListUserStates_Legacy_Fallback tests ListUserStates in Legacy mode falls back to zset
+func TestListUserStates_Legacy_Fallback(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	// First write user state to zset using Legacy mode
+	svcL, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeLegacy))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	userKey := session.UserKey{AppName: "app1", UserID: "u1"}
+
+	// Write to hashidx directly (simulating data that exists in hashidx)
+	hashidxClient := hashidx.NewClient(buildRedisClient(t, redisURL), hashidx.Config{KeyPrefix: ""})
+	err = hashidxClient.UpdateUserState(ctx, userKey, session.StateMap{"zkey": []byte("zval")}, time.Hour)
+	require.NoError(t, err)
+	svcL.Close()
+
+	// Now read using Legacy mode - should find data in hashidx
+	svcL2, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeLegacy))
+	require.NoError(t, err)
+	defer svcL2.Close()
+
+	states, err := svcL2.ListUserStates(ctx, userKey)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("zval"), states["zkey"])
+}
+
+// TestCreateSession_Transition_Mode tests CreateSession in Transition mode
+func TestCreateSession_Transition_Mode(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	svcT, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeTransition))
+	require.NoError(t, err)
+	defer svcT.Close()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app1", UserID: "u1", SessionID: "trans-session"}
+
+	// Pre-populate states
+	err = svcT.UpdateAppState(ctx, "app1", session.StateMap{"appkey": []byte("appval")})
+	require.NoError(t, err)
+	err = svcT.UpdateUserState(ctx, session.UserKey{AppName: "app1", UserID: "u1"}, session.StateMap{"userkey": []byte("userval")})
+	require.NoError(t, err)
+
+	// Create session in Transition mode
+	sess, err := svcT.CreateSession(ctx, key, session.StateMap{"sesskey": []byte("sessval")})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	// Verify session was created in zset (Transition writes to zset)
+	zsetClient := zset.NewClient(buildRedisClient(t, redisURL), zset.Config{KeyPrefix: ""})
+	exists, err := zsetClient.Exists(ctx, key)
+	require.NoError(t, err)
+	assert.True(t, exists)
+
+	// Verify session state includes merged app and user state
+	assert.Equal(t, []byte("sessval"), sess.State["sesskey"])
+	assert.Equal(t, []byte("appval"), sess.State["app:appkey"])
+	assert.Equal(t, []byte("userval"), sess.State["user:userkey"])
+}
+
+// TestDeleteSession_ZsetSession tests DeleteSession with zset session
+func TestDeleteSession_ZsetSession(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	// Create zset session via Transition mode
+	svcT, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeTransition))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app1", UserID: "u1", SessionID: "del-zset"}
+	sess, err := svcT.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	// Append some events and track events
+	e := createTestEvent("e1", "agent", "content", time.Now(), false)
+	require.NoError(t, svcT.AppendEvent(ctx, sess, e))
+
+	te := &session.TrackEvent{
+		Track:     "test",
+		Payload:   json.RawMessage(`"data"`),
+		Timestamp: time.Now(),
+	}
+	require.NoError(t, svcT.AppendTrackEvent(ctx, sess, te))
+	svcT.Close()
+
+	// Delete using Legacy mode
+	svcL, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeLegacy))
+	require.NoError(t, err)
+	defer svcL.Close()
+
+	err = svcL.DeleteSession(ctx, key)
+	require.NoError(t, err)
+
+	// Verify session is deleted
+	sess, err = svcL.GetSession(ctx, key)
+	require.NoError(t, err)
+	assert.Nil(t, sess)
+}
+
+// TestDeleteSession_HashidxSession tests DeleteSession with hashidx session
+func TestDeleteSession_HashidxSession(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	svc, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeNone))
+	require.NoError(t, err)
+	defer svc.Close()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app1", UserID: "u1", SessionID: "del-hash"}
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	// Append events
+	e := createTestEvent("e1", "agent", "content", time.Now(), false)
+	require.NoError(t, svc.AppendEvent(ctx, sess, e))
+
+	// Delete session
+	err = svc.DeleteSession(ctx, key)
+	require.NoError(t, err)
+
+	// Verify session is deleted
+	sess, err = svc.GetSession(ctx, key)
+	require.NoError(t, err)
+	assert.Nil(t, sess)
+}
+
+// TestNewService_WithAllOptions tests NewService with all possible options
+func TestNewService_WithAllOptions(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	// Test with various options
+	svc, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithKeyPrefix("test"),
+		WithSessionTTL(time.Hour),
+		WithAppStateTTL(2*time.Hour),
+		WithUserStateTTL(30*time.Minute),
+		WithEnableAsyncPersist(true),
+		WithAsyncPersisterNum(4),
+		WithSummarizer(&fakeSummarizer{allow: true, out: "test"}),
+		WithAsyncSummaryNum(2),
+		WithSummaryQueueSize(100),
+		WithSummaryJobTimeout(30*time.Second),
+		WithCompatMode(CompatModeTransition),
+	)
+	require.NoError(t, err)
+	svc.Close()
+}
+
+// TestAsyncPersist_MultipleWorkers tests async persister with multiple workers
+func TestAsyncPersist_MultipleWorkers(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithEnableAsyncPersist(true),
+		WithAsyncPersisterNum(4),
+	)
+	require.NoError(t, err)
+	defer svc.Close()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app1", UserID: "u1", SessionID: "async-multi"}
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	// Send many events
+	for i := 0; i < 50; i++ {
+		e := createTestEvent(fmt.Sprintf("e%d", i), "agent", "content", time.Now(), false)
+		err = svc.AppendEvent(ctx, sess, e)
+		require.NoError(t, err)
+	}
+
+	// Give time for async workers to process
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify events were persisted
+	sessGet, err := svc.GetSession(ctx, key)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, len(sessGet.Events), 50)
+}
+
+// TestListSessions_MixedStorages tests ListSessions finding sessions from both storages
+func TestListSessions_MixedStorages(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	userKey := session.UserKey{AppName: "app", UserID: "user"}
+
+	// Create hashidx session
+	svcN, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeNone))
+	require.NoError(t, err)
+	_, err = svcN.CreateSession(ctx, session.Key{AppName: "app", UserID: "user", SessionID: "hash-sess"}, nil)
+	require.NoError(t, err)
+	svcN.Close()
+
+	// Create zset session
+	svcT, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeTransition))
+	require.NoError(t, err)
+	_, err = svcT.CreateSession(ctx, session.Key{AppName: "app", UserID: "user", SessionID: "zset-sess"}, nil)
+	require.NoError(t, err)
+	svcT.Close()
+
+	// List using Transition mode should find both
+	svcT2, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeTransition))
+	require.NoError(t, err)
+	defer svcT2.Close()
+
+	sessions, err := svcT2.ListSessions(ctx, userKey)
+	require.NoError(t, err)
+	assert.Len(t, sessions, 2)
+
+	sessionIDs := make(map[string]bool)
+	for _, s := range sessions {
+		sessionIDs[s.ID] = true
+	}
+	assert.True(t, sessionIDs["hash-sess"])
+	assert.True(t, sessionIDs["zset-sess"])
+}
+
+// TestTrimConversations_HashidxSession tests TrimConversations with hashidx session
+func TestTrimConversations_HashidxSession(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	svc, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeNone))
+	require.NoError(t, err)
+	defer svc.Close()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "trim-hash"}
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	// Append events with RequestIDs
+	for i := 0; i < 3; i++ {
+		e := createTestEvent("e"+string(rune('0'+i)), "agent", "content", time.Now().Add(time.Duration(i)*time.Second), false)
+		e.RequestID = "req" + string(rune('0'+i))
+		require.NoError(t, svc.AppendEvent(ctx, sess, e))
+	}
+
+	// Trim from hashidx session
+	deleted, err := svc.TrimConversations(ctx, key, WithCount(1))
+	require.NoError(t, err)
+	assert.NotEmpty(t, deleted)
+}
+
+// TestDeleteSession_TransitionMode tests DeleteSession in Transition mode
+func TestDeleteSession_TransitionMode(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	svcT, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeTransition))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "del-trans"}
+	_, err = svcT.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	svcT.Close()
+
+	// Delete using Transition mode (should delete from both)
+	svcT2, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeTransition))
+	require.NoError(t, err)
+	defer svcT2.Close()
+
+	err = svcT2.DeleteSession(ctx, key)
+	require.NoError(t, err)
+
+	// Verify session is deleted from both storages
+	sess, err := svcT2.GetSession(ctx, key)
+	require.NoError(t, err)
+	assert.Nil(t, sess)
+}
+
+// TestUpdateUserState_LegacyMode tests UpdateUserState in Legacy mode
+func TestUpdateUserState_LegacyMode(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	svcL, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeLegacy))
+	require.NoError(t, err)
+	defer svcL.Close()
+
+	ctx := context.Background()
+	userKey := session.UserKey{AppName: "app", UserID: "user"}
+
+	// Write user state in Legacy mode - writes to hashidx
+	err = svcL.UpdateUserState(ctx, userKey, session.StateMap{"key": []byte("value")})
+	require.NoError(t, err)
+
+	// Verify hashidx has the data
+	hashidxClient := hashidx.NewClient(buildRedisClient(t, redisURL), hashidx.Config{KeyPrefix: ""})
+	hashidxStates, err := hashidxClient.ListUserStates(ctx, userKey)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("value"), hashidxStates["key"])
+
+	// ListUserStates should return the data from hashidx
+	states, err := svcL.ListUserStates(ctx, userKey)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("value"), states["key"])
+}
+
+// TestDeleteUserState_LegacyMode tests DeleteUserState in Legacy mode
+func TestDeleteUserState_LegacyMode(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	svcL, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeLegacy))
+	require.NoError(t, err)
+	defer svcL.Close()
+
+	ctx := context.Background()
+	userKey := session.UserKey{AppName: "app", UserID: "user"}
+
+	// Create user state (goes to hashidx in Legacy mode)
+	err = svcL.UpdateUserState(ctx, userKey, session.StateMap{"k1": []byte("v1"), "k2": []byte("v2")})
+	require.NoError(t, err)
+
+	// Delete k1
+	err = svcL.DeleteUserState(ctx, userKey, "k1")
+	require.NoError(t, err)
+
+	// Verify k1 deleted, k2 still exists (using service API)
+	states, err := svcL.ListUserStates(ctx, userKey)
+	require.NoError(t, err)
+	assert.Nil(t, states["k1"])
+	assert.Equal(t, []byte("v2"), states["k2"])
+}
+
+// TestUpdateUserState_Transition_OnlyHashidx tests UpdateUserState in Transition mode when only hashidx has data
+func TestUpdateUserState_Transition_OnlyHashidx(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	// First write to hashidx only
+	svcN, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeNone))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	userKey := session.UserKey{AppName: "app", UserID: "user"}
+	err = svcN.UpdateUserState(ctx, userKey, session.StateMap{"key": []byte("hash-value")})
+	require.NoError(t, err)
+	svcN.Close()
+
+	// Now read using Transition mode
+	svcT, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeTransition))
+	require.NoError(t, err)
+	defer svcT.Close()
+
+	states, err := svcT.ListUserStates(ctx, userKey)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("hash-value"), states["key"])
+}
+
+// TestGetSession_NonExistent tests GetSession with non-existent session in various modes
+func TestGetSession_NonExistent(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	modes := []CompatMode{CompatModeNone, CompatModeLegacy, CompatModeTransition}
+
+	for _, mode := range modes {
+		svc, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(mode))
+		require.NoError(t, err)
+
+		ctx := context.Background()
+		key := session.Key{AppName: "app", UserID: "user", SessionID: "nonexistent"}
+
+		sess, err := svc.GetSession(ctx, key)
+		require.NoError(t, err)
+		assert.Nil(t, sess, "mode %d should return nil for non-existent session", mode)
+
+		svc.Close()
+	}
+}
+
+// TestListUserStates_NoneMode tests ListUserStates in None mode
+func TestListUserStates_NoneMode(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	svc, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeNone))
+	require.NoError(t, err)
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := session.UserKey{AppName: "app", UserID: "user"}
+
+	// Write user state in None mode - should only write to hashidx
+	err = svc.UpdateUserState(ctx, userKey, session.StateMap{"key": []byte("value")})
+	require.NoError(t, err)
+
+	// List should return the data from hashidx
+	states, err := svc.ListUserStates(ctx, userKey)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("value"), states["key"])
+}
+
+// TestUpdateAppState_LegacyMode tests UpdateAppState in Legacy mode
+func TestUpdateAppState_LegacyMode(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	svcL, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeLegacy))
+	require.NoError(t, err)
+	defer svcL.Close()
+
+	ctx := context.Background()
+
+	// Update app state in Legacy mode (goes to hashidx)
+	err = svcL.UpdateAppState(ctx, "app", session.StateMap{"key": []byte("value")})
+	require.NoError(t, err)
+
+	// Verify it can be read back
+	states, err := svcL.ListAppStates(ctx, "app")
+	require.NoError(t, err)
+	assert.Equal(t, []byte("value"), states["key"])
+}
+
+// TestDeleteAppState_LegacyMode tests DeleteAppState in Legacy mode
+func TestDeleteAppState_LegacyMode(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	svcL, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeLegacy))
+	require.NoError(t, err)
+	defer svcL.Close()
+
+	ctx := context.Background()
+
+	// Create app state
+	err = svcL.UpdateAppState(ctx, "app", session.StateMap{"k1": []byte("v1"), "k2": []byte("v2")})
+	require.NoError(t, err)
+
+	// Delete k1
+	err = svcL.DeleteAppState(ctx, "app", "k1")
+	require.NoError(t, err)
+
+	// Verify k1 deleted, k2 still exists
+	states, err := svcL.ListAppStates(ctx, "app")
+	require.NoError(t, err)
+	assert.Nil(t, states["k1"])
+	assert.Equal(t, []byte("v2"), states["k2"])
+}
+
+// TestEnqueueSummaryJob_NoAsyncWorker tests EnqueueSummaryJob without async worker
+func TestEnqueueSummaryJob_NoAsyncWorker(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	// Create service without async summary worker
+	svc, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithSummarizer(&fakeSummarizer{allow: true, out: "test"}),
+		// No async summary options, so no async worker
+	)
+	require.NoError(t, err)
+	defer svc.Close()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "enqueue"}
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	// Enqueue should work even without async worker (falls back to sync)
+	err = svc.EnqueueSummaryJob(ctx, sess, "", false)
+	require.NoError(t, err)
+}
+
+// TestEnqueueSummaryJob_NoSummarizer tests EnqueueSummaryJob without summarizer
+func TestEnqueueSummaryJob_NoSummarizer(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	// Create service without summarizer
+	svc, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer svc.Close()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "no-sum"}
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	// Enqueue should return nil when no summarizer
+	err = svc.EnqueueSummaryJob(ctx, sess, "", false)
+	require.NoError(t, err)
+}
+
+// TestGetSessionSummaryText_LegacyMode tests GetSessionSummaryText in Legacy mode with zset data
+func TestGetSessionSummaryText_LegacyMode(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	// Create zset session
+	svcT, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeTransition))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	sess, err := svcT.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	svcT.Close()
+
+	// Add summary to zset
+	client := buildRedisClient(t, redisURL)
+	sumKey := zset.GetSessionSummaryKey(key)
+	summaries := map[string]*session.Summary{
+		session.SummaryFilterKeyAllContents: {
+			Summary:   "legacy-summary",
+			UpdatedAt: time.Now().UTC(),
+		},
+	}
+	payload, _ := json.Marshal(summaries)
+	client.HSet(ctx, sumKey, "sess", string(payload))
+
+	// Get summary using Legacy mode
+	svcL, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeLegacy))
+	require.NoError(t, err)
+	defer svcL.Close()
+
+	text, ok := svcL.GetSessionSummaryText(ctx, sess)
+	require.True(t, ok)
+	assert.Equal(t, "legacy-summary", text)
+}
+
+// TestUpdateSessionState_LegacyMode tests UpdateSessionState in Legacy mode
+func TestUpdateSessionState_LegacyMode(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	// Create zset session
+	svcT, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeTransition))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	_, err = svcT.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	svcT.Close()
+
+	// Update session state using Legacy mode
+	svcL, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeLegacy))
+	require.NoError(t, err)
+	defer svcL.Close()
+
+	err = svcL.UpdateSessionState(ctx, key, session.StateMap{"newkey": []byte("newval")})
+	require.NoError(t, err)
+
+	// Verify state was updated by reading the session
+	sessL, err := svcL.GetSession(ctx, key)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("newval"), sessL.State["newkey"])
+}
+
+// TestCreateSessionSummary_LegacyMode tests CreateSessionSummary in Legacy mode
+func TestCreateSessionSummary_LegacyMode(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	// Create zset session
+	svcT, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeTransition))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sum-leg"}
+	sess, err := svcT.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	// Add an event
+	e := event.New("inv", "author")
+	e.Timestamp = time.Now()
+	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
+	require.NoError(t, svcT.AppendEvent(ctx, sess, e))
+	svcT.Close()
+
+	// Create summary using Legacy mode
+	svcL, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithCompatMode(CompatModeLegacy),
+		WithSummarizer(&fakeSummarizer{allow: true, out: "legacy-summary"}),
+		WithSessionTTL(time.Hour),
+	)
+	require.NoError(t, err)
+	defer svcL.Close()
+
+	// Get session with events
+	sessL, err := svcL.GetSession(ctx, key)
+	require.NoError(t, err)
+
+	err = svcL.CreateSessionSummary(ctx, sessL, "", false)
+	require.NoError(t, err)
+}
+
+// TestGetSummaryFromZSet_ErrorPath tests error path for getSummaryFromZSet
+func TestGetSummaryFromZSet_ErrorPath(t *testing.T) {
+	mr, err := miniredis.Run()
+	require.NoError(t, err)
+	redisURL := "redis://" + mr.Addr()
+	defer mr.Close()
+
+	svc, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeLegacy))
+	require.NoError(t, err)
+
+	// Create session first
+	key := session.Key{AppName: "app1", UserID: "u1", SessionID: "zsum-err"}
+	sess, err := svc.CreateSession(context.Background(), key, nil)
+	require.NoError(t, err)
+
+	// Close Redis to trigger error
+	mr.Close()
+
+	// GetSessionSummaryText should handle zset error gracefully
+	_, ok := svc.GetSessionSummaryText(context.Background(), sess)
+	// When Redis is closed, it should return false (not found)
+	assert.False(t, ok)
+	svc.Close()
+}
+
+// TestGetSummaryFromHashIdx_ErrorPath tests error path for getSummaryFromHashIdx
+func TestGetSummaryFromHashIdx_ErrorPath(t *testing.T) {
+	mr, err := miniredis.Run()
+	require.NoError(t, err)
+	redisURL := "redis://" + mr.Addr()
+	defer mr.Close()
+
+	svc, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeNone))
+	require.NoError(t, err)
+
+	// Create session
+	key := session.Key{AppName: "app1", UserID: "u1", SessionID: "hsum-err"}
+	sess, err := svc.CreateSession(context.Background(), key, nil)
+	require.NoError(t, err)
+
+	// Close Redis
+	mr.Close()
+
+	// GetSessionSummaryText should handle hashidx error gracefully
+	_, ok := svc.GetSessionSummaryText(context.Background(), sess)
+	assert.False(t, ok)
+	svc.Close()
+}
+
+// TestCheckSessionExists_BothStorages tests checkSessionExists with sessions in both storages
+func TestCheckSessionExists_BothStorages(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app1", UserID: "u1", SessionID: "exist-test"}
+
+	// Create in zset (Transition mode)
+	svcT, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeTransition))
+	require.NoError(t, err)
+	_, err = svcT.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	svcT.Close()
+
+	// Check existence using Legacy mode
+	svcL, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeLegacy))
+	require.NoError(t, err)
+	defer svcL.Close()
+
+	zsetExists, hashidxExists, err := svcL.checkSessionExists(ctx, key)
+	require.NoError(t, err)
+	assert.True(t, zsetExists)
+	assert.False(t, hashidxExists)
+}
+
+// TestListSessions_EmptyResult tests ListSessions with empty result
+func TestListSessions_EmptyResult(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	svc, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := session.UserKey{AppName: "nonexistent", UserID: "user"}
+
+	sessions, err := svc.ListSessions(ctx, userKey)
+	require.NoError(t, err)
+	assert.Empty(t, sessions)
 }

@@ -139,7 +139,6 @@ func TestClient_ListAppStates_Error(t *testing.T) {
 	c := NewClient(rdb, defaultConfig())
 	ctx := context.Background()
 
-	// Close miniredis to simulate connection error
 	mr.Close()
 
 	_, err := c.ListAppStates(ctx, "myapp")
@@ -151,7 +150,6 @@ func TestClient_ListUserStates_Error(t *testing.T) {
 	c := NewClient(rdb, defaultConfig())
 	ctx := context.Background()
 
-	// Close miniredis to simulate connection error
 	mr.Close()
 
 	_, err := c.ListUserStates(ctx, session.UserKey{AppName: "x", UserID: "y"})
