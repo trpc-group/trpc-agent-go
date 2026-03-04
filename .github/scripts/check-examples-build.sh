@@ -26,7 +26,7 @@ main() {
 	examples_dir="$repo_root/examples"
 	# Validate the examples directory exists.
 	if [[ ! -d "$examples_dir" ]]; then
-		echo "未找到 examples 目录: $examples_dir" >&2
+		echo "examples directory not found: $examples_dir" >&2
 		return 2
 	fi
 	# Build the `go build` arguments.
@@ -41,7 +41,7 @@ main() {
 		mod_files+=("$modfile")
 	done < <(find "$examples_dir" -name go.mod -type f | sort)
 	if (( ${#mod_files[@]} == 0 )); then
-		echo "examples 目录下未找到 go.mod 文件。" >&2
+		echo "no go.mod files found under examples directory." >&2
 		return 2
 	fi
 	# Build each module and record failures.
@@ -56,7 +56,7 @@ main() {
 		fi
 		module_dir="$(dirname "$modfile")"
 		rel_dir="${module_dir#"$repo_root"/}"
-		echo "==> 编译: $rel_dir"
+		echo "==> Build: $rel_dir"
 		local build_log build_log2
 		# Try a standard build first.
 		if build_log=$(cd "$module_dir" && go build "${build_args[@]}" ./... 2>&1); then
@@ -74,7 +74,7 @@ main() {
 			else
 				printf '%s\n' "$build_log" >&2
 				printf '%s\n' "$build_log2" >&2
-				echo "ERR: $rel_dir" >&2
+				echo "Build failed: $rel_dir" >&2
 				failed_modules+=("$rel_dir")
 			fi
 		fi
@@ -82,14 +82,14 @@ main() {
 	done
 	# Report failures if any.
 	if (( ${#failed_modules[@]} > 0 )); then
-		echo "以下 module 编译失败 (${#failed_modules[@]}):" >&2
+		echo "Build failed for modules (${#failed_modules[@]}):" >&2
 		local m
 		for m in "${failed_modules[@]}"; do
 			echo "  - $m" >&2
 		done
 		return 1
 	fi
-	echo "所有 examples module 均编译通过。"
+	echo "All examples modules built successfully."
 }
 
 main "$@"
