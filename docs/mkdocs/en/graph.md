@@ -766,6 +766,19 @@ Common approaches:
   when you see a non-partial response that carries `choice.Message.Content`
   (or when the workflow finishes).
 
+Tip: node-to-node streaming inside the graph
+
+- Graph state (for example, `last_response` and `node_responses[nodeID]`) is
+  committed only after a node finishes. Downstream nodes cannot read partial
+  streaming text from those keys.
+- If you need a downstream node to react while an upstream LLM (or Agent node)
+  is still streaming, use the StreamHub APIs:
+  - Producer node: `graph.WithStreamOutput("name")`
+  - Consumer node: `graph.OpenStreamReader(ctx, "name")`
+- Streams are ephemeral (in-memory) and are not checkpointed. To consume in
+  real time, run the consumer node in parallel and join afterwards.
+- See `examples/graph/streaming_node_consumer`.
+
 #### Three input paradigms
 
 - OneShot (`StateKeyOneShotMessages`):

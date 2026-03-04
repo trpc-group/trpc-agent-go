@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"reflect"
 	"sort"
@@ -233,6 +234,16 @@ func WithGenerationConfig(cfg model.GenerationConfig) Option {
 	return func(node *Node) {
 		c := cfg
 		node.llmGenerationConfig = &c
+	}
+}
+
+// WithStreamOutput enables node-to-node streaming for this node.
+//
+// For LLM and Agent nodes, streaming deltas are forwarded to the named stream.
+// Function nodes can write to streams directly via OpenStreamWriter.
+func WithStreamOutput(streamName string) Option {
+	return func(node *Node) {
+		node.streamOutputName = streamName
 	}
 }
 
@@ -501,6 +512,12 @@ func (sg *StateGraph) AddLLMNode(
 		llmOptsForFunc = append(
 			llmOptsForFunc,
 			WithLLMGenerationConfig(*node.llmGenerationConfig),
+		)
+	}
+	if node.streamOutputName != "" {
+		llmOptsForFunc = append(
+			llmOptsForFunc,
+			WithLLMStreamOutput(node.streamOutputName),
 		)
 	}
 	llmNodeFunc := NewLLMNodeFunc(model, instruction, tools, llmOptsForFunc...)
@@ -966,6 +983,13 @@ func WithLLMGenerationConfig(cfg model.GenerationConfig) LLMNodeFuncOption {
 	}
 }
 
+// WithLLMStreamOutput sets the stream name used for node-to-node streaming.
+func WithLLMStreamOutput(streamName string) LLMNodeFuncOption {
+	return func(runner *llmRunner) {
+		runner.streamOutputName = streamName
+	}
+}
+
 // NewLLMNodeFunc creates a NodeFunc that uses the model package directly.
 // This implements LLM node functionality using the model package interface.
 func NewLLMNodeFunc(
@@ -1009,6 +1033,7 @@ type llmRunner struct {
 	nodeID               string
 	generationConfig     model.GenerationConfig
 	userInputKey         string
+	streamOutputName     string
 }
 
 // execute implements the three-stage rule for LLM execution.
@@ -1203,6 +1228,16 @@ func (r *llmRunner) executeModel(
 	// Build model input metadata from the original state and instruction
 	// so events accurately reflect both instruction and user input.
 	modelInput := extractModelInput(state, instructionUsed, r.userInputKey)
+
+	var streamWriter *agent.StreamWriter
+	if r.streamOutputName != "" {
+		w, err := agent.OpenStreamWriter(ctx, r.streamOutputName)
+		if err != nil {
+			return nil, err
+		}
+		streamWriter = w
+	}
+
 	startTime := time.Now()
 	modelName := getModelName(r.llmModel)
 	emitModelStartEvent(ctx, eventChan, invocationID, modelName, nodeID, modelInput, startTime)
@@ -1217,8 +1252,18 @@ func (r *llmRunner) executeModel(
 		UserID:         userID,
 		Span:           span,
 		NodeID:         nodeID,
+		DeltaStream:    streamWriter,
 	})
 	endTime := time.Now()
+
+	if streamWriter != nil {
+		if err != nil {
+			_ = streamWriter.CloseWithError(err)
+		} else {
+			_ = streamWriter.Close()
+		}
+	}
+
 	var modelOutput string
 	var responseID string
 	if err == nil && result != nil {
@@ -1896,6 +1941,7 @@ type agentNodeConfig struct {
 	inputFromLast       bool
 	llmGenerationConfig *model.GenerationConfig
 	userInputKey        string
+	streamOutputName    string
 }
 
 func agentNodeConfigFromOptions(opts ...Option) agentNodeConfig {
@@ -1912,6 +1958,7 @@ func agentNodeConfigFromOptions(opts ...Option) agentNodeConfig {
 		inputFromLast:       dummyNode.agentInputFromLastResponse,
 		llmGenerationConfig: dummyNode.llmGenerationConfig,
 		userInputKey:        dummyNode.userInputKey,
+		streamOutputName:    dummyNode.streamOutputName,
 	}
 }
 
@@ -2237,6 +2284,7 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 			state,
 			eventChan,
 			agentName,
+			cfg.streamOutputName,
 			tracker,
 		)
 		if err != nil {
@@ -2316,11 +2364,42 @@ func processAgentEventStream(
 	state State,
 	eventChan chan<- *event.Event,
 	agentName string,
+	streamName string,
 	tracker *itelemetry.InvokeAgentTracker,
-) (agentEventStreamResult, error) {
-	res := agentEventStreamResult{
+) (res agentEventStreamResult, err error) {
+	res = agentEventStreamResult{
 		tokenUsage: &itelemetry.TokenUsage{},
 	}
+
+	var (
+		streamWriter *agent.StreamWriter
+		sawDelta     bool
+		streamBroken bool
+	)
+	if streamName != "" {
+		w, openErr := agent.OpenStreamWriter(ctx, streamName)
+		if openErr != nil {
+			return res, openErr
+		}
+		streamWriter = w
+	}
+	defer func() {
+		if streamWriter == nil {
+			return
+		}
+		if streamBroken {
+			_ = streamWriter.CloseWithError(io.ErrClosedPipe)
+			return
+		}
+		if err != nil {
+			_ = streamWriter.CloseWithError(err)
+			return
+		}
+		if !sawDelta && res.lastResponse != "" {
+			_, _ = streamWriter.WriteString(res.lastResponse)
+		}
+		_ = streamWriter.Close()
+	}()
 
 	for agentEvent := range agentEventChan {
 		// Run node callbacks for this event.
@@ -2336,6 +2415,18 @@ func processAgentEventStream(
 		// Forward the event to the parent event channel.
 		if err := event.EmitEvent(ctx, eventChan, agentEvent); err != nil {
 			return res, err
+		}
+
+		if streamWriter != nil && !streamBroken &&
+			agentEvent != nil && agentEvent.Response != nil &&
+			len(agentEvent.Response.Choices) > 0 {
+			delta := agentEvent.Response.Choices[0].Delta.Content
+			if delta != "" {
+				sawDelta = true
+				if _, err := streamWriter.WriteString(delta); err != nil {
+					streamBroken = true
+				}
+			}
 		}
 
 		// Track the last response for state update.
@@ -2890,6 +2981,7 @@ type modelExecutionConfig struct {
 	UserID         string
 	NodeID         string // Add NodeID for parallel execution support
 	NodeResultKey  string // Add NodeResultKey for configurable result key pattern
+	DeltaStream    *agent.StreamWriter
 	Span           oteltrace.Span
 }
 
@@ -2925,9 +3017,24 @@ func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (a
 	// Process response.
 	var finalResponse *model.Response
 	var toolCalls []model.ToolCall
+	var sawDelta bool
+	streamBroken := false
 	for response := range responseChan {
 		// Track response for telemetry
 		tracker.TrackResponse(response)
+
+		if config.DeltaStream != nil && !streamBroken {
+			delta := ""
+			if response != nil && len(response.Choices) > 0 {
+				delta = response.Choices[0].Delta.Content
+			}
+			if delta != "" {
+				sawDelta = true
+				if _, err := config.DeltaStream.WriteString(delta); err != nil {
+					streamBroken = true
+				}
+			}
+		}
 
 		// set timing info to response
 		if response.Usage == nil {
@@ -2981,6 +3088,15 @@ func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (a
 	}
 	if len(finalResponse.Choices[0].Message.ToolCalls) < len(toolCalls) {
 		finalResponse.Choices[0].Message.ToolCalls = toolCalls
+	}
+
+	if config.DeltaStream != nil && !streamBroken && !sawDelta {
+		if len(finalResponse.Choices) > 0 {
+			msg := finalResponse.Choices[0].Message.Content
+			if msg != "" {
+				_, _ = config.DeltaStream.WriteString(msg)
+			}
+		}
 	}
 	return finalResponse, nil
 }

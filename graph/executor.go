@@ -264,6 +264,7 @@ func (e *Executor) Execute(
 	if invocation == nil {
 		return nil, errors.New("invocation is nil")
 	}
+	agent.GetOrCreateStreamHub(invocation)
 	startTime := time.Now()
 	// Create event channel.
 	eventChan := make(chan *event.Event, e.channelBufferSize)
@@ -292,6 +293,7 @@ func (e *Executor) Execute(
 					WithPregelEventError(workflow.Error.Error()),
 				))
 			}
+			agent.GetOrCreateStreamHub(invocation).CloseAll(ctx.Err())
 			close(eventChan)
 			itelemetry.TraceWorkflow(span, workflow)
 			span.End()
