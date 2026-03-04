@@ -1215,6 +1215,17 @@ func TestServer_Messages_EventError(t *testing.T) {
 	require.Equal(t, errTypeInternal, rsp.Error.Type)
 }
 
+func TestServer_ProcessMessage_NilServer(t *testing.T) {
+	t.Parallel()
+
+	var srv *Server
+	rsp, status := srv.ProcessMessage(nil, gwproto.MessageRequest{})
+	require.Equal(t, http.StatusInternalServerError, status)
+	require.NotNil(t, rsp.Error)
+	require.Equal(t, errTypeInternal, rsp.Error.Type)
+	require.Equal(t, "nil server", rsp.Error.Message)
+}
+
 func TestServer_Messages_EmptyReply(t *testing.T) {
 	t.Parallel()
 
@@ -1273,6 +1284,45 @@ func TestServer_Status_MissingRequestID(t *testing.T) {
 	srv.Handler().ServeHTTP(rr, req)
 
 	require.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+func TestServer_CancelRequest_NilContext(t *testing.T) {
+	t.Parallel()
+
+	r := &managedRunnerStub{
+		status: runner.RunStatus{
+			RequestID: "req-1",
+			AgentName: "agent",
+		},
+	}
+	srv, err := New(r)
+	require.NoError(t, err)
+
+	canceled, apiErr, status := srv.CancelRequest(nil, "req-1")
+	require.True(t, canceled)
+	require.Nil(t, apiErr)
+	require.Equal(t, http.StatusOK, status)
+}
+
+func TestServer_CancelRequest_NoMatchReturnsFalse(t *testing.T) {
+	t.Parallel()
+
+	r := &managedRunnerStub{
+		status: runner.RunStatus{
+			RequestID: "req-1",
+			AgentName: "agent",
+		},
+	}
+	srv, err := New(r)
+	require.NoError(t, err)
+
+	canceled, apiErr, status := srv.CancelRequest(
+		context.Background(),
+		"missing",
+	)
+	require.False(t, canceled)
+	require.Nil(t, apiErr)
+	require.Equal(t, http.StatusOK, status)
 }
 
 func TestServer_Cancel_MissingRequestID(t *testing.T) {
