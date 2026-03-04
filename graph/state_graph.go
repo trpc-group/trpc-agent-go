@@ -2354,6 +2354,206 @@ type agentEventStreamResult struct {
 	interrupt        *InterruptError
 }
 
+type agentDeltaStreamTap struct {
+	writer       *agent.StreamWriter
+	lastResponse *string
+
+	sawDelta bool
+	broken   bool
+}
+
+func newAgentDeltaStreamTap(
+	ctx context.Context,
+	streamName string,
+	lastResponse *string,
+) (*agentDeltaStreamTap, error) {
+	tap := &agentDeltaStreamTap{
+		lastResponse: lastResponse,
+	}
+	if streamName == "" {
+		return tap, nil
+	}
+	w, err := agent.OpenStreamWriter(ctx, streamName)
+	if err != nil {
+		return nil, err
+	}
+	tap.writer = w
+	return tap, nil
+}
+
+func (t *agentDeltaStreamTap) WriteDelta(ev *event.Event) {
+	if t == nil || t.writer == nil || t.broken {
+		return
+	}
+	delta := agentDeltaFromEvent(ev)
+	if delta == "" {
+		return
+	}
+	t.sawDelta = true
+	if _, err := t.writer.WriteString(delta); err != nil {
+		t.broken = true
+	}
+}
+
+func (t *agentDeltaStreamTap) Close(errp *error) {
+	if t == nil || t.writer == nil {
+		return
+	}
+	if t.broken {
+		_ = t.writer.CloseWithError(io.ErrClosedPipe)
+		return
+	}
+	if errp != nil && *errp != nil {
+		_ = t.writer.CloseWithError(*errp)
+		return
+	}
+	if !t.sawDelta && t.lastResponse != nil && *t.lastResponse != "" {
+		_, _ = t.writer.WriteString(*t.lastResponse)
+	}
+	_ = t.writer.Close()
+}
+
+func agentDeltaFromEvent(ev *event.Event) string {
+	if ev == nil || ev.Response == nil || len(ev.Response.Choices) == 0 {
+		return ""
+	}
+	return ev.Response.Choices[0].Delta.Content
+}
+
+func runAgentEventCallbacks(
+	ctx context.Context,
+	nodeCallbacks *NodeCallbacks,
+	nodeID string,
+	agentName string,
+	state State,
+	ev *event.Event,
+) {
+	if nodeCallbacks == nil {
+		return
+	}
+	for _, callback := range nodeCallbacks.AgentEvent {
+		callback(ctx, &NodeCallbackContext{
+			NodeID:   nodeID,
+			NodeName: agentName,
+		}, state, ev)
+	}
+}
+
+func updateAgentStreamResultFromEvent(
+	ctx context.Context,
+	res *agentEventStreamResult,
+	ev *event.Event,
+	tracker *itelemetry.InvokeAgentTracker,
+) {
+	updateAgentLastResponse(res, ev)
+	updateAgentStructuredOutput(res, ev)
+	updateAgentTokenUsage(res, ev, tracker)
+	updateAgentInterrupt(res, ev)
+	updateAgentFinalState(ctx, res, ev)
+}
+
+func updateAgentLastResponse(res *agentEventStreamResult, ev *event.Event) {
+	if res == nil || ev == nil || ev.Response == nil {
+		return
+	}
+	if len(ev.Response.Choices) == 0 {
+		return
+	}
+	msg := ev.Response.Choices[0].Message.Content
+	if msg == "" {
+		return
+	}
+	res.lastResponse = msg
+}
+
+func updateAgentStructuredOutput(res *agentEventStreamResult, ev *event.Event) {
+	if res == nil || ev == nil {
+		return
+	}
+	if ev.StructuredOutput == nil {
+		return
+	}
+	res.structuredOutput = ev.StructuredOutput
+}
+
+func updateAgentTokenUsage(
+	res *agentEventStreamResult,
+	ev *event.Event,
+	tracker *itelemetry.InvokeAgentTracker,
+) {
+	if res == nil || ev == nil || ev.Response == nil {
+		return
+	}
+	if tracker != nil {
+		tracker.TrackResponse(ev.Response)
+	}
+	if ev.Response.IsPartial {
+		return
+	}
+	if ev.Response.Usage != nil {
+		res.tokenUsage.PromptTokens += ev.Response.Usage.PromptTokens
+		res.tokenUsage.CompletionTokens +=
+			ev.Response.Usage.CompletionTokens
+		res.tokenUsage.TotalTokens += ev.Response.Usage.TotalTokens
+	}
+	res.fullRespEvent = ev
+}
+
+func updateAgentInterrupt(res *agentEventStreamResult, ev *event.Event) {
+	if res == nil || res.interrupt != nil {
+		return
+	}
+	intr, ok := extractPregelInterrupt(ev)
+	if !ok {
+		return
+	}
+	res.interrupt = intr
+}
+
+func updateAgentFinalState(
+	ctx context.Context,
+	res *agentEventStreamResult,
+	ev *event.Event,
+) {
+	if res == nil {
+		return
+	}
+	finalState, rawDelta, ok := extractSubgraphFinalState(ctx, ev)
+	if !ok {
+		return
+	}
+	res.finalState = finalState
+	res.rawDelta = rawDelta
+}
+
+func extractSubgraphFinalState(
+	ctx context.Context,
+	ev *event.Event,
+) (State, map[string][]byte, bool) {
+	if ev == nil || !ev.Done || ev.Response == nil || ev.StateDelta == nil {
+		return nil, nil, false
+	}
+	if ev.Response.Object != ObjectTypeGraphExecution {
+		return nil, nil, false
+	}
+	tmp := make(State)
+	for k, b := range ev.StateDelta {
+		var v any
+		err := json.Unmarshal(b, &v)
+		if err == nil {
+			tmp[k] = v
+			continue
+		}
+		log.DebugfContext(
+			ctx,
+			"subgraph: failed to unmarshal final state key=%s: %v",
+			k,
+			err,
+		)
+	}
+	return tmp, ev.StateDelta, true
+}
+
 // processAgentEventStream processes the event stream from the target agent.
 // This function handles forwarding events and capturing completion state.
 func processAgentEventStream(
@@ -2371,120 +2571,30 @@ func processAgentEventStream(
 		tokenUsage: &itelemetry.TokenUsage{},
 	}
 
-	var (
-		streamWriter *agent.StreamWriter
-		sawDelta     bool
-		streamBroken bool
-	)
-	if streamName != "" {
-		w, openErr := agent.OpenStreamWriter(ctx, streamName)
-		if openErr != nil {
-			return res, openErr
-		}
-		streamWriter = w
+	tap, err := newAgentDeltaStreamTap(ctx, streamName, &res.lastResponse)
+	if err != nil {
+		return res, err
 	}
-	defer func() {
-		if streamWriter == nil {
-			return
-		}
-		if streamBroken {
-			_ = streamWriter.CloseWithError(io.ErrClosedPipe)
-			return
-		}
-		if err != nil {
-			_ = streamWriter.CloseWithError(err)
-			return
-		}
-		if !sawDelta && res.lastResponse != "" {
-			_, _ = streamWriter.WriteString(res.lastResponse)
-		}
-		_ = streamWriter.Close()
-	}()
+	defer tap.Close(&err)
 
 	for agentEvent := range agentEventChan {
-		// Run node callbacks for this event.
-		if nodeCallbacks != nil {
-			for _, callback := range nodeCallbacks.AgentEvent {
-				callback(ctx, &NodeCallbackContext{
-					NodeID:   nodeID,
-					NodeName: agentName,
-				}, state, agentEvent)
-			}
-		}
+		runAgentEventCallbacks(
+			ctx,
+			nodeCallbacks,
+			nodeID,
+			agentName,
+			state,
+			agentEvent,
+		)
 
 		// Forward the event to the parent event channel.
 		if err := event.EmitEvent(ctx, eventChan, agentEvent); err != nil {
 			return res, err
 		}
 
-		if streamWriter != nil && !streamBroken &&
-			agentEvent != nil && agentEvent.Response != nil &&
-			len(agentEvent.Response.Choices) > 0 {
-			delta := agentEvent.Response.Choices[0].Delta.Content
-			if delta != "" {
-				sawDelta = true
-				if _, err := streamWriter.WriteString(delta); err != nil {
-					streamBroken = true
-				}
-			}
-		}
+		tap.WriteDelta(agentEvent)
 
-		// Track the last response for state update.
-		if agentEvent.Response != nil && len(agentEvent.Response.Choices) > 0 &&
-			agentEvent.Response.Choices[0].Message.Content != "" {
-			res.lastResponse = agentEvent.Response.Choices[0].Message.Content
-		}
-
-		// Capture structured output from state.update events.
-		if agentEvent.StructuredOutput != nil {
-			res.structuredOutput = agentEvent.StructuredOutput
-		}
-
-		if agentEvent.Response != nil {
-			tracker.TrackResponse(agentEvent.Response)
-			if !agentEvent.Response.IsPartial {
-				if agentEvent.Response.Usage != nil {
-					res.tokenUsage.PromptTokens +=
-						agentEvent.Response.Usage.PromptTokens
-					res.tokenUsage.CompletionTokens +=
-						agentEvent.Response.Usage.CompletionTokens
-					res.tokenUsage.TotalTokens +=
-						agentEvent.Response.Usage.TotalTokens
-				}
-				res.fullRespEvent = agentEvent
-			}
-		}
-
-		if res.interrupt == nil {
-			if intr, ok := extractPregelInterrupt(agentEvent); ok {
-				res.interrupt = intr
-			}
-		}
-
-		// Capture subgraph completion state from its final graph.execution event.
-		if agentEvent.Done && agentEvent.Response != nil &&
-			agentEvent.Response.Object == ObjectTypeGraphExecution && agentEvent.StateDelta != nil {
-			// Convert StateDelta (JSON bytes) back into a State map.
-			tmp := make(State)
-			for k, b := range agentEvent.StateDelta {
-				var v any
-				if err := json.Unmarshal(b, &v); err == nil {
-					tmp[k] = v
-				} else {
-					// Debug-only: record keys that failed to unmarshal to
-					// help diagnose type drift. RawStateDelta still
-					// carries the original JSON.
-					log.DebugfContext(
-						ctx,
-						"subgraph: failed to unmarshal final state key=%s: %v",
-						k,
-						err,
-					)
-				}
-			}
-			res.finalState = tmp
-			res.rawDelta = agentEvent.StateDelta
-		}
+		updateAgentStreamResultFromEvent(ctx, &res, agentEvent, tracker)
 	}
 
 	return res, nil
@@ -2990,6 +3100,127 @@ const (
 	errMsgNoModelChoices  = "model returned no choices"
 )
 
+type modelDeltaStreamTap struct {
+	writer *agent.StreamWriter
+
+	sawDelta bool
+	broken   bool
+}
+
+func newModelDeltaStreamTap(w *agent.StreamWriter) *modelDeltaStreamTap {
+	return &modelDeltaStreamTap{
+		writer: w,
+	}
+}
+
+func (t *modelDeltaStreamTap) WriteDelta(resp *model.Response) {
+	if t == nil || t.writer == nil || t.broken {
+		return
+	}
+	delta := modelDeltaFromResponse(resp)
+	if delta == "" {
+		return
+	}
+	t.sawDelta = true
+	if _, err := t.writer.WriteString(delta); err != nil {
+		t.broken = true
+	}
+}
+
+func (t *modelDeltaStreamTap) WriteFinalIfNoDelta(final *model.Response) {
+	if t == nil || t.writer == nil || t.broken || t.sawDelta {
+		return
+	}
+	msg := modelMessageFromResponse(final)
+	if msg == "" {
+		return
+	}
+	_, _ = t.writer.WriteString(msg)
+}
+
+func modelDeltaFromResponse(resp *model.Response) string {
+	if resp == nil || len(resp.Choices) == 0 {
+		return ""
+	}
+	return resp.Choices[0].Delta.Content
+}
+
+func modelMessageFromResponse(resp *model.Response) string {
+	if resp == nil || len(resp.Choices) == 0 {
+		return ""
+	}
+	return resp.Choices[0].Message.Content
+}
+
+func validateFinalModelResponse(
+	span oteltrace.Span,
+	resp *model.Response,
+) (*model.Response, error) {
+	if resp == nil {
+		span.SetAttributes(attribute.String(
+			"trpc.go.agent.error",
+			errMsgNoModelResponse,
+		))
+		return nil, errors.New(errMsgNoModelResponse)
+	}
+	if len(resp.Choices) == 0 {
+		span.SetAttributes(attribute.String(
+			"trpc.go.agent.error",
+			errMsgNoModelChoices,
+		))
+		return nil, errors.New(errMsgNoModelChoices)
+	}
+	return resp, nil
+}
+
+func collectToolCallsFromResponse(
+	toolCalls []model.ToolCall,
+	resp *model.Response,
+) []model.ToolCall {
+	if resp == nil || len(resp.Choices) == 0 {
+		return toolCalls
+	}
+	calls := resp.Choices[0].Message.ToolCalls
+	if len(calls) == 0 {
+		return toolCalls
+	}
+	return append(toolCalls, calls...)
+}
+
+func mergeToolCallsIntoFinalResponse(
+	resp *model.Response,
+	toolCalls []model.ToolCall,
+) {
+	if resp == nil || len(resp.Choices) == 0 {
+		return
+	}
+	if len(resp.Choices[0].Message.ToolCalls) >= len(toolCalls) {
+		return
+	}
+	resp.Choices[0].Message.ToolCalls = toolCalls
+}
+
+func traceChatIfLastEvent(
+	span oteltrace.Span,
+	tracker *itelemetry.ChatMetricsTracker,
+	invocation *agent.Invocation,
+	req *model.Request,
+	resp *model.Response,
+	lastEvent *event.Event,
+) {
+	if tracker == nil || lastEvent == nil {
+		return
+	}
+	tracker.SetLastEvent(lastEvent)
+	itelemetry.TraceChat(span, &itelemetry.TraceChatAttributes{
+		Invocation:       invocation,
+		Request:          req,
+		Response:         resp,
+		EventID:          lastEvent.ID,
+		TimeToFirstToken: tracker.FirstTokenTimeDuration(),
+	})
+}
+
 // executeModelWithEvents executes the model with event processing.
 func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (any, error) {
 	ctx, responseChan, err := runModel(ctx, config.ModelCallbacks, config.LLMModel, config.Request)
@@ -3014,27 +3245,15 @@ func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (a
 	tracker := itelemetry.NewChatMetricsTracker(ctx, invocation, config.Request, timingInfo, nil, &err)
 	defer tracker.RecordMetrics()()
 
+	tap := newModelDeltaStreamTap(config.DeltaStream)
+
 	// Process response.
 	var finalResponse *model.Response
 	var toolCalls []model.ToolCall
-	var sawDelta bool
-	streamBroken := false
 	for response := range responseChan {
 		// Track response for telemetry
 		tracker.TrackResponse(response)
-
-		if config.DeltaStream != nil && !streamBroken {
-			delta := ""
-			if response != nil && len(response.Choices) > 0 {
-				delta = response.Choices[0].Delta.Content
-			}
-			if delta != "" {
-				sawDelta = true
-				if _, err := config.DeltaStream.WriteString(delta); err != nil {
-					streamBroken = true
-				}
-			}
-		}
+		tap.WriteDelta(response)
 
 		// set timing info to response
 		if response.Usage == nil {
@@ -3056,48 +3275,25 @@ func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (a
 		if err != nil {
 			return nil, err
 		}
-		if lastEvent != nil {
-			tracker.SetLastEvent(lastEvent)
-			itelemetry.TraceChat(config.Span, &itelemetry.TraceChatAttributes{
-				Invocation:       invocation,
-				Request:          config.Request,
-				Response:         response,
-				EventID:          lastEvent.ID,
-				TimeToFirstToken: tracker.FirstTokenTimeDuration(),
-			})
-		}
+		traceChatIfLastEvent(
+			config.Span,
+			tracker,
+			invocation,
+			config.Request,
+			response,
+			lastEvent,
+		)
 
-		if len(response.Choices) > 0 && len(response.Choices[0].Message.ToolCalls) > 0 {
-			toolCalls = append(toolCalls, response.Choices[0].Message.ToolCalls...)
-		}
+		toolCalls = collectToolCallsFromResponse(toolCalls, response)
 		finalResponse = response
 	}
-	if finalResponse == nil {
-		config.Span.SetAttributes(attribute.String(
-			"trpc.go.agent.error",
-			errMsgNoModelResponse,
-		))
-		return nil, errors.New(errMsgNoModelResponse)
+	finalResponse, err = validateFinalModelResponse(config.Span, finalResponse)
+	if err != nil {
+		return nil, err
 	}
-	if len(finalResponse.Choices) == 0 {
-		config.Span.SetAttributes(attribute.String(
-			"trpc.go.agent.error",
-			errMsgNoModelChoices,
-		))
-		return nil, errors.New(errMsgNoModelChoices)
-	}
-	if len(finalResponse.Choices[0].Message.ToolCalls) < len(toolCalls) {
-		finalResponse.Choices[0].Message.ToolCalls = toolCalls
-	}
+	mergeToolCallsIntoFinalResponse(finalResponse, toolCalls)
 
-	if config.DeltaStream != nil && !streamBroken && !sawDelta {
-		if len(finalResponse.Choices) > 0 {
-			msg := finalResponse.Choices[0].Message.Content
-			if msg != "" {
-				_, _ = config.DeltaStream.WriteString(msg)
-			}
-		}
-	}
+	tap.WriteFinalIfNoDelta(finalResponse)
 	return finalResponse, nil
 }
 

@@ -26,8 +26,11 @@ const (
 )
 
 var (
-	ErrStreamNameEmpty        = errors.New(errStreamNameEmpty)
+	// ErrStreamNameEmpty indicates the stream name is empty.
+	ErrStreamNameEmpty = errors.New(errStreamNameEmpty)
+	// ErrStreamWriterAlreadySet indicates a writer is already opened.
 	ErrStreamWriterAlreadySet = errors.New(errStreamWriterAlreadySet)
+	// ErrStreamReaderAlreadySet indicates a reader is already opened.
 	ErrStreamReaderAlreadySet = errors.New(errStreamReaderAlreadySet)
 )
 
@@ -305,6 +308,7 @@ func (w *StreamWriter) Write(p []byte) (int, error) {
 	}
 }
 
+// WriteString writes s into the stream.
 func (w *StreamWriter) WriteString(s string) (int, error) {
 	if w == nil || w.s == nil {
 		return 0, io.ErrClosedPipe
@@ -331,6 +335,7 @@ func (w *StreamWriter) WriteString(s string) (int, error) {
 	}
 }
 
+// Close closes the stream for writing.
 func (w *StreamWriter) Close() error {
 	if w == nil || w.s == nil {
 		return nil
@@ -339,6 +344,7 @@ func (w *StreamWriter) Close() error {
 	return nil
 }
 
+// CloseWithError closes the stream for writing with err.
 func (w *StreamWriter) CloseWithError(err error) error {
 	if w == nil || w.s == nil {
 		return nil
@@ -414,6 +420,7 @@ func (r *StreamReader) Read(p []byte) (int, error) {
 	}
 }
 
+// Close closes the reader and stops the writer.
 func (r *StreamReader) Close() error {
 	if r == nil || r.s == nil {
 		return nil
