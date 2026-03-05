@@ -49,7 +49,11 @@ func generateImage(ctx context.Context, input generateImageInput) (generateImage
 	for _, img := range images {
 		output.Result += fmt.Sprintf("Image has been generated at the URL %s.", img.url)
 		imageID := generateRandomID()
-		_, err = toolCtx.PutArtifact(imageID, bytes.NewReader(img.content), artifact.WithPutMimeType(img.mimeType))
+		_, err = toolCtx.PutArtifact(&artifact.PutRequest{
+			Name:     imageID,
+			Body:     bytes.NewReader(img.content),
+			MimeType: img.mimeType,
+		})
 		if err != nil {
 			output.Result += fmt.Sprintf("Failed to save image(%s) to artifact, err: %v\n", img.url, err)
 		} else {

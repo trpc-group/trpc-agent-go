@@ -47,7 +47,11 @@ func logQuery(ctx context.Context, query logQueryInput) (logQueryOutput, error) 
 		return logQueryOutput{}, err
 	}
 
-	_, err = toolCtx.PutArtifact("query", bytes.NewReader(data), artifact.WithPutMimeType("text/plain"))
+	_, err = toolCtx.PutArtifact(&artifact.PutRequest{
+		Name:     "query",
+		Body:     bytes.NewReader(data),
+		MimeType: "text/plain",
+	})
 	if err != nil {
 		log.Errorf("Failed to save artifact: %v", err)
 	}

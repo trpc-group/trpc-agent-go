@@ -244,7 +244,7 @@ func withArtifactContext(ctx context.Context) context.Context {
 		return ctx
 	}
 	ctx = codeexecutor.WithArtifactService(ctx, inv.ArtifactService)
-	return codeexecutor.WithArtifactBaseKey(ctx, artifact.Key{
+	return codeexecutor.WithArtifactBaseKey(ctx, codeexecutor.ArtifactBaseKey{
 		AppName:   inv.Session.AppName,
 		UserID:    inv.Session.UserID,
 		SessionID: inv.Session.ID,

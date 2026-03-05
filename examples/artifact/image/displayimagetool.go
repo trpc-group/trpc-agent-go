@@ -41,7 +41,7 @@ func displayImage(ctx context.Context, _ displayImageInput) (displayImageOutput,
 	}
 	var output displayImageOutput
 	for _, key := range stateValue.ImageIDs {
-		desc, err := tc.HeadArtifact(key, nil)
+		desc, err := tc.HeadArtifact(&artifact.HeadRequest{Name: key})
 		if err != nil {
 			if errors.Is(err, artifact.ErrNotFound) {
 				output.Result += fmt.Sprintf("artifact not found: %s\n", key)

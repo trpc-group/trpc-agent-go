@@ -539,14 +539,15 @@ func (c *skillChat) handleUploadArtifact(
 	}
 	name := artifactUploadPrefix + uuid.NewString() + "_" +
 		base
-	key := artifact.Key{
+	mt := guessMimeType(base, data)
+	desc, err := c.artSvc.Put(ctx, &artifact.PutRequest{
 		AppName:   appName,
 		UserID:    c.userID,
 		SessionID: c.sessionID,
 		Name:      name,
-	}
-	mt := guessMimeType(base, data)
-	desc, err := c.artSvc.Put(ctx, key, bytes.NewReader(data), artifact.WithPutMimeType(mt))
+		Body:      bytes.NewReader(data),
+		MimeType:  mt,
+	})
 	if err != nil {
 		return err
 	}
@@ -603,20 +604,20 @@ func (c *skillChat) handlePull(text string) error {
 			verPtr = &v
 		}
 	}
-	key := artifact.Key{
+	resp, err := c.artSvc.Open(context.Background(), &artifact.OpenRequest{
 		AppName:   appName,
 		UserID:    c.userID,
 		SessionID: c.sessionID,
 		Name:      name,
-	}
-	rc, desc, err := c.artSvc.Open(context.Background(), key, verPtr)
+		Version:   verPtr,
+	})
 	if err != nil {
 		if errors.Is(err, artifact.ErrNotFound) {
 			return fmt.Errorf("artifact not found: %s", name)
 		}
 		return err
 	}
-	defer rc.Close()
+	defer resp.Body.Close()
 	dir := "downloads"
 	_ = os.MkdirAll(dir, 0o755)
 	out := filepath.Join(dir, filepath.Base(name))
@@ -624,14 +625,14 @@ func (c *skillChat) handlePull(text string) error {
 	if err != nil {
 		return err
 	}
-	written, err := io.Copy(f, rc)
+	written, err := io.Copy(f, resp.Body)
 	_ = f.Close()
 	if err != nil {
 		return err
 	}
 	fmt.Printf(
 		"📥 Saved %s (%d bytes, %s)\n",
-		out, written, desc.MimeType,
+		out, written, resp.MimeType,
 	)
 	return nil
 }
@@ -641,32 +642,32 @@ func (c *skillChat) handleListArtifacts() error {
 	if c.artSvc == nil {
 		return fmt.Errorf("artifact service not available")
 	}
-	ns := artifact.Key{
-		AppName:   appName,
-		UserID:    c.userID,
-		SessionID: c.sessionID,
-	}
+	limit := 200
 	var (
 		keys      []string
 		pageToken string
 	)
 	for {
-		items, next, err := c.artSvc.List(
-			context.Background(),
-			ns,
-			artifact.WithListLimit(200),
-			artifact.WithListPageToken(pageToken),
-		)
+		req := &artifact.ListRequest{
+			AppName:   appName,
+			UserID:    c.userID,
+			SessionID: c.sessionID,
+			Limit:     &limit,
+		}
+		if pageToken != "" {
+			req.PageToken = &pageToken
+		}
+		resp, err := c.artSvc.List(context.Background(), req)
 		if err != nil {
 			return err
 		}
-		for _, d := range items {
-			keys = append(keys, d.Key.Name)
+		for _, it := range resp.Items {
+			keys = append(keys, it.Name)
 		}
-		if next == "" {
+		if resp.NextPageToken == "" {
 			break
 		}
-		pageToken = next
+		pageToken = resp.NextPageToken
 	}
 	if len(keys) == 0 {
 		fmt.Println("(no artifacts)")
