@@ -34,6 +34,7 @@ const (
 
 	sessionBackendInMemory   = "inmemory"
 	sessionBackendRedis      = "redis"
+	sessionBackendSQLite     = "sqlite"
 	sessionBackendMySQL      = "mysql"
 	sessionBackendPostgres   = "postgres"
 	sessionBackendClickHouse = "clickhouse"
@@ -424,7 +425,7 @@ func parseRunOptions(args []string) (runOptions, error) {
 		&opts.SessionBackend,
 		"session-backend",
 		sessionBackendInMemory,
-		"Session backend: inmemory|redis|mysql|postgres|clickhouse",
+		"Session backend: inmemory|redis|sqlite|mysql|postgres|clickhouse",
 	)
 	fs.StringVar(
 		&opts.SessionRedisURL,

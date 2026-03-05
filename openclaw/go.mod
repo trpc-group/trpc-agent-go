@@ -34,6 +34,8 @@ replace trpc.group/trpc-go/trpc-agent-go/session/postgres => ../session/postgres
 
 replace trpc.group/trpc-go/trpc-agent-go/session/redis => ../session/redis
 
+replace trpc.group/trpc-go/trpc-agent-go/session/sqlite => ../session/sqlite
+
 replace trpc.group/trpc-go/trpc-agent-go/storage/clickhouse => ../storage/clickhouse
 
 replace trpc.group/trpc-go/trpc-agent-go/storage/mysql => ../storage/mysql
@@ -47,6 +49,7 @@ require (
 	github.com/alicebob/miniredis/v2 v2.35.0
 	github.com/creack/pty v1.1.24
 	github.com/google/uuid v1.6.0
+	github.com/mattn/go-sqlite3 v1.14.32
 	github.com/stretchr/testify v1.11.1
 	gopkg.in/yaml.v3 v3.0.1
 	trpc.group/trpc-go/trpc-agent-go v1.5.0
@@ -58,6 +61,7 @@ require (
 	trpc.group/trpc-go/trpc-agent-go/session/mysql v1.5.0
 	trpc.group/trpc-go/trpc-agent-go/session/postgres v1.5.0
 	trpc.group/trpc-go/trpc-agent-go/session/redis v0.0.3
+	trpc.group/trpc-go/trpc-agent-go/session/sqlite v1.5.0
 	trpc.group/trpc-go/trpc-agent-go/storage/clickhouse v1.5.0
 	trpc.group/trpc-go/trpc-agent-go/storage/mysql v1.5.0
 	trpc.group/trpc-go/trpc-agent-go/storage/postgres v1.5.0

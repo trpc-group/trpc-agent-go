@@ -60,7 +60,11 @@ func newSessionService(
 				Instance:  opts.SessionRedisInstance,
 				KeyPrefix: opts.SessionRedisKeyPref,
 			},
-			Config: opts.SessionConfig,
+			Config: defaultSQLiteSessionConfigNode(
+				backend,
+				opts.StateDir,
+				opts.SessionConfig,
+			),
 		},
 	)
 }

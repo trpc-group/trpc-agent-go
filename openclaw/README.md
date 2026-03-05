@@ -850,6 +850,20 @@ The Redis key-space is still isolated by `app_name` and `user_id`. You
 can override `app_name` with `-app-name` (or `app_name` in YAML) to
 match your business identifier.
 
+### Local persistence (SQLite)
+
+If you want local persistence across restarts (without running Redis),
+use the `sqlite` session backend.
+
+By default, it stores data in `<state_dir>/sessions.sqlite`.
+
+```bash
+cd openclaw
+go run ./cmd/openclaw \
+  -mode mock \
+  -session-backend sqlite
+```
+
 ### SQL backends (MySQL/Postgres/ClickHouse/PGVector)
 
 This demo also supports SQL backends already implemented in

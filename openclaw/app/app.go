@@ -206,6 +206,7 @@ func NewRuntime(
 			Err:  fmt.Errorf("resolve state dir failed: %w", err),
 		}
 	}
+	opts.StateDir = resolvedStateDir
 
 	needsModel := agentType == agentTypeLLM ||
 		opts.SessionSummaryEnabled ||
@@ -435,6 +436,7 @@ func run(ctx context.Context, args []string) error {
 			Err:  fmt.Errorf("resolve state dir failed: %w", err),
 		}
 	}
+	opts.StateDir = resolvedStateDir
 
 	needsModel := agentType == agentTypeLLM ||
 		opts.SessionSummaryEnabled ||

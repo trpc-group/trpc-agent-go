@@ -423,6 +423,7 @@ Supported `session.backend` values:
 
 - `inmemory` (default)
 - `redis`
+- `sqlite`
 - `mysql`
 - `postgres`
 - `clickhouse`
@@ -453,6 +454,26 @@ Notes:
 - `url` and `instance` are two ways to specify where Redis is.
   Use `url` unless you have an internal service discovery system.
 - `key_prefix` is optional. `app_name` is still used for isolation.
+
+### Session: sqlite
+
+Good for local demos where you want persistence across restarts.
+
+If `session.config` is omitted, it defaults to:
+
+- `<state_dir>/sessions.sqlite` (where `state_dir` defaults to
+  `~/.trpc-agent-go/openclaw`)
+
+Explicit path example:
+
+```yaml
+session:
+  backend: "sqlite"
+  config:
+    path: "/tmp/openclaw-sessions.sqlite"
+    skip_db_init: false
+    table_prefix: "oc_"
+```
 
 ### Session: mysql / postgres / clickhouse
 
