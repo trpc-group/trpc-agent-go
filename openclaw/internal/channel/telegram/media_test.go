@@ -653,6 +653,196 @@ func TestAppendDocumentPart_TooLarge(t *testing.T) {
 	require.True(t, errors.Is(err, tgapi.ErrFileTooLarge))
 }
 
+func TestAppendDocumentPart_Success(t *testing.T) {
+	t.Parallel()
+
+	data := []byte("pdf")
+
+	bot := &stubBot{
+		downloads: map[string]stubDownload{
+			testFileID: {
+				file: tgapi.File{FilePath: "docs/doc.pdf"},
+				data: data,
+			},
+		},
+	}
+	ch := &Channel{bot: bot}
+
+	parts, err := ch.appendDocumentPart(
+		context.Background(),
+		nil,
+		&tgapi.Document{
+			FileID:   testFileID,
+			MimeType: "application/pdf",
+			FileSize: int64(len(data)),
+		},
+		int64(len(data)),
+	)
+	require.NoError(t, err)
+	require.Len(t, parts, 1)
+	require.Equal(t, gwproto.PartTypeFile, parts[0].Type)
+	require.NotNil(t, parts[0].File)
+	require.Equal(t, "doc.pdf", parts[0].File.Filename)
+	require.Equal(t, "application/pdf", parts[0].File.Format)
+	require.Equal(t, data, parts[0].File.Data)
+}
+
+func TestAppendDocumentPart_DownloadFails(t *testing.T) {
+	t.Parallel()
+
+	base := errors.New("download failed")
+	bot := &stubBot{
+		downloads: map[string]stubDownload{
+			testFileID: {err: base},
+		},
+	}
+	ch := &Channel{bot: bot}
+
+	_, err := ch.appendDocumentPart(
+		context.Background(),
+		nil,
+		&tgapi.Document{FileID: testFileID},
+		10,
+	)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, base))
+
+	u, ok := err.(*userError)
+	require.True(t, ok)
+	require.Equal(t, downloadFailedMessage, u.userMessage)
+}
+
+func TestAppendVideoPart_DownloadFails(t *testing.T) {
+	t.Parallel()
+
+	base := errors.New("download failed")
+	bot := &stubBot{
+		downloads: map[string]stubDownload{
+			testFileID: {err: base},
+		},
+	}
+	ch := &Channel{bot: bot}
+
+	_, err := ch.appendVideoPart(
+		context.Background(),
+		nil,
+		&tgapi.Video{FileID: testFileID},
+		10,
+	)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, base))
+
+	u, ok := err.(*userError)
+	require.True(t, ok)
+	require.Equal(t, downloadFailedMessage, u.userMessage)
+}
+
+func TestAppendVoicePart_DownloadFails(t *testing.T) {
+	t.Parallel()
+
+	base := errors.New("download failed")
+	bot := &stubBot{
+		downloads: map[string]stubDownload{
+			testFileID: {err: base},
+		},
+	}
+	ch := &Channel{bot: bot}
+
+	_, err := ch.appendVoicePart(
+		context.Background(),
+		nil,
+		&tgapi.Voice{FileID: testFileID},
+		10,
+	)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, base))
+
+	u, ok := err.(*userError)
+	require.True(t, ok)
+	require.Equal(t, downloadFailedMessage, u.userMessage)
+}
+
+func TestAppendAudioPart_MP3BuildsAudioPartAndRecordsTrace(t *testing.T) {
+	t.Parallel()
+
+	data := []byte("mp3data")
+
+	bot := &stubBot{
+		downloads: map[string]stubDownload{
+			testFileID: {
+				file: tgapi.File{FilePath: "audio/raw.bin"},
+				data: data,
+			},
+		},
+	}
+	ch := &Channel{bot: bot}
+
+	mode, err := debugrecorder.ParseMode("full")
+	require.NoError(t, err)
+
+	rec, err := debugrecorder.New(t.TempDir(), mode)
+	require.NoError(t, err)
+
+	trace, err := rec.Start(debugrecorder.TraceStart{
+		Channel:   channelID,
+		RequestID: "req-1",
+	})
+	require.NoError(t, err)
+
+	ctx := debugrecorder.WithTrace(context.Background(), trace)
+	parts, err := ch.appendAudioPart(
+		ctx,
+		nil,
+		&tgapi.Audio{
+			FileID:   testFileID,
+			FileName: "song.mp3",
+			MimeType: mimeAudioMP3,
+			FileSize: int64(len(data)),
+		},
+		int64(len(data)),
+	)
+	require.NoError(t, err)
+	require.Len(t, parts, 1)
+	require.Equal(t, gwproto.PartTypeAudio, parts[0].Type)
+	require.NotNil(t, parts[0].Audio)
+	require.Equal(t, audioFormatMP3, parts[0].Audio.Format)
+	require.Equal(t, data, parts[0].Audio.Data)
+
+	require.NoError(t, trace.Close(debugrecorder.TraceEnd{Status: "ok"}))
+
+	evs, err := os.Open(filepath.Join(trace.Dir(), debugEventsFileName))
+	require.NoError(t, err)
+	defer evs.Close()
+
+	scanner := bufio.NewScanner(evs)
+	found := false
+	for scanner.Scan() {
+		var evt debugEventRecord
+		require.NoError(t, json.Unmarshal(scanner.Bytes(), &evt))
+		if evt.Kind != debugrecorder.KindTelegramAttachment {
+			continue
+		}
+
+		var att telegramAttachmentSummary
+		require.NoError(t, json.Unmarshal(evt.Payload, &att))
+		require.Equal(t, attachmentKindAudio, att.Kind)
+		require.Equal(t, testFileID, att.FileID)
+		require.Equal(t, "audio.mp3", att.Name)
+		require.Equal(t, audioFormatMP3, att.Format)
+		require.NotEmpty(t, att.Blob.Ref)
+
+		dst := filepath.Join(trace.Dir(), att.Blob.Ref)
+		got, err := os.ReadFile(dst)
+		require.NoError(t, err)
+		require.Equal(t, data, got)
+
+		found = true
+		break
+	}
+	require.NoError(t, scanner.Err())
+	require.True(t, found)
+}
+
 func TestBuildGatewayRequest_TooLargePropagates(t *testing.T) {
 	t.Parallel()
 

@@ -34,6 +34,7 @@ import (
 
 	occhannel "trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwclient"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
 	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
@@ -1078,6 +1079,55 @@ func TestResolveStateDir_DefaultHome(t *testing.T) {
 	got, err := resolveStateDir("")
 	require.NoError(t, err)
 	require.Equal(t, filepath.Join(home, ".trpc-agent-go", appName), got)
+}
+
+func TestMaybeEnableDebugRecorder_Disabled(t *testing.T) {
+	t.Parallel()
+
+	ctx, rec, err := maybeEnableDebugRecorder(nil, runOptions{})
+	require.NoError(t, err)
+	require.NotNil(t, ctx)
+	require.Nil(t, rec)
+	require.Nil(t, debugrecorder.RecorderFromContext(ctx))
+}
+
+func TestMaybeEnableDebugRecorder_Enabled_Defaults(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	ctx, rec, err := maybeEnableDebugRecorder(
+		context.Background(),
+		runOptions{
+			StateDir:             stateDir,
+			DebugRecorderEnabled: true,
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, rec)
+	require.Equal(
+		t,
+		filepath.Join(stateDir, defaultDebugRecorderDir),
+		rec.Dir(),
+	)
+	require.Equal(t, rec, debugrecorder.RecorderFromContext(ctx))
+
+	_, err = os.Stat(rec.Dir())
+	require.NoError(t, err)
+}
+
+func TestMaybeEnableDebugRecorder_InvalidModeFails(t *testing.T) {
+	t.Parallel()
+
+	_, rec, err := maybeEnableDebugRecorder(
+		context.Background(),
+		runOptions{
+			StateDir:             t.TempDir(),
+			DebugRecorderEnabled: true,
+			DebugRecorderMode:    "nope",
+		},
+	)
+	require.Error(t, err)
+	require.Nil(t, rec)
 }
 
 func TestConfigFingerprint_Deterministic(t *testing.T) {

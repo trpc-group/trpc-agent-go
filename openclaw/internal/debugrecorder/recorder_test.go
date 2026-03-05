@@ -288,6 +288,38 @@ func TestTrace_StoreBlob_FullModeWritesAndDedupes(t *testing.T) {
 	require.Equal(t, data, got)
 }
 
+func TestTrace_StoreBlob_MkdirFails(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join(t.TempDir(), "root")
+	require.NoError(t, os.WriteFile(root, []byte("x"), 0o644))
+
+	trace := &Trace{
+		root: root,
+		mode: modeFull,
+	}
+	_, err := trace.StoreBlob("a.txt", []byte("hello"))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "mkdir")
+}
+
+func TestTrace_StoreBlob_CreateTempFails(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	attDir := filepath.Join(root, defaultAttachmentsDir)
+	require.NoError(t, os.MkdirAll(attDir, defaultTraceDirPerm))
+	require.NoError(t, os.Chmod(attDir, 0o555))
+
+	trace := &Trace{
+		root: root,
+		mode: modeFull,
+	}
+	_, err := trace.StoreBlob("a.txt", []byte("hello"))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "temp file")
+}
+
 func TestContextHelpers(t *testing.T) {
 	t.Parallel()
 
@@ -471,4 +503,37 @@ func TestSummarizeRequest_NilTraceDoesNotPanic(t *testing.T) {
 	require.Len(t, summary.ContentParts, 1)
 	require.NotNil(t, summary.ContentParts[0].File)
 	require.Empty(t, summary.ContentParts[0].File.Data.Ref)
+}
+
+func TestSafeComponent_SanitizesAndTruncates(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, "a_b_c", safeComponent(" a/b:c "))
+	require.Equal(t, "", safeComponent("._-"))
+
+	raw := strings.Repeat("a", maxSafeComponentLen+10)
+	out := safeComponent(raw)
+	require.Len(t, out, maxSafeComponentLen)
+}
+
+func TestRecorder_NewTraceDir_TruncatesBase(t *testing.T) {
+	t.Parallel()
+
+	rec := &Recorder{
+		dir:  t.TempDir(),
+		mode: modeFull,
+		now:  time.Now,
+	}
+	now := time.Date(2026, 3, 5, 9, 0, 0, 0, time.UTC)
+
+	channel := strings.Repeat("a", maxSafeComponentLen+10)
+	req := strings.Repeat("b", maxSafeComponentLen+10)
+	dir, err := rec.newTraceDir(now, TraceStart{
+		Channel:   channel,
+		RequestID: req,
+	})
+	require.NoError(t, err)
+
+	base := filepath.Base(dir)
+	require.LessOrEqual(t, len(base), maxTraceBaseLen)
 }

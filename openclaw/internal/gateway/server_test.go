@@ -805,6 +805,89 @@ func TestServer_ProcessMessage_DebugRecorderWritesTrace(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestServer_ProcessMessage_MissingUserIDAndFrom(t *testing.T) {
+	t.Parallel()
+
+	srv, err := New(&stubRunner{})
+	require.NoError(t, err)
+
+	rsp, status := srv.ProcessMessage(
+		context.Background(),
+		gwproto.MessageRequest{Text: "hello"},
+	)
+	require.Equal(t, http.StatusBadRequest, status)
+	require.NotNil(t, rsp.Error)
+	require.Equal(t, errTypeInvalidRequest, rsp.Error.Type)
+	require.Contains(t, rsp.Error.Message, "missing user_id")
+}
+
+func TestServer_ProcessMessage_RequireMention_Ignores(t *testing.T) {
+	t.Parallel()
+
+	srv, err := New(
+		&stubRunner{},
+		WithRequireMentionInThreads(true),
+		WithMentionPatterns("@bot"),
+	)
+	require.NoError(t, err)
+
+	rsp, status := srv.ProcessMessage(
+		context.Background(),
+		gwproto.MessageRequest{
+			From:   "u1",
+			Thread: "g1",
+			Text:   "hello",
+		},
+	)
+	require.Equal(t, http.StatusOK, status)
+	require.True(t, rsp.Ignored)
+	require.Nil(t, rsp.Error)
+}
+
+func TestServer_ProcessMessage_SessionIDFuncError(t *testing.T) {
+	t.Parallel()
+
+	srv, err := New(
+		&stubRunner{},
+		WithSessionIDFunc(func(_ InboundMessage) (string, error) {
+			return "", errors.New("bad sid")
+		}),
+	)
+	require.NoError(t, err)
+
+	rsp, status := srv.ProcessMessage(
+		context.Background(),
+		gwproto.MessageRequest{
+			From: "u1",
+			Text: "hello",
+		},
+	)
+	require.Equal(t, http.StatusBadRequest, status)
+	require.NotNil(t, rsp.Error)
+	require.Equal(t, errTypeInvalidRequest, rsp.Error.Type)
+	require.Contains(t, rsp.Error.Message, "bad sid")
+}
+
+func TestServer_ProcessMessage_RunError(t *testing.T) {
+	t.Parallel()
+
+	r := &staticRunner{err: errors.New("runner boom")}
+	srv, err := New(r)
+	require.NoError(t, err)
+
+	rsp, status := srv.ProcessMessage(
+		context.Background(),
+		gwproto.MessageRequest{
+			From: "u1",
+			Text: "hello",
+		},
+	)
+	require.Equal(t, http.StatusInternalServerError, status)
+	require.NotNil(t, rsp.Error)
+	require.Equal(t, errTypeInternal, rsp.Error.Type)
+	require.Contains(t, rsp.Error.Message, "runner boom")
+}
+
 func TestServer_New_RequireMentionWithoutPatterns(t *testing.T) {
 	t.Parallel()
 
