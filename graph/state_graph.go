@@ -456,11 +456,11 @@ func (sg *StateGraph) AddNode(id string, function NodeFunc, opts ...Option) *Sta
 		}()
 
 		response, err := function(ctx, state)
+		workflow.Response = response
 		if err != nil {
 			workflow.Error = err
-			return nil, err
+			return response, err
 		}
-		workflow.Response = response
 		return response, nil
 	}
 
