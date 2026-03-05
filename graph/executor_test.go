@@ -30,6 +30,17 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
+const (
+	testFatalErrCodeInt = -1
+	testFatalErrCodeStr = "-1"
+)
+
+type codedTestError struct{}
+
+func (codedTestError) Error() string { return "boom" }
+
+func (codedTestError) Code() int { return testFatalErrCodeInt }
+
 // TestDocumentProcessingWorkflow tests a comprehensive document processing workflow
 // that mimics real-world usage with LLM nodes, tool nodes, and conditional routing.
 func TestDocumentProcessingWorkflow(t *testing.T) {
@@ -1293,6 +1304,51 @@ func TestAfterCallbackRunsOnNodeError(t *testing.T) {
 	got, ok := afterSawErr.Load().(error)
 	require.True(t, ok)
 	require.ErrorIs(t, got, boom)
+}
+
+func TestFatalErrorEvents_PropagateErrorCode(t *testing.T) {
+	const nodeID = "N"
+
+	g := NewStateGraph(NewStateSchema())
+	g.AddNode(nodeID, func(ctx context.Context, s State) (any, error) {
+		return nil, codedTestError{}
+	})
+	g.SetEntryPoint(nodeID).SetFinishPoint(nodeID)
+
+	compiled, err := g.Compile()
+	require.NoError(t, err)
+	exec, err := NewExecutor(compiled)
+	require.NoError(t, err)
+
+	ch, err := exec.Execute(
+		context.Background(),
+		State{},
+		&agent.Invocation{InvocationID: "inv-coded-fatal"},
+	)
+	require.NoError(t, err)
+
+	var gotNodeCode string
+	var gotPregelCode string
+	for evt := range ch {
+		if evt.Response == nil || evt.Response.Error == nil {
+			continue
+		}
+		if evt.Response.Error.Code == nil {
+			continue
+		}
+		switch evt.Author {
+		case nodeID:
+			gotNodeCode = *evt.Response.Error.Code
+		case AuthorGraphPregel:
+			if evt.Object != ObjectTypeGraphPregelStep {
+				continue
+			}
+			gotPregelCode = *evt.Response.Error.Code
+		}
+	}
+
+	require.Equal(t, testFatalErrCodeStr, gotNodeCode)
+	require.Equal(t, testFatalErrCodeStr, gotPregelCode)
 }
 
 func TestAfterCallbackCanRecoverNodeError(t *testing.T) {
