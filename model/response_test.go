@@ -10,10 +10,26 @@
 package model
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 	"time"
 )
+
+type typedCodedError struct{}
+
+const (
+	typedCodedErrMsg     = "boom"
+	typedCodedErrType    = "fatal"
+	typedCodedErrCodeInt = -1
+	typedCodedErrCodeStr = "-1"
+)
+
+func (typedCodedError) Error() string { return typedCodedErrMsg }
+
+func (typedCodedError) ErrorType() string { return typedCodedErrType }
+
+func (typedCodedError) Code() int { return typedCodedErrCodeInt }
 
 func TestErrorTypeConstants(t *testing.T) {
 	tests := []struct {
@@ -265,6 +281,61 @@ func TestResponseError_Structure(t *testing.T) {
 	}
 	if *err.Code != "invalid_value" {
 		t.Errorf("ResponseError.Code = %v, want %v", *err.Code, "invalid_value")
+	}
+}
+
+func TestResponseError_ImplementsError(t *testing.T) {
+	var respErr *ResponseError
+	if respErr.Error() != "" {
+		t.Errorf("(*ResponseError)(nil).Error() = %q, want %q", respErr.Error(), "")
+	}
+
+	respErr = &ResponseError{Message: "boom"}
+	var err error = respErr
+	if err.Error() != "boom" {
+		t.Errorf("error.Error() = %q, want %q", err.Error(), "boom")
+	}
+}
+
+func TestResponseErrorFromError_PreservesTypeAndCode(t *testing.T) {
+	code := "E42"
+	in := &ResponseError{
+		Type:    "biz_error",
+		Code:    &code,
+		Message: "bad",
+	}
+
+	got := ResponseErrorFromError(in, ErrorTypeFlowError)
+	if got == nil {
+		t.Fatal("ResponseErrorFromError() returned nil")
+	}
+	if got.Type != "biz_error" {
+		t.Errorf("Type = %q, want %q", got.Type, "biz_error")
+	}
+	if got.Code == nil || *got.Code != "E42" {
+		t.Errorf("Code = %v, want %q", got.Code, "E42")
+	}
+	if got.Message != "bad" {
+		t.Errorf("Message = %q, want %q", got.Message, "bad")
+	}
+}
+
+func TestResponseErrorFromError_ExtractsTypeAndCode(t *testing.T) {
+	err := errors.New("wrapper: boom")
+	err = errors.Join(err, typedCodedError{})
+
+	got := ResponseErrorFromError(err, ErrorTypeFlowError)
+	if got == nil {
+		t.Fatal("ResponseErrorFromError() returned nil")
+	}
+	if got.Type != typedCodedErrType {
+		t.Errorf("Type = %q, want %q", got.Type, typedCodedErrType)
+	}
+	if got.Code == nil || *got.Code != typedCodedErrCodeStr {
+		t.Errorf("Code = %v, want %q", got.Code, typedCodedErrCodeStr)
+	}
+	if got.Message == "" {
+		t.Error("Message should not be empty")
 	}
 }
 

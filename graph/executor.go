@@ -30,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
@@ -290,6 +291,12 @@ func (e *Executor) Execute(
 					WithPregelEventInvocationID(invocation.InvocationID),
 					WithPregelEventStepNumber(-1),
 					WithPregelEventError(workflow.Error.Error()),
+					WithPregelEventResponseError(
+						model.ResponseErrorFromError(
+							workflow.Error,
+							model.ErrorTypeFlowError,
+						),
+					),
 				))
 			}
 			close(eventChan)
@@ -309,6 +316,12 @@ func (e *Executor) Execute(
 				WithPregelEventInvocationID(invocation.InvocationID),
 				WithPregelEventStepNumber(-1),
 				WithPregelEventError(err.Error()),
+				WithPregelEventResponseError(
+					model.ResponseErrorFromError(
+						err,
+						model.ErrorTypeFlowError,
+					),
+				),
 			))
 		}
 	}(runCtx)
@@ -3350,6 +3363,12 @@ func (e *Executor) emitNodeErrorEvent(
 		WithNodeEventNodeType(nodeType),
 		WithNodeEventStepNumber(step),
 		WithNodeEventError(err.Error()),
+		WithNodeEventResponseError(
+			model.ResponseErrorFromError(
+				err,
+				model.ErrorTypeFlowError,
+			),
+		),
 	}
 	if len(extra) > 0 {
 		opts = append(opts, extra...)

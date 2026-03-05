@@ -4220,6 +4220,73 @@ func buildGraph() (*graph.Graph, error) {
 }
 ```
 
+#### 致命错误：如何获取原始错误与错误码
+
+当节点错误没有被 After 回调恢复（或执行器自身发生错误 / panic）时，图会失败并停止执行。
+这类**致命错误不会通过 `Runner.Run(...)` 的返回值传出**，而是通过事件流输出。
+
+你通常会看到两类与错误相关的事件（都满足 `Response.Error != nil`）：
+
+- **图级致命错误（推荐作为“最终失败原因”）**：
+  `Author = graph.AuthorGraphPregel` 且 `Object = graph.ObjectTypeGraphPregelStep`。
+  该事件的 `_pregel_metadata.stepNumber` 通常为 `-1`，表示执行器在图外层汇总后的最终失
+  败原因。
+- **节点级错误（便于定位问题节点）**：
+  `Author = <nodeID>` 且 `Response.Error != nil`。
+  同时 `_node_metadata` 会带上节点 ID、step、attempt/重试等信息。
+
+注意：
+
+- Runner 最终还会补发一条 `runner.completion` 事件作为真正的结束标记；建议一直消费到
+  completion 再关闭上游连接。
+- 当你让错误保持“致命”（After 回调返回 `nil, nil` 或返回非 nil error）时，框架不会产
+  生 `graph.execution` 的最终状态快照事件。因此“收集致命错误”的推荐方式是消费事件流
+  或在回调里主动发射自定义事件（见上文“在节点回调中携带业务值”）。
+
+**根据错误码分流**
+
+`Response.Error` 支持 `Code` 字段，你可以在消费事件时根据 `Code` 做不同逻辑处理：
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/graph"
+
+for ev := range eventCh {
+    if ev.Response == nil || ev.Response.Error == nil {
+        continue
+    }
+
+    // Graph-level fatal error for the whole run.
+    if ev.Author != graph.AuthorGraphPregel ||
+        ev.Object != graph.ObjectTypeGraphPregelStep {
+        continue
+    }
+
+    if ev.Response.Error.Code == nil {
+        // No code provided.
+        continue
+    }
+
+    switch *ev.Response.Error.Code {
+    case "-1":
+        // Handle your business error code here.
+    default:
+        // Fallback.
+    }
+}
+```
+
+**如何让致命错误带上 code**
+
+框架会在发出 error 事件时尽量把 code 填到 `Response.Error.Code`。
+当你的节点返回的 `error`（包括 wrap/Join 的错误链）满足下列任意一种形式时：
+
+- `ErrorCode() string`
+- `Code() string`
+- `Code() int` / `Code() int32` / `Code() int64`
+- 或者直接返回 `*model.ResponseError`（它实现了 `error` 接口）
+
+对应的 code 会出现在事件的 `Response.Error.Code` 中。
+
 也可以在 Agent 级别配置回调：
 
 ```go

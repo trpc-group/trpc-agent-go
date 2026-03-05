@@ -308,3 +308,11 @@ type ResponseError struct {
 	// Code is the error code.
 	Code *string `json:"code,omitempty"`
 }
+
+// Error implements the error interface.
+func (e *ResponseError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.Message
+}
