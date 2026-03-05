@@ -58,6 +58,8 @@ type Model struct {
 	cacheSystemPrompt bool
 	cacheTools        bool
 	cacheMessages     bool
+	// explicitMaxTokens overrides the auto-calculated MaxTokens value sent to the API.
+	explicitMaxTokens *int
 }
 
 // New creates a new Anthropic model adapter.
@@ -106,6 +108,7 @@ func New(name string, opts ...Option) *Model {
 		cacheSystemPrompt:          o.cacheSystemPrompt,
 		cacheTools:                 o.cacheTools,
 		cacheMessages:              o.cacheMessages,
+		explicitMaxTokens:          o.explicitMaxTokens,
 	}
 }
 
@@ -216,37 +219,41 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	// Set max output tokens only if user hasn't specified it.
 	// This respects user's explicit configuration while providing a safe default.
 	if request.GenerationConfig.MaxTokens == nil {
-		contextWindow := imodel.ResolveContextWindow(m.name)
-		var maxOutputTokens int
-		if m.protocolOverheadTokens > 0 || m.outputTokensFloor > 0 {
-			// Use custom parameters if any are set.
-			maxOutputTokens = imodel.CalculateMaxOutputTokensWithParams(
-				contextWindow,
-				usedTokens,
-				m.protocolOverheadTokens,
-				m.outputTokensFloor,
-				m.safetyMarginRatio,
-			)
+		if m.explicitMaxTokens != nil {
+			request.GenerationConfig.MaxTokens = m.explicitMaxTokens
 		} else {
-			// Use default parameters.
-			maxOutputTokens = imodel.CalculateMaxOutputTokens(contextWindow, usedTokens)
-		}
-		if maxOutputTokens > 0 {
-			// Cap to model's known max output tokens if applicable.
-			// Models like claude-sonnet-4 have a 200K context window but only
-			// support 128K max output tokens.
-			if modelCap := imodel.ResolveMaxOutputTokens(m.name); modelCap > 0 && maxOutputTokens > modelCap {
-				maxOutputTokens = modelCap
+			contextWindow := imodel.ResolveContextWindow(m.name)
+			var maxOutputTokens int
+			if m.protocolOverheadTokens > 0 || m.outputTokensFloor > 0 {
+				// Use custom parameters if any are set.
+				maxOutputTokens = imodel.CalculateMaxOutputTokensWithParams(
+					contextWindow,
+					usedTokens,
+					m.protocolOverheadTokens,
+					m.outputTokensFloor,
+					m.safetyMarginRatio,
+				)
+			} else {
+				// Use default parameters.
+				maxOutputTokens = imodel.CalculateMaxOutputTokens(contextWindow, usedTokens)
 			}
-			request.GenerationConfig.MaxTokens = &maxOutputTokens
-			log.DebugfContext(
-				ctx,
-				"token tailoring: contextWindow=%d, usedTokens=%d, "+
-					"maxOutputTokens=%d",
-				contextWindow,
-				usedTokens,
-				maxOutputTokens,
-			)
+			if maxOutputTokens > 0 {
+				// Cap to model's known max output tokens if applicable.
+				// Models like claude-sonnet-4 have a 200K context window but only
+				// support 128K max output tokens.
+				if modelCap := imodel.ResolveMaxOutputTokens(m.name); modelCap > 0 && maxOutputTokens > modelCap {
+					maxOutputTokens = modelCap
+				}
+				request.GenerationConfig.MaxTokens = &maxOutputTokens
+				log.DebugfContext(
+					ctx,
+					"token tailoring: contextWindow=%d, usedTokens=%d, "+
+						"maxOutputTokens=%d",
+					contextWindow,
+					usedTokens,
+					maxOutputTokens,
+				)
+			}
 		}
 	}
 }

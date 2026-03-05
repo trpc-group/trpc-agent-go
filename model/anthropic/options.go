@@ -85,6 +85,8 @@ type options struct {
 	tailoringStrategy model.TailoringStrategy
 	// maxInputTokens is the max input tokens for token tailoring.
 	maxInputTokens int
+	// explicitMaxTokens overrides the auto-calculated MaxTokens value sent to the API.
+	explicitMaxTokens *int
 	// tokenTailoringConfig allows customization of token tailoring parameters.
 	tokenTailoringConfig *model.TokenTailoringConfig
 
@@ -224,6 +226,13 @@ func WithEnableTokenTailoring(enabled bool) Option {
 func WithMaxInputTokens(limit int) Option {
 	return func(opts *options) {
 		opts.maxInputTokens = limit
+	}
+}
+
+// WithMaxTokens explicitly sets the maximum output tokens to generate, skipping auto-calculation.
+func WithMaxTokens(limit int) Option {
+	return func(opts *options) {
+		opts.explicitMaxTokens = &limit
 	}
 }
 
