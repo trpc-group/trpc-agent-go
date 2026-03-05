@@ -3116,8 +3116,13 @@ func TestConvertUserMessageContent_OmitFileContentParts_FileOnly(t *testing.T) {
 
 	content, extraFields := m.convertUserMessageContent(msg)
 	assert.Empty(t, extraFields, "expected no extra fields")
-	require.True(t, content.OfString.Valid(), "expected string content")
-	assert.Contains(t, content.OfString.Value, "report.pdf")
+	assert.False(t, content.OfString.Valid(), "expected non-string content")
+	require.Len(t, content.OfArrayOfContentParts, 1,
+		"expected 1 content part")
+	require.NotNil(t, content.OfArrayOfContentParts[0].OfText,
+		"expected text content part")
+	assert.Contains(t, content.OfArrayOfContentParts[0].OfText.Text,
+		"report.pdf")
 }
 
 func TestUserFileHint_EmptyContentParts(t *testing.T) {

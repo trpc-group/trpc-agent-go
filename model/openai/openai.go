@@ -686,6 +686,14 @@ func (m *Model) convertUserMessageContent(
 	}
 	extraFields := m.appendUserContentParts(&contentParts, msg.ContentParts)
 
+	if strings.TrimSpace(msg.Content) == "" &&
+		fileHint != "" &&
+		onlyFileContentParts(msg.ContentParts) {
+		return openai.ChatCompletionUserMessageParamContentUnion{
+			OfArrayOfContentParts: contentParts,
+		}, extraFields
+	}
+
 	if content, ok := singleUserContentString(
 		msg.Content,
 		fileHint,
