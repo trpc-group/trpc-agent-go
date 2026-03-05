@@ -125,6 +125,51 @@ func TestRunTool_ExecutesAndCollectsOutputFiles(t *testing.T) {
 	require.Contains(t, out.PrimaryOutput.Content, contentHi)
 }
 
+func TestRunTool_Declaration_OutputSchema(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	decl := rt.Declaration()
+	require.NotNil(t, decl)
+	require.NotNil(t, decl.OutputSchema)
+
+	out := decl.OutputSchema
+	require.Equal(t, "object", out.Type)
+	require.NotNil(t, out.Properties)
+
+	for _, key := range []string{
+		"output_files",
+		"stdout",
+		"stderr",
+		"exit_code",
+		"timed_out",
+		"duration_ms",
+	} {
+		require.Contains(t, out.Properties, key)
+	}
+
+	outFiles := out.Properties["output_files"]
+	require.Equal(t, "array", outFiles.Type)
+	require.NotNil(t, outFiles.Items)
+	require.Equal(t, "object", outFiles.Items.Type)
+	for _, key := range []string{
+		"name",
+		"content",
+		"mime_type",
+		"size_bytes",
+		"truncated",
+		"ref",
+	} {
+		require.Contains(t, outFiles.Items.Properties, key)
+	}
+}
+
 type envRepo struct {
 	skill.Repository
 	env map[string]string
