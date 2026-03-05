@@ -119,9 +119,9 @@ func WithMaxLoadedSkills(max int) SkillsRequestProcessorOption {
 //   - Loaded skills: inject full SKILL.md body.
 //   - Docs: inject doc texts selected via state keys.
 //
-// State keys used (per turn, ephemeral):
-//   - skill.StateKeyLoadedPrefix+name -> "1"
-//   - skill.StateKeyDocsPrefix+name ->
+// State keys used (per agent, ephemeral):
+//   - skill.LoadedKey(agentName, skillName) -> "1"
+//   - skill.DocsKey(agentName, skillName) ->
 //     "*" or JSON array of file names.
 type SkillsRequestProcessor struct {
 	repo            skill.Repository
@@ -178,6 +178,8 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 	if req == nil || inv == nil || inv.Session == nil || p.repo == nil {
 		return
 	}
+
+	maybeMigrateLegacySkillState(ctx, inv, ch)
 
 	p.maybeClearSkillStateForTurn(ctx, inv, ch)
 
@@ -283,11 +285,11 @@ func (p *SkillsRequestProcessor) maybeCapLoadedSkills(
 			kept = append(kept, name)
 			continue
 		}
-		loadedKey := skill.StateKeyLoadedPrefix + name
+		loadedKey := skill.LoadedKey(inv.AgentName, name)
 		inv.Session.SetState(loadedKey, nil)
 		delta[loadedKey] = nil
 
-		docsKey := skill.StateKeyDocsPrefix + name
+		docsKey := skill.DocsKey(inv.AgentName, name)
 		inv.Session.SetState(docsKey, nil)
 		delta[docsKey] = nil
 	}
@@ -318,6 +320,7 @@ func keepMostRecentSkills(
 
 	keep, seen := mostRecentSkillsFromEvents(
 		inv.Session.GetEvents(),
+		inv.AgentName,
 		loadedSet,
 		max,
 	)
@@ -341,6 +344,7 @@ func loadedSkillSet(loaded []string) map[string]struct{} {
 
 func mostRecentSkillsFromEvents(
 	events []event.Event,
+	agentName string,
 	loadedSet map[string]struct{},
 	max int,
 ) ([]string, map[string]struct{}) {
@@ -349,6 +353,7 @@ func mostRecentSkillsFromEvents(
 	for i := len(events) - 1; i >= 0 && len(keep) < max; i-- {
 		keep = appendSkillsFromToolResponseEvent(
 			events[i],
+			agentName,
 			loadedSet,
 			seen,
 			keep,
@@ -360,11 +365,15 @@ func mostRecentSkillsFromEvents(
 
 func appendSkillsFromToolResponseEvent(
 	ev event.Event,
+	agentName string,
 	loadedSet map[string]struct{},
 	seen map[string]struct{},
 	keep []string,
 	max int,
 ) []string {
+	if agentName != "" && ev.Author != agentName {
+		return keep
+	}
 	if ev.Response == nil {
 		return keep
 	}
@@ -474,9 +483,11 @@ func clearSkillState(inv *agent.Invocation) map[string][]byte {
 		return nil
 	}
 	delta := make(map[string][]byte)
+	loadedPrefix := skill.LoadedPrefix(inv.AgentName)
+	docsPrefix := skill.DocsPrefix(inv.AgentName)
 	for k, v := range state {
-		if !strings.HasPrefix(k, skill.StateKeyLoadedPrefix) &&
-			!strings.HasPrefix(k, skill.StateKeyDocsPrefix) {
+		if !strings.HasPrefix(k, loadedPrefix) &&
+			!strings.HasPrefix(k, docsPrefix) {
 			continue
 		}
 		if len(v) == 0 {
@@ -502,11 +513,11 @@ func (p *SkillsRequestProcessor) maybeOffloadLoadedSkills(
 	}
 	delta := make(map[string][]byte, len(loaded)*2)
 	for _, name := range loaded {
-		loadedKey := skill.StateKeyLoadedPrefix + name
+		loadedKey := skill.LoadedKey(inv.AgentName, name)
 		inv.Session.SetState(loadedKey, nil)
 		delta[loadedKey] = nil
 
-		docsKey := skill.StateKeyDocsPrefix + name
+		docsKey := skill.DocsKey(inv.AgentName, name)
 		inv.Session.SetState(docsKey, nil)
 		delta[docsKey] = nil
 	}
@@ -651,15 +662,16 @@ func (p *SkillsRequestProcessor) getLoadedSkills(
 	inv *agent.Invocation,
 ) []string {
 	var names []string
+	prefix := skill.LoadedPrefix(inv.AgentName)
 	state := inv.Session.SnapshotState()
 	for k, v := range state {
-		if !strings.HasPrefix(k, skill.StateKeyLoadedPrefix) {
+		if !strings.HasPrefix(k, prefix) {
 			continue
 		}
 		if len(v) == 0 {
 			continue
 		}
-		name := strings.TrimPrefix(k, skill.StateKeyLoadedPrefix)
+		name := strings.TrimPrefix(k, prefix)
 		names = append(names, name)
 	}
 	return names
@@ -668,7 +680,7 @@ func (p *SkillsRequestProcessor) getLoadedSkills(
 func (p *SkillsRequestProcessor) getDocsSelection(
 	inv *agent.Invocation, name string,
 ) []string {
-	key := skill.StateKeyDocsPrefix + name
+	key := skill.DocsKey(inv.AgentName, name)
 	v, ok := inv.Session.GetState(key)
 	if !ok || len(v) == 0 {
 		return nil

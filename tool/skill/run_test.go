@@ -2633,13 +2633,14 @@ func TestRunTool_RequireSkillLoaded_Loaded_OK(t *testing.T) {
 		State: session.StateMap{},
 	}
 	sess.SetState(
-		skill.StateKeyLoadedPrefix+testSkillName,
+		skill.LoadedKey("tester", testSkillName),
 		[]byte("1"),
 	)
 	inv := agent.NewInvocation(
 		agent.WithInvocationMessage(model.NewUserMessage("hi")),
 		agent.WithInvocationSession(sess),
 	)
+	inv.AgentName = "tester"
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 
 	args := runInput{Skill: testSkillName, Command: echoOK,
