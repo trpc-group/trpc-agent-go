@@ -4279,9 +4279,16 @@ func TestFileNameFromArtifactRef_EdgeCases(t *testing.T) {
 		assert.Equal(t, "", fileNameFromArtifactRef("file-123"))
 	})
 
-	t.Run("invalid version returns empty", func(t *testing.T) {
-		ref := fileref.ArtifactPrefix + "a@x"
-		assert.Equal(t, "", fileNameFromArtifactRef(ref))
+	t.Run("name with @ is supported", func(t *testing.T) {
+		ref := fileref.ArtifactPrefix + "uploads/a@x"
+		assert.Equal(t, "a@x", fileNameFromArtifactRef(ref))
+	})
+
+	t.Run("name with @ + version is supported", func(t *testing.T) {
+		ref := fileref.ArtifactPrefix +
+			"uploads/skey=@crypt_abc.jpeg@0"
+		assert.Equal(t, "skey=@crypt_abc.jpeg",
+			fileNameFromArtifactRef(ref))
 	})
 
 	t.Run("invalid base returns empty", func(t *testing.T) {
