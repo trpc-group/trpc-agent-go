@@ -201,7 +201,9 @@ func listSkillStateKeys(state session.StateMap) []string {
 	var out []string
 	for k := range state {
 		if strings.HasPrefix(k, skill.StateKeyLoadedPrefix) ||
-			strings.HasPrefix(k, skill.StateKeyDocsPrefix) {
+			strings.HasPrefix(k, skill.StateKeyDocsPrefix) ||
+			strings.HasPrefix(k, skill.StateKeyLoadedByAgentPrefix) ||
+			strings.HasPrefix(k, skill.StateKeyDocsByAgentPrefix) {
 			out = append(out, k)
 		}
 	}
