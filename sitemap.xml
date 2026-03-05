@@ -8,6 +8,13 @@
         <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/"/>
     </url>
     <url>
+        <loc>https://trpc-group.github.io/trpc-agent-go/a2a-interaction/</loc>
+        <lastmod>2026-03-05</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/a2a-interaction/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/a2a-interaction/"/>
+    </url>
+    <url>
         <loc>https://trpc-group.github.io/trpc-agent-go/a2a/</loc>
         <lastmod>2026-03-05</lastmod>
         <changefreq>daily</changefreq>
@@ -342,6 +349,13 @@
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/"/>
+    </url>
+    <url>
+        <loc>https://trpc-group.github.io/trpc-agent-go/zh/a2a-interaction/</loc>
+        <lastmod>2026-03-05</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/a2a-interaction/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/a2a-interaction/"/>
     </url>
     <url>
         <loc>https://trpc-group.github.io/trpc-agent-go/zh/a2a/</loc>
