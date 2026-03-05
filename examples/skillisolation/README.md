@@ -10,7 +10,7 @@ In older versions, `skill_load` wrote unscoped session state keys, so a
 sub-agent could accidentally make the coordinator inject the loaded skill
 body/docs into its own prompt.
 
-trpc-agent-go now scopes skills state keys by agent name, so a sub-agent’s
+trpc-agent-go now scopes skill state keys by agent name, so a sub-agent’s
 `skill_load` does **not** automatically inflate the coordinator’s prompt.
 
 ## Prerequisites
@@ -46,4 +46,3 @@ On the second checkpoint:
   `temp:skill:loaded_by_agent:skillisolation-child/demo-skill`
 - The coordinator request should **not** contain a `[Loaded] demo-skill`
   block in the system message.
-
