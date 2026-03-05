@@ -14,6 +14,11 @@ mock model, so it does **not** require any API key.
 When the model calls `skill_load` (and optionally `skill_select_docs`), the
 framework writes session state keys:
 
+- `temp:skill:loaded_by_agent:<agent>/<name>`
+- `temp:skill:docs_by_agent:<agent>/<name>`
+
+Legacy (pre-scoping) keys are still supported and migrated when seen:
+
 - `temp:skill:loaded:<name>`
 - `temp:skill:docs:<name>`
 
