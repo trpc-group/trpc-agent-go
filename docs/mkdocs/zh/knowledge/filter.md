@@ -120,6 +120,7 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
     "trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
     knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
+    "trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // 手动创建 Tool 并设置过滤器
@@ -134,7 +135,7 @@ searchTool := knowledgetool.NewKnowledgeSearchTool(
 llmAgent := llmagent.New(
     "knowledge-assistant",
     llmagent.WithModel(modelInstance),
-    llmagent.WithTools(searchTool),
+    llmagent.WithTools([]tool.Tool{searchTool}),
 )
 ```
 
@@ -329,6 +330,7 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
     "trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
     knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
+    "trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // 手动创建带有条件过滤器的 Tool
@@ -348,7 +350,7 @@ searchTool := knowledgetool.NewKnowledgeSearchTool(
 llmAgent := llmagent.New(
     "knowledge-assistant",
     llmagent.WithModel(modelInstance),
-    llmagent.WithTools(searchTool),  // 手动传递 Tool
+    llmagent.WithTools([]tool.Tool{searchTool}),  // 手动传递 Tool
 )
 
 // 最终过滤条件：

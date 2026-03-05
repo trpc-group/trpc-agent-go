@@ -30,14 +30,49 @@ trpc-agent-go 支持多种向量存储实现：
 
 **示例**:
 ```go
-// Default automatic search mode selection
-results, err := kb.Search(ctx, "Large language model applications")
+// 默认自动搜索
+reqSearch := &knowledge.SearchRequest{
+    Query: "Large language model applications",
+    //History: nil,
+    //UserID: "",
+    //SessionID: "",
+    //MaxResults: 0,
+    //MinScore: 0,
+    //SearchFilter: nil,
+    //SearchMode: 0,
+}
+rspSearch, err := kb.Search(ctx, reqSearch)
+if err != nil {
+    log.Debugf("Failed to search knowledge base: %v", err)
+    return
+}
+log.Infof("Search Result:[%+v]", rspSearch)
+for i, r := range rspSearch.Documents {
+    log.Infof("rspSearch.DOC_%d.score=%v,doc:[%+v]", i, r.Score, r.Document)
+}
 
-// Filter by metadata
-filter := searchfilter.NewFilter(
-    searchfilter.WithMetadata("category", "technical docs"),
-)
-results, err := kb.Search(ctx, "", knowledge.WithSearchFilter(filter))
+// 带过滤条件搜索
+filter := knowledge.SearchFilter{
+    //DocumentIDs: nil,
+    //Metadata: nil,
+    FilterCondition: searchfilter.And(
+        searchfilter.Equal("category", "film"),
+        searchfilter.Equal("country_code", "us"),
+    ),
+}
+reqSearchWithFilter := &knowledge.SearchRequest{
+    Query:        "排行第一的电影",
+    SearchFilter: &filter,
+}
+rspSearchWithFilter, err := kb.Search(ctx, reqSearchWithFilter)
+if err != nil {
+    log.Debugf("Failed to search knowledge base: %v", err)
+    return
+}
+log.Infof("Search Result:[%+v]", rspSearchWithFilter)
+for i, r := range rspSearchWithFilter.Documents {
+    log.Infof("rspSearchWithFilter.DOC_%d.score=%v,doc:[%+v]", i, r.Score, r.Document)
+}
 ```
 
 ## 过滤器支持
