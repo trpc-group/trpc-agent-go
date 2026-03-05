@@ -160,3 +160,96 @@ func TestNewSQLiteSessionBackend_BadTablePrefix(t *testing.T) {
 	require.Contains(t, err.Error(), "bad-prefix")
 	require.Nil(t, svc)
 }
+
+func TestNewSQLiteSessionBackend_DecodeStrictFails(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "sessions.sqlite")
+	var node yaml.Node
+	require.NoError(t, yaml.Unmarshal([]byte(fmt.Sprintf(
+		"path: %q\n"+
+			"unknown_field: true\n",
+		dbPath,
+	)), &node))
+
+	svc, err := newSQLiteSessionBackend(
+		registry.SessionDeps{},
+		registry.SessionBackendSpec{Config: &node},
+	)
+	require.Error(t, err)
+	require.Nil(t, svc)
+}
+
+func TestNewSQLiteSessionBackend_EnsureSQLiteDirFails(t *testing.T) {
+	t.Parallel()
+
+	const badPath = "/dev/null/sessions.sqlite"
+	var node yaml.Node
+	require.NoError(t, yaml.Unmarshal([]byte(fmt.Sprintf(
+		"path: %q\n",
+		badPath,
+	)), &node))
+
+	svc, err := newSQLiteSessionBackend(
+		registry.SessionDeps{},
+		registry.SessionBackendSpec{Config: &node},
+	)
+	require.Error(t, err)
+	require.Nil(t, svc)
+}
+
+func TestNewSQLiteSessionBackend_SkipInitAndSummarizer(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "sessions.sqlite")
+	var node yaml.Node
+	require.NoError(t, yaml.Unmarshal([]byte(fmt.Sprintf(
+		"path: %q\n"+
+			"skip_db_init: true\n"+
+			"table_prefix: %q\n",
+		dbPath,
+		"good_prefix",
+	)), &node))
+
+	svc, err := newSQLiteSessionBackend(
+		registry.SessionDeps{Summarizer: &stubSummarizer{}},
+		registry.SessionBackendSpec{Config: &node},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, svc)
+	require.NoError(t, svc.Close())
+}
+
+func TestNewSQLiteSessionBackend_NewServiceFails(t *testing.T) {
+	t.Parallel()
+
+	const badPath = "/dev/null"
+	var node yaml.Node
+	require.NoError(t, yaml.Unmarshal([]byte(fmt.Sprintf(
+		"path: %q\n",
+		badPath,
+	)), &node))
+
+	svc, err := newSQLiteSessionBackend(
+		registry.SessionDeps{},
+		registry.SessionBackendSpec{Config: &node},
+	)
+	require.Error(t, err)
+	require.Nil(t, svc)
+}
+
+func TestEnsureSQLiteDir_SpecialCases(t *testing.T) {
+	t.Parallel()
+
+	require.NoError(t, ensureSQLiteDir(""))
+	require.NoError(t, ensureSQLiteDir(":memory:"))
+	require.NoError(t, ensureSQLiteDir("sessions.sqlite"))
+}
+
+func TestEnsureSQLiteDir_MkdirFails(t *testing.T) {
+	t.Parallel()
+
+	err := ensureSQLiteDir("/dev/null/sessions.sqlite")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "mkdir session sqlite dir")
+}

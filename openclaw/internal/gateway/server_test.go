@@ -805,6 +805,110 @@ func TestServer_ProcessMessage_DebugRecorderWritesTrace(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestServer_ProcessMessage_DebugRecorder_IgnoresStatus(t *testing.T) {
+	t.Parallel()
+
+	mode, err := debugrecorder.ParseMode("safe")
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	rec, err := debugrecorder.New(dir, mode)
+	require.NoError(t, err)
+
+	srv, err := New(
+		&stubRunner{},
+		WithDebugRecorder(rec),
+		WithRequireMentionInThreads(true),
+		WithMentionPatterns("@bot"),
+	)
+	require.NoError(t, err)
+
+	rsp, status := srv.ProcessMessage(
+		context.Background(),
+		gwproto.MessageRequest{
+			From:   "u1",
+			Thread: "g1",
+			Text:   "hello",
+		},
+	)
+	require.Equal(t, http.StatusOK, status)
+	require.True(t, rsp.Ignored)
+}
+
+func TestServer_ProcessMessage_DebugRecorder_MissingText(t *testing.T) {
+	t.Parallel()
+
+	mode, err := debugrecorder.ParseMode("safe")
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	rec, err := debugrecorder.New(dir, mode)
+	require.NoError(t, err)
+
+	srv, err := New(&stubRunner{}, WithDebugRecorder(rec))
+	require.NoError(t, err)
+
+	rsp, status := srv.ProcessMessage(
+		context.Background(),
+		gwproto.MessageRequest{From: "u1"},
+	)
+	require.Equal(t, http.StatusBadRequest, status)
+	require.NotNil(t, rsp.Error)
+	require.Equal(t, errTypeInvalidRequest, rsp.Error.Type)
+	require.Contains(t, rsp.Error.Message, "missing text")
+}
+
+func TestServer_ProcessMessage_DebugRecorder_Unauthorized(t *testing.T) {
+	t.Parallel()
+
+	mode, err := debugrecorder.ParseMode("safe")
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	rec, err := debugrecorder.New(dir, mode)
+	require.NoError(t, err)
+
+	srv, err := New(
+		&stubRunner{},
+		WithAllowUsers("u2"),
+		WithDebugRecorder(rec),
+	)
+	require.NoError(t, err)
+
+	rsp, status := srv.ProcessMessage(
+		context.Background(),
+		gwproto.MessageRequest{From: "u1", Text: "hello"},
+	)
+	require.Equal(t, http.StatusForbidden, status)
+	require.NotNil(t, rsp.Error)
+	require.Equal(t, errTypeUnauthorized, rsp.Error.Type)
+}
+
+func TestServer_ProcessMessage_DebugRecorder_RunError(t *testing.T) {
+	t.Parallel()
+
+	mode, err := debugrecorder.ParseMode("safe")
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	rec, err := debugrecorder.New(dir, mode)
+	require.NoError(t, err)
+
+	srv, err := New(
+		&staticRunner{err: errors.New("runner boom")},
+		WithDebugRecorder(rec),
+	)
+	require.NoError(t, err)
+
+	rsp, status := srv.ProcessMessage(
+		context.Background(),
+		gwproto.MessageRequest{From: "u1", Text: "hello"},
+	)
+	require.Equal(t, http.StatusInternalServerError, status)
+	require.NotNil(t, rsp.Error)
+	require.Equal(t, errTypeInternal, rsp.Error.Type)
+}
+
 func TestServer_ProcessMessage_MissingUserIDAndFrom(t *testing.T) {
 	t.Parallel()
 
