@@ -108,6 +108,7 @@ func (t *LoadTool) StateDelta(_ string, args []byte, _ []byte) map[string][]byte
 	return t.stateDelta("", args)
 }
 
+// StateDeltaForInvocation writes agent-scoped state for the invocation.
 func (t *LoadTool) StateDeltaForInvocation(
 	inv *agent.Invocation,
 	toolCallID string,

@@ -136,6 +136,7 @@ func (t *SelectDocsTool) StateDelta(
 	return t.stateDelta("", resultJSON)
 }
 
+// StateDeltaForInvocation writes agent-scoped state for the invocation.
 func (t *SelectDocsTool) StateDeltaForInvocation(
 	inv *agent.Invocation,
 	toolCallID string,
