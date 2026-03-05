@@ -15,9 +15,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 	"trpc.group/trpc-go/trpc-a2a-go/auth"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 	a2a "trpc.group/trpc-go/trpc-a2a-go/server"
@@ -81,6 +84,14 @@ func buildAgentCard(options *options) a2a.AgentCard {
 		URL:         url,
 		Capabilities: a2a.AgentCapabilities{
 			Streaming: &options.enableStreaming,
+			Extensions: []a2a.AgentExtension{
+				{
+					URI: ia2a.ExtensionTRPCA2AVersion,
+					Params: map[string]any{
+						"version": ia2a.InteractionVersion,
+					},
+				},
+			},
 		},
 		Skills:             skills,
 		DefaultInputModes:  []string{"text"},
@@ -161,6 +172,7 @@ func buildA2AServer(options *options) (*a2a.A2AServer, error) {
 	opts := []a2a.Option{
 		a2a.WithAuthProvider(&defaultAuthProvider{userIDHeader: userIDHeader}),
 		a2a.WithBasePath(basePath),
+		a2a.WithMiddleWare(&traceContextMiddleware{}),
 	}
 	opts = append(opts, options.extraOptions...)
 	a2aServer, err := a2a.NewA2AServer(agentCard, taskManager, opts...)
@@ -168,6 +180,22 @@ func buildA2AServer(options *options) (*a2a.A2AServer, error) {
 		return nil, fmt.Errorf("failed to create a2a server: %w", err)
 	}
 	return a2aServer, nil
+}
+
+// traceContextMiddleware extracts W3C Trace Context from HTTP headers and injects
+// it into the request context. This enables distributed tracing across A2A
+// agent boundaries.
+type traceContextMiddleware struct{}
+
+// Wrap implements the a2a.Middleware interface.
+func (m *traceContextMiddleware) Wrap(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Extract trace context from HTTP headers using the global propagator
+		propagator := otel.GetTextMapPropagator()
+		ctx := propagator.Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+		// Continue with the enriched context
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 // extractBasePath extracts the path component from a URL for request routing.
@@ -852,8 +880,8 @@ func buildSkillsFromTools(agent agent.Agent, agentName, agentDesc string) []a2a.
 }
 
 // addTaskMetadata adds ADK-compatible metadata to task status update events.
-// When ADK compatibility mode is enabled, it adds metadata with "adk_" prefix
-// (e.g., "adk_app_name", "adk_user_id", "adk_session_id") to match ADK Python implementation.
+// Only writes metadata when ADK compatibility is enabled, using ADK-prefixed keys
+// (adk_app_name, adk_user_id, adk_session_id) for interoperability with ADK clients.
 func (m *messageProcessor) addTaskMetadata(event *protocol.TaskStatusUpdateEvent, userID, sessionID string) {
 	if !m.adkCompatibility {
 		return
@@ -863,7 +891,6 @@ func (m *messageProcessor) addTaskMetadata(event *protocol.TaskStatusUpdateEvent
 		event.Metadata = make(map[string]any)
 	}
 
-	// Add ADK-compatible metadata keys
 	event.Metadata[ia2a.GetADKMetadataKey("app_name")] = m.agentName
 	event.Metadata[ia2a.GetADKMetadataKey("user_id")] = userID
 	event.Metadata[ia2a.GetADKMetadataKey("session_id")] = sessionID
