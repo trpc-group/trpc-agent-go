@@ -855,6 +855,7 @@ func TestBuildGatewayRequest_TooLargePropagates(t *testing.T) {
 		context.Background(),
 		"1",
 		"",
+		"telegram:dm:1",
 		"rid",
 		tgapi.Message{
 			MessageID: 3,
@@ -878,6 +879,7 @@ func TestBuildGatewayRequest_EmptyMessageErrors(t *testing.T) {
 		context.Background(),
 		"1",
 		"",
+		"telegram:dm:1",
 		"rid",
 		tgapi.Message{MessageID: 3},
 	)

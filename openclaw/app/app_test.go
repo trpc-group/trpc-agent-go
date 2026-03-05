@@ -27,9 +27,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/claudecode"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/memory"
+	meminmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/session"
+	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	occhannel "trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
@@ -1610,7 +1614,7 @@ func TestInProcGatewayClient_SendMessage_OK(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	c := newInProcGatewayClient(srv)
+	c := newInProcGatewayClient(srv, appName, nil, nil, "")
 
 	rsp, err := c.SendMessage(context.Background(), gwclient.MessageRequest{
 		From: "u1",
@@ -1634,7 +1638,7 @@ func TestInProcGatewayClient_SendMessage_StatusError(t *testing.T) {
 	srv, err := gateway.New(&inProcGWTestRunner{})
 	require.NoError(t, err)
 
-	c := newInProcGatewayClient(srv)
+	c := newInProcGatewayClient(srv, appName, nil, nil, "")
 
 	_, err = c.SendMessage(context.Background(), gwclient.MessageRequest{
 		Text: "hi",
@@ -1669,7 +1673,7 @@ func TestInProcGatewayClient_Cancel_OK(t *testing.T) {
 	srv, err := gateway.New(r)
 	require.NoError(t, err)
 
-	c := newInProcGatewayClient(srv)
+	c := newInProcGatewayClient(srv, appName, nil, nil, "")
 
 	canceled, err := c.Cancel(context.Background(), testRequestID)
 	require.NoError(t, err)
@@ -1685,11 +1689,115 @@ func TestInProcGatewayClient_Cancel_Unsupported(t *testing.T) {
 	srv, err := gateway.New(&inProcGWTestRunner{})
 	require.NoError(t, err)
 
-	c := newInProcGatewayClient(srv)
+	c := newInProcGatewayClient(srv, appName, nil, nil, "")
 
 	_, err = c.Cancel(context.Background(), "req-1")
 	require.Error(t, err)
 	require.Equal(t, wantErr, err.Error())
+}
+
+func TestInProcGatewayClient_ForgetUser_DeletesState(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	sessSvc := sessioninmemory.NewSessionService()
+	memSvc := meminmemory.NewMemoryService()
+
+	const (
+		channelName = "telegram"
+		userID      = "u1"
+	)
+
+	_, err := sessSvc.CreateSession(ctx, session.Key{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: "s1",
+	}, nil)
+	require.NoError(t, err)
+	_, err = sessSvc.CreateSession(ctx, session.Key{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: "s2",
+	}, nil)
+	require.NoError(t, err)
+
+	err = memSvc.AddMemory(
+		ctx,
+		memory.UserKey{AppName: appName, UserID: userID},
+		"remember",
+		nil,
+	)
+	require.NoError(t, err)
+
+	mode, err := debugrecorder.ParseMode("safe")
+	require.NoError(t, err)
+
+	debugDir := t.TempDir()
+	rec, err := debugrecorder.New(debugDir, mode)
+	require.NoError(t, err)
+
+	trace, err := rec.Start(debugrecorder.TraceStart{
+		AppName:   appName,
+		Channel:   channelName,
+		UserID:    userID,
+		SessionID: "sid",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, trace)
+	traceDir := trace.Dir()
+	require.NotEmpty(t, traceDir)
+	require.NoError(t, trace.Close(debugrecorder.TraceEnd{Status: "ok"}))
+
+	otherTrace, err := rec.Start(debugrecorder.TraceStart{
+		AppName:   appName,
+		Channel:   channelName,
+		UserID:    "u2",
+		SessionID: "sid2",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, otherTrace)
+	otherTraceDir := otherTrace.Dir()
+	require.NotEmpty(t, otherTraceDir)
+	require.NoError(
+		t,
+		otherTrace.Close(debugrecorder.TraceEnd{Status: "ok"}),
+	)
+
+	srv, err := gateway.New(&inProcGWTestRunner{})
+	require.NoError(t, err)
+
+	c := newInProcGatewayClient(
+		srv,
+		appName,
+		sessSvc,
+		memSvc,
+		debugDir,
+	)
+
+	require.NoError(t, c.ForgetUser(ctx, channelName, userID))
+
+	sessions, err := sessSvc.ListSessions(ctx, session.UserKey{
+		AppName: appName,
+		UserID:  userID,
+	})
+	require.NoError(t, err)
+	require.Empty(t, sessions)
+
+	memories, err := memSvc.ReadMemories(
+		ctx,
+		memory.UserKey{AppName: appName, UserID: userID},
+		10,
+	)
+	require.NoError(t, err)
+	require.Empty(t, memories)
+
+	_, err = os.Stat(traceDir)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, os.ErrNotExist))
+
+	_, err = os.Stat(otherTraceDir)
+	require.NoError(t, err)
 }
 
 func TestErrorForGWStatus_NilAPIError(t *testing.T) {

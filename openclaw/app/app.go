@@ -382,7 +382,17 @@ func NewRuntime(
 		CancelPath:   gwSrv.CancelPath(),
 	}
 
-	gw := newInProcGatewayClient(gwSrv)
+	debugDir := filepath.Join(resolvedStateDir, defaultDebugRecorderDir)
+	if debugRec != nil {
+		debugDir = debugRec.Dir()
+	}
+	gw := newInProcGatewayClient(
+		gwSrv,
+		opts.AppName,
+		sessionSvc,
+		memSvc,
+		debugDir,
+	)
 
 	if len(opts.Channels) > 0 {
 		extra, err := channelsFromRegistry(
@@ -615,7 +625,17 @@ func run(ctx context.Context, args []string) error {
 		}
 	}
 
-	gw := newInProcGatewayClient(gwSrv)
+	debugDir := filepath.Join(resolvedStateDir, defaultDebugRecorderDir)
+	if debugRec != nil {
+		debugDir = debugRec.Dir()
+	}
+	gw := newInProcGatewayClient(
+		gwSrv,
+		opts.AppName,
+		sessionSvc,
+		memSvc,
+		debugDir,
+	)
 
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()

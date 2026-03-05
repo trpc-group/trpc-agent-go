@@ -129,18 +129,18 @@ func TestBuildRequestID(t *testing.T) {
 	)
 }
 
-func TestBuildSessionID(t *testing.T) {
+func TestBuildLaneKey(t *testing.T) {
 	t.Parallel()
 
 	require.Equal(
 		t,
 		"telegram:dm:u1",
-		buildSessionID("u1", ""),
+		buildLaneKey("u1", ""),
 	)
 	require.Equal(
 		t,
 		"telegram:thread:10:topic:2",
-		buildSessionID("u1", "10:topic:2"),
+		buildLaneKey("u1", "10:topic:2"),
 	)
 }
 

@@ -20,11 +20,18 @@ const (
 
 	commandHelp   = "help"
 	commandCancel = "cancel"
+
+	commandReset  = "reset"
+	commandNew    = "new"
+	commandForget = "forget"
 )
 
 const helpMessage = `Commands:
 /help   Show help
-/cancel Cancel the current run`
+/cancel Cancel the current run
+/reset  Start a new DM session
+/new    Alias of /reset
+/forget Delete your saved data (DM only)`
 
 func parseCommand(text string, bot BotInfo) string {
 	trimmed := strings.TrimSpace(text)

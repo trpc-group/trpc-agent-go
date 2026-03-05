@@ -92,6 +92,7 @@ func (c *Channel) callGatewayAndReply(
 	replyTo int,
 	fromID string,
 	thread string,
+	sessionID string,
 	requestID string,
 	msg tgapi.Message,
 ) (err error) {
@@ -104,7 +105,6 @@ func (c *Channel) callGatewayAndReply(
 		rec := debugrecorder.RecorderFromContext(ctx)
 		if rec != nil {
 			traceStartedAt = time.Now()
-			sessionID := buildSessionID(fromID, thread)
 			t, recErr := rec.Start(debugrecorder.TraceStart{
 				Channel:   channelID,
 				UserID:    fromID,
@@ -174,7 +174,14 @@ func (c *Channel) callGatewayAndReply(
 		mode,
 	)
 
-	req, err := c.buildGatewayRequest(ctx, fromID, thread, requestID, msg)
+	req, err := c.buildGatewayRequest(
+		ctx,
+		fromID,
+		thread,
+		sessionID,
+		requestID,
+		msg,
+	)
 	if err != nil {
 		if trace != nil {
 			traceStatus = "error"

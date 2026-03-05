@@ -14,8 +14,9 @@ package telegram
 //
 // Telegram docs: core.telegram.org/bots/api#update
 type Update struct {
-	UpdateID int      `json:"update_id"`
-	Message  *Message `json:"message,omitempty"`
+	UpdateID     int              `json:"update_id"`
+	Message      *Message         `json:"message,omitempty"`
+	MyChatMember *ChatMemberEvent `json:"my_chat_member,omitempty"`
 }
 
 // Message is a Telegram message.
@@ -118,6 +119,25 @@ type User struct {
 type Chat struct {
 	ID   int64  `json:"id"`
 	Type string `json:"type"`
+}
+
+// ChatMemberEvent is a my_chat_member update payload.
+//
+// Telegram docs: core.telegram.org/bots/api#chatmemberupdated
+type ChatMemberEvent struct {
+	Chat          *Chat       `json:"chat,omitempty"`
+	From          *User       `json:"from,omitempty"`
+	Date          int64       `json:"date,omitempty"`
+	OldChatMember *ChatMember `json:"old_chat_member,omitempty"`
+	NewChatMember *ChatMember `json:"new_chat_member,omitempty"`
+}
+
+// ChatMember is a minimal chat member descriptor.
+//
+// Telegram docs: core.telegram.org/bots/api#chatmember
+type ChatMember struct {
+	Status string `json:"status,omitempty"`
+	User   *User  `json:"user,omitempty"`
 }
 
 const (

@@ -307,6 +307,59 @@ func TestPoller_HandlesMediaMessages(t *testing.T) {
 	}
 }
 
+func TestPoller_HandlesMyChatMember(t *testing.T) {
+	t.Parallel()
+
+	client := &stubUpdatesClient{
+		results: [][]Update{
+			{
+				{
+					UpdateID: 1,
+					MyChatMember: &ChatMemberEvent{
+						Chat: &Chat{
+							ID:   2,
+							Type: chatTypePrivate,
+						},
+						NewChatMember: &ChatMember{
+							Status: "kicked",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	handled := make(chan struct{}, 1)
+	poller, err := NewPoller(
+		client,
+		WithStartFromLatest(false),
+		WithPollTimeout(0),
+		WithMessageHandler(func(_ context.Context, _ Message) error {
+			t.Fatal("unexpected message handler call")
+			return nil
+		}),
+		WithMyChatMemberHandler(func(_ context.Context, ev ChatMemberEvent) error {
+			require.NotNil(t, ev.Chat)
+			require.Equal(t, int64(2), ev.Chat.ID)
+			handled <- struct{}{}
+			cancel()
+			return nil
+		}),
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, poller.Run(ctx))
+
+	select {
+	case <-handled:
+	default:
+		t.Fatal("expected handler to be called")
+	}
+}
+
 type stubOffsetStore struct {
 	mu         sync.Mutex
 	readOffset int

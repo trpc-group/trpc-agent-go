@@ -12,12 +12,20 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwclient"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 const (
@@ -26,14 +34,36 @@ const (
 	gwclientStatusAPIErrorFmt = "gwclient: status %d: %s: %s"
 
 	errNilGatewayServer = "gateway client: nil server"
+
+	debugTraceMetaFile = "meta.json"
+
+	errEmptyForgetChannel = "gateway client: empty forget channel"
+	errEmptyForgetUserID  = "gateway client: empty forget user id"
 )
 
 type inProcGatewayClient struct {
-	srv *gateway.Server
+	srv      *gateway.Server
+	appName  string
+	sessions session.Service
+	memories memory.Service
+
+	debugDir string
 }
 
-func newInProcGatewayClient(srv *gateway.Server) *inProcGatewayClient {
-	return &inProcGatewayClient{srv: srv}
+func newInProcGatewayClient(
+	srv *gateway.Server,
+	appName string,
+	sessions session.Service,
+	memories memory.Service,
+	debugDir string,
+) *inProcGatewayClient {
+	return &inProcGatewayClient{
+		srv:      srv,
+		appName:  strings.TrimSpace(appName),
+		sessions: sessions,
+		memories: memories,
+		debugDir: strings.TrimSpace(debugDir),
+	}
 }
 
 func (c *inProcGatewayClient) SendMessage(
@@ -74,6 +104,72 @@ func (c *inProcGatewayClient) Cancel(
 	return canceled, nil
 }
 
+func (c *inProcGatewayClient) ForgetUser(
+	ctx context.Context,
+	channel string,
+	userID string,
+) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if c == nil || c.srv == nil {
+		return errors.New(errNilGatewayServer)
+	}
+
+	channel = strings.TrimSpace(channel)
+	if channel == "" {
+		return errors.New(errEmptyForgetChannel)
+	}
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return errors.New(errEmptyForgetUserID)
+	}
+	appName := strings.TrimSpace(c.appName)
+	if appName == "" {
+		return session.ErrAppNameRequired
+	}
+
+	if c.sessions != nil {
+		userKey := session.UserKey{AppName: appName, UserID: userID}
+		sessions, err := c.sessions.ListSessions(ctx, userKey)
+		if err != nil {
+			return fmt.Errorf("forget: list sessions: %w", err)
+		}
+		for _, sess := range sessions {
+			if sess == nil || strings.TrimSpace(sess.ID) == "" {
+				continue
+			}
+			key := session.Key{
+				AppName:   appName,
+				UserID:    userID,
+				SessionID: sess.ID,
+			}
+			if err := c.sessions.DeleteSession(ctx, key); err != nil {
+				return fmt.Errorf("forget: delete session: %w", err)
+			}
+		}
+	}
+
+	if c.memories != nil {
+		userKey := memory.UserKey{AppName: appName, UserID: userID}
+		if err := c.memories.ClearMemories(ctx, userKey); err != nil {
+			return fmt.Errorf("forget: clear memories: %w", err)
+		}
+	}
+
+	if err := deleteDebugTraces(
+		ctx,
+		c.debugDir,
+		channel,
+		appName,
+		userID,
+	); err != nil {
+		return fmt.Errorf("forget: delete debug traces: %w", err)
+	}
+
+	return nil
+}
+
 func errorForGWStatus(status int, apiErr *gwclient.APIError) error {
 	if status == http.StatusOK {
 		return nil
@@ -87,4 +183,115 @@ func errorForGWStatus(status int, apiErr *gwclient.APIError) error {
 		apiErr.Type,
 		apiErr.Message,
 	)
+}
+
+type traceMeta struct {
+	Start debugrecorder.TraceStart `json:"start"`
+}
+
+func deleteDebugTraces(
+	ctx context.Context,
+	debugDir string,
+	channel string,
+	appName string,
+	userID string,
+) error {
+	debugDir = strings.TrimSpace(debugDir)
+	if debugDir == "" {
+		return nil
+	}
+
+	st, err := os.Stat(debugDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	if !st.IsDir() {
+		return nil
+	}
+
+	var dirs []string
+	walkErr := filepath.WalkDir(
+		debugDir,
+		func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					return nil
+				}
+				return err
+			}
+			if d.IsDir() {
+				return nil
+			}
+			if d.Name() != debugTraceMetaFile {
+				return nil
+			}
+
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				return nil
+			}
+
+			var meta traceMeta
+			if err := json.Unmarshal(raw, &meta); err != nil {
+				return nil
+			}
+
+			if strings.TrimSpace(meta.Start.AppName) != appName {
+				return nil
+			}
+			if strings.TrimSpace(meta.Start.Channel) != channel {
+				return nil
+			}
+			if strings.TrimSpace(meta.Start.UserID) != userID {
+				return nil
+			}
+
+			dir := filepath.Dir(path)
+			if filepath.Clean(dir) == filepath.Clean(debugDir) {
+				return nil
+			}
+			dirs = append(dirs, dir)
+			return nil
+		},
+	)
+	if walkErr != nil {
+		return walkErr
+	}
+
+	if len(dirs) == 0 {
+		return nil
+	}
+
+	sort.Strings(dirs)
+	dirs = compactStrings(dirs)
+
+	for _, dir := range dirs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func compactStrings(in []string) []string {
+	if len(in) < 2 {
+		return in
+	}
+	out := make([]string, 0, len(in))
+	prev := in[0]
+	out = append(out, prev)
+	for _, v := range in[1:] {
+		if v == prev {
+			continue
+		}
+		out = append(out, v)
+		prev = v
+	}
+	return out
 }

@@ -46,7 +46,7 @@ func buildRequestID(
 	)
 }
 
-func buildSessionID(fromID string, thread string) string {
+func buildLaneKey(fromID string, thread string) string {
 	if strings.TrimSpace(thread) != "" {
 		return fmt.Sprintf("%s:thread:%s", channelID, thread)
 	}
@@ -82,6 +82,24 @@ func parseGroupPolicy(raw string) (string, error) {
 	default:
 		return "", fmt.Errorf(
 			"telegram: unsupported group policy: %s",
+			raw,
+		)
+	}
+}
+
+func parseDMBlockCleanup(raw string) (string, error) {
+	v := strings.ToLower(strings.TrimSpace(raw))
+	if v == "" {
+		return defaultDMBlockCleanup, nil
+	}
+	switch v {
+	case dmBlockCleanupNone,
+		dmBlockCleanupReset,
+		dmBlockCleanupForget:
+		return v, nil
+	default:
+		return "", fmt.Errorf(
+			"telegram: unsupported dm block cleanup: %s",
 			raw,
 		)
 	}
@@ -251,6 +269,13 @@ const (
 	cancelNoopMessage   = "No running request to cancel."
 	cancelFailedMessage = "Cancel failed."
 	cancelOKMessage     = "Canceled."
+
+	resetOKMessage     = "Started a new session."
+	resetFailedMessage = "Failed to start a new session."
+
+	forgetOKMessage          = "Forgot your data."
+	forgetFailedMessage      = "Failed to forget your data."
+	forgetUnsupportedMessage = "Forget is not supported."
 )
 
 func (c *Channel) handleCancelCommand(
@@ -258,9 +283,9 @@ func (c *Channel) handleCancelCommand(
 	chatID int64,
 	messageThreadID int,
 	replyTo int,
-	sessionID string,
+	laneKey string,
 ) error {
-	requestID := c.inflight.Get(sessionID)
+	requestID := c.inflight.Get(laneKey)
 	if strings.TrimSpace(requestID) == "" {
 		c.reply(
 			ctx,
@@ -302,5 +327,112 @@ func (c *Channel) handleCancelCommand(
 		replyTo,
 		cancelOKMessage,
 	)
+	return nil
+}
+
+type userForgetter interface {
+	ForgetUser(ctx context.Context, channel, userID string) error
+}
+
+func (c *Channel) cancelInflight(
+	ctx context.Context,
+	laneKey string,
+) bool {
+	requestID := strings.TrimSpace(c.inflight.Get(laneKey))
+	if requestID == "" {
+		return false
+	}
+
+	canceled, err := c.gw.Cancel(ctx, requestID)
+	if err != nil {
+		log.WarnfContext(ctx, "telegram: cancel: %v", err)
+		return false
+	}
+	c.inflight.Clear(laneKey, requestID)
+	return canceled
+}
+
+func (c *Channel) handleResetCommand(
+	ctx context.Context,
+	chatID int64,
+	messageThreadID int,
+	replyTo int,
+	laneKey string,
+	userID string,
+) error {
+	c.cancelInflight(ctx, laneKey)
+
+	if c.dmSessions == nil {
+		c.reply(
+			ctx,
+			chatID,
+			messageThreadID,
+			replyTo,
+			resetFailedMessage,
+		)
+		return nil
+	}
+
+	if _, err := c.dmSessions.Rotate(ctx, userID, laneKey); err != nil {
+		log.WarnfContext(ctx, "telegram: reset: %v", err)
+		c.reply(
+			ctx,
+			chatID,
+			messageThreadID,
+			replyTo,
+			resetFailedMessage,
+		)
+		return nil
+	}
+
+	c.reply(ctx, chatID, messageThreadID, replyTo, resetOKMessage)
+	return nil
+}
+
+func (c *Channel) handleForgetCommand(
+	ctx context.Context,
+	chatID int64,
+	messageThreadID int,
+	replyTo int,
+	laneKey string,
+	userID string,
+) error {
+	c.cancelInflight(ctx, laneKey)
+
+	f, ok := c.gw.(userForgetter)
+	if !ok {
+		c.reply(
+			ctx,
+			chatID,
+			messageThreadID,
+			replyTo,
+			forgetUnsupportedMessage,
+		)
+		return nil
+	}
+
+	if err := f.ForgetUser(ctx, channelID, userID); err != nil {
+		log.WarnfContext(ctx, "telegram: forget: %v", err)
+		c.reply(
+			ctx,
+			chatID,
+			messageThreadID,
+			replyTo,
+			forgetFailedMessage,
+		)
+		return nil
+	}
+
+	if c.dmSessions != nil {
+		if _, err := c.dmSessions.ForgetUser(ctx, userID); err != nil {
+			log.WarnfContext(
+				ctx,
+				"telegram: forget dm session: %v",
+				err,
+			)
+		}
+	}
+
+	c.reply(ctx, chatID, messageThreadID, replyTo, forgetOKMessage)
 	return nil
 }

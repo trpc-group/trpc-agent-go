@@ -453,6 +453,9 @@ channels:
       # http_timeout: "60s"
       # max_retries: 3
       # max_download_bytes: 8388608
+      # session_reset_idle: "24h"
+      # session_reset_daily: true
+      # on_block: "reset"
 ```
 
 Run:
@@ -534,6 +537,21 @@ This demo supports a few basic commands:
 
 - `/help`: show a short help message.
 - `/cancel`: cancel the current run for the same DM/thread session.
+- `/reset` and `/new`: start a new DM session (old data is kept).
+- `/forget`: permanently delete your stored sessions, memories, and debug
+  traces (DM only).
+
+You can also configure automatic DM session resets:
+
+- `session_reset_idle`: rotate the active DM session after it has been idle
+  for the configured duration.
+- `session_reset_daily`: rotate the active DM session when the date changes
+  (local time).
+
+To react to privacy/lifecycle events, configure:
+
+- `on_block`: what to do when a user blocks the bot (`my_chat_member` updates).
+  Supported values: `reset` (default), `forget`, `none`.
 
 ### Telegram reply streaming (preview)
 
@@ -560,7 +578,9 @@ channels:
 This demo derives `session_id` based on whether the inbound message is a
 DM (direct message, i.e. a private chat) or a group message:
 
-- DMs: `thread` is empty, so the session is per-user.
+- DMs: `thread` is empty, so the session is per-user. The active DM session
+  can be rotated via `/reset` (or automatically via `session_reset_*`) and is
+  persisted under `<state_dir>/telegram/`.
 - Groups: `thread` is the chat ID, so the session is per-group.
 - Group topics: if Telegram provides `message_thread_id`, `thread` becomes
   `<chat_id>:topic:<message_thread_id>`, so each topic gets its own session.

@@ -65,6 +65,7 @@ func (c *Channel) buildGatewayRequest(
 	ctx context.Context,
 	fromID string,
 	thread string,
+	sessionID string,
 	requestID string,
 	msg tgapi.Message,
 ) (gwclient.MessageRequest, error) {
@@ -82,6 +83,7 @@ func (c *Channel) buildGatewayRequest(
 		MessageID: strconv.Itoa(msg.MessageID),
 		Text:      text,
 		UserID:    fromID,
+		SessionID: sessionID,
 		RequestID: requestID,
 	}
 

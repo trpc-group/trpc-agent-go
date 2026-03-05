@@ -19,6 +19,25 @@ import (
 	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
 )
 
+type stubGatewayWithForget struct {
+	*stubGateway
+
+	forgetCalls []string
+	forgetErr   error
+}
+
+func (g *stubGatewayWithForget) ForgetUser(
+	_ context.Context,
+	_ string,
+	userID string,
+) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	g.forgetCalls = append(g.forgetCalls, userID)
+	return g.forgetErr
+}
+
 func TestChannel_HandleMessage_CommandHelp(t *testing.T) {
 	t.Parallel()
 
@@ -159,4 +178,44 @@ func TestChannel_HandleMessage_CommandCancel_Inflight(t *testing.T) {
 	require.Len(t, bot.sent, 1)
 	require.Equal(t, cancelOKMessage, bot.sent[0].Text)
 	bot.mu.Unlock()
+}
+
+func TestChannel_HandleMessage_CommandForget_CallsGateway(t *testing.T) {
+	t.Parallel()
+
+	gw := &stubGatewayWithForget{
+		stubGateway: &stubGateway{},
+	}
+	dir := t.TempDir()
+	ch, err := New(
+		testToken,
+		BotInfo{Username: "bot"},
+		gw,
+		WithStateDir(dir),
+		WithDMPolicy(dmPolicyOpen),
+	)
+	require.NoError(t, err)
+
+	bot := &stubBot{}
+	ch.bot = bot
+
+	err = ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID: 3,
+		From:      &tgapi.User{ID: 2},
+		Chat:      &tgapi.Chat{ID: 1, Type: chatTypePrivate},
+		Text:      "/reset",
+	})
+	require.NoError(t, err)
+
+	err = ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID: 4,
+		From:      &tgapi.User{ID: 2},
+		Chat:      &tgapi.Chat{ID: 1, Type: chatTypePrivate},
+		Text:      "/forget",
+	})
+	require.NoError(t, err)
+
+	gw.mu.Lock()
+	require.Equal(t, []string{"2"}, gw.forgetCalls)
+	gw.mu.Unlock()
 }

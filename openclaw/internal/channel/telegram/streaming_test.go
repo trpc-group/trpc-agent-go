@@ -129,6 +129,7 @@ func TestChannel_CallGatewayAndReply_4xxEditsPreviewAndDrops(t *testing.T) {
 		2,
 		"u1",
 		"",
+		buildLaneKey("u1", ""),
 		"rid",
 		tgapi.Message{MessageID: 2, Text: "hi"},
 	)
@@ -172,6 +173,7 @@ func TestChannel_CallGatewayAndReply_RecorderCreatesTrace(t *testing.T) {
 		2,
 		"u1",
 		"",
+		buildLaneKey("u1", ""),
 		"rid",
 		tgapi.Message{MessageID: 2, Text: "hi"},
 	)
@@ -211,6 +213,7 @@ func TestChannel_CallGatewayAndReply_5xxReturnsError(t *testing.T) {
 		2,
 		"u1",
 		"",
+		buildLaneKey("u1", ""),
 		"rid",
 		tgapi.Message{MessageID: 2, Text: "hi"},
 	)
@@ -245,6 +248,7 @@ func TestChannel_CallGatewayAndReply_IgnoredEditsPreview(t *testing.T) {
 		2,
 		"u1",
 		"",
+		buildLaneKey("u1", ""),
 		"rid",
 		tgapi.Message{MessageID: 2, Text: "hi"},
 	)
@@ -281,6 +285,7 @@ func TestChannel_CallGatewayAndReply_NoReplyEditsPreview(t *testing.T) {
 		2,
 		"u1",
 		"",
+		buildLaneKey("u1", ""),
 		"rid",
 		tgapi.Message{MessageID: 2, Text: "hi"},
 	)
@@ -315,6 +320,7 @@ func TestChannel_CallGatewayAndReply_StreamingOff(t *testing.T) {
 		2,
 		"u1",
 		"",
+		buildLaneKey("u1", ""),
 		"rid",
 		tgapi.Message{MessageID: 2, Text: "hi"},
 	)
@@ -351,6 +357,7 @@ func TestChannel_CallGatewayAndReply_SplitsReplyForPreview(t *testing.T) {
 		2,
 		"u1",
 		"",
+		buildLaneKey("u1", ""),
 		"rid",
 		tgapi.Message{MessageID: 2, Text: "hi"},
 	)
@@ -386,6 +393,7 @@ func TestChannel_CallGatewayAndReply_AttachmentTooLargeEditsPreview(
 		2,
 		"u1",
 		"",
+		buildLaneKey("u1", ""),
 		"rid",
 		tgapi.Message{
 			MessageID: 2,
@@ -433,6 +441,7 @@ func TestChannel_CallGatewayAndReply_DownloadFailedEditsPreview(
 		2,
 		"u1",
 		"",
+		buildLaneKey("u1", ""),
 		"rid",
 		tgapi.Message{
 			MessageID: 2,
@@ -474,6 +483,7 @@ func TestChannel_CallGatewayAndReply_StreamingOffRepliesOnUserError(
 		2,
 		"u1",
 		"",
+		buildLaneKey("u1", ""),
 		"rid",
 		tgapi.Message{
 			MessageID: 2,

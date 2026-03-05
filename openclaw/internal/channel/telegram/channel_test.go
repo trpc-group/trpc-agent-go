@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -358,7 +359,98 @@ func TestChannel_HandleMessage_PrivateChat(t *testing.T) {
 	require.Equal(t, "ok", sent.Text)
 }
 
-func TestChannel_HandleMessage_PhotoWithCaption_BuildsImagePart(t *testing.T) {
+func TestChannel_HandleMessage_CommandReset_RotatesSession(t *testing.T) {
+	t.Parallel()
+
+	gw := &stubGateway{
+		rsp: gwclient.MessageResponse{
+			StatusCode: http.StatusOK,
+			Reply:      "ok",
+		},
+	}
+	dir := t.TempDir()
+	botInfo := BotInfo{Username: "bot"}
+	ch, err := New(
+		testToken,
+		botInfo,
+		gw,
+		WithStateDir(dir),
+		WithDMPolicy(dmPolicyOpen),
+	)
+	require.NoError(t, err)
+
+	bot := &stubBot{}
+	ch.bot = bot
+
+	err = ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID: 3,
+		From:      &tgapi.User{ID: 2},
+		Chat:      &tgapi.Chat{ID: 1, Type: chatTypePrivate},
+		Text:      "hi",
+	})
+	require.NoError(t, err)
+
+	legacySession := buildLaneKey("2", "")
+
+	gw.mu.Lock()
+	require.Len(t, gw.reqs, 1)
+	require.Equal(t, legacySession, gw.reqs[0].SessionID)
+	gw.mu.Unlock()
+
+	err = ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID: 4,
+		From:      &tgapi.User{ID: 2},
+		Chat:      &tgapi.Chat{ID: 1, Type: chatTypePrivate},
+		Text:      "/reset",
+	})
+	require.NoError(t, err)
+
+	gw.mu.Lock()
+	require.Len(t, gw.reqs, 1)
+	gw.mu.Unlock()
+
+	err = ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID: 5,
+		From:      &tgapi.User{ID: 2},
+		Chat:      &tgapi.Chat{ID: 1, Type: chatTypePrivate},
+		Text:      "hi2",
+	})
+	require.NoError(t, err)
+
+	gw.mu.Lock()
+	require.Len(t, gw.reqs, 2)
+	rotatedSession := gw.reqs[1].SessionID
+	gw.mu.Unlock()
+
+	require.True(t, strings.HasPrefix(rotatedSession, legacySession+":"))
+
+	ch2, err := New(
+		testToken,
+		botInfo,
+		&stubGateway{},
+		WithStateDir(dir),
+		WithDMPolicy(dmPolicyOpen),
+	)
+	require.NoError(t, err)
+
+	got, _, err := ch2.dmSessions.EnsureActiveSession(
+		context.Background(),
+		"2",
+		legacySession,
+		dmSessionResetPolicy{},
+	)
+	require.NoError(t, err)
+	require.Equal(t, rotatedSession, got)
+
+	bot.mu.Lock()
+	require.Len(t, bot.sent, 3)
+	require.Equal(t, "ok", bot.sent[0].Text)
+	require.Equal(t, resetOKMessage, bot.sent[1].Text)
+	require.Equal(t, "ok", bot.sent[2].Text)
+	bot.mu.Unlock()
+}
+
+func TestChannel_HandleMessage_PhotoCaption_BuildsImagePart(t *testing.T) {
 	t.Parallel()
 
 	photoBytes := []byte{0xff, 0xd8, 0xff, 0xd9}
