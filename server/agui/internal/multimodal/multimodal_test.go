@@ -216,8 +216,13 @@ func TestFileFromBinaryID_NonBinaryNil(t *testing.T) {
 func TestFileNameFromArtifactRef_EdgeCases(t *testing.T) {
 	assert.Equal(t, "", fileNameFromArtifactRef("file-123"))
 
-	invalidVer := fileref.ArtifactPrefix + "a@x"
-	assert.Equal(t, "", fileNameFromArtifactRef(invalidVer))
+	nameWithAt := fileref.ArtifactPrefix + "uploads/a@x"
+	assert.Equal(t, "a@x", fileNameFromArtifactRef(nameWithAt))
+
+	nameWithAtAndVersion := fileref.ArtifactPrefix +
+		"uploads/skey=@crypt_abc.jpeg@0"
+	assert.Equal(t, "skey=@crypt_abc.jpeg",
+		fileNameFromArtifactRef(nameWithAtAndVersion))
 
 	invalidBase := fileref.ArtifactPrefix + "..@0"
 	assert.Equal(t, "", fileNameFromArtifactRef(invalidBase))

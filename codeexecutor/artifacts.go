@@ -67,25 +67,43 @@ func resolveArtifactVersion(
 
 // ParseArtifactRef splits "name@version" into name and optional version.
 func ParseArtifactRef(ref string) (string, *int, error) {
-	parts := strings.Split(ref, "@")
-	if len(parts) == 1 {
-		return parts[0], nil, nil
+	last := strings.LastIndex(ref, "@")
+	if last < 0 {
+		return ref, nil, nil
 	}
-	if len(parts) == 2 {
-		// version may not be strictly numeric across services; keep
-		// it simple: try integer, else error.
-		var v int
-		for _, r := range parts[1] {
-			if r < '0' || r > '9' {
-				return "", nil, fmt.Errorf("invalid version: %s", parts[1])
-			}
-		}
-		for i := 0; i < len(parts[1]); i++ {
-			v = v*10 + int(parts[1][i]-'0')
-		}
-		return parts[0], &v, nil
+	if last == len(ref)-1 {
+		return ref, nil, nil
 	}
-	return "", nil, fmt.Errorf("invalid artifact ref: %s", ref)
+	suffix := ref[last+1:]
+	if !isDecimalVersion(suffix) {
+		return ref, nil, nil
+	}
+	name := ref[:last]
+	if strings.TrimSpace(name) == "" {
+		return "", nil, fmt.Errorf("invalid artifact ref: %s", ref)
+	}
+	version := parseDecimalVersion(suffix)
+	return name, &version, nil
+}
+
+func isDecimalVersion(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func parseDecimalVersion(s string) int {
+	var v int
+	for i := 0; i < len(s); i++ {
+		v = v*10 + int(s[i]-'0')
+	}
+	return v
 }
 
 // SaveArtifactHelper saves a file as artifact using callback context.
