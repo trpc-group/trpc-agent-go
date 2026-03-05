@@ -361,8 +361,7 @@ func (t *RunTool) Declaration() *tool.Declaration {
 				"outputs": outputSpecSchema(),
 			},
 		},
-		OutputSchema: &tool.Schema{Type: "object",
-			Description: "Run result with output files"},
+		OutputSchema: skillRunOutputSchema(),
 	}
 }
 
@@ -2073,6 +2072,163 @@ func applyOmitInlineContent(
 func hasOmitInlineFallback(ctx context.Context) bool {
 	inv, ok := agent.InvocationFromContext(ctx)
 	return ok && inv != nil
+}
+
+func skillRunOutputSchema() *tool.Schema {
+	return &tool.Schema{
+		Type: "object",
+		Description: "Structured result of skill_run. " +
+			"Important: the tool can return this object even when the " +
+			"command fails; treat exit_code != 0 or timed_out == true as " +
+			"primary failure signals, and inspect stderr/warnings for " +
+			"diagnostics. " +
+			"Tool-level failures (invalid args, missing skill_load, " +
+			"workspace setup errors) return an error instead of this object.",
+		Required: []string{
+			"output_files",
+			"stdout",
+			"stderr",
+			"exit_code",
+			"timed_out",
+			"duration_ms",
+		},
+		Properties: map[string]*tool.Schema{
+			"staged_inputs": {
+				Type: "array",
+				Description: "Inputs staged into the workspace " +
+					"(e.g. user uploads or declarative inputs). " +
+					"Paths are workspace-relative and typically " +
+					"live under work/inputs/.",
+				Items: stagedInputSchema(),
+			},
+			"output_files": {
+				Type: "array",
+				Description: "Collected output files. " +
+					"Text files may be inlined via content. " +
+					"Binary outputs omit inline content and " +
+					"should be accessed via ref (workspace://...).",
+				Items: runFileSchema("Output file"),
+			},
+			"primary_output": runFileSchema("Convenience: best small text output file (if any)"),
+			"stdout": {
+				Type:        "string",
+				Description: "Standard output (may be truncated; see warnings)",
+			},
+			"stderr": {
+				Type: "string",
+				Description: "Standard error (may be truncated; see warnings). " +
+					"Non-empty stderr often indicates the command failed, " +
+					"but some commands may write warnings there even when " +
+					"exit_code == 0.",
+			},
+			"exit_code": {
+				Type: "integer",
+				Description: "Process exit code. " +
+					"0 typically means success; non-zero indicates failure.",
+			},
+			"timed_out": {
+				Type:        "boolean",
+				Description: "True if the command timed out",
+			},
+			"duration_ms": {
+				Type:        "integer",
+				Description: "Execution duration in milliseconds",
+			},
+			"artifact_files": {
+				Type: "array",
+				Description: "Artifact references for saved outputs when " +
+					"save_as_artifacts or outputs.save is enabled and the " +
+					"Artifact service is configured.",
+				Items: artifactRefSchema(),
+			},
+			"warnings": {
+				Type:        "array",
+				Items:       &tool.Schema{Type: "string"},
+				Description: "Non-fatal warnings/hints about truncation or persistence",
+			},
+		},
+	}
+}
+
+func stagedInputSchema() *tool.Schema {
+	return &tool.Schema{
+		Type:     "object",
+		Required: []string{"name"},
+		Properties: map[string]*tool.Schema{
+			"name": {
+				Type:        "string",
+				Description: "Workspace-relative path where the input was staged",
+			},
+			"original_name": {
+				Type:        "string",
+				Description: "Original filename (if available)",
+			},
+			"mime_type": {
+				Type:        "string",
+				Description: "Detected MIME type (if available)",
+			},
+			"size_bytes": {
+				Type:        "integer",
+				Description: "Size in bytes (if available)",
+			},
+		},
+	}
+}
+
+func runFileSchema(desc string) *tool.Schema {
+	if desc == "" {
+		desc = "File"
+	}
+	return &tool.Schema{
+		Type:        "object",
+		Description: desc,
+		Required:    []string{"name", "mime_type"},
+		Properties: map[string]*tool.Schema{
+			"name": {
+				Type:        "string",
+				Description: "Workspace-relative path",
+			},
+			"content": {
+				Type: "string",
+				Description: "Inline content for small text outputs. " +
+					"Omitted/empty for binary outputs or when omit_inline_content is true.",
+			},
+			"mime_type": {
+				Type:        "string",
+				Description: "Detected MIME type",
+			},
+			"size_bytes": {
+				Type:        "integer",
+				Description: "File size in bytes (may be omitted)",
+			},
+			"truncated": {
+				Type:        "boolean",
+				Description: "True if content was truncated to configured limits",
+			},
+			"ref": {
+				Type: "string",
+				Description: "Stable reference to the file in the workspace " +
+					"(workspace://...). Use this when passing a file to other tools.",
+			},
+		},
+	}
+}
+
+func artifactRefSchema() *tool.Schema {
+	return &tool.Schema{
+		Type:     "object",
+		Required: []string{"name", "version"},
+		Properties: map[string]*tool.Schema{
+			"name": {
+				Type:        "string",
+				Description: "Artifact name",
+			},
+			"version": {
+				Type:        "integer",
+				Description: "Artifact version",
+			},
+		},
+	}
 }
 
 func inputSpecsSchema() *tool.Schema {
