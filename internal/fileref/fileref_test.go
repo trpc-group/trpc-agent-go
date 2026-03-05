@@ -66,7 +66,7 @@ func TestParse_ArtifactScheme(t *testing.T) {
 	require.Equal(t, fileref.SchemeArtifact, ref.Scheme)
 	require.Equal(t, "x.txt", ref.ArtifactName)
 	require.NotNil(t, ref.ArtifactVersion)
-	require.Equal(t, 12, *ref.ArtifactVersion)
+	require.Equal(t, artifact.VersionID("12"), *ref.ArtifactVersion)
 }
 
 func TestParse_UnsupportedScheme(t *testing.T) {
@@ -75,7 +75,7 @@ func TestParse_UnsupportedScheme(t *testing.T) {
 }
 
 func TestParse_Artifact_InvalidRef(t *testing.T) {
-	_, err := fileref.Parse("artifact://x@bad")
+	_, err := fileref.Parse("artifact://x@")
 	require.Error(t, err)
 }
 
@@ -158,13 +158,12 @@ func TestTryRead_Artifact_WithService(t *testing.T) {
 	inv.ArtifactService = svc
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 
-	info := artifact.SessionInfo{
+	ctxIO := codeexecutor.WithArtifactService(ctx, svc)
+	ctxIO = codeexecutor.WithArtifactBaseKey(ctxIO, codeexecutor.ArtifactBaseKey{
 		AppName:   sess.AppName,
 		UserID:    sess.UserID,
 		SessionID: sess.ID,
-	}
-	ctxIO := codeexecutor.WithArtifactService(ctx, svc)
-	ctxIO = codeexecutor.WithArtifactSession(ctxIO, info)
+	})
 	_, err := codeexecutor.SaveArtifactHelper(
 		ctxIO,
 		"x.txt",
@@ -207,7 +206,11 @@ func TestTryRead_Artifact_WithServiceInContext(t *testing.T) {
 
 	ctx := context.Background()
 	ctx = codeexecutor.WithArtifactService(ctx, svc)
-	ctx = codeexecutor.WithArtifactSession(ctx, artifact.SessionInfo{})
+	ctx = codeexecutor.WithArtifactBaseKey(ctx, codeexecutor.ArtifactBaseKey{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "sess",
+	})
 
 	_, err := codeexecutor.SaveArtifactHelper(
 		ctx,

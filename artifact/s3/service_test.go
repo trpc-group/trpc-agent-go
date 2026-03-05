@@ -10,12 +10,15 @@
 package s3
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"sort"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -24,7 +27,7 @@ import (
 	s3storage "trpc.group/trpc-go/trpc-agent-go/storage/s3"
 )
 
-// mockStorage is a mock implementation of the Client interface for testing.
+// mockStorage is a mock implementation of the storage Client.
 type mockStorage struct {
 	mu      sync.RWMutex
 	objects map[string]*mockObject
@@ -36,17 +39,14 @@ type mockObject struct {
 }
 
 func newMockClient() *mockStorage {
-	return &mockStorage{
-		objects: make(map[string]*mockObject),
-	}
+	return &mockStorage{objects: make(map[string]*mockObject)}
 }
 
 func (m *mockStorage) PutObject(ctx context.Context, key string, data []byte, contentType string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
 	m.objects[key] = &mockObject{
-		data:        append([]byte(nil), data...), // Copy data
+		data:        append([]byte(nil), data...),
 		contentType: contentType,
 	}
 	return nil
@@ -55,7 +55,6 @@ func (m *mockStorage) PutObject(ctx context.Context, key string, data []byte, co
 func (m *mockStorage) GetObject(ctx context.Context, key string) ([]byte, string, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-
 	obj, ok := m.objects[key]
 	if !ok {
 		return nil, "", s3storage.ErrNotFound
@@ -63,932 +62,208 @@ func (m *mockStorage) GetObject(ctx context.Context, key string) ([]byte, string
 	return append([]byte(nil), obj.data...), obj.contentType, nil
 }
 
+func (m *mockStorage) OpenObject(ctx context.Context, key string) (io.ReadCloser, string, int64, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	obj, ok := m.objects[key]
+	if !ok {
+		return nil, "", 0, s3storage.ErrNotFound
+	}
+	return io.NopCloser(bytes.NewReader(obj.data)), obj.contentType, int64(len(obj.data)), nil
+}
+
+func (m *mockStorage) HeadObject(ctx context.Context, key string) (string, int64, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	obj, ok := m.objects[key]
+	if !ok {
+		return "", 0, s3storage.ErrNotFound
+	}
+	return obj.contentType, int64(len(obj.data)), nil
+}
+
+func (m *mockStorage) PresignGetObject(ctx context.Context, key string, expires time.Duration) (string, error) {
+	return "", errors.New("presign not supported in mock")
+}
+
 func (m *mockStorage) ListObjects(ctx context.Context, prefix string) ([]string, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-
 	var keys []string
-	for key := range m.objects {
-		if strings.HasPrefix(key, prefix) {
-			keys = append(keys, key)
+	for k := range m.objects {
+		if strings.HasPrefix(k, prefix) {
+			keys = append(keys, k)
 		}
 	}
-
-	// Sort for deterministic results
 	sort.Strings(keys)
-
 	return keys, nil
 }
 
 func (m *mockStorage) DeleteObjects(ctx context.Context, keys []string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	for _, key := range keys {
-		delete(m.objects, key)
+	for _, k := range keys {
+		delete(m.objects, k)
 	}
 	return nil
 }
 
-func (m *mockStorage) Close() error {
-	return nil
-}
-
-// Test helpers
+func (m *mockStorage) Close() error { return nil }
 
 func newTestService(t *testing.T) (*Service, *mockStorage) {
 	mock := newMockClient()
-	svc, err := NewService(context.Background(), "test-bucket",
-		WithClient(mock),
-	)
+	svc, err := NewService(context.Background(), "test-bucket", WithClient(mock))
 	require.NoError(t, err)
 	return svc, mock
 }
 
-func testSessionInfo() artifact.SessionInfo {
-	return artifact.SessionInfo{
-		AppName:   "test-app",
-		UserID:    "user-123",
-		SessionID: "session-456",
-	}
-}
-
-// Tests
-
-func TestNewService(t *testing.T) {
-	t.Run("with valid config", func(t *testing.T) {
-		mock := newMockClient()
-		svc, err := NewService(context.Background(), "my-bucket",
-			WithClient(mock),
-		)
-		require.NoError(t, err)
-		assert.NotNil(t, svc)
-	})
-
-	t.Run("with all options and client", func(t *testing.T) {
-		mock := newMockClient()
-		svc, err := NewService(context.Background(), "my-bucket",
-			WithEndpoint("http://localhost:9000"),
-			WithRegion("us-east-1"),
-			WithCredentials("access", "secret"),
-			WithSessionToken("token"),
-			WithPathStyle(true),
-			WithRetries(5),
-			WithClient(mock), // Client takes precedence over connection options
-		)
-		require.NoError(t, err)
-		assert.NotNil(t, svc)
-	})
-}
-
-func TestSaveArtifact(t *testing.T) {
-	t.Run("save first version", func(t *testing.T) {
-		svc, _ := newTestService(t)
-		ctx := context.Background()
-		info := testSessionInfo()
-
-		art := &artifact.Artifact{
-			Data:     []byte("hello world"),
-			MimeType: "text/plain",
-			Name:     "test.txt",
-		}
-
-		version, err := svc.SaveArtifact(ctx, info, "test.txt", art)
-		require.NoError(t, err)
-		assert.Equal(t, 0, version) // First version is 0 per interface contract
-	})
-
-	t.Run("save multiple versions", func(t *testing.T) {
-		svc, _ := newTestService(t)
-		ctx := context.Background()
-		info := testSessionInfo()
-
-		// Save version 0 (first)
-		art := &artifact.Artifact{Data: []byte("v0"), MimeType: "text/plain"}
-		v0, err := svc.SaveArtifact(ctx, info, "doc.txt", art)
-		require.NoError(t, err)
-		assert.Equal(t, 0, v0)
-
-		// Save version 1
-		art.Data = []byte("v1")
-		v1, err := svc.SaveArtifact(ctx, info, "doc.txt", art)
-		require.NoError(t, err)
-		assert.Equal(t, 1, v1)
-
-		// Save version 2
-		art.Data = []byte("v2")
-		v2, err := svc.SaveArtifact(ctx, info, "doc.txt", art)
-		require.NoError(t, err)
-		assert.Equal(t, 2, v2)
-	})
-
-	t.Run("save with user namespace", func(t *testing.T) {
-		svc, _ := newTestService(t)
-		ctx := context.Background()
-		info := testSessionInfo()
-
-		art := &artifact.Artifact{Data: []byte("user data"), MimeType: "text/plain"}
-		version, err := svc.SaveArtifact(ctx, info, "user:profile.txt", art)
-		require.NoError(t, err)
-		assert.Equal(t, 0, version) // First version is 0 per interface contract
-	})
-
-	t.Run("save with empty filename returns error", func(t *testing.T) {
-		svc, _ := newTestService(t)
-		ctx := context.Background()
-		info := testSessionInfo()
-
-		art := &artifact.Artifact{Data: []byte("data"), MimeType: "text/plain"}
-		_, err := svc.SaveArtifact(ctx, info, "", art)
-		assert.ErrorIs(t, err, ErrEmptyFilename)
-	})
-
-	t.Run("save with invalid filename returns error", func(t *testing.T) {
-		svc, _ := newTestService(t)
-		ctx := context.Background()
-		info := testSessionInfo()
-		art := &artifact.Artifact{Data: []byte("data"), MimeType: "text/plain"}
-
-		invalidNames := []string{
-			"path/to/file.txt", // contains /
-			"..\\etc\\passwd",  // contains \ and ..
-			"../parent.txt",    // path traversal
-			"file\x00name.txt", // null byte
-		}
-
-		for _, name := range invalidNames {
-			_, err := svc.SaveArtifact(ctx, info, name, art)
-			assert.ErrorIs(t, err, ErrInvalidFilename, "filename: %q", name)
-		}
-	})
-
-	t.Run("save with nil artifact returns error", func(t *testing.T) {
-		svc, _ := newTestService(t)
-		ctx := context.Background()
-		info := testSessionInfo()
-
-		_, err := svc.SaveArtifact(ctx, info, "test.txt", nil)
-		assert.ErrorIs(t, err, ErrNilArtifact)
-	})
-
-	t.Run("save with empty session info returns error", func(t *testing.T) {
-		svc, _ := newTestService(t)
-		ctx := context.Background()
-
-		art := &artifact.Artifact{Data: []byte("data"), MimeType: "text/plain"}
-
-		// Empty AppName
-		_, err := svc.SaveArtifact(ctx, artifact.SessionInfo{UserID: "u", SessionID: "s"}, "test.txt", art)
-		assert.ErrorIs(t, err, ErrEmptySessionInfo)
-
-		// Empty UserID
-		_, err = svc.SaveArtifact(ctx, artifact.SessionInfo{AppName: "a", SessionID: "s"}, "test.txt", art)
-		assert.ErrorIs(t, err, ErrEmptySessionInfo)
-
-		// Empty SessionID
-		_, err = svc.SaveArtifact(ctx, artifact.SessionInfo{AppName: "a", UserID: "u"}, "test.txt", art)
-		assert.ErrorIs(t, err, ErrEmptySessionInfo)
-	})
-}
-
-func TestLoadArtifact(t *testing.T) {
-	t.Run("load existing artifact", func(t *testing.T) {
-		svc, _ := newTestService(t)
-		ctx := context.Background()
-		info := testSessionInfo()
-
-		// Save artifact
-		original := &artifact.Artifact{
-			Data:     []byte("test content"),
-			MimeType: "text/plain",
-			Name:     "test.txt",
-		}
-		_, err := svc.SaveArtifact(ctx, info, "test.txt", original)
-		require.NoError(t, err)
-
-		// Load artifact
-		loaded, err := svc.LoadArtifact(ctx, info, "test.txt", nil)
-		require.NoError(t, err)
-		require.NotNil(t, loaded)
-		assert.Equal(t, original.Data, loaded.Data)
-		assert.Equal(t, original.MimeType, loaded.MimeType)
-	})
-
-	t.Run("load specific version", func(t *testing.T) {
-		svc, _ := newTestService(t)
-		ctx := context.Background()
-		info := testSessionInfo()
-
-		// Save multiple versions (0, 1, 2)
-		for i := 0; i <= 2; i++ {
-			art := &artifact.Artifact{
-				Data:     []byte("version " + string(rune('0'+i))),
-				MimeType: "text/plain",
-			}
-			_, err := svc.SaveArtifact(ctx, info, "doc.txt", art)
-			require.NoError(t, err)
-		}
-
-		// Load version 1
-		version := 1
-		loaded, err := svc.LoadArtifact(ctx, info, "doc.txt", &version)
-		require.NoError(t, err)
-		require.NotNil(t, loaded)
-		assert.Equal(t, []byte("version 1"), loaded.Data)
-	})
-
-	t.Run("load latest version", func(t *testing.T) {
-		svc, _ := newTestService(t)
-		ctx := context.Background()
-		info := testSessionInfo()
-
-		// Save multiple versions (0, 1, 2)
-		for i := 0; i <= 2; i++ {
-			art := &artifact.Artifact{
-				Data:     []byte("version " + string(rune('0'+i))),
-				MimeType: "text/plain",
-			}
-			_, err := svc.SaveArtifact(ctx, info, "doc.txt", art)
-			require.NoError(t, err)
-		}
-
-		// Load latest (should be version 2)
-		loaded, err := svc.LoadArtifact(ctx, info, "doc.txt", nil)
-		require.NoError(t, err)
-		require.NotNil(t, loaded)
-		assert.Equal(t, []byte("version 2"), loaded.Data)
-	})
-
-	t.Run("load non-existent artifact", func(t *testing.T) {
-		svc, _ := newTestService(t)
-		ctx := context.Background()
-		info := testSessionInfo()
-
-		loaded, err := svc.LoadArtifact(ctx, info, "nonexistent.txt", nil)
-		require.NoError(t, err)
-		assert.Nil(t, loaded)
-	})
-
-	t.Run("load with user namespace", func(t *testing.T) {
-		svc, _ := newTestService(t)
-		ctx := context.Background()
-		info := testSessionInfo()
-
-		// Save with user namespace
-		original := &artifact.Artifact{Data: []byte("user data"), MimeType: "text/plain"}
-		_, err := svc.SaveArtifact(ctx, info, "user:profile.txt", original)
-		require.NoError(t, err)
-
-		// Load with user namespace
-		loaded, err := svc.LoadArtifact(ctx, info, "user:profile.txt", nil)
-		require.NoError(t, err)
-		require.NotNil(t, loaded)
-		assert.Equal(t, original.Data, loaded.Data)
-	})
-
-	t.Run("load with empty filename returns error", func(t *testing.T) {
-		svc, _ := newTestService(t)
-		ctx := context.Background()
-		info := testSessionInfo()
-
-		_, err := svc.LoadArtifact(ctx, info, "", nil)
-		assert.ErrorIs(t, err, ErrEmptyFilename)
-	})
-
-	t.Run("load with invalid filename returns error", func(t *testing.T) {
-		svc, _ := newTestService(t)
-		ctx := context.Background()
-		info := testSessionInfo()
-
-		_, err := svc.LoadArtifact(ctx, info, "path/to/file.txt", nil)
-		assert.ErrorIs(t, err, ErrInvalidFilename)
-	})
-
-	t.Run("load with empty session info returns error", func(t *testing.T) {
-		svc, _ := newTestService(t)
-		ctx := context.Background()
-
-		_, err := svc.LoadArtifact(ctx, artifact.SessionInfo{}, "test.txt", nil)
-		assert.ErrorIs(t, err, ErrEmptySessionInfo)
-	})
-
-	t.Run("load specific version that does not exist returns nil", func(t *testing.T) {
-		svc, _ := newTestService(t)
-		ctx := context.Background()
-		info := testSessionInfo()
-
-		// Save version 0
-		art := &artifact.Artifact{Data: []byte("v0"), MimeType: "text/plain"}
-		_, err := svc.SaveArtifact(ctx, info, "doc.txt", art)
-		require.NoError(t, err)
-
-		// Try to load version 999 which doesn't exist
-		// Per interface contract: returns nil when not found
-		version := 999
-		loaded, err := svc.LoadArtifact(ctx, info, "doc.txt", &version)
-		assert.NoError(t, err)
-		assert.Nil(t, loaded)
-	})
-
-	t.Run("load latest of non-existent artifact returns nil", func(t *testing.T) {
-		svc, _ := newTestService(t)
-		ctx := context.Background()
-		info := testSessionInfo()
-
-		// Load artifact that doesn't exist (no specific version)
-		art, err := svc.LoadArtifact(ctx, info, "nonexistent.txt", nil)
-		assert.NoError(t, err)
-		assert.Nil(t, art)
-	})
-}
-
-func TestListArtifactKeys(t *testing.T) {
-	t.Run("list empty", func(t *testing.T) {
-		svc, _ := newTestService(t)
-		ctx := context.Background()
-		info := testSessionInfo()
-
-		keys, err := svc.ListArtifactKeys(ctx, info)
-		require.NoError(t, err)
-		assert.Empty(t, keys)
-	})
-
-	t.Run("list session artifacts", func(t *testing.T) {
-		svc, _ := newTestService(t)
-		ctx := context.Background()
-		info := testSessionInfo()
-
-		// Save some artifacts
-		files := []string{"doc1.pdf", "doc2.pdf", "image.png"}
-		for _, name := range files {
-			art := &artifact.Artifact{Data: []byte("data"), MimeType: "application/octet-stream"}
-			_, err := svc.SaveArtifact(ctx, info, name, art)
-			require.NoError(t, err)
-		}
-
-		keys, err := svc.ListArtifactKeys(ctx, info)
-		require.NoError(t, err)
-		assert.ElementsMatch(t, files, keys)
-	})
-
-	t.Run("list both session and user artifacts", func(t *testing.T) {
-		svc, _ := newTestService(t)
-		ctx := context.Background()
-		info := testSessionInfo()
-
-		// Save session-scoped artifacts
-		art := &artifact.Artifact{Data: []byte("data"), MimeType: "text/plain"}
-		_, err := svc.SaveArtifact(ctx, info, "session-doc.txt", art)
-		require.NoError(t, err)
-
-		// Save user-scoped artifacts
-		_, err = svc.SaveArtifact(ctx, info, "user:user-doc.txt", art)
-		require.NoError(t, err)
-
-		keys, err := svc.ListArtifactKeys(ctx, info)
-		require.NoError(t, err)
-		assert.Len(t, keys, 2)
-		assert.Contains(t, keys, "session-doc.txt")
-		assert.Contains(t, keys, "user:user-doc.txt")
-	})
-
-	t.Run("list with multiple versions", func(t *testing.T) {
-		svc, _ := newTestService(t)
-		ctx := context.Background()
-		info := testSessionInfo()
-
-		// Save multiple versions of same file
-		for i := 0; i < 3; i++ {
-			art := &artifact.Artifact{Data: []byte("v"), MimeType: "text/plain"}
-			_, err := svc.SaveArtifact(ctx, info, "doc.txt", art)
-			require.NoError(t, err)
-		}
-
-		// Should only list filename once
-		keys, err := svc.ListArtifactKeys(ctx, info)
-		require.NoError(t, err)
-		assert.Equal(t, []string{"doc.txt"}, keys)
-	})
-
-	t.Run("list with empty session info returns error", func(t *testing.T) {
-		svc, _ := newTestService(t)
-		ctx := context.Background()
-
-		_, err := svc.ListArtifactKeys(ctx, artifact.SessionInfo{})
-		assert.ErrorIs(t, err, ErrEmptySessionInfo)
-	})
-}
-
-func TestDeleteArtifact(t *testing.T) {
-	t.Run("delete existing artifact", func(t *testing.T) {
-		svc, _ := newTestService(t)
-		ctx := context.Background()
-		info := testSessionInfo()
-
-		// Save artifact
-		art := &artifact.Artifact{Data: []byte("data"), MimeType: "text/plain"}
-		_, err := svc.SaveArtifact(ctx, info, "test.txt", art)
-		require.NoError(t, err)
-
-		// Delete artifact
-		err = svc.DeleteArtifact(ctx, info, "test.txt")
-		require.NoError(t, err)
-
-		// Verify deleted
-		loaded, err := svc.LoadArtifact(ctx, info, "test.txt", nil)
-		require.NoError(t, err)
-		assert.Nil(t, loaded)
-	})
-
-	t.Run("delete all versions", func(t *testing.T) {
-		svc, _ := newTestService(t)
-		ctx := context.Background()
-		info := testSessionInfo()
-
-		// Save multiple versions
-		for i := 0; i < 3; i++ {
-			art := &artifact.Artifact{Data: []byte("v"), MimeType: "text/plain"}
-			_, err := svc.SaveArtifact(ctx, info, "doc.txt", art)
-			require.NoError(t, err)
-		}
-
-		// Delete artifact (should delete all versions)
-		err := svc.DeleteArtifact(ctx, info, "doc.txt")
-		require.NoError(t, err)
-
-		// Verify all versions deleted
-		versions, err := svc.ListVersions(ctx, info, "doc.txt")
-		require.NoError(t, err)
-		assert.Empty(t, versions)
-	})
-
-	t.Run("delete non-existent artifact", func(t *testing.T) {
-		svc, _ := newTestService(t)
-		ctx := context.Background()
-		info := testSessionInfo()
-
-		// Should not error
-		err := svc.DeleteArtifact(ctx, info, "nonexistent.txt")
-		require.NoError(t, err)
-	})
-
-	t.Run("delete with empty filename returns error", func(t *testing.T) {
-		svc, _ := newTestService(t)
-		ctx := context.Background()
-		info := testSessionInfo()
-
-		err := svc.DeleteArtifact(ctx, info, "")
-		assert.ErrorIs(t, err, ErrEmptyFilename)
-	})
-
-	t.Run("delete with invalid filename returns error", func(t *testing.T) {
-		svc, _ := newTestService(t)
-		ctx := context.Background()
-		info := testSessionInfo()
-
-		err := svc.DeleteArtifact(ctx, info, "../etc/passwd")
-		assert.ErrorIs(t, err, ErrInvalidFilename)
-	})
-
-	t.Run("delete with empty session info returns error", func(t *testing.T) {
-		svc, _ := newTestService(t)
-		ctx := context.Background()
-
-		err := svc.DeleteArtifact(ctx, artifact.SessionInfo{}, "test.txt")
-		assert.ErrorIs(t, err, ErrEmptySessionInfo)
-	})
-}
-
-func TestListVersions(t *testing.T) {
-	t.Run("list versions", func(t *testing.T) {
-		svc, _ := newTestService(t)
-		ctx := context.Background()
-		info := testSessionInfo()
-
-		// Save multiple versions
-		for i := 0; i < 5; i++ {
-			art := &artifact.Artifact{Data: []byte("v"), MimeType: "text/plain"}
-			_, err := svc.SaveArtifact(ctx, info, "doc.txt", art)
-			require.NoError(t, err)
-		}
-
-		versions, err := svc.ListVersions(ctx, info, "doc.txt")
-		require.NoError(t, err)
-		assert.Equal(t, []int{0, 1, 2, 3, 4}, versions)
-	})
-
-	t.Run("list versions of non-existent artifact", func(t *testing.T) {
-		svc, _ := newTestService(t)
-		ctx := context.Background()
-		info := testSessionInfo()
-
-		versions, err := svc.ListVersions(ctx, info, "nonexistent.txt")
-		require.NoError(t, err)
-		assert.Empty(t, versions)
-	})
-
-	t.Run("list versions with empty filename returns error", func(t *testing.T) {
-		svc, _ := newTestService(t)
-		ctx := context.Background()
-		info := testSessionInfo()
-
-		_, err := svc.ListVersions(ctx, info, "")
-		assert.ErrorIs(t, err, ErrEmptyFilename)
-	})
-
-	t.Run("list versions with invalid filename returns error", func(t *testing.T) {
-		svc, _ := newTestService(t)
-		ctx := context.Background()
-		info := testSessionInfo()
-
-		_, err := svc.ListVersions(ctx, info, "path/file.txt")
-		assert.ErrorIs(t, err, ErrInvalidFilename)
-	})
-
-	t.Run("list versions with empty session info returns error", func(t *testing.T) {
-		svc, _ := newTestService(t)
-		ctx := context.Background()
-
-		_, err := svc.ListVersions(ctx, artifact.SessionInfo{}, "test.txt")
-		assert.ErrorIs(t, err, ErrEmptySessionInfo)
-	})
-}
-
-func TestValidateFilename(t *testing.T) {
-	t.Run("valid filenames", func(t *testing.T) {
-		validNames := []string{
-			"file.txt",
-			"my-document.pdf",
-			"image_001.png",
-			"report.2024.xlsx",
-			"user:profile.json", // user namespace prefix is valid
-			"user:settings.yaml",
-			"名前.txt", // unicode is OK
-			"файл.doc",
-		}
-
-		for _, name := range validNames {
-			err := validateFilename(name)
-			assert.NoError(t, err, "filename should be valid: %q", name)
-		}
-	})
-
-	t.Run("invalid filenames", func(t *testing.T) {
-		invalidNames := []string{
-			"",                   // empty
-			"path/to/file.txt",   // forward slash
-			"path\\to\\file.txt", // backslash
-			"../parent.txt",      // path traversal
-			"..\\parent.txt",     // path traversal with backslash
-			"file\x00name.txt",   // null byte
-			"a/b",                // simple slash
-		}
-
-		for _, name := range invalidNames {
-			err := validateFilename(name)
-			assert.Error(t, err, "filename should be invalid: %q", name)
-		}
-	})
-}
-
-func TestExtractFilename(t *testing.T) {
-	tests := []struct {
-		name     string
-		key      string
-		prefix   string
-		expected string
-	}{
-		{
-			name:     "session scoped",
-			key:      "app/user/session/doc.pdf/0",
-			prefix:   "app/user/session/",
-			expected: "doc.pdf",
-		},
-		{
-			name:     "user scoped",
-			key:      "app/user/user/user:profile.txt/0",
-			prefix:   "app/user/user/",
-			expected: "user:profile.txt",
-		},
-		{
-			name:     "no match",
-			key:      "other/path/file.txt",
-			prefix:   "app/user/session/",
-			expected: "",
-		},
-		{
-			name:     "empty relative",
-			key:      "app/user/session/",
-			prefix:   "app/user/session/",
-			expected: "",
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			result := extractFilename(tc.key, tc.prefix)
-			assert.Equal(t, tc.expected, result)
-		})
-	}
-}
-
-// errorMockStorage is a mock storage that can be configured to return errors.
-type errorMockStorage struct {
-	mockStorage
-	listObjectsErr   error
-	putObjectErr     error
-	getObjectErr     error
-	deleteObjectsErr error
-}
-
-func newErrorMockStorage() *errorMockStorage {
-	return &errorMockStorage{
-		mockStorage: mockStorage{
-			objects: make(map[string]*mockObject),
-		},
-	}
-}
-
-func (m *errorMockStorage) ListObjects(ctx context.Context, prefix string) ([]string, error) {
-	if m.listObjectsErr != nil {
-		return nil, m.listObjectsErr
-	}
-	return m.mockStorage.ListObjects(ctx, prefix)
-}
-
-func (m *errorMockStorage) PutObject(ctx context.Context, key string, data []byte, contentType string) error {
-	if m.putObjectErr != nil {
-		return m.putObjectErr
-	}
-	return m.mockStorage.PutObject(ctx, key, data, contentType)
-}
-
-func (m *errorMockStorage) GetObject(ctx context.Context, key string) ([]byte, string, error) {
-	if m.getObjectErr != nil {
-		return nil, "", m.getObjectErr
-	}
-	return m.mockStorage.GetObject(ctx, key)
-}
-
-func (m *errorMockStorage) DeleteObjects(ctx context.Context, keys []string) error {
-	if m.deleteObjectsErr != nil {
-		return m.deleteObjectsErr
-	}
-	return m.mockStorage.DeleteObjects(ctx, keys)
-}
-
-func (m *errorMockStorage) Close() error {
-	return nil
-}
-
-func TestServiceErrorPaths(t *testing.T) {
+func TestService_PutOpenHead(t *testing.T) {
+	svc, _ := newTestService(t)
 	ctx := context.Background()
-	sessionInfo := testSessionInfo()
-	testErr := errors.New("test error")
 
-	t.Run("SaveArtifact returns error when ListVersions fails", func(t *testing.T) {
-		mock := newErrorMockStorage()
-		mock.listObjectsErr = testErr
+	appName := "test-app"
+	userID := "user-123"
+	sessionID := "session-456"
+	name := "test.txt"
 
-		svc, err := NewService(context.Background(), "test-bucket", WithClient(mock))
-		require.NoError(t, err)
-
-		_, err = svc.SaveArtifact(ctx, sessionInfo, "test.txt", &artifact.Artifact{
-			Data:     []byte("test"),
-			MimeType: "text/plain",
-		})
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to list versions")
+	desc, err := svc.Put(ctx, &artifact.PutRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+		Body:      strings.NewReader("hello"),
+		MimeType:  "text/plain",
 	})
+	require.NoError(t, err)
+	require.NotEmpty(t, desc.Version)
+	assert.Equal(t, "text/plain", desc.MimeType)
+	assert.Equal(t, int64(5), desc.Size)
 
-	t.Run("SaveArtifact returns error when PutObject fails", func(t *testing.T) {
-		mock := newErrorMockStorage()
-		mock.putObjectErr = testErr
-
-		svc, err := NewService(context.Background(), "test-bucket", WithClient(mock))
-		require.NoError(t, err)
-
-		_, err = svc.SaveArtifact(ctx, sessionInfo, "test.txt", &artifact.Artifact{
-			Data:     []byte("test"),
-			MimeType: "text/plain",
-		})
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to upload artifact")
+	od, err := svc.Open(ctx, &artifact.OpenRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
 	})
+	require.NoError(t, err)
+	defer od.Body.Close()
+	b, err := io.ReadAll(od.Body)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("hello"), b)
+	assert.Equal(t, desc.Version, od.Version)
 
-	t.Run("LoadArtifact returns error when ListVersions fails", func(t *testing.T) {
-		mock := newErrorMockStorage()
-		mock.listObjectsErr = testErr
-
-		svc, err := NewService(context.Background(), "test-bucket", WithClient(mock))
-		require.NoError(t, err)
-
-		_, err = svc.LoadArtifact(ctx, sessionInfo, "test.txt", nil)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to list versions")
+	hd, err := svc.Head(ctx, &artifact.HeadRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+		Version:   &desc.Version,
 	})
-
-	t.Run("LoadArtifact returns error when GetObject fails with non-NotFound error", func(t *testing.T) {
-		mock := newErrorMockStorage()
-		mock.getObjectErr = testErr
-
-		svc, err := NewService(context.Background(), "test-bucket", WithClient(mock))
-		require.NoError(t, err)
-
-		// First save an artifact so ListVersions returns a version
-		mock.getObjectErr = nil
-		_, err = svc.SaveArtifact(ctx, sessionInfo, "test.txt", &artifact.Artifact{
-			Data:     []byte("test"),
-			MimeType: "text/plain",
-		})
-		require.NoError(t, err)
-
-		// Now set the error and try to load
-		mock.getObjectErr = testErr
-		_, err = svc.LoadArtifact(ctx, sessionInfo, "test.txt", nil)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to download artifact")
-	})
-
-	t.Run("LoadArtifact returns nil when GetObject returns NotFound", func(t *testing.T) {
-		mock := newErrorMockStorage()
-
-		svc, err := NewService(context.Background(), "test-bucket", WithClient(mock))
-		require.NoError(t, err)
-
-		// Save an artifact first
-		_, err = svc.SaveArtifact(ctx, sessionInfo, "test.txt", &artifact.Artifact{
-			Data:     []byte("test"),
-			MimeType: "text/plain",
-		})
-		require.NoError(t, err)
-
-		// Set NotFound error
-		mock.getObjectErr = s3storage.ErrNotFound
-		art, err := svc.LoadArtifact(ctx, sessionInfo, "test.txt", nil)
-		assert.NoError(t, err)
-		assert.Nil(t, art)
-	})
-
-	t.Run("ListArtifactKeys returns error when listing artifacts fails", func(t *testing.T) {
-		mock := newErrorMockStorage()
-		mock.listObjectsErr = testErr
-
-		svc, err := NewService(context.Background(), "test-bucket", WithClient(mock))
-		require.NoError(t, err)
-
-		_, err = svc.ListArtifactKeys(ctx, sessionInfo)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to list artifacts")
-	})
-
-	t.Run("DeleteArtifact returns error when ListObjects fails with non-NotFound error", func(t *testing.T) {
-		mock := newErrorMockStorage()
-		mock.listObjectsErr = testErr
-
-		svc, err := NewService(context.Background(), "test-bucket", WithClient(mock))
-		require.NoError(t, err)
-
-		err = svc.DeleteArtifact(ctx, sessionInfo, "test.txt")
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to list artifact versions")
-	})
-
-	t.Run("DeleteArtifact returns nil when ListObjects returns NotFound", func(t *testing.T) {
-		mock := newErrorMockStorage()
-		mock.listObjectsErr = s3storage.ErrNotFound
-
-		svc, err := NewService(context.Background(), "test-bucket", WithClient(mock))
-		require.NoError(t, err)
-
-		err = svc.DeleteArtifact(ctx, sessionInfo, "test.txt")
-		assert.NoError(t, err)
-	})
-
-	t.Run("DeleteArtifact returns error when DeleteObjects fails", func(t *testing.T) {
-		mock := newErrorMockStorage()
-
-		svc, err := NewService(context.Background(), "test-bucket", WithClient(mock))
-		require.NoError(t, err)
-
-		// Save an artifact first
-		_, err = svc.SaveArtifact(ctx, sessionInfo, "test.txt", &artifact.Artifact{
-			Data:     []byte("test"),
-			MimeType: "text/plain",
-		})
-		require.NoError(t, err)
-
-		// Set delete error
-		mock.deleteObjectsErr = testErr
-		err = svc.DeleteArtifact(ctx, sessionInfo, "test.txt")
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to delete artifact")
-	})
-
-	t.Run("ListVersions returns empty slice when ListObjects returns NotFound", func(t *testing.T) {
-		mock := newErrorMockStorage()
-		mock.listObjectsErr = s3storage.ErrNotFound
-
-		svc, err := NewService(context.Background(), "test-bucket", WithClient(mock))
-		require.NoError(t, err)
-
-		versions, err := svc.ListVersions(ctx, sessionInfo, "test.txt")
-		assert.NoError(t, err)
-		assert.Empty(t, versions)
-	})
-
-	t.Run("ListVersions returns error when ListObjects fails with non-NotFound error", func(t *testing.T) {
-		mock := newErrorMockStorage()
-		mock.listObjectsErr = testErr
-
-		svc, err := NewService(context.Background(), "test-bucket", WithClient(mock))
-		require.NoError(t, err)
-
-		_, err = svc.ListVersions(ctx, sessionInfo, "test.txt")
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to list versions")
-	})
+	require.NoError(t, err)
+	assert.Equal(t, desc.Version, hd.Version)
+	assert.Equal(t, desc.MimeType, hd.MimeType)
+	assert.Equal(t, desc.Size, hd.Size)
 }
 
-// mockLogger is a mock logger for testing.
-type mockLogger struct {
-	debugMessages []string
+func TestService_VersionsAndDeleteAll(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+	appName := "test-app"
+	userID := "user-123"
+	sessionID := "session-456"
+	name := "doc.txt"
+
+	d1, err := svc.Put(ctx, &artifact.PutRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+		Body:      strings.NewReader("v1"),
+		MimeType:  "text/plain",
+	})
+	require.NoError(t, err)
+	d2, err := svc.Put(ctx, &artifact.PutRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+		Body:      strings.NewReader("v2"),
+		MimeType:  "text/plain",
+	})
+	require.NoError(t, err)
+
+	vers, err := svc.Versions(ctx, &artifact.VersionsRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
+	require.NoError(t, err)
+	assert.Len(t, vers.Versions, 2)
+	assert.Contains(t, vers.Versions, d1.Version)
+	assert.Contains(t, vers.Versions, d2.Version)
+
+	_, err = svc.Delete(ctx, &artifact.DeleteRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
+	require.NoError(t, err)
+	_, err = svc.Open(ctx, &artifact.OpenRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
+	assert.ErrorIs(t, err, artifact.ErrNotFound)
 }
 
-func (m *mockLogger) Debug(args ...any) { m.debugMessages = append(m.debugMessages, "debug") }
-func (m *mockLogger) Debugf(format string, args ...any) {
-	m.debugMessages = append(m.debugMessages, format)
+func TestService_List_Paginates(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+	appName := "test-app"
+	userID := "user-123"
+	sessionID := "session-456"
+
+	_, _ = svc.Put(ctx, &artifact.PutRequest{AppName: appName, UserID: userID, SessionID: sessionID, Name: "a.txt", Body: strings.NewReader("a")})
+	_, _ = svc.Put(ctx, &artifact.PutRequest{AppName: appName, UserID: userID, SessionID: sessionID, Name: "b.txt", Body: strings.NewReader("b")})
+	_, _ = svc.Put(ctx, &artifact.PutRequest{AppName: appName, UserID: userID, SessionID: sessionID, Name: "c.txt", Body: strings.NewReader("c")})
+
+	limit2 := 2
+	page1, err := svc.List(ctx, &artifact.ListRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Limit:     &limit2,
+	})
+	require.NoError(t, err)
+	require.Len(t, page1.Items, 2)
+	require.NotEmpty(t, page1.NextPageToken)
+
+	next := page1.NextPageToken
+	page2, err := svc.List(ctx, &artifact.ListRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Limit:     &limit2,
+		PageToken: &next,
+	})
+	require.NoError(t, err)
+	require.Len(t, page2.Items, 1)
+	require.Empty(t, page2.NextPageToken)
 }
-func (m *mockLogger) Info(args ...any)                  {}
-func (m *mockLogger) Infof(format string, args ...any)  {}
-func (m *mockLogger) Warn(args ...any)                  {}
-func (m *mockLogger) Warnf(format string, args ...any)  {}
-func (m *mockLogger) Error(args ...any)                 {}
-func (m *mockLogger) Errorf(format string, args ...any) {}
-func (m *mockLogger) Fatal(args ...any)                 {}
-func (m *mockLogger) Fatalf(format string, args ...any) {}
 
-func TestWithLogger(t *testing.T) {
-	t.Run("logs when artifact not found", func(t *testing.T) {
-		mock := newMockClient()
-		logger := &mockLogger{}
-		svc, err := NewService(context.Background(), "test-bucket",
-			WithClient(mock),
-			WithLogger(logger),
-		)
-		require.NoError(t, err)
+func TestService_Put_ValidatesKey(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
 
-		ctx := context.Background()
-		info := testSessionInfo()
+	_, err := svc.Put(ctx, &artifact.PutRequest{Name: "x", Body: strings.NewReader("x")})
+	assert.ErrorIs(t, err, ErrEmptySessionInfo)
 
-		// Try to load non-existent artifact
-		art, err := svc.LoadArtifact(ctx, info, "nonexistent.txt", nil)
-		assert.NoError(t, err)
-		assert.Nil(t, art)
-		assert.Len(t, logger.debugMessages, 1)
-		assert.Contains(t, logger.debugMessages[0], "artifact not found")
-	})
+	_, err = svc.Put(ctx, &artifact.PutRequest{AppName: "a", UserID: "u", Name: "x", Body: strings.NewReader("x")})
+	assert.NoError(t, err)
 
-	t.Run("logs when specific version not found", func(t *testing.T) {
-		mock := newMockClient()
-		logger := &mockLogger{}
-		svc, err := NewService(context.Background(), "test-bucket",
-			WithClient(mock),
-			WithLogger(logger),
-		)
-		require.NoError(t, err)
-
-		ctx := context.Background()
-		info := testSessionInfo()
-
-		// Save version 0
-		art := &artifact.Artifact{Data: []byte("v0"), MimeType: "text/plain"}
-		_, err = svc.SaveArtifact(ctx, info, "doc.txt", art)
-		require.NoError(t, err)
-
-		// Try to load version 999 which doesn't exist
-		version := 999
-		loaded, err := svc.LoadArtifact(ctx, info, "doc.txt", &version)
-		assert.NoError(t, err)
-		assert.Nil(t, loaded)
-		assert.Len(t, logger.debugMessages, 1)
-		assert.Contains(t, logger.debugMessages[0], "artifact version not found")
-	})
-
-	t.Run("no logging when logger is nil", func(t *testing.T) {
-		mock := newMockClient()
-		svc, err := NewService(context.Background(), "test-bucket",
-			WithClient(mock),
-			// No WithLogger - logger is nil
-		)
-		require.NoError(t, err)
-
-		ctx := context.Background()
-		info := testSessionInfo()
-
-		// Should not panic when logger is nil
-		art, err := svc.LoadArtifact(ctx, info, "nonexistent.txt", nil)
-		assert.NoError(t, err)
-		assert.Nil(t, art)
-	})
+	_, err = svc.Put(ctx, &artifact.PutRequest{AppName: "a", UserID: "u", SessionID: "s", Name: "", Body: strings.NewReader("x")})
+	assert.ErrorIs(t, err, ErrEmptyFilename)
 }

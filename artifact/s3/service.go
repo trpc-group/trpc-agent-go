@@ -16,9 +16,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"slices"
-	"strconv"
 	"strings"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	iartifact "trpc.group/trpc-go/trpc-agent-go/internal/artifact"
@@ -42,16 +43,18 @@ var _ artifact.Service = (*Service)(nil)
 //   - For regular session-scoped files:
 //     {app_name}/{user_id}/{session_id}/{filename}/{version}
 type Service struct {
-	client     s3storage.Client
-	ownsClient bool // true if we created the client, false if provided via WithClient
-	logger     log.Logger
+	client         s3storage.Client
+	ownsClient     bool // true if we created the client, false if provided via WithClient
+	logger         log.Logger
+	presignExpires time.Duration
 }
 
 // NewService creates a new S3 artifact service.
 // When using WithClient, the bucket parameter is ignored as the client already has one configured.
 func NewService(ctx context.Context, bucket string, opts ...Option) (*Service, error) {
 	o := &options{
-		bucket: bucket,
+		bucket:         bucket,
+		presignExpires: 15 * time.Minute,
 	}
 	for _, opt := range opts {
 		opt(o)
@@ -74,9 +77,10 @@ func NewService(ctx context.Context, bucket string, opts ...Option) (*Service, e
 	}
 
 	return &Service{
-		client:     client,
-		ownsClient: ownsClient,
-		logger:     o.logger,
+		client:         client,
+		ownsClient:     ownsClient,
+		logger:         o.logger,
+		presignExpires: o.presignExpires,
 	}, nil
 }
 
@@ -89,198 +93,285 @@ func (s *Service) Close() error {
 	return s.client.Close()
 }
 
-// SaveArtifact saves an artifact to S3.
-// It automatically determines the next version number by listing existing versions.
-//
-// Concurrency: This method is NOT safe for concurrent writes to the same filename.
-// If multiple goroutines save the same artifact concurrently, they may compute
-// the same version number, causing one write to overwrite the other.
-// For concurrent access, use external synchronization or unique filenames.
-func (s *Service) SaveArtifact(
-	ctx context.Context,
-	sessionInfo artifact.SessionInfo,
-	filename string,
-	art *artifact.Artifact,
-) (int, error) {
-	if err := validateSessionInfo(sessionInfo); err != nil {
-		return 0, err
+// Put stores artifact content and returns its metadata.
+func (s *Service) Put(ctx context.Context, req *artifact.PutRequest, opts ...artifact.PutOption) (*artifact.PutResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("put request is nil")
 	}
-	if err := validateFilename(filename); err != nil {
-		return 0, err
+	if err := validateKeyFields(req.AppName, req.UserID, req.Name); err != nil {
+		return nil, err
 	}
-	if art == nil {
-		return 0, ErrNilArtifact
+	if req.Body == nil {
+		return nil, fmt.Errorf("put request body is nil")
 	}
+	_ = opts // reserved
 
-	versions, err := s.listVersions(ctx, sessionInfo, filename)
+	v, err := artifact.NewVersionID()
 	if err != nil {
-		return 0, fmt.Errorf("failed to list versions: %w", err)
+		return nil, err
 	}
+	objectKey := iartifact.BuildObjectName(req.AppName, req.UserID, req.SessionID, req.Name, v)
+	contentType := cmp.Or(req.MimeType, defaultContentType)
 
-	version := 0
-	if len(versions) > 0 {
-		version = slices.Max(versions) + 1
+	data, err := io.ReadAll(req.Body)
+	if err != nil {
+		return nil, err
 	}
-
-	objectKey := iartifact.BuildObjectName(sessionInfo, filename, version)
-	contentType := cmp.Or(art.MimeType, defaultContentType)
-
-	if err := s.client.PutObject(ctx, objectKey, art.Data, contentType); err != nil {
-		return 0, fmt.Errorf("failed to upload artifact: %w", err)
+	if err := s.client.PutObject(ctx, objectKey, data, contentType); err != nil {
+		return nil, fmt.Errorf("failed to upload artifact: %w", err)
 	}
-
-	return version, nil
+	resp := &artifact.PutResponse{Version: v, MimeType: contentType, Size: int64(len(data))}
+	if u, err := s.client.PresignGetObject(ctx, objectKey, s.presignExpires); err == nil && u != "" {
+		resp.URL = u
+	}
+	return resp, nil
 }
 
-// LoadArtifact loads an artifact from S3.
-// If version is nil, the latest version is loaded.
-func (s *Service) LoadArtifact(
-	ctx context.Context,
-	sessionInfo artifact.SessionInfo,
-	filename string,
-	version *int,
-) (*artifact.Artifact, error) {
-	if err := validateSessionInfo(sessionInfo); err != nil {
+// Head resolves an artifact version to its metadata and an optional URL.
+func (s *Service) Head(ctx context.Context, req *artifact.HeadRequest, opts ...artifact.HeadOption) (*artifact.HeadResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("head request is nil")
+	}
+	if err := validateKeyFields(req.AppName, req.UserID, req.Name); err != nil {
 		return nil, err
 	}
-	if err := validateFilename(filename); err != nil {
+	_ = opts // reserved
+
+	target, err := s.resolveVersion(ctx, req.AppName, req.UserID, req.SessionID, req.Name, req.Version)
+	if err != nil {
 		return nil, err
 	}
-
-	targetVersion := 0
-	if version != nil {
-		targetVersion = *version
-	} else {
-		versions, err := s.listVersions(ctx, sessionInfo, filename)
-		if err != nil {
-			return nil, fmt.Errorf("failed to list versions: %w", err)
-		}
-		if len(versions) == 0 {
-			if s.logger != nil {
-				s.logger.Debugf("artifact not found: %s/%s/%s/%s",
-					sessionInfo.AppName, sessionInfo.UserID, sessionInfo.SessionID, filename)
-			}
-			return nil, nil // Artifact not found
-		}
-		targetVersion = slices.Max(versions)
-	}
-
-	objectKey := iartifact.BuildObjectName(sessionInfo, filename, targetVersion)
-	data, contentType, err := s.client.GetObject(ctx, objectKey)
+	objectKey := iartifact.BuildObjectName(req.AppName, req.UserID, req.SessionID, req.Name, target)
+	contentType, size, err := s.client.HeadObject(ctx, objectKey)
 	if err != nil {
 		if errors.Is(err, s3storage.ErrNotFound) {
-			if s.logger != nil {
-				if version != nil {
-					s.logger.Debugf("artifact version not found: %s/%s/%s/%s@%d",
-						sessionInfo.AppName, sessionInfo.UserID, sessionInfo.SessionID, filename, *version)
-				} else {
-					s.logger.Debugf("artifact not found: %s/%s/%s/%s",
-						sessionInfo.AppName, sessionInfo.UserID, sessionInfo.SessionID, filename)
-				}
-			}
-			return nil, nil
+			return nil, artifact.ErrNotFound
 		}
-		return nil, fmt.Errorf("failed to download artifact: %w", err)
+		return nil, fmt.Errorf("failed to head artifact: %w", err)
 	}
-
-	return &artifact.Artifact{
-		Data:     data,
+	resp := &artifact.HeadResponse{
+		Version:  target,
 		MimeType: cmp.Or(contentType, defaultContentType),
-		Name:     filename,
-	}, nil
+		Size:     size,
+	}
+	if u, err := s.client.PresignGetObject(ctx, objectKey, s.presignExpires); err == nil && u != "" {
+		resp.URL = u
+	}
+	return resp, nil
 }
 
-// ListArtifactKeys lists all artifact filenames within a session.
-// It returns artifacts from both session scope and user scope.
-func (s *Service) ListArtifactKeys(
-	ctx context.Context,
-	sessionInfo artifact.SessionInfo,
-) ([]string, error) {
-	if err := validateSessionInfo(sessionInfo); err != nil {
+// Open returns a streaming reader for the artifact content and its descriptor.
+func (s *Service) Open(ctx context.Context, req *artifact.OpenRequest, opts ...artifact.OpenOption) (*artifact.OpenResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("open request is nil")
+	}
+	if err := validateKeyFields(req.AppName, req.UserID, req.Name); err != nil {
 		return nil, err
 	}
+	_ = opts // reserved
 
-	filenameSet := make(map[string]struct{})
-	prefixes := []string{
-		iartifact.BuildSessionPrefix(sessionInfo),
-		iartifact.BuildUserNamespacePrefix(sessionInfo),
+	target, err := s.resolveVersion(ctx, req.AppName, req.UserID, req.SessionID, req.Name, req.Version)
+	if err != nil {
+		return nil, err
 	}
-
-	for _, prefix := range prefixes {
-		keys, err := s.client.ListObjects(ctx, prefix)
-		if err != nil && !errors.Is(err, s3storage.ErrNotFound) {
-			return nil, fmt.Errorf("failed to list artifacts: %w", err)
-		}
-		for _, key := range keys {
-			if filename := extractFilename(key, prefix); filename != "" {
-				filenameSet[filename] = struct{}{}
-			}
-		}
-	}
-
-	filenames := make([]string, 0, len(filenameSet))
-	for filename := range filenameSet {
-		filenames = append(filenames, filename)
-	}
-	slices.Sort(filenames)
-
-	return filenames, nil
-}
-
-// DeleteArtifact deletes all versions of an artifact from S3.
-func (s *Service) DeleteArtifact(
-	ctx context.Context,
-	sessionInfo artifact.SessionInfo,
-	filename string,
-) error {
-	if err := validateSessionInfo(sessionInfo); err != nil {
-		return err
-	}
-	if err := validateFilename(filename); err != nil {
-		return err
-	}
-
-	prefix := iartifact.BuildObjectNamePrefix(sessionInfo, filename)
-	keys, err := s.client.ListObjects(ctx, prefix)
+	objectKey := iartifact.BuildObjectName(req.AppName, req.UserID, req.SessionID, req.Name, target)
+	body, contentType, size, err := s.client.OpenObject(ctx, objectKey)
 	if err != nil {
 		if errors.Is(err, s3storage.ErrNotFound) {
-			return nil
+			return nil, artifact.ErrNotFound
 		}
-		return fmt.Errorf("failed to list artifact versions: %w", err)
+		return nil, fmt.Errorf("failed to open artifact: %w", err)
 	}
-
-	if len(keys) == 0 {
-		return nil
+	resp := &artifact.OpenResponse{
+		Body:     body,
+		Version:  target,
+		MimeType: cmp.Or(contentType, defaultContentType),
+		Size:     size,
 	}
-
-	if err := s.client.DeleteObjects(ctx, keys); err != nil {
-		return fmt.Errorf("failed to delete artifact: %w", err)
+	if u, err := s.client.PresignGetObject(ctx, objectKey, s.presignExpires); err == nil && u != "" {
+		resp.URL = u
 	}
-
-	return nil
+	return resp, nil
 }
 
-// ListVersions lists all versions of an artifact.
-func (s *Service) ListVersions(
-	ctx context.Context,
-	sessionInfo artifact.SessionInfo,
-	filename string,
-) ([]int, error) {
-	if err := validateSessionInfo(sessionInfo); err != nil {
+// List returns the latest version metadata for each artifact name under the given namespace.
+func (s *Service) List(ctx context.Context, req *artifact.ListRequest, opts ...artifact.ListOption) (*artifact.ListResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("list request is nil")
+	}
+	if err := validateListFields(req.AppName, req.UserID); err != nil {
 		return nil, err
 	}
-	if err := validateFilename(filename); err != nil {
-		return nil, err
+	_ = opts // reserved
+
+	scopePrefix := iartifact.BuildListPrefix(req.AppName, req.UserID, req.SessionID)
+	keys, err := s.client.ListObjects(ctx, scopePrefix)
+	if err != nil {
+		if errors.Is(err, s3storage.ErrNotFound) {
+			return &artifact.ListResponse{}, nil
+		}
+		return nil, fmt.Errorf("failed to list artifacts: %w", err)
 	}
-	return s.listVersions(ctx, sessionInfo, filename)
+
+	type latest struct {
+		version artifact.VersionID
+	}
+	latestByName := make(map[string]latest)
+	names := make([]string, 0)
+
+	for _, objectKey := range keys {
+		name, ver, ok := parseNameAndVersion(objectKey, scopePrefix)
+		if !ok {
+			continue
+		}
+		if cur, exists := latestByName[name]; !exists {
+			latestByName[name] = latest{version: ver}
+			names = append(names, name)
+		} else if artifact.CompareVersion(ver, cur.version) > 0 {
+			latestByName[name] = latest{version: ver}
+		}
+	}
+
+	slices.Sort(names)
+
+	start := 0
+	if req.PageToken != nil && *req.PageToken != "" {
+		tok := *req.PageToken
+		i, _ := slices.BinarySearch(names, tok)
+		start = i
+		for start < len(names) && names[start] <= tok {
+			start++
+		}
+	}
+	limit := 0
+	if req.Limit != nil {
+		limit = *req.Limit
+	}
+	if limit <= 0 || limit > len(names)-start {
+		limit = len(names) - start
+	}
+	end := start + limit
+	page := names[start:end]
+
+	out := make([]artifact.ListItem, 0, len(page))
+	for _, name := range page {
+		ver := latestByName[name].version
+		objectKey := iartifact.BuildObjectName(req.AppName, req.UserID, req.SessionID, name, ver)
+		contentType, size, err := s.client.HeadObject(ctx, objectKey)
+		if err != nil {
+			if errors.Is(err, s3storage.ErrNotFound) {
+				continue
+			}
+			return nil, fmt.Errorf("failed to head listed artifact: %w", err)
+		}
+		item := artifact.ListItem{
+			Name:     name,
+			Version:  ver,
+			MimeType: cmp.Or(contentType, defaultContentType),
+			Size:     size,
+		}
+		if u, err := s.client.PresignGetObject(ctx, objectKey, s.presignExpires); err == nil && u != "" {
+			item.URL = u
+		}
+		out = append(out, item)
+	}
+
+	next := ""
+	if end < len(names) && len(page) > 0 {
+		next = page[len(page)-1]
+	}
+	return &artifact.ListResponse{Items: out, NextPageToken: next}, nil
 }
 
-func (s *Service) listVersions(
-	ctx context.Context,
-	sessionInfo artifact.SessionInfo,
-	filename string,
-) ([]int, error) {
-	prefix := iartifact.BuildObjectNamePrefix(sessionInfo, filename)
+// Delete is idempotent by default.
+func (s *Service) Delete(ctx context.Context, req *artifact.DeleteRequest, opts ...artifact.DeleteOption) (*artifact.DeleteResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("delete request is nil")
+	}
+	if err := validateKeyFields(req.AppName, req.UserID, req.Name); err != nil {
+		return nil, err
+	}
+	_ = opts // reserved
+
+	// Delete all versions.
+	if req.Version == nil {
+		prefix := iartifact.BuildObjectNamePrefix(req.AppName, req.UserID, req.SessionID, req.Name)
+		keys, err := s.client.ListObjects(ctx, prefix)
+		if err != nil {
+			if errors.Is(err, s3storage.ErrNotFound) {
+				return &artifact.DeleteResponse{Deleted: false}, nil
+			}
+			return nil, fmt.Errorf("failed to list artifact versions: %w", err)
+		}
+		if len(keys) == 0 {
+			return &artifact.DeleteResponse{Deleted: false}, nil
+		}
+		if err := s.client.DeleteObjects(ctx, keys); err != nil {
+			if errors.Is(err, s3storage.ErrNotFound) {
+				return &artifact.DeleteResponse{Deleted: false}, nil
+			}
+			return nil, fmt.Errorf("failed to delete artifact: %w", err)
+		}
+		return &artifact.DeleteResponse{Deleted: true}, nil
+	}
+
+	// Delete a specific version.
+	objectKey := iartifact.BuildObjectName(req.AppName, req.UserID, req.SessionID, req.Name, *req.Version)
+	if err := s.client.DeleteObjects(ctx, []string{objectKey}); err != nil {
+		if errors.Is(err, s3storage.ErrNotFound) {
+			return &artifact.DeleteResponse{Deleted: false}, nil
+		}
+		return nil, fmt.Errorf("failed to delete artifact: %w", err)
+	}
+	return &artifact.DeleteResponse{Deleted: true}, nil
+}
+
+// Versions lists all versions available for the provided artifact.
+func (s *Service) Versions(ctx context.Context, req *artifact.VersionsRequest, opts ...artifact.VersionsOption) (*artifact.VersionsResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("versions request is nil")
+	}
+	if err := validateKeyFields(req.AppName, req.UserID, req.Name); err != nil {
+		return nil, err
+	}
+	_ = opts // reserved
+
+	versions, err := s.listVersions(ctx, req.AppName, req.UserID, req.SessionID, req.Name)
+	if err != nil {
+		return nil, err
+	}
+	if len(versions) == 0 {
+		return nil, artifact.ErrNotFound
+	}
+	return &artifact.VersionsResponse{Versions: versions}, nil
+}
+
+func (s *Service) resolveVersion(ctx context.Context, appName, userID, sessionID, name string, version *artifact.VersionID) (artifact.VersionID, error) {
+	if version != nil {
+		return *version, nil
+	}
+	versions, err := s.listVersions(ctx, appName, userID, sessionID, name)
+	if err != nil {
+		return "", err
+	}
+	if len(versions) == 0 {
+		if s.logger != nil {
+			s.logger.Debugf("artifact not found: %s/%s/%s/%s",
+				appName, userID, sessionID, name)
+		}
+		return "", artifact.ErrNotFound
+	}
+	latest := versions[0]
+	for _, v := range versions[1:] {
+		if artifact.CompareVersion(v, latest) > 0 {
+			latest = v
+		}
+	}
+	return latest, nil
+}
+
+func (s *Service) listVersions(ctx context.Context, appName, userID, sessionID, name string) ([]artifact.VersionID, error) {
+	prefix := iartifact.BuildObjectNamePrefix(appName, userID, sessionID, name)
 	keys, err := s.client.ListObjects(ctx, prefix)
 	if err != nil {
 		if errors.Is(err, s3storage.ErrNotFound) {
@@ -288,59 +379,86 @@ func (s *Service) listVersions(
 		}
 		return nil, fmt.Errorf("failed to list versions: %w", err)
 	}
-
-	versions := make([]int, 0, len(keys))
-	for _, key := range keys {
-		if idx := strings.LastIndex(key, "/"); idx != -1 {
-			if v, err := strconv.Atoi(key[idx+1:]); err == nil {
-				versions = append(versions, v)
+	versions := make([]artifact.VersionID, 0, len(keys))
+	for _, objectKey := range keys {
+		if idx := strings.LastIndex(objectKey, "/"); idx != -1 {
+			s := objectKey[idx+1:]
+			if s != "" {
+				versions = append(versions, artifact.VersionID(s))
 			}
 		}
 	}
-
-	slices.Sort(versions)
+	slices.SortFunc(versions, func(a, b artifact.VersionID) int { return artifact.CompareVersion(a, b) })
 	return versions, nil
 }
 
-// extractFilename extracts the filename from an object key given a prefix.
-// Object key format: {prefix}{filename}/{version}
-// Returns the filename or empty string if the key doesn't match the expected format.
-func extractFilename(objectKey, prefix string) string {
-	if !strings.HasPrefix(objectKey, prefix) {
-		return ""
+func parseNameAndVersion(objectKey, scopePrefix string) (name string, ver artifact.VersionID, ok bool) {
+	if !strings.HasPrefix(objectKey, scopePrefix) {
+		return "", "", false
 	}
-
-	relative := strings.TrimPrefix(objectKey, prefix)
-	if filename, _, ok := strings.Cut(relative, "/"); ok && filename != "" {
-		return filename
+	rel := strings.TrimPrefix(objectKey, scopePrefix)
+	parts := strings.Split(rel, "/")
+	if len(parts) < 2 {
+		return "", "", false
 	}
-
-	return ""
+	b := parts[len(parts)-1]
+	a := strings.Join(parts[:len(parts)-1], "/")
+	if a == "" || b == "" {
+		return "", "", false
+	}
+	return a, artifact.VersionID(b), true
 }
 
-// validateSessionInfo checks that all required session info fields are present.
-func validateSessionInfo(info artifact.SessionInfo) error {
-	if info.AppName == "" || info.UserID == "" || info.SessionID == "" {
+func validateKeyFields(appName, userID, name string) error {
+	if appName == "" || userID == "" {
+		return ErrEmptySessionInfo
+	}
+	return validateName(name)
+}
+
+func validateListFields(appName, userID string) error {
+	if appName == "" || userID == "" {
 		return ErrEmptySessionInfo
 	}
 	return nil
 }
 
-// validateFilename checks that the filename is valid and safe.
-// It rejects empty filenames, path traversal attempts, and other dangerous patterns.
-func validateFilename(filename string) error {
-	if filename == "" {
+func validateName(name string) error {
+	if name == "" {
 		return ErrEmptyFilename
 	}
-
-	// Check for path traversal and invalid characters
-	// Note: "user:" prefix is allowed for user-scoped artifacts
-	if strings.Contains(filename, "/") ||
-		strings.Contains(filename, "\\") ||
-		strings.Contains(filename, "..") ||
-		strings.Contains(filename, "\x00") {
+	if strings.HasPrefix(name, "/") ||
+		strings.Contains(name, "\\") ||
+		strings.Contains(name, "\x00") {
 		return ErrInvalidFilename
 	}
+	parts := strings.Split(name, "/")
+	for _, p := range parts {
+		if p == "" || p == "." || p == ".." {
+			return ErrInvalidFilename
+		}
+	}
+	return nil
+}
 
+func validateNamePrefix(prefix string) error {
+	if prefix == "" {
+		return nil
+	}
+	if strings.HasPrefix(prefix, "/") ||
+		strings.Contains(prefix, "\\") ||
+		strings.Contains(prefix, "\x00") {
+		return ErrInvalidFilename
+	}
+	parts := strings.Split(prefix, "/")
+	for i, p := range parts {
+		if p == "." || p == ".." {
+			return ErrInvalidFilename
+		}
+		// Allow trailing slash.
+		if p == "" && i != len(parts)-1 {
+			return ErrInvalidFilename
+		}
+	}
 	return nil
 }

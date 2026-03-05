@@ -11,6 +11,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strings"
@@ -39,17 +40,18 @@ type logQueryOutput struct{}
 
 // logQuery is the function to log the query
 func logQuery(ctx context.Context, query logQueryInput) (logQueryOutput, error) {
-	a := &artifact.Artifact{
-		Data:     []byte(query.Query),
-		MimeType: "text/plain",
-	}
+	data := []byte(query.Query)
 	toolCtx, err := agent.NewToolContext(ctx)
 	if err != nil {
 		log.Errorf("Failed to create tool context: %v", err)
 		return logQueryOutput{}, err
 	}
 
-	_, err = toolCtx.SaveArtifact("query", a)
+	_, err = toolCtx.PutArtifact(&artifact.PutRequest{
+		Name:     "query",
+		Body:     bytes.NewReader(data),
+		MimeType: "text/plain",
+	})
 	if err != nil {
 		log.Errorf("Failed to save artifact: %v", err)
 	}

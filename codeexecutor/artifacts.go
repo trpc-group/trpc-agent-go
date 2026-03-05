@@ -10,6 +10,7 @@
 package codeexecutor
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strings"
@@ -17,71 +18,52 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 )
 
+// ArtifactBaseKey contains the base namespace for artifact operations.
+// It intentionally excludes artifact name, which is provided per call.
+type ArtifactBaseKey struct {
+	AppName   string
+	UserID    string
+	SessionID string // Optional. Empty means user-scoped namespace.
+}
+
 // LoadArtifactHelper resolves artifact name@version via callback context.
 // If version is nil, loads latest. Returns data, mime, actual version.
 func LoadArtifactHelper(
-	ctx context.Context, name string, version *int,
-) ([]byte, string, int, error) {
+	ctx context.Context, name string, version *artifact.VersionID,
+) ([]byte, string, artifact.VersionID, error) {
 	svc, ok := ArtifactServiceFromContext(ctx)
 	if !ok || svc == nil {
-		return nil, "", 0, fmt.Errorf("artifact service not in context")
+		return nil, "", "", fmt.Errorf("artifact service not in context")
 	}
-	info := artifactSessionFromContext(ctx)
-	art, err := svc.LoadArtifact(ctx, info, name, version)
+	baseKey := artifactBaseKeyFromContext(ctx)
+	data, desc, err := artifact.ReadAll(ctx, svc, &artifact.OpenRequest{
+		AppName:   baseKey.AppName,
+		UserID:    baseKey.UserID,
+		SessionID: baseKey.SessionID,
+		Name:      name,
+		Version:   version,
+	})
 	if err != nil {
-		return nil, "", 0, err
+		return nil, "", "", err
 	}
-	if art == nil {
-		return nil, "", 0, fmt.Errorf("artifact not found: %s", name)
-	}
-	actual := resolveArtifactVersion(ctx, svc, info, name, version)
-	mt := art.MimeType
+	actual := desc.Version
+	mt := desc.MimeType
 	if mt == "" {
 		mt = "application/octet-stream"
 	}
-	return art.Data, mt, actual, nil
-}
-
-func resolveArtifactVersion(
-	ctx context.Context,
-	svc artifact.Service,
-	info artifact.SessionInfo,
-	name string,
-	version *int,
-) int {
-	if version != nil {
-		return *version
-	}
-	vers, err := svc.ListVersions(ctx, info, name)
-	if err != nil || len(vers) == 0 {
-		return 0
-	}
-	max := vers[0]
-	for _, v := range vers[1:] {
-		if v > max {
-			max = v
-		}
-	}
-	return max
+	return data, mt, actual, nil
 }
 
 // ParseArtifactRef splits "name@version" into name and optional version.
-func ParseArtifactRef(ref string) (string, *int, error) {
+func ParseArtifactRef(ref string) (string, *artifact.VersionID, error) {
 	parts := strings.Split(ref, "@")
 	if len(parts) == 1 {
 		return parts[0], nil, nil
 	}
 	if len(parts) == 2 {
-		// version may not be strictly numeric across services; keep
-		// it simple: try integer, else error.
-		var v int
-		for _, r := range parts[1] {
-			if r < '0' || r > '9' {
-				return "", nil, fmt.Errorf("invalid version: %s", parts[1])
-			}
-		}
-		for i := 0; i < len(parts[1]); i++ {
-			v = v*10 + int(parts[1][i]-'0')
+		v := artifact.VersionID(parts[1])
+		if strings.TrimSpace(string(v)) == "" {
+			return "", nil, fmt.Errorf("invalid version: %s", parts[1])
 		}
 		return parts[0], &v, nil
 	}
@@ -91,28 +73,30 @@ func ParseArtifactRef(ref string) (string, *int, error) {
 // SaveArtifactHelper saves a file as artifact using callback context.
 func SaveArtifactHelper(
 	ctx context.Context, filename string, data []byte, mime string,
-) (int, error) {
+) (artifact.VersionID, error) {
 	svc, ok := ArtifactServiceFromContext(ctx)
 	if !ok || svc == nil {
-		return 0, fmt.Errorf("artifact service not in context")
+		return "", fmt.Errorf("artifact service not in context")
 	}
-	info := artifactSessionFromContext(ctx)
-	ver, err := svc.SaveArtifact(ctx, info, filename,
-		&artifact.Artifact{
-			Data:     data,
-			MimeType: mime,
-			Name:     filename,
-		})
+	baseKey := artifactBaseKeyFromContext(ctx)
+	desc, err := svc.Put(ctx, &artifact.PutRequest{
+		AppName:   baseKey.AppName,
+		UserID:    baseKey.UserID,
+		SessionID: baseKey.SessionID,
+		Name:      filename,
+		Body:      bytes.NewReader(data),
+		MimeType:  mime,
+	})
 	if err != nil {
-		return 0, err
+		return "", err
 	}
-	return ver, nil
+	return desc.Version, nil
 }
 
 // WithArtifactService attaches artifact.Service to context so lower
 // layers (codeexecutor) can resolve artifacts without importing agent.
 type artifactKey struct{}
-type artifactSessionKey struct{}
+type artifactBaseKey struct{}
 
 // WithArtifactService stores an artifact.Service in the context.
 // Callers retrieve it in lower layers to load/save artifacts
@@ -137,22 +121,18 @@ func ArtifactServiceFromContext(
 	return svc, ok
 }
 
-// WithArtifactSession stores artifact session info in context.
-func WithArtifactSession(
-	ctx context.Context, info artifact.SessionInfo,
-) context.Context {
-	return context.WithValue(ctx, artifactSessionKey{}, info)
+// WithArtifactBaseKey stores the base artifact key (without Name) in context.
+func WithArtifactBaseKey(ctx context.Context, key ArtifactBaseKey) context.Context {
+	return context.WithValue(ctx, artifactBaseKey{}, key)
 }
 
-func artifactSessionFromContext(
-	ctx context.Context,
-) artifact.SessionInfo {
-	v := ctx.Value(artifactSessionKey{})
+func artifactBaseKeyFromContext(ctx context.Context) ArtifactBaseKey {
+	v := ctx.Value(artifactBaseKey{})
 	if v == nil {
-		return artifact.SessionInfo{}
+		return ArtifactBaseKey{}
 	}
-	if info, ok := v.(artifact.SessionInfo); ok {
-		return info
+	if k, ok := v.(ArtifactBaseKey); ok {
+		return k
 	}
-	return artifact.SessionInfo{}
+	return ArtifactBaseKey{}
 }

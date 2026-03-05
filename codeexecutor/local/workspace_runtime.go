@@ -32,6 +32,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 
+	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
 
@@ -535,7 +536,7 @@ func pinnedArtifactVersion(
 	md codeexecutor.WorkspaceMetadata,
 	name string,
 	to string,
-) *int {
+) *artifact.VersionID {
 	if strings.TrimSpace(name) == "" || strings.TrimSpace(to) == "" {
 		return nil
 	}
@@ -609,7 +610,7 @@ func (r *Runtime) stageInput(
 	sp codeexecutor.InputSpec,
 	mode string,
 	to string,
-) (string, *int, error) {
+) (string, *artifact.VersionID, error) {
 	switch {
 	case strings.HasPrefix(sp.From, inputSchemeArtifact):
 		name := strings.TrimPrefix(sp.From, inputSchemeArtifact)
@@ -698,7 +699,7 @@ func (r *Runtime) CollectOutputs(
 	globs := codeexecutor.NormalizeGlobs(spec.Globs)
 	out := codeexecutor.OutputManifest{}
 	var savedNames []string
-	var savedVers []int
+	var savedVers []artifact.VersionID
 	count := 0
 	for _, g := range globs {
 		abs := filepath.Join(ws.Path, g)

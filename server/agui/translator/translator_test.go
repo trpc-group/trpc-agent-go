@@ -2028,7 +2028,7 @@ func TestTranslate_ToolArtifactsFromStateDelta_NoResponse(t *testing.T) {
 	payload, err := json.Marshal(map[string]any{
 		"tool_call_id": "call-1",
 		"artifacts": []map[string]any{
-			{"name": "out/a.txt", "version": 3, "ref": "artifact://out/a.txt@3"},
+			{"name": "out/a.txt", "version": "3", "ref": "artifact://out/a.txt@3"},
 		},
 	})
 	assert.NoError(t, err)

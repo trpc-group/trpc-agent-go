@@ -283,14 +283,14 @@ type runFile struct {
 }
 
 type artifactRef struct {
-	Name    string `json:"name"`
-	Version int    `json:"version"`
+	Name    string             `json:"name"`
+	Version artifact.VersionID `json:"version"`
 }
 
 type artifactStateRef struct {
-	Name    string `json:"name"`
-	Version int    `json:"version"`
-	Ref     string `json:"ref"`
+	Name    string             `json:"name"`
+	Version artifact.VersionID `json:"version"`
+	Ref     string             `json:"ref"`
 }
 
 type skillRunArtifactsDelta struct {
@@ -486,13 +486,14 @@ func (t *RunTool) StateDelta(
 	refs := make([]artifactStateRef, 0, len(out.ArtifactFiles))
 	for _, f := range out.ArtifactFiles {
 		name := strings.TrimSpace(f.Name)
-		if name == "" || f.Version < 0 {
+		ver := artifact.VersionID(strings.TrimSpace(string(f.Version)))
+		if name == "" || ver == "" {
 			continue
 		}
 		refs = append(refs, artifactStateRef{
 			Name:    name,
-			Version: f.Version,
-			Ref:     fmt.Sprintf("artifact://%s@%d", name, f.Version),
+			Version: ver,
+			Ref:     fmt.Sprintf("artifact://%s@%s", name, ver),
 		})
 	}
 	if len(refs) == 0 {
@@ -1765,8 +1766,9 @@ func withArtifactContext(ctx context.Context) context.Context {
 		ctxIO = codeexecutor.WithArtifactService(
 			ctxIO, inv.ArtifactService,
 		)
-		ctxIO = codeexecutor.WithArtifactSession(
-			ctxIO, artifact.SessionInfo{
+		ctxIO = codeexecutor.WithArtifactBaseKey(
+			ctxIO,
+			codeexecutor.ArtifactBaseKey{
 				AppName:   inv.Session.AppName,
 				UserID:    inv.Session.UserID,
 				SessionID: inv.Session.ID,
@@ -2170,15 +2172,15 @@ func (t *RunTool) saveArtifacts(
 		if prefix != "" {
 			name = prefix + name
 		}
-		ver, err := cb.SaveArtifact(name, &artifact.Artifact{
-			Data:     []byte(f.Content),
-			MimeType: f.MIMEType,
+		desc, err := cb.PutArtifact(&artifact.PutRequest{
 			Name:     name,
+			Body:     strings.NewReader(f.Content),
+			MimeType: f.MIMEType,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("save artifact %s: %w", name, err)
 		}
-		refs = append(refs, artifactRef{Name: name, Version: ver})
+		refs = append(refs, artifactRef{Name: name, Version: desc.Version})
 	}
 	return refs, nil
 }

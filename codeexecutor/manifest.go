@@ -10,7 +10,11 @@
 
 package codeexecutor
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"trpc.group/trpc-go/trpc-agent-go/artifact"
+)
 
 // InputSpec declares a single input mapping into the workspace.
 //
@@ -96,7 +100,7 @@ type FileRef struct {
 	MIMEType  string
 	Content   string
 	SavedAs   string
-	Version   int
+	Version   artifact.VersionID
 	SizeBytes int64
 	Truncated bool
 }

@@ -9,6 +9,8 @@
 package s3
 
 import (
+	"time"
+
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	s3storage "trpc.group/trpc-go/trpc-agent-go/storage/s3"
 )
@@ -18,6 +20,7 @@ type options struct {
 	client            s3storage.Client
 	clientBuilderOpts []s3storage.ClientBuilderOpt
 	logger            log.Logger
+	presignExpires    time.Duration
 }
 
 // Option is a function that configures the S3 artifact service.
@@ -78,5 +81,13 @@ func WithClient(client s3storage.Client) Option {
 func WithLogger(logger log.Logger) Option {
 	return func(o *options) {
 		o.logger = logger
+	}
+}
+
+// WithPresignExpires sets the TTL for generated presigned URLs.
+// If not set, a default is used.
+func WithPresignExpires(expires time.Duration) Option {
+	return func(o *options) {
+		o.presignExpires = expires
 	}
 }

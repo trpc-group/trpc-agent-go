@@ -10,7 +10,10 @@
 package cos_test
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os"
 	"strconv"
 	"testing"
@@ -22,144 +25,329 @@ import (
 )
 
 func TestArtifact_SessionScope(t *testing.T) {
-	// Save-ListVersions-Load-ListKeys-Delete-ListVersions-Load-ListKeys
-	t.Skip("Skipping TCOS integration test, need to set up environment variables COS_SECRETID, COS_SECRETKEY and COS_BUCKET_URL")
-	s, err := cos.NewService("cos-1", os.Getenv("COS_BUCKET_URL"))
-	require.NoError(t, err)
-	sessionInfo := artifact.SessionInfo{
-		AppName:   "testapp",
-		UserID:    "user1",
-		SessionID: "session1",
+	// Put-Versions-Open-List-Delete-Versions-Open-List
+	if os.Getenv("COS_INTEGRATION_TEST") != "1" {
+		t.Skip("Skipping TCOS integration test (set COS_INTEGRATION_TEST=1 to run).")
 	}
-	sessionScopeKey := "test.txt"
-	var artifacts []*artifact.Artifact
+	bucketURL := os.Getenv("COS_BUCKET_URL")
+	secretID := os.Getenv("COS_SECRETID")
+	secretKey := os.Getenv("COS_SECRETKEY")
+	if bucketURL == "" || secretID == "" || secretKey == "" {
+		t.Skip("Skipping TCOS integration test (requires COS_BUCKET_URL, COS_SECRETID, COS_SECRETKEY).")
+	}
+
+	s, err := cos.NewService("cos-1", bucketURL)
+	require.NoError(t, err)
+	appName := "testapp"
+	userID := "user1"
+	sessionID := "session1"
+	name := "test.txt"
+	var artifacts [][]byte
 	for i := 0; i < 3; i++ {
-		artifacts = append(artifacts, &artifact.Artifact{
-			Data:     []byte("Hello, World!" + strconv.Itoa(i)),
-			MimeType: "text/plain",
-			Name:     "display_name_user_scope_test.txt",
-		})
+		artifacts = append(artifacts, []byte("Hello, World!"+strconv.Itoa(i)))
 	}
 	t.Cleanup(func() {
-		if err := s.DeleteArtifact(context.Background(), sessionInfo, sessionScopeKey); err != nil {
-			t.Logf("Cleanup: DeleteArtifact: %v", err)
+		if _, err := s.Delete(context.Background(), &artifact.DeleteRequest{
+			AppName:   appName,
+			UserID:    userID,
+			SessionID: sessionID,
+			Name:      name,
+		}); err != nil {
+			t.Logf("Cleanup: Delete: %v", err)
 		}
 	})
 
-	for i, a := range artifacts {
-		version, err := s.SaveArtifact(context.Background(),
-			sessionInfo, sessionScopeKey, a)
+	var versionsPut []artifact.VersionID
+	for _, data := range artifacts {
+		desc, err := s.Put(context.Background(), &artifact.PutRequest{
+			AppName:   appName,
+			UserID:    userID,
+			SessionID: sessionID,
+			Name:      name,
+			Body:      bytes.NewReader(data),
+			MimeType:  "text/plain",
+		})
 		require.NoError(t, err)
-		require.Equal(t, i, version)
+		versionsPut = append(versionsPut, desc.Version)
 	}
 
-	version, err := s.ListVersions(context.Background(), sessionInfo, sessionScopeKey)
+	versions, err := s.Versions(context.Background(), &artifact.VersionsRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
 	require.NoError(t, err)
-	require.ElementsMatch(t, []int{0, 1, 2}, version)
+	require.ElementsMatch(t, versionsPut, versions.Versions)
 
-	a, err := s.LoadArtifact(context.Background(), sessionInfo, sessionScopeKey, nil)
+	openLatest, err := s.Open(context.Background(), &artifact.OpenRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
 	require.NoError(t, err)
-	require.EqualValues(t, &artifact.Artifact{
-		Data:     []byte("Hello, World!" + strconv.Itoa(2)),
-		MimeType: "text/plain",
-		Name:     sessionScopeKey,
-	}, a)
+	require.Equal(t, "text/plain", openLatest.MimeType)
+	gotLatest, err := io.ReadAll(openLatest.Body)
+	require.NoError(t, err)
+	require.NoError(t, openLatest.Body.Close())
+	require.EqualValues(t, artifacts[len(artifacts)-1], gotLatest)
+
 	for i, wanted := range artifacts {
-		got, err := s.LoadArtifact(context.Background(),
-			sessionInfo, sessionScopeKey, &i)
+		v := versionsPut[i]
+		out, err := s.Open(context.Background(), &artifact.OpenRequest{
+			AppName:   appName,
+			UserID:    userID,
+			SessionID: sessionID,
+			Name:      name,
+			Version:   &v,
+		})
 		require.NoError(t, err)
-		require.EqualValues(t, wanted.Data, got.Data)
-		require.EqualValues(t, wanted.MimeType, got.MimeType)
-		require.EqualValues(t, sessionScopeKey, got.Name)
+		got, err := io.ReadAll(out.Body)
+		require.NoError(t, err)
+		require.NoError(t, out.Body.Close())
+		require.EqualValues(t, wanted, got)
 	}
 
-	keys, err := s.ListArtifactKeys(context.Background(), sessionInfo)
+	items, err := s.List(context.Background(), &artifact.ListRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+	})
 	require.NoError(t, err)
-	require.ElementsMatch(t, []string{sessionScopeKey}, keys)
+	require.Len(t, items.Items, 1)
+	require.Equal(t, name, items.Items[0].Name)
 
-	err = s.DeleteArtifact(context.Background(), sessionInfo, sessionScopeKey)
+	_, err = s.Delete(context.Background(), &artifact.DeleteRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
 	require.NoError(t, err)
 
-	keys, err = s.ListArtifactKeys(context.Background(), sessionInfo)
+	items, err = s.List(context.Background(), &artifact.ListRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+	})
 	require.NoError(t, err)
-	require.Empty(t, keys)
+	require.Empty(t, items.Items)
 
-	version, err = s.ListVersions(context.Background(), sessionInfo, sessionScopeKey)
-	require.NoError(t, err)
-	require.Empty(t, version)
+	_, err = s.Versions(context.Background(), &artifact.VersionsRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
+	require.Error(t, err)
+	require.True(t, errors.Is(err, artifact.ErrNotFound))
 
-	a, err = s.LoadArtifact(context.Background(), sessionInfo, sessionScopeKey, nil)
+	_, err = s.Open(context.Background(), &artifact.OpenRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
+	require.Error(t, err)
+	require.True(t, errors.Is(err, artifact.ErrNotFound))
+}
+
+func TestArtifact_SessionScope_PutHeadDelete(t *testing.T) {
+	// Put-Head-Delete (session scope)
+	if os.Getenv("COS_INTEGRATION_TEST") != "1" {
+		t.Skip("Skipping TCOS integration test (set COS_INTEGRATION_TEST=1 to run).")
+	}
+	bucketURL := os.Getenv("COS_BUCKET_URL")
+	secretID := os.Getenv("COS_SECRETID")
+	secretKey := os.Getenv("COS_SECRETKEY")
+	if bucketURL == "" || secretID == "" || secretKey == "" {
+		t.Skip("Skipping TCOS integration test (requires COS_BUCKET_URL, COS_SECRETID, COS_SECRETKEY).")
+	}
+
+	s, err := cos.NewService("cos-1", bucketURL)
 	require.NoError(t, err)
-	require.Nil(t, a)
+
+	appName := "testapp"
+	userID := "user1"
+	sessionID := "session1"
+	name := "put-head-delete.txt"
+
+	t.Cleanup(func() {
+		if _, err := s.Delete(context.Background(), &artifact.DeleteRequest{
+			AppName:   appName,
+			UserID:    userID,
+			SessionID: sessionID,
+			Name:      name,
+		}); err != nil {
+			t.Logf("Cleanup: Delete: %v", err)
+		}
+	})
+
+	data := []byte("PutHeadDelete")
+	putDesc, err := s.Put(context.Background(), &artifact.PutRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+		Body:      bytes.NewReader(data),
+		MimeType:  "text/plain",
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, putDesc.Version)
+
+	headDesc, err := s.Head(context.Background(), &artifact.HeadRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
+	require.NoError(t, err)
+	t.Logf("headDesc: %+v", headDesc)
+	require.Equal(t, putDesc.Version, headDesc.Version)
+	require.Equal(t, "text/plain", headDesc.MimeType)
+
+	_, err = s.Delete(context.Background(), &artifact.DeleteRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
+	require.NoError(t, err)
+
+	_, err = s.Head(context.Background(), &artifact.HeadRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
+	require.Error(t, err)
+	require.True(t, errors.Is(err, artifact.ErrNotFound))
 }
 
 func TestArtifact_UserScope(t *testing.T) {
-	t.Skip("Skipping TCOS integration test, need to set up environment variables COS_BUCKET_URL, COS_SECRETID and COS_SECRETKEY")
-	// Save-ListVersions-Load-ListKeys-Delete-ListVersions-Load-ListKeys
-	s, err := cos.NewService("cos-2", os.Getenv("COS_BUCKET_URL"))
-	require.NoError(t, err)
-	sessionInfo := artifact.SessionInfo{
-		AppName:   "testapp",
-		UserID:    "user2",
-		SessionID: "session1",
+	if os.Getenv("COS_INTEGRATION_TEST") != "1" {
+		t.Skip("Skipping TCOS integration test (set COS_INTEGRATION_TEST=1 to run).")
 	}
-	userScopeKey := "user:test.txt"
+	bucketURL := os.Getenv("COS_BUCKET_URL")
+	secretID := os.Getenv("COS_SECRETID")
+	secretKey := os.Getenv("COS_SECRETKEY")
+	if bucketURL == "" || secretID == "" || secretKey == "" {
+		t.Skip("Skipping TCOS integration test (requires COS_BUCKET_URL, COS_SECRETID, COS_SECRETKEY).")
+	}
+	// Put-Versions-Open-List-Delete-Versions-Open-List
+	s, err := cos.NewService("cos-2", bucketURL)
+	require.NoError(t, err)
+	appName := "testapp"
+	userID := "user2"
+	sessionID := ""
+	name := "test.txt"
 	t.Cleanup(func() {
-		if err := s.DeleteArtifact(context.Background(), sessionInfo, userScopeKey); err != nil {
-			t.Logf("Cleanup: DeleteArtifact: %v", err)
+		if _, err := s.Delete(context.Background(), &artifact.DeleteRequest{
+			AppName:   appName,
+			UserID:    userID,
+			SessionID: sessionID,
+			Name:      name,
+		}); err != nil {
+			t.Logf("Cleanup: Delete: %v", err)
 		}
 	})
 
+	var versionsPut []artifact.VersionID
+	var artifacts [][]byte
 	for i := 0; i < 3; i++ {
 		data := []byte("Hi, World!" + strconv.Itoa(i))
-		version, err := s.SaveArtifact(context.Background(),
-			sessionInfo, userScopeKey, &artifact.Artifact{
-				Data:     data,
-				MimeType: "text/plain",
-				Name:     "display_name_user_scope_test.txt",
-			})
+		desc, err := s.Put(context.Background(), &artifact.PutRequest{
+			AppName:   appName,
+			UserID:    userID,
+			SessionID: sessionID,
+			Name:      name,
+			Body:      bytes.NewReader(data),
+			MimeType:  "text/plain",
+		})
 		require.NoError(t, err)
-		require.Equal(t, i, version)
+		versionsPut = append(versionsPut, desc.Version)
+		artifacts = append(artifacts, data)
 	}
 
-	version, err := s.ListVersions(context.Background(), sessionInfo, userScopeKey)
+	versions, err := s.Versions(context.Background(), &artifact.VersionsRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
 	require.NoError(t, err)
-	require.ElementsMatch(t, []int{0, 1, 2}, version)
+	require.ElementsMatch(t, versionsPut, versions.Versions)
 
-	a, err := s.LoadArtifact(context.Background(), sessionInfo, userScopeKey, nil)
+	openLatest, err := s.Open(context.Background(), &artifact.OpenRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
 	require.NoError(t, err)
-	require.EqualValues(t, &artifact.Artifact{
-		Data:     []byte("Hi, World!" + strconv.Itoa(2)),
-		MimeType: "text/plain",
-		Name:     userScopeKey,
-	}, a)
+	require.Equal(t, "text/plain", openLatest.MimeType)
+	gotLatest, err := io.ReadAll(openLatest.Body)
+	require.NoError(t, err)
+	require.NoError(t, openLatest.Body.Close())
+	require.EqualValues(t, artifacts[len(artifacts)-1], gotLatest)
+
 	for i := 0; i < 3; i++ {
-		a, err := s.LoadArtifact(context.Background(),
-			sessionInfo, userScopeKey, &i)
+		v := versionsPut[i]
+		out, err := s.Open(context.Background(), &artifact.OpenRequest{
+			AppName:   appName,
+			UserID:    userID,
+			SessionID: sessionID,
+			Name:      name,
+			Version:   &v,
+		})
 		require.NoError(t, err)
-		require.EqualValues(t, &artifact.Artifact{
-			Data:     []byte("Hi, World!" + strconv.Itoa(i)),
-			MimeType: "text/plain",
-			Name:     userScopeKey,
-		}, a)
+		got, err := io.ReadAll(out.Body)
+		require.NoError(t, err)
+		require.NoError(t, out.Body.Close())
+		require.EqualValues(t, artifacts[i], got)
 	}
 
-	keys, err := s.ListArtifactKeys(context.Background(), sessionInfo)
+	items, err := s.List(context.Background(), &artifact.ListRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: "", // user scope
+	})
 	require.NoError(t, err)
-	require.ElementsMatch(t, []string{userScopeKey}, keys)
+	require.Len(t, items.Items, 1)
+	require.Equal(t, name, items.Items[0].Name)
 
-	err = s.DeleteArtifact(context.Background(), sessionInfo, userScopeKey)
+	_, err = s.Delete(context.Background(), &artifact.DeleteRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
 	require.NoError(t, err)
 
-	keys, err = s.ListArtifactKeys(context.Background(), sessionInfo)
+	items, err = s.List(context.Background(), &artifact.ListRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: "",
+	})
 	require.NoError(t, err)
-	require.Empty(t, keys)
+	require.Empty(t, items.Items)
 
-	version, err = s.ListVersions(context.Background(), sessionInfo, userScopeKey)
-	require.NoError(t, err)
-	require.Empty(t, version)
+	_, err = s.Versions(context.Background(), &artifact.VersionsRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
+	require.Error(t, err)
+	require.True(t, errors.Is(err, artifact.ErrNotFound))
 
-	a, err = s.LoadArtifact(context.Background(), sessionInfo, userScopeKey, nil)
-	require.NoError(t, err)
-	require.Nil(t, a)
+	_, err = s.Open(context.Background(), &artifact.OpenRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
+	require.Error(t, err)
+	require.True(t, errors.Is(err, artifact.ErrNotFound))
 }

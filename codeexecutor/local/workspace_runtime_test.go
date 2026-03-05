@@ -24,7 +24,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
@@ -715,9 +714,11 @@ func TestRuntime_StageInputs_ArtifactAndLinks(t *testing.T) {
 	// Prepare artifact service in context and save an artifact.
 	svc := inmemory.NewService()
 	actx := codeexecutor.WithArtifactService(ctx, svc)
-	actx = codeexecutor.WithArtifactSession(
-		actx, artifact.SessionInfo{AppName: "a", UserID: "u", SessionID: "s"},
-	)
+	actx = codeexecutor.WithArtifactBaseKey(actx, codeexecutor.ArtifactBaseKey{
+		AppName:   "a",
+		UserID:    "u",
+		SessionID: "s",
+	})
 	_, err = codeexecutor.SaveArtifactHelper(
 		actx, "a.txt", []byte("AX"), "text/plain",
 	)
@@ -742,7 +743,7 @@ func TestRuntime_StageInputs_ArtifactAndLinks(t *testing.T) {
 		actx, "uploads/b.txt", []byte("BX"), "text/plain",
 	)
 	require.NoError(t, err)
-	ref := fmt.Sprintf("artifact://uploads/b.txt@%d", ver)
+	ref := fmt.Sprintf("artifact://uploads/b.txt@%s", string(ver))
 	err = rt.StageInputs(actx, ws, []codeexecutor.InputSpec{{
 		From: ref,
 		Mode: "copy",
@@ -866,9 +867,11 @@ func TestRuntime_CollectOutputs_SaveAndInline(t *testing.T) {
 	// Attach artifact service to save outputs.
 	svc := inmemory.NewService()
 	actx := codeexecutor.WithArtifactService(ctx, svc)
-	actx = codeexecutor.WithArtifactSession(
-		actx, artifact.SessionInfo{AppName: "a", UserID: "u", SessionID: "s"},
-	)
+	actx = codeexecutor.WithArtifactBaseKey(actx, codeexecutor.ArtifactBaseKey{
+		AppName:   "a",
+		UserID:    "u",
+		SessionID: "s",
+	})
 	mf, err := rt.CollectOutputs(actx, ws, codeexecutor.OutputSpec{
 		Globs:         []string{filepath.Join(codeexecutor.DirOut, "*")},
 		Inline:        true,

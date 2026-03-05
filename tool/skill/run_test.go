@@ -288,8 +288,8 @@ func TestRunTool_StateDelta_EmitsArtifactRefs(t *testing.T) {
 	rt := &RunTool{}
 	out := runOutput{
 		ArtifactFiles: []artifactRef{
-			{Name: "out/a.txt", Version: 3},
-			{Name: "out/b.txt", Version: 0},
+			{Name: "out/a.txt", Version: "3"},
+			{Name: "out/b.txt", Version: "0"},
 		},
 	}
 	b, err := json.Marshal(out)
@@ -309,7 +309,7 @@ func TestRunTool_StateDelta_EdgeCases(t *testing.T) {
 
 	t.Run("empty toolCallID returns nil", func(t *testing.T) {
 		delta := rt.StateDelta("   ", nil, []byte(
-			`{"artifact_files":[{"name":"out/a.txt","version":0}]}`,
+			`{"artifact_files":[{"name":"out/a.txt","version":"0"}]}`,
 		))
 		require.Nil(t, delta)
 	})
@@ -339,11 +339,11 @@ func TestRunTool_StateDelta_EdgeCases(t *testing.T) {
 		require.Nil(t, delta)
 	})
 
-	t.Run("trims toolCallID and filters invalid entries", func(t *testing.T) {
+	t.Run("trims toolCallID and filters invalid entries(empty name or version)", func(t *testing.T) {
 		input := `{"artifact_files":[` +
-			`{"name":"  out/a.txt  ","version":1},` +
-			`{"name":"","version":2},` +
-			`{"name":"x","version":-1}` +
+			`{"name":"  out/a.txt  ","version":"1"},` +
+			`{"name":"","version":"2"},` +
+			`{"name":"x","version":""}` +
 			`]}`
 		delta := rt.StateDelta(" call-1 ", nil, []byte(input))
 		require.Len(t, delta, 1)
@@ -357,7 +357,7 @@ func TestRunTool_StateDelta_EdgeCases(t *testing.T) {
 		require.Len(t, got.Artifacts, 1)
 		require.Equal(t, artifactStateRef{
 			Name:    "out/a.txt",
-			Version: 1,
+			Version: "1",
 			Ref:     "artifact://out/a.txt@1",
 		}, got.Artifacts[0])
 	})
@@ -799,7 +799,7 @@ func TestRunTool_SaveAsArtifacts_AndOmitInline(t *testing.T) {
 	require.Equal(t, 0, out.ExitCode)
 	require.Len(t, out.ArtifactFiles, 1)
 	require.Equal(t, outATxt, out.ArtifactFiles[0].Name)
-	require.Equal(t, 0, out.ArtifactFiles[0].Version)
+	require.NotEmpty(t, out.ArtifactFiles[0].Version)
 	// OmitInline should clear inline file contents.
 	require.Len(t, out.OutputFiles, 1)
 	require.Equal(t, "", out.OutputFiles[0].Content)
@@ -1035,11 +1035,12 @@ func TestRunTool_ForceSaveArtifacts_OutputsSpec(t *testing.T) {
 	require.NoError(t, err)
 
 	svc := inmemory.NewService()
+	sess := &session.Session{
+		AppName: "app", UserID: "u", ID: "s1",
+		State: session.StateMap{},
+	}
 	inv := agent.NewInvocation(
-		agent.WithInvocationSession(&session.Session{
-			AppName: "app", UserID: "u", ID: "s1",
-			State: session.StateMap{},
-		}),
+		agent.WithInvocationSession(sess),
 		agent.WithInvocationArtifactService(svc),
 	)
 	ctx := agent.NewInvocationContext(context.Background(), inv)
@@ -1051,19 +1052,14 @@ func TestRunTool_ForceSaveArtifacts_OutputsSpec(t *testing.T) {
 	require.Len(t, out.ArtifactFiles, 1)
 	savedName := "pref/" + outATxt
 	require.Equal(t, savedName, out.ArtifactFiles[0].Name)
-	got, err := svc.LoadArtifact(
-		ctx,
-		artifact.SessionInfo{
-			AppName:   "app",
-			UserID:    "u",
-			SessionID: "s1",
-		},
-		savedName,
-		nil,
-	)
+	got, _, err := artifact.ReadAll(ctx, svc, &artifact.OpenRequest{
+		AppName:   sess.AppName,
+		UserID:    sess.UserID,
+		SessionID: sess.ID,
+		Name:      savedName,
+	})
 	require.NoError(t, err)
-	require.NotNil(t, got)
-	require.Contains(t, string(got.Data), contentHi)
+	require.Contains(t, string(got), contentHi)
 }
 
 func TestRunTool_ForceSaveArtifacts_OutputsSpec_NoService(t *testing.T) {
@@ -1214,34 +1210,46 @@ func TestRunTool_OutputsSpec_AcceptsSnakeCaseJSON(t *testing.T) {
 // errArtifactService always fails on save to cover error path.
 type errArtifactService struct{}
 
-func (e *errArtifactService) SaveArtifact(
-	ctx context.Context, sessionInfo artifact.SessionInfo,
-	filename string, a *artifact.Artifact,
-) (int, error) {
-	return 0, fmt.Errorf("forced-error")
+func (e *errArtifactService) Put(ctx context.Context, req *artifact.PutRequest, opts ...artifact.PutOption) (*artifact.PutResponse, error) {
+	_ = ctx
+	_ = req
+	_ = opts
+	return nil, fmt.Errorf("forced-error")
 }
-func (e *errArtifactService) LoadArtifact(
-	ctx context.Context, sessionInfo artifact.SessionInfo,
-	filename string, version *int,
-) (*artifact.Artifact, error) {
-	return nil, nil
+
+func (e *errArtifactService) Head(ctx context.Context, req *artifact.HeadRequest, opts ...artifact.HeadOption) (*artifact.HeadResponse, error) {
+	_ = ctx
+	_ = req
+	_ = opts
+	return nil, artifact.ErrNotFound
 }
-func (e *errArtifactService) ListArtifactKeys(
-	ctx context.Context, sessionInfo artifact.SessionInfo,
-) ([]string, error) {
-	return nil, nil
+
+func (e *errArtifactService) Open(ctx context.Context, req *artifact.OpenRequest, opts ...artifact.OpenOption) (*artifact.OpenResponse, error) {
+	_ = ctx
+	_ = req
+	_ = opts
+	return nil, artifact.ErrNotFound
 }
-func (e *errArtifactService) DeleteArtifact(
-	ctx context.Context, sessionInfo artifact.SessionInfo,
-	filename string,
-) error {
-	return nil
+
+func (e *errArtifactService) List(ctx context.Context, req *artifact.ListRequest, opts ...artifact.ListOption) (*artifact.ListResponse, error) {
+	_ = ctx
+	_ = req
+	_ = opts
+	return &artifact.ListResponse{}, nil
 }
-func (e *errArtifactService) ListVersions(
-	ctx context.Context, sessionInfo artifact.SessionInfo,
-	filename string,
-) ([]int, error) {
-	return nil, nil
+
+func (e *errArtifactService) Delete(ctx context.Context, req *artifact.DeleteRequest, opts ...artifact.DeleteOption) (*artifact.DeleteResponse, error) {
+	_ = ctx
+	_ = req
+	_ = opts
+	return &artifact.DeleteResponse{Deleted: false}, nil
+}
+
+func (e *errArtifactService) Versions(ctx context.Context, req *artifact.VersionsRequest, opts ...artifact.VersionsOption) (*artifact.VersionsResponse, error) {
+	_ = ctx
+	_ = req
+	_ = opts
+	return nil, artifact.ErrNotFound
 }
 
 func TestRunTool_SaveAsArtifacts_SaveError(t *testing.T) {
@@ -2439,29 +2447,22 @@ func TestRunTool_StagesUserFileInputs_ArtifactRef_OK(t *testing.T) {
 		ID:      "s1",
 		State:   session.StateMap{},
 	}
-	info := artifact.SessionInfo{
+	const artifactName = "uploads/notes.txt"
+	desc, err := svc.Put(context.Background(), &artifact.PutRequest{
 		AppName:   sess.AppName,
 		UserID:    sess.UserID,
 		SessionID: sess.ID,
-	}
-	const artifactName = "uploads/notes.txt"
-	ver, err := svc.SaveArtifact(
-		context.Background(),
-		info,
-		artifactName,
-		&artifact.Artifact{
-			Data:     []byte(contentHi),
-			MimeType: "text/plain",
-			Name:     artifactName,
-		},
-	)
+		Name:      artifactName,
+		Body:      strings.NewReader(contentHi),
+		MimeType:  "text/plain",
+	})
 	require.NoError(t, err)
 
 	ref := fmt.Sprintf(
-		"%s%s@%d",
+		"%s%s@%s",
 		fileref.ArtifactPrefix,
 		artifactName,
-		ver,
+		desc.Version,
 	)
 	user := model.NewUserMessage("upload")
 	user.AddFileIDWithName(ref, uploadNotesTxt)
@@ -2515,29 +2516,22 @@ func TestRunTool_StagesUserFileInputs_ArtifactRef_InfersName(t *testing.T) {
 		ID:      "s1",
 		State:   session.StateMap{},
 	}
-	info := artifact.SessionInfo{
+	const artifactName = "uploads/notes.txt"
+	desc, err := svc.Put(context.Background(), &artifact.PutRequest{
 		AppName:   sess.AppName,
 		UserID:    sess.UserID,
 		SessionID: sess.ID,
-	}
-	const artifactName = "uploads/notes.txt"
-	ver, err := svc.SaveArtifact(
-		context.Background(),
-		info,
-		artifactName,
-		&artifact.Artifact{
-			Data:     []byte(contentHi),
-			MimeType: "text/plain",
-			Name:     artifactName,
-		},
-	)
+		Name:      artifactName,
+		Body:      strings.NewReader(contentHi),
+		MimeType:  "text/plain",
+	})
 	require.NoError(t, err)
 
 	ref := fmt.Sprintf(
-		"%s%s@%d",
+		"%s%s@%s",
 		fileref.ArtifactPrefix,
 		artifactName,
-		ver,
+		string(desc.Version),
 	)
 	user := model.NewUserMessage("upload")
 	user.AddFileID(ref)
@@ -2655,7 +2649,7 @@ func TestFileNameFromArtifactRef_EdgeCases(t *testing.T) {
 	require.Equal(t, "", fileNameFromArtifactRef("file-123"))
 
 	invalidVer := fileref.ArtifactPrefix + "a@x"
-	require.Equal(t, "", fileNameFromArtifactRef(invalidVer))
+	require.Equal(t, "a", fileNameFromArtifactRef(invalidVer))
 
 	invalidBase := fileref.ArtifactPrefix + "..@0"
 	require.Equal(t, "", fileNameFromArtifactRef(invalidBase))
@@ -2959,7 +2953,7 @@ func TestUserFileInputBytes(t *testing.T) {
 		)
 		ctx := agent.NewInvocationContext(context.Background(), inv)
 		f := model.File{
-			FileID: fileref.ArtifactPrefix + "uploads/x.txt@x",
+			FileID: fileref.ArtifactPrefix + "uploads/x.txt@",
 		}
 		_, _, warn := userFileInputBytes(
 			ctx,
@@ -2977,28 +2971,21 @@ func TestUserFileInputBytes(t *testing.T) {
 			ID:      "s1",
 			State:   session.StateMap{},
 		}
-		info := artifact.SessionInfo{
+		const artifactName = "uploads/notes.txt"
+		desc, err := svc.Put(context.Background(), &artifact.PutRequest{
 			AppName:   sess.AppName,
 			UserID:    sess.UserID,
 			SessionID: sess.ID,
-		}
-		const artifactName = "uploads/notes.txt"
-		ver, err := svc.SaveArtifact(
-			context.Background(),
-			info,
-			artifactName,
-			&artifact.Artifact{
-				Data:     []byte(contentHi),
-				MimeType: "text/plain",
-				Name:     artifactName,
-			},
-		)
+			Name:      artifactName,
+			Body:      strings.NewReader(contentHi),
+			MimeType:  "text/plain",
+		})
 		require.NoError(t, err)
 		ref := fmt.Sprintf(
-			"%s%s@%d",
+			"%s%s@%s",
 			fileref.ArtifactPrefix,
 			artifactName,
-			ver,
+			desc.Version,
 		)
 		inv := agent.NewInvocation(
 			agent.WithInvocationSession(sess),
@@ -3456,7 +3443,7 @@ func TestMergeManifestArtifactRefs_Appends(t *testing.T) {
 		Files: []codeexecutor.FileRef{{
 			Name:     "out/a.txt",
 			SavedAs:  "prefix-out/a.txt",
-			Version:  2,
+			Version:  artifact.VersionID("2"),
 			MIMEType: "text/plain",
 		}},
 	}
@@ -3464,7 +3451,7 @@ func TestMergeManifestArtifactRefs_Appends(t *testing.T) {
 	mergeManifestArtifactRefs(mf, out)
 	require.Len(t, out.ArtifactFiles, 1)
 	require.Equal(t, "prefix-out/a.txt", out.ArtifactFiles[0].Name)
-	require.Equal(t, 2, out.ArtifactFiles[0].Version)
+	require.Equal(t, artifact.VersionID("2"), out.ArtifactFiles[0].Version)
 }
 
 // Test that workspace persists across calls within the same session,

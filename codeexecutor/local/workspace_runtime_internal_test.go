@@ -16,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
 
@@ -60,8 +61,9 @@ func TestCopyPath_FileAndDir(t *testing.T) {
 	require.Equal(t, "y", string(b))
 }
 
-func intPtr(v int) *int {
-	return &v
+func verPtr(v string) *artifact.VersionID {
+	vid := artifact.VersionID(v)
+	return &vid
 }
 
 func TestPinnedArtifactVersion(t *testing.T) {
@@ -74,17 +76,17 @@ func TestPinnedArtifactVersion(t *testing.T) {
 			From:     inputSchemeArtifact + name + "@1",
 			To:       to,
 			Resolved: "other",
-			Version:  intPtr(1),
+			Version:  verPtr("1"),
 		}, {
 			From:     inputSchemeArtifact + name + "@bad",
 			To:       to,
 			Resolved: "other",
-			Version:  intPtr(2),
+			Version:  verPtr("bad"),
 		}, {
 			From:     inputSchemeHost + "/tmp/x",
 			To:       to,
 			Resolved: "other",
-			Version:  intPtr(3),
+			Version:  verPtr("3"),
 		}, {
 			From:     inputSchemeArtifact + name + "@1",
 			To:       to,
@@ -94,12 +96,12 @@ func TestPinnedArtifactVersion(t *testing.T) {
 			From:     inputSchemeArtifact + name + "@1",
 			To:       "work/inputs/other.txt",
 			Resolved: "other",
-			Version:  intPtr(4),
+			Version:  verPtr("4"),
 		}},
 	}
 	got := pinnedArtifactVersion(md, name, to)
 	require.NotNil(t, got)
-	require.Equal(t, 1, *got)
+	require.Equal(t, artifact.VersionID("bad"), *got)
 
 	require.Nil(t, pinnedArtifactVersion(md, "", to))
 	require.Nil(t, pinnedArtifactVersion(md, name, ""))
@@ -115,10 +117,10 @@ func TestPinnedArtifactVersion_ResolvedMatch(t *testing.T) {
 			From:     inputSchemeArtifact + name + "@1",
 			To:       to,
 			Resolved: name,
-			Version:  intPtr(9),
+			Version:  verPtr("9"),
 		}},
 	}
 	got := pinnedArtifactVersion(md, name, to)
 	require.NotNil(t, got)
-	require.Equal(t, 9, *got)
+	require.Equal(t, artifact.VersionID("9"), *got)
 }

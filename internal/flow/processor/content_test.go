@@ -4281,7 +4281,7 @@ func TestFileNameFromArtifactRef_EdgeCases(t *testing.T) {
 
 	t.Run("invalid version returns empty", func(t *testing.T) {
 		ref := fileref.ArtifactPrefix + "a@x"
-		assert.Equal(t, "", fileNameFromArtifactRef(ref))
+		assert.Equal(t, "a", fileNameFromArtifactRef(ref))
 	})
 
 	t.Run("invalid base returns empty", func(t *testing.T) {

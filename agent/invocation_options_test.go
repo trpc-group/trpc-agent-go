@@ -11,7 +11,9 @@ package agent
 
 import (
 	"context"
+	"io"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -436,22 +438,48 @@ func (m *mockMemoryService) Close() error {
 
 type mockArtifactService struct{}
 
-func (m *mockArtifactService) SaveArtifact(ctx context.Context, info artifact.SessionInfo, filename string, artifact *artifact.Artifact) (int, error) {
-	return 1, nil
+func (m *mockArtifactService) Put(ctx context.Context, req *artifact.PutRequest, opts ...artifact.PutOption) (*artifact.PutResponse, error) {
+	_ = opts
+	return &artifact.PutResponse{Version: artifact.VersionID("1"), MimeType: req.MimeType}, nil
 }
 
-func (m *mockArtifactService) LoadArtifact(ctx context.Context, info artifact.SessionInfo, filename string, version *int) (*artifact.Artifact, error) {
-	return nil, nil
+func (m *mockArtifactService) Head(ctx context.Context, req *artifact.HeadRequest, opts ...artifact.HeadOption) (*artifact.HeadResponse, error) {
+	_ = opts
+	v := req.Version
+	if v == nil {
+		v0 := artifact.VersionID("1")
+		v = &v0
+	}
+	return &artifact.HeadResponse{Version: *v, MimeType: "text/plain"}, nil
 }
 
-func (m *mockArtifactService) ListArtifactKeys(ctx context.Context, info artifact.SessionInfo) ([]string, error) {
-	return nil, nil
+func (m *mockArtifactService) Open(ctx context.Context, req *artifact.OpenRequest, opts ...artifact.OpenOption) (*artifact.OpenResponse, error) {
+	_ = opts
+	v := req.Version
+	if v == nil {
+		v0 := artifact.VersionID("1")
+		v = &v0
+	}
+	return &artifact.OpenResponse{Body: io.NopCloser(strings.NewReader("")), Version: *v, MimeType: "text/plain"}, nil
 }
 
-func (m *mockArtifactService) DeleteArtifact(ctx context.Context, info artifact.SessionInfo, filename string) error {
-	return nil
+func (m *mockArtifactService) List(ctx context.Context, req *artifact.ListRequest, opts ...artifact.ListOption) (*artifact.ListResponse, error) {
+	_ = ctx
+	_ = req
+	_ = opts
+	return &artifact.ListResponse{}, nil
 }
 
-func (m *mockArtifactService) ListVersions(ctx context.Context, info artifact.SessionInfo, filename string) ([]int, error) {
-	return nil, nil
+func (m *mockArtifactService) Delete(ctx context.Context, req *artifact.DeleteRequest, opts ...artifact.DeleteOption) (*artifact.DeleteResponse, error) {
+	_ = ctx
+	_ = req
+	_ = opts
+	return &artifact.DeleteResponse{Deleted: true}, nil
+}
+
+func (m *mockArtifactService) Versions(ctx context.Context, req *artifact.VersionsRequest, opts ...artifact.VersionsOption) (*artifact.VersionsResponse, error) {
+	_ = ctx
+	_ = req
+	_ = opts
+	return &artifact.VersionsResponse{Versions: []artifact.VersionID{"1"}}, nil
 }

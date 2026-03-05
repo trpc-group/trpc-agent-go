@@ -20,7 +20,6 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
-	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	artifactinmemory "trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
@@ -652,13 +651,12 @@ func TestFileTool_ReadFile_ArtifactRef(t *testing.T) {
 	inv.ArtifactService = svc
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 
-	info := artifact.SessionInfo{
+	ctxIO := codeexecutor.WithArtifactService(ctx, svc)
+	ctxIO = codeexecutor.WithArtifactBaseKey(ctxIO, codeexecutor.ArtifactBaseKey{
 		AppName:   sess.AppName,
 		UserID:    sess.UserID,
 		SessionID: sess.ID,
-	}
-	ctxIO := codeexecutor.WithArtifactService(ctx, svc)
-	ctxIO = codeexecutor.WithArtifactSession(ctxIO, info)
+	})
 	_, err = codeexecutor.SaveArtifactHelper(
 		ctxIO,
 		"x.txt",

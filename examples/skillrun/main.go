@@ -16,10 +16,13 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"mime"
 	"net/http"
 	"os"
@@ -536,34 +539,27 @@ func (c *skillChat) handleUploadArtifact(
 	}
 	name := artifactUploadPrefix + uuid.NewString() + "_" +
 		base
-	info := artifact.SessionInfo{
+	mt := guessMimeType(base, data)
+	desc, err := c.artSvc.Put(ctx, &artifact.PutRequest{
 		AppName:   appName,
 		UserID:    c.userID,
 		SessionID: c.sessionID,
-	}
-	mt := guessMimeType(base, data)
-	ver, err := c.artSvc.SaveArtifact(
-		ctx,
-		info,
-		name,
-		&artifact.Artifact{
-			Data:     data,
-			MimeType: mt,
-			Name:     base,
-		},
-	)
+		Name:      name,
+		Body:      bytes.NewReader(data),
+		MimeType:  mt,
+	})
 	if err != nil {
 		return err
 	}
 	ref := fmt.Sprintf(
-		"%s%s@%d",
+		"%s%s@%s",
 		artifactRefPrefix,
 		name,
-		ver,
+		desc.Version,
 	)
 	msg := model.NewUserMessage("Uploaded file: " + base)
 	msg.AddFileIDWithName(ref, base)
-	fmt.Printf("📤 Uploaded to %s@%d\n", name, ver)
+	fmt.Printf("📤 Uploaded to %s@%s\n", name, desc.Version)
 	return c.processModelMessage(ctx, msg)
 }
 
@@ -601,31 +597,42 @@ func (c *skillChat) handlePull(text string) error {
 		return fmt.Errorf("usage: /pull <name> [version]")
 	}
 	name := fields[1]
-	var verPtr *int
+	var verPtr *artifact.VersionID
 	if len(fields) >= 3 {
-		if v, err := parseInt(fields[2]); err == nil {
+		v := artifact.VersionID(strings.TrimSpace(fields[2]))
+		if v != "" && !strings.EqualFold(string(v), "latest") {
 			verPtr = &v
 		}
 	}
-	si := artifact.SessionInfo{
-		AppName: appName, UserID: c.userID, SessionID: c.sessionID,
-	}
-	art, err := c.artSvc.LoadArtifact(context.Background(), si, name, verPtr)
+	resp, err := c.artSvc.Open(context.Background(), &artifact.OpenRequest{
+		AppName:   appName,
+		UserID:    c.userID,
+		SessionID: c.sessionID,
+		Name:      name,
+		Version:   verPtr,
+	})
 	if err != nil {
+		if errors.Is(err, artifact.ErrNotFound) {
+			return fmt.Errorf("artifact not found: %s", name)
+		}
 		return err
 	}
-	if art == nil || len(art.Data) == 0 {
-		return fmt.Errorf("artifact not found: %s", name)
-	}
+	defer resp.Body.Close()
 	dir := "downloads"
 	_ = os.MkdirAll(dir, 0o755)
 	out := filepath.Join(dir, filepath.Base(name))
-	if err := os.WriteFile(out, art.Data, 0o644); err != nil {
+	f, err := os.OpenFile(out, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	written, err := io.Copy(f, resp.Body)
+	_ = f.Close()
+	if err != nil {
 		return err
 	}
 	fmt.Printf(
 		"📥 Saved %s (%d bytes, %s)\n",
-		out, len(art.Data), art.MimeType,
+		out, written, resp.MimeType,
 	)
 	return nil
 }
@@ -635,12 +642,32 @@ func (c *skillChat) handleListArtifacts() error {
 	if c.artSvc == nil {
 		return fmt.Errorf("artifact service not available")
 	}
-	si := artifact.SessionInfo{
-		AppName: appName, UserID: c.userID, SessionID: c.sessionID,
-	}
-	keys, err := c.artSvc.ListArtifactKeys(context.Background(), si)
-	if err != nil {
-		return err
+	limit := 200
+	var (
+		keys      []string
+		pageToken string
+	)
+	for {
+		req := &artifact.ListRequest{
+			AppName:   appName,
+			UserID:    c.userID,
+			SessionID: c.sessionID,
+			Limit:     &limit,
+		}
+		if pageToken != "" {
+			req.PageToken = &pageToken
+		}
+		resp, err := c.artSvc.List(context.Background(), req)
+		if err != nil {
+			return err
+		}
+		for _, it := range resp.Items {
+			keys = append(keys, it.Name)
+		}
+		if resp.NextPageToken == "" {
+			break
+		}
+		pageToken = resp.NextPageToken
 	}
 	if len(keys) == 0 {
 		fmt.Println("(no artifacts)")
@@ -651,17 +678,6 @@ func (c *skillChat) handleListArtifacts() error {
 		fmt.Printf("- %s\n", k)
 	}
 	return nil
-}
-
-func parseInt(s string) (int, error) {
-	var n int
-	for _, ch := range s {
-		if ch < '0' || ch > '9' {
-			return 0, fmt.Errorf("invalid int: %s", s)
-		}
-		n = n*10 + int(ch-'0')
-	}
-	return n, nil
 }
 
 func (c *skillChat) handleEvent(
@@ -715,15 +731,15 @@ func (c *skillChat) handleToolResponses(ev *event.Event) bool {
 				// Try to surface artifact refs if present.
 				var v struct {
 					ArtifactFiles []struct {
-						Name    string `json:"name"`
-						Version int    `json:"version"`
+						Name    string             `json:"name"`
+						Version artifact.VersionID `json:"version"`
 					} `json:"artifact_files"`
 				}
 				if json.Unmarshal([]byte(ch.Message.Content), &v) == nil &&
 					len(v.ArtifactFiles) > 0 {
 					fmt.Printf("   Saved artifacts:\n")
 					for _, a := range v.ArtifactFiles {
-						fmt.Printf("   - %s (v%d)\n", a.Name, a.Version)
+						fmt.Printf("   - %s (@%s)\n", a.Name, a.Version)
 					}
 				}
 				has = true

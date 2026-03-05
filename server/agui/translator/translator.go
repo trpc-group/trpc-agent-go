@@ -19,6 +19,7 @@ import (
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/google/uuid"
+	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	agentevent "trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -133,9 +134,9 @@ func (t *translator) Translate(ctx context.Context, event *agentevent.Event) ([]
 }
 
 type artifactRef struct {
-	Name    string `json:"name"`
-	Version int    `json:"version"`
-	Ref     string `json:"ref"`
+	Name    string             `json:"name"`
+	Version artifact.VersionID `json:"version"`
+	Ref     string             `json:"ref"`
 }
 
 type skillRunArtifactsDelta struct {
