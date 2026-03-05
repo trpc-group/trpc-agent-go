@@ -674,6 +674,22 @@ func (m *Model) convertUserMessageContent(
 		contentParts []openai.ChatCompletionContentPartUnionParam
 		extraFields  map[string]any
 	)
+	mainTextEmpty := strings.TrimSpace(msg.Content) == ""
+	fileHint := ""
+	if mainTextEmpty &&
+		(m.omitFileContentParts ||
+			m.variantConfig.skipFileTypeInContent) {
+		hasNonFile := false
+		for _, part := range msg.ContentParts {
+			if part.Type != model.ContentTypeFile {
+				hasNonFile = true
+				break
+			}
+		}
+		if !hasNonFile {
+			fileHint = fileHintForContentParts(msg.ContentParts)
+		}
+	}
 	// Add Content as a text part if present.
 	if msg.Content != "" {
 		contentParts = append(
@@ -681,6 +697,16 @@ func (m *Model) convertUserMessageContent(
 			openai.ChatCompletionContentPartUnionParam{
 				OfText: &openai.ChatCompletionContentPartTextParam{
 					Text: msg.Content,
+				},
+			},
+		)
+	}
+	if fileHint != "" {
+		contentParts = append(
+			contentParts,
+			openai.ChatCompletionContentPartUnionParam{
+				OfText: &openai.ChatCompletionContentPartTextParam{
+					Text: fileHint,
 				},
 			},
 		)
@@ -720,9 +746,47 @@ func (m *Model) convertUserMessageContent(
 			OfString: openai.String(msg.Content),
 		}, nil
 	}
+	if extraFields == nil && fileHint != "" && msg.Content == "" &&
+		len(contentParts) == 1 &&
+		contentParts[0].OfText != nil &&
+		contentParts[0].OfText.Text == fileHint {
+		return openai.ChatCompletionUserMessageParamContentUnion{
+			OfString: openai.String(fileHint),
+		}, nil
+	}
 	return openai.ChatCompletionUserMessageParamContentUnion{
 		OfArrayOfContentParts: contentParts,
 	}, extraFields
+}
+
+func fileHintForContentParts(parts []model.ContentPart) string {
+	const (
+		fileHintDefaultName = "attachment"
+		fileHintSingleFmt   = "Uploaded file: %s (available to tools)."
+		fileHintMultiFmt    = "Uploaded files: %s (available to tools)."
+	)
+
+	var names []string
+	for _, part := range parts {
+		if part.Type != model.ContentTypeFile || part.File == nil {
+			continue
+		}
+		name := strings.TrimSpace(part.File.Name)
+		if name == "" {
+			name = strings.TrimSpace(part.File.FileID)
+		}
+		if name == "" {
+			name = fileHintDefaultName
+		}
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	if len(names) == 1 {
+		return fmt.Sprintf(fileHintSingleFmt, names[0])
+	}
+	return fmt.Sprintf(fileHintMultiFmt, strings.Join(names, ", "))
 }
 
 // convertAssistantMessageContent converts message content to assistant message content union.

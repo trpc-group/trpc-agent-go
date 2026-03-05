@@ -3109,6 +3109,17 @@ func TestConvertUserMessageContent_OmitFileContentParts(t *testing.T) {
 		"expected no content parts")
 }
 
+func TestConvertUserMessageContent_OmitFileContentParts_FileOnly(t *testing.T) {
+	m := New("test-model", WithOmitFileContentParts(true))
+	msg := model.Message{Role: model.RoleUser}
+	msg.AddFileData("report.pdf", []byte("%PDF-1.4"), "application/pdf")
+
+	content, extraFields := m.convertUserMessageContent(msg)
+	assert.Empty(t, extraFields, "expected no extra fields")
+	require.True(t, content.OfString.Valid(), "expected string content")
+	assert.Contains(t, content.OfString.Value, "report.pdf")
+}
+
 // TestBuildChatRequest_EdgeCases tests edge cases in buildChatRequest.
 func TestBuildChatRequest_EdgeCases(t *testing.T) {
 	m := New("gpt-3.5-turbo", WithAPIKey("test-key"))
