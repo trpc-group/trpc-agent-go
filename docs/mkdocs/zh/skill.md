@@ -836,7 +836,9 @@ agent := llmagent.New(
     - `workspace://rel/path` 从当前工作区相对路径复制/链接
     - `skill://<name>/rel/path` 从已缓存的技能目录复制/链接
   - `to`：目的路径（相对工作区）。未指定时默认写到
-    `WORK_DIR/inputs/<basename>`。
+    `WORK_DIR/inputs/<basename>`。为了方便，`skill_run` 也支持
+    `to` 以 `inputs/` 开头的写法，会被视为 `work/inputs/`
+    （因为技能根目录下 `inputs/` 是指向 `work/inputs/` 的软链）。
   - `mode`：`copy`（默认）或 `link`（在可行时建立符号链接）。
   - `pin`：当 `from=artifact://name` 未指定 `@version` 时，
     尝试复用同一 `to` 路径第一次解析到的版本（best effort）。
