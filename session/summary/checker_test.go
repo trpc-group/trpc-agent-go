@@ -266,6 +266,30 @@ func TestCheckTokenThreshold(t *testing.T) {
 		assert.False(t, checker(sess))
 	})
 
+	t.Run("branch scope includes sub-agent-only tokens", func(t *testing.T) {
+		const appName = "my-app"
+		checker := CheckTokenThreshold(100)
+		sess := &session.Session{
+			AppName: appName,
+			State: session.StateMap{
+				summaryScopeStateKey: []byte(summaryScopeBranch),
+			},
+			Events: []event.Event{
+				{
+					Author:    "assistant",
+					FilterKey: "child-agent-xyz",
+					Timestamp: time.Now(),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{
+							Content: strings.Repeat("a", 1200),
+						},
+					}}},
+				},
+			},
+		}
+		assert.True(t, checker(sess))
+	})
+
 	t.Run("tokens equal threshold does not trigger", func(t *testing.T) {
 		const contentLen = 200
 		sess := &session.Session{Events: []event.Event{
@@ -493,6 +517,35 @@ func TestCheckTokenThreshold(t *testing.T) {
 		// Empty FilterKey ignored in mixed detection → single
 		// non-empty key → triggers.
 		assert.True(t, checker(sess))
+	})
+}
+
+func TestGetSummaryScope(t *testing.T) {
+	t.Run("nil session", func(t *testing.T) {
+		assert.Equal(t, "", getSummaryScope(nil))
+	})
+
+	t.Run("missing state key", func(t *testing.T) {
+		sess := &session.Session{}
+		assert.Equal(t, "", getSummaryScope(sess))
+	})
+
+	t.Run("valid full scope", func(t *testing.T) {
+		sess := &session.Session{
+			State: session.StateMap{
+				summaryScopeStateKey: []byte(summaryScopeFull),
+			},
+		}
+		assert.Equal(t, summaryScopeFull, getSummaryScope(sess))
+	})
+
+	t.Run("invalid scope value", func(t *testing.T) {
+		sess := &session.Session{
+			State: session.StateMap{
+				summaryScopeStateKey: []byte("unknown"),
+			},
+		}
+		assert.Equal(t, "", getSummaryScope(sess))
 	})
 }
 
