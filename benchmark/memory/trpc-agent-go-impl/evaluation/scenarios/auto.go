@@ -30,7 +30,7 @@ import (
 const (
 	autoAppName = "memory-eval-auto"
 
-	autoQAMaxTokens         = 75
+	autoQAMaxTokens         = 50
 	autoQAMaxToolIterations = 10
 )
 

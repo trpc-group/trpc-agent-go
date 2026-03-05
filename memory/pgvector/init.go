@@ -45,6 +45,19 @@ const (
 	sqlCreateKindIndexPattern         = "CREATE INDEX IF NOT EXISTS %s ON %s(app_name, user_id, memory_kind)"
 	sqlCreateParticipantsIndexPattern = "CREATE INDEX IF NOT EXISTS %s ON %s USING gin(participants) WHERE participants IS NOT NULL"
 
+	sqlAddSearchVectorColumn         = "ALTER TABLE %s ADD COLUMN IF NOT EXISTS search_vector tsvector"
+	sqlCreateSearchVectorIndex       = "CREATE INDEX IF NOT EXISTS %s ON %s USING gin(search_vector)"
+	sqlBackfillSearchVector          = "UPDATE %s SET search_vector = to_tsvector('english', coalesce(memory_content, '')) WHERE search_vector IS NULL"
+	sqlCreateSearchVectorTriggerFunc = `CREATE OR REPLACE FUNCTION %s_search_vector_update() RETURNS trigger AS $$
+BEGIN
+  NEW.search_vector := to_tsvector('english', coalesce(NEW.memory_content, ''));
+  RETURN NEW;
+END
+$$ LANGUAGE plpgsql`
+	sqlAttachSearchVectorTrigger = "DROP TRIGGER IF EXISTS tsvector_update ON %s; " +
+		"CREATE TRIGGER tsvector_update BEFORE INSERT OR UPDATE ON %s " +
+		"FOR EACH ROW EXECUTE FUNCTION %s_search_vector_update()"
+
 	sqlCreateHNSWIndexPattern = "CREATE INDEX IF NOT EXISTS %s ON %s USING hnsw " +
 		"(embedding vector_cosine_ops) WITH (m = %d, ef_construction = %d)"
 )
@@ -168,6 +181,7 @@ func (s *Service) initDB(ctx context.Context) error {
 		indexSuffixEventTime    = "event_time"
 		indexSuffixKind         = "kind"
 		indexSuffixParticipants = "participants"
+		indexSuffixSearchVector = "search_vector"
 	)
 
 	// Create regular indexes.
@@ -201,6 +215,44 @@ func (s *Service) initDB(ctx context.Context) error {
 			err)
 	}
 	log.InfofContext(ctx, "created HNSW index on table %s", fullTableName)
+
+	// Add search_vector column for full-text search (hybrid search support).
+	addTSVCol := fmt.Sprintf(sqlAddSearchVectorColumn, fullTableName)
+	if _, err := s.db.ExecContext(ctx, addTSVCol); err != nil {
+		return fmt.Errorf("add search_vector column on table %s failed: %w",
+			fullTableName, err)
+	}
+
+	// Create trigger function to auto-populate search_vector on insert/update.
+	triggerFuncSQL := fmt.Sprintf(sqlCreateSearchVectorTriggerFunc, baseTableName)
+	if _, err := s.db.ExecContext(ctx, triggerFuncSQL); err != nil {
+		return fmt.Errorf("create tsvector trigger function for %s failed: %w",
+			fullTableName, err)
+	}
+
+	// Attach trigger to table.
+	triggerSQL := fmt.Sprintf(sqlAttachSearchVectorTrigger,
+		fullTableName, fullTableName, baseTableName)
+	if _, err := s.db.ExecContext(ctx, triggerSQL); err != nil {
+		return fmt.Errorf("attach tsvector trigger on %s failed: %w",
+			fullTableName, err)
+	}
+
+	// Create GIN index on search_vector for fast full-text search.
+	tsvIndexSQL := buildCreateIndexSQL(s.opts.schema, baseTableName,
+		indexSuffixSearchVector, sqlCreateSearchVectorIndex)
+	if _, err := s.db.ExecContext(ctx, tsvIndexSQL); err != nil {
+		return fmt.Errorf("create search_vector GIN index on %s failed: %w",
+			fullTableName, err)
+	}
+	log.InfofContext(ctx, "created search_vector GIN index on table %s", fullTableName)
+
+	// Backfill search_vector for existing rows that lack it.
+	backfillSQL := fmt.Sprintf(sqlBackfillSearchVector, fullTableName)
+	if _, bfErr := s.db.ExecContext(ctx, backfillSQL); bfErr != nil {
+		log.WarnfContext(ctx, "backfill search_vector on %s (non-fatal): %v",
+			fullTableName, bfErr)
+	}
 
 	log.InfoContext(ctx, "pgvector memory database schema initialized successfully")
 	return nil
