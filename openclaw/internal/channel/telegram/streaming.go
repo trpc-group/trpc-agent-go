@@ -38,7 +38,15 @@ const (
 	processingMessage = "Processing..."
 
 	progressInterval = 2 * time.Second
-	progressMaxEdits = 30
+
+	progressEditIntervalFast     = progressInterval
+	progressEditIntervalMedium   = 10 * time.Second
+	progressEditIntervalSlow     = 30 * time.Second
+	progressEditIntervalVerySlow = time.Minute
+
+	progressEditAfterMedium   = time.Minute
+	progressEditAfterSlow     = 10 * time.Minute
+	progressEditAfterVerySlow = 30 * time.Minute
 )
 
 func parseStreamingMode(raw string) (string, error) {
@@ -252,10 +260,10 @@ func (c *Channel) progressLoop(
 	messageID int,
 ) {
 	start := time.Now()
+	lastEditAt := start.Add(-progressEditIntervalFast)
 	ticker := time.NewTicker(progressInterval)
 	defer ticker.Stop()
 
-	edits := 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -269,12 +277,13 @@ func (c *Channel) progressLoop(
 			Action:          chatActionTyping,
 		})
 
-		if edits >= progressMaxEdits {
+		now := time.Now()
+		elapsed := now.Sub(start).Round(time.Second)
+		if now.Sub(lastEditAt) < progressEditInterval(elapsed) {
 			continue
 		}
-		edits++
+		lastEditAt = now
 
-		elapsed := time.Since(start).Round(time.Second)
 		_ = c.editPreview(
 			ctx,
 			chatID,
@@ -282,6 +291,19 @@ func (c *Channel) progressLoop(
 			fmt.Sprintf("Processing... (%s)", elapsed),
 		)
 	}
+}
+
+func progressEditInterval(elapsed time.Duration) time.Duration {
+	if elapsed >= progressEditAfterVerySlow {
+		return progressEditIntervalVerySlow
+	}
+	if elapsed >= progressEditAfterSlow {
+		return progressEditIntervalSlow
+	}
+	if elapsed >= progressEditAfterMedium {
+		return progressEditIntervalMedium
+	}
+	return progressEditIntervalFast
 }
 
 func (c *Channel) editPreview(
