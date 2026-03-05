@@ -35,12 +35,22 @@ func maybeMigrateLegacySkillState(
 	}
 	inv.SetState(skillsLegacyMigrationStateKey, true)
 
+	hasLoaded := inv.Session.HasStateKeyWithPrefix(
+		skill.StateKeyLoadedPrefix,
+	)
+	hasDocs := inv.Session.HasStateKeyWithPrefix(
+		skill.StateKeyDocsPrefix,
+	)
+	if !hasLoaded && !hasDocs {
+		return
+	}
+
 	state := inv.Session.SnapshotState()
 	if len(state) == 0 {
 		return
 	}
 
-	owners := legacySkillOwners(inv.Session.GetEvents())
+	var owners map[string]string
 	delta := make(map[string][]byte)
 
 	for k, v := range state {
@@ -50,6 +60,9 @@ func maybeMigrateLegacySkillState(
 
 		switch {
 		case strings.HasPrefix(k, skill.StateKeyLoadedPrefix):
+			if owners == nil {
+				owners = legacySkillOwners(inv.Session.GetEvents())
+			}
 			name := strings.TrimPrefix(k, skill.StateKeyLoadedPrefix)
 			migrateLegacyStateKey(
 				inv,
@@ -61,6 +74,9 @@ func maybeMigrateLegacySkillState(
 				skill.LoadedKey,
 			)
 		case strings.HasPrefix(k, skill.StateKeyDocsPrefix):
+			if owners == nil {
+				owners = legacySkillOwners(inv.Session.GetEvents())
+			}
 			name := strings.TrimPrefix(k, skill.StateKeyDocsPrefix)
 			migrateLegacyStateKey(
 				inv,
