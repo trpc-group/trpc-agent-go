@@ -118,7 +118,7 @@ _, _ = sessionService.CreateSession(ctx, session.Key{AppName: app, UserID: user,
 进一步阅读：
 
 - 示例：`examples/placeholder`、`examples/outputkey`
-- Session API：`docs/mkdocs/zh/session.md`
+- Session API：`docs/mkdocs/zh/session/index.md`
 
 ### 使用 Runner 执行 Agent
 
@@ -931,7 +931,7 @@ Memory Service 用于记录用户的偏好信息，支持个性化体验。
 **推荐阅读顺序：**
 
 1. [Runner](runner.md) - 学习推荐的使用方式
-2. [Session](session.md) - 了解会话管理
+2. [Session](session/index.md) - 了解会话管理
 3. [Multi-Agent](multiagent.md) - 学习多 Agent 系统
 
 ## 运行时动态更新 Instruction
