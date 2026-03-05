@@ -116,6 +116,36 @@ func TestNewNodeEvents(t *testing.T) {
 	require.Equal(t, "boom", e3.Response.Error.Message)
 }
 
+func TestNewNodeErrorEvent_WithResponseError(t *testing.T) {
+	const (
+		nodeID = "node-err"
+		errMsg = "boom"
+		code   = "E1"
+	)
+
+	start := time.Now().Add(-time.Second).UTC()
+	end := start.Add(150 * time.Millisecond)
+	codeVal := code
+
+	e := NewNodeErrorEvent(
+		WithNodeEventInvocationID("inv"),
+		WithNodeEventNodeID(nodeID),
+		WithNodeEventNodeType(NodeTypeFunction),
+		WithNodeEventStepNumber(5),
+		WithNodeEventStartTime(start),
+		WithNodeEventEndTime(end),
+		WithNodeEventError(errMsg),
+		WithNodeEventResponseError(&model.ResponseError{Code: &codeVal}),
+	)
+	require.Equal(t, model.ObjectTypeError, e.Object)
+	require.NotNil(t, e.Response)
+	require.NotNil(t, e.Response.Error)
+	require.Equal(t, model.ErrorTypeFlowError, e.Response.Error.Type)
+	require.Equal(t, errMsg, e.Response.Error.Message)
+	require.NotNil(t, e.Response.Error.Code)
+	require.Equal(t, code, *e.Response.Error.Code)
+}
+
 func TestNewToolAndModelEvents(t *testing.T) {
 	start := time.Now().UTC()
 	end := start.Add(10 * time.Millisecond)
@@ -216,6 +246,27 @@ func TestNewPregelAndChannelStateEvents(t *testing.T) {
 	require.NotNil(t, pe.Response.Error)
 	require.Equal(t, model.ErrorTypeFlowError, pe.Response.Error.Type)
 	require.Equal(t, "fail", pe.Response.Error.Message)
+
+	const pregelCode = "E2"
+	pregelCodeVal := pregelCode
+	pe2 := NewPregelErrorEvent(
+		WithPregelEventInvocationID("inv"),
+		WithPregelEventStepNumber(2),
+		WithPregelEventPhase(PregelPhaseError),
+		WithPregelEventStartTime(start),
+		WithPregelEventEndTime(end),
+		WithPregelEventError("fail"),
+		WithPregelEventResponseError(
+			&model.ResponseError{Code: &pregelCodeVal},
+		),
+	)
+	require.Equal(t, ObjectTypeGraphPregelStep, pe2.Object)
+	require.NotNil(t, pe2.Response)
+	require.NotNil(t, pe2.Response.Error)
+	require.Equal(t, model.ErrorTypeFlowError, pe2.Response.Error.Type)
+	require.Equal(t, "fail", pe2.Response.Error.Message)
+	require.NotNil(t, pe2.Response.Error.Code)
+	require.Equal(t, pregelCode, *pe2.Response.Error.Code)
 
 	pi := NewPregelInterruptEvent(
 		WithPregelEventInvocationID("inv"),
