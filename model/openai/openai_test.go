@@ -3120,6 +3120,21 @@ func TestConvertUserMessageContent_OmitFileContentParts_FileOnly(t *testing.T) {
 	assert.Contains(t, content.OfString.Value, "report.pdf")
 }
 
+func TestUserFileHint_EmptyContentParts(t *testing.T) {
+	m := New("test-model", WithOmitFileContentParts(true))
+	msg := model.Message{Role: model.RoleUser}
+
+	hint := m.userFileHint(msg)
+	assert.Empty(t, hint, "expected no hint for empty content parts")
+}
+
+func TestAppendFileID_NilFilePart(t *testing.T) {
+	extraFields := appendFileID(nil, model.ContentPart{
+		Type: model.ContentTypeFile,
+	})
+	assert.Nil(t, extraFields, "expected nil extra fields")
+}
+
 // TestBuildChatRequest_EdgeCases tests edge cases in buildChatRequest.
 func TestBuildChatRequest_EdgeCases(t *testing.T) {
 	m := New("gpt-3.5-turbo", WithAPIKey("test-key"))
