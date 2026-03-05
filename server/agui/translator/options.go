@@ -9,11 +9,12 @@
 
 package translator
 
-// options configures which graph-related AG-UI events the translator emits.
+// options configures which AG-UI events the translator emits.
 type options struct {
 	graphNodeLifecycleActivityEnabled      bool // graphNodeLifecycleActivityEnabled enables graph node lifecycle activity events.
 	graphNodeInterruptActivityEnabled      bool // graphNodeInterruptActivityEnabled enables graph interrupt activity events.
 	graphNodeInterruptActivityTopLevelOnly bool // graphNodeInterruptActivityTopLevelOnly drops nested graph interrupt activity events.
+	reasoningContentEnabled                bool // reasoningContentEnabled controls whether reasoning content events are emitted.
 }
 
 // Option is a function that configures the options.
@@ -49,5 +50,12 @@ func WithGraphNodeInterruptActivityEnabled(enabled bool) Option {
 func WithGraphNodeInterruptActivityTopLevelOnly(enabled bool) Option {
 	return func(o *options) {
 		o.graphNodeInterruptActivityTopLevelOnly = enabled
+	}
+}
+
+// WithReasoningContentEnabled controls whether the translator emits REASONING_* events.
+func WithReasoningContentEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.reasoningContentEnabled = enabled
 	}
 }

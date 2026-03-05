@@ -37,15 +37,23 @@ func New(ctx context.Context, opt ...Option) Aggregator {
 	}
 }
 
-// aggregator merges adjacent text content events before persistence.
+// aggregator merges adjacent text and reasoning content events before persistence.
 type aggregator struct {
 	mu            sync.Mutex
 	enabled       bool            // enabled indicates whether aggregation is active.
 	lastMessageID string          // lastMessageID tracks the message being buffered.
+	lastType      bufferType      // lastType tracks the event type being buffered.
 	buffer        strings.Builder // buffer stores concatenated deltas for the buffered message.
 }
+type bufferType int
 
-// Append aggregates adjacent text content events with the same message ID.
+const (
+	bufferTypeUnknown bufferType = iota
+	bufferTypeText
+	bufferTypeReasoning
+)
+
+// Append aggregates adjacent text and reasoning content events with the same message ID.
 func (a *aggregator) Append(_ context.Context, event aguievents.Event) ([]aguievents.Event, error) {
 	if !a.enabled {
 		return []aguievents.Event{event}, nil
@@ -55,6 +63,8 @@ func (a *aggregator) Append(_ context.Context, event aguievents.Event) ([]aguiev
 	switch e := event.(type) {
 	case *aguievents.TextMessageContentEvent:
 		return a.handleTextContent(e), nil
+	case *aguievents.ReasoningMessageContentEvent:
+		return a.handleReasoningContent(e), nil
 	default:
 		events := a.flush()
 		events = append(events, event)
@@ -62,7 +72,7 @@ func (a *aggregator) Append(_ context.Context, event aguievents.Event) ([]aguiev
 	}
 }
 
-// Flush flushes any buffered text content.
+// Flush flushes any buffered text and reasoning content.
 func (a *aggregator) Flush(context.Context) ([]aguievents.Event, error) {
 	if !a.enabled {
 		return nil, nil
@@ -74,12 +84,26 @@ func (a *aggregator) Flush(context.Context) ([]aguievents.Event, error) {
 
 // handleTextContent merges content when message ID matches the buffer; otherwise flushes first.
 func (a *aggregator) handleTextContent(event *aguievents.TextMessageContentEvent) []aguievents.Event {
-	if a.lastMessageID == event.MessageID {
+	if a.lastMessageID == event.MessageID && a.lastType == bufferTypeText {
 		a.buffer.WriteString(event.Delta)
 		return nil
 	}
 	events := a.flush()
 	a.lastMessageID = event.MessageID
+	a.lastType = bufferTypeText
+	a.buffer.Reset()
+	a.buffer.WriteString(event.Delta)
+	return events
+}
+
+func (a *aggregator) handleReasoningContent(event *aguievents.ReasoningMessageContentEvent) []aguievents.Event {
+	if a.lastMessageID == event.MessageID && a.lastType == bufferTypeReasoning {
+		a.buffer.WriteString(event.Delta)
+		return nil
+	}
+	events := a.flush()
+	a.lastMessageID = event.MessageID
+	a.lastType = bufferTypeReasoning
 	a.buffer.Reset()
 	a.buffer.WriteString(event.Delta)
 	return events
@@ -91,7 +115,17 @@ func (a *aggregator) flush() []aguievents.Event {
 		return nil
 	}
 	content := a.buffer.String()
-	event := aguievents.NewTextMessageContentEvent(a.lastMessageID, content)
+	var event aguievents.Event
+	switch a.lastType {
+	case bufferTypeText:
+		event = aguievents.NewTextMessageContentEvent(a.lastMessageID, content)
+	case bufferTypeReasoning:
+		event = aguievents.NewReasoningMessageContentEvent(a.lastMessageID, content)
+	default:
+		a.buffer.Reset()
+		return nil
+	}
 	a.buffer.Reset()
+	a.lastType = bufferTypeUnknown
 	return []aguievents.Event{event}
 }

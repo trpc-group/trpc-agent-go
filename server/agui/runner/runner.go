@@ -70,6 +70,7 @@ func New(r trunner.Runner, opt ...Option) Runner {
 		graphNodeLifecycleActivityEnabled:      opts.GraphNodeLifecycleActivityEnabled,
 		graphNodeInterruptActivityEnabled:      opts.GraphNodeInterruptActivityEnabled,
 		graphNodeInterruptActivityTopLevelOnly: opts.GraphNodeInterruptActivityTopLevelOnly,
+		reasoningContentEnabled:                opts.ReasoningContentEnabled,
 		userIDResolver:                         opts.UserIDResolver,
 		translateCallbacks:                     opts.TranslateCallbacks,
 		runAgentInputHook:                      opts.RunAgentInputHook,
@@ -95,6 +96,7 @@ type runner struct {
 	graphNodeLifecycleActivityEnabled      bool
 	graphNodeInterruptActivityEnabled      bool
 	graphNodeInterruptActivityTopLevelOnly bool
+	reasoningContentEnabled                bool
 	userIDResolver                         UserIDResolver
 	translateCallbacks                     *translator.Callbacks
 	runAgentInputHook                      RunAgentInputHook
@@ -227,6 +229,7 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 		translator.WithGraphNodeLifecycleActivityEnabled(r.graphNodeLifecycleActivityEnabled),
 		translator.WithGraphNodeInterruptActivityEnabled(r.graphNodeInterruptActivityEnabled),
 		translator.WithGraphNodeInterruptActivityTopLevelOnly(r.graphNodeInterruptActivityTopLevelOnly),
+		translator.WithReasoningContentEnabled(r.reasoningContentEnabled),
 	)
 	if err != nil {
 		span.End()

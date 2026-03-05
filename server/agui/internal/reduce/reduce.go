@@ -24,11 +24,13 @@ import (
 
 // reducer reduces the AG-UI track events into message snapshots.
 type reducer struct {
-	appName   string
-	userID    string
-	texts     map[string]*textState
-	toolCalls map[string]*toolCallState
-	messages  []*aguievents.Message
+	appName              string
+	userID               string
+	texts                map[string]*textState
+	reasonings           map[string]*reasoningState
+	lastReasoningChunkID string
+	toolCalls            map[string]*toolCallState
+	messages             []*aguievents.Message
 }
 
 // textPhase is the phase of the text message.
@@ -45,6 +47,21 @@ type textState struct {
 	name    string
 	content strings.Builder
 	phase   textPhase
+	index   int
+}
+
+type reasoningPhase int
+
+const (
+	reasoningReceiving reasoningPhase = iota
+	reasoningEnded
+)
+
+type reasoningState struct {
+	role    string
+	name    string
+	content strings.Builder
+	phase   reasoningPhase
 	index   int
 }
 
@@ -89,11 +106,12 @@ func Reduce(appName, userID string, events []session.TrackEvent) ([]aguievents.M
 // new creates a new reducer.
 func new(appName, userID string) *reducer {
 	return &reducer{
-		appName:   appName,
-		userID:    userID,
-		texts:     make(map[string]*textState),
-		toolCalls: make(map[string]*toolCallState),
-		messages:  make([]*aguievents.Message, 0),
+		appName:    appName,
+		userID:     userID,
+		texts:      make(map[string]*textState),
+		reasonings: make(map[string]*reasoningState),
+		toolCalls:  make(map[string]*toolCallState),
+		messages:   make([]*aguievents.Message, 0),
 	}
 }
 
@@ -127,6 +145,20 @@ func (r *reducer) reduceEvent(evt aguievents.Event) error {
 		return r.handleToolEnd(e)
 	case *aguievents.ToolCallResultEvent:
 		return r.handleToolResult(e)
+	case *aguievents.ReasoningStartEvent:
+		return nil
+	case *aguievents.ReasoningMessageStartEvent:
+		return r.handleReasoningMessageStart(e)
+	case *aguievents.ReasoningMessageContentEvent:
+		return r.handleReasoningContent(e)
+	case *aguievents.ReasoningMessageEndEvent:
+		return r.handleReasoningEnd(e)
+	case *aguievents.ReasoningMessageChunkEvent:
+		return r.handleReasoningChunk(e)
+	case *aguievents.ReasoningEncryptedValueEvent:
+		return r.handleReasoningEncryptedValue(e)
+	case *aguievents.ReasoningEndEvent:
+		return nil
 	case *aguievents.CustomEvent:
 		if e.Name == multimodal.CustomEventNameUserMessage {
 			return r.handleUserMessageCustomEvent(e)
@@ -170,6 +202,13 @@ func (r *reducer) handleUserMessageCustomEvent(e *aguievents.CustomEvent) error 
 func (r *reducer) finalizePartial() {
 	for _, state := range r.texts {
 		if state.phase != textReceiving || state.content.Len() == 0 {
+			continue
+		}
+		text := strings.Clone(state.content.String())
+		r.messages[state.index].Content = &text
+	}
+	for _, state := range r.reasonings {
+		if state.phase != reasoningReceiving || state.content.Len() == 0 {
 			continue
 		}
 		text := strings.Clone(state.content.String())
@@ -297,6 +336,158 @@ func (r *reducer) handleTextChunk(e *aguievents.TextMessageChunkEvent) error {
 		phase:   textEnded,
 		index:   len(r.messages) - 1,
 	}
+	return nil
+}
+
+func (r *reducer) handleReasoningMessageStart(e *aguievents.ReasoningMessageStartEvent) error {
+	if e.MessageID == "" {
+		return fmt.Errorf("reasoning message start missing id")
+	}
+	if _, exists := r.reasonings[e.MessageID]; exists {
+		return fmt.Errorf("duplicate reasoning message start: %s", e.MessageID)
+	}
+	role := e.Role
+	if role == "" {
+		role = string(model.RoleAssistant)
+	}
+	if role != string(model.RoleAssistant) {
+		return fmt.Errorf("unsupported role: %s", role)
+	}
+	name := r.appName
+	msg := &aguievents.Message{
+		ID:   e.MessageID,
+		Role: types.RoleReasoning,
+		Name: name,
+	}
+	r.messages = append(r.messages, msg)
+	r.reasonings[e.MessageID] = &reasoningState{
+		role:  role,
+		name:  name,
+		phase: reasoningReceiving,
+		index: len(r.messages) - 1,
+	}
+	return nil
+}
+
+func (r *reducer) handleReasoningContent(e *aguievents.ReasoningMessageContentEvent) error {
+	state, ok := r.reasonings[e.MessageID]
+	if !ok {
+		return fmt.Errorf("reasoning message content without start: %s", e.MessageID)
+	}
+	if state.phase != reasoningReceiving {
+		return fmt.Errorf("reasoning message content after end: %s", e.MessageID)
+	}
+	state.content.WriteString(e.Delta)
+	return nil
+}
+
+func (r *reducer) handleReasoningEnd(e *aguievents.ReasoningMessageEndEvent) error {
+	state, ok := r.reasonings[e.MessageID]
+	if !ok {
+		return fmt.Errorf("reasoning message end without start: %s", e.MessageID)
+	}
+	if state.phase != reasoningReceiving {
+		return fmt.Errorf("duplicate reasoning message end: %s", e.MessageID)
+	}
+	state.phase = reasoningEnded
+	text := strings.Clone(state.content.String())
+	r.messages[state.index].Content = &text
+	if r.lastReasoningChunkID == e.MessageID {
+		r.lastReasoningChunkID = ""
+	}
+	return nil
+}
+
+func (r *reducer) handleReasoningChunk(e *aguievents.ReasoningMessageChunkEvent) error {
+	messageID := ""
+	if e.MessageID != nil && *e.MessageID != "" {
+		messageID = *e.MessageID
+		r.lastReasoningChunkID = messageID
+	} else if r.lastReasoningChunkID != "" {
+		messageID = r.lastReasoningChunkID
+	} else {
+		return fmt.Errorf("reasoning message chunk missing id")
+	}
+
+	state, ok := r.reasonings[messageID]
+	if ok {
+		if state.phase != reasoningReceiving {
+			return fmt.Errorf("reasoning message chunk after end: %s", messageID)
+		}
+		if e.Delta == nil {
+			return nil
+		}
+		if *e.Delta == "" {
+			state.phase = reasoningEnded
+			if r.lastReasoningChunkID == messageID {
+				r.lastReasoningChunkID = ""
+			}
+			if state.content.Len() > 0 {
+				text := strings.Clone(state.content.String())
+				r.messages[state.index].Content = &text
+			}
+			return nil
+		}
+		state.content.WriteString(*e.Delta)
+		return nil
+	}
+
+	msg := &aguievents.Message{
+		ID:   messageID,
+		Role: types.RoleReasoning,
+		Name: r.appName,
+	}
+	r.messages = append(r.messages, msg)
+	r.reasonings[messageID] = &reasoningState{
+		role:  string(model.RoleAssistant),
+		name:  r.appName,
+		phase: reasoningReceiving,
+		index: len(r.messages) - 1,
+	}
+	if e.Delta != nil {
+		if *e.Delta == "" {
+			r.reasonings[messageID].phase = reasoningEnded
+			if r.lastReasoningChunkID == messageID {
+				r.lastReasoningChunkID = ""
+			}
+		} else {
+			r.reasonings[messageID].content.WriteString(*e.Delta)
+		}
+	}
+	return nil
+}
+
+func (r *reducer) handleReasoningEncryptedValue(e *aguievents.ReasoningEncryptedValueEvent) error {
+	if e.EntityID == "" {
+		return fmt.Errorf("reasoning encrypted value missing entity id")
+	}
+	if e.EncryptedValue == "" {
+		return fmt.Errorf("reasoning encrypted value missing encrypted value")
+	}
+	if e.Subtype != aguievents.ReasoningEncryptedValueSubtypeMessage {
+		return nil
+	}
+	state, ok := r.reasonings[e.EntityID]
+	if !ok {
+		msg := &aguievents.Message{
+			ID:             e.EntityID,
+			Role:           types.RoleReasoning,
+			Name:           r.appName,
+			EncryptedValue: e.EncryptedValue,
+		}
+		r.messages = append(r.messages, msg)
+		r.reasonings[e.EntityID] = &reasoningState{
+			role:  string(model.RoleAssistant),
+			name:  r.appName,
+			phase: reasoningEnded,
+			index: len(r.messages) - 1,
+		}
+		return nil
+	}
+	if state.index < 0 || state.index >= len(r.messages) {
+		return fmt.Errorf("reasoning encrypted value missing target message: %s", e.EntityID)
+	}
+	r.messages[state.index].EncryptedValue = e.EncryptedValue
 	return nil
 }
 
