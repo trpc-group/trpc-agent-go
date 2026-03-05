@@ -29,7 +29,7 @@ const (
 	defaultCleanupIntervalSecond = 5 * time.Minute
 	defaultAsyncPersistTimeout   = 5 * time.Second
 
-	defaultAsyncSummaryNum = 3
+	defaultAsyncSummaryNum   = 3
 	defaultSummaryQueueSize  = 100
 	defaultSummaryJobTimeout = 60 * time.Second
 

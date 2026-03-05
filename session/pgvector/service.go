@@ -210,9 +210,9 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		opts.asyncSummaryNum > 0 {
 		s.asyncWorker = isummary.NewAsyncSummaryWorker(
 			isummary.AsyncSummaryConfig{
-				Summarizer:  opts.summarizer,
-				AsyncSummaryNum: opts.asyncSummaryNum,
-				SummaryQueueSize: opts.summaryQueueSize,
+				Summarizer:        opts.summarizer,
+				AsyncSummaryNum:   opts.asyncSummaryNum,
+				SummaryQueueSize:  opts.summaryQueueSize,
 				SummaryJobTimeout: opts.summaryJobTimeout,
 				CreateSummaryFunc: s.CreateSessionSummary,
 			},
