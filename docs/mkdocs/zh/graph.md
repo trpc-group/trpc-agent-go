@@ -4140,6 +4140,86 @@ func buildGraph() (*graph.Graph, error) {
 - 内部/易变键不会被序列化到最终快照，亦不建议外发（参考 [graph/internal_keys.go:16](https://github.com/trpc-group/trpc-agent-go/blob/main/graph/internal_keys.go#L16)）；
 - 文本类中间结果优先复用模型流式事件（`choice.Delta.Content`）。
 
+#### 将节点错误视为“非致命”并继续执行
+
+默认情况下，如果某个节点返回了非空 `error`，图会停止执行，Executor 会发出错误事件。
+
+有些业务场景希望把部分错误当作**非致命错误**：
+
+- 记录错误信息（便于排查/监控，或供后续节点/最终输出使用）
+- 不中断图执行，继续跑后续节点
+
+可以用 After 节点回调（`WithPostNodeCallback` 或图级 `WithNodeCallbacks`）来实现：
+
+- 回调会收到 `nodeErr error`：
+  - `nodeErr == nil`：节点成功
+  - `nodeErr != nil`：节点失败（可能经历过重试）
+- 如果你判定这是**非致命错误**，回调需要返回一个**非 nil** 的“替代结果”以及 `nil` error：
+  - 替代结果会按“正常节点返回值”处理：可以是 `graph.State`、`*graph.Command` 或 `[]*graph.Command`。
+  - 常见做法是返回 `graph.State{...}`：既完成“恢复”，又把错误写入 state。
+- 如果在失败时返回 `nil, nil`，原始错误会保留，图依旧会失败。
+
+示例：把非致命错误收集到 `stateKeyNodeErrors` 并继续执行：
+
+```go
+import (
+    "context"
+    "errors"
+    "reflect"
+
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+const (
+    stateKeyNodeErrors = "node_errors"
+)
+
+var errNonFatal = errors.New("non-fatal error")
+
+func failingNode(ctx context.Context, st graph.State) (any, error) {
+    return nil, errNonFatal
+}
+
+func buildGraph() (*graph.Graph, error) {
+    schema := graph.MessagesStateSchema()
+    schema.AddField(stateKeyNodeErrors, graph.StateField{
+        Type:    reflect.TypeOf([]string{}),
+        Reducer: graph.StringSliceReducer,
+        Default: func() any { return []string{} },
+    })
+
+    sg := graph.NewStateGraph(schema)
+    sg.AddNode("N", failingNode)
+
+    cbs := graph.NewNodeCallbacks().RegisterAfterNode(func(
+        ctx context.Context,
+        cb *graph.NodeCallbackContext,
+        st graph.State,
+        result any,
+        nodeErr error,
+    ) (any, error) {
+        if nodeErr == nil {
+            return nil, nil
+        }
+        // Decide whether it's fatal.
+        if !errors.Is(nodeErr, errNonFatal) {
+            return nil, nil // keep it fatal
+        }
+        // Non-fatal: record it and keep running.
+        return graph.State{
+            stateKeyNodeErrors: []string{
+                cb.NodeID + ": " + nodeErr.Error(),
+            },
+        }, nil
+    })
+    sg.WithNodeCallbacks(cbs)
+
+    sg.SetEntryPoint("N")
+    sg.SetFinishPoint("N")
+    return sg.Compile()
+}
+```
+
 也可以在 Agent 级别配置回调：
 
 ```go

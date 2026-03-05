@@ -4194,6 +4194,94 @@ Recommendations:
 - Internal/volatile keys are filtered from final snapshots and should not be emitted (see [graph/internal_keys.go:16](https://github.com/trpc-group/trpc-agent-go/blob/main/graph/internal_keys.go#L16)).
 - For textual intermediate outputs, prefer existing model streaming events (`choice.Delta.Content`).
 
+#### Recover from non-fatal node errors
+
+By default, if a node returns a non‑nil `error`, graph execution stops and the
+Executor emits an error event.
+
+Sometimes you want a *non‑fatal* error:
+
+- Record the error (for debugging/monitoring or to show in the final output)
+- Keep running the rest of the graph
+
+You can implement this with an After‑node callback (`WithPostNodeCallback` or
+graph‑wide `WithNodeCallbacks`).
+
+How it works:
+
+- Your callback receives `nodeErr error`.
+  - `nodeErr == nil`: the node succeeded
+  - `nodeErr != nil`: the node failed (possibly after retries)
+- If you decide the error is **non‑fatal**, return a **non‑nil** replacement
+  result and `nil` error.
+  - The replacement result is handled like a normal node result: it can be
+    `graph.State`, `*graph.Command`, or `[]*graph.Command`.
+  - Returning `graph.State{...}` is a common way to both recover and record the
+    error in state.
+- If you return `nil, nil` on a failure, the original node error is preserved
+  and the graph still fails.
+
+Example: collect non‑fatal errors into `stateKeyNodeErrors` while continuing:
+
+```go
+import (
+    "context"
+    "errors"
+    "reflect"
+
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+const (
+    stateKeyNodeErrors = "node_errors"
+)
+
+var errNonFatal = errors.New("non-fatal error")
+
+func failingNode(ctx context.Context, st graph.State) (any, error) {
+    return nil, errNonFatal
+}
+
+func buildGraph() (*graph.Graph, error) {
+    schema := graph.MessagesStateSchema()
+    schema.AddField(stateKeyNodeErrors, graph.StateField{
+        Type:    reflect.TypeOf([]string{}),
+        Reducer: graph.StringSliceReducer,
+        Default: func() any { return []string{} },
+    })
+
+    sg := graph.NewStateGraph(schema)
+    sg.AddNode("N", failingNode)
+
+    cbs := graph.NewNodeCallbacks().RegisterAfterNode(func(
+        ctx context.Context,
+        cb *graph.NodeCallbackContext,
+        st graph.State,
+        result any,
+        nodeErr error,
+    ) (any, error) {
+        if nodeErr == nil {
+            return nil, nil
+        }
+        // Decide whether it's fatal.
+        if !errors.Is(nodeErr, errNonFatal) {
+            return nil, nil // keep it fatal
+        }
+        // Non-fatal: record it and keep running.
+        return graph.State{
+            stateKeyNodeErrors: []string{
+                cb.NodeID + ": " + nodeErr.Error(),
+            },
+        }, nil
+    })
+    sg.WithNodeCallbacks(cbs)
+
+    sg.SetEntryPoint("N")
+    sg.SetFinishPoint("N")
+    return sg.Compile()
+}
+```
+
 You can also configure agent‑level callbacks:
 
 ```go
