@@ -660,7 +660,8 @@ func (m *Model) convertSystemMessageContent(msg model.Message) openai.ChatComple
 	}
 }
 
-// convertUserMessageContent converts message content to user message content union.
+// convertUserMessageContent converts a message into an OpenAI user
+// message content union.
 func (m *Model) convertUserMessageContent(
 	msg model.Message,
 ) (openai.ChatCompletionUserMessageParamContentUnion, map[string]any) {
@@ -670,93 +671,139 @@ func (m *Model) convertUserMessageContent(
 			OfString: openai.String(msg.Content),
 		}, nil
 	}
-	var (
-		contentParts []openai.ChatCompletionContentPartUnionParam
-		extraFields  map[string]any
+
+	fileHint := m.userFileHint(msg)
+	contentParts := make(
+		[]openai.ChatCompletionContentPartUnionParam,
+		0,
+		len(msg.ContentParts)+2,
 	)
-	mainTextEmpty := strings.TrimSpace(msg.Content) == ""
-	fileHint := ""
-	if mainTextEmpty &&
-		(m.omitFileContentParts ||
-			m.variantConfig.skipFileTypeInContent) {
-		hasNonFile := false
-		for _, part := range msg.ContentParts {
-			if part.Type != model.ContentTypeFile {
-				hasNonFile = true
-				break
-			}
-		}
-		if !hasNonFile {
-			fileHint = fileHintForContentParts(msg.ContentParts)
-		}
-	}
-	// Add Content as a text part if present.
 	if msg.Content != "" {
-		contentParts = append(
-			contentParts,
-			openai.ChatCompletionContentPartUnionParam{
-				OfText: &openai.ChatCompletionContentPartTextParam{
-					Text: msg.Content,
-				},
-			},
-		)
+		contentParts = append(contentParts, userTextPart(msg.Content))
 	}
 	if fileHint != "" {
-		contentParts = append(
-			contentParts,
-			openai.ChatCompletionContentPartUnionParam{
-				OfText: &openai.ChatCompletionContentPartTextParam{
-					Text: fileHint,
-				},
-			},
-		)
+		contentParts = append(contentParts, userTextPart(fileHint))
 	}
-	for _, part := range msg.ContentParts {
+	extraFields := m.appendUserContentParts(&contentParts, msg.ContentParts)
+
+	if content, ok := singleUserContentString(
+		msg.Content,
+		fileHint,
+		contentParts,
+		extraFields,
+	); ok {
+		return openai.ChatCompletionUserMessageParamContentUnion{
+			OfString: openai.String(content),
+		}, nil
+	}
+
+	return openai.ChatCompletionUserMessageParamContentUnion{
+		OfArrayOfContentParts: contentParts,
+	}, extraFields
+}
+
+func (m *Model) userFileHint(msg model.Message) string {
+	if strings.TrimSpace(msg.Content) != "" {
+		return ""
+	}
+	if !m.omitFileContentParts &&
+		!m.variantConfig.skipFileTypeInContent {
+		return ""
+	}
+	if !onlyFileContentParts(msg.ContentParts) {
+		return ""
+	}
+	return fileHintForContentParts(msg.ContentParts)
+}
+
+func onlyFileContentParts(parts []model.ContentPart) bool {
+	if len(parts) == 0 {
+		return false
+	}
+	for _, part := range parts {
+		if part.Type != model.ContentTypeFile {
+			return false
+		}
+	}
+	return true
+}
+
+func userTextPart(text string) openai.ChatCompletionContentPartUnionParam {
+	return openai.ChatCompletionContentPartUnionParam{
+		OfText: &openai.ChatCompletionContentPartTextParam{
+			Text: text,
+		},
+	}
+}
+
+func (m *Model) appendUserContentParts(
+	dst *[]openai.ChatCompletionContentPartUnionParam,
+	parts []model.ContentPart,
+) map[string]any {
+	var extraFields map[string]any
+	for _, part := range parts {
 		if part.Type == model.ContentTypeFile &&
 			m.omitFileContentParts {
+			continue
+		}
+		if part.Type == model.ContentTypeFile &&
+			m.variantConfig.skipFileTypeInContent {
+			extraFields = appendFileID(extraFields, part)
 			continue
 		}
 		contentPart := m.convertContentPart(part)
 		if contentPart == nil {
 			continue
 		}
-		// Handle file content parts based on variant configuration.
-		if part.Type == model.ContentTypeFile && m.variantConfig.skipFileTypeInContent {
-			const fileIDsKey = "file_ids"
-			if extraFields == nil {
-				extraFields = make(map[string]any)
-			}
-			// Collect file IDs in extraFields under "file_ids".
-			fileIDs, ok := extraFields[fileIDsKey].([]string)
-			if !ok {
-				fileIDs = []string{}
-			}
-			fileIDs = append(fileIDs, part.File.FileID)
-			extraFields[fileIDsKey] = fileIDs
-			continue
-		}
-		// For non-file or non-skipped file types, add to contentParts.
-		contentParts = append(contentParts, *contentPart)
+		*dst = append(*dst, *contentPart)
 	}
-	if msg.Content != "" && extraFields == nil &&
-		len(contentParts) == 1 &&
-		contentParts[0].OfText != nil &&
-		contentParts[0].OfText.Text == msg.Content {
-		return openai.ChatCompletionUserMessageParamContentUnion{
-			OfString: openai.String(msg.Content),
-		}, nil
+	return extraFields
+}
+
+func appendFileID(
+	extraFields map[string]any,
+	part model.ContentPart,
+) map[string]any {
+	if part.File == nil {
+		return extraFields
 	}
-	if extraFields == nil && fileHint != "" && msg.Content == "" &&
-		len(contentParts) == 1 &&
-		contentParts[0].OfText != nil &&
-		contentParts[0].OfText.Text == fileHint {
-		return openai.ChatCompletionUserMessageParamContentUnion{
-			OfString: openai.String(fileHint),
-		}, nil
+	const fileIDsKey = "file_ids"
+	if extraFields == nil {
+		extraFields = make(map[string]any)
 	}
-	return openai.ChatCompletionUserMessageParamContentUnion{
-		OfArrayOfContentParts: contentParts,
-	}, extraFields
+	fileIDs, ok := extraFields[fileIDsKey].([]string)
+	if !ok {
+		fileIDs = []string{}
+	}
+	fileIDs = append(fileIDs, part.File.FileID)
+	extraFields[fileIDsKey] = fileIDs
+	return extraFields
+}
+
+func singleUserContentString(
+	mainText string,
+	fileHint string,
+	contentParts []openai.ChatCompletionContentPartUnionParam,
+	extraFields map[string]any,
+) (string, bool) {
+	if extraFields != nil {
+		return "", false
+	}
+	if len(contentParts) != 1 {
+		return "", false
+	}
+	if contentParts[0].OfText == nil {
+		return "", false
+	}
+
+	text := contentParts[0].OfText.Text
+	if mainText != "" && text == mainText {
+		return mainText, true
+	}
+	if mainText == "" && fileHint != "" && text == fileHint {
+		return fileHint, true
+	}
+	return "", false
 }
 
 func fileHintForContentParts(parts []model.ContentPart) string {
