@@ -148,13 +148,6 @@
         <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/runner/"/>
     </url>
     <url>
-        <loc>https://trpc-group.github.io/trpc-agent-go/session/</loc>
-        <lastmod>2026-03-05</lastmod>
-        <changefreq>daily</changefreq>
-        <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/session/"/>
-        <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/session/"/>
-    </url>
-    <url>
         <loc>https://trpc-group.github.io/trpc-agent-go/skill/</loc>
         <lastmod>2026-03-05</lastmod>
         <changefreq>daily</changefreq>
@@ -489,13 +482,6 @@
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/runner/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/runner/"/>
-    </url>
-    <url>
-        <loc>https://trpc-group.github.io/trpc-agent-go/zh/session/</loc>
-        <lastmod>2026-03-05</lastmod>
-        <changefreq>daily</changefreq>
-        <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/session/"/>
-        <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/session/"/>
     </url>
     <url>
         <loc>https://trpc-group.github.io/trpc-agent-go/zh/skill/</loc>
