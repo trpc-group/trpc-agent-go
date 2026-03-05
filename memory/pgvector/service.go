@@ -16,6 +16,7 @@ import (
 	"database/sql"
 	"fmt"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -545,12 +546,28 @@ func (s *Service) SearchMemoriesWithOptions(
 		}
 	}
 
+	// Hybrid search: run keyword search and merge with vector results
+	// using Reciprocal Rank Fusion (RRF) to improve recall for exact
+	// entity names, book titles, etc.
+	if opts.HybridSearch {
+		keywordResults, kwErr := s.executeKeywordSearch(ctx, userKey, opts, maxResults)
+		if kwErr == nil && len(keywordResults) > 0 {
+			rrfK := opts.HybridRRFK
+			if rrfK <= 0 {
+				rrfK = defaultRRFK
+			}
+			results = mergeHybridResults(results, keywordResults, rrfK, maxResults)
+		}
+	}
+
 	// Apply similarity threshold filtering.
+	// Skip when hybrid search is active because RRF scores use a
+	// different range than cosine similarity.
 	threshold := s.opts.similarityThreshold
 	if opts.SimilarityThreshold > 0 {
 		threshold = opts.SimilarityThreshold
 	}
-	if threshold > 0 && len(results) > 0 {
+	if threshold > 0 && len(results) > 0 && !opts.HybridSearch {
 		filtered := results[:0]
 		for _, r := range results {
 			if r.Score >= threshold {
@@ -598,12 +615,12 @@ func (s *Service) executeVectorSearch(
 	}
 
 	if opts.TimeAfter != nil {
-		fmt.Fprintf(&searchQuery, " AND event_time >= $%d", argIdx)
+		fmt.Fprintf(&searchQuery, " AND (event_time >= $%d OR event_time IS NULL)", argIdx)
 		args = append(args, *opts.TimeAfter)
 		argIdx++
 	}
 	if opts.TimeBefore != nil {
-		fmt.Fprintf(&searchQuery, " AND event_time <= $%d", argIdx)
+		fmt.Fprintf(&searchQuery, " AND (event_time <= $%d OR event_time IS NULL)", argIdx)
 		args = append(args, *opts.TimeBefore)
 		argIdx++
 	}
@@ -631,6 +648,135 @@ func (s *Service) executeVectorSearch(
 		return nil, fmt.Errorf("search memories failed: %w", err)
 	}
 	return results, nil
+}
+
+// defaultRRFK is the standard Reciprocal Rank Fusion constant.
+const defaultRRFK = 60
+
+// executeKeywordSearch runs a full-text search using PostgreSQL
+// tsvector/tsquery alongside the vector search results.
+func (s *Service) executeKeywordSearch(
+	ctx context.Context,
+	userKey memory.UserKey,
+	opts memory.SearchOptions,
+	maxResults int,
+) ([]*memory.Entry, error) {
+	query := strings.TrimSpace(opts.Query)
+	if query == "" {
+		return []*memory.Entry{}, nil
+	}
+
+	var searchQuery strings.Builder
+	args := []any{query, userKey.AppName, userKey.UserID}
+	argIdx := 4
+
+	fmt.Fprintf(&searchQuery,
+		"SELECT memory_id, app_name, user_id, memory_content, topics, "+
+			"memory_kind, event_time, participants, location, "+
+			"created_at, updated_at, "+
+			"ts_rank(search_vector, plainto_tsquery('english', $1)) AS similarity "+
+			"FROM %s WHERE app_name = $2 AND user_id = $3 "+
+			"AND search_vector @@ plainto_tsquery('english', $1)",
+		s.tableName,
+	)
+	if s.opts.softDelete {
+		searchQuery.WriteString(" AND deleted_at IS NULL")
+	}
+
+	if opts.Kind != "" {
+		fmt.Fprintf(&searchQuery, " AND memory_kind = $%d", argIdx)
+		args = append(args, string(opts.Kind))
+		argIdx++
+	}
+
+	if opts.TimeAfter != nil {
+		fmt.Fprintf(&searchQuery, " AND (event_time >= $%d OR event_time IS NULL)", argIdx)
+		args = append(args, *opts.TimeAfter)
+		argIdx++
+	}
+	if opts.TimeBefore != nil {
+		fmt.Fprintf(&searchQuery, " AND (event_time <= $%d OR event_time IS NULL)", argIdx)
+		args = append(args, *opts.TimeBefore)
+		argIdx++
+	}
+
+	searchQuery.WriteString(" ORDER BY similarity DESC")
+	fmt.Fprintf(&searchQuery, " LIMIT %d", maxResults)
+
+	results := make([]*memory.Entry, 0)
+	err := s.db.Query(ctx, func(rows *sql.Rows) error {
+		for rows.Next() {
+			entry, scanErr := scanMemoryEntryWithSimilarity(rows)
+			if scanErr != nil {
+				return scanErr
+			}
+			results = append(results, entry)
+		}
+		return nil
+	}, searchQuery.String(), args...)
+
+	if err != nil {
+		// Keyword search failure is non-fatal; log and return empty.
+		return []*memory.Entry{}, nil
+	}
+	return results, nil
+}
+
+// mergeHybridResults combines vector and keyword search results using
+// Reciprocal Rank Fusion (RRF). Each result gets score = 1/(k+rank)
+// from each search method. Combined scores determine final ranking.
+func mergeHybridResults(
+	vectorResults, keywordResults []*memory.Entry,
+	k int,
+	maxResults int,
+) []*memory.Entry {
+	if k <= 0 {
+		k = defaultRRFK
+	}
+
+	type rrfEntry struct {
+		entry *memory.Entry
+		score float64
+	}
+
+	scores := make(map[string]*rrfEntry, len(vectorResults)+len(keywordResults))
+
+	for rank, entry := range vectorResults {
+		scores[entry.ID] = &rrfEntry{
+			entry: entry,
+			score: 1.0 / float64(k+rank+1),
+		}
+	}
+
+	for rank, entry := range keywordResults {
+		rrfScore := 1.0 / float64(k+rank+1)
+		if existing, ok := scores[entry.ID]; ok {
+			existing.score += rrfScore
+		} else {
+			scores[entry.ID] = &rrfEntry{
+				entry: entry,
+				score: rrfScore,
+			}
+		}
+	}
+
+	merged := make([]*rrfEntry, 0, len(scores))
+	for _, e := range scores {
+		merged = append(merged, e)
+	}
+	sort.Slice(merged, func(i, j int) bool {
+		return merged[i].score > merged[j].score
+	})
+
+	results := make([]*memory.Entry, 0, min(len(merged), maxResults))
+	for i, e := range merged {
+		if i >= maxResults {
+			break
+		}
+		e.entry.Score = e.score
+		results = append(results, e.entry)
+	}
+	return results
 }
 
 // mergeSearchResults merges kind-filtered results with fallback results.

@@ -215,7 +215,11 @@ func NewSearchTool() tool.CallableTool {
 
 		// Validate input.
 		if req == nil || req.Query == "" {
-			return nil, fmt.Errorf("memory search tool: query is required for app %s and user %s", appName, userID)
+			return &SearchMemoryResponse{
+				Query:   "",
+				Results: []Result{},
+				Count:   0,
+			}, nil
 		}
 
 		userKey := memory.UserKey{AppName: appName, UserID: userID}
@@ -371,9 +375,10 @@ func buildEpisodicFields(kind, eventTimeStr string, participants []string, locat
 // buildSearchOptions constructs SearchOptions from a SearchMemoryRequest.
 func buildSearchOptions(req *SearchMemoryRequest) memory.SearchOptions {
 	opts := memory.SearchOptions{
-		Query:       req.Query,
-		Kind:        memory.MemoryKind(req.Kind),
-		Deduplicate: true,
+		Query:        req.Query,
+		Kind:         memory.MemoryKind(req.Kind),
+		Deduplicate:  true,
+		HybridSearch: true,
 	}
 	// Enable kind fallback when a kind filter is requested so that
 	// results of the other kind are still included if the filtered

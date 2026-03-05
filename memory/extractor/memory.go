@@ -452,7 +452,8 @@ Today's date is {current_date}. You MUST use this date to resolve ALL relative t
 - **COMPLETENESS**: Extract every distinct fact, event, preference, and
   relationship mentioned in the conversation. When in doubt, create a
   memory rather than skip it. Missing information is worse than having
-  a slightly redundant memory.
+  a slightly redundant memory. Go through the conversation turn by turn
+  and ensure NOTHING is missed from any turn.
 - **ATOMICITY**: Keep each memory focused on a SINGLE piece of information.
   For example, if a user says "I went to Paris with Alice and we ate at
   Le Cinq, then visited the Louvre", create SEPARATE memories for:
@@ -466,6 +467,9 @@ Today's date is {current_date}. You MUST use this date to resolve ALL relative t
   When Speaker B mentions their own experiences, hobbies, purchases, trips,
   books they read, objects they own, or activities they do, these MUST be
   extracted as separate memories attributed to Speaker B by name.
+  When BOTH speakers mention doing the same activity together, create memories
+  for EACH person's involvement (e.g., "Alice and Bob visited Rome" should
+  produce memories for both Alice AND Bob visiting Rome).
 - **EXHAUSTIVE DETAILS**: Extract EVERY specific detail mentioned, even if
   it seems minor or is mentioned only once in passing. This includes:
   - Specific book titles, movie titles, song names, band/artist names
@@ -649,20 +653,90 @@ Relative phrases to always resolve: "yesterday", "today", "last week",
 
 <critical_details>
 The following types of information are FREQUENTLY MISSED but CRITICALLY IMPORTANT.
-You MUST extract these whenever they appear, even if mentioned only once:
+You MUST extract these whenever they appear, even if mentioned only once or in passing:
 
 1. BOOK/MOVIE/SONG TITLES: Every title mentioned by name must become its own memory.
    "I just finished reading 'Charlotte's Web'" → memory about reading that specific book.
+   "Caroline recommended 'Becoming Nicole'" → TWO memories: "Caroline recommended 'Becoming Nicole'" AND "Melanie is reading 'Becoming Nicole' from Caroline's recommendation."
+   "I read 'Nothing is Impossible'" → memory with that exact title.
 2. COUNTS AND NUMBERS: "I have 3 kids", "we went twice", "married for 5 years" —
    always include the exact number in the memory text.
+   "My three children" → "X has three children."
+   "The 2 younger kids love nature" implies at least 3 children — extract "X has at least 3 children."
+   "We go to the beach once or twice a year" → "X's family goes to the beach once or twice a year."
 3. SPECIFIC NAMES: Celebrity names, performer names, band names, brand names.
    "We saw Matt Patterson perform" → memory with "Matt Patterson" in text and topics.
+   "It's Shia Labeouf!" → memory mentioning Shia LaBeouf by name.
 4. RELATIONSHIP STATUS: Single, married, dating, divorced — always extract explicitly.
+   "I'm still single" → "X is single."
 5. ORIGIN/HOMETOWN: "I moved from Sweden" → memory: "X moved from Sweden."
    Do NOT paraphrase as "home country" — use the actual country/city name.
-6. PET ANECDOTES: "Oliver hid his bone in my slipper" → extract the specific anecdote.
+6. PET ANECDOTES: "Oliver hid his bone in my slipper" → extract the SPECIFIC anecdote with exact details.
+   "Bailey knocked over a vase" → extract with exact details.
 7. PURCHASED/OWNED ITEMS: "I bought figurines at the market" → extract with item name.
+   "I got new running shoes" → "X bought new running shoes." with the specific item.
 8. PHYSICAL DESCRIPTIONS of art/objects: "painted a sunset with a palm tree" →
    include "palm tree" detail, not just "sunset painting".
+   "a painting with blue streaks" → include "blue streaks" detail.
+9. COLLABORATION/JOINT DECISIONS: "We decided to collaborate on dance content" →
+   extract with all participants and the specific plan.
+10. BUSINESS/CAREER MILESTONES with dates: "I opened my online store on March 16" →
+    episode with exact date. "I started going to the gym in March" → episode with date.
+    "I went to a fair to promote my studio on April 24" → episode with exact date.
+11. TRIPS/TRAVEL: "I took a short trip to Rome last week" → episode with place and date.
+    Extract for EACH person who traveled, not just the one being talked about.
+    "We went on a road trip to the Grand Canyon" → extract road trip with destination and date.
+12. FAMILY EVENTS: "We celebrated my daughter's birthday" → extract the event AND
+    "X's daughter's birthday is [date]" as a separate fact if the date can be inferred.
+13. SHARED IMAGES: When text says "[Shared image: ...]", treat the image description
+    as additional context. If the image shows a book cover, it IS the book being
+    discussed. If it shows children, the count IS relevant.
+14. FASHION/DESIGN: "I made a limited edition line of hoodies" → extract with item type
+    and the fact it was limited edition.
+15. CHILDHOOD/PAST ACTIVITIES: "I used to go horseback riding with my dad" →
+    "X used to go horseback riding with her/his dad as a child."
+16. IDENTITY/SELF-DESCRIPTION: "I identify as a transgender woman" →
+    "X is a transgender woman." — use the EXACT identity term.
+17. OPINIONS ABOUT OTHERS: "I think Caroline is doing something amazing" →
+    "X thinks Caroline is doing something amazing" — extract opinions one person has about another.
+18. SIGNS/POSTERS/TEXT SEEN: "There were posters saying 'Trans Lives Matter'" →
+    Extract what text was on the signs/posters.
+19. CRAFTED ITEMS with details: "I made a stained glass window for a church" →
+    "X created a stained glass window for a local church."
+20. FREQUENCY/HABITS: "We go to the beach once or twice a year" →
+    "X's family goes to the beach once or twice a year." — exact frequency matters.
+21. EMOTIONS/FEELINGS about events: "I felt glad to be part of it" → extract the EXACT feeling word.
+    "The opening night was exciting" → "X felt excited about the opening night."
+    "Dance brings a magical feeling" → "X describes dance as magical."
+22. EXACT QUOTES and descriptions: "Your studio is amazing" → "X describes Y's studio as amazing."
+    "They look graceful" → "X said the dancers look graceful."
+    "I won't quit" → "X said he/she won't quit."
+23. COMPARISONS/METAPHORS: "Our journey is like dancing together" →
+    "X compared their entrepreneurial journey to dancing together."
+24. REASONS/MOTIVATIONS: "I started my business because I lost my job" →
+    "X lost their job and decided to start their own business."
+    "I shut down my bank account for my business" → exact reason.
+25. IDEAL/DREAM descriptions: "I want my studio to be by the water with natural light" →
+    "X's ideal studio is by the water, with natural light and Marley flooring."
 </critical_details>
+
+<extraction_checklist>
+After extracting memories, do a FINAL CHECK. Re-read each turn and verify:
+- Did I extract EVERY new activity or hobby started? (gym, classes, running, etc.)
+- Did I extract EVERY trip or visit to a specific place? (Rome, fair, museum, park, road trip, etc.)
+- Did I extract EVERY item purchased or created? (figurines, hoodies, paintings, shoes, etc.)
+- Did I extract EVERY family detail? (children count, birthdays, road trips, etc.)
+- Did I extract EVERY collaboration or plan between speakers?
+- Did I extract information from BOTH speakers, not just the primary one?
+- For each speaker who mentioned traveling somewhere, did I create a memory for THAT speaker?
+- Did I extract EVERY childhood memory or past activity? (horseback riding, camping with dad, etc.)
+- Did I extract identity descriptions? (transgender woman, single parent, etc.)
+- Did I extract frequency of activities? (once a year, every week, etc.)
+- Did I extract EVERY specific object or artwork with its full description?
+- Did I extract EXACT feelings/emotions expressed? (glad, excited, magical, amazing, etc.)
+- Did I extract what one person says about another person's work or journey?
+- Did I extract reasons/motivations for major decisions? (why started a business, why quit, etc.)
+- Did I extract ideal/dream descriptions? (ideal studio, dream home, etc.)
+If any information was missed, add it now.
+</extraction_checklist>
 `

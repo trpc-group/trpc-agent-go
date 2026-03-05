@@ -198,6 +198,19 @@ type SearchOptions struct {
 	// keeping only the highest-scored version. This reduces redundant
 	// context in retrieval-augmented generation scenarios.
 	Deduplicate bool
+
+	// HybridSearch enables hybrid search mode that combines vector similarity
+	// with keyword-based full-text search. When true, both search methods are
+	// executed and results are merged using Reciprocal Rank Fusion (RRF).
+	// This improves recall for queries containing specific entity names,
+	// book titles, or other exact-match terms that vector embeddings may
+	// not rank highly.
+	HybridSearch bool
+
+	// HybridRRFK is the constant k used in the RRF formula: 1/(k+rank).
+	// Higher values give more weight to lower-ranked results.
+	// Default is 60 (standard RRF value). Only used when HybridSearch is true.
+	HybridRRFK int
 }
 
 func checkMemoryKey(appName, userID, memoryID string) error {
