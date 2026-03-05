@@ -56,25 +56,26 @@ func WithInsecure() Option {
 	}
 }
 
-// WithMaxObservationBytes configures the max byte size for Langfuse observation input/output.
+// WithObservationLeafValueMaxBytes configures the max byte length for each leaf
+// value in Langfuse observation JSON payloads (and plain string observation values).
 //
 // If this option is not set, truncation is disabled by default.
 // If maxBytes is 0, it truncates everything.
 // If maxBytes < 0, truncation is disabled.
-func WithMaxObservationBytes(maxBytes int) Option {
+func WithObservationLeafValueMaxBytes(maxBytes int) Option {
 	return func(cfg *config) {
 		v := maxBytes
-		cfg.maxObservationBytes = &v
+		cfg.maxObservationLeafValueBytes = &v
 	}
 }
 
 // config holds Langfuse configuration options.
 type config struct {
-	secretKey           string
-	publicKey           string
-	host                string
-	insecure            bool
-	maxObservationBytes *int
+	secretKey                    string
+	publicKey                    string
+	host                         string
+	insecure                     bool
+	maxObservationLeafValueBytes *int
 }
 
 // newConfigFromEnv creates a Langfuse config from environment variables.
@@ -84,14 +85,15 @@ type config struct {
 //	LANGFUSE_PUBLIC_KEY: Langfuse public key
 //	LANGFUSE_HOST: Langfuse host in "hostname:port" format (e.g., "cloud.langfuse.com:443")
 //	LANGFUSE_INSECURE: Set to "true" for insecure connections (development only)
-//	LANGFUSE_MAX_OBSERVATION_BYTES: Optional; max byte size for observation.input/output (unset by default)
+//	LANGFUSE_OBSERVATION_LEAF_VALUE_MAX_BYTES: Optional; max byte length for each observation JSON leaf value (unset by default)
 func newConfigFromEnv() *config {
+	leafBytes := getEnvIntPtr("LANGFUSE_OBSERVATION_LEAF_VALUE_MAX_BYTES")
 	return &config{
-		secretKey:           getEnv("LANGFUSE_SECRET_KEY", ""),
-		publicKey:           getEnv("LANGFUSE_PUBLIC_KEY", ""),
-		host:                getEnv("LANGFUSE_HOST", ""),
-		insecure:            getEnv("LANGFUSE_INSECURE", "") == "true",
-		maxObservationBytes: getEnvIntPtr("LANGFUSE_MAX_OBSERVATION_BYTES"),
+		secretKey:                    getEnv("LANGFUSE_SECRET_KEY", ""),
+		publicKey:                    getEnv("LANGFUSE_PUBLIC_KEY", ""),
+		host:                         getEnv("LANGFUSE_HOST", ""),
+		insecure:                     getEnv("LANGFUSE_INSECURE", "") == "true",
+		maxObservationLeafValueBytes: leafBytes,
 	}
 }
 
