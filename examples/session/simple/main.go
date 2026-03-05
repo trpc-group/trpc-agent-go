@@ -70,6 +70,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/langfuse"
+	atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 
 	util "trpc.group/trpc-go/trpc-agent-go/examples/session"
 )
@@ -86,7 +88,7 @@ var (
 	)
 	sessServiceName = flag.String(
 		"session",
-		"inmemory",
+		"redis",
 		"Name of the session service to use, inmemory / "+
 			"sqlite / redis / postgres / mysql / clickhouse",
 	)
@@ -111,6 +113,12 @@ var (
 		"Enable debug mode to print session events after each "+
 			"turn",
 	)
+	enableTrace = flag.Bool(
+		"enable-trace",
+		true,
+		"Enable Langfuse tracing for session operations. "+
+			"Requires LANGFUSE_SECRET_KEY, LANGFUSE_PUBLIC_KEY, LANGFUSE_HOST env vars.",
+	)
 )
 
 func main() {
@@ -124,6 +132,18 @@ func main() {
 			format = fmt.Sprintf("[req:%s] %s", reqID, format)
 		}
 		origInfofContext(ctx, format, args...)
+	}
+
+	if *enableTrace {
+		clean, err := langfuse.Start(context.Background())
+		if err != nil {
+			log.Fatalf("failed to start langfuse tracer: %v", err)
+		}
+		defer func() {
+			if err := clean(context.Background()); err != nil {
+				log.Printf("langfuse tracer cleanup: %v", err)
+			}
+		}()
 	}
 
 	fmt.Printf("Session Management Demo\n")
@@ -176,8 +196,9 @@ func (c *multiTurnChat) setup(_ context.Context) error {
 	sessionService, err := util.NewSessionServiceByType(
 		sessionType,
 		util.SessionServiceConfig{
-			EventLimit: *eventLimit,
-			TTL:        *sessionTTL,
+			EventLimit:    *eventLimit,
+			TTL:           *sessionTTL,
+			EnableTracing: *enableTrace,
 		},
 	)
 	if err != nil {
@@ -302,6 +323,15 @@ func (c *multiTurnChat) processMessage(
 
 	// Inject requestID into context for logging.
 	ctx = context.WithValue(ctx, requestIDKey, requestID)
+
+	// Create a root span if tracing is enabled. The session service
+	// will attach its child spans (create_session, get_session, append_event)
+	// to this root span automatically via context propagation.
+	if *enableTrace {
+		spanCtx, span := atrace.Tracer.Start(ctx, "session_demo_request")
+		defer span.End()
+		ctx = spanCtx
+	}
 
 	// Run the agent through the runner.
 	eventChan, err := c.runner.Run(

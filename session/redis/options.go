@@ -85,7 +85,8 @@ type ServiceOpts struct {
 	// compatMode controls zset/hashidx compatibility behavior.
 	// See CompatMode constants for details.
 	// Default: CompatModeLegacy (safe for most scenarios).
-	compatMode CompatMode
+	compatMode    CompatMode
+	enableTracing bool
 }
 
 // ServiceOpt is the option for the redis session service.
@@ -259,5 +260,12 @@ func WithCompatMode(mode CompatMode) ServiceOpt {
 func WithKeyPrefix(prefix string) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.keyPrefix = prefix
+	}
+}
+
+// WithEnableTracing enables OpenTelemetry tracing for redis session operations.
+func WithEnableTracing(enable bool) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.enableTracing = enable
 	}
 }
