@@ -51,6 +51,10 @@ const (
 	// attachment (see internal/state/appender).
 	appenderStateKey = "__append_event__"
 
+	// streamHubStateKey is the invocation state key used by the graph to
+	// share ephemeral streams across node invocations within the same run.
+	streamHubStateKey = "__graph_stream_hub__"
+
 	// SyncSummaryIntraRunStateKey is set on the invocation by the
 	// flow when sync intra-run summary is active.
 	// Runner checks this key to skip redundant async summary
@@ -798,6 +802,9 @@ func (inv *Invocation) cloneState() map[string]any {
 	}
 	if holder, ok := inv.state[appenderStateKey]; ok {
 		copied[appenderStateKey] = holder
+	}
+	if hub, ok := inv.state[streamHubStateKey]; ok {
+		copied[streamHubStateKey] = hub
 	}
 	return copied
 }
