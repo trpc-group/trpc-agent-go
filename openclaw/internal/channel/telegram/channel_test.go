@@ -40,7 +40,8 @@ type stubGateway struct {
 	err   error
 	delay time.Duration
 
-	onSend func()
+	onSend   func()
+	onCancel func()
 
 	canceled  []string
 	cancelOK  bool
@@ -73,9 +74,16 @@ func (g *stubGateway) Cancel(
 	requestID string,
 ) (bool, error) {
 	g.mu.Lock()
-	defer g.mu.Unlock()
 	g.canceled = append(g.canceled, requestID)
-	return g.cancelOK, g.cancelErr
+	onCancel := g.onCancel
+	ok := g.cancelOK
+	err := g.cancelErr
+	g.mu.Unlock()
+
+	if onCancel != nil {
+		onCancel()
+	}
+	return ok, err
 }
 
 type stubBot struct {
@@ -295,6 +303,21 @@ func TestNew_OptionsApplied(t *testing.T) {
 	require.False(t, ch.startFromLatest)
 	require.Equal(t, pollTimeout, ch.pollTimeout)
 	require.Equal(t, errorBackoff, ch.errorBackoff)
+}
+
+func TestOption_DMSessionResetAndBlockCleanup(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config{}
+	idle := 7 * time.Second
+
+	WithDMSessionIdleReset(idle)(cfg)
+	WithDMSessionDailyReset(true)(cfg)
+	WithDMBlockCleanup(dmBlockCleanupForget)(cfg)
+
+	require.Equal(t, idle, cfg.dmResetPolicy.Idle)
+	require.True(t, cfg.dmResetPolicy.Daily)
+	require.Equal(t, dmBlockCleanupForget, cfg.dmBlockCleanup)
 }
 
 func TestChannel_Run_Nil(t *testing.T) {
@@ -969,27 +992,35 @@ func TestChannel_Run_OneMessage(t *testing.T) {
 	t.Cleanup(cancel)
 
 	gw := &stubGateway{
-		rsp: gwclient.MessageResponse{
-			StatusCode: http.StatusOK,
-			Reply:      "ok",
-		},
-		onSend: cancel,
+		cancelOK: true,
+		onCancel: cancel,
 	}
-	gw.delay = 0
 
 	bot := &stubBot{
 		updates: [][]tgapi.Update{
 			{
 				{
 					UpdateID: 1,
+					MyChatMember: &tgapi.ChatMemberEvent{
+						Chat: &tgapi.Chat{
+							ID:   2,
+							Type: chatTypePrivate,
+						},
+						NewChatMember: &tgapi.ChatMember{
+							Status: tgChatMemberStatusLeft,
+						},
+					},
+				},
+				{
+					UpdateID: 2,
 					Message: &tgapi.Message{
 						MessageID: 1,
 						From:      &tgapi.User{ID: 2},
 						Chat: &tgapi.Chat{
-							ID:   3,
+							ID:   2,
 							Type: chatTypePrivate,
 						},
-						Text: "hi",
+						Text: "/help",
 					},
 				},
 			},
@@ -1005,9 +1036,27 @@ func TestChannel_Run_OneMessage(t *testing.T) {
 		pollTimeout:     0,
 		errorBackoff:    0,
 		dmPolicy:        dmPolicyOpen,
+		dmBlockCleanup:  dmBlockCleanupNone,
+		inflight:        newInflightRequests(),
 	}
 
+	laneKey := buildLaneKey("2", "")
+	ch.inflight.Set(laneKey, "req-1")
+
 	require.NoError(t, ch.Run(ctx))
+
+	require.Eventually(t, func() bool {
+		gw.mu.Lock()
+		defer gw.mu.Unlock()
+		return len(gw.canceled) == 1 && gw.canceled[0] == "req-1"
+	}, 500*time.Millisecond, 10*time.Millisecond)
+
+	require.Eventually(t, func() bool {
+		bot.mu.Lock()
+		defer bot.mu.Unlock()
+		return len(bot.sent) == 1 &&
+			strings.Contains(bot.sent[0].Text, "Commands:")
+	}, 500*time.Millisecond, 10*time.Millisecond)
 }
 
 func TestChannel_HandleMessage_Ignored(t *testing.T) {
@@ -1076,4 +1125,114 @@ func TestChannel_HandleMessage_SendError_Drops(t *testing.T) {
 		Text:      "hi",
 	})
 	require.NoError(t, err)
+}
+
+func TestChannel_HandleMyChatMember_Block_Reset(t *testing.T) {
+	t.Parallel()
+
+	gw := &stubGateway{cancelOK: true}
+	dir := t.TempDir()
+	ch, err := New(
+		testToken,
+		BotInfo{Username: "bot"},
+		gw,
+		WithStateDir(dir),
+		WithDMPolicy(dmPolicyOpen),
+		WithDMBlockCleanup(dmBlockCleanupReset),
+	)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	userID := "2"
+	laneKey := buildLaneKey(userID, "")
+
+	sid, rotated, err := ch.dmSessions.EnsureActiveSession(
+		ctx,
+		userID,
+		laneKey,
+		dmSessionResetPolicy{},
+	)
+	require.NoError(t, err)
+	require.False(t, rotated)
+	require.Equal(t, laneKey, sid)
+
+	ch.inflight.Set(laneKey, "req-1")
+
+	err = ch.handleMyChatMember(ctx, tgapi.ChatMemberEvent{
+		Chat: &tgapi.Chat{
+			ID:   2,
+			Type: chatTypePrivate,
+		},
+		NewChatMember: &tgapi.ChatMember{
+			Status: tgChatMemberStatusKicked,
+		},
+	})
+	require.NoError(t, err)
+
+	got, rotated, err := ch.dmSessions.EnsureActiveSession(
+		ctx,
+		userID,
+		laneKey,
+		dmSessionResetPolicy{},
+	)
+	require.NoError(t, err)
+	require.False(t, rotated)
+	require.True(t, strings.HasPrefix(got, laneKey+":"))
+
+	gw.mu.Lock()
+	require.Equal(t, []string{"req-1"}, gw.canceled)
+	gw.mu.Unlock()
+}
+
+func TestChannel_HandleMyChatMember_Block_Forget(t *testing.T) {
+	t.Parallel()
+
+	gw := &stubGatewayWithForget{
+		stubGateway: &stubGateway{cancelOK: true},
+	}
+	dir := t.TempDir()
+	ch, err := New(
+		testToken,
+		BotInfo{Username: "bot"},
+		gw,
+		WithStateDir(dir),
+		WithDMPolicy(dmPolicyOpen),
+		WithDMBlockCleanup(dmBlockCleanupForget),
+	)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	userID := "2"
+	laneKey := buildLaneKey(userID, "")
+
+	_, err = ch.dmSessions.Rotate(ctx, userID, laneKey)
+	require.NoError(t, err)
+
+	ch.inflight.Set(laneKey, "req-1")
+
+	err = ch.handleMyChatMember(ctx, tgapi.ChatMemberEvent{
+		Chat: &tgapi.Chat{
+			ID:   2,
+			Type: chatTypePrivate,
+		},
+		NewChatMember: &tgapi.ChatMember{
+			Status: tgChatMemberStatusLeft,
+		},
+	})
+	require.NoError(t, err)
+
+	gw.mu.Lock()
+	require.Equal(t, []string{"2"}, gw.forgetCalls)
+	require.Equal(t, []string{"req-1"}, gw.canceled)
+	gw.mu.Unlock()
+
+	got, rotated, err := ch.dmSessions.EnsureActiveSession(
+		ctx,
+		userID,
+		laneKey,
+		dmSessionResetPolicy{},
+	)
+	require.NoError(t, err)
+	require.False(t, rotated)
+	require.Equal(t, laneKey, got)
 }

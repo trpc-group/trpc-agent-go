@@ -12,12 +12,28 @@ package telegram
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestNewDMSessionStore_EmptyPath(t *testing.T) {
+	t.Parallel()
+
+	_, err := newDMSessionStore("")
+	require.Error(t, err)
+}
+
+func TestDMSessionStorePath_EmptyStateDir(t *testing.T) {
+	t.Parallel()
+
+	_, err := dmSessionStorePath("", BotInfo{Username: "bot"})
+	require.Error(t, err)
+}
 
 func TestDMSessionStore_RotatePersists(t *testing.T) {
 	t.Parallel()
@@ -75,6 +91,20 @@ func TestDMSessionStore_RotatePersists(t *testing.T) {
 	require.Equal(t, legacy, got)
 }
 
+func TestDMSessionStore_Load_RejectsVersion(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path, err := dmSessionStorePath(dir, BotInfo{Username: "bot"})
+	require.NoError(t, err)
+
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.WriteFile(path, []byte(`{"version":2}`), 0o600))
+
+	_, err = newDMSessionStore(path)
+	require.Error(t, err)
+}
+
 func TestDMSessionStore_AutoReset_IdleAndDaily(t *testing.T) {
 	t.Parallel()
 
@@ -124,4 +154,69 @@ func TestDMSessionStore_AutoReset_IdleAndDaily(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, rotated)
 	require.True(t, strings.HasPrefix(sid, legacy+":"))
+}
+
+func TestDMSessionStore_EnsureActiveSession_ValidationErrors(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path, err := dmSessionStorePath(dir, BotInfo{Username: "bot"})
+	require.NoError(t, err)
+
+	store, err := newDMSessionStore(path)
+	require.NoError(t, err)
+
+	_, _, err = store.EnsureActiveSession(
+		context.Background(),
+		"",
+		"sid",
+		dmSessionResetPolicy{},
+	)
+	require.Error(t, err)
+
+	_, _, err = store.EnsureActiveSession(
+		context.Background(),
+		"u1",
+		"",
+		dmSessionResetPolicy{},
+	)
+	require.Error(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _, err = store.EnsureActiveSession(
+		ctx,
+		"u1",
+		"sid",
+		dmSessionResetPolicy{},
+	)
+	require.Error(t, err)
+}
+
+func TestDMSessionStore_ForgetUser_EmptyAndMissing(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path, err := dmSessionStorePath(dir, BotInfo{Username: "bot"})
+	require.NoError(t, err)
+
+	store, err := newDMSessionStore(path)
+	require.NoError(t, err)
+
+	forgot, err := store.ForgetUser(context.Background(), "u1")
+	require.NoError(t, err)
+	require.False(t, forgot)
+
+	legacy := buildLaneKey("u2", "")
+	_, _, err = store.EnsureActiveSession(
+		context.Background(),
+		"u2",
+		legacy,
+		dmSessionResetPolicy{Daily: true},
+	)
+	require.NoError(t, err)
+
+	forgot, err = store.ForgetUser(context.Background(), "missing")
+	require.NoError(t, err)
+	require.False(t, forgot)
 }

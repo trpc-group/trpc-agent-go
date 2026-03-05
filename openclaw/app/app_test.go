@@ -1800,6 +1800,42 @@ func TestInProcGatewayClient_ForgetUser_DeletesState(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestInProcGatewayClient_ForgetUser_ValidationErrors(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	srv, err := gateway.New(&inProcGWTestRunner{})
+	require.NoError(t, err)
+
+	c := newInProcGatewayClient(srv, appName, nil, nil, "")
+
+	require.NoError(t, c.ForgetUser(nil, "telegram", "u1"))
+
+	err = c.ForgetUser(ctx, " ", "u1")
+	require.Error(t, err)
+	require.Equal(t, errEmptyForgetChannel, err.Error())
+
+	err = c.ForgetUser(ctx, "telegram", " ")
+	require.Error(t, err)
+	require.Equal(t, errEmptyForgetUserID, err.Error())
+
+	c2 := newInProcGatewayClient(srv, " ", nil, nil, "")
+	err = c2.ForgetUser(ctx, "telegram", "u1")
+	require.ErrorIs(t, err, session.ErrAppNameRequired)
+
+	c3 := newInProcGatewayClient(nil, appName, nil, nil, "")
+	err = c3.ForgetUser(ctx, "telegram", "u1")
+	require.Error(t, err)
+	require.Equal(t, errNilGatewayServer, err.Error())
+
+	debugFile := filepath.Join(t.TempDir(), "debug.txt")
+	require.NoError(t, os.WriteFile(debugFile, []byte("x"), 0o600))
+
+	c4 := newInProcGatewayClient(srv, appName, nil, nil, debugFile)
+	require.NoError(t, c4.ForgetUser(ctx, "telegram", "u1"))
+}
+
 func TestErrorForGWStatus_NilAPIError(t *testing.T) {
 	t.Parallel()
 

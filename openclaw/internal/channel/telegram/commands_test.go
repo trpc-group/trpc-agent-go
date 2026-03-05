@@ -12,6 +12,7 @@ package telegram
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -218,4 +219,74 @@ func TestChannel_HandleMessage_CommandForget_CallsGateway(t *testing.T) {
 	gw.mu.Lock()
 	require.Equal(t, []string{"2"}, gw.forgetCalls)
 	gw.mu.Unlock()
+}
+
+func TestChannel_HandleMessage_CommandForget_Unsupported(t *testing.T) {
+	t.Parallel()
+
+	gw := &stubGateway{}
+	dir := t.TempDir()
+	ch, err := New(
+		testToken,
+		BotInfo{Username: "bot"},
+		gw,
+		WithStateDir(dir),
+		WithDMPolicy(dmPolicyOpen),
+	)
+	require.NoError(t, err)
+
+	bot := &stubBot{}
+	ch.bot = bot
+
+	err = ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID: 3,
+		From:      &tgapi.User{ID: 2},
+		Chat:      &tgapi.Chat{ID: 1, Type: chatTypePrivate},
+		Text:      "/forget",
+	})
+	require.NoError(t, err)
+
+	bot.mu.Lock()
+	require.Len(t, bot.sent, 1)
+	require.Equal(t, forgetUnsupportedMessage, bot.sent[0].Text)
+	bot.mu.Unlock()
+}
+
+func TestChannel_HandleMessage_CommandForget_Error(t *testing.T) {
+	t.Parallel()
+
+	wantErr := errors.New("forget failed")
+	gw := &stubGatewayWithForget{
+		stubGateway: &stubGateway{},
+		forgetErr:   wantErr,
+	}
+	dir := t.TempDir()
+	ch, err := New(
+		testToken,
+		BotInfo{Username: "bot"},
+		gw,
+		WithStateDir(dir),
+		WithDMPolicy(dmPolicyOpen),
+	)
+	require.NoError(t, err)
+
+	bot := &stubBot{}
+	ch.bot = bot
+
+	err = ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID: 4,
+		From:      &tgapi.User{ID: 2},
+		Chat:      &tgapi.Chat{ID: 1, Type: chatTypePrivate},
+		Text:      "/forget",
+	})
+	require.NoError(t, err)
+
+	gw.mu.Lock()
+	require.Equal(t, []string{"2"}, gw.forgetCalls)
+	gw.mu.Unlock()
+
+	bot.mu.Lock()
+	require.Len(t, bot.sent, 1)
+	require.Equal(t, forgetFailedMessage, bot.sent[0].Text)
+	bot.mu.Unlock()
 }
