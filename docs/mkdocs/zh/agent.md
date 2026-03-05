@@ -389,6 +389,44 @@ agent := llmagent.New(
 )
 ```
 
+### 调用次数限制（安全机制）
+
+为防止 Agent 陷入无限循环或过度消耗资源，LLMAgent 提供了两个可选的调用次数限制配置：
+
+**可用配置：**
+
+| 配置项 | 说明 |
+|--------|------|
+| `llmagent.WithMaxLLMCalls(n)` | 限制每次调用的 LLM 调用次数上限。当 `n > 0` 时生效，`n <= 0` 时不限制（默认）。 |
+| `llmagent.WithMaxToolIterations(n)` | 限制每次调用的工具迭代次数上限。当 `n > 0` 时生效，`n <= 0` 时不限制（默认）。 |
+
+**使用示例：**
+
+```go
+agent := llmagent.New(
+  "safe-agent",
+  llmagent.WithModel(modelInstance),
+  llmagent.WithTools([]tool.Tool{myTool}),
+  // 限制最多调用 10 次 LLM。
+  llmagent.WithMaxLLMCalls(10),
+  // 限制最多进行 5 轮工具调用迭代。
+  llmagent.WithMaxToolIterations(5),
+)
+```
+
+**行为说明：**
+
+- **`WithMaxLLMCalls`**：当 LLM 调用次数超过限制时，会返回 `StopError`，终止当前调用。
+- **`WithMaxToolIterations`**：当工具迭代次数超过限制时，会发送 `flow_error` 响应事件并结束调用，不会返回 `StopError`。
+- 两个限制相互独立，可以单独使用或组合使用。
+- 这些限制是每次调用级别的，不同的 `runner.Run()` 调用会各自独立计数。
+
+**推荐用法：**
+
+- 在生产环境中，建议设置合理的限制以防止意外情况。
+- 根据任务的复杂度和预期行为设置限制值。
+- 可以在 [examples/max_limits](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/max_limits) 查看完整示例。
+
 ### 处理事件流
 
 `runner.Run()` 返回的 `eventChan` 是一个事件通道，Agent 执行过程中会持续向这个通道发送 Event 对象。
