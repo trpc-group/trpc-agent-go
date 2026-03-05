@@ -417,7 +417,7 @@ agent := llmagent.New(
 **行为说明：**
 
 - **`WithMaxLLMCalls`**：当 LLM 调用次数超过限制时，会返回 `StopError`，终止当前调用。
-- **`WithMaxToolIterations`**：当工具迭代次数超过限制时，会返回 `StopError`，终止当前调用。
+- **`WithMaxToolIterations`**：当工具迭代次数超过限制时，会发送 `flow_error` 响应事件并结束调用，不会返回 `StopError`。
 - 两个限制相互独立，可以单独使用或组合使用。
 - 这些限制是每次调用级别的，不同的 `runner.Run()` 调用会各自独立计数。
 

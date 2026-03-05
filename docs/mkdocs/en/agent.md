@@ -443,7 +443,7 @@ agent := llmagent.New(
 **Behavior:**
 
 - **`WithMaxLLMCalls`**: When LLM call count exceeds the limit, a `StopError` is returned and the current invocation terminates.
-- **`WithMaxToolIterations`**: When tool iteration count exceeds the limit, a `StopError` is returned and the current invocation terminates.
+- **`WithMaxToolIterations`**: When tool iteration count exceeds the limit, a `flow_error` response event is emitted and the invocation ends. It does not return a `StopError`.
 - Both limits are independent and can be used separately or together.
 - These limits are per-invocation; different `runner.Run()` calls maintain independent counts.
 
