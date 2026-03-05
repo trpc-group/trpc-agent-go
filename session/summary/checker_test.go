@@ -149,6 +149,29 @@ func TestCheckEventThreshold(t *testing.T) {
 		// Single FilterKey → no filtering → 5 > 2 = true.
 		assert.True(t, checker(sess))
 	})
+
+	t.Run("prepended summary event does not break branch detection", func(t *testing.T) {
+		// prependPrevSummary inserts a synthetic event with
+		// FilterKey="" at the head of the event list. This empty
+		// FilterKey must not cause filterPrimaryEvents to treat
+		// the set as "mixed" and discard all sub-agent events.
+		const appName = "my-app"
+		checker := CheckEventThreshold(2)
+		events := []event.Event{
+			// Synthetic summary event (FilterKey="").
+			{Timestamp: time.Now(), FilterKey: ""},
+			{Timestamp: time.Now(), FilterKey: "sub-agent-abc"},
+			{Timestamp: time.Now(), FilterKey: "sub-agent-abc"},
+			{Timestamp: time.Now(), FilterKey: "sub-agent-abc"},
+		}
+		sess := &session.Session{
+			AppName: appName,
+			Events:  events,
+		}
+		// Empty FilterKey is ignored in mixed detection → single
+		// non-empty key "sub-agent-abc" → 4 > 2 = true.
+		assert.True(t, checker(sess))
+	})
 }
 
 func TestCheckTimeThreshold(t *testing.T) {
@@ -393,6 +416,41 @@ func TestCheckTokenThreshold(t *testing.T) {
 			},
 		}
 		// Single FilterKey → no filtering → triggers.
+		assert.True(t, checker(sess))
+	})
+
+	t.Run("prepended summary event does not break branch detection", func(t *testing.T) {
+		// prependPrevSummary inserts a synthetic event with
+		// FilterKey="" at the head. This must not cause
+		// filterPrimaryEvents to treat the set as "mixed" and
+		// discard all sub-agent events.
+		const appName = "my-app"
+		checker := CheckTokenThreshold(10)
+		sess := &session.Session{
+			AppName: appName,
+			Events: []event.Event{
+				{
+					Author:    "system",
+					FilterKey: "",
+					Timestamp: time.Now(),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "prev summary"},
+					}}},
+				},
+				{
+					Author:    "assistant",
+					FilterKey: "child-agent-xyz",
+					Timestamp: time.Now(),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{
+							Content: strings.Repeat("a", 800),
+						},
+					}}},
+				},
+			},
+		}
+		// Empty FilterKey ignored in mixed detection → single
+		// non-empty key → triggers.
 		assert.True(t, checker(sess))
 	})
 }

@@ -91,17 +91,24 @@ func filterDeltaEvents(sess *session.Session) []event.Event {
 // parent-level threshold checks in the full-session summary scenario.
 //
 // The function distinguishes two cases by inspecting whether the events
-// contain multiple distinct FilterKey values:
+// contain multiple distinct non-empty FilterKey values:
 //
-//  1. Single FilterKey (branch summary) — all events share one key
-//     because computeDeltaSince already filtered by that branch.
-//     No further filtering is needed; return the events as-is.
+//  1. Single non-empty FilterKey (branch summary) — all events with a
+//     non-empty FilterKey share the same value because computeDeltaSince
+//     already filtered by that branch. No further filtering is needed;
+//     return the events as-is.
 //
-//  2. Mixed FilterKeys (full-session summary) — events come from
-//     both the primary agent and one or more sub-agents. Only events
-//     whose FilterKey matches the session's AppName (the primary
-//     agent's key) are retained so that sub-agent tokens/counts do
-//     not inflate the parent threshold.
+//  2. Mixed non-empty FilterKeys (full-session summary) — events come
+//     from both the primary agent and one or more sub-agents. Only
+//     events whose FilterKey matches the session's AppName (the primary
+//     agent's key) are retained so that sub-agent tokens/counts do not
+//     inflate the parent threshold.
+//
+// Events with an empty FilterKey (e.g. synthetic summary events created
+// by prependPrevSummary) are ignored when determining whether the set is
+// mixed, and are always kept in the output. This prevents a single
+// prepended summary event from incorrectly triggering the mixed-key
+// filtering path for what is actually a single-branch summary.
 //
 // When AppName is empty, no filtering is applied for backward
 // compatibility with sessions that do not set an AppName.
@@ -111,25 +118,37 @@ func filterPrimaryEvents(
 	if appName == "" || len(events) == 0 {
 		return events
 	}
-	// Detect whether the events contain multiple distinct FilterKeys.
-	first := events[0].FilterKey
+	// Detect whether the events contain multiple distinct non-empty
+	// FilterKeys. Empty FilterKeys are ignored because they come
+	// from synthetic events (e.g. prepended previous summary).
+	var firstNonEmpty string
 	mixed := false
-	for i := 1; i < len(events); i++ {
-		if events[i].FilterKey != first {
+	for i := range events {
+		fk := events[i].FilterKey
+		if fk == "" {
+			continue
+		}
+		if firstNonEmpty == "" {
+			firstNonEmpty = fk
+			continue
+		}
+		if fk != firstNonEmpty {
 			mixed = true
 			break
 		}
 	}
 	if !mixed {
-		// All events share one FilterKey (branch summary) — no
-		// additional filtering required.
+		// All non-empty FilterKeys are identical (branch summary)
+		// or there are no non-empty keys at all — no additional
+		// filtering required.
 		return events
 	}
-	// Mixed FilterKeys (full-session summary) — keep only events
-	// that belong to the primary agent.
+	// Mixed non-empty FilterKeys (full-session summary) — keep
+	// events that belong to the primary agent plus any events with
+	// an empty FilterKey (synthetic summary events).
 	out := make([]event.Event, 0, len(events))
 	for _, e := range events {
-		if e.FilterKey == appName {
+		if e.FilterKey == appName || e.FilterKey == "" {
 			out = append(out, e)
 		}
 	}
