@@ -181,6 +181,29 @@ func TestSummarizeSession_FilteredKey_RespectsDeltaAndShould(t *testing.T) {
 	require.Equal(t, "sum", base.Summaries["b1"].Summary)
 }
 
+func TestBuildFilterSession_SetsSummaryScope(t *testing.T) {
+	now := time.Now()
+	base := &session.Session{
+		ID:        "s1",
+		AppName:   "app",
+		UserID:    "u",
+		CreatedAt: now.Add(-time.Hour),
+	}
+	evs := []event.Event{
+		makeEvent("hello", now, "app/child"),
+	}
+
+	full := buildFilterSession(base, "", evs)
+	fullScope, ok := full.GetState(summaryScopeStateKey)
+	require.True(t, ok)
+	require.Equal(t, summaryScopeFull, string(fullScope))
+
+	branch := buildFilterSession(base, "app/child", evs)
+	branchScope, ok := branch.GetState(summaryScopeStateKey)
+	require.True(t, ok)
+	require.Equal(t, summaryScopeBranch, string(branchScope))
+}
+
 func TestSummarizeSession_FullSession_SingleWrite(t *testing.T) {
 	now := time.Now()
 	base := &session.Session{ID: "s1", AppName: "a", UserID: "u"}

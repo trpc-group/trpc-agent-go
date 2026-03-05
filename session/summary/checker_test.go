@@ -129,6 +129,23 @@ func TestCheckEventThreshold(t *testing.T) {
 		assert.False(t, checker(sess))
 	})
 
+	t.Run("full scope excludes sub-agent-only events", func(t *testing.T) {
+		// Full-session summary can still have only sub-agent delta events.
+		// With explicit scope marker, these should not count.
+		const appName = "my-app"
+		checker := CheckEventThreshold(0)
+		sess := &session.Session{
+			AppName: appName,
+			State: session.StateMap{
+				summaryScopeStateKey: []byte(summaryScopeFull),
+			},
+			Events: []event.Event{
+				{Timestamp: time.Now(), FilterKey: "sub-agent-abc"},
+			},
+		}
+		assert.False(t, checker(sess))
+	})
+
 	t.Run("branch summary counts all events in branch", func(t *testing.T) {
 		// Branch-summary scenario: computeDeltaSince already
 		// pre-filtered to one sub-agent branch. All events share
@@ -358,6 +375,30 @@ func TestCheckTokenThreshold(t *testing.T) {
 		}
 		// Without filtering, total tokens >> 100. With filtering,
 		// only the short primary event is counted.
+		assert.False(t, checker(sess))
+	})
+
+	t.Run("full scope excludes sub-agent-only tokens", func(t *testing.T) {
+		const appName = "my-app"
+		checker := CheckTokenThreshold(100)
+		sess := &session.Session{
+			AppName: appName,
+			State: session.StateMap{
+				summaryScopeStateKey: []byte(summaryScopeFull),
+			},
+			Events: []event.Event{
+				{
+					Author:    "assistant",
+					FilterKey: "child-agent-xyz",
+					Timestamp: time.Now(),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{
+							Content: strings.Repeat("a", 1200),
+						},
+					}}},
+				},
+			},
+		}
 		assert.False(t, checker(sess))
 	})
 

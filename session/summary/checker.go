@@ -31,6 +31,18 @@ var (
 	defaultTokenCounter   model.TokenCounter = model.NewSimpleTokenCounter()
 )
 
+const (
+	// summaryScopeStateKey marks summary scope in temporary sessions built by
+	// session/internal/summary before calling ShouldSummarize.
+	//
+	// Values:
+	//   - summaryScopeFull: full-session summary check.
+	//   - summaryScopeBranch: branch/filter-key summary check.
+	summaryScopeStateKey = "summary:scope"
+	summaryScopeFull     = "full"
+	summaryScopeBranch   = "branch"
+)
+
 func getTokenCounter() model.TokenCounter {
 	defaultTokenCounterMu.RLock()
 	counter := defaultTokenCounter
@@ -52,6 +64,23 @@ func SetTokenCounter(counter model.TokenCounter) {
 	defaultTokenCounterMu.Lock()
 	defaultTokenCounter = counter
 	defaultTokenCounterMu.Unlock()
+}
+
+func getSummaryScope(sess *session.Session) string {
+	if sess == nil {
+		return ""
+	}
+	raw, ok := sess.GetState(summaryScopeStateKey)
+	if !ok || len(raw) == 0 {
+		return ""
+	}
+	scope := string(raw)
+	switch scope {
+	case summaryScopeFull, summaryScopeBranch:
+		return scope
+	default:
+		return ""
+	}
 }
 
 // filterDeltaEvents returns events that occurred strictly after the last
@@ -90,19 +119,15 @@ func filterDeltaEvents(sess *session.Session) []event.Event {
 // filterPrimaryEvents prevents sub-agent events from inflating
 // parent-level threshold checks in the full-session summary scenario.
 //
-// The function distinguishes two cases by inspecting whether the events
-// contain multiple distinct non-empty FilterKey values:
+// Preferred behavior is driven by explicit summary scope state:
 //
-//  1. Single non-empty FilterKey (branch summary) — all events with a
-//     non-empty FilterKey share the same value because computeDeltaSince
-//     already filtered by that branch. No further filtering is needed;
-//     return the events as-is.
+//  1. summaryScopeBranch: return events as-is.
 //
-//  2. Mixed non-empty FilterKeys (full-session summary) — events come
-//     from both the primary agent and one or more sub-agents. Only
-//     events whose FilterKey matches the session's AppName (the primary
-//     agent's key) are retained so that sub-agent tokens/counts do not
-//     inflate the parent threshold.
+//  2. summaryScopeFull: keep only events whose FilterKey matches AppName.
+//
+// For backward compatibility when scope is unknown, a legacy heuristic is used:
+// if events contain mixed non-empty FilterKeys, retain only AppName and empty
+// FilterKey events; otherwise return events as-is.
 //
 // Events with an empty FilterKey (e.g. synthetic summary events created
 // by prependPrevSummary) are ignored when determining whether the set is
@@ -113,10 +138,22 @@ func filterDeltaEvents(sess *session.Session) []event.Event {
 // When AppName is empty, no filtering is applied for backward
 // compatibility with sessions that do not set an AppName.
 func filterPrimaryEvents(
-	events []event.Event, appName string,
+	events []event.Event, appName string, scope string,
 ) []event.Event {
 	if appName == "" || len(events) == 0 {
 		return events
+	}
+	switch scope {
+	case summaryScopeBranch:
+		return events
+	case summaryScopeFull:
+		out := make([]event.Event, 0, len(events))
+		for _, e := range events {
+			if e.FilterKey == appName {
+				out = append(out, e)
+			}
+		}
+		return out
 	}
 	// Detect whether the events contain multiple distinct non-empty
 	// FilterKeys. Empty FilterKeys are ignored because they come
@@ -165,7 +202,11 @@ func CheckEventThreshold(eventCount int) Checker {
 		if len(delta) == 0 {
 			return false
 		}
-		primary := filterPrimaryEvents(delta, sess.AppName)
+		primary := filterPrimaryEvents(
+			delta,
+			sess.AppName,
+			getSummaryScope(sess),
+		)
 		return len(primary) > eventCount
 	}
 }
@@ -211,7 +252,11 @@ func CheckTokenThreshold(tokenCount int) Checker {
 		if len(delta) == 0 {
 			return false
 		}
-		primary := filterPrimaryEvents(delta, sess.AppName)
+		primary := filterPrimaryEvents(
+			delta,
+			sess.AppName,
+			getSummaryScope(sess),
+		)
 		if len(primary) == 0 {
 			return false
 		}

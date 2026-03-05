@@ -26,6 +26,14 @@ import (
 // authorSystem is the system author.
 const authorSystem = "system"
 
+const (
+	// summaryScopeStateKey is consumed by session/summary checkers to
+	// distinguish full-session vs branch-summary threshold evaluation.
+	summaryScopeStateKey = "summary:scope"
+	summaryScopeFull     = "full"
+	summaryScopeBranch   = "branch"
+)
+
 // computeDeltaSince returns events that occurred strictly after the given
 // time and match the filterKey, along with the latest event timestamp among
 // the returned events. When since is zero, all events are considered. When
@@ -71,11 +79,17 @@ func prependPrevSummary(prevSummary string, delta []event.Event, now time.Time) 
 // buildFilterSession builds a temporary session containing filterKey events.
 // When filterKey=="", it represents the full-session input.
 func buildFilterSession(base *session.Session, filterKey string, evs []event.Event) *session.Session {
+	scope := summaryScopeFull
+	if filterKey != "" {
+		scope = summaryScopeBranch
+	}
 	return &session.Session{
-		ID:        base.ID + ":" + filterKey,
-		AppName:   base.AppName,
-		UserID:    base.UserID,
-		State:     nil,
+		ID:      base.ID + ":" + filterKey,
+		AppName: base.AppName,
+		UserID:  base.UserID,
+		State: session.StateMap{
+			summaryScopeStateKey: []byte(scope),
+		},
 		Events:    evs,
 		UpdatedAt: time.Now(),
 		CreatedAt: base.CreatedAt,
