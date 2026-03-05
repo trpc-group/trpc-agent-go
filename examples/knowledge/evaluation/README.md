@@ -51,7 +51,7 @@ python3 main.py --kb=agno
 python3 main.py --kb=autogen
 
 # Full log output (show complete answers and contexts)
-python3 main.py --kb=trpc-agent-go --max-qa=1 --full-log
+python3 main.py --kb=trpc-agent-go --full-log
 ```
 
 ## Configuration Alignment
@@ -212,7 +212,7 @@ Tests whether the model can correctly answer questions when retrieved documents 
 
 | Metric | LangChain | tRPC-Agent-Go | Agno | CrewAI | Best |
 |--------|-----------|---------------|------|--------|------|
-| **Faithfulness** | **0.9783** | 0.9872 | 0.7554 | **0.9948** | ✅ CrewAI |
+| **Faithfulness** | 0.9783 | 0.9872 | 0.7554 | **0.9948** | ✅ CrewAI |
 | **Answer Relevancy** | 0.9493 | 0.9534 | **0.9612** | 0.9125 | ✅ Agno |
 | **Answer Correctness** | 0.7969 | **0.8462** | 0.7141 | 0.7680 | ✅ tRPC-Agent-Go |
 | **Answer Similarity** | 0.5308 | **0.5401** | 0.5040 | 0.5327 | ✅ tRPC-Agent-Go |
@@ -223,7 +223,7 @@ Tests whether the model can correctly answer questions when retrieved documents 
 |--------|-----------|---------------|------|--------|------|
 | **Context Precision** | 0.9407 | **0.9539** | 0.9452 | 0.9393 | ✅ tRPC-Agent-Go |
 | **Context Recall** | **1.0000** | **1.0000** | **1.0000** | **1.0000** | Tied |
-| **Context Entity Recall** | 0.6378 | **0.6478** | 0.6583 | 0.6467 | ✅ Agno |
+| **Context Entity Recall** | 0.6378 | 0.6478 | **0.6583** | 0.6467 | ✅ Agno |
 
 #### 2.2 RGB-en_int: Information Integration (100 QA Pairs)
 
@@ -234,7 +234,7 @@ Tests the model's ability to synthesize information scattered across multiple do
 | Metric | LangChain | tRPC-Agent-Go | Agno | CrewAI | Best |
 |--------|-----------|---------------|------|--------|------|
 | **Faithfulness** | 0.9523 | **0.9743** | 0.8615 | 0.9623 | ✅ tRPC-Agent-Go |
-| **Answer Relevancy** | 0.9301 | 0.9061 | 0.9146 | **0.9094** | ✅ LangChain |
+| **Answer Relevancy** | **0.9301** | 0.9061 | 0.9146 | 0.9094 | ✅ LangChain |
 | **Answer Correctness** | 0.7258 | **0.8059** | 0.7203 | 0.7277 | ✅ tRPC-Agent-Go |
 | **Answer Similarity** | 0.5441 | **0.5683** | 0.5447 | 0.5546 | ✅ tRPC-Agent-Go |
 
@@ -242,8 +242,8 @@ Tests the model's ability to synthesize information scattered across multiple do
 
 | Metric | LangChain | tRPC-Agent-Go | Agno | CrewAI | Best |
 |--------|-----------|---------------|------|--------|------|
-| **Context Precision** | 0.2868 | **0.3118** | **0.3244** | 0.3069 | ✅ Agno |
-| **Context Recall** | 0.9133 | **0.9233** | **0.9300** | 0.9250 | ✅ Agno |
+| **Context Precision** | 0.2868 | 0.3118 | **0.3244** | 0.3069 | ✅ Agno |
+| **Context Recall** | 0.9133 | 0.9233 | **0.9300** | 0.9250 | ✅ Agno |
 | **Context Entity Recall** | 0.6317 | **0.6500** | 0.6350 | 0.6417 | ✅ tRPC-Agent-Go |
 
 #### 2.3 RGB-en_fact: Counterfactual Robustness (100 QA Pairs)
@@ -263,7 +263,7 @@ Tests whether the model can identify and reject counterfactual (altered facts) i
 
 | Metric | LangChain | tRPC-Agent-Go | Agno | CrewAI | Best |
 |--------|-----------|---------------|------|--------|------|
-| **Context Precision** | **0.8652** | 0.8641 | 0.8495 | **0.8694** | ✅ CrewAI |
+| **Context Precision** | 0.8652 | 0.8641 | 0.8495 | **0.8694** | ✅ CrewAI |
 | **Context Recall** | **0.9900** | **0.9900** | 0.9700 | **0.9900** | Tied |
 | **Context Entity Recall** | 0.7300 | **0.7400** | 0.7100 | 0.7300 | ✅ tRPC-Agent-Go |
 
@@ -285,6 +285,75 @@ Tests whether the model can identify and reject counterfactual (altered facts) i
 3. **Information Integration (en_int) is the hardest task**: Context Precision drops significantly for all frameworks (0.28-0.32 vs 0.85-0.95 in other subsets), reflecting the inherent difficulty of multi-document reasoning. Agno performs relatively better here.
 4. **All frameworks achieve near-perfect Context Recall on en**: Context Recall = 1.0 for all frameworks on the noise robustness subset, suggesting the retrieval step is highly effective when documents are straightforward.
 5. **Agno shows weaker faithfulness**: Consistently lower Faithfulness (0.69-0.86) across all subsets indicates a higher tendency to generate content beyond retrieved documents.
+
+### 3. Vertical Evaluation: tRPC-Agent-Go Hybrid Search Weight Ablation
+
+To find the optimal weight ratio for PGVector Hybrid Search (vector similarity + sparse text retrieval) in tRPC-Agent-Go, we designed a gradient ablation experiment with 11 steps ranging from pure text (`v0_t100`) to pure vector (`v100_t0`).
+
+**Test Configuration:**
+- **Dataset**: HuggingFace Documentation QA subset (10 sampled QA pairs)
+- **Retrieval Configuration**: Top K = 4
+- **Embedding / Agent / Eval Models**: Same as the main evaluation
+
+**Results (sorted by vector weight from low to high):**
+
+| Config (vector_weight\_text_weight) | Faithfulness | Answer Relevancy | Answer Correctness | Answer Similarity | Context Precision | Context Recall | Context Entity Recall |
+| ----------------------------------- | ------------ | ---------------- | ------------------ | ----------------- | ----------------- | -------------- | --------------------- |
+| **hybrid_v0_t100** (pure text)      | 0.7625 | 0.6862 | 0.5830 | 0.6785 | 0.4046 | 0.6000 | 0.3500 |
+| **hybrid_v10_t90**                  | 0.8417 | 0.6090 | 0.6260 | 0.6840 | 0.5358 | 0.8000 | 0.5500 |
+| **hybrid_v20_t80**                  | 0.8500 | 0.6804 | 0.5279 | 0.6691 | 0.5258 | 0.8000 | 0.5000 |
+| **hybrid_v30_t70**                  | 0.9750 | 0.6744 | 0.4706 | 0.6622 | 0.5624 | 0.8000 | 0.4500 |
+| **hybrid_v40_t60**                  | 0.8800 | 0.7348 | 0.5657 | 0.6963 | 0.6109 | 0.9000 | 0.5000 |
+| **hybrid_v50_t50**                  | 0.8667 | 0.7296 | 0.5921 | 0.6817 | 0.5795 | 0.8000 | 0.5500 |
+| **hybrid_v60_t40**                  | 0.9000 | 0.8126 | 0.6955 | 0.7086 | 0.6223 | 0.9000 | 0.5500 |
+| **hybrid_v70_t30**                  | 0.9000 | 0.7929 | 0.6240 | 0.7045 | 0.6787 | 0.9000 | 0.4500 |
+| **hybrid_v80_t20**                  | 0.9000 | 0.8044 | 0.6305 | 0.7021 | 0.7018 | 0.9000 | 0.4700 |
+| **hybrid_v90_t10**                  | 1.0000 | 0.8544 | 0.6543 | 0.7232 | 0.7257 | 0.9000 | **0.5750** |
+| **hybrid_v100_t0** (pure vector)    | **1.0000** | **0.8787** | **0.7648** | **0.7493** | **0.7665** | **1.0000** | 0.5500 |
+
+**Key Findings & Analysis:**
+
+1. **Pure vector retrieval (v100_t0) achieves overwhelming advantage**:
+   With the current tech stack (high-quality `BGE-M3` 1024-dim embedding model) and Markdown QA dataset, **pure vector retrieval ranks 1st in 6 out of 7 metrics (all except Entity Recall)**. This indicates that semantic representations are sufficient to capture the relevance between documents and queries.
+2. **Pure text retrieval (v0_t100) performs worst**:
+   When degraded to pure sparse text retrieval, Context Recall drops sharply to 0.6000 and Context Precision is only 0.4046, resulting in the lowest Answer Correctness across all configurations.
+3. **"Text penalty" phenomenon in hybrid retrieval**:
+   Observing the intermediate gradients (v10 to v90) reveals a clear trend: **as text weight increases, overall metrics decline**. For example, at equal weights (v50_t50), Answer Correctness drops to 0.5921; only when vector weight reaches 0.9 (v90_t10) do metrics recover to near pure-vector levels. This suggests that in the current scenario, the "literal matching" benefit from text keyword retrieval is far outweighed by the noise it introduces.
+
+**Practical Recommendations**:
+For standard RAG scenarios (especially systems with high-quality LLMs and embeddings), **it is recommended to maximize the vector retrieval weight or set it as the dominant factor (>0.9)**. Only consider increasing sparse text retrieval weight in scenarios with highly specialized jargon or non-semantic identifiers (e.g., product codes).
+
+### 4. Vertical Evaluation: Reciprocal Rank Fusion (RRF) Mode
+
+In addition to Weighted Score Fusion, PGVector also supports **Reciprocal Rank Fusion (RRF)** as a hybrid search fusion strategy. RRF does not rely on the absolute values of raw scores but instead fuses results based on the **ranking** from each retrieval channel:
+
+```
+score(d) = sum(1 / (k + rank_i))
+```
+
+where `k` is a constant (default 60) and `rank_i` is the rank of document `d` in the `i`-th retrieval channel. This approach naturally avoids the issue of inconsistent score scales between vector and text scores.
+
+**Test Configuration:**
+- **Dataset**: HuggingFace Documentation QA subset (10 sampled QA pairs)
+- **Retrieval Configuration**: Top K = 4, RRF k=60, CandidateRatio=3
+- **Embedding / Agent / Eval Models**: Same as the main evaluation
+
+**Results:**
+
+| Fusion Strategy | Faithfulness | Answer Relevancy | Answer Correctness | Answer Similarity | Context Precision | Context Recall | Context Entity Recall |
+| --------------- | ------------ | ---------------- | ------------------ | ----------------- | ----------------- | -------------- | --------------------- |
+| **RRF** (k=60) | 1.0000 | 0.7502 | 0.5439 | 0.6755 | 0.5957 | 0.8000 | 0.4000 |
+| **Weighted** (v100_t0, pure vector) | 1.0000 | 0.8787 | 0.7648 | 0.7493 | 0.7665 | 1.0000 | 0.5500 |
+| **Weighted** (v90_t10) | 1.0000 | 0.8544 | 0.6543 | 0.7232 | 0.7257 | 0.9000 | 0.5750 |
+| **Weighted** (v50_t50, equal) | 0.8667 | 0.7296 | 0.5921 | 0.6817 | 0.5795 | 0.8000 | 0.5500 |
+
+**Analysis:**
+
+1. **RRF underperforms pure vector weighted fusion in the current scenario**: RRF's Answer Correctness (0.5439) and Context Precision (0.5957) are significantly lower than pure vector mode (0.7648 / 0.7665), and Context Recall also drops from 1.0 to 0.8.
+2. **RRF is comparable to medium-weight fusion**: RRF's metrics are close to v50_t50, suggesting that under the current dataset, RRF's rank-based fusion is roughly equivalent to equal-weight fusion between vector and text channels.
+3. **Root cause**: With the current HuggingFace Markdown documents + BGE-M3 high-quality embeddings, the vector retrieval channel quality is far superior to the sparse text retrieval channel. RRF gives relatively equal weight to both channels' rankings (both use `1/(k+rank)`), which effectively **amplifies the influence of the lower-quality text channel**, diluting the advantage of the high-quality vector channel. Weighted fusion, on the other hand, can suppress text channel noise by setting a very high vector weight (e.g., 0.9 or 1.0).
+
+**Conclusion**: RRF is better suited for scenarios where **both retrieval channels are of comparable quality** (e.g., when high-quality vector retrieval and BM25 retrieval coexist). When one channel is clearly superior to the other, weighted fusion with appropriate weight tuning is the better choice.
 
 ---
 

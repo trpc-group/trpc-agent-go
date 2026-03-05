@@ -142,7 +142,7 @@ func (s *KnowledgeService) newPGVectorStore() (vectorstore.VectorStore, error) {
 	port, _ := strconv.Atoi(portStr)
 	user := getEnvOrDefault("PGVECTOR_USER", "root")
 	password := getEnvOrDefault("PGVECTOR_PASSWORD", "123")
-	database := getEnvOrDefault("PGVECTOR_DATABASE", "rgb")
+	database := getEnvOrDefault("PGVECTOR_DATABASE", "vertical")
 	table := getEnvOrDefault("PGVECTOR_TABLE", "trpc_agent_go_eval")
 
 	// Command-line --pg-table overrides env var

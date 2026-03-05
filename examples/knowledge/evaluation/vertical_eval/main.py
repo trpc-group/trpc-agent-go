@@ -5,10 +5,11 @@ Runs a suite of experiments with different configurations (hybrid weights,
 retrieval k) against the HuggingFace dataset, and generates a comparison report.
 
 Usage:
-    python -m vertical_eval.main --suite hybrid_weight --max-qa 10
-    python -m vertical_eval.main --suite retrieval_k --max-qa 10
-    python -m vertical_eval.main --suite all --max-qa 10
-    python -m vertical_eval.main --suite hybrid_weight --pg-table my_table --max-qa 10
+    python -m vertical_eval.main --suite hybrid_weight
+    python -m vertical_eval.main --suite retrieval_k
+    python -m vertical_eval.main --suite all
+    python -m vertical_eval.main --suite hybrid_weight --pg-table my_table
+    python -m vertical_eval.main --suite hybrid_rrf --skip-load --pg-table veval_hw_rrf
 """
 
 import argparse
@@ -34,12 +35,6 @@ def main():
         choices=list(EXPERIMENT_SUITES.keys()) + ["all"],
         default="hybrid_weight",
         help="Experiment suite to run (default: hybrid_weight)",
-    )
-    parser.add_argument(
-        "--max-qa",
-        type=int,
-        default=10,
-        help="Maximum QA items per experiment (default: 10)",
     )
     parser.add_argument(
         "--k",
@@ -73,7 +68,7 @@ def main():
     parser.add_argument(
         "--timeout",
         type=int,
-        default=600,
+        default=6000000,
         help="Timeout in seconds for evaluation (default: 600)",
     )
     parser.add_argument(
@@ -130,14 +125,13 @@ def main():
         print(f"\n{'#'*70}")
         print(f"# Suite: {suite_name}")
         print(f"# Experiments: {len(experiments)}")
-        print(f"# Max QA: {args.max_qa}")
         print(f"# Output: {output_dir}")
         print(f"{'#'*70}")
 
         # Load dataset (HuggingFace)
         from dataset import create_dataset
         dataset = create_dataset("huggingface")
-        qa_items = dataset.load_qa_items(args.max_qa)
+        qa_items = dataset.load_qa_items()
         print(f"Loaded {len(qa_items)} QA items from HuggingFace dataset")
 
         # Load documents once

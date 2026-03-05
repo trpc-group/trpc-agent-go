@@ -105,7 +105,7 @@ func main() {
 		fmt.Printf("PG Table: %s (override)\n", *pgTable)
 	}
 	fmt.Printf("PG Host: %s:%s\n", getEnvOrDefault("PGVECTOR_HOST", "127.0.0.1"), getEnvOrDefault("PGVECTOR_PORT", "5432"))
-	fmt.Printf("PG Database: %s (User: %s)\n", getEnvOrDefault("PGVECTOR_DATABASE", "rgb"), getEnvOrDefault("PGVECTOR_USER", "root"))
+	fmt.Printf("PG Database: %s (User: %s)\n", getEnvOrDefault("PGVECTOR_DATABASE", "vertical"), getEnvOrDefault("PGVECTOR_USER", "root"))
 	fmt.Printf("OPENAI_API_KEY: %s\n", os.Getenv("OPENAI_API_KEY"))
 	fmt.Printf("OPENAI_BASE_URL: %s\n", os.Getenv("OPENAI_BASE_URL"))
 	fmt.Println(strings.Repeat("=", 50))
@@ -162,7 +162,7 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 	host := getEnvOrDefault("PGVECTOR_HOST", "127.0.0.1")
 	portStr := getEnvOrDefault("PGVECTOR_PORT", "5432")
 	user := getEnvOrDefault("PGVECTOR_USER", "root")
-	database := getEnvOrDefault("PGVECTOR_DATABASE", "rgb")
+	database := getEnvOrDefault("PGVECTOR_DATABASE", "vertical")
 
 	cfg := map[string]any{
 		"model_name":           knowledgeSvc.modelName,
