@@ -49,6 +49,9 @@ func TestStateKeys_ScopedAndLegacy(t *testing.T) {
 		skillName   = "demo"
 		paddedAgent = "  agentA  "
 		paddedSkill = "  demo  "
+
+		parentAgent = "agent"
+		childAgent  = "agent/child"
 	)
 
 	legacyLoaded := StateKeyLoadedPrefix + skillName
@@ -89,6 +92,13 @@ func TestStateKeys_ScopedAndLegacy(t *testing.T) {
 	require.Equal(t, StateKeyLoadedPrefix, LoadedPrefix(" "))
 	require.Equal(t, StateKeyDocsPrefix, DocsPrefix(""))
 	require.Equal(t, StateKeyDocsPrefix, DocsPrefix(" "))
+
+	loadedKey := LoadedKey(childAgent, skillName)
+	parentPrefix := LoadedPrefix(parentAgent)
+	require.False(t, strings.HasPrefix(loadedKey, parentPrefix))
+
+	childPrefix := LoadedPrefix(childAgent)
+	require.True(t, strings.HasPrefix(loadedKey, childPrefix))
 }
 
 func TestFSRepository_Path(t *testing.T) {

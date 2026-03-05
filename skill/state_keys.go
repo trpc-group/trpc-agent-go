@@ -10,9 +10,19 @@
 
 package skill
 
-import "strings"
+import (
+	"net/url"
+	"strings"
+)
 
 const stateKeyScopeDelimiter = "/"
+
+func escapeScopeSegment(value string) string {
+	if strings.Contains(value, stateKeyScopeDelimiter) {
+		return url.PathEscape(value)
+	}
+	return value
+}
 
 // LoadedKey returns the session state key used to mark a skill as loaded for
 // a specific agent.
@@ -24,6 +34,7 @@ func LoadedKey(agentName string, skillName string) string {
 	if agentName == "" {
 		return StateKeyLoadedPrefix + skillName
 	}
+	agentName = escapeScopeSegment(agentName)
 	return StateKeyLoadedByAgentPrefix + agentName +
 		stateKeyScopeDelimiter + skillName
 }
@@ -38,6 +49,7 @@ func DocsKey(agentName string, skillName string) string {
 	if agentName == "" {
 		return StateKeyDocsPrefix + skillName
 	}
+	agentName = escapeScopeSegment(agentName)
 	return StateKeyDocsByAgentPrefix + agentName +
 		stateKeyScopeDelimiter + skillName
 }
@@ -51,6 +63,7 @@ func LoadedPrefix(agentName string) string {
 	if agentName == "" {
 		return StateKeyLoadedPrefix
 	}
+	agentName = escapeScopeSegment(agentName)
 	return StateKeyLoadedByAgentPrefix + agentName + stateKeyScopeDelimiter
 }
 
@@ -63,5 +76,6 @@ func DocsPrefix(agentName string) string {
 	if agentName == "" {
 		return StateKeyDocsPrefix
 	}
+	agentName = escapeScopeSegment(agentName)
 	return StateKeyDocsByAgentPrefix + agentName + stateKeyScopeDelimiter
 }
