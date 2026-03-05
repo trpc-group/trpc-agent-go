@@ -36,9 +36,9 @@ import (
 )
 
 var (
-	modelName  = flag.String("model", "deepseek-chat", "Model to use")
+	modelName  = flag.String("model", getEnvOrDefault("MODEL_NAME", "deepseek-chat"), "Model to use")
 	host       = flag.String("host", "0.0.0.0:8888", "Host to use")
-	streaming  = flag.Bool("streaming", false, "Streaming to use")
+	streaming  = flag.Bool("streaming", true, "Streaming to use")
 	remoteOnly = flag.Bool("remote-only", false, "Only output remote agent responses")
 )
 
@@ -483,4 +483,11 @@ type timeResult struct {
 	Time     string `json:"time"`
 	Date     string `json:"date"`
 	Weekday  string `json:"weekday"`
+}
+
+func getEnvOrDefault(key, defaultValue string) string {
+	if value, ok := os.LookupEnv(key); ok {
+		return value
+	}
+	return defaultValue
 }

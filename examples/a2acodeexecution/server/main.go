@@ -15,6 +15,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
@@ -24,7 +25,7 @@ import (
 )
 
 var (
-	modelName = flag.String("model", "deepseek-chat", "Model to use")
+	modelName = flag.String("model", getEnvOrDefault("MODEL_NAME", "deepseek-chat"), "Model to use")
 	host      = flag.String("host", "0.0.0.0:8888", "A2A server host address")
 	streaming = flag.Bool("streaming", true, "Enable streaming mode")
 )
@@ -111,3 +112,10 @@ Important guidelines:
 - Available libraries: math, statistics, json, datetime, collections, itertools, functools, re
 - Provide clear explanations along with your code
 `
+
+func getEnvOrDefault(key, defaultValue string) string {
+	if value, ok := os.LookupEnv(key); ok {
+		return value
+	}
+	return defaultValue
+}
