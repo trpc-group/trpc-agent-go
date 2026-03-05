@@ -12,6 +12,7 @@ package graph
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -1230,6 +1231,143 @@ func TestAfterCallbackOverride(t *testing.T) {
 	rv, ok := final["result"].(string)
 	require.True(t, ok)
 	require.Equal(t, "override", rv)
+}
+
+func TestAfterCallbackRunsOnNodeError(t *testing.T) {
+	boom := errors.New("boom")
+
+	g := NewStateGraph(NewStateSchema())
+	g.AddNode("N", func(ctx context.Context, s State) (any, error) {
+		return nil, boom
+	})
+	g.SetEntryPoint("N").SetFinishPoint("N")
+
+	var afterCalls int32
+	var afterSawNilResult int32
+	var afterSawErr atomic.Value
+	cbs := NewNodeCallbacks().RegisterAfterNode(func(
+		ctx context.Context,
+		cb *NodeCallbackContext,
+		st State,
+		result any,
+		nodeErr error,
+	) (any, error) {
+		atomic.AddInt32(&afterCalls, 1)
+		if result == nil {
+			atomic.StoreInt32(&afterSawNilResult, 1)
+		}
+		if nodeErr != nil {
+			afterSawErr.Store(nodeErr)
+		}
+		return nil, nil
+	})
+	g.WithNodeCallbacks(cbs)
+
+	compiled, err := g.Compile()
+	require.NoError(t, err)
+	exec, err := NewExecutor(compiled)
+	require.NoError(t, err)
+
+	ch, err := exec.Execute(
+		context.Background(),
+		State{},
+		&agent.Invocation{InvocationID: "inv-after-on-error"},
+	)
+	require.NoError(t, err)
+
+	var sawPregelError bool
+	for evt := range ch {
+		if evt.Object != ObjectTypeGraphPregelStep {
+			continue
+		}
+		if evt.Response == nil || evt.Response.Error == nil {
+			continue
+		}
+		sawPregelError = true
+	}
+
+	require.True(t, sawPregelError)
+	require.Equal(t, int32(1), atomic.LoadInt32(&afterCalls))
+	require.Equal(t, int32(1), atomic.LoadInt32(&afterSawNilResult))
+
+	got, ok := afterSawErr.Load().(error)
+	require.True(t, ok)
+	require.ErrorIs(t, got, boom)
+}
+
+func TestAfterCallbackCanRecoverNodeError(t *testing.T) {
+	boom := errors.New("boom")
+
+	g := NewStateGraph(NewStateSchema())
+	g.AddNode("N", func(ctx context.Context, s State) (any, error) {
+		return nil, boom
+	})
+	g.SetEntryPoint("N").SetFinishPoint("N")
+
+	var afterCalls int32
+	var afterSawErr atomic.Value
+	cbs := NewNodeCallbacks().RegisterAfterNode(func(
+		ctx context.Context,
+		cb *NodeCallbackContext,
+		st State,
+		result any,
+		nodeErr error,
+	) (any, error) {
+		atomic.AddInt32(&afterCalls, 1)
+		if nodeErr != nil {
+			afterSawErr.Store(nodeErr)
+		}
+		return State{"ok": true}, nil
+	})
+	g.WithNodeCallbacks(cbs)
+
+	compiled, err := g.Compile()
+	require.NoError(t, err)
+	exec, err := NewExecutor(compiled)
+	require.NoError(t, err)
+
+	ch, err := exec.Execute(
+		context.Background(),
+		State{},
+		&agent.Invocation{InvocationID: "inv-after-recover"},
+	)
+	require.NoError(t, err)
+
+	var sawPregelError bool
+	final := make(State)
+	for ev := range ch {
+		if ev.Object == ObjectTypeGraphPregelStep &&
+			ev.Response != nil &&
+			ev.Response.Error != nil {
+			sawPregelError = true
+		}
+		if ev.Done && ev.StateDelta != nil {
+			for k, vb := range ev.StateDelta {
+				switch k {
+				case MetadataKeyNode, MetadataKeyPregel,
+					MetadataKeyChannel, MetadataKeyState,
+					MetadataKeyCompletion:
+					continue
+				default:
+				}
+				var v any
+				if err := json.Unmarshal(vb, &v); err == nil {
+					final[k] = v
+				}
+			}
+		}
+	}
+
+	require.False(t, sawPregelError)
+	require.Equal(t, int32(1), atomic.LoadInt32(&afterCalls))
+
+	got, ok := afterSawErr.Load().(error)
+	require.True(t, ok)
+	require.ErrorIs(t, got, boom)
+
+	okv, ok := final["ok"].(bool)
+	require.True(t, ok)
+	require.True(t, okv)
 }
 
 func TestBeforeCallbackError_BarrierWaitsForCompletion(t *testing.T) {
