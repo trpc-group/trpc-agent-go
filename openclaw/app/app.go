@@ -990,6 +990,7 @@ func newAgent(
 	opts = append(opts, llmagent.WithSkills(repo))
 
 	tools := append([]tool.Tool(nil), extraTools...)
+	tools = append(tools, ocskills.NewListTool(repo))
 	if cfg.EnableOpenClawTools {
 		mgr := octool.NewManager()
 		tools = append(tools,
@@ -1300,7 +1301,10 @@ func newOpenAIModel(spec registry.ModelSpec) (model.Model, error) {
 		return nil, err
 	}
 
-	opts := []openai.Option{openai.WithVariant(variant)}
+	opts := []openai.Option{
+		openai.WithVariant(variant),
+		openai.WithOmitFileContentParts(true),
+	}
 	baseURL := strings.TrimSpace(spec.BaseURL)
 	if baseURL != "" {
 		opts = append(opts, openai.WithBaseURL(baseURL))

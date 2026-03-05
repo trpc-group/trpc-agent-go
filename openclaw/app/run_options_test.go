@@ -21,6 +21,18 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 )
 
+func TestMain(m *testing.M) {
+	home, err := os.MkdirTemp("", "openclaw-test-home-*")
+	if err != nil {
+		panic(err)
+	}
+	_ = os.Setenv("HOME", home)
+	_ = os.Unsetenv(openClawConfigEnvName)
+	code := m.Run()
+	_ = os.RemoveAll(home)
+	os.Exit(code)
+}
+
 func TestParseRunOptions_UsesEnvConfig(t *testing.T) {
 	cfgPath := writeTempConfig(t, `
 app_name: demo
@@ -36,6 +48,26 @@ gateway:
 	require.Equal(t, "demo", opts.AppName)
 	require.Equal(t, ":9999", opts.HTTPAddr)
 	require.Equal(t, "u1,u2", opts.AllowUsers)
+}
+
+func TestParseRunOptions_UsesDefaultConfigPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfgPath := filepath.Join(
+		home,
+		defaultConfigRootDir,
+		defaultConfigAppDir,
+		defaultConfigFile,
+	)
+	err := os.MkdirAll(filepath.Dir(cfgPath), 0o755)
+	require.NoError(t, err)
+	err = os.WriteFile(cfgPath, []byte("app_name: demo\n"), 0o644)
+	require.NoError(t, err)
+
+	opts, err := parseRunOptions(nil)
+	require.NoError(t, err)
+	require.Equal(t, "demo", opts.AppName)
 }
 
 func TestParseRunOptions_FlagOverridesConfig(t *testing.T) {
@@ -145,6 +177,30 @@ memory:
 	var exitErr *exitError
 	require.True(t, errors.As(err, &exitErr))
 	require.Equal(t, 1, exitErr.Code)
+}
+
+func TestLoadConfigFile_ExpandsEnvPlaceholders(t *testing.T) {
+	t.Setenv("TEST_OPENCLAW_APP", "demo")
+
+	cfgPath := writeTempConfig(t, `
+app_name: ${TEST_OPENCLAW_APP}
+`)
+
+	cfg, err := loadConfigFile(cfgPath)
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	require.NotNil(t, cfg.AppName)
+	require.Equal(t, "demo", *cfg.AppName)
+}
+
+func TestLoadConfigFile_MissingEnvPlaceholderFails(t *testing.T) {
+	cfgPath := writeTempConfig(t, `
+app_name: ${TEST_OPENCLAW_MISSING}
+`)
+
+	_, err := loadConfigFile(cfgPath)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "TEST_OPENCLAW_MISSING")
 }
 
 func TestParseRunOptions_RalphLoopInvalidDurationFails(t *testing.T) {

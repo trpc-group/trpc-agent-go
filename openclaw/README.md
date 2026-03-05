@@ -60,8 +60,13 @@ This demo supports a YAML config file to avoid a long list of CLI flags.
 
 - Pass `-config /path/to/openclaw.yaml`, or
 - set `OPENCLAW_CONFIG=/path/to/openclaw.yaml`.
+- If neither is set, OpenClaw also tries `~/.trpc-agent-go/openclaw/openclaw.yaml`
+  (only if the file exists).
 
 CLI flags always override config file values.
+
+The config file supports environment variable placeholders in the form `${NAME}`.
+Missing environment variables cause OpenClaw to fail fast with a config error.
 
 Example config:
 
@@ -105,7 +110,7 @@ gateway:
 channels:
   - type: "telegram"
     config:
-      token: "<YOUR_TELEGRAM_BOT_TOKEN>"
+      token: "${TELEGRAM_BOT_TOKEN}"
       streaming: "progress"
       http_timeout: "60s"
 
@@ -284,6 +289,11 @@ curl -sS 'http://127.0.0.1:8080/v1/gateway/messages' \
 If you send non-text inputs (`image`, `audio`, `file`, `video`), make sure
 the configured model supports those input types.
 
+Note: OpenAI Chat Completions does not support raw file inputs in the same
+way as images/audio. This demo omits file/video parts from model requests and
+expects you to handle files via skills/tools (for example `skill_run`, where
+user uploads are staged into `$WORK_DIR/inputs`).
+
 ## Run with a real model (OpenAI)
 
 This demo uses the `model/openai` implementation with provider variants.
@@ -398,7 +408,7 @@ channels:
   - type: "telegram"
     config:
       token: "<YOUR_TELEGRAM_BOT_TOKEN>"
-      # Optional:
+      ## Optional:
       # streaming: "progress"
       # proxy: "http://127.0.0.1:7890"
       # http_timeout: "60s"

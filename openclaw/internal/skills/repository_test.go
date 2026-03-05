@@ -811,6 +811,49 @@ x
 	require.False(t, ok)
 }
 
+func TestListTool_ReturnsDisabledSkillsWithReasons(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeSkill(t, root, "ok", `---
+name: ok
+description: ok
+---
+
+# ok
+`)
+	writeSkill(t, root, "needsbin", `---
+name: needsbin
+description: needs bin
+metadata:
+  { "openclaw": { "requires": { "bins": ["definitely_missing_bin"] } } }
+---
+
+# needsbin
+`)
+
+	repo, err := NewRepository([]string{root})
+	require.NoError(t, err)
+
+	lt := NewListTool(repo)
+	gotAny, err := lt.Call(context.Background(), []byte(`{}`))
+	require.NoError(t, err)
+
+	got, ok := gotAny.(listOutput)
+	require.True(t, ok)
+	require.Equal(t, 2, got.Total)
+	require.Equal(t, 1, got.Enabled)
+	require.Equal(t, 1, got.Disabled)
+
+	byName := map[string]skillEntry{}
+	for _, s := range got.Skills {
+		byName[s.Name] = s
+	}
+	require.True(t, byName["ok"].Enabled)
+	require.False(t, byName["needsbin"].Enabled)
+	require.Contains(t, byName["needsbin"].Reason, "missing bins")
+}
+
 func TestBundledSkills_ParseFrontMatterAndMetadata(t *testing.T) {
 	_, file, _, ok := runtime.Caller(0)
 	require.True(t, ok)

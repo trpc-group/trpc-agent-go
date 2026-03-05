@@ -16,6 +16,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -26,6 +27,10 @@ import (
 
 const (
 	openClawConfigEnvName = "OPENCLAW_CONFIG"
+
+	defaultConfigRootDir = ".trpc-agent-go"
+	defaultConfigAppDir  = "openclaw"
+	defaultConfigFile    = "openclaw.yaml"
 
 	sessionBackendInMemory   = "inmemory"
 	sessionBackendRedis      = "redis"
@@ -617,7 +622,31 @@ func resolveConfigPath(raw string) string {
 	if path != "" {
 		return path
 	}
-	return strings.TrimSpace(os.Getenv(openClawConfigEnvName))
+	if v := strings.TrimSpace(os.Getenv(openClawConfigEnvName)); v != "" {
+		return v
+	}
+	return defaultConfigPathIfExists()
+}
+
+func defaultConfigPathIfExists() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	if strings.TrimSpace(home) == "" {
+		return ""
+	}
+	cfgPath := filepath.Join(
+		home,
+		defaultConfigRootDir,
+		defaultConfigAppDir,
+		defaultConfigFile,
+	)
+	st, err := os.Stat(cfgPath)
+	if err != nil || st == nil || st.IsDir() {
+		return ""
+	}
+	return cfgPath
 }
 
 type fileConfig struct {
@@ -791,6 +820,10 @@ func loadConfigFile(path string) (*fileConfig, error) {
 	if err != nil {
 		return nil, err
 	}
+	data, err = expandEnvPlaceholders(data)
+	if err != nil {
+		return nil, err
+	}
 
 	var cfg fileConfig
 	dec := yaml.NewDecoder(bytes.NewReader(data))
@@ -803,6 +836,70 @@ func loadConfigFile(path string) (*fileConfig, error) {
 		return nil, errors.New("multiple YAML documents are not supported")
 	}
 	return &cfg, nil
+}
+
+func expandEnvPlaceholders(data []byte) ([]byte, error) {
+	if len(data) == 0 {
+		return data, nil
+	}
+	const prefix = "${"
+	if !bytes.Contains(data, []byte(prefix)) {
+		return data, nil
+	}
+
+	out := make([]byte, 0, len(data))
+	for i := 0; i < len(data); {
+		if data[i] != '$' || i+1 >= len(data) || data[i+1] != '{' {
+			out = append(out, data[i])
+			i++
+			continue
+		}
+
+		end := bytes.IndexByte(data[i+2:], '}')
+		if end < 0 {
+			out = append(out, data[i])
+			i++
+			continue
+		}
+		rawName := strings.TrimSpace(string(data[i+2 : i+2+end]))
+		if !isValidEnvName(rawName) {
+			out = append(out, data[i:i+2+end+1]...)
+			i += 2 + end + 1
+			continue
+		}
+
+		val, ok := os.LookupEnv(rawName)
+		if !ok {
+			return nil, fmt.Errorf(
+				"config: env var %s is not set",
+				rawName,
+			)
+		}
+		out = append(out, []byte(val)...)
+		i += 2 + end + 1
+	}
+	return out, nil
+}
+
+func isValidEnvName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i, r := range name {
+		isAlpha := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
+		isDigit := r >= '0' && r <= '9'
+		if i == 0 {
+			if isAlpha || r == '_' {
+				continue
+			}
+			return false
+		}
+		if isAlpha || isDigit || r == '_' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func (cfg *fileConfig) apply(
