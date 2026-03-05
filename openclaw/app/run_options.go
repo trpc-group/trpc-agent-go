@@ -75,6 +75,10 @@ const (
 	flagEnableParallelTools = "enable-parallel-tools"
 
 	flagSkillsAllowBundled = "skills-allow-bundled"
+
+	flagDebugRecorder     = "debug-recorder"
+	flagDebugRecorderDir  = "debug-recorder-dir"
+	flagDebugRecorderMode = "debug-recorder-mode"
 )
 
 type runOptions struct {
@@ -123,6 +127,10 @@ type runOptions struct {
 	SkillsAllowBundled string
 	SkillConfigs       map[string]ocskills.SkillConfig
 	StateDir           string
+
+	DebugRecorderEnabled bool
+	DebugRecorderDir     string
+	DebugRecorderMode    string
 
 	AllowUsers     string
 	RequireMention bool
@@ -421,6 +429,24 @@ func parseRunOptions(args []string) (runOptions, error) {
 		"",
 		"State dir for offsets and managed skills",
 	)
+	fs.BoolVar(
+		&opts.DebugRecorderEnabled,
+		flagDebugRecorder,
+		false,
+		"Enable file-based debug recorder",
+	)
+	fs.StringVar(
+		&opts.DebugRecorderDir,
+		flagDebugRecorderDir,
+		"",
+		"Debug recorder output dir (default: <state_dir>/debug)",
+	)
+	fs.StringVar(
+		&opts.DebugRecorderMode,
+		flagDebugRecorderMode,
+		"",
+		"Debug recorder mode: full|safe (default: full)",
+	)
 	fs.StringVar(
 		&opts.SessionBackend,
 		"session-backend",
@@ -654,6 +680,8 @@ type fileConfig struct {
 	AppName  *string `yaml:"app_name,omitempty"`
 	StateDir *string `yaml:"state_dir,omitempty"`
 
+	DebugRecorder *debugRecorderConfig `yaml:"debug_recorder,omitempty"`
+
 	HTTP     *httpConfig      `yaml:"http,omitempty"`
 	Agent    *agentRunConfig  `yaml:"agent,omitempty"`
 	Model    *modelConfig     `yaml:"model,omitempty"`
@@ -668,6 +696,12 @@ type fileConfig struct {
 
 type httpConfig struct {
 	Addr *string `yaml:"addr,omitempty"`
+}
+
+type debugRecorderConfig struct {
+	Enabled *bool   `yaml:"enabled,omitempty"`
+	Dir     *string `yaml:"dir,omitempty"`
+	Mode    *string `yaml:"mode,omitempty"`
 }
 
 type agentRunConfig struct {
@@ -916,6 +950,20 @@ func (cfg *fileConfig) apply(
 	}
 	if cfg.StateDir != nil && !flagWasSet(set, "state-dir") {
 		opts.StateDir = strings.TrimSpace(*cfg.StateDir)
+	}
+	if cfg.DebugRecorder != nil {
+		if cfg.DebugRecorder.Enabled != nil &&
+			!flagWasSet(set, flagDebugRecorder) {
+			opts.DebugRecorderEnabled = *cfg.DebugRecorder.Enabled
+		}
+		if cfg.DebugRecorder.Dir != nil &&
+			!flagWasSet(set, flagDebugRecorderDir) {
+			opts.DebugRecorderDir = strings.TrimSpace(*cfg.DebugRecorder.Dir)
+		}
+		if cfg.DebugRecorder.Mode != nil &&
+			!flagWasSet(set, flagDebugRecorderMode) {
+			opts.DebugRecorderMode = strings.TrimSpace(*cfg.DebugRecorder.Mode)
+		}
 	}
 
 	if cfg.HTTP != nil && cfg.HTTP.Addr != nil && !flagWasSet(set, "http-addr") {

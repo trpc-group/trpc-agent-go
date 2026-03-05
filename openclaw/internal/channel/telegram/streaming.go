@@ -15,12 +15,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
 )
 
@@ -49,6 +51,24 @@ const (
 	progressEditAfterVerySlow = 30 * time.Minute
 )
 
+type telegramMessageSummary struct {
+	ChatID          int64  `json:"chat_id"`
+	MessageThreadID int    `json:"message_thread_id,omitempty"`
+	ReplyTo         int    `json:"reply_to,omitempty"`
+	FromID          string `json:"from_id,omitempty"`
+	Thread          string `json:"thread,omitempty"`
+	RequestID       string `json:"request_id,omitempty"`
+	SessionID       string `json:"session_id,omitempty"`
+	Text            string `json:"text,omitempty"`
+	Caption         string `json:"caption,omitempty"`
+
+	HasPhoto    bool `json:"has_photo,omitempty"`
+	HasDocument bool `json:"has_document,omitempty"`
+	HasAudio    bool `json:"has_audio,omitempty"`
+	HasVoice    bool `json:"has_voice,omitempty"`
+	HasVideo    bool `json:"has_video,omitempty"`
+}
+
 func parseStreamingMode(raw string) (string, error) {
 	v := strings.ToLower(strings.TrimSpace(raw))
 	if v == "" {
@@ -74,7 +94,65 @@ func (c *Channel) callGatewayAndReply(
 	thread string,
 	requestID string,
 	msg tgapi.Message,
-) error {
+) (err error) {
+	traceStartedAt := time.Time{}
+	traceStatus := ""
+	traceErr := ""
+
+	trace := debugrecorder.TraceFromContext(ctx)
+	if trace == nil {
+		rec := debugrecorder.RecorderFromContext(ctx)
+		if rec != nil {
+			traceStartedAt = time.Now()
+			sessionID := buildSessionID(fromID, thread)
+			t, recErr := rec.Start(debugrecorder.TraceStart{
+				Channel:   channelID,
+				UserID:    fromID,
+				SessionID: sessionID,
+				Thread:    thread,
+				MessageID: strconv.Itoa(msg.MessageID),
+				RequestID: requestID,
+				Source:    channelID,
+			})
+			if recErr == nil && t != nil {
+				trace = t
+				ctx = debugrecorder.WithTrace(ctx, trace)
+				traceStatus = "ok"
+				_ = trace.Record(
+					debugrecorder.KindTelegramMessage,
+					telegramMessageSummary{
+						ChatID:          chatID,
+						MessageThreadID: messageThreadID,
+						ReplyTo:         replyTo,
+						FromID:          fromID,
+						Thread:          thread,
+						RequestID:       requestID,
+						SessionID:       sessionID,
+						Text:            msg.Text,
+						Caption:         msg.Caption,
+						HasPhoto:        len(msg.Photo) > 0,
+						HasDocument:     msg.Document != nil,
+						HasAudio:        msg.Audio != nil,
+						HasVoice:        msg.Voice != nil,
+						HasVideo:        msg.Video != nil,
+					},
+				)
+				defer func() {
+					end := debugrecorder.TraceEnd{
+						Duration: time.Since(traceStartedAt),
+						Status:   traceStatus,
+						Error:    traceErr,
+					}
+					if err != nil && end.Error == "" {
+						end.Status = "error"
+						end.Error = err.Error()
+					}
+					_ = trace.Close(end)
+				}()
+			}
+		}
+	}
+
 	mode := strings.TrimSpace(c.streamingMode)
 	if mode == "" {
 		mode = defaultStreamingMode
@@ -98,6 +176,11 @@ func (c *Channel) callGatewayAndReply(
 
 	req, err := c.buildGatewayRequest(ctx, fromID, thread, requestID, msg)
 	if err != nil {
+		if trace != nil {
+			traceStatus = "error"
+			traceErr = err.Error()
+			_ = trace.RecordError(err)
+		}
 		if progressCancel != nil {
 			progressCancel()
 		}
@@ -134,6 +217,11 @@ func (c *Channel) callGatewayAndReply(
 	}
 
 	if err != nil {
+		if trace != nil {
+			traceStatus = "error"
+			traceErr = err.Error()
+			_ = trace.RecordError(err)
+		}
 		if hasPreview {
 			msg := "Failed to process message."
 			if rsp.Error != nil &&
@@ -160,6 +248,10 @@ func (c *Channel) callGatewayAndReply(
 		return nil
 	}
 	if strings.TrimSpace(rsp.Reply) == "" {
+		if trace != nil {
+			traceStatus = "error"
+			traceErr = "empty reply"
+		}
 		if hasPreview {
 			_ = c.editPreview(
 				ctx,

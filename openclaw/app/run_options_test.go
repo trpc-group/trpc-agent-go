@@ -11,6 +11,7 @@ package app
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -618,6 +619,24 @@ skills:
 	})
 	require.NoError(t, err)
 	require.Equal(t, "b,c", opts.SkillsAllowBundled)
+}
+
+func TestParseRunOptions_DebugRecorder_ConfigApplied(t *testing.T) {
+	t.Parallel()
+
+	outDir := t.TempDir()
+	cfgPath := writeTempConfig(t, fmt.Sprintf(`
+debug_recorder:
+  enabled: true
+  dir: %q
+  mode: safe
+`, outDir))
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.True(t, opts.DebugRecorderEnabled)
+	require.Equal(t, outDir, opts.DebugRecorderDir)
+	require.Equal(t, "safe", opts.DebugRecorderMode)
 }
 
 func writeTempConfig(t *testing.T, body string) string {

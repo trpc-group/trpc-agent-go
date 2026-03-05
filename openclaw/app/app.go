@@ -40,6 +40,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/octool"
 	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
@@ -60,6 +61,8 @@ const (
 	defaultAgentsDir = ".agents"
 
 	csvDelimiter = ","
+
+	defaultDebugRecorderDir = "debug"
 
 	defaultAgentName        = "assistant"
 	defaultAgentInstruction = "You are a helpful assistant. " +
@@ -208,6 +211,14 @@ func NewRuntime(
 	}
 	opts.StateDir = resolvedStateDir
 
+	ctx, debugRec, err := maybeEnableDebugRecorder(ctx, opts)
+	if err != nil {
+		return nil, &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("debug recorder config failed: %w", err),
+		}
+	}
+
 	needsModel := agentType == agentTypeLLM ||
 		opts.SessionSummaryEnabled ||
 		opts.MemoryAutoEnabled
@@ -353,6 +364,9 @@ func NewRuntime(
 		opts.RequireMention,
 		mentionPatterns,
 	)
+	if debugRec != nil {
+		gwOpts = append(gwOpts, gateway.WithDebugRecorder(debugRec))
+	}
 	gwSrv, err := gateway.New(r, gwOpts...)
 	if err != nil {
 		return nil, &exitError{
@@ -437,6 +451,14 @@ func run(ctx context.Context, args []string) error {
 		}
 	}
 	opts.StateDir = resolvedStateDir
+
+	ctx, debugRec, err := maybeEnableDebugRecorder(ctx, opts)
+	if err != nil {
+		return &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("debug recorder config failed: %w", err),
+		}
+	}
 
 	needsModel := agentType == agentTypeLLM ||
 		opts.SessionSummaryEnabled ||
@@ -582,6 +604,9 @@ func run(ctx context.Context, args []string) error {
 		opts.RequireMention,
 		mentionPatterns,
 	)
+	if debugRec != nil {
+		gwOpts = append(gwOpts, gateway.WithDebugRecorder(debugRec))
+	}
 	gwSrv, err := gateway.New(r, gwOpts...)
 	if err != nil {
 		return &exitError{
@@ -1280,6 +1305,39 @@ func resolveStateDir(raw string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(home, ".trpc-agent-go", appName), nil
+}
+
+func maybeEnableDebugRecorder(
+	ctx context.Context,
+	opts runOptions,
+) (context.Context, *debugrecorder.Recorder, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if !opts.DebugRecorderEnabled {
+		return ctx, nil, nil
+	}
+
+	dir := strings.TrimSpace(opts.DebugRecorderDir)
+	if dir == "" {
+		dir = filepath.Join(opts.StateDir, defaultDebugRecorderDir)
+	}
+	mode, err := debugrecorder.ParseMode(opts.DebugRecorderMode)
+	if err != nil {
+		return ctx, nil, err
+	}
+	rec, err := debugrecorder.New(dir, mode)
+	if err != nil {
+		return ctx, nil, err
+	}
+
+	log.Infof(
+		"Debug recorder enabled: dir=%s mode=%s",
+		rec.Dir(),
+		rec.Mode(),
+	)
+
+	return debugrecorder.WithRecorder(ctx, rec), rec, nil
 }
 
 func configFingerprint(parts ...string) string {

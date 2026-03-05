@@ -34,6 +34,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
@@ -60,6 +61,8 @@ const (
 	defaultMaxBodyBytes int64 = 1 << 20
 
 	queryRequestID = "request_id"
+
+	errEmptyReply = "gateway: empty reply"
 )
 
 const (
@@ -126,6 +129,8 @@ type Server struct {
 	lanes *laneLocker
 
 	handler http.Handler
+
+	recorder *debugrecorder.Recorder
 }
 
 // New creates a gateway server with the provided runner.
@@ -194,6 +199,7 @@ func New(r runner.Runner, opts ...Option) (*Server, error) {
 		requireMention:  options.requireMention,
 		mentionPatterns: options.mentionPatterns,
 		lanes:           newLaneLocker(),
+		recorder:        options.recorder,
 	}
 
 	mux := http.NewServeMux()
@@ -433,26 +439,51 @@ func (s *Server) runLocked(
 	requestID string,
 	msg model.Message,
 ) (string, string, error) {
+	trace := debugrecorder.TraceFromContext(ctx)
+
 	runOpts := make([]agent.RunOption, 0, 1)
 	if requestID != "" {
 		runOpts = append(runOpts, agent.WithRequestID(requestID))
 	}
 
+	if trace != nil {
+		_ = trace.Record(
+			debugrecorder.KindGatewayRun,
+			map[string]any{
+				"user_id":    userID,
+				"session_id": sessionID,
+				"request_id": requestID,
+			},
+		)
+	}
+
 	events, err := s.runner.Run(ctx, userID, sessionID, msg, runOpts...)
 	if err != nil {
+		if trace != nil {
+			_ = trace.RecordError(err)
+		}
 		return "", "", err
 	}
 
 	result := newReplyAccumulator()
 	for evt := range events {
+		if trace != nil && evt != nil {
+			_ = trace.Record(debugrecorder.KindRunnerEvent, evt)
+		}
 		result.Consume(evt)
 	}
 
 	if result.Error != nil {
+		if trace != nil {
+			_ = trace.RecordError(result.Error)
+		}
 		return "", result.RequestID, result.Error
 	}
 	if result.Text == "" {
-		return "", result.RequestID, errors.New("gateway: empty reply")
+		if trace != nil {
+			_ = trace.RecordError(errors.New(errEmptyReply))
+		}
+		return "", result.RequestID, errors.New(errEmptyReply)
 	}
 	return result.Text, result.RequestID, nil
 }

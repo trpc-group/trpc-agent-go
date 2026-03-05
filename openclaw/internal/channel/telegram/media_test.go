@@ -11,11 +11,17 @@
 package telegram
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
 	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
@@ -30,7 +36,14 @@ const (
 	mimeAudioMP3 = "audio/mpeg"
 	mimeAudioWAV = "audio/wav"
 	mimeAudioOGG = "audio/ogg"
+
+	debugEventsFileName = "events.jsonl"
 )
+
+type debugEventRecord struct {
+	Kind    string          `json:"kind"`
+	Payload json.RawMessage `json:"payload,omitempty"`
+}
 
 func TestUserError_ErrorAndUnwrap(t *testing.T) {
 	t.Parallel()
@@ -312,6 +325,76 @@ func TestAppendPhotoPart_TooLarge(t *testing.T) {
 	bot.mu.Lock()
 	require.Empty(t, bot.dlCalls)
 	bot.mu.Unlock()
+}
+
+func TestAppendPhotoPart_RecordsAttachmentInTrace(t *testing.T) {
+	t.Parallel()
+
+	data := []byte("img")
+
+	bot := &stubBot{
+		downloads: map[string]stubDownload{
+			testFileID: {
+				file: tgapi.File{FilePath: "photos/a.png"},
+				data: data,
+			},
+		},
+	}
+	ch := &Channel{
+		bot: bot,
+	}
+
+	mode, err := debugrecorder.ParseMode("full")
+	require.NoError(t, err)
+	rec, err := debugrecorder.New(t.TempDir(), mode)
+	require.NoError(t, err)
+
+	trace, err := rec.Start(debugrecorder.TraceStart{
+		Channel:   channelID,
+		RequestID: "req-1",
+	})
+	require.NoError(t, err)
+
+	ctx := debugrecorder.WithTrace(context.Background(), trace)
+	_, err = ch.appendPhotoPart(
+		ctx,
+		nil,
+		[]tgapi.PhotoSize{{FileID: testFileID}},
+		int64(len(data)),
+	)
+	require.NoError(t, err)
+	require.NoError(t, trace.Close(debugrecorder.TraceEnd{Status: "ok"}))
+
+	evs, err := os.Open(filepath.Join(trace.Dir(), debugEventsFileName))
+	require.NoError(t, err)
+	defer evs.Close()
+
+	scanner := bufio.NewScanner(evs)
+	found := false
+	for scanner.Scan() {
+		var evt debugEventRecord
+		require.NoError(t, json.Unmarshal(scanner.Bytes(), &evt))
+		if evt.Kind != debugrecorder.KindTelegramAttachment {
+			continue
+		}
+
+		var att telegramAttachmentSummary
+		require.NoError(t, json.Unmarshal(evt.Payload, &att))
+		require.Equal(t, attachmentKindPhoto, att.Kind)
+		require.Equal(t, testFileID, att.FileID)
+		require.NotEmpty(t, att.Blob.SHA256)
+		require.NotEmpty(t, att.Blob.Ref)
+
+		dst := filepath.Join(trace.Dir(), att.Blob.Ref)
+		got, err := os.ReadFile(dst)
+		require.NoError(t, err)
+		require.Equal(t, data, got)
+
+		found = true
+		break
+	}
+	require.NoError(t, scanner.Err())
+	require.True(t, found)
 }
 
 func TestAppendVideoPart_BuildsVideoPart(t *testing.T) {

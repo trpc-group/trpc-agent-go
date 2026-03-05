@@ -10,7 +10,11 @@
 
 package gateway
 
-import "strings"
+import (
+	"strings"
+
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
+)
 
 // SessionIDFunc builds a session ID for the inbound message.
 type SessionIDFunc func(InboundMessage) (string, error)
@@ -34,6 +38,8 @@ type options struct {
 	allowUsers      map[string]struct{}
 	requireMention  bool
 	mentionPatterns []string
+
+	recorder *debugrecorder.Recorder
 }
 
 // Option is a function that configures a gateway server.
@@ -220,5 +226,15 @@ func WithMentionPatterns(patterns ...string) Option {
 			copied = append(copied, pattern)
 		}
 		o.mentionPatterns = copied
+	}
+}
+
+// WithDebugRecorder enables file-based debug recording for gateway requests.
+//
+// When set, the gateway creates a per-request trace when no trace is present
+// in the request context.
+func WithDebugRecorder(rec *debugrecorder.Recorder) Option {
+	return func(o *options) {
+		o.recorder = rec
 	}
 }

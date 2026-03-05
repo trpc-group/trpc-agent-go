@@ -463,6 +463,7 @@ If `session.config` is omitted, it defaults to:
 
 - `<state_dir>/sessions.sqlite` (where `state_dir` defaults to
   `~/.trpc-agent-go/openclaw`)
+- `<state_dir>/debug` (when `debug_recorder.enabled: true`)
 
 Explicit path example:
 

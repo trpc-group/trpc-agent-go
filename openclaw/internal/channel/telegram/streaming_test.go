@@ -14,6 +14,8 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwclient"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
 )
 
@@ -73,6 +76,52 @@ func TestChannel_CallGatewayAndReply_4xxEditsPreviewAndDrops(t *testing.T) {
 	require.Len(t, bot.edits, 1)
 	require.Equal(t, "nope", bot.edits[0].Text)
 	bot.mu.Unlock()
+}
+
+func TestChannel_CallGatewayAndReply_RecorderCreatesTrace(t *testing.T) {
+	t.Parallel()
+
+	gw := &stubGateway{
+		rsp: gwclient.MessageResponse{
+			StatusCode: http.StatusOK,
+			Reply:      "ok",
+		},
+	}
+	bot := &stubBot{}
+	ch := &Channel{
+		bot:           bot,
+		gw:            gw,
+		streamingMode: streamingOff,
+	}
+
+	mode, err := debugrecorder.ParseMode("safe")
+	require.NoError(t, err)
+
+	rec, err := debugrecorder.New(t.TempDir(), mode)
+	require.NoError(t, err)
+
+	ctx := debugrecorder.WithRecorder(context.Background(), rec)
+	err = ch.callGatewayAndReply(
+		ctx,
+		1,
+		0,
+		2,
+		"u1",
+		"",
+		"rid",
+		tgapi.Message{MessageID: 2, Text: "hi"},
+	)
+	require.NoError(t, err)
+
+	matches, err := filepath.Glob(
+		filepath.Join(rec.Dir(), "*", "*", debugEventsFileName),
+	)
+	require.NoError(t, err)
+	require.Len(t, matches, 1)
+
+	raw, err := os.ReadFile(matches[0])
+	require.NoError(t, err)
+	require.Contains(t, string(raw), debugrecorder.KindTelegramMessage)
 }
 
 func TestChannel_CallGatewayAndReply_5xxReturnsError(t *testing.T) {

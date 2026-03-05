@@ -68,6 +68,45 @@ CLI flags always override config file values.
 The config file supports environment variable placeholders in the form `${NAME}`.
 Missing environment variables cause OpenClaw to fail fast with a config error.
 
+### Debug recorder (optional)
+
+When debugging multi-step flows (especially Telegram "Processing..." messages),
+it helps to have a single place that captures what happened end-to-end.
+
+OpenClaw includes an opt-in, file-based debug recorder that writes a per-request
+trace directory with:
+
+- gateway requests/responses
+- runner events
+- Telegram message + attachment metadata
+- (mode `full`) attachment bytes (to reproduce multimodal issues)
+
+Enable with CLI flags:
+
+```bash
+cd openclaw
+go run ./cmd/openclaw -debug-recorder
+```
+
+Or via YAML:
+
+```yaml
+debug_recorder:
+  enabled: true
+  mode: "full" # "full" (default) or "safe" (no attachment bytes)
+  # dir: "<state_dir>/debug" # default
+```
+
+Trace output location:
+
+- default: `<state_dir>/debug`
+- layout: `<YYYYMMDD>/<HHMMSS>_<channel>_<request_id>/`
+- files:
+  - `meta.json`: trace start metadata
+  - `events.jsonl`: event stream (one JSON object per line)
+  - `result.json`: trace end status + duration
+  - `attachments/<sha256>`: stored bytes (mode `full` only)
+
 Example config:
 
 ```yaml

@@ -13,10 +13,14 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -28,12 +32,18 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
 const (
 	testTimeout   = 2 * time.Second
 	testShortWait = 100 * time.Millisecond
+
+	debugEventsFile     = "events.jsonl"
+	debugMetaFile       = "meta.json"
+	debugResultFile     = "result.json"
+	debugAttachmentsDir = "attachments"
 )
 
 type stubRunner struct {
@@ -742,6 +752,57 @@ func TestServer_ProcessMessage_LargeInlineData(t *testing.T) {
 	srv.Handler().ServeHTTP(rr, httpReq)
 
 	require.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+func TestServer_ProcessMessage_DebugRecorderWritesTrace(t *testing.T) {
+	t.Parallel()
+
+	mode, err := debugrecorder.ParseMode("full")
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	rec, err := debugrecorder.New(dir, mode)
+	require.NoError(t, err)
+
+	r := &recordingRunner{}
+	srv, err := New(r, WithDebugRecorder(rec))
+	require.NoError(t, err)
+
+	data := []byte("hello")
+	req := gwproto.MessageRequest{
+		From: "u1",
+		ContentParts: []gwproto.ContentPart{
+			{
+				Type: gwproto.PartTypeFile,
+				File: &gwproto.FilePart{
+					Filename: "a.txt",
+					Data:     data,
+				},
+			},
+		},
+	}
+
+	rsp, status := srv.ProcessMessage(context.Background(), req)
+	require.Equal(t, http.StatusOK, status)
+	require.Equal(t, "ok", rsp.Reply)
+
+	matches, err := filepath.Glob(
+		filepath.Join(dir, "*", "*", debugEventsFile),
+	)
+	require.NoError(t, err)
+	require.Len(t, matches, 1)
+
+	root := filepath.Dir(matches[0])
+	_, err = os.Stat(filepath.Join(root, debugMetaFile))
+	require.NoError(t, err)
+	_, err = os.Stat(filepath.Join(root, debugResultFile))
+	require.NoError(t, err)
+
+	sum := sha256.Sum256(data)
+	shaHex := hex.EncodeToString(sum[:])
+	dst := filepath.Join(root, debugAttachmentsDir, shaHex)
+	_, err = os.Stat(dst)
+	require.NoError(t, err)
 }
 
 func TestServer_New_RequireMentionWithoutPatterns(t *testing.T) {

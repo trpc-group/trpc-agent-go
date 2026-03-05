@@ -14,9 +14,11 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 )
 
 // ProcessMessage processes a gateway message request without an HTTP hop.
@@ -26,7 +28,7 @@ import (
 func (s *Server) ProcessMessage(
 	ctx context.Context,
 	req gwproto.MessageRequest,
-) (gwproto.MessageResponse, int) {
+) (rsp gwproto.MessageResponse, status int) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -39,8 +41,42 @@ func (s *Server) ProcessMessage(
 		}, http.StatusInternalServerError
 	}
 
+	trace, created := s.ensureTrace(ctx, req)
+	if created && trace != nil {
+		ctx = debugrecorder.WithTrace(ctx, trace)
+		startedAt := time.Now()
+		defer func() {
+			end := debugrecorder.TraceEnd{
+				Duration: time.Since(startedAt),
+			}
+			switch {
+			case rsp.Ignored:
+				end.Status = "ignored"
+			case status == http.StatusOK && rsp.Error == nil:
+				end.Status = "ok"
+			default:
+				end.Status = "error"
+			}
+			if rsp.Error != nil {
+				end.Error = rsp.Error.Message
+			}
+			_ = trace.Close(end)
+		}()
+	}
+
+	if trace != nil {
+		summary, err := debugrecorder.SummarizeRequest(trace, req)
+		if err != nil {
+			_ = trace.RecordError(err)
+		}
+		_ = trace.Record(debugrecorder.KindGatewayReq, summary)
+	}
+
 	userMsg, mentionText, err := s.normalizeUserMessage(ctx, req)
 	if err != nil {
+		if trace != nil {
+			_ = trace.RecordError(err)
+		}
 		return gwproto.MessageResponse{
 			Error: &gwproto.APIError{
 				Type:    errTypeInvalidRequest,
@@ -56,28 +92,43 @@ func (s *Server) ProcessMessage(
 		userID = msg.From
 	}
 	if userID == "" {
+		errMsg := "missing user_id or from"
+		if trace != nil {
+			_ = trace.RecordError(errString(errMsg))
+		}
 		return gwproto.MessageResponse{
 			Error: &gwproto.APIError{
 				Type:    errTypeInvalidRequest,
-				Message: "missing user_id or from",
+				Message: errMsg,
 			},
 		}, http.StatusBadRequest
 	}
 
 	if !s.isUserAllowed(userID) {
+		errMsg := "user is not allowed"
+		if trace != nil {
+			_ = trace.RecordError(errString(errMsg))
+		}
 		return gwproto.MessageResponse{
 			Error: &gwproto.APIError{
 				Type:    errTypeUnauthorized,
-				Message: "user is not allowed",
+				Message: errMsg,
 			},
 		}, http.StatusForbidden
 	}
 
 	if s.requireMention && msg.Thread != "" {
 		if !containsAny(msg.Text, s.mentionPatterns) {
-			return gwproto.MessageResponse{
-				Ignored: true,
-			}, http.StatusOK
+			if trace != nil {
+				_ = trace.Record(
+					debugrecorder.KindGatewayRsp,
+					map[string]any{
+						"ignored": true,
+						"reason":  "missing mention",
+					},
+				)
+			}
+			return gwproto.MessageResponse{Ignored: true}, http.StatusOK
 		}
 	}
 
@@ -87,10 +138,11 @@ func (s *Server) ProcessMessage(
 		if sessionIDFunc == nil {
 			sessionIDFunc = DefaultSessionID
 		}
-
-		var err error
 		sessionID, err = sessionIDFunc(msg)
 		if err != nil {
+			if trace != nil {
+				_ = trace.RecordError(err)
+			}
 			return gwproto.MessageResponse{
 				Error: &gwproto.APIError{
 					Type:    errTypeInvalidRequest,
@@ -110,6 +162,16 @@ func (s *Server) ProcessMessage(
 	)
 	if err != nil {
 		log.WarnfContext(ctx, "gateway: run failed: %v", err)
+		if trace != nil {
+			_ = trace.RecordError(err)
+			_ = trace.Record(
+				debugrecorder.KindGatewayRsp,
+				map[string]any{
+					"status": http.StatusInternalServerError,
+					"error":  err.Error(),
+				},
+			)
+		}
 		return gwproto.MessageResponse{
 			Error: &gwproto.APIError{
 				Type:    errTypeInternal,
@@ -118,21 +180,34 @@ func (s *Server) ProcessMessage(
 		}, http.StatusInternalServerError
 	}
 
-	return gwproto.MessageResponse{
+	rsp = gwproto.MessageResponse{
 		SessionID: sessionID,
 		RequestID: resolvedRequestID,
 		Reply:     reply,
-	}, http.StatusOK
+	}
+	status = http.StatusOK
+
+	if trace != nil {
+		_ = trace.Record(
+			debugrecorder.KindGatewayRsp,
+			map[string]any{
+				"status":     status,
+				"session_id": sessionID,
+				"request_id": resolvedRequestID,
+				"reply":      reply,
+			},
+		)
+	}
+	return rsp, status
 }
 
-// CancelRequest cancels a running request by its request ID.
+// CancelRequest cancels an in-flight run by request ID.
 //
-// It returns the canceled flag, an optional gateway-style API error, and the
-// HTTP-like status code that the /cancel endpoint would use.
+// It returns (canceled=false, status=200) when no matching run exists.
 func (s *Server) CancelRequest(
 	ctx context.Context,
 	requestID string,
-) (bool, *gwproto.APIError, int) {
+) (canceled bool, apiErr *gwproto.APIError, status int) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -148,12 +223,63 @@ func (s *Server) CancelRequest(
 			Message: "runner does not support cancel",
 		}, http.StatusNotImplemented
 	}
-	requestID = strings.TrimSpace(requestID)
-	if requestID == "" {
+
+	rid := strings.TrimSpace(requestID)
+	if rid == "" {
 		return false, &gwproto.APIError{
 			Type:    errTypeInvalidRequest,
 			Message: "missing request_id",
 		}, http.StatusBadRequest
 	}
-	return s.managed.Cancel(requestID), nil, http.StatusOK
+
+	return s.managed.Cancel(rid), nil, http.StatusOK
 }
+
+func (s *Server) ensureTrace(
+	ctx context.Context,
+	req gwproto.MessageRequest,
+) (*debugrecorder.Trace, bool) {
+	trace := debugrecorder.TraceFromContext(ctx)
+	if trace != nil {
+		return trace, false
+	}
+	if s == nil || s.recorder == nil {
+		return nil, false
+	}
+
+	msg := inboundFromRequest(req, req.Text)
+	userID := strings.TrimSpace(req.UserID)
+	if userID == "" {
+		userID = msg.From
+	}
+
+	sessionID := strings.TrimSpace(req.SessionID)
+	if sessionID == "" {
+		sessionIDFunc := s.sessionIDFunc
+		if sessionIDFunc == nil {
+			sessionIDFunc = DefaultSessionID
+		}
+		sid, err := sessionIDFunc(msg)
+		if err == nil {
+			sessionID = sid
+		}
+	}
+
+	trace, err := s.recorder.Start(debugrecorder.TraceStart{
+		Channel:   msg.Channel,
+		UserID:    userID,
+		SessionID: sessionID,
+		Thread:    msg.Thread,
+		MessageID: msg.MessageID,
+		RequestID: strings.TrimSpace(req.RequestID),
+		Source:    "gateway",
+	})
+	if err != nil {
+		return nil, false
+	}
+	return trace, true
+}
+
+type errString string
+
+func (e errString) Error() string { return string(e) }

@@ -20,6 +20,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwclient"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
 )
 
@@ -29,12 +30,21 @@ const (
 	unsupportedMediaMsg   = "Unsupported attachment format."
 
 	defaultAttachmentName = "attachment"
+	defaultPhotoName      = "photo"
 	defaultVoiceName      = "voice"
 	defaultAudioName      = "audio"
 	defaultVideoName      = "video"
 
 	audioFormatWAV = "wav"
 	audioFormatMP3 = "mp3"
+)
+
+const (
+	attachmentKindPhoto    = "photo"
+	attachmentKindDocument = "document"
+	attachmentKindVideo    = "video"
+	attachmentKindVoice    = "voice"
+	attachmentKindAudio    = "audio"
 )
 
 type userError struct {
@@ -128,30 +138,67 @@ func (c *Channel) appendPhotoPart(
 		return parts, nil
 	}
 
+	trace := debugrecorder.TraceFromContext(ctx)
+
 	p := photos[len(photos)-1]
 	fileID := strings.TrimSpace(p.FileID)
 	if fileID == "" {
 		return parts, nil
 	}
 	if p.FileSize > maxBytes && p.FileSize > 0 {
-		return nil, &userError{
+		uerr := &userError{
 			userMessage: attachmentTooLargeMsg,
 			err:         tgapi.ErrFileTooLarge,
 		}
+		recordAttachment(trace, telegramAttachmentSummary{
+			Kind:         attachmentKindPhoto,
+			FileID:       fileID,
+			ReportedSize: p.FileSize,
+			UserMessage:  uerr.userMessage,
+			Error:        uerr.Error(),
+		})
+		return nil, uerr
 	}
 
 	file, data, err := c.bot.DownloadFileByID(ctx, fileID, maxBytes)
 	if err != nil {
-		return nil, mapDownloadError(err)
+		mapped := mapDownloadError(err)
+		recordAttachment(trace, telegramAttachmentSummary{
+			Kind:         attachmentKindPhoto,
+			FileID:       fileID,
+			ReportedSize: p.FileSize,
+			UserMessage:  userMessageFromErr(mapped),
+			Error:        err.Error(),
+		})
+		return nil, mapped
 	}
 
 	format := inferImageFormat(file.FilePath, data)
 	if format == "" {
-		return nil, &userError{
+		uerr := &userError{
 			userMessage: unsupportedMediaMsg,
 			err:         errors.New("telegram: empty image format"),
 		}
+		recordAttachment(trace, telegramAttachmentSummary{
+			Kind:         attachmentKindPhoto,
+			FileID:       fileID,
+			ReportedSize: p.FileSize,
+			UserMessage:  uerr.userMessage,
+			Error:        uerr.Error(),
+		})
+		return nil, uerr
 	}
+
+	name := defaultPhotoName + "." + format
+	ref := storeBlob(trace, name, data)
+	recordAttachment(trace, telegramAttachmentSummary{
+		Kind:         attachmentKindPhoto,
+		FileID:       fileID,
+		Name:         name,
+		Format:       format,
+		ReportedSize: p.FileSize,
+		Blob:         ref,
+	})
 
 	parts = append(parts, gwproto.ContentPart{
 		Type: gwproto.PartTypeImage,
@@ -173,24 +220,56 @@ func (c *Channel) appendDocumentPart(
 		return parts, nil
 	}
 
+	trace := debugrecorder.TraceFromContext(ctx)
+
 	fileID := strings.TrimSpace(doc.FileID)
 	if fileID == "" {
 		return parts, nil
 	}
 	if doc.FileSize > maxBytes && doc.FileSize > 0 {
-		return nil, &userError{
+		uerr := &userError{
 			userMessage: attachmentTooLargeMsg,
 			err:         tgapi.ErrFileTooLarge,
 		}
+		recordAttachment(trace, telegramAttachmentSummary{
+			Kind:         attachmentKindDocument,
+			FileID:       fileID,
+			Name:         strings.TrimSpace(doc.FileName),
+			MimeType:     strings.TrimSpace(doc.MimeType),
+			ReportedSize: doc.FileSize,
+			UserMessage:  uerr.userMessage,
+			Error:        uerr.Error(),
+		})
+		return nil, uerr
 	}
 
 	file, data, err := c.bot.DownloadFileByID(ctx, fileID, maxBytes)
 	if err != nil {
-		return nil, mapDownloadError(err)
+		mapped := mapDownloadError(err)
+		recordAttachment(trace, telegramAttachmentSummary{
+			Kind:         attachmentKindDocument,
+			FileID:       fileID,
+			Name:         strings.TrimSpace(doc.FileName),
+			MimeType:     strings.TrimSpace(doc.MimeType),
+			ReportedSize: doc.FileSize,
+			UserMessage:  userMessageFromErr(mapped),
+			Error:        err.Error(),
+		})
+		return nil, mapped
 	}
 
 	name := fallbackFilename(doc.FileName, file.FilePath, defaultAttachmentName)
 	mimeType := strings.TrimSpace(doc.MimeType)
+
+	ref := storeBlob(trace, name, data)
+	recordAttachment(trace, telegramAttachmentSummary{
+		Kind:         attachmentKindDocument,
+		FileID:       fileID,
+		Name:         name,
+		MimeType:     mimeType,
+		ReportedSize: doc.FileSize,
+		Blob:         ref,
+	})
 
 	parts = append(parts, gwproto.ContentPart{
 		Type: gwproto.PartTypeFile,
@@ -213,24 +292,56 @@ func (c *Channel) appendVideoPart(
 		return parts, nil
 	}
 
+	trace := debugrecorder.TraceFromContext(ctx)
+
 	fileID := strings.TrimSpace(video.FileID)
 	if fileID == "" {
 		return parts, nil
 	}
 	if video.FileSize > maxBytes && video.FileSize > 0 {
-		return nil, &userError{
+		uerr := &userError{
 			userMessage: attachmentTooLargeMsg,
 			err:         tgapi.ErrFileTooLarge,
 		}
+		recordAttachment(trace, telegramAttachmentSummary{
+			Kind:         attachmentKindVideo,
+			FileID:       fileID,
+			Name:         strings.TrimSpace(video.FileName),
+			MimeType:     strings.TrimSpace(video.MimeType),
+			ReportedSize: video.FileSize,
+			UserMessage:  uerr.userMessage,
+			Error:        uerr.Error(),
+		})
+		return nil, uerr
 	}
 
 	file, data, err := c.bot.DownloadFileByID(ctx, fileID, maxBytes)
 	if err != nil {
-		return nil, mapDownloadError(err)
+		mapped := mapDownloadError(err)
+		recordAttachment(trace, telegramAttachmentSummary{
+			Kind:         attachmentKindVideo,
+			FileID:       fileID,
+			Name:         strings.TrimSpace(video.FileName),
+			MimeType:     strings.TrimSpace(video.MimeType),
+			ReportedSize: video.FileSize,
+			UserMessage:  userMessageFromErr(mapped),
+			Error:        err.Error(),
+		})
+		return nil, mapped
 	}
 
 	name := fallbackFilename(video.FileName, file.FilePath, defaultVideoName)
 	mimeType := strings.TrimSpace(video.MimeType)
+
+	ref := storeBlob(trace, name, data)
+	recordAttachment(trace, telegramAttachmentSummary{
+		Kind:         attachmentKindVideo,
+		FileID:       fileID,
+		Name:         name,
+		MimeType:     mimeType,
+		ReportedSize: video.FileSize,
+		Blob:         ref,
+	})
 
 	parts = append(parts, gwproto.ContentPart{
 		Type: gwproto.PartTypeVideo,
@@ -253,24 +364,54 @@ func (c *Channel) appendVoicePart(
 		return parts, nil
 	}
 
+	trace := debugrecorder.TraceFromContext(ctx)
+
 	fileID := strings.TrimSpace(voice.FileID)
 	if fileID == "" {
 		return parts, nil
 	}
 	if voice.FileSize > maxBytes && voice.FileSize > 0 {
-		return nil, &userError{
+		uerr := &userError{
 			userMessage: attachmentTooLargeMsg,
 			err:         tgapi.ErrFileTooLarge,
 		}
+		recordAttachment(trace, telegramAttachmentSummary{
+			Kind:         attachmentKindVoice,
+			FileID:       fileID,
+			MimeType:     strings.TrimSpace(voice.MimeType),
+			ReportedSize: voice.FileSize,
+			UserMessage:  uerr.userMessage,
+			Error:        uerr.Error(),
+		})
+		return nil, uerr
 	}
 
 	file, data, err := c.bot.DownloadFileByID(ctx, fileID, maxBytes)
 	if err != nil {
-		return nil, mapDownloadError(err)
+		mapped := mapDownloadError(err)
+		recordAttachment(trace, telegramAttachmentSummary{
+			Kind:         attachmentKindVoice,
+			FileID:       fileID,
+			MimeType:     strings.TrimSpace(voice.MimeType),
+			ReportedSize: voice.FileSize,
+			UserMessage:  userMessageFromErr(mapped),
+			Error:        err.Error(),
+		})
+		return nil, mapped
 	}
 
 	name := fallbackFilename("", file.FilePath, defaultVoiceName)
 	mimeType := strings.TrimSpace(voice.MimeType)
+
+	ref := storeBlob(trace, name, data)
+	recordAttachment(trace, telegramAttachmentSummary{
+		Kind:         attachmentKindVoice,
+		FileID:       fileID,
+		Name:         name,
+		MimeType:     mimeType,
+		ReportedSize: voice.FileSize,
+		Blob:         ref,
+	})
 
 	parts = append(parts, gwproto.ContentPart{
 		Type: gwproto.PartTypeFile,
@@ -293,24 +434,57 @@ func (c *Channel) appendAudioPart(
 		return parts, nil
 	}
 
+	trace := debugrecorder.TraceFromContext(ctx)
+
 	fileID := strings.TrimSpace(audio.FileID)
 	if fileID == "" {
 		return parts, nil
 	}
 	if audio.FileSize > maxBytes && audio.FileSize > 0 {
-		return nil, &userError{
+		uerr := &userError{
 			userMessage: attachmentTooLargeMsg,
 			err:         tgapi.ErrFileTooLarge,
 		}
+		recordAttachment(trace, telegramAttachmentSummary{
+			Kind:         attachmentKindAudio,
+			FileID:       fileID,
+			Name:         strings.TrimSpace(audio.FileName),
+			MimeType:     strings.TrimSpace(audio.MimeType),
+			ReportedSize: audio.FileSize,
+			UserMessage:  uerr.userMessage,
+			Error:        uerr.Error(),
+		})
+		return nil, uerr
 	}
 
 	file, data, err := c.bot.DownloadFileByID(ctx, fileID, maxBytes)
 	if err != nil {
-		return nil, mapDownloadError(err)
+		mapped := mapDownloadError(err)
+		recordAttachment(trace, telegramAttachmentSummary{
+			Kind:         attachmentKindAudio,
+			FileID:       fileID,
+			Name:         strings.TrimSpace(audio.FileName),
+			MimeType:     strings.TrimSpace(audio.MimeType),
+			ReportedSize: audio.FileSize,
+			UserMessage:  userMessageFromErr(mapped),
+			Error:        err.Error(),
+		})
+		return nil, mapped
 	}
 
 	format := inferAudioFormat(audio.FileName, file.FilePath, audio.MimeType)
 	if format != "" {
+		name := defaultAudioName + "." + format
+		ref := storeBlob(trace, name, data)
+		recordAttachment(trace, telegramAttachmentSummary{
+			Kind:         attachmentKindAudio,
+			FileID:       fileID,
+			Name:         name,
+			Format:       format,
+			MimeType:     strings.TrimSpace(audio.MimeType),
+			ReportedSize: audio.FileSize,
+			Blob:         ref,
+		})
 		parts = append(parts, gwproto.ContentPart{
 			Type: gwproto.PartTypeAudio,
 			Audio: &gwproto.AudioPart{
@@ -323,6 +497,16 @@ func (c *Channel) appendAudioPart(
 
 	name := fallbackFilename(audio.FileName, file.FilePath, defaultAudioName)
 	mimeType := strings.TrimSpace(audio.MimeType)
+
+	ref := storeBlob(trace, name, data)
+	recordAttachment(trace, telegramAttachmentSummary{
+		Kind:         attachmentKindAudio,
+		FileID:       fileID,
+		Name:         name,
+		MimeType:     mimeType,
+		ReportedSize: audio.FileSize,
+		Blob:         ref,
+	})
 
 	parts = append(parts, gwproto.ContentPart{
 		Type: gwproto.PartTypeFile,
@@ -346,6 +530,52 @@ func mapDownloadError(err error) error {
 		userMessage: downloadFailedMessage,
 		err:         err,
 	}
+}
+
+type telegramAttachmentSummary struct {
+	Kind         string                `json:"kind,omitempty"`
+	FileID       string                `json:"file_id,omitempty"`
+	Name         string                `json:"name,omitempty"`
+	Format       string                `json:"format,omitempty"`
+	MimeType     string                `json:"mime_type,omitempty"`
+	ReportedSize int64                 `json:"reported_size,omitempty"`
+	UserMessage  string                `json:"user_message,omitempty"`
+	Error        string                `json:"error,omitempty"`
+	Blob         debugrecorder.BlobRef `json:"blob,omitempty"`
+}
+
+func recordAttachment(
+	trace *debugrecorder.Trace,
+	summary telegramAttachmentSummary,
+) {
+	if trace == nil {
+		return
+	}
+	_ = trace.Record(debugrecorder.KindTelegramAttachment, summary)
+}
+
+func storeBlob(
+	trace *debugrecorder.Trace,
+	name string,
+	data []byte,
+) debugrecorder.BlobRef {
+	if trace == nil {
+		return debugrecorder.BlobRef{}
+	}
+	ref, err := trace.StoreBlob(name, data)
+	if err != nil {
+		_ = trace.RecordError(err)
+		return debugrecorder.BlobRef{}
+	}
+	return ref
+}
+
+func userMessageFromErr(err error) string {
+	var uerr *userError
+	if errors.As(err, &uerr) {
+		return strings.TrimSpace(uerr.userMessage)
+	}
+	return ""
 }
 
 func fallbackFilename(primary, filePath, fallback string) string {
