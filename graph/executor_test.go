@@ -1370,6 +1370,97 @@ func TestAfterCallbackCanRecoverNodeError(t *testing.T) {
 	require.True(t, okv)
 }
 
+func TestAfterCallbackCanRecoverWithOriginalResult(t *testing.T) {
+	const (
+		nodeID       = "N"
+		invocationID = "inv-after-recover-original"
+
+		stateKeyPartial = "partial"
+	)
+
+	boom := errors.New("boom")
+
+	g := NewStateGraph(NewStateSchema())
+	g.AddNode(nodeID, func(ctx context.Context, s State) (any, error) {
+		return State{stateKeyPartial: true}, boom
+	})
+	g.SetEntryPoint(nodeID).SetFinishPoint(nodeID)
+
+	type afterSeen struct {
+		result any
+		err    error
+	}
+
+	var seen atomic.Value
+	seen.Store(afterSeen{})
+
+	cbs := NewNodeCallbacks().RegisterAfterNode(func(
+		ctx context.Context,
+		cb *NodeCallbackContext,
+		st State,
+		result any,
+		nodeErr error,
+	) (any, error) {
+		seen.Store(afterSeen{result: result, err: nodeErr})
+		return result, nil
+	})
+	g.WithNodeCallbacks(cbs)
+
+	compiled, err := g.Compile()
+	require.NoError(t, err)
+	exec, err := NewExecutor(compiled)
+	require.NoError(t, err)
+
+	ch, err := exec.Execute(
+		context.Background(),
+		State{},
+		&agent.Invocation{InvocationID: invocationID},
+	)
+	require.NoError(t, err)
+
+	var sawPregelError bool
+	final := make(State)
+	for ev := range ch {
+		if ev.Object == ObjectTypeGraphPregelStep &&
+			ev.Response != nil &&
+			ev.Response.Error != nil {
+			sawPregelError = true
+		}
+		if ev.Done && ev.StateDelta != nil {
+			for k, vb := range ev.StateDelta {
+				switch k {
+				case MetadataKeyNode, MetadataKeyPregel,
+					MetadataKeyChannel, MetadataKeyState,
+					MetadataKeyCompletion:
+					continue
+				default:
+				}
+				var v any
+				if err := json.Unmarshal(vb, &v); err == nil {
+					final[k] = v
+				}
+			}
+		}
+	}
+
+	require.False(t, sawPregelError)
+
+	got := seen.Load().(afterSeen)
+	require.ErrorIs(t, got.err, boom)
+	require.NotNil(t, got.result)
+
+	partial, ok := got.result.(State)
+	require.True(t, ok)
+
+	gotPartial, ok := partial[stateKeyPartial].(bool)
+	require.True(t, ok)
+	require.True(t, gotPartial)
+
+	statePartial, ok := final[stateKeyPartial].(bool)
+	require.True(t, ok)
+	require.True(t, statePartial)
+}
+
 func TestBeforeCallbackError_BarrierWaitsForCompletion(t *testing.T) {
 	var nodeRuns int32
 	var onErrCalls int32
