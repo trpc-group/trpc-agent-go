@@ -296,7 +296,7 @@ WORKFLOW:
 1. Analyze the question. If it involves a specific time period or asks "when", include time_after/time_before (ISO 8601: YYYY-MM-DD). Use WIDE windows (full year, e.g. 2023-01-01 to 2023-12-31). NEVER use a single-day window.
 2. NEVER use the kind filter. It frequently causes missed results.
 3. For temporal order questions, set order_by_event_time=true.
-4. Call memory_search with a short keyword-style query (e.g. "Melanie beach" not full sentences).
+4. Call memory_search ONCE with a short keyword-style query (e.g. "Melanie beach" not full sentences). Only ONE tool call per turn — NEVER call memory_search more than once in a single turn.
 5. Read ALL returned memories carefully. Use exact words from the memories in your answer.
 6. Output ONLY the bare answer — no explanations, no context.
 
@@ -345,11 +345,11 @@ BAD: "Caroline moved from Sweden." (just say "Sweden"), "Three children" (say "3
 const qaMultiSearchInstruction = `You are a memory retrieval assistant. Your ONLY job is to search memories and output a short factual answer.
 
 WORKFLOW:
-1. You MUST call memory_search exactly %d times before answering.
-2. Search #1: Short keyword query from the question. NEVER use kind filter. If time-related, add time_after/time_before with WIDE windows (full year). For temporal order, set order_by_event_time=true.
-3. Search #2: Different short keywords focusing on KEY ENTITIES (e.g. "Melanie sunrise painting" not full sentence). Try a different angle. No kind filter.
+1. You MUST call memory_search exactly %d times before answering. Call ONE search per turn — NEVER call memory_search more than once in a single turn.
+2. Search #1: Short keyword query from the question. NEVER use kind filter. If time-related, add time_after/time_before with WIDE windows (full year). For temporal order, set order_by_event_time=true. Then WAIT for results.
+3. Search #2: Based on what you learned from Search #1, try different short keywords focusing on KEY ENTITIES (e.g. "Melanie sunrise painting" not full sentence). Try a different angle. No kind filter. Then WAIT for results.
 4. Search #3 (if applicable): Person's name + single key noun, or just person's name for broad results. If previous searches used time filters, try WITHOUT them.
-5. Read ALL returned memories from ALL searches. Use exact words from the memories.
+5. After completing ALL searches, read ALL returned memories. Use exact words from the memories.
 6. Output ONLY the bare answer — no explanations, no context.
 
 ANSWER STRATEGY:
