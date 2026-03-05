@@ -43,6 +43,54 @@ func writeSkill(t *testing.T, dir, name string) string {
 	return sdir
 }
 
+func TestStateKeys_ScopedAndLegacy(t *testing.T) {
+	const (
+		agentName   = "agentA"
+		skillName   = "demo"
+		paddedAgent = "  agentA  "
+		paddedSkill = "  demo  "
+	)
+
+	legacyLoaded := StateKeyLoadedPrefix + skillName
+	require.Equal(t, legacyLoaded, LoadedKey("", skillName))
+	require.Equal(t, legacyLoaded, LoadedKey(" ", skillName))
+
+	scopedLoadedPrefix := StateKeyLoadedByAgentPrefix + agentName +
+		stateKeyScopeDelimiter
+	require.Equal(
+		t,
+		scopedLoadedPrefix+skillName,
+		LoadedKey(paddedAgent, paddedSkill),
+	)
+	require.Equal(
+		t,
+		scopedLoadedPrefix,
+		LoadedPrefix(paddedAgent),
+	)
+
+	legacyDocs := StateKeyDocsPrefix + skillName
+	require.Equal(t, legacyDocs, DocsKey("", skillName))
+	require.Equal(t, legacyDocs, DocsKey(" ", skillName))
+
+	scopedDocsPrefix := StateKeyDocsByAgentPrefix + agentName +
+		stateKeyScopeDelimiter
+	require.Equal(
+		t,
+		scopedDocsPrefix+skillName,
+		DocsKey(paddedAgent, paddedSkill),
+	)
+	require.Equal(
+		t,
+		scopedDocsPrefix,
+		DocsPrefix(paddedAgent),
+	)
+
+	require.Equal(t, StateKeyLoadedPrefix, LoadedPrefix(""))
+	require.Equal(t, StateKeyLoadedPrefix, LoadedPrefix(" "))
+	require.Equal(t, StateKeyDocsPrefix, DocsPrefix(""))
+	require.Equal(t, StateKeyDocsPrefix, DocsPrefix(" "))
+}
+
 func TestFSRepository_Path(t *testing.T) {
 	root := t.TempDir()
 	sdir := writeSkill(t, root, "alpha")

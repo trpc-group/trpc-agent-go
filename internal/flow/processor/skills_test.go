@@ -1511,6 +1511,275 @@ func TestSkillsToolResultRequestProcessor_MaybeOffload_NoOpWhenNotOnce(
 	require.Len(t, ch, 0)
 }
 
+func TestMaybeMigrateLegacySkillState_EarlyReturns(t *testing.T) {
+	ch := make(chan *event.Event, 1)
+	maybeMigrateLegacySkillState(context.Background(), nil, ch)
+	require.Len(t, ch, 0)
+
+	inv := &agent.Invocation{Session: nil}
+	maybeMigrateLegacySkillState(context.Background(), inv, ch)
+	require.Len(t, ch, 0)
+
+	inv = &agent.Invocation{Session: &session.Session{}}
+	maybeMigrateLegacySkillState(context.Background(), inv, ch)
+	require.Len(t, ch, 0)
+}
+
+func TestMaybeMigrateLegacySkillState_MigratesLegacyKeys(t *testing.T) {
+	const (
+		coordinator = "coordinator"
+		subAgent    = "sub"
+		skillName   = "demo"
+		loadedVal   = "1"
+		docsVal     = "[\"A.md\"]"
+	)
+
+	legacyLoadedKey := skill.StateKeyLoadedPrefix + skillName
+	legacyDocsKey := skill.StateKeyDocsPrefix + skillName
+	unrelatedKey := "temp:unrelated"
+	emptyLoadedKey := skill.StateKeyLoadedPrefix + "empty"
+
+	sess := &session.Session{
+		State: session.StateMap{
+			legacyLoadedKey:            []byte(loadedVal),
+			legacyDocsKey:              []byte(docsVal),
+			skill.StateKeyLoadedPrefix: []byte("1"),
+			emptyLoadedKey:             nil,
+			unrelatedKey:               []byte("x"),
+		},
+		Events: []event.Event{
+			toolResponseEvent(
+				subAgent,
+				skillToolLoad,
+				loadedPrefix+" "+skillName,
+			),
+		},
+	}
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    coordinator,
+		Session:      sess,
+	}
+
+	ch := make(chan *event.Event, 1)
+	maybeMigrateLegacySkillState(context.Background(), inv, ch)
+
+	ev := <-ch
+	require.NotNil(t, ev)
+	require.Equal(t, model.ObjectTypeStateUpdate, ev.Object)
+
+	scopedLoadedKey := skill.LoadedKey(subAgent, skillName)
+	scopedDocsKey := skill.DocsKey(subAgent, skillName)
+
+	require.Equal(t, []byte(loadedVal), ev.StateDelta[scopedLoadedKey])
+	require.Equal(t, []byte(docsVal), ev.StateDelta[scopedDocsKey])
+	require.Contains(t, ev.StateDelta, legacyLoadedKey)
+	require.Contains(t, ev.StateDelta, legacyDocsKey)
+	require.Nil(t, ev.StateDelta[legacyLoadedKey])
+	require.Nil(t, ev.StateDelta[legacyDocsKey])
+
+	v, ok := sess.GetState(scopedLoadedKey)
+	require.True(t, ok)
+	require.Equal(t, []byte(loadedVal), v)
+
+	v, ok = sess.GetState(scopedDocsKey)
+	require.True(t, ok)
+	require.Equal(t, []byte(docsVal), v)
+
+	v, ok = sess.GetState(legacyLoadedKey)
+	require.True(t, ok)
+	require.Nil(t, v)
+
+	v, ok = sess.GetState(legacyDocsKey)
+	require.True(t, ok)
+	require.Nil(t, v)
+
+	maybeMigrateLegacySkillState(context.Background(), inv, ch)
+	require.Len(t, ch, 0)
+}
+
+func TestMaybeMigrateLegacySkillState_ClearsLegacyWhenScopedExists(
+	t *testing.T,
+) {
+	const (
+		owner     = "sub"
+		skillName = "demo"
+		scopedVal = "new"
+		legacyVal = "legacy"
+	)
+
+	legacyKey := skill.StateKeyLoadedPrefix + skillName
+	scopedKey := skill.LoadedKey(owner, skillName)
+
+	sess := &session.Session{
+		State: session.StateMap{
+			scopedKey: []byte(scopedVal),
+			legacyKey: []byte(legacyVal),
+		},
+		Events: []event.Event{
+			toolResponseEvent(
+				owner,
+				skillToolLoad,
+				loadedPrefix+" "+skillName,
+			),
+		},
+	}
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "coordinator",
+		Session:      sess,
+	}
+
+	ch := make(chan *event.Event, 1)
+	maybeMigrateLegacySkillState(context.Background(), inv, ch)
+
+	ev := <-ch
+	require.NotNil(t, ev)
+	require.Equal(t, model.ObjectTypeStateUpdate, ev.Object)
+	require.Contains(t, ev.StateDelta, legacyKey)
+	require.NotContains(t, ev.StateDelta, scopedKey)
+	require.Nil(t, ev.StateDelta[legacyKey])
+
+	v, ok := sess.GetState(scopedKey)
+	require.True(t, ok)
+	require.Equal(t, []byte(scopedVal), v)
+
+	v, ok = sess.GetState(legacyKey)
+	require.True(t, ok)
+	require.Nil(t, v)
+}
+
+func TestMaybeMigrateLegacySkillState_NoOwnerKeepsLegacyState(
+	t *testing.T,
+) {
+	const (
+		skillName = "demo"
+		legacyVal = "1"
+	)
+
+	legacyKey := skill.StateKeyLoadedPrefix + skillName
+	sess := &session.Session{
+		State: session.StateMap{
+			legacyKey: []byte(legacyVal),
+		},
+	}
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    " ",
+		Session:      sess,
+	}
+
+	ch := make(chan *event.Event, 1)
+	maybeMigrateLegacySkillState(context.Background(), inv, ch)
+	require.Len(t, ch, 0)
+
+	v, ok := sess.GetState(legacyKey)
+	require.True(t, ok)
+	require.Equal(t, []byte(legacyVal), v)
+}
+
+func TestAddOwnersFromEvent_EarlyReturnsAndSkips(t *testing.T) {
+	toolEvent := func(
+		author string,
+		role model.Role,
+		toolName string,
+		content string,
+	) event.Event {
+		return event.Event{
+			Author: author,
+			Response: &model.Response{
+				Object: model.ObjectTypeToolResponse,
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role:     role,
+						ToolName: toolName,
+						Content:  content,
+					},
+				}},
+			},
+		}
+	}
+
+	owners := map[string]string{}
+	owners = addOwnersFromEvent(event.Event{}, owners)
+	require.Empty(t, owners)
+
+	owners = addOwnersFromEvent(event.Event{
+		Author: "a",
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+		},
+	}, owners)
+	require.Empty(t, owners)
+
+	owners = addOwnersFromEvent(event.Event{
+		Author: "a",
+		Response: &model.Response{
+			Object: model.ObjectTypeToolResponse,
+		},
+	}, owners)
+	require.Empty(t, owners)
+
+	owners = addOwnersFromEvent(toolEvent(
+		" ",
+		model.RoleTool,
+		skillToolLoad,
+		loadedPrefix+" demo",
+	), owners)
+	require.Empty(t, owners)
+
+	owners = addOwnersFromEvent(toolEvent(
+		"a",
+		model.RoleAssistant,
+		skillToolLoad,
+		loadedPrefix+" demo",
+	), owners)
+	require.Empty(t, owners)
+
+	owners = addOwnersFromEvent(toolEvent(
+		"a",
+		model.RoleTool,
+		"other_tool",
+		loadedPrefix+" demo",
+	), owners)
+	require.Empty(t, owners)
+
+	owners = addOwnersFromEvent(toolEvent(
+		"a",
+		model.RoleTool,
+		skillToolLoad,
+		"not loaded",
+	), owners)
+	require.Empty(t, owners)
+
+	owners = addOwnersFromEvent(toolEvent(
+		"a",
+		model.RoleTool,
+		skillToolSelectDocs,
+		"{",
+	), owners)
+	require.Empty(t, owners)
+}
+
+func TestLegacySkillOwners_PrefersMostRecent(t *testing.T) {
+	const skillName = "demo"
+
+	events := []event.Event{
+		toolResponseEvent(
+			"old",
+			skillToolLoad,
+			loadedPrefix+" "+skillName,
+		),
+		toolResponseEvent(
+			"new",
+			skillToolLoad,
+			loadedPrefix+" "+skillName,
+		),
+	}
+	owners := legacySkillOwners(events)
+	require.Equal(t, "new", owners[skillName])
+}
+
 func toolResponseEvent(
 	author string,
 	toolName string,
