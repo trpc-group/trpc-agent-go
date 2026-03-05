@@ -4444,6 +4444,82 @@ func buildGraph() (*graph.Graph, error) {
 }
 ```
 
+#### Fatal errors: where to read them (and how to branch by code)
+
+If a node failure is *not* recovered by an After‑node callback (or the Executor
+itself fails / panics), the graph stops with a **fatal error**.
+
+That fatal error is **not** returned via `Runner.Run(...)` (the run is streamed);
+instead, it is emitted on the event stream.
+
+In practice you will usually see two kinds of error‑related events (both satisfy
+`Response.Error != nil`):
+
+- **Graph‑level fatal error (recommended as the “final failure reason”)**:
+  `Author = graph.AuthorGraphPregel` and
+  `Object = graph.ObjectTypeGraphPregelStep`.
+  The `_pregel_metadata.stepNumber` is typically `-1`, meaning the Executor is
+  reporting the run’s final failure reason from outside any specific node.
+- **Node‑level error (best for pinpointing the failing node)**:
+  `Author = <nodeID>` and `Response.Error != nil`.
+  `_node_metadata` includes node ID, step, attempt/retry info, etc.
+
+Notes:
+
+- Runner always emits a final `runner.completion` event as the true end marker.
+  Keep consuming until completion.
+- If you keep the error “fatal” (your After‑node callback returns `nil, nil` or
+  returns a non‑nil error), there will be no final `graph.execution` state
+  snapshot. Prefer consuming the event stream for fatal errors (or emit a
+  custom event in a callback; see “Carry business values in node callbacks”).
+
+**Branch by error code**
+
+`Response.Error` supports an optional `Code` field. You can branch logic based
+on `Code` while consuming events:
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/graph"
+
+for ev := range eventCh {
+    if ev.Response == nil || ev.Response.Error == nil {
+        continue
+    }
+
+    // Graph-level fatal error for the whole run.
+    if ev.Author != graph.AuthorGraphPregel ||
+        ev.Object != graph.ObjectTypeGraphPregelStep {
+        continue
+    }
+
+    if ev.Response.Error.Code == nil {
+        // No code provided.
+        continue
+    }
+
+    switch *ev.Response.Error.Code {
+    case "-1":
+        // Handle your business error code here.
+    default:
+        // Fallback.
+    }
+}
+```
+
+**How to attach a code to a fatal error**
+
+When emitting error events, the framework tries to populate `Response.Error.Code`
+when your node returns an error (including wrapped / joined error chains) that
+matches any of the following forms:
+
+- `ErrorCode() string`
+- `Code() string`
+- `Code() int` / `Code() int32` / `Code() int64`
+- Or return `*model.ResponseError` directly (it implements the `error` interface)
+
+When present, that code is available as `Response.Error.Code` on the error
+events.
+
 You can also configure agent‑level callbacks:
 
 ```go
