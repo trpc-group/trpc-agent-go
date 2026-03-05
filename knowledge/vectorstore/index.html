@@ -1420,6 +1420,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#search-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Search Modes
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#filter-support" class="md-nav__link">
     <span class="md-ellipsis">
       Filter Support
@@ -1896,6 +1905,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#search-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Search Modes
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#filter-support" class="md-nav__link">
     <span class="md-ellipsis">
       Filter Support
@@ -1986,6 +2004,131 @@
 </tr>
 </tbody>
 </table>
+<h2 id="search-modes">Search Modes</h2>
+<p>Vector stores support four search modes. The system <strong>automatically selects</strong> the most appropriate mode based on the query:</p>
+<table>
+<thead>
+<tr>
+<th>Search Mode</th>
+<th>Enum Value</th>
+<th>Description</th>
+<th>Requirements</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Vector</strong></td>
+<td><code>SearchModeVector</code></td>
+<td>Semantic similarity search, understands query intent</td>
+<td>Requires Embedder</td>
+</tr>
+<tr>
+<td><strong>Keyword</strong></td>
+<td><code>SearchModeKeyword</code></td>
+<td>Exact keyword matching, suitable for technical terms</td>
+<td>PGVector requires <code>WithEnableTSVector(true)</code></td>
+</tr>
+<tr>
+<td><strong>Hybrid</strong></td>
+<td><code>SearchModeHybrid</code></td>
+<td>Combines vector and keyword search (recommended, default)</td>
+<td>PGVector requires <code>WithEnableTSVector(true)</code></td>
+</tr>
+<tr>
+<td><strong>Filter</strong></td>
+<td><code>SearchModeFilter</code></td>
+<td>Metadata-only filtering, no similarity score</td>
+<td>-</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Examples</strong>:
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-0-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-0-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-0-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-0-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-0-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-0-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-0-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-0-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-0-10">10</a></span>
+<span class="normal"><a href="#__codelineno-0-11">11</a></span>
+<span class="normal"><a href="#__codelineno-0-12">12</a></span>
+<span class="normal"><a href="#__codelineno-0-13">13</a></span>
+<span class="normal"><a href="#__codelineno-0-14">14</a></span>
+<span class="normal"><a href="#__codelineno-0-15">15</a></span>
+<span class="normal"><a href="#__codelineno-0-16">16</a></span>
+<span class="normal"><a href="#__codelineno-0-17">17</a></span>
+<span class="normal"><a href="#__codelineno-0-18">18</a></span>
+<span class="normal"><a href="#__codelineno-0-19">19</a></span>
+<span class="normal"><a href="#__codelineno-0-20">20</a></span>
+<span class="normal"><a href="#__codelineno-0-21">21</a></span>
+<span class="normal"><a href="#__codelineno-0-22">22</a></span>
+<span class="normal"><a href="#__codelineno-0-23">23</a></span>
+<span class="normal"><a href="#__codelineno-0-24">24</a></span>
+<span class="normal"><a href="#__codelineno-0-25">25</a></span>
+<span class="normal"><a href="#__codelineno-0-26">26</a></span>
+<span class="normal"><a href="#__codelineno-0-27">27</a></span>
+<span class="normal"><a href="#__codelineno-0-28">28</a></span>
+<span class="normal"><a href="#__codelineno-0-29">29</a></span>
+<span class="normal"><a href="#__codelineno-0-30">30</a></span>
+<span class="normal"><a href="#__codelineno-0-31">31</a></span>
+<span class="normal"><a href="#__codelineno-0-32">32</a></span>
+<span class="normal"><a href="#__codelineno-0-33">33</a></span>
+<span class="normal"><a href="#__codelineno-0-34">34</a></span>
+<span class="normal"><a href="#__codelineno-0-35">35</a></span>
+<span class="normal"><a href="#__codelineno-0-36">36</a></span>
+<span class="normal"><a href="#__codelineno-0-37">37</a></span>
+<span class="normal"><a href="#__codelineno-0-38">38</a></span>
+<span class="normal"><a href="#__codelineno-0-39">39</a></span>
+<span class="normal"><a href="#__codelineno-0-40">40</a></span>
+<span class="normal"><a href="#__codelineno-0-41">41</a></span>
+<span class="normal"><a href="#__codelineno-0-42">42</a></span>
+<span class="normal"><a href="#__codelineno-0-43">43</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="c1">// Default automatic search</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a><span class="nx">reqSearch</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">SearchRequest</span><span class="p">{</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a><span class="w">    </span><span class="nx">Query</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Large language model applications&quot;</span><span class="p">,</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="w">    </span><span class="c1">//History: nil,</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="w">    </span><span class="c1">//UserID: &quot;&quot;,</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a><span class="w">    </span><span class="c1">//SessionID: &quot;&quot;,</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7"></a><span class="w">    </span><span class="c1">//MaxResults: 0,</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a><span class="w">    </span><span class="c1">//MinScore: 0,</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9"></a><span class="w">    </span><span class="c1">//SearchFilter: nil,</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10"></a><span class="w">    </span><span class="c1">//SearchMode: 0,</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11"></a><span class="p">}</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12"></a><span class="nx">rspSearch</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">kb</span><span class="p">.</span><span class="nx">Search</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">reqSearch</span><span class="p">)</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Debugf</span><span class="p">(</span><span class="s">&quot;Failed to search knowledge base: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15"></a><span class="w">    </span><span class="k">return</span>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16"></a><span class="p">}</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17"></a><span class="nx">log</span><span class="p">.</span><span class="nx">Infof</span><span class="p">(</span><span class="s">&quot;Search Result:[%+v]&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">rspSearch</span><span class="p">)</span>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18"></a><span class="k">for</span><span class="w"> </span><span class="nx">i</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">rspSearch</span><span class="p">.</span><span class="nx">Documents</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Infof</span><span class="p">(</span><span class="s">&quot;rspSearch.DOC_%d.score=%v,doc:[%+v]&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">i</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Score</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Document</span><span class="p">)</span>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20"></a><span class="p">}</span>
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21"></a>
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22"></a><span class="c1">// Search with filter conditions</span>
+</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23"></a><span class="nx">filter</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">SearchFilter</span><span class="p">{</span>
+</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24"></a><span class="w">    </span><span class="c1">//DocumentIDs: nil,</span>
+</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25"></a><span class="w">    </span><span class="c1">//Metadata: nil,</span>
+</span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26"></a><span class="w">    </span><span class="nx">FilterCondition</span><span class="p">:</span><span class="w"> </span><span class="nx">searchfilter</span><span class="p">.</span><span class="nx">And</span><span class="p">(</span>
+</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27"></a><span class="w">        </span><span class="nx">searchfilter</span><span class="p">.</span><span class="nx">Equal</span><span class="p">(</span><span class="s">&quot;category&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;film&quot;</span><span class="p">),</span>
+</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28"></a><span class="w">        </span><span class="nx">searchfilter</span><span class="p">.</span><span class="nx">Equal</span><span class="p">(</span><span class="s">&quot;country_code&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;us&quot;</span><span class="p">),</span>
+</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-0-30"><a id="__codelineno-0-30" name="__codelineno-0-30"></a><span class="p">}</span>
+</span><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31"></a><span class="nx">reqSearchWithFilter</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">SearchRequest</span><span class="p">{</span>
+</span><span id="__span-0-32"><a id="__codelineno-0-32" name="__codelineno-0-32"></a><span class="w">    </span><span class="nx">Query</span><span class="p">:</span><span class="w">        </span><span class="s">&quot;Top ranked movie&quot;</span><span class="p">,</span>
+</span><span id="__span-0-33"><a id="__codelineno-0-33" name="__codelineno-0-33"></a><span class="w">    </span><span class="nx">SearchFilter</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">filter</span><span class="p">,</span>
+</span><span id="__span-0-34"><a id="__codelineno-0-34" name="__codelineno-0-34"></a><span class="p">}</span>
+</span><span id="__span-0-35"><a id="__codelineno-0-35" name="__codelineno-0-35"></a><span class="nx">rspSearchWithFilter</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">kb</span><span class="p">.</span><span class="nx">Search</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">reqSearchWithFilter</span><span class="p">)</span>
+</span><span id="__span-0-36"><a id="__codelineno-0-36" name="__codelineno-0-36"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-37"><a id="__codelineno-0-37" name="__codelineno-0-37"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Debugf</span><span class="p">(</span><span class="s">&quot;Failed to search knowledge base: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-0-38"><a id="__codelineno-0-38" name="__codelineno-0-38"></a><span class="w">    </span><span class="k">return</span>
+</span><span id="__span-0-39"><a id="__codelineno-0-39" name="__codelineno-0-39"></a><span class="p">}</span>
+</span><span id="__span-0-40"><a id="__codelineno-0-40" name="__codelineno-0-40"></a><span class="nx">log</span><span class="p">.</span><span class="nx">Infof</span><span class="p">(</span><span class="s">&quot;Search Result:[%+v]&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">rspSearchWithFilter</span><span class="p">)</span>
+</span><span id="__span-0-41"><a id="__codelineno-0-41" name="__codelineno-0-41"></a><span class="k">for</span><span class="w"> </span><span class="nx">i</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">rspSearchWithFilter</span><span class="p">.</span><span class="nx">Documents</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-42"><a id="__codelineno-0-42" name="__codelineno-0-42"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Infof</span><span class="p">(</span><span class="s">&quot;rspSearchWithFilter.DOC_%d.score=%v,doc:[%+v]&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">i</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Score</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Document</span><span class="p">)</span>
+</span><span id="__span-0-43"><a id="__codelineno-0-43" name="__codelineno-0-43"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div></p>
 <h2 id="filter-support">Filter Support</h2>
 <p>All vector stores support filter functionality, including ID filtering, metadata filtering, and complex condition filtering (<code>FilterCondition</code>).</p>
 <h2 id="more-content">More Content</h2>
@@ -2019,7 +2162,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 8, 2026 11:46:52 UTC">2026-01-08 11:46:52</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="March 5, 2026 08:17:10 UTC">2026-03-05 08:17:10</span>
   </span>
 
     
