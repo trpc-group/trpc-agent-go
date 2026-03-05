@@ -118,6 +118,7 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
     "trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
     knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
+    "trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // Manually create Tool and set filters
@@ -132,7 +133,7 @@ searchTool := knowledgetool.NewKnowledgeSearchTool(
 llmAgent := llmagent.New(
     "knowledge-assistant",
     llmagent.WithModel(modelInstance),
-    llmagent.WithTools(searchTool),
+    llmagent.WithTools([]tool.Tool{searchTool}),
 )
 ```
 
@@ -327,6 +328,13 @@ import (
     knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
 )
 
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
+    knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
 // Manually create Tool with conditioned filter
 searchTool := knowledgetool.NewKnowledgeSearchTool(
     kb,
@@ -344,7 +352,7 @@ searchTool := knowledgetool.NewKnowledgeSearchTool(
 llmAgent := llmagent.New(
     "knowledge-assistant",
     llmagent.WithModel(modelInstance),
-    llmagent.WithTools(searchTool),  // Manually pass Tool
+    llmagent.WithTools([]tool.Tool{searchTool}),  // Manually pass Tool
 )
 
 // Final filter condition:
