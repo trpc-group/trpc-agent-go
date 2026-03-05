@@ -203,6 +203,63 @@ app_name: ${TEST_OPENCLAW_MISSING}
 	require.Contains(t, err.Error(), "TEST_OPENCLAW_MISSING")
 }
 
+func TestExpandEnvPlaceholders_TrimsName(t *testing.T) {
+	t.Setenv("OPENCLAW_ENV_TEST", "demo")
+
+	in := []byte("app_name: ${ OPENCLAW_ENV_TEST }\n")
+	out, err := expandEnvPlaceholders(in)
+	require.NoError(t, err)
+	require.Equal(t, "app_name: demo\n", string(out))
+}
+
+func TestExpandEnvPlaceholders_InvalidNameIsPreserved(t *testing.T) {
+	in := []byte("app_name: ${1BAD}\n")
+	out, err := expandEnvPlaceholders(in)
+	require.NoError(t, err)
+	require.Equal(t, in, out)
+}
+
+func TestExpandEnvPlaceholders_MissingBraceIsPreserved(t *testing.T) {
+	in := []byte("app_name: ${OPENCLAW_ENV_TEST\n")
+	out, err := expandEnvPlaceholders(in)
+	require.NoError(t, err)
+	require.Equal(t, in, out)
+}
+
+func TestExpandEnvPlaceholders_ReplacesMultiple(t *testing.T) {
+	t.Setenv("OPENCLAW_ENV_A", "A")
+	t.Setenv("OPENCLAW_ENV_B", "B")
+
+	in := []byte("a: ${OPENCLAW_ENV_A} b: ${OPENCLAW_ENV_B}\n")
+	out, err := expandEnvPlaceholders(in)
+	require.NoError(t, err)
+	require.Equal(t, "a: A b: B\n", string(out))
+}
+
+func TestIsValidEnvName(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{in: "", want: false},
+		{in: "A", want: true},
+		{in: "_A", want: true},
+		{in: "A1", want: true},
+		{in: "1A", want: false},
+		{in: "A-B", want: false},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.in, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tc.want, isValidEnvName(tc.in))
+		})
+	}
+}
+
 func TestParseRunOptions_RalphLoopInvalidDurationFails(t *testing.T) {
 	t.Parallel()
 
