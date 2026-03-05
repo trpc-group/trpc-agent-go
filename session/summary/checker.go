@@ -17,6 +17,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/internal/summaryscope"
 )
 
 // Checker defines a function type for checking if summarization is needed.
@@ -29,18 +30,6 @@ type Checker func(sess *session.Session) bool
 var (
 	defaultTokenCounterMu sync.RWMutex
 	defaultTokenCounter   model.TokenCounter = model.NewSimpleTokenCounter()
-)
-
-const (
-	// summaryScopeStateKey marks summary scope in temporary sessions built by
-	// session/internal/summary before calling ShouldSummarize.
-	//
-	// Values:
-	//   - summaryScopeFull: full-session summary check.
-	//   - summaryScopeBranch: branch/filter-key summary check.
-	summaryScopeStateKey = "summary:scope"
-	summaryScopeFull     = "full"
-	summaryScopeBranch   = "branch"
 )
 
 func getTokenCounter() model.TokenCounter {
@@ -70,13 +59,13 @@ func getSummaryScope(sess *session.Session) string {
 	if sess == nil {
 		return ""
 	}
-	raw, ok := sess.GetState(summaryScopeStateKey)
+	raw, ok := sess.GetState(summaryscope.StateKey)
 	if !ok || len(raw) == 0 {
 		return ""
 	}
 	scope := string(raw)
 	switch scope {
-	case summaryScopeFull, summaryScopeBranch:
+	case summaryscope.ScopeFullSession, summaryscope.ScopeFilterKey:
 		return scope
 	default:
 		return ""
@@ -121,9 +110,9 @@ func filterDeltaEvents(sess *session.Session) []event.Event {
 //
 // Preferred behavior is driven by explicit summary scope state:
 //
-//  1. summaryScopeBranch: return events as-is.
+//  1. ScopeFilterKey: return events as-is.
 //
-//  2. summaryScopeFull: keep only events whose FilterKey matches AppName.
+//  2. ScopeFullSession: keep only events whose FilterKey matches AppName.
 //
 // For backward compatibility when scope is unknown, a legacy heuristic is used:
 // if events contain mixed non-empty FilterKeys, retain only AppName and empty
@@ -131,9 +120,10 @@ func filterDeltaEvents(sess *session.Session) []event.Event {
 //
 // Events with an empty FilterKey (e.g. synthetic summary events created
 // by prependPrevSummary) are ignored when determining whether the set is
-// mixed, and are always kept in the output. This prevents a single
+// mixed, and are kept in output only in the legacy fallback path. This
+// prevents a single
 // prepended summary event from incorrectly triggering the mixed-key
-// filtering path for what is actually a single-branch summary.
+// filtering path for what is actually a single filterKey-scoped summary.
 //
 // When AppName is empty, no filtering is applied for backward
 // compatibility with sessions that do not set an AppName.
@@ -144,9 +134,9 @@ func filterPrimaryEvents(
 		return events
 	}
 	switch scope {
-	case summaryScopeBranch:
+	case summaryscope.ScopeFilterKey:
 		return events
-	case summaryScopeFull:
+	case summaryscope.ScopeFullSession:
 		out := make([]event.Event, 0, len(events))
 		for _, e := range events {
 			if e.FilterKey == appName {
@@ -175,12 +165,12 @@ func filterPrimaryEvents(
 		}
 	}
 	if !mixed {
-		// All non-empty FilterKeys are identical (branch summary)
+		// All non-empty FilterKeys are identical (filterKey-scoped summary)
 		// or there are no non-empty keys at all — no additional
 		// filtering required.
 		return events
 	}
-	// Mixed non-empty FilterKeys (full-session summary) — keep
+	// Mixed non-empty FilterKeys (full-session fallback) — keep
 	// events that belong to the primary agent plus any events with
 	// an empty FilterKey (synthetic summary events).
 	out := make([]event.Event, 0, len(events))

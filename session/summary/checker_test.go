@@ -19,6 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/internal/summaryscope"
 )
 
 func TestCheckEventThreshold(t *testing.T) {
@@ -137,7 +138,7 @@ func TestCheckEventThreshold(t *testing.T) {
 		sess := &session.Session{
 			AppName: appName,
 			State: session.StateMap{
-				summaryScopeStateKey: []byte(summaryScopeFull),
+				summaryscope.StateKey: []byte(summaryscope.ScopeFullSession),
 			},
 			Events: []event.Event{
 				{Timestamp: time.Now(), FilterKey: "sub-agent-abc"},
@@ -266,13 +267,13 @@ func TestCheckTokenThreshold(t *testing.T) {
 		assert.False(t, checker(sess))
 	})
 
-	t.Run("branch scope includes sub-agent-only tokens", func(t *testing.T) {
+	t.Run("filter-key scope includes sub-agent-only tokens", func(t *testing.T) {
 		const appName = "my-app"
 		checker := CheckTokenThreshold(100)
 		sess := &session.Session{
 			AppName: appName,
 			State: session.StateMap{
-				summaryScopeStateKey: []byte(summaryScopeBranch),
+				summaryscope.StateKey: []byte(summaryscope.ScopeFilterKey),
 			},
 			Events: []event.Event{
 				{
@@ -408,7 +409,7 @@ func TestCheckTokenThreshold(t *testing.T) {
 		sess := &session.Session{
 			AppName: appName,
 			State: session.StateMap{
-				summaryScopeStateKey: []byte(summaryScopeFull),
+				summaryscope.StateKey: []byte(summaryscope.ScopeFullSession),
 			},
 			Events: []event.Event{
 				{
@@ -533,16 +534,16 @@ func TestGetSummaryScope(t *testing.T) {
 	t.Run("valid full scope", func(t *testing.T) {
 		sess := &session.Session{
 			State: session.StateMap{
-				summaryScopeStateKey: []byte(summaryScopeFull),
+				summaryscope.StateKey: []byte(summaryscope.ScopeFullSession),
 			},
 		}
-		assert.Equal(t, summaryScopeFull, getSummaryScope(sess))
+		assert.Equal(t, summaryscope.ScopeFullSession, getSummaryScope(sess))
 	})
 
 	t.Run("invalid scope value", func(t *testing.T) {
 		sess := &session.Session{
 			State: session.StateMap{
-				summaryScopeStateKey: []byte("unknown"),
+				summaryscope.StateKey: []byte("unknown"),
 			},
 		}
 		assert.Equal(t, "", getSummaryScope(sess))

@@ -22,6 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/internal/summaryscope"
 )
 
 type mockSummarizerWithTs struct {
@@ -194,14 +195,14 @@ func TestBuildFilterSession_SetsSummaryScope(t *testing.T) {
 	}
 
 	full := buildFilterSession(base, "", evs)
-	fullScope, ok := full.GetState(summaryScopeStateKey)
+	fullScope, ok := full.GetState(summaryscope.StateKey)
 	require.True(t, ok)
-	require.Equal(t, summaryScopeFull, string(fullScope))
+	require.Equal(t, summaryscope.ScopeFullSession, string(fullScope))
 
 	branch := buildFilterSession(base, "app/child", evs)
-	branchScope, ok := branch.GetState(summaryScopeStateKey)
+	branchScope, ok := branch.GetState(summaryscope.StateKey)
 	require.True(t, ok)
-	require.Equal(t, summaryScopeBranch, string(branchScope))
+	require.Equal(t, summaryscope.ScopeFilterKey, string(branchScope))
 }
 
 func TestSummarizeSession_FullSession_SingleWrite(t *testing.T) {
