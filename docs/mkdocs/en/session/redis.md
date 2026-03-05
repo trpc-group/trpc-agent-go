@@ -58,13 +58,13 @@ If multiple components need to use the same Redis instance, register and reuse i
 
 ```go
 import (
-    "trpc.group/trpc-go/trpc-agent-go/storage"
+    redisstorage "trpc.group/trpc-go/trpc-agent-go/storage/redis"
     "trpc.group/trpc-go/trpc-agent-go/session/redis"
 )
 
 redisURL := "redis://127.0.0.1:6379"
-storage.RegisterRedisInstance("my-redis-instance",
-    storage.WithClientBuilderURL(redisURL))
+redisstorage.RegisterRedisInstance("my-redis-instance",
+    redisstorage.WithClientBuilderURL(redisURL))
 
 sessionService, err := redis.NewService(
     redis.WithRedisInstance("my-redis-instance"),
