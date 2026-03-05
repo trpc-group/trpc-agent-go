@@ -662,7 +662,7 @@ func WithNodeEventError(errMsg string) NodeEventOption {
 	}
 }
 
-// WithNodeEventResponseError sets the structured ResponseError for node events.
+// WithNodeEventResponseError sets ResponseError for node events.
 func WithNodeEventResponseError(err *model.ResponseError) NodeEventOption {
 	return func(opts *NodeEventOptions) {
 		opts.ResponseError = err
@@ -1203,6 +1203,11 @@ func NewNodeErrorEvent(opts ...NodeEventOption) *event.Event {
 		}
 	}
 	if respErr != nil {
+		if options.ResponseError != nil &&
+			(respErr.Message == "" || respErr.Type == "") {
+			clone := *respErr
+			respErr = &clone
+		}
 		if respErr.Message == "" {
 			respErr.Message = options.Error
 		}
@@ -1353,6 +1358,11 @@ func NewPregelErrorEvent(opts ...PregelEventOption) *event.Event {
 		}
 	}
 	if respErr != nil {
+		if options.ResponseError != nil &&
+			(respErr.Message == "" || respErr.Type == "") {
+			clone := *respErr
+			respErr = &clone
+		}
 		if respErr.Message == "" {
 			respErr.Message = options.Error
 		}

@@ -4300,7 +4300,7 @@ In practice you will usually see two kinds of error‑related events (both satis
   reporting the run’s final failure reason from outside any specific node.
 - **Node‑level error (best for pinpointing the failing node)**:
   `Author = <nodeID>` and `Response.Error != nil`.
-  `_node_metadata` includes node id, step, attempt/retry info, etc.
+  `_node_metadata` includes node ID, step, attempt/retry info, etc.
 
 Notes:
 
