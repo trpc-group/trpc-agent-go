@@ -330,12 +330,6 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
     "trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
     knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
-)
-
-import (
-    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
-    "trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
-    knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
     "trpc.group/trpc-go/trpc-agent-go/tool"
 )
 

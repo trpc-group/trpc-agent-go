@@ -326,16 +326,10 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
     "trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
     knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
-)
-
-import (
-    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
-    "trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
-    knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
     "trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-// Manually create Tool with conditioned filter
+// Manually create Tool with conditional filter
 searchTool := knowledgetool.NewKnowledgeSearchTool(
     kb,
     knowledgetool.WithConditionedFilter(
