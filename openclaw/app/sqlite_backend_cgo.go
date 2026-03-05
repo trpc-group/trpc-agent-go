@@ -21,6 +21,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessionsqlite "trpc.group/trpc-go/trpc-agent-go/session/sqlite"
 
@@ -61,12 +62,15 @@ func newSQLiteSessionBackend(
 		opts = append(opts, sessionsqlite.WithSkipDBInit(true))
 	}
 	if pref := strings.TrimSpace(cfg.TablePref); pref != "" {
-		opt, err := safeOption(sessionsqlite.WithTablePrefix, pref)
-		if err != nil {
+		if err := sqldb.ValidateTablePrefix(pref); err != nil {
 			_ = db.Close()
-			return nil, err
+			return nil, fmt.Errorf(
+				"invalid sqlite table prefix %q: %w",
+				pref,
+				err,
+			)
 		}
-		opts = append(opts, opt)
+		opts = append(opts, sessionsqlite.WithTablePrefix(pref))
 	}
 	if deps.Summarizer != nil {
 		opts = append(opts, sessionsqlite.WithSummarizer(deps.Summarizer))

@@ -519,6 +519,81 @@ func TestClient_New_ValidationErrors(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestReadLimited_TooLarge(t *testing.T) {
+	t.Parallel()
+
+	_, err := readLimited(strings.NewReader("abcd"), 3)
+	require.ErrorIs(t, err, ErrFileTooLarge)
+}
+
+func TestClient_RedactErr(t *testing.T) {
+	t.Parallel()
+
+	c, err := New(testToken)
+	require.NoError(t, err)
+
+	orig := errors.New("telegram: request: bot TOKEN failed")
+	red := c.redactErr(orig)
+	require.Contains(t, red.Error(), redactedToken)
+	require.NotContains(t, red.Error(), testToken)
+	require.ErrorIs(t, red, orig)
+}
+
+func TestClient_ShouldRetryAndRetryDelay(t *testing.T) {
+	t.Parallel()
+
+	c, err := New(
+		testToken,
+		WithMaxRetries(1),
+		WithRetryBaseDelay(100*time.Millisecond),
+		WithRetryMaxDelay(250*time.Millisecond),
+	)
+	require.NoError(t, err)
+
+	require.False(t, c.shouldRetry(0, context.Canceled))
+	require.False(t, c.shouldRetry(0, context.DeadlineExceeded))
+	require.False(t, c.shouldRetry(1, errors.New("boom")))
+
+	require.False(t, c.shouldRetry(0, &apiCallError{errorCode: 400}))
+	require.True(t, c.shouldRetry(0, &apiCallError{
+		errorCode: http.StatusTooManyRequests,
+	}))
+	require.True(t, c.shouldRetry(0, &apiCallError{
+		errorCode: http.StatusInternalServerError,
+	}))
+
+	require.False(t, c.shouldRetry(0, statusError{status: 400}))
+	require.True(t, c.shouldRetry(0, statusError{
+		status: http.StatusTooManyRequests,
+	}))
+	require.True(t, c.shouldRetry(0, statusError{
+		status: http.StatusInternalServerError,
+	}))
+
+	require.True(t, c.shouldRetry(0, errors.New("transport error")))
+
+	require.Equal(
+		t,
+		7*time.Second,
+		c.retryDelay(0, &apiCallError{retryAfter: 7 * time.Second}),
+	)
+	require.Equal(
+		t,
+		100*time.Millisecond,
+		c.retryDelay(0, errors.New("boom")),
+	)
+	require.Equal(
+		t,
+		200*time.Millisecond,
+		c.retryDelay(1, errors.New("boom")),
+	)
+	require.Equal(
+		t,
+		250*time.Millisecond,
+		c.retryDelay(2, errors.New("boom")),
+	)
+}
+
 func TestClient_GetFile_EmptyFileID(t *testing.T) {
 	t.Parallel()
 

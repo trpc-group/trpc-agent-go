@@ -38,6 +38,70 @@ func TestParseStreamingMode_DefaultAndInvalid(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestProgressEditInterval(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(
+		t,
+		progressEditIntervalFast,
+		progressEditInterval(progressEditAfterMedium-time.Second),
+	)
+	require.Equal(
+		t,
+		progressEditIntervalMedium,
+		progressEditInterval(progressEditAfterMedium),
+	)
+	require.Equal(
+		t,
+		progressEditIntervalSlow,
+		progressEditInterval(progressEditAfterSlow),
+	)
+	require.Equal(
+		t,
+		progressEditIntervalVerySlow,
+		progressEditInterval(progressEditAfterVerySlow),
+	)
+}
+
+func TestChannel_SendPreviewMessage_ModeOffOrNoBot(t *testing.T) {
+	t.Parallel()
+
+	ch := &Channel{}
+	_, ok := ch.sendPreviewMessage(
+		context.Background(),
+		1,
+		0,
+		0,
+		streamingBlock,
+	)
+	require.False(t, ok)
+
+	ch.bot = &stubBot{}
+	_, ok = ch.sendPreviewMessage(
+		context.Background(),
+		1,
+		0,
+		0,
+		streamingOff,
+	)
+	require.False(t, ok)
+}
+
+func TestChannel_SendPreviewMessage_SendFails(t *testing.T) {
+	t.Parallel()
+
+	bot := &stubBot{sendErr: errors.New("send failed")}
+	ch := &Channel{bot: bot}
+	_, ok := ch.sendPreviewMessage(
+		context.Background(),
+		1,
+		0,
+		0,
+		streamingBlock,
+	)
+	require.False(t, ok)
+}
+
 func TestChannel_CallGatewayAndReply_4xxEditsPreviewAndDrops(t *testing.T) {
 	t.Parallel()
 
