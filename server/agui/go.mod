@@ -2,12 +2,10 @@ module trpc.group/trpc-go/trpc-agent-go/server/agui
 
 go 1.24.4
 
-replace github.com/ag-ui-protocol/ag-ui/sdks/community/go => github.com/Flash-LHR/ag-ui/sdks/community/go v0.0.0-20260226100332-50dd0f7a7764
-
 replace trpc.group/trpc-go/trpc-agent-go => ../../
 
 require (
-	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260201021820-c2d2db22a1c9
+	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260305114736-115a967b66a9
 	github.com/google/uuid v1.6.0
 	github.com/stretchr/testify v1.10.0
 	go.opentelemetry.io/otel/trace v1.29.0
