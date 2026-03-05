@@ -653,14 +653,14 @@ sessionService, err := redis.NewService(
 
 ```go
 import (
-    "trpc.group/trpc-go/trpc-agent-go/storage"
+    redisstorage "trpc.group/trpc-go/trpc-agent-go/storage/redis"
     "trpc.group/trpc-go/trpc-agent-go/session/redis"
 )
 
 // 注册 Redis 实例
 redisURL := "redis://127.0.0.1:6379"
-storage.RegisterRedisInstance("my-redis-instance",
-    storage.WithClientBuilderURL(redisURL))
+redisstorage.RegisterRedisInstance("my-redis-instance",
+    redisstorage.WithClientBuilderURL(redisURL))
 
 // 在会话服务中使用
 sessionService, err := redis.NewService(
