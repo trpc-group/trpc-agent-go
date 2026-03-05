@@ -107,6 +107,48 @@ func TestCheckEventThreshold(t *testing.T) {
 		}
 		assert.True(t, checker(sess))
 	})
+
+	t.Run("sub-agent events excluded from count", func(t *testing.T) {
+		// Full-session scenario: 1 primary + 5 sub-agent events.
+		// Mixed FilterKeys → only primary counted. 1 > 2 = false.
+		const appName = "my-app"
+		checker := CheckEventThreshold(2)
+		events := []event.Event{
+			{Timestamp: time.Now(), FilterKey: appName},
+		}
+		for i := 0; i < 5; i++ {
+			events = append(events, event.Event{
+				Timestamp: time.Now(),
+				FilterKey: "sub-agent-abc",
+			})
+		}
+		sess := &session.Session{
+			AppName: appName,
+			Events:  events,
+		}
+		assert.False(t, checker(sess))
+	})
+
+	t.Run("branch summary counts all events in branch", func(t *testing.T) {
+		// Branch-summary scenario: computeDeltaSince already
+		// pre-filtered to one sub-agent branch. All events share
+		// the same FilterKey, so they are all counted.
+		const appName = "my-app"
+		checker := CheckEventThreshold(2)
+		events := make([]event.Event, 5)
+		for i := range events {
+			events[i] = event.Event{
+				Timestamp: time.Now(),
+				FilterKey: "sub-agent-abc",
+			}
+		}
+		sess := &session.Session{
+			AppName: appName,
+			Events:  events,
+		}
+		// Single FilterKey → no filtering → 5 > 2 = true.
+		assert.True(t, checker(sess))
+	})
 }
 
 func TestCheckTimeThreshold(t *testing.T) {
@@ -255,6 +297,102 @@ func TestCheckTokenThreshold(t *testing.T) {
 			},
 		}
 
+		assert.True(t, checker(sess))
+	})
+
+	t.Run("sub-agent events excluded from token count", func(t *testing.T) {
+		// Threshold is 100 tokens. The sub-agent event has enough
+		// tokens to exceed it, but the primary event does not.
+		const (
+			threshold = 100
+			appName   = "my-app"
+		)
+		checker := CheckTokenThreshold(threshold)
+		sess := &session.Session{
+			AppName: appName,
+			Events: []event.Event{
+				{
+					Author:    "user",
+					FilterKey: appName,
+					Timestamp: time.Now(),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{
+							Content: "short user message",
+						},
+					}}},
+				},
+				{
+					Author:    "assistant",
+					FilterKey: "sub-agent-abc-123",
+					Timestamp: time.Now(),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{
+							Content: strings.Repeat("x", 2000),
+						},
+					}}},
+				},
+			},
+		}
+		// Without filtering, total tokens >> 100. With filtering,
+		// only the short primary event is counted.
+		assert.False(t, checker(sess))
+	})
+
+	t.Run("only sub-agent events yields false", func(t *testing.T) {
+		// Full-session scenario: primary event below threshold,
+		// sub-agent event above threshold. Mixed FilterKeys trigger
+		// filtering, so only the small primary event is counted.
+		const appName = "my-app"
+		checker := CheckTokenThreshold(100)
+		sess := &session.Session{
+			AppName: appName,
+			Events: []event.Event{
+				{
+					Author:    "user",
+					FilterKey: appName,
+					Timestamp: time.Now(),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "hi"},
+					}}},
+				},
+				{
+					Author:    "assistant",
+					FilterKey: "child-agent-xyz",
+					Timestamp: time.Now(),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{
+							Content: strings.Repeat("a", 800),
+						},
+					}}},
+				},
+			},
+		}
+		assert.False(t, checker(sess))
+	})
+
+	t.Run("branch summary counts all events in branch", func(t *testing.T) {
+		// Branch-summary scenario: computeDeltaSince already
+		// pre-filtered events to one sub-agent branch. All events
+		// share the same FilterKey, so filterPrimaryEvents should
+		// NOT discard them even though they differ from AppName.
+		const appName = "my-app"
+		checker := CheckTokenThreshold(10)
+		sess := &session.Session{
+			AppName: appName,
+			Events: []event.Event{
+				{
+					Author:    "assistant",
+					FilterKey: "child-agent-xyz",
+					Timestamp: time.Now(),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{
+							Content: strings.Repeat("a", 800),
+						},
+					}}},
+				},
+			},
+		}
+		// Single FilterKey → no filtering → triggers.
 		assert.True(t, checker(sess))
 	})
 }

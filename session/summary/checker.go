@@ -87,12 +87,67 @@ func filterDeltaEvents(sess *session.Session) []event.Event {
 	return out
 }
 
-// CheckEventThreshold creates a checker that triggers when the number of events
-// since the last summary exceeds the given threshold.
+// filterPrimaryEvents prevents sub-agent events from inflating
+// parent-level threshold checks in the full-session summary scenario.
+//
+// The function distinguishes two cases by inspecting whether the events
+// contain multiple distinct FilterKey values:
+//
+//  1. Single FilterKey (branch summary) — all events share one key
+//     because computeDeltaSince already filtered by that branch.
+//     No further filtering is needed; return the events as-is.
+//
+//  2. Mixed FilterKeys (full-session summary) — events come from
+//     both the primary agent and one or more sub-agents. Only events
+//     whose FilterKey matches the session's AppName (the primary
+//     agent's key) are retained so that sub-agent tokens/counts do
+//     not inflate the parent threshold.
+//
+// When AppName is empty, no filtering is applied for backward
+// compatibility with sessions that do not set an AppName.
+func filterPrimaryEvents(
+	events []event.Event, appName string,
+) []event.Event {
+	if appName == "" || len(events) == 0 {
+		return events
+	}
+	// Detect whether the events contain multiple distinct FilterKeys.
+	first := events[0].FilterKey
+	mixed := false
+	for i := 1; i < len(events); i++ {
+		if events[i].FilterKey != first {
+			mixed = true
+			break
+		}
+	}
+	if !mixed {
+		// All events share one FilterKey (branch summary) — no
+		// additional filtering required.
+		return events
+	}
+	// Mixed FilterKeys (full-session summary) — keep only events
+	// that belong to the primary agent.
+	out := make([]event.Event, 0, len(events))
+	for _, e := range events {
+		if e.FilterKey == appName {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// CheckEventThreshold creates a checker that triggers when the number of
+// primary-agent events since the last summary exceeds the given threshold.
+// Sub-agent events (FilterKey != AppName) are excluded from the count so
+// that child agent activity does not inflate the parent threshold.
 func CheckEventThreshold(eventCount int) Checker {
 	return func(sess *session.Session) bool {
 		delta := filterDeltaEvents(sess)
-		return len(delta) > eventCount
+		if len(delta) == 0 {
+			return false
+		}
+		primary := filterPrimaryEvents(delta, sess.AppName)
+		return len(primary) > eventCount
 	}
 }
 
@@ -122,21 +177,31 @@ func checkTokenThresholdFromText(tokenCount int, conversationText string) bool {
 	return tokens > tokenCount
 }
 
-// CheckTokenThreshold creates a checker that triggers when the estimated token
-// count of the events since the last summary exceeds the given threshold.
+// CheckTokenThreshold creates a checker that triggers when the estimated
+// token count of the primary-agent events since the last summary exceeds
+// the given threshold. Sub-agent events (FilterKey != AppName) are excluded
+// so that child agent tokens do not inflate the parent threshold check.
 //
 // Note:
-// Token accounting via model usage is not stable once session summary injection
-// is enabled. For consistent gating, we estimate tokens from the delta events.
+// Token accounting via model usage is not stable once session summary
+// injection is enabled. For consistent gating, we estimate tokens from
+// the delta events.
 func CheckTokenThreshold(tokenCount int) Checker {
 	return func(sess *session.Session) bool {
 		delta := filterDeltaEvents(sess)
 		if len(delta) == 0 {
 			return false
 		}
-
-		conversationText := extractConversationText(delta, nil, nil)
-		return checkTokenThresholdFromText(tokenCount, conversationText)
+		primary := filterPrimaryEvents(delta, sess.AppName)
+		if len(primary) == 0 {
+			return false
+		}
+		conversationText := extractConversationText(
+			primary, nil, nil,
+		)
+		return checkTokenThresholdFromText(
+			tokenCount, conversationText,
+		)
 	}
 }
 
