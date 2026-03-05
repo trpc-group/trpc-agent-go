@@ -1278,6 +1278,31 @@ func TestSession_SnapshotState_NilStateMap(t *testing.T) {
 	assert.Nil(t, snap)
 }
 
+func TestSession_HasStateKeyWithPrefix(t *testing.T) {
+	t.Run("nil session", func(t *testing.T) {
+		var sess *Session
+		assert.False(t, sess.HasStateKeyWithPrefix("x:"))
+	})
+
+	t.Run("empty prefix", func(t *testing.T) {
+		sess := NewSession("app", "user", "sid")
+		assert.False(t, sess.HasStateKeyWithPrefix(""))
+		assert.False(t, sess.HasStateKeyWithPrefix(" "))
+	})
+
+	t.Run("prefix match requires non-empty value", func(t *testing.T) {
+		sess := NewSession("app", "user", "sid")
+		sess.SetState("foo:bar", []byte("1"))
+		sess.SetState("foo:nil", nil)
+		sess.SetState("foo:empty", []byte{})
+
+		assert.True(t, sess.HasStateKeyWithPrefix("foo:"))
+		assert.False(t, sess.HasStateKeyWithPrefix("foo:nil"))
+		assert.False(t, sess.HasStateKeyWithPrefix("foo:empty"))
+		assert.False(t, sess.HasStateKeyWithPrefix("missing:"))
+	})
+}
+
 func TestUpdateUserSession(t *testing.T) {
 	now := time.Now()
 	baseTime := now.Add(-5 * time.Minute)
