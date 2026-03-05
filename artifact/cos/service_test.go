@@ -229,16 +229,28 @@ func TestCOSService_PutHeadOpenVersionsListDelete(t *testing.T) {
 	s, transport := createMockService(t)
 	ctx := context.Background()
 
-	key := artifact.Key{
-		AppName:   "testapp",
-		UserID:    "user1",
-		SessionID: "session1",
-		Name:      "test.txt",
-	}
+	appName := "testapp"
+	userID := "user1"
+	sessionID := "session1"
+	name := "test.txt"
 
-	desc1, err := s.Put(ctx, key, bytes.NewReader([]byte("v1")), artifact.WithPutMimeType("text/plain"))
+	desc1, err := s.Put(ctx, &artifact.PutRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+		Body:      bytes.NewReader([]byte("v1")),
+		MimeType:  "text/plain",
+	})
 	require.NoError(t, err)
-	desc2, err := s.Put(ctx, key, bytes.NewReader([]byte("v2")), artifact.WithPutMimeType("text/plain"))
+	desc2, err := s.Put(ctx, &artifact.PutRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+		Body:      bytes.NewReader([]byte("v2")),
+		MimeType:  "text/plain",
+	})
 	require.NoError(t, err)
 	require.NotEqual(t, desc1.Version, desc2.Version)
 
@@ -246,34 +258,64 @@ func TestCOSService_PutHeadOpenVersionsListDelete(t *testing.T) {
 		require.True(t, strings.HasPrefix(objectKey, "artifact/"), "objectKey=%s", objectKey)
 	}
 
-	h, err := s.Head(ctx, key, nil)
+	h, err := s.Head(ctx, &artifact.HeadRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
 	require.NoError(t, err)
 	require.Equal(t, desc2.Version, h.Version)
 
-	rc, od, err := s.Open(ctx, key, &desc1.Version)
+	od, err := s.Open(ctx, &artifact.OpenRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+		Version:   &desc1.Version,
+	})
 	require.NoError(t, err)
-	b, err := io.ReadAll(rc)
+	b, err := io.ReadAll(od.Body)
 	require.NoError(t, err)
-	require.NoError(t, rc.Close())
+	require.NoError(t, od.Body.Close())
 	require.Equal(t, []byte("v1"), b)
 	require.Equal(t, desc1.Version, od.Version)
 
-	vers, err := s.Versions(ctx, key)
+	vers, err := s.Versions(ctx, &artifact.VersionsRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
 	require.NoError(t, err)
-	require.Len(t, vers, 2)
+	require.Len(t, vers.Versions, 2)
 
-	items, next, err := s.List(ctx, artifact.Key{
-		AppName:   key.AppName,
-		UserID:    key.UserID,
-		SessionID: key.SessionID,
-	}, artifact.WithListLimit(10))
+	limit10 := 10
+	items, err := s.List(ctx, &artifact.ListRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Limit:     &limit10,
+	})
 	require.NoError(t, err)
-	require.Empty(t, next)
-	require.Len(t, items, 1)
-	require.Equal(t, "test.txt", items[0].Key.Name)
+	require.Empty(t, items.NextPageToken)
+	require.Len(t, items.Items, 1)
+	require.Equal(t, "test.txt", items.Items[0].Name)
 
-	require.NoError(t, s.Delete(ctx, key, artifact.DeleteAllOpt()))
-	_, err = s.Head(ctx, key, nil)
+	del, err := s.Delete(ctx, &artifact.DeleteRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
+	require.NoError(t, err)
+	require.True(t, del.Deleted)
+	_, err = s.Head(ctx, &artifact.HeadRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
 	require.ErrorIs(t, err, artifact.ErrNotFound)
 }
 
@@ -281,16 +323,26 @@ func TestCOSService_UserScopeIgnoresSessionID(t *testing.T) {
 	s, _ := createMockService(t)
 	ctx := context.Background()
 
-	putKey := artifact.Key{AppName: "testapp", UserID: "user1", SessionID: "", Name: "profile.txt"}
-	_, err := s.Put(ctx, putKey, bytes.NewReader([]byte("u")), artifact.WithPutMimeType("text/plain"))
+	_, err := s.Put(ctx, &artifact.PutRequest{
+		AppName:   "testapp",
+		UserID:    "user1",
+		SessionID: "",
+		Name:      "profile.txt",
+		Body:      bytes.NewReader([]byte("u")),
+		MimeType:  "text/plain",
+	})
 	require.NoError(t, err)
 
-	getKey := artifact.Key{AppName: "testapp", UserID: "user1", SessionID: "", Name: "profile.txt"}
-	rc, _, err := s.Open(ctx, getKey, nil)
+	out, err := s.Open(ctx, &artifact.OpenRequest{
+		AppName:   "testapp",
+		UserID:    "user1",
+		SessionID: "",
+		Name:      "profile.txt",
+	})
 	require.NoError(t, err)
-	b, err := io.ReadAll(rc)
+	b, err := io.ReadAll(out.Body)
 	require.NoError(t, err)
-	require.NoError(t, rc.Close())
+	require.NoError(t, out.Body.Close())
 	require.Equal(t, []byte("u"), b)
 }
 

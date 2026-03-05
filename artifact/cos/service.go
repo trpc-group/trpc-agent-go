@@ -125,208 +125,217 @@ func NewService(name, bucketURL string, opts ...Option) (*Service, error) {
 	}, nil
 }
 
-// Put stores artifact content and returns its descriptor.
-func (s *Service) Put(ctx context.Context, key artifact.Key, r io.Reader, opts ...artifact.PutOption) (artifact.Descriptor, error) {
-	if err := validateKey(key); err != nil {
-		return artifact.Descriptor{}, err
+// Put stores artifact content and returns its metadata.
+func (s *Service) Put(ctx context.Context, req *artifact.PutRequest, opts ...artifact.PutOption) (*artifact.PutResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("put request is nil")
+	}
+	if err := validateKeyFields(req.AppName, req.UserID, req.Name); err != nil {
+		return nil, err
+	}
+	if req.Body == nil {
+		return nil, fmt.Errorf("put request body is nil")
 	}
 
-	o := artifact.PutOptions{}
+	po := artifact.PutOptions{}
 	for _, opt := range opts {
 		if opt != nil {
-			opt(&o)
+			opt(&po)
 		}
 	}
 
 	v, err := artifact.NewVersionID()
 	if err != nil {
-		return artifact.Descriptor{}, err
+		return nil, err
 	}
-	objectName := withArtifactRoot(iartifact.BuildObjectName(key, v))
+	objectName := withArtifactRoot(iartifact.BuildObjectName(req.AppName, req.UserID, req.SessionID, req.Name, v))
 
-	data, err := io.ReadAll(r)
+	data, err := io.ReadAll(req.Body)
 	if err != nil {
-		return artifact.Descriptor{}, err
+		return nil, err
 	}
-	mt := o.MimeType
+	mt := req.MimeType
 	if mt == "" {
 		mt = defaultContentType
 	}
 	if err := s.cosClient.PutObject(ctx, objectName, bytes.NewReader(data), mt); err != nil {
-		return artifact.Descriptor{}, fmt.Errorf("failed to upload artifact: %w", err)
+		return nil, fmt.Errorf("failed to upload artifact: %w", err)
 	}
-	return artifact.Descriptor{Key: key, Version: v, MimeType: mt, Size: int64(len(data))}, nil
+	return &artifact.PutResponse{Version: v, MimeType: mt, Size: int64(len(data)), URL: s.bestEffortURL(ctx, objectName)}, nil
 }
 
 // Head resolves an artifact version to its metadata and an optional URL.
-func (s *Service) Head(ctx context.Context, key artifact.Key, version *artifact.VersionID) (artifact.Descriptor, error) {
-	if err := validateKey(key); err != nil {
-		return artifact.Descriptor{}, err
+func (s *Service) Head(ctx context.Context, req *artifact.HeadRequest, opts ...artifact.HeadOption) (*artifact.HeadResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("head request is nil")
 	}
-	target, err := s.resolveVersion(ctx, key, version)
+	if err := validateKeyFields(req.AppName, req.UserID, req.Name); err != nil {
+		return nil, err
+	}
+	_ = opts // reserved
+
+	target, err := s.resolveVersion(ctx, req.AppName, req.UserID, req.SessionID, req.Name, req.Version)
 	if err != nil {
-		return artifact.Descriptor{}, err
+		return nil, err
 	}
-	objectName := withArtifactRoot(iartifact.BuildObjectName(key, target))
+	objectName := withArtifactRoot(iartifact.BuildObjectName(req.AppName, req.UserID, req.SessionID, req.Name, target))
 	h, err := s.cosClient.HeadObject(ctx, objectName)
 	if err != nil {
 		if cos.IsNotFoundError(err) {
-			return artifact.Descriptor{}, artifact.ErrNotFound
+			return nil, artifact.ErrNotFound
 		}
-		return artifact.Descriptor{}, fmt.Errorf("failed to head artifact: %w", err)
+		return nil, fmt.Errorf("failed to head artifact: %w", err)
 	}
-	desc := descriptorFromHeader(key, target, h)
-	s.bestEffortURL(ctx, &desc, objectName)
-	return desc, nil
+	resp := headResponseFromHeader(target, h)
+	resp.URL = s.bestEffortURL(ctx, objectName)
+	return &resp, nil
 }
 
 // Open returns a streaming reader for the artifact content and its descriptor.
-func (s *Service) Open(ctx context.Context, key artifact.Key, version *artifact.VersionID) (io.ReadCloser, artifact.Descriptor, error) {
-	if err := validateKey(key); err != nil {
-		return nil, artifact.Descriptor{}, err
+func (s *Service) Open(ctx context.Context, req *artifact.OpenRequest, opts ...artifact.OpenOption) (*artifact.OpenResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("open request is nil")
 	}
-	target, err := s.resolveVersion(ctx, key, version)
+	if err := validateKeyFields(req.AppName, req.UserID, req.Name); err != nil {
+		return nil, err
+	}
+	_ = opts // reserved
+
+	target, err := s.resolveVersion(ctx, req.AppName, req.UserID, req.SessionID, req.Name, req.Version)
 	if err != nil {
-		return nil, artifact.Descriptor{}, err
+		return nil, err
 	}
-	objectName := withArtifactRoot(iartifact.BuildObjectName(key, target))
+	objectName := withArtifactRoot(iartifact.BuildObjectName(req.AppName, req.UserID, req.SessionID, req.Name, target))
 	body, header, err := s.cosClient.GetObject(ctx, objectName)
 	if err != nil {
 		if cos.IsNotFoundError(err) {
-			return nil, artifact.Descriptor{}, artifact.ErrNotFound
+			return nil, artifact.ErrNotFound
 		}
-		return nil, artifact.Descriptor{}, fmt.Errorf("failed to open artifact: %w", err)
+		return nil, fmt.Errorf("failed to open artifact: %w", err)
 	}
-	desc := descriptorFromHeader(key, target, header)
-	s.bestEffortURL(ctx, &desc, objectName)
-	return body, desc, nil
+	resp := openResponseFromHeader(body, target, header)
+	resp.URL = s.bestEffortURL(ctx, objectName)
+	return &resp, nil
 }
 
 // List returns the latest version descriptor for each artifact name under the given prefix.
-func (s *Service) List(ctx context.Context, key artifact.Key, opts ...artifact.ListOption) ([]artifact.Descriptor, string, error) {
-	if err := validateListKey(key); err != nil {
-		return nil, "", err
+func (s *Service) List(ctx context.Context, req *artifact.ListRequest, opts ...artifact.ListOption) (*artifact.ListResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("list request is nil")
 	}
+	if err := validateListFields(req.AppName, req.UserID); err != nil {
+		return nil, err
+	}
+	_ = opts // reserved
 
-	o := applyListOptions(opts)
-
-	scopePrefix := withArtifactRoot(iartifact.BuildListPrefix(key))
+	scopePrefix := withArtifactRoot(iartifact.BuildListPrefix(req.AppName, req.UserID, req.SessionID))
 	result, err := s.cosClient.GetBucket(ctx, scopePrefix)
 	if err != nil {
 		if cos.IsNotFoundError(err) {
-			return nil, "", nil
+			return &artifact.ListResponse{}, nil
 		}
-		return nil, "", fmt.Errorf("failed to list artifacts: %w", err)
+		return nil, fmt.Errorf("failed to list artifacts: %w", err)
 	}
 	if result == nil {
-		return nil, "", nil
+		return &artifact.ListResponse{}, nil
 	}
 
 	names, latestByName := collectLatestByName(result.Contents, scopePrefix)
 	if len(names) == 0 {
-		return nil, "", nil
+		return &artifact.ListResponse{}, nil
 	}
 
-	page, next := paginateNames(names, o)
+	page, next := paginateNames(names, req.Limit, req.PageToken)
 
-	out := make([]artifact.Descriptor, 0, len(page))
+	out := make([]artifact.ListItem, 0, len(page))
 	for _, name := range page {
-		itemKey := artifact.Key{AppName: key.AppName, UserID: key.UserID, SessionID: key.SessionID, Name: name}
 		ver := latestByName[name]
-		desc, err := s.Head(ctx, itemKey, &ver)
+		h, err := s.Head(ctx, &artifact.HeadRequest{
+			AppName:   req.AppName,
+			UserID:    req.UserID,
+			SessionID: req.SessionID,
+			Name:      name,
+			Version:   &ver,
+		})
 		if err != nil {
 			if errors.Is(err, artifact.ErrNotFound) {
 				continue
 			}
-			return nil, "", err
+			return nil, err
 		}
-		out = append(out, desc)
+		out = append(out, artifact.ListItem{
+			Name:     name,
+			Version:  h.Version,
+			MimeType: h.MimeType,
+			Size:     h.Size,
+			URL:      h.URL,
+		})
 	}
-	return out, next, nil
+	return &artifact.ListResponse{Items: out, NextPageToken: next}, nil
 }
 
 // Delete removes artifact content according to the provided delete options.
-func (s *Service) Delete(ctx context.Context, key artifact.Key, opts ...artifact.DeleteOption) error {
-	if err := validateKey(key); err != nil {
-		return err
+func (s *Service) Delete(ctx context.Context, req *artifact.DeleteRequest, opts ...artifact.DeleteOption) (*artifact.DeleteResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("delete request is nil")
 	}
+	if err := validateKeyFields(req.AppName, req.UserID, req.Name); err != nil {
+		return nil, err
+	}
+	_ = opts // reserved
 
-	o := artifact.DeleteOptions{}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(&o)
-		}
-	}
-	if err := o.Validate(); err != nil {
-		return err
-	}
-
-	switch o.Mode {
-	case artifact.DeleteAll:
-		versions, err := s.listVersions(ctx, key)
+	// Delete all versions.
+	if req.Version == nil {
+		versions, err := s.listVersions(ctx, req.AppName, req.UserID, req.SessionID, req.Name)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if len(versions) == 0 {
-			return artifact.ErrNotFound
+			return &artifact.DeleteResponse{Deleted: false}, nil
 		}
+		deleted := false
 		for _, v := range versions {
-			objectName := withArtifactRoot(iartifact.BuildObjectName(key, v))
-			if err := s.cosClient.DeleteObject(ctx, objectName); err != nil && !cos.IsNotFoundError(err) {
-				return fmt.Errorf("failed to delete artifact version %s: %w", v, err)
+			objectName := withArtifactRoot(iartifact.BuildObjectName(req.AppName, req.UserID, req.SessionID, req.Name, v))
+			if err := s.cosClient.DeleteObject(ctx, objectName); err != nil {
+				if cos.IsNotFoundError(err) {
+					continue
+				}
+				return nil, fmt.Errorf("failed to delete artifact version %s: %w", v, err)
 			}
+			deleted = true
 		}
-		return nil
-	case artifact.DeleteLatest:
-		ver, err := s.resolveVersion(ctx, key, nil)
-		if err != nil {
-			return err
-		}
-		objectName := withArtifactRoot(iartifact.BuildObjectName(key, ver))
-		if err := s.cosClient.DeleteObject(ctx, objectName); err != nil {
-			if cos.IsNotFoundError(err) {
-				return artifact.ErrNotFound
-			}
-			return fmt.Errorf("failed to delete artifact version %s: %w", ver, err)
-		}
-		return nil
-	case artifact.DeleteVersion:
-		objectName := withArtifactRoot(iartifact.BuildObjectName(key, o.Version))
-		if err := s.cosClient.DeleteObject(ctx, objectName); err != nil {
-			if cos.IsNotFoundError(err) {
-				return artifact.ErrNotFound
-			}
-			return fmt.Errorf("failed to delete artifact version %s: %w", o.Version, err)
-		}
-		return nil
-	default:
-		return fmt.Errorf("unknown delete mode: %d", int(o.Mode))
+		return &artifact.DeleteResponse{Deleted: deleted}, nil
 	}
+
+	// Delete a specific version.
+	objectName := withArtifactRoot(iartifact.BuildObjectName(req.AppName, req.UserID, req.SessionID, req.Name, *req.Version))
+	if err := s.cosClient.DeleteObject(ctx, objectName); err != nil {
+		if cos.IsNotFoundError(err) {
+			return &artifact.DeleteResponse{Deleted: false}, nil
+		}
+		return nil, fmt.Errorf("failed to delete artifact version %s: %w", *req.Version, err)
+	}
+	return &artifact.DeleteResponse{Deleted: true}, nil
 }
 
 // Versions lists all versions available for the provided artifact key.
-func (s *Service) Versions(ctx context.Context, key artifact.Key) ([]artifact.VersionID, error) {
-	if err := validateKey(key); err != nil {
+func (s *Service) Versions(ctx context.Context, req *artifact.VersionsRequest, opts ...artifact.VersionsOption) (*artifact.VersionsResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("versions request is nil")
+	}
+	if err := validateKeyFields(req.AppName, req.UserID, req.Name); err != nil {
 		return nil, err
 	}
-	versions, err := s.listVersions(ctx, key)
+	_ = opts // reserved
+
+	versions, err := s.listVersions(ctx, req.AppName, req.UserID, req.SessionID, req.Name)
 	if err != nil {
 		return nil, err
 	}
 	if len(versions) == 0 {
 		return nil, artifact.ErrNotFound
 	}
-	return versions, nil
-}
-
-func applyListOptions(opts []artifact.ListOption) artifact.ListOptions {
-	o := artifact.ListOptions{}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(&o)
-		}
-	}
-	return o
+	return &artifact.VersionsResponse{Versions: versions}, nil
 }
 
 func collectLatestByName(contents []cos.Object, scopePrefix string) ([]string, map[string]artifact.VersionID) {
@@ -348,16 +357,20 @@ func collectLatestByName(contents []cos.Object, scopePrefix string) ([]string, m
 	return names, latestByName
 }
 
-func paginateNames(names []string, o artifact.ListOptions) (page []string, next string) {
+func paginateNames(names []string, limitPtr *int, pageTokenPtr *string) (page []string, next string) {
 	start := 0
-	if o.PageToken != "" {
-		i := sort.SearchStrings(names, o.PageToken)
+	if pageTokenPtr != nil && *pageTokenPtr != "" {
+		tok := *pageTokenPtr
+		i := sort.SearchStrings(names, tok)
 		start = i
-		for start < len(names) && names[start] <= o.PageToken {
+		for start < len(names) && names[start] <= tok {
 			start++
 		}
 	}
-	limit := o.Limit
+	limit := 0
+	if limitPtr != nil {
+		limit = *limitPtr
+	}
 	if limit <= 0 || limit > len(names)-start {
 		limit = len(names) - start
 	}
@@ -371,11 +384,11 @@ func paginateNames(names []string, o artifact.ListOptions) (page []string, next 
 	return page, next
 }
 
-func (s *Service) resolveVersion(ctx context.Context, key artifact.Key, version *artifact.VersionID) (artifact.VersionID, error) {
+func (s *Service) resolveVersion(ctx context.Context, appName, userID, sessionID, name string, version *artifact.VersionID) (artifact.VersionID, error) {
 	if version != nil {
 		return *version, nil
 	}
-	versions, err := s.listVersions(ctx, key)
+	versions, err := s.listVersions(ctx, appName, userID, sessionID, name)
 	if err != nil {
 		return "", err
 	}
@@ -391,8 +404,8 @@ func (s *Service) resolveVersion(ctx context.Context, key artifact.Key, version 
 	return latest, nil
 }
 
-func (s *Service) listVersions(ctx context.Context, key artifact.Key) ([]artifact.VersionID, error) {
-	prefix := withArtifactRoot(iartifact.BuildObjectNamePrefix(key))
+func (s *Service) listVersions(ctx context.Context, appName, userID, sessionID, name string) ([]artifact.VersionID, error) {
+	prefix := withArtifactRoot(iartifact.BuildObjectNamePrefix(appName, userID, sessionID, name))
 	result, err := s.cosClient.GetBucket(ctx, prefix)
 	if err != nil {
 		if cos.IsNotFoundError(err) {
@@ -435,7 +448,7 @@ func parseNameAndVersion(objectKey, scopePrefix string) (string, artifact.Versio
 	return name, artifact.VersionID(ver), true
 }
 
-func descriptorFromHeader(key artifact.Key, version artifact.VersionID, h http.Header) artifact.Descriptor {
+func headResponseFromHeader(version artifact.VersionID, h http.Header) artifact.HeadResponse {
 	contentType := h.Get("Content-Type")
 	if contentType == "" {
 		contentType = defaultContentType
@@ -446,34 +459,42 @@ func descriptorFromHeader(key artifact.Key, version artifact.VersionID, h http.H
 			size = n
 		}
 	}
-	return artifact.Descriptor{Key: key, Version: version, MimeType: contentType, Size: size}
+	return artifact.HeadResponse{Version: version, MimeType: contentType, Size: size}
 }
 
-func (s *Service) bestEffortURL(ctx context.Context, desc *artifact.Descriptor, objectName string) {
-	if desc == nil {
-		return
+func openResponseFromHeader(body io.ReadCloser, version artifact.VersionID, h http.Header) artifact.OpenResponse {
+	hr := headResponseFromHeader(version, h)
+	return artifact.OpenResponse{
+		Body:     body,
+		Version:  hr.Version,
+		MimeType: hr.MimeType,
+		Size:     hr.Size,
+		URL:      hr.URL,
 	}
+}
+
+func (s *Service) bestEffortURL(ctx context.Context, objectName string) string {
 	if s.secretID != "" && s.secretKey != "" {
 		if u, err := s.cosClient.PresignGetObject(ctx, objectName, s.secretID, s.secretKey, s.presignExpires); err == nil && u != nil {
-			desc.URL = u.String()
-			return
+			return u.String()
 		}
 	}
 	if u := s.cosClient.ObjectURL(objectName); u != nil {
-		desc.URL = u.String()
+		return u.String()
 	}
+	return ""
 }
 
-func validateKey(k artifact.Key) error {
-	if k.AppName == "" || k.UserID == "" {
+func validateKeyFields(appName, userID, name string) error {
+	if appName == "" || userID == "" {
 		return fmt.Errorf("invalid key: missing appName or userID")
 	}
-	return validateName(k.Name)
+	return validateName(name)
 }
 
-func validateListKey(k artifact.Key) error {
-	if k.AppName == "" || k.UserID == "" {
-		return fmt.Errorf("invalid prefix: missing appName or userID")
+func validateListFields(appName, userID string) error {
+	if appName == "" || userID == "" {
+		return fmt.Errorf("invalid namespace: missing appName or userID")
 	}
 	return nil
 }

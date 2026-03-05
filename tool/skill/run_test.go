@@ -15,7 +15,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path"
@@ -1053,12 +1052,12 @@ func TestRunTool_ForceSaveArtifacts_OutputsSpec(t *testing.T) {
 	require.Len(t, out.ArtifactFiles, 1)
 	savedName := "pref/" + outATxt
 	require.Equal(t, savedName, out.ArtifactFiles[0].Name)
-	got, _, err := artifact.ReadAll(ctx, svc, artifact.Key{
+	got, _, err := artifact.ReadAll(ctx, svc, &artifact.OpenRequest{
 		AppName:   sess.AppName,
 		UserID:    sess.UserID,
 		SessionID: sess.ID,
 		Name:      savedName,
-	}, nil)
+	})
 	require.NoError(t, err)
 	require.Contains(t, string(got), contentHi)
 }
@@ -1211,27 +1210,45 @@ func TestRunTool_OutputsSpec_AcceptsSnakeCaseJSON(t *testing.T) {
 // errArtifactService always fails on save to cover error path.
 type errArtifactService struct{}
 
-func (e *errArtifactService) Put(ctx context.Context, key artifact.Key, r io.Reader, opts ...artifact.PutOption) (artifact.Descriptor, error) {
-	return artifact.Descriptor{}, fmt.Errorf("forced-error")
+func (e *errArtifactService) Put(ctx context.Context, req *artifact.PutRequest, opts ...artifact.PutOption) (*artifact.PutResponse, error) {
+	_ = ctx
+	_ = req
+	_ = opts
+	return nil, fmt.Errorf("forced-error")
 }
 
-func (e *errArtifactService) Head(ctx context.Context, key artifact.Key, version *artifact.VersionID) (artifact.Descriptor, error) {
-	return artifact.Descriptor{}, artifact.ErrNotFound
+func (e *errArtifactService) Head(ctx context.Context, req *artifact.HeadRequest, opts ...artifact.HeadOption) (*artifact.HeadResponse, error) {
+	_ = ctx
+	_ = req
+	_ = opts
+	return nil, artifact.ErrNotFound
 }
 
-func (e *errArtifactService) Open(ctx context.Context, key artifact.Key, version *artifact.VersionID) (io.ReadCloser, artifact.Descriptor, error) {
-	return nil, artifact.Descriptor{}, artifact.ErrNotFound
+func (e *errArtifactService) Open(ctx context.Context, req *artifact.OpenRequest, opts ...artifact.OpenOption) (*artifact.OpenResponse, error) {
+	_ = ctx
+	_ = req
+	_ = opts
+	return nil, artifact.ErrNotFound
 }
 
-func (e *errArtifactService) List(ctx context.Context, key artifact.Key, opts ...artifact.ListOption) ([]artifact.Descriptor, string, error) {
-	return nil, "", nil
+func (e *errArtifactService) List(ctx context.Context, req *artifact.ListRequest, opts ...artifact.ListOption) (*artifact.ListResponse, error) {
+	_ = ctx
+	_ = req
+	_ = opts
+	return &artifact.ListResponse{}, nil
 }
 
-func (e *errArtifactService) Delete(ctx context.Context, key artifact.Key, opts ...artifact.DeleteOption) error {
-	return artifact.ErrNotFound
+func (e *errArtifactService) Delete(ctx context.Context, req *artifact.DeleteRequest, opts ...artifact.DeleteOption) (*artifact.DeleteResponse, error) {
+	_ = ctx
+	_ = req
+	_ = opts
+	return &artifact.DeleteResponse{Deleted: false}, nil
 }
 
-func (e *errArtifactService) Versions(ctx context.Context, key artifact.Key) ([]artifact.VersionID, error) {
+func (e *errArtifactService) Versions(ctx context.Context, req *artifact.VersionsRequest, opts ...artifact.VersionsOption) (*artifact.VersionsResponse, error) {
+	_ = ctx
+	_ = req
+	_ = opts
 	return nil, artifact.ErrNotFound
 }
 
@@ -2431,12 +2448,14 @@ func TestRunTool_StagesUserFileInputs_ArtifactRef_OK(t *testing.T) {
 		State:   session.StateMap{},
 	}
 	const artifactName = "uploads/notes.txt"
-	desc, err := svc.Put(context.Background(), artifact.Key{
+	desc, err := svc.Put(context.Background(), &artifact.PutRequest{
 		AppName:   sess.AppName,
 		UserID:    sess.UserID,
 		SessionID: sess.ID,
 		Name:      artifactName,
-	}, strings.NewReader(contentHi), artifact.WithPutMimeType("text/plain"))
+		Body:      strings.NewReader(contentHi),
+		MimeType:  "text/plain",
+	})
 	require.NoError(t, err)
 
 	ref := fmt.Sprintf(
@@ -2498,12 +2517,14 @@ func TestRunTool_StagesUserFileInputs_ArtifactRef_InfersName(t *testing.T) {
 		State:   session.StateMap{},
 	}
 	const artifactName = "uploads/notes.txt"
-	desc, err := svc.Put(context.Background(), artifact.Key{
+	desc, err := svc.Put(context.Background(), &artifact.PutRequest{
 		AppName:   sess.AppName,
 		UserID:    sess.UserID,
 		SessionID: sess.ID,
 		Name:      artifactName,
-	}, strings.NewReader(contentHi), artifact.WithPutMimeType("text/plain"))
+		Body:      strings.NewReader(contentHi),
+		MimeType:  "text/plain",
+	})
 	require.NoError(t, err)
 
 	ref := fmt.Sprintf(
@@ -2951,12 +2972,14 @@ func TestUserFileInputBytes(t *testing.T) {
 			State:   session.StateMap{},
 		}
 		const artifactName = "uploads/notes.txt"
-		desc, err := svc.Put(context.Background(), artifact.Key{
+		desc, err := svc.Put(context.Background(), &artifact.PutRequest{
 			AppName:   sess.AppName,
 			UserID:    sess.UserID,
 			SessionID: sess.ID,
 			Name:      artifactName,
-		}, strings.NewReader(contentHi), artifact.WithPutMimeType("text/plain"))
+			Body:      strings.NewReader(contentHi),
+			MimeType:  "text/plain",
+		})
 		require.NoError(t, err)
 		ref := fmt.Sprintf(
 			"%s%s@%s",

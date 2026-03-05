@@ -32,41 +32,80 @@ func TestPutOpenHeadVersionsDelete(t *testing.T) {
 	service := NewService()
 	ctx := context.Background()
 
-	key := artifact.Key{
-		AppName:   "testapp",
-		UserID:    "user123",
-		SessionID: "session456",
-		Name:      "test.txt",
-	}
+	appName := "testapp"
+	userID := "user123"
+	sessionID := "session456"
+	name := "test.txt"
 
 	// Put two versions.
-	desc1, err := service.Put(ctx, key, bytes.NewReader([]byte("v1")), artifact.WithPutMimeType("text/plain"))
+	desc1, err := service.Put(ctx, &artifact.PutRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+		Body:      bytes.NewReader([]byte("v1")),
+		MimeType:  "text/plain",
+	})
 	require.NoError(t, err)
-	desc2, err := service.Put(ctx, key, bytes.NewReader([]byte("v2")), artifact.WithPutMimeType("text/plain"))
+	desc2, err := service.Put(ctx, &artifact.PutRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+		Body:      bytes.NewReader([]byte("v2")),
+		MimeType:  "text/plain",
+	})
 	require.NoError(t, err)
 	assert.NotEqual(t, desc1.Version, desc2.Version)
 
 	// Open latest.
-	data, latestDesc, err := artifact.ReadAll(ctx, service, key, nil)
+	data, latestDesc, err := artifact.ReadAll(ctx, service, &artifact.OpenRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
 	require.NoError(t, err)
 	assert.Equal(t, []byte("v2"), data)
 	assert.Equal(t, desc2.Version, latestDesc.Version)
 
 	// Open specific.
-	data, d1, err := artifact.ReadAll(ctx, service, key, &desc1.Version)
+	data, d1, err := artifact.ReadAll(ctx, service, &artifact.OpenRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+		Version:   &desc1.Version,
+	})
 	require.NoError(t, err)
 	assert.Equal(t, []byte("v1"), data)
 	assert.Equal(t, desc1.Version, d1.Version)
 
 	// Versions.
-	versions, err := service.Versions(ctx, key)
+	versions, err := service.Versions(ctx, &artifact.VersionsRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
 	require.NoError(t, err)
-	assert.Len(t, versions, 2)
+	assert.Len(t, versions.Versions, 2)
 
 	// Delete removes all versions.
-	err = service.Delete(ctx, key, artifact.DeleteAllOpt())
+	del, err := service.Delete(ctx, &artifact.DeleteRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
 	require.NoError(t, err)
-	_, _, err = artifact.ReadAll(ctx, service, key, nil)
+	require.True(t, del.Deleted)
+	_, _, err = artifact.ReadAll(ctx, service, &artifact.OpenRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
 	assert.ErrorIs(t, err, artifact.ErrNotFound)
 }
 
@@ -74,34 +113,73 @@ func TestListPagination(t *testing.T) {
 	service := NewService()
 	ctx := context.Background()
 
-	base := artifact.Key{AppName: "testapp", UserID: "user123", SessionID: "s1"}
-	_, err := service.Put(ctx, artifact.Key{AppName: base.AppName, UserID: base.UserID, SessionID: base.SessionID, Name: "a.txt"}, bytes.NewReader([]byte("a")))
+	baseApp := "testapp"
+	baseUser := "user123"
+	baseSession := "s1"
+
+	_, err := service.Put(ctx, &artifact.PutRequest{
+		AppName:   baseApp,
+		UserID:    baseUser,
+		SessionID: baseSession,
+		Name:      "a.txt",
+		Body:      bytes.NewReader([]byte("a")),
+	})
 	require.NoError(t, err)
-	_, err = service.Put(ctx, artifact.Key{AppName: base.AppName, UserID: base.UserID, SessionID: base.SessionID, Name: "b.txt"}, bytes.NewReader([]byte("b")))
+	_, err = service.Put(ctx, &artifact.PutRequest{
+		AppName:   baseApp,
+		UserID:    baseUser,
+		SessionID: baseSession,
+		Name:      "b.txt",
+		Body:      bytes.NewReader([]byte("b")),
+	})
 	require.NoError(t, err)
 
-	ns := artifact.Key{AppName: base.AppName, UserID: base.UserID, SessionID: base.SessionID}
-	page1, next, err := service.List(ctx, ns, artifact.WithListLimit(1))
+	limit1 := 1
+	page1, err := service.List(ctx, &artifact.ListRequest{
+		AppName:   baseApp,
+		UserID:    baseUser,
+		SessionID: baseSession,
+		Limit:     &limit1,
+	})
 	require.NoError(t, err)
-	require.Len(t, page1, 1)
-	require.NotEmpty(t, next)
+	require.Len(t, page1.Items, 1)
+	require.NotEmpty(t, page1.NextPageToken)
 
-	page2, next2, err := service.List(ctx, ns, artifact.WithListLimit(10), artifact.WithListPageToken(next))
+	limit10 := 10
+	next := page1.NextPageToken
+	page2, err := service.List(ctx, &artifact.ListRequest{
+		AppName:   baseApp,
+		UserID:    baseUser,
+		SessionID: baseSession,
+		Limit:     &limit10,
+		PageToken: &next,
+	})
 	require.NoError(t, err)
-	require.Len(t, page2, 1)
-	require.Empty(t, next2)
+	require.Len(t, page2.Items, 1)
+	require.Empty(t, page2.NextPageToken)
 }
 
 func TestUserScopeIgnoresSessionID(t *testing.T) {
 	service := NewService()
 	ctx := context.Background()
 
-	putKey := artifact.Key{AppName: "testapp", UserID: "user123", SessionID: "", Name: "profile.txt"}
-	_, err := service.Put(ctx, putKey, bytes.NewReader([]byte("u")), artifact.WithPutMimeType("text/plain"))
+	putKey := &artifact.PutRequest{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "",
+		Name:      "profile.txt",
+		Body:      bytes.NewReader([]byte("u")),
+		MimeType:  "text/plain",
+	}
+	_, err := service.Put(ctx, putKey)
 	require.NoError(t, err)
 
-	getKey := artifact.Key{AppName: "testapp", UserID: "user123", SessionID: "", Name: "profile.txt"}
-	data, _, err := artifact.ReadAll(ctx, service, getKey, nil)
+	data, _, err := artifact.ReadAll(ctx, service, &artifact.OpenRequest{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "",
+		Name:      "profile.txt",
+	})
 	require.NoError(t, err)
 	assert.Equal(t, []byte("u"), data)
 }

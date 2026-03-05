@@ -24,14 +24,6 @@ import (
 // to choose safe versioning strategies (monotonic timestamps, UUIDs, etc.).
 type VersionID string
 
-// Key identifies an artifact (all versions) in a namespace.
-type Key struct {
-	AppName   string
-	UserID    string
-	SessionID string // Optional. When set, services may use it to namespace artifacts.
-	Name      string
-}
-
 // Artifact is a convenience container for artifact bytes with optional metadata.
 // Services operate on streaming readers; use this type in higher-level helpers.
 type Artifact struct {

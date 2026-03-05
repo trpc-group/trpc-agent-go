@@ -438,34 +438,48 @@ func (m *mockMemoryService) Close() error {
 
 type mockArtifactService struct{}
 
-func (m *mockArtifactService) Put(ctx context.Context, key artifact.Key, r io.Reader, opts ...artifact.PutOption) (artifact.Descriptor, error) {
-	return artifact.Descriptor{Key: key, Version: "1"}, nil
+func (m *mockArtifactService) Put(ctx context.Context, req *artifact.PutRequest, opts ...artifact.PutOption) (*artifact.PutResponse, error) {
+	_ = opts
+	return &artifact.PutResponse{Version: artifact.VersionID("1"), MimeType: req.MimeType}, nil
 }
 
-func (m *mockArtifactService) Head(ctx context.Context, key artifact.Key, version *artifact.VersionID) (artifact.Descriptor, error) {
-	if version == nil {
-		v := artifact.VersionID("1")
-		version = &v
+func (m *mockArtifactService) Head(ctx context.Context, req *artifact.HeadRequest, opts ...artifact.HeadOption) (*artifact.HeadResponse, error) {
+	_ = opts
+	v := req.Version
+	if v == nil {
+		v0 := artifact.VersionID("1")
+		v = &v0
 	}
-	return artifact.Descriptor{Key: key, Version: *version}, nil
+	return &artifact.HeadResponse{Version: *v, MimeType: "text/plain"}, nil
 }
 
-func (m *mockArtifactService) Open(ctx context.Context, key artifact.Key, version *artifact.VersionID) (io.ReadCloser, artifact.Descriptor, error) {
-	d, err := m.Head(ctx, key, version)
-	if err != nil {
-		return nil, artifact.Descriptor{}, err
+func (m *mockArtifactService) Open(ctx context.Context, req *artifact.OpenRequest, opts ...artifact.OpenOption) (*artifact.OpenResponse, error) {
+	_ = opts
+	v := req.Version
+	if v == nil {
+		v0 := artifact.VersionID("1")
+		v = &v0
 	}
-	return io.NopCloser(strings.NewReader("")), d, nil
+	return &artifact.OpenResponse{Body: io.NopCloser(strings.NewReader("")), Version: *v, MimeType: "text/plain"}, nil
 }
 
-func (m *mockArtifactService) List(ctx context.Context, key artifact.Key, opts ...artifact.ListOption) ([]artifact.Descriptor, string, error) {
-	return nil, "", nil
+func (m *mockArtifactService) List(ctx context.Context, req *artifact.ListRequest, opts ...artifact.ListOption) (*artifact.ListResponse, error) {
+	_ = ctx
+	_ = req
+	_ = opts
+	return &artifact.ListResponse{}, nil
 }
 
-func (m *mockArtifactService) Delete(ctx context.Context, key artifact.Key, opts ...artifact.DeleteOption) error {
-	return nil
+func (m *mockArtifactService) Delete(ctx context.Context, req *artifact.DeleteRequest, opts ...artifact.DeleteOption) (*artifact.DeleteResponse, error) {
+	_ = ctx
+	_ = req
+	_ = opts
+	return &artifact.DeleteResponse{Deleted: true}, nil
 }
 
-func (m *mockArtifactService) Versions(ctx context.Context, key artifact.Key) ([]artifact.VersionID, error) {
-	return []artifact.VersionID{"1"}, nil
+func (m *mockArtifactService) Versions(ctx context.Context, req *artifact.VersionsRequest, opts ...artifact.VersionsOption) (*artifact.VersionsResponse, error) {
+	_ = ctx
+	_ = req
+	_ = opts
+	return &artifact.VersionsResponse{Versions: []artifact.VersionID{"1"}}, nil
 }

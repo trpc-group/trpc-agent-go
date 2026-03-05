@@ -46,7 +46,7 @@ func TestArtifactHelpers_SaveAndLoad(t *testing.T) {
 	svc := inmemory.NewService()
 	// Attach service and a dummy session to context.
 	ctx = WithArtifactService(ctx, svc)
-	ctx = WithArtifactBaseKey(ctx, artifact.Key{
+	ctx = WithArtifactBaseKey(ctx, ArtifactBaseKey{
 		AppName:   "app",
 		UserID:    "u",
 		SessionID: "s",

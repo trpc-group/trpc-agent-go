@@ -117,35 +117,48 @@ func newTestService(t *testing.T) (*Service, *mockStorage) {
 	return svc, mock
 }
 
-func testKey(name string) artifact.Key {
-	return artifact.Key{
-		AppName:   "test-app",
-		UserID:    "user-123",
-		SessionID: "session-456",
-		Name:      name,
-	}
-}
-
 func TestService_PutOpenHead(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()
 
-	desc, err := svc.Put(ctx, testKey("test.txt"), strings.NewReader("hello"), artifact.WithPutMimeType("text/plain"))
+	appName := "test-app"
+	userID := "user-123"
+	sessionID := "session-456"
+	name := "test.txt"
+
+	desc, err := svc.Put(ctx, &artifact.PutRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+		Body:      strings.NewReader("hello"),
+		MimeType:  "text/plain",
+	})
 	require.NoError(t, err)
 	require.NotEmpty(t, desc.Version)
 	assert.Equal(t, "text/plain", desc.MimeType)
 	assert.Equal(t, int64(5), desc.Size)
-	assert.Equal(t, "test.txt", desc.Key.Name)
 
-	rc, od, err := svc.Open(ctx, testKey("test.txt"), nil)
+	od, err := svc.Open(ctx, &artifact.OpenRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
 	require.NoError(t, err)
-	defer rc.Close()
-	b, err := io.ReadAll(rc)
+	defer od.Body.Close()
+	b, err := io.ReadAll(od.Body)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("hello"), b)
 	assert.Equal(t, desc.Version, od.Version)
 
-	hd, err := svc.Head(ctx, testKey("test.txt"), &desc.Version)
+	hd, err := svc.Head(ctx, &artifact.HeadRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+		Version:   &desc.Version,
+	})
 	require.NoError(t, err)
 	assert.Equal(t, desc.Version, hd.Version)
 	assert.Equal(t, desc.MimeType, hd.MimeType)
@@ -155,59 +168,102 @@ func TestService_PutOpenHead(t *testing.T) {
 func TestService_VersionsAndDeleteAll(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()
-	k := testKey("doc.txt")
+	appName := "test-app"
+	userID := "user-123"
+	sessionID := "session-456"
+	name := "doc.txt"
 
-	d1, err := svc.Put(ctx, k, strings.NewReader("v1"), artifact.WithPutMimeType("text/plain"))
+	d1, err := svc.Put(ctx, &artifact.PutRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+		Body:      strings.NewReader("v1"),
+		MimeType:  "text/plain",
+	})
 	require.NoError(t, err)
-	d2, err := svc.Put(ctx, k, strings.NewReader("v2"), artifact.WithPutMimeType("text/plain"))
+	d2, err := svc.Put(ctx, &artifact.PutRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+		Body:      strings.NewReader("v2"),
+		MimeType:  "text/plain",
+	})
 	require.NoError(t, err)
 
-	vers, err := svc.Versions(ctx, k)
+	vers, err := svc.Versions(ctx, &artifact.VersionsRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
 	require.NoError(t, err)
-	assert.Len(t, vers, 2)
-	assert.Contains(t, vers, d1.Version)
-	assert.Contains(t, vers, d2.Version)
+	assert.Len(t, vers.Versions, 2)
+	assert.Contains(t, vers.Versions, d1.Version)
+	assert.Contains(t, vers.Versions, d2.Version)
 
-	require.NoError(t, svc.Delete(ctx, k, artifact.DeleteAllOpt()))
-	_, _, err = svc.Open(ctx, k, nil)
+	_, err = svc.Delete(ctx, &artifact.DeleteRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
+	require.NoError(t, err)
+	_, err = svc.Open(ctx, &artifact.OpenRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
 	assert.ErrorIs(t, err, artifact.ErrNotFound)
 }
 
 func TestService_List_Paginates(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()
+	appName := "test-app"
+	userID := "user-123"
+	sessionID := "session-456"
 
-	_, _ = svc.Put(ctx, testKey("a.txt"), strings.NewReader("a"))
-	_, _ = svc.Put(ctx, testKey("b.txt"), strings.NewReader("b"))
-	_, _ = svc.Put(ctx, testKey("c.txt"), strings.NewReader("c"))
+	_, _ = svc.Put(ctx, &artifact.PutRequest{AppName: appName, UserID: userID, SessionID: sessionID, Name: "a.txt", Body: strings.NewReader("a")})
+	_, _ = svc.Put(ctx, &artifact.PutRequest{AppName: appName, UserID: userID, SessionID: sessionID, Name: "b.txt", Body: strings.NewReader("b")})
+	_, _ = svc.Put(ctx, &artifact.PutRequest{AppName: appName, UserID: userID, SessionID: sessionID, Name: "c.txt", Body: strings.NewReader("c")})
 
-	ns := artifact.Key{
-		AppName:   "test-app",
-		UserID:    "user-123",
-		SessionID: "session-456",
-	}
-
-	page1, next, err := svc.List(ctx, ns, artifact.WithListLimit(2))
+	limit2 := 2
+	page1, err := svc.List(ctx, &artifact.ListRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Limit:     &limit2,
+	})
 	require.NoError(t, err)
-	require.Len(t, page1, 2)
-	require.NotEmpty(t, next)
+	require.Len(t, page1.Items, 2)
+	require.NotEmpty(t, page1.NextPageToken)
 
-	page2, next2, err := svc.List(ctx, ns, artifact.WithListLimit(2), artifact.WithListPageToken(next))
+	next := page1.NextPageToken
+	page2, err := svc.List(ctx, &artifact.ListRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Limit:     &limit2,
+		PageToken: &next,
+	})
 	require.NoError(t, err)
-	require.Len(t, page2, 1)
-	require.Empty(t, next2)
+	require.Len(t, page2.Items, 1)
+	require.Empty(t, page2.NextPageToken)
 }
 
 func TestService_Put_ValidatesKey(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()
 
-	_, err := svc.Put(ctx, artifact.Key{Name: "x"}, strings.NewReader("x"))
+	_, err := svc.Put(ctx, &artifact.PutRequest{Name: "x", Body: strings.NewReader("x")})
 	assert.ErrorIs(t, err, ErrEmptySessionInfo)
 
-	_, err = svc.Put(ctx, artifact.Key{AppName: "a", UserID: "u", Name: "x"}, strings.NewReader("x"))
+	_, err = svc.Put(ctx, &artifact.PutRequest{AppName: "a", UserID: "u", Name: "x", Body: strings.NewReader("x")})
 	assert.NoError(t, err)
 
-	_, err = svc.Put(ctx, artifact.Key{AppName: "a", UserID: "u", SessionID: "s", Name: ""}, strings.NewReader("x"))
+	_, err = svc.Put(ctx, &artifact.PutRequest{AppName: "a", UserID: "u", SessionID: "s", Name: "", Body: strings.NewReader("x")})
 	assert.ErrorIs(t, err, ErrEmptyFilename)
 }

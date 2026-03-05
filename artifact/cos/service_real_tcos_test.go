@@ -38,76 +38,117 @@ func TestArtifact_SessionScope(t *testing.T) {
 
 	s, err := cos.NewService("cos-1", bucketURL)
 	require.NoError(t, err)
-	key := artifact.Key{
-		AppName:   "testapp",
-		UserID:    "user1",
-		SessionID: "session1",
-		Name:      "test.txt",
-	}
+	appName := "testapp"
+	userID := "user1"
+	sessionID := "session1"
+	name := "test.txt"
 	var artifacts [][]byte
 	for i := 0; i < 3; i++ {
 		artifacts = append(artifacts, []byte("Hello, World!"+strconv.Itoa(i)))
 	}
 	t.Cleanup(func() {
-		if err := s.Delete(context.Background(), key, artifact.DeleteAllOpt()); err != nil && !errors.Is(err, artifact.ErrNotFound) {
+		if _, err := s.Delete(context.Background(), &artifact.DeleteRequest{
+			AppName:   appName,
+			UserID:    userID,
+			SessionID: sessionID,
+			Name:      name,
+		}); err != nil {
 			t.Logf("Cleanup: Delete: %v", err)
 		}
 	})
 
 	var versionsPut []artifact.VersionID
 	for _, data := range artifacts {
-		desc, err := s.Put(context.Background(), key, bytes.NewReader(data), artifact.WithPutMimeType("text/plain"))
+		desc, err := s.Put(context.Background(), &artifact.PutRequest{
+			AppName:   appName,
+			UserID:    userID,
+			SessionID: sessionID,
+			Name:      name,
+			Body:      bytes.NewReader(data),
+			MimeType:  "text/plain",
+		})
 		require.NoError(t, err)
 		versionsPut = append(versionsPut, desc.Version)
 	}
 
-	versions, err := s.Versions(context.Background(), key)
+	versions, err := s.Versions(context.Background(), &artifact.VersionsRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
 	require.NoError(t, err)
-	require.ElementsMatch(t, versionsPut, versions)
+	require.ElementsMatch(t, versionsPut, versions.Versions)
 
-	rc, desc, err := s.Open(context.Background(), key, nil)
+	openLatest, err := s.Open(context.Background(), &artifact.OpenRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
 	require.NoError(t, err)
-	require.Equal(t, "text/plain", desc.MimeType)
-	gotLatest, err := io.ReadAll(rc)
+	require.Equal(t, "text/plain", openLatest.MimeType)
+	gotLatest, err := io.ReadAll(openLatest.Body)
 	require.NoError(t, err)
-	require.NoError(t, rc.Close())
+	require.NoError(t, openLatest.Body.Close())
 	require.EqualValues(t, artifacts[len(artifacts)-1], gotLatest)
 
 	for i, wanted := range artifacts {
 		v := versionsPut[i]
-		rc, _, err := s.Open(context.Background(), key, &v)
+		out, err := s.Open(context.Background(), &artifact.OpenRequest{
+			AppName:   appName,
+			UserID:    userID,
+			SessionID: sessionID,
+			Name:      name,
+			Version:   &v,
+		})
 		require.NoError(t, err)
-		got, err := io.ReadAll(rc)
+		got, err := io.ReadAll(out.Body)
 		require.NoError(t, err)
-		require.NoError(t, rc.Close())
+		require.NoError(t, out.Body.Close())
 		require.EqualValues(t, wanted, got)
 	}
 
-	items, _, err := s.List(context.Background(), artifact.Key{
-		AppName:   key.AppName,
-		UserID:    key.UserID,
-		SessionID: key.SessionID,
+	items, err := s.List(context.Background(), &artifact.ListRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
 	})
 	require.NoError(t, err)
-	require.Len(t, items, 1)
-	require.Equal(t, key.Name, items[0].Key.Name)
+	require.Len(t, items.Items, 1)
+	require.Equal(t, name, items.Items[0].Name)
 
-	err = s.Delete(context.Background(), key, artifact.DeleteAllOpt())
-	require.NoError(t, err)
-
-	items, _, err = s.List(context.Background(), artifact.Key{
-		AppName:   key.AppName,
-		UserID:    key.UserID,
-		SessionID: key.SessionID,
+	_, err = s.Delete(context.Background(), &artifact.DeleteRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
 	})
 	require.NoError(t, err)
-	require.Empty(t, items)
 
-	_, err = s.Versions(context.Background(), key)
+	items, err = s.List(context.Background(), &artifact.ListRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+	})
+	require.NoError(t, err)
+	require.Empty(t, items.Items)
+
+	_, err = s.Versions(context.Background(), &artifact.VersionsRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
 	require.Error(t, err)
 	require.True(t, errors.Is(err, artifact.ErrNotFound))
 
-	_, _, err = s.Open(context.Background(), key, nil)
+	_, err = s.Open(context.Background(), &artifact.OpenRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
 	require.Error(t, err)
 	require.True(t, errors.Is(err, artifact.ErrNotFound))
 }
@@ -127,35 +168,59 @@ func TestArtifact_SessionScope_PutHeadDelete(t *testing.T) {
 	s, err := cos.NewService("cos-1", bucketURL)
 	require.NoError(t, err)
 
-	key := artifact.Key{
-		AppName:   "testapp",
-		UserID:    "user1",
-		SessionID: "session1",
-		Name:      "put-head-delete.txt",
-	}
+	appName := "testapp"
+	userID := "user1"
+	sessionID := "session1"
+	name := "put-head-delete.txt"
 
 	t.Cleanup(func() {
-		if err := s.Delete(context.Background(), key, artifact.DeleteAllOpt()); err != nil && !errors.Is(err, artifact.ErrNotFound) {
+		if _, err := s.Delete(context.Background(), &artifact.DeleteRequest{
+			AppName:   appName,
+			UserID:    userID,
+			SessionID: sessionID,
+			Name:      name,
+		}); err != nil {
 			t.Logf("Cleanup: Delete: %v", err)
 		}
 	})
 
 	data := []byte("PutHeadDelete")
-	putDesc, err := s.Put(context.Background(), key, bytes.NewReader(data), artifact.WithPutMimeType("text/plain"))
+	putDesc, err := s.Put(context.Background(), &artifact.PutRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+		Body:      bytes.NewReader(data),
+		MimeType:  "text/plain",
+	})
 	require.NoError(t, err)
 	require.NotEmpty(t, putDesc.Version)
-	require.Equal(t, key.Name, putDesc.Key.Name)
 
-	headDesc, err := s.Head(context.Background(), key, nil)
+	headDesc, err := s.Head(context.Background(), &artifact.HeadRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
 	require.NoError(t, err)
 	t.Logf("headDesc: %+v", headDesc)
 	require.Equal(t, putDesc.Version, headDesc.Version)
 	require.Equal(t, "text/plain", headDesc.MimeType)
 
-	err = s.Delete(context.Background(), key, artifact.DeleteAllOpt())
+	_, err = s.Delete(context.Background(), &artifact.DeleteRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
 	require.NoError(t, err)
 
-	_, err = s.Head(context.Background(), key, nil)
+	_, err = s.Head(context.Background(), &artifact.HeadRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
 	require.Error(t, err)
 	require.True(t, errors.Is(err, artifact.ErrNotFound))
 }
@@ -173,14 +238,17 @@ func TestArtifact_UserScope(t *testing.T) {
 	// Put-Versions-Open-List-Delete-Versions-Open-List
 	s, err := cos.NewService("cos-2", bucketURL)
 	require.NoError(t, err)
-	key := artifact.Key{
-		AppName:   "testapp",
-		UserID:    "user2",
-		SessionID: "",
-		Name:      "test.txt",
-	}
+	appName := "testapp"
+	userID := "user2"
+	sessionID := ""
+	name := "test.txt"
 	t.Cleanup(func() {
-		if err := s.Delete(context.Background(), key, artifact.DeleteAllOpt()); err != nil && !errors.Is(err, artifact.ErrNotFound) {
+		if _, err := s.Delete(context.Background(), &artifact.DeleteRequest{
+			AppName:   appName,
+			UserID:    userID,
+			SessionID: sessionID,
+			Name:      name,
+		}); err != nil {
 			t.Logf("Cleanup: Delete: %v", err)
 		}
 	})
@@ -189,59 +257,97 @@ func TestArtifact_UserScope(t *testing.T) {
 	var artifacts [][]byte
 	for i := 0; i < 3; i++ {
 		data := []byte("Hi, World!" + strconv.Itoa(i))
-		desc, err := s.Put(context.Background(), key, bytes.NewReader(data), artifact.WithPutMimeType("text/plain"))
+		desc, err := s.Put(context.Background(), &artifact.PutRequest{
+			AppName:   appName,
+			UserID:    userID,
+			SessionID: sessionID,
+			Name:      name,
+			Body:      bytes.NewReader(data),
+			MimeType:  "text/plain",
+		})
 		require.NoError(t, err)
 		versionsPut = append(versionsPut, desc.Version)
 		artifacts = append(artifacts, data)
 	}
 
-	versions, err := s.Versions(context.Background(), key)
+	versions, err := s.Versions(context.Background(), &artifact.VersionsRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
 	require.NoError(t, err)
-	require.ElementsMatch(t, versionsPut, versions)
+	require.ElementsMatch(t, versionsPut, versions.Versions)
 
-	rc, desc, err := s.Open(context.Background(), key, nil)
+	openLatest, err := s.Open(context.Background(), &artifact.OpenRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
 	require.NoError(t, err)
-	require.Equal(t, "text/plain", desc.MimeType)
-	gotLatest, err := io.ReadAll(rc)
+	require.Equal(t, "text/plain", openLatest.MimeType)
+	gotLatest, err := io.ReadAll(openLatest.Body)
 	require.NoError(t, err)
-	require.NoError(t, rc.Close())
+	require.NoError(t, openLatest.Body.Close())
 	require.EqualValues(t, artifacts[len(artifacts)-1], gotLatest)
 
 	for i := 0; i < 3; i++ {
 		v := versionsPut[i]
-		rc, _, err := s.Open(context.Background(), key, &v)
+		out, err := s.Open(context.Background(), &artifact.OpenRequest{
+			AppName:   appName,
+			UserID:    userID,
+			SessionID: sessionID,
+			Name:      name,
+			Version:   &v,
+		})
 		require.NoError(t, err)
-		got, err := io.ReadAll(rc)
+		got, err := io.ReadAll(out.Body)
 		require.NoError(t, err)
-		require.NoError(t, rc.Close())
+		require.NoError(t, out.Body.Close())
 		require.EqualValues(t, artifacts[i], got)
 	}
 
-	items, _, err := s.List(context.Background(), artifact.Key{
-		AppName:   key.AppName,
-		UserID:    key.UserID,
-		SessionID: "", // not used for user scope
+	items, err := s.List(context.Background(), &artifact.ListRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: "", // user scope
 	})
 	require.NoError(t, err)
-	require.Len(t, items, 1)
-	require.Equal(t, key.Name, items[0].Key.Name)
+	require.Len(t, items.Items, 1)
+	require.Equal(t, name, items.Items[0].Name)
 
-	err = s.Delete(context.Background(), key, artifact.DeleteAllOpt())
+	_, err = s.Delete(context.Background(), &artifact.DeleteRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
 	require.NoError(t, err)
 
-	items, _, err = s.List(context.Background(), artifact.Key{
-		AppName:   key.AppName,
-		UserID:    key.UserID,
+	items, err = s.List(context.Background(), &artifact.ListRequest{
+		AppName:   appName,
+		UserID:    userID,
 		SessionID: "",
 	})
 	require.NoError(t, err)
-	require.Empty(t, items)
+	require.Empty(t, items.Items)
 
-	_, err = s.Versions(context.Background(), key)
+	_, err = s.Versions(context.Background(), &artifact.VersionsRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
 	require.Error(t, err)
 	require.True(t, errors.Is(err, artifact.ErrNotFound))
 
-	_, _, err = s.Open(context.Background(), key, nil)
+	_, err = s.Open(context.Background(), &artifact.OpenRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		Name:      name,
+	})
 	require.Error(t, err)
 	require.True(t, errors.Is(err, artifact.ErrNotFound))
 }

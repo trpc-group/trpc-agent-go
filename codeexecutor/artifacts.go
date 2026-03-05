@@ -18,6 +18,14 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 )
 
+// ArtifactBaseKey contains the base namespace for artifact operations.
+// It intentionally excludes artifact name, which is provided per call.
+type ArtifactBaseKey struct {
+	AppName   string
+	UserID    string
+	SessionID string // Optional. Empty means user-scoped namespace.
+}
+
 // LoadArtifactHelper resolves artifact name@version via callback context.
 // If version is nil, loads latest. Returns data, mime, actual version.
 func LoadArtifactHelper(
@@ -28,7 +36,13 @@ func LoadArtifactHelper(
 		return nil, "", "", fmt.Errorf("artifact service not in context")
 	}
 	baseKey := artifactBaseKeyFromContext(ctx)
-	data, desc, err := artifact.ReadAll(ctx, svc, withName(baseKey, name), version)
+	data, desc, err := artifact.ReadAll(ctx, svc, &artifact.OpenRequest{
+		AppName:   baseKey.AppName,
+		UserID:    baseKey.UserID,
+		SessionID: baseKey.SessionID,
+		Name:      name,
+		Version:   version,
+	})
 	if err != nil {
 		return nil, "", "", err
 	}
@@ -65,7 +79,14 @@ func SaveArtifactHelper(
 		return "", fmt.Errorf("artifact service not in context")
 	}
 	baseKey := artifactBaseKeyFromContext(ctx)
-	desc, err := svc.Put(ctx, withName(baseKey, filename), bytes.NewReader(data), artifact.WithPutMimeType(mime))
+	desc, err := svc.Put(ctx, &artifact.PutRequest{
+		AppName:   baseKey.AppName,
+		UserID:    baseKey.UserID,
+		SessionID: baseKey.SessionID,
+		Name:      filename,
+		Body:      bytes.NewReader(data),
+		MimeType:  mime,
+	})
 	if err != nil {
 		return "", err
 	}
@@ -101,23 +122,17 @@ func ArtifactServiceFromContext(
 }
 
 // WithArtifactBaseKey stores the base artifact key (without Name) in context.
-func WithArtifactBaseKey(ctx context.Context, key artifact.Key) context.Context {
-	key.Name = ""
+func WithArtifactBaseKey(ctx context.Context, key ArtifactBaseKey) context.Context {
 	return context.WithValue(ctx, artifactBaseKey{}, key)
 }
 
-func artifactBaseKeyFromContext(ctx context.Context) artifact.Key {
+func artifactBaseKeyFromContext(ctx context.Context) ArtifactBaseKey {
 	v := ctx.Value(artifactBaseKey{})
 	if v == nil {
-		return artifact.Key{}
+		return ArtifactBaseKey{}
 	}
-	if k, ok := v.(artifact.Key); ok {
+	if k, ok := v.(ArtifactBaseKey); ok {
 		return k
 	}
-	return artifact.Key{}
-}
-
-func withName(base artifact.Key, name string) artifact.Key {
-	base.Name = name
-	return base
+	return ArtifactBaseKey{}
 }

@@ -23,25 +23,25 @@ import (
 //     {app_name}/{user_id}/user/{name}
 //   - If SessionID is not empty:
 //     {app_name}/{user_id}/{session_id}/{name}
-func BuildArtifactPath(key artifact.Key) string {
-	if key.SessionID == "" {
-		return fmt.Sprintf("%s/%s/user/%s", key.AppName, key.UserID, key.Name)
+func BuildArtifactPath(appName, userID, sessionID, name string) string {
+	if sessionID == "" {
+		return fmt.Sprintf("%s/%s/user/%s", appName, userID, name)
 	}
-	return fmt.Sprintf("%s/%s/%s/%s", key.AppName, key.UserID, key.SessionID, key.Name)
+	return fmt.Sprintf("%s/%s/%s/%s", appName, userID, sessionID, name)
 }
 
 // BuildObjectName constructs the object name for versioned storage (like COS).
 // The object name format is:
 //
 //	{artifact_path}/{version_id}
-func BuildObjectName(key artifact.Key, version artifact.VersionID) string {
-	return fmt.Sprintf("%s/%s", BuildArtifactPath(key), version)
+func BuildObjectName(appName, userID, sessionID, name string, version artifact.VersionID) string {
+	return fmt.Sprintf("%s/%s", BuildArtifactPath(appName, userID, sessionID, name), version)
 }
 
 // BuildObjectNamePrefix constructs the object name prefix for listing versions.
 // This is used to list all versions of a specific artifact.
-func BuildObjectNamePrefix(key artifact.Key) string {
-	return fmt.Sprintf("%s/", BuildArtifactPath(key))
+func BuildObjectNamePrefix(appName, userID, sessionID, name string) string {
+	return fmt.Sprintf("%s/", BuildArtifactPath(appName, userID, sessionID, name))
 }
 
 // BuildSessionPrefix constructs the prefix for session-scoped artifacts.
@@ -57,9 +57,9 @@ func BuildUserNamespacePrefix(appName, userID string) string {
 // BuildListPrefix builds the object prefix for listing artifacts under a namespace key.
 //
 // key.Name is ignored.
-func BuildListPrefix(key artifact.Key) string {
-	if key.SessionID == "" {
-		return fmt.Sprintf("%s/%s/user/", key.AppName, key.UserID)
+func BuildListPrefix(appName, userID, sessionID string) string {
+	if sessionID == "" {
+		return fmt.Sprintf("%s/%s/user/", appName, userID)
 	}
-	return fmt.Sprintf("%s/%s/%s/", key.AppName, key.UserID, key.SessionID)
+	return fmt.Sprintf("%s/%s/%s/", appName, userID, sessionID)
 }

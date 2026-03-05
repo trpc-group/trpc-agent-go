@@ -13,7 +13,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -47,57 +46,100 @@ func NewCallbackContext(ctx context.Context) (*CallbackContext, error) {
 	}, nil
 }
 
-// PutArtifact stores a new version of the artifact content and returns its descriptor.
-func (cc *CallbackContext) PutArtifact(name string, r io.Reader, opts ...artifact.PutOption) (artifact.Descriptor, error) {
-	service, baseKey, err := cc.getArtifactServiceAndBaseKey()
+// PutArtifact stores a new version of the artifact content and returns its metadata.
+//
+// The provided request's AppName/UserID/SessionID are ignored and filled from the invocation session.
+func (cc *CallbackContext) PutArtifact(req *artifact.PutRequest, opts ...artifact.PutOption) (*artifact.PutResponse, error) {
+	service, appName, userID, sessionID, err := cc.getArtifactServiceAndBase()
 	if err != nil {
-		return artifact.Descriptor{}, err
+		return nil, err
 	}
-	if r == nil {
-		return artifact.Descriptor{}, errors.New("artifact reader is nil")
+	if req == nil {
+		return nil, errors.New("put artifact request is nil")
 	}
-	return service.Put(cc.Context, withName(baseKey, name), r, opts...)
+	r := *req
+	r.AppName = appName
+	r.UserID = userID
+	r.SessionID = sessionID
+	return service.Put(cc.Context, &r, opts...)
 }
 
 // HeadArtifact resolves an artifact version to its metadata and an optional URL.
-func (cc *CallbackContext) HeadArtifact(name string, version *artifact.VersionID) (artifact.Descriptor, error) {
-	service, baseKey, err := cc.getArtifactServiceAndBaseKey()
+//
+// The provided request's AppName/UserID/SessionID are ignored and filled from the invocation session.
+func (cc *CallbackContext) HeadArtifact(req *artifact.HeadRequest, opts ...artifact.HeadOption) (*artifact.HeadResponse, error) {
+	service, appName, userID, sessionID, err := cc.getArtifactServiceAndBase()
 	if err != nil {
-		return artifact.Descriptor{}, err
+		return nil, err
 	}
-	return service.Head(cc.Context, withName(baseKey, name), version)
+	if req == nil {
+		return nil, errors.New("head artifact request is nil")
+	}
+	r := *req
+	r.AppName = appName
+	r.UserID = userID
+	r.SessionID = sessionID
+	return service.Head(cc.Context, &r, opts...)
 }
 
 // OpenArtifact opens a streaming reader for an artifact version.
-func (cc *CallbackContext) OpenArtifact(name string, version *artifact.VersionID) (io.ReadCloser, artifact.Descriptor, error) {
-	service, baseKey, err := cc.getArtifactServiceAndBaseKey()
+//
+// The provided request's AppName/UserID/SessionID are ignored and filled from the invocation session.
+func (cc *CallbackContext) OpenArtifact(req *artifact.OpenRequest, opts ...artifact.OpenOption) (*artifact.OpenResponse, error) {
+	service, appName, userID, sessionID, err := cc.getArtifactServiceAndBase()
 	if err != nil {
-		return nil, artifact.Descriptor{}, err
+		return nil, err
 	}
-	return service.Open(cc.Context, withName(baseKey, name), version)
+	if req == nil {
+		return nil, errors.New("open artifact request is nil")
+	}
+	r := *req
+	r.AppName = appName
+	r.UserID = userID
+	r.SessionID = sessionID
+	return service.Open(cc.Context, &r, opts...)
 }
 
 // ListArtifacts lists artifacts within the current session scope.
 //
 // It returns descriptors for the latest version of each artifact and a nextPageToken.
 // nextPageToken is empty when there are no more results.
-func (cc *CallbackContext) ListArtifacts(opts ...artifact.ListOption) ([]artifact.Descriptor, string, error) {
-	service, baseKey, err := cc.getArtifactServiceAndBaseKey()
+//
+// The provided request's AppName/UserID/SessionID are ignored and filled from the invocation session.
+func (cc *CallbackContext) ListArtifacts(req *artifact.ListRequest, opts ...artifact.ListOption) (*artifact.ListResponse, error) {
+	service, appName, userID, sessionID, err := cc.getArtifactServiceAndBase()
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
-	return service.List(cc.Context, baseKey, opts...)
+	if req == nil {
+		return nil, errors.New("list artifacts request is nil")
+	}
+	r := *req
+	r.AppName = appName
+	r.UserID = userID
+	r.SessionID = sessionID
+	return service.List(cc.Context, &r, opts...)
 }
 
 // DeleteArtifact deletes artifact versions identified by name within the current session scope.
 //
-// By default (no opts), it deletes all versions.
-func (cc *CallbackContext) DeleteArtifact(name string, opts ...artifact.DeleteOption) error {
-	service, baseKey, err := cc.getArtifactServiceAndBaseKey()
+// When version is nil, it deletes all versions.
+// When version is non-nil, it deletes the specified version.
+//
+// The provided request's AppName/UserID/SessionID are ignored and filled from the invocation session.
+func (cc *CallbackContext) DeleteArtifact(req *artifact.DeleteRequest, opts ...artifact.DeleteOption) (*artifact.DeleteResponse, error) {
+	service, appName, userID, sessionID, err := cc.getArtifactServiceAndBase()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return service.Delete(cc.Context, withName(baseKey, name), opts...)
+	if req == nil {
+		return nil, errors.New("delete artifact request is nil")
+	}
+	r := *req
+	r.AppName = appName
+	r.UserID = userID
+	r.SessionID = sessionID
+	return service.Delete(cc.Context, &r, opts...)
 }
 
 // ListArtifactVersions lists all versions of an artifact.
@@ -107,31 +149,36 @@ func (cc *CallbackContext) DeleteArtifact(name string, opts ...artifact.DeleteOp
 //
 // Returns:
 //   - A list of all available versions of the artifact
-func (cc *CallbackContext) ListArtifactVersions(name string) ([]artifact.VersionID, error) {
-	service, baseKey, err := cc.getArtifactServiceAndBaseKey()
+//
+// The provided request's AppName/UserID/SessionID are ignored and filled from the invocation session.
+func (cc *CallbackContext) ListArtifactVersions(req *artifact.VersionsRequest, opts ...artifact.VersionsOption) (*artifact.VersionsResponse, error) {
+	service, appName, userID, sessionID, err := cc.getArtifactServiceAndBase()
 	if err != nil {
 		return nil, err
 	}
-	return service.Versions(cc.Context, withName(baseKey, name))
+	if req == nil {
+		return nil, errors.New("list artifact versions request is nil")
+	}
+	r := *req
+	r.AppName = appName
+	r.UserID = userID
+	r.SessionID = sessionID
+	return service.Versions(cc.Context, &r, opts...)
 }
 
-// getArtifactServiceAndBaseKey extracts common logic for getting artifact service and the session base key.
-func (cc *CallbackContext) getArtifactServiceAndBaseKey() (s artifact.Service, baseKey artifact.Key, err error) {
+// getArtifactServiceAndBase extracts common logic for getting artifact service and the session base namespace.
+func (cc *CallbackContext) getArtifactServiceAndBase() (s artifact.Service, appName, userID, sessionID string, err error) {
 	service := cc.invocation.ArtifactService
 	if service == nil {
-		return nil, artifact.Key{}, errors.New("artifact service is nil in invocation")
+		return nil, "", "", "", errors.New("artifact service is nil in invocation")
 	}
 
-	appName, userID, sessionID, err := cc.appUserSession()
+	a, u, sid, err := cc.appUserSession()
 	if err != nil {
-		return nil, artifact.Key{}, err
+		return nil, "", "", "", err
 	}
 
-	return service, artifact.Key{
-		AppName:   appName,
-		UserID:    userID,
-		SessionID: sessionID,
-	}, nil
+	return service, a, u, sid, nil
 }
 
 // appUserSession extracts app name, user ID, and session ID from the invocation.
@@ -149,9 +196,4 @@ func (cc *CallbackContext) appUserSession() (appName, userID, sessionID string, 
 	// Return error if session exists but missing required fields.
 	return "", "", "", fmt.Errorf("session exists but missing appName or userID or sessionID: appName=%s, userID=%s, sessionID=%s",
 		cc.invocation.Session.AppName, cc.invocation.Session.UserID, cc.invocation.Session.ID)
-}
-
-func withName(base artifact.Key, name string) artifact.Key {
-	base.Name = name
-	return base
 }

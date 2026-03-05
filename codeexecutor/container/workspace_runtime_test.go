@@ -664,7 +664,7 @@ func TestWorkspaceRuntime_StageInputs_ArtifactAndWorkspace(t *testing.T) {
 	ctx := codeexecutor.WithArtifactService(
 		context.Background(), svc,
 	)
-	ctx = codeexecutor.WithArtifactBaseKey(ctx, artifact.Key{
+	ctx = codeexecutor.WithArtifactBaseKey(ctx, codeexecutor.ArtifactBaseKey{
 		AppName:   "a",
 		UserID:    "u",
 		SessionID: "s",
@@ -994,24 +994,17 @@ type artMem struct{ saved int }
 
 func (m *artMem) Put(
 	_ context.Context,
-	key artifact.Key,
-	r io.Reader,
+	req *artifact.PutRequest,
 	opts ...artifact.PutOption,
-) (artifact.Descriptor, error) {
+) (*artifact.PutResponse, error) {
 	m.saved++
-	o := artifact.PutOptions{}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(&o)
-		}
-	}
-	mt := o.MimeType
+	_ = opts // reserved
+	mt := req.MimeType
 	if strings.TrimSpace(mt) == "" {
 		mt = "application/octet-stream"
 	}
-	b, _ := io.ReadAll(r)
-	return artifact.Descriptor{
-		Key:      key,
+	b, _ := io.ReadAll(req.Body)
+	return &artifact.PutResponse{
 		Version:  artifact.VersionID(fmt.Sprint(m.saved)),
 		MimeType: mt,
 		Size:     int64(len(b)),
@@ -1020,51 +1013,57 @@ func (m *artMem) Put(
 
 func (*artMem) Head(
 	_ context.Context,
-	key artifact.Key,
-	version *artifact.VersionID,
-) (artifact.Descriptor, error) {
+	req *artifact.HeadRequest,
+	opts ...artifact.HeadOption,
+) (*artifact.HeadResponse, error) {
+	_ = opts // reserved
 	v := artifact.VersionID("1")
-	if version != nil {
-		v = *version
+	if req.Version != nil {
+		v = *req.Version
 	}
-	return artifact.Descriptor{Key: key, Version: v, MimeType: "text/plain"}, nil
+	return &artifact.HeadResponse{Version: v, MimeType: "text/plain", Size: 2}, nil
 }
 
 func (*artMem) Open(
 	_ context.Context,
-	key artifact.Key,
-	version *artifact.VersionID,
-) (io.ReadCloser, artifact.Descriptor, error) {
+	req *artifact.OpenRequest,
+	opts ...artifact.OpenOption,
+) (*artifact.OpenResponse, error) {
+	_ = opts // reserved
 	v := artifact.VersionID("1")
-	if version != nil {
-		v = *version
+	if req.Version != nil {
+		v = *req.Version
 	}
-	return io.NopCloser(strings.NewReader("A1")),
-		artifact.Descriptor{Key: key, Version: v, MimeType: "text/plain", Size: 2},
-		nil
+	return &artifact.OpenResponse{
+		Body:     io.NopCloser(strings.NewReader("A1")),
+		Version:  v,
+		MimeType: "text/plain",
+		Size:     2,
+	}, nil
 }
 
 func (*artMem) List(
 	_ context.Context,
-	_ artifact.Key,
+	_ *artifact.ListRequest,
 	_ ...artifact.ListOption,
-) ([]artifact.Descriptor, string, error) {
-	return nil, "", nil
+) (*artifact.ListResponse, error) {
+	return &artifact.ListResponse{}, nil
 }
 
 func (*artMem) Delete(
 	_ context.Context,
-	_ artifact.Key,
+	_ *artifact.DeleteRequest,
 	_ ...artifact.DeleteOption,
-) error {
-	return nil
+) (*artifact.DeleteResponse, error) {
+	return &artifact.DeleteResponse{Deleted: false}, nil
 }
 
 func (*artMem) Versions(
 	_ context.Context,
-	_ artifact.Key,
-) ([]artifact.VersionID, error) {
-	return []artifact.VersionID{"1"}, nil
+	_ *artifact.VersionsRequest,
+	_ ...artifact.VersionsOption,
+) (*artifact.VersionsResponse, error) {
+	return &artifact.VersionsResponse{Versions: []artifact.VersionID{"1"}}, nil
 }
 
 type pinnedArtifactService struct {
@@ -1073,60 +1072,65 @@ type pinnedArtifactService struct {
 
 func (*pinnedArtifactService) Put(
 	_ context.Context,
-	key artifact.Key,
-	_ io.Reader,
+	req *artifact.PutRequest,
 	_ ...artifact.PutOption,
-) (artifact.Descriptor, error) {
-	return artifact.Descriptor{Key: key, Version: "0"}, nil
+) (*artifact.PutResponse, error) {
+	_ = req
+	return &artifact.PutResponse{Version: artifact.VersionID("0")}, nil
 }
 
 func (*pinnedArtifactService) Head(
 	_ context.Context,
-	key artifact.Key,
-	version *artifact.VersionID,
-) (artifact.Descriptor, error) {
+	req *artifact.HeadRequest,
+	_ ...artifact.HeadOption,
+) (*artifact.HeadResponse, error) {
 	v := artifact.VersionID("7")
-	if version != nil {
-		v = *version
+	if req.Version != nil {
+		v = *req.Version
 	}
-	return artifact.Descriptor{Key: key, Version: v, MimeType: "text/plain"}, nil
+	return &artifact.HeadResponse{Version: v, MimeType: "text/plain", Size: 1}, nil
 }
 
 func (s *pinnedArtifactService) Open(
 	_ context.Context,
-	key artifact.Key,
-	version *artifact.VersionID,
-) (io.ReadCloser, artifact.Descriptor, error) {
-	if version == nil {
+	req *artifact.OpenRequest,
+	_ ...artifact.OpenOption,
+) (*artifact.OpenResponse, error) {
+	if req.Version == nil {
 		s.loadVersions = append(s.loadVersions, "nil")
 	} else {
-		s.loadVersions = append(s.loadVersions, string(*version))
+		s.loadVersions = append(s.loadVersions, string(*req.Version))
 	}
-	desc := artifact.Descriptor{Key: key, Version: "7", MimeType: "text/plain", Size: 1}
-	return io.NopCloser(strings.NewReader("A")), desc, nil
+	return &artifact.OpenResponse{
+		Body:     io.NopCloser(strings.NewReader("A")),
+		Version:  "7",
+		MimeType: "text/plain",
+		Size:     1,
+	}, nil
 }
 
 func (*pinnedArtifactService) List(
 	_ context.Context,
-	_ artifact.Key,
+	_ *artifact.ListRequest,
 	_ ...artifact.ListOption,
-) ([]artifact.Descriptor, string, error) {
-	return nil, "", nil
+) (*artifact.ListResponse, error) {
+	return &artifact.ListResponse{}, nil
 }
 
 func (*pinnedArtifactService) Delete(
 	_ context.Context,
-	_ artifact.Key,
+	_ *artifact.DeleteRequest,
 	_ ...artifact.DeleteOption,
-) error {
-	return nil
+) (*artifact.DeleteResponse, error) {
+	return &artifact.DeleteResponse{Deleted: false}, nil
 }
 
 func (*pinnedArtifactService) Versions(
 	_ context.Context,
-	_ artifact.Key,
-) ([]artifact.VersionID, error) {
-	return []artifact.VersionID{"7"}, nil
+	_ *artifact.VersionsRequest,
+	_ ...artifact.VersionsOption,
+) (*artifact.VersionsResponse, error) {
+	return &artifact.VersionsResponse{Versions: []artifact.VersionID{"7"}}, nil
 }
 
 func TestStageInputs_ArtifactPinUsesPinnedVersion(t *testing.T) {
@@ -1163,7 +1167,7 @@ func TestStageInputs_ArtifactPinUsesPinnedVersion(t *testing.T) {
 	ctx := codeexecutor.WithArtifactService(
 		context.Background(), svc,
 	)
-	ctx = codeexecutor.WithArtifactBaseKey(ctx, artifact.Key{
+	ctx = codeexecutor.WithArtifactBaseKey(ctx, codeexecutor.ArtifactBaseKey{
 		AppName:   "a",
 		UserID:    "u",
 		SessionID: "s",
@@ -1314,7 +1318,7 @@ func TestStageInputs_ArtifactPinFromMetadata(t *testing.T) {
 	ctx := codeexecutor.WithArtifactService(
 		context.Background(), svc,
 	)
-	ctx = codeexecutor.WithArtifactBaseKey(ctx, artifact.Key{
+	ctx = codeexecutor.WithArtifactBaseKey(ctx, codeexecutor.ArtifactBaseKey{
 		AppName:   "a",
 		UserID:    "u",
 		SessionID: "s",
@@ -1419,7 +1423,7 @@ func TestStageInputs_AllBranches(t *testing.T) {
 	ctx := codeexecutor.WithArtifactService(
 		context.Background(), svc,
 	)
-	ctx = codeexecutor.WithArtifactBaseKey(ctx, artifact.Key{
+	ctx = codeexecutor.WithArtifactBaseKey(ctx, codeexecutor.ArtifactBaseKey{
 		AppName:   "a",
 		UserID:    "u",
 		SessionID: "s",
@@ -1493,7 +1497,7 @@ func TestCollectOutputs_SaveInlineLimits(t *testing.T) {
 	ctx := codeexecutor.WithArtifactService(
 		context.Background(), svc,
 	)
-	ctx = codeexecutor.WithArtifactBaseKey(ctx, artifact.Key{
+	ctx = codeexecutor.WithArtifactBaseKey(ctx, codeexecutor.ArtifactBaseKey{
 		AppName:   "a",
 		UserID:    "u",
 		SessionID: "s",

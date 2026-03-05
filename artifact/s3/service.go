@@ -93,136 +93,124 @@ func (s *Service) Close() error {
 	return s.client.Close()
 }
 
-// Put stores artifact content and returns its descriptor.
-func (s *Service) Put(
-	ctx context.Context,
-	key artifact.Key,
-	r io.Reader,
-	opts ...artifact.PutOption,
-) (artifact.Descriptor, error) {
-	if err := validateKey(key); err != nil {
-		return artifact.Descriptor{}, err
+// Put stores artifact content and returns its metadata.
+func (s *Service) Put(ctx context.Context, req *artifact.PutRequest, opts ...artifact.PutOption) (*artifact.PutResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("put request is nil")
 	}
-
-	o := artifact.PutOptions{}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(&o)
-		}
+	if err := validateKeyFields(req.AppName, req.UserID, req.Name); err != nil {
+		return nil, err
 	}
+	if req.Body == nil {
+		return nil, fmt.Errorf("put request body is nil")
+	}
+	_ = opts // reserved
 
 	v, err := artifact.NewVersionID()
 	if err != nil {
-		return artifact.Descriptor{}, err
+		return nil, err
 	}
-	objectKey := iartifact.BuildObjectName(key, v)
-	contentType := cmp.Or(o.MimeType, defaultContentType)
+	objectKey := iartifact.BuildObjectName(req.AppName, req.UserID, req.SessionID, req.Name, v)
+	contentType := cmp.Or(req.MimeType, defaultContentType)
 
-	data, err := io.ReadAll(r)
+	data, err := io.ReadAll(req.Body)
 	if err != nil {
-		return artifact.Descriptor{}, err
+		return nil, err
 	}
 	if err := s.client.PutObject(ctx, objectKey, data, contentType); err != nil {
-		return artifact.Descriptor{}, fmt.Errorf("failed to upload artifact: %w", err)
+		return nil, fmt.Errorf("failed to upload artifact: %w", err)
 	}
-	return artifact.Descriptor{
-		Key:      key,
-		Version:  v,
-		MimeType: contentType,
-		Size:     int64(len(data)),
-	}, nil
+	resp := &artifact.PutResponse{Version: v, MimeType: contentType, Size: int64(len(data))}
+	if u, err := s.client.PresignGetObject(ctx, objectKey, s.presignExpires); err == nil && u != "" {
+		resp.URL = u
+	}
+	return resp, nil
 }
 
 // Head resolves an artifact version to its metadata and an optional URL.
-func (s *Service) Head(
-	ctx context.Context,
-	key artifact.Key,
-	version *artifact.VersionID,
-) (artifact.Descriptor, error) {
-	if err := validateKey(key); err != nil {
-		return artifact.Descriptor{}, err
+func (s *Service) Head(ctx context.Context, req *artifact.HeadRequest, opts ...artifact.HeadOption) (*artifact.HeadResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("head request is nil")
 	}
-	target, err := s.resolveVersion(ctx, key, version)
+	if err := validateKeyFields(req.AppName, req.UserID, req.Name); err != nil {
+		return nil, err
+	}
+	_ = opts // reserved
+
+	target, err := s.resolveVersion(ctx, req.AppName, req.UserID, req.SessionID, req.Name, req.Version)
 	if err != nil {
-		return artifact.Descriptor{}, err
+		return nil, err
 	}
-	objectKey := iartifact.BuildObjectName(key, target)
+	objectKey := iartifact.BuildObjectName(req.AppName, req.UserID, req.SessionID, req.Name, target)
 	contentType, size, err := s.client.HeadObject(ctx, objectKey)
 	if err != nil {
 		if errors.Is(err, s3storage.ErrNotFound) {
-			return artifact.Descriptor{}, artifact.ErrNotFound
+			return nil, artifact.ErrNotFound
 		}
-		return artifact.Descriptor{}, fmt.Errorf("failed to head artifact: %w", err)
+		return nil, fmt.Errorf("failed to head artifact: %w", err)
 	}
-	desc := artifact.Descriptor{
-		Key:      key,
+	resp := &artifact.HeadResponse{
 		Version:  target,
 		MimeType: cmp.Or(contentType, defaultContentType),
 		Size:     size,
 	}
 	if u, err := s.client.PresignGetObject(ctx, objectKey, s.presignExpires); err == nil && u != "" {
-		desc.URL = u
+		resp.URL = u
 	}
-	return desc, nil
+	return resp, nil
 }
 
 // Open returns a streaming reader for the artifact content and its descriptor.
-func (s *Service) Open(
-	ctx context.Context,
-	key artifact.Key,
-	version *artifact.VersionID,
-) (io.ReadCloser, artifact.Descriptor, error) {
-	if err := validateKey(key); err != nil {
-		return nil, artifact.Descriptor{}, err
+func (s *Service) Open(ctx context.Context, req *artifact.OpenRequest, opts ...artifact.OpenOption) (*artifact.OpenResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("open request is nil")
 	}
-	target, err := s.resolveVersion(ctx, key, version)
+	if err := validateKeyFields(req.AppName, req.UserID, req.Name); err != nil {
+		return nil, err
+	}
+	_ = opts // reserved
+
+	target, err := s.resolveVersion(ctx, req.AppName, req.UserID, req.SessionID, req.Name, req.Version)
 	if err != nil {
-		return nil, artifact.Descriptor{}, err
+		return nil, err
 	}
-	objectKey := iartifact.BuildObjectName(key, target)
+	objectKey := iartifact.BuildObjectName(req.AppName, req.UserID, req.SessionID, req.Name, target)
 	body, contentType, size, err := s.client.OpenObject(ctx, objectKey)
 	if err != nil {
 		if errors.Is(err, s3storage.ErrNotFound) {
-			return nil, artifact.Descriptor{}, artifact.ErrNotFound
+			return nil, artifact.ErrNotFound
 		}
-		return nil, artifact.Descriptor{}, fmt.Errorf("failed to open artifact: %w", err)
+		return nil, fmt.Errorf("failed to open artifact: %w", err)
 	}
-	desc := artifact.Descriptor{
-		Key:      key,
+	resp := &artifact.OpenResponse{
+		Body:     body,
 		Version:  target,
 		MimeType: cmp.Or(contentType, defaultContentType),
 		Size:     size,
 	}
 	if u, err := s.client.PresignGetObject(ctx, objectKey, s.presignExpires); err == nil && u != "" {
-		desc.URL = u
+		resp.URL = u
 	}
-	return body, desc, nil
+	return resp, nil
 }
 
-// List returns the latest version descriptor for each artifact name under the given prefix.
-func (s *Service) List(
-	ctx context.Context,
-	key artifact.Key,
-	opts ...artifact.ListOption,
-) ([]artifact.Descriptor, string, error) {
-	if err := validateListKey(key); err != nil {
-		return nil, "", err
+// List returns the latest version metadata for each artifact name under the given namespace.
+func (s *Service) List(ctx context.Context, req *artifact.ListRequest, opts ...artifact.ListOption) (*artifact.ListResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("list request is nil")
 	}
-
-	o := artifact.ListOptions{}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(&o)
-		}
+	if err := validateListFields(req.AppName, req.UserID); err != nil {
+		return nil, err
 	}
+	_ = opts // reserved
 
-	scopePrefix := iartifact.BuildListPrefix(key)
+	scopePrefix := iartifact.BuildListPrefix(req.AppName, req.UserID, req.SessionID)
 	keys, err := s.client.ListObjects(ctx, scopePrefix)
 	if err != nil {
 		if errors.Is(err, s3storage.ErrNotFound) {
-			return nil, "", nil
+			return &artifact.ListResponse{}, nil
 		}
-		return nil, "", fmt.Errorf("failed to list artifacts: %w", err)
+		return nil, fmt.Errorf("failed to list artifacts: %w", err)
 	}
 
 	type latest struct {
@@ -247,146 +235,129 @@ func (s *Service) List(
 	slices.Sort(names)
 
 	start := 0
-	if o.PageToken != "" {
-		i, _ := slices.BinarySearch(names, o.PageToken)
+	if req.PageToken != nil && *req.PageToken != "" {
+		tok := *req.PageToken
+		i, _ := slices.BinarySearch(names, tok)
 		start = i
-		for start < len(names) && names[start] <= o.PageToken {
+		for start < len(names) && names[start] <= tok {
 			start++
 		}
 	}
-	limit := o.Limit
+	limit := 0
+	if req.Limit != nil {
+		limit = *req.Limit
+	}
 	if limit <= 0 || limit > len(names)-start {
 		limit = len(names) - start
 	}
 	end := start + limit
 	page := names[start:end]
 
-	out := make([]artifact.Descriptor, 0, len(page))
+	out := make([]artifact.ListItem, 0, len(page))
 	for _, name := range page {
-		itemKey := artifact.Key{
-			AppName:   key.AppName,
-			UserID:    key.UserID,
-			SessionID: key.SessionID,
-			Name:      name,
-		}
 		ver := latestByName[name].version
-		objectKey := iartifact.BuildObjectName(itemKey, ver)
+		objectKey := iartifact.BuildObjectName(req.AppName, req.UserID, req.SessionID, name, ver)
 		contentType, size, err := s.client.HeadObject(ctx, objectKey)
 		if err != nil {
 			if errors.Is(err, s3storage.ErrNotFound) {
 				continue
 			}
-			return nil, "", fmt.Errorf("failed to head listed artifact: %w", err)
+			return nil, fmt.Errorf("failed to head listed artifact: %w", err)
 		}
-		desc := artifact.Descriptor{
-			Key:      itemKey,
+		item := artifact.ListItem{
+			Name:     name,
 			Version:  ver,
 			MimeType: cmp.Or(contentType, defaultContentType),
 			Size:     size,
 		}
 		if u, err := s.client.PresignGetObject(ctx, objectKey, s.presignExpires); err == nil && u != "" {
-			desc.URL = u
+			item.URL = u
 		}
-		out = append(out, desc)
+		out = append(out, item)
 	}
 
 	next := ""
 	if end < len(names) && len(page) > 0 {
 		next = page[len(page)-1]
 	}
-	return out, next, nil
+	return &artifact.ListResponse{Items: out, NextPageToken: next}, nil
 }
 
-// Delete removes artifact content according to the provided delete options.
-func (s *Service) Delete(ctx context.Context, key artifact.Key, opts ...artifact.DeleteOption) error {
-	if err := validateKey(key); err != nil {
-		return err
+// Delete is idempotent by default.
+func (s *Service) Delete(ctx context.Context, req *artifact.DeleteRequest, opts ...artifact.DeleteOption) (*artifact.DeleteResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("delete request is nil")
 	}
+	if err := validateKeyFields(req.AppName, req.UserID, req.Name); err != nil {
+		return nil, err
+	}
+	_ = opts // reserved
 
-	o := artifact.DeleteOptions{}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(&o)
-		}
-	}
-	if err := o.Validate(); err != nil {
-		return err
-	}
-
-	switch o.Mode {
-	case artifact.DeleteAll:
-		prefix := iartifact.BuildObjectNamePrefix(key)
+	// Delete all versions.
+	if req.Version == nil {
+		prefix := iartifact.BuildObjectNamePrefix(req.AppName, req.UserID, req.SessionID, req.Name)
 		keys, err := s.client.ListObjects(ctx, prefix)
 		if err != nil {
 			if errors.Is(err, s3storage.ErrNotFound) {
-				return artifact.ErrNotFound
+				return &artifact.DeleteResponse{Deleted: false}, nil
 			}
-			return fmt.Errorf("failed to list artifact versions: %w", err)
+			return nil, fmt.Errorf("failed to list artifact versions: %w", err)
 		}
 		if len(keys) == 0 {
-			return artifact.ErrNotFound
+			return &artifact.DeleteResponse{Deleted: false}, nil
 		}
 		if err := s.client.DeleteObjects(ctx, keys); err != nil {
 			if errors.Is(err, s3storage.ErrNotFound) {
-				return artifact.ErrNotFound
+				return &artifact.DeleteResponse{Deleted: false}, nil
 			}
-			return fmt.Errorf("failed to delete artifact: %w", err)
+			return nil, fmt.Errorf("failed to delete artifact: %w", err)
 		}
-		return nil
-	case artifact.DeleteLatest:
-		ver, err := s.resolveVersion(ctx, key, nil)
-		if err != nil {
-			return err
-		}
-		objectKey := iartifact.BuildObjectName(key, ver)
-		if err := s.client.DeleteObjects(ctx, []string{objectKey}); err != nil {
-			if errors.Is(err, s3storage.ErrNotFound) {
-				return artifact.ErrNotFound
-			}
-			return fmt.Errorf("failed to delete artifact: %w", err)
-		}
-		return nil
-	case artifact.DeleteVersion:
-		objectKey := iartifact.BuildObjectName(key, o.Version)
-		if err := s.client.DeleteObjects(ctx, []string{objectKey}); err != nil {
-			if errors.Is(err, s3storage.ErrNotFound) {
-				return artifact.ErrNotFound
-			}
-			return fmt.Errorf("failed to delete artifact: %w", err)
-		}
-		return nil
-	default:
-		return fmt.Errorf("unknown delete mode: %d", int(o.Mode))
+		return &artifact.DeleteResponse{Deleted: true}, nil
 	}
+
+	// Delete a specific version.
+	objectKey := iartifact.BuildObjectName(req.AppName, req.UserID, req.SessionID, req.Name, *req.Version)
+	if err := s.client.DeleteObjects(ctx, []string{objectKey}); err != nil {
+		if errors.Is(err, s3storage.ErrNotFound) {
+			return &artifact.DeleteResponse{Deleted: false}, nil
+		}
+		return nil, fmt.Errorf("failed to delete artifact: %w", err)
+	}
+	return &artifact.DeleteResponse{Deleted: true}, nil
 }
 
-// Versions lists all versions available for the provided artifact key.
-func (s *Service) Versions(ctx context.Context, key artifact.Key) ([]artifact.VersionID, error) {
-	if err := validateKey(key); err != nil {
+// Versions lists all versions available for the provided artifact.
+func (s *Service) Versions(ctx context.Context, req *artifact.VersionsRequest, opts ...artifact.VersionsOption) (*artifact.VersionsResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("versions request is nil")
+	}
+	if err := validateKeyFields(req.AppName, req.UserID, req.Name); err != nil {
 		return nil, err
 	}
-	versions, err := s.listVersions(ctx, key)
+	_ = opts // reserved
+
+	versions, err := s.listVersions(ctx, req.AppName, req.UserID, req.SessionID, req.Name)
 	if err != nil {
 		return nil, err
 	}
 	if len(versions) == 0 {
 		return nil, artifact.ErrNotFound
 	}
-	return versions, nil
+	return &artifact.VersionsResponse{Versions: versions}, nil
 }
 
-func (s *Service) resolveVersion(ctx context.Context, key artifact.Key, version *artifact.VersionID) (artifact.VersionID, error) {
+func (s *Service) resolveVersion(ctx context.Context, appName, userID, sessionID, name string, version *artifact.VersionID) (artifact.VersionID, error) {
 	if version != nil {
 		return *version, nil
 	}
-	versions, err := s.listVersions(ctx, key)
+	versions, err := s.listVersions(ctx, appName, userID, sessionID, name)
 	if err != nil {
 		return "", err
 	}
 	if len(versions) == 0 {
 		if s.logger != nil {
 			s.logger.Debugf("artifact not found: %s/%s/%s/%s",
-				key.AppName, key.UserID, key.SessionID, key.Name)
+				appName, userID, sessionID, name)
 		}
 		return "", artifact.ErrNotFound
 	}
@@ -399,8 +370,8 @@ func (s *Service) resolveVersion(ctx context.Context, key artifact.Key, version 
 	return latest, nil
 }
 
-func (s *Service) listVersions(ctx context.Context, key artifact.Key) ([]artifact.VersionID, error) {
-	prefix := iartifact.BuildObjectNamePrefix(key)
+func (s *Service) listVersions(ctx context.Context, appName, userID, sessionID, name string) ([]artifact.VersionID, error) {
+	prefix := iartifact.BuildObjectNamePrefix(appName, userID, sessionID, name)
 	keys, err := s.client.ListObjects(ctx, prefix)
 	if err != nil {
 		if errors.Is(err, s3storage.ErrNotFound) {
@@ -438,15 +409,15 @@ func parseNameAndVersion(objectKey, scopePrefix string) (name string, ver artifa
 	return a, artifact.VersionID(b), true
 }
 
-func validateKey(k artifact.Key) error {
-	if k.AppName == "" || k.UserID == "" {
+func validateKeyFields(appName, userID, name string) error {
+	if appName == "" || userID == "" {
 		return ErrEmptySessionInfo
 	}
-	return validateName(k.Name)
+	return validateName(name)
 }
 
-func validateListKey(k artifact.Key) error {
-	if k.AppName == "" || k.UserID == "" {
+func validateListFields(appName, userID string) error {
+	if appName == "" || userID == "" {
 		return ErrEmptySessionInfo
 	}
 	return nil

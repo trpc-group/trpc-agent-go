@@ -9,20 +9,8 @@
 
 package artifact
 
-// PutOptions configures Put behavior.
-type PutOptions struct {
-	MimeType string
-}
+// PutOptions configures Put behavior (reserved for future).
+type PutOptions struct{}
 
 // PutOption configures Put behavior (functional options style).
 type PutOption func(*PutOptions)
-
-// WithPutMimeType sets PutOptions.MimeType.
-func WithPutMimeType(mimeType string) PutOption {
-	return func(o *PutOptions) {
-		if o == nil {
-			return
-		}
-		o.MimeType = mimeType
-	}
-}

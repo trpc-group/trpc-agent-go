@@ -24,7 +24,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
@@ -715,7 +714,7 @@ func TestRuntime_StageInputs_ArtifactAndLinks(t *testing.T) {
 	// Prepare artifact service in context and save an artifact.
 	svc := inmemory.NewService()
 	actx := codeexecutor.WithArtifactService(ctx, svc)
-	actx = codeexecutor.WithArtifactBaseKey(actx, artifact.Key{
+	actx = codeexecutor.WithArtifactBaseKey(actx, codeexecutor.ArtifactBaseKey{
 		AppName:   "a",
 		UserID:    "u",
 		SessionID: "s",
@@ -868,7 +867,7 @@ func TestRuntime_CollectOutputs_SaveAndInline(t *testing.T) {
 	// Attach artifact service to save outputs.
 	svc := inmemory.NewService()
 	actx := codeexecutor.WithArtifactService(ctx, svc)
-	actx = codeexecutor.WithArtifactBaseKey(actx, artifact.Key{
+	actx = codeexecutor.WithArtifactBaseKey(actx, codeexecutor.ArtifactBaseKey{
 		AppName:   "a",
 		UserID:    "u",
 		SessionID: "s",

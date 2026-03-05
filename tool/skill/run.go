@@ -1768,7 +1768,7 @@ func withArtifactContext(ctx context.Context) context.Context {
 		)
 		ctxIO = codeexecutor.WithArtifactBaseKey(
 			ctxIO,
-			artifact.Key{
+			codeexecutor.ArtifactBaseKey{
 				AppName:   inv.Session.AppName,
 				UserID:    inv.Session.UserID,
 				SessionID: inv.Session.ID,
@@ -2172,7 +2172,11 @@ func (t *RunTool) saveArtifacts(
 		if prefix != "" {
 			name = prefix + name
 		}
-		desc, err := cb.PutArtifact(name, strings.NewReader(f.Content), artifact.WithPutMimeType(f.MIMEType))
+		desc, err := cb.PutArtifact(&artifact.PutRequest{
+			Name:     name,
+			Body:     strings.NewReader(f.Content),
+			MimeType: f.MIMEType,
+		})
 		if err != nil {
 			return nil, fmt.Errorf("save artifact %s: %w", name, err)
 		}

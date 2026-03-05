@@ -48,75 +48,69 @@ func NewService() *Service {
 
 var _ artifact.Service = (*Service)(nil)
 
-// Put stores artifact content and returns its descriptor.
-func (s *Service) Put(
-	ctx context.Context,
-	key artifact.Key,
-	r io.Reader,
-	opts ...artifact.PutOption,
-) (artifact.Descriptor, error) {
+// Put stores artifact content and returns its metadata.
+func (s *Service) Put(ctx context.Context, req *artifact.PutRequest, opts ...artifact.PutOption) (*artifact.PutResponse, error) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	if err := validateKey(key); err != nil {
-		return artifact.Descriptor{}, err
+	if req == nil {
+		return nil, fmt.Errorf("put request is nil")
 	}
-
-	o := artifact.PutOptions{}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(&o)
-		}
+	if err := validateKeyFields(req.AppName, req.UserID, req.Name); err != nil {
+		return nil, err
 	}
+	if req.Body == nil {
+		return nil, fmt.Errorf("put request body is nil")
+	}
+	_ = opts // reserved
 
-	path := iartifact.BuildArtifactPath(key)
+	path := iartifact.BuildArtifactPath(req.AppName, req.UserID, req.SessionID, req.Name)
 	v, err := artifact.NewVersionID()
 	if err != nil {
-		return artifact.Descriptor{}, err
+		return nil, err
 	}
-	data, err := io.ReadAll(r)
+	data, err := io.ReadAll(req.Body)
 	if err != nil {
-		return artifact.Descriptor{}, err
+		return nil, err
 	}
 	s.artifacts[path] = append(s.artifacts[path], stored{
 		version: v,
-		mime:    o.MimeType,
+		mime:    req.MimeType,
 		data:    data,
 	})
 
-	return artifact.Descriptor{
-		Key:      key,
+	return &artifact.PutResponse{
 		Version:  v,
-		MimeType: mimeOrDefault(o.MimeType),
+		MimeType: mimeOrDefault(req.MimeType),
 		Size:     int64(len(data)),
 	}, nil
 }
 
-// Head resolves an artifact version to its descriptor.
-func (s *Service) Head(
-	ctx context.Context,
-	key artifact.Key,
-	version *artifact.VersionID,
-) (artifact.Descriptor, error) {
+// Head resolves an artifact version to its metadata.
+func (s *Service) Head(ctx context.Context, req *artifact.HeadRequest, opts ...artifact.HeadOption) (*artifact.HeadResponse, error) {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
-	if err := validateKey(key); err != nil {
-		return artifact.Descriptor{}, err
+	if req == nil {
+		return nil, fmt.Errorf("head request is nil")
 	}
-	path := iartifact.BuildArtifactPath(key)
+	if err := validateKeyFields(req.AppName, req.UserID, req.Name); err != nil {
+		return nil, err
+	}
+	_ = opts // reserved
+
+	path := iartifact.BuildArtifactPath(req.AppName, req.UserID, req.SessionID, req.Name)
 	versions, exists := s.artifacts[path]
 	if !exists || len(versions) == 0 {
-		return artifact.Descriptor{}, artifact.ErrNotFound
+		return nil, artifact.ErrNotFound
 	}
 
-	st, ok := resolveVersion(versions, version)
+	st, ok := resolveVersion(versions, req.Version)
 	if !ok {
-		return artifact.Descriptor{}, artifact.ErrNotFound
+		return nil, artifact.ErrNotFound
 	}
 
-	return artifact.Descriptor{
-		Key:      key,
+	return &artifact.HeadResponse{
 		Version:  st.version,
 		MimeType: mimeOrDefault(st.mime),
 		Size:     int64(len(st.data)),
@@ -124,58 +118,51 @@ func (s *Service) Head(
 }
 
 // Open returns a streaming reader for the artifact content and its descriptor.
-func (s *Service) Open(
-	ctx context.Context,
-	key artifact.Key,
-	version *artifact.VersionID,
-) (io.ReadCloser, artifact.Descriptor, error) {
+func (s *Service) Open(ctx context.Context, req *artifact.OpenRequest, opts ...artifact.OpenOption) (*artifact.OpenResponse, error) {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
-	if err := validateKey(key); err != nil {
-		return nil, artifact.Descriptor{}, err
+	if req == nil {
+		return nil, fmt.Errorf("open request is nil")
 	}
-	path := iartifact.BuildArtifactPath(key)
+	if err := validateKeyFields(req.AppName, req.UserID, req.Name); err != nil {
+		return nil, err
+	}
+	_ = opts // reserved
+
+	path := iartifact.BuildArtifactPath(req.AppName, req.UserID, req.SessionID, req.Name)
 	versions, exists := s.artifacts[path]
 	if !exists || len(versions) == 0 {
-		return nil, artifact.Descriptor{}, artifact.ErrNotFound
+		return nil, artifact.ErrNotFound
 	}
 
-	st, ok := resolveVersion(versions, version)
+	st, ok := resolveVersion(versions, req.Version)
 	if !ok {
-		return nil, artifact.Descriptor{}, artifact.ErrNotFound
+		return nil, artifact.ErrNotFound
 	}
 
-	desc := artifact.Descriptor{
-		Key:      key,
+	return &artifact.OpenResponse{
+		Body:     io.NopCloser(bytes.NewReader(st.data)),
 		Version:  st.version,
 		MimeType: mimeOrDefault(st.mime),
 		Size:     int64(len(st.data)),
-	}
-	return io.NopCloser(bytes.NewReader(st.data)), desc, nil
+	}, nil
 }
 
-// List returns the latest version descriptor for each artifact name under the given prefix.
-func (s *Service) List(
-	ctx context.Context,
-	key artifact.Key,
-	opts ...artifact.ListOption,
-) ([]artifact.Descriptor, string, error) {
+// List returns the latest version metadata for each artifact name under the given namespace.
+func (s *Service) List(ctx context.Context, req *artifact.ListRequest, opts ...artifact.ListOption) (*artifact.ListResponse, error) {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
-	if err := validateListKey(key); err != nil {
-		return nil, "", err
+	if req == nil {
+		return nil, fmt.Errorf("list request is nil")
 	}
-
-	o := artifact.ListOptions{}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(&o)
-		}
+	if err := validateListFields(req.AppName, req.UserID); err != nil {
+		return nil, err
 	}
+	_ = opts // reserved
 
-	scopePrefix := iartifact.BuildListPrefix(key)
+	scopePrefix := iartifact.BuildListPrefix(req.AppName, req.UserID, req.SessionID)
 	names := make([]string, 0)
 	latest := make(map[string]stored)
 	for path, versions := range s.artifacts {
@@ -202,31 +189,29 @@ func (s *Service) List(
 
 	sort.Strings(names)
 	start := 0
-	if o.PageToken != "" {
-		i := sort.SearchStrings(names, o.PageToken)
-		for i < len(names) && names[i] <= o.PageToken {
+	if req.PageToken != nil && *req.PageToken != "" {
+		tok := *req.PageToken
+		i := sort.SearchStrings(names, tok)
+		for i < len(names) && names[i] <= tok {
 			i++
 		}
 		start = i
 	}
-	limit := o.Limit
+	limit := 0
+	if req.Limit != nil {
+		limit = *req.Limit
+	}
 	if limit <= 0 || limit > len(names)-start {
 		limit = len(names) - start
 	}
 	end := start + limit
 	page := names[start:end]
 
-	out := make([]artifact.Descriptor, 0, len(page))
+	out := make([]artifact.ListItem, 0, len(page))
 	for _, name := range page {
 		st := latest[name]
-		itemKey := artifact.Key{
-			AppName:   key.AppName,
-			UserID:    key.UserID,
-			SessionID: key.SessionID,
-			Name:      name,
-		}
-		out = append(out, artifact.Descriptor{
-			Key:      itemKey,
+		out = append(out, artifact.ListItem{
+			Name:     name,
 			Version:  st.version,
 			MimeType: mimeOrDefault(st.mime),
 			Size:     int64(len(st.data)),
@@ -237,54 +222,44 @@ func (s *Service) List(
 	if end < len(names) {
 		next = page[len(page)-1]
 	}
-	return out, next, nil
+	return &artifact.ListResponse{Items: out, NextPageToken: next}, nil
 }
 
-// Delete removes artifact content according to the provided delete options.
-func (s *Service) Delete(ctx context.Context, key artifact.Key, opts ...artifact.DeleteOption) error {
+// Delete is idempotent by default.
+func (s *Service) Delete(ctx context.Context, req *artifact.DeleteRequest, opts ...artifact.DeleteOption) (*artifact.DeleteResponse, error) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	if err := validateKey(key); err != nil {
-		return err
+	if req == nil {
+		return nil, fmt.Errorf("delete request is nil")
 	}
+	if err := validateKeyFields(req.AppName, req.UserID, req.Name); err != nil {
+		return nil, err
+	}
+	_ = opts // reserved
 
-	o := artifact.DeleteOptions{}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(&o)
-		}
-	}
-	if err := o.Validate(); err != nil {
-		return err
-	}
-	path := iartifact.BuildArtifactPath(key)
+	path := iartifact.BuildArtifactPath(req.AppName, req.UserID, req.SessionID, req.Name)
 	versions, exists := s.artifacts[path]
 	if !exists || len(versions) == 0 {
-		return artifact.ErrNotFound
+		return &artifact.DeleteResponse{Deleted: false}, nil
 	}
 
-	switch o.Mode {
-	case artifact.DeleteAll:
+	if req.Version == nil {
 		delete(s.artifacts, path)
-		return nil
-	case artifact.DeleteLatest:
-		latest, ok := resolveVersion(versions, nil)
-		if !ok {
-			return artifact.ErrNotFound
-		}
-		return deleteOneVersionLocked(s.artifacts, path, latest.version)
-	case artifact.DeleteVersion:
-		return deleteOneVersionLocked(s.artifacts, path, o.Version)
-	default:
-		return fmt.Errorf("unknown delete mode: %d", int(o.Mode))
+		return &artifact.DeleteResponse{Deleted: true}, nil
 	}
+
+	deleted, err := deleteOneVersionLocked(s.artifacts, path, *req.Version)
+	if err != nil {
+		return nil, err
+	}
+	return &artifact.DeleteResponse{Deleted: deleted}, nil
 }
 
-func deleteOneVersionLocked(m map[string][]stored, path string, ver artifact.VersionID) error {
+func deleteOneVersionLocked(m map[string][]stored, path string, ver artifact.VersionID) (bool, error) {
 	versions, ok := m[path]
 	if !ok || len(versions) == 0 {
-		return artifact.ErrNotFound
+		return false, nil
 	}
 	out := make([]stored, 0, len(versions))
 	found := false
@@ -296,25 +271,30 @@ func deleteOneVersionLocked(m map[string][]stored, path string, ver artifact.Ver
 		out = append(out, st)
 	}
 	if !found {
-		return artifact.ErrNotFound
+		return false, nil
 	}
 	if len(out) == 0 {
 		delete(m, path)
-		return nil
+		return true, nil
 	}
 	m[path] = out
-	return nil
+	return true, nil
 }
 
-// Versions lists all versions available for the provided artifact key.
-func (s *Service) Versions(ctx context.Context, key artifact.Key) ([]artifact.VersionID, error) {
+// Versions lists all versions available for the provided artifact.
+func (s *Service) Versions(ctx context.Context, req *artifact.VersionsRequest, opts ...artifact.VersionsOption) (*artifact.VersionsResponse, error) {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
-	if err := validateKey(key); err != nil {
+	if req == nil {
+		return nil, fmt.Errorf("versions request is nil")
+	}
+	if err := validateKeyFields(req.AppName, req.UserID, req.Name); err != nil {
 		return nil, err
 	}
-	path := iartifact.BuildArtifactPath(key)
+	_ = opts // reserved
+
+	path := iartifact.BuildArtifactPath(req.AppName, req.UserID, req.SessionID, req.Name)
 	versions, exists := s.artifacts[path]
 	if !exists || len(versions) == 0 {
 		return nil, artifact.ErrNotFound
@@ -327,7 +307,7 @@ func (s *Service) Versions(ctx context.Context, key artifact.Key) ([]artifact.Ve
 	sort.Slice(result, func(i, j int) bool {
 		return artifact.CompareVersion(result[i], result[j]) < 0
 	})
-	return result, nil
+	return &artifact.VersionsResponse{Versions: result}, nil
 }
 
 func resolveVersion(versions []stored, version *artifact.VersionID) (stored, bool) {
@@ -358,22 +338,19 @@ func mimeOrDefault(mt string) string {
 	return mt
 }
 
-func validateKey(k artifact.Key) error {
-	if k.AppName == "" || k.UserID == "" {
+func validateKeyFields(appName, userID, name string) error {
+	if appName == "" || userID == "" {
 		return fmt.Errorf("invalid key: missing appName or userID")
 	}
-	if k.Name == "" {
+	if name == "" {
 		return fmt.Errorf("invalid key: empty name")
 	}
-	if err := validateObjectName(k.Name); err != nil {
-		return err
-	}
-	return nil
+	return validateObjectName(name)
 }
 
-func validateListKey(k artifact.Key) error {
-	if k.AppName == "" || k.UserID == "" {
-		return fmt.Errorf("invalid prefix: missing appName or userID")
+func validateListFields(appName, userID string) error {
+	if appName == "" || userID == "" {
+		return fmt.Errorf("invalid namespace: missing appName or userID")
 	}
 	return nil
 }

@@ -159,7 +159,7 @@ func TestTryRead_Artifact_WithService(t *testing.T) {
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 
 	ctxIO := codeexecutor.WithArtifactService(ctx, svc)
-	ctxIO = codeexecutor.WithArtifactBaseKey(ctxIO, artifact.Key{
+	ctxIO = codeexecutor.WithArtifactBaseKey(ctxIO, codeexecutor.ArtifactBaseKey{
 		AppName:   sess.AppName,
 		UserID:    sess.UserID,
 		SessionID: sess.ID,
@@ -206,7 +206,7 @@ func TestTryRead_Artifact_WithServiceInContext(t *testing.T) {
 
 	ctx := context.Background()
 	ctx = codeexecutor.WithArtifactService(ctx, svc)
-	ctx = codeexecutor.WithArtifactBaseKey(ctx, artifact.Key{
+	ctx = codeexecutor.WithArtifactBaseKey(ctx, codeexecutor.ArtifactBaseKey{
 		AppName:   "app",
 		UserID:    "user",
 		SessionID: "sess",
