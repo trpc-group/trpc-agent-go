@@ -455,7 +455,7 @@ func isSkillLoadedInContext(ctx context.Context, name string) bool {
 	if !ok || inv == nil || inv.Session == nil {
 		return true
 	}
-	key := skill.StateKeyLoadedPrefix + strings.TrimSpace(name)
+	key := skill.LoadedKey(inv.AgentName, strings.TrimSpace(name))
 	v, ok := inv.Session.GetState(key)
 	return ok && len(v) > 0
 }

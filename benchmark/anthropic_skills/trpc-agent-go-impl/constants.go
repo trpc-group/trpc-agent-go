@@ -17,6 +17,8 @@ const (
 	defaultAppName = "anthropic-skills-bench"
 	defaultUserID  = "bench"
 
+	benchAgentName = "anthropic-skills-agent"
+
 	suiteTool        = "tool"
 	suiteAgent       = "agent"
 	suiteAll         = "all"

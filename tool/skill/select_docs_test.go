@@ -55,6 +55,7 @@ func TestSelectDocsTool_ReplaceAndAll(t *testing.T) {
 	repo, err := skill.NewFSRepository(root)
 	require.NoError(t, err)
 	sd := NewSelectDocsTool(repo)
+	inv := &agent.Invocation{AgentName: "tester"}
 
 	// replace with specific doc
 	out, err := sd.Call(context.Background(), []byte(
@@ -69,10 +70,10 @@ func TestSelectDocsTool_ReplaceAndAll(t *testing.T) {
 	require.Equal(t, 1, len(arr))
 	require.Equal(t, usageDoc, arr[0].(string))
 
-	delta := sd.StateDelta("call-1", nil, b)
+	delta := sd.StateDeltaForInvocation(inv, "call-1", nil, b)
 	require.NotNil(t, delta)
 	require.Contains(t,
-		string(delta[skill.StateKeyDocsPrefix+demoSkill]), usageDoc)
+		string(delta[skill.DocsKey("tester", demoSkill)]), usageDoc)
 
 	// include all
 	out, err = sd.Call(context.Background(), []byte(
@@ -80,9 +81,9 @@ func TestSelectDocsTool_ReplaceAndAll(t *testing.T) {
 	))
 	require.NoError(t, err)
 	b, _ = json.Marshal(out)
-	delta = sd.StateDelta("call-2", nil, b)
+	delta = sd.StateDeltaForInvocation(inv, "call-2", nil, b)
 	require.Equal(t, []byte("*"),
-		delta[skill.StateKeyDocsPrefix+demoSkill])
+		delta[skill.DocsKey("tester", demoSkill)])
 }
 
 func TestSelectDocsTool_AddAndClear(t *testing.T) {
@@ -93,9 +94,10 @@ func TestSelectDocsTool_AddAndClear(t *testing.T) {
 
 	// Prepare context with previous selection
 	inv := &agent.Invocation{
-		Session: &session.Session{State: session.StateMap{}},
+		AgentName: "tester",
+		Session:   &session.Session{State: session.StateMap{}},
 	}
-	key := skill.StateKeyDocsPrefix + demoSkill
+	key := skill.DocsKey("tester", demoSkill)
 	inv.Session.State[key] = []byte(`["` + usageDoc + `"]`)
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 
@@ -123,9 +125,9 @@ func TestSelectDocsTool_AddAndClear(t *testing.T) {
 	))
 	require.NoError(t, err)
 	b, _ = json.Marshal(out)
-	delta := sd.StateDelta("call-3", nil, b)
+	delta := sd.StateDeltaForInvocation(inv, "call-3", nil, b)
 	require.Equal(t, "[]",
-		string(delta[skill.StateKeyDocsPrefix+demoSkill]))
+		string(delta[skill.DocsKey("tester", demoSkill)]))
 }
 
 // stubRepo returns error for any Get. Others are unused in tests.

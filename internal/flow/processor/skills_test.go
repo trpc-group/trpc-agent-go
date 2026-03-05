@@ -63,8 +63,8 @@ func TestSkillsRequestProcessor_ProcessRequest_OverviewAndDocs(
 		AgentName:    "tester",
 		Session: &session.Session{
 			State: session.StateMap{
-				skill.StateKeyLoadedPrefix + "calc": []byte("1"),
-				skill.StateKeyDocsPrefix + "calc":   []byte("*"),
+				skill.LoadedKey("tester", "calc"): []byte("1"),
+				skill.DocsKey("tester", "calc"):   []byte("*"),
 			},
 		},
 	}
@@ -160,12 +160,15 @@ func TestSkillsRequestProcessor_ArrayDocs_NoSystemMessage(t *testing.T) {
 			},
 		},
 	}
-	inv := &agent.Invocation{Session: &session.Session{
-		State: session.StateMap{
-			skill.StateKeyLoadedPrefix + "calc": []byte("1"),
-			skill.StateKeyDocsPrefix + "calc":   []byte("[\"USAGE.md\"]"),
+	inv := &agent.Invocation{
+		AgentName: "tester",
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.LoadedKey("tester", "calc"): []byte("1"),
+				skill.DocsKey("tester", "calc"):   []byte("[\"USAGE.md\"]"),
+			},
 		},
-	}}
+	}
 	// No system message initially.
 	req := &model.Request{Messages: nil}
 	p := NewSkillsRequestProcessor(
@@ -192,11 +195,14 @@ func TestSkillsRequestProcessor_MergeIntoEmptySystem(t *testing.T) {
 			"calc": {Summary: skill.Summary{Name: "calc"}, Body: "B"},
 		},
 	}
-	inv := &agent.Invocation{Session: &session.Session{
-		State: session.StateMap{
-			skill.StateKeyLoadedPrefix + "calc": []byte("1"),
+	inv := &agent.Invocation{
+		AgentName: "tester",
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.LoadedKey("tester", "calc"): []byte("1"),
+			},
 		},
-	}}
+	}
 	// Pre-existing empty system message.
 	req := &model.Request{Messages: []model.Message{
 		model.NewSystemMessage(""),
@@ -225,12 +231,15 @@ func TestSkillsRequestProcessor_InvalidDocsSelectionJSON(t *testing.T) {
 		},
 	}
 	// Docs selection is invalid JSON; should be ignored.
-	inv := &agent.Invocation{Session: &session.Session{
-		State: session.StateMap{
-			skill.StateKeyLoadedPrefix + "calc": []byte("1"),
-			skill.StateKeyDocsPrefix + "calc":   []byte("[bad]"),
+	inv := &agent.Invocation{
+		AgentName: "tester",
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.LoadedKey("tester", "calc"): []byte("1"),
+				skill.DocsKey("tester", "calc"):   []byte("[bad]"),
+			},
 		},
-	}}
+	}
 	req := &model.Request{Messages: nil}
 	p := NewSkillsRequestProcessor(
 		repo,
@@ -296,7 +305,7 @@ func TestSkillsRequestProcessor_SkillLoadModeOnce_OffloadsLoadedSkills(
 		AgentName:    "tester",
 		Session: &session.Session{
 			State: session.StateMap{
-				skill.StateKeyLoadedPrefix + "calc": []byte("1"),
+				skill.LoadedKey("tester", "calc"): []byte("1"),
 			},
 		},
 	}
@@ -314,14 +323,18 @@ func TestSkillsRequestProcessor_SkillLoadModeOnce_OffloadsLoadedSkills(
 	require.Contains(t, sys, "[Loaded] calc")
 	require.Contains(t, sys, "B")
 
-	v, ok := inv.Session.GetState(skill.StateKeyLoadedPrefix + "calc")
+	v, ok := inv.Session.GetState(skill.LoadedKey("tester", "calc"))
 	require.True(t, ok)
 	require.Empty(t, v)
 
 	ev1 := <-ch
 	require.NotNil(t, ev1)
 	require.Equal(t, model.ObjectTypeStateUpdate, ev1.Object)
-	require.Contains(t, ev1.StateDelta, skill.StateKeyLoadedPrefix+"calc")
+	require.Contains(
+		t,
+		ev1.StateDelta,
+		skill.LoadedKey("tester", "calc"),
+	)
 
 	ev2 := <-ch
 	require.NotNil(t, ev2)
@@ -342,8 +355,8 @@ func TestSkillsRequestProcessor_SkillLoadModeTurn_ClearsOncePerInvocation(
 		AgentName:    "tester",
 		Session: &session.Session{
 			State: session.StateMap{
-				skill.StateKeyLoadedPrefix + "calc": []byte("1"),
-				skill.StateKeyDocsPrefix + "calc":   []byte("*"),
+				skill.LoadedKey("tester", "calc"): []byte("1"),
+				skill.DocsKey("tester", "calc"):   []byte("*"),
 			},
 		},
 	}
@@ -361,10 +374,10 @@ func TestSkillsRequestProcessor_SkillLoadModeTurn_ClearsOncePerInvocation(
 	require.Contains(t, sys1, skillsOverviewHeader)
 	require.NotContains(t, sys1, "[Loaded] calc")
 
-	loadedVal, ok := inv.Session.GetState(skill.StateKeyLoadedPrefix + "calc")
+	loadedVal, ok := inv.Session.GetState(skill.LoadedKey("tester", "calc"))
 	require.True(t, ok)
 	require.Empty(t, loadedVal)
-	docsVal, ok := inv.Session.GetState(skill.StateKeyDocsPrefix + "calc")
+	docsVal, ok := inv.Session.GetState(skill.DocsKey("tester", "calc"))
 	require.True(t, ok)
 	require.Empty(t, docsVal)
 
@@ -376,7 +389,7 @@ func TestSkillsRequestProcessor_SkillLoadModeTurn_ClearsOncePerInvocation(
 	require.NotNil(t, ev2)
 	require.Equal(t, model.ObjectTypePreprocessingInstruction, ev2.Object)
 
-	inv.Session.SetState(skill.StateKeyLoadedPrefix+"calc", []byte("1"))
+	inv.Session.SetState(skill.LoadedKey("tester", "calc"), []byte("1"))
 	req2 := &model.Request{Messages: nil}
 	ch2 := make(chan *event.Event, 2)
 	p.ProcessRequest(context.Background(), inv, req2, ch2)
@@ -389,6 +402,76 @@ func TestSkillsRequestProcessor_SkillLoadModeTurn_ClearsOncePerInvocation(
 	ev3 := <-ch2
 	require.NotNil(t, ev3)
 	require.Equal(t, model.ObjectTypePreprocessingInstruction, ev3.Object)
+}
+
+func TestSkillsRequestProcessor_TurnMode_IsolatesAgents(t *testing.T) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "calc", Description: "math"}},
+		full: map[string]*skill.Skill{
+			"calc": {Summary: skill.Summary{Name: "calc"}, Body: "B"},
+		},
+	}
+	sess := &session.Session{
+		State: session.StateMap{
+			skill.LoadedKey("parent", "calc"): []byte("1"),
+			skill.LoadedKey("child", "calc"):  []byte("1"),
+		},
+	}
+
+	inv := &agent.Invocation{
+		InvocationID: "inv-child",
+		AgentName:    "child",
+		Session:      sess,
+	}
+	req := &model.Request{Messages: nil}
+
+	ch := make(chan *event.Event, 3)
+	p := NewSkillsRequestProcessor(
+		repo,
+		WithSkillLoadMode(SkillLoadModeTurn),
+	)
+	p.ProcessRequest(context.Background(), inv, req, ch)
+
+	parentVal, ok := sess.GetState(skill.LoadedKey("parent", "calc"))
+	require.True(t, ok)
+	require.Equal(t, []byte("1"), parentVal)
+
+	childVal, ok := sess.GetState(skill.LoadedKey("child", "calc"))
+	require.True(t, ok)
+	require.Empty(t, childVal)
+}
+
+func TestSkillsRequestProcessor_LoadedSkills_DoNotLeakAcrossAgents(t *testing.T) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "calc", Description: "math"}},
+		full: map[string]*skill.Skill{
+			"calc": {Summary: skill.Summary{Name: "calc"}, Body: "B"},
+		},
+	}
+
+	sess := &session.Session{
+		State: session.StateMap{
+			skill.LoadedKey("child", "calc"): []byte("1"),
+		},
+	}
+	parentInv := &agent.Invocation{
+		InvocationID: "inv-parent",
+		AgentName:    "parent",
+		Session:      sess,
+	}
+	req := &model.Request{Messages: nil}
+
+	ch := make(chan *event.Event, 2)
+	p := NewSkillsRequestProcessor(
+		repo,
+		WithSkillLoadMode(SkillLoadModeSession),
+	)
+	p.ProcessRequest(context.Background(), parentInv, req, ch)
+
+	require.NotEmpty(t, req.Messages)
+	sys := req.Messages[0].Content
+	require.Contains(t, sys, skillsOverviewHeader)
+	require.NotContains(t, sys, "[Loaded] calc")
 }
 
 func TestSkillsRequestProcessor_ToolResultMode_OverviewOnly(
@@ -415,8 +498,8 @@ func TestSkillsRequestProcessor_ToolResultMode_OverviewOnly(
 		AgentName:    "tester",
 		Session: &session.Session{
 			State: session.StateMap{
-				skill.StateKeyLoadedPrefix + "calc": []byte("1"),
-				skill.StateKeyDocsPrefix + "calc":   []byte("*"),
+				skill.LoadedKey("tester", "calc"): []byte("1"),
+				skill.DocsKey("tester", "calc"):   []byte("*"),
 			},
 		},
 	}
@@ -469,25 +552,29 @@ func TestSkillsRequestProcessor_MaxLoadedSkills_EvictsOldest(
 		AgentName:    "tester",
 		Session: &session.Session{
 			State: session.StateMap{
-				skill.StateKeyLoadedPrefix + "a": []byte("1"),
-				skill.StateKeyLoadedPrefix + "b": []byte("1"),
-				skill.StateKeyLoadedPrefix + "c": []byte("1"),
-				skill.StateKeyLoadedPrefix + "d": []byte("1"),
+				skill.LoadedKey("tester", "a"): []byte("1"),
+				skill.LoadedKey("tester", "b"): []byte("1"),
+				skill.LoadedKey("tester", "c"): []byte("1"),
+				skill.LoadedKey("tester", "d"): []byte("1"),
 			},
 			Events: []event.Event{
 				toolResponseEvent(
+					"tester",
 					skillToolLoad,
 					loadedPrefix+" a",
 				),
 				toolResponseEvent(
+					"tester",
 					skillToolLoad,
 					loadedPrefix+" b",
 				),
 				toolResponseEvent(
+					"tester",
 					skillToolLoad,
 					loadedPrefix+" c",
 				),
 				toolResponseEvent(
+					"tester",
 					skillToolLoad,
 					loadedPrefix+" d",
 				),
@@ -512,19 +599,19 @@ func TestSkillsRequestProcessor_MaxLoadedSkills_EvictsOldest(
 	require.Contains(t, sys, "[Loaded] c")
 	require.Contains(t, sys, "[Loaded] d")
 
-	v, ok := inv.Session.GetState(skill.StateKeyLoadedPrefix + "a")
+	v, ok := inv.Session.GetState(skill.LoadedKey("tester", "a"))
 	require.True(t, ok)
 	require.Empty(t, v)
 
-	v, ok = inv.Session.GetState(skill.StateKeyLoadedPrefix + "b")
+	v, ok = inv.Session.GetState(skill.LoadedKey("tester", "b"))
 	require.True(t, ok)
 	require.Equal(t, []byte("1"), v)
 
 	ev1 := <-ch
 	require.NotNil(t, ev1)
 	require.Equal(t, model.ObjectTypeStateUpdate, ev1.Object)
-	require.Contains(t, ev1.StateDelta, skill.StateKeyLoadedPrefix+"a")
-	require.Contains(t, ev1.StateDelta, skill.StateKeyDocsPrefix+"a")
+	require.Contains(t, ev1.StateDelta, skill.LoadedKey("tester", "a"))
+	require.Contains(t, ev1.StateDelta, skill.DocsKey("tester", "a"))
 
 	ev2 := <-ch
 	require.NotNil(t, ev2)
@@ -557,29 +644,34 @@ func TestSkillsRequestProcessor_MaxLoadedSkills_SelectDocsTouchesSkill(
 		AgentName:    "tester",
 		Session: &session.Session{
 			State: session.StateMap{
-				skill.StateKeyLoadedPrefix + "a": []byte("1"),
-				skill.StateKeyLoadedPrefix + "b": []byte("1"),
-				skill.StateKeyLoadedPrefix + "c": []byte("1"),
-				skill.StateKeyLoadedPrefix + "d": []byte("1"),
+				skill.LoadedKey("tester", "a"): []byte("1"),
+				skill.LoadedKey("tester", "b"): []byte("1"),
+				skill.LoadedKey("tester", "c"): []byte("1"),
+				skill.LoadedKey("tester", "d"): []byte("1"),
 			},
 			Events: []event.Event{
 				toolResponseEvent(
+					"tester",
 					skillToolLoad,
 					loadedPrefix+" a",
 				),
 				toolResponseEvent(
+					"tester",
 					skillToolLoad,
 					loadedPrefix+" b",
 				),
 				toolResponseEvent(
+					"tester",
 					skillToolLoad,
 					loadedPrefix+" c",
 				),
 				toolResponseEvent(
+					"tester",
 					skillToolLoad,
 					loadedPrefix+" d",
 				),
 				toolResponseEvent(
+					"tester",
 					skillToolSelectDocs,
 					string(args),
 				),
@@ -602,7 +694,7 @@ func TestSkillsRequestProcessor_MaxLoadedSkills_SelectDocsTouchesSkill(
 	require.Contains(t, sys, "[Loaded] c")
 	require.Contains(t, sys, "[Loaded] d")
 
-	v, ok := inv.Session.GetState(skill.StateKeyLoadedPrefix + "b")
+	v, ok := inv.Session.GetState(skill.LoadedKey("tester", "b"))
 	require.True(t, ok)
 	require.Empty(t, v)
 }
@@ -630,25 +722,29 @@ func TestSkillsRequestProcessor_MaxLoadedSkills_ToolResultMode_EvictsOldest(
 		AgentName:    "tester",
 		Session: &session.Session{
 			State: session.StateMap{
-				skill.StateKeyLoadedPrefix + "a": []byte("1"),
-				skill.StateKeyLoadedPrefix + "b": []byte("1"),
-				skill.StateKeyLoadedPrefix + "c": []byte("1"),
-				skill.StateKeyLoadedPrefix + "d": []byte("1"),
+				skill.LoadedKey("tester", "a"): []byte("1"),
+				skill.LoadedKey("tester", "b"): []byte("1"),
+				skill.LoadedKey("tester", "c"): []byte("1"),
+				skill.LoadedKey("tester", "d"): []byte("1"),
 			},
 			Events: []event.Event{
 				toolResponseEvent(
+					"tester",
 					skillToolLoad,
 					loadedPrefix+" a",
 				),
 				toolResponseEvent(
+					"tester",
 					skillToolLoad,
 					loadedPrefix+" b",
 				),
 				toolResponseEvent(
+					"tester",
 					skillToolLoad,
 					loadedPrefix+" c",
 				),
 				toolResponseEvent(
+					"tester",
 					skillToolLoad,
 					loadedPrefix+" d",
 				),
@@ -677,7 +773,7 @@ func TestSkillsRequestProcessor_MaxLoadedSkills_ToolResultMode_EvictsOldest(
 	require.NotContains(t, sys, "[Loaded] c")
 	require.NotContains(t, sys, "[Loaded] d")
 
-	v, ok := inv.Session.GetState(skill.StateKeyLoadedPrefix + "a")
+	v, ok := inv.Session.GetState(skill.LoadedKey("tester", "a"))
 	require.True(t, ok)
 	require.Empty(t, v)
 
@@ -727,6 +823,7 @@ func TestAppendSkillsFromToolResponseEvent_EarlyReturns(t *testing.T) {
 
 	keep := appendSkillsFromToolResponseEvent(
 		event.Event{},
+		"",
 		loadedSet,
 		seen,
 		nil,
@@ -740,6 +837,7 @@ func TestAppendSkillsFromToolResponseEvent_EarlyReturns(t *testing.T) {
 				Object: "not_tool_response",
 			},
 		},
+		"",
 		loadedSet,
 		seen,
 		nil,
@@ -753,6 +851,7 @@ func TestAppendSkillsFromToolResponseEvent_EarlyReturns(t *testing.T) {
 				Object: model.ObjectTypeToolResponse,
 			},
 		},
+		"",
 		loadedSet,
 		seen,
 		nil,
@@ -812,6 +911,7 @@ func TestAppendSkillsFromToolResponseEvent_SkipsInvalidMessages(t *testing.T) {
 
 	keep := appendSkillsFromToolResponseEvent(
 		ev,
+		"",
 		loadedSet,
 		seen,
 		nil,
@@ -850,8 +950,8 @@ func TestSkillsToolResultRequestProcessor_MaterializesIntoLastToolMsg(
 		AgentName:    "tester",
 		Session: &session.Session{
 			State: session.StateMap{
-				skill.StateKeyLoadedPrefix + "calc": []byte("1"),
-				skill.StateKeyDocsPrefix + "calc":   []byte("*"),
+				skill.LoadedKey("tester", "calc"): []byte("1"),
+				skill.DocsKey("tester", "calc"):   []byte("*"),
 			},
 		},
 	}
@@ -944,7 +1044,7 @@ func TestSkillsToolResultRequestProcessor_FallbackSystemMessageAdded(
 		AgentName:    "tester",
 		Session: &session.Session{
 			State: session.StateMap{
-				skill.StateKeyLoadedPrefix + "calc": []byte("1"),
+				skill.LoadedKey("tester", "calc"): []byte("1"),
 			},
 		},
 	}
@@ -975,7 +1075,7 @@ func TestSkillsToolResultRequestProcessor_FallbackSystemMessageAdded(
 	}
 	require.True(t, found)
 
-	inv.Session.SetState(skill.StateKeyLoadedPrefix+"calc", nil)
+	inv.Session.SetState(skill.LoadedKey("tester", "calc"), nil)
 	p.ProcessRequest(context.Background(), inv, req, nil)
 
 	for _, m := range req.Messages {
@@ -1001,7 +1101,7 @@ func TestSkillsToolResultRequestProcessor_SessionSummary_DisablesFallback(
 		AgentName:    "tester",
 		Session: &session.Session{
 			State: session.StateMap{
-				skill.StateKeyLoadedPrefix + "calc": []byte("1"),
+				skill.LoadedKey("tester", "calc"): []byte("1"),
 			},
 		},
 	}
@@ -1043,7 +1143,7 @@ func TestSkillsToolResultRequestProcessor_SessionSummary_AllowsFallback(
 		AgentName:    "tester",
 		Session: &session.Session{
 			State: session.StateMap{
-				skill.StateKeyLoadedPrefix + "calc": []byte("1"),
+				skill.LoadedKey("tester", "calc"): []byte("1"),
 			},
 		},
 	}
@@ -1126,8 +1226,8 @@ func TestSkillsToolResultRequestProcessor_SkillLoadModeOnce_Offloads(
 		AgentName:    "tester",
 		Session: &session.Session{
 			State: session.StateMap{
-				skill.StateKeyLoadedPrefix + "calc": []byte("1"),
-				skill.StateKeyDocsPrefix + "calc":   []byte("[]"),
+				skill.LoadedKey("tester", "calc"): []byte("1"),
+				skill.DocsKey("tester", "calc"):   []byte("[]"),
 			},
 		},
 	}
@@ -1171,13 +1271,13 @@ func TestSkillsToolResultRequestProcessor_SkillLoadModeOnce_Offloads(
 	require.Contains(t, toolMsg, "B")
 
 	loadedVal, ok := inv.Session.GetState(
-		skill.StateKeyLoadedPrefix + "calc",
+		skill.LoadedKey("tester", "calc"),
 	)
 	require.True(t, ok)
 	require.Empty(t, loadedVal)
 
 	docsVal, ok := inv.Session.GetState(
-		skill.StateKeyDocsPrefix + "calc",
+		skill.DocsKey("tester", "calc"),
 	)
 	require.True(t, ok)
 	require.Empty(t, docsVal)
@@ -1188,12 +1288,12 @@ func TestSkillsToolResultRequestProcessor_SkillLoadModeOnce_Offloads(
 	require.Contains(
 		t,
 		ev.StateDelta,
-		skill.StateKeyLoadedPrefix+"calc",
+		skill.LoadedKey("tester", "calc"),
 	)
 	require.Contains(
 		t,
 		ev.StateDelta,
-		skill.StateKeyDocsPrefix+"calc",
+		skill.DocsKey("tester", "calc"),
 	)
 }
 
@@ -1345,16 +1445,17 @@ func TestSkillsToolResultRequestProcessor_GetDocsSelection_InvalidJSON(
 		},
 	}
 	inv := &agent.Invocation{
+		AgentName: "tester",
 		Session: &session.Session{
 			State: session.StateMap{
-				skill.StateKeyDocsPrefix + "calc": []byte("[bad]"),
+				skill.DocsKey("tester", "calc"): []byte("[bad]"),
 			},
 		},
 	}
 	p := NewSkillsToolResultRequestProcessor(repo)
 	require.Empty(t, p.getDocsSelection(inv, "calc"))
 
-	inv.Session.SetState(skill.StateKeyDocsPrefix+"missing", []byte("*"))
+	inv.Session.SetState(skill.DocsKey("tester", "missing"), []byte("*"))
 	require.Empty(t, p.getDocsSelection(inv, "missing"))
 }
 
@@ -1384,9 +1485,10 @@ func TestSkillsToolResultRequestProcessor_MaybeOffload_NoOpWhenNotOnce(
 		},
 	}
 	inv := &agent.Invocation{
+		AgentName: "tester",
 		Session: &session.Session{
 			State: session.StateMap{
-				skill.StateKeyLoadedPrefix + "calc": []byte("1"),
+				skill.LoadedKey("tester", "calc"): []byte("1"),
 			},
 		},
 	}
@@ -1403,14 +1505,288 @@ func TestSkillsToolResultRequestProcessor_MaybeOffload_NoOpWhenNotOnce(
 		ch,
 	)
 
-	v, ok := inv.Session.GetState(skill.StateKeyLoadedPrefix + "calc")
+	v, ok := inv.Session.GetState(skill.LoadedKey("tester", "calc"))
 	require.True(t, ok)
 	require.Equal(t, []byte("1"), v)
 	require.Len(t, ch, 0)
 }
 
-func toolResponseEvent(toolName string, content string) event.Event {
+func TestMaybeMigrateLegacySkillState_EarlyReturns(t *testing.T) {
+	ch := make(chan *event.Event, 1)
+	maybeMigrateLegacySkillState(context.Background(), nil, ch)
+	require.Len(t, ch, 0)
+
+	inv := &agent.Invocation{Session: nil}
+	maybeMigrateLegacySkillState(context.Background(), inv, ch)
+	require.Len(t, ch, 0)
+
+	inv = &agent.Invocation{Session: &session.Session{}}
+	maybeMigrateLegacySkillState(context.Background(), inv, ch)
+	require.Len(t, ch, 0)
+}
+
+func TestMaybeMigrateLegacySkillState_MigratesLegacyKeys(t *testing.T) {
+	const (
+		coordinator = "coordinator"
+		subAgent    = "sub"
+		skillName   = "demo"
+		loadedVal   = "1"
+		docsVal     = "[\"A.md\"]"
+	)
+
+	legacyLoadedKey := skill.StateKeyLoadedPrefix + skillName
+	legacyDocsKey := skill.StateKeyDocsPrefix + skillName
+	unrelatedKey := "temp:unrelated"
+	emptyLoadedKey := skill.StateKeyLoadedPrefix + "empty"
+
+	sess := &session.Session{
+		State: session.StateMap{
+			legacyLoadedKey:            []byte(loadedVal),
+			legacyDocsKey:              []byte(docsVal),
+			skill.StateKeyLoadedPrefix: []byte("1"),
+			emptyLoadedKey:             nil,
+			unrelatedKey:               []byte("x"),
+		},
+		Events: []event.Event{
+			toolResponseEvent(
+				subAgent,
+				skillToolLoad,
+				loadedPrefix+" "+skillName,
+			),
+		},
+	}
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    coordinator,
+		Session:      sess,
+	}
+
+	ch := make(chan *event.Event, 1)
+	maybeMigrateLegacySkillState(context.Background(), inv, ch)
+
+	ev := <-ch
+	require.NotNil(t, ev)
+	require.Equal(t, model.ObjectTypeStateUpdate, ev.Object)
+
+	scopedLoadedKey := skill.LoadedKey(subAgent, skillName)
+	scopedDocsKey := skill.DocsKey(subAgent, skillName)
+
+	require.Equal(t, []byte(loadedVal), ev.StateDelta[scopedLoadedKey])
+	require.Equal(t, []byte(docsVal), ev.StateDelta[scopedDocsKey])
+	require.Contains(t, ev.StateDelta, legacyLoadedKey)
+	require.Contains(t, ev.StateDelta, legacyDocsKey)
+	require.Nil(t, ev.StateDelta[legacyLoadedKey])
+	require.Nil(t, ev.StateDelta[legacyDocsKey])
+
+	v, ok := sess.GetState(scopedLoadedKey)
+	require.True(t, ok)
+	require.Equal(t, []byte(loadedVal), v)
+
+	v, ok = sess.GetState(scopedDocsKey)
+	require.True(t, ok)
+	require.Equal(t, []byte(docsVal), v)
+
+	v, ok = sess.GetState(legacyLoadedKey)
+	require.True(t, ok)
+	require.Nil(t, v)
+
+	v, ok = sess.GetState(legacyDocsKey)
+	require.True(t, ok)
+	require.Nil(t, v)
+
+	maybeMigrateLegacySkillState(context.Background(), inv, ch)
+	require.Len(t, ch, 0)
+}
+
+func TestMaybeMigrateLegacySkillState_ClearsLegacyWhenScopedExists(
+	t *testing.T,
+) {
+	const (
+		owner     = "sub"
+		skillName = "demo"
+		scopedVal = "new"
+		legacyVal = "legacy"
+	)
+
+	legacyKey := skill.StateKeyLoadedPrefix + skillName
+	scopedKey := skill.LoadedKey(owner, skillName)
+
+	sess := &session.Session{
+		State: session.StateMap{
+			scopedKey: []byte(scopedVal),
+			legacyKey: []byte(legacyVal),
+		},
+		Events: []event.Event{
+			toolResponseEvent(
+				owner,
+				skillToolLoad,
+				loadedPrefix+" "+skillName,
+			),
+		},
+	}
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "coordinator",
+		Session:      sess,
+	}
+
+	ch := make(chan *event.Event, 1)
+	maybeMigrateLegacySkillState(context.Background(), inv, ch)
+
+	ev := <-ch
+	require.NotNil(t, ev)
+	require.Equal(t, model.ObjectTypeStateUpdate, ev.Object)
+	require.Contains(t, ev.StateDelta, legacyKey)
+	require.NotContains(t, ev.StateDelta, scopedKey)
+	require.Nil(t, ev.StateDelta[legacyKey])
+
+	v, ok := sess.GetState(scopedKey)
+	require.True(t, ok)
+	require.Equal(t, []byte(scopedVal), v)
+
+	v, ok = sess.GetState(legacyKey)
+	require.True(t, ok)
+	require.Nil(t, v)
+}
+
+func TestMaybeMigrateLegacySkillState_NoOwnerKeepsLegacyState(
+	t *testing.T,
+) {
+	const (
+		skillName = "demo"
+		legacyVal = "1"
+	)
+
+	legacyKey := skill.StateKeyLoadedPrefix + skillName
+	sess := &session.Session{
+		State: session.StateMap{
+			legacyKey: []byte(legacyVal),
+		},
+	}
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    " ",
+		Session:      sess,
+	}
+
+	ch := make(chan *event.Event, 1)
+	maybeMigrateLegacySkillState(context.Background(), inv, ch)
+	require.Len(t, ch, 0)
+
+	v, ok := sess.GetState(legacyKey)
+	require.True(t, ok)
+	require.Equal(t, []byte(legacyVal), v)
+}
+
+func TestAddOwnersFromEvent_EarlyReturnsAndSkips(t *testing.T) {
+	toolEvent := func(
+		author string,
+		role model.Role,
+		toolName string,
+		content string,
+	) event.Event {
+		return event.Event{
+			Author: author,
+			Response: &model.Response{
+				Object: model.ObjectTypeToolResponse,
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role:     role,
+						ToolName: toolName,
+						Content:  content,
+					},
+				}},
+			},
+		}
+	}
+
+	owners := map[string]string{}
+	owners = addOwnersFromEvent(event.Event{}, owners)
+	require.Empty(t, owners)
+
+	owners = addOwnersFromEvent(event.Event{
+		Author: "a",
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+		},
+	}, owners)
+	require.Empty(t, owners)
+
+	owners = addOwnersFromEvent(event.Event{
+		Author: "a",
+		Response: &model.Response{
+			Object: model.ObjectTypeToolResponse,
+		},
+	}, owners)
+	require.Empty(t, owners)
+
+	owners = addOwnersFromEvent(toolEvent(
+		" ",
+		model.RoleTool,
+		skillToolLoad,
+		loadedPrefix+" demo",
+	), owners)
+	require.Empty(t, owners)
+
+	owners = addOwnersFromEvent(toolEvent(
+		"a",
+		model.RoleAssistant,
+		skillToolLoad,
+		loadedPrefix+" demo",
+	), owners)
+	require.Empty(t, owners)
+
+	owners = addOwnersFromEvent(toolEvent(
+		"a",
+		model.RoleTool,
+		"other_tool",
+		loadedPrefix+" demo",
+	), owners)
+	require.Empty(t, owners)
+
+	owners = addOwnersFromEvent(toolEvent(
+		"a",
+		model.RoleTool,
+		skillToolLoad,
+		"not loaded",
+	), owners)
+	require.Empty(t, owners)
+
+	owners = addOwnersFromEvent(toolEvent(
+		"a",
+		model.RoleTool,
+		skillToolSelectDocs,
+		"{",
+	), owners)
+	require.Empty(t, owners)
+}
+
+func TestLegacySkillOwners_PrefersMostRecent(t *testing.T) {
+	const skillName = "demo"
+
+	events := []event.Event{
+		toolResponseEvent(
+			"old",
+			skillToolLoad,
+			loadedPrefix+" "+skillName,
+		),
+		toolResponseEvent(
+			"new",
+			skillToolLoad,
+			loadedPrefix+" "+skillName,
+		),
+	}
+	owners := legacySkillOwners(events)
+	require.Equal(t, "new", owners[skillName])
+}
+
+func toolResponseEvent(
+	author string,
+	toolName string,
+	content string,
+) event.Event {
 	return event.Event{
+		Author: author,
 		Response: &model.Response{
 			Object: model.ObjectTypeToolResponse,
 			Choices: []model.Choice{{

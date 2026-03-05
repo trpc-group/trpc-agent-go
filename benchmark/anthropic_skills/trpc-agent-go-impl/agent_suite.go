@@ -34,7 +34,7 @@ import (
 )
 
 const (
-	agentSessionPrefix = "anthropic-skills-agent-"
+	agentSessionPrefix = benchAgentName + "-"
 )
 
 type docCaseAnswer struct {
@@ -261,11 +261,11 @@ func createAllSkillsSession(
 	}
 	state := make(session.StateMap)
 	for _, s := range repo.Summaries() {
-		state[skillrepo.StateKeyLoadedPrefix+s.Name] = []byte(
+		state[skillrepo.LoadedKey(benchAgentName, s.Name)] = []byte(
 			stateValueLoaded,
 		)
 		if allDocs {
-			state[skillrepo.StateKeyDocsPrefix+s.Name] = []byte(
+			state[skillrepo.DocsKey(benchAgentName, s.Name)] = []byte(
 				stateValueAllDocs,
 			)
 		}
@@ -354,7 +354,7 @@ func newBenchAgent(
 		)
 	}
 	return llmagent.New(
-		"anthropic-skills-agent",
+		benchAgentName,
 		opts...,
 	)
 }

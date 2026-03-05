@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"math"
+	"strings"
 	"sync"
 	"time"
 
@@ -289,6 +290,36 @@ func (sess *Session) SnapshotState() StateMap {
 		out[k] = val
 	}
 	return out
+}
+
+// HasStateKeyWithPrefix reports whether the session state contains at least one
+// key with the provided prefix and a non-empty value.
+//
+// Nil or empty values are treated as absent.
+func (sess *Session) HasStateKeyWithPrefix(prefix string) bool {
+	if sess == nil {
+		return false
+	}
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return false
+	}
+
+	sess.stateMu.RLock()
+	defer sess.stateMu.RUnlock()
+	if len(sess.State) == 0 {
+		return false
+	}
+	for k, v := range sess.State {
+		if !strings.HasPrefix(k, prefix) {
+			continue
+		}
+		if len(v) == 0 {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // GetEvents returns the session events.

@@ -91,7 +91,8 @@ Session summary 提醒：如果你启用了会话摘要注入
   里多次调用模型的场景（一次用户消息触发多个 tool call）。
 - 如果你希望跨**多轮对话**继续复用“已加载技能的正文/文档”，需要把
   `SkillLoadMode` 设为 `session`。默认 `turn` 会在下一轮开始前清空
-  `temp:skill:loaded:*` / `temp:skill:docs:*`，因此即使 history 里仍然
+  该 agent 的 skill state key（`temp:skill:loaded_by_agent:<agent>/<name>` /
+  `temp:skill:docs_by_agent:<agent>/<name>`），因此即使 history 里仍然
   有上一轮的 `skill_load` tool result（通常是 `loaded: <name>` 这种短
   stub），框架也不会再把正文/文档物化进去。
 
@@ -120,7 +121,9 @@ Session summary 提醒：如果你启用了会话摘要注入
   运行时配置拼出来。
 
 `skill_load` 只会把“已加载/已选文档”的**小状态**写入 Session（例如
-`temp:skill:loaded:*`、`temp:skill:docs:*`）。随后由请求处理器在
+`temp:skill:loaded_by_agent:<agent>/<name>`、
+`temp:skill:docs_by_agent:<agent>/<name>`；旧版 key 也仍被支持）。
+随后由请求处理器在
 **下一次模型请求**里，把对应的 `SKILL.md` 正文/已选 docs **物化**
 进去。
 
@@ -265,6 +268,9 @@ GAIA 基准示例（技能 + 文件工具）：
 SkillLoadMode 演示（无需 API key）：
 [examples/skillloadmode/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillloadmode/README.md)
 
+子代理 skill 隔离演示（AgentTool + Skills）：
+[examples/skillisolation/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillisolation/README.md)
+
 快速开始（下载数据集 JSON 到 `examples/skill/data/`）：
 
 ```bash
@@ -333,9 +339,14 @@ https://github.com/anthropics/skills
 - `include_all_docs`（可选）：为 true 时包含所有文档
 
 行为：
-- 写入会话临时键（生命周期由 `SkillLoadMode` 控制）：
-  - `temp:skill:loaded:<name>` = "1"
-  - `temp:skill:docs:<name>` = "*" 或 JSON 字符串数组
+- 写入会话临时键（按 agent 隔离，生命周期由 `SkillLoadMode` 控制）：
+  - `temp:skill:loaded_by_agent:<agent>/<name>` = "1"
+  - `temp:skill:docs_by_agent:<agent>/<name>` = "*" 或 JSON 字符串数组
+  - 旧版 key（`temp:skill:loaded:<name>`、`temp:skill:docs:<name>`）仍被支持，
+    并在读到时自动迁移。
+- 多代理提示：transfer 调用子代理时通常共享同一个 Session。key 按 agent
+  隔离后，子代理的 `skill_load` 不会自动把技能正文/文档“塞进”主代理的提示词。
+  如果主代理确实需要该技能正文/文档，请让主代理自己调用一次 `skill_load`。
 - 请求处理器读取这些键，把 `SKILL.md` 正文与文档物化到下一次模型请求中：
   - 默认：追加到系统消息（兼容旧行为）
   - 可选：追加到对应 tool result 消息
@@ -351,9 +362,9 @@ https://github.com/anthropics/skills
 从最基本的机制出发理解：
 
 - `skill_load` 并不会把完整的 `SKILL.md` 正文写进 session 的事件记录里。
-- 它只会往 session state 写入一些很小的“标记键”：
-  - Loaded 标记：前缀为 `skill.StateKeyLoadedPrefix` 的 key
-  - Docs 选择：前缀为 `skill.StateKeyDocsPrefix` 的 key
+- 它只会往 session state 写入一些很小的“标记键”（按 agent 隔离）：
+  - Loaded 标记：前缀为 `skill.LoadedPrefix(inv.AgentName)` 的 key
+  - Docs 选择：前缀为 `skill.DocsPrefix(inv.AgentName)` 的 key
 - Skills 的请求处理器会读取这些键，把正文/文档物化到**下一次**
   outbound 模型请求里。
 
@@ -384,15 +395,17 @@ func loadedSkillNames(inv *agent.Invocation) []string {
         return nil
     }
 
+    prefix := skill.LoadedPrefix(inv.AgentName)
+
     var out []string
     for k, v := range state {
-        if !strings.HasPrefix(k, skill.StateKeyLoadedPrefix) {
+        if !strings.HasPrefix(k, prefix) {
             continue
         }
         if len(v) == 0 {
             continue
         }
-        name := strings.TrimPrefix(k, skill.StateKeyLoadedPrefix)
+        name := strings.TrimPrefix(k, prefix)
         if strings.TrimSpace(name) == "" {
             continue
         }
@@ -428,7 +441,8 @@ _ = agt
 注意：
 
 - 默认 `SkillLoadModeTurn` 会在**下一轮** `Runner.Run` 开始前清空这些
-  `temp:skill:*` state key，所以“已加载列表”通常只在当前这轮
+  该 agent 的 `temp:skill:loaded_by_agent:*` /
+  `temp:skill:docs_by_agent:*` state key，所以“已加载列表”通常只在当前这轮
   tool loop 里非空。
 - `SkillLoadModeSession` 会跨轮保留这些 key，所以“已加载列表”会一直
   非空，直到你手动清空（或会话过期）。
@@ -466,7 +480,7 @@ _ = agt
 核心思路：
 
 1) 识别“加载 skill”的事件（state delta 里包含
-   `skill.StateKeyLoadedPrefix+<name>`）。
+   该 agent 的 loaded key，即 key 前缀为 `skill.LoadedPrefix(ev.Author)`）。
 2) 计算“应用该 delta 后”会有哪些 skills 处于 loaded 状态。
 3) 如果数量超过阈值，在同一个 `StateDelta` 里把要淘汰的 skills 对应
    key 置为 `nil`（清空）。
@@ -495,19 +509,23 @@ type skillLoadArgs struct {
     Skill string `json:"skill"`
 }
 
-func loadedSkillsFromState(state session.StateMap) []string {
+func loadedSkillsFromState(
+    state session.StateMap,
+    agentName string,
+) []string {
     if len(state) == 0 {
         return nil
     }
+    prefix := skill.LoadedPrefix(agentName)
     var out []string
     for k, v := range state {
-        if !strings.HasPrefix(k, skill.StateKeyLoadedPrefix) {
+        if !strings.HasPrefix(k, prefix) {
             continue
         }
         if len(v) == 0 {
             continue
         }
-        name := strings.TrimPrefix(k, skill.StateKeyLoadedPrefix)
+        name := strings.TrimPrefix(k, prefix)
         if strings.TrimSpace(name) == "" {
             continue
         }
@@ -529,16 +547,22 @@ func capLoadedSkills(
         return
     }
 
+    agentName := strings.TrimSpace(ev.Author)
+    if agentName == "" {
+        return
+    }
+    loadedPrefix := skill.LoadedPrefix(agentName)
+
     // Only enforce when this event loads a skill.
     var newlyLoaded []string
     for k, v := range ev.StateDelta {
-        if !strings.HasPrefix(k, skill.StateKeyLoadedPrefix) {
+        if !strings.HasPrefix(k, loadedPrefix) {
             continue
         }
         if len(v) == 0 {
             continue
         }
-        name := strings.TrimPrefix(k, skill.StateKeyLoadedPrefix)
+        name := strings.TrimPrefix(k, loadedPrefix)
         if strings.TrimSpace(name) == "" {
             continue
         }
@@ -554,7 +578,7 @@ func capLoadedSkills(
         nextState[k] = v
     }
 
-    loaded := loadedSkillsFromState(nextState)
+    loaded := loadedSkillsFromState(nextState, agentName)
     if len(loaded) <= max {
         return
     }
@@ -587,6 +611,9 @@ func capLoadedSkills(
     // 2) Fill from newest skill_load calls in the transcript.
     events := sess.GetEvents()
     for i := len(events) - 1; i >= 0 && len(keep) < max; i-- {
+        if strings.TrimSpace(events[i].Author) != agentName {
+            continue
+        }
         rsp := events[i].Response
         if rsp == nil || len(rsp.Choices) == 0 {
             continue
@@ -641,8 +668,8 @@ func capLoadedSkills(
         if _, ok := keepSet[name]; ok {
             continue
         }
-        ev.StateDelta[skill.StateKeyLoadedPrefix+name] = nil
-        ev.StateDelta[skill.StateKeyDocsPrefix+name] = nil
+        ev.StateDelta[skill.LoadedKey(agentName, name)] = nil
+        ev.StateDelta[skill.DocsKey(agentName, name)] = nil
     }
 }
 
@@ -800,7 +827,9 @@ agent := llmagent.New(
 - `mode`（可选字符串）：`add` | `replace` | `clear`
 
 行为：
-- 更新 `temp:skill:docs:<name>`：`*` 表示全选；数组表示显式列表
+- 更新当前 agent 的 doc 选择 state key：
+  - `temp:skill:docs_by_agent:<agent>/<name>`：`*` 表示全选；数组表示显式列表
+  - 旧版 key `temp:skill:docs:<name>` 仍被支持，并在读到时自动迁移
 
 ### `skill_list_docs`
 
