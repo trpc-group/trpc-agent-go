@@ -1682,6 +1682,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#_42" class="md-nav__link">
+    <span class="md-ellipsis">
+      致命错误：如何获取原始错误与错误码
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1693,7 +1702,7 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_42" class="md-nav__link">
+  <a href="#_43" class="md-nav__link">
     <span class="md-ellipsis">
       常见问题排查
     </span>
@@ -1702,7 +1711,7 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_43" class="md-nav__link">
+  <a href="#_44" class="md-nav__link">
     <span class="md-ellipsis">
       实际案例
     </span>
@@ -1712,7 +1721,7 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#_44" class="md-nav__link">
+  <a href="#_45" class="md-nav__link">
     <span class="md-ellipsis">
       审批工作流
     </span>
@@ -1726,7 +1735,7 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_45" class="md-nav__link">
+  <a href="#_46" class="md-nav__link">
     <span class="md-ellipsis">
       总结
     </span>
@@ -1735,7 +1744,7 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_46" class="md-nav__link">
+  <a href="#_47" class="md-nav__link">
     <span class="md-ellipsis">
       参考与示例
     </span>
@@ -3986,6 +3995,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#_42" class="md-nav__link">
+    <span class="md-ellipsis">
+      致命错误：如何获取原始错误与错误码
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -3997,7 +4015,7 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_42" class="md-nav__link">
+  <a href="#_43" class="md-nav__link">
     <span class="md-ellipsis">
       常见问题排查
     </span>
@@ -4006,7 +4024,7 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_43" class="md-nav__link">
+  <a href="#_44" class="md-nav__link">
     <span class="md-ellipsis">
       实际案例
     </span>
@@ -4016,7 +4034,7 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#_44" class="md-nav__link">
+  <a href="#_45" class="md-nav__link">
     <span class="md-ellipsis">
       审批工作流
     </span>
@@ -4030,7 +4048,7 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_45" class="md-nav__link">
+  <a href="#_46" class="md-nav__link">
     <span class="md-ellipsis">
       总结
     </span>
@@ -4039,7 +4057,7 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_46" class="md-nav__link">
+  <a href="#_47" class="md-nav__link">
     <span class="md-ellipsis">
       参考与示例
     </span>
@@ -10163,7 +10181,29 @@ resume 时的确定性 rerun。</li>
 </span><span id="__span-99-55"><a id="__codelineno-99-55" name="__codelineno-99-55"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">sg</span><span class="p">.</span><span class="nx">Compile</span><span class="p">()</span>
 </span><span id="__span-99-56"><a id="__codelineno-99-56" name="__codelineno-99-56"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p>也可以在 Agent 级别配置回调：</p>
+<h4 id="_42">致命错误：如何获取原始错误与错误码</h4>
+<p>当节点错误没有被 After 回调恢复（或执行器自身发生错误 / panic）时，图会失败并停止执行。
+这类<strong>致命错误不会通过 <code>Runner.Run(...)</code> 的返回值传出</strong>，而是通过事件流输出。</p>
+<p>你通常会看到两类与错误相关的事件（都满足 <code>Response.Error != nil</code>）：</p>
+<ul>
+<li><strong>图级致命错误（推荐作为“最终失败原因”）</strong>：
+  <code>Author = graph.AuthorGraphPregel</code> 且 <code>Object = graph.ObjectTypeGraphPregelStep</code>。
+  该事件的 <code>_pregel_metadata.stepNumber</code> 通常为 <code>-1</code>，表示执行器在图外层汇总后的最终失
+  败原因。</li>
+<li><strong>节点级错误（便于定位问题节点）</strong>：
+  <code>Author = &lt;nodeID&gt;</code> 且 <code>Response.Error != nil</code>。
+  同时 <code>_node_metadata</code> 会带上节点 ID、step、attempt/重试等信息。</li>
+</ul>
+<p>注意：</p>
+<ul>
+<li>Runner 最终还会补发一条 <code>runner.completion</code> 事件作为真正的结束标记；建议一直消费到
+  completion 再关闭上游连接。</li>
+<li>当你让错误保持“致命”（After 回调返回 <code>nil, nil</code> 或返回非 nil error）时，框架不会产
+  生 <code>graph.execution</code> 的最终状态快照事件。因此“收集致命错误”的推荐方式是消费事件流
+  或在回调里主动发射自定义事件（见上文“在节点回调中携带业务值”）。</li>
+</ul>
+<p><strong>根据错误码分流</strong></p>
+<p><code>Response.Error</code> 支持 <code>Code</code> 字段，你可以在消费事件时根据 <code>Code</code> 做不同逻辑处理：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-100-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-100-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-100-3"> 3</a></span>
@@ -10183,28 +10223,89 @@ resume 时的确定性 rerun。</li>
 <span class="normal"><a href="#__codelineno-100-17">17</a></span>
 <span class="normal"><a href="#__codelineno-100-18">18</a></span>
 <span class="normal"><a href="#__codelineno-100-19">19</a></span>
-<span class="normal"><a href="#__codelineno-100-20">20</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-100-1"><a id="__codelineno-100-1" name="__codelineno-100-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-100-2"><a id="__codelineno-100-2" name="__codelineno-100-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent&quot;</span>
-</span><span id="__span-100-3"><a id="__codelineno-100-3" name="__codelineno-100-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
-</span><span id="__span-100-4"><a id="__codelineno-100-4" name="__codelineno-100-4"></a><span class="p">)</span>
-</span><span id="__span-100-5"><a id="__codelineno-100-5" name="__codelineno-100-5"></a>
-</span><span id="__span-100-6"><a id="__codelineno-100-6" name="__codelineno-100-6"></a><span class="c1">// 方式一：构造回调并注册（推荐）</span>
-</span><span id="__span-100-7"><a id="__codelineno-100-7" name="__codelineno-100-7"></a><span class="c1">// 注意：结构化回调 API 需要 trpc-agent-go &gt;= 0.6.0</span>
-</span><span id="__span-100-8"><a id="__codelineno-100-8" name="__codelineno-100-8"></a><span class="nx">cb</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">NewCallbacks</span><span class="p">().</span>
-</span><span id="__span-100-9"><a id="__codelineno-100-9" name="__codelineno-100-9"></a><span class="w">    </span><span class="nx">RegisterBeforeAgent</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">args</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">BeforeAgentArgs</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">BeforeAgentResult</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-100-10"><a id="__codelineno-100-10" name="__codelineno-100-10"></a><span class="w">        </span><span class="c1">// 返回非空 CustomResponse 可直接短路此轮执行</span>
-</span><span id="__span-100-11"><a id="__codelineno-100-11" name="__codelineno-100-11"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-100-12"><a id="__codelineno-100-12" name="__codelineno-100-12"></a><span class="w">    </span><span class="p">}).</span>
-</span><span id="__span-100-13"><a id="__codelineno-100-13" name="__codelineno-100-13"></a><span class="w">    </span><span class="nx">RegisterAfterAgent</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">args</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">AfterAgentArgs</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">AfterAgentResult</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-100-14"><a id="__codelineno-100-14" name="__codelineno-100-14"></a><span class="w">        </span><span class="c1">// 可对最终响应做统一修改/替换</span>
-</span><span id="__span-100-15"><a id="__codelineno-100-15" name="__codelineno-100-15"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-100-16"><a id="__codelineno-100-16" name="__codelineno-100-16"></a><span class="w">    </span><span class="p">})</span>
-</span><span id="__span-100-17"><a id="__codelineno-100-17" name="__codelineno-100-17"></a>
-</span><span id="__span-100-18"><a id="__codelineno-100-18" name="__codelineno-100-18"></a><span class="nx">graphAgent</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">graphagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;workflow&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">g</span><span class="p">,</span>
-</span><span id="__span-100-19"><a id="__codelineno-100-19" name="__codelineno-100-19"></a><span class="w">    </span><span class="nx">graphagent</span><span class="p">.</span><span class="nx">WithAgentCallbacks</span><span class="p">(</span><span class="nx">cb</span><span class="p">),</span>
-</span><span id="__span-100-20"><a id="__codelineno-100-20" name="__codelineno-100-20"></a><span class="p">)</span>
+<span class="normal"><a href="#__codelineno-100-20">20</a></span>
+<span class="normal"><a href="#__codelineno-100-21">21</a></span>
+<span class="normal"><a href="#__codelineno-100-22">22</a></span>
+<span class="normal"><a href="#__codelineno-100-23">23</a></span>
+<span class="normal"><a href="#__codelineno-100-24">24</a></span>
+<span class="normal"><a href="#__codelineno-100-25">25</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-100-1"><a id="__codelineno-100-1" name="__codelineno-100-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/graph&quot;</span>
+</span><span id="__span-100-2"><a id="__codelineno-100-2" name="__codelineno-100-2"></a>
+</span><span id="__span-100-3"><a id="__codelineno-100-3" name="__codelineno-100-3"></a><span class="k">for</span><span class="w"> </span><span class="nx">ev</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">eventCh</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-100-4"><a id="__codelineno-100-4" name="__codelineno-100-4"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">ev</span><span class="p">.</span><span class="nx">Response</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nx">ev</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Error</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-100-5"><a id="__codelineno-100-5" name="__codelineno-100-5"></a><span class="w">        </span><span class="k">continue</span>
+</span><span id="__span-100-6"><a id="__codelineno-100-6" name="__codelineno-100-6"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-100-7"><a id="__codelineno-100-7" name="__codelineno-100-7"></a>
+</span><span id="__span-100-8"><a id="__codelineno-100-8" name="__codelineno-100-8"></a><span class="w">    </span><span class="c1">// Graph-level fatal error for the whole run.</span>
+</span><span id="__span-100-9"><a id="__codelineno-100-9" name="__codelineno-100-9"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">ev</span><span class="p">.</span><span class="nx">Author</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">AuthorGraphPregel</span><span class="w"> </span><span class="o">||</span>
+</span><span id="__span-100-10"><a id="__codelineno-100-10" name="__codelineno-100-10"></a><span class="w">        </span><span class="nx">ev</span><span class="p">.</span><span class="nx">Object</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">ObjectTypeGraphPregelStep</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-100-11"><a id="__codelineno-100-11" name="__codelineno-100-11"></a><span class="w">        </span><span class="k">continue</span>
+</span><span id="__span-100-12"><a id="__codelineno-100-12" name="__codelineno-100-12"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-100-13"><a id="__codelineno-100-13" name="__codelineno-100-13"></a>
+</span><span id="__span-100-14"><a id="__codelineno-100-14" name="__codelineno-100-14"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">ev</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Error</span><span class="p">.</span><span class="nx">Code</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-100-15"><a id="__codelineno-100-15" name="__codelineno-100-15"></a><span class="w">        </span><span class="c1">// No code provided.</span>
+</span><span id="__span-100-16"><a id="__codelineno-100-16" name="__codelineno-100-16"></a><span class="w">        </span><span class="k">continue</span>
+</span><span id="__span-100-17"><a id="__codelineno-100-17" name="__codelineno-100-17"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-100-18"><a id="__codelineno-100-18" name="__codelineno-100-18"></a>
+</span><span id="__span-100-19"><a id="__codelineno-100-19" name="__codelineno-100-19"></a><span class="w">    </span><span class="k">switch</span><span class="w"> </span><span class="o">*</span><span class="nx">ev</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Error</span><span class="p">.</span><span class="nx">Code</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-100-20"><a id="__codelineno-100-20" name="__codelineno-100-20"></a><span class="w">    </span><span class="k">case</span><span class="w"> </span><span class="s">&quot;-1&quot;</span><span class="p">:</span>
+</span><span id="__span-100-21"><a id="__codelineno-100-21" name="__codelineno-100-21"></a><span class="w">        </span><span class="c1">// Handle your business error code here.</span>
+</span><span id="__span-100-22"><a id="__codelineno-100-22" name="__codelineno-100-22"></a><span class="w">    </span><span class="k">default</span><span class="p">:</span>
+</span><span id="__span-100-23"><a id="__codelineno-100-23" name="__codelineno-100-23"></a><span class="w">        </span><span class="c1">// Fallback.</span>
+</span><span id="__span-100-24"><a id="__codelineno-100-24" name="__codelineno-100-24"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-100-25"><a id="__codelineno-100-25" name="__codelineno-100-25"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<h2 id="_42">常见问题排查</h2>
+<p><strong>如何让致命错误带上 code</strong></p>
+<p>框架会在发出 error 事件时尽量把 code 填到 <code>Response.Error.Code</code>。
+当你的节点返回的 <code>error</code>（包括 wrap/Join 的错误链）满足下列任意一种形式时：</p>
+<ul>
+<li><code>ErrorCode() string</code></li>
+<li><code>Code() string</code></li>
+<li><code>Code() int</code> / <code>Code() int32</code> / <code>Code() int64</code></li>
+<li>或者直接返回 <code>*model.ResponseError</code>（它实现了 <code>error</code> 接口）</li>
+</ul>
+<p>对应的 code 会出现在事件的 <code>Response.Error.Code</code> 中。</p>
+<p>也可以在 Agent 级别配置回调：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-101-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-101-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-101-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-101-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-101-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-101-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-101-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-101-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-101-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-101-10">10</a></span>
+<span class="normal"><a href="#__codelineno-101-11">11</a></span>
+<span class="normal"><a href="#__codelineno-101-12">12</a></span>
+<span class="normal"><a href="#__codelineno-101-13">13</a></span>
+<span class="normal"><a href="#__codelineno-101-14">14</a></span>
+<span class="normal"><a href="#__codelineno-101-15">15</a></span>
+<span class="normal"><a href="#__codelineno-101-16">16</a></span>
+<span class="normal"><a href="#__codelineno-101-17">17</a></span>
+<span class="normal"><a href="#__codelineno-101-18">18</a></span>
+<span class="normal"><a href="#__codelineno-101-19">19</a></span>
+<span class="normal"><a href="#__codelineno-101-20">20</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-101-1"><a id="__codelineno-101-1" name="__codelineno-101-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-101-2"><a id="__codelineno-101-2" name="__codelineno-101-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent&quot;</span>
+</span><span id="__span-101-3"><a id="__codelineno-101-3" name="__codelineno-101-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
+</span><span id="__span-101-4"><a id="__codelineno-101-4" name="__codelineno-101-4"></a><span class="p">)</span>
+</span><span id="__span-101-5"><a id="__codelineno-101-5" name="__codelineno-101-5"></a>
+</span><span id="__span-101-6"><a id="__codelineno-101-6" name="__codelineno-101-6"></a><span class="c1">// 方式一：构造回调并注册（推荐）</span>
+</span><span id="__span-101-7"><a id="__codelineno-101-7" name="__codelineno-101-7"></a><span class="c1">// 注意：结构化回调 API 需要 trpc-agent-go &gt;= 0.6.0</span>
+</span><span id="__span-101-8"><a id="__codelineno-101-8" name="__codelineno-101-8"></a><span class="nx">cb</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">NewCallbacks</span><span class="p">().</span>
+</span><span id="__span-101-9"><a id="__codelineno-101-9" name="__codelineno-101-9"></a><span class="w">    </span><span class="nx">RegisterBeforeAgent</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">args</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">BeforeAgentArgs</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">BeforeAgentResult</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-101-10"><a id="__codelineno-101-10" name="__codelineno-101-10"></a><span class="w">        </span><span class="c1">// 返回非空 CustomResponse 可直接短路此轮执行</span>
+</span><span id="__span-101-11"><a id="__codelineno-101-11" name="__codelineno-101-11"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-101-12"><a id="__codelineno-101-12" name="__codelineno-101-12"></a><span class="w">    </span><span class="p">}).</span>
+</span><span id="__span-101-13"><a id="__codelineno-101-13" name="__codelineno-101-13"></a><span class="w">    </span><span class="nx">RegisterAfterAgent</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">args</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">AfterAgentArgs</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">AfterAgentResult</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-101-14"><a id="__codelineno-101-14" name="__codelineno-101-14"></a><span class="w">        </span><span class="c1">// 可对最终响应做统一修改/替换</span>
+</span><span id="__span-101-15"><a id="__codelineno-101-15" name="__codelineno-101-15"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-101-16"><a id="__codelineno-101-16" name="__codelineno-101-16"></a><span class="w">    </span><span class="p">})</span>
+</span><span id="__span-101-17"><a id="__codelineno-101-17" name="__codelineno-101-17"></a>
+</span><span id="__span-101-18"><a id="__codelineno-101-18" name="__codelineno-101-18"></a><span class="nx">graphAgent</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">graphagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;workflow&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">g</span><span class="p">,</span>
+</span><span id="__span-101-19"><a id="__codelineno-101-19" name="__codelineno-101-19"></a><span class="w">    </span><span class="nx">graphagent</span><span class="p">.</span><span class="nx">WithAgentCallbacks</span><span class="p">(</span><span class="nx">cb</span><span class="p">),</span>
+</span><span id="__span-101-20"><a id="__codelineno-101-20" name="__codelineno-101-20"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<h2 id="_43">常见问题排查</h2>
 <p><strong>Q1: 报错 "graph must have an entry point"</strong></p>
 <ul>
 <li>未设置入口点。调用 <code>SetEntryPoint()</code>，并确保目标节点已定义。</li>
@@ -10225,17 +10326,17 @@ resume 时的确定性 rerun。</li>
 <li><code>AddToolsConditionalEdges</code> 内部检查 <code>state[StateKeyMessages].([]model.Message)</code> 来判断是否有工具调用。</li>
 <li>如果 Schema 中没有 <code>StateKeyMessages</code> 字段，<code>MessageReducer</code> 不会被应用，LLM 节点返回的是 <code>[]graph.MessageOp</code> 类型而非 <code>[]model.Message</code>，导致类型断言失败，永远路由到 <code>fallbackNode</code>。</li>
 <li><strong>解决方案</strong>：将 <code>graph.NewStateSchema()</code> 改为 <code>graph.MessagesStateSchema()</code>，然后在其基础上添加业务字段：
-  <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-101-1">1</a></span>
-<span class="normal"><a href="#__codelineno-101-2">2</a></span>
-<span class="normal"><a href="#__codelineno-101-3">3</a></span>
-<span class="normal"><a href="#__codelineno-101-4">4</a></span>
-<span class="normal"><a href="#__codelineno-101-5">5</a></span>
-<span class="normal"><a href="#__codelineno-101-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-101-1"><a id="__codelineno-101-1" name="__codelineno-101-1"></a><span class="c1">// 错误写法</span>
-</span><span id="__span-101-2"><a id="__codelineno-101-2" name="__codelineno-101-2"></a><span class="nx">schema</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">NewStateSchema</span><span class="p">()</span>
-</span><span id="__span-101-3"><a id="__codelineno-101-3" name="__codelineno-101-3"></a>
-</span><span id="__span-101-4"><a id="__codelineno-101-4" name="__codelineno-101-4"></a><span class="c1">// 正确写法</span>
-</span><span id="__span-101-5"><a id="__codelineno-101-5" name="__codelineno-101-5"></a><span class="nx">schema</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">MessagesStateSchema</span><span class="p">()</span>
-</span><span id="__span-101-6"><a id="__codelineno-101-6" name="__codelineno-101-6"></a><span class="nx">schema</span><span class="p">.</span><span class="nx">AddField</span><span class="p">(</span><span class="s">&quot;my_field&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">StateField</span><span class="p">{</span><span class="o">...</span><span class="p">})</span>
+  <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-102-1">1</a></span>
+<span class="normal"><a href="#__codelineno-102-2">2</a></span>
+<span class="normal"><a href="#__codelineno-102-3">3</a></span>
+<span class="normal"><a href="#__codelineno-102-4">4</a></span>
+<span class="normal"><a href="#__codelineno-102-5">5</a></span>
+<span class="normal"><a href="#__codelineno-102-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-102-1"><a id="__codelineno-102-1" name="__codelineno-102-1"></a><span class="c1">// 错误写法</span>
+</span><span id="__span-102-2"><a id="__codelineno-102-2" name="__codelineno-102-2"></a><span class="nx">schema</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">NewStateSchema</span><span class="p">()</span>
+</span><span id="__span-102-3"><a id="__codelineno-102-3" name="__codelineno-102-3"></a>
+</span><span id="__span-102-4"><a id="__codelineno-102-4" name="__codelineno-102-4"></a><span class="c1">// 正确写法</span>
+</span><span id="__span-102-5"><a id="__codelineno-102-5" name="__codelineno-102-5"></a><span class="nx">schema</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">MessagesStateSchema</span><span class="p">()</span>
+</span><span id="__span-102-6"><a id="__codelineno-102-6" name="__codelineno-102-6"></a><span class="nx">schema</span><span class="p">.</span><span class="nx">AddField</span><span class="p">(</span><span class="s">&quot;my_field&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">StateField</span><span class="p">{</span><span class="o">...</span><span class="p">})</span>
 </span></code></pre></div></td></tr></table></div></li>
 </ul>
 <p><strong>Q5: 没有观察到流式事件</strong></p>
@@ -10258,21 +10359,21 @@ resume 时的确定性 rerun。</li>
 <li><strong>LLM 决定是否调用工具</strong>：LLM 根据 tools 声明和用户输入，决定是否在响应中返回 <code>tool_calls</code>。</li>
 <li><strong>tools 不会自动执行</strong>：<code>AddLLMNode</code> 只负责声明工具、发送请求给 LLM，不会执行工具。</li>
 <li><strong>工具执行需要配合 AddToolsNode + AddToolsConditionalEdges</strong>：
-  <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-102-1">1</a></span>
-<span class="normal"><a href="#__codelineno-102-2">2</a></span>
-<span class="normal"><a href="#__codelineno-102-3">3</a></span>
-<span class="normal"><a href="#__codelineno-102-4">4</a></span>
-<span class="normal"><a href="#__codelineno-102-5">5</a></span>
-<span class="normal"><a href="#__codelineno-102-6">6</a></span>
-<span class="normal"><a href="#__codelineno-102-7">7</a></span>
-<span class="normal"><a href="#__codelineno-102-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-102-1"><a id="__codelineno-102-1" name="__codelineno-102-1"></a><span class="c1">// 1. LLM 节点声明工具（告诉 LLM 有哪些工具可用）</span>
-</span><span id="__span-102-2"><a id="__codelineno-102-2" name="__codelineno-102-2"></a><span class="nx">sg</span><span class="p">.</span><span class="nx">AddLLMNode</span><span class="p">(</span><span class="s">&quot;ask&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">model</span><span class="p">,</span><span class="w"> </span><span class="nx">systemPrompt</span><span class="p">,</span><span class="w"> </span><span class="nx">tools</span><span class="p">)</span>
-</span><span id="__span-102-3"><a id="__codelineno-102-3" name="__codelineno-102-3"></a>
-</span><span id="__span-102-4"><a id="__codelineno-102-4" name="__codelineno-102-4"></a><span class="c1">// 2. 工具节点负责执行工具（根据 LLM 返回的 tool_calls）</span>
-</span><span id="__span-102-5"><a id="__codelineno-102-5" name="__codelineno-102-5"></a><span class="nx">sg</span><span class="p">.</span><span class="nx">AddToolsNode</span><span class="p">(</span><span class="s">&quot;tools&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">tools</span><span class="p">)</span>
-</span><span id="__span-102-6"><a id="__codelineno-102-6" name="__codelineno-102-6"></a>
-</span><span id="__span-102-7"><a id="__codelineno-102-7" name="__codelineno-102-7"></a><span class="c1">// 3. 条件边根据 LLM 响应路由（有 tool_calls 则路由到工具节点）</span>
-</span><span id="__span-102-8"><a id="__codelineno-102-8" name="__codelineno-102-8"></a><span class="nx">sg</span><span class="p">.</span><span class="nx">AddToolsConditionalEdges</span><span class="p">(</span><span class="s">&quot;ask&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;tools&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;fallback&quot;</span><span class="p">)</span>
+  <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-103-1">1</a></span>
+<span class="normal"><a href="#__codelineno-103-2">2</a></span>
+<span class="normal"><a href="#__codelineno-103-3">3</a></span>
+<span class="normal"><a href="#__codelineno-103-4">4</a></span>
+<span class="normal"><a href="#__codelineno-103-5">5</a></span>
+<span class="normal"><a href="#__codelineno-103-6">6</a></span>
+<span class="normal"><a href="#__codelineno-103-7">7</a></span>
+<span class="normal"><a href="#__codelineno-103-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-103-1"><a id="__codelineno-103-1" name="__codelineno-103-1"></a><span class="c1">// 1. LLM 节点声明工具（告诉 LLM 有哪些工具可用）</span>
+</span><span id="__span-103-2"><a id="__codelineno-103-2" name="__codelineno-103-2"></a><span class="nx">sg</span><span class="p">.</span><span class="nx">AddLLMNode</span><span class="p">(</span><span class="s">&quot;ask&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">model</span><span class="p">,</span><span class="w"> </span><span class="nx">systemPrompt</span><span class="p">,</span><span class="w"> </span><span class="nx">tools</span><span class="p">)</span>
+</span><span id="__span-103-3"><a id="__codelineno-103-3" name="__codelineno-103-3"></a>
+</span><span id="__span-103-4"><a id="__codelineno-103-4" name="__codelineno-103-4"></a><span class="c1">// 2. 工具节点负责执行工具（根据 LLM 返回的 tool_calls）</span>
+</span><span id="__span-103-5"><a id="__codelineno-103-5" name="__codelineno-103-5"></a><span class="nx">sg</span><span class="p">.</span><span class="nx">AddToolsNode</span><span class="p">(</span><span class="s">&quot;tools&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">tools</span><span class="p">)</span>
+</span><span id="__span-103-6"><a id="__codelineno-103-6" name="__codelineno-103-6"></a>
+</span><span id="__span-103-7"><a id="__codelineno-103-7" name="__codelineno-103-7"></a><span class="c1">// 3. 条件边根据 LLM 响应路由（有 tool_calls 则路由到工具节点）</span>
+</span><span id="__span-103-8"><a id="__codelineno-103-8" name="__codelineno-103-8"></a><span class="nx">sg</span><span class="p">.</span><span class="nx">AddToolsConditionalEdges</span><span class="p">(</span><span class="s">&quot;ask&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;tools&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;fallback&quot;</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div></li>
 <li><strong>调用时机</strong>：当 <code>AddToolsConditionalEdges</code> 检测到 LLM 响应中包含 <code>tool_calls</code> 时，会路由到 <code>AddToolsNode</code>，由工具节点执行实际调用。</li>
 </ul>
@@ -10281,23 +10382,23 @@ resume 时的确定性 rerun。</li>
 <li><strong>问题现象</strong>：同一个用户输入在 <code>req.Messages</code> 中出现多次。</li>
 <li><strong>根本原因</strong>：使用 <code>MessagesStateSchema()</code> 时，<code>MessageReducer</code> 会累积消息。每个 LLM 节点执行时，如果 <code>StateKeyUserInput</code> 不为空，会追加新的 user message。当存在循环（如工具调用循环）或多个 LLM 节点串联时，消息会不断累积。</li>
 <li><strong>解决方案</strong>：在设置新的 <code>StateKeyUserInput</code> 之前，使用 <code>RemoveAllMessages</code> 清除之前的消息：
-  <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-103-1">1</a></span>
-<span class="normal"><a href="#__codelineno-103-2">2</a></span>
-<span class="normal"><a href="#__codelineno-103-3">3</a></span>
-<span class="normal"><a href="#__codelineno-103-4">4</a></span>
-<span class="normal"><a href="#__codelineno-103-5">5</a></span>
-<span class="normal"><a href="#__codelineno-103-6">6</a></span>
-<span class="normal"><a href="#__codelineno-103-7">7</a></span>
-<span class="normal"><a href="#__codelineno-103-8">8</a></span>
-<span class="normal"><a href="#__codelineno-103-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-103-1"><a id="__codelineno-103-1" name="__codelineno-103-1"></a><span class="c1">// 在准备 prompt 的节点中</span>
-</span><span id="__span-103-2"><a id="__codelineno-103-2" name="__codelineno-103-2"></a><span class="kd">func</span><span class="w"> </span><span class="nx">preparePromptNode</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">state</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">any</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-103-3"><a id="__codelineno-103-3" name="__codelineno-103-3"></a><span class="w">    </span><span class="nx">userMessage</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">buildUserMessage</span><span class="p">(</span><span class="o">...</span><span class="p">)</span>
-</span><span id="__span-103-4"><a id="__codelineno-103-4" name="__codelineno-103-4"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">{</span>
-</span><span id="__span-103-5"><a id="__codelineno-103-5" name="__codelineno-103-5"></a><span class="w">        </span><span class="c1">// 关键：先清除之前的消息，避免累积</span>
-</span><span id="__span-103-6"><a id="__codelineno-103-6" name="__codelineno-103-6"></a><span class="w">        </span><span class="nx">graph</span><span class="p">.</span><span class="nx">StateKeyMessages</span><span class="p">:</span><span class="w">  </span><span class="nx">graph</span><span class="p">.</span><span class="nx">RemoveAllMessages</span><span class="p">{},</span>
-</span><span id="__span-103-7"><a id="__codelineno-103-7" name="__codelineno-103-7"></a><span class="w">        </span><span class="nx">graph</span><span class="p">.</span><span class="nx">StateKeyUserInput</span><span class="p">:</span><span class="w"> </span><span class="nx">userMessage</span><span class="p">,</span>
-</span><span id="__span-103-8"><a id="__codelineno-103-8" name="__codelineno-103-8"></a><span class="w">    </span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-103-9"><a id="__codelineno-103-9" name="__codelineno-103-9"></a><span class="p">}</span>
+  <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-104-1">1</a></span>
+<span class="normal"><a href="#__codelineno-104-2">2</a></span>
+<span class="normal"><a href="#__codelineno-104-3">3</a></span>
+<span class="normal"><a href="#__codelineno-104-4">4</a></span>
+<span class="normal"><a href="#__codelineno-104-5">5</a></span>
+<span class="normal"><a href="#__codelineno-104-6">6</a></span>
+<span class="normal"><a href="#__codelineno-104-7">7</a></span>
+<span class="normal"><a href="#__codelineno-104-8">8</a></span>
+<span class="normal"><a href="#__codelineno-104-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-104-1"><a id="__codelineno-104-1" name="__codelineno-104-1"></a><span class="c1">// 在准备 prompt 的节点中</span>
+</span><span id="__span-104-2"><a id="__codelineno-104-2" name="__codelineno-104-2"></a><span class="kd">func</span><span class="w"> </span><span class="nx">preparePromptNode</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">state</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">any</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-104-3"><a id="__codelineno-104-3" name="__codelineno-104-3"></a><span class="w">    </span><span class="nx">userMessage</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">buildUserMessage</span><span class="p">(</span><span class="o">...</span><span class="p">)</span>
+</span><span id="__span-104-4"><a id="__codelineno-104-4" name="__codelineno-104-4"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">{</span>
+</span><span id="__span-104-5"><a id="__codelineno-104-5" name="__codelineno-104-5"></a><span class="w">        </span><span class="c1">// 关键：先清除之前的消息，避免累积</span>
+</span><span id="__span-104-6"><a id="__codelineno-104-6" name="__codelineno-104-6"></a><span class="w">        </span><span class="nx">graph</span><span class="p">.</span><span class="nx">StateKeyMessages</span><span class="p">:</span><span class="w">  </span><span class="nx">graph</span><span class="p">.</span><span class="nx">RemoveAllMessages</span><span class="p">{},</span>
+</span><span id="__span-104-7"><a id="__codelineno-104-7" name="__codelineno-104-7"></a><span class="w">        </span><span class="nx">graph</span><span class="p">.</span><span class="nx">StateKeyUserInput</span><span class="p">:</span><span class="w"> </span><span class="nx">userMessage</span><span class="p">,</span>
+</span><span id="__span-104-8"><a id="__codelineno-104-8" name="__codelineno-104-8"></a><span class="w">    </span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-104-9"><a id="__codelineno-104-9" name="__codelineno-104-9"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div></li>
 <li><strong>注意</strong>：<code>WithSubgraphIsolatedMessages(true)</code> 只对 <code>AddSubgraphNode</code> 有效，对 <code>AddLLMNode</code> 无效。</li>
 </ul>
@@ -10308,25 +10409,25 @@ resume 时的确定性 rerun。</li>
 <li><strong>根本原因</strong>：Agent 节点把 <code>user_input</code> 当作输入消息，并在成功执行后清空它；
   边不会自动把上游输出“管道式”传下去。</li>
 <li><strong>解决方案</strong>：在下游 Agent 执行前显式把目标值写入 <code>user_input</code>：
-  <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-104-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-104-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-104-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-104-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-104-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-104-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-104-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-104-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-104-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-104-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-104-1"><a id="__codelineno-104-1" name="__codelineno-104-1"></a><span class="nx">sg</span><span class="p">.</span><span class="nx">AddAgentNode</span><span class="p">(</span><span class="s">&quot;B&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">WithSubgraphInputFromLastResponse</span><span class="p">())</span>
-</span><span id="__span-104-2"><a id="__codelineno-104-2" name="__codelineno-104-2"></a><span class="c1">// 或：</span>
-</span><span id="__span-104-3"><a id="__codelineno-104-3" name="__codelineno-104-3"></a><span class="nx">sg</span><span class="p">.</span><span class="nx">AddAgentNode</span><span class="p">(</span><span class="s">&quot;B&quot;</span><span class="p">,</span>
-</span><span id="__span-104-4"><a id="__codelineno-104-4" name="__codelineno-104-4"></a><span class="w">    </span><span class="nx">graph</span><span class="p">.</span><span class="nx">WithPreNodeCallback</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">cb</span><span class="w"> </span><span class="o">*</span><span class="nx">graph</span><span class="p">.</span><span class="nx">NodeCallbackContext</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">any</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-104-5"><a id="__codelineno-104-5" name="__codelineno-104-5"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">v</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">s</span><span class="p">[</span><span class="nx">graph</span><span class="p">.</span><span class="nx">StateKeyLastResponse</span><span class="p">].(</span><span class="kt">string</span><span class="p">);</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-104-6"><a id="__codelineno-104-6" name="__codelineno-104-6"></a><span class="w">            </span><span class="nx">s</span><span class="p">[</span><span class="nx">graph</span><span class="p">.</span><span class="nx">StateKeyUserInput</span><span class="p">]</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">v</span>
-</span><span id="__span-104-7"><a id="__codelineno-104-7" name="__codelineno-104-7"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-104-8"><a id="__codelineno-104-8" name="__codelineno-104-8"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-104-9"><a id="__codelineno-104-9" name="__codelineno-104-9"></a><span class="w">    </span><span class="p">}),</span>
-</span><span id="__span-104-10"><a id="__codelineno-104-10" name="__codelineno-104-10"></a><span class="p">)</span>
+  <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-105-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-105-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-105-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-105-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-105-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-105-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-105-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-105-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-105-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-105-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-105-1"><a id="__codelineno-105-1" name="__codelineno-105-1"></a><span class="nx">sg</span><span class="p">.</span><span class="nx">AddAgentNode</span><span class="p">(</span><span class="s">&quot;B&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">WithSubgraphInputFromLastResponse</span><span class="p">())</span>
+</span><span id="__span-105-2"><a id="__codelineno-105-2" name="__codelineno-105-2"></a><span class="c1">// 或：</span>
+</span><span id="__span-105-3"><a id="__codelineno-105-3" name="__codelineno-105-3"></a><span class="nx">sg</span><span class="p">.</span><span class="nx">AddAgentNode</span><span class="p">(</span><span class="s">&quot;B&quot;</span><span class="p">,</span>
+</span><span id="__span-105-4"><a id="__codelineno-105-4" name="__codelineno-105-4"></a><span class="w">    </span><span class="nx">graph</span><span class="p">.</span><span class="nx">WithPreNodeCallback</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">cb</span><span class="w"> </span><span class="o">*</span><span class="nx">graph</span><span class="p">.</span><span class="nx">NodeCallbackContext</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">any</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-105-5"><a id="__codelineno-105-5" name="__codelineno-105-5"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">v</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">s</span><span class="p">[</span><span class="nx">graph</span><span class="p">.</span><span class="nx">StateKeyLastResponse</span><span class="p">].(</span><span class="kt">string</span><span class="p">);</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-105-6"><a id="__codelineno-105-6" name="__codelineno-105-6"></a><span class="w">            </span><span class="nx">s</span><span class="p">[</span><span class="nx">graph</span><span class="p">.</span><span class="nx">StateKeyUserInput</span><span class="p">]</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">v</span>
+</span><span id="__span-105-7"><a id="__codelineno-105-7" name="__codelineno-105-7"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-105-8"><a id="__codelineno-105-8" name="__codelineno-105-8"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-105-9"><a id="__codelineno-105-9" name="__codelineno-105-9"></a><span class="w">    </span><span class="p">}),</span>
+</span><span id="__span-105-10"><a id="__codelineno-105-10" name="__codelineno-105-10"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
   如果你需要消费“指定节点”的输出，可从 <code>node_responses[targetNodeID]</code> 取值并写入 <code>user_input</code>。</li>
 </ul>
@@ -10339,173 +10440,173 @@ resume 时的确定性 rerun。</li>
   <code>original + upstream</code> 显式拼接写回 <code>user_input</code>。
   见“Agent 节点：拼接原始输入与上游输出”。</li>
 </ul>
-<h2 id="_43">实际案例</h2>
-<h3 id="_44">审批工作流</h3>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-105-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-105-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-105-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-105-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-105-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-105-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-105-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-105-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-105-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-105-10">10</a></span>
-<span class="normal"><a href="#__codelineno-105-11">11</a></span>
-<span class="normal"><a href="#__codelineno-105-12">12</a></span>
-<span class="normal"><a href="#__codelineno-105-13">13</a></span>
-<span class="normal"><a href="#__codelineno-105-14">14</a></span>
-<span class="normal"><a href="#__codelineno-105-15">15</a></span>
-<span class="normal"><a href="#__codelineno-105-16">16</a></span>
-<span class="normal"><a href="#__codelineno-105-17">17</a></span>
-<span class="normal"><a href="#__codelineno-105-18">18</a></span>
-<span class="normal"><a href="#__codelineno-105-19">19</a></span>
-<span class="normal"><a href="#__codelineno-105-20">20</a></span>
-<span class="normal"><a href="#__codelineno-105-21">21</a></span>
-<span class="normal"><a href="#__codelineno-105-22">22</a></span>
-<span class="normal"><a href="#__codelineno-105-23">23</a></span>
-<span class="normal"><a href="#__codelineno-105-24">24</a></span>
-<span class="normal"><a href="#__codelineno-105-25">25</a></span>
-<span class="normal"><a href="#__codelineno-105-26">26</a></span>
-<span class="normal"><a href="#__codelineno-105-27">27</a></span>
-<span class="normal"><a href="#__codelineno-105-28">28</a></span>
-<span class="normal"><a href="#__codelineno-105-29">29</a></span>
-<span class="normal"><a href="#__codelineno-105-30">30</a></span>
-<span class="normal"><a href="#__codelineno-105-31">31</a></span>
-<span class="normal"><a href="#__codelineno-105-32">32</a></span>
-<span class="normal"><a href="#__codelineno-105-33">33</a></span>
-<span class="normal"><a href="#__codelineno-105-34">34</a></span>
-<span class="normal"><a href="#__codelineno-105-35">35</a></span>
-<span class="normal"><a href="#__codelineno-105-36">36</a></span>
-<span class="normal"><a href="#__codelineno-105-37">37</a></span>
-<span class="normal"><a href="#__codelineno-105-38">38</a></span>
-<span class="normal"><a href="#__codelineno-105-39">39</a></span>
-<span class="normal"><a href="#__codelineno-105-40">40</a></span>
-<span class="normal"><a href="#__codelineno-105-41">41</a></span>
-<span class="normal"><a href="#__codelineno-105-42">42</a></span>
-<span class="normal"><a href="#__codelineno-105-43">43</a></span>
-<span class="normal"><a href="#__codelineno-105-44">44</a></span>
-<span class="normal"><a href="#__codelineno-105-45">45</a></span>
-<span class="normal"><a href="#__codelineno-105-46">46</a></span>
-<span class="normal"><a href="#__codelineno-105-47">47</a></span>
-<span class="normal"><a href="#__codelineno-105-48">48</a></span>
-<span class="normal"><a href="#__codelineno-105-49">49</a></span>
-<span class="normal"><a href="#__codelineno-105-50">50</a></span>
-<span class="normal"><a href="#__codelineno-105-51">51</a></span>
-<span class="normal"><a href="#__codelineno-105-52">52</a></span>
-<span class="normal"><a href="#__codelineno-105-53">53</a></span>
-<span class="normal"><a href="#__codelineno-105-54">54</a></span>
-<span class="normal"><a href="#__codelineno-105-55">55</a></span>
-<span class="normal"><a href="#__codelineno-105-56">56</a></span>
-<span class="normal"><a href="#__codelineno-105-57">57</a></span>
-<span class="normal"><a href="#__codelineno-105-58">58</a></span>
-<span class="normal"><a href="#__codelineno-105-59">59</a></span>
-<span class="normal"><a href="#__codelineno-105-60">60</a></span>
-<span class="normal"><a href="#__codelineno-105-61">61</a></span>
-<span class="normal"><a href="#__codelineno-105-62">62</a></span>
-<span class="normal"><a href="#__codelineno-105-63">63</a></span>
-<span class="normal"><a href="#__codelineno-105-64">64</a></span>
-<span class="normal"><a href="#__codelineno-105-65">65</a></span>
-<span class="normal"><a href="#__codelineno-105-66">66</a></span>
-<span class="normal"><a href="#__codelineno-105-67">67</a></span>
-<span class="normal"><a href="#__codelineno-105-68">68</a></span>
-<span class="normal"><a href="#__codelineno-105-69">69</a></span>
-<span class="normal"><a href="#__codelineno-105-70">70</a></span>
-<span class="normal"><a href="#__codelineno-105-71">71</a></span>
-<span class="normal"><a href="#__codelineno-105-72">72</a></span>
-<span class="normal"><a href="#__codelineno-105-73">73</a></span>
-<span class="normal"><a href="#__codelineno-105-74">74</a></span>
-<span class="normal"><a href="#__codelineno-105-75">75</a></span>
-<span class="normal"><a href="#__codelineno-105-76">76</a></span>
-<span class="normal"><a href="#__codelineno-105-77">77</a></span>
-<span class="normal"><a href="#__codelineno-105-78">78</a></span>
-<span class="normal"><a href="#__codelineno-105-79">79</a></span>
-<span class="normal"><a href="#__codelineno-105-80">80</a></span>
-<span class="normal"><a href="#__codelineno-105-81">81</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-105-1"><a id="__codelineno-105-1" name="__codelineno-105-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-105-2"><a id="__codelineno-105-2" name="__codelineno-105-2"></a><span class="w">    </span><span class="s">&quot;context&quot;</span>
-</span><span id="__span-105-3"><a id="__codelineno-105-3" name="__codelineno-105-3"></a><span class="w">    </span><span class="s">&quot;fmt&quot;</span>
-</span><span id="__span-105-4"><a id="__codelineno-105-4" name="__codelineno-105-4"></a><span class="w">    </span><span class="s">&quot;strings&quot;</span>
-</span><span id="__span-105-5"><a id="__codelineno-105-5" name="__codelineno-105-5"></a>
-</span><span id="__span-105-6"><a id="__codelineno-105-6" name="__codelineno-105-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/graph&quot;</span>
-</span><span id="__span-105-7"><a id="__codelineno-105-7" name="__codelineno-105-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/openai&quot;</span>
-</span><span id="__span-105-8"><a id="__codelineno-105-8" name="__codelineno-105-8"></a><span class="p">)</span>
-</span><span id="__span-105-9"><a id="__codelineno-105-9" name="__codelineno-105-9"></a>
-</span><span id="__span-105-10"><a id="__codelineno-105-10" name="__codelineno-105-10"></a><span class="kd">func</span><span class="w"> </span><span class="nx">buildApprovalWorkflow</span><span class="p">()</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">graph</span><span class="p">.</span><span class="nx">Graph</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-105-11"><a id="__codelineno-105-11" name="__codelineno-105-11"></a><span class="w">    </span><span class="nx">sg</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">NewStateGraph</span><span class="p">(</span><span class="nx">graph</span><span class="p">.</span><span class="nx">MessagesStateSchema</span><span class="p">())</span>
-</span><span id="__span-105-12"><a id="__codelineno-105-12" name="__codelineno-105-12"></a>
-</span><span id="__span-105-13"><a id="__codelineno-105-13" name="__codelineno-105-13"></a><span class="w">    </span><span class="c1">// AI 初审（定义 LLM 模型）</span>
-</span><span id="__span-105-14"><a id="__codelineno-105-14" name="__codelineno-105-14"></a><span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-105-15"><a id="__codelineno-105-15" name="__codelineno-105-15"></a><span class="w">        </span><span class="nx">modelNameApprove</span><span class="w">      </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;gpt-4o-mini&quot;</span>
-</span><span id="__span-105-16"><a id="__codelineno-105-16" name="__codelineno-105-16"></a><span class="w">        </span><span class="nx">promptApproveDecision</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;判断申请是否符合要求，回复 approve 或 reject&quot;</span>
-</span><span id="__span-105-17"><a id="__codelineno-105-17" name="__codelineno-105-17"></a>
-</span><span id="__span-105-18"><a id="__codelineno-105-18" name="__codelineno-105-18"></a><span class="w">        </span><span class="nx">nodeAIReview</span><span class="w">    </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;ai_review&quot;</span>
-</span><span id="__span-105-19"><a id="__codelineno-105-19" name="__codelineno-105-19"></a><span class="w">        </span><span class="nx">nodeHumanReview</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;human_review&quot;</span>
-</span><span id="__span-105-20"><a id="__codelineno-105-20" name="__codelineno-105-20"></a><span class="w">        </span><span class="nx">nodeApprove</span><span class="w">     </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;approve&quot;</span>
-</span><span id="__span-105-21"><a id="__codelineno-105-21" name="__codelineno-105-21"></a><span class="w">        </span><span class="nx">nodeReject</span><span class="w">      </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;reject&quot;</span>
-</span><span id="__span-105-22"><a id="__codelineno-105-22" name="__codelineno-105-22"></a>
-</span><span id="__span-105-23"><a id="__codelineno-105-23" name="__codelineno-105-23"></a><span class="w">        </span><span class="nx">routeHumanReview</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;route_human_review&quot;</span>
-</span><span id="__span-105-24"><a id="__codelineno-105-24" name="__codelineno-105-24"></a><span class="w">        </span><span class="nx">routeReject</span><span class="w">      </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;route_reject&quot;</span>
-</span><span id="__span-105-25"><a id="__codelineno-105-25" name="__codelineno-105-25"></a><span class="w">        </span><span class="nx">routeApprove</span><span class="w">     </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;route_approve&quot;</span>
-</span><span id="__span-105-26"><a id="__codelineno-105-26" name="__codelineno-105-26"></a>
-</span><span id="__span-105-27"><a id="__codelineno-105-27" name="__codelineno-105-27"></a><span class="w">        </span><span class="nx">stateKeyApplication</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;application&quot;</span>
-</span><span id="__span-105-28"><a id="__codelineno-105-28" name="__codelineno-105-28"></a><span class="w">        </span><span class="nx">stateKeyDecision</span><span class="w">    </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;decision&quot;</span>
-</span><span id="__span-105-29"><a id="__codelineno-105-29" name="__codelineno-105-29"></a><span class="w">    </span><span class="p">)</span>
-</span><span id="__span-105-30"><a id="__codelineno-105-30" name="__codelineno-105-30"></a>
-</span><span id="__span-105-31"><a id="__codelineno-105-31" name="__codelineno-105-31"></a><span class="w">    </span><span class="nx">llm</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">modelNameApprove</span><span class="p">)</span>
-</span><span id="__span-105-32"><a id="__codelineno-105-32" name="__codelineno-105-32"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">AddLLMNode</span><span class="p">(</span><span class="nx">nodeAIReview</span><span class="p">,</span><span class="w"> </span><span class="nx">llm</span><span class="p">,</span><span class="w"> </span><span class="nx">promptApproveDecision</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span><span class="p">)</span>
-</span><span id="__span-105-33"><a id="__codelineno-105-33" name="__codelineno-105-33"></a>
-</span><span id="__span-105-34"><a id="__codelineno-105-34" name="__codelineno-105-34"></a><span class="w">    </span><span class="c1">// 条件路由到人工审核或拒绝</span>
-</span><span id="__span-105-35"><a id="__codelineno-105-35" name="__codelineno-105-35"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">AddConditionalEdges</span><span class="p">(</span><span class="nx">nodeAIReview</span><span class="p">,</span>
-</span><span id="__span-105-36"><a id="__codelineno-105-36" name="__codelineno-105-36"></a><span class="w">        </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-105-37"><a id="__codelineno-105-37" name="__codelineno-105-37"></a><span class="w">            </span><span class="nx">resp</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">s</span><span class="p">[</span><span class="nx">graph</span><span class="p">.</span><span class="nx">StateKeyLastResponse</span><span class="p">].(</span><span class="kt">string</span><span class="p">)</span>
-</span><span id="__span-105-38"><a id="__codelineno-105-38" name="__codelineno-105-38"></a><span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="nx">strings</span><span class="p">.</span><span class="nx">Contains</span><span class="p">(</span><span class="nx">resp</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;approve&quot;</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-105-39"><a id="__codelineno-105-39" name="__codelineno-105-39"></a><span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="nx">routeHumanReview</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-105-40"><a id="__codelineno-105-40" name="__codelineno-105-40"></a><span class="w">            </span><span class="p">}</span>
-</span><span id="__span-105-41"><a id="__codelineno-105-41" name="__codelineno-105-41"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nx">routeReject</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-105-42"><a id="__codelineno-105-42" name="__codelineno-105-42"></a><span class="w">        </span><span class="p">},</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">string</span><span class="p">{</span>
-</span><span id="__span-105-43"><a id="__codelineno-105-43" name="__codelineno-105-43"></a><span class="w">            </span><span class="nx">routeHumanReview</span><span class="p">:</span><span class="w"> </span><span class="nx">nodeHumanReview</span><span class="p">,</span>
-</span><span id="__span-105-44"><a id="__codelineno-105-44" name="__codelineno-105-44"></a><span class="w">            </span><span class="nx">routeReject</span><span class="p">:</span><span class="w">      </span><span class="nx">nodeReject</span><span class="p">,</span>
-</span><span id="__span-105-45"><a id="__codelineno-105-45" name="__codelineno-105-45"></a><span class="w">        </span><span class="p">})</span>
-</span><span id="__span-105-46"><a id="__codelineno-105-46" name="__codelineno-105-46"></a>
-</span><span id="__span-105-47"><a id="__codelineno-105-47" name="__codelineno-105-47"></a><span class="w">    </span><span class="c1">// 人工审核节点</span>
-</span><span id="__span-105-48"><a id="__codelineno-105-48" name="__codelineno-105-48"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">AddNode</span><span class="p">(</span><span class="nx">nodeHumanReview</span><span class="p">,</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">any</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-105-49"><a id="__codelineno-105-49" name="__codelineno-105-49"></a><span class="w">        </span><span class="nx">app</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">s</span><span class="p">[</span><span class="nx">stateKeyApplication</span><span class="p">].(</span><span class="kt">string</span><span class="p">)</span>
-</span><span id="__span-105-50"><a id="__codelineno-105-50" name="__codelineno-105-50"></a><span class="w">        </span><span class="nx">decision</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">Interrupt</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;approval&quot;</span><span class="p">,</span>
-</span><span id="__span-105-51"><a id="__codelineno-105-51" name="__codelineno-105-51"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Sprintf</span><span class="p">(</span><span class="s">&quot;请审批: %s&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">app</span><span class="p">))</span>
-</span><span id="__span-105-52"><a id="__codelineno-105-52" name="__codelineno-105-52"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-105-53"><a id="__codelineno-105-53" name="__codelineno-105-53"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span>
-</span><span id="__span-105-54"><a id="__codelineno-105-54" name="__codelineno-105-54"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-105-55"><a id="__codelineno-105-55" name="__codelineno-105-55"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">{</span><span class="nx">stateKeyDecision</span><span class="p">:</span><span class="w"> </span><span class="nx">decision</span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-105-56"><a id="__codelineno-105-56" name="__codelineno-105-56"></a><span class="w">    </span><span class="p">})</span>
-</span><span id="__span-105-57"><a id="__codelineno-105-57" name="__codelineno-105-57"></a>
-</span><span id="__span-105-58"><a id="__codelineno-105-58" name="__codelineno-105-58"></a><span class="w">    </span><span class="c1">// 结果处理</span>
-</span><span id="__span-105-59"><a id="__codelineno-105-59" name="__codelineno-105-59"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">AddNode</span><span class="p">(</span><span class="nx">nodeApprove</span><span class="p">,</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">any</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-105-60"><a id="__codelineno-105-60" name="__codelineno-105-60"></a><span class="w">        </span><span class="c1">// 执行批准逻辑</span>
-</span><span id="__span-105-61"><a id="__codelineno-105-61" name="__codelineno-105-61"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">{</span><span class="s">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;approved&quot;</span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-105-62"><a id="__codelineno-105-62" name="__codelineno-105-62"></a><span class="w">    </span><span class="p">})</span>
-</span><span id="__span-105-63"><a id="__codelineno-105-63" name="__codelineno-105-63"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">AddNode</span><span class="p">(</span><span class="nx">nodeReject</span><span class="p">,</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">any</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-105-64"><a id="__codelineno-105-64" name="__codelineno-105-64"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">{</span><span class="s">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;rejected&quot;</span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-105-65"><a id="__codelineno-105-65" name="__codelineno-105-65"></a><span class="w">    </span><span class="p">})</span>
-</span><span id="__span-105-66"><a id="__codelineno-105-66" name="__codelineno-105-66"></a>
-</span><span id="__span-105-67"><a id="__codelineno-105-67" name="__codelineno-105-67"></a><span class="w">    </span><span class="c1">// 配置流程</span>
-</span><span id="__span-105-68"><a id="__codelineno-105-68" name="__codelineno-105-68"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">SetEntryPoint</span><span class="p">(</span><span class="nx">nodeAIReview</span><span class="p">)</span>
-</span><span id="__span-105-69"><a id="__codelineno-105-69" name="__codelineno-105-69"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">AddConditionalEdges</span><span class="p">(</span><span class="nx">nodeHumanReview</span><span class="p">,</span>
-</span><span id="__span-105-70"><a id="__codelineno-105-70" name="__codelineno-105-70"></a><span class="w">        </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-105-71"><a id="__codelineno-105-71" name="__codelineno-105-71"></a><span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="nx">s</span><span class="p">[</span><span class="nx">stateKeyDecision</span><span class="p">]</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s">&quot;approve&quot;</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-105-72"><a id="__codelineno-105-72" name="__codelineno-105-72"></a><span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="nx">routeApprove</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-105-73"><a id="__codelineno-105-73" name="__codelineno-105-73"></a><span class="w">            </span><span class="p">}</span>
-</span><span id="__span-105-74"><a id="__codelineno-105-74" name="__codelineno-105-74"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nx">routeReject</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-105-75"><a id="__codelineno-105-75" name="__codelineno-105-75"></a><span class="w">        </span><span class="p">},</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">string</span><span class="p">{</span>
-</span><span id="__span-105-76"><a id="__codelineno-105-76" name="__codelineno-105-76"></a><span class="w">            </span><span class="nx">routeApprove</span><span class="p">:</span><span class="w"> </span><span class="nx">nodeApprove</span><span class="p">,</span>
-</span><span id="__span-105-77"><a id="__codelineno-105-77" name="__codelineno-105-77"></a><span class="w">            </span><span class="nx">routeReject</span><span class="p">:</span><span class="w">  </span><span class="nx">nodeReject</span><span class="p">,</span>
-</span><span id="__span-105-78"><a id="__codelineno-105-78" name="__codelineno-105-78"></a><span class="w">        </span><span class="p">})</span>
-</span><span id="__span-105-79"><a id="__codelineno-105-79" name="__codelineno-105-79"></a>
-</span><span id="__span-105-80"><a id="__codelineno-105-80" name="__codelineno-105-80"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">sg</span><span class="p">.</span><span class="nx">Compile</span><span class="p">()</span>
-</span><span id="__span-105-81"><a id="__codelineno-105-81" name="__codelineno-105-81"></a><span class="p">}</span>
+<h2 id="_44">实际案例</h2>
+<h3 id="_45">审批工作流</h3>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-106-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-106-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-106-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-106-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-106-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-106-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-106-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-106-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-106-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-106-10">10</a></span>
+<span class="normal"><a href="#__codelineno-106-11">11</a></span>
+<span class="normal"><a href="#__codelineno-106-12">12</a></span>
+<span class="normal"><a href="#__codelineno-106-13">13</a></span>
+<span class="normal"><a href="#__codelineno-106-14">14</a></span>
+<span class="normal"><a href="#__codelineno-106-15">15</a></span>
+<span class="normal"><a href="#__codelineno-106-16">16</a></span>
+<span class="normal"><a href="#__codelineno-106-17">17</a></span>
+<span class="normal"><a href="#__codelineno-106-18">18</a></span>
+<span class="normal"><a href="#__codelineno-106-19">19</a></span>
+<span class="normal"><a href="#__codelineno-106-20">20</a></span>
+<span class="normal"><a href="#__codelineno-106-21">21</a></span>
+<span class="normal"><a href="#__codelineno-106-22">22</a></span>
+<span class="normal"><a href="#__codelineno-106-23">23</a></span>
+<span class="normal"><a href="#__codelineno-106-24">24</a></span>
+<span class="normal"><a href="#__codelineno-106-25">25</a></span>
+<span class="normal"><a href="#__codelineno-106-26">26</a></span>
+<span class="normal"><a href="#__codelineno-106-27">27</a></span>
+<span class="normal"><a href="#__codelineno-106-28">28</a></span>
+<span class="normal"><a href="#__codelineno-106-29">29</a></span>
+<span class="normal"><a href="#__codelineno-106-30">30</a></span>
+<span class="normal"><a href="#__codelineno-106-31">31</a></span>
+<span class="normal"><a href="#__codelineno-106-32">32</a></span>
+<span class="normal"><a href="#__codelineno-106-33">33</a></span>
+<span class="normal"><a href="#__codelineno-106-34">34</a></span>
+<span class="normal"><a href="#__codelineno-106-35">35</a></span>
+<span class="normal"><a href="#__codelineno-106-36">36</a></span>
+<span class="normal"><a href="#__codelineno-106-37">37</a></span>
+<span class="normal"><a href="#__codelineno-106-38">38</a></span>
+<span class="normal"><a href="#__codelineno-106-39">39</a></span>
+<span class="normal"><a href="#__codelineno-106-40">40</a></span>
+<span class="normal"><a href="#__codelineno-106-41">41</a></span>
+<span class="normal"><a href="#__codelineno-106-42">42</a></span>
+<span class="normal"><a href="#__codelineno-106-43">43</a></span>
+<span class="normal"><a href="#__codelineno-106-44">44</a></span>
+<span class="normal"><a href="#__codelineno-106-45">45</a></span>
+<span class="normal"><a href="#__codelineno-106-46">46</a></span>
+<span class="normal"><a href="#__codelineno-106-47">47</a></span>
+<span class="normal"><a href="#__codelineno-106-48">48</a></span>
+<span class="normal"><a href="#__codelineno-106-49">49</a></span>
+<span class="normal"><a href="#__codelineno-106-50">50</a></span>
+<span class="normal"><a href="#__codelineno-106-51">51</a></span>
+<span class="normal"><a href="#__codelineno-106-52">52</a></span>
+<span class="normal"><a href="#__codelineno-106-53">53</a></span>
+<span class="normal"><a href="#__codelineno-106-54">54</a></span>
+<span class="normal"><a href="#__codelineno-106-55">55</a></span>
+<span class="normal"><a href="#__codelineno-106-56">56</a></span>
+<span class="normal"><a href="#__codelineno-106-57">57</a></span>
+<span class="normal"><a href="#__codelineno-106-58">58</a></span>
+<span class="normal"><a href="#__codelineno-106-59">59</a></span>
+<span class="normal"><a href="#__codelineno-106-60">60</a></span>
+<span class="normal"><a href="#__codelineno-106-61">61</a></span>
+<span class="normal"><a href="#__codelineno-106-62">62</a></span>
+<span class="normal"><a href="#__codelineno-106-63">63</a></span>
+<span class="normal"><a href="#__codelineno-106-64">64</a></span>
+<span class="normal"><a href="#__codelineno-106-65">65</a></span>
+<span class="normal"><a href="#__codelineno-106-66">66</a></span>
+<span class="normal"><a href="#__codelineno-106-67">67</a></span>
+<span class="normal"><a href="#__codelineno-106-68">68</a></span>
+<span class="normal"><a href="#__codelineno-106-69">69</a></span>
+<span class="normal"><a href="#__codelineno-106-70">70</a></span>
+<span class="normal"><a href="#__codelineno-106-71">71</a></span>
+<span class="normal"><a href="#__codelineno-106-72">72</a></span>
+<span class="normal"><a href="#__codelineno-106-73">73</a></span>
+<span class="normal"><a href="#__codelineno-106-74">74</a></span>
+<span class="normal"><a href="#__codelineno-106-75">75</a></span>
+<span class="normal"><a href="#__codelineno-106-76">76</a></span>
+<span class="normal"><a href="#__codelineno-106-77">77</a></span>
+<span class="normal"><a href="#__codelineno-106-78">78</a></span>
+<span class="normal"><a href="#__codelineno-106-79">79</a></span>
+<span class="normal"><a href="#__codelineno-106-80">80</a></span>
+<span class="normal"><a href="#__codelineno-106-81">81</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-106-1"><a id="__codelineno-106-1" name="__codelineno-106-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-106-2"><a id="__codelineno-106-2" name="__codelineno-106-2"></a><span class="w">    </span><span class="s">&quot;context&quot;</span>
+</span><span id="__span-106-3"><a id="__codelineno-106-3" name="__codelineno-106-3"></a><span class="w">    </span><span class="s">&quot;fmt&quot;</span>
+</span><span id="__span-106-4"><a id="__codelineno-106-4" name="__codelineno-106-4"></a><span class="w">    </span><span class="s">&quot;strings&quot;</span>
+</span><span id="__span-106-5"><a id="__codelineno-106-5" name="__codelineno-106-5"></a>
+</span><span id="__span-106-6"><a id="__codelineno-106-6" name="__codelineno-106-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/graph&quot;</span>
+</span><span id="__span-106-7"><a id="__codelineno-106-7" name="__codelineno-106-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/openai&quot;</span>
+</span><span id="__span-106-8"><a id="__codelineno-106-8" name="__codelineno-106-8"></a><span class="p">)</span>
+</span><span id="__span-106-9"><a id="__codelineno-106-9" name="__codelineno-106-9"></a>
+</span><span id="__span-106-10"><a id="__codelineno-106-10" name="__codelineno-106-10"></a><span class="kd">func</span><span class="w"> </span><span class="nx">buildApprovalWorkflow</span><span class="p">()</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">graph</span><span class="p">.</span><span class="nx">Graph</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-106-11"><a id="__codelineno-106-11" name="__codelineno-106-11"></a><span class="w">    </span><span class="nx">sg</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">NewStateGraph</span><span class="p">(</span><span class="nx">graph</span><span class="p">.</span><span class="nx">MessagesStateSchema</span><span class="p">())</span>
+</span><span id="__span-106-12"><a id="__codelineno-106-12" name="__codelineno-106-12"></a>
+</span><span id="__span-106-13"><a id="__codelineno-106-13" name="__codelineno-106-13"></a><span class="w">    </span><span class="c1">// AI 初审（定义 LLM 模型）</span>
+</span><span id="__span-106-14"><a id="__codelineno-106-14" name="__codelineno-106-14"></a><span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-106-15"><a id="__codelineno-106-15" name="__codelineno-106-15"></a><span class="w">        </span><span class="nx">modelNameApprove</span><span class="w">      </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;gpt-4o-mini&quot;</span>
+</span><span id="__span-106-16"><a id="__codelineno-106-16" name="__codelineno-106-16"></a><span class="w">        </span><span class="nx">promptApproveDecision</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;判断申请是否符合要求，回复 approve 或 reject&quot;</span>
+</span><span id="__span-106-17"><a id="__codelineno-106-17" name="__codelineno-106-17"></a>
+</span><span id="__span-106-18"><a id="__codelineno-106-18" name="__codelineno-106-18"></a><span class="w">        </span><span class="nx">nodeAIReview</span><span class="w">    </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;ai_review&quot;</span>
+</span><span id="__span-106-19"><a id="__codelineno-106-19" name="__codelineno-106-19"></a><span class="w">        </span><span class="nx">nodeHumanReview</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;human_review&quot;</span>
+</span><span id="__span-106-20"><a id="__codelineno-106-20" name="__codelineno-106-20"></a><span class="w">        </span><span class="nx">nodeApprove</span><span class="w">     </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;approve&quot;</span>
+</span><span id="__span-106-21"><a id="__codelineno-106-21" name="__codelineno-106-21"></a><span class="w">        </span><span class="nx">nodeReject</span><span class="w">      </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;reject&quot;</span>
+</span><span id="__span-106-22"><a id="__codelineno-106-22" name="__codelineno-106-22"></a>
+</span><span id="__span-106-23"><a id="__codelineno-106-23" name="__codelineno-106-23"></a><span class="w">        </span><span class="nx">routeHumanReview</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;route_human_review&quot;</span>
+</span><span id="__span-106-24"><a id="__codelineno-106-24" name="__codelineno-106-24"></a><span class="w">        </span><span class="nx">routeReject</span><span class="w">      </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;route_reject&quot;</span>
+</span><span id="__span-106-25"><a id="__codelineno-106-25" name="__codelineno-106-25"></a><span class="w">        </span><span class="nx">routeApprove</span><span class="w">     </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;route_approve&quot;</span>
+</span><span id="__span-106-26"><a id="__codelineno-106-26" name="__codelineno-106-26"></a>
+</span><span id="__span-106-27"><a id="__codelineno-106-27" name="__codelineno-106-27"></a><span class="w">        </span><span class="nx">stateKeyApplication</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;application&quot;</span>
+</span><span id="__span-106-28"><a id="__codelineno-106-28" name="__codelineno-106-28"></a><span class="w">        </span><span class="nx">stateKeyDecision</span><span class="w">    </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;decision&quot;</span>
+</span><span id="__span-106-29"><a id="__codelineno-106-29" name="__codelineno-106-29"></a><span class="w">    </span><span class="p">)</span>
+</span><span id="__span-106-30"><a id="__codelineno-106-30" name="__codelineno-106-30"></a>
+</span><span id="__span-106-31"><a id="__codelineno-106-31" name="__codelineno-106-31"></a><span class="w">    </span><span class="nx">llm</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">modelNameApprove</span><span class="p">)</span>
+</span><span id="__span-106-32"><a id="__codelineno-106-32" name="__codelineno-106-32"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">AddLLMNode</span><span class="p">(</span><span class="nx">nodeAIReview</span><span class="p">,</span><span class="w"> </span><span class="nx">llm</span><span class="p">,</span><span class="w"> </span><span class="nx">promptApproveDecision</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span><span class="p">)</span>
+</span><span id="__span-106-33"><a id="__codelineno-106-33" name="__codelineno-106-33"></a>
+</span><span id="__span-106-34"><a id="__codelineno-106-34" name="__codelineno-106-34"></a><span class="w">    </span><span class="c1">// 条件路由到人工审核或拒绝</span>
+</span><span id="__span-106-35"><a id="__codelineno-106-35" name="__codelineno-106-35"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">AddConditionalEdges</span><span class="p">(</span><span class="nx">nodeAIReview</span><span class="p">,</span>
+</span><span id="__span-106-36"><a id="__codelineno-106-36" name="__codelineno-106-36"></a><span class="w">        </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-106-37"><a id="__codelineno-106-37" name="__codelineno-106-37"></a><span class="w">            </span><span class="nx">resp</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">s</span><span class="p">[</span><span class="nx">graph</span><span class="p">.</span><span class="nx">StateKeyLastResponse</span><span class="p">].(</span><span class="kt">string</span><span class="p">)</span>
+</span><span id="__span-106-38"><a id="__codelineno-106-38" name="__codelineno-106-38"></a><span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="nx">strings</span><span class="p">.</span><span class="nx">Contains</span><span class="p">(</span><span class="nx">resp</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;approve&quot;</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-106-39"><a id="__codelineno-106-39" name="__codelineno-106-39"></a><span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="nx">routeHumanReview</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-106-40"><a id="__codelineno-106-40" name="__codelineno-106-40"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-106-41"><a id="__codelineno-106-41" name="__codelineno-106-41"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nx">routeReject</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-106-42"><a id="__codelineno-106-42" name="__codelineno-106-42"></a><span class="w">        </span><span class="p">},</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">string</span><span class="p">{</span>
+</span><span id="__span-106-43"><a id="__codelineno-106-43" name="__codelineno-106-43"></a><span class="w">            </span><span class="nx">routeHumanReview</span><span class="p">:</span><span class="w"> </span><span class="nx">nodeHumanReview</span><span class="p">,</span>
+</span><span id="__span-106-44"><a id="__codelineno-106-44" name="__codelineno-106-44"></a><span class="w">            </span><span class="nx">routeReject</span><span class="p">:</span><span class="w">      </span><span class="nx">nodeReject</span><span class="p">,</span>
+</span><span id="__span-106-45"><a id="__codelineno-106-45" name="__codelineno-106-45"></a><span class="w">        </span><span class="p">})</span>
+</span><span id="__span-106-46"><a id="__codelineno-106-46" name="__codelineno-106-46"></a>
+</span><span id="__span-106-47"><a id="__codelineno-106-47" name="__codelineno-106-47"></a><span class="w">    </span><span class="c1">// 人工审核节点</span>
+</span><span id="__span-106-48"><a id="__codelineno-106-48" name="__codelineno-106-48"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">AddNode</span><span class="p">(</span><span class="nx">nodeHumanReview</span><span class="p">,</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">any</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-106-49"><a id="__codelineno-106-49" name="__codelineno-106-49"></a><span class="w">        </span><span class="nx">app</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">s</span><span class="p">[</span><span class="nx">stateKeyApplication</span><span class="p">].(</span><span class="kt">string</span><span class="p">)</span>
+</span><span id="__span-106-50"><a id="__codelineno-106-50" name="__codelineno-106-50"></a><span class="w">        </span><span class="nx">decision</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">Interrupt</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;approval&quot;</span><span class="p">,</span>
+</span><span id="__span-106-51"><a id="__codelineno-106-51" name="__codelineno-106-51"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Sprintf</span><span class="p">(</span><span class="s">&quot;请审批: %s&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">app</span><span class="p">))</span>
+</span><span id="__span-106-52"><a id="__codelineno-106-52" name="__codelineno-106-52"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-106-53"><a id="__codelineno-106-53" name="__codelineno-106-53"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-106-54"><a id="__codelineno-106-54" name="__codelineno-106-54"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-106-55"><a id="__codelineno-106-55" name="__codelineno-106-55"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">{</span><span class="nx">stateKeyDecision</span><span class="p">:</span><span class="w"> </span><span class="nx">decision</span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-106-56"><a id="__codelineno-106-56" name="__codelineno-106-56"></a><span class="w">    </span><span class="p">})</span>
+</span><span id="__span-106-57"><a id="__codelineno-106-57" name="__codelineno-106-57"></a>
+</span><span id="__span-106-58"><a id="__codelineno-106-58" name="__codelineno-106-58"></a><span class="w">    </span><span class="c1">// 结果处理</span>
+</span><span id="__span-106-59"><a id="__codelineno-106-59" name="__codelineno-106-59"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">AddNode</span><span class="p">(</span><span class="nx">nodeApprove</span><span class="p">,</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">any</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-106-60"><a id="__codelineno-106-60" name="__codelineno-106-60"></a><span class="w">        </span><span class="c1">// 执行批准逻辑</span>
+</span><span id="__span-106-61"><a id="__codelineno-106-61" name="__codelineno-106-61"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">{</span><span class="s">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;approved&quot;</span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-106-62"><a id="__codelineno-106-62" name="__codelineno-106-62"></a><span class="w">    </span><span class="p">})</span>
+</span><span id="__span-106-63"><a id="__codelineno-106-63" name="__codelineno-106-63"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">AddNode</span><span class="p">(</span><span class="nx">nodeReject</span><span class="p">,</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">any</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-106-64"><a id="__codelineno-106-64" name="__codelineno-106-64"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">{</span><span class="s">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;rejected&quot;</span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-106-65"><a id="__codelineno-106-65" name="__codelineno-106-65"></a><span class="w">    </span><span class="p">})</span>
+</span><span id="__span-106-66"><a id="__codelineno-106-66" name="__codelineno-106-66"></a>
+</span><span id="__span-106-67"><a id="__codelineno-106-67" name="__codelineno-106-67"></a><span class="w">    </span><span class="c1">// 配置流程</span>
+</span><span id="__span-106-68"><a id="__codelineno-106-68" name="__codelineno-106-68"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">SetEntryPoint</span><span class="p">(</span><span class="nx">nodeAIReview</span><span class="p">)</span>
+</span><span id="__span-106-69"><a id="__codelineno-106-69" name="__codelineno-106-69"></a><span class="w">    </span><span class="nx">sg</span><span class="p">.</span><span class="nx">AddConditionalEdges</span><span class="p">(</span><span class="nx">nodeHumanReview</span><span class="p">,</span>
+</span><span id="__span-106-70"><a id="__codelineno-106-70" name="__codelineno-106-70"></a><span class="w">        </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-106-71"><a id="__codelineno-106-71" name="__codelineno-106-71"></a><span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="nx">s</span><span class="p">[</span><span class="nx">stateKeyDecision</span><span class="p">]</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s">&quot;approve&quot;</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-106-72"><a id="__codelineno-106-72" name="__codelineno-106-72"></a><span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="nx">routeApprove</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-106-73"><a id="__codelineno-106-73" name="__codelineno-106-73"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-106-74"><a id="__codelineno-106-74" name="__codelineno-106-74"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nx">routeReject</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-106-75"><a id="__codelineno-106-75" name="__codelineno-106-75"></a><span class="w">        </span><span class="p">},</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">string</span><span class="p">{</span>
+</span><span id="__span-106-76"><a id="__codelineno-106-76" name="__codelineno-106-76"></a><span class="w">            </span><span class="nx">routeApprove</span><span class="p">:</span><span class="w"> </span><span class="nx">nodeApprove</span><span class="p">,</span>
+</span><span id="__span-106-77"><a id="__codelineno-106-77" name="__codelineno-106-77"></a><span class="w">            </span><span class="nx">routeReject</span><span class="p">:</span><span class="w">  </span><span class="nx">nodeReject</span><span class="p">,</span>
+</span><span id="__span-106-78"><a id="__codelineno-106-78" name="__codelineno-106-78"></a><span class="w">        </span><span class="p">})</span>
+</span><span id="__span-106-79"><a id="__codelineno-106-79" name="__codelineno-106-79"></a>
+</span><span id="__span-106-80"><a id="__codelineno-106-80" name="__codelineno-106-80"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">sg</span><span class="p">.</span><span class="nx">Compile</span><span class="p">()</span>
+</span><span id="__span-106-81"><a id="__codelineno-106-81" name="__codelineno-106-81"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<h2 id="_45">总结</h2>
+<h2 id="_46">总结</h2>
 <p>本文介绍了 <code>graph</code> 包与 GraphAgent 的核心用法：如何声明节点与路由、如何通过 Schema 与 Reducer 安全合并状态、以及如何利用事件、检查点与中断实现可观测与可恢复。对于结构化流程（审批、内容审核、分步数据处理等），Graph 提供稳定、可审计的执行路径；对于需要智能决策的环节，可通过 LLM 节点与子 Agent 灵活扩展。</p>
-<h2 id="_46">参考与示例</h2>
+<h2 id="_47">参考与示例</h2>
 <ul>
 <li>代码仓库: https://github.com/trpc-group/trpc-agent-go</li>
 <li>Graph 示例: <code>examples/graph</code> 目录（基础/并行/多轮/中断与恢复等）<ul>
@@ -10539,7 +10640,7 @@ resume 时的确定性 rerun。</li>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年3月5日 14:48:44 UTC">2026-03-05 14:48:44</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年3月5日 14:50:31 UTC">2026-03-05 14:50:31</span>
   </span>
 
     
