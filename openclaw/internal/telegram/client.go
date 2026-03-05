@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -443,12 +444,10 @@ func (c *Client) DownloadFile(
 	}
 	defer resp.Body.Close()
 
-	if resp.ContentLength > maxBytes && resp.ContentLength > 0 {
-		return nil, ErrFileTooLarge
-	}
-
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		raw, err := readLimited(resp.Body, maxErrorBodyBytes)
+		raw, err := io.ReadAll(
+			io.LimitReader(resp.Body, maxErrorBodyBytes),
+		)
 		if err != nil {
 			return nil, fmt.Errorf("telegram: read response: %w", err)
 		}
@@ -458,6 +457,9 @@ func (c *Client) DownloadFile(
 		}
 	}
 
+	if resp.ContentLength > maxBytes && resp.ContentLength > 0 {
+		return nil, ErrFileTooLarge
+	}
 	return readLimited(resp.Body, maxBytes)
 }
 
@@ -615,9 +617,9 @@ func readLimited(r io.Reader, maxBytes int64) ([]byte, error) {
 		return nil, errors.New(errInvalidMaxBytes)
 	}
 
-	limit := maxBytes + 1
-	if limit <= 0 {
-		return nil, errors.New(errInvalidMaxBytes)
+	limit := maxBytes
+	if maxBytes < math.MaxInt64 {
+		limit = maxBytes + 1
 	}
 
 	lr := &io.LimitedReader{R: r, N: limit}

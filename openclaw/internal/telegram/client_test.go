@@ -621,6 +621,46 @@ func TestClient_DownloadFile_StatusError(t *testing.T) {
 	require.Equal(t, errBody, se.body)
 }
 
+func TestClient_DownloadFile_StatusError_LargeBody(t *testing.T) {
+	t.Parallel()
+
+	const filePath = "photos/file_1.jpg"
+
+	errBody := strings.Repeat(
+		"x",
+		int(maxErrorBodyBytes)+10,
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		_ *http.Request,
+	) {
+		w.Header().Set(
+			"Content-Length",
+			strconv.Itoa(len(errBody)),
+		)
+		w.WriteHeader(http.StatusTeapot)
+		_, _ = io.WriteString(w, errBody)
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := New(
+		testToken,
+		WithBaseURL(srv.URL),
+		WithHTTPClient(srv.Client()),
+	)
+	require.NoError(t, err)
+
+	_, err = c.DownloadFile(context.Background(), filePath, 1)
+	require.Error(t, err)
+	require.False(t, errors.Is(err, ErrFileTooLarge))
+
+	var se statusError
+	require.True(t, errors.As(err, &se))
+	require.Equal(t, http.StatusTeapot, se.status)
+	require.Len(t, se.body, int(maxErrorBodyBytes))
+}
+
 func TestClient_DownloadFileByID_EmptyFilePath(t *testing.T) {
 	t.Parallel()
 
@@ -663,9 +703,9 @@ func TestReadLimited_Errors(t *testing.T) {
 	require.Contains(t, err.Error(), errInvalidMaxBytes)
 
 	const maxInt64 = int64(^uint64(0) >> 1)
-	_, err = readLimited(strings.NewReader(""), maxInt64)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), errInvalidMaxBytes)
+	data, err := readLimited(strings.NewReader(""), maxInt64)
+	require.NoError(t, err)
+	require.Empty(t, data)
 }
 
 func TestValidateResponse_RetryAfter(t *testing.T) {
