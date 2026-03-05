@@ -17,6 +17,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/hook"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -26,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session/redis/internal/util"
 	"trpc.group/trpc-go/trpc-agent-go/session/redis/internal/zset"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/redis"
+	atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
 
 var (
@@ -75,6 +78,19 @@ func (s *Service) compatEnabled() bool {
 //   - Reads route based on actual session location (hashidx or zset)
 func (s *Service) transitionEnabled() bool {
 	return s.opts.compatMode == CompatModeTransition
+}
+
+func (s *Service) startSpan(ctx context.Context, name string, key session.Key) (context.Context, trace.Span) {
+	if !s.opts.enableTracing {
+		return ctx, trace.SpanFromContext(ctx)
+	}
+	ctx, span := atrace.Tracer.Start(ctx, name)
+	span.SetAttributes(
+		attribute.String("app_name", key.AppName),
+		attribute.String("user_id", key.UserID),
+		attribute.String("session_id", key.SessionID),
+	)
+	return ctx, span
 }
 
 // NewService creates a new redis session service.
@@ -211,6 +227,9 @@ func (s *Service) CreateSession(
 	state session.StateMap,
 	opts ...session.Option,
 ) (*session.Session, error) {
+	ctx, span := s.startSpan(ctx, "create_session", key)
+	defer span.End()
+
 	if err := key.CheckUserKey(); err != nil {
 		return nil, err
 	}
@@ -230,8 +249,10 @@ func (s *Service) CreateSession(
 				return nil, fmt.Errorf("get existing session: %w", err)
 			}
 			if sess != nil {
-				log.InfofContext(ctx, "create_session: app=%s user=%s session=%s storage=%s (existing)",
-					key.AppName, key.UserID, key.SessionID, storageType)
+				span.SetAttributes(
+					attribute.String("storage", storageType),
+					attribute.Bool("existing", true),
+				)
 				return sess, nil
 			}
 		}
@@ -252,8 +273,7 @@ func (s *Service) CreateSession(
 		if err != nil {
 			return nil, err
 		}
-		log.InfofContext(ctx, "create_session: app=%s user=%s session=%s storage=zset",
-			key.AppName, key.UserID, key.SessionID)
+		span.SetAttributes(attribute.String("storage", util.StorageTypeZset))
 		return sess, nil
 	}
 
@@ -268,8 +288,7 @@ func (s *Service) CreateSession(
 	if err != nil {
 		return nil, err
 	}
-	log.InfofContext(ctx, "create_session: app=%s user=%s session=%s storage=hashidx",
-		key.AppName, key.UserID, key.SessionID)
+	span.SetAttributes(attribute.String("storage", util.StorageTypeHashIdx))
 	return sess, nil
 }
 
@@ -324,6 +343,9 @@ func (s *Service) GetSession(
 	key session.Key,
 	opts ...session.Option,
 ) (*session.Session, error) {
+	ctx, span := s.startSpan(ctx, "get_session", key)
+	defer span.End()
+
 	if err := key.CheckSessionKey(); err != nil {
 		return nil, err
 	}
@@ -345,8 +367,7 @@ func (s *Service) GetSession(
 			return nil, err
 		}
 		if sess != nil {
-			log.InfofContext(c.Context, "get_session: app=%s user=%s session=%s storage=%s",
-				c.Key.AppName, c.Key.UserID, c.Key.SessionID, storageType)
+			span.SetAttributes(attribute.String("storage", storageType))
 		}
 		return sess, nil
 	}
@@ -452,6 +473,9 @@ func (s *Service) DeleteSession(
 	key session.Key,
 	opts ...session.Option,
 ) error {
+	ctx, span := s.startSpan(ctx, "delete_session", key)
+	defer span.End()
+
 	if err := key.CheckSessionKey(); err != nil {
 		return err
 	}
@@ -532,7 +556,6 @@ func (s *Service) appendEventInternal(
 		}()
 
 		ver := getSessionVersion(sess)
-
 		index := sess.Hash % len(s.eventPairChans)
 		select {
 		case s.eventPairChans[index] <- &sessionEventPair{key: key, event: e, version: ver}:
@@ -556,6 +579,9 @@ func getSessionVersion(sess *session.Session) string {
 }
 
 func (s *Service) persistEvent(ctx context.Context, ver string, e *event.Event, key session.Key) error {
+	ctx, span := s.startSpan(ctx, "append_event", key)
+	defer span.End()
+
 	// fast path: use version tag
 	switch ver {
 	case util.StorageTypeHashIdx:
@@ -564,7 +590,7 @@ func (s *Service) persistEvent(ctx context.Context, ver string, e *event.Event, 
 			log.WarnfContext(ctx, "append_event failed: storage=hashidx err=%v", err)
 			return err
 		}
-		log.InfofContext(ctx, "append_event: session=%s storage=hashidx", key.SessionID)
+		span.SetAttributes(attribute.String("storage", util.StorageTypeHashIdx))
 		return nil
 	case util.StorageTypeZset:
 		err := s.zsetClient.AppendEvent(ctx, key, e)
@@ -572,7 +598,7 @@ func (s *Service) persistEvent(ctx context.Context, ver string, e *event.Event, 
 			log.WarnfContext(ctx, "append_event failed: storage=zset err=%v", err)
 			return err
 		}
-		log.InfofContext(ctx, "append_event: session=%s storage=zset", key.SessionID)
+		span.SetAttributes(attribute.String("storage", util.StorageTypeZset))
 		return nil
 	}
 
@@ -588,7 +614,7 @@ func (s *Service) persistEvent(ctx context.Context, ver string, e *event.Event, 
 			log.WarnfContext(ctx, "append_event failed: storage=zset err=%v", err)
 			return err
 		}
-		log.InfofContext(ctx, "append_event: session=%s storage=zset", key.SessionID)
+		span.SetAttributes(attribute.String("storage", util.StorageTypeZset))
 		return nil
 	}
 	if hashidxExists {
@@ -597,7 +623,7 @@ func (s *Service) persistEvent(ctx context.Context, ver string, e *event.Event, 
 			log.WarnfContext(ctx, "append_event failed: storage=hashidx err=%v", err)
 			return err
 		}
-		log.InfofContext(ctx, "append_event: session=%s storage=hashidx", key.SessionID)
+		span.SetAttributes(attribute.String("storage", util.StorageTypeHashIdx))
 		return nil
 	}
 

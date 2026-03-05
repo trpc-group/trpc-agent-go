@@ -33,6 +33,9 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 	}
 
 	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
+	ctx, span := s.startSpan(ctx, "create_session_summary", key)
+	defer span.End()
+
 	if err := key.CheckSessionKey(); err != nil {
 		return fmt.Errorf("check session key failed: %w", err)
 	}
@@ -87,6 +90,9 @@ func (s *Service) GetSessionSummaryText(ctx context.Context, sess *session.Sessi
 	}
 
 	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
+	ctx, span := s.startSpan(ctx, "get_session_summary_text", key)
+	defer span.End()
+
 	if err := key.CheckSessionKey(); err != nil {
 		return "", false
 	}

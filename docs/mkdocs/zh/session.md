@@ -587,6 +587,25 @@ defer sessionService.Close()
 - **`WithSummaryQueueSize(size int)`**：设置摘要任务队列大小。默认值为 100。
 - **`WithSummaryJobTimeout(timeout time.Duration)`**：设置单个摘要任务超时时间。默认值为 60 秒。
 
+**链路追踪配置：**
+
+- **`WithEnableTracing(enable bool)`**：启用 OpenTelemetry 链路追踪。默认值为 `false`。启用后，`CreateSession`、`GetSession`、`AppendEvent`、`DeleteSession`、`AppendTrackEvent`、`CreateSessionSummary`、`GetSessionSummaryText` 等操作会自动创建 span。
+
+!!! note "关于 Root Span"
+    Session 的操作由 Runner 执行，发生在 Agent 的 `Run()` 调用前后。而 Agent 的 root span 是在 `agent.Run()` 内部创建的，Session span 不会自动挂载到 Agent span 下。因此，如果需要在 Langfuse 等可观测平台中看到完整的 Session span 链路，需要在调用 `runner.Run()` 之前手动创建一个 root span：
+
+    ```go
+    import atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
+
+    // Create a root span before runner.Run(), so that session spans
+    // (create_session, get_session, append_event, etc.) become children
+    // of this root span via context propagation.
+    ctx, span := atrace.Tracer.Start(ctx, "my_request")
+    defer span.End()
+
+    eventChan, err := r.Run(ctx, userID, sessionID, message)
+    ```
+
 **Hook 配置：**
 
 - **`WithAppendEventHook(hooks ...session.AppendEventHook)`**：添加 `AppendEvent` 钩子。

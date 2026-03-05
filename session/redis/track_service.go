@@ -35,6 +35,9 @@ func (s *Service) AppendTrackEvent(
 		UserID:    sess.UserID,
 		SessionID: sess.ID,
 	}
+	ctx, span := s.startSpan(ctx, "append_track_event", key)
+	defer span.End()
+
 	if err := key.CheckSessionKey(); err != nil {
 		return err
 	}

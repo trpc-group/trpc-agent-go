@@ -585,6 +585,25 @@ Suitable for production environments and distributed applications, provides high
 - **`WithSummaryQueueSize(size int)`**: Set summary task queue size. Default is 100.
 - **`WithSummaryJobTimeout(timeout time.Duration)`**: Set timeout for a single summary job. Default is 60 seconds.
 
+**Tracing Configuration:**
+
+- **`WithEnableTracing(enable bool)`**: Enable OpenTelemetry tracing for Redis session operations. Default is `false`. When enabled, operations like `CreateSession`, `GetSession`, `AppendEvent`, `DeleteSession`, `AppendTrackEvent`, `CreateSessionSummary`, and `GetSessionSummaryText` automatically create spans.
+
+!!! note "About Root Span"
+    Session operations are executed by the Runner, occurring before and after the Agent's `Run()` call. The Agent's root span is created inside `agent.Run()`, so Session spans are not automatically attached as children of the Agent span. To see a complete Session span hierarchy in observability platforms like Langfuse, you need to manually create a root span before calling `runner.Run()`:
+
+    ```go
+    import atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
+
+    // Create a root span before runner.Run(), so that session spans
+    // (create_session, get_session, append_event, etc.) become children
+    // of this root span via context propagation.
+    ctx, span := atrace.Tracer.Start(ctx, "my_request")
+    defer span.End()
+
+    eventChan, err := r.Run(ctx, userID, sessionID, message)
+    ```
+
 **Hook Configuration:**
 
 - **`WithAppendEventHook(hooks ...session.AppendEventHook)`**: Add `AppendEvent` hooks.
