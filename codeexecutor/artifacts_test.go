@@ -32,6 +32,11 @@ func TestParseArtifactRef(t *testing.T) {
 	require.Equal(t, "plain", name)
 	require.Nil(t, ver)
 
+	name, ver, err = ParseArtifactRef("tail@")
+	require.NoError(t, err)
+	require.Equal(t, "tail@", name)
+	require.Nil(t, ver)
+
 	name, ver, err = ParseArtifactRef("bad@v1")
 	require.NoError(t, err)
 	require.Equal(t, "bad@v1", name)
@@ -50,6 +55,12 @@ func TestParseArtifactRef(t *testing.T) {
 
 	_, _, err = ParseArtifactRef("@123")
 	require.Error(t, err)
+}
+
+func TestIsDecimalVersion(t *testing.T) {
+	require.False(t, isDecimalVersion(""))
+	require.False(t, isDecimalVersion("/"))
+	require.True(t, isDecimalVersion("0"))
 }
 
 func TestArtifactHelpers_SaveAndLoad(t *testing.T) {
