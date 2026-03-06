@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/panjf2000/ants/v2"
@@ -635,6 +636,7 @@ func (dk *BuiltinKnowledge) processDocuments(
 ) error {
 	var wgDoc sync.WaitGroup
 	errCh := make(chan error, len(docs))
+	var completedCount atomic.Int64
 
 	processDoc := func(doc *document.Document, docIndex int) func() {
 		return func() {
@@ -644,21 +646,22 @@ func (dk *BuiltinKnowledge) processDocuments(
 				return
 			}
 
+			completed := int(completedCount.Add(1))
+			total := len(docs)
+
 			aggr.StatCh() <- loader.StatEvent{Size: len(doc.Content)}
 			if cfg.showProgress {
 				aggr.ProgCh() <- loader.ProgEvent{
 					SrcName:      src.Name(),
-					SrcProcessed: docIndex + 1,
-					SrcTotal:     len(docs),
+					SrcProcessed: completed,
+					SrcTotal:     total,
 				}
 			}
 			if cfg.progressCallback != nil {
-				processed := docIndex + 1
-				total := len(docs)
-				if processed%cfg.progressStepSize == 0 || processed == total {
+				if completed%cfg.progressStepSize == 0 || completed == total {
 					cfg.progressCallback(ctx, LoadProgressEvent{
 						SourceName: src.Name(),
-						Processed:  processed,
+						Processed:  completed,
 						Total:      total,
 					})
 				}
