@@ -102,6 +102,7 @@ type execSession struct {
 	finalizedAt           time.Time
 }
 
+// ExecTool starts interactive commands inside skill workspaces.
 type ExecTool struct {
 	run *RunTool
 
@@ -111,14 +112,17 @@ type ExecTool struct {
 	clock    func() time.Time
 }
 
+// WriteStdinTool writes stdin to running skill sessions.
 type WriteStdinTool struct {
 	exec *ExecTool
 }
 
+// PollSessionTool polls running skill sessions for new output.
 type PollSessionTool struct {
 	exec *ExecTool
 }
 
+// KillSessionTool terminates running skill sessions.
 type KillSessionTool struct {
 	exec *ExecTool
 }
@@ -148,6 +152,7 @@ func NewKillSessionTool(exec *ExecTool) *KillSessionTool {
 	return &KillSessionTool{exec: exec}
 }
 
+// Declaration returns the tool schema for skill_exec.
 func (t *ExecTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name: "skill_exec",
@@ -218,6 +223,7 @@ func (t *ExecTool) Declaration() *tool.Declaration {
 	}
 }
 
+// Declaration returns the tool schema for skill_write_stdin.
 func (t *WriteStdinTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name: "skill_write_stdin",
@@ -258,6 +264,7 @@ func (t *WriteStdinTool) Declaration() *tool.Declaration {
 	}
 }
 
+// Declaration returns the tool schema for skill_poll_session.
 func (t *PollSessionTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name: "skill_poll_session",
@@ -289,6 +296,7 @@ func (t *PollSessionTool) Declaration() *tool.Declaration {
 	}
 }
 
+// Declaration returns the tool schema for skill_kill_session.
 func (t *KillSessionTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name:        "skill_kill_session",
@@ -326,6 +334,7 @@ func (t *KillSessionTool) Declaration() *tool.Declaration {
 	}
 }
 
+// StreamableCall starts an interactive skill session and streams output.
 func (t *ExecTool) StreamableCall(
 	ctx context.Context,
 	args []byte,
