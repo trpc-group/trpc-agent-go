@@ -752,9 +752,9 @@ func TestWithTransferStateKey(t *testing.T) {
 			t.Fatal("expected metadata to be set")
 		}
 
-		// Check that only the specified keys are transferred
-		if len(msg.Metadata) != 2 {
-			t.Errorf("expected 2 metadata items, got %d", len(msg.Metadata))
+		// Check that only the specified keys + interaction_spec_version are transferred
+		if len(msg.Metadata) != 3 {
+			t.Errorf("expected 3 metadata items, got %d", len(msg.Metadata))
 		}
 
 		if msg.Metadata["session_key"] != "session_value" {
@@ -763,6 +763,10 @@ func TestWithTransferStateKey(t *testing.T) {
 
 		if msg.Metadata["user_pref"] != "dark_mode" {
 			t.Error("user_pref not transferred correctly")
+		}
+
+		if _, exists := msg.Metadata["interaction_spec_version"]; !exists {
+			t.Error("interaction_spec_version should be present in metadata")
 		}
 
 		// Make sure other keys are not transferred

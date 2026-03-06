@@ -125,6 +125,51 @@ func TestRunTool_ExecutesAndCollectsOutputFiles(t *testing.T) {
 	require.Contains(t, out.PrimaryOutput.Content, contentHi)
 }
 
+func TestRunTool_Declaration_OutputSchema(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	decl := rt.Declaration()
+	require.NotNil(t, decl)
+	require.NotNil(t, decl.OutputSchema)
+
+	out := decl.OutputSchema
+	require.Equal(t, "object", out.Type)
+	require.NotNil(t, out.Properties)
+
+	for _, key := range []string{
+		"output_files",
+		"stdout",
+		"stderr",
+		"exit_code",
+		"timed_out",
+		"duration_ms",
+	} {
+		require.Contains(t, out.Properties, key)
+	}
+
+	outFiles := out.Properties["output_files"]
+	require.Equal(t, "array", outFiles.Type)
+	require.NotNil(t, outFiles.Items)
+	require.Equal(t, "object", outFiles.Items.Type)
+	for _, key := range []string{
+		"name",
+		"content",
+		"mime_type",
+		"size_bytes",
+		"truncated",
+		"ref",
+	} {
+		require.Contains(t, outFiles.Items.Properties, key)
+	}
+}
+
 type envRepo struct {
 	skill.Repository
 	env map[string]string
@@ -2568,6 +2613,79 @@ func TestRunTool_StagesUserFileInputs_ArtifactRef_InfersName(t *testing.T) {
 	require.Equal(t, uploadNotesTxt, out.StagedInputs[0].OriginalName)
 }
 
+func TestRunTool_StagesUserFileInputs_ArtifactRef_NameContainsAt(
+	t *testing.T,
+) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	rt := NewRunTool(repo, localexec.New())
+
+	svc := inmemory.NewService()
+	sess := &session.Session{
+		AppName: "app",
+		UserID:  "u",
+		ID:      "s1",
+		State:   session.StateMap{},
+	}
+	info := artifact.SessionInfo{
+		AppName:   sess.AppName,
+		UserID:    sess.UserID,
+		SessionID: sess.ID,
+	}
+	const artifactName = "uploads/a@b.txt"
+	ver, err := svc.SaveArtifact(
+		context.Background(),
+		info,
+		artifactName,
+		&artifact.Artifact{
+			Data:     []byte(contentHi),
+			MimeType: "text/plain",
+			Name:     artifactName,
+		},
+	)
+	require.NoError(t, err)
+
+	ref := fmt.Sprintf(
+		"%s%s@%d",
+		fileref.ArtifactPrefix,
+		artifactName,
+		ver,
+	)
+	user := model.NewUserMessage("upload")
+	user.AddFileID(ref)
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(user),
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationArtifactService(svc),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	const fileName = "a@b.txt"
+	args := runInput{
+		Skill: testSkillName,
+		Command: "mkdir -p out; cat work/inputs/" +
+			fileName + " > " + outATxt,
+		OutputFiles: []string{outATxt},
+		Timeout:     timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Len(t, out.StagedInputs, 1)
+	require.Equal(t, "work/inputs/"+fileName,
+		out.StagedInputs[0].Name)
+	require.Equal(t, fileName, out.StagedInputs[0].OriginalName)
+	require.Len(t, out.OutputFiles, 1)
+	require.Equal(t, outATxt, out.OutputFiles[0].Name)
+	require.Contains(t, out.OutputFiles[0].Content, contentHi)
+}
+
 func TestRunTool_RequireSkillLoaded_NotLoaded_Error(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, testSkillName)
@@ -2633,13 +2751,14 @@ func TestRunTool_RequireSkillLoaded_Loaded_OK(t *testing.T) {
 		State: session.StateMap{},
 	}
 	sess.SetState(
-		skill.StateKeyLoadedPrefix+testSkillName,
+		skill.LoadedKey("tester", testSkillName),
 		[]byte("1"),
 	)
 	inv := agent.NewInvocation(
 		agent.WithInvocationMessage(model.NewUserMessage("hi")),
 		agent.WithInvocationSession(sess),
 	)
+	inv.AgentName = "tester"
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 
 	args := runInput{Skill: testSkillName, Command: echoOK,
@@ -2654,8 +2773,13 @@ func TestRunTool_RequireSkillLoaded_Loaded_OK(t *testing.T) {
 func TestFileNameFromArtifactRef_EdgeCases(t *testing.T) {
 	require.Equal(t, "", fileNameFromArtifactRef("file-123"))
 
-	invalidVer := fileref.ArtifactPrefix + "a@x"
-	require.Equal(t, "", fileNameFromArtifactRef(invalidVer))
+	nameWithAt := fileref.ArtifactPrefix + "uploads/a@x"
+	require.Equal(t, "a@x", fileNameFromArtifactRef(nameWithAt))
+
+	nameWithAtAndVersion := fileref.ArtifactPrefix +
+		"uploads/skey=@crypt_abc.jpeg@0"
+	require.Equal(t, "skey=@crypt_abc.jpeg",
+		fileNameFromArtifactRef(nameWithAtAndVersion))
 
 	invalidBase := fileref.ArtifactPrefix + "..@0"
 	require.Equal(t, "", fileNameFromArtifactRef(invalidBase))
@@ -2945,7 +3069,7 @@ func TestUserFileInputBytes(t *testing.T) {
 		require.Equal(t, userFileInputWarnArtifactNoService, warn)
 	})
 
-	t.Run("artifact-parse-error", func(t *testing.T) {
+	t.Run("artifact-invalid-ref", func(t *testing.T) {
 		svc := inmemory.NewService()
 		sess := &session.Session{
 			AppName: "app",
@@ -2959,7 +3083,7 @@ func TestUserFileInputBytes(t *testing.T) {
 		)
 		ctx := agent.NewInvocationContext(context.Background(), inv)
 		f := model.File{
-			FileID: fileref.ArtifactPrefix + "uploads/x.txt@x",
+			FileID: fileref.ArtifactPrefix + "@0",
 		}
 		_, _, warn := userFileInputBytes(
 			ctx,

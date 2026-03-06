@@ -16,12 +16,12 @@ import (
 
 const defaultTruncateMarker = "…[truncated]…"
 
-// observationMaxBytes stores the configured truncation max bytes.
+// observationMaxBytes stores the configured truncation threshold.
 //
 // Semantics:
 // - < 0: truncation disabled
 // - = 0: truncate everything
-// - > 0: truncate to at most maxBytes
+// - > 0: max byte length for a JSON leaf node (or a plain string value)
 var observationMaxBytes atomic.Int64
 
 func init() {
@@ -41,6 +41,7 @@ func setObservationMaxBytes(maxBytes *int) {
 	observationMaxBytes.Store(int64(*maxBytes))
 }
 
+// getObservationMaxBytes returns the max byte length for each observation JSON leaf node.
 func getObservationMaxBytes() int {
 	return int(observationMaxBytes.Load())
 }

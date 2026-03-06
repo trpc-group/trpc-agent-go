@@ -133,7 +133,7 @@ _, _ = sessionService.CreateSession(ctx, session.Key{AppName: app, UserID: user,
 See also:
 
 - Examples: `examples/placeholder`, `examples/outputkey`
-- Session API: `docs/mkdocs/en/session.md`
+- Session API: `docs/mkdocs/en/session/index.md`
 
 ### Using Runner to Execute Agent
 
@@ -414,6 +414,44 @@ agent := llmagent.New(
   llmagent.WithEnablePostToolPrompt(false),
 )
 ```
+
+### Call Count Limits (Safety Mechanism)
+
+To prevent Agents from entering infinite loops or consuming excessive resources, LLMAgent provides two optional call count limit configurations:
+
+**Available Configurations:**
+
+| Configuration | Description |
+|---------------|-------------|
+| `llmagent.WithMaxLLMCalls(n)` | Limits the maximum number of LLM calls per invocation. Takes effect when `n > 0`; no limit when `n <= 0` (default). |
+| `llmagent.WithMaxToolIterations(n)` | Limits the maximum number of tool-call iterations per invocation. Takes effect when `n > 0`; no limit when `n <= 0` (default). |
+
+**Usage Example:**
+
+```go
+agent := llmagent.New(
+  "safe-agent",
+  llmagent.WithModel(modelInstance),
+  llmagent.WithTools([]tool.Tool{myTool}),
+  // Limit to at most 10 LLM calls.
+  llmagent.WithMaxLLMCalls(10),
+  // Limit to at most 5 tool-call iterations.
+  llmagent.WithMaxToolIterations(5),
+)
+```
+
+**Behavior:**
+
+- **`WithMaxLLMCalls`**: When LLM call count exceeds the limit, a `StopError` is returned and the current invocation terminates.
+- **`WithMaxToolIterations`**: When tool iteration count exceeds the limit, a `flow_error` response event is emitted and the invocation ends. It does not return a `StopError`.
+- Both limits are independent and can be used separately or together.
+- These limits are per-invocation; different `runner.Run()` calls maintain independent counts.
+
+**Recommended Usage:**
+
+- In production environments, setting reasonable limits is recommended to prevent unexpected scenarios.
+- Set limit values based on task complexity and expected behavior.
+- See [examples/max_limits](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/max_limits) for a complete example.
 
 ### Handling Event Stream
 
@@ -960,7 +998,7 @@ Memory Service is used to record user preference information, supporting persona
 **Recommended Reading Order:**
 
 1. [Runner](runner.md) - Learn the recommended usage
-2. [Session](session.md) - Understand session management
+2. [Session](session/index.md) - Understand session management
 3. [Multi-Agent](multiagent.md) - Learn multi-Agent systems
 
 ## Runtime Instruction Updates
