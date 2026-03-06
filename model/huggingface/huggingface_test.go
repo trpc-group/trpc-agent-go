@@ -482,13 +482,12 @@ func TestModel_TokenTailoring(t *testing.T) {
 				{Role: model.RoleUser, Content: "How are you?"},
 			},
 			expectTailoring: true,
-			expectMaxTokens: true,
+			expectMaxTokens: false,
 			validateRequest: func(t *testing.T, req *model.Request) {
 				// Messages should remain the same for small conversations.
 				assert.Len(t, req.Messages, 3)
-				// MaxTokens should be set automatically.
-				assert.NotNil(t, req.GenerationConfig.MaxTokens)
-				assert.Greater(t, *req.GenerationConfig.MaxTokens, 0)
+				// MaxTokens should stay unset unless user specifies it.
+				assert.Nil(t, req.GenerationConfig.MaxTokens)
 			},
 		},
 		{
@@ -503,12 +502,12 @@ func TestModel_TokenTailoring(t *testing.T) {
 				{Role: model.RoleUser, Content: "How are you?"},
 			},
 			expectTailoring: true,
-			expectMaxTokens: true,
+			expectMaxTokens: false,
 			validateRequest: func(t *testing.T, req *model.Request) {
 				// Messages should remain the same for small conversations.
 				assert.LessOrEqual(t, len(req.Messages), 3)
-				// MaxTokens should be set.
-				assert.NotNil(t, req.GenerationConfig.MaxTokens)
+				// MaxTokens should stay unset unless user specifies it.
+				assert.Nil(t, req.GenerationConfig.MaxTokens)
 			},
 		},
 		{
@@ -547,10 +546,10 @@ func TestModel_TokenTailoring(t *testing.T) {
 				{Role: model.RoleUser, Content: "Test message"},
 			},
 			expectTailoring: true,
-			expectMaxTokens: true,
+			expectMaxTokens: false,
 			validateRequest: func(t *testing.T, req *model.Request) {
 				assert.NotEmpty(t, req.Messages)
-				assert.NotNil(t, req.GenerationConfig.MaxTokens)
+				assert.Nil(t, req.GenerationConfig.MaxTokens)
 			},
 		},
 		{
@@ -709,13 +708,11 @@ func TestModel_TokenTailoring_Integration(t *testing.T) {
 	}
 
 	log.Infof("request.Messages: %d", len(request.Messages))
-	log.Infof("request.GenerationConfig MaxTokens: %d", *request.GenerationConfig.MaxTokens)
 	// Verify that messages were tailored (reduced).
 	assert.Less(t, len(request.Messages), 200, "Messages should be tailored to fit token limit")
 	assert.Greater(t, len(request.Messages), 0, "Should have at least some messages")
-	// Verify that MaxTokens was set.
-	assert.NotNil(t, request.GenerationConfig.MaxTokens)
-	assert.Greater(t, *request.GenerationConfig.MaxTokens, 0)
+	// Verify that MaxTokens stays unset unless user specifies it.
+	assert.Nil(t, request.GenerationConfig.MaxTokens)
 
 	// Verify response was received.
 	require.NotEmpty(t, responses, "Should receive at least one response")
@@ -2691,8 +2688,8 @@ func TestModel_TokenTailoringWithAutoCalculation(t *testing.T) {
 	assert.Nil(t, responses[0].Error)
 	// Messages should be tailored (or at least not increased)
 	assert.LessOrEqual(t, len(request.Messages), 100)
-	// MaxTokens should be set automatically
-	assert.NotNil(t, request.GenerationConfig.MaxTokens)
+	// MaxTokens should stay unset unless user specifies it
+	assert.Nil(t, request.GenerationConfig.MaxTokens)
 }
 
 // TestModel_RequestWithMaxTokensSet tests that user-specified MaxTokens is respected
@@ -3820,9 +3817,7 @@ func TestGenerateContent_TokenTailoringAppliedToRequest(t *testing.T) {
 
 	t.Logf("原始消息数: %d, 实际发送消息数: %d", len(request.Messages), len(capturedRequest.Messages))
 
-	require.NotNil(t, capturedRequest.MaxTokens, "MaxTokens 应该被自动设置")
-	assert.Greater(t, *capturedRequest.MaxTokens, 0, "MaxTokens 应该大于 0")
-	t.Logf("自动设置的 MaxTokens: %d", *capturedRequest.MaxTokens)
+	require.Nil(t, capturedRequest.MaxTokens, "MaxTokens should stay unset")
 
 	if len(capturedRequest.Messages) < len(request.Messages) {
 		t.Logf("消息已被裁剪，从 %d 条减少到 %d 条", len(request.Messages), len(capturedRequest.Messages))
