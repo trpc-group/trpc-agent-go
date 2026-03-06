@@ -2255,7 +2255,7 @@ func TestGetSession_WithEventLimit(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestGetSession_WithTTLRefresh(t *testing.T) {
+func TestGetSession_WithTTL(t *testing.T) {
 	s, mock, db := setupMockService(t, nil)
 	defer db.Close()
 

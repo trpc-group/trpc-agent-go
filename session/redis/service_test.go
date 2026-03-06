@@ -2149,7 +2149,7 @@ func TestService_WithTTL(t *testing.T) {
 	assert.Equal(t, []byte("app_value"), retrievedSess.State["app:app_key"])
 	assert.Equal(t, []byte("user_value"), retrievedSess.State["user:user_key"])
 
-	// List sessions - this should also trigger TTL refresh
+	// List sessions
 	sessions, err := service.ListSessions(ctx, userKey)
 	require.NoError(t, err)
 	assert.Len(t, sessions, 1)
@@ -2787,7 +2787,7 @@ func TestService_ListSessions_WithTTL(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// List sessions - should trigger TTL refresh
+	// List sessions
 	sessions, err := service.ListSessions(ctx, userKey)
 	require.NoError(t, err)
 	assert.Len(t, sessions, 3)

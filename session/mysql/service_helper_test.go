@@ -247,7 +247,7 @@ func TestGetSession_WithTrackEvents(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestGetSession_WithRefreshTTL(t *testing.T) {
+func TestGetSession_WithTTL(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
