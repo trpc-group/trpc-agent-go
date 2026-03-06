@@ -432,6 +432,71 @@ for e := range eventChan {
 This keeps application code simple and consistent across Agent types while still
 preserving detailed graph events for advanced use.
 
+#### Fatal Errors Before a Graph Completion Event
+
+Sometimes a run stops early because of a fatal error before the graph emits its
+final `graph.execution` event. A common example is:
+
+- a node callback emits a custom state delta with fatal-error details
+- the run then aborts before the graph can produce its normal final snapshot
+
+In that case, Runner still emits the final `runner.completion` event. When the
+terminal error is a real fatal error (not `stop_agent_error`), Runner now copies
+two pieces of information onto that last event for you:
+
+- `Response.Error`: the final structured error for the run
+- `StateDelta`: the accumulated state delta from the error path
+
+This lets application code keep the same simple rule: read the last event first,
+instead of scanning the whole stream to find the fatal-error event.
+
+Example:
+
+```go
+import (
+    "encoding/json"
+    "fmt"
+
+    "trpc.group/trpc-go/trpc-agent-go/event"
+)
+
+const stateKeyNodeFatal = "node_fatal_error"
+
+func readLastEvent(eventChan <-chan *event.Event) error {
+    for e := range eventChan {
+        if !e.IsRunnerCompletion() {
+            continue
+        }
+
+        if e.Response != nil && e.Response.Error != nil {
+            fmt.Printf(
+                "run failed: type=%s message=%s\n",
+                e.Response.Error.Type,
+                e.Response.Error.Message,
+            )
+        }
+
+        if b, ok := e.StateDelta[stateKeyNodeFatal]; ok {
+            var detail map[string]any
+            if err := json.Unmarshal(b, &detail); err == nil {
+                fmt.Printf("fatal detail: %+v\n", detail)
+            }
+        }
+        return nil
+    }
+    return nil
+}
+```
+
+Recommended mental model:
+
+- Success path with graph completion: read final output from the completion
+  event’s `StateDelta` (for example, `graph.StateKeyLastResponse`)
+- Fatal exit before graph completion: read `Response.Error` and any custom fatal
+  keys from the same completion event
+- `stop_agent_error`: still behaves like a controlled stop signal and is not
+  duplicated onto the completion event
+
 #### 🔁 Option: Emit Final Graph LLM Responses
 
 Graph-based agents (for example, GraphAgent) can call a Large Language Model
