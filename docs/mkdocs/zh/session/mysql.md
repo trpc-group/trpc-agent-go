@@ -98,7 +98,7 @@ sessionService, err := mysql.NewService(
     mysql.WithAsyncPersisterNum(4),
 )
 // 效果：
-// - 会话 30 分钟不活动后过期
+// - 会话最后一次写入后 30 分钟过期
 // - 每 10 分钟清理过期数据（软删除）
 // - 4 个异步 worker 处理写入
 ```

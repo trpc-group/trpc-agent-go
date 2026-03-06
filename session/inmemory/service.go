@@ -320,9 +320,6 @@ func (s *SessionService) getSession(ctx context.Context, key session.Key, opt *s
 		return nil, nil
 	}
 
-	// Refresh TTL on access
-	sessWithTTL.expiredAt = calculateExpiredAt(s.opts.sessionTTL)
-
 	copiedSess := sess.Clone()
 
 	// apply filtering options if provided
