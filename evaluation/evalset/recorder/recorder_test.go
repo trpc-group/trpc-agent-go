@@ -216,6 +216,37 @@ func TestRecorder_PersistsContextMessagesByDefault(t *testing.T) {
 	assert.Equal(t, "You are a careful assistant.", c.Conversation[0].ContextMessages[0].Content)
 }
 
+func TestRecorder_ClonesCapturedMessages(t *testing.T) {
+	ctx := context.Background()
+	manager := inmemory.New()
+	rec, err := New(manager)
+	require.NoError(t, err)
+	inv := newTestInvocation("app-1", "u-1", "s-1", "r-1", model.NewUserMessage("hi"))
+	inv.RunOptions.InjectedContextMessages = []model.Message{
+		model.NewSystemMessage("before-context"),
+	}
+	finalEvent := newFinalResponseEvent(inv, "before-final")
+	_, err = rec.onEvent(ctx, inv, finalEvent)
+	require.NoError(t, err)
+	inv.Message.Content = "after-user"
+	inv.RunOptions.InjectedContextMessages[0].Content = "after-context"
+	finalEvent.Response.Choices[0].Message.Content = "after-final"
+	_, err = rec.onEvent(ctx, inv, newRunnerCompletionEvent(inv))
+	require.NoError(t, err)
+	require.NoError(t, rec.Close(ctx))
+	c, err := manager.GetCase(ctx, "app-1", "s-1", "s-1")
+	require.NoError(t, err)
+	require.NotNil(t, c)
+	require.Len(t, c.ContextMessages, 1)
+	assert.Equal(t, "before-context", c.ContextMessages[0].Content)
+	require.Len(t, c.Conversation, 1)
+	require.NotNil(t, c.Conversation[0])
+	require.NotNil(t, c.Conversation[0].UserContent)
+	assert.Equal(t, "hi", c.Conversation[0].UserContent.Content)
+	require.NotNil(t, c.Conversation[0].FinalResponse)
+	assert.Equal(t, "before-final", c.Conversation[0].FinalResponse.Content)
+}
+
 func TestRecorder_TraceModeEnabled_PersistsActualConversation(t *testing.T) {
 	ctx := context.Background()
 	manager := inmemory.New()

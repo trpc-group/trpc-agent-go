@@ -15,7 +15,6 @@ import (
 	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/clone"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -50,7 +49,7 @@ func (a *accumulator) captureRunInputs(runtimeState map[string]any, contextMessa
 		return
 	}
 	a.sessionInputState = cloneStateMap(runtimeState)
-	a.contextMessages = cloneMessages(contextMessages)
+	a.contextMessages = cloneValue("context messages", contextMessages)
 	a.capturedRunInputs = true
 }
 
@@ -66,7 +65,7 @@ func (a *accumulator) setUserContent(msg model.Message) {
 	if !model.HasPayload(msg) {
 		return
 	}
-	a.userContent = msg
+	a.userContent = cloneValue("user content", msg)
 	a.hasUserContent = true
 }
 
@@ -79,7 +78,7 @@ func (a *accumulator) setFinalResponse(msg model.Message) {
 	if !model.HasPayload(msg) {
 		return
 	}
-	a.finalResponse = msg
+	a.finalResponse = cloneValue("final response", msg)
 	a.hasFinalResponse = true
 }
 
@@ -95,7 +94,7 @@ func (a *accumulator) addIntermediateResponse(msg model.Message) {
 	if !model.HasPayload(msg) {
 		return
 	}
-	a.intermediateResponses = append(a.intermediateResponses, msg)
+	a.intermediateResponses = append(a.intermediateResponses, cloneValue("intermediate response", msg))
 }
 
 func (a *accumulator) setRunError(err model.ResponseError) {
@@ -221,11 +220,7 @@ func (a *accumulator) finalizeAndSnapshot() turnSnapshot {
 		intermediateResponses: append([]model.Message(nil), a.intermediateResponses...),
 	}
 	if len(a.tools) > 0 {
-		s.tools = make([]*evalset.Tool, 0, len(a.tools))
-		for _, t := range a.tools {
-			cloned := *t
-			s.tools = append(s.tools, &cloned)
-		}
+		s.tools = cloneValue("tools", a.tools)
 	}
 	return s
 }
@@ -241,16 +236,18 @@ func cloneStateMap(state map[string]any) map[string]any {
 	return copied
 }
 
-func cloneMessages(messages []model.Message) []model.Message {
-	if len(messages) == 0 {
-		return nil
+func cloneValue[T any](name string, value T) T {
+	payload, err := json.Marshal(value)
+	if err != nil {
+		log.Warnf("evalset recorder: clone %s failed: %v", name, err)
+		return value
 	}
-	copied, err := clone.Clone(&messages)
-	if err == nil {
-		return *copied
+	var cloned T
+	if err := json.Unmarshal(payload, &cloned); err != nil {
+		log.Warnf("evalset recorder: decode cloned %s failed: %v", name, err)
+		return value
 	}
-	log.Warnf("evalset recorder: clone context messages failed: %v", err)
-	return append([]model.Message(nil), messages...)
+	return cloned
 }
 
 func normalizeStateValue(value any) any {
