@@ -1793,6 +1793,85 @@ func TestRunner_CompletionSkipsFallbackAfterRecovery(t *testing.T) {
 	require.Empty(t, completion.StateDelta)
 }
 
+func TestCaptureCompletionFallback_IgnoresPartialError(t *testing.T) {
+	loop := &eventLoopContext{}
+	r := &runner{}
+
+	r.captureCompletionFallback(loop, &event.Event{
+		Response: &model.Response{
+			IsPartial: true,
+			Error:     &model.ResponseError{Message: "boom"},
+		},
+	})
+
+	require.Nil(t, loop.finalError)
+}
+
+func TestMergeCompletionFallbackStateDelta(t *testing.T) {
+	t.Run("empty src", func(t *testing.T) {
+		dst := map[string][]byte{"keep": []byte("v")}
+
+		got := mergeCompletionFallbackStateDelta(dst, nil)
+
+		require.Equal(t, dst, got)
+		require.Equal(t, "v", string(got["keep"]))
+	})
+
+	t.Run("filters metadata and copies business keys", func(t *testing.T) {
+		const (
+			stateKey   = "node_error"
+			nilState   = "nil_state"
+			stateValue = "fatal"
+		)
+
+		srcValue := []byte(stateValue)
+		got := mergeCompletionFallbackStateDelta(nil, map[string][]byte{
+			stateKey:              srcValue,
+			nilState:              nil,
+			graph.MetadataKeyNode: []byte(`{"node_id":"n1"}`),
+			graph.MetadataKeyTool: []byte(`{"tool_id":"t1"}`),
+		})
+
+		require.Equal(t, stateValue, string(got[stateKey]))
+		require.Contains(t, got, nilState)
+		require.Nil(t, got[nilState])
+		require.NotContains(t, got, graph.MetadataKeyNode)
+		require.NotContains(t, got, graph.MetadataKeyTool)
+
+		srcValue[0] = 'F'
+		require.Equal(t, stateValue, string(got[stateKey]))
+	})
+}
+
+func TestCloneResponseError(t *testing.T) {
+	t.Run("nil", func(t *testing.T) {
+		require.Nil(t, cloneResponseError(nil))
+	})
+
+	t.Run("deep copy", func(t *testing.T) {
+		param := "p"
+		code := "c"
+		in := &model.ResponseError{
+			Type:    model.ErrorTypeFlowError,
+			Message: "boom",
+			Param:   &param,
+			Code:    &code,
+		}
+
+		got := cloneResponseError(in)
+
+		require.NotNil(t, got)
+		require.NotSame(t, in, got)
+		require.NotSame(t, in.Param, got.Param)
+		require.NotSame(t, in.Code, got.Code)
+
+		*in.Param = "mutated-param"
+		*in.Code = "mutated-code"
+		require.Equal(t, "p", *got.Param)
+		require.Equal(t, "c", *got.Code)
+	})
+}
+
 func TestGraphCompletionNotPersistedAsMessage(t *testing.T) {
 	const (
 		appName   = "app"
