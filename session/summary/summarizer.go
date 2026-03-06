@@ -382,36 +382,42 @@ func extractConversationText(
 		if e.Response == nil || len(e.Response.Choices) == 0 {
 			continue
 		}
-		msg := e.Response.Choices[0].Message
 		author := e.Author
 		if author == "" {
 			author = authorUnknown
 		}
 
-		// Handle tool calls from assistant.
-		// Note: A message may contain both ToolCalls and Content (e.g., "Let me check
-		// the weather" + tool call), so we process both without using continue.
-		if len(msg.ToolCalls) > 0 {
-			for _, tc := range msg.ToolCalls {
-				toolCallText := toolCallFmt(tc)
-				if toolCallText != "" {
-					parts = append(parts, fmt.Sprintf("%s: %s", author, toolCallText))
+		// Iterate over all choices, not just the first one.
+		// When model returns multiple tool call results, they may be distributed
+		// across different choices (len(e.Response.Choices) > 1).
+		for _, choice := range e.Response.Choices {
+			msg := choice.Message
+
+			// Handle tool calls from assistant.
+			// Note: A message may contain both ToolCalls and Content (e.g., "Let me check
+			// the weather" + tool call), so we process both without using continue.
+			if len(msg.ToolCalls) > 0 {
+				for _, tc := range msg.ToolCalls {
+					toolCallText := toolCallFmt(tc)
+					if toolCallText != "" {
+						parts = append(parts, fmt.Sprintf("%s: %s", author, toolCallText))
+					}
 				}
 			}
-		}
 
-		// Handle tool response.
-		if msg.ToolID != "" {
-			toolRespText := toolResultFmt(msg)
-			if toolRespText != "" {
-				parts = append(parts, fmt.Sprintf("%s: %s", author, toolRespText))
+			// Handle tool response.
+			if msg.ToolID != "" {
+				toolRespText := toolResultFmt(msg)
+				if toolRespText != "" {
+					parts = append(parts, fmt.Sprintf("%s: %s", author, toolRespText))
+				}
+				continue // Tool responses don't have additional content.
 			}
-			continue // Tool responses don't have additional content.
-		}
 
-		// Handle regular message content.
-		if trimmed := strings.TrimSpace(msg.Content); trimmed != "" {
-			parts = append(parts, fmt.Sprintf("%s: %s", author, trimmed))
+			// Handle regular message content.
+			if trimmed := strings.TrimSpace(msg.Content); trimmed != "" {
+				parts = append(parts, fmt.Sprintf("%s: %s", author, trimmed))
+			}
 		}
 	}
 
