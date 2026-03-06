@@ -467,7 +467,6 @@ func (dk *BuiltinKnowledge) loadSequential(
 		log.InfofContext(ctx, "Loading source %d/%d: %s (type: %s)",
 			i+1, totalSources, sourceName, sourceType)
 
-		srcStartTime := time.Now()
 		docs, err := src.ReadDocuments(ctx)
 		if err != nil {
 			log.ErrorfContext(ctx, "Failed to read documents from source %s: %v",
@@ -491,6 +490,11 @@ func (dk *BuiltinKnowledge) loadSequential(
 		}
 
 		log.InfofContext(ctx, "Start embedding & storing documents from source %s...", sourceName)
+
+		// srcStartTime tracks only the embed+store phase, so that Elapsed and ETA
+		// in progress events and logs reflect actual indexing throughput rather than
+		// including the (often slow) ReadDocuments I/O time.
+		srcStartTime := time.Now()
 
 		// Process documents with progress logging if enabled.
 		for j, doc := range docs {

@@ -2178,6 +2178,11 @@ func TestWithLoadProgressCallback_Sequential(t *testing.T) {
 		if ev.Processed < 1 || ev.Processed > ev.Total {
 			t.Errorf("event out of range: Processed=%d Total=%d", ev.Processed, ev.Total)
 		}
+		// Sequential path always populates Elapsed (>= 0; usually > 0 except for
+		// nearly-instant test stubs, so just check it's non-negative).
+		if ev.Elapsed < 0 {
+			t.Errorf("Elapsed should be non-negative, got %s", ev.Elapsed)
+		}
 	}
 }
 
