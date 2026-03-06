@@ -282,7 +282,7 @@ func (c *Channel) callGatewayAndReply(
 	}
 
 	for _, part := range parts[1:] {
-		_, err := c.bot.SendMessage(ctx, tgapi.SendMessageParams{
+		_, err := c.sendTextMessage(ctx, tgapi.SendMessageParams{
 			ChatID:          chatID,
 			MessageThreadID: messageThreadID,
 			Text:            part,
@@ -312,7 +312,7 @@ func (c *Channel) sendPreviewMessage(
 		Action:          chatActionTyping,
 	})
 
-	msg, err := c.bot.SendMessage(ctx, tgapi.SendMessageParams{
+	msg, err := c.sendTextMessage(ctx, tgapi.SendMessageParams{
 		ChatID:           chatID,
 		MessageThreadID:  messageThreadID,
 		ReplyToMessageID: replyTo,
@@ -411,7 +411,7 @@ func (c *Channel) editPreview(
 	messageID int,
 	text string,
 ) bool {
-	_, err := c.bot.EditMessageText(ctx, tgapi.EditMessageTextParams{
+	_, err := c.editTextMessage(ctx, tgapi.EditMessageTextParams{
 		ChatID:    chatID,
 		MessageID: messageID,
 		Text:      text,
@@ -435,7 +435,7 @@ func (c *Channel) sendReplyParts(
 		if i == 0 {
 			replyID = replyTo
 		}
-		_, err := c.bot.SendMessage(ctx, tgapi.SendMessageParams{
+		_, err := c.sendTextMessage(ctx, tgapi.SendMessageParams{
 			ChatID:           chatID,
 			MessageThreadID:  messageThreadID,
 			ReplyToMessageID: replyID,

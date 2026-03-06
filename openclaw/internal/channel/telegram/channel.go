@@ -780,7 +780,7 @@ func (c *Channel) sendDM(
 	chatID int64,
 	text string,
 ) {
-	_, err := c.bot.SendMessage(ctx, tgapi.SendMessageParams{
+	_, err := c.sendTextMessage(ctx, tgapi.SendMessageParams{
 		ChatID: chatID,
 		Text:   text,
 	})

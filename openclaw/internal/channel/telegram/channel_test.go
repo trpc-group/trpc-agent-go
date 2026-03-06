@@ -90,8 +90,10 @@ type stubBot struct {
 	mu        sync.Mutex
 	sent      []tgapi.SendMessageParams
 	sendErr   error
+	sendHook  func(tgapi.SendMessageParams) error
 	edits     []tgapi.EditMessageTextParams
 	editErr   error
+	editHook  func(tgapi.EditMessageTextParams) error
 	actions   []tgapi.SendChatActionParams
 	actionErr error
 	commands  [][]tgapi.BotCommand
@@ -141,6 +143,11 @@ func (b *stubBot) SendMessage(
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.sent = append(b.sent, params)
+	if b.sendHook != nil {
+		if err := b.sendHook(params); err != nil {
+			return tgapi.Message{}, err
+		}
+	}
 	if b.sendErr != nil {
 		return tgapi.Message{}, b.sendErr
 	}
@@ -159,6 +166,11 @@ func (b *stubBot) EditMessageText(
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.edits = append(b.edits, params)
+	if b.editHook != nil {
+		if err := b.editHook(params); err != nil {
+			return tgapi.Message{}, err
+		}
+	}
 	if b.editErr != nil {
 		return tgapi.Message{}, b.editErr
 	}

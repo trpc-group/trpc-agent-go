@@ -61,7 +61,7 @@ func (c *Channel) SendText(
 		if strings.TrimSpace(part) == "" {
 			continue
 		}
-		_, err := c.bot.SendMessage(ctx, tgapi.SendMessageParams{
+		_, err := c.sendTextMessage(ctx, tgapi.SendMessageParams{
 			ChatID:          chatID,
 			MessageThreadID: threadID,
 			Text:            part,

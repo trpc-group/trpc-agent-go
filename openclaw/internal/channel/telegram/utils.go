@@ -255,7 +255,7 @@ func (c *Channel) reply(
 	replyTo int,
 	text string,
 ) {
-	_, err := c.bot.SendMessage(ctx, tgapi.SendMessageParams{
+	_, err := c.sendTextMessage(ctx, tgapi.SendMessageParams{
 		ChatID:           chatID,
 		MessageThreadID:  messageThreadID,
 		ReplyToMessageID: replyTo,

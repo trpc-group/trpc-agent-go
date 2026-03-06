@@ -109,6 +109,7 @@ func TestClient_SendMessage(t *testing.T) {
 		testThreadID = 7
 		testReplyTo  = 100
 		testReplyMsg = "hello"
+		testMode     = ParseModeHTML
 	)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(
@@ -127,6 +128,7 @@ func TestClient_SendMessage(t *testing.T) {
 		require.Equal(t, testThreadID, payload.MessageThreadID)
 		require.Equal(t, testReplyTo, payload.ReplyToMessageID)
 		require.Equal(t, testReplyMsg, payload.Text)
+		require.Equal(t, testMode, payload.ParseMode)
 		require.True(t, payload.DisableWebPagePrev)
 
 		_ = json.NewEncoder(w).Encode(apiResponse[Message]{
@@ -153,6 +155,7 @@ func TestClient_SendMessage(t *testing.T) {
 			MessageThreadID:  testThreadID,
 			ReplyToMessageID: testReplyTo,
 			Text:             testReplyMsg,
+			ParseMode:        testMode,
 		},
 	)
 	require.NoError(t, err)
@@ -167,6 +170,7 @@ func TestClient_EditMessageText(t *testing.T) {
 		testChatID  = int64(42)
 		testMsgID   = 100
 		testNewText = "updated"
+		testMode    = ParseModeHTML
 	)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(
@@ -188,6 +192,7 @@ func TestClient_EditMessageText(t *testing.T) {
 		require.Equal(t, testChatID, payload.ChatID)
 		require.Equal(t, testMsgID, payload.MessageID)
 		require.Equal(t, testNewText, payload.Text)
+		require.Equal(t, testMode, payload.ParseMode)
 		require.True(t, payload.DisableWebPagePrev)
 
 		_ = json.NewEncoder(w).Encode(apiResponse[Message]{
@@ -213,11 +218,27 @@ func TestClient_EditMessageText(t *testing.T) {
 			ChatID:    testChatID,
 			MessageID: testMsgID,
 			Text:      testNewText,
+			ParseMode: testMode,
 		},
 	)
 	require.NoError(t, err)
 	require.Equal(t, testMsgID, msg.MessageID)
 	require.Equal(t, testNewText, msg.Text)
+}
+
+func TestIsEntityParseError(t *testing.T) {
+	t.Parallel()
+
+	require.True(t, IsEntityParseError(
+		errors.New("telegram: api error 400: can't parse entities"),
+	))
+	require.True(t, IsEntityParseError(
+		errors.New("telegram: api error 400: find end of the entity"),
+	))
+	require.False(t, IsEntityParseError(
+		errors.New("telegram: api error 400: chat not found"),
+	))
+	require.False(t, IsEntityParseError(nil))
 }
 
 func TestClient_SendChatAction(t *testing.T) {

@@ -580,6 +580,13 @@ Telegram `streaming` modes (Telegram channel config):
 - `block`: send one "Processing..." message, then edit once to final.
 - `progress` (default): keep editing the message while the model is running.
 
+Outbound Telegram text now uses `parse_mode: "HTML"` by default:
+
+- Markdown-ish model output is rendered into Telegram-safe HTML.
+- Raw HTML from the model is escaped before sending.
+- If Telegram rejects the formatted HTML, OpenClaw automatically retries
+  with plain text.
+
 To disable streaming:
 
 ```yaml

@@ -49,6 +49,8 @@ const (
 	pathSendMsg         = "sendMessage"
 )
 
+const ParseModeHTML = "HTML"
+
 const queryFileID = "file_id"
 
 const (
@@ -56,6 +58,11 @@ const (
 	errEmptyFilePath   = "telegram: empty file path"
 	errInvalidMaxBytes = "telegram: non-positive max bytes"
 	errFileTooLarge    = "telegram: file too large"
+)
+
+const (
+	parseErrContainsEntities = "parse entities"
+	parseErrContainsEnd      = "find end of the entity"
 )
 
 // ErrFileTooLarge is returned when a downloaded file exceeds the configured
@@ -131,6 +138,7 @@ type SendMessageParams struct {
 	MessageThreadID  int
 	ReplyToMessageID int
 	Text             string
+	ParseMode        string
 }
 
 // EditMessageTextParams contains parameters for EditMessageText.
@@ -138,6 +146,7 @@ type EditMessageTextParams struct {
 	ChatID    int64
 	MessageID int
 	Text      string
+	ParseMode string
 }
 
 // SendChatActionParams contains parameters for SendChatAction.
@@ -286,6 +295,7 @@ func (c *Client) SendMessage(
 		Text:               params.Text,
 		MessageThreadID:    params.MessageThreadID,
 		ReplyToMessageID:   params.ReplyToMessageID,
+		ParseMode:          params.ParseMode,
 		DisableWebPagePrev: true,
 	}
 
@@ -324,6 +334,7 @@ func (c *Client) EditMessageText(
 		ChatID:             params.ChatID,
 		MessageID:          params.MessageID,
 		Text:               params.Text,
+		ParseMode:          params.ParseMode,
 		DisableWebPagePrev: true,
 	}
 
@@ -535,6 +546,7 @@ type sendMessageRequest struct {
 	Text               string `json:"text"`
 	MessageThreadID    int    `json:"message_thread_id,omitempty"`
 	ReplyToMessageID   int    `json:"reply_to_message_id,omitempty"`
+	ParseMode          string `json:"parse_mode,omitempty"`
 	DisableWebPagePrev bool   `json:"disable_web_page_preview,omitempty"`
 }
 
@@ -542,6 +554,7 @@ type editMessageTextRequest struct {
 	ChatID             int64  `json:"chat_id"`
 	MessageID          int    `json:"message_id"`
 	Text               string `json:"text"`
+	ParseMode          string `json:"parse_mode,omitempty"`
 	DisableWebPagePrev bool   `json:"disable_web_page_preview,omitempty"`
 }
 
@@ -795,6 +808,17 @@ func (c *Client) retryDelay(attempt int, err error) time.Duration {
 		return c.retryMaxDelay
 	}
 	return delay
+}
+
+// IsEntityParseError reports whether Telegram rejected formatted text due to
+// invalid entity markup.
+func IsEntityParseError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, parseErrContainsEntities) ||
+		strings.Contains(msg, parseErrContainsEnd)
 }
 
 func sleep(ctx context.Context, d time.Duration) bool {
