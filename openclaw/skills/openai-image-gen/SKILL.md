@@ -29,8 +29,10 @@ Generate a handful of “random but structured” prompts and render them via th
 
 ## Run
 
-Note: Image generation can take longer than common exec timeouts (for example 30 seconds).
-When invoking this skill via OpenClaw’s exec tool, set a higher timeout to avoid premature termination/retries (e.g., exec timeout=300).
+Note: Image generation can take longer than common host tool timeouts
+(for example 30 seconds). When invoking this skill via OpenClaw's
+`exec_command`, set a higher `timeout_sec` to avoid premature
+termination or retries (for example `timeout_sec=300`).
 
 ```bash
 python3 {baseDir}/scripts/gen.py

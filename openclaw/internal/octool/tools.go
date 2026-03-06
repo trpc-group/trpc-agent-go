@@ -6,7 +6,6 @@
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
-//
 
 package octool
 
@@ -18,66 +17,88 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const (
-	toolProcess = "process"
+	toolExecCommand = "exec_command"
+	toolWriteStdin  = "write_stdin"
+	toolKillSession = "kill_session"
+
+	errExecToolNotConfigured  = "exec tool is not configured"
+	errCommandRequired        = "command is required"
+	errWriteToolNotConfigured = "write_stdin tool is not configured"
+	errKillToolNotConfigured  = "kill_session tool is not configured"
+	errSessionIDRequired      = "session id is required"
 )
 
-type ExecTool struct {
-	name string
-	mgr  *Manager
+type execTool struct {
+	mgr *Manager
 }
 
-func NewExecTool(name string, mgr *Manager) *ExecTool {
-	return &ExecTool{name: name, mgr: mgr}
+// NewExecCommandTool creates the canonical host command tool.
+func NewExecCommandTool(mgr *Manager) tool.Tool {
+	return &execTool{mgr: mgr}
 }
 
-func (t *ExecTool) Declaration() *tool.Declaration {
+func (t *execTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
-		Name:        t.name,
-		Description: "Execute a shell command (OpenClaw compatible).",
+		Name: toolExecCommand,
+		Description: "Execute a host shell command. Use this for " +
+			"general local shell work. Interactive commands can " +
+			"continue with write_stdin.",
 		InputSchema: &tool.Schema{
 			Type:     "object",
 			Required: []string{"command"},
 			Properties: map[string]*tool.Schema{
 				"command": {
-					Type:        "string",
-					Description: "Shell command to execute",
-				},
-				"yieldMs": {
-					Type:        "number",
-					Description: "Auto-background after this delay (ms)",
-				},
-				"background": {
-					Type:        "boolean",
-					Description: "Run in background immediately",
-				},
-				"timeout": {
-					Type:        "number",
-					Description: "Timeout in seconds",
-				},
-				"timeoutSec": {
-					Type:        "number",
-					Description: "Alias for timeout",
-				},
-				"pty": {
-					Type:        "boolean",
-					Description: "Allocate a PTY (interactive CLIs)",
+					Type: "string",
+					Description: "Shell command to execute on " +
+						"the current machine.",
 				},
 				"workdir": {
 					Type:        "string",
-					Description: "Working directory",
+					Description: "Optional working directory.",
 				},
 				"env": {
-					Type:        "object",
-					Description: "Extra environment variables",
+					Type: "object",
+					Description: "Optional environment variable " +
+						"overrides.",
 				},
-				"elevated": {
+				"yield_time_ms": {
+					Type: "number",
+					Description: "How long to wait before " +
+						"returning. 0 waits for exit when " +
+						"possible.",
+				},
+				"background": {
+					Type: "boolean",
+					Description: "Run in the background " +
+						"immediately.",
+				},
+				"timeout_sec": {
+					Type: "number",
+					Description: "Maximum command runtime in " +
+						"seconds.",
+				},
+				"tty": {
+					Type: "boolean",
+					Description: "Allocate a TTY for interactive " +
+						"commands.",
+				},
+				"yieldMs": {
+					Type:        "number",
+					Description: "Alias for yield_time_ms.",
+				},
+				"timeoutSec": {
+					Type:        "number",
+					Description: "Alias for timeout_sec.",
+				},
+				"pty": {
 					Type:        "boolean",
-					Description: "Ignored (no sandbox in this demo)",
+					Description: "Alias for tty.",
 				},
 			},
 		},
@@ -85,20 +106,21 @@ func (t *ExecTool) Declaration() *tool.Declaration {
 }
 
 type execInput struct {
-	Command    string            `json:"command"`
-	YieldMs    *int              `json:"yieldMs,omitempty"`
-	Background bool              `json:"background,omitempty"`
-	Timeout    *int              `json:"timeout,omitempty"`
-	TimeoutSec *int              `json:"timeoutSec,omitempty"`
-	Pty        bool              `json:"pty,omitempty"`
-	Workdir    string            `json:"workdir,omitempty"`
-	Env        map[string]string `json:"env,omitempty"`
-	Elevated   bool              `json:"elevated,omitempty"`
+	Command       string            `json:"command"`
+	Workdir       string            `json:"workdir,omitempty"`
+	Env           map[string]string `json:"env,omitempty"`
+	YieldTimeMS   *int              `json:"yield_time_ms,omitempty"`
+	YieldMs       *int              `json:"yieldMs,omitempty"`
+	Background    bool              `json:"background,omitempty"`
+	TimeoutSec    *int              `json:"timeout_sec,omitempty"`
+	TimeoutSecOld *int              `json:"timeoutSec,omitempty"`
+	TTY           *bool             `json:"tty,omitempty"`
+	PTY           *bool             `json:"pty,omitempty"`
 }
 
-func (t *ExecTool) Call(ctx context.Context, args []byte) (any, error) {
-	if t.mgr == nil {
-		return nil, errors.New("exec tool is not configured")
+func (t *execTool) Call(ctx context.Context, args []byte) (any, error) {
+	if t == nil || t.mgr == nil {
+		return nil, errors.New(errExecToolNotConfigured)
 	}
 
 	var in execInput
@@ -106,144 +128,241 @@ func (t *ExecTool) Call(ctx context.Context, args []byte) (any, error) {
 		return nil, fmt.Errorf("invalid args: %w", err)
 	}
 	if strings.TrimSpace(in.Command) == "" {
-		return nil, errors.New("command is required")
+		return nil, errors.New(errCommandRequired)
 	}
 
-	timeoutS := in.Timeout
-	if timeoutS == nil && in.TimeoutSec != nil {
-		timeoutS = in.TimeoutSec
-	}
-
-	wd, err := resolveWorkdir(in.Workdir)
+	workdir, err := resolveWorkdir(in.Workdir)
 	if err != nil {
 		return nil, err
 	}
 
+	yield := firstInt(in.YieldTimeMS, in.YieldMs)
+	timeout := firstInt(in.TimeoutSec, in.TimeoutSecOld)
+	tty := firstBool(in.TTY, in.PTY)
+
 	return t.mgr.Exec(ctx, execParams{
 		Command:    in.Command,
-		Workdir:    wd,
+		Workdir:    workdir,
 		Env:        in.Env,
-		Pty:        in.Pty,
+		Pty:        tty,
 		Background: in.Background,
-		YieldMs:    in.YieldMs,
-		TimeoutS:   timeoutS,
+		YieldMs:    yield,
+		TimeoutS:   timeout,
 	})
 }
 
-type ProcessTool struct {
+type writeTool struct {
 	mgr *Manager
 }
 
-func NewProcessTool(mgr *Manager) *ProcessTool {
-	return &ProcessTool{mgr: mgr}
+// NewWriteStdinTool creates the stdin continuation tool.
+func NewWriteStdinTool(mgr *Manager) tool.Tool {
+	return &writeTool{mgr: mgr}
 }
 
-func (t *ProcessTool) Declaration() *tool.Declaration {
+func (t *writeTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
-		Name:        toolProcess,
-		Description: "Manage background sessions created by exec/bash.",
+		Name: toolWriteStdin,
+		Description: "Write to an existing exec_command session. " +
+			"When chars is empty, this acts like a poll.",
 		InputSchema: &tool.Schema{
 			Type:     "object",
-			Required: []string{"action"},
+			Required: []string{"session_id"},
 			Properties: map[string]*tool.Schema{
-				"action": {
-					Type:        "string",
-					Description: "list, poll, log, write, submit, kill, clear, remove",
+				"session_id": {
+					Type: "string",
+					Description: "Session id returned by " +
+						"exec_command.",
+				},
+				"chars": {
+					Type: "string",
+					Description: "Characters to write. Include " +
+						"\\n when the program expects Enter.",
+				},
+				"yield_time_ms": {
+					Type: "number",
+					Description: "Optional wait before polling " +
+						"recent output.",
+				},
+				"append_newline": {
+					Type:        "boolean",
+					Description: "Append a newline after chars.",
 				},
 				"sessionId": {
 					Type:        "string",
-					Description: "Session id from exec/bash",
+					Description: "Alias for session_id.",
 				},
-				"offset": {
+				"yieldMs": {
 					Type:        "number",
-					Description: "Line offset for log",
+					Description: "Alias for yield_time_ms.",
 				},
-				"limit": {
-					Type:        "number",
-					Description: "Line limit for poll/log",
-				},
-				"data": {
-					Type:        "string",
-					Description: "Stdin data for write/submit",
+				"submit": {
+					Type:        "boolean",
+					Description: "Alias for append_newline.",
 				},
 			},
 		},
 	}
 }
 
-type processInput struct {
-	Action    string `json:"action"`
-	SessionID string `json:"sessionId,omitempty"`
-	Offset    *int   `json:"offset,omitempty"`
-	Limit     *int   `json:"limit,omitempty"`
-	Data      string `json:"data,omitempty"`
+type writeInput struct {
+	SessionID     string `json:"session_id,omitempty"`
+	SessionIDOld  string `json:"sessionId,omitempty"`
+	Chars         string `json:"chars,omitempty"`
+	YieldTimeMS   *int   `json:"yield_time_ms,omitempty"`
+	YieldMs       *int   `json:"yieldMs,omitempty"`
+	AppendNewline *bool  `json:"append_newline,omitempty"`
+	Submit        *bool  `json:"submit,omitempty"`
 }
 
-func (t *ProcessTool) Call(ctx context.Context, args []byte) (any, error) {
-	_ = ctx
-	if t.mgr == nil {
-		return nil, errors.New("process tool is not configured")
+func (t *writeTool) Call(ctx context.Context, args []byte) (any, error) {
+	if t == nil || t.mgr == nil {
+		return nil, errors.New(errWriteToolNotConfigured)
 	}
 
-	var in processInput
+	var in writeInput
 	if err := json.Unmarshal(args, &in); err != nil {
 		return nil, fmt.Errorf("invalid args: %w", err)
 	}
 
-	action := strings.ToLower(strings.TrimSpace(in.Action))
-	switch action {
-	case "list":
-		return map[string]any{
-			"sessions": t.mgr.list(),
-		}, nil
-	case "poll":
-		if err := requireSessionID(in.SessionID); err != nil {
-			return nil, err
+	sessionID := strings.TrimSpace(in.SessionID)
+	if sessionID == "" {
+		sessionID = strings.TrimSpace(in.SessionIDOld)
+	}
+	if sessionID == "" {
+		return nil, errors.New(errSessionIDRequired)
+	}
+
+	appendNewline := firstBool(in.AppendNewline, in.Submit)
+	if _, err := t.mgr.write(
+		sessionID,
+		in.Chars,
+		appendNewline,
+	); err != nil {
+		return nil, err
+	}
+
+	yield := defaultWriteYield
+	if v := firstInt(in.YieldTimeMS, in.YieldMs); v != nil &&
+		*v >= 0 {
+		yield = *v
+	}
+	if yield > 0 {
+		timer := time.NewTimer(time.Duration(yield) * time.Millisecond)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-timer.C:
 		}
-		return t.mgr.poll(in.SessionID, in.Limit)
-	case "log":
-		if err := requireSessionID(in.SessionID); err != nil {
-			return nil, err
-		}
-		return t.mgr.log(in.SessionID, in.Offset, in.Limit)
-	case "write":
-		if err := requireSessionID(in.SessionID); err != nil {
-			return nil, err
-		}
-		return t.mgr.write(in.SessionID, in.Data, false)
-	case "submit":
-		if err := requireSessionID(in.SessionID); err != nil {
-			return nil, err
-		}
-		return t.mgr.write(in.SessionID, in.Data, true)
-	case "kill":
-		if err := requireSessionID(in.SessionID); err != nil {
-			return nil, err
-		}
-		err := t.mgr.kill(in.SessionID)
-		return map[string]any{"ok": err == nil}, err
-	case "clear":
-		if err := requireSessionID(in.SessionID); err != nil {
-			return nil, err
-		}
-		return map[string]any{
-			"ok": true,
-		}, t.mgr.clearFinished(in.SessionID)
-	case "remove":
-		if err := requireSessionID(in.SessionID); err != nil {
-			return nil, err
-		}
-		return map[string]any{"ok": true}, t.mgr.remove(in.SessionID)
-	default:
-		return nil, fmt.Errorf("unsupported action: %s", in.Action)
+	}
+
+	poll, err := t.mgr.poll(sessionID, nil)
+	if err != nil {
+		return nil, err
+	}
+	return mapPollResult(sessionID, poll), nil
+}
+
+type killTool struct {
+	mgr *Manager
+}
+
+// NewKillSessionTool creates the session termination tool.
+func NewKillSessionTool(mgr *Manager) tool.Tool {
+	return &killTool{mgr: mgr}
+}
+
+func (t *killTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{
+		Name:        toolKillSession,
+		Description: "Terminate a running exec_command session.",
+		InputSchema: &tool.Schema{
+			Type:     "object",
+			Required: []string{"session_id"},
+			Properties: map[string]*tool.Schema{
+				"session_id": {
+					Type: "string",
+					Description: "Session id returned by " +
+						"exec_command.",
+				},
+				"sessionId": {
+					Type:        "string",
+					Description: "Alias for session_id.",
+				},
+			},
+		},
 	}
 }
 
-func requireSessionID(id string) error {
-	if strings.TrimSpace(id) == "" {
-		return errors.New("sessionId is required")
+type killInput struct {
+	SessionID    string `json:"session_id,omitempty"`
+	SessionIDOld string `json:"sessionId,omitempty"`
+}
+
+func (t *killTool) Call(ctx context.Context, args []byte) (any, error) {
+	_ = ctx
+	if t == nil || t.mgr == nil {
+		return nil, errors.New(errKillToolNotConfigured)
+	}
+
+	var in killInput
+	if err := json.Unmarshal(args, &in); err != nil {
+		return nil, fmt.Errorf("invalid args: %w", err)
+	}
+
+	sessionID := strings.TrimSpace(in.SessionID)
+	if sessionID == "" {
+		sessionID = strings.TrimSpace(in.SessionIDOld)
+	}
+	if sessionID == "" {
+		return nil, errors.New(errSessionIDRequired)
+	}
+
+	err := t.mgr.kill(sessionID)
+	return map[string]any{
+		"ok":         err == nil,
+		"session_id": sessionID,
+	}, err
+}
+
+const (
+	defaultWriteYield = 200
+)
+
+func mapPollResult(
+	sessionID string,
+	poll processPoll,
+) map[string]any {
+	out := map[string]any{
+		"session_id":  sessionID,
+		"status":      poll.Status,
+		"output":      poll.Output,
+		"offset":      poll.Offset,
+		"next_offset": poll.NextOffset,
+	}
+	if poll.ExitCode != nil {
+		out["exit_code"] = *poll.ExitCode
+	}
+	return out
+}
+
+func firstInt(values ...*int) *int {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
 	}
 	return nil
+}
+
+func firstBool(values ...*bool) bool {
+	for _, value := range values {
+		if value != nil {
+			return *value
+		}
+	}
+	return false
 }
 
 func resolveWorkdir(raw string) (string, error) {
@@ -268,5 +387,6 @@ func resolveWorkdir(raw string) (string, error) {
 	return s, nil
 }
 
-var _ tool.CallableTool = (*ExecTool)(nil)
-var _ tool.CallableTool = (*ProcessTool)(nil)
+var _ tool.CallableTool = (*execTool)(nil)
+var _ tool.CallableTool = (*writeTool)(nil)
+var _ tool.CallableTool = (*killTool)(nil)

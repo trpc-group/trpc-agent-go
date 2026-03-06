@@ -809,8 +809,9 @@ go run ./cmd/openclaw \
 ```
 
 Note: OpenClaw skills often assume the OpenClaw tool surface. This demo
-can optionally enable OpenClaw-compatible `exec` / `process` tools (see
-below), but it is not a full OpenClaw replacement.
+enables the OpenClaw host tools for the default LLM agent so skills can
+use `exec_command`, `message`, and `cron`, but it is not a full
+OpenClaw replacement.
 
 In a chat, you can ask the assistant to list and run skills. For
 example:
@@ -996,29 +997,34 @@ go run ./cmd/openclaw \
   -memory-auto-messages 20
 ```
 
-## OpenClaw exec/process tools (unsafe)
+## OpenClaw host tools (unsafe)
 
-OpenClaw skills commonly rely on two tools:
+This demo exposes a code-agent-first host tool surface for the default
+LLM agent, but it is **unsafe** when exposed to untrusted inputs.
 
-- `exec` (or older skills: `bash`) to run shell commands
-- `process` to manage background sessions
+The assistant gets:
 
-This demo can provide OpenClaw-compatible tools, but they are **unsafe**
-when exposed to untrusted inputs.
+- `exec_command` for general host shell work
+- `write_stdin` and `kill_session` for interactive commands
+- `message` for sending to the current chat or explicit targets
+- `cron` for future or recurring jobs
 
-Enable with:
+To disable these tools explicitly:
 
 ```bash
 go run ./cmd/openclaw \
   -mode openai \
   -model deepseek-chat \
   -config ./openclaw.yaml \
-  -enable-openclaw-tools
+  -enable-openclaw-tools=false
 ```
 
-Once enabled, you can ask the assistant to run a command. For example:
+Once enabled, you can ask the assistant to run a command, send to the
+current chat, or create a recurring job. For example:
 
 ```
-Use the exec tool to run: echo hello
-If it runs in background, use the process tool to poll until it exits.
+Use exec_command to run: echo hello
+If it is interactive, continue with write_stdin.
+Create a cron job that reports system resources every minute to
+this Telegram chat.
 ```

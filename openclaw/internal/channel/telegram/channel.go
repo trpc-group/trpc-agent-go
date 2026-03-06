@@ -80,6 +80,9 @@ const (
 	defaultMaxDownloadBytes int64 = 8 << 20
 )
 
+// ChannelName is the stable channel identifier used across OpenClaw.
+const ChannelName = channelID
+
 const (
 	notAllowedMessage = "You are not allowed to use this bot."
 

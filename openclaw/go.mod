@@ -50,6 +50,7 @@ require (
 	github.com/creack/pty v1.1.24
 	github.com/google/uuid v1.6.0
 	github.com/mattn/go-sqlite3 v1.14.32
+	github.com/robfig/cron/v3 v3.0.1
 	github.com/stretchr/testify v1.11.1
 	gopkg.in/yaml.v3 v3.0.1
 	trpc.group/trpc-go/trpc-agent-go v1.5.0

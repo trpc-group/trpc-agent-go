@@ -177,6 +177,8 @@ type runOptions struct {
 	EnableOpenClawTools bool
 	EnableParallelTools bool
 
+	enableOpenClawToolsExplicit bool
+
 	ToolProviders []pluginSpec
 	ToolSets      []pluginSpec
 
@@ -610,7 +612,8 @@ func parseRunOptions(args []string) (runOptions, error) {
 		&opts.EnableOpenClawTools,
 		"enable-openclaw-tools",
 		false,
-		"Enable OpenClaw-compatible exec/process tools (unsafe)",
+		"Enable OpenClaw host tools (exec_command, message, "+
+			"cron) (unsafe, enabled by default for llm agents)",
 	)
 	fs.BoolVar(
 		&opts.EnableParallelTools,
@@ -639,6 +642,10 @@ func parseRunOptions(args []string) (runOptions, error) {
 	fs.Visit(func(f *flag.Flag) {
 		setFlags[f.Name] = struct{}{}
 	})
+	opts.enableOpenClawToolsExplicit = flagWasSet(
+		setFlags,
+		"enable-openclaw-tools",
+	)
 
 	cfgPath := resolveConfigPath(opts.ConfigPath)
 	if cfgPath == "" {
@@ -1245,9 +1252,12 @@ func (cfg *fileConfig) apply(
 			!flagWasSet(set, "enable-local-exec") {
 			opts.EnableLocalExec = *cfg.Tools.EnableLocalExec
 		}
-		if cfg.Tools.EnableOpenClawTools != nil &&
-			!flagWasSet(set, "enable-openclaw-tools") {
-			opts.EnableOpenClawTools = *cfg.Tools.EnableOpenClawTools
+		if cfg.Tools.EnableOpenClawTools != nil {
+			opts.enableOpenClawToolsExplicit = true
+			if !flagWasSet(set, "enable-openclaw-tools") {
+				opts.EnableOpenClawTools =
+					*cfg.Tools.EnableOpenClawTools
+			}
 		}
 		if cfg.Tools.EnableParallelTools != nil &&
 			!flagWasSet(set, flagEnableParallelTools) {

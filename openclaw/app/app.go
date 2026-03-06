@@ -40,9 +40,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/cron"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/octool"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
 	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 )
@@ -67,6 +69,15 @@ const (
 	defaultAgentName        = "assistant"
 	defaultAgentInstruction = "You are a helpful assistant. " +
 		"Keep replies concise."
+
+	openClawToolingGuidance = "For general local shell work, use " +
+		"exec_command. For interactive follow-up input, use " +
+		"write_stdin and kill_session when needed. Use message " +
+		"to send to the current chat or an explicit target. " +
+		"When creating a cron job from chat, omit channel and " +
+		"target to send results back to the current chat by " +
+		"default. Use cron for future or recurring work. " +
+		"Use skill_run only for skill workspace workflows."
 
 	agentTypeLLM        = "llm"
 	agentTypeClaudeCode = "claude-code"
@@ -125,6 +136,18 @@ type exitError struct {
 	Err  error
 }
 
+func applyOpenClawToolDefaults(
+	agentType string,
+	opts *runOptions,
+) {
+	if opts == nil || opts.enableOpenClawToolsExplicit {
+		return
+	}
+	if agentType == agentTypeLLM {
+		opts.EnableOpenClawTools = true
+	}
+}
+
 func (e *exitError) Error() string {
 	if e == nil || e.Err == nil {
 		return ""
@@ -155,6 +178,7 @@ type Runtime struct {
 	runner     runner.Runner
 	sessionSvc closeFunc
 	memorySvc  closeFunc
+	cronSvc    closeFunc
 	toolSets   []tool.ToolSet
 }
 
@@ -193,6 +217,7 @@ func NewRuntime(
 			Err:  fmt.Errorf("agent config failed: %w", err),
 		}
 	}
+	applyOpenClawToolDefaults(agentType, &opts)
 	if err := validateAgentRunOptions(agentType, opts); err != nil {
 		return nil, &exitError{
 			Code: 1,
@@ -282,6 +307,10 @@ func NewRuntime(
 		}
 	}
 
+	openClawTools := buildOpenClawTools(opts.EnableOpenClawTools)
+	extraTools := append([]tool.Tool(nil), memSvc.Tools()...)
+	extraTools = append(extraTools, openClawTools.tools...)
+
 	var (
 		toolSets []tool.ToolSet
 		ag       agent.Agent
@@ -332,7 +361,7 @@ func NewRuntime(
 			ToolSets:      opts.ToolSets,
 
 			RefreshToolSetsOnRun: opts.RefreshToolSetsOnRun,
-		}, memSvc.Tools(), toolSets)
+		}, extraTools, toolSets)
 	}
 	if err != nil {
 		closeToolSets(toolSets)
@@ -417,6 +446,26 @@ func NewRuntime(
 		rt.Channels = append(rt.Channels, extra...)
 	}
 
+	if openClawTools.router != nil {
+		for _, ch := range rt.Channels {
+			openClawTools.router.Register(ch)
+		}
+		cronSvc, err := cron.NewService(
+			resolvedStateDir,
+			r,
+			openClawTools.router,
+		)
+		if err != nil {
+			return nil, &exitError{
+				Code: 1,
+				Err:  fmt.Errorf("create cron service failed: %w", err),
+			}
+		}
+		openClawTools.cronTool.SetService(cronSvc)
+		cronSvc.Start(ctx)
+		rt.cronSvc = cronSvc
+	}
+
 	return rt, nil
 }
 
@@ -426,6 +475,9 @@ func (r *Runtime) Close() error {
 		return nil
 	}
 
+	if r.cronSvc != nil {
+		_ = r.cronSvc.Close()
+	}
 	closeToolSets(r.toolSets)
 	closeMemoryService(r.memorySvc)
 	closeSessionService(r.sessionSvc)
@@ -449,6 +501,7 @@ func run(ctx context.Context, args []string) error {
 			Err:  fmt.Errorf("agent config failed: %w", err),
 		}
 	}
+	applyOpenClawToolDefaults(agentType, &opts)
 	if err := validateAgentRunOptions(agentType, opts); err != nil {
 		return &exitError{
 			Code: 1,
@@ -538,6 +591,10 @@ func run(ctx context.Context, args []string) error {
 		}
 	}
 
+	openClawTools := buildOpenClawTools(opts.EnableOpenClawTools)
+	extraTools := append([]tool.Tool(nil), memSvc.Tools()...)
+	extraTools = append(extraTools, openClawTools.tools...)
+
 	var (
 		toolSets []tool.ToolSet
 		ag       agent.Agent
@@ -591,7 +648,7 @@ func run(ctx context.Context, args []string) error {
 			ToolSets:      opts.ToolSets,
 
 			RefreshToolSetsOnRun: opts.RefreshToolSetsOnRun,
-		}, memSvc.Tools(), toolSets)
+		}, extraTools, toolSets)
 	}
 	if err != nil {
 		return &exitError{
@@ -675,6 +732,26 @@ func run(ctx context.Context, args []string) error {
 		channels = append(channels, extra...)
 	}
 
+	var cronSvc *cron.Service
+	if openClawTools.router != nil {
+		for _, ch := range channels {
+			openClawTools.router.Register(ch)
+		}
+		cronSvc, err = cron.NewService(
+			resolvedStateDir,
+			r,
+			openClawTools.router,
+		)
+		if err != nil {
+			return &exitError{
+				Code: 1,
+				Err:  fmt.Errorf("create cron service failed: %w", err),
+			}
+		}
+		openClawTools.cronTool.SetService(cronSvc)
+		cronSvc.Start(runCtx)
+	}
+
 	workerCount := 1 + len(channels)
 	errCh := make(chan error, workerCount)
 
@@ -714,6 +791,9 @@ func run(ctx context.Context, args []string) error {
 	defer cancel()
 
 	_ = httpSrv.Shutdown(shutdownCtx)
+	if cronSvc != nil {
+		_ = cronSvc.Close()
+	}
 	_ = r.Close()
 
 	for received < workerCount {
@@ -1018,6 +1098,11 @@ func newAgent(
 	if instruction == "" {
 		instruction = defaultAgentInstruction
 	}
+	if cfg.EnableOpenClawTools {
+		instruction = strings.TrimSpace(
+			instruction + "\n\n" + openClawToolingGuidance,
+		)
+	}
 
 	opts := []llmagent.Option{
 		llmagent.WithModel(mdl),
@@ -1072,14 +1157,6 @@ func newAgent(
 
 	tools := append([]tool.Tool(nil), extraTools...)
 	tools = append(tools, ocskills.NewListTool(repo))
-	if cfg.EnableOpenClawTools {
-		mgr := octool.NewManager()
-		tools = append(tools,
-			octool.NewExecTool("exec", mgr),
-			octool.NewExecTool("bash", mgr),
-			octool.NewProcessTool(mgr),
-		)
-	}
 	if len(cfg.ToolProviders) > 0 {
 		extra, err := toolsFromProviders(
 			mdl,
@@ -1298,6 +1375,35 @@ type agentConfig struct {
 	ToolSets []pluginSpec
 
 	RefreshToolSetsOnRun bool
+}
+
+type openClawToolsBundle struct {
+	tools    []tool.Tool
+	router   *outbound.Router
+	cronTool *cron.Tool
+}
+
+func buildOpenClawTools(enabled bool) openClawToolsBundle {
+	if !enabled {
+		return openClawToolsBundle{}
+	}
+
+	mgr := octool.NewManager()
+	router := outbound.NewRouter()
+	cronTool := cron.NewTool(nil)
+
+	tools := []tool.Tool{
+		octool.NewExecCommandTool(mgr),
+		octool.NewWriteStdinTool(mgr),
+		octool.NewKillSessionTool(mgr),
+		outbound.NewTool(router),
+		cronTool,
+	}
+	return openClawToolsBundle{
+		tools:    tools,
+		router:   router,
+		cronTool: cronTool,
+	}
 }
 
 func resolveSkillRoots(cwd string, cfg agentConfig) []string {

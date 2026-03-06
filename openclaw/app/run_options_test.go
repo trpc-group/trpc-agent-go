@@ -71,6 +71,32 @@ func TestParseRunOptions_UsesDefaultConfigPath(t *testing.T) {
 	require.Equal(t, "demo", opts.AppName)
 }
 
+func TestApplyOpenClawToolDefaults_LLMEnablesTools(t *testing.T) {
+	t.Parallel()
+
+	opts := runOptions{}
+	applyOpenClawToolDefaults(agentTypeLLM, &opts)
+	require.True(t, opts.EnableOpenClawTools)
+}
+
+func TestApplyOpenClawToolDefaults_RespectsExplicitFalse(t *testing.T) {
+	t.Parallel()
+
+	opts := runOptions{
+		enableOpenClawToolsExplicit: true,
+	}
+	applyOpenClawToolDefaults(agentTypeLLM, &opts)
+	require.False(t, opts.EnableOpenClawTools)
+}
+
+func TestApplyOpenClawToolDefaults_ClaudeCodeStaysOff(t *testing.T) {
+	t.Parallel()
+
+	opts := runOptions{}
+	applyOpenClawToolDefaults(agentTypeClaudeCode, &opts)
+	require.False(t, opts.EnableOpenClawTools)
+}
+
 func TestParseRunOptions_FlagOverridesConfig(t *testing.T) {
 	t.Parallel()
 

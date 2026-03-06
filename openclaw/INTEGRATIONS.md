@@ -346,8 +346,13 @@ Telegram:
 
 Tool surface keys (optional):
 
-- If `tools.enable_openclaw_tools: true`, this demo adds:
-  - `tools.exec`, `tools.bash`, `tools.process`
+- For the default LLM agent, this demo adds:
+  - `tools.exec_command`
+  - `tools.write_stdin`
+  - `tools.kill_session`
+  - `tools.message`
+  - `tools.cron`
+- Set `tools.enable_openclaw_tools: false` to disable them.
 - If `tools.enable_local_exec: true`, this demo adds:
   - `tools.local_exec`
 
@@ -389,18 +394,21 @@ Some OpenClaw skill packs use `{baseDir}` in commands and docs to mean
 This demo replaces `{baseDir}` in loaded skill bodies/docs with the
 actual local path to keep those skill packs usable.
 
-### Skills and tool compatibility (OpenClaw-style `exec` / `process`)
+### Skills and tool compatibility (OpenClaw host tools)
 
 Some skill packs assume an OpenClaw-like tool surface, especially:
 
-- `exec` (or `bash`): execute a shell command
-- `process`: manage long-running sessions
+- `exec_command`: execute a host shell command
+- `write_stdin`: continue an interactive command
+- `message`: send to the current chat
+- `cron`: create future or recurring jobs
 
-This demo can enable OpenClaw-compatible tools:
+This demo enables OpenClaw-compatible host tools for the default LLM
+agent. To disable them explicitly:
 
 ```yaml
 tools:
-  enable_openclaw_tools: true
+  enable_openclaw_tools: false
 ```
 
 To further reduce risk, you can restrict what `skill_run` is allowed to
