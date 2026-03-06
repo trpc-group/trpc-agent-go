@@ -1,0 +1,57 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "soccer_final",
+  "runId": 1,
+  "invocations": [
+    {
+      "metrics": [
+        {
+          "metricName": "llm_critic",
+          "score": 0.5,
+          "threshold": 0.8,
+          "evalStatus": "failed",
+          "output": {
+            "assessment": "candidate 满足单一 JSON 且仅含 content 的契约；比分与 12'、67'、88' 三次进球均与输入一致，整体叙述清晰。但其“曼城…并在补时阶段领到一张黄牌”在句法上默认延续主语，将 90+2' 黄牌归因给曼城；而输入仅有“Yellow card shown”并未指明球队/球员，属于根据语境补全，违反“严格基于输入、不编造”的要求。Prompt 需要更明确规定：当事件缺少归属信息时必须中性描述，并避免并列结构导致的默认归因，否则类似黄牌/红牌等条目会被错误指派。",
+            "issues": [
+              {
+                "action": "在 Prompt 中加入硬约束：凡输入的事件/高亮未提供执行者或受罚方（球队/球员），只能用中性措辞描述（如“补时阶段出现黄牌”），禁止推断归属或默认沿用上一句主语。",
+                "key": "no_inferred_event_actor",
+                "severity": "P0",
+                "summary": "Prompt 缺少“事件未指明主体时不得推断球队/球员归属”的明确约束，导致把黄牌错误归因到曼城。"
+              },
+              {
+                "action": "在 Prompt 中要求：多事件叙述时每条 highlight 尽量独立成句或显式写明主语切换；对主体不明的条目使用无主句/被动句，避免“X…并在…”等并列结构造成主语自动延续。",
+                "key": "avoid_subject_carryover",
+                "severity": "P1",
+                "summary": "Prompt 未提示并列/承接句式会引入“主语延续”的隐性推断，从而产生事实归因错误。"
+              }
+            ],
+            "rubrics": [
+              {
+                "id": "r1",
+                "reason": "输出为单个 JSON 对象，且仅包含字段 content，无额外文本/字段。",
+                "verdict": "yes"
+              },
+              {
+                "id": "r3",
+                "reason": "将 90+2' 的黄牌用“曼城…并在补时阶段领到一张黄牌”归因给曼城，但输入未指明黄牌对象，属于不基于输入的补全。",
+                "verdict": "no"
+              }
+            ]
+          },
+          "rubricScores": [
+            {
+              "id": "r1",
+              "reason": "输出为单个 JSON 对象，且仅包含字段 content，无额外文本/字段。",
+              "score": 1
+            },
+            {
+              "id": "r3",
+              "reason": "将 90+2' 的黄牌用“曼城…并在补时阶段领到一张黄牌”归因给曼城，但输入未指明黄牌对象，属于不基于输入的补全。"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

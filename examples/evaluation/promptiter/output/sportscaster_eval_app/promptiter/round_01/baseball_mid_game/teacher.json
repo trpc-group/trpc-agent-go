@@ -1,0 +1,18 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "baseball_mid_game",
+  "runId": 1,
+  "invocations": [
+    {
+      "invocationId": "4172bf35-ec4a-4b0a-8d2b-707f7b9ccb4f",
+      "userContent": {
+        "role": "user",
+        "content": "{\"sport\":\"baseball\",\"league\":\"MLB\",\"match_id\":\"mlb_20260223_nyy_bos\",\"home_team\":\"Boston Red Sox\",\"away_team\":\"New York Yankees\",\"status\":\"in_progress\",\"phase\":\"Top 7\",\"clock\":null,\"score\":{\"home\":2,\"away\":3},\"highlights\":[{\"time\":\"Top 5\",\"text\":\"Yankees hit a two-run home run.\"},{\"time\":\"Bottom 6\",\"text\":\"Red Sox scored on a sacrifice fly.\"}],\"last_update\":\"2026-02-23T20:18:00+08:00\"}"
+      },
+      "finalResponse": {
+        "role": "assistant",
+        "content": "{\"content\":\"MLB 第七局上半（Top 7）！纽约扬基 3:2 领先波士顿红袜！五局上，扬基一发两分全垒打轰开局面——六局下，红袜用高飞牺牲打追回一分！现在只差 1 分，后面每一次上垒、每一个出局，都可能把走势彻底改写！\"}"
+      }
+    }
+  ]
+}

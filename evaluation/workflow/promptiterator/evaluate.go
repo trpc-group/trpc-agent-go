@@ -37,6 +37,8 @@ func (w *promptIterator) evaluateRound(ctx context.Context, idx int, promptText 
 			evaluation.WithRegistry(callOpts.registry),
 			evaluation.WithExpectedRunner(callOpts.expectedRunner),
 			evaluation.WithRunOptions(runOpts...),
+			evaluation.WithEvalCaseParallelInferenceEnabled(true),
+			evaluation.WithEvalCaseParallelEvaluationEnabled(true),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("evaluate %s: %w", evalSetID, err)

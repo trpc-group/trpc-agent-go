@@ -1,0 +1,18 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "baseball_mid_game",
+  "runId": 1,
+  "invocations": [
+    {
+      "invocationId": "a154f906-1dc6-4c0f-ba71-87ec7f385973",
+      "userContent": {
+        "role": "user",
+        "content": "{\"sport\":\"baseball\",\"league\":\"MLB\",\"match_id\":\"mlb_20260223_nyy_bos\",\"home_team\":\"Boston Red Sox\",\"away_team\":\"New York Yankees\",\"status\":\"in_progress\",\"phase\":\"Top 7\",\"clock\":null,\"score\":{\"home\":2,\"away\":3},\"highlights\":[{\"time\":\"Top 5\",\"text\":\"Yankees hit a two-run home run.\"},{\"time\":\"Bottom 6\",\"text\":\"Red Sox scored on a sacrifice fly.\"}],\"last_update\":\"2026-02-23T20:18:00+08:00\"}"
+      },
+      "finalResponse": {
+        "role": "assistant",
+        "content": "{\"content\":\"MLB 第七局上半（Top 7）！New York Yankees 3:2 领先 Boston Red Sox！五局上 Yankees 轰出一发两分全垒打，把局面打出优势——六局下 Red Sox 靠高飞牺牲打追回一分！现在只差 1 分，比赛进入后半程，谁先抓住机会，走向就可能被瞬间改写！\"}"
+      }
+    }
+  ]
+}

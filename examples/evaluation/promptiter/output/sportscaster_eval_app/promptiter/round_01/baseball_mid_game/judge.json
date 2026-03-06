@@ -1,0 +1,63 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "baseball_mid_game",
+  "runId": 1,
+  "invocations": [
+    {
+      "metrics": [
+        {
+          "metricName": "llm_critic",
+          "score": 0.5,
+          "threshold": 0.8,
+          "evalStatus": "failed",
+          "output": {
+            "assessment": "该样本中，candidate 能以单一 JSON 对象输出且仅含 content 字段，结构契约符合要求；正文也正确复述了输入中的关键信息：Top 7、比分 3:2，以及五局上两分本垒打与六局下牺牲高飞得分等亮点，未出现明显的时间/比分冲突。但 content 末句“比赛进入最后阶段，双方争夺激烈”属于对比赛态势的主观渲染，输入 JSON 并未提供“激烈”或类似判断依据，在“必须严格基于输入、不得编造”的约束下构成不够可追溯的新增信息。此问题可能源于 Prompt 未明确禁止情绪化/推断性描述，或未要求每句都能对应到输入字段（或可计算派生信息）。",
+            "issues": [
+              {
+                "action": "Prompt 需要明确禁止加入输入 JSON 未包含、且无法由字段直接计算/推导的主观判断与氛围渲染（如“争夺激烈/胶着/形势大好”等），要求此类句子一律删除而非润色替换。",
+                "key": "ban_subjective_ungrounded_claims",
+                "severity": "P0",
+                "summary": "Prompt 缺少对“主观态势/渲染性措辞”严格禁止的硬约束，导致输出出现无法从输入验证的内容。"
+              },
+              {
+                "action": "Prompt 需要增加“逐句可追溯”规则：每句话必须能指向 user_input 的具体字段（phase/score/highlights/last_update 等）或明确允许的派生量（如分差=1），否则不得输出；并建议在生成前做一次自检删除不满足者。",
+                "key": "require_sentence_level_grounding",
+                "severity": "P0",
+                "summary": "Prompt 未要求输出句子与输入字段建立对应关系，容易混入不可验证的补充描述。"
+              },
+              {
+                "action": "Prompt 可补充“避免空泛收尾句”约束：禁止使用不携带新信息的通用结尾（如“双方争夺激烈/比赛进入白热化”），改为仅输出结构化事实或可计算信息。",
+                "key": "avoid_generic_filler_lines",
+                "severity": "P1",
+                "summary": "Prompt 未限制空泛套话，容易引入与输入无关或不可验证的泛化表述。"
+              }
+            ],
+            "rubrics": [
+              {
+                "id": "r1",
+                "reason": "candidate_output 为单个 JSON 对象，且仅包含 content 字段，没有额外文本或字段。",
+                "verdict": "yes"
+              },
+              {
+                "id": "r3",
+                "reason": "多数信息来自输入，但“双方争夺激烈/最后阶段”等态势判断未在输入中给出且不可严格验证，属于不够严格基于输入的新增描述。",
+                "verdict": "no"
+              }
+            ]
+          },
+          "rubricScores": [
+            {
+              "id": "r1",
+              "reason": "candidate_output 为单个 JSON 对象，且仅包含 content 字段，没有额外文本或字段。",
+              "score": 1
+            },
+            {
+              "id": "r3",
+              "reason": "多数信息来自输入，但“双方争夺激烈/最后阶段”等态势判断未在输入中给出且不可严格验证，属于不够严格基于输入的新增描述。"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

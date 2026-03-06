@@ -1,0 +1,18 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "soccer_final",
+  "runId": 1,
+  "invocations": [
+    {
+      "invocationId": "fa326840-eaf7-479f-b9f4-ceafe536a81f",
+      "userContent": {
+        "role": "user",
+        "content": "{\"sport\":\"soccer\",\"league\":\"UEFA Champions League\",\"match_id\":\"ucl_20260224_mci_rma\",\"home_team\":\"Manchester City\",\"away_team\":\"Real Madrid\",\"status\":\"finished\",\"phase\":\"FT\",\"clock\":null,\"score\":{\"home\":2,\"away\":1},\"highlights\":[{\"time\":\"12'\",\"text\":\"Goal: Manchester City (1-0).\"},{\"time\":\"67'\",\"text\":\"Goal: Real Madrid (1-1).\"},{\"time\":\"88'\",\"text\":\"Goal: Manchester City (2-1).\"},{\"time\":\"90+2'\",\"text\":\"Yellow card shown.\"}],\"last_update\":\"2026-02-24T23:55:00+08:00\"}"
+      },
+      "finalResponse": {
+        "role": "assistant",
+        "content": "{\n  \"content\": \"UEFA Champions League | finished | FT | Manchester City 2-1 Real Madrid | - 12' Goal: Manchester City (1-0). | - 67' Goal: Real Madrid (1-1). | - 88' Goal: Manchester City (2-1). | - 90+2' Yellow card shown.\"\n}"
+      }
+    }
+  ]
+}

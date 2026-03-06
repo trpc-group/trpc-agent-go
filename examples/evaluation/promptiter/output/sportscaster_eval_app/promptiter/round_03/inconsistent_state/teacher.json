@@ -1,0 +1,18 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "inconsistent_state",
+  "runId": 1,
+  "invocations": [
+    {
+      "invocationId": "4a958fc8-b1c4-41a0-b2a8-fa2ecde22893",
+      "userContent": {
+        "role": "user",
+        "content": "{\"sport\":\"basketball\",\"league\":\"NBA\",\"home_team\":\"Team X\",\"away_team\":\"Team Y\",\"status\":\"finished\",\"phase\":\"Q4\",\"clock\":\"05:00\",\"score\":{\"home\":110,\"away\":108},\"highlights\":[{\"time\":\"Final\",\"text\":\"Reported as finished.\"}],\"last_update\":\"2026-02-22T22:01:00+08:00\"}"
+      },
+      "finalResponse": {
+        "role": "assistant",
+        "content": "{\"content\":\"全场结束！NBA 这场较量，主场 Team X 以 110:108 拿下 Team Y！末节收官，比分就定格在 2 分差——比赛已宣告结束！\"}"
+      }
+    }
+  ]
+}

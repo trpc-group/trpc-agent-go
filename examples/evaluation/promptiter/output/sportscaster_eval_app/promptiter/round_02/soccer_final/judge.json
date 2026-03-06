@@ -1,0 +1,64 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "soccer_final",
+  "runId": 1,
+  "invocations": [
+    {
+      "metrics": [
+        {
+          "metricName": "llm_critic",
+          "score": 1,
+          "threshold": 0.8,
+          "evalStatus": "passed",
+          "output": {
+            "assessment": "candidate 能满足契约：输出为单一 JSON 且仅含 content；其中赛事、阶段(FT)、比分 2-1 及 4 条事件时间点均来自输入 highlights/score，与输入不冲突且无编造。与 teacher 相比，主要偏差在呈现方式：candidate 采用英文与“|”分隔的清单，缺少中文解说式总述、分段叙事与情绪化收束，比分与结束语的固定表达也不一致。若 Prompt 未明确语言、口吻与排版模板，类似样本中容易出现列表化/中英混杂、可读性与参考风格不一致的赛况回顾。",
+            "issues": [
+              {
+                "action": "Prompt 增加硬约束：正文使用中文输出；采用解说式连贯叙述（先总述再按时间串联事件），避免仅用英文要点清单；可补充期望语气与示例句式。",
+                "key": "language_and_narration_constraints",
+                "severity": "P1",
+                "summary": "Prompt 未明确要求与参考一致的中文叙述与解说风格，导致输出偏英文列表而非中文赛况回顾。"
+              },
+              {
+                "action": "Prompt 明确排版规范：首句包含“全场结束(FT)+对阵+比分”，随后用换行/段落按时间顺序描述 highlights；限制使用“|”等分隔符堆叠以保证可读性。",
+                "key": "formatting_template_readability",
+                "severity": "P1",
+                "summary": "Prompt 未规定段落结构与可读性排版模板，导致输出使用大量分隔符，结构与参考不一致。"
+              },
+              {
+                "action": "Prompt 明确一致的记分与标签写法（如比分用“2:1”或“2-1”择一、FT/全场结束的固定位置）；同时说明球队名是否必须与输入完全一致，或是否允许本地化译名/简称。",
+                "key": "score_and_label_conventions",
+                "severity": "P1",
+                "summary": "Prompt 未规定比分符号与结束标签的呈现规则，且未说明球队名是否允许本地化处理，导致与参考表达口径不统一。"
+              }
+            ],
+            "rubrics": [
+              {
+                "id": "r1",
+                "reason": "输出为单个 JSON 对象且仅包含 content 字段，没有额外文本或字段。",
+                "verdict": "yes"
+              },
+              {
+                "id": "r3",
+                "reason": "比分、阶段与每条事件时间/内容均对应输入 JSON（score/highlights），未新增或冲突事实。",
+                "verdict": "yes"
+              }
+            ]
+          },
+          "rubricScores": [
+            {
+              "id": "r1",
+              "reason": "输出为单个 JSON 对象且仅包含 content 字段，没有额外文本或字段。",
+              "score": 1
+            },
+            {
+              "id": "r3",
+              "reason": "比分、阶段与每条事件时间/内容均对应输入 JSON（score/highlights），未新增或冲突事实。",
+              "score": 1
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

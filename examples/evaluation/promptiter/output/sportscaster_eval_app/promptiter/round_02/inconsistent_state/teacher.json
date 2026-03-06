@@ -1,0 +1,18 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "inconsistent_state",
+  "runId": 1,
+  "invocations": [
+    {
+      "invocationId": "bc9b5304-3c0a-4ba9-aa55-6467d4443024",
+      "userContent": {
+        "role": "user",
+        "content": "{\"sport\":\"basketball\",\"league\":\"NBA\",\"home_team\":\"Team X\",\"away_team\":\"Team Y\",\"status\":\"finished\",\"phase\":\"Q4\",\"clock\":\"05:00\",\"score\":{\"home\":110,\"away\":108},\"highlights\":[{\"time\":\"Final\",\"text\":\"Reported as finished.\"}],\"last_update\":\"2026-02-22T22:01:00+08:00\"}"
+      },
+      "finalResponse": {
+        "role": "assistant",
+        "content": "{\"content\":\"比赛结束！NBA——Team X 110:108 拿下 Team Y！第四节收官，比分两分分差定胜负——终场已被确认结束，胜负就此定格！\"}"
+      }
+    }
+  ]
+}

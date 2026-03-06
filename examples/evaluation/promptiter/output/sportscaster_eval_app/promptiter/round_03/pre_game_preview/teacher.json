@@ -1,0 +1,18 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "pre_game_preview",
+  "runId": 1,
+  "invocations": [
+    {
+      "invocationId": "86c6bea1-3ca6-4253-9b0f-23df487f0cb7",
+      "userContent": {
+        "role": "user",
+        "content": "{\"sport\":\"basketball\",\"league\":\"NBA\",\"match_id\":\"nba_20260226_gsw_den\",\"home_team\":\"Golden State Warriors\",\"away_team\":\"Denver Nuggets\",\"status\":\"pre_game\",\"phase\":null,\"clock\":null,\"score\":{\"home\":0,\"away\":0},\"highlights\":[],\"last_update\":\"2026-02-26T18:30:00+08:00\"}"
+      },
+      "finalResponse": {
+        "role": "assistant",
+        "content": "{\"content\":\"NBA 赛前！勇士坐镇主场迎战掘金——目前 0:0，比赛尚未开打。最新时间停在 2026-02-26 18:30（+08:00），两队即将登场，先把对抗的味道拉满！\"}"
+      }
+    }
+  ]
+}

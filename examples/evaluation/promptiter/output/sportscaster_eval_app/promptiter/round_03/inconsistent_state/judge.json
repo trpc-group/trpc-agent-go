@@ -1,0 +1,45 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "inconsistent_state",
+  "runId": 1,
+  "invocations": [
+    {
+      "metrics": [
+        {
+          "metricName": "llm_critic",
+          "score": 1,
+          "threshold": 0.8,
+          "evalStatus": "passed",
+          "output": {
+            "assessment": "该样本中，candidate 输出符合契约：为单一 JSON 对象且仅含 content 字段，无额外文本；内容严格基于 user_input 的比赛状态，准确复述了联盟（NBA）、主客队、完赛状态与最终比分，并从比分正确推出主队获胜，且“更新时间”也与 last_update 一致，未引入输入中不存在的事件或细节。相较 teacher 的更强叙事与感叹语气，candidate 风格更简洁，但不影响 rubrics 要求。就本样本看，Prompt 若要更贴近参考风格，可补充“允许更生动的赛况表述/强调末节收官”等指导，但这不属于当前 rubrics 的硬性缺陷。",
+            "issues": [],
+            "rubrics": [
+              {
+                "id": "r1",
+                "reason": "输出为单个 JSON 对象且仅包含 content 字段，没有额外文本或字段。",
+                "verdict": "yes"
+              },
+              {
+                "id": "r3",
+                "reason": "内容与输入一致：完赛、比分、主客队与更新时间均来自 user_input，未编造额外事实。",
+                "verdict": "yes"
+              }
+            ]
+          },
+          "rubricScores": [
+            {
+              "id": "r1",
+              "reason": "输出为单个 JSON 对象且仅包含 content 字段，没有额外文本或字段。",
+              "score": 1
+            },
+            {
+              "id": "r3",
+              "reason": "内容与输入一致：完赛、比分、主客队与更新时间均来自 user_input，未编造额外事实。",
+              "score": 1
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

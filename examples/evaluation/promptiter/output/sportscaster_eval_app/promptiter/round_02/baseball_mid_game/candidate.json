@@ -1,0 +1,18 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "baseball_mid_game",
+  "runId": 1,
+  "invocations": [
+    {
+      "invocationId": "9c56d60e-7a86-4c7c-a5d6-d41d21e9e6a2",
+      "userContent": {
+        "role": "user",
+        "content": "{\"sport\":\"baseball\",\"league\":\"MLB\",\"match_id\":\"mlb_20260223_nyy_bos\",\"home_team\":\"Boston Red Sox\",\"away_team\":\"New York Yankees\",\"status\":\"in_progress\",\"phase\":\"Top 7\",\"clock\":null,\"score\":{\"home\":2,\"away\":3},\"highlights\":[{\"time\":\"Top 5\",\"text\":\"Yankees hit a two-run home run.\"},{\"time\":\"Bottom 6\",\"text\":\"Red Sox scored on a sacrifice fly.\"}],\"last_update\":\"2026-02-23T20:18:00+08:00\"}"
+      },
+      "finalResponse": {
+        "role": "assistant",
+        "content": "{\n  \"content\": \"MLB | in_progress | Top 7 | Boston Red Sox 2-3 New York Yankees | 最后更新：2026-02-23T20:18:00+08:00 | - Top 5 Yankees hit a two-run home run. | - Bottom 6 Red Sox scored on a sacrifice fly.\"\n}"
+      }
+    }
+  ]
+}

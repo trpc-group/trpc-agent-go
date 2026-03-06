@@ -1,0 +1,63 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "inconsistent_state",
+  "runId": 1,
+  "invocations": [
+    {
+      "metrics": [
+        {
+          "metricName": "llm_critic",
+          "score": 0.5,
+          "threshold": 0.8,
+          "evalStatus": "failed",
+          "output": {
+            "assessment": "candidate 以单一 JSON 对象且仅含 content 输出，满足 r1。但正文在比分与胜负之外加入“惊心动魄”“最后五分钟悬念”“关键时刻稳定发挥”“球迷欢呼/顽强表现”等输入未提供的过程描写与评价，并借 Q4 05:00 推演比赛走势；在 user_input 同时标注 finished 的情况下，这类推断还会放大自相矛盾风险，违反 r3。teacher 仅陈述比赛结束、比分与“Reported as finished.”，更严格贴合输入。反映出 Prompt 对“只写输入明确事实、禁止合理化脑补”及“字段冲突时如何取舍”约束不够清晰，可能引发类似的剧情化复盘或氛围描写。",
+            "issues": [
+              {
+                "action": "Prompt 需要增加硬约束：content 只能改写/重述 user_input 明确给出的字段（如 league、队名、status、score、highlights.text），禁止加入任何未在输入出现的事件过程、关键回合、现场氛围、球员表现等描写或评价性结论。",
+                "key": "strictly_grounded_content",
+                "severity": "P0",
+                "summary": "Prompt 缺少“仅基于输入字段、不得补写比赛过程与评价”的明确限制，导致加入未证实情节。"
+              },
+              {
+                "action": "Prompt 需要明确：不得根据比分接近、阶段(Q4)或时间(clock)去推断“最后五分钟悬念”“关键时刻发挥”等时间线/走势；若输入未直接描述比赛进程，则只输出终场与比分等确定信息。",
+                "key": "no_infer_from_score_clock",
+                "severity": "P0",
+                "summary": "Prompt 未禁止从 score/clock 进行叙事化推断，导致基于 05:00 等信息脑补比赛走势。"
+              },
+              {
+                "action": "Prompt 需要补充冲突处理规则：当 status/highlights 与 phase/clock 等字段不一致时，优先采用能表明比赛状态的字段（如 status=finished、highlights 的结束声明），并避免引用会造成矛盾的细节（如仍剩 05:00）。",
+                "key": "conflict_resolution_policy",
+                "severity": "P1",
+                "summary": "Prompt 未规定输入字段自相矛盾时的取舍与规避策略，容易在描述中引入不一致细节。"
+              }
+            ],
+            "rubrics": [
+              {
+                "id": "r1",
+                "reason": "candidate_output 为单个 JSON 对象，且仅包含 content 字段，没有额外文本或字段。",
+                "verdict": "yes"
+              },
+              {
+                "id": "r3",
+                "reason": "正文加入输入未提供的比赛过程与氛围/评价（如最后五分钟悬念、关键时刻发挥、球迷欢呼等），属于基于输入的推断与编造。",
+                "verdict": "no"
+              }
+            ]
+          },
+          "rubricScores": [
+            {
+              "id": "r1",
+              "reason": "candidate_output 为单个 JSON 对象，且仅包含 content 字段，没有额外文本或字段。",
+              "score": 1
+            },
+            {
+              "id": "r3",
+              "reason": "正文加入输入未提供的比赛过程与氛围/评价（如最后五分钟悬念、关键时刻发挥、球迷欢呼等），属于基于输入的推断与编造。"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

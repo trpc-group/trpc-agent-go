@@ -1,0 +1,18 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "inconsistent_state",
+  "runId": 1,
+  "invocations": [
+    {
+      "invocationId": "32ea8187-a048-42aa-af57-bf20add04a3e",
+      "userContent": {
+        "role": "user",
+        "content": "{\"sport\":\"basketball\",\"league\":\"NBA\",\"home_team\":\"Team X\",\"away_team\":\"Team Y\",\"status\":\"finished\",\"phase\":\"Q4\",\"clock\":\"05:00\",\"score\":{\"home\":110,\"away\":108},\"highlights\":[{\"time\":\"Final\",\"text\":\"Reported as finished.\"}],\"last_update\":\"2026-02-22T22:01:00+08:00\"}"
+      },
+      "finalResponse": {
+        "role": "assistant",
+        "content": "{\n  \"content\": \"NBA全场结束，Team X（主）110:108 Team Y（客），Team X获胜。更新时间：2026-02-22T22:01:00+08:00。\"\n}"
+      }
+    }
+  ]
+}

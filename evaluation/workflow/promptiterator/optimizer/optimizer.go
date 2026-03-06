@@ -81,7 +81,7 @@ func (o *optimizer) Optimize(ctx context.Context, currentPrompt string, gradient
 	if err != nil {
 		return "", err
 	}
-	nextPrompt := captured.FinalContent
+	nextPrompt := strings.TrimSpace(captured.FinalContent)
 	if nextPrompt == "" {
 		return "", errors.New("optimizer final content is empty")
 	}

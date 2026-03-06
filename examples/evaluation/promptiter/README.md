@@ -8,6 +8,8 @@ The demo task is sports flash news generation. The input is a game status JSON s
 
 The program prints the final prompt to stdout.
 
+The program writes per-round artifacts under `-output-dir/<appName>/promptiter`.
+
 If the final prompt passes all metrics, the program exits with status code `0`.
 
 If the final prompt still fails after the maximum optimization rounds, the program exits with status code `1`.
@@ -158,6 +160,7 @@ go run . -evalset sportscaster_basic
 | `-app` | App name used to locate evalsets and metrics under `-data-dir` | `sportscaster_eval_app` |
 | `-evalset` | Evalset id, can be repeated or comma separated. When omitted, runs all evalsets under the app | empty |
 | `-data-dir` | Data directory containing `.evalset.json` and `.metrics.json` | `./data` |
+| `-output-dir` | Directory where per-round artifacts are written | `./output` |
 | `-schema` | JSON Schema path for Candidate output | `./schema/candidate.json` |
 | `-iters` | Max iteration rounds | `3` |
 | `-candidate-model` | Candidate model name | `deepseek-v3.2` |
@@ -193,6 +196,27 @@ examples/evaluation/promptiter/
     ├── candidate.json
     ├── llmcritic.json
     └── aggregator.json
+```
+
+### Artifacts
+
+Artifacts are written under `-output-dir/<appName>/promptiter`, grouped by round first and then by eval case:
+
+```text
+output/<appName>/promptiter/
+├── round_01/
+│   ├── prompt.md
+│   ├── issues.json
+│   ├── evaluation/
+│   │   └── sportscaster_basic.json
+│   ├── basketball_clutch_q4/
+│   │   ├── candidate.json
+│   │   ├── teacher.json
+│   │   └── judge.json
+│   ├── aggregator.json
+│   └── optimizer.md
+└── round_02/
+    └── ...
 ```
 
 ## Iteration loop

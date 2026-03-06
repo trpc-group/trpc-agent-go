@@ -1,0 +1,1155 @@
+{
+  "evalSetResultId": "sportscaster_eval_app_sportscaster_basic_1bba35d4-c50f-42d1-bc46-7e2373c451dd",
+  "evalSetResultName": "sportscaster_eval_app_sportscaster_basic_1bba35d4-c50f-42d1-bc46-7e2373c451dd",
+  "evalSetId": "sportscaster_basic",
+  "evalCaseResults": [
+    {
+      "evalSetId": "sportscaster_basic",
+      "evalId": "basketball_clutch_q4",
+      "runId": 1,
+      "finalEvalStatus": "passed",
+      "overallEvalMetricResults": [
+        {
+          "metricName": "json_schema",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 1,
+          "details": {
+            "reason": "valid",
+            "score": 1
+          }
+        },
+        {
+          "metricName": "llm_critic",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 0.8,
+          "criterion": {
+            "llmJudge": {
+              "rubrics": [
+                {
+                  "id": "r1",
+                  "content": {
+                    "text": "输出必须是单个 JSON 对象，且不得包含任何额外文本。"
+                  }
+                },
+                {
+                  "id": "r3",
+                  "content": {
+                    "text": "正文必须严格基于输入 JSON 比赛状态，不得编造事实或事件；缺失或不确定的信息直接略过；当输入不完整或自相矛盾时，正文避免自相矛盾。"
+                  }
+                }
+              ]
+            }
+          },
+          "details": {
+            "reason": "{\"assessment\":\"candidate 以单一 JSON 对象输出且仅包含 content，满足输出契约。正文复用了输入中的节次、剩余时间、比分、球权、最后更新时间与三条 highlights，未新增比赛事件或与输入冲突，整体符合 r3。与 teacher 的中文解说体相比，candidate 使用“|”拼接并中英混杂，且将“3”改写为“III”、球权直接输出为 home 枚举值，信息虽对但呈现不够自然清晰。这暴露出 Prompt 可能缺少：输出语言/文体统一要求、对 home/away 与 status 等枚举的可读化映射规则、以及数值与关键文本的保真约束；这些缺口在相似样本中可能引发不必要的改写与可读性下降。\",\"issues\":[{\"action\":\"Prompt 需要明确规定输出语言（如全中文），并约束 highlights 的翻译/保留策略（例如统一翻译为中文或统一保留原文），禁止中英与符号风格随意混用。\",\"key\":\"language_and_style_consistency\",\"severity\":\"P1\",\"summary\":\"Prompt 缺少对输出语言与文体一致性的硬约束，导致本样本出现中英混杂与“表格化”拼接风格偏离参考答案的解说体。\"},{\"action\":\"Prompt 需要增加“数值与比分等关键信息保持输入原样（阿拉伯数字/符号）”的约束，避免将 3 等数字改写为罗马数字或其他非必要变体。\",\"key\":\"numeric_fidelity\",\"severity\":\"P1\",\"summary\":\"Prompt 缺少对关键数值表达的保真要求，导致出现将输入中的数字改写为不同记法（如 III）的风险。\"},{\"action\":\"Prompt 需要明确把 possession/status 等枚举值映射为人类可读表述（如“主队球权/客队球权”“进行中”），并可选要求带上对应队名以消除歧义。\",\"key\":\"enum_human_readable_mapping\",\"severity\":\"P1\",\"summary\":\"Prompt 未要求将 home/away、in_progress 等枚举转为可读语句，导致信息虽正确但不够直观。\"},{\"action\":\"Prompt 可要求使用与参考类似的段落/换行结构（如开场一句+分号/换行串联 highlights），并强调“只做基于输入的描述，不添加推断性结论”，以兼顾可读性与不编造。\",\"key\":\"readable_structured_narration\",\"severity\":\"P1\",\"summary\":\"Prompt 缺少对内容组织方式的指引，导致本样本采用“|”连缀而非更易读的中文叙述结构。\"}],\"rubrics\":[{\"id\":\"r1\",\"reason\":\"candidate_output 为单个 JSON 对象且仅含 content 字段，无额外字段或多余文本。\",\"verdict\":\"yes\"},{\"id\":\"r3\",\"reason\":\"比分、节次、时间、球权与 highlights 均与 user_input 一致，未编造新事件；个别写法（如 III）不改变事实但降低表达保真度。\",\"verdict\":\"yes\"}]}",
+            "score": 1,
+            "rubricScores": [
+              {
+                "id": "r1",
+                "reason": "candidate_output 为单个 JSON 对象且仅含 content 字段，无额外字段或多余文本。",
+                "score": 1
+              },
+              {
+                "id": "r3",
+                "reason": "比分、节次、时间、球权与 highlights 均与 user_input 一致，未编造新事件；个别写法（如 III）不改变事实但降低表达保真度。",
+                "score": 1
+              }
+            ]
+          }
+        }
+      ],
+      "evalMetricResultPerInvocation": [
+        {
+          "actualInvocation": {
+            "invocationId": "2a3f3f07-39b9-4b40-b07b-8b5f19b4d442",
+            "userContent": {
+              "role": "user",
+              "content": "{\"sport\":\"basketball\",\"league\":\"NBA\",\"match_id\":\"nba_20260225_bos_lal\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Los Angeles Lakers\",\"status\":\"in_progress\",\"phase\":\"Q4\",\"clock\":\"02:31\",\"score\":{\"home\":102,\"away\":99},\"possession\":\"home\",\"highlights\":[{\"time\":\"04:10\",\"text\":\"Lakers made a 7-0 run to cut the lead to 1.\"},{\"time\":\"03:22\",\"text\":\"Celtics hit a three-pointer to go up by 3.\"},{\"time\":\"02:45\",\"text\":\"Timeout called after a loose ball scramble.\"}],\"last_update\":\"2026-02-25T21:10:00+08:00\"}"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "{\n  \"content\": \"NBA | in_progress | Q4 | 02:31 | Boston Celtics 102-99 Los Angeles Lakers | 球权：home | 最后更新：2026-02-25T21:10:00+08:00。 - 04:10 Lakers made a 7-0 run to cut the lead to 1. - 03:22 Celtics hit a three-pointer to go up by III. - 02:45 Timeout called after a loose ball scramble.\"\n}"
+            }
+          },
+          "expectedInvocation": {
+            "invocationId": "55b2fb9a-8058-44b1-b272-a22c44845689",
+            "userContent": {
+              "role": "user",
+              "content": "{\"sport\":\"basketball\",\"league\":\"NBA\",\"match_id\":\"nba_20260225_bos_lal\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Los Angeles Lakers\",\"status\":\"in_progress\",\"phase\":\"Q4\",\"clock\":\"02:31\",\"score\":{\"home\":102,\"away\":99},\"possession\":\"home\",\"highlights\":[{\"time\":\"04:10\",\"text\":\"Lakers made a 7-0 run to cut the lead to 1.\"},{\"time\":\"03:22\",\"text\":\"Celtics hit a three-pointer to go up by 3.\"},{\"time\":\"02:45\",\"text\":\"Timeout called after a loose ball scramble.\"}],\"last_update\":\"2026-02-25T21:10:00+08:00\"}"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "{\"content\":\"第四节（Q4）还剩 2:31！凯尔特人 102:99 领先湖人——而且球权在主队手里！\\n\\n4:10 湖人轰出一波 7:0，把分差硬生生追到只剩 1 分；3:22 凯尔特人立刻用一记三分稳住局面，把优势拉回 3 分——2:45 地板球乱战后直接暂停！最后两分多钟，一攻一守都要见真章！\"}"
+            }
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "json_schema",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "details": {
+                "reason": "valid",
+                "score": 1
+              }
+            },
+            {
+              "metricName": "llm_critic",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 0.8,
+              "criterion": {
+                "llmJudge": {
+                  "rubrics": [
+                    {
+                      "id": "r1",
+                      "content": {
+                        "text": "输出必须是单个 JSON 对象，且不得包含任何额外文本。"
+                      }
+                    },
+                    {
+                      "id": "r3",
+                      "content": {
+                        "text": "正文必须严格基于输入 JSON 比赛状态，不得编造事实或事件；缺失或不确定的信息直接略过；当输入不完整或自相矛盾时，正文避免自相矛盾。"
+                      }
+                    }
+                  ]
+                }
+              },
+              "details": {
+                "reason": "{\"assessment\":\"candidate 以单一 JSON 对象输出且仅包含 content，满足输出契约。正文复用了输入中的节次、剩余时间、比分、球权、最后更新时间与三条 highlights，未新增比赛事件或与输入冲突，整体符合 r3。与 teacher 的中文解说体相比，candidate 使用“|”拼接并中英混杂，且将“3”改写为“III”、球权直接输出为 home 枚举值，信息虽对但呈现不够自然清晰。这暴露出 Prompt 可能缺少：输出语言/文体统一要求、对 home/away 与 status 等枚举的可读化映射规则、以及数值与关键文本的保真约束；这些缺口在相似样本中可能引发不必要的改写与可读性下降。\",\"issues\":[{\"action\":\"Prompt 需要明确规定输出语言（如全中文），并约束 highlights 的翻译/保留策略（例如统一翻译为中文或统一保留原文），禁止中英与符号风格随意混用。\",\"key\":\"language_and_style_consistency\",\"severity\":\"P1\",\"summary\":\"Prompt 缺少对输出语言与文体一致性的硬约束，导致本样本出现中英混杂与“表格化”拼接风格偏离参考答案的解说体。\"},{\"action\":\"Prompt 需要增加“数值与比分等关键信息保持输入原样（阿拉伯数字/符号）”的约束，避免将 3 等数字改写为罗马数字或其他非必要变体。\",\"key\":\"numeric_fidelity\",\"severity\":\"P1\",\"summary\":\"Prompt 缺少对关键数值表达的保真要求，导致出现将输入中的数字改写为不同记法（如 III）的风险。\"},{\"action\":\"Prompt 需要明确把 possession/status 等枚举值映射为人类可读表述（如“主队球权/客队球权”“进行中”），并可选要求带上对应队名以消除歧义。\",\"key\":\"enum_human_readable_mapping\",\"severity\":\"P1\",\"summary\":\"Prompt 未要求将 home/away、in_progress 等枚举转为可读语句，导致信息虽正确但不够直观。\"},{\"action\":\"Prompt 可要求使用与参考类似的段落/换行结构（如开场一句+分号/换行串联 highlights），并强调“只做基于输入的描述，不添加推断性结论”，以兼顾可读性与不编造。\",\"key\":\"readable_structured_narration\",\"severity\":\"P1\",\"summary\":\"Prompt 缺少对内容组织方式的指引，导致本样本采用“|”连缀而非更易读的中文叙述结构。\"}],\"rubrics\":[{\"id\":\"r1\",\"reason\":\"candidate_output 为单个 JSON 对象且仅含 content 字段，无额外字段或多余文本。\",\"verdict\":\"yes\"},{\"id\":\"r3\",\"reason\":\"比分、节次、时间、球权与 highlights 均与 user_input 一致，未编造新事件；个别写法（如 III）不改变事实但降低表达保真度。\",\"verdict\":\"yes\"}]}",
+                "score": 1,
+                "rubricScores": [
+                  {
+                    "id": "r1",
+                    "reason": "candidate_output 为单个 JSON 对象且仅含 content 字段，无额外字段或多余文本。",
+                    "score": 1
+                  },
+                  {
+                    "id": "r3",
+                    "reason": "比分、节次、时间、球权与 highlights 均与 user_input 一致，未编造新事件；个别写法（如 III）不改变事实但降低表达保真度。",
+                    "score": 1
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "sessionId": "6e9d2bed-aabf-47c7-a86e-28f19d97cae5",
+      "userId": "demo_user"
+    },
+    {
+      "evalSetId": "sportscaster_basic",
+      "evalId": "soccer_final",
+      "runId": 1,
+      "finalEvalStatus": "passed",
+      "overallEvalMetricResults": [
+        {
+          "metricName": "json_schema",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 1,
+          "details": {
+            "reason": "valid",
+            "score": 1
+          }
+        },
+        {
+          "metricName": "llm_critic",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 0.8,
+          "criterion": {
+            "llmJudge": {
+              "rubrics": [
+                {
+                  "id": "r1",
+                  "content": {
+                    "text": "输出必须是单个 JSON 对象，且不得包含任何额外文本。"
+                  }
+                },
+                {
+                  "id": "r3",
+                  "content": {
+                    "text": "正文必须严格基于输入 JSON 比赛状态，不得编造事实或事件；缺失或不确定的信息直接略过；当输入不完整或自相矛盾时，正文避免自相矛盾。"
+                  }
+                }
+              ]
+            }
+          },
+          "details": {
+            "reason": "{\"assessment\":\"candidate 能满足契约：输出为单一 JSON 且仅含 content；其中赛事、阶段(FT)、比分 2-1 及 4 条事件时间点均来自输入 highlights/score，与输入不冲突且无编造。与 teacher 相比，主要偏差在呈现方式：candidate 采用英文与“|”分隔的清单，缺少中文解说式总述、分段叙事与情绪化收束，比分与结束语的固定表达也不一致。若 Prompt 未明确语言、口吻与排版模板，类似样本中容易出现列表化/中英混杂、可读性与参考风格不一致的赛况回顾。\",\"issues\":[{\"action\":\"Prompt 增加硬约束：正文使用中文输出；采用解说式连贯叙述（先总述再按时间串联事件），避免仅用英文要点清单；可补充期望语气与示例句式。\",\"key\":\"language_and_narration_constraints\",\"severity\":\"P1\",\"summary\":\"Prompt 未明确要求与参考一致的中文叙述与解说风格，导致输出偏英文列表而非中文赛况回顾。\"},{\"action\":\"Prompt 明确排版规范：首句包含“全场结束(FT)+对阵+比分”，随后用换行/段落按时间顺序描述 highlights；限制使用“|”等分隔符堆叠以保证可读性。\",\"key\":\"formatting_template_readability\",\"severity\":\"P1\",\"summary\":\"Prompt 未规定段落结构与可读性排版模板，导致输出使用大量分隔符，结构与参考不一致。\"},{\"action\":\"Prompt 明确一致的记分与标签写法（如比分用“2:1”或“2-1”择一、FT/全场结束的固定位置）；同时说明球队名是否必须与输入完全一致，或是否允许本地化译名/简称。\",\"key\":\"score_and_label_conventions\",\"severity\":\"P1\",\"summary\":\"Prompt 未规定比分符号与结束标签的呈现规则，且未说明球队名是否允许本地化处理，导致与参考表达口径不统一。\"}],\"rubrics\":[{\"id\":\"r1\",\"reason\":\"输出为单个 JSON 对象且仅包含 content 字段，没有额外文本或字段。\",\"verdict\":\"yes\"},{\"id\":\"r3\",\"reason\":\"比分、阶段与每条事件时间/内容均对应输入 JSON（score/highlights），未新增或冲突事实。\",\"verdict\":\"yes\"}]}",
+            "score": 1,
+            "rubricScores": [
+              {
+                "id": "r1",
+                "reason": "输出为单个 JSON 对象且仅包含 content 字段，没有额外文本或字段。",
+                "score": 1
+              },
+              {
+                "id": "r3",
+                "reason": "比分、阶段与每条事件时间/内容均对应输入 JSON（score/highlights），未新增或冲突事实。",
+                "score": 1
+              }
+            ]
+          }
+        }
+      ],
+      "evalMetricResultPerInvocation": [
+        {
+          "actualInvocation": {
+            "invocationId": "fa326840-eaf7-479f-b9f4-ceafe536a81f",
+            "userContent": {
+              "role": "user",
+              "content": "{\"sport\":\"soccer\",\"league\":\"UEFA Champions League\",\"match_id\":\"ucl_20260224_mci_rma\",\"home_team\":\"Manchester City\",\"away_team\":\"Real Madrid\",\"status\":\"finished\",\"phase\":\"FT\",\"clock\":null,\"score\":{\"home\":2,\"away\":1},\"highlights\":[{\"time\":\"12'\",\"text\":\"Goal: Manchester City (1-0).\"},{\"time\":\"67'\",\"text\":\"Goal: Real Madrid (1-1).\"},{\"time\":\"88'\",\"text\":\"Goal: Manchester City (2-1).\"},{\"time\":\"90+2'\",\"text\":\"Yellow card shown.\"}],\"last_update\":\"2026-02-24T23:55:00+08:00\"}"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "{\n  \"content\": \"UEFA Champions League | finished | FT | Manchester City 2-1 Real Madrid | - 12' Goal: Manchester City (1-0). | - 67' Goal: Real Madrid (1-1). | - 88' Goal: Manchester City (2-1). | - 90+2' Yellow card shown.\"\n}"
+            }
+          },
+          "expectedInvocation": {
+            "invocationId": "75fc4b4c-6d70-4547-b29c-026787bf4610",
+            "userContent": {
+              "role": "user",
+              "content": "{\"sport\":\"soccer\",\"league\":\"UEFA Champions League\",\"match_id\":\"ucl_20260224_mci_rma\",\"home_team\":\"Manchester City\",\"away_team\":\"Real Madrid\",\"status\":\"finished\",\"phase\":\"FT\",\"clock\":null,\"score\":{\"home\":2,\"away\":1},\"highlights\":[{\"time\":\"12'\",\"text\":\"Goal: Manchester City (1-0).\"},{\"time\":\"67'\",\"text\":\"Goal: Real Madrid (1-1).\"},{\"time\":\"88'\",\"text\":\"Goal: Manchester City (2-1).\"},{\"time\":\"90+2'\",\"text\":\"Yellow card shown.\"}],\"last_update\":\"2026-02-24T23:55:00+08:00\"}"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "{\"content\":\"全场结束（FT）！欧冠赛场，曼城 2:1 皇马！12' 曼城率先破门，1-0 抢下先手——67' 皇马回敬一球，比分被扳成 1-1！\\n\\n88' 曼城再下一城，改写为 2-1！补时 90+2' 还有黄牌亮起，最后时刻对抗拉满，胜负就此定格！\"}"
+            }
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "json_schema",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "details": {
+                "reason": "valid",
+                "score": 1
+              }
+            },
+            {
+              "metricName": "llm_critic",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 0.8,
+              "criterion": {
+                "llmJudge": {
+                  "rubrics": [
+                    {
+                      "id": "r1",
+                      "content": {
+                        "text": "输出必须是单个 JSON 对象，且不得包含任何额外文本。"
+                      }
+                    },
+                    {
+                      "id": "r3",
+                      "content": {
+                        "text": "正文必须严格基于输入 JSON 比赛状态，不得编造事实或事件；缺失或不确定的信息直接略过；当输入不完整或自相矛盾时，正文避免自相矛盾。"
+                      }
+                    }
+                  ]
+                }
+              },
+              "details": {
+                "reason": "{\"assessment\":\"candidate 能满足契约：输出为单一 JSON 且仅含 content；其中赛事、阶段(FT)、比分 2-1 及 4 条事件时间点均来自输入 highlights/score，与输入不冲突且无编造。与 teacher 相比，主要偏差在呈现方式：candidate 采用英文与“|”分隔的清单，缺少中文解说式总述、分段叙事与情绪化收束，比分与结束语的固定表达也不一致。若 Prompt 未明确语言、口吻与排版模板，类似样本中容易出现列表化/中英混杂、可读性与参考风格不一致的赛况回顾。\",\"issues\":[{\"action\":\"Prompt 增加硬约束：正文使用中文输出；采用解说式连贯叙述（先总述再按时间串联事件），避免仅用英文要点清单；可补充期望语气与示例句式。\",\"key\":\"language_and_narration_constraints\",\"severity\":\"P1\",\"summary\":\"Prompt 未明确要求与参考一致的中文叙述与解说风格，导致输出偏英文列表而非中文赛况回顾。\"},{\"action\":\"Prompt 明确排版规范：首句包含“全场结束(FT)+对阵+比分”，随后用换行/段落按时间顺序描述 highlights；限制使用“|”等分隔符堆叠以保证可读性。\",\"key\":\"formatting_template_readability\",\"severity\":\"P1\",\"summary\":\"Prompt 未规定段落结构与可读性排版模板，导致输出使用大量分隔符，结构与参考不一致。\"},{\"action\":\"Prompt 明确一致的记分与标签写法（如比分用“2:1”或“2-1”择一、FT/全场结束的固定位置）；同时说明球队名是否必须与输入完全一致，或是否允许本地化译名/简称。\",\"key\":\"score_and_label_conventions\",\"severity\":\"P1\",\"summary\":\"Prompt 未规定比分符号与结束标签的呈现规则，且未说明球队名是否允许本地化处理，导致与参考表达口径不统一。\"}],\"rubrics\":[{\"id\":\"r1\",\"reason\":\"输出为单个 JSON 对象且仅包含 content 字段，没有额外文本或字段。\",\"verdict\":\"yes\"},{\"id\":\"r3\",\"reason\":\"比分、阶段与每条事件时间/内容均对应输入 JSON（score/highlights），未新增或冲突事实。\",\"verdict\":\"yes\"}]}",
+                "score": 1,
+                "rubricScores": [
+                  {
+                    "id": "r1",
+                    "reason": "输出为单个 JSON 对象且仅包含 content 字段，没有额外文本或字段。",
+                    "score": 1
+                  },
+                  {
+                    "id": "r3",
+                    "reason": "比分、阶段与每条事件时间/内容均对应输入 JSON（score/highlights），未新增或冲突事实。",
+                    "score": 1
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "sessionId": "8b9b2f29-2e02-4f05-97fa-4ad34deca93e",
+      "userId": "demo_user"
+    },
+    {
+      "evalSetId": "sportscaster_basic",
+      "evalId": "baseball_mid_game",
+      "runId": 1,
+      "finalEvalStatus": "passed",
+      "overallEvalMetricResults": [
+        {
+          "metricName": "json_schema",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 1,
+          "details": {
+            "reason": "valid",
+            "score": 1
+          }
+        },
+        {
+          "metricName": "llm_critic",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 0.8,
+          "criterion": {
+            "llmJudge": {
+              "rubrics": [
+                {
+                  "id": "r1",
+                  "content": {
+                    "text": "输出必须是单个 JSON 对象，且不得包含任何额外文本。"
+                  }
+                },
+                {
+                  "id": "r3",
+                  "content": {
+                    "text": "正文必须严格基于输入 JSON 比赛状态，不得编造事实或事件；缺失或不确定的信息直接略过；当输入不完整或自相矛盾时，正文避免自相矛盾。"
+                  }
+                }
+              ]
+            }
+          },
+          "details": {
+            "reason": "{\"assessment\":\"candidate 符合输出契约：为单一 JSON 且仅含 content；内容均可在输入中逐项对应（Top 7、2-3 比分、两条 highlights、last_update），未添加新事件或与输入冲突，因此 r1/r3 表现良好。与参考答案相比，candidate 更像用“|”拼接的状态日志，保留了 in_progress 这类英文枚举，也未用“第七局上半/谁以几比几领先”进行自然语言叙述，解说感与可读性偏弱。说明 Prompt 可能缺少对中文叙述体裁、状态字段本地化、以及比分领先关系表达方式的明确要求，类似样本可能继续产出模板化且中英混杂的摘要。\",\"issues\":[{\"action\":\"在 Prompt 中增加硬约束：content 必须用中文自然语言成句输出（允许适度语气但不得新增事实），避免使用“|”等日志式分隔符；建议给出一句到两句的示例结构（局数+比分+领先方+关键回合串联）。\",\"key\":\"require_chinese_narrative_style\",\"severity\":\"P1\",\"summary\":\"Prompt 未明确要求以中文解说/叙述体输出，导致结果更偏日志拼接格式，和参考答案风格差距较大。\"},{\"action\":\"在 Prompt 中规定对 status/phase 等枚举进行本地化转写（如 in_progress→“正在进行”，Top 7→“第七局上半/七局上”），并要求不直接输出原始英文 token。\",\"key\":\"localize_enum_terms\",\"severity\":\"P1\",\"summary\":\"Prompt 未规定对输入中的英文状态字段做中文化处理，容易出现中英混用（如 in_progress）。\"},{\"action\":\"在 Prompt 中加入规则：当 score 可得时，必须用“队A x:y 领先 队B/双方战平”明确领先关系（必要时结合主客队）。\",\"key\":\"explicit_lead_statement\",\"severity\":\"P1\",\"summary\":\"Prompt 未要求明确表达“谁领先”与比分关系，导致只并列呈现比分而缺少关键语义。\"}],\"rubrics\":[{\"id\":\"r1\",\"reason\":\"candidate_output 为单一 JSON 对象且仅包含 content 字段，无额外文本。\",\"verdict\":\"yes\"},{\"id\":\"r3\",\"reason\":\"比分、局数、两条事件与更新时间均来自 user_input，未编造或与输入冲突。\",\"verdict\":\"yes\"}]}",
+            "score": 1,
+            "rubricScores": [
+              {
+                "id": "r1",
+                "reason": "candidate_output 为单一 JSON 对象且仅包含 content 字段，无额外文本。",
+                "score": 1
+              },
+              {
+                "id": "r3",
+                "reason": "比分、局数、两条事件与更新时间均来自 user_input，未编造或与输入冲突。",
+                "score": 1
+              }
+            ]
+          }
+        }
+      ],
+      "evalMetricResultPerInvocation": [
+        {
+          "actualInvocation": {
+            "invocationId": "9c56d60e-7a86-4c7c-a5d6-d41d21e9e6a2",
+            "userContent": {
+              "role": "user",
+              "content": "{\"sport\":\"baseball\",\"league\":\"MLB\",\"match_id\":\"mlb_20260223_nyy_bos\",\"home_team\":\"Boston Red Sox\",\"away_team\":\"New York Yankees\",\"status\":\"in_progress\",\"phase\":\"Top 7\",\"clock\":null,\"score\":{\"home\":2,\"away\":3},\"highlights\":[{\"time\":\"Top 5\",\"text\":\"Yankees hit a two-run home run.\"},{\"time\":\"Bottom 6\",\"text\":\"Red Sox scored on a sacrifice fly.\"}],\"last_update\":\"2026-02-23T20:18:00+08:00\"}"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "{\n  \"content\": \"MLB | in_progress | Top 7 | Boston Red Sox 2-3 New York Yankees | 最后更新：2026-02-23T20:18:00+08:00 | - Top 5 Yankees hit a two-run home run. | - Bottom 6 Red Sox scored on a sacrifice fly.\"\n}"
+            }
+          },
+          "expectedInvocation": {
+            "invocationId": "a154f906-1dc6-4c0f-ba71-87ec7f385973",
+            "userContent": {
+              "role": "user",
+              "content": "{\"sport\":\"baseball\",\"league\":\"MLB\",\"match_id\":\"mlb_20260223_nyy_bos\",\"home_team\":\"Boston Red Sox\",\"away_team\":\"New York Yankees\",\"status\":\"in_progress\",\"phase\":\"Top 7\",\"clock\":null,\"score\":{\"home\":2,\"away\":3},\"highlights\":[{\"time\":\"Top 5\",\"text\":\"Yankees hit a two-run home run.\"},{\"time\":\"Bottom 6\",\"text\":\"Red Sox scored on a sacrifice fly.\"}],\"last_update\":\"2026-02-23T20:18:00+08:00\"}"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "{\"content\":\"MLB 第七局上半（Top 7）！New York Yankees 3:2 领先 Boston Red Sox！五局上 Yankees 轰出一发两分全垒打，把局面打出优势——六局下 Red Sox 靠高飞牺牲打追回一分！现在只差 1 分，比赛进入后半程，谁先抓住机会，走向就可能被瞬间改写！\"}"
+            }
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "json_schema",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "details": {
+                "reason": "valid",
+                "score": 1
+              }
+            },
+            {
+              "metricName": "llm_critic",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 0.8,
+              "criterion": {
+                "llmJudge": {
+                  "rubrics": [
+                    {
+                      "id": "r1",
+                      "content": {
+                        "text": "输出必须是单个 JSON 对象，且不得包含任何额外文本。"
+                      }
+                    },
+                    {
+                      "id": "r3",
+                      "content": {
+                        "text": "正文必须严格基于输入 JSON 比赛状态，不得编造事实或事件；缺失或不确定的信息直接略过；当输入不完整或自相矛盾时，正文避免自相矛盾。"
+                      }
+                    }
+                  ]
+                }
+              },
+              "details": {
+                "reason": "{\"assessment\":\"candidate 符合输出契约：为单一 JSON 且仅含 content；内容均可在输入中逐项对应（Top 7、2-3 比分、两条 highlights、last_update），未添加新事件或与输入冲突，因此 r1/r3 表现良好。与参考答案相比，candidate 更像用“|”拼接的状态日志，保留了 in_progress 这类英文枚举，也未用“第七局上半/谁以几比几领先”进行自然语言叙述，解说感与可读性偏弱。说明 Prompt 可能缺少对中文叙述体裁、状态字段本地化、以及比分领先关系表达方式的明确要求，类似样本可能继续产出模板化且中英混杂的摘要。\",\"issues\":[{\"action\":\"在 Prompt 中增加硬约束：content 必须用中文自然语言成句输出（允许适度语气但不得新增事实），避免使用“|”等日志式分隔符；建议给出一句到两句的示例结构（局数+比分+领先方+关键回合串联）。\",\"key\":\"require_chinese_narrative_style\",\"severity\":\"P1\",\"summary\":\"Prompt 未明确要求以中文解说/叙述体输出，导致结果更偏日志拼接格式，和参考答案风格差距较大。\"},{\"action\":\"在 Prompt 中规定对 status/phase 等枚举进行本地化转写（如 in_progress→“正在进行”，Top 7→“第七局上半/七局上”），并要求不直接输出原始英文 token。\",\"key\":\"localize_enum_terms\",\"severity\":\"P1\",\"summary\":\"Prompt 未规定对输入中的英文状态字段做中文化处理，容易出现中英混用（如 in_progress）。\"},{\"action\":\"在 Prompt 中加入规则：当 score 可得时，必须用“队A x:y 领先 队B/双方战平”明确领先关系（必要时结合主客队）。\",\"key\":\"explicit_lead_statement\",\"severity\":\"P1\",\"summary\":\"Prompt 未要求明确表达“谁领先”与比分关系，导致只并列呈现比分而缺少关键语义。\"}],\"rubrics\":[{\"id\":\"r1\",\"reason\":\"candidate_output 为单一 JSON 对象且仅包含 content 字段，无额外文本。\",\"verdict\":\"yes\"},{\"id\":\"r3\",\"reason\":\"比分、局数、两条事件与更新时间均来自 user_input，未编造或与输入冲突。\",\"verdict\":\"yes\"}]}",
+                "score": 1,
+                "rubricScores": [
+                  {
+                    "id": "r1",
+                    "reason": "candidate_output 为单一 JSON 对象且仅包含 content 字段，无额外文本。",
+                    "score": 1
+                  },
+                  {
+                    "id": "r3",
+                    "reason": "比分、局数、两条事件与更新时间均来自 user_input，未编造或与输入冲突。",
+                    "score": 1
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "sessionId": "37fc5bd6-4e57-43ab-8a2c-95ad43fc31a6",
+      "userId": "demo_user"
+    },
+    {
+      "evalSetId": "sportscaster_basic",
+      "evalId": "pre_game_preview",
+      "runId": 1,
+      "finalEvalStatus": "passed",
+      "overallEvalMetricResults": [
+        {
+          "metricName": "json_schema",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 1,
+          "details": {
+            "reason": "valid",
+            "score": 1
+          }
+        },
+        {
+          "metricName": "llm_critic",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 0.8,
+          "criterion": {
+            "llmJudge": {
+              "rubrics": [
+                {
+                  "id": "r1",
+                  "content": {
+                    "text": "输出必须是单个 JSON 对象，且不得包含任何额外文本。"
+                  }
+                },
+                {
+                  "id": "r3",
+                  "content": {
+                    "text": "正文必须严格基于输入 JSON 比赛状态，不得编造事实或事件；缺失或不确定的信息直接略过；当输入不完整或自相矛盾时，正文避免自相矛盾。"
+                  }
+                }
+              ]
+            }
+          },
+          "details": {
+            "reason": "{\n  \"assessment\": \"本样本中，candidate 以单一 JSON 对象输出且仅含 content 字段，满足输出契约；内容提到的联盟、状态 pre_game、两队名称与 0-0 比分均与输入一致，未见编造或冲突。与 teacher 相比，文本明显更简短且偏英文，未利用输入已提供的主客场信息与 last_update，也未将 pre_game 解释为“赛前/尚未开打”等可读表达。可能是 Prompt 未明确要求输出语言与表达风格，亦未规定当输入包含时间与主客场等字段时的必选呈现项与格式，进而在类似赛前或其他阶段输出中出现信息覆盖不足、可读性不一致的问题。\",\n  \"issues\": [\n    {\n      \"action\": \"Prompt 明确规定 content 的语言与风格（例如中文叙述为主，可在括号保留英文状态码），并要求在不增加字段的前提下输出更自然的句式。\",\n      \"key\": \"language_and_style_constraints\",\n      \"severity\": \"P1\",\n      \"summary\": \"Prompt 未明确输出语言与文风约束，导致本样本输出偏英文且过于口号式，和参考答案的信息呈现风格不一致。\"\n    },\n    {\n      \"action\": \"Prompt 增加硬性信息覆盖规则：当 status=pre_game 且 score 为 0:0 时，需明确表达“赛前/尚未开打”，避免只输出原始状态码。\",\n      \"key\": \"pre_game_status_rendering\",\n      \"severity\": \"P1\",\n      \"summary\": \"Prompt 未定义 pre_game 等状态的呈现模板，导致仅复述状态码而缺少“赛前/未开打”的语义化描述。\"\n    },\n    {\n      \"action\": \"Prompt 规定当输入提供 last_update 时必须在 content 中输出，并给出统一的时间格式（保留时区信息）。\",\n      \"key\": \"last_update_required_when_present\",\n      \"severity\": \"P1\",\n      \"summary\": \"Prompt 未要求在输入包含 last_update 时输出更新时间，导致本样本遗漏了可用且重要的时间信息。\"\n    },\n    {\n      \"action\": \"Prompt 指定当输入提供 home_team/away_team 时，需明确主客场关系（如“X 主场迎战 Y”）或用固定顺序标注，提升可读性与一致性。\",\n      \"key\": \"home_away_context_requirement\",\n      \"severity\": \"P1\",\n      \"summary\": \"Prompt 未明确主客场信息的表达要求，导致本样本仅并列队名，缺少对阵语义与顺序约束。\"\n    }\n  ],\n  \"rubrics\": [\n    {\n      \"id\": \"r1\",\n      \"reason\": \"输出为单个 JSON 对象，且仅包含 content 字段，无额外文本或字段。\",\n      \"verdict\": \"yes\"\n    },\n    {\n      \"id\": \"r3\",\n      \"reason\": \"内容与输入一致：NBA、pre_game、两队名称及 0-0 比分均匹配，未编造未冲突；未写到的信息被自然略过。\",\n      \"verdict\": \"yes\"\n    }\n  ]\n}",
+            "score": 1,
+            "rubricScores": [
+              {
+                "id": "r1",
+                "reason": "输出为单个 JSON 对象，且仅包含 content 字段，无额外文本或字段。",
+                "score": 1
+              },
+              {
+                "id": "r3",
+                "reason": "内容与输入一致：NBA、pre_game、两队名称及 0-0 比分均匹配，未编造未冲突；未写到的信息被自然略过。",
+                "score": 1
+              }
+            ]
+          }
+        }
+      ],
+      "evalMetricResultPerInvocation": [
+        {
+          "actualInvocation": {
+            "invocationId": "e1baa123-5638-4d40-8435-46a75df9d600",
+            "userContent": {
+              "role": "user",
+              "content": "{\"sport\":\"basketball\",\"league\":\"NBA\",\"match_id\":\"nba_20260226_gsw_den\",\"home_team\":\"Golden State Warriors\",\"away_team\":\"Denver Nuggets\",\"status\":\"pre_game\",\"phase\":null,\"clock\":null,\"score\":{\"home\":0,\"away\":0},\"highlights\":[],\"last_update\":\"2026-02-26T18:30:00+08:00\"}"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "{\n  \"content\": \"NBA | pre_game | Golden State Warriors 0-0 Denver Nuggets\"\n}"
+            }
+          },
+          "expectedInvocation": {
+            "invocationId": "3dcd79c2-74dd-4c6e-bdfc-22417701f583",
+            "userContent": {
+              "role": "user",
+              "content": "{\"sport\":\"basketball\",\"league\":\"NBA\",\"match_id\":\"nba_20260226_gsw_den\",\"home_team\":\"Golden State Warriors\",\"away_team\":\"Denver Nuggets\",\"status\":\"pre_game\",\"phase\":null,\"clock\":null,\"score\":{\"home\":0,\"away\":0},\"highlights\":[],\"last_update\":\"2026-02-26T18:30:00+08:00\"}"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "{\"content\":\"赛前（pre_game）！NBA——金州勇士主场迎战丹佛掘金！当前比分 0:0，比赛尚未开打。最后更新 2026-02-26 18:30（+08:00）——两队对决一触即发！\"}"
+            }
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "json_schema",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "details": {
+                "reason": "valid",
+                "score": 1
+              }
+            },
+            {
+              "metricName": "llm_critic",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 0.8,
+              "criterion": {
+                "llmJudge": {
+                  "rubrics": [
+                    {
+                      "id": "r1",
+                      "content": {
+                        "text": "输出必须是单个 JSON 对象，且不得包含任何额外文本。"
+                      }
+                    },
+                    {
+                      "id": "r3",
+                      "content": {
+                        "text": "正文必须严格基于输入 JSON 比赛状态，不得编造事实或事件；缺失或不确定的信息直接略过；当输入不完整或自相矛盾时，正文避免自相矛盾。"
+                      }
+                    }
+                  ]
+                }
+              },
+              "details": {
+                "reason": "{\n  \"assessment\": \"本样本中，candidate 以单一 JSON 对象输出且仅含 content 字段，满足输出契约；内容提到的联盟、状态 pre_game、两队名称与 0-0 比分均与输入一致，未见编造或冲突。与 teacher 相比，文本明显更简短且偏英文，未利用输入已提供的主客场信息与 last_update，也未将 pre_game 解释为“赛前/尚未开打”等可读表达。可能是 Prompt 未明确要求输出语言与表达风格，亦未规定当输入包含时间与主客场等字段时的必选呈现项与格式，进而在类似赛前或其他阶段输出中出现信息覆盖不足、可读性不一致的问题。\",\n  \"issues\": [\n    {\n      \"action\": \"Prompt 明确规定 content 的语言与风格（例如中文叙述为主，可在括号保留英文状态码），并要求在不增加字段的前提下输出更自然的句式。\",\n      \"key\": \"language_and_style_constraints\",\n      \"severity\": \"P1\",\n      \"summary\": \"Prompt 未明确输出语言与文风约束，导致本样本输出偏英文且过于口号式，和参考答案的信息呈现风格不一致。\"\n    },\n    {\n      \"action\": \"Prompt 增加硬性信息覆盖规则：当 status=pre_game 且 score 为 0:0 时，需明确表达“赛前/尚未开打”，避免只输出原始状态码。\",\n      \"key\": \"pre_game_status_rendering\",\n      \"severity\": \"P1\",\n      \"summary\": \"Prompt 未定义 pre_game 等状态的呈现模板，导致仅复述状态码而缺少“赛前/未开打”的语义化描述。\"\n    },\n    {\n      \"action\": \"Prompt 规定当输入提供 last_update 时必须在 content 中输出，并给出统一的时间格式（保留时区信息）。\",\n      \"key\": \"last_update_required_when_present\",\n      \"severity\": \"P1\",\n      \"summary\": \"Prompt 未要求在输入包含 last_update 时输出更新时间，导致本样本遗漏了可用且重要的时间信息。\"\n    },\n    {\n      \"action\": \"Prompt 指定当输入提供 home_team/away_team 时，需明确主客场关系（如“X 主场迎战 Y”）或用固定顺序标注，提升可读性与一致性。\",\n      \"key\": \"home_away_context_requirement\",\n      \"severity\": \"P1\",\n      \"summary\": \"Prompt 未明确主客场信息的表达要求，导致本样本仅并列队名，缺少对阵语义与顺序约束。\"\n    }\n  ],\n  \"rubrics\": [\n    {\n      \"id\": \"r1\",\n      \"reason\": \"输出为单个 JSON 对象，且仅包含 content 字段，无额外文本或字段。\",\n      \"verdict\": \"yes\"\n    },\n    {\n      \"id\": \"r3\",\n      \"reason\": \"内容与输入一致：NBA、pre_game、两队名称及 0-0 比分均匹配，未编造未冲突；未写到的信息被自然略过。\",\n      \"verdict\": \"yes\"\n    }\n  ]\n}",
+                "score": 1,
+                "rubricScores": [
+                  {
+                    "id": "r1",
+                    "reason": "输出为单个 JSON 对象，且仅包含 content 字段，无额外文本或字段。",
+                    "score": 1
+                  },
+                  {
+                    "id": "r3",
+                    "reason": "内容与输入一致：NBA、pre_game、两队名称及 0-0 比分均匹配，未编造未冲突；未写到的信息被自然略过。",
+                    "score": 1
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "sessionId": "3a0ec6c3-aa8a-4c0d-9be0-3d48c9d37c9e",
+      "userId": "demo_user"
+    },
+    {
+      "evalSetId": "sportscaster_basic",
+      "evalId": "missing_fields",
+      "runId": 1,
+      "finalEvalStatus": "passed",
+      "overallEvalMetricResults": [
+        {
+          "metricName": "json_schema",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 1,
+          "details": {
+            "reason": "valid",
+            "score": 1
+          }
+        },
+        {
+          "metricName": "llm_critic",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 0.8,
+          "criterion": {
+            "llmJudge": {
+              "rubrics": [
+                {
+                  "id": "r1",
+                  "content": {
+                    "text": "输出必须是单个 JSON 对象，且不得包含任何额外文本。"
+                  }
+                },
+                {
+                  "id": "r3",
+                  "content": {
+                    "text": "正文必须严格基于输入 JSON 比赛状态，不得编造事实或事件；缺失或不确定的信息直接略过；当输入不完整或自相矛盾时，正文避免自相矛盾。"
+                  }
+                }
+              ]
+            }
+          },
+          "details": {
+            "reason": "{\"assessment\":\"本样本中，candidate 输出为仅含 content 的单一 JSON 对象，且无多余文本，满足契约要求；正文只引用了运动类型与状态，也未编造比赛事件或与输入冲突，因此 r1、r3 均可判定通过。但对照 teacher，candidate 内容明显偏“标签化/枚举值直出”，没有利用已提供的主客队信息，也未将 in_progress 转为自然语言（如“比赛进行中”）并组织成连贯中文解说，信息量与可读性不足。说明 Prompt 可能缺少：要求使用输入中可用关键字段（队名）、规定输出语言与表达风格、以及对状态字段的口语化映射与句式模板。这类缺口可能导致相似场景下输出长期过短、只复述原始值而不形成观赛向描述。\",\"issues\":[{\"action\":\"Prompt 需要明确：当 user_input 提供 home_team/away_team 时，content 必须包含双方队名与对阵关系（例如“X 对阵 Y”），除非字段缺失则直接略过。\",\"key\":\"require_include_teams_when_available\",\"severity\":\"P1\",\"summary\":\"Prompt 未明确要求使用已给出的主客队信息，导致输出信息量不足。\"},{\"action\":\"Prompt 需要指定输出语言为中文，并要求用 1–2 句自然语言描述比赛状态（而非用分隔符/标签串联）。\",\"key\":\"specify_chinese_natural_sentence\",\"severity\":\"P1\",\"summary\":\"Prompt 未约束语言与表达形式，导致内容呈现为“枚举值直出”的标签风格。\"},{\"action\":\"Prompt 需要增加规则：将 status 枚举映射为对应中文短语（如 in_progress→“比赛进行中”），并在不新增事实的前提下组织为解说句式。\",\"key\":\"status_to_human_readable_mapping\",\"severity\":\"P1\",\"summary\":\"Prompt 未要求对状态字段做可读化转换，影响可读性与与参考答案风格的一致性。\"}],\"rubrics\":[{\"id\":\"r1\",\"reason\":\"输出为单个 JSON 对象且仅包含 content 字段，无额外文本。\",\"verdict\":\"yes\"},{\"id\":\"r3\",\"reason\":\"正文仅使用输入中的 sport 与 status 信息，未编造事件或与输入矛盾；未使用的队名信息被略过也不构成冲突。\",\"verdict\":\"yes\"}]}",
+            "score": 1,
+            "rubricScores": [
+              {
+                "id": "r1",
+                "reason": "输出为单个 JSON 对象且仅包含 content 字段，无额外文本。",
+                "score": 1
+              },
+              {
+                "id": "r3",
+                "reason": "正文仅使用输入中的 sport 与 status 信息，未编造事件或与输入矛盾；未使用的队名信息被略过也不构成冲突。",
+                "score": 1
+              }
+            ]
+          }
+        }
+      ],
+      "evalMetricResultPerInvocation": [
+        {
+          "actualInvocation": {
+            "invocationId": "66ea5f65-391f-4f33-9ba7-04af85990769",
+            "userContent": {
+              "role": "user",
+              "content": "{\"sport\":\"soccer\",\"home_team\":\"Team A\",\"away_team\":\"Team B\",\"status\":\"in_progress\"}"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "{\n  \"content\": \"soccer | in_progress\"\n}"
+            }
+          },
+          "expectedInvocation": {
+            "invocationId": "3051e47c-884a-431a-97ea-3bd5a8c1c446",
+            "userContent": {
+              "role": "user",
+              "content": "{\"sport\":\"soccer\",\"home_team\":\"Team A\",\"away_team\":\"Team B\",\"status\":\"in_progress\"}"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "{\"content\":\"比赛进行中！Team A 对阵 Team B——双方还在场上缠斗，局势随时可能被改写！\"}"
+            }
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "json_schema",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "details": {
+                "reason": "valid",
+                "score": 1
+              }
+            },
+            {
+              "metricName": "llm_critic",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 0.8,
+              "criterion": {
+                "llmJudge": {
+                  "rubrics": [
+                    {
+                      "id": "r1",
+                      "content": {
+                        "text": "输出必须是单个 JSON 对象，且不得包含任何额外文本。"
+                      }
+                    },
+                    {
+                      "id": "r3",
+                      "content": {
+                        "text": "正文必须严格基于输入 JSON 比赛状态，不得编造事实或事件；缺失或不确定的信息直接略过；当输入不完整或自相矛盾时，正文避免自相矛盾。"
+                      }
+                    }
+                  ]
+                }
+              },
+              "details": {
+                "reason": "{\"assessment\":\"本样本中，candidate 输出为仅含 content 的单一 JSON 对象，且无多余文本，满足契约要求；正文只引用了运动类型与状态，也未编造比赛事件或与输入冲突，因此 r1、r3 均可判定通过。但对照 teacher，candidate 内容明显偏“标签化/枚举值直出”，没有利用已提供的主客队信息，也未将 in_progress 转为自然语言（如“比赛进行中”）并组织成连贯中文解说，信息量与可读性不足。说明 Prompt 可能缺少：要求使用输入中可用关键字段（队名）、规定输出语言与表达风格、以及对状态字段的口语化映射与句式模板。这类缺口可能导致相似场景下输出长期过短、只复述原始值而不形成观赛向描述。\",\"issues\":[{\"action\":\"Prompt 需要明确：当 user_input 提供 home_team/away_team 时，content 必须包含双方队名与对阵关系（例如“X 对阵 Y”），除非字段缺失则直接略过。\",\"key\":\"require_include_teams_when_available\",\"severity\":\"P1\",\"summary\":\"Prompt 未明确要求使用已给出的主客队信息，导致输出信息量不足。\"},{\"action\":\"Prompt 需要指定输出语言为中文，并要求用 1–2 句自然语言描述比赛状态（而非用分隔符/标签串联）。\",\"key\":\"specify_chinese_natural_sentence\",\"severity\":\"P1\",\"summary\":\"Prompt 未约束语言与表达形式，导致内容呈现为“枚举值直出”的标签风格。\"},{\"action\":\"Prompt 需要增加规则：将 status 枚举映射为对应中文短语（如 in_progress→“比赛进行中”），并在不新增事实的前提下组织为解说句式。\",\"key\":\"status_to_human_readable_mapping\",\"severity\":\"P1\",\"summary\":\"Prompt 未要求对状态字段做可读化转换，影响可读性与与参考答案风格的一致性。\"}],\"rubrics\":[{\"id\":\"r1\",\"reason\":\"输出为单个 JSON 对象且仅包含 content 字段，无额外文本。\",\"verdict\":\"yes\"},{\"id\":\"r3\",\"reason\":\"正文仅使用输入中的 sport 与 status 信息，未编造事件或与输入矛盾；未使用的队名信息被略过也不构成冲突。\",\"verdict\":\"yes\"}]}",
+                "score": 1,
+                "rubricScores": [
+                  {
+                    "id": "r1",
+                    "reason": "输出为单个 JSON 对象且仅包含 content 字段，无额外文本。",
+                    "score": 1
+                  },
+                  {
+                    "id": "r3",
+                    "reason": "正文仅使用输入中的 sport 与 status 信息，未编造事件或与输入矛盾；未使用的队名信息被略过也不构成冲突。",
+                    "score": 1
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "sessionId": "bc80c3a4-545c-490b-aa39-7c9eedc9f2c5",
+      "userId": "demo_user"
+    },
+    {
+      "evalSetId": "sportscaster_basic",
+      "evalId": "inconsistent_state",
+      "runId": 1,
+      "finalEvalStatus": "failed",
+      "overallEvalMetricResults": [
+        {
+          "metricName": "json_schema",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 1,
+          "details": {
+            "reason": "valid",
+            "score": 1
+          }
+        },
+        {
+          "metricName": "llm_critic",
+          "score": 0.5,
+          "evalStatus": "failed",
+          "threshold": 0.8,
+          "criterion": {
+            "llmJudge": {
+              "rubrics": [
+                {
+                  "id": "r1",
+                  "content": {
+                    "text": "输出必须是单个 JSON 对象，且不得包含任何额外文本。"
+                  }
+                },
+                {
+                  "id": "r3",
+                  "content": {
+                    "text": "正文必须严格基于输入 JSON 比赛状态，不得编造事实或事件；缺失或不确定的信息直接略过；当输入不完整或自相矛盾时，正文避免自相矛盾。"
+                  }
+                }
+              ]
+            }
+          },
+          "details": {
+            "reason": "{\"assessment\":\"本样本 candidate 满足 r1：输出为单一 JSON 对象且仅含 content 字段。主要问题在 r3：输入同时给出 status=finished 与 Q4/05:00 这类“进行中”信号，candidate把两者并列写入正文，导致语义自相矛盾；参考答案则选择只表达“已结束+终场比分”，避免冲突。此外，candidate采用英文与“|”拼接的列表体，和参考答案的中文叙述差异较大，且未基于比分点明胜者（可由输入推得）。这些现象通常来自 Prompt 未明确：遇到状态字段冲突时的取舍规则、以及期望的语言与表达风格。\",\"issues\":[{\"action\":\"在 Prompt 中加入消歧硬约束：当 status/highlights 明确为 finished/Final 时，正文只输出“终场/已结束”与最终比分（可含球队名），与结束语义冲突的 clock/phase 等信息必须省略或改写为不冲突表述，禁止并列呈现造成自相矛盾。\",\"key\":\"resolve_conflicting_status_fields\",\"severity\":\"P0\",\"summary\":\"Prompt 缺少对输入字段自相矛盾（已结束 vs 仍有节次/剩余时间）的处理规则，导致正文出现“finished + Q4 05:00”式矛盾表述。\"},{\"action\":\"在 Prompt 中明确输出语言与体裁约束（例如：中文、1-2 句自然语言播报），并要求避免使用“|”等管道符拼接的表格/列表式表达，除非被明确要求。\",\"key\":\"specify_language_and_narrative_style\",\"severity\":\"P1\",\"summary\":\"Prompt 未明确正文应使用中文自然语言及叙述风格，导致输出呈英文分隔符拼接，和参考答案风格偏离。\"},{\"action\":\"在 Prompt 中增加可选但明确的推导规则：当比赛已结束且比分不相等时，可根据 home/away 分数比较点明获胜方与分差；若比分相等则不要断言胜负。\",\"key\":\"allow_winner_inference_from_score\",\"severity\":\"P1\",\"summary\":\"Prompt 未说明在“已结束”场景下可由比分安全推导胜者，导致只罗列比分而缺少结果性表述（胜者/分差）。\"}],\"rubrics\":[{\"id\":\"r1\",\"reason\":\"输出为单一 JSON 对象，且仅包含 content 字段，无额外文本或字段。\",\"verdict\":\"yes\"},{\"id\":\"r3\",\"reason\":\"正文同时呈现 finished 与 Q4/05:00 等进行中信息，未在输入自相矛盾时做取舍，造成自相矛盾表达。\",\"verdict\":\"no\"}]}",
+            "score": 0.5,
+            "rubricScores": [
+              {
+                "id": "r1",
+                "reason": "输出为单一 JSON 对象，且仅包含 content 字段，无额外文本或字段。",
+                "score": 1
+              },
+              {
+                "id": "r3",
+                "reason": "正文同时呈现 finished 与 Q4/05:00 等进行中信息，未在输入自相矛盾时做取舍，造成自相矛盾表达。"
+              }
+            ]
+          }
+        }
+      ],
+      "evalMetricResultPerInvocation": [
+        {
+          "actualInvocation": {
+            "invocationId": "af99612e-4552-4e73-b800-1a5daf270f1d",
+            "userContent": {
+              "role": "user",
+              "content": "{\"sport\":\"basketball\",\"league\":\"NBA\",\"home_team\":\"Team X\",\"away_team\":\"Team Y\",\"status\":\"finished\",\"phase\":\"Q4\",\"clock\":\"05:00\",\"score\":{\"home\":110,\"away\":108},\"highlights\":[{\"time\":\"Final\",\"text\":\"Reported as finished.\"}],\"last_update\":\"2026-02-22T22:01:00+08:00\"}"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "{\n  \"content\": \"NBA | finished | Q4 | 05:00 | Team X 110-108 Team Y | - Final Reported as finished.\"\n}"
+            }
+          },
+          "expectedInvocation": {
+            "invocationId": "bc9b5304-3c0a-4ba9-aa55-6467d4443024",
+            "userContent": {
+              "role": "user",
+              "content": "{\"sport\":\"basketball\",\"league\":\"NBA\",\"home_team\":\"Team X\",\"away_team\":\"Team Y\",\"status\":\"finished\",\"phase\":\"Q4\",\"clock\":\"05:00\",\"score\":{\"home\":110,\"away\":108},\"highlights\":[{\"time\":\"Final\",\"text\":\"Reported as finished.\"}],\"last_update\":\"2026-02-22T22:01:00+08:00\"}"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "{\"content\":\"比赛结束！NBA——Team X 110:108 拿下 Team Y！第四节收官，比分两分分差定胜负——终场已被确认结束，胜负就此定格！\"}"
+            }
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "json_schema",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "details": {
+                "reason": "valid",
+                "score": 1
+              }
+            },
+            {
+              "metricName": "llm_critic",
+              "score": 0.5,
+              "evalStatus": "failed",
+              "threshold": 0.8,
+              "criterion": {
+                "llmJudge": {
+                  "rubrics": [
+                    {
+                      "id": "r1",
+                      "content": {
+                        "text": "输出必须是单个 JSON 对象，且不得包含任何额外文本。"
+                      }
+                    },
+                    {
+                      "id": "r3",
+                      "content": {
+                        "text": "正文必须严格基于输入 JSON 比赛状态，不得编造事实或事件；缺失或不确定的信息直接略过；当输入不完整或自相矛盾时，正文避免自相矛盾。"
+                      }
+                    }
+                  ]
+                }
+              },
+              "details": {
+                "reason": "{\"assessment\":\"本样本 candidate 满足 r1：输出为单一 JSON 对象且仅含 content 字段。主要问题在 r3：输入同时给出 status=finished 与 Q4/05:00 这类“进行中”信号，candidate把两者并列写入正文，导致语义自相矛盾；参考答案则选择只表达“已结束+终场比分”，避免冲突。此外，candidate采用英文与“|”拼接的列表体，和参考答案的中文叙述差异较大，且未基于比分点明胜者（可由输入推得）。这些现象通常来自 Prompt 未明确：遇到状态字段冲突时的取舍规则、以及期望的语言与表达风格。\",\"issues\":[{\"action\":\"在 Prompt 中加入消歧硬约束：当 status/highlights 明确为 finished/Final 时，正文只输出“终场/已结束”与最终比分（可含球队名），与结束语义冲突的 clock/phase 等信息必须省略或改写为不冲突表述，禁止并列呈现造成自相矛盾。\",\"key\":\"resolve_conflicting_status_fields\",\"severity\":\"P0\",\"summary\":\"Prompt 缺少对输入字段自相矛盾（已结束 vs 仍有节次/剩余时间）的处理规则，导致正文出现“finished + Q4 05:00”式矛盾表述。\"},{\"action\":\"在 Prompt 中明确输出语言与体裁约束（例如：中文、1-2 句自然语言播报），并要求避免使用“|”等管道符拼接的表格/列表式表达，除非被明确要求。\",\"key\":\"specify_language_and_narrative_style\",\"severity\":\"P1\",\"summary\":\"Prompt 未明确正文应使用中文自然语言及叙述风格，导致输出呈英文分隔符拼接，和参考答案风格偏离。\"},{\"action\":\"在 Prompt 中增加可选但明确的推导规则：当比赛已结束且比分不相等时，可根据 home/away 分数比较点明获胜方与分差；若比分相等则不要断言胜负。\",\"key\":\"allow_winner_inference_from_score\",\"severity\":\"P1\",\"summary\":\"Prompt 未说明在“已结束”场景下可由比分安全推导胜者，导致只罗列比分而缺少结果性表述（胜者/分差）。\"}],\"rubrics\":[{\"id\":\"r1\",\"reason\":\"输出为单一 JSON 对象，且仅包含 content 字段，无额外文本或字段。\",\"verdict\":\"yes\"},{\"id\":\"r3\",\"reason\":\"正文同时呈现 finished 与 Q4/05:00 等进行中信息，未在输入自相矛盾时做取舍，造成自相矛盾表达。\",\"verdict\":\"no\"}]}",
+                "score": 0.5,
+                "rubricScores": [
+                  {
+                    "id": "r1",
+                    "reason": "输出为单一 JSON 对象，且仅包含 content 字段，无额外文本或字段。",
+                    "score": 1
+                  },
+                  {
+                    "id": "r3",
+                    "reason": "正文同时呈现 finished 与 Q4/05:00 等进行中信息，未在输入自相矛盾时做取舍，造成自相矛盾表达。"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "sessionId": "7a03b763-d99f-406a-8ec9-e0d9f29ace80",
+      "userId": "demo_user"
+    }
+  ],
+  "summary": {
+    "overallStatus": "failed",
+    "numRuns": 1,
+    "runStatusCounts": {
+      "failed": 1
+    },
+    "runSummaries": [
+      {
+        "runId": 1,
+        "overallStatus": "failed",
+        "caseStatusCounts": {
+          "passed": 5,
+          "failed": 1
+        },
+        "metricSummaries": [
+          {
+            "metricName": "json_schema",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 1,
+            "statusCounts": {
+              "passed": 6
+            }
+          },
+          {
+            "metricName": "llm_critic",
+            "averageScore": 0.9166666666666666,
+            "evalStatus": "passed",
+            "threshold": 0.8,
+            "statusCounts": {
+              "passed": 5,
+              "failed": 1
+            }
+          }
+        ]
+      }
+    ],
+    "evalCaseSummaries": [
+      {
+        "evalId": "baseball_mid_game",
+        "overallStatus": "passed",
+        "runStatusCounts": {
+          "passed": 1
+        },
+        "metricSummaries": [
+          {
+            "metricName": "json_schema",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 1,
+            "statusCounts": {
+              "passed": 1
+            }
+          },
+          {
+            "metricName": "llm_critic",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 0.8,
+            "statusCounts": {
+              "passed": 1
+            }
+          }
+        ],
+        "runSummaries": [
+          {
+            "runId": 1,
+            "finalEvalStatus": "passed",
+            "metricResults": [
+              {
+                "metricName": "json_schema",
+                "score": 1,
+                "evalStatus": "passed",
+                "threshold": 1
+              },
+              {
+                "metricName": "llm_critic",
+                "score": 1,
+                "evalStatus": "passed",
+                "threshold": 0.8
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "evalId": "basketball_clutch_q4",
+        "overallStatus": "passed",
+        "runStatusCounts": {
+          "passed": 1
+        },
+        "metricSummaries": [
+          {
+            "metricName": "json_schema",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 1,
+            "statusCounts": {
+              "passed": 1
+            }
+          },
+          {
+            "metricName": "llm_critic",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 0.8,
+            "statusCounts": {
+              "passed": 1
+            }
+          }
+        ],
+        "runSummaries": [
+          {
+            "runId": 1,
+            "finalEvalStatus": "passed",
+            "metricResults": [
+              {
+                "metricName": "json_schema",
+                "score": 1,
+                "evalStatus": "passed",
+                "threshold": 1
+              },
+              {
+                "metricName": "llm_critic",
+                "score": 1,
+                "evalStatus": "passed",
+                "threshold": 0.8
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "evalId": "inconsistent_state",
+        "overallStatus": "failed",
+        "runStatusCounts": {
+          "failed": 1
+        },
+        "metricSummaries": [
+          {
+            "metricName": "json_schema",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 1,
+            "statusCounts": {
+              "passed": 1
+            }
+          },
+          {
+            "metricName": "llm_critic",
+            "averageScore": 0.5,
+            "evalStatus": "failed",
+            "threshold": 0.8,
+            "statusCounts": {
+              "failed": 1
+            }
+          }
+        ],
+        "runSummaries": [
+          {
+            "runId": 1,
+            "finalEvalStatus": "failed",
+            "metricResults": [
+              {
+                "metricName": "json_schema",
+                "score": 1,
+                "evalStatus": "passed",
+                "threshold": 1
+              },
+              {
+                "metricName": "llm_critic",
+                "score": 0.5,
+                "evalStatus": "failed",
+                "threshold": 0.8
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "evalId": "missing_fields",
+        "overallStatus": "passed",
+        "runStatusCounts": {
+          "passed": 1
+        },
+        "metricSummaries": [
+          {
+            "metricName": "json_schema",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 1,
+            "statusCounts": {
+              "passed": 1
+            }
+          },
+          {
+            "metricName": "llm_critic",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 0.8,
+            "statusCounts": {
+              "passed": 1
+            }
+          }
+        ],
+        "runSummaries": [
+          {
+            "runId": 1,
+            "finalEvalStatus": "passed",
+            "metricResults": [
+              {
+                "metricName": "json_schema",
+                "score": 1,
+                "evalStatus": "passed",
+                "threshold": 1
+              },
+              {
+                "metricName": "llm_critic",
+                "score": 1,
+                "evalStatus": "passed",
+                "threshold": 0.8
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "evalId": "pre_game_preview",
+        "overallStatus": "passed",
+        "runStatusCounts": {
+          "passed": 1
+        },
+        "metricSummaries": [
+          {
+            "metricName": "json_schema",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 1,
+            "statusCounts": {
+              "passed": 1
+            }
+          },
+          {
+            "metricName": "llm_critic",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 0.8,
+            "statusCounts": {
+              "passed": 1
+            }
+          }
+        ],
+        "runSummaries": [
+          {
+            "runId": 1,
+            "finalEvalStatus": "passed",
+            "metricResults": [
+              {
+                "metricName": "json_schema",
+                "score": 1,
+                "evalStatus": "passed",
+                "threshold": 1
+              },
+              {
+                "metricName": "llm_critic",
+                "score": 1,
+                "evalStatus": "passed",
+                "threshold": 0.8
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "evalId": "soccer_final",
+        "overallStatus": "passed",
+        "runStatusCounts": {
+          "passed": 1
+        },
+        "metricSummaries": [
+          {
+            "metricName": "json_schema",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 1,
+            "statusCounts": {
+              "passed": 1
+            }
+          },
+          {
+            "metricName": "llm_critic",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 0.8,
+            "statusCounts": {
+              "passed": 1
+            }
+          }
+        ],
+        "runSummaries": [
+          {
+            "runId": 1,
+            "finalEvalStatus": "passed",
+            "metricResults": [
+              {
+                "metricName": "json_schema",
+                "score": 1,
+                "evalStatus": "passed",
+                "threshold": 1
+              },
+              {
+                "metricName": "llm_critic",
+                "score": 1,
+                "evalStatus": "passed",
+                "threshold": 0.8
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

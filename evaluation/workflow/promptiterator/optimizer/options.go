@@ -33,7 +33,7 @@ type options struct {
 func newOptions(opt ...Option) *options {
 	opts := &options{
 		userIDSupplier: func(context.Context) string {
-			return uuid.NewString()
+			return "promptiterator-optimizer"
 		},
 		sessionIDSupplier: func(context.Context) string {
 			return uuid.NewString()

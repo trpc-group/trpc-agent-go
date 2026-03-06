@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
@@ -37,6 +38,7 @@ type workflow struct {
 	metricMgr    metric.Manager
 	evaluatorReg registry.Registry
 	evalSetIDs   []string
+	outputDir    string
 }
 
 func newWorkflow(ctx context.Context, cfg Config) (*workflow, error) {
@@ -54,6 +56,12 @@ func newWorkflow(ctx context.Context, cfg Config) (*workflow, error) {
 		return nil, err
 	}
 	wf.evalSetIDs = evalSetIDs
+	// Create output directory.
+	outputDir := filepath.Join(cfg.OutputDir, cfg.AppName, "promptiter")
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create output dir: %w", err)
+	}
+	wf.outputDir = outputDir
 	// Create candidate.
 	candidateRunner, err := newCandidateRunner(cfg)
 	if err != nil {
@@ -133,6 +141,9 @@ func (w *workflow) Run(ctx context.Context) (*promptiterator.Result, error) {
 		string(promptBytes),
 		w.evalSetIDs,
 		promptiterator.WithMaxOptimizationRounds(w.cfg.MaxIters),
+		promptiterator.WithRoundCallback(func(_ context.Context, round *promptiterator.Round) error {
+			return writeRoundArtifactsForRound(w.outputDir, round)
+		}),
 	)
 	if err != nil {
 		return nil, err

@@ -9,6 +9,7 @@
 package promptiterator
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -27,6 +28,9 @@ import (
 
 const defaultMaxOptimizationRounds = 3
 
+// RoundCallback is invoked after a round is completed.
+type RoundCallback func(context.Context, *Round) error
+
 type options struct {
 	appName               string
 	maxOptimizationRounds int
@@ -40,6 +44,7 @@ type options struct {
 	aggregator            aggregator.Aggregator
 	optimizer             optimizer.Optimizer
 	runOptions            []agent.RunOption
+	roundCallback         RoundCallback
 }
 
 // Option configures the prompt iteration workflow.
@@ -157,5 +162,12 @@ func WithOptimizer(opt optimizer.Optimizer) Option {
 func WithRunOptions(runOptions ...agent.RunOption) Option {
 	return func(o *options) {
 		o.runOptions = append(o.runOptions, runOptions...)
+	}
+}
+
+// WithRoundCallback sets a callback invoked after each round is completed.
+func WithRoundCallback(cb RoundCallback) Option {
+	return func(o *options) {
+		o.roundCallback = cb
 	}
 }

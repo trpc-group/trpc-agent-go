@@ -12,6 +12,7 @@ import (
 	"context"
 	"flag"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiterator"
@@ -37,6 +38,7 @@ func parseFlags() Config {
 		return nil
 	})
 	flag.StringVar(&cfg.DataDir, "data-dir", cfg.DataDir, "Directory containing evalset and metrics files")
+	flag.StringVar(&cfg.OutputDir, "output-dir", cfg.OutputDir, "Directory where per-round artifacts are written")
 	flag.StringVar(&cfg.SchemaPath, "schema", cfg.SchemaPath, "Output JSON schema path")
 	flag.IntVar(&cfg.MaxIters, "iters", cfg.MaxIters, "Max iteration rounds")
 	flag.StringVar(&cfg.CandidateModel.ModelName, "candidate-model", cfg.CandidateModel.ModelName, "Candidate model name")
@@ -74,6 +76,7 @@ func main() {
 	} else {
 		log.Errorf("Done. Metrics still failing after %d optimization rounds.", result.OptimizationRounds)
 	}
+	log.Infof("Artifacts dir: %s", filepath.Join(cfg.OutputDir, cfg.AppName, "promptiter"))
 	log.Infof("Final prompt:\n%s", result.FinalPrompt)
 	if !result.Passed {
 		os.Exit(1)

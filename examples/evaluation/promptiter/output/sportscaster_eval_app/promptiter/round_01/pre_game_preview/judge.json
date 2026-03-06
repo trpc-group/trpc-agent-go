@@ -1,0 +1,69 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "pre_game_preview",
+  "runId": 1,
+  "invocations": [
+    {
+      "metrics": [
+        {
+          "metricName": "llm_critic",
+          "score": 0.5,
+          "threshold": 0.8,
+          "evalStatus": "failed",
+          "output": {
+            "assessment": "candidate 在格式上符合契约：单一 JSON 且仅含 content（r1 通过）。但正文多处超出 user_input：加入“卫冕冠军”“众多明星球员”“对攻大战”“库里和约基奇对决”“今晚”等信息，输入仅给出联盟、主客队、pre_game、0:0 与时间戳，未提供冠军归属、球员、比赛风格或相对时间表述，因此违反“严格基于输入、缺失则略过”的要求（r3 不通过）。这暴露出 Prompt 对“禁止使用外部常识/推测、仅允许复述输入字段”的硬约束不够明确，容易在类似赛前场景继续编造看点、人物与背景。",
+            "issues": [
+              {
+                "action": "在 Prompt 中增加硬约束：content 只能改写/组合 user_input 已给字段（如 league、teams、status、score、last_update），禁止引入任何外部背景、评价性预测或常识性补全（如卫冕冠军、明星球员、对攻大战等）；并给出允许/不允许示例。",
+                "key": "strict_grounding_only",
+                "severity": "P0",
+                "summary": "Prompt 缺少“仅可使用输入字段信息、禁止外部事实与主观预测”的明确约束，导致编造背景与赛事解读。"
+              },
+              {
+                "action": "在 Prompt 中明确：除非 user_input 明确提供球员/阵容/伤病等字段，否则不得出现任何球员姓名或“某某对决/最大看点”等表述。",
+                "key": "no_unprovided_player_mentions",
+                "severity": "P0",
+                "summary": "Prompt 未明确禁止在输入缺少球员信息时输出球星对决与看点，易引入臆测。"
+              },
+              {
+                "action": "在 Prompt 中补充规则：不得使用“今晚/今早/即将开打于XX主场氛围”等相对时间与情境词，除非输入明确给出；如需时间仅可引用 last_update 的客观时间。",
+                "key": "avoid_time_context_guessing",
+                "severity": "P1",
+                "summary": "Prompt 未要求避免相对时间与情境化措辞，导致在仅有时间戳时仍写“今晚”等推断。"
+              },
+              {
+                "action": "在 Prompt 中提供 pre_game 的最小输出模板：{league}—{home_team} vs {away_team}，状态 {status}，比分 {home}:{away}；其余信息缺失则不写，以减少填充性扩写。",
+                "key": "pre_game_minimal_template",
+                "severity": "P1",
+                "summary": "Prompt 缺少针对赛前状态的简洁模板约束，导致用泛化宣传语填充并引入不基于输入的内容。"
+              }
+            ],
+            "rubrics": [
+              {
+                "id": "r1",
+                "reason": "输出为单个 JSON 对象且仅包含 content 字段，无额外文本。",
+                "verdict": "yes"
+              },
+              {
+                "id": "r3",
+                "reason": "正文加入“卫冕冠军”“库里和约基奇对决”“今晚”等输入未提供的信息，属于编造/推断。",
+                "verdict": "no"
+              }
+            ]
+          },
+          "rubricScores": [
+            {
+              "id": "r1",
+              "reason": "输出为单个 JSON 对象且仅包含 content 字段，无额外文本。",
+              "score": 1
+            },
+            {
+              "id": "r3",
+              "reason": "正文加入“卫冕冠军”“库里和约基奇对决”“今晚”等输入未提供的信息，属于编造/推断。"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

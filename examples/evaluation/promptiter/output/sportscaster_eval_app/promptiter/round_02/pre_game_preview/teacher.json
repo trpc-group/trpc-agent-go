@@ -1,0 +1,18 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "pre_game_preview",
+  "runId": 1,
+  "invocations": [
+    {
+      "invocationId": "3dcd79c2-74dd-4c6e-bdfc-22417701f583",
+      "userContent": {
+        "role": "user",
+        "content": "{\"sport\":\"basketball\",\"league\":\"NBA\",\"match_id\":\"nba_20260226_gsw_den\",\"home_team\":\"Golden State Warriors\",\"away_team\":\"Denver Nuggets\",\"status\":\"pre_game\",\"phase\":null,\"clock\":null,\"score\":{\"home\":0,\"away\":0},\"highlights\":[],\"last_update\":\"2026-02-26T18:30:00+08:00\"}"
+      },
+      "finalResponse": {
+        "role": "assistant",
+        "content": "{\"content\":\"赛前（pre_game）！NBA——金州勇士主场迎战丹佛掘金！当前比分 0:0，比赛尚未开打。最后更新 2026-02-26 18:30（+08:00）——两队对决一触即发！\"}"
+      }
+    }
+  ]
+}

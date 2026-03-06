@@ -1,0 +1,18 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "soccer_final",
+  "runId": 1,
+  "invocations": [
+    {
+      "invocationId": "03fb3657-7868-4e46-81db-8eeb7582144b",
+      "userContent": {
+        "role": "user",
+        "content": "{\"sport\":\"soccer\",\"league\":\"UEFA Champions League\",\"match_id\":\"ucl_20260224_mci_rma\",\"home_team\":\"Manchester City\",\"away_team\":\"Real Madrid\",\"status\":\"finished\",\"phase\":\"FT\",\"clock\":null,\"score\":{\"home\":2,\"away\":1},\"highlights\":[{\"time\":\"12'\",\"text\":\"Goal: Manchester City (1-0).\"},{\"time\":\"67'\",\"text\":\"Goal: Real Madrid (1-1).\"},{\"time\":\"88'\",\"text\":\"Goal: Manchester City (2-1).\"},{\"time\":\"90+2'\",\"text\":\"Yellow card shown.\"}],\"last_update\":\"2026-02-24T23:55:00+08:00\"}"
+      },
+      "finalResponse": {
+        "role": "assistant",
+        "content": "{\n  \"content\": \"UEFA Champions League全场结束，Manchester City（主）2:1 Real Madrid（客），Manchester City获胜。更新时间：2026-02-24T23:55:00+08:00。67'：Real Madrid进球，比分1:1。88'：Manchester City进球，比分2:1。90+2'：黄牌。\"\n}"
+      }
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "inconsistent_state",
+  "runId": 1,
+  "invocations": [
+    {
+      "invocationId": "91361349-e629-450c-be13-30c7eb1ac2fa",
+      "userContent": {
+        "role": "user",
+        "content": "{\"sport\":\"basketball\",\"league\":\"NBA\",\"home_team\":\"Team X\",\"away_team\":\"Team Y\",\"status\":\"finished\",\"phase\":\"Q4\",\"clock\":\"05:00\",\"score\":{\"home\":110,\"away\":108},\"highlights\":[{\"time\":\"Final\",\"text\":\"Reported as finished.\"}],\"last_update\":\"2026-02-22T22:01:00+08:00\"}"
+      },
+      "finalResponse": {
+        "role": "assistant",
+        "content": "{\"content\":\"终场哨响！一场惊心动魄的对决落下帷幕。主场作战的Team X以110比108，两分险胜来访的Team Y。比赛直到最后五分钟依然悬念丛生，双方比分紧咬。最终，Team X凭借关键时刻的稳定发挥，在主场球迷的欢呼声中守住了胜利。恭喜Team X，也为Team Y的顽强表现喝彩！\"}"
+      }
+    }
+  ]
+}

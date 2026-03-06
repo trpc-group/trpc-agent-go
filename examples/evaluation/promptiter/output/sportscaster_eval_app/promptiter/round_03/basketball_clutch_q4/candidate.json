@@ -1,0 +1,18 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "basketball_clutch_q4",
+  "runId": 1,
+  "invocations": [
+    {
+      "invocationId": "4d220d3f-38cc-46c4-99d2-004ead40faf5",
+      "userContent": {
+        "role": "user",
+        "content": "{\"sport\":\"basketball\",\"league\":\"NBA\",\"match_id\":\"nba_20260225_bos_lal\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Los Angeles Lakers\",\"status\":\"in_progress\",\"phase\":\"Q4\",\"clock\":\"02:31\",\"score\":{\"home\":102,\"away\":99},\"possession\":\"home\",\"highlights\":[{\"time\":\"04:10\",\"text\":\"Lakers made a 7-0 run to cut the lead to 1.\"},{\"time\":\"03:22\",\"text\":\"Celtics hit a three-pointer to go up by 3.\"},{\"time\":\"02:45\",\"text\":\"Timeout called after a loose ball scramble.\"}],\"last_update\":\"2026-02-25T21:10:00+08:00\"}"
+      },
+      "finalResponse": {
+        "role": "assistant",
+        "content": "{\n  \"content\": \"NBA比赛进行中（第4节，02:31），Boston Celtics（主）102:99 Los Angeles Lakers（客），Boston Celtics领先Los Angeles Lakers。更新时间：2026-02-25T21:10:00+08:00。04:10：湖人队打出一波7-0攻势，将分差缩小至1分。03:22：凯尔特人队命中三分球，将领先优势扩大到3分。02:45：争抢地板球后请求暂停。\"\n}"
+      }
+    }
+  ]
+}

@@ -100,6 +100,7 @@ func New(appName string, candidateRunner runner.Runner, opt ...Option) (PromptIt
 		aggregator:            opts.aggregator,
 		optimizer:             opts.optimizer,
 		runOptions:            append([]agent.RunOption(nil), opts.runOptions...),
+		roundCallback:         opts.roundCallback,
 	}, nil
 }
 
@@ -115,6 +116,7 @@ type promptIterator struct {
 	aggregator            aggregator.Aggregator
 	optimizer             optimizer.Optimizer
 	runOptions            []agent.RunOption
+	roundCallback         RoundCallback
 }
 
 // Run executes the prompt iteration starting from initialPrompt.
@@ -146,6 +148,11 @@ func (w *promptIterator) Run(ctx context.Context, initialPrompt string, evalSetI
 		if roundResult.Passed {
 			out.FinalPrompt = currentPrompt
 			out.Passed = true
+			if callOpts.roundCallback != nil {
+				if err := callOpts.roundCallback(ctx, roundResult); err != nil {
+					return nil, err
+				}
+			}
 			return out, nil
 		}
 		if len(roundResult.Issues) == 0 {
@@ -167,6 +174,11 @@ func (w *promptIterator) Run(ctx context.Context, initialPrompt string, evalSetI
 		currentPrompt = nextPrompt
 		out.OptimizationRounds = round
 		out.FinalPrompt = nextPrompt
+		if callOpts.roundCallback != nil {
+			if err := callOpts.roundCallback(ctx, roundResult); err != nil {
+				return nil, err
+			}
+		}
 	}
 	// Evaluate the last prompt after completing all optimization rounds.
 	finalRound, err := w.evaluateRound(ctx, callOpts.maxOptimizationRounds+1, currentPrompt, evalSetIDs, callOpts)
@@ -176,6 +188,11 @@ func (w *promptIterator) Run(ctx context.Context, initialPrompt string, evalSetI
 	out.Rounds = append(out.Rounds, finalRound)
 	out.FinalPrompt = currentPrompt
 	out.Passed = finalRound.Passed
+	if callOpts.roundCallback != nil {
+		if err := callOpts.roundCallback(ctx, finalRound); err != nil {
+			return nil, err
+		}
+	}
 	return out, nil
 }
 
@@ -191,6 +208,7 @@ func (w *promptIterator) mergeCallOptions(opt ...Option) (*options, error) {
 		aggregator:            w.aggregator,
 		optimizer:             w.optimizer,
 		runOptions:            append([]agent.RunOption(nil), w.runOptions...),
+		roundCallback:         w.roundCallback,
 	}
 	for _, o := range opt {
 		o(callOpts)

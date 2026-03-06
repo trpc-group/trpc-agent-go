@@ -1,0 +1,58 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "soccer_final",
+  "runId": 1,
+  "invocations": [
+    {
+      "metrics": [
+        {
+          "metricName": "llm_critic",
+          "score": 1,
+          "threshold": 0.8,
+          "evalStatus": "passed",
+          "output": {
+            "assessment": "candidate 以单一 JSON 且仅含 content 输出，满足输出契约；正文与输入的 finished/比分 2:1、last_update 以及 67'、88' 进球和 90+2' 黄牌一致，没有编造事实。与 teacher 相比，candidate 未覆盖 highlights 中 12' 的首开纪录，且事件呈现偏列表化，未将比分变化按时间线完整串联。说明 Prompt 可能未明确：当提供 highlights 时需尽量覆盖全部关键事件（至少所有进球/牌），并按时间先后组织为连贯赛况。该缺口在相似比赛中可能导致漏写早段关键节点或叙事顺序不稳。",
+            "issues": [
+              {
+                "action": "Prompt 需要增加硬约束：当输入包含 highlights 时，输出必须覆盖其中所有“进球/红黄牌”等关键事件（尤其进球），不得遗漏；只允许略过非关键事件且不新增未在 highlights 中出现的事件。",
+                "key": "cover_key_highlights",
+                "severity": "P1",
+                "summary": "Prompt 未要求在 highlights 存在时覆盖全部关键事件，导致本例漏写 12' 的进球信息。"
+              },
+              {
+                "action": "Prompt 需要明确组织规则：将 highlights 按时间先后顺序串联描述，并在每个进球节点同步更新比分（从输入推导），避免仅罗列零散片段。",
+                "key": "chronological_highlight_narrative",
+                "severity": "P1",
+                "summary": "Prompt 未规定按时间顺序与比分变化来组织 highlights，导致叙事不够连贯且易出现顺序/上下文缺失。"
+              }
+            ],
+            "rubrics": [
+              {
+                "id": "r1",
+                "reason": "candidate_output 为单个 JSON 对象且仅包含 content 字段，无额外文本或字段。",
+                "verdict": "yes"
+              },
+              {
+                "id": "r3",
+                "reason": "内容仅引用并推导自输入：完赛状态、比分、更新时间及给定事件均一致，未添加输入中不存在的事实。",
+                "verdict": "yes"
+              }
+            ]
+          },
+          "rubricScores": [
+            {
+              "id": "r1",
+              "reason": "candidate_output 为单个 JSON 对象且仅包含 content 字段，无额外文本或字段。",
+              "score": 1
+            },
+            {
+              "id": "r3",
+              "reason": "内容仅引用并推导自输入：完赛状态、比分、更新时间及给定事件均一致，未添加输入中不存在的事实。",
+              "score": 1
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

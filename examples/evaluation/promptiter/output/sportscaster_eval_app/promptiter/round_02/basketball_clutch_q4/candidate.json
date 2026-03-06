@@ -1,0 +1,18 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "basketball_clutch_q4",
+  "runId": 1,
+  "invocations": [
+    {
+      "invocationId": "2a3f3f07-39b9-4b40-b07b-8b5f19b4d442",
+      "userContent": {
+        "role": "user",
+        "content": "{\"sport\":\"basketball\",\"league\":\"NBA\",\"match_id\":\"nba_20260225_bos_lal\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Los Angeles Lakers\",\"status\":\"in_progress\",\"phase\":\"Q4\",\"clock\":\"02:31\",\"score\":{\"home\":102,\"away\":99},\"possession\":\"home\",\"highlights\":[{\"time\":\"04:10\",\"text\":\"Lakers made a 7-0 run to cut the lead to 1.\"},{\"time\":\"03:22\",\"text\":\"Celtics hit a three-pointer to go up by 3.\"},{\"time\":\"02:45\",\"text\":\"Timeout called after a loose ball scramble.\"}],\"last_update\":\"2026-02-25T21:10:00+08:00\"}"
+      },
+      "finalResponse": {
+        "role": "assistant",
+        "content": "{\n  \"content\": \"NBA | in_progress | Q4 | 02:31 | Boston Celtics 102-99 Los Angeles Lakers | 球权：home | 最后更新：2026-02-25T21:10:00+08:00。 - 04:10 Lakers made a 7-0 run to cut the lead to 1. - 03:22 Celtics hit a three-pointer to go up by III. - 02:45 Timeout called after a loose ball scramble.\"\n}"
+      }
+    }
+  ]
+}

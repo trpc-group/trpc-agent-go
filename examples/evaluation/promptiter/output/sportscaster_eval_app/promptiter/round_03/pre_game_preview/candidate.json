@@ -1,0 +1,18 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "pre_game_preview",
+  "runId": 1,
+  "invocations": [
+    {
+      "invocationId": "8354c8d3-d00c-4c2a-a54e-acd86745dab5",
+      "userContent": {
+        "role": "user",
+        "content": "{\"sport\":\"basketball\",\"league\":\"NBA\",\"match_id\":\"nba_20260226_gsw_den\",\"home_team\":\"Golden State Warriors\",\"away_team\":\"Denver Nuggets\",\"status\":\"pre_game\",\"phase\":null,\"clock\":null,\"score\":{\"home\":0,\"away\":0},\"highlights\":[],\"last_update\":\"2026-02-26T18:30:00+08:00\"}"
+      },
+      "finalResponse": {
+        "role": "assistant",
+        "content": "{\n  \"content\": \"NBA赛前（尚未开打），Golden State Warriors（主）对 Denver Nuggets（客）。更新时间：2026-02-26T18:30:00+08:00。\"\n}"
+      }
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "baseball_mid_game",
+  "runId": 1,
+  "invocations": [
+    {
+      "metrics": [
+        {
+          "metricName": "llm_critic",
+          "score": 1,
+          "threshold": 0.8,
+          "evalStatus": "passed",
+          "output": {
+            "assessment": "本样本中，candidate 严格输出为仅含 content 的单一 JSON 对象，满足格式契约。content 内容与 user_input 一致：比赛状态为进行中、局数为 Top 7，比分 2:3、领先方、更新时间及两条 highlights（Top 5 两分本垒打、Bottom 6 牺牲飞球得分）均未偏离输入，也未添加额外事件或自相矛盾信息。相较 teacher 的解说式表达，candidate 更偏事实罗列，未加入“分差 1 分/局面紧张”等概括性渲染；若目标更贴近 teacher 风格，Prompt 需要明确允许基于现有比分做概括性解说，但仍应硬性禁止新增具体比赛事件。",
+            "issues": [],
+            "rubrics": [
+              {
+                "id": "r1",
+                "reason": "输出为单个 JSON 对象，且仅包含字段 content（string），无额外文本或字段。",
+                "verdict": "yes"
+              },
+              {
+                "id": "r3",
+                "reason": "所有陈述均可由输入 JSON 直接对应（局数、比分、更新时间、两条事件），未编造新事实，且无矛盾。",
+                "verdict": "yes"
+              }
+            ]
+          },
+          "rubricScores": [
+            {
+              "id": "r1",
+              "reason": "输出为单个 JSON 对象，且仅包含字段 content（string），无额外文本或字段。",
+              "score": 1
+            },
+            {
+              "id": "r3",
+              "reason": "所有陈述均可由输入 JSON 直接对应（局数、比分、更新时间、两条事件），未编造新事实，且无矛盾。",
+              "score": 1
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

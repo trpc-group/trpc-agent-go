@@ -38,6 +38,8 @@ type Config struct {
 	EvalSetIDs []string
 	// DataDir is the directory containing evalset and metrics files.
 	DataDir string
+	// OutputDir is the base directory used for round artifacts.
+	OutputDir string
 	// SchemaPath is the output JSON schema file path.
 	SchemaPath string
 	// JudgeOutputSchemaPath is the JSON schema used for the judge structured output.
@@ -74,6 +76,7 @@ func DefaultConfig() Config {
 	return Config{
 		AppName:                      "sportscaster_eval_app",
 		DataDir:                      filepath.Join(".", "data"),
+		OutputDir:                    filepath.Join(".", "output"),
 		SchemaPath:                   filepath.Join(".", "schema", "candidate.json"),
 		JudgeOutputSchemaPath:        filepath.Join(".", "schema", "llmcritic.json"),
 		AggregatedGradientSchemaPath: filepath.Join(".", "schema", "aggregator.json"),
@@ -142,6 +145,9 @@ func (c Config) Validate() error {
 	}
 	if c.DataDir == "" {
 		return errors.New("data dir is empty")
+	}
+	if c.OutputDir == "" {
+		return errors.New("output dir is empty")
 	}
 	if c.SchemaPath == "" {
 		return errors.New("schema path is empty")

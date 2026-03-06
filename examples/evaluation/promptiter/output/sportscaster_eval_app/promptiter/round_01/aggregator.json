@@ -1,0 +1,72 @@
+{
+  "issues": [
+    {
+      "severity": "P0",
+      "key": "strict_grounding_only",
+      "summary": "Prompt 对“仅能输出输入 JSON 可验证信息”的硬约束与逐句可追溯要求不清（覆盖 strict_grounding_only/strict_grounding_only_input/strictly_grounded_content/require_sentence_level_grounding/ban_subjective_ungrounded_claims/no_unprovided_player_mentions/avoid_time_context_guessing/no_infer_from_score_clock/avoid_generic_filler_lines），导致多样本混入外部背景、主观渲染、未提供球员与相对时间语境、以及从比分/时间推断走势等编造内容。",
+      "action": "在 Prompt 的输出契约中新增并加粗“严格基于输入（grounding）”章节：1）content 只能改写/组合 user_input 的显式字段，及少量明确允许的派生量（如分差=主队分-客队分）；2）要求“逐句可追溯”：每句话都必须能对应到某个输入字段，否则必须删除；3）明确禁区清单：外部背景/常识补全、预测与解读、氛围与态势渲染词、战术与比赛过程描写、未在输入出现的球员姓名、相对时间情境词（如“今晚/今早”）；4）时间只能原样引用 last_update/clock/highlights.time 等字段；5）明确禁止仅凭 score/phase/clock 推断“胶着/关键时刻/最后X分钟悬念”等走势叙事；并给出允许/不允许各2条示例+生成后自检步骤。",
+      "cases": [
+        "sportscaster_basic/baseball_mid_game#llm_critic",
+        "sportscaster_basic/pre_game_preview#llm_critic",
+        "sportscaster_basic/missing_fields#llm_critic",
+        "sportscaster_basic/inconsistent_state#llm_critic"
+      ]
+    },
+    {
+      "severity": "P0",
+      "key": "no_inferred_event_actor",
+      "summary": "Prompt 未明确“事件主体缺失时不得推断/不得主语延续”（覆盖 no_inferred_event_actor/avoid_subject_carryover），导致把未指明归属的事件（如黄牌）错误归因到特定球队。",
+      "action": "在 Prompt 中加入硬约束：对每条 highlights/事件先检查是否包含明确 actor（球队/球员/受罚方）；若缺失则只能用中性无主句/被动句描述（如“补时阶段出现黄牌”），禁止推断归属、禁止默认沿用上一句主语。并要求多事件叙述“按条独立成句”，避免使用“X…并在…”等并列承接结构造成主语自动延续；可提供2-3个中性句式模板。",
+      "cases": [
+        "sportscaster_basic/soccer_final#llm_critic"
+      ]
+    },
+    {
+      "severity": "P0",
+      "key": "omit_unknown_fields_no_meta",
+      "summary": "Prompt 未明确“缺失信息直接省略且不得以元叙述提及缺失”，导致在字段缺失场景输出‘暂无/未更新’等内容，破坏只基于输入的约束。",
+      "action": "在 Prompt 增加缺失字段处理条款：若某字段未提供/为空，则正文必须完全不触及该信息维度（如比分/时间/场地/球权等）；并显式禁用“未提供/暂无信息/尚未更新/比分未更新”等缺失元叙述。建议附一条生成前检查清单：仅保留能被输入字段指认的内容。",
+      "cases": [
+        "sportscaster_basic/missing_fields#llm_critic"
+      ]
+    },
+    {
+      "severity": "P1",
+      "key": "require_key_metadata",
+      "summary": "Prompt 未强制显式呈现 league/phase/clock/主客队名与球权等关键元数据，导致输出信息颗粒度不足、与参考答案对齐度下降。",
+      "action": "在 Prompt 中增加硬性结构要求：正文开头设“关键元数据行/段”的固定模板；当字段存在时必须按顺序显式写出 league、phase、clock、当前比分（含主/客队名）与 possession（主/客）；字段缺失则跳过该项且不补写、不提示缺失。",
+      "cases": [
+        "sportscaster_basic/basketball_clutch_q4#llm_critic"
+      ]
+    },
+    {
+      "severity": "P1",
+      "key": "render_highlights_with_timestamps",
+      "summary": "Prompt 未要求 highlights 逐条携带 time 并按顺序呈现，导致时间戳等可复用细节在输出中丢失或被合并。",
+      "action": "在 Prompt 规定 highlights 渲染规则：若输入提供 highlights[].time，则必须按输入顺序逐条输出为“time + 事件描述（来自 highlights[].text/等价字段）”，不得把多条合并概述；允许每条后追加一句不引入新事实的短评（可选），但不得新增人物/原因/结果。",
+      "cases": [
+        "sportscaster_basic/basketball_clutch_q4#llm_critic"
+      ]
+    },
+    {
+      "severity": "P1",
+      "key": "conflict_resolution_policy",
+      "summary": "Prompt 未规定输入字段自相矛盾时的取舍与规避策略，导致输出同时引用冲突细节、引入不一致表述。",
+      "action": "在 Prompt 增加“输入冲突处理”规则：当 status/highlights 与 phase/clock/score 等出现矛盾时，优先采用能直接表明比赛状态的字段（如 status=finished、highlights 中的终场/结束声明）；对会造成矛盾的字段一律不引用或只引用不冲突部分；若仍无法确定，采取最保守输出（仅对阵+status+可确认的比分/阶段）。",
+      "cases": [
+        "sportscaster_basic/inconsistent_state#llm_critic"
+      ]
+    },
+    {
+      "severity": "P1",
+      "key": "minimal_template_sparse_input",
+      "summary": "Prompt 缺少对赛前或字段稀疏输入的极简模板与篇幅约束（覆盖 pre_game_minimal_template/limit_specificity_with_minimal_input），容易用泛化措辞填充并诱发不基于输入的扩写。",
+      "action": "在 Prompt 提供“信息稀疏场景最小模板”并限制长度：1）pre_game：仅输出 {league}—{home_team} vs {away_team}，状态 {status}，以及输入中存在的客观字段（如比分/时间）；2）仅含队名+status 的场景：限制 1–2 句，只写对阵与比赛状态；同时明确禁止宣传语/看点/对决/期待/氛围等填充性扩写。",
+      "cases": [
+        "sportscaster_basic/pre_game_preview#llm_critic",
+        "sportscaster_basic/missing_fields#llm_critic"
+      ]
+    }
+  ],
+  "notes": "已将多条“grounding/禁止编造/禁止主观渲染/禁止从比分时间推断/禁用未提供球员与相对时间语境”等高度同源问题合并为一条 P0，以便在 Prompt 中集中加硬约束与自检规则。"
+}

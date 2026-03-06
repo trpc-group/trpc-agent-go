@@ -1,0 +1,18 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "soccer_final",
+  "runId": 1,
+  "invocations": [
+    {
+      "invocationId": "fa576d63-a96d-4759-9843-71a70eff7a0f",
+      "userContent": {
+        "role": "user",
+        "content": "{\"sport\":\"soccer\",\"league\":\"UEFA Champions League\",\"match_id\":\"ucl_20260224_mci_rma\",\"home_team\":\"Manchester City\",\"away_team\":\"Real Madrid\",\"status\":\"finished\",\"phase\":\"FT\",\"clock\":null,\"score\":{\"home\":2,\"away\":1},\"highlights\":[{\"time\":\"12'\",\"text\":\"Goal: Manchester City (1-0).\"},{\"time\":\"67'\",\"text\":\"Goal: Real Madrid (1-1).\"},{\"time\":\"88'\",\"text\":\"Goal: Manchester City (2-1).\"},{\"time\":\"90+2'\",\"text\":\"Yellow card shown.\"}],\"last_update\":\"2026-02-24T23:55:00+08:00\"}"
+      },
+      "finalResponse": {
+        "role": "assistant",
+        "content": "{\"content\":\"全场结束（FT）！欧冠赛场，曼城 2:1 皇马！12' 曼城率先破门，1-0 先声夺人——67' 皇马回敬一球，把比分扳成 1-1！比赛越踢越紧，直到 88' 曼城再下一城，2-1 重新领先！补时 90+2' 还亮出一张黄牌，最后时刻气氛拉满，比分就定格在 2:1！\"}"
+      }
+    }
+  ]
+}

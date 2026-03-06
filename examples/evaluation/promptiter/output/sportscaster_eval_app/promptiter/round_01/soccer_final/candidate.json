@@ -1,0 +1,18 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "soccer_final",
+  "runId": 1,
+  "invocations": [
+    {
+      "invocationId": "29a88375-da52-47c2-becd-fa7a6175e7d0",
+      "userContent": {
+        "role": "user",
+        "content": "{\"sport\":\"soccer\",\"league\":\"UEFA Champions League\",\"match_id\":\"ucl_20260224_mci_rma\",\"home_team\":\"Manchester City\",\"away_team\":\"Real Madrid\",\"status\":\"finished\",\"phase\":\"FT\",\"clock\":null,\"score\":{\"home\":2,\"away\":1},\"highlights\":[{\"time\":\"12'\",\"text\":\"Goal: Manchester City (1-0).\"},{\"time\":\"67'\",\"text\":\"Goal: Real Madrid (1-1).\"},{\"time\":\"88'\",\"text\":\"Goal: Manchester City (2-1).\"},{\"time\":\"90+2'\",\"text\":\"Yellow card shown.\"}],\"last_update\":\"2026-02-24T23:55:00+08:00\"}"
+      },
+      "finalResponse": {
+        "role": "assistant",
+        "content": "{\"content\":\"一场经典的欧冠对决！曼城凭借第88分钟的绝杀，在主场2-1力克皇家马德里。比赛开局阶段，曼城在第12分钟就取得领先，但皇马在第67分钟顽强扳平。比赛尾声，曼城再次发力，在第88分钟打入制胜球，并在补时阶段领到一张黄牌。最终，曼城守住了胜果，拿下这场关键胜利。\"}"
+      }
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "pre_game_preview",
+  "runId": 1,
+  "invocations": [
+    {
+      "invocationId": "86c9f12a-9b37-4f57-9fbd-d9611f471b7a",
+      "userContent": {
+        "role": "user",
+        "content": "{\"sport\":\"basketball\",\"league\":\"NBA\",\"match_id\":\"nba_20260226_gsw_den\",\"home_team\":\"Golden State Warriors\",\"away_team\":\"Denver Nuggets\",\"status\":\"pre_game\",\"phase\":null,\"clock\":null,\"score\":{\"home\":0,\"away\":0},\"highlights\":[],\"last_update\":\"2026-02-26T18:30:00+08:00\"}"
+      },
+      "finalResponse": {
+        "role": "assistant",
+        "content": "{\"content\":\"比赛即将开始！今晚在勇士队主场，卫冕冠军丹佛掘金队将客场挑战金州勇士队。两支球队都拥有众多明星球员，预计这将是一场精彩的对攻大战。库里和约基奇的对决将是本场比赛的最大看点。让我们拭目以待！\"}"
+      }
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "baseball_mid_game",
+  "runId": 1,
+  "invocations": [
+    {
+      "invocationId": "b6fe8ea4-0054-4897-9ce1-f07b4d61abe2",
+      "userContent": {
+        "role": "user",
+        "content": "{\"sport\":\"baseball\",\"league\":\"MLB\",\"match_id\":\"mlb_20260223_nyy_bos\",\"home_team\":\"Boston Red Sox\",\"away_team\":\"New York Yankees\",\"status\":\"in_progress\",\"phase\":\"Top 7\",\"clock\":null,\"score\":{\"home\":2,\"away\":3},\"highlights\":[{\"time\":\"Top 5\",\"text\":\"Yankees hit a two-run home run.\"},{\"time\":\"Bottom 6\",\"text\":\"Red Sox scored on a sacrifice fly.\"}],\"last_update\":\"2026-02-23T20:18:00+08:00\"}"
+      },
+      "finalResponse": {
+        "role": "assistant",
+        "content": "{\"content\":\"MLB比赛进行中（第7局上），Boston Red Sox（主）2:3 New York Yankees（客），New York Yankees领先。更新时间：2026-02-23T20:18:00+08:00。Top 5：纽约扬基队击出一支两分本垒打。Bottom 6：波士顿红袜队凭借高飞牺牲打得分。\"}"
+      }
+    }
+  ]
+}

@@ -1,0 +1,63 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "missing_fields",
+  "runId": 1,
+  "invocations": [
+    {
+      "metrics": [
+        {
+          "metricName": "llm_critic",
+          "score": 0.5,
+          "threshold": 0.8,
+          "evalStatus": "failed",
+          "output": {
+            "assessment": "candidate 符合输出契约：输出为单一 JSON 对象且仅包含 content 字段，满足 r1。但正文除“比赛进行中、Team A 对阵 Team B”外，加入了“比分尚未更新”“激烈拼抢/争夺控球权”“主场球迷助威”“进攻组织/防守阵型稳固”等具体情节与状态判断，均未在输入 JSON 中出现；且以“未更新”方式提及缺失信息，违反 r3。该偏差通常源于 Prompt 对“仅可复述输入可直接推出的事实”“缺失字段必须直接省略且不得做元叙述”约束不够明确，可能在类似仅提供队名与状态的样本里继续扩写不存在的比赛细节。",
+            "issues": [
+              {
+                "action": "在 Prompt 增加硬约束：content 只能包含由输入字段（sport/home_team/away_team/status）可直接推出的信息；禁止生成任何比赛过程、战术、强度描写或评价性细节（如控球、拼抢、阵型稳固、谁在进攻等），除非这些事件在输入中以字段明确给出。",
+                "key": "strict_grounding_only_input",
+                "severity": "P0",
+                "summary": "Prompt 缺少“正文仅能由输入 JSON 字段直接推出”的硬约束，导致编造比赛过程与战术细节。"
+              },
+              {
+                "action": "在 Prompt 明确规则：若输入未提供 score/time/venue 等信息，正文必须完全不提这些维度；禁止使用“未提供/尚未更新/暂无信息/比分未更新”等提及缺失信息的表述。",
+                "key": "omit_unknown_fields_no_meta",
+                "severity": "P0",
+                "summary": "Prompt 未明确“缺失信息直接省略且不得以‘未更新/暂无’形式提及”，导致出现比分相关元叙述。"
+              },
+              {
+                "action": "在 Prompt 补充：当输入仅含队名与 status 时，content 需保持高度概括（建议 1–2 句），只描述“比赛进行中 + 对阵双方”，避免扩展叙事性场面描写。",
+                "key": "limit_specificity_with_minimal_input",
+                "severity": "P1",
+                "summary": "Prompt 未规定“仅给状态时需极简概括”，导致在信息稀疏场景下过度具体化。"
+              }
+            ],
+            "rubrics": [
+              {
+                "id": "r1",
+                "reason": "candidate_output 为单个 JSON 对象且仅包含 content 字段，无额外文本。",
+                "verdict": "yes"
+              },
+              {
+                "id": "r3",
+                "reason": "正文加入控球/拼抢/阵型、主场助威及“比分尚未更新”等输入未提供的信息，属于编造与缺失信息元叙述。",
+                "verdict": "no"
+              }
+            ]
+          },
+          "rubricScores": [
+            {
+              "id": "r1",
+              "reason": "candidate_output 为单个 JSON 对象且仅包含 content 字段，无额外文本。",
+              "score": 1
+            },
+            {
+              "id": "r3",
+              "reason": "正文加入控球/拼抢/阵型、主场助威及“比分尚未更新”等输入未提供的信息，属于编造与缺失信息元叙述。"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
