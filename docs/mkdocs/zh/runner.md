@@ -436,12 +436,19 @@ for e := range eventChan {
 - 随后流程直接中止，图本身来不及产出正常的最终快照
 
 这时 Runner 仍然会发出最后那条 `runner.completion` 事件。对于这种真正的致命错误
-（不包括 `stop_agent_error` 这种受控停止），Runner 现在会把两类信息一并带到这条最后事件上：
+（不包括 `stop_agent_error` 这种受控停止），Runner 现在会把“可安全兜底”的业务状态
+带到这条最后事件上：
 
-- `Response.Error`：本次运行最终的结构化错误
 - `StateDelta`：错误路径上累计出来的状态增量
 
-这样业务代码就可以继续保持同一个规则：优先看最后一条事件，而不是为了拿错误详情去遍历整条事件流。
+这里有两个细节要注意：
+
+- `Response.Error` 仍然只保留在原始致命错误事件上，这样下游翻译层依然可以把
+  `runner.completion` 当作正常的结束信号处理。
+- `graph.MetadataKeyNode`、`graph.MetadataKeyTool` 这类图元数据键会在兜底复制时被过滤掉，
+  避免 AGUI 这类消费者把节点/工具生命周期事件重复翻译一遍。
+
+这样业务代码就可以继续保持同一个规则：优先看最后一条事件里的业务错误详情，而不是为了拿错误信息去遍历整条事件流。
 
 示例：
 
@@ -461,14 +468,6 @@ func readLastEvent(eventChan <-chan *event.Event) error {
             continue
         }
 
-        if e.Response != nil && e.Response.Error != nil {
-            fmt.Printf(
-                "run failed: type=%s message=%s\n",
-                e.Response.Error.Type,
-                e.Response.Error.Message,
-            )
-        }
-
         if b, ok := e.StateDelta[stateKeyNodeFatal]; ok {
             var detail map[string]any
             if err := json.Unmarshal(b, &detail); err == nil {
@@ -485,8 +484,8 @@ func readLastEvent(eventChan <-chan *event.Event) error {
 
 - 正常成功且图产出了完成事件：从 completion event 的 `StateDelta` 里读取最终输出
   （例如 `graph.StateKeyLastResponse`）
-- 图完成前就致命退出：从同一条 completion event 的 `Response.Error` 和你自定义的
-  fatal key 里读取错误信息
+- 图完成前就致命退出：从同一条 completion event 的自定义 fatal key 里读取错误信息；
+  如果还需要结构化的 `Response.Error`，它仍然保留在原始致命错误事件上
 - `stop_agent_error`：仍然被视为“受控停止”信号，不会再重复镜像到 completion event
 
 #### 🔁 开关：让 Graph 的 LLM 节点输出最终响应事件

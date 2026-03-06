@@ -1032,7 +1032,7 @@ func (r *runner) captureCompletionFallback(
 		return
 	}
 	if len(agentEvent.StateDelta) > 0 {
-		loop.fallbackStateDelta = mergeStateDelta(
+		loop.fallbackStateDelta = mergeCompletionFallbackStateDelta(
 			loop.fallbackStateDelta,
 			agentEvent.StateDelta,
 		)
@@ -1043,6 +1043,49 @@ func (r *runner) captureCompletionFallback(
 	// The last non-partial response wins so the completion event reflects
 	// the terminal outcome seen by the runner.
 	loop.finalError = cloneResponseError(agentEvent.Response.Error)
+}
+
+func mergeCompletionFallbackStateDelta(
+	dst map[string][]byte,
+	src map[string][]byte,
+) map[string][]byte {
+	if len(src) == 0 {
+		return dst
+	}
+	for k, v := range src {
+		if !shouldPropagateFallbackStateKey(k) {
+			continue
+		}
+		if dst == nil {
+			dst = make(map[string][]byte, len(src))
+		}
+		if v == nil {
+			dst[k] = nil
+			continue
+		}
+		vv := make([]byte, len(v))
+		copy(vv, v)
+		dst[k] = vv
+	}
+	return dst
+}
+
+func shouldPropagateFallbackStateKey(key string) bool {
+	switch key {
+	case graph.MetadataKeyNode,
+		graph.MetadataKeyPregel,
+		graph.MetadataKeyChannel,
+		graph.MetadataKeyState,
+		graph.MetadataKeyCompletion,
+		graph.MetadataKeyTool,
+		graph.MetadataKeyModel,
+		graph.MetadataKeyCheckpoint,
+		graph.MetadataKeyCacheHit,
+		graph.MetadataKeyNodeCustom:
+		return false
+	default:
+		return true
+	}
 }
 
 func mergeStateDelta(
@@ -1083,7 +1126,7 @@ func cloneResponseError(err *model.ResponseError) *model.ResponseError {
 	return &clone
 }
 
-func shouldPropagateCompletionError(err *model.ResponseError) bool {
+func shouldPropagateFallbackState(err *model.ResponseError) bool {
 	if err == nil {
 		return false
 	}
@@ -1113,16 +1156,12 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 		runnerCompletionEvent,
 	)
 
-	propagateError := shouldPropagateCompletionError(loop.finalError)
+	propagateFallbackState := shouldPropagateFallbackState(
+		loop.finalError,
+	)
 	finalStateDelta := loop.finalStateDelta
-	if len(finalStateDelta) == 0 && propagateError {
+	if len(finalStateDelta) == 0 && propagateFallbackState {
 		finalStateDelta = loop.fallbackStateDelta
-	}
-	if len(loop.finalStateDelta) == 0 && propagateError &&
-		runnerCompletionEvent.Response != nil {
-		runnerCompletionEvent.Response.Error = cloneResponseError(
-			loop.finalError,
-		)
 	}
 
 	// Propagate graph-level completion data if available.

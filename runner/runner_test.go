@@ -1711,7 +1711,7 @@ func TestEmitRunnerCompletion_AppendErrorStillEmits(t *testing.T) {
 	// Even though append failed internally, the completion event is still emitted.
 }
 
-func TestRunner_CompletionIncludesFallbackErrorData(t *testing.T) {
+func TestRunner_CompletionIncludesFallbackBusinessState(t *testing.T) {
 	const (
 		stateKey   = "_node_error_"
 		stateValue = "fatal callback"
@@ -1721,8 +1721,12 @@ func TestRunner_CompletionIncludesFallbackErrorData(t *testing.T) {
 
 	svc := sessioninmemory.NewSessionService()
 	ag := &fallbackCompletionAgent{
-		name:       "fallback",
-		delta:      map[string][]byte{stateKey: []byte(stateValue)},
+		name: "fallback",
+		delta: map[string][]byte{
+			stateKey:              []byte(stateValue),
+			graph.MetadataKeyNode: []byte(`{"node_id":"n1"}`),
+			graph.MetadataKeyTool: []byte(`{"tool_id":"t1"}`),
+		},
 		errType:    errType,
 		errMessage: errMessage,
 	}
@@ -1744,11 +1748,11 @@ func TestRunner_CompletionIncludesFallbackErrorData(t *testing.T) {
 	}
 	require.NotNil(t, completion)
 	require.NotNil(t, completion.Response)
-	require.NotNil(t, completion.Response.Error)
-	require.Equal(t, errType, completion.Response.Error.Type)
-	require.Equal(t, errMessage, completion.Response.Error.Message)
+	require.Nil(t, completion.Response.Error)
 	require.Equal(t, stateValue,
 		string(completion.StateDelta[stateKey]))
+	require.NotContains(t, completion.StateDelta, graph.MetadataKeyNode)
+	require.NotContains(t, completion.StateDelta, graph.MetadataKeyTool)
 }
 
 func TestRunner_CompletionSkipsFallbackAfterRecovery(t *testing.T) {

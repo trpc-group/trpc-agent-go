@@ -442,13 +442,22 @@ final `graph.execution` event. A common example is:
 
 In that case, Runner still emits the final `runner.completion` event. When the
 terminal error is a real fatal error (not `stop_agent_error`), Runner now copies
-two pieces of information onto that last event for you:
+the accumulated fallback business state onto that last event for you:
 
-- `Response.Error`: the final structured error for the run
 - `StateDelta`: the accumulated state delta from the error path
 
-This lets application code keep the same simple rule: read the last event first,
-instead of scanning the whole stream to find the fatal-error event.
+Two details matter here:
+
+- Runner keeps the original fatal event as the only carrier of
+  `Response.Error`, so downstream translators can still treat
+  `runner.completion` as a normal finish signal.
+- Graph metadata keys such as `graph.MetadataKeyNode` and
+  `graph.MetadataKeyTool` are filtered out from the fallback delta to avoid
+  re-translating node/tool lifecycle events in consumers such as AGUI.
+
+This lets application code keep the same simple rule: read the last event first
+for business-level fatal details, instead of scanning the whole stream to find
+the callback/error event.
 
 Example:
 
@@ -468,14 +477,6 @@ func readLastEvent(eventChan <-chan *event.Event) error {
             continue
         }
 
-        if e.Response != nil && e.Response.Error != nil {
-            fmt.Printf(
-                "run failed: type=%s message=%s\n",
-                e.Response.Error.Type,
-                e.Response.Error.Message,
-            )
-        }
-
         if b, ok := e.StateDelta[stateKeyNodeFatal]; ok {
             var detail map[string]any
             if err := json.Unmarshal(b, &detail); err == nil {
@@ -492,8 +493,9 @@ Recommended mental model:
 
 - Success path with graph completion: read final output from the completion
   event’s `StateDelta` (for example, `graph.StateKeyLastResponse`)
-- Fatal exit before graph completion: read `Response.Error` and any custom fatal
-  keys from the same completion event
+- Fatal exit before graph completion: read your custom fatal keys from the same
+  completion event; if you also need the structured `Response.Error`, it
+  remains on the original fatal event
 - `stop_agent_error`: still behaves like a controlled stop signal and is not
   duplicated onto the completion event
 
