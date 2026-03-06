@@ -155,6 +155,10 @@ sessionService, err := mysql.NewService(
     mysql.WithCleanupInterval(10*time.Minute),
     mysql.WithSoftDelete(true),
 )
+// Cleanup behavior:
+// - softDelete=true: expired data marked as deleted_at = NOW()
+// - softDelete=false: expired data physically deleted
+// - Queries always include `WHERE deleted_at IS NULL`
 ```
 
 ## With Summary
