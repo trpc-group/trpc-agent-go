@@ -213,6 +213,114 @@ func TestRunTool_FailedRun_KeepsNonEmptyOutputFiles(t *testing.T) {
 		warnFailedRunEmptyOutputFiles)
 }
 
+func TestRunTool_FailedRun_DeletesCachedOutputFiles(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{
+			AppName: "app", UserID: "u", ID: "s1",
+			State: session.StateMap{},
+		}),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	firstRun := runInput{
+		Skill: testSkillName,
+		Command: "mkdir -p out; echo " + contentHi +
+			" > " + outATxt,
+		OutputFiles: []string{outATxt},
+		Timeout:     timeoutSecSmall,
+	}
+	firstRunJSON, err := jsonMarshal(firstRun)
+	require.NoError(t, err)
+
+	_, err = rt.Call(ctx, firstRunJSON)
+	require.NoError(t, err)
+
+	content, _, ok := toolcache.LookupSkillRunOutputFileFromContext(
+		ctx,
+		outATxt,
+	)
+	require.True(t, ok)
+	require.Contains(t, content, contentHi)
+
+	failedRun := runInput{
+		Skill: testSkillName,
+		Command: "mkdir -p out; python3 missing.py > " +
+			outATxt,
+		OutputFiles: []string{outATxt},
+		Timeout:     timeoutSecSmall,
+	}
+	failedRunJSON, err := jsonMarshal(failedRun)
+	require.NoError(t, err)
+
+	res, err := rt.Call(ctx, failedRunJSON)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.NotEqual(t, 0, out.ExitCode)
+	require.Empty(t, out.OutputFiles)
+
+	content, _, ok = toolcache.LookupSkillRunOutputFileFromContext(
+		ctx,
+		outATxt,
+	)
+	require.False(t, ok)
+	require.Empty(t, content)
+}
+
+func TestRunTool_FailedRun_OmitsEmptyOutputsSaveArtifacts(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	exec := localexec.New()
+	rt := NewRunTool(repo, exec)
+
+	args := runInput{
+		Skill: testSkillName,
+		Command: "mkdir -p out; python3 missing.py > " +
+			outATxt,
+		Outputs: &codeexecutor.OutputSpec{
+			Globs: []string{outATxt},
+			Save:  true,
+		},
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{
+			AppName: "app", UserID: "u", ID: "s1",
+			State: session.StateMap{},
+		}),
+		agent.WithInvocationArtifactService(inmemory.NewService()),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.NotEqual(t, 0, out.ExitCode)
+	require.Empty(t, out.OutputFiles)
+	require.Nil(t, out.PrimaryOutput)
+	require.Empty(t, out.ArtifactFiles)
+	require.Contains(t, out.Stderr, "missing.py")
+	require.Contains(t, out.Warnings,
+		warnFailedRunEmptyOutputFiles)
+}
+
 func TestRunTool_Declaration_OutputSchema(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, testSkillName)
