@@ -1040,6 +1040,8 @@ func (r *runner) captureCompletionFallback(
 	if agentEvent.Response == nil || agentEvent.IsPartial {
 		return
 	}
+	// The last non-partial response wins so the completion event reflects
+	// the terminal outcome seen by the runner.
 	loop.finalError = cloneResponseError(agentEvent.Response.Error)
 }
 
@@ -1111,13 +1113,12 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 		runnerCompletionEvent,
 	)
 
+	propagateError := shouldPropagateCompletionError(loop.finalError)
 	finalStateDelta := loop.finalStateDelta
-	if len(finalStateDelta) == 0 &&
-		shouldPropagateCompletionError(loop.finalError) {
+	if len(finalStateDelta) == 0 && propagateError {
 		finalStateDelta = loop.fallbackStateDelta
 	}
-	if len(loop.finalStateDelta) == 0 &&
-		shouldPropagateCompletionError(loop.finalError) &&
+	if len(loop.finalStateDelta) == 0 && propagateError &&
 		runnerCompletionEvent.Response != nil {
 		runnerCompletionEvent.Response.Error = cloneResponseError(
 			loop.finalError,
