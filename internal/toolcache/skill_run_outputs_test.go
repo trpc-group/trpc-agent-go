@@ -72,6 +72,35 @@ func TestStoreSkillRunOutputFiles_Merges(t *testing.T) {
 	require.Equal(t, "b", content)
 }
 
+func TestDeleteSkillRunOutputFiles_RemovesNames(t *testing.T) {
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	StoreSkillRunOutputFilesFromContext(
+		ctx,
+		[]codeexecutor.File{
+			{Name: "a.txt", Content: "a"},
+			{Name: "b.txt", Content: "b"},
+		},
+	)
+	DeleteSkillRunOutputFilesFromContext(
+		ctx,
+		[]string{"a.txt", "missing.txt", "  "},
+	)
+
+	content, _, ok := LookupSkillRunOutputFileFromContext(ctx, "a.txt")
+	require.False(t, ok)
+	require.Empty(t, content)
+
+	content, _, ok = LookupSkillRunOutputFileFromContext(ctx, "b.txt")
+	require.True(t, ok)
+	require.Equal(t, "b", content)
+
+	DeleteSkillRunOutputFilesFromContext(ctx, []string{"b.txt"})
+	_, ok = inv.GetState(stateKeySkillRunOutputFiles)
+	require.False(t, ok)
+}
+
 func TestLookupSkillRunOutputFileFromContext_Miss(t *testing.T) {
 	inv := agent.NewInvocation()
 	ctx := agent.NewInvocationContext(context.Background(), inv)
@@ -108,14 +137,18 @@ func TestStoreSkillRunOutputFiles_EarlyReturns(t *testing.T) {
 		nil,
 		[]codeexecutor.File{{Name: "a.txt", Content: "a"}},
 	)
+	DeleteSkillRunOutputFiles(nil, []string{"a.txt"})
 
 	inv := agent.NewInvocation()
 	StoreSkillRunOutputFiles(inv, nil)
 	StoreSkillRunOutputFiles(inv, []codeexecutor.File{})
+	DeleteSkillRunOutputFiles(inv, nil)
+	DeleteSkillRunOutputFiles(inv, []string{})
 
 	StoreSkillRunOutputFiles(inv, []codeexecutor.File{
 		{Name: "  ", Content: "ignored"},
 	})
+	DeleteSkillRunOutputFiles(inv, []string{"  "})
 }
 
 func TestLookupSkillRunOutputFile_WrongStateType(t *testing.T) {

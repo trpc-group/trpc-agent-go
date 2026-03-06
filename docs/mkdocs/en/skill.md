@@ -986,6 +986,8 @@ Output:
     Use `ref` with `read_file` to fetch text content on demand.
   - `size_bytes` is the file size on disk; `truncated=true` means the
     collected content hit internal caps (for example, 4 MiB/file).
+  - If the command fails or times out, zero-byte collected files are
+    omitted to avoid misleading shell-redirection artifacts.
 - `warnings` (optional): non-fatal notes (for example, when artifact
   saving is skipped)
 - `artifact_files` with `name`, `version` appears in two cases:
