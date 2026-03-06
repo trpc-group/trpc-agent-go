@@ -334,6 +334,7 @@ func (s *interactiveSession) trimLocked() {
 	}
 }
 
+// StartProgram starts an interactive program in the workspace.
 func (r *Runtime) StartProgram(
 	ctx context.Context,
 	ws codeexecutor.Workspace,

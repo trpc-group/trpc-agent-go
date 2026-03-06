@@ -412,6 +412,7 @@ func (t *ExecTool) StreamableCall(
 	return buildExecStream(poll.Output, result), nil
 }
 
+// StreamableCall writes stdin to a running skill session.
 func (t *WriteStdinTool) StreamableCall(
 	ctx context.Context,
 	args []byte,
@@ -444,6 +445,7 @@ func (t *WriteStdinTool) StreamableCall(
 	return buildExecStream(poll.Output, result), nil
 }
 
+// StreamableCall polls a running skill session for new output.
 func (t *PollSessionTool) StreamableCall(
 	ctx context.Context,
 	args []byte,
@@ -471,6 +473,7 @@ func (t *PollSessionTool) StreamableCall(
 	return buildExecStream(poll.Output, result), nil
 }
 
+// Call terminates a running skill session and removes it.
 func (t *KillSessionTool) Call(
 	_ context.Context,
 	args []byte,
@@ -970,6 +973,7 @@ func execArtifactsStateDelta(
 	return tmp.StateDelta(toolCallID, nil, b)
 }
 
+// StateDelta stores artifact references from a completed session result.
 func (t *ExecTool) StateDelta(
 	toolCallID string,
 	_ []byte,
@@ -978,6 +982,7 @@ func (t *ExecTool) StateDelta(
 	return execArtifactsStateDelta(toolCallID, resultJSON)
 }
 
+// StateDelta stores artifact references from a completed session result.
 func (t *WriteStdinTool) StateDelta(
 	toolCallID string,
 	_ []byte,
@@ -986,6 +991,7 @@ func (t *WriteStdinTool) StateDelta(
 	return execArtifactsStateDelta(toolCallID, resultJSON)
 }
 
+// StateDelta stores artifact references from a completed session result.
 func (t *PollSessionTool) StateDelta(
 	toolCallID string,
 	_ []byte,
