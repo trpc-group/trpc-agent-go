@@ -1563,6 +1563,71 @@ func (m *graphDoneAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan
 	return ch, nil
 }
 
+type fallbackCompletionAgent struct {
+	name        string
+	delta       map[string][]byte
+	errType     string
+	errMessage  string
+	successText string
+}
+
+func (m *fallbackCompletionAgent) Info() agent.Info {
+	return agent.Info{Name: m.name}
+}
+
+func (m *fallbackCompletionAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+func (m *fallbackCompletionAgent) FindSubAgent(name string) agent.Agent {
+	return nil
+}
+
+func (m *fallbackCompletionAgent) Tools() []tool.Tool {
+	return nil
+}
+
+func (m *fallbackCompletionAgent) Run(
+	ctx context.Context,
+	inv *agent.Invocation,
+) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 3)
+	if len(m.delta) > 0 {
+		ch <- event.New(
+			inv.InvocationID,
+			m.name,
+			event.WithStateDelta(m.delta),
+		)
+	}
+	if m.errMessage != "" {
+		ch <- event.NewErrorEvent(
+			inv.InvocationID,
+			m.name,
+			m.errType,
+			m.errMessage,
+		)
+	}
+	if m.successText != "" {
+		ch <- event.NewResponseEvent(
+			inv.InvocationID,
+			m.name,
+			&model.Response{
+				ID:   "fallback-success",
+				Done: true,
+				Choices: []model.Choice{{
+					Index: 0,
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: m.successText,
+					},
+				}},
+			},
+		)
+	}
+	close(ch)
+	return ch, nil
+}
+
 func TestNewRunner_DefaultSessionService(t *testing.T) {
 	// No WithSessionService option -> should default to inmemory session service.
 	r := NewRunner("app", &noOpAgent{name: "a"})
@@ -1644,6 +1709,84 @@ func TestEmitRunnerCompletion_AppendErrorStillEmits(t *testing.T) {
 	require.True(t, last.Done)
 	require.Equal(t, model.ObjectTypeRunnerCompletion, last.Object)
 	// Even though append failed internally, the completion event is still emitted.
+}
+
+func TestRunner_CompletionIncludesFallbackErrorData(t *testing.T) {
+	const (
+		stateKey   = "_node_error_"
+		stateValue = "fatal callback"
+		errType    = model.ErrorTypeFlowError
+		errMessage = "execution failed"
+	)
+
+	svc := sessioninmemory.NewSessionService()
+	ag := &fallbackCompletionAgent{
+		name:       "fallback",
+		delta:      map[string][]byte{stateKey: []byte(stateValue)},
+		errType:    errType,
+		errMessage: errMessage,
+	}
+	r := NewRunner("app", ag, WithSessionService(svc))
+
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage(""),
+	)
+	require.NoError(t, err)
+
+	var completion *event.Event
+	for e := range ch {
+		if e.IsRunnerCompletion() {
+			completion = e
+		}
+	}
+	require.NotNil(t, completion)
+	require.NotNil(t, completion.Response)
+	require.NotNil(t, completion.Response.Error)
+	require.Equal(t, errType, completion.Response.Error.Type)
+	require.Equal(t, errMessage, completion.Response.Error.Message)
+	require.Equal(t, stateValue,
+		string(completion.StateDelta[stateKey]))
+}
+
+func TestRunner_CompletionSkipsFallbackAfterRecovery(t *testing.T) {
+	const (
+		stateKey   = "_node_error_"
+		stateValue = "fatal callback"
+		errMessage = "execution failed"
+		successMsg = "recovered"
+	)
+
+	svc := sessioninmemory.NewSessionService()
+	ag := &fallbackCompletionAgent{
+		name:        "fallback",
+		delta:       map[string][]byte{stateKey: []byte(stateValue)},
+		errType:     model.ErrorTypeFlowError,
+		errMessage:  errMessage,
+		successText: successMsg,
+	}
+	r := NewRunner("app", ag, WithSessionService(svc))
+
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage(""),
+	)
+	require.NoError(t, err)
+
+	var completion *event.Event
+	for e := range ch {
+		if e.IsRunnerCompletion() {
+			completion = e
+		}
+	}
+	require.NotNil(t, completion)
+	require.NotNil(t, completion.Response)
+	require.Nil(t, completion.Response.Error)
+	require.Empty(t, completion.StateDelta)
 }
 
 func TestGraphCompletionNotPersistedAsMessage(t *testing.T) {
