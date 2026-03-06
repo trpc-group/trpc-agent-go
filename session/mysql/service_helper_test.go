@@ -293,16 +293,6 @@ func TestGetSession_WithRefreshTTL(t *testing.T) {
 		WithArgs(key.AppName, key.UserID, key.SessionID).
 		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "event", "created_at"}))
 
-	// Mock: Refresh session TTL
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states")).
-		WithArgs(
-			sqlmock.AnyArg(), // expires_at
-			key.AppName,
-			key.UserID,
-			key.SessionID,
-		).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-
 	sess, err := s.GetSession(ctx, key)
 	require.NoError(t, err)
 	assert.NotNil(t, sess)
@@ -891,35 +881,6 @@ func TestAddEvent_PartialEvent(t *testing.T) {
 	mock.ExpectCommit()
 
 	err = s.addEvent(ctx, key, evt)
-	assert.NoError(t, err)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestRefreshSessionTTL_Success(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-
-	s := createTestService(t, db, WithSessionTTL(1*time.Hour))
-	ctx := context.Background()
-
-	key := session.Key{
-		AppName:   "test-app",
-		UserID:    "user-123",
-		SessionID: "session-456",
-	}
-
-	// Mock: Update session TTL
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states")).
-		WithArgs(
-			sqlmock.AnyArg(), // expires_at
-			key.AppName,
-			key.UserID,
-			key.SessionID,
-		).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-
-	err = s.refreshSessionTTL(ctx, key)
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

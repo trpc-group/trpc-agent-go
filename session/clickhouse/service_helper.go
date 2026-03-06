@@ -275,44 +275,6 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, evt *event.Even
 	return nil
 }
 
-// refreshSessionTTL updates the session's expires_at timestamp.
-func (s *Service) refreshSessionTTL(ctx context.Context, key session.Key) error {
-	expiresAt := time.Now().Add(s.opts.sessionTTL)
-
-	// Get current session state to preserve other fields
-	var stateStr string
-	var createdAt time.Time
-	var updatedAt time.Time
-	rows, err := s.chClient.Query(ctx,
-		fmt.Sprintf(`SELECT state, created_at, updated_at FROM %s FINAL
-			WHERE app_name = ? AND user_id = ? AND session_id = ?
-			AND deleted_at IS NULL`, s.tableSessionStates),
-		key.AppName, key.UserID, key.SessionID)
-
-	if err != nil {
-		return fmt.Errorf("get session state failed: %w", err)
-	}
-	defer rows.Close()
-
-	if !rows.Next() {
-		return fmt.Errorf("session not found")
-	}
-	if err := rows.Scan(&stateStr, &createdAt, &updatedAt); err != nil {
-		return fmt.Errorf("scan session state failed: %w", err)
-	}
-
-	// Insert new version with updated expires_at, preserving original updated_at
-	err = s.chClient.Exec(ctx,
-		fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, state, extra_data, created_at, updated_at, expires_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, s.tableSessionStates),
-		key.AppName, key.UserID, key.SessionID, stateStr, "{}", createdAt, updatedAt, expiresAt)
-
-	if err != nil {
-		return fmt.Errorf("refresh session TTL failed: %w", err)
-	}
-	return nil
-}
-
 // deleteSessionState soft-deletes a session and its related data.
 // It inserts new versions with deleted_at set, which ReplacingMergeTree will use for deduplication.
 func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error {

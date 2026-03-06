@@ -419,23 +419,6 @@ func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent
 	return nil
 }
 
-// refreshSessionTTL updates the session's expires_at timestamp.
-func (s *Service) refreshSessionTTL(ctx context.Context, key session.Key) error {
-	expiresAt := time.Now().Add(s.opts.sessionTTL)
-
-	_, err := s.mysqlClient.Exec(ctx,
-		fmt.Sprintf(`UPDATE %s
-		SET expires_at = ?
-		WHERE app_name = ? AND user_id = ? AND session_id = ?
-		AND deleted_at IS NULL`, s.tableSessionStates),
-		expiresAt, key.AppName, key.UserID, key.SessionID)
-
-	if err != nil {
-		return fmt.Errorf("refresh session TTL failed: %w", err)
-	}
-	return nil
-}
-
 // deleteSessionState deletes a session and its related data.
 func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error {
 	err := s.mysqlClient.Transaction(ctx, func(tx *sql.Tx) error {

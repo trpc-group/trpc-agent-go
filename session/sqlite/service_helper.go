@@ -524,32 +524,6 @@ AND deleted_at IS NULL`,
 	return nil
 }
 
-func (s *Service) refreshSessionTTL(
-	ctx context.Context,
-	key session.Key,
-) error {
-	expires := time.Now().UTC().Add(s.opts.sessionTTL).UTC().UnixNano()
-
-	_, err := s.db.ExecContext(
-		ctx,
-		fmt.Sprintf(
-			`UPDATE %s
-SET expires_at = ?
-WHERE app_name = ? AND user_id = ? AND session_id = ?
-AND deleted_at IS NULL`,
-			s.tableSessionStates,
-		),
-		expires,
-		key.AppName,
-		key.UserID,
-		key.SessionID,
-	)
-	if err != nil {
-		return fmt.Errorf("refresh session TTL: %w", err)
-	}
-	return nil
-}
-
 func (s *Service) deleteSessionState(
 	ctx context.Context,
 	key session.Key,

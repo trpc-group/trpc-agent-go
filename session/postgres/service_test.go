@@ -2299,11 +2299,6 @@ func TestGetSession_WithTTLRefresh(t *testing.T) {
 		WithArgs("test-app", "test-user", "{test-session}").
 		WillReturnRows(eventRows)
 
-	// Mock TTL refresh UPDATE - this should be called after successful GetSession
-	mock.ExpectExec("UPDATE session_states").
-		WithArgs(sqlmock.AnyArg(), "test-app", "test-user", "test-session").
-		WillReturnResult(sqlmock.NewResult(0, 1))
-
 	sess, err := s.GetSession(context.Background(), key)
 	require.NoError(t, err)
 	require.NotNil(t, sess)

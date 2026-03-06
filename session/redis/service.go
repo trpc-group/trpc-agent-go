@@ -776,8 +776,6 @@ func (s *Service) fetchSessionMeta(
 	sessCmd := pipe.HGet(ctx, sessKey, key.SessionID)
 	summariesCmd := pipe.HGet(ctx, sessSummaryKey, key.SessionID)
 
-	s.appendSessionTTL(ctx, pipe, key, sessKey, sessSummaryKey, appStateKey, userStateKey)
-
 	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
 		return nil, nil, nil, nil, fmt.Errorf("get session state failed: %w", err)
 	}
