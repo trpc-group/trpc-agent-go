@@ -153,8 +153,9 @@ type Info struct {
     Name string // Model name.
 }
 
-// IterModel is an optional interface that reduces channel overhead compared to Model.
+// IterModel is an optional extension of Model that reduces channel overhead for streaming.
 type IterModel interface {
+    Model
     GenerateContentIter(ctx context.Context, request *Request) (Seq[*Response], error)
 }
 

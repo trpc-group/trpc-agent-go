@@ -59,11 +59,12 @@ type Model interface {
 // Seq is a callback-based sequence that yields values.
 type Seq[T any] func(yield func(T) bool)
 
-// IterModel is an optional interface a Model can implement to stream responses in the caller goroutine.
+// IterModel is an optional extension of Model that streams responses in the caller goroutine.
 // When implemented, flows may prefer this method to reduce goroutine and channel scheduling overhead for streaming use cases.
 // Implementations should yield *Response values, including API-level and stream-level errors encoded in Response.Error.
 // The returned error is reserved for failures that prevent creating the iterator.
 type IterModel interface {
+	Model
 	GenerateContentIter(ctx context.Context, request *Request) (Seq[*Response], error)
 }
 

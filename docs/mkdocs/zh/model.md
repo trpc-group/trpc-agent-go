@@ -153,8 +153,9 @@ type Info struct {
     Name string // 模型名称
 }
 
-// IterModel 是可选接口，相较于 Model 接口减少了 channel 的开销
+// IterModel 是 Model 的可选扩展接口，用于降低流式处理时的 channel 开销
 type IterModel interface {
+    Model
     GenerateContentIter(ctx context.Context, request *Request) (Seq[*Response], error)
 }
 
