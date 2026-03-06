@@ -305,6 +305,8 @@ func (t *RunTool) Declaration() *tool.Declaration {
 		"docs (not for generic shell tasks). " +
 		"User-uploaded file inputs are staged under " +
 		"$WORK_DIR/inputs (also visible as inputs/). " +
+		"For declarative inputs, to paths starting with " +
+		"inputs/ are treated as work/inputs/. " +
 		"Returns stdout/stderr, a primary_output " +
 		"(best small text file), and collected output_files " +
 		"(text inline by default, with workspace:// refs). " +
@@ -983,7 +985,40 @@ func (t *RunTool) parseRunArgs(args []byte) (runInput, error) {
 	if t.exec == nil {
 		return runInput{}, fmt.Errorf("executor is not configured")
 	}
+	normalizeRunInput(&in)
 	return in, nil
+}
+
+func normalizeRunInput(in *runInput) {
+	if in == nil || len(in.Inputs) == 0 {
+		return
+	}
+	for i := range in.Inputs {
+		in.Inputs[i].To = normalizeInputTo(in.Inputs[i].To)
+	}
+}
+
+func normalizeInputTo(to string) string {
+	s := strings.TrimSpace(to)
+	s = strings.ReplaceAll(s, "\\", "/")
+	if s == "" {
+		return ""
+	}
+	cleaned := path.Clean(s)
+	if cleaned == "." {
+		return ""
+	}
+	if cleaned == skillDirInputs {
+		return ""
+	}
+	prefix := skillDirInputs + "/"
+	if strings.HasPrefix(cleaned, prefix) {
+		rest := strings.TrimPrefix(cleaned, prefix)
+		return path.Join(
+			codeexecutor.DirWork, skillDirInputs, rest,
+		)
+	}
+	return cleaned
 }
 
 // ensureEngine gets engine from executor or builds a local one.

@@ -2130,6 +2130,111 @@ func TestRunTool_StageInputs_FromSkill(t *testing.T) {
 	require.Contains(t, out.OutputFiles[0].Content, contentMsg)
 }
 
+func TestNormalizeInputTo(t *testing.T) {
+	t.Parallel()
+
+	workInputs := path.Join(codeexecutor.DirWork, skillDirInputs)
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{{
+		name: "empty",
+		in:   "",
+		want: "",
+	}, {
+		name: "spaces",
+		in:   "  ",
+		want: "",
+	}, {
+		name: "dot",
+		in:   ".",
+		want: "",
+	}, {
+		name: "inputs-dir",
+		in:   "inputs",
+		want: "",
+	}, {
+		name: "inputs-dir-slash",
+		in:   "inputs/",
+		want: "",
+	}, {
+		name: "inputs-file",
+		in:   "inputs/m.txt",
+		want: path.Join(workInputs, "m.txt"),
+	}, {
+		name: "inputs-backslash",
+		in:   "inputs\\m.txt",
+		want: path.Join(workInputs, "m.txt"),
+	}, {
+		name: "work-inputs",
+		in:   "work/inputs/m.txt",
+		want: "work/inputs/m.txt",
+	}, {
+		name: "other",
+		in:   "foo/bar.txt",
+		want: "foo/bar.txt",
+	}}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := normalizeInputTo(tc.in)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestRunTool_StageInputs_ToInputsAlias(t *testing.T) {
+	root := t.TempDir()
+	dir := writeSkill(t, root, testSkillName)
+	// Prepare a source file under scripts/ of the skill.
+	scripts := filepath.Join(dir, scriptsDir)
+	require.NoError(t, os.MkdirAll(scripts, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(scripts, "msg.txt"),
+		[]byte(contentMsg+"\n"), 0o644,
+	))
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	rt := NewRunTool(repo, localexec.New())
+
+	args := runInput{
+		Skill:   testSkillName,
+		Command: "cat inputs/m.txt > " + outBTxt,
+		Inputs: []codeexecutor.InputSpec{
+			{From: "skill://" + testSkillName + "/" + scriptsDir +
+				"/msg.txt",
+				To:   "inputs/m.txt",
+				Mode: "copy",
+			},
+		},
+		OutputFiles: []string{outBTxt},
+		Timeout:     timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Len(t, out.OutputFiles, 1)
+	require.Contains(t, out.OutputFiles[0].Content, contentMsg)
+}
+
+func TestRunTool_DeclarationMentionsInputsAlias(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	rt := NewRunTool(repo, localexec.New())
+
+	decl := rt.Declaration()
+	require.NotNil(t, decl)
+	require.Contains(t, decl.Description, "work/inputs")
+}
+
 func TestRunTool_StagesUserFileInputs_FileData(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, testSkillName)
