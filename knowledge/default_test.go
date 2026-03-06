@@ -2127,3 +2127,142 @@ func TestBuiltinKnowledge_ShowDocumentInfo(t *testing.T) {
 		})
 	}
 }
+
+// TestWithLoadProgressCallback_Sequential verifies that the progress callback
+// is invoked during sequential loading and receives correct event fields.
+func TestWithLoadProgressCallback_Sequential(t *testing.T) {
+	const docCount = 5
+	const step = 2
+
+	var mu sync.Mutex
+	var events []LoadProgressEvent
+
+	kb := New(WithSources([]source.Source{&mockSource{name: "src1", docCount: docCount}}))
+	kb.vectorStore = &stubVectorStore{}
+	kb.embedder = stubEmbedder{}
+
+	ctx := context.Background()
+	err := kb.Load(ctx,
+		WithSourceConcurrency(1),
+		WithDocConcurrency(1),
+		WithProgressStepSize(step),
+		WithLoadProgressCallback(func(_ context.Context, ev LoadProgressEvent) {
+			mu.Lock()
+			events = append(events, ev)
+			mu.Unlock()
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(events) == 0 {
+		t.Fatal("expected at least one progress event, got none")
+	}
+
+	// Last event must always report Processed == Total (final boundary).
+	last := events[len(events)-1]
+	if last.Processed != docCount || last.Total != docCount {
+		t.Errorf("last event: want Processed=Total=%d, got Processed=%d Total=%d",
+			docCount, last.Processed, last.Total)
+	}
+	if last.SourceName != "src1" {
+		t.Errorf("expected SourceName=src1, got %s", last.SourceName)
+	}
+
+	// Every event must have Processed in range [1, Total].
+	for _, ev := range events {
+		if ev.Processed < 1 || ev.Processed > ev.Total {
+			t.Errorf("event out of range: Processed=%d Total=%d", ev.Processed, ev.Total)
+		}
+	}
+}
+
+// TestWithLoadProgressCallback_Concurrent verifies that the callback is invoked
+// during concurrent loading across multiple sources.
+func TestWithLoadProgressCallback_Concurrent(t *testing.T) {
+	const docCount = 4
+
+	var mu sync.Mutex
+	seenSources := make(map[string]int) // sourceName -> max Processed seen
+
+	kb := New(WithSources([]source.Source{
+		&mockSource{name: "src-a", docCount: docCount},
+		&mockSource{name: "src-b", docCount: docCount},
+	}))
+	kb.vectorStore = &stubVectorStore{}
+	kb.embedder = stubEmbedder{}
+
+	ctx := context.Background()
+	err := kb.Load(ctx,
+		WithSourceConcurrency(2),
+		WithDocConcurrency(2),
+		WithProgressStepSize(1),
+		WithLoadProgressCallback(func(_ context.Context, ev LoadProgressEvent) {
+			mu.Lock()
+			if ev.Processed > seenSources[ev.SourceName] {
+				seenSources[ev.SourceName] = ev.Processed
+			}
+			mu.Unlock()
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	for _, name := range []string{"src-a", "src-b"} {
+		if seenSources[name] == 0 {
+			t.Errorf("no progress events received for source %s", name)
+		}
+	}
+}
+
+// TestWithLoadProgressCallback_NilCallback verifies that nil callback does not panic.
+func TestWithLoadProgressCallback_NilCallback(t *testing.T) {
+	kb := New(WithSources([]source.Source{&mockSource{name: "src1", docCount: 3}}))
+	kb.vectorStore = &stubVectorStore{}
+	kb.embedder = stubEmbedder{}
+
+	ctx := context.Background()
+	err := kb.Load(ctx,
+		WithSourceConcurrency(1),
+		WithDocConcurrency(1),
+		WithLoadProgressCallback(nil),
+	)
+	if err != nil {
+		t.Fatalf("Load with nil callback failed: %v", err)
+	}
+}
+
+// TestWithLoadProgressCallback_CoexistsWithShowProgress verifies that callback
+// and log-based progress can be used together without conflict.
+func TestWithLoadProgressCallback_CoexistsWithShowProgress(t *testing.T) {
+	var callbackInvoked bool
+
+	kb := New(WithSources([]source.Source{&mockSource{name: "src1", docCount: 2}}))
+	kb.vectorStore = &stubVectorStore{}
+	kb.embedder = stubEmbedder{}
+
+	ctx := context.Background()
+	err := kb.Load(ctx,
+		WithSourceConcurrency(1),
+		WithDocConcurrency(1),
+		WithShowProgress(true),
+		WithProgressStepSize(1),
+		WithLoadProgressCallback(func(_ context.Context, _ LoadProgressEvent) {
+			callbackInvoked = true
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if !callbackInvoked {
+		t.Error("expected callback to be invoked alongside ShowProgress, but it was not")
+	}
+}

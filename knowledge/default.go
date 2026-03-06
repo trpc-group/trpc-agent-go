@@ -503,7 +503,7 @@ func (dk *BuiltinKnowledge) loadSequential(
 			processedDocs++
 
 			// Log progress based on configuration.
-			if config.showProgress {
+			if config.showProgress || config.progressCallback != nil {
 				srcProcessed := j + 1
 				totalSrc := len(docs)
 
@@ -512,11 +512,23 @@ func (dk *BuiltinKnowledge) loadSequential(
 					etaSrc := calcETA(srcStartTime, srcProcessed, totalSrc)
 					elapsedSrc := time.Since(srcStartTime)
 
-					log.InfofContext(ctx,
-						"Processed %d/%d doc(s) | source %s | elapsed %s | ETA %s",
-						srcProcessed, totalSrc, sourceName,
-						elapsedSrc.Truncate(time.Second),
-						etaSrc.Truncate(time.Second))
+					if config.showProgress {
+						log.InfofContext(ctx,
+							"Processed %d/%d doc(s) | source %s | elapsed %s | ETA %s",
+							srcProcessed, totalSrc, sourceName,
+							elapsedSrc.Truncate(time.Second),
+							etaSrc.Truncate(time.Second))
+					}
+
+					if config.progressCallback != nil {
+						config.progressCallback(ctx, LoadProgressEvent{
+							SourceName: sourceName,
+							Processed:  srcProcessed,
+							Total:      totalSrc,
+							Elapsed:    elapsedSrc,
+							ETA:        etaSrc,
+						})
+					}
 				}
 			}
 		}
@@ -638,6 +650,17 @@ func (dk *BuiltinKnowledge) processDocuments(
 					SrcName:      src.Name(),
 					SrcProcessed: docIndex + 1,
 					SrcTotal:     len(docs),
+				}
+			}
+			if cfg.progressCallback != nil {
+				processed := docIndex + 1
+				total := len(docs)
+				if processed%cfg.progressStepSize == 0 || processed == total {
+					cfg.progressCallback(ctx, LoadProgressEvent{
+						SourceName: src.Name(),
+						Processed:  processed,
+						Total:      total,
+					})
 				}
 			}
 		}
