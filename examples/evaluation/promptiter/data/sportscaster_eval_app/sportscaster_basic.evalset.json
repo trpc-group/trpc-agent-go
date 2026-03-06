@@ -1,0 +1,90 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "name": "sportscaster_basic",
+  "evalCases": [
+    {
+      "evalId": "basketball_clutch_q4",
+      "expectedRunnerEnabled": true,
+      "conversation": [
+        {
+          "invocationId": "basketball_clutch_q4_1",
+          "userContent": {
+            "role": "user",
+            "content": "{\"sport\":\"basketball\",\"league\":\"NBA\",\"match_id\":\"nba_20260225_bos_lal\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Los Angeles Lakers\",\"status\":\"in_progress\",\"phase\":\"Q4\",\"clock\":\"02:31\",\"score\":{\"home\":102,\"away\":99},\"possession\":\"home\",\"highlights\":[{\"time\":\"04:10\",\"text\":\"Lakers made a 7-0 run to cut the lead to 1.\"},{\"time\":\"03:22\",\"text\":\"Celtics hit a three-pointer to go up by 3.\"},{\"time\":\"02:45\",\"text\":\"Timeout called after a loose ball scramble.\"}],\"last_update\":\"2026-02-25T21:10:00+08:00\"}"
+          }
+        }
+      ],
+      "sessionInput": { "appName": "sportscaster_eval_app", "userId": "demo_user" }
+    },
+    {
+      "evalId": "soccer_final",
+      "expectedRunnerEnabled": true,
+      "conversation": [
+        {
+          "invocationId": "soccer_final_1",
+          "userContent": {
+            "role": "user",
+            "content": "{\"sport\":\"soccer\",\"league\":\"UEFA Champions League\",\"match_id\":\"ucl_20260224_mci_rma\",\"home_team\":\"Manchester City\",\"away_team\":\"Real Madrid\",\"status\":\"finished\",\"phase\":\"FT\",\"clock\":null,\"score\":{\"home\":2,\"away\":1},\"highlights\":[{\"time\":\"12'\",\"text\":\"Goal: Manchester City (1-0).\"},{\"time\":\"67'\",\"text\":\"Goal: Real Madrid (1-1).\"},{\"time\":\"88'\",\"text\":\"Goal: Manchester City (2-1).\"},{\"time\":\"90+2'\",\"text\":\"Yellow card shown.\"}],\"last_update\":\"2026-02-24T23:55:00+08:00\"}"
+          }
+        }
+      ],
+      "sessionInput": { "appName": "sportscaster_eval_app", "userId": "demo_user" }
+    },
+    {
+      "evalId": "baseball_mid_game",
+      "expectedRunnerEnabled": true,
+      "conversation": [
+        {
+          "invocationId": "baseball_mid_game_1",
+          "userContent": {
+            "role": "user",
+            "content": "{\"sport\":\"baseball\",\"league\":\"MLB\",\"match_id\":\"mlb_20260223_nyy_bos\",\"home_team\":\"Boston Red Sox\",\"away_team\":\"New York Yankees\",\"status\":\"in_progress\",\"phase\":\"Top 7\",\"clock\":null,\"score\":{\"home\":2,\"away\":3},\"highlights\":[{\"time\":\"Top 5\",\"text\":\"Yankees hit a two-run home run.\"},{\"time\":\"Bottom 6\",\"text\":\"Red Sox scored on a sacrifice fly.\"}],\"last_update\":\"2026-02-23T20:18:00+08:00\"}"
+          }
+        }
+      ],
+      "sessionInput": { "appName": "sportscaster_eval_app", "userId": "demo_user" }
+    },
+    {
+      "evalId": "pre_game_preview",
+      "expectedRunnerEnabled": true,
+      "conversation": [
+        {
+          "invocationId": "pre_game_preview_1",
+          "userContent": {
+            "role": "user",
+            "content": "{\"sport\":\"basketball\",\"league\":\"NBA\",\"match_id\":\"nba_20260226_gsw_den\",\"home_team\":\"Golden State Warriors\",\"away_team\":\"Denver Nuggets\",\"status\":\"pre_game\",\"phase\":null,\"clock\":null,\"score\":{\"home\":0,\"away\":0},\"highlights\":[],\"last_update\":\"2026-02-26T18:30:00+08:00\"}"
+          }
+        }
+      ],
+      "sessionInput": { "appName": "sportscaster_eval_app", "userId": "demo_user" }
+    },
+    {
+      "evalId": "missing_fields",
+      "expectedRunnerEnabled": true,
+      "conversation": [
+        {
+          "invocationId": "missing_fields_1",
+          "userContent": {
+            "role": "user",
+            "content": "{\"sport\":\"soccer\",\"home_team\":\"Team A\",\"away_team\":\"Team B\",\"status\":\"in_progress\"}"
+          }
+        }
+      ],
+      "sessionInput": { "appName": "sportscaster_eval_app", "userId": "demo_user" }
+    },
+    {
+      "evalId": "inconsistent_state",
+      "expectedRunnerEnabled": true,
+      "conversation": [
+        {
+          "invocationId": "inconsistent_state_1",
+          "userContent": {
+            "role": "user",
+            "content": "{\"sport\":\"basketball\",\"league\":\"NBA\",\"home_team\":\"Team X\",\"away_team\":\"Team Y\",\"status\":\"finished\",\"phase\":\"Q4\",\"clock\":\"05:00\",\"score\":{\"home\":110,\"away\":108},\"highlights\":[{\"time\":\"Final\",\"text\":\"Reported as finished.\"}],\"last_update\":\"2026-02-22T22:01:00+08:00\"}"
+          }
+        }
+      ],
+      "sessionInput": { "appName": "sportscaster_eval_app", "userId": "demo_user" }
+    }
+  ]
+}

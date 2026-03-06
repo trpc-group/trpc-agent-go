@@ -1,0 +1,28 @@
+[
+  {
+    "metricName": "json_schema",
+    "threshold": 1.0
+  },
+  {
+    "metricName": "llm_critic",
+    "threshold": 0.8,
+    "criterion": {
+      "llmJudge": {
+        "rubrics": [
+          {
+            "id": "r1",
+            "content": {
+              "text": "输出必须是单个 JSON 对象，且不得包含任何额外文本。"
+            }
+          },
+          {
+            "id": "r3",
+            "content": {
+              "text": "正文必须严格基于输入 JSON 比赛状态，不得编造事实或事件；缺失或不确定的信息直接略过；当输入不完整或自相矛盾时，正文避免自相矛盾。"
+            }
+          }
+        ]
+      }
+    }
+  }
+]
