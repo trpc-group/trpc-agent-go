@@ -2267,7 +2267,7 @@ Provider 支持以下 `Option`：
 | `WithCallbacks`                                                                                   | 配置 OpenAI / Anthropic 的请求、响应、流式回调 |
 | `WithExtraFields`                                                                                 | 配置请求体自定义字段                           |
 | `WithEnableTokenTailoring` / `WithMaxInputTokens`<br>`WithTokenCounter` / `WithTailoringStrategy` | Token 裁剪相关参数                             |
-| `WithTokenTailoringConfig`                                                                        | 高级配置：自定义 token 裁剪预算参数            |
+| `WithTokenTailoringConfig` / `WithDisableAutoMaxTokens`                                           | 高级配置：预算参数与自动 `MaxTokens` 行为控制  |
 | `WithOpenAIOption` / `WithAnthropicOption`                                                        | 透传供应商原生 Option                          |
 
 ### 使用示例
@@ -2323,6 +2323,25 @@ modelInstance, err := provider.Model(
     provider.WithTokenTailoringConfig(config),
 )
 ```
+
+**禁用自动 `MaxTokens` 计算**：
+
+当启用 token tailoring 后，provider 可能会自动填充输出 `MaxTokens`。
+如果你希望保持 `GenerationConfig.MaxTokens` 不被自动改写，可以使用
+provider 便捷 Option：
+
+```go
+modelInstance, err := provider.Model(
+    "openai",
+    "deepseek-chat",
+    provider.WithAPIKey(c.apiKey),
+    provider.WithEnableTokenTailoring(true),
+    provider.WithDisableAutoMaxTokens(true),
+)
+```
+
+`WithDisableAutoMaxTokens(true)` 等价于设置
+`TokenTailoringConfig.DisableAutoMaxTokens = true`。
 
 完整代码可参见 [examples/provider](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/provider)。
 

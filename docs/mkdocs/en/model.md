@@ -2278,7 +2278,7 @@ The Provider supports the following `Option`:
 | `WithCallbacks`                                                                                   | Configure OpenAI / Anthropic request, response, and streaming callbacks |
 | `WithExtraFields`                                                                                 | Configure custom fields in the request body                             |
 | `WithEnableTokenTailoring` / `WithMaxInputTokens`<br>`WithTokenCounter` / `WithTailoringStrategy` | Token trimming related parameters                                       |
-| `WithTokenTailoringConfig`                                                                        | Custom token tailoring budget parameters for advanced configuration     |
+| `WithTokenTailoringConfig` / `WithDisableAutoMaxTokens`                                           | Custom token tailoring budget and control auto `MaxTokens` behavior     |
 | `WithOpenAIOption` / `WithAnthropicOption`                                                        | Pass-through native options for the respective providers                |
 
 ### Usage Example
@@ -2330,6 +2330,25 @@ modelInstance, err := provider.Model(
     provider.WithTokenTailoringConfig(config),
 )
 ```
+
+**Disable automatic `MaxTokens` calculation**:
+
+When token tailoring is enabled, providers can auto-fill output `MaxTokens`.
+If you want to keep `GenerationConfig.MaxTokens` untouched, use the provider
+shortcut option:
+
+```go
+modelInstance, err := provider.Model(
+    "openai",
+    "deepseek-chat",
+    provider.WithAPIKey(c.apiKey),
+    provider.WithEnableTokenTailoring(true),
+    provider.WithDisableAutoMaxTokens(true),
+)
+```
+
+`WithDisableAutoMaxTokens(true)` is equivalent to setting
+`TokenTailoringConfig.DisableAutoMaxTokens = true`.
 
 Full code can be found in [examples/provider](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/provider).
 
