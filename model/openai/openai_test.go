@@ -988,6 +988,143 @@ func TestModel_Callbacks(t *testing.T) {
 	})
 }
 
+func TestModel_GenerateContent_Streaming_UsageOnChoiceChunks(t *testing.T) {
+	const chatCompletionPathSuffix = "/chat/completions"
+
+	mustMarshalChunk := func(t *testing.T, payload map[string]any) string {
+		t.Helper()
+		b, err := json.Marshal(payload)
+		require.NoError(t, err)
+		return "data: " + string(b)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			if !strings.HasSuffix(r.URL.Path, chatCompletionPathSuffix) {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("Cache-Control", "no-cache")
+			w.Header().Set("Connection", "keep-alive")
+
+			const created = int64(1699200000)
+			const modelName = "hunyuan-2.0-instruct"
+
+			chunk1 := mustMarshalChunk(t, map[string]any{
+				"id":      "test",
+				"object":  "chat.completion.chunk",
+				"created": created,
+				"model":   modelName,
+				"choices": []map[string]any{
+					{
+						"index": 0,
+						"delta": map[string]any{
+							"role":    "assistant",
+							"content": "hi",
+						},
+						"finish_reason": nil,
+					},
+				},
+				"usage": map[string]any{
+					"prompt_tokens":     5,
+					"completion_tokens": 1,
+					"total_tokens":      6,
+					"prompt_tokens_details": map[string]any{
+						"cached_tokens": 0,
+					},
+				},
+			})
+			chunk2 := mustMarshalChunk(t, map[string]any{
+				"id":      "test",
+				"object":  "chat.completion.chunk",
+				"created": created,
+				"model":   modelName,
+				"choices": []map[string]any{
+					{
+						"index": 0,
+						"delta": map[string]any{
+							"content": "",
+						},
+						"finish_reason": "stop",
+					},
+				},
+				"usage": map[string]any{
+					"prompt_tokens":     5,
+					"completion_tokens": 2,
+					"total_tokens":      7,
+					"prompt_tokens_details": map[string]any{
+						"cached_tokens": 0,
+					},
+				},
+			})
+
+			chunks := []string{
+				chunk1,
+				chunk2,
+				`data: [DONE]`,
+			}
+
+			for _, chunk := range chunks {
+				fmt.Fprintf(w, "%s\n\n", chunk)
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+		},
+	))
+	defer server.Close()
+
+	m := New(
+		"hunyuan-2.0-instruct",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+	)
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewUserMessage("hello"),
+		},
+		GenerationConfig: model.GenerationConfig{Stream: true},
+	}
+
+	ctx := context.Background()
+	ch, err := m.GenerateContent(ctx, req)
+	require.NoError(t, err)
+
+	var (
+		firstPartial *model.Response
+		final        *model.Response
+	)
+	for rsp := range ch {
+		require.Nilf(t, rsp.Error, "response error: %v", rsp.Error)
+		if rsp.IsPartial {
+			if firstPartial == nil {
+				firstPartial = rsp
+			}
+			continue
+		}
+		final = rsp
+	}
+
+	require.NotNil(t, firstPartial)
+	require.NotNil(t, firstPartial.Usage)
+	assert.Equal(t, 5, firstPartial.Usage.PromptTokens)
+	assert.Equal(t, 1, firstPartial.Usage.CompletionTokens)
+	assert.Equal(t, 6, firstPartial.Usage.TotalTokens)
+
+	require.NotNil(t, final)
+	require.NotNil(t, final.Usage)
+	assert.Equal(t, 5, final.Usage.PromptTokens)
+	assert.Equal(t, 2, final.Usage.CompletionTokens)
+	assert.Equal(t, 7, final.Usage.TotalTokens)
+	require.NotEmpty(t, final.Choices)
+	assert.Equal(t, "hi", final.Choices[0].Message.Content)
+	assert.True(t, final.Done)
+	assert.False(t, final.IsPartial)
+}
+
 // TestModel_CallbackParameters verifies that callback functions receive the
 // correct parameter types and values.
 func TestModel_CallbackParameters(t *testing.T) {

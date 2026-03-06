@@ -1622,6 +1622,32 @@ model := openai.New("deepseek-chat",
 )
 ```
 
+**Streaming usage (token accounting)**:
+
+- When `Stream=true`, the framework emits multiple chunk events with `IsPartial=true`, and finally one event with `IsPartial=false`.
+- For the standard OpenAI API, `usage` is usually only available on the **final event**.
+- Some OpenAI-compatible providers (for example, Hunyuan) may return `usage` on every chunk. In that case, the framework passes it through to the corresponding events, and uses the **last seen usage** as the total usage on the final event.
+
+Example: read final usage (recommended)
+
+```go
+for evt := range events {
+    if evt.Response == nil || evt.Response.Usage == nil {
+        continue
+    }
+    if evt.Response.IsPartial {
+        continue
+    }
+    u := evt.Response.Usage
+    fmt.Printf(
+        "prompt=%d completion=%d total=%d\n",
+        u.PromptTokens,
+        u.CompletionTokens,
+        u.TotalTokens,
+    )
+}
+```
+
 ##### 7.3. Behavioral Differences of Variants Examples
 
 **Message content handling differences**：

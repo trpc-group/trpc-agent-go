@@ -1610,6 +1610,32 @@ model := openai.New("deepseek-chat",
 )
 ```
 
+**流式 usage（token 用量）**：
+
+- 当 `Stream=true` 时，框架会先输出多条 `IsPartial=true` 的 chunk 事件，最后输出一条 `IsPartial=false` 的最终事件；
+- 标准 OpenAI 接口的 `usage` 通常只会在**最终事件**里出现；
+- 部分 OpenAI 兼容平台（例如混元）会在每个 chunk 中都返回 `usage`，框架会把它透传到对应的事件中，并在最终事件里使用“最后一次出现的 usage”作为总用量。
+
+示例：读取最终用量（推荐做法）
+
+```go
+for evt := range events {
+    if evt.Response == nil || evt.Response.Usage == nil {
+        continue
+    }
+    if evt.Response.IsPartial {
+        continue
+    }
+    u := evt.Response.Usage
+    fmt.Printf(
+        "prompt=%d completion=%d total=%d\n",
+        u.PromptTokens,
+        u.CompletionTokens,
+        u.TotalTokens,
+    )
+}
+```
+
 ##### 7.3. Variant 的行为差异示例
 
 **消息内容处理差异**：

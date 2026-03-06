@@ -931,6 +931,12 @@ func (m *Model) handleStreamingResponse(
 	var reasoningBuf bytes.Buffer
 	// Track next available index for tool calls (for providers that don't set correct indices).
 	nextToolCallIndex := 0
+	// Track latest non-empty usage observed in stream chunks.
+	var (
+		lastChunkUsage     openai.CompletionUsage
+		hasLastChunkUsage  bool
+		usageInChoiceChunk bool
+	)
 
 	for stream.Next() {
 		chunk := stream.Current()
@@ -954,6 +960,17 @@ func (m *Model) handleStreamingResponse(
 		// but skip chunks with reasoning content that would cause the SDK accumulator to panic.
 		m.accumulateChunk(chunk, &acc, &reasoningBuf)
 
+		// Some OpenAI-compatible providers return usage on every chunk
+		// (including non-final chunks with choices). For these providers, the
+		// usage values typically represent totals rather than deltas.
+		if usage, ok := m.extractChunkUsage(chunk); ok {
+			lastChunkUsage = usage
+			hasLastChunkUsage = true
+			if len(chunk.Choices) > 0 {
+				usageInChoiceChunk = true
+			}
+		}
+
 		// Suppress chunks that carry no meaningful visible delta (including
 		// tool_call deltas, which we'll surface only in the final response).
 		// Note: reasoning content chunks are not suppressed even if they have no other content.
@@ -969,6 +986,25 @@ func (m *Model) handleStreamingResponse(
 
 		if err := m.sendPartialResponse(ctx, chunk, responseChan); err != nil {
 			return
+		}
+	}
+
+	// Prefer the latest usage reported by the provider when it appears on
+	// choice chunks. The upstream accumulator sums chunk usages, but many
+	// providers expose cumulative totals per chunk, which would be double
+	// counted by summation.
+	if hasLastChunkUsage && m.accumulateChunkUsage == nil {
+		if acc.Usage.PromptTokens == 0 &&
+			acc.Usage.CompletionTokens == 0 &&
+			acc.Usage.TotalTokens == 0 {
+			acc.Usage = lastChunkUsage
+		} else if usageInChoiceChunk {
+			// If the last chunk doesn't carry prompt tokens, keep the accumulator
+			// semantics (prompt tokens may only appear on the first chunk).
+			if lastChunkUsage.PromptTokens != 0 ||
+				acc.Usage.PromptTokens == 0 {
+				acc.Usage = lastChunkUsage
+			}
 		}
 	}
 
@@ -1406,6 +1442,33 @@ func extractReasoningContent(extraFields map[string]respjson.Field) string {
 	return ""
 }
 
+func (m *Model) extractChunkUsage(
+	chunk openai.ChatCompletionChunk,
+) (openai.CompletionUsage, bool) {
+	if chunk.Usage.CompletionTokens > 0 ||
+		chunk.Usage.PromptTokens > 0 ||
+		chunk.Usage.TotalTokens > 0 {
+		return chunk.Usage, true
+	}
+
+	// Some providers return a usage object that the OpenAI SDK may not decode
+	// into the typed field. Fall back to the raw JSON when available.
+	raw := chunk.JSON.Usage.Raw()
+	if raw == "" || raw == respjson.Null {
+		return openai.CompletionUsage{}, false
+	}
+
+	var usage openai.CompletionUsage
+	if err := json.Unmarshal([]byte(raw), &usage); err != nil {
+		return openai.CompletionUsage{}, false
+	}
+	if usage.CompletionTokens > 0 || usage.PromptTokens > 0 ||
+		usage.TotalTokens > 0 {
+		return usage, true
+	}
+	return openai.CompletionUsage{}, false
+}
+
 // convertExtraFields converts SDK's respjson.Field map to a generic map[string]any.
 // This preserves all extra fields from the API response (e.g., Gemini 3's thought_signature)
 // for transparent passthrough to subsequent requests.
@@ -1490,6 +1553,11 @@ func (m *Model) createPartialResponse(chunk openai.ChatCompletionChunk) *model.R
 			finishReason := chunk.Choices[0].FinishReason
 			response.Choices[0].FinishReason = &finishReason
 		}
+	}
+
+	if usage, ok := m.extractChunkUsage(chunk); ok {
+		modelUsage := completionUsageToModelUsage(usage)
+		response.Usage = &modelUsage
 	}
 
 	return response
