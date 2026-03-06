@@ -21,6 +21,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwclient"
 	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
 )
 
@@ -276,6 +277,15 @@ const (
 	forgetOKMessage          = "Forgot your data."
 	forgetFailedMessage      = "Failed to forget your data."
 	forgetUnsupportedMessage = "Forget is not supported."
+
+	jobsUnsupportedMessage = "Scheduled job management is not supported."
+	jobsListFailedMessage  = "Failed to list scheduled jobs."
+	jobsClearFailedMessage = "Failed to clear scheduled jobs."
+	jobsEmptyMessage       = "No scheduled jobs for this chat."
+	jobsClearNoopMessage   = "No scheduled jobs to clear for this chat."
+	jobsMessageHeader      = "Scheduled jobs for this chat:"
+	jobsClearOKFmt         = "Cleared %d scheduled job(s) for this chat."
+	jobTimeLayout          = "2006-01-02 15:04:05 MST"
 )
 
 func (c *Channel) handleCancelCommand(
@@ -332,6 +342,21 @@ func (c *Channel) handleCancelCommand(
 
 type userForgetter interface {
 	ForgetUser(ctx context.Context, channel, userID string) error
+}
+
+type scheduledJobManager interface {
+	ListScheduledJobs(
+		ctx context.Context,
+		channel string,
+		userID string,
+		target string,
+	) ([]gwclient.ScheduledJobSummary, error)
+	ClearScheduledJobs(
+		ctx context.Context,
+		channel string,
+		userID string,
+		target string,
+	) (int, error)
 }
 
 func (c *Channel) cancelInflight(
@@ -435,4 +460,157 @@ func (c *Channel) handleForgetCommand(
 
 	c.reply(ctx, chatID, messageThreadID, replyTo, forgetOKMessage)
 	return nil
+}
+
+func (c *Channel) handleJobsCommand(
+	ctx context.Context,
+	chatID int64,
+	messageThreadID int,
+	replyTo int,
+	userID string,
+) error {
+	manager, ok := c.gw.(scheduledJobManager)
+	if !ok {
+		c.reply(
+			ctx,
+			chatID,
+			messageThreadID,
+			replyTo,
+			jobsUnsupportedMessage,
+		)
+		return nil
+	}
+
+	jobs, err := manager.ListScheduledJobs(
+		ctx,
+		channelID,
+		userID,
+		currentChatTarget(chatID, messageThreadID),
+	)
+	if err != nil {
+		log.WarnfContext(ctx, "telegram: list jobs: %v", err)
+		c.reply(
+			ctx,
+			chatID,
+			messageThreadID,
+			replyTo,
+			jobsListFailedMessage,
+		)
+		return nil
+	}
+
+	c.reply(
+		ctx,
+		chatID,
+		messageThreadID,
+		replyTo,
+		formatScheduledJobsMessage(jobs),
+	)
+	return nil
+}
+
+func (c *Channel) handleJobsClearCommand(
+	ctx context.Context,
+	chatID int64,
+	messageThreadID int,
+	replyTo int,
+	userID string,
+) error {
+	manager, ok := c.gw.(scheduledJobManager)
+	if !ok {
+		c.reply(
+			ctx,
+			chatID,
+			messageThreadID,
+			replyTo,
+			jobsUnsupportedMessage,
+		)
+		return nil
+	}
+
+	removed, err := manager.ClearScheduledJobs(
+		ctx,
+		channelID,
+		userID,
+		currentChatTarget(chatID, messageThreadID),
+	)
+	if err != nil {
+		log.WarnfContext(ctx, "telegram: clear jobs: %v", err)
+		c.reply(
+			ctx,
+			chatID,
+			messageThreadID,
+			replyTo,
+			jobsClearFailedMessage,
+		)
+		return nil
+	}
+
+	text := jobsClearNoopMessage
+	if removed > 0 {
+		text = fmt.Sprintf(jobsClearOKFmt, removed)
+	}
+	c.reply(ctx, chatID, messageThreadID, replyTo, text)
+	return nil
+}
+
+func currentChatTarget(chatID int64, messageThreadID int) string {
+	chat := strconv.FormatInt(chatID, 10)
+	if messageThreadID == 0 {
+		return chat
+	}
+	return fmt.Sprintf(
+		"%s%s%d",
+		chat,
+		threadTopicSep,
+		messageThreadID,
+	)
+}
+
+func formatScheduledJobsMessage(
+	jobs []gwclient.ScheduledJobSummary,
+) string {
+	if len(jobs) == 0 {
+		return jobsEmptyMessage
+	}
+
+	var b strings.Builder
+	b.WriteString(jobsMessageHeader)
+	for _, job := range jobs {
+		line := formatScheduledJobLine(job)
+		if line == "" {
+			continue
+		}
+		b.WriteByte('\n')
+		b.WriteString(line)
+	}
+	return b.String()
+}
+
+func formatScheduledJobLine(job gwclient.ScheduledJobSummary) string {
+	id := strings.TrimSpace(job.ID)
+	if id == "" {
+		return ""
+	}
+
+	name := strings.TrimSpace(job.Name)
+	if name == "" {
+		name = id
+	}
+
+	parts := []string{name}
+	if schedule := strings.TrimSpace(job.Schedule); schedule != "" {
+		parts = append(parts, schedule)
+	}
+	if job.NextRunAt != nil && !job.NextRunAt.IsZero() {
+		parts = append(
+			parts,
+			"next "+job.NextRunAt.Local().Format(jobTimeLayout),
+		)
+	}
+	if status := strings.TrimSpace(job.LastStatus); status != "" {
+		parts = append(parts, status)
+	}
+	parts = append(parts, "id "+id)
+	return "- " + strings.Join(parts, " | ")
 }

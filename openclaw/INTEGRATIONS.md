@@ -401,7 +401,8 @@ Some skill packs assume an OpenClaw-like tool surface, especially:
 - `exec_command`: execute a host shell command
 - `write_stdin`: continue an interactive command
 - `message`: send to the current chat
-- `cron`: create future or recurring jobs
+- `cron`: create future or recurring jobs persisted in the OpenClaw
+  state dir
 
 This demo enables OpenClaw-compatible host tools for the default LLM
 agent. To disable them explicitly:

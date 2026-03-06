@@ -20,11 +20,14 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwclient"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/cron"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -34,6 +37,7 @@ const (
 	gwclientStatusAPIErrorFmt = "gwclient: status %d: %s: %s"
 
 	errNilGatewayServer = "gateway client: nil server"
+	errNilCronService   = "gateway client: cron service unavailable"
 
 	debugTraceMetaFile = "meta.json"
 
@@ -46,6 +50,7 @@ type inProcGatewayClient struct {
 	appName  string
 	sessions session.Service
 	memories memory.Service
+	cronSvc  *cron.Service
 
 	debugDir string
 }
@@ -64,6 +69,13 @@ func newInProcGatewayClient(
 		memories: memories,
 		debugDir: strings.TrimSpace(debugDir),
 	}
+}
+
+func (c *inProcGatewayClient) SetCronService(svc *cron.Service) {
+	if c == nil {
+		return
+	}
+	c.cronSvc = svc
 }
 
 func (c *inProcGatewayClient) SendMessage(
@@ -170,6 +182,45 @@ func (c *inProcGatewayClient) ForgetUser(
 	return nil
 }
 
+func (c *inProcGatewayClient) ListScheduledJobs(
+	_ context.Context,
+	channel string,
+	userID string,
+	target string,
+) ([]gwclient.ScheduledJobSummary, error) {
+	if c == nil || c.cronSvc == nil {
+		return nil, errors.New(errNilCronService)
+	}
+
+	jobs := c.cronSvc.ListForUser(
+		userID,
+		cronDeliveryTarget(channel, target),
+	)
+	out := make([]gwclient.ScheduledJobSummary, 0, len(jobs))
+	for _, job := range jobs {
+		if job == nil {
+			continue
+		}
+		out = append(out, summarizeScheduledJob(job))
+	}
+	return out, nil
+}
+
+func (c *inProcGatewayClient) ClearScheduledJobs(
+	_ context.Context,
+	channel string,
+	userID string,
+	target string,
+) (int, error) {
+	if c == nil || c.cronSvc == nil {
+		return 0, errors.New(errNilCronService)
+	}
+	return c.cronSvc.RemoveForUser(
+		userID,
+		cronDeliveryTarget(channel, target),
+	)
+}
+
 func errorForGWStatus(status int, apiErr *gwclient.APIError) error {
 	if status == http.StatusOK {
 		return nil
@@ -183,6 +234,64 @@ func errorForGWStatus(status int, apiErr *gwclient.APIError) error {
 		apiErr.Type,
 		apiErr.Message,
 	)
+}
+
+func cronDeliveryTarget(
+	channel string,
+	target string,
+) outbound.DeliveryTarget {
+	return outbound.DeliveryTarget{
+		Channel: strings.TrimSpace(channel),
+		Target:  strings.TrimSpace(target),
+	}
+}
+
+func summarizeScheduledJob(job *cron.Job) gwclient.ScheduledJobSummary {
+	return gwclient.ScheduledJobSummary{
+		ID:         job.ID,
+		Name:       job.Name,
+		Enabled:    job.Enabled,
+		Schedule:   jobScheduleSummary(job.Schedule),
+		NextRunAt:  cloneTime(job.NextRunAt),
+		LastStatus: job.LastStatus,
+		LastError:  job.LastError,
+	}
+}
+
+func jobScheduleSummary(schedule cron.Schedule) string {
+	switch strings.ToLower(strings.TrimSpace(schedule.Kind)) {
+	case cron.ScheduleKindAt:
+		return "at " + strings.TrimSpace(schedule.At)
+	case cron.ScheduleKindEvery:
+		if strings.TrimSpace(schedule.Every) != "" {
+			return "every " + strings.TrimSpace(schedule.Every)
+		}
+		if schedule.EveryMS > 0 {
+			return fmt.Sprintf("every %dms", schedule.EveryMS)
+		}
+	case cron.ScheduleKindCron:
+		expr := strings.TrimSpace(schedule.CronExpr)
+		if expr == "" {
+			return cron.ScheduleKindCron
+		}
+		if strings.TrimSpace(schedule.Timezone) == "" {
+			return "cron " + expr
+		}
+		return fmt.Sprintf(
+			"cron %s (%s)",
+			expr,
+			strings.TrimSpace(schedule.Timezone),
+		)
+	}
+	return strings.TrimSpace(schedule.Kind)
+}
+
+func cloneTime(src *time.Time) *time.Time {
+	if src == nil {
+		return nil
+	}
+	next := *src
+	return &next
 }
 
 type traceMeta struct {

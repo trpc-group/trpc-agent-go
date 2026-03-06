@@ -35,19 +35,41 @@ func computeInitialNextRun(
 
 func computeNextAfterRun(
 	schedule Schedule,
-	after time.Time,
+	base time.Time,
+	now time.Time,
 ) (*time.Time, error) {
-	if strings.EqualFold(
-		strings.TrimSpace(schedule.Kind),
-		ScheduleKindAt,
-	) {
+	kind := strings.ToLower(strings.TrimSpace(schedule.Kind))
+	switch kind {
+	case ScheduleKindAt:
 		return nil, nil
+	case ScheduleKindEvery:
+		interval, err := parseEveryInterval(schedule)
+		if err != nil {
+			return nil, err
+		}
+		next := base.Add(interval)
+		if next.After(now) {
+			return &next, nil
+		}
+		missed := (now.Sub(next) / interval) + 1
+		next = next.Add(missed * interval)
+		return &next, nil
+	case ScheduleKindCron:
+		spec, err := parseCronSpec(schedule)
+		if err != nil {
+			return nil, err
+		}
+		next := spec.Next(base)
+		for !next.After(now) {
+			next = spec.Next(next)
+		}
+		return &next, nil
+	default:
+		return nil, fmt.Errorf(
+			"cron: unsupported schedule kind: %s",
+			schedule.Kind,
+		)
 	}
-	next, err := computeNextRun(schedule, after)
-	if err != nil {
-		return nil, err
-	}
-	return &next, nil
 }
 
 func computeNextRun(

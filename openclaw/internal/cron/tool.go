@@ -22,6 +22,15 @@ import (
 
 const (
 	toolCron = "cron"
+
+	actionStatus = "status"
+	actionList   = "list"
+	actionAdd    = "add"
+	actionUpdate = "update"
+	actionRemove = "remove"
+	actionDelete = "delete"
+	actionRun    = "run"
+	actionClear  = "clear"
 )
 
 // Tool exposes the scheduler to the model.
@@ -50,7 +59,8 @@ func (t *Tool) Declaration() *tool.Declaration {
 			"becomes a future agent turn. If channel/target are " +
 			"omitted when adding a job from chat, the final " +
 			"result is delivered back to the current chat when " +
-			"possible.",
+			"possible. Listing and mutating jobs is scoped to " +
+			"the current user.",
 		InputSchema: &tool.Schema{
 			Type:     "object",
 			Required: []string{"action"},
@@ -58,7 +68,7 @@ func (t *Tool) Declaration() *tool.Declaration {
 				"action": {
 					Type: "string",
 					Description: "status, list, add, update, " +
-						"remove, or run",
+						"remove, clear, or run",
 				},
 				"job_id": {
 					Type: "string",
@@ -207,22 +217,50 @@ func (t *Tool) Call(ctx context.Context, args []byte) (any, error) {
 		return nil, fmt.Errorf("invalid args: %w", err)
 	}
 
-	switch strings.ToLower(strings.TrimSpace(in.Action)) {
-	case "status":
+	action := strings.ToLower(strings.TrimSpace(in.Action))
+	if isScheduledRunMutation(ctx, action) {
+		return nil, fmt.Errorf(
+			"cron: scheduled runs cannot %s jobs",
+			action,
+		)
+	}
+
+	switch action {
+	case actionStatus:
 		return t.svc.Status(), nil
-	case "list":
-		return map[string]any{"jobs": t.svc.List()}, nil
-	case "add":
+	case actionList:
+		return t.list(ctx, in)
+	case actionAdd:
 		return t.add(ctx, in)
-	case "update":
+	case actionUpdate:
 		return t.update(ctx, in)
-	case "remove":
-		return t.remove(in)
-	case "run":
-		return t.runNow(in)
+	case actionRemove, actionDelete:
+		return t.remove(ctx, in)
+	case actionClear:
+		return t.clear(ctx, in)
+	case actionRun:
+		return t.runNow(ctx, in)
 	default:
 		return nil, fmt.Errorf("unsupported cron action: %s", in.Action)
 	}
+}
+
+func (t *Tool) list(
+	ctx context.Context,
+	in toolInput,
+) (any, error) {
+	userID, err := currentUserID(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	delivery, err := optionalScopeDelivery(ctx, in.Channel, in.Target)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"jobs": t.svc.ListForUser(userID, delivery),
+	}, nil
 }
 
 func (t *Tool) add(
@@ -266,6 +304,9 @@ func (t *Tool) update(
 	if jobID == "" {
 		return nil, fmt.Errorf("job_id is required")
 	}
+	if _, err := currentOwnedJob(ctx, t.svc, jobID); err != nil {
+		return nil, err
+	}
 
 	patch := Patch{}
 	if in.Name != "" {
@@ -308,10 +349,16 @@ func (t *Tool) update(
 	return updated, nil
 }
 
-func (t *Tool) remove(in toolInput) (any, error) {
+func (t *Tool) remove(
+	ctx context.Context,
+	in toolInput,
+) (any, error) {
 	jobID := resolveJobID(in)
 	if jobID == "" {
 		return nil, fmt.Errorf("job_id is required")
+	}
+	if _, err := currentOwnedJob(ctx, t.svc, jobID); err != nil {
+		return nil, err
 	}
 	if err := t.svc.Remove(jobID); err != nil {
 		return nil, err
@@ -319,10 +366,36 @@ func (t *Tool) remove(in toolInput) (any, error) {
 	return map[string]any{"ok": true, "job_id": jobID}, nil
 }
 
-func (t *Tool) runNow(in toolInput) (any, error) {
+func (t *Tool) clear(
+	ctx context.Context,
+	in toolInput,
+) (any, error) {
+	userID, err := currentUserID(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	delivery, err := optionalScopeDelivery(ctx, in.Channel, in.Target)
+	if err != nil {
+		return nil, err
+	}
+	removed, err := t.svc.RemoveForUser(userID, delivery)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"ok": true, "removed": removed}, nil
+}
+
+func (t *Tool) runNow(
+	ctx context.Context,
+	in toolInput,
+) (any, error) {
 	jobID := resolveJobID(in)
 	if jobID == "" {
 		return nil, fmt.Errorf("job_id is required")
+	}
+	if _, err := currentOwnedJob(ctx, t.svc, jobID); err != nil {
+		return nil, err
 	}
 	job, err := t.svc.RunNow(jobID)
 	if err != nil {
@@ -332,13 +405,46 @@ func (t *Tool) runNow(in toolInput) (any, error) {
 }
 
 func scheduleFromInput(in toolInput) Schedule {
+	at := resolveAt(in)
+	every := resolveEvery(in)
+	everyMS := firstInt64Value(in.EveryMS, in.EveryMSOld)
+	cronExpr := firstString(in.CronExpr, in.CronExprOld)
 	return Schedule{
-		Kind:     strings.TrimSpace(in.ScheduleKind),
-		At:       resolveAt(in),
-		Every:    resolveEvery(in),
-		EveryMS:  firstInt64Value(in.EveryMS, in.EveryMSOld),
-		CronExpr: firstString(in.CronExpr, in.CronExprOld),
+		Kind: resolveScheduleKind(
+			in.ScheduleKind,
+			at,
+			every,
+			everyMS,
+			cronExpr,
+		),
+		At:       at,
+		Every:    every,
+		EveryMS:  everyMS,
+		CronExpr: cronExpr,
 		Timezone: strings.TrimSpace(in.Timezone),
+	}
+}
+
+func resolveScheduleKind(
+	kind string,
+	at string,
+	every string,
+	everyMS int64,
+	cronExpr string,
+) string {
+	kind = strings.TrimSpace(kind)
+	if kind != "" {
+		return kind
+	}
+	switch {
+	case strings.TrimSpace(cronExpr) != "":
+		return ScheduleKindCron
+	case strings.TrimSpace(at) != "":
+		return ScheduleKindAt
+	case strings.TrimSpace(every) != "", everyMS > 0:
+		return ScheduleKindEvery
+	default:
+		return ""
 	}
 }
 
@@ -373,6 +479,26 @@ func currentUserID(ctx context.Context) (string, error) {
 	return userID, nil
 }
 
+func currentOwnedJob(
+	ctx context.Context,
+	svc *Service,
+	jobID string,
+) (*Job, error) {
+	userID, err := currentUserID(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	job := svc.Get(jobID)
+	if job == nil {
+		return nil, fmt.Errorf("cron: unknown job: %s", jobID)
+	}
+	if strings.TrimSpace(job.UserID) != userID {
+		return nil, fmt.Errorf("cron: unknown job: %s", jobID)
+	}
+	return job, nil
+}
+
 func optionalDelivery(
 	ctx context.Context,
 	channelID string,
@@ -391,6 +517,35 @@ func optionalDelivery(
 		return resolved, nil
 	}
 	return outbound.ResolveTarget(ctx, explicit)
+}
+
+func optionalScopeDelivery(
+	ctx context.Context,
+	channelID string,
+	target string,
+) (outbound.DeliveryTarget, error) {
+	if strings.TrimSpace(channelID) == "" &&
+		strings.TrimSpace(target) == "" {
+		return outbound.DeliveryTarget{}, nil
+	}
+	return outbound.ResolveTarget(
+		ctx,
+		outbound.DeliveryTarget{
+			Channel: channelID,
+			Target:  target,
+		},
+	)
+}
+
+func isScheduledRunMutation(ctx context.Context, action string) bool {
+	if action == actionStatus || action == actionList {
+		return false
+	}
+	scheduled, ok := agent.GetRuntimeStateValueFromContext[bool](
+		ctx,
+		runtimeStateScheduledRun,
+	)
+	return ok && scheduled
 }
 
 func hasScheduleInput(in toolInput) bool {

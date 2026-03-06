@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
 )
@@ -72,6 +73,17 @@ type MessageResponse struct {
 	Error     *APIError `json:"error,omitempty"`
 
 	StatusCode int `json:"-"`
+}
+
+// ScheduledJobSummary is a transport-safe view of one scheduled job.
+type ScheduledJobSummary struct {
+	ID         string     `json:"id,omitempty"`
+	Name       string     `json:"name,omitempty"`
+	Enabled    bool       `json:"enabled"`
+	Schedule   string     `json:"schedule,omitempty"`
+	NextRunAt  *time.Time `json:"next_run_at,omitempty"`
+	LastStatus string     `json:"last_status,omitempty"`
+	LastError  string     `json:"last_error,omitempty"`
 }
 
 // SendMessage sends one message to the gateway handler.

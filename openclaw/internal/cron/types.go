@@ -24,6 +24,11 @@ const (
 )
 
 const (
+	runtimeStateScheduledRun = "openclaw.cron.scheduled_run"
+	runtimeStateJobID        = "openclaw.cron.job_id"
+)
+
+const (
 	StatusIdle           = "idle"
 	StatusRunning        = "running"
 	StatusSucceeded      = "succeeded"

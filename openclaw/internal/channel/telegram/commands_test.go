@@ -14,9 +14,11 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwclient"
 	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
 )
 
@@ -25,6 +27,17 @@ type stubGatewayWithForget struct {
 
 	forgetCalls []string
 	forgetErr   error
+}
+
+type stubGatewayWithJobs struct {
+	*stubGateway
+
+	jobs       []gwclient.ScheduledJobSummary
+	jobsErr    error
+	clearCnt   int
+	clearErr   error
+	lastUser   string
+	lastTarget string
 }
 
 func (g *stubGatewayWithForget) ForgetUser(
@@ -37,6 +50,40 @@ func (g *stubGatewayWithForget) ForgetUser(
 
 	g.forgetCalls = append(g.forgetCalls, userID)
 	return g.forgetErr
+}
+
+func (g *stubGatewayWithJobs) ListScheduledJobs(
+	_ context.Context,
+	_ string,
+	userID string,
+	target string,
+) ([]gwclient.ScheduledJobSummary, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.lastUser = userID
+	g.lastTarget = target
+	if g.jobsErr != nil {
+		return nil, g.jobsErr
+	}
+	out := make([]gwclient.ScheduledJobSummary, len(g.jobs))
+	copy(out, g.jobs)
+	return out, nil
+}
+
+func (g *stubGatewayWithJobs) ClearScheduledJobs(
+	_ context.Context,
+	_ string,
+	userID string,
+	target string,
+) (int, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.lastUser = userID
+	g.lastTarget = target
+	if g.clearErr != nil {
+		return 0, g.clearErr
+	}
+	return g.clearCnt, nil
 }
 
 func TestChannel_HandleMessage_CommandHelp(t *testing.T) {
@@ -288,5 +335,97 @@ func TestChannel_HandleMessage_CommandForget_Error(t *testing.T) {
 	bot.mu.Lock()
 	require.Len(t, bot.sent, 1)
 	require.Equal(t, forgetFailedMessage, bot.sent[0].Text)
+	bot.mu.Unlock()
+}
+
+func TestChannel_HandleMessage_CommandJobs(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 6, 16, 45, 0, 0, time.UTC)
+	gw := &stubGatewayWithJobs{
+		stubGateway: &stubGateway{},
+		jobs: []gwclient.ScheduledJobSummary{
+			{
+				ID:         "job-1",
+				Name:       "cpu report",
+				Schedule:   "every 1m",
+				NextRunAt:  &now,
+				LastStatus: "succeeded",
+			},
+		},
+	}
+	dir := t.TempDir()
+	ch, err := New(
+		testToken,
+		BotInfo{Username: "bot"},
+		gw,
+		WithStateDir(dir),
+		WithDMPolicy(dmPolicyOpen),
+	)
+	require.NoError(t, err)
+
+	bot := &stubBot{}
+	ch.bot = bot
+
+	err = ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID: 5,
+		From:      &tgapi.User{ID: 2},
+		Chat:      &tgapi.Chat{ID: 1, Type: chatTypePrivate},
+		Text:      "/jobs",
+	})
+	require.NoError(t, err)
+
+	gw.mu.Lock()
+	require.Equal(t, "2", gw.lastUser)
+	require.Equal(t, "1", gw.lastTarget)
+	gw.mu.Unlock()
+
+	bot.mu.Lock()
+	require.Len(t, bot.sent, 1)
+	require.Contains(t, bot.sent[0].Text, jobsMessageHeader)
+	require.Contains(t, bot.sent[0].Text, "cpu report")
+	bot.mu.Unlock()
+}
+
+func TestChannel_HandleMessage_CommandJobsClear(t *testing.T) {
+	t.Parallel()
+
+	gw := &stubGatewayWithJobs{
+		stubGateway: &stubGateway{},
+		clearCnt:    3,
+	}
+	dir := t.TempDir()
+	ch, err := New(
+		testToken,
+		BotInfo{Username: "bot"},
+		gw,
+		WithStateDir(dir),
+		WithDMPolicy(dmPolicyOpen),
+	)
+	require.NoError(t, err)
+
+	bot := &stubBot{}
+	ch.bot = bot
+
+	err = ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID: 5,
+		From:      &tgapi.User{ID: 2},
+		Chat:      &tgapi.Chat{ID: 1, Type: chatTypePrivate},
+		Text:      "/jobs_clear",
+	})
+	require.NoError(t, err)
+
+	gw.mu.Lock()
+	require.Equal(t, "2", gw.lastUser)
+	require.Equal(t, "1", gw.lastTarget)
+	gw.mu.Unlock()
+
+	bot.mu.Lock()
+	require.Len(t, bot.sent, 1)
+	require.Equal(
+		t,
+		"Cleared 3 scheduled job(s) for this chat.",
+		bot.sent[0].Text,
+	)
 	bot.mu.Unlock()
 }

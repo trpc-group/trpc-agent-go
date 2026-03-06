@@ -134,7 +134,12 @@ func TestServiceRunNowSendsToDeliveryTarget(t *testing.T) {
 	defer runner.mu.Unlock()
 	require.Equal(t, "telegram:user", runner.userID)
 	require.True(t, strings.HasPrefix(runner.sessionID, "cron:"+job.ID))
-	require.Equal(t, "collect system resources", runner.message.Content)
+	require.Contains(t, runner.message.Content, "collect system resources")
+	require.Contains(
+		t,
+		runner.message.Content,
+		"Execute the following existing scheduled job once now",
+	)
 	require.Equal(
 		t,
 		"telegram",
@@ -144,6 +149,16 @@ func TestServiceRunNowSendsToDeliveryTarget(t *testing.T) {
 		t,
 		"100",
 		runner.runOpts.RuntimeState["openclaw.delivery.target"],
+	)
+	require.Equal(
+		t,
+		true,
+		runner.runOpts.RuntimeState[runtimeStateScheduledRun],
+	)
+	require.Equal(
+		t,
+		job.ID,
+		runner.runOpts.RuntimeState[runtimeStateJobID],
 	)
 }
 
@@ -230,6 +245,159 @@ func TestServiceTriggerDueRunsPastAtJob(t *testing.T) {
 	require.Equal(t, job.ID, jobs[0].ID)
 	require.False(t, jobs[0].Enabled)
 	require.Equal(t, StatusSucceeded, jobs[0].LastStatus)
+}
+
+func TestServiceRecurringJobsKeepFixedCadence(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 6, 15, 0, 0, 0, time.UTC)
+	router := outbound.NewRouter()
+	sender := &stubSender{}
+	router.RegisterSender(sender)
+
+	runner := &stubRunner{reply: "done"}
+	svc, err := NewService(
+		t.TempDir(),
+		runner,
+		router,
+		WithClock(func() time.Time { return now }),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	job, err := svc.Add(&Job{
+		Name:    "report",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "collect system resources",
+		UserID:  "telegram:user",
+		Delivery: outbound.DeliveryTarget{
+			Channel: "telegram",
+			Target:  "100",
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, job.NextRunAt)
+
+	now = job.NextRunAt.Add(15 * time.Second)
+	svc.triggerDue(context.Background())
+
+	waitFor(t, func() bool {
+		jobs := svc.List()
+		return len(jobs) == 1 &&
+			jobs[0].LastStatus == StatusSucceeded
+	})
+
+	jobs := svc.List()
+	require.Len(t, jobs, 1)
+	require.NotNil(t, jobs[0].NextRunAt)
+	require.Equal(t, job.NextRunAt.Add(time.Minute), *jobs[0].NextRunAt)
+}
+
+func TestNewServicePreservesLoadedNextRunAt(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	router := outbound.NewRouter()
+	runner := &stubRunner{reply: "done"}
+	initialNow := time.Date(2026, 3, 6, 15, 0, 0, 0, time.UTC)
+
+	svc, err := NewService(
+		dir,
+		runner,
+		router,
+		WithClock(func() time.Time { return initialNow }),
+	)
+	require.NoError(t, err)
+
+	job, err := svc.Add(&Job{
+		Name:    "report",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "collect system resources",
+		UserID:  "telegram:user",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, job.NextRunAt)
+	require.NoError(t, svc.Close())
+
+	reloadNow := initialNow.Add(10 * time.Minute)
+	reloaded, err := NewService(
+		dir,
+		runner,
+		router,
+		WithClock(func() time.Time { return reloadNow }),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, reloaded.Close())
+	})
+
+	jobs := reloaded.List()
+	require.Len(t, jobs, 1)
+	require.NotNil(t, jobs[0].NextRunAt)
+	require.Equal(t, *job.NextRunAt, *jobs[0].NextRunAt)
+}
+
+func TestServiceRunNowDoesNotShiftSchedule(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 6, 15, 0, 0, 0, time.UTC)
+	router := outbound.NewRouter()
+	sender := &stubSender{}
+	router.RegisterSender(sender)
+
+	runner := &stubRunner{reply: "done"}
+	svc, err := NewService(
+		t.TempDir(),
+		runner,
+		router,
+		WithClock(func() time.Time { return now }),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	job, err := svc.Add(&Job{
+		Name:    "report",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "collect system resources",
+		UserID:  "telegram:user",
+		Delivery: outbound.DeliveryTarget{
+			Channel: "telegram",
+			Target:  "100",
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, job.NextRunAt)
+
+	now = now.Add(10 * time.Second)
+	_, err = svc.RunNow(job.ID)
+	require.NoError(t, err)
+
+	waitFor(t, func() bool {
+		jobs := svc.List()
+		return len(jobs) == 1 &&
+			jobs[0].LastStatus == StatusSucceeded
+	})
+
+	jobs := svc.List()
+	require.Len(t, jobs, 1)
+	require.NotNil(t, jobs[0].NextRunAt)
+	require.Equal(t, *job.NextRunAt, *jobs[0].NextRunAt)
 }
 
 func waitFor(t *testing.T, fn func() bool) {

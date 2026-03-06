@@ -31,9 +31,22 @@ import (
 
 const (
 	runContextPrompt = "You are running an OpenClaw scheduled job. " +
-		"Use exec_command for host commands. The final answer " +
-		"will be delivered automatically to the job target. " +
-		"Do not ask for confirmation unless blocked."
+		"The schedule and delivery are already handled. " +
+		"Execute the task once now. Use exec_command for host " +
+		"commands. Adapt commands to the current OS when " +
+		"needed instead of blindly following old shell " +
+		"snippets. Do not create, update, remove, clear, or " +
+		"run cron jobs from within this scheduled run. " +
+		"Do not use message unless you need an additional " +
+		"side message beyond the final result. The final " +
+		"answer will be delivered automatically to the job " +
+		"target. Do not ask for confirmation unless blocked."
+
+	scheduledRunMessagePrefix = "Execute the following existing " +
+		"scheduled job once now. Ignore any wording about " +
+		"future scheduling or sending to the current chat, " +
+		"because scheduling and delivery are already handled.\n\n" +
+		"Task:\n"
 )
 
 // Service runs and persists scheduled jobs.
@@ -48,6 +61,8 @@ type Service struct {
 	mu      sync.Mutex
 	jobs    map[string]*Job
 	running map[string]struct{}
+
+	persistMu sync.Mutex
 
 	startOnce sync.Once
 	cancel    context.CancelFunc
@@ -183,6 +198,84 @@ func (s *Service) List() []*Job {
 	return sortedJobs(cloneJobs(mapJobs(s.jobs)))
 }
 
+// ListForUser returns current jobs owned by a specific user.
+func (s *Service) ListForUser(
+	userID string,
+	delivery outbound.DeliveryTarget,
+) []*Job {
+	if s == nil {
+		return nil
+	}
+
+	userID = strings.TrimSpace(userID)
+	filter := normalizeDeliveryFilter(delivery)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	jobs := make([]*Job, 0, len(s.jobs))
+	for _, job := range s.jobs {
+		if !matchesJobScope(job, userID, filter) {
+			continue
+		}
+		jobs = append(jobs, job.clone())
+	}
+	return sortedJobs(jobs)
+}
+
+// RemoveForUser deletes scoped jobs owned by a specific user.
+func (s *Service) RemoveForUser(
+	userID string,
+	delivery outbound.DeliveryTarget,
+) (int, error) {
+	if s == nil {
+		return 0, fmt.Errorf("cron: nil service")
+	}
+
+	userID = strings.TrimSpace(userID)
+	filter := normalizeDeliveryFilter(delivery)
+
+	s.mu.Lock()
+	removed := 0
+	for id, job := range s.jobs {
+		if !matchesJobScope(job, userID, filter) {
+			continue
+		}
+		delete(s.jobs, id)
+		delete(s.running, id)
+		removed++
+	}
+	s.mu.Unlock()
+
+	if removed == 0 {
+		return 0, nil
+	}
+	if err := s.persist(); err != nil {
+		return 0, err
+	}
+	return removed, nil
+}
+
+// Get returns one job snapshot by id.
+func (s *Service) Get(jobID string) *Job {
+	if s == nil {
+		return nil
+	}
+
+	id := strings.TrimSpace(jobID)
+	if id == "" {
+		return nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job := s.jobs[id]
+	if job == nil {
+		return nil
+	}
+	return job.clone()
+}
+
 // Add registers a new job.
 func (s *Service) Add(job *Job) (*Job, error) {
 	if s == nil {
@@ -281,7 +374,7 @@ func (s *Service) RunNow(jobID string) (*Job, error) {
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		s.executeJob(runCtx, job)
+		s.executeJob(runCtx, job, false, time.Time{})
 	}()
 	return job.clone(), nil
 }
@@ -332,15 +425,21 @@ func (s *Service) triggerDue(ctx context.Context) {
 
 	for _, job := range due {
 		job := job
+		scheduledAt := scheduledRunBase(job, now)
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
-			s.executeJob(ctx, job)
+			s.executeJob(ctx, job, true, scheduledAt)
 		}()
 	}
 }
 
-func (s *Service) executeJob(ctx context.Context, job *Job) {
+func (s *Service) executeJob(
+	ctx context.Context,
+	job *Job,
+	reschedule bool,
+	scheduledAt time.Time,
+) {
 	now := s.clock()
 	runCtx := ctx
 	if job.TimeoutSec > 0 {
@@ -352,7 +451,7 @@ func (s *Service) executeJob(ctx context.Context, job *Job) {
 		defer cancel()
 	}
 
-	runtimeState := outbound.RuntimeStateForTarget(job.Delivery)
+	runtimeState := scheduledRunRuntimeState(job)
 	runOpts := make([]agent.RunOption, 0, 3)
 	if runtimeState != nil {
 		runOpts = append(runOpts, agent.WithRuntimeState(runtimeState))
@@ -370,7 +469,7 @@ func (s *Service) executeJob(ctx context.Context, job *Job) {
 		runCtx,
 		job.UserID,
 		sessionID,
-		model.NewUserMessage(job.Message),
+		model.NewUserMessage(buildScheduledRunMessage(job.Message)),
 		runOpts...,
 	)
 
@@ -401,15 +500,25 @@ func (s *Service) executeJob(ctx context.Context, job *Job) {
 		}
 	}
 
-	s.finishRun(job.ID, now, output, err, deliveryErr)
+	s.finishRun(
+		job.ID,
+		scheduledAt,
+		now,
+		output,
+		err,
+		deliveryErr,
+		reschedule,
+	)
 }
 
 func (s *Service) finishRun(
 	jobID string,
+	scheduledAt time.Time,
 	now time.Time,
 	output string,
 	runErr error,
 	deliveryErr error,
+	reschedule bool,
 ) {
 	s.mu.Lock()
 	job := s.jobs[jobID]
@@ -436,16 +545,19 @@ func (s *Service) finishRun(
 		job.LastError = ""
 	}
 
-	next, err := computeNextAfterRun(job.Schedule, now)
-	if err != nil {
-		job.Enabled = false
-		job.NextRunAt = nil
-		job.LastStatus = StatusFailed
-		job.LastError = err.Error()
-	} else {
-		job.NextRunAt = next
-		if next == nil {
+	if reschedule {
+		nextBase := scheduledRunBase(job, scheduledAt)
+		next, err := computeNextAfterRun(job.Schedule, nextBase, now)
+		if err != nil {
 			job.Enabled = false
+			job.NextRunAt = nil
+			job.LastStatus = StatusFailed
+			job.LastError = err.Error()
+		} else {
+			job.NextRunAt = next
+			if next == nil {
+				job.Enabled = false
+			}
 		}
 	}
 	s.mu.Unlock()
@@ -485,6 +597,9 @@ func (s *Service) persist() error {
 	if s == nil {
 		return nil
 	}
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
+
 	s.mu.Lock()
 	jobs := mapJobs(s.jobs)
 	s.mu.Unlock()
@@ -506,8 +621,19 @@ func normalizeLoadedJob(job *Job, now time.Time) (*Job, error) {
 	if strings.TrimSpace(next.ID) == "" {
 		return nil, fmt.Errorf("cron: empty job id")
 	}
-	if _, err := normalizeCommon(next, false, now); err != nil {
+	if err := normalizeFields(next, false, now); err != nil {
 		return nil, err
+	}
+	if next.Enabled {
+		if next.NextRunAt == nil || next.NextRunAt.IsZero() {
+			runAt, err := computeInitialNextRun(next.Schedule, now)
+			if err != nil {
+				return nil, err
+			}
+			next.NextRunAt = runAt
+		}
+	} else {
+		next.NextRunAt = nil
 	}
 	return next, nil
 }
@@ -527,32 +653,8 @@ func normalizeCommon(
 	defaultEnabled bool,
 	now time.Time,
 ) (*Job, error) {
-	if job == nil {
-		return nil, fmt.Errorf("cron: nil job")
-	}
-	job.Name = strings.TrimSpace(job.Name)
-	job.Message = strings.TrimSpace(job.Message)
-	job.UserID = strings.TrimSpace(job.UserID)
-	job.Delivery = outbound.DeliveryTarget{
-		Channel: strings.TrimSpace(job.Delivery.Channel),
-		Target:  strings.TrimSpace(job.Delivery.Target),
-	}
-
-	if job.Message == "" {
-		return nil, fmt.Errorf("cron: message is required")
-	}
-	if job.UserID == "" {
-		return nil, fmt.Errorf("cron: user id is required")
-	}
-	if job.CreatedAt.IsZero() {
-		job.CreatedAt = now
-	}
-	job.UpdatedAt = now
-	if !job.Enabled && defaultEnabled {
-		job.Enabled = true
-	}
-	if job.LastStatus == "" {
-		job.LastStatus = StatusIdle
+	if err := normalizeFields(job, defaultEnabled, now); err != nil {
+		return nil, err
 	}
 
 	next, err := computeInitialNextRun(job.Schedule, now)
@@ -565,6 +667,44 @@ func normalizeCommon(
 		job.NextRunAt = nil
 	}
 	return job, nil
+}
+
+func normalizeFields(
+	job *Job,
+	defaultEnabled bool,
+	now time.Time,
+) error {
+	if job == nil {
+		return fmt.Errorf("cron: nil job")
+	}
+	job.Name = strings.TrimSpace(job.Name)
+	job.Message = strings.TrimSpace(job.Message)
+	job.UserID = strings.TrimSpace(job.UserID)
+	job.Delivery = outbound.DeliveryTarget{
+		Channel: strings.TrimSpace(job.Delivery.Channel),
+		Target:  strings.TrimSpace(job.Delivery.Target),
+	}
+
+	if job.Message == "" {
+		return fmt.Errorf("cron: message is required")
+	}
+	if job.UserID == "" {
+		return fmt.Errorf("cron: user id is required")
+	}
+	if job.CreatedAt.IsZero() {
+		job.CreatedAt = now
+	}
+	if !job.Enabled && defaultEnabled {
+		job.Enabled = true
+	}
+	if job.LastStatus == "" || job.LastStatus == StatusRunning {
+		job.LastStatus = StatusIdle
+	}
+	if _, err := computeNextRun(job.Schedule, now); err != nil {
+		return err
+	}
+	job.UpdatedAt = now
+	return nil
 }
 
 func mapJobs(items map[string]*Job) []*Job {
@@ -586,6 +726,55 @@ func sortedJobs(jobs []*Job) []*Job {
 		return jobs[i].ID < jobs[j].ID
 	})
 	return jobs
+}
+
+func normalizeDeliveryFilter(
+	target outbound.DeliveryTarget,
+) outbound.DeliveryTarget {
+	return outbound.DeliveryTarget{
+		Channel: strings.TrimSpace(target.Channel),
+		Target:  strings.TrimSpace(target.Target),
+	}
+}
+
+func matchesJobScope(
+	job *Job,
+	userID string,
+	delivery outbound.DeliveryTarget,
+) bool {
+	if job == nil || strings.TrimSpace(job.UserID) != userID {
+		return false
+	}
+	if delivery.Channel != "" &&
+		job.Delivery.Channel != delivery.Channel {
+		return false
+	}
+	if delivery.Target != "" &&
+		job.Delivery.Target != delivery.Target {
+		return false
+	}
+	return true
+}
+
+func scheduledRunBase(job *Job, fallback time.Time) time.Time {
+	if job != nil && job.NextRunAt != nil && !job.NextRunAt.IsZero() {
+		return *job.NextRunAt
+	}
+	return fallback
+}
+
+func scheduledRunRuntimeState(job *Job) map[string]any {
+	runtimeState := outbound.RuntimeStateForTarget(job.Delivery)
+	if runtimeState == nil {
+		runtimeState = make(map[string]any, 2)
+	}
+	runtimeState[runtimeStateScheduledRun] = true
+	runtimeState[runtimeStateJobID] = strings.TrimSpace(job.ID)
+	return runtimeState
+}
+
+func buildScheduledRunMessage(task string) string {
+	return scheduledRunMessagePrefix + strings.TrimSpace(task)
 }
 
 type cronReplyAccumulator struct {

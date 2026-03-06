@@ -40,8 +40,10 @@ import (
 
 	occhannel "trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwclient"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/cron"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
 	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 )
@@ -2089,6 +2091,101 @@ func TestInProcGatewayClient_ForgetUser_ValidationErrors(t *testing.T) {
 
 	c4 := newInProcGatewayClient(srv, appName, nil, nil, debugFile)
 	require.NoError(t, c4.ForgetUser(ctx, "telegram", "u1"))
+}
+
+func TestInProcGatewayClient_ScheduledJobs(t *testing.T) {
+	t.Parallel()
+
+	srv, err := gateway.New(&inProcGWTestRunner{})
+	require.NoError(t, err)
+
+	router := outbound.NewRouter()
+	now := time.Date(2026, 3, 6, 16, 0, 0, 0, time.UTC)
+	cronSvc, err := cron.NewService(
+		t.TempDir(),
+		&inProcGWTestRunner{},
+		router,
+		cron.WithClock(func() time.Time { return now }),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, cronSvc.Close())
+	})
+
+	job, err := cronSvc.Add(&cron.Job{
+		Name:    "cpu report",
+		Enabled: true,
+		Schedule: cron.Schedule{
+			Kind:  cron.ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "collect cpu",
+		UserID:  "u1",
+		Delivery: outbound.DeliveryTarget{
+			Channel: "telegram",
+			Target:  "100",
+		},
+		LastStatus: cron.StatusSucceeded,
+	})
+	require.NoError(t, err)
+
+	c := newInProcGatewayClient(srv, appName, nil, nil, "")
+	c.SetCronService(cronSvc)
+
+	jobs, err := c.ListScheduledJobs(
+		context.Background(),
+		"telegram",
+		"u1",
+		"100",
+	)
+	require.NoError(t, err)
+	require.Len(t, jobs, 1)
+	require.Equal(t, job.ID, jobs[0].ID)
+	require.Equal(t, "cpu report", jobs[0].Name)
+	require.Equal(t, "every 1m", jobs[0].Schedule)
+	require.Equal(t, cron.StatusSucceeded, jobs[0].LastStatus)
+	require.WithinDuration(t, now.Add(time.Minute), *jobs[0].NextRunAt, 0)
+
+	removed, err := c.ClearScheduledJobs(
+		context.Background(),
+		"telegram",
+		"u1",
+		"100",
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, removed)
+	require.Len(
+		t,
+		cronSvc.ListForUser("u1", outbound.DeliveryTarget{}),
+		0,
+	)
+}
+
+func TestInProcGatewayClient_ScheduledJobs_RequireCronService(t *testing.T) {
+	t.Parallel()
+
+	srv, err := gateway.New(&inProcGWTestRunner{})
+	require.NoError(t, err)
+
+	c := newInProcGatewayClient(srv, appName, nil, nil, "")
+
+	_, err = c.ListScheduledJobs(
+		context.Background(),
+		"telegram",
+		"u1",
+		"100",
+	)
+	require.Error(t, err)
+	require.Equal(t, errNilCronService, err.Error())
+
+	_, err = c.ClearScheduledJobs(
+		context.Background(),
+		"telegram",
+		"u1",
+		"100",
+	)
+	require.Error(t, err)
+	require.Equal(t, errNilCronService, err.Error())
 }
 
 type errSessionService struct {

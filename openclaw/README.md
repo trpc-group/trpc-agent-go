@@ -543,6 +543,8 @@ This demo supports a few basic commands:
 - `/reset` and `/new`: start a new DM session (old data is kept).
 - `/forget`: permanently delete your stored sessions, memories, and debug
   traces (DM only).
+- `/jobs`: list scheduled jobs scoped to the current chat.
+- `/jobs_clear`: remove scheduled jobs scoped to the current chat.
 
 On startup, OpenClaw also registers these commands with Telegram via
 `setMyCommands`, so supported clients can show them in the slash-command
@@ -1028,3 +1030,8 @@ If it is interactive, continue with write_stdin.
 Create a cron job that reports system resources every minute to
 this Telegram chat.
 ```
+
+Cron jobs are persisted under the OpenClaw state directory, so they
+continue after gateway restarts. In Telegram, `/jobs` and `/jobs_clear`
+provide a direct way to inspect or clean up jobs for the current chat
+without going through the model.

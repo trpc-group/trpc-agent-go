@@ -76,7 +76,12 @@ const (
 		"to send to the current chat or an explicit target. " +
 		"When creating a cron job from chat, omit channel and " +
 		"target to send results back to the current chat by " +
-		"default. Use cron for future or recurring work. " +
+		"default. When adding cron jobs, write the stored task " +
+		"as a one-time execution instruction, not as another " +
+		"scheduling request. Prefer concise, outcome-oriented " +
+		"tasks over brittle shell transcripts unless exact " +
+		"commands are truly required. Use cron for future or " +
+		"recurring work. " +
 		"Use skill_run only for skill workspace workflows."
 
 	agentTypeLLM        = "llm"
@@ -462,6 +467,7 @@ func NewRuntime(
 			}
 		}
 		openClawTools.cronTool.SetService(cronSvc)
+		gw.SetCronService(cronSvc)
 		cronSvc.Start(ctx)
 		rt.cronSvc = cronSvc
 	}
@@ -749,6 +755,7 @@ func run(ctx context.Context, args []string) error {
 			}
 		}
 		openClawTools.cronTool.SetService(cronSvc)
+		gw.SetCronService(cronSvc)
 		cronSvc.Start(runCtx)
 	}
 

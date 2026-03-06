@@ -678,6 +678,22 @@ func (c *Channel) handleMessage(
 				laneKey,
 				fromID,
 			)
+		case commandJobs:
+			return c.handleJobsCommand(
+				ctx,
+				chatID,
+				messageThreadID,
+				msg.MessageID,
+				fromID,
+			)
+		case commandJobsClear:
+			return c.handleJobsClearCommand(
+				ctx,
+				chatID,
+				messageThreadID,
+				msg.MessageID,
+				fromID,
+			)
 		default:
 			if !isGroup {
 				c.reply(

@@ -21,6 +21,8 @@ const (
 	storeVersion  = 1
 	storeFilePerm = 0o600
 	storeDirPerm  = 0o700
+
+	storeTempPattern = defaultJobsFile + ".tmp-*"
 )
 
 type storeData struct {
@@ -74,8 +76,24 @@ func saveJobs(path string, jobs []*Job) error {
 	}
 	data = append(data, '\n')
 
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, storeFilePerm); err != nil {
+	file, err := os.CreateTemp(filepath.Dir(path), storeTempPattern)
+	if err != nil {
+		return err
+	}
+	tmp := file.Name()
+	defer func() {
+		_ = os.Remove(tmp)
+	}()
+
+	if err := file.Chmod(storeFilePerm); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)

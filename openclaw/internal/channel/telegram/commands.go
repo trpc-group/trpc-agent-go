@@ -23,17 +23,21 @@ const (
 	commandHelp   = "help"
 	commandCancel = "cancel"
 
-	commandReset  = "reset"
-	commandNew    = "new"
-	commandForget = "forget"
+	commandReset     = "reset"
+	commandNew       = "new"
+	commandForget    = "forget"
+	commandJobs      = "jobs"
+	commandJobsClear = "jobs_clear"
 )
 
 const (
-	commandHelpDesc   = "Show help"
-	commandCancelDesc = "Cancel the current run"
-	commandResetDesc  = "Start a new DM session"
-	commandNewDesc    = "Alias of /reset"
-	commandForgetDesc = "Delete your saved data (DM only)"
+	commandHelpDesc      = "Show help"
+	commandCancelDesc    = "Cancel the current run"
+	commandResetDesc     = "Start a new DM session"
+	commandNewDesc       = "Alias of /reset"
+	commandForgetDesc    = "Delete your saved data (DM only)"
+	commandJobsDesc      = "List scheduled jobs for this chat"
+	commandJobsClearDesc = "Remove scheduled jobs for this chat"
 )
 
 const helpMessage = "Commands:\n" +
@@ -41,7 +45,9 @@ const helpMessage = "Commands:\n" +
 	"/cancel " + commandCancelDesc + "\n" +
 	"/reset  " + commandResetDesc + "\n" +
 	"/new    " + commandNewDesc + "\n" +
-	"/forget " + commandForgetDesc
+	"/forget " + commandForgetDesc + "\n" +
+	"/jobs   " + commandJobsDesc + "\n" +
+	"/jobs_clear " + commandJobsClearDesc
 
 func defaultBotCommands() []tgapi.BotCommand {
 	return []tgapi.BotCommand{
@@ -64,6 +70,14 @@ func defaultBotCommands() []tgapi.BotCommand {
 		{
 			Command:     commandForget,
 			Description: commandForgetDesc,
+		},
+		{
+			Command:     commandJobs,
+			Description: commandJobsDesc,
+		},
+		{
+			Command:     commandJobsClear,
+			Description: commandJobsClearDesc,
 		},
 	}
 }
