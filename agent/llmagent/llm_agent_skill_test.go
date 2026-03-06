@@ -73,6 +73,10 @@ func TestLLMAgent_SkillRunToolRegistered(t *testing.T) {
 	}
 	require.True(t, names["skill_load"]) // existed before
 	require.True(t, names["skill_run"])  // new runner tool
+	require.True(t, names["skill_exec"])
+	require.True(t, names["skill_write_stdin"])
+	require.True(t, names["skill_poll_session"])
+	require.True(t, names["skill_kill_session"])
 }
 
 func TestLLMAgent_SkillRunToolExecutes(t *testing.T) {

@@ -125,6 +125,82 @@ func TestRunTool_ExecutesAndCollectsOutputFiles(t *testing.T) {
 	require.Contains(t, out.PrimaryOutput.Content, contentHi)
 }
 
+func TestRunTool_Stdin(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	rt := NewRunTool(repo, localexec.New())
+	args := runInput{
+		Skill:   testSkillName,
+		Command: "cat",
+		Stdin:   "stdin-value",
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Equal(t, "stdin-value", strings.TrimSpace(out.Stdout))
+}
+
+func TestRunTool_EditorText(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	rt := NewRunTool(repo, localexec.New())
+	args := runInput{
+		Skill: testSkillName,
+		Command: "mkdir -p out; $EDITOR out/note.txt; " +
+			"cat out/note.txt",
+		EditorText: "memo body",
+		Timeout:    timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Equal(t, "memo body", strings.TrimSpace(out.Stdout))
+}
+
+func TestRunTool_EditorText_ConflictsWithEditorEnv(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	rt := NewRunTool(repo, localexec.New())
+	args := runInput{
+		Skill:      testSkillName,
+		Command:    echoOK,
+		EditorText: "memo body",
+		Env: map[string]string{
+			envEditor: "/usr/bin/vi",
+		},
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	_, err = rt.Call(context.Background(), enc)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), envEditor)
+}
+
 func TestRunTool_FailedRun_OmitsEmptyOutputFiles(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, testSkillName)
