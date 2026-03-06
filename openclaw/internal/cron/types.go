@@ -28,6 +28,8 @@ const (
 	runtimeStateJobID        = "openclaw.cron.job_id"
 )
 
+const cronSessionPrefix = "cron:"
+
 const (
 	StatusIdle           = "idle"
 	StatusRunning        = "running"
@@ -100,8 +102,47 @@ func sanitizeStoredOutput(text string) string {
 	return string(runes[:maxStoredOutputRunes])
 }
 
+// IsRunSessionID reports whether a session id belongs to cron execution.
+func IsRunSessionID(sessionID string) bool {
+	return strings.HasPrefix(
+		strings.TrimSpace(sessionID),
+		cronSessionPrefix,
+	)
+}
+
+// ScheduleSummary returns a stable human-readable schedule summary.
+func ScheduleSummary(schedule Schedule) string {
+	switch strings.ToLower(strings.TrimSpace(schedule.Kind)) {
+	case ScheduleKindAt:
+		return "at " + strings.TrimSpace(schedule.At)
+	case ScheduleKindEvery:
+		if every := strings.TrimSpace(schedule.Every); every != "" {
+			return "every " + every
+		}
+		if schedule.EveryMS > 0 {
+			return fmt.Sprintf("every %dms", schedule.EveryMS)
+		}
+	case ScheduleKindCron:
+		expr := strings.TrimSpace(schedule.CronExpr)
+		if expr == "" {
+			return ScheduleKindCron
+		}
+		tz := strings.TrimSpace(schedule.Timezone)
+		if tz == "" {
+			return "cron " + expr
+		}
+		return fmt.Sprintf("cron %s (%s)", expr, tz)
+	}
+	return strings.TrimSpace(schedule.Kind)
+}
+
 func freshRunSessionID(jobID string, now time.Time) string {
-	return fmt.Sprintf("cron:%s:%d", jobID, now.UnixNano())
+	return fmt.Sprintf(
+		"%s%s:%d",
+		cronSessionPrefix,
+		jobID,
+		now.UnixNano(),
+	)
 }
 
 func freshRequestID(jobID string, now time.Time) string {

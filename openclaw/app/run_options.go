@@ -31,6 +31,7 @@ const (
 	defaultConfigRootDir = ".trpc-agent-go"
 	defaultConfigAppDir  = "openclaw"
 	defaultConfigFile    = "openclaw.yaml"
+	defaultAdminAddr     = "127.0.0.1:18789"
 
 	sessionBackendInMemory   = "inmemory"
 	sessionBackendRedis      = "redis"
@@ -84,6 +85,9 @@ const (
 	flagDebugRecorder     = "debug-recorder"
 	flagDebugRecorderDir  = "debug-recorder-dir"
 	flagDebugRecorderMode = "debug-recorder-mode"
+
+	flagAdminEnabled = "admin-enabled"
+	flagAdminAddr    = "admin-addr"
 )
 
 type runOptions struct {
@@ -91,6 +95,9 @@ type runOptions struct {
 
 	AppName  string
 	HTTPAddr string
+
+	AdminEnabled bool
+	AdminAddr    string
 
 	AddSessionSummary bool
 	MaxHistoryRuns    int
@@ -190,8 +197,10 @@ func parseRunOptions(args []string) (runOptions, error) {
 	fs.SetOutput(os.Stderr)
 
 	opts := runOptions{
-		AppName:  appName,
-		HTTPAddr: defaultHTTPAddr,
+		AppName:      appName,
+		HTTPAddr:     defaultHTTPAddr,
+		AdminEnabled: true,
+		AdminAddr:    defaultAdminAddr,
 
 		AgentType: agentTypeLLM,
 
@@ -228,6 +237,18 @@ func parseRunOptions(args []string) (runOptions, error) {
 		"http-addr",
 		defaultHTTPAddr,
 		"HTTP listen address for gateway endpoints",
+	)
+	fs.BoolVar(
+		&opts.AdminEnabled,
+		flagAdminEnabled,
+		true,
+		"Enable the local OpenClaw admin UI",
+	)
+	fs.StringVar(
+		&opts.AdminAddr,
+		flagAdminAddr,
+		defaultAdminAddr,
+		"HTTP listen address for the local OpenClaw admin UI",
 	)
 	fs.StringVar(
 		&opts.AgentType,
@@ -742,6 +763,7 @@ type fileConfig struct {
 	DebugRecorder *debugRecorderConfig `yaml:"debug_recorder,omitempty"`
 
 	HTTP     *httpConfig      `yaml:"http,omitempty"`
+	Admin    *adminConfig     `yaml:"admin,omitempty"`
 	Agent    *agentRunConfig  `yaml:"agent,omitempty"`
 	Model    *modelConfig     `yaml:"model,omitempty"`
 	Gateway  *gatewayConfig   `yaml:"gateway,omitempty"`
@@ -755,6 +777,11 @@ type fileConfig struct {
 
 type httpConfig struct {
 	Addr *string `yaml:"addr,omitempty"`
+}
+
+type adminConfig struct {
+	Enabled *bool   `yaml:"enabled,omitempty"`
+	Addr    *string `yaml:"addr,omitempty"`
 }
 
 type debugRecorderConfig struct {
@@ -1038,6 +1065,16 @@ func (cfg *fileConfig) apply(
 
 	if cfg.HTTP != nil && cfg.HTTP.Addr != nil && !flagWasSet(set, "http-addr") {
 		opts.HTTPAddr = strings.TrimSpace(*cfg.HTTP.Addr)
+	}
+	if cfg.Admin != nil {
+		if cfg.Admin.Enabled != nil &&
+			!flagWasSet(set, flagAdminEnabled) {
+			opts.AdminEnabled = *cfg.Admin.Enabled
+		}
+		if cfg.Admin.Addr != nil &&
+			!flagWasSet(set, flagAdminAddr) {
+			opts.AdminAddr = strings.TrimSpace(*cfg.Admin.Addr)
+		}
 	}
 
 	if cfg.Agent != nil {
@@ -1577,6 +1614,10 @@ func finalizeRunOptions(opts *runOptions) error {
 		return err
 	}
 	opts.SkillsLoadMode = mode
+	opts.AdminAddr = strings.TrimSpace(opts.AdminAddr)
+	if opts.AdminEnabled && opts.AdminAddr == "" {
+		opts.AdminAddr = defaultAdminAddr
+	}
 	return nil
 }
 

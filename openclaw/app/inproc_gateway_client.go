@@ -141,6 +141,15 @@ func (c *inProcGatewayClient) ForgetUser(
 		return session.ErrAppNameRequired
 	}
 
+	if c.cronSvc != nil {
+		if _, err := c.cronSvc.RemoveForUser(
+			userID,
+			outbound.DeliveryTarget{},
+		); err != nil {
+			return fmt.Errorf("forget: clear scheduled jobs: %w", err)
+		}
+	}
+
 	if c.sessions != nil {
 		userKey := session.UserKey{AppName: appName, UserID: userID}
 		sessions, err := c.sessions.ListSessions(ctx, userKey)
@@ -149,6 +158,9 @@ func (c *inProcGatewayClient) ForgetUser(
 		}
 		for _, sess := range sessions {
 			if sess == nil || strings.TrimSpace(sess.ID) == "" {
+				continue
+			}
+			if cron.IsRunSessionID(sess.ID) {
 				continue
 			}
 			key := session.Key{
@@ -259,31 +271,7 @@ func summarizeScheduledJob(job *cron.Job) gwclient.ScheduledJobSummary {
 }
 
 func jobScheduleSummary(schedule cron.Schedule) string {
-	switch strings.ToLower(strings.TrimSpace(schedule.Kind)) {
-	case cron.ScheduleKindAt:
-		return "at " + strings.TrimSpace(schedule.At)
-	case cron.ScheduleKindEvery:
-		if strings.TrimSpace(schedule.Every) != "" {
-			return "every " + strings.TrimSpace(schedule.Every)
-		}
-		if schedule.EveryMS > 0 {
-			return fmt.Sprintf("every %dms", schedule.EveryMS)
-		}
-	case cron.ScheduleKindCron:
-		expr := strings.TrimSpace(schedule.CronExpr)
-		if expr == "" {
-			return cron.ScheduleKindCron
-		}
-		if strings.TrimSpace(schedule.Timezone) == "" {
-			return "cron " + expr
-		}
-		return fmt.Sprintf(
-			"cron %s (%s)",
-			expr,
-			strings.TrimSpace(schedule.Timezone),
-		)
-	}
-	return strings.TrimSpace(schedule.Kind)
+	return cron.ScheduleSummary(schedule)
 }
 
 func cloneTime(src *time.Time) *time.Time {

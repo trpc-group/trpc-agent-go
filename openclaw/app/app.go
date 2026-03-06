@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -40,6 +41,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/admin"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/cron"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
@@ -178,6 +180,7 @@ func (e *exitError) ExitCode() int {
 // default OpenClaw runner + channel wiring.
 type Runtime struct {
 	Gateway  Gateway
+	Admin    AdminSurface
 	Channels []channel.Channel
 
 	runner     runner.Runner
@@ -194,6 +197,12 @@ type Gateway struct {
 	MessagesPath string
 	StatusPath   string
 	CancelPath   string
+}
+
+type AdminSurface struct {
+	Handler http.Handler
+	Addr    string
+	URL     string
 }
 
 // NewRuntime constructs an OpenClaw runtime based on CLI args / config file,
@@ -264,27 +273,13 @@ func NewRuntime(
 		}
 	}
 
-	if agentType == agentTypeLLM {
-		log.Infof(
-			"Instance: %s",
-			configFingerprint(
-				opts.ModelMode,
-				opts.OpenAIModel,
-				resolvedStateDir,
-			),
-		)
-	} else {
-		parts := []string{
-			agentType,
-			strings.TrimSpace(opts.ClaudeBin),
-			strings.TrimSpace(opts.ClaudeOutputFormat),
-			resolvedStateDir,
-		}
-		if needsModel {
-			parts = append(parts, opts.ModelMode, opts.OpenAIModel)
-		}
-		log.Infof("Instance: %s", configFingerprint(parts...))
-	}
+	instanceID := runtimeInstanceID(
+		agentType,
+		opts,
+		needsModel,
+		resolvedStateDir,
+	)
+	log.Infof("Instance: %s", instanceID)
 
 	sessionSvc, err := newSessionService(mdl, opts)
 	if err != nil {
@@ -451,11 +446,12 @@ func NewRuntime(
 		rt.Channels = append(rt.Channels, extra...)
 	}
 
+	var cronSvc *cron.Service
 	if openClawTools.router != nil {
 		for _, ch := range rt.Channels {
 			openClawTools.router.Register(ch)
 		}
-		cronSvc, err := cron.NewService(
+		cronSvc, err = cron.NewService(
 			resolvedStateDir,
 			r,
 			openClawTools.router,
@@ -470,6 +466,33 @@ func NewRuntime(
 		gw.SetCronService(cronSvc)
 		cronSvc.Start(ctx)
 		rt.cronSvc = cronSvc
+	}
+
+	if opts.AdminEnabled {
+		adminURL := listenURL(opts.AdminAddr)
+		adminSvc := admin.New(admin.Config{
+			AppName:     opts.AppName,
+			InstanceID:  instanceID,
+			GatewayAddr: opts.HTTPAddr,
+			GatewayURL:  listenURL(opts.HTTPAddr),
+			AdminAddr:   opts.AdminAddr,
+			AdminURL:    adminURL,
+			StateDir:    resolvedStateDir,
+			DebugDir:    debugDir,
+			Channels:    channelIDs(rt.Channels),
+			GatewayRoutes: admin.Routes{
+				HealthPath:   gwSrv.HealthPath(),
+				MessagesPath: gwSrv.MessagesPath(),
+				StatusPath:   gwSrv.StatusPath(),
+				CancelPath:   gwSrv.CancelPath(),
+			},
+			Cron: cronSvc,
+		})
+		rt.Admin = AdminSurface{
+			Handler: adminSvc.Handler(),
+			Addr:    opts.AdminAddr,
+			URL:     adminURL,
+		}
 	}
 
 	return rt, nil
@@ -549,27 +572,13 @@ func run(ctx context.Context, args []string) error {
 		}
 	}
 
-	if agentType == agentTypeLLM {
-		log.Infof(
-			"Instance: %s",
-			configFingerprint(
-				opts.ModelMode,
-				opts.OpenAIModel,
-				resolvedStateDir,
-			),
-		)
-	} else {
-		parts := []string{
-			agentType,
-			strings.TrimSpace(opts.ClaudeBin),
-			strings.TrimSpace(opts.ClaudeOutputFormat),
-			resolvedStateDir,
-		}
-		if needsModel {
-			parts = append(parts, opts.ModelMode, opts.OpenAIModel)
-		}
-		log.Infof("Instance: %s", configFingerprint(parts...))
-	}
+	instanceID := runtimeInstanceID(
+		agentType,
+		opts,
+		needsModel,
+		resolvedStateDir,
+	)
+	log.Infof("Instance: %s", instanceID)
 
 	sessionSvc, err := newSessionService(mdl, opts)
 	if err != nil {
@@ -718,6 +727,7 @@ func run(ctx context.Context, args []string) error {
 		Handler:           gwSrv.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	var adminSrv *http.Server
 
 	var channels []channel.Channel
 	if len(opts.Channels) > 0 {
@@ -759,7 +769,36 @@ func run(ctx context.Context, args []string) error {
 		cronSvc.Start(runCtx)
 	}
 
+	if opts.AdminEnabled {
+		adminSvc := admin.New(admin.Config{
+			AppName:     opts.AppName,
+			InstanceID:  instanceID,
+			GatewayAddr: opts.HTTPAddr,
+			GatewayURL:  listenURL(opts.HTTPAddr),
+			AdminAddr:   opts.AdminAddr,
+			AdminURL:    listenURL(opts.AdminAddr),
+			StateDir:    resolvedStateDir,
+			DebugDir:    debugDir,
+			Channels:    channelIDs(channels),
+			GatewayRoutes: admin.Routes{
+				HealthPath:   gwSrv.HealthPath(),
+				MessagesPath: gwSrv.MessagesPath(),
+				StatusPath:   gwSrv.StatusPath(),
+				CancelPath:   gwSrv.CancelPath(),
+			},
+			Cron: cronSvc,
+		})
+		adminSrv = &http.Server{
+			Addr:              opts.AdminAddr,
+			Handler:           adminSvc.Handler(),
+			ReadHeaderTimeout: 5 * time.Second,
+		}
+	}
+
 	workerCount := 1 + len(channels)
+	if adminSrv != nil {
+		workerCount++
+	}
 	errCh := make(chan error, workerCount)
 
 	go func() {
@@ -771,6 +810,15 @@ func run(ctx context.Context, args []string) error {
 		//nolint:gosec
 		errCh <- httpSrv.ListenAndServe()
 	}()
+
+	if adminSrv != nil {
+		go func() {
+			log.Infof("Admin UI listening on %s", adminSrv.Addr)
+			log.Infof("Admin UI: %s", listenURL(adminSrv.Addr))
+			//nolint:gosec
+			errCh <- adminSrv.ListenAndServe()
+		}()
+	}
 
 	for _, ch := range channels {
 		ch := ch
@@ -798,6 +846,9 @@ func run(ctx context.Context, args []string) error {
 	defer cancel()
 
 	_ = httpSrv.Shutdown(shutdownCtx)
+	if adminSrv != nil {
+		_ = adminSrv.Shutdown(shutdownCtx)
+	}
 	if cronSvc != nil {
 		_ = cronSvc.Close()
 	}
@@ -849,6 +900,63 @@ func closeToolSets(sets []tool.ToolSet) {
 			log.Warnf("close toolset %q failed: %v", ts.Name(), err)
 		}
 	}
+}
+
+func runtimeInstanceID(
+	agentType string,
+	opts runOptions,
+	needsModel bool,
+	stateDir string,
+) string {
+	if agentType == agentTypeLLM {
+		return configFingerprint(
+			opts.ModelMode,
+			opts.OpenAIModel,
+			stateDir,
+		)
+	}
+
+	parts := []string{
+		agentType,
+		strings.TrimSpace(opts.ClaudeBin),
+		strings.TrimSpace(opts.ClaudeOutputFormat),
+		stateDir,
+	}
+	if needsModel {
+		parts = append(parts, opts.ModelMode, opts.OpenAIModel)
+	}
+	return configFingerprint(parts...)
+}
+
+func channelIDs(channels []channel.Channel) []string {
+	if len(channels) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(channels))
+	for _, ch := range channels {
+		if ch == nil {
+			continue
+		}
+		if id := strings.TrimSpace(ch.ID()); id != "" {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+func listenURL(addr string) string {
+	host, port, err := net.SplitHostPort(strings.TrimSpace(addr))
+	if err != nil {
+		trimmed := strings.TrimSpace(addr)
+		if trimmed == "" {
+			return ""
+		}
+		return "http://" + trimmed
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port)
 }
 
 func defaultOpenAIModelName() string {

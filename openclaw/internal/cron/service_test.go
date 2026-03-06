@@ -68,6 +68,47 @@ func (s *stubRunner) Run(
 
 func (s *stubRunner) Close() error { return nil }
 
+type blockingRunner struct {
+	started chan struct{}
+	release chan struct{}
+	reply   string
+
+	startOnce sync.Once
+}
+
+func (r *blockingRunner) Run(
+	ctx context.Context,
+	userID string,
+	sessionID string,
+	message model.Message,
+	opts ...agent.RunOption,
+) (<-chan *event.Event, error) {
+	r.startOnce.Do(func() {
+		close(r.started)
+	})
+
+	ch := make(chan *event.Event, 1)
+	go func() {
+		defer close(ch)
+		select {
+		case <-ctx.Done():
+			return
+		case <-r.release:
+		}
+		ch <- &event.Event{
+			Response: &model.Response{
+				Object: model.ObjectTypeChatCompletion,
+				Choices: []model.Choice{{
+					Message: model.NewAssistantMessage(r.reply),
+				}},
+			},
+		}
+	}()
+	return ch, nil
+}
+
+func (r *blockingRunner) Close() error { return nil }
+
 type stubSender struct {
 	mu     sync.Mutex
 	target string
@@ -463,6 +504,57 @@ func TestServiceScopesAndHelpers(t *testing.T) {
 	require.Len(t, svc.ListForUser("user-1", outbound.DeliveryTarget{}), 0)
 }
 
+func TestServiceRemoveSuppressesRunningDelivery(t *testing.T) {
+	t.Parallel()
+
+	router := outbound.NewRouter()
+	sender := &stubSender{}
+	router.RegisterSender(sender)
+
+	runner := &blockingRunner{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+		reply:   "should stay muted",
+	}
+	svc, err := NewService(t.TempDir(), runner, router)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	job, err := svc.Add(&Job{
+		Name:    "report",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "collect cpu",
+		UserID:  "telegram:user",
+		Delivery: outbound.DeliveryTarget{
+			Channel: "telegram",
+			Target:  "100",
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = svc.RunNow(job.ID)
+	require.NoError(t, err)
+
+	<-runner.started
+	require.NoError(t, svc.Remove(job.ID))
+	close(runner.release)
+
+	waitFor(t, func() bool {
+		return svc.Status()["jobs_running"] == 0
+	})
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	require.Empty(t, sender.text)
+	require.Nil(t, svc.Get(job.ID))
+}
+
 func TestServiceNormalizeAndAccumulatorHelpers(t *testing.T) {
 	t.Parallel()
 
@@ -540,6 +632,17 @@ func TestServiceNormalizeAndAccumulatorHelpers(t *testing.T) {
 
 	acc.consume(event.NewErrorEvent("inv", "assistant", "tool", "boom"))
 	require.EqualError(t, acc.err, "boom")
+
+	require.True(t, IsRunSessionID("cron:job-1:123"))
+	require.False(t, IsRunSessionID("telegram:dm:1"))
+	require.Equal(t, "every 1m", ScheduleSummary(Schedule{
+		Kind:  ScheduleKindEvery,
+		Every: "1m",
+	}))
+	require.Equal(t, "cron 0 * * * *", ScheduleSummary(Schedule{
+		Kind:     ScheduleKindCron,
+		CronExpr: "0 * * * *",
+	}))
 }
 
 func waitFor(t *testing.T, fn func() bool) {

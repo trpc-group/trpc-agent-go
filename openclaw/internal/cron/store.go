@@ -96,7 +96,19 @@ func saveJobs(path string, jobs []*Job) error {
 	if err := file.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if mkErr := os.MkdirAll(
+			filepath.Dir(path),
+			storeDirPerm,
+		); mkErr != nil {
+			return mkErr
+		}
+		return os.Rename(tmp, path)
+	}
+	return nil
 }
 
 func cloneJobs(jobs []*Job) []*Job {

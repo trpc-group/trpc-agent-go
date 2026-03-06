@@ -60,7 +60,7 @@ type Service struct {
 
 	mu      sync.Mutex
 	jobs    map[string]*Job
-	running map[string]struct{}
+	running map[string]*jobRun
 
 	persistMu sync.Mutex
 
@@ -68,6 +68,20 @@ type Service struct {
 	cancel    context.CancelFunc
 	done      chan struct{}
 	wg        sync.WaitGroup
+}
+
+type jobRun struct {
+	cancel           context.CancelFunc
+	suppressDelivery bool
+	startedAt        time.Time
+	requestID        string
+	sessionID        string
+}
+
+type queuedRun struct {
+	job         *Job
+	runCtx      context.Context
+	scheduledAt time.Time
 }
 
 // Option customizes the cron service.
@@ -115,7 +129,7 @@ func NewService(
 		tickInterval: defaultTickInterval,
 		clock:        time.Now,
 		jobs:         make(map[string]*Job),
-		running:      make(map[string]struct{}),
+		running:      make(map[string]*jobRun),
 		done:         make(chan struct{}),
 	}
 	for _, opt := range opts {
@@ -161,6 +175,7 @@ func (s *Service) Close() error {
 	if s == nil {
 		return nil
 	}
+	s.stopAllRuns(true)
 	if s.cancel != nil {
 		s.cancel()
 	}
@@ -241,8 +256,7 @@ func (s *Service) RemoveForUser(
 		if !matchesJobScope(job, userID, filter) {
 			continue
 		}
-		delete(s.jobs, id)
-		delete(s.running, id)
+		s.removeJobLocked(id)
 		removed++
 	}
 	s.mu.Unlock()
@@ -329,6 +343,9 @@ func (s *Service) Update(
 
 	s.mu.Lock()
 	s.jobs[id] = next
+	if !next.Enabled {
+		s.suppressRunLocked(id)
+	}
 	s.mu.Unlock()
 	if err := s.persist(); err != nil {
 		return nil, err
@@ -351,8 +368,7 @@ func (s *Service) Remove(jobID string) error {
 		s.mu.Unlock()
 		return fmt.Errorf("cron: unknown job: %s", id)
 	}
-	delete(s.jobs, id)
-	delete(s.running, id)
+	s.removeJobLocked(id)
 	s.mu.Unlock()
 	return s.persist()
 }
@@ -367,7 +383,10 @@ func (s *Service) RunNow(jobID string) (*Job, error) {
 		return nil, fmt.Errorf("cron: job id is required")
 	}
 
-	job, runCtx, err := s.markRunning(id)
+	job, runCtx, err := s.markRunning(
+		id,
+		context.Background(),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -395,7 +414,7 @@ func (s *Service) loop(ctx context.Context) {
 
 func (s *Service) triggerDue(ctx context.Context) {
 	now := s.clock()
-	due := make([]*Job, 0)
+	runs := make([]queuedRun, 0)
 
 	s.mu.Lock()
 	for _, job := range s.jobs {
@@ -408,28 +427,40 @@ func (s *Service) triggerDue(ctx context.Context) {
 		if job.NextRunAt.After(now) {
 			continue
 		}
-		s.running[job.ID] = struct{}{}
+		runCtx, cancel := s.newRunContext(ctx)
+		s.running[job.ID] = &jobRun{
+			cancel:    cancel,
+			startedAt: now,
+		}
 		job.LastStatus = StatusRunning
 		job.LastError = ""
 		job.UpdatedAt = now
-		due = append(due, job.clone())
+		runs = append(runs, queuedRun{
+			job:         job.clone(),
+			runCtx:      runCtx,
+			scheduledAt: scheduledRunBase(job, now),
+		})
 	}
 	s.mu.Unlock()
 
-	if len(due) == 0 {
+	if len(runs) == 0 {
 		return
 	}
 	if err := s.persist(); err != nil {
 		log.Warnf("cron: persist running state: %v", err)
 	}
 
-	for _, job := range due {
-		job := job
-		scheduledAt := scheduledRunBase(job, now)
+	for _, run := range runs {
+		run := run
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
-			s.executeJob(ctx, job, true, scheduledAt)
+			s.executeJob(
+				run.runCtx,
+				run.job,
+				true,
+				run.scheduledAt,
+			)
 		}()
 	}
 }
@@ -456,15 +487,17 @@ func (s *Service) executeJob(
 	if runtimeState != nil {
 		runOpts = append(runOpts, agent.WithRuntimeState(runtimeState))
 	}
+	requestID := freshRequestID(job.ID, now)
 	runOpts = append(
 		runOpts,
-		agent.WithRequestID(freshRequestID(job.ID, now)),
+		agent.WithRequestID(requestID),
 		agent.WithInjectedContextMessages([]model.Message{
 			model.NewSystemMessage(runContextPrompt),
 		}),
 	)
 
 	sessionID := freshRunSessionID(job.ID, now)
+	s.setRunMetadata(job.ID, sessionID, requestID)
 	events, err := s.runner.Run(
 		runCtx,
 		job.UserID,
@@ -486,6 +519,7 @@ func (s *Service) executeJob(
 	deliveryErr := error(nil)
 	output := sanitizeStoredOutput(result.text)
 	if err == nil &&
+		s.deliveryAllowed(job.ID) &&
 		job.Delivery.Channel != "" &&
 		job.Delivery.Target != "" &&
 		strings.TrimSpace(result.text) != "" {
@@ -569,6 +603,7 @@ func (s *Service) finishRun(
 
 func (s *Service) markRunning(
 	jobID string,
+	parent context.Context,
 ) (*Job, context.Context, error) {
 	s.mu.Lock()
 	job := s.jobs[jobID]
@@ -580,17 +615,99 @@ func (s *Service) markRunning(
 		s.mu.Unlock()
 		return nil, nil, fmt.Errorf("cron: job is already running")
 	}
-	s.running[jobID] = struct{}{}
+	runCtx, cancel := s.newRunContext(parent)
+	now := s.clock()
+	s.running[jobID] = &jobRun{
+		cancel:    cancel,
+		startedAt: now,
+	}
 	job.LastStatus = StatusRunning
 	job.LastError = ""
-	job.UpdatedAt = s.clock()
+	job.UpdatedAt = now
 	clone := job.clone()
 	s.mu.Unlock()
 
 	if err := s.persist(); err != nil {
+		cancel()
+		s.mu.Lock()
+		delete(s.running, jobID)
+		if current := s.jobs[jobID]; current != nil {
+			current.LastStatus = StatusIdle
+			current.LastError = ""
+			current.UpdatedAt = now
+		}
+		s.mu.Unlock()
 		return nil, nil, err
 	}
-	return clone, context.Background(), nil
+	return clone, runCtx, nil
+}
+
+func (s *Service) newRunContext(
+	parent context.Context,
+) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	return context.WithCancel(parent)
+}
+
+func (s *Service) setRunMetadata(
+	jobID string,
+	sessionID string,
+	requestID string,
+) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	run := s.running[jobID]
+	if run == nil {
+		return
+	}
+	run.sessionID = sessionID
+	run.requestID = requestID
+}
+
+func (s *Service) deliveryAllowed(jobID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	run := s.running[jobID]
+	if run == nil {
+		return false
+	}
+	return !run.suppressDelivery
+}
+
+func (s *Service) suppressRunLocked(jobID string) {
+	run := s.running[jobID]
+	if run == nil {
+		return
+	}
+	run.suppressDelivery = true
+}
+
+func (s *Service) removeJobLocked(jobID string) {
+	if _, ok := s.running[jobID]; ok {
+		s.suppressRunLocked(jobID)
+	} else {
+		delete(s.running, jobID)
+	}
+	delete(s.jobs, jobID)
+}
+
+func (s *Service) stopAllRuns(cancel bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, run := range s.running {
+		if run == nil {
+			continue
+		}
+		run.suppressDelivery = true
+		if cancel && run.cancel != nil {
+			run.cancel()
+		}
+	}
 }
 
 func (s *Service) persist() error {

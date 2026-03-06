@@ -118,6 +118,10 @@ app_name: "openclaw"
 http:
   addr: ":8080"
 
+admin:
+  enabled: true
+  addr: "127.0.0.1:18789"
+
 agent:
   # Short instruction text (optional).
   instruction: "You are a helpful assistant. Reply in a friendly tone."
@@ -545,6 +549,8 @@ This demo supports a few basic commands:
   traces (DM only).
 - `/jobs`: list scheduled jobs scoped to the current chat.
 - `/jobs_clear`: remove scheduled jobs scoped to the current chat.
+  Future executions stop immediately, and any already-running delivery is
+  muted before the next reply is sent.
 
 On startup, OpenClaw also registers these commands with Telegram via
 `setMyCommands`, so supported clients can show them in the slash-command
@@ -1035,3 +1041,9 @@ Cron jobs are persisted under the OpenClaw state directory, so they
 continue after gateway restarts. In Telegram, `/jobs` and `/jobs_clear`
 provide a direct way to inspect or clean up jobs for the current chat
 without going through the model.
+
+When `admin.enabled` is true (default), OpenClaw also starts a local
+admin surface on `admin.addr` (default `127.0.0.1:18789`). It exposes a
+browser UI plus JSON endpoints for runtime overview and scheduled job
+management. Startup logs print the admin URL alongside the gateway
+routes.

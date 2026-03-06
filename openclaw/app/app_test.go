@@ -1676,6 +1676,46 @@ func TestChannelsFromRegistry(t *testing.T) {
 	require.Equal(t, "/state", got.deps.StateDir)
 }
 
+func TestRuntimeAdminHelpers(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, "", listenURL(""))
+	require.Equal(
+		t,
+		"http://127.0.0.1:18789",
+		listenURL(":18789"),
+	)
+	require.Equal(
+		t,
+		"http://127.0.0.1:8080",
+		listenURL("0.0.0.0:8080"),
+	)
+	require.Equal(
+		t,
+		"http://127.0.0.1:9090",
+		listenURL("127.0.0.1:9090"),
+	)
+
+	ids := channelIDs([]occhannel.Channel{
+		&stubChannel{id: "telegram"},
+		nil,
+		&stubChannel{id: "  "},
+		&stubChannel{id: "discord"},
+	})
+	require.Equal(t, []string{"telegram", "discord"}, ids)
+
+	instanceID := runtimeInstanceID(
+		agentTypeLLM,
+		runOptions{
+			ModelMode:   modeOpenAI,
+			OpenAIModel: "gpt-5",
+		},
+		true,
+		"/tmp/state",
+	)
+	require.NotEmpty(t, instanceID)
+}
+
 type toolProviderCfg struct {
 	ToolName string `yaml:"tool_name"`
 }
@@ -2055,6 +2095,79 @@ func TestInProcGatewayClient_ForgetUser_DeletesState(t *testing.T) {
 
 	_, err = os.Stat(otherTraceDir)
 	require.NoError(t, err)
+}
+
+func TestInProcGatewayClient_ForgetUser_ClearsCronJobsOnlyOnce(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	ctx := context.Background()
+	srv, err := gateway.New(&inProcGWTestRunner{})
+	require.NoError(t, err)
+
+	sessSvc := sessioninmemory.NewSessionService()
+	memSvc := meminmemory.NewMemoryService()
+	const userID = "u1"
+
+	_, err = sessSvc.CreateSession(ctx, session.Key{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: "dm:1",
+	}, nil)
+	require.NoError(t, err)
+	_, err = sessSvc.CreateSession(ctx, session.Key{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: "cron:job-1:1",
+	}, nil)
+	require.NoError(t, err)
+
+	cronSvc, err := cron.NewService(
+		t.TempDir(),
+		&inProcGWTestRunner{},
+		outbound.NewRouter(),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, cronSvc.Close())
+	})
+
+	_, err = cronSvc.Add(&cron.Job{
+		Name:    "report",
+		Enabled: true,
+		Schedule: cron.Schedule{
+			Kind:  cron.ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "collect cpu",
+		UserID:  userID,
+		Delivery: outbound.DeliveryTarget{
+			Channel: "telegram",
+			Target:  "100",
+		},
+	})
+	require.NoError(t, err)
+
+	c := newInProcGatewayClient(srv, appName, sessSvc, memSvc, "")
+	c.SetCronService(cronSvc)
+
+	require.NoError(t, c.ForgetUser(ctx, "telegram", userID))
+
+	sessions, err := sessSvc.ListSessions(ctx, session.UserKey{
+		AppName: appName,
+		UserID:  userID,
+	})
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	require.Equal(t, "cron:job-1:1", sessions[0].ID)
+	require.Empty(
+		t,
+		cronSvc.ListForUser(
+			userID,
+			outbound.DeliveryTarget{Channel: "telegram"},
+		),
+	)
 }
 
 func TestInProcGatewayClient_ForgetUser_ValidationErrors(t *testing.T) {
