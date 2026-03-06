@@ -253,6 +253,7 @@ func (s *Service) CreateSession(
 					attribute.String("storage", storageType),
 					attribute.Bool("existing", true),
 				)
+				s.recordStorageRoute(ctx, opCreateSession, storageType)
 				return sess, nil
 			}
 		}
@@ -274,6 +275,7 @@ func (s *Service) CreateSession(
 			return nil, err
 		}
 		span.SetAttributes(attribute.String("storage", util.StorageTypeZset))
+		s.recordStorageRoute(ctx, opCreateSession, util.StorageTypeZset)
 		return sess, nil
 	}
 
@@ -289,6 +291,7 @@ func (s *Service) CreateSession(
 		return nil, err
 	}
 	span.SetAttributes(attribute.String("storage", util.StorageTypeHashIdx))
+	s.recordStorageRoute(ctx, opCreateSession, util.StorageTypeHashIdx)
 	return sess, nil
 }
 
@@ -368,6 +371,7 @@ func (s *Service) GetSession(
 		}
 		if sess != nil {
 			span.SetAttributes(attribute.String("storage", storageType))
+			s.recordStorageRoute(c.Context, opGetSession, storageType)
 		}
 		return sess, nil
 	}
@@ -591,6 +595,7 @@ func (s *Service) persistEvent(ctx context.Context, ver string, e *event.Event, 
 			return err
 		}
 		span.SetAttributes(attribute.String("storage", util.StorageTypeHashIdx))
+		s.recordStorageRoute(ctx, opAppendEvent, util.StorageTypeHashIdx)
 		return nil
 	case util.StorageTypeZset:
 		err := s.zsetClient.AppendEvent(ctx, key, e)
@@ -599,6 +604,7 @@ func (s *Service) persistEvent(ctx context.Context, ver string, e *event.Event, 
 			return err
 		}
 		span.SetAttributes(attribute.String("storage", util.StorageTypeZset))
+		s.recordStorageRoute(ctx, opAppendEvent, util.StorageTypeZset)
 		return nil
 	}
 
@@ -615,6 +621,7 @@ func (s *Service) persistEvent(ctx context.Context, ver string, e *event.Event, 
 			return err
 		}
 		span.SetAttributes(attribute.String("storage", util.StorageTypeZset))
+		s.recordStorageRoute(ctx, opAppendEvent, util.StorageTypeZset)
 		return nil
 	}
 	if hashidxExists {
@@ -624,6 +631,7 @@ func (s *Service) persistEvent(ctx context.Context, ver string, e *event.Event, 
 			return err
 		}
 		span.SetAttributes(attribute.String("storage", util.StorageTypeHashIdx))
+		s.recordStorageRoute(ctx, opAppendEvent, util.StorageTypeHashIdx)
 		return nil
 	}
 

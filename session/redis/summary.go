@@ -57,8 +57,10 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 	// Fast path: use version tag from session
 	switch ver := getSessionVersion(sess); ver {
 	case util.StorageTypeHashIdx:
+		s.recordStorageRoute(ctx, opCreateSessionSummary, util.StorageTypeHashIdx)
 		return s.hashidxClient.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL)
 	case util.StorageTypeZset:
+		s.recordStorageRoute(ctx, opCreateSessionSummary, util.StorageTypeZset)
 		return s.zsetClient.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL)
 	}
 
@@ -69,9 +71,11 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 	}
 
 	if s.compatEnabled() && zsetExists {
+		s.recordStorageRoute(ctx, opCreateSessionSummary, util.StorageTypeZset)
 		return s.zsetClient.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL)
 	}
 	if hashidxExists {
+		s.recordStorageRoute(ctx, opCreateSessionSummary, util.StorageTypeHashIdx)
 		return s.hashidxClient.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL)
 	}
 
@@ -107,8 +111,10 @@ func (s *Service) GetSessionSummaryText(ctx context.Context, sess *session.Sessi
 	// Fast path: use version tag from session to avoid checkSessionExists round-trip.
 	switch ver := getSessionVersion(sess); ver {
 	case util.StorageTypeHashIdx:
+		s.recordStorageRoute(ctx, opGetSessionSummaryText, util.StorageTypeHashIdx)
 		return s.getSummaryFromHashIdx(ctx, key, filterKey, sess.CreatedAt)
 	case util.StorageTypeZset:
+		s.recordStorageRoute(ctx, opGetSessionSummaryText, util.StorageTypeZset)
 		return s.getSummaryFromZSet(ctx, key, filterKey, sess.CreatedAt)
 	}
 
@@ -120,9 +126,11 @@ func (s *Service) GetSessionSummaryText(ctx context.Context, sess *session.Sessi
 	}
 
 	if s.compatEnabled() && zsetExists {
+		s.recordStorageRoute(ctx, opGetSessionSummaryText, util.StorageTypeZset)
 		return s.getSummaryFromZSet(ctx, key, filterKey, sess.CreatedAt)
 	}
 	if hashidxExists {
+		s.recordStorageRoute(ctx, opGetSessionSummaryText, util.StorageTypeHashIdx)
 		return s.getSummaryFromHashIdx(ctx, key, filterKey, sess.CreatedAt)
 	}
 

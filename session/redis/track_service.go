@@ -86,8 +86,10 @@ func (s *Service) persistTrackEvent(ctx context.Context, ver string, key session
 	// Fast path: use version tag
 	switch ver {
 	case util.StorageTypeHashIdx:
+		s.recordStorageRoute(ctx, opAppendTrackEvent, util.StorageTypeHashIdx)
 		return s.hashidxClient.AppendTrackEvent(ctx, key, trackEvent, tracksState)
 	case util.StorageTypeZset:
+		s.recordStorageRoute(ctx, opAppendTrackEvent, util.StorageTypeZset)
 		return s.zsetClient.AppendTrackEvent(ctx, key, trackEvent)
 	}
 
@@ -98,9 +100,11 @@ func (s *Service) persistTrackEvent(ctx context.Context, ver string, key session
 	}
 
 	if s.compatEnabled() && zsetExists {
+		s.recordStorageRoute(ctx, opAppendTrackEvent, util.StorageTypeZset)
 		return s.zsetClient.AppendTrackEvent(ctx, key, trackEvent)
 	}
 	if hashidxExists {
+		s.recordStorageRoute(ctx, opAppendTrackEvent, util.StorageTypeHashIdx)
 		return s.hashidxClient.AppendTrackEvent(ctx, key, trackEvent, tracksState)
 	}
 
