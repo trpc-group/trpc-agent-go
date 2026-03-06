@@ -12,6 +12,7 @@ package graph
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"reflect"
 	"strings"
 	"sync"
@@ -367,6 +368,7 @@ func TestProcessAgentEventStream_UnmarshalErrorLogged(t *testing.T) {
 		State{},
 		parentEventChan,
 		"agent",
+		"",
 		&itelemetry.InvokeAgentTracker{},
 	)
 	require.NoError(t, err)
@@ -415,6 +417,7 @@ func TestProcessAgentEventStream_AccumulatesTokenUsage(t *testing.T) {
 		State{},
 		parentEventChan,
 		"agent",
+		"",
 		&itelemetry.InvokeAgentTracker{},
 	)
 	require.NoError(t, err)
@@ -428,6 +431,171 @@ func TestProcessAgentEventStream_AccumulatesTokenUsage(t *testing.T) {
 	require.Equal(t, finalUsage.TotalTokens, res.tokenUsage.TotalTokens)
 	require.Equal(t, finalEvent, res.fullRespEvent)
 	require.Len(t, parentEventChan, 2)
+}
+
+func TestProcessAgentEventStream_StreamOutputWritesDeltas(t *testing.T) {
+	inv := agent.NewInvocation(agent.WithInvocationID("inv-stream"))
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	agent.GetOrCreateStreamHub(inv)
+
+	const streamName = "s"
+	r, err := OpenStreamReader(ctx, streamName)
+	require.NoError(t, err)
+	defer r.Close()
+
+	agentEvents := make(chan *event.Event, 3)
+	parentEventChan := make(chan *event.Event, 3)
+
+	agentEvents <- &event.Event{
+		Response: &model.Response{
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Delta: model.NewAssistantMessage("a\n"),
+			}},
+		},
+	}
+	agentEvents <- &event.Event{
+		Response: &model.Response{
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Delta: model.NewAssistantMessage("b\n"),
+			}},
+		},
+	}
+	agentEvents <- &event.Event{
+		Response: &model.Response{
+			IsPartial: false,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("final"),
+			}},
+		},
+	}
+	close(agentEvents)
+
+	_, err = processAgentEventStream(
+		ctx,
+		agentEvents,
+		nil,
+		"node",
+		State{},
+		parentEventChan,
+		"agent",
+		streamName,
+		&itelemetry.InvokeAgentTracker{},
+	)
+	require.NoError(t, err)
+
+	b, err := io.ReadAll(r)
+	require.NoError(t, err)
+	require.Equal(t, "a\nb\n", string(b))
+}
+
+func TestProcessAgentEventStream_StreamOutputWritesFinalWhenNoDeltas(
+	t *testing.T,
+) {
+	inv := agent.NewInvocation(agent.WithInvocationID("inv-stream-final"))
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	agent.GetOrCreateStreamHub(inv)
+
+	const streamName = "s"
+	r, err := OpenStreamReader(ctx, streamName)
+	require.NoError(t, err)
+	defer r.Close()
+
+	agentEvents := make(chan *event.Event, 1)
+	parentEventChan := make(chan *event.Event, 1)
+	agentEvents <- &event.Event{
+		Response: &model.Response{
+			IsPartial: false,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("final"),
+			}},
+		},
+	}
+	close(agentEvents)
+
+	_, err = processAgentEventStream(
+		ctx,
+		agentEvents,
+		nil,
+		"node",
+		State{},
+		parentEventChan,
+		"agent",
+		streamName,
+		&itelemetry.InvokeAgentTracker{},
+	)
+	require.NoError(t, err)
+
+	b, err := io.ReadAll(r)
+	require.NoError(t, err)
+	require.Equal(t, "final", string(b))
+}
+
+func TestProcessAgentEventStream_StreamOutputCloseWithError(
+	t *testing.T,
+) {
+	inv := agent.NewInvocation(agent.WithInvocationID("inv-stream-err"))
+	base := agent.NewInvocationContext(context.Background(), inv)
+	agent.GetOrCreateStreamHub(inv)
+
+	ctx, cancel := context.WithCancel(base)
+	cancel()
+
+	const streamName = "s"
+	r, err := OpenStreamReader(base, streamName)
+	require.NoError(t, err)
+	defer r.Close()
+
+	agentEvents := make(chan *event.Event, 1)
+	parentEventChan := make(chan *event.Event, 1)
+	agentEvents <- &event.Event{
+		Response: &model.Response{
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Delta: model.NewAssistantMessage("x"),
+			}},
+		},
+	}
+	close(agentEvents)
+
+	_, err = processAgentEventStream(
+		ctx,
+		agentEvents,
+		nil,
+		"node",
+		State{},
+		parentEventChan,
+		"agent",
+		streamName,
+		&itelemetry.InvokeAgentTracker{},
+	)
+	require.ErrorIs(t, err, context.Canceled)
+
+	buf := make([]byte, 1)
+	_, err = r.Read(buf)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestAgentDeltaFromEvent(t *testing.T) {
+	require.Equal(t, "", agentDeltaFromEvent(nil))
+	require.Equal(t, "", agentDeltaFromEvent(&event.Event{}))
+
+	require.Equal(t, "", agentDeltaFromEvent(&event.Event{
+		Response: &model.Response{},
+	}))
+	require.Equal(t, "", agentDeltaFromEvent(&event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{},
+		},
+	}))
+	require.Equal(t, "x", agentDeltaFromEvent(&event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Delta: model.NewAssistantMessage("x"),
+			}},
+		},
+	}))
 }
 
 func TestProcessAgentEventStream_CapturesStructuredOutput(t *testing.T) {
@@ -466,6 +634,7 @@ func TestProcessAgentEventStream_CapturesStructuredOutput(t *testing.T) {
 		State{},
 		parentEventChan,
 		"agent",
+		"",
 		&itelemetry.InvokeAgentTracker{},
 	)
 	require.NoError(t, err)
@@ -2378,6 +2547,38 @@ func (m *recordingModel) Info() model.Info {
 	return model.Info{Name: "recording"}
 }
 
+type deltaModel struct {
+	deltas []string
+	final  string
+}
+
+func (m *deltaModel) GenerateContent(
+	_ context.Context,
+	_ *model.Request,
+) (<-chan *model.Response, error) {
+	ch := make(chan *model.Response, len(m.deltas)+1)
+	for _, delta := range m.deltas {
+		ch <- &model.Response{
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Delta: model.NewAssistantMessage(delta),
+			}},
+		}
+	}
+	ch <- &model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.NewAssistantMessage(m.final),
+		}},
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (m *deltaModel) Info() model.Info {
+	return model.Info{Name: "delta"}
+}
+
 func TestAddLLMNode_StaticToolSets(t *testing.T) {
 	schema := MessagesStateSchema()
 	rm := &recordingModel{}
@@ -2483,6 +2684,225 @@ func TestAddLLMNode_PlaceholderInvocationState(t *testing.T) {
 	require.NotEmpty(t, rm.lastMessages)
 	require.Equal(t, model.RoleSystem, rm.lastMessages[0].Role)
 	require.Equal(t, wantSystem, rm.lastMessages[0].Content)
+}
+
+func TestLLMNode_StreamOutput_NodeToNode(t *testing.T) {
+	const (
+		nodeSetup   = "setup"
+		nodeLLM     = "llm"
+		nodeConsume = "consume"
+		nodeFinish  = "finish"
+
+		streamName   = "out"
+		userInput    = "hi"
+		invocationID = "inv-stream"
+		stateKeyOut  = "captured"
+	)
+
+	dm := &deltaModel{
+		deltas: []string{"hello\n", "world\n"},
+		final:  "hello\nworld\n",
+	}
+
+	sg := NewStateGraph(MessagesStateSchema())
+	sg.AddNode(nodeSetup, func(ctx context.Context, _ State) (any, error) {
+		return State{}, nil
+	})
+	sg.AddLLMNode(
+		nodeLLM,
+		dm,
+		"ignore",
+		nil,
+		WithStreamOutput(streamName),
+	)
+	sg.AddNode(nodeConsume, func(ctx context.Context, _ State) (any, error) {
+		r, err := OpenStreamReader(ctx, streamName)
+		if err != nil {
+			return nil, err
+		}
+		defer r.Close()
+
+		b, err := io.ReadAll(r)
+		if err != nil {
+			return nil, err
+		}
+		return State{stateKeyOut: string(b)}, nil
+	})
+	sg.AddNode(nodeFinish, func(ctx context.Context, _ State) (any, error) {
+		return State{}, nil
+	})
+
+	sg.SetEntryPoint(nodeSetup)
+	sg.SetFinishPoint(nodeFinish)
+	sg.AddEdge(nodeSetup, nodeLLM)
+	sg.AddEdge(nodeSetup, nodeConsume)
+	sg.AddJoinEdge([]string{nodeLLM, nodeConsume}, nodeFinish)
+
+	g, err := sg.Compile()
+	require.NoError(t, err)
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(agent.WithInvocationID(invocationID))
+	ch, err := exec.Execute(
+		context.Background(),
+		State{StateKeyUserInput: userInput},
+		inv,
+	)
+	require.NoError(t, err)
+
+	final := make(State)
+	for ev := range ch {
+		if ev.Done && ev.StateDelta != nil {
+			for k, vb := range ev.StateDelta {
+				if k == MetadataKeyNode ||
+					k == MetadataKeyPregel ||
+					k == MetadataKeyChannel ||
+					k == MetadataKeyState ||
+					k == MetadataKeyCompletion {
+					continue
+				}
+				var v any
+				if err := json.Unmarshal(vb, &v); err == nil {
+					final[k] = v
+				}
+			}
+		}
+	}
+
+	require.Equal(t, dm.final, final[stateKeyOut])
+}
+
+func TestLLMNode_StreamOutput_WritesFinalWhenNoDeltas(t *testing.T) {
+	const (
+		nodeSetup   = "setup"
+		nodeLLM     = "llm"
+		nodeConsume = "consume"
+		nodeFinish  = "finish"
+
+		streamName   = "out"
+		userInput    = "hi"
+		invocationID = "inv-stream-final-only"
+		stateKeyOut  = "captured"
+	)
+
+	dm := &deltaModel{
+		final: "final",
+	}
+
+	sg := NewStateGraph(MessagesStateSchema())
+	sg.AddNode(nodeSetup, func(context.Context, State) (any, error) {
+		return State{}, nil
+	})
+	sg.AddLLMNode(
+		nodeLLM,
+		dm,
+		"ignore",
+		nil,
+		WithStreamOutput(streamName),
+	)
+	sg.AddNode(nodeConsume, func(ctx context.Context, _ State) (any, error) {
+		r, err := OpenStreamReader(ctx, streamName)
+		if err != nil {
+			return nil, err
+		}
+		defer r.Close()
+
+		b, err := io.ReadAll(r)
+		if err != nil {
+			return nil, err
+		}
+		return State{stateKeyOut: string(b)}, nil
+	})
+	sg.AddNode(nodeFinish, func(context.Context, State) (any, error) {
+		return State{}, nil
+	})
+
+	sg.SetEntryPoint(nodeSetup)
+	sg.SetFinishPoint(nodeFinish)
+	sg.AddEdge(nodeSetup, nodeLLM)
+	sg.AddEdge(nodeSetup, nodeConsume)
+	sg.AddJoinEdge([]string{nodeLLM, nodeConsume}, nodeFinish)
+
+	g, err := sg.Compile()
+	require.NoError(t, err)
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(agent.WithInvocationID(invocationID))
+	ch, err := exec.Execute(
+		context.Background(),
+		State{StateKeyUserInput: userInput},
+		inv,
+	)
+	require.NoError(t, err)
+
+	final := make(State)
+	for ev := range ch {
+		if ev.Done && ev.StateDelta != nil {
+			for k, vb := range ev.StateDelta {
+				if k == MetadataKeyNode ||
+					k == MetadataKeyPregel ||
+					k == MetadataKeyChannel ||
+					k == MetadataKeyState ||
+					k == MetadataKeyCompletion {
+					continue
+				}
+				var v any
+				if err := json.Unmarshal(vb, &v); err == nil {
+					final[k] = v
+				}
+			}
+		}
+	}
+
+	require.Equal(t, dm.final, final[stateKeyOut])
+}
+
+func TestOpenStreamWriter_DelegatesToAgent(t *testing.T) {
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	const streamName = "s"
+	w, err := OpenStreamWriter(ctx, streamName)
+	require.NoError(t, err)
+
+	r, err := OpenStreamReader(ctx, streamName)
+	require.NoError(t, err)
+	defer r.Close()
+
+	const want = "x"
+	_, err = io.WriteString(w, want)
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+
+	b, err := io.ReadAll(r)
+	require.NoError(t, err)
+	require.Equal(t, want, string(b))
+}
+
+func TestModelDeltaAndMessageFromResponse(t *testing.T) {
+	require.Equal(t, "", modelDeltaFromResponse(nil))
+	require.Equal(t, "", modelDeltaFromResponse(&model.Response{}))
+	require.Equal(t, "", modelDeltaFromResponse(&model.Response{
+		Choices: []model.Choice{},
+	}))
+	require.Equal(t, "d", modelDeltaFromResponse(&model.Response{
+		Choices: []model.Choice{{
+			Delta: model.NewAssistantMessage("d"),
+		}},
+	}))
+
+	require.Equal(t, "", modelMessageFromResponse(nil))
+	require.Equal(t, "", modelMessageFromResponse(&model.Response{}))
+	require.Equal(t, "", modelMessageFromResponse(&model.Response{
+		Choices: []model.Choice{},
+	}))
+	require.Equal(t, "m", modelMessageFromResponse(&model.Response{
+		Choices: []model.Choice{{
+			Message: model.NewAssistantMessage("m"),
+		}},
+	}))
 }
 
 func TestNewToolsNodeFunc_StaticToolSets(t *testing.T) {

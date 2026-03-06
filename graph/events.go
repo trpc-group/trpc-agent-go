@@ -508,18 +508,19 @@ func formatNodeAuthor(nodeID, fallbackAuthor string) string {
 
 // NodeEventOptions contains options for creating node events.
 type NodeEventOptions struct {
-	InvocationID string
-	NodeID       string
-	NodeType     NodeType
-	StepNumber   int
-	StartTime    time.Time
-	EndTime      time.Time
-	InputKeys    []string
-	OutputKeys   []string
-	ToolCalls    []model.ToolCall
-	ModelName    string
-	ModelInput   string
-	Error        string
+	InvocationID  string
+	NodeID        string
+	NodeType      NodeType
+	StepNumber    int
+	StartTime     time.Time
+	EndTime       time.Time
+	InputKeys     []string
+	OutputKeys    []string
+	ToolCalls     []model.ToolCall
+	ModelName     string
+	ModelInput    string
+	Error         string
+	ResponseError *model.ResponseError
 	// Retry metadata (optional)
 	Attempt     int
 	MaxAttempts int
@@ -658,6 +659,13 @@ func WithNodeEventModelInput(modelInput string) NodeEventOption {
 func WithNodeEventError(errMsg string) NodeEventOption {
 	return func(opts *NodeEventOptions) {
 		opts.Error = errMsg
+	}
+}
+
+// WithNodeEventResponseError sets ResponseError for node events.
+func WithNodeEventResponseError(err *model.ResponseError) NodeEventOption {
+	return func(opts *NodeEventOptions) {
+		opts.ResponseError = err
 	}
 }
 
@@ -859,6 +867,7 @@ type PregelEventOptions struct {
 	StartTime       time.Time
 	EndTime         time.Time
 	Error           string
+	ResponseError   *model.ResponseError
 	NodeID          string
 	InterruptKey    string
 	InterruptValue  any
@@ -929,6 +938,14 @@ func WithPregelEventEndTime(endTime time.Time) PregelEventOption {
 func WithPregelEventError(errMsg string) PregelEventOption {
 	return func(opts *PregelEventOptions) {
 		opts.Error = errMsg
+	}
+}
+
+// WithPregelEventResponseError sets the structured ResponseError for Pregel
+// events.
+func WithPregelEventResponseError(err *model.ResponseError) PregelEventOption {
+	return func(opts *PregelEventOptions) {
+		opts.ResponseError = err
 	}
 }
 
@@ -1177,12 +1194,28 @@ func NewNodeErrorEvent(opts ...NodeEventOption) *event.Event {
 		formatNodeAuthor(options.NodeID, AuthorGraphNode),
 		ObjectTypeGraphNodeError,
 		WithNodeMetadata(metadata))
-	if options.Error != "" {
-		graphEvent.Response.Object = model.ObjectTypeError
-		graphEvent.Response.Error = &model.ResponseError{
+
+	respErr := options.ResponseError
+	if respErr == nil && options.Error != "" {
+		respErr = &model.ResponseError{
 			Type:    model.ErrorTypeFlowError,
 			Message: options.Error,
 		}
+	}
+	if respErr != nil {
+		if options.ResponseError != nil &&
+			(respErr.Message == "" || respErr.Type == "") {
+			clone := *respErr
+			respErr = &clone
+		}
+		if respErr.Message == "" {
+			respErr.Message = options.Error
+		}
+		if respErr.Type == "" {
+			respErr.Type = model.ErrorTypeFlowError
+		}
+		graphEvent.Response.Object = model.ObjectTypeError
+		graphEvent.Response.Error = respErr
 		graphEvent.Object = graphEvent.Response.Object
 	}
 	return graphEvent
@@ -1317,11 +1350,26 @@ func NewPregelErrorEvent(opts ...PregelEventOption) *event.Event {
 	// Mirror error to Event.Error for easier consumption by clients that
 	// only check event.Error, while keeping object as graph.pregel.step
 	// for compatibility with existing consumers.
-	if options.Error != "" {
-		ge.Response.Error = &model.ResponseError{
+	respErr := options.ResponseError
+	if respErr == nil && options.Error != "" {
+		respErr = &model.ResponseError{
 			Type:    model.ErrorTypeFlowError,
 			Message: options.Error,
 		}
+	}
+	if respErr != nil {
+		if options.ResponseError != nil &&
+			(respErr.Message == "" || respErr.Type == "") {
+			clone := *respErr
+			respErr = &clone
+		}
+		if respErr.Message == "" {
+			respErr.Message = options.Error
+		}
+		if respErr.Type == "" {
+			respErr.Type = model.ErrorTypeFlowError
+		}
+		ge.Response.Error = respErr
 	}
 	return ge
 }

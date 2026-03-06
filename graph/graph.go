@@ -164,6 +164,10 @@ type Node struct {
 	// If set, AddLLMNode forwards it to the underlying LLM runner.
 	llmGenerationConfig *model.GenerationConfig
 
+	// streamOutputName enables node-to-node streaming via agent.StreamHub.
+	// For LLM and Agent nodes, it forwards streaming deltas to this stream.
+	streamOutputName string
+
 	// interruptBefore pauses execution before this node runs.
 	interruptBefore bool
 	// interruptAfter pauses execution after this node runs.

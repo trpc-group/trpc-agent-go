@@ -74,9 +74,19 @@ func TestParse_UnsupportedScheme(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestParse_Artifact_InvalidRef(t *testing.T) {
-	_, err := fileref.Parse("artifact://x@bad")
-	require.Error(t, err)
+func TestParse_Artifact_NameContainsAt(t *testing.T) {
+	ref, err := fileref.Parse("artifact://x@bad")
+	require.NoError(t, err)
+	require.Equal(t, fileref.SchemeArtifact, ref.Scheme)
+	require.Equal(t, "x@bad", ref.ArtifactName)
+	require.Nil(t, ref.ArtifactVersion)
+
+	ref, err = fileref.Parse("artifact://x@y@12")
+	require.NoError(t, err)
+	require.Equal(t, fileref.SchemeArtifact, ref.Scheme)
+	require.Equal(t, "x@y", ref.ArtifactName)
+	require.NotNil(t, ref.ArtifactVersion)
+	require.Equal(t, 12, *ref.ArtifactVersion)
 }
 
 func TestParse_Artifact_EmptyNameAfterParse(t *testing.T) {

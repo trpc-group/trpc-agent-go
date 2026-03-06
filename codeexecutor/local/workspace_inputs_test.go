@@ -263,7 +263,7 @@ func TestStageInputs_Artifact_InvalidRef(t *testing.T) {
 	require.NoError(t, err)
 	defer rt.Cleanup(ctx, ws)
 
-	const badRef = "artifact://bad@v1"
+	const badRef = "artifact://@0"
 	specs := []codeexecutor.InputSpec{{From: badRef}}
 	err = rt.StageInputs(ctx, ws, specs)
 	require.Error(t, err)
