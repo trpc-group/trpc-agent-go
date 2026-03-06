@@ -738,45 +738,6 @@ func TestService_GetSummariesList_SessionWithNoSummary(t *testing.T) {
 	assert.Len(t, summariesList[1], 0)
 }
 
-func TestService_RefreshSessionTTL_MoreErrors(t *testing.T) {
-	mockCli := &mockClient{}
-	s := &Service{
-		chClient:           mockCli,
-		tableSessionStates: "session_states",
-		opts:               ServiceOpts{sessionTTL: time.Hour},
-	}
-	ctx := context.Background()
-	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
-
-	// Case 1: Scan error
-	// Force scan error using scanFunc
-	rows := newMockRows([][]any{{"state_json"}})
-	rows.scanFunc = func(dest ...any) error {
-		return assert.AnError
-	}
-	mockCli.queryFunc = func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
-		return rows, nil
-	}
-	err := s.refreshSessionTTL(ctx, key)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "scan session state failed")
-
-	// Case 2: Insert error
-	// Reset queryFunc to return valid rows
-	mockCli.queryFunc = func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
-		return newMockRows([][]any{
-			{"{}", time.Now()},
-		}), nil
-	}
-	// Set execFunc to return error
-	mockCli.execFunc = func(ctx context.Context, query string, args ...any) error {
-		return assert.AnError
-	}
-	err = s.refreshSessionTTL(ctx, key)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "refresh session TTL failed")
-}
-
 func TestService_AddEvent_MoreErrors(t *testing.T) {
 	mockCli := &mockClient{}
 	s := &Service{

@@ -25,7 +25,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/hook"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
-	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
 )
@@ -426,16 +425,6 @@ func (s *Service) GetSession(
 		)
 		if err != nil {
 			return nil, err
-		}
-
-		if sess != nil && s.opts.sessionTTL > 0 {
-			if err := s.refreshSessionTTL(c.Context, c.Key); err != nil {
-				log.WarnfContext(
-					c.Context,
-					"failed to refresh session TTL: %v",
-					err,
-				)
-			}
 		}
 
 		return sess, nil
