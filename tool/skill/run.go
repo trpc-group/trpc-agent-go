@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -648,6 +649,7 @@ const (
 
 	userFileInputKeyFileIDPrefix = "file_id/"
 	userFileInputKeySHA256Prefix = "sha256/"
+	userFileInputHostPrefix      = "host://"
 
 	userFileInputWarnPrefix     = "user file input:"
 	userFileInputWarnMissingRef = userFileInputWarnPrefix +
@@ -935,6 +937,9 @@ func userFileInputBytes(
 	if strings.HasPrefix(fileID, fileref.ArtifactPrefix) {
 		return userFileInputArtifactBytes(ctx, fileID)
 	}
+	if hostPath, ok := userFileInputHostPath(fileID); ok {
+		return userFileInputHostBytes(hostPath, f)
+	}
 	dl, ok := mdl.(model.FileDownloader)
 	if !ok || dl == nil {
 		return nil, "", userFileInputWarnNoDownloader
@@ -948,6 +953,42 @@ func userFileInputBytes(
 		)
 	}
 	return data, mime, ""
+}
+
+func userFileInputHostPath(fileID string) (string, bool) {
+	trimmed := strings.TrimSpace(fileID)
+	if trimmed == "" {
+		return "", false
+	}
+	if strings.HasPrefix(trimmed, userFileInputHostPrefix) {
+		hostPath := strings.TrimPrefix(
+			trimmed,
+			userFileInputHostPrefix,
+		)
+		if filepath.IsAbs(hostPath) {
+			return hostPath, true
+		}
+		return "", false
+	}
+	if filepath.IsAbs(trimmed) {
+		return trimmed, true
+	}
+	return "", false
+}
+
+func userFileInputHostBytes(
+	hostPath string,
+	f model.File,
+) ([]byte, string, string) {
+	data, err := os.ReadFile(hostPath)
+	if err != nil {
+		return nil, "", fmt.Sprintf(
+			"user file input: read host path %s: %v",
+			hostPath,
+			err,
+		)
+	}
+	return data, strings.TrimSpace(f.MimeType), ""
 }
 
 func userFileInputArtifactBytes(
