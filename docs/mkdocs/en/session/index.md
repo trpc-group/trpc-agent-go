@@ -308,6 +308,10 @@ sessionService := inmemory.NewSessionService(
 )
 ```
 
+**TTL refresh behavior:**
+
+TTL is only refreshed on **write operations** (e.g., CreateSession, AppendEvent, UpdateSessionState). Read operations (GetSession) do **not** refresh TTL.
+
 **Expiration behavior:**
 
 | Storage Type | Expiration Mechanism | Auto Cleanup |

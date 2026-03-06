@@ -33,6 +33,10 @@ import "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 
 // Default configuration (development)
 sessionService := inmemory.NewSessionService()
+// Result:
+// - Up to 1000 events per session
+// - All data never expires
+// - No automatic cleanup
 
 // Production-like configuration
 sessionService := inmemory.NewSessionService(
@@ -42,6 +46,12 @@ sessionService := inmemory.NewSessionService(
     inmemory.WithUserStateTTL(7*24*time.Hour),
     inmemory.WithCleanupInterval(10*time.Minute),
 )
+// Result:
+// - Up to 500 events per session
+// - Session expires 30 minutes after last write
+// - App state expires after 24 hours
+// - User state expires after 7 days
+// - Expired data cleaned up every 10 minutes
 ```
 
 ## With Summary

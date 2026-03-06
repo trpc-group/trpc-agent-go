@@ -53,7 +53,7 @@ sessionService, err := redis.NewService(
 // 效果：
 // - 连接本地 Redis 数据库 0
 // - 每个会话最多存储 1000 个事件
-// - 会话 30 分钟不活动后过期（Redis TTL）
+// - 会话最后一次写入后 30 分钟过期（Redis TTL）
 // - 应用状态 24 小时后过期
 // - 用户状态 7 天后过期
 // - 使用 Redis 原生 TTL 机制，无需手动清理

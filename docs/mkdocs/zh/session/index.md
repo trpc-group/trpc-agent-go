@@ -311,6 +311,10 @@ sessionService := inmemory.NewSessionService(
 )
 ```
 
+**TTL 刷新行为：**
+
+TTL 仅在**写操作**时刷新（如 CreateSession、AppendEvent、UpdateSessionState 等）。读操作（GetSession）**不会**刷新 TTL。
+
 **过期行为：**
 
 | 存储类型 | 过期机制 | 自动清理 |
