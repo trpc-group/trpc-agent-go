@@ -11,6 +11,7 @@ package outbound
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -70,4 +71,38 @@ func TestRouter_Channels_Sorted(t *testing.T) {
 	router.RegisterSender(&stubSender{id: "a"})
 
 	require.Equal(t, []string{"a", "b"}, router.Channels())
+}
+
+func TestTool_Call_ExplicitTargetAndErrors(t *testing.T) {
+	router := NewRouter()
+	sender := &stubSender{id: "telegram"}
+	router.RegisterSender(sender)
+
+	tool := NewTool(router)
+	require.Equal(t, toolMessage, tool.Declaration().Name)
+
+	args, err := json.Marshal(map[string]any{
+		"text":    "hello",
+		"channel": "telegram",
+		"target":  "200",
+	})
+	require.NoError(t, err)
+
+	result, err := tool.Call(context.Background(), args)
+	require.NoError(t, err)
+	require.Equal(t, "200", sender.target)
+	require.Equal(t, "hello", sender.text)
+	require.Equal(t, "telegram", result.(map[string]any)["channel"])
+
+	_, err = tool.Call(context.Background(), []byte(`{"text":" "}`))
+	require.Error(t, err)
+
+	_, err = tool.Call(context.Background(), []byte("{"))
+	require.Error(t, err)
+
+	_, err = NewTool(nil).Call(
+		context.Background(),
+		[]byte(`{"text":"hi"}`),
+	)
+	require.Error(t, err)
 }

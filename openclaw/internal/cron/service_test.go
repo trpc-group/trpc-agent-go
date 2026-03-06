@@ -400,6 +400,148 @@ func TestServiceRunNowDoesNotShiftSchedule(t *testing.T) {
 	require.Equal(t, *job.NextRunAt, *jobs[0].NextRunAt)
 }
 
+func TestServiceScopesAndHelpers(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 6, 16, 0, 0, 0, time.UTC)
+	svc, err := NewService(
+		t.TempDir(),
+		&stubRunner{reply: "ok"},
+		outbound.NewRouter(),
+		WithClock(func() time.Time { return now }),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	job, err := svc.Add(&Job{
+		Name:    "mine",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "collect system resources",
+		UserID:  "user-1",
+		Delivery: outbound.DeliveryTarget{
+			Channel: "telegram",
+			Target:  "100",
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = svc.Add(&Job{
+		Name:    "other",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "collect system resources",
+		UserID:  "user-2",
+	})
+	require.NoError(t, err)
+
+	require.NotNil(t, svc.Get(job.ID))
+	require.Nil(t, svc.Get(" "))
+	require.Len(
+		t,
+		svc.ListForUser(
+			"user-1",
+			outbound.DeliveryTarget{Channel: "telegram"},
+		),
+		1,
+	)
+
+	removed, err := svc.RemoveForUser(
+		"user-1",
+		outbound.DeliveryTarget{Channel: "telegram", Target: "100"},
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, removed)
+	require.Len(t, svc.ListForUser("user-1", outbound.DeliveryTarget{}), 0)
+}
+
+func TestServiceNormalizeAndAccumulatorHelpers(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 6, 16, 0, 0, 0, time.UTC)
+
+	loaded, err := normalizeLoadedJob(&Job{
+		ID:      "job-1",
+		Message: "report",
+		UserID:  "user-1",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		LastStatus: StatusRunning,
+	}, now)
+	require.NoError(t, err)
+	require.Equal(t, StatusIdle, loaded.LastStatus)
+
+	created, err := normalizeNewJob(&Job{
+		Message: "report",
+		UserID:  "user-1",
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+	}, now)
+	require.NoError(t, err)
+	require.True(t, created.Enabled)
+
+	require.True(t, matchesJobScope(&Job{
+		UserID: "user-1",
+		Delivery: outbound.DeliveryTarget{
+			Channel: "telegram",
+			Target:  "1",
+		},
+	}, "user-1", outbound.DeliveryTarget{Channel: "telegram"}))
+	require.False(t, matchesJobScope(nil, "user-1", outbound.DeliveryTarget{}))
+
+	runtimeState := scheduledRunRuntimeState(&Job{
+		ID: "job-1",
+		Delivery: outbound.DeliveryTarget{
+			Channel: "telegram",
+			Target:  "1",
+		},
+	})
+	require.Equal(t, true, runtimeState[runtimeStateScheduledRun])
+	require.Equal(t, "job-1", runtimeState[runtimeStateJobID])
+	require.Contains(
+		t,
+		buildScheduledRunMessage(" collect cpu "),
+		"collect cpu",
+	)
+
+	acc := cronReplyAccumulator{}
+	acc.consume(&event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletionChunk,
+			Choices: []model.Choice{{
+				Delta: model.Message{Content: "hello"},
+			}},
+		},
+	})
+	require.Equal(t, "hello", acc.text)
+
+	acc.consume(&event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("done"),
+			}},
+		},
+	})
+	require.Equal(t, "done", acc.text)
+
+	acc.consume(event.NewErrorEvent("inv", "assistant", "tool", "boom"))
+	require.EqualError(t, acc.err, "boom")
+}
+
 func waitFor(t *testing.T, fn func() bool) {
 	t.Helper()
 

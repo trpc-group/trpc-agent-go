@@ -392,3 +392,112 @@ func TestToolListFiltersByTarget(t *testing.T) {
 	require.Len(t, jobs, 1)
 	require.Equal(t, "chat-1", jobs[0].Name)
 }
+
+func TestTool_StatusUpdateRunAndHelpers(t *testing.T) {
+	t.Parallel()
+
+	svc, err := NewService(
+		t.TempDir(),
+		&stubRunner{reply: "ok"},
+		outbound.NewRouter(),
+	)
+	require.NoError(t, err)
+
+	tool := NewTool(nil)
+	tool.SetService(svc)
+	require.Equal(t, toolCron, tool.Declaration().Name)
+
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		&agent.Invocation{
+			Session: &session.Session{
+				ID:     "telegram:dm:12345",
+				UserID: "user-1",
+			},
+		},
+	)
+
+	status, err := tool.Call(ctx, []byte(`{"action":"status"}`))
+	require.NoError(t, err)
+	require.NotNil(t, status)
+
+	job, err := svc.Add(&Job{
+		Name:    "mine",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "mine",
+		UserID:  "user-1",
+	})
+	require.NoError(t, err)
+
+	updated, err := tool.Call(ctx, []byte(
+		`{"action":"update","job_id":"`+job.ID+`","name":"new"}`,
+	))
+	require.NoError(t, err)
+	require.Equal(t, "new", updated.(*Job).Name)
+
+	ran, err := tool.Call(ctx, []byte(
+		`{"action":"run","job_id":"`+job.ID+`"}`,
+	))
+	require.NoError(t, err)
+	require.Equal(t, job.ID, ran.(*Job).ID)
+
+	require.Equal(t, "message", resolveMessage(toolInput{
+		Task: " message ",
+	}))
+	require.Equal(t, "1m", resolveEvery(toolInput{Duration: " 1m "}))
+	require.Equal(t, "2026", resolveAt(toolInput{RunAt: "2026"}))
+	require.Equal(t, "job-1", resolveJobID(toolInput{JobIDOld: "job-1"}))
+	require.True(t, hasScheduleInput(toolInput{CronExpr: "*/1 * * * *"}))
+	require.Equal(
+		t,
+		ScheduleKindCron,
+		resolveScheduleKind("", "", "", 0, "*/5 * * * *"),
+	)
+}
+
+func TestTool_ContextAndDeliveryErrors(t *testing.T) {
+	t.Parallel()
+
+	svc, err := NewService(
+		t.TempDir(),
+		&stubRunner{reply: "ok"},
+		outbound.NewRouter(),
+	)
+	require.NoError(t, err)
+
+	tool := NewTool(svc)
+
+	_, err = tool.Call(context.Background(), []byte(`{"action":"list"}`))
+	require.Error(t, err)
+
+	_, err = currentUserID(context.Background())
+	require.Error(t, err)
+
+	delivery, err := optionalDelivery(context.Background(), "", "")
+	require.NoError(t, err)
+	require.Equal(t, outbound.DeliveryTarget{}, delivery)
+
+	_, err = optionalScopeDelivery(
+		context.Background(),
+		"telegram",
+		"",
+	)
+	require.Error(t, err)
+
+	require.False(t, isScheduledRunMutation(context.Background(), actionList))
+	require.Equal(t, 3, firstIntValue(nil, intPointer(3)))
+	require.Equal(t, int64(5), firstInt64Value(nil, int64Pointer(5)))
+	require.Equal(t, "x", firstString("", " x "))
+}
+
+func intPointer(v int) *int {
+	return &v
+}
+
+func int64Pointer(v int64) *int64 {
+	return &v
+}
