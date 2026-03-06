@@ -427,6 +427,9 @@ func (t *RunTool) Call(
 	if err != nil {
 		return nil, err
 	}
+	filteredOutputs := filterFailedEmptyOutputs(rr, files, manifest)
+	files = filteredOutputs.files
+	manifest = filteredOutputs.manifest
 	out, err := t.buildRunOutput(
 		ctx,
 		rr,
@@ -440,9 +443,18 @@ func (t *RunTool) Call(
 	if err != nil {
 		return nil, err
 	}
+	if len(filteredOutputs.warnings) > 0 {
+		out.Warnings = append(out.Warnings, filteredOutputs.warnings...)
+	}
 	out.StagedInputs = staged
 	if len(stageWarn) > 0 {
 		out.Warnings = append(out.Warnings, stageWarn...)
+	}
+	if len(filteredOutputs.omittedNames) > 0 {
+		toolcache.DeleteSkillRunOutputFilesFromContext(
+			ctx,
+			filteredOutputs.omittedNames,
+		)
 	}
 	toolcache.StoreSkillRunOutputFilesFromContext(ctx, files)
 	return out, nil
@@ -1874,6 +1886,119 @@ func buildRunOutput(
 	}
 }
 
+type failedOutputFilterResult struct {
+	files        []codeexecutor.File
+	manifest     *codeexecutor.OutputManifest
+	omittedNames []string
+	warnings     []string
+}
+
+func filterFailedEmptyOutputs(
+	rr codeexecutor.RunResult,
+	files []codeexecutor.File,
+	manifest *codeexecutor.OutputManifest,
+) failedOutputFilterResult {
+	result := failedOutputFilterResult{
+		files:    files,
+		manifest: manifest,
+	}
+	if !failedRunResult(rr) {
+		return result
+	}
+
+	seen := make(map[string]struct{})
+	if len(files) > 0 {
+		filtered := make([]codeexecutor.File, 0, len(files))
+		for _, f := range files {
+			if emptyCollectedFile(f) {
+				result.omittedNames = appendFilteredFileName(
+					result.omittedNames,
+					seen,
+					f.Name,
+				)
+				continue
+			}
+			filtered = append(filtered, f)
+		}
+		if len(filtered) != len(files) {
+			result.files = filtered
+		}
+	}
+	result.manifest = filterFailedEmptyManifestFiles(
+		manifest,
+		seen,
+		&result.omittedNames,
+	)
+	if len(result.omittedNames) > 0 {
+		result.warnings = []string{warnFailedRunEmptyOutputFiles}
+	}
+	return result
+}
+
+func failedRunResult(rr codeexecutor.RunResult) bool {
+	return rr.ExitCode != 0 || rr.TimedOut
+}
+
+func emptyCollectedFile(f codeexecutor.File) bool {
+	return f.SizeBytes == 0 && f.Content == ""
+}
+
+func emptyCollectedFileRef(f codeexecutor.FileRef) bool {
+	return f.SizeBytes == 0 && f.Content == ""
+}
+
+func appendFilteredFileName(
+	names []string,
+	seen map[string]struct{},
+	name string,
+) []string {
+	n := strings.TrimSpace(name)
+	if n == "" {
+		return names
+	}
+	if _, ok := seen[n]; ok {
+		return names
+	}
+	seen[n] = struct{}{}
+	return append(names, n)
+}
+
+func filterFailedEmptyManifestFiles(
+	manifest *codeexecutor.OutputManifest,
+	seen map[string]struct{},
+	omittedNames *[]string,
+) *codeexecutor.OutputManifest {
+	if manifest == nil || len(manifest.Files) == 0 {
+		return manifest
+	}
+
+	filtered := make([]codeexecutor.FileRef, 0, len(manifest.Files))
+	omitted := false
+	for _, f := range manifest.Files {
+		name := strings.TrimSpace(f.Name)
+		if _, ok := seen[name]; ok {
+			omitted = true
+			continue
+		}
+		if emptyCollectedFileRef(f) {
+			*omittedNames = appendFilteredFileName(
+				*omittedNames,
+				seen,
+				name,
+			)
+			omitted = true
+			continue
+		}
+		filtered = append(filtered, f)
+	}
+	if !omitted {
+		return manifest
+	}
+	cloned := *manifest
+	cloned.Files = filtered
+	return &cloned
+}
+
 const (
 	maxOutputChars = 16 * 1024
 )
@@ -1883,8 +2008,11 @@ const (
 )
 
 const (
-	warnStdoutTruncated = "stdout truncated"
-	warnStderrTruncated = "stderr truncated"
+	warnStdoutTruncated           = "stdout truncated"
+	warnStderrTruncated           = "stderr truncated"
+	warnFailedRunEmptyOutputFiles = "empty output_files omitted " +
+		"because command failed; shell redirections can create " +
+		"empty files before execution fails"
 )
 
 func truncateOutput(s string) (string, bool) {
@@ -2144,7 +2272,9 @@ func skillRunOutputSchema() *tool.Schema {
 					"should be accessed via ref (workspace://...).",
 				Items: runFileSchema("Output file"),
 			},
-			"primary_output": runFileSchema("Convenience: best small text output file (if any)"),
+			"primary_output": runFileSchema(
+				"Convenience: best small text output file (if any)",
+			),
 			"stdout": {
 				Type:        "string",
 				Description: "Standard output (may be truncated; see warnings)",

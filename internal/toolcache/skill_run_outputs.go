@@ -51,6 +51,20 @@ func StoreSkillRunOutputFilesFromContext(
 	StoreSkillRunOutputFiles(inv, files)
 }
 
+// DeleteSkillRunOutputFilesFromContext deletes skill_run output_files from
+// the invocation state carried by ctx. It is a no-op when ctx has no
+// invocation.
+func DeleteSkillRunOutputFilesFromContext(
+	ctx context.Context,
+	names []string,
+) {
+	inv, ok := agent.InvocationFromContext(ctx)
+	if !ok || inv == nil {
+		return
+	}
+	DeleteSkillRunOutputFiles(inv, names)
+}
+
 // StoreSkillRunOutputFiles stores skill_run output_files into inv so other
 // tools can look them up by name later.
 func StoreSkillRunOutputFiles(
@@ -82,6 +96,47 @@ func StoreSkillRunOutputFiles(
 	}
 
 	if len(merged) == 0 {
+		return
+	}
+	inv.SetState(stateKeySkillRunOutputFiles, merged)
+}
+
+// DeleteSkillRunOutputFiles deletes skill_run output_files from inv so other
+// tools no longer look them up by name later.
+func DeleteSkillRunOutputFiles(
+	inv *agent.Invocation,
+	names []string,
+) {
+	if inv == nil || len(names) == 0 {
+		return
+	}
+
+	existing, ok := inv.GetState(stateKeySkillRunOutputFiles)
+	if !ok {
+		return
+	}
+	merged, ok := existing.(map[string]cachedSkillRunFile)
+	if !ok || len(merged) == 0 {
+		return
+	}
+
+	deleted := false
+	for _, name := range names {
+		n := strings.TrimSpace(name)
+		if n == "" {
+			continue
+		}
+		if _, ok := merged[n]; !ok {
+			continue
+		}
+		delete(merged, n)
+		deleted = true
+	}
+	if !deleted {
+		return
+	}
+	if len(merged) == 0 {
+		inv.DeleteState(stateKeySkillRunOutputFiles)
 		return
 	}
 	inv.SetState(stateKeySkillRunOutputFiles, merged)
