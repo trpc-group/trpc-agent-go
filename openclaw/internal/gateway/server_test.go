@@ -33,6 +33,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
@@ -752,6 +753,54 @@ func TestServer_ProcessMessage_LargeInlineData(t *testing.T) {
 	srv.Handler().ServeHTTP(rr, httpReq)
 
 	require.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+func TestServer_ProcessMessage_FileUploadStorePersistsHostRef(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	store, err := uploads.NewStore(t.TempDir())
+	require.NoError(t, err)
+
+	r := &recordingRunner{}
+	srv, err := New(r, WithUploadStore(store))
+	require.NoError(t, err)
+
+	pdfBytes := []byte("%PDF-1.4")
+	req := gwproto.MessageRequest{
+		Channel:   "telegram",
+		From:      "u1",
+		SessionID: "telegram:dm:u1",
+		ContentParts: []gwproto.ContentPart{
+			{
+				Type: gwproto.PartTypeFile,
+				File: &gwproto.FilePart{
+					Filename: "report.pdf",
+					Data:     pdfBytes,
+				},
+			},
+		},
+	}
+
+	rsp, status := srv.ProcessMessage(context.Background(), req)
+	require.Equal(t, http.StatusOK, status)
+	require.Equal(t, "ok", rsp.Reply)
+
+	msg := r.Last()
+	require.Len(t, msg.ContentParts, 1)
+	require.NotNil(t, msg.ContentParts[0].File)
+	filePart := msg.ContentParts[0].File
+	require.Equal(t, "report.pdf", filePart.Name)
+	require.Empty(t, filePart.Data)
+	require.NotEmpty(t, filePart.FileID)
+
+	path, ok := uploads.PathFromHostRef(filePart.FileID)
+	require.True(t, ok)
+	require.Contains(t, path, store.Root())
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, pdfBytes, data)
 }
 
 func TestServer_ProcessMessage_DebugRecorderWritesTrace(t *testing.T) {

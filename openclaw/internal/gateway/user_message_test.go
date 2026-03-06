@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -347,6 +348,14 @@ func TestReadLimited_InvalidMaxBytes(t *testing.T) {
 	_, err := readLimited(strings.NewReader("a"), 0)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid max bytes")
+}
+
+func TestReadLimited_MaxInt64DoesNotOverflow(t *testing.T) {
+	t.Parallel()
+
+	data, err := readLimited(strings.NewReader(""), math.MaxInt64)
+	require.NoError(t, err)
+	require.Empty(t, data)
 }
 
 func TestReadLimited_ReadError(t *testing.T) {

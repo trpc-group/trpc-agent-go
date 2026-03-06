@@ -45,6 +45,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
 	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 )
 
@@ -2061,6 +2062,20 @@ func TestInProcGatewayClient_ForgetUser_DeletesState(t *testing.T) {
 		otherTrace.Close(debugrecorder.TraceEnd{Status: "ok"}),
 	)
 
+	uploadStore, err := uploads.NewStore(debugDir)
+	require.NoError(t, err)
+	saved, err := uploadStore.Save(
+		ctx,
+		uploads.Scope{
+			Channel:   channelName,
+			UserID:    userID,
+			SessionID: "sid",
+		},
+		"report.pdf",
+		[]byte("pdf"),
+	)
+	require.NoError(t, err)
+
 	srv, err := gateway.New(&inProcGWTestRunner{})
 	require.NoError(t, err)
 
@@ -2070,6 +2085,7 @@ func TestInProcGatewayClient_ForgetUser_DeletesState(t *testing.T) {
 		sessSvc,
 		memSvc,
 		debugDir,
+		uploadStore,
 	)
 
 	require.NoError(t, c.ForgetUser(ctx, channelName, userID))
@@ -2090,6 +2106,10 @@ func TestInProcGatewayClient_ForgetUser_DeletesState(t *testing.T) {
 	require.Empty(t, memories)
 
 	_, err = os.Stat(traceDir)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, os.ErrNotExist))
+
+	_, err = os.Stat(saved.Path)
 	require.Error(t, err)
 	require.True(t, errors.Is(err, os.ErrNotExist))
 

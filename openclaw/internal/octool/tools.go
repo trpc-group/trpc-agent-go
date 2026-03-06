@@ -19,7 +19,11 @@ import (
 	"strings"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 )
 
 const (
@@ -32,6 +36,10 @@ const (
 	errWriteToolNotConfigured = "write_stdin tool is not configured"
 	errKillToolNotConfigured  = "kill_session tool is not configured"
 	errSessionIDRequired      = "session id is required"
+
+	envSessionUploadsDir = "OPENCLAW_SESSION_UPLOADS_DIR"
+	envLastUploadPath    = "OPENCLAW_LAST_UPLOAD_PATH"
+	envLastUploadName    = "OPENCLAW_LAST_UPLOAD_NAME"
 )
 
 type execTool struct {
@@ -48,7 +56,10 @@ func (t *execTool) Declaration() *tool.Declaration {
 		Name: toolExecCommand,
 		Description: "Execute a host shell command. Use this for " +
 			"general local shell work. Interactive commands can " +
-			"continue with write_stdin.",
+			"continue with write_stdin. When a chat upload is " +
+			"available, OPENCLAW_LAST_UPLOAD_PATH and " +
+			"OPENCLAW_SESSION_UPLOADS_DIR point to stable host " +
+			"paths for that attachment.",
 		InputSchema: &tool.Schema{
 			Type:     "object",
 			Required: []string{"command"},
@@ -139,11 +150,12 @@ func (t *execTool) Call(ctx context.Context, args []byte) (any, error) {
 	yield := firstInt(in.YieldTimeMS, in.YieldMs)
 	timeout := firstInt(in.TimeoutSec, in.TimeoutSecOld)
 	tty := firstBool(in.TTY, in.PTY)
+	env := mergeExecEnv(in.Env, uploadEnvFromContext(ctx))
 
 	return t.mgr.Exec(ctx, execParams{
 		Command:    in.Command,
 		Workdir:    workdir,
-		Env:        in.Env,
+		Env:        env,
 		Pty:        tty,
 		Background: in.Background,
 		YieldMs:    yield,
@@ -385,6 +397,93 @@ func resolveWorkdir(raw string) (string, error) {
 		s = filepath.Join(home, strings.TrimPrefix(s, "~/"))
 	}
 	return s, nil
+}
+
+func mergeExecEnv(
+	base map[string]string,
+	extra map[string]string,
+) map[string]string {
+	if len(base) == 0 && len(extra) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(base)+len(extra))
+	for key, value := range extra {
+		out[key] = value
+	}
+	for key, value := range base {
+		out[key] = value
+	}
+	return out
+}
+
+func uploadEnvFromContext(ctx context.Context) map[string]string {
+	inv, ok := agent.InvocationFromContext(ctx)
+	if !ok || inv == nil || inv.Session == nil {
+		return nil
+	}
+
+	path, name := latestUploadFromInvocation(inv)
+	if path == "" {
+		return nil
+	}
+
+	env := map[string]string{
+		envLastUploadPath:    path,
+		envSessionUploadsDir: filepath.Dir(path),
+	}
+	if name != "" {
+		env[envLastUploadName] = name
+	}
+	return env
+}
+
+func latestUploadFromInvocation(inv *agent.Invocation) (string, string) {
+	if inv == nil || inv.Session == nil {
+		return "", ""
+	}
+
+	inv.Session.EventMu.RLock()
+	defer inv.Session.EventMu.RUnlock()
+
+	for i := len(inv.Session.Events) - 1; i >= 0; i-- {
+		evt := inv.Session.Events[i]
+		if evt.Response == nil {
+			continue
+		}
+		for _, choice := range evt.Response.Choices {
+			msg := choice.Message
+			if msg.Role != model.RoleUser && msg.Role != "" {
+				continue
+			}
+			path, name := latestUploadFromMessage(msg)
+			if path != "" {
+				return path, name
+			}
+		}
+	}
+	return "", ""
+}
+
+func latestUploadFromMessage(msg model.Message) (string, string) {
+	for i := len(msg.ContentParts) - 1; i >= 0; i-- {
+		part := msg.ContentParts[i]
+		if part.Type != model.ContentTypeFile || part.File == nil {
+			continue
+		}
+		path, ok := uploads.PathFromHostRef(part.File.FileID)
+		if !ok {
+			continue
+		}
+		if _, err := os.Stat(path); err != nil {
+			continue
+		}
+		name := strings.TrimSpace(part.File.Name)
+		if name == "" {
+			name = filepath.Base(path)
+		}
+		return path, name
+	}
+	return "", ""
 }
 
 var _ tool.CallableTool = (*execTool)(nil)

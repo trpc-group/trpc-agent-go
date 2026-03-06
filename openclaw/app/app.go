@@ -50,6 +50,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/octool"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
 	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 )
 
@@ -78,6 +79,11 @@ const (
 		"exec_command. For interactive follow-up input, use " +
 		"write_stdin and kill_session when needed. Use message " +
 		"to send to the current chat or an explicit target. " +
+		"Chat uploads are saved to stable host paths. For host " +
+		"commands, prefer OPENCLAW_LAST_UPLOAD_PATH or " +
+		"OPENCLAW_SESSION_UPLOADS_DIR instead of guessing " +
+		"attachment paths. For exec_command, do not assume skill " +
+		"workspace paths like work/inputs. " +
 		"When creating a cron job from chat, omit channel and " +
 		"target to send results back to the current chat by " +
 		"default. When adding cron jobs, write the stored task " +
@@ -397,11 +403,20 @@ func NewRuntime(
 	r := runner.NewRunner(opts.AppName, ag, runnerOpts...)
 	rt.runner = r
 
+	uploadStore, err := uploads.NewStore(resolvedStateDir)
+	if err != nil {
+		return nil, &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("create upload store failed: %w", err),
+		}
+	}
+
 	gwOpts := makeGatewayOptions(
 		splitCSV(opts.AllowUsers),
 		opts.RequireMention,
 		mentionPatterns,
 	)
+	gwOpts = append(gwOpts, gateway.WithUploadStore(uploadStore))
 	if debugRec != nil {
 		gwOpts = append(gwOpts, gateway.WithDebugRecorder(debugRec))
 	}
@@ -430,6 +445,7 @@ func NewRuntime(
 		sessionSvc,
 		memSvc,
 		debugDir,
+		uploadStore,
 	)
 
 	if len(opts.Channels) > 0 {
@@ -712,11 +728,20 @@ func run(ctx context.Context, args []string) error {
 	}
 	r := runner.NewRunner(opts.AppName, ag, runnerOpts...)
 
+	uploadStore, err := uploads.NewStore(resolvedStateDir)
+	if err != nil {
+		return &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("create upload store failed: %w", err),
+		}
+	}
+
 	gwOpts := makeGatewayOptions(
 		splitCSV(opts.AllowUsers),
 		opts.RequireMention,
 		mentionPatterns,
 	)
+	gwOpts = append(gwOpts, gateway.WithUploadStore(uploadStore))
 	if debugRec != nil {
 		gwOpts = append(gwOpts, gateway.WithDebugRecorder(debugRec))
 	}
@@ -738,6 +763,7 @@ func run(ctx context.Context, args []string) error {
 		sessionSvc,
 		memSvc,
 		debugDir,
+		uploadStore,
 	)
 
 	runCtx, cancelRun := context.WithCancel(ctx)

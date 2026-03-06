@@ -35,6 +35,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
@@ -131,6 +132,7 @@ type Server struct {
 	handler http.Handler
 
 	recorder *debugrecorder.Recorder
+	uploads  *uploads.Store
 }
 
 // New creates a gateway server with the provided runner.
@@ -200,6 +202,7 @@ func New(r runner.Runner, opts ...Option) (*Server, error) {
 		mentionPatterns: options.mentionPatterns,
 		lanes:           newLaneLocker(),
 		recorder:        options.recorder,
+		uploads:         options.uploads,
 	}
 
 	mux := http.NewServeMux()

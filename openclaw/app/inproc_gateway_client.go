@@ -28,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -53,6 +54,7 @@ type inProcGatewayClient struct {
 	cronSvc  *cron.Service
 
 	debugDir string
+	uploads  *uploads.Store
 }
 
 func newInProcGatewayClient(
@@ -61,13 +63,19 @@ func newInProcGatewayClient(
 	sessions session.Service,
 	memories memory.Service,
 	debugDir string,
+	uploadStores ...*uploads.Store,
 ) *inProcGatewayClient {
+	var uploadStore *uploads.Store
+	if len(uploadStores) > 0 {
+		uploadStore = uploadStores[0]
+	}
 	return &inProcGatewayClient{
 		srv:      srv,
 		appName:  strings.TrimSpace(appName),
 		sessions: sessions,
 		memories: memories,
 		debugDir: strings.TrimSpace(debugDir),
+		uploads:  uploadStore,
 	}
 }
 
@@ -178,6 +186,12 @@ func (c *inProcGatewayClient) ForgetUser(
 		userKey := memory.UserKey{AppName: appName, UserID: userID}
 		if err := c.memories.ClearMemories(ctx, userKey); err != nil {
 			return fmt.Errorf("forget: clear memories: %w", err)
+		}
+	}
+
+	if c.uploads != nil {
+		if err := c.uploads.DeleteUser(ctx, channel, userID); err != nil {
+			return fmt.Errorf("forget: delete uploads: %w", err)
 		}
 	}
 

@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"mime"
 	"net"
 	"net/http"
@@ -26,6 +27,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 )
 
 const (
@@ -347,7 +349,11 @@ func readLimited(r io.Reader, maxBytes int64) ([]byte, error) {
 	if maxBytes <= 0 {
 		return nil, errors.New("invalid max bytes")
 	}
-	limited := io.LimitReader(r, maxBytes+1)
+	limit := maxBytes
+	if maxBytes < math.MaxInt64 {
+		limit = maxBytes + 1
+	}
+	limited := io.LimitReader(r, limit)
 	body, err := io.ReadAll(limited)
 	if err != nil {
 		return nil, fmt.Errorf("read body: %w", err)
@@ -381,9 +387,11 @@ func (s *Server) normalizeUserMessage(
 	req gwproto.MessageRequest,
 ) (model.Message, string, error) {
 	text := strings.TrimSpace(req.Text)
+	scope := uploadScopeFromRequest(req)
 	parts, partsText, err := s.normalizeContentParts(
 		ctx,
 		req.ContentParts,
+		scope,
 	)
 	if err != nil {
 		return model.Message{}, "", err
@@ -415,15 +423,21 @@ func joinText(a, b string) string {
 func (s *Server) normalizeContentParts(
 	ctx context.Context,
 	parts []gwproto.ContentPart,
+	scopes ...uploads.Scope,
 ) ([]model.ContentPart, string, error) {
 	if len(parts) == 0 {
 		return nil, "", nil
 	}
+	scope := firstUploadScope(scopes...)
 	out := make([]model.ContentPart, 0, len(parts))
 	textParts := make([]string, 0, len(parts))
 
 	for i, part := range parts {
-		normalized, text, err := s.normalizeContentPart(ctx, part)
+		normalized, text, err := s.normalizeContentPart(
+			ctx,
+			part,
+			scope,
+		)
 		if err != nil {
 			return nil, "", fmt.Errorf("content_parts[%d]: %w", i, err)
 		}
@@ -441,11 +455,13 @@ func (s *Server) normalizeContentParts(
 func (s *Server) normalizeContentPart(
 	ctx context.Context,
 	part gwproto.ContentPart,
+	scopes ...uploads.Scope,
 ) (*model.ContentPart, string, error) {
 	maxBytes := s.maxPartBytes
 	if maxBytes <= 0 {
 		maxBytes = defaultMaxContentPartBytes
 	}
+	scope := firstUploadScope(scopes...)
 
 	switch part.Type {
 	case gwproto.PartTypeText:
@@ -470,7 +486,7 @@ func (s *Server) normalizeContentPart(
 			int64(len(part.File.Data)) > maxBytes {
 			return nil, "", errors.New(errContentPartTooLarge)
 		}
-		return s.normalizeFilePart(ctx, part)
+		return s.normalizeFilePart(ctx, part, scope)
 	case gwproto.PartTypeLink:
 		return normalizeLinkPart(part)
 	case gwproto.PartTypeLocation:
@@ -620,6 +636,7 @@ func isSupportedAudioFormat(format string) bool {
 func (s *Server) normalizeFilePart(
 	ctx context.Context,
 	part gwproto.ContentPart,
+	scope uploads.Scope,
 ) (*model.ContentPart, string, error) {
 	if part.File == nil {
 		return nil, "", errors.New("missing file")
@@ -629,12 +646,12 @@ func (s *Server) normalizeFilePart(
 		return normalizeFileID(part.File), "", nil
 	}
 	if strings.TrimSpace(part.File.URL) != "" {
-		return s.normalizeFileURL(ctx, part.File)
+		return s.normalizeFileURL(ctx, part.File, scope)
 	}
 	if len(part.File.Data) == 0 {
 		return nil, "", errors.New("missing file url, data, or file_id")
 	}
-	return normalizeFileData(part.File)
+	return s.normalizeFileData(ctx, part.File, scope)
 }
 
 func normalizeFileID(file *gwproto.FilePart) *model.ContentPart {
@@ -652,6 +669,7 @@ func normalizeFileID(file *gwproto.FilePart) *model.ContentPart {
 func (s *Server) normalizeFileURL(
 	ctx context.Context,
 	file *gwproto.FilePart,
+	scope uploads.Scope,
 ) (*model.ContentPart, string, error) {
 	f, err := s.fetchContentPart(ctx, file.URL)
 	if err != nil {
@@ -674,18 +692,13 @@ func (s *Server) normalizeFileURL(
 	if mimeType == "" {
 		mimeType = mimeOctetStream
 	}
-	return &model.ContentPart{
-		Type: model.ContentTypeFile,
-		File: &model.File{
-			Name:     name,
-			Data:     f.Data,
-			MimeType: mimeType,
-		},
-	}, "", nil
+	return s.persistNormalizedFile(ctx, scope, name, mimeType, f.Data)
 }
 
-func normalizeFileData(
+func (s *Server) normalizeFileData(
+	ctx context.Context,
 	file *gwproto.FilePart,
+	scope uploads.Scope,
 ) (*model.ContentPart, string, error) {
 	name := strings.TrimSpace(file.Filename)
 	if name == "" {
@@ -698,14 +711,70 @@ func normalizeFileData(
 	if mimeType == "" {
 		mimeType = mimeOctetStream
 	}
+	return s.persistNormalizedFile(ctx, scope, name, mimeType, file.Data)
+}
+
+func (s *Server) persistNormalizedFile(
+	ctx context.Context,
+	scope uploads.Scope,
+	name string,
+	mimeType string,
+	data []byte,
+) (*model.ContentPart, string, error) {
+	if s == nil || s.uploads == nil {
+		return &model.ContentPart{
+			Type: model.ContentTypeFile,
+			File: &model.File{
+				Name:     name,
+				Data:     data,
+				MimeType: mimeType,
+			},
+		}, "", nil
+	}
+
+	saved, err := s.uploads.Save(ctx, scope, name, data)
+	if err != nil {
+		return nil, "", err
+	}
 	return &model.ContentPart{
 		Type: model.ContentTypeFile,
 		File: &model.File{
-			Name:     name,
-			Data:     file.Data,
+			Name:     saved.Name,
+			FileID:   saved.HostRef,
 			MimeType: mimeType,
 		},
 	}, "", nil
+}
+
+func uploadScopeFromRequest(req gwproto.MessageRequest) uploads.Scope {
+	channel := strings.TrimSpace(req.Channel)
+	if channel == "" {
+		channel = defaultChannelName
+	}
+	userID := strings.TrimSpace(req.UserID)
+	if userID == "" {
+		userID = strings.TrimSpace(req.From)
+	}
+	sessionID := strings.TrimSpace(req.SessionID)
+	if sessionID == "" {
+		if resolved, err := DefaultSessionID(
+			inboundFromRequest(req, req.Text),
+		); err == nil {
+			sessionID = resolved
+		}
+	}
+	return uploads.Scope{
+		Channel:   channel,
+		UserID:    userID,
+		SessionID: sessionID,
+	}
+}
+
+func firstUploadScope(scopes ...uploads.Scope) uploads.Scope {
+	if len(scopes) == 0 {
+		return uploads.Scope{}
+	}
+	return scopes[0]
 }
 
 func inferMimeTypeFromName(name string) string {

@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 )
 
 // SessionIDFunc builds a session ID for the inbound message.
@@ -40,6 +41,7 @@ type options struct {
 	mentionPatterns []string
 
 	recorder *debugrecorder.Recorder
+	uploads  *uploads.Store
 }
 
 // Option is a function that configures a gateway server.
@@ -236,5 +238,12 @@ func WithMentionPatterns(patterns ...string) Option {
 func WithDebugRecorder(rec *debugrecorder.Recorder) Option {
 	return func(o *options) {
 		o.recorder = rec
+	}
+}
+
+// WithUploadStore persists inbound file parts to stable host paths.
+func WithUploadStore(store *uploads.Store) Option {
+	return func(o *options) {
+		o.uploads = store
 	}
 }

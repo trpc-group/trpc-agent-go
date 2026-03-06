@@ -337,9 +337,12 @@ If you send non-text inputs (`image`, `audio`, `file`, `video`), make sure
 the configured model supports those input types.
 
 Note: OpenAI Chat Completions does not support raw file inputs in the same
-way as images/audio. This demo omits file/video parts from model requests and
-expects you to handle files via skills/tools (for example `skill_run`, where
-user uploads are staged into `$WORK_DIR/inputs`).
+way as images/audio. OpenClaw persists inbound `file` and `video` parts to
+stable host paths under the state directory, keeps those refs in session
+history, and exposes them back to tools. In practice this means later turns
+can still operate on the same upload with `exec_command`
+(`$OPENCLAW_LAST_UPLOAD_PATH`, `$OPENCLAW_SESSION_UPLOADS_DIR`) or
+`skill_run` (`host://...` inputs staged into `$WORK_DIR/inputs`).
 
 ## Run with a real model (OpenAI)
 

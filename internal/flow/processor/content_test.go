@@ -4274,6 +4274,51 @@ func TestContentRequestProcessor_AnnotatesUserFileInputs_ArtifactRef(t *testing.
 	assert.Equal(t, 2, fileParts)
 }
 
+func TestContentRequestProcessor_AnnotatesUserFileInputs_HostRef(t *testing.T) {
+	p := NewContentRequestProcessor()
+
+	const invocationID = "inv"
+
+	userMsg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name:   "report.pdf",
+					FileID: "host:///tmp/openclaw/report.pdf",
+				},
+			},
+		},
+	}
+	ev := event.NewResponseEvent(invocationID, "user", &model.Response{
+		Choices: []model.Choice{{Message: userMsg}},
+	})
+	inv := &agent.Invocation{
+		InvocationID: invocationID,
+		AgentName:    "agent",
+		Session: &session.Session{
+			Events: []event.Event{*ev},
+		},
+	}
+	req := &model.Request{}
+	ch := make(chan *event.Event, 1)
+	p.ProcessRequest(context.Background(), inv, req, ch)
+
+	if !assert.Len(t, req.Messages, 1) {
+		return
+	}
+	first := req.Messages[0].ContentParts[0]
+	if assert.NotNil(t, first.Text) {
+		assert.Contains(t, *first.Text, "report.pdf")
+		assert.Contains(
+			t,
+			*first.Text,
+			"/tmp/openclaw/report.pdf",
+		)
+	}
+}
+
 func TestFileNameFromArtifactRef_EdgeCases(t *testing.T) {
 	t.Run("non-artifact ref returns empty", func(t *testing.T) {
 		assert.Equal(t, "", fileNameFromArtifactRef("file-123"))
@@ -4294,5 +4339,23 @@ func TestFileNameFromArtifactRef_EdgeCases(t *testing.T) {
 	t.Run("invalid base returns empty", func(t *testing.T) {
 		ref := fileref.ArtifactPrefix + "..@0"
 		assert.Equal(t, "", fileNameFromArtifactRef(ref))
+	})
+}
+
+func TestAnnotationRefDisplay_EdgeCases(t *testing.T) {
+	t.Run("absolute path is preserved", func(t *testing.T) {
+		assert.Equal(t, "/tmp/a.pdf", annotationRefDisplay("/tmp/a.pdf"))
+	})
+
+	t.Run("host ref trims prefix", func(t *testing.T) {
+		assert.Equal(
+			t,
+			"/tmp/a.pdf",
+			annotationRefDisplay("host:///tmp/a.pdf"),
+		)
+	})
+
+	t.Run("provider file id stays hidden", func(t *testing.T) {
+		assert.Equal(t, "", annotationRefDisplay("file-123"))
 	})
 }

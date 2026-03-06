@@ -24,6 +24,10 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	sessionpkg "trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -571,6 +575,59 @@ func TestManager_ExecErrors(t *testing.T) {
 
 	_, err = mgr.Exec(context.Background(), execParams{})
 	require.Error(t, err)
+}
+
+func TestUploadEnvFromContext(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "report.pdf")
+	require.NoError(t, os.WriteFile(
+		filePath,
+		[]byte("pdf"),
+		0o600,
+	))
+
+	userMsg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name:   "report.pdf",
+					FileID: "host://" + filePath,
+				},
+			},
+		},
+	}
+	ev := event.NewResponseEvent("inv", "user", &model.Response{
+		Choices: []model.Choice{{Message: userMsg}},
+	})
+	inv := agent.NewInvocation(agent.WithInvocationSession(
+		&sessionpkg.Session{
+			Events: []event.Event{*ev},
+		},
+	))
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	env := uploadEnvFromContext(ctx)
+	require.Equal(t, filePath, env[envLastUploadPath])
+	require.Equal(t, dir, env[envSessionUploadsDir])
+	require.Equal(t, "report.pdf", env[envLastUploadName])
+}
+
+func TestMergeExecEnv_PreservesExplicitEnv(t *testing.T) {
+	t.Parallel()
+
+	merged := mergeExecEnv(
+		map[string]string{envLastUploadPath: "explicit"},
+		map[string]string{
+			envLastUploadPath: "derived",
+			envLastUploadName: "report.pdf",
+		},
+	)
+	require.Equal(t, "explicit", merged[envLastUploadPath])
+	require.Equal(t, "report.pdf", merged[envLastUploadName])
 }
 
 func pollUntilExited(t *testing.T, mgr *Manager, id string) string {
