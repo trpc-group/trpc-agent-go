@@ -330,7 +330,7 @@ func TestRefreshSessionTTL(t *testing.T) {
 	}
 
 	mock.ExpectExec("UPDATE session_states").
-		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), key.AppName, key.UserID, key.SessionID).
+		WithArgs(sqlmock.AnyArg(), key.AppName, key.UserID, key.SessionID).
 		WillReturnError(fmt.Errorf("database error"))
 
 	err = s.refreshSessionTTL(context.Background(), key)

@@ -37,8 +37,9 @@ func TestService_RefreshSessionTTL(t *testing.T) {
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
 
 	// Mock Query
+	now := time.Now()
 	mockCli.queryFunc = func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
-		return newMockRows([][]any{{"{}", time.Now()}}), nil
+		return newMockRows([][]any{{"{}", now, now}}), nil
 	}
 
 	// Mock Exec
@@ -79,8 +80,9 @@ func TestService_RefreshSessionTTL_Error(t *testing.T) {
 	assert.Contains(t, err.Error(), "session not found")
 
 	// Case 3: Exec Error
+	now := time.Now()
 	mockCli.queryFunc = func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
-		return newMockRows([][]any{{"{}", time.Now()}}), nil
+		return newMockRows([][]any{{"{}", now, now}}), nil
 	}
 	mockCli.execFunc = func(ctx context.Context, query string, args ...any) error {
 		return assert.AnError

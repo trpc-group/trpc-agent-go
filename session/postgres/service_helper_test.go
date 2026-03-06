@@ -32,7 +32,7 @@ func TestRefreshSessionTTL_Success(t *testing.T) {
 
 	// Mock the UPDATE query for refreshing TTL.
 	mock.ExpectExec("UPDATE session_states").
-		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "test-app", "test-user", "test-session").
+		WithArgs(sqlmock.AnyArg(), "test-app", "test-user", "test-session").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	err := s.refreshSessionTTL(context.Background(), key)
@@ -52,7 +52,7 @@ func TestRefreshSessionTTL_Error(t *testing.T) {
 
 	// Mock UPDATE error.
 	mock.ExpectExec("UPDATE session_states").
-		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "test-app", "test-user", "test-session").
+		WithArgs(sqlmock.AnyArg(), "test-app", "test-user", "test-session").
 		WillReturnError(assert.AnError)
 
 	err := s.refreshSessionTTL(context.Background(), key)

@@ -913,7 +913,6 @@ func TestRefreshSessionTTL_Success(t *testing.T) {
 	// Mock: Update session TTL
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states")).
 		WithArgs(
-			sqlmock.AnyArg(), // updated_at
 			sqlmock.AnyArg(), // expires_at
 			key.AppName,
 			key.UserID,

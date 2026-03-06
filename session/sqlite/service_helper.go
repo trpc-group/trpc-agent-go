@@ -528,19 +528,17 @@ func (s *Service) refreshSessionTTL(
 	ctx context.Context,
 	key session.Key,
 ) error {
-	now := time.Now().UTC()
-	expires := now.Add(s.opts.sessionTTL).UTC().UnixNano()
+	expires := time.Now().UTC().Add(s.opts.sessionTTL).UTC().UnixNano()
 
 	_, err := s.db.ExecContext(
 		ctx,
 		fmt.Sprintf(
 			`UPDATE %s
-SET updated_at = ?, expires_at = ?
+SET expires_at = ?
 WHERE app_name = ? AND user_id = ? AND session_id = ?
 AND deleted_at IS NULL`,
 			s.tableSessionStates,
 		),
-		now.UTC().UnixNano(),
 		expires,
 		key.AppName,
 		key.UserID,

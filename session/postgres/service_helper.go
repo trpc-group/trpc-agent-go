@@ -425,18 +425,17 @@ func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent
 	return nil
 }
 
-// refreshSessionTTL updates the session's updated_at and expires_at timestamps.
+// refreshSessionTTL updates the session's expires_at timestamp.
 // This effectively "renews" the session, extending its lifetime by the configured TTL.
 func (s *Service) refreshSessionTTL(ctx context.Context, key session.Key) error {
-	now := time.Now()
-	expiresAt := now.Add(s.opts.sessionTTL)
+	expiresAt := time.Now().Add(s.opts.sessionTTL)
 
 	_, err := s.pgClient.ExecContext(ctx,
 		fmt.Sprintf(`UPDATE %s
-		SET updated_at = $1, expires_at = $2
-		WHERE app_name = $3 AND user_id = $4 AND session_id = $5
+		SET expires_at = $1
+		WHERE app_name = $2 AND user_id = $3 AND session_id = $4
 		AND deleted_at IS NULL`, s.tableSessionStates),
-		now, expiresAt, key.AppName, key.UserID, key.SessionID)
+		expiresAt, key.AppName, key.UserID, key.SessionID)
 
 	if err != nil {
 		return fmt.Errorf("refresh session TTL failed: %w", err)

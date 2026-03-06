@@ -750,7 +750,7 @@ func TestService_RefreshSessionTTL_MoreErrors(t *testing.T) {
 
 	// Case 1: Scan error
 	// Force scan error using scanFunc
-	rows := newMockRows([][]any{{"state_json"}})
+	rows := newMockRows([][]any{{"state_json", time.Now(), time.Now()}})
 	rows.scanFunc = func(dest ...any) error {
 		return assert.AnError
 	}
@@ -763,9 +763,10 @@ func TestService_RefreshSessionTTL_MoreErrors(t *testing.T) {
 
 	// Case 2: Insert error
 	// Reset queryFunc to return valid rows
+	now := time.Now()
 	mockCli.queryFunc = func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
 		return newMockRows([][]any{
-			{"{}", time.Now()},
+			{"{}", now, now},
 		}), nil
 	}
 	// Set execFunc to return error
