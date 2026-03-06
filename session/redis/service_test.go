@@ -2140,7 +2140,7 @@ func TestService_WithTTL(t *testing.T) {
 	err = service.AppendEvent(ctx, sess, evt)
 	require.NoError(t, err)
 
-	// Get session - this should trigger TTL refresh
+	// Get session - pure read, no TTL refresh
 	retrievedSess, err := service.GetSession(ctx, key)
 	require.NoError(t, err)
 	assert.NotNil(t, retrievedSess)

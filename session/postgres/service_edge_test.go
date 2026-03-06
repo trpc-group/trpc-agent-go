@@ -502,7 +502,7 @@ func TestGetSession(t *testing.T) {
 		assert.Error(t, err)
 	})
 
-	t.Run("WithRefresh", func(t *testing.T) {
+	t.Run("WithTTLNoRefresh", func(t *testing.T) {
 		db, mock, err := sqlmock.New()
 		require.NoError(t, err)
 		defer db.Close()
@@ -539,13 +539,11 @@ func TestGetSession(t *testing.T) {
 			WithArgs(key.AppName, key.UserID, sqlmock.AnyArg()).
 			WillReturnRows(sqlmock.NewRows([]string{"session_id", "event"}))
 
-		mock.ExpectExec("UPDATE session_states").
-			WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), key.AppName, key.UserID, key.SessionID).
-			WillReturnResult(sqlmock.NewResult(0, 1))
-
+		// GetSession is a pure read operation - no UPDATE expected.
 		sess, err := s.GetSession(context.Background(), key)
 		assert.NoError(t, err)
 		assert.NotNil(t, sess)
+		require.NoError(t, mock.ExpectationsWereMet())
 	})
 }
 
