@@ -40,10 +40,12 @@ const (
 	defaultFilePerm     = 0o600
 
 	defaultAttachmentsDir = "attachments"
+	defaultBySessionDir   = "by-session"
 
 	eventsFileName = "events.jsonl"
 	metaFileName   = "meta.json"
 	resultFileName = "result.json"
+	traceRefName   = "trace.json"
 
 	KindTraceStart  = "trace.start"
 	KindTraceEnd    = "trace.end"
@@ -162,6 +164,9 @@ func (r *Recorder) Start(start TraceStart) (*Trace, error) {
 	if err := os.MkdirAll(root, defaultTraceDirPerm); err != nil {
 		return nil, fmt.Errorf("debug recorder: mkdir trace: %w", err)
 	}
+	if err := r.writeSessionIndex(root, now, start); err != nil {
+		return nil, err
+	}
 
 	meta := struct {
 		StartedAt time.Time  `json:"started_at"`
@@ -232,6 +237,98 @@ func (r *Recorder) newTraceDir(
 		return "", err
 	}
 	return filepath.Join(r.dir, dateDir, base+"_"+suffix), nil
+}
+
+type traceRef struct {
+	TraceDir  string    `json:"trace_dir"`
+	StartedAt time.Time `json:"started_at"`
+	Channel   string    `json:"channel,omitempty"`
+	SessionID string    `json:"session_id,omitempty"`
+	RequestID string    `json:"request_id,omitempty"`
+	MessageID string    `json:"message_id,omitempty"`
+}
+
+func (r *Recorder) writeSessionIndex(
+	root string,
+	now time.Time,
+	start TraceStart,
+) error {
+	indexRoot, err := r.newSessionIndexDir(now, start)
+	if err != nil {
+		return err
+	}
+	if indexRoot == "" {
+		return nil
+	}
+	if err := os.MkdirAll(indexRoot, defaultTraceDirPerm); err != nil {
+		return fmt.Errorf("debug recorder: mkdir session index: %w", err)
+	}
+	rel, err := filepath.Rel(indexRoot, root)
+	if err != nil {
+		return fmt.Errorf("debug recorder: session index rel: %w", err)
+	}
+	ref := traceRef{
+		TraceDir:  rel,
+		StartedAt: now,
+		Channel:   strings.TrimSpace(start.Channel),
+		SessionID: strings.TrimSpace(start.SessionID),
+		RequestID: strings.TrimSpace(start.RequestID),
+		MessageID: strings.TrimSpace(start.MessageID),
+	}
+	return writeJSONFile(filepath.Join(indexRoot, traceRefName), ref)
+}
+
+func (r *Recorder) newSessionIndexDir(
+	now time.Time,
+	start TraceStart,
+) (string, error) {
+	session := sessionIndexComponent(start)
+	if session == "" {
+		return "", nil
+	}
+	dateDir := now.Format(defaultDateDirLayout)
+	base := sessionIndexBase(now, start)
+	dir := filepath.Join(r.dir, defaultBySessionDir, session, dateDir, base)
+	if _, err := os.Stat(dir); err != nil && os.IsNotExist(err) {
+		return dir, nil
+	}
+	suffix, err := randomHex(traceSuffixBytes)
+	if err != nil {
+		return "", err
+	}
+	return dir + "_" + suffix, nil
+}
+
+func sessionIndexComponent(start TraceStart) string {
+	if session := safeComponent(start.SessionID); session != "" {
+		return session
+	}
+	if user := safeComponent(start.UserID); user != "" {
+		return "user_" + user
+	}
+	if req := safeComponent(start.RequestID); req != "" {
+		return "request_" + req
+	}
+	return ""
+}
+
+func sessionIndexBase(now time.Time, start TraceStart) string {
+	var parts []string
+	parts = append(parts, now.Format(defaultTimeLayout))
+	if msg := safeComponent(start.MessageID); msg != "" {
+		parts = append(parts, msg)
+	} else if req := safeComponent(start.RequestID); req != "" {
+		parts = append(parts, req)
+	}
+	base := strings.Join(parts, "_")
+	base = strings.Trim(base, "._-")
+	if len(base) > maxTraceBaseLen {
+		base = base[:maxTraceBaseLen]
+	}
+	if base == "" {
+		return now.Format(defaultTimeLayout)
+	}
+	return base
 }
 
 func (t *Trace) Dir() string {

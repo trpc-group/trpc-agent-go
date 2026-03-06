@@ -315,9 +315,14 @@ func NewRuntime(
 			SkillsAllowBundled: splitCSV(
 				opts.SkillsAllowBundled,
 			),
-			SkillConfigs:    opts.SkillConfigs,
-			SkillConfigKeys: resolveSkillConfigKeys(opts),
-			StateDir:        resolvedStateDir,
+			SkillConfigs:       opts.SkillConfigs,
+			SkillConfigKeys:    resolveSkillConfigKeys(opts),
+			SkillsLoadMode:     opts.SkillsLoadMode,
+			SkillsMaxLoaded:    opts.SkillsMaxLoaded,
+			SkillsToolResults:  opts.SkillsToolResults,
+			SkillsSkipFallback: opts.SkillsSkipFallback,
+			SkillsToolingGuide: opts.SkillsToolingGuide,
+			StateDir:           resolvedStateDir,
 
 			EnableLocalExec:     opts.EnableLocalExec,
 			EnableOpenClawTools: opts.EnableOpenClawTools,
@@ -569,9 +574,14 @@ func run(ctx context.Context, args []string) error {
 			SkillsAllowBundled: splitCSV(
 				opts.SkillsAllowBundled,
 			),
-			SkillConfigs:    opts.SkillConfigs,
-			SkillConfigKeys: resolveSkillConfigKeys(opts),
-			StateDir:        resolvedStateDir,
+			SkillConfigs:       opts.SkillConfigs,
+			SkillConfigKeys:    resolveSkillConfigKeys(opts),
+			SkillsLoadMode:     opts.SkillsLoadMode,
+			SkillsMaxLoaded:    opts.SkillsMaxLoaded,
+			SkillsToolResults:  opts.SkillsToolResults,
+			SkillsSkipFallback: opts.SkillsSkipFallback,
+			SkillsToolingGuide: opts.SkillsToolingGuide,
+			StateDir:           resolvedStateDir,
 
 			EnableLocalExec:     opts.EnableLocalExec,
 			EnableOpenClawTools: opts.EnableOpenClawTools,
@@ -1035,6 +1045,30 @@ func newAgent(
 	}
 
 	opts = append(opts, llmagent.WithSkills(repo))
+	opts = append(
+		opts,
+		llmagent.WithSkillLoadMode(cfg.SkillsLoadMode),
+		llmagent.WithSkillsLoadedContentInToolResults(
+			cfg.SkillsToolResults,
+		),
+		llmagent.WithSkipSkillsFallbackOnSessionSummary(
+			cfg.SkillsSkipFallback,
+		),
+	)
+	if cfg.SkillsMaxLoaded > 0 {
+		opts = append(
+			opts,
+			llmagent.WithMaxLoadedSkills(cfg.SkillsMaxLoaded),
+		)
+	}
+	if cfg.SkillsToolingGuide != nil {
+		opts = append(
+			opts,
+			llmagent.WithSkillsToolingGuidance(
+				*cfg.SkillsToolingGuide,
+			),
+		)
+	}
 
 	tools := append([]tool.Tool(nil), extraTools...)
 	tools = append(tools, ocskills.NewListTool(repo))
@@ -1246,6 +1280,11 @@ type agentConfig struct {
 	SkillsAllowBundled []string
 	SkillConfigs       map[string]ocskills.SkillConfig
 	SkillConfigKeys    []string
+	SkillsLoadMode     string
+	SkillsMaxLoaded    int
+	SkillsToolResults  bool
+	SkillsSkipFallback bool
+	SkillsToolingGuide *string
 
 	StateDir string
 

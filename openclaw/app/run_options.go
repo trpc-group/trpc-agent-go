@@ -50,6 +50,7 @@ const (
 
 	defaultSessionSummaryEventThreshold = 20
 	defaultMemoryAutoMessageThreshold   = 20
+	defaultSkillsLoadMode               = "turn"
 
 	flagAddSessionSummary = "add-session-summary"
 	flagMaxHistoryRuns    = "max-history-runs"
@@ -75,6 +76,10 @@ const (
 	flagEnableParallelTools = "enable-parallel-tools"
 
 	flagSkillsAllowBundled = "skills-allow-bundled"
+	flagSkillsLoadMode     = "skills-load-mode"
+	flagSkillsMaxLoaded    = "skills-max-loaded"
+	flagSkillsToolResults  = "skills-loaded-content-in-tool-results"
+	flagSkillsSkipFallback = "skills-skip-fallback-on-session-summary"
 
 	flagDebugRecorder     = "debug-recorder"
 	flagDebugRecorderDir  = "debug-recorder-dir"
@@ -126,6 +131,11 @@ type runOptions struct {
 	SkillsDebug        bool
 	SkillsAllowBundled string
 	SkillConfigs       map[string]ocskills.SkillConfig
+	SkillsLoadMode     string
+	SkillsMaxLoaded    int
+	SkillsToolResults  bool
+	SkillsSkipFallback bool
+	SkillsToolingGuide *string
 	StateDir           string
 
 	DebugRecorderEnabled bool
@@ -186,6 +196,10 @@ func parseRunOptions(args []string) (runOptions, error) {
 		ModelMode:     modeOpenAI,
 		OpenAIModel:   defaultOpenAIModelName(),
 		OpenAIVariant: defaultOpenAIVariant,
+
+		SkillsLoadMode:     defaultSkillsLoadMode,
+		SkillsToolResults:  true,
+		SkillsSkipFallback: true,
 
 		SessionBackend: sessionBackendInMemory,
 		MemoryBackend:  memoryBackendInMemory,
@@ -424,6 +438,31 @@ func parseRunOptions(args []string) (runOptions, error) {
 		"Comma-separated allowlist of bundled skills",
 	)
 	fs.StringVar(
+		&opts.SkillsLoadMode,
+		flagSkillsLoadMode,
+		defaultSkillsLoadMode,
+		"Skill context lifetime: once|turn|session",
+	)
+	fs.IntVar(
+		&opts.SkillsMaxLoaded,
+		flagSkillsMaxLoaded,
+		0,
+		"Keep at most N loaded skills (0 disables the cap)",
+	)
+	fs.BoolVar(
+		&opts.SkillsToolResults,
+		flagSkillsToolResults,
+		true,
+		"Materialize loaded skill content into tool results",
+	)
+	fs.BoolVar(
+		&opts.SkillsSkipFallback,
+		flagSkillsSkipFallback,
+		true,
+		"Skip skill fallback system message when session "+
+			"summary exists",
+	)
+	fs.StringVar(
 		&opts.StateDir,
 		"state-dir",
 		"",
@@ -603,6 +642,9 @@ func parseRunOptions(args []string) (runOptions, error) {
 
 	cfgPath := resolveConfigPath(opts.ConfigPath)
 	if cfgPath == "" {
+		if err := finalizeRunOptions(&opts); err != nil {
+			return runOptions{}, &exitError{Code: 2, Err: err}
+		}
 		return opts, nil
 	}
 
@@ -614,12 +656,22 @@ func parseRunOptions(args []string) (runOptions, error) {
 		}
 	}
 	if cfg == nil {
+		if err := finalizeRunOptions(&opts); err != nil {
+			return runOptions{}, &exitError{Code: 2, Err: err}
+		}
 		return opts, nil
 	}
 	if err := cfg.apply(&opts, setFlags); err != nil {
 		return runOptions{}, &exitError{
 			Code: 1,
 			Err:  fmt.Errorf("apply config failed: %w", err),
+		}
+	}
+
+	if err := finalizeRunOptions(&opts); err != nil {
+		return runOptions{}, &exitError{
+			Code: loadModeExitCode(setFlags),
+			Err:  err,
 		}
 	}
 
@@ -766,6 +818,17 @@ type skillsConfig struct {
 
 	AllowBundled      []string `yaml:"allow_bundled,omitempty"`
 	AllowBundledCamel []string `yaml:"allowBundled,omitempty"`
+	LoadMode          *string  `yaml:"load_mode,omitempty"`
+	LoadModeCamel     *string  `yaml:"loadMode,omitempty"`
+	MaxLoadedSkills   *int     `yaml:"max_loaded_skills,omitempty"`
+	MaxLoadedCamel    *int     `yaml:"maxLoadedSkills,omitempty"`
+
+	ToolResults          *bool   `yaml:"loaded_content_in_tool_results,omitempty"`
+	ToolResultsCamel     *bool   `yaml:"loadedContentInToolResults,omitempty"`
+	SkipSummaryFallback  *bool   `yaml:"skip_fallback_on_session_summary,omitempty"`
+	SkipFallbackCamel    *bool   `yaml:"skipFallbackOnSessionSummary,omitempty"`
+	ToolingGuidance      *string `yaml:"tooling_guidance,omitempty"`
+	ToolingGuidanceCamel *string `yaml:"toolingGuidance,omitempty"`
 
 	Entries map[string]skillEntryConfig `yaml:"entries,omitempty"`
 }
@@ -1142,6 +1205,39 @@ func (cfg *fileConfig) apply(
 				cfg.Skills.Entries,
 			)
 		}
+		loadMode := firstStringPtr(
+			cfg.Skills.LoadMode,
+			cfg.Skills.LoadModeCamel,
+		)
+		if loadMode != nil && !flagWasSet(set, flagSkillsLoadMode) {
+			opts.SkillsLoadMode = strings.TrimSpace(*loadMode)
+		}
+		maxLoaded := firstIntPtr(
+			cfg.Skills.MaxLoadedSkills,
+			cfg.Skills.MaxLoadedCamel,
+		)
+		if maxLoaded != nil && !flagWasSet(set, flagSkillsMaxLoaded) {
+			opts.SkillsMaxLoaded = *maxLoaded
+		}
+		toolResults := firstBoolPtr(
+			cfg.Skills.ToolResults,
+			cfg.Skills.ToolResultsCamel,
+		)
+		if toolResults != nil && !flagWasSet(set, flagSkillsToolResults) {
+			opts.SkillsToolResults = *toolResults
+		}
+		skipFallback := firstBoolPtr(
+			cfg.Skills.SkipSummaryFallback,
+			cfg.Skills.SkipFallbackCamel,
+		)
+		if skipFallback != nil &&
+			!flagWasSet(set, flagSkillsSkipFallback) {
+			opts.SkillsSkipFallback = *skipFallback
+		}
+		opts.SkillsToolingGuide = firstStringPtr(
+			cfg.Skills.ToolingGuidance,
+			cfg.Skills.ToolingGuidanceCamel,
+		)
 	}
 
 	if cfg.Tools != nil {
@@ -1453,4 +1549,60 @@ func parseDuration(raw string) (time.Duration, error) {
 func flagWasSet(set map[string]struct{}, name string) bool {
 	_, ok := set[name]
 	return ok
+}
+
+func loadModeExitCode(set map[string]struct{}) int {
+	if flagWasSet(set, flagSkillsLoadMode) {
+		return 2
+	}
+	return 1
+}
+
+func finalizeRunOptions(opts *runOptions) error {
+	if opts == nil {
+		return nil
+	}
+	mode, err := normalizeSkillsLoadMode(opts.SkillsLoadMode)
+	if err != nil {
+		return err
+	}
+	opts.SkillsLoadMode = mode
+	return nil
+}
+
+func normalizeSkillsLoadMode(raw string) (string, error) {
+	mode := strings.ToLower(strings.TrimSpace(raw))
+	if mode == "" {
+		return defaultSkillsLoadMode, nil
+	}
+	switch mode {
+	case "once", "turn", "session":
+		return mode, nil
+	default:
+		return "", fmt.Errorf(
+			"invalid skills load mode %q: want once|turn|session",
+			raw,
+		)
+	}
+}
+
+func firstBoolPtr(primary, fallback *bool) *bool {
+	if primary != nil {
+		return primary
+	}
+	return fallback
+}
+
+func firstIntPtr(primary, fallback *int) *int {
+	if primary != nil {
+		return primary
+	}
+	return fallback
+}
+
+func firstStringPtr(primary, fallback *string) *string {
+	if primary != nil {
+		return primary
+	}
+	return fallback
 }

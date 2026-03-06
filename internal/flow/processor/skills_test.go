@@ -91,7 +91,8 @@ func TestSkillsRequestProcessor_ProcessRequest_OverviewAndDocs(
 	require.Contains(t, sys, skillsToolingGuidanceHeader)
 	require.Contains(t, sys, ".venv/")
 	require.Contains(t, sys, "Avoid include_all_docs")
-	require.Contains(t, sys, "Use skill_run only for commands required")
+	require.Contains(t, sys, "Treat loaded skill docs as guidance")
+	require.Contains(t, sys, "Do not invent subcommands, flags")
 	require.Contains(t, sys, "[Loaded] calc")
 	require.Contains(t, sys, "Calc body")
 	require.Contains(t, sys, "[Doc] USAGE.md")
@@ -761,7 +762,7 @@ func TestAppendSkillsFromToolResponseEvent_EarlyReturns(t *testing.T) {
 	require.Nil(t, keep)
 }
 
-func TestAppendSkillsFromToolResponseEvent_SkipsInvalidMessages(t *testing.T) {
+func TestAppendSkillsFromToolResp_SkipsInvalidMessages(t *testing.T) {
 	loadedSet := map[string]struct{}{
 		"a": {},
 		"b": {},

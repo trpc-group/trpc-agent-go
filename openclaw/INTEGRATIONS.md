@@ -162,6 +162,11 @@ skills:
   # Optional: restrict which bundled skills are enabled by default.
   # Applies only to bundled skills under ./openclaw/skills.
   allowBundled: ["gh-issues", "notion"]
+  load_mode: "turn"              # once|turn|session
+  loaded_content_in_tool_results: true
+  max_loaded_skills: 0
+  skip_fallback_on_session_summary: true
+  tooling_guidance: ""           # optional; "" disables built-in guidance
 
   # Optional: per-skill config (by skillKey or skill name).
   entries:
@@ -178,6 +183,15 @@ CLI equivalents:
 - `-skills-extra-dirs <A,B,C>` (comma-separated)
 - `-skills-debug`
 - `-skills-allow-bundled <A,B,C>` (comma-separated; bundled skills only)
+- `-skills-load-mode <once|turn|session>`
+- `-skills-max-loaded <N>`
+- `-skills-loaded-content-in-tool-results`
+- `-skills-skip-fallback-on-session-summary`
+
+OpenClaw defaults to materializing loaded skill bodies and docs into tool
+result messages. The built-in guidance also allows small read-only probes,
+such as `--help` or `--version`, when a skill depends on an external CLI
+and the runtime contract needs to be verified.
 
 #### `skills.entries` and OpenClaw metadata
 

@@ -18,6 +18,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,6 +35,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	occhannel "trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
@@ -43,6 +45,92 @@ import (
 	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 )
+
+type captureRequestModel struct {
+	got *model.Request
+}
+
+func (m *captureRequestModel) GenerateContent(
+	ctx context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	m.got = req
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role:    model.RoleAssistant,
+				Content: "ok",
+			},
+		}},
+		Done: true,
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (m *captureRequestModel) Info() model.Info {
+	return model.Info{Name: "capture"}
+}
+
+func createAppTestSkill(t *testing.T) string {
+	t.Helper()
+
+	root := t.TempDir()
+	dir := filepath.Join(root, "echoer")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	data := "---\nname: echoer\n" +
+		"description: simple echo skill\n---\nbody\n"
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "SKILL.md"),
+		[]byte(data),
+		0o600,
+	))
+	return root
+}
+
+func runAgentAndCapture(
+	t *testing.T,
+	agt agent.Agent,
+	mdl *captureRequestModel,
+	sess *session.Session,
+) *model.Request {
+	t.Helper()
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("hi")),
+		agent.WithInvocationSession(sess),
+	)
+	ch, err := agt.Run(context.Background(), inv)
+	require.NoError(t, err)
+	for evt := range ch {
+		if evt == nil || !evt.RequiresCompletion {
+			continue
+		}
+		key := agent.GetAppendEventNoticeKey(evt.ID)
+		require.NotNil(
+			t,
+			inv.AddNoticeChannel(context.Background(), key),
+		)
+		require.NoError(t, inv.NotifyCompletion(context.Background(), key))
+	}
+	require.NotNil(t, mdl.got)
+	return mdl.got
+}
+
+func joinSystemMessages(req *model.Request) string {
+	if req == nil {
+		return ""
+	}
+	var parts []string
+	for _, msg := range req.Messages {
+		if msg.Role != model.RoleSystem {
+			continue
+		}
+		parts = append(parts, msg.Content)
+	}
+	return strings.Join(parts, "\n\n")
+}
 
 func TestRun_ParseErrorExitCode(t *testing.T) {
 	t.Parallel()
@@ -750,6 +838,84 @@ func TestNewAgent_EmptyInstructionUsesDefault(t *testing.T) {
 	}, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, agt)
+}
+
+func TestNewAgent_SkillsToolingGuidance_ConfigApplied(t *testing.T) {
+	t.Parallel()
+
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	guide := ""
+	agt, err := newAgent(mdl, agentConfig{
+		AppName:            "demo",
+		SkillsRoot:         root,
+		StateDir:           t.TempDir(),
+		SkillsToolingGuide: &guide,
+	}, nil, nil)
+	require.NoError(t, err)
+
+	req := runAgentAndCapture(
+		t,
+		agt,
+		mdl,
+		&session.Session{},
+	)
+	sys := joinSystemMessages(req)
+	require.Contains(t, sys, "Available skills:")
+	require.NotContains(
+		t,
+		sys,
+		"Tooling and workspace guidance:",
+	)
+}
+
+func TestNewAgent_SkillsLoadModeTurnClearsLoadedState(t *testing.T) {
+	t.Parallel()
+
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	agt, err := newAgent(mdl, agentConfig{
+		AppName:        "demo",
+		SkillsRoot:     root,
+		StateDir:       t.TempDir(),
+		SkillsLoadMode: "turn",
+	}, nil, nil)
+	require.NoError(t, err)
+
+	sess := &session.Session{
+		State: session.StateMap{
+			skill.StateKeyLoadedPrefix + "echoer": []byte("1"),
+		},
+	}
+	req := runAgentAndCapture(t, agt, mdl, sess)
+	sys := joinSystemMessages(req)
+	require.NotContains(t, sys, "[Loaded] echoer")
+	require.Nil(t, sess.State[skill.StateKeyLoadedPrefix+"echoer"])
+}
+
+func TestNewAgent_SkillsToolResults_ConfigApplied(t *testing.T) {
+	t.Parallel()
+
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	agt, err := newAgent(mdl, agentConfig{
+		AppName:           "demo",
+		SkillsRoot:        root,
+		StateDir:          t.TempDir(),
+		SkillsLoadMode:    "session",
+		SkillsToolResults: true,
+	}, nil, nil)
+	require.NoError(t, err)
+
+	sess := &session.Session{
+		State: session.StateMap{
+			skill.StateKeyLoadedPrefix + "echoer": []byte("1"),
+		},
+	}
+	req := runAgentAndCapture(t, agt, mdl, sess)
+	sys := joinSystemMessages(req)
+	require.Contains(t, sys, "Loaded skill context:")
+	require.Contains(t, sys, "[Loaded] echoer")
 }
 
 func TestRun_HTTPListenErrorPath(t *testing.T) {

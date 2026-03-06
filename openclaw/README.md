@@ -100,12 +100,15 @@ debug_recorder:
 Trace output location:
 
 - default: `<state_dir>/debug`
-- layout: `<YYYYMMDD>/<HHMMSS>_<channel>_<request_id>/`
+- canonical layout: `<YYYYMMDD>/<HHMMSS>_<channel>_<request_id>/`
+- session index:
+  `<by-session>/<session-or-user>/<YYYYMMDD>/<HHMMSS>_<message_id>/trace.json`
 - files:
   - `meta.json`: trace start metadata
   - `events.jsonl`: event stream (one JSON object per line)
   - `result.json`: trace end status + duration
   - `attachments/<sha256>`: stored bytes (mode `full` only)
+  - `by-session/.../trace.json`: pointer to the canonical trace dir
 
 Example config:
 
@@ -757,6 +760,12 @@ skills:
   # Optional: restrict which bundled skills are enabled by default.
   # Applies only to bundled skills under ./openclaw/skills.
   allowBundled: ["gh-issues", "notion"]
+  load_mode: "turn" # once|turn|session
+  loaded_content_in_tool_results: true
+  max_loaded_skills: 0
+  skip_fallback_on_session_summary: true
+  # Optional: override default skills guidance text. Set to "" to disable it.
+  tooling_guidance: ""
 
   # Optional: per-skill config (by skillKey or skill name).
   entries:
@@ -767,6 +776,15 @@ skills:
       env:
         GH_TOKEN: "..."
 ```
+
+OpenClaw defaults to materializing loaded skill bodies/docs into tool
+result messages. This keeps the system prompt more stable while still
+letting `SkillLoadMode` control how long loaded skill state survives.
+
+The built-in skills guidance is also more runtime-oriented by default:
+the agent prefers skill-owned scripts when present and may use minimal
+read-only probes such as `--help` or `--version` to verify external CLI
+syntax before taking side effects.
 
 ### `{baseDir}` placeholder
 

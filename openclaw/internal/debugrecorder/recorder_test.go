@@ -537,3 +537,48 @@ func TestRecorder_NewTraceDir_TruncatesBase(t *testing.T) {
 	base := filepath.Base(dir)
 	require.LessOrEqual(t, len(base), maxTraceBaseLen)
 }
+
+func TestRecorder_Start_WritesSessionIndex(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 5, 9, 0, 0, 0, time.UTC)
+	rec := &Recorder{
+		dir:  t.TempDir(),
+		mode: modeSafe,
+		now:  func() time.Time { return now },
+	}
+	trace, err := rec.Start(TraceStart{
+		Channel:   "telegram",
+		UserID:    "7602183958",
+		SessionID: "telegram:dm:7602183958",
+		MessageID: "137",
+		RequestID: "telegram:7602183958:137",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, trace.Close(TraceEnd{Status: "ok"}))
+	})
+
+	refPath := filepath.Join(
+		rec.dir,
+		defaultBySessionDir,
+		"telegram_dm_7602183958",
+		"20260305",
+		"090000_137",
+		traceRefName,
+	)
+	raw, err := os.ReadFile(refPath)
+	require.NoError(t, err)
+
+	var ref traceRef
+	require.NoError(t, json.Unmarshal(raw, &ref))
+	require.Equal(t, "telegram", ref.Channel)
+	require.Equal(t, "telegram:dm:7602183958", ref.SessionID)
+	require.Equal(t, "telegram:7602183958:137", ref.RequestID)
+	require.Equal(t, "137", ref.MessageID)
+
+	target := filepath.Clean(
+		filepath.Join(filepath.Dir(refPath), ref.TraceDir),
+	)
+	require.Equal(t, trace.Dir(), target)
+}

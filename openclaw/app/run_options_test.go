@@ -348,6 +348,11 @@ skills:
   extra_dirs: ["/extra1","/extra2"]
   debug: true
   allowBundled: ["gh-issues","notion"]
+  load_mode: "session"
+  max_loaded_skills: 3
+  loaded_content_in_tool_results: false
+  skip_fallback_on_session_summary: false
+  tooling_guidance: "Prefer runtime help over stale docs."
   entries:
     gh-issues:
       enabled: false
@@ -479,6 +484,16 @@ memory:
 	require.Equal(t, "/extra1,/extra2", opts.SkillsExtraDir)
 	require.True(t, opts.SkillsDebug)
 	require.Equal(t, "gh-issues,notion", opts.SkillsAllowBundled)
+	require.Equal(t, "session", opts.SkillsLoadMode)
+	require.Equal(t, 3, opts.SkillsMaxLoaded)
+	require.False(t, opts.SkillsToolResults)
+	require.False(t, opts.SkillsSkipFallback)
+	require.NotNil(t, opts.SkillsToolingGuide)
+	require.Equal(
+		t,
+		"Prefer runtime help over stale docs.",
+		*opts.SkillsToolingGuide,
+	)
 
 	require.Len(t, opts.SkillConfigs, 2)
 	require.NotNil(t, opts.SkillConfigs["gh-issues"].Enabled)
@@ -637,6 +652,31 @@ debug_recorder:
 	require.True(t, opts.DebugRecorderEnabled)
 	require.Equal(t, outDir, opts.DebugRecorderDir)
 	require.Equal(t, "safe", opts.DebugRecorderMode)
+}
+
+func TestParseRunOptions_SkillsDefaults(t *testing.T) {
+	t.Parallel()
+
+	opts, err := parseRunOptions(nil)
+	require.NoError(t, err)
+	require.Equal(t, defaultSkillsLoadMode, opts.SkillsLoadMode)
+	require.True(t, opts.SkillsToolResults)
+	require.True(t, opts.SkillsSkipFallback)
+	require.Zero(t, opts.SkillsMaxLoaded)
+	require.Nil(t, opts.SkillsToolingGuide)
+}
+
+func TestParseRunOptions_SkillsLoadMode_InvalidFails(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseRunOptions([]string{
+		"-skills-load-mode", "bad",
+	})
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 2, exitErr.Code)
 }
 
 func writeTempConfig(t *testing.T, body string) string {
