@@ -50,6 +50,13 @@ sessionService, err := redis.NewService(
     redis.WithAppStateTTL(24*time.Hour),
     redis.WithUserStateTTL(7*24*time.Hour),
 )
+// Result:
+// - Connect to local Redis database 0
+// - Up to 1000 events per session
+// - Session expires 30 minutes after last write (Redis TTL)
+// - App state expires after 24 hours
+// - User state expires after 7 days
+// - Uses Redis native TTL mechanism, no manual cleanup needed
 ```
 
 ## Instance Reuse
