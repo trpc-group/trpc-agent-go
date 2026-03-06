@@ -300,6 +300,11 @@ WORKFLOW:
 5. Read ALL returned memories carefully. Use exact words from the memories in your answer.
 6. Output ONLY the bare answer — no explanations, no context.
 
+ANSWERING PRIORITY — ALWAYS try to answer first:
+If ANY retrieved memory is topically related to the question, you MUST provide an answer.
+Only say "` + fallbackAnswer + `" when ZERO retrieved memories relate to the question topic.
+When in doubt between answering and saying "not available", ALWAYS answer.
+
 ANSWER STRATEGY:
 
 A) FACTUAL questions (Who/What/Where/When/How many):
@@ -307,21 +312,31 @@ A) FACTUAL questions (Who/What/Where/When/How many):
    For "When" questions, look at both memory text AND the event_time field for dates.
    For "How many" questions, output the NUMBER (e.g. "3" not "three").
    If the question asks about a SPECIFIC person, verify the memory mentions that person.
-   If the question asks about person A (e.g. "grandpa") but memories ONLY mention person B (e.g. "grandma"), say "` + fallbackAnswer + `".
+   If the question asks about person A but memories ONLY mention person B doing that exact thing, say "` + fallbackAnswer + `".
+   IMPORTANT: Only reject when there is a CLEAR person mismatch for the SAME activity/fact.
+   If the memory mentions person A doing ANYTHING related, use it to answer.
 
 B) HYPOTHETICAL/INFERENCE questions (Would/Could/Is it likely/What might/What would/What traits/Would X be considered/Would X want/Would X be more interested):
    You MUST reason and infer from available evidence. NEVER say "not available" for these.
    - "Would X enjoy Vivaldi?" + memory "X enjoys classical music" → "Yes"
    - "Would X be considered religious?" + memory "necklace symbolizing faith" → "Somewhat"
-   - "Would X be more interested in A or B?" + memory "X likes outdoors" → "A"
-   - "Would X be considered a member of Y?" + no direct evidence → "Likely no" (not "not available")
+   - "Would X be more interested in A or B?" → You MUST pick one option. Use ANY relevant memory to decide. → "A" or "B"
+   - "What traits would X have?" + memory "X volunteers, donates" → "Compassionate, generous"
+   - "Would X be considered a member of Y?" + no direct evidence → "No"
+   For preference/choice questions ("more interested in A or B", "prefer A or B"), ALWAYS commit to one choice based on available evidence.
 
 C) TEMPORAL CALCULATION questions (How long/What happened first):
    Combine dates from multiple memories to calculate durations or order.
+   For "Would X be able to do Y by date Z?" — check dates and infer. Give a direct Yes/No.
 
 D) OPEN-DOMAIN questions (What does X feel/think/enjoy/value/realize/describe/do/see/find):
    Answer by copying the most relevant phrase directly from memory text. Do NOT summarize.
    NEVER say "not available" for open-domain questions if ANY related memory exists.
+
+ADVERSARIAL PERSON-NAME CHECK (apply ONLY when suspicious):
+Some questions deliberately swap person names. For example, asking "What did Melanie do while camping?" when ONLY Caroline went camping.
+Apply this check ONLY when: the question asks person A did something, but ALL memories about that activity mention ONLY person B and NEVER person A.
+Do NOT apply this check when: memories mention the correct person doing related things, or when the question is about general topics.
 
 RULES:
 - Maximum 1-8 words. Output ONLY the answer fragment, NEVER a full sentence.
@@ -337,7 +352,7 @@ RULES:
 - Do NOT rephrase. If memory says "Sweden", say "Sweden", NOT "her home country".
 - Output the bare answer only. No sentences. No explanations.
 
-GOOD: "Sweden", "7 May 2023", "3", "sunset", "Running, pottery", "Likely no"
+GOOD: "Sweden", "7 May 2023", "3", "sunset", "Running, pottery", "No"
 BAD: "Caroline moved from Sweden." (just say "Sweden"), "Three children" (say "3")`
 
 // qaMultiSearchInstruction is a strict instruction for the QA agent to
@@ -352,6 +367,11 @@ WORKFLOW:
 5. After completing ALL searches, read ALL returned memories. Use exact words from the memories.
 6. Output ONLY the bare answer — no explanations, no context.
 
+ANSWERING PRIORITY — ALWAYS try to answer first:
+If ANY retrieved memory is topically related to the question, you MUST provide an answer.
+Only say "` + fallbackAnswer + `" when ZERO retrieved memories relate to the question topic.
+When in doubt between answering and saying "not available", ALWAYS answer.
+
 ANSWER STRATEGY:
 
 A) FACTUAL questions (Who/What/Where/When/How many):
@@ -359,21 +379,31 @@ A) FACTUAL questions (Who/What/Where/When/How many):
    For "When" questions, look at both memory text AND the event_time field for dates.
    For "How many" questions, output the NUMBER (e.g. "3" not "three").
    If the question asks about a SPECIFIC person, verify the memory mentions that person.
-   If the question asks about person A (e.g. "grandpa") but memories ONLY mention person B (e.g. "grandma"), say "` + fallbackAnswer + `".
+   If the question asks about person A but memories ONLY mention person B doing that exact thing, say "` + fallbackAnswer + `".
+   IMPORTANT: Only reject when there is a CLEAR person mismatch for the SAME activity/fact.
+   If the memory mentions person A doing ANYTHING related, use it to answer.
 
 B) HYPOTHETICAL/INFERENCE questions (Would/Could/Is it likely/What might/What would/What traits/Would X be considered/Would X want/Would X be more interested):
    You MUST reason and infer from available evidence. NEVER say "not available" for these.
    - "Would X enjoy Vivaldi?" + memory "X enjoys classical music" → "Yes"
    - "Would X be considered religious?" + memory "necklace symbolizing faith" → "Somewhat"
-   - "Would X be more interested in A or B?" + memory "X likes outdoors" → "A"
-   - "Would X be considered a member of Y?" + no direct evidence → "Likely no" (not "not available")
+   - "Would X be more interested in A or B?" → You MUST pick one option. Use ANY relevant memory to decide. → "A" or "B"
+   - "What traits would X have?" + memory "X volunteers, donates" → "Compassionate, generous"
+   - "Would X be considered a member of Y?" + no direct evidence → "No"
+   For preference/choice questions ("more interested in A or B", "prefer A or B"), ALWAYS commit to one choice based on available evidence.
 
 C) TEMPORAL CALCULATION questions (How long/What happened first):
    Combine dates from multiple memories to calculate durations or order.
+   For "Would X be able to do Y by date Z?" — check dates and infer. Give a direct Yes/No.
 
 D) OPEN-DOMAIN questions (What does X feel/think/enjoy/value/realize/describe/do/see/find):
    Answer by copying the most relevant phrase directly from memory text. Do NOT summarize.
    NEVER say "not available" for open-domain questions if ANY related memory exists.
+
+ADVERSARIAL PERSON-NAME CHECK (apply ONLY when suspicious):
+Some questions deliberately swap person names. For example, asking "What did Melanie do while camping?" when ONLY Caroline went camping.
+Apply this check ONLY when: the question asks person A did something, but ALL memories about that activity mention ONLY person B and NEVER person A.
+Do NOT apply this check when: memories mention the correct person doing related things, or when the question is about general topics.
 
 RULES:
 - Maximum 1-8 words. Output ONLY the answer fragment, NEVER a full sentence.
@@ -389,7 +419,7 @@ RULES:
 - Do NOT rephrase. If memory says "Sweden", say "Sweden", NOT "her home country".
 - Output the bare answer only. No sentences. No explanations.
 
-GOOD: "Sweden", "7 May 2023", "3", "sunset", "Running, pottery", "Likely no"
+GOOD: "Sweden", "7 May 2023", "3", "sunset", "Running, pottery", "No"
 BAD: "Caroline moved from Sweden." (just say "Sweden"), "Three children" (say "3")`
 
 func qaMemorySearchInstruction(searchPasses int) string {
