@@ -152,7 +152,20 @@ type Model interface {
 type Info struct {
     Name string // 模型名称
 }
+
+// IterModel 是 Model 的可选扩展接口，用于降低流式处理时的 channel 开销
+type IterModel interface {
+    Model
+    GenerateContentIter(ctx context.Context, request *Request) (Seq[*Response], error)
+}
+
+// Seq 是一个基于回调的序列类型，用于按需 yield 一个值
+type Seq[T any] func(yield func(T) bool)
 ```
+
+基于 channel 的流式接口通常需要额外 goroutine 驱动读取，并在每个响应片段上产生一次 channel 同步。高频流式输出时，该开销可能成为主要的性能成本。`IterModel` 提供可选的迭代器式接口，使响应在调用方 goroutine 内同步产出，以降低上述开销。
+
+模型实现 `IterModel` 时，框架优先调用 `GenerateContentIter`；否则继续调用 `GenerateContent`。实现方必须串行调用 `yield`，并在其返回 `false` 时停止。
 
 ### Request 结构
 
