@@ -50,8 +50,8 @@ func (a *activeSummarizer) SummarizeWithFilter(
 	return a.text, a.err
 }
 
-func (a *activeSummarizer) SetPrompt(_ string)       {}
-func (a *activeSummarizer) SetModel(_ model.Model)   {}
+func (a *activeSummarizer) SetPrompt(_ string)     {}
+func (a *activeSummarizer) SetModel(_ model.Model) {}
 func (a *activeSummarizer) Metadata() map[string]any {
 	return nil
 }

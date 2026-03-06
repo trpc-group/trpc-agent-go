@@ -715,24 +715,24 @@ func (s *Service) startAsyncPersistWorker() {
 					pair.key.UserID,
 					pair.key.SessionID,
 				)
-			if err := s.addEvent(
-				ctx, pair.key, pair.event,
-			); err != nil {
-				log.ErrorfContext(ctx,
-					"pgvector session service "+
-						"async persist event "+
-						"failed: %v", err,
-				)
-			} else {
-				sess := &session.Session{
-					ID:      pair.key.SessionID,
-					AppName: pair.key.AppName,
-					UserID:  pair.key.UserID,
+				if err := s.addEvent(
+					ctx, pair.key, pair.event,
+				); err != nil {
+					log.ErrorfContext(ctx,
+						"pgvector session service "+
+							"async persist event "+
+							"failed: %v", err,
+					)
+				} else {
+					sess := &session.Session{
+						ID:      pair.key.SessionID,
+						AppName: pair.key.AppName,
+						UserID:  pair.key.UserID,
+					}
+					s.asyncIndexEvent(
+						ctx, sess, pair.event,
+					)
 				}
-				s.asyncIndexEvent(
-					ctx, sess, pair.event,
-				)
-			}
 				cancel()
 			}
 		}(ch)
