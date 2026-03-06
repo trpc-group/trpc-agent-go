@@ -15,6 +15,8 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -25,17 +27,34 @@ import (
 const (
 	routeIndex = "/"
 
-	routeStatusJSON = "/api/status"
-	routeJobsJSON   = "/api/cron/jobs"
-	routeJobRun     = "/api/cron/jobs/run"
-	routeJobRemove  = "/api/cron/jobs/remove"
-	routeJobsClear  = "/api/cron/jobs/clear"
+	routeStatusJSON        = "/api/status"
+	routeJobsJSON          = "/api/cron/jobs"
+	routeJobRun            = "/api/cron/jobs/run"
+	routeJobRemove         = "/api/cron/jobs/remove"
+	routeJobsClear         = "/api/cron/jobs/clear"
+	routeDebugSessionsJSON = "/api/debug/sessions"
+	routeDebugTracesJSON   = "/api/debug/traces"
+	routeDebugFile         = "/debug/file"
 
-	queryNotice = "notice"
-	queryError  = "error"
-	formJobID   = "job_id"
+	queryNotice    = "notice"
+	queryError     = "error"
+	querySessionID = "session_id"
+	queryTrace     = "trace"
+	queryName      = "name"
+	formJobID      = "job_id"
 
 	refreshSeconds = 15
+
+	debugBySessionDir   = "by-session"
+	debugMetaFileName   = "meta.json"
+	debugEventsFileName = "events.jsonl"
+	debugResultFileName = "result.json"
+
+	maxDebugSessionRows = 12
+	maxDebugTraceRows   = 18
+	maxJobOutputRunes   = 120
+
+	formatTimeLayout = "2006-01-02 15:04:05 MST"
 )
 
 type Routes struct {
@@ -48,11 +67,22 @@ type Routes struct {
 type Config struct {
 	AppName    string
 	InstanceID string
+	StartedAt  time.Time
+	Hostname   string
+	PID        int
+	GoVersion  string
 
-	GatewayAddr string
-	GatewayURL  string
-	AdminAddr   string
-	AdminURL    string
+	AgentType      string
+	ModelMode      string
+	ModelName      string
+	SessionBackend string
+	MemoryBackend  string
+
+	GatewayAddr   string
+	GatewayURL    string
+	AdminAddr     string
+	AdminURL      string
+	AdminAutoPort bool
 
 	StateDir string
 	DebugDir string
@@ -99,26 +129,42 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc(routeJobRun, s.handleRunJob)
 	mux.HandleFunc(routeJobRemove, s.handleRemoveJob)
 	mux.HandleFunc(routeJobsClear, s.handleClearJobs)
+	mux.HandleFunc(routeDebugSessionsJSON, s.handleDebugSessionsJSON)
+	mux.HandleFunc(routeDebugTracesJSON, s.handleDebugTracesJSON)
+	mux.HandleFunc(routeDebugFile, s.handleDebugFile)
 	return mux
 }
 
 type snapshot struct {
 	GeneratedAt time.Time `json:"generated_at"`
 
-	AppName    string `json:"app_name,omitempty"`
-	InstanceID string `json:"instance_id,omitempty"`
+	AppName    string    `json:"app_name,omitempty"`
+	InstanceID string    `json:"instance_id,omitempty"`
+	StartedAt  time.Time `json:"started_at,omitempty"`
+	Hostname   string    `json:"hostname,omitempty"`
+	PID        int       `json:"pid,omitempty"`
+	GoVersion  string    `json:"go_version,omitempty"`
+	Uptime     string    `json:"uptime,omitempty"`
 
-	GatewayAddr string `json:"gateway_addr,omitempty"`
-	GatewayURL  string `json:"gateway_url,omitempty"`
-	AdminAddr   string `json:"admin_addr,omitempty"`
-	AdminURL    string `json:"admin_url,omitempty"`
+	AgentType      string `json:"agent_type,omitempty"`
+	ModelMode      string `json:"model_mode,omitempty"`
+	ModelName      string `json:"model_name,omitempty"`
+	SessionBackend string `json:"session_backend,omitempty"`
+	MemoryBackend  string `json:"memory_backend,omitempty"`
+
+	GatewayAddr   string `json:"gateway_addr,omitempty"`
+	GatewayURL    string `json:"gateway_url,omitempty"`
+	AdminAddr     string `json:"admin_addr,omitempty"`
+	AdminURL      string `json:"admin_url,omitempty"`
+	AdminAutoPort bool   `json:"admin_auto_port"`
 
 	StateDir string `json:"state_dir,omitempty"`
 	DebugDir string `json:"debug_dir,omitempty"`
 
-	Channels []string   `json:"channels,omitempty"`
-	Routes   Routes     `json:"routes,omitempty"`
-	Cron     cronStatus `json:"cron"`
+	Channels []string    `json:"channels,omitempty"`
+	Routes   Routes      `json:"routes,omitempty"`
+	Cron     cronStatus  `json:"cron"`
+	Debug    debugStatus `json:"debug"`
 }
 
 type cronStatus struct {
@@ -139,6 +185,7 @@ type jobView struct {
 	Target  string `json:"target,omitempty"`
 
 	MessagePreview string `json:"message_preview,omitempty"`
+	LastOutput     string `json:"last_output,omitempty"`
 
 	Enabled    bool       `json:"enabled"`
 	CreatedAt  time.Time  `json:"created_at"`
@@ -150,23 +197,37 @@ type jobView struct {
 }
 
 type pageData struct {
-	Snapshot snapshot
-	Notice   string
-	Error    string
+	Snapshot       snapshot
+	Notice         string
+	Error          string
+	RefreshSeconds int
 }
 
 func (s *Service) Snapshot() snapshot {
+	now := s.now()
 	out := snapshot{
-		GeneratedAt: s.now(),
-		AppName:     strings.TrimSpace(s.cfg.AppName),
-		InstanceID:  strings.TrimSpace(s.cfg.InstanceID),
-		GatewayAddr: strings.TrimSpace(s.cfg.GatewayAddr),
-		GatewayURL:  strings.TrimSpace(s.cfg.GatewayURL),
-		AdminAddr:   strings.TrimSpace(s.cfg.AdminAddr),
-		AdminURL:    strings.TrimSpace(s.cfg.AdminURL),
-		StateDir:    strings.TrimSpace(s.cfg.StateDir),
-		DebugDir:    strings.TrimSpace(s.cfg.DebugDir),
-		Routes:      s.cfg.GatewayRoutes,
+		GeneratedAt:    now,
+		AppName:        strings.TrimSpace(s.cfg.AppName),
+		InstanceID:     strings.TrimSpace(s.cfg.InstanceID),
+		StartedAt:      s.cfg.StartedAt,
+		Hostname:       strings.TrimSpace(s.cfg.Hostname),
+		PID:            s.cfg.PID,
+		GoVersion:      strings.TrimSpace(s.cfg.GoVersion),
+		Uptime:         formatUptime(s.cfg.StartedAt, now),
+		AgentType:      strings.TrimSpace(s.cfg.AgentType),
+		ModelMode:      strings.TrimSpace(s.cfg.ModelMode),
+		ModelName:      strings.TrimSpace(s.cfg.ModelName),
+		SessionBackend: strings.TrimSpace(s.cfg.SessionBackend),
+		MemoryBackend:  strings.TrimSpace(s.cfg.MemoryBackend),
+		GatewayAddr:    strings.TrimSpace(s.cfg.GatewayAddr),
+		GatewayURL:     strings.TrimSpace(s.cfg.GatewayURL),
+		AdminAddr:      strings.TrimSpace(s.cfg.AdminAddr),
+		AdminURL:       strings.TrimSpace(s.cfg.AdminURL),
+		AdminAutoPort:  s.cfg.AdminAutoPort,
+		StateDir:       strings.TrimSpace(s.cfg.StateDir),
+		DebugDir:       strings.TrimSpace(s.cfg.DebugDir),
+		Routes:         s.cfg.GatewayRoutes,
+		Debug:          s.debugStatus(),
 	}
 
 	if len(s.cfg.Channels) > 0 {
@@ -206,9 +267,10 @@ func (s *Service) handleIndex(
 	}
 
 	data := pageData{
-		Snapshot: s.Snapshot(),
-		Notice:   strings.TrimSpace(r.URL.Query().Get(queryNotice)),
-		Error:    strings.TrimSpace(r.URL.Query().Get(queryError)),
+		Snapshot:       s.Snapshot(),
+		Notice:         strings.TrimSpace(r.URL.Query().Get(queryNotice)),
+		Error:          strings.TrimSpace(r.URL.Query().Get(queryError)),
+		RefreshSeconds: refreshSeconds,
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -241,6 +303,52 @@ func (s *Service) handleJobsJSON(
 		return
 	}
 	writeJSON(w, http.StatusOK, s.Snapshot().Cron.Jobs)
+}
+
+func (s *Service) handleDebugSessionsJSON(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.debugStatus().Sessions)
+}
+
+func (s *Service) handleDebugTracesJSON(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	sessionID := strings.TrimSpace(r.URL.Query().Get(querySessionID))
+	writeJSON(
+		w,
+		http.StatusOK,
+		s.debugStatusForSession(sessionID).RecentTraces,
+	)
+}
+
+func (s *Service) handleDebugFile(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	tracePath := strings.TrimSpace(r.URL.Query().Get(queryTrace))
+	name := strings.TrimSpace(r.URL.Query().Get(queryName))
+	filePath, err := s.resolveDebugFile(tracePath, name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	http.ServeFile(w, r, filePath)
 }
 
 func (s *Service) handleRunJob(
@@ -384,7 +492,8 @@ func jobViewFromJob(job *cron.Job) jobView {
 		UserID:         strings.TrimSpace(job.UserID),
 		Channel:        strings.TrimSpace(job.Delivery.Channel),
 		Target:         strings.TrimSpace(job.Delivery.Target),
-		MessagePreview: summarizeMessage(job.Message),
+		MessagePreview: summarizeText(job.Message, maxRunesPreview),
+		LastOutput:     summarizeText(job.LastOutput, maxJobOutputRunes),
 		Enabled:        job.Enabled,
 		CreatedAt:      job.CreatedAt,
 		UpdatedAt:      job.UpdatedAt,
@@ -405,9 +514,13 @@ func fallbackJobName(job *cron.Job) string {
 	return strings.TrimSpace(job.ID)
 }
 
-func summarizeMessage(text string) string {
+const maxRunesPreview = 96
+
+func summarizeText(text string, maxRunes int) string {
+	if maxRunes <= 0 {
+		maxRunes = maxRunesPreview
+	}
 	runes := []rune(strings.TrimSpace(text))
-	const maxRunes = 96
 	if len(runes) <= maxRunes {
 		return string(runes)
 	}
@@ -446,14 +559,74 @@ func formatTime(raw any) string {
 		if value.IsZero() {
 			return "-"
 		}
-		return value.Local().Format("2006-01-02 15:04:05 MST")
+		return value.Local().Format(formatTimeLayout)
 	case *time.Time:
 		if value == nil || value.IsZero() {
 			return "-"
 		}
-		return value.Local().Format("2006-01-02 15:04:05 MST")
+		return value.Local().Format(formatTimeLayout)
 	default:
 		return "-"
+	}
+}
+
+func formatUptime(startedAt time.Time, now time.Time) string {
+	if startedAt.IsZero() {
+		return "-"
+	}
+	if now.Before(startedAt) {
+		now = startedAt
+	}
+	return now.Sub(startedAt).Round(time.Second).String()
+}
+
+func (s *Service) resolveDebugFile(
+	tracePath string,
+	name string,
+) (string, error) {
+	root := strings.TrimSpace(s.cfg.DebugDir)
+	if root == "" {
+		return "", fmt.Errorf("debug recorder is not configured")
+	}
+	if strings.TrimSpace(tracePath) == "" {
+		return "", fmt.Errorf("trace path is required")
+	}
+	if !isAllowedDebugFile(name) {
+		return "", fmt.Errorf("unsupported debug file: %s", name)
+	}
+
+	candidate := filepath.Clean(filepath.Join(
+		root,
+		filepath.FromSlash(tracePath),
+		name,
+	))
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return "", fmt.Errorf("resolve debug root: %w", err)
+	}
+	absCandidate, err := filepath.Abs(candidate)
+	if err != nil {
+		return "", fmt.Errorf("resolve debug file: %w", err)
+	}
+	if absCandidate != absRoot &&
+		!strings.HasPrefix(
+			absCandidate,
+			absRoot+string(os.PathSeparator),
+		) {
+		return "", fmt.Errorf("debug file escapes debug root")
+	}
+	if _, err := os.Stat(absCandidate); err != nil {
+		return "", fmt.Errorf("debug file not found")
+	}
+	return absCandidate, nil
+}
+
+func isAllowedDebugFile(name string) bool {
+	switch strings.TrimSpace(name) {
+	case debugMetaFileName, debugEventsFileName, debugResultFileName:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -467,7 +640,7 @@ const adminPageHTML = `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="refresh" content="15">
+  <meta http-equiv="refresh" content="{{.RefreshSeconds}}">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>OpenClaw Admin</title>
   <style>
@@ -647,8 +820,12 @@ const adminPageHTML = `<!doctype html>
         <span class="stat-value">{{.Snapshot.Cron.JobCount}}</span>
       </article>
       <article class="card">
-        <span class="stat-label">Running Jobs</span>
-        <span class="stat-value">{{.Snapshot.Cron.RunningJobs}}</span>
+        <span class="stat-label">Debug Sessions</span>
+        <span class="stat-value">{{.Snapshot.Debug.SessionCount}}</span>
+      </article>
+      <article class="card">
+        <span class="stat-label">Recent Traces</span>
+        <span class="stat-value">{{.Snapshot.Debug.TraceCount}}</span>
       </article>
     </section>
 
@@ -658,10 +835,34 @@ const adminPageHTML = `<!doctype html>
         <dl class="meta">
           <dt>App</dt>
           <dd>{{.Snapshot.AppName}}</dd>
+          <dt>Agent Type</dt>
+          <dd>{{if .Snapshot.AgentType}}{{.Snapshot.AgentType}}{{else}}-{{end}}</dd>
+          <dt>Model</dt>
+          <dd>
+            {{if .Snapshot.ModelName}}
+              {{.Snapshot.ModelMode}} / {{.Snapshot.ModelName}}
+            {{else if .Snapshot.ModelMode}}
+              {{.Snapshot.ModelMode}}
+            {{else}}-{{end}}
+          </dd>
+          <dt>Session Backend</dt>
+          <dd>{{if .Snapshot.SessionBackend}}{{.Snapshot.SessionBackend}}{{else}}-{{end}}</dd>
+          <dt>Memory Backend</dt>
+          <dd>{{if .Snapshot.MemoryBackend}}{{.Snapshot.MemoryBackend}}{{else}}-{{end}}</dd>
+          <dt>Host</dt>
+          <dd>{{if .Snapshot.Hostname}}{{.Snapshot.Hostname}}{{else}}-{{end}}</dd>
+          <dt>PID</dt>
+          <dd>{{if .Snapshot.PID}}{{.Snapshot.PID}}{{else}}-{{end}}</dd>
+          <dt>Started</dt>
+          <dd>{{formatTime .Snapshot.StartedAt}}</dd>
+          <dt>Uptime</dt>
+          <dd>{{.Snapshot.Uptime}}</dd>
           <dt>Gateway URL</dt>
           <dd><a href="{{.Snapshot.GatewayURL}}">{{.Snapshot.GatewayURL}}</a></dd>
           <dt>Admin URL</dt>
           <dd><a href="{{.Snapshot.AdminURL}}">{{.Snapshot.AdminURL}}</a></dd>
+          <dt>Admin Auto Port</dt>
+          <dd>{{.Snapshot.AdminAutoPort}}</dd>
           <dt>State Dir</dt>
           <dd><code>{{.Snapshot.StateDir}}</code></dd>
           <dt>Debug Dir</dt>
@@ -691,7 +892,9 @@ const adminPageHTML = `<!doctype html>
           <dt>JSON</dt>
           <dd>
             <a href="/api/status">status</a> ·
-            <a href="/api/cron/jobs">jobs</a>
+            <a href="/api/cron/jobs">jobs</a> ·
+            <a href="/api/debug/sessions">debug sessions</a> ·
+            <a href="/api/debug/traces">debug traces</a>
           </dd>
         </dl>
       </article>
@@ -720,6 +923,33 @@ const adminPageHTML = `<!doctype html>
         <p class="empty">Scheduled jobs are not enabled for this runtime.</p>
         {{end}}
       </article>
+
+      <article class="card">
+        <h2>Debug Index</h2>
+        <p class="subtle">
+          Session-indexed trace browsing for recent gateway activity. This is
+          especially useful when a Telegram or cron flow behaves strangely and
+          you want the exact recorded request and event stream.
+        </p>
+        <dl class="meta">
+          <dt>Indexed Dir</dt>
+          <dd><code>{{.Snapshot.Debug.BySessionDir}}</code></dd>
+          <dt>Session Count</dt>
+          <dd>{{.Snapshot.Debug.SessionCount}}</dd>
+          <dt>Trace Count</dt>
+          <dd>{{.Snapshot.Debug.TraceCount}}</dd>
+          <dt>Status</dt>
+          <dd>
+            {{if .Snapshot.Debug.Error}}
+              <span class="subtle">{{.Snapshot.Debug.Error}}</span>
+            {{else if .Snapshot.Debug.Enabled}}
+              ready
+            {{else}}
+              idle
+            {{end}}
+          </dd>
+        </dl>
+      </article>
     </section>
 
     <section class="card" style="margin-top: 24px;">
@@ -734,6 +964,7 @@ const adminPageHTML = `<!doctype html>
             <th>Status</th>
             <th>Timing</th>
             <th>Task</th>
+            <th>Last Output</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -758,6 +989,7 @@ const adminPageHTML = `<!doctype html>
               last {{formatTime .LastRunAt}}
             </td>
             <td>{{.MessagePreview}}</td>
+            <td>{{if .LastOutput}}{{.LastOutput}}{{else}}-{{end}}</td>
             <td>
               <div class="actions">
                 <form method="post" action="/api/cron/jobs/run">
@@ -782,6 +1014,79 @@ const adminPageHTML = `<!doctype html>
       </table>
       {{else}}
       <p class="empty">No scheduled jobs.</p>
+      {{end}}
+    </section>
+
+    <section class="card" style="margin-top: 24px;">
+      <h2>Debug Sessions</h2>
+      {{if .Snapshot.Debug.Sessions}}
+      <table>
+        <thead>
+          <tr>
+            <th>Session</th>
+            <th>Trace Count</th>
+            <th>Last Seen</th>
+            <th>Latest Trace</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Snapshot.Debug.Sessions}}
+          <tr>
+            <td><code>{{.SessionID}}</code></td>
+            <td>{{.TraceCount}}</td>
+            <td>
+              {{formatTime .LastTraceAt}}<br>
+              {{if .Channel}}{{.Channel}}{{end}}
+              {{if .RequestID}}<br><span class="subtle">{{.RequestID}}</span>{{end}}
+            </td>
+            <td>
+              {{if .MetaURL}}<a href="{{.MetaURL}}" target="_blank">meta</a>{{end}}
+              {{if .EventsURL}} · <a href="{{.EventsURL}}" target="_blank">events</a>{{end}}
+              {{if .ResultURL}} · <a href="{{.ResultURL}}" target="_blank">result</a>{{end}}
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+      {{else}}
+      <p class="empty">No debug sessions indexed yet.</p>
+      {{end}}
+    </section>
+
+    <section class="card" style="margin-top: 24px;">
+      <h2>Recent Traces</h2>
+      {{if .Snapshot.Debug.RecentTraces}}
+      <table>
+        <thead>
+          <tr>
+            <th>Session</th>
+            <th>Started</th>
+            <th>Request</th>
+            <th>Files</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Snapshot.Debug.RecentTraces}}
+          <tr>
+            <td><code>{{.SessionID}}</code></td>
+            <td>{{formatTime .StartedAt}}</td>
+            <td>
+              {{if .Channel}}{{.Channel}}{{else}}-{{end}}
+              {{if .RequestID}}<br><span class="subtle">{{.RequestID}}</span>{{end}}
+              {{if .MessageID}}<br><span class="subtle">msg {{.MessageID}}</span>{{end}}
+            </td>
+            <td>
+              {{if .MetaURL}}<a href="{{.MetaURL}}" target="_blank">meta</a>{{end}}
+              {{if .EventsURL}} · <a href="{{.EventsURL}}" target="_blank">events</a>{{end}}
+              {{if .ResultURL}} · <a href="{{.ResultURL}}" target="_blank">result</a>{{end}}
+              {{if .TracePath}}<br><span class="subtle"><code>{{.TracePath}}</code></span>{{end}}
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+      {{else}}
+      <p class="empty">No recent traces.</p>
       {{end}}
     </section>
   </main>

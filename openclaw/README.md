@@ -120,7 +120,8 @@ http:
 
 admin:
   enabled: true
-  addr: "127.0.0.1:18789"
+  addr: "127.0.0.1:19789"
+  auto_port: true
 
 agent:
   # Short instruction text (optional).
@@ -1051,7 +1052,16 @@ provide a direct way to inspect or clean up jobs for the current chat
 without going through the model.
 
 When `admin.enabled` is true (default), OpenClaw also starts a local
-admin surface on `admin.addr` (default `127.0.0.1:18789`). It exposes a
-browser UI plus JSON endpoints for runtime overview and scheduled job
-management. Startup logs print the admin URL alongside the gateway
-routes.
+admin surface on `admin.addr` (default `127.0.0.1:19789`). When
+`admin.auto_port` is true (default), OpenClaw automatically moves to a
+nearby free port if the preferred admin port is busy, and startup logs
+print the actual admin URL.
+
+The admin surface is intentionally broader than cron management. It now
+includes:
+
+- runtime and host metadata
+- gateway routes and JSON endpoints
+- scheduled job inspection plus run/remove/clear actions
+- session-indexed debug trace browsing with direct links to
+  `meta.json`, `events.jsonl`, and `result.json`

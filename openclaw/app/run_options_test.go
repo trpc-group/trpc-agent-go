@@ -705,6 +705,53 @@ func TestParseRunOptions_SkillsLoadMode_InvalidFails(t *testing.T) {
 	require.Equal(t, 2, exitErr.Code)
 }
 
+func TestParseRunOptions_AdminDefaults(t *testing.T) {
+	t.Parallel()
+
+	opts, err := parseRunOptions(nil)
+	require.NoError(t, err)
+	require.True(t, opts.AdminEnabled)
+	require.Equal(t, defaultAdminAddr, opts.AdminAddr)
+	require.True(t, opts.AdminAutoPort)
+}
+
+func TestParseRunOptions_AdminConfigApplied(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+admin:
+  enabled: true
+  addr: "127.0.0.1:21000"
+  auto_port: false
+`)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.True(t, opts.AdminEnabled)
+	require.Equal(t, "127.0.0.1:21000", opts.AdminAddr)
+	require.False(t, opts.AdminAutoPort)
+}
+
+func TestParseRunOptions_AdminFlagOverridesConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+admin:
+  enabled: true
+  addr: "127.0.0.1:21000"
+  auto_port: false
+`)
+
+	opts, err := parseRunOptions([]string{
+		"-config", cfgPath,
+		"-admin-addr", "127.0.0.1:22000",
+		"-admin-auto-port=true",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "127.0.0.1:22000", opts.AdminAddr)
+	require.True(t, opts.AdminAutoPort)
+}
+
 func writeTempConfig(t *testing.T, body string) string {
 	t.Helper()
 

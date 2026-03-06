@@ -13,6 +13,9 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -51,6 +54,59 @@ func (r *stubRunner) Run(
 }
 
 func (r *stubRunner) Close() error { return nil }
+
+func writeDebugTraceFixture(
+	t *testing.T,
+	root string,
+	sessionID string,
+	requestID string,
+	startedAt time.Time,
+) string {
+	t.Helper()
+
+	traceDir := filepath.Join(
+		root,
+		startedAt.Format("20060102"),
+		startedAt.Format("150405")+"_"+requestID,
+	)
+	require.NoError(t, os.MkdirAll(traceDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(traceDir, debugMetaFileName),
+		[]byte(`{"request_id":"`+requestID+`"}`+"\n"),
+		0o600,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(traceDir, debugEventsFileName),
+		[]byte(`{"kind":"trace.start"}`+"\n"),
+		0o600,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(traceDir, debugResultFileName),
+		[]byte(`{"status":"ok"}`+"\n"),
+		0o600,
+	))
+
+	indexDir := filepath.Join(
+		root,
+		debugBySessionDir,
+		sessionID,
+		startedAt.Format("20060102"),
+		startedAt.Format("150405")+"_"+requestID,
+	)
+	require.NoError(t, os.MkdirAll(indexDir, 0o755))
+	rel, err := filepath.Rel(indexDir, traceDir)
+	require.NoError(t, err)
+	ref := `{"trace_dir":"` + filepath.ToSlash(rel) + `",` +
+		`"started_at":"` + startedAt.Format(time.RFC3339Nano) + `",` +
+		`"channel":"telegram","request_id":"` + requestID + `",` +
+		`"message_id":"msg-` + requestID + `"}`
+	require.NoError(t, os.WriteFile(
+		filepath.Join(indexDir, debugMetaTraceRefName),
+		[]byte(ref),
+		0o600,
+	))
+	return traceDir
+}
 
 func TestServiceHandlerRendersOverview(t *testing.T) {
 	t.Parallel()
@@ -200,6 +256,80 @@ func TestServiceSnapshotIncludesCronSummary(t *testing.T) {
 	require.Equal(t, 1, snap.Cron.JobCount)
 	require.Len(t, snap.Cron.Jobs, 1)
 	require.Equal(t, "every 5m", snap.Cron.Jobs[0].Schedule)
+}
+
+func TestServiceDebugEndpoints(t *testing.T) {
+	t.Parallel()
+
+	debugRoot := t.TempDir()
+	now := time.Date(2026, 3, 6, 18, 10, 0, 0, time.UTC)
+	writeDebugTraceFixture(
+		t,
+		debugRoot,
+		"telegram:dm:1",
+		"req-1",
+		now,
+	)
+	writeDebugTraceFixture(
+		t,
+		debugRoot,
+		"telegram:dm:2",
+		"req-2",
+		now.Add(-time.Minute),
+	)
+
+	svc := New(
+		Config{
+			AppName:        "openclaw",
+			InstanceID:     "inst-1",
+			StartedAt:      now.Add(-time.Hour),
+			Hostname:       "host-1",
+			PID:            4321,
+			GoVersion:      "go1.test",
+			AgentType:      "llm",
+			ModelMode:      "openai",
+			ModelName:      "gpt-5",
+			SessionBackend: "sqlite",
+			MemoryBackend:  "inmemory",
+			DebugDir:       debugRoot,
+		},
+		WithClock(func() time.Time { return now }),
+	)
+	handler := svc.Handler()
+
+	snap := svc.Snapshot()
+	require.True(t, snap.Debug.Enabled)
+	require.Equal(t, 2, snap.Debug.SessionCount)
+	require.Equal(t, 2, snap.Debug.TraceCount)
+	require.Len(t, snap.Debug.Sessions, 2)
+	require.Len(t, snap.Debug.RecentTraces, 2)
+
+	sessionsRR := httptest.NewRecorder()
+	sessionsReq := httptest.NewRequest(
+		http.MethodGet,
+		routeDebugSessionsJSON,
+		nil,
+	)
+	handler.ServeHTTP(sessionsRR, sessionsReq)
+	require.Equal(t, http.StatusOK, sessionsRR.Code)
+	require.Contains(t, sessionsRR.Body.String(), "telegram:dm:1")
+
+	traceQuery := routeDebugTracesJSON + "?" +
+		querySessionID + "=" +
+		url.QueryEscape("telegram:dm:1")
+	tracesRR := httptest.NewRecorder()
+	tracesReq := httptest.NewRequest(http.MethodGet, traceQuery, nil)
+	handler.ServeHTTP(tracesRR, tracesReq)
+	require.Equal(t, http.StatusOK, tracesRR.Code)
+	require.Contains(t, tracesRR.Body.String(), "req-1")
+	require.NotContains(t, tracesRR.Body.String(), "req-2")
+
+	metaURL := snap.Debug.RecentTraces[0].MetaURL
+	metaRR := httptest.NewRecorder()
+	metaReq := httptest.NewRequest(http.MethodGet, metaURL, nil)
+	handler.ServeHTTP(metaRR, metaReq)
+	require.Equal(t, http.StatusOK, metaRR.Code)
+	require.Contains(t, metaRR.Body.String(), "req-1")
 }
 
 func TestServiceClearAndValidationPaths(t *testing.T) {

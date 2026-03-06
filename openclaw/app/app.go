@@ -215,6 +215,7 @@ func NewRuntime(
 	args []string,
 ) (rt *Runtime, err error) {
 	rt = &Runtime{}
+	startedAt := time.Now()
 	cleanup := rt
 	defer func() {
 		if err != nil {
@@ -486,24 +487,24 @@ func NewRuntime(
 
 	if opts.AdminEnabled {
 		adminURL := listenURL(opts.AdminAddr)
-		adminSvc := admin.New(admin.Config{
-			AppName:     opts.AppName,
-			InstanceID:  instanceID,
-			GatewayAddr: opts.HTTPAddr,
-			GatewayURL:  listenURL(opts.HTTPAddr),
-			AdminAddr:   opts.AdminAddr,
-			AdminURL:    adminURL,
-			StateDir:    resolvedStateDir,
-			DebugDir:    debugDir,
-			Channels:    channelIDs(rt.Channels),
-			GatewayRoutes: admin.Routes{
+		adminSvc := admin.New(buildAdminConfig(
+			opts,
+			agentType,
+			instanceID,
+			resolvedStateDir,
+			debugDir,
+			startedAt,
+			rt.Channels,
+			admin.Routes{
 				HealthPath:   gwSrv.HealthPath(),
 				MessagesPath: gwSrv.MessagesPath(),
 				StatusPath:   gwSrv.StatusPath(),
 				CancelPath:   gwSrv.CancelPath(),
 			},
-			Cron: cronSvc,
-		})
+			cronSvc,
+			opts.AdminAddr,
+			adminURL,
+		))
 		rt.Admin = AdminSurface{
 			Handler: adminSvc.Handler(),
 			Addr:    opts.AdminAddr,
@@ -537,6 +538,7 @@ func (r *Runtime) Close() error {
 }
 
 func run(ctx context.Context, args []string) error {
+	startedAt := time.Now()
 	opts, err := parseRunOptions(args)
 	if err != nil {
 		return err
@@ -746,7 +748,10 @@ func run(ctx context.Context, args []string) error {
 		Handler:           gwSrv.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-	var adminSrv *http.Server
+	var (
+		adminSrv     *http.Server
+		adminBinding *adminBinding
+	)
 
 	var channels []channel.Channel
 	if len(opts.Channels) > 0 {
@@ -801,26 +806,35 @@ func run(ctx context.Context, args []string) error {
 	}
 
 	if opts.AdminEnabled {
-		adminSvc := admin.New(admin.Config{
-			AppName:     opts.AppName,
-			InstanceID:  instanceID,
-			GatewayAddr: opts.HTTPAddr,
-			GatewayURL:  listenURL(opts.HTTPAddr),
-			AdminAddr:   opts.AdminAddr,
-			AdminURL:    listenURL(opts.AdminAddr),
-			StateDir:    resolvedStateDir,
-			DebugDir:    debugDir,
-			Channels:    channelIDs(channels),
-			GatewayRoutes: admin.Routes{
+		adminBinding, err = openAdminBinding(
+			opts.AdminAddr,
+			opts.AdminAutoPort,
+		)
+		if err != nil {
+			return &exitError{
+				Code: 1,
+				Err:  err,
+			}
+		}
+		adminSvc := admin.New(buildAdminConfig(
+			opts,
+			agentType,
+			instanceID,
+			resolvedStateDir,
+			debugDir,
+			startedAt,
+			channels,
+			admin.Routes{
 				HealthPath:   gwSrv.HealthPath(),
 				MessagesPath: gwSrv.MessagesPath(),
 				StatusPath:   gwSrv.StatusPath(),
 				CancelPath:   gwSrv.CancelPath(),
 			},
-			Cron: cronSvc,
-		})
+			cronSvc,
+			adminBinding.addr,
+			adminBinding.url,
+		))
 		adminSrv = &http.Server{
-			Addr:              opts.AdminAddr,
 			Handler:           adminSvc.Handler(),
 			ReadHeaderTimeout: 5 * time.Second,
 		}
@@ -844,10 +858,18 @@ func run(ctx context.Context, args []string) error {
 
 	if adminSrv != nil {
 		go func() {
-			log.Infof("Admin UI listening on %s", adminSrv.Addr)
-			log.Infof("Admin UI: %s", listenURL(adminSrv.Addr))
+			if adminBinding.relocated {
+				log.Warnf(
+					"Admin UI preferred address %s was busy; "+
+						"using %s instead",
+					opts.AdminAddr,
+					adminBinding.addr,
+				)
+			}
+			log.Infof("Admin UI listening on %s", adminBinding.addr)
+			log.Infof("Admin UI: %s", adminBinding.url)
 			//nolint:gosec
-			errCh <- adminSrv.ListenAndServe()
+			errCh <- adminSrv.Serve(adminBinding.listener)
 		}()
 	}
 
@@ -1664,7 +1686,7 @@ func maybeEnableDebugRecorder(
 	}
 
 	log.Infof(
-		"Debug recorder enabled: dir=%s mode=%s",
+		"Debug recorder enabled: dir = %s mode = %s",
 		rec.Dir(),
 		rec.Mode(),
 	)

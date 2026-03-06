@@ -31,7 +31,8 @@ const (
 	defaultConfigRootDir = ".trpc-agent-go"
 	defaultConfigAppDir  = "openclaw"
 	defaultConfigFile    = "openclaw.yaml"
-	defaultAdminAddr     = "127.0.0.1:18789"
+	defaultAdminAddr     = "127.0.0.1:19789"
+	defaultAdminAutoPort = true
 
 	sessionBackendInMemory   = "inmemory"
 	sessionBackendRedis      = "redis"
@@ -86,8 +87,9 @@ const (
 	flagDebugRecorderDir  = "debug-recorder-dir"
 	flagDebugRecorderMode = "debug-recorder-mode"
 
-	flagAdminEnabled = "admin-enabled"
-	flagAdminAddr    = "admin-addr"
+	flagAdminEnabled  = "admin-enabled"
+	flagAdminAddr     = "admin-addr"
+	flagAdminAutoPort = "admin-auto-port"
 )
 
 type runOptions struct {
@@ -96,8 +98,9 @@ type runOptions struct {
 	AppName  string
 	HTTPAddr string
 
-	AdminEnabled bool
-	AdminAddr    string
+	AdminEnabled  bool
+	AdminAddr     string
+	AdminAutoPort bool
 
 	AddSessionSummary bool
 	MaxHistoryRuns    int
@@ -197,10 +200,11 @@ func parseRunOptions(args []string) (runOptions, error) {
 	fs.SetOutput(os.Stderr)
 
 	opts := runOptions{
-		AppName:      appName,
-		HTTPAddr:     defaultHTTPAddr,
-		AdminEnabled: true,
-		AdminAddr:    defaultAdminAddr,
+		AppName:       appName,
+		HTTPAddr:      defaultHTTPAddr,
+		AdminEnabled:  true,
+		AdminAddr:     defaultAdminAddr,
+		AdminAutoPort: defaultAdminAutoPort,
 
 		AgentType: agentTypeLLM,
 
@@ -249,6 +253,12 @@ func parseRunOptions(args []string) (runOptions, error) {
 		flagAdminAddr,
 		defaultAdminAddr,
 		"HTTP listen address for the local OpenClaw admin UI",
+	)
+	fs.BoolVar(
+		&opts.AdminAutoPort,
+		flagAdminAutoPort,
+		defaultAdminAutoPort,
+		"Auto-pick a nearby free admin port when the preferred one is busy",
 	)
 	fs.StringVar(
 		&opts.AgentType,
@@ -780,8 +790,9 @@ type httpConfig struct {
 }
 
 type adminConfig struct {
-	Enabled *bool   `yaml:"enabled,omitempty"`
-	Addr    *string `yaml:"addr,omitempty"`
+	Enabled  *bool   `yaml:"enabled,omitempty"`
+	Addr     *string `yaml:"addr,omitempty"`
+	AutoPort *bool   `yaml:"auto_port,omitempty"`
 }
 
 type debugRecorderConfig struct {
@@ -1074,6 +1085,10 @@ func (cfg *fileConfig) apply(
 		if cfg.Admin.Addr != nil &&
 			!flagWasSet(set, flagAdminAddr) {
 			opts.AdminAddr = strings.TrimSpace(*cfg.Admin.Addr)
+		}
+		if cfg.Admin.AutoPort != nil &&
+			!flagWasSet(set, flagAdminAutoPort) {
+			opts.AdminAutoPort = *cfg.Admin.AutoPort
 		}
 	}
 
