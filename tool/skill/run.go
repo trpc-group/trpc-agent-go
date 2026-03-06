@@ -425,6 +425,7 @@ func (t *RunTool) Call(
 	if err != nil {
 		return nil, err
 	}
+	files, fileWarn := filterFailedEmptyOutputFiles(rr, files)
 	out, err := t.buildRunOutput(
 		ctx,
 		rr,
@@ -437,6 +438,9 @@ func (t *RunTool) Call(
 	)
 	if err != nil {
 		return nil, err
+	}
+	if len(fileWarn) > 0 {
+		out.Warnings = append(out.Warnings, fileWarn...)
 	}
 	out.StagedInputs = staged
 	if len(stageWarn) > 0 {
@@ -1839,6 +1843,36 @@ func buildRunOutput(
 	}
 }
 
+func filterFailedEmptyOutputFiles(
+	rr codeexecutor.RunResult,
+	files []codeexecutor.File,
+) ([]codeexecutor.File, []string) {
+	if !failedRunResult(rr) || len(files) == 0 {
+		return files, nil
+	}
+	filtered := make([]codeexecutor.File, 0, len(files))
+	omitted := false
+	for _, f := range files {
+		if emptyCollectedFile(f) {
+			omitted = true
+			continue
+		}
+		filtered = append(filtered, f)
+	}
+	if !omitted {
+		return files, nil
+	}
+	return filtered, []string{warnFailedRunEmptyOutputFiles}
+}
+
+func failedRunResult(rr codeexecutor.RunResult) bool {
+	return rr.ExitCode != 0 || rr.TimedOut
+}
+
+func emptyCollectedFile(f codeexecutor.File) bool {
+	return f.SizeBytes == 0 && f.Content == ""
+}
+
 const (
 	maxOutputChars = 16 * 1024
 )
@@ -1848,8 +1882,11 @@ const (
 )
 
 const (
-	warnStdoutTruncated = "stdout truncated"
-	warnStderrTruncated = "stderr truncated"
+	warnStdoutTruncated           = "stdout truncated"
+	warnStderrTruncated           = "stderr truncated"
+	warnFailedRunEmptyOutputFiles = "empty output_files omitted " +
+		"because command failed; shell redirections can create " +
+		"empty files before execution fails"
 )
 
 func truncateOutput(s string) (string, bool) {
