@@ -10,6 +10,9 @@
 package knowledge
 
 import (
+	"context"
+	"time"
+
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/embedder"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/query"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/reranker"
@@ -70,14 +73,57 @@ func WithSources(sources []source.Source) Option {
 	}
 }
 
+// LoadProgressStage indicates the phase of load progress.
+type LoadProgressStage string
+
+const (
+	// LoadProgressStageSourceStart is emitted when loading of a source begins.
+	LoadProgressStageSourceStart LoadProgressStage = "source_start"
+	// LoadProgressStageDocument is emitted when document-level progress is made
+	// (at step boundaries controlled by WithProgressStepSize).
+	LoadProgressStageDocument LoadProgressStage = "document"
+	// LoadProgressStageSourceDone is emitted when loading of a source completes.
+	LoadProgressStageSourceDone LoadProgressStage = "source_done"
+	// LoadProgressStageCompleted is emitted when the entire load finishes.
+	LoadProgressStageCompleted LoadProgressStage = "completed"
+)
+
+// LoadProgressEvent carries progress information for a single load event.
+// Not all fields are set for every stage; see LoadProgressStage for semantics.
+type LoadProgressEvent struct {
+	Stage         LoadProgressStage
+	SourceName    string
+	SourceIndex   int // 1-based index of the current source
+	SourceTotal   int
+	DocProcessed  int
+	DocTotal      int
+	Elapsed       time.Duration
+	ETA           time.Duration
+}
+
+// LoadProgressCallback is invoked during Load to report progress. The callback
+// should return quickly; avoid blocking or heavy work. It may be called from
+// multiple goroutines when using concurrent loading.
+type LoadProgressCallback func(ctx context.Context, event LoadProgressEvent)
+
+// WithLoadProgressCallback sets an optional callback invoked during Load with
+// progress events (source start, document progress, source done, completed).
+// Progress is reported at the same points as log output when WithShowProgress(true).
+func WithLoadProgressCallback(cb LoadProgressCallback) LoadOption {
+	return func(lc *loadConfig) {
+		lc.progressCallback = cb
+	}
+}
+
 // loadConfig holds the configuration for load behavior.
 type loadConfig struct {
-	showProgress     bool
-	progressStepSize int
-	showStats        bool
-	srcParallelism   int
-	docParallelism   int
-	recreate         bool
+	showProgress      bool
+	progressStepSize  int
+	showStats         bool
+	srcParallelism    int
+	docParallelism    int
+	recreate          bool
+	progressCallback  LoadProgressCallback
 }
 
 // LoadOption represents a functional option for configuring load behavior.

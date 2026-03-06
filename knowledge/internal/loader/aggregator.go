@@ -36,7 +36,16 @@ type ProgEvent struct {
 	SrcName      string
 	SrcProcessed int
 	SrcTotal     int
+	// SrcIndex is the 1-based index of the source (0 when not set).
+	SrcIndex int
+	// SrcTotalCount is the total number of sources being loaded (0 when not set).
+	SrcTotalCount int
 }
+
+// ProgressCallbackFunc is invoked when document progress is reported, with
+// elapsed time for the current source and estimated remaining time (ETA).
+// Used by the knowledge package to support progress callbacks.
+type ProgressCallbackFunc func(ev ProgEvent, elapsed, eta time.Duration)
 
 // Aggregator centralises statistics collection and progress logging. It owns
 // all mutable state so callers do not need explicit locking – they simply send
@@ -48,13 +57,15 @@ type Aggregator struct {
 }
 
 // NewAggregator starts a background goroutine that consumes events and logs
-// according to the provided configuration. Call Close to flush and print the
-// final statistics.
+// according to the provided configuration. If onProgress is non-nil, it is
+// called for each progress report (at the same step boundaries as logging).
+// Call Close to flush and print the final statistics.
 func NewAggregator(
 	buckets []int,
 	showStats bool,
 	showProgress bool,
 	step int,
+	onProgress ProgressCallbackFunc,
 ) *Aggregator {
 	ag := &Aggregator{
 		statCh: make(chan StatEvent, chanBufferSize),
@@ -68,6 +79,8 @@ func NewAggregator(
 		stats := NewStats(buckets)
 		// Map to track per-source progress so we can decide whether to log.
 		lastLogged := make(map[string]int)
+		// Per-source start time for elapsed/ETA when invoking onProgress.
+		sourceStart := make(map[string]time.Time)
 
 		statCh := ag.statCh
 		progCh := ag.progCh
@@ -89,20 +102,30 @@ func NewAggregator(
 					progCh = nil
 					continue
 				}
-				if !showProgress {
-					continue
+				// Track first event time per source for elapsed/ETA.
+				if _, seen := sourceStart[ev.SrcName]; !seen {
+					sourceStart[ev.SrcName] = time.Now()
+				}
+				elapsed := time.Since(sourceStart[ev.SrcName])
+				var eta time.Duration
+				if ev.SrcProcessed > 0 && ev.SrcProcessed < ev.SrcTotal {
+					eta = time.Duration(int64(elapsed) * int64(ev.SrcTotal-ev.SrcProcessed) / int64(ev.SrcProcessed))
 				}
 
 				// Emit progress logs only every `step` documents.
-				if ev.SrcProcessed%step == 0 || ev.SrcProcessed == ev.SrcTotal {
+				shouldReport := ev.SrcProcessed%step == 0 || ev.SrcProcessed == ev.SrcTotal
+				if shouldReport {
 					// Avoid duplicate logs if sender races.
 					prev := lastLogged[ev.SrcName]
-					if ev.SrcProcessed != prev {
+					if ev.SrcProcessed != prev && showProgress {
 						log.Infof(
 							"Processed %d/%d doc(s) | source %s",
 							ev.SrcProcessed, ev.SrcTotal, ev.SrcName,
 						)
 						lastLogged[ev.SrcName] = ev.SrcProcessed
+					}
+					if onProgress != nil {
+						onProgress(ev, elapsed, eta)
 					}
 				}
 

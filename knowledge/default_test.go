@@ -381,6 +381,19 @@ func TestLoadOptions(t *testing.T) {
 			},
 			expectError: false,
 		},
+		{
+			name: "WithLoadProgressCallback",
+			setupKB: func() *BuiltinKnowledge {
+				kb := New(WithSources([]source.Source{&mockSource{name: "test", docCount: 1}}))
+				kb.vectorStore = &stubVectorStore{}
+				kb.embedder = stubEmbedder{}
+				return kb
+			},
+			loadOptions: []LoadOption{
+				WithLoadProgressCallback(func(ctx context.Context, ev LoadProgressEvent) {}),
+			},
+			expectError: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -612,6 +625,124 @@ func TestBuiltinKnowledge_LoadSequential(t *testing.T) {
 		WithProgressStepSize(1))
 	if err != nil {
 		t.Errorf("Sequential load failed: %v", err)
+	}
+}
+
+// TestLoadProgressCallback_Sequential verifies that WithLoadProgressCallback
+// receives the expected events (source_start, document, source_done, completed)
+// when loading sequentially.
+func TestLoadProgressCallback_Sequential(t *testing.T) {
+	var mu sync.Mutex
+	var events []LoadProgressEvent
+	cb := func(ctx context.Context, ev LoadProgressEvent) {
+		mu.Lock()
+		events = append(events, ev)
+		mu.Unlock()
+	}
+
+	kb := New(WithSources([]source.Source{
+		&mockSource{name: "src1", docCount: 3},
+	}))
+	kb.vectorStore = &stubVectorStore{}
+	kb.embedder = stubEmbedder{}
+
+	err := kb.Load(context.Background(),
+		WithSourceConcurrency(1),
+		WithDocConcurrency(1),
+		WithShowProgress(false),
+		WithProgressStepSize(1),
+		WithLoadProgressCallback(cb))
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	mu.Lock()
+	got := events
+	mu.Unlock()
+
+	// Expect: source_start, document(1), document(2), document(3), source_done, completed
+	if len(got) < 6 {
+		t.Fatalf("expected at least 6 progress events, got %d: %+v", len(got), got)
+	}
+	if got[0].Stage != LoadProgressStageSourceStart {
+		t.Errorf("first event: want stage %q, got %q", LoadProgressStageSourceStart, got[0].Stage)
+	}
+	if got[0].SourceName != "src1" || got[0].SourceIndex != 1 || got[0].SourceTotal != 1 {
+		t.Errorf("source_start: want SourceName=src1 SourceIndex=1 SourceTotal=1, got %+v", got[0])
+	}
+	// Document events at step boundaries (step=1: every doc)
+	docCount := 0
+	for i := 1; i < len(got)-2; i++ {
+		if got[i].Stage == LoadProgressStageDocument {
+			docCount++
+			if got[i].DocProcessed < 1 || got[i].DocTotal != 3 {
+				t.Errorf("document event %d: DocProcessed/DocTotal invalid: %+v", i, got[i])
+			}
+		}
+	}
+	if docCount != 3 {
+		t.Errorf("expected 3 document events, got %d", docCount)
+	}
+	if got[len(got)-2].Stage != LoadProgressStageSourceDone {
+		t.Errorf("second-to-last event: want stage %q, got %q", LoadProgressStageSourceDone, got[len(got)-2].Stage)
+	}
+	if got[len(got)-1].Stage != LoadProgressStageCompleted {
+		t.Errorf("last event: want stage %q, got %q", LoadProgressStageCompleted, got[len(got)-1].Stage)
+	}
+	if got[len(got)-1].SourceTotal != 1 {
+		t.Errorf("completed: want SourceTotal=1, got %d", got[len(got)-1].SourceTotal)
+	}
+}
+
+// TestLoadProgressCallback_Concurrent verifies that the progress callback is
+// invoked during concurrent load and receives at least document and completed events.
+func TestLoadProgressCallback_Concurrent(t *testing.T) {
+	var mu sync.Mutex
+	var events []LoadProgressEvent
+	cb := func(ctx context.Context, ev LoadProgressEvent) {
+		mu.Lock()
+		events = append(events, ev)
+		mu.Unlock()
+	}
+
+	kb := New(WithSources([]source.Source{
+		&mockSource{name: "concurrent-src", docCount: 2},
+	}))
+	kb.vectorStore = &stubVectorStore{}
+	kb.embedder = stubEmbedder{}
+
+	err := kb.Load(context.Background(),
+		WithSourceConcurrency(2),
+		WithDocConcurrency(2),
+		WithShowProgress(false),
+		WithProgressStepSize(1),
+		WithLoadProgressCallback(cb))
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	mu.Lock()
+	got := events
+	mu.Unlock()
+
+	// Must have at least one document event and one completed event.
+	var hasDocument, hasCompleted bool
+	for _, ev := range got {
+		if ev.Stage == LoadProgressStageDocument {
+			hasDocument = true
+		}
+		if ev.Stage == LoadProgressStageCompleted {
+			hasCompleted = true
+			if ev.SourceTotal != 1 {
+				t.Errorf("completed event: want SourceTotal=1, got %d", ev.SourceTotal)
+			}
+		}
+	}
+	if !hasDocument {
+		t.Error("expected at least one LoadProgressStageDocument event")
+	}
+	if !hasCompleted {
+		t.Error("expected LoadProgressStageCompleted event")
 	}
 }
 

@@ -463,8 +463,18 @@ func (dk *BuiltinKnowledge) loadSequential(
 	for i, src := range sources {
 		sourceName := src.Name()
 		sourceType := src.Type()
+		sourceIndex := i + 1
 		log.InfofContext(ctx, "Loading source %d/%d: %s (type: %s)",
-			i+1, totalSources, sourceName, sourceType)
+			sourceIndex, totalSources, sourceName, sourceType)
+
+		if config.progressCallback != nil {
+			config.progressCallback(ctx, LoadProgressEvent{
+				Stage:       LoadProgressStageSourceStart,
+				SourceName:  sourceName,
+				SourceIndex: sourceIndex,
+				SourceTotal: totalSources,
+			})
+		}
 
 		srcStartTime := time.Now()
 		docs, err := src.ReadDocuments(ctx)
@@ -502,23 +512,42 @@ func (dk *BuiltinKnowledge) loadSequential(
 			allAddedIDs = append(allAddedIDs, doc.ID)
 			processedDocs++
 
-			// Log progress based on configuration.
-			if config.showProgress {
-				srcProcessed := j + 1
-				totalSrc := len(docs)
-
-				// Respect progressStepSize for logging frequency.
-				if srcProcessed%config.progressStepSize == 0 || srcProcessed == totalSrc {
-					etaSrc := calcETA(srcStartTime, srcProcessed, totalSrc)
-					elapsedSrc := time.Since(srcStartTime)
-
+			// Log progress and invoke callback based on configuration.
+			srcProcessed := j + 1
+			totalSrc := len(docs)
+			if srcProcessed%config.progressStepSize == 0 || srcProcessed == totalSrc {
+				etaSrc := calcETA(srcStartTime, srcProcessed, totalSrc)
+				elapsedSrc := time.Since(srcStartTime)
+				if config.showProgress {
 					log.InfofContext(ctx,
 						"Processed %d/%d doc(s) | source %s | elapsed %s | ETA %s",
 						srcProcessed, totalSrc, sourceName,
 						elapsedSrc.Truncate(time.Second),
 						etaSrc.Truncate(time.Second))
 				}
+				if config.progressCallback != nil {
+					config.progressCallback(ctx, LoadProgressEvent{
+						Stage:         LoadProgressStageDocument,
+						SourceName:    sourceName,
+						SourceIndex:   sourceIndex,
+						SourceTotal:   totalSources,
+						DocProcessed:  srcProcessed,
+						DocTotal:      totalSrc,
+						Elapsed:       elapsedSrc,
+						ETA:           etaSrc,
+					})
+				}
 			}
+		}
+		if config.progressCallback != nil {
+			config.progressCallback(ctx, LoadProgressEvent{
+				Stage:       LoadProgressStageSourceDone,
+				SourceName:  sourceName,
+				SourceIndex: sourceIndex,
+				SourceTotal: totalSources,
+				DocProcessed: len(docs),
+				DocTotal:     len(docs),
+			})
 		}
 		log.InfofContext(ctx, "Successfully loaded source %s", sourceName)
 	}
@@ -526,6 +555,12 @@ func (dk *BuiltinKnowledge) loadSequential(
 	elapsedTotal := time.Since(startTime)
 	log.InfofContext(ctx, "Knowledge base loading completed in %s (%d sources)",
 		elapsedTotal, totalSources)
+	if config.progressCallback != nil {
+		config.progressCallback(ctx, LoadProgressEvent{
+			Stage: LoadProgressStageCompleted,
+			SourceTotal: totalSources,
+		})
+	}
 
 	// Output statistics if requested.
 	if config.showStats && stats.totalDocs > 0 {
@@ -539,8 +574,23 @@ func (dk *BuiltinKnowledge) loadConcurrent(
 	ctx context.Context,
 	config *loadConfig,
 	sources []source.Source) ([]string, error) {
-	// Create aggregator for collecting results
-	aggr := loader.NewAggregator(defaultSizeBuckets, config.showStats, config.showProgress, config.progressStepSize)
+	var onProgress loader.ProgressCallbackFunc
+	if config.progressCallback != nil {
+		cb := config.progressCallback
+		onProgress = func(ev loader.ProgEvent, elapsed, eta time.Duration) {
+			cb(ctx, LoadProgressEvent{
+				Stage:         LoadProgressStageDocument,
+				SourceName:    ev.SrcName,
+				SourceIndex:   ev.SrcIndex,
+				SourceTotal:   ev.SrcTotalCount,
+				DocProcessed:  ev.SrcProcessed,
+				DocTotal:      ev.SrcTotal,
+				Elapsed:       elapsed,
+				ETA:           eta,
+			})
+		}
+	}
+	aggr := loader.NewAggregator(defaultSizeBuckets, config.showStats, config.showProgress, config.progressStepSize, onProgress)
 	defer aggr.Close()
 
 	// Create worker pool for source processing
@@ -579,7 +629,7 @@ func (dk *BuiltinKnowledge) loadConcurrent(
 				return
 			}
 			log.InfofContext(ctx, "Fetched %d document(s) from source %s", len(docs), sourceName)
-			if err := dk.processDocuments(ctx, docs, config, aggr, docPool, source); err != nil {
+			if err := dk.processDocuments(ctx, docs, config, aggr, docPool, source, srcIdx+1, len(sources)); err != nil {
 				errCh <- fmt.Errorf("failed to process documents for source %s: %w", sourceName, err)
 				return
 			}
@@ -608,11 +658,18 @@ func (dk *BuiltinKnowledge) loadConcurrent(
 		}
 	}
 
+	if config.progressCallback != nil {
+		config.progressCallback(ctx, LoadProgressEvent{
+			Stage:       LoadProgressStageCompleted,
+			SourceTotal: len(sources),
+		})
+	}
 	return allAddedIDs, nil
 }
 
 // processDocuments embeds and stores all documents from a single source using
-// document-level parallelism.
+// document-level parallelism. sourceIndex and sourceTotal are 1-based index
+// and total count of sources, used for progress reporting.
 func (dk *BuiltinKnowledge) processDocuments(
 	ctx context.Context,
 	docs []*document.Document,
@@ -620,10 +677,13 @@ func (dk *BuiltinKnowledge) processDocuments(
 	aggr *loader.Aggregator,
 	pool *ants.Pool,
 	src source.Source,
+	sourceIndex int,
+	sourceTotal int,
 ) error {
 	var wgDoc sync.WaitGroup
 	errCh := make(chan error, len(docs))
 
+	reportProgress := cfg.showProgress || cfg.progressCallback != nil
 	processDoc := func(doc *document.Document, docIndex int) func() {
 		return func() {
 			defer wgDoc.Done()
@@ -633,11 +693,13 @@ func (dk *BuiltinKnowledge) processDocuments(
 			}
 
 			aggr.StatCh() <- loader.StatEvent{Size: len(doc.Content)}
-			if cfg.showProgress {
+			if reportProgress {
 				aggr.ProgCh() <- loader.ProgEvent{
-					SrcName:      src.Name(),
-					SrcProcessed: docIndex + 1,
-					SrcTotal:     len(docs),
+					SrcName:       src.Name(),
+					SrcProcessed:  docIndex + 1,
+					SrcTotal:      len(docs),
+					SrcIndex:      sourceIndex,
+					SrcTotalCount: sourceTotal,
 				}
 			}
 		}
