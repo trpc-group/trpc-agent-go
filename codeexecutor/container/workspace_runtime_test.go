@@ -690,6 +690,102 @@ func TestWorkspaceRuntime_StageInputs_ArtifactAndWorkspace(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestWorkspaceRuntime_StageInputs_DefaultTo_StripsVersion(t *testing.T) {
+	// Two execs: collect metadata, then mkdir -p for staged file.
+	var execIdx int
+	var stagedName string
+	var stagedDest string
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/exec"):
+			execIdx++
+			id := testExec1
+			if execIdx > 1 {
+				id = testExec2
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"` + id + `"}`))
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/start"):
+			hj, _ := w.(http.Hijacker)
+			conn, buf, _ := hj.Hijack()
+			writeHijackStream(t, conn, buf, "", "")
+		case r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ExitCode":0}`))
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec2+"/start"):
+			hj, _ := w.(http.Hijacker)
+			conn, buf, _ := hj.Hijack()
+			writeHijackStream(t, conn, buf, "", "")
+		case r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec2+"/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ExitCode":0}`))
+		case r.Method == http.MethodPut &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/archive"):
+			b, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+			tr := tar.NewReader(bytes.NewReader(b))
+			hdr, err := tr.Next()
+			require.NoError(t, err)
+			if hdr.Name != codeexecutor.MetaFileName {
+				stagedName = hdr.Name
+				stagedDest = r.URL.Query().Get("path")
+			}
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}
+
+	cli, cleanup := fakeDocker(t, handler)
+	defer cleanup()
+
+	rt := &workspaceRuntime{
+		ce: &CodeExecutor{
+			client:    cli,
+			container: &tcontainer.Summary{ID: testCID},
+		},
+		cfg: runtimeConfig{runContainerBase: testRunBase},
+	}
+
+	ws := codeexecutor.Workspace{ID: "wsi2",
+		Path: path.Join(testRunBase, "wsi2")}
+
+	svc := inmemory.NewService()
+	ctx := codeexecutor.WithArtifactService(
+		context.Background(), svc,
+	)
+	ctx = codeexecutor.WithArtifactSession(ctx, artifact.SessionInfo{
+		AppName: "a", UserID: "u", SessionID: "s",
+	})
+	ver, err := codeexecutor.SaveArtifactHelper(
+		ctx, "out/merged.pdf", []byte("PDF"), "application/pdf",
+	)
+	require.NoError(t, err)
+
+	spec := codeexecutor.InputSpec{
+		From: fmt.Sprintf("artifact://out/merged.pdf@%d", ver),
+		Mode: "copy",
+	}
+	err = rt.StageInputs(ctx, ws, []codeexecutor.InputSpec{spec})
+	require.NoError(t, err)
+
+	require.Equal(t, "merged.pdf", stagedName)
+	require.Equal(t,
+		path.Join(ws.Path, codeexecutor.DirWork, "inputs"), stagedDest,
+	)
+}
+
 func TestWorkspaceRuntime_Collect_NoMatches_And_CopyError(t *testing.T) {
 	// Two phases: first no matches, then copy error on a listed file.
 	phase := 0
