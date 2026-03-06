@@ -94,6 +94,8 @@ type stubBot struct {
 	editErr   error
 	actions   []tgapi.SendChatActionParams
 	actionErr error
+	commands  [][]tgapi.BotCommand
+	cmdErr    error
 	updates   [][]tgapi.Update
 	getError  error
 
@@ -174,6 +176,16 @@ func (b *stubBot) SendChatAction(
 	defer b.mu.Unlock()
 	b.actions = append(b.actions, params)
 	return b.actionErr
+}
+
+func (b *stubBot) SetMyCommands(
+	_ context.Context,
+	params tgapi.SetMyCommandsParams,
+) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.commands = append(b.commands, params.Commands)
+	return b.cmdErr
 }
 
 func (b *stubBot) DownloadFileByID(
@@ -279,6 +291,56 @@ func TestChannel_ID(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, "telegram", ch.ID())
+}
+
+func TestChannel_RegisterBotCommands(t *testing.T) {
+	t.Parallel()
+
+	gw := &stubGateway{}
+	dir := t.TempDir()
+	ch, err := New(
+		testToken,
+		BotInfo{Username: "bot"},
+		gw,
+		WithStateDir(dir),
+	)
+	require.NoError(t, err)
+
+	bot := &stubBot{}
+	ch.bot = bot
+
+	err = ch.registerBotCommands(context.Background())
+	require.NoError(t, err)
+
+	bot.mu.Lock()
+	defer bot.mu.Unlock()
+	require.Len(t, bot.commands, 1)
+	require.Equal(t, defaultBotCommands(), bot.commands[0])
+}
+
+func TestChannel_RegisterBotCommands_Disabled(t *testing.T) {
+	t.Parallel()
+
+	gw := &stubGateway{}
+	dir := t.TempDir()
+	ch, err := New(
+		testToken,
+		BotInfo{Username: "bot"},
+		gw,
+		WithStateDir(dir),
+		WithRegisterCommands(false),
+	)
+	require.NoError(t, err)
+
+	bot := &stubBot{}
+	ch.bot = bot
+
+	err = ch.registerBotCommands(context.Background())
+	require.NoError(t, err)
+
+	bot.mu.Lock()
+	defer bot.mu.Unlock()
+	require.Empty(t, bot.commands)
 }
 
 func TestNew_OptionsApplied(t *testing.T) {

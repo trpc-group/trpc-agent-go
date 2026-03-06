@@ -42,6 +42,7 @@ const (
 	pathEditMessageText = "editMessageText"
 	pathGetFile         = "getFile"
 	pathGetMe           = "getMe"
+	pathSetMyCommands   = "setMyCommands"
 	pathGetUpdate       = "getUpdates"
 	pathGetWebhookInfo  = "getWebhookInfo"
 	pathSendChatAction  = "sendChatAction"
@@ -144,6 +145,11 @@ type SendChatActionParams struct {
 	ChatID          int64
 	MessageThreadID int
 	Action          string
+}
+
+// SetMyCommandsParams contains parameters for SetMyCommands.
+type SetMyCommandsParams struct {
+	Commands []BotCommand
 }
 
 // Option configures the Telegram client.
@@ -380,6 +386,37 @@ func (c *Client) SendChatAction(
 	})
 }
 
+// SetMyCommands registers the bot command menu shown by Telegram clients.
+func (c *Client) SetMyCommands(
+	ctx context.Context,
+	params SetMyCommandsParams,
+) error {
+	req := setMyCommandsRequest{
+		Commands: params.Commands,
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("telegram: marshal request: %w", err)
+	}
+
+	var rsp apiResponse[bool]
+	return c.doWithRetry(ctx, func(ctx context.Context) error {
+		status, err := c.doOnce(
+			ctx,
+			methodPost,
+			pathSetMyCommands,
+			nil,
+			body,
+			&rsp,
+		)
+		if err != nil {
+			return err
+		}
+		return validateResponse(status, rsp)
+	})
+}
+
 // GetFile resolves a file ID into a downloadable file path.
 func (c *Client) GetFile(ctx context.Context, fileID string) (File, error) {
 	fileID = strings.TrimSpace(fileID)
@@ -512,6 +549,10 @@ type sendChatActionRequest struct {
 	ChatID          int64  `json:"chat_id"`
 	MessageThreadID int    `json:"message_thread_id,omitempty"`
 	Action          string `json:"action"`
+}
+
+type setMyCommandsRequest struct {
+	Commands []BotCommand `json:"commands"`
 }
 
 // WebhookInfo describes the currently configured Telegram webhook.

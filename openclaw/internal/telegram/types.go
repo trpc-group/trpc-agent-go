@@ -104,6 +104,14 @@ type File struct {
 	FilePath     string `json:"file_path,omitempty"`
 }
 
+// BotCommand is one bot command entry for Telegram command menus.
+//
+// Telegram docs: core.telegram.org/bots/api#botcommand
+type BotCommand struct {
+	Command     string `json:"command"`
+	Description string `json:"description"`
+}
+
 // User is a Telegram user.
 //
 // Telegram docs: core.telegram.org/bots/api#user

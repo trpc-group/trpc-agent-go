@@ -544,6 +544,10 @@ This demo supports a few basic commands:
 - `/forget`: permanently delete your stored sessions, memories, and debug
   traces (DM only).
 
+On startup, OpenClaw also registers these commands with Telegram via
+`setMyCommands`, so supported clients can show them in the slash-command
+menu. If registration fails, the commands still work when typed manually.
+
 You can also configure automatic DM session resets:
 
 - `session_reset_idle`: rotate the active DM session after it has been idle

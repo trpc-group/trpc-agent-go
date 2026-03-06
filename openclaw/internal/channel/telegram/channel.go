@@ -75,6 +75,8 @@ const (
 
 	defaultPairingTTL = time.Hour
 
+	defaultRegisterCommands = true
+
 	defaultMaxDownloadBytes int64 = 8 << 20
 )
 
@@ -120,6 +122,11 @@ type botAPI interface {
 	SendChatAction(
 		ctx context.Context,
 		params tgapi.SendChatActionParams,
+	) error
+
+	SetMyCommands(
+		ctx context.Context,
+		params tgapi.SetMyCommandsParams,
 	) error
 
 	DownloadFileByID(
@@ -192,6 +199,8 @@ type config struct {
 	dmResetPolicy dmSessionResetPolicy
 
 	dmBlockCleanup string
+
+	registerCommands bool
 }
 
 // Option configures the Telegram channel.
@@ -317,6 +326,12 @@ func WithDMBlockCleanup(action string) Option {
 	return func(c *config) { c.dmBlockCleanup = action }
 }
 
+// WithRegisterCommands controls whether the bot registers slash commands
+// with Telegram on startup.
+func WithRegisterCommands(enabled bool) Option {
+	return func(c *config) { c.registerCommands = enabled }
+}
+
 type pairingStore interface {
 	IsApproved(ctx context.Context, userID string) (bool, error)
 	Request(
@@ -353,6 +368,8 @@ type Channel struct {
 
 	streamingMode string
 
+	registerCommands bool
+
 	lanes    *laneLocker
 	inflight *inflightRequests
 }
@@ -379,6 +396,7 @@ func New(
 		dmPolicy:         defaultDMPolicy,
 		groupPolicy:      defaultGroupPolicy,
 		pairingTTL:       defaultPairingTTL,
+		registerCommands: defaultRegisterCommands,
 		maxDownloadBytes: defaultMaxDownloadBytes,
 		streamingMode:    defaultStreamingMode,
 		dmBlockCleanup:   defaultDMBlockCleanup,
@@ -474,6 +492,7 @@ func New(
 		pairing:          dmPairing,
 		maxDownloadBytes: cfg.maxDownloadBytes,
 		streamingMode:    streamingMode,
+		registerCommands: cfg.registerCommands,
 		lanes:            newLaneLocker(),
 		inflight:         newInflightRequests(),
 	}, nil
@@ -486,6 +505,17 @@ func (c *Channel) ID() string { return channelID }
 func (c *Channel) Run(ctx context.Context) error {
 	if c == nil {
 		return errors.New("telegram: nil channel")
+	}
+
+	if err := c.registerBotCommands(ctx); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		log.WarnfContext(
+			ctx,
+			"telegram: register commands: %v",
+			err,
+		)
 	}
 
 	poller, err := tgapi.NewPoller(
@@ -532,6 +562,18 @@ func (c *Channel) Run(ctx context.Context) error {
 		return err
 	}
 	return poller.Run(ctx)
+}
+
+func (c *Channel) registerBotCommands(ctx context.Context) error {
+	if c == nil || !c.registerCommands || c.bot == nil {
+		return nil
+	}
+	return c.bot.SetMyCommands(
+		ctx,
+		tgapi.SetMyCommandsParams{
+			Commands: defaultBotCommands(),
+		},
+	)
 }
 
 func (c *Channel) handleMessage(

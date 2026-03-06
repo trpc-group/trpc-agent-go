@@ -963,6 +963,53 @@ func TestClient_GetUpdates_QueryEmptyByDefault(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestClient_SetMyCommands(t *testing.T) {
+	t.Parallel()
+
+	commands := []BotCommand{
+		{Command: "help", Description: "Show help"},
+		{Command: "reset", Description: "Start a new DM session"},
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		require.Equal(t, methodPost, r.Method)
+		require.Equal(
+			t,
+			"/bot"+testToken+"/"+pathSetMyCommands,
+			r.URL.Path,
+		)
+
+		raw, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+
+		var payload setMyCommandsRequest
+		require.NoError(t, json.Unmarshal(raw, &payload))
+		require.Equal(t, commands, payload.Commands)
+
+		_ = json.NewEncoder(w).Encode(apiResponse[bool]{
+			OK:     true,
+			Result: true,
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := New(
+		testToken,
+		WithBaseURL(srv.URL),
+		WithHTTPClient(srv.Client()),
+	)
+	require.NoError(t, err)
+
+	err = c.SetMyCommands(
+		context.Background(),
+		SetMyCommandsParams{Commands: commands},
+	)
+	require.NoError(t, err)
+}
+
 func TestClient_GetMe_RetriesOnAPI429(t *testing.T) {
 	t.Parallel()
 

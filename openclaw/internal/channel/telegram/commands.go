@@ -13,6 +13,8 @@ package telegram
 import (
 	"strings"
 	"sync"
+
+	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
 )
 
 const (
@@ -26,12 +28,45 @@ const (
 	commandForget = "forget"
 )
 
-const helpMessage = `Commands:
-/help   Show help
-/cancel Cancel the current run
-/reset  Start a new DM session
-/new    Alias of /reset
-/forget Delete your saved data (DM only)`
+const (
+	commandHelpDesc   = "Show help"
+	commandCancelDesc = "Cancel the current run"
+	commandResetDesc  = "Start a new DM session"
+	commandNewDesc    = "Alias of /reset"
+	commandForgetDesc = "Delete your saved data (DM only)"
+)
+
+const helpMessage = "Commands:\n" +
+	"/help   " + commandHelpDesc + "\n" +
+	"/cancel " + commandCancelDesc + "\n" +
+	"/reset  " + commandResetDesc + "\n" +
+	"/new    " + commandNewDesc + "\n" +
+	"/forget " + commandForgetDesc
+
+func defaultBotCommands() []tgapi.BotCommand {
+	return []tgapi.BotCommand{
+		{
+			Command:     commandHelp,
+			Description: commandHelpDesc,
+		},
+		{
+			Command:     commandCancel,
+			Description: commandCancelDesc,
+		},
+		{
+			Command:     commandReset,
+			Description: commandResetDesc,
+		},
+		{
+			Command:     commandNew,
+			Description: commandNewDesc,
+		},
+		{
+			Command:     commandForget,
+			Description: commandForgetDesc,
+		},
+	}
+}
 
 func parseCommand(text string, bot BotInfo) string {
 	trimmed := strings.TrimSpace(text)
