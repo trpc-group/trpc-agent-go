@@ -402,6 +402,9 @@ func TestTool_StatusUpdateRunAndHelpers(t *testing.T) {
 		outbound.NewRouter(),
 	)
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
 
 	tool := NewTool(nil)
 	tool.SetService(svc)

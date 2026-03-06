@@ -35,9 +35,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
+	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
@@ -184,6 +186,7 @@ type Runtime struct {
 	Channels []channel.Channel
 
 	runner     runner.Runner
+	cronRunner closeFunc
 	sessionSvc closeFunc
 	memorySvc  closeFunc
 	cronSvc    closeFunc
@@ -446,17 +449,29 @@ func NewRuntime(
 		rt.Channels = append(rt.Channels, extra...)
 	}
 
-	var cronSvc *cron.Service
+	var (
+		cronSvc    *cron.Service
+		cronRunner runner.Runner
+	)
 	if openClawTools.router != nil {
 		for _, ch := range rt.Channels {
 			openClawTools.router.Register(ch)
 		}
+		cronRunner = newCronRunner(
+			opts.AppName,
+			ag,
+			memSvc,
+			rlCfg,
+		)
 		cronSvc, err = cron.NewService(
 			resolvedStateDir,
-			r,
+			cronRunner,
 			openClawTools.router,
 		)
 		if err != nil {
+			if cronRunner != nil {
+				_ = cronRunner.Close()
+			}
 			return nil, &exitError{
 				Code: 1,
 				Err:  fmt.Errorf("create cron service failed: %w", err),
@@ -466,6 +481,7 @@ func NewRuntime(
 		gw.SetCronService(cronSvc)
 		cronSvc.Start(ctx)
 		rt.cronSvc = cronSvc
+		rt.cronRunner = cronRunner
 	}
 
 	if opts.AdminEnabled {
@@ -506,6 +522,9 @@ func (r *Runtime) Close() error {
 
 	if r.cronSvc != nil {
 		_ = r.cronSvc.Close()
+	}
+	if r.cronRunner != nil {
+		_ = r.cronRunner.Close()
 	}
 	closeToolSets(r.toolSets)
 	closeMemoryService(r.memorySvc)
@@ -748,17 +767,29 @@ func run(ctx context.Context, args []string) error {
 		channels = append(channels, extra...)
 	}
 
-	var cronSvc *cron.Service
+	var (
+		cronSvc    *cron.Service
+		cronRunner runner.Runner
+	)
 	if openClawTools.router != nil {
 		for _, ch := range channels {
 			openClawTools.router.Register(ch)
 		}
+		cronRunner = newCronRunner(
+			opts.AppName,
+			ag,
+			memSvc,
+			rlCfg,
+		)
 		cronSvc, err = cron.NewService(
 			resolvedStateDir,
-			r,
+			cronRunner,
 			openClawTools.router,
 		)
 		if err != nil {
+			if cronRunner != nil {
+				_ = cronRunner.Close()
+			}
 			return &exitError{
 				Code: 1,
 				Err:  fmt.Errorf("create cron service failed: %w", err),
@@ -852,6 +883,9 @@ func run(ctx context.Context, args []string) error {
 	if cronSvc != nil {
 		_ = cronSvc.Close()
 	}
+	if cronRunner != nil {
+		_ = cronRunner.Close()
+	}
 	_ = r.Close()
 
 	for received < workerCount {
@@ -900,6 +934,24 @@ func closeToolSets(sets []tool.ToolSet) {
 			log.Warnf("close toolset %q failed: %v", ts.Name(), err)
 		}
 	}
+}
+
+func newCronRunner(
+	appName string,
+	ag agent.Agent,
+	memSvc memory.Service,
+	rlCfg *runner.RalphLoopConfig,
+) runner.Runner {
+	opts := []runner.Option{
+		runner.WithSessionService(
+			sessioninmemory.NewSessionService(),
+		),
+		runner.WithMemoryService(memSvc),
+	}
+	if rlCfg != nil {
+		opts = append(opts, runner.WithRalphLoop(*rlCfg))
+	}
+	return runner.NewRunner(appName, ag, opts...)
 }
 
 func runtimeInstanceID(

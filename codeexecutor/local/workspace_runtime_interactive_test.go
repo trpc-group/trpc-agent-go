@@ -106,14 +106,22 @@ func TestRuntime_StartProgramInteractivePipes(t *testing.T) {
 	waitInteractiveExit(t, proc, "ready")
 	require.NoError(t, proc.Write("hello", true))
 
-	poll := waitInteractiveExit(t, proc, "out:hello")
+	waitInteractiveExit(t, proc, "out:hello")
+	poll := waitInteractiveStatus(
+		t,
+		proc,
+		codeexecutor.ProgramStatusExited,
+	)
 	require.Equal(t, codeexecutor.ProgramStatusExited, poll.Status)
 
 	provider, ok := proc.(codeexecutor.ProgramResultProvider)
 	require.True(t, ok)
-	result := provider.RunResult()
-	require.Contains(t, result.Stdout, "out:hello")
-	require.Contains(t, result.Stderr, "err:hello")
+	var result codeexecutor.RunResult
+	require.Eventually(t, func() bool {
+		result = provider.RunResult()
+		return strings.Contains(result.Stdout, "out:hello") &&
+			strings.Contains(result.Stderr, "err:hello")
+	}, time.Second, 20*time.Millisecond)
 	require.NoError(t, proc.Close())
 }
 
@@ -150,13 +158,23 @@ func TestRuntime_StartProgramInteractiveTTY(t *testing.T) {
 	waitInteractiveExit(t, proc, "choose:")
 	require.NoError(t, proc.Write("7", true))
 
+	waitInteractiveExit(t, proc, "tty:7")
+
 	poll := waitInteractiveStatus(
 		t,
 		proc,
 		codeexecutor.ProgramStatusExited,
 	)
 	require.Equal(t, codeexecutor.ProgramStatusExited, poll.Status)
-	require.Contains(t, poll.Output, "tty:7")
+
+	provider, ok := proc.(codeexecutor.ProgramResultProvider)
+	require.True(t, ok)
+	require.Eventually(t, func() bool {
+		return strings.Contains(
+			provider.RunResult().Stdout,
+			"tty:7",
+		)
+	}, time.Second, 20*time.Millisecond)
 }
 
 func TestInteractiveHelpers_FormatEnvAndExitCode(t *testing.T) {

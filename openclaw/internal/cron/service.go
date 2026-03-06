@@ -256,7 +256,7 @@ func (s *Service) RemoveForUser(
 		if !matchesJobScope(job, userID, filter) {
 			continue
 		}
-		s.removeJobLocked(id)
+		s.removeJobLocked(id, true)
 		removed++
 	}
 	s.mu.Unlock()
@@ -368,7 +368,7 @@ func (s *Service) Remove(jobID string) error {
 		s.mu.Unlock()
 		return fmt.Errorf("cron: unknown job: %s", id)
 	}
-	s.removeJobLocked(id)
+	s.removeJobLocked(id, true)
 	s.mu.Unlock()
 	return s.persist()
 }
@@ -686,8 +686,21 @@ func (s *Service) suppressRunLocked(jobID string) {
 	run.suppressDelivery = true
 }
 
-func (s *Service) removeJobLocked(jobID string) {
-	if _, ok := s.running[jobID]; ok {
+func (s *Service) cancelRunLocked(jobID string) {
+	run := s.running[jobID]
+	if run == nil {
+		return
+	}
+	run.suppressDelivery = true
+	if run.cancel != nil {
+		run.cancel()
+	}
+}
+
+func (s *Service) removeJobLocked(jobID string, cancel bool) {
+	if cancel {
+		s.cancelRunLocked(jobID)
+	} else if _, ok := s.running[jobID]; ok {
 		s.suppressRunLocked(jobID)
 	} else {
 		delete(s.running, jobID)

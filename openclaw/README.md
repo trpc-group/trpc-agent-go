@@ -549,8 +549,9 @@ This demo supports a few basic commands:
   traces (DM only).
 - `/jobs`: list scheduled jobs scoped to the current chat.
 - `/jobs_clear`: remove scheduled jobs scoped to the current chat.
-  Future executions stop immediately, and any already-running delivery is
-  muted before the next reply is sent.
+  Future executions stop immediately. If a matching job is currently
+  running, OpenClaw cancels that in-flight run and suppresses any pending
+  delivery for this chat.
 
 On startup, OpenClaw also registers these commands with Telegram via
 `setMyCommands`, so supported clients can show them in the slash-command

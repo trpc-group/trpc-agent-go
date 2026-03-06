@@ -504,7 +504,7 @@ func TestServiceScopesAndHelpers(t *testing.T) {
 	require.Len(t, svc.ListForUser("user-1", outbound.DeliveryTarget{}), 0)
 }
 
-func TestServiceRemoveSuppressesRunningDelivery(t *testing.T) {
+func TestServiceRemoveCancelsRunningDelivery(t *testing.T) {
 	t.Parallel()
 
 	router := outbound.NewRouter()
@@ -543,7 +543,6 @@ func TestServiceRemoveSuppressesRunningDelivery(t *testing.T) {
 
 	<-runner.started
 	require.NoError(t, svc.Remove(job.ID))
-	close(runner.release)
 
 	waitFor(t, func() bool {
 		return svc.Status()["jobs_running"] == 0
@@ -553,6 +552,82 @@ func TestServiceRemoveSuppressesRunningDelivery(t *testing.T) {
 	defer sender.mu.Unlock()
 	require.Empty(t, sender.text)
 	require.Nil(t, svc.Get(job.ID))
+}
+
+func TestServiceRemoveForUserCancelsRunningDelivery(t *testing.T) {
+	t.Parallel()
+
+	router := outbound.NewRouter()
+	sender := &stubSender{}
+	router.RegisterSender(sender)
+
+	runner := &blockingRunner{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+		reply:   "should stay muted",
+	}
+	svc, err := NewService(t.TempDir(), runner, router)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	_, err = svc.Add(&Job{
+		Name:    "report",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "collect cpu",
+		UserID:  "telegram:user",
+		Delivery: outbound.DeliveryTarget{
+			Channel: "telegram",
+			Target:  "100",
+		},
+	})
+	require.NoError(t, err)
+
+	jobs := svc.ListForUser(
+		"telegram:user",
+		outbound.DeliveryTarget{
+			Channel: "telegram",
+			Target:  "100",
+		},
+	)
+	require.Len(t, jobs, 1)
+
+	_, err = svc.RunNow(jobs[0].ID)
+	require.NoError(t, err)
+
+	<-runner.started
+	removed, err := svc.RemoveForUser(
+		"telegram:user",
+		outbound.DeliveryTarget{
+			Channel: "telegram",
+			Target:  "100",
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, removed)
+
+	waitFor(t, func() bool {
+		return svc.Status()["jobs_running"] == 0
+	})
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	require.Empty(t, sender.text)
+	require.Empty(
+		t,
+		svc.ListForUser(
+			"telegram:user",
+			outbound.DeliveryTarget{
+				Channel: "telegram",
+				Target:  "100",
+			},
+		),
+	)
 }
 
 func TestServiceNormalizeAndAccumulatorHelpers(t *testing.T) {
