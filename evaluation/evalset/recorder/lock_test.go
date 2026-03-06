@@ -58,3 +58,9 @@ func TestKeyedLocker_RemovesLockAfterUnlock(t *testing.T) {
 	l.mu.Unlock()
 	assert.False(t, ok)
 }
+
+func TestKeyedLocker_UnlockMissingKeyIsNoop(t *testing.T) {
+	l := newKeyedLocker()
+	l.unlock("missing")
+	assert.Empty(t, l.locks)
+}

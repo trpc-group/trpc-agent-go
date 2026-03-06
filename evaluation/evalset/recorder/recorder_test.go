@@ -418,6 +418,107 @@ func TestRecorder_OnEvent_NilArgs_NoPanic(t *testing.T) {
 	assert.NoError(t, hookErr)
 }
 
+func TestRecorder_HelperBranches(t *testing.T) {
+	_, err := New(nil)
+	require.ErrorContains(t, err, "evalset manager is nil")
+	rec, err := New(inmemory.New())
+	require.NoError(t, err)
+	assert.Equal(t, defaultPluginName, rec.Name())
+	rec.Register(nil)
+	msg, err := buildFinalResponse(turnSnapshot{hasRunError: true, runError: model.ResponseError{}}, true)
+	require.NoError(t, err)
+	require.NotNil(t, msg)
+	assert.Equal(t, "[RUN_ERROR] unknown: unknown", msg.Content)
+	_, err = buildFinalResponse(turnSnapshot{}, true)
+	require.ErrorContains(t, err, "run error is missing")
+	final := model.NewAssistantMessage("ok")
+	msg, err = buildFinalResponse(turnSnapshot{hasFinalResponse: true, finalResponse: final}, false)
+	require.NoError(t, err)
+	require.NotNil(t, msg)
+	assert.Equal(t, "ok", msg.Content)
+	_, err = buildFinalResponse(turnSnapshot{}, false)
+	require.ErrorContains(t, err, "final response is missing")
+	assert.Equal(t, "[RUN_ERROR] unknown: unknown", formatRunError(model.ResponseError{}))
+	_, ok := extractAssistantContentMessage(nil)
+	assert.False(t, ok)
+	_, ok = extractAssistantContentMessage(&model.Response{})
+	assert.False(t, ok)
+	_, ok = extractAssistantContentMessage(&model.Response{Choices: []model.Choice{{Message: model.NewUserMessage("user")}}})
+	assert.False(t, ok)
+	_, ok = extractAssistantContentMessage(&model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant}}}})
+	assert.False(t, ok)
+	got, ok := extractAssistantContentMessage(&model.Response{Choices: []model.Choice{{Message: model.NewAssistantMessage("assistant")}}})
+	require.True(t, ok)
+	assert.Equal(t, "assistant", got.Content)
+}
+
+func TestRecorder_BuildTurnAndStartWriteBranches(t *testing.T) {
+	ctx := context.Background()
+	rec := &Recorder{locker: newKeyedLocker(), manager: &stubManager{}}
+	snapshot := turnSnapshot{
+		hasUserContent:        true,
+		userContent:           model.NewUserMessage("hi"),
+		hasFinalResponse:      true,
+		finalResponse:         model.NewAssistantMessage("ok"),
+		sessionInputState:     map[string]any{"tenant": "blue"},
+		contextMessages:       []model.Message{model.NewSystemMessage("ctx")},
+		intermediateResponses: []model.Message{model.NewAssistantMessage("mid")},
+	}
+	_, err := rec.buildTurn(ctx, nil, "req", snapshot, false, time.Unix(10, 0))
+	require.ErrorContains(t, err, "invocation is nil")
+	_, err = rec.buildTurn(ctx, &agent.Invocation{}, "req", snapshot, false, time.Unix(10, 0))
+	require.ErrorContains(t, err, "session is nil")
+	inv := newTestInvocation("app-1", "u-1", "s-1", "req", model.NewUserMessage("hi"))
+	_, err = rec.buildTurn(ctx, inv, "", snapshot, false, time.Unix(10, 0))
+	require.ErrorContains(t, err, "request id is empty")
+	_, err = rec.buildTurn(ctx, inv, "req", turnSnapshot{}, false, time.Unix(10, 0))
+	require.ErrorContains(t, err, "user content is missing")
+	emptyAppInv := newTestInvocation("", "u-1", "s-1", "req", model.NewUserMessage("hi"))
+	_, err = rec.buildTurn(ctx, emptyAppInv, "req", snapshot, false, time.Unix(10, 0))
+	require.ErrorContains(t, err, "app name is empty")
+	setErrRecorder := &Recorder{
+		manager:           &stubManager{},
+		locker:            newKeyedLocker(),
+		evalSetIDResolver: func(context.Context, *agent.Invocation) (string, error) { return "", errors.New("set boom") },
+	}
+	_, err = setErrRecorder.buildTurn(ctx, inv, "req", snapshot, false, time.Unix(10, 0))
+	require.ErrorContains(t, err, "resolve eval set id: set boom")
+	caseErrRecorder := &Recorder{
+		manager:            &stubManager{},
+		locker:             newKeyedLocker(),
+		evalCaseIDResolver: func(context.Context, *agent.Invocation) (string, error) { return "", errors.New("case boom") },
+	}
+	_, err = caseErrRecorder.buildTurn(ctx, inv, "req", snapshot, false, time.Unix(10, 0))
+	require.ErrorContains(t, err, "resolve eval case id: case boom")
+	emptyIDRecorder := &Recorder{
+		manager:            &stubManager{},
+		locker:             newKeyedLocker(),
+		evalSetIDResolver:  func(context.Context, *agent.Invocation) (string, error) { return "", nil },
+		evalCaseIDResolver: func(context.Context, *agent.Invocation) (string, error) { return "", nil },
+	}
+	_, err = emptyIDRecorder.buildTurn(ctx, inv, "req", snapshot, false, time.Unix(10, 0))
+	require.ErrorContains(t, err, "eval set id or eval case id is empty")
+	traceRecorder := &Recorder{manager: &stubManager{}, locker: newKeyedLocker(), traceModeEnabled: true}
+	turn, err := traceRecorder.buildTurn(ctx, inv, "req", snapshot, false, time.Unix(10, 0))
+	require.NoError(t, err)
+	require.NotNil(t, turn)
+	assert.Equal(t, evalset.EvalModeTrace, turn.evalMode)
+	require.NotNil(t, turn.invocation.CreationTimestamp)
+	assert.Equal(t, time.Unix(10, 0), turn.invocation.CreationTimestamp.Time)
+	require.Len(t, turn.contextMessages, 1)
+	assert.Equal(t, "ctx", turn.contextMessages[0].Content)
+	require.Len(t, turn.invocation.IntermediateResponses, 1)
+	assert.Equal(t, "mid", turn.invocation.IntermediateResponses[0].Content)
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	rec.startWrite(canceledCtx, turn)
+	closedRecorder := &Recorder{manager: &stubManager{addCaseFn: func(context.Context, string, string, *evalset.EvalCase) error {
+		t.Fatal("unexpected write")
+		return nil
+	}}, locker: newKeyedLocker(), asyncWriteEnabled: true, closed: true}
+	closedRecorder.startWrite(context.Background(), turn)
+}
+
 func newTestInvocation(appName, userID, sessionID, requestID string, msg model.Message) *agent.Invocation {
 	return &agent.Invocation{
 		Session: &session.Session{
