@@ -916,6 +916,7 @@ func (s *Service) appendEventInternal(
 				"failed: %w", err,
 		)
 	}
+	go s.asyncIndexEvent(ctx, sess, e)
 	return nil
 }
 
