@@ -284,7 +284,7 @@ func TestProviderWithTokenTailoringConfig(t *testing.T) {
 		SafetyMarginRatio:      0.15,
 	}
 
-	// Test OpenAI provider
+	// Test OpenAI provider.
 	opts := &Options{ModelName: "gpt-4"}
 	WithTokenTailoringConfig(config)(opts)
 	modelInstance, err := openaiProvider(opts)
@@ -294,7 +294,7 @@ func TestProviderWithTokenTailoringConfig(t *testing.T) {
 	assert.True(t, ok)
 	assert.NotNil(t, openaiModel)
 
-	// Test Anthropic provider
+	// Test Anthropic provider.
 	opts = &Options{ModelName: "claude"}
 	WithTokenTailoringConfig(config)(opts)
 	modelInstance, err = anthropicProvider(opts)
@@ -303,6 +303,17 @@ func TestProviderWithTokenTailoringConfig(t *testing.T) {
 	anthropicModel, ok := modelInstance.(*anthropic.Model)
 	assert.True(t, ok)
 	assert.NotNil(t, anthropicModel)
+}
+
+func TestProviderWithDisableAutoMaxTokens(t *testing.T) {
+	opts := &Options{ModelName: "gpt-4"}
+	WithDisableAutoMaxTokens(true)(opts)
+	modelInstance, err := openaiProvider(opts)
+	assert.NoError(t, err)
+
+	openaiModel, ok := modelInstance.(*openai.Model)
+	assert.True(t, ok)
+	assert.True(t, readBoolField(openaiModel, "disableAutoMaxTokens"))
 }
 
 func TestGetProvider(t *testing.T) {

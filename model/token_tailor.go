@@ -52,6 +52,10 @@ type TokenTailoringConfig struct {
 	InputTokensFloor int
 	// OutputTokensFloor is the minimum number of output tokens.
 	OutputTokensFloor int
+	// DisableAutoMaxTokens disables auto-calculation of output MaxTokens.
+	// When true, token tailoring trims input messages only and will not set
+	// GenerationConfig.MaxTokens automatically.
+	DisableAutoMaxTokens bool
 	// SafetyMarginRatio is the safety margin ratio for token counting
 	// inaccuracies.
 	SafetyMarginRatio float64

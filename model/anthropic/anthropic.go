@@ -52,6 +52,7 @@ type Model struct {
 	reserveOutputTokens    int
 	inputTokensFloor       int
 	outputTokensFloor      int
+	disableAutoMaxTokens   bool
 	safetyMarginRatio      float64
 	maxInputTokensRatio    float64
 	// Prompt cache configuration
@@ -101,6 +102,7 @@ func New(name string, opts ...Option) *Model {
 		reserveOutputTokens:        o.tokenTailoringConfig.ReserveOutputTokens,
 		inputTokensFloor:           o.tokenTailoringConfig.InputTokensFloor,
 		outputTokensFloor:          o.tokenTailoringConfig.OutputTokensFloor,
+		disableAutoMaxTokens:       o.tokenTailoringConfig.DisableAutoMaxTokens,
 		safetyMarginRatio:          o.tokenTailoringConfig.SafetyMarginRatio,
 		maxInputTokensRatio:        o.tokenTailoringConfig.MaxInputTokensRatio,
 		cacheSystemPrompt:          o.cacheSystemPrompt,
@@ -211,7 +213,7 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 
 	// Set max output tokens only if user hasn't specified it.
 	// This respects user's explicit configuration while providing a safe default.
-	if request.GenerationConfig.MaxTokens == nil {
+	if request.GenerationConfig.MaxTokens == nil && !m.disableAutoMaxTokens {
 		contextWindow := imodel.ResolveContextWindow(m.name)
 		var maxOutputTokens int
 		if m.protocolOverheadTokens > 0 || m.outputTokensFloor > 0 {

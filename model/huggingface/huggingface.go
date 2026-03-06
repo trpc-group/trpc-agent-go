@@ -450,7 +450,9 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 
 	// Set max output tokens only if user hasn't specified it.
 	// This respects user's explicit configuration while providing a safe default.
-	if request.GenerationConfig.MaxTokens == nil {
+	if request.GenerationConfig.MaxTokens == nil &&
+		(m.tokenTailoringConfig == nil ||
+			!m.tokenTailoringConfig.DisableAutoMaxTokens) {
 		contextWindow := imodel.ResolveContextWindow(m.name)
 		var maxOutputTokens int
 		if m.tokenTailoringConfig != nil &&

@@ -88,6 +88,7 @@ func TestWithTokenTailoringConfig(t *testing.T) {
 				SafetyMarginRatio:      0.3,
 				InputTokensFloor:       300,
 				OutputTokensFloor:      400,
+				DisableAutoMaxTokens:   true,
 				MaxInputTokensRatio:    2.0,
 			},
 			initialOpts: &options{},
@@ -97,6 +98,7 @@ func TestWithTokenTailoringConfig(t *testing.T) {
 				SafetyMarginRatio:      0.3,
 				InputTokensFloor:       300,
 				OutputTokensFloor:      400,
+				DisableAutoMaxTokens:   true,
 				MaxInputTokensRatio:    2.0,
 			},
 		},
@@ -138,6 +140,7 @@ func TestWithTokenTailoringConfig(t *testing.T) {
 				assert.Equal(t, tt.wantCfg.SafetyMarginRatio, tt.initialOpts.tokenTailoringConfig.SafetyMarginRatio, "SafetyMarginRatio inconsistent")
 				assert.Equal(t, tt.wantCfg.InputTokensFloor, tt.initialOpts.tokenTailoringConfig.InputTokensFloor, "InputTokensFloor inconsistent")
 				assert.Equal(t, tt.wantCfg.OutputTokensFloor, tt.initialOpts.tokenTailoringConfig.OutputTokensFloor, "OutputTokensFloor inconsistent")
+				assert.Equal(t, tt.wantCfg.DisableAutoMaxTokens, tt.initialOpts.tokenTailoringConfig.DisableAutoMaxTokens, "DisableAutoMaxTokens inconsistent")
 				assert.Equal(t, tt.wantCfg.MaxInputTokensRatio, tt.initialOpts.tokenTailoringConfig.MaxInputTokensRatio, "MaxInputTokensRatioinconsistent")
 			}
 		})

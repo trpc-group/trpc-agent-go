@@ -1407,6 +1407,39 @@ func TestWithEnableTokenTailoring_AutoSetMaxTokens(t *testing.T) {
 	require.Greater(t, captured.MaxTokens, int64(0), "expected MaxTokens > 0")
 }
 
+// TestWithEnableTokenTailoring_DisableAutoMaxTokens tests disabling auto MaxTokens.
+func TestWithEnableTokenTailoring_DisableAutoMaxTokens(t *testing.T) {
+	var captured *anthropic.MessageNewParams
+	m := New("claude-3-5-sonnet",
+		WithEnableTokenTailoring(true),
+		WithMaxInputTokens(10000),
+		WithTokenCounter(zeroTokenCounter{}),
+		WithTailoringStrategy(testStubStrategy{}),
+		WithTokenTailoringConfig(&model.TokenTailoringConfig{
+			DisableAutoMaxTokens: true,
+		}),
+		WithChatRequestCallback(func(ctx context.Context, req *anthropic.MessageNewParams) {
+			captured = req
+		}),
+	)
+
+	req := &model.Request{Messages: []model.Message{
+		model.NewUserMessage("A"),
+		model.NewUserMessage("B"),
+	}}
+
+	ch, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err, "GenerateContent: %v", err)
+	select {
+	case <-ch:
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	require.NotNil(t, captured, "expected request callback to capture request")
+	require.Equal(t, int64(0), captured.MaxTokens,
+		"expected MaxTokens to stay unset when auto calculation is disabled")
+}
+
 // TestWithEnableTokenTailoring_UserSpecifiedMaxTokens tests user-specified MaxTokens is preserved.
 func TestWithEnableTokenTailoring_UserSpecifiedMaxTokens(t *testing.T) {
 	var captured *anthropic.MessageNewParams
