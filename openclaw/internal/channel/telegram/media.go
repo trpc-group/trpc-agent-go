@@ -222,6 +222,13 @@ func replyHasVideoNote(msg *tgapi.Message) bool {
 	return msg != nil && msg.VideoNote != nil
 }
 
+func incomingReplyTo(msg tgapi.Message) int {
+	if msg.ReplyToMessage == nil {
+		return 0
+	}
+	return msg.ReplyToMessage.MessageID
+}
+
 func joinMessageText(a, b string) string {
 	a = strings.TrimSpace(a)
 	b = strings.TrimSpace(b)

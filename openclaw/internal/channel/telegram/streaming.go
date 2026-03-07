@@ -55,6 +55,7 @@ type telegramMessageSummary struct {
 	ChatID          int64  `json:"chat_id"`
 	MessageThreadID int    `json:"message_thread_id,omitempty"`
 	ReplyTo         int    `json:"reply_to,omitempty"`
+	IncomingReplyTo int    `json:"incoming_reply_to,omitempty"`
 	FromID          string `json:"from_id,omitempty"`
 	Thread          string `json:"thread,omitempty"`
 	RequestID       string `json:"request_id,omitempty"`
@@ -134,6 +135,7 @@ func (c *Channel) callGatewayAndReply(
 						ChatID:          chatID,
 						MessageThreadID: messageThreadID,
 						ReplyTo:         replyTo,
+						IncomingReplyTo: incomingReplyTo(msg),
 						FromID:          fromID,
 						Thread:          thread,
 						RequestID:       requestID,
