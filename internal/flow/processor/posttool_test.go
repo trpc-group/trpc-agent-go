@@ -197,3 +197,25 @@ func TestHasToolResultMessages(t *testing.T) {
 		})
 	}
 }
+
+func TestHasCompactedToolResultMessages(t *testing.T) {
+	t.Run("nil invocation", func(t *testing.T) {
+		assert.False(t, hasCompactedToolResultMessages(nil))
+	})
+
+	t.Run("missing state", func(t *testing.T) {
+		assert.False(t, hasCompactedToolResultMessages(&agent.Invocation{}))
+	})
+
+	t.Run("non-bool state", func(t *testing.T) {
+		inv := &agent.Invocation{}
+		inv.SetState(contentHasCompactedToolResultsStateKey, "true")
+		assert.False(t, hasCompactedToolResultMessages(inv))
+	})
+
+	t.Run("bool state", func(t *testing.T) {
+		inv := &agent.Invocation{}
+		inv.SetState(contentHasCompactedToolResultsStateKey, true)
+		assert.True(t, hasCompactedToolResultMessages(inv))
+	})
+}

@@ -1086,6 +1086,48 @@ func TestSkillsToolResultRequestProcessor_FallbackSystemMessageAdded(
 	}
 }
 
+func TestSkillsToolResultRequestProcessor_SessionSummary_DisablesFallbackWithoutCompactionSignal(
+	t *testing.T,
+) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "calc", Description: "math"}},
+		full: map[string]*skill.Skill{
+			"calc": {Summary: skill.Summary{Name: "calc"}, Body: "B"},
+		},
+	}
+
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.LoadedKey("tester", "calc"): []byte("1"),
+			},
+		},
+	}
+	inv.SetState(contentHasSessionSummaryStateKey, true)
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("sys"),
+			model.NewUserMessage("u"),
+		},
+	}
+
+	p := NewSkillsToolResultRequestProcessor(
+		repo,
+		WithSkillsToolResultLoadMode(SkillLoadModeSession),
+	)
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	for _, m := range req.Messages {
+		if m.Role != model.RoleSystem {
+			continue
+		}
+		require.NotContains(t, m.Content, skillsLoadedContextHeader)
+	}
+}
+
 func TestSkillsToolResultRequestProcessor_SessionSummary_SkipsFallbackWhenMaterialized(
 	t *testing.T,
 ) {
@@ -1171,6 +1213,7 @@ func TestSkillsToolResultRequestProcessor_SessionSummary_ReenablesFallbackWhenTo
 		},
 	}
 	inv.SetState(contentHasSessionSummaryStateKey, true)
+	inv.SetState(contentHasCompactedToolResultsStateKey, true)
 
 	req := &model.Request{
 		Messages: []model.Message{

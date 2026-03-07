@@ -749,6 +749,133 @@ func TestProcessRequest_SessionSummary_CompactsSameTurnToolHistory(t *testing.T)
 	}
 }
 
+func TestContentRequestProcessor_HasCompactedCurrentInvocationToolResults(t *testing.T) {
+	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	since := baseTime.Add(2 * time.Second)
+
+	t.Run("nil invocation", func(t *testing.T) {
+		p := NewContentRequestProcessor()
+		require.False(t, p.hasCompactedCurrentInvocationToolResults(nil, since))
+	})
+
+	t.Run("missing request metadata", func(t *testing.T) {
+		p := NewContentRequestProcessor()
+		inv := &agent.Invocation{
+			Session: &session.Session{},
+		}
+		require.False(t, p.hasCompactedCurrentInvocationToolResults(inv, since))
+	})
+
+	t.Run("ignores non matching and non tool events", func(t *testing.T) {
+		p := NewContentRequestProcessor()
+		inv := agent.NewInvocation(
+			agent.WithInvocationID("inv1"),
+			agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req1"}),
+			agent.WithInvocationSession(&session.Session{
+				Events: []event.Event{
+					{
+						RequestID:    "req2",
+						InvocationID: "inv1",
+						Timestamp:    baseTime,
+						Version:      event.CurrentVersion,
+						Response: &model.Response{
+							Done: true,
+							Choices: []model.Choice{{Index: 0, Message: model.NewToolMessage(
+								"call_1",
+								"worker",
+								"result",
+							)}},
+						},
+					},
+					{
+						RequestID:    "req1",
+						InvocationID: "inv1",
+						Timestamp:    baseTime,
+						Version:      event.CurrentVersion,
+						Response: &model.Response{
+							Done: true,
+							Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage(
+								"not a tool result",
+							)}},
+						},
+					},
+					{
+						RequestID:    "req1",
+						InvocationID: "inv1",
+						Timestamp:    since.Add(time.Second),
+						Version:      event.CurrentVersion,
+						Response: &model.Response{
+							Done: true,
+							Choices: []model.Choice{{Index: 0, Message: model.NewToolMessage(
+								"call_2",
+								"worker",
+								"after cutoff",
+							)}},
+						},
+					},
+				},
+			}),
+		)
+		require.False(t, p.hasCompactedCurrentInvocationToolResults(inv, since))
+	})
+
+	t.Run("respects branch filter", func(t *testing.T) {
+		p := NewContentRequestProcessor(WithBranchFilterMode(BranchFilterModeExact))
+		inv := agent.NewInvocation(
+			agent.WithInvocationID("inv1"),
+			agent.WithInvocationEventFilterKey("wanted"),
+			agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req1"}),
+			agent.WithInvocationSession(&session.Session{
+				Events: []event.Event{
+					{
+						RequestID:    "req1",
+						InvocationID: "inv1",
+						FilterKey:    "other",
+						Timestamp:    baseTime,
+						Version:      event.CurrentVersion,
+						Response: &model.Response{
+							Done: true,
+							Choices: []model.Choice{{Index: 0, Message: model.NewToolMessage(
+								"call_1",
+								"worker",
+								"result",
+							)}},
+						},
+					},
+				},
+			}),
+		)
+		require.False(t, p.hasCompactedCurrentInvocationToolResults(inv, since))
+	})
+
+	t.Run("detects compacted tool result", func(t *testing.T) {
+		p := NewContentRequestProcessor()
+		inv := agent.NewInvocation(
+			agent.WithInvocationID("inv1"),
+			agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req1"}),
+			agent.WithInvocationSession(&session.Session{
+				Events: []event.Event{
+					{
+						RequestID:    "req1",
+						InvocationID: "inv1",
+						Timestamp:    baseTime,
+						Version:      event.CurrentVersion,
+						Response: &model.Response{
+							Done: true,
+							Choices: []model.Choice{{Index: 0, Message: model.NewToolMessage(
+								"call_1",
+								"worker",
+								"result",
+							)}},
+						},
+					},
+				},
+			}),
+		)
+		require.True(t, p.hasCompactedCurrentInvocationToolResults(inv, since))
+	})
+}
+
 // Test additional edge cases for session summary insertion.
 func TestProcessRequest_SessionSummary_EdgeCases(t *testing.T) {
 	// Create session with summary

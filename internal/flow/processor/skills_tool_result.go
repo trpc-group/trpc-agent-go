@@ -163,7 +163,7 @@ func (p *SkillsToolResultRequestProcessor) ProcessRequest(
 		p.removeLoadedContextMessage(req)
 	} else if p.skipFallbackOnSessionSummary &&
 		hasSessionSummary(inv) &&
-		len(materialized) == len(loaded) {
+		!hasCompactedToolResultMessages(inv) {
 		p.removeLoadedContextMessage(req)
 	} else {
 		p.upsertLoadedContextMessage(req, fallbackContent)
