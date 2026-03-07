@@ -448,6 +448,12 @@ func (s *Server) runLocked(
 	if requestID != "" {
 		runOpts = append(runOpts, agent.WithRequestID(requestID))
 	}
+	if messages := s.uploadContextMessages(userID, sessionID); len(messages) > 0 {
+		runOpts = append(
+			runOpts,
+			agent.WithInjectedContextMessages(messages),
+		)
+	}
 
 	if trace != nil {
 		_ = trace.Record(

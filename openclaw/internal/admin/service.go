@@ -1205,11 +1205,46 @@ const adminPageHTML = `<!doctype html>
     </section>
 
     <section class="card" style="margin-top: 24px;">
+      <h2>Upload Sessions</h2>
+      {{if .Snapshot.Uploads.Sessions}}
+      <table>
+        <thead>
+          <tr>
+            <th>Channel</th>
+            <th>User</th>
+            <th>Session</th>
+            <th>Files</th>
+            <th>Total Bytes</th>
+            <th>Last Modified</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Snapshot.Uploads.Sessions}}
+          <tr>
+            <td>{{.Channel}}</td>
+            <td><code>{{.UserID}}</code></td>
+            <td><code>{{.SessionID}}</code></td>
+            <td>{{.FileCount}}</td>
+            <td>{{.TotalBytes}}</td>
+            <td>{{formatTime .LastModified}}</td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+      {{else}}
+      <p class="empty">No upload sessions indexed yet.</p>
+      {{end}}
+    </section>
+
+    <section class="card" style="margin-top: 24px;">
       <h2>Recent Uploads</h2>
       {{if .Snapshot.Uploads.Files}}
       <table>
         <thead>
           <tr>
+            <th>Channel</th>
+            <th>User</th>
+            <th>Session</th>
             <th>Name</th>
             <th>Kind</th>
             <th>Relative Path</th>
@@ -1220,6 +1255,9 @@ const adminPageHTML = `<!doctype html>
         <tbody>
           {{range .Snapshot.Uploads.Files}}
           <tr>
+            <td>{{.Channel}}</td>
+            <td><code>{{.UserID}}</code></td>
+            <td><code>{{.SessionID}}</code></td>
             <td>
               <a href="{{.OpenURL}}" target="_blank"
                 rel="noopener noreferrer">{{.Name}}</a>

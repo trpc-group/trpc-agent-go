@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -112,4 +113,57 @@ func TestPathFromHostRef(t *testing.T) {
 
 	_, ok = PathFromHostRef("file-123")
 	require.False(t, ok)
+}
+
+func TestStoreListScopeAndListAll(t *testing.T) {
+	t.Parallel()
+
+	store, err := NewStore(t.TempDir())
+	require.NoError(t, err)
+
+	scopeA := Scope{
+		Channel:   "telegram",
+		UserID:    "u1",
+		SessionID: "s1",
+	}
+	scopeB := Scope{
+		Channel:   "telegram",
+		UserID:    "u2",
+		SessionID: "s2",
+	}
+
+	first, err := store.Save(
+		context.Background(),
+		scopeA,
+		"report.pdf",
+		[]byte("a"),
+	)
+	require.NoError(t, err)
+	time.Sleep(10 * time.Millisecond)
+	second, err := store.Save(
+		context.Background(),
+		scopeB,
+		"clip.mp4",
+		[]byte("bb"),
+	)
+	require.NoError(t, err)
+
+	scopeFiles, err := store.ListScope(scopeA, 10)
+	require.NoError(t, err)
+	require.Len(t, scopeFiles, 1)
+	require.Equal(t, first.Name, scopeFiles[0].Name)
+	require.Equal(t, first.Path, scopeFiles[0].Path)
+	require.Equal(t, scopeA, scopeFiles[0].Scope)
+	require.Contains(
+		t,
+		scopeFiles[0].RelativePath,
+		"telegram/u1/s1/",
+	)
+
+	allFiles, err := store.ListAll(10)
+	require.NoError(t, err)
+	require.Len(t, allFiles, 2)
+	require.Equal(t, second.Path, allFiles[0].Path)
+	require.Equal(t, scopeB, allFiles[0].Scope)
+	require.Equal(t, first.Path, allFiles[1].Path)
 }

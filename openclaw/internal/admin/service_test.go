@@ -416,14 +416,17 @@ func TestServiceSnapshotIncludesUploadsAndExec(t *testing.T) {
 
 	stateDir := t.TempDir()
 	uploadsRoot := filepath.Join(stateDir, defaultUploadsDir)
+	relPath := filepath.ToSlash(
+		filepath.Join("telegram", "u1", "session-1", "clip.mp4"),
+	)
 	require.NoError(
 		t,
-		os.MkdirAll(filepath.Join(uploadsRoot, "telegram", "u1"), 0o755),
+		os.MkdirAll(filepath.Dir(filepath.Join(uploadsRoot, relPath)), 0o755),
 	)
 	require.NoError(
 		t,
 		os.WriteFile(
-			filepath.Join(uploadsRoot, "telegram", "u1", "clip.mp4"),
+			filepath.Join(uploadsRoot, relPath),
 			[]byte("video"),
 			0o600,
 		),
@@ -439,6 +442,10 @@ func TestServiceSnapshotIncludesUploadsAndExec(t *testing.T) {
 	require.True(t, snap.Uploads.Enabled)
 	require.Equal(t, 1, snap.Uploads.FileCount)
 	require.Equal(t, "clip.mp4", snap.Uploads.Files[0].Name)
+	require.Equal(t, "telegram", snap.Uploads.Files[0].Channel)
+	require.Equal(t, "u1", snap.Uploads.Files[0].UserID)
+	require.Equal(t, "session-1", snap.Uploads.Files[0].SessionID)
+	require.Len(t, snap.Uploads.Sessions, 1)
 
 	handler := svc.Handler()
 
@@ -466,7 +473,7 @@ func TestServiceSnapshotIncludesUploadsAndExec(t *testing.T) {
 	openReq := httptest.NewRequest(
 		http.MethodGet,
 		routeUploadFile+"?"+url.Values{
-			queryPath: []string{"telegram/u1/clip.mp4"},
+			queryPath: []string{relPath},
 		}.Encode(),
 		nil,
 	)
@@ -478,7 +485,7 @@ func TestServiceSnapshotIncludesUploadsAndExec(t *testing.T) {
 	downloadReq := httptest.NewRequest(
 		http.MethodGet,
 		routeUploadFile+"?"+url.Values{
-			queryPath:     []string{"telegram/u1/clip.mp4"},
+			queryPath:     []string{relPath},
 			queryDownload: []string{"1"},
 		}.Encode(),
 		nil,
@@ -490,4 +497,56 @@ func TestServiceSnapshotIncludesUploadsAndExec(t *testing.T) {
 		downloadRR.Header().Get("Content-Disposition"),
 		"clip.mp4",
 	)
+}
+
+func TestAdminRuntimeHelpers(t *testing.T) {
+	t.Parallel()
+
+	exitCode := 7
+	view := execSessionViewFromSession(octool.ProcessSession{
+		SessionID: " sess-1 ",
+		Command:   " echo hi ",
+		Status:    " running ",
+		StartedAt: " start ",
+		DoneAt:    " done ",
+		ExitCode:  &exitCode,
+	})
+	require.Equal(t, "sess-1", view.SessionID)
+	require.Equal(t, "echo hi", view.Command)
+	require.Equal(t, "running", view.Status)
+	require.Equal(t, "start", view.StartedAt)
+	require.Equal(t, "done", view.DoneAt)
+	require.NotNil(t, view.ExitCode)
+	require.Equal(t, exitCode, *view.ExitCode)
+
+	require.Equal(t, "image", uploadKindFromName("frame.PNG"))
+	require.Equal(t, "audio", uploadKindFromName("voice.ogg"))
+	require.Equal(t, "video", uploadKindFromName("clip.MOV"))
+	require.Equal(t, "pdf", uploadKindFromName("doc.pdf"))
+	require.Equal(t, "file", uploadKindFromName("notes.txt"))
+}
+
+func TestServiceUploadAndDebugValidationErrors(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{StateDir: t.TempDir()})
+	handler := svc.Handler()
+
+	uploadRR := httptest.NewRecorder()
+	uploadReq := httptest.NewRequest(
+		http.MethodGet,
+		routeUploadFile,
+		nil,
+	)
+	handler.ServeHTTP(uploadRR, uploadReq)
+	require.Equal(t, http.StatusBadRequest, uploadRR.Code)
+
+	debugRR := httptest.NewRecorder()
+	debugReq := httptest.NewRequest(
+		http.MethodGet,
+		routeDebugFile,
+		nil,
+	)
+	handler.ServeHTTP(debugRR, debugReq)
+	require.Equal(t, http.StatusBadRequest, debugRR.Code)
 }

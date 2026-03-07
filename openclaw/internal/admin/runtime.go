@@ -10,7 +10,6 @@
 package admin
 
 import (
-	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -19,11 +18,13 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/octool"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 )
 
 const (
 	defaultUploadsDir = "uploads"
 	maxUploadRows     = 12
+	maxUploadSessions = 8
 	maxExecRows       = 12
 )
 
@@ -44,15 +45,19 @@ type execSessionView struct {
 }
 
 type uploadsStatus struct {
-	Enabled    bool         `json:"enabled"`
-	Root       string       `json:"root,omitempty"`
-	FileCount  int          `json:"file_count"`
-	TotalBytes int64        `json:"total_bytes"`
-	Error      string       `json:"error,omitempty"`
-	Files      []uploadView `json:"files,omitempty"`
+	Enabled    bool                `json:"enabled"`
+	Root       string              `json:"root,omitempty"`
+	FileCount  int                 `json:"file_count"`
+	TotalBytes int64               `json:"total_bytes"`
+	Error      string              `json:"error,omitempty"`
+	Files      []uploadView        `json:"files,omitempty"`
+	Sessions   []uploadSessionView `json:"sessions,omitempty"`
 }
 
 type uploadView struct {
+	Channel      string    `json:"channel,omitempty"`
+	UserID       string    `json:"user_id,omitempty"`
+	SessionID    string    `json:"session_id,omitempty"`
 	Name         string    `json:"name,omitempty"`
 	RelativePath string    `json:"relative_path,omitempty"`
 	Kind         string    `json:"kind,omitempty"`
@@ -60,6 +65,15 @@ type uploadView struct {
 	ModifiedAt   time.Time `json:"modified_at,omitempty"`
 	OpenURL      string    `json:"open_url,omitempty"`
 	DownloadURL  string    `json:"download_url,omitempty"`
+}
+
+type uploadSessionView struct {
+	Channel      string    `json:"channel,omitempty"`
+	UserID       string    `json:"user_id,omitempty"`
+	SessionID    string    `json:"session_id,omitempty"`
+	FileCount    int       `json:"file_count"`
+	TotalBytes   int64     `json:"total_bytes"`
+	LastModified time.Time `json:"last_modified,omitempty"`
 }
 
 func (s *Service) execStatus() execStatus {
@@ -116,17 +130,19 @@ func (s *Service) uploadsStatus() uploadsStatus {
 	}
 
 	status.Enabled = true
-	files, totalBytes, err := listUploads(root)
+	store, err := uploads.NewStore(s.cfg.StateDir)
 	if err != nil {
 		status.Error = err.Error()
 		return status
 	}
-	status.FileCount = len(files)
-	status.TotalBytes = totalBytes
-	if len(files) > maxUploadRows {
-		files = files[:maxUploadRows]
+	listed, err := store.ListAll(0)
+	if err != nil {
+		status.Error = err.Error()
+		return status
 	}
-	status.Files = files
+	status.FileCount = len(listed)
+	status.Files, status.TotalBytes = uploadViewsFromList(listed)
+	status.Sessions = uploadSessionsFromList(listed)
 	return status
 }
 
@@ -138,52 +154,76 @@ func resolveUploadsRoot(stateDir string) string {
 	return filepath.Join(root, defaultUploadsDir)
 }
 
-func listUploads(root string) ([]uploadView, int64, error) {
-	files := make([]uploadView, 0)
+func uploadViewsFromList(listed []uploads.ListedFile) ([]uploadView, int64) {
+	files := make([]uploadView, 0, len(listed))
 	var totalBytes int64
-	walkErr := filepath.WalkDir(
-		root,
-		func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if d == nil || d.IsDir() {
-				return nil
-			}
-
-			info, err := d.Info()
-			if err != nil {
-				return err
-			}
-			rel, err := filepath.Rel(root, path)
-			if err != nil {
-				return err
-			}
-			totalBytes += info.Size()
-			kind := uploadKindFromName(d.Name())
-			openURL := uploadFileURL(rel, false)
-			files = append(files, uploadView{
-				Name:         d.Name(),
-				RelativePath: filepath.ToSlash(rel),
-				Kind:         kind,
-				SizeBytes:    info.Size(),
-				ModifiedAt:   info.ModTime(),
-				OpenURL:      openURL,
-				DownloadURL:  uploadFileURL(rel, true),
-			})
-			return nil
-		},
-	)
-	if walkErr != nil {
-		return nil, 0, walkErr
+	for _, file := range listed {
+		totalBytes += file.SizeBytes
+		files = append(files, uploadView{
+			Channel:      file.Scope.Channel,
+			UserID:       file.Scope.UserID,
+			SessionID:    file.Scope.SessionID,
+			Name:         file.Name,
+			RelativePath: file.RelativePath,
+			Kind:         uploadKindFromName(file.Name),
+			SizeBytes:    file.SizeBytes,
+			ModifiedAt:   file.ModifiedAt,
+			OpenURL:      uploadFileURL(file.RelativePath, false),
+			DownloadURL:  uploadFileURL(file.RelativePath, true),
+		})
 	}
-	sort.Slice(files, func(i, j int) bool {
-		if files[i].ModifiedAt.Equal(files[j].ModifiedAt) {
-			return files[i].RelativePath < files[j].RelativePath
+	if len(files) > maxUploadRows {
+		files = files[:maxUploadRows]
+	}
+	return files, totalBytes
+}
+
+func uploadSessionsFromList(
+	listed []uploads.ListedFile,
+) []uploadSessionView {
+	index := make(map[string]*uploadSessionView)
+	for _, file := range listed {
+		key := strings.Join([]string{
+			file.Scope.Channel,
+			file.Scope.UserID,
+			file.Scope.SessionID,
+		}, "\x00")
+		view, ok := index[key]
+		if !ok {
+			view = &uploadSessionView{
+				Channel:   file.Scope.Channel,
+				UserID:    file.Scope.UserID,
+				SessionID: file.Scope.SessionID,
+			}
+			index[key] = view
 		}
-		return files[i].ModifiedAt.After(files[j].ModifiedAt)
+		view.FileCount++
+		view.TotalBytes += file.SizeBytes
+		if file.ModifiedAt.After(view.LastModified) {
+			view.LastModified = file.ModifiedAt
+		}
+	}
+
+	out := make([]uploadSessionView, 0, len(index))
+	for _, view := range index {
+		out = append(out, *view)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].LastModified.Equal(out[j].LastModified) {
+			if out[i].Channel != out[j].Channel {
+				return out[i].Channel < out[j].Channel
+			}
+			if out[i].UserID != out[j].UserID {
+				return out[i].UserID < out[j].UserID
+			}
+			return out[i].SessionID < out[j].SessionID
+		}
+		return out[i].LastModified.After(out[j].LastModified)
 	})
-	return files, totalBytes, nil
+	if len(out) > maxUploadSessions {
+		out = out[:maxUploadSessions]
+	}
+	return out
 }
 
 func errorsIsNotExist(err error) bool {

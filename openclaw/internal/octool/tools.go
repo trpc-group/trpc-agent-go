@@ -41,7 +41,17 @@ const (
 	envLastUploadPath    = "OPENCLAW_LAST_UPLOAD_PATH"
 	envLastUploadName    = "OPENCLAW_LAST_UPLOAD_NAME"
 	envLastUploadMIME    = "OPENCLAW_LAST_UPLOAD_MIME"
+	envRecentUploadsJSON = "OPENCLAW_RECENT_UPLOADS_JSON"
+
+	recentUploadsLimit = 6
 )
+
+type execUploadMeta struct {
+	Name     string `json:"name,omitempty"`
+	Path     string `json:"path,omitempty"`
+	HostRef  string `json:"host_ref,omitempty"`
+	MimeType string `json:"mime_type,omitempty"`
+}
 
 type execTool struct {
 	mgr *Manager
@@ -60,8 +70,11 @@ func (t *execTool) Declaration() *tool.Declaration {
 			"continue with write_stdin. When a chat upload is " +
 			"available, OPENCLAW_LAST_UPLOAD_PATH, " +
 			"OPENCLAW_LAST_UPLOAD_NAME, OPENCLAW_LAST_UPLOAD_MIME, " +
-			"and OPENCLAW_SESSION_UPLOADS_DIR point to stable " +
-			"attachment metadata and host paths.",
+			"OPENCLAW_SESSION_UPLOADS_DIR, and " +
+			"OPENCLAW_RECENT_UPLOADS_JSON point to stable " +
+			"attachment metadata and host paths. Write derived " +
+			"outputs under OPENCLAW_SESSION_UPLOADS_DIR when " +
+			"you plan to send them back to the user.",
 		InputSchema: &tool.Schema{
 			Type:     "object",
 			Required: []string{"command"},
@@ -424,37 +437,55 @@ func uploadEnvFromContext(ctx context.Context) map[string]string {
 		return nil
 	}
 
-	path, name, mimeType := latestUploadFromInvocation(inv)
-	if path == "" {
+	recent := recentUploadsFromInvocation(inv, recentUploadsLimit)
+	if len(recent) == 0 {
 		return nil
 	}
+	latest := recent[0]
 
 	env := map[string]string{
-		envLastUploadPath:    path,
-		envSessionUploadsDir: filepath.Dir(path),
+		envLastUploadPath:    latest.Path,
+		envSessionUploadsDir: filepath.Dir(latest.Path),
 	}
-	if name != "" {
-		env[envLastUploadName] = name
+	if latest.Name != "" {
+		env[envLastUploadName] = latest.Name
 	}
-	if mimeType != "" {
-		env[envLastUploadMIME] = mimeType
+	if latest.MimeType != "" {
+		env[envLastUploadMIME] = latest.MimeType
+	}
+	if raw, err := json.Marshal(recent); err == nil {
+		env[envRecentUploadsJSON] = string(raw)
 	}
 	return env
 }
 
-func latestUploadFromInvocation(inv *agent.Invocation) (
-	string,
-	string,
-	string,
-) {
-	if inv == nil || inv.Session == nil {
-		return "", "", ""
+func recentUploadsFromInvocation(
+	inv *agent.Invocation,
+	limit int,
+) []execUploadMeta {
+	if inv == nil {
+		return nil
+	}
+
+	out := make([]execUploadMeta, 0, limit)
+	seen := make(map[string]struct{})
+	out = appendRecentUploadsFromMessage(
+		out,
+		seen,
+		inv.Message,
+		limit,
+	)
+	if inv.Session == nil {
+		return out
 	}
 
 	inv.Session.EventMu.RLock()
 	defer inv.Session.EventMu.RUnlock()
 
 	for i := len(inv.Session.Events) - 1; i >= 0; i-- {
+		if limit > 0 && len(out) >= limit {
+			break
+		}
 		evt := inv.Session.Events[i]
 		if evt.Response == nil {
 			continue
@@ -464,21 +495,27 @@ func latestUploadFromInvocation(inv *agent.Invocation) (
 			if msg.Role != model.RoleUser && msg.Role != "" {
 				continue
 			}
-			path, name, mimeType := latestUploadFromMessage(msg)
-			if path != "" {
-				return path, name, mimeType
-			}
+			out = appendRecentUploadsFromMessage(
+				out,
+				seen,
+				msg,
+				limit,
+			)
 		}
 	}
-	return "", "", ""
+	return out
 }
 
-func latestUploadFromMessage(msg model.Message) (
-	string,
-	string,
-	string,
-) {
+func appendRecentUploadsFromMessage(
+	out []execUploadMeta,
+	seen map[string]struct{},
+	msg model.Message,
+	limit int,
+) []execUploadMeta {
 	for i := len(msg.ContentParts) - 1; i >= 0; i-- {
+		if limit > 0 && len(out) >= limit {
+			break
+		}
 		part := msg.ContentParts[i]
 		if part.Type != model.ContentTypeFile || part.File == nil {
 			continue
@@ -490,13 +527,22 @@ func latestUploadFromMessage(msg model.Message) (
 		if _, err := os.Stat(path); err != nil {
 			continue
 		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
 		name := strings.TrimSpace(part.File.Name)
 		if name == "" {
 			name = filepath.Base(path)
 		}
-		return path, name, strings.TrimSpace(part.File.MimeType)
+		seen[path] = struct{}{}
+		out = append(out, execUploadMeta{
+			Name:     name,
+			Path:     path,
+			HostRef:  uploads.HostRef(path),
+			MimeType: strings.TrimSpace(part.File.MimeType),
+		})
 	}
-	return "", "", ""
+	return out
 }
 
 var _ tool.CallableTool = (*execTool)(nil)

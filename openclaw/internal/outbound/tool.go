@@ -13,14 +13,21 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const (
 	toolMessage = "message"
+
+	maxExpandedFileCount = 32
 )
 
 // Tool sends plain text messages through OpenClaw channels.
@@ -57,9 +64,12 @@ func (t *Tool) Declaration() *tool.Declaration {
 					Description: "Optional local file paths, " +
 						"host:// refs, artifact:// refs, or " +
 						"workspace:// refs to send back to the " +
-						"user. Telegram auto-picks document, " +
-						"photo, audio, voice, or video upload " +
-						"mode based on the file type.",
+						"user. Existing directories are expanded " +
+						"to their files, and host globs are " +
+						"expanded when they match. Telegram " +
+						"auto-picks document, photo, audio, " +
+						"voice, or video upload mode based on " +
+						"the file type.",
 				},
 				"file": {
 					Type:        "string",
@@ -146,12 +156,128 @@ func buildOutboundMessage(in toolInput) (channel.OutboundMessage, error) {
 		Text:  in.Text,
 		Files: make([]channel.OutboundFile, 0, len(paths)),
 	}
-	for _, path := range paths {
+	files, err := expandOutboundFiles(paths)
+	if err != nil {
+		return channel.OutboundMessage{}, err
+	}
+	for _, path := range files {
 		msg.Files = append(msg.Files, channel.OutboundFile{
 			Path: path,
 		})
 	}
 	return msg, nil
+}
+
+func expandOutboundFiles(paths []string) ([]string, error) {
+	seen := make(map[string]struct{})
+	out := make([]string, 0, len(paths))
+	for _, raw := range paths {
+		expanded, err := expandOutboundPath(raw)
+		if err != nil {
+			return nil, err
+		}
+		if len(expanded) == 0 {
+			out = appendPath(out, seen, raw)
+			continue
+		}
+		for _, item := range expanded {
+			out = appendPath(out, seen, item)
+		}
+	}
+	return out, nil
+}
+
+func expandOutboundPath(raw string) ([]string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil, nil
+	}
+	if isOpaqueRef(trimmed) {
+		return nil, nil
+	}
+	if matches, err := expandOutboundGlob(trimmed); err != nil {
+		return nil, err
+	} else if len(matches) > 0 {
+		return matches, nil
+	}
+	return expandOutboundDirectory(trimmed)
+}
+
+func isOpaqueRef(raw string) bool {
+	if strings.HasPrefix(raw, "host://") {
+		return false
+	}
+	if strings.HasPrefix(raw, "file://") {
+		return false
+	}
+	return strings.Contains(raw, "://")
+}
+
+func expandOutboundGlob(raw string) ([]string, error) {
+	if !strings.ContainsAny(raw, "*?[") {
+		return nil, nil
+	}
+	matches, err := filepath.Glob(raw)
+	if err != nil {
+		return nil, fmt.Errorf("invalid file glob: %w", err)
+	}
+	if len(matches) == 0 {
+		return nil, nil
+	}
+	sort.Strings(matches)
+	return absPaths(matches), nil
+}
+
+func expandOutboundDirectory(raw string) ([]string, error) {
+	path := strings.TrimSpace(raw)
+	if resolved, ok := uploads.PathFromHostRef(path); ok {
+		path = resolved
+	}
+	info, err := os.Stat(path)
+	if err != nil || !info.IsDir() {
+		return nil, nil
+	}
+	root, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve dir: %w", err)
+	}
+	files := make([]string, 0, 4)
+	err = filepath.WalkDir(
+		root,
+		func(path string, d fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if d == nil || d.IsDir() {
+				return nil
+			}
+			files = append(files, path)
+			if len(files) >= maxExpandedFileCount {
+				return fs.SkipAll
+			}
+			return nil
+		},
+	)
+	if err != nil && err != fs.SkipAll {
+		return nil, fmt.Errorf("expand dir: %w", err)
+	}
+	sort.Strings(files)
+	return files, nil
+}
+
+func absPaths(paths []string) []string {
+	out := make([]string, 0, len(paths))
+	for _, path := range paths {
+		resolved := strings.TrimSpace(path)
+		if resolved == "" {
+			continue
+		}
+		if abs, err := filepath.Abs(resolved); err == nil {
+			resolved = abs
+		}
+		out = append(out, resolved)
+	}
+	return out
 }
 
 func collectPaths(groups ...any) []string {

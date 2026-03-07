@@ -146,6 +146,16 @@ func TestSanitizeTelegramText_HidesAbsolutePaths(t *testing.T) {
 	require.Equal(t, "User path: `report.pdf`.", got)
 }
 
+func TestSanitizeTelegramText_HidesRelativePathsInCodeSpans(t *testing.T) {
+	t.Parallel()
+
+	stateDir := filepath.Join("/tmp", "openclaw")
+	text := "Generated: `out_pdf_split/report_page_3.pdf`."
+
+	got := sanitizeTelegramText(text, stateDir)
+	require.Equal(t, "Generated: `report_page_3.pdf`.", got)
+}
+
 func TestChannel_SendTextMessage_SanitizesPaths(t *testing.T) {
 	t.Parallel()
 
@@ -166,4 +176,56 @@ func TestChannel_SendTextMessage_SanitizesPaths(t *testing.T) {
 	require.Len(t, bot.sent, 1)
 	require.Contains(t, bot.sent[0].Text, "<code>frame.png</code>")
 	require.NotContains(t, bot.sent[0].Text, "/tmp/openclaw/")
+}
+
+func TestSanitizeInternalRefToken(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(
+		t,
+		"report.pdf",
+		sanitizeInternalRefToken("artifact://out/report.pdf@1"),
+	)
+	require.Equal(
+		t,
+		"frame.png",
+		sanitizeInternalRefToken("workspace://frames/frame.png"),
+	)
+	require.Equal(
+		t,
+		"clip.mp4",
+		sanitizeInternalRefToken("host:///tmp/openclaw/clip.mp4"),
+	)
+	require.Equal(
+		t,
+		"clip.mp4",
+		sanitizeInternalRefToken("file:///tmp/openclaw/clip.mp4"),
+	)
+	require.Empty(t, sanitizeInternalRefToken("https://example.com/x"))
+}
+
+func TestSanitizeStatePathTokenAndPathUnderRoot(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join("/tmp", "openclaw")
+	inRoot := filepath.Join(root, "uploads", "frame.png")
+	outRoot := filepath.Join("/tmp", "elsewhere", "frame.png")
+
+	require.Equal(t, "frame.png", sanitizeStatePathToken(inRoot, root))
+	require.Empty(t, sanitizeStatePathToken(outRoot, root))
+	require.True(t, pathUnderRoot(inRoot, root))
+	require.False(t, pathUnderRoot(outRoot, root))
+}
+
+func TestRenderTelegramHTMLText_CodeBlocksAndOrderedLists(t *testing.T) {
+	t.Parallel()
+
+	rendered, ok := renderTelegramHTMLText(
+		"1. first\n2. second\n\n```python\nprint('hi')\n```",
+	)
+	require.True(t, ok)
+	require.Contains(t, rendered, "1. first")
+	require.Contains(t, rendered, "2. second")
+	require.Contains(t, rendered, "<pre><code class=\"language-python\">")
+	require.Contains(t, rendered, "print(&#39;hi&#39;)")
 }

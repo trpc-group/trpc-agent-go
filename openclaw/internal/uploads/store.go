@@ -15,9 +15,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 )
 
 const (
@@ -32,10 +35,22 @@ const (
 
 	maxFileNameRunes = 96
 	hashPrefixBytes  = 12
+	hashPrefixHexLen = hashPrefixBytes * 2
 
 	fileMode = 0o600
 	dirMode  = 0o755
 )
+
+// ListedFile describes one persisted upload entry.
+type ListedFile struct {
+	Scope        Scope
+	Name         string
+	Path         string
+	HostRef      string
+	RelativePath string
+	SizeBytes    int64
+	ModifiedAt   time.Time
+}
 
 // Scope identifies who owns a persisted upload.
 type Scope struct {
@@ -128,6 +143,32 @@ func (s *Store) DeleteUser(
 		return fmt.Errorf("uploads: delete user dir: %w", err)
 	}
 	return nil
+}
+
+// ListScope returns persisted uploads for one session scope, newest first.
+func (s *Store) ListScope(scope Scope, limit int) ([]ListedFile, error) {
+	if s == nil || strings.TrimSpace(s.root) == "" {
+		return nil, nil
+	}
+	return listStoredFiles(
+		s.root,
+		s.scopeDir(scope),
+		scope,
+		limit,
+	)
+}
+
+// ListAll returns persisted uploads across all users, newest first.
+func (s *Store) ListAll(limit int) ([]ListedFile, error) {
+	if s == nil || strings.TrimSpace(s.root) == "" {
+		return nil, nil
+	}
+	return listStoredFiles(
+		s.root,
+		s.root,
+		Scope{},
+		limit,
+	)
 }
 
 // HostRef converts an absolute path into a host:// ref.
@@ -249,4 +290,100 @@ func writeFileIfMissing(path string, data []byte) error {
 		return fmt.Errorf("uploads: rename temp file: %w", err)
 	}
 	return nil
+}
+
+func listStoredFiles(
+	root string,
+	walkRoot string,
+	scope Scope,
+	limit int,
+) ([]ListedFile, error) {
+	if strings.TrimSpace(root) == "" || strings.TrimSpace(walkRoot) == "" {
+		return nil, nil
+	}
+	if _, err := os.Stat(walkRoot); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("uploads: stat dir: %w", err)
+	}
+
+	files := make([]ListedFile, 0)
+	err := filepath.WalkDir(
+		walkRoot,
+		func(path string, d fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if d == nil || d.IsDir() {
+				return nil
+			}
+
+			info, err := d.Info()
+			if err != nil {
+				return err
+			}
+			rel, err := filepath.Rel(root, path)
+			if err != nil {
+				return err
+			}
+			fileScope := scope
+			if fileScope == (Scope{}) {
+				fileScope = scopeFromRelativePath(rel)
+			}
+			files = append(files, ListedFile{
+				Scope:        fileScope,
+				Name:         displayUploadName(d.Name()),
+				Path:         path,
+				HostRef:      HostRef(path),
+				RelativePath: filepath.ToSlash(rel),
+				SizeBytes:    info.Size(),
+				ModifiedAt:   info.ModTime(),
+			})
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("uploads: list files: %w", err)
+	}
+
+	sort.Slice(files, func(i, j int) bool {
+		if files[i].ModifiedAt.Equal(files[j].ModifiedAt) {
+			return files[i].RelativePath < files[j].RelativePath
+		}
+		return files[i].ModifiedAt.After(files[j].ModifiedAt)
+	})
+	if limit > 0 && len(files) > limit {
+		files = files[:limit]
+	}
+	return files, nil
+}
+
+func displayUploadName(name string) string {
+	trimmed := strings.TrimSpace(name)
+	if len(trimmed) <= hashPrefixHexLen+1 {
+		return trimmed
+	}
+	if trimmed[hashPrefixHexLen] != '-' {
+		return trimmed
+	}
+	for i := 0; i < hashPrefixHexLen; i++ {
+		r := trimmed[i]
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return trimmed
+		}
+	}
+	return trimmed[hashPrefixHexLen+1:]
+}
+
+func scopeFromRelativePath(rel string) Scope {
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	if len(parts) < 4 {
+		return Scope{}
+	}
+	return Scope{
+		Channel:   parts[0],
+		UserID:    parts[1],
+		SessionID: parts[2],
+	}
 }

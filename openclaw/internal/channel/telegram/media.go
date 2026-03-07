@@ -13,6 +13,7 @@ package telegram
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"path"
 	"strconv"
@@ -46,6 +47,9 @@ const (
 
 	mimeAudioMPEG = "audio/mpeg"
 	mimeAudioWAV  = "audio/wav"
+
+	bytesPerKiB int64 = 1 << 10
+	bytesPerMiB int64 = 1 << 20
 )
 
 const (
@@ -178,7 +182,7 @@ func (c *Channel) appendPhotoPart(
 	}
 	if p.FileSize > maxBytes && p.FileSize > 0 {
 		uerr := &userError{
-			userMessage: attachmentTooLargeMsg,
+			userMessage: attachmentTooLargeMessage(maxBytes),
 			err:         tgapi.ErrFileTooLarge,
 		}
 		recordAttachment(trace, telegramAttachmentSummary{
@@ -193,7 +197,7 @@ func (c *Channel) appendPhotoPart(
 
 	file, data, err := c.bot.DownloadFileByID(ctx, fileID, maxBytes)
 	if err != nil {
-		mapped := mapDownloadError(err)
+		mapped := mapDownloadError(err, maxBytes)
 		recordAttachment(trace, telegramAttachmentSummary{
 			Kind:         attachmentKindPhoto,
 			FileID:       fileID,
@@ -265,7 +269,7 @@ func (c *Channel) appendDocumentPart(
 	}
 	if doc.FileSize > maxBytes && doc.FileSize > 0 {
 		uerr := &userError{
-			userMessage: attachmentTooLargeMsg,
+			userMessage: attachmentTooLargeMessage(maxBytes),
 			err:         tgapi.ErrFileTooLarge,
 		}
 		recordAttachment(trace, telegramAttachmentSummary{
@@ -282,7 +286,7 @@ func (c *Channel) appendDocumentPart(
 
 	file, data, err := c.bot.DownloadFileByID(ctx, fileID, maxBytes)
 	if err != nil {
-		mapped := mapDownloadError(err)
+		mapped := mapDownloadError(err, maxBytes)
 		recordAttachment(trace, telegramAttachmentSummary{
 			Kind:         attachmentKindDocument,
 			FileID:       fileID,
@@ -337,7 +341,7 @@ func (c *Channel) appendVideoPart(
 	}
 	if video.FileSize > maxBytes && video.FileSize > 0 {
 		uerr := &userError{
-			userMessage: attachmentTooLargeMsg,
+			userMessage: attachmentTooLargeMessage(maxBytes),
 			err:         tgapi.ErrFileTooLarge,
 		}
 		recordAttachment(trace, telegramAttachmentSummary{
@@ -354,7 +358,7 @@ func (c *Channel) appendVideoPart(
 
 	file, data, err := c.bot.DownloadFileByID(ctx, fileID, maxBytes)
 	if err != nil {
-		mapped := mapDownloadError(err)
+		mapped := mapDownloadError(err, maxBytes)
 		recordAttachment(trace, telegramAttachmentSummary{
 			Kind:         attachmentKindVideo,
 			FileID:       fileID,
@@ -453,7 +457,7 @@ func (c *Channel) appendNamedVideoLikePart(
 	trace := debugrecorder.TraceFromContext(ctx)
 	if fileSize > maxBytes && fileSize > 0 {
 		uerr := &userError{
-			userMessage: attachmentTooLargeMsg,
+			userMessage: attachmentTooLargeMessage(maxBytes),
 			err:         tgapi.ErrFileTooLarge,
 		}
 		recordAttachment(trace, telegramAttachmentSummary{
@@ -470,7 +474,7 @@ func (c *Channel) appendNamedVideoLikePart(
 
 	file, data, err := c.bot.DownloadFileByID(ctx, fileID, maxBytes)
 	if err != nil {
-		mapped := mapDownloadError(err)
+		mapped := mapDownloadError(err, maxBytes)
 		recordAttachment(trace, telegramAttachmentSummary{
 			Kind:         kind,
 			FileID:       fileID,
@@ -523,7 +527,7 @@ func (c *Channel) appendVoicePart(
 	}
 	if voice.FileSize > maxBytes && voice.FileSize > 0 {
 		uerr := &userError{
-			userMessage: attachmentTooLargeMsg,
+			userMessage: attachmentTooLargeMessage(maxBytes),
 			err:         tgapi.ErrFileTooLarge,
 		}
 		recordAttachment(trace, telegramAttachmentSummary{
@@ -539,7 +543,7 @@ func (c *Channel) appendVoicePart(
 
 	file, data, err := c.bot.DownloadFileByID(ctx, fileID, maxBytes)
 	if err != nil {
-		mapped := mapDownloadError(err)
+		mapped := mapDownloadError(err, maxBytes)
 		recordAttachment(trace, telegramAttachmentSummary{
 			Kind:         attachmentKindVoice,
 			FileID:       fileID,
@@ -593,7 +597,7 @@ func (c *Channel) appendAudioPart(
 	}
 	if audio.FileSize > maxBytes && audio.FileSize > 0 {
 		uerr := &userError{
-			userMessage: attachmentTooLargeMsg,
+			userMessage: attachmentTooLargeMessage(maxBytes),
 			err:         tgapi.ErrFileTooLarge,
 		}
 		recordAttachment(trace, telegramAttachmentSummary{
@@ -610,7 +614,7 @@ func (c *Channel) appendAudioPart(
 
 	file, data, err := c.bot.DownloadFileByID(ctx, fileID, maxBytes)
 	if err != nil {
-		mapped := mapDownloadError(err)
+		mapped := mapDownloadError(err, maxBytes)
 		recordAttachment(trace, telegramAttachmentSummary{
 			Kind:         attachmentKindAudio,
 			FileID:       fileID,
@@ -676,16 +680,38 @@ func (c *Channel) appendAudioPart(
 	return parts, nil
 }
 
-func mapDownloadError(err error) error {
+func mapDownloadError(err error, maxBytes int64) error {
 	if errors.Is(err, tgapi.ErrFileTooLarge) {
 		return &userError{
-			userMessage: attachmentTooLargeMsg,
+			userMessage: attachmentTooLargeMessage(maxBytes),
 			err:         err,
 		}
 	}
 	return &userError{
 		userMessage: downloadFailedMessage,
 		err:         err,
+	}
+}
+
+func attachmentTooLargeMessage(maxBytes int64) string {
+	if maxBytes <= 0 {
+		return attachmentTooLargeMsg
+	}
+	return fmt.Sprintf(
+		"%s (limit: %s).",
+		attachmentTooLargeMsg,
+		formatByteLimit(maxBytes),
+	)
+}
+
+func formatByteLimit(maxBytes int64) string {
+	switch {
+	case maxBytes >= bytesPerMiB && maxBytes%bytesPerMiB == 0:
+		return fmt.Sprintf("%d MiB", maxBytes/bytesPerMiB)
+	case maxBytes >= bytesPerKiB && maxBytes%bytesPerKiB == 0:
+		return fmt.Sprintf("%d KiB", maxBytes/bytesPerKiB)
+	default:
+		return fmt.Sprintf("%d bytes", maxBytes)
 	}
 }
 

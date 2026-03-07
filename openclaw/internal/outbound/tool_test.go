@@ -12,6 +12,7 @@ package outbound
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -158,4 +159,35 @@ func TestTool_Call_SendsFilesWithoutText(t *testing.T) {
 		},
 	)
 	require.Equal(t, 3, result.(map[string]any)["files_sent"])
+}
+
+func TestTool_Call_ExpandsDirectoryAndGlob(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dir := filepath.Join(root, "out")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	pdf := filepath.Join(dir, "page-1.pdf")
+	png := filepath.Join(dir, "page-2.png")
+	require.NoError(t, os.WriteFile(pdf, []byte("pdf"), 0o600))
+	require.NoError(t, os.WriteFile(png, []byte("png"), 0o600))
+
+	router := NewRouter()
+	sender := &stubSender{id: "telegram"}
+	router.RegisterMessageSender(sender)
+
+	tool := NewTool(router)
+	args, err := json.Marshal(map[string]any{
+		"channel": "telegram",
+		"target":  "100",
+		"files":   []string{dir, filepath.Join(root, "*.missing")},
+		"media":   []string{filepath.Join(dir, "*.png")},
+	})
+	require.NoError(t, err)
+	_, err = tool.Call(context.Background(), args)
+	require.NoError(t, err)
+	require.Len(t, sender.files, 3)
+	require.Equal(t, pdf, sender.files[0].Path)
+	require.Equal(t, png, sender.files[1].Path)
+	require.Equal(t, filepath.Join(root, "*.missing"), sender.files[2].Path)
 }

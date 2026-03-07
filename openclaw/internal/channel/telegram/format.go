@@ -46,11 +46,17 @@ const (
 	lineBreak   = "\n"
 
 	pathTokenTrailingPunct = ".,:;!?)]}"
+
+	inlineCodeDelimiter = "`"
 )
 
 var telegramPathTokenRE = regexp.MustCompile(
 	`(?:artifact|workspace|host|file)://[^\s<>()\[\]{}"'` +
 		"`" + `]+|/[^\s<>()\[\]{}"'` + "`" + `]+`,
+)
+
+var telegramInlineCodeRE = regexp.MustCompile(
+	"`([^`\n]+)`",
 )
 
 func (c *Channel) sendTextMessage(
@@ -134,8 +140,9 @@ func sanitizeTelegramText(text string, stateDir string) string {
 		return text
 	}
 	root := cleanStateRoot(stateDir)
+	sanitized := sanitizeTelegramInlineCodePaths(text, root)
 	return telegramPathTokenRE.ReplaceAllStringFunc(
-		text,
+		sanitized,
 		func(token string) string {
 			return sanitizeTelegramPathToken(token, root)
 		},
@@ -151,6 +158,9 @@ func sanitizeTelegramPathToken(token string, stateRoot string) string {
 		return name + suffix
 	}
 	if name := sanitizeStatePathToken(core, stateRoot); name != "" {
+		return name + suffix
+	}
+	if name := sanitizeGenericPathToken(core); name != "" {
 		return name + suffix
 	}
 	return token
@@ -202,6 +212,49 @@ func sanitizeStatePathToken(token string, stateRoot string) string {
 		return ""
 	}
 	base := filepath.Base(clean)
+	if base == "." || base == string(filepath.Separator) || base == ".." {
+		return ""
+	}
+	return base
+}
+
+func sanitizeTelegramInlineCodePaths(
+	text string,
+	stateRoot string,
+) string {
+	return telegramInlineCodeRE.ReplaceAllStringFunc(
+		text,
+		func(span string) string {
+			if len(span) < 2 {
+				return span
+			}
+			token := strings.TrimSuffix(
+				strings.TrimPrefix(span, inlineCodeDelimiter),
+				inlineCodeDelimiter,
+			)
+			sanitized := sanitizeTelegramPathToken(token, stateRoot)
+			if sanitized == token {
+				return span
+			}
+			return inlineCodeDelimiter + sanitized + inlineCodeDelimiter
+		},
+	)
+}
+
+func sanitizeGenericPathToken(token string) string {
+	trimmed := strings.TrimSpace(token)
+	if trimmed == "" || strings.Contains(trimmed, "://") {
+		return ""
+	}
+	if trimmed == "~" {
+		return ""
+	}
+	if !filepath.IsAbs(trimmed) &&
+		!strings.HasPrefix(trimmed, "~/") &&
+		!strings.Contains(trimmed, "/") {
+		return ""
+	}
+	base := filepath.Base(strings.TrimRight(trimmed, "/"))
 	if base == "." || base == string(filepath.Separator) || base == ".." {
 		return ""
 	}

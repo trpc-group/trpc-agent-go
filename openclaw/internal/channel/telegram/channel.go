@@ -77,7 +77,8 @@ const (
 
 	defaultRegisterCommands = true
 
-	defaultMaxDownloadBytes int64 = 8 << 20
+	defaultMaxDownloadMiB         = 20
+	defaultMaxDownloadBytes int64 = defaultMaxDownloadMiB << 20
 )
 
 // ChannelName is the stable channel identifier used across OpenClaw.

@@ -340,6 +340,57 @@ func TestServiceRecurringJobsKeepFixedCadence(t *testing.T) {
 	require.Equal(t, job.NextRunAt.Add(time.Minute), *jobs[0].NextRunAt)
 }
 
+func TestServiceStartRunsDueJobsOnTicker(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 6, 15, 0, 0, 0, time.UTC)
+	router := outbound.NewRouter()
+	sender := &stubSender{}
+	router.RegisterSender(sender)
+
+	runner := &stubRunner{reply: "tick done"}
+	svc, err := NewService(
+		t.TempDir(),
+		runner,
+		router,
+		WithClock(func() time.Time { return now }),
+		WithTickInterval(10*time.Millisecond),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	_, err = svc.Add(&Job{
+		Name:    "due-now",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind: ScheduleKindAt,
+			At:   now.Add(-time.Second).Format(time.RFC3339),
+		},
+		Message: "collect system resources",
+		UserID:  "telegram:user",
+		Delivery: outbound.DeliveryTarget{
+			Channel: "telegram",
+			Target:  "100",
+		},
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	svc.Start(ctx)
+
+	waitFor(t, func() bool {
+		sender.mu.Lock()
+		defer sender.mu.Unlock()
+		return sender.text == "tick done"
+	})
+
+	status := svc.Status()
+	require.Equal(t, true, status["running"])
+}
+
 func TestNewServicePreservesLoadedNextRunAt(t *testing.T) {
 	t.Parallel()
 

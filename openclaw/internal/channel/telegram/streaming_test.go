@@ -333,6 +333,116 @@ func TestChannel_CallGatewayAndReply_StreamingOff(t *testing.T) {
 	bot.mu.Unlock()
 }
 
+func TestChannel_CallGatewayAndReply_AutoSendsDerivedFiles(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	oldWD, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(root))
+	defer func() {
+		require.NoError(t, os.Chdir(oldWD))
+	}()
+
+	framesDir := filepath.Join(root, "frames")
+	require.NoError(t, os.MkdirAll(framesDir, 0o755))
+	frameA := filepath.Join(framesDir, "frame-1.png")
+	frameB := filepath.Join(framesDir, "frame-2.png")
+	require.NoError(
+		t,
+		os.WriteFile(frameA, []byte("png-a"), 0o600),
+	)
+	require.NoError(
+		t,
+		os.WriteFile(frameB, []byte("png-b"), 0o600),
+	)
+
+	gw := &stubGateway{
+		rsp: gwclient.MessageResponse{
+			StatusCode: http.StatusOK,
+			Reply: "已导出两张图片：`frames/frame-1.png` 和 " +
+				"`frames/frame-2.png`。",
+		},
+	}
+	bot := &stubBot{}
+	ch := &Channel{
+		bot:           bot,
+		gw:            gw,
+		state:         filepath.Join(root, "state"),
+		streamingMode: streamingOff,
+	}
+
+	err = ch.callGatewayAndReply(
+		context.Background(),
+		1,
+		0,
+		2,
+		"u1",
+		"",
+		buildLaneKey("u1", ""),
+		"rid",
+		tgapi.Message{MessageID: 2, Text: "hi"},
+	)
+	require.NoError(t, err)
+
+	bot.mu.Lock()
+	require.Len(t, bot.sent, 1)
+	require.Contains(t, bot.sent[0].Text, "<code>frame-1.png</code>")
+	require.Contains(t, bot.sent[0].Text, "<code>frame-2.png</code>")
+	require.Len(t, bot.photos, 2)
+	require.Equal(t, "frame-1.png", bot.photos[0].FileName)
+	require.Equal(t, "frame-2.png", bot.photos[1].FileName)
+	bot.mu.Unlock()
+}
+
+func TestChannel_CallGatewayAndReply_DoesNotAutoSendOutsideRoots(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "report.pdf")
+	require.NoError(
+		t,
+		os.WriteFile(outside, []byte("%PDF-1.4"), 0o600),
+	)
+
+	gw := &stubGateway{
+		rsp: gwclient.MessageResponse{
+			StatusCode: http.StatusOK,
+			Reply:      "结果在 `" + outside + "`。",
+		},
+	}
+	bot := &stubBot{}
+	ch := &Channel{
+		bot:           bot,
+		gw:            gw,
+		state:         filepath.Join(root, "state"),
+		streamingMode: streamingOff,
+	}
+
+	err := ch.callGatewayAndReply(
+		context.Background(),
+		1,
+		0,
+		2,
+		"u1",
+		"",
+		buildLaneKey("u1", ""),
+		"rid",
+		tgapi.Message{MessageID: 2, Text: "hi"},
+	)
+	require.NoError(t, err)
+
+	bot.mu.Lock()
+	require.Len(t, bot.sent, 1)
+	require.Contains(t, bot.sent[0].Text, "<code>report.pdf</code>")
+	require.Empty(t, bot.docs)
+	require.Empty(t, bot.photos)
+	require.Empty(t, bot.audios)
+	require.Empty(t, bot.voices)
+	require.Empty(t, bot.videos)
+	bot.mu.Unlock()
+}
+
 func TestChannel_CallGatewayAndReply_SplitsReplyForPreview(t *testing.T) {
 	t.Parallel()
 
@@ -412,7 +522,11 @@ func TestChannel_CallGatewayAndReply_AttachmentTooLargeEditsPreview(
 	require.Len(t, bot.sent, 1)
 	require.Equal(t, processingMessage, bot.sent[0].Text)
 	require.Len(t, bot.edits, 1)
-	require.Equal(t, attachmentTooLargeMsg, bot.edits[0].Text)
+	require.Equal(
+		t,
+		attachmentTooLargeMessage(3),
+		bot.edits[0].Text,
+	)
 	bot.mu.Unlock()
 }
 
@@ -496,7 +610,11 @@ func TestChannel_CallGatewayAndReply_StreamingOffRepliesOnUserError(
 
 	bot.mu.Lock()
 	require.Len(t, bot.sent, 1)
-	require.Equal(t, attachmentTooLargeMsg, bot.sent[0].Text)
+	require.Equal(
+		t,
+		attachmentTooLargeMessage(3),
+		bot.sent[0].Text,
+	)
 	bot.mu.Unlock()
 }
 

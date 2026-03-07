@@ -137,6 +137,54 @@ func (r *recordingRunner) Last() model.Message {
 	return r.last
 }
 
+type runOptionsRunner struct {
+	mu   sync.Mutex
+	opts agent.RunOptions
+}
+
+func (r *runOptionsRunner) Run(
+	_ context.Context,
+	_ string,
+	_ string,
+	_ model.Message,
+	opts ...agent.RunOption,
+) (<-chan *event.Event, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	cfg := agent.RunOptions{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
+	r.opts = cfg
+
+	ch := make(chan *event.Event, 1)
+	ch <- &event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{
+				{Message: model.NewAssistantMessage("ok")},
+			},
+			Done: true,
+		},
+		RequestID: "req-1",
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (r *runOptionsRunner) Close() error {
+	return nil
+}
+
+func (r *runOptionsRunner) Options() agent.RunOptions {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.opts
+}
+
 func strPtr(s string) *string {
 	return &s
 }
@@ -801,6 +849,49 @@ func TestServer_ProcessMessage_FileUploadStorePersistsHostRef(
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
 	require.Equal(t, pdfBytes, data)
+}
+
+func TestServer_ProcessMessage_IncludesRecentUploadContext(t *testing.T) {
+	t.Parallel()
+
+	store, err := uploads.NewStore(t.TempDir())
+	require.NoError(t, err)
+
+	runner := &runOptionsRunner{}
+	srv, err := New(runner, WithUploadStore(store))
+	require.NoError(t, err)
+
+	req := gwproto.MessageRequest{
+		Channel:   "telegram",
+		From:      "u1",
+		SessionID: "telegram:dm:u1",
+		ContentParts: []gwproto.ContentPart{
+			{
+				Type: gwproto.PartTypeFile,
+				File: &gwproto.FilePart{
+					Filename: "report.pdf",
+					Data:     []byte("%PDF"),
+				},
+			},
+		},
+	}
+
+	rsp, status := srv.ProcessMessage(context.Background(), req)
+	require.Equal(t, http.StatusOK, status)
+	require.Equal(t, "ok", rsp.Reply)
+
+	opts := runner.Options()
+	require.Len(t, opts.InjectedContextMessages, 1)
+	require.Contains(
+		t,
+		opts.InjectedContextMessages[0].Content,
+		"report.pdf [pdf]",
+	)
+	require.Contains(
+		t,
+		opts.InjectedContextMessages[0].Content,
+		"OPENCLAW_RECENT_UPLOADS_JSON",
+	)
 }
 
 func TestServer_ProcessMessage_DebugRecorderWritesTrace(t *testing.T) {

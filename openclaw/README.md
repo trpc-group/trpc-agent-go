@@ -464,7 +464,7 @@ channels:
       # proxy: "http://127.0.0.1:7890"
       # http_timeout: "60s"
       # max_retries: 3
-      # max_download_bytes: 8388608
+      # max_download_bytes: 20971520
       # session_reset_idle: "24h"
       # session_reset_daily: true
       # on_block: "reset"
@@ -488,7 +488,7 @@ Configure Telegram networking under the Telegram channel `config:`:
 - `http_timeout`: HTTP client timeout (optional; should be > 25s long polling)
 - `max_retries`: retry count for transient failures (optional; default: 3)
 - `max_download_bytes`: per-file download limit for inbound attachments
-  (optional; default: 8388608)
+  (optional; default: 20971520 / 20 MiB)
 
 To override the Telegram API base URL (for testing), set
 `OPENCLAW_TELEGRAM_BASE_URL`.
@@ -513,6 +513,19 @@ Inbound attachments are downloaded from Telegram and forwarded to the gateway
 as multimodal `content_parts`. The uploaded files are also persisted under the
 OpenClaw state directory so later turns in the same chat can keep working on
 the same PDF, image, audio, or video without asking the user to upload again.
+
+For host-side tools, OpenClaw injects stable attachment metadata such as
+`OPENCLAW_LAST_UPLOAD_PATH`, `OPENCLAW_LAST_UPLOAD_NAME`,
+`OPENCLAW_LAST_UPLOAD_MIME`, `OPENCLAW_SESSION_UPLOADS_DIR`, and
+`OPENCLAW_RECENT_UPLOADS_JSON` so the agent can keep operating on the recent
+chat uploads without guessing local paths.
+
+When the agent generates local output files under the current working
+directory or the OpenClaw state directory, Telegram can send them back as
+documents, images, audio, or video via the `message` tool. Replies that mention
+generated files by local path are also sanitized to user-facing filenames, and
+OpenClaw will try to send those generated files back to the current chat
+automatically when it can resolve them safely.
 
 By default, DMs are **fail-closed** and require pairing.
 

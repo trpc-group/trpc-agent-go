@@ -274,3 +274,47 @@ func TestDetectUploadMode(t *testing.T) {
 		detectUploadMode("report.pdf", []byte("%PDF-1.4")),
 	)
 }
+
+func TestParseTextTargetErrors(t *testing.T) {
+	t.Parallel()
+
+	_, _, err := parseTextTarget("")
+	require.Error(t, err)
+
+	_, _, err = parseTextTarget("abc")
+	require.Error(t, err)
+
+	_, _, err = parseTextTarget("100:topic:")
+	require.Error(t, err)
+}
+
+func TestResolveOutboundFile_EmptyPath(t *testing.T) {
+	t.Parallel()
+
+	_, err := resolveOutboundFile(
+		context.Background(),
+		channel.OutboundFile{},
+	)
+	require.Error(t, err)
+}
+
+func TestExpandHomePath_ResolvesBareHome(t *testing.T) {
+	t.Parallel()
+
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	got, err := expandHomePath("~")
+	require.NoError(t, err)
+	require.Equal(t, home, got)
+}
+
+func TestTypeFromExtensionAndVoiceDetection(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, "video/quicktime", typeFromExtension(".mov"))
+	require.Equal(t, "image/gif", typeFromExtension(".gif"))
+	require.Equal(t, "", typeFromExtension(".unknown"))
+	require.True(t, isVoiceMedia(mimeVoiceOGG, "voice.oga"))
+	require.False(t, isVoiceMedia("audio/mpeg", "voice.mp3"))
+}

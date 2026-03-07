@@ -82,7 +82,8 @@ const (
 		"Chat uploads are saved to stable host paths. For host " +
 		"commands, prefer OPENCLAW_LAST_UPLOAD_PATH or " +
 		"OPENCLAW_SESSION_UPLOADS_DIR, OPENCLAW_LAST_UPLOAD_NAME, " +
-		"and OPENCLAW_LAST_UPLOAD_MIME instead of guessing " +
+		"OPENCLAW_LAST_UPLOAD_MIME, and " +
+		"OPENCLAW_RECENT_UPLOADS_JSON instead of guessing " +
 		"attachment paths. When a user follows " +
 		"up about 'the PDF/audio/video I just sent', assume they " +
 		"mean the recent upload already present in this chat unless " +
@@ -93,7 +94,14 @@ const (
 		"with local file paths/host refs/artifact refs to send " +
 		"PDFs, images, audio, or video back to the current chat " +
 		"when needed instead of asking for chat_id or another " +
-		"upload. " +
+		"upload. If a command produces multiple files in one " +
+		"directory, send that directory or the matching files " +
+		"directly with message instead of only describing their " +
+		"paths. When you mention generated files in the final " +
+		"reply, use concise filenames rather than local machine " +
+		"paths. Prefer writing derived files under " +
+		"OPENCLAW_SESSION_UPLOADS_DIR when you will send them " +
+		"back to the user. " +
 		"When creating a cron job from chat, omit channel and " +
 		"target to send results back to the current chat by " +
 		"default. When adding cron jobs, write the stored task " +

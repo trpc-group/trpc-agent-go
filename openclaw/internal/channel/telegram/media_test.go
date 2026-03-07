@@ -206,14 +206,18 @@ func TestInferAudioFormat(t *testing.T) {
 func TestMapDownloadError(t *testing.T) {
 	t.Parallel()
 
-	err := mapDownloadError(tgapi.ErrFileTooLarge)
+	err := mapDownloadError(tgapi.ErrFileTooLarge, 4*bytesPerMiB)
 	u, ok := err.(*userError)
 	require.True(t, ok)
-	require.Equal(t, attachmentTooLargeMsg, u.userMessage)
+	require.Equal(
+		t,
+		attachmentTooLargeMessage(4*bytesPerMiB),
+		u.userMessage,
+	)
 	require.True(t, errors.Is(err, tgapi.ErrFileTooLarge))
 
 	other := errors.New("boom")
-	err = mapDownloadError(other)
+	err = mapDownloadError(other, 4*bytesPerMiB)
 	u, ok = err.(*userError)
 	require.True(t, ok)
 	require.Equal(t, downloadFailedMessage, u.userMessage)
@@ -323,7 +327,7 @@ func TestAppendPhotoPart_TooLarge(t *testing.T) {
 	require.Error(t, err)
 	u, ok := err.(*userError)
 	require.True(t, ok)
-	require.Equal(t, attachmentTooLargeMsg, u.userMessage)
+	require.Equal(t, attachmentTooLargeMessage(9), u.userMessage)
 	require.True(t, errors.Is(err, tgapi.ErrFileTooLarge))
 
 	bot.mu.Lock()
@@ -715,7 +719,7 @@ func TestAppendDocumentPart_TooLarge(t *testing.T) {
 	require.Error(t, err)
 	u, ok := err.(*userError)
 	require.True(t, ok)
-	require.Equal(t, attachmentTooLargeMsg, u.userMessage)
+	require.Equal(t, attachmentTooLargeMessage(9), u.userMessage)
 	require.True(t, errors.Is(err, tgapi.ErrFileTooLarge))
 }
 

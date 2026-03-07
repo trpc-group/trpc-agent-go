@@ -582,9 +582,15 @@ func TestUploadEnvFromContext(t *testing.T) {
 
 	dir := t.TempDir()
 	filePath := filepath.Join(dir, "report.pdf")
+	audioPath := filepath.Join(dir, "clip.ogg")
 	require.NoError(t, os.WriteFile(
 		filePath,
 		[]byte("pdf"),
+		0o600,
+	))
+	require.NoError(t, os.WriteFile(
+		audioPath,
+		[]byte("ogg"),
 		0o600,
 	))
 
@@ -601,25 +607,50 @@ func TestUploadEnvFromContext(t *testing.T) {
 			},
 		},
 	}
+	currentMsg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name:     "clip.ogg",
+					FileID:   "host://" + audioPath,
+					MimeType: "audio/ogg",
+				},
+			},
+		},
+	}
 	ev := event.NewResponseEvent("inv", "user", &model.Response{
 		Choices: []model.Choice{{Message: userMsg}},
 	})
-	inv := agent.NewInvocation(agent.WithInvocationSession(
-		&sessionpkg.Session{
-			Events: []event.Event{*ev},
-		},
-	))
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(currentMsg),
+		agent.WithInvocationSession(
+			&sessionpkg.Session{
+				Events: []event.Event{*ev},
+			},
+		),
+	)
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 
 	env := uploadEnvFromContext(ctx)
-	require.Equal(t, filePath, env[envLastUploadPath])
+	require.Equal(t, audioPath, env[envLastUploadPath])
 	require.Equal(t, dir, env[envSessionUploadsDir])
-	require.Equal(t, "report.pdf", env[envLastUploadName])
+	require.Equal(t, "clip.ogg", env[envLastUploadName])
 	require.Equal(
 		t,
-		"application/pdf",
+		"audio/ogg",
 		env[envLastUploadMIME],
 	)
+
+	var recent []execUploadMeta
+	require.NoError(
+		t,
+		json.Unmarshal([]byte(env[envRecentUploadsJSON]), &recent),
+	)
+	require.Len(t, recent, 2)
+	require.Equal(t, audioPath, recent[0].Path)
+	require.Equal(t, filePath, recent[1].Path)
 }
 
 func TestMergeExecEnv_PreservesExplicitEnv(t *testing.T) {
