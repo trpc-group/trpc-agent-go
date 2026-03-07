@@ -892,6 +892,62 @@ func TestResolveTelegramOutboundExistingPath_PrefersSessionRoot(
 	require.Equal(t, saved.Path, got)
 }
 
+func TestResolveTelegramOutboundExistingPath_UsesResolvedPath(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	path := filepath.Join(root, "report.pdf")
+	require.NoError(t, os.WriteFile(path, []byte("pdf"), 0o600))
+
+	ch := &Channel{}
+	got, info, ok := ch.resolveTelegramOutboundExistingPath(
+		context.Background(),
+		path,
+	)
+	require.True(t, ok)
+	require.NotNil(t, info)
+	require.Equal(t, path, got)
+}
+
+func TestPersistDerivedOutboundFile_AnnotatesExistingPath(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	scope := uploads.Scope{
+		Channel:   channelID,
+		UserID:    "u1",
+		SessionID: "telegram:dm:u1:s1",
+	}
+	store, err := uploads.NewStore(stateDir)
+	require.NoError(t, err)
+
+	saved, err := store.Save(
+		context.Background(),
+		scope,
+		"report.pdf",
+		[]byte("pdf"),
+	)
+	require.NoError(t, err)
+
+	ch := &Channel{state: stateDir}
+	got := ch.persistDerivedOutboundFile(
+		context.Background(),
+		outboundFilePayload{
+			Name:       "report.pdf",
+			Data:       []byte("pdf"),
+			SourcePath: saved.Path,
+		},
+		scope,
+	)
+	require.Equal(t, saved.Path, got)
+
+	files, err := store.ListScope(scope, 10)
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	require.Equal(t, uploads.SourceDerived, files[0].Source)
+	require.Equal(t, "application/pdf", files[0].MimeType)
+}
+
 func mustParseLegacyDMTarget(t *testing.T, raw string) string {
 	t.Helper()
 

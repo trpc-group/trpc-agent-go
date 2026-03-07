@@ -13,6 +13,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -209,6 +210,193 @@ func TestInteractiveHelpers_FormatEnvAndExitCode(t *testing.T) {
 		},
 	)
 	require.NoError(t, envErr)
+}
+
+func TestInteractiveSession_IDLogOffsetsAndMarkDone(t *testing.T) {
+	sess := newInteractiveSession("sess-1", "echo hi", 2)
+	require.Equal(t, "sess-1", sess.ID())
+
+	sess.appendOutput("one\ntwo\nthree\nfour\n", "stdout")
+	sess.appendOutput("tail", "stdout")
+
+	logged := sess.Log(intPtr(0), intPtr(1))
+	require.Equal(t, "three", logged.Output)
+	require.Equal(t, 2, logged.Offset)
+	require.Equal(t, 3, logged.NextOffset)
+
+	logged = sess.Log(intPtr(10), nil)
+	require.Equal(t, "tail", logged.Output)
+	require.Equal(t, 4, logged.Offset)
+	require.Equal(t, 4, logged.NextOffset)
+
+	poll := sess.Poll(intPtr(1))
+	require.Equal(t, "three", poll.Output)
+	require.Equal(t, 2, poll.Offset)
+	require.Equal(t, 3, poll.NextOffset)
+
+	poll = sess.Poll(nil)
+	require.Equal(t, "four\ntail", poll.Output)
+	require.Equal(t, 3, poll.Offset)
+	require.Equal(t, 4, poll.NextOffset)
+
+	sess.markDone(7, time.Second, false)
+	sess.markDone(9, 2*time.Second, true)
+
+	result := sess.RunResult()
+	require.Equal(t, 7, result.ExitCode)
+	require.False(t, result.TimedOut)
+}
+
+func TestInteractiveSession_KillRunningProcess(t *testing.T) {
+	rt := NewRuntime(t.TempDir())
+	ws := codeexecutor.Workspace{
+		ID:   "ws-kill",
+		Path: t.TempDir(),
+	}
+	_, err := codeexecutor.EnsureLayout(ws.Path)
+	require.NoError(t, err)
+
+	t.Run("exits on term", func(t *testing.T) {
+		proc, err := rt.StartProgram(
+			context.Background(),
+			ws,
+			codeexecutor.InteractiveProgramSpec{
+				RunProgramSpec: codeexecutor.RunProgramSpec{
+					Cmd:     "sh",
+					Args:    []string{"-lc", "sleep 30"},
+					Timeout: 5 * time.Second,
+				},
+			},
+		)
+		require.NoError(t, err)
+
+		sess, ok := proc.(*interactiveSession)
+		require.True(t, ok)
+		require.NoError(t, sess.Kill(200*time.Millisecond))
+
+		poll := waitInteractiveStatus(
+			t,
+			proc,
+			codeexecutor.ProgramStatusExited,
+		)
+		require.Equal(t, codeexecutor.ProgramStatusExited, poll.Status)
+		require.NoError(t, proc.Close())
+	})
+
+	t.Run("falls back to kill", func(t *testing.T) {
+		proc, err := rt.StartProgram(
+			context.Background(),
+			ws,
+			codeexecutor.InteractiveProgramSpec{
+				RunProgramSpec: codeexecutor.RunProgramSpec{
+					Cmd: "sh",
+					Args: []string{
+						"-lc",
+						"trap '' TERM; sleep 30",
+					},
+					Timeout: 5 * time.Second,
+				},
+			},
+		)
+		require.NoError(t, err)
+
+		sess, ok := proc.(*interactiveSession)
+		require.True(t, ok)
+		require.NoError(t, sess.Kill(20*time.Millisecond))
+
+		poll := waitInteractiveStatus(
+			t,
+			proc,
+			codeexecutor.ProgramStatusExited,
+		)
+		require.Equal(t, codeexecutor.ProgramStatusExited, poll.Status)
+		require.NoError(t, proc.Close())
+	})
+}
+
+func TestRuntime_StartProgram_StdinAndPipeErrors(t *testing.T) {
+	rt := NewRuntime(t.TempDir())
+	ws := codeexecutor.Workspace{
+		ID:   "ws-stdin",
+		Path: t.TempDir(),
+	}
+	_, err := codeexecutor.EnsureLayout(ws.Path)
+	require.NoError(t, err)
+
+	proc, err := rt.StartProgram(
+		context.Background(),
+		ws,
+		codeexecutor.InteractiveProgramSpec{
+			RunProgramSpec: codeexecutor.RunProgramSpec{
+				Cmd: "sh",
+				Args: []string{
+					"-lc",
+					"read v; printf '%s|%s|%s' " +
+						"\"$v\" \"$WORK_DIR\" \"$CUSTOM_ENV\"",
+				},
+				Timeout: 2 * time.Second,
+				Stdin:   "hello\n",
+				Env: map[string]string{
+					codeexecutor.EnvWorkDir: "override",
+					"CUSTOM_ENV":            "ok",
+				},
+			},
+		},
+	)
+	require.NoError(t, err)
+
+	waitInteractiveStatus(t, proc, codeexecutor.ProgramStatusExited)
+
+	provider, ok := proc.(codeexecutor.ProgramResultProvider)
+	require.True(t, ok)
+	require.Contains(
+		t,
+		provider.RunResult().Stdout,
+		"hello|override|ok",
+	)
+	require.NoError(t, proc.Close())
+
+	cmd := exec.Command("sh", "-lc", "true")
+	cmd.Stdout = os.Stdout
+	stdin, stdout, stderr, err := startPipes(cmd)
+	require.Error(t, err)
+	require.Nil(t, stdin)
+	require.Nil(t, stdout)
+	require.Nil(t, stderr)
+
+	cmd = exec.Command("sh", "-lc", "true")
+	cmd.Stderr = os.Stderr
+	stdin, stdout, stderr, err = startPipes(cmd)
+	require.Error(t, err)
+	require.Nil(t, stdin)
+	require.Nil(t, stdout)
+	require.Nil(t, stderr)
+
+	done := make(chan struct{})
+	waitInteractiveIODone(done, 10*time.Millisecond)
+}
+
+func TestRuntime_StartProgram_MkdirError(t *testing.T) {
+	rt := NewRuntime(t.TempDir())
+	wsPath := filepath.Join(t.TempDir(), "workspace")
+	require.NoError(t, os.WriteFile(wsPath, []byte("x"), 0o600))
+
+	_, err := rt.StartProgram(
+		context.Background(),
+		codeexecutor.Workspace{
+			ID:   "ws-bad",
+			Path: wsPath,
+		},
+		codeexecutor.InteractiveProgramSpec{
+			RunProgramSpec: codeexecutor.RunProgramSpec{
+				Cmd:     "sh",
+				Args:    []string{"-lc", "true"},
+				Cwd:     "work",
+				Timeout: time.Second,
+			},
+		},
+	)
+	require.Error(t, err)
 }
 
 func waitInteractiveExit(

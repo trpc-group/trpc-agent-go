@@ -288,6 +288,94 @@ func TestInferAudioFormat(t *testing.T) {
 	)
 }
 
+func TestMediaHelperMappings(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, mimeImageJPEG, mimeTypeForImageFormat(" jpg "))
+	require.Equal(t, mimeImagePNG, mimeTypeForImageFormat("png"))
+	require.Equal(t, mimeAudioMPEG, mimeTypeForAudioFormat(audioFormatMP3))
+	require.Equal(t, mimeAudioWAV, mimeTypeForAudioFormat(audioFormatWAV))
+	require.Empty(t, mimeTypeForAudioFormat("ogg"))
+
+	require.Equal(
+		t,
+		attachmentTooLargeMsg,
+		attachmentTooLargeMessage(0),
+	)
+	require.Equal(t, "2 MiB", formatByteLimit(2*bytesPerMiB))
+	require.Equal(t, "3 KiB", formatByteLimit(3*bytesPerKiB))
+	require.Equal(t, "777 bytes", formatByteLimit(777))
+	require.Contains(
+		t,
+		attachmentTooLargeMessage(2*bytesPerMiB),
+		"2 MiB",
+	)
+}
+
+func TestMediaHelperFallbacksAndErrors(t *testing.T) {
+	t.Parallel()
+
+	userErr := &userError{
+		userMessage: " user-visible ",
+		err:         errors.New("boom"),
+	}
+	require.Equal(t, "user-visible", userMessageFromErr(userErr))
+	require.Empty(t, userMessageFromErr(errors.New("plain")))
+
+	require.Equal(
+		t,
+		defaultAnimationName,
+		documentFallbackBase("clip.gif", ""),
+	)
+	require.Equal(
+		t,
+		defaultPhotoName,
+		documentFallbackBase("clip.png", ""),
+	)
+	require.Equal(
+		t,
+		defaultVideoName,
+		documentFallbackBase("clip.mp4", ""),
+	)
+	require.Equal(
+		t,
+		defaultAudioName,
+		documentFallbackBase("clip.wav", ""),
+	)
+	require.Equal(
+		t,
+		defaultDocumentName,
+		documentFallbackBase("clip.bin", "application/octet-stream"),
+	)
+
+	require.Equal(t, ".ogg", mediaExtFromPathOrMIME("voice.oga", ""))
+	require.Equal(t, ".mp3", mediaExtFromPathOrMIME("", mimeAudioMPEG))
+	require.Equal(t, ".wav", mediaExtFromPathOrMIME("", mimeAudioWAV))
+	require.Equal(t, ".mp4", mediaExtFromPathOrMIME("", mimeVideoMP4))
+	require.Equal(t, ".gif", mediaExtFromPathOrMIME("", mimeImageGIF))
+	require.Empty(t, mediaExtFromPathOrMIME("", ""))
+
+	require.Equal(
+		t,
+		"video/mp4",
+		normalizeMediaMIME("clip.mp4", "", ""),
+	)
+	require.Equal(
+		t,
+		mimeImagePNG,
+		normalizeMediaMIME("", "frame.png", ""),
+	)
+	require.Equal(
+		t,
+		"text/plain",
+		normalizeMediaMIME("", "", "text/plain"),
+	)
+	require.True(t, isVideoMedia("clip.mp4", "", ""))
+	require.True(t, isVideoMedia("", "clip.mov", ""))
+	require.True(t, isVideoMedia("", "", "video/webm"))
+	require.False(t, isVideoMedia("note.txt", "", ""))
+}
+
 func TestMapDownloadError(t *testing.T) {
 	t.Parallel()
 

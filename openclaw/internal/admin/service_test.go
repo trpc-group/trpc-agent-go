@@ -866,3 +866,246 @@ func TestServiceUploadsJSON_RewritesGeneratedNames(t *testing.T) {
 	require.Contains(t, rr.Body.String(), "\"name\": \"video.mp4\"")
 	require.NotContains(t, rr.Body.String(), "\"name\": \"file_10.mp4\"")
 }
+
+func TestUploadRuntimeHelpers_LimitsAndFilters(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 7, 10, 0, 0, 0, time.UTC)
+	listed := []uploads.ListedFile{
+		{
+			Scope: uploads.Scope{
+				Channel:   "telegram",
+				UserID:    "u2",
+				SessionID: "s2",
+			},
+			Name:         "file_10.mp4",
+			RelativePath: "telegram/u2/s2/file_10.mp4",
+			MimeType:     "video/mp4",
+			SizeBytes:    7,
+			ModifiedAt:   now,
+		},
+		{
+			Scope: uploads.Scope{
+				Channel:   "telegram",
+				UserID:    "u1",
+				SessionID: "s1",
+			},
+			Name:         "report.pdf",
+			RelativePath: "telegram/u1/s1/report.pdf",
+			MimeType:     "application/pdf",
+			Source:       uploads.SourceDerived,
+			SizeBytes:    5,
+			ModifiedAt:   now.Add(-time.Minute),
+		},
+		{
+			Scope: uploads.Scope{
+				Channel:   "telegram",
+				UserID:    "u1",
+				SessionID: "s1",
+			},
+			Name:         "voice.ogg",
+			RelativePath: "telegram/u1/s1/voice.ogg",
+			MimeType:     "audio/ogg",
+			Source:       uploads.SourceInbound,
+			SizeBytes:    3,
+			ModifiedAt:   now.Add(-2 * time.Minute),
+		},
+		{
+			Scope: uploads.Scope{
+				Channel:   "telegram",
+				UserID:    "u0",
+				SessionID: "s3",
+			},
+			Name:         "clip.mp4",
+			RelativePath: "telegram/u0/s3/clip.mp4",
+			MimeType:     "video/mp4",
+			Source:       uploads.SourceDerived,
+			SizeBytes:    9,
+			ModifiedAt:   now,
+		},
+	}
+
+	views, totalBytes := uploadViewsFromList(listed, 1)
+	require.Equal(t, int64(24), totalBytes)
+	require.Len(t, views, 1)
+	require.Equal(t, "video.mp4", views[0].Name)
+	require.Contains(t, views[0].OpenURL, queryPath+"=")
+	require.Contains(t, views[0].DownloadURL, queryDownload+"=1")
+
+	sessions := uploadSessionsFromList(listed, 0)
+	require.Len(t, sessions, 3)
+	require.Equal(t, "u0", sessions[0].UserID)
+	require.Equal(t, "u2", sessions[1].UserID)
+	require.Equal(t, "u1", sessions[2].UserID)
+
+	limitedSessions := uploadSessionsFromList(listed, 2)
+	require.Len(t, limitedSessions, 2)
+
+	kindCounts := uploadKindCountsFromList(listed)
+	require.Len(t, kindCounts, 3)
+	require.Equal(t, "video", kindCounts[0].Kind)
+	require.Equal(t, 2, kindCounts[0].Count)
+
+	sourceCounts := uploadSourceCountsFromList(listed)
+	require.Len(t, sourceCounts, 3)
+	require.Equal(t, uploads.SourceDerived, sourceCounts[0].Source)
+	require.Equal(t, 2, sourceCounts[0].Count)
+	require.Equal(t, "unknown", sourceCounts[2].Source)
+
+	filtered := filterUploadList(
+		listed,
+		uploadFilters{
+			UserID:   "u1",
+			Kind:     "pdf",
+			MimeType: "application/pdf",
+			Source:   uploads.SourceDerived,
+		},
+	)
+	require.Len(t, filtered, 1)
+	require.Equal(t, "report.pdf", filtered[0].Name)
+
+	require.Equal(t, listed, filterUploadList(listed, uploadFilters{}))
+	require.Nil(t, filterUploadList(nil, uploadFilters{}))
+	require.Nil(t, uploadKindCountsFromList(nil))
+	require.Nil(t, uploadSourceCountsFromList(nil))
+}
+
+func TestUploadsStatusFiltered_StateErrors(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(
+		t,
+		uploadsStatus{},
+		New(Config{}).uploadsStatusFiltered(uploadFilters{}, 0, 0),
+	)
+
+	badState := filepath.Join(t.TempDir(), "state-file")
+	require.NoError(t, os.WriteFile(badState, []byte("x"), 0o600))
+
+	status := New(Config{StateDir: badState}).uploadsStatusFiltered(
+		uploadFilters{},
+		0,
+		0,
+	)
+	require.False(t, status.Enabled)
+	require.NotEmpty(t, status.Error)
+}
+
+func TestServiceHelperFunctions(t *testing.T) {
+	t.Parallel()
+
+	rr := httptest.NewRecorder()
+	writeJSON(rr, http.StatusCreated, map[string]string{"ok": "yes"})
+	require.Equal(t, http.StatusCreated, rr.Code)
+	require.Contains(t, rr.Body.String(), "\"ok\": \"yes\"")
+
+	errRR := httptest.NewRecorder()
+	writeJSON(
+		errRR,
+		http.StatusOK,
+		map[string]any{"bad": make(chan int)},
+	)
+	require.Equal(t, http.StatusInternalServerError, errRR.Code)
+
+	require.Empty(t, fallbackJobName(nil))
+	require.Equal(
+		t,
+		"job-1",
+		fallbackJobName(&cron.Job{ID: " job-1 "}),
+	)
+	require.Equal(
+		t,
+		"named",
+		fallbackJobName(&cron.Job{Name: " named ", ID: "job-2"}),
+	)
+	require.Equal(t, "short", summarizeText(" short ", 0))
+	require.Equal(t, "abc...", summarizeText("abcdef", 3))
+	require.Equal(t, 5, intFromMap(5))
+	require.Zero(t, intFromMap("bad"))
+	require.Nil(t, stringSliceFromMap(nil))
+	require.Equal(
+		t,
+		[]string{"a", "b"},
+		stringSliceFromMap([]string{"b", "a"}),
+	)
+	require.Nil(t, stringSliceFromMap("bad"))
+
+	now := time.Date(2026, 3, 7, 11, 0, 0, 0, time.UTC)
+	require.Equal(t, "-", formatTime(time.Time{}))
+	require.Equal(t, "-", formatTime((*time.Time)(nil)))
+	require.Equal(
+		t,
+		now.Local().Format(formatTimeLayout),
+		formatTime(now),
+	)
+	require.Equal(t, "-", formatTime("bad"))
+	require.Equal(t, "-", formatUptime(time.Time{}, now))
+	require.Equal(t, "0s", formatUptime(now, now.Add(-time.Minute)))
+
+	require.Equal(t, uploadFilters{}, uploadFiltersFromRequest(nil))
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/?"+url.Values{
+			queryChannel:   []string{" telegram "},
+			queryUserID:    []string{" u1 "},
+			querySessionID: []string{" s1 "},
+			queryKind:      []string{" pdf "},
+			queryMimeType:  []string{" application/pdf "},
+			querySource:    []string{" derived "},
+		}.Encode(),
+		nil,
+	)
+	require.Equal(
+		t,
+		uploadFilters{
+			Channel:   "telegram",
+			UserID:    "u1",
+			SessionID: "s1",
+			Kind:      "pdf",
+			MimeType:  "application/pdf",
+			Source:    "derived",
+		},
+		uploadFiltersFromRequest(req),
+	)
+}
+
+func TestServiceResolveDebugFileAndMethodChecks(t *testing.T) {
+	t.Parallel()
+
+	debugDir := t.TempDir()
+	traceDir := filepath.Join(debugDir, "20260307", "trace")
+	require.NoError(t, os.MkdirAll(traceDir, 0o755))
+	metaPath := filepath.Join(traceDir, debugMetaFileName)
+	require.NoError(t, os.WriteFile(metaPath, []byte("{}"), 0o600))
+
+	svc := New(Config{DebugDir: debugDir})
+	got, err := svc.resolveDebugFile("20260307/trace", debugMetaFileName)
+	require.NoError(t, err)
+	require.Equal(t, metaPath, got)
+
+	_, err = svc.resolveDebugFile("", debugMetaFileName)
+	require.Error(t, err)
+	_, err = svc.resolveDebugFile("20260307/trace", "notes.txt")
+	require.Error(t, err)
+	_, err = svc.resolveDebugFile("../escape", debugMetaFileName)
+	require.Error(t, err)
+	_, err = svc.resolveDebugFile("20260307/missing", debugMetaFileName)
+	require.Error(t, err)
+
+	handler := svc.Handler()
+	routes := []string{
+		routeStatusJSON,
+		routeJobsJSON,
+		routeExecSessionsJSON,
+		routeUploadsJSON,
+		routeUploadSessions,
+		routeDebugSessionsJSON,
+		routeDebugTracesJSON,
+	}
+	for _, route := range routes {
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, route, nil)
+		handler.ServeHTTP(rr, req)
+		require.Equal(t, http.StatusMethodNotAllowed, rr.Code)
+	}
+}
