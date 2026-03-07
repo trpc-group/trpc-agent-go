@@ -135,15 +135,6 @@ func TestWithAddSessionSummary(t *testing.T) {
 	require.False(t, opts.AddSessionSummary)
 }
 
-func TestWithSingleSystemMessage(t *testing.T) {
-	opts := &Options{}
-	WithSingleSystemMessage(true)(opts)
-	require.True(t, opts.singleSystemMessage)
-
-	WithSingleSystemMessage(false)(opts)
-	require.False(t, opts.singleSystemMessage)
-}
-
 func TestWithMaxHistoryRuns(t *testing.T) {
 	opts := &Options{}
 	WithMaxHistoryRuns(5)(opts)

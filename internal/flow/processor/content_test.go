@@ -291,26 +291,16 @@ func TestContentRequestProcessor_WithAddSessionSummary_Option(t *testing.T) {
 	assert.True(t, p.AddSessionSummary)
 }
 
-func TestContentRequestProcessor_WithSingleSystemMessage_Option(t *testing.T) {
-	p := NewContentRequestProcessor(WithSingleSystemMessage(true))
-	assert.True(t, p.SingleSystemMessage)
-
-	p = NewContentRequestProcessor(WithSingleSystemMessage(false))
-	assert.False(t, p.SingleSystemMessage)
-}
-
-func TestContentRequestProcessor_InjectSystemContextMessage_SingleSystemMessage(t *testing.T) {
+func TestContentRequestProcessor_InjectSystemContextMessage(t *testing.T) {
 	tests := []struct {
-		name                string
-		singleSystemMessage bool
-		existingMessages    []model.Message
-		summaryContent      string
-		wantMessagesLen     int
-		wantFirstContent    string
+		name             string
+		existingMessages []model.Message
+		summaryContent   string
+		wantMessagesLen  int
+		wantFirstContent string
 	}{
 		{
-			name:                "single mode merges into existing non-empty system message",
-			singleSystemMessage: true,
+			name: "merges into existing non-empty system message",
 			existingMessages: []model.Message{
 				{Role: model.RoleSystem, Content: "You are a helpful assistant."},
 				{Role: model.RoleUser, Content: "Hello"},
@@ -320,8 +310,7 @@ func TestContentRequestProcessor_InjectSystemContextMessage_SingleSystemMessage(
 			wantFirstContent: "You are a helpful assistant.\n\nPrevious conversation summary",
 		},
 		{
-			name:                "single mode merges into existing empty system message",
-			singleSystemMessage: true,
+			name: "merges into existing empty system message",
 			existingMessages: []model.Message{
 				{Role: model.RoleSystem, Content: ""},
 				{Role: model.RoleUser, Content: "Hello"},
@@ -331,29 +320,7 @@ func TestContentRequestProcessor_InjectSystemContextMessage_SingleSystemMessage(
 			wantFirstContent: "Previous conversation summary",
 		},
 		{
-			name:                "single mode creates new system message when none exists",
-			singleSystemMessage: true,
-			existingMessages: []model.Message{
-				{Role: model.RoleUser, Content: "Hello"},
-			},
-			summaryContent:   "Previous conversation summary",
-			wantMessagesLen:  2,
-			wantFirstContent: "Previous conversation summary",
-		},
-		{
-			name:                "default mode inserts after last system message",
-			singleSystemMessage: false,
-			existingMessages: []model.Message{
-				{Role: model.RoleSystem, Content: "System prompt"},
-				{Role: model.RoleUser, Content: "Hello"},
-			},
-			summaryContent:   "Previous conversation summary",
-			wantMessagesLen:  3,
-			wantFirstContent: "System prompt",
-		},
-		{
-			name:                "default mode prepends when no system message exists",
-			singleSystemMessage: false,
+			name: "creates new system message when none exists",
 			existingMessages: []model.Message{
 				{Role: model.RoleUser, Content: "Hello"},
 			},
@@ -365,7 +332,7 @@ func TestContentRequestProcessor_InjectSystemContextMessage_SingleSystemMessage(
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			p := NewContentRequestProcessor(WithSingleSystemMessage(tt.singleSystemMessage))
+			p := NewContentRequestProcessor()
 			req := &model.Request{Messages: tt.existingMessages}
 			summaryMsg := model.Message{Role: model.RoleSystem, Content: tt.summaryContent}
 
@@ -378,7 +345,7 @@ func TestContentRequestProcessor_InjectSystemContextMessage_SingleSystemMessage(
 }
 
 func TestContentRequestProcessor_InjectSystemContextMessage_NonSystemMessage(t *testing.T) {
-	p := NewContentRequestProcessor(WithSingleSystemMessage(true))
+	p := NewContentRequestProcessor()
 	req := &model.Request{Messages: []model.Message{
 		{Role: model.RoleUser, Content: "Hello"},
 	}}

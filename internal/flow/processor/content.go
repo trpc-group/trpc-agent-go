@@ -114,10 +114,6 @@ type ContentRequestProcessor struct {
 	// SummaryFormatter allows custom formatting of session summary content.
 	// When nil (default), uses the default formatSummaryContent function.
 	SummaryFormatter func(summary string) string
-	// SingleSystemMessage controls whether summary and preloaded memory are
-	// merged into an existing system message. When true, only one system
-	// message is kept in the request whenever possible.
-	SingleSystemMessage bool
 }
 
 // ContentOption is a functional option for configuring the ContentRequestProcessor.
@@ -210,14 +206,6 @@ func WithPreloadMemory(limit int) ContentOption {
 func WithSummaryFormatter(formatter func(summary string) string) ContentOption {
 	return func(p *ContentRequestProcessor) {
 		p.SummaryFormatter = formatter
-	}
-}
-
-// WithSingleSystemMessage controls whether summary and preloaded memory are
-// merged into an existing system message.
-func WithSingleSystemMessage(single bool) ContentOption {
-	return func(p *ContentRequestProcessor) {
-		p.SingleSystemMessage = single
 	}
 }
 
@@ -354,6 +342,8 @@ func (p *ContentRequestProcessor) ProcessRequest(
 }
 
 // injectSystemContextMessage injects summary or memory context into request.
+// It merges the content into an existing system message if one exists,
+// or prepends as a new system message if none exists.
 func (p *ContentRequestProcessor) injectSystemContextMessage(
 	req *model.Request,
 	msg model.Message,
@@ -361,21 +351,13 @@ func (p *ContentRequestProcessor) injectSystemContextMessage(
 	if msg.Role != model.RoleSystem {
 		return
 	}
-	if p.SingleSystemMessage {
-		systemMsgIndex := findSystemMessageIndex(req.Messages)
-		if systemMsgIndex >= 0 {
-			if req.Messages[systemMsgIndex].Content == "" {
-				req.Messages[systemMsgIndex].Content = msg.Content
-				return
-			}
-			req.Messages[systemMsgIndex].Content += "\n\n" + msg.Content
+	systemMsgIndex := findSystemMessageIndex(req.Messages)
+	if systemMsgIndex >= 0 {
+		if req.Messages[systemMsgIndex].Content == "" {
+			req.Messages[systemMsgIndex].Content = msg.Content
 			return
 		}
-	}
-	systemMsgIndex := findLastSystemMessageIndex(req.Messages)
-	if systemMsgIndex >= 0 {
-		req.Messages = append(req.Messages[:systemMsgIndex+1],
-			append([]model.Message{msg}, req.Messages[systemMsgIndex+1:]...)...)
+		req.Messages[systemMsgIndex].Content += "\n\n" + msg.Content
 		return
 	}
 	req.Messages = append([]model.Message{msg}, req.Messages...)

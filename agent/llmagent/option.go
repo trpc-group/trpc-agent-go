@@ -329,10 +329,6 @@ type Options struct {
 	// When 0 (default), no memories are preloaded (use tools instead).
 	// When < 0, all memories are loaded.
 	PreloadMemory int
-	// singleSystemMessage controls whether summary and preloaded memory are
-	// merged into a single system message when possible.
-	// Default is false.
-	singleSystemMessage bool
 
 	// postToolPromptEnabled controls whether the post-tool dynamic prompt
 	// injection is enabled. When nil (default), injection is enabled to
@@ -931,14 +927,6 @@ func WithMessageFilterMode(mode MessageFilterMode) Option {
 func WithPreloadMemory(limit int) Option {
 	return func(opts *Options) {
 		opts.PreloadMemory = limit
-	}
-}
-
-// WithSingleSystemMessage controls whether summary and preloaded memory are
-// merged into a single system message when possible.
-func WithSingleSystemMessage(single bool) Option {
-	return func(opts *Options) {
-		opts.singleSystemMessage = single
 	}
 }
 
