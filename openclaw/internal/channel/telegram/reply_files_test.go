@@ -20,22 +20,34 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 )
 
-func TestReplyFileCandidates_RecognizesPlainFilenames(t *testing.T) {
+func TestReplyFileCandidates_RecognizesExplicitPaths(t *testing.T) {
+	t.Parallel()
+
+	got := replyFileCandidates(
+		"已生成 `out_pdf_split/风雨独立路_第3页.pdf` 和 " +
+			"`frames/page2.png`，可直接发送。",
+	)
+	require.Contains(t, got, "out_pdf_split/风雨独立路_第3页.pdf")
+	require.Contains(t, got, "frames/page2.png")
+}
+
+func TestReplyFileCandidates_DedupesPathAndInline(t *testing.T) {
+	t.Parallel()
+
+	got := replyFileCandidates(
+		"发回 `frames/page2.png` 和 `frames/page2.png`",
+	)
+	require.Len(t, got, 1)
+	require.Equal(t, "frames/page2.png", got[0])
+}
+
+func TestReplyFileCandidates_IgnoresBareFilenames(t *testing.T) {
 	t.Parallel()
 
 	got := replyFileCandidates(
 		"已生成 风雨独立路_第3页.pdf 和 page2.png，可直接发送。",
 	)
-	require.Contains(t, got, "风雨独立路_第3页.pdf")
-	require.Contains(t, got, "page2.png")
-}
-
-func TestReplyFileCandidates_DedupesPlainAndInline(t *testing.T) {
-	t.Parallel()
-
-	got := replyFileCandidates("发回 `page2.png` 和 page2.png")
-	require.Len(t, got, 1)
-	require.Equal(t, "page2.png", got[0])
+	require.Empty(t, got)
 }
 
 func TestReplyFileCandidates_RecognizesDirectoryCue(t *testing.T) {
@@ -114,7 +126,9 @@ func TestResolveReplyCandidateFiles_HostDirExpands(t *testing.T) {
 	require.Len(t, got, 2)
 }
 
-func TestChannelCollectReplyFiles_UsesSessionUploads(t *testing.T) {
+func TestChannelCollectReplyFiles_DoesNotReuseBareSessionUploadNames(
+	t *testing.T,
+) {
 	t.Parallel()
 
 	stateDir := t.TempDir()
@@ -140,43 +154,43 @@ func TestChannelCollectReplyFiles_UsesSessionUploads(t *testing.T) {
 		"u1",
 		"telegram:dm:u1:s1",
 	)
-	require.Len(t, got, 1)
-	require.Equal(t, saved.Path, got[0].Path)
+	require.Empty(t, got)
+	require.NotEmpty(t, saved.Path)
 }
 
-func TestChannelCollectReplyFiles_UsesDerivedUnicodeFiles(t *testing.T) {
+func TestChannelCollectReplyFiles_UsesExplicitDerivedPaths(t *testing.T) {
 	t.Parallel()
 
-	stateDir := t.TempDir()
-	store, err := uploads.NewStore(stateDir)
-	require.NoError(t, err)
+	root := t.TempDir()
 
-	scope := uploads.Scope{
-		Channel:   channelID,
-		UserID:    "u1",
-		SessionID: "telegram:dm:u1:s1",
-	}
-	saved, err := store.SaveWithInfo(
-		context.Background(),
-		scope,
+	outDir := filepath.Join(root, "out_pdf_split")
+	require.NoError(t, os.MkdirAll(outDir, 0o755))
+	want := filepath.Join(
+		outDir,
 		"风雨独立路--李光耀回忆录_第3页.pdf",
-		uploads.FileMetadata{
-			MimeType: "application/pdf",
-			Source:   uploads.SourceDerived,
-		},
-		[]byte("%PDF-1.4"),
 	)
-	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(want, []byte("%PDF-1.4"), 0o600))
 
-	ch := &Channel{state: stateDir}
+	cwdMu.Lock()
+	oldWD, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(root))
+	defer func() {
+		require.NoError(t, os.Chdir(oldWD))
+		cwdMu.Unlock()
+	}()
+
+	ch := &Channel{state: filepath.Join(root, "state")}
 	got := ch.collectReplyFiles(
-		"已拆分成 `风雨独立路--李光耀回忆录_第3页.pdf`，"+
+		"已拆分成 `out_pdf_split/风雨独立路--李光耀回忆录_第3页.pdf`，"+
 			"现在发给你。",
 		"u1",
 		"telegram:dm:u1:s1",
 	)
 	require.Len(t, got, 1)
-	require.Equal(t, saved.Path, got[0].Path)
+	resolvedWant, err := filepath.EvalSymlinks(want)
+	require.NoError(t, err)
+	require.Equal(t, resolvedWant, got[0].Path)
 }
 
 func TestFindReplyNamedFiles_RespectsDepth(t *testing.T) {
@@ -222,4 +236,6 @@ func TestAutoReplyRoots_IncludeSessionUploadsRoot(t *testing.T) {
 		"telegram:dm:u1:s1",
 	)
 	require.Contains(t, roots, filepath.Clean(want))
+	require.Len(t, roots, 2)
+	require.NotContains(t, roots, filepath.Clean(stateDir))
 }

@@ -110,7 +110,10 @@ const (
 		"with local file paths/host refs/artifact refs to send " +
 		"PDFs, images, audio, or video back to the current chat " +
 		"when needed instead of asking for chat_id or another " +
-		"upload. If a command produces multiple files in one " +
+		"upload. Merely mentioning a filename in text does not " +
+		"send it; call message with files when the user should " +
+		"actually receive media or documents. If a command " +
+		"produces multiple files in one " +
 		"directory, send that directory or the matching files " +
 		"directly with message instead of only describing their " +
 		"paths. When you mention generated files in the final " +

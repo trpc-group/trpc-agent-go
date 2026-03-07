@@ -397,6 +397,72 @@ func TestChannel_CallGatewayAndReply_AutoSendsDerivedFiles(t *testing.T) {
 	bot.mu.Unlock()
 }
 
+func TestChannel_CallGatewayAndReply_IgnoresBareOutputFilenames(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cwdMu.Lock()
+	oldWD, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(root))
+	defer func() {
+		require.NoError(t, os.Chdir(oldWD))
+		cwdMu.Unlock()
+	}()
+
+	frameA := filepath.Join(root, "frame-1.png")
+	frameB := filepath.Join(root, "frame-2.png")
+	require.NoError(
+		t,
+		os.WriteFile(frameA, []byte("png-a"), 0o600),
+	)
+	require.NoError(
+		t,
+		os.WriteFile(frameB, []byte("png-b"), 0o600),
+	)
+
+	gw := &stubGateway{
+		rsp: gwclient.MessageResponse{
+			StatusCode: http.StatusOK,
+			Reply: "已提取两张图片：`frame-1.png` 和 " +
+				"`frame-2.png`。",
+		},
+	}
+	bot := &stubBot{}
+	ch := &Channel{
+		bot:           bot,
+		gw:            gw,
+		state:         filepath.Join(root, "state"),
+		streamingMode: streamingOff,
+	}
+
+	err = ch.callGatewayAndReply(
+		context.Background(),
+		1,
+		0,
+		2,
+		"u1",
+		"",
+		buildLaneKey("u1", ""),
+		"rid",
+		tgapi.Message{MessageID: 2, Text: "hi"},
+	)
+	require.NoError(t, err)
+
+	bot.mu.Lock()
+	require.Len(t, bot.sent, 1)
+	require.Contains(t, bot.sent[0].Text, "<code>frame-1.png</code>")
+	require.Contains(t, bot.sent[0].Text, "<code>frame-2.png</code>")
+	require.Empty(t, bot.photos)
+	require.Empty(t, bot.docs)
+	require.Empty(t, bot.audios)
+	require.Empty(t, bot.voices)
+	require.Empty(t, bot.videos)
+	bot.mu.Unlock()
+}
+
 func TestChannel_CallGatewayAndReply_AutoSendsDirectoryCueFiles(t *testing.T) {
 	t.Parallel()
 

@@ -70,15 +70,6 @@ var replyFileExts = map[string]struct{}{
 	".zip":  {},
 }
 
-var replyPlainFileRE = regexp.MustCompile(
-	`[^\s<>()\[\]{}"'` + "`" + `]+\.(?:` +
-		`avi|csv|doc|docx|gif|htm|html|jpeg|jpg|json|m4a|` +
-		`md|mkv|mov|mp3|mp4|oga|ogg|pdf|png|ppt|pptx|svg|` +
-		`tar|tgz|tsv|txt|wav|webm|webp|xls|xlsx|xml|yaml|` +
-		`yml|zip)` +
-		``,
-)
-
 var replyDirCueRE = regexp.MustCompile(
 	`(?:目录|文件夹|folder|directory)\s*[:：]?\s*` +
 		`([^\s<>()\[\]{}"'` + "`" + `]+)`,
@@ -170,15 +161,25 @@ func replyFileCandidates(text string) []string {
 		seen[trimmed] = struct{}{}
 		out = append(out, trimmed)
 	}
+	appendExplicitToken := func(token string) {
+		trimmed := cleanReplyCandidateToken(token)
+		if !isExplicitReplyCandidate(trimmed) {
+			return
+		}
+		if isReplySuffixCandidate(trimmed, seen) {
+			return
+		}
+		appendToken(trimmed)
+	}
 
 	for _, match := range telegramInlineCodeRE.FindAllStringSubmatch(text, -1) {
 		if len(match) < 2 {
 			continue
 		}
-		appendToken(match[1])
+		appendExplicitToken(match[1])
 	}
 	for _, token := range telegramPathTokenRE.FindAllString(text, -1) {
-		appendToken(token)
+		appendExplicitToken(token)
 	}
 	for _, match := range replyDirCueRE.FindAllStringSubmatch(text, -1) {
 		if len(match) < 2 {
@@ -186,15 +187,45 @@ func replyFileCandidates(text string) []string {
 		}
 		appendToken(match[1])
 	}
-	for _, token := range replyPlainFileRE.FindAllString(text, -1) {
-		appendToken(token)
-	}
 	return out
 }
 
 func cleanReplyCandidateToken(token string) string {
 	core, _ := splitTrailingPathPunct(strings.TrimSpace(token))
 	return strings.Trim(core, replyTokenTrimPunct)
+}
+
+func isExplicitReplyCandidate(token string) bool {
+	trimmed := strings.TrimSpace(token)
+	if trimmed == "" {
+		return false
+	}
+	if isReplyDirectRef(trimmed) || isDirectReplyPathToken(trimmed) {
+		return true
+	}
+	if !canJoinReplyRoots(trimmed) {
+		return false
+	}
+	return strings.Contains(trimmed, "/") ||
+		strings.Contains(trimmed, string(filepath.Separator))
+}
+
+func isReplySuffixCandidate(
+	token string,
+	seen map[string]struct{},
+) bool {
+	if !strings.HasPrefix(token, "/") || len(seen) == 0 {
+		return false
+	}
+	for existing := range seen {
+		if len(existing) <= len(token) {
+			continue
+		}
+		if strings.HasSuffix(existing, token) {
+			return true
+		}
+	}
+	return false
 }
 
 func looksLikeReplyFileName(token string) bool {
@@ -495,7 +526,6 @@ func autoReplyRoots(
 	if cwd, err := os.Getwd(); err == nil {
 		appendRoot(cwd)
 	}
-	appendRoot(stateRoot)
 	return out
 }
 
