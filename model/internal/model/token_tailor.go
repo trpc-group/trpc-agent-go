@@ -27,6 +27,9 @@ const (
 
 	// DefaultOutputTokensFloor is the minimum number of output tokens to ensure
 	// a meaningful response. Below this limit, responses may be truncated.
+	//
+	// Deprecated: OutputTokensFloor is no longer used. Token tailoring no
+	// longer auto-calculates output MaxTokens.
 	DefaultOutputTokensFloor = 256
 
 	// DefaultSafetyMarginRatio is the safety margin ratio (10%) used to account for
@@ -89,6 +92,9 @@ func CalculateMaxInputTokensWithParams(
 // CalculateMaxOutputTokens calculates the maximum output tokens based on the
 // context window and actual used input tokens.
 //
+// Deprecated: CalculateMaxOutputTokens is no longer used. Token tailoring no
+// longer auto-calculates output MaxTokens.
+//
 // Formula:
 //
 //	safetyMargin = contextWindow × safetyMarginRatio (10%)
@@ -119,6 +125,9 @@ func CalculateMaxOutputTokens(contextWindow int, usedInputTokens int) int {
 
 // CalculateMaxOutputTokensWithParams calculates the maximum output tokens
 // with custom budget parameters.
+//
+// Deprecated: CalculateMaxOutputTokensWithParams is no longer used. Token
+// tailoring no longer auto-calculates output MaxTokens.
 func CalculateMaxOutputTokensWithParams(
 	contextWindow int,
 	usedInputTokens int,
