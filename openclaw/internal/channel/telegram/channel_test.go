@@ -1645,3 +1645,153 @@ func TestChannel_HandleMyChatMember_Block_Forget(t *testing.T) {
 	require.False(t, rotated)
 	require.Equal(t, laneKey, got)
 }
+
+func TestChannelAnswerCallbackQueryAndAccessHelpers(t *testing.T) {
+	t.Parallel()
+
+	ch := &Channel{}
+	require.NoError(
+		t,
+		ch.answerCallbackQuery(context.Background(), "", "done", true),
+	)
+	require.True(t, ch.isUserAllowed("u1"))
+	require.True(t, ch.isChatAllowed(false, ""))
+
+	bot := &stubBot{}
+	ch = &Channel{
+		bot:         bot,
+		allowUsers:  map[string]struct{}{"u1": {}},
+		groupPolicy: groupPolicyAllowlist,
+		allowThreads: map[string]struct{}{
+			"100": {},
+		},
+	}
+	require.True(t, ch.isUserAllowed("u1"))
+	require.False(t, ch.isUserAllowed("u2"))
+	require.True(t, ch.isChatAllowed(true, "100:topic:7"))
+	require.False(t, ch.isChatAllowed(true, "200:topic:7"))
+	require.NoError(
+		t,
+		ch.answerCallbackQuery(context.Background(), "cb-1", "done", true),
+	)
+	require.Len(t, bot.callbacks, 1)
+	require.Equal(t, "cb-1", bot.callbacks[0].CallbackQueryID)
+	require.True(t, bot.callbacks[0].ShowAlert)
+}
+
+func TestChannelIsDMAllowed(t *testing.T) {
+	t.Parallel()
+
+	bot := &stubBot{}
+	ch := &Channel{
+		bot:      bot,
+		dmPolicy: dmPolicyAllowlist,
+	}
+
+	ok, err := ch.isDMAllowed(context.Background(), 1, "u1")
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Len(t, bot.sent, 1)
+	require.Contains(t, bot.sent[0].Text, notAllowedMessage)
+
+	ch.allowUsers = map[string]struct{}{"u1": {}}
+	ok, err = ch.isDMAllowed(context.Background(), 1, "u1")
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	ch.dmPolicy = dmPolicyDisabled
+	ok, err = ch.isDMAllowed(context.Background(), 1, "u1")
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	ch.dmPolicy = dmPolicyOpen
+	ok, err = ch.isDMAllowed(context.Background(), 1, "u1")
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	ch.dmPolicy = dmPolicyPairing
+	ch.pairing = nil
+	ok, err = ch.isDMAllowed(context.Background(), 1, "u1")
+	require.Error(t, err)
+	require.False(t, ok)
+
+	ch.pairing = &stubPairingStore{approved: true}
+	ok, err = ch.isDMAllowed(context.Background(), 1, "u1")
+	require.NoError(t, err)
+	require.True(t, ok)
+}
+
+func TestChannelIsDMAllowed_PairingRequestAndUnsupportedPolicy(t *testing.T) {
+	t.Parallel()
+
+	bot := &stubBot{}
+	pairing := &stubPairingStore{code: "654321"}
+	ch := &Channel{
+		bot:      bot,
+		dmPolicy: dmPolicyPairing,
+		pairing:  pairing,
+	}
+
+	ok, err := ch.isDMAllowed(context.Background(), 7, "u7")
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Equal(t, []string{"u7"}, pairing.requested)
+	require.Len(t, bot.sent, 1)
+	require.Contains(t, bot.sent[0].Text, "654321")
+
+	ch.dmPolicy = "weird"
+	ok, err = ch.isDMAllowed(context.Background(), 7, "u7")
+	require.Error(t, err)
+	require.False(t, ok)
+}
+
+func TestChannelHandleCallbackQuery_GuardsAndFiltering(t *testing.T) {
+	t.Parallel()
+
+	bot := &stubBot{}
+	ch := &Channel{
+		bot:        bot,
+		allowUsers: map[string]struct{}{"1": {}},
+	}
+	ctx := context.Background()
+
+	err := ch.handleCallbackQuery(ctx, tgapi.CallbackQuery{
+		ID: "cb-empty",
+	})
+	require.NoError(t, err)
+
+	err = ch.handleCallbackQuery(ctx, tgapi.CallbackQuery{
+		ID:   "cb-group",
+		Data: "noop",
+		From: &tgapi.User{ID: 1},
+		Message: &tgapi.Message{
+			Chat: &tgapi.Chat{
+				ID:   100,
+				Type: chatTypeSuperGroup,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	err = ch.handleCallbackQuery(ctx, tgapi.CallbackQuery{
+		ID:   "cb-user",
+		Data: "noop",
+		From: &tgapi.User{ID: 2},
+		Message: &tgapi.Message{
+			Chat: &tgapi.Chat{
+				ID:   100,
+				Type: chatTypeSuperGroup,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	require.Len(t, bot.callbacks, 3)
+	require.Equal(t, "cb-empty", bot.callbacks[0].CallbackQueryID)
+	require.Empty(t, bot.callbacks[0].Text)
+	require.Equal(t, "cb-group", bot.callbacks[1].CallbackQueryID)
+	require.Empty(t, bot.callbacks[1].Text)
+	require.Equal(t, "cb-user", bot.callbacks[2].CallbackQueryID)
+	require.Equal(t, notAllowedMessage, bot.callbacks[2].Text)
+	require.True(t, bot.callbacks[2].ShowAlert)
+}

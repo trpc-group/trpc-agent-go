@@ -256,6 +256,47 @@ func TestSanitizeInternalRefToken(t *testing.T) {
 	require.Empty(t, sanitizeInternalRefToken("https://example.com/x"))
 }
 
+func TestSanitizeTelegramPathToken_PreservesTrailingPunct(t *testing.T) {
+	t.Parallel()
+
+	stateDir := filepath.Join("/tmp", "openclaw")
+	token := filepath.Join(
+		stateDir,
+		"uploads",
+		"chat",
+		"frame.png",
+	) + ")."
+
+	require.Equal(
+		t,
+		"frame.png).",
+		sanitizeTelegramPathToken(token, stateDir),
+	)
+}
+
+func TestSanitizeGenericPathToken(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(
+		t,
+		"clip.mp4",
+		sanitizeGenericPathToken("~/media/clip.mp4"),
+	)
+	require.Equal(
+		t,
+		"report.pdf",
+		sanitizeGenericPathToken("out_pdf_split/report.pdf"),
+	)
+	require.Equal(
+		t,
+		"tmp",
+		sanitizeGenericPathToken("/var/tmp/"),
+	)
+	require.Empty(t, sanitizeGenericPathToken("frame.png"))
+	require.Empty(t, sanitizeGenericPathToken("https://example.com/x"))
+	require.Empty(t, sanitizeGenericPathToken("~"))
+}
+
 func TestSanitizeStatePathTokenAndPathUnderRoot(t *testing.T) {
 	t.Parallel()
 
@@ -269,6 +310,23 @@ func TestSanitizeStatePathTokenAndPathUnderRoot(t *testing.T) {
 	require.False(t, pathUnderRoot(outRoot, root))
 }
 
+func TestRenderHelpers(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, "", wrapHTMLTag(htmlTagBold, ""))
+	require.Equal(t, "label", renderLink("label", ""))
+	require.Equal(
+		t,
+		"<pre><code class=\"language-go\">x</code></pre>",
+		renderCodeBlock([]byte("x\n"), "go"),
+	)
+	require.Equal(
+		t,
+		"1. first\n  second",
+		prefixLines("first\nsecond", "1. "),
+	)
+}
+
 func TestRenderTelegramHTMLText_CodeBlocksAndOrderedLists(t *testing.T) {
 	t.Parallel()
 
@@ -280,4 +338,21 @@ func TestRenderTelegramHTMLText_CodeBlocksAndOrderedLists(t *testing.T) {
 	require.Contains(t, rendered, "2. second")
 	require.Contains(t, rendered, "<pre><code class=\"language-python\">")
 	require.Contains(t, rendered, "print(&#39;hi&#39;)")
+}
+
+func TestRenderTelegramHTMLText_CoversMoreNodeTypes(t *testing.T) {
+	t.Parallel()
+
+	rendered, ok := renderTelegramHTMLText(
+		"~~gone~~ <https://example.com>\n\n---\n\n<div>x</div>",
+	)
+	require.True(t, ok)
+	require.Contains(t, rendered, "<s>gone</s>")
+	require.Contains(
+		t,
+		rendered,
+		"<a href=\"https://example.com\">https://example.com</a>",
+	)
+	require.Contains(t, rendered, "---")
+	require.Contains(t, rendered, "&lt;div&gt;x&lt;/div&gt;")
 }

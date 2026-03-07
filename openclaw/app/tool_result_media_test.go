@@ -21,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 )
 
 func TestOpenClawToolResultMessages_AttachesMediaFiles(t *testing.T) {
@@ -139,13 +140,176 @@ func TestOpenClawToolResultMessages_RecordsTraceEvent(t *testing.T) {
 	require.Contains(t, string(data), "frame.png")
 }
 
+func TestToolResultImageMessages_Guards(t *testing.T) {
+	t.Parallel()
+
+	out, err := toolResultImageMessages(context.Background(), nil)
+	require.NoError(t, err)
+	require.Nil(t, out)
+
+	out, err = openClawToolResultMessages(
+		context.Background(),
+		&tool.ToolResultMessagesInput{
+			DefaultToolMessage: "not-a-model-message",
+			Result: map[string]any{
+				"media_files": []string{"/tmp/missing.png"},
+			},
+		},
+	)
+	require.NoError(t, err)
+	require.Nil(t, out)
+}
+
+func TestCollectToolResultImagePaths_WalksDirsAndDeduplicates(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	nested := filepath.Join(root, "frames")
+	require.NoError(t, os.MkdirAll(nested, 0o755))
+
+	pathA := writeTestFile(t, nested, "frame.png", []byte("png"))
+	pathB := writeTestFile(t, root, "cover.jpg", []byte("jpg"))
+	writeTestFile(t, root, "notes.txt", []byte("note"))
+
+	got := collectToolResultImagePaths(map[string]any{
+		"media_files": []string{
+			uploads.HostRef(pathA),
+			pathA,
+		},
+		"media_dirs": []string{root},
+		"output": "MEDIA: " + pathB + "\n" +
+			"MEDIA_DIR: " + uploads.HostRef(root),
+	})
+
+	require.Equal(t, []string{pathA, pathB}, got)
+}
+
+func TestLoadToolResultImages_FiltersBySizeAndFormat(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeTestFile(t, root, "frame.webp", []byte("webp"))
+	writeTestFile(t, root, "notes.txt", []byte("note"))
+
+	largePath := filepath.Join(root, "large.png")
+	require.NoError(
+		t,
+		os.WriteFile(
+			largePath,
+			make([]byte, maxToolResultImageBytes+1),
+			0o600,
+		),
+	)
+
+	got := loadToolResultImages(map[string]any{
+		"media_dirs": []string{root},
+	})
+
+	require.Len(t, got, 1)
+	require.Equal(t, "frame.webp", got[0].Name)
+	require.Equal(t, "webp", got[0].Format)
+	require.Equal(t, []byte("webp"), got[0].Data)
+}
+
+func TestCollectToolResultImagePaths_StopsAtLimit(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	for i := 0; i < maxToolResultImages+2; i++ {
+		name := filepath.Join("frames", "image-"+string(rune('a'+i))+".png")
+		writeTestFile(t, root, name, []byte("png"))
+	}
+
+	got := collectToolResultImagePaths(map[string]any{
+		"media_dirs": []string{root},
+	})
+	require.Len(t, got, maxToolResultImages)
+}
+
+func TestParseToolResultMediaPayload_RejectsUnsupportedInput(t *testing.T) {
+	t.Parallel()
+
+	_, ok := parseToolResultMediaPayload(nil)
+	require.False(t, ok)
+
+	_, ok = parseToolResultMediaPayload(map[string]any{
+		"bad": func() {},
+	})
+	require.False(t, ok)
+}
+
+func TestToolResultPathHelpers(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	path := writeTestFile(t, root, "clip.gif", []byte("gif"))
+	hostRef := uploads.HostRef(path)
+
+	got, ok := toolResultPathFromLine("MEDIA: `" + hostRef + "`")
+	require.True(t, ok)
+	require.Equal(t, path, got)
+
+	got, ok = toolResultPathFromLine(path)
+	require.True(t, ok)
+	require.Equal(t, path, got)
+
+	_, ok = toolResultPathFromLine("MEDIA: relative.png")
+	require.False(t, ok)
+
+	require.Equal(
+		t,
+		[]string{path},
+		toolResultOutputPaths("noise\nMEDIA: "+hostRef+"\n"),
+	)
+
+	got, ok = resolveToolResultPath(hostRef)
+	require.True(t, ok)
+	require.Equal(t, path, got)
+
+	_, ok = resolveToolResultPath("relative.png")
+	require.False(t, ok)
+
+	require.Equal(t, "gif", mustToolResultImageFormat(t, path))
+	require.Equal(
+		t,
+		"Generated image attached for direct inspection.",
+		toolResultImageMessageText([]toolResultImage{{}}),
+	)
+	require.Equal(
+		t,
+		"Generated images attached for direct inspection: "+
+			"one.png, two.jpg.",
+		toolResultImageMessageText([]toolResultImage{
+			{Name: "one.png"},
+			{Name: "two.jpg"},
+		}),
+	)
+}
+
 func writeTestImage(t *testing.T, name string) string {
 	t.Helper()
 
-	path := filepath.Join(t.TempDir(), name)
-	require.NoError(
-		t,
-		os.WriteFile(path, []byte("fake-image"), 0o600),
-	)
+	return writeTestFile(t, t.TempDir(), name, []byte("fake-image"))
+}
+
+func writeTestFile(
+	t *testing.T,
+	dir string,
+	name string,
+	data []byte,
+) string {
+	t.Helper()
+
+	path := filepath.Join(dir, name)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, data, 0o600))
 	return path
+}
+
+func mustToolResultImageFormat(t *testing.T, path string) string {
+	t.Helper()
+
+	format, ok := toolResultImageFormat(path)
+	require.True(t, ok)
+	return format
 }

@@ -231,7 +231,7 @@ func isOpaqueOutboundRef(raw string) bool {
 	if strings.HasPrefix(trimmed, fileURLPrefix) {
 		return false
 	}
-	if strings.HasPrefix(trimmed, uploads.HostRef("")) {
+	if _, ok := uploads.PathFromHostRef(trimmed); ok {
 		return false
 	}
 	return strings.Contains(trimmed, "://")

@@ -594,6 +594,15 @@ func TestTypeFromExtensionAndVoiceDetection(t *testing.T) {
 	require.False(t, isVoiceCompatibleMedia("audio/wav", "voice.wav"))
 }
 
+func TestIsOpaqueOutboundRef(t *testing.T) {
+	t.Parallel()
+
+	require.True(t, isOpaqueOutboundRef("artifact://reports/result.pdf@0"))
+	require.True(t, isOpaqueOutboundRef("workspace://notes/summary.txt"))
+	require.False(t, isOpaqueOutboundRef("file:///tmp/report.pdf"))
+	require.False(t, isOpaqueOutboundRef("host:///tmp/report.pdf"))
+}
+
 func TestChannel_SendMessage_ForcesAudioAsVoice(t *testing.T) {
 	t.Parallel()
 
@@ -774,6 +783,113 @@ func TestParseTextTarget_BareSessionSuffix(t *testing.T) {
 	require.NoError(t, err)
 	require.EqualValues(t, 100, chatID)
 	require.Zero(t, threadID)
+}
+
+func TestResolveArtifactOutboundFile_UsesInvocationArtifactService(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	artifactSvc := artifactinmemory.NewService()
+	info := artifact.SessionInfo{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "telegram:dm:user:s1",
+	}
+	_, err := artifactSvc.SaveArtifact(
+		context.Background(),
+		info,
+		"reports/result.pdf",
+		&artifact.Artifact{Data: []byte("pdf")},
+	)
+	require.NoError(t, err)
+
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(
+			agent.WithInvocationSession(
+				session.NewSession("app", "user", info.SessionID),
+			),
+			agent.WithInvocationArtifactService(artifactSvc),
+		),
+	)
+
+	got, err := resolveArtifactOutboundFile(
+		ctx,
+		"artifact://reports/result.pdf@0",
+		"",
+	)
+	require.NoError(t, err)
+	require.Equal(t, "result.pdf", got.Name)
+	require.Equal(t, []byte("pdf"), got.Data)
+}
+
+func TestResolveSessionScopedJoinedPath(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	outDir := filepath.Join(root, "out")
+	require.NoError(t, os.MkdirAll(outDir, 0o755))
+
+	filePath := filepath.Join(outDir, "page.pdf")
+	require.NoError(t, os.WriteFile(filePath, []byte("pdf"), 0o600))
+
+	got, ok := resolveSessionScopedJoinedPath(
+		root,
+		filepath.Join("out", "page.pdf"),
+	)
+	require.True(t, ok)
+	require.Equal(t, filePath, got)
+
+	_, ok = resolveSessionScopedJoinedPath(root, "out")
+	require.False(t, ok)
+
+	outside := filepath.Join(filepath.Dir(root), "outside.pdf")
+	require.NoError(t, os.WriteFile(outside, []byte("pdf"), 0o600))
+
+	_, ok = resolveSessionScopedJoinedPath(root, "../outside.pdf")
+	require.False(t, ok)
+}
+
+func TestResolveTelegramOutboundExistingPath_PrefersSessionRoot(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	scope := uploads.Scope{
+		Channel:   channelID,
+		UserID:    "u1",
+		SessionID: "telegram:dm:u1:s1",
+	}
+	store, err := uploads.NewStore(stateDir)
+	require.NoError(t, err)
+
+	saved, err := store.Save(
+		context.Background(),
+		scope,
+		"split.pdf",
+		[]byte("pdf"),
+	)
+	require.NoError(t, err)
+
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(
+			agent.WithInvocationSession(
+				session.NewSession("app", "u1", scope.SessionID),
+			),
+		),
+	)
+	ch := &Channel{state: stateDir}
+
+	got, info, ok := ch.resolveTelegramOutboundExistingPath(
+		ctx,
+		"split.pdf",
+	)
+	require.True(t, ok)
+	require.NotNil(t, info)
+	require.Equal(t, saved.Path, got)
 }
 
 func mustParseLegacyDMTarget(t *testing.T, raw string) string {
