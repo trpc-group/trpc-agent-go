@@ -1822,7 +1822,7 @@ func TestGraphAgent_RunWithBarrier_EmitEventError(t *testing.T) {
 	}
 
 	// Create output channel with buffer size 0 to make EmitEvent block
-	out := make(chan *event.Event, 0)
+	out := make(chan *event.Event)
 
 	// Create a context that will be canceled to cause EmitEvent to fail
 	ctx, cancel := context.WithCancel(context.Background())
