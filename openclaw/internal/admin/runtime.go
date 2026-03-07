@@ -28,6 +28,13 @@ const (
 	maxExecRows       = 12
 )
 
+type uploadFilters struct {
+	Channel   string
+	UserID    string
+	SessionID string
+	Kind      string
+}
+
 type execStatus struct {
 	Enabled      bool              `json:"enabled"`
 	SessionCount int               `json:"session_count"`
@@ -122,6 +129,18 @@ func execSessionViewFromSession(
 }
 
 func (s *Service) uploadsStatus() uploadsStatus {
+	return s.uploadsStatusFiltered(
+		uploadFilters{},
+		maxUploadRows,
+		maxUploadSessions,
+	)
+}
+
+func (s *Service) uploadsStatusFiltered(
+	filters uploadFilters,
+	fileLimit int,
+	sessionLimit int,
+) uploadsStatus {
 	root := resolveUploadsRoot(s.cfg.StateDir)
 	status := uploadsStatus{Root: root}
 	if root == "" {
@@ -146,9 +165,13 @@ func (s *Service) uploadsStatus() uploadsStatus {
 		status.Error = err.Error()
 		return status
 	}
+	listed = filterUploadList(listed, filters)
 	status.FileCount = len(listed)
-	status.Files, status.TotalBytes = uploadViewsFromList(listed)
-	status.Sessions = uploadSessionsFromList(listed)
+	status.Files, status.TotalBytes = uploadViewsFromList(
+		listed,
+		fileLimit,
+	)
+	status.Sessions = uploadSessionsFromList(listed, sessionLimit)
 	status.KindCounts = uploadKindCountsFromList(listed)
 	return status
 }
@@ -161,7 +184,10 @@ func resolveUploadsRoot(stateDir string) string {
 	return filepath.Join(root, defaultUploadsDir)
 }
 
-func uploadViewsFromList(listed []uploads.ListedFile) ([]uploadView, int64) {
+func uploadViewsFromList(
+	listed []uploads.ListedFile,
+	limit int,
+) ([]uploadView, int64) {
 	files := make([]uploadView, 0, len(listed))
 	var totalBytes int64
 	for _, file := range listed {
@@ -179,14 +205,15 @@ func uploadViewsFromList(listed []uploads.ListedFile) ([]uploadView, int64) {
 			DownloadURL:  uploadFileURL(file.RelativePath, true),
 		})
 	}
-	if len(files) > maxUploadRows {
-		files = files[:maxUploadRows]
+	if limit > 0 && len(files) > limit {
+		files = files[:limit]
 	}
 	return files, totalBytes
 }
 
 func uploadSessionsFromList(
 	listed []uploads.ListedFile,
+	limit int,
 ) []uploadSessionView {
 	index := make(map[string]*uploadSessionView)
 	for _, file := range listed {
@@ -227,8 +254,8 @@ func uploadSessionsFromList(
 		}
 		return out[i].LastModified.After(out[j].LastModified)
 	})
-	if len(out) > maxUploadSessions {
-		out = out[:maxUploadSessions]
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
 	}
 	return out
 }
@@ -259,6 +286,41 @@ func uploadKindCountsFromList(
 		}
 		return out[i].Count > out[j].Count
 	})
+	return out
+}
+
+func filterUploadList(
+	listed []uploads.ListedFile,
+	filters uploadFilters,
+) []uploads.ListedFile {
+	if len(listed) == 0 {
+		return nil
+	}
+
+	channel := strings.TrimSpace(filters.Channel)
+	userID := strings.TrimSpace(filters.UserID)
+	sessionID := strings.TrimSpace(filters.SessionID)
+	kind := strings.ToLower(strings.TrimSpace(filters.Kind))
+	if channel == "" && userID == "" && sessionID == "" && kind == "" {
+		return listed
+	}
+
+	out := make([]uploads.ListedFile, 0, len(listed))
+	for _, file := range listed {
+		if channel != "" && file.Scope.Channel != channel {
+			continue
+		}
+		if userID != "" && file.Scope.UserID != userID {
+			continue
+		}
+		if sessionID != "" && file.Scope.SessionID != sessionID {
+			continue
+		}
+		if kind != "" && uploadKindFromName(file.Name) != kind {
+			continue
+		}
+		out = append(out, file)
+	}
 	return out
 }
 

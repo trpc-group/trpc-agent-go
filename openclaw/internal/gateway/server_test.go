@@ -1700,12 +1700,12 @@ func TestServer_Messages_EmptyReply(t *testing.T) {
 	)
 	srv.Handler().ServeHTTP(rr, req)
 
-	require.Equal(t, http.StatusInternalServerError, rr.Code)
+	require.Equal(t, http.StatusOK, rr.Code)
 
 	var rsp gwproto.MessageResponse
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &rsp))
-	require.NotNil(t, rsp.Error)
-	require.Equal(t, errTypeInternal, rsp.Error.Type)
+	require.Nil(t, rsp.Error)
+	require.Equal(t, emptyReplyFallbackText, rsp.Reply)
 }
 
 func TestServer_Status_MissingRequestID(t *testing.T) {

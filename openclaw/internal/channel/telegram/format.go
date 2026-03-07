@@ -266,7 +266,14 @@ func cleanStateRoot(stateDir string) string {
 	if trimmed == "" {
 		return ""
 	}
-	return filepath.Clean(trimmed)
+	if filepath.IsAbs(trimmed) {
+		return filepath.Clean(trimmed)
+	}
+	abs, err := filepath.Abs(trimmed)
+	if err != nil {
+		return filepath.Clean(trimmed)
+	}
+	return filepath.Clean(abs)
 }
 
 func pathUnderRoot(path string, root string) bool {

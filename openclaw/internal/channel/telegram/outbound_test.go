@@ -11,6 +11,7 @@ package telegram
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcache"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
+	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -139,6 +141,90 @@ func TestChannel_SendMessage_SendsAudioVoiceAndVideo(t *testing.T) {
 	require.Equal(t, "voice.oga", bot.voices[0].FileName)
 	require.Len(t, bot.videos, 1)
 	require.Equal(t, "clip.mp4", bot.videos[0].FileName)
+}
+
+func TestChannel_SendMessage_UsesSingleFileCaption(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	path := filepath.Join(root, "frame.png")
+	require.NoError(
+		t,
+		os.WriteFile(
+			path,
+			[]byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'},
+			0o600,
+		),
+	)
+
+	bot := &stubBot{}
+	ch := &Channel{
+		bot:   bot,
+		state: filepath.Join("/tmp", "openclaw"),
+	}
+
+	err := ch.SendMessage(
+		context.Background(),
+		"100",
+		channel.OutboundMessage{
+			Text:  "结果在 `out/frame.png`",
+			Files: []channel.OutboundFile{{Path: path}},
+		},
+	)
+	require.NoError(t, err)
+	require.Empty(t, bot.sent)
+	require.Len(t, bot.photos, 1)
+	require.Equal(
+		t,
+		"结果在 <code>frame.png</code>",
+		bot.photos[0].Caption,
+	)
+	require.Equal(
+		t,
+		tgapi.ParseModeHTML,
+		bot.photos[0].ParseMode,
+	)
+}
+
+func TestChannel_SendMessage_FileCaptionFallsBackToPlain(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	path := filepath.Join(root, "report.pdf")
+	require.NoError(t, os.WriteFile(path, []byte("%PDF-1.4"), 0o600))
+
+	bot := &stubBot{
+		fileHook: func(params tgapi.SendFileParams) error {
+			if params.ParseMode == tgapi.ParseModeHTML {
+				return errors.New(
+					"telegram: api error 400: can't parse entities",
+				)
+			}
+			return nil
+		},
+	}
+	ch := &Channel{
+		bot:   bot,
+		state: filepath.Join("/tmp", "openclaw"),
+	}
+
+	err := ch.SendMessage(
+		context.Background(),
+		"100",
+		channel.OutboundMessage{
+			Text:  "**done** `out/report.pdf`",
+			Files: []channel.OutboundFile{{Path: path}},
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, bot.docs, 2)
+	require.Equal(t, tgapi.ParseModeHTML, bot.docs[0].ParseMode)
+	require.Empty(t, bot.docs[1].ParseMode)
+	require.Equal(
+		t,
+		"**done** `report.pdf`",
+		bot.docs[1].Caption,
+	)
 }
 
 func TestChannel_SendMessage_SendsArtifactAndWorkspaceRefs(t *testing.T) {

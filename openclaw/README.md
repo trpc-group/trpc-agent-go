@@ -1089,5 +1089,6 @@ includes:
 - scheduled job inspection plus run/remove/clear actions
 - exec session inspection
 - persisted upload browsing with direct open/download links
+- upload-session and media-kind filtered JSON views for multimodal traces
 - session-indexed debug trace browsing with direct links to
   `meta.json`, `events.jsonl`, and `result.json`

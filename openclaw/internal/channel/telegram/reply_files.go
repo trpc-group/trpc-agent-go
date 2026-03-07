@@ -128,7 +128,15 @@ func (c *Channel) sendReplyFiles(
 	files []channel.OutboundFile,
 ) {
 	for _, file := range files {
-		if err := c.sendFile(ctx, chatID, messageThreadID, file); err != nil {
+		if err := c.sendFile(
+			ctx,
+			chatID,
+			messageThreadID,
+			file,
+			"",
+			"",
+			"",
+		); err != nil {
 			log.WarnfContext(
 				ctx,
 				"telegram: send derived file %q: %v",

@@ -99,6 +99,7 @@ type stubBot struct {
 	voices    []tgapi.SendFileParams
 	videos    []tgapi.SendFileParams
 	fileErr   error
+	fileHook  func(tgapi.SendFileParams) error
 	edits     []tgapi.EditMessageTextParams
 	editErr   error
 	editHook  func(tgapi.EditMessageTextParams) error
@@ -209,6 +210,11 @@ func (b *stubBot) appendFileSend(
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	*dst = append(*dst, params)
+	if b.fileHook != nil {
+		if err := b.fileHook(params); err != nil {
+			return tgapi.Message{}, err
+		}
+	}
 	if b.fileErr != nil {
 		return tgapi.Message{}, b.fileErr
 	}

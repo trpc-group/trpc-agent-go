@@ -64,7 +64,12 @@ const (
 	queryRequestID = "request_id"
 
 	errEmptyReply = "gateway: empty reply"
+
+	emptyReplyFallbackText = "I didn't produce a visible " +
+		"reply. Please try again."
 )
+
+var errEmptyReplyValue = errors.New(errEmptyReply)
 
 const (
 	errTypeInvalidRequest = "invalid_request"
@@ -490,9 +495,9 @@ func (s *Server) runLocked(
 	}
 	if result.Text == "" {
 		if trace != nil {
-			_ = trace.RecordError(errors.New(errEmptyReply))
+			_ = trace.RecordError(errEmptyReplyValue)
 		}
-		return "", result.RequestID, errors.New(errEmptyReply)
+		return "", result.RequestID, errEmptyReplyValue
 	}
 	return result.Text, result.RequestID, nil
 }

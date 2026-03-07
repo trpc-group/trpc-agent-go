@@ -35,6 +35,7 @@ const (
 	routeJobsClear         = "/api/cron/jobs/clear"
 	routeExecSessionsJSON  = "/api/exec/sessions"
 	routeUploadsJSON       = "/api/uploads"
+	routeUploadSessions    = "/api/uploads/sessions"
 	routeUploadFile        = "/uploads/file"
 	routeDebugSessionsJSON = "/api/debug/sessions"
 	routeDebugTracesJSON   = "/api/debug/traces"
@@ -43,6 +44,9 @@ const (
 	queryNotice    = "notice"
 	queryError     = "error"
 	querySessionID = "session_id"
+	queryChannel   = "channel"
+	queryUserID    = "user_id"
+	queryKind      = "kind"
 	queryTrace     = "trace"
 	queryName      = "name"
 	queryPath      = "path"
@@ -138,6 +142,7 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc(routeJobsClear, s.handleClearJobs)
 	mux.HandleFunc(routeExecSessionsJSON, s.handleExecSessionsJSON)
 	mux.HandleFunc(routeUploadsJSON, s.handleUploadsJSON)
+	mux.HandleFunc(routeUploadSessions, s.handleUploadSessionsJSON)
 	mux.HandleFunc(routeUploadFile, s.handleUploadFile)
 	mux.HandleFunc(routeDebugSessionsJSON, s.handleDebugSessionsJSON)
 	mux.HandleFunc(routeDebugTracesJSON, s.handleDebugTracesJSON)
@@ -338,7 +343,28 @@ func (s *Service) handleUploadsJSON(
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.Snapshot().Uploads)
+	filters := uploadFiltersFromRequest(r)
+	writeJSON(
+		w,
+		http.StatusOK,
+		s.uploadsStatusFiltered(filters, 0, 0),
+	)
+}
+
+func (s *Service) handleUploadSessionsJSON(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	filters := uploadFiltersFromRequest(r)
+	writeJSON(
+		w,
+		http.StatusOK,
+		s.uploadsStatusFiltered(filters, 0, 0).Sessions,
+	)
 }
 
 func (s *Service) handleUploadFile(
@@ -369,6 +395,19 @@ func (s *Service) handleUploadFile(
 		)
 	}
 	http.ServeFile(w, r, filePath)
+}
+
+func uploadFiltersFromRequest(r *http.Request) uploadFilters {
+	if r == nil || r.URL == nil {
+		return uploadFilters{}
+	}
+	values := r.URL.Query()
+	return uploadFilters{
+		Channel:   strings.TrimSpace(values.Get(queryChannel)),
+		UserID:    strings.TrimSpace(values.Get(queryUserID)),
+		SessionID: strings.TrimSpace(values.Get(querySessionID)),
+		Kind:      strings.TrimSpace(values.Get(queryKind)),
+	}
 }
 
 func (s *Service) handleDebugSessionsJSON(
@@ -1017,6 +1056,7 @@ const adminPageHTML = `<!doctype html>
             <a href="/api/cron/jobs">jobs</a> ·
             <a href="/api/exec/sessions">exec</a> ·
             <a href="/api/uploads">uploads</a> ·
+            <a href="/api/uploads/sessions">upload sessions</a> ·
             <a href="/api/debug/sessions">debug sessions</a> ·
             <a href="/api/debug/traces">debug traces</a>
           </dd>
@@ -1247,7 +1287,11 @@ const adminPageHTML = `<!doctype html>
           <tr>
             <td>{{.Channel}}</td>
             <td><code>{{.UserID}}</code></td>
-            <td><code>{{.SessionID}}</code></td>
+            <td>
+              <a href="/api/uploads?session_id={{urlquery .SessionID}}">
+                <code>{{.SessionID}}</code>
+              </a>
+            </td>
             <td>{{.FileCount}}</td>
             <td>{{.TotalBytes}}</td>
             <td>{{formatTime .LastModified}}</td>
@@ -1282,14 +1326,22 @@ const adminPageHTML = `<!doctype html>
           <tr>
             <td>{{.Channel}}</td>
             <td><code>{{.UserID}}</code></td>
-            <td><code>{{.SessionID}}</code></td>
+            <td>
+              <a href="/api/uploads?session_id={{urlquery .SessionID}}">
+                <code>{{.SessionID}}</code>
+              </a>
+            </td>
             <td>
               <a href="{{.OpenURL}}" target="_blank"
                 rel="noopener noreferrer">{{.Name}}</a>
               <br>
               <a href="{{.DownloadURL}}">download</a>
             </td>
-            <td>{{.Kind}}</td>
+            <td>
+              <a href="/api/uploads?kind={{urlquery .Kind}}">
+                {{.Kind}}
+              </a>
+            </td>
             <td>
               <div class="preview-box">
                 {{if eq .Kind "image"}}

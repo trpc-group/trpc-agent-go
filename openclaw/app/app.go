@@ -99,8 +99,11 @@ const (
 		"the current chat with message instead of asking which " +
 		"channel or delivery method to use. For exec_command, do " +
 		"not assume skill workspace paths like work/inputs. Do not " +
-		"expose local host paths to the user; refer to uploads and " +
-		"generated files by user-facing filenames, and use message " +
+		"expose local host paths to the user; when acknowledging a " +
+		"new upload, refer to it only by filename and media kind, " +
+		"not by OPENCLAW_* vars or a machine path. Refer to uploads " +
+		"and generated files by user-facing filenames, and use " +
+		"message " +
 		"with local file paths/host refs/artifact refs to send " +
 		"PDFs, images, audio, or video back to the current chat " +
 		"when needed instead of asking for chat_id or another " +

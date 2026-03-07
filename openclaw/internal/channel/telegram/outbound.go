@@ -51,6 +51,8 @@ const (
 	uploadModeVideo    = "video"
 
 	workspaceFileFallback = "workspace-output"
+
+	maxTelegramCaptionRunes = 1024
 )
 
 type outboundFilePayload struct {
@@ -128,6 +130,23 @@ func (c *Channel) SendMessage(
 		return err
 	}
 
+	if len(msg.Files) == 1 {
+		if caption, plain, parseMode := telegramCaptionParts(
+			msg.Text,
+			c.state,
+		); caption != "" {
+			return c.sendFile(
+				ctx,
+				chatID,
+				threadID,
+				msg.Files[0],
+				caption,
+				plain,
+				parseMode,
+			)
+		}
+	}
+
 	if strings.TrimSpace(msg.Text) != "" {
 		if err := c.SendText(ctx, target, msg.Text); err != nil {
 			return err
@@ -140,6 +159,9 @@ func (c *Channel) SendMessage(
 			chatID,
 			threadID,
 			file,
+			"",
+			"",
+			"",
 		); err != nil {
 			return err
 		}
@@ -274,6 +296,9 @@ func (c *Channel) sendFile(
 	chatID int64,
 	threadID int,
 	file channel.OutboundFile,
+	caption string,
+	plainCaption string,
+	parseMode string,
 ) error {
 	payload, err := resolveOutboundFile(ctx, c.state, file)
 	if err != nil {
@@ -283,11 +308,31 @@ func (c *Channel) sendFile(
 	params := tgapi.SendFileParams{
 		ChatID:          chatID,
 		MessageThreadID: threadID,
+		Caption:         caption,
+		ParseMode:       parseMode,
 		FileName:        payload.Name,
 		Data:            payload.Data,
 	}
 
-	switch detectUploadMode(payload.Name, payload.Data) {
+	mode := detectUploadMode(payload.Name, payload.Data)
+	err = c.sendFileByMode(ctx, mode, params)
+	if err == nil || parseMode == "" || !tgapi.IsEntityParseError(err) {
+		return err
+	}
+
+	fallback := params
+	fallback.Caption = plainCaption
+	fallback.ParseMode = ""
+	return c.sendFileByMode(ctx, mode, fallback)
+}
+
+func (c *Channel) sendFileByMode(
+	ctx context.Context,
+	mode string,
+	params tgapi.SendFileParams,
+) error {
+	var err error
+	switch mode {
 	case uploadModePhoto:
 		_, err = c.bot.SendPhoto(ctx, params)
 	case uploadModeAudio:
@@ -300,6 +345,25 @@ func (c *Channel) sendFile(
 		_, err = c.bot.SendDocument(ctx, params)
 	}
 	return err
+}
+
+func telegramCaptionParts(
+	text string,
+	stateDir string,
+) (string, string, string) {
+	plain := sanitizeTelegramText(text, stateDir)
+	plain = strings.TrimSpace(plain)
+	if plain == "" {
+		return "", "", ""
+	}
+	if len([]rune(plain)) > maxTelegramCaptionRunes {
+		return "", "", ""
+	}
+	formatted, ok := renderTelegramHTMLText(plain)
+	if !ok {
+		return plain, plain, ""
+	}
+	return formatted, plain, tgapi.ParseModeHTML
 }
 
 func resolveOutboundFile(

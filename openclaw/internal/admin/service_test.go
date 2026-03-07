@@ -504,6 +504,67 @@ func TestServiceSnapshotIncludesUploadsAndExec(t *testing.T) {
 	)
 }
 
+func TestServiceUploadJSONFilters(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	store, err := uploads.NewStore(stateDir)
+	require.NoError(t, err)
+
+	_, err = store.Save(
+		context.Background(),
+		uploads.Scope{
+			Channel:   "telegram",
+			UserID:    "u1",
+			SessionID: "session-1",
+		},
+		"clip.mp4",
+		[]byte("video"),
+	)
+	require.NoError(t, err)
+	_, err = store.Save(
+		context.Background(),
+		uploads.Scope{
+			Channel:   "telegram",
+			UserID:    "u2",
+			SessionID: "session-2",
+		},
+		"report.pdf",
+		[]byte("%PDF-1.4"),
+	)
+	require.NoError(t, err)
+
+	svc := New(Config{StateDir: stateDir})
+	handler := svc.Handler()
+
+	filesRR := httptest.NewRecorder()
+	filesReq := httptest.NewRequest(
+		http.MethodGet,
+		routeUploadsJSON+"?"+url.Values{
+			querySessionID: []string{"session-2"},
+			queryKind:      []string{"pdf"},
+		}.Encode(),
+		nil,
+	)
+	handler.ServeHTTP(filesRR, filesReq)
+	require.Equal(t, http.StatusOK, filesRR.Code)
+	require.Contains(t, filesRR.Body.String(), "report.pdf")
+	require.NotContains(t, filesRR.Body.String(), "clip.mp4")
+
+	sessionsRR := httptest.NewRecorder()
+	sessionsReq := httptest.NewRequest(
+		http.MethodGet,
+		routeUploadSessions+"?"+url.Values{
+			queryUserID: []string{"u2"},
+		}.Encode(),
+		nil,
+	)
+	handler.ServeHTTP(sessionsRR, sessionsReq)
+	require.Equal(t, http.StatusOK, sessionsRR.Code)
+	require.Contains(t, sessionsRR.Body.String(), "session-2")
+	require.NotContains(t, sessionsRR.Body.String(), "session-1")
+}
+
 func TestAdminRuntimeHelpers(t *testing.T) {
 	t.Parallel()
 

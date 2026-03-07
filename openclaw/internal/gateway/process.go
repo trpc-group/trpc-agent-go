@@ -12,6 +12,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -161,6 +162,28 @@ func (s *Server) ProcessMessage(
 		userMsg,
 	)
 	if err != nil {
+		if errors.Is(err, errEmptyReplyValue) {
+			reply = emptyReplyFallbackText
+			rsp = gwproto.MessageResponse{
+				SessionID: sessionID,
+				RequestID: resolvedRequestID,
+				Reply:     reply,
+			}
+			status = http.StatusOK
+			if trace != nil {
+				_ = trace.Record(
+					debugrecorder.KindGatewayRsp,
+					map[string]any{
+						"status":     status,
+						"session_id": sessionID,
+						"request_id": resolvedRequestID,
+						"reply":      reply,
+						"warning":    err.Error(),
+					},
+				)
+			}
+			return rsp, status
+		}
 		log.WarnfContext(ctx, "gateway: run failed: %v", err)
 		if trace != nil {
 			_ = trace.RecordError(err)

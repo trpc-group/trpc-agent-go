@@ -12,6 +12,7 @@ package telegram
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -133,6 +134,20 @@ func TestSanitizeTelegramText_HidesStateDirAbsolutePaths(t *testing.T) {
 	text := "Saved to `/tmp/openclaw/uploads/chat/frame.png`."
 
 	got := sanitizeTelegramText(text, stateDir)
+	require.Equal(t, "Saved to `frame.png`.", got)
+}
+
+func TestSanitizeTelegramText_HidesPathsWithRelativeStateDir(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+	relRoot, err := filepath.Rel(cwd, root)
+	require.NoError(t, err)
+
+	text := "Saved to `" + filepath.Join(root, "uploads", "frame.png") + "`."
+	got := sanitizeTelegramText(text, relRoot)
 	require.Equal(t, "Saved to `frame.png`.", got)
 }
 
