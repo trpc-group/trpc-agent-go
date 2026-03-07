@@ -260,6 +260,15 @@ func (e *Event) IsRunnerCompletion() bool {
 	return e.Done && e.Object == model.ObjectTypeRunnerCompletion
 }
 
+// IsError reports whether this event should be treated as a terminal error event.
+// Events with ObjectTypeError or Response.Error are considered terminal failures.
+func (e *Event) IsError() bool {
+	if e == nil || e.Response == nil {
+		return false
+	}
+	return e.Object == model.ObjectTypeError || e.Error != nil
+}
+
 // EmitEvent sends an event to the channel without timeout.
 func EmitEvent(ctx context.Context, ch chan<- *Event, e *Event) error {
 	return EmitEventWithTimeout(ctx, ch, e, EmitWithoutTimeout)
