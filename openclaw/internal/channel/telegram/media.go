@@ -31,6 +31,7 @@ const (
 	unsupportedMediaMsg   = "Unsupported attachment format."
 
 	defaultAttachmentName = "attachment"
+	defaultDocumentName   = "document"
 	defaultPhotoName      = "photo"
 	defaultVoiceName      = "voice"
 	defaultAudioName      = "audio"
@@ -47,6 +48,9 @@ const (
 
 	mimeAudioMPEG = "audio/mpeg"
 	mimeAudioWAV  = "audio/wav"
+	mimeAudioOGG  = "audio/ogg"
+	mimeVideoMP4  = "video/mp4"
+	mimeImageGIF  = "image/gif"
 
 	bytesPerKiB int64 = 1 << 10
 	bytesPerMiB int64 = 1 << 20
@@ -377,7 +381,11 @@ func (c *Channel) appendDocumentPart(
 		return nil, mapped
 	}
 
-	name := fallbackFilename(doc.FileName, file.FilePath, defaultAttachmentName)
+	name := fallbackDocumentFilename(
+		doc.FileName,
+		file.FilePath,
+		strings.TrimSpace(doc.MimeType),
+	)
 	mimeType := strings.TrimSpace(doc.MimeType)
 
 	ref := storeBlob(trace, name, data)
@@ -449,8 +457,13 @@ func (c *Channel) appendVideoPart(
 		return nil, mapped
 	}
 
-	name := fallbackFilename(video.FileName, file.FilePath, defaultVideoName)
 	mimeType := strings.TrimSpace(video.MimeType)
+	name := fallbackMediaFilename(
+		video.FileName,
+		file.FilePath,
+		defaultVideoName,
+		mimeType,
+	)
 
 	ref := storeBlob(trace, name, data)
 	recordAttachment(trace, telegramAttachmentSummary{
@@ -565,7 +578,12 @@ func (c *Channel) appendNamedVideoLikePart(
 		return nil, mapped
 	}
 
-	name := fallbackFilename(fileName, file.FilePath, fallbackName)
+	name := fallbackMediaFilename(
+		fileName,
+		file.FilePath,
+		fallbackName,
+		mimeType,
+	)
 	ref := storeBlob(trace, name, data)
 	recordAttachment(trace, telegramAttachmentSummary{
 		Kind:         kind,
@@ -633,8 +651,13 @@ func (c *Channel) appendVoicePart(
 		return nil, mapped
 	}
 
-	name := fallbackFilename("", file.FilePath, defaultVoiceName)
 	mimeType := strings.TrimSpace(voice.MimeType)
+	name := fallbackMediaFilename(
+		"",
+		file.FilePath,
+		defaultVoiceName,
+		mimeType,
+	)
 
 	ref := storeBlob(trace, name, data)
 	recordAttachment(trace, telegramAttachmentSummary{
@@ -734,8 +757,13 @@ func (c *Channel) appendAudioPart(
 		return parts, nil
 	}
 
-	name := fallbackFilename(audio.FileName, file.FilePath, defaultAudioName)
 	mimeType := strings.TrimSpace(audio.MimeType)
+	name := fallbackMediaFilename(
+		audio.FileName,
+		file.FilePath,
+		defaultAudioName,
+		mimeType,
+	)
 
 	ref := storeBlob(trace, name, data)
 	recordAttachment(trace, telegramAttachmentSummary{
@@ -891,6 +919,107 @@ func fallbackFilename(primary, filePath, fallback string) string {
 		return base
 	}
 	return fallback
+}
+
+func fallbackMediaFilename(
+	primary string,
+	filePath string,
+	fallback string,
+	mimeType string,
+) string {
+	name := strings.TrimSpace(primary)
+	if name != "" {
+		return name
+	}
+
+	base := strings.TrimSpace(path.Base(strings.TrimSpace(filePath)))
+	if base != "" && base != "." && base != "/" &&
+		!looksGeneratedTelegramFileName(base) {
+		return base
+	}
+
+	ext := mediaExtFromPathOrMIME(filePath, mimeType)
+	if ext == "" {
+		return fallback
+	}
+	return fallback + ext
+}
+
+func fallbackDocumentFilename(
+	primary string,
+	filePath string,
+	mimeType string,
+) string {
+	name := strings.TrimSpace(primary)
+	if name != "" && !looksGeneratedTelegramFileName(name) {
+		return name
+	}
+	fallback := documentFallbackBase(filePath, mimeType)
+	return fallbackMediaFilename("", filePath, fallback, mimeType)
+}
+
+func documentFallbackBase(filePath string, mimeType string) string {
+	contentType := strings.ToLower(strings.TrimSpace(mimeType))
+	ext := strings.ToLower(path.Ext(strings.TrimSpace(filePath)))
+
+	switch {
+	case contentType == "application/pdf" || ext == ".pdf":
+		return defaultDocumentName
+	case contentType == mimeImageGIF || ext == ".gif":
+		return defaultAnimationName
+	case strings.HasPrefix(contentType, mimePrefixImage) ||
+		ext == ".jpg" || ext == ".jpeg" ||
+		ext == ".png" || ext == ".webp":
+		return defaultPhotoName
+	case strings.HasPrefix(contentType, mimePrefixVideo) ||
+		ext == ".mp4" || ext == ".mov" ||
+		ext == ".webm" || ext == ".mkv":
+		return defaultVideoName
+	case strings.HasPrefix(contentType, mimePrefixAudio) ||
+		ext == ".mp3" || ext == ".wav" ||
+		ext == ".ogg" || ext == ".oga" ||
+		ext == ".m4a":
+		return defaultAudioName
+	default:
+		return defaultDocumentName
+	}
+}
+
+func looksGeneratedTelegramFileName(name string) bool {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return false
+	}
+	dot := strings.Index(trimmed, ".")
+	stem := trimmed
+	if dot >= 0 {
+		stem = trimmed[:dot]
+	}
+	if !strings.HasPrefix(stem, "file_") {
+		return false
+	}
+	suffix := strings.TrimPrefix(stem, "file_")
+	return suffix != "" && isDigitsOnly(suffix)
+}
+
+func mediaExtFromPathOrMIME(filePath, mimeType string) string {
+	if ext := path.Ext(strings.TrimSpace(filePath)); ext != "" {
+		return strings.ToLower(ext)
+	}
+	switch strings.ToLower(strings.TrimSpace(mimeType)) {
+	case mimeAudioMPEG:
+		return ".mp3"
+	case mimeAudioWAV:
+		return ".wav"
+	case mimeAudioOGG:
+		return ".ogg"
+	case mimeVideoMP4:
+		return ".mp4"
+	case mimeImageGIF:
+		return ".gif"
+	default:
+		return ""
+	}
 }
 
 func inferImageFormat(filePath string, data []byte) string {

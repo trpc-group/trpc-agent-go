@@ -86,3 +86,58 @@ func TestComputeNextRunVariants(t *testing.T) {
 	require.NotNil(t, nextPtr)
 	require.Equal(t, now.Add(6*time.Minute), *nextPtr)
 }
+
+func TestScheduleHelpers_ErrorCases(t *testing.T) {
+	t.Parallel()
+
+	_, err := computeInitialNextRun(
+		Schedule{Kind: ScheduleKindEvery, Every: "2m"},
+		time.Date(2026, 3, 6, 10, 0, 0, 0, time.UTC),
+	)
+	require.NoError(t, err)
+
+	_, err = parseAtTime(" ")
+	require.Error(t, err)
+
+	_, err = parseEveryInterval(Schedule{})
+	require.Error(t, err)
+
+	_, err = parseEveryInterval(Schedule{Every: "-1m"})
+	require.Error(t, err)
+
+	_, err = parseEveryInterval(Schedule{Every: "bad"})
+	require.Error(t, err)
+
+	_, err = parseCronSpec(Schedule{})
+	require.Error(t, err)
+
+	_, err = parseCronSpec(Schedule{
+		CronExpr: "*/5 * * * *",
+		Timezone: "Bad/Timezone",
+	})
+	require.Error(t, err)
+
+	_, err = parseCronSpec(Schedule{CronExpr: "* * *"})
+	require.Error(t, err)
+
+	_, err = computeNextAfterRun(
+		Schedule{Kind: "weird"},
+		time.Now(),
+		time.Now(),
+	)
+	require.Error(t, err)
+}
+
+func TestParseCronSpec_WithTimezone(t *testing.T) {
+	t.Parallel()
+
+	spec, err := parseCronSpec(Schedule{
+		CronExpr: "0 */5 * * * *",
+		Timezone: "Asia/Shanghai",
+	})
+	require.NoError(t, err)
+
+	base := time.Date(2026, 3, 6, 10, 0, 0, 0, time.UTC)
+	next := spec.Next(base)
+	require.True(t, next.After(base))
+}

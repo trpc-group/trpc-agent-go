@@ -34,7 +34,6 @@ const (
 	contentTypeText = "text/plain"
 
 	mimeAudioMP3 = "audio/mpeg"
-	mimeAudioOGG = "audio/ogg"
 
 	debugEventsFileName = "events.jsonl"
 )
@@ -120,6 +119,92 @@ func TestFallbackFilename(t *testing.T) {
 		"fallback",
 		fallbackFilename("", "/", "fallback"),
 	)
+}
+
+func TestFallbackMediaFilename(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(
+		t,
+		"voice.ogg",
+		fallbackMediaFilename(
+			"",
+			"voice/file_11.ogg",
+			defaultVoiceName,
+			mimeAudioOGG,
+		),
+	)
+	require.Equal(
+		t,
+		"video-note.mp4",
+		fallbackMediaFilename(
+			"",
+			"videos/file_10.mp4",
+			defaultVideoNoteName,
+			mimeVideoMP4,
+		),
+	)
+	require.Equal(
+		t,
+		"clip.mp4",
+		fallbackMediaFilename(
+			"",
+			"videos/clip.mp4",
+			defaultVideoName,
+			mimeVideoMP4,
+		),
+	)
+	require.Equal(
+		t,
+		"custom.mov",
+		fallbackMediaFilename(
+			"custom.mov",
+			"videos/file_10.mp4",
+			defaultVideoName,
+			mimeVideoMP4,
+		),
+	)
+}
+
+func TestFallbackDocumentFilename(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(
+		t,
+		"video.mp4",
+		fallbackDocumentFilename(
+			"",
+			"videos/file_10.mp4",
+			mimeVideoMP4,
+		),
+	)
+	require.Equal(
+		t,
+		"document.pdf",
+		fallbackDocumentFilename(
+			"",
+			"docs/file_12.pdf",
+			"application/pdf",
+		),
+	)
+	require.Equal(
+		t,
+		"scan.jpg",
+		fallbackDocumentFilename(
+			"scan.jpg",
+			"docs/file_13.jpg",
+			mimeImageJPEG,
+		),
+	)
+}
+
+func TestLooksGeneratedTelegramFileName(t *testing.T) {
+	t.Parallel()
+
+	require.True(t, looksGeneratedTelegramFileName("file_11.ogg"))
+	require.True(t, looksGeneratedTelegramFileName("file_9"))
+	require.False(t, looksGeneratedTelegramFileName("file_name.ogg"))
+	require.False(t, looksGeneratedTelegramFileName("voice.ogg"))
 }
 
 func TestImageFormatFromContentType(t *testing.T) {
@@ -535,6 +620,35 @@ func TestAppendVideoNotePart_BuildsVideoPart(t *testing.T) {
 	require.Equal(t, "note.mp4", parts[0].File.Filename)
 }
 
+func TestAppendVideoNotePart_UsesFriendlyFallbackName(t *testing.T) {
+	t.Parallel()
+
+	data := []byte("note")
+
+	bot := &stubBot{
+		downloads: map[string]stubDownload{
+			testFileID: {
+				file: tgapi.File{FilePath: "videos/file_10.mp4"},
+				data: data,
+			},
+		},
+	}
+	ch := &Channel{bot: bot}
+
+	parts, err := ch.appendVideoNotePart(
+		context.Background(),
+		nil,
+		&tgapi.VideoNote{
+			FileID:   testFileID,
+			FileSize: int64(len(data)),
+		},
+		int64(len(data)),
+	)
+	require.NoError(t, err)
+	require.Len(t, parts, 1)
+	require.Equal(t, "video-note.mp4", parts[0].File.Filename)
+}
+
 func TestAppendVoicePart_BuildsFilePart(t *testing.T) {
 	t.Parallel()
 
@@ -569,6 +683,38 @@ func TestAppendVoicePart_BuildsFilePart(t *testing.T) {
 	require.Equal(t, "voice.ogg", parts[0].File.Filename)
 	require.Equal(t, mimeAudioOGG, parts[0].File.Format)
 	require.Equal(t, data, parts[0].File.Data)
+}
+
+func TestAppendVoicePart_UsesFriendlyFallbackName(t *testing.T) {
+	t.Parallel()
+
+	data := []byte("voice")
+
+	bot := &stubBot{
+		downloads: map[string]stubDownload{
+			testFileID: {
+				file: tgapi.File{FilePath: "voice/file_11.oga"},
+				data: data,
+			},
+		},
+	}
+	ch := &Channel{
+		bot: bot,
+	}
+
+	parts, err := ch.appendVoicePart(
+		context.Background(),
+		nil,
+		&tgapi.Voice{
+			FileID:   testFileID,
+			MimeType: mimeAudioOGG,
+			FileSize: int64(len(data)),
+		},
+		int64(len(data)),
+	)
+	require.NoError(t, err)
+	require.Len(t, parts, 1)
+	require.Equal(t, "voice.oga", parts[0].File.Filename)
 }
 
 func TestAppendVoicePart_NilEmptyAndTooLarge(t *testing.T) {
@@ -755,6 +901,36 @@ func TestAppendDocumentPart_Success(t *testing.T) {
 	require.Equal(t, "doc.pdf", parts[0].File.Filename)
 	require.Equal(t, "application/pdf", parts[0].File.Format)
 	require.Equal(t, data, parts[0].File.Data)
+}
+
+func TestAppendDocumentPart_UsesFriendlyMediaFallbackName(t *testing.T) {
+	t.Parallel()
+
+	data := []byte("video")
+	bot := &stubBot{
+		downloads: map[string]stubDownload{
+			testFileID: {
+				file: tgapi.File{FilePath: "docs/file_10.mp4"},
+				data: data,
+			},
+		},
+	}
+	ch := &Channel{bot: bot}
+
+	parts, err := ch.appendDocumentPart(
+		context.Background(),
+		nil,
+		&tgapi.Document{
+			FileID:   testFileID,
+			MimeType: mimeVideoMP4,
+			FileSize: int64(len(data)),
+		},
+		int64(len(data)),
+	)
+	require.NoError(t, err)
+	require.Len(t, parts, 1)
+	require.Equal(t, "video.mp4", parts[0].File.Filename)
+	require.Equal(t, mimeVideoMP4, parts[0].File.Format)
 }
 
 func TestAppendDocumentPart_DownloadFails(t *testing.T) {

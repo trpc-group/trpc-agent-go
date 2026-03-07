@@ -759,6 +759,45 @@ func TestUploadEnvFromContext_UsesUploadStore(t *testing.T) {
 	require.Equal(t, uploads.SourceDerived, recent[0].Source)
 }
 
+func TestUploadEnvFromContext_RewritesGeneratedUploadNames(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	videoPath := filepath.Join(dir, "file_10.mp4")
+	require.NoError(t, os.WriteFile(videoPath, []byte("mp4"), 0o600))
+
+	msg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{{
+			Type: model.ContentTypeFile,
+			File: &model.File{
+				Name:     "file_10.mp4",
+				FileID:   "host://" + videoPath,
+				MimeType: "video/mp4",
+			},
+		}},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(msg),
+		agent.WithInvocationSession(
+			sessionpkg.NewSession("app", "u1", "telegram:dm:u1:s1"),
+		),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	env := (&execTool{}).uploadEnvFromContext(ctx)
+	require.Equal(t, "video.mp4", env[envLastUploadName])
+	require.Equal(t, "video.mp4", env[envLastVideoName])
+
+	var recent []execUploadMeta
+	require.NoError(
+		t,
+		json.Unmarshal([]byte(env[envRecentUploadsJSON]), &recent),
+	)
+	require.Len(t, recent, 1)
+	require.Equal(t, "video.mp4", recent[0].Name)
+}
+
 func TestUploadEnvFromContext_UsesSessionDirWithoutRecentUploads(
 	t *testing.T,
 ) {

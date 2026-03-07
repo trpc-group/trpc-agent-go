@@ -42,7 +42,6 @@ const (
 	mimePrefixText  = "text/"
 
 	mimeVoiceOGG    = "audio/ogg"
-	mimeImageGIF    = "image/gif"
 	mimeOctetStream = "application/octet-stream"
 
 	uploadModeDocument = "document"

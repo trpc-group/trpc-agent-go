@@ -663,6 +663,10 @@ func appendRecentUploadsFromMessage(
 		if name == "" {
 			name = filepath.Base(path)
 		}
+		name = uploads.PreferredName(
+			name,
+			strings.TrimSpace(part.File.MimeType),
+		)
 		seen[path] = struct{}{}
 		out = append(out, execUploadMeta{
 			Name:     name,
@@ -716,6 +720,10 @@ func appendRecentUploadsFromStore(
 		if name == "" {
 			name = filepath.Base(path)
 		}
+		name = uploads.PreferredName(
+			name,
+			strings.TrimSpace(file.MimeType),
+		)
 		seen[path] = struct{}{}
 		out = append(out, execUploadMeta{
 			Name:     name,

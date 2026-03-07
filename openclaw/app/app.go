@@ -104,7 +104,10 @@ const (
 		"not assume skill workspace paths like work/inputs. Do not " +
 		"expose local host paths to the user; when acknowledging a " +
 		"new upload, refer to it only by filename and media kind, " +
-		"not by OPENCLAW_* vars or a machine path. Refer to uploads " +
+		"not by OPENCLAW_* vars or a machine path. If Telegram gives " +
+		"you an opaque placeholder filename like file_11.oga, avoid " +
+		"surfacing that raw placeholder to the user unless they " +
+		"explicitly ask for the exact filename. Refer to uploads " +
 		"and generated files by user-facing filenames, and use " +
 		"message " +
 		"with local file paths/host refs/artifact refs to send " +

@@ -299,6 +299,29 @@ func TestBuildUploadContextText_UsesPersistedMimeType(t *testing.T) {
 	require.Contains(t, text, "- video: video-note")
 }
 
+func TestBuildUploadContextText_RewritesGeneratedNames(t *testing.T) {
+	t.Parallel()
+
+	text := buildUploadContextText([]uploads.ListedFile{
+		{
+			Name:     "file_10.mp4",
+			Path:     "/tmp/file_10.mp4",
+			MimeType: "video/mp4",
+		},
+		{
+			Name:     "file_11.ogg",
+			Path:     "/tmp/file_11.ogg",
+			MimeType: "audio/ogg",
+		},
+	})
+	require.Contains(t, text, "video.mp4 [video]")
+	require.Contains(t, text, "audio.ogg [audio]")
+	require.Contains(t, text, "- video: video.mp4")
+	require.Contains(t, text, "- audio: audio.ogg")
+	require.NotContains(t, text, "file_10.mp4 [video]")
+	require.NotContains(t, text, "file_11.ogg [audio]")
+}
+
 func TestServerUploadContextMessages(t *testing.T) {
 	t.Parallel()
 

@@ -284,6 +284,26 @@ func TestSanitizeHelpers(t *testing.T) {
 	require.Equal(t, KindFile, KindFromMeta("notes", ""))
 	require.Equal(
 		t,
+		"video.mp4",
+		PreferredName("file_10.mp4", "video/mp4"),
+	)
+	require.Equal(
+		t,
+		"audio.ogg",
+		PreferredName("file_11.ogg", "audio/ogg"),
+	)
+	require.Equal(
+		t,
+		"document.pdf",
+		PreferredName("file_12.pdf", "application/pdf"),
+	)
+	require.Equal(
+		t,
+		"scan.jpg",
+		PreferredName("scan.jpg", "image/jpeg"),
+	)
+	require.Equal(
+		t,
 		SourceInbound,
 		sanitizeMetadataSource(" InBound "),
 	)

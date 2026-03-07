@@ -791,3 +791,34 @@ func TestHandleIndex_RendersUploadPreviews(t *testing.T) {
 	require.Contains(t, rr.Body.String(), ">open preview</a>")
 	require.Contains(t, rr.Body.String(), "<code>video/mp4</code>")
 }
+
+func TestServiceUploadsJSON_RewritesGeneratedNames(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	store, err := uploads.NewStore(stateDir)
+	require.NoError(t, err)
+
+	scope := uploads.Scope{
+		Channel:   "telegram",
+		UserID:    "u1",
+		SessionID: "telegram:dm:u1:s1",
+	}
+	_, err = store.SaveWithMetadata(
+		context.Background(),
+		scope,
+		"file_10.mp4",
+		"video/mp4",
+		[]byte("mp4"),
+	)
+	require.NoError(t, err)
+
+	svc := New(Config{StateDir: stateDir})
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, routeUploadsJSON, nil)
+
+	svc.Handler().ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Contains(t, rr.Body.String(), "\"name\": \"video.mp4\"")
+	require.NotContains(t, rr.Body.String(), "\"name\": \"file_10.mp4\"")
+}

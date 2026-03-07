@@ -55,6 +55,15 @@ const (
 )
 
 const (
+	displayPhotoName      = "photo"
+	displayAudioName      = "audio"
+	displayVideoName      = "video"
+	displayAnimationName  = "animation"
+	displayDocumentName   = "document"
+	displayAttachmentName = "attachment"
+)
+
+const (
 	SourceInbound = "inbound"
 	SourceDerived = "derived"
 )
@@ -546,6 +555,109 @@ func KindFromMeta(name string, mimeType string) string {
 	default:
 		return KindFile
 	}
+}
+
+// PreferredName returns a user-facing filename for one stored upload.
+// It preserves meaningful names and rewrites generated Telegram placeholder
+// names like "file_10.mp4" into stable names such as "video.mp4".
+func PreferredName(name string, mimeType string) string {
+	trimmed := strings.TrimSpace(name)
+	if trimmed != "" && !isGeneratedPlaceholderName(trimmed) {
+		return trimmed
+	}
+
+	base := preferredNameBase(trimmed, mimeType)
+	ext := strings.ToLower(filepath.Ext(trimmed))
+	if ext == "" {
+		ext = preferredNameExt(mimeType)
+	}
+	if ext == "" {
+		return base
+	}
+	return base + ext
+}
+
+func preferredNameBase(name string, mimeType string) string {
+	mimeType = strings.ToLower(strings.TrimSpace(mimeType))
+	ext := strings.ToLower(filepath.Ext(strings.TrimSpace(name)))
+
+	switch {
+	case mimeType == "application/pdf" || ext == ".pdf":
+		return displayDocumentName
+	case mimeType == "image/gif" || ext == ".gif":
+		return displayAnimationName
+	case strings.HasPrefix(mimeType, "image/") ||
+		ext == ".jpg" || ext == ".jpeg" ||
+		ext == ".png" || ext == ".webp":
+		return displayPhotoName
+	case strings.HasPrefix(mimeType, "audio/") ||
+		ext == ".mp3" || ext == ".wav" ||
+		ext == ".ogg" || ext == ".oga" ||
+		ext == ".m4a":
+		return displayAudioName
+	case strings.HasPrefix(mimeType, "video/") ||
+		ext == ".mp4" || ext == ".mov" ||
+		ext == ".webm" || ext == ".mkv":
+		return displayVideoName
+	default:
+		return displayAttachmentName
+	}
+}
+
+func preferredNameExt(mimeType string) string {
+	switch strings.ToLower(strings.TrimSpace(mimeType)) {
+	case "application/pdf":
+		return ".pdf"
+	case "image/jpeg":
+		return ".jpg"
+	case "image/png":
+		return ".png"
+	case "image/webp":
+		return ".webp"
+	case "image/gif":
+		return ".gif"
+	case "audio/mpeg":
+		return ".mp3"
+	case "audio/wav", "audio/x-wav":
+		return ".wav"
+	case "audio/ogg":
+		return ".ogg"
+	case "audio/mp4", "audio/x-m4a":
+		return ".m4a"
+	case "video/mp4":
+		return ".mp4"
+	case "video/quicktime":
+		return ".mov"
+	case "video/webm":
+		return ".webm"
+	default:
+		return ""
+	}
+}
+
+func isGeneratedPlaceholderName(name string) bool {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return false
+	}
+	stem := trimmed
+	if dot := strings.Index(trimmed, "."); dot >= 0 {
+		stem = trimmed[:dot]
+	}
+	if !strings.HasPrefix(stem, "file_") {
+		return false
+	}
+	suffix := strings.TrimPrefix(stem, "file_")
+	return suffix != "" && digitsOnly(suffix)
+}
+
+func digitsOnly(raw string) bool {
+	for _, r := range raw {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return raw != ""
 }
 
 func sanitizeFileMetadata(meta FileMetadata) FileMetadata {

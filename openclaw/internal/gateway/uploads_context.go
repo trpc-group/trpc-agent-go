@@ -103,6 +103,7 @@ func buildUploadKindSummary(files []uploads.ListedFile) string {
 		if name == "" {
 			name = filepath.Base(strings.TrimSpace(file.Path))
 		}
+		name = uploads.PreferredName(name, file.MimeType)
 		if name == "" {
 			continue
 		}
@@ -118,6 +119,7 @@ func formatUploadContextLine(file uploads.ListedFile) string {
 	if name == "" {
 		name = filepath.Base(strings.TrimSpace(file.Path))
 	}
+	name = uploads.PreferredName(name, file.MimeType)
 	kind := describeUploadKind(name, file.MimeType)
 	source := describeUploadSource(file.Source)
 	if kind == "" && source == "" {

@@ -196,11 +196,15 @@ func uploadViewsFromList(
 	var totalBytes int64
 	for _, file := range listed {
 		totalBytes += file.SizeBytes
+		name := uploads.PreferredName(file.Name, file.MimeType)
+		if name == "" {
+			name = file.Name
+		}
 		files = append(files, uploadView{
 			Channel:      file.Scope.Channel,
 			UserID:       file.Scope.UserID,
 			SessionID:    file.Scope.SessionID,
-			Name:         file.Name,
+			Name:         name,
 			RelativePath: file.RelativePath,
 			Kind:         uploadKindFromFile(file),
 			MimeType:     file.MimeType,
