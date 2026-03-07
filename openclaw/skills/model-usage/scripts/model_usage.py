@@ -40,7 +40,10 @@ def run_codexbar_cost(provider: str) -> List[Dict[str, Any]]:
             f"Invalid provider: {provider!r}. "
             f"Must be one of: {', '.join(sorted(ALLOWED_PROVIDERS))}"
         )
-    cmd = ["codexbar", "cost", "--format", "json", "--provider", provider]
+    if provider == "codex":
+        cmd = ["codexbar", "cost", "--format", "json", "--provider", "codex"]
+    else:
+        cmd = ["codexbar", "cost", "--format", "json", "--provider", "claude"]
     try:
         output = subprocess.check_output(cmd, text=True)
     except FileNotFoundError:
