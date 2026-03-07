@@ -341,7 +341,8 @@ way as images/audio. OpenClaw persists inbound `file` and `video` parts to
 stable host paths under the state directory, keeps those refs in session
 history, and exposes them back to tools. In practice this means later turns
 can still operate on the same upload with `exec_command`
-(`$OPENCLAW_LAST_UPLOAD_PATH`, `$OPENCLAW_SESSION_UPLOADS_DIR`) or
+(`$OPENCLAW_LAST_UPLOAD_PATH`, `$OPENCLAW_LAST_UPLOAD_NAME`,
+`$OPENCLAW_LAST_UPLOAD_MIME`, `$OPENCLAW_SESSION_UPLOADS_DIR`) or
 `skill_run` (`host://...` inputs staged into `$WORK_DIR/inputs`).
 
 ## Run with a real model (OpenAI)

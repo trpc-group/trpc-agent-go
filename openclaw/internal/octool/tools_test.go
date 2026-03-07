@@ -594,8 +594,9 @@ func TestUploadEnvFromContext(t *testing.T) {
 			{
 				Type: model.ContentTypeFile,
 				File: &model.File{
-					Name:   "report.pdf",
-					FileID: "host://" + filePath,
+					Name:     "report.pdf",
+					FileID:   "host://" + filePath,
+					MimeType: "application/pdf",
 				},
 			},
 		},
@@ -614,6 +615,11 @@ func TestUploadEnvFromContext(t *testing.T) {
 	require.Equal(t, filePath, env[envLastUploadPath])
 	require.Equal(t, dir, env[envSessionUploadsDir])
 	require.Equal(t, "report.pdf", env[envLastUploadName])
+	require.Equal(
+		t,
+		"application/pdf",
+		env[envLastUploadMIME],
+	)
 }
 
 func TestMergeExecEnv_PreservesExplicitEnv(t *testing.T) {
@@ -624,10 +630,16 @@ func TestMergeExecEnv_PreservesExplicitEnv(t *testing.T) {
 		map[string]string{
 			envLastUploadPath: "derived",
 			envLastUploadName: "report.pdf",
+			envLastUploadMIME: "application/pdf",
 		},
 	)
 	require.Equal(t, "explicit", merged[envLastUploadPath])
 	require.Equal(t, "report.pdf", merged[envLastUploadName])
+	require.Equal(
+		t,
+		"application/pdf",
+		merged[envLastUploadMIME],
+	)
 }
 
 func pollUntilExited(t *testing.T, mgr *Manager, id string) string {

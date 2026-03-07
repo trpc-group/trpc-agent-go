@@ -40,6 +40,7 @@ const (
 	envSessionUploadsDir = "OPENCLAW_SESSION_UPLOADS_DIR"
 	envLastUploadPath    = "OPENCLAW_LAST_UPLOAD_PATH"
 	envLastUploadName    = "OPENCLAW_LAST_UPLOAD_NAME"
+	envLastUploadMIME    = "OPENCLAW_LAST_UPLOAD_MIME"
 )
 
 type execTool struct {
@@ -57,9 +58,10 @@ func (t *execTool) Declaration() *tool.Declaration {
 		Description: "Execute a host shell command. Use this for " +
 			"general local shell work. Interactive commands can " +
 			"continue with write_stdin. When a chat upload is " +
-			"available, OPENCLAW_LAST_UPLOAD_PATH and " +
-			"OPENCLAW_SESSION_UPLOADS_DIR point to stable host " +
-			"paths for that attachment.",
+			"available, OPENCLAW_LAST_UPLOAD_PATH, " +
+			"OPENCLAW_LAST_UPLOAD_NAME, OPENCLAW_LAST_UPLOAD_MIME, " +
+			"and OPENCLAW_SESSION_UPLOADS_DIR point to stable " +
+			"attachment metadata and host paths.",
 		InputSchema: &tool.Schema{
 			Type:     "object",
 			Required: []string{"command"},
@@ -422,7 +424,7 @@ func uploadEnvFromContext(ctx context.Context) map[string]string {
 		return nil
 	}
 
-	path, name := latestUploadFromInvocation(inv)
+	path, name, mimeType := latestUploadFromInvocation(inv)
 	if path == "" {
 		return nil
 	}
@@ -434,12 +436,19 @@ func uploadEnvFromContext(ctx context.Context) map[string]string {
 	if name != "" {
 		env[envLastUploadName] = name
 	}
+	if mimeType != "" {
+		env[envLastUploadMIME] = mimeType
+	}
 	return env
 }
 
-func latestUploadFromInvocation(inv *agent.Invocation) (string, string) {
+func latestUploadFromInvocation(inv *agent.Invocation) (
+	string,
+	string,
+	string,
+) {
 	if inv == nil || inv.Session == nil {
-		return "", ""
+		return "", "", ""
 	}
 
 	inv.Session.EventMu.RLock()
@@ -455,16 +464,20 @@ func latestUploadFromInvocation(inv *agent.Invocation) (string, string) {
 			if msg.Role != model.RoleUser && msg.Role != "" {
 				continue
 			}
-			path, name := latestUploadFromMessage(msg)
+			path, name, mimeType := latestUploadFromMessage(msg)
 			if path != "" {
-				return path, name
+				return path, name, mimeType
 			}
 		}
 	}
-	return "", ""
+	return "", "", ""
 }
 
-func latestUploadFromMessage(msg model.Message) (string, string) {
+func latestUploadFromMessage(msg model.Message) (
+	string,
+	string,
+	string,
+) {
 	for i := len(msg.ContentParts) - 1; i >= 0; i-- {
 		part := msg.ContentParts[i]
 		if part.Type != model.ContentTypeFile || part.File == nil {
@@ -481,9 +494,9 @@ func latestUploadFromMessage(msg model.Message) (string, string) {
 		if name == "" {
 			name = filepath.Base(path)
 		}
-		return path, name
+		return path, name, strings.TrimSpace(part.File.MimeType)
 	}
-	return "", ""
+	return "", "", ""
 }
 
 var _ tool.CallableTool = (*execTool)(nil)

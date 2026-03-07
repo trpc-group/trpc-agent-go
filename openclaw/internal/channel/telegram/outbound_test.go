@@ -222,3 +222,55 @@ func TestResolveOutboundFilePath_ExpandsHome(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, filepath.Join(home, "x.pdf"), got)
 }
+
+func TestResolveOutboundFilePath_FileURL(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	path := filepath.Join(root, "frame.png")
+	require.NoError(
+		t,
+		os.WriteFile(path, []byte("png"), 0o600),
+	)
+
+	got, err := resolveOutboundFilePath("file://" + path)
+	require.NoError(t, err)
+	require.Equal(t, path, got)
+}
+
+func TestResolveOutboundFilePath_InvalidFileURL(t *testing.T) {
+	t.Parallel()
+
+	_, err := resolveOutboundFilePath("file://")
+	require.Error(t, err)
+}
+
+func TestDetectUploadMode(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(
+		t,
+		uploadModePhoto,
+		detectUploadMode("frame.png", []byte("png")),
+	)
+	require.Equal(
+		t,
+		uploadModeAudio,
+		detectUploadMode("note.mp3", []byte("mp3")),
+	)
+	require.Equal(
+		t,
+		uploadModeVoice,
+		detectUploadMode("voice.oga", []byte("ogg")),
+	)
+	require.Equal(
+		t,
+		uploadModeVideo,
+		detectUploadMode("clip.mp4", []byte("mp4")),
+	)
+	require.Equal(
+		t,
+		uploadModeDocument,
+		detectUploadMode("report.pdf", []byte("%PDF-1.4")),
+	)
+}

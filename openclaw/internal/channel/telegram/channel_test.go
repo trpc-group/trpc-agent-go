@@ -791,6 +791,178 @@ func TestChannel_HandleMessage_AudioMP3_BuildsAudioPart(t *testing.T) {
 	require.Equal(t, audioBytes, filePart.File.Data)
 }
 
+func TestChannel_HandleMessage_Video_BuildsVideoPart(t *testing.T) {
+	t.Parallel()
+
+	videoBytes := []byte("mp4")
+
+	gw := &stubGateway{
+		rsp: gwclient.MessageResponse{
+			StatusCode: http.StatusOK,
+			Reply:      "ok",
+		},
+	}
+	dir := t.TempDir()
+	ch, err := New(
+		testToken,
+		BotInfo{Username: "bot"},
+		gw,
+		WithStateDir(dir),
+		WithDMPolicy(dmPolicyOpen),
+	)
+	require.NoError(t, err)
+
+	bot := &stubBot{
+		downloads: map[string]stubDownload{
+			"v1": {
+				file: tgapi.File{FilePath: "video/clip.mp4"},
+				data: videoBytes,
+			},
+		},
+	}
+	ch.bot = bot
+
+	err = ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID: 3,
+		From:      &tgapi.User{ID: 2},
+		Chat:      &tgapi.Chat{ID: 1, Type: chatTypePrivate},
+		Video: &tgapi.Video{
+			FileID:   "v1",
+			FileName: "clip.mp4",
+			MimeType: "video/mp4",
+			FileSize: int64(len(videoBytes)),
+		},
+	})
+	require.NoError(t, err)
+
+	gw.mu.Lock()
+	require.Len(t, gw.reqs, 1)
+	req := gw.reqs[0]
+	gw.mu.Unlock()
+
+	require.Len(t, req.ContentParts, 1)
+	part := req.ContentParts[0]
+	require.Equal(t, gwproto.PartTypeVideo, part.Type)
+	require.NotNil(t, part.File)
+	require.Equal(t, "clip.mp4", part.File.Filename)
+	require.Equal(t, "video/mp4", part.File.Format)
+	require.Equal(t, videoBytes, part.File.Data)
+}
+
+func TestChannel_HandleMessage_Animation_BuildsVideoPart(t *testing.T) {
+	t.Parallel()
+
+	videoBytes := []byte("webm")
+
+	gw := &stubGateway{
+		rsp: gwclient.MessageResponse{
+			StatusCode: http.StatusOK,
+			Reply:      "ok",
+		},
+	}
+	dir := t.TempDir()
+	ch, err := New(
+		testToken,
+		BotInfo{Username: "bot"},
+		gw,
+		WithStateDir(dir),
+		WithDMPolicy(dmPolicyOpen),
+	)
+	require.NoError(t, err)
+
+	bot := &stubBot{
+		downloads: map[string]stubDownload{
+			"a1": {
+				file: tgapi.File{FilePath: "video/anim.webm"},
+				data: videoBytes,
+			},
+		},
+	}
+	ch.bot = bot
+
+	err = ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID: 3,
+		From:      &tgapi.User{ID: 2},
+		Chat:      &tgapi.Chat{ID: 1, Type: chatTypePrivate},
+		Animation: &tgapi.Animation{
+			FileID:   "a1",
+			FileName: "anim.webm",
+			MimeType: "video/webm",
+			FileSize: int64(len(videoBytes)),
+		},
+	})
+	require.NoError(t, err)
+
+	gw.mu.Lock()
+	require.Len(t, gw.reqs, 1)
+	req := gw.reqs[0]
+	gw.mu.Unlock()
+
+	require.Len(t, req.ContentParts, 1)
+	part := req.ContentParts[0]
+	require.Equal(t, gwproto.PartTypeVideo, part.Type)
+	require.NotNil(t, part.File)
+	require.Equal(t, "anim.webm", part.File.Filename)
+	require.Equal(t, "video/webm", part.File.Format)
+	require.Equal(t, videoBytes, part.File.Data)
+}
+
+func TestChannel_HandleMessage_VideoNote_BuildsVideoPart(t *testing.T) {
+	t.Parallel()
+
+	videoBytes := []byte("note")
+
+	gw := &stubGateway{
+		rsp: gwclient.MessageResponse{
+			StatusCode: http.StatusOK,
+			Reply:      "ok",
+		},
+	}
+	dir := t.TempDir()
+	ch, err := New(
+		testToken,
+		BotInfo{Username: "bot"},
+		gw,
+		WithStateDir(dir),
+		WithDMPolicy(dmPolicyOpen),
+	)
+	require.NoError(t, err)
+
+	bot := &stubBot{
+		downloads: map[string]stubDownload{
+			"vn1": {
+				file: tgapi.File{FilePath: "video/note.mp4"},
+				data: videoBytes,
+			},
+		},
+	}
+	ch.bot = bot
+
+	err = ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID: 3,
+		From:      &tgapi.User{ID: 2},
+		Chat:      &tgapi.Chat{ID: 1, Type: chatTypePrivate},
+		VideoNote: &tgapi.VideoNote{
+			FileID:   "vn1",
+			FileSize: int64(len(videoBytes)),
+		},
+	})
+	require.NoError(t, err)
+
+	gw.mu.Lock()
+	require.Len(t, gw.reqs, 1)
+	req := gw.reqs[0]
+	gw.mu.Unlock()
+
+	require.Len(t, req.ContentParts, 1)
+	part := req.ContentParts[0]
+	require.Equal(t, gwproto.PartTypeVideo, part.Type)
+	require.NotNil(t, part.File)
+	require.Equal(t, "note.mp4", part.File.Filename)
+	require.Equal(t, "", part.File.Format)
+	require.Equal(t, videoBytes, part.File.Data)
+}
+
 func TestChannel_HandleMessage_DMPolicyAllowlist_NoAllowUsers(t *testing.T) {
 	t.Parallel()
 

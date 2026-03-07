@@ -81,8 +81,9 @@ const (
 		"to send to the current chat or an explicit target. " +
 		"Chat uploads are saved to stable host paths. For host " +
 		"commands, prefer OPENCLAW_LAST_UPLOAD_PATH or " +
-		"OPENCLAW_SESSION_UPLOADS_DIR and OPENCLAW_LAST_UPLOAD_NAME " +
-		"instead of guessing attachment paths. When a user follows " +
+		"OPENCLAW_SESSION_UPLOADS_DIR, OPENCLAW_LAST_UPLOAD_NAME, " +
+		"and OPENCLAW_LAST_UPLOAD_MIME instead of guessing " +
+		"attachment paths. When a user follows " +
 		"up about 'the PDF/audio/video I just sent', assume they " +
 		"mean the recent upload already present in this chat unless " +
 		"the reference is genuinely ambiguous. For exec_command, do " +

@@ -54,8 +54,12 @@ func (t *Tool) Declaration() *tool.Declaration {
 					Items: &tool.Schema{
 						Type: "string",
 					},
-					Description: "Optional local file paths or " +
-						"host:// refs to send back to the user.",
+					Description: "Optional local file paths, " +
+						"host:// refs, artifact:// refs, or " +
+						"workspace:// refs to send back to the " +
+						"user. Telegram auto-picks document, " +
+						"photo, audio, voice, or video upload " +
+						"mode based on the file type.",
 				},
 				"file": {
 					Type:        "string",

@@ -13,6 +13,9 @@ import (
 	"context"
 	"fmt"
 	"html"
+	"net/url"
+	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/yuin/goldmark"
@@ -22,8 +25,10 @@ import (
 	"github.com/yuin/goldmark/parser"
 	gtext "github.com/yuin/goldmark/text"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 )
 
 const (
@@ -39,12 +44,20 @@ const (
 	listMarker  = "- "
 	doubleBreak = "\n\n"
 	lineBreak   = "\n"
+
+	pathTokenTrailingPunct = ".,:;!?)]}"
+)
+
+var telegramPathTokenRE = regexp.MustCompile(
+	`(?:artifact|workspace|host|file)://[^\s<>()\[\]{}"'` +
+		"`" + `]+|/[^\s<>()\[\]{}"'` + "`" + `]+`,
 )
 
 func (c *Channel) sendTextMessage(
 	ctx context.Context,
 	params tgapi.SendMessageParams,
 ) (tgapi.Message, error) {
+	params.Text = sanitizeTelegramText(params.Text, c.state)
 	formatted, ok := renderTelegramHTMLText(params.Text)
 	if ok {
 		richParams := params
@@ -71,6 +84,7 @@ func (c *Channel) editTextMessage(
 	ctx context.Context,
 	params tgapi.EditMessageTextParams,
 ) (tgapi.Message, error) {
+	params.Text = sanitizeTelegramText(params.Text, c.state)
 	formatted, ok := renderTelegramHTMLText(params.Text)
 	if ok {
 		richParams := params
@@ -113,6 +127,104 @@ func renderTelegramHTMLText(markdown string) (string, bool) {
 	root := md.Parser().Parse(gtext.NewReader(source))
 	rendered := strings.TrimSpace(renderBlockChildren(root, source))
 	return rendered, rendered != ""
+}
+
+func sanitizeTelegramText(text string, stateDir string) string {
+	if strings.TrimSpace(text) == "" {
+		return text
+	}
+	root := cleanStateRoot(stateDir)
+	return telegramPathTokenRE.ReplaceAllStringFunc(
+		text,
+		func(token string) string {
+			return sanitizeTelegramPathToken(token, root)
+		},
+	)
+}
+
+func sanitizeTelegramPathToken(token string, stateRoot string) string {
+	core, suffix := splitTrailingPathPunct(token)
+	if core == "" {
+		return token
+	}
+	if name := sanitizeInternalRefToken(core); name != "" {
+		return name + suffix
+	}
+	if name := sanitizeStatePathToken(core, stateRoot); name != "" {
+		return name + suffix
+	}
+	return token
+}
+
+func splitTrailingPathPunct(token string) (string, string) {
+	end := len(token)
+	for end > 0 {
+		last := token[end-1]
+		if !strings.ContainsRune(pathTokenTrailingPunct, rune(last)) {
+			break
+		}
+		end--
+	}
+	return token[:end], token[end:]
+}
+
+func sanitizeInternalRefToken(token string) string {
+	trimmed := strings.TrimSpace(token)
+	if trimmed == "" {
+		return ""
+	}
+	if strings.HasPrefix(trimmed, fileref.ArtifactPrefix) ||
+		strings.HasPrefix(trimmed, fileref.WorkspacePrefix) {
+		return fileref.DisplayName(trimmed)
+	}
+	if path, ok := uploads.PathFromHostRef(trimmed); ok {
+		return filepath.Base(path)
+	}
+	if strings.HasPrefix(trimmed, fileURLPrefix) {
+		parsed, err := url.Parse(trimmed)
+		if err != nil {
+			return ""
+		}
+		if parsed.Path == "" {
+			return ""
+		}
+		return filepath.Base(parsed.Path)
+	}
+	return ""
+}
+
+func sanitizeStatePathToken(token string, stateRoot string) string {
+	if stateRoot == "" || !filepath.IsAbs(token) {
+		return ""
+	}
+	clean := filepath.Clean(token)
+	if !pathUnderRoot(clean, stateRoot) {
+		return ""
+	}
+	base := filepath.Base(clean)
+	if base == "." || base == string(filepath.Separator) || base == ".." {
+		return ""
+	}
+	return base
+}
+
+func cleanStateRoot(stateDir string) string {
+	trimmed := strings.TrimSpace(stateDir)
+	if trimmed == "" {
+		return ""
+	}
+	return filepath.Clean(trimmed)
+}
+
+func pathUnderRoot(path string, root string) bool {
+	if path == "" || root == "" {
+		return false
+	}
+	if path == root {
+		return true
+	}
+	prefix := root + string(filepath.Separator)
+	return strings.HasPrefix(path, prefix)
 }
 
 func renderBlockChildren(node gast.Node, source []byte) string {

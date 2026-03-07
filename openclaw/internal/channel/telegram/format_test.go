@@ -12,6 +12,7 @@ package telegram
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -106,4 +107,63 @@ func TestChannel_EditTextMessageFallsBackToPlainText(t *testing.T) {
 	require.Equal(t, "<code>code</code>", bot.edits[0].Text)
 	require.Empty(t, bot.edits[1].ParseMode)
 	require.Equal(t, "`code`", bot.edits[1].Text)
+}
+
+func TestSanitizeTelegramText_HidesInternalRefs(t *testing.T) {
+	t.Parallel()
+
+	stateDir := filepath.Join("/tmp", "openclaw")
+	text := "See `host:///tmp/openclaw/uploads/a.pdf` and " +
+		"`artifact://out/report.pdf@1` and " +
+		"`workspace://frames/f1.png`."
+
+	got := sanitizeTelegramText(text, stateDir)
+	require.NotContains(t, got, "host://")
+	require.NotContains(t, got, "artifact://")
+	require.NotContains(t, got, "workspace://")
+	require.Contains(t, got, "`a.pdf`")
+	require.Contains(t, got, "`report.pdf`")
+	require.Contains(t, got, "`f1.png`")
+}
+
+func TestSanitizeTelegramText_HidesStateDirAbsolutePaths(t *testing.T) {
+	t.Parallel()
+
+	stateDir := filepath.Join("/tmp", "openclaw")
+	text := "Saved to `/tmp/openclaw/uploads/chat/frame.png`."
+
+	got := sanitizeTelegramText(text, stateDir)
+	require.Equal(t, "Saved to `frame.png`.", got)
+}
+
+func TestSanitizeTelegramText_HidesAbsolutePaths(t *testing.T) {
+	t.Parallel()
+
+	stateDir := filepath.Join("/tmp", "openclaw")
+	text := "User path: `/tmp/other/report.pdf`."
+
+	got := sanitizeTelegramText(text, stateDir)
+	require.Equal(t, "User path: `report.pdf`.", got)
+}
+
+func TestChannel_SendTextMessage_SanitizesPaths(t *testing.T) {
+	t.Parallel()
+
+	bot := &stubBot{}
+	ch := &Channel{
+		bot:   bot,
+		state: filepath.Join("/tmp", "openclaw"),
+	}
+
+	_, err := ch.sendTextMessage(
+		context.Background(),
+		tgapi.SendMessageParams{
+			ChatID: 1,
+			Text:   "ready: `/tmp/openclaw/uploads/chat/frame.png`",
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, bot.sent, 1)
+	require.Contains(t, bot.sent[0].Text, "<code>frame.png</code>")
+	require.NotContains(t, bot.sent[0].Text, "/tmp/openclaw/")
 }
