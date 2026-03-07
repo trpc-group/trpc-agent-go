@@ -589,6 +589,56 @@ func WithSummaryFilterKey(filterKey string) SummaryOption {
 	}
 }
 
+// EventSearchResult wraps a recalled session event with
+// its similarity score.
+type EventSearchResult struct {
+	// Event is the matched event.
+	Event event.Event
+	// Score is the cosine similarity score (0..1).
+	Score float64
+}
+
+// SearchOption configures SearchEvents behaviour.
+type SearchOption func(*SearchOptions)
+
+// SearchOptions holds options for SearchEvents.
+type SearchOptions struct {
+	// TopK overrides the default max results.
+	TopK int
+}
+
+// WithTopK sets the maximum number of results returned
+// by SearchEvents. Values <= 0 are ignored.
+func WithTopK(k int) SearchOption {
+	return func(o *SearchOptions) {
+		if k > 0 {
+			o.TopK = k
+		}
+	}
+}
+
+// SearchableService extends session.Service with
+// vector-based semantic search over session events.
+// Session backends that support embedding-based retrieval
+// should implement this interface.
+// Non-vector backends (sqlite, mysql, redis, etc.) do not
+// need to implement this interface.
+type SearchableService interface {
+	// SearchEvents returns the top-K events most
+	// semantically relevant to the given query text
+	// within a session. Results are ordered by
+	// descending similarity score.
+	// Only events with meaningful text content
+	// (user/assistant messages) are searchable; tool
+	// calls and partial events are excluded.
+	SearchEvents(
+		ctx context.Context,
+		key Key,
+		query string,
+		opts ...SearchOption,
+	) ([]EventSearchResult, error)
+}
+
 // Service is the interface that all session services must implement.
 type Service interface {
 	// CreateSession creates a new session.
