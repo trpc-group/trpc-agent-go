@@ -81,5 +81,3 @@ func CalculateMaxInputTokensWithParams(
 	ratioLimit := int(float64(contextWindow) * maxInputTokensRatio)
 	return max(min(calculatedMax, ratioLimit), inputTokensFloor)
 }
-
-
