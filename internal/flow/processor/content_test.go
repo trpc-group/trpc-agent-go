@@ -2334,12 +2334,11 @@ func TestContentRequestProcessor_getFilterIncrementMessages(t *testing.T) {
 		{
 			name:             "BranchFilterModeAll and TimelineFilterAll and has time",
 			summaryUpdatedAt: baseTime,
-			expectedCount:    12,
+			expectedCount:    9,
 			expectedContent: []string{
 				"message2", "message3", "message4",
 				"message8", "message9", "message10",
 				"message14", "message15", "message16",
-				"message17", "message18", "message19",
 			},
 			branchFilterMode:   BranchFilterModeAll,
 			timelineFilterMode: TimelineFilterAll,
@@ -2432,7 +2431,7 @@ func TestContentRequestProcessor_shouldIncludeEvent(t *testing.T) {
 			expected: false,
 		},
 		{
-			name: "timestamp before since when not zero time, same invocation preserved",
+			name: "timestamp before since when not zero time, same invocation excluded",
 			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
 				p := &ContentRequestProcessor{}
 				evt := event.Event{
@@ -2453,10 +2452,10 @@ func TestContentRequestProcessor_shouldIncludeEvent(t *testing.T) {
 				inv := &agent.Invocation{InvocationID: "123", RunOptions: agent.RunOptions{RequestID: "123"}}
 				return p, evt, inv, "", false, sinceTime
 			},
-			expected: true,
+			expected: false,
 		},
 		{
-			name: "timestamp equal since when not zero time, same invocation preserved",
+			name: "timestamp equal since when not zero time, same invocation excluded",
 			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
 				p := &ContentRequestProcessor{}
 				evt := event.Event{
@@ -2477,7 +2476,7 @@ func TestContentRequestProcessor_shouldIncludeEvent(t *testing.T) {
 				inv := &agent.Invocation{InvocationID: "123", RunOptions: agent.RunOptions{RequestID: "123"}}
 				return p, evt, inv, "", false, sinceTime
 			},
-			expected: true,
+			expected: false,
 		},
 		{
 			name: "timestamp before since when not zero time, different invocation excluded",
@@ -3053,7 +3052,7 @@ func TestContentRequestProcessor_shouldIncludeEvent(t *testing.T) {
 			expected: false,
 		},
 		{
-			name: "intra-run summary: assistant event before since with same invocation preserved",
+			name: "intra-run summary: assistant event before since with same invocation excluded",
 			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
 				p := &ContentRequestProcessor{}
 				evt := event.Event{
@@ -3082,10 +3081,10 @@ func TestContentRequestProcessor_shouldIncludeEvent(t *testing.T) {
 				}
 				return p, evt, inv, "", false, sinceTime
 			},
-			expected: true,
+			expected: false,
 		},
 		{
-			name: "intra-run summary: tool result before since with same invocation preserved",
+			name: "intra-run summary: tool result before since with same invocation excluded",
 			setup: func() (*ContentRequestProcessor, event.Event, *agent.Invocation, string, bool, time.Time) {
 				p := &ContentRequestProcessor{}
 				evt := event.Event{
@@ -3115,7 +3114,7 @@ func TestContentRequestProcessor_shouldIncludeEvent(t *testing.T) {
 				}
 				return p, evt, inv, "", false, sinceTime
 			},
-			expected: true,
+			expected: false,
 		},
 		{
 			name: "intra-run summary: assistant event from different invocation excluded",
