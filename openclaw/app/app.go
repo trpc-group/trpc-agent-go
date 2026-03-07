@@ -40,8 +40,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
-	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwclient"
-	tgch "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/channel/telegram"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/octool"
 	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
@@ -69,9 +67,6 @@ const (
 
 	agentTypeLLM        = "llm"
 	agentTypeClaudeCode = "claude-code"
-
-	defaultTelegramMaxRetries = 3
-	defaultTelegramStreaming  = "progress"
 
 	openAIVariantAuto = "auto"
 
@@ -202,56 +197,7 @@ func NewRuntime(
 		}
 	}
 
-	telegramToken := strings.TrimSpace(opts.TelegramToken)
-	telegramEnabled := telegramToken != ""
-
-	var (
-		telegramBot tgch.BotInfo
-		tgapiOpts   []telegramAPIOption
-	)
-	if telegramEnabled {
-		tgapiOpts, err = makeTelegramAPIOptions(
-			opts.TelegramProxy,
-			opts.TelegramHTTPTimeout,
-			opts.TelegramMaxRetries,
-		)
-		if err != nil {
-			return nil, &exitError{
-				Code: 1,
-				Err:  fmt.Errorf("telegram config failed: %w", err),
-			}
-		}
-
-		telegramBot, err = tgch.ProbeBotInfo(
-			ctx,
-			telegramToken,
-			tgapiOpts...,
-		)
-		if err != nil {
-			return nil, &exitError{
-				Code: 1,
-				Err:  fmt.Errorf("probe telegram bot failed: %w", err),
-			}
-		}
-
-		if strings.TrimSpace(telegramBot.Username) != "" {
-			log.Infof(
-				"Telegram enabled as @%s",
-				telegramBot.Username,
-			)
-		} else if telegramBot.ID != 0 {
-			log.Infof("Telegram enabled as id %d", telegramBot.ID)
-		} else {
-			log.Infof("Telegram enabled")
-		}
-	}
-
 	mentionPatterns := splitCSV(opts.Mention)
-	if opts.RequireMention &&
-		len(mentionPatterns) == 0 &&
-		telegramBot.Mention != "" {
-		mentionPatterns = []string{telegramBot.Mention}
-	}
 
 	resolvedStateDir, err := resolveStateDir(opts.StateDir)
 	if err != nil {
@@ -354,6 +300,10 @@ func NewRuntime(
 			SkillsRoot:      opts.SkillsRoot,
 			SkillsExtraDirs: splitCSV(opts.SkillsExtraDir),
 			SkillsDebug:     opts.SkillsDebug,
+			SkillsAllowBundled: splitCSV(
+				opts.SkillsAllowBundled,
+			),
+			SkillConfigs:    opts.SkillConfigs,
 			SkillConfigKeys: resolveSkillConfigKeys(opts),
 			StateDir:        resolvedStateDir,
 
@@ -417,49 +367,15 @@ func NewRuntime(
 		CancelPath:   gwSrv.CancelPath(),
 	}
 
-	gw, err := gwclient.New(
-		gwSrv.Handler(),
-		gwSrv.MessagesPath(),
-		gwSrv.CancelPath(),
-	)
-	if err != nil {
-		return nil, &exitError{
-			Code: 1,
-			Err:  fmt.Errorf("create gateway client failed: %w", err),
-		}
-	}
-
-	if telegramEnabled {
-		users := splitCSV(opts.AllowUsers)
-		threads := splitCSV(opts.TelegramAllowThreads)
-		ch, err := tgch.New(
-			telegramToken,
-			telegramBot,
-			gw,
-			tgch.WithAPIOptions(tgapiOpts...),
-			tgch.WithStateDir(resolvedStateDir),
-			tgch.WithStartFromLatest(opts.TelegramStartFromLatest),
-			tgch.WithStreamingMode(opts.TelegramStreaming),
-			tgch.WithDMPolicy(opts.TelegramDMPolicy),
-			tgch.WithGroupPolicy(opts.TelegramGroupPolicy),
-			tgch.WithAllowUsers(users...),
-			tgch.WithAllowThreads(threads...),
-			tgch.WithPairingTTL(opts.TelegramPairingTTL),
-		)
-		if err != nil {
-			return nil, &exitError{
-				Code: 1,
-				Err:  fmt.Errorf("create telegram channel failed: %w", err),
-			}
-		}
-		rt.Channels = append(rt.Channels, ch)
-	}
+	gw := newInProcGatewayClient(gwSrv)
 
 	if len(opts.Channels) > 0 {
 		extra, err := channelsFromRegistry(
+			ctx,
 			gw,
 			opts.AppName,
 			resolvedStateDir,
+			splitCSV(opts.AllowUsers),
 			opts.Channels,
 		)
 		if err != nil {
@@ -510,56 +426,7 @@ func run(ctx context.Context, args []string) error {
 		}
 	}
 
-	telegramToken := strings.TrimSpace(opts.TelegramToken)
-	telegramEnabled := telegramToken != ""
-
-	var (
-		telegramBot tgch.BotInfo
-		tgapiOpts   []telegramAPIOption
-	)
-	if telegramEnabled {
-		tgapiOpts, err = makeTelegramAPIOptions(
-			opts.TelegramProxy,
-			opts.TelegramHTTPTimeout,
-			opts.TelegramMaxRetries,
-		)
-		if err != nil {
-			return &exitError{
-				Code: 1,
-				Err:  fmt.Errorf("telegram config failed: %w", err),
-			}
-		}
-
-		telegramBot, err = tgch.ProbeBotInfo(
-			ctx,
-			telegramToken,
-			tgapiOpts...,
-		)
-		if err != nil {
-			return &exitError{
-				Code: 1,
-				Err:  fmt.Errorf("probe telegram bot failed: %w", err),
-			}
-		}
-
-		if strings.TrimSpace(telegramBot.Username) != "" {
-			log.Infof(
-				"Telegram enabled as @%s",
-				telegramBot.Username,
-			)
-		} else if telegramBot.ID != 0 {
-			log.Infof("Telegram enabled as id %d", telegramBot.ID)
-		} else {
-			log.Infof("Telegram enabled")
-		}
-	}
-
 	mentionPatterns := splitCSV(opts.Mention)
-	if opts.RequireMention &&
-		len(mentionPatterns) == 0 &&
-		telegramBot.Mention != "" {
-		mentionPatterns = []string{telegramBot.Mention}
-	}
 
 	resolvedStateDir, err := resolveStateDir(opts.StateDir)
 	if err != nil {
@@ -665,6 +532,10 @@ func run(ctx context.Context, args []string) error {
 			SkillsRoot:      opts.SkillsRoot,
 			SkillsExtraDirs: splitCSV(opts.SkillsExtraDir),
 			SkillsDebug:     opts.SkillsDebug,
+			SkillsAllowBundled: splitCSV(
+				opts.SkillsAllowBundled,
+			),
+			SkillConfigs:    opts.SkillConfigs,
 			SkillConfigKeys: resolveSkillConfigKeys(opts),
 			StateDir:        resolvedStateDir,
 
@@ -717,17 +588,7 @@ func run(ctx context.Context, args []string) error {
 		}
 	}
 
-	gw, err := gwclient.New(
-		gwSrv.Handler(),
-		gwSrv.MessagesPath(),
-		gwSrv.CancelPath(),
-	)
-	if err != nil {
-		return &exitError{
-			Code: 1,
-			Err:  fmt.Errorf("create gateway client failed: %w", err),
-		}
-	}
+	gw := newInProcGatewayClient(gwSrv)
 
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
@@ -739,37 +600,13 @@ func run(ctx context.Context, args []string) error {
 	}
 
 	var channels []channel.Channel
-	if telegramEnabled {
-		users := splitCSV(opts.AllowUsers)
-		threads := splitCSV(opts.TelegramAllowThreads)
-		ch, err := tgch.New(
-			telegramToken,
-			telegramBot,
-			gw,
-			tgch.WithAPIOptions(tgapiOpts...),
-			tgch.WithStateDir(resolvedStateDir),
-			tgch.WithStartFromLatest(opts.TelegramStartFromLatest),
-			tgch.WithStreamingMode(opts.TelegramStreaming),
-			tgch.WithDMPolicy(opts.TelegramDMPolicy),
-			tgch.WithGroupPolicy(opts.TelegramGroupPolicy),
-			tgch.WithAllowUsers(users...),
-			tgch.WithAllowThreads(threads...),
-			tgch.WithPairingTTL(opts.TelegramPairingTTL),
-		)
-		if err != nil {
-			return &exitError{
-				Code: 1,
-				Err:  fmt.Errorf("create telegram channel failed: %w", err),
-			}
-		}
-		channels = append(channels, ch)
-	}
-
 	if len(opts.Channels) > 0 {
 		extra, err := channelsFromRegistry(
+			ctx,
 			gw,
 			opts.AppName,
 			resolvedStateDir,
+			splitCSV(opts.AllowUsers),
 			opts.Channels,
 		)
 		if err != nil {
@@ -1137,10 +974,14 @@ func newAgent(
 
 	cwd, _ := os.Getwd()
 	roots := resolveSkillRoots(cwd, cfg)
+	bundledRoot := filepath.Join(cwd, appName, defaultSkillsDir)
 	repo, err := ocskills.NewRepository(
 		roots,
 		ocskills.WithDebug(cfg.SkillsDebug),
 		ocskills.WithConfigKeys(cfg.SkillConfigKeys),
+		ocskills.WithBundledSkillsRoot(bundledRoot),
+		ocskills.WithAllowBundled(cfg.SkillsAllowBundled),
+		ocskills.WithSkillConfigs(cfg.SkillConfigs),
 	)
 	if err != nil {
 		return nil, err
@@ -1291,15 +1132,19 @@ func toolSetsFromProviders(
 }
 
 func channelsFromRegistry(
+	ctx context.Context,
 	gw registry.GatewayClient,
 	appName string,
 	stateDir string,
+	allowUsers []string,
 	specs []pluginSpec,
 ) ([]channel.Channel, error) {
 	deps := registry.ChannelDeps{
-		Gateway:  gw,
-		StateDir: stateDir,
-		AppName:  appName,
+		Ctx:        ctx,
+		Gateway:    gw,
+		StateDir:   stateDir,
+		AppName:    appName,
+		AllowUsers: allowUsers,
 	}
 
 	out := make([]channel.Channel, 0, len(specs))
@@ -1347,10 +1192,12 @@ type agentConfig struct {
 	Instruction       string
 	SystemPrompt      string
 
-	SkillsRoot      string
-	SkillsExtraDirs []string
-	SkillsDebug     bool
-	SkillConfigKeys []string
+	SkillsRoot         string
+	SkillsExtraDirs    []string
+	SkillsDebug        bool
+	SkillsAllowBundled []string
+	SkillConfigs       map[string]ocskills.SkillConfig
+	SkillConfigKeys    []string
 
 	StateDir string
 

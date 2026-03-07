@@ -99,8 +99,10 @@ How this relates to `SkillLoadMode` (common pitfall):
   loop).
 - If you want loaded skill bodies/docs to persist across **multiple
   conversation turns**, set `SkillLoadMode` to `session`. The default
-  `turn` mode clears `temp:skill:loaded:*` / `temp:skill:docs:*` before
-  the next run starts. As a result, even if your history still contains
+  `turn` mode clears the agent-scoped skill keys
+  (`temp:skill:loaded_by_agent:<agent>/<name>` and
+  `temp:skill:docs_by_agent:<agent>/<name>`) before the next run starts.
+  As a result, even if your history still contains
   the previous `skill_load` tool result (typically a short `loaded:
   <name>` stub), the framework will not materialize the body/docs again.
 
@@ -279,6 +281,9 @@ for skills like `whisper` (audio) and `ocr` (images).
 SkillLoadMode demo (no API key required):
 [examples/skillloadmode/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillloadmode/README.md)
 
+Sub-agent skill isolation demo (AgentTool + Skills):
+[examples/skillisolation/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillisolation/README.md)
+
 Quick start (download dataset JSON into `examples/skill/data/`):
 
 ```bash
@@ -344,8 +349,14 @@ Input:
 
 Behavior:
 - Writes session-scoped `temp:*` keys:
-  - `temp:skill:loaded:<name>` = "1"
-  - `temp:skill:docs:<name>` = "*" or JSON array
+  - `temp:skill:loaded_by_agent:<agent>/<name>` = "1"
+  - `temp:skill:docs_by_agent:<agent>/<name>` = "*" or JSON array
+  - Legacy keys (`temp:skill:loaded:<name>`, `temp:skill:docs:<name>`) are
+    still supported and migrated when seen.
+- Multi-agent note: sub-agents typically share the same Session. With
+  agent-scoped keys, a child agent’s `skill_load` won’t automatically
+  inflate the coordinator’s prompt. If another agent needs the body/docs,
+  have that agent call `skill_load` explicitly.
 - Request processors materialize `SKILL.md` body and docs into the next
   model request:
   - Default: appended to the system message (legacy behavior)
@@ -363,8 +374,10 @@ From first principles:
 - `skill_load` does **not** inject the full `SKILL.md` text into the
   session transcript.
 - Instead, it writes small “flags” into the session state:
-  - Loaded flag: keys with prefix `skill.StateKeyLoadedPrefix`
-  - Docs selection: keys with prefix `skill.StateKeyDocsPrefix`
+  - Loaded flag: keys with prefix `skill.StateKeyLoadedByAgentPrefix`
+  - Docs selection: keys with prefix `skill.StateKeyDocsByAgentPrefix`
+  - These keys are scoped by agent name to avoid cross-agent leakage in
+    multi-agent sessions.
 - The Skills request processors read those keys and materialize bodies
   / docs into the **next** outbound model request.
 
@@ -396,15 +409,17 @@ func loadedSkillNames(inv *agent.Invocation) []string {
         return nil
     }
 
+    prefix := skill.LoadedPrefix(inv.AgentName)
+
     var out []string
     for k, v := range state {
-        if !strings.HasPrefix(k, skill.StateKeyLoadedPrefix) {
+        if !strings.HasPrefix(k, prefix) {
             continue
         }
         if len(v) == 0 {
             continue
         }
-        name := strings.TrimPrefix(k, skill.StateKeyLoadedPrefix)
+        name := strings.TrimPrefix(k, prefix)
         if strings.TrimSpace(name) == "" {
             continue
         }
@@ -439,9 +454,11 @@ _ = agt
 
 Notes:
 
-- `SkillLoadModeTurn` (default) clears those `temp:skill:*` keys at the
-  start of the **next** `Runner.Run` call, so the loaded list is usually
-  non-empty only within the current turn/tool loop.
+- `SkillLoadModeTurn` (default) clears the agent-scoped `temp:skill:*`
+  keys (for example, `temp:skill:loaded_by_agent:*` /
+  `temp:skill:docs_by_agent:*`) at the start of the **next**
+  `Runner.Run` call, so the loaded list is usually non-empty only within
+  the current turn/tool loop.
 - `SkillLoadModeSession` keeps them across turns, so the loaded list can
   remain non-empty until you clear it (or the session expires).
 
@@ -477,8 +494,8 @@ service to modify the state deltas written by `skill_load`.
 
 The core idea:
 
-1) Detect events that load a skill (state delta contains
-   `skill.StateKeyLoadedPrefix+<name>`).
+1) Detect events that load a skill for a specific agent (state delta
+   contains keys with prefix `skill.LoadedPrefix(ev.Author)`).
 2) Compute which skills would be loaded *after* applying the delta.
 3) If the count exceeds your limit, clear the older skills by adding
    `nil` entries into the same `StateDelta` map.
@@ -507,19 +524,23 @@ type skillLoadArgs struct {
     Skill string `json:"skill"`
 }
 
-func loadedSkillsFromState(state session.StateMap) []string {
+func loadedSkillsFromState(
+    state session.StateMap,
+    agentName string,
+) []string {
     if len(state) == 0 {
         return nil
     }
+    prefix := skill.LoadedPrefix(agentName)
     var out []string
     for k, v := range state {
-        if !strings.HasPrefix(k, skill.StateKeyLoadedPrefix) {
+        if !strings.HasPrefix(k, prefix) {
             continue
         }
         if len(v) == 0 {
             continue
         }
-        name := strings.TrimPrefix(k, skill.StateKeyLoadedPrefix)
+        name := strings.TrimPrefix(k, prefix)
         if strings.TrimSpace(name) == "" {
             continue
         }
@@ -541,16 +562,22 @@ func capLoadedSkills(
         return
     }
 
+    agentName := strings.TrimSpace(ev.Author)
+    if agentName == "" {
+        return
+    }
+    loadedPrefix := skill.LoadedPrefix(agentName)
+
     // Only enforce when this event loads a skill.
     var newlyLoaded []string
     for k, v := range ev.StateDelta {
-        if !strings.HasPrefix(k, skill.StateKeyLoadedPrefix) {
+        if !strings.HasPrefix(k, loadedPrefix) {
             continue
         }
         if len(v) == 0 {
             continue
         }
-        name := strings.TrimPrefix(k, skill.StateKeyLoadedPrefix)
+        name := strings.TrimPrefix(k, loadedPrefix)
         if strings.TrimSpace(name) == "" {
             continue
         }
@@ -566,7 +593,7 @@ func capLoadedSkills(
         nextState[k] = v
     }
 
-    loaded := loadedSkillsFromState(nextState)
+    loaded := loadedSkillsFromState(nextState, agentName)
     if len(loaded) <= max {
         return
     }
@@ -599,6 +626,9 @@ func capLoadedSkills(
     // 2) Fill from newest skill_load calls in the transcript.
     events := sess.GetEvents()
     for i := len(events) - 1; i >= 0 && len(keep) < max; i-- {
+        if strings.TrimSpace(events[i].Author) != agentName {
+            continue
+        }
         rsp := events[i].Response
         if rsp == nil || len(rsp.Choices) == 0 {
             continue
@@ -653,8 +683,8 @@ func capLoadedSkills(
         if _, ok := keepSet[name]; ok {
             continue
         }
-        ev.StateDelta[skill.StateKeyLoadedPrefix+name] = nil
-        ev.StateDelta[skill.StateKeyDocsPrefix+name] = nil
+        ev.StateDelta[skill.LoadedKey(agentName, name)] = nil
+        ev.StateDelta[skill.DocsKey(agentName, name)] = nil
     }
 }
 
@@ -820,9 +850,10 @@ Input:
 - `mode` (optional string): `add` | `replace` | `clear`
 
 Behavior:
-- Updates `temp:skill:docs:<name>` accordingly:
-  - `*` for include all
-  - JSON array for explicit list
+- Updates doc selection state for the current agent:
+  - `temp:skill:docs_by_agent:<agent>/<name>` = `*` for include all
+  - `temp:skill:docs_by_agent:<agent>/<name>` = JSON array for explicit list
+  - Legacy key `temp:skill:docs:<name>` is still supported and migrated.
 
 ### `skill_list_docs`
 
@@ -857,7 +888,9 @@ Input:
     - `workspace://rel/path` to copy/link from current workspace
     - `skill://<name>/rel/path` to copy/link from a staged skill
   - `to` workspace‑relative destination; defaults to
-    `WORK_DIR/inputs/<basename>`
+    `WORK_DIR/inputs/<basename>`. For convenience, `skill_run` treats
+    `to` values starting with `inputs/` as `work/inputs/` (because
+    `inputs/` is a symlink under the skill root).
   - `mode`: `copy` (default) or `link` when feasible
   - `pin`: for `artifact://name` without `@version`, reuse the first
     resolved version for the same `to` path (best effort)
@@ -869,6 +902,9 @@ Input:
     command runs.
   - Filenames are sanitized to a safe basename and de-duplicated with a
     numeric suffix when needed.
+  - If a file input has no filename and `file_id` is an `artifact://...`
+    reference, the framework infers the basename from the artifact name.
+    Otherwise, it falls back to `upload_N`.
   - If a file input includes raw bytes (`data`), those bytes are written
     directly into the workspace.
   - If a file input is referenced only by `file_id`:
@@ -950,6 +986,8 @@ Output:
     Use `ref` with `read_file` to fetch text content on demand.
   - `size_bytes` is the file size on disk; `truncated=true` means the
     collected content hit internal caps (for example, 4 MiB/file).
+  - If the command fails or times out, zero-byte collected files are
+    omitted to avoid misleading shell-redirection artifacts.
 - `warnings` (optional): non-fatal notes (for example, when artifact
   saving is skipped)
 - `artifact_files` with `name`, `version` appears in two cases:
@@ -958,6 +996,10 @@ Output:
 
 Typical flow:
 1) Call `skill_load` to inject body/docs
+   - When using `llmagent.LLMAgent`, this step is required by default:
+     `skill_run` rejects calls unless `skill_load` has been called for
+     that skill. Disable with:
+     `llmagent.WithSkillRunRequireSkillLoaded(false)`.
 2) Call `skill_run` and collect outputs:
    - Legacy: use `output_files` globs
    - Declarative: use `outputs` to drive collect/inline/save

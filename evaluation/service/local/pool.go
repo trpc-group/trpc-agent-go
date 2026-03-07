@@ -26,6 +26,7 @@ type evalCaseInferenceParam struct {
 	ctx      context.Context
 	req      *service.InferenceRequest
 	evalCase *evalset.EvalCase
+	opts     *service.Options
 	svc      *local
 	results  []*service.InferenceResult
 	wg       *sync.WaitGroup
@@ -36,6 +37,7 @@ func (p *evalCaseInferenceParam) reset() {
 	p.ctx = nil
 	p.req = nil
 	p.evalCase = nil
+	p.opts = nil
 	p.svc = nil
 	p.results = nil
 	p.wg = nil
@@ -60,11 +62,28 @@ func createEvalCaseInferencePool(size int) (*ants.PoolWithFunc, error) {
 			param.reset()
 			evalCaseInferenceParamPool.Put(param)
 		}()
-		param.results[param.idx] = param.svc.inferenceEvalCase(param.ctx, param.req, param.evalCase)
+		param.results[param.idx] = param.svc.inferenceEvalCase(param.ctx, param.req, param.evalCase, param.opts)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create eval case inference pool: %w", err)
 	}
+	return pool, nil
+}
+
+func (s *local) ensureEvalCaseInferencePool(size int) (*ants.PoolWithFunc, error) {
+	s.evalCaseInferencePoolsMu.Lock()
+	defer s.evalCaseInferencePoolsMu.Unlock()
+	if s.evalCaseInferencePools == nil {
+		s.evalCaseInferencePools = make(map[int]*ants.PoolWithFunc)
+	}
+	if pool := s.evalCaseInferencePools[size]; pool != nil {
+		return pool, nil
+	}
+	pool, err := createEvalCaseInferencePool(size)
+	if err != nil {
+		return nil, err
+	}
+	s.evalCaseInferencePools[size] = pool
 	return pool, nil
 }
 
@@ -73,6 +92,7 @@ type evalCaseEvaluationParam struct {
 	ctx             context.Context
 	req             *service.EvaluateRequest
 	inferenceResult *service.InferenceResult
+	opts            *service.Options
 	svc             *local
 	results         []*evalresult.EvalCaseResult
 	errs            []error
@@ -84,6 +104,7 @@ func (p *evalCaseEvaluationParam) reset() {
 	p.ctx = nil
 	p.req = nil
 	p.inferenceResult = nil
+	p.opts = nil
 	p.svc = nil
 	p.results = nil
 	p.errs = nil
@@ -109,7 +130,7 @@ func createEvalCaseEvaluationPool(size int) (*ants.PoolWithFunc, error) {
 			param.reset()
 			evalCaseEvaluationParamPool.Put(param)
 		}()
-		caseResult, err := param.svc.evaluateCase(param.ctx, param.req, param.inferenceResult)
+		caseResult, err := param.svc.evaluateCase(param.ctx, param.req, param.inferenceResult, param.opts)
 		if err != nil {
 			evalCaseID := ""
 			if param.inferenceResult != nil {
@@ -125,5 +146,22 @@ func createEvalCaseEvaluationPool(size int) (*ants.PoolWithFunc, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create eval case evaluation pool: %w", err)
 	}
+	return pool, nil
+}
+
+func (s *local) ensureEvalCaseEvaluationPool(size int) (*ants.PoolWithFunc, error) {
+	s.evalCaseEvaluationPoolsMu.Lock()
+	defer s.evalCaseEvaluationPoolsMu.Unlock()
+	if s.evalCaseEvaluationPools == nil {
+		s.evalCaseEvaluationPools = make(map[int]*ants.PoolWithFunc)
+	}
+	if pool := s.evalCaseEvaluationPools[size]; pool != nil {
+		return pool, nil
+	}
+	pool, err := createEvalCaseEvaluationPool(size)
+	if err != nil {
+		return nil, err
+	}
+	s.evalCaseEvaluationPools[size] = pool
 	return pool, nil
 }

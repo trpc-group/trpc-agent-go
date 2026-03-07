@@ -10,10 +10,64 @@
 package model
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 	"time"
 )
+
+type typedCodedError struct{}
+
+const (
+	typedCodedErrMsg     = "boom"
+	typedCodedErrType    = "fatal"
+	typedCodedErrCodeInt = -1
+	typedCodedErrCodeStr = "-1"
+)
+
+func (typedCodedError) Error() string { return typedCodedErrMsg }
+
+func (typedCodedError) ErrorType() string { return typedCodedErrType }
+
+func (typedCodedError) Code() int { return typedCodedErrCodeInt }
+
+type errorCodeStringError struct{}
+
+const errorCodeStringErrCode = "E_CODE"
+
+func (errorCodeStringError) Error() string { return typedCodedErrMsg }
+
+func (errorCodeStringError) ErrorCode() string { return errorCodeStringErrCode }
+
+type codeStringError struct{}
+
+const codeStringErrCode = "E_STR"
+
+func (codeStringError) Error() string { return typedCodedErrMsg }
+
+func (codeStringError) Code() string { return codeStringErrCode }
+
+type codeInt32Error struct{}
+
+const (
+	codeInt32ErrCode    int32 = 32
+	codeInt32ErrCodeStr       = "32"
+)
+
+func (codeInt32Error) Error() string { return typedCodedErrMsg }
+
+func (codeInt32Error) Code() int32 { return codeInt32ErrCode }
+
+type codeInt64Error struct{}
+
+const (
+	codeInt64ErrCode    int64 = 64
+	codeInt64ErrCodeStr       = "64"
+)
+
+func (codeInt64Error) Error() string { return typedCodedErrMsg }
+
+func (codeInt64Error) Code() int64 { return codeInt64ErrCode }
 
 func TestErrorTypeConstants(t *testing.T) {
 	tests := []struct {
@@ -265,6 +319,126 @@ func TestResponseError_Structure(t *testing.T) {
 	}
 	if *err.Code != "invalid_value" {
 		t.Errorf("ResponseError.Code = %v, want %v", *err.Code, "invalid_value")
+	}
+}
+
+func TestResponseError_ImplementsError(t *testing.T) {
+	var respErr *ResponseError
+	if respErr.Error() != "" {
+		t.Errorf("(*ResponseError)(nil).Error() = %q, want %q", respErr.Error(), "")
+	}
+
+	respErr = &ResponseError{Message: "boom"}
+	var err error = respErr
+	if err.Error() != "boom" {
+		t.Errorf("error.Error() = %q, want %q", err.Error(), "boom")
+	}
+}
+
+func TestResponseErrorFromError_PreservesTypeAndCode(t *testing.T) {
+	code := "E42"
+	in := &ResponseError{
+		Type:    "biz_error",
+		Code:    &code,
+		Message: "bad",
+	}
+
+	got := ResponseErrorFromError(in, ErrorTypeFlowError)
+	if got == nil {
+		t.Fatal("ResponseErrorFromError() returned nil")
+	}
+	if got.Type != "biz_error" {
+		t.Errorf("Type = %q, want %q", got.Type, "biz_error")
+	}
+	if got.Code == nil || *got.Code != "E42" {
+		t.Errorf("Code = %v, want %q", got.Code, "E42")
+	}
+	if got.Message != "bad" {
+		t.Errorf("Message = %q, want %q", got.Message, "bad")
+	}
+}
+
+func TestResponseErrorFromError_ExtractsTypeAndCode(t *testing.T) {
+	err := errors.New("wrapper: boom")
+	err = errors.Join(err, typedCodedError{})
+
+	got := ResponseErrorFromError(err, ErrorTypeFlowError)
+	if got == nil {
+		t.Fatal("ResponseErrorFromError() returned nil")
+	}
+	if got.Type != typedCodedErrType {
+		t.Errorf("Type = %q, want %q", got.Type, typedCodedErrType)
+	}
+	if got.Code == nil || *got.Code != typedCodedErrCodeStr {
+		t.Errorf("Code = %v, want %q", got.Code, typedCodedErrCodeStr)
+	}
+	if got.Message == "" {
+		t.Error("Message should not be empty")
+	}
+}
+
+func TestResponseErrorFromError_Nil(t *testing.T) {
+	got := ResponseErrorFromError(nil, ErrorTypeFlowError)
+	if got != nil {
+		t.Fatalf("ResponseErrorFromError(nil) = %#v, want nil", got)
+	}
+}
+
+func TestResponseErrorFromError_FallbackTypeAndNoCode(t *testing.T) {
+	err := errors.New("boom")
+
+	got := ResponseErrorFromError(err, ErrorTypeFlowError)
+	if got == nil {
+		t.Fatal("ResponseErrorFromError() returned nil")
+	}
+	if got.Type != ErrorTypeFlowError {
+		t.Errorf("Type = %q, want %q", got.Type, ErrorTypeFlowError)
+	}
+	if got.Code != nil {
+		t.Errorf("Code = %v, want nil", got.Code)
+	}
+	if got.Message != "boom" {
+		t.Errorf("Message = %q, want %q", got.Message, "boom")
+	}
+}
+
+func TestResponseErrorFromError_UsesErrorCodeMethod(t *testing.T) {
+	got := ResponseErrorFromError(errorCodeStringError{}, ErrorTypeFlowError)
+	if got == nil {
+		t.Fatal("ResponseErrorFromError() returned nil")
+	}
+	if got.Code == nil || *got.Code != errorCodeStringErrCode {
+		t.Errorf("Code = %v, want %q", got.Code, errorCodeStringErrCode)
+	}
+}
+
+func TestResponseErrorFromError_UsesCodeStringMethod(t *testing.T) {
+	got := ResponseErrorFromError(codeStringError{}, ErrorTypeFlowError)
+	if got == nil {
+		t.Fatal("ResponseErrorFromError() returned nil")
+	}
+	if got.Code == nil || *got.Code != codeStringErrCode {
+		t.Errorf("Code = %v, want %q", got.Code, codeStringErrCode)
+	}
+}
+
+func TestResponseErrorFromError_UsesCodeInt32Method(t *testing.T) {
+	got := ResponseErrorFromError(codeInt32Error{}, ErrorTypeFlowError)
+	if got == nil {
+		t.Fatal("ResponseErrorFromError() returned nil")
+	}
+	if got.Code == nil || *got.Code != codeInt32ErrCodeStr {
+		t.Errorf("Code = %v, want %q", got.Code, codeInt32ErrCodeStr)
+	}
+}
+
+func TestResponseErrorFromError_UsesCodeInt64Method(t *testing.T) {
+	got := ResponseErrorFromError(codeInt64Error{}, ErrorTypeFlowError)
+	if got == nil {
+		t.Fatal("ResponseErrorFromError() returned nil")
+	}
+	if got.Code == nil || *got.Code != codeInt64ErrCodeStr {
+		t.Errorf("Code = %v, want %q", got.Code, codeInt64ErrCodeStr)
 	}
 }
 

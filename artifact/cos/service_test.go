@@ -202,7 +202,7 @@ func createMockService() (*Service, *MockTransport) {
 
 type stubClient struct {
 	getBucketFn    func(context.Context, string) (*cos.BucketGetResult, error)
-	putObjectFn    func(context.Context, string, io.Reader, string) error
+	putObjectFn    func(context.Context, string, io.Reader, cos.ObjectPutOptions) error
 	getObjectFn    func(context.Context, string) (io.ReadCloser, http.Header, error)
 	deleteObjectFn func(context.Context, string) error
 }
@@ -221,12 +221,12 @@ func (c *stubClient) PutObject(
 	ctx context.Context,
 	name string,
 	content io.Reader,
-	mimeType string,
+	opt cos.ObjectPutOptions,
 ) error {
 	if c.putObjectFn == nil {
 		return nil
 	}
-	return c.putObjectFn(ctx, name, content, mimeType)
+	return c.putObjectFn(ctx, name, content, opt)
 }
 
 func (c *stubClient) GetObject(

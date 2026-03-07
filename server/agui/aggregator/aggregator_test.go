@@ -64,6 +64,23 @@ func TestAggregatorFlushOnMessageChange(t *testing.T) {
 	require.Equal(t, "there", second.Delta)
 }
 
+func TestAggregatorMergesReasoningSameMessage(t *testing.T) {
+	ctx := context.Background()
+	agg := New(ctx)
+	events, err := agg.Append(ctx, aguievents.NewReasoningMessageContentEvent("msg", "think"))
+	require.NoError(t, err)
+	require.Nil(t, events)
+	events, err = agg.Append(ctx, aguievents.NewReasoningMessageContentEvent("msg", "ing"))
+	require.NoError(t, err)
+	require.Nil(t, events)
+	flushed, err := agg.Flush(ctx)
+	require.NoError(t, err)
+	require.Len(t, flushed, 1)
+	content, ok := flushed[0].(*aguievents.ReasoningMessageContentEvent)
+	require.True(t, ok)
+	require.Equal(t, "thinking", content.Delta)
+}
+
 func TestAggregatorFlushesBeforeNonTextEvent(t *testing.T) {
 	ctx := context.Background()
 	agg := New(ctx)
@@ -80,6 +97,17 @@ func TestAggregatorFlushesBeforeNonTextEvent(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "abc", content.Delta)
 	require.Same(t, runStarted, events[1])
+}
+
+func TestAggregatorFlushesOnContentTypeChange(t *testing.T) {
+	ctx := context.Background()
+	agg := New(ctx)
+	_, err := agg.Append(ctx, aguievents.NewReasoningMessageContentEvent("msg", "a"))
+	require.NoError(t, err)
+	events, err := agg.Append(ctx, aguievents.NewTextMessageContentEvent("msg", "b"))
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	require.IsType(t, (*aguievents.ReasoningMessageContentEvent)(nil), events[0])
 }
 
 func TestAggregatorDisabledPassThrough(t *testing.T) {

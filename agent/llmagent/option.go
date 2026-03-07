@@ -116,6 +116,8 @@ var (
 		SkillLoadMode: SkillLoadModeTurn,
 
 		SkipSkillsFallbackOnSessionSummary: true,
+
+		skillRunRequireSkillLoaded: true,
 	}
 )
 
@@ -309,6 +311,9 @@ type Options struct {
 	// skillRunForceSaveArtifacts forces skill_run to persist collected
 	// outputs via the artifact service when possible.
 	skillRunForceSaveArtifacts bool
+	// skillRunRequireSkillLoaded rejects skill_run unless the skill was
+	// loaded via skill_load in the current session state.
+	skillRunRequireSkillLoaded bool
 	messageTimelineFilterMode  string
 	messageBranchFilterMode    string
 
@@ -575,6 +580,17 @@ func WithSkillRunDeniedCommands(cmds ...string) Option {
 func WithSkillRunForceSaveArtifacts(enable bool) Option {
 	return func(opts *Options) {
 		opts.skillRunForceSaveArtifacts = enable
+	}
+}
+
+// WithSkillRunRequireSkillLoaded rejects skill_run unless the skill was
+// loaded via skill_load in the current session state.
+//
+// When enabled, models must call skill_load first to bring SKILL.md (and any
+// selected docs) into context, reducing hallucinated commands/scripts.
+func WithSkillRunRequireSkillLoaded(enable bool) Option {
+	return func(opts *Options) {
+		opts.skillRunRequireSkillLoaded = enable
 	}
 }
 

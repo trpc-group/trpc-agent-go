@@ -79,6 +79,47 @@ func (m *mockCallableTool) Call(ctx context.Context, args []byte) (any, error) {
 	return m.callFn(ctx, args)
 }
 
+type mockInvocationStateDeltaTool struct {
+	declaration *tool.Declaration
+	delta       map[string][]byte
+}
+
+func (m *mockInvocationStateDeltaTool) Declaration() *tool.Declaration {
+	if m.declaration != nil {
+		return m.declaration
+	}
+	return &tool.Declaration{Name: "mock"}
+}
+
+func (m *mockInvocationStateDeltaTool) StateDeltaForInvocation(
+	_ *agent.Invocation,
+	_ string,
+	_ []byte,
+	_ []byte,
+) map[string][]byte {
+	return m.delta
+}
+
+type mockStateDeltaTool struct {
+	declaration *tool.Declaration
+	delta       map[string][]byte
+}
+
+func (m *mockStateDeltaTool) Declaration() *tool.Declaration {
+	if m.declaration != nil {
+		return m.declaration
+	}
+	return &tool.Declaration{Name: "mock"}
+}
+
+func (m *mockStateDeltaTool) StateDelta(
+	_ string,
+	_ []byte,
+	_ []byte,
+) map[string][]byte {
+	return m.delta
+}
+
 func TestExecuteToolCall_MapsSubAgentToTransfer(t *testing.T) {
 	ctx := context.Background()
 	p := NewFunctionCallResponseProcessor(false, nil)
@@ -126,6 +167,47 @@ func TestExecuteToolCall_MapsSubAgentToTransfer(t *testing.T) {
 	require.NoError(t, json.Unmarshal(capturedArgs, &got))
 	assert.Equal(t, "weather-agent", got.AgentName)
 	assert.Equal(t, "What's the weather like in Tokyo?", got.Message)
+}
+
+func TestFunctionCallResponseProcessor_AttachStateDelta(t *testing.T) {
+	const (
+		deltaKey1 = "k1"
+		deltaVal1 = "v1"
+		deltaKey2 = "k2"
+		deltaVal2 = "v2"
+	)
+
+	p := &FunctionCallResponseProcessor{}
+	inv := &agent.Invocation{AgentName: "tester"}
+	args := []byte(`{"ok":true}`)
+	choice := &model.Choice{
+		Message: model.Message{
+			ToolID:   "call-1",
+			Content:  `{"result":"ok"}`,
+			ToolName: "tool",
+			Role:     model.RoleTool,
+		},
+	}
+
+	ev := &event.Event{}
+	tl := &mockInvocationStateDeltaTool{
+		declaration: &tool.Declaration{Name: "tool"},
+		delta: map[string][]byte{
+			deltaKey1: []byte(deltaVal1),
+		},
+	}
+	p.attachStateDelta(inv, tl, args, choice, ev)
+	require.Equal(t, []byte(deltaVal1), ev.StateDelta[deltaKey1])
+
+	ev2 := &event.Event{}
+	tl2 := &mockStateDeltaTool{
+		declaration: &tool.Declaration{Name: "tool"},
+		delta: map[string][]byte{
+			deltaKey2: []byte(deltaVal2),
+		},
+	}
+	p.attachStateDelta(inv, tl2, args, choice, ev2)
+	require.Equal(t, []byte(deltaVal2), ev2.StateDelta[deltaKey2])
 }
 
 func TestExecuteToolCall(t *testing.T) {

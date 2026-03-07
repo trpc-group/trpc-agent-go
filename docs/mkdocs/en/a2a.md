@@ -281,6 +281,9 @@ a2aAgent, err := a2aagent.New(
 	a2aagent.WithCustomEventConverter(customEventConverter),
 
 	a2aagent.WithCustomA2AConverter(customA2AConverter),
+
+	// Explicitly control streaming mode (overrides AgentCard capability declaration)
+	a2aagent.WithEnableStreaming(true),
 )
 ```
 
@@ -510,12 +513,25 @@ server, _ := a2a.New(
 
 The UserID from `invocation.Session.UserID` will be automatically sent via the configured header to the A2A server.
 
+### ADK Compatibility Mode
+
+If you need to interoperate with Google ADK (Agent Development Kit) Python clients, you can enable ADK compatibility mode. When enabled, the Server will write additional `adk_`-prefixed keys (such as `adk_type`, `adk_thought`) in metadata to be compatible with ADK's part converter parsing logic:
+
+```go
+server, _ := a2a.New(
+	a2a.WithHost("localhost:8888"),
+	a2a.WithAgent(agent, true),
+	a2a.WithADKCompatibility(true), // Disabled by default
+)
+```
+
 ### Custom Converters
 
 For special requirements, you can customize message and event converters:
 
 ```go
-// Custom A2A message converter
+// Custom A2A message converter (Invocation -> A2A Message)
+// Implements the a2aagent.InvocationA2AConverter interface
 type CustomA2AConverter struct{}
 
 func (c *CustomA2AConverter) ConvertToA2AMessage(
@@ -524,32 +540,49 @@ func (c *CustomA2AConverter) ConvertToA2AMessage(
 	invocation *agent.Invocation,
 ) (*protocol.Message, error) {
 	// Custom message conversion logic
-	return &protocol.Message{
-		MessageID: invocation.InvocationID,
-		Role:      protocol.MessageRoleUser,
-		Parts:     []protocol.Part{/* custom content */},
-	}, nil
+	msg := protocol.NewMessage(protocol.MessageRoleUser, []protocol.Part{
+		protocol.NewTextPart(invocation.Message.Content),
+	})
+	return &msg, nil
 }
 
-// Custom event converter  
+// Custom event converter (A2A Response -> Event)
+// Implements the a2aagent.A2AEventConverter interface
 type CustomEventConverter struct{}
 
-func (c *CustomEventConverter) ConvertToEvent(
+func (c *CustomEventConverter) ConvertToEvents(
 	result protocol.MessageResult,
 	agentName string,
 	invocation *agent.Invocation,
-) (*event.Event, error) {
-	// Custom event conversion logic
-	return event.New(invocation.InvocationID, agentName), nil
+) ([]*event.Event, error) {
+	// Custom non-streaming event conversion logic
+	return []*event.Event{event.New(invocation.InvocationID, agentName)}, nil
+}
+
+func (c *CustomEventConverter) ConvertStreamingToEvents(
+	result protocol.StreamingMessageEvent,
+	agentName string,
+	invocation *agent.Invocation,
+) ([]*event.Event, error) {
+	// Custom streaming event conversion logic
+	return []*event.Event{event.New(invocation.InvocationID, agentName)}, nil
 }
 
 // Use custom converters
 a2aAgent, _ := a2aagent.New(
 	a2aagent.WithAgentCardURL("http://remote-agent:8888"),
-	a2aagent.WithA2AMessageConverter(&CustomA2AConverter{}),
-	a2aagent.WithEventConverter(&CustomEventConverter{}),
+	a2aagent.WithCustomA2AConverter(&CustomA2AConverter{}),
+	a2aagent.WithCustomEventConverter(&CustomEventConverter{}),
 )
 ```
+
+## Protocol Interaction Specification
+
+For detailed specifications on how tool calls, code execution, reasoning content, and other events are transmitted through the A2A protocol, as well as Metadata field definitions, ADK compatibility mode, and distributed tracing, please refer to the dedicated document:
+
+**[A2A Protocol Interaction Specification](a2a-interaction.md)**
+
+This document defines the extension specification of trpc-agent-go on top of the A2A protocol, serving as the standard reference for Client and Server implementations.
 
 ## Summary: A2A Server vs A2AAgent
 

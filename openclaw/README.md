@@ -102,10 +102,12 @@ gateway:
   require_mention: false
   mention_patterns: ["@mybot"]
 
-telegram:
-  token: "<YOUR_TELEGRAM_BOT_TOKEN>"
-  streaming: "progress"
-  http_timeout: "60s"
+channels:
+  - type: "telegram"
+    config:
+      token: "<YOUR_TELEGRAM_BOT_TOKEN>"
+      streaming: "progress"
+      http_timeout: "60s"
 
 session:
   backend: "inmemory"
@@ -128,11 +130,12 @@ go run ./cmd/openclaw -config ./openclaw.yaml
 Notes:
 
 - Duration fields use Go-style strings like `60s`, `10m`, `1h`.
-- For secrets (model keys, Telegram tokens), prefer environment variables
-  or CLI flags instead of committing config files.
+- For secrets (model keys, Telegram tokens), keep them out of version control.
+  Prefer environment variables when available.
 - Plugin sections:
-  - `channels` enables additional channel plugins and requires a custom
-    binary that imports those plugins. See `openclaw/EXTENDING.md` and
+  - `channels` configures channel plugins. This demo binary ships with the
+    `telegram` channel plugin; other channel types require a custom binary
+    that imports them. See `openclaw/EXTENDING.md` and
     `openclaw/examples/stdin_chat/`.
   - `tools.enable_parallel_tools` toggles parallel tool execution for one
     model step (optional).
@@ -388,40 +391,40 @@ privacy enabled is usually fine. If you want to disable privacy, use
 
 ### 4) Run the binary
 
-Run the binary with `-telegram-token`:
+Add a Telegram channel to your config file:
+
+```yaml
+channels:
+  - type: "telegram"
+    config:
+      token: "<YOUR_TELEGRAM_BOT_TOKEN>"
+      # Optional:
+      # streaming: "progress"
+      # proxy: "http://127.0.0.1:7890"
+      # http_timeout: "60s"
+      # max_retries: 3
+```
+
+Run:
 
 ```bash
 cd openclaw
 go run ./cmd/openclaw \
   -mode mock \
   -http-addr :8080 \
-  -telegram-token "$TELEGRAM_BOT_TOKEN"
+  -config ./openclaw.yaml
 ```
 
 ### Telegram networking (proxy / timeout / retries)
 
-If your environment requires an HTTP proxy, set `-telegram-proxy`:
+Configure Telegram networking under the Telegram channel `config:`:
 
-```bash
-cd openclaw
-go run ./cmd/openclaw \
-  -mode mock \
-  -telegram-token "$TELEGRAM_BOT_TOKEN" \
-  -telegram-proxy "http://127.0.0.1:7890"
-```
+- `proxy`: HTTP proxy URL (optional)
+- `http_timeout`: HTTP client timeout (optional; should be > 25s long polling)
+- `max_retries`: retry count for transient failures (optional; default: 3)
 
-If you set `-telegram-http-timeout`, make sure it is larger than the
-long-polling timeout (25s by default), for example:
-
-```bash
-cd openclaw
-go run ./cmd/openclaw \
-  -mode mock \
-  -telegram-token "$TELEGRAM_BOT_TOKEN" \
-  -telegram-http-timeout 60s
-```
-
-You can also tune retries with `-telegram-max-retries` (default: 3).
+To override the Telegram API base URL (for testing), set
+`OPENCLAW_TELEGRAM_BASE_URL`.
 
 ### Telegram doctor command
 
@@ -429,8 +432,7 @@ To quickly validate your Telegram setup (token, webhook, pairing store):
 
 ```bash
 cd openclaw
-go run ./cmd/openclaw doctor \
-  -telegram-token "$TELEGRAM_BOT_TOKEN"
+go run ./cmd/openclaw doctor -config ./openclaw.yaml
 ```
 
 ### 5) Send a message
@@ -446,30 +448,26 @@ To approve a user, run:
 
 ```bash
 cd openclaw
-go run ./cmd/openclaw pairing approve <CODE> \
-  -telegram-token "$TELEGRAM_BOT_TOKEN"
+go run ./cmd/openclaw pairing approve <CODE> -config ./openclaw.yaml
 ```
 
 You can also list pending pairing requests:
 
 ```bash
 cd openclaw
-go run ./cmd/openclaw pairing list \
-  -telegram-token "$TELEGRAM_BOT_TOKEN"
+go run ./cmd/openclaw pairing list -config ./openclaw.yaml
 ```
 
 After approval, the bot forwards inbound text to the gateway and sends
 the final reply back to Telegram.
 
-To disable pairing (less safe), run the gateway with:
+To disable pairing (less safe), set the Telegram channel `dm_policy` to `open`:
 
-```bash
-cd openclaw
-go run ./cmd/openclaw \
-  -mode mock \
-  -http-addr :8080 \
-  -telegram-token "$TELEGRAM_BOT_TOKEN" \
-  -telegram-dm-policy open
+```yaml
+channels:
+  - type: "telegram"
+    config:
+      dm_policy: "open"
 ```
 
 ### Telegram commands
@@ -484,7 +482,7 @@ This demo supports a few basic commands:
 This demo can optionally use `editMessageText` to show a processing preview,
 then replace it with the final answer.
 
-`-telegram-streaming` modes:
+Telegram `streaming` modes (Telegram channel config):
 
 - `off`: send the final answer as messages.
 - `block`: send one "Processing..." message, then edit once to final.
@@ -492,12 +490,11 @@ then replace it with the final answer.
 
 To disable streaming:
 
-```bash
-cd openclaw
-go run ./cmd/openclaw \
-  -mode mock \
-  -telegram-token "$TELEGRAM_BOT_TOKEN" \
-  -telegram-streaming off
+```yaml
+channels:
+  - type: "telegram"
+    config:
+      streaming: "off"
 ```
 
 ### Telegram threads and topics
@@ -520,7 +517,8 @@ can resume from the last processed update.
 
 On the first run (when no offset file exists), the poller drains pending
 updates by default to avoid replying to very old messages. You can
-disable this behavior with `-telegram-start-from-latest=false`.
+disable this behavior with `start_from_latest: false` in the Telegram channel
+config.
 
 ## Safety knobs
 
@@ -531,7 +529,7 @@ To only allow specific user IDs:
 ```bash
 go run ./cmd/openclaw \
   -mode mock \
-  -telegram-token "$TELEGRAM_BOT_TOKEN" \
+  -config ./openclaw.yaml \
   -allow-users "123456789,987654321"
 ```
 
@@ -560,50 +558,50 @@ To ignore group messages unless a mention pattern is present:
 ```bash
 go run ./cmd/openclaw \
   -mode mock \
-  -telegram-token "$TELEGRAM_BOT_TOKEN" \
-  -require-mention
+  -config ./openclaw.yaml \
+  -require-mention \
+  -mention "@mybot"
 ```
 
-When `-require-mention` is set and `-mention` is empty, this demo uses
-`@<bot_username>` as the default mention pattern.
+Mention patterns can also be set in config via `gateway.mention_patterns`.
 
-If Telegram is disabled (HTTP-only), you must provide `-mention` explicitly.
+If `-require-mention` (or `gateway.require_mention`) is enabled and mention
+patterns are empty, the gateway refuses to start.
 
 To override patterns:
 
 ```bash
 go run ./cmd/openclaw \
   -mode mock \
-  -telegram-token "$TELEGRAM_BOT_TOKEN" \
+  -config ./openclaw.yaml \
   -require-mention \
   -mention "@mybot,/agent"
 ```
 
 ### Telegram group policy and allowlist
 
-By default, this demo ignores all group messages (`-telegram-group-policy` is
+By default, this demo ignores all group messages (`group_policy` defaults to
 `disabled`).
 
 To enable groups (less safe), use:
 
-```bash
-cd openclaw
-go run ./cmd/openclaw \
-  -mode mock \
-  -telegram-token "$TELEGRAM_BOT_TOKEN" \
-  -telegram-group-policy open \
-  -require-mention
+```yaml
+channels:
+  - type: "telegram"
+    config:
+      group_policy: "open"
 ```
 
 To allowlist specific groups/topics, use:
 
-```bash
-cd openclaw
-go run ./cmd/openclaw \
-  -mode mock \
-  -telegram-token "$TELEGRAM_BOT_TOKEN" \
-  -telegram-group-policy allowlist \
-  -telegram-allow-threads "<chat_id>,<chat_id>:topic:<message_thread_id>"
+```yaml
+channels:
+  - type: "telegram"
+    config:
+      group_policy: "allowlist"
+      allow_threads:
+        - "<chat_id>"
+        - "<chat_id>:topic:<message_thread_id>"
 ```
 
 You can discover `chat_id` and `message_thread_id` from `getUpdates`.
@@ -619,7 +617,7 @@ It is disabled by default. To enable:
 ```bash
 go run ./cmd/openclaw \
   -mode openai \
-  -telegram-token "$TELEGRAM_BOT_TOKEN" \
+  -config ./openclaw.yaml \
   -enable-local-exec
 ```
 
@@ -635,7 +633,10 @@ borrows a few design ideas from OpenClaw:
 
 ### Bundled skills
 
-This demo includes a few simple bundled skills under `openclaw/skills/`:
+This demo vendors the upstream OpenClaw skill pack under `openclaw/skills/`
+(see `openclaw/skills/README.md` for attribution and license).
+
+It also includes a few simple demo skills:
 
 - `hello`: write a small file to `out/`.
 - `envdump`: dump environment info to `out/env.txt`.
@@ -664,8 +665,30 @@ demo can filter the skill at load time based on the local environment:
 - `metadata.openclaw.requires.bins`
 - `metadata.openclaw.requires.anyBins`
 - `metadata.openclaw.requires.env`
+- `metadata.openclaw.requires.config`
 
 Enable `-skills-debug` to log which skills are skipped and why.
+
+### OpenClaw-style skill config (`skills.entries`)
+
+Upstream OpenClaw supports providing per-skill environment variables and
+API keys via config. This demo supports the same idea in YAML:
+
+```yaml
+skills:
+  # Optional: restrict which bundled skills are enabled by default.
+  # Applies only to bundled skills under ./openclaw/skills.
+  allowBundled: ["gh-issues", "notion"]
+
+  # Optional: per-skill config (by skillKey or skill name).
+  entries:
+    gh-issues:
+      # Injected into metadata.openclaw.primaryEnv when present.
+      apiKey: "..."
+      # Injected into skill_run env (never overrides host env).
+      env:
+        GH_TOKEN: "..."
+```
 
 ### `{baseDir}` placeholder
 
@@ -875,7 +898,7 @@ Enable with:
 go run ./cmd/openclaw \
   -mode openai \
   -model deepseek-chat \
-  -telegram-token "$TELEGRAM_BOT_TOKEN" \
+  -config ./openclaw.yaml \
   -enable-openclaw-tools
 ```
 

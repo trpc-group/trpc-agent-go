@@ -294,14 +294,6 @@ func (s *Service) GetSession(
 		if err != nil {
 			return nil, fmt.Errorf("clickhouse session service get session state failed: %w", err)
 		}
-
-		// Refresh session TTL if configured and session exists
-		if sess != nil && s.opts.sessionTTL > 0 {
-			if err := s.refreshSessionTTL(c.Context, c.Key); err != nil {
-				log.WarnfContext(c.Context, "failed to refresh session TTL: %v", err)
-				// Don't fail the GetSession call, just log the warning
-			}
-		}
 		return sess, nil
 	}
 	return hook.RunGetSessionHooks(s.opts.getSessionHooks, hctx, final)

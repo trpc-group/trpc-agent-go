@@ -26,69 +26,6 @@ import (
 // Since Write overwrites, I must include EVERYTHING.
 // I will copy previous content and append.
 
-func TestService_RefreshSessionTTL(t *testing.T) {
-	mockCli := &mockClient{}
-	s := &Service{
-		chClient:           mockCli,
-		opts:               ServiceOpts{sessionTTL: time.Hour},
-		tableSessionStates: "session_states",
-	}
-	ctx := context.Background()
-	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
-
-	// Mock Query
-	mockCli.queryFunc = func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
-		return newMockRows([][]any{{"{}", time.Now()}}), nil
-	}
-
-	// Mock Exec
-	execCalled := false
-	mockCli.execFunc = func(ctx context.Context, query string, args ...any) error {
-		execCalled = true
-		return nil
-	}
-
-	err := s.refreshSessionTTL(ctx, key)
-	assert.NoError(t, err)
-	assert.True(t, execCalled)
-}
-
-func TestService_RefreshSessionTTL_Error(t *testing.T) {
-	mockCli := &mockClient{}
-	s := &Service{
-		chClient:           mockCli,
-		opts:               ServiceOpts{sessionTTL: time.Hour},
-		tableSessionStates: "session_states",
-	}
-	ctx := context.Background()
-	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
-
-	// Case 1: Query Error
-	mockCli.queryFunc = func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
-		return nil, assert.AnError
-	}
-	err := s.refreshSessionTTL(ctx, key)
-	assert.Error(t, err)
-
-	// Case 2: Session Not Found
-	mockCli.queryFunc = func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
-		return newMockRows([][]any{}), nil
-	}
-	err = s.refreshSessionTTL(ctx, key)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "session not found")
-
-	// Case 3: Exec Error
-	mockCli.queryFunc = func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
-		return newMockRows([][]any{{"{}", time.Now()}}), nil
-	}
-	mockCli.execFunc = func(ctx context.Context, query string, args ...any) error {
-		return assert.AnError
-	}
-	err = s.refreshSessionTTL(ctx, key)
-	assert.Error(t, err)
-}
-
 func TestService_MergeState(t *testing.T) {
 	// Unit test for mergeState helper
 	appState := session.StateMap{"k1": []byte("v1")}

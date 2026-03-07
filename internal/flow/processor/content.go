@@ -16,13 +16,16 @@ package processor
 import (
 	"context"
 	"fmt"
+	"path"
 	"sort"
 	"strings"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -641,11 +644,31 @@ func fileNamesForAnnotation(
 		}
 		name := strings.TrimSpace(part.File.Name)
 		if name == "" {
+			name = fileNameFromArtifactRef(part.File.FileID)
+		}
+		if name == "" {
 			name = fmt.Sprintf(attachedFileNameFallbackFmt, count)
 		}
 		names = append(names, name)
 	}
 	return names, count
+}
+
+func fileNameFromArtifactRef(fileID string) string {
+	s := strings.TrimSpace(fileID)
+	if !strings.HasPrefix(s, fileref.ArtifactPrefix) {
+		return ""
+	}
+	rest := strings.TrimPrefix(s, fileref.ArtifactPrefix)
+	name, _, err := codeexecutor.ParseArtifactRef(rest)
+	if err != nil {
+		return ""
+	}
+	base := path.Base(strings.TrimSpace(name))
+	if base == "." || base == "/" || base == ".." {
+		return ""
+	}
+	return base
 }
 
 // applyMaxHistoryRuns trims messages to at most maxRuns entries from the tail.

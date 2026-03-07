@@ -522,6 +522,11 @@ func registerTools(options *Options) ([]tool.Tool, map[string]bool) {
 				toolskill.WithForceSaveArtifacts(true),
 			)
 		}
+		if options.skillRunRequireSkillLoaded {
+			runOpts = append(runOpts,
+				toolskill.WithRequireSkillLoaded(true),
+			)
+		}
 		allTools = append(allTools, toolskill.NewRunTool(
 			options.skillsRepository, exec, runOpts...,
 		))
