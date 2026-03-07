@@ -291,6 +291,18 @@ func TestIsRunnerCompletion(t *testing.T) {
 	require.True(t, evt.IsRunnerCompletion())
 }
 
+func TestIsError(t *testing.T) {
+	var nilEvt *Event
+	require.False(t, nilEvt.IsError())
+	require.False(t, (&Event{}).IsError())
+	require.False(t, (&Event{Response: &model.Response{Done: true, Object: model.ObjectTypeChatCompletion}}).IsError())
+	require.True(t, (&Event{Response: &model.Response{Done: true, Object: model.ObjectTypeError}}).IsError())
+	require.True(t, (&Event{Response: &model.Response{
+		Done:  true,
+		Error: &model.ResponseError{Type: model.ErrorTypeAPIError, Message: "boom"},
+	}}).IsError())
+}
+
 func TestEmitEvent_WrapperAndNilChannel(t *testing.T) {
 	// Wrapper uses EmitWithoutTimeout, ensure success path works
 	ch := make(chan *Event, 1)
