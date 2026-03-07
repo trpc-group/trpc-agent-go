@@ -186,6 +186,10 @@ sessionService, err := postgres.NewService(
     postgres.WithCleanupInterval(10*time.Minute),
     postgres.WithSoftDelete(true),
 )
+// Cleanup behavior:
+// - softDelete=true: expired data marked as deleted_at = NOW()
+// - softDelete=false: expired data physically deleted
+// - Queries always include `WHERE deleted_at IS NULL`
 ```
 
 ## With Summary

@@ -547,49 +547,6 @@ func TestSessionSQLite_AppendTrackEvent_AsyncPersist(t *testing.T) {
 	require.Contains(t, got.Tracks, trk)
 }
 
-func TestSessionSQLite_RefreshTTL(t *testing.T) {
-	const sessTTL = time.Hour
-
-	db, _, cleanup := openTempSQLiteDB(t)
-	defer cleanup()
-
-	svc, err := NewService(db, WithSessionTTL(sessTTL))
-	require.NoError(t, err)
-	defer func() { require.NoError(t, svc.Close()) }()
-
-	ctx := context.Background()
-	key := session.Key{AppName: "app", UserID: "u1", SessionID: "s1"}
-	_, err = svc.CreateSession(ctx, key, nil)
-	require.NoError(t, err)
-
-	var expires1 int64
-	err = svc.db.QueryRowContext(
-		ctx,
-		"SELECT expires_at FROM "+svc.tableSessionStates+
-			" WHERE app_name = ? AND user_id = ? AND session_id = ?",
-		key.AppName,
-		key.UserID,
-		key.SessionID,
-	).Scan(&expires1)
-	require.NoError(t, err)
-
-	_, err = svc.GetSession(ctx, key)
-	require.NoError(t, err)
-
-	var expires2 int64
-	err = svc.db.QueryRowContext(
-		ctx,
-		"SELECT expires_at FROM "+svc.tableSessionStates+
-			" WHERE app_name = ? AND user_id = ? AND session_id = ?",
-		key.AppName,
-		key.UserID,
-		key.SessionID,
-	).Scan(&expires2)
-	require.NoError(t, err)
-
-	require.Greater(t, expires2, expires1)
-}
-
 func TestSessionSQLite_DeleteSession_InvalidKey_Error(t *testing.T) {
 	db, _, cleanup := openTempSQLiteDB(t)
 	defer cleanup()

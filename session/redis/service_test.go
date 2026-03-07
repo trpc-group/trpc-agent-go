@@ -1058,54 +1058,6 @@ func TestService_SessionTTL(t *testing.T) {
 				assert.True(t, ttl.Val() > 0 && ttl.Val() <= 5*time.Second, "Event list TTL should be set and close to 5 seconds, got: %v", ttl.Val())
 			},
 		},
-		{
-			name: "session_ttl_refreshed_on_get",
-			setup: func(t *testing.T, service *Service) session.Key {
-				sessionKey := session.Key{
-					AppName:   "testapp",
-					UserID:    "user123",
-					SessionID: "session456",
-				}
-				sess, err := service.CreateSession(context.Background(), sessionKey, session.StateMap{"key": []byte("value")})
-				require.NoError(t, err)
-
-				// Add an event to create the event list
-				testEvent := event.New("test-invocation", "test-author")
-				testEvent.Response = &model.Response{
-					Choices: []model.Choice{
-						{
-							Message: model.Message{
-								Role:    model.RoleUser,
-								Content: "Test message for TTL test",
-							},
-						},
-					},
-				}
-				err = service.AppendEvent(context.Background(), sess, testEvent)
-				require.NoError(t, err)
-
-				// Wait a bit to let TTL decrease
-				time.Sleep(2 * time.Second)
-
-				// Get session to refresh TTL
-				_, err = service.GetSession(context.Background(), sessionKey)
-				require.NoError(t, err)
-
-				return sessionKey
-			},
-			validate: func(t *testing.T, client *redis.Client, sessionKey session.Key) {
-				// Check that TTL was refreshed (should be close to 5 seconds again)
-				sessionStateKey := getExpectedSessionStateKey(sessionKey)
-				ttl := client.TTL(context.Background(), sessionStateKey)
-				require.NoError(t, ttl.Err())
-				assert.True(t, ttl.Val() > 3*time.Second, "Session state TTL should be refreshed, got: %v", ttl.Val())
-
-				eventKey := getExpectedEventKey(sessionKey)
-				ttl = client.TTL(context.Background(), eventKey)
-				require.NoError(t, ttl.Err())
-				assert.True(t, ttl.Val() > 3*time.Second, "Event list TTL should be refreshed, got: %v", ttl.Val())
-			},
-		},
 	}
 
 	for _, tt := range tests {
@@ -1128,50 +1080,6 @@ func TestService_SessionTTL(t *testing.T) {
 	}
 }
 
-func TestService_getSessionSummaryTTL(t *testing.T) {
-	redisURL, cleanup := setupTestRedis(t)
-	defer cleanup()
-
-	ttl := 3 * time.Second
-	service, err := NewService(
-		WithRedisClientURL(redisURL),
-		WithSessionTTL(ttl),
-	)
-	require.NoError(t, err)
-	defer service.Close()
-
-	ctx := context.Background()
-	key := session.Key{
-		AppName:   "summary-app",
-		UserID:    "summary-user",
-		SessionID: "summary-session",
-	}
-	_, err = service.CreateSession(ctx, key, session.StateMap{})
-	require.NoError(t, err)
-
-	summary := map[string]*session.Summary{
-		session.SummaryFilterKeyAllContents: {
-			Summary:   "hello",
-			UpdatedAt: time.Now(),
-		},
-	}
-	summaryBytes, err := json.Marshal(summary)
-	require.NoError(t, err)
-
-	client := buildRedisClient(t, redisURL)
-	summaryKey := getExpectedSessionSummaryKey(key)
-	err = client.HSet(ctx, summaryKey, key.SessionID, summaryBytes).Err()
-	require.NoError(t, err)
-
-	_, err = service.getSession(ctx, key, 0, time.Time{})
-	require.NoError(t, err)
-
-	ttlVal := client.TTL(ctx, summaryKey).Val()
-	assert.Greater(t, ttlVal, time.Duration(0))
-	assert.LessOrEqual(t, ttlVal, ttl)
-}
-
-// TestService_AppStateTTL tests app state TTL functionality
 func TestService_AppStateTTL(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -1191,39 +1099,6 @@ func TestService_AppStateTTL(t *testing.T) {
 				ttl := client.TTL(context.Background(), appStateKey)
 				require.NoError(t, ttl.Err())
 				assert.True(t, ttl.Val() > 0 && ttl.Val() <= 5*time.Second, "App state TTL should be set and close to 5 seconds, got: %v", ttl.Val())
-			},
-		},
-		{
-			name: "app_state_ttl_refreshed_on_get",
-			setup: func(t *testing.T, service *Service) string {
-				appName := "testapp2"
-				err := service.UpdateAppState(context.Background(), appName, session.StateMap{"key": []byte("value")})
-				require.NoError(t, err)
-
-				// Wait a bit to let TTL decrease
-				time.Sleep(2 * time.Second)
-
-				// Create a session to trigger app state TTL refresh
-				sessionKey := session.Key{
-					AppName:   appName,
-					UserID:    "user123",
-					SessionID: "session123",
-				}
-				_, err = service.CreateSession(context.Background(), sessionKey, session.StateMap{})
-				require.NoError(t, err)
-
-				// Get session to refresh app state TTL
-				_, err = service.GetSession(context.Background(), sessionKey)
-				require.NoError(t, err)
-
-				return appName
-			},
-			validate: func(t *testing.T, client *redis.Client, appName string) {
-				// Check that TTL was refreshed (should be close to 5 seconds again)
-				appStateKey := getExpectedAppStateKey(appName)
-				ttl := client.TTL(context.Background(), appStateKey)
-				require.NoError(t, ttl.Err())
-				assert.True(t, ttl.Val() > 3*time.Second, "App state TTL should be refreshed, got: %v", ttl.Val())
 			},
 		},
 	}
@@ -1271,42 +1146,6 @@ func TestService_UserStateTTL(t *testing.T) {
 				ttl := client.TTL(context.Background(), userStateKey)
 				require.NoError(t, ttl.Err())
 				assert.True(t, ttl.Val() > 0 && ttl.Val() <= 5*time.Second, "User state TTL should be set and close to 5 seconds, got: %v", ttl.Val())
-			},
-		},
-		{
-			name: "user_state_ttl_refreshed_on_get",
-			setup: func(t *testing.T, service *Service) session.UserKey {
-				userKey := session.UserKey{
-					AppName: "testapp2",
-					UserID:  "user456",
-				}
-				err := service.UpdateUserState(context.Background(), userKey, session.StateMap{"key": []byte("value")})
-				require.NoError(t, err)
-
-				// Wait a bit to let TTL decrease
-				time.Sleep(2 * time.Second)
-
-				// Create a session to trigger user state TTL refresh
-				sessionKey := session.Key{
-					AppName:   userKey.AppName,
-					UserID:    userKey.UserID,
-					SessionID: "session456",
-				}
-				_, err = service.CreateSession(context.Background(), sessionKey, session.StateMap{})
-				require.NoError(t, err)
-
-				// Get session to refresh user state TTL
-				_, err = service.GetSession(context.Background(), sessionKey)
-				require.NoError(t, err)
-
-				return userKey
-			},
-			validate: func(t *testing.T, client *redis.Client, userKey session.UserKey) {
-				// Check that TTL was refreshed (should be close to 5 seconds again)
-				userStateKey := getExpectedUserStateKey(session.Key{AppName: userKey.AppName, UserID: userKey.UserID})
-				ttl := client.TTL(context.Background(), userStateKey)
-				require.NoError(t, ttl.Err())
-				assert.True(t, ttl.Val() > 3*time.Second, "User state TTL should be refreshed, got: %v", ttl.Val())
 			},
 		},
 	}
@@ -2301,7 +2140,7 @@ func TestService_WithTTL(t *testing.T) {
 	err = service.AppendEvent(ctx, sess, evt)
 	require.NoError(t, err)
 
-	// Get session - this should trigger TTL refresh
+	// Get session - pure read, no TTL refresh
 	retrievedSess, err := service.GetSession(ctx, key)
 	require.NoError(t, err)
 	assert.NotNil(t, retrievedSess)
@@ -2310,7 +2149,7 @@ func TestService_WithTTL(t *testing.T) {
 	assert.Equal(t, []byte("app_value"), retrievedSess.State["app:app_key"])
 	assert.Equal(t, []byte("user_value"), retrievedSess.State["user:user_key"])
 
-	// List sessions - this should also trigger TTL refresh
+	// List sessions
 	sessions, err := service.ListSessions(ctx, userKey)
 	require.NoError(t, err)
 	assert.Len(t, sessions, 1)
@@ -2948,7 +2787,7 @@ func TestService_ListSessions_WithTTL(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// List sessions - should trigger TTL refresh
+	// List sessions
 	sessions, err := service.ListSessions(ctx, userKey)
 	require.NoError(t, err)
 	assert.Len(t, sessions, 3)

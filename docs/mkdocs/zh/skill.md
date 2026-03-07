@@ -865,7 +865,9 @@ agent := llmagent.New(
     - `workspace://rel/path` 从当前工作区相对路径复制/链接
     - `skill://<name>/rel/path` 从已缓存的技能目录复制/链接
   - `to`：目的路径（相对工作区）。未指定时默认写到
-    `WORK_DIR/inputs/<basename>`。
+    `WORK_DIR/inputs/<basename>`。为了方便，`skill_run` 也支持
+    `to` 以 `inputs/` 开头的写法，会被视为 `work/inputs/`
+    （因为技能根目录下 `inputs/` 是指向 `work/inputs/` 的软链）。
   - `mode`：`copy`（默认）或 `link`（在可行时建立符号链接）。
   - `pin`：当 `from=artifact://name` 未指定 `@version` 时，
     尝试复用同一 `to` 路径第一次解析到的版本（best effort）。
@@ -953,6 +955,8 @@ agent := llmagent.New(
     `ref` 配合 `read_file` 按需读取文本内容。
   - `size_bytes` 表示磁盘上的文件大小；`truncated=true` 表示收集内容触发了
     内部上限（例如 4 MiB/文件）。
+  - 当命令失败或超时时，会省略 0 字节的收集结果，避免 shell 重定向先创建
+    空文件而造成误导。
 - `warnings`（可选）：非致命提示（例如制品保存被跳过）
 - `artifact_files`：制品引用（`name`、`version`）。两种途径：
   - 传统路径：设置了 `save_as_artifacts` 时由工具保存并返回

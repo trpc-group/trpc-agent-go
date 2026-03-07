@@ -888,7 +888,9 @@ Input:
     - `workspace://rel/path` to copy/link from current workspace
     - `skill://<name>/rel/path` to copy/link from a staged skill
   - `to` workspace‑relative destination; defaults to
-    `WORK_DIR/inputs/<basename>`
+    `WORK_DIR/inputs/<basename>`. For convenience, `skill_run` treats
+    `to` values starting with `inputs/` as `work/inputs/` (because
+    `inputs/` is a symlink under the skill root).
   - `mode`: `copy` (default) or `link` when feasible
   - `pin`: for `artifact://name` without `@version`, reuse the first
     resolved version for the same `to` path (best effort)
@@ -984,6 +986,8 @@ Output:
     Use `ref` with `read_file` to fetch text content on demand.
   - `size_bytes` is the file size on disk; `truncated=true` means the
     collected content hit internal caps (for example, 4 MiB/file).
+  - If the command fails or times out, zero-byte collected files are
+    omitted to avoid misleading shell-redirection artifacts.
 - `warnings` (optional): non-fatal notes (for example, when artifact
   saving is skipped)
 - `artifact_files` with `name`, `version` appears in two cases:
