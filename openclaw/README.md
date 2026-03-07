@@ -342,7 +342,9 @@ stable host paths under the state directory, keeps those refs in session
 history, and exposes them back to tools. In practice this means later turns
 can still operate on the same upload with `exec_command`
 (`$OPENCLAW_LAST_UPLOAD_PATH`, `$OPENCLAW_LAST_UPLOAD_NAME`,
-`$OPENCLAW_LAST_UPLOAD_MIME`, `$OPENCLAW_SESSION_UPLOADS_DIR`) or
+`$OPENCLAW_LAST_UPLOAD_MIME`, `$OPENCLAW_LAST_PDF_PATH`,
+`$OPENCLAW_LAST_AUDIO_PATH`, `$OPENCLAW_LAST_VIDEO_PATH`,
+`$OPENCLAW_LAST_IMAGE_PATH`, `$OPENCLAW_SESSION_UPLOADS_DIR`) or
 `skill_run` (`host://...` inputs staged into `$WORK_DIR/inputs`).
 
 ## Run with a real model (OpenAI)
@@ -517,8 +519,10 @@ the same PDF, image, audio, or video without asking the user to upload again.
 For host-side tools, OpenClaw injects stable attachment metadata such as
 `OPENCLAW_LAST_UPLOAD_PATH`, `OPENCLAW_LAST_UPLOAD_NAME`,
 `OPENCLAW_LAST_UPLOAD_MIME`, `OPENCLAW_SESSION_UPLOADS_DIR`, and
-`OPENCLAW_RECENT_UPLOADS_JSON` so the agent can keep operating on the recent
-chat uploads without guessing local paths.
+`OPENCLAW_RECENT_UPLOADS_JSON`, plus kind-aware shortcuts like
+`OPENCLAW_LAST_PDF_PATH`, `OPENCLAW_LAST_AUDIO_PATH`,
+`OPENCLAW_LAST_VIDEO_PATH`, and `OPENCLAW_LAST_IMAGE_PATH`, so the agent can
+keep operating on the recent chat uploads without guessing local paths.
 
 When the agent generates local output files under the current working
 directory or the OpenClaw state directory, Telegram can send them back as

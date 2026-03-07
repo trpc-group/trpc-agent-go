@@ -22,6 +22,8 @@ const (
 
 	recentUploadContextHeader = "Recent chat uploads available " +
 		"to tools in this session (newest first):"
+	recentUploadKindHeader = "Latest matching upload by kind " +
+		"in this chat:"
 	recentUploadContextFooter = "Use OPENCLAW_LAST_UPLOAD_* " +
 		"for the newest upload. For multiple uploads in " +
 		"exec_command, use OPENCLAW_RECENT_UPLOADS_JSON. " +
@@ -68,9 +70,43 @@ func buildUploadContextText(files []uploads.ListedFile) string {
 	for _, file := range files {
 		lines = append(lines, formatUploadContextLine(file))
 	}
+	if summary := buildUploadKindSummary(files); summary != "" {
+		lines = append(lines, recentUploadKindHeader)
+		lines = append(lines, summary)
+	}
 	lines = append(lines, recentUploadContextFooter)
 	return strings.Join(lines, "\n")
 }
+
+func buildUploadKindSummary(files []uploads.ListedFile) string {
+	if len(files) == 0 {
+		return ""
+	}
+
+	seen := make(map[string]struct{})
+	parts := make([]string, 0, 4)
+	for _, file := range files {
+		kind := describeUploadKind(file.Name)
+		if kind == "" || kind == uploadKindFileLabel {
+			continue
+		}
+		if _, ok := seen[kind]; ok {
+			continue
+		}
+		seen[kind] = struct{}{}
+		name := strings.TrimSpace(file.Name)
+		if name == "" {
+			name = filepath.Base(strings.TrimSpace(file.Path))
+		}
+		if name == "" {
+			continue
+		}
+		parts = append(parts, "- "+kind+": "+name)
+	}
+	return strings.Join(parts, "\n")
+}
+
+const uploadKindFileLabel = "file"
 
 func formatUploadContextLine(file uploads.ListedFile) string {
 	name := strings.TrimSpace(file.Name)
@@ -95,7 +131,7 @@ func describeUploadKind(name string) string {
 	case ".pdf":
 		return "pdf"
 	default:
-		return "file"
+		return uploadKindFileLabel
 	}
 }
 

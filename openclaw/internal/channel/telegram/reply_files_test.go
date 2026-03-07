@@ -38,6 +38,13 @@ func TestReplyFileCandidates_DedupesPlainAndInline(t *testing.T) {
 	require.Equal(t, "page2.png", got[0])
 }
 
+func TestReplyFileCandidates_RecognizesDirectoryCue(t *testing.T) {
+	t.Parallel()
+
+	got := replyFileCandidates("文件在目录 out_pdf_split 里，马上发回。")
+	require.Contains(t, got, "out_pdf_split")
+}
+
 func TestResolveReplyCandidateFiles_DirectRefs(t *testing.T) {
 	t.Parallel()
 
@@ -69,6 +76,23 @@ func TestResolveReplyCandidateFiles_SearchesRoots(t *testing.T) {
 	got := resolveReplyCandidateFiles("page2.png", []string{root})
 	require.Len(t, got, 1)
 	require.Equal(t, want, got[0].Path)
+}
+
+func TestResolveReplyCandidateFiles_ExpandsDirectoryCueRoot(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dir := filepath.Join(root, "out_pdf_split")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	fileA := filepath.Join(dir, "page3.pdf")
+	fileB := filepath.Join(dir, "page4.pdf")
+	require.NoError(t, os.WriteFile(fileA, []byte("a"), 0o600))
+	require.NoError(t, os.WriteFile(fileB, []byte("b"), 0o600))
+
+	got := resolveReplyCandidateFiles("out_pdf_split", []string{root})
+	require.Len(t, got, 2)
+	require.Equal(t, fileA, got[0].Path)
+	require.Equal(t, fileB, got[1].Path)
 }
 
 func TestResolveReplyCandidateFiles_HostDirExpands(t *testing.T) {

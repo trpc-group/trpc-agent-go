@@ -337,11 +337,13 @@ func TestChannel_CallGatewayAndReply_AutoSendsDerivedFiles(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
+	cwdMu.Lock()
 	oldWD, err := os.Getwd()
 	require.NoError(t, err)
 	require.NoError(t, os.Chdir(root))
 	defer func() {
 		require.NoError(t, os.Chdir(oldWD))
+		cwdMu.Unlock()
 	}()
 
 	framesDir := filepath.Join(root, "frames")
@@ -392,6 +394,60 @@ func TestChannel_CallGatewayAndReply_AutoSendsDerivedFiles(t *testing.T) {
 	require.Len(t, bot.photos, 2)
 	require.Equal(t, "frame-1.png", bot.photos[0].FileName)
 	require.Equal(t, "frame-2.png", bot.photos[1].FileName)
+	bot.mu.Unlock()
+}
+
+func TestChannel_CallGatewayAndReply_AutoSendsDirectoryCueFiles(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cwdMu.Lock()
+	oldWD, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(root))
+	defer func() {
+		require.NoError(t, os.Chdir(oldWD))
+		cwdMu.Unlock()
+	}()
+
+	outDir := filepath.Join(root, "out_pdf_split")
+	require.NoError(t, os.MkdirAll(outDir, 0o755))
+	fileA := filepath.Join(outDir, "page-3.pdf")
+	fileB := filepath.Join(outDir, "page-4.pdf")
+	require.NoError(t, os.WriteFile(fileA, []byte("a"), 0o600))
+	require.NoError(t, os.WriteFile(fileB, []byte("b"), 0o600))
+
+	gw := &stubGateway{
+		rsp: gwclient.MessageResponse{
+			StatusCode: http.StatusOK,
+			Reply:      "已拆分完成，文件在目录 out_pdf_split 里。",
+		},
+	}
+	bot := &stubBot{}
+	ch := &Channel{
+		bot:           bot,
+		gw:            gw,
+		state:         filepath.Join(root, "state"),
+		streamingMode: streamingOff,
+	}
+
+	err = ch.callGatewayAndReply(
+		context.Background(),
+		1,
+		0,
+		2,
+		"u1",
+		"",
+		buildLaneKey("u1", ""),
+		"rid",
+		tgapi.Message{MessageID: 2, Text: "hi"},
+	)
+	require.NoError(t, err)
+
+	bot.mu.Lock()
+	require.Len(t, bot.docs, 2)
+	require.Equal(t, "page-3.pdf", bot.docs[0].FileName)
+	require.Equal(t, "page-4.pdf", bot.docs[1].FileName)
 	bot.mu.Unlock()
 }
 

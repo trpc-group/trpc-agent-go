@@ -281,6 +281,10 @@ func TestBuildUploadContextText(t *testing.T) {
 	require.Contains(t, text, "voice.ogg [audio]")
 	require.Contains(t, text, "clip.mp4 [video]")
 	require.Contains(t, text, "report.pdf [pdf]")
+	require.Contains(t, text, recentUploadKindHeader)
+	require.Contains(t, text, "- audio: voice.ogg")
+	require.Contains(t, text, "- video: clip.mp4")
+	require.Contains(t, text, "- pdf: report.pdf")
 }
 
 func TestServerUploadContextMessages(t *testing.T) {

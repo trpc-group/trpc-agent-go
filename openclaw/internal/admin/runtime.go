@@ -50,8 +50,14 @@ type uploadsStatus struct {
 	FileCount  int                 `json:"file_count"`
 	TotalBytes int64               `json:"total_bytes"`
 	Error      string              `json:"error,omitempty"`
+	KindCounts []uploadKindCount   `json:"kind_counts,omitempty"`
 	Files      []uploadView        `json:"files,omitempty"`
 	Sessions   []uploadSessionView `json:"sessions,omitempty"`
+}
+
+type uploadKindCount struct {
+	Kind  string `json:"kind,omitempty"`
+	Count int    `json:"count"`
 }
 
 type uploadView struct {
@@ -143,6 +149,7 @@ func (s *Service) uploadsStatus() uploadsStatus {
 	status.FileCount = len(listed)
 	status.Files, status.TotalBytes = uploadViewsFromList(listed)
 	status.Sessions = uploadSessionsFromList(listed)
+	status.KindCounts = uploadKindCountsFromList(listed)
 	return status
 }
 
@@ -223,6 +230,35 @@ func uploadSessionsFromList(
 	if len(out) > maxUploadSessions {
 		out = out[:maxUploadSessions]
 	}
+	return out
+}
+
+func uploadKindCountsFromList(
+	listed []uploads.ListedFile,
+) []uploadKindCount {
+	if len(listed) == 0 {
+		return nil
+	}
+
+	counts := make(map[string]int)
+	for _, file := range listed {
+		kind := uploadKindFromName(file.Name)
+		counts[kind]++
+	}
+
+	out := make([]uploadKindCount, 0, len(counts))
+	for kind, count := range counts {
+		out = append(out, uploadKindCount{
+			Kind:  kind,
+			Count: count,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count == out[j].Count {
+			return out[i].Kind < out[j].Kind
+		}
+		return out[i].Count > out[j].Count
+	})
 	return out
 }
 

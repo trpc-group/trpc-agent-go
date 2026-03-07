@@ -349,11 +349,13 @@ func TestResolveOutboundFilePath_Relative(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
+	cwdMu.Lock()
 	cwd, err := os.Getwd()
 	require.NoError(t, err)
 	require.NoError(t, os.Chdir(root))
 	t.Cleanup(func() {
 		require.NoError(t, os.Chdir(cwd))
+		cwdMu.Unlock()
 	})
 
 	got, err := resolveOutboundFilePath(

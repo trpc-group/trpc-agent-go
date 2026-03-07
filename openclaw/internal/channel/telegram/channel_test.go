@@ -33,6 +33,8 @@ const (
 	chatTypeSuperGroup = "supergroup"
 )
 
+var cwdMu sync.Mutex
+
 type stubGateway struct {
 	mu    sync.Mutex
 	reqs  []gwclient.MessageRequest

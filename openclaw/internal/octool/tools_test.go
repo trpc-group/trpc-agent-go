@@ -642,6 +642,16 @@ func TestUploadEnvFromContext(t *testing.T) {
 		"audio/ogg",
 		env[envLastUploadMIME],
 	)
+	require.Equal(t, audioPath, env[envLastAudioPath])
+	require.Equal(t, "clip.ogg", env[envLastAudioName])
+	require.Equal(t, "audio/ogg", env[envLastAudioMIME])
+	require.Equal(t, filePath, env[envLastPDFPath])
+	require.Equal(t, "report.pdf", env[envLastPDFName])
+	require.Equal(
+		t,
+		"application/pdf",
+		env[envLastPDFMIME],
+	)
 
 	var recent []execUploadMeta
 	require.NoError(
@@ -650,7 +660,39 @@ func TestUploadEnvFromContext(t *testing.T) {
 	)
 	require.Len(t, recent, 2)
 	require.Equal(t, audioPath, recent[0].Path)
+	require.Equal(t, uploadKindAudio, recent[0].Kind)
 	require.Equal(t, filePath, recent[1].Path)
+	require.Equal(t, uploadKindPDF, recent[1].Kind)
+}
+
+func TestUploadKindFromMeta(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(
+		t,
+		uploadKindImage,
+		uploadKindFromMeta("frame.png", ""),
+	)
+	require.Equal(
+		t,
+		uploadKindAudio,
+		uploadKindFromMeta("voice.bin", "audio/ogg"),
+	)
+	require.Equal(
+		t,
+		uploadKindVideo,
+		uploadKindFromMeta("clip.mp4", ""),
+	)
+	require.Equal(
+		t,
+		uploadKindPDF,
+		uploadKindFromMeta("report.pdf", ""),
+	)
+	require.Equal(
+		t,
+		uploadKindFile,
+		uploadKindFromMeta("archive.bin", ""),
+	)
 }
 
 func TestMergeExecEnv_PreservesExplicitEnv(t *testing.T) {

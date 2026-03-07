@@ -79,6 +79,11 @@ var replyPlainFileRE = regexp.MustCompile(
 		``,
 )
 
+var replyDirCueRE = regexp.MustCompile(
+	`(?:目录|文件夹|folder|directory)\s*[:：]?\s*` +
+		`([^\s<>()\[\]{}"'` + "`" + `]+)`,
+)
+
 func (c *Channel) collectReplyFiles(
 	text string,
 	fromID string,
@@ -159,6 +164,12 @@ func replyFileCandidates(text string) []string {
 	for _, token := range telegramPathTokenRE.FindAllString(text, -1) {
 		appendToken(token)
 	}
+	for _, match := range replyDirCueRE.FindAllStringSubmatch(text, -1) {
+		if len(match) < 2 {
+			continue
+		}
+		appendToken(match[1])
+	}
 	for _, token := range replyPlainFileRE.FindAllString(text, -1) {
 		appendToken(token)
 	}
@@ -223,13 +234,31 @@ func resolveReplyExistingPaths(
 	roots []string,
 ) []channel.OutboundFile {
 	paths := make([]string, 0, len(roots)+1)
-	if resolved, err := resolveOutboundFilePath(nil, "", token); err == nil {
-		paths = append(paths, resolved)
-	}
-	if canJoinReplyRoots(token) {
+	if isDirectReplyPathToken(token) {
+		if resolved, err := resolveOutboundFilePath(
+			nil,
+			"",
+			token,
+		); err == nil {
+			paths = append(paths, resolved)
+		}
+	} else if canJoinReplyRoots(token) {
 		for _, root := range roots {
 			paths = append(paths, filepath.Join(root, token))
 		}
+		if resolved, err := resolveOutboundFilePath(
+			nil,
+			"",
+			token,
+		); err == nil {
+			paths = append(paths, resolved)
+		}
+	} else if resolved, err := resolveOutboundFilePath(
+		nil,
+		"",
+		token,
+	); err == nil {
+		paths = append(paths, resolved)
 	}
 	for _, path := range paths {
 		files := outboundFilesForPath(path, roots)
@@ -238,6 +267,22 @@ func resolveReplyExistingPaths(
 		}
 	}
 	return nil
+}
+
+func isDirectReplyPathToken(token string) bool {
+	trimmed := strings.TrimSpace(token)
+	if trimmed == "" {
+		return false
+	}
+	if isReplyDirectRef(trimmed) || filepath.IsAbs(trimmed) {
+		return true
+	}
+	if strings.HasPrefix(trimmed, "~") ||
+		strings.HasPrefix(trimmed, fileURLPrefix) {
+		return true
+	}
+	_, ok := uploads.PathFromHostRef(trimmed)
+	return ok
 }
 
 func canJoinReplyRoots(token string) bool {

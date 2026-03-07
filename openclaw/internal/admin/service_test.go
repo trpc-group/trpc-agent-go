@@ -447,6 +447,9 @@ func TestServiceSnapshotIncludesUploadsAndExec(t *testing.T) {
 	require.Equal(t, "u1", snap.Uploads.Files[0].UserID)
 	require.Equal(t, "session-1", snap.Uploads.Files[0].SessionID)
 	require.Len(t, snap.Uploads.Sessions, 1)
+	require.Len(t, snap.Uploads.KindCounts, 1)
+	require.Equal(t, "video", snap.Uploads.KindCounts[0].Kind)
+	require.Equal(t, 1, snap.Uploads.KindCounts[0].Count)
 
 	handler := svc.Handler()
 
@@ -469,6 +472,7 @@ func TestServiceSnapshotIncludesUploadsAndExec(t *testing.T) {
 	handler.ServeHTTP(uploadsRR, uploadsReq)
 	require.Equal(t, http.StatusOK, uploadsRR.Code)
 	require.Contains(t, uploadsRR.Body.String(), "clip.mp4")
+	require.Contains(t, uploadsRR.Body.String(), `"kind": "video"`)
 
 	openRR := httptest.NewRecorder()
 	openReq := httptest.NewRequest(

@@ -87,7 +87,11 @@ const (
 		"attachment paths. When a user follows " +
 		"up about 'the PDF/audio/video I just sent', assume they " +
 		"mean the recent upload already present in this chat unless " +
-		"the reference is genuinely ambiguous. If the user replies " +
+		"the reference is genuinely ambiguous. Match by media kind " +
+		"first: prefer OPENCLAW_LAST_PDF_PATH, " +
+		"OPENCLAW_LAST_AUDIO_PATH, OPENCLAW_LAST_VIDEO_PATH, or " +
+		"OPENCLAW_LAST_IMAGE_PATH when the request clearly targets " +
+		"one of those kinds. If the user replies " +
 		"to an earlier media message, treat that replied media as " +
 		"the default target unless they clearly ask for something " +
 		"else. If the user asks you to 'send it back', '发给我', " +

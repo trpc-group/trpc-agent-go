@@ -1110,6 +1110,14 @@ const adminPageHTML = `<!doctype html>
           <dd>{{.Snapshot.Uploads.FileCount}}</dd>
           <dt>Total Bytes</dt>
           <dd>{{.Snapshot.Uploads.TotalBytes}}</dd>
+          <dt>By Kind</dt>
+          <dd>
+            {{if .Snapshot.Uploads.KindCounts}}
+              {{range $i, $item := .Snapshot.Uploads.KindCounts}}{{if $i}}, {{end}}{{$item.Kind}} {{$item.Count}}{{end}}
+            {{else}}
+              -
+            {{end}}
+          </dd>
           <dt>Status</dt>
           <dd>
             {{if .Snapshot.Uploads.Error}}

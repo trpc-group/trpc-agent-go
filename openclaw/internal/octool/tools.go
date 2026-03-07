@@ -43,7 +43,31 @@ const (
 	envLastUploadMIME    = "OPENCLAW_LAST_UPLOAD_MIME"
 	envRecentUploadsJSON = "OPENCLAW_RECENT_UPLOADS_JSON"
 
+	envLastImagePath = "OPENCLAW_LAST_IMAGE_PATH"
+	envLastImageName = "OPENCLAW_LAST_IMAGE_NAME"
+	envLastImageMIME = "OPENCLAW_LAST_IMAGE_MIME"
+
+	envLastAudioPath = "OPENCLAW_LAST_AUDIO_PATH"
+	envLastAudioName = "OPENCLAW_LAST_AUDIO_NAME"
+	envLastAudioMIME = "OPENCLAW_LAST_AUDIO_MIME"
+
+	envLastVideoPath = "OPENCLAW_LAST_VIDEO_PATH"
+	envLastVideoName = "OPENCLAW_LAST_VIDEO_NAME"
+	envLastVideoMIME = "OPENCLAW_LAST_VIDEO_MIME"
+
+	envLastPDFPath = "OPENCLAW_LAST_PDF_PATH"
+	envLastPDFName = "OPENCLAW_LAST_PDF_NAME"
+	envLastPDFMIME = "OPENCLAW_LAST_PDF_MIME"
+
 	recentUploadsLimit = 6
+)
+
+const (
+	uploadKindImage = "image"
+	uploadKindAudio = "audio"
+	uploadKindVideo = "video"
+	uploadKindPDF   = "pdf"
+	uploadKindFile  = "file"
 )
 
 type execUploadMeta struct {
@@ -51,6 +75,7 @@ type execUploadMeta struct {
 	Path     string `json:"path,omitempty"`
 	HostRef  string `json:"host_ref,omitempty"`
 	MimeType string `json:"mime_type,omitempty"`
+	Kind     string `json:"kind,omitempty"`
 }
 
 type execTool struct {
@@ -70,6 +95,7 @@ func (t *execTool) Declaration() *tool.Declaration {
 			"continue with write_stdin. When a chat upload is " +
 			"available, OPENCLAW_LAST_UPLOAD_PATH, " +
 			"OPENCLAW_LAST_UPLOAD_NAME, OPENCLAW_LAST_UPLOAD_MIME, " +
+			"kind-specific OPENCLAW_LAST_*_PATH vars, " +
 			"OPENCLAW_SESSION_UPLOADS_DIR, and " +
 			"OPENCLAW_RECENT_UPLOADS_JSON point to stable " +
 			"attachment metadata and host paths. Write derived " +
@@ -456,7 +482,72 @@ func uploadEnvFromContext(ctx context.Context) map[string]string {
 	if raw, err := json.Marshal(recent); err == nil {
 		env[envRecentUploadsJSON] = string(raw)
 	}
+	addLatestKindUploadEnv(
+		env,
+		recent,
+		uploadKindImage,
+		envLastImagePath,
+		envLastImageName,
+		envLastImageMIME,
+	)
+	addLatestKindUploadEnv(
+		env,
+		recent,
+		uploadKindAudio,
+		envLastAudioPath,
+		envLastAudioName,
+		envLastAudioMIME,
+	)
+	addLatestKindUploadEnv(
+		env,
+		recent,
+		uploadKindVideo,
+		envLastVideoPath,
+		envLastVideoName,
+		envLastVideoMIME,
+	)
+	addLatestKindUploadEnv(
+		env,
+		recent,
+		uploadKindPDF,
+		envLastPDFPath,
+		envLastPDFName,
+		envLastPDFMIME,
+	)
 	return env
+}
+
+func addLatestKindUploadEnv(
+	env map[string]string,
+	recent []execUploadMeta,
+	kind string,
+	pathKey string,
+	nameKey string,
+	mimeKey string,
+) {
+	latest, ok := latestUploadOfKind(recent, kind)
+	if !ok {
+		return
+	}
+	env[pathKey] = latest.Path
+	if latest.Name != "" {
+		env[nameKey] = latest.Name
+	}
+	if latest.MimeType != "" {
+		env[mimeKey] = latest.MimeType
+	}
+}
+
+func latestUploadOfKind(
+	recent []execUploadMeta,
+	kind string,
+) (execUploadMeta, bool) {
+	for _, item := range recent {
+		if item.Kind == kind {
+			return item, true
+		}
+	}
+	return execUploadMeta{}, false
 }
 
 func recentUploadsFromInvocation(
@@ -540,9 +631,37 @@ func appendRecentUploadsFromMessage(
 			Path:     path,
 			HostRef:  uploads.HostRef(path),
 			MimeType: strings.TrimSpace(part.File.MimeType),
+			Kind:     uploadKindFromMeta(name, part.File.MimeType),
 		})
 	}
 	return out
+}
+
+func uploadKindFromMeta(name string, mimeType string) string {
+	mimeType = strings.ToLower(strings.TrimSpace(mimeType))
+	switch {
+	case strings.HasPrefix(mimeType, "image/"):
+		return uploadKindImage
+	case strings.HasPrefix(mimeType, "audio/"):
+		return uploadKindAudio
+	case strings.HasPrefix(mimeType, "video/"):
+		return uploadKindVideo
+	case mimeType == "application/pdf":
+		return uploadKindPDF
+	}
+
+	switch strings.ToLower(filepath.Ext(strings.TrimSpace(name))) {
+	case ".jpg", ".jpeg", ".png", ".gif", ".webp":
+		return uploadKindImage
+	case ".mp3", ".wav", ".ogg", ".oga", ".m4a":
+		return uploadKindAudio
+	case ".mp4", ".mov", ".webm", ".mkv":
+		return uploadKindVideo
+	case ".pdf":
+		return uploadKindPDF
+	default:
+		return uploadKindFile
+	}
 }
 
 var _ tool.CallableTool = (*execTool)(nil)
