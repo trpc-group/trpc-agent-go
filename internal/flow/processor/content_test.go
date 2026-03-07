@@ -3225,6 +3225,134 @@ func TestContentRequestProcessor_shouldIncludeEvent(t *testing.T) {
 	}
 }
 
+func TestContentRequestProcessor_getIncrementMessages_SummaryPreservesToolState(t *testing.T) {
+	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	userMsg := model.NewUserMessage("run the task")
+	toolCall1 := model.Message{
+		Role:    model.RoleAssistant,
+		Content: "Starting with step 1.",
+		ToolCalls: []model.ToolCall{{
+			Type: "function",
+			ID:   "call_1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "step_worker",
+				Arguments: []byte(`{"step":1}`),
+			},
+		}},
+	}
+	toolResult1 := model.Message{
+		Role:     model.RoleTool,
+		ToolID:   "call_1",
+		ToolName: "step_worker",
+		Content:  "step-1-large-result",
+	}
+	toolCall2 := model.Message{
+		Role:    model.RoleAssistant,
+		Content: "Proceeding to step 2.",
+		ToolCalls: []model.ToolCall{{
+			Type: "function",
+			ID:   "call_2",
+			Function: model.FunctionDefinitionParam{
+				Name:      "step_worker",
+				Arguments: []byte(`{"step":2}`),
+			},
+		}},
+	}
+	toolResult2 := model.Message{
+		Role:     model.RoleTool,
+		ToolID:   "call_2",
+		ToolName: "step_worker",
+		Content:  "step-2-result",
+	}
+
+	sess := &session.Session{
+		EventMu: sync.RWMutex{},
+		Events: []event.Event{
+			{
+				Author:       "user",
+				RequestID:    "req1",
+				InvocationID: "inv1",
+				Timestamp:    baseTime,
+				Version:      event.CurrentVersion,
+				Response: &model.Response{
+					Done:    true,
+					Choices: []model.Choice{{Index: 0, Message: userMsg}},
+				},
+			},
+			{
+				Author:       "test-agent",
+				RequestID:    "req1",
+				InvocationID: "inv1",
+				Timestamp:    baseTime.Add(time.Second),
+				Version:      event.CurrentVersion,
+				Response: &model.Response{
+					Done:    true,
+					Choices: []model.Choice{{Index: 0, Message: toolCall1}},
+				},
+			},
+			{
+				Author:       "test-agent",
+				RequestID:    "req1",
+				InvocationID: "inv1",
+				Timestamp:    baseTime.Add(2 * time.Second),
+				Version:      event.CurrentVersion,
+				Response: &model.Response{
+					Done:    true,
+					Object:  model.ObjectTypeToolResponse,
+					Choices: []model.Choice{{Index: 0, Message: toolResult1}},
+				},
+			},
+			{
+				Author:       "test-agent",
+				RequestID:    "req1",
+				InvocationID: "inv1",
+				Timestamp:    baseTime.Add(3 * time.Second),
+				Version:      event.CurrentVersion,
+				Response: &model.Response{
+					Done:    true,
+					Choices: []model.Choice{{Index: 0, Message: toolCall2}},
+				},
+			},
+			{
+				Author:       "test-agent",
+				RequestID:    "req1",
+				InvocationID: "inv1",
+				Timestamp:    baseTime.Add(4 * time.Second),
+				Version:      event.CurrentVersion,
+				Response: &model.Response{
+					Done:    true,
+					Object:  model.ObjectTypeToolResponse,
+					Choices: []model.Choice{{Index: 0, Message: toolResult2}},
+				},
+			},
+		},
+	}
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationID("inv1"),
+		agent.WithInvocationMessage(userMsg),
+		agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req1"}),
+	)
+	inv.AgentName = "test-agent"
+
+	p := NewContentRequestProcessor(WithAddSessionSummary(true))
+	messages := p.getIncrementMessages(inv, baseTime.Add(2*time.Second))
+
+	if assert.Len(t, messages, 5) {
+		assert.True(t, model.MessagesEqual(userMsg, messages[0]))
+		assert.Equal(t, toolCall1.Content, messages[1].Content)
+		assert.Equal(t, toolCall1.ToolCalls, messages[1].ToolCalls)
+		assert.Equal(t, model.RoleTool, messages[2].Role)
+		assert.Equal(t, toolResult1.ToolID, messages[2].ToolID)
+		assert.Equal(t, toolResult1.ToolName, messages[2].ToolName)
+		assert.Equal(t, compactedToolResultPlaceholder, messages[2].Content)
+		assert.Equal(t, toolCall2.Content, messages[3].Content)
+		assert.Equal(t, toolCall2.ToolCalls, messages[3].ToolCalls)
+		assert.True(t, model.MessagesEqual(toolResult2, messages[4]))
+	}
+}
+
 func TestInsertInvocationMessage(t *testing.T) {
 	createInvocation := func(id, requestID, content string) *agent.Invocation {
 		return &agent.Invocation{

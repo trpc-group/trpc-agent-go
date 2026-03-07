@@ -215,6 +215,7 @@ const (
 
 	contentHasSessionSummaryStateKey       = "processor:content:has_session_summary"
 	contentHasCompactedToolResultsStateKey = "processor:content:has_compacted_tool_results"
+	compactedToolResultPlaceholder         = "Tool result omitted from raw history; details are captured in the session summary above."
 )
 
 const (
@@ -487,6 +488,16 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 	var events []event.Event
 	inv.Session.EventMu.RLock()
 	for _, evt := range inv.Session.Events {
+		if compactedEvt, ok := p.compactCurrentInvocationEvent(
+			evt,
+			inv,
+			filter,
+			isZeroTime,
+			since,
+		); ok {
+			events = append(events, compactedEvt)
+			continue
+		}
 		shouldInclude, isInvocationMessage := p.shouldIncludeEvent(evt, inv, filter, isZeroTime, since)
 		if !shouldInclude {
 			continue
@@ -544,6 +555,82 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 	}
 	messages = annotateUserMessagesWithAttachedFiles(messages)
 	return messages
+}
+
+// compactCurrentInvocationEvent preserves the minimum structured state needed
+// for same-turn tool loops after a summary has already absorbed earlier
+// invocation history. Assistant tool-call messages are kept intact, while tool
+// results are replaced with a small placeholder that points the model at the
+// summary for details.
+func (p *ContentRequestProcessor) compactCurrentInvocationEvent(
+	evt event.Event,
+	inv *agent.Invocation,
+	filter string,
+	isZeroTime bool,
+	since time.Time,
+) (event.Event, bool) {
+	if isZeroTime || inv == nil {
+		return event.Event{}, false
+	}
+	if evt.RequestID != inv.RunOptions.RequestID ||
+		evt.InvocationID != inv.InvocationID {
+		return event.Event{}, false
+	}
+	if evt.Timestamp.After(since) {
+		return event.Event{}, false
+	}
+	if !isEventEligibleForInclusion(evt) {
+		return event.Event{}, false
+	}
+	if !p.passTimelineFilter(evt, inv) || !p.passBranchFilter(evt, filter) {
+		return event.Event{}, false
+	}
+
+	var compactedChoices []model.Choice
+	for _, choice := range evt.Choices {
+		msg, ok := compactedCurrentInvocationMessage(choice.Message)
+		if !ok {
+			continue
+		}
+		compactedChoices = append(compactedChoices, model.Choice{
+			Index:   choice.Index,
+			Message: msg,
+		})
+	}
+	if len(compactedChoices) == 0 {
+		return event.Event{}, false
+	}
+
+	compacted := evt
+	compacted.Response = &model.Response{
+		Done:    evt.Response.Done,
+		Object:  evt.Response.Object,
+		Choices: compactedChoices,
+	}
+	return compacted, true
+}
+
+func compactedCurrentInvocationMessage(
+	msg model.Message,
+) (model.Message, bool) {
+	switch {
+	case len(msg.ToolCalls) > 0:
+		return model.Message{
+			Role:         msg.Role,
+			Content:      msg.Content,
+			ContentParts: msg.ContentParts,
+			ToolCalls:    msg.ToolCalls,
+		}, true
+	case msg.Role == model.RoleTool && msg.ToolID != "":
+		return model.Message{
+			Role:     msg.Role,
+			Content:  compactedToolResultPlaceholder,
+			ToolID:   msg.ToolID,
+			ToolName: msg.ToolName,
+		}, true
+	default:
+		return model.Message{}, false
+	}
 }
 
 func annotateUserMessagesWithAttachedFiles(

@@ -653,7 +653,8 @@ func TestProcessRequest_SessionSummary_CompactsSameTurnToolHistory(t *testing.T)
 	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
 	userMsg := model.NewUserMessage("run the task")
 	toolCallMsg := model.Message{
-		Role: model.RoleAssistant,
+		Role:    model.RoleAssistant,
+		Content: "Starting with step 1.",
 		ToolCalls: []model.ToolCall{{
 			Type: "function",
 			ID:   "call_1",
@@ -735,18 +736,21 @@ func TestProcessRequest_SessionSummary_CompactsSameTurnToolHistory(t *testing.T)
 	require.True(t, ok)
 	require.Equal(t, true, raw)
 
-	require.Len(t, req.Messages, 3)
+	require.Len(t, req.Messages, 5)
 	require.Equal(t, model.RoleSystem, req.Messages[0].Role)
 	require.Equal(t, "system prompt", req.Messages[0].Content)
 	require.Equal(t, model.RoleSystem, req.Messages[1].Role)
 	require.Contains(t, req.Messages[1].Content, "step 1 completed successfully")
 	require.True(t, model.MessagesEqual(userMsg, req.Messages[2]))
-
-	for _, msg := range req.Messages {
-		require.Empty(t, msg.ToolCalls)
-		require.NotEqual(t, model.RoleTool, msg.Role)
-		require.NotContains(t, msg.Content, "large-result;")
-	}
+	require.Equal(t, model.RoleAssistant, req.Messages[3].Role)
+	require.Equal(t, "Starting with step 1.", req.Messages[3].Content)
+	require.Len(t, req.Messages[3].ToolCalls, 1)
+	require.Equal(t, "call_1", req.Messages[3].ToolCalls[0].ID)
+	require.Equal(t, model.RoleTool, req.Messages[4].Role)
+	require.Equal(t, "call_1", req.Messages[4].ToolID)
+	require.Equal(t, "step_worker", req.Messages[4].ToolName)
+	require.Equal(t, compactedToolResultPlaceholder, req.Messages[4].Content)
+	require.NotContains(t, req.Messages[4].Content, "large-result;")
 }
 
 func TestContentRequestProcessor_HasCompactedCurrentInvocationToolResults(t *testing.T) {
