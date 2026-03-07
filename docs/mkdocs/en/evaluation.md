@@ -2752,6 +2752,41 @@ passHatK, err := evaluation.PassHatK(n, c, k)
 
 The computation of pass@k and pass^k relies on independence and identical distribution across runs. When doing repeated runs, ensure each run is independently sampled with necessary state reset, and avoid reusing session memory, tool caches, or external dependencies that would systematically inflate the metrics.
 
+### Converting Live Traffic into EvalSets
+
+During product iteration, evaluation sets often need to be distilled from real interactions. The framework provides the `evaluation/evalset/recorder` Runner plugin, which captures the event stream from `runner.Run()` at runtime and persists the interaction into EvalSet/EvalCase, producing reusable evaluation assets.
+
+By default, the recorder uses `sessionID` as both `EvalSetID` and `EvalCase.EvalID`, so multi-turn conversations under the same `sessionID` are appended to the same EvalCase `conversation`. The recorded asset keeps the inputs required for replay together with the conversation itself: `RunOptions.RuntimeState` is written into `EvalCase.SessionInput.State`, and injected context messages are stored as `EvalCase.ContextMessages`. Persistence is triggered when `runner.completion` arrives or when a terminal error event is observed. `runner.completion` indicates the run completed successfully. A terminal error is represented either by an `error` event whose object type is `ObjectTypeError` or by a response event carrying `Response.Error`, and is persisted as a failed invocation.
+
+```go
+import (
+	"log"
+	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	evalsetlocal "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/local"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/recorder"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+evalSetManager := evalsetlocal.New(evalset.WithBaseDir("./data"))
+rec, err := recorder.New(
+	evalSetManager,
+	recorder.WithWriteTimeout(2*time.Second),
+)
+if err != nil {
+	log.Fatalf("create evalset recorder: %v", err)
+}
+
+run := runner.NewRunner(appName, agent, runner.WithPlugins(rec))
+```
+
+Options let you adjust how traffic is bucketed and written. `WithEvalSetIDResolver` and `WithEvalCaseIDResolver` customize how `EvalSetID` and `EvalCase.EvalID` are derived, which is useful when grouping traffic by business dimensions or aggregating multiple sessions into one evaluation set. Persistence is synchronous by default so data is flushed promptly after a run completes; if you do not want persistence to block event handling, enable `WithAsyncWriteEnabled(true)`. To keep a slow backend from making a single write unbounded, use `WithWriteTimeout(d)` to add a deadline, where `d == 0` means no extra timeout is applied.
+
+If you want to record live traffic as trace-mode actuals instead of default expecteds, enable `WithTraceModeEnabled(true)`. In that mode, recorder creates `EvalModeTrace` cases and appends turns to `ActualConversation` rather than `Conversation`. Because `Conversation` and `ActualConversation` have different evaluation semantics, appending to an existing EvalCase requires the mode to match.
+
+See [examples/evaluation/evalsetrecorder](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/evalsetrecorder) for the full example.
+
 ### Skills Evaluation
 
 Agent Skills are exposed as built-in tools: `skill_load` and `skill_run`, so you can evaluate whether the agent uses Skills correctly with the same tool trajectory evaluator. In practice, `skill_run` results contain volatile fields such as `stdout`, `stderr`, `duration_ms`, and inline `output_files` content. Prefer using `onlyTree` in a per-tool strategy to assert only stable fields such as `skill`, requested `output_files`, and `exit_code` and `timed_out`, letting other volatile keys be ignored.

@@ -2755,6 +2755,41 @@ passHatK, err := evaluation.PassHatK(n, c, k)
 
 pass@k 与 pass^k 的计算依赖运行之间的独立性与同分布假设，进行重复运行评估时需要确保每次运行均为独立采样并完成必要的状态重置，避免会话记忆、工具缓存或外部依赖复用导致指标被系统性高估。
 
+### 实时流量沉淀为评估集
+
+在业务迭代中，评估集往往需要从真实交互中沉淀。框架提供 `evaluation/evalset/recorder` Runner 插件，用于在运行时捕获 `runner.Run()` 的事件流，并将交互过程写入 EvalSet/EvalCase，形成可复用的评估资产。
+
+默认情况下，recorder 以 `sessionID` 同时作为 `EvalSetID` 和 `EvalCase.EvalID`，从而使同一 `sessionID` 的多轮对话持续追加到同一个 EvalCase 的 `conversation` 中。除了对话本身，recorder 还会把回放所需的输入一并沉淀下来：`RunOptions.RuntimeState` 会写入 `EvalCase.SessionInput.State`，注入型上下文消息会存入 `EvalCase.ContextMessages`。写入会在 `runner.completion` 到达，或者观测到终态错误事件时触发。`runner.completion` 表示本轮推理成功完成。终态错误既可以是对象类型为 `ObjectTypeError` 的 `error` 事件，也可以是携带 `Response.Error` 的响应事件；这两类情况都会以失败调用的形式写入评估集。
+
+```go
+import (
+	"log"
+	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	evalsetlocal "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/local"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/recorder"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+evalSetManager := evalsetlocal.New(evalset.WithBaseDir("./data"))
+rec, err := recorder.New(
+	evalSetManager,
+	recorder.WithWriteTimeout(2*time.Second),
+)
+if err != nil {
+	log.Fatalf("create evalset recorder: %v", err)
+}
+
+run := runner.NewRunner(appName, agent, runner.WithPlugins(rec))
+```
+
+如需调整沉淀粒度与写入行为，可以通过 Option 进行配置。`WithEvalSetIDResolver` 与 `WithEvalCaseIDResolver` 用于自定义 `EvalSetID` 与 `EvalCase.EvalID` 的生成规则，常用于按业务维度分桶，或将多个 session 汇聚到同一评估集。写入模式默认同步，以保证在本轮推理完成后尽快落盘；当不希望写入阻塞事件处理时，可以通过 `WithAsyncWriteEnabled(true)` 开启异步写入。为避免慢存储导致单次写入耗时不可控，可以通过 `WithWriteTimeout(d)` 为落盘设置超时，`d==0` 表示不额外设置 deadline。
+
+如果希望把实时流量按 trace mode 作为 actual trace 落盘，可以开启 `WithTraceModeEnabled(true)`。开启后，recorder 会创建 `EvalModeTrace` 的 case，并将 turn 追加到 `ActualConversation`，而不是默认模式下的 `Conversation`。由于 `Conversation` 与 `ActualConversation` 在评估中的语义不同，向已有 EvalCase 追加时要求 mode 一致。
+
+完整示例参见 [examples/evaluation/evalsetrecorder](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/evalsetrecorder)。
+
 ### Skills 评估
 
 Agent Skills 以工具 `skill_load` 与 `skill_run` 形式暴露，因此也可以复用工具轨迹评估器来评估 Agent 是否按预期使用 Skills。实践中 `skill_run` 的结果通常包含波动字段，例如 `stdout`、`stderr`、`duration_ms`，以及收集到的 `output_files` 内联内容。建议在按工具覆盖策略中使用 `onlyTree` 只对比稳定字段，例如 `skill`、请求的 `output_files`，以及 `exit_code` 与 `timed_out`，未被选中的字段将被忽略。
