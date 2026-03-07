@@ -465,6 +465,68 @@ func TestAppendVideoPart_NilEmptyAndTooLarge(t *testing.T) {
 	require.True(t, errors.Is(err, tgapi.ErrFileTooLarge))
 }
 
+func TestAppendAnimationPart_BuildsVideoPart(t *testing.T) {
+	t.Parallel()
+
+	data := []byte("anim")
+
+	bot := &stubBot{
+		downloads: map[string]stubDownload{
+			testFileID: {
+				file: tgapi.File{FilePath: "animations/clip.gif"},
+				data: data,
+			},
+		},
+	}
+	ch := &Channel{bot: bot}
+
+	parts, err := ch.appendAnimationPart(
+		context.Background(),
+		nil,
+		&tgapi.Animation{
+			FileID:   testFileID,
+			FileName: "clip.gif",
+			MimeType: "image/gif",
+			FileSize: int64(len(data)),
+		},
+		int64(len(data)),
+	)
+	require.NoError(t, err)
+	require.Len(t, parts, 1)
+	require.Equal(t, gwproto.PartTypeVideo, parts[0].Type)
+	require.Equal(t, "clip.gif", parts[0].File.Filename)
+}
+
+func TestAppendVideoNotePart_BuildsVideoPart(t *testing.T) {
+	t.Parallel()
+
+	data := []byte("note")
+
+	bot := &stubBot{
+		downloads: map[string]stubDownload{
+			testFileID: {
+				file: tgapi.File{FilePath: "videos/note.mp4"},
+				data: data,
+			},
+		},
+	}
+	ch := &Channel{bot: bot}
+
+	parts, err := ch.appendVideoNotePart(
+		context.Background(),
+		nil,
+		&tgapi.VideoNote{
+			FileID:   testFileID,
+			FileSize: int64(len(data)),
+		},
+		int64(len(data)),
+	)
+	require.NoError(t, err)
+	require.Len(t, parts, 1)
+	require.Equal(t, gwproto.PartTypeVideo, parts[0].Type)
+	require.Equal(t, "note.mp4", parts[0].File.Filename)
+}
+
 func TestAppendVoicePart_BuildsFilePart(t *testing.T) {
 	t.Parallel()
 

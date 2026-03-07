@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/admin"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/cron"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/octool"
 )
 
 const adminAutoPortSearchSpan = 32
@@ -112,6 +113,7 @@ func buildAdminConfig(
 	channels []channel.Channel,
 	routes admin.Routes,
 	cronSvc *cron.Service,
+	execMgr *octool.Manager,
 	adminAddr string,
 	adminURL string,
 ) admin.Config {
@@ -137,6 +139,7 @@ func buildAdminConfig(
 		Channels:       channelIDs(channels),
 		GatewayRoutes:  routes,
 		Cron:           cronSvc,
+		Exec:           execMgr,
 	}
 }
 

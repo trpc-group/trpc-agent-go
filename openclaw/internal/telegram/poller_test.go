@@ -261,6 +261,30 @@ func TestPoller_HandlesMediaMessages(t *testing.T) {
 				require.NotNil(t, msg.Video)
 			},
 		},
+		{
+			name: "animation",
+			msg: &Message{
+				MessageID: 1,
+				From:      &User{ID: 1},
+				Chat:      &Chat{ID: 2, Type: chatTypePrivate},
+				Animation: &Animation{FileID: "anim1"},
+			},
+			check: func(t *testing.T, msg Message) {
+				require.NotNil(t, msg.Animation)
+			},
+		},
+		{
+			name: "video_note",
+			msg: &Message{
+				MessageID: 1,
+				From:      &User{ID: 1},
+				Chat:      &Chat{ID: 2, Type: chatTypePrivate},
+				VideoNote: &VideoNote{FileID: "vn1"},
+			},
+			check: func(t *testing.T, msg Message) {
+				require.NotNil(t, msg.VideoNote)
+			},
+		},
 	}
 
 	for _, tt := range tests {

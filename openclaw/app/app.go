@@ -81,9 +81,18 @@ const (
 		"to send to the current chat or an explicit target. " +
 		"Chat uploads are saved to stable host paths. For host " +
 		"commands, prefer OPENCLAW_LAST_UPLOAD_PATH or " +
-		"OPENCLAW_SESSION_UPLOADS_DIR instead of guessing " +
-		"attachment paths. For exec_command, do not assume skill " +
-		"workspace paths like work/inputs. " +
+		"OPENCLAW_SESSION_UPLOADS_DIR and OPENCLAW_LAST_UPLOAD_NAME " +
+		"instead of guessing attachment paths. When a user follows " +
+		"up about 'the PDF/audio/video I just sent', assume they " +
+		"mean the recent upload already present in this chat unless " +
+		"the reference is genuinely ambiguous. For exec_command, do " +
+		"not assume skill workspace paths like work/inputs. Do not " +
+		"expose local host paths to the user; refer to uploads and " +
+		"generated files by user-facing filenames, and use message " +
+		"with local file paths/host refs/artifact refs to send " +
+		"PDFs, images, audio, or video back to the current chat " +
+		"when needed instead of asking for chat_id or another " +
+		"upload. " +
 		"When creating a cron job from chat, omit channel and " +
 		"target to send results back to the current chat by " +
 		"default. When adding cron jobs, write the stored task " +
@@ -518,6 +527,7 @@ func NewRuntime(
 				CancelPath:   gwSrv.CancelPath(),
 			},
 			cronSvc,
+			openClawTools.execMgr,
 			opts.AdminAddr,
 			adminURL,
 		))
@@ -857,6 +867,7 @@ func run(ctx context.Context, args []string) error {
 				CancelPath:   gwSrv.CancelPath(),
 			},
 			cronSvc,
+			openClawTools.execMgr,
 			adminBinding.addr,
 			adminBinding.url,
 		))
@@ -1594,6 +1605,7 @@ type agentConfig struct {
 
 type openClawToolsBundle struct {
 	tools    []tool.Tool
+	execMgr  *octool.Manager
 	router   *outbound.Router
 	cronTool *cron.Tool
 }
@@ -1616,6 +1628,7 @@ func buildOpenClawTools(enabled bool) openClawToolsBundle {
 	}
 	return openClawToolsBundle{
 		tools:    tools,
+		execMgr:  mgr,
 		router:   router,
 		cronTool: cronTool,
 	}

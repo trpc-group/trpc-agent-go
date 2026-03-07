@@ -366,6 +366,11 @@ func (m *Manager) list() []processSession {
 	return out
 }
 
+// ListSessions returns the current exec_command session snapshots.
+func (m *Manager) ListSessions() []ProcessSession {
+	return m.list()
+}
+
 func (m *Manager) poll(id string, limit *int) (processPoll, error) {
 	s, err := m.get(id)
 	if err != nil {

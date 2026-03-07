@@ -23,6 +23,22 @@ type Channel interface {
 	Run(ctx context.Context) error
 }
 
+// OutboundFile describes one local file to send back through a channel.
+type OutboundFile struct {
+	// Path is a host path or other channel-specific local reference.
+	Path string
+	// Name optionally overrides the uploaded filename.
+	Name string
+}
+
+// OutboundMessage is a generic outbound payload for chat channels.
+type OutboundMessage struct {
+	// Text is optional plain text to send before or with media.
+	Text string
+	// Files contains optional local files to deliver.
+	Files []OutboundFile
+}
+
 // TextSender is an optional outbound capability implemented by channels
 // that can deliver plain text messages to a channel-specific target.
 //
@@ -34,4 +50,18 @@ type TextSender interface {
 
 	// SendText delivers text to the provided channel-specific target.
 	SendText(ctx context.Context, target string, text string) error
+}
+
+// MessageSender is an optional outbound capability implemented by
+// channels that can deliver text together with local media/files.
+type MessageSender interface {
+	Channel
+
+	// SendMessage delivers a structured outbound payload to the
+	// provided channel-specific target.
+	SendMessage(
+		ctx context.Context,
+		target string,
+		msg OutboundMessage,
+	) error
 }

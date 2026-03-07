@@ -222,6 +222,7 @@ const (
 	attachedFileNameFallbackFmt   = "upload_%d"
 	attachedFilesMaxPreview       = 20
 	hostRefPrefix                 = "host://"
+	ignoredAttachmentMimeType     = "application/octet-stream"
 )
 
 // NewContentRequestProcessor creates a new content request processor.
@@ -643,12 +644,26 @@ func fileLabelForAnnotation(file *model.File, count int) string {
 	if name == "" {
 		name = fmt.Sprintf(attachedFileNameFallbackFmt, count)
 	}
+	if mimeType := fileMimeLabel(file); mimeType != "" {
+		name = fmt.Sprintf("%s (%s)", name, mimeType)
+	}
 
 	ref := annotationRefDisplay(file.FileID)
 	if ref == "" || ref == name {
 		return name
 	}
 	return fmt.Sprintf("%s @ %s", name, ref)
+}
+
+func fileMimeLabel(file *model.File) string {
+	if file == nil {
+		return ""
+	}
+	mimeType := strings.TrimSpace(file.MimeType)
+	if mimeType == "" || mimeType == ignoredAttachmentMimeType {
+		return ""
+	}
+	return mimeType
 }
 
 func fileNameFromAnnotationRef(fileID string) string {
@@ -672,16 +687,6 @@ func annotationRefDisplay(fileID string) string {
 	}
 	if strings.HasPrefix(ref, fileref.ArtifactPrefix) ||
 		strings.HasPrefix(ref, fileref.WorkspacePrefix) {
-		return ref
-	}
-	if strings.HasPrefix(ref, hostRefPrefix) {
-		path := strings.TrimPrefix(ref, hostRefPrefix)
-		if filepath.IsAbs(path) {
-			return path
-		}
-		return ""
-	}
-	if filepath.IsAbs(ref) {
 		return ref
 	}
 	return ""

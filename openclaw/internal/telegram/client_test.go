@@ -15,6 +15,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -163,6 +165,43 @@ func TestClient_SendMessage(t *testing.T) {
 	require.Equal(t, testReplyMsg, msg.Text)
 }
 
+func TestClient_SendDocument(t *testing.T) {
+	t.Parallel()
+
+	testMultipartSend(
+		t,
+		pathSendDocument,
+		"document",
+		func(c *Client, ctx context.Context) (Message, error) {
+			return c.SendDocument(ctx, SendFileParams{
+				ChatID:          42,
+				MessageThreadID: 7,
+				FileName:        "report.pdf",
+				Data:            []byte("%PDF-1.4"),
+			})
+		},
+	)
+}
+
+func TestClient_SendPhoto(t *testing.T) {
+	t.Parallel()
+
+	testMultipartSend(
+		t,
+		pathSendPhoto,
+		"photo",
+		func(c *Client, ctx context.Context) (Message, error) {
+			return c.SendPhoto(ctx, SendFileParams{
+				ChatID:   42,
+				FileName: "frame.png",
+				Data: []byte{
+					0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n',
+				},
+			})
+		},
+	)
+}
+
 func TestClient_EditMessageText(t *testing.T) {
 	t.Parallel()
 
@@ -224,6 +263,103 @@ func TestClient_EditMessageText(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, testMsgID, msg.MessageID)
 	require.Equal(t, testNewText, msg.Text)
+}
+
+func testMultipartSend(
+	t *testing.T,
+	apiPath string,
+	field string,
+	send func(*Client, context.Context) (Message, error),
+) {
+	t.Helper()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		require.Equal(t, methodPost, r.Method)
+		require.Equal(t, "/bot"+testToken+"/"+apiPath, r.URL.Path)
+
+		mediaType, params, err := mime.ParseMediaType(
+			r.Header.Get("Content-Type"),
+		)
+		require.NoError(t, err)
+		require.True(t, strings.HasPrefix(mediaType, "multipart/"))
+
+		reader := multipartReader(t, r, params["boundary"])
+		values, files := readMultipartParts(t, reader)
+		require.Equal(t, "42", values["chat_id"])
+		require.Equal(t, field, files[0].field)
+		require.NotEmpty(t, files[0].name)
+		require.NotEmpty(t, files[0].data)
+
+		_ = json.NewEncoder(w).Encode(apiResponse[Message]{
+			OK: true,
+			Result: Message{
+				MessageID: 101,
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := New(
+		testToken,
+		WithBaseURL(srv.URL),
+		WithHTTPClient(srv.Client()),
+	)
+	require.NoError(t, err)
+
+	msg, err := send(c, context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 101, msg.MessageID)
+}
+
+type multipartFile struct {
+	field string
+	name  string
+	data  []byte
+}
+
+func multipartReader(
+	t *testing.T,
+	r *http.Request,
+	boundary string,
+) *multipart.Reader {
+	t.Helper()
+	require.NotEmpty(t, boundary)
+	return multipart.NewReader(r.Body, boundary)
+}
+
+func readMultipartParts(
+	t *testing.T,
+	reader *multipart.Reader,
+) (map[string]string, []multipartFile) {
+	t.Helper()
+
+	values := make(map[string]string)
+	files := make([]multipartFile, 0, 1)
+	for {
+		part, err := reader.NextPart()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		require.NoError(t, err)
+
+		data, err := io.ReadAll(part)
+		require.NoError(t, err)
+
+		name := part.FormName()
+		if part.FileName() == "" {
+			values[name] = string(data)
+			continue
+		}
+		files = append(files, multipartFile{
+			field: name,
+			name:  part.FileName(),
+			data:  data,
+		})
+	}
+	return values, files
 }
 
 func TestIsEntityParseError(t *testing.T) {

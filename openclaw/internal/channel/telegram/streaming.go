@@ -62,11 +62,13 @@ type telegramMessageSummary struct {
 	Text            string `json:"text,omitempty"`
 	Caption         string `json:"caption,omitempty"`
 
-	HasPhoto    bool `json:"has_photo,omitempty"`
-	HasDocument bool `json:"has_document,omitempty"`
-	HasAudio    bool `json:"has_audio,omitempty"`
-	HasVoice    bool `json:"has_voice,omitempty"`
-	HasVideo    bool `json:"has_video,omitempty"`
+	HasPhoto     bool `json:"has_photo,omitempty"`
+	HasDocument  bool `json:"has_document,omitempty"`
+	HasAudio     bool `json:"has_audio,omitempty"`
+	HasVoice     bool `json:"has_voice,omitempty"`
+	HasVideo     bool `json:"has_video,omitempty"`
+	HasAnimation bool `json:"has_animation,omitempty"`
+	HasVideoNote bool `json:"has_video_note,omitempty"`
 }
 
 func parseStreamingMode(raw string) (string, error) {
@@ -135,6 +137,8 @@ func (c *Channel) callGatewayAndReply(
 						HasAudio:        msg.Audio != nil,
 						HasVoice:        msg.Voice != nil,
 						HasVideo:        msg.Video != nil,
+						HasAnimation:    msg.Animation != nil,
+						HasVideoNote:    msg.VideoNote != nil,
 					},
 				)
 				defer func() {

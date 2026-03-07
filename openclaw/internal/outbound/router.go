@@ -27,24 +27,27 @@ type DeliveryTarget struct {
 
 // Router dispatches outbound messages to registered channels.
 type Router struct {
-	mu      sync.RWMutex
-	senders map[string]channel.TextSender
+	mu             sync.RWMutex
+	textSenders    map[string]channel.TextSender
+	messageSenders map[string]channel.MessageSender
 }
 
 // NewRouter creates an empty outbound router.
 func NewRouter() *Router {
 	return &Router{
-		senders: make(map[string]channel.TextSender),
+		textSenders:    make(map[string]channel.TextSender),
+		messageSenders: make(map[string]channel.MessageSender),
 	}
 }
 
 // Register adds a channel sender when the channel implements TextSender.
 func (r *Router) Register(ch channel.Channel) {
-	sender, ok := ch.(channel.TextSender)
-	if !ok {
-		return
+	if sender, ok := ch.(channel.TextSender); ok {
+		r.RegisterSender(sender)
 	}
-	r.RegisterSender(sender)
+	if sender, ok := ch.(channel.MessageSender); ok {
+		r.RegisterMessageSender(sender)
+	}
 }
 
 // RegisterSender adds or replaces a sender for its channel id.
@@ -58,7 +61,21 @@ func (r *Router) RegisterSender(sender channel.TextSender) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.senders[id] = sender
+	r.textSenders[id] = sender
+}
+
+// RegisterMessageSender adds or replaces a media-capable sender.
+func (r *Router) RegisterMessageSender(sender channel.MessageSender) {
+	if r == nil || sender == nil {
+		return
+	}
+	id := strings.TrimSpace(sender.ID())
+	if id == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.messageSenders[id] = sender
 }
 
 // Channels returns the sorted list of registered channel ids.
@@ -69,8 +86,15 @@ func (r *Router) Channels() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	out := make([]string, 0, len(r.senders))
-	for id := range r.senders {
+	index := make(map[string]struct{})
+	for id := range r.textSenders {
+		index[id] = struct{}{}
+	}
+	for id := range r.messageSenders {
+		index[id] = struct{}{}
+	}
+	out := make([]string, 0, len(index))
+	for id := range index {
 		out = append(out, id)
 	}
 	sort.Strings(out)
@@ -83,6 +107,18 @@ func (r *Router) SendText(
 	target DeliveryTarget,
 	text string,
 ) error {
+	return r.SendMessage(ctx, target, channel.OutboundMessage{
+		Text: text,
+	})
+}
+
+// SendMessage delivers text and optional local files through the selected
+// channel.
+func (r *Router) SendMessage(
+	ctx context.Context,
+	target DeliveryTarget,
+	msg channel.OutboundMessage,
+) error {
 	if r == nil {
 		return fmt.Errorf("outbound: nil router")
 	}
@@ -93,13 +129,27 @@ func (r *Router) SendText(
 	}
 
 	r.mu.RLock()
-	sender := r.senders[channelID]
+	messageSender := r.messageSenders[channelID]
+	textSender := r.textSenders[channelID]
 	r.mu.RUnlock()
-	if sender == nil {
+	if messageSender != nil {
+		return messageSender.SendMessage(
+			ctx,
+			target.Target,
+			msg,
+		)
+	}
+	if textSender == nil {
 		return fmt.Errorf(
 			"outbound: unsupported channel: %s",
 			channelID,
 		)
 	}
-	return sender.SendText(ctx, target.Target, text)
+	if len(msg.Files) > 0 {
+		return fmt.Errorf(
+			"outbound: channel does not support file delivery: %s",
+			channelID,
+		)
+	}
+	return textSender.SendText(ctx, target.Target, msg.Text)
 }

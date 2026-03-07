@@ -34,17 +34,21 @@ const (
 	defaultVoiceName      = "voice"
 	defaultAudioName      = "audio"
 	defaultVideoName      = "video"
+	defaultAnimationName  = "animation"
+	defaultVideoNoteName  = "video-note"
 
 	audioFormatWAV = "wav"
 	audioFormatMP3 = "mp3"
 )
 
 const (
-	attachmentKindPhoto    = "photo"
-	attachmentKindDocument = "document"
-	attachmentKindVideo    = "video"
-	attachmentKindVoice    = "voice"
-	attachmentKindAudio    = "audio"
+	attachmentKindPhoto     = "photo"
+	attachmentKindDocument  = "document"
+	attachmentKindVideo     = "video"
+	attachmentKindVoice     = "voice"
+	attachmentKindAudio     = "audio"
+	attachmentKindAnimation = "animation"
+	attachmentKindVideoNote = "video_note"
 )
 
 type userError struct {
@@ -99,6 +103,24 @@ func (c *Channel) buildGatewayRequest(
 		return gwclient.MessageRequest{}, err
 	}
 	parts, err = c.appendVideoPart(ctx, parts, msg.Video, maxBytes)
+	if err != nil {
+		return gwclient.MessageRequest{}, err
+	}
+	parts, err = c.appendAnimationPart(
+		ctx,
+		parts,
+		msg.Animation,
+		maxBytes,
+	)
+	if err != nil {
+		return gwclient.MessageRequest{}, err
+	}
+	parts, err = c.appendVideoNotePart(
+		ctx,
+		parts,
+		msg.VideoNote,
+		maxBytes,
+	)
 	if err != nil {
 		return gwclient.MessageRequest{}, err
 	}
@@ -342,6 +364,120 @@ func (c *Channel) appendVideoPart(
 		Name:         name,
 		MimeType:     mimeType,
 		ReportedSize: video.FileSize,
+		Blob:         ref,
+	})
+
+	parts = append(parts, gwproto.ContentPart{
+		Type: gwproto.PartTypeVideo,
+		File: &gwproto.FilePart{
+			Filename: name,
+			Data:     data,
+			Format:   mimeType,
+		},
+	})
+	return parts, nil
+}
+
+func (c *Channel) appendAnimationPart(
+	ctx context.Context,
+	parts []gwproto.ContentPart,
+	animation *tgapi.Animation,
+	maxBytes int64,
+) ([]gwproto.ContentPart, error) {
+	if animation == nil {
+		return parts, nil
+	}
+	return c.appendNamedVideoLikePart(
+		ctx,
+		parts,
+		attachmentKindAnimation,
+		strings.TrimSpace(animation.FileID),
+		strings.TrimSpace(animation.FileName),
+		strings.TrimSpace(animation.MimeType),
+		animation.FileSize,
+		defaultAnimationName,
+		maxBytes,
+	)
+}
+
+func (c *Channel) appendVideoNotePart(
+	ctx context.Context,
+	parts []gwproto.ContentPart,
+	videoNote *tgapi.VideoNote,
+	maxBytes int64,
+) ([]gwproto.ContentPart, error) {
+	if videoNote == nil {
+		return parts, nil
+	}
+	return c.appendNamedVideoLikePart(
+		ctx,
+		parts,
+		attachmentKindVideoNote,
+		strings.TrimSpace(videoNote.FileID),
+		"",
+		"",
+		videoNote.FileSize,
+		defaultVideoNoteName,
+		maxBytes,
+	)
+}
+
+func (c *Channel) appendNamedVideoLikePart(
+	ctx context.Context,
+	parts []gwproto.ContentPart,
+	kind string,
+	fileID string,
+	fileName string,
+	mimeType string,
+	fileSize int64,
+	fallbackName string,
+	maxBytes int64,
+) ([]gwproto.ContentPart, error) {
+	if fileID == "" {
+		return parts, nil
+	}
+
+	trace := debugrecorder.TraceFromContext(ctx)
+	if fileSize > maxBytes && fileSize > 0 {
+		uerr := &userError{
+			userMessage: attachmentTooLargeMsg,
+			err:         tgapi.ErrFileTooLarge,
+		}
+		recordAttachment(trace, telegramAttachmentSummary{
+			Kind:         kind,
+			FileID:       fileID,
+			Name:         fileName,
+			MimeType:     mimeType,
+			ReportedSize: fileSize,
+			UserMessage:  uerr.userMessage,
+			Error:        uerr.Error(),
+		})
+		return nil, uerr
+	}
+
+	file, data, err := c.bot.DownloadFileByID(ctx, fileID, maxBytes)
+	if err != nil {
+		mapped := mapDownloadError(err)
+		recordAttachment(trace, telegramAttachmentSummary{
+			Kind:         kind,
+			FileID:       fileID,
+			Name:         fileName,
+			MimeType:     mimeType,
+			ReportedSize: fileSize,
+			UserMessage:  userMessageFromErr(mapped),
+			Error:        err.Error(),
+		})
+		return nil, mapped
+	}
+
+	name := fallbackFilename(fileName, file.FilePath, fallbackName)
+	ref := storeBlob(trace, name, data)
+	recordAttachment(trace, telegramAttachmentSummary{
+		Kind:         kind,
+		FileID:       fileID,
+		Name:         name,
+		MimeType:     mimeType,
+		ReportedSize: fileSize,
 		Blob:         ref,
 	})
 

@@ -506,10 +506,12 @@ go run ./cmd/openclaw doctor -config ./openclaw.yaml
 Open a chat with your bot (or add it into a group) and send:
 
 - a text message, or
-- a photo, document, audio, voice note, or video.
+- a photo, document, audio, voice note, video, animation, or video note.
 
 Inbound attachments are downloaded from Telegram and forwarded to the gateway
-as multimodal `content_parts`.
+as multimodal `content_parts`. The uploaded files are also persisted under the
+OpenClaw state directory so later turns in the same chat can keep working on
+the same PDF, audio, or video without asking the user to upload again.
 
 By default, DMs are **fail-closed** and require pairing.
 
@@ -1026,7 +1028,8 @@ The assistant gets:
 
 - `exec_command` for general host shell work
 - `write_stdin` and `kill_session` for interactive commands
-- `message` for sending to the current chat or explicit targets
+- `message` for sending text, PDFs, images, audio, or video to the current
+  chat or explicit targets
 - `cron` for future or recurring jobs
 
 To disable these tools explicitly:
@@ -1066,5 +1069,7 @@ includes:
 - runtime and host metadata
 - gateway routes and JSON endpoints
 - scheduled job inspection plus run/remove/clear actions
+- exec session inspection
+- persisted upload browsing with direct open/download links
 - session-indexed debug trace browsing with direct links to
   `meta.json`, `events.jsonl`, and `result.json`

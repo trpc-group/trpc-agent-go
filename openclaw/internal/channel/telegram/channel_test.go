@@ -91,6 +91,12 @@ type stubBot struct {
 	sent      []tgapi.SendMessageParams
 	sendErr   error
 	sendHook  func(tgapi.SendMessageParams) error
+	docs      []tgapi.SendFileParams
+	photos    []tgapi.SendFileParams
+	audios    []tgapi.SendFileParams
+	voices    []tgapi.SendFileParams
+	videos    []tgapi.SendFileParams
+	fileErr   error
 	edits     []tgapi.EditMessageTextParams
 	editErr   error
 	editHook  func(tgapi.EditMessageTextParams) error
@@ -156,6 +162,58 @@ func (b *stubBot) SendMessage(
 	return tgapi.Message{
 		MessageID: b.nextMessageID,
 		Text:      params.Text,
+	}, nil
+}
+
+func (b *stubBot) SendDocument(
+	_ context.Context,
+	params tgapi.SendFileParams,
+) (tgapi.Message, error) {
+	return b.appendFileSend(&b.docs, params)
+}
+
+func (b *stubBot) SendPhoto(
+	_ context.Context,
+	params tgapi.SendFileParams,
+) (tgapi.Message, error) {
+	return b.appendFileSend(&b.photos, params)
+}
+
+func (b *stubBot) SendAudio(
+	_ context.Context,
+	params tgapi.SendFileParams,
+) (tgapi.Message, error) {
+	return b.appendFileSend(&b.audios, params)
+}
+
+func (b *stubBot) SendVoice(
+	_ context.Context,
+	params tgapi.SendFileParams,
+) (tgapi.Message, error) {
+	return b.appendFileSend(&b.voices, params)
+}
+
+func (b *stubBot) SendVideo(
+	_ context.Context,
+	params tgapi.SendFileParams,
+) (tgapi.Message, error) {
+	return b.appendFileSend(&b.videos, params)
+}
+
+func (b *stubBot) appendFileSend(
+	dst *[]tgapi.SendFileParams,
+	params tgapi.SendFileParams,
+) (tgapi.Message, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	*dst = append(*dst, params)
+	if b.fileErr != nil {
+		return tgapi.Message{}, b.fileErr
+	}
+
+	b.nextMessageID++
+	return tgapi.Message{
+		MessageID: b.nextMessageID,
 	}, nil
 }
 

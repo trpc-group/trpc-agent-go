@@ -29,6 +29,22 @@ func TestResolveTarget_ExplicitSessionID(t *testing.T) {
 	require.Equal(t, "123", target.Target)
 }
 
+func TestResolveTarget_DMSessionWithSuffix(t *testing.T) {
+	t.Parallel()
+
+	target, err := ResolveTarget(
+		context.Background(),
+		DeliveryTarget{
+			Target: "telegram:dm:123:session-abc",
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, DeliveryTarget{
+		Channel: "telegram",
+		Target:  "123",
+	}, target)
+}
+
 func TestResolveTarget_RuntimeStateFallback(t *testing.T) {
 	ctx := invocationCtx(
 		t,

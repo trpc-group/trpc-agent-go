@@ -12,31 +12,65 @@ package telegram
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/url"
+	"os"
+	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/artifact"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
 	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 )
 
 const (
 	sessionDMPrefix     = channelID + ":dm:"
 	sessionThreadPrefix = channelID + ":thread:"
+
+	fileURLPrefix = "file://"
+
+	mimePrefixImage = "image/"
+	mimePrefixAudio = "audio/"
+	mimePrefixVideo = "video/"
+	mimePrefixText  = "text/"
+
+	mimeVoiceOGG    = "audio/ogg"
+	mimeImageGIF    = "image/gif"
+	mimeOctetStream = "application/octet-stream"
+
+	uploadModeDocument = "document"
+	uploadModePhoto    = "photo"
+	uploadModeAudio    = "audio"
+	uploadModeVoice    = "voice"
+	uploadModeVideo    = "video"
+
+	workspaceFileFallback = "workspace-output"
 )
+
+type outboundFilePayload struct {
+	Name string
+	Data []byte
+}
 
 // ResolveTextTargetFromSessionID converts a Telegram session id into the
 // channel-specific outbound target used by SendText.
 func ResolveTextTargetFromSessionID(sessionID string) (string, bool) {
+	raw := strings.TrimSpace(sessionID)
 	switch {
-	case strings.HasPrefix(sessionID, sessionDMPrefix):
-		target := strings.TrimSpace(
-			strings.TrimPrefix(sessionID, sessionDMPrefix),
+	case strings.HasPrefix(raw, sessionDMPrefix):
+		return parseDMSessionTarget(
+			strings.TrimPrefix(raw, sessionDMPrefix),
 		)
-		return target, target != ""
-	case strings.HasPrefix(sessionID, sessionThreadPrefix):
-		target := strings.TrimSpace(
-			strings.TrimPrefix(sessionID, sessionThreadPrefix),
+	case strings.HasPrefix(raw, sessionThreadPrefix):
+		return parseThreadSessionTarget(
+			strings.TrimPrefix(raw, sessionThreadPrefix),
 		)
-		return target, target != ""
 	default:
 		return "", false
 	}
@@ -73,6 +107,40 @@ func (c *Channel) SendText(
 	return nil
 }
 
+// SendMessage implements channel.MessageSender for Telegram.
+func (c *Channel) SendMessage(
+	ctx context.Context,
+	target string,
+	msg channel.OutboundMessage,
+) error {
+	if c == nil || c.bot == nil {
+		return fmt.Errorf("telegram: sender unavailable")
+	}
+
+	chatID, threadID, err := parseTextTarget(target)
+	if err != nil {
+		return err
+	}
+
+	if strings.TrimSpace(msg.Text) != "" {
+		if err := c.SendText(ctx, target, msg.Text); err != nil {
+			return err
+		}
+	}
+
+	for _, file := range msg.Files {
+		if err := c.sendFile(
+			ctx,
+			chatID,
+			threadID,
+			file,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func parseTextTarget(target string) (int64, int, error) {
 	raw := strings.TrimSpace(target)
 	if raw == "" {
@@ -88,28 +156,393 @@ func parseTextTarget(target string) (int64, int, error) {
 
 	if idx := strings.Index(raw, threadTopicSep); idx >= 0 {
 		chatPart = strings.TrimSpace(raw[:idx])
-		topicPart := strings.TrimSpace(
+		topicPart := leadingSessionToken(
 			raw[idx+len(threadTopicSep):],
 		)
 		if topicPart == "" {
 			return 0, 0, fmt.Errorf("telegram: empty topic target")
 		}
-		topicID, err := strconv.Atoi(topicPart)
+		parsed, err := parseTopicID(topicPart)
 		if err != nil {
-			return 0, 0, fmt.Errorf(
-				"telegram: invalid topic target: %w",
-				err,
-			)
+			return 0, 0, err
 		}
-		threadID = topicID
+		threadID = parsed
 	}
 
-	chatID, err := strconv.ParseInt(chatPart, 10, 64)
+	chatID, err := parseChatID(chatPart)
 	if err != nil {
-		return 0, 0, fmt.Errorf(
+		return 0, 0, err
+	}
+	return chatID, threadID, nil
+}
+
+func parseDMSessionTarget(raw string) (string, bool) {
+	chatPart := leadingSessionToken(raw)
+	if chatPart == "" {
+		return "", false
+	}
+	return chatPart, true
+}
+
+func parseThreadSessionTarget(raw string) (string, bool) {
+	idx := strings.Index(raw, threadTopicSep)
+	if idx < 0 {
+		return "", false
+	}
+	chatPart := leadingSessionToken(raw[:idx])
+	topicPart := leadingSessionToken(
+		raw[idx+len(threadTopicSep):],
+	)
+	if chatPart == "" || topicPart == "" {
+		return "", false
+	}
+	return chatPart + threadTopicSep + topicPart, true
+}
+
+func leadingSessionToken(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	if idx := strings.Index(trimmed, ":"); idx >= 0 {
+		return strings.TrimSpace(trimmed[:idx])
+	}
+	return trimmed
+}
+
+func parseChatID(raw string) (int64, error) {
+	chatID, err := strconvParseInt(raw)
+	if err != nil {
+		return 0, fmt.Errorf(
 			"telegram: invalid chat target: %w",
 			err,
 		)
 	}
-	return chatID, threadID, nil
+	return chatID, nil
+}
+
+func parseTopicID(raw string) (int, error) {
+	topicID, err := strconvAtoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf(
+			"telegram: invalid topic target: %w",
+			err,
+		)
+	}
+	return topicID, nil
+}
+
+func (c *Channel) sendFile(
+	ctx context.Context,
+	chatID int64,
+	threadID int,
+	file channel.OutboundFile,
+) error {
+	payload, err := resolveOutboundFile(ctx, file)
+	if err != nil {
+		return err
+	}
+
+	params := tgapi.SendFileParams{
+		ChatID:          chatID,
+		MessageThreadID: threadID,
+		FileName:        payload.Name,
+		Data:            payload.Data,
+	}
+
+	switch detectUploadMode(payload.Name, payload.Data) {
+	case uploadModePhoto:
+		_, err = c.bot.SendPhoto(ctx, params)
+	case uploadModeAudio:
+		_, err = c.bot.SendAudio(ctx, params)
+	case uploadModeVoice:
+		_, err = c.bot.SendVoice(ctx, params)
+	case uploadModeVideo:
+		_, err = c.bot.SendVideo(ctx, params)
+	default:
+		_, err = c.bot.SendDocument(ctx, params)
+	}
+	return err
+}
+
+func resolveOutboundFile(
+	ctx context.Context,
+	file channel.OutboundFile,
+) (outboundFilePayload, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	raw := strings.TrimSpace(file.Path)
+	if raw == "" {
+		return outboundFilePayload{}, fmt.Errorf(
+			"telegram: empty file path",
+		)
+	}
+
+	switch {
+	case strings.HasPrefix(raw, fileref.ArtifactPrefix):
+		return resolveArtifactOutboundFile(ctx, raw, file.Name)
+	case strings.HasPrefix(raw, fileref.WorkspacePrefix):
+		return resolveWorkspaceOutboundFile(ctx, raw, file.Name)
+	default:
+		return resolveHostOutboundFile(raw, file.Name)
+	}
+}
+
+func resolveArtifactOutboundFile(
+	ctx context.Context,
+	raw string,
+	nameHint string,
+) (outboundFilePayload, error) {
+	ref, err := fileref.Parse(raw)
+	if err != nil {
+		return outboundFilePayload{}, fmt.Errorf(
+			"telegram: parse artifact ref: %w",
+			err,
+		)
+	}
+	data, _, _, err := codeexecutor.LoadArtifactHelper(
+		withArtifactContext(ctx),
+		ref.ArtifactName,
+		ref.ArtifactVersion,
+	)
+	if err != nil {
+		return outboundFilePayload{}, fmt.Errorf(
+			"telegram: load artifact: %w",
+			err,
+		)
+	}
+
+	name := strings.TrimSpace(nameHint)
+	if name == "" {
+		name = path.Base(strings.TrimSpace(ref.ArtifactName))
+	}
+	if name == "" || name == "." || name == "/" {
+		name = defaultAttachmentName
+	}
+	return outboundFilePayload{
+		Name: name,
+		Data: data,
+	}, nil
+}
+
+func resolveWorkspaceOutboundFile(
+	ctx context.Context,
+	raw string,
+	nameHint string,
+) (outboundFilePayload, error) {
+	content, _, handled, err := fileref.TryRead(ctx, raw)
+	if err != nil {
+		return outboundFilePayload{}, fmt.Errorf(
+			"telegram: load workspace ref: %w",
+			err,
+		)
+	}
+	if !handled {
+		return outboundFilePayload{}, fmt.Errorf(
+			"telegram: unsupported workspace ref: %s",
+			raw,
+		)
+	}
+
+	ref, err := fileref.Parse(raw)
+	if err != nil {
+		return outboundFilePayload{}, fmt.Errorf(
+			"telegram: parse workspace ref: %w",
+			err,
+		)
+	}
+
+	name := strings.TrimSpace(nameHint)
+	if name == "" {
+		name = path.Base(strings.TrimSpace(ref.Path))
+	}
+	if name == "" || name == "." || name == "/" {
+		name = workspaceFileFallback
+	}
+	return outboundFilePayload{
+		Name: name,
+		Data: []byte(content),
+	}, nil
+}
+
+func resolveHostOutboundFile(
+	raw string,
+	nameHint string,
+) (outboundFilePayload, error) {
+	resolved, err := resolveOutboundFilePath(raw)
+	if err != nil {
+		return outboundFilePayload{}, err
+	}
+
+	data, err := os.ReadFile(resolved)
+	if err != nil {
+		return outboundFilePayload{}, fmt.Errorf(
+			"telegram: read file: %w",
+			err,
+		)
+	}
+
+	name := strings.TrimSpace(nameHint)
+	if name == "" {
+		name = filepath.Base(resolved)
+	}
+	return outboundFilePayload{
+		Name: name,
+		Data: data,
+	}, nil
+}
+
+func resolveOutboundFilePath(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", fmt.Errorf("telegram: empty file path")
+	}
+	if path, ok := uploads.PathFromHostRef(trimmed); ok {
+		return path, nil
+	}
+	if strings.HasPrefix(trimmed, fileURLPrefix) {
+		u, err := url.Parse(trimmed)
+		if err != nil {
+			return "", fmt.Errorf("telegram: invalid file url: %w", err)
+		}
+		path := strings.TrimSpace(u.Path)
+		if path == "" {
+			return "", fmt.Errorf("telegram: empty file url path")
+		}
+		return filepath.Clean(path), nil
+	}
+	if trimmed == "~" || strings.HasPrefix(trimmed, "~/") {
+		expanded, err := expandHomePath(trimmed)
+		if err != nil {
+			return "", err
+		}
+		return filepath.Clean(expanded), nil
+	}
+	if filepath.IsAbs(trimmed) {
+		return filepath.Clean(trimmed), nil
+	}
+	abs, err := filepath.Abs(trimmed)
+	if err != nil {
+		return "", fmt.Errorf("telegram: resolve file path: %w", err)
+	}
+	return abs, nil
+}
+
+func expandHomePath(raw string) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("telegram: resolve home dir: %w", err)
+	}
+	if strings.TrimSpace(raw) == "~" {
+		return home, nil
+	}
+	return filepath.Join(home, strings.TrimPrefix(raw, "~/")), nil
+}
+
+func withArtifactContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if svc, ok := codeexecutor.ArtifactServiceFromContext(ctx); ok &&
+		svc != nil {
+		return ctx
+	}
+	inv, ok := agent.InvocationFromContext(ctx)
+	if !ok || inv == nil || inv.ArtifactService == nil ||
+		inv.Session == nil {
+		return ctx
+	}
+
+	ctx = codeexecutor.WithArtifactService(ctx, inv.ArtifactService)
+	return codeexecutor.WithArtifactSession(ctx, artifact.SessionInfo{
+		AppName:   inv.Session.AppName,
+		UserID:    inv.Session.UserID,
+		SessionID: inv.Session.ID,
+	})
+}
+
+func detectUploadMode(name string, data []byte) string {
+	contentType := detectMediaType(name, data)
+	switch {
+	case strings.HasPrefix(contentType, mimePrefixImage) &&
+		contentType != mimeImageGIF:
+		return uploadModePhoto
+	case isVoiceMedia(contentType, name):
+		return uploadModeVoice
+	case strings.HasPrefix(contentType, mimePrefixAudio):
+		return uploadModeAudio
+	case strings.HasPrefix(contentType, mimePrefixVideo):
+		return uploadModeVideo
+	default:
+		return uploadModeDocument
+	}
+}
+
+func detectMediaType(name string, data []byte) string {
+	contentType := strings.TrimSpace(http.DetectContentType(data))
+	if contentType == mimePrefixImage ||
+		contentType == mimePrefixAudio ||
+		contentType == mimePrefixVideo {
+		contentType = ""
+	}
+	extType := typeFromExtension(filepath.Ext(name))
+	if extType == "" {
+		return contentType
+	}
+	if strings.TrimSpace(contentType) == "" ||
+		contentType == mimeOctetStream ||
+		strings.HasPrefix(contentType, mimePrefixText) {
+		return extType
+	}
+	return contentType
+}
+
+func typeFromExtension(ext string) string {
+	switch strings.ToLower(strings.TrimSpace(ext)) {
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".png":
+		return "image/png"
+	case ".webp":
+		return "image/webp"
+	case ".gif":
+		return mimeImageGIF
+	case ".pdf":
+		return "application/pdf"
+	case ".mp3":
+		return "audio/mpeg"
+	case ".wav":
+		return "audio/wav"
+	case ".ogg", ".oga":
+		return mimeVoiceOGG
+	case ".mp4":
+		return "video/mp4"
+	case ".mov":
+		return "video/quicktime"
+	case ".webm":
+		return "video/webm"
+	default:
+		return ""
+	}
+}
+
+func isVoiceMedia(contentType string, name string) bool {
+	if contentType == mimeVoiceOGG {
+		return true
+	}
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".ogg", ".oga":
+		return true
+	default:
+		return false
+	}
+}
+
+func strconvParseInt(raw string) (int64, error) {
+	return strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+}
+
+func strconvAtoi(raw string) (int, error) {
+	return strconv.Atoi(strings.TrimSpace(raw))
 }

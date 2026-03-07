@@ -30,11 +30,13 @@ type Message struct {
 	Text            string `json:"text,omitempty"`
 	Caption         string `json:"caption,omitempty"`
 
-	Photo    []PhotoSize `json:"photo,omitempty"`
-	Document *Document   `json:"document,omitempty"`
-	Audio    *Audio      `json:"audio,omitempty"`
-	Voice    *Voice      `json:"voice,omitempty"`
-	Video    *Video      `json:"video,omitempty"`
+	Photo     []PhotoSize `json:"photo,omitempty"`
+	Document  *Document   `json:"document,omitempty"`
+	Audio     *Audio      `json:"audio,omitempty"`
+	Voice     *Voice      `json:"voice,omitempty"`
+	Video     *Video      `json:"video,omitempty"`
+	Animation *Animation  `json:"animation,omitempty"`
+	VideoNote *VideoNote  `json:"video_note,omitempty"`
 }
 
 // PhotoSize is one size variant of a photo.
@@ -91,6 +93,25 @@ type Video struct {
 	Duration     int    `json:"duration,omitempty"`
 	FileName     string `json:"file_name,omitempty"`
 	MimeType     string `json:"mime_type,omitempty"`
+	FileSize     int64  `json:"file_size,omitempty"`
+}
+
+// Animation is one animated file. Telegram often uses this shape for
+// short silent clips or GIF-like uploads.
+type Animation struct {
+	FileID       string `json:"file_id"`
+	FileUniqueID string `json:"file_unique_id,omitempty"`
+	Duration     int    `json:"duration,omitempty"`
+	FileName     string `json:"file_name,omitempty"`
+	MimeType     string `json:"mime_type,omitempty"`
+	FileSize     int64  `json:"file_size,omitempty"`
+}
+
+// VideoNote is one circular video note.
+type VideoNote struct {
+	FileID       string `json:"file_id"`
+	FileUniqueID string `json:"file_unique_id,omitempty"`
+	Duration     int    `json:"duration,omitempty"`
 	FileSize     int64  `json:"file_size,omitempty"`
 }
 

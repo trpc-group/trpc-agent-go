@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/cron"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/octool"
 )
 
 type stubRunner struct {
@@ -408,4 +409,85 @@ func TestServiceWithoutCron(t *testing.T) {
 	clearReq := httptest.NewRequest(http.MethodPost, routeJobsClear, nil)
 	handler.ServeHTTP(clearRR, clearReq)
 	require.Equal(t, http.StatusNotFound, clearRR.Code)
+}
+
+func TestServiceSnapshotIncludesUploadsAndExec(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	uploadsRoot := filepath.Join(stateDir, defaultUploadsDir)
+	require.NoError(
+		t,
+		os.MkdirAll(filepath.Join(uploadsRoot, "telegram", "u1"), 0o755),
+	)
+	require.NoError(
+		t,
+		os.WriteFile(
+			filepath.Join(uploadsRoot, "telegram", "u1", "clip.mp4"),
+			[]byte("video"),
+			0o600,
+		),
+	)
+
+	svc := New(Config{
+		StateDir: stateDir,
+		Exec:     octool.NewManager(),
+	})
+	snap := svc.Snapshot()
+	require.True(t, snap.Exec.Enabled)
+	require.Equal(t, 0, snap.Exec.SessionCount)
+	require.True(t, snap.Uploads.Enabled)
+	require.Equal(t, 1, snap.Uploads.FileCount)
+	require.Equal(t, "clip.mp4", snap.Uploads.Files[0].Name)
+
+	handler := svc.Handler()
+
+	execRR := httptest.NewRecorder()
+	execReq := httptest.NewRequest(
+		http.MethodGet,
+		routeExecSessionsJSON,
+		nil,
+	)
+	handler.ServeHTTP(execRR, execReq)
+	require.Equal(t, http.StatusOK, execRR.Code)
+	require.Contains(t, execRR.Body.String(), "[]")
+
+	uploadsRR := httptest.NewRecorder()
+	uploadsReq := httptest.NewRequest(
+		http.MethodGet,
+		routeUploadsJSON,
+		nil,
+	)
+	handler.ServeHTTP(uploadsRR, uploadsReq)
+	require.Equal(t, http.StatusOK, uploadsRR.Code)
+	require.Contains(t, uploadsRR.Body.String(), "clip.mp4")
+
+	openRR := httptest.NewRecorder()
+	openReq := httptest.NewRequest(
+		http.MethodGet,
+		routeUploadFile+"?"+url.Values{
+			queryPath: []string{"telegram/u1/clip.mp4"},
+		}.Encode(),
+		nil,
+	)
+	handler.ServeHTTP(openRR, openReq)
+	require.Equal(t, http.StatusOK, openRR.Code)
+	require.Equal(t, "video", openRR.Body.String())
+
+	downloadRR := httptest.NewRecorder()
+	downloadReq := httptest.NewRequest(
+		http.MethodGet,
+		routeUploadFile+"?"+url.Values{
+			queryPath:     []string{"telegram/u1/clip.mp4"},
+			queryDownload: []string{"1"},
+		}.Encode(),
+		nil,
+	)
+	handler.ServeHTTP(downloadRR, downloadReq)
+	require.Equal(t, http.StatusOK, downloadRR.Code)
+	require.Contains(
+		t,
+		downloadRR.Header().Get("Content-Disposition"),
+		"clip.mp4",
+	)
 }

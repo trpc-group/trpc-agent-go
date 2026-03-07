@@ -4285,8 +4285,9 @@ func TestContentRequestProcessor_AnnotatesUserFileInputs_HostRef(t *testing.T) {
 			{
 				Type: model.ContentTypeFile,
 				File: &model.File{
-					Name:   "report.pdf",
-					FileID: "host:///tmp/openclaw/report.pdf",
+					Name:     "report.pdf",
+					FileID:   "host:///tmp/openclaw/report.pdf",
+					MimeType: "application/pdf",
 				},
 			},
 		},
@@ -4311,11 +4312,8 @@ func TestContentRequestProcessor_AnnotatesUserFileInputs_HostRef(t *testing.T) {
 	first := req.Messages[0].ContentParts[0]
 	if assert.NotNil(t, first.Text) {
 		assert.Contains(t, *first.Text, "report.pdf")
-		assert.Contains(
-			t,
-			*first.Text,
-			"/tmp/openclaw/report.pdf",
-		)
+		assert.Contains(t, *first.Text, "application/pdf")
+		assert.NotContains(t, *first.Text, "/tmp/openclaw/report.pdf")
 	}
 }
 
@@ -4343,16 +4341,12 @@ func TestFileNameFromArtifactRef_EdgeCases(t *testing.T) {
 }
 
 func TestAnnotationRefDisplay_EdgeCases(t *testing.T) {
-	t.Run("absolute path is preserved", func(t *testing.T) {
-		assert.Equal(t, "/tmp/a.pdf", annotationRefDisplay("/tmp/a.pdf"))
+	t.Run("absolute path is hidden", func(t *testing.T) {
+		assert.Equal(t, "", annotationRefDisplay("/tmp/a.pdf"))
 	})
 
-	t.Run("host ref trims prefix", func(t *testing.T) {
-		assert.Equal(
-			t,
-			"/tmp/a.pdf",
-			annotationRefDisplay("host:///tmp/a.pdf"),
-		)
+	t.Run("host ref stays hidden", func(t *testing.T) {
+		assert.Equal(t, "", annotationRefDisplay("host:///tmp/a.pdf"))
 	})
 
 	t.Run("provider file id stays hidden", func(t *testing.T) {

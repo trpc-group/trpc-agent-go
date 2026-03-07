@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/cron"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/octool"
 )
 
 const (
@@ -32,6 +33,9 @@ const (
 	routeJobRun            = "/api/cron/jobs/run"
 	routeJobRemove         = "/api/cron/jobs/remove"
 	routeJobsClear         = "/api/cron/jobs/clear"
+	routeExecSessionsJSON  = "/api/exec/sessions"
+	routeUploadsJSON       = "/api/uploads"
+	routeUploadFile        = "/uploads/file"
 	routeDebugSessionsJSON = "/api/debug/sessions"
 	routeDebugTracesJSON   = "/api/debug/traces"
 	routeDebugFile         = "/debug/file"
@@ -41,6 +45,8 @@ const (
 	querySessionID = "session_id"
 	queryTrace     = "trace"
 	queryName      = "name"
+	queryPath      = "path"
+	queryDownload  = "download"
 	formJobID      = "job_id"
 
 	refreshSeconds = 15
@@ -91,6 +97,7 @@ type Config struct {
 	GatewayRoutes Routes
 
 	Cron *cron.Service
+	Exec *octool.Manager
 }
 
 type Service struct {
@@ -129,6 +136,9 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc(routeJobRun, s.handleRunJob)
 	mux.HandleFunc(routeJobRemove, s.handleRemoveJob)
 	mux.HandleFunc(routeJobsClear, s.handleClearJobs)
+	mux.HandleFunc(routeExecSessionsJSON, s.handleExecSessionsJSON)
+	mux.HandleFunc(routeUploadsJSON, s.handleUploadsJSON)
+	mux.HandleFunc(routeUploadFile, s.handleUploadFile)
 	mux.HandleFunc(routeDebugSessionsJSON, s.handleDebugSessionsJSON)
 	mux.HandleFunc(routeDebugTracesJSON, s.handleDebugTracesJSON)
 	mux.HandleFunc(routeDebugFile, s.handleDebugFile)
@@ -161,10 +171,12 @@ type snapshot struct {
 	StateDir string `json:"state_dir,omitempty"`
 	DebugDir string `json:"debug_dir,omitempty"`
 
-	Channels []string    `json:"channels,omitempty"`
-	Routes   Routes      `json:"routes,omitempty"`
-	Cron     cronStatus  `json:"cron"`
-	Debug    debugStatus `json:"debug"`
+	Channels []string      `json:"channels,omitempty"`
+	Routes   Routes        `json:"routes,omitempty"`
+	Exec     execStatus    `json:"exec"`
+	Uploads  uploadsStatus `json:"uploads"`
+	Cron     cronStatus    `json:"cron"`
+	Debug    debugStatus   `json:"debug"`
 }
 
 type cronStatus struct {
@@ -227,6 +239,8 @@ func (s *Service) Snapshot() snapshot {
 		StateDir:       strings.TrimSpace(s.cfg.StateDir),
 		DebugDir:       strings.TrimSpace(s.cfg.DebugDir),
 		Routes:         s.cfg.GatewayRoutes,
+		Exec:           s.execStatus(),
+		Uploads:        s.uploadsStatus(),
 		Debug:          s.debugStatus(),
 	}
 
@@ -305,6 +319,58 @@ func (s *Service) handleJobsJSON(
 	writeJSON(w, http.StatusOK, s.Snapshot().Cron.Jobs)
 }
 
+func (s *Service) handleExecSessionsJSON(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.Snapshot().Exec.Sessions)
+}
+
+func (s *Service) handleUploadsJSON(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.Snapshot().Uploads)
+}
+
+func (s *Service) handleUploadFile(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	root := resolveUploadsRoot(s.cfg.StateDir)
+	filePath, err := resolveUploadFile(
+		root,
+		strings.TrimSpace(r.URL.Query().Get(queryPath)),
+	)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(r.URL.Query().Get(queryDownload)) != "" {
+		w.Header().Set(
+			"Content-Disposition",
+			fmt.Sprintf(
+				"attachment; filename=%q",
+				filepath.Base(filePath),
+			),
+		)
+	}
+	http.ServeFile(w, r, filePath)
+}
+
 func (s *Service) handleDebugSessionsJSON(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -349,6 +415,38 @@ func (s *Service) handleDebugFile(
 		return
 	}
 	http.ServeFile(w, r, filePath)
+}
+
+func resolveUploadFile(root string, rel string) (string, error) {
+	if strings.TrimSpace(root) == "" {
+		return "", fmt.Errorf("uploads are not enabled")
+	}
+	clean := filepath.Clean(strings.TrimSpace(rel))
+	if clean == "." || clean == "" {
+		return "", fmt.Errorf("missing upload path")
+	}
+	if strings.HasPrefix(clean, "..") ||
+		filepath.IsAbs(clean) {
+		return "", fmt.Errorf("invalid upload path")
+	}
+
+	filePath := filepath.Join(root, clean)
+	relative, err := filepath.Rel(root, filePath)
+	if err != nil {
+		return "", fmt.Errorf("resolve upload path: %w", err)
+	}
+	if relative == "." || strings.HasPrefix(relative, "..") {
+		return "", fmt.Errorf("invalid upload path")
+	}
+
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return "", err
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("upload path is a directory")
+	}
+	return filePath, nil
 }
 
 func (s *Service) handleRunJob(
@@ -820,6 +918,14 @@ const adminPageHTML = `<!doctype html>
         <span class="stat-value">{{.Snapshot.Cron.JobCount}}</span>
       </article>
       <article class="card">
+        <span class="stat-label">Exec Sessions</span>
+        <span class="stat-value">{{.Snapshot.Exec.SessionCount}}</span>
+      </article>
+      <article class="card">
+        <span class="stat-label">Uploads</span>
+        <span class="stat-value">{{.Snapshot.Uploads.FileCount}}</span>
+      </article>
+      <article class="card">
         <span class="stat-label">Debug Sessions</span>
         <span class="stat-value">{{.Snapshot.Debug.SessionCount}}</span>
       </article>
@@ -893,6 +999,8 @@ const adminPageHTML = `<!doctype html>
           <dd>
             <a href="/api/status">status</a> ·
             <a href="/api/cron/jobs">jobs</a> ·
+            <a href="/api/exec/sessions">exec</a> ·
+            <a href="/api/uploads">uploads</a> ·
             <a href="/api/debug/sessions">debug sessions</a> ·
             <a href="/api/debug/traces">debug traces</a>
           </dd>
@@ -943,6 +1051,54 @@ const adminPageHTML = `<!doctype html>
             {{if .Snapshot.Debug.Error}}
               <span class="subtle">{{.Snapshot.Debug.Error}}</span>
             {{else if .Snapshot.Debug.Enabled}}
+              ready
+            {{else}}
+              idle
+            {{end}}
+          </dd>
+        </dl>
+      </article>
+
+      <article class="card">
+        <h2>Exec Surface</h2>
+        <p class="subtle">
+          Live view of host <code>exec_command</code> sessions. This makes it
+          easier to understand long-running interactive jobs without digging
+          through runner logs first.
+        </p>
+        <dl class="meta">
+          <dt>Enabled</dt>
+          <dd>{{.Snapshot.Exec.Enabled}}</dd>
+          <dt>Sessions</dt>
+          <dd>{{.Snapshot.Exec.SessionCount}}</dd>
+          <dt>Running</dt>
+          <dd>{{.Snapshot.Exec.RunningCount}}</dd>
+          <dt>JSON</dt>
+          <dd><a href="/api/exec/sessions">/api/exec/sessions</a></dd>
+        </dl>
+      </article>
+
+      <article class="card">
+        <h2>Uploads</h2>
+        <p class="subtle">
+          Recent persisted chat uploads. This helps debug multi-turn file,
+          PDF, audio, and video workflows without exposing host paths in
+          the user conversation.
+        </p>
+        <dl class="meta">
+          <dt>Enabled</dt>
+          <dd>{{.Snapshot.Uploads.Enabled}}</dd>
+          <dt>Root</dt>
+          <dd><code>{{.Snapshot.Uploads.Root}}</code></dd>
+          <dt>Files</dt>
+          <dd>{{.Snapshot.Uploads.FileCount}}</dd>
+          <dt>Total Bytes</dt>
+          <dd>{{.Snapshot.Uploads.TotalBytes}}</dd>
+          <dt>Status</dt>
+          <dd>
+            {{if .Snapshot.Uploads.Error}}
+              <span class="subtle">{{.Snapshot.Uploads.Error}}</span>
+            {{else if .Snapshot.Uploads.Enabled}}
               ready
             {{else}}
               idle
@@ -1014,6 +1170,72 @@ const adminPageHTML = `<!doctype html>
       </table>
       {{else}}
       <p class="empty">No scheduled jobs.</p>
+      {{end}}
+    </section>
+
+    <section class="card" style="margin-top: 24px;">
+      <h2>Exec Sessions</h2>
+      {{if .Snapshot.Exec.Sessions}}
+      <table>
+        <thead>
+          <tr>
+            <th>Session</th>
+            <th>Status</th>
+            <th>Command</th>
+            <th>Timing</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Snapshot.Exec.Sessions}}
+          <tr>
+            <td><code>{{.SessionID}}</code></td>
+            <td>{{.Status}}{{if .ExitCode}}<br>exit {{.ExitCode}}{{end}}</td>
+            <td><code>{{.Command}}</code></td>
+            <td>
+              started {{.StartedAt}}
+              {{if .DoneAt}}<br>done {{.DoneAt}}{{end}}
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+      {{else}}
+      <p class="empty">No exec sessions.</p>
+      {{end}}
+    </section>
+
+    <section class="card" style="margin-top: 24px;">
+      <h2>Recent Uploads</h2>
+      {{if .Snapshot.Uploads.Files}}
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Kind</th>
+            <th>Relative Path</th>
+            <th>Size</th>
+            <th>Modified</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Snapshot.Uploads.Files}}
+          <tr>
+            <td>
+              <a href="{{.OpenURL}}" target="_blank"
+                rel="noopener noreferrer">{{.Name}}</a>
+              <br>
+              <a href="{{.DownloadURL}}">download</a>
+            </td>
+            <td>{{.Kind}}</td>
+            <td><code>{{.RelativePath}}</code></td>
+            <td>{{.SizeBytes}}</td>
+            <td>{{formatTime .ModifiedAt}}</td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+      {{else}}
+      <p class="empty">No uploads indexed yet.</p>
       {{end}}
     </section>
 

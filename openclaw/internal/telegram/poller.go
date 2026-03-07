@@ -242,6 +242,12 @@ func hasUserContent(msg *Message) bool {
 	if msg.Video != nil {
 		return true
 	}
+	if msg.Animation != nil {
+		return true
+	}
+	if msg.VideoNote != nil {
+		return true
+	}
 	return false
 }
 

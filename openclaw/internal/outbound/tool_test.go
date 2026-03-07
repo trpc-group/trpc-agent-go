@@ -12,11 +12,13 @@ package outbound
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -24,6 +26,7 @@ type stubSender struct {
 	id     string
 	target string
 	text   string
+	files  []channel.OutboundFile
 }
 
 func (s *stubSender) ID() string { return s.id }
@@ -43,10 +46,22 @@ func (s *stubSender) SendText(
 	return nil
 }
 
+func (s *stubSender) SendMessage(
+	_ context.Context,
+	target string,
+	msg channel.OutboundMessage,
+) error {
+	s.target = target
+	s.text = msg.Text
+	s.files = append([]channel.OutboundFile(nil), msg.Files...)
+	return nil
+}
+
 func TestTool_Call_UsesCurrentSession(t *testing.T) {
 	router := NewRouter()
 	sender := &stubSender{id: "telegram"}
 	router.RegisterSender(sender)
+	router.RegisterMessageSender(sender)
 
 	inv := agent.NewInvocation(
 		agent.WithInvocationSession(
@@ -77,6 +92,7 @@ func TestTool_Call_ExplicitTargetAndErrors(t *testing.T) {
 	router := NewRouter()
 	sender := &stubSender{id: "telegram"}
 	router.RegisterSender(sender)
+	router.RegisterMessageSender(sender)
 
 	tool := NewTool(router)
 	require.Equal(t, toolMessage, tool.Declaration().Name)
@@ -105,4 +121,41 @@ func TestTool_Call_ExplicitTargetAndErrors(t *testing.T) {
 		[]byte(`{"text":"hi"}`),
 	)
 	require.Error(t, err)
+}
+
+func TestTool_Call_SendsFilesWithoutText(t *testing.T) {
+	t.Parallel()
+
+	router := NewRouter()
+	sender := &stubSender{id: "telegram"}
+	router.RegisterMessageSender(sender)
+
+	tool := NewTool(router)
+	result, err := tool.Call(
+		context.Background(),
+		[]byte(`{
+			"channel":"telegram",
+			"target":"100",
+			"files":["a.pdf"],
+			"media":["a.pdf","images/p1.png"],
+			"file":"audio.wav"
+		}`),
+	)
+	require.NoError(t, err)
+	require.Equal(t, "100", sender.target)
+	require.Equal(t, "", sender.text)
+	require.Equal(
+		t,
+		[]string{
+			"audio.wav",
+			"a.pdf",
+			filepath.ToSlash("images/p1.png"),
+		},
+		[]string{
+			sender.files[0].Path,
+			filepath.ToSlash(sender.files[1].Path),
+			sender.files[2].Path,
+		},
+	)
+	require.Equal(t, 3, result.(map[string]any)["files_sent"])
 }

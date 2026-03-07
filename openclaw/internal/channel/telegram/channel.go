@@ -117,6 +117,31 @@ type botAPI interface {
 		params tgapi.SendMessageParams,
 	) (tgapi.Message, error)
 
+	SendDocument(
+		ctx context.Context,
+		params tgapi.SendFileParams,
+	) (tgapi.Message, error)
+
+	SendPhoto(
+		ctx context.Context,
+		params tgapi.SendFileParams,
+	) (tgapi.Message, error)
+
+	SendAudio(
+		ctx context.Context,
+		params tgapi.SendFileParams,
+	) (tgapi.Message, error)
+
+	SendVoice(
+		ctx context.Context,
+		params tgapi.SendFileParams,
+	) (tgapi.Message, error)
+
+	SendVideo(
+		ctx context.Context,
+		params tgapi.SendFileParams,
+	) (tgapi.Message, error)
+
 	EditMessageText(
 		ctx context.Context,
 		params tgapi.EditMessageTextParams,
