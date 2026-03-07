@@ -55,6 +55,25 @@ func TestPostToolRequestProcessor_WithToolResults_DefaultPrompt(t *testing.T) {
 	assert.Contains(t, req.Messages[0].Content, "Analyze the tool result")
 }
 
+func TestPostToolRequestProcessor_WithCompactedToolResultsState(t *testing.T) {
+	p := NewPostToolRequestProcessor()
+	inv := &agent.Invocation{}
+	inv.SetState(contentHasCompactedToolResultsStateKey, true)
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("You are helpful."),
+			model.NewUserMessage("Continue"),
+		},
+	}
+
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	require.Len(t, req.Messages, 2)
+	assert.Contains(t, req.Messages[0].Content, "[Tool Prompt]")
+	assert.Contains(t, req.Messages[0].Content, "Analyze the tool result")
+}
+
 func TestPostToolRequestProcessor_WithToolResults_CustomPrompt(t *testing.T) {
 	customPrompt := "[Tool Prompt] Be concise and direct."
 	p := NewPostToolRequestProcessor(WithPostToolPrompt(customPrompt))

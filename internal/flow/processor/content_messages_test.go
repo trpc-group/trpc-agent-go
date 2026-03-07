@@ -731,6 +731,10 @@ func TestProcessRequest_SessionSummary_CompactsSameTurnToolHistory(t *testing.T)
 	p := NewContentRequestProcessor(WithAddSessionSummary(true))
 	p.ProcessRequest(context.Background(), inv, req, nil)
 
+	raw, ok := inv.GetState(contentHasCompactedToolResultsStateKey)
+	require.True(t, ok)
+	require.Equal(t, true, raw)
+
 	require.Len(t, req.Messages, 3)
 	require.Equal(t, model.RoleSystem, req.Messages[0].Role)
 	require.Equal(t, "system prompt", req.Messages[0].Content)

@@ -213,7 +213,8 @@ const (
 	mergedUserSeparator = "\n\n"
 	contextPrefix       = "For context:"
 
-	contentHasSessionSummaryStateKey = "processor:content:has_session_summary"
+	contentHasSessionSummaryStateKey       = "processor:content:has_session_summary"
+	contentHasCompactedToolResultsStateKey = "processor:content:has_compacted_tool_results"
 )
 
 const (
@@ -265,6 +266,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	if invocation == nil {
 		return
 	}
+	invocation.DeleteState(contentHasCompactedToolResultsStateKey)
 
 	// Honor per-invocation include_contents flag from runtime state when
 	// present. This allows callers (including GraphAgent subgraphs) to
@@ -339,6 +341,15 @@ func (p *ContentRequestProcessor) ProcessRequest(
 			messages = p.getCurrentInvocationMessages(invocation)
 		} else {
 			messages = p.getIncrementMessages(invocation, summaryUpdatedAt)
+			if p.hasCompactedCurrentInvocationToolResults(
+				invocation,
+				summaryUpdatedAt,
+			) {
+				invocation.SetState(
+					contentHasCompactedToolResultsStateKey,
+					true,
+				)
+			}
 		}
 		req.Messages = append(req.Messages, messages...)
 		needToAddInvocationMessage = len(messages) == 0
@@ -951,6 +962,46 @@ func isCurrentInvocationUserMessage(evt event.Event, inv *agent.Invocation) bool
 		inv.InvocationID == evt.InvocationID &&
 		len(evt.Choices) > 0 &&
 		evt.Choices[0].Message.Role == model.RoleUser
+}
+
+// hasCompactedCurrentInvocationToolResults reports whether same-invocation tool
+// result events exist before the active summary cutoff and were therefore
+// compacted out of the raw prompt history.
+func (p *ContentRequestProcessor) hasCompactedCurrentInvocationToolResults(
+	inv *agent.Invocation,
+	since time.Time,
+) bool {
+	if inv == nil || inv.Session == nil || since.IsZero() {
+		return false
+	}
+	if inv.RunOptions.RequestID == "" || inv.InvocationID == "" {
+		return false
+	}
+
+	filter := inv.GetEventFilterKey()
+
+	inv.Session.EventMu.RLock()
+	defer inv.Session.EventMu.RUnlock()
+
+	for _, evt := range inv.Session.Events {
+		if evt.RequestID != inv.RunOptions.RequestID ||
+			evt.InvocationID != inv.InvocationID {
+			continue
+		}
+		if evt.Timestamp.After(since) {
+			continue
+		}
+		if !isEventEligibleForInclusion(evt) ||
+			len(evt.Choices) == 0 ||
+			evt.Choices[0].Message.Role != model.RoleTool {
+			continue
+		}
+		if !p.passBranchFilter(evt, filter) {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // passTimelineFilter applies request/invocation timeline constraints.
