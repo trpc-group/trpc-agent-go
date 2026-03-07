@@ -11,7 +11,6 @@ package evaluation
 
 import (
 	"context"
-	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -25,11 +24,11 @@ import (
 
 type stubService struct{}
 
-func (stubService) Inference(ctx context.Context, req *service.InferenceRequest) ([]*service.InferenceResult, error) {
+func (stubService) Inference(ctx context.Context, req *service.InferenceRequest, opt ...service.Option) ([]*service.InferenceResult, error) {
 	return nil, nil
 }
 
-func (stubService) Evaluate(ctx context.Context, req *service.EvaluateRequest) (*service.EvalSetRunResult, error) {
+func (stubService) Evaluate(ctx context.Context, req *service.EvaluateRequest, opt ...service.Option) (*service.EvalSetRunResult, error) {
 	return nil, nil
 }
 
@@ -47,9 +46,9 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.NotNil(t, opts.registry)
 	assert.Nil(t, opts.evalService)
 	assert.Nil(t, opts.callbacks)
-	assert.Equal(t, runtime.GOMAXPROCS(0), opts.evalCaseParallelism)
-	assert.False(t, opts.evalCaseParallelInferenceEnabled)
-	assert.False(t, opts.evalCaseParallelEvaluationEnabled)
+	assert.Nil(t, opts.evalCaseParallelism)
+	assert.Nil(t, opts.evalCaseParallelInferenceEnabled)
+	assert.Nil(t, opts.evalCaseParallelEvaluationEnabled)
 }
 
 func TestWithEvalSetManager(t *testing.T) {
@@ -94,6 +93,18 @@ func TestWithCallbacks(t *testing.T) {
 	assert.Same(t, custom, opts.callbacks)
 }
 
+func TestWithExpectedRunner(t *testing.T) {
+	custom := stubRunner{}
+	opts := newOptions(WithExpectedRunner(custom))
+	assert.Equal(t, custom, opts.expectedRunner)
+}
+
+func TestWithJudgeRunner(t *testing.T) {
+	custom := stubRunner{}
+	opts := newOptions(WithJudgeRunner(custom))
+	assert.Equal(t, custom, opts.judgeRunner)
+}
+
 func TestWithNumRuns(t *testing.T) {
 	opts := newOptions(WithNumRuns(5))
 	assert.Equal(t, 5, opts.numRuns)
@@ -101,15 +112,55 @@ func TestWithNumRuns(t *testing.T) {
 
 func TestWithEvalCaseParallelism(t *testing.T) {
 	opts := newOptions(WithEvalCaseParallelism(8))
-	assert.Equal(t, 8, opts.evalCaseParallelism)
+	assert.NotNil(t, opts.evalCaseParallelism)
+	if opts.evalCaseParallelism == nil {
+		return
+	}
+	assert.Equal(t, 8, *opts.evalCaseParallelism)
 }
 
 func TestWithEvalCaseParallelInferenceEnabled(t *testing.T) {
 	opts := newOptions(WithEvalCaseParallelInferenceEnabled(true))
-	assert.True(t, opts.evalCaseParallelInferenceEnabled)
+	assert.NotNil(t, opts.evalCaseParallelInferenceEnabled)
+	if opts.evalCaseParallelInferenceEnabled == nil {
+		return
+	}
+	assert.True(t, *opts.evalCaseParallelInferenceEnabled)
 }
 
 func TestWithEvalCaseParallelEvaluationEnabled(t *testing.T) {
 	opts := newOptions(WithEvalCaseParallelEvaluationEnabled(true))
-	assert.True(t, opts.evalCaseParallelEvaluationEnabled)
+	assert.NotNil(t, opts.evalCaseParallelEvaluationEnabled)
+	if opts.evalCaseParallelEvaluationEnabled == nil {
+		return
+	}
+	assert.True(t, *opts.evalCaseParallelEvaluationEnabled)
+}
+
+func TestOptionsValidateRejectsNilOptions(t *testing.T) {
+	var opts *options
+
+	err := opts.validate(false)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "options is nil")
+}
+
+func TestOptionsValidateRejectsNilRegistry(t *testing.T) {
+	opts := newOptions()
+	opts.registry = nil
+
+	err := opts.validate(false)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "registry is nil")
+}
+
+func TestOptionsValidateRejectsNilEvalServiceWhenRequired(t *testing.T) {
+	opts := newOptions()
+
+	err := opts.validate(true)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "eval service is nil")
 }

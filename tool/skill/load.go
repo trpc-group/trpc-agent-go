@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -104,6 +105,30 @@ func (t *LoadTool) Call(ctx context.Context, args []byte) (any, error) {
 
 // StateDelta builds delta keys to mark loaded skill and doc selection.
 func (t *LoadTool) StateDelta(_ string, args []byte, _ []byte) map[string][]byte {
+	return t.stateDelta("", args)
+}
+
+// StateDeltaForInvocation writes agent-scoped state for the invocation.
+func (t *LoadTool) StateDeltaForInvocation(
+	inv *agent.Invocation,
+	toolCallID string,
+	args []byte,
+	resultJSON []byte,
+) map[string][]byte {
+	_ = toolCallID
+	_ = resultJSON
+
+	var agentName string
+	if inv != nil {
+		agentName = inv.AgentName
+	}
+	return t.stateDelta(agentName, args)
+}
+
+func (t *LoadTool) stateDelta(
+	agentName string,
+	args []byte,
+) map[string][]byte {
 	var in loadInput
 	if err := json.Unmarshal(args, &in); err != nil {
 		log.Warnf("skill_load state parse failed: %v", err)
@@ -114,14 +139,14 @@ func (t *LoadTool) StateDelta(_ string, args []byte, _ []byte) map[string][]byte
 	}
 	delta := make(map[string][]byte)
 	// Mark as loaded.
-	k := skill.StateKeyLoadedPrefix + in.Skill
+	k := skill.LoadedKey(agentName, in.Skill)
 	delta[k] = []byte("1")
 	// Docs selection
 	if in.IncludeAllDocs {
-		dk := skill.StateKeyDocsPrefix + in.Skill
+		dk := skill.DocsKey(agentName, in.Skill)
 		delta[dk] = []byte("*")
 	} else if len(in.Docs) > 0 {
-		dk := skill.StateKeyDocsPrefix + in.Skill
+		dk := skill.DocsKey(agentName, in.Skill)
 		b, err := json.Marshal(in.Docs)
 		if err == nil {
 			delta[dk] = b

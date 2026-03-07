@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 )
 
 func TestParseRunOptions_UsesEnvConfig(t *testing.T) {
@@ -131,8 +133,10 @@ func TestParseRunOptions_InvalidDurationFails(t *testing.T) {
 	t.Parallel()
 
 	cfgPath := writeTempConfig(t, `
-telegram:
-  http_timeout: "bad"
+memory:
+  auto:
+    enabled: true
+    time_interval: "bad"
 `)
 
 	_, err := parseRunOptions([]string{"-config", cfgPath})
@@ -211,26 +215,41 @@ gateway:
   require_mention: true
   mention_patterns: ["@bot"]
 
-telegram:
-  token: "t"
-  start_from_latest: false
-  proxy: "http://127.0.0.1:7890"
-  http_timeout: "60s"
-  max_retries: 5
-  streaming: "block"
-  dm_policy: "open"
-  group_policy: "allowlist"
-  allow_threads: ["1","2:topic:3"]
-  pairing_ttl: "30m"
+channels:
+  - type: "telegram"
+    config:
+      token: "t"
+      start_from_latest: false
+      proxy: "http://127.0.0.1:7890"
+      http_timeout: "60s"
+      max_retries: 5
+      streaming: "block"
+      dm_policy: "open"
+      group_policy: "allowlist"
+      allow_threads: ["1","2:topic:3"]
+      pairing_ttl: "30m"
 
 skills:
   root: "/skills"
   extra_dirs: ["/extra1","/extra2"]
   debug: true
+  allowBundled: ["gh-issues","notion"]
+  entries:
+    gh-issues:
+      enabled: false
+      apiKey: "k1"
+      env:
+        GH_TOKEN: "t1"
+    notion:
+      enabled: true
+      api_key: "k2"
+      env:
+        NOTION_API_KEY: "t2"
 
 tools:
   enable_local_exec: true
   enable_openclaw_tools: true
+  enable_parallel_tools: true
   refresh_toolsets_on_run: true
   providers:
     - type: "duckduckgo"
@@ -322,23 +341,49 @@ memory:
 	require.True(t, opts.RequireMention)
 	require.Equal(t, "@bot", opts.Mention)
 
-	require.Equal(t, "t", opts.TelegramToken)
-	require.False(t, opts.TelegramStartFromLatest)
-	require.Equal(t, "http://127.0.0.1:7890", opts.TelegramProxy)
-	require.Equal(t, 60*time.Second, opts.TelegramHTTPTimeout)
-	require.Equal(t, 5, opts.TelegramMaxRetries)
-	require.Equal(t, "block", opts.TelegramStreaming)
-	require.Equal(t, "open", opts.TelegramDMPolicy)
-	require.Equal(t, "allowlist", opts.TelegramGroupPolicy)
-	require.Equal(t, "1,2:topic:3", opts.TelegramAllowThreads)
-	require.Equal(t, 30*time.Minute, opts.TelegramPairingTTL)
+	require.Len(t, opts.Channels, 1)
+	require.Equal(t, telegramChannelType, opts.Channels[0].Type)
+	require.Equal(t, "", opts.Channels[0].Name)
+	require.NotNil(t, opts.Channels[0].Config)
+
+	var tgCfg telegramChannelConfig
+	require.NoError(t, registry.DecodeStrict(opts.Channels[0].Config, &tgCfg))
+	require.Equal(t, "t", tgCfg.Token)
+	require.NotNil(t, tgCfg.StartFromLatest)
+	require.False(t, *tgCfg.StartFromLatest)
+	require.Equal(t, "http://127.0.0.1:7890", tgCfg.Proxy)
+	require.Equal(t, "60s", tgCfg.HTTPTimeout)
+	require.NotNil(t, tgCfg.MaxRetries)
+	require.Equal(t, 5, *tgCfg.MaxRetries)
+	require.Equal(t, "block", tgCfg.Streaming)
+	require.Equal(t, "open", tgCfg.DMPolicy)
+	require.Equal(t, "allowlist", tgCfg.GroupPolicy)
+	require.Equal(t, []string{"1", "2:topic:3"}, tgCfg.AllowThreads)
+	require.Equal(t, "30m", tgCfg.PairingTTL)
 
 	require.Equal(t, "/skills", opts.SkillsRoot)
 	require.Equal(t, "/extra1,/extra2", opts.SkillsExtraDir)
 	require.True(t, opts.SkillsDebug)
+	require.Equal(t, "gh-issues,notion", opts.SkillsAllowBundled)
+
+	require.Len(t, opts.SkillConfigs, 2)
+	require.NotNil(t, opts.SkillConfigs["gh-issues"].Enabled)
+	require.False(t, *opts.SkillConfigs["gh-issues"].Enabled)
+	require.Equal(t, "k1", opts.SkillConfigs["gh-issues"].APIKey)
+	require.Equal(t, "t1", opts.SkillConfigs["gh-issues"].Env["GH_TOKEN"])
+
+	require.NotNil(t, opts.SkillConfigs["notion"].Enabled)
+	require.True(t, *opts.SkillConfigs["notion"].Enabled)
+	require.Equal(t, "k2", opts.SkillConfigs["notion"].APIKey)
+	require.Equal(
+		t,
+		"t2",
+		opts.SkillConfigs["notion"].Env["NOTION_API_KEY"],
+	)
 
 	require.True(t, opts.EnableLocalExec)
 	require.True(t, opts.EnableOpenClawTools)
+	require.True(t, opts.EnableParallelTools)
 	require.True(t, opts.RefreshToolSetsOnRun)
 
 	require.Len(t, opts.ToolProviders, 1)
@@ -421,6 +466,45 @@ session:
 	var exitErr *exitError
 	require.True(t, errors.As(err, &exitErr))
 	require.Equal(t, 1, exitErr.Code)
+}
+
+func TestConvertSkillConfigs_EmptyAndBlankKeys(t *testing.T) {
+	require.Nil(t, convertSkillConfigs(nil))
+	require.Nil(t, convertSkillConfigs(map[string]skillEntryConfig{}))
+
+	got := convertSkillConfigs(map[string]skillEntryConfig{
+		" ": {},
+	})
+	require.Nil(t, got)
+}
+
+func TestParseRunOptions_AllowBundledSnakeCase(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+skills:
+  allow_bundled: ["a","b"]
+`)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.Equal(t, "a,b", opts.SkillsAllowBundled)
+}
+
+func TestParseRunOptions_SkillsAllowBundledFlagOverridesConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+skills:
+  allow_bundled: ["a"]
+`)
+
+	opts, err := parseRunOptions([]string{
+		"-config", cfgPath,
+		"-skills-allow-bundled", "b,c",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "b,c", opts.SkillsAllowBundled)
 }
 
 func writeTempConfig(t *testing.T, body string) string {

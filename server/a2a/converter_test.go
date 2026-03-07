@@ -570,6 +570,7 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage_MessageType(
 				msg.Metadata = map[string]any{
 					ia2a.MessageMetadataObjectTypeKey: "",
 					ia2a.MessageMetadataTagKey:        "",
+					ia2a.MessageMetadataResponseIDKey: "resp-123",
 				}
 				return &msg
 			}(),
@@ -623,6 +624,7 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage_MessageType(
 				msg.Metadata = map[string]any{
 					ia2a.MessageMetadataObjectTypeKey: "",
 					ia2a.MessageMetadataTagKey:        "",
+					ia2a.MessageMetadataResponseIDKey: "resp-stc1",
 				}
 				return &msg
 			}(),
@@ -1433,8 +1435,11 @@ func TestDefaultEventToA2AMessage_CodeExecution(t *testing.T) {
 					t.Errorf("Expected map data, got %T", dataPart.Data)
 					return
 				}
-				if data["content"] != "print('hello')" {
-					t.Errorf("Expected content field in non-ADK mode, got %v", data)
+				if data["code"] != "print('hello')" {
+					t.Errorf("Expected code field, got %v", data)
+				}
+				if data["language"] != "unknown" {
+					t.Errorf("Expected language field 'unknown', got %v", data["language"])
 				}
 			},
 		},
@@ -1533,8 +1538,8 @@ func TestDefaultEventToA2AMessage_CodeExecution(t *testing.T) {
 					t.Errorf("Expected map data, got %T", dataPart.Data)
 					return
 				}
-				if data["content"] != "execution output" {
-					t.Errorf("Expected content field, got %v", data)
+				if data["output"] != "execution output" {
+					t.Errorf("Expected output field, got %v", data)
 				}
 			},
 		},

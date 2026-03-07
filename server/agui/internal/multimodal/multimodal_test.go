@@ -16,6 +16,7 @@ import (
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -174,11 +175,55 @@ func TestUserMessageFromInputContentsBinaryDataFile(t *testing.T) {
 
 func TestUserMessageFromInputContentsBinaryIDFile(t *testing.T) {
 	msg, err := UserMessageFromInputContents([]types.InputContent{
-		{Type: types.InputContentTypeBinary, ID: "file-123"},
+		{
+			Type:     types.InputContentTypeBinary,
+			ID:       "file-123",
+			Filename: "demo.pdf",
+		},
 	})
 	require.NoError(t, err)
 	require.Len(t, msg.ContentParts, 1)
 	assert.Equal(t, model.ContentTypeFile, msg.ContentParts[0].Type)
 	require.NotNil(t, msg.ContentParts[0].File)
+	assert.Equal(t, "demo.pdf", msg.ContentParts[0].File.Name)
 	assert.Equal(t, "file-123", msg.ContentParts[0].File.FileID)
+}
+
+func TestUserMessageFromInputContentsBinaryIDFile_ArtifactRef(t *testing.T) {
+	const artifactRef = "artifact://uploads/demo.pdf@0"
+
+	msg, err := UserMessageFromInputContents([]types.InputContent{
+		{
+			Type: types.InputContentTypeBinary,
+			ID:   artifactRef,
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, msg.ContentParts, 1)
+	assert.Equal(t, model.ContentTypeFile, msg.ContentParts[0].Type)
+	require.NotNil(t, msg.ContentParts[0].File)
+	assert.Equal(t, "demo.pdf", msg.ContentParts[0].File.Name)
+	assert.Equal(t, artifactRef, msg.ContentParts[0].File.FileID)
+}
+
+func TestFileFromBinaryID_NonBinaryNil(t *testing.T) {
+	got := fileFromBinaryID(types.InputContent{
+		Type: types.InputContentTypeText,
+	})
+	assert.Nil(t, got)
+}
+
+func TestFileNameFromArtifactRef_EdgeCases(t *testing.T) {
+	assert.Equal(t, "", fileNameFromArtifactRef("file-123"))
+
+	nameWithAt := fileref.ArtifactPrefix + "uploads/a@x"
+	assert.Equal(t, "a@x", fileNameFromArtifactRef(nameWithAt))
+
+	nameWithAtAndVersion := fileref.ArtifactPrefix +
+		"uploads/skey=@crypt_abc.jpeg@0"
+	assert.Equal(t, "skey=@crypt_abc.jpeg",
+		fileNameFromArtifactRef(nameWithAtAndVersion))
+
+	invalidBase := fileref.ArtifactPrefix + "..@0"
+	assert.Equal(t, "", fileNameFromArtifactRef(invalidBase))
 }

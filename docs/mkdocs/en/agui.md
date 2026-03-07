@@ -351,6 +351,26 @@ For example, when using React Planner, if you want to apply different custom eve
 
 You can find the complete code example in [examples/agui/server/react](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/react).
 
+### Thinking content
+
+AG-UI uses `REASONING_*` events to carry model thinking content, making it easier for the frontend to display the thinking process before the final answer. For more details, see the official AG-UI docs: [Reasoning](https://docs.ag-ui.com/concepts/reasoning). A typical event sequence is as follows:
+
+```text
+REASONING_START
+  → REASONING_MESSAGE_START
+  → REASONING_MESSAGE_CONTENT
+  → REASONING_MESSAGE_END
+REASONING_END
+```
+
+By default, thought-provoking content is disabled. You can enable it when creating the server using `agui.WithReasoningContentEnabled`.
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/server/agui"
+
+server, err := agui.New(runner, agui.WithReasoningContentEnabled(true))
+```
+
 ### Custom `UserIDResolver`
 
 By default every request maps to the fixed user ID `"user"`. Implement a custom `UserIDResolver` if you need to derive the user from the `RunAgentInput`:
@@ -609,7 +629,7 @@ In streaming response scenarios, a single reply usually consists of multiple inc
 
 To address this, the framework first aggregates events and then writes them into the session. In addition, it performs a periodic flush once per second by default, and each flush writes the current aggregation result into the session.
 
-* `aggregator.WithEnabled(true)` is used to control whether event aggregation is enabled. It is enabled by default. When enabled, it aggregates consecutive text events that share the same `messageId`. When disabled, no aggregation is performed on AG-UI events.
+* `aggregator.WithEnabled(true)` is used to control whether event aggregation is enabled. It is enabled by default. When enabled, it aggregates consecutive `TEXT_MESSAGE_CONTENT` and `REASONING_MESSAGE_CONTENT` events that share the same `messageId`. When disabled, no aggregation is performed on AG-UI events.
 * `aguirunner.WithFlushInterval(time.Second)` is used to control the periodic flush interval of aggregated results. The default is 1 second. Setting it to 0 disables the periodic flush mechanism.
 
 ```go
@@ -640,116 +660,6 @@ server, err := agui.New(
 ```
 
 If more complex aggregation strategies are required, you can implement `aggregator.Aggregator` and inject it through a custom factory. Note that although an aggregator is created separately for each session, avoiding cross-session state management and concurrency handling, the aggregation methods themselves may still be called concurrently, so concurrency must still be handled properly.
-
-For example, while remaining compatible with the default text aggregation, you can accumulate the content of custom events of type `"think"` and then persist them.
-
-A complete example can be found at [examples/agui/server/thinkaggregator](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/thinkaggregator)
-
-```go
-import (
-	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
-	"trpc.group/trpc-go/trpc-agent-go/runner"
-	"trpc.group/trpc-go/trpc-agent-go/server/agui"
-	"trpc.group/trpc-go/trpc-agent-go/server/agui/aggregator"
-	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
-	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
-)
-
-type thinkAggregator struct {
-	mu    sync.Mutex
-	inner aggregator.Aggregator
-	think strings.Builder
-}
-
-func newAggregator(ctx context.Context, opt ...aggregator.Option) aggregator.Aggregator {
-	return &thinkAggregator{inner: aggregator.New(ctx, opt...)}
-}
-
-
-func (c *thinkAggregator) Append(ctx context.Context, event aguievents.Event) ([]aguievents.Event, error) {
-	// Use a mutex to ensure concurrent safety of the inner aggregator and the think buffer, avoiding race conditions when multiple events are appended concurrently.
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// For custom "think" events, use a strategy of "accumulate only, do not emit immediately".
-	// 1. Force flush inner first to fully emit previously accumulated normal events.
-	// 2. Append the current think content to the buffer only, without returning it immediately.
-	// This ensures that think fragments are not interrupted by normal events, and that previous normal events are emitted before new thinking content.
-	if custom, ok := event.(*aguievents.CustomEvent); ok && custom.Name == string(thinkEventTypeContent) {
-		flushed, err := c.inner.Flush(ctx)
-		if err != nil {
-			return nil, err
-		}
-		// Only participate in accumulation when the value is a string, to avoid polluting the buffer with values of unexpected types.
-		if v, ok := custom.Value.(string); ok {
-			c.think.WriteString(v)
-		}
-		// The current think event only participates in internal accumulation and is not immediately visible externally. The return value is the previously aggregated results from inner.
-		return flushed, nil
-	}
-
-	// Non-think events follow the default inner aggregation logic to ensure that the original text aggregation behavior is preserved.
-	events, err := c.inner.Append(ctx, event)
-	if err != nil {
-		return nil, err
-	}
-
-	// If there is no accumulated think content, directly return the aggregation results from inner without additional wrapping.
-	if c.think.Len() == 0 {
-		return events, nil
-	}
-
-	// If there is accumulated think content, insert a single aggregated think event before the current batch of events.
-	// 1. Package the buffer content into a single CustomEvent.
-	// 2. Clear the buffer to avoid sending duplicate content.
-	// 3. Place this think event before the current events to preserve the time order: output the complete thinking content first, then subsequent events.
-	think := aguievents.NewCustomEvent(string(thinkEventTypeContent), aguievents.WithValue(c.think.String()))
-	c.think.Reset()
-
-	out := make([]aguievents.Event, 0, len(events)+1)
-	out = append(out, think)
-	out = append(out, events...)
-	return out, nil
-}
-
-func (c *thinkAggregator) Flush(ctx context.Context) ([]aguievents.Event, error) {
-	// Flush likewise needs to ensure concurrent safety of the inner aggregator and the think buffer.
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Flush inner first to ensure that all normal events are emitted according to its own aggregation strategy.
-	events, err := c.inner.Flush(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	// If there is still unflushed content in the think buffer.
-	// Wrap it into a single aggregated think event and insert it at the front of the current batch.
-	// This ensures that the aggregated thinking content is not reordered by events produced by subsequent flushes.
-	if c.think.Len() > 0 {
-		think := aguievents.NewCustomEvent(string(thinkEventTypeContent), aguievents.WithValue(c.think.String()))
-		c.think.Reset()
-		events = append([]aguievents.Event{think}, events...)
-	}
-	return events, nil
-}
-
-runner := runner.NewRunner(agent.Info().Name, agent)
-sessionService := inmemory.NewSessionService()
-
-server, err := agui.New(
-    runner,
-    agui.WithPath("/agui"),
-    agui.WithMessagesSnapshotPath("/history"),
-    agui.WithMessagesSnapshotEnabled(true),
-    agui.WithAppName(appName),
-    agui.WithSessionService(sessionService),
-    agui.WithAGUIRunnerOptions(
-        aguirunner.WithUserIDResolver(userIDResolver),
-        aguirunner.WithAggregatorFactory(newAggregator),
-    ),
-)
-```
 
 ### Message Snapshot Continuation
 

@@ -43,6 +43,64 @@ func writeSkill(t *testing.T, dir, name string) string {
 	return sdir
 }
 
+func TestStateKeys_ScopedAndLegacy(t *testing.T) {
+	const (
+		agentName   = "agentA"
+		skillName   = "demo"
+		paddedAgent = "  agentA  "
+		paddedSkill = "  demo  "
+
+		parentAgent = "agent"
+		childAgent  = "agent/child"
+	)
+
+	legacyLoaded := StateKeyLoadedPrefix + skillName
+	require.Equal(t, legacyLoaded, LoadedKey("", skillName))
+	require.Equal(t, legacyLoaded, LoadedKey(" ", skillName))
+
+	scopedLoadedPrefix := StateKeyLoadedByAgentPrefix + agentName +
+		stateKeyScopeDelimiter
+	require.Equal(
+		t,
+		scopedLoadedPrefix+skillName,
+		LoadedKey(paddedAgent, paddedSkill),
+	)
+	require.Equal(
+		t,
+		scopedLoadedPrefix,
+		LoadedPrefix(paddedAgent),
+	)
+
+	legacyDocs := StateKeyDocsPrefix + skillName
+	require.Equal(t, legacyDocs, DocsKey("", skillName))
+	require.Equal(t, legacyDocs, DocsKey(" ", skillName))
+
+	scopedDocsPrefix := StateKeyDocsByAgentPrefix + agentName +
+		stateKeyScopeDelimiter
+	require.Equal(
+		t,
+		scopedDocsPrefix+skillName,
+		DocsKey(paddedAgent, paddedSkill),
+	)
+	require.Equal(
+		t,
+		scopedDocsPrefix,
+		DocsPrefix(paddedAgent),
+	)
+
+	require.Equal(t, StateKeyLoadedPrefix, LoadedPrefix(""))
+	require.Equal(t, StateKeyLoadedPrefix, LoadedPrefix(" "))
+	require.Equal(t, StateKeyDocsPrefix, DocsPrefix(""))
+	require.Equal(t, StateKeyDocsPrefix, DocsPrefix(" "))
+
+	loadedKey := LoadedKey(childAgent, skillName)
+	parentPrefix := LoadedPrefix(parentAgent)
+	require.False(t, strings.HasPrefix(loadedKey, parentPrefix))
+
+	childPrefix := LoadedPrefix(childAgent)
+	require.True(t, strings.HasPrefix(loadedKey, childPrefix))
+}
+
 func TestFSRepository_Path(t *testing.T) {
 	root := t.TempDir()
 	sdir := writeSkill(t, root, "alpha")
@@ -199,7 +257,8 @@ func TestFSRepository_Get_SkipsUnreadableDocs(t *testing.T) {
 	sdir := writeSkill(t, root, skillName)
 
 	docPath := filepath.Join(sdir, docName)
-	if err := os.Symlink(filepath.Join(root, "missing-target"), docPath); err != nil {
+	target := filepath.Join(root, "missing-target")
+	if err := os.Symlink(target, docPath); err != nil {
 		t.Skipf("symlink not supported: %v", err)
 	}
 
@@ -389,6 +448,31 @@ func TestFSRepository_Summaries_NameFallback(t *testing.T) {
 	sums := repo.Summaries()
 	require.Len(t, sums, 1)
 	require.Equal(t, "alpha", sums[0].Name)
+}
+
+func TestFSRepository_ScansSkillWithoutFrontMatter(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "nofm")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+
+	err := os.WriteFile(
+		filepath.Join(dir, skillFile),
+		[]byte("# No front matter\n\nBody\n"),
+		0o644,
+	)
+	require.NoError(t, err)
+
+	repo, err := NewFSRepository(root)
+	require.NoError(t, err)
+
+	sums := repo.Summaries()
+	require.Len(t, sums, 1)
+	require.Equal(t, "nofm", sums[0].Name)
+
+	sk, err := repo.Get("nofm")
+	require.NoError(t, err)
+	require.Equal(t, "nofm", sk.Summary.Name)
+	require.Contains(t, sk.Body, "No front matter")
 }
 
 func TestFSRepository_Get_ReadSkillFileError(t *testing.T) {

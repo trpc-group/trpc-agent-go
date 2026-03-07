@@ -23,13 +23,16 @@ import (
 
 	tgch "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/channel/telegram"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/pairing"
+	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 )
 
 const (
 	subcmdPairing = "pairing"
 
-	flagTelegramToken = "telegram-token"
-	flagStateDir      = "state-dir"
+	flagConfig   = "config"
+	flagChannel  = "channel"
+	flagStateDir = "state-dir"
 
 	pairingCmdList    = "list"
 	pairingCmdApprove = "approve"
@@ -38,18 +41,24 @@ const (
 var probeBotInfo = func(
 	ctx context.Context,
 	token string,
+	opts ...tgapi.Option,
 ) (tgch.BotInfo, error) {
-	return tgch.ProbeBotInfo(ctx, token)
+	return tgch.ProbeBotInfo(ctx, token, opts...)
 }
 
 func runPairing(args []string) int {
 	fs := flag.NewFlagSet(subcmdPairing, flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 
-	token := fs.String(
-		flagTelegramToken,
+	configPath := fs.String(
+		flagConfig,
 		"",
-		"Telegram bot token (required)",
+		"Path to YAML config file; can also be set via $"+openClawConfigEnvName,
+	)
+	channelName := fs.String(
+		flagChannel,
+		"",
+		"Telegram channel name (optional)",
 	)
 	stateDir := fs.String(
 		flagStateDir,
@@ -74,52 +83,88 @@ func runPairing(args []string) int {
 		return 2
 	}
 	action := rest[0]
+	code := ""
 
-	ctx := context.Background()
 	switch action {
 	case pairingCmdList:
-		return runPairingList(ctx, *token, *stateDir)
 	case pairingCmdApprove:
 		if len(rest) < 2 {
 			fmt.Fprintln(os.Stderr, "missing pairing code")
 			printPairingUsage()
 			return 2
 		}
-		return runPairingApprove(ctx, *token, *stateDir, rest[1])
+		code = rest[1]
 	default:
 		fmt.Fprintf(os.Stderr, "unknown pairing command: %s\n", action)
 		printPairingUsage()
 		return 2
 	}
+
+	ctx := context.Background()
+
+	parseArgs := make([]string, 0, 4)
+	if strings.TrimSpace(*configPath) != "" {
+		parseArgs = append(
+			parseArgs,
+			"-"+flagConfig,
+			strings.TrimSpace(*configPath),
+		)
+	}
+	if strings.TrimSpace(*stateDir) != "" {
+		parseArgs = append(
+			parseArgs,
+			"-"+flagStateDir,
+			strings.TrimSpace(*stateDir),
+		)
+	}
+
+	runOpts, err := parseRunOptions(parseArgs)
+	if err != nil {
+		var exitErr *exitError
+		if errors.As(err, &exitErr) {
+			if exitErr.Code != 2 {
+				fmt.Fprintln(os.Stderr, exitErr.Err)
+			}
+			return exitErr.Code
+		}
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+
+	store, err := openPairingStore(ctx, runOpts, *channelName)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+
+	if action == pairingCmdList {
+		return runPairingList(ctx, store)
+	}
+	return runPairingApprove(ctx, store, code)
 }
 
 func printPairingUsage() {
 	fmt.Fprintln(os.Stderr, "Usage:")
 	fmt.Fprintf(
 		os.Stderr,
-		"  openclaw pairing list -%s <TOKEN> [-%s <DIR>]\n",
-		flagTelegramToken,
+		"  openclaw pairing list -%s <CONFIG> [-%s <DIR>] [-%s <NAME>]\n",
+		flagConfig,
 		flagStateDir,
+		flagChannel,
 	)
 	fmt.Fprintf(
 		os.Stderr,
-		"  openclaw pairing approve <CODE> -%s <TOKEN> [-%s <DIR>]\n",
-		flagTelegramToken,
+		"  openclaw pairing approve <CODE> -%s <CONFIG> [-%s <DIR>] [-%s <NAME>]\n",
+		flagConfig,
 		flagStateDir,
+		flagChannel,
 	)
 }
 
 func runPairingList(
 	ctx context.Context,
-	token string,
-	rawStateDir string,
+	store *pairing.FileStore,
 ) int {
-	store, err := openPairingStore(ctx, token, rawStateDir)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-
 	pending, err := store.ListPending(ctx)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -146,16 +191,9 @@ func runPairingList(
 
 func runPairingApprove(
 	ctx context.Context,
-	token string,
-	rawStateDir string,
+	store *pairing.FileStore,
 	code string,
 ) int {
-	store, err := openPairingStore(ctx, token, rawStateDir)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-
 	userID, ok, err := store.Approve(ctx, code)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -171,19 +209,39 @@ func runPairingApprove(
 
 func openPairingStore(
 	ctx context.Context,
-	token string,
-	rawStateDir string,
+	opts runOptions,
+	wantChannel string,
 ) (*pairing.FileStore, error) {
-	if strings.TrimSpace(token) == "" {
-		return nil, errors.New("pairing: missing -" + flagTelegramToken)
-	}
-
-	resolvedStateDir, err := resolveStateDir(rawStateDir)
+	spec, err := resolveTelegramPairingChannel(opts, wantChannel)
 	if err != nil {
 		return nil, err
 	}
 
-	bot, err := probeBotInfo(ctx, token)
+	var cfg telegramChannelConfig
+	if err := registry.DecodeStrict(spec.Config, &cfg); err != nil {
+		return nil, err
+	}
+
+	token := strings.TrimSpace(cfg.Token)
+	if token == "" {
+		return nil, errors.New("pairing: missing telegram channel token")
+	}
+
+	resolvedStateDir, err := resolveStateDir(opts.StateDir)
+	if err != nil {
+		return nil, err
+	}
+
+	netOpts, err := telegramClientNetOptions(cfg)
+	if err != nil {
+		return nil, err
+	}
+	apiOpts, err := tgapi.BuildClientOptionsFromEnv(netOpts)
+	if err != nil {
+		return nil, err
+	}
+
+	bot, err := probeBotInfo(ctx, token, apiOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -193,7 +251,44 @@ func openPairingStore(
 		return nil, err
 	}
 
-	return pairing.NewFileStore(path)
+	storeOpts, err := pairingStoreOptions(cfg.PairingTTL)
+	if err != nil {
+		return nil, err
+	}
+	return pairing.NewFileStore(path, storeOpts...)
+}
+
+func resolveTelegramPairingChannel(
+	opts runOptions,
+	wantChannel string,
+) (pluginSpec, error) {
+	specs := resolveTelegramChannelSpecs(opts.Channels)
+
+	if len(specs) == 0 {
+		return pluginSpec{}, errors.New("pairing: telegram not configured")
+	}
+
+	name := strings.TrimSpace(wantChannel)
+	if name == "" {
+		if len(specs) == 1 {
+			return specs[0], nil
+		}
+		return pluginSpec{}, errors.New(
+			"pairing: multiple telegram channels configured; " +
+				"use -channel to select one",
+		)
+	}
+
+	for i := range specs {
+		spec := specs[i]
+		if strings.EqualFold(strings.TrimSpace(spec.Name), name) {
+			return spec, nil
+		}
+	}
+	return pluginSpec{}, fmt.Errorf(
+		"pairing: telegram channel not found: %s",
+		name,
+	)
 }
 
 func normalizePairingArgs(args []string) ([]string, error) {
@@ -216,7 +311,8 @@ func normalizePairingArgs(args []string) ([]string, error) {
 
 		name := flagName(arg)
 		if strings.Contains(arg, "=") ||
-			(name != flagTelegramToken && name != flagStateDir) {
+			(name != flagConfig && name != flagChannel &&
+				name != flagStateDir) {
 			flagArgs = append(flagArgs, arg)
 			i++
 			continue

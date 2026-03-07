@@ -32,7 +32,6 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -323,16 +322,11 @@ func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	requestID := strings.TrimSpace(req.RequestID)
-	if requestID == "" {
-		s.writeError(w, gwproto.APIError{
-			Type:    errTypeInvalidRequest,
-			Message: "missing request_id",
-		}, http.StatusBadRequest)
+	canceled, apiErr, status := s.CancelRequest(r.Context(), req.RequestID)
+	if apiErr != nil {
+		s.writeError(w, *apiErr, status)
 		return
 	}
-
-	canceled := s.managed.Cancel(requestID)
 
 	w.Header().Set(headerContentType, contentTypeJSON)
 	_ = json.NewEncoder(w).Encode(map[string]bool{"canceled": canceled})
@@ -354,88 +348,8 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userMsg, mentionText, err := s.normalizeUserMessage(
-		r.Context(),
-		req,
-	)
-	if err != nil {
-		s.writeError(w, gwproto.APIError{
-			Type:    errTypeInvalidRequest,
-			Message: err.Error(),
-		}, http.StatusBadRequest)
-		return
-	}
-
-	msg := inboundFromRequest(req, mentionText)
-
-	userID := strings.TrimSpace(req.UserID)
-	if userID == "" {
-		userID = msg.From
-	}
-	if userID == "" {
-		s.writeError(w, gwproto.APIError{
-			Type:    errTypeInvalidRequest,
-			Message: "missing user_id or from",
-		}, http.StatusBadRequest)
-		return
-	}
-
-	if !s.isUserAllowed(userID) {
-		s.writeError(w, gwproto.APIError{
-			Type:    errTypeUnauthorized,
-			Message: "user is not allowed",
-		}, http.StatusForbidden)
-		return
-	}
-
-	if s.requireMention && msg.Thread != "" {
-		if !containsAny(msg.Text, s.mentionPatterns) {
-			s.writeJSON(w, gwproto.MessageResponse{
-				Ignored: true,
-			}, http.StatusOK)
-			return
-		}
-	}
-
-	sessionID := strings.TrimSpace(req.SessionID)
-	if sessionID == "" {
-		var err error
-		sessionID, err = s.sessionIDFunc(msg)
-		if err != nil {
-			s.writeError(w, gwproto.APIError{
-				Type:    errTypeInvalidRequest,
-				Message: err.Error(),
-			}, http.StatusBadRequest)
-			return
-		}
-	}
-
-	requestID := strings.TrimSpace(req.RequestID)
-	reply, resolvedRequestID, err := s.run(
-		r.Context(),
-		userID,
-		sessionID,
-		requestID,
-		userMsg,
-	)
-	if err != nil {
-		log.WarnfContext(
-			r.Context(),
-			"gateway: run failed: %v",
-			err,
-		)
-		s.writeError(w, gwproto.APIError{
-			Type:    errTypeInternal,
-			Message: err.Error(),
-		}, http.StatusInternalServerError)
-		return
-	}
-
-	s.writeJSON(w, gwproto.MessageResponse{
-		SessionID: sessionID,
-		RequestID: resolvedRequestID,
-		Reply:     reply,
-	}, http.StatusOK)
+	rsp, status := s.ProcessMessage(r.Context(), req)
+	s.writeJSON(w, rsp, status)
 }
 
 func (s *Server) isUserAllowed(userID string) bool {

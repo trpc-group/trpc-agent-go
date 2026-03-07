@@ -11,6 +11,7 @@ package a2aagent
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -123,8 +124,14 @@ func (d *defaultA2AEventConverter) ConvertStreamingToEvents(
 	case *protocol.Task:
 		responseMsg = convertTaskToMessage(v)
 	case *protocol.TaskStatusUpdateEvent:
-		responseMsg = convertTaskStatusToMessage(v)
+		// Status updates (submitted/completed) are control signals, not user-facing content.
+		return nil, nil
 	case *protocol.TaskArtifactUpdateEvent:
+		if v.IsFinal() {
+			// Final artifact chunk is either an aggregated result or a termination signal,
+			// not incremental content for the user.
+			return nil, nil
+		}
 		responseMsg = convertTaskArtifactToMessage(v)
 	default:
 		log.Infof("unexpected event type: %T", result.Result)
@@ -146,65 +153,8 @@ func (d *defaultEventA2AConverter) ConvertToA2AMessage(
 	agentName string,
 	invocation *agent.Invocation,
 ) (*protocol.Message, error) {
-	var parts []protocol.Part
+	parts := d.buildA2AParts(invocation)
 
-	// Convert invocation.Message.Content (text) to TextPart
-	if invocation.Message.Content != "" {
-		parts = append(parts, protocol.NewTextPart(invocation.Message.Content))
-	}
-
-	// Convert invocation.Message.ContentParts to A2A Parts
-	for _, contentPart := range invocation.Message.ContentParts {
-		switch contentPart.Type {
-		case model.ContentTypeText:
-			if contentPart.Text != nil {
-				parts = append(parts, protocol.NewTextPart(*contentPart.Text))
-			}
-		case model.ContentTypeImage:
-			if contentPart.Image != nil {
-				if len(contentPart.Image.Data) > 0 {
-					// Handle inline image data
-					parts = append(parts, protocol.NewFilePartWithBytes(
-						"image",
-						contentPart.Image.Format,
-						base64.StdEncoding.EncodeToString(contentPart.Image.Data),
-					))
-				} else if contentPart.Image.URL != "" {
-					// Handle image URL
-					parts = append(parts, protocol.NewFilePartWithURI(
-						"image",
-						contentPart.Image.Format,
-						contentPart.Image.URL,
-					))
-				}
-			}
-		case model.ContentTypeAudio:
-			if contentPart.Audio != nil && contentPart.Audio.Data != nil {
-				// Handle audio data as file with bytes
-				parts = append(parts, protocol.NewFilePartWithBytes(
-					"audio",
-					contentPart.Audio.Format,
-					base64.StdEncoding.EncodeToString(contentPart.Audio.Data),
-				))
-			}
-		case model.ContentTypeFile:
-			if contentPart.File != nil {
-				if len(contentPart.File.Data) > 0 {
-					fileName := contentPart.File.Name
-					if fileName == "" {
-						fileName = "file"
-					}
-					parts = append(parts, protocol.NewFilePartWithBytes(
-						fileName,
-						contentPart.File.MimeType,
-						base64.StdEncoding.EncodeToString(contentPart.File.Data),
-					))
-				}
-			}
-		}
-	}
-
-	// If no content, create an empty text part to ensure message is not empty
 	if len(parts) == 0 {
 		parts = append(parts, protocol.NewTextPart(""))
 	}
@@ -213,7 +163,102 @@ func (d *defaultEventA2AConverter) ConvertToA2AMessage(
 	if sess != nil {
 		message.ContextID = &sess.ID
 	}
+
+	message.Metadata = make(map[string]any)
+	if invocation.InvocationID != "" {
+		message.Metadata["invocation_id"] = invocation.InvocationID
+	}
+	if sess != nil && sess.UserID != "" {
+		message.Metadata["user_id"] = sess.UserID
+	}
+	message.Metadata[ia2a.MessageMetadataInteractionSpecVersionKey] = ia2a.InteractionVersion
+
 	return &message, nil
+}
+
+// buildA2AParts converts invocation message content and content parts to A2A protocol parts.
+func (d *defaultEventA2AConverter) buildA2AParts(invocation *agent.Invocation) []protocol.Part {
+	var parts []protocol.Part
+
+	if invocation.Message.Content != "" {
+		parts = append(parts, protocol.NewTextPart(invocation.Message.Content))
+	}
+
+	for _, contentPart := range invocation.Message.ContentParts {
+		parts = appendContentPart(parts, contentPart)
+	}
+
+	return parts
+}
+
+// appendContentPart converts a single model.ContentPart and appends it to parts.
+func appendContentPart(parts []protocol.Part, cp model.ContentPart) []protocol.Part {
+	switch cp.Type {
+	case model.ContentTypeText:
+		return appendTextPart(parts, cp)
+	case model.ContentTypeImage:
+		return appendImagePart(parts, cp)
+	case model.ContentTypeAudio:
+		return appendAudioPart(parts, cp)
+	case model.ContentTypeFile:
+		return appendFilePart(parts, cp)
+	default:
+		return parts
+	}
+}
+
+func appendTextPart(parts []protocol.Part, cp model.ContentPart) []protocol.Part {
+	if cp.Text == nil {
+		return parts
+	}
+	return append(parts, protocol.NewTextPart(*cp.Text))
+}
+
+func appendImagePart(parts []protocol.Part, cp model.ContentPart) []protocol.Part {
+	if cp.Image == nil {
+		return parts
+	}
+	if len(cp.Image.Data) > 0 {
+		return append(parts, protocol.NewFilePartWithBytes(
+			"image",
+			cp.Image.Format,
+			base64.StdEncoding.EncodeToString(cp.Image.Data),
+		))
+	}
+	if cp.Image.URL != "" {
+		return append(parts, protocol.NewFilePartWithURI(
+			"image",
+			cp.Image.Format,
+			cp.Image.URL,
+		))
+	}
+	return parts
+}
+
+func appendAudioPart(parts []protocol.Part, cp model.ContentPart) []protocol.Part {
+	if cp.Audio == nil || cp.Audio.Data == nil {
+		return parts
+	}
+	return append(parts, protocol.NewFilePartWithBytes(
+		"audio",
+		cp.Audio.Format,
+		base64.StdEncoding.EncodeToString(cp.Audio.Data),
+	))
+}
+
+func appendFilePart(parts []protocol.Part, cp model.ContentPart) []protocol.Part {
+	if cp.File == nil || len(cp.File.Data) == 0 {
+		return parts
+	}
+	fileName := cp.File.Name
+	if fileName == "" {
+		fileName = "file"
+	}
+	return append(parts, protocol.NewFilePartWithBytes(
+		fileName,
+		cp.File.MimeType,
+		base64.StdEncoding.EncodeToString(cp.File.Data),
+	))
 }
 
 // buildRespEvent converts A2A response to tRPC event (used for both streaming and non-streaming mode)
@@ -256,6 +301,9 @@ type parseResult struct {
 
 	// tag holds the event tag from A2A message metadata
 	tag string
+
+	// responseID holds the original LLM Response.ID from A2A message metadata
+	responseID string
 }
 
 // toolResponseData holds tool response information
@@ -292,6 +340,9 @@ func parseA2AMessageParts(msg *protocol.Message) *parseResult {
 		}
 		if tag, ok := msg.Metadata[ia2a.MessageMetadataTagKey].(string); ok {
 			result.tag = tag
+		}
+		if responseID, ok := msg.Metadata[ia2a.MessageMetadataResponseIDKey].(string); ok {
+			result.responseID = responseID
 		}
 	}
 
@@ -384,8 +435,19 @@ func processFunctionCall(d *protocol.DataPart) *model.ToolCall {
 		toolCall.Function.Name = name
 	}
 
-	if args, ok := data[ia2a.ToolCallFieldArgs].(string); ok {
-		toolCall.Function.Arguments = []byte(args)
+	if args, ok := data[ia2a.ToolCallFieldArgs]; ok {
+		switch v := args.(type) {
+		case string:
+			toolCall.Function.Arguments = []byte(v)
+		case map[string]any:
+			if jsonBytes, err := json.Marshal(v); err == nil {
+				toolCall.Function.Arguments = jsonBytes
+			} else {
+				log.Warnf("Failed to marshal tool call arguments: %v", err)
+			}
+		default:
+			log.Warnf("Tool call arguments has unexpected type: %T", v)
+		}
 	}
 
 	// Validate that we have at least a name
@@ -484,10 +546,17 @@ func buildEventResponse(
 
 	evt := event.New(invocation.InvocationID, agentName, opts...)
 
+	// Use llm_response_id from metadata when available (preserves original LLM Response.ID),
+	// fall back to messageID (which is ArtifactID in streaming, or Message.MessageID in unary).
+	respID := messageID
+	if result.responseID != "" {
+		respID = result.responseID
+	}
+
 	if isStreaming {
-		evt.Response = buildStreamingResponse(messageID, result, role)
+		evt.Response = buildStreamingResponse(respID, result, role)
 	} else {
-		evt.Response = buildNonStreamingResponse(messageID, result, role)
+		evt.Response = buildNonStreamingResponse(respID, result, role)
 	}
 
 	return evt
@@ -536,7 +605,7 @@ func buildStreamingResponse(messageID string, result *parseResult, role protocol
 		return &model.Response{
 			ID:        messageID,
 			Choices:   choices,
-			Object:    model.ObjectTypeChatCompletion,
+			Object:    model.ObjectTypeToolResponse,
 			Timestamp: now,
 			Created:   now.Unix(),
 			IsPartial: false,
@@ -590,8 +659,10 @@ func extractObjectType(result *parseResult) string {
 		return model.ObjectTypeChatCompletion
 	}
 
-	// Both code execution and code execution result use the same ObjectType.
-	// The distinction is made via the Tag field.
+	if len(result.toolResponses) > 0 {
+		return model.ObjectTypeToolResponse
+	}
+
 	if len(result.codeExecution) > 0 || len(result.codeExecutionResult) > 0 {
 		return model.ObjectTypePostprocessingCodeExecution
 	}

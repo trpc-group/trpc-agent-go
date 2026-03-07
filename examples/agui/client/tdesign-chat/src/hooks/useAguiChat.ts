@@ -77,6 +77,24 @@ function sanitizeIdPart(value: string, maxLength = 96): string {
   return value.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, maxLength);
 }
 
+function fnv1aHash32(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function reasoningUiMessageId(messageId: string): string {
+  const normalized = messageId.trim();
+  if (!normalized) {
+    return randomId("reasoning");
+  }
+  const sanitized = sanitizeIdPart(normalized, 64) || "id";
+  return `reasoning_${sanitized}_${fnv1aHash32(normalized)}`;
+}
+
 function graphInterruptIdentity(interrupt: GraphInterrupt): string {
   return [interrupt.checkpointId ?? "", interrupt.lineageId ?? "", interrupt.key ?? ""].filter(Boolean).join("|");
 }
@@ -266,8 +284,47 @@ function restoreFromMessagesSnapshot(evt: AguiSseEvent): {
       continue;
     }
 
+    if (role === "reasoning") {
+      const content = typeof msg?.content === "string" ? msg.content : formatStructured(msg?.content);
+      if (!content.trim()) {
+        continue;
+      }
+      const messageId = typeof msg?.id === "string" ? msg.id : randomId("reasoning_snapshot");
+      const thinkingId = reasoningUiMessageId(messageId);
+      uiMessages.push({
+        id: thinkingId,
+        role: "assistant",
+        kind: "thinking",
+        title: "Thinking",
+        content,
+        status: "complete",
+        timestamp,
+      });
+      messageIndexById.set(thinkingId, uiMessages.length - 1);
+      activeThinkingIndex = null;
+      continue;
+    }
+
     if (role === "assistant") {
       const content = typeof msg?.content === "string" ? msg.content : formatStructured(msg?.content);
+      const rawMessageId = typeof msg?.id === "string" ? msg.id : "";
+      if (rawMessageId.startsWith("reasoning_")) {
+        const thinkingId = reasoningUiMessageId(rawMessageId);
+        if (content.trim()) {
+          uiMessages.push({
+            id: thinkingId,
+            role: "assistant",
+            kind: "thinking",
+            title: "Thinking",
+            content,
+            status: "complete",
+            timestamp,
+          });
+          messageIndexById.set(thinkingId, uiMessages.length - 1);
+        }
+        activeThinkingIndex = null;
+        continue;
+      }
       if (getActiveReportSession()?.status === "open") {
         if (content.trim()) {
           appendReportContent(content);
@@ -688,7 +745,6 @@ function restoreFromMessagesSnapshot(evt: AguiSseEvent): {
       timestamp: prev?.timestamp ?? timestamp,
     };
   }
-
   return {
     messages: uiMessages,
     reportSessions,
@@ -717,6 +773,8 @@ export function useAguiChat(config: AguiChatConfig) {
   const toolCallArgsByIdRef = useRef<Map<string, string>>(new Map());
   const activityStateRef = useRef<Record<string, any>>({});
   const activeThinkingRef = useRef<{ id: string; active: boolean } | null>(null);
+  const activeReasoningIdsRef = useRef<Set<string>>(new Set());
+  const lastReasoningMessageIdRef = useRef<string>("");
   const reportSessionsRef = useRef<ReportSession[]>([]);
   const writingReportIdRef = useRef<string | null>(null);
   const graphInterruptIdentityRef = useRef<string | null>(null);
@@ -739,6 +797,8 @@ export function useAguiChat(config: AguiChatConfig) {
     toolCallNameByIdRef.current.clear();
     toolCallArgsByIdRef.current.clear();
     activeThinkingRef.current = null;
+    activeReasoningIdsRef.current.clear();
+    lastReasoningMessageIdRef.current = "";
 
     next.forEach((msg, index) => {
       messageIndexByIdRef.current.set(msg.id, index);
@@ -948,6 +1008,126 @@ export function useAguiChat(config: AguiChatConfig) {
       }
     },
     [addMessage, upsertMessage],
+  );
+
+  const handleReasoningEvent = useCallback(
+    (evt: AguiSseEvent) => {
+      const type = typeof evt.type === "string" ? evt.type : "";
+      const rawMessageId = typeof evt.messageId === "string" ? evt.messageId : "";
+      if (type === "REASONING_MESSAGE_CHUNK" && rawMessageId) {
+        lastReasoningMessageIdRef.current = rawMessageId;
+      }
+      let messageId = rawMessageId;
+      if (!messageId && type === "REASONING_MESSAGE_CHUNK") {
+        messageId = lastReasoningMessageIdRef.current;
+      }
+      if (!messageId) {
+        return;
+      }
+      const thinkingId = reasoningUiMessageId(messageId);
+      const timestamp = evt.timestamp ?? Date.now();
+      // Start or resume a reasoning stream.
+      if (type === "REASONING_START" || type === "REASONING_MESSAGE_START") {
+        activeReasoningIdsRef.current.add(thinkingId);
+        upsertMessage(thinkingId, (msg) => {
+          return {
+            id: thinkingId,
+            role: "assistant",
+            kind: "thinking",
+            title: msg?.title ?? "Thinking",
+            content: msg?.content ?? "",
+            status: "streaming",
+            timestamp: msg?.timestamp ?? timestamp,
+          };
+        });
+        return;
+      }
+      if (type === "REASONING_MESSAGE_CHUNK") {
+        const delta = typeof evt.delta === "string" ? evt.delta : undefined;
+        // Treat an explicit empty delta as a close signal for the current reasoning message.
+        if (delta === "") {
+          activeReasoningIdsRef.current.delete(thinkingId);
+          if (lastReasoningMessageIdRef.current === messageId) {
+            lastReasoningMessageIdRef.current = "";
+          }
+          if (!messageIndexByIdRef.current.has(thinkingId)) {
+            return;
+          }
+          upsertMessage(thinkingId, (msg) => {
+            return {
+              id: thinkingId,
+              role: "assistant",
+              kind: "thinking",
+              title: msg?.title ?? "Thinking",
+              content: msg?.content ?? "",
+              status: "complete",
+              timestamp: msg?.timestamp ?? timestamp,
+            };
+          });
+          return;
+        }
+        if (!delta) {
+          return;
+        }
+        activeReasoningIdsRef.current.add(thinkingId);
+        upsertMessage(thinkingId, (msg) => {
+          const prev = msg?.content ?? "";
+          return {
+            id: thinkingId,
+            role: "assistant",
+            kind: "thinking",
+            title: msg?.title ?? "Thinking",
+            content: prev + delta,
+            status: "streaming",
+            timestamp: msg?.timestamp ?? timestamp,
+          };
+        });
+        return;
+      }
+      // Append reasoning delta to the UI message.
+      if (type === "REASONING_MESSAGE_CONTENT") {
+        const delta = typeof evt.delta === "string" ? evt.delta : "";
+        if (!delta) {
+          return;
+        }
+        activeReasoningIdsRef.current.add(thinkingId);
+        upsertMessage(thinkingId, (msg) => {
+          const prev = msg?.content ?? "";
+          return {
+            id: thinkingId,
+            role: "assistant",
+            kind: "thinking",
+            title: msg?.title ?? "Thinking",
+            content: prev + delta,
+            status: "streaming",
+            timestamp: msg?.timestamp ?? timestamp,
+          };
+        });
+        return;
+      }
+      // Mark the reasoning message as complete.
+      if (type === "REASONING_MESSAGE_END" || type === "REASONING_END") {
+        activeReasoningIdsRef.current.delete(thinkingId);
+        if (lastReasoningMessageIdRef.current === messageId) {
+          lastReasoningMessageIdRef.current = "";
+        }
+        if (!messageIndexByIdRef.current.has(thinkingId)) {
+          return;
+        }
+        upsertMessage(thinkingId, (msg) => {
+          return {
+            id: thinkingId,
+            role: "assistant",
+            kind: "thinking",
+            title: msg?.title ?? "Thinking",
+            content: msg?.content ?? "",
+            status: "complete",
+            timestamp: msg?.timestamp ?? timestamp,
+          };
+        });
+      }
+    },
+    [upsertMessage],
   );
 
   const handleActivityDelta = useCallback(
@@ -1184,6 +1364,26 @@ export function useAguiChat(config: AguiChatConfig) {
         setGraphNodeId(undefined);
         setGraphInterrupt(null);
         setProgress(null);
+        lastReasoningMessageIdRef.current = "";
+        const activeReasoningIds = Array.from(activeReasoningIdsRef.current);
+        activeReasoningIdsRef.current.clear();
+        const timestamp = evt.timestamp ?? Date.now();
+        for (const thinkingId of activeReasoningIds) {
+          if (!messageIndexByIdRef.current.has(thinkingId)) {
+            continue;
+          }
+          upsertMessage(thinkingId, (msg) => {
+            return {
+              id: thinkingId,
+              role: "assistant",
+              kind: "thinking",
+              title: msg?.title ?? "Thinking",
+              content: msg?.content ?? "",
+              status: "complete",
+              timestamp: msg?.timestamp ?? timestamp,
+            };
+          });
+        }
         return;
       }
 
@@ -1193,6 +1393,26 @@ export function useAguiChat(config: AguiChatConfig) {
         abortRef.current = null;
         const result = typeof evt.result === "string" ? evt.result : undefined;
         setFinishReason(result);
+        lastReasoningMessageIdRef.current = "";
+        const activeReasoningIds = Array.from(activeReasoningIdsRef.current);
+        activeReasoningIdsRef.current.clear();
+        const timestamp = evt.timestamp ?? Date.now();
+        for (const thinkingId of activeReasoningIds) {
+          if (!messageIndexByIdRef.current.has(thinkingId)) {
+            continue;
+          }
+          upsertMessage(thinkingId, (msg) => {
+            return {
+              id: thinkingId,
+              role: "assistant",
+              kind: "thinking",
+              title: msg?.title ?? "Thinking",
+              content: msg?.content ?? "",
+              status: "complete",
+              timestamp: msg?.timestamp ?? timestamp,
+            };
+          });
+        }
         return;
       }
 
@@ -1202,9 +1422,34 @@ export function useAguiChat(config: AguiChatConfig) {
         abortRef.current = null;
         const msg = typeof evt.message === "string" ? evt.message : "Run error.";
         setLastError(msg);
+        lastReasoningMessageIdRef.current = "";
+        const activeReasoningIds = Array.from(activeReasoningIdsRef.current);
+        activeReasoningIdsRef.current.clear();
+        const timestamp = evt.timestamp ?? Date.now();
+        for (const thinkingId of activeReasoningIds) {
+          if (!messageIndexByIdRef.current.has(thinkingId)) {
+            continue;
+          }
+          upsertMessage(thinkingId, (msg) => {
+            return {
+              id: thinkingId,
+              role: "assistant",
+              kind: "thinking",
+              title: msg?.title ?? "Thinking",
+              content: msg?.content ?? "",
+              status: "complete",
+              timestamp: msg?.timestamp ?? timestamp,
+            };
+          });
+        }
         return;
       }
-
+      // Handle REASONING_* events.
+      if (type.startsWith("REASONING_")) {
+        appendRawEvent(evt);
+        handleReasoningEvent(evt);
+        return;
+      }
       if (type === "TEXT_MESSAGE_START") {
         appendRawEvent(evt);
         const writingId = writingReportIdRef.current;
@@ -1357,7 +1602,7 @@ export function useAguiChat(config: AguiChatConfig) {
       }
       appendRawEvent(evt);
     },
-    [addMessage, appendRawEvent, handleActivityDelta, handleCustomEvent, handleToolCallResult, updateReportSessions, upsertMessage],
+    [addMessage, appendRawEvent, handleActivityDelta, handleCustomEvent, handleReasoningEvent, handleToolCallResult, updateReportSessions, upsertMessage],
   );
 
   const stop = useCallback(() => {

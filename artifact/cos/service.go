@@ -35,6 +35,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"mime"
 	"sort"
 	"strconv"
 	"strings"
@@ -142,7 +143,15 @@ func (s *Service) SaveArtifact(
 
 	// Upload the artifact data
 	reader := bytes.NewReader(art.Data)
-	err = s.cosClient.PutObject(ctx, objectName, reader, art.MimeType)
+	putOpts := cos.ObjectPutOptions{
+		ObjectPutHeaderOptions: &cos.ObjectPutHeaderOptions{
+			ContentType: art.MimeType,
+			ContentDisposition: mime.FormatMediaType("attachment", map[string]string{
+				"filename": filename,
+			}),
+		},
+	}
+	err = s.cosClient.PutObject(ctx, objectName, reader, putOpts)
 	if err != nil {
 		return 0, fmt.Errorf("failed to upload artifact: %w", err)
 	}

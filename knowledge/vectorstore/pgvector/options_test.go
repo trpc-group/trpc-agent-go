@@ -233,3 +233,77 @@ func TestWithPGVectorClientDSN(t *testing.T) {
 	WithPGVectorClientDSN(dsn)(&opts)
 	assert.Equal(t, dsn, opts.dsn)
 }
+
+// freshOptions returns a copy of defaultOptions with its own RRFParams
+// to avoid pointer sharing between tests.
+func freshOptions() options {
+	o := defaultOptions
+	o.rrfParams = &RRFParams{K: 60, CandidateRatio: 3}
+	return o
+}
+
+func TestWithRRFParams(t *testing.T) {
+	t.Run("nil_params_no_change", func(t *testing.T) {
+		opts := freshOptions()
+		WithRRFParams(nil)(&opts)
+		assert.Equal(t, 60, opts.rrfParams.K)
+		assert.Equal(t, 3, opts.rrfParams.CandidateRatio)
+	})
+
+	t.Run("valid_params", func(t *testing.T) {
+		opts := freshOptions()
+		WithRRFParams(&RRFParams{K: 30, CandidateRatio: 5})(&opts)
+		assert.Equal(t, 30, opts.rrfParams.K)
+		assert.Equal(t, 5, opts.rrfParams.CandidateRatio)
+	})
+
+	t.Run("zero_values_keep_defaults", func(t *testing.T) {
+		opts := freshOptions()
+		WithRRFParams(&RRFParams{K: 0, CandidateRatio: 0})(&opts)
+		assert.Equal(t, 60, opts.rrfParams.K)
+		assert.Equal(t, 3, opts.rrfParams.CandidateRatio)
+	})
+
+	t.Run("negative_values_keep_defaults", func(t *testing.T) {
+		opts := freshOptions()
+		WithRRFParams(&RRFParams{K: -10, CandidateRatio: -5})(&opts)
+		assert.Equal(t, 60, opts.rrfParams.K)
+		assert.Equal(t, 3, opts.rrfParams.CandidateRatio)
+	})
+
+	t.Run("large_values_accepted", func(t *testing.T) {
+		opts := freshOptions()
+		WithRRFParams(&RRFParams{K: 500, CandidateRatio: 20})(&opts)
+		assert.Equal(t, 500, opts.rrfParams.K)
+		assert.Equal(t, 20, opts.rrfParams.CandidateRatio)
+	})
+
+	t.Run("partial_update_k_only", func(t *testing.T) {
+		opts := freshOptions()
+		WithRRFParams(&RRFParams{K: 20})(&opts)
+		assert.Equal(t, 20, opts.rrfParams.K)
+		assert.Equal(t, 3, opts.rrfParams.CandidateRatio)
+	})
+
+	t.Run("partial_update_candidate_ratio_only", func(t *testing.T) {
+		opts := freshOptions()
+		WithRRFParams(&RRFParams{CandidateRatio: 7})(&opts)
+		assert.Equal(t, 60, opts.rrfParams.K)
+		assert.Equal(t, 7, opts.rrfParams.CandidateRatio)
+	})
+}
+
+func TestWithHybridFusionMode(t *testing.T) {
+	t.Run("set_rrf_mode", func(t *testing.T) {
+		opts := defaultOptions
+		WithHybridFusionMode(HybridFusionRRF)(&opts)
+		assert.Equal(t, HybridFusionRRF, opts.fusionMode)
+	})
+
+	t.Run("set_weighted_mode", func(t *testing.T) {
+		opts := defaultOptions
+		opts.fusionMode = HybridFusionRRF
+		WithHybridFusionMode(HybridFusionWeighted)(&opts)
+		assert.Equal(t, HybridFusionWeighted, opts.fusionMode)
+	})
+}
