@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcache"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -207,7 +208,11 @@ func TestResolveOutboundFilePath_SupportsHostRef(t *testing.T) {
 	path := filepath.Join(root, "x.pdf")
 	require.NoError(t, os.WriteFile(path, []byte("x"), 0o600))
 
-	got, err := resolveOutboundFilePath("host://" + path)
+	got, err := resolveOutboundFilePath(
+		context.Background(),
+		"",
+		"host://"+path,
+	)
 	require.NoError(t, err)
 	require.Equal(t, path, got)
 }
@@ -218,7 +223,7 @@ func TestResolveOutboundFilePath_ExpandsHome(t *testing.T) {
 	home, err := os.UserHomeDir()
 	require.NoError(t, err)
 
-	got, err := resolveOutboundFilePath("~/x.pdf")
+	got, err := resolveOutboundFilePath(context.Background(), "", "~/x.pdf")
 	require.NoError(t, err)
 	require.Equal(t, filepath.Join(home, "x.pdf"), got)
 }
@@ -233,7 +238,11 @@ func TestResolveOutboundFilePath_FileURL(t *testing.T) {
 		os.WriteFile(path, []byte("png"), 0o600),
 	)
 
-	got, err := resolveOutboundFilePath("file://" + path)
+	got, err := resolveOutboundFilePath(
+		context.Background(),
+		"",
+		"file://"+path,
+	)
 	require.NoError(t, err)
 	require.Equal(t, path, got)
 }
@@ -241,7 +250,7 @@ func TestResolveOutboundFilePath_FileURL(t *testing.T) {
 func TestResolveOutboundFilePath_InvalidFileURL(t *testing.T) {
 	t.Parallel()
 
-	_, err := resolveOutboundFilePath("file://")
+	_, err := resolveOutboundFilePath(context.Background(), "", "file://")
 	require.Error(t, err)
 }
 
@@ -293,6 +302,7 @@ func TestResolveOutboundFile_EmptyPath(t *testing.T) {
 
 	_, err := resolveOutboundFile(
 		context.Background(),
+		"",
 		channel.OutboundFile{},
 	)
 	require.Error(t, err)
@@ -317,4 +327,166 @@ func TestTypeFromExtensionAndVoiceDetection(t *testing.T) {
 	require.Equal(t, "", typeFromExtension(".unknown"))
 	require.True(t, isVoiceMedia(mimeVoiceOGG, "voice.oga"))
 	require.False(t, isVoiceMedia("audio/mpeg", "voice.mp3"))
+}
+
+func TestSendTextAndSendMessage_Errors(t *testing.T) {
+	t.Parallel()
+
+	var ch *Channel
+	err := ch.SendText(context.Background(), "100", "hi")
+	require.Error(t, err)
+
+	ch = &Channel{bot: &stubBot{}}
+	err = ch.SendMessage(
+		context.Background(),
+		"bad-target",
+		channel.OutboundMessage{Text: "hi"},
+	)
+	require.Error(t, err)
+}
+
+func TestResolveOutboundFilePath_Relative(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(root))
+	t.Cleanup(func() {
+		require.NoError(t, os.Chdir(cwd))
+	})
+
+	got, err := resolveOutboundFilePath(
+		context.Background(),
+		"",
+		"report.pdf",
+	)
+	require.NoError(t, err)
+	require.Equal(t, "report.pdf", filepath.Base(got))
+	require.True(t, strings.HasSuffix(got, filepath.Join("001", "report.pdf")))
+}
+
+func TestResolveOutboundFilePath_SessionUploadsFallback(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	store, err := uploads.NewStore(stateDir)
+	require.NoError(t, err)
+
+	scope := uploads.Scope{
+		Channel:   channelID,
+		UserID:    "u1",
+		SessionID: "telegram:dm:u1:s1",
+	}
+	saved, err := store.Save(
+		context.Background(),
+		scope,
+		"split.pdf",
+		[]byte("%PDF-1.4"),
+	)
+	require.NoError(t, err)
+
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(
+			agent.WithInvocationSession(
+				session.NewSession("app", "u1", "telegram:dm:u1:s1"),
+			),
+		),
+	)
+
+	got, err := resolveOutboundFilePath(ctx, stateDir, "split.pdf")
+	require.NoError(t, err)
+	require.Equal(t, saved.Path, got)
+}
+
+func TestResolveHostOutboundFile_NameHintAndReadError(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	path := filepath.Join(root, "report.pdf")
+	require.NoError(t, os.WriteFile(path, []byte("pdf"), 0o600))
+
+	got, err := resolveHostOutboundFile(
+		context.Background(),
+		"",
+		path,
+		"renamed.pdf",
+	)
+	require.NoError(t, err)
+	require.Equal(t, "renamed.pdf", got.Name)
+	require.Equal(t, []byte("pdf"), got.Data)
+
+	_, err = resolveHostOutboundFile(
+		context.Background(),
+		"",
+		filepath.Join(root, "missing.pdf"),
+		"",
+	)
+	require.Error(t, err)
+}
+
+func TestDetectMediaType_PrefersExtensionFallback(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(
+		t,
+		"application/pdf",
+		detectMediaType("report.pdf", []byte("plain text")),
+	)
+	require.Equal(
+		t,
+		"image/png",
+		detectMediaType("frame.png", []byte("not real image")),
+	)
+}
+
+func TestParseSessionTargets_Invalid(t *testing.T) {
+	t.Parallel()
+
+	_, ok := parseDMSessionTarget("")
+	require.False(t, ok)
+
+	_, ok = parseThreadSessionTarget("100")
+	require.False(t, ok)
+
+	require.Equal(t, "100", leadingSessionToken("100:session-1"))
+	require.Equal(
+		t,
+		"100",
+		mustParseLegacyDMTarget(t, "100:session-1"),
+	)
+	_, ok = parseLegacyDMSessionTarget("100:123")
+	require.False(t, ok)
+}
+
+func TestResolveTextTargetFromSessionID_BareSuffix(t *testing.T) {
+	t.Parallel()
+
+	target, ok := ResolveTextTargetFromSessionID("100:session-abc")
+	require.True(t, ok)
+	require.Equal(t, "100", target)
+
+	target, ok = ResolveTextTargetFromSessionID(
+		"-100123:topic:7:session-abc",
+	)
+	require.True(t, ok)
+	require.Equal(t, "-100123:topic:7", target)
+}
+
+func TestParseTextTarget_BareSessionSuffix(t *testing.T) {
+	t.Parallel()
+
+	chatID, threadID, err := parseTextTarget("100:session-abc")
+	require.NoError(t, err)
+	require.EqualValues(t, 100, chatID)
+	require.Zero(t, threadID)
+}
+
+func mustParseLegacyDMTarget(t *testing.T, raw string) string {
+	t.Helper()
+
+	target, ok := parseLegacyDMSessionTarget(raw)
+	require.True(t, ok)
+	return target
 }

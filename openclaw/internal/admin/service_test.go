@@ -27,6 +27,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/cron"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/octool"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 )
 
 type stubRunner struct {
@@ -549,4 +550,125 @@ func TestServiceUploadAndDebugValidationErrors(t *testing.T) {
 	)
 	handler.ServeHTTP(debugRR, debugReq)
 	require.Equal(t, http.StatusBadRequest, debugRR.Code)
+}
+
+func TestResolveUploadFile_InvalidPaths(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dir := filepath.Join(root, "telegram", "u1")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	filePath := filepath.Join(dir, "clip.mp4")
+	require.NoError(t, os.WriteFile(filePath, []byte("x"), 0o600))
+
+	_, err := resolveUploadFile(root, "../clip.mp4")
+	require.Error(t, err)
+
+	_, err = resolveUploadFile(root, "telegram/u1")
+	require.Error(t, err)
+
+	got, err := resolveUploadFile(root, "telegram/u1/clip.mp4")
+	require.NoError(t, err)
+	require.Equal(t, filePath, got)
+}
+
+func TestServiceUploadEndpoint_MethodNotAllowed(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{StateDir: t.TempDir()})
+	handler := svc.Handler()
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, routeUploadFile, nil)
+	handler.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusMethodNotAllowed, rr.Code)
+}
+
+func TestDebugHelpers(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{DebugDir: t.TempDir()})
+	require.Empty(t, svc.debugFileURL("", debugMetaFileName))
+	require.Empty(t, svc.debugFileURL("x/y", "notes.txt"))
+
+	items := []debugTraceView{
+		{SessionID: "s1"},
+		{SessionID: "s2"},
+	}
+	limited := limitDebugTraces(items, 1)
+	require.Len(t, limited, 1)
+	require.Equal(t, "s1", limited[0].SessionID)
+
+	require.False(t, fileExists(filepath.Join(t.TempDir(), "missing")))
+}
+
+func TestReadDebugTrace_RejectsEscapeAndBadJSON(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	bySession := filepath.Join(root, debugBySessionDir, "session-1")
+	traceDir := filepath.Join(root, "20260307", "trace")
+	require.NoError(t, os.MkdirAll(bySession, 0o755))
+	require.NoError(t, os.MkdirAll(traceDir, 0o755))
+
+	refPath := filepath.Join(bySession, debugMetaTraceRefName)
+	svc := New(Config{DebugDir: root})
+
+	require.NoError(t, os.WriteFile(refPath, []byte("{"), 0o600))
+	_, ok, err := svc.readDebugTrace(root, filepath.Join(root, debugBySessionDir), refPath, "")
+	require.Error(t, err)
+	require.False(t, ok)
+
+	ref := `{"trace_dir":"../../../../escape","started_at":"2026-03-07T00:00:00Z"}`
+	require.NoError(t, os.WriteFile(refPath, []byte(ref), 0o600))
+	_, ok, err = svc.readDebugTrace(
+		root,
+		filepath.Join(root, debugBySessionDir),
+		refPath,
+		"",
+	)
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
+func TestHandleIndex_RendersUploadPreviews(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	store, err := uploads.NewStore(stateDir)
+	require.NoError(t, err)
+
+	scope := uploads.Scope{
+		Channel:   "telegram",
+		UserID:    "u1",
+		SessionID: "telegram:dm:u1:s1",
+	}
+	_, err = store.Save(context.Background(), scope, "frame.png", []byte("png"))
+	require.NoError(t, err)
+	_, err = store.Save(context.Background(), scope, "note.mp3", []byte("mp3"))
+	require.NoError(t, err)
+	_, err = store.Save(context.Background(), scope, "clip.mp4", []byte("mp4"))
+	require.NoError(t, err)
+	_, err = store.Save(
+		context.Background(),
+		scope,
+		"report.pdf",
+		[]byte("%PDF-1.4"),
+	)
+	require.NoError(t, err)
+
+	svc := New(Config{
+		StateDir:   stateDir,
+		GatewayURL: "http://127.0.0.1:8080",
+		AdminURL:   "http://127.0.0.1:19789",
+	})
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, routeIndex, nil)
+
+	svc.Handler().ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Contains(t, rr.Body.String(), "<img src=\"/uploads/file?")
+	require.Contains(t, rr.Body.String(), "<audio controls")
+	require.Contains(t, rr.Body.String(), "<video controls")
+	require.Contains(t, rr.Body.String(), ">open preview</a>")
 }

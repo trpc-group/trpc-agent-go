@@ -261,6 +261,55 @@ func TestDefaultSessionID_Thread(t *testing.T) {
 	require.Equal(t, "http:thread:g1", id)
 }
 
+func TestBuildUploadContextText(t *testing.T) {
+	t.Parallel()
+
+	text := buildUploadContextText([]uploads.ListedFile{
+		{
+			Name: "voice.ogg",
+			Path: "/tmp/voice.ogg",
+		},
+		{
+			Name: "clip.mp4",
+			Path: "/tmp/clip.mp4",
+		},
+		{
+			Name: "report.pdf",
+			Path: "/tmp/report.pdf",
+		},
+	})
+	require.Contains(t, text, "voice.ogg [audio]")
+	require.Contains(t, text, "clip.mp4 [video]")
+	require.Contains(t, text, "report.pdf [pdf]")
+}
+
+func TestServerUploadContextMessages(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	store, err := uploads.NewStore(stateDir)
+	require.NoError(t, err)
+
+	scope := uploads.Scope{
+		Channel:   "telegram",
+		UserID:    "u1",
+		SessionID: "telegram:dm:u1:s1",
+	}
+	_, err = store.Save(
+		context.Background(),
+		scope,
+		"clip.mp4",
+		[]byte("video"),
+	)
+	require.NoError(t, err)
+
+	srv := &Server{uploads: store}
+	msgs := srv.uploadContextMessages("u1", "telegram:dm:u1:s1")
+	require.Len(t, msgs, 1)
+	require.Contains(t, msgs[0].Content, recentUploadContextHeader)
+	require.Contains(t, msgs[0].Content, "clip.mp4 [video]")
+}
+
 func TestDefaultSessionID_MissingFromForDM(t *testing.T) {
 	t.Parallel()
 	_, err := DefaultSessionID(InboundMessage{

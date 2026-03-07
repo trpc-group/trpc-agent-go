@@ -72,6 +72,12 @@ func ResolveTextTargetFromSessionID(sessionID string) (string, bool) {
 			strings.TrimPrefix(raw, sessionThreadPrefix),
 		)
 	default:
+		if target, ok := parseThreadSessionTarget(raw); ok {
+			return target, true
+		}
+		if target, ok := parseLegacyDMSessionTarget(raw); ok {
+			return target, true
+		}
 		return "", false
 	}
 }
@@ -171,7 +177,12 @@ func parseTextTarget(target string) (int64, int, error) {
 
 	chatID, err := parseChatID(chatPart)
 	if err != nil {
-		return 0, 0, err
+		if fallback, ok := parseLegacyDMSessionTarget(chatPart); ok {
+			chatID, err = parseChatID(fallback)
+		}
+		if err != nil {
+			return 0, 0, err
+		}
 	}
 	return chatID, threadID, nil
 }
@@ -197,6 +208,32 @@ func parseThreadSessionTarget(raw string) (string, bool) {
 		return "", false
 	}
 	return chatPart + threadTopicSep + topicPart, true
+}
+
+func parseLegacyDMSessionTarget(raw string) (string, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", false
+	}
+	chatPart := leadingSessionToken(trimmed)
+	if chatPart == "" || chatPart == trimmed {
+		return "", false
+	}
+	suffix := strings.TrimSpace(strings.TrimPrefix(trimmed, chatPart))
+	if !strings.HasPrefix(suffix, ":") {
+		return "", false
+	}
+	suffix = strings.TrimSpace(strings.TrimPrefix(suffix, ":"))
+	if suffix == "" || strings.Contains(suffix, ":") {
+		return "", false
+	}
+	if isDigitsOnly(suffix) {
+		return "", false
+	}
+	if _, err := strconvParseInt(chatPart); err != nil {
+		return "", false
+	}
+	return chatPart, true
 }
 
 func leadingSessionToken(raw string) string {
@@ -238,7 +275,7 @@ func (c *Channel) sendFile(
 	threadID int,
 	file channel.OutboundFile,
 ) error {
-	payload, err := resolveOutboundFile(ctx, file)
+	payload, err := resolveOutboundFile(ctx, c.state, file)
 	if err != nil {
 		return err
 	}
@@ -267,6 +304,7 @@ func (c *Channel) sendFile(
 
 func resolveOutboundFile(
 	ctx context.Context,
+	stateRoot string,
 	file channel.OutboundFile,
 ) (outboundFilePayload, error) {
 	if ctx == nil {
@@ -285,7 +323,7 @@ func resolveOutboundFile(
 	case strings.HasPrefix(raw, fileref.WorkspacePrefix):
 		return resolveWorkspaceOutboundFile(ctx, raw, file.Name)
 	default:
-		return resolveHostOutboundFile(raw, file.Name)
+		return resolveHostOutboundFile(ctx, stateRoot, raw, file.Name)
 	}
 }
 
@@ -367,10 +405,12 @@ func resolveWorkspaceOutboundFile(
 }
 
 func resolveHostOutboundFile(
+	ctx context.Context,
+	stateRoot string,
 	raw string,
 	nameHint string,
 ) (outboundFilePayload, error) {
-	resolved, err := resolveOutboundFilePath(raw)
+	resolved, err := resolveOutboundFilePath(ctx, stateRoot, raw)
 	if err != nil {
 		return outboundFilePayload{}, err
 	}
@@ -393,7 +433,11 @@ func resolveHostOutboundFile(
 	}, nil
 }
 
-func resolveOutboundFilePath(raw string) (string, error) {
+func resolveOutboundFilePath(
+	ctx context.Context,
+	stateRoot string,
+	raw string,
+) (string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
 		return "", fmt.Errorf("telegram: empty file path")
@@ -426,7 +470,73 @@ func resolveOutboundFilePath(raw string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("telegram: resolve file path: %w", err)
 	}
+	if info, statErr := os.Stat(abs); statErr == nil && !info.IsDir() {
+		return filepath.Clean(abs), nil
+	}
+	if resolved, ok := resolveSessionScopedOutboundPath(
+		ctx,
+		stateRoot,
+		trimmed,
+	); ok {
+		return resolved, nil
+	}
 	return abs, nil
+}
+
+func resolveSessionScopedOutboundPath(
+	ctx context.Context,
+	stateRoot string,
+	raw string,
+) (string, bool) {
+	if ctx == nil {
+		return "", false
+	}
+	inv, ok := agent.InvocationFromContext(ctx)
+	if !ok || inv == nil || inv.Session == nil {
+		return "", false
+	}
+	root := sessionUploadsRoot(
+		stateRoot,
+		inv.Session.UserID,
+		inv.Session.ID,
+	)
+	if root == "" {
+		return "", false
+	}
+	if joined, ok := resolveSessionScopedJoinedPath(root, raw); ok {
+		return joined, true
+	}
+	if !looksLikeReplyFileName(raw) {
+		return "", false
+	}
+	matches := findReplyNamedFiles(
+		root,
+		filepath.Base(strings.TrimSpace(raw)),
+		maxReplySearchDepth,
+		1,
+	)
+	if len(matches) == 0 {
+		return "", false
+	}
+	return filepath.Clean(matches[0]), true
+}
+
+func resolveSessionScopedJoinedPath(
+	root string,
+	raw string,
+) (string, bool) {
+	if !canJoinReplyRoots(raw) {
+		return "", false
+	}
+	candidate := filepath.Join(root, raw)
+	abs, info, err := statReplyPath(candidate)
+	if err != nil || info == nil || info.IsDir() {
+		return "", false
+	}
+	if !pathUnderRoot(abs, filepath.Clean(root)) {
+		return "", false
+	}
+	return abs, true
 }
 
 func expandHomePath(raw string) (string, error) {
@@ -545,4 +655,17 @@ func strconvParseInt(raw string) (int64, error) {
 
 func strconvAtoi(raw string) (int, error) {
 	return strconv.Atoi(strings.TrimSpace(raw))
+}
+
+func isDigitsOnly(raw string) bool {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return false
+	}
+	for _, r := range trimmed {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }

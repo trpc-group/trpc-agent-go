@@ -305,7 +305,7 @@ func (c *Channel) callGatewayAndReply(
 		return nil
 	}
 
-	replyFiles := c.collectReplyFiles(rsp.Reply)
+	replyFiles := c.collectReplyFiles(rsp.Reply, fromID, sessionID)
 	parts := splitRunes(rsp.Reply, maxReplyRunes)
 	if !hasPreview || mode == streamingOff {
 		c.sendReplyParts(ctx, chatID, messageThreadID, replyTo, parts)

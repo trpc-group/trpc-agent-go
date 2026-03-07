@@ -876,6 +876,22 @@ const adminPageHTML = `<!doctype html>
       margin-top: 14px;
       color: var(--muted);
     }
+    .preview-box {
+      max-width: 220px;
+    }
+    .preview-box img,
+    .preview-box video {
+      display: block;
+      max-width: 220px;
+      max-height: 140px;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: white;
+    }
+    .preview-box audio {
+      width: 220px;
+      max-width: 100%;
+    }
     @media (max-width: 760px) {
       h1 { font-size: 30px; }
       .meta { grid-template-columns: 1fr; }
@@ -1247,6 +1263,7 @@ const adminPageHTML = `<!doctype html>
             <th>Session</th>
             <th>Name</th>
             <th>Kind</th>
+            <th>Preview</th>
             <th>Relative Path</th>
             <th>Size</th>
             <th>Modified</th>
@@ -1265,6 +1282,29 @@ const adminPageHTML = `<!doctype html>
               <a href="{{.DownloadURL}}">download</a>
             </td>
             <td>{{.Kind}}</td>
+            <td>
+              <div class="preview-box">
+                {{if eq .Kind "image"}}
+                <a href="{{.OpenURL}}" target="_blank"
+                  rel="noopener noreferrer">
+                  <img src="{{.OpenURL}}" alt="{{.Name}}">
+                </a>
+                {{else if eq .Kind "audio"}}
+                <audio controls preload="none" src="{{.OpenURL}}">
+                  Your browser does not support audio preview.
+                </audio>
+                {{else if eq .Kind "video"}}
+                <video controls preload="metadata" muted src="{{.OpenURL}}">
+                  Your browser does not support video preview.
+                </video>
+                {{else if eq .Kind "pdf"}}
+                <a href="{{.OpenURL}}" target="_blank"
+                  rel="noopener noreferrer">open preview</a>
+                {{else}}
+                <span class="subtle">n/a</span>
+                {{end}}
+              </div>
+            </td>
             <td><code>{{.RelativePath}}</code></td>
             <td>{{.SizeBytes}}</td>
             <td>{{formatTime .ModifiedAt}}</td>

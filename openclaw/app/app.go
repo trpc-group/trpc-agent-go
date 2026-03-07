@@ -90,7 +90,10 @@ const (
 		"the reference is genuinely ambiguous. If the user replies " +
 		"to an earlier media message, treat that replied media as " +
 		"the default target unless they clearly ask for something " +
-		"else. For exec_command, do " +
+		"else. If the user asks you to 'send it back', '发给我', " +
+		"'回传', or similar, send the derived files directly in " +
+		"the current chat with message instead of asking which " +
+		"channel or delivery method to use. For exec_command, do " +
 		"not assume skill workspace paths like work/inputs. Do not " +
 		"expose local host paths to the user; refer to uploads and " +
 		"generated files by user-facing filenames, and use message " +
@@ -102,7 +105,10 @@ const (
 		"directly with message instead of only describing their " +
 		"paths. When you mention generated files in the final " +
 		"reply, use concise filenames rather than local machine " +
-		"paths. Prefer writing derived files under " +
+		"paths, and ensure those filenames actually exist under " +
+		"the current working directory or " +
+		"OPENCLAW_SESSION_UPLOADS_DIR. Prefer writing derived " +
+		"files under " +
 		"OPENCLAW_SESSION_UPLOADS_DIR when you will send them " +
 		"back to the user. " +
 		"When creating a cron job from chat, omit channel and " +

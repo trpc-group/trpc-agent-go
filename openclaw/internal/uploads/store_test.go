@@ -13,6 +13,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -41,6 +42,13 @@ func TestStoreSave(t *testing.T) {
 
 	require.Contains(t, saved.Name, "李光耀回忆录.pdf")
 	require.NotContains(t, saved.Name, "..")
+}
+
+func TestNewStore_EmptyStateDir(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewStore(" ")
+	require.Error(t, err)
 }
 
 func TestStoreSave_Deduplicates(t *testing.T) {
@@ -166,4 +174,36 @@ func TestStoreListScopeAndListAll(t *testing.T) {
 	require.Equal(t, second.Path, allFiles[0].Path)
 	require.Equal(t, scopeB, allFiles[0].Scope)
 	require.Equal(t, first.Path, allFiles[1].Path)
+}
+
+func TestStoreScopeDir(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store, err := NewStore(root)
+	require.NoError(t, err)
+
+	got := store.ScopeDir(Scope{
+		Channel:   "telegram",
+		UserID:    "u1",
+		SessionID: "telegram:dm:u1:abc",
+	})
+	require.NotEmpty(t, got)
+	require.True(
+		t,
+		strings.HasPrefix(got, filepath.Join(root, defaultUploadsDir)),
+	)
+	require.Contains(t, got, filepath.Join("telegram", "u1"))
+}
+
+func TestSanitizeHelpers(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, defaultChannelDir, sanitizeDirToken(" ", defaultChannelDir))
+	require.Equal(t, "telegram_dm_1", sanitizeDirToken(
+		"telegram:dm:1",
+		defaultSessionDir,
+	))
+	require.Equal(t, defaultFileName, sanitizeFileName("../"))
+	require.Contains(t, sanitizeFileName("../报告.pdf"), "报告.pdf")
 }

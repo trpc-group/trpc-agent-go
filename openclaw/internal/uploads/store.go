@@ -91,6 +91,14 @@ func (s *Store) Root() string {
 	return s.root
 }
 
+// ScopeDir returns the stable host directory for one upload scope.
+func (s *Store) ScopeDir(scope Scope) string {
+	if s == nil || strings.TrimSpace(s.root) == "" {
+		return ""
+	}
+	return s.scopeDirPath(scope)
+}
+
 // Save persists data for the given scope and returns a stable host ref.
 func (s *Store) Save(
 	_ context.Context,
@@ -106,7 +114,7 @@ func (s *Store) Save(
 	}
 
 	safeName := sanitizeFileName(name)
-	dir := s.scopeDir(scope)
+	dir := s.scopeDirPath(scope)
 	if err := os.MkdirAll(dir, dirMode); err != nil {
 		return SavedFile{}, fmt.Errorf("uploads: create dir: %w", err)
 	}
@@ -152,7 +160,7 @@ func (s *Store) ListScope(scope Scope, limit int) ([]ListedFile, error) {
 	}
 	return listStoredFiles(
 		s.root,
-		s.scopeDir(scope),
+		s.scopeDirPath(scope),
 		scope,
 		limit,
 	)
@@ -199,7 +207,7 @@ func PathFromHostRef(ref string) (string, bool) {
 	return "", false
 }
 
-func (s *Store) scopeDir(scope Scope) string {
+func (s *Store) scopeDirPath(scope Scope) string {
 	return filepath.Join(
 		s.root,
 		sanitizeDirToken(scope.Channel, defaultChannelDir),
