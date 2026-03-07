@@ -583,6 +583,8 @@ func TestUploadEnvFromContext(t *testing.T) {
 	dir := t.TempDir()
 	filePath := filepath.Join(dir, "report.pdf")
 	audioPath := filepath.Join(dir, "clip.ogg")
+	videoPath := filepath.Join(dir, "movie.mp4")
+	imagePath := filepath.Join(dir, "frame.png")
 	require.NoError(t, os.WriteFile(
 		filePath,
 		[]byte("pdf"),
@@ -591,6 +593,16 @@ func TestUploadEnvFromContext(t *testing.T) {
 	require.NoError(t, os.WriteFile(
 		audioPath,
 		[]byte("ogg"),
+		0o600,
+	))
+	require.NoError(t, os.WriteFile(
+		videoPath,
+		[]byte("mp4"),
+		0o600,
+	))
+	require.NoError(t, os.WriteFile(
+		imagePath,
+		[]byte("png"),
 		0o600,
 	))
 
@@ -605,6 +617,14 @@ func TestUploadEnvFromContext(t *testing.T) {
 					MimeType: "application/pdf",
 				},
 			},
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name:     "frame.png",
+					FileID:   "host://" + imagePath,
+					MimeType: "image/png",
+				},
+			},
 		},
 	}
 	currentMsg := model.Message{
@@ -616,6 +636,14 @@ func TestUploadEnvFromContext(t *testing.T) {
 					Name:     "clip.ogg",
 					FileID:   "host://" + audioPath,
 					MimeType: "audio/ogg",
+				},
+			},
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name:     "movie.mp4",
+					FileID:   "host://" + videoPath,
+					MimeType: "video/mp4",
 				},
 			},
 		},
@@ -634,17 +662,23 @@ func TestUploadEnvFromContext(t *testing.T) {
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 
 	env := uploadEnvFromContext(ctx)
-	require.Equal(t, audioPath, env[envLastUploadPath])
+	require.Equal(t, videoPath, env[envLastUploadPath])
 	require.Equal(t, dir, env[envSessionUploadsDir])
-	require.Equal(t, "clip.ogg", env[envLastUploadName])
+	require.Equal(t, "movie.mp4", env[envLastUploadName])
 	require.Equal(
 		t,
-		"audio/ogg",
+		"video/mp4",
 		env[envLastUploadMIME],
 	)
 	require.Equal(t, audioPath, env[envLastAudioPath])
 	require.Equal(t, "clip.ogg", env[envLastAudioName])
 	require.Equal(t, "audio/ogg", env[envLastAudioMIME])
+	require.Equal(t, videoPath, env[envLastVideoPath])
+	require.Equal(t, "movie.mp4", env[envLastVideoName])
+	require.Equal(t, "video/mp4", env[envLastVideoMIME])
+	require.Equal(t, imagePath, env[envLastImagePath])
+	require.Equal(t, "frame.png", env[envLastImageName])
+	require.Equal(t, "image/png", env[envLastImageMIME])
 	require.Equal(t, filePath, env[envLastPDFPath])
 	require.Equal(t, "report.pdf", env[envLastPDFName])
 	require.Equal(
@@ -658,11 +692,15 @@ func TestUploadEnvFromContext(t *testing.T) {
 		t,
 		json.Unmarshal([]byte(env[envRecentUploadsJSON]), &recent),
 	)
-	require.Len(t, recent, 2)
-	require.Equal(t, audioPath, recent[0].Path)
-	require.Equal(t, uploadKindAudio, recent[0].Kind)
-	require.Equal(t, filePath, recent[1].Path)
-	require.Equal(t, uploadKindPDF, recent[1].Kind)
+	require.Len(t, recent, 4)
+	require.Equal(t, videoPath, recent[0].Path)
+	require.Equal(t, uploadKindVideo, recent[0].Kind)
+	require.Equal(t, audioPath, recent[1].Path)
+	require.Equal(t, uploadKindAudio, recent[1].Kind)
+	require.Equal(t, imagePath, recent[2].Path)
+	require.Equal(t, uploadKindImage, recent[2].Kind)
+	require.Equal(t, filePath, recent[3].Path)
+	require.Equal(t, uploadKindPDF, recent[3].Kind)
 }
 
 func TestUploadKindFromMeta(t *testing.T) {
