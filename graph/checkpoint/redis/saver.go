@@ -44,23 +44,119 @@ const (
 	metadataJSONKey       = "metadata_json"
 )
 
+var luaPutCheckpoint = redis.NewScript(`
+-- Put checkpoint core data and indexes atomically.
+--
+-- KEYS[1] = checkpointKey
+-- KEYS[2] = checkpointTSKey
+-- KEYS[3] = lineageNSKey
+--
+-- ARGV[1] = ttl_ms
+-- ARGV[2] = lineage_id
+-- ARGV[3] = checkpoint_ns
+-- ARGV[4] = checkpoint_id
+-- ARGV[5] = parent_checkpoint_id
+-- ARGV[6] = ts (unix nano)
+-- ARGV[7] = checkpoint_json
+-- ARGV[8] = metadata_json
+local ttl = tonumber(ARGV[1])
+
+redis.call('HSET', KEYS[1],
+  'lineage_id', ARGV[2],
+  'checkpoint_ns', ARGV[3],
+  'checkpoint_id', ARGV[4],
+  'parent_checkpoint_id', ARGV[5],
+  'ts', ARGV[6],
+  'checkpoint_json', ARGV[7],
+  'metadata_json', ARGV[8]
+)
+
+redis.call('ZADD', KEYS[2], ARGV[6], ARGV[4])
+redis.call('SADD', KEYS[3], ARGV[3])
+
+if ttl and ttl > 0 then
+  redis.call('PEXPIRE', KEYS[1], ttl)
+  redis.call('PEXPIRE', KEYS[2], ttl)
+  redis.call('PEXPIRE', KEYS[3], ttl)
+end
+
+return 1
+`)
+
+var luaPutFullCheckpoint = redis.NewScript(`
+-- Put checkpoint core data, indexes and writes atomically.
+--
+-- KEYS[1] = checkpointKey
+-- KEYS[2] = checkpointTSKey
+-- KEYS[3] = lineageNSKey
+-- KEYS[4] = writesKey
+--
+-- ARGV[1] = ttl_ms
+-- ARGV[2] = lineage_id
+-- ARGV[3] = checkpoint_ns
+-- ARGV[4] = checkpoint_id
+-- ARGV[5] = parent_checkpoint_id
+-- ARGV[6] = ts (unix nano)
+-- ARGV[7] = checkpoint_json
+-- ARGV[8] = metadata_json
+-- ARGV[9...] = write_field_1, write_json_1, write_field_2, write_json_2, ...
+local ttl = tonumber(ARGV[1])
+
+redis.call('HSET', KEYS[1],
+  'lineage_id', ARGV[2],
+  'checkpoint_ns', ARGV[3],
+  'checkpoint_id', ARGV[4],
+  'parent_checkpoint_id', ARGV[5],
+  'ts', ARGV[6],
+  'checkpoint_json', ARGV[7],
+  'metadata_json', ARGV[8]
+)
+
+redis.call('ZADD', KEYS[2], ARGV[6], ARGV[4])
+redis.call('SADD', KEYS[3], ARGV[3])
+
+for i = 9, #ARGV, 2 do
+  redis.call('HSET', KEYS[4], ARGV[i], ARGV[i + 1])
+end
+
+if ttl and ttl > 0 then
+  redis.call('PEXPIRE', KEYS[1], ttl)
+  redis.call('PEXPIRE', KEYS[2], ttl)
+  redis.call('PEXPIRE', KEYS[3], ttl)
+  redis.call('PEXPIRE', KEYS[4], ttl)
+end
+
+return 1
+`)
+
+func ttlMilliseconds(ttl time.Duration) int64 {
+	if ttl <= 0 {
+		return 0
+	}
+	ttlMs := ttl.Milliseconds()
+	if ttlMs == 0 {
+		return 1
+	}
+	return ttlMs
+}
+
 func checkpointKey(lineageID, checkpointNS, checkpointID string) string {
-	return fmt.Sprintf("%s%s:%s:%s", keyPrefixCheckpoint, lineageID, checkpointNS, checkpointID)
+	return fmt.Sprintf("%s{%s}:%s:%s", keyPrefixCheckpoint, lineageID, checkpointNS, checkpointID)
 }
 
 func checkpointTSKey(lineageID, checkpointNS string) string {
 	if checkpointNS == "" {
-		return fmt.Sprintf("%s%s", keyPrefixCheckpointTS, lineageID)
+		return fmt.Sprintf("%s{%s}", keyPrefixCheckpointTS, lineageID)
 	}
-	return fmt.Sprintf("%s%s:%s", keyPrefixCheckpointTS, lineageID, checkpointNS)
+	return fmt.Sprintf("%s{%s}:%s", keyPrefixCheckpointTS, lineageID, checkpointNS)
 }
 
 func writesKey(lineageID, checkpointNS, checkpointID string) string {
-	return fmt.Sprintf("%s%s:%s:%s", keyPrefixWrites, lineageID, checkpointNS, checkpointID)
+	return fmt.Sprintf("%s{%s}:%s:%s", keyPrefixWrites, lineageID, checkpointNS, checkpointID)
 }
 
 func lineageNSKey(lineageID string) string {
-	return fmt.Sprintf("%s%s", keyPrefixLineageNS, lineageID)
+	return fmt.Sprintf("%s{%s}", keyPrefixLineageNS, lineageID)
 }
 
 type writeData struct {
@@ -335,39 +431,29 @@ func (s *Saver) Put(ctx context.Context, req graph.PutRequest) (map[string]any, 
 		return nil, fmt.Errorf("marshal metadata: %w", err)
 	}
 
-	pipe := s.client.TxPipeline()
-
 	checkpointID := req.Checkpoint.ID
 	ts := req.Checkpoint.Timestamp.UnixNano()
 	if ts <= 0 {
 		ts = time.Now().UTC().UnixNano()
 	}
 
-	checkpointKey := checkpointKey(lineageID, checkpointNS, checkpointID)
-	pipe.HSet(ctx, checkpointKey,
-		lingeageIDKey, lineageID,
-		checkpointNSKey, checkpointNS,
-		checkpointIDKey, checkpointID,
-		parentCheckpointIDKey, req.Checkpoint.ParentCheckpointID,
-		tsKey, ts,
-		checkpointJSONKey, checkpointJSON,
-		metadataJSONKey, metadataJSON,
-	)
-	pipe.Expire(ctx, checkpointKey, s.opts.ttl)
-
-	tsKey := checkpointTSKey(lineageID, checkpointNS)
-	pipe.ZAdd(ctx, tsKey, redis.Z{
-		Score:  float64(ts),
-		Member: checkpointID,
-	})
-	pipe.Expire(ctx, tsKey, s.opts.ttl)
-
-	nsKey := lineageNSKey(lineageID)
-	pipe.SAdd(ctx, nsKey, checkpointNS)
-	pipe.Expire(ctx, nsKey, s.opts.ttl)
-
-	if _, err := pipe.Exec(ctx); err != nil {
-		return nil, fmt.Errorf("redis transaction failed: %w", err)
+	keys := []string{
+		checkpointKey(lineageID, checkpointNS, checkpointID),
+		checkpointTSKey(lineageID, checkpointNS),
+		lineageNSKey(lineageID),
+	}
+	args := []any{
+		ttlMilliseconds(s.opts.ttl),
+		lineageID,
+		checkpointNS,
+		checkpointID,
+		req.Checkpoint.ParentCheckpointID,
+		ts,
+		checkpointJSON,
+		metadataJSON,
+	}
+	if _, err := luaPutCheckpoint.Run(ctx, s.client, keys, args...).Result(); err != nil {
+		return nil, fmt.Errorf("save checkpoint: %w", err)
 	}
 
 	return graph.CreateCheckpointConfig(lineageID, checkpointID, checkpointNS), nil
@@ -436,38 +522,30 @@ func (s *Saver) PutFull(ctx context.Context, req graph.PutFullRequest) (map[stri
 		return nil, fmt.Errorf("marshal metadata: %w", err)
 	}
 
-	pipe := s.client.TxPipeline()
-
 	checkpointID := req.Checkpoint.ID
 	ts := req.Checkpoint.Timestamp.UnixNano()
 	if ts <= 0 {
 		ts = time.Now().UTC().UnixNano()
 	}
 
-	checkpointKey := checkpointKey(lineageID, checkpointNS, checkpointID)
-	pipe.HSet(ctx, checkpointKey,
-		lingeageIDKey, lineageID,
-		checkpointNSKey, checkpointNS,
-		checkpointIDKey, checkpointID,
-		parentCheckpointIDKey, req.Checkpoint.ParentCheckpointID,
-		tsKey, ts,
-		checkpointJSONKey, checkpointJSON,
-		metadataJSONKey, metadataJSON,
-	)
-	pipe.Expire(ctx, checkpointKey, s.opts.ttl)
-
-	tsKey := checkpointTSKey(lineageID, checkpointNS)
-	pipe.ZAdd(ctx, tsKey, redis.Z{
-		Score:  float64(ts),
-		Member: checkpointID,
-	})
-	pipe.Expire(ctx, tsKey, s.opts.ttl)
-
-	nsKey := lineageNSKey(lineageID)
-	pipe.SAdd(ctx, nsKey, checkpointNS)
-	pipe.Expire(ctx, nsKey, s.opts.ttl)
-
 	writeKey := writesKey(lineageID, checkpointNS, checkpointID)
+
+	keys := []string{
+		checkpointKey(lineageID, checkpointNS, checkpointID),
+		checkpointTSKey(lineageID, checkpointNS),
+		lineageNSKey(lineageID),
+		writeKey,
+	}
+	args := []any{
+		ttlMilliseconds(s.opts.ttl),
+		lineageID,
+		checkpointNS,
+		checkpointID,
+		req.Checkpoint.ParentCheckpointID,
+		ts,
+		checkpointJSON,
+		metadataJSON,
+	}
 	for idx, w := range req.PendingWrites {
 		valueJSON, err := json.Marshal(w.Value)
 		if err != nil {
@@ -493,12 +571,10 @@ func (s *Saver) PutFull(ctx context.Context, req graph.PutFullRequest) (map[stri
 		if err != nil {
 			return nil, fmt.Errorf("marshal write data: %w", err)
 		}
-		pipe.HSet(ctx, writeKey, field, writeJSON)
+		args = append(args, field, writeJSON)
 	}
-	pipe.Expire(ctx, writeKey, s.opts.ttl)
-
-	if _, err := pipe.Exec(ctx); err != nil {
-		return nil, fmt.Errorf("redis transaction failed: %w", err)
+	if _, err := luaPutFullCheckpoint.Run(ctx, s.client, keys, args...).Result(); err != nil {
+		return nil, fmt.Errorf("save checkpoint: %w", err)
 	}
 
 	return graph.CreateCheckpointConfig(lineageID, checkpointID, checkpointNS), nil
