@@ -1369,12 +1369,8 @@ func TestWithEnableTokenTailoring_RemainingTokensNegative(t *testing.T) {
 	}
 
 	require.NotNil(t, captured, "expected request callback to capture request")
-	// With maxInputTokens=1 and usedTokens=0 (zeroTokenCounter), remaining tokens
-	// should be positive, so MaxTokens should be set to at least the floor (256).
-	// The actual calculation: contextWindow - 0 - 512 - safetyMargin
-	// For claude-3-5-sonnet (200000): 200000 - 0 - 512 - 20000 = 179488
-	// So MaxTokens should be max(179488, 256) = 179488
-	require.Greater(t, captured.MaxTokens, int64(0), "expected MaxTokens to be set when sufficient tokens available")
+	// MaxTokens should not be auto-set by token tailoring.
+	require.Equal(t, int64(0), captured.MaxTokens, "expected MaxTokens to remain unset")
 }
 
 // TestWithEnableTokenTailoring_AutoSetMaxTokens tests automatic MaxTokens setting.
@@ -1403,8 +1399,8 @@ func TestWithEnableTokenTailoring_AutoSetMaxTokens(t *testing.T) {
 	}
 
 	require.NotNil(t, captured, "expected request callback to capture request")
-	// MaxTokens should be auto-set when not specified by user.
-	require.Greater(t, captured.MaxTokens, int64(0), "expected MaxTokens > 0")
+	// MaxTokens should stay unset when not specified by user.
+	require.Equal(t, int64(0), captured.MaxTokens, "expected MaxTokens to remain unset")
 }
 
 // TestWithEnableTokenTailoring_UserSpecifiedMaxTokens tests user-specified MaxTokens is preserved.
