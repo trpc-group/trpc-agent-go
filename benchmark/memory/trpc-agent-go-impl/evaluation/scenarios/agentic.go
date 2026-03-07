@@ -119,6 +119,34 @@ func (s *datePrefixMemoryService) Close() error {
 	return s.inner.Close()
 }
 
+func (s *datePrefixMemoryService) AddMemoryWithEpisodic(
+	ctx context.Context,
+	userKey memory.UserKey,
+	mem string,
+	topics []string,
+	ep *memory.EpisodicFields,
+) error {
+	return s.inner.AddMemoryWithEpisodic(ctx, userKey, s.withDatePrefix(mem), topics, ep)
+}
+
+func (s *datePrefixMemoryService) UpdateMemoryWithEpisodic(
+	ctx context.Context,
+	memoryKey memory.Key,
+	mem string,
+	topics []string,
+	ep *memory.EpisodicFields,
+) error {
+	return s.inner.UpdateMemoryWithEpisodic(ctx, memoryKey, s.withDatePrefix(mem), topics, ep)
+}
+
+func (s *datePrefixMemoryService) SearchMemoriesWithOptions(
+	ctx context.Context,
+	userKey memory.UserKey,
+	opts memory.SearchOptions,
+) ([]*memory.Entry, error) {
+	return s.inner.SearchMemoriesWithOptions(ctx, userKey, opts)
+}
+
 func (s *datePrefixMemoryService) withDatePrefix(mem string) string {
 	trimmed := strings.TrimSpace(mem)
 	if strings.HasPrefix(trimmed, "[DATE:") {
@@ -313,22 +341,26 @@ func (e *AgenticEvaluator) processConversation(
 	userKey memory.UserKey,
 	sample *dataset.LoCoMoSample,
 ) error {
+	// The memory tools already carry jsonschema descriptions for
+	// episodic fields (memory_kind, event_time, participants, location),
+	// so the instruction only covers extraction strategy -- not episodic
+	// classification rules, which are the framework's responsibility.
 	writeInstruction := "You are a memory extraction assistant. " +
-		"Extract ALL distinct facts from the conversation " +
-		"and store EACH fact as a separate memory_add call.\n\n" +
+		"Extract ALL distinct facts and events from the conversation " +
+		"and store EACH as a separate memory_add call.\n\n" +
 		"RULES:\n" +
-		"- Store one fact per memory_add call.\n" +
-		"- Include facts about ALL speakers, not just the " +
+		"- Store one piece of information per memory_add call.\n" +
+		"- Include information about ALL speakers, not just the " +
 		"primary one.\n" +
 		"- Store events with specific details " +
 		"(what happened, who, where).\n" +
 		"- Store personal traits, preferences, relationships, " +
 		"plans, and emotions.\n" +
-		"- If the conversation mentions a relative time " +
-		"(\"last year\", \"next month\"), resolve it to an " +
-		"absolute date/year using the SessionDate.\n" +
+		"- Use the SessionDate in context to resolve any relative " +
+		"time references (\"last year\", \"next month\") into " +
+		"absolute dates.\n" +
 		"- After storing all memories, reply 'Done.' only.\n\n" +
-		"IMPORTANT: Extract as many facts as possible. " +
+		"IMPORTANT: Extract as many facts and events as possible. " +
 		"Aim for 3-8 memories per session."
 
 	for _, sess := range sample.Conversation {

@@ -65,7 +65,7 @@ func TestFormatMemoriesForPrompt(t *testing.T) {
 		{
 			name:     "empty memories",
 			memories: []*memory.Entry{},
-			contains: []string{"## User Memories", "The following are memories about the user:"},
+			contains: []string{"## User Memories"},
 		},
 		{
 			name: "single memory",
@@ -77,7 +77,7 @@ func TestFormatMemoriesForPrompt(t *testing.T) {
 					UserID:  "user",
 				},
 			},
-			contains: []string{"ID: mem-1", "Memory: User likes coffee"},
+			contains: []string{"[mem-1]", "User likes coffee"},
 		},
 		{
 			name: "multiple memories",
@@ -98,8 +98,8 @@ func TestFormatMemoriesForPrompt(t *testing.T) {
 				},
 			},
 			contains: []string{
-				"ID: mem-1", "Memory: User likes coffee",
-				"ID: mem-2", "Memory: User works in tech",
+				"[mem-1]", "User likes coffee",
+				"[mem-2]", "User works in tech",
 			},
 		},
 		{
@@ -120,8 +120,8 @@ func TestFormatMemoriesForPrompt(t *testing.T) {
 				},
 			},
 			contains: []string{
-				"ID: mem-1", "Memory: User likes coffee",
-				"ID: mem-2", "Memory: User works in tech",
+				"[mem-1]", "User likes coffee",
+				"[mem-2]", "User works in tech",
 			},
 		},
 		{
@@ -147,10 +147,10 @@ func TestFormatMemoriesForPrompt(t *testing.T) {
 				},
 			},
 			contains: []string{
-				"ID: mem-1", "Memory: User likes coffee",
-				"ID: mem-3", "Memory: User works in tech",
+				"[mem-1]", "User likes coffee",
+				"[mem-3]", "User works in tech",
 			},
-			excludes: []string{"ID: mem-2"},
+			excludes: []string{"[mem-2]"},
 		},
 		{
 			name: "all nil or nil memory returns header only",
@@ -159,9 +159,9 @@ func TestFormatMemoriesForPrompt(t *testing.T) {
 				{ID: "mem-1", Memory: nil, AppName: "app", UserID: "user"},
 			},
 			contains: []string{
-				"## User Memories", "The following are memories about the user:",
+				"## User Memories",
 			},
-			excludes: []string{"ID: mem-1"},
+			excludes: []string{"[mem-1]"},
 		},
 	}
 
@@ -225,6 +225,21 @@ func (m *mockMemoryService) EnqueueAutoMemoryJob(ctx context.Context, sess *sess
 
 func (m *mockMemoryService) Close() error {
 	return nil
+}
+
+func (m *mockMemoryService) AddMemoryWithEpisodic(ctx context.Context, userKey memory.UserKey,
+	memoryStr string, topics []string, _ *memory.EpisodicFields) error {
+	return m.AddMemory(ctx, userKey, memoryStr, topics)
+}
+
+func (m *mockMemoryService) UpdateMemoryWithEpisodic(ctx context.Context, memoryKey memory.Key,
+	memoryStr string, topics []string, _ *memory.EpisodicFields) error {
+	return m.UpdateMemory(ctx, memoryKey, memoryStr, topics)
+}
+
+func (m *mockMemoryService) SearchMemoriesWithOptions(ctx context.Context, userKey memory.UserKey,
+	opts memory.SearchOptions) ([]*memory.Entry, error) {
+	return m.SearchMemories(ctx, userKey, opts.Query)
 }
 
 func TestGetPreloadMemoryMessage(t *testing.T) {

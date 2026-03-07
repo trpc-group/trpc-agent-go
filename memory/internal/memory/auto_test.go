@@ -160,6 +160,26 @@ func (m *mockOperator) ClearMemories(ctx context.Context, userKey memory.UserKey
 	return nil
 }
 
+func (m *mockOperator) AddMemoryWithEpisodic(
+	ctx context.Context,
+	userKey memory.UserKey,
+	memoryStr string,
+	topics []string,
+	_ *memory.EpisodicFields,
+) error {
+	return m.AddMemory(ctx, userKey, memoryStr, topics)
+}
+
+func (m *mockOperator) UpdateMemoryWithEpisodic(
+	ctx context.Context,
+	memoryKey memory.Key,
+	memoryStr string,
+	topics []string,
+	_ *memory.EpisodicFields,
+) error {
+	return m.UpdateMemory(ctx, memoryKey, memoryStr, topics)
+}
+
 func TestNewAutoMemoryWorker(t *testing.T) {
 	ext := &mockExtractor{}
 	op := newMockOperator()
@@ -1629,4 +1649,46 @@ func TestAutoMemoryWorker_ExecuteOperation_UpdateNotFound_AddEnabled(t *testing.
 
 	// Fallback add should proceed because add is enabled.
 	assert.Equal(t, 1, op.addCalls)
+}
+
+func TestOpToEpisodicFields(t *testing.T) {
+	t.Run("all empty returns fact default", func(t *testing.T) {
+		op := &extractor.Operation{}
+		got := opToEpisodicFields(op)
+		require.NotNil(t, got)
+		assert.Equal(t, memory.MemoryKindFact, got.Kind)
+	})
+
+	t.Run("fact kind", func(t *testing.T) {
+		op := &extractor.Operation{
+			MemoryKind: memory.MemoryKindFact,
+		}
+		got := opToEpisodicFields(op)
+		require.NotNil(t, got)
+		assert.Equal(t, memory.MemoryKindFact, got.Kind)
+	})
+
+	t.Run("episode with time", func(t *testing.T) {
+		eventTime := time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC)
+		op := &extractor.Operation{
+			MemoryKind: memory.MemoryKindEpisode,
+			EventTime:  &eventTime,
+		}
+		got := opToEpisodicFields(op)
+		require.NotNil(t, got)
+		assert.Equal(t, memory.MemoryKindEpisode, got.Kind)
+		assert.Equal(t, &eventTime, got.EventTime)
+	})
+
+	t.Run("episode without time remains episode", func(t *testing.T) {
+		op := &extractor.Operation{
+			MemoryKind:   memory.MemoryKindEpisode,
+			Participants: []string{"Alice"},
+		}
+		got := opToEpisodicFields(op)
+		require.NotNil(t, got)
+		assert.Equal(t, memory.MemoryKindEpisode, got.Kind, "episode without event_time should remain episode")
+		assert.Nil(t, got.EventTime)
+		assert.Equal(t, []string{"Alice"}, got.Participants)
+	})
 }

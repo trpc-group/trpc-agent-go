@@ -318,6 +318,23 @@ func isStopword(s string) bool {
 	}
 }
 
+// ApplyEpisodicFields populates episodic metadata on a Memory object.
+// This is used by JSON-based backends (mysql, postgres, sqlite, etc.)
+// where the Memory struct is serialized as JSON and the episodic fields
+// are already part of the struct definition.
+// If ep is nil, no fields are modified.
+func ApplyEpisodicFields(mem *memory.Memory, ep *memory.EpisodicFields) {
+	if ep == nil || mem == nil {
+		return
+	}
+	if ep.Kind != "" {
+		mem.Kind = ep.Kind
+	}
+	mem.EventTime = ep.EventTime
+	mem.Participants = ep.Participants
+	mem.Location = ep.Location
+}
+
 // MatchMemoryEntry checks if a memory entry matches the given query.
 // It uses token-based matching for better search accuracy.
 // The function returns true if the query matches either the memory content or any of the topics.

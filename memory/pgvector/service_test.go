@@ -895,12 +895,13 @@ func TestService_ReadMemories(t *testing.T) {
 		WithArgs(userKey.AppName, userKey.UserID).
 		WillReturnRows(sqlmock.NewRows(
 			[]string{"memory_id", "app_name", "user_id", "memory_content", "topics",
+				"memory_kind", "event_time", "participants", "location",
 				"created_at", "updated_at"},
 		).
 			AddRow("mem-1", "test-app", "u1", "memory 1", pq.Array([]string{"topic1"}),
-				now, now).
+				"fact", nil, pq.Array([]string{}), nil, now, now).
 			AddRow("mem-2", "test-app", "u1", "memory 2", pq.Array([]string{"topic2"}),
-				now, now))
+				"fact", nil, pq.Array([]string{}), nil, now, now))
 
 	entries, err := svc.ReadMemories(ctx, userKey, 10)
 	require.NoError(t, err)
@@ -951,6 +952,7 @@ func TestService_ReadMemories_Empty(t *testing.T) {
 		WithArgs(userKey.AppName, userKey.UserID).
 		WillReturnRows(sqlmock.NewRows(
 			[]string{"memory_id", "app_name", "user_id", "memory_content", "topics",
+				"memory_kind", "event_time", "participants", "location",
 				"created_at", "updated_at"},
 		))
 
@@ -976,12 +978,13 @@ func TestService_SearchMemories(t *testing.T) {
 	mock.ExpectQuery("SELECT memory_id, app_name, user_id, memory_content, topics").
 		WillReturnRows(sqlmock.NewRows(
 			[]string{"memory_id", "app_name", "user_id", "memory_content", "topics",
+				"memory_kind", "event_time", "participants", "location",
 				"created_at", "updated_at", "similarity"},
 		).
 			AddRow("mem-1", "test-app", "u1", "coffee brewing tips", pq.Array([]string{"hobby"}),
-				now, now, 0.95).
+				"fact", nil, pq.Array([]string{}), nil, now, now, 0.95).
 			AddRow("mem-2", "test-app", "u1", "Alice likes coffee", pq.Array([]string{"profile"}),
-				now, now, 0.85))
+				"fact", nil, pq.Array([]string{}), nil, now, now, 0.85))
 
 	results, err := svc.SearchMemories(ctx, userKey, "coffee")
 	require.NoError(t, err)
@@ -1367,6 +1370,12 @@ func TestService_InitDB_IndexCreateError(t *testing.T) {
 	mock.ExpectExec("CREATE TABLE IF NOT EXISTS").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
+	// Mock episodic column migrations.
+	for i := 0; i < 4; i++ {
+		mock.ExpectExec("ALTER TABLE").
+			WillReturnResult(sqlmock.NewResult(0, 0))
+	}
+
 	// Mock first index creation failure.
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").
 		WillReturnError(fmt.Errorf("index creation failed"))
@@ -1407,13 +1416,17 @@ func TestService_InitDB_HNSWIndexError(t *testing.T) {
 	mock.ExpectExec("CREATE TABLE IF NOT EXISTS").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
-	// Mock 3 regular index creations.
-	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").
-		WillReturnResult(sqlmock.NewResult(0, 0))
+	// Mock episodic column migrations.
+	for i := 0; i < 4; i++ {
+		mock.ExpectExec("ALTER TABLE").
+			WillReturnResult(sqlmock.NewResult(0, 0))
+	}
+
+	// Mock 6 regular index creations.
+	for i := 0; i < 6; i++ {
+		mock.ExpectExec("CREATE INDEX IF NOT EXISTS").
+			WillReturnResult(sqlmock.NewResult(0, 0))
+	}
 
 	// Mock HNSW index creation failure.
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").
@@ -1624,6 +1637,7 @@ func TestService_ReadMemories_SoftDelete(t *testing.T) {
 	mock.ExpectQuery("SELECT memory_id").
 		WillReturnRows(sqlmock.NewRows(
 			[]string{"memory_id", "app_name", "user_id", "memory_content", "topics",
+				"memory_kind", "event_time", "participants", "location",
 				"created_at", "updated_at"},
 		))
 
@@ -1687,10 +1701,11 @@ func TestService_SearchMemories_SoftDelete(t *testing.T) {
 	mock.ExpectQuery("SELECT memory_id").
 		WillReturnRows(sqlmock.NewRows(
 			[]string{"memory_id", "app_name", "user_id", "memory_content", "topics",
+				"memory_kind", "event_time", "participants", "location",
 				"created_at", "updated_at", "similarity"},
 		).
 			AddRow("mem-1", "test-app", "u1", "test", pq.Array([]string{"t"}),
-				now, now, 0.9))
+				"fact", nil, pq.Array([]string{}), nil, now, now, 0.9))
 
 	results, err := svc.SearchMemories(ctx, userKey, "query")
 	require.NoError(t, err)
@@ -1882,8 +1897,10 @@ func TestService_ScanMemoryEntry_Error(t *testing.T) {
 		WithArgs(userKey.AppName, userKey.UserID).
 		WillReturnRows(sqlmock.NewRows(
 			[]string{"memory_id", "app_name", "user_id", "memory_content", "topics",
+				"memory_kind", "event_time", "participants", "location",
 				"created_at", "updated_at"},
-		).AddRow("mem-1", "test-app", "u1", "memory", nil, "invalid-time", "invalid"))
+		).AddRow("mem-1", "test-app", "u1", "memory", nil,
+			"fact", nil, pq.Array([]string{}), nil, "invalid-time", "invalid"))
 
 	_, err := svc.ReadMemories(ctx, userKey, 10)
 	require.Error(t, err)
@@ -1904,8 +1921,10 @@ func TestService_ScanMemoryEntryWithSimilarity_Error(t *testing.T) {
 	mock.ExpectQuery("SELECT memory_id").
 		WillReturnRows(sqlmock.NewRows(
 			[]string{"memory_id", "app_name", "user_id", "memory_content", "topics",
+				"memory_kind", "event_time", "participants", "location",
 				"created_at", "updated_at", "similarity"},
-		).AddRow("mem-1", "test-app", "u1", "memory", nil, "invalid-time", "invalid", 0.9))
+		).AddRow("mem-1", "test-app", "u1", "memory", nil,
+			"fact", nil, pq.Array([]string{}), nil, "invalid-time", "invalid", 0.9))
 
 	_, err := svc.SearchMemories(ctx, userKey, "query")
 	require.Error(t, err)

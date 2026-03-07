@@ -434,6 +434,21 @@ func (m *mockMemoryService) Close() error {
 	return nil
 }
 
+func (m *mockMemoryService) AddMemoryWithEpisodic(ctx context.Context, userKey memory.UserKey,
+	memoryStr string, topics []string, _ *memory.EpisodicFields) error {
+	return m.AddMemory(ctx, userKey, memoryStr, topics)
+}
+
+func (m *mockMemoryService) UpdateMemoryWithEpisodic(ctx context.Context, memoryKey memory.Key,
+	memoryStr string, topics []string, _ *memory.EpisodicFields) error {
+	return m.UpdateMemory(ctx, memoryKey, memoryStr, topics)
+}
+
+func (m *mockMemoryService) SearchMemoriesWithOptions(ctx context.Context, userKey memory.UserKey,
+	opts memory.SearchOptions) ([]*memory.Entry, error) {
+	return m.SearchMemories(ctx, userKey, opts.Query)
+}
+
 type mockArtifactService struct{}
 
 func (m *mockArtifactService) SaveArtifact(ctx context.Context, info artifact.SessionInfo, filename string, artifact *artifact.Artifact) (int, error) {

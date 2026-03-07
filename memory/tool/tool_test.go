@@ -131,6 +131,21 @@ func (m *mockMemoryService) Close() error {
 	return nil
 }
 
+func (m *mockMemoryService) AddMemoryWithEpisodic(ctx context.Context, userKey memory.UserKey,
+	memoryStr string, topics []string, _ *memory.EpisodicFields) error {
+	return m.AddMemory(ctx, userKey, memoryStr, topics)
+}
+
+func (m *mockMemoryService) UpdateMemoryWithEpisodic(ctx context.Context, memoryKey memory.Key,
+	memoryStr string, topics []string, _ *memory.EpisodicFields) error {
+	return m.UpdateMemory(ctx, memoryKey, memoryStr, topics)
+}
+
+func (m *mockMemoryService) SearchMemoriesWithOptions(ctx context.Context, userKey memory.UserKey,
+	opts memory.SearchOptions) ([]*memory.Entry, error) {
+	return m.SearchMemories(ctx, userKey, opts.Query)
+}
+
 func (m *mockMemoryService) BuildInstruction(enabledTools []string, defaultPrompt string) (string, bool) {
 	return "", false
 }
@@ -1060,6 +1075,152 @@ func (m *mockMemoryServiceWithError) Close() error {
 	return fmt.Errorf("mock close error")
 }
 
+func (m *mockMemoryServiceWithError) AddMemoryWithEpisodic(ctx context.Context, userKey memory.UserKey,
+	memoryStr string, topics []string, _ *memory.EpisodicFields) error {
+	return m.AddMemory(ctx, userKey, memoryStr, topics)
+}
+
+func (m *mockMemoryServiceWithError) UpdateMemoryWithEpisodic(ctx context.Context, memoryKey memory.Key,
+	memoryStr string, topics []string, _ *memory.EpisodicFields) error {
+	return m.UpdateMemory(ctx, memoryKey, memoryStr, topics)
+}
+
+func (m *mockMemoryServiceWithError) SearchMemoriesWithOptions(ctx context.Context, userKey memory.UserKey,
+	opts memory.SearchOptions) ([]*memory.Entry, error) {
+	return m.SearchMemories(ctx, userKey, opts.Query)
+}
+
 func (m *mockMemoryServiceWithError) BuildInstruction(enabledTools []string, defaultPrompt string) (string, bool) {
 	return "", false
+}
+
+// --- Episodic helpers unit tests ---
+
+func TestParseFlexibleTime(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		wantNil  bool
+		wantDate string // "2006-01-02" formatted
+	}{
+		{"RFC3339", "2024-05-07T10:30:00Z", false, "2024-05-07"},
+		{"datetime without TZ", "2024-05-07T10:30:00", false, "2024-05-07"},
+		{"datetime with space", "2024-05-07 10:30:00", false, "2024-05-07"},
+		{"date only", "2024-05-07", false, "2024-05-07"},
+		{"natural long", "7 May 2024", false, "2024-05-07"},
+		{"US format", "May 7, 2024", false, "2024-05-07"},
+		{"abbreviated", "May 2024", false, "2024-05-01"},
+		{"year-month", "2024-05", false, "2024-05-01"},
+		{"year only", "2024", false, "2024-01-01"},
+		{"empty", "", true, ""},
+		{"whitespace", "  ", true, ""},
+		{"unparsable", "last Tuesday", true, ""},
+		{"relative", "yesterday", true, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ParseFlexibleTime(tt.input)
+			if tt.wantNil {
+				assert.Nil(t, got)
+			} else {
+				require.NotNil(t, got)
+				assert.Equal(t, tt.wantDate, got.Format("2006-01-02"))
+			}
+		})
+	}
+}
+
+func TestEndOfPeriod(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want time.Time
+	}{
+		{
+			"year only",
+			"2024",
+			time.Date(2024, 12, 31, 23, 59, 59, 0, time.UTC),
+		},
+		{
+			"month YYYY-MM",
+			"2024-02",
+			time.Date(2024, 2, 29, 23, 59, 59, 0, time.UTC), // leap year
+		},
+		{
+			"month January 2024",
+			"January 2024",
+			time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC),
+		},
+		{
+			"day level",
+			"2024-05-07",
+			time.Date(2024, 5, 7, 23, 59, 59, 0, time.UTC),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parsed := ParseFlexibleTime(tt.raw)
+			require.NotNil(t, parsed)
+			got := EndOfPeriod(*parsed, tt.raw)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestBuildEpisodicFields(t *testing.T) {
+	tests := []struct {
+		name         string
+		kind         string
+		eventTimeStr string
+		participants []string
+		location     string
+		wantNil      bool
+		wantKind     memory.MemoryKind
+	}{
+		{
+			name:    "all empty returns nil",
+			wantNil: true,
+		},
+		{
+			name:     "fact with no time",
+			kind:     "fact",
+			wantKind: memory.MemoryKindFact,
+		},
+		{
+			name:         "episode with time",
+			kind:         "episode",
+			eventTimeStr: "2024-05-07",
+			wantKind:     memory.MemoryKindEpisode,
+		},
+		{
+			name:     "episode without time remains episode",
+			kind:     "episode",
+			wantKind: memory.MemoryKindEpisode,
+		},
+		{
+			name:         "episode with unparsable time remains episode",
+			kind:         "episode",
+			eventTimeStr: "sometime last year",
+			wantKind:     memory.MemoryKindEpisode,
+		},
+		{
+			name:         "episode with valid time and metadata",
+			kind:         "episode",
+			eventTimeStr: "2024-05-07",
+			participants: []string{"Alice"},
+			location:     "Tokyo",
+			wantKind:     memory.MemoryKindEpisode,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildEpisodicFields(tt.kind, tt.eventTimeStr, tt.participants, tt.location)
+			if tt.wantNil {
+				assert.Nil(t, got)
+				return
+			}
+			require.NotNil(t, got)
+			assert.Equal(t, tt.wantKind, got.Kind)
+		})
+	}
 }

@@ -121,113 +121,12 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 
 // AddMemory adds or updates a memory for a user (idempotent).
 func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryStr string, topics []string) error {
-	if err := userKey.CheckUserKey(); err != nil {
-		return err
-	}
-
-	// Enforce memory limit.
-	if s.opts.memoryLimit > 0 {
-		countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE app_name = ? AND user_id = ?", s.tableName)
-		if s.opts.softDelete {
-			countQuery += " AND deleted_at IS NULL"
-		}
-		var count int
-		if err := s.db.QueryRow(ctx, []any{&count}, countQuery, userKey.AppName, userKey.UserID); err != nil {
-			return fmt.Errorf("mysql memory service check memory count failed: %w", err)
-		}
-		if count >= s.opts.memoryLimit {
-			return fmt.Errorf("memory limit exceeded for user %s, limit: %d, current: %d",
-				userKey.UserID, s.opts.memoryLimit, count)
-		}
-	}
-
-	now := time.Now()
-	mem := &memory.Memory{
-		Memory:      memoryStr,
-		Topics:      topics,
-		LastUpdated: &now,
-	}
-	entry := &memory.Entry{
-		ID:        imemory.GenerateMemoryID(mem, userKey.AppName, userKey.UserID),
-		AppName:   userKey.AppName,
-		Memory:    mem,
-		UserID:    userKey.UserID,
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
-
-	memoryData, err := json.Marshal(entry)
-	if err != nil {
-		return fmt.Errorf("marshal memory entry failed: %w", err)
-	}
-
-	// Note: memory_data contains the full JSON with topics, so updating memory_data
-	// will also update the topics field.
-	insertQuery := fmt.Sprintf(
-		"INSERT INTO `%s` (app_name, user_id, memory_id, memory_data, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) "+
-			"ON DUPLICATE KEY UPDATE memory_data = VALUES(memory_data), updated_at = VALUES(updated_at)",
-		s.tableName,
-	)
-	_, err = s.db.Exec(ctx, insertQuery, userKey.AppName, userKey.UserID, entry.ID, memoryData, now, now)
-	if err != nil {
-		return fmt.Errorf("store memory entry failed: %w", err)
-	}
-
-	return nil
+	return s.AddMemoryWithEpisodic(ctx, userKey, memoryStr, topics, nil)
 }
 
 // UpdateMemory updates an existing memory for a user.
 func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key, memoryStr string, topics []string) error {
-	if err := memoryKey.CheckMemoryKey(); err != nil {
-		return err
-	}
-
-	// Get existing entry.
-	selectQuery := fmt.Sprintf(
-		"SELECT memory_data FROM %s WHERE app_name = ? AND user_id = ? AND memory_id = ?",
-		s.tableName,
-	)
-	if s.opts.softDelete {
-		selectQuery += " AND deleted_at IS NULL"
-	}
-	var memoryData []byte
-	err := s.db.QueryRow(ctx, []any{&memoryData}, selectQuery, memoryKey.AppName, memoryKey.UserID, memoryKey.MemoryID)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
-		}
-		return fmt.Errorf("get memory entry failed: %w", err)
-	}
-
-	entry := &memory.Entry{}
-	if err := json.Unmarshal(memoryData, entry); err != nil {
-		return fmt.Errorf("unmarshal memory entry failed: %w", err)
-	}
-
-	now := time.Now()
-	entry.Memory.Memory = memoryStr
-	entry.Memory.Topics = topics
-	entry.Memory.LastUpdated = &now
-	entry.UpdatedAt = now
-
-	updated, err := json.Marshal(entry)
-	if err != nil {
-		return fmt.Errorf("marshal updated memory entry failed: %w", err)
-	}
-
-	updateQuery := fmt.Sprintf(
-		"UPDATE %s SET memory_data = ?, updated_at = ? WHERE app_name = ? AND user_id = ? AND memory_id = ?",
-		s.tableName,
-	)
-	if s.opts.softDelete {
-		updateQuery += " AND deleted_at IS NULL"
-	}
-	_, err = s.db.Exec(ctx, updateQuery, updated, now, memoryKey.AppName, memoryKey.UserID, memoryKey.MemoryID)
-	if err != nil {
-		return fmt.Errorf("update memory entry failed: %w", err)
-	}
-
-	return nil
+	return s.UpdateMemoryWithEpisodic(ctx, memoryKey, memoryStr, topics, nil)
 }
 
 // DeleteMemory deletes a memory for a user (soft delete).
@@ -406,4 +305,124 @@ func (s *Service) Close() error {
 		return s.db.Close()
 	}
 	return nil
+}
+
+// AddMemoryWithEpisodic adds a memory with optional episodic fields.
+// The episodic fields are stored in the JSON memory_data column.
+func (s *Service) AddMemoryWithEpisodic(ctx context.Context, userKey memory.UserKey,
+	memoryStr string, topics []string, ep *memory.EpisodicFields) error {
+	if err := userKey.CheckUserKey(); err != nil {
+		return err
+	}
+
+	// Enforce memory limit.
+	if s.opts.memoryLimit > 0 {
+		countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE app_name = ? AND user_id = ?", s.tableName)
+		if s.opts.softDelete {
+			countQuery += " AND deleted_at IS NULL"
+		}
+		var count int
+		if err := s.db.QueryRow(ctx, []any{&count}, countQuery, userKey.AppName, userKey.UserID); err != nil {
+			return fmt.Errorf("mysql memory service check memory count failed: %w", err)
+		}
+		if count >= s.opts.memoryLimit {
+			return fmt.Errorf("memory limit exceeded for user %s, limit: %d, current: %d",
+				userKey.UserID, s.opts.memoryLimit, count)
+		}
+	}
+
+	now := time.Now()
+	mem := &memory.Memory{
+		Memory:      memoryStr,
+		Topics:      topics,
+		LastUpdated: &now,
+	}
+	imemory.ApplyEpisodicFields(mem, ep)
+	entry := &memory.Entry{
+		ID:        imemory.GenerateMemoryID(mem, userKey.AppName, userKey.UserID),
+		AppName:   userKey.AppName,
+		Memory:    mem,
+		UserID:    userKey.UserID,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	memoryData, err := json.Marshal(entry)
+	if err != nil {
+		return fmt.Errorf("marshal memory entry failed: %w", err)
+	}
+
+	insertQuery := fmt.Sprintf(
+		"INSERT INTO `%s` (app_name, user_id, memory_id, memory_data, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) "+
+			"ON DUPLICATE KEY UPDATE memory_data = VALUES(memory_data), updated_at = VALUES(updated_at)",
+		s.tableName,
+	)
+	_, err = s.db.Exec(ctx, insertQuery, userKey.AppName, userKey.UserID, entry.ID, memoryData, now, now)
+	if err != nil {
+		return fmt.Errorf("store memory entry failed: %w", err)
+	}
+
+	return nil
+}
+
+// UpdateMemoryWithEpisodic updates an existing memory with optional episodic fields.
+// The episodic fields are stored in the JSON memory_data column.
+func (s *Service) UpdateMemoryWithEpisodic(ctx context.Context, memoryKey memory.Key,
+	memoryStr string, topics []string, ep *memory.EpisodicFields) error {
+	if err := memoryKey.CheckMemoryKey(); err != nil {
+		return err
+	}
+
+	selectQuery := fmt.Sprintf(
+		"SELECT memory_data FROM %s WHERE app_name = ? AND user_id = ? AND memory_id = ?",
+		s.tableName,
+	)
+	if s.opts.softDelete {
+		selectQuery += " AND deleted_at IS NULL"
+	}
+	var memoryData []byte
+	err := s.db.QueryRow(ctx, []any{&memoryData}, selectQuery, memoryKey.AppName, memoryKey.UserID, memoryKey.MemoryID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
+		}
+		return fmt.Errorf("get memory entry failed: %w", err)
+	}
+
+	entry := &memory.Entry{}
+	if err := json.Unmarshal(memoryData, entry); err != nil {
+		return fmt.Errorf("unmarshal memory entry failed: %w", err)
+	}
+
+	now := time.Now()
+	entry.Memory.Memory = memoryStr
+	entry.Memory.Topics = topics
+	entry.Memory.LastUpdated = &now
+	imemory.ApplyEpisodicFields(entry.Memory, ep)
+	entry.UpdatedAt = now
+
+	updated, err := json.Marshal(entry)
+	if err != nil {
+		return fmt.Errorf("marshal updated memory entry failed: %w", err)
+	}
+
+	updateQuery := fmt.Sprintf(
+		"UPDATE %s SET memory_data = ?, updated_at = ? WHERE app_name = ? AND user_id = ? AND memory_id = ?",
+		s.tableName,
+	)
+	if s.opts.softDelete {
+		updateQuery += " AND deleted_at IS NULL"
+	}
+	_, err = s.db.Exec(ctx, updateQuery, updated, now, memoryKey.AppName, memoryKey.UserID, memoryKey.MemoryID)
+	if err != nil {
+		return fmt.Errorf("update memory entry failed: %w", err)
+	}
+
+	return nil
+}
+
+// SearchMemoriesWithOptions delegates to SearchMemories (advanced filtering ignored for mysql backend).
+func (s *Service) SearchMemoriesWithOptions(ctx context.Context, userKey memory.UserKey,
+	opts memory.SearchOptions) ([]*memory.Entry, error) {
+	return s.SearchMemories(ctx, userKey, opts.Query)
 }

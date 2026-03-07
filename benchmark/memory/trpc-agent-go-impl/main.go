@@ -86,7 +86,7 @@ var (
 	)
 	flagVectorTopK = flag.Int(
 		"vector-topk",
-		10,
+		20,
 		"Top-k results for vector backends (pgvector, sqlitevec)",
 	)
 	flagMySQLDSN = flag.String(
@@ -106,7 +106,7 @@ var (
 	)
 	flagQASearchPasses = flag.Int(
 		"qa-search-passes",
-		1,
+		2,
 		"Number of memory_search calls per QA "+
 			"(1=single search, auto/agentic only)",
 	)
@@ -117,17 +117,24 @@ var (
 	flagDebugMemLimit     = flag.Int("debug-mem-limit", 200, "Max memories to dump when debug-dump-memories is enabled")
 	flagDebugQALimit      = flag.Int("debug-qa-limit", 5, "Dump retrieval hits for the first N questions (auto scenario only)")
 	flagResume            = flag.Bool("resume", false, "Resume from checkpoint (TODO: implement)")
+	flagTableSuffix       = flag.String(
+		"table-suffix",
+		"",
+		"Suffix appended to all DB table names for parallel runs "+
+			"(e.g. _v2 → memory_eval_auto_v2)",
+	)
 )
 
+// Base table name constants (before suffix).
 const (
-	pgvectorTableDefault  = "memory_eval"
-	pgvectorTableAuto     = "memory_eval_auto"
-	mysqlTableDefault     = "memory_eval_mysql"
-	mysqlTableAuto        = "memory_eval_auto_mysql"
-	sqliteTableDefault    = "memory_eval_sqlite"
-	sqliteTableAuto       = "memory_eval_auto_sqlite"
-	sqliteVecTableDefault = "memory_eval_sqlitevec"
-	sqliteVecTableAuto    = "memory_eval_auto_sqlitevec"
+	pgvectorTableDefaultBase  = "memory_eval"
+	pgvectorTableAutoBase     = "memory_eval_auto"
+	mysqlTableDefaultBase     = "memory_eval_mysql"
+	mysqlTableAutoBase        = "memory_eval_auto_mysql"
+	sqliteTableDefaultBase    = "memory_eval_sqlite"
+	sqliteTableAutoBase       = "memory_eval_auto_sqlite"
+	sqliteVecTableDefaultBase = "memory_eval_sqlitevec"
+	sqliteVecTableAutoBase    = "memory_eval_auto_sqlitevec"
 
 	autoMemoryAsyncWorkers = 3
 	autoMemoryQueueSize    = 200
@@ -136,37 +143,13 @@ const (
 	maxQASearchPasses = 3
 )
 
-// benchmarkExtractorPrompt is optimized for retrieval-based benchmark evaluation.
-// The default memory extractor prompt is user-profile oriented; for benchmarks we
-// need dense, queryable, factual memories (entities, dates, relations).
-const benchmarkExtractorPrompt = `You are a memory extraction engine for retrieval-based QA benchmarks.
-
-Goal: Extract factual, queryable memories from multi-session conversations so that downstream QA can answer questions by searching memories.
-
-CRITICAL RULES (TIME):
-- Do NOT use relative time words like "yesterday", "last week", "two days ago", "next month".
-- Always write an ABSOLUTE DATE when possible:
-  - Prefer ISO date: YYYY-MM-DD.
-  - If only a textual date is available, keep it as-is (e.g., "7 May 2023", "late June 2023").
-- Every memory MUST start with a date prefix:
-  - Format: [DATE: <absolute-date-or-unknown>]
-  - Examples: [DATE: 2023-05-07] ... , [DATE: 7 May 2023] ... , [DATE: late June 2023] ...
-  - Use [DATE: unknown] only if no absolute date can be inferred from the provided context.
-
-EXTRACTION RULES (CONTENT):
-- Prefer atomic memories: one fact per memory.
-- Extract concrete facts that can answer future questions: who/what/when/where/relationships/preferences/attributes/events.
-- Include facts about all mentioned people (not only the user).
-- Be comprehensive rather than conservative: store many small facts.
-  - Aim for at least 3-8 atomic memories per session when possible.
-- Do NOT guess. If not stated, omit it.
-- Avoid vague summaries like "They discussed their plans".
-- Avoid duplicates: update existing memories when the same fact is refined.
-
-OUTPUT:
-- Use the provided tools to add/update/delete memories.
-- Use short topics (1-3) such as: person, event, date, location, preference.
-`
+// tableNameWithSuffix appends the user-specified suffix to a base table name.
+func tableNameWithSuffix(base string) string {
+	if *flagTableSuffix == "" {
+		return base
+	}
+	return base + *flagTableSuffix
+}
 
 type memoryMode string
 
@@ -255,6 +238,9 @@ func main() {
 		)
 	}
 	log.Printf("Output: %s", outputDir)
+	if *flagTableSuffix != "" {
+		log.Printf("Table Suffix: %s", *flagTableSuffix)
+	}
 	if *flagResume {
 		log.Printf("Resume mode: enabled (checkpoint will be loaded if exists)")
 	}
@@ -641,7 +627,7 @@ func createPGVectorService(
 	}
 	embedModelName := getEmbedModelName()
 	emb := newEmbeddingEmbedder(embedModelName)
-	tableName := pgvectorTableDefault
+	tableName := tableNameWithSuffix(pgvectorTableDefaultBase)
 	var ext extractor.MemoryExtractor
 	if opts.enableExtractor {
 		log.Printf(
@@ -649,8 +635,8 @@ func createPGVectorService(
 				"(embed_model=%s)",
 			embedModelName,
 		)
-		tableName = pgvectorTableAuto
-		ext = extractor.NewExtractor(opts.extractorModel, extractor.WithPrompt(benchmarkExtractorPrompt))
+		tableName = tableNameWithSuffix(pgvectorTableAutoBase)
+		ext = extractor.NewExtractor(opts.extractorModel)
 	} else {
 		log.Printf(
 			"Creating pgvector memory service (embed_model=%s)",
@@ -684,12 +670,12 @@ func createMySQLService(
 		)
 	}
 
-	tableName := mysqlTableDefault
+	tableName := tableNameWithSuffix(mysqlTableDefaultBase)
 	var ext extractor.MemoryExtractor
 	if opts.enableExtractor {
 		log.Printf("Creating mysql memory service with extractor")
-		tableName = mysqlTableAuto
-		ext = extractor.NewExtractor(opts.extractorModel, extractor.WithPrompt(benchmarkExtractorPrompt))
+		tableName = tableNameWithSuffix(mysqlTableAutoBase)
+		ext = extractor.NewExtractor(opts.extractorModel)
 	} else {
 		log.Printf("Creating mysql memory service")
 	}
@@ -712,7 +698,7 @@ func createMySQLService(
 func createInMemoryService(opts memoryServiceOptions) memory.Service {
 	if opts.enableExtractor {
 		log.Printf("Creating inmemory memory service with extractor")
-		ext := extractor.NewExtractor(opts.extractorModel, extractor.WithPrompt(benchmarkExtractorPrompt))
+		ext := extractor.NewExtractor(opts.extractorModel)
 		return inmemory.NewMemoryService(
 			inmemory.WithExtractor(ext),
 			inmemory.WithAsyncMemoryNum(autoMemoryAsyncWorkers),

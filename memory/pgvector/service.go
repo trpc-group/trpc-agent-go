@@ -16,6 +16,7 @@ import (
 	"database/sql"
 	"fmt"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -178,6 +179,17 @@ func (s *Service) AddMemory(
 	memoryStr string,
 	topics []string,
 ) error {
+	return s.AddMemoryWithEpisodic(ctx, userKey, memoryStr, topics, nil)
+}
+
+// AddMemoryWithEpisodic adds or updates a memory with optional episodic fields.
+func (s *Service) AddMemoryWithEpisodic(
+	ctx context.Context,
+	userKey memory.UserKey,
+	memoryStr string,
+	topics []string,
+	ep *memory.EpisodicFields,
+) error {
 	if err := userKey.CheckUserKey(); err != nil {
 		return err
 	}
@@ -203,16 +215,23 @@ func (s *Service) AddMemory(
 	// Convert embedding to pgvector format.
 	vector := pgvector.NewVector(convertToFloat32(embedding))
 
+	// Resolve episodic fields for SQL parameters.
+	ef := resolveEpisodicFields(ep)
+
 	var insertQuery string
 	args := []any{
-		memoryID,
-		userKey.AppName,
-		userKey.UserID,
-		memoryStr,
-		pq.Array(topics),
-		vector,
-		now,
-		now,
+		memoryID,                  // $1
+		userKey.AppName,           // $2
+		userKey.UserID,            // $3
+		memoryStr,                 // $4
+		pq.Array(topics),          // $5
+		vector,                    // $6
+		ef.kind,                   // $7
+		ef.eventTime,              // $8
+		pq.Array(ef.participants), // $9
+		ef.location,               // $10
+		now,                       // $11
+		now,                       // $12
 	}
 	if s.opts.memoryLimit > 0 {
 		deletedFilter := ""
@@ -228,14 +247,19 @@ func (s *Service) AddMemory(
 				"WHERE app_name = $2 AND user_id = $3%s"+
 				") "+
 				"INSERT INTO %s (memory_id, app_name, user_id, memory_content, topics, "+
-				"embedding, created_at, updated_at) "+
-				"SELECT $1, $2, $3, $4, $5, $6, $7, $8 "+
+				"embedding, memory_kind, event_time, participants, location, "+
+				"created_at, updated_at) "+
+				"SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12 "+
 				"WHERE (EXISTS (SELECT 1 FROM existing) OR "+
-				"(SELECT c FROM cnt) < $9) "+
+				"(SELECT c FROM cnt) < $13) "+
 				"ON CONFLICT (memory_id) DO UPDATE SET "+
 				"memory_content = EXCLUDED.memory_content, "+
 				"topics = EXCLUDED.topics, "+
 				"embedding = EXCLUDED.embedding, "+
+				"memory_kind = EXCLUDED.memory_kind, "+
+				"event_time = EXCLUDED.event_time, "+
+				"participants = EXCLUDED.participants, "+
+				"location = EXCLUDED.location, "+
 				"deleted_at = NULL, "+
 				"updated_at = EXCLUDED.updated_at",
 			s.tableName,
@@ -248,12 +272,17 @@ func (s *Service) AddMemory(
 	} else {
 		insertQuery = fmt.Sprintf(
 			"INSERT INTO %s (memory_id, app_name, user_id, memory_content, topics, "+
-				"embedding, created_at, updated_at) "+
-				"VALUES ($1, $2, $3, $4, $5, $6, $7, $8) "+
+				"embedding, memory_kind, event_time, participants, location, "+
+				"created_at, updated_at) "+
+				"VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) "+
 				"ON CONFLICT (memory_id) DO UPDATE SET "+
 				"memory_content = EXCLUDED.memory_content, "+
 				"topics = EXCLUDED.topics, "+
 				"embedding = EXCLUDED.embedding, "+
+				"memory_kind = EXCLUDED.memory_kind, "+
+				"event_time = EXCLUDED.event_time, "+
+				"participants = EXCLUDED.participants, "+
+				"location = EXCLUDED.location, "+
 				"deleted_at = NULL, "+
 				"updated_at = EXCLUDED.updated_at",
 			s.tableName,
@@ -285,6 +314,17 @@ func (s *Service) UpdateMemory(
 	memoryStr string,
 	topics []string,
 ) error {
+	return s.UpdateMemoryWithEpisodic(ctx, memoryKey, memoryStr, topics, nil)
+}
+
+// UpdateMemoryWithEpisodic updates an existing memory with optional episodic fields.
+func (s *Service) UpdateMemoryWithEpisodic(
+	ctx context.Context,
+	memoryKey memory.Key,
+	memoryStr string,
+	topics []string,
+	ep *memory.EpisodicFields,
+) error {
 	if err := memoryKey.CheckMemoryKey(); err != nil {
 		return err
 	}
@@ -302,17 +342,22 @@ func (s *Service) UpdateMemory(
 	now := time.Now()
 	vector := pgvector.NewVector(convertToFloat32(embedding))
 
+	// Resolve episodic fields for SQL parameters.
+	ef := resolveEpisodicFields(ep)
+
 	var updateQuery strings.Builder
 	fmt.Fprintf(&updateQuery,
 		"UPDATE %s SET memory_content = $1, topics = $2, embedding = $3, "+
-			"updated_at = $4 WHERE memory_id = $5 AND app_name = $6 AND user_id = $7",
+			"memory_kind = $4, event_time = $5, participants = $6, location = $7, "+
+			"updated_at = $8 WHERE memory_id = $9 AND app_name = $10 AND user_id = $11",
 		s.tableName,
 	)
 	if s.opts.softDelete {
 		updateQuery.WriteString(" AND deleted_at IS NULL")
 	}
 	res, err := s.db.ExecContext(ctx, updateQuery.String(),
-		memoryStr, pq.Array(topics), vector, now,
+		memoryStr, pq.Array(topics), vector,
+		ef.kind, ef.eventTime, pq.Array(ef.participants), ef.location, now,
 		memoryKey.MemoryID, memoryKey.AppName, memoryKey.UserID)
 	if err != nil {
 		return fmt.Errorf("update memory entry failed: %w", err)
@@ -403,8 +448,9 @@ func (s *Service) ReadMemories(
 
 	var query strings.Builder
 	fmt.Fprintf(&query,
-		"SELECT memory_id, app_name, user_id, memory_content, topics, created_at, "+
-			"updated_at FROM %s WHERE app_name = $1 AND user_id = $2",
+		"SELECT memory_id, app_name, user_id, memory_content, topics, "+
+			"memory_kind, event_time, participants, location, "+
+			"created_at, updated_at FROM %s WHERE app_name = $1 AND user_id = $2",
 		s.tableName,
 	)
 	if s.opts.softDelete {
@@ -440,16 +486,31 @@ func (s *Service) SearchMemories(
 	userKey memory.UserKey,
 	query string,
 ) ([]*memory.Entry, error) {
+	return s.SearchMemoriesWithOptions(ctx, userKey, memory.SearchOptions{
+		Query: query,
+	})
+}
+
+// minKindFallbackResults is the threshold below which a kind-filtered
+// search triggers a fallback unfiltered search when KindFallback is enabled.
+const minKindFallbackResults = 3
+
+// SearchMemoriesWithOptions searches memories with advanced filtering.
+func (s *Service) SearchMemoriesWithOptions(
+	ctx context.Context,
+	userKey memory.UserKey,
+	opts memory.SearchOptions,
+) ([]*memory.Entry, error) {
 	if err := userKey.CheckUserKey(); err != nil {
 		return nil, err
 	}
 
-	query = strings.TrimSpace(query)
+	query := strings.TrimSpace(opts.Query)
 	if query == "" {
 		return []*memory.Entry{}, nil
 	}
 
-	// Generate embedding for the query.
+	// Generate embedding for the query (reused across fallback searches).
 	queryEmbedding, err := s.opts.embedder.GetEmbedding(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("generate query embedding failed: %w", err)
@@ -461,38 +522,366 @@ func (s *Service) SearchMemories(
 
 	vector := pgvector.NewVector(convertToFloat32(queryEmbedding))
 
-	// Use cosine distance for similarity search.
-	// Order by distance ascending (smaller distance = more similar).
+	maxResults := s.opts.maxResults
+	if opts.MaxResults > 0 {
+		maxResults = opts.MaxResults
+	}
+
+	results, err := s.executeVectorSearch(ctx, userKey, opts, vector, maxResults)
+	if err != nil {
+		return nil, err
+	}
+
+	// Kind fallback: when kind filter was applied but returned too few
+	// results, retry without the kind filter and merge both result sets.
+	if opts.Kind != "" && opts.KindFallback && len(results) < minKindFallbackResults {
+		fallbackOpts := opts
+		fallbackOpts.Kind = ""
+		fallbackOpts.KindFallback = false
+		fallbackResults, fallbackErr := s.executeVectorSearch(
+			ctx, userKey, fallbackOpts, vector, maxResults,
+		)
+		if fallbackErr == nil && len(fallbackResults) > 0 {
+			results = mergeSearchResults(results, fallbackResults, opts.Kind, maxResults)
+		}
+	}
+
+	// Hybrid search: run keyword search and merge with vector results
+	// using Reciprocal Rank Fusion (RRF) to improve recall for exact
+	// entity names, book titles, etc.
+	if opts.HybridSearch {
+		keywordResults, kwErr := s.executeKeywordSearch(ctx, userKey, opts, maxResults)
+		if kwErr == nil && len(keywordResults) > 0 {
+			rrfK := opts.HybridRRFK
+			if rrfK <= 0 {
+				rrfK = defaultRRFK
+			}
+			results = mergeHybridResults(results, keywordResults, rrfK, maxResults)
+		}
+	}
+
+	// Apply similarity threshold filtering.
+	// Skip when hybrid search is active because RRF scores use a
+	// different range than cosine similarity.
+	threshold := s.opts.similarityThreshold
+	if opts.SimilarityThreshold > 0 {
+		threshold = opts.SimilarityThreshold
+	}
+	if threshold > 0 && len(results) > 0 && !opts.HybridSearch {
+		filtered := results[:0]
+		for _, r := range results {
+			if r.Score >= threshold {
+				filtered = append(filtered, r)
+			}
+		}
+		results = filtered
+	}
+
+	// Content-based deduplication of near-identical memories.
+	if opts.Deduplicate && len(results) > 1 {
+		results = deduplicateResults(results)
+	}
+
+	return results, nil
+}
+
+// executeVectorSearch runs a single vector similarity search against pgvector.
+func (s *Service) executeVectorSearch(
+	ctx context.Context,
+	userKey memory.UserKey,
+	opts memory.SearchOptions,
+	vector pgvector.Vector,
+	maxResults int,
+) ([]*memory.Entry, error) {
 	var searchQuery strings.Builder
+	args := []any{vector, userKey.AppName, userKey.UserID}
+	argIdx := 4
+
 	fmt.Fprintf(&searchQuery,
-		"SELECT memory_id, app_name, user_id, memory_content, topics, created_at, "+
-			"updated_at, 1 - (embedding <=> $1) AS similarity "+
+		"SELECT memory_id, app_name, user_id, memory_content, topics, "+
+			"memory_kind, event_time, participants, location, "+
+			"created_at, updated_at, 1 - (embedding <=> $1) AS similarity "+
 			"FROM %s WHERE app_name = $2 AND user_id = $3",
 		s.tableName,
 	)
 	if s.opts.softDelete {
 		searchQuery.WriteString(" AND deleted_at IS NULL")
 	}
-	searchQuery.WriteString(" ORDER BY embedding <=> $1")
-	fmt.Fprintf(&searchQuery, " LIMIT %d", s.opts.maxResults)
+
+	if opts.Kind != "" {
+		fmt.Fprintf(&searchQuery, " AND memory_kind = $%d", argIdx)
+		args = append(args, string(opts.Kind))
+		argIdx++
+	}
+
+	if opts.TimeAfter != nil {
+		fmt.Fprintf(&searchQuery, " AND (event_time >= $%d OR event_time IS NULL)", argIdx)
+		args = append(args, *opts.TimeAfter)
+		argIdx++
+	}
+	if opts.TimeBefore != nil {
+		fmt.Fprintf(&searchQuery, " AND (event_time <= $%d OR event_time IS NULL)", argIdx)
+		args = append(args, *opts.TimeBefore)
+		argIdx++
+	}
+
+	if opts.OrderByEventTime {
+		searchQuery.WriteString(" ORDER BY event_time ASC NULLS LAST, embedding <=> $1")
+	} else {
+		searchQuery.WriteString(" ORDER BY embedding <=> $1")
+	}
+	fmt.Fprintf(&searchQuery, " LIMIT %d", maxResults)
 
 	results := make([]*memory.Entry, 0)
-	err = s.db.Query(ctx, func(rows *sql.Rows) error {
+	err := s.db.Query(ctx, func(rows *sql.Rows) error {
 		for rows.Next() {
-			entry, err := scanMemoryEntryWithSimilarity(rows)
-			if err != nil {
-				return err
+			entry, scanErr := scanMemoryEntryWithSimilarity(rows)
+			if scanErr != nil {
+				return scanErr
 			}
 			results = append(results, entry)
 		}
 		return nil
-	}, searchQuery.String(), vector, userKey.AppName, userKey.UserID)
+	}, searchQuery.String(), args...)
 
 	if err != nil {
 		return nil, fmt.Errorf("search memories failed: %w", err)
 	}
-
 	return results, nil
+}
+
+// defaultRRFK is the standard Reciprocal Rank Fusion constant.
+const defaultRRFK = 60
+
+// executeKeywordSearch runs a full-text search using PostgreSQL
+// tsvector/tsquery alongside the vector search results.
+func (s *Service) executeKeywordSearch(
+	ctx context.Context,
+	userKey memory.UserKey,
+	opts memory.SearchOptions,
+	maxResults int,
+) ([]*memory.Entry, error) {
+	query := strings.TrimSpace(opts.Query)
+	if query == "" {
+		return []*memory.Entry{}, nil
+	}
+
+	var searchQuery strings.Builder
+	args := []any{query, userKey.AppName, userKey.UserID}
+	argIdx := 4
+
+	fmt.Fprintf(&searchQuery,
+		"SELECT memory_id, app_name, user_id, memory_content, topics, "+
+			"memory_kind, event_time, participants, location, "+
+			"created_at, updated_at, "+
+			"ts_rank(search_vector, plainto_tsquery('english', $1)) AS similarity "+
+			"FROM %s WHERE app_name = $2 AND user_id = $3 "+
+			"AND search_vector @@ plainto_tsquery('english', $1)",
+		s.tableName,
+	)
+	if s.opts.softDelete {
+		searchQuery.WriteString(" AND deleted_at IS NULL")
+	}
+
+	if opts.Kind != "" {
+		fmt.Fprintf(&searchQuery, " AND memory_kind = $%d", argIdx)
+		args = append(args, string(opts.Kind))
+		argIdx++
+	}
+
+	if opts.TimeAfter != nil {
+		fmt.Fprintf(&searchQuery, " AND (event_time >= $%d OR event_time IS NULL)", argIdx)
+		args = append(args, *opts.TimeAfter)
+		argIdx++
+	}
+	if opts.TimeBefore != nil {
+		fmt.Fprintf(&searchQuery, " AND (event_time <= $%d OR event_time IS NULL)", argIdx)
+		args = append(args, *opts.TimeBefore)
+		argIdx++
+	}
+
+	searchQuery.WriteString(" ORDER BY similarity DESC")
+	fmt.Fprintf(&searchQuery, " LIMIT %d", maxResults)
+
+	results := make([]*memory.Entry, 0)
+	err := s.db.Query(ctx, func(rows *sql.Rows) error {
+		for rows.Next() {
+			entry, scanErr := scanMemoryEntryWithSimilarity(rows)
+			if scanErr != nil {
+				return scanErr
+			}
+			results = append(results, entry)
+		}
+		return nil
+	}, searchQuery.String(), args...)
+
+	if err != nil {
+		// Keyword search failure is non-fatal; log and return empty.
+		return []*memory.Entry{}, nil
+	}
+	return results, nil
+}
+
+// mergeHybridResults combines vector and keyword search results using
+// Reciprocal Rank Fusion (RRF). Each result gets score = 1/(k+rank)
+// from each search method. Combined scores determine final ranking.
+func mergeHybridResults(
+	vectorResults, keywordResults []*memory.Entry,
+	k int,
+	maxResults int,
+) []*memory.Entry {
+	if k <= 0 {
+		k = defaultRRFK
+	}
+
+	type rrfEntry struct {
+		entry *memory.Entry
+		score float64
+	}
+
+	scores := make(map[string]*rrfEntry, len(vectorResults)+len(keywordResults))
+
+	for rank, entry := range vectorResults {
+		scores[entry.ID] = &rrfEntry{
+			entry: entry,
+			score: 1.0 / float64(k+rank+1),
+		}
+	}
+
+	for rank, entry := range keywordResults {
+		rrfScore := 1.0 / float64(k+rank+1)
+		if existing, ok := scores[entry.ID]; ok {
+			existing.score += rrfScore
+		} else {
+			scores[entry.ID] = &rrfEntry{
+				entry: entry,
+				score: rrfScore,
+			}
+		}
+	}
+
+	merged := make([]*rrfEntry, 0, len(scores))
+	for _, e := range scores {
+		merged = append(merged, e)
+	}
+	sort.Slice(merged, func(i, j int) bool {
+		return merged[i].score > merged[j].score
+	})
+
+	results := make([]*memory.Entry, 0, min(len(merged), maxResults))
+	for i, e := range merged {
+		if i >= maxResults {
+			break
+		}
+		e.entry.Score = e.score
+		results = append(results, e.entry)
+	}
+	return results
+}
+
+// mergeSearchResults merges kind-filtered results with fallback results.
+// Results matching the preferred kind are ranked higher. Duplicates are
+// removed by memory ID.
+func mergeSearchResults(
+	primary, fallback []*memory.Entry,
+	preferredKind memory.MemoryKind,
+	maxResults int,
+) []*memory.Entry {
+	seen := make(map[string]bool, len(primary))
+	for _, e := range primary {
+		seen[e.ID] = true
+	}
+
+	// Split fallback into matching-kind and other-kind.
+	var kindMatch, kindOther []*memory.Entry
+	for _, e := range fallback {
+		if seen[e.ID] {
+			continue
+		}
+		if e.Memory != nil && e.Memory.Kind == preferredKind {
+			kindMatch = append(kindMatch, e)
+		} else {
+			kindOther = append(kindOther, e)
+		}
+	}
+
+	// Build merged list: primary (kind-filtered) → fallback matching kind → fallback other kind.
+	merged := make([]*memory.Entry, 0, len(primary)+len(kindMatch)+len(kindOther))
+	merged = append(merged, primary...)
+	merged = append(merged, kindMatch...)
+	merged = append(merged, kindOther...)
+
+	if len(merged) > maxResults {
+		merged = merged[:maxResults]
+	}
+	return merged
+}
+
+// deduplicateResults removes near-duplicate memories based on word-level
+// Jaccard similarity. When two results have >80% word overlap, the
+// lower-scored one is dropped.
+func deduplicateResults(results []*memory.Entry) []*memory.Entry {
+	const jaccardThreshold = 0.80
+
+	type wordSet map[string]struct{}
+	sets := make([]wordSet, len(results))
+	for i, r := range results {
+		ws := make(wordSet)
+		for _, w := range strings.Fields(strings.ToLower(r.Memory.Memory)) {
+			ws[w] = struct{}{}
+		}
+		sets[i] = ws
+	}
+
+	keep := make([]bool, len(results))
+	for i := range keep {
+		keep[i] = true
+	}
+
+	for i := 0; i < len(results); i++ {
+		if !keep[i] {
+			continue
+		}
+		for j := i + 1; j < len(results); j++ {
+			if !keep[j] {
+				continue
+			}
+			if jaccardSimilarity(sets[i], sets[j]) >= jaccardThreshold {
+				// Drop the lower-scored duplicate.
+				if results[i].Score >= results[j].Score {
+					keep[j] = false
+				} else {
+					keep[i] = false
+					break
+				}
+			}
+		}
+	}
+
+	deduped := make([]*memory.Entry, 0, len(results))
+	for i, r := range results {
+		if keep[i] {
+			deduped = append(deduped, r)
+		}
+	}
+	return deduped
+}
+
+func jaccardSimilarity(a, b map[string]struct{}) float64 {
+	if len(a) == 0 && len(b) == 0 {
+		return 1.0
+	}
+	intersection := 0
+	for w := range a {
+		if _, ok := b[w]; ok {
+			intersection++
+		}
+	}
+	union := len(a) + len(b) - intersection
+	if union == 0 {
+		return 0
+	}
+	return float64(intersection) / float64(union)
 }
 
 // Tools returns the list of available memory tools.
@@ -535,29 +924,25 @@ func scanMemoryEntry(rows *sql.Rows) (*memory.Entry, error) {
 		userID        string
 		memoryContent string
 		topics        pq.StringArray
+		memoryKind    string
+		eventTime     sql.NullTime
+		participants  pq.StringArray
+		location      sql.NullString
 		createdAt     time.Time
 		updatedAt     time.Time
 	)
 
 	if err := rows.Scan(
 		&memoryID, &appName, &userID, &memoryContent, &topics,
+		&memoryKind, &eventTime, &participants, &location,
 		&createdAt, &updatedAt,
 	); err != nil {
 		return nil, fmt.Errorf("scan memory entry failed: %w", err)
 	}
 
-	return &memory.Entry{
-		ID:      memoryID,
-		AppName: appName,
-		UserID:  userID,
-		Memory: &memory.Memory{
-			Memory:      memoryContent,
-			Topics:      []string(topics),
-			LastUpdated: &updatedAt,
-		},
-		CreatedAt: createdAt,
-		UpdatedAt: updatedAt,
-	}, nil
+	return buildEntry(memoryID, appName, userID, memoryContent,
+		topics, memoryKind, eventTime, participants, location,
+		createdAt, updatedAt), nil
 }
 
 // scanMemoryEntryWithSimilarity scans a memory entry with similarity score.
@@ -569,6 +954,10 @@ func scanMemoryEntryWithSimilarity(rows *sql.Rows) (*memory.Entry, error) {
 		userID        string
 		memoryContent string
 		topics        pq.StringArray
+		memoryKind    string
+		eventTime     sql.NullTime
+		participants  pq.StringArray
+		location      sql.NullString
 		createdAt     time.Time
 		updatedAt     time.Time
 		similarity    float64
@@ -576,27 +965,53 @@ func scanMemoryEntryWithSimilarity(rows *sql.Rows) (*memory.Entry, error) {
 
 	if err := rows.Scan(
 		&memoryID, &appName, &userID, &memoryContent, &topics,
+		&memoryKind, &eventTime, &participants, &location,
 		&createdAt, &updatedAt, &similarity,
 	); err != nil {
 		return nil, fmt.Errorf("scan memory entry with similarity failed: %w", err)
 	}
 
-	// Note: similarity score is available but not stored in Entry.
-	// It could be added to metadata if needed in the future.
-	_ = similarity
+	entry := buildEntry(memoryID, appName, userID, memoryContent,
+		topics, memoryKind, eventTime, participants, location,
+		createdAt, updatedAt)
+	entry.Score = similarity
+	return entry, nil
+}
+
+// buildEntry constructs a memory.Entry from scanned row fields.
+func buildEntry(
+	memoryID, appName, userID, memoryContent string,
+	topics pq.StringArray,
+	memoryKind string,
+	eventTime sql.NullTime,
+	participants pq.StringArray,
+	location sql.NullString,
+	createdAt, updatedAt time.Time,
+) *memory.Entry {
+	mem := &memory.Memory{
+		Memory:      memoryContent,
+		Topics:      []string(topics),
+		LastUpdated: &updatedAt,
+		Kind:        memory.MemoryKind(memoryKind),
+	}
+	if eventTime.Valid {
+		mem.EventTime = &eventTime.Time
+	}
+	if len(participants) > 0 {
+		mem.Participants = []string(participants)
+	}
+	if location.Valid {
+		mem.Location = location.String
+	}
 
 	return &memory.Entry{
-		ID:      memoryID,
-		AppName: appName,
-		UserID:  userID,
-		Memory: &memory.Memory{
-			Memory:      memoryContent,
-			Topics:      []string(topics),
-			LastUpdated: &updatedAt,
-		},
+		ID:        memoryID,
+		AppName:   appName,
+		UserID:    userID,
+		Memory:    mem,
 		CreatedAt: createdAt,
 		UpdatedAt: updatedAt,
-	}, nil
+	}
 }
 
 // convertToFloat32 converts a float64 slice to float32 slice.
@@ -606,4 +1021,35 @@ func convertToFloat32(embedding []float64) []float32 {
 		result[i] = float32(v)
 	}
 	return result
+}
+
+// episodicSQLFields holds episodic field values resolved for SQL parameters.
+type episodicSQLFields struct {
+	kind         string
+	eventTime    *time.Time
+	participants []string
+	location     *string
+}
+
+// resolveEpisodicFields converts EpisodicFields to SQL-ready values.
+// Returns default (fact, nil, empty, nil) when ep is nil.
+func resolveEpisodicFields(ep *memory.EpisodicFields) episodicSQLFields {
+	f := episodicSQLFields{
+		kind:         string(memory.MemoryKindFact),
+		participants: []string{},
+	}
+	if ep == nil {
+		return f
+	}
+	if ep.Kind != "" {
+		f.kind = string(ep.Kind)
+	}
+	f.eventTime = ep.EventTime
+	if len(ep.Participants) > 0 {
+		f.participants = ep.Participants
+	}
+	if ep.Location != "" {
+		f.location = &ep.Location
+	}
+	return f
 }

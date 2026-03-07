@@ -175,9 +175,10 @@ type locomo10QA struct {
 }
 
 type locomo10Turn struct {
-	Speaker string `json:"speaker"`
-	Text    string `json:"text"`
-	DiaID   string `json:"dia_id"`
+	Speaker     string `json:"speaker"`
+	Text        string `json:"text"`
+	DiaID       string `json:"dia_id"`
+	BlipCaption string `json:"blip_caption"`
 }
 
 type locomo10Observation map[string]map[string][][]string
@@ -337,9 +338,15 @@ func parseSessions(
 			if t.Text == "" {
 				continue
 			}
+			text := t.Text
+			// Append image caption so the extractor can see
+			// visual information (book covers, photos, etc.).
+			if t.BlipCaption != "" {
+				text += " [Shared image: " + t.BlipCaption + "]"
+			}
 			turns = append(turns, Turn{
 				Speaker: t.Speaker,
-				Text:    t.Text,
+				Text:    text,
 			})
 		}
 		if len(turns) == 0 {

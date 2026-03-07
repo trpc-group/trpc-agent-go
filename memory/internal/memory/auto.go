@@ -83,7 +83,11 @@ func ConfigureExtractorEnabledTools(
 type MemoryOperator interface {
 	ReadMemories(ctx context.Context, userKey memory.UserKey, limit int) ([]*memory.Entry, error)
 	AddMemory(ctx context.Context, userKey memory.UserKey, memory string, topics []string) error
+	AddMemoryWithEpisodic(ctx context.Context, userKey memory.UserKey, memory string,
+		topics []string, ep *memory.EpisodicFields) error
 	UpdateMemory(ctx context.Context, memoryKey memory.Key, memory string, topics []string) error
+	UpdateMemoryWithEpisodic(ctx context.Context, memoryKey memory.Key, memory string,
+		topics []string, ep *memory.EpisodicFields) error
 	DeleteMemory(ctx context.Context, memoryKey memory.Key) error
 	ClearMemories(ctx context.Context, userKey memory.UserKey) error
 }
@@ -376,7 +380,8 @@ func (w *AutoMemoryWorker) executeOperation(
 
 	switch op.Type {
 	case extractor.OperationAdd:
-		if err := w.operator.AddMemory(ctx, userKey, op.Memory, op.Topics); err != nil {
+		ep := opToEpisodicFields(op)
+		if err := w.operator.AddMemoryWithEpisodic(ctx, userKey, op.Memory, op.Topics, ep); err != nil {
 			log.WarnfContext(ctx, "auto_memory: add memory failed for user %s/%s: %v",
 				userKey.AppName, userKey.UserID, err)
 		}
@@ -386,7 +391,8 @@ func (w *AutoMemoryWorker) executeOperation(
 			UserID:   userKey.UserID,
 			MemoryID: op.MemoryID,
 		}
-		if err := w.operator.UpdateMemory(ctx, memKey, op.Memory, op.Topics); err != nil {
+		ep := opToEpisodicFields(op)
+		if err := w.operator.UpdateMemoryWithEpisodic(ctx, memKey, op.Memory, op.Topics, ep); err != nil {
 			if isMemoryNotFoundError(err) {
 				if !w.isToolEnabled(memory.AddToolName) {
 					log.DebugfContext(ctx,
@@ -396,8 +402,8 @@ func (w *AutoMemoryWorker) executeOperation(
 						userKey.AppName, userKey.UserID, op.MemoryID)
 					return
 				}
-				if addErr := w.operator.AddMemory(
-					ctx, userKey, op.Memory, op.Topics,
+				if addErr := w.operator.AddMemoryWithEpisodic(
+					ctx, userKey, op.Memory, op.Topics, ep,
 				); addErr != nil {
 					log.WarnfContext(ctx,
 						"auto_memory: update missing, add memory failed for user %s/%s, memory_id=%s: %v",
@@ -427,6 +433,22 @@ func (w *AutoMemoryWorker) executeOperation(
 	default:
 		log.WarnfContext(ctx, "auto_memory: unknown operation type '%s' for user %s/%s",
 			op.Type, userKey.AppName, userKey.UserID)
+	}
+}
+
+// opToEpisodicFields converts extractor.Operation episodic fields to memory.EpisodicFields.
+// Always returns a non-nil value; defaults to Kind=MemoryKindFact when no
+// episodic data is present so that backends do not need nil-guard logic.
+func opToEpisodicFields(op *extractor.Operation) *memory.EpisodicFields {
+	kind := op.MemoryKind
+	if kind == "" {
+		kind = memory.MemoryKindFact
+	}
+	return &memory.EpisodicFields{
+		Kind:         kind,
+		EventTime:    op.EventTime,
+		Participants: op.Participants,
+		Location:     op.Location,
 	}
 }
 
