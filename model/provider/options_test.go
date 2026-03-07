@@ -130,17 +130,6 @@ func TestWithAnthropicOption(t *testing.T) {
 	assert.Equal(t, 1, len(opts.AnthropicOption))
 }
 
-func TestWithDisableAutoMaxTokensKeepsExistingTokenTailoringConfig(t *testing.T) {
-	opts := &Options{}
-	config := &model.TokenTailoringConfig{ReserveOutputTokens: 4096}
-	WithTokenTailoringConfig(config)(opts)
-	WithDisableAutoMaxTokens(true)(opts)
-
-	assert.NotNil(t, opts.TokenTailoringConfig)
-	assert.Equal(t, 4096, opts.TokenTailoringConfig.ReserveOutputTokens)
-	assert.True(t, opts.TokenTailoringConfig.DisableAutoMaxTokens)
-}
-
 func TestWithTokenTailoringConfig(t *testing.T) {
 	opts := &Options{}
 	config := &model.TokenTailoringConfig{

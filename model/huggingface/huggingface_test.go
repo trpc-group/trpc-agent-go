@@ -2695,46 +2695,6 @@ func TestModel_TokenTailoringWithAutoCalculation(t *testing.T) {
 	assert.NotNil(t, request.GenerationConfig.MaxTokens)
 }
 
-// TestModel_DisableAutoMaxTokensWithTokenTailoring tests disabling auto MaxTokens.
-func TestModel_DisableAutoMaxTokensWithTokenTailoring(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		response := "{\"id\":\"test\",\"object\":\"chat.completion\"," +
-			"\"created\":1234567890,\"model\":\"test-model\"," +
-			"\"choices\":[{\"index\":0,\"message\":{" +
-			"\"role\":\"assistant\",\"content\":\"test\"}," +
-			"\"finish_reason\":\"stop\"}]}"
-		fmt.Fprint(w, response)
-	}))
-	defer server.Close()
-
-	m, err := New(
-		"test-model",
-		WithAPIKey("test-key"),
-		WithBaseURL(server.URL),
-		WithEnableTokenTailoring(true),
-		WithTokenTailoringConfig(&model.TokenTailoringConfig{
-			DisableAutoMaxTokens: true,
-		}),
-	)
-	require.NoError(t, err)
-
-	request := &model.Request{
-		Messages: []model.Message{
-			{Role: model.RoleUser, Content: "test"},
-		},
-	}
-
-	ctx := context.Background()
-	responseChan, err := m.GenerateContent(ctx, request)
-	require.NoError(t, err)
-
-	for range responseChan {
-	}
-
-	assert.Nil(t, request.GenerationConfig.MaxTokens)
-}
-
 // TestModel_RequestWithMaxTokensSet tests that user-specified MaxTokens is respected
 func TestModel_RequestWithMaxTokensSet(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

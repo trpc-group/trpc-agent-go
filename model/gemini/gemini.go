@@ -42,7 +42,6 @@ type Model struct {
 	reserveOutputTokens    int
 	inputTokensFloor       int
 	outputTokensFloor      int
-	disableAutoMaxTokens   bool
 	safetyMarginRatio      float64
 	maxInputTokensRatio    float64
 }
@@ -68,7 +67,6 @@ func New(ctx context.Context, name string, opts ...Option) (*Model, error) {
 		inputTokensFloor:           o.tokenTailoringConfig.InputTokensFloor,
 		outputTokensFloor:          o.tokenTailoringConfig.OutputTokensFloor,
 		safetyMarginRatio:          o.tokenTailoringConfig.SafetyMarginRatio,
-		disableAutoMaxTokens:       o.tokenTailoringConfig.DisableAutoMaxTokens,
 		maxInputTokensRatio:        o.tokenTailoringConfig.MaxInputTokensRatio,
 		maxInputTokens:             o.maxInputTokens,
 		chatRequestCallback:        o.chatRequestCallback,
@@ -393,7 +391,7 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 
 	// Set max output tokens only if user hasn't specified it.
 	// This respects user's explicit configuration while providing a safe default.
-	if request.GenerationConfig.MaxTokens == nil && !m.disableAutoMaxTokens {
+	if request.GenerationConfig.MaxTokens == nil {
 		contextWindow := imodel.ResolveContextWindow(m.name)
 		var maxOutputTokens int
 		if m.protocolOverheadTokens > 0 || m.outputTokensFloor > 0 {

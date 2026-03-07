@@ -273,17 +273,6 @@ func WithTokenTailoringConfig(config *model.TokenTailoringConfig) Option {
 	}
 }
 
-// WithDisableAutoMaxTokens toggles automatic MaxTokens calculation after token
-// tailoring.
-func WithDisableAutoMaxTokens(disable bool) Option {
-	return func(o *Options) {
-		if o.TokenTailoringConfig == nil {
-			o.TokenTailoringConfig = &model.TokenTailoringConfig{}
-		}
-		o.TokenTailoringConfig.DisableAutoMaxTokens = disable
-	}
-}
-
 // WithOpenAIOption appends raw OpenAI options.
 func WithOpenAIOption(opt ...openai.Option) Option {
 	return func(o *Options) {
