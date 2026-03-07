@@ -949,11 +949,23 @@ func (r *workspaceRuntime) copyBytesTo(
 }
 
 func inputBase(from string) string {
-	i := strings.LastIndex(from, "/")
-	if i >= 0 && i+1 < len(from) {
-		return from[i+1:]
+	s := strings.TrimSpace(from)
+	if strings.HasPrefix(s, inputSchemeArtifact) {
+		rest := strings.TrimPrefix(s, inputSchemeArtifact)
+		name, _, err := codeexecutor.ParseArtifactRef(rest)
+		if err == nil {
+			base := path.Base(strings.TrimSpace(name))
+			if base != "." && base != "/" && base != ".." && base != "" {
+				return base
+			}
+		}
 	}
-	return from
+
+	i := strings.LastIndex(s, "/")
+	if i >= 0 && i+1 < len(s) {
+		return s[i+1:]
+	}
+	return s
 }
 
 // ExecuteInline writes code blocks and runs them.

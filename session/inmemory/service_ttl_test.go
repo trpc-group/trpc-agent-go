@@ -257,7 +257,7 @@ func TestTTLCleanupBehavior(t *testing.T) {
 	app.mu.RUnlock()
 }
 
-func TestTTLRefresh(t *testing.T) {
+func TestTTLNoRefreshOnGet(t *testing.T) {
 	service := NewSessionService(WithSessionTTL(200 * time.Millisecond))
 	key := session.Key{
 		AppName:   "test-app",
@@ -273,17 +273,17 @@ func TestTTLRefresh(t *testing.T) {
 	// Wait half the TTL time
 	time.Sleep(100 * time.Millisecond)
 
-	// Access session to refresh TTL
+	// Access session - should NOT refresh TTL
 	_, err = service.GetSession(context.Background(), key)
 	require.NoError(t, err)
 
-	// Wait another half TTL time, total time is now > original TTL
+	// Wait past original TTL
 	time.Sleep(150 * time.Millisecond)
 
-	// Session should still be accessible due to TTL refresh
-	stillValidSess, err := service.GetSession(context.Background(), key)
+	// Session should have expired since GetSession does not refresh TTL
+	expiredSess, err := service.GetSession(context.Background(), key)
 	require.NoError(t, err)
-	assert.NotNil(t, stillValidSess, "Session should be valid after TTL refresh")
+	assert.Nil(t, expiredSess, "Session should be expired since GetSession does not refresh TTL")
 }
 
 func TestTTLNoRefresh(t *testing.T) {

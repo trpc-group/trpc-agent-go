@@ -55,9 +55,6 @@ const (
 	BackendInMemory = "inmemory"
 	// BackendRedis is the built-in Redis backend type.
 	BackendRedis = "redis"
-
-	// ChannelTypeTelegram is the built-in Telegram channel type.
-	ChannelTypeTelegram = "telegram"
 )
 
 // GatewayClient is the minimal gateway client surface a channel needs.
@@ -72,9 +69,17 @@ type GatewayClient interface {
 
 // ChannelDeps are dependencies passed to channel factories.
 type ChannelDeps struct {
+	// Ctx is the application context for channel initialization.
+	Ctx      context.Context
 	Gateway  GatewayClient
 	StateDir string
 	AppName  string
+
+	// AllowUsers is the global allowlist parsed from gateway.allow_users.
+	//
+	// Channels may use it to provide friendlier "not allowed" UX before the
+	// gateway rejects the request.
+	AllowUsers []string
 }
 
 // PluginSpec describes one configured plugin instance.

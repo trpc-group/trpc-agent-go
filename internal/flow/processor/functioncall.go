@@ -386,7 +386,13 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequential(
 		if tl, ok := tools[toolCall.Function.Name]; ok {
 			// Use the first choice as the canonical tool result for state
 			// delta.
-			p.attachStateDelta(tl, modifiedArgs, &choices[0], toolEvent)
+			p.attachStateDelta(
+				invocation,
+				tl,
+				modifiedArgs,
+				&choices[0],
+				toolEvent,
+			)
 		}
 	}
 
@@ -586,7 +592,11 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	if tl, ok := tools[tc.Function.Name]; ok {
 		// Use the first choice as the canonical tool result for state delta.
 		p.attachStateDelta(
-			tl, modifiedArgs, &choices[0], toolCallResponseEvent,
+			invocation,
+			tl,
+			modifiedArgs,
+			&choices[0],
+			toolCallResponseEvent,
 		)
 	}
 	itelemetry.TraceToolCall(span, sess, decl, modifiedArgs, toolCallResponseEvent, err)
@@ -607,7 +617,11 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 
 // attachStateDelta copies tool-provided state delta to the event.
 func (p *FunctionCallResponseProcessor) attachStateDelta(
-	tl tool.Tool, args []byte, choice *model.Choice, ev *event.Event,
+	inv *agent.Invocation,
+	tl tool.Tool,
+	args []byte,
+	choice *model.Choice,
+	ev *event.Event,
 ) {
 	if tl == nil || choice == nil || ev == nil {
 		return
@@ -622,11 +636,21 @@ func (p *FunctionCallResponseProcessor) attachStateDelta(
 	type stateDeltaProvider interface {
 		StateDelta(string, []byte, []byte) map[string][]byte
 	}
-	sdp, ok := original.(stateDeltaProvider)
-	if !ok {
-		return
+	type invocationStateDeltaProvider interface {
+		StateDeltaForInvocation(
+			*agent.Invocation,
+			string,
+			[]byte,
+			[]byte,
+		) map[string][]byte
 	}
-	delta := sdp.StateDelta(toolCallID, args, b)
+
+	var delta map[string][]byte
+	if isdp, ok := original.(invocationStateDeltaProvider); ok {
+		delta = isdp.StateDeltaForInvocation(inv, toolCallID, args, b)
+	} else if sdp, ok := original.(stateDeltaProvider); ok {
+		delta = sdp.StateDelta(toolCallID, args, b)
+	}
 	if len(delta) == 0 {
 		return
 	}

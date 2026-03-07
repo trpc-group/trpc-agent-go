@@ -776,8 +776,6 @@ func (s *Service) fetchSessionMeta(
 	sessCmd := pipe.HGet(ctx, sessKey, key.SessionID)
 	summariesCmd := pipe.HGet(ctx, sessSummaryKey, key.SessionID)
 
-	s.appendSessionTTL(ctx, pipe, key, sessKey, sessSummaryKey, appStateKey, userStateKey)
-
 	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
 		return nil, nil, nil, nil, fmt.Errorf("get session state failed: %w", err)
 	}
@@ -1079,7 +1077,6 @@ func (s *Service) buildTrackQueries(
 				zrangeBy.Count = int64(limit)
 			}
 			cmd := dataPipe.ZRevRangeByScore(ctx, trackKey, zrangeBy)
-			s.appendTrackTTL(ctx, dataPipe, trackKey)
 			queries = append(queries, &trackQuery{
 				sessionIdx: i,
 				track:      track,
@@ -1089,16 +1086,6 @@ func (s *Service) buildTrackQueries(
 	}
 
 	return queries, dataPipe
-}
-
-func (s *Service) appendTrackTTL(
-	ctx context.Context,
-	pipe redis.Pipeliner,
-	trackKey string,
-) {
-	if s.opts.sessionTTL > 0 {
-		pipe.Expire(ctx, trackKey, s.opts.sessionTTL)
-	}
 }
 
 func newTrackResults(count int) []map[session.Track][]session.TrackEvent {

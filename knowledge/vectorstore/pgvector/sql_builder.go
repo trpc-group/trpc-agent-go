@@ -215,7 +215,8 @@ func (ub *updateByFilterBuilder) build() (string, []any) {
 }
 
 // queryBuilder builds SQL queries safely without string concatenation.
-// It supports different search modes: vector, keyword, hybrid, and filter.
+// It supports different search modes: vector, keyword, hybrid (weighted), and filter.
+// RRF hybrid search is handled separately via rrfRankQueryBuilder + Go-level fusion.
 type queryBuilder struct {
 	// Basic query components
 	*baseSQLBuilder
@@ -287,7 +288,8 @@ func (dsb *deleteSQLBuilder) build() (string, []any) {
 	return sql, dsb.args
 }
 
-// newQueryBuilderWithMode creates a query builder with specific search mode and weights
+// newQueryBuilderWithMode creates a query builder with specific search mode and weights.
+// Note: RRF hybrid search does not use queryBuilder; it uses rrfRankQueryBuilder instead.
 func newQueryBuilderWithMode(o options, mode vectorstore.SearchMode, vectorWeight, textWeight float64) *queryBuilder {
 	qb := newQueryBuilder(o)
 	qb.searchMode = mode
@@ -346,6 +348,7 @@ func (qb *queryBuilder) addSelectClause(scoreExpression string) {
 }
 
 // addScoreFilter adds score filter to the query.
+// Note: RRF mode handles score filtering in Go code after fusion, not here.
 func (qb *queryBuilder) addScoreFilter(minScore float64) {
 	var scoreExpr string
 	switch qb.searchMode {
@@ -354,7 +357,6 @@ func (qb *queryBuilder) addScoreFilter(minScore float64) {
 	case vectorstore.SearchModeHybrid:
 		scoreExpr = qb.getHybridScoreExpr()
 	default:
-		// Fallback for unexpected modes, though likely unused
 		scoreExpr = qb.getVectorScoreExpr()
 	}
 
@@ -437,10 +439,15 @@ func (qb *queryBuilder) buildVectorQueryWithSubquery(whereClause string, limit i
 	return sql, qb.args
 }
 
-// buildHybridQueryWithSubquery generates hybrid search query using subquery.
+// buildHybridQueryWithSubquery generates hybrid search query using weighted fusion.
+func (qb *queryBuilder) buildHybridQueryWithSubquery(whereClause string, limit int) (string, []any) {
+	return qb.buildHybridWeightedQuery(whereClause, limit)
+}
+
+// buildHybridWeightedQuery generates hybrid search query using weighted score fusion.
 // Inner query calculates vector_score and text_score once, then orders by hybrid score.
 // Outer query reuses the computed scores to avoid duplicate calculations.
-func (qb *queryBuilder) buildHybridQueryWithSubquery(whereClause string, limit int) (string, []any) {
+func (qb *queryBuilder) buildHybridWeightedQuery(whereClause string, limit int) (string, []any) {
 	vExpr := qb.getVectorScoreExpr()
 
 	tExpr := "0.0"
@@ -464,6 +471,67 @@ func (qb *queryBuilder) buildHybridQueryWithSubquery(whereClause string, limit i
 		) subq`, qb.vectorWeight, qb.textWeight, commonFieldsStr, vExpr, tExpr, qb.o.table, whereClause, hybridScoreExpr, limit)
 
 	return sql, qb.args
+}
+
+// rrfRankQueryBuilder builds simple rank queries for RRF sub-searches.
+// Each sub-search returns only (id, rank) pairs, which are then fused in Go code.
+type rrfRankQueryBuilder struct {
+	*baseSQLBuilder
+}
+
+func newRRFRankQueryBuilder(o options) *rrfRankQueryBuilder {
+	return &rrfRankQueryBuilder{
+		baseSQLBuilder: &baseSQLBuilder{
+			o:          o,
+			conditions: []string{"1=1"},
+			args:       make([]any, 0),
+			argIndex:   1,
+		},
+	}
+}
+
+// buildVectorRankQuery builds a query that returns (id, rank) ordered by vector distance.
+func (rb *rrfRankQueryBuilder) buildVectorRankQuery(limit int) (string, []any) {
+	whereClause := strings.Join(rb.conditions, " AND ")
+	sql := fmt.Sprintf(`SELECT %s, ROW_NUMBER() OVER (ORDER BY %s <=> $1) as rank
+		FROM %s WHERE %s LIMIT %d`,
+		rb.o.idFieldName, rb.o.embeddingFieldName, rb.o.table, whereClause, limit)
+	return sql, rb.args
+}
+
+// buildTextRankQuery builds a query that returns (id, rank) ordered by text relevance.
+// textQueryPos is the parameter position for the text query argument.
+func (rb *rrfRankQueryBuilder) buildTextRankQuery(textQueryPos int, limit int) (string, []any) {
+	ftsCondition := fmt.Sprintf("to_tsvector('%s', %s) @@ %s('%s', $%d)",
+		rb.o.language, rb.o.contentFieldName,
+		rb.o.sparseQueryFunc, rb.o.language, textQueryPos)
+
+	whereClause := strings.Join(rb.conditions, " AND ")
+	if whereClause != "1=1" {
+		whereClause = fmt.Sprintf("%s AND %s", whereClause, ftsCondition)
+	} else {
+		whereClause = ftsCondition
+	}
+
+	rankExpr := fmt.Sprintf("%s(to_tsvector('%s', %s), %s('%s', $%d))",
+		rb.o.sparseRankFunc, rb.o.language, rb.o.contentFieldName,
+		rb.o.sparseQueryFunc, rb.o.language, textQueryPos)
+
+	sql := fmt.Sprintf(`SELECT %s, ROW_NUMBER() OVER (ORDER BY %s DESC) as rank
+		FROM %s WHERE %s LIMIT %d`,
+		rb.o.idFieldName, rankExpr, rb.o.table, whereClause, limit)
+	return sql, rb.args
+}
+
+// buildFetchByIDsQuery builds a query that fetches full documents by IDs with score placeholders.
+func buildFetchByIDsQuery(o options, count int) string {
+	placeholders := make([]string, count)
+	for i := 0; i < count; i++ {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+	}
+	return fmt.Sprintf(`SELECT %s, 0.0 as vector_score, 0.0 as text_score, 0.0 as score
+		FROM %s WHERE %s IN (%s)`,
+		commonFieldsStr, o.table, o.idFieldName, strings.Join(placeholders, ", "))
 }
 
 // buildHybridSelectClause generates SELECT clause for hybrid search.

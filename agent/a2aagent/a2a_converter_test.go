@@ -314,18 +314,8 @@ func TestDefaultA2AEventConverter_ConvertStreamingToEvents(t *testing.T) {
 				if err != nil {
 					t.Errorf("expected no error, got %v", err)
 				}
-				if len(events) == 0 {
-					t.Fatal("expected at least one event, got none")
-				}
-				evt := events[0]
-				if evt.Response == nil {
-					t.Fatal("expected response, got nil")
-				}
-				if evt.Response.ID != "status-1" {
-					t.Errorf("expected response ID 'status-1', got %s", evt.Response.ID)
-				}
-				if evt.Response.Object != model.ObjectTypeChatCompletionChunk {
-					t.Errorf("expected response object %s, got %s", model.ObjectTypeChatCompletionChunk, evt.Response.Object)
+				if len(events) != 0 {
+					t.Fatalf("expected no events (status updates are filtered), got %d", len(events))
 				}
 			},
 		},
@@ -2266,7 +2256,7 @@ func TestBuildStreamingResponse_ToolResponses(t *testing.T) {
 	if resp == nil {
 		t.Fatalf("expected response, got nil")
 	}
-	if resp.Object != model.ObjectTypeChatCompletion {
+	if resp.Object != model.ObjectTypeToolResponse {
 		t.Fatalf("unexpected object type: %s", resp.Object)
 	}
 	if len(resp.Choices) != 1 {
@@ -2483,5 +2473,158 @@ func TestConvertA2ARoleToModelRole(t *testing.T) {
 				t.Errorf("convertA2ARoleToModelRole(%v) = %v, want %v", tt.role, result, tt.expected)
 			}
 		})
+	}
+}
+
+func TestAppendContentPart_UnknownType(t *testing.T) {
+	parts := appendContentPart(nil, model.ContentPart{Type: "unknown"})
+	if len(parts) != 0 {
+		t.Fatalf("expected empty parts for unknown content type, got %d", len(parts))
+	}
+}
+
+func TestAppendTextPart_NilText(t *testing.T) {
+	parts := appendTextPart(nil, model.ContentPart{Type: model.ContentTypeText, Text: nil})
+	if len(parts) != 0 {
+		t.Fatalf("expected empty parts for nil Text, got %d", len(parts))
+	}
+}
+
+func TestAppendImagePart_NilImage(t *testing.T) {
+	parts := appendImagePart(nil, model.ContentPart{Type: model.ContentTypeImage, Image: nil})
+	if len(parts) != 0 {
+		t.Fatalf("expected empty parts for nil Image, got %d", len(parts))
+	}
+}
+
+func TestAppendImagePart_NoDataNoURL(t *testing.T) {
+	parts := appendImagePart(nil, model.ContentPart{
+		Type:  model.ContentTypeImage,
+		Image: &model.Image{},
+	})
+	if len(parts) != 0 {
+		t.Fatalf("expected empty parts for Image with no data and no URL, got %d", len(parts))
+	}
+}
+
+func TestAppendImagePart_WithURL(t *testing.T) {
+	parts := appendImagePart(nil, model.ContentPart{
+		Type: model.ContentTypeImage,
+		Image: &model.Image{
+			URL:    "https://example.com/img.png",
+			Format: "image/png",
+		},
+	})
+	if len(parts) != 1 {
+		t.Fatalf("expected 1 part, got %d", len(parts))
+	}
+	if parts[0].GetKind() != protocol.KindFile {
+		t.Fatalf("expected file kind, got %s", parts[0].GetKind())
+	}
+}
+
+func TestAppendAudioPart_NilAudio(t *testing.T) {
+	parts := appendAudioPart(nil, model.ContentPart{Type: model.ContentTypeAudio, Audio: nil})
+	if len(parts) != 0 {
+		t.Fatalf("expected empty parts for nil Audio, got %d", len(parts))
+	}
+}
+
+func TestAppendAudioPart_NilData(t *testing.T) {
+	parts := appendAudioPart(nil, model.ContentPart{
+		Type:  model.ContentTypeAudio,
+		Audio: &model.Audio{Data: nil, Format: "wav"},
+	})
+	if len(parts) != 0 {
+		t.Fatalf("expected empty parts for Audio with nil Data, got %d", len(parts))
+	}
+}
+
+func TestAppendAudioPart_WithData(t *testing.T) {
+	audioData := []byte("fake-audio-data")
+	parts := appendAudioPart(nil, model.ContentPart{
+		Type:  model.ContentTypeAudio,
+		Audio: &model.Audio{Data: audioData, Format: "wav"},
+	})
+	if len(parts) != 1 {
+		t.Fatalf("expected 1 part, got %d", len(parts))
+	}
+	if parts[0].GetKind() != protocol.KindFile {
+		t.Fatalf("expected file kind, got %s", parts[0].GetKind())
+	}
+}
+
+func TestAppendFilePart_NilFile(t *testing.T) {
+	parts := appendFilePart(nil, model.ContentPart{Type: model.ContentTypeFile, File: nil})
+	if len(parts) != 0 {
+		t.Fatalf("expected empty parts for nil File, got %d", len(parts))
+	}
+}
+
+func TestAppendFilePart_EmptyData(t *testing.T) {
+	parts := appendFilePart(nil, model.ContentPart{
+		Type: model.ContentTypeFile,
+		File: &model.File{Name: "test.txt", Data: nil},
+	})
+	if len(parts) != 0 {
+		t.Fatalf("expected empty parts for File with empty Data, got %d", len(parts))
+	}
+}
+
+func TestProcessFunctionCall_NonMapData(t *testing.T) {
+	dataPart := protocol.NewDataPart("not-a-map")
+	result := processFunctionCall(&dataPart)
+	if result != nil {
+		t.Fatalf("expected nil for non-map data, got %+v", result)
+	}
+}
+
+func TestProcessFunctionCall_ArgsAsMap(t *testing.T) {
+	dataPart := protocol.NewDataPart(map[string]any{
+		ia2a.ToolCallFieldID:   "call-1",
+		ia2a.ToolCallFieldType: "function",
+		ia2a.ToolCallFieldName: "my_tool",
+		ia2a.ToolCallFieldArgs: map[string]any{"key": "value"},
+	})
+	result := processFunctionCall(&dataPart)
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if result.Function.Name != "my_tool" {
+		t.Errorf("unexpected function name: %s", result.Function.Name)
+	}
+	if string(result.Function.Arguments) != `{"key":"value"}` {
+		t.Errorf("unexpected arguments: %s", string(result.Function.Arguments))
+	}
+}
+
+func TestProcessFunctionCall_ArgsUnexpectedType(t *testing.T) {
+	dataPart := protocol.NewDataPart(map[string]any{
+		ia2a.ToolCallFieldName: "my_tool",
+		ia2a.ToolCallFieldArgs: 12345,
+	})
+	result := processFunctionCall(&dataPart)
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if len(result.Function.Arguments) != 0 {
+		t.Errorf("expected empty arguments for unexpected type, got %s", string(result.Function.Arguments))
+	}
+}
+
+func TestBuildNonStreamingResponse_EmptyParseResult(t *testing.T) {
+	result := &parseResult{}
+	resp := buildNonStreamingResponse("msg-1", result, protocol.MessageRoleAgent)
+	if resp == nil {
+		t.Fatal("expected non-nil response")
+	}
+	if len(resp.Choices) != 1 {
+		t.Fatalf("expected 1 choice, got %d", len(resp.Choices))
+	}
+	if resp.Choices[0].Message.Role != model.RoleAssistant {
+		t.Errorf("expected RoleAssistant, got %s", resp.Choices[0].Message.Role)
+	}
+	if resp.Choices[0].Message.Content != "" {
+		t.Errorf("expected empty content, got %q", resp.Choices[0].Message.Content)
 	}
 }

@@ -16,13 +16,16 @@ package processor
 import (
 	"context"
 	"fmt"
+	"path"
 	"sort"
 	"strings"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -33,6 +36,13 @@ import (
 const (
 	// BranchFilterModePrefix Prefix matching pattern
 	BranchFilterModePrefix = "prefix"
+	// BranchFilterModeSubtree includes only events whose FilterKey is the
+	// same as the current filter key or is a descendant of it.
+	//
+	// Unlike BranchFilterModePrefix, it does not include ancestor FilterKeys.
+	// This is useful for isolating history across independent scopes
+	// (e.g., permission/tenant views) within the same session.
+	BranchFilterModeSubtree = "subtree"
 	// BranchFilterModeAll include all
 	BranchFilterModeAll = "all"
 	// BranchFilterModeExact exact match
@@ -112,7 +122,9 @@ type ContentOption func(*ContentRequestProcessor)
 // WithBranchFilterMode sets how to include content from session events.
 func WithBranchFilterMode(mode string) ContentOption {
 	return func(p *ContentRequestProcessor) {
-		if mode != BranchFilterModeAll && mode != BranchFilterModeExact {
+		if mode != BranchFilterModeAll &&
+			mode != BranchFilterModeExact &&
+			mode != BranchFilterModeSubtree {
 			mode = BranchFilterModePrefix
 		}
 		p.BranchFilterMode = mode
@@ -614,11 +626,31 @@ func fileNamesForAnnotation(
 		}
 		name := strings.TrimSpace(part.File.Name)
 		if name == "" {
+			name = fileNameFromArtifactRef(part.File.FileID)
+		}
+		if name == "" {
 			name = fmt.Sprintf(attachedFileNameFallbackFmt, count)
 		}
 		names = append(names, name)
 	}
 	return names, count
+}
+
+func fileNameFromArtifactRef(fileID string) string {
+	s := strings.TrimSpace(fileID)
+	if !strings.HasPrefix(s, fileref.ArtifactPrefix) {
+		return ""
+	}
+	rest := strings.TrimPrefix(s, fileref.ArtifactPrefix)
+	name, _, err := codeexecutor.ParseArtifactRef(rest)
+	if err != nil {
+		return ""
+	}
+	base := path.Base(strings.TrimSpace(name))
+	if base == "." || base == "/" || base == ".." {
+		return ""
+	}
+	return base
 }
 
 // applyMaxHistoryRuns trims messages to at most maxRuns entries from the tail.
@@ -948,9 +980,23 @@ func (p *ContentRequestProcessor) passBranchFilter(evt event.Event, filter strin
 		return evt.FilterKey == filter
 	case BranchFilterModePrefix:
 		return evt.Filter(filter)
+	case BranchFilterModeSubtree:
+		return filterSubtree(evt.FilterKey, filter)
 	default:
 		return true
 	}
+}
+
+func filterSubtree(eventFilterKey, filterKey string) bool {
+	if filterKey == "" || eventFilterKey == "" {
+		return true
+	}
+	if eventFilterKey == filterKey {
+		return true
+	}
+	filterKey += agent.EventFilterKeyDelimiter
+	eventFilterKey += agent.EventFilterKeyDelimiter
+	return strings.HasPrefix(eventFilterKey, filterKey)
 }
 
 func invocationMessageEqual(invMsg model.Message, evtMsg model.Message) bool {

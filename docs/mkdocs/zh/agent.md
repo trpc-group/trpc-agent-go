@@ -118,7 +118,7 @@ _, _ = sessionService.CreateSession(ctx, session.Key{AppName: app, UserID: user,
 进一步阅读：
 
 - 示例：`examples/placeholder`、`examples/outputkey`
-- Session API：`docs/mkdocs/zh/session.md`
+- Session API：`docs/mkdocs/zh/session/index.md`
 
 ### 使用 Runner 执行 Agent
 
@@ -271,10 +271,12 @@ if err != nil {
   - `TimelineFilterAll`: 包含历史消息以及当前请求中所生成的消息
   - `TimelineFilterCurrentRequest`: 仅包含当前请求 (一次 runner.Run 为一次请求) 中所生成的消息
   - `TimelineFilterCurrentInvocation`: 仅包含当前 invocation 上下文中生成的消息
-- `WithMessageBranchFilterMode`: 分支维度可见性控制（用于控制对其他 agent 生成消息的可见性）
-  - `BranchFilterModePrefix`: 通过 Event.FilterKey 与 Invocation.eventFilterKey 做前缀匹配
-  - `BranchFilterModeAll`: 所有 agent 的均消息
-  - `BranchFilterModeExact`: 仅自己生成的消息可见
+- `WithMessageBranchFilterMode`: 按 FilterKey 层级控制可见性
+  - `BranchFilterModePrefix`（默认）：层级匹配（祖先/自己/子孙都算匹配）
+  - `BranchFilterModeSubtree`：仅包含当前 key 及其子孙（不含父级，更适合严格隔离）
+  - `BranchFilterModeExact`：仅包含
+    `Event.FilterKey == Invocation.eventFilterKey`
+  - `BranchFilterModeAll`：忽略 FilterKey，包含全部消息
   
 ```go
 llmAgent := llmagent.New(
@@ -295,9 +297,11 @@ llmAgent := llmagent.New(
     // 分支维度过滤条件
     // 默认值：llmagent.BranchFilterModePrefix
     // 可选值：
-    //  - llmagent.BranchFilterModeAll: 包含所有 agent 的消息，当前 agent 与模型交互时，如需将所有 agent 生成的有效内容消息同步给模型时可设置该值
-    //  - llmagent.BranchFilterModePrefix: 通过 Event.FilterKey 与 Invocation.eventFilterKey 做前缀匹配过滤消息，期望将与当前 agent 以及相关上下游 agent 生成的消息传递给模型时，可设置该值
-    //  - llmagent.BranchFilterModeExact: 通过 Event.FilterKey==Invocation.eventFilterKey 过滤消息，当前 agent 与模型交互时，仅需使用当前 agent 生成的消息时可设置该值
+    //  - llmagent.BranchFilterModePrefix: 层级匹配（祖先/自己/子孙都算匹配）
+    //  - llmagent.BranchFilterModeSubtree: 仅包含当前 key 及其子孙（不含父级）
+    //  - llmagent.BranchFilterModeExact: 仅包含
+    //    Event.FilterKey == Invocation.eventFilterKey
+    //  - llmagent.BranchFilterModeAll: 忽略 FilterKey，包含全部消息
     llmagent.WithMessageBranchFilterMode(llmagent.BranchFilterModePrefix),
 )
 ```
@@ -384,6 +388,44 @@ agent := llmagent.New(
   llmagent.WithEnablePostToolPrompt(false),
 )
 ```
+
+### 调用次数限制（安全机制）
+
+为防止 Agent 陷入无限循环或过度消耗资源，LLMAgent 提供了两个可选的调用次数限制配置：
+
+**可用配置：**
+
+| 配置项 | 说明 |
+|--------|------|
+| `llmagent.WithMaxLLMCalls(n)` | 限制每次调用的 LLM 调用次数上限。当 `n > 0` 时生效，`n <= 0` 时不限制（默认）。 |
+| `llmagent.WithMaxToolIterations(n)` | 限制每次调用的工具迭代次数上限。当 `n > 0` 时生效，`n <= 0` 时不限制（默认）。 |
+
+**使用示例：**
+
+```go
+agent := llmagent.New(
+  "safe-agent",
+  llmagent.WithModel(modelInstance),
+  llmagent.WithTools([]tool.Tool{myTool}),
+  // 限制最多调用 10 次 LLM。
+  llmagent.WithMaxLLMCalls(10),
+  // 限制最多进行 5 轮工具调用迭代。
+  llmagent.WithMaxToolIterations(5),
+)
+```
+
+**行为说明：**
+
+- **`WithMaxLLMCalls`**：当 LLM 调用次数超过限制时，会返回 `StopError`，终止当前调用。
+- **`WithMaxToolIterations`**：当工具迭代次数超过限制时，会发送 `flow_error` 响应事件并结束调用，不会返回 `StopError`。
+- 两个限制相互独立，可以单独使用或组合使用。
+- 这些限制是每次调用级别的，不同的 `runner.Run()` 调用会各自独立计数。
+
+**推荐用法：**
+
+- 在生产环境中，建议设置合理的限制以防止意外情况。
+- 根据任务的复杂度和预期行为设置限制值。
+- 可以在 [examples/max_limits](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/max_limits) 查看完整示例。
 
 ### 处理事件流
 
@@ -927,7 +969,7 @@ Memory Service 用于记录用户的偏好信息，支持个性化体验。
 **推荐阅读顺序：**
 
 1. [Runner](runner.md) - 学习推荐的使用方式
-2. [Session](session.md) - 了解会话管理
+2. [Session](session/index.md) - 了解会话管理
 3. [Multi-Agent](multiagent.md) - 学习多 Agent 系统
 
 ## 运行时动态更新 Instruction

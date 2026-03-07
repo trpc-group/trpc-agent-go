@@ -176,11 +176,11 @@ func TestService_GetSession_Error(t *testing.T) {
 	assert.Nil(t, sess)
 }
 
-func TestService_GetSession_NoTTLRefresh(t *testing.T) {
+func TestService_GetSession_PureRead(t *testing.T) {
 	mockCli := &mockClient{}
 	s := &Service{
 		chClient:              mockCli,
-		opts:                  ServiceOpts{sessionTTL: 0}, // No TTL refresh
+		opts:                  ServiceOpts{sessionTTL: 0},
 		tableSessionStates:    "session_states",
 		tableSessionEvents:    "session_events",
 		tableSessionSummaries: "session_summaries",
@@ -211,7 +211,7 @@ func TestService_GetSession_NoTTLRefresh(t *testing.T) {
 		return newMockRows([][]any{}), nil
 	}
 
-	// Get existing session - should not refresh TTL since sessionTTL is 0
+	// GetSession is a pure read operation - no TTL refresh regardless of config.
 	sess, err := s.GetSession(ctx, key)
 	assert.NoError(t, err)
 	assert.NotNil(t, sess)

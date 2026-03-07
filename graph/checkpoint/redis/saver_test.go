@@ -78,6 +78,14 @@ func TestNewSaverWithRedisInstance_buildFailed(t *testing.T) {
 	require.Nil(t, saver)
 }
 
+func TestTTLMilliseconds(t *testing.T) {
+	assert.Equal(t, int64(0), ttlMilliseconds(0))
+	assert.Equal(t, int64(0), ttlMilliseconds(-time.Second))
+	assert.Equal(t, int64(1), ttlMilliseconds(500*time.Microsecond))
+	assert.Equal(t, int64(1), ttlMilliseconds(time.Millisecond))
+	assert.Equal(t, int64(1500), ttlMilliseconds(1500*time.Millisecond))
+}
+
 func TestNewSaverWithRedisOption_Error(t *testing.T) {
 	saver, err := NewSaver(WithRedisClientURL(""))
 	require.Error(t, err)

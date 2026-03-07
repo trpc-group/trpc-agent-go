@@ -78,6 +78,11 @@ const (
 	// allowing A2A clients to restore the tag information for business-specific labeling.
 	MessageMetadataTagKey = "tag"
 
+	// MessageMetadataResponseIDKey is the metadata key for the LLM response ID.
+	// This preserves the original LLM Response.ID (e.g. OpenAI's "chatcmpl-xxx") across
+	// A2A transport, enabling clients to group incremental chunks from the same LLM call.
+	MessageMetadataResponseIDKey = "llm_response_id"
+
 	// TextPartMetadataThoughtKey is the metadata key for thought/reasoning content in TextPart.
 	TextPartMetadataThoughtKey = "thought"
 
@@ -85,6 +90,21 @@ const (
 	// ADK uses "adk_" prefix for metadata keys like "adk_type", "adk_app_name", "adk_user_id", etc.
 	// This ensures compatibility with ADK's part converter which expects "adk_type" instead of "type".
 	ADKMetadataKeyPrefix = "adk_"
+
+	// ExtensionTRPCA2AVersion is the URI for the trpc-a2a interaction version extension.
+	// Declared in AgentCard.Capabilities.Extensions so that clients can detect which version of the
+	// interaction protocol the server supports and apply compatible conversion logic.
+	ExtensionTRPCA2AVersion = "trpc-a2a-version"
+
+	// InteractionVersion is the current version of the trpc-agent-go interaction specification.
+	// Bump this when the metadata schema, part encoding, or streaming conventions change in a
+	// backward-incompatible way.
+	InteractionVersion = "0.1"
+
+	// MessageMetadataInteractionSpecVersionKey is the metadata key sent by the client in
+	// request messages to declare which interaction spec version it supports.
+	// The server can use this to apply version-specific conversion logic.
+	MessageMetadataInteractionSpecVersionKey = "interaction_spec_version"
 )
 
 // GetADKMetadataKey returns the ADK-compatible metadata key with "adk_" prefix.
