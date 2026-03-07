@@ -13,6 +13,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -28,6 +29,8 @@ const (
 
 	hostRefPrefix = "host://"
 
+	metadataSuffix = ".meta.json"
+
 	defaultChannelDir = "unknown-channel"
 	defaultUserDir    = "unknown-user"
 	defaultSessionDir = "unknown-session"
@@ -41,6 +44,20 @@ const (
 	dirMode  = 0o755
 )
 
+const MetadataSuffix = metadataSuffix
+
+const (
+	KindImage = "image"
+	KindAudio = "audio"
+	KindVideo = "video"
+	KindPDF   = "pdf"
+	KindFile  = "file"
+)
+
+type fileMetadata struct {
+	MimeType string `json:"mime_type,omitempty"`
+}
+
 // ListedFile describes one persisted upload entry.
 type ListedFile struct {
 	Scope        Scope
@@ -48,6 +65,7 @@ type ListedFile struct {
 	Path         string
 	HostRef      string
 	RelativePath string
+	MimeType     string
 	SizeBytes    int64
 	ModifiedAt   time.Time
 }
@@ -101,9 +119,20 @@ func (s *Store) ScopeDir(scope Scope) string {
 
 // Save persists data for the given scope and returns a stable host ref.
 func (s *Store) Save(
+	ctx context.Context,
+	scope Scope,
+	name string,
+	data []byte,
+) (SavedFile, error) {
+	return s.SaveWithMetadata(ctx, scope, name, "", data)
+}
+
+// SaveWithMetadata persists data together with optional metadata.
+func (s *Store) SaveWithMetadata(
 	_ context.Context,
 	scope Scope,
 	name string,
+	mimeType string,
 	data []byte,
 ) (SavedFile, error) {
 	if s == nil || strings.TrimSpace(s.root) == "" {
@@ -123,6 +152,9 @@ func (s *Store) Save(
 	base := hex.EncodeToString(sum[:hashPrefixBytes])
 	filePath := filepath.Join(dir, base+"-"+safeName)
 	if err := writeFileIfMissing(filePath, data); err != nil {
+		return SavedFile{}, err
+	}
+	if err := writeMetadataIfNeeded(filePath, mimeType); err != nil {
 		return SavedFile{}, err
 	}
 
@@ -300,6 +332,38 @@ func writeFileIfMissing(path string, data []byte) error {
 	return nil
 }
 
+func writeMetadataIfNeeded(path string, mimeType string) error {
+	mimeType = strings.TrimSpace(mimeType)
+	if mimeType == "" {
+		return nil
+	}
+
+	raw, err := json.Marshal(fileMetadata{
+		MimeType: mimeType,
+	})
+	if err != nil {
+		return fmt.Errorf("uploads: marshal metadata: %w", err)
+	}
+	metaPath := metadataPath(path)
+	if err := writeFileIfMissing(metaPath, raw); err != nil {
+		return err
+	}
+	return nil
+}
+
+func metadataPath(path string) string {
+	return path + metadataSuffix
+}
+
+func isMetadataFileName(name string) bool {
+	return strings.HasSuffix(strings.TrimSpace(name), metadataSuffix)
+}
+
+// IsMetadataPath reports whether path points to an uploads sidecar file.
+func IsMetadataPath(path string) bool {
+	return isMetadataFileName(filepath.Base(strings.TrimSpace(path)))
+}
+
 func listStoredFiles(
 	root string,
 	walkRoot string,
@@ -326,6 +390,9 @@ func listStoredFiles(
 			if d == nil || d.IsDir() {
 				return nil
 			}
+			if isMetadataFileName(d.Name()) {
+				return nil
+			}
 
 			info, err := d.Info()
 			if err != nil {
@@ -339,12 +406,17 @@ func listStoredFiles(
 			if fileScope == (Scope{}) {
 				fileScope = scopeFromRelativePath(rel)
 			}
+			meta, err := readMetadata(path)
+			if err != nil {
+				return err
+			}
 			files = append(files, ListedFile{
 				Scope:        fileScope,
 				Name:         displayUploadName(d.Name()),
 				Path:         path,
 				HostRef:      HostRef(path),
 				RelativePath: filepath.ToSlash(rel),
+				MimeType:     strings.TrimSpace(meta.MimeType),
 				SizeBytes:    info.Size(),
 				ModifiedAt:   info.ModTime(),
 			})
@@ -365,6 +437,29 @@ func listStoredFiles(
 		files = files[:limit]
 	}
 	return files, nil
+}
+
+func readMetadata(path string) (fileMetadata, error) {
+	metaPath := metadataPath(path)
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fileMetadata{}, nil
+		}
+		return fileMetadata{}, fmt.Errorf(
+			"uploads: read metadata: %w",
+			err,
+		)
+	}
+	var meta fileMetadata
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return fileMetadata{}, fmt.Errorf(
+			"uploads: parse metadata: %w",
+			err,
+		)
+	}
+	meta.MimeType = strings.TrimSpace(meta.MimeType)
+	return meta, nil
 }
 
 func displayUploadName(name string) string {
@@ -393,5 +488,33 @@ func scopeFromRelativePath(rel string) Scope {
 		Channel:   parts[0],
 		UserID:    parts[1],
 		SessionID: parts[2],
+	}
+}
+
+// KindFromMeta returns a stable media kind from filename and MIME.
+func KindFromMeta(name string, mimeType string) string {
+	mimeType = strings.ToLower(strings.TrimSpace(mimeType))
+	switch {
+	case strings.HasPrefix(mimeType, "image/"):
+		return KindImage
+	case strings.HasPrefix(mimeType, "audio/"):
+		return KindAudio
+	case strings.HasPrefix(mimeType, "video/"):
+		return KindVideo
+	case mimeType == "application/pdf":
+		return KindPDF
+	}
+
+	switch strings.ToLower(filepath.Ext(strings.TrimSpace(name))) {
+	case ".jpg", ".jpeg", ".png", ".webp", ".gif":
+		return KindImage
+	case ".mp3", ".wav", ".ogg", ".oga", ".m4a":
+		return KindAudio
+	case ".mp4", ".mov", ".webm", ".mkv":
+		return KindVideo
+	case ".pdf":
+		return KindPDF
+	default:
+		return KindFile
 	}
 }

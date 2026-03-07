@@ -590,6 +590,14 @@ func TestAdminRuntimeHelpers(t *testing.T) {
 	require.Equal(t, "video", uploadKindFromName("clip.MOV"))
 	require.Equal(t, "pdf", uploadKindFromName("doc.pdf"))
 	require.Equal(t, "file", uploadKindFromName("notes.txt"))
+	require.Equal(
+		t,
+		"video",
+		uploadKindFromFile(uploads.ListedFile{
+			Name:     "video-note",
+			MimeType: "video/mp4",
+		}),
+	)
 }
 
 func TestServiceUploadAndDebugValidationErrors(t *testing.T) {
@@ -630,6 +638,12 @@ func TestResolveUploadFile_InvalidPaths(t *testing.T) {
 	require.Error(t, err)
 
 	_, err = resolveUploadFile(root, "telegram/u1")
+	require.Error(t, err)
+
+	_, err = resolveUploadFile(
+		root,
+		"telegram/u1/clip.mp4"+uploads.MetadataSuffix,
+	)
 	require.Error(t, err)
 
 	got, err := resolveUploadFile(root, "telegram/u1/clip.mp4")
@@ -721,6 +735,14 @@ func TestHandleIndex_RendersUploadPreviews(t *testing.T) {
 		[]byte("%PDF-1.4"),
 	)
 	require.NoError(t, err)
+	_, err = store.SaveWithMetadata(
+		context.Background(),
+		scope,
+		"video-note",
+		"video/mp4",
+		[]byte("mp4"),
+	)
+	require.NoError(t, err)
 
 	svc := New(Config{
 		StateDir:   stateDir,
@@ -736,4 +758,5 @@ func TestHandleIndex_RendersUploadPreviews(t *testing.T) {
 	require.Contains(t, rr.Body.String(), "<audio controls")
 	require.Contains(t, rr.Body.String(), "<video controls")
 	require.Contains(t, rr.Body.String(), ">open preview</a>")
+	require.Contains(t, rr.Body.String(), "<code>video/mp4</code>")
 }

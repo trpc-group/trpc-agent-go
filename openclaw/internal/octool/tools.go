@@ -638,30 +638,7 @@ func appendRecentUploadsFromMessage(
 }
 
 func uploadKindFromMeta(name string, mimeType string) string {
-	mimeType = strings.ToLower(strings.TrimSpace(mimeType))
-	switch {
-	case strings.HasPrefix(mimeType, "image/"):
-		return uploadKindImage
-	case strings.HasPrefix(mimeType, "audio/"):
-		return uploadKindAudio
-	case strings.HasPrefix(mimeType, "video/"):
-		return uploadKindVideo
-	case mimeType == "application/pdf":
-		return uploadKindPDF
-	}
-
-	switch strings.ToLower(filepath.Ext(strings.TrimSpace(name))) {
-	case ".jpg", ".jpeg", ".png", ".gif", ".webp":
-		return uploadKindImage
-	case ".mp3", ".wav", ".ogg", ".oga", ".m4a":
-		return uploadKindAudio
-	case ".mp4", ".mov", ".webm", ".mkv":
-		return uploadKindVideo
-	case ".pdf":
-		return uploadKindPDF
-	default:
-		return uploadKindFile
-	}
+	return uploads.KindFromMeta(name, mimeType)
 }
 
 var _ tool.CallableTool = (*execTool)(nil)

@@ -287,6 +287,18 @@ func TestBuildUploadContextText(t *testing.T) {
 	require.Contains(t, text, "- pdf: report.pdf")
 }
 
+func TestBuildUploadContextText_UsesPersistedMimeType(t *testing.T) {
+	t.Parallel()
+
+	text := buildUploadContextText([]uploads.ListedFile{{
+		Name:     "video-note",
+		Path:     "/tmp/video-note",
+		MimeType: "video/mp4",
+	}})
+	require.Contains(t, text, "video-note [video]")
+	require.Contains(t, text, "- video: video-note")
+}
+
 func TestServerUploadContextMessages(t *testing.T) {
 	t.Parallel()
 
@@ -312,6 +324,33 @@ func TestServerUploadContextMessages(t *testing.T) {
 	require.Len(t, msgs, 1)
 	require.Contains(t, msgs[0].Content, recentUploadContextHeader)
 	require.Contains(t, msgs[0].Content, "clip.mp4 [video]")
+}
+
+func TestServerUploadContextMessages_UsesStoredMimeType(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	store, err := uploads.NewStore(stateDir)
+	require.NoError(t, err)
+
+	scope := uploads.Scope{
+		Channel:   "telegram",
+		UserID:    "u1",
+		SessionID: "telegram:dm:u1:s1",
+	}
+	_, err = store.SaveWithMetadata(
+		context.Background(),
+		scope,
+		"video-note",
+		"video/mp4",
+		[]byte("video"),
+	)
+	require.NoError(t, err)
+
+	srv := &Server{uploads: store}
+	msgs := srv.uploadContextMessages("u1", "telegram:dm:u1:s1")
+	require.Len(t, msgs, 1)
+	require.Contains(t, msgs[0].Content, "video-note [video]")
 }
 
 func TestDefaultSessionID_MissingFromForDM(t *testing.T) {

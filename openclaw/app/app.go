@@ -94,7 +94,10 @@ const (
 		"one of those kinds. If the user replies " +
 		"to an earlier media message, treat that replied media as " +
 		"the default target unless they clearly ask for something " +
-		"else. If the user asks you to 'send it back', '发给我', " +
+		"else. Do not ask the user to re-upload a file or provide " +
+		"a local path when the recent upload context already lists " +
+		"a matching upload for this chat. If the user asks you to " +
+		"'send it back', '发给我', " +
 		"'回传', or similar, send the derived files directly in " +
 		"the current chat with message instead of asking which " +
 		"channel or delivery method to use. For exec_command, do " +

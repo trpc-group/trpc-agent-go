@@ -162,6 +162,7 @@ func TestStoreListScopeAndListAll(t *testing.T) {
 	require.Equal(t, first.Name, scopeFiles[0].Name)
 	require.Equal(t, first.Path, scopeFiles[0].Path)
 	require.Equal(t, scopeA, scopeFiles[0].Scope)
+	require.Equal(t, "", scopeFiles[0].MimeType)
 	require.Contains(
 		t,
 		scopeFiles[0].RelativePath,
@@ -174,6 +175,38 @@ func TestStoreListScopeAndListAll(t *testing.T) {
 	require.Equal(t, second.Path, allFiles[0].Path)
 	require.Equal(t, scopeB, allFiles[0].Scope)
 	require.Equal(t, first.Path, allFiles[1].Path)
+}
+
+func TestStoreSaveWithMetadataAndList(t *testing.T) {
+	t.Parallel()
+
+	store, err := NewStore(t.TempDir())
+	require.NoError(t, err)
+
+	scope := Scope{
+		Channel:   "telegram",
+		UserID:    "u1",
+		SessionID: "s1",
+	}
+	saved, err := store.SaveWithMetadata(
+		context.Background(),
+		scope,
+		"video-note",
+		"video/mp4",
+		[]byte("mp4"),
+	)
+	require.NoError(t, err)
+
+	metaPath := metadataPath(saved.Path)
+	data, err := os.ReadFile(metaPath)
+	require.NoError(t, err)
+	require.Contains(t, string(data), "video/mp4")
+
+	files, err := store.ListScope(scope, 10)
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	require.Equal(t, "video/mp4", files[0].MimeType)
+	require.Equal(t, "video-note", files[0].Name)
 }
 
 func TestStoreScopeDir(t *testing.T) {
@@ -206,4 +239,10 @@ func TestSanitizeHelpers(t *testing.T) {
 	))
 	require.Equal(t, defaultFileName, sanitizeFileName("../"))
 	require.Contains(t, sanitizeFileName("../报告.pdf"), "报告.pdf")
+	require.True(t, IsMetadataPath("/tmp/report.pdf"+metadataSuffix))
+	require.Equal(t, KindImage, KindFromMeta("frame", "image/png"))
+	require.Equal(t, KindAudio, KindFromMeta("voice", "audio/ogg"))
+	require.Equal(t, KindVideo, KindFromMeta("video-note", "video/mp4"))
+	require.Equal(t, KindPDF, KindFromMeta("report", "application/pdf"))
+	require.Equal(t, KindFile, KindFromMeta("notes", ""))
 }

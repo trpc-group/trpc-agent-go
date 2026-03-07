@@ -86,7 +86,7 @@ func buildUploadKindSummary(files []uploads.ListedFile) string {
 	seen := make(map[string]struct{})
 	parts := make([]string, 0, 4)
 	for _, file := range files {
-		kind := describeUploadKind(file.Name)
+		kind := describeUploadKind(file.Name, file.MimeType)
 		if kind == "" || kind == uploadKindFileLabel {
 			continue
 		}
@@ -113,26 +113,15 @@ func formatUploadContextLine(file uploads.ListedFile) string {
 	if name == "" {
 		name = filepath.Base(strings.TrimSpace(file.Path))
 	}
-	kind := describeUploadKind(name)
+	kind := describeUploadKind(name, file.MimeType)
 	if kind == "" {
 		return "- " + name
 	}
 	return "- " + name + " [" + kind + "]"
 }
 
-func describeUploadKind(name string) string {
-	switch strings.ToLower(filepath.Ext(strings.TrimSpace(name))) {
-	case ".jpg", ".jpeg", ".png", ".gif", ".webp":
-		return "image"
-	case ".mp3", ".wav", ".ogg", ".oga", ".m4a":
-		return "audio"
-	case ".mp4", ".mov", ".webm", ".mkv":
-		return "video"
-	case ".pdf":
-		return "pdf"
-	default:
-		return uploadKindFileLabel
-	}
+func describeUploadKind(name string, mimeType string) string {
+	return uploads.KindFromMeta(name, mimeType)
 }
 
 func channelFromSessionID(sessionID string) string {

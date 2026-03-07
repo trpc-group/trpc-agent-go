@@ -732,7 +732,13 @@ func (s *Server) persistNormalizedFile(
 		}, "", nil
 	}
 
-	saved, err := s.uploads.Save(ctx, scope, name, data)
+	saved, err := s.uploads.SaveWithMetadata(
+		ctx,
+		scope,
+		name,
+		mimeType,
+		data,
+	)
 	if err != nil {
 		return nil, "", err
 	}

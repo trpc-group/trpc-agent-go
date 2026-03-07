@@ -23,6 +23,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/cron"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/octool"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 )
 
 const (
@@ -466,6 +467,9 @@ func resolveUploadFile(root string, rel string) (string, error) {
 	}
 	if strings.HasPrefix(clean, "..") ||
 		filepath.IsAbs(clean) {
+		return "", fmt.Errorf("invalid upload path")
+	}
+	if uploads.IsMetadataPath(clean) {
 		return "", fmt.Errorf("invalid upload path")
 	}
 
@@ -1315,6 +1319,7 @@ const adminPageHTML = `<!doctype html>
             <th>Session</th>
             <th>Name</th>
             <th>Kind</th>
+            <th>MIME</th>
             <th>Preview</th>
             <th>Relative Path</th>
             <th>Size</th>
@@ -1341,6 +1346,13 @@ const adminPageHTML = `<!doctype html>
               <a href="/api/uploads?kind={{urlquery .Kind}}">
                 {{.Kind}}
               </a>
+            </td>
+            <td>
+              {{if .MimeType}}
+              <code>{{.MimeType}}</code>
+              {{else}}
+              <span class="subtle">-</span>
+              {{end}}
             </td>
             <td>
               <div class="preview-box">

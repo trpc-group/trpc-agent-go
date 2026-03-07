@@ -74,6 +74,7 @@ type uploadView struct {
 	Name         string    `json:"name,omitempty"`
 	RelativePath string    `json:"relative_path,omitempty"`
 	Kind         string    `json:"kind,omitempty"`
+	MimeType     string    `json:"mime_type,omitempty"`
 	SizeBytes    int64     `json:"size_bytes"`
 	ModifiedAt   time.Time `json:"modified_at,omitempty"`
 	OpenURL      string    `json:"open_url,omitempty"`
@@ -198,7 +199,8 @@ func uploadViewsFromList(
 			SessionID:    file.Scope.SessionID,
 			Name:         file.Name,
 			RelativePath: file.RelativePath,
-			Kind:         uploadKindFromName(file.Name),
+			Kind:         uploadKindFromFile(file),
+			MimeType:     file.MimeType,
 			SizeBytes:    file.SizeBytes,
 			ModifiedAt:   file.ModifiedAt,
 			OpenURL:      uploadFileURL(file.RelativePath, false),
@@ -269,7 +271,7 @@ func uploadKindCountsFromList(
 
 	counts := make(map[string]int)
 	for _, file := range listed {
-		kind := uploadKindFromName(file.Name)
+		kind := uploadKindFromFile(file)
 		counts[kind]++
 	}
 
@@ -316,7 +318,7 @@ func filterUploadList(
 		if sessionID != "" && file.Scope.SessionID != sessionID {
 			continue
 		}
-		if kind != "" && uploadKindFromName(file.Name) != kind {
+		if kind != "" && uploadKindFromFile(file) != kind {
 			continue
 		}
 		out = append(out, file)
@@ -329,18 +331,11 @@ func errorsIsNotExist(err error) bool {
 }
 
 func uploadKindFromName(name string) string {
-	switch strings.ToLower(filepath.Ext(strings.TrimSpace(name))) {
-	case ".jpg", ".jpeg", ".png", ".webp", ".gif":
-		return "image"
-	case ".mp3", ".wav", ".ogg", ".oga", ".m4a":
-		return "audio"
-	case ".mp4", ".mov", ".webm", ".mkv":
-		return "video"
-	case ".pdf":
-		return "pdf"
-	default:
-		return "file"
-	}
+	return uploads.KindFromMeta(name, "")
+}
+
+func uploadKindFromFile(file uploads.ListedFile) string {
+	return uploads.KindFromMeta(file.Name, file.MimeType)
 }
 
 func uploadFileURL(rel string, download bool) string {
