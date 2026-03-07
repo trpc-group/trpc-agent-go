@@ -948,6 +948,38 @@ func TestPersistDerivedOutboundFile_AnnotatesExistingPath(t *testing.T) {
 	require.Equal(t, "application/pdf", files[0].MimeType)
 }
 
+func TestResolveTelegramOutboundExistingPath_FalseCases(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	ch := &Channel{state: stateDir}
+
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(
+			agent.WithInvocationSession(
+				session.NewSession("app", "u1", "telegram:dm:u1:s1"),
+			),
+		),
+	)
+
+	got, info, ok := ch.resolveTelegramOutboundExistingPath(
+		ctx,
+		"../missing.pdf",
+	)
+	require.False(t, ok)
+	require.Empty(t, got)
+	require.Nil(t, info)
+
+	got, info, ok = ch.resolveTelegramOutboundExistingPath(
+		context.Background(),
+		"artifact://reports/result.pdf@0",
+	)
+	require.False(t, ok)
+	require.Empty(t, got)
+	require.Nil(t, info)
+}
+
 func mustParseLegacyDMTarget(t *testing.T, raw string) string {
 	t.Helper()
 

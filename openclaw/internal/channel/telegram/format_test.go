@@ -356,3 +356,19 @@ func TestRenderTelegramHTMLText_CoversMoreNodeTypes(t *testing.T) {
 	require.Contains(t, rendered, "---")
 	require.Contains(t, rendered, "&lt;div&gt;x&lt;/div&gt;")
 }
+
+func TestRenderTelegramHTMLText_CoversInlineHTMLAndLineBreaks(t *testing.T) {
+	t.Parallel()
+
+	rendered, ok := renderTelegramHTMLText(
+		"alpha  \nbeta\n\n_setext_\n\nbefore <span>x</span> after",
+	)
+	require.True(t, ok)
+	require.Contains(t, rendered, "alpha\nbeta")
+	require.Contains(t, rendered, "<i>setext</i>")
+	require.Contains(
+		t,
+		rendered,
+		"before &lt;span&gt;x&lt;/span&gt; after",
+	)
+}

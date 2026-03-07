@@ -211,6 +211,47 @@ func TestLoadToolResultImages_FiltersBySizeAndFormat(t *testing.T) {
 	require.Equal(t, []byte("webp"), got[0].Data)
 }
 
+func TestLoadToolResultImages_SkipsMissingAndTrimmedPaths(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	goodPath := writeTestFile(t, root, "good.png", []byte("png"))
+	nestedDir := filepath.Join(root, "nested")
+	require.NoError(t, os.MkdirAll(nestedDir, 0o755))
+	nestedPath := writeTestFile(t, nestedDir, "nested.jpg", []byte("jpg"))
+	writeTestFile(t, root, "notes.txt", []byte("note"))
+
+	got := loadToolResultImages(map[string]any{
+		"media_files": []string{
+			" `" + goodPath + "` ",
+			filepath.Join(root, "missing.png"),
+		},
+		"media_dirs": []string{root},
+	})
+
+	require.Len(t, got, 2)
+	require.Equal(t, "good.png", got[0].Name)
+	require.Equal(t, []byte("png"), got[0].Data)
+	require.Equal(t, "nested.jpg", got[1].Name)
+	require.Equal(t, []byte("jpg"), got[1].Data)
+
+	paths := appendToolResultImagePath(
+		nil,
+		map[string]struct{}{},
+		"relative.png",
+	)
+	require.Nil(t, paths)
+
+	seen := make(map[string]struct{})
+	paths = appendToolResultImagePath(nil, seen, goodPath)
+	paths = appendToolResultImagePath(paths, seen, goodPath)
+	require.Equal(t, []string{goodPath}, paths)
+
+	gotPath, ok := resolveToolResultPath(" `" + nestedPath + "` ")
+	require.True(t, ok)
+	require.Equal(t, nestedPath, gotPath)
+}
+
 func TestCollectToolResultImagePaths_StopsAtLimit(t *testing.T) {
 	t.Parallel()
 

@@ -867,6 +867,51 @@ func TestServiceUploadsJSON_RewritesGeneratedNames(t *testing.T) {
 	require.NotContains(t, rr.Body.String(), "\"name\": \"file_10.mp4\"")
 }
 
+func TestDebugStatusForSession_SkipsBadTraceRefs(t *testing.T) {
+	t.Parallel()
+
+	debugRoot := t.TempDir()
+	now := time.Date(2026, 3, 7, 12, 0, 0, 0, time.UTC)
+	writeDebugTraceFixture(
+		t,
+		debugRoot,
+		"telegram:dm:1",
+		"req-1",
+		now,
+	)
+	writeDebugTraceFixture(
+		t,
+		debugRoot,
+		"telegram:dm:2",
+		"req-2",
+		now.Add(-time.Minute),
+	)
+
+	badRefDir := filepath.Join(
+		debugRoot,
+		debugBySessionDir,
+		"telegram:dm:1",
+		now.Format("20060102"),
+		"bad-ref",
+	)
+	require.NoError(t, os.MkdirAll(badRefDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(badRefDir, debugMetaTraceRefName),
+		[]byte("{"),
+		0o600,
+	))
+
+	status := New(Config{DebugDir: debugRoot}).debugStatusForSession(
+		"telegram:dm:1",
+	)
+	require.True(t, status.Enabled)
+	require.Equal(t, 1, status.SessionCount)
+	require.Equal(t, 1, status.TraceCount)
+	require.Len(t, status.Sessions, 1)
+	require.Equal(t, "telegram:dm:1", status.Sessions[0].SessionID)
+	require.NotEmpty(t, status.Error)
+}
+
 func TestUploadRuntimeHelpers_LimitsAndFilters(t *testing.T) {
 	t.Parallel()
 
