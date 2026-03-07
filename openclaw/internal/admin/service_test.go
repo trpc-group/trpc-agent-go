@@ -260,6 +260,50 @@ func TestServiceSnapshotIncludesCronSummary(t *testing.T) {
 	require.Equal(t, "every 5m", snap.Cron.Jobs[0].Schedule)
 }
 
+func TestServiceSnapshotIncludesUploadSourceCounts(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	store, err := uploads.NewStore(stateDir)
+	require.NoError(t, err)
+
+	scope := uploads.Scope{
+		Channel:   "telegram",
+		UserID:    "u1",
+		SessionID: "telegram:dm:u1:s1",
+	}
+	_, err = store.SaveWithInfo(
+		context.Background(),
+		scope,
+		"voice.ogg",
+		uploads.FileMetadata{
+			MimeType: "audio/ogg",
+			Source:   uploads.SourceInbound,
+		},
+		[]byte("voice"),
+	)
+	require.NoError(t, err)
+	_, err = store.SaveWithInfo(
+		context.Background(),
+		scope,
+		"page-1.pdf",
+		uploads.FileMetadata{
+			MimeType: "application/pdf",
+			Source:   uploads.SourceDerived,
+		},
+		[]byte("%PDF-1.4"),
+	)
+	require.NoError(t, err)
+
+	snap := New(Config{StateDir: stateDir}).Snapshot()
+	require.True(t, snap.Uploads.Enabled)
+	require.Len(t, snap.Uploads.SourceCounts, 2)
+	require.Equal(t, "derived", snap.Uploads.SourceCounts[0].Source)
+	require.Equal(t, 1, snap.Uploads.SourceCounts[0].Count)
+	require.Equal(t, "inbound", snap.Uploads.SourceCounts[1].Source)
+	require.Equal(t, 1, snap.Uploads.SourceCounts[1].Count)
+}
+
 func TestServiceDebugEndpoints(t *testing.T) {
 	t.Parallel()
 

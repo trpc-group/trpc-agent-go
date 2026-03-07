@@ -54,19 +54,25 @@ type execSessionView struct {
 }
 
 type uploadsStatus struct {
-	Enabled    bool                `json:"enabled"`
-	Root       string              `json:"root,omitempty"`
-	FileCount  int                 `json:"file_count"`
-	TotalBytes int64               `json:"total_bytes"`
-	Error      string              `json:"error,omitempty"`
-	KindCounts []uploadKindCount   `json:"kind_counts,omitempty"`
-	Files      []uploadView        `json:"files,omitempty"`
-	Sessions   []uploadSessionView `json:"sessions,omitempty"`
+	Enabled      bool                `json:"enabled"`
+	Root         string              `json:"root,omitempty"`
+	FileCount    int                 `json:"file_count"`
+	TotalBytes   int64               `json:"total_bytes"`
+	Error        string              `json:"error,omitempty"`
+	KindCounts   []uploadKindCount   `json:"kind_counts,omitempty"`
+	SourceCounts []uploadSourceCount `json:"source_counts,omitempty"`
+	Files        []uploadView        `json:"files,omitempty"`
+	Sessions     []uploadSessionView `json:"sessions,omitempty"`
 }
 
 type uploadKindCount struct {
 	Kind  string `json:"kind,omitempty"`
 	Count int    `json:"count"`
+}
+
+type uploadSourceCount struct {
+	Source string `json:"source,omitempty"`
+	Count  int    `json:"count"`
 }
 
 type uploadView struct {
@@ -177,6 +183,7 @@ func (s *Service) uploadsStatusFiltered(
 	)
 	status.Sessions = uploadSessionsFromList(listed, sessionLimit)
 	status.KindCounts = uploadKindCountsFromList(listed)
+	status.SourceCounts = uploadSourceCountsFromList(listed)
 	return status
 }
 
@@ -293,6 +300,38 @@ func uploadKindCountsFromList(
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Count == out[j].Count {
 			return out[i].Kind < out[j].Kind
+		}
+		return out[i].Count > out[j].Count
+	})
+	return out
+}
+
+func uploadSourceCountsFromList(
+	listed []uploads.ListedFile,
+) []uploadSourceCount {
+	if len(listed) == 0 {
+		return nil
+	}
+
+	counts := make(map[string]int)
+	for _, file := range listed {
+		source := strings.TrimSpace(file.Source)
+		if source == "" {
+			source = "unknown"
+		}
+		counts[source]++
+	}
+
+	out := make([]uploadSourceCount, 0, len(counts))
+	for source, count := range counts {
+		out = append(out, uploadSourceCount{
+			Source: source,
+			Count:  count,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count == out[j].Count {
+			return out[i].Source < out[j].Source
 		}
 		return out[i].Count > out[j].Count
 	})

@@ -1166,6 +1166,14 @@ const adminPageHTML = `<!doctype html>
               -
             {{end}}
           </dd>
+          <dt>By Source</dt>
+          <dd>
+            {{if .Snapshot.Uploads.SourceCounts}}
+              {{range $i, $item := .Snapshot.Uploads.SourceCounts}}{{if $i}}, {{end}}{{$item.Source}} {{$item.Count}}{{end}}
+            {{else}}
+              -
+            {{end}}
+          </dd>
           <dt>Status</dt>
           <dd>
             {{if .Snapshot.Uploads.Error}}

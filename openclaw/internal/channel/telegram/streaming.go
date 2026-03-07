@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
@@ -306,6 +307,12 @@ func (c *Channel) callGatewayAndReply(
 	}
 
 	replyFiles := c.collectReplyFiles(rsp.Reply, fromID, sessionID)
+	replyFiles = c.filterAlreadySentReplyFiles(
+		requestID,
+		chatID,
+		messageThreadID,
+		replyFiles,
+	)
 	parts := splitRunes(rsp.Reply, maxReplyRunes)
 	if !hasPreview || mode == streamingOff {
 		c.sendReplyParts(ctx, chatID, messageThreadID, replyTo, parts)
@@ -353,6 +360,30 @@ func (c *Channel) callGatewayAndReply(
 		replyFiles,
 	)
 	return nil
+}
+
+func (c *Channel) filterAlreadySentReplyFiles(
+	requestID string,
+	chatID int64,
+	threadID int,
+	files []channel.OutboundFile,
+) []channel.OutboundFile {
+	if len(files) == 0 || c == nil || c.sentFiles == nil {
+		return files
+	}
+	seen := c.sentFiles.Consume(requestID, chatID, threadID)
+	if len(seen) == 0 {
+		return files
+	}
+	out := make([]channel.OutboundFile, 0, len(files))
+	for _, file := range files {
+		clean := cleanReplyFilePath(file.Path)
+		if _, ok := seen[clean]; ok {
+			continue
+		}
+		out = append(out, file)
+	}
+	return out
 }
 
 func (c *Channel) sendPreviewMessage(

@@ -158,6 +158,74 @@ func TestChannelCollectReplyFiles_DoesNotReuseBareSessionUploadNames(
 	require.NotEmpty(t, saved.Path)
 }
 
+func TestChannelCollectReplyFiles_UsesBareDerivedSessionUploadNames(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	store, err := uploads.NewStore(stateDir)
+	require.NoError(t, err)
+
+	scope := uploads.Scope{
+		Channel:   channelID,
+		UserID:    "u1",
+		SessionID: "telegram:dm:u1:s1",
+	}
+	saved, err := store.SaveWithInfo(
+		context.Background(),
+		scope,
+		"split.pdf",
+		uploads.FileMetadata{
+			MimeType: "application/pdf",
+			Source:   uploads.SourceDerived,
+		},
+		[]byte("%PDF-1.4"),
+	)
+	require.NoError(t, err)
+
+	ch := &Channel{state: stateDir}
+	got := ch.collectReplyFiles(
+		"已生成 `split.pdf`，现在发回给你。",
+		"u1",
+		"telegram:dm:u1:s1",
+	)
+	require.Len(t, got, 1)
+	require.Equal(t, cleanReplyFilePath(saved.Path), got[0].Path)
+}
+
+func TestChannelCollectReplyFiles_UsesBareGeneratedCurrentDirNames(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	root := t.TempDir()
+	framePath := filepath.Join(root, "page2.png")
+	require.NoError(t, os.WriteFile(framePath, []byte("png"), 0o600))
+
+	cwdMu.Lock()
+	oldWD, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(root))
+	defer func() {
+		require.NoError(t, os.Chdir(oldWD))
+		cwdMu.Unlock()
+	}()
+
+	ch := &Channel{state: filepath.Join(root, "state")}
+	got := ch.collectReplyFiles(
+		"已生成 `page2.png`，现在发回。",
+		"u1",
+		"telegram:dm:u1:s1",
+	)
+	require.Len(t, got, 1)
+	require.Equal(
+		t,
+		cleanReplyFilePath(framePath),
+		got[0].Path,
+	)
+}
+
 func TestChannelCollectReplyFiles_UsesExplicitDerivedPaths(t *testing.T) {
 	t.Parallel()
 

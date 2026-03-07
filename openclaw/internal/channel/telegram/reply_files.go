@@ -80,20 +80,46 @@ func (c *Channel) collectReplyFiles(
 	fromID string,
 	sessionID string,
 ) []channel.OutboundFile {
-	candidates := replyFileCandidates(text)
-	if len(candidates) == 0 {
-		return nil
-	}
-
 	roots := autoReplyRoots(c.state, fromID, sessionID)
 	if len(roots) == 0 {
 		return nil
 	}
+	sessionRoot := sessionUploadsRoot(c.state, fromID, sessionID)
+	sessionSources := replySessionSourceMap(
+		c.state,
+		fromID,
+		sessionID,
+	)
 
-	out := make([]channel.OutboundFile, 0, len(candidates))
+	explicit := replyFileCandidates(text)
+	bare := replyBareFilenameCandidates(text)
+
+	out := make([]channel.OutboundFile, 0, len(explicit)+len(bare))
 	seen := make(map[string]struct{})
-	for _, candidate := range candidates {
+	for _, candidate := range explicit {
 		files := resolveReplyCandidateFiles(candidate, roots)
+		for _, file := range files {
+			clean := cleanReplyFilePath(file.Path)
+			if _, ok := seen[clean]; ok {
+				continue
+			}
+			seen[clean] = struct{}{}
+			out = append(out, channel.OutboundFile{
+				Path: clean,
+				Name: file.Name,
+			})
+			if len(out) >= maxAutoReplyFiles {
+				return out
+			}
+		}
+	}
+	for _, candidate := range bare {
+		files := resolveReplyBareCandidateFiles(
+			candidate,
+			roots,
+			sessionRoot,
+			sessionSources,
+		)
 		for _, file := range files {
 			clean := cleanReplyFilePath(file.Path)
 			if _, ok := seen[clean]; ok {
@@ -188,6 +214,48 @@ func replyFileCandidates(text string) []string {
 		appendToken(match[1])
 	}
 	return out
+}
+
+func replyBareFilenameCandidates(text string) []string {
+	seen := make(map[string]struct{})
+	out := make([]string, 0, 4)
+	appendToken := func(token string) {
+		candidate := cleanReplyCandidateToken(token)
+		if !isBareReplyFileCandidate(candidate) {
+			return
+		}
+		if _, ok := seen[candidate]; ok {
+			return
+		}
+		seen[candidate] = struct{}{}
+		out = append(out, candidate)
+	}
+
+	for _, match := range telegramInlineCodeRE.FindAllStringSubmatch(text, -1) {
+		if len(match) < 2 {
+			continue
+		}
+		appendToken(match[1])
+	}
+	for _, field := range strings.Fields(text) {
+		appendToken(field)
+	}
+	return out
+}
+
+func isBareReplyFileCandidate(token string) bool {
+	trimmed := strings.TrimSpace(token)
+	if trimmed == "" {
+		return false
+	}
+	if isExplicitReplyCandidate(trimmed) {
+		return false
+	}
+	if strings.Contains(trimmed, "/") ||
+		strings.Contains(trimmed, string(filepath.Separator)) {
+		return false
+	}
+	return looksLikeReplyFileName(trimmed)
 }
 
 func cleanReplyCandidateToken(token string) string {
@@ -437,6 +505,127 @@ func searchReplyNamedFiles(
 	return out
 }
 
+func resolveReplyBareCandidateFiles(
+	token string,
+	roots []string,
+	sessionRoot string,
+	sessionSources map[string]string,
+) []channel.OutboundFile {
+	name := filepath.Base(strings.TrimSpace(token))
+	if name == "" {
+		return nil
+	}
+
+	out := make([]channel.OutboundFile, 0, 2)
+	seen := make(map[string]struct{})
+
+	for _, root := range roots {
+		if filepath.Clean(root) == filepath.Clean(sessionRoot) {
+			continue
+		}
+		out = appendReplyMatches(
+			out,
+			seen,
+			findReplyNamedFiles(
+				root,
+				name,
+				maxReplySearchDepth,
+				maxAutoReplyFiles-len(out),
+			),
+		)
+		if len(out) >= maxAutoReplyFiles {
+			return out
+		}
+	}
+
+	if strings.TrimSpace(sessionRoot) == "" {
+		return out
+	}
+	for _, match := range findReplyNamedFiles(
+		sessionRoot,
+		name,
+		maxReplySearchDepth,
+		maxAutoReplyFiles-len(out),
+	) {
+		clean := filepath.Clean(match)
+		if _, ok := seen[clean]; ok {
+			continue
+		}
+		if !allowSessionBareReplyPath(clean, sessionSources) {
+			continue
+		}
+		seen[clean] = struct{}{}
+		out = append(out, channel.OutboundFile{Path: clean})
+		if len(out) >= maxAutoReplyFiles {
+			return out
+		}
+	}
+	return out
+}
+
+func appendReplyMatches(
+	out []channel.OutboundFile,
+	seen map[string]struct{},
+	matches []string,
+) []channel.OutboundFile {
+	for _, match := range matches {
+		clean := filepath.Clean(match)
+		if _, ok := seen[clean]; ok {
+			continue
+		}
+		seen[clean] = struct{}{}
+		out = append(out, channel.OutboundFile{Path: clean})
+	}
+	return out
+}
+
+func allowSessionBareReplyPath(
+	path string,
+	sessionSources map[string]string,
+) bool {
+	source, ok := sessionSources[cleanReplyFilePath(path)]
+	if !ok {
+		return false
+	}
+	return strings.TrimSpace(source) == uploads.SourceDerived
+}
+
+func replySessionSourceMap(
+	stateRoot string,
+	fromID string,
+	sessionID string,
+) map[string]string {
+	if strings.TrimSpace(stateRoot) == "" ||
+		strings.TrimSpace(fromID) == "" ||
+		strings.TrimSpace(sessionID) == "" {
+		return nil
+	}
+	store, err := uploads.NewStore(stateRoot)
+	if err != nil {
+		return nil
+	}
+	files, err := store.ListScope(
+		uploads.Scope{
+			Channel:   channelID,
+			UserID:    fromID,
+			SessionID: sessionID,
+		},
+		0,
+	)
+	if err != nil || len(files) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(files))
+	for _, file := range files {
+		path := cleanReplyFilePath(file.Path)
+		if path == "" {
+			continue
+		}
+		out[path] = strings.TrimSpace(file.Source)
+	}
+	return out
+}
+
 func findReplyNamedFiles(
 	root string,
 	name string,
@@ -555,7 +744,18 @@ func cleanReplyFilePath(path string) string {
 	if trimmed == "" {
 		return trimmed
 	}
-	return filepath.Clean(trimmed)
+	if strings.Contains(trimmed, "://") {
+		return trimmed
+	}
+
+	clean := filepath.Clean(trimmed)
+	if abs, err := filepath.Abs(clean); err == nil {
+		clean = filepath.Clean(abs)
+	}
+	if resolved, err := filepath.EvalSymlinks(clean); err == nil {
+		clean = filepath.Clean(resolved)
+	}
+	return clean
 }
 
 func matchesReplyFileName(found string, want string) bool {

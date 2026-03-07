@@ -27,6 +27,10 @@ const (
 	recentUploadContextFooter = "Use OPENCLAW_LAST_UPLOAD_* " +
 		"for the newest file. For multiple recent files in " +
 		"exec_command, use OPENCLAW_RECENT_UPLOADS_JSON. " +
+		"When calling message to send an existing upload back " +
+		"to the user, prefer the stable host_ref from that " +
+		"JSON or OPENCLAW_LAST_UPLOAD_HOST_REF instead of " +
+		"guessing a local path. " +
 		"This list may include both user uploads and bot-" +
 		"generated files previously sent in this chat. " +
 		"When the user says 'the PDF/audio/video I just " +

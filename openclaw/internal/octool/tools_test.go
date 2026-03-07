@@ -664,6 +664,7 @@ func TestUploadEnvFromContext(t *testing.T) {
 
 	env := (&execTool{}).uploadEnvFromContext(ctx)
 	require.Equal(t, videoPath, env[envLastUploadPath])
+	require.Equal(t, uploads.HostRef(videoPath), env[envLastUploadHostRef])
 	require.Equal(t, dir, env[envSessionUploadsDir])
 	require.Equal(t, "movie.mp4", env[envLastUploadName])
 	require.Equal(
@@ -672,15 +673,19 @@ func TestUploadEnvFromContext(t *testing.T) {
 		env[envLastUploadMIME],
 	)
 	require.Equal(t, audioPath, env[envLastAudioPath])
+	require.Equal(t, uploads.HostRef(audioPath), env[envLastAudioHostRef])
 	require.Equal(t, "clip.ogg", env[envLastAudioName])
 	require.Equal(t, "audio/ogg", env[envLastAudioMIME])
 	require.Equal(t, videoPath, env[envLastVideoPath])
+	require.Equal(t, uploads.HostRef(videoPath), env[envLastVideoHostRef])
 	require.Equal(t, "movie.mp4", env[envLastVideoName])
 	require.Equal(t, "video/mp4", env[envLastVideoMIME])
 	require.Equal(t, imagePath, env[envLastImagePath])
+	require.Equal(t, uploads.HostRef(imagePath), env[envLastImageHostRef])
 	require.Equal(t, "frame.png", env[envLastImageName])
 	require.Equal(t, "image/png", env[envLastImageMIME])
 	require.Equal(t, filePath, env[envLastPDFPath])
+	require.Equal(t, uploads.HostRef(filePath), env[envLastPDFHostRef])
 	require.Equal(t, "report.pdf", env[envLastPDFName])
 	require.Equal(
 		t,
@@ -741,7 +746,9 @@ func TestUploadEnvFromContext_UsesUploadStore(t *testing.T) {
 
 	env := (&execTool{uploads: store}).uploadEnvFromContext(ctx)
 	require.Equal(t, derived.Path, env[envLastUploadPath])
+	require.Equal(t, derived.HostRef, env[envLastUploadHostRef])
 	require.Equal(t, derived.Path, env[envLastPDFPath])
+	require.Equal(t, derived.HostRef, env[envLastPDFHostRef])
 	require.Equal(
 		t,
 		filepath.Dir(derived.Path),

@@ -377,6 +377,8 @@ type Channel struct {
 	store tgapi.OffsetStore
 	state string
 
+	sentFiles *sentFileTracker
+
 	dmSessions     *dmSessionStore
 	dmResetPolicy  dmSessionResetPolicy
 	dmBlockCleanup string
@@ -508,6 +510,7 @@ func New(
 		gw:               gw,
 		store:            store,
 		state:            stateDir,
+		sentFiles:        newSentFileTracker(),
 		dmSessions:       dmSessions,
 		dmResetPolicy:    cfg.dmResetPolicy,
 		dmBlockCleanup:   dmBlockCleanup,

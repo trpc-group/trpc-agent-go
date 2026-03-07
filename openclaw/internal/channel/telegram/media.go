@@ -386,7 +386,11 @@ func (c *Channel) appendDocumentPart(
 		file.FilePath,
 		strings.TrimSpace(doc.MimeType),
 	)
-	mimeType := strings.TrimSpace(doc.MimeType)
+	mimeType := normalizeMediaMIME(
+		name,
+		file.FilePath,
+		doc.MimeType,
+	)
 
 	ref := storeBlob(trace, name, data)
 	recordAttachment(trace, telegramAttachmentSummary{
@@ -398,14 +402,62 @@ func (c *Channel) appendDocumentPart(
 		Blob:         ref,
 	})
 
-	parts = append(parts, gwproto.ContentPart{
-		Type: gwproto.PartTypeFile,
-		File: &gwproto.FilePart{
-			Filename: name,
-			Data:     data,
-			Format:   mimeType,
-		},
-	})
+	if imageFormat := inferImageFormat(name, data); imageFormat != "" {
+		parts = append(parts, gwproto.ContentPart{
+			Type: gwproto.PartTypeImage,
+			Image: &gwproto.ImagePart{
+				Data:   data,
+				Format: imageFormat,
+			},
+		})
+		parts = appendStoredFilePart(
+			parts,
+			name,
+			normalizeMediaMIME(
+				name,
+				file.FilePath,
+				mimeTypeForImageFormat(imageFormat),
+			),
+			data,
+		)
+		return parts, nil
+	}
+
+	audioFormat := inferAudioFormat(name, file.FilePath, mimeType)
+	if isSupportedAudioFormat(audioFormat) {
+		parts = append(parts, gwproto.ContentPart{
+			Type: gwproto.PartTypeAudio,
+			Audio: &gwproto.AudioPart{
+				Data:   data,
+				Format: audioFormat,
+			},
+		})
+		parts = appendStoredFilePart(
+			parts,
+			name,
+			normalizeMediaMIME(
+				name,
+				file.FilePath,
+				mimeTypeForAudioFormat(audioFormat),
+			),
+			data,
+		)
+		return parts, nil
+	}
+
+	if isVideoMedia(name, file.FilePath, mimeType) {
+		parts = append(parts, gwproto.ContentPart{
+			Type: gwproto.PartTypeVideo,
+			File: &gwproto.FilePart{
+				Filename: name,
+				Data:     data,
+				Format:   mimeType,
+			},
+		})
+		return parts, nil
+	}
+
+	parts = appendStoredFilePart(parts, name, mimeType, data)
 	return parts, nil
 }
 
@@ -457,7 +509,11 @@ func (c *Channel) appendVideoPart(
 		return nil, mapped
 	}
 
-	mimeType := strings.TrimSpace(video.MimeType)
+	mimeType := normalizeMediaMIME(
+		video.FileName,
+		file.FilePath,
+		video.MimeType,
+	)
 	name := fallbackMediaFilename(
 		video.FileName,
 		file.FilePath,
@@ -584,6 +640,7 @@ func (c *Channel) appendNamedVideoLikePart(
 		fallbackName,
 		mimeType,
 	)
+	mimeType = normalizeMediaMIME(name, file.FilePath, mimeType)
 	ref := storeBlob(trace, name, data)
 	recordAttachment(trace, telegramAttachmentSummary{
 		Kind:         kind,
@@ -651,7 +708,11 @@ func (c *Channel) appendVoicePart(
 		return nil, mapped
 	}
 
-	mimeType := strings.TrimSpace(voice.MimeType)
+	mimeType := normalizeMediaMIME(
+		"",
+		file.FilePath,
+		voice.MimeType,
+	)
 	name := fallbackMediaFilename(
 		"",
 		file.FilePath,
@@ -728,7 +789,12 @@ func (c *Channel) appendAudioPart(
 		return nil, mapped
 	}
 
-	format := inferAudioFormat(audio.FileName, file.FilePath, audio.MimeType)
+	mimeType := normalizeMediaMIME(
+		audio.FileName,
+		file.FilePath,
+		audio.MimeType,
+	)
+	format := inferAudioFormat(audio.FileName, file.FilePath, mimeType)
 	if format != "" {
 		name := defaultAudioName + "." + format
 		ref := storeBlob(trace, name, data)
@@ -737,7 +803,7 @@ func (c *Channel) appendAudioPart(
 			FileID:       fileID,
 			Name:         name,
 			Format:       format,
-			MimeType:     strings.TrimSpace(audio.MimeType),
+			MimeType:     mimeType,
 			ReportedSize: audio.FileSize,
 			Blob:         ref,
 		})
@@ -757,7 +823,6 @@ func (c *Channel) appendAudioPart(
 		return parts, nil
 	}
 
-	mimeType := strings.TrimSpace(audio.MimeType)
 	name := fallbackMediaFilename(
 		audio.FileName,
 		file.FilePath,
@@ -861,6 +926,10 @@ func mimeTypeForAudioFormat(format string) string {
 	default:
 		return ""
 	}
+}
+
+func isSupportedAudioFormat(format string) bool {
+	return strings.TrimSpace(format) != ""
 }
 
 type telegramAttachmentSummary struct {
@@ -1004,6 +1073,9 @@ func looksGeneratedTelegramFileName(name string) bool {
 
 func mediaExtFromPathOrMIME(filePath, mimeType string) string {
 	if ext := path.Ext(strings.TrimSpace(filePath)); ext != "" {
+		if strings.EqualFold(ext, ".oga") {
+			return ".ogg"
+		}
 		return strings.ToLower(ext)
 	}
 	switch strings.ToLower(strings.TrimSpace(mimeType)) {
@@ -1019,6 +1091,38 @@ func mediaExtFromPathOrMIME(filePath, mimeType string) string {
 		return ".gif"
 	default:
 		return ""
+	}
+}
+
+func normalizeMediaMIME(
+	fileName string,
+	filePath string,
+	mimeType string,
+) string {
+	trimmed := strings.TrimSpace(mimeType)
+	if trimmed != "" {
+		return trimmed
+	}
+	if extType := typeFromExtension(path.Ext(fileName)); extType != "" {
+		return extType
+	}
+	return typeFromExtension(path.Ext(filePath))
+}
+
+func isVideoMedia(
+	fileName string,
+	filePath string,
+	mimeType string,
+) bool {
+	normalized := normalizeMediaMIME(fileName, filePath, mimeType)
+	if strings.HasPrefix(normalized, mimePrefixVideo) {
+		return true
+	}
+	switch mediaExtFromPathOrMIME(filePath, normalized) {
+	case ".mp4", ".mov", ".webm", ".mkv":
+		return true
+	default:
+		return false
 	}
 }
 

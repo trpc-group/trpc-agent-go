@@ -39,25 +39,30 @@ const (
 
 	envSessionUploadsDir = "OPENCLAW_SESSION_UPLOADS_DIR"
 	envLastUploadPath    = "OPENCLAW_LAST_UPLOAD_PATH"
+	envLastUploadHostRef = "OPENCLAW_LAST_UPLOAD_HOST_REF"
 	envLastUploadName    = "OPENCLAW_LAST_UPLOAD_NAME"
 	envLastUploadMIME    = "OPENCLAW_LAST_UPLOAD_MIME"
 	envRecentUploadsJSON = "OPENCLAW_RECENT_UPLOADS_JSON"
 
-	envLastImagePath = "OPENCLAW_LAST_IMAGE_PATH"
-	envLastImageName = "OPENCLAW_LAST_IMAGE_NAME"
-	envLastImageMIME = "OPENCLAW_LAST_IMAGE_MIME"
+	envLastImagePath    = "OPENCLAW_LAST_IMAGE_PATH"
+	envLastImageHostRef = "OPENCLAW_LAST_IMAGE_HOST_REF"
+	envLastImageName    = "OPENCLAW_LAST_IMAGE_NAME"
+	envLastImageMIME    = "OPENCLAW_LAST_IMAGE_MIME"
 
-	envLastAudioPath = "OPENCLAW_LAST_AUDIO_PATH"
-	envLastAudioName = "OPENCLAW_LAST_AUDIO_NAME"
-	envLastAudioMIME = "OPENCLAW_LAST_AUDIO_MIME"
+	envLastAudioPath    = "OPENCLAW_LAST_AUDIO_PATH"
+	envLastAudioHostRef = "OPENCLAW_LAST_AUDIO_HOST_REF"
+	envLastAudioName    = "OPENCLAW_LAST_AUDIO_NAME"
+	envLastAudioMIME    = "OPENCLAW_LAST_AUDIO_MIME"
 
-	envLastVideoPath = "OPENCLAW_LAST_VIDEO_PATH"
-	envLastVideoName = "OPENCLAW_LAST_VIDEO_NAME"
-	envLastVideoMIME = "OPENCLAW_LAST_VIDEO_MIME"
+	envLastVideoPath    = "OPENCLAW_LAST_VIDEO_PATH"
+	envLastVideoHostRef = "OPENCLAW_LAST_VIDEO_HOST_REF"
+	envLastVideoName    = "OPENCLAW_LAST_VIDEO_NAME"
+	envLastVideoMIME    = "OPENCLAW_LAST_VIDEO_MIME"
 
-	envLastPDFPath = "OPENCLAW_LAST_PDF_PATH"
-	envLastPDFName = "OPENCLAW_LAST_PDF_NAME"
-	envLastPDFMIME = "OPENCLAW_LAST_PDF_MIME"
+	envLastPDFPath    = "OPENCLAW_LAST_PDF_PATH"
+	envLastPDFHostRef = "OPENCLAW_LAST_PDF_HOST_REF"
+	envLastPDFName    = "OPENCLAW_LAST_PDF_NAME"
+	envLastPDFMIME    = "OPENCLAW_LAST_PDF_MIME"
 
 	recentUploadsLimit = 6
 )
@@ -106,11 +111,13 @@ func (t *execTool) Declaration() *tool.Declaration {
 			"general local shell work. Interactive commands can " +
 			"continue with write_stdin. When a chat upload is " +
 			"available, OPENCLAW_LAST_UPLOAD_PATH, " +
+			"OPENCLAW_LAST_UPLOAD_HOST_REF, " +
 			"OPENCLAW_LAST_UPLOAD_NAME, OPENCLAW_LAST_UPLOAD_MIME, " +
 			"kind-specific OPENCLAW_LAST_*_PATH vars, " +
 			"OPENCLAW_SESSION_UPLOADS_DIR, and " +
 			"OPENCLAW_RECENT_UPLOADS_JSON point to stable " +
-			"attachment metadata and host paths. Write derived " +
+			"attachment metadata, host refs, and host paths. " +
+			"Write derived " +
 			"outputs under OPENCLAW_SESSION_UPLOADS_DIR when " +
 			"you plan to send them back to the user.",
 		InputSchema: &tool.Schema{
@@ -500,6 +507,7 @@ func (t *execTool) uploadEnvFromContext(
 	latest := recent[0]
 
 	env[envLastUploadPath] = latest.Path
+	env[envLastUploadHostRef] = latest.HostRef
 	if _, ok := env[envSessionUploadsDir]; !ok {
 		env[envSessionUploadsDir] = filepath.Dir(latest.Path)
 	}
@@ -517,6 +525,7 @@ func (t *execTool) uploadEnvFromContext(
 		recent,
 		uploadKindImage,
 		envLastImagePath,
+		envLastImageHostRef,
 		envLastImageName,
 		envLastImageMIME,
 	)
@@ -525,6 +534,7 @@ func (t *execTool) uploadEnvFromContext(
 		recent,
 		uploadKindAudio,
 		envLastAudioPath,
+		envLastAudioHostRef,
 		envLastAudioName,
 		envLastAudioMIME,
 	)
@@ -533,6 +543,7 @@ func (t *execTool) uploadEnvFromContext(
 		recent,
 		uploadKindVideo,
 		envLastVideoPath,
+		envLastVideoHostRef,
 		envLastVideoName,
 		envLastVideoMIME,
 	)
@@ -541,6 +552,7 @@ func (t *execTool) uploadEnvFromContext(
 		recent,
 		uploadKindPDF,
 		envLastPDFPath,
+		envLastPDFHostRef,
 		envLastPDFName,
 		envLastPDFMIME,
 	)
@@ -552,6 +564,7 @@ func addLatestKindUploadEnv(
 	recent []execUploadMeta,
 	kind string,
 	pathKey string,
+	hostRefKey string,
 	nameKey string,
 	mimeKey string,
 ) {
@@ -560,6 +573,9 @@ func addLatestKindUploadEnv(
 		return
 	}
 	env[pathKey] = latest.Path
+	if latest.HostRef != "" {
+		env[hostRefKey] = latest.HostRef
+	}
 	if latest.Name != "" {
 		env[nameKey] = latest.Name
 	}

@@ -81,7 +81,8 @@ const (
 		"to send to the current chat or an explicit target. " +
 		"Chat uploads are saved to stable host paths. For host " +
 		"commands, prefer OPENCLAW_LAST_UPLOAD_PATH or " +
-		"OPENCLAW_SESSION_UPLOADS_DIR, OPENCLAW_LAST_UPLOAD_NAME, " +
+		"OPENCLAW_SESSION_UPLOADS_DIR, OPENCLAW_LAST_UPLOAD_HOST_REF, " +
+		"OPENCLAW_LAST_UPLOAD_NAME, " +
 		"OPENCLAW_LAST_UPLOAD_MIME, and " +
 		"OPENCLAW_RECENT_UPLOADS_JSON instead of guessing " +
 		"attachment paths. When a user follows " +
@@ -91,7 +92,10 @@ const (
 		"first: prefer OPENCLAW_LAST_PDF_PATH, " +
 		"OPENCLAW_LAST_AUDIO_PATH, OPENCLAW_LAST_VIDEO_PATH, or " +
 		"OPENCLAW_LAST_IMAGE_PATH when the request clearly targets " +
-		"one of those kinds. If the user replies " +
+		"one of those kinds. Telegram voice notes count as audio, " +
+		"video notes count as video, and documents with image/audio/" +
+		"video MIME types still count as that media kind. If the " +
+		"user replies " +
 		"to an earlier media message, treat that replied media as " +
 		"the default target unless they clearly ask for something " +
 		"else. Do not ask the user to re-upload a file or provide " +
@@ -110,7 +114,8 @@ const (
 		"explicitly ask for the exact filename. Refer to uploads " +
 		"and generated files by user-facing filenames, and use " +
 		"message " +
-		"with local file paths/host refs/artifact refs to send " +
+		"with host refs when possible, or with local file " +
+		"paths/artifact refs when needed, to send " +
 		"PDFs, images, audio, or video back to the current chat " +
 		"when needed instead of asking for chat_id or another " +
 		"upload. Merely mentioning a filename in text does not " +

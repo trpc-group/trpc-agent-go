@@ -714,7 +714,7 @@ func TestAppendVoicePart_UsesFriendlyFallbackName(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Len(t, parts, 1)
-	require.Equal(t, "voice.oga", parts[0].File.Filename)
+	require.Equal(t, "voice.ogg", parts[0].File.Filename)
 }
 
 func TestAppendVoicePart_NilEmptyAndTooLarge(t *testing.T) {
@@ -903,6 +903,73 @@ func TestAppendDocumentPart_Success(t *testing.T) {
 	require.Equal(t, data, parts[0].File.Data)
 }
 
+func TestAppendDocumentPart_BuildsImageAndFileParts(t *testing.T) {
+	t.Parallel()
+
+	data := []byte{
+		0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n',
+	}
+	bot := &stubBot{
+		downloads: map[string]stubDownload{
+			testFileID: {
+				file: tgapi.File{FilePath: "docs/file_13.png"},
+				data: data,
+			},
+		},
+	}
+	ch := &Channel{bot: bot}
+
+	parts, err := ch.appendDocumentPart(
+		context.Background(),
+		nil,
+		&tgapi.Document{
+			FileID:   testFileID,
+			MimeType: mimeImagePNG,
+			FileSize: int64(len(data)),
+		},
+		int64(len(data)),
+	)
+	require.NoError(t, err)
+	require.Len(t, parts, 2)
+	require.Equal(t, gwproto.PartTypeImage, parts[0].Type)
+	require.Equal(t, gwproto.PartTypeFile, parts[1].Type)
+	require.Equal(t, "photo.png", parts[1].File.Filename)
+	require.Equal(t, mimeImagePNG, parts[1].File.Format)
+}
+
+func TestAppendDocumentPart_BuildsAudioAndFileParts(t *testing.T) {
+	t.Parallel()
+
+	data := []byte("mp3data")
+	bot := &stubBot{
+		downloads: map[string]stubDownload{
+			testFileID: {
+				file: tgapi.File{FilePath: "docs/briefing.mp3"},
+				data: data,
+			},
+		},
+	}
+	ch := &Channel{bot: bot}
+
+	parts, err := ch.appendDocumentPart(
+		context.Background(),
+		nil,
+		&tgapi.Document{
+			FileID:   testFileID,
+			MimeType: mimeAudioMP3,
+			FileSize: int64(len(data)),
+		},
+		int64(len(data)),
+	)
+	require.NoError(t, err)
+	require.Len(t, parts, 2)
+	require.Equal(t, gwproto.PartTypeAudio, parts[0].Type)
+	require.Equal(t, audioFormatMP3, parts[0].Audio.Format)
+	require.Equal(t, gwproto.PartTypeFile, parts[1].Type)
+	require.Equal(t, "briefing.mp3", parts[1].File.Filename)
+	require.Equal(t, mimeAudioMP3, parts[1].File.Format)
+}
+
 func TestAppendDocumentPart_UsesFriendlyMediaFallbackName(t *testing.T) {
 	t.Parallel()
 
@@ -929,6 +996,7 @@ func TestAppendDocumentPart_UsesFriendlyMediaFallbackName(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Len(t, parts, 1)
+	require.Equal(t, gwproto.PartTypeVideo, parts[0].Type)
 	require.Equal(t, "video.mp4", parts[0].File.Filename)
 	require.Equal(t, mimeVideoMP4, parts[0].File.Format)
 }

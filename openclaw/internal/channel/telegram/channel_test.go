@@ -1032,7 +1032,7 @@ func TestChannel_HandleMessage_VideoNote_BuildsVideoPart(t *testing.T) {
 	require.Equal(t, gwproto.PartTypeVideo, part.Type)
 	require.NotNil(t, part.File)
 	require.Equal(t, "note.mp4", part.File.Filename)
-	require.Equal(t, "", part.File.Format)
+	require.Equal(t, "video/mp4", part.File.Format)
 	require.Equal(t, videoBytes, part.File.Data)
 }
 

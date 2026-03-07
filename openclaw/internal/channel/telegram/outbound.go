@@ -53,11 +53,13 @@ const (
 	workspaceFileFallback = "workspace-output"
 
 	maxTelegramCaptionRunes = 1024
+	maxTelegramExpandedDir  = 32
 )
 
 type outboundFilePayload struct {
-	Name string
-	Data []byte
+	Name       string
+	Data       []byte
+	SourcePath string
 }
 
 // ResolveTextTargetFromSessionID converts a Telegram session id into the
@@ -129,6 +131,11 @@ func (c *Channel) SendMessage(
 	if err != nil {
 		return err
 	}
+	files, err := c.expandTelegramOutboundFiles(ctx, msg.Files)
+	if err != nil {
+		return err
+	}
+	msg.Files = files
 	scope := outboundUploadScopeFromContext(ctx)
 
 	if len(msg.Files) == 1 {
@@ -170,6 +177,106 @@ func (c *Channel) SendMessage(
 		}
 	}
 	return nil
+}
+
+func (c *Channel) expandTelegramOutboundFiles(
+	ctx context.Context,
+	files []channel.OutboundFile,
+) ([]channel.OutboundFile, error) {
+	if len(files) == 0 {
+		return nil, nil
+	}
+	out := make([]channel.OutboundFile, 0, len(files))
+	for _, file := range files {
+		expanded, err := c.expandTelegramOutboundFile(ctx, file)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, expanded...)
+	}
+	return out, nil
+}
+
+func (c *Channel) expandTelegramOutboundFile(
+	ctx context.Context,
+	file channel.OutboundFile,
+) ([]channel.OutboundFile, error) {
+	raw := strings.TrimSpace(file.Path)
+	if raw == "" || isOpaqueOutboundRef(raw) {
+		return []channel.OutboundFile{file}, nil
+	}
+	path, info, ok := c.resolveTelegramOutboundExistingPath(ctx, raw)
+	if !ok || info == nil || !info.IsDir() {
+		return []channel.OutboundFile{file}, nil
+	}
+	items := listReplyDirectoryFiles(path, maxTelegramExpandedDir)
+	if len(items) == 0 {
+		return nil, fmt.Errorf(
+			"telegram: outbound directory %q is empty",
+			raw,
+		)
+	}
+	out := make([]channel.OutboundFile, 0, len(items))
+	for _, item := range items {
+		out = append(out, channel.OutboundFile{Path: item})
+	}
+	return out, nil
+}
+
+func isOpaqueOutboundRef(raw string) bool {
+	trimmed := strings.TrimSpace(raw)
+	if strings.HasPrefix(trimmed, fileURLPrefix) {
+		return false
+	}
+	if strings.HasPrefix(trimmed, uploads.HostRef("")) {
+		return false
+	}
+	return strings.Contains(trimmed, "://")
+}
+
+func (c *Channel) resolveTelegramOutboundExistingPath(
+	ctx context.Context,
+	raw string,
+) (string, os.FileInfo, bool) {
+	sessionRoot := outboundSessionUploadsRoot(ctx, c.state)
+	if sessionRoot != "" && canJoinReplyRoots(raw) {
+		candidate := filepath.Join(sessionRoot, raw)
+		if abs, info, err := statReplyPath(candidate); err == nil &&
+			pathUnderRoot(abs, filepath.Clean(sessionRoot)) {
+			return abs, info, true
+		}
+	}
+
+	resolved, err := resolveOutboundFilePath(ctx, c.state, raw)
+	if err == nil {
+		if abs, info, statErr := statReplyPath(resolved); statErr == nil {
+			return abs, info, true
+		}
+	}
+	if sessionRoot == "" || !canJoinReplyRoots(raw) {
+		return "", nil, false
+	}
+	candidate := filepath.Join(sessionRoot, raw)
+	abs, info, err := statReplyPath(candidate)
+	if err != nil || !pathUnderRoot(abs, filepath.Clean(sessionRoot)) {
+		return "", nil, false
+	}
+	return abs, info, true
+}
+
+func outboundSessionUploadsRoot(
+	ctx context.Context,
+	stateRoot string,
+) string {
+	scope := outboundUploadScopeFromContext(ctx)
+	if !isValidUploadScope(scope) {
+		return ""
+	}
+	return sessionUploadsRoot(
+		stateRoot,
+		scope.UserID,
+		scope.SessionID,
+	)
 }
 
 func parseTextTarget(target string) (int64, int, error) {
@@ -321,7 +428,8 @@ func (c *Channel) sendFile(
 	mode := detectUploadMode(payload.Name, payload.Data)
 	err = c.sendFileByMode(ctx, mode, params)
 	if err == nil {
-		c.persistDerivedOutboundFile(ctx, payload, scope)
+		savedPath := c.persistDerivedOutboundFile(ctx, payload, scope)
+		c.recordSentFiles(ctx, chatID, threadID, payload, savedPath)
 		return nil
 	}
 	if parseMode == "" || !tgapi.IsEntityParseError(err) {
@@ -334,8 +442,32 @@ func (c *Channel) sendFile(
 	if err := c.sendFileByMode(ctx, mode, fallback); err != nil {
 		return err
 	}
-	c.persistDerivedOutboundFile(ctx, payload, scope)
+	savedPath := c.persistDerivedOutboundFile(ctx, payload, scope)
+	c.recordSentFiles(ctx, chatID, threadID, payload, savedPath)
 	return nil
+}
+
+func (c *Channel) recordSentFiles(
+	ctx context.Context,
+	chatID int64,
+	threadID int,
+	payload outboundFilePayload,
+	savedPath string,
+) {
+	if c == nil || c.sentFiles == nil {
+		return
+	}
+	requestID := currentRequestIDFromContext(ctx)
+	if strings.TrimSpace(requestID) == "" {
+		return
+	}
+	c.sentFiles.Record(
+		requestID,
+		chatID,
+		threadID,
+		payload.SourcePath,
+		savedPath,
+	)
 }
 
 func (c *Channel) sendFileByMode(
@@ -363,12 +495,12 @@ func (c *Channel) persistDerivedOutboundFile(
 	ctx context.Context,
 	payload outboundFilePayload,
 	scope uploads.Scope,
-) {
+) string {
 	if c == nil || strings.TrimSpace(c.state) == "" {
-		return
+		return ""
 	}
 	if !isValidUploadScope(scope) {
-		return
+		return ""
 	}
 	store, err := uploads.NewStore(c.state)
 	if err != nil {
@@ -377,9 +509,9 @@ func (c *Channel) persistDerivedOutboundFile(
 			"telegram: create uploads store for outbound file: %v",
 			err,
 		)
-		return
+		return ""
 	}
-	_, err = store.SaveWithInfo(
+	saved, err := store.SaveWithInfo(
 		ctx,
 		scope,
 		payload.Name,
@@ -396,7 +528,9 @@ func (c *Channel) persistDerivedOutboundFile(
 			payload.Name,
 			err,
 		)
+		return ""
 	}
+	return strings.TrimSpace(saved.Path)
 }
 
 func outboundUploadScopeFromContext(
@@ -564,8 +698,9 @@ func resolveHostOutboundFile(
 		name = filepath.Base(resolved)
 	}
 	return outboundFilePayload{
-		Name: name,
-		Data: data,
+		Name:       name,
+		Data:       data,
+		SourcePath: resolved,
 	}, nil
 }
 

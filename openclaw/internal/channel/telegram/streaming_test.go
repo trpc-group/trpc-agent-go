@@ -22,9 +22,12 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwclient"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 func TestParseStreamingMode_DefaultAndInvalid(t *testing.T) {
@@ -397,7 +400,7 @@ func TestChannel_CallGatewayAndReply_AutoSendsDerivedFiles(t *testing.T) {
 	bot.mu.Unlock()
 }
 
-func TestChannel_CallGatewayAndReply_IgnoresBareOutputFilenames(
+func TestChannel_CallGatewayAndReply_AutoSendsBareOutputFilenames(
 	t *testing.T,
 ) {
 	t.Parallel()
@@ -455,11 +458,95 @@ func TestChannel_CallGatewayAndReply_IgnoresBareOutputFilenames(
 	require.Len(t, bot.sent, 1)
 	require.Contains(t, bot.sent[0].Text, "<code>frame-1.png</code>")
 	require.Contains(t, bot.sent[0].Text, "<code>frame-2.png</code>")
-	require.Empty(t, bot.photos)
+	require.Len(t, bot.photos, 2)
+	require.Equal(t, "frame-1.png", bot.photos[0].FileName)
+	require.Equal(t, "frame-2.png", bot.photos[1].FileName)
 	require.Empty(t, bot.docs)
 	require.Empty(t, bot.audios)
 	require.Empty(t, bot.voices)
 	require.Empty(t, bot.videos)
+	bot.mu.Unlock()
+}
+
+func TestChannel_CallGatewayAndReply_SkipsFilesAlreadySentByTool(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cwdMu.Lock()
+	oldWD, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(root))
+	defer func() {
+		require.NoError(t, os.Chdir(oldWD))
+		cwdMu.Unlock()
+	}()
+
+	frameA := filepath.Join(root, "frame-1.png")
+	frameB := filepath.Join(root, "frame-2.png")
+	require.NoError(
+		t,
+		os.WriteFile(frameA, []byte("png-a"), 0o600),
+	)
+	require.NoError(
+		t,
+		os.WriteFile(frameB, []byte("png-b"), 0o600),
+	)
+
+	bot := &stubBot{}
+	ch := &Channel{
+		bot:           bot,
+		gw:            &stubGateway{},
+		state:         filepath.Join(root, "state"),
+		streamingMode: streamingOff,
+		sentFiles:     newSentFileTracker(),
+	}
+
+	sessionID := buildLaneKey("100", "")
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(
+			session.NewSession("app", "100", sessionID),
+		),
+		agent.WithInvocationRunOptions(
+			agent.RunOptions{RequestID: "rid"},
+		),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	err = ch.SendMessage(
+		ctx,
+		"1",
+		channel.OutboundMessage{
+			Files: []channel.OutboundFile{
+				{Path: frameA},
+				{Path: frameB},
+			},
+		},
+	)
+	require.NoError(t, err)
+
+	ch.gw = &stubGateway{
+		rsp: gwclient.MessageResponse{
+			StatusCode: http.StatusOK,
+			Reply:      "已发出 `frame-1.png` 和 `frame-2.png`。",
+		},
+	}
+	err = ch.callGatewayAndReply(
+		context.Background(),
+		1,
+		0,
+		2,
+		"100",
+		"",
+		sessionID,
+		"rid",
+		tgapi.Message{MessageID: 2, Text: "hi"},
+	)
+	require.NoError(t, err)
+
+	bot.mu.Lock()
+	require.Len(t, bot.photos, 2)
 	bot.mu.Unlock()
 }
 

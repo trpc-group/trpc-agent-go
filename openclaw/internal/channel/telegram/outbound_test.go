@@ -240,6 +240,56 @@ func TestChannel_SendMessage_PersistsDerivedFile(t *testing.T) {
 	require.Equal(t, uploads.SourceDerived, files[0].Source)
 }
 
+func TestChannel_SendMessage_ExpandsSessionUploadDirectory(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	sessionID := "telegram:dm:100:session-abc"
+	scope := uploads.Scope{
+		Channel:   channelID,
+		UserID:    "100",
+		SessionID: sessionID,
+	}
+	store, err := uploads.NewStore(stateDir)
+	require.NoError(t, err)
+
+	root := filepath.Join(store.ScopeDir(scope), "out_pdf_split")
+	require.NoError(t, os.MkdirAll(root, 0o755))
+	fileA := filepath.Join(root, "page-1.pdf")
+	fileB := filepath.Join(root, "page-2.pdf")
+	require.NoError(t, os.WriteFile(fileA, []byte("a"), 0o600))
+	require.NoError(t, os.WriteFile(fileB, []byte("b"), 0o600))
+
+	bot := &stubBot{}
+	ch := &Channel{
+		bot:       bot,
+		state:     stateDir,
+		sentFiles: newSentFileTracker(),
+	}
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(
+			agent.WithInvocationSession(
+				session.NewSession("app", "100", sessionID),
+			),
+		),
+	)
+
+	err = ch.SendMessage(
+		ctx,
+		"telegram:dm:100:session-abc",
+		channel.OutboundMessage{
+			Files: []channel.OutboundFile{
+				{Path: "out_pdf_split"},
+			},
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, bot.docs, 2)
+	require.Equal(t, "page-1.pdf", bot.docs[0].FileName)
+	require.Equal(t, "page-2.pdf", bot.docs[1].FileName)
+}
+
 func TestChannel_SendMessage_FileCaptionFallsBackToPlain(t *testing.T) {
 	t.Parallel()
 
