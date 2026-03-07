@@ -34,7 +34,6 @@ const (
 	contentTypeText = "text/plain"
 
 	mimeAudioMP3 = "audio/mpeg"
-	mimeAudioWAV = "audio/wav"
 	mimeAudioOGG = "audio/ogg"
 
 	debugEventsFileName = "events.jsonl"
@@ -247,10 +246,15 @@ func TestAppendPhotoPart_ContentTypeInference(t *testing.T) {
 		int64(len(pngHeader)),
 	)
 	require.NoError(t, err)
-	require.Len(t, parts, 1)
+	require.Len(t, parts, 2)
 	require.Equal(t, gwproto.PartTypeImage, parts[0].Type)
 	require.NotNil(t, parts[0].Image)
 	require.Equal(t, "png", parts[0].Image.Format)
+	require.Equal(t, gwproto.PartTypeFile, parts[1].Type)
+	require.NotNil(t, parts[1].File)
+	require.Equal(t, defaultPhotoName+".png", parts[1].File.Filename)
+	require.Equal(t, mimeImagePNG, parts[1].File.Format)
+	require.Equal(t, pngHeader, parts[1].File.Data)
 }
 
 func TestAppendPhotoPart_EmptyAndUnsupported_NoOpOrError(t *testing.T) {
@@ -864,11 +868,16 @@ func TestAppendAudioPart_MP3BuildsAudioPartAndRecordsTrace(t *testing.T) {
 		int64(len(data)),
 	)
 	require.NoError(t, err)
-	require.Len(t, parts, 1)
+	require.Len(t, parts, 2)
 	require.Equal(t, gwproto.PartTypeAudio, parts[0].Type)
 	require.NotNil(t, parts[0].Audio)
 	require.Equal(t, audioFormatMP3, parts[0].Audio.Format)
 	require.Equal(t, data, parts[0].Audio.Data)
+	require.Equal(t, gwproto.PartTypeFile, parts[1].Type)
+	require.NotNil(t, parts[1].File)
+	require.Equal(t, defaultAudioName+".mp3", parts[1].File.Filename)
+	require.Equal(t, mimeAudioMP3, parts[1].File.Format)
+	require.Equal(t, data, parts[1].File.Data)
 
 	require.NoError(t, trace.Close(debugrecorder.TraceEnd{Status: "ok"}))
 

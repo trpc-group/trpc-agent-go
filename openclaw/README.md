@@ -511,7 +511,7 @@ Open a chat with your bot (or add it into a group) and send:
 Inbound attachments are downloaded from Telegram and forwarded to the gateway
 as multimodal `content_parts`. The uploaded files are also persisted under the
 OpenClaw state directory so later turns in the same chat can keep working on
-the same PDF, audio, or video without asking the user to upload again.
+the same PDF, image, audio, or video without asking the user to upload again.
 
 By default, DMs are **fail-closed** and require pairing.
 

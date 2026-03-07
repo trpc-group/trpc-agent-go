@@ -6639,3 +6639,69 @@ func TestFileToParams_FileIDWins(t *testing.T) {
 	require.False(t, p.FileData.Valid())
 	require.False(t, p.Filename.Valid())
 }
+
+func TestFileToParams_InternalRefUsesData(t *testing.T) {
+	f := &model.File{
+		Name:     "notes.txt",
+		Data:     []byte("hello"),
+		MimeType: "text/plain",
+		FileID:   "host:///tmp/notes.txt",
+	}
+	p, ok := fileToParamsOK(f)
+	require.True(t, ok)
+	require.False(t, p.FileID.Valid())
+	require.True(t, p.FileData.Valid())
+	require.Equal(t, "notes.txt", p.Filename.Value)
+}
+
+func TestFileToParams_InternalRefWithoutDataSkips(t *testing.T) {
+	f := &model.File{
+		Name:   "notes.txt",
+		FileID: "host:///tmp/notes.txt",
+	}
+	_, ok := fileToParamsOK(f)
+	require.False(t, ok)
+}
+
+func TestAppendFileID_SkipsInternalRefs(t *testing.T) {
+	fields := appendFileID(nil, model.ContentPart{
+		Type: model.ContentTypeFile,
+		File: &model.File{
+			FileID: "host:///tmp/notes.txt",
+		},
+	})
+	require.Nil(t, fields)
+}
+
+func TestUserFileHint_UsesSafeNameForInternalRefs(t *testing.T) {
+	m := &Model{}
+	msg := model.Message{
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					FileID: "host:///tmp/private/notes.txt",
+				},
+			},
+		},
+	}
+	got := m.userFileHint(msg)
+	require.Contains(t, got, "notes.txt")
+	require.NotContains(t, got, "host://")
+	require.NotContains(t, got, "/tmp/private")
+}
+
+func TestAppendUserContentParts_SkipsInternalFiles(t *testing.T) {
+	m := &Model{}
+	dst := []openai.ChatCompletionContentPartUnionParam{}
+	fields := m.appendUserContentParts(&dst, []model.ContentPart{
+		{
+			Type: model.ContentTypeFile,
+			File: &model.File{
+				FileID: "host:///tmp/notes.txt",
+			},
+		},
+	})
+	require.Nil(t, fields)
+	require.Empty(t, dst)
+}

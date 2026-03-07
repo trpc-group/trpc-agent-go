@@ -653,13 +653,20 @@ func TestChannel_HandleMessage_PhotoCaption_BuildsImagePart(t *testing.T) {
 	gw.mu.Unlock()
 
 	require.Equal(t, "hi", req.Text)
-	require.Len(t, req.ContentParts, 1)
+	require.Len(t, req.ContentParts, 2)
 
 	part := req.ContentParts[0]
 	require.Equal(t, gwproto.PartTypeImage, part.Type)
 	require.NotNil(t, part.Image)
 	require.Equal(t, photoBytes, part.Image.Data)
 	require.Equal(t, "jpeg", part.Image.Format)
+
+	filePart := req.ContentParts[1]
+	require.Equal(t, gwproto.PartTypeFile, filePart.Type)
+	require.NotNil(t, filePart.File)
+	require.Equal(t, defaultPhotoName+".jpeg", filePart.File.Filename)
+	require.Equal(t, mimeImageJPEG, filePart.File.Format)
+	require.Equal(t, photoBytes, filePart.File.Data)
 }
 
 func TestChannel_HandleMessage_Document_BuildsFilePart(t *testing.T) {
@@ -769,12 +776,19 @@ func TestChannel_HandleMessage_AudioMP3_BuildsAudioPart(t *testing.T) {
 	req := gw.reqs[0]
 	gw.mu.Unlock()
 
-	require.Len(t, req.ContentParts, 1)
+	require.Len(t, req.ContentParts, 2)
 	part := req.ContentParts[0]
 	require.Equal(t, gwproto.PartTypeAudio, part.Type)
 	require.NotNil(t, part.Audio)
 	require.Equal(t, audioBytes, part.Audio.Data)
 	require.Equal(t, "mp3", part.Audio.Format)
+
+	filePart := req.ContentParts[1]
+	require.Equal(t, gwproto.PartTypeFile, filePart.Type)
+	require.NotNil(t, filePart.File)
+	require.Equal(t, defaultAudioName+".mp3", filePart.File.Filename)
+	require.Equal(t, mimeAudioMP3, filePart.File.Format)
+	require.Equal(t, audioBytes, filePart.File.Data)
 }
 
 func TestChannel_HandleMessage_DMPolicyAllowlist_NoAllowUsers(t *testing.T) {

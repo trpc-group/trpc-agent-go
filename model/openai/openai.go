@@ -31,6 +31,7 @@ import (
 	"github.com/openai/openai-go/packages/respjson"
 	"github.com/openai/openai-go/packages/ssestream"
 	"github.com/openai/openai-go/shared"
+	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
@@ -715,7 +716,8 @@ func (m *Model) userFileHint(msg model.Message) string {
 		return ""
 	}
 	if !m.omitFileContentParts &&
-		!m.variantConfig.skipFileTypeInContent {
+		!m.variantConfig.skipFileTypeInContent &&
+		!onlyInternalFileContentParts(msg.ContentParts) {
 		return ""
 	}
 	if !onlyFileContentParts(msg.ContentParts) {
@@ -730,6 +732,21 @@ func onlyFileContentParts(parts []model.ContentPart) bool {
 	}
 	for _, part := range parts {
 		if part.Type != model.ContentTypeFile {
+			return false
+		}
+	}
+	return true
+}
+
+func onlyInternalFileContentParts(parts []model.ContentPart) bool {
+	if len(parts) == 0 {
+		return false
+	}
+	for _, part := range parts {
+		if part.Type != model.ContentTypeFile || part.File == nil {
+			return false
+		}
+		if !isInternalOnlyFile(part.File) {
 			return false
 		}
 	}
@@ -755,6 +772,11 @@ func (m *Model) appendUserContentParts(
 			continue
 		}
 		if part.Type == model.ContentTypeFile &&
+			part.File != nil &&
+			isInternalOnlyFile(part.File) {
+			continue
+		}
+		if part.Type == model.ContentTypeFile &&
 			m.variantConfig.skipFileTypeInContent {
 			extraFields = appendFileID(extraFields, part)
 			continue
@@ -772,7 +794,7 @@ func appendFileID(
 	extraFields map[string]any,
 	part model.ContentPart,
 ) map[string]any {
-	if part.File == nil {
+	if part.File == nil || !isProviderFileID(part.File.FileID) {
 		return extraFields
 	}
 	const fileIDsKey = "file_ids"
@@ -826,10 +848,7 @@ func fileHintForContentParts(parts []model.ContentPart) string {
 		if part.Type != model.ContentTypeFile || part.File == nil {
 			continue
 		}
-		name := strings.TrimSpace(part.File.Name)
-		if name == "" {
-			name = strings.TrimSpace(part.File.FileID)
-		}
+		name := safeFileHintName(part.File)
 		if name == "" {
 			name = fileHintDefaultName
 		}
@@ -913,9 +932,13 @@ func (m *Model) convertContentPart(part model.ContentPart) *openai.ChatCompletio
 		}
 	case model.ContentTypeFile:
 		if part.File != nil {
+			params, ok := fileToParamsOK(part.File)
+			if !ok {
+				return nil
+			}
 			return &openai.ChatCompletionContentPartUnionParam{
 				OfFile: &openai.ChatCompletionContentPartFileParam{
-					File: fileToParams(part.File),
+					File: params,
 				},
 			}
 		}
@@ -930,11 +953,52 @@ func imageToURLOrBase64(image *model.Image) string {
 	return "data:image/" + image.Format + ";base64," + base64.StdEncoding.EncodeToString(image.Data)
 }
 
-func fileToParams(file *model.File) openai.ChatCompletionContentPartFileFileParam {
-	if file.FileID != "" {
+func isProviderFileID(fileID string) bool {
+	id := strings.TrimSpace(fileID)
+	if id == "" {
+		return false
+	}
+	return !fileref.IsInternalFileRef(id)
+}
+
+func isInternalOnlyFile(file *model.File) bool {
+	if file == nil {
+		return false
+	}
+	return fileref.IsInternalFileRef(file.FileID) &&
+		len(file.Data) == 0
+}
+
+func safeFileHintName(file *model.File) string {
+	if file == nil {
+		return ""
+	}
+	name := strings.TrimSpace(file.Name)
+	if name != "" {
+		return name
+	}
+	if display := fileref.DisplayName(file.FileID); display != "" {
+		return display
+	}
+	if isProviderFileID(file.FileID) {
+		return strings.TrimSpace(file.FileID)
+	}
+	return ""
+}
+
+func fileToParamsOK(
+	file *model.File,
+) (openai.ChatCompletionContentPartFileFileParam, bool) {
+	if file == nil {
+		return openai.ChatCompletionContentPartFileFileParam{}, false
+	}
+	if isProviderFileID(file.FileID) {
 		return openai.ChatCompletionContentPartFileFileParam{
 			FileID: openai.String(file.FileID),
-		}
+		}, true
+	}
+	if len(file.Data) == 0 {
+		return openai.ChatCompletionContentPartFileFileParam{}, false
 	}
 	const (
 		fileDataPrefix = "data:"
@@ -946,7 +1010,12 @@ func fileToParams(file *model.File) openai.ChatCompletionContentPartFileFilePara
 	return openai.ChatCompletionContentPartFileFileParam{
 		FileData: openai.String(fileData),
 		Filename: openai.String(file.Name),
-	}
+	}, true
+}
+
+func fileToParams(file *model.File) openai.ChatCompletionContentPartFileFileParam {
+	params, _ := fileToParamsOK(file)
+	return params
 }
 
 func audioToBase64(audio *model.Audio) string {

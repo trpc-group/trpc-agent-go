@@ -39,6 +39,13 @@ const (
 
 	audioFormatWAV = "wav"
 	audioFormatMP3 = "mp3"
+
+	mimeImageJPEG = "image/jpeg"
+	mimeImagePNG  = "image/png"
+	mimeImageWEBP = "image/webp"
+
+	mimeAudioMPEG = "audio/mpeg"
+	mimeAudioWAV  = "audio/wav"
 )
 
 const (
@@ -231,6 +238,12 @@ func (c *Channel) appendPhotoPart(
 			Format: format,
 		},
 	})
+	parts = appendStoredFilePart(
+		parts,
+		name,
+		mimeTypeForImageFormat(format),
+		data,
+	)
 	return parts, nil
 }
 
@@ -630,6 +643,12 @@ func (c *Channel) appendAudioPart(
 				Format: format,
 			},
 		})
+		parts = appendStoredFilePart(
+			parts,
+			name,
+			mimeTypeForAudioFormat(format),
+			data,
+		)
 		return parts, nil
 	}
 
@@ -667,6 +686,48 @@ func mapDownloadError(err error) error {
 	return &userError{
 		userMessage: downloadFailedMessage,
 		err:         err,
+	}
+}
+
+func appendStoredFilePart(
+	parts []gwproto.ContentPart,
+	name string,
+	mimeType string,
+	data []byte,
+) []gwproto.ContentPart {
+	return append(parts, gwproto.ContentPart{
+		Type: gwproto.PartTypeFile,
+		File: &gwproto.FilePart{
+			Filename: name,
+			Data:     data,
+			Format:   strings.TrimSpace(mimeType),
+		},
+	})
+}
+
+func mimeTypeForImageFormat(format string) string {
+	switch strings.TrimSpace(strings.ToLower(format)) {
+	case "jpeg", "jpg":
+		return mimeImageJPEG
+	case "png":
+		return mimeImagePNG
+	case "gif":
+		return mimeImageGIF
+	case "webp":
+		return mimeImageWEBP
+	default:
+		return ""
+	}
+}
+
+func mimeTypeForAudioFormat(format string) string {
+	switch strings.TrimSpace(strings.ToLower(format)) {
+	case audioFormatMP3:
+		return mimeAudioMPEG
+	case audioFormatWAV:
+		return mimeAudioWAV
+	default:
+		return ""
 	}
 }
 
