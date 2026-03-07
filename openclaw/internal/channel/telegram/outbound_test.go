@@ -186,6 +186,60 @@ func TestChannel_SendMessage_UsesSingleFileCaption(t *testing.T) {
 	)
 }
 
+func TestChannel_SendMessage_PersistsDerivedFile(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	root := t.TempDir()
+	path := filepath.Join(root, "report.pdf")
+	require.NoError(t, os.WriteFile(path, []byte("%PDF-1.4"), 0o600))
+
+	bot := &stubBot{}
+	ch := &Channel{
+		bot:   bot,
+		state: stateDir,
+	}
+
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(
+			agent.WithInvocationSession(
+				session.NewSession(
+					"app",
+					"100",
+					"telegram:dm:100:session-abc",
+				),
+			),
+		),
+	)
+
+	err := ch.SendMessage(
+		ctx,
+		"telegram:dm:100:session-abc",
+		channel.OutboundMessage{
+			Text:  "done",
+			Files: []channel.OutboundFile{{Path: path}},
+		},
+	)
+	require.NoError(t, err)
+
+	store, err := uploads.NewStore(stateDir)
+	require.NoError(t, err)
+	files, err := store.ListScope(
+		uploads.Scope{
+			Channel:   channelID,
+			UserID:    "100",
+			SessionID: "telegram:dm:100:session-abc",
+		},
+		8,
+	)
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	require.Equal(t, "report.pdf", files[0].Name)
+	require.Equal(t, "application/pdf", files[0].MimeType)
+	require.Equal(t, uploads.SourceDerived, files[0].Source)
+}
+
 func TestChannel_SendMessage_FileCaptionFallsBackToPlain(t *testing.T) {
 	t.Parallel()
 

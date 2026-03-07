@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
 	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
@@ -129,6 +130,7 @@ func (c *Channel) SendMessage(
 	if err != nil {
 		return err
 	}
+	scope := outboundUploadScopeFromContext(ctx)
 
 	if len(msg.Files) == 1 {
 		if caption, plain, parseMode := telegramCaptionParts(
@@ -143,6 +145,7 @@ func (c *Channel) SendMessage(
 				caption,
 				plain,
 				parseMode,
+				scope,
 			)
 		}
 	}
@@ -162,6 +165,7 @@ func (c *Channel) SendMessage(
 			"",
 			"",
 			"",
+			scope,
 		); err != nil {
 			return err
 		}
@@ -299,6 +303,7 @@ func (c *Channel) sendFile(
 	caption string,
 	plainCaption string,
 	parseMode string,
+	scope uploads.Scope,
 ) error {
 	payload, err := resolveOutboundFile(ctx, c.state, file)
 	if err != nil {
@@ -316,14 +321,22 @@ func (c *Channel) sendFile(
 
 	mode := detectUploadMode(payload.Name, payload.Data)
 	err = c.sendFileByMode(ctx, mode, params)
-	if err == nil || parseMode == "" || !tgapi.IsEntityParseError(err) {
+	if err == nil {
+		c.persistDerivedOutboundFile(ctx, payload, scope)
+		return nil
+	}
+	if parseMode == "" || !tgapi.IsEntityParseError(err) {
 		return err
 	}
 
 	fallback := params
 	fallback.Caption = plainCaption
 	fallback.ParseMode = ""
-	return c.sendFileByMode(ctx, mode, fallback)
+	if err := c.sendFileByMode(ctx, mode, fallback); err != nil {
+		return err
+	}
+	c.persistDerivedOutboundFile(ctx, payload, scope)
+	return nil
 }
 
 func (c *Channel) sendFileByMode(
@@ -345,6 +358,66 @@ func (c *Channel) sendFileByMode(
 		_, err = c.bot.SendDocument(ctx, params)
 	}
 	return err
+}
+
+func (c *Channel) persistDerivedOutboundFile(
+	ctx context.Context,
+	payload outboundFilePayload,
+	scope uploads.Scope,
+) {
+	if c == nil || strings.TrimSpace(c.state) == "" {
+		return
+	}
+	if !isValidUploadScope(scope) {
+		return
+	}
+	store, err := uploads.NewStore(c.state)
+	if err != nil {
+		log.WarnfContext(
+			ctx,
+			"telegram: create uploads store for outbound file: %v",
+			err,
+		)
+		return
+	}
+	_, err = store.SaveWithInfo(
+		ctx,
+		scope,
+		payload.Name,
+		uploads.FileMetadata{
+			MimeType: detectMediaType(payload.Name, payload.Data),
+			Source:   uploads.SourceDerived,
+		},
+		payload.Data,
+	)
+	if err != nil {
+		log.WarnfContext(
+			ctx,
+			"telegram: persist outbound file %q: %v",
+			payload.Name,
+			err,
+		)
+	}
+}
+
+func outboundUploadScopeFromContext(
+	ctx context.Context,
+) uploads.Scope {
+	inv, ok := agent.InvocationFromContext(ctx)
+	if !ok || inv == nil || inv.Session == nil {
+		return uploads.Scope{}
+	}
+	return uploads.Scope{
+		Channel:   channelID,
+		UserID:    strings.TrimSpace(inv.Session.UserID),
+		SessionID: strings.TrimSpace(inv.Session.ID),
+	}
+}
+
+func isValidUploadScope(scope uploads.Scope) bool {
+	return strings.TrimSpace(scope.Channel) != "" &&
+		strings.TrimSpace(scope.UserID) != "" &&
+		strings.TrimSpace(scope.SessionID) != ""
 }
 
 func telegramCaptionParts(

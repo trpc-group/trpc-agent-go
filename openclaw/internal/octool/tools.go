@@ -76,15 +76,27 @@ type execUploadMeta struct {
 	HostRef  string `json:"host_ref,omitempty"`
 	MimeType string `json:"mime_type,omitempty"`
 	Kind     string `json:"kind,omitempty"`
+	Source   string `json:"source,omitempty"`
 }
 
 type execTool struct {
-	mgr *Manager
+	mgr     *Manager
+	uploads *uploads.Store
 }
 
 // NewExecCommandTool creates the canonical host command tool.
-func NewExecCommandTool(mgr *Manager) tool.Tool {
-	return &execTool{mgr: mgr}
+func NewExecCommandTool(
+	mgr *Manager,
+	stores ...*uploads.Store,
+) tool.Tool {
+	var store *uploads.Store
+	if len(stores) > 0 {
+		store = stores[0]
+	}
+	return &execTool{
+		mgr:     mgr,
+		uploads: store,
+	}
 }
 
 func (t *execTool) Declaration() *tool.Declaration {
@@ -191,7 +203,7 @@ func (t *execTool) Call(ctx context.Context, args []byte) (any, error) {
 	yield := firstInt(in.YieldTimeMS, in.YieldMs)
 	timeout := firstInt(in.TimeoutSec, in.TimeoutSecOld)
 	tty := firstBool(in.TTY, in.PTY)
-	env := mergeExecEnv(in.Env, uploadEnvFromContext(ctx))
+	env := mergeExecEnv(in.Env, t.uploadEnvFromContext(ctx))
 
 	return t.mgr.Exec(ctx, execParams{
 		Command:    in.Command,
@@ -457,21 +469,39 @@ func mergeExecEnv(
 	return out
 }
 
-func uploadEnvFromContext(ctx context.Context) map[string]string {
+func (t *execTool) uploadEnvFromContext(
+	ctx context.Context,
+) map[string]string {
 	inv, ok := agent.InvocationFromContext(ctx)
 	if !ok || inv == nil || inv.Session == nil {
 		return nil
 	}
 
-	recent := recentUploadsFromInvocation(inv, recentUploadsLimit)
+	env := make(map[string]string)
+	if scope, ok := uploadScopeFromInvocation(inv); ok &&
+		t.uploads != nil {
+		dir := strings.TrimSpace(t.uploads.ScopeDir(scope))
+		if dir != "" {
+			env[envSessionUploadsDir] = dir
+		}
+	}
+
+	recent := recentUploadsFromInvocation(
+		inv,
+		t.uploads,
+		recentUploadsLimit,
+	)
 	if len(recent) == 0 {
-		return nil
+		if len(env) == 0 {
+			return nil
+		}
+		return env
 	}
 	latest := recent[0]
 
-	env := map[string]string{
-		envLastUploadPath:    latest.Path,
-		envSessionUploadsDir: filepath.Dir(latest.Path),
+	env[envLastUploadPath] = latest.Path
+	if _, ok := env[envSessionUploadsDir]; !ok {
+		env[envSessionUploadsDir] = filepath.Dir(latest.Path)
 	}
 	if latest.Name != "" {
 		env[envLastUploadName] = latest.Name
@@ -552,6 +582,7 @@ func latestUploadOfKind(
 
 func recentUploadsFromInvocation(
 	inv *agent.Invocation,
+	store *uploads.Store,
 	limit int,
 ) []execUploadMeta {
 	if inv == nil {
@@ -594,6 +625,13 @@ func recentUploadsFromInvocation(
 			)
 		}
 	}
+	out = appendRecentUploadsFromStore(
+		out,
+		seen,
+		store,
+		inv,
+		limit,
+	)
 	return out
 }
 
@@ -632,9 +670,93 @@ func appendRecentUploadsFromMessage(
 			HostRef:  uploads.HostRef(path),
 			MimeType: strings.TrimSpace(part.File.MimeType),
 			Kind:     uploadKindFromMeta(name, part.File.MimeType),
+			Source:   uploads.SourceInbound,
 		})
 	}
 	return out
+}
+
+func appendRecentUploadsFromStore(
+	out []execUploadMeta,
+	seen map[string]struct{},
+	store *uploads.Store,
+	inv *agent.Invocation,
+	limit int,
+) []execUploadMeta {
+	if store == nil || inv == nil || inv.Session == nil {
+		return out
+	}
+	if limit > 0 && len(out) >= limit {
+		return out
+	}
+
+	scope, ok := uploadScopeFromInvocation(inv)
+	if !ok {
+		return out
+	}
+	files, err := store.ListScope(scope, limit)
+	if err != nil {
+		return out
+	}
+	for _, file := range files {
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+		path := strings.TrimSpace(file.Path)
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		if _, err := os.Stat(path); err != nil {
+			continue
+		}
+		name := strings.TrimSpace(file.Name)
+		if name == "" {
+			name = filepath.Base(path)
+		}
+		seen[path] = struct{}{}
+		out = append(out, execUploadMeta{
+			Name:     name,
+			Path:     path,
+			HostRef:  uploads.HostRef(path),
+			MimeType: strings.TrimSpace(file.MimeType),
+			Kind:     uploadKindFromMeta(name, file.MimeType),
+			Source:   strings.TrimSpace(file.Source),
+		})
+	}
+	return out
+}
+
+func uploadScopeFromInvocation(
+	inv *agent.Invocation,
+) (uploads.Scope, bool) {
+	if inv == nil || inv.Session == nil {
+		return uploads.Scope{}, false
+	}
+	sessionID := strings.TrimSpace(inv.Session.ID)
+	userID := strings.TrimSpace(inv.Session.UserID)
+	if sessionID == "" || userID == "" {
+		return uploads.Scope{}, false
+	}
+	return uploads.Scope{
+		Channel:   uploadChannelFromSessionID(sessionID),
+		UserID:    userID,
+		SessionID: sessionID,
+	}, true
+}
+
+func uploadChannelFromSessionID(sessionID string) string {
+	trimmed := strings.TrimSpace(sessionID)
+	if trimmed == "" {
+		return ""
+	}
+	idx := strings.Index(trimmed, ":")
+	if idx <= 0 {
+		return ""
+	}
+	return strings.TrimSpace(trimmed[:idx])
 }
 
 func uploadKindFromMeta(name string, mimeType string) string {

@@ -144,6 +144,41 @@ func TestChannelCollectReplyFiles_UsesSessionUploads(t *testing.T) {
 	require.Equal(t, saved.Path, got[0].Path)
 }
 
+func TestChannelCollectReplyFiles_UsesDerivedUnicodeFiles(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	store, err := uploads.NewStore(stateDir)
+	require.NoError(t, err)
+
+	scope := uploads.Scope{
+		Channel:   channelID,
+		UserID:    "u1",
+		SessionID: "telegram:dm:u1:s1",
+	}
+	saved, err := store.SaveWithInfo(
+		context.Background(),
+		scope,
+		"风雨独立路--李光耀回忆录_第3页.pdf",
+		uploads.FileMetadata{
+			MimeType: "application/pdf",
+			Source:   uploads.SourceDerived,
+		},
+		[]byte("%PDF-1.4"),
+	)
+	require.NoError(t, err)
+
+	ch := &Channel{state: stateDir}
+	got := ch.collectReplyFiles(
+		"已拆分成 `风雨独立路--李光耀回忆录_第3页.pdf`，"+
+			"现在发给你。",
+		"u1",
+		"telegram:dm:u1:s1",
+	)
+	require.Len(t, got, 1)
+	require.Equal(t, saved.Path, got[0].Path)
+}
+
 func TestFindReplyNamedFiles_RespectsDepth(t *testing.T) {
 	t.Parallel()
 

@@ -34,6 +34,7 @@ type uploadFilters struct {
 	SessionID string
 	Kind      string
 	MimeType  string
+	Source    string
 }
 
 type execStatus struct {
@@ -76,6 +77,7 @@ type uploadView struct {
 	RelativePath string    `json:"relative_path,omitempty"`
 	Kind         string    `json:"kind,omitempty"`
 	MimeType     string    `json:"mime_type,omitempty"`
+	Source       string    `json:"source,omitempty"`
 	SizeBytes    int64     `json:"size_bytes"`
 	ModifiedAt   time.Time `json:"modified_at,omitempty"`
 	OpenURL      string    `json:"open_url,omitempty"`
@@ -202,6 +204,7 @@ func uploadViewsFromList(
 			RelativePath: file.RelativePath,
 			Kind:         uploadKindFromFile(file),
 			MimeType:     file.MimeType,
+			Source:       file.Source,
 			SizeBytes:    file.SizeBytes,
 			ModifiedAt:   file.ModifiedAt,
 			OpenURL:      uploadFileURL(file.RelativePath, false),
@@ -305,8 +308,9 @@ func filterUploadList(
 	sessionID := strings.TrimSpace(filters.SessionID)
 	kind := strings.ToLower(strings.TrimSpace(filters.Kind))
 	mimeType := strings.ToLower(strings.TrimSpace(filters.MimeType))
+	source := strings.ToLower(strings.TrimSpace(filters.Source))
 	if channel == "" && userID == "" && sessionID == "" &&
-		kind == "" && mimeType == "" {
+		kind == "" && mimeType == "" && source == "" {
 		return listed
 	}
 
@@ -326,6 +330,10 @@ func filterUploadList(
 		}
 		if mimeType != "" &&
 			strings.ToLower(strings.TrimSpace(file.MimeType)) != mimeType {
+			continue
+		}
+		if source != "" &&
+			strings.ToLower(strings.TrimSpace(file.Source)) != source {
 			continue
 		}
 		out = append(out, file)

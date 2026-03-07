@@ -534,6 +534,21 @@ func TestServiceUploadJSONFilters(t *testing.T) {
 		[]byte("%PDF-1.4"),
 	)
 	require.NoError(t, err)
+	_, err = store.SaveWithInfo(
+		context.Background(),
+		uploads.Scope{
+			Channel:   "telegram",
+			UserID:    "u2",
+			SessionID: "session-2",
+		},
+		"derived-frame.png",
+		uploads.FileMetadata{
+			MimeType: "image/png",
+			Source:   uploads.SourceDerived,
+		},
+		[]byte("png"),
+	)
+	require.NoError(t, err)
 
 	svc := New(Config{StateDir: stateDir})
 	handler := svc.Handler()
@@ -552,6 +567,20 @@ func TestServiceUploadJSONFilters(t *testing.T) {
 	require.Equal(t, http.StatusOK, filesRR.Code)
 	require.Contains(t, filesRR.Body.String(), "report.pdf")
 	require.NotContains(t, filesRR.Body.String(), "clip.mp4")
+
+	sourceRR := httptest.NewRecorder()
+	sourceReq := httptest.NewRequest(
+		http.MethodGet,
+		routeUploadsJSON+"?"+url.Values{
+			queryUserID: []string{"u2"},
+			querySource: []string{uploads.SourceDerived},
+		}.Encode(),
+		nil,
+	)
+	handler.ServeHTTP(sourceRR, sourceReq)
+	require.Equal(t, http.StatusOK, sourceRR.Code)
+	require.Contains(t, sourceRR.Body.String(), "derived-frame.png")
+	require.NotContains(t, sourceRR.Body.String(), "report.pdf")
 
 	sessionsRR := httptest.NewRecorder()
 	sessionsReq := httptest.NewRequest(

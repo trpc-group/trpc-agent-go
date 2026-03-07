@@ -54,8 +54,15 @@ const (
 	KindFile  = "file"
 )
 
-type fileMetadata struct {
+const (
+	SourceInbound = "inbound"
+	SourceDerived = "derived"
+)
+
+// FileMetadata describes optional metadata stored with one persisted file.
+type FileMetadata struct {
 	MimeType string `json:"mime_type,omitempty"`
+	Source   string `json:"source,omitempty"`
 }
 
 // ListedFile describes one persisted upload entry.
@@ -66,6 +73,7 @@ type ListedFile struct {
 	HostRef      string
 	RelativePath string
 	MimeType     string
+	Source       string
 	SizeBytes    int64
 	ModifiedAt   time.Time
 }
@@ -124,15 +132,38 @@ func (s *Store) Save(
 	name string,
 	data []byte,
 ) (SavedFile, error) {
-	return s.SaveWithMetadata(ctx, scope, name, "", data)
+	return s.SaveWithInfo(
+		ctx,
+		scope,
+		name,
+		FileMetadata{},
+		data,
+	)
 }
 
 // SaveWithMetadata persists data together with optional metadata.
 func (s *Store) SaveWithMetadata(
-	_ context.Context,
+	ctx context.Context,
 	scope Scope,
 	name string,
 	mimeType string,
+	data []byte,
+) (SavedFile, error) {
+	return s.SaveWithInfo(
+		ctx,
+		scope,
+		name,
+		FileMetadata{MimeType: mimeType},
+		data,
+	)
+}
+
+// SaveWithInfo persists data together with optional metadata.
+func (s *Store) SaveWithInfo(
+	_ context.Context,
+	scope Scope,
+	name string,
+	meta FileMetadata,
 	data []byte,
 ) (SavedFile, error) {
 	if s == nil || strings.TrimSpace(s.root) == "" {
@@ -154,7 +185,7 @@ func (s *Store) SaveWithMetadata(
 	if err := writeFileIfMissing(filePath, data); err != nil {
 		return SavedFile{}, err
 	}
-	if err := writeMetadataIfNeeded(filePath, mimeType); err != nil {
+	if err := writeMetadataIfNeeded(filePath, meta); err != nil {
 		return SavedFile{}, err
 	}
 
@@ -332,15 +363,13 @@ func writeFileIfMissing(path string, data []byte) error {
 	return nil
 }
 
-func writeMetadataIfNeeded(path string, mimeType string) error {
-	mimeType = strings.TrimSpace(mimeType)
-	if mimeType == "" {
+func writeMetadataIfNeeded(path string, meta FileMetadata) error {
+	meta = sanitizeFileMetadata(meta)
+	if meta == (FileMetadata{}) {
 		return nil
 	}
 
-	raw, err := json.Marshal(fileMetadata{
-		MimeType: mimeType,
-	})
+	raw, err := json.Marshal(meta)
 	if err != nil {
 		return fmt.Errorf("uploads: marshal metadata: %w", err)
 	}
@@ -417,6 +446,7 @@ func listStoredFiles(
 				HostRef:      HostRef(path),
 				RelativePath: filepath.ToSlash(rel),
 				MimeType:     strings.TrimSpace(meta.MimeType),
+				Source:       strings.TrimSpace(meta.Source),
 				SizeBytes:    info.Size(),
 				ModifiedAt:   info.ModTime(),
 			})
@@ -439,27 +469,26 @@ func listStoredFiles(
 	return files, nil
 }
 
-func readMetadata(path string) (fileMetadata, error) {
+func readMetadata(path string) (FileMetadata, error) {
 	metaPath := metadataPath(path)
 	data, err := os.ReadFile(metaPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return fileMetadata{}, nil
+			return FileMetadata{}, nil
 		}
-		return fileMetadata{}, fmt.Errorf(
+		return FileMetadata{}, fmt.Errorf(
 			"uploads: read metadata: %w",
 			err,
 		)
 	}
-	var meta fileMetadata
+	var meta FileMetadata
 	if err := json.Unmarshal(data, &meta); err != nil {
-		return fileMetadata{}, fmt.Errorf(
+		return FileMetadata{}, fmt.Errorf(
 			"uploads: parse metadata: %w",
 			err,
 		)
 	}
-	meta.MimeType = strings.TrimSpace(meta.MimeType)
-	return meta, nil
+	return sanitizeFileMetadata(meta), nil
 }
 
 func displayUploadName(name string) string {
@@ -516,5 +545,22 @@ func KindFromMeta(name string, mimeType string) string {
 		return KindPDF
 	default:
 		return KindFile
+	}
+}
+
+func sanitizeFileMetadata(meta FileMetadata) FileMetadata {
+	meta.MimeType = strings.TrimSpace(meta.MimeType)
+	meta.Source = sanitizeMetadataSource(meta.Source)
+	return meta
+}
+
+func sanitizeMetadataSource(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case SourceInbound:
+		return SourceInbound
+	case SourceDerived:
+		return SourceDerived
+	default:
+		return ""
 	}
 }

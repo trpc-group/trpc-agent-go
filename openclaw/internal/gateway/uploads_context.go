@@ -20,19 +20,24 @@ import (
 const (
 	recentUploadContextLimit = 6
 
-	recentUploadContextHeader = "Recent chat uploads available " +
+	recentUploadContextHeader = "Recent chat files/media available " +
 		"to tools in this session (newest first):"
-	recentUploadKindHeader = "Latest matching upload by kind " +
+	recentUploadKindHeader = "Latest matching file by kind " +
 		"in this chat:"
 	recentUploadContextFooter = "Use OPENCLAW_LAST_UPLOAD_* " +
-		"for the newest upload. For multiple uploads in " +
+		"for the newest file. For multiple recent files in " +
 		"exec_command, use OPENCLAW_RECENT_UPLOADS_JSON. " +
+		"This list may include both user uploads and bot-" +
+		"generated files previously sent in this chat. " +
 		"When the user says 'the PDF/audio/video I just " +
-		"sent', resolve against this list first. If the " +
+		"sent' or 'the file you just sent me', resolve " +
+		"against this list first. If the " +
+		"target file came from a recent bot reply, it is " +
+		"still valid to reuse it. If the " +
 		"user replies to an earlier media message, that " +
 		"replied media is usually the intended target. If the " +
 		"requested media kind is not present here, say " +
-		"which uploads are currently available in this chat."
+		"which files are currently available in this chat."
 )
 
 func (s *Server) uploadContextMessages(
@@ -114,14 +119,31 @@ func formatUploadContextLine(file uploads.ListedFile) string {
 		name = filepath.Base(strings.TrimSpace(file.Path))
 	}
 	kind := describeUploadKind(name, file.MimeType)
-	if kind == "" {
+	source := describeUploadSource(file.Source)
+	if kind == "" && source == "" {
 		return "- " + name
 	}
-	return "- " + name + " [" + kind + "]"
+	switch {
+	case kind != "" && source != "":
+		return "- " + name + " [" + kind + ", " + source + "]"
+	case kind != "":
+		return "- " + name + " [" + kind + "]"
+	default:
+		return "- " + name + " [" + source + "]"
+	}
 }
 
 func describeUploadKind(name string, mimeType string) string {
 	return uploads.KindFromMeta(name, mimeType)
+}
+
+func describeUploadSource(source string) string {
+	switch strings.TrimSpace(source) {
+	case uploads.SourceDerived:
+		return "derived"
+	default:
+		return ""
+	}
 }
 
 func channelFromSessionID(sessionID string) string {

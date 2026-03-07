@@ -125,8 +125,15 @@ func (c *Channel) sendReplyFiles(
 	ctx context.Context,
 	chatID int64,
 	messageThreadID int,
+	fromID string,
+	sessionID string,
 	files []channel.OutboundFile,
 ) {
+	scope := uploads.Scope{
+		Channel:   channelID,
+		UserID:    strings.TrimSpace(fromID),
+		SessionID: strings.TrimSpace(sessionID),
+	}
 	for _, file := range files {
 		if err := c.sendFile(
 			ctx,
@@ -136,6 +143,7 @@ func (c *Channel) sendReplyFiles(
 			"",
 			"",
 			"",
+			scope,
 		); err != nil {
 			log.WarnfContext(
 				ctx,

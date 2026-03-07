@@ -207,6 +207,43 @@ func TestStoreSaveWithMetadataAndList(t *testing.T) {
 	require.Len(t, files, 1)
 	require.Equal(t, "video/mp4", files[0].MimeType)
 	require.Equal(t, "video-note", files[0].Name)
+	require.Equal(t, "", files[0].Source)
+}
+
+func TestStoreSaveWithInfo_PersistsSource(t *testing.T) {
+	t.Parallel()
+
+	store, err := NewStore(t.TempDir())
+	require.NoError(t, err)
+
+	scope := Scope{
+		Channel:   "telegram",
+		UserID:    "u1",
+		SessionID: "s1",
+	}
+	saved, err := store.SaveWithInfo(
+		context.Background(),
+		scope,
+		"frame.png",
+		FileMetadata{
+			MimeType: "image/png",
+			Source:   SourceDerived,
+		},
+		[]byte("png"),
+	)
+	require.NoError(t, err)
+
+	metaPath := metadataPath(saved.Path)
+	data, err := os.ReadFile(metaPath)
+	require.NoError(t, err)
+	require.Contains(t, string(data), "image/png")
+	require.Contains(t, string(data), SourceDerived)
+
+	files, err := store.ListScope(scope, 10)
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	require.Equal(t, "image/png", files[0].MimeType)
+	require.Equal(t, SourceDerived, files[0].Source)
 }
 
 func TestStoreScopeDir(t *testing.T) {
@@ -245,4 +282,19 @@ func TestSanitizeHelpers(t *testing.T) {
 	require.Equal(t, KindVideo, KindFromMeta("video-note", "video/mp4"))
 	require.Equal(t, KindPDF, KindFromMeta("report", "application/pdf"))
 	require.Equal(t, KindFile, KindFromMeta("notes", ""))
+	require.Equal(
+		t,
+		SourceInbound,
+		sanitizeMetadataSource(" InBound "),
+	)
+	require.Equal(
+		t,
+		SourceDerived,
+		sanitizeMetadataSource("derived"),
+	)
+	require.Equal(
+		t,
+		"",
+		sanitizeMetadataSource("else"),
+	)
 }

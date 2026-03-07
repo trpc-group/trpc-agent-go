@@ -309,13 +309,27 @@ func (c *Channel) callGatewayAndReply(
 	parts := splitRunes(rsp.Reply, maxReplyRunes)
 	if !hasPreview || mode == streamingOff {
 		c.sendReplyParts(ctx, chatID, messageThreadID, replyTo, parts)
-		c.sendReplyFiles(ctx, chatID, messageThreadID, replyFiles)
+		c.sendReplyFiles(
+			ctx,
+			chatID,
+			messageThreadID,
+			fromID,
+			sessionID,
+			replyFiles,
+		)
 		return nil
 	}
 
 	if !c.editPreview(ctx, chatID, preview.MessageID, parts[0]) {
 		c.sendReplyParts(ctx, chatID, messageThreadID, replyTo, parts)
-		c.sendReplyFiles(ctx, chatID, messageThreadID, replyFiles)
+		c.sendReplyFiles(
+			ctx,
+			chatID,
+			messageThreadID,
+			fromID,
+			sessionID,
+			replyFiles,
+		)
 		return nil
 	}
 
@@ -330,7 +344,14 @@ func (c *Channel) callGatewayAndReply(
 			return nil
 		}
 	}
-	c.sendReplyFiles(ctx, chatID, messageThreadID, replyFiles)
+	c.sendReplyFiles(
+		ctx,
+		chatID,
+		messageThreadID,
+		fromID,
+		sessionID,
+		replyFiles,
+	)
 	return nil
 }
 

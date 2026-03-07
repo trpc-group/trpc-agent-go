@@ -27,6 +27,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 	sessionpkg "trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -661,7 +662,7 @@ func TestUploadEnvFromContext(t *testing.T) {
 	)
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 
-	env := uploadEnvFromContext(ctx)
+	env := (&execTool{}).uploadEnvFromContext(ctx)
 	require.Equal(t, videoPath, env[envLastUploadPath])
 	require.Equal(t, dir, env[envSessionUploadsDir])
 	require.Equal(t, "movie.mp4", env[envLastUploadName])
@@ -701,6 +702,94 @@ func TestUploadEnvFromContext(t *testing.T) {
 	require.Equal(t, uploadKindImage, recent[2].Kind)
 	require.Equal(t, filePath, recent[3].Path)
 	require.Equal(t, uploadKindPDF, recent[3].Kind)
+}
+
+func TestUploadEnvFromContext_UsesUploadStore(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	store, err := uploads.NewStore(stateDir)
+	require.NoError(t, err)
+
+	scope := uploads.Scope{
+		Channel:   "telegram",
+		UserID:    "u1",
+		SessionID: "telegram:dm:u1:s1",
+	}
+	derived, err := store.SaveWithInfo(
+		context.Background(),
+		scope,
+		"split-page-3.pdf",
+		uploads.FileMetadata{
+			MimeType: "application/pdf",
+			Source:   uploads.SourceDerived,
+		},
+		[]byte("%PDF-1.4"),
+	)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(
+			sessionpkg.NewSession(
+				"app",
+				"u1",
+				"telegram:dm:u1:s1",
+			),
+		),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	env := (&execTool{uploads: store}).uploadEnvFromContext(ctx)
+	require.Equal(t, derived.Path, env[envLastUploadPath])
+	require.Equal(t, derived.Path, env[envLastPDFPath])
+	require.Equal(
+		t,
+		filepath.Dir(derived.Path),
+		env[envSessionUploadsDir],
+	)
+
+	var recent []execUploadMeta
+	require.NoError(
+		t,
+		json.Unmarshal([]byte(env[envRecentUploadsJSON]), &recent),
+	)
+	require.Len(t, recent, 1)
+	require.Equal(t, derived.Path, recent[0].Path)
+	require.Equal(t, uploadKindPDF, recent[0].Kind)
+	require.Equal(t, uploads.SourceDerived, recent[0].Source)
+}
+
+func TestUploadEnvFromContext_UsesSessionDirWithoutRecentUploads(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	store, err := uploads.NewStore(stateDir)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(
+			sessionpkg.NewSession(
+				"app",
+				"u1",
+				"telegram:dm:u1:s1",
+			),
+		),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	env := (&execTool{uploads: store}).uploadEnvFromContext(ctx)
+	require.Equal(
+		t,
+		store.ScopeDir(uploads.Scope{
+			Channel:   "telegram",
+			UserID:    "u1",
+			SessionID: "telegram:dm:u1:s1",
+		}),
+		env[envSessionUploadsDir],
+	)
+	require.NotContains(t, env, envLastUploadPath)
 }
 
 func TestUploadKindFromMeta(t *testing.T) {

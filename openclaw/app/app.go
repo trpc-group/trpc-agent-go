@@ -120,7 +120,9 @@ const (
 		"OPENCLAW_SESSION_UPLOADS_DIR. Prefer writing derived " +
 		"files under " +
 		"OPENCLAW_SESSION_UPLOADS_DIR when you will send them " +
-		"back to the user. " +
+		"back to the user. Prefer already installed local tools " +
+		"for OCR, PDF, audio, image, and video work before " +
+		"trying package installs or long downloads. " +
 		"When creating a cron job from chat, omit channel and " +
 		"target to send results back to the current chat by " +
 		"default. When adding cron jobs, write the stored task " +
@@ -354,7 +356,10 @@ func NewRuntime(
 		}
 	}
 
-	openClawTools := buildOpenClawTools(opts.EnableOpenClawTools)
+	openClawTools := buildOpenClawTools(
+		opts.EnableOpenClawTools,
+		resolvedStateDir,
+	)
 	extraTools := append([]tool.Tool(nil), memSvc.Tools()...)
 	extraTools = append(extraTools, openClawTools.tools...)
 
@@ -681,7 +686,10 @@ func run(ctx context.Context, args []string) error {
 		}
 	}
 
-	openClawTools := buildOpenClawTools(opts.EnableOpenClawTools)
+	openClawTools := buildOpenClawTools(
+		opts.EnableOpenClawTools,
+		resolvedStateDir,
+	)
 	extraTools := append([]tool.Tool(nil), memSvc.Tools()...)
 	extraTools = append(extraTools, openClawTools.tools...)
 
@@ -1638,7 +1646,10 @@ type openClawToolsBundle struct {
 	cronTool *cron.Tool
 }
 
-func buildOpenClawTools(enabled bool) openClawToolsBundle {
+func buildOpenClawTools(
+	enabled bool,
+	stateDir string,
+) openClawToolsBundle {
 	if !enabled {
 		return openClawToolsBundle{}
 	}
@@ -1646,9 +1657,13 @@ func buildOpenClawTools(enabled bool) openClawToolsBundle {
 	mgr := octool.NewManager()
 	router := outbound.NewRouter()
 	cronTool := cron.NewTool(nil)
+	var uploadStore *uploads.Store
+	if store, err := uploads.NewStore(stateDir); err == nil {
+		uploadStore = store
+	}
 
 	tools := []tool.Tool{
-		octool.NewExecCommandTool(mgr),
+		octool.NewExecCommandTool(mgr, uploadStore),
 		octool.NewWriteStdinTool(mgr),
 		octool.NewKillSessionTool(mgr),
 		outbound.NewTool(router),
