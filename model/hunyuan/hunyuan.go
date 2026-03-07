@@ -32,15 +32,6 @@ const (
 	functionToolType         = "function"
 )
 
-var (
-	protocolOverheadTokens = imodel.DefaultProtocolOverheadTokens
-	reserveOutputTokens    = imodel.DefaultReserveOutputTokens
-	inputTokensFloor       = imodel.DefaultInputTokensFloor
-	outputTokensFloor      = imodel.DefaultOutputTokensFloor
-	safetyMarginRatio      = imodel.DefaultSafetyMarginRatio
-	maxInputTokensRatio    = imodel.DefaultMaxInputTokensRatio
-)
-
 // Model implements the model.Model interface for Hunyuan API.
 type Model struct {
 	client                     *hunyuan.Client
@@ -61,7 +52,6 @@ type Model struct {
 	protocolOverheadTokens int
 	reserveOutputTokens    int
 	inputTokensFloor       int
-	outputTokensFloor      int
 	safetyMarginRatio      float64
 	maxInputTokensRatio    float64
 }
@@ -175,7 +165,6 @@ func New(name string, opts ...Option) *Model {
 		protocolOverheadTokens:     o.tokenTailoringConfig.ProtocolOverheadTokens,
 		reserveOutputTokens:        o.tokenTailoringConfig.ReserveOutputTokens,
 		inputTokensFloor:           o.tokenTailoringConfig.InputTokensFloor,
-		outputTokensFloor:          o.tokenTailoringConfig.OutputTokensFloor,
 		safetyMarginRatio:          o.tokenTailoringConfig.SafetyMarginRatio,
 		maxInputTokensRatio:        o.tokenTailoringConfig.MaxInputTokensRatio,
 	}
