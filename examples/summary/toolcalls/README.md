@@ -82,15 +82,17 @@ Use this checklist to validate behavior:
      original user message is still present in the message list.
 
 5. **Context compaction after summary.**
-   - After summary appears, older tool interactions are represented by the
-     summary text instead of being sent as full raw history.
-   - Only recent assistant/tool interactions are kept as raw messages.
+   - After summary appears, tool interactions already absorbed into that
+     summary are omitted from the raw prompt history, even within the same
+     turn.
+   - The prompt keeps the original user message plus any events that happened
+     after the summary cutoff.
 
-6. **No orphan tool context.**
-   - Tool messages shown in `BeforeModel` are accompanied by matching recent
-     assistant progression text (for example, "Now I'll proceed to step N").
-   - There should be no isolated tool result that lacks nearby assistant
-     context for the current step.
+6. **Large tool results are compacted.**
+   - A large tool result that triggered the summary should stop appearing as a
+     raw `role=tool` message in later `BeforeModel` requests.
+   - Its salient information should instead survive through the summary system
+     message.
 
 7. **ReAct loop completion.**
    - Tool call count reaches the configured `-steps` value.

@@ -294,7 +294,8 @@ type Options struct {
 
 	// SkipSkillsFallbackOnSessionSummary controls whether the framework
 	// skips the "Loaded skill context" system-message fallback when a
-	// session summary is present in the request.
+	// session summary is present in the request and the matching loaded
+	// content is still available via tool-result materialization.
 	//
 	// Default: true.
 	SkipSkillsFallbackOnSessionSummary bool
