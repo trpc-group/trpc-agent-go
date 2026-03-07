@@ -2560,6 +2560,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#converting-live-traffic-into-evalsets" class="md-nav__link">
+    <span class="md-ellipsis">
+      Converting Live Traffic into EvalSets
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#skills-evaluation" class="md-nav__link">
     <span class="md-ellipsis">
       Skills Evaluation
@@ -3696,6 +3705,15 @@
   <a href="#passk-and-passk" class="md-nav__link">
     <span class="md-ellipsis">
       pass@k and pass^k
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#converting-live-traffic-into-evalsets" class="md-nav__link">
+    <span class="md-ellipsis">
+      Converting Live Traffic into EvalSets
     </span>
   </a>
   
@@ -7894,11 +7912,10 @@
 </span><span id="__span-76-6"><a id="__codelineno-76-6" name="__codelineno-76-6"></a><span class="nx">passHatK</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">PassHatK</span><span class="p">(</span><span class="nx">n</span><span class="p">,</span><span class="w"> </span><span class="nx">c</span><span class="p">,</span><span class="w"> </span><span class="nx">k</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>The computation of pass@k and pass^k relies on independence and identical distribution across runs. When doing repeated runs, ensure each run is independently sampled with necessary state reset, and avoid reusing session memory, tool caches, or external dependencies that would systematically inflate the metrics.</p>
-<h3 id="skills-evaluation">Skills Evaluation</h3>
-<p>Agent Skills are exposed as built-in tools: <code>skill_load</code> and <code>skill_run</code>, so you can evaluate whether the agent uses Skills correctly with the same tool trajectory evaluator. In practice, <code>skill_run</code> results contain volatile fields such as <code>stdout</code>, <code>stderr</code>, <code>duration_ms</code>, and inline <code>output_files</code> content. Prefer using <code>onlyTree</code> in a per-tool strategy to assert only stable fields such as <code>skill</code>, requested <code>output_files</code>, and <code>exit_code</code> and <code>timed_out</code>, letting other volatile keys be ignored.</p>
-<p>A minimal example is shown below.</p>
-<p>EvalSet <code>tools</code> snippet:</p>
-<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-77-1"> 1</a></span>
+<h3 id="converting-live-traffic-into-evalsets">Converting Live Traffic into EvalSets</h3>
+<p>During product iteration, evaluation sets often need to be distilled from real interactions. The framework provides the <code>evaluation/evalset/recorder</code> Runner plugin, which captures the event stream from <code>runner.Run()</code> at runtime and persists the interaction into EvalSet/EvalCase, producing reusable evaluation assets.</p>
+<p>By default, the recorder uses <code>sessionID</code> as both <code>EvalSetID</code> and <code>EvalCase.EvalID</code>, so multi-turn conversations under the same <code>sessionID</code> are appended to the same EvalCase <code>conversation</code>. The recorded asset keeps the inputs required for replay together with the conversation itself: <code>RunOptions.RuntimeState</code> is written into <code>EvalCase.SessionInput.State</code>, and injected context messages are stored as <code>EvalCase.ContextMessages</code>. Persistence is triggered when <code>runner.completion</code> arrives or when a terminal error event is observed. <code>runner.completion</code> indicates the run completed successfully. A terminal error is represented either by an <code>error</code> event whose object type is <code>ObjectTypeError</code> or by a response event carrying <code>Response.Error</code>, and is persisted as a failed invocation.</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-77-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-77-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-77-3"> 3</a></span>
 <span class="normal"><a href="#__codelineno-77-4"> 4</a></span>
@@ -7917,48 +7934,34 @@
 <span class="normal"><a href="#__codelineno-77-17">17</a></span>
 <span class="normal"><a href="#__codelineno-77-18">18</a></span>
 <span class="normal"><a href="#__codelineno-77-19">19</a></span>
-<span class="normal"><a href="#__codelineno-77-20">20</a></span>
-<span class="normal"><a href="#__codelineno-77-21">21</a></span>
-<span class="normal"><a href="#__codelineno-77-22">22</a></span>
-<span class="normal"><a href="#__codelineno-77-23">23</a></span>
-<span class="normal"><a href="#__codelineno-77-24">24</a></span>
-<span class="normal"><a href="#__codelineno-77-25">25</a></span>
-<span class="normal"><a href="#__codelineno-77-26">26</a></span>
-<span class="normal"><a href="#__codelineno-77-27">27</a></span>
-<span class="normal"><a href="#__codelineno-77-28">28</a></span>
-<span class="normal"><a href="#__codelineno-77-29">29</a></span>
-<span class="normal"><a href="#__codelineno-77-30">30</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-77-1"><a id="__codelineno-77-1" name="__codelineno-77-1"></a><span class="p">{</span>
-</span><span id="__span-77-2"><a id="__codelineno-77-2" name="__codelineno-77-2"></a><span class="w">  </span><span class="nt">&quot;invocationId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;write_ok-1&quot;</span><span class="p">,</span>
-</span><span id="__span-77-3"><a id="__codelineno-77-3" name="__codelineno-77-3"></a><span class="w">  </span><span class="nt">&quot;userContent&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-77-4"><a id="__codelineno-77-4" name="__codelineno-77-4"></a><span class="w">    </span><span class="nt">&quot;role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;user&quot;</span><span class="p">,</span>
-</span><span id="__span-77-5"><a id="__codelineno-77-5" name="__codelineno-77-5"></a><span class="w">    </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Use skills to generate an OK file and confirm when done.&quot;</span>
-</span><span id="__span-77-6"><a id="__codelineno-77-6" name="__codelineno-77-6"></a><span class="w">  </span><span class="p">},</span>
-</span><span id="__span-77-7"><a id="__codelineno-77-7" name="__codelineno-77-7"></a><span class="w">  </span><span class="nt">&quot;tools&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-</span><span id="__span-77-8"><a id="__codelineno-77-8" name="__codelineno-77-8"></a><span class="w">    </span><span class="p">{</span>
-</span><span id="__span-77-9"><a id="__codelineno-77-9" name="__codelineno-77-9"></a><span class="w">      </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;tool_use_1&quot;</span><span class="p">,</span>
-</span><span id="__span-77-10"><a id="__codelineno-77-10" name="__codelineno-77-10"></a><span class="w">      </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;skill_load&quot;</span><span class="p">,</span>
-</span><span id="__span-77-11"><a id="__codelineno-77-11" name="__codelineno-77-11"></a><span class="w">      </span><span class="nt">&quot;arguments&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-77-12"><a id="__codelineno-77-12" name="__codelineno-77-12"></a><span class="w">        </span><span class="nt">&quot;skill&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;write-ok&quot;</span>
-</span><span id="__span-77-13"><a id="__codelineno-77-13" name="__codelineno-77-13"></a><span class="w">      </span><span class="p">}</span>
-</span><span id="__span-77-14"><a id="__codelineno-77-14" name="__codelineno-77-14"></a><span class="w">    </span><span class="p">},</span>
-</span><span id="__span-77-15"><a id="__codelineno-77-15" name="__codelineno-77-15"></a><span class="w">    </span><span class="p">{</span>
-</span><span id="__span-77-16"><a id="__codelineno-77-16" name="__codelineno-77-16"></a><span class="w">      </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;tool_use_2&quot;</span><span class="p">,</span>
-</span><span id="__span-77-17"><a id="__codelineno-77-17" name="__codelineno-77-17"></a><span class="w">      </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;skill_run&quot;</span><span class="p">,</span>
-</span><span id="__span-77-18"><a id="__codelineno-77-18" name="__codelineno-77-18"></a><span class="w">      </span><span class="nt">&quot;arguments&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-77-19"><a id="__codelineno-77-19" name="__codelineno-77-19"></a><span class="w">        </span><span class="nt">&quot;skill&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;write-ok&quot;</span><span class="p">,</span>
-</span><span id="__span-77-20"><a id="__codelineno-77-20" name="__codelineno-77-20"></a><span class="w">        </span><span class="nt">&quot;output_files&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-</span><span id="__span-77-21"><a id="__codelineno-77-21" name="__codelineno-77-21"></a><span class="w">          </span><span class="s2">&quot;out/ok.txt&quot;</span>
-</span><span id="__span-77-22"><a id="__codelineno-77-22" name="__codelineno-77-22"></a><span class="w">        </span><span class="p">]</span>
-</span><span id="__span-77-23"><a id="__codelineno-77-23" name="__codelineno-77-23"></a><span class="w">      </span><span class="p">},</span>
-</span><span id="__span-77-24"><a id="__codelineno-77-24" name="__codelineno-77-24"></a><span class="w">      </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-77-25"><a id="__codelineno-77-25" name="__codelineno-77-25"></a><span class="w">        </span><span class="nt">&quot;exit_code&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
-</span><span id="__span-77-26"><a id="__codelineno-77-26" name="__codelineno-77-26"></a><span class="w">        </span><span class="nt">&quot;timed_out&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
-</span><span id="__span-77-27"><a id="__codelineno-77-27" name="__codelineno-77-27"></a><span class="w">      </span><span class="p">}</span>
-</span><span id="__span-77-28"><a id="__codelineno-77-28" name="__codelineno-77-28"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-77-29"><a id="__codelineno-77-29" name="__codelineno-77-29"></a><span class="w">  </span><span class="p">]</span>
-</span><span id="__span-77-30"><a id="__codelineno-77-30" name="__codelineno-77-30"></a><span class="p">}</span>
+<span class="normal"><a href="#__codelineno-77-20">20</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-77-1"><a id="__codelineno-77-1" name="__codelineno-77-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-77-2"><a id="__codelineno-77-2" name="__codelineno-77-2"></a><span class="w">    </span><span class="s">&quot;log&quot;</span>
+</span><span id="__span-77-3"><a id="__codelineno-77-3" name="__codelineno-77-3"></a><span class="w">    </span><span class="s">&quot;time&quot;</span>
+</span><span id="__span-77-4"><a id="__codelineno-77-4" name="__codelineno-77-4"></a>
+</span><span id="__span-77-5"><a id="__codelineno-77-5" name="__codelineno-77-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/evalset&quot;</span>
+</span><span id="__span-77-6"><a id="__codelineno-77-6" name="__codelineno-77-6"></a><span class="w">    </span><span class="nx">evalsetlocal</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/local&quot;</span>
+</span><span id="__span-77-7"><a id="__codelineno-77-7" name="__codelineno-77-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/recorder&quot;</span>
+</span><span id="__span-77-8"><a id="__codelineno-77-8" name="__codelineno-77-8"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
+</span><span id="__span-77-9"><a id="__codelineno-77-9" name="__codelineno-77-9"></a><span class="p">)</span>
+</span><span id="__span-77-10"><a id="__codelineno-77-10" name="__codelineno-77-10"></a>
+</span><span id="__span-77-11"><a id="__codelineno-77-11" name="__codelineno-77-11"></a><span class="nx">evalSetManager</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evalsetlocal</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">evalset</span><span class="p">.</span><span class="nx">WithBaseDir</span><span class="p">(</span><span class="s">&quot;./data&quot;</span><span class="p">))</span>
+</span><span id="__span-77-12"><a id="__codelineno-77-12" name="__codelineno-77-12"></a><span class="nx">rec</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">recorder</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-77-13"><a id="__codelineno-77-13" name="__codelineno-77-13"></a><span class="w">    </span><span class="nx">evalSetManager</span><span class="p">,</span>
+</span><span id="__span-77-14"><a id="__codelineno-77-14" name="__codelineno-77-14"></a><span class="w">    </span><span class="nx">recorder</span><span class="p">.</span><span class="nx">WithWriteTimeout</span><span class="p">(</span><span class="mi">2</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Second</span><span class="p">),</span>
+</span><span id="__span-77-15"><a id="__codelineno-77-15" name="__codelineno-77-15"></a><span class="p">)</span>
+</span><span id="__span-77-16"><a id="__codelineno-77-16" name="__codelineno-77-16"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-77-17"><a id="__codelineno-77-17" name="__codelineno-77-17"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;create evalset recorder: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-77-18"><a id="__codelineno-77-18" name="__codelineno-77-18"></a><span class="p">}</span>
+</span><span id="__span-77-19"><a id="__codelineno-77-19" name="__codelineno-77-19"></a>
+</span><span id="__span-77-20"><a id="__codelineno-77-20" name="__codelineno-77-20"></a><span class="nx">run</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="nx">appName</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">,</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithPlugins</span><span class="p">(</span><span class="nx">rec</span><span class="p">))</span>
 </span></code></pre></div></td></tr></table></div>
-<p>Metric <code>toolTrajectory</code> snippet:</p>
+<p>Options let you adjust how traffic is bucketed and written. <code>WithEvalSetIDResolver</code> and <code>WithEvalCaseIDResolver</code> customize how <code>EvalSetID</code> and <code>EvalCase.EvalID</code> are derived, which is useful when grouping traffic by business dimensions or aggregating multiple sessions into one evaluation set. Persistence is synchronous by default so data is flushed promptly after a run completes; if you do not want persistence to block event handling, enable <code>WithAsyncWriteEnabled(true)</code>. To keep a slow backend from making a single write unbounded, use <code>WithWriteTimeout(d)</code> to add a deadline, where <code>d == 0</code> means no extra timeout is applied.</p>
+<p>If you want to record live traffic as trace-mode actuals instead of default expecteds, enable <code>WithTraceModeEnabled(true)</code>. In that mode, recorder creates <code>EvalModeTrace</code> cases and appends turns to <code>ActualConversation</code> rather than <code>Conversation</code>. Because <code>Conversation</code> and <code>ActualConversation</code> have different evaluation semantics, appending to an existing EvalCase requires the mode to match.</p>
+<p>See <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/evalsetrecorder">examples/evaluation/evalsetrecorder</a> for the full example.</p>
+<h3 id="skills-evaluation">Skills Evaluation</h3>
+<p>Agent Skills are exposed as built-in tools: <code>skill_load</code> and <code>skill_run</code>, so you can evaluate whether the agent uses Skills correctly with the same tool trajectory evaluator. In practice, <code>skill_run</code> results contain volatile fields such as <code>stdout</code>, <code>stderr</code>, <code>duration_ms</code>, and inline <code>output_files</code> content. Prefer using <code>onlyTree</code> in a per-tool strategy to assert only stable fields such as <code>skill</code>, requested <code>output_files</code>, and <code>exit_code</code> and <code>timed_out</code>, letting other volatile keys be ignored.</p>
+<p>A minimal example is shown below.</p>
+<p>EvalSet <code>tools</code> snippet:</p>
 <div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-78-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-78-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-78-3"> 3</a></span>
@@ -7988,70 +7991,38 @@
 <span class="normal"><a href="#__codelineno-78-27">27</a></span>
 <span class="normal"><a href="#__codelineno-78-28">28</a></span>
 <span class="normal"><a href="#__codelineno-78-29">29</a></span>
-<span class="normal"><a href="#__codelineno-78-30">30</a></span>
-<span class="normal"><a href="#__codelineno-78-31">31</a></span>
-<span class="normal"><a href="#__codelineno-78-32">32</a></span>
-<span class="normal"><a href="#__codelineno-78-33">33</a></span>
-<span class="normal"><a href="#__codelineno-78-34">34</a></span>
-<span class="normal"><a href="#__codelineno-78-35">35</a></span>
-<span class="normal"><a href="#__codelineno-78-36">36</a></span>
-<span class="normal"><a href="#__codelineno-78-37">37</a></span>
-<span class="normal"><a href="#__codelineno-78-38">38</a></span>
-<span class="normal"><a href="#__codelineno-78-39">39</a></span>
-<span class="normal"><a href="#__codelineno-78-40">40</a></span>
-<span class="normal"><a href="#__codelineno-78-41">41</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-78-1"><a id="__codelineno-78-1" name="__codelineno-78-1"></a><span class="p">[</span>
-</span><span id="__span-78-2"><a id="__codelineno-78-2" name="__codelineno-78-2"></a><span class="w">  </span><span class="p">{</span>
-</span><span id="__span-78-3"><a id="__codelineno-78-3" name="__codelineno-78-3"></a><span class="w">    </span><span class="nt">&quot;metricName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;tool_trajectory_avg_score&quot;</span><span class="p">,</span>
-</span><span id="__span-78-4"><a id="__codelineno-78-4" name="__codelineno-78-4"></a><span class="w">    </span><span class="nt">&quot;threshold&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
-</span><span id="__span-78-5"><a id="__codelineno-78-5" name="__codelineno-78-5"></a><span class="w">    </span><span class="nt">&quot;criterion&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-78-6"><a id="__codelineno-78-6" name="__codelineno-78-6"></a><span class="w">      </span><span class="nt">&quot;toolTrajectory&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-78-7"><a id="__codelineno-78-7" name="__codelineno-78-7"></a><span class="w">        </span><span class="nt">&quot;orderSensitive&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-</span><span id="__span-78-8"><a id="__codelineno-78-8" name="__codelineno-78-8"></a><span class="w">        </span><span class="nt">&quot;subsetMatching&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-</span><span id="__span-78-9"><a id="__codelineno-78-9" name="__codelineno-78-9"></a><span class="w">        </span><span class="nt">&quot;toolStrategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-78-10"><a id="__codelineno-78-10" name="__codelineno-78-10"></a><span class="w">          </span><span class="nt">&quot;skill_load&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-78-11"><a id="__codelineno-78-11" name="__codelineno-78-11"></a><span class="w">            </span><span class="nt">&quot;arguments&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-78-12"><a id="__codelineno-78-12" name="__codelineno-78-12"></a><span class="w">              </span><span class="nt">&quot;onlyTree&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-78-13"><a id="__codelineno-78-13" name="__codelineno-78-13"></a><span class="w">                </span><span class="nt">&quot;skill&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
-</span><span id="__span-78-14"><a id="__codelineno-78-14" name="__codelineno-78-14"></a><span class="w">              </span><span class="p">},</span>
-</span><span id="__span-78-15"><a id="__codelineno-78-15" name="__codelineno-78-15"></a><span class="w">              </span><span class="nt">&quot;matchStrategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;exact&quot;</span>
-</span><span id="__span-78-16"><a id="__codelineno-78-16" name="__codelineno-78-16"></a><span class="w">            </span><span class="p">},</span>
-</span><span id="__span-78-17"><a id="__codelineno-78-17" name="__codelineno-78-17"></a><span class="w">            </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-78-18"><a id="__codelineno-78-18" name="__codelineno-78-18"></a><span class="w">              </span><span class="nt">&quot;ignore&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
-</span><span id="__span-78-19"><a id="__codelineno-78-19" name="__codelineno-78-19"></a><span class="w">            </span><span class="p">}</span>
-</span><span id="__span-78-20"><a id="__codelineno-78-20" name="__codelineno-78-20"></a><span class="w">          </span><span class="p">},</span>
-</span><span id="__span-78-21"><a id="__codelineno-78-21" name="__codelineno-78-21"></a><span class="w">          </span><span class="nt">&quot;skill_run&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-78-22"><a id="__codelineno-78-22" name="__codelineno-78-22"></a><span class="w">            </span><span class="nt">&quot;arguments&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-78-23"><a id="__codelineno-78-23" name="__codelineno-78-23"></a><span class="w">              </span><span class="nt">&quot;onlyTree&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-78-24"><a id="__codelineno-78-24" name="__codelineno-78-24"></a><span class="w">                </span><span class="nt">&quot;skill&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-</span><span id="__span-78-25"><a id="__codelineno-78-25" name="__codelineno-78-25"></a><span class="w">                </span><span class="nt">&quot;output_files&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
-</span><span id="__span-78-26"><a id="__codelineno-78-26" name="__codelineno-78-26"></a><span class="w">              </span><span class="p">},</span>
-</span><span id="__span-78-27"><a id="__codelineno-78-27" name="__codelineno-78-27"></a><span class="w">              </span><span class="nt">&quot;matchStrategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;exact&quot;</span>
-</span><span id="__span-78-28"><a id="__codelineno-78-28" name="__codelineno-78-28"></a><span class="w">            </span><span class="p">},</span>
-</span><span id="__span-78-29"><a id="__codelineno-78-29" name="__codelineno-78-29"></a><span class="w">            </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-78-30"><a id="__codelineno-78-30" name="__codelineno-78-30"></a><span class="w">              </span><span class="nt">&quot;onlyTree&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-78-31"><a id="__codelineno-78-31" name="__codelineno-78-31"></a><span class="w">                </span><span class="nt">&quot;exit_code&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-</span><span id="__span-78-32"><a id="__codelineno-78-32" name="__codelineno-78-32"></a><span class="w">                </span><span class="nt">&quot;timed_out&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
-</span><span id="__span-78-33"><a id="__codelineno-78-33" name="__codelineno-78-33"></a><span class="w">              </span><span class="p">},</span>
-</span><span id="__span-78-34"><a id="__codelineno-78-34" name="__codelineno-78-34"></a><span class="w">              </span><span class="nt">&quot;matchStrategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;exact&quot;</span>
-</span><span id="__span-78-35"><a id="__codelineno-78-35" name="__codelineno-78-35"></a><span class="w">            </span><span class="p">}</span>
-</span><span id="__span-78-36"><a id="__codelineno-78-36" name="__codelineno-78-36"></a><span class="w">          </span><span class="p">}</span>
-</span><span id="__span-78-37"><a id="__codelineno-78-37" name="__codelineno-78-37"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-78-38"><a id="__codelineno-78-38" name="__codelineno-78-38"></a><span class="w">      </span><span class="p">}</span>
-</span><span id="__span-78-39"><a id="__codelineno-78-39" name="__codelineno-78-39"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-78-40"><a id="__codelineno-78-40" name="__codelineno-78-40"></a><span class="w">  </span><span class="p">}</span>
-</span><span id="__span-78-41"><a id="__codelineno-78-41" name="__codelineno-78-41"></a><span class="p">]</span>
+<span class="normal"><a href="#__codelineno-78-30">30</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-78-1"><a id="__codelineno-78-1" name="__codelineno-78-1"></a><span class="p">{</span>
+</span><span id="__span-78-2"><a id="__codelineno-78-2" name="__codelineno-78-2"></a><span class="w">  </span><span class="nt">&quot;invocationId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;write_ok-1&quot;</span><span class="p">,</span>
+</span><span id="__span-78-3"><a id="__codelineno-78-3" name="__codelineno-78-3"></a><span class="w">  </span><span class="nt">&quot;userContent&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-78-4"><a id="__codelineno-78-4" name="__codelineno-78-4"></a><span class="w">    </span><span class="nt">&quot;role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;user&quot;</span><span class="p">,</span>
+</span><span id="__span-78-5"><a id="__codelineno-78-5" name="__codelineno-78-5"></a><span class="w">    </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Use skills to generate an OK file and confirm when done.&quot;</span>
+</span><span id="__span-78-6"><a id="__codelineno-78-6" name="__codelineno-78-6"></a><span class="w">  </span><span class="p">},</span>
+</span><span id="__span-78-7"><a id="__codelineno-78-7" name="__codelineno-78-7"></a><span class="w">  </span><span class="nt">&quot;tools&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-78-8"><a id="__codelineno-78-8" name="__codelineno-78-8"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-78-9"><a id="__codelineno-78-9" name="__codelineno-78-9"></a><span class="w">      </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;tool_use_1&quot;</span><span class="p">,</span>
+</span><span id="__span-78-10"><a id="__codelineno-78-10" name="__codelineno-78-10"></a><span class="w">      </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;skill_load&quot;</span><span class="p">,</span>
+</span><span id="__span-78-11"><a id="__codelineno-78-11" name="__codelineno-78-11"></a><span class="w">      </span><span class="nt">&quot;arguments&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-78-12"><a id="__codelineno-78-12" name="__codelineno-78-12"></a><span class="w">        </span><span class="nt">&quot;skill&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;write-ok&quot;</span>
+</span><span id="__span-78-13"><a id="__codelineno-78-13" name="__codelineno-78-13"></a><span class="w">      </span><span class="p">}</span>
+</span><span id="__span-78-14"><a id="__codelineno-78-14" name="__codelineno-78-14"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-78-15"><a id="__codelineno-78-15" name="__codelineno-78-15"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-78-16"><a id="__codelineno-78-16" name="__codelineno-78-16"></a><span class="w">      </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;tool_use_2&quot;</span><span class="p">,</span>
+</span><span id="__span-78-17"><a id="__codelineno-78-17" name="__codelineno-78-17"></a><span class="w">      </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;skill_run&quot;</span><span class="p">,</span>
+</span><span id="__span-78-18"><a id="__codelineno-78-18" name="__codelineno-78-18"></a><span class="w">      </span><span class="nt">&quot;arguments&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-78-19"><a id="__codelineno-78-19" name="__codelineno-78-19"></a><span class="w">        </span><span class="nt">&quot;skill&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;write-ok&quot;</span><span class="p">,</span>
+</span><span id="__span-78-20"><a id="__codelineno-78-20" name="__codelineno-78-20"></a><span class="w">        </span><span class="nt">&quot;output_files&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-78-21"><a id="__codelineno-78-21" name="__codelineno-78-21"></a><span class="w">          </span><span class="s2">&quot;out/ok.txt&quot;</span>
+</span><span id="__span-78-22"><a id="__codelineno-78-22" name="__codelineno-78-22"></a><span class="w">        </span><span class="p">]</span>
+</span><span id="__span-78-23"><a id="__codelineno-78-23" name="__codelineno-78-23"></a><span class="w">      </span><span class="p">},</span>
+</span><span id="__span-78-24"><a id="__codelineno-78-24" name="__codelineno-78-24"></a><span class="w">      </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-78-25"><a id="__codelineno-78-25" name="__codelineno-78-25"></a><span class="w">        </span><span class="nt">&quot;exit_code&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+</span><span id="__span-78-26"><a id="__codelineno-78-26" name="__codelineno-78-26"></a><span class="w">        </span><span class="nt">&quot;timed_out&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
+</span><span id="__span-78-27"><a id="__codelineno-78-27" name="__codelineno-78-27"></a><span class="w">      </span><span class="p">}</span>
+</span><span id="__span-78-28"><a id="__codelineno-78-28" name="__codelineno-78-28"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-78-29"><a id="__codelineno-78-29" name="__codelineno-78-29"></a><span class="w">  </span><span class="p">]</span>
+</span><span id="__span-78-30"><a id="__codelineno-78-30" name="__codelineno-78-30"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p>See <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/skill">examples/evaluation/skill</a> for a runnable example.</p>
-<h3 id="claude-code-evaluation">Claude Code Evaluation</h3>
-<p>The framework provides a Claude Code Agent. It executes a local Claude Code CLI and maps <code>tool_use</code> / <code>tool_result</code> records from the CLI output into framework tool events. Therefore, when you need to evaluate Claude Code MCP tool calls, Skills, and subagent behaviors, you can reuse the tool trajectory evaluator <code>tool_trajectory_avg_score</code> to align tool traces.</p>
-<p>When authoring EvalSets and Metrics, note the Claude Code tool naming and normalization rules:</p>
-<ul>
-<li>MCP tool names follow the <code>mcp__&lt;server&gt;__&lt;tool&gt;</code> convention, where <code>&lt;server&gt;</code> corresponds to the server key in the project <code>.mcp.json</code>.</li>
-<li>Claude Code CLI <code>Skill</code> tool calls are normalized to <code>skill_run</code>, and <code>skill</code> is written into tool arguments <code>arguments</code> for matching.</li>
-<li>Subagent routing is usually represented by a <code>Task</code> tool call, with <code>subagent_type</code> included in tool arguments <code>arguments</code>.</li>
-</ul>
-<p>A minimal example is shown below. It demonstrates how to declare the expected tool trajectory in the EvalSet and how to use <code>onlyTree</code> / <code>ignore</code> in the Metric to assert only stable fields.</p>
-<p>EvalSet file example below covers MCP, Skill, and Task tools:</p>
+<p>Metric <code>toolTrajectory</code> snippet:</p>
 <div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-79-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-79-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-79-3"> 3</a></span>
@@ -8092,147 +8063,59 @@
 <span class="normal"><a href="#__codelineno-79-38">38</a></span>
 <span class="normal"><a href="#__codelineno-79-39">39</a></span>
 <span class="normal"><a href="#__codelineno-79-40">40</a></span>
-<span class="normal"><a href="#__codelineno-79-41">41</a></span>
-<span class="normal"><a href="#__codelineno-79-42">42</a></span>
-<span class="normal"><a href="#__codelineno-79-43">43</a></span>
-<span class="normal"><a href="#__codelineno-79-44">44</a></span>
-<span class="normal"><a href="#__codelineno-79-45">45</a></span>
-<span class="normal"><a href="#__codelineno-79-46">46</a></span>
-<span class="normal"><a href="#__codelineno-79-47">47</a></span>
-<span class="normal"><a href="#__codelineno-79-48">48</a></span>
-<span class="normal"><a href="#__codelineno-79-49">49</a></span>
-<span class="normal"><a href="#__codelineno-79-50">50</a></span>
-<span class="normal"><a href="#__codelineno-79-51">51</a></span>
-<span class="normal"><a href="#__codelineno-79-52">52</a></span>
-<span class="normal"><a href="#__codelineno-79-53">53</a></span>
-<span class="normal"><a href="#__codelineno-79-54">54</a></span>
-<span class="normal"><a href="#__codelineno-79-55">55</a></span>
-<span class="normal"><a href="#__codelineno-79-56">56</a></span>
-<span class="normal"><a href="#__codelineno-79-57">57</a></span>
-<span class="normal"><a href="#__codelineno-79-58">58</a></span>
-<span class="normal"><a href="#__codelineno-79-59">59</a></span>
-<span class="normal"><a href="#__codelineno-79-60">60</a></span>
-<span class="normal"><a href="#__codelineno-79-61">61</a></span>
-<span class="normal"><a href="#__codelineno-79-62">62</a></span>
-<span class="normal"><a href="#__codelineno-79-63">63</a></span>
-<span class="normal"><a href="#__codelineno-79-64">64</a></span>
-<span class="normal"><a href="#__codelineno-79-65">65</a></span>
-<span class="normal"><a href="#__codelineno-79-66">66</a></span>
-<span class="normal"><a href="#__codelineno-79-67">67</a></span>
-<span class="normal"><a href="#__codelineno-79-68">68</a></span>
-<span class="normal"><a href="#__codelineno-79-69">69</a></span>
-<span class="normal"><a href="#__codelineno-79-70">70</a></span>
-<span class="normal"><a href="#__codelineno-79-71">71</a></span>
-<span class="normal"><a href="#__codelineno-79-72">72</a></span>
-<span class="normal"><a href="#__codelineno-79-73">73</a></span>
-<span class="normal"><a href="#__codelineno-79-74">74</a></span>
-<span class="normal"><a href="#__codelineno-79-75">75</a></span>
-<span class="normal"><a href="#__codelineno-79-76">76</a></span>
-<span class="normal"><a href="#__codelineno-79-77">77</a></span>
-<span class="normal"><a href="#__codelineno-79-78">78</a></span>
-<span class="normal"><a href="#__codelineno-79-79">79</a></span>
-<span class="normal"><a href="#__codelineno-79-80">80</a></span>
-<span class="normal"><a href="#__codelineno-79-81">81</a></span>
-<span class="normal"><a href="#__codelineno-79-82">82</a></span>
-<span class="normal"><a href="#__codelineno-79-83">83</a></span>
-<span class="normal"><a href="#__codelineno-79-84">84</a></span>
-<span class="normal"><a href="#__codelineno-79-85">85</a></span>
-<span class="normal"><a href="#__codelineno-79-86">86</a></span>
-<span class="normal"><a href="#__codelineno-79-87">87</a></span>
-<span class="normal"><a href="#__codelineno-79-88">88</a></span>
-<span class="normal"><a href="#__codelineno-79-89">89</a></span>
-<span class="normal"><a href="#__codelineno-79-90">90</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-79-1"><a id="__codelineno-79-1" name="__codelineno-79-1"></a><span class="p">{</span>
-</span><span id="__span-79-2"><a id="__codelineno-79-2" name="__codelineno-79-2"></a><span class="w">  </span><span class="nt">&quot;evalSetId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;claudecode-basic&quot;</span><span class="p">,</span>
-</span><span id="__span-79-3"><a id="__codelineno-79-3" name="__codelineno-79-3"></a><span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;claudecode-basic&quot;</span><span class="p">,</span>
-</span><span id="__span-79-4"><a id="__codelineno-79-4" name="__codelineno-79-4"></a><span class="w">  </span><span class="nt">&quot;evalCases&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-</span><span id="__span-79-5"><a id="__codelineno-79-5" name="__codelineno-79-5"></a><span class="w">    </span><span class="p">{</span>
-</span><span id="__span-79-6"><a id="__codelineno-79-6" name="__codelineno-79-6"></a><span class="w">      </span><span class="nt">&quot;evalId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;mcp_calculator&quot;</span><span class="p">,</span>
-</span><span id="__span-79-7"><a id="__codelineno-79-7" name="__codelineno-79-7"></a><span class="w">      </span><span class="nt">&quot;conversation&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-</span><span id="__span-79-8"><a id="__codelineno-79-8" name="__codelineno-79-8"></a><span class="w">        </span><span class="p">{</span>
-</span><span id="__span-79-9"><a id="__codelineno-79-9" name="__codelineno-79-9"></a><span class="w">          </span><span class="nt">&quot;invocationId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;mcp_calculator-1&quot;</span><span class="p">,</span>
-</span><span id="__span-79-10"><a id="__codelineno-79-10" name="__codelineno-79-10"></a><span class="w">          </span><span class="nt">&quot;userContent&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-79-11"><a id="__codelineno-79-11" name="__codelineno-79-11"></a><span class="w">            </span><span class="nt">&quot;role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;user&quot;</span><span class="p">,</span>
-</span><span id="__span-79-12"><a id="__codelineno-79-12" name="__codelineno-79-12"></a><span class="w">            </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Compute 1+2.&quot;</span>
-</span><span id="__span-79-13"><a id="__codelineno-79-13" name="__codelineno-79-13"></a><span class="w">          </span><span class="p">},</span>
-</span><span id="__span-79-14"><a id="__codelineno-79-14" name="__codelineno-79-14"></a><span class="w">          </span><span class="nt">&quot;tools&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-</span><span id="__span-79-15"><a id="__codelineno-79-15" name="__codelineno-79-15"></a><span class="w">            </span><span class="p">{</span>
-</span><span id="__span-79-16"><a id="__codelineno-79-16" name="__codelineno-79-16"></a><span class="w">              </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;tool_use_1&quot;</span><span class="p">,</span>
-</span><span id="__span-79-17"><a id="__codelineno-79-17" name="__codelineno-79-17"></a><span class="w">              </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;mcp__eva_cli_example__calculator&quot;</span><span class="p">,</span>
-</span><span id="__span-79-18"><a id="__codelineno-79-18" name="__codelineno-79-18"></a><span class="w">              </span><span class="nt">&quot;arguments&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-79-19"><a id="__codelineno-79-19" name="__codelineno-79-19"></a><span class="w">                </span><span class="nt">&quot;operation&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;add&quot;</span><span class="p">,</span>
-</span><span id="__span-79-20"><a id="__codelineno-79-20" name="__codelineno-79-20"></a><span class="w">                </span><span class="nt">&quot;a&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
-</span><span id="__span-79-21"><a id="__codelineno-79-21" name="__codelineno-79-21"></a><span class="w">                </span><span class="nt">&quot;b&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span>
-</span><span id="__span-79-22"><a id="__codelineno-79-22" name="__codelineno-79-22"></a><span class="w">              </span><span class="p">},</span>
-</span><span id="__span-79-23"><a id="__codelineno-79-23" name="__codelineno-79-23"></a><span class="w">              </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-79-24"><a id="__codelineno-79-24" name="__codelineno-79-24"></a><span class="w">                </span><span class="nt">&quot;operation&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;add&quot;</span><span class="p">,</span>
-</span><span id="__span-79-25"><a id="__codelineno-79-25" name="__codelineno-79-25"></a><span class="w">                </span><span class="nt">&quot;a&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
-</span><span id="__span-79-26"><a id="__codelineno-79-26" name="__codelineno-79-26"></a><span class="w">                </span><span class="nt">&quot;b&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
-</span><span id="__span-79-27"><a id="__codelineno-79-27" name="__codelineno-79-27"></a><span class="w">                </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span>
-</span><span id="__span-79-28"><a id="__codelineno-79-28" name="__codelineno-79-28"></a><span class="w">              </span><span class="p">}</span>
-</span><span id="__span-79-29"><a id="__codelineno-79-29" name="__codelineno-79-29"></a><span class="w">            </span><span class="p">}</span>
-</span><span id="__span-79-30"><a id="__codelineno-79-30" name="__codelineno-79-30"></a><span class="w">          </span><span class="p">]</span>
-</span><span id="__span-79-31"><a id="__codelineno-79-31" name="__codelineno-79-31"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-79-32"><a id="__codelineno-79-32" name="__codelineno-79-32"></a><span class="w">      </span><span class="p">],</span>
-</span><span id="__span-79-33"><a id="__codelineno-79-33" name="__codelineno-79-33"></a><span class="w">      </span><span class="nt">&quot;sessionInput&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-79-34"><a id="__codelineno-79-34" name="__codelineno-79-34"></a><span class="w">        </span><span class="nt">&quot;appName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;claudecode-eval-app&quot;</span><span class="p">,</span>
-</span><span id="__span-79-35"><a id="__codelineno-79-35" name="__codelineno-79-35"></a><span class="w">        </span><span class="nt">&quot;userId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;user&quot;</span>
-</span><span id="__span-79-36"><a id="__codelineno-79-36" name="__codelineno-79-36"></a><span class="w">      </span><span class="p">}</span>
-</span><span id="__span-79-37"><a id="__codelineno-79-37" name="__codelineno-79-37"></a><span class="w">    </span><span class="p">},</span>
-</span><span id="__span-79-38"><a id="__codelineno-79-38" name="__codelineno-79-38"></a><span class="w">    </span><span class="p">{</span>
-</span><span id="__span-79-39"><a id="__codelineno-79-39" name="__codelineno-79-39"></a><span class="w">      </span><span class="nt">&quot;evalId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;skill_call&quot;</span><span class="p">,</span>
-</span><span id="__span-79-40"><a id="__codelineno-79-40" name="__codelineno-79-40"></a><span class="w">      </span><span class="nt">&quot;conversation&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-</span><span id="__span-79-41"><a id="__codelineno-79-41" name="__codelineno-79-41"></a><span class="w">        </span><span class="p">{</span>
-</span><span id="__span-79-42"><a id="__codelineno-79-42" name="__codelineno-79-42"></a><span class="w">          </span><span class="nt">&quot;invocationId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;skill_call-1&quot;</span><span class="p">,</span>
-</span><span id="__span-79-43"><a id="__codelineno-79-43" name="__codelineno-79-43"></a><span class="w">          </span><span class="nt">&quot;userContent&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-79-44"><a id="__codelineno-79-44" name="__codelineno-79-44"></a><span class="w">            </span><span class="nt">&quot;role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;user&quot;</span><span class="p">,</span>
-</span><span id="__span-79-45"><a id="__codelineno-79-45" name="__codelineno-79-45"></a><span class="w">            </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;What&#39;s the weather in Shenzhen?&quot;</span>
-</span><span id="__span-79-46"><a id="__codelineno-79-46" name="__codelineno-79-46"></a><span class="w">          </span><span class="p">},</span>
-</span><span id="__span-79-47"><a id="__codelineno-79-47" name="__codelineno-79-47"></a><span class="w">          </span><span class="nt">&quot;tools&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-</span><span id="__span-79-48"><a id="__codelineno-79-48" name="__codelineno-79-48"></a><span class="w">            </span><span class="p">{</span>
-</span><span id="__span-79-49"><a id="__codelineno-79-49" name="__codelineno-79-49"></a><span class="w">              </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;tool_use_1&quot;</span><span class="p">,</span>
-</span><span id="__span-79-50"><a id="__codelineno-79-50" name="__codelineno-79-50"></a><span class="w">              </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;skill_run&quot;</span><span class="p">,</span>
-</span><span id="__span-79-51"><a id="__codelineno-79-51" name="__codelineno-79-51"></a><span class="w">              </span><span class="nt">&quot;arguments&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-79-52"><a id="__codelineno-79-52" name="__codelineno-79-52"></a><span class="w">                </span><span class="nt">&quot;skill&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;weather-query&quot;</span>
-</span><span id="__span-79-53"><a id="__codelineno-79-53" name="__codelineno-79-53"></a><span class="w">              </span><span class="p">}</span>
-</span><span id="__span-79-54"><a id="__codelineno-79-54" name="__codelineno-79-54"></a><span class="w">            </span><span class="p">}</span>
-</span><span id="__span-79-55"><a id="__codelineno-79-55" name="__codelineno-79-55"></a><span class="w">          </span><span class="p">]</span>
-</span><span id="__span-79-56"><a id="__codelineno-79-56" name="__codelineno-79-56"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-79-57"><a id="__codelineno-79-57" name="__codelineno-79-57"></a><span class="w">      </span><span class="p">],</span>
-</span><span id="__span-79-58"><a id="__codelineno-79-58" name="__codelineno-79-58"></a><span class="w">      </span><span class="nt">&quot;sessionInput&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-79-59"><a id="__codelineno-79-59" name="__codelineno-79-59"></a><span class="w">        </span><span class="nt">&quot;appName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;claudecode-eval-app&quot;</span><span class="p">,</span>
-</span><span id="__span-79-60"><a id="__codelineno-79-60" name="__codelineno-79-60"></a><span class="w">        </span><span class="nt">&quot;userId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;user&quot;</span>
-</span><span id="__span-79-61"><a id="__codelineno-79-61" name="__codelineno-79-61"></a><span class="w">      </span><span class="p">}</span>
-</span><span id="__span-79-62"><a id="__codelineno-79-62" name="__codelineno-79-62"></a><span class="w">    </span><span class="p">},</span>
-</span><span id="__span-79-63"><a id="__codelineno-79-63" name="__codelineno-79-63"></a><span class="w">    </span><span class="p">{</span>
-</span><span id="__span-79-64"><a id="__codelineno-79-64" name="__codelineno-79-64"></a><span class="w">      </span><span class="nt">&quot;evalId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;subagent_task&quot;</span><span class="p">,</span>
-</span><span id="__span-79-65"><a id="__codelineno-79-65" name="__codelineno-79-65"></a><span class="w">      </span><span class="nt">&quot;conversation&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-</span><span id="__span-79-66"><a id="__codelineno-79-66" name="__codelineno-79-66"></a><span class="w">        </span><span class="p">{</span>
-</span><span id="__span-79-67"><a id="__codelineno-79-67" name="__codelineno-79-67"></a><span class="w">          </span><span class="nt">&quot;invocationId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;subagent_task-1&quot;</span><span class="p">,</span>
-</span><span id="__span-79-68"><a id="__codelineno-79-68" name="__codelineno-79-68"></a><span class="w">          </span><span class="nt">&quot;userContent&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-79-69"><a id="__codelineno-79-69" name="__codelineno-79-69"></a><span class="w">            </span><span class="nt">&quot;role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;user&quot;</span><span class="p">,</span>
-</span><span id="__span-79-70"><a id="__codelineno-79-70" name="__codelineno-79-70"></a><span class="w">            </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Look up the phone number for Alice.&quot;</span>
-</span><span id="__span-79-71"><a id="__codelineno-79-71" name="__codelineno-79-71"></a><span class="w">          </span><span class="p">},</span>
-</span><span id="__span-79-72"><a id="__codelineno-79-72" name="__codelineno-79-72"></a><span class="w">          </span><span class="nt">&quot;tools&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-</span><span id="__span-79-73"><a id="__codelineno-79-73" name="__codelineno-79-73"></a><span class="w">            </span><span class="p">{</span>
-</span><span id="__span-79-74"><a id="__codelineno-79-74" name="__codelineno-79-74"></a><span class="w">              </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;tool_use_1&quot;</span><span class="p">,</span>
-</span><span id="__span-79-75"><a id="__codelineno-79-75" name="__codelineno-79-75"></a><span class="w">              </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Task&quot;</span><span class="p">,</span>
-</span><span id="__span-79-76"><a id="__codelineno-79-76" name="__codelineno-79-76"></a><span class="w">              </span><span class="nt">&quot;arguments&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-79-77"><a id="__codelineno-79-77" name="__codelineno-79-77"></a><span class="w">                </span><span class="nt">&quot;subagent_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;contact-lookup-agent&quot;</span>
-</span><span id="__span-79-78"><a id="__codelineno-79-78" name="__codelineno-79-78"></a><span class="w">              </span><span class="p">}</span>
-</span><span id="__span-79-79"><a id="__codelineno-79-79" name="__codelineno-79-79"></a><span class="w">            </span><span class="p">}</span>
-</span><span id="__span-79-80"><a id="__codelineno-79-80" name="__codelineno-79-80"></a><span class="w">          </span><span class="p">]</span>
-</span><span id="__span-79-81"><a id="__codelineno-79-81" name="__codelineno-79-81"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-79-82"><a id="__codelineno-79-82" name="__codelineno-79-82"></a><span class="w">      </span><span class="p">],</span>
-</span><span id="__span-79-83"><a id="__codelineno-79-83" name="__codelineno-79-83"></a><span class="w">      </span><span class="nt">&quot;sessionInput&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-79-84"><a id="__codelineno-79-84" name="__codelineno-79-84"></a><span class="w">        </span><span class="nt">&quot;appName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;claudecode-eval-app&quot;</span><span class="p">,</span>
-</span><span id="__span-79-85"><a id="__codelineno-79-85" name="__codelineno-79-85"></a><span class="w">        </span><span class="nt">&quot;userId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;user&quot;</span>
-</span><span id="__span-79-86"><a id="__codelineno-79-86" name="__codelineno-79-86"></a><span class="w">      </span><span class="p">}</span>
-</span><span id="__span-79-87"><a id="__codelineno-79-87" name="__codelineno-79-87"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-79-88"><a id="__codelineno-79-88" name="__codelineno-79-88"></a><span class="w">  </span><span class="p">],</span>
-</span><span id="__span-79-89"><a id="__codelineno-79-89" name="__codelineno-79-89"></a><span class="w">  </span><span class="nt">&quot;creationTimestamp&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1771929600</span>
-</span><span id="__span-79-90"><a id="__codelineno-79-90" name="__codelineno-79-90"></a><span class="p">}</span>
+<span class="normal"><a href="#__codelineno-79-41">41</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-79-1"><a id="__codelineno-79-1" name="__codelineno-79-1"></a><span class="p">[</span>
+</span><span id="__span-79-2"><a id="__codelineno-79-2" name="__codelineno-79-2"></a><span class="w">  </span><span class="p">{</span>
+</span><span id="__span-79-3"><a id="__codelineno-79-3" name="__codelineno-79-3"></a><span class="w">    </span><span class="nt">&quot;metricName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;tool_trajectory_avg_score&quot;</span><span class="p">,</span>
+</span><span id="__span-79-4"><a id="__codelineno-79-4" name="__codelineno-79-4"></a><span class="w">    </span><span class="nt">&quot;threshold&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-79-5"><a id="__codelineno-79-5" name="__codelineno-79-5"></a><span class="w">    </span><span class="nt">&quot;criterion&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-79-6"><a id="__codelineno-79-6" name="__codelineno-79-6"></a><span class="w">      </span><span class="nt">&quot;toolTrajectory&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-79-7"><a id="__codelineno-79-7" name="__codelineno-79-7"></a><span class="w">        </span><span class="nt">&quot;orderSensitive&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-79-8"><a id="__codelineno-79-8" name="__codelineno-79-8"></a><span class="w">        </span><span class="nt">&quot;subsetMatching&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-79-9"><a id="__codelineno-79-9" name="__codelineno-79-9"></a><span class="w">        </span><span class="nt">&quot;toolStrategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-79-10"><a id="__codelineno-79-10" name="__codelineno-79-10"></a><span class="w">          </span><span class="nt">&quot;skill_load&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-79-11"><a id="__codelineno-79-11" name="__codelineno-79-11"></a><span class="w">            </span><span class="nt">&quot;arguments&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-79-12"><a id="__codelineno-79-12" name="__codelineno-79-12"></a><span class="w">              </span><span class="nt">&quot;onlyTree&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-79-13"><a id="__codelineno-79-13" name="__codelineno-79-13"></a><span class="w">                </span><span class="nt">&quot;skill&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-79-14"><a id="__codelineno-79-14" name="__codelineno-79-14"></a><span class="w">              </span><span class="p">},</span>
+</span><span id="__span-79-15"><a id="__codelineno-79-15" name="__codelineno-79-15"></a><span class="w">              </span><span class="nt">&quot;matchStrategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;exact&quot;</span>
+</span><span id="__span-79-16"><a id="__codelineno-79-16" name="__codelineno-79-16"></a><span class="w">            </span><span class="p">},</span>
+</span><span id="__span-79-17"><a id="__codelineno-79-17" name="__codelineno-79-17"></a><span class="w">            </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-79-18"><a id="__codelineno-79-18" name="__codelineno-79-18"></a><span class="w">              </span><span class="nt">&quot;ignore&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-79-19"><a id="__codelineno-79-19" name="__codelineno-79-19"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-79-20"><a id="__codelineno-79-20" name="__codelineno-79-20"></a><span class="w">          </span><span class="p">},</span>
+</span><span id="__span-79-21"><a id="__codelineno-79-21" name="__codelineno-79-21"></a><span class="w">          </span><span class="nt">&quot;skill_run&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-79-22"><a id="__codelineno-79-22" name="__codelineno-79-22"></a><span class="w">            </span><span class="nt">&quot;arguments&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-79-23"><a id="__codelineno-79-23" name="__codelineno-79-23"></a><span class="w">              </span><span class="nt">&quot;onlyTree&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-79-24"><a id="__codelineno-79-24" name="__codelineno-79-24"></a><span class="w">                </span><span class="nt">&quot;skill&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-79-25"><a id="__codelineno-79-25" name="__codelineno-79-25"></a><span class="w">                </span><span class="nt">&quot;output_files&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-79-26"><a id="__codelineno-79-26" name="__codelineno-79-26"></a><span class="w">              </span><span class="p">},</span>
+</span><span id="__span-79-27"><a id="__codelineno-79-27" name="__codelineno-79-27"></a><span class="w">              </span><span class="nt">&quot;matchStrategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;exact&quot;</span>
+</span><span id="__span-79-28"><a id="__codelineno-79-28" name="__codelineno-79-28"></a><span class="w">            </span><span class="p">},</span>
+</span><span id="__span-79-29"><a id="__codelineno-79-29" name="__codelineno-79-29"></a><span class="w">            </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-79-30"><a id="__codelineno-79-30" name="__codelineno-79-30"></a><span class="w">              </span><span class="nt">&quot;onlyTree&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-79-31"><a id="__codelineno-79-31" name="__codelineno-79-31"></a><span class="w">                </span><span class="nt">&quot;exit_code&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-79-32"><a id="__codelineno-79-32" name="__codelineno-79-32"></a><span class="w">                </span><span class="nt">&quot;timed_out&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-79-33"><a id="__codelineno-79-33" name="__codelineno-79-33"></a><span class="w">              </span><span class="p">},</span>
+</span><span id="__span-79-34"><a id="__codelineno-79-34" name="__codelineno-79-34"></a><span class="w">              </span><span class="nt">&quot;matchStrategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;exact&quot;</span>
+</span><span id="__span-79-35"><a id="__codelineno-79-35" name="__codelineno-79-35"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-79-36"><a id="__codelineno-79-36" name="__codelineno-79-36"></a><span class="w">          </span><span class="p">}</span>
+</span><span id="__span-79-37"><a id="__codelineno-79-37" name="__codelineno-79-37"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-79-38"><a id="__codelineno-79-38" name="__codelineno-79-38"></a><span class="w">      </span><span class="p">}</span>
+</span><span id="__span-79-39"><a id="__codelineno-79-39" name="__codelineno-79-39"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-79-40"><a id="__codelineno-79-40" name="__codelineno-79-40"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-79-41"><a id="__codelineno-79-41" name="__codelineno-79-41"></a><span class="p">]</span>
 </span></code></pre></div></td></tr></table></div>
-<p>Metric file example below:</p>
+<p>See <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/skill">examples/evaluation/skill</a> for a runnable example.</p>
+<h3 id="claude-code-evaluation">Claude Code Evaluation</h3>
+<p>The framework provides a Claude Code Agent. It executes a local Claude Code CLI and maps <code>tool_use</code> / <code>tool_result</code> records from the CLI output into framework tool events. Therefore, when you need to evaluate Claude Code MCP tool calls, Skills, and subagent behaviors, you can reuse the tool trajectory evaluator <code>tool_trajectory_avg_score</code> to align tool traces.</p>
+<p>When authoring EvalSets and Metrics, note the Claude Code tool naming and normalization rules:</p>
+<ul>
+<li>MCP tool names follow the <code>mcp__&lt;server&gt;__&lt;tool&gt;</code> convention, where <code>&lt;server&gt;</code> corresponds to the server key in the project <code>.mcp.json</code>.</li>
+<li>Claude Code CLI <code>Skill</code> tool calls are normalized to <code>skill_run</code>, and <code>skill</code> is written into tool arguments <code>arguments</code> for matching.</li>
+<li>Subagent routing is usually represented by a <code>Task</code> tool call, with <code>subagent_type</code> included in tool arguments <code>arguments</code>.</li>
+</ul>
+<p>A minimal example is shown below. It demonstrates how to declare the expected tool trajectory in the EvalSet and how to use <code>onlyTree</code> / <code>ignore</code> in the Metric to assert only stable fields.</p>
+<p>EvalSet file example below covers MCP, Skill, and Task tools:</p>
 <div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-80-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-80-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-80-3"> 3</a></span>
@@ -8285,66 +8168,136 @@
 <span class="normal"><a href="#__codelineno-80-50">50</a></span>
 <span class="normal"><a href="#__codelineno-80-51">51</a></span>
 <span class="normal"><a href="#__codelineno-80-52">52</a></span>
-<span class="normal"><a href="#__codelineno-80-53">53</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-80-1"><a id="__codelineno-80-1" name="__codelineno-80-1"></a><span class="p">[</span>
-</span><span id="__span-80-2"><a id="__codelineno-80-2" name="__codelineno-80-2"></a><span class="w">  </span><span class="p">{</span>
-</span><span id="__span-80-3"><a id="__codelineno-80-3" name="__codelineno-80-3"></a><span class="w">    </span><span class="nt">&quot;metricName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;tool_trajectory_avg_score&quot;</span><span class="p">,</span>
-</span><span id="__span-80-4"><a id="__codelineno-80-4" name="__codelineno-80-4"></a><span class="w">    </span><span class="nt">&quot;threshold&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
-</span><span id="__span-80-5"><a id="__codelineno-80-5" name="__codelineno-80-5"></a><span class="w">    </span><span class="nt">&quot;criterion&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-80-6"><a id="__codelineno-80-6" name="__codelineno-80-6"></a><span class="w">      </span><span class="nt">&quot;toolTrajectory&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-80-7"><a id="__codelineno-80-7" name="__codelineno-80-7"></a><span class="w">        </span><span class="nt">&quot;orderSensitive&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-</span><span id="__span-80-8"><a id="__codelineno-80-8" name="__codelineno-80-8"></a><span class="w">        </span><span class="nt">&quot;subsetMatching&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-</span><span id="__span-80-9"><a id="__codelineno-80-9" name="__codelineno-80-9"></a><span class="w">        </span><span class="nt">&quot;defaultStrategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-80-10"><a id="__codelineno-80-10" name="__codelineno-80-10"></a><span class="w">          </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-80-11"><a id="__codelineno-80-11" name="__codelineno-80-11"></a><span class="w">            </span><span class="nt">&quot;matchStrategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;exact&quot;</span>
-</span><span id="__span-80-12"><a id="__codelineno-80-12" name="__codelineno-80-12"></a><span class="w">          </span><span class="p">},</span>
-</span><span id="__span-80-13"><a id="__codelineno-80-13" name="__codelineno-80-13"></a><span class="w">          </span><span class="nt">&quot;arguments&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-80-14"><a id="__codelineno-80-14" name="__codelineno-80-14"></a><span class="w">            </span><span class="nt">&quot;matchStrategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;exact&quot;</span>
-</span><span id="__span-80-15"><a id="__codelineno-80-15" name="__codelineno-80-15"></a><span class="w">          </span><span class="p">},</span>
-</span><span id="__span-80-16"><a id="__codelineno-80-16" name="__codelineno-80-16"></a><span class="w">          </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-80-17"><a id="__codelineno-80-17" name="__codelineno-80-17"></a><span class="w">            </span><span class="nt">&quot;matchStrategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;exact&quot;</span>
-</span><span id="__span-80-18"><a id="__codelineno-80-18" name="__codelineno-80-18"></a><span class="w">          </span><span class="p">}</span>
-</span><span id="__span-80-19"><a id="__codelineno-80-19" name="__codelineno-80-19"></a><span class="w">        </span><span class="p">},</span>
-</span><span id="__span-80-20"><a id="__codelineno-80-20" name="__codelineno-80-20"></a><span class="w">        </span><span class="nt">&quot;toolStrategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-80-21"><a id="__codelineno-80-21" name="__codelineno-80-21"></a><span class="w">          </span><span class="nt">&quot;skill_run&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-80-22"><a id="__codelineno-80-22" name="__codelineno-80-22"></a><span class="w">            </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-80-23"><a id="__codelineno-80-23" name="__codelineno-80-23"></a><span class="w">              </span><span class="nt">&quot;matchStrategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;exact&quot;</span>
-</span><span id="__span-80-24"><a id="__codelineno-80-24" name="__codelineno-80-24"></a><span class="w">            </span><span class="p">},</span>
-</span><span id="__span-80-25"><a id="__codelineno-80-25" name="__codelineno-80-25"></a><span class="w">            </span><span class="nt">&quot;arguments&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-80-26"><a id="__codelineno-80-26" name="__codelineno-80-26"></a><span class="w">              </span><span class="nt">&quot;onlyTree&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-80-27"><a id="__codelineno-80-27" name="__codelineno-80-27"></a><span class="w">                </span><span class="nt">&quot;skill&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
-</span><span id="__span-80-28"><a id="__codelineno-80-28" name="__codelineno-80-28"></a><span class="w">              </span><span class="p">},</span>
-</span><span id="__span-80-29"><a id="__codelineno-80-29" name="__codelineno-80-29"></a><span class="w">              </span><span class="nt">&quot;matchStrategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;exact&quot;</span>
-</span><span id="__span-80-30"><a id="__codelineno-80-30" name="__codelineno-80-30"></a><span class="w">            </span><span class="p">},</span>
-</span><span id="__span-80-31"><a id="__codelineno-80-31" name="__codelineno-80-31"></a><span class="w">            </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-80-32"><a id="__codelineno-80-32" name="__codelineno-80-32"></a><span class="w">              </span><span class="nt">&quot;ignore&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
-</span><span id="__span-80-33"><a id="__codelineno-80-33" name="__codelineno-80-33"></a><span class="w">            </span><span class="p">}</span>
-</span><span id="__span-80-34"><a id="__codelineno-80-34" name="__codelineno-80-34"></a><span class="w">          </span><span class="p">},</span>
-</span><span id="__span-80-35"><a id="__codelineno-80-35" name="__codelineno-80-35"></a><span class="w">          </span><span class="nt">&quot;Task&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-80-36"><a id="__codelineno-80-36" name="__codelineno-80-36"></a><span class="w">            </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-80-37"><a id="__codelineno-80-37" name="__codelineno-80-37"></a><span class="w">              </span><span class="nt">&quot;matchStrategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;exact&quot;</span>
-</span><span id="__span-80-38"><a id="__codelineno-80-38" name="__codelineno-80-38"></a><span class="w">            </span><span class="p">},</span>
-</span><span id="__span-80-39"><a id="__codelineno-80-39" name="__codelineno-80-39"></a><span class="w">            </span><span class="nt">&quot;arguments&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-80-40"><a id="__codelineno-80-40" name="__codelineno-80-40"></a><span class="w">              </span><span class="nt">&quot;onlyTree&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-80-41"><a id="__codelineno-80-41" name="__codelineno-80-41"></a><span class="w">                </span><span class="nt">&quot;subagent_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
-</span><span id="__span-80-42"><a id="__codelineno-80-42" name="__codelineno-80-42"></a><span class="w">              </span><span class="p">},</span>
-</span><span id="__span-80-43"><a id="__codelineno-80-43" name="__codelineno-80-43"></a><span class="w">              </span><span class="nt">&quot;matchStrategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;exact&quot;</span>
-</span><span id="__span-80-44"><a id="__codelineno-80-44" name="__codelineno-80-44"></a><span class="w">            </span><span class="p">},</span>
-</span><span id="__span-80-45"><a id="__codelineno-80-45" name="__codelineno-80-45"></a><span class="w">            </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-80-46"><a id="__codelineno-80-46" name="__codelineno-80-46"></a><span class="w">              </span><span class="nt">&quot;ignore&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
-</span><span id="__span-80-47"><a id="__codelineno-80-47" name="__codelineno-80-47"></a><span class="w">            </span><span class="p">}</span>
-</span><span id="__span-80-48"><a id="__codelineno-80-48" name="__codelineno-80-48"></a><span class="w">          </span><span class="p">}</span>
-</span><span id="__span-80-49"><a id="__codelineno-80-49" name="__codelineno-80-49"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-80-50"><a id="__codelineno-80-50" name="__codelineno-80-50"></a><span class="w">      </span><span class="p">}</span>
-</span><span id="__span-80-51"><a id="__codelineno-80-51" name="__codelineno-80-51"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-80-52"><a id="__codelineno-80-52" name="__codelineno-80-52"></a><span class="w">  </span><span class="p">}</span>
-</span><span id="__span-80-53"><a id="__codelineno-80-53" name="__codelineno-80-53"></a><span class="p">]</span>
+<span class="normal"><a href="#__codelineno-80-53">53</a></span>
+<span class="normal"><a href="#__codelineno-80-54">54</a></span>
+<span class="normal"><a href="#__codelineno-80-55">55</a></span>
+<span class="normal"><a href="#__codelineno-80-56">56</a></span>
+<span class="normal"><a href="#__codelineno-80-57">57</a></span>
+<span class="normal"><a href="#__codelineno-80-58">58</a></span>
+<span class="normal"><a href="#__codelineno-80-59">59</a></span>
+<span class="normal"><a href="#__codelineno-80-60">60</a></span>
+<span class="normal"><a href="#__codelineno-80-61">61</a></span>
+<span class="normal"><a href="#__codelineno-80-62">62</a></span>
+<span class="normal"><a href="#__codelineno-80-63">63</a></span>
+<span class="normal"><a href="#__codelineno-80-64">64</a></span>
+<span class="normal"><a href="#__codelineno-80-65">65</a></span>
+<span class="normal"><a href="#__codelineno-80-66">66</a></span>
+<span class="normal"><a href="#__codelineno-80-67">67</a></span>
+<span class="normal"><a href="#__codelineno-80-68">68</a></span>
+<span class="normal"><a href="#__codelineno-80-69">69</a></span>
+<span class="normal"><a href="#__codelineno-80-70">70</a></span>
+<span class="normal"><a href="#__codelineno-80-71">71</a></span>
+<span class="normal"><a href="#__codelineno-80-72">72</a></span>
+<span class="normal"><a href="#__codelineno-80-73">73</a></span>
+<span class="normal"><a href="#__codelineno-80-74">74</a></span>
+<span class="normal"><a href="#__codelineno-80-75">75</a></span>
+<span class="normal"><a href="#__codelineno-80-76">76</a></span>
+<span class="normal"><a href="#__codelineno-80-77">77</a></span>
+<span class="normal"><a href="#__codelineno-80-78">78</a></span>
+<span class="normal"><a href="#__codelineno-80-79">79</a></span>
+<span class="normal"><a href="#__codelineno-80-80">80</a></span>
+<span class="normal"><a href="#__codelineno-80-81">81</a></span>
+<span class="normal"><a href="#__codelineno-80-82">82</a></span>
+<span class="normal"><a href="#__codelineno-80-83">83</a></span>
+<span class="normal"><a href="#__codelineno-80-84">84</a></span>
+<span class="normal"><a href="#__codelineno-80-85">85</a></span>
+<span class="normal"><a href="#__codelineno-80-86">86</a></span>
+<span class="normal"><a href="#__codelineno-80-87">87</a></span>
+<span class="normal"><a href="#__codelineno-80-88">88</a></span>
+<span class="normal"><a href="#__codelineno-80-89">89</a></span>
+<span class="normal"><a href="#__codelineno-80-90">90</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-80-1"><a id="__codelineno-80-1" name="__codelineno-80-1"></a><span class="p">{</span>
+</span><span id="__span-80-2"><a id="__codelineno-80-2" name="__codelineno-80-2"></a><span class="w">  </span><span class="nt">&quot;evalSetId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;claudecode-basic&quot;</span><span class="p">,</span>
+</span><span id="__span-80-3"><a id="__codelineno-80-3" name="__codelineno-80-3"></a><span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;claudecode-basic&quot;</span><span class="p">,</span>
+</span><span id="__span-80-4"><a id="__codelineno-80-4" name="__codelineno-80-4"></a><span class="w">  </span><span class="nt">&quot;evalCases&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-80-5"><a id="__codelineno-80-5" name="__codelineno-80-5"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-80-6"><a id="__codelineno-80-6" name="__codelineno-80-6"></a><span class="w">      </span><span class="nt">&quot;evalId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;mcp_calculator&quot;</span><span class="p">,</span>
+</span><span id="__span-80-7"><a id="__codelineno-80-7" name="__codelineno-80-7"></a><span class="w">      </span><span class="nt">&quot;conversation&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-80-8"><a id="__codelineno-80-8" name="__codelineno-80-8"></a><span class="w">        </span><span class="p">{</span>
+</span><span id="__span-80-9"><a id="__codelineno-80-9" name="__codelineno-80-9"></a><span class="w">          </span><span class="nt">&quot;invocationId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;mcp_calculator-1&quot;</span><span class="p">,</span>
+</span><span id="__span-80-10"><a id="__codelineno-80-10" name="__codelineno-80-10"></a><span class="w">          </span><span class="nt">&quot;userContent&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-80-11"><a id="__codelineno-80-11" name="__codelineno-80-11"></a><span class="w">            </span><span class="nt">&quot;role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;user&quot;</span><span class="p">,</span>
+</span><span id="__span-80-12"><a id="__codelineno-80-12" name="__codelineno-80-12"></a><span class="w">            </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Compute 1+2.&quot;</span>
+</span><span id="__span-80-13"><a id="__codelineno-80-13" name="__codelineno-80-13"></a><span class="w">          </span><span class="p">},</span>
+</span><span id="__span-80-14"><a id="__codelineno-80-14" name="__codelineno-80-14"></a><span class="w">          </span><span class="nt">&quot;tools&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-80-15"><a id="__codelineno-80-15" name="__codelineno-80-15"></a><span class="w">            </span><span class="p">{</span>
+</span><span id="__span-80-16"><a id="__codelineno-80-16" name="__codelineno-80-16"></a><span class="w">              </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;tool_use_1&quot;</span><span class="p">,</span>
+</span><span id="__span-80-17"><a id="__codelineno-80-17" name="__codelineno-80-17"></a><span class="w">              </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;mcp__eva_cli_example__calculator&quot;</span><span class="p">,</span>
+</span><span id="__span-80-18"><a id="__codelineno-80-18" name="__codelineno-80-18"></a><span class="w">              </span><span class="nt">&quot;arguments&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-80-19"><a id="__codelineno-80-19" name="__codelineno-80-19"></a><span class="w">                </span><span class="nt">&quot;operation&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;add&quot;</span><span class="p">,</span>
+</span><span id="__span-80-20"><a id="__codelineno-80-20" name="__codelineno-80-20"></a><span class="w">                </span><span class="nt">&quot;a&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-80-21"><a id="__codelineno-80-21" name="__codelineno-80-21"></a><span class="w">                </span><span class="nt">&quot;b&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span>
+</span><span id="__span-80-22"><a id="__codelineno-80-22" name="__codelineno-80-22"></a><span class="w">              </span><span class="p">},</span>
+</span><span id="__span-80-23"><a id="__codelineno-80-23" name="__codelineno-80-23"></a><span class="w">              </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-80-24"><a id="__codelineno-80-24" name="__codelineno-80-24"></a><span class="w">                </span><span class="nt">&quot;operation&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;add&quot;</span><span class="p">,</span>
+</span><span id="__span-80-25"><a id="__codelineno-80-25" name="__codelineno-80-25"></a><span class="w">                </span><span class="nt">&quot;a&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-80-26"><a id="__codelineno-80-26" name="__codelineno-80-26"></a><span class="w">                </span><span class="nt">&quot;b&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+</span><span id="__span-80-27"><a id="__codelineno-80-27" name="__codelineno-80-27"></a><span class="w">                </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span>
+</span><span id="__span-80-28"><a id="__codelineno-80-28" name="__codelineno-80-28"></a><span class="w">              </span><span class="p">}</span>
+</span><span id="__span-80-29"><a id="__codelineno-80-29" name="__codelineno-80-29"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-80-30"><a id="__codelineno-80-30" name="__codelineno-80-30"></a><span class="w">          </span><span class="p">]</span>
+</span><span id="__span-80-31"><a id="__codelineno-80-31" name="__codelineno-80-31"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-80-32"><a id="__codelineno-80-32" name="__codelineno-80-32"></a><span class="w">      </span><span class="p">],</span>
+</span><span id="__span-80-33"><a id="__codelineno-80-33" name="__codelineno-80-33"></a><span class="w">      </span><span class="nt">&quot;sessionInput&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-80-34"><a id="__codelineno-80-34" name="__codelineno-80-34"></a><span class="w">        </span><span class="nt">&quot;appName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;claudecode-eval-app&quot;</span><span class="p">,</span>
+</span><span id="__span-80-35"><a id="__codelineno-80-35" name="__codelineno-80-35"></a><span class="w">        </span><span class="nt">&quot;userId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;user&quot;</span>
+</span><span id="__span-80-36"><a id="__codelineno-80-36" name="__codelineno-80-36"></a><span class="w">      </span><span class="p">}</span>
+</span><span id="__span-80-37"><a id="__codelineno-80-37" name="__codelineno-80-37"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-80-38"><a id="__codelineno-80-38" name="__codelineno-80-38"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-80-39"><a id="__codelineno-80-39" name="__codelineno-80-39"></a><span class="w">      </span><span class="nt">&quot;evalId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;skill_call&quot;</span><span class="p">,</span>
+</span><span id="__span-80-40"><a id="__codelineno-80-40" name="__codelineno-80-40"></a><span class="w">      </span><span class="nt">&quot;conversation&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-80-41"><a id="__codelineno-80-41" name="__codelineno-80-41"></a><span class="w">        </span><span class="p">{</span>
+</span><span id="__span-80-42"><a id="__codelineno-80-42" name="__codelineno-80-42"></a><span class="w">          </span><span class="nt">&quot;invocationId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;skill_call-1&quot;</span><span class="p">,</span>
+</span><span id="__span-80-43"><a id="__codelineno-80-43" name="__codelineno-80-43"></a><span class="w">          </span><span class="nt">&quot;userContent&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-80-44"><a id="__codelineno-80-44" name="__codelineno-80-44"></a><span class="w">            </span><span class="nt">&quot;role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;user&quot;</span><span class="p">,</span>
+</span><span id="__span-80-45"><a id="__codelineno-80-45" name="__codelineno-80-45"></a><span class="w">            </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;What&#39;s the weather in Shenzhen?&quot;</span>
+</span><span id="__span-80-46"><a id="__codelineno-80-46" name="__codelineno-80-46"></a><span class="w">          </span><span class="p">},</span>
+</span><span id="__span-80-47"><a id="__codelineno-80-47" name="__codelineno-80-47"></a><span class="w">          </span><span class="nt">&quot;tools&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-80-48"><a id="__codelineno-80-48" name="__codelineno-80-48"></a><span class="w">            </span><span class="p">{</span>
+</span><span id="__span-80-49"><a id="__codelineno-80-49" name="__codelineno-80-49"></a><span class="w">              </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;tool_use_1&quot;</span><span class="p">,</span>
+</span><span id="__span-80-50"><a id="__codelineno-80-50" name="__codelineno-80-50"></a><span class="w">              </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;skill_run&quot;</span><span class="p">,</span>
+</span><span id="__span-80-51"><a id="__codelineno-80-51" name="__codelineno-80-51"></a><span class="w">              </span><span class="nt">&quot;arguments&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-80-52"><a id="__codelineno-80-52" name="__codelineno-80-52"></a><span class="w">                </span><span class="nt">&quot;skill&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;weather-query&quot;</span>
+</span><span id="__span-80-53"><a id="__codelineno-80-53" name="__codelineno-80-53"></a><span class="w">              </span><span class="p">}</span>
+</span><span id="__span-80-54"><a id="__codelineno-80-54" name="__codelineno-80-54"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-80-55"><a id="__codelineno-80-55" name="__codelineno-80-55"></a><span class="w">          </span><span class="p">]</span>
+</span><span id="__span-80-56"><a id="__codelineno-80-56" name="__codelineno-80-56"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-80-57"><a id="__codelineno-80-57" name="__codelineno-80-57"></a><span class="w">      </span><span class="p">],</span>
+</span><span id="__span-80-58"><a id="__codelineno-80-58" name="__codelineno-80-58"></a><span class="w">      </span><span class="nt">&quot;sessionInput&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-80-59"><a id="__codelineno-80-59" name="__codelineno-80-59"></a><span class="w">        </span><span class="nt">&quot;appName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;claudecode-eval-app&quot;</span><span class="p">,</span>
+</span><span id="__span-80-60"><a id="__codelineno-80-60" name="__codelineno-80-60"></a><span class="w">        </span><span class="nt">&quot;userId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;user&quot;</span>
+</span><span id="__span-80-61"><a id="__codelineno-80-61" name="__codelineno-80-61"></a><span class="w">      </span><span class="p">}</span>
+</span><span id="__span-80-62"><a id="__codelineno-80-62" name="__codelineno-80-62"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-80-63"><a id="__codelineno-80-63" name="__codelineno-80-63"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-80-64"><a id="__codelineno-80-64" name="__codelineno-80-64"></a><span class="w">      </span><span class="nt">&quot;evalId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;subagent_task&quot;</span><span class="p">,</span>
+</span><span id="__span-80-65"><a id="__codelineno-80-65" name="__codelineno-80-65"></a><span class="w">      </span><span class="nt">&quot;conversation&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-80-66"><a id="__codelineno-80-66" name="__codelineno-80-66"></a><span class="w">        </span><span class="p">{</span>
+</span><span id="__span-80-67"><a id="__codelineno-80-67" name="__codelineno-80-67"></a><span class="w">          </span><span class="nt">&quot;invocationId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;subagent_task-1&quot;</span><span class="p">,</span>
+</span><span id="__span-80-68"><a id="__codelineno-80-68" name="__codelineno-80-68"></a><span class="w">          </span><span class="nt">&quot;userContent&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-80-69"><a id="__codelineno-80-69" name="__codelineno-80-69"></a><span class="w">            </span><span class="nt">&quot;role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;user&quot;</span><span class="p">,</span>
+</span><span id="__span-80-70"><a id="__codelineno-80-70" name="__codelineno-80-70"></a><span class="w">            </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Look up the phone number for Alice.&quot;</span>
+</span><span id="__span-80-71"><a id="__codelineno-80-71" name="__codelineno-80-71"></a><span class="w">          </span><span class="p">},</span>
+</span><span id="__span-80-72"><a id="__codelineno-80-72" name="__codelineno-80-72"></a><span class="w">          </span><span class="nt">&quot;tools&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-80-73"><a id="__codelineno-80-73" name="__codelineno-80-73"></a><span class="w">            </span><span class="p">{</span>
+</span><span id="__span-80-74"><a id="__codelineno-80-74" name="__codelineno-80-74"></a><span class="w">              </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;tool_use_1&quot;</span><span class="p">,</span>
+</span><span id="__span-80-75"><a id="__codelineno-80-75" name="__codelineno-80-75"></a><span class="w">              </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Task&quot;</span><span class="p">,</span>
+</span><span id="__span-80-76"><a id="__codelineno-80-76" name="__codelineno-80-76"></a><span class="w">              </span><span class="nt">&quot;arguments&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-80-77"><a id="__codelineno-80-77" name="__codelineno-80-77"></a><span class="w">                </span><span class="nt">&quot;subagent_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;contact-lookup-agent&quot;</span>
+</span><span id="__span-80-78"><a id="__codelineno-80-78" name="__codelineno-80-78"></a><span class="w">              </span><span class="p">}</span>
+</span><span id="__span-80-79"><a id="__codelineno-80-79" name="__codelineno-80-79"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-80-80"><a id="__codelineno-80-80" name="__codelineno-80-80"></a><span class="w">          </span><span class="p">]</span>
+</span><span id="__span-80-81"><a id="__codelineno-80-81" name="__codelineno-80-81"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-80-82"><a id="__codelineno-80-82" name="__codelineno-80-82"></a><span class="w">      </span><span class="p">],</span>
+</span><span id="__span-80-83"><a id="__codelineno-80-83" name="__codelineno-80-83"></a><span class="w">      </span><span class="nt">&quot;sessionInput&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-80-84"><a id="__codelineno-80-84" name="__codelineno-80-84"></a><span class="w">        </span><span class="nt">&quot;appName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;claudecode-eval-app&quot;</span><span class="p">,</span>
+</span><span id="__span-80-85"><a id="__codelineno-80-85" name="__codelineno-80-85"></a><span class="w">        </span><span class="nt">&quot;userId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;user&quot;</span>
+</span><span id="__span-80-86"><a id="__codelineno-80-86" name="__codelineno-80-86"></a><span class="w">      </span><span class="p">}</span>
+</span><span id="__span-80-87"><a id="__codelineno-80-87" name="__codelineno-80-87"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-80-88"><a id="__codelineno-80-88" name="__codelineno-80-88"></a><span class="w">  </span><span class="p">],</span>
+</span><span id="__span-80-89"><a id="__codelineno-80-89" name="__codelineno-80-89"></a><span class="w">  </span><span class="nt">&quot;creationTimestamp&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1771929600</span>
+</span><span id="__span-80-90"><a id="__codelineno-80-90" name="__codelineno-80-90"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p>See <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/claudecode">examples/evaluation/claudecode</a> for a runnable example.</p>
-<h2 id="best-practices">Best Practices</h2>
-<p>Integrating evaluation into engineering workflows often delivers more value than expected. It is not about producing a polished report; it is about turning key Agent behaviors into sustainable regression signals.</p>
-<p>Two things are most dangerous in Agent evolution: small-looking changes that cause silent behavior drift, and issues that only surface for users, which multiplies diagnosis cost. Evaluation exists to block these risks early.</p>
-<p>tRPC-Agent-Go in <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runner">examples/runner</a> encodes critical paths into evaluation sets and metrics and runs them in the release pipeline. The Runner quickstart cases cover common scenarios such as calculator, time tool, and compound interest, with a clear goal to guard tool selection and output shape. If behavior drifts, the pipeline fails early, and you can locate the issue directly with the corresponding case and trace.</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-81-1"> 1</a></span>
+<p>Metric file example below:</p>
+<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-81-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-81-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-81-3"> 3</a></span>
 <span class="normal"><a href="#__codelineno-81-4"> 4</a></span>
@@ -8396,83 +8349,194 @@
 <span class="normal"><a href="#__codelineno-81-50">50</a></span>
 <span class="normal"><a href="#__codelineno-81-51">51</a></span>
 <span class="normal"><a href="#__codelineno-81-52">52</a></span>
-<span class="normal"><a href="#__codelineno-81-53">53</a></span>
-<span class="normal"><a href="#__codelineno-81-54">54</a></span>
-<span class="normal"><a href="#__codelineno-81-55">55</a></span>
-<span class="normal"><a href="#__codelineno-81-56">56</a></span>
-<span class="normal"><a href="#__codelineno-81-57">57</a></span>
-<span class="normal"><a href="#__codelineno-81-58">58</a></span>
-<span class="normal"><a href="#__codelineno-81-59">59</a></span>
-<span class="normal"><a href="#__codelineno-81-60">60</a></span>
-<span class="normal"><a href="#__codelineno-81-61">61</a></span>
-<span class="normal"><a href="#__codelineno-81-62">62</a></span>
-<span class="normal"><a href="#__codelineno-81-63">63</a></span>
-<span class="normal"><a href="#__codelineno-81-64">64</a></span>
-<span class="normal"><a href="#__codelineno-81-65">65</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-81-1"><a id="__codelineno-81-1" name="__codelineno-81-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-81-2"><a id="__codelineno-81-2" name="__codelineno-81-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation&quot;</span>
-</span><span id="__span-81-3"><a id="__codelineno-81-3" name="__codelineno-81-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult&quot;</span>
-</span><span id="__span-81-4"><a id="__codelineno-81-4" name="__codelineno-81-4"></a><span class="w">    </span><span class="nx">localevalresult</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/local&quot;</span>
-</span><span id="__span-81-5"><a id="__codelineno-81-5" name="__codelineno-81-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/evalset&quot;</span>
-</span><span id="__span-81-6"><a id="__codelineno-81-6" name="__codelineno-81-6"></a><span class="w">    </span><span class="nx">localevalset</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/local&quot;</span>
-</span><span id="__span-81-7"><a id="__codelineno-81-7" name="__codelineno-81-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric&quot;</span>
-</span><span id="__span-81-8"><a id="__codelineno-81-8" name="__codelineno-81-8"></a><span class="w">    </span><span class="nx">localmetric</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric/local&quot;</span>
-</span><span id="__span-81-9"><a id="__codelineno-81-9" name="__codelineno-81-9"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/status&quot;</span>
-</span><span id="__span-81-10"><a id="__codelineno-81-10" name="__codelineno-81-10"></a><span class="p">)</span>
-</span><span id="__span-81-11"><a id="__codelineno-81-11" name="__codelineno-81-11"></a>
-</span><span id="__span-81-12"><a id="__codelineno-81-12" name="__codelineno-81-12"></a><span class="kd">func</span><span class="w"> </span><span class="nx">TestTool</span><span class="p">(</span><span class="nx">t</span><span class="w"> </span><span class="o">*</span><span class="nx">testing</span><span class="p">.</span><span class="nx">T</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-81-13"><a id="__codelineno-81-13" name="__codelineno-81-13"></a><span class="w">    </span><span class="nx">tests</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="p">[]</span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-81-14"><a id="__codelineno-81-14" name="__codelineno-81-14"></a><span class="w">        </span><span class="nx">name</span><span class="w">      </span><span class="kt">string</span>
-</span><span id="__span-81-15"><a id="__codelineno-81-15" name="__codelineno-81-15"></a><span class="w">        </span><span class="nx">evalSetID</span><span class="w"> </span><span class="kt">string</span>
-</span><span id="__span-81-16"><a id="__codelineno-81-16" name="__codelineno-81-16"></a><span class="w">    </span><span class="p">}{</span>
-</span><span id="__span-81-17"><a id="__codelineno-81-17" name="__codelineno-81-17"></a><span class="w">        </span><span class="p">{</span>
-</span><span id="__span-81-18"><a id="__codelineno-81-18" name="__codelineno-81-18"></a><span class="w">            </span><span class="nx">name</span><span class="p">:</span><span class="w">      </span><span class="s">&quot;calculator&quot;</span><span class="p">,</span>
-</span><span id="__span-81-19"><a id="__codelineno-81-19" name="__codelineno-81-19"></a><span class="w">            </span><span class="nx">evalSetID</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;calculator_tool&quot;</span><span class="p">,</span>
-</span><span id="__span-81-20"><a id="__codelineno-81-20" name="__codelineno-81-20"></a><span class="w">        </span><span class="p">},</span>
-</span><span id="__span-81-21"><a id="__codelineno-81-21" name="__codelineno-81-21"></a><span class="w">        </span><span class="p">{</span>
-</span><span id="__span-81-22"><a id="__codelineno-81-22" name="__codelineno-81-22"></a><span class="w">            </span><span class="nx">name</span><span class="p">:</span><span class="w">      </span><span class="s">&quot;currenttime&quot;</span><span class="p">,</span>
-</span><span id="__span-81-23"><a id="__codelineno-81-23" name="__codelineno-81-23"></a><span class="w">            </span><span class="nx">evalSetID</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;currenttime_tool&quot;</span><span class="p">,</span>
-</span><span id="__span-81-24"><a id="__codelineno-81-24" name="__codelineno-81-24"></a><span class="w">        </span><span class="p">},</span>
-</span><span id="__span-81-25"><a id="__codelineno-81-25" name="__codelineno-81-25"></a><span class="w">        </span><span class="p">{</span>
-</span><span id="__span-81-26"><a id="__codelineno-81-26" name="__codelineno-81-26"></a><span class="w">            </span><span class="nx">name</span><span class="p">:</span><span class="w">      </span><span class="s">&quot;compound_interest&quot;</span><span class="p">,</span>
-</span><span id="__span-81-27"><a id="__codelineno-81-27" name="__codelineno-81-27"></a><span class="w">            </span><span class="nx">evalSetID</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;compound_interest&quot;</span><span class="p">,</span>
-</span><span id="__span-81-28"><a id="__codelineno-81-28" name="__codelineno-81-28"></a><span class="w">        </span><span class="p">},</span>
-</span><span id="__span-81-29"><a id="__codelineno-81-29" name="__codelineno-81-29"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-81-30"><a id="__codelineno-81-30" name="__codelineno-81-30"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">tt</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">tests</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-81-31"><a id="__codelineno-81-31" name="__codelineno-81-31"></a><span class="w">        </span><span class="nx">t</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">tt</span><span class="p">.</span><span class="nx">name</span><span class="p">,</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">t</span><span class="w"> </span><span class="o">*</span><span class="nx">testing</span><span class="p">.</span><span class="nx">T</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-81-32"><a id="__codelineno-81-32" name="__codelineno-81-32"></a><span class="w">            </span><span class="nx">chat</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">multiTurnChat</span><span class="p">{</span>
-</span><span id="__span-81-33"><a id="__codelineno-81-33" name="__codelineno-81-33"></a><span class="w">                </span><span class="nx">modelName</span><span class="p">:</span><span class="w"> </span><span class="o">*</span><span class="nx">modelName</span><span class="p">,</span>
-</span><span id="__span-81-34"><a id="__codelineno-81-34" name="__codelineno-81-34"></a><span class="w">                </span><span class="nx">streaming</span><span class="p">:</span><span class="w"> </span><span class="o">*</span><span class="nx">streaming</span><span class="p">,</span>
-</span><span id="__span-81-35"><a id="__codelineno-81-35" name="__codelineno-81-35"></a><span class="w">                </span><span class="nx">variant</span><span class="p">:</span><span class="w">   </span><span class="o">*</span><span class="nx">variant</span><span class="p">,</span>
-</span><span id="__span-81-36"><a id="__codelineno-81-36" name="__codelineno-81-36"></a><span class="w">            </span><span class="p">}</span>
-</span><span id="__span-81-37"><a id="__codelineno-81-37" name="__codelineno-81-37"></a><span class="w">            </span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">cancel</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">WithTimeout</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">(),</span><span class="w"> </span><span class="mi">5</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">)</span>
-</span><span id="__span-81-38"><a id="__codelineno-81-38" name="__codelineno-81-38"></a><span class="w">            </span><span class="k">defer</span><span class="w"> </span><span class="nx">cancel</span><span class="p">()</span>
-</span><span id="__span-81-39"><a id="__codelineno-81-39" name="__codelineno-81-39"></a><span class="w">            </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">chat</span><span class="p">.</span><span class="nx">setup</span><span class="p">(</span><span class="nx">ctx</span><span class="p">)</span>
-</span><span id="__span-81-40"><a id="__codelineno-81-40" name="__codelineno-81-40"></a><span class="w">            </span><span class="nx">assert</span><span class="p">.</span><span class="nx">NoError</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-81-41"><a id="__codelineno-81-41" name="__codelineno-81-41"></a><span class="w">            </span><span class="k">defer</span><span class="w"> </span><span class="nx">chat</span><span class="p">.</span><span class="nx">runner</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
-</span><span id="__span-81-42"><a id="__codelineno-81-42" name="__codelineno-81-42"></a><span class="w">            </span><span class="nx">evaluationDir</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">&quot;evaluation&quot;</span>
-</span><span id="__span-81-43"><a id="__codelineno-81-43" name="__codelineno-81-43"></a><span class="w">            </span><span class="nx">localEvalSetManager</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">localevalset</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">evalset</span><span class="p">.</span><span class="nx">WithBaseDir</span><span class="p">(</span><span class="nx">evaluationDir</span><span class="p">))</span>
-</span><span id="__span-81-44"><a id="__codelineno-81-44" name="__codelineno-81-44"></a><span class="w">            </span><span class="nx">localMetricManager</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">localmetric</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">metric</span><span class="p">.</span><span class="nx">WithBaseDir</span><span class="p">(</span><span class="nx">evaluationDir</span><span class="p">))</span>
-</span><span id="__span-81-45"><a id="__codelineno-81-45" name="__codelineno-81-45"></a><span class="w">            </span><span class="nx">localEvalResultManager</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">localevalresult</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">evalresult</span><span class="p">.</span><span class="nx">WithBaseDir</span><span class="p">(</span><span class="nx">evaluationDir</span><span class="p">))</span>
-</span><span id="__span-81-46"><a id="__codelineno-81-46" name="__codelineno-81-46"></a><span class="w">            </span><span class="nx">evaluator</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-81-47"><a id="__codelineno-81-47" name="__codelineno-81-47"></a><span class="w">                </span><span class="nx">appName</span><span class="p">,</span>
-</span><span id="__span-81-48"><a id="__codelineno-81-48" name="__codelineno-81-48"></a><span class="w">                </span><span class="nx">chat</span><span class="p">.</span><span class="nx">runner</span><span class="p">,</span>
-</span><span id="__span-81-49"><a id="__codelineno-81-49" name="__codelineno-81-49"></a><span class="w">                </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithEvalSetManager</span><span class="p">(</span><span class="nx">localEvalSetManager</span><span class="p">),</span>
-</span><span id="__span-81-50"><a id="__codelineno-81-50" name="__codelineno-81-50"></a><span class="w">                </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithMetricManager</span><span class="p">(</span><span class="nx">localMetricManager</span><span class="p">),</span>
-</span><span id="__span-81-51"><a id="__codelineno-81-51" name="__codelineno-81-51"></a><span class="w">                </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithEvalResultManager</span><span class="p">(</span><span class="nx">localEvalResultManager</span><span class="p">),</span>
-</span><span id="__span-81-52"><a id="__codelineno-81-52" name="__codelineno-81-52"></a><span class="w">            </span><span class="p">)</span>
-</span><span id="__span-81-53"><a id="__codelineno-81-53" name="__codelineno-81-53"></a><span class="w">            </span><span class="nx">assert</span><span class="p">.</span><span class="nx">NoError</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-81-54"><a id="__codelineno-81-54" name="__codelineno-81-54"></a><span class="w">            </span><span class="nx">t</span><span class="p">.</span><span class="nx">Cleanup</span><span class="p">(</span><span class="kd">func</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-81-55"><a id="__codelineno-81-55" name="__codelineno-81-55"></a><span class="w">                </span><span class="nx">assert</span><span class="p">.</span><span class="nx">NoError</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">evaluator</span><span class="p">.</span><span class="nx">Close</span><span class="p">())</span>
-</span><span id="__span-81-56"><a id="__codelineno-81-56" name="__codelineno-81-56"></a><span class="w">            </span><span class="p">})</span>
-</span><span id="__span-81-57"><a id="__codelineno-81-57" name="__codelineno-81-57"></a><span class="w">            </span><span class="nx">result</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evaluator</span><span class="p">.</span><span class="nx">Evaluate</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">tt</span><span class="p">.</span><span class="nx">evalSetID</span><span class="p">)</span>
-</span><span id="__span-81-58"><a id="__codelineno-81-58" name="__codelineno-81-58"></a><span class="w">            </span><span class="nx">assert</span><span class="p">.</span><span class="nx">NoError</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-81-59"><a id="__codelineno-81-59" name="__codelineno-81-59"></a><span class="w">            </span><span class="nx">assert</span><span class="p">.</span><span class="nx">NotNil</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">result</span><span class="p">)</span>
-</span><span id="__span-81-60"><a id="__codelineno-81-60" name="__codelineno-81-60"></a><span class="w">            </span><span class="nx">resultData</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">json</span><span class="p">.</span><span class="nx">MarshalIndent</span><span class="p">(</span><span class="nx">result</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;  &quot;</span><span class="p">)</span>
-</span><span id="__span-81-61"><a id="__codelineno-81-61" name="__codelineno-81-61"></a><span class="w">            </span><span class="nx">assert</span><span class="p">.</span><span class="nx">NoError</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-81-62"><a id="__codelineno-81-62" name="__codelineno-81-62"></a><span class="w">            </span><span class="nx">assert</span><span class="p">.</span><span class="nx">Equal</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">status</span><span class="p">.</span><span class="nx">EvalStatusPassed</span><span class="p">,</span><span class="w"> </span><span class="nx">result</span><span class="p">.</span><span class="nx">OverallStatus</span><span class="p">,</span><span class="w"> </span><span class="nb">string</span><span class="p">(</span><span class="nx">resultData</span><span class="p">))</span>
-</span><span id="__span-81-63"><a id="__codelineno-81-63" name="__codelineno-81-63"></a><span class="w">        </span><span class="p">})</span>
-</span><span id="__span-81-64"><a id="__codelineno-81-64" name="__codelineno-81-64"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-81-65"><a id="__codelineno-81-65" name="__codelineno-81-65"></a><span class="p">}</span>
+<span class="normal"><a href="#__codelineno-81-53">53</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-81-1"><a id="__codelineno-81-1" name="__codelineno-81-1"></a><span class="p">[</span>
+</span><span id="__span-81-2"><a id="__codelineno-81-2" name="__codelineno-81-2"></a><span class="w">  </span><span class="p">{</span>
+</span><span id="__span-81-3"><a id="__codelineno-81-3" name="__codelineno-81-3"></a><span class="w">    </span><span class="nt">&quot;metricName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;tool_trajectory_avg_score&quot;</span><span class="p">,</span>
+</span><span id="__span-81-4"><a id="__codelineno-81-4" name="__codelineno-81-4"></a><span class="w">    </span><span class="nt">&quot;threshold&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-81-5"><a id="__codelineno-81-5" name="__codelineno-81-5"></a><span class="w">    </span><span class="nt">&quot;criterion&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-81-6"><a id="__codelineno-81-6" name="__codelineno-81-6"></a><span class="w">      </span><span class="nt">&quot;toolTrajectory&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-81-7"><a id="__codelineno-81-7" name="__codelineno-81-7"></a><span class="w">        </span><span class="nt">&quot;orderSensitive&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-81-8"><a id="__codelineno-81-8" name="__codelineno-81-8"></a><span class="w">        </span><span class="nt">&quot;subsetMatching&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-81-9"><a id="__codelineno-81-9" name="__codelineno-81-9"></a><span class="w">        </span><span class="nt">&quot;defaultStrategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-81-10"><a id="__codelineno-81-10" name="__codelineno-81-10"></a><span class="w">          </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-81-11"><a id="__codelineno-81-11" name="__codelineno-81-11"></a><span class="w">            </span><span class="nt">&quot;matchStrategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;exact&quot;</span>
+</span><span id="__span-81-12"><a id="__codelineno-81-12" name="__codelineno-81-12"></a><span class="w">          </span><span class="p">},</span>
+</span><span id="__span-81-13"><a id="__codelineno-81-13" name="__codelineno-81-13"></a><span class="w">          </span><span class="nt">&quot;arguments&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-81-14"><a id="__codelineno-81-14" name="__codelineno-81-14"></a><span class="w">            </span><span class="nt">&quot;matchStrategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;exact&quot;</span>
+</span><span id="__span-81-15"><a id="__codelineno-81-15" name="__codelineno-81-15"></a><span class="w">          </span><span class="p">},</span>
+</span><span id="__span-81-16"><a id="__codelineno-81-16" name="__codelineno-81-16"></a><span class="w">          </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-81-17"><a id="__codelineno-81-17" name="__codelineno-81-17"></a><span class="w">            </span><span class="nt">&quot;matchStrategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;exact&quot;</span>
+</span><span id="__span-81-18"><a id="__codelineno-81-18" name="__codelineno-81-18"></a><span class="w">          </span><span class="p">}</span>
+</span><span id="__span-81-19"><a id="__codelineno-81-19" name="__codelineno-81-19"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-81-20"><a id="__codelineno-81-20" name="__codelineno-81-20"></a><span class="w">        </span><span class="nt">&quot;toolStrategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-81-21"><a id="__codelineno-81-21" name="__codelineno-81-21"></a><span class="w">          </span><span class="nt">&quot;skill_run&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-81-22"><a id="__codelineno-81-22" name="__codelineno-81-22"></a><span class="w">            </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-81-23"><a id="__codelineno-81-23" name="__codelineno-81-23"></a><span class="w">              </span><span class="nt">&quot;matchStrategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;exact&quot;</span>
+</span><span id="__span-81-24"><a id="__codelineno-81-24" name="__codelineno-81-24"></a><span class="w">            </span><span class="p">},</span>
+</span><span id="__span-81-25"><a id="__codelineno-81-25" name="__codelineno-81-25"></a><span class="w">            </span><span class="nt">&quot;arguments&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-81-26"><a id="__codelineno-81-26" name="__codelineno-81-26"></a><span class="w">              </span><span class="nt">&quot;onlyTree&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-81-27"><a id="__codelineno-81-27" name="__codelineno-81-27"></a><span class="w">                </span><span class="nt">&quot;skill&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-81-28"><a id="__codelineno-81-28" name="__codelineno-81-28"></a><span class="w">              </span><span class="p">},</span>
+</span><span id="__span-81-29"><a id="__codelineno-81-29" name="__codelineno-81-29"></a><span class="w">              </span><span class="nt">&quot;matchStrategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;exact&quot;</span>
+</span><span id="__span-81-30"><a id="__codelineno-81-30" name="__codelineno-81-30"></a><span class="w">            </span><span class="p">},</span>
+</span><span id="__span-81-31"><a id="__codelineno-81-31" name="__codelineno-81-31"></a><span class="w">            </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-81-32"><a id="__codelineno-81-32" name="__codelineno-81-32"></a><span class="w">              </span><span class="nt">&quot;ignore&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-81-33"><a id="__codelineno-81-33" name="__codelineno-81-33"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-81-34"><a id="__codelineno-81-34" name="__codelineno-81-34"></a><span class="w">          </span><span class="p">},</span>
+</span><span id="__span-81-35"><a id="__codelineno-81-35" name="__codelineno-81-35"></a><span class="w">          </span><span class="nt">&quot;Task&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-81-36"><a id="__codelineno-81-36" name="__codelineno-81-36"></a><span class="w">            </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-81-37"><a id="__codelineno-81-37" name="__codelineno-81-37"></a><span class="w">              </span><span class="nt">&quot;matchStrategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;exact&quot;</span>
+</span><span id="__span-81-38"><a id="__codelineno-81-38" name="__codelineno-81-38"></a><span class="w">            </span><span class="p">},</span>
+</span><span id="__span-81-39"><a id="__codelineno-81-39" name="__codelineno-81-39"></a><span class="w">            </span><span class="nt">&quot;arguments&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-81-40"><a id="__codelineno-81-40" name="__codelineno-81-40"></a><span class="w">              </span><span class="nt">&quot;onlyTree&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-81-41"><a id="__codelineno-81-41" name="__codelineno-81-41"></a><span class="w">                </span><span class="nt">&quot;subagent_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-81-42"><a id="__codelineno-81-42" name="__codelineno-81-42"></a><span class="w">              </span><span class="p">},</span>
+</span><span id="__span-81-43"><a id="__codelineno-81-43" name="__codelineno-81-43"></a><span class="w">              </span><span class="nt">&quot;matchStrategy&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;exact&quot;</span>
+</span><span id="__span-81-44"><a id="__codelineno-81-44" name="__codelineno-81-44"></a><span class="w">            </span><span class="p">},</span>
+</span><span id="__span-81-45"><a id="__codelineno-81-45" name="__codelineno-81-45"></a><span class="w">            </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-81-46"><a id="__codelineno-81-46" name="__codelineno-81-46"></a><span class="w">              </span><span class="nt">&quot;ignore&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-81-47"><a id="__codelineno-81-47" name="__codelineno-81-47"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-81-48"><a id="__codelineno-81-48" name="__codelineno-81-48"></a><span class="w">          </span><span class="p">}</span>
+</span><span id="__span-81-49"><a id="__codelineno-81-49" name="__codelineno-81-49"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-81-50"><a id="__codelineno-81-50" name="__codelineno-81-50"></a><span class="w">      </span><span class="p">}</span>
+</span><span id="__span-81-51"><a id="__codelineno-81-51" name="__codelineno-81-51"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-81-52"><a id="__codelineno-81-52" name="__codelineno-81-52"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-81-53"><a id="__codelineno-81-53" name="__codelineno-81-53"></a><span class="p">]</span>
+</span></code></pre></div></td></tr></table></div>
+<p>See <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/claudecode">examples/evaluation/claudecode</a> for a runnable example.</p>
+<h2 id="best-practices">Best Practices</h2>
+<p>Integrating evaluation into engineering workflows often delivers more value than expected. It is not about producing a polished report; it is about turning key Agent behaviors into sustainable regression signals.</p>
+<p>Two things are most dangerous in Agent evolution: small-looking changes that cause silent behavior drift, and issues that only surface for users, which multiplies diagnosis cost. Evaluation exists to block these risks early.</p>
+<p>tRPC-Agent-Go in <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runner">examples/runner</a> encodes critical paths into evaluation sets and metrics and runs them in the release pipeline. The Runner quickstart cases cover common scenarios such as calculator, time tool, and compound interest, with a clear goal to guard tool selection and output shape. If behavior drifts, the pipeline fails early, and you can locate the issue directly with the corresponding case and trace.</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-82-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-82-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-82-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-82-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-82-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-82-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-82-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-82-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-82-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-82-10">10</a></span>
+<span class="normal"><a href="#__codelineno-82-11">11</a></span>
+<span class="normal"><a href="#__codelineno-82-12">12</a></span>
+<span class="normal"><a href="#__codelineno-82-13">13</a></span>
+<span class="normal"><a href="#__codelineno-82-14">14</a></span>
+<span class="normal"><a href="#__codelineno-82-15">15</a></span>
+<span class="normal"><a href="#__codelineno-82-16">16</a></span>
+<span class="normal"><a href="#__codelineno-82-17">17</a></span>
+<span class="normal"><a href="#__codelineno-82-18">18</a></span>
+<span class="normal"><a href="#__codelineno-82-19">19</a></span>
+<span class="normal"><a href="#__codelineno-82-20">20</a></span>
+<span class="normal"><a href="#__codelineno-82-21">21</a></span>
+<span class="normal"><a href="#__codelineno-82-22">22</a></span>
+<span class="normal"><a href="#__codelineno-82-23">23</a></span>
+<span class="normal"><a href="#__codelineno-82-24">24</a></span>
+<span class="normal"><a href="#__codelineno-82-25">25</a></span>
+<span class="normal"><a href="#__codelineno-82-26">26</a></span>
+<span class="normal"><a href="#__codelineno-82-27">27</a></span>
+<span class="normal"><a href="#__codelineno-82-28">28</a></span>
+<span class="normal"><a href="#__codelineno-82-29">29</a></span>
+<span class="normal"><a href="#__codelineno-82-30">30</a></span>
+<span class="normal"><a href="#__codelineno-82-31">31</a></span>
+<span class="normal"><a href="#__codelineno-82-32">32</a></span>
+<span class="normal"><a href="#__codelineno-82-33">33</a></span>
+<span class="normal"><a href="#__codelineno-82-34">34</a></span>
+<span class="normal"><a href="#__codelineno-82-35">35</a></span>
+<span class="normal"><a href="#__codelineno-82-36">36</a></span>
+<span class="normal"><a href="#__codelineno-82-37">37</a></span>
+<span class="normal"><a href="#__codelineno-82-38">38</a></span>
+<span class="normal"><a href="#__codelineno-82-39">39</a></span>
+<span class="normal"><a href="#__codelineno-82-40">40</a></span>
+<span class="normal"><a href="#__codelineno-82-41">41</a></span>
+<span class="normal"><a href="#__codelineno-82-42">42</a></span>
+<span class="normal"><a href="#__codelineno-82-43">43</a></span>
+<span class="normal"><a href="#__codelineno-82-44">44</a></span>
+<span class="normal"><a href="#__codelineno-82-45">45</a></span>
+<span class="normal"><a href="#__codelineno-82-46">46</a></span>
+<span class="normal"><a href="#__codelineno-82-47">47</a></span>
+<span class="normal"><a href="#__codelineno-82-48">48</a></span>
+<span class="normal"><a href="#__codelineno-82-49">49</a></span>
+<span class="normal"><a href="#__codelineno-82-50">50</a></span>
+<span class="normal"><a href="#__codelineno-82-51">51</a></span>
+<span class="normal"><a href="#__codelineno-82-52">52</a></span>
+<span class="normal"><a href="#__codelineno-82-53">53</a></span>
+<span class="normal"><a href="#__codelineno-82-54">54</a></span>
+<span class="normal"><a href="#__codelineno-82-55">55</a></span>
+<span class="normal"><a href="#__codelineno-82-56">56</a></span>
+<span class="normal"><a href="#__codelineno-82-57">57</a></span>
+<span class="normal"><a href="#__codelineno-82-58">58</a></span>
+<span class="normal"><a href="#__codelineno-82-59">59</a></span>
+<span class="normal"><a href="#__codelineno-82-60">60</a></span>
+<span class="normal"><a href="#__codelineno-82-61">61</a></span>
+<span class="normal"><a href="#__codelineno-82-62">62</a></span>
+<span class="normal"><a href="#__codelineno-82-63">63</a></span>
+<span class="normal"><a href="#__codelineno-82-64">64</a></span>
+<span class="normal"><a href="#__codelineno-82-65">65</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-82-1"><a id="__codelineno-82-1" name="__codelineno-82-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-82-2"><a id="__codelineno-82-2" name="__codelineno-82-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation&quot;</span>
+</span><span id="__span-82-3"><a id="__codelineno-82-3" name="__codelineno-82-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult&quot;</span>
+</span><span id="__span-82-4"><a id="__codelineno-82-4" name="__codelineno-82-4"></a><span class="w">    </span><span class="nx">localevalresult</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/local&quot;</span>
+</span><span id="__span-82-5"><a id="__codelineno-82-5" name="__codelineno-82-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/evalset&quot;</span>
+</span><span id="__span-82-6"><a id="__codelineno-82-6" name="__codelineno-82-6"></a><span class="w">    </span><span class="nx">localevalset</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/local&quot;</span>
+</span><span id="__span-82-7"><a id="__codelineno-82-7" name="__codelineno-82-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric&quot;</span>
+</span><span id="__span-82-8"><a id="__codelineno-82-8" name="__codelineno-82-8"></a><span class="w">    </span><span class="nx">localmetric</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric/local&quot;</span>
+</span><span id="__span-82-9"><a id="__codelineno-82-9" name="__codelineno-82-9"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/status&quot;</span>
+</span><span id="__span-82-10"><a id="__codelineno-82-10" name="__codelineno-82-10"></a><span class="p">)</span>
+</span><span id="__span-82-11"><a id="__codelineno-82-11" name="__codelineno-82-11"></a>
+</span><span id="__span-82-12"><a id="__codelineno-82-12" name="__codelineno-82-12"></a><span class="kd">func</span><span class="w"> </span><span class="nx">TestTool</span><span class="p">(</span><span class="nx">t</span><span class="w"> </span><span class="o">*</span><span class="nx">testing</span><span class="p">.</span><span class="nx">T</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-82-13"><a id="__codelineno-82-13" name="__codelineno-82-13"></a><span class="w">    </span><span class="nx">tests</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="p">[]</span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-82-14"><a id="__codelineno-82-14" name="__codelineno-82-14"></a><span class="w">        </span><span class="nx">name</span><span class="w">      </span><span class="kt">string</span>
+</span><span id="__span-82-15"><a id="__codelineno-82-15" name="__codelineno-82-15"></a><span class="w">        </span><span class="nx">evalSetID</span><span class="w"> </span><span class="kt">string</span>
+</span><span id="__span-82-16"><a id="__codelineno-82-16" name="__codelineno-82-16"></a><span class="w">    </span><span class="p">}{</span>
+</span><span id="__span-82-17"><a id="__codelineno-82-17" name="__codelineno-82-17"></a><span class="w">        </span><span class="p">{</span>
+</span><span id="__span-82-18"><a id="__codelineno-82-18" name="__codelineno-82-18"></a><span class="w">            </span><span class="nx">name</span><span class="p">:</span><span class="w">      </span><span class="s">&quot;calculator&quot;</span><span class="p">,</span>
+</span><span id="__span-82-19"><a id="__codelineno-82-19" name="__codelineno-82-19"></a><span class="w">            </span><span class="nx">evalSetID</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;calculator_tool&quot;</span><span class="p">,</span>
+</span><span id="__span-82-20"><a id="__codelineno-82-20" name="__codelineno-82-20"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-82-21"><a id="__codelineno-82-21" name="__codelineno-82-21"></a><span class="w">        </span><span class="p">{</span>
+</span><span id="__span-82-22"><a id="__codelineno-82-22" name="__codelineno-82-22"></a><span class="w">            </span><span class="nx">name</span><span class="p">:</span><span class="w">      </span><span class="s">&quot;currenttime&quot;</span><span class="p">,</span>
+</span><span id="__span-82-23"><a id="__codelineno-82-23" name="__codelineno-82-23"></a><span class="w">            </span><span class="nx">evalSetID</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;currenttime_tool&quot;</span><span class="p">,</span>
+</span><span id="__span-82-24"><a id="__codelineno-82-24" name="__codelineno-82-24"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-82-25"><a id="__codelineno-82-25" name="__codelineno-82-25"></a><span class="w">        </span><span class="p">{</span>
+</span><span id="__span-82-26"><a id="__codelineno-82-26" name="__codelineno-82-26"></a><span class="w">            </span><span class="nx">name</span><span class="p">:</span><span class="w">      </span><span class="s">&quot;compound_interest&quot;</span><span class="p">,</span>
+</span><span id="__span-82-27"><a id="__codelineno-82-27" name="__codelineno-82-27"></a><span class="w">            </span><span class="nx">evalSetID</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;compound_interest&quot;</span><span class="p">,</span>
+</span><span id="__span-82-28"><a id="__codelineno-82-28" name="__codelineno-82-28"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-82-29"><a id="__codelineno-82-29" name="__codelineno-82-29"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-82-30"><a id="__codelineno-82-30" name="__codelineno-82-30"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">tt</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">tests</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-82-31"><a id="__codelineno-82-31" name="__codelineno-82-31"></a><span class="w">        </span><span class="nx">t</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">tt</span><span class="p">.</span><span class="nx">name</span><span class="p">,</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">t</span><span class="w"> </span><span class="o">*</span><span class="nx">testing</span><span class="p">.</span><span class="nx">T</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-82-32"><a id="__codelineno-82-32" name="__codelineno-82-32"></a><span class="w">            </span><span class="nx">chat</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">multiTurnChat</span><span class="p">{</span>
+</span><span id="__span-82-33"><a id="__codelineno-82-33" name="__codelineno-82-33"></a><span class="w">                </span><span class="nx">modelName</span><span class="p">:</span><span class="w"> </span><span class="o">*</span><span class="nx">modelName</span><span class="p">,</span>
+</span><span id="__span-82-34"><a id="__codelineno-82-34" name="__codelineno-82-34"></a><span class="w">                </span><span class="nx">streaming</span><span class="p">:</span><span class="w"> </span><span class="o">*</span><span class="nx">streaming</span><span class="p">,</span>
+</span><span id="__span-82-35"><a id="__codelineno-82-35" name="__codelineno-82-35"></a><span class="w">                </span><span class="nx">variant</span><span class="p">:</span><span class="w">   </span><span class="o">*</span><span class="nx">variant</span><span class="p">,</span>
+</span><span id="__span-82-36"><a id="__codelineno-82-36" name="__codelineno-82-36"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-82-37"><a id="__codelineno-82-37" name="__codelineno-82-37"></a><span class="w">            </span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">cancel</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">WithTimeout</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">(),</span><span class="w"> </span><span class="mi">5</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">)</span>
+</span><span id="__span-82-38"><a id="__codelineno-82-38" name="__codelineno-82-38"></a><span class="w">            </span><span class="k">defer</span><span class="w"> </span><span class="nx">cancel</span><span class="p">()</span>
+</span><span id="__span-82-39"><a id="__codelineno-82-39" name="__codelineno-82-39"></a><span class="w">            </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">chat</span><span class="p">.</span><span class="nx">setup</span><span class="p">(</span><span class="nx">ctx</span><span class="p">)</span>
+</span><span id="__span-82-40"><a id="__codelineno-82-40" name="__codelineno-82-40"></a><span class="w">            </span><span class="nx">assert</span><span class="p">.</span><span class="nx">NoError</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-82-41"><a id="__codelineno-82-41" name="__codelineno-82-41"></a><span class="w">            </span><span class="k">defer</span><span class="w"> </span><span class="nx">chat</span><span class="p">.</span><span class="nx">runner</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+</span><span id="__span-82-42"><a id="__codelineno-82-42" name="__codelineno-82-42"></a><span class="w">            </span><span class="nx">evaluationDir</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">&quot;evaluation&quot;</span>
+</span><span id="__span-82-43"><a id="__codelineno-82-43" name="__codelineno-82-43"></a><span class="w">            </span><span class="nx">localEvalSetManager</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">localevalset</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">evalset</span><span class="p">.</span><span class="nx">WithBaseDir</span><span class="p">(</span><span class="nx">evaluationDir</span><span class="p">))</span>
+</span><span id="__span-82-44"><a id="__codelineno-82-44" name="__codelineno-82-44"></a><span class="w">            </span><span class="nx">localMetricManager</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">localmetric</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">metric</span><span class="p">.</span><span class="nx">WithBaseDir</span><span class="p">(</span><span class="nx">evaluationDir</span><span class="p">))</span>
+</span><span id="__span-82-45"><a id="__codelineno-82-45" name="__codelineno-82-45"></a><span class="w">            </span><span class="nx">localEvalResultManager</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">localevalresult</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">evalresult</span><span class="p">.</span><span class="nx">WithBaseDir</span><span class="p">(</span><span class="nx">evaluationDir</span><span class="p">))</span>
+</span><span id="__span-82-46"><a id="__codelineno-82-46" name="__codelineno-82-46"></a><span class="w">            </span><span class="nx">evaluator</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-82-47"><a id="__codelineno-82-47" name="__codelineno-82-47"></a><span class="w">                </span><span class="nx">appName</span><span class="p">,</span>
+</span><span id="__span-82-48"><a id="__codelineno-82-48" name="__codelineno-82-48"></a><span class="w">                </span><span class="nx">chat</span><span class="p">.</span><span class="nx">runner</span><span class="p">,</span>
+</span><span id="__span-82-49"><a id="__codelineno-82-49" name="__codelineno-82-49"></a><span class="w">                </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithEvalSetManager</span><span class="p">(</span><span class="nx">localEvalSetManager</span><span class="p">),</span>
+</span><span id="__span-82-50"><a id="__codelineno-82-50" name="__codelineno-82-50"></a><span class="w">                </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithMetricManager</span><span class="p">(</span><span class="nx">localMetricManager</span><span class="p">),</span>
+</span><span id="__span-82-51"><a id="__codelineno-82-51" name="__codelineno-82-51"></a><span class="w">                </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithEvalResultManager</span><span class="p">(</span><span class="nx">localEvalResultManager</span><span class="p">),</span>
+</span><span id="__span-82-52"><a id="__codelineno-82-52" name="__codelineno-82-52"></a><span class="w">            </span><span class="p">)</span>
+</span><span id="__span-82-53"><a id="__codelineno-82-53" name="__codelineno-82-53"></a><span class="w">            </span><span class="nx">assert</span><span class="p">.</span><span class="nx">NoError</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-82-54"><a id="__codelineno-82-54" name="__codelineno-82-54"></a><span class="w">            </span><span class="nx">t</span><span class="p">.</span><span class="nx">Cleanup</span><span class="p">(</span><span class="kd">func</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-82-55"><a id="__codelineno-82-55" name="__codelineno-82-55"></a><span class="w">                </span><span class="nx">assert</span><span class="p">.</span><span class="nx">NoError</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">evaluator</span><span class="p">.</span><span class="nx">Close</span><span class="p">())</span>
+</span><span id="__span-82-56"><a id="__codelineno-82-56" name="__codelineno-82-56"></a><span class="w">            </span><span class="p">})</span>
+</span><span id="__span-82-57"><a id="__codelineno-82-57" name="__codelineno-82-57"></a><span class="w">            </span><span class="nx">result</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evaluator</span><span class="p">.</span><span class="nx">Evaluate</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">tt</span><span class="p">.</span><span class="nx">evalSetID</span><span class="p">)</span>
+</span><span id="__span-82-58"><a id="__codelineno-82-58" name="__codelineno-82-58"></a><span class="w">            </span><span class="nx">assert</span><span class="p">.</span><span class="nx">NoError</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-82-59"><a id="__codelineno-82-59" name="__codelineno-82-59"></a><span class="w">            </span><span class="nx">assert</span><span class="p">.</span><span class="nx">NotNil</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">result</span><span class="p">)</span>
+</span><span id="__span-82-60"><a id="__codelineno-82-60" name="__codelineno-82-60"></a><span class="w">            </span><span class="nx">resultData</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">json</span><span class="p">.</span><span class="nx">MarshalIndent</span><span class="p">(</span><span class="nx">result</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;  &quot;</span><span class="p">)</span>
+</span><span id="__span-82-61"><a id="__codelineno-82-61" name="__codelineno-82-61"></a><span class="w">            </span><span class="nx">assert</span><span class="p">.</span><span class="nx">NoError</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-82-62"><a id="__codelineno-82-62" name="__codelineno-82-62"></a><span class="w">            </span><span class="nx">assert</span><span class="p">.</span><span class="nx">Equal</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">status</span><span class="p">.</span><span class="nx">EvalStatusPassed</span><span class="p">,</span><span class="w"> </span><span class="nx">result</span><span class="p">.</span><span class="nx">OverallStatus</span><span class="p">,</span><span class="w"> </span><span class="nb">string</span><span class="p">(</span><span class="nx">resultData</span><span class="p">))</span>
+</span><span id="__span-82-63"><a id="__codelineno-82-63" name="__codelineno-82-63"></a><span class="w">        </span><span class="p">})</span>
+</span><span id="__span-82-64"><a id="__codelineno-82-64" name="__codelineno-82-64"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-82-65"><a id="__codelineno-82-65" name="__codelineno-82-65"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 
 
@@ -8496,7 +8560,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="March 4, 2026 09:56:07 UTC">2026-03-04 09:56:07</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="March 7, 2026 08:22:36 UTC">2026-03-07 08:22:36</span>
   </span>
 
     
