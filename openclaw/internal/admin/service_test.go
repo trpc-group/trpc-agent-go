@@ -522,7 +522,7 @@ func TestServiceUploadJSONFilters(t *testing.T) {
 		[]byte("video"),
 	)
 	require.NoError(t, err)
-	_, err = store.Save(
+	_, err = store.SaveWithMetadata(
 		context.Background(),
 		uploads.Scope{
 			Channel:   "telegram",
@@ -530,6 +530,7 @@ func TestServiceUploadJSONFilters(t *testing.T) {
 			SessionID: "session-2",
 		},
 		"report.pdf",
+		"application/pdf",
 		[]byte("%PDF-1.4"),
 	)
 	require.NoError(t, err)
@@ -543,6 +544,7 @@ func TestServiceUploadJSONFilters(t *testing.T) {
 		routeUploadsJSON+"?"+url.Values{
 			querySessionID: []string{"session-2"},
 			queryKind:      []string{"pdf"},
+			queryMimeType:  []string{"application/pdf"},
 		}.Encode(),
 		nil,
 	)

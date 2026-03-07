@@ -33,6 +33,7 @@ type uploadFilters struct {
 	UserID    string
 	SessionID string
 	Kind      string
+	MimeType  string
 }
 
 type execStatus struct {
@@ -303,7 +304,9 @@ func filterUploadList(
 	userID := strings.TrimSpace(filters.UserID)
 	sessionID := strings.TrimSpace(filters.SessionID)
 	kind := strings.ToLower(strings.TrimSpace(filters.Kind))
-	if channel == "" && userID == "" && sessionID == "" && kind == "" {
+	mimeType := strings.ToLower(strings.TrimSpace(filters.MimeType))
+	if channel == "" && userID == "" && sessionID == "" &&
+		kind == "" && mimeType == "" {
 		return listed
 	}
 
@@ -319,6 +322,10 @@ func filterUploadList(
 			continue
 		}
 		if kind != "" && uploadKindFromFile(file) != kind {
+			continue
+		}
+		if mimeType != "" &&
+			strings.ToLower(strings.TrimSpace(file.MimeType)) != mimeType {
 			continue
 		}
 		out = append(out, file)

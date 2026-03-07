@@ -48,6 +48,7 @@ const (
 	queryChannel   = "channel"
 	queryUserID    = "user_id"
 	queryKind      = "kind"
+	queryMimeType  = "mime_type"
 	queryTrace     = "trace"
 	queryName      = "name"
 	queryPath      = "path"
@@ -408,6 +409,7 @@ func uploadFiltersFromRequest(r *http.Request) uploadFilters {
 		UserID:    strings.TrimSpace(values.Get(queryUserID)),
 		SessionID: strings.TrimSpace(values.Get(querySessionID)),
 		Kind:      strings.TrimSpace(values.Get(queryKind)),
+		MimeType:  strings.TrimSpace(values.Get(queryMimeType)),
 	}
 }
 
@@ -1349,7 +1351,9 @@ const adminPageHTML = `<!doctype html>
             </td>
             <td>
               {{if .MimeType}}
-              <code>{{.MimeType}}</code>
+              <a href="/api/uploads?mime_type={{urlquery .MimeType}}">
+                <code>{{.MimeType}}</code>
+              </a>
               {{else}}
               <span class="subtle">-</span>
               {{end}}
