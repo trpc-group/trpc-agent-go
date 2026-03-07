@@ -698,20 +698,33 @@ func consumeEvents(evtCh <-chan *event.Event) (string, *TokenUsage) {
 		if evt.Error != nil {
 			continue
 		}
-		if evt.Response != nil {
-			if evt.Response.Usage != nil {
-				usage.PromptTokens = evt.Response.Usage.PromptTokens
-				usage.CompletionTokens = evt.Response.Usage.CompletionTokens
-				usage.TotalTokens = evt.Response.Usage.TotalTokens
+		if evt.Response == nil {
+			continue
+		}
+		// Accumulate token usage from every event.
+		if evt.Response.Usage != nil {
+			usage.PromptTokens = evt.Response.Usage.PromptTokens
+			usage.CompletionTokens = evt.Response.Usage.CompletionTokens
+			usage.TotalTokens = evt.Response.Usage.TotalTokens
+		}
+		// Skip tool call requests and tool result events;
+		// only collect the final assistant text content.
+		if evt.Response.IsToolCallResponse() {
+			continue
+		}
+		if evt.Response.IsToolResultResponse() {
+			continue
+		}
+		if evt.Response.Object == model.ObjectTypeToolResponse {
+			continue
+		}
+		if len(evt.Response.Choices) > 0 {
+			choice := evt.Response.Choices[0]
+			if choice.Message.Content != "" {
+				response.WriteString(choice.Message.Content)
 			}
-			if len(evt.Response.Choices) > 0 {
-				choice := evt.Response.Choices[0]
-				if choice.Message.Content != "" {
-					response.WriteString(choice.Message.Content)
-				}
-				if choice.Delta.Content != "" {
-					response.WriteString(choice.Delta.Content)
-				}
+			if choice.Delta.Content != "" {
+				response.WriteString(choice.Delta.Content)
 			}
 		}
 	}

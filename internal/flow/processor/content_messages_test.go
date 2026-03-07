@@ -566,16 +566,18 @@ func TestProcessRequest_SessionSummary_InsertAsSeparateSystemMessage(t *testing.
 	require.True(t, ok)
 	require.Equal(t, true, raw)
 
-	// Should have 4 messages: system, summary system, user, current request
-	require.Equal(t, 4, len(req1.Messages))
+	// Should have 5 messages: system, summary system, guidance system, user, current request
+	require.Equal(t, 5, len(req1.Messages))
 	require.Equal(t, model.RoleSystem, req1.Messages[0].Role)
 	require.Equal(t, "existing system prompt", req1.Messages[0].Content)
 	require.Equal(t, model.RoleSystem, req1.Messages[1].Role)
 	require.Equal(t, NewContentRequestProcessor().formatSummary("Session summary content"), req1.Messages[1].Content)
-	require.Equal(t, model.RoleUser, req1.Messages[2].Role)
-	require.Equal(t, "user question", req1.Messages[2].Content)
+	require.Equal(t, model.RoleSystem, req1.Messages[2].Role)
+	require.Contains(t, req1.Messages[2].Content, "search_history")
 	require.Equal(t, model.RoleUser, req1.Messages[3].Role)
-	require.Equal(t, "current request", req1.Messages[3].Content)
+	require.Equal(t, "user question", req1.Messages[3].Content)
+	require.Equal(t, model.RoleUser, req1.Messages[4].Role)
+	require.Equal(t, "current request", req1.Messages[4].Content)
 
 	// Test case 2: Request has only user message (no system message)
 	req2 := &model.Request{
@@ -597,14 +599,16 @@ func TestProcessRequest_SessionSummary_InsertAsSeparateSystemMessage(t *testing.
 	require.True(t, ok)
 	require.Equal(t, true, raw)
 
-	// Should have 3 messages: summary system, user, current request
-	require.Equal(t, 3, len(req2.Messages))
+	// Should have 4 messages: summary system, guidance system, user, current request
+	require.Equal(t, 4, len(req2.Messages))
 	require.Equal(t, model.RoleSystem, req2.Messages[0].Role)
 	require.Equal(t, NewContentRequestProcessor().formatSummary("Session summary content"), req2.Messages[0].Content)
-	require.Equal(t, model.RoleUser, req2.Messages[1].Role)
-	require.Equal(t, "user question", req2.Messages[1].Content)
+	require.Equal(t, model.RoleSystem, req2.Messages[1].Role)
+	require.Contains(t, req2.Messages[1].Content, "search_history")
 	require.Equal(t, model.RoleUser, req2.Messages[2].Role)
-	require.Equal(t, "current request", req2.Messages[2].Content)
+	require.Equal(t, "user question", req2.Messages[2].Content)
+	require.Equal(t, model.RoleUser, req2.Messages[3].Role)
+	require.Equal(t, "current request", req2.Messages[3].Content)
 
 	// Test case 3: Request has multiple system messages
 	req3 := &model.Request{
@@ -628,9 +632,9 @@ func TestProcessRequest_SessionSummary_InsertAsSeparateSystemMessage(t *testing.
 	require.True(t, ok)
 	require.Equal(t, true, raw)
 
-	// Should have 5 messages: system1, system2, summary system, user, current
+	// Should have 6 messages: system1, system2, summary system, guidance system, user, current
 	// request.
-	require.Equal(t, 5, len(req3.Messages))
+	require.Equal(t, 6, len(req3.Messages))
 	require.Equal(t, model.RoleSystem, req3.Messages[0].Role)
 	require.Equal(t, "system 1", req3.Messages[0].Content)
 	require.Equal(t, model.RoleSystem, req3.Messages[1].Role)
@@ -643,10 +647,12 @@ func TestProcessRequest_SessionSummary_InsertAsSeparateSystemMessage(t *testing.
 		),
 		req3.Messages[2].Content,
 	)
-	require.Equal(t, model.RoleUser, req3.Messages[3].Role)
-	require.Equal(t, "user question", req3.Messages[3].Content)
+	require.Equal(t, model.RoleSystem, req3.Messages[3].Role)
+	require.Contains(t, req3.Messages[3].Content, "search_history")
 	require.Equal(t, model.RoleUser, req3.Messages[4].Role)
-	require.Equal(t, "current request", req3.Messages[4].Content)
+	require.Equal(t, "user question", req3.Messages[4].Content)
+	require.Equal(t, model.RoleUser, req3.Messages[5].Role)
+	require.Equal(t, "current request", req3.Messages[5].Content)
 }
 
 // Test additional edge cases for session summary insertion.
@@ -679,12 +685,14 @@ func TestProcessRequest_SessionSummary_EdgeCases(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, true, raw)
 
-	// Should have 2 messages: summary system, current request
-	require.Equal(t, 2, len(req1.Messages))
+	// Should have 3 messages: summary system, guidance system, current request
+	require.Equal(t, 3, len(req1.Messages))
 	require.Equal(t, model.RoleSystem, req1.Messages[0].Role)
 	require.Equal(t, NewContentRequestProcessor().formatSummary("Session summary content"), req1.Messages[0].Content)
-	require.Equal(t, model.RoleUser, req1.Messages[1].Role)
-	require.Equal(t, "current request", req1.Messages[1].Content)
+	require.Equal(t, model.RoleSystem, req1.Messages[1].Role)
+	require.Contains(t, req1.Messages[1].Content, "search_history")
+	require.Equal(t, model.RoleUser, req1.Messages[2].Role)
+	require.Equal(t, "current request", req1.Messages[2].Content)
 
 	// Test case 2: Only system messages
 	req2 := &model.Request{
@@ -706,14 +714,16 @@ func TestProcessRequest_SessionSummary_EdgeCases(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, true, raw)
 
-	// Should have 3 messages: system, summary system, current request
-	require.Equal(t, 3, len(req2.Messages))
+	// Should have 4 messages: system, summary system, guidance system, current request
+	require.Equal(t, 4, len(req2.Messages))
 	require.Equal(t, model.RoleSystem, req2.Messages[0].Role)
 	require.Equal(t, "system prompt", req2.Messages[0].Content)
 	require.Equal(t, model.RoleSystem, req2.Messages[1].Role)
 	require.Equal(t, NewContentRequestProcessor().formatSummary("Session summary content"), req2.Messages[1].Content)
-	require.Equal(t, model.RoleUser, req2.Messages[2].Role)
-	require.Equal(t, "current request", req2.Messages[2].Content)
+	require.Equal(t, model.RoleSystem, req2.Messages[2].Role)
+	require.Contains(t, req2.Messages[2].Content, "search_history")
+	require.Equal(t, model.RoleUser, req2.Messages[3].Role)
+	require.Equal(t, "current request", req2.Messages[3].Content)
 }
 
 func TestContentRequestProcessor_AggregatePrefixSummaries_Sorted(

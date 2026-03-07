@@ -63,8 +63,8 @@ func TestRegisterTools_AddsToolSet(t *testing.T) {
 
 	all, userToolNames := registerTools(&Options{Tools: direct, ToolSets: []tool.ToolSet{ts}, Knowledge: kb})
 
-	// Expect 1 direct + 1 from set + 1 knowledge search tool.
-	require.Equal(t, 3, len(all))
+	// Expect 1 direct + 1 from set + 2 history tools + 1 knowledge search tool.
+	require.Equal(t, 5, len(all))
 
 	// Verify user tool tracking
 	require.True(t, userToolNames["direct"], "direct tool should be tracked as user tool")
@@ -77,6 +77,8 @@ func TestRegisterTools_AddsToolSet(t *testing.T) {
 	require.Contains(t, names, "mock_set-tool") // Tool name is now namespaced with toolset name
 	// Knowledge search tool name is "knowledge_search" per implementation.
 	require.Contains(t, names, "knowledge_search")
+	require.Contains(t, names, "search_history")
+	require.Contains(t, names, "get_history_events")
 }
 
 // mockAgent minimal implementation.
@@ -103,10 +105,15 @@ func TestLLMAgent_ToolsAddsTransfer(t *testing.T) {
 	)
 
 	got := a.Tools()
-	// Should contain core tool + transfer tool.
-	require.Equal(t, 2, len(got))
-	names := []string{got[0].Declaration().Name, got[1].Declaration().Name}
+	// Should contain core tool + history tools + transfer tool.
+	require.Equal(t, 4, len(got))
+	names := []string{}
+	for _, t := range got {
+		names = append(names, t.Declaration().Name)
+	}
 	require.Contains(t, names, "core")
+	require.Contains(t, names, "search_history")
+	require.Contains(t, names, "get_history_events")
 	require.Contains(t, names, "transfer_to_agent")
 
 	// FindSubAgent should work.
@@ -124,8 +131,14 @@ func TestLLMAgent_InfoAndTools(t *testing.T) {
 	require.Equal(t, "desc", info.Description)
 
 	ts := agent.Tools()
-	require.Equal(t, 1, len(ts))
-	require.Equal(t, "t1", ts[0].Declaration().Name)
+	require.Equal(t, 3, len(ts))
+	names := []string{}
+	for _, t := range ts {
+		names = append(names, t.Declaration().Name)
+	}
+	require.Contains(t, names, "t1")
+	require.Contains(t, names, "search_history")
+	require.Contains(t, names, "get_history_events")
 }
 
 func TestLLMAgent_AfterCb(t *testing.T) {
