@@ -82,7 +82,19 @@ func TestClient_GetUpdates(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(apiResponse[[]Update]{
 			OK: true,
 			Result: []Update{
-				{UpdateID: 10},
+				{
+					UpdateID: 10,
+					Message: &Message{
+						MessageID: 100,
+						Text:      "check this video",
+						ReplyToMessage: &Message{
+							MessageID: 99,
+							Video: &Video{
+								FileID: "vid1",
+							},
+						},
+					},
+				},
 				{UpdateID: 11},
 			},
 		})
@@ -99,6 +111,14 @@ func TestClient_GetUpdates(t *testing.T) {
 	updates, err := c.GetUpdates(context.Background(), 7, 30*time.Second)
 	require.NoError(t, err)
 	require.Len(t, updates, 2)
+	require.NotNil(t, updates[0].Message)
+	require.NotNil(t, updates[0].Message.ReplyToMessage)
+	require.NotNil(t, updates[0].Message.ReplyToMessage.Video)
+	require.Equal(
+		t,
+		"vid1",
+		updates[0].Message.ReplyToMessage.Video.FileID,
+	)
 	require.Equal(t, "7", seenOffset)
 	require.Equal(t, "30", seenTimeout)
 }

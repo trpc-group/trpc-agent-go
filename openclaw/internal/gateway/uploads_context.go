@@ -27,6 +27,8 @@ const (
 		"exec_command, use OPENCLAW_RECENT_UPLOADS_JSON. " +
 		"When the user says 'the PDF/audio/video I just " +
 		"sent', resolve against this list first. If the " +
+		"user replies to an earlier media message, that " +
+		"replied media is usually the intended target. If the " +
 		"requested media kind is not present here, say " +
 		"which uploads are currently available in this chat."
 )

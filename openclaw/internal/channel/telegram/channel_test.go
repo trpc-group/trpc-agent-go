@@ -849,6 +849,71 @@ func TestChannel_HandleMessage_Video_BuildsVideoPart(t *testing.T) {
 	require.Equal(t, videoBytes, part.File.Data)
 }
 
+func TestChannel_HandleMessage_ReplyToVideo_BuildsVideoPart(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	videoBytes := []byte("mp4")
+
+	gw := &stubGateway{
+		rsp: gwclient.MessageResponse{
+			StatusCode: http.StatusOK,
+			Reply:      "ok",
+		},
+	}
+	dir := t.TempDir()
+	ch, err := New(
+		testToken,
+		BotInfo{Username: "bot"},
+		gw,
+		WithStateDir(dir),
+		WithDMPolicy(dmPolicyOpen),
+	)
+	require.NoError(t, err)
+
+	bot := &stubBot{
+		downloads: map[string]stubDownload{
+			"v1": {
+				file: tgapi.File{FilePath: "video/clip.mp4"},
+				data: videoBytes,
+			},
+		},
+	}
+	ch.bot = bot
+
+	err = ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID: 3,
+		From:      &tgapi.User{ID: 2},
+		Chat:      &tgapi.Chat{ID: 1, Type: chatTypePrivate},
+		Text:      "extract the last two frames",
+		ReplyToMessage: &tgapi.Message{
+			MessageID: 2,
+			Video: &tgapi.Video{
+				FileID:   "v1",
+				FileName: "clip.mp4",
+				MimeType: "video/mp4",
+				FileSize: int64(len(videoBytes)),
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	gw.mu.Lock()
+	require.Len(t, gw.reqs, 1)
+	req := gw.reqs[0]
+	gw.mu.Unlock()
+
+	require.Equal(t, "extract the last two frames", req.Text)
+	require.Len(t, req.ContentParts, 1)
+	part := req.ContentParts[0]
+	require.Equal(t, gwproto.PartTypeVideo, part.Type)
+	require.NotNil(t, part.File)
+	require.Equal(t, "clip.mp4", part.File.Filename)
+	require.Equal(t, "video/mp4", part.File.Format)
+	require.Equal(t, videoBytes, part.File.Data)
+}
+
 func TestChannel_HandleMessage_Animation_BuildsVideoPart(t *testing.T) {
 	t.Parallel()
 

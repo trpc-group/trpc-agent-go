@@ -87,7 +87,10 @@ const (
 		"attachment paths. When a user follows " +
 		"up about 'the PDF/audio/video I just sent', assume they " +
 		"mean the recent upload already present in this chat unless " +
-		"the reference is genuinely ambiguous. For exec_command, do " +
+		"the reference is genuinely ambiguous. If the user replies " +
+		"to an earlier media message, treat that replied media as " +
+		"the default target unless they clearly ask for something " +
+		"else. For exec_command, do " +
 		"not assume skill workspace paths like work/inputs. Do not " +
 		"expose local host paths to the user; refer to uploads and " +
 		"generated files by user-facing filenames, and use message " +

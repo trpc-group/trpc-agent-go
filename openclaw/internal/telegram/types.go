@@ -23,12 +23,13 @@ type Update struct {
 //
 // Telegram docs: core.telegram.org/bots/api#message
 type Message struct {
-	MessageID       int    `json:"message_id"`
-	MessageThreadID int    `json:"message_thread_id,omitempty"`
-	From            *User  `json:"from,omitempty"`
-	Chat            *Chat  `json:"chat,omitempty"`
-	Text            string `json:"text,omitempty"`
-	Caption         string `json:"caption,omitempty"`
+	MessageID       int      `json:"message_id"`
+	MessageThreadID int      `json:"message_thread_id,omitempty"`
+	From            *User    `json:"from,omitempty"`
+	Chat            *Chat    `json:"chat,omitempty"`
+	Text            string   `json:"text,omitempty"`
+	Caption         string   `json:"caption,omitempty"`
+	ReplyToMessage  *Message `json:"reply_to_message,omitempty"`
 
 	Photo     []PhotoSize `json:"photo,omitempty"`
 	Document  *Document   `json:"document,omitempty"`

@@ -105,17 +105,52 @@ func (c *Channel) buildGatewayRequest(
 	parts := make([]gwproto.ContentPart, 0, 4)
 	var err error
 
-	parts, err = c.appendPhotoPart(ctx, parts, msg.Photo, maxBytes)
+	parts, err = c.appendMessageParts(ctx, parts, &msg, maxBytes)
 	if err != nil {
 		return gwclient.MessageRequest{}, err
+	}
+	if len(parts) == 0 && hasTelegramAttachments(msg.ReplyToMessage) {
+		parts, err = c.appendMessageParts(
+			ctx,
+			parts,
+			msg.ReplyToMessage,
+			maxBytes,
+		)
+		if err != nil {
+			return gwclient.MessageRequest{}, err
+		}
+	}
+
+	req.ContentParts = parts
+	if strings.TrimSpace(req.Text) == "" && len(req.ContentParts) == 0 {
+		return gwclient.MessageRequest{}, errors.New("telegram: empty message")
+	}
+	return req, nil
+}
+
+func (c *Channel) appendMessageParts(
+	ctx context.Context,
+	parts []gwproto.ContentPart,
+	msg *tgapi.Message,
+	maxBytes int64,
+) ([]gwproto.ContentPart, error) {
+	if msg == nil {
+		return parts, nil
+	}
+
+	var err error
+
+	parts, err = c.appendPhotoPart(ctx, parts, msg.Photo, maxBytes)
+	if err != nil {
+		return nil, err
 	}
 	parts, err = c.appendDocumentPart(ctx, parts, msg.Document, maxBytes)
 	if err != nil {
-		return gwclient.MessageRequest{}, err
+		return nil, err
 	}
 	parts, err = c.appendVideoPart(ctx, parts, msg.Video, maxBytes)
 	if err != nil {
-		return gwclient.MessageRequest{}, err
+		return nil, err
 	}
 	parts, err = c.appendAnimationPart(
 		ctx,
@@ -124,7 +159,7 @@ func (c *Channel) buildGatewayRequest(
 		maxBytes,
 	)
 	if err != nil {
-		return gwclient.MessageRequest{}, err
+		return nil, err
 	}
 	parts, err = c.appendVideoNotePart(
 		ctx,
@@ -133,22 +168,58 @@ func (c *Channel) buildGatewayRequest(
 		maxBytes,
 	)
 	if err != nil {
-		return gwclient.MessageRequest{}, err
+		return nil, err
 	}
 	parts, err = c.appendVoicePart(ctx, parts, msg.Voice, maxBytes)
 	if err != nil {
-		return gwclient.MessageRequest{}, err
+		return nil, err
 	}
 	parts, err = c.appendAudioPart(ctx, parts, msg.Audio, maxBytes)
 	if err != nil {
-		return gwclient.MessageRequest{}, err
+		return nil, err
 	}
+	return parts, nil
+}
 
-	req.ContentParts = parts
-	if strings.TrimSpace(req.Text) == "" && len(req.ContentParts) == 0 {
-		return gwclient.MessageRequest{}, errors.New("telegram: empty message")
+func hasTelegramAttachments(msg *tgapi.Message) bool {
+	if msg == nil {
+		return false
 	}
-	return req, nil
+	return len(msg.Photo) > 0 ||
+		msg.Document != nil ||
+		msg.Audio != nil ||
+		msg.Voice != nil ||
+		msg.Video != nil ||
+		msg.Animation != nil ||
+		msg.VideoNote != nil
+}
+
+func replyHasPhoto(msg *tgapi.Message) bool {
+	return msg != nil && len(msg.Photo) > 0
+}
+
+func replyHasDocument(msg *tgapi.Message) bool {
+	return msg != nil && msg.Document != nil
+}
+
+func replyHasAudio(msg *tgapi.Message) bool {
+	return msg != nil && msg.Audio != nil
+}
+
+func replyHasVoice(msg *tgapi.Message) bool {
+	return msg != nil && msg.Voice != nil
+}
+
+func replyHasVideo(msg *tgapi.Message) bool {
+	return msg != nil && msg.Video != nil
+}
+
+func replyHasAnimation(msg *tgapi.Message) bool {
+	return msg != nil && msg.Animation != nil
+}
+
+func replyHasVideoNote(msg *tgapi.Message) bool {
+	return msg != nil && msg.VideoNote != nil
 }
 
 func joinMessageText(a, b string) string {

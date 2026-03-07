@@ -69,6 +69,14 @@ type telegramMessageSummary struct {
 	HasVideo     bool `json:"has_video,omitempty"`
 	HasAnimation bool `json:"has_animation,omitempty"`
 	HasVideoNote bool `json:"has_video_note,omitempty"`
+
+	ReplyHasPhoto     bool `json:"reply_has_photo,omitempty"`
+	ReplyHasDocument  bool `json:"reply_has_document,omitempty"`
+	ReplyHasAudio     bool `json:"reply_has_audio,omitempty"`
+	ReplyHasVoice     bool `json:"reply_has_voice,omitempty"`
+	ReplyHasVideo     bool `json:"reply_has_video,omitempty"`
+	ReplyHasAnimation bool `json:"reply_has_animation,omitempty"`
+	ReplyHasVideoNote bool `json:"reply_has_video_note,omitempty"`
 }
 
 func parseStreamingMode(raw string) (string, error) {
@@ -139,6 +147,27 @@ func (c *Channel) callGatewayAndReply(
 						HasVideo:        msg.Video != nil,
 						HasAnimation:    msg.Animation != nil,
 						HasVideoNote:    msg.VideoNote != nil,
+						ReplyHasPhoto: replyHasPhoto(
+							msg.ReplyToMessage,
+						),
+						ReplyHasDocument: replyHasDocument(
+							msg.ReplyToMessage,
+						),
+						ReplyHasAudio: replyHasAudio(
+							msg.ReplyToMessage,
+						),
+						ReplyHasVoice: replyHasVoice(
+							msg.ReplyToMessage,
+						),
+						ReplyHasVideo: replyHasVideo(
+							msg.ReplyToMessage,
+						),
+						ReplyHasAnimation: replyHasAnimation(
+							msg.ReplyToMessage,
+						),
+						ReplyHasVideoNote: replyHasVideoNote(
+							msg.ReplyToMessage,
+						),
 					},
 				)
 				defer func() {
