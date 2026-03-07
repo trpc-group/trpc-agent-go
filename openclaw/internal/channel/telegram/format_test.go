@@ -171,6 +171,43 @@ func TestSanitizeTelegramText_HidesRelativePathsInCodeSpans(t *testing.T) {
 	require.Equal(t, "Generated: `report_page_3.pdf`.", got)
 }
 
+func TestSanitizeTelegramText_StripsReplyDirectives(t *testing.T) {
+	t.Parallel()
+
+	stateDir := filepath.Join("/tmp", "openclaw")
+	text := "已生成结果。\n" +
+		"MEDIA: /tmp/openclaw/uploads/chat/frame 1.png\n" +
+		"MEDIA_DIR: /tmp/openclaw/uploads/chat/out pdf\n" +
+		"请查收。"
+
+	got := sanitizeTelegramText(text, stateDir)
+	require.Equal(t, "已生成结果。\n请查收。", got)
+}
+
+func TestSanitizeTelegramText_StripsAudioAsVoiceTag(t *testing.T) {
+	t.Parallel()
+
+	got := sanitizeTelegramText(
+		"准备好了。\n[[audio_as_voice]]\n请查收。",
+		"",
+	)
+	require.Equal(t, "准备好了。\n\n请查收。", got)
+}
+
+func TestSanitizeTelegramText_RewritesPlaceholderFileNames(t *testing.T) {
+	t.Parallel()
+
+	got := sanitizeTelegramText(
+		"收到 `file_11.oga`，导出的图片是 `file_10.png`。",
+		"",
+	)
+	require.Equal(
+		t,
+		"收到 `audio.oga`，导出的图片是 `photo.png`。",
+		got,
+	)
+}
+
 func TestChannel_SendTextMessage_SanitizesPaths(t *testing.T) {
 	t.Parallel()
 

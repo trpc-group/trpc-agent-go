@@ -49,6 +49,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/octool"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
 	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
@@ -113,7 +114,10 @@ const (
 		"surfacing that raw placeholder to the user unless they " +
 		"explicitly ask for the exact filename. Refer to uploads " +
 		"and generated files by user-facing filenames, and use " +
-		"message " +
+		"OPENCLAW_LAST_*_NAME instead of basename(" +
+		"OPENCLAW_LAST_*_PATH) when deriving output filenames, " +
+		"because stored host paths may include internal dedupe " +
+		"prefixes. Use message " +
 		"with host refs when possible, or with local file " +
 		"paths/artifact refs when needed, to send " +
 		"PDFs, images, audio, or video back to the current chat " +
@@ -121,6 +125,22 @@ const (
 		"upload. Merely mentioning a filename in text does not " +
 		"send it; call message with files when the user should " +
 		"actually receive media or documents. If a command " +
+		"returns media_files or media_dirs, call message with " +
+		"those paths unless your final reply already includes " +
+		"`MEDIA:` or `MEDIA_DIR:` lines for OpenClaw to " +
+		"auto-attach and hide from the user. When exec_command " +
+		"or write_stdin generates images that you need to inspect, " +
+		"prefer printing `MEDIA:` / `MEDIA_DIR:` lines or the " +
+		"absolute image paths on their own lines. OpenClaw can " +
+		"reattach those generated images to the model for direct " +
+		"visual inspection, so inspect the image before assuming " +
+		"OCR failed. If you intentionally " +
+		"use that directive path, keep the visible prose separate " +
+		"from the `MEDIA:` lines. If a compatible audio reply " +
+		"should arrive as a Telegram voice bubble instead of a " +
+		"generic audio file, call message with as_voice=true or " +
+		"include `[[audio_as_voice]]` in the final reply along " +
+		"with the `MEDIA:` lines. If a command " +
 		"produces multiple files in one " +
 		"directory, send that directory or the matching files " +
 		"directly with message instead of only describing their " +
@@ -463,6 +483,20 @@ func NewRuntime(
 			Err:  fmt.Errorf("create upload store failed: %w", err),
 		}
 	}
+	personaPath, err := persona.DefaultStorePath(resolvedStateDir)
+	if err != nil {
+		return nil, &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("create persona store path failed: %w", err),
+		}
+	}
+	personaStore, err := persona.NewStore(personaPath)
+	if err != nil {
+		return nil, &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("create persona store failed: %w", err),
+		}
+	}
 
 	gwOpts := makeGatewayOptions(
 		splitCSV(opts.AllowUsers),
@@ -470,6 +504,7 @@ func NewRuntime(
 		mentionPatterns,
 	)
 	gwOpts = append(gwOpts, gateway.WithUploadStore(uploadStore))
+	gwOpts = append(gwOpts, gateway.WithPersonaStore(personaStore))
 	if debugRec != nil {
 		gwOpts = append(gwOpts, gateway.WithDebugRecorder(debugRec))
 	}
@@ -500,6 +535,7 @@ func NewRuntime(
 		debugDir,
 		uploadStore,
 	)
+	gw.SetPersonaStore(personaStore)
 
 	if len(opts.Channels) > 0 {
 		extra, err := channelsFromRegistry(
@@ -792,6 +828,20 @@ func run(ctx context.Context, args []string) error {
 			Err:  fmt.Errorf("create upload store failed: %w", err),
 		}
 	}
+	personaPath, err := persona.DefaultStorePath(resolvedStateDir)
+	if err != nil {
+		return &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("create persona store path failed: %w", err),
+		}
+	}
+	personaStore, err := persona.NewStore(personaPath)
+	if err != nil {
+		return &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("create persona store failed: %w", err),
+		}
+	}
 
 	gwOpts := makeGatewayOptions(
 		splitCSV(opts.AllowUsers),
@@ -799,6 +849,7 @@ func run(ctx context.Context, args []string) error {
 		mentionPatterns,
 	)
 	gwOpts = append(gwOpts, gateway.WithUploadStore(uploadStore))
+	gwOpts = append(gwOpts, gateway.WithPersonaStore(personaStore))
 	if debugRec != nil {
 		gwOpts = append(gwOpts, gateway.WithDebugRecorder(debugRec))
 	}
@@ -822,6 +873,7 @@ func run(ctx context.Context, args []string) error {
 		debugDir,
 		uploadStore,
 	)
+	gw.SetPersonaStore(personaStore)
 
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
@@ -1457,7 +1509,7 @@ func newAgent(
 	}
 
 	callbacks := tool.NewCallbacks()
-	callbacks.RegisterToolResultMessages(mcpImageResultMessages)
+	callbacks.RegisterToolResultMessages(openClawToolResultMessages)
 	opts = append(opts, llmagent.WithToolCallbacks(callbacks))
 
 	return llmagent.New(defaultAgentName, opts...), nil

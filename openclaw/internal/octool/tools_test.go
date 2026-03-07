@@ -65,6 +65,39 @@ func TestExecTool_Foreground(t *testing.T) {
 	require.Equal(t, 0, res.ExitCode)
 }
 
+func TestAnnotateExecResult_ParsesMediaMarkers(t *testing.T) {
+	t.Parallel()
+
+	res := execResult{
+		Status: "exited",
+		Output: "done\nMEDIA: /tmp/a.png\n" +
+			"MEDIA_DIR: /tmp/out frames\n" +
+			"MEDIA: /tmp/a.png\n",
+	}
+	annotateExecResult(&res)
+	require.Equal(t, []string{"/tmp/a.png"}, res.MediaFiles)
+	require.Equal(t, []string{"/tmp/out frames"}, res.MediaDirs)
+}
+
+func TestMapPollResult_IncludesMediaMarkers(t *testing.T) {
+	t.Parallel()
+
+	code := 0
+	out := mapPollResult("sess-1", processPoll{
+		Status:     "exited",
+		Output:     "MEDIA: page1.png\nMEDIA_DIR: out_pdf_split",
+		Offset:     1,
+		NextOffset: 3,
+		ExitCode:   &code,
+	})
+	require.Equal(t, []string{"page1.png"}, out["media_files"])
+	require.Equal(
+		t,
+		[]string{"out_pdf_split"},
+		out["media_dirs"],
+	)
+}
+
 func TestExecTool_YieldBackgroundAndPoll(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash is not available")

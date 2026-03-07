@@ -118,6 +118,11 @@ type botAPI interface {
 		params tgapi.SendMessageParams,
 	) (tgapi.Message, error)
 
+	AnswerCallbackQuery(
+		ctx context.Context,
+		params tgapi.AnswerCallbackQueryParams,
+	) error
+
 	SendDocument(
 		ctx context.Context,
 		params tgapi.SendFileParams,
@@ -379,6 +384,8 @@ type Channel struct {
 
 	sentFiles *sentFileTracker
 
+	audioInputConverter audioInputConverter
+
 	dmSessions     *dmSessionStore
 	dmResetPolicy  dmSessionResetPolicy
 	dmBlockCleanup string
@@ -505,28 +512,29 @@ func New(
 	}
 
 	return &Channel{
-		bot:              api,
-		info:             bot,
-		gw:               gw,
-		store:            store,
-		state:            stateDir,
-		sentFiles:        newSentFileTracker(),
-		dmSessions:       dmSessions,
-		dmResetPolicy:    cfg.dmResetPolicy,
-		dmBlockCleanup:   dmBlockCleanup,
-		startFromLatest:  cfg.startFromLatest,
-		pollTimeout:      cfg.pollTimeout,
-		errorBackoff:     cfg.errorBackoff,
-		dmPolicy:         dmPolicy,
-		groupPolicy:      groupPolicy,
-		allowUsers:       cfg.allowUsers,
-		allowThreads:     cfg.allowThreads,
-		pairing:          dmPairing,
-		maxDownloadBytes: cfg.maxDownloadBytes,
-		streamingMode:    streamingMode,
-		registerCommands: cfg.registerCommands,
-		lanes:            newLaneLocker(),
-		inflight:         newInflightRequests(),
+		bot:                 api,
+		info:                bot,
+		gw:                  gw,
+		store:               store,
+		state:               stateDir,
+		sentFiles:           newSentFileTracker(),
+		audioInputConverter: defaultAudioInputConverter,
+		dmSessions:          dmSessions,
+		dmResetPolicy:       cfg.dmResetPolicy,
+		dmBlockCleanup:      dmBlockCleanup,
+		startFromLatest:     cfg.startFromLatest,
+		pollTimeout:         cfg.pollTimeout,
+		errorBackoff:        cfg.errorBackoff,
+		dmPolicy:            dmPolicy,
+		groupPolicy:         groupPolicy,
+		allowUsers:          cfg.allowUsers,
+		allowThreads:        cfg.allowThreads,
+		pairing:             dmPairing,
+		maxDownloadBytes:    cfg.maxDownloadBytes,
+		streamingMode:       streamingMode,
+		registerCommands:    cfg.registerCommands,
+		lanes:               newLaneLocker(),
+		inflight:            newInflightRequests(),
 	}, nil
 }
 
@@ -568,6 +576,21 @@ func (c *Channel) Run(ctx context.Context) error {
 					log.WarnfContext(
 						ctx,
 						"telegram: handle message: %v",
+						err,
+					)
+				}
+			}()
+			return nil
+		}),
+		tgapi.WithCallbackQueryHandler(func(
+			ctx context.Context,
+			q tgapi.CallbackQuery,
+		) error {
+			go func() {
+				if err := c.handleCallbackQuery(ctx, q); err != nil {
+					log.WarnfContext(
+						ctx,
+						"telegram: handle callback query: %v",
 						err,
 					)
 				}
@@ -669,9 +692,12 @@ func (c *Channel) handleMessage(
 		sessionID = resolved
 	}
 
-	cmd := parseCommand(joinMessageText(msg.Text, msg.Caption), c.info)
-	if cmd != "" {
-		switch cmd {
+	cmd := parseCommandCall(
+		joinMessageText(msg.Text, msg.Caption),
+		c.info,
+	)
+	if cmd.Name != "" {
+		switch cmd.Name {
 		case commandHelp:
 			c.reply(ctx, chatID, messageThreadID, msg.MessageID, helpMessage)
 			return nil
@@ -722,6 +748,23 @@ func (c *Channel) handleMessage(
 				messageThreadID,
 				msg.MessageID,
 				fromID,
+			)
+		case commandPersona:
+			return c.handlePersonaCommand(
+				ctx,
+				chatID,
+				messageThreadID,
+				msg.MessageID,
+				laneKey,
+				cmd.Args,
+			)
+		case commandPersonas:
+			return c.handlePersonasCommand(
+				ctx,
+				chatID,
+				messageThreadID,
+				msg.MessageID,
+				laneKey,
 			)
 		default:
 			if !isGroup {
@@ -804,6 +847,73 @@ func (c *Channel) handleMyChatMember(
 	}
 }
 
+func (c *Channel) handleCallbackQuery(
+	ctx context.Context,
+	q tgapi.CallbackQuery,
+) error {
+	if q.Message == nil || q.Message.Chat == nil || q.From == nil {
+		return c.answerCallbackQuery(ctx, q.ID, "", false)
+	}
+
+	data := strings.TrimSpace(q.Data)
+	if data == "" {
+		return c.answerCallbackQuery(ctx, q.ID, "", false)
+	}
+
+	chatID := q.Message.Chat.ID
+	fromID := strconv.FormatInt(q.From.ID, 10)
+	isGroup := tgapi.IsGroupChat(strings.TrimSpace(q.Message.Chat.Type))
+
+	if !c.isUserAllowed(fromID) {
+		return c.answerCallbackQuery(
+			ctx,
+			q.ID,
+			notAllowedMessage,
+			true,
+		)
+	}
+
+	thread := ""
+	messageThreadID := 0
+	if isGroup {
+		thread = strconv.FormatInt(chatID, 10)
+		if q.Message.MessageThreadID != 0 {
+			thread = fmt.Sprintf(
+				"%s%s%d",
+				thread,
+				threadTopicSep,
+				q.Message.MessageThreadID,
+			)
+			messageThreadID = q.Message.MessageThreadID
+		}
+	}
+
+	if !c.isChatAllowed(isGroup, thread) {
+		return c.answerCallbackQuery(ctx, q.ID, "", false)
+	}
+	if !isGroup {
+		ok, err := c.isDMAllowed(ctx, chatID, fromID)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return c.answerCallbackQuery(ctx, q.ID, "", false)
+		}
+	}
+
+	switch {
+	case isPersonaCallbackData(data):
+		return c.handlePersonaCallbackQuery(
+			ctx,
+			q,
+			buildLaneKey(fromID, thread),
+			messageThreadID,
+		)
+	default:
+		return c.answerCallbackQuery(ctx, q.ID, "", false)
+	}
+}
+
 func (c *Channel) sendDM(
 	ctx context.Context,
 	chatID int64,
@@ -816,6 +926,28 @@ func (c *Channel) sendDM(
 	if err != nil {
 		log.WarnfContext(ctx, "telegram: send message: %v", err)
 	}
+}
+
+func (c *Channel) answerCallbackQuery(
+	ctx context.Context,
+	callbackID string,
+	text string,
+	showAlert bool,
+) error {
+	if c == nil || c.bot == nil {
+		return nil
+	}
+	if strings.TrimSpace(callbackID) == "" {
+		return nil
+	}
+	return c.bot.AnswerCallbackQuery(
+		ctx,
+		tgapi.AnswerCallbackQueryParams{
+			CallbackQueryID: callbackID,
+			Text:            text,
+			ShowAlert:       showAlert,
+		},
+	)
 }
 
 func (c *Channel) isUserAllowed(userID string) bool {

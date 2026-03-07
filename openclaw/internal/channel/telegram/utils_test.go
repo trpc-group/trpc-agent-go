@@ -262,6 +262,13 @@ func TestParseCommand(t *testing.T) {
 	require.Equal(t, "help", parseCommand(" /help ", BotInfo{}))
 	require.Equal(t, "help", parseCommand("/help@bot", BotInfo{Username: "bot"}))
 	require.Equal(t, "", parseCommand("/help@x", BotInfo{Username: "bot"}))
+
+	call := parseCommandCall(
+		"/persona@bot girlfriend  ",
+		BotInfo{Username: "bot"},
+	)
+	require.Equal(t, commandPersona, call.Name)
+	require.Equal(t, "girlfriend", call.Args)
 }
 
 func TestResolveStateDir_Default(t *testing.T) {

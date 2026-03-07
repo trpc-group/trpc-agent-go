@@ -75,6 +75,10 @@ var replyDirCueRE = regexp.MustCompile(
 		`([^\s<>()\[\]{}"'` + "`" + `]+)`,
 )
 
+var replyMediaCueRE = regexp.MustCompile(
+	`(?im)^\s*MEDIA(?:_DIR)?\s*:\s*(.+?)\s*$`,
+)
+
 func (c *Channel) collectReplyFiles(
 	text string,
 	fromID string,
@@ -92,10 +96,35 @@ func (c *Channel) collectReplyFiles(
 	)
 
 	explicit := replyFileCandidates(text)
+	directive := replyDirectiveCandidates(text)
 	bare := replyBareFilenameCandidates(text)
+	if len(directive) > 0 {
+		bare = nil
+	}
 
-	out := make([]channel.OutboundFile, 0, len(explicit)+len(bare))
+	out := make(
+		[]channel.OutboundFile,
+		0,
+		len(directive)+len(explicit)+len(bare),
+	)
 	seen := make(map[string]struct{})
+	for _, candidate := range directive {
+		files := resolveReplyDirectiveFiles(candidate)
+		for _, file := range files {
+			clean := cleanReplyFilePath(file.Path)
+			if _, ok := seen[clean]; ok {
+				continue
+			}
+			seen[clean] = struct{}{}
+			out = append(out, channel.OutboundFile{
+				Path: clean,
+				Name: file.Name,
+			})
+			if len(out) >= maxAutoReplyFiles {
+				return out
+			}
+		}
+	}
 	for _, candidate := range explicit {
 		files := resolveReplyCandidateFiles(candidate, roots)
 		for _, file := range files {
@@ -138,6 +167,29 @@ func (c *Channel) collectReplyFiles(
 	return out
 }
 
+func replyDirectiveCandidates(text string) []string {
+	seen := make(map[string]struct{})
+	out := make([]string, 0, 2)
+	for _, match := range replyMediaCueRE.FindAllStringSubmatch(
+		text,
+		-1,
+	) {
+		if len(match) < 2 {
+			continue
+		}
+		candidate := cleanReplyCandidateToken(match[1])
+		if candidate == "" {
+			continue
+		}
+		if _, ok := seen[candidate]; ok {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		out = append(out, candidate)
+	}
+	return out
+}
+
 func (c *Channel) sendReplyFiles(
 	ctx context.Context,
 	chatID int64,
@@ -161,6 +213,7 @@ func (c *Channel) sendReplyFiles(
 			"",
 			"",
 			scope,
+			file.AsVoice,
 		); err != nil {
 			log.WarnfContext(
 				ctx,
@@ -196,6 +249,16 @@ func replyFileCandidates(text string) []string {
 			return
 		}
 		appendToken(trimmed)
+	}
+
+	for _, match := range replyMediaCueRE.FindAllStringSubmatch(
+		text,
+		-1,
+	) {
+		if len(match) < 2 {
+			continue
+		}
+		appendToken(match[1])
 	}
 
 	for _, match := range telegramInlineCodeRE.FindAllStringSubmatch(text, -1) {
@@ -336,6 +399,35 @@ func resolveReplyCandidateFiles(
 	}
 
 	return searchReplyNamedFiles(trimmed, roots)
+}
+
+func resolveReplyDirectiveFiles(token string) []channel.OutboundFile {
+	trimmed := strings.TrimSpace(token)
+	if trimmed == "" {
+		return nil
+	}
+	if isReplyDirectRef(trimmed) {
+		return []channel.OutboundFile{{Path: trimmed}}
+	}
+	resolved, err := resolveOutboundFilePath(nil, "", trimmed)
+	if err != nil {
+		return nil
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return nil
+	}
+	if !info.IsDir() {
+		return []channel.OutboundFile{{
+			Path: filepath.Clean(resolved),
+		}}
+	}
+	items := listReplyDirectoryFiles(resolved, maxAutoReplyFiles)
+	out := make([]channel.OutboundFile, 0, len(items))
+	for _, item := range items {
+		out = append(out, channel.OutboundFile{Path: item})
+	}
+	return out
 }
 
 func isReplyDirectRef(token string) bool {

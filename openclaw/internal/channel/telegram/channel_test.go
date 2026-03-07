@@ -89,26 +89,29 @@ func (g *stubGateway) Cancel(
 }
 
 type stubBot struct {
-	mu        sync.Mutex
-	sent      []tgapi.SendMessageParams
-	sendErr   error
-	sendHook  func(tgapi.SendMessageParams) error
-	docs      []tgapi.SendFileParams
-	photos    []tgapi.SendFileParams
-	audios    []tgapi.SendFileParams
-	voices    []tgapi.SendFileParams
-	videos    []tgapi.SendFileParams
-	fileErr   error
-	fileHook  func(tgapi.SendFileParams) error
-	edits     []tgapi.EditMessageTextParams
-	editErr   error
-	editHook  func(tgapi.EditMessageTextParams) error
-	actions   []tgapi.SendChatActionParams
-	actionErr error
-	commands  [][]tgapi.BotCommand
-	cmdErr    error
-	updates   [][]tgapi.Update
-	getError  error
+	mu           sync.Mutex
+	sent         []tgapi.SendMessageParams
+	sendErr      error
+	sendHook     func(tgapi.SendMessageParams) error
+	callbacks    []tgapi.AnswerCallbackQueryParams
+	callbackErr  error
+	callbackHook func(tgapi.AnswerCallbackQueryParams) error
+	docs         []tgapi.SendFileParams
+	photos       []tgapi.SendFileParams
+	audios       []tgapi.SendFileParams
+	voices       []tgapi.SendFileParams
+	videos       []tgapi.SendFileParams
+	fileErr      error
+	fileHook     func(tgapi.SendFileParams) error
+	edits        []tgapi.EditMessageTextParams
+	editErr      error
+	editHook     func(tgapi.EditMessageTextParams) error
+	actions      []tgapi.SendChatActionParams
+	actionErr    error
+	commands     [][]tgapi.BotCommand
+	cmdErr       error
+	updates      [][]tgapi.Update
+	getError     error
 
 	downloads map[string]stubDownload
 	dlCalls   []downloadCall
@@ -166,6 +169,21 @@ func (b *stubBot) SendMessage(
 		MessageID: b.nextMessageID,
 		Text:      params.Text,
 	}, nil
+}
+
+func (b *stubBot) AnswerCallbackQuery(
+	_ context.Context,
+	params tgapi.AnswerCallbackQueryParams,
+) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.callbacks = append(b.callbacks, params)
+	if b.callbackHook != nil {
+		if err := b.callbackHook(params); err != nil {
+			return err
+		}
+	}
+	return b.callbackErr
 }
 
 func (b *stubBot) SendDocument(
@@ -794,7 +812,7 @@ func TestChannel_HandleMessage_AudioMP3_BuildsAudioPart(t *testing.T) {
 	filePart := req.ContentParts[1]
 	require.Equal(t, gwproto.PartTypeFile, filePart.Type)
 	require.NotNil(t, filePart.File)
-	require.Equal(t, defaultAudioName+".mp3", filePart.File.Filename)
+	require.Equal(t, "song.mp3", filePart.File.Filename)
 	require.Equal(t, mimeAudioMP3, filePart.File.Format)
 	require.Equal(t, audioBytes, filePart.File.Data)
 }

@@ -205,6 +205,63 @@ func TestPoller_HandlesPhotoMessage(t *testing.T) {
 	}
 }
 
+func TestPoller_HandlesCallbackQuery(t *testing.T) {
+	t.Parallel()
+
+	client := &stubUpdatesClient{
+		results: [][]Update{
+			{
+				{
+					UpdateID: 1,
+					CallbackQuery: &CallbackQuery{
+						ID:   "cb-1",
+						From: &User{ID: 1},
+						Message: &Message{
+							MessageID: 1,
+							Chat: &Chat{
+								ID:   2,
+								Type: chatTypePrivate,
+							},
+						},
+						Data: "persona:set:coach",
+					},
+				},
+			},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	handled := make(chan struct{}, 1)
+	poller, err := NewPoller(
+		client,
+		WithStartFromLatest(false),
+		WithPollTimeout(0),
+		WithMessageHandler(func(context.Context, Message) error {
+			t.Fatal("message handler should not run")
+			return nil
+		}),
+		WithCallbackQueryHandler(
+			func(_ context.Context, q CallbackQuery) error {
+				require.Equal(t, "cb-1", q.ID)
+				handled <- struct{}{}
+				cancel()
+				return nil
+			},
+		),
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, poller.Run(ctx))
+
+	select {
+	case <-handled:
+	default:
+		t.Fatal("expected callback query handler to be called")
+	}
+}
+
 func TestPoller_HandlesMediaMessages(t *testing.T) {
 	t.Parallel()
 

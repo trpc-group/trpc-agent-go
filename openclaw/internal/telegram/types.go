@@ -14,9 +14,10 @@ package telegram
 //
 // Telegram docs: core.telegram.org/bots/api#update
 type Update struct {
-	UpdateID     int              `json:"update_id"`
-	Message      *Message         `json:"message,omitempty"`
-	MyChatMember *ChatMemberEvent `json:"my_chat_member,omitempty"`
+	UpdateID      int              `json:"update_id"`
+	Message       *Message         `json:"message,omitempty"`
+	CallbackQuery *CallbackQuery   `json:"callback_query,omitempty"`
+	MyChatMember  *ChatMemberEvent `json:"my_chat_member,omitempty"`
 }
 
 // Message is a Telegram message.
@@ -38,6 +39,31 @@ type Message struct {
 	Video     *Video      `json:"video,omitempty"`
 	Animation *Animation  `json:"animation,omitempty"`
 	VideoNote *VideoNote  `json:"video_note,omitempty"`
+}
+
+// CallbackQuery is an inline keyboard callback interaction.
+//
+// Telegram docs: core.telegram.org/bots/api#callbackquery
+type CallbackQuery struct {
+	ID      string   `json:"id"`
+	From    *User    `json:"from,omitempty"`
+	Message *Message `json:"message,omitempty"`
+	Data    string   `json:"data,omitempty"`
+}
+
+// InlineKeyboardMarkup is one inline keyboard payload.
+//
+// Telegram docs: core.telegram.org/bots/api#inlinekeyboardmarkup
+type InlineKeyboardMarkup struct {
+	InlineKeyboard [][]InlineKeyboardButton `json:"inline_keyboard"`
+}
+
+// InlineKeyboardButton is one inline keyboard button.
+//
+// Telegram docs: core.telegram.org/bots/api#inlinekeyboardbutton
+type InlineKeyboardButton struct {
+	Text         string `json:"text"`
+	CallbackData string `json:"callback_data,omitempty"`
 }
 
 // PhotoSize is one size variant of a photo.

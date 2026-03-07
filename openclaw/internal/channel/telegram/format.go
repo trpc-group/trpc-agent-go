@@ -48,6 +48,11 @@ const (
 	pathTokenTrailingPunct = ".,:;!?)]}"
 
 	inlineCodeDelimiter = "`"
+
+	replyDirectiveMedia    = "MEDIA:"
+	replyDirectiveMediaDir = "MEDIA_DIR:"
+
+	audioAsVoiceTag = "[[audio_as_voice]]"
 )
 
 var telegramPathTokenRE = regexp.MustCompile(
@@ -57,6 +62,10 @@ var telegramPathTokenRE = regexp.MustCompile(
 
 var telegramInlineCodeRE = regexp.MustCompile(
 	"`([^`\n]+)`",
+)
+
+var telegramPlaceholderNameRE = regexp.MustCompile(
+	`\bfile_\d+(?:\.[A-Za-z0-9]+)?\b`,
 )
 
 func (c *Channel) sendTextMessage(
@@ -139,12 +148,58 @@ func sanitizeTelegramText(text string, stateDir string) string {
 	if strings.TrimSpace(text) == "" {
 		return text
 	}
+	text = stripTelegramReplyDirectives(text)
+	text = stripAudioAsVoiceTag(text)
 	root := cleanStateRoot(stateDir)
 	sanitized := sanitizeTelegramInlineCodePaths(text, root)
-	return telegramPathTokenRE.ReplaceAllStringFunc(
+	sanitized = telegramPathTokenRE.ReplaceAllStringFunc(
 		sanitized,
 		func(token string) string {
 			return sanitizeTelegramPathToken(token, root)
+		},
+	)
+	return sanitizeTelegramPlaceholderNames(sanitized)
+}
+
+func stripTelegramReplyDirectives(text string) string {
+	lines := strings.Split(text, lineBreak)
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if isTelegramReplyDirectiveLine(line) {
+			continue
+		}
+		out = append(out, line)
+	}
+	return strings.TrimSpace(strings.Join(out, lineBreak))
+}
+
+func isTelegramReplyDirectiveLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return false
+	}
+	upper := strings.ToUpper(trimmed)
+	return strings.HasPrefix(upper, replyDirectiveMedia) ||
+		strings.HasPrefix(upper, replyDirectiveMediaDir)
+}
+
+func stripAudioAsVoiceTag(text string) string {
+	return strings.ReplaceAll(text, audioAsVoiceTag, "")
+}
+
+func hasAudioAsVoiceTag(text string) bool {
+	return strings.Contains(text, audioAsVoiceTag)
+}
+
+func sanitizeTelegramPlaceholderNames(text string) string {
+	return telegramPlaceholderNameRE.ReplaceAllStringFunc(
+		text,
+		func(token string) string {
+			name := uploads.PreferredName(token, "")
+			if name == "" {
+				return token
+			}
+			return name
 		},
 	)
 }

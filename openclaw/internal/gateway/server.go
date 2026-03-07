@@ -35,6 +35,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
@@ -136,8 +137,10 @@ type Server struct {
 
 	handler http.Handler
 
-	recorder *debugrecorder.Recorder
-	uploads  *uploads.Store
+	recorder         *debugrecorder.Recorder
+	uploads          *uploads.Store
+	audioTranscriber audioTranscriber
+	personaStore     *persona.Store
 }
 
 // New creates a gateway server with the provided runner.
@@ -189,25 +192,31 @@ func New(r runner.Runner, opts ...Option) (*Server, error) {
 			policy: policy,
 		}
 	}
+	audioTranscriber := options.audioTranscriber
+	if audioTranscriber == nil {
+		audioTranscriber = newDefaultAudioTranscriber()
+	}
 
 	s := &Server{
-		basePath:        options.basePath,
-		messagesPath:    messagesPath,
-		statusPath:      statusPath,
-		cancelPath:      cancelPath,
-		healthPath:      options.healthPath,
-		maxBodyBytes:    options.maxBodyBytes,
-		maxPartBytes:    options.maxPartBytes,
-		partFetcher:     fetcher,
-		runner:          r,
-		managed:         managed,
-		sessionIDFunc:   sessionIDFunc,
-		allowUsers:      options.allowUsers,
-		requireMention:  options.requireMention,
-		mentionPatterns: options.mentionPatterns,
-		lanes:           newLaneLocker(),
-		recorder:        options.recorder,
-		uploads:         options.uploads,
+		basePath:         options.basePath,
+		messagesPath:     messagesPath,
+		statusPath:       statusPath,
+		cancelPath:       cancelPath,
+		healthPath:       options.healthPath,
+		maxBodyBytes:     options.maxBodyBytes,
+		maxPartBytes:     options.maxPartBytes,
+		partFetcher:      fetcher,
+		runner:           r,
+		managed:          managed,
+		sessionIDFunc:    sessionIDFunc,
+		allowUsers:       options.allowUsers,
+		requireMention:   options.requireMention,
+		mentionPatterns:  options.mentionPatterns,
+		lanes:            newLaneLocker(),
+		recorder:         options.recorder,
+		uploads:          options.uploads,
+		audioTranscriber: audioTranscriber,
+		personaStore:     options.personaStore,
 	}
 
 	mux := http.NewServeMux()
@@ -453,7 +462,10 @@ func (s *Server) runLocked(
 	if requestID != "" {
 		runOpts = append(runOpts, agent.WithRequestID(requestID))
 	}
-	if messages := s.uploadContextMessages(userID, sessionID); len(messages) > 0 {
+	if messages := s.injectedContextMessages(
+		userID,
+		sessionID,
+	); len(messages) > 0 {
 		runOpts = append(
 			runOpts,
 			agent.WithInjectedContextMessages(messages),

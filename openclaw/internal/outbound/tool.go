@@ -95,18 +95,30 @@ func (t *Tool) Declaration() *tool.Declaration {
 						"session ids, <chatID>, or " +
 						"<chatID>:topic:<topicID>.",
 				},
+				"as_voice": {
+					Type: "boolean",
+					Description: "When true, send compatible " +
+						"audio files as voice notes on channels " +
+						"that support them.",
+				},
+				"audio_as_voice": {
+					Type:        "boolean",
+					Description: "Alias for as_voice.",
+				},
 			},
 		},
 	}
 }
 
 type toolInput struct {
-	Text    string   `json:"text"`
-	File    string   `json:"file,omitempty"`
-	Files   []string `json:"files,omitempty"`
-	Media   []string `json:"media,omitempty"`
-	Channel string   `json:"channel,omitempty"`
-	Target  string   `json:"target,omitempty"`
+	Text         string   `json:"text"`
+	File         string   `json:"file,omitempty"`
+	Files        []string `json:"files,omitempty"`
+	Media        []string `json:"media,omitempty"`
+	Channel      string   `json:"channel,omitempty"`
+	Target       string   `json:"target,omitempty"`
+	AsVoice      bool     `json:"as_voice,omitempty"`
+	AudioAsVoice bool     `json:"audio_as_voice,omitempty"`
 }
 
 func (t *Tool) Call(ctx context.Context, args []byte) (any, error) {
@@ -160,9 +172,11 @@ func buildOutboundMessage(in toolInput) (channel.OutboundMessage, error) {
 	if err != nil {
 		return channel.OutboundMessage{}, err
 	}
+	asVoice := in.AsVoice || in.AudioAsVoice
 	for _, path := range files {
 		msg.Files = append(msg.Files, channel.OutboundFile{
-			Path: path,
+			Path:    path,
+			AsVoice: asVoice,
 		})
 	}
 	return msg, nil

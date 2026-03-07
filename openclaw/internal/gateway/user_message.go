@@ -27,6 +27,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 )
 
@@ -48,6 +49,13 @@ const (
 	audioFormatMP3 = "mp3"
 
 	errContentPartTooLarge = "content part too large"
+
+	telegramChannelName = "telegram"
+
+	audioTranscriptSeparator = "\n\n"
+	audioTranscriptLabelFmt  = "Audio transcript %d:"
+
+	kindGatewayAudioTranscript = "gateway.audio.transcription"
 )
 
 type partFetcher interface {
@@ -397,13 +405,22 @@ func (s *Server) normalizeUserMessage(
 		return model.Message{}, "", err
 	}
 
+	text, parts, transcriptText, transcriptMention := s.rewriteAudioMessage(
+		ctx,
+		strings.TrimSpace(req.Channel),
+		text,
+		parts,
+	)
 	mentionText := strings.TrimSpace(joinText(text, partsText))
+	mentionText = strings.TrimSpace(
+		joinText(mentionText, transcriptMention),
+	)
 	if text == "" && len(parts) == 0 {
 		return model.Message{}, "", errors.New("missing text")
 	}
 	return model.Message{
 		Role:         model.RoleUser,
-		Content:      text,
+		Content:      strings.TrimSpace(joinText(text, transcriptText)),
 		ContentParts: parts,
 	}, mentionText, nil
 }
@@ -450,6 +467,149 @@ func (s *Server) normalizeContentParts(
 		}
 	}
 	return out, strings.Join(textParts, "\n"), nil
+}
+
+func (s *Server) rewriteAudioMessage(
+	ctx context.Context,
+	channel string,
+	text string,
+	parts []model.ContentPart,
+) (string, []model.ContentPart, string, string) {
+	if s == nil || s.audioTranscriber == nil ||
+		!strings.EqualFold(channel, telegramChannelName) {
+		return text, parts, "", ""
+	}
+
+	transcripts, rewritten := s.transcribeAudioParts(ctx, parts)
+	if len(transcripts) == 0 {
+		return text, parts, "", ""
+	}
+
+	plainText := strings.Join(transcripts, "\n")
+	if strings.TrimSpace(text) == "" && len(transcripts) == 1 {
+		return plainText, rewritten, "", ""
+	}
+	return text,
+		rewritten,
+		formatAudioTranscriptText(transcripts),
+		plainText
+}
+
+func (s *Server) transcribeAudioParts(
+	ctx context.Context,
+	parts []model.ContentPart,
+) ([]string, []model.ContentPart) {
+	if len(parts) == 0 {
+		return nil, parts
+	}
+
+	transcripts := make([]string, 0, len(parts))
+	rewritten := make([]model.ContentPart, 0, len(parts))
+
+	for i := range parts {
+		part := parts[i]
+		if part.Type != model.ContentTypeAudio || part.Audio == nil {
+			rewritten = append(rewritten, part)
+			continue
+		}
+
+		transcript, err := s.transcribeAudioPart(ctx, i, part.Audio)
+		if err != nil {
+			rewritten = append(rewritten, part)
+			continue
+		}
+		transcripts = append(transcripts, transcript)
+	}
+	return transcripts, rewritten
+}
+
+func (s *Server) transcribeAudioPart(
+	ctx context.Context,
+	index int,
+	audio *model.Audio,
+) (string, error) {
+	if s == nil || s.audioTranscriber == nil {
+		return "", errors.New("missing audio transcriber")
+	}
+
+	transcribeCtx, cancel := context.WithTimeout(
+		ctx,
+		defaultAudioTranscriptionTimeout,
+	)
+	defer cancel()
+
+	transcript, err := s.audioTranscriber.Transcribe(
+		transcribeCtx,
+		audio,
+	)
+	traceAudioTranscription(
+		ctx,
+		index,
+		audio,
+		transcript,
+		err,
+	)
+	if err != nil {
+		return "", err
+	}
+	transcript = strings.TrimSpace(transcript)
+	if transcript == "" {
+		return "", errors.New("empty audio transcript")
+	}
+	return transcript, nil
+}
+
+func formatAudioTranscriptText(transcripts []string) string {
+	if len(transcripts) == 0 {
+		return ""
+	}
+	if len(transcripts) == 1 {
+		return strings.TrimSpace(
+			"Audio transcript:\n" + transcripts[0],
+		)
+	}
+
+	parts := make([]string, 0, len(transcripts))
+	for i := range transcripts {
+		text := strings.TrimSpace(transcripts[i])
+		if text == "" {
+			continue
+		}
+		parts = append(
+			parts,
+			fmt.Sprintf(audioTranscriptLabelFmt, i+1)+"\n"+text,
+		)
+	}
+	return strings.Join(parts, audioTranscriptSeparator)
+}
+
+func traceAudioTranscription(
+	ctx context.Context,
+	index int,
+	audio *model.Audio,
+	transcript string,
+	err error,
+) {
+	trace := debugrecorder.TraceFromContext(ctx)
+	if trace == nil {
+		return
+	}
+
+	payload := map[string]any{
+		"index":             index,
+		"format":            "",
+		"bytes":             0,
+		"transcript":        transcript,
+		"transcript_length": len(transcript),
+	}
+	if audio != nil {
+		payload["format"] = strings.TrimSpace(audio.Format)
+		payload["bytes"] = len(audio.Data)
+	}
+	if err != nil {
+		payload["error"] = err.Error()
+	}
+	_ = trace.Record(kindGatewayAudioTranscript, payload)
 }
 
 func (s *Server) normalizeContentPart(

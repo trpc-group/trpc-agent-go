@@ -28,6 +28,8 @@ const (
 	commandForget    = "forget"
 	commandJobs      = "jobs"
 	commandJobsClear = "jobs_clear"
+	commandPersona   = "persona"
+	commandPersonas  = "personas"
 )
 
 const (
@@ -38,6 +40,8 @@ const (
 	commandForgetDesc    = "Delete your saved data (DM only)"
 	commandJobsDesc      = "List scheduled jobs for this chat"
 	commandJobsClearDesc = "Remove scheduled jobs for this chat"
+	commandPersonaDesc   = "Show or set the active persona preset"
+	commandPersonasDesc  = "List available persona presets"
 )
 
 const helpMessage = "Commands:\n" +
@@ -47,7 +51,9 @@ const helpMessage = "Commands:\n" +
 	"/new    " + commandNewDesc + "\n" +
 	"/forget " + commandForgetDesc + "\n" +
 	"/jobs   " + commandJobsDesc + "\n" +
-	"/jobs_clear " + commandJobsClearDesc
+	"/jobs_clear " + commandJobsClearDesc + "\n" +
+	"/persona " + commandPersonaDesc + "\n" +
+	"/personas " + commandPersonasDesc
 
 func defaultBotCommands() []tgapi.BotCommand {
 	return []tgapi.BotCommand{
@@ -79,22 +85,39 @@ func defaultBotCommands() []tgapi.BotCommand {
 			Command:     commandJobsClear,
 			Description: commandJobsClearDesc,
 		},
+		{
+			Command:     commandPersona,
+			Description: commandPersonaDesc,
+		},
+		{
+			Command:     commandPersonas,
+			Description: commandPersonasDesc,
+		},
 	}
 }
 
+type commandCall struct {
+	Name string
+	Args string
+}
+
 func parseCommand(text string, bot BotInfo) string {
+	return parseCommandCall(text, bot).Name
+}
+
+func parseCommandCall(text string, bot BotInfo) commandCall {
 	trimmed := strings.TrimSpace(text)
 	if !strings.HasPrefix(trimmed, commandPrefix) {
-		return ""
+		return commandCall{}
 	}
 	fields := strings.Fields(trimmed)
 	if len(fields) == 0 {
-		return ""
+		return commandCall{}
 	}
 
 	token := strings.TrimPrefix(fields[0], commandPrefix)
 	if token == "" {
-		return ""
+		return commandCall{}
 	}
 
 	cmd := token
@@ -105,17 +128,23 @@ func parseCommand(text string, bot BotInfo) string {
 	}
 	cmd = strings.ToLower(strings.TrimSpace(cmd))
 	if cmd == "" {
-		return ""
+		return commandCall{}
 	}
 
 	if target == "" || strings.TrimSpace(bot.Username) == "" {
-		return cmd
+		return commandCall{
+			Name: cmd,
+			Args: strings.TrimSpace(strings.TrimPrefix(trimmed, fields[0])),
+		}
 	}
 
 	if strings.EqualFold(target, bot.Username) {
-		return cmd
+		return commandCall{
+			Name: cmd,
+			Args: strings.TrimSpace(strings.TrimPrefix(trimmed, fields[0])),
+		}
 	}
-	return ""
+	return commandCall{}
 }
 
 type inflightRequests struct {

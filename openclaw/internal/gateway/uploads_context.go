@@ -40,6 +40,17 @@ const (
 		"still valid to reuse it. If the " +
 		"user replies to an earlier media message, that " +
 		"replied media is usually the intended target. If the " +
+		"agent wants OpenClaw chat channels to auto-attach " +
+		"generated outputs, it may include final reply lines like " +
+		"`MEDIA: /path/to/file` or `MEDIA_DIR: /path/to/dir`; " +
+		"those directive lines are hidden from users while the " +
+		"matching files are sent. To send compatible audio as a " +
+		"Telegram voice bubble, it may also include " +
+		"`[[audio_as_voice]]` in the final reply. " +
+		"Avoid repeating local machine " +
+		"paths or placeholder Telegram filenames " +
+		"in user-facing replies unless the user explicitly asks. " +
+		"If the " +
 		"requested media kind is not present here, say " +
 		"which files are currently available in this chat."
 )
@@ -103,11 +114,7 @@ func buildUploadKindSummary(files []uploads.ListedFile) string {
 			continue
 		}
 		seen[kind] = struct{}{}
-		name := strings.TrimSpace(file.Name)
-		if name == "" {
-			name = filepath.Base(strings.TrimSpace(file.Path))
-		}
-		name = uploads.PreferredName(name, file.MimeType)
+		name := uploadContextName(file)
 		if name == "" {
 			continue
 		}
@@ -119,11 +126,7 @@ func buildUploadKindSummary(files []uploads.ListedFile) string {
 const uploadKindFileLabel = "file"
 
 func formatUploadContextLine(file uploads.ListedFile) string {
-	name := strings.TrimSpace(file.Name)
-	if name == "" {
-		name = filepath.Base(strings.TrimSpace(file.Path))
-	}
-	name = uploads.PreferredName(name, file.MimeType)
+	name := uploadContextName(file)
 	kind := describeUploadKind(name, file.MimeType)
 	source := describeUploadSource(file.Source)
 	if kind == "" && source == "" {
@@ -137,6 +140,55 @@ func formatUploadContextLine(file uploads.ListedFile) string {
 	default:
 		return "- " + name + " [" + source + "]"
 	}
+}
+
+func uploadContextName(file uploads.ListedFile) string {
+	name := strings.TrimSpace(file.Name)
+	if name == "" {
+		name = filepath.Base(strings.TrimSpace(file.Path))
+	}
+	name = uploads.PreferredName(name, file.MimeType)
+	if !isUploadPlaceholderName(file.Name) ||
+		strings.TrimSpace(file.Source) != uploads.SourceInbound {
+		return name
+	}
+
+	switch uploads.KindFromMeta(file.Name, file.MimeType) {
+	case uploads.KindAudio:
+		return "your audio message"
+	case uploads.KindVideo:
+		return "your video"
+	case uploads.KindImage:
+		return "your image"
+	case uploads.KindPDF:
+		return "your PDF"
+	default:
+		return "your file"
+	}
+}
+
+func isUploadPlaceholderName(name string) bool {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return false
+	}
+	stem := trimmed
+	if dot := strings.Index(trimmed, "."); dot >= 0 {
+		stem = trimmed[:dot]
+	}
+	if !strings.HasPrefix(stem, "file_") {
+		return false
+	}
+	suffix := strings.TrimPrefix(stem, "file_")
+	if suffix == "" {
+		return false
+	}
+	for _, r := range suffix {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func describeUploadKind(name string, mimeType string) string {

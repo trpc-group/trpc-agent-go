@@ -37,6 +37,9 @@ type MessageHandler func(ctx context.Context, msg Message) error
 // MyChatMemberHandler handles one my_chat_member update.
 type MyChatMemberHandler func(ctx context.Context, ev ChatMemberEvent) error
 
+// CallbackQueryHandler handles one callback_query update.
+type CallbackQueryHandler func(ctx context.Context, q CallbackQuery) error
+
 // Poller consumes updates via getUpdates and calls the handler for
 // each message with user content.
 type Poller struct {
@@ -47,6 +50,7 @@ type Poller struct {
 	offsetStore     OffsetStore
 	onError         func(error)
 	handler         MessageHandler
+	callbackQuery   CallbackQueryHandler
 	myChatMember    MyChatMemberHandler
 }
 
@@ -87,6 +91,11 @@ func WithMessageHandler(h MessageHandler) PollerOption {
 // WithMyChatMemberHandler sets the my_chat_member handler.
 func WithMyChatMemberHandler(h MyChatMemberHandler) PollerOption {
 	return func(p *Poller) { p.myChatMember = h }
+}
+
+// WithCallbackQueryHandler sets the callback_query handler.
+func WithCallbackQueryHandler(h CallbackQueryHandler) PollerOption {
+	return func(p *Poller) { p.callbackQuery = h }
 }
 
 // NewPoller creates a poller.
@@ -174,6 +183,25 @@ func (p *Poller) Run(ctx context.Context) error {
 					if err := p.myChatMember(
 						ctx,
 						*upd.MyChatMember,
+					); err != nil {
+						p.onError(err)
+						if !sleepWithContext(ctx, p.backoff) {
+							return nil
+						}
+						break
+					}
+				}
+
+				offset = nextOffset
+				p.persistOffset(ctx, offset)
+				continue
+			}
+
+			if upd.CallbackQuery != nil {
+				if p.callbackQuery != nil {
+					if err := p.callbackQuery(
+						ctx,
+						*upd.CallbackQuery,
 					); err != nil {
 						p.onError(err)
 						if !sleepWithContext(ctx, p.backoff) {

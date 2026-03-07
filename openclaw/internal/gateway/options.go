@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 )
 
@@ -33,6 +34,7 @@ type options struct {
 	partFetcher          partFetcher
 	allowPrivatePartURLs bool
 	allowedPartPatterns  []string
+	audioTranscriber     audioTranscriber
 
 	sessionIDFunc SessionIDFunc
 
@@ -42,6 +44,8 @@ type options struct {
 
 	recorder *debugrecorder.Recorder
 	uploads  *uploads.Store
+
+	personaStore *persona.Store
 }
 
 // Option is a function that configures a gateway server.
@@ -178,6 +182,14 @@ func WithAllowedContentPartDomains(domains ...string) Option {
 	}
 }
 
+// WithPersonaStore sets the preset persona store used for per-chat
+// system-message injection.
+func WithPersonaStore(store *persona.Store) Option {
+	return func(o *options) {
+		o.personaStore = store
+	}
+}
+
 // WithSessionIDFunc sets a custom session ID function.
 func WithSessionIDFunc(fn SessionIDFunc) Option {
 	return func(o *options) {
@@ -245,5 +257,12 @@ func WithDebugRecorder(rec *debugrecorder.Recorder) Option {
 func WithUploadStore(store *uploads.Store) Option {
 	return func(o *options) {
 		o.uploads = store
+	}
+}
+
+// WithAudioTranscriber overrides inbound audio transcription.
+func WithAudioTranscriber(transcriber audioTranscriber) Option {
+	return func(o *options) {
+		o.audioTranscriber = transcriber
 	}
 }

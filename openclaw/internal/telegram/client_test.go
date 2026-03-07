@@ -123,6 +123,56 @@ func TestClient_GetUpdates(t *testing.T) {
 	require.Equal(t, "30", seenTimeout)
 }
 
+func TestClient_GetUpdates_CallbackQuery(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		require.Equal(t, methodGet, r.Method)
+		require.Equal(t, "/bot"+testToken+"/"+pathGetUpdate, r.URL.Path)
+
+		_ = json.NewEncoder(w).Encode(apiResponse[[]Update]{
+			OK: true,
+			Result: []Update{{
+				UpdateID: 12,
+				CallbackQuery: &CallbackQuery{
+					ID:   "cb-1",
+					From: &User{ID: 2},
+					Message: &Message{
+						MessageID: 7,
+						Chat: &Chat{
+							ID:   42,
+							Type: chatTypePrivate,
+						},
+					},
+					Data: "persona:set:coach",
+				},
+			}},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := New(
+		testToken,
+		WithBaseURL(srv.URL),
+		WithHTTPClient(srv.Client()),
+	)
+	require.NoError(t, err)
+
+	updates, err := c.GetUpdates(context.Background(), 0, 0)
+	require.NoError(t, err)
+	require.Len(t, updates, 1)
+	require.NotNil(t, updates[0].CallbackQuery)
+	require.Equal(t, "cb-1", updates[0].CallbackQuery.ID)
+	require.Equal(
+		t,
+		"persona:set:coach",
+		updates[0].CallbackQuery.Data,
+	)
+}
+
 func TestClient_SendMessage(t *testing.T) {
 	t.Parallel()
 
@@ -132,6 +182,7 @@ func TestClient_SendMessage(t *testing.T) {
 		testReplyTo  = 100
 		testReplyMsg = "hello"
 		testMode     = ParseModeHTML
+		testButton   = "Coach"
 	)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(
@@ -147,11 +198,17 @@ func TestClient_SendMessage(t *testing.T) {
 		var payload sendMessageRequest
 		require.NoError(t, json.Unmarshal(raw, &payload))
 		require.Equal(t, testChatID, payload.ChatID)
-		require.Equal(t, testThreadID, payload.MessageThreadID)
-		require.Equal(t, testReplyTo, payload.ReplyToMessageID)
+		require.Equal(t, testThreadID, payload.ThreadID)
+		require.Equal(t, testReplyTo, payload.ReplyID)
 		require.Equal(t, testReplyMsg, payload.Text)
-		require.Equal(t, testMode, payload.ParseMode)
-		require.True(t, payload.DisableWebPagePrev)
+		require.Equal(t, testMode, payload.Mode)
+		require.True(t, payload.NoPrev)
+		require.NotNil(t, payload.Markup)
+		require.Equal(
+			t,
+			testButton,
+			payload.Markup.InlineKeyboard[0][0].Text,
+		)
 
 		_ = json.NewEncoder(w).Encode(apiResponse[Message]{
 			OK: true,
@@ -178,6 +235,14 @@ func TestClient_SendMessage(t *testing.T) {
 			ReplyToMessageID: testReplyTo,
 			Text:             testReplyMsg,
 			ParseMode:        testMode,
+			ReplyMarkup: &InlineKeyboardMarkup{
+				InlineKeyboard: [][]InlineKeyboardButton{{
+					{
+						Text:         testButton,
+						CallbackData: "persona:set:coach",
+					},
+				}},
+			},
 		},
 	)
 	require.NoError(t, err)
@@ -230,6 +295,7 @@ func TestClient_EditMessageText(t *testing.T) {
 		testMsgID   = 100
 		testNewText = "updated"
 		testMode    = ParseModeHTML
+		testButton  = "Creative"
 	)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(
@@ -249,10 +315,16 @@ func TestClient_EditMessageText(t *testing.T) {
 		var payload editMessageTextRequest
 		require.NoError(t, json.Unmarshal(raw, &payload))
 		require.Equal(t, testChatID, payload.ChatID)
-		require.Equal(t, testMsgID, payload.MessageID)
+		require.Equal(t, testMsgID, payload.MsgID)
 		require.Equal(t, testNewText, payload.Text)
-		require.Equal(t, testMode, payload.ParseMode)
-		require.True(t, payload.DisableWebPagePrev)
+		require.Equal(t, testMode, payload.Mode)
+		require.True(t, payload.NoPrev)
+		require.NotNil(t, payload.Markup)
+		require.Equal(
+			t,
+			testButton,
+			payload.Markup.InlineKeyboard[0][0].Text,
+		)
 
 		_ = json.NewEncoder(w).Encode(apiResponse[Message]{
 			OK: true,
@@ -278,11 +350,67 @@ func TestClient_EditMessageText(t *testing.T) {
 			MessageID: testMsgID,
 			Text:      testNewText,
 			ParseMode: testMode,
+			ReplyMarkup: &InlineKeyboardMarkup{
+				InlineKeyboard: [][]InlineKeyboardButton{{
+					{
+						Text:         testButton,
+						CallbackData: "persona:set:creative",
+					},
+				}},
+			},
 		},
 	)
 	require.NoError(t, err)
 	require.Equal(t, testMsgID, msg.MessageID)
 	require.Equal(t, testNewText, msg.Text)
+}
+
+func TestClient_AnswerCallbackQuery(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		require.Equal(t, methodPost, r.Method)
+		require.Equal(
+			t,
+			"/bot"+testToken+"/"+pathAnswerCallback,
+			r.URL.Path,
+		)
+
+		raw, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+
+		var payload answerCallbackQueryRequest
+		require.NoError(t, json.Unmarshal(raw, &payload))
+		require.Equal(t, "cb-1", payload.CallbackQueryID)
+		require.Equal(t, "updated", payload.Text)
+		require.True(t, payload.ShowAlert)
+
+		_ = json.NewEncoder(w).Encode(apiResponse[bool]{
+			OK:     true,
+			Result: true,
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := New(
+		testToken,
+		WithBaseURL(srv.URL),
+		WithHTTPClient(srv.Client()),
+	)
+	require.NoError(t, err)
+
+	err = c.AnswerCallbackQuery(
+		context.Background(),
+		AnswerCallbackQueryParams{
+			CallbackQueryID: "cb-1",
+			Text:            "updated",
+			ShowAlert:       true,
+		},
+	)
+	require.NoError(t, err)
 }
 
 func testMultipartSend(

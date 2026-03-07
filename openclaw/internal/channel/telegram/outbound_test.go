@@ -240,6 +240,67 @@ func TestChannel_SendMessage_PersistsDerivedFile(t *testing.T) {
 	require.Equal(t, uploads.SourceDerived, files[0].Source)
 }
 
+func TestChannel_SendMessage_ReusesExistingSessionUploadFile(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	sessionID := "telegram:dm:100:session-abc"
+	scope := uploads.Scope{
+		Channel:   channelID,
+		UserID:    "100",
+		SessionID: sessionID,
+	}
+	store, err := uploads.NewStore(stateDir)
+	require.NoError(t, err)
+
+	root := store.ScopeDir(scope)
+	require.NoError(t, os.MkdirAll(root, 0o755))
+	path := filepath.Join(
+		root,
+		"00ed39bb50144ce9ebef3aab-report.pdf",
+	)
+	require.NoError(
+		t,
+		os.WriteFile(path, []byte("%PDF-1.4"), 0o600),
+	)
+
+	bot := &stubBot{}
+	ch := &Channel{
+		bot:       bot,
+		state:     stateDir,
+		sentFiles: newSentFileTracker(),
+	}
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(
+			agent.WithInvocationSession(
+				session.NewSession("app", "100", sessionID),
+			),
+		),
+	)
+
+	err = ch.SendMessage(
+		ctx,
+		sessionID,
+		channel.OutboundMessage{
+			Files: []channel.OutboundFile{{Path: path}},
+		},
+	)
+	require.NoError(t, err)
+
+	bot.mu.Lock()
+	require.Len(t, bot.docs, 1)
+	require.Equal(t, "report.pdf", bot.docs[0].FileName)
+	bot.mu.Unlock()
+
+	files, err := store.ListScope(scope, 10)
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	require.Equal(t, path, files[0].Path)
+	require.Equal(t, "report.pdf", files[0].Name)
+	require.Equal(t, uploads.SourceDerived, files[0].Source)
+}
+
 func TestChannel_SendMessage_ExpandsSessionUploadDirectory(t *testing.T) {
 	t.Parallel()
 
@@ -450,27 +511,37 @@ func TestDetectUploadMode(t *testing.T) {
 	require.Equal(
 		t,
 		uploadModePhoto,
-		detectUploadMode("frame.png", []byte("png")),
+		detectUploadMode("frame.png", []byte("png"), false),
 	)
 	require.Equal(
 		t,
 		uploadModeAudio,
-		detectUploadMode("note.mp3", []byte("mp3")),
+		detectUploadMode("note.mp3", []byte("mp3"), false),
+	)
+	require.Equal(
+		t,
+		uploadModeAudio,
+		detectUploadMode("note.m4a", []byte("m4a"), false),
 	)
 	require.Equal(
 		t,
 		uploadModeVoice,
-		detectUploadMode("voice.oga", []byte("ogg")),
+		detectUploadMode("voice.oga", []byte("ogg"), false),
 	)
 	require.Equal(
 		t,
 		uploadModeVideo,
-		detectUploadMode("clip.mp4", []byte("mp4")),
+		detectUploadMode("clip.mp4", []byte("mp4"), false),
 	)
 	require.Equal(
 		t,
 		uploadModeDocument,
-		detectUploadMode("report.pdf", []byte("%PDF-1.4")),
+		detectUploadMode("report.pdf", []byte("%PDF-1.4"), false),
+	)
+	require.Equal(
+		t,
+		uploadModeVoice,
+		detectUploadMode("reply.mp3", []byte("mp3"), true),
 	)
 }
 
@@ -514,9 +585,39 @@ func TestTypeFromExtensionAndVoiceDetection(t *testing.T) {
 
 	require.Equal(t, "video/quicktime", typeFromExtension(".mov"))
 	require.Equal(t, "image/gif", typeFromExtension(".gif"))
+	require.Equal(t, "audio/mp4", typeFromExtension(".m4a"))
 	require.Equal(t, "", typeFromExtension(".unknown"))
 	require.True(t, isVoiceMedia(mimeVoiceOGG, "voice.oga"))
 	require.False(t, isVoiceMedia("audio/mpeg", "voice.mp3"))
+	require.True(t, isVoiceCompatibleMedia("audio/mpeg", "voice.mp3"))
+	require.True(t, isVoiceCompatibleMedia("audio/mp4", "voice.m4a"))
+	require.False(t, isVoiceCompatibleMedia("audio/wav", "voice.wav"))
+}
+
+func TestChannel_SendMessage_ForcesAudioAsVoice(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	audioPath := filepath.Join(root, "reply.mp3")
+	require.NoError(t, os.WriteFile(audioPath, []byte("mp3"), 0o600))
+
+	bot := &stubBot{}
+	ch := &Channel{bot: bot}
+
+	err := ch.SendMessage(
+		context.Background(),
+		"100",
+		channel.OutboundMessage{
+			Text: audioAsVoiceTag + "\nvoice reply",
+			Files: []channel.OutboundFile{{
+				Path: audioPath,
+			}},
+		},
+	)
+	require.NoError(t, err)
+	require.Empty(t, bot.audios)
+	require.Len(t, bot.voices, 1)
+	require.Equal(t, "reply.mp3", bot.voices[0].FileName)
 }
 
 func TestSendTextAndSendMessage_Errors(t *testing.T) {

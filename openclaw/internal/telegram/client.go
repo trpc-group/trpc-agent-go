@@ -40,6 +40,7 @@ const (
 	methodGet  = "GET"
 	methodPost = "POST"
 
+	pathAnswerCallback  = "answerCallbackQuery"
 	pathEditMessageText = "editMessageText"
 	pathGetFile         = "getFile"
 	pathGetMe           = "getMe"
@@ -69,6 +70,7 @@ const (
 const (
 	parseErrContainsEntities = "parse entities"
 	parseErrContainsEnd      = "find end of the entity"
+	errMessageNotModified    = "message is not modified"
 )
 
 // ErrFileTooLarge is returned when a downloaded file exceeds the configured
@@ -145,6 +147,7 @@ type SendMessageParams struct {
 	ReplyToMessageID int
 	Text             string
 	ParseMode        string
+	ReplyMarkup      *InlineKeyboardMarkup
 }
 
 // SendFileParams contains parameters for Telegram media uploads.
@@ -160,10 +163,11 @@ type SendFileParams struct {
 
 // EditMessageTextParams contains parameters for EditMessageText.
 type EditMessageTextParams struct {
-	ChatID    int64
-	MessageID int
-	Text      string
-	ParseMode string
+	ChatID      int64
+	MessageID   int
+	Text        string
+	ParseMode   string
+	ReplyMarkup *InlineKeyboardMarkup
 }
 
 // SendChatActionParams contains parameters for SendChatAction.
@@ -171,6 +175,13 @@ type SendChatActionParams struct {
 	ChatID          int64
 	MessageThreadID int
 	Action          string
+}
+
+// AnswerCallbackQueryParams contains parameters for AnswerCallbackQuery.
+type AnswerCallbackQueryParams struct {
+	CallbackQueryID string
+	Text            string
+	ShowAlert       bool
 }
 
 // SetMyCommandsParams contains parameters for SetMyCommands.
@@ -308,12 +319,13 @@ func (c *Client) SendMessage(
 	params SendMessageParams,
 ) (Message, error) {
 	req := sendMessageRequest{
-		ChatID:             params.ChatID,
-		Text:               params.Text,
-		MessageThreadID:    params.MessageThreadID,
-		ReplyToMessageID:   params.ReplyToMessageID,
-		ParseMode:          params.ParseMode,
-		DisableWebPagePrev: true,
+		ChatID:   params.ChatID,
+		Text:     params.Text,
+		ThreadID: params.MessageThreadID,
+		ReplyID:  params.ReplyToMessageID,
+		Mode:     params.ParseMode,
+		NoPrev:   true,
+		Markup:   params.ReplyMarkup,
 	}
 
 	body, err := json.Marshal(req)
@@ -388,11 +400,12 @@ func (c *Client) EditMessageText(
 	params EditMessageTextParams,
 ) (Message, error) {
 	req := editMessageTextRequest{
-		ChatID:             params.ChatID,
-		MessageID:          params.MessageID,
-		Text:               params.Text,
-		ParseMode:          params.ParseMode,
-		DisableWebPagePrev: true,
+		ChatID: params.ChatID,
+		MsgID:  params.MessageID,
+		Text:   params.Text,
+		Mode:   params.ParseMode,
+		NoPrev: true,
+		Markup: params.ReplyMarkup,
 	}
 
 	body, err := json.Marshal(req)
@@ -419,6 +432,39 @@ func (c *Client) EditMessageText(
 		return Message{}, err
 	}
 	return rsp.Result, nil
+}
+
+// AnswerCallbackQuery answers one callback query to stop the client spinner.
+func (c *Client) AnswerCallbackQuery(
+	ctx context.Context,
+	params AnswerCallbackQueryParams,
+) error {
+	req := answerCallbackQueryRequest{
+		CallbackQueryID: params.CallbackQueryID,
+		Text:            params.Text,
+		ShowAlert:       params.ShowAlert,
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("telegram: marshal request: %w", err)
+	}
+
+	var rsp apiResponse[bool]
+	return c.doWithRetry(ctx, func(ctx context.Context) error {
+		status, err := c.doOnce(
+			ctx,
+			methodPost,
+			pathAnswerCallback,
+			nil,
+			body,
+			&rsp,
+		)
+		if err != nil {
+			return err
+		}
+		return validateResponse(status, rsp)
+	})
 }
 
 // SendChatAction sends a chat action (for example "typing").
@@ -731,20 +777,28 @@ type apiResponse[T any] struct {
 }
 
 type sendMessageRequest struct {
-	ChatID             int64  `json:"chat_id"`
-	Text               string `json:"text"`
-	MessageThreadID    int    `json:"message_thread_id,omitempty"`
-	ReplyToMessageID   int    `json:"reply_to_message_id,omitempty"`
-	ParseMode          string `json:"parse_mode,omitempty"`
-	DisableWebPagePrev bool   `json:"disable_web_page_preview,omitempty"`
+	ChatID   int64                 `json:"chat_id"`
+	Text     string                `json:"text"`
+	ThreadID int                   `json:"message_thread_id,omitempty"`
+	ReplyID  int                   `json:"reply_to_message_id,omitempty"`
+	Mode     string                `json:"parse_mode,omitempty"`
+	NoPrev   bool                  `json:"disable_web_page_preview,omitempty"`
+	Markup   *InlineKeyboardMarkup `json:"reply_markup,omitempty"`
 }
 
 type editMessageTextRequest struct {
-	ChatID             int64  `json:"chat_id"`
-	MessageID          int    `json:"message_id"`
-	Text               string `json:"text"`
-	ParseMode          string `json:"parse_mode,omitempty"`
-	DisableWebPagePrev bool   `json:"disable_web_page_preview,omitempty"`
+	ChatID int64                 `json:"chat_id"`
+	MsgID  int                   `json:"message_id"`
+	Text   string                `json:"text"`
+	Mode   string                `json:"parse_mode,omitempty"`
+	NoPrev bool                  `json:"disable_web_page_preview,omitempty"`
+	Markup *InlineKeyboardMarkup `json:"reply_markup,omitempty"`
+}
+
+type answerCallbackQueryRequest struct {
+	CallbackQueryID string `json:"callback_query_id"`
+	Text            string `json:"text,omitempty"`
+	ShowAlert       bool   `json:"show_alert,omitempty"`
 }
 
 type sendChatActionRequest struct {
@@ -1072,6 +1126,18 @@ func IsEntityParseError(err error) bool {
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, parseErrContainsEntities) ||
 		strings.Contains(msg, parseErrContainsEnd)
+}
+
+// IsMessageNotModifiedError reports whether Telegram rejected an edit
+// because the message content already matched the requested update.
+func IsMessageNotModifiedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(
+		strings.ToLower(err.Error()),
+		errMessageNotModified,
+	)
 }
 
 func sleep(ctx context.Context, d time.Duration) bool {

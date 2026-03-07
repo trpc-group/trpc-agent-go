@@ -515,6 +515,9 @@ Inbound attachments are downloaded from Telegram and forwarded to the gateway
 as multimodal `content_parts`. The uploaded files are also persisted under the
 OpenClaw state directory so later turns in the same chat can keep working on
 the same PDF, image, audio, or video without asking the user to upload again.
+When a Telegram voice note can be transcribed locally, OpenClaw also injects
+the transcript as the user instruction while keeping the original audio upload
+available to tools and follow-up turns.
 
 For host-side tools, OpenClaw injects stable attachment metadata such as
 `OPENCLAW_LAST_UPLOAD_PATH`, `OPENCLAW_LAST_UPLOAD_NAME`,
@@ -576,10 +579,30 @@ This demo supports a few basic commands:
   Future executions stop immediately. If a matching job is currently
   running, OpenClaw cancels that in-flight run and suppresses any pending
   delivery for this chat.
+- `/persona`: show the active persona preset for this chat and list the
+  available presets.
+- `/persona <id>`: switch the active persona preset for this chat.
+- `/personas`: list the available persona presets.
 
 On startup, OpenClaw also registers these commands with Telegram via
 `setMyCommands`, so supported clients can show them in the slash-command
 menu. If registration fails, the commands still work when typed manually.
+
+Built-in persona presets:
+
+- `default`: keep the normal assistant behavior.
+- `girlfriend`: warm, playful, and affectionate companion tone.
+- `concise`: direct, brief, and action-first replies.
+- `coach`: structured, pragmatic, and goal-oriented.
+- `creative`: more imaginative, vivid, and idea-rich replies.
+
+Examples:
+
+```text
+/persona
+/persona girlfriend
+/persona default
+```
 
 You can also configure automatic DM session resets:
 

@@ -39,6 +39,7 @@ const (
 	maxFileNameRunes = 96
 	hashPrefixBytes  = 12
 	hashPrefixHexLen = hashPrefixBytes * 2
+	hashPrefixSep    = '-'
 
 	fileMode = 0o600
 	dirMode  = 0o755
@@ -249,6 +250,44 @@ func (s *Store) ListAll(limit int) ([]ListedFile, error) {
 		Scope{},
 		limit,
 	)
+}
+
+// Annotate writes metadata for one existing file already stored inside the
+// uploads root.
+func (s *Store) Annotate(path string, meta FileMetadata) error {
+	if s == nil || strings.TrimSpace(s.root) == "" {
+		return errors.New("uploads: store not configured")
+	}
+
+	clean := filepath.Clean(strings.TrimSpace(path))
+	if clean == "" {
+		return errors.New("uploads: empty file path")
+	}
+	if !filepath.IsAbs(clean) {
+		return errors.New("uploads: file path must be absolute")
+	}
+
+	root, err := filepath.Abs(s.root)
+	if err != nil {
+		return fmt.Errorf("uploads: resolve root: %w", err)
+	}
+	clean, err = filepath.Abs(clean)
+	if err != nil {
+		return fmt.Errorf("uploads: resolve file path: %w", err)
+	}
+	if !pathInsideRoot(clean, root) {
+		return errors.New("uploads: file outside store root")
+	}
+
+	info, err := os.Stat(clean)
+	if err != nil {
+		return fmt.Errorf("uploads: stat file: %w", err)
+	}
+	if info.IsDir() {
+		return errors.New("uploads: file path is a directory")
+	}
+
+	return writeMetadataIfNeeded(clean, meta)
 }
 
 // HostRef converts an absolute path into a host:// ref.
@@ -501,20 +540,7 @@ func readMetadata(path string) (FileMetadata, error) {
 }
 
 func displayUploadName(name string) string {
-	trimmed := strings.TrimSpace(name)
-	if len(trimmed) <= hashPrefixHexLen+1 {
-		return trimmed
-	}
-	if trimmed[hashPrefixHexLen] != '-' {
-		return trimmed
-	}
-	for i := 0; i < hashPrefixHexLen; i++ {
-		r := trimmed[i]
-		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
-			return trimmed
-		}
-	}
-	return trimmed[hashPrefixHexLen+1:]
+	return StoredDisplayName(name)
 }
 
 func scopeFromRelativePath(rel string) Scope {
@@ -561,7 +587,7 @@ func KindFromMeta(name string, mimeType string) string {
 // It preserves meaningful names and rewrites generated Telegram placeholder
 // names like "file_10.mp4" into stable names such as "video.mp4".
 func PreferredName(name string, mimeType string) string {
-	trimmed := strings.TrimSpace(name)
+	trimmed := StoredDisplayName(name)
 	if trimmed != "" && !isGeneratedPlaceholderName(trimmed) {
 		return trimmed
 	}
@@ -602,6 +628,48 @@ func preferredNameBase(name string, mimeType string) string {
 	default:
 		return displayAttachmentName
 	}
+}
+
+// StoredDisplayName strips one or more internal upload hash prefixes from a
+// persisted filename while leaving normal filenames untouched.
+func StoredDisplayName(name string) string {
+	trimmed := strings.TrimSpace(name)
+	for {
+		next, ok := stripStoredHashPrefix(trimmed)
+		if !ok {
+			return trimmed
+		}
+		trimmed = next
+	}
+}
+
+func stripStoredHashPrefix(name string) (string, bool) {
+	trimmed := strings.TrimSpace(name)
+	if len(trimmed) <= hashPrefixHexLen+1 {
+		return trimmed, false
+	}
+	if trimmed[hashPrefixHexLen] != hashPrefixSep {
+		return trimmed, false
+	}
+	for i := 0; i < hashPrefixHexLen; i++ {
+		r := trimmed[i]
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return trimmed, false
+		}
+	}
+	return trimmed[hashPrefixHexLen+1:], true
+}
+
+func pathInsideRoot(path string, root string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	if rel == "." {
+		return true
+	}
+	return rel != ".." &&
+		!strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func preferredNameExt(mimeType string) string {

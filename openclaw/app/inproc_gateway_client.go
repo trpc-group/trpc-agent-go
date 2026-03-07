@@ -28,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -39,6 +40,7 @@ const (
 
 	errNilGatewayServer = "gateway client: nil server"
 	errNilCronService   = "gateway client: cron service unavailable"
+	errNilPersonaStore  = "gateway client: persona store unavailable"
 
 	debugTraceMetaFile = "meta.json"
 
@@ -55,6 +57,7 @@ type inProcGatewayClient struct {
 
 	debugDir string
 	uploads  *uploads.Store
+	personas *persona.Store
 }
 
 func newInProcGatewayClient(
@@ -84,6 +87,13 @@ func (c *inProcGatewayClient) SetCronService(svc *cron.Service) {
 		return
 	}
 	c.cronSvc = svc
+}
+
+func (c *inProcGatewayClient) SetPersonaStore(store *persona.Store) {
+	if c == nil {
+		return
+	}
+	c.personas = store
 }
 
 func (c *inProcGatewayClient) SendMessage(
@@ -194,6 +204,11 @@ func (c *inProcGatewayClient) ForgetUser(
 			return fmt.Errorf("forget: delete uploads: %w", err)
 		}
 	}
+	if c.personas != nil {
+		if err := c.personas.ForgetUser(ctx, channel, userID); err != nil {
+			return fmt.Errorf("forget: delete personas: %w", err)
+		}
+	}
 
 	if err := deleteDebugTraces(
 		ctx,
@@ -206,6 +221,34 @@ func (c *inProcGatewayClient) ForgetUser(
 	}
 
 	return nil
+}
+
+func (c *inProcGatewayClient) ListPresetPersonas() []persona.Preset {
+	return persona.List()
+}
+
+func (c *inProcGatewayClient) GetPresetPersona(
+	_ context.Context,
+	scopeKey string,
+) (persona.Preset, error) {
+	if c == nil || c.personas == nil {
+		return persona.DefaultPreset(), nil
+	}
+	return c.personas.Get(scopeKey)
+}
+
+func (c *inProcGatewayClient) SetPresetPersona(
+	ctx context.Context,
+	scopeKey string,
+	presetID string,
+) (persona.Preset, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if c == nil || c.personas == nil {
+		return persona.Preset{}, errors.New(errNilPersonaStore)
+	}
+	return c.personas.Set(ctx, scopeKey, presetID)
 }
 
 func (c *inProcGatewayClient) ListScheduledJobs(

@@ -423,22 +423,21 @@ func (c *Channel) appendDocumentPart(
 		return parts, nil
 	}
 
-	audioFormat := inferAudioFormat(name, file.FilePath, mimeType)
-	if isSupportedAudioFormat(audioFormat) {
-		parts = append(parts, gwproto.ContentPart{
-			Type: gwproto.PartTypeAudio,
-			Audio: &gwproto.AudioPart{
-				Data:   data,
-				Format: audioFormat,
-			},
-		})
+	if audioPart := c.audioModelPart(
+		ctx,
+		name,
+		file.FilePath,
+		mimeType,
+		data,
+	); audioPart != nil {
+		parts = append(parts, *audioPart)
 		parts = appendStoredFilePart(
 			parts,
 			name,
 			normalizeMediaMIME(
 				name,
 				file.FilePath,
-				mimeTypeForAudioFormat(audioFormat),
+				mimeType,
 			),
 			data,
 		)
@@ -730,14 +729,19 @@ func (c *Channel) appendVoicePart(
 		Blob:         ref,
 	})
 
-	parts = append(parts, gwproto.ContentPart{
-		Type: gwproto.PartTypeFile,
-		File: &gwproto.FilePart{
-			Filename: name,
-			Data:     data,
-			Format:   mimeType,
-		},
-	})
+	if audioPart := c.audioModelPart(
+		ctx,
+		name,
+		file.FilePath,
+		mimeType,
+		data,
+	); audioPart != nil {
+		parts = append(parts, *audioPart)
+		parts = appendStoredFilePart(parts, name, mimeType, data)
+		return parts, nil
+	}
+
+	parts = appendStoredFilePart(parts, name, mimeType, data)
 	return parts, nil
 }
 
@@ -794,41 +798,33 @@ func (c *Channel) appendAudioPart(
 		file.FilePath,
 		audio.MimeType,
 	)
-	format := inferAudioFormat(audio.FileName, file.FilePath, mimeType)
-	if format != "" {
-		name := defaultAudioName + "." + format
-		ref := storeBlob(trace, name, data)
-		recordAttachment(trace, telegramAttachmentSummary{
-			Kind:         attachmentKindAudio,
-			FileID:       fileID,
-			Name:         name,
-			Format:       format,
-			MimeType:     mimeType,
-			ReportedSize: audio.FileSize,
-			Blob:         ref,
-		})
-		parts = append(parts, gwproto.ContentPart{
-			Type: gwproto.PartTypeAudio,
-			Audio: &gwproto.AudioPart{
-				Data:   data,
-				Format: format,
-			},
-		})
-		parts = appendStoredFilePart(
-			parts,
-			name,
-			mimeTypeForAudioFormat(format),
-			data,
-		)
-		return parts, nil
-	}
-
 	name := fallbackMediaFilename(
 		audio.FileName,
 		file.FilePath,
 		defaultAudioName,
 		mimeType,
 	)
+	if audioPart := c.audioModelPart(
+		ctx,
+		name,
+		file.FilePath,
+		mimeType,
+		data,
+	); audioPart != nil {
+		ref := storeBlob(trace, name, data)
+		recordAttachment(trace, telegramAttachmentSummary{
+			Kind:         attachmentKindAudio,
+			FileID:       fileID,
+			Name:         name,
+			Format:       audioPart.Audio.Format,
+			MimeType:     mimeType,
+			ReportedSize: audio.FileSize,
+			Blob:         ref,
+		})
+		parts = append(parts, *audioPart)
+		parts = appendStoredFilePart(parts, name, mimeType, data)
+		return parts, nil
+	}
 
 	ref := storeBlob(trace, name, data)
 	recordAttachment(trace, telegramAttachmentSummary{
@@ -840,14 +836,7 @@ func (c *Channel) appendAudioPart(
 		Blob:         ref,
 	})
 
-	parts = append(parts, gwproto.ContentPart{
-		Type: gwproto.PartTypeFile,
-		File: &gwproto.FilePart{
-			Filename: name,
-			Data:     data,
-			Format:   mimeType,
-		},
-	})
+	parts = appendStoredFilePart(parts, name, mimeType, data)
 	return parts, nil
 }
 

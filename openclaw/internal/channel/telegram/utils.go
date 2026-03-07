@@ -22,6 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwclient"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
 	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
 )
 
@@ -286,6 +287,24 @@ const (
 	jobsMessageHeader      = "Scheduled jobs for this chat:"
 	jobsClearOKFmt         = "Cleared %d scheduled job(s) for this chat."
 	jobTimeLayout          = "2006-01-02 15:04:05 MST"
+
+	personaUnsupportedMessage = "Preset personas are not supported."
+	personaListFailedMessage  = "Failed to load persona presets."
+	personaSetFailedMessage   = "Failed to update the persona preset."
+	personaUnknownMessage     = "Unknown persona preset. " +
+		"Use the personas list command."
+	personaResetOKMessage = "Persona reset to default."
+	personaSetOKFmt       = "Persona set to %s."
+	personaMessageHeader  = "Persona presets for this chat:"
+	personaCurrentPrefix  = "Current: "
+	personaUsageMessage   = "Tap a button below to switch instantly. " +
+		"Use /persona <id> if you prefer typing. Use default " +
+		"to reset."
+
+	personaCallbackPrefix      = "persona:set:"
+	personaButtonActivePrefix  = "> "
+	personaKeyboardColumns     = 2
+	personaSelectionFailedHint = "Could not update the preset."
 )
 
 func (c *Channel) handleCancelCommand(
@@ -357,6 +376,19 @@ type scheduledJobManager interface {
 		userID string,
 		target string,
 	) (int, error)
+}
+
+type personaManager interface {
+	ListPresetPersonas() []persona.Preset
+	GetPresetPersona(
+		ctx context.Context,
+		scopeKey string,
+	) (persona.Preset, error)
+	SetPresetPersona(
+		ctx context.Context,
+		scopeKey string,
+		presetID string,
+	) (persona.Preset, error)
 }
 
 func (c *Channel) cancelInflight(
@@ -554,6 +586,244 @@ func (c *Channel) handleJobsClearCommand(
 	return nil
 }
 
+func (c *Channel) handlePersonaCommand(
+	ctx context.Context,
+	chatID int64,
+	messageThreadID int,
+	replyTo int,
+	scopeKey string,
+	args string,
+) error {
+	manager, ok := c.gw.(personaManager)
+	if !ok {
+		c.reply(
+			ctx,
+			chatID,
+			messageThreadID,
+			replyTo,
+			personaUnsupportedMessage,
+		)
+		return nil
+	}
+
+	presetID := firstCommandArg(args)
+	if presetID == "" {
+		return c.replyPersonaSummary(
+			ctx,
+			chatID,
+			messageThreadID,
+			replyTo,
+			scopeKey,
+			manager,
+		)
+	}
+
+	preset, err := manager.SetPresetPersona(ctx, scopeKey, presetID)
+	if err != nil {
+		if errors.Is(err, persona.ErrUnknownPreset) {
+			c.reply(
+				ctx,
+				chatID,
+				messageThreadID,
+				replyTo,
+				personaUnknownMessage,
+			)
+			return nil
+		}
+		log.WarnfContext(ctx, "telegram: set persona: %v", err)
+		c.reply(
+			ctx,
+			chatID,
+			messageThreadID,
+			replyTo,
+			personaSetFailedMessage,
+		)
+		return nil
+	}
+
+	c.reply(
+		ctx,
+		chatID,
+		messageThreadID,
+		replyTo,
+		personaSelectionText(preset),
+	)
+	return nil
+}
+
+func (c *Channel) handlePersonasCommand(
+	ctx context.Context,
+	chatID int64,
+	messageThreadID int,
+	replyTo int,
+	scopeKey string,
+) error {
+	manager, ok := c.gw.(personaManager)
+	if !ok {
+		c.reply(
+			ctx,
+			chatID,
+			messageThreadID,
+			replyTo,
+			personaUnsupportedMessage,
+		)
+		return nil
+	}
+	return c.replyPersonaSummary(
+		ctx,
+		chatID,
+		messageThreadID,
+		replyTo,
+		scopeKey,
+		manager,
+	)
+}
+
+func (c *Channel) replyPersonaSummary(
+	ctx context.Context,
+	chatID int64,
+	messageThreadID int,
+	replyTo int,
+	scopeKey string,
+	manager personaManager,
+) error {
+	current, presets, err := personaSummaryData(
+		ctx,
+		scopeKey,
+		manager,
+	)
+	if err != nil {
+		log.WarnfContext(ctx, "telegram: get persona: %v", err)
+		c.reply(
+			ctx,
+			chatID,
+			messageThreadID,
+			replyTo,
+			personaListFailedMessage,
+		)
+		return nil
+	}
+
+	_, err = c.sendTextMessage(
+		ctx,
+		tgapi.SendMessageParams{
+			ChatID:           chatID,
+			MessageThreadID:  messageThreadID,
+			ReplyToMessageID: replyTo,
+			Text: formatPersonaMessage(
+				current,
+				presets,
+			),
+			ReplyMarkup: personaReplyMarkup(
+				current,
+				presets,
+			),
+		},
+	)
+	if err != nil {
+		log.WarnfContext(ctx, "telegram: send persona summary: %v", err)
+	}
+	return nil
+}
+
+func (c *Channel) handlePersonaCallbackQuery(
+	ctx context.Context,
+	q tgapi.CallbackQuery,
+	scopeKey string,
+	messageThreadID int,
+) error {
+	manager, ok := c.gw.(personaManager)
+	if !ok {
+		return c.answerCallbackQuery(
+			ctx,
+			q.ID,
+			personaUnsupportedMessage,
+			true,
+		)
+	}
+
+	presetID := personaPresetIDFromCallback(q.Data)
+	if presetID == "" {
+		return c.answerCallbackQuery(ctx, q.ID, "", false)
+	}
+
+	preset, err := manager.SetPresetPersona(ctx, scopeKey, presetID)
+	if err != nil {
+		if errors.Is(err, persona.ErrUnknownPreset) {
+			return c.answerCallbackQuery(
+				ctx,
+				q.ID,
+				personaUnknownMessage,
+				true,
+			)
+		}
+		log.WarnfContext(ctx, "telegram: set persona via callback: %v", err)
+		return c.answerCallbackQuery(
+			ctx,
+			q.ID,
+			personaSelectionFailedHint,
+			true,
+		)
+	}
+
+	current, presets, err := personaSummaryData(
+		ctx,
+		scopeKey,
+		manager,
+	)
+	if err != nil {
+		log.WarnfContext(
+			ctx,
+			"telegram: refresh persona summary: %v",
+			err,
+		)
+		return c.answerCallbackQuery(
+			ctx,
+			q.ID,
+			personaSelectionText(preset),
+			false,
+		)
+	}
+
+	if _, err := c.editTextMessage(
+		ctx,
+		tgapi.EditMessageTextParams{
+			ChatID:    q.Message.Chat.ID,
+			MessageID: q.Message.MessageID,
+			Text: formatPersonaMessage(
+				current,
+				presets,
+			),
+			ReplyMarkup: personaReplyMarkup(
+				current,
+				presets,
+			),
+		},
+	); err != nil {
+		if !tgapi.IsMessageNotModifiedError(err) {
+			log.WarnfContext(
+				ctx,
+				"telegram: edit persona summary: %v",
+				err,
+			)
+			c.reply(
+				ctx,
+				q.Message.Chat.ID,
+				messageThreadID,
+				q.Message.MessageID,
+				personaSelectionText(preset),
+			)
+		}
+	}
+
+	return c.answerCallbackQuery(
+		ctx,
+		q.ID,
+		personaSelectionText(preset),
+		false,
+	)
+}
+
 func currentChatTarget(chatID int64, messageThreadID int) string {
 	chat := strconv.FormatInt(chatID, 10)
 	if messageThreadID == 0 {
@@ -613,4 +883,134 @@ func formatScheduledJobLine(job gwclient.ScheduledJobSummary) string {
 	}
 	parts = append(parts, "id "+id)
 	return "- " + strings.Join(parts, " | ")
+}
+
+func firstCommandArg(args string) string {
+	fields := strings.Fields(strings.TrimSpace(args))
+	if len(fields) == 0 {
+		return ""
+	}
+	return fields[0]
+}
+
+func formatPersonaMessage(
+	current persona.Preset,
+	presets []persona.Preset,
+) string {
+	var b strings.Builder
+	b.WriteString(personaMessageHeader)
+	b.WriteByte('\n')
+	b.WriteString(personaCurrentPrefix)
+	b.WriteString(current.ID)
+	for _, preset := range presets {
+		line := formatPersonaLine(preset, current.ID)
+		if line == "" {
+			continue
+		}
+		b.WriteByte('\n')
+		b.WriteString(line)
+	}
+	b.WriteByte('\n')
+	b.WriteString(personaUsageMessage)
+	return b.String()
+}
+
+func formatPersonaLine(
+	preset persona.Preset,
+	currentID string,
+) string {
+	id := strings.TrimSpace(preset.ID)
+	if id == "" {
+		return ""
+	}
+
+	line := "- " + id
+	desc := strings.TrimSpace(preset.Description)
+	if desc != "" {
+		line += ": " + desc
+	}
+	if id == strings.TrimSpace(currentID) {
+		line += " (active)"
+	}
+	return line
+}
+
+func personaSummaryData(
+	ctx context.Context,
+	scopeKey string,
+	manager personaManager,
+) (persona.Preset, []persona.Preset, error) {
+	current, err := manager.GetPresetPersona(ctx, scopeKey)
+	if err != nil {
+		return persona.Preset{}, nil, err
+	}
+	return current, manager.ListPresetPersonas(), nil
+}
+
+func personaReplyMarkup(
+	current persona.Preset,
+	presets []persona.Preset,
+) *tgapi.InlineKeyboardMarkup {
+	rows := make([][]tgapi.InlineKeyboardButton, 0)
+	row := make([]tgapi.InlineKeyboardButton, 0, personaKeyboardColumns)
+	for _, preset := range presets {
+		id := strings.TrimSpace(preset.ID)
+		if id == "" {
+			continue
+		}
+		row = append(row, tgapi.InlineKeyboardButton{
+			Text:         personaButtonText(preset, current.ID),
+			CallbackData: personaCallbackPrefix + id,
+		})
+		if len(row) == personaKeyboardColumns {
+			rows = append(rows, row)
+			row = make([]tgapi.InlineKeyboardButton, 0,
+				personaKeyboardColumns)
+		}
+	}
+	if len(row) > 0 {
+		rows = append(rows, row)
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	return &tgapi.InlineKeyboardMarkup{
+		InlineKeyboard: rows,
+	}
+}
+
+func personaButtonText(
+	preset persona.Preset,
+	currentID string,
+) string {
+	label := strings.TrimSpace(preset.Name)
+	if label == "" {
+		label = strings.TrimSpace(preset.ID)
+	}
+	if strings.TrimSpace(preset.ID) == strings.TrimSpace(currentID) {
+		return personaButtonActivePrefix + label
+	}
+	return label
+}
+
+func isPersonaCallbackData(data string) bool {
+	return personaPresetIDFromCallback(data) != ""
+}
+
+func personaPresetIDFromCallback(data string) string {
+	trimmed := strings.TrimSpace(data)
+	if !strings.HasPrefix(trimmed, personaCallbackPrefix) {
+		return ""
+	}
+	return strings.TrimSpace(
+		strings.TrimPrefix(trimmed, personaCallbackPrefix),
+	)
+}
+
+func personaSelectionText(preset persona.Preset) string {
+	text := fmt.Sprintf(personaSetOKFmt, preset.ID)
+	if preset.ID == persona.PresetDefault {
+		return personaResetOKMessage
+	}
+	return text
 }

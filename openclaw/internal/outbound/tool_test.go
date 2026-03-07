@@ -161,6 +161,28 @@ func TestTool_Call_SendsFilesWithoutText(t *testing.T) {
 	require.Equal(t, 3, result.(map[string]any)["files_sent"])
 }
 
+func TestTool_Call_PropagatesAsVoice(t *testing.T) {
+	t.Parallel()
+
+	router := NewRouter()
+	sender := &stubSender{id: "telegram"}
+	router.RegisterMessageSender(sender)
+
+	tool := NewTool(router)
+	_, err := tool.Call(
+		context.Background(),
+		[]byte(`{
+			"channel":"telegram",
+			"target":"100",
+			"file":"reply.mp3",
+			"as_voice":true
+		}`),
+	)
+	require.NoError(t, err)
+	require.Len(t, sender.files, 1)
+	require.True(t, sender.files[0].AsVoice)
+}
+
 func TestTool_Call_ExpandsDirectoryAndGlob(t *testing.T) {
 	t.Parallel()
 

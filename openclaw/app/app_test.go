@@ -44,6 +44,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
 	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
@@ -2076,6 +2077,17 @@ func TestInProcGatewayClient_ForgetUser_DeletesState(t *testing.T) {
 	)
 	require.NoError(t, err)
 
+	personaPath, err := persona.DefaultStorePath(debugDir)
+	require.NoError(t, err)
+	personaStore, err := persona.NewStore(personaPath)
+	require.NoError(t, err)
+	_, err = personaStore.Set(
+		ctx,
+		persona.DMScopeKey(channelName, userID),
+		persona.PresetCoach,
+	)
+	require.NoError(t, err)
+
 	srv, err := gateway.New(&inProcGWTestRunner{})
 	require.NoError(t, err)
 
@@ -2087,6 +2099,7 @@ func TestInProcGatewayClient_ForgetUser_DeletesState(t *testing.T) {
 		debugDir,
 		uploadStore,
 	)
+	c.SetPersonaStore(personaStore)
 
 	require.NoError(t, c.ForgetUser(ctx, channelName, userID))
 
@@ -2115,6 +2128,12 @@ func TestInProcGatewayClient_ForgetUser_DeletesState(t *testing.T) {
 
 	_, err = os.Stat(otherTraceDir)
 	require.NoError(t, err)
+
+	currentPreset, err := personaStore.Get(
+		persona.DMScopeKey(channelName, userID),
+	)
+	require.NoError(t, err)
+	require.Equal(t, persona.PresetDefault, currentPreset.ID)
 }
 
 func TestInProcGatewayClient_ForgetUser_ClearsCronJobsOnlyOnce(
@@ -2319,6 +2338,36 @@ func TestInProcGatewayClient_ScheduledJobs_RequireCronService(t *testing.T) {
 	)
 	require.Error(t, err)
 	require.Equal(t, errNilCronService, err.Error())
+}
+
+func TestInProcGatewayClient_PresetPersona(t *testing.T) {
+	t.Parallel()
+
+	srv, err := gateway.New(&inProcGWTestRunner{})
+	require.NoError(t, err)
+
+	personaPath, err := persona.DefaultStorePath(t.TempDir())
+	require.NoError(t, err)
+	personaStore, err := persona.NewStore(personaPath)
+	require.NoError(t, err)
+
+	c := newInProcGatewayClient(srv, appName, nil, nil, "")
+	c.SetPersonaStore(personaStore)
+
+	scopeKey := persona.DMScopeKey("telegram", "u1")
+	preset, err := c.SetPresetPersona(
+		context.Background(),
+		scopeKey,
+		persona.PresetGirlfriend,
+	)
+	require.NoError(t, err)
+	require.Equal(t, persona.PresetGirlfriend, preset.ID)
+
+	got, err := c.GetPresetPersona(context.Background(), scopeKey)
+	require.NoError(t, err)
+	require.Equal(t, persona.PresetGirlfriend, got.ID)
+
+	require.NotEmpty(t, c.ListPresetPersonas())
 }
 
 type errSessionService struct {

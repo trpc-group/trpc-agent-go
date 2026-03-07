@@ -88,10 +88,12 @@ type execParams struct {
 }
 
 type execResult struct {
-	Status    string `json:"status"`
-	Output    string `json:"output,omitempty"`
-	ExitCode  int    `json:"exitCode,omitempty"`
-	SessionID string `json:"sessionId,omitempty"`
+	Status     string   `json:"status"`
+	Output     string   `json:"output,omitempty"`
+	ExitCode   int      `json:"exitCode,omitempty"`
+	SessionID  string   `json:"sessionId,omitempty"`
+	MediaFiles []string `json:"media_files,omitempty"`
+	MediaDirs  []string `json:"media_dirs,omitempty"`
 }
 
 func (m *Manager) Exec(

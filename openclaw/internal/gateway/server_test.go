@@ -33,6 +33,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
@@ -374,6 +375,51 @@ func TestServerUploadContextMessages_UsesStoredMimeType(t *testing.T) {
 	msgs := srv.uploadContextMessages("u1", "telegram:dm:u1:s1")
 	require.Len(t, msgs, 1)
 	require.Contains(t, msgs[0].Content, "video-note [video]")
+}
+
+func TestServerInjectedContextMessages_IncludePersonaAndUploads(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	uploadStore, err := uploads.NewStore(stateDir)
+	require.NoError(t, err)
+
+	personaPath, err := persona.DefaultStorePath(stateDir)
+	require.NoError(t, err)
+	personaStore, err := persona.NewStore(personaPath)
+	require.NoError(t, err)
+
+	sessionID := "telegram:dm:u1:rotated"
+	scope := uploads.Scope{
+		Channel:   "telegram",
+		UserID:    "u1",
+		SessionID: sessionID,
+	}
+	_, err = uploadStore.Save(
+		context.Background(),
+		scope,
+		"clip.mp4",
+		[]byte("video"),
+	)
+	require.NoError(t, err)
+
+	_, err = personaStore.Set(
+		context.Background(),
+		persona.DMScopeKey("telegram", "u1"),
+		persona.PresetGirlfriend,
+	)
+	require.NoError(t, err)
+
+	srv := &Server{
+		uploads:      uploadStore,
+		personaStore: personaStore,
+	}
+	msgs := srv.injectedContextMessages("u1", sessionID)
+	require.Len(t, msgs, 2)
+	require.Contains(t, msgs[0].Content, personaContextHeader)
+	require.Contains(t, msgs[0].Content, persona.PresetGirlfriend)
+	require.Contains(t, msgs[1].Content, recentUploadContextHeader)
+	require.Contains(t, msgs[1].Content, "clip.mp4 [video]")
 }
 
 func TestDefaultSessionID_MissingFromForDM(t *testing.T) {

@@ -57,6 +57,18 @@ func TestReplyFileCandidates_RecognizesDirectoryCue(t *testing.T) {
 	require.Contains(t, got, "out_pdf_split")
 }
 
+func TestReplyFileCandidates_RecognizesMediaDirectives(t *testing.T) {
+	t.Parallel()
+
+	got := replyFileCandidates(
+		"处理完成。\n" +
+			"MEDIA: /tmp/out split/page 1.png\n" +
+			"MEDIA_DIR: /tmp/out split/pages",
+	)
+	require.Contains(t, got, "/tmp/out split/page 1.png")
+	require.Contains(t, got, "/tmp/out split/pages")
+}
+
 func TestResolveReplyCandidateFiles_DirectRefs(t *testing.T) {
 	t.Parallel()
 
@@ -259,6 +271,25 @@ func TestChannelCollectReplyFiles_UsesExplicitDerivedPaths(t *testing.T) {
 	resolvedWant, err := filepath.EvalSymlinks(want)
 	require.NoError(t, err)
 	require.Equal(t, resolvedWant, got[0].Path)
+}
+
+func TestChannelCollectReplyFiles_UsesMediaDirectivePaths(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	outDir := filepath.Join(root, "out pdf split")
+	require.NoError(t, os.MkdirAll(outDir, 0o755))
+	want := filepath.Join(outDir, "page 1.png")
+	require.NoError(t, os.WriteFile(want, []byte("png"), 0o600))
+
+	ch := &Channel{state: filepath.Join(root, "state")}
+	got := ch.collectReplyFiles(
+		"处理完成。\nMEDIA: "+want,
+		"u1",
+		"telegram:dm:u1:s1",
+	)
+	require.Len(t, got, 1)
+	require.Equal(t, cleanReplyFilePath(want), got[0].Path)
 }
 
 func TestFindReplyNamedFiles_RespectsDepth(t *testing.T) {

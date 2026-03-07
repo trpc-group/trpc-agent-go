@@ -65,6 +65,10 @@ const (
 	envLastPDFMIME    = "OPENCLAW_LAST_PDF_MIME"
 
 	recentUploadsLimit = 6
+
+	execOutputMediaMarker    = "MEDIA:"
+	execOutputMediaDirMarker = "MEDIA_DIR:"
+	maxExecOutputMarkers     = 16
 )
 
 const (
@@ -119,7 +123,11 @@ func (t *execTool) Declaration() *tool.Declaration {
 			"attachment metadata, host refs, and host paths. " +
 			"Write derived " +
 			"outputs under OPENCLAW_SESSION_UPLOADS_DIR when " +
-			"you plan to send them back to the user.",
+			"you plan to send them back to the user. " +
+			"If the command prints lines like " +
+			"`MEDIA: /path/to/file` or " +
+			"`MEDIA_DIR: /path/to/dir`, those paths are " +
+			"returned in structured media_files/media_dirs fields.",
 		InputSchema: &tool.Schema{
 			Type:     "object",
 			Required: []string{"command"},
@@ -212,7 +220,7 @@ func (t *execTool) Call(ctx context.Context, args []byte) (any, error) {
 	tty := firstBool(in.TTY, in.PTY)
 	env := mergeExecEnv(in.Env, t.uploadEnvFromContext(ctx))
 
-	return t.mgr.Exec(ctx, execParams{
+	res, err := t.mgr.Exec(ctx, execParams{
 		Command:    in.Command,
 		Workdir:    workdir,
 		Env:        env,
@@ -221,6 +229,11 @@ func (t *execTool) Call(ctx context.Context, args []byte) (any, error) {
 		YieldMs:    yield,
 		TimeoutS:   timeout,
 	})
+	if err != nil {
+		return nil, err
+	}
+	annotateExecResult(&res)
+	return res, nil
 }
 
 type writeTool struct {
@@ -416,7 +429,99 @@ func mapPollResult(
 	if poll.ExitCode != nil {
 		out["exit_code"] = *poll.ExitCode
 	}
+	addExecOutputMarkers(out, poll.Output)
 	return out
+}
+
+func annotateExecResult(out *execResult) {
+	if out == nil {
+		return
+	}
+	mediaFiles, mediaDirs := parseExecOutputMarkers(out.Output)
+	out.MediaFiles = mediaFiles
+	out.MediaDirs = mediaDirs
+}
+
+func addExecOutputMarkers(
+	out map[string]any,
+	output string,
+) {
+	mediaFiles, mediaDirs := parseExecOutputMarkers(output)
+	if len(mediaFiles) > 0 {
+		out["media_files"] = mediaFiles
+	}
+	if len(mediaDirs) > 0 {
+		out["media_dirs"] = mediaDirs
+	}
+}
+
+func parseExecOutputMarkers(output string) ([]string, []string) {
+	if strings.TrimSpace(output) == "" {
+		return nil, nil
+	}
+	lines := strings.Split(output, "\n")
+	mediaFiles := make([]string, 0, 2)
+	mediaDirs := make([]string, 0, 1)
+	seenFiles := make(map[string]struct{})
+	seenDirs := make(map[string]struct{})
+	for _, line := range lines {
+		prefix, path, ok := splitExecOutputMarker(line)
+		if !ok {
+			continue
+		}
+		switch prefix {
+		case execOutputMediaMarker:
+			mediaFiles = appendExecOutputMarker(
+				mediaFiles,
+				seenFiles,
+				path,
+			)
+		case execOutputMediaDirMarker:
+			mediaDirs = appendExecOutputMarker(
+				mediaDirs,
+				seenDirs,
+				path,
+			)
+		}
+		if len(mediaFiles)+len(mediaDirs) >= maxExecOutputMarkers {
+			break
+		}
+	}
+	return mediaFiles, mediaDirs
+}
+
+func splitExecOutputMarker(line string) (string, string, bool) {
+	trimmed := strings.TrimSpace(line)
+	switch {
+	case strings.HasPrefix(trimmed, execOutputMediaDirMarker):
+		path := strings.TrimSpace(
+			strings.TrimPrefix(trimmed, execOutputMediaDirMarker),
+		)
+		return execOutputMediaDirMarker, path, path != ""
+	case strings.HasPrefix(trimmed, execOutputMediaMarker):
+		path := strings.TrimSpace(
+			strings.TrimPrefix(trimmed, execOutputMediaMarker),
+		)
+		return execOutputMediaMarker, path, path != ""
+	default:
+		return "", "", false
+	}
+}
+
+func appendExecOutputMarker(
+	out []string,
+	seen map[string]struct{},
+	path string,
+) []string {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return out
+	}
+	if _, ok := seen[trimmed]; ok {
+		return out
+	}
+	seen[trimmed] = struct{}{}
+	return append(out, trimmed)
 }
 
 func firstInt(values ...*int) *int {

@@ -717,6 +717,57 @@ func TestAppendVoicePart_UsesFriendlyFallbackName(t *testing.T) {
 	require.Equal(t, "voice.ogg", parts[0].File.Filename)
 }
 
+func TestAppendVoicePart_ConvertsVoiceForModel(t *testing.T) {
+	t.Parallel()
+
+	data := []byte("voice")
+	converted := []byte("wavdata")
+
+	bot := &stubBot{
+		downloads: map[string]stubDownload{
+			testFileID: {
+				file: tgapi.File{FilePath: "voice/file_11.oga"},
+				data: data,
+			},
+		},
+	}
+	ch := &Channel{
+		bot: bot,
+		audioInputConverter: func(
+			_ context.Context,
+			src audioInputSource,
+		) (*convertedAudio, error) {
+			require.Equal(t, "voice.ogg", src.Name)
+			require.Equal(t, mimeAudioOGG, src.MimeType)
+			require.Equal(t, data, src.Data)
+			return &convertedAudio{
+				Data:   converted,
+				Format: audioFormatWAV,
+			}, nil
+		},
+	}
+
+	parts, err := ch.appendVoicePart(
+		context.Background(),
+		nil,
+		&tgapi.Voice{
+			FileID:   testFileID,
+			MimeType: mimeAudioOGG,
+			FileSize: int64(len(data)),
+		},
+		int64(len(data)),
+	)
+	require.NoError(t, err)
+	require.Len(t, parts, 2)
+	require.Equal(t, gwproto.PartTypeAudio, parts[0].Type)
+	require.Equal(t, audioFormatWAV, parts[0].Audio.Format)
+	require.Equal(t, converted, parts[0].Audio.Data)
+	require.Equal(t, gwproto.PartTypeFile, parts[1].Type)
+	require.Equal(t, "voice.ogg", parts[1].File.Filename)
+	require.Equal(t, mimeAudioOGG, parts[1].File.Format)
+	require.Equal(t, data, parts[1].File.Data)
+}
+
 func TestAppendVoicePart_NilEmptyAndTooLarge(t *testing.T) {
 	t.Parallel()
 
@@ -784,6 +835,58 @@ func TestAppendAudioPart_UnsupportedFallsBackToFile(t *testing.T) {
 	require.Equal(t, "recording.ogg", parts[0].File.Filename)
 	require.Equal(t, mimeAudioOGG, parts[0].File.Format)
 	require.Equal(t, data, parts[0].File.Data)
+}
+
+func TestAppendAudioPart_ConvertsUnsupportedAudioForModel(t *testing.T) {
+	t.Parallel()
+
+	data := []byte("m4adata")
+	converted := []byte("wavdata")
+
+	bot := &stubBot{
+		downloads: map[string]stubDownload{
+			testFileID: {
+				file: tgapi.File{FilePath: "audio/recording.m4a"},
+				data: data,
+			},
+		},
+	}
+	ch := &Channel{
+		bot: bot,
+		audioInputConverter: func(
+			_ context.Context,
+			src audioInputSource,
+		) (*convertedAudio, error) {
+			require.Equal(t, "recording.m4a", src.Name)
+			require.Equal(t, "audio/mp4", src.MimeType)
+			require.Equal(t, data, src.Data)
+			return &convertedAudio{
+				Data:   converted,
+				Format: audioFormatWAV,
+			}, nil
+		},
+	}
+
+	parts, err := ch.appendAudioPart(
+		context.Background(),
+		nil,
+		&tgapi.Audio{
+			FileID:   testFileID,
+			FileName: "recording.m4a",
+			MimeType: "audio/mp4",
+			FileSize: int64(len(data)),
+		},
+		int64(len(data)),
+	)
+	require.NoError(t, err)
+	require.Len(t, parts, 2)
+	require.Equal(t, gwproto.PartTypeAudio, parts[0].Type)
+	require.Equal(t, audioFormatWAV, parts[0].Audio.Format)
+	require.Equal(t, converted, parts[0].Audio.Data)
+	require.Equal(t, gwproto.PartTypeFile, parts[1].Type)
+	require.Equal(t, "recording.m4a", parts[1].File.Filename)
+	require.Equal(t, "audio/mp4", parts[1].File.Format)
+	require.Equal(t, data, parts[1].File.Data)
 }
 
 func TestAppendAudioPart_NilEmptyAndTooLarge(t *testing.T) {
@@ -1123,7 +1226,7 @@ func TestAppendAudioPart_MP3BuildsAudioPartAndRecordsTrace(t *testing.T) {
 	require.Equal(t, data, parts[0].Audio.Data)
 	require.Equal(t, gwproto.PartTypeFile, parts[1].Type)
 	require.NotNil(t, parts[1].File)
-	require.Equal(t, defaultAudioName+".mp3", parts[1].File.Filename)
+	require.Equal(t, "song.mp3", parts[1].File.Filename)
 	require.Equal(t, mimeAudioMP3, parts[1].File.Format)
 	require.Equal(t, data, parts[1].File.Data)
 
@@ -1146,7 +1249,7 @@ func TestAppendAudioPart_MP3BuildsAudioPartAndRecordsTrace(t *testing.T) {
 		require.NoError(t, json.Unmarshal(evt.Payload, &att))
 		require.Equal(t, attachmentKindAudio, att.Kind)
 		require.Equal(t, testFileID, att.FileID)
-		require.Equal(t, "audio.mp3", att.Name)
+		require.Equal(t, "song.mp3", att.Name)
 		require.Equal(t, audioFormatMP3, att.Format)
 		require.NotEmpty(t, att.Blob.Ref)
 

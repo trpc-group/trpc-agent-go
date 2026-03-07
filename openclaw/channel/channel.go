@@ -29,6 +29,9 @@ type OutboundFile struct {
 	Path string
 	// Name optionally overrides the uploaded filename.
 	Name string
+	// AsVoice asks channels that support it to deliver compatible
+	// audio as a voice note bubble instead of a generic audio file.
+	AsVoice bool
 }
 
 // OutboundMessage is a generic outbound payload for chat channels.

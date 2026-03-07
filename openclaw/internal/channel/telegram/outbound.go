@@ -131,6 +131,7 @@ func (c *Channel) SendMessage(
 	if err != nil {
 		return err
 	}
+	forceVoice := hasAudioAsVoiceTag(msg.Text)
 	files, err := c.expandTelegramOutboundFiles(ctx, msg.Files)
 	if err != nil {
 		return err
@@ -152,6 +153,7 @@ func (c *Channel) SendMessage(
 				plain,
 				parseMode,
 				scope,
+				msg.Files[0].AsVoice || forceVoice,
 			)
 		}
 	}
@@ -172,6 +174,7 @@ func (c *Channel) SendMessage(
 			"",
 			"",
 			scope,
+			file.AsVoice || forceVoice,
 		); err != nil {
 			return err
 		}
@@ -410,6 +413,7 @@ func (c *Channel) sendFile(
 	plainCaption string,
 	parseMode string,
 	scope uploads.Scope,
+	asVoice bool,
 ) error {
 	payload, err := resolveOutboundFile(ctx, c.state, file)
 	if err != nil {
@@ -425,7 +429,7 @@ func (c *Channel) sendFile(
 		Data:            payload.Data,
 	}
 
-	mode := detectUploadMode(payload.Name, payload.Data)
+	mode := detectUploadMode(payload.Name, payload.Data, asVoice)
 	err = c.sendFileByMode(ctx, mode, params)
 	if err == nil {
 		savedPath := c.persistDerivedOutboundFile(ctx, payload, scope)
@@ -511,6 +515,14 @@ func (c *Channel) persistDerivedOutboundFile(
 		)
 		return ""
 	}
+	if existing := c.annotateExistingOutboundFile(
+		ctx,
+		store,
+		payload,
+		scope,
+	); existing != "" {
+		return existing
+	}
 	saved, err := store.SaveWithInfo(
 		ctx,
 		scope,
@@ -531,6 +543,43 @@ func (c *Channel) persistDerivedOutboundFile(
 		return ""
 	}
 	return strings.TrimSpace(saved.Path)
+}
+
+func (c *Channel) annotateExistingOutboundFile(
+	ctx context.Context,
+	store *uploads.Store,
+	payload outboundFilePayload,
+	scope uploads.Scope,
+) string {
+	if store == nil {
+		return ""
+	}
+	source := filepath.Clean(strings.TrimSpace(payload.SourcePath))
+	if source == "" || !filepath.IsAbs(source) {
+		return ""
+	}
+	root := filepath.Clean(store.ScopeDir(scope))
+	if root == "" || !pathUnderRoot(source, root) {
+		return ""
+	}
+
+	err := store.Annotate(
+		source,
+		uploads.FileMetadata{
+			MimeType: detectMediaType(payload.Name, payload.Data),
+			Source:   uploads.SourceDerived,
+		},
+	)
+	if err != nil {
+		log.WarnfContext(
+			ctx,
+			"telegram: annotate outbound file %q: %v",
+			payload.Name,
+			err,
+		)
+		return ""
+	}
+	return source
 }
 
 func outboundUploadScopeFromContext(
@@ -693,10 +742,12 @@ func resolveHostOutboundFile(
 		)
 	}
 
+	mimeType := detectMediaType(filepath.Base(resolved), data)
 	name := strings.TrimSpace(nameHint)
 	if name == "" {
 		name = filepath.Base(resolved)
 	}
+	name = uploads.PreferredName(name, mimeType)
 	return outboundFilePayload{
 		Name:       name,
 		Data:       data,
@@ -843,12 +894,18 @@ func withArtifactContext(ctx context.Context) context.Context {
 	})
 }
 
-func detectUploadMode(name string, data []byte) string {
+func detectUploadMode(
+	name string,
+	data []byte,
+	asVoice bool,
+) string {
 	contentType := detectMediaType(name, data)
 	switch {
 	case strings.HasPrefix(contentType, mimePrefixImage) &&
 		contentType != mimeImageGIF:
 		return uploadModePhoto
+	case asVoice && isVoiceCompatibleMedia(contentType, name):
+		return uploadModeVoice
 	case isVoiceMedia(contentType, name):
 		return uploadModeVoice
 	case strings.HasPrefix(contentType, mimePrefixAudio):
@@ -893,6 +950,8 @@ func typeFromExtension(ext string) string {
 		return "application/pdf"
 	case ".mp3":
 		return "audio/mpeg"
+	case ".m4a":
+		return "audio/mp4"
 	case ".wav":
 		return "audio/wav"
 	case ".ogg", ".oga":
@@ -914,6 +973,22 @@ func isVoiceMedia(contentType string, name string) bool {
 	}
 	switch strings.ToLower(filepath.Ext(name)) {
 	case ".ogg", ".oga":
+		return true
+	default:
+		return false
+	}
+}
+
+func isVoiceCompatibleMedia(contentType string, name string) bool {
+	if isVoiceMedia(contentType, name) {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(contentType)) {
+	case "audio/mpeg", "audio/mp3", "audio/mp4", "audio/x-m4a":
+		return true
+	}
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".mp3", ".m4a":
 		return true
 	default:
 		return false

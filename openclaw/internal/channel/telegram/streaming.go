@@ -307,6 +307,9 @@ func (c *Channel) callGatewayAndReply(
 	}
 
 	replyFiles := c.collectReplyFiles(rsp.Reply, fromID, sessionID)
+	if hasAudioAsVoiceTag(rsp.Reply) {
+		replyFiles = markReplyFilesAsVoice(replyFiles)
+	}
 	replyFiles = c.filterAlreadySentReplyFiles(
 		requestID,
 		chatID,
@@ -360,6 +363,20 @@ func (c *Channel) callGatewayAndReply(
 		replyFiles,
 	)
 	return nil
+}
+
+func markReplyFilesAsVoice(
+	files []channel.OutboundFile,
+) []channel.OutboundFile {
+	if len(files) == 0 {
+		return files
+	}
+	out := make([]channel.OutboundFile, 0, len(files))
+	for _, file := range files {
+		file.AsVoice = true
+		out = append(out, file)
+	}
+	return out
 }
 
 func (c *Channel) filterAlreadySentReplyFiles(

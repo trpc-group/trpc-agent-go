@@ -266,6 +266,39 @@ func TestStoreScopeDir(t *testing.T) {
 	require.Contains(t, got, filepath.Join("telegram", "u1"))
 }
 
+func TestStoreAnnotate(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store, err := NewStore(root)
+	require.NoError(t, err)
+
+	scope := Scope{
+		Channel:   "telegram",
+		UserID:    "u1",
+		SessionID: "s1",
+	}
+	saved, err := store.Save(
+		context.Background(),
+		scope,
+		"report.pdf",
+		[]byte("%PDF-1.4"),
+	)
+	require.NoError(t, err)
+
+	err = store.Annotate(saved.Path, FileMetadata{
+		MimeType: "application/pdf",
+		Source:   SourceDerived,
+	})
+	require.NoError(t, err)
+
+	files, err := store.ListScope(scope, 10)
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	require.Equal(t, "application/pdf", files[0].MimeType)
+	require.Equal(t, SourceDerived, files[0].Source)
+}
+
 func TestSanitizeHelpers(t *testing.T) {
 	t.Parallel()
 
@@ -301,6 +334,23 @@ func TestSanitizeHelpers(t *testing.T) {
 		t,
 		"scan.jpg",
 		PreferredName("scan.jpg", "image/jpeg"),
+	)
+	require.Equal(
+		t,
+		"audio.oga",
+		PreferredName(
+			"3a2a69871c9515b0d3a1d886-"+
+				"3a2a69871c9515b0d3a1d886-file_11.oga",
+			"audio/ogg",
+		),
+	)
+	require.Equal(
+		t,
+		"report.pdf",
+		StoredDisplayName(
+			"702b5bcd905ee561174e9b03-"+
+				"00ed39bb50144ce9ebef3aab-report.pdf",
+		),
 	)
 	require.Equal(
 		t,
