@@ -659,15 +659,17 @@ func (r *runner) getOrCreateSession(
 
 // eventLoopContext bundles all channels and state required by the event loop.
 type eventLoopContext struct {
-	sess             *session.Session
-	invocation       *agent.Invocation
-	agentEventCh     <-chan *event.Event
-	flushChan        chan *flush.FlushRequest
-	processedEventCh chan *event.Event
-	runHandle        *runHandle
-	finalStateDelta  map[string][]byte
-	finalChoices     []model.Choice
-	streamFilter     graph.StreamModeFilter
+	sess               *session.Session
+	invocation         *agent.Invocation
+	agentEventCh       <-chan *event.Event
+	flushChan          chan *flush.FlushRequest
+	processedEventCh   chan *event.Event
+	runHandle          *runHandle
+	finalStateDelta    map[string][]byte
+	finalChoices       []model.Choice
+	fallbackStateDelta map[string][]byte
+	finalError         *model.ResponseError
+	streamFilter       graph.StreamModeFilter
 	// emittedAssistantResponseIDs tracks response IDs that already produced a
 	// non-partial assistant message event during this run.
 	//
@@ -770,6 +772,7 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 	if isGraphCompletionEvent(agentEvent) {
 		loop.finalStateDelta, loop.finalChoices = r.captureGraphCompletion(agentEvent)
 	}
+	r.captureCompletionFallback(loop, agentEvent)
 
 	// Notify completion if required.
 	if agentEvent.RequiresCompletion {
@@ -1012,22 +1015,122 @@ func isGraphCompletionEvent(agentEvent *event.Event) bool {
 func (r *runner) captureGraphCompletion(
 	agentEvent *event.Event,
 ) (map[string][]byte, []model.Choice) {
-	// Shallow copy map (values are immutable []byte owned by event stream).
-	finalStateDelta := make(map[string][]byte, len(agentEvent.StateDelta))
-	for k, v := range agentEvent.StateDelta {
-		// Copy bytes to avoid accidental mutation downstream.
-		if v != nil {
-			vv := make([]byte, len(v))
-			copy(vv, v)
-			finalStateDelta[k] = vv
-		}
-	}
+	finalStateDelta := mergeStateDelta(nil, agentEvent.StateDelta)
 
 	var finalChoices []model.Choice
 	if agentEvent.Response != nil && len(agentEvent.Response.Choices) > 0 {
 		finalChoices = agentEvent.Response.Choices
 	}
 	return finalStateDelta, finalChoices
+}
+
+func (r *runner) captureCompletionFallback(
+	loop *eventLoopContext,
+	agentEvent *event.Event,
+) {
+	if loop == nil || agentEvent == nil {
+		return
+	}
+	if len(agentEvent.StateDelta) > 0 {
+		loop.fallbackStateDelta = mergeCompletionFallbackStateDelta(
+			loop.fallbackStateDelta,
+			agentEvent.StateDelta,
+		)
+	}
+	if agentEvent.Response == nil || agentEvent.IsPartial {
+		return
+	}
+	// The last non-partial response wins so the completion event reflects
+	// the terminal outcome seen by the runner.
+	loop.finalError = cloneResponseError(agentEvent.Response.Error)
+}
+
+func mergeCompletionFallbackStateDelta(
+	dst map[string][]byte,
+	src map[string][]byte,
+) map[string][]byte {
+	if len(src) == 0 {
+		return dst
+	}
+	for k, v := range src {
+		if !shouldPropagateFallbackStateKey(k) {
+			continue
+		}
+		if dst == nil {
+			dst = make(map[string][]byte, len(src))
+		}
+		if v == nil {
+			dst[k] = nil
+			continue
+		}
+		vv := make([]byte, len(v))
+		copy(vv, v)
+		dst[k] = vv
+	}
+	return dst
+}
+
+func shouldPropagateFallbackStateKey(key string) bool {
+	switch key {
+	case graph.MetadataKeyNode,
+		graph.MetadataKeyPregel,
+		graph.MetadataKeyChannel,
+		graph.MetadataKeyState,
+		graph.MetadataKeyCompletion,
+		graph.MetadataKeyTool,
+		graph.MetadataKeyModel,
+		graph.MetadataKeyCheckpoint,
+		graph.MetadataKeyCacheHit,
+		graph.MetadataKeyNodeCustom:
+		return false
+	default:
+		return true
+	}
+}
+
+func mergeStateDelta(
+	dst map[string][]byte,
+	src map[string][]byte,
+) map[string][]byte {
+	if len(src) == 0 {
+		return dst
+	}
+	if dst == nil {
+		dst = make(map[string][]byte, len(src))
+	}
+	for k, v := range src {
+		if v == nil {
+			dst[k] = nil
+			continue
+		}
+		vv := make([]byte, len(v))
+		copy(vv, v)
+		dst[k] = vv
+	}
+	return dst
+}
+
+func cloneResponseError(err *model.ResponseError) *model.ResponseError {
+	if err == nil {
+		return nil
+	}
+	clone := *err
+	if err.Param != nil {
+		param := *err.Param
+		clone.Param = &param
+	}
+	if err.Code != nil {
+		code := *err.Code
+		clone.Code = &code
+	}
+	return &clone
+}
+
+func shouldPropagateFallbackState(err *model.ResponseError) bool {
+	if err == nil {
+		return false
+	}
+	return err.Type != agent.ErrorTypeStopAgentError
 }
 
 // emitRunnerCompletion creates and emits the final runner completion event,
@@ -1053,12 +1156,20 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 		runnerCompletionEvent,
 	)
 
+	propagateFallbackState := shouldPropagateFallbackState(
+		loop.finalError,
+	)
+	finalStateDelta := loop.finalStateDelta
+	if len(finalStateDelta) == 0 && propagateFallbackState {
+		finalStateDelta = loop.fallbackStateDelta
+	}
+
 	// Propagate graph-level completion data if available.
-	if len(loop.finalStateDelta) > 0 {
+	if len(finalStateDelta) > 0 {
 		echoFinalChoices := r.shouldEchoFinalChoicesInCompletion(loop)
 		r.propagateGraphCompletion(
 			runnerCompletionEvent,
-			loop.finalStateDelta,
+			finalStateDelta,
 			loop.finalChoices,
 			echoFinalChoices,
 		)
@@ -1090,15 +1201,10 @@ func (r *runner) propagateGraphCompletion(
 	}
 
 	// Copy state delta with byte ownership.
-	for k, v := range finalStateDelta {
-		if v != nil {
-			vv := make([]byte, len(v))
-			copy(vv, v)
-			runnerCompletionEvent.StateDelta[k] = vv
-		} else {
-			runnerCompletionEvent.StateDelta[k] = nil
-		}
-	}
+	runnerCompletionEvent.StateDelta = mergeStateDelta(
+		runnerCompletionEvent.StateDelta,
+		finalStateDelta,
+	)
 
 	// Optionally echo the final text as a non-streaming assistant message
 	// if graph provided it in its completion.
