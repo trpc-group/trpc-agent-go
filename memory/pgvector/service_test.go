@@ -644,13 +644,33 @@ func TestService_AddMemory_MemoryLimit(t *testing.T) {
 	ctx := context.Background()
 	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
 
-	// Atomic insert will affect 0 rows when at limit and memory does not exist.
+	// At capacity the evict CTE removes the oldest entry, so the insert succeeds.
+	mock.ExpectExec("WITH existing AS").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	err := svc.AddMemory(ctx, userKey, "test memory", nil)
+	require.NoError(t, err)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_AddMemory_MemoryLimit_EvictionFailed(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock, WithSkipDBInit(true), WithMemoryLimit(1))
+	defer svc.Close()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	// Safety-net: if eviction somehow fails, 0 rows affected triggers an error.
 	mock.ExpectExec("WITH existing AS").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	err := svc.AddMemory(ctx, userKey, "test memory", nil)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "memory limit exceeded")
+	assert.Contains(t, err.Error(), "memory eviction failed")
 
 	require.NoError(t, mock.ExpectationsWereMet())
 }
