@@ -1,0 +1,85 @@
+# This file defines code owners for the repository.
+# Each line is a file pattern followed by one or more owners.
+# Order matters — later rules take precedence over earlier ones.
+# See: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owner for the entire repository
+* @sandyskies
+
+# agent
+/agent/ @WineChord
+
+# artifact
+/artifact/ @liuzengh
+
+# benchmark
+/benchmark/ @Flash-LHR
+
+# codeexecutor
+/codeexecutor/ @liuzengh
+
+# docs
+/docs/ @WineChord @Flash-LHR
+
+# evaluation
+/evaluation/ @Flash-LHR
+
+# event
+/event/ @WineChord
+
+# examples
+/examples/ @WineChord
+
+# graph
+/graph/ @WineChord
+
+# internal
+/internal/ @WineChord @sandyskies @liuzengh @Flash-LHR @Rememorio @hyprh
+
+# knowledge
+/knowledge/ @hyprh
+
+# log
+/log/ @WineChord
+
+# memory
+/memory/ @Rememorio @hyprh
+
+# model
+/model/ @WineChord
+
+# openclaw
+/openclaw/ @WineChord
+
+# planner
+/planner/ @WineChord
+
+# plugin
+/plugin/ @WineChord
+
+# runner
+/runner/ @WineChord
+
+# server
+/server/ @WineChord @Flash-LHR
+
+# session
+/session/ @Rememorio @hyprh
+
+# skill
+/skill/ @WineChord
+
+# storage
+/storage/ @Rememorio @hyprh
+
+# team
+/team/ @WineChord
+
+# telemetry
+/telemetry/ @liuzengh
+
+# test
+/test/ @WineChord @Flash-LHR
+
+# tool
+/tool/ @liuzengh
