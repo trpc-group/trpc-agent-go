@@ -2488,9 +2488,10 @@
 system message，确保模型仍能看到已加载内容。</p>
 <p>Session summary 提醒：如果你启用了会话摘要注入
 （<code>WithAddSessionSummary(true)</code>），并且本次请求里确实插入了摘要，
-框架默认会<strong>跳过</strong>这条回退 system message，避免把“已被 summary 掉的
-内容”又塞回提示词里。在这种配置下，如果 tool result 被摘要覆盖掉，
-模型需要再次调用 <code>skill_load</code> 才能看到完整正文/文档。</p>
+框架会尽量<strong>跳过</strong>这条回退 system message，避免把“已被 summary 掉的
+内容”又塞回提示词里。如果对应的 tool result 仍在提示词里，回退会继续
+保持关闭；如果 same-turn summary compaction 已经把这些 tool result
+裁掉，回退会重新开启，保证模型仍能看到完整正文/文档。</p>
 <p>启用方式：<code>llmagent.WithSkillsLoadedContentInToolResults(true)</code>。
 如果你希望在 summary 场景恢复旧的回退行为：
 <code>llmagent.WithSkipSkillsFallbackOnSessionSummary(false)</code>。</p>
@@ -3917,7 +3918,7 @@ option：</p>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年3月8日 07:23:06 UTC">2026-03-08 07:23:06</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年3月8日 14:18:50 UTC">2026-03-08 14:18:50</span>
   </span>
 
     
