@@ -1,0 +1,33 @@
+{
+  "name": "hybrid_v10_t90",
+  "description": "Hybrid: vector=0.1, text=0.9",
+  "config": {
+    "hybrid_vector_weight": 0.1,
+    "hybrid_text_weight": 0.9,
+    "retrieval_k": 4,
+    "pg_table": "veval_hw_v10_t90"
+  },
+  "service_config": {
+    "hybrid_text_weight": 0.9,
+    "hybrid_vector_weight": 0.1,
+    "model_name": "deepseek-v3.2",
+    "pg_connection": {
+      "database": "vertical",
+      "host": "127.0.0.1",
+      "port": "5432",
+      "user": "root"
+    },
+    "pg_table": "veval_hw_v10_t90",
+    "search_mode": 0,
+    "vectorstore": "pgvector"
+  },
+  "timing": {
+    "qa_total_seconds": 157.47,
+    "qa_avg_seconds": 15.75,
+    "eval_seconds": 381.57
+  },
+  "samples_count": 10,
+  "errors_count": 0,
+  "result": "=== RAGAS Evaluation Results ===\n\n--- Answer Quality ---\nFaithfulness:        0.8417\nAnswer Relevancy:    0.6090\nAnswer Correctness:  0.6260\nAnswer Similarity:   0.6840\n\n--- Context Quality ---\nContext Precision:   0.5358\nContext Recall:      0.8000\nContext Entity Recall: 0.5500",
+  "errors": []
+}

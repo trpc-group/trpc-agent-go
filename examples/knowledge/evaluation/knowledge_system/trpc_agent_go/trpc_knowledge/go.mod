@@ -50,3 +50,5 @@ require (
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/postgres v1.2.1-0.20260123134909-0db8688a12ca // indirect
 )
+
+replace trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector => ../../../../../../knowledge/vectorstore/pgvector

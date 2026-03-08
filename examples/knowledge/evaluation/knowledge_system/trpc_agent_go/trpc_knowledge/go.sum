@@ -149,7 +149,5 @@ mellium.im/sasl v0.3.1 h1:wE0LW6g7U83vhvxjC1IY8DnXM+EU095yeo8XClvCdfo=
 mellium.im/sasl v0.3.1/go.mod h1:xm59PUYpZHhgQ9ZqoJ5QaCqzWMi8IeS49dhp6plPCzw=
 trpc.group/trpc-go/trpc-a2a-go v0.2.5 h1:X3pAlWD128LaS9TtXsUDZoJWPVuPZDkZKUecKRxmWn4=
 trpc.group/trpc-go/trpc-a2a-go v0.2.5/go.mod h1:Gtytau9Uoc3oPo/dpHvKit+tQn9Qlk5XFG1RiZTGqfk=
-trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector v1.2.1-0.20260123134909-0db8688a12ca h1:wWY1B8Am9nRDQD+pRAPQppbNEwZqa/NMJ8BXnTqm14M=
-trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector v1.2.1-0.20260123134909-0db8688a12ca/go.mod h1:QtM5yQzee1lTkN31CMS4qCP0N1rR4En8NYsjKw+a+no=
 trpc.group/trpc-go/trpc-agent-go/storage/postgres v1.2.1-0.20260123134909-0db8688a12ca h1:E8lU9V6FgiKB3NhePbI4ESKYhKGX/kJoZegKT6klAzY=
 trpc.group/trpc-go/trpc-agent-go/storage/postgres v1.2.1-0.20260123134909-0db8688a12ca/go.mod h1:q1/qPdLQ8hgyGhvq2t0lmfhRcekm0chBc5+ZI32pBv0=
