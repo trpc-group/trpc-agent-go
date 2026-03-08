@@ -1092,6 +1092,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#interactive-skill-sessions" class="md-nav__link">
+    <span class="md-ellipsis">
+      Interactive skill sessions
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2321,6 +2330,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#interactive-skill-sessions" class="md-nav__link">
+    <span class="md-ellipsis">
+      Interactive skill sessions
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2422,6 +2440,7 @@ when actually needed, and runs scripts inside an isolated workspace.</p>
 <li>🧾 <code>skill_list_docs</code> to list available docs</li>
 <li>🏃 <code>skill_run</code> to execute commands, returning stdout/stderr and
   output files</li>
+<li>⌨️ <code>skill_exec</code> plus session tools for interactive stdin/TTY flows</li>
 <li>🗂️ Output file collection via glob patterns with MIME detection</li>
 <li>🧩 Pluggable local or container workspace executors (local by default)</li>
 <li>🧱 Declarative <code>inputs</code>/<code>outputs</code>: map inputs and collect/inline/
@@ -3548,6 +3567,8 @@ them directly when driving the conversation naturally.</p>
 - <code>skill</code> (required)
 - <code>command</code> (required; by default runs via <code>bash -c</code>)
 - <code>cwd</code>, <code>env</code> (optional)
+- <code>stdin</code> (optional): one-shot stdin text passed to the command
+- <code>editor_text</code> (optional): text used for CLIs that launch <code>$EDITOR</code>
 - <code>output_files</code> (optional, legacy collection): glob patterns (e.g.,
   <code>out/*.txt</code>). Patterns are workspace‑relative; env‑style prefixes
   like <code>$OUTPUT_DIR/*.txt</code> are also accepted and normalized to
@@ -3681,6 +3702,36 @@ them directly when driving the conversation naturally.</p>
    - Legacy: use <code>output_files</code> globs
    - Declarative: use <code>outputs</code> to drive collect/inline/save
    - Use <code>inputs</code> to stage upstream files when needed</p>
+<h3 id="interactive-skill-sessions">Interactive skill sessions</h3>
+<p>Declaration:
+- <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/exec.go">tool/skill/exec.go</a></p>
+<p>Tools:
+- <code>skill_exec</code>: start a session-oriented command in the skill workspace
+- <code>skill_write_stdin</code>: write incremental stdin to a running session
+- <code>skill_poll_session</code>: fetch more terminal output or the final result
+- <code>skill_kill_session</code>: terminate and remove a session</p>
+<p>Guidance:
+- Prefer <code>skill_run</code> for one-shot commands.
+- Prefer <code>skill_exec</code> when the command may prompt for input, present a
+  numbered selection, or keep running between turns.
+- Prefer <code>editor_text</code> on <code>skill_run</code> or <code>skill_exec</code> for <code>$EDITOR</code>
+  workflows instead of trying to drive a full-screen editor via stdin.</p>
+<p><code>skill_exec</code> reuses the same workspace, <code>inputs</code>, <code>outputs</code>,
+<code>save_as_artifacts</code>, <code>omit_inline_content</code>, <code>artifact_prefix</code>, <code>stdin</code>,
+and <code>editor_text</code> behavior as <code>skill_run</code>, but returns session state:
+- <code>status</code>: <code>running</code> or <code>exited</code>
+- <code>session_id</code>: stable id for follow-up calls
+- <code>output</code>: most recent terminal output seen during that call
+- <code>interaction</code>: best-effort hint when the process appears to be waiting
+  for more input
+- <code>result</code>: when the session exits, the final <code>skill_run</code>-style output</p>
+<p>Typical interactive flow:
+1) Call <code>skill_exec</code>
+2) Inspect <code>output</code> / <code>interaction</code>
+3) Use <code>skill_write_stdin</code> or <code>skill_poll_session</code> until <code>status</code>
+   becomes <code>exited</code>
+4) Read <code>result</code> and collected outputs, or call <code>skill_kill_session</code>
+   to stop the session</p>
 <p>Examples:</p>
 <p>Stage an external input file and collect a small text output:</p>
 <div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-16-1"> 1</a></span>
@@ -3890,7 +3941,7 @@ in tools like <code>read_file</code>.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="March 6, 2026 03:46:43 UTC">2026-03-06 03:46:43</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="March 8, 2026 07:23:06 UTC">2026-03-08 07:23:06</span>
   </span>
 
     

@@ -1092,6 +1092,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#skill_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      交互式 Skill 会话
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2321,6 +2330,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#skill_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      交互式 Skill 会话
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2421,6 +2439,7 @@
 <li>📚 <code>skill_select_docs</code> 增/改/清除文档选择</li>
 <li>🧾 <code>skill_list_docs</code> 列出可用文档</li>
 <li>🏃 <code>skill_run</code> 在工作区执行命令，返回 stdout/stderr 与输出文件</li>
+<li>⌨️ <code>skill_exec</code> 与 session 工具处理交互式 stdin/TTY 流程</li>
 <li>🗂️ 按通配符收集输出文件并回传内容与 MIME 类型</li>
 <li>🧩 可选择本地或容器工作区执行器（默认本地）</li>
 <li>🧱 支持声明式 <code>inputs</code>/<code>outputs</code>：映射输入、
@@ -3535,6 +3554,8 @@ option：</p>
 - <code>command</code>（必填）：Shell 命令（默认通过 <code>bash -c</code> 执行）
 - <code>cwd</code>（可选）：相对技能根目录的工作路径
 - <code>env</code>（可选）：环境变量映射
+- <code>stdin</code>（可选）：一次性写入命令的标准输入文本
+- <code>editor_text</code>（可选）：用于会拉起 <code>$EDITOR</code> 的 CLI 的文本内容
 - <code>output_files</code>（可选，传统收集方式）：通配符列表
   （如 <code>out/*.txt</code>）。通配符以工作区根目录为准，也支持
   <code>$OUTPUT_DIR/*.txt</code> 这类写法，会自动归一化为 <code>out/*.txt</code>。
@@ -3658,6 +3679,35 @@ option：</p>
    - 传统：用 <code>output_files</code> 指定通配符
    - 声明式：用 <code>outputs</code> 统一控制收集/内联/保存
    - 如需把上游文件带入，可用 <code>inputs</code> 先行映射</p>
+<h3 id="skill_1">交互式 Skill 会话</h3>
+<p>声明：
+- <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/exec.go">tool/skill/exec.go</a></p>
+<p>工具：
+- <code>skill_exec</code>：在 Skill 工作区里启动一个可持续交互的命令
+- <code>skill_write_stdin</code>：向运行中的会话追加 stdin
+- <code>skill_poll_session</code>：继续拉取终端输出或最终结果
+- <code>skill_kill_session</code>：终止并移除会话</p>
+<p>建议：
+- 一次性命令优先用 <code>skill_run</code>
+- 如果命令会等待输入、展示编号选择，或需要跨多次工具调用继续交互，
+  优先用 <code>skill_exec</code>
+- 对 <code>$EDITOR</code> 型流程，优先在 <code>skill_run</code> / <code>skill_exec</code> 上传
+  <code>editor_text</code>，不要试图通过 stdin 驱动全屏编辑器</p>
+<p><code>skill_exec</code> 复用 <code>skill_run</code> 的同一套工作区、<code>inputs</code>、<code>outputs</code>、
+<code>save_as_artifacts</code>、<code>omit_inline_content</code>、<code>artifact_prefix</code>、
+<code>stdin</code> 与 <code>editor_text</code> 语义，但会额外返回会话状态：
+- <code>status</code>：<code>running</code> 或 <code>exited</code>
+- <code>session_id</code>：后续继续交互使用的稳定 id
+- <code>output</code>：本次调用观察到的最新终端输出
+- <code>interaction</code>：best effort 的输入提示（例如 prompt / selection）
+- <code>result</code>：当会话退出后，返回与 <code>skill_run</code> 风格一致的最终结果</p>
+<p>典型交互流程：
+1) 先调用 <code>skill_exec</code>
+2) 查看 <code>output</code> / <code>interaction</code>
+3) 持续调用 <code>skill_write_stdin</code> 或 <code>skill_poll_session</code>，直到
+   <code>status=exited</code>
+4) 读取 <code>result</code> 与收集到的输出；若需要中止，则调用
+   <code>skill_kill_session</code></p>
 <p>示例：</p>
 <p>映射外部输入文件，并收集一个小型文本输出：</p>
 <div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-16-1"> 1</a></span>
@@ -3867,7 +3917,7 @@ option：</p>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年3月6日 03:46:43 UTC">2026-03-06 03:46:43</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年3月8日 07:23:06 UTC">2026-03-08 07:23:06</span>
   </span>
 
     
