@@ -555,7 +555,7 @@ sg.SetFinishPoint("A").SetFinishPoint("B")
 - 一个最小的 OpenClaw-like gateway 服务。
 - 稳定的 session id，以及同一 session 串行执行。
 - 基础安全控制：allowlist + mention gating。
-- OpenClaw-like demo binary（Telegram + gateway）：[openclaw](openclaw)
+- OpenClaw-like 实现（Telegram + gateway）：[openclaw](openclaw)
 
 其他值得关注的示例：
 
