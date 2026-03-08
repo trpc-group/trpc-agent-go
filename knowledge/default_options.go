@@ -10,6 +10,9 @@
 package knowledge
 
 import (
+	"context"
+	"time"
+
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/embedder"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/query"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/reranker"
@@ -70,6 +73,30 @@ func WithSources(sources []source.Source) Option {
 	}
 }
 
+// LoadProgressEvent carries structured progress information emitted during Load.
+// It is delivered to the callback registered via WithLoadProgressCallback.
+//
+// For concurrent loading the callback may be invoked from multiple goroutines
+// concurrently; the order of events across different sources is not guaranteed.
+// Callers must synchronise any shared state accessed inside the callback.
+type LoadProgressEvent struct {
+	// SourceName is the name of the source being loaded.
+	SourceName string
+	// Processed is the number of documents processed so far within this source.
+	Processed int
+	// Total is the total number of documents in this source.
+	Total int
+	// Elapsed is the time elapsed since the source started loading.
+	Elapsed time.Duration
+	// ETA is the estimated time remaining for this source.
+	// It may be zero when the estimate is not available (e.g. at the very start).
+	ETA time.Duration
+}
+
+// LoadProgressCallback is the callback signature for load progress events.
+// ctx is the same context passed to Load.
+type LoadProgressCallback func(ctx context.Context, event LoadProgressEvent)
+
 // loadConfig holds the configuration for load behavior.
 type loadConfig struct {
 	showProgress     bool
@@ -78,6 +105,7 @@ type loadConfig struct {
 	srcParallelism   int
 	docParallelism   int
 	recreate         bool
+	progressCallback LoadProgressCallback
 }
 
 // LoadOption represents a functional option for configuring load behavior.
@@ -129,6 +157,27 @@ func WithDocConcurrency(n int) LoadOption {
 func WithRecreate(recreate bool) LoadOption {
 	return func(lc *loadConfig) {
 		lc.recreate = recreate
+	}
+}
+
+// WithLoadProgressCallback registers a callback that is invoked at each progress
+// boundary during Load, following the same step-size granularity as
+// WithProgressStepSize (default: every 10 documents per source).
+//
+// The callback receives a LoadProgressEvent with structured fields (SourceName,
+// Processed, Total, Elapsed, ETA) and can be used to drive UIs, metrics, or
+// any other observability integration without parsing log output.
+//
+// When used together with WithShowProgress(true) (the default), both the log
+// output and the callback are emitted; they are fully independent.
+//
+// For concurrent loading (WithSourceConcurrency > 1 or WithDocConcurrency > 1)
+// the callback may be invoked from multiple goroutines concurrently. The order
+// of events across different sources is not guaranteed. Callers must synchronise
+// any shared state accessed inside the callback.
+func WithLoadProgressCallback(cb LoadProgressCallback) LoadOption {
+	return func(lc *loadConfig) {
+		lc.progressCallback = cb
 	}
 }
 

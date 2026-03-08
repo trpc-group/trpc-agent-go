@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/panjf2000/ants/v2"
@@ -466,7 +467,6 @@ func (dk *BuiltinKnowledge) loadSequential(
 		log.InfofContext(ctx, "Loading source %d/%d: %s (type: %s)",
 			i+1, totalSources, sourceName, sourceType)
 
-		srcStartTime := time.Now()
 		docs, err := src.ReadDocuments(ctx)
 		if err != nil {
 			log.ErrorfContext(ctx, "Failed to read documents from source %s: %v",
@@ -491,6 +491,11 @@ func (dk *BuiltinKnowledge) loadSequential(
 
 		log.InfofContext(ctx, "Start embedding & storing documents from source %s...", sourceName)
 
+		// srcStartTime tracks only the embed+store phase, so that Elapsed and ETA
+		// in progress events and logs reflect actual indexing throughput rather than
+		// including the (often slow) ReadDocuments I/O time.
+		srcStartTime := time.Now()
+
 		// Process documents with progress logging if enabled.
 		for j, doc := range docs {
 			if err := dk.addDocumentWithSync(ctx, doc, src); err != nil {
@@ -503,7 +508,7 @@ func (dk *BuiltinKnowledge) loadSequential(
 			processedDocs++
 
 			// Log progress based on configuration.
-			if config.showProgress {
+			if config.showProgress || config.progressCallback != nil {
 				srcProcessed := j + 1
 				totalSrc := len(docs)
 
@@ -512,11 +517,23 @@ func (dk *BuiltinKnowledge) loadSequential(
 					etaSrc := calcETA(srcStartTime, srcProcessed, totalSrc)
 					elapsedSrc := time.Since(srcStartTime)
 
-					log.InfofContext(ctx,
-						"Processed %d/%d doc(s) | source %s | elapsed %s | ETA %s",
-						srcProcessed, totalSrc, sourceName,
-						elapsedSrc.Truncate(time.Second),
-						etaSrc.Truncate(time.Second))
+					if config.showProgress {
+						log.InfofContext(ctx,
+							"Processed %d/%d doc(s) | source %s | elapsed %s | ETA %s",
+							srcProcessed, totalSrc, sourceName,
+							elapsedSrc.Truncate(time.Second),
+							etaSrc.Truncate(time.Second))
+					}
+
+					if config.progressCallback != nil {
+						config.progressCallback(ctx, LoadProgressEvent{
+							SourceName: sourceName,
+							Processed:  srcProcessed,
+							Total:      totalSrc,
+							Elapsed:    elapsedSrc,
+							ETA:        etaSrc,
+						})
+					}
 				}
 			}
 		}
@@ -623,6 +640,7 @@ func (dk *BuiltinKnowledge) processDocuments(
 ) error {
 	var wgDoc sync.WaitGroup
 	errCh := make(chan error, len(docs))
+	var completedCount atomic.Int64
 
 	processDoc := func(doc *document.Document, docIndex int) func() {
 		return func() {
@@ -632,12 +650,24 @@ func (dk *BuiltinKnowledge) processDocuments(
 				return
 			}
 
+			completed := int(completedCount.Add(1))
+			total := len(docs)
+
 			aggr.StatCh() <- loader.StatEvent{Size: len(doc.Content)}
 			if cfg.showProgress {
 				aggr.ProgCh() <- loader.ProgEvent{
 					SrcName:      src.Name(),
-					SrcProcessed: docIndex + 1,
-					SrcTotal:     len(docs),
+					SrcProcessed: completed,
+					SrcTotal:     total,
+				}
+			}
+			if cfg.progressCallback != nil {
+				if completed%cfg.progressStepSize == 0 || completed == total {
+					cfg.progressCallback(ctx, LoadProgressEvent{
+						SourceName: src.Name(),
+						Processed:  completed,
+						Total:      total,
+					})
 				}
 			}
 		}
