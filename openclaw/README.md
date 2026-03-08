@@ -1,3 +1,5 @@
+English | [中文](README.zh_CN.md)
+
 # OpenClaw-like Implementation (Telegram + HTTP Gateway)
 
 This directory is a small runnable binary that implements an
