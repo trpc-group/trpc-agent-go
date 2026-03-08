@@ -7,79 +7,79 @@
 * @sandyskies
 
 # agent
-/agent/ @WineChord
+/agent/ @sandyskies @WineChord
 
 # artifact
-/artifact/ @liuzengh
+/artifact/ @sandyskies @liuzengh
 
 # benchmark
-/benchmark/ @Flash-LHR
+/benchmark/ @sandyskies @Flash-LHR
 
 # codeexecutor
-/codeexecutor/ @liuzengh
+/codeexecutor/ @sandyskies @liuzengh
 
 # docs
-/docs/ @WineChord @Flash-LHR
+/docs/ @sandyskies @WineChord @Flash-LHR
 
 # evaluation
-/evaluation/ @Flash-LHR
+/evaluation/ @sandyskies @Flash-LHR
 
 # event
-/event/ @WineChord
+/event/ @sandyskies @WineChord
 
 # examples
-/examples/ @WineChord
+/examples/ @sandyskies @WineChord
 
 # graph
-/graph/ @WineChord
+/graph/ @sandyskies @WineChord
 
 # internal
-/internal/ @WineChord @sandyskies @liuzengh @Flash-LHR @Rememorio @hyprh
+/internal/ @sandyskies @WineChord @liuzengh @Flash-LHR @Rememorio @hyprh
 
 # knowledge
-/knowledge/ @hyprh
+/knowledge/ @sandyskies @hyprh
 
 # log
-/log/ @WineChord
+/log/ @sandyskies @WineChord
 
 # memory
-/memory/ @Rememorio @hyprh
+/memory/ @sandyskies @Rememorio @hyprh
 
 # model
-/model/ @WineChord
+/model/ @sandyskies @WineChord
 
 # openclaw
-/openclaw/ @WineChord
+/openclaw/ @sandyskies @WineChord
 
 # planner
-/planner/ @WineChord
+/planner/ @sandyskies @WineChord
 
 # plugin
-/plugin/ @WineChord
+/plugin/ @sandyskies @WineChord
 
 # runner
-/runner/ @WineChord
+/runner/ @sandyskies @WineChord
 
 # server
-/server/ @WineChord @Flash-LHR
+/server/ @sandyskies @WineChord @Flash-LHR
 
 # session
-/session/ @Rememorio @hyprh
+/session/ @sandyskies @Rememorio @hyprh
 
 # skill
-/skill/ @WineChord
+/skill/ @sandyskies @WineChord
 
 # storage
-/storage/ @Rememorio @hyprh
+/storage/ @sandyskies @Rememorio @hyprh
 
 # team
-/team/ @WineChord
+/team/ @sandyskies @WineChord
 
 # telemetry
-/telemetry/ @liuzengh
+/telemetry/ @sandyskies @liuzengh
 
 # test
-/test/ @WineChord @Flash-LHR
+/test/ @sandyskies @WineChord @Flash-LHR
 
 # tool
-/tool/ @liuzengh
+/tool/ @sandyskies @liuzengh
