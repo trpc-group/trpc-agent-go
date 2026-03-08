@@ -80,10 +80,11 @@ loaded content.
 
 Session summary note: if you enable session summary injection
 (`WithAddSessionSummary(true)`) and a summary is present, the framework
-**skips** this fallback by default to avoid re-inflating the prompt with
-summarized content. In that setup, if the tool result messages were
-summarized away, the model will need to call `skill_load` again to see
-the full body/docs.
+prefers to **skip** this fallback to avoid re-inflating the prompt with
+summarized content. If the matching tool result messages are still
+available, the fallback stays suppressed; if summary compaction removes
+them, the fallback is re-enabled so the model still sees the full
+body/docs.
 
 Enable tool-result materialization with:
 `llmagent.WithSkillsLoadedContentInToolResults(true)`.

@@ -75,9 +75,10 @@ system message，确保模型仍能看到已加载内容。
 
 Session summary 提醒：如果你启用了会话摘要注入
 （`WithAddSessionSummary(true)`），并且本次请求里确实插入了摘要，
-框架默认会**跳过**这条回退 system message，避免把“已被 summary 掉的
-内容”又塞回提示词里。在这种配置下，如果 tool result 被摘要覆盖掉，
-模型需要再次调用 `skill_load` 才能看到完整正文/文档。
+框架会尽量**跳过**这条回退 system message，避免把“已被 summary 掉的
+内容”又塞回提示词里。如果对应的 tool result 仍在提示词里，回退会继续
+保持关闭；如果 same-turn summary compaction 已经把这些 tool result
+裁掉，回退会重新开启，保证模型仍能看到完整正文/文档。
 
 启用方式：`llmagent.WithSkillsLoadedContentInToolResults(true)`。
 如果你希望在 summary 场景恢复旧的回退行为：
