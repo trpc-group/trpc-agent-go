@@ -12,7 +12,11 @@ You will learn how to:
 - Extend the agent with file-based **skills** (`SKILL.md` folders) without
   writing Go code.
 
-If you just want a working example, start with `openclaw/examples/stdin_chat/`.
+If you just want local terminal chat, the standard binary now ships
+`stdin` and `telegram` channel plugins, so you can start with
+`./openclaw.stdin.yaml`. If you want a runnable example of a custom
+distribution binary that also bundles extra plugins, start with
+`openclaw/examples/stdin_chat/`.
 
 ## What "plugin" means here (no magic, no dynamic loading)
 

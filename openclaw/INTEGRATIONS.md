@@ -162,6 +162,11 @@ skills:
   # Optional: restrict which bundled skills are enabled by default.
   # Applies only to bundled skills under ./openclaw/skills.
   allowBundled: ["gh-issues", "notion"]
+  load_mode: "turn"              # once|turn|session
+  loaded_content_in_tool_results: true
+  max_loaded_skills: 0
+  skip_fallback_on_session_summary: true
+  tooling_guidance: ""           # optional; "" disables built-in guidance
 
   # Optional: per-skill config (by skillKey or skill name).
   entries:
@@ -178,6 +183,15 @@ CLI equivalents:
 - `-skills-extra-dirs <A,B,C>` (comma-separated)
 - `-skills-debug`
 - `-skills-allow-bundled <A,B,C>` (comma-separated; bundled skills only)
+- `-skills-load-mode <once|turn|session>`
+- `-skills-max-loaded <N>`
+- `-skills-loaded-content-in-tool-results`
+- `-skills-skip-fallback-on-session-summary`
+
+OpenClaw defaults to materializing loaded skill bodies and docs into tool
+result messages. The built-in guidance also allows small read-only probes,
+such as `--help` or `--version`, when a skill depends on an external CLI
+and the runtime contract needs to be verified.
 
 #### `skills.entries` and OpenClaw metadata
 
@@ -232,7 +246,7 @@ Then run OpenClaw (skills are discovered automatically):
 
 ```bash
 cd openclaw
-go run ./cmd/openclaw -config ./examples/stdin_chat/openclaw.yaml
+go run ./cmd/openclaw -config ./openclaw.stdin.yaml
 ```
 
 This starts a local terminal chat (STDIN channel).
@@ -332,8 +346,13 @@ Telegram:
 
 Tool surface keys (optional):
 
-- If `tools.enable_openclaw_tools: true`, this demo adds:
-  - `tools.exec`, `tools.bash`, `tools.process`
+- For the default LLM agent, this demo adds:
+  - `tools.exec_command`
+  - `tools.write_stdin`
+  - `tools.kill_session`
+  - `tools.message`
+  - `tools.cron`
+- Set `tools.enable_openclaw_tools: false` to disable them.
 - If `tools.enable_local_exec: true`, this demo adds:
   - `tools.local_exec`
 
@@ -375,18 +394,22 @@ Some OpenClaw skill packs use `{baseDir}` in commands and docs to mean
 This demo replaces `{baseDir}` in loaded skill bodies/docs with the
 actual local path to keep those skill packs usable.
 
-### Skills and tool compatibility (OpenClaw-style `exec` / `process`)
+### Skills and tool compatibility (OpenClaw host tools)
 
 Some skill packs assume an OpenClaw-like tool surface, especially:
 
-- `exec` (or `bash`): execute a shell command
-- `process`: manage long-running sessions
+- `exec_command`: execute a host shell command
+- `write_stdin`: continue an interactive command
+- `message`: send to the current chat
+- `cron`: create future or recurring jobs persisted in the OpenClaw
+  state dir
 
-This demo can enable OpenClaw-compatible tools:
+This demo enables OpenClaw-compatible host tools for the default LLM
+agent. To disable them explicitly:
 
 ```yaml
 tools:
-  enable_openclaw_tools: true
+  enable_openclaw_tools: false
 ```
 
 To further reduce risk, you can restrict what `skill_run` is allowed to
@@ -423,6 +446,7 @@ Supported `session.backend` values:
 
 - `inmemory` (default)
 - `redis`
+- `sqlite`
 - `mysql`
 - `postgres`
 - `clickhouse`
@@ -453,6 +477,27 @@ Notes:
 - `url` and `instance` are two ways to specify where Redis is.
   Use `url` unless you have an internal service discovery system.
 - `key_prefix` is optional. `app_name` is still used for isolation.
+
+### Session: sqlite
+
+Good for local demos where you want persistence across restarts.
+
+If `session.config` is omitted, it defaults to:
+
+- `<state_dir>/sessions.sqlite` (where `state_dir` defaults to
+  `~/.trpc-agent-go/openclaw`)
+- `<state_dir>/debug` (when `debug_recorder.enabled: true`)
+
+Explicit path example:
+
+```yaml
+session:
+  backend: "sqlite"
+  config:
+    path: "/tmp/openclaw-sessions.sqlite"
+    skip_db_init: false
+    table_prefix: "oc_"
+```
 
 ### Session: mysql / postgres / clickhouse
 
