@@ -208,18 +208,25 @@ def _patched_fetch_stm(self: ContextualMemory,
 ContextualMemory._fetch_stm_context = _patched_fetch_stm
 
 # -------------------------------------------------------------------
-# Thread-safe token tracker via litellm success_callback.
-# CrewAI's built-in _token_process often stays at 0 because
-# the TokenCalcHandler callback may not fire for all LLM
-# backends. We register our own litellm callback as a
-# reliable fallback.
+# Thread-safe global token tracker.
+# CrewAI 1.9+ uses its own OpenAI client (OpenAICompletion)
+# and does NOT go through litellm at all, so neither
+# litellm.success_callback nor litellm.callbacks works.
+#
+# Instead we monkey-patch BaseLLM._track_token_usage_internal
+# which CrewAI calls after every OpenAI API response. This
+# feeds a global accumulator that the benchmark reads via
+# snapshot() before/after each QA kickoff.
 # -------------------------------------------------------------------
 import threading as _threading
 
-import litellm as _litellm
+from crewai.llms.base_llm import BaseLLM as _BaseLLM
 
-class _LiteLLMTokenTracker:
-    """Accumulates token usage reported by litellm."""
+_orig_track = _BaseLLM._track_token_usage_internal
+
+
+class _GlobalTokenTracker:
+    """Accumulates token usage across all LLM instances."""
 
     def __init__(self) -> None:
         self._lock = _threading.Lock()
@@ -237,24 +244,39 @@ class _LiteLLMTokenTracker:
                 self.successful_requests,
             )
 
-    # litellm success_callback signature.
-    def __call__(self, kwargs: dict, response: object,
-                 start_time: float,
-                 end_time: float) -> None:
-        usage = getattr(response, "usage", None)
-        if usage is None:
-            return
-        pt = getattr(usage, "prompt_tokens", 0) or 0
-        ct = getattr(usage, "completion_tokens", 0) or 0
-        tt = getattr(usage, "total_tokens", 0) or 0
+    def accumulate(self, usage_data: dict) -> None:
+        """Called from the patched method."""
+        pt = (
+            usage_data.get("prompt_tokens")
+            or usage_data.get("prompt_token_count")
+            or usage_data.get("input_tokens")
+            or 0
+        )
+        ct = (
+            usage_data.get("completion_tokens")
+            or usage_data.get("candidates_token_count")
+            or usage_data.get("output_tokens")
+            or 0
+        )
         with self._lock:
             self.prompt_tokens += pt
             self.completion_tokens += ct
-            self.total_tokens += tt
+            self.total_tokens += pt + ct
             self.successful_requests += 1
 
-_token_tracker = _LiteLLMTokenTracker()
-_litellm.success_callback.append(_token_tracker)
+
+_token_tracker = _GlobalTokenTracker()
+
+
+def _patched_track_token_usage(self, usage_data):
+    """Patched version that also feeds the global tracker."""
+    _orig_track(self, usage_data)
+    _token_tracker.accumulate(usage_data)
+
+
+_BaseLLM._track_token_usage_internal = (
+    _patched_track_token_usage
+)
 
 
 # ---------------------------------------------------------------------------
