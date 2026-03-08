@@ -246,7 +246,7 @@ Then run OpenClaw (skills are discovered automatically):
 
 ```bash
 cd openclaw
-go run ./cmd/openclaw -config ./examples/stdin_chat/openclaw.yaml
+go run ./cmd/openclaw -config ./openclaw.stdin.yaml
 ```
 
 This starts a local terminal chat (STDIN channel).

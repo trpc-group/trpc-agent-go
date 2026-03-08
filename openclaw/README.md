@@ -17,9 +17,7 @@ Run with a mock model (no external model credentials needed):
 
 ```bash
 cd openclaw
-go run ./cmd/openclaw \
-  -mode mock \
-  -http-addr :8080
+go run ./cmd/openclaw -config ./openclaw.stdin.yaml
 ```
 
 Note: by default, this demo uses `-mode openai` and `-model gpt-5`.
@@ -110,7 +108,10 @@ Trace output location:
   - `attachments/<sha256>`: stored bytes (mode `full` only)
   - `by-session/.../trace.json`: pointer to the canonical trace dir
 
-This repo ships the same sample config as [`./openclaw.yaml`](./openclaw.yaml).
+This repo ships two sample configs:
+
+- [`./openclaw.yaml`](./openclaw.yaml) for Telegram.
+- [`./openclaw.stdin.yaml`](./openclaw.stdin.yaml) for local terminal chat.
 
 Example config:
 
@@ -183,10 +184,12 @@ Notes:
   Prefer environment variables when available.
 - The sample config in `./openclaw.yaml` is ready to use with
   `go run ./cmd/openclaw -config ./openclaw.yaml`.
+- The sample config in `./openclaw.stdin.yaml` is ready to use with
+  `go run ./cmd/openclaw -config ./openclaw.stdin.yaml`.
 - Plugin sections:
   - `channels` configures channel plugins. This demo binary ships with the
-    `telegram` channel plugin; other channel types require a custom binary
-    that imports them. See `openclaw/EXTENDING.md` and
+    `telegram` and `stdin` channel plugins; other channel types require a
+    custom binary that imports them. See `openclaw/EXTENDING.md` and
     `openclaw/examples/stdin_chat/`.
   - `tools.enable_parallel_tools` toggles parallel tool execution for one
     model step (optional).
