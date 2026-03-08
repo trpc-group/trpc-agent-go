@@ -357,6 +357,98 @@ func TestWorkspaceRuntime_RunProgram_InsertsWorkspaceEnv(t *testing.T) {
 	require.Contains(t, joined, ws.Path)
 }
 
+func TestWorkspaceRuntime_RunProgram_WithStdin(t *testing.T) {
+	var (
+		capturedStdin string
+		attachStdin   bool
+	)
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPut &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/archive"):
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/exec"):
+			var payload struct {
+				AttachStdin bool `json:"AttachStdin"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&payload)
+			attachStdin = payload.AttachStdin
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"` + testExec1 + `"}`))
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/start"):
+			hj, _ := w.(http.Hijacker)
+			conn, buf, _ := hj.Hijack()
+			_, _ = buf.WriteString(
+				"HTTP/1.1 101 Switching Protocols\r\n" +
+					"Connection: Upgrade\r\n" +
+					"Upgrade: tcp\r\n" +
+					"Content-Type: " +
+					"application/vnd.docker.raw-stream\r\n\r\n",
+			)
+			_ = buf.Flush()
+			_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+			data, _ := io.ReadAll(conn)
+			capturedStdin = string(data)
+			writeDockerFrame(t, buf, 1, "done")
+			_ = buf.Flush()
+			if closer, ok := conn.(interface{ CloseWrite() error }); ok {
+				_ = closer.CloseWrite()
+			}
+			go func() {
+				time.Sleep(10 * time.Millisecond)
+				_ = conn.Close()
+			}()
+		case r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ExitCode":0}`))
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}
+
+	cli, cleanup := fakeDocker(t, handler)
+	defer cleanup()
+
+	rt := &workspaceRuntime{
+		ce: &CodeExecutor{
+			client:    cli,
+			container: &tcontainer.Summary{ID: testCID},
+		},
+		cfg: runtimeConfig{
+			runHostBase:      t.TempDir(),
+			runContainerBase: testRunBase,
+		},
+	}
+	ws := codeexecutor.Workspace{ID: "wstdin",
+		Path: path.Join(testRunBase, "wstdin")}
+	err := rt.PutFiles(context.Background(), ws, []codeexecutor.PutFile{
+		{Path: "hello.txt", Content: []byte(contentHello), Mode: 0o644},
+	})
+	require.NoError(t, err)
+
+	res, err := rt.RunProgram(
+		context.Background(),
+		ws,
+		codeexecutor.RunProgramSpec{
+			Cmd:     "cat",
+			Stdin:   "input-data",
+			Timeout: time.Duration(waitShortSec) * time.Second,
+		},
+	)
+	require.NoError(t, err)
+	require.True(t, attachStdin)
+	require.Contains(t, capturedStdin, "input-data")
+	require.Equal(t, "done", res.Stdout)
+}
+
 func TestWorkspaceRuntime_Collect(t *testing.T) {
 	// will list two files and return tar streams for each
 	handler := func(w http.ResponseWriter, r *http.Request) {

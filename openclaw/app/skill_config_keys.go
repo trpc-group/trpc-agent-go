@@ -29,10 +29,12 @@ const (
 	configKeyPluginsEnabledSuffix = ".enabled"
 	configKeyPluginsConfigPrefix  = ".config"
 
-	configKeyExec      = "exec"
-	configKeyBash      = "bash"
-	configKeyProcess   = "process"
-	configKeyLocalExec = "local_exec"
+	configKeyExecCommand = "exec_command"
+	configKeyWriteStdin  = "write_stdin"
+	configKeyKillSession = "kill_session"
+	configKeyMessage     = "message"
+	configKeyCron        = "cron"
+	configKeyLocalExec   = "local_exec"
 )
 
 func resolveSkillConfigKeys(opts runOptions) []string {
@@ -84,9 +86,20 @@ func addPluginSpecsConfigKeys(
 
 func addToolSurfaceKeys(set map[string]struct{}, opts runOptions) {
 	if opts.EnableOpenClawTools {
-		addConfigKey(set, configKeyToolsPrefix+configKeyExec)
-		addConfigKey(set, configKeyToolsPrefix+configKeyBash)
-		addConfigKey(set, configKeyToolsPrefix+configKeyProcess)
+		addConfigKey(
+			set,
+			configKeyToolsPrefix+configKeyExecCommand,
+		)
+		addConfigKey(
+			set,
+			configKeyToolsPrefix+configKeyWriteStdin,
+		)
+		addConfigKey(
+			set,
+			configKeyToolsPrefix+configKeyKillSession,
+		)
+		addConfigKey(set, configKeyToolsPrefix+configKeyMessage)
+		addConfigKey(set, configKeyToolsPrefix+configKeyCron)
 	}
 	if opts.EnableLocalExec {
 		addConfigKey(set, configKeyToolsPrefix+configKeyLocalExec)

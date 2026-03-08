@@ -811,6 +811,166 @@ x
 	require.False(t, ok)
 }
 
+func TestListTool_ReturnsDisabledSkillsWithReasons(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeSkill(t, root, "ok", `---
+name: ok
+description: ok
+---
+
+# ok
+`)
+	writeSkill(t, root, "needsbin", `---
+name: needsbin
+description: needs bin
+metadata:
+  { "openclaw": { "requires": { "bins": ["definitely_missing_bin"] } } }
+---
+
+# needsbin
+`)
+
+	repo, err := NewRepository([]string{root})
+	require.NoError(t, err)
+
+	lt := NewListTool(repo)
+	gotAny, err := lt.Call(context.Background(), []byte(`{}`))
+	require.NoError(t, err)
+
+	got, ok := gotAny.(listOutput)
+	require.True(t, ok)
+	require.Equal(t, 2, got.Total)
+	require.Equal(t, 1, got.Enabled)
+	require.Equal(t, 1, got.Disabled)
+
+	byName := map[string]skillEntry{}
+	for _, s := range got.Skills {
+		byName[s.Name] = s
+	}
+	require.True(t, byName["ok"].Enabled)
+	require.False(t, byName["needsbin"].Enabled)
+	require.Contains(t, byName["needsbin"].Reason, "missing bins")
+}
+
+func TestListTool_Declaration(t *testing.T) {
+	t.Parallel()
+
+	lt := NewListTool(nil)
+	decl := lt.Declaration()
+	require.NotNil(t, decl)
+	require.Equal(t, skillListToolName, decl.Name)
+	require.NotNil(t, decl.InputSchema)
+	require.NotNil(t, decl.InputSchema.Properties["mode"])
+	require.NotNil(t, decl.OutputSchema)
+}
+
+func TestListTool_Call_InvalidArgsFails(t *testing.T) {
+	t.Parallel()
+
+	lt := NewListTool(nil)
+	_, err := lt.Call(context.Background(), []byte("{"))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid args")
+}
+
+func TestListTool_Call_NilRepoReturnsEmpty(t *testing.T) {
+	t.Parallel()
+
+	lt := NewListTool(nil)
+	gotAny, err := lt.Call(context.Background(), []byte(`{}`))
+	require.NoError(t, err)
+
+	got, ok := gotAny.(listOutput)
+	require.True(t, ok)
+	require.Equal(t, 0, got.Total)
+	require.Empty(t, got.Skills)
+}
+
+func TestListTool_ModeFiltering(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeSkill(t, root, "ok", `---
+name: ok
+description: ok
+---
+
+# ok
+`)
+	writeSkill(t, root, "metaonly", `---
+name: metaonly
+description: meta only
+metadata:
+  { "openclaw": { "emoji": "pin", "homepage": "https://example.com" } }
+---
+
+# metaonly
+`)
+	writeSkill(t, root, "needsbin", `---
+name: needsbin
+description: needs bin
+metadata:
+  { "openclaw": { "requires": { "bins": ["definitely_missing_bin"] } } }
+---
+
+# needsbin
+`)
+
+	repo, err := NewRepository([]string{root})
+	require.NoError(t, err)
+
+	lt := NewListTool(repo)
+
+	gotAny, err := lt.Call(
+		context.Background(),
+		[]byte(`{"mode":"enabled"}`),
+	)
+	require.NoError(t, err)
+	enabledOut := gotAny.(listOutput)
+	require.Equal(t, 2, enabledOut.Total)
+	require.Equal(t, 2, enabledOut.Enabled)
+	require.Equal(t, 0, enabledOut.Disabled)
+	for _, s := range enabledOut.Skills {
+		require.True(t, s.Enabled, s.Name)
+	}
+
+	gotAny, err = lt.Call(
+		context.Background(),
+		[]byte(`{"mode":"disabled"}`),
+	)
+	require.NoError(t, err)
+	disabledOut := gotAny.(listOutput)
+	require.Equal(t, 1, disabledOut.Total)
+	require.Equal(t, 0, disabledOut.Enabled)
+	require.Equal(t, 1, disabledOut.Disabled)
+	require.Len(t, disabledOut.Skills, 1)
+	require.Equal(t, "needsbin", disabledOut.Skills[0].Name)
+	require.False(t, disabledOut.Skills[0].Enabled)
+
+	gotAny, err = lt.Call(
+		context.Background(),
+		[]byte(`{"mode":"unknown"}`),
+	)
+	require.NoError(t, err)
+	allOut := gotAny.(listOutput)
+	require.Equal(t, 3, allOut.Total)
+	require.Equal(t, 2, allOut.Enabled)
+	require.Equal(t, 1, allOut.Disabled)
+
+	var metaonly skillEntry
+	for _, s := range allOut.Skills {
+		if s.Name == "metaonly" {
+			metaonly = s
+		}
+	}
+	require.NotEmpty(t, metaonly.Name)
+	require.Equal(t, "pin", metaonly.Emoji)
+	require.Equal(t, "https://example.com", metaonly.Homepage)
+	require.Nil(t, metaonly.Requires)
+}
+
 func TestBundledSkills_ParseFrontMatterAndMetadata(t *testing.T) {
 	_, file, _, ok := runtime.Caller(0)
 	require.True(t, ok)

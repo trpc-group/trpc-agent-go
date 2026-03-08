@@ -11,6 +11,7 @@ package app
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -20,6 +21,18 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 )
+
+func TestMain(m *testing.M) {
+	home, err := os.MkdirTemp("", "openclaw-test-home-*")
+	if err != nil {
+		panic(err)
+	}
+	_ = os.Setenv("HOME", home)
+	_ = os.Unsetenv(openClawConfigEnvName)
+	code := m.Run()
+	_ = os.RemoveAll(home)
+	os.Exit(code)
+}
 
 func TestParseRunOptions_UsesEnvConfig(t *testing.T) {
 	cfgPath := writeTempConfig(t, `
@@ -36,6 +49,52 @@ gateway:
 	require.Equal(t, "demo", opts.AppName)
 	require.Equal(t, ":9999", opts.HTTPAddr)
 	require.Equal(t, "u1,u2", opts.AllowUsers)
+}
+
+func TestParseRunOptions_UsesDefaultConfigPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfgPath := filepath.Join(
+		home,
+		defaultConfigRootDir,
+		defaultConfigAppDir,
+		defaultConfigFile,
+	)
+	err := os.MkdirAll(filepath.Dir(cfgPath), 0o755)
+	require.NoError(t, err)
+	err = os.WriteFile(cfgPath, []byte("app_name: demo\n"), 0o644)
+	require.NoError(t, err)
+
+	opts, err := parseRunOptions(nil)
+	require.NoError(t, err)
+	require.Equal(t, "demo", opts.AppName)
+}
+
+func TestApplyOpenClawToolDefaults_LLMEnablesTools(t *testing.T) {
+	t.Parallel()
+
+	opts := runOptions{}
+	applyOpenClawToolDefaults(agentTypeLLM, &opts)
+	require.True(t, opts.EnableOpenClawTools)
+}
+
+func TestApplyOpenClawToolDefaults_RespectsExplicitFalse(t *testing.T) {
+	t.Parallel()
+
+	opts := runOptions{
+		enableOpenClawToolsExplicit: true,
+	}
+	applyOpenClawToolDefaults(agentTypeLLM, &opts)
+	require.False(t, opts.EnableOpenClawTools)
+}
+
+func TestApplyOpenClawToolDefaults_ClaudeCodeStaysOff(t *testing.T) {
+	t.Parallel()
+
+	opts := runOptions{}
+	applyOpenClawToolDefaults(agentTypeClaudeCode, &opts)
+	require.False(t, opts.EnableOpenClawTools)
 }
 
 func TestParseRunOptions_FlagOverridesConfig(t *testing.T) {
@@ -147,6 +206,87 @@ memory:
 	require.Equal(t, 1, exitErr.Code)
 }
 
+func TestLoadConfigFile_ExpandsEnvPlaceholders(t *testing.T) {
+	t.Setenv("TEST_OPENCLAW_APP", "demo")
+
+	cfgPath := writeTempConfig(t, `
+app_name: ${TEST_OPENCLAW_APP}
+`)
+
+	cfg, err := loadConfigFile(cfgPath)
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	require.NotNil(t, cfg.AppName)
+	require.Equal(t, "demo", *cfg.AppName)
+}
+
+func TestLoadConfigFile_MissingEnvPlaceholderFails(t *testing.T) {
+	cfgPath := writeTempConfig(t, `
+app_name: ${TEST_OPENCLAW_MISSING}
+`)
+
+	_, err := loadConfigFile(cfgPath)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "TEST_OPENCLAW_MISSING")
+}
+
+func TestExpandEnvPlaceholders_TrimsName(t *testing.T) {
+	t.Setenv("OPENCLAW_ENV_TEST", "demo")
+
+	in := []byte("app_name: ${ OPENCLAW_ENV_TEST }\n")
+	out, err := expandEnvPlaceholders(in)
+	require.NoError(t, err)
+	require.Equal(t, "app_name: demo\n", string(out))
+}
+
+func TestExpandEnvPlaceholders_InvalidNameIsPreserved(t *testing.T) {
+	in := []byte("app_name: ${1BAD}\n")
+	out, err := expandEnvPlaceholders(in)
+	require.NoError(t, err)
+	require.Equal(t, in, out)
+}
+
+func TestExpandEnvPlaceholders_MissingBraceIsPreserved(t *testing.T) {
+	in := []byte("app_name: ${OPENCLAW_ENV_TEST\n")
+	out, err := expandEnvPlaceholders(in)
+	require.NoError(t, err)
+	require.Equal(t, in, out)
+}
+
+func TestExpandEnvPlaceholders_ReplacesMultiple(t *testing.T) {
+	t.Setenv("OPENCLAW_ENV_A", "A")
+	t.Setenv("OPENCLAW_ENV_B", "B")
+
+	in := []byte("a: ${OPENCLAW_ENV_A} b: ${OPENCLAW_ENV_B}\n")
+	out, err := expandEnvPlaceholders(in)
+	require.NoError(t, err)
+	require.Equal(t, "a: A b: B\n", string(out))
+}
+
+func TestIsValidEnvName(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{in: "", want: false},
+		{in: "A", want: true},
+		{in: "_A", want: true},
+		{in: "A1", want: true},
+		{in: "1A", want: false},
+		{in: "A-B", want: false},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.in, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tc.want, isValidEnvName(tc.in))
+		})
+	}
+}
+
 func TestParseRunOptions_RalphLoopInvalidDurationFails(t *testing.T) {
 	t.Parallel()
 
@@ -234,6 +374,11 @@ skills:
   extra_dirs: ["/extra1","/extra2"]
   debug: true
   allowBundled: ["gh-issues","notion"]
+  load_mode: "session"
+  max_loaded_skills: 3
+  loaded_content_in_tool_results: false
+  skip_fallback_on_session_summary: false
+  tooling_guidance: "Prefer runtime help over stale docs."
   entries:
     gh-issues:
       enabled: false
@@ -365,6 +510,16 @@ memory:
 	require.Equal(t, "/extra1,/extra2", opts.SkillsExtraDir)
 	require.True(t, opts.SkillsDebug)
 	require.Equal(t, "gh-issues,notion", opts.SkillsAllowBundled)
+	require.Equal(t, "session", opts.SkillsLoadMode)
+	require.Equal(t, 3, opts.SkillsMaxLoaded)
+	require.False(t, opts.SkillsToolResults)
+	require.False(t, opts.SkillsSkipFallback)
+	require.NotNil(t, opts.SkillsToolingGuide)
+	require.Equal(
+		t,
+		"Prefer runtime help over stale docs.",
+		*opts.SkillsToolingGuide,
+	)
 
 	require.Len(t, opts.SkillConfigs, 2)
 	require.NotNil(t, opts.SkillConfigs["gh-issues"].Enabled)
@@ -505,6 +660,96 @@ skills:
 	})
 	require.NoError(t, err)
 	require.Equal(t, "b,c", opts.SkillsAllowBundled)
+}
+
+func TestParseRunOptions_DebugRecorder_ConfigApplied(t *testing.T) {
+	t.Parallel()
+
+	outDir := t.TempDir()
+	cfgPath := writeTempConfig(t, fmt.Sprintf(`
+debug_recorder:
+  enabled: true
+  dir: %q
+  mode: safe
+`, outDir))
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.True(t, opts.DebugRecorderEnabled)
+	require.Equal(t, outDir, opts.DebugRecorderDir)
+	require.Equal(t, "safe", opts.DebugRecorderMode)
+}
+
+func TestParseRunOptions_SkillsDefaults(t *testing.T) {
+	t.Parallel()
+
+	opts, err := parseRunOptions(nil)
+	require.NoError(t, err)
+	require.Equal(t, defaultSkillsLoadMode, opts.SkillsLoadMode)
+	require.True(t, opts.SkillsToolResults)
+	require.True(t, opts.SkillsSkipFallback)
+	require.Zero(t, opts.SkillsMaxLoaded)
+	require.Nil(t, opts.SkillsToolingGuide)
+}
+
+func TestParseRunOptions_SkillsLoadMode_InvalidFails(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseRunOptions([]string{
+		"-skills-load-mode", "bad",
+	})
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 2, exitErr.Code)
+}
+
+func TestParseRunOptions_AdminDefaults(t *testing.T) {
+	t.Parallel()
+
+	opts, err := parseRunOptions(nil)
+	require.NoError(t, err)
+	require.True(t, opts.AdminEnabled)
+	require.Equal(t, defaultAdminAddr, opts.AdminAddr)
+	require.True(t, opts.AdminAutoPort)
+}
+
+func TestParseRunOptions_AdminConfigApplied(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+admin:
+  enabled: true
+  addr: "127.0.0.1:21000"
+  auto_port: false
+`)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.True(t, opts.AdminEnabled)
+	require.Equal(t, "127.0.0.1:21000", opts.AdminAddr)
+	require.False(t, opts.AdminAutoPort)
+}
+
+func TestParseRunOptions_AdminFlagOverridesConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+admin:
+  enabled: true
+  addr: "127.0.0.1:21000"
+  auto_port: false
+`)
+
+	opts, err := parseRunOptions([]string{
+		"-config", cfgPath,
+		"-admin-addr", "127.0.0.1:22000",
+		"-admin-auto-port=true",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "127.0.0.1:22000", opts.AdminAddr)
+	require.True(t, opts.AdminAutoPort)
 }
 
 func writeTempConfig(t *testing.T, body string) string {

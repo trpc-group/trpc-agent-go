@@ -35,30 +35,35 @@ Always include a city, region, or airport code in weather queries.
 
 ## Commands
 
+### Units
+
+- **Metric (recommended):** add `&m` (°C, km/h)
+- **US:** add `&u` (°F, mph)
+
 ### Current Weather
 
 ```bash
 # One-line summary
-curl "wttr.in/London?format=3"
+curl "wttr.in/London?format=3&m"
 
 # Detailed current conditions
-curl "wttr.in/London?0"
+curl "wttr.in/London?0&m"
 
 # Specific city
-curl "wttr.in/New+York?format=3"
+curl "wttr.in/New+York?format=3&u"
 ```
 
 ### Forecasts
 
 ```bash
 # 3-day forecast
-curl "wttr.in/London"
+curl "wttr.in/London?m"
 
 # Week forecast
-curl "wttr.in/London?format=v2"
+curl "wttr.in/London?format=v2&m"
 
 # Specific day (0=today, 1=tomorrow, 2=day after)
-curl "wttr.in/London?1"
+curl "wttr.in/London?1&m"
 ```
 
 ### Format Options
@@ -89,13 +94,13 @@ curl "wttr.in/London.png"
 **"What's the weather?"**
 
 ```bash
-curl -s "wttr.in/London?format=%l:+%c+%t+(feels+like+%f),+%w+wind,+%h+humidity"
+curl -s "wttr.in/London?format=%l:+%c+%t+(feels+like+%f),+%w+wind,+%h+humidity&m"
 ```
 
 **"Will it rain?"**
 
 ```bash
-curl -s "wttr.in/London?format=%l:+%c+%p"
+curl -s "wttr.in/London?format=%l:+%c+%p&m"
 ```
 
 **"Weekend forecast"**

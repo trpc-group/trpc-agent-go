@@ -13,6 +13,8 @@ package telegram
 import (
 	"strings"
 	"sync"
+
+	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
 )
 
 const (
@@ -20,25 +22,102 @@ const (
 
 	commandHelp   = "help"
 	commandCancel = "cancel"
+
+	commandReset     = "reset"
+	commandNew       = "new"
+	commandForget    = "forget"
+	commandJobs      = "jobs"
+	commandJobsClear = "jobs_clear"
+	commandPersona   = "persona"
+	commandPersonas  = "personas"
 )
 
-const helpMessage = `Commands:
-/help   Show help
-/cancel Cancel the current run`
+const (
+	commandHelpDesc      = "Show help"
+	commandCancelDesc    = "Cancel the current run"
+	commandResetDesc     = "Start a new DM session"
+	commandNewDesc       = "Alias of /reset"
+	commandForgetDesc    = "Delete your saved data (DM only)"
+	commandJobsDesc      = "List scheduled jobs for this chat"
+	commandJobsClearDesc = "Remove scheduled jobs for this chat"
+	commandPersonaDesc   = "Show or set the active persona preset"
+	commandPersonasDesc  = "List available persona presets"
+)
+
+const helpMessage = "Commands:\n" +
+	"/help   " + commandHelpDesc + "\n" +
+	"/cancel " + commandCancelDesc + "\n" +
+	"/reset  " + commandResetDesc + "\n" +
+	"/new    " + commandNewDesc + "\n" +
+	"/forget " + commandForgetDesc + "\n" +
+	"/jobs   " + commandJobsDesc + "\n" +
+	"/jobs_clear " + commandJobsClearDesc + "\n" +
+	"/persona " + commandPersonaDesc + "\n" +
+	"/personas " + commandPersonasDesc
+
+func defaultBotCommands() []tgapi.BotCommand {
+	return []tgapi.BotCommand{
+		{
+			Command:     commandHelp,
+			Description: commandHelpDesc,
+		},
+		{
+			Command:     commandCancel,
+			Description: commandCancelDesc,
+		},
+		{
+			Command:     commandReset,
+			Description: commandResetDesc,
+		},
+		{
+			Command:     commandNew,
+			Description: commandNewDesc,
+		},
+		{
+			Command:     commandForget,
+			Description: commandForgetDesc,
+		},
+		{
+			Command:     commandJobs,
+			Description: commandJobsDesc,
+		},
+		{
+			Command:     commandJobsClear,
+			Description: commandJobsClearDesc,
+		},
+		{
+			Command:     commandPersona,
+			Description: commandPersonaDesc,
+		},
+		{
+			Command:     commandPersonas,
+			Description: commandPersonasDesc,
+		},
+	}
+}
+
+type commandCall struct {
+	Name string
+	Args string
+}
 
 func parseCommand(text string, bot BotInfo) string {
+	return parseCommandCall(text, bot).Name
+}
+
+func parseCommandCall(text string, bot BotInfo) commandCall {
 	trimmed := strings.TrimSpace(text)
 	if !strings.HasPrefix(trimmed, commandPrefix) {
-		return ""
+		return commandCall{}
 	}
 	fields := strings.Fields(trimmed)
 	if len(fields) == 0 {
-		return ""
+		return commandCall{}
 	}
 
 	token := strings.TrimPrefix(fields[0], commandPrefix)
 	if token == "" {
-		return ""
+		return commandCall{}
 	}
 
 	cmd := token
@@ -49,17 +128,23 @@ func parseCommand(text string, bot BotInfo) string {
 	}
 	cmd = strings.ToLower(strings.TrimSpace(cmd))
 	if cmd == "" {
-		return ""
+		return commandCall{}
 	}
 
 	if target == "" || strings.TrimSpace(bot.Username) == "" {
-		return cmd
+		return commandCall{
+			Name: cmd,
+			Args: strings.TrimSpace(strings.TrimPrefix(trimmed, fields[0])),
+		}
 	}
 
 	if strings.EqualFold(target, bot.Username) {
-		return cmd
+		return commandCall{
+			Name: cmd,
+			Args: strings.TrimSpace(strings.TrimPrefix(trimmed, fields[0])),
+		}
 	}
-	return ""
+	return commandCall{}
 }
 
 type inflightRequests struct {

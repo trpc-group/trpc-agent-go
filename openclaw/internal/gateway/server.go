@@ -34,6 +34,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
@@ -60,7 +63,14 @@ const (
 	defaultMaxBodyBytes int64 = 1 << 20
 
 	queryRequestID = "request_id"
+
+	errEmptyReply = "gateway: empty reply"
+
+	emptyReplyFallbackText = "I didn't produce a visible " +
+		"reply. Please try again."
 )
+
+var errEmptyReplyValue = errors.New(errEmptyReply)
 
 const (
 	errTypeInvalidRequest = "invalid_request"
@@ -126,6 +136,11 @@ type Server struct {
 	lanes *laneLocker
 
 	handler http.Handler
+
+	recorder         *debugrecorder.Recorder
+	uploads          *uploads.Store
+	audioTranscriber audioTranscriber
+	personaStore     *persona.Store
 }
 
 // New creates a gateway server with the provided runner.
@@ -177,23 +192,31 @@ func New(r runner.Runner, opts ...Option) (*Server, error) {
 			policy: policy,
 		}
 	}
+	audioTranscriber := options.audioTranscriber
+	if audioTranscriber == nil {
+		audioTranscriber = newDefaultAudioTranscriber()
+	}
 
 	s := &Server{
-		basePath:        options.basePath,
-		messagesPath:    messagesPath,
-		statusPath:      statusPath,
-		cancelPath:      cancelPath,
-		healthPath:      options.healthPath,
-		maxBodyBytes:    options.maxBodyBytes,
-		maxPartBytes:    options.maxPartBytes,
-		partFetcher:     fetcher,
-		runner:          r,
-		managed:         managed,
-		sessionIDFunc:   sessionIDFunc,
-		allowUsers:      options.allowUsers,
-		requireMention:  options.requireMention,
-		mentionPatterns: options.mentionPatterns,
-		lanes:           newLaneLocker(),
+		basePath:         options.basePath,
+		messagesPath:     messagesPath,
+		statusPath:       statusPath,
+		cancelPath:       cancelPath,
+		healthPath:       options.healthPath,
+		maxBodyBytes:     options.maxBodyBytes,
+		maxPartBytes:     options.maxPartBytes,
+		partFetcher:      fetcher,
+		runner:           r,
+		managed:          managed,
+		sessionIDFunc:    sessionIDFunc,
+		allowUsers:       options.allowUsers,
+		requireMention:   options.requireMention,
+		mentionPatterns:  options.mentionPatterns,
+		lanes:            newLaneLocker(),
+		recorder:         options.recorder,
+		uploads:          options.uploads,
+		audioTranscriber: audioTranscriber,
+		personaStore:     options.personaStore,
 	}
 
 	mux := http.NewServeMux()
@@ -433,26 +456,60 @@ func (s *Server) runLocked(
 	requestID string,
 	msg model.Message,
 ) (string, string, error) {
+	trace := debugrecorder.TraceFromContext(ctx)
+
 	runOpts := make([]agent.RunOption, 0, 1)
 	if requestID != "" {
 		runOpts = append(runOpts, agent.WithRequestID(requestID))
 	}
+	if messages := s.injectedContextMessages(
+		userID,
+		sessionID,
+	); len(messages) > 0 {
+		runOpts = append(
+			runOpts,
+			agent.WithInjectedContextMessages(messages),
+		)
+	}
+
+	if trace != nil {
+		_ = trace.Record(
+			debugrecorder.KindGatewayRun,
+			map[string]any{
+				"user_id":    userID,
+				"session_id": sessionID,
+				"request_id": requestID,
+			},
+		)
+	}
 
 	events, err := s.runner.Run(ctx, userID, sessionID, msg, runOpts...)
 	if err != nil {
+		if trace != nil {
+			_ = trace.RecordError(err)
+		}
 		return "", "", err
 	}
 
 	result := newReplyAccumulator()
 	for evt := range events {
+		if trace != nil && evt != nil {
+			_ = trace.Record(debugrecorder.KindRunnerEvent, evt)
+		}
 		result.Consume(evt)
 	}
 
 	if result.Error != nil {
+		if trace != nil {
+			_ = trace.RecordError(result.Error)
+		}
 		return "", result.RequestID, result.Error
 	}
 	if result.Text == "" {
-		return "", result.RequestID, errors.New("gateway: empty reply")
+		if trace != nil {
+			_ = trace.RecordError(errEmptyReplyValue)
+		}
+		return "", result.RequestID, errEmptyReplyValue
 	}
 	return result.Text, result.RequestID, nil
 }

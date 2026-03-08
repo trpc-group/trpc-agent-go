@@ -113,6 +113,334 @@ func TestPoller_BootstrapAndHandleMessage(t *testing.T) {
 	require.Equal(t, 3*time.Second, client.timeouts[2])
 }
 
+func TestPoller_HandlesCaptionMessage(t *testing.T) {
+	t.Parallel()
+
+	client := &stubUpdatesClient{
+		results: [][]Update{
+			{
+				{
+					UpdateID: 1,
+					Message: &Message{
+						MessageID: 1,
+						From:      &User{ID: 1},
+						Chat:      &Chat{ID: 2, Type: chatTypePrivate},
+						Caption:   "cap",
+					},
+				},
+			},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	handled := make(chan struct{}, 1)
+	poller, err := NewPoller(
+		client,
+		WithStartFromLatest(false),
+		WithPollTimeout(0),
+		WithMessageHandler(func(_ context.Context, msg Message) error {
+			require.Equal(t, "cap", msg.Caption)
+			handled <- struct{}{}
+			cancel()
+			return nil
+		}),
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, poller.Run(ctx))
+
+	select {
+	case <-handled:
+	default:
+		t.Fatal("expected handler to be called")
+	}
+}
+
+func TestPoller_HandlesPhotoMessage(t *testing.T) {
+	t.Parallel()
+
+	client := &stubUpdatesClient{
+		results: [][]Update{
+			{
+				{
+					UpdateID: 1,
+					Message: &Message{
+						MessageID: 1,
+						From:      &User{ID: 1},
+						Chat:      &Chat{ID: 2, Type: chatTypePrivate},
+						Photo: []PhotoSize{
+							{FileID: "p1"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	handled := make(chan struct{}, 1)
+	poller, err := NewPoller(
+		client,
+		WithStartFromLatest(false),
+		WithPollTimeout(0),
+		WithMessageHandler(func(_ context.Context, msg Message) error {
+			require.Len(t, msg.Photo, 1)
+			handled <- struct{}{}
+			cancel()
+			return nil
+		}),
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, poller.Run(ctx))
+
+	select {
+	case <-handled:
+	default:
+		t.Fatal("expected handler to be called")
+	}
+}
+
+func TestPoller_HandlesCallbackQuery(t *testing.T) {
+	t.Parallel()
+
+	client := &stubUpdatesClient{
+		results: [][]Update{
+			{
+				{
+					UpdateID: 1,
+					CallbackQuery: &CallbackQuery{
+						ID:   "cb-1",
+						From: &User{ID: 1},
+						Message: &Message{
+							MessageID: 1,
+							Chat: &Chat{
+								ID:   2,
+								Type: chatTypePrivate,
+							},
+						},
+						Data: "persona:set:coach",
+					},
+				},
+			},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	handled := make(chan struct{}, 1)
+	poller, err := NewPoller(
+		client,
+		WithStartFromLatest(false),
+		WithPollTimeout(0),
+		WithMessageHandler(func(context.Context, Message) error {
+			t.Fatal("message handler should not run")
+			return nil
+		}),
+		WithCallbackQueryHandler(
+			func(_ context.Context, q CallbackQuery) error {
+				require.Equal(t, "cb-1", q.ID)
+				handled <- struct{}{}
+				cancel()
+				return nil
+			},
+		),
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, poller.Run(ctx))
+
+	select {
+	case <-handled:
+	default:
+		t.Fatal("expected callback query handler to be called")
+	}
+}
+
+func TestPoller_HandlesMediaMessages(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		check func(t *testing.T, msg Message)
+		msg   *Message
+	}{
+		{
+			name: "document",
+			msg: &Message{
+				MessageID: 1,
+				From:      &User{ID: 1},
+				Chat:      &Chat{ID: 2, Type: chatTypePrivate},
+				Document:  &Document{FileID: "d1"},
+			},
+			check: func(t *testing.T, msg Message) {
+				require.NotNil(t, msg.Document)
+			},
+		},
+		{
+			name: "audio",
+			msg: &Message{
+				MessageID: 1,
+				From:      &User{ID: 1},
+				Chat:      &Chat{ID: 2, Type: chatTypePrivate},
+				Audio:     &Audio{FileID: "a1"},
+			},
+			check: func(t *testing.T, msg Message) {
+				require.NotNil(t, msg.Audio)
+			},
+		},
+		{
+			name: "voice",
+			msg: &Message{
+				MessageID: 1,
+				From:      &User{ID: 1},
+				Chat:      &Chat{ID: 2, Type: chatTypePrivate},
+				Voice:     &Voice{FileID: "v1"},
+			},
+			check: func(t *testing.T, msg Message) {
+				require.NotNil(t, msg.Voice)
+			},
+		},
+		{
+			name: "video",
+			msg: &Message{
+				MessageID: 1,
+				From:      &User{ID: 1},
+				Chat:      &Chat{ID: 2, Type: chatTypePrivate},
+				Video:     &Video{FileID: "vid1"},
+			},
+			check: func(t *testing.T, msg Message) {
+				require.NotNil(t, msg.Video)
+			},
+		},
+		{
+			name: "animation",
+			msg: &Message{
+				MessageID: 1,
+				From:      &User{ID: 1},
+				Chat:      &Chat{ID: 2, Type: chatTypePrivate},
+				Animation: &Animation{FileID: "anim1"},
+			},
+			check: func(t *testing.T, msg Message) {
+				require.NotNil(t, msg.Animation)
+			},
+		},
+		{
+			name: "video_note",
+			msg: &Message{
+				MessageID: 1,
+				From:      &User{ID: 1},
+				Chat:      &Chat{ID: 2, Type: chatTypePrivate},
+				VideoNote: &VideoNote{FileID: "vn1"},
+			},
+			check: func(t *testing.T, msg Message) {
+				require.NotNil(t, msg.VideoNote)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			client := &stubUpdatesClient{
+				results: [][]Update{
+					{
+						{UpdateID: 1, Message: tt.msg},
+					},
+				},
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+
+			handled := make(chan struct{}, 1)
+			poller, err := NewPoller(
+				client,
+				WithStartFromLatest(false),
+				WithPollTimeout(0),
+				WithMessageHandler(func(
+					_ context.Context,
+					msg Message,
+				) error {
+					tt.check(t, msg)
+					handled <- struct{}{}
+					cancel()
+					return nil
+				}),
+			)
+			require.NoError(t, err)
+
+			require.NoError(t, poller.Run(ctx))
+
+			select {
+			case <-handled:
+			default:
+				t.Fatal("expected handler to be called")
+			}
+		})
+	}
+}
+
+func TestPoller_HandlesMyChatMember(t *testing.T) {
+	t.Parallel()
+
+	client := &stubUpdatesClient{
+		results: [][]Update{
+			{
+				{
+					UpdateID: 1,
+					MyChatMember: &ChatMemberEvent{
+						Chat: &Chat{
+							ID:   2,
+							Type: chatTypePrivate,
+						},
+						NewChatMember: &ChatMember{
+							Status: "kicked",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	handled := make(chan struct{}, 1)
+	poller, err := NewPoller(
+		client,
+		WithStartFromLatest(false),
+		WithPollTimeout(0),
+		WithMessageHandler(func(_ context.Context, _ Message) error {
+			t.Fatal("unexpected message handler call")
+			return nil
+		}),
+		WithMyChatMemberHandler(func(_ context.Context, ev ChatMemberEvent) error {
+			require.NotNil(t, ev.Chat)
+			require.Equal(t, int64(2), ev.Chat.ID)
+			handled <- struct{}{}
+			cancel()
+			return nil
+		}),
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, poller.Run(ctx))
+
+	select {
+	case <-handled:
+	default:
+		t.Fatal("expected handler to be called")
+	}
+}
+
 type stubOffsetStore struct {
 	mu         sync.Mutex
 	readOffset int

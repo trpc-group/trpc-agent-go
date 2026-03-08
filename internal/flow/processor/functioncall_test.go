@@ -2408,9 +2408,10 @@ func TestProcessStreamChunk_ForwardsEvent(t *testing.T) {
 	ev := event.New("i", "a")
 	ch := make(chan *event.Event, 1)
 	var contents []any
+	var finalResult any
 	err := f.processStreamChunk(ctx, inv,
 		model.ToolCall{ID: "x"},
-		tool.StreamChunk{Content: ev}, ch, &contents,
+		tool.StreamChunk{Content: ev}, ch, &contents, &finalResult,
 	)
 	require.NoError(t, err)
 	select {
@@ -2419,6 +2420,7 @@ func TestProcessStreamChunk_ForwardsEvent(t *testing.T) {
 	default:
 		t.Fatal("expected an event forwarded")
 	}
+	require.Nil(t, finalResult)
 }
 
 func TestExecuteToolCall_MarshalErrorIgnored(t *testing.T) {
@@ -2893,6 +2895,58 @@ func TestExecuteStreamableTool_ChunkStructJSON(t *testing.T) {
 	require.Equal(t, `{"a":1}{"b":"x"}`, res.(string))
 }
 
+type finalResultStreamTool struct{ name string }
+
+func (s *finalResultStreamTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: s.name}
+}
+
+func (s *finalResultStreamTool) StreamableCall(
+	ctx context.Context,
+	_ []byte,
+) (*tool.StreamReader, error) {
+	st := tool.NewStream(4)
+	go func() {
+		defer st.Writer.Close()
+		st.Writer.Send(tool.StreamChunk{Content: "line-1"}, nil)
+		st.Writer.Send(tool.StreamChunk{
+			Content: tool.FinalResultChunk{
+				Result: map[string]any{"status": "ok"},
+			},
+		}, nil)
+	}()
+	return st.Reader, nil
+}
+
+func TestExecuteStreamableTool_PreservesFinalResultChunk(t *testing.T) {
+	f := NewFunctionCallResponseProcessor(false, nil)
+	ctx := context.Background()
+	inv := &agent.Invocation{
+		InvocationID: "inv-final-result",
+		AgentName:    "tester",
+		Branch:       "br",
+		Model:        &mockModel{},
+	}
+	tc := model.ToolCall{
+		ID:       "c1",
+		Function: model.FunctionDefinitionParam{Name: "final"},
+	}
+	st := &finalResultStreamTool{name: "final"}
+	ch := make(chan *event.Event, 4)
+	res, err := f.executeStreamableTool(ctx, inv, tc, st, ch)
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{"status": "ok"}, res)
+
+	select {
+	case evt := <-ch:
+		require.NotNil(t, evt)
+		require.True(t, evt.IsPartial)
+		require.Equal(t, "line-1", evt.Choices[0].Delta.Content)
+	default:
+		t.Fatalf("expected a partial event from streamed output")
+	}
+}
+
 // stream tool forwarding inner *event.Event
 type innerEventStreamTool struct{ name string }
 
@@ -3175,14 +3229,22 @@ func TestProcessStreamChunk_EmptyText_NoEvent(t *testing.T) {
 	inv := &agent.Invocation{Model: &mockModel{}}
 	tc := model.ToolCall{ID: "x", Function: model.FunctionDefinitionParam{Name: "t"}}
 	out := make([]any, 0)
+	var finalResult any
 	ch := make(chan *event.Event, 1)
 	// Empty string chunk should be ignored.
 	err := f.processStreamChunk(
-		ctx, inv, tc, tool.StreamChunk{Content: ""}, ch, &out,
+		ctx,
+		inv,
+		tc,
+		tool.StreamChunk{Content: ""},
+		ch,
+		&out,
+		&finalResult,
 	)
 	require.NoError(t, err)
 	require.Empty(t, out)
 	require.Len(t, ch, 0)
+	require.Nil(t, finalResult)
 }
 
 func TestExecuteToolWithCallbacks_BeforeCustomResult(t *testing.T) {

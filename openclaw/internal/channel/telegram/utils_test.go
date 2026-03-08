@@ -12,6 +12,7 @@ package telegram
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -129,18 +130,18 @@ func TestBuildRequestID(t *testing.T) {
 	)
 }
 
-func TestBuildSessionID(t *testing.T) {
+func TestBuildLaneKey(t *testing.T) {
 	t.Parallel()
 
 	require.Equal(
 		t,
 		"telegram:dm:u1",
-		buildSessionID("u1", ""),
+		buildLaneKey("u1", ""),
 	)
 	require.Equal(
 		t,
 		"telegram:thread:10:topic:2",
-		buildSessionID("u1", "10:topic:2"),
+		buildLaneKey("u1", "10:topic:2"),
 	)
 }
 
@@ -163,6 +164,17 @@ func TestParseGroupPolicy_DefaultAndInvalid(t *testing.T) {
 	require.Equal(t, defaultGroupPolicy, got)
 
 	_, err = parseGroupPolicy("nope")
+	require.Error(t, err)
+}
+
+func TestParseDMBlockCleanup_DefaultAndInvalid(t *testing.T) {
+	t.Parallel()
+
+	got, err := parseDMBlockCleanup("")
+	require.NoError(t, err)
+	require.Equal(t, defaultDMBlockCleanup, got)
+
+	_, err = parseDMBlockCleanup("nope")
 	require.Error(t, err)
 }
 
@@ -250,6 +262,13 @@ func TestParseCommand(t *testing.T) {
 	require.Equal(t, "help", parseCommand(" /help ", BotInfo{}))
 	require.Equal(t, "help", parseCommand("/help@bot", BotInfo{Username: "bot"}))
 	require.Equal(t, "", parseCommand("/help@x", BotInfo{Username: "bot"}))
+
+	call := parseCommandCall(
+		"/persona@bot girlfriend  ",
+		BotInfo{Username: "bot"},
+	)
+	require.Equal(t, commandPersona, call.Name)
+	require.Equal(t, "girlfriend", call.Args)
 }
 
 func TestResolveStateDir_Default(t *testing.T) {
@@ -392,4 +411,115 @@ func TestChannel_HandleMessage_ReplySplit(t *testing.T) {
 	require.Equal(t, 0, second.ReplyToMessageID)
 	require.Len(t, first.Text, maxReplyRunes)
 	require.Len(t, second.Text, 1)
+}
+
+func TestChannel_CancelInflight_CancelErrorDoesNotClear(t *testing.T) {
+	t.Parallel()
+
+	gw := &stubGateway{
+		cancelOK:  true,
+		cancelErr: errors.New("boom"),
+	}
+	ch := &Channel{
+		gw:       gw,
+		inflight: newInflightRequests(),
+	}
+	const (
+		laneKey   = "lane"
+		requestID = "req-1"
+	)
+	ch.inflight.Set(laneKey, requestID)
+
+	canceled := ch.cancelInflight(context.Background(), laneKey)
+	require.False(t, canceled)
+	require.Equal(t, requestID, ch.inflight.Get(laneKey))
+}
+
+func TestChannel_HandleResetCommand_NoDMSessionsRepliesFailed(t *testing.T) {
+	t.Parallel()
+
+	bot := &stubBot{}
+	ch := &Channel{
+		bot:      bot,
+		gw:       &stubGateway{},
+		inflight: newInflightRequests(),
+	}
+
+	err := ch.handleResetCommand(
+		context.Background(),
+		1,
+		0,
+		2,
+		"lane",
+		"u1",
+	)
+	require.NoError(t, err)
+
+	bot.mu.Lock()
+	require.Len(t, bot.sent, 1)
+	require.Equal(t, resetFailedMessage, bot.sent[0].Text)
+	bot.mu.Unlock()
+}
+
+func TestChannel_HandleResetCommand_RotateErrorRepliesFailed(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path, err := dmSessionStorePath(dir, BotInfo{Username: "bot"})
+	require.NoError(t, err)
+	store, err := newDMSessionStore(path)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	bot := &stubBot{}
+	ch := &Channel{
+		bot:        bot,
+		gw:         &stubGateway{},
+		inflight:   newInflightRequests(),
+		dmSessions: store,
+	}
+
+	err = ch.handleResetCommand(ctx, 1, 0, 2, "lane", "u1")
+	require.NoError(t, err)
+
+	bot.mu.Lock()
+	require.Len(t, bot.sent, 1)
+	require.Equal(t, resetFailedMessage, bot.sent[0].Text)
+	bot.mu.Unlock()
+}
+
+func TestChannel_HandleForgetCommand_SessionErrorRepliesOK(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path, err := dmSessionStorePath(dir, BotInfo{Username: "bot"})
+	require.NoError(t, err)
+	store, err := newDMSessionStore(path)
+	require.NoError(t, err)
+
+	gw := &stubGatewayWithForget{stubGateway: &stubGateway{}}
+	bot := &stubBot{}
+	ch := &Channel{
+		bot:        bot,
+		gw:         gw,
+		inflight:   newInflightRequests(),
+		dmSessions: store,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err = ch.handleForgetCommand(ctx, 1, 0, 2, "lane", "u1")
+	require.NoError(t, err)
+
+	gw.mu.Lock()
+	require.Equal(t, []string{"u1"}, gw.forgetCalls)
+	gw.mu.Unlock()
+
+	bot.mu.Lock()
+	require.Len(t, bot.sent, 1)
+	require.Equal(t, forgetOKMessage, bot.sent[0].Text)
+	bot.mu.Unlock()
 }

@@ -12,6 +12,7 @@ package telegram
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -20,8 +21,9 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
 
-	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwclient"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
 )
 
@@ -39,8 +41,45 @@ const (
 	processingMessage = "Processing..."
 
 	progressInterval = 2 * time.Second
-	progressMaxEdits = 30
+
+	progressEditIntervalFast     = progressInterval
+	progressEditIntervalMedium   = 10 * time.Second
+	progressEditIntervalSlow     = 30 * time.Second
+	progressEditIntervalVerySlow = time.Minute
+
+	progressEditAfterMedium   = time.Minute
+	progressEditAfterSlow     = 10 * time.Minute
+	progressEditAfterVerySlow = 30 * time.Minute
 )
+
+type telegramMessageSummary struct {
+	ChatID          int64  `json:"chat_id"`
+	MessageThreadID int    `json:"message_thread_id,omitempty"`
+	ReplyTo         int    `json:"reply_to,omitempty"`
+	IncomingReplyTo int    `json:"incoming_reply_to,omitempty"`
+	FromID          string `json:"from_id,omitempty"`
+	Thread          string `json:"thread,omitempty"`
+	RequestID       string `json:"request_id,omitempty"`
+	SessionID       string `json:"session_id,omitempty"`
+	Text            string `json:"text,omitempty"`
+	Caption         string `json:"caption,omitempty"`
+
+	HasPhoto     bool `json:"has_photo,omitempty"`
+	HasDocument  bool `json:"has_document,omitempty"`
+	HasAudio     bool `json:"has_audio,omitempty"`
+	HasVoice     bool `json:"has_voice,omitempty"`
+	HasVideo     bool `json:"has_video,omitempty"`
+	HasAnimation bool `json:"has_animation,omitempty"`
+	HasVideoNote bool `json:"has_video_note,omitempty"`
+
+	ReplyHasPhoto     bool `json:"reply_has_photo,omitempty"`
+	ReplyHasDocument  bool `json:"reply_has_document,omitempty"`
+	ReplyHasAudio     bool `json:"reply_has_audio,omitempty"`
+	ReplyHasVoice     bool `json:"reply_has_voice,omitempty"`
+	ReplyHasVideo     bool `json:"reply_has_video,omitempty"`
+	ReplyHasAnimation bool `json:"reply_has_animation,omitempty"`
+	ReplyHasVideoNote bool `json:"reply_has_video_note,omitempty"`
+}
 
 func parseStreamingMode(raw string) (string, error) {
 	v := strings.ToLower(strings.TrimSpace(raw))
@@ -65,10 +104,91 @@ func (c *Channel) callGatewayAndReply(
 	replyTo int,
 	fromID string,
 	thread string,
+	sessionID string,
 	requestID string,
-	messageID int,
-	text string,
-) error {
+	msg tgapi.Message,
+) (err error) {
+	traceStartedAt := time.Time{}
+	traceStatus := ""
+	traceErr := ""
+
+	trace := debugrecorder.TraceFromContext(ctx)
+	if trace == nil {
+		rec := debugrecorder.RecorderFromContext(ctx)
+		if rec != nil {
+			traceStartedAt = time.Now()
+			t, recErr := rec.Start(debugrecorder.TraceStart{
+				Channel:   channelID,
+				UserID:    fromID,
+				SessionID: sessionID,
+				Thread:    thread,
+				MessageID: strconv.Itoa(msg.MessageID),
+				RequestID: requestID,
+				Source:    channelID,
+			})
+			if recErr == nil && t != nil {
+				trace = t
+				ctx = debugrecorder.WithTrace(ctx, trace)
+				traceStatus = "ok"
+				_ = trace.Record(
+					debugrecorder.KindTelegramMessage,
+					telegramMessageSummary{
+						ChatID:          chatID,
+						MessageThreadID: messageThreadID,
+						ReplyTo:         replyTo,
+						IncomingReplyTo: incomingReplyTo(msg),
+						FromID:          fromID,
+						Thread:          thread,
+						RequestID:       requestID,
+						SessionID:       sessionID,
+						Text:            msg.Text,
+						Caption:         msg.Caption,
+						HasPhoto:        len(msg.Photo) > 0,
+						HasDocument:     msg.Document != nil,
+						HasAudio:        msg.Audio != nil,
+						HasVoice:        msg.Voice != nil,
+						HasVideo:        msg.Video != nil,
+						HasAnimation:    msg.Animation != nil,
+						HasVideoNote:    msg.VideoNote != nil,
+						ReplyHasPhoto: replyHasPhoto(
+							msg.ReplyToMessage,
+						),
+						ReplyHasDocument: replyHasDocument(
+							msg.ReplyToMessage,
+						),
+						ReplyHasAudio: replyHasAudio(
+							msg.ReplyToMessage,
+						),
+						ReplyHasVoice: replyHasVoice(
+							msg.ReplyToMessage,
+						),
+						ReplyHasVideo: replyHasVideo(
+							msg.ReplyToMessage,
+						),
+						ReplyHasAnimation: replyHasAnimation(
+							msg.ReplyToMessage,
+						),
+						ReplyHasVideoNote: replyHasVideoNote(
+							msg.ReplyToMessage,
+						),
+					},
+				)
+				defer func() {
+					end := debugrecorder.TraceEnd{
+						Duration: time.Since(traceStartedAt),
+						Status:   traceStatus,
+						Error:    traceErr,
+					}
+					if err != nil && end.Error == "" {
+						end.Status = "error"
+						end.Error = err.Error()
+					}
+					_ = trace.Close(end)
+				}()
+			}
+		}
+	}
+
 	mode := strings.TrimSpace(c.streamingMode)
 	if mode == "" {
 		mode = defaultStreamingMode
@@ -90,15 +210,47 @@ func (c *Channel) callGatewayAndReply(
 		mode,
 	)
 
-	rsp, err := c.gw.SendMessage(ctx, gwclient.MessageRequest{
-		Channel:   channelID,
-		From:      fromID,
-		Thread:    thread,
-		MessageID: strconv.Itoa(messageID),
-		Text:      text,
-		UserID:    fromID,
-		RequestID: requestID,
-	})
+	req, err := c.buildGatewayRequest(
+		ctx,
+		fromID,
+		thread,
+		sessionID,
+		requestID,
+		msg,
+	)
+	if err != nil {
+		if trace != nil {
+			traceStatus = "error"
+			traceErr = err.Error()
+			_ = trace.RecordError(err)
+		}
+		if progressCancel != nil {
+			progressCancel()
+		}
+		if progressWG != nil {
+			progressWG.Wait()
+		}
+
+		userMsg := "Failed to process message."
+		var uerr *userError
+		if errors.As(err, &uerr) &&
+			strings.TrimSpace(uerr.userMessage) != "" {
+			userMsg = uerr.userMessage
+		}
+
+		if hasPreview {
+			_ = c.editPreview(ctx, chatID, preview.MessageID, userMsg)
+		} else {
+			c.reply(ctx, chatID, messageThreadID, replyTo, userMsg)
+		}
+
+		if errors.As(err, &uerr) {
+			return nil
+		}
+		return err
+	}
+
+	rsp, err := c.gw.SendMessage(ctx, req)
 
 	if progressCancel != nil {
 		progressCancel()
@@ -108,6 +260,11 @@ func (c *Channel) callGatewayAndReply(
 	}
 
 	if err != nil {
+		if trace != nil {
+			traceStatus = "error"
+			traceErr = err.Error()
+			_ = trace.RecordError(err)
+		}
 		if hasPreview {
 			msg := "Failed to process message."
 			if rsp.Error != nil &&
@@ -134,6 +291,10 @@ func (c *Channel) callGatewayAndReply(
 		return nil
 	}
 	if strings.TrimSpace(rsp.Reply) == "" {
+		if trace != nil {
+			traceStatus = "error"
+			traceErr = "empty reply"
+		}
 		if hasPreview {
 			_ = c.editPreview(
 				ctx,
@@ -145,19 +306,45 @@ func (c *Channel) callGatewayAndReply(
 		return nil
 	}
 
+	replyFiles := c.collectReplyFiles(rsp.Reply, fromID, sessionID)
+	if hasAudioAsVoiceTag(rsp.Reply) {
+		replyFiles = markReplyFilesAsVoice(replyFiles)
+	}
+	replyFiles = c.filterAlreadySentReplyFiles(
+		requestID,
+		chatID,
+		messageThreadID,
+		replyFiles,
+	)
 	parts := splitRunes(rsp.Reply, maxReplyRunes)
 	if !hasPreview || mode == streamingOff {
 		c.sendReplyParts(ctx, chatID, messageThreadID, replyTo, parts)
+		c.sendReplyFiles(
+			ctx,
+			chatID,
+			messageThreadID,
+			fromID,
+			sessionID,
+			replyFiles,
+		)
 		return nil
 	}
 
 	if !c.editPreview(ctx, chatID, preview.MessageID, parts[0]) {
 		c.sendReplyParts(ctx, chatID, messageThreadID, replyTo, parts)
+		c.sendReplyFiles(
+			ctx,
+			chatID,
+			messageThreadID,
+			fromID,
+			sessionID,
+			replyFiles,
+		)
 		return nil
 	}
 
 	for _, part := range parts[1:] {
-		_, err := c.bot.SendMessage(ctx, tgapi.SendMessageParams{
+		_, err := c.sendTextMessage(ctx, tgapi.SendMessageParams{
 			ChatID:          chatID,
 			MessageThreadID: messageThreadID,
 			Text:            part,
@@ -167,7 +354,53 @@ func (c *Channel) callGatewayAndReply(
 			return nil
 		}
 	}
+	c.sendReplyFiles(
+		ctx,
+		chatID,
+		messageThreadID,
+		fromID,
+		sessionID,
+		replyFiles,
+	)
 	return nil
+}
+
+func markReplyFilesAsVoice(
+	files []channel.OutboundFile,
+) []channel.OutboundFile {
+	if len(files) == 0 {
+		return files
+	}
+	out := make([]channel.OutboundFile, 0, len(files))
+	for _, file := range files {
+		file.AsVoice = true
+		out = append(out, file)
+	}
+	return out
+}
+
+func (c *Channel) filterAlreadySentReplyFiles(
+	requestID string,
+	chatID int64,
+	threadID int,
+	files []channel.OutboundFile,
+) []channel.OutboundFile {
+	if len(files) == 0 || c == nil || c.sentFiles == nil {
+		return files
+	}
+	seen := c.sentFiles.Consume(requestID, chatID, threadID)
+	if len(seen) == 0 {
+		return files
+	}
+	out := make([]channel.OutboundFile, 0, len(files))
+	for _, file := range files {
+		clean := cleanReplyFilePath(file.Path)
+		if _, ok := seen[clean]; ok {
+			continue
+		}
+		out = append(out, file)
+	}
+	return out
 }
 
 func (c *Channel) sendPreviewMessage(
@@ -187,7 +420,7 @@ func (c *Channel) sendPreviewMessage(
 		Action:          chatActionTyping,
 	})
 
-	msg, err := c.bot.SendMessage(ctx, tgapi.SendMessageParams{
+	msg, err := c.sendTextMessage(ctx, tgapi.SendMessageParams{
 		ChatID:           chatID,
 		MessageThreadID:  messageThreadID,
 		ReplyToMessageID: replyTo,
@@ -234,10 +467,10 @@ func (c *Channel) progressLoop(
 	messageID int,
 ) {
 	start := time.Now()
+	lastEditAt := start.Add(-progressEditIntervalFast)
 	ticker := time.NewTicker(progressInterval)
 	defer ticker.Stop()
 
-	edits := 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -251,12 +484,13 @@ func (c *Channel) progressLoop(
 			Action:          chatActionTyping,
 		})
 
-		if edits >= progressMaxEdits {
+		now := time.Now()
+		elapsed := now.Sub(start).Round(time.Second)
+		if now.Sub(lastEditAt) < progressEditInterval(elapsed) {
 			continue
 		}
-		edits++
+		lastEditAt = now
 
-		elapsed := time.Since(start).Round(time.Second)
 		_ = c.editPreview(
 			ctx,
 			chatID,
@@ -266,13 +500,26 @@ func (c *Channel) progressLoop(
 	}
 }
 
+func progressEditInterval(elapsed time.Duration) time.Duration {
+	if elapsed >= progressEditAfterVerySlow {
+		return progressEditIntervalVerySlow
+	}
+	if elapsed >= progressEditAfterSlow {
+		return progressEditIntervalSlow
+	}
+	if elapsed >= progressEditAfterMedium {
+		return progressEditIntervalMedium
+	}
+	return progressEditIntervalFast
+}
+
 func (c *Channel) editPreview(
 	ctx context.Context,
 	chatID int64,
 	messageID int,
 	text string,
 ) bool {
-	_, err := c.bot.EditMessageText(ctx, tgapi.EditMessageTextParams{
+	_, err := c.editTextMessage(ctx, tgapi.EditMessageTextParams{
 		ChatID:    chatID,
 		MessageID: messageID,
 		Text:      text,
@@ -296,7 +543,7 @@ func (c *Channel) sendReplyParts(
 		if i == 0 {
 			replyID = replyTo
 		}
-		_, err := c.bot.SendMessage(ctx, tgapi.SendMessageParams{
+		_, err := c.sendTextMessage(ctx, tgapi.SendMessageParams{
 			ChatID:           chatID,
 			MessageThreadID:  messageThreadID,
 			ReplyToMessageID: replyID,

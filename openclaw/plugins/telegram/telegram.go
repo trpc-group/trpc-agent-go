@@ -54,6 +54,13 @@ type channelCfg struct {
 	GroupPolicy  string   `yaml:"group_policy"`
 	AllowThreads []string `yaml:"allow_threads"`
 	PairingTTL   string   `yaml:"pairing_ttl"`
+
+	MaxDownloadBytes *int64 `yaml:"max_download_bytes"`
+
+	SessionResetIdle  string `yaml:"session_reset_idle"`
+	SessionResetDaily *bool  `yaml:"session_reset_daily"`
+
+	OnBlock string `yaml:"on_block"`
 }
 
 func newChannel(
@@ -125,6 +132,30 @@ func newChannel(
 			return nil, err
 		}
 		chOpts = append(chOpts, tgch.WithPairingTTL(ttl))
+	}
+	if cfg.MaxDownloadBytes != nil {
+		chOpts = append(
+			chOpts,
+			tgch.WithMaxDownloadBytes(*cfg.MaxDownloadBytes),
+		)
+	}
+	if strings.TrimSpace(cfg.SessionResetIdle) != "" {
+		idle, err := time.ParseDuration(
+			strings.TrimSpace(cfg.SessionResetIdle),
+		)
+		if err != nil {
+			return nil, err
+		}
+		chOpts = append(chOpts, tgch.WithDMSessionIdleReset(idle))
+	}
+	if cfg.SessionResetDaily != nil {
+		chOpts = append(
+			chOpts,
+			tgch.WithDMSessionDailyReset(*cfg.SessionResetDaily),
+		)
+	}
+	if strings.TrimSpace(cfg.OnBlock) != "" {
+		chOpts = append(chOpts, tgch.WithDMBlockCleanup(cfg.OnBlock))
 	}
 
 	return tgch.New(token, bot, deps.Gateway, chOpts...)

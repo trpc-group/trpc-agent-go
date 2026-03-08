@@ -1,0 +1,1156 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
+package admin
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/cron"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/octool"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
+)
+
+type stubRunner struct {
+	reply string
+}
+
+func (r *stubRunner) Run(
+	ctx context.Context,
+	userID string,
+	sessionID string,
+	message model.Message,
+	opts ...agent.RunOption,
+) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 1)
+	ch <- &event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage(r.reply),
+			}},
+			Done: true,
+		},
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (r *stubRunner) Close() error { return nil }
+
+func writeDebugTraceFixture(
+	t *testing.T,
+	root string,
+	sessionID string,
+	requestID string,
+	startedAt time.Time,
+) string {
+	t.Helper()
+
+	traceDir := filepath.Join(
+		root,
+		startedAt.Format("20060102"),
+		startedAt.Format("150405")+"_"+requestID,
+	)
+	require.NoError(t, os.MkdirAll(traceDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(traceDir, debugMetaFileName),
+		[]byte(`{"request_id":"`+requestID+`"}`+"\n"),
+		0o600,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(traceDir, debugEventsFileName),
+		[]byte(`{"kind":"trace.start"}`+"\n"),
+		0o600,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(traceDir, debugResultFileName),
+		[]byte(`{"status":"ok"}`+"\n"),
+		0o600,
+	))
+
+	indexDir := filepath.Join(
+		root,
+		debugBySessionDir,
+		sessionID,
+		startedAt.Format("20060102"),
+		startedAt.Format("150405")+"_"+requestID,
+	)
+	require.NoError(t, os.MkdirAll(indexDir, 0o755))
+	rel, err := filepath.Rel(indexDir, traceDir)
+	require.NoError(t, err)
+	ref := `{"trace_dir":"` + filepath.ToSlash(rel) + `",` +
+		`"started_at":"` + startedAt.Format(time.RFC3339Nano) + `",` +
+		`"channel":"telegram","request_id":"` + requestID + `",` +
+		`"message_id":"msg-` + requestID + `"}`
+	require.NoError(t, os.WriteFile(
+		filepath.Join(indexDir, debugMetaTraceRefName),
+		[]byte(ref),
+		0o600,
+	))
+	return traceDir
+}
+
+func TestServiceHandlerRendersOverview(t *testing.T) {
+	t.Parallel()
+
+	cronSvc, err := cron.NewService(
+		t.TempDir(),
+		&stubRunner{reply: "done"},
+		nil,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, cronSvc.Close())
+	})
+
+	_, err = cronSvc.Add(&cron.Job{
+		Name:    "cpu report",
+		Enabled: true,
+		Schedule: cron.Schedule{
+			Kind:  cron.ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "collect cpu and mem",
+		UserID:  "u1",
+	})
+	require.NoError(t, err)
+
+	svc := New(Config{
+		AppName:     "openclaw",
+		InstanceID:  "abcd1234",
+		GatewayAddr: "127.0.0.1:8080",
+		GatewayURL:  "http://127.0.0.1:8080",
+		AdminAddr:   "127.0.0.1:18789",
+		AdminURL:    "http://127.0.0.1:18789/",
+		StateDir:    "/tmp/openclaw",
+		DebugDir:    "/tmp/openclaw/debug",
+		Channels:    []string{"telegram"},
+		Cron:        cronSvc,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, routeIndex, nil)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	body := rr.Body.String()
+	require.Contains(t, body, "OpenClaw Admin")
+	require.Contains(t, body, "cpu report")
+	require.Contains(t, body, "127.0.0.1:8080")
+	require.Contains(t, body, "telegram")
+}
+
+func TestServiceJobEndpoints(t *testing.T) {
+	t.Parallel()
+
+	cronSvc, err := cron.NewService(
+		t.TempDir(),
+		&stubRunner{reply: "done"},
+		nil,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, cronSvc.Close())
+	})
+
+	job, err := cronSvc.Add(&cron.Job{
+		Name:    "cpu report",
+		Enabled: true,
+		Schedule: cron.Schedule{
+			Kind:  cron.ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "collect cpu",
+		UserID:  "u1",
+	})
+	require.NoError(t, err)
+
+	svc := New(Config{Cron: cronSvc})
+	handler := svc.Handler()
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, routeJobsJSON, nil)
+	handler.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Contains(t, rr.Body.String(), job.ID)
+
+	runReq := httptest.NewRequest(
+		http.MethodPost,
+		routeJobRun,
+		strings.NewReader("job_id="+job.ID),
+	)
+	runReq.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	runRR := httptest.NewRecorder()
+	handler.ServeHTTP(runRR, runReq)
+	require.Equal(t, http.StatusSeeOther, runRR.Code)
+
+	removeReq := httptest.NewRequest(
+		http.MethodPost,
+		routeJobRemove,
+		strings.NewReader("job_id="+job.ID),
+	)
+	removeReq.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	removeRR := httptest.NewRecorder()
+	handler.ServeHTTP(removeRR, removeReq)
+	require.Equal(t, http.StatusSeeOther, removeRR.Code)
+	require.Nil(t, cronSvc.Get(job.ID))
+}
+
+func TestServiceSnapshotIncludesCronSummary(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 6, 18, 0, 0, 0, time.UTC)
+	cronSvc, err := cron.NewService(
+		t.TempDir(),
+		&stubRunner{reply: "done"},
+		nil,
+		cron.WithClock(func() time.Time { return now }),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, cronSvc.Close())
+	})
+
+	_, err = cronSvc.Add(&cron.Job{
+		Name:    "report",
+		Enabled: true,
+		Schedule: cron.Schedule{
+			Kind:  cron.ScheduleKindEvery,
+			Every: "5m",
+		},
+		Message: "collect cpu and mem",
+		UserID:  "u1",
+	})
+	require.NoError(t, err)
+
+	svc := New(
+		Config{Cron: cronSvc},
+		WithClock(func() time.Time { return now }),
+	)
+	snap := svc.Snapshot()
+	require.True(t, snap.Cron.Enabled)
+	require.Equal(t, 1, snap.Cron.JobCount)
+	require.Len(t, snap.Cron.Jobs, 1)
+	require.Equal(t, "every 5m", snap.Cron.Jobs[0].Schedule)
+}
+
+func TestServiceSnapshotIncludesUploadSourceCounts(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	store, err := uploads.NewStore(stateDir)
+	require.NoError(t, err)
+
+	scope := uploads.Scope{
+		Channel:   "telegram",
+		UserID:    "u1",
+		SessionID: "telegram:dm:u1:s1",
+	}
+	_, err = store.SaveWithInfo(
+		context.Background(),
+		scope,
+		"voice.ogg",
+		uploads.FileMetadata{
+			MimeType: "audio/ogg",
+			Source:   uploads.SourceInbound,
+		},
+		[]byte("voice"),
+	)
+	require.NoError(t, err)
+	_, err = store.SaveWithInfo(
+		context.Background(),
+		scope,
+		"page-1.pdf",
+		uploads.FileMetadata{
+			MimeType: "application/pdf",
+			Source:   uploads.SourceDerived,
+		},
+		[]byte("%PDF-1.4"),
+	)
+	require.NoError(t, err)
+
+	snap := New(Config{StateDir: stateDir}).Snapshot()
+	require.True(t, snap.Uploads.Enabled)
+	require.Len(t, snap.Uploads.SourceCounts, 2)
+	require.Equal(t, "derived", snap.Uploads.SourceCounts[0].Source)
+	require.Equal(t, 1, snap.Uploads.SourceCounts[0].Count)
+	require.Equal(t, "inbound", snap.Uploads.SourceCounts[1].Source)
+	require.Equal(t, 1, snap.Uploads.SourceCounts[1].Count)
+}
+
+func TestServiceDebugEndpoints(t *testing.T) {
+	t.Parallel()
+
+	debugRoot := t.TempDir()
+	now := time.Date(2026, 3, 6, 18, 10, 0, 0, time.UTC)
+	writeDebugTraceFixture(
+		t,
+		debugRoot,
+		"telegram:dm:1",
+		"req-1",
+		now,
+	)
+	writeDebugTraceFixture(
+		t,
+		debugRoot,
+		"telegram:dm:2",
+		"req-2",
+		now.Add(-time.Minute),
+	)
+
+	svc := New(
+		Config{
+			AppName:        "openclaw",
+			InstanceID:     "inst-1",
+			StartedAt:      now.Add(-time.Hour),
+			Hostname:       "host-1",
+			PID:            4321,
+			GoVersion:      "go1.test",
+			AgentType:      "llm",
+			ModelMode:      "openai",
+			ModelName:      "gpt-5",
+			SessionBackend: "sqlite",
+			MemoryBackend:  "inmemory",
+			DebugDir:       debugRoot,
+		},
+		WithClock(func() time.Time { return now }),
+	)
+	handler := svc.Handler()
+
+	snap := svc.Snapshot()
+	require.True(t, snap.Debug.Enabled)
+	require.Equal(t, 2, snap.Debug.SessionCount)
+	require.Equal(t, 2, snap.Debug.TraceCount)
+	require.Len(t, snap.Debug.Sessions, 2)
+	require.Len(t, snap.Debug.RecentTraces, 2)
+
+	sessionsRR := httptest.NewRecorder()
+	sessionsReq := httptest.NewRequest(
+		http.MethodGet,
+		routeDebugSessionsJSON,
+		nil,
+	)
+	handler.ServeHTTP(sessionsRR, sessionsReq)
+	require.Equal(t, http.StatusOK, sessionsRR.Code)
+	require.Contains(t, sessionsRR.Body.String(), "telegram:dm:1")
+
+	traceQuery := routeDebugTracesJSON + "?" +
+		querySessionID + "=" +
+		url.QueryEscape("telegram:dm:1")
+	tracesRR := httptest.NewRecorder()
+	tracesReq := httptest.NewRequest(http.MethodGet, traceQuery, nil)
+	handler.ServeHTTP(tracesRR, tracesReq)
+	require.Equal(t, http.StatusOK, tracesRR.Code)
+	require.Contains(t, tracesRR.Body.String(), "req-1")
+	require.NotContains(t, tracesRR.Body.String(), "req-2")
+
+	metaURL := snap.Debug.RecentTraces[0].MetaURL
+	metaRR := httptest.NewRecorder()
+	metaReq := httptest.NewRequest(http.MethodGet, metaURL, nil)
+	handler.ServeHTTP(metaRR, metaReq)
+	require.Equal(t, http.StatusOK, metaRR.Code)
+	require.Contains(t, metaRR.Body.String(), "req-1")
+}
+
+func TestServiceClearAndValidationPaths(t *testing.T) {
+	t.Parallel()
+
+	cronSvc, err := cron.NewService(
+		t.TempDir(),
+		&stubRunner{reply: "done"},
+		nil,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, cronSvc.Close())
+	})
+
+	for _, name := range []string{"job-a", "job-b"} {
+		_, err = cronSvc.Add(&cron.Job{
+			Name:    name,
+			Enabled: true,
+			Schedule: cron.Schedule{
+				Kind:  cron.ScheduleKindEvery,
+				Every: "1m",
+			},
+			Message: "collect cpu",
+			UserID:  "u1",
+		})
+		require.NoError(t, err)
+	}
+
+	svc := New(Config{Cron: cronSvc})
+	handler := svc.Handler()
+
+	methodRR := httptest.NewRecorder()
+	methodReq := httptest.NewRequest(http.MethodGet, routeJobRun, nil)
+	handler.ServeHTTP(methodRR, methodReq)
+	require.Equal(t, http.StatusMethodNotAllowed, methodRR.Code)
+
+	missingRR := httptest.NewRecorder()
+	missingReq := httptest.NewRequest(
+		http.MethodPost,
+		routeJobRemove,
+		strings.NewReader(""),
+	)
+	missingReq.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	handler.ServeHTTP(missingRR, missingReq)
+	require.Equal(t, http.StatusSeeOther, missingRR.Code)
+	require.Contains(
+		t,
+		missingRR.Header().Get("Location"),
+		"job_id+is+required",
+	)
+
+	clearRR := httptest.NewRecorder()
+	clearReq := httptest.NewRequest(http.MethodPost, routeJobsClear, nil)
+	handler.ServeHTTP(clearRR, clearReq)
+	require.Equal(t, http.StatusSeeOther, clearRR.Code)
+	require.Empty(t, cronSvc.List())
+}
+
+func TestServiceWithoutCron(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{})
+	handler := svc.Handler()
+
+	statusRR := httptest.NewRecorder()
+	statusReq := httptest.NewRequest(http.MethodGet, routeStatusJSON, nil)
+	handler.ServeHTTP(statusRR, statusReq)
+	require.Equal(t, http.StatusOK, statusRR.Code)
+	require.Contains(t, statusRR.Body.String(), `"enabled": false`)
+
+	clearRR := httptest.NewRecorder()
+	clearReq := httptest.NewRequest(http.MethodPost, routeJobsClear, nil)
+	handler.ServeHTTP(clearRR, clearReq)
+	require.Equal(t, http.StatusNotFound, clearRR.Code)
+}
+
+func TestServiceSnapshotIncludesUploadsAndExec(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	uploadsRoot := filepath.Join(stateDir, defaultUploadsDir)
+	relPath := filepath.ToSlash(
+		filepath.Join("telegram", "u1", "session-1", "clip.mp4"),
+	)
+	require.NoError(
+		t,
+		os.MkdirAll(filepath.Dir(filepath.Join(uploadsRoot, relPath)), 0o755),
+	)
+	require.NoError(
+		t,
+		os.WriteFile(
+			filepath.Join(uploadsRoot, relPath),
+			[]byte("video"),
+			0o600,
+		),
+	)
+
+	svc := New(Config{
+		StateDir: stateDir,
+		Exec:     octool.NewManager(),
+	})
+	snap := svc.Snapshot()
+	require.True(t, snap.Exec.Enabled)
+	require.Equal(t, 0, snap.Exec.SessionCount)
+	require.True(t, snap.Uploads.Enabled)
+	require.Equal(t, 1, snap.Uploads.FileCount)
+	require.Equal(t, "clip.mp4", snap.Uploads.Files[0].Name)
+	require.Equal(t, "telegram", snap.Uploads.Files[0].Channel)
+	require.Equal(t, "u1", snap.Uploads.Files[0].UserID)
+	require.Equal(t, "session-1", snap.Uploads.Files[0].SessionID)
+	require.Len(t, snap.Uploads.Sessions, 1)
+	require.Len(t, snap.Uploads.KindCounts, 1)
+	require.Equal(t, "video", snap.Uploads.KindCounts[0].Kind)
+	require.Equal(t, 1, snap.Uploads.KindCounts[0].Count)
+
+	handler := svc.Handler()
+
+	execRR := httptest.NewRecorder()
+	execReq := httptest.NewRequest(
+		http.MethodGet,
+		routeExecSessionsJSON,
+		nil,
+	)
+	handler.ServeHTTP(execRR, execReq)
+	require.Equal(t, http.StatusOK, execRR.Code)
+	require.Contains(t, execRR.Body.String(), "[]")
+
+	uploadsRR := httptest.NewRecorder()
+	uploadsReq := httptest.NewRequest(
+		http.MethodGet,
+		routeUploadsJSON,
+		nil,
+	)
+	handler.ServeHTTP(uploadsRR, uploadsReq)
+	require.Equal(t, http.StatusOK, uploadsRR.Code)
+	require.Contains(t, uploadsRR.Body.String(), "clip.mp4")
+	require.Contains(t, uploadsRR.Body.String(), `"kind": "video"`)
+
+	openRR := httptest.NewRecorder()
+	openReq := httptest.NewRequest(
+		http.MethodGet,
+		routeUploadFile+"?"+url.Values{
+			queryPath: []string{relPath},
+		}.Encode(),
+		nil,
+	)
+	handler.ServeHTTP(openRR, openReq)
+	require.Equal(t, http.StatusOK, openRR.Code)
+	require.Equal(t, "video", openRR.Body.String())
+
+	downloadRR := httptest.NewRecorder()
+	downloadReq := httptest.NewRequest(
+		http.MethodGet,
+		routeUploadFile+"?"+url.Values{
+			queryPath:     []string{relPath},
+			queryDownload: []string{"1"},
+		}.Encode(),
+		nil,
+	)
+	handler.ServeHTTP(downloadRR, downloadReq)
+	require.Equal(t, http.StatusOK, downloadRR.Code)
+	require.Contains(
+		t,
+		downloadRR.Header().Get("Content-Disposition"),
+		"clip.mp4",
+	)
+}
+
+func TestServiceUploadJSONFilters(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	store, err := uploads.NewStore(stateDir)
+	require.NoError(t, err)
+
+	_, err = store.Save(
+		context.Background(),
+		uploads.Scope{
+			Channel:   "telegram",
+			UserID:    "u1",
+			SessionID: "session-1",
+		},
+		"clip.mp4",
+		[]byte("video"),
+	)
+	require.NoError(t, err)
+	_, err = store.SaveWithMetadata(
+		context.Background(),
+		uploads.Scope{
+			Channel:   "telegram",
+			UserID:    "u2",
+			SessionID: "session-2",
+		},
+		"report.pdf",
+		"application/pdf",
+		[]byte("%PDF-1.4"),
+	)
+	require.NoError(t, err)
+	_, err = store.SaveWithInfo(
+		context.Background(),
+		uploads.Scope{
+			Channel:   "telegram",
+			UserID:    "u2",
+			SessionID: "session-2",
+		},
+		"derived-frame.png",
+		uploads.FileMetadata{
+			MimeType: "image/png",
+			Source:   uploads.SourceDerived,
+		},
+		[]byte("png"),
+	)
+	require.NoError(t, err)
+
+	svc := New(Config{StateDir: stateDir})
+	handler := svc.Handler()
+
+	filesRR := httptest.NewRecorder()
+	filesReq := httptest.NewRequest(
+		http.MethodGet,
+		routeUploadsJSON+"?"+url.Values{
+			querySessionID: []string{"session-2"},
+			queryKind:      []string{"pdf"},
+			queryMimeType:  []string{"application/pdf"},
+		}.Encode(),
+		nil,
+	)
+	handler.ServeHTTP(filesRR, filesReq)
+	require.Equal(t, http.StatusOK, filesRR.Code)
+	require.Contains(t, filesRR.Body.String(), "report.pdf")
+	require.NotContains(t, filesRR.Body.String(), "clip.mp4")
+
+	sourceRR := httptest.NewRecorder()
+	sourceReq := httptest.NewRequest(
+		http.MethodGet,
+		routeUploadsJSON+"?"+url.Values{
+			queryUserID: []string{"u2"},
+			querySource: []string{uploads.SourceDerived},
+		}.Encode(),
+		nil,
+	)
+	handler.ServeHTTP(sourceRR, sourceReq)
+	require.Equal(t, http.StatusOK, sourceRR.Code)
+	require.Contains(t, sourceRR.Body.String(), "derived-frame.png")
+	require.NotContains(t, sourceRR.Body.String(), "report.pdf")
+
+	sessionsRR := httptest.NewRecorder()
+	sessionsReq := httptest.NewRequest(
+		http.MethodGet,
+		routeUploadSessions+"?"+url.Values{
+			queryUserID: []string{"u2"},
+		}.Encode(),
+		nil,
+	)
+	handler.ServeHTTP(sessionsRR, sessionsReq)
+	require.Equal(t, http.StatusOK, sessionsRR.Code)
+	require.Contains(t, sessionsRR.Body.String(), "session-2")
+	require.NotContains(t, sessionsRR.Body.String(), "session-1")
+}
+
+func TestAdminRuntimeHelpers(t *testing.T) {
+	t.Parallel()
+
+	exitCode := 7
+	view := execSessionViewFromSession(octool.ProcessSession{
+		SessionID: " sess-1 ",
+		Command:   " echo hi ",
+		Status:    " running ",
+		StartedAt: " start ",
+		DoneAt:    " done ",
+		ExitCode:  &exitCode,
+	})
+	require.Equal(t, "sess-1", view.SessionID)
+	require.Equal(t, "echo hi", view.Command)
+	require.Equal(t, "running", view.Status)
+	require.Equal(t, "start", view.StartedAt)
+	require.Equal(t, "done", view.DoneAt)
+	require.NotNil(t, view.ExitCode)
+	require.Equal(t, exitCode, *view.ExitCode)
+
+	require.Equal(t, "image", uploadKindFromName("frame.PNG"))
+	require.Equal(t, "audio", uploadKindFromName("voice.ogg"))
+	require.Equal(t, "video", uploadKindFromName("clip.MOV"))
+	require.Equal(t, "pdf", uploadKindFromName("doc.pdf"))
+	require.Equal(t, "file", uploadKindFromName("notes.txt"))
+	require.Equal(
+		t,
+		"video",
+		uploadKindFromFile(uploads.ListedFile{
+			Name:     "video-note",
+			MimeType: "video/mp4",
+		}),
+	)
+}
+
+func TestServiceUploadAndDebugValidationErrors(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{StateDir: t.TempDir()})
+	handler := svc.Handler()
+
+	uploadRR := httptest.NewRecorder()
+	uploadReq := httptest.NewRequest(
+		http.MethodGet,
+		routeUploadFile,
+		nil,
+	)
+	handler.ServeHTTP(uploadRR, uploadReq)
+	require.Equal(t, http.StatusBadRequest, uploadRR.Code)
+
+	debugRR := httptest.NewRecorder()
+	debugReq := httptest.NewRequest(
+		http.MethodGet,
+		routeDebugFile,
+		nil,
+	)
+	handler.ServeHTTP(debugRR, debugReq)
+	require.Equal(t, http.StatusBadRequest, debugRR.Code)
+}
+
+func TestResolveUploadFile_InvalidPaths(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dir := filepath.Join(root, "telegram", "u1")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	filePath := filepath.Join(dir, "clip.mp4")
+	require.NoError(t, os.WriteFile(filePath, []byte("x"), 0o600))
+
+	_, err := resolveUploadFile(root, "../clip.mp4")
+	require.Error(t, err)
+
+	_, err = resolveUploadFile(root, "telegram/u1")
+	require.Error(t, err)
+
+	_, err = resolveUploadFile(
+		root,
+		"telegram/u1/clip.mp4"+uploads.MetadataSuffix,
+	)
+	require.Error(t, err)
+
+	got, err := resolveUploadFile(root, "telegram/u1/clip.mp4")
+	require.NoError(t, err)
+	require.Equal(t, filePath, got)
+}
+
+func TestServiceUploadEndpoint_MethodNotAllowed(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{StateDir: t.TempDir()})
+	handler := svc.Handler()
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, routeUploadFile, nil)
+	handler.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusMethodNotAllowed, rr.Code)
+}
+
+func TestDebugHelpers(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{DebugDir: t.TempDir()})
+	require.Empty(t, svc.debugFileURL("", debugMetaFileName))
+	require.Empty(t, svc.debugFileURL("x/y", "notes.txt"))
+
+	items := []debugTraceView{
+		{SessionID: "s1"},
+		{SessionID: "s2"},
+	}
+	limited := limitDebugTraces(items, 1)
+	require.Len(t, limited, 1)
+	require.Equal(t, "s1", limited[0].SessionID)
+
+	require.False(t, fileExists(filepath.Join(t.TempDir(), "missing")))
+}
+
+func TestReadDebugTrace_RejectsEscapeAndBadJSON(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	bySession := filepath.Join(root, debugBySessionDir, "session-1")
+	traceDir := filepath.Join(root, "20260307", "trace")
+	require.NoError(t, os.MkdirAll(bySession, 0o755))
+	require.NoError(t, os.MkdirAll(traceDir, 0o755))
+
+	refPath := filepath.Join(bySession, debugMetaTraceRefName)
+	svc := New(Config{DebugDir: root})
+
+	require.NoError(t, os.WriteFile(refPath, []byte("{"), 0o600))
+	_, ok, err := svc.readDebugTrace(root, filepath.Join(root, debugBySessionDir), refPath, "")
+	require.Error(t, err)
+	require.False(t, ok)
+
+	ref := `{"trace_dir":"../../../../escape","started_at":"2026-03-07T00:00:00Z"}`
+	require.NoError(t, os.WriteFile(refPath, []byte(ref), 0o600))
+	_, ok, err = svc.readDebugTrace(
+		root,
+		filepath.Join(root, debugBySessionDir),
+		refPath,
+		"",
+	)
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
+func TestHandleIndex_RendersUploadPreviews(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	store, err := uploads.NewStore(stateDir)
+	require.NoError(t, err)
+
+	scope := uploads.Scope{
+		Channel:   "telegram",
+		UserID:    "u1",
+		SessionID: "telegram:dm:u1:s1",
+	}
+	_, err = store.Save(context.Background(), scope, "frame.png", []byte("png"))
+	require.NoError(t, err)
+	_, err = store.Save(context.Background(), scope, "note.mp3", []byte("mp3"))
+	require.NoError(t, err)
+	_, err = store.Save(context.Background(), scope, "clip.mp4", []byte("mp4"))
+	require.NoError(t, err)
+	_, err = store.Save(
+		context.Background(),
+		scope,
+		"report.pdf",
+		[]byte("%PDF-1.4"),
+	)
+	require.NoError(t, err)
+	_, err = store.SaveWithMetadata(
+		context.Background(),
+		scope,
+		"video-note",
+		"video/mp4",
+		[]byte("mp4"),
+	)
+	require.NoError(t, err)
+
+	svc := New(Config{
+		StateDir:   stateDir,
+		GatewayURL: "http://127.0.0.1:8080",
+		AdminURL:   "http://127.0.0.1:19789",
+	})
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, routeIndex, nil)
+
+	svc.Handler().ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Contains(t, rr.Body.String(), "<img src=\"/uploads/file?")
+	require.Contains(t, rr.Body.String(), "<audio controls")
+	require.Contains(t, rr.Body.String(), "<video controls")
+	require.Contains(t, rr.Body.String(), ">open preview</a>")
+	require.Contains(t, rr.Body.String(), "<code>video/mp4</code>")
+}
+
+func TestServiceUploadsJSON_RewritesGeneratedNames(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	store, err := uploads.NewStore(stateDir)
+	require.NoError(t, err)
+
+	scope := uploads.Scope{
+		Channel:   "telegram",
+		UserID:    "u1",
+		SessionID: "telegram:dm:u1:s1",
+	}
+	_, err = store.SaveWithMetadata(
+		context.Background(),
+		scope,
+		"file_10.mp4",
+		"video/mp4",
+		[]byte("mp4"),
+	)
+	require.NoError(t, err)
+
+	svc := New(Config{StateDir: stateDir})
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, routeUploadsJSON, nil)
+
+	svc.Handler().ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Contains(t, rr.Body.String(), "\"name\": \"video.mp4\"")
+	require.NotContains(t, rr.Body.String(), "\"name\": \"file_10.mp4\"")
+}
+
+func TestDebugStatusForSession_SkipsBadTraceRefs(t *testing.T) {
+	t.Parallel()
+
+	debugRoot := t.TempDir()
+	now := time.Date(2026, 3, 7, 12, 0, 0, 0, time.UTC)
+	writeDebugTraceFixture(
+		t,
+		debugRoot,
+		"telegram:dm:1",
+		"req-1",
+		now,
+	)
+	writeDebugTraceFixture(
+		t,
+		debugRoot,
+		"telegram:dm:2",
+		"req-2",
+		now.Add(-time.Minute),
+	)
+
+	badRefDir := filepath.Join(
+		debugRoot,
+		debugBySessionDir,
+		"telegram:dm:1",
+		now.Format("20060102"),
+		"bad-ref",
+	)
+	require.NoError(t, os.MkdirAll(badRefDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(badRefDir, debugMetaTraceRefName),
+		[]byte("{"),
+		0o600,
+	))
+
+	status := New(Config{DebugDir: debugRoot}).debugStatusForSession(
+		"telegram:dm:1",
+	)
+	require.True(t, status.Enabled)
+	require.Equal(t, 1, status.SessionCount)
+	require.Equal(t, 1, status.TraceCount)
+	require.Len(t, status.Sessions, 1)
+	require.Equal(t, "telegram:dm:1", status.Sessions[0].SessionID)
+	require.NotEmpty(t, status.Error)
+}
+
+func TestUploadRuntimeHelpers_LimitsAndFilters(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 7, 10, 0, 0, 0, time.UTC)
+	listed := []uploads.ListedFile{
+		{
+			Scope: uploads.Scope{
+				Channel:   "telegram",
+				UserID:    "u2",
+				SessionID: "s2",
+			},
+			Name:         "file_10.mp4",
+			RelativePath: "telegram/u2/s2/file_10.mp4",
+			MimeType:     "video/mp4",
+			SizeBytes:    7,
+			ModifiedAt:   now,
+		},
+		{
+			Scope: uploads.Scope{
+				Channel:   "telegram",
+				UserID:    "u1",
+				SessionID: "s1",
+			},
+			Name:         "report.pdf",
+			RelativePath: "telegram/u1/s1/report.pdf",
+			MimeType:     "application/pdf",
+			Source:       uploads.SourceDerived,
+			SizeBytes:    5,
+			ModifiedAt:   now.Add(-time.Minute),
+		},
+		{
+			Scope: uploads.Scope{
+				Channel:   "telegram",
+				UserID:    "u1",
+				SessionID: "s1",
+			},
+			Name:         "voice.ogg",
+			RelativePath: "telegram/u1/s1/voice.ogg",
+			MimeType:     "audio/ogg",
+			Source:       uploads.SourceInbound,
+			SizeBytes:    3,
+			ModifiedAt:   now.Add(-2 * time.Minute),
+		},
+		{
+			Scope: uploads.Scope{
+				Channel:   "telegram",
+				UserID:    "u0",
+				SessionID: "s3",
+			},
+			Name:         "clip.mp4",
+			RelativePath: "telegram/u0/s3/clip.mp4",
+			MimeType:     "video/mp4",
+			Source:       uploads.SourceDerived,
+			SizeBytes:    9,
+			ModifiedAt:   now,
+		},
+	}
+
+	views, totalBytes := uploadViewsFromList(listed, 1)
+	require.Equal(t, int64(24), totalBytes)
+	require.Len(t, views, 1)
+	require.Equal(t, "video.mp4", views[0].Name)
+	require.Contains(t, views[0].OpenURL, queryPath+"=")
+	require.Contains(t, views[0].DownloadURL, queryDownload+"=1")
+
+	sessions := uploadSessionsFromList(listed, 0)
+	require.Len(t, sessions, 3)
+	require.Equal(t, "u0", sessions[0].UserID)
+	require.Equal(t, "u2", sessions[1].UserID)
+	require.Equal(t, "u1", sessions[2].UserID)
+
+	limitedSessions := uploadSessionsFromList(listed, 2)
+	require.Len(t, limitedSessions, 2)
+
+	kindCounts := uploadKindCountsFromList(listed)
+	require.Len(t, kindCounts, 3)
+	require.Equal(t, "video", kindCounts[0].Kind)
+	require.Equal(t, 2, kindCounts[0].Count)
+
+	sourceCounts := uploadSourceCountsFromList(listed)
+	require.Len(t, sourceCounts, 3)
+	require.Equal(t, uploads.SourceDerived, sourceCounts[0].Source)
+	require.Equal(t, 2, sourceCounts[0].Count)
+	require.Equal(t, "unknown", sourceCounts[2].Source)
+
+	filtered := filterUploadList(
+		listed,
+		uploadFilters{
+			UserID:   "u1",
+			Kind:     "pdf",
+			MimeType: "application/pdf",
+			Source:   uploads.SourceDerived,
+		},
+	)
+	require.Len(t, filtered, 1)
+	require.Equal(t, "report.pdf", filtered[0].Name)
+
+	require.Equal(t, listed, filterUploadList(listed, uploadFilters{}))
+	require.Nil(t, filterUploadList(nil, uploadFilters{}))
+	require.Nil(t, uploadKindCountsFromList(nil))
+	require.Nil(t, uploadSourceCountsFromList(nil))
+}
+
+func TestUploadsStatusFiltered_StateErrors(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(
+		t,
+		uploadsStatus{},
+		New(Config{}).uploadsStatusFiltered(uploadFilters{}, 0, 0),
+	)
+
+	badState := filepath.Join(t.TempDir(), "state-file")
+	require.NoError(t, os.WriteFile(badState, []byte("x"), 0o600))
+
+	status := New(Config{StateDir: badState}).uploadsStatusFiltered(
+		uploadFilters{},
+		0,
+		0,
+	)
+	require.False(t, status.Enabled)
+	require.NotEmpty(t, status.Error)
+}
+
+func TestServiceHelperFunctions(t *testing.T) {
+	t.Parallel()
+
+	rr := httptest.NewRecorder()
+	writeJSON(rr, http.StatusCreated, map[string]string{"ok": "yes"})
+	require.Equal(t, http.StatusCreated, rr.Code)
+	require.Contains(t, rr.Body.String(), "\"ok\": \"yes\"")
+
+	errRR := httptest.NewRecorder()
+	writeJSON(
+		errRR,
+		http.StatusOK,
+		map[string]any{"bad": make(chan int)},
+	)
+	require.Equal(t, http.StatusInternalServerError, errRR.Code)
+
+	require.Empty(t, fallbackJobName(nil))
+	require.Equal(
+		t,
+		"job-1",
+		fallbackJobName(&cron.Job{ID: " job-1 "}),
+	)
+	require.Equal(
+		t,
+		"named",
+		fallbackJobName(&cron.Job{Name: " named ", ID: "job-2"}),
+	)
+	require.Equal(t, "short", summarizeText(" short ", 0))
+	require.Equal(t, "abc...", summarizeText("abcdef", 3))
+	require.Equal(t, 5, intFromMap(5))
+	require.Zero(t, intFromMap("bad"))
+	require.Nil(t, stringSliceFromMap(nil))
+	require.Equal(
+		t,
+		[]string{"a", "b"},
+		stringSliceFromMap([]string{"b", "a"}),
+	)
+	require.Nil(t, stringSliceFromMap("bad"))
+
+	now := time.Date(2026, 3, 7, 11, 0, 0, 0, time.UTC)
+	require.Equal(t, "-", formatTime(time.Time{}))
+	require.Equal(t, "-", formatTime((*time.Time)(nil)))
+	require.Equal(
+		t,
+		now.Local().Format(formatTimeLayout),
+		formatTime(now),
+	)
+	require.Equal(t, "-", formatTime("bad"))
+	require.Equal(t, "-", formatUptime(time.Time{}, now))
+	require.Equal(t, "0s", formatUptime(now, now.Add(-time.Minute)))
+
+	require.Equal(t, uploadFilters{}, uploadFiltersFromRequest(nil))
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/?"+url.Values{
+			queryChannel:   []string{" telegram "},
+			queryUserID:    []string{" u1 "},
+			querySessionID: []string{" s1 "},
+			queryKind:      []string{" pdf "},
+			queryMimeType:  []string{" application/pdf "},
+			querySource:    []string{" derived "},
+		}.Encode(),
+		nil,
+	)
+	require.Equal(
+		t,
+		uploadFilters{
+			Channel:   "telegram",
+			UserID:    "u1",
+			SessionID: "s1",
+			Kind:      "pdf",
+			MimeType:  "application/pdf",
+			Source:    "derived",
+		},
+		uploadFiltersFromRequest(req),
+	)
+}
+
+func TestServiceResolveDebugFileAndMethodChecks(t *testing.T) {
+	t.Parallel()
+
+	debugDir := t.TempDir()
+	traceDir := filepath.Join(debugDir, "20260307", "trace")
+	require.NoError(t, os.MkdirAll(traceDir, 0o755))
+	metaPath := filepath.Join(traceDir, debugMetaFileName)
+	require.NoError(t, os.WriteFile(metaPath, []byte("{}"), 0o600))
+
+	svc := New(Config{DebugDir: debugDir})
+	got, err := svc.resolveDebugFile("20260307/trace", debugMetaFileName)
+	require.NoError(t, err)
+	require.Equal(t, metaPath, got)
+
+	_, err = svc.resolveDebugFile("", debugMetaFileName)
+	require.Error(t, err)
+	_, err = svc.resolveDebugFile("20260307/trace", "notes.txt")
+	require.Error(t, err)
+	_, err = svc.resolveDebugFile("../escape", debugMetaFileName)
+	require.Error(t, err)
+	_, err = svc.resolveDebugFile("20260307/missing", debugMetaFileName)
+	require.Error(t, err)
+
+	handler := svc.Handler()
+	routes := []string{
+		routeStatusJSON,
+		routeJobsJSON,
+		routeExecSessionsJSON,
+		routeUploadsJSON,
+		routeUploadSessions,
+		routeDebugSessionsJSON,
+		routeDebugTracesJSON,
+	}
+	for _, route := range routes {
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, route, nil)
+		handler.ServeHTTP(rr, req)
+		require.Equal(t, http.StatusMethodNotAllowed, rr.Code)
+	}
+}
