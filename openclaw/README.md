@@ -110,6 +110,8 @@ Trace output location:
   - `attachments/<sha256>`: stored bytes (mode `full` only)
   - `by-session/.../trace.json`: pointer to the canonical trace dir
 
+This repo ships the same sample config as [`./openclaw.yaml`](./openclaw.yaml).
+
 Example config:
 
 ```yaml
@@ -149,11 +151,6 @@ tools:
   # OpenClaw executes them concurrently.
   enable_parallel_tools: true
 
-gateway:
-  allow_users: ["123456789"]
-  require_mention: false
-  mention_patterns: ["@mybot"]
-
 channels:
   - type: "telegram"
     config:
@@ -184,6 +181,8 @@ Notes:
 - Duration fields use Go-style strings like `60s`, `10m`, `1h`.
 - For secrets (model keys, Telegram tokens), keep them out of version control.
   Prefer environment variables when available.
+- The sample config in `./openclaw.yaml` is ready to use with
+  `go run ./cmd/openclaw -config ./openclaw.yaml`.
 - Plugin sections:
   - `channels` configures channel plugins. This demo binary ships with the
     `telegram` channel plugin; other channel types require a custom binary
