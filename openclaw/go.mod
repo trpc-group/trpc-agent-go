@@ -34,6 +34,8 @@ replace trpc.group/trpc-go/trpc-agent-go/session/postgres => ../session/postgres
 
 replace trpc.group/trpc-go/trpc-agent-go/session/redis => ../session/redis
 
+replace trpc.group/trpc-go/trpc-agent-go/session/sqlite => ../session/sqlite
+
 replace trpc.group/trpc-go/trpc-agent-go/storage/clickhouse => ../storage/clickhouse
 
 replace trpc.group/trpc-go/trpc-agent-go/storage/mysql => ../storage/mysql
@@ -47,7 +49,10 @@ require (
 	github.com/alicebob/miniredis/v2 v2.35.0
 	github.com/creack/pty v1.1.24
 	github.com/google/uuid v1.6.0
+	github.com/mattn/go-sqlite3 v1.14.32
+	github.com/robfig/cron/v3 v3.0.1
 	github.com/stretchr/testify v1.11.1
+	github.com/yuin/goldmark v1.7.13
 	gopkg.in/yaml.v3 v3.0.1
 	trpc.group/trpc-go/trpc-agent-go v1.5.0
 	trpc.group/trpc-go/trpc-agent-go/memory/mysql v1.5.0
@@ -58,6 +63,7 @@ require (
 	trpc.group/trpc-go/trpc-agent-go/session/mysql v1.5.0
 	trpc.group/trpc-go/trpc-agent-go/session/postgres v1.5.0
 	trpc.group/trpc-go/trpc-agent-go/session/redis v0.0.3
+	trpc.group/trpc-go/trpc-agent-go/session/sqlite v1.5.0
 	trpc.group/trpc-go/trpc-agent-go/storage/clickhouse v1.5.0
 	trpc.group/trpc-go/trpc-agent-go/storage/mysql v1.5.0
 	trpc.group/trpc-go/trpc-agent-go/storage/postgres v1.5.0
@@ -136,7 +142,6 @@ require (
 	github.com/wneessen/go-mail v0.7.2 // indirect
 	github.com/woodsbury/decimal128 v1.3.0 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
-	github.com/yuin/goldmark v1.7.13 // indirect
 	github.com/yuin/gopher-lua v1.1.1 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.61.0 // indirect

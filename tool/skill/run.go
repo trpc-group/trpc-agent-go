@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -106,6 +107,8 @@ const (
 const (
 	envPath       = "PATH"
 	envVirtualEnv = "VIRTUAL_ENV"
+	envEditor     = "EDITOR"
+	envVisual     = "VISUAL"
 )
 
 const (
@@ -120,6 +123,13 @@ const (
 const workspaceMetadataFileMode uint32 = 0o600
 
 const workspaceMetadataTmpFile = ".metadata.tmp"
+
+const (
+	editorHelperDir     = ".trpc_agent"
+	editorContentFile   = "editor_input.txt"
+	editorScriptFile    = "editor_write.sh"
+	editorScriptMissing = "editor wrapper: missing target file"
+)
 
 // WithAllowedCommands restricts skill_run to a single program execution
 // whose command name is in the allowlist.
@@ -246,6 +256,8 @@ type runInput struct {
 	Command        string            `json:"command"`
 	Cwd            string            `json:"cwd,omitempty"`
 	Env            map[string]string `json:"env,omitempty"`
+	Stdin          string            `json:"stdin,omitempty"`
+	EditorText     string            `json:"editor_text,omitempty"`
 	OutputFiles    []string          `json:"output_files,omitempty"`
 	Timeout        int               `json:"timeout,omitempty"`
 	SaveArtifacts  bool              `json:"save_as_artifacts,omitempty"`
@@ -341,6 +353,18 @@ func (t *RunTool) Declaration() *tool.Declaration {
 				"cwd":     {Type: "string", Description: "Working dir"},
 				"env": {Type: "object", Description: "Env vars",
 					AdditionalProperties: &tool.Schema{Type: "string"}},
+				"stdin": {
+					Type: "string",
+					Description: "Optional one-shot stdin text " +
+						"passed to the command",
+				},
+				"editor_text": {
+					Type: "string",
+					Description: "Optional text used to satisfy " +
+						"CLIs that launch $EDITOR. When set, " +
+						"skill_run stages a temporary editor " +
+						"wrapper and points EDITOR/VISUAL to it.",
+				},
 				"output_files": {Type: "array",
 					Items: &tool.Schema{Type: "string"},
 					Description: "Workspace-relative paths/globs to " +
@@ -625,6 +649,7 @@ const (
 
 	userFileInputKeyFileIDPrefix = "file_id/"
 	userFileInputKeySHA256Prefix = "sha256/"
+	userFileInputHostPrefix      = "host://"
 
 	userFileInputWarnPrefix     = "user file input:"
 	userFileInputWarnMissingRef = userFileInputWarnPrefix +
@@ -912,6 +937,9 @@ func userFileInputBytes(
 	if strings.HasPrefix(fileID, fileref.ArtifactPrefix) {
 		return userFileInputArtifactBytes(ctx, fileID)
 	}
+	if hostPath, ok := userFileInputHostPath(fileID); ok {
+		return userFileInputHostBytes(hostPath, f)
+	}
 	dl, ok := mdl.(model.FileDownloader)
 	if !ok || dl == nil {
 		return nil, "", userFileInputWarnNoDownloader
@@ -925,6 +953,42 @@ func userFileInputBytes(
 		)
 	}
 	return data, mime, ""
+}
+
+func userFileInputHostPath(fileID string) (string, bool) {
+	trimmed := strings.TrimSpace(fileID)
+	if trimmed == "" {
+		return "", false
+	}
+	if strings.HasPrefix(trimmed, userFileInputHostPrefix) {
+		hostPath := strings.TrimPrefix(
+			trimmed,
+			userFileInputHostPrefix,
+		)
+		if filepath.IsAbs(hostPath) {
+			return hostPath, true
+		}
+		return "", false
+	}
+	if filepath.IsAbs(trimmed) {
+		return trimmed, true
+	}
+	return "", false
+}
+
+func userFileInputHostBytes(
+	hostPath string,
+	f model.File,
+) ([]byte, string, string) {
+	data, err := os.ReadFile(hostPath)
+	if err != nil {
+		return nil, "", fmt.Sprintf(
+			"user file input: read host path %s: %v",
+			hostPath,
+			err,
+		)
+	}
+	return data, strings.TrimSpace(f.MimeType), ""
 }
 
 func userFileInputArtifactBytes(
@@ -1496,17 +1560,31 @@ func (t *RunTool) runProgram(
 	cwd string,
 	in runInput,
 ) (codeexecutor.RunResult, error) {
+	spec, err := t.buildRunProgramSpec(ctx, eng, ws, cwd, in)
+	if err != nil {
+		return codeexecutor.RunResult{}, err
+	}
+	return eng.Runner().RunProgram(ctx, ws, spec)
+}
+
+func (t *RunTool) buildRunProgramSpec(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	ws codeexecutor.Workspace,
+	cwd string,
+	in runInput,
+) (codeexecutor.RunProgramSpec, error) {
 	timeout := time.Duration(in.Timeout) * time.Second
 	if in.Timeout <= 0 {
 		timeout = defaultSkillRunTimeout
 	}
-	env := in.Env
-	if env == nil {
-		env = map[string]string{}
-	}
+	env := cloneStringMap(in.Env)
 	t.maybeInjectSkillEnv(ctx, in.Skill, env)
 	if _, ok := env[codeexecutor.EnvSkillName]; !ok {
 		env[codeexecutor.EnvSkillName] = in.Skill
+	}
+	if err := t.prepareEditorEnv(ctx, eng, ws, env, in.EditorText); err != nil {
+		return codeexecutor.RunProgramSpec{}, err
 	}
 
 	venvRel, venvBinRel := venvRelPaths(cwd, in.Skill)
@@ -1515,42 +1593,40 @@ func (t *RunTool) runProgram(
 		injectVenvEnv(env, venvRel, venvBinRel)
 		argv, err := splitCommandLine(in.Command)
 		if err != nil {
-			return codeexecutor.RunResult{}, err
+			return codeexecutor.RunProgramSpec{}, err
 		}
 		cmd := argv[0]
 		if len(t.allowedCmds) > 0 && !cmdInList(t.allowedCmds, cmd) {
-			return codeexecutor.RunResult{}, fmt.Errorf(
+			return codeexecutor.RunProgramSpec{}, fmt.Errorf(
 				"skill_run: command %q is not allowed by allowed_commands",
 				cmd,
 			)
 		}
 		if cmdInList(t.deniedCmds, cmd) {
-			return codeexecutor.RunResult{}, fmt.Errorf(
+			return codeexecutor.RunProgramSpec{}, fmt.Errorf(
 				"skill_run: command %q is denied by denied_commands",
 				cmd,
 			)
 		}
-		return eng.Runner().RunProgram(
-			ctx, ws, codeexecutor.RunProgramSpec{
-				Cmd:     cmd,
-				Args:    argv[1:],
-				Env:     env,
-				Cwd:     cwd,
-				Timeout: timeout,
-			},
-		)
+		return codeexecutor.RunProgramSpec{
+			Cmd:     cmd,
+			Args:    argv[1:],
+			Env:     env,
+			Cwd:     cwd,
+			Stdin:   in.Stdin,
+			Timeout: timeout,
+		}, nil
 	}
 
 	cmd := wrapWithVenvPrefix(in.Command, venvRel, venvBinRel)
-	return eng.Runner().RunProgram(
-		ctx, ws, codeexecutor.RunProgramSpec{
-			Cmd:     "bash",
-			Args:    []string{"-c", cmd},
-			Env:     env,
-			Cwd:     cwd,
-			Timeout: timeout,
-		},
-	)
+	return codeexecutor.RunProgramSpec{
+		Cmd:     "bash",
+		Args:    []string{"-c", cmd},
+		Env:     env,
+		Cwd:     cwd,
+		Stdin:   in.Stdin,
+		Timeout: timeout,
+	}, nil
 }
 
 func venvRelPaths(cwd string, skillName string) (string, string) {
@@ -1698,6 +1774,91 @@ func injectVenvEnv(env map[string]string, venv string, venvBin string) {
 		return
 	}
 	env[envPath] = venvBin + sep + basePATH
+}
+
+func cloneStringMap(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return map[string]string{}
+	}
+	out := make(map[string]string, len(src))
+	for k, v := range src {
+		out[k] = v
+	}
+	return out
+}
+
+func (t *RunTool) prepareEditorEnv(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	ws codeexecutor.Workspace,
+	env map[string]string,
+	editorText string,
+) error {
+	if editorText == "" {
+		return nil
+	}
+	if _, ok := env[envEditor]; ok {
+		return fmt.Errorf(
+			"editor_text cannot be combined with env.%s",
+			envEditor,
+		)
+	}
+	if _, ok := env[envVisual]; ok {
+		return fmt.Errorf(
+			"editor_text cannot be combined with env.%s",
+			envVisual,
+		)
+	}
+
+	contentRel := path.Join(
+		codeexecutor.DirWork,
+		editorHelperDir,
+		editorContentFile,
+	)
+	scriptRel := path.Join(
+		codeexecutor.DirWork,
+		editorHelperDir,
+		editorScriptFile,
+	)
+	contentPath := path.Join(ws.Path, contentRel)
+	scriptPath := path.Join(ws.Path, scriptRel)
+
+	script := buildEditorWrapperScript(contentPath)
+	files := []codeexecutor.PutFile{
+		{
+			Path:    contentRel,
+			Content: []byte(editorText),
+			Mode:    codeexecutor.DefaultScriptFileMode,
+		},
+		{
+			Path:    scriptRel,
+			Content: []byte(script),
+			Mode:    codeexecutor.DefaultExecFileMode,
+		},
+	}
+	if err := eng.FS().PutFiles(ctx, ws, files); err != nil {
+		return err
+	}
+	env[envEditor] = scriptPath
+	env[envVisual] = scriptPath
+	return nil
+}
+
+func buildEditorWrapperScript(contentPath string) string {
+	var sb strings.Builder
+	sb.WriteString("#!/bin/sh\n")
+	sb.WriteString("set -eu\n")
+	sb.WriteString("for last do target=\"$last\"; done\n")
+	sb.WriteString("if [ -z \"${target:-}\" ]; then\n")
+	sb.WriteString("  echo ")
+	sb.WriteString(shellQuote(editorScriptMissing))
+	sb.WriteString(" >&2\n")
+	sb.WriteString("  exit 1\n")
+	sb.WriteString("fi\n")
+	sb.WriteString("cat ")
+	sb.WriteString(shellQuote(contentPath))
+	sb.WriteString(" > \"$target\"\n")
+	return sb.String()
 }
 
 func wrapWithVenvPrefix(cmd string, venv string, venvBin string) string {

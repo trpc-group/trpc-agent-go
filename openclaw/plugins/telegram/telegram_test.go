@@ -85,6 +85,10 @@ group_policy: allowlist
 allow_threads:
   - "x"
 pairing_ttl: 30m
+max_download_bytes: 123
+session_reset_idle: 24h
+session_reset_daily: true
+on_block: forget
 `),
 	}
 
@@ -99,6 +103,44 @@ pairing_ttl: 30m
 	require.NoError(t, err)
 	require.NotNil(t, ch)
 	require.Equal(t, pluginType, ch.ID())
+}
+
+func TestNewChannel_BadSessionResetIdle(t *testing.T) {
+	srv := newTelegramServer(t, testToken)
+	t.Setenv(tgapi.BaseURLEnvName, srv.URL)
+
+	spec := registry.PluginSpec{
+		Type: pluginType,
+		Config: mustYAMLNode(t, `
+token: `+testToken+`
+session_reset_idle: bad
+`),
+	}
+
+	_, err := newChannel(registry.ChannelDeps{
+		Gateway:  stubGateway{},
+		StateDir: t.TempDir(),
+	}, spec)
+	require.Error(t, err)
+}
+
+func TestNewChannel_BadOnBlock(t *testing.T) {
+	srv := newTelegramServer(t, testToken)
+	t.Setenv(tgapi.BaseURLEnvName, srv.URL)
+
+	spec := registry.PluginSpec{
+		Type: pluginType,
+		Config: mustYAMLNode(t, `
+token: `+testToken+`
+on_block: bad
+`),
+	}
+
+	_, err := newChannel(registry.ChannelDeps{
+		Gateway:  stubGateway{},
+		StateDir: t.TempDir(),
+	}, spec)
+	require.Error(t, err)
 }
 
 func TestNewChannel_NilGateway(t *testing.T) {

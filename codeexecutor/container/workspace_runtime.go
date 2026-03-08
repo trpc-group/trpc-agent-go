@@ -446,7 +446,12 @@ func (r *workspaceRuntime) RunProgram(
 		cmdline.WriteString(shellQuote(a))
 	}
 	argv := []string{"/bin/bash", "-lc", cmdline.String()}
-	out, errOut, code, timed, err := r.execCmd(ctx, argv, t)
+	out, errOut, code, timed, err := r.execCmdWithStdin(
+		ctx,
+		argv,
+		t,
+		spec.Stdin,
+	)
 	res := codeexecutor.RunResult{
 		Stdout:   out,
 		Stderr:   errOut,
@@ -1035,12 +1040,22 @@ func (r *workspaceRuntime) execCmd(
 	argv []string,
 	timeout time.Duration,
 ) (string, string, int, bool, error) {
+	return r.execCmdWithStdin(ctx, argv, timeout, "")
+}
+
+func (r *workspaceRuntime) execCmdWithStdin(
+	ctx context.Context,
+	argv []string,
+	timeout time.Duration,
+	stdin string,
+) (string, string, int, bool, error) {
 	tctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	ec := tcontainer.ExecOptions{
 		Cmd:          argv,
 		AttachStdout: true,
 		AttachStderr: true,
+		AttachStdin:  stdin != "",
 	}
 	ex, err := r.ce.client.ContainerExecCreate(
 		tctx, r.ce.container.ID, ec,
@@ -1055,8 +1070,26 @@ func (r *workspaceRuntime) execCmd(
 		return "", "", 0, false, err
 	}
 	defer hj.Close()
+
+	writeDone := make(chan error, 1)
+	if stdin != "" {
+		go func() {
+			_, err := io.WriteString(hj.Conn, stdin)
+			if closeErr := hj.CloseWrite(); err == nil &&
+				closeErr != nil {
+				err = closeErr
+			}
+			writeDone <- err
+		}()
+	}
+
 	var stdout, stderr bytes.Buffer
 	_, err = stdcopy.StdCopy(&stdout, &stderr, hj.Reader)
+	if stdin != "" {
+		if writeErr := <-writeDone; err == nil && writeErr != nil {
+			err = writeErr
+		}
+	}
 	if err != nil {
 		return "", "", 0, false, err
 	}

@@ -1,0 +1,37 @@
+app_name: "openclaw"
+
+http:
+  addr: ":8080"
+
+admin:
+  enabled: true
+  addr: "127.0.0.1:19789"
+  auto_port: true
+
+agent:
+  instruction: "You are a helpful assistant. Reply in a friendly tone."
+
+model:
+  mode: "openai"
+  name: "gpt-5"
+  openai_variant: "auto"
+
+tools:
+  enable_parallel_tools: true
+
+channels:
+  - type: "telegram"
+    config:
+      token: "${TELEGRAM_BOT_TOKEN}"
+      streaming: "progress"
+      http_timeout: "60s"
+
+session:
+  backend: "inmemory"
+  summary:
+    enabled: false
+
+memory:
+  backend: "inmemory"
+  auto:
+    enabled: false

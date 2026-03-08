@@ -13,10 +13,14 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -28,12 +32,20 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
 const (
 	testTimeout   = 2 * time.Second
 	testShortWait = 100 * time.Millisecond
+
+	debugEventsFile     = "events.jsonl"
+	debugMetaFile       = "meta.json"
+	debugResultFile     = "result.json"
+	debugAttachmentsDir = "attachments"
 )
 
 type stubRunner struct {
@@ -126,6 +138,54 @@ func (r *recordingRunner) Last() model.Message {
 	return r.last
 }
 
+type runOptionsRunner struct {
+	mu   sync.Mutex
+	opts agent.RunOptions
+}
+
+func (r *runOptionsRunner) Run(
+	_ context.Context,
+	_ string,
+	_ string,
+	_ model.Message,
+	opts ...agent.RunOption,
+) (<-chan *event.Event, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	cfg := agent.RunOptions{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
+	r.opts = cfg
+
+	ch := make(chan *event.Event, 1)
+	ch <- &event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{
+				{Message: model.NewAssistantMessage("ok")},
+			},
+			Done: true,
+		},
+		RequestID: "req-1",
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (r *runOptionsRunner) Close() error {
+	return nil
+}
+
+func (r *runOptionsRunner) Options() agent.RunOptions {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.opts
+}
+
 func strPtr(s string) *string {
 	return &s
 }
@@ -200,6 +260,166 @@ func TestDefaultSessionID_Thread(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, "http:thread:g1", id)
+}
+
+func TestBuildUploadContextText(t *testing.T) {
+	t.Parallel()
+
+	text := buildUploadContextText([]uploads.ListedFile{
+		{
+			Name: "voice.ogg",
+			Path: "/tmp/voice.ogg",
+		},
+		{
+			Name: "clip.mp4",
+			Path: "/tmp/clip.mp4",
+		},
+		{
+			Name: "report.pdf",
+			Path: "/tmp/report.pdf",
+		},
+	})
+	require.Contains(t, text, "voice.ogg [audio]")
+	require.Contains(t, text, "clip.mp4 [video]")
+	require.Contains(t, text, "report.pdf [pdf]")
+	require.Contains(t, text, recentUploadKindHeader)
+	require.Contains(t, text, "- audio: voice.ogg")
+	require.Contains(t, text, "- video: clip.mp4")
+	require.Contains(t, text, "- pdf: report.pdf")
+}
+
+func TestBuildUploadContextText_UsesPersistedMimeType(t *testing.T) {
+	t.Parallel()
+
+	text := buildUploadContextText([]uploads.ListedFile{{
+		Name:     "video-note",
+		Path:     "/tmp/video-note",
+		MimeType: "video/mp4",
+	}})
+	require.Contains(t, text, "video-note [video]")
+	require.Contains(t, text, "- video: video-note")
+}
+
+func TestBuildUploadContextText_RewritesGeneratedNames(t *testing.T) {
+	t.Parallel()
+
+	text := buildUploadContextText([]uploads.ListedFile{
+		{
+			Name:     "file_10.mp4",
+			Path:     "/tmp/file_10.mp4",
+			MimeType: "video/mp4",
+		},
+		{
+			Name:     "file_11.ogg",
+			Path:     "/tmp/file_11.ogg",
+			MimeType: "audio/ogg",
+		},
+	})
+	require.Contains(t, text, "video.mp4 [video]")
+	require.Contains(t, text, "audio.ogg [audio]")
+	require.Contains(t, text, "- video: video.mp4")
+	require.Contains(t, text, "- audio: audio.ogg")
+	require.NotContains(t, text, "file_10.mp4 [video]")
+	require.NotContains(t, text, "file_11.ogg [audio]")
+}
+
+func TestServerUploadContextMessages(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	store, err := uploads.NewStore(stateDir)
+	require.NoError(t, err)
+
+	scope := uploads.Scope{
+		Channel:   "telegram",
+		UserID:    "u1",
+		SessionID: "telegram:dm:u1:s1",
+	}
+	_, err = store.Save(
+		context.Background(),
+		scope,
+		"clip.mp4",
+		[]byte("video"),
+	)
+	require.NoError(t, err)
+
+	srv := &Server{uploads: store}
+	msgs := srv.uploadContextMessages("u1", "telegram:dm:u1:s1")
+	require.Len(t, msgs, 1)
+	require.Contains(t, msgs[0].Content, recentUploadContextHeader)
+	require.Contains(t, msgs[0].Content, "clip.mp4 [video]")
+}
+
+func TestServerUploadContextMessages_UsesStoredMimeType(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	store, err := uploads.NewStore(stateDir)
+	require.NoError(t, err)
+
+	scope := uploads.Scope{
+		Channel:   "telegram",
+		UserID:    "u1",
+		SessionID: "telegram:dm:u1:s1",
+	}
+	_, err = store.SaveWithMetadata(
+		context.Background(),
+		scope,
+		"video-note",
+		"video/mp4",
+		[]byte("video"),
+	)
+	require.NoError(t, err)
+
+	srv := &Server{uploads: store}
+	msgs := srv.uploadContextMessages("u1", "telegram:dm:u1:s1")
+	require.Len(t, msgs, 1)
+	require.Contains(t, msgs[0].Content, "video-note [video]")
+}
+
+func TestServerInjectedContextMessages_IncludePersonaAndUploads(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	uploadStore, err := uploads.NewStore(stateDir)
+	require.NoError(t, err)
+
+	personaPath, err := persona.DefaultStorePath(stateDir)
+	require.NoError(t, err)
+	personaStore, err := persona.NewStore(personaPath)
+	require.NoError(t, err)
+
+	sessionID := "telegram:dm:u1:rotated"
+	scope := uploads.Scope{
+		Channel:   "telegram",
+		UserID:    "u1",
+		SessionID: sessionID,
+	}
+	_, err = uploadStore.Save(
+		context.Background(),
+		scope,
+		"clip.mp4",
+		[]byte("video"),
+	)
+	require.NoError(t, err)
+
+	_, err = personaStore.Set(
+		context.Background(),
+		persona.DMScopeKey("telegram", "u1"),
+		persona.PresetGirlfriend,
+	)
+	require.NoError(t, err)
+
+	srv := &Server{
+		uploads:      uploadStore,
+		personaStore: personaStore,
+	}
+	msgs := srv.injectedContextMessages("u1", sessionID)
+	require.Len(t, msgs, 2)
+	require.Contains(t, msgs[0].Content, personaContextHeader)
+	require.Contains(t, msgs[0].Content, persona.PresetGirlfriend)
+	require.Contains(t, msgs[1].Content, recentUploadContextHeader)
+	require.Contains(t, msgs[1].Content, "clip.mp4 [video]")
 }
 
 func TestDefaultSessionID_MissingFromForDM(t *testing.T) {
@@ -744,6 +964,335 @@ func TestServer_ProcessMessage_LargeInlineData(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, rr.Code)
 }
 
+func TestServer_ProcessMessage_FileUploadStorePersistsHostRef(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	store, err := uploads.NewStore(t.TempDir())
+	require.NoError(t, err)
+
+	r := &recordingRunner{}
+	srv, err := New(r, WithUploadStore(store))
+	require.NoError(t, err)
+
+	pdfBytes := []byte("%PDF-1.4")
+	req := gwproto.MessageRequest{
+		Channel:   "telegram",
+		From:      "u1",
+		SessionID: "telegram:dm:u1",
+		ContentParts: []gwproto.ContentPart{
+			{
+				Type: gwproto.PartTypeFile,
+				File: &gwproto.FilePart{
+					Filename: "report.pdf",
+					Data:     pdfBytes,
+				},
+			},
+		},
+	}
+
+	rsp, status := srv.ProcessMessage(context.Background(), req)
+	require.Equal(t, http.StatusOK, status)
+	require.Equal(t, "ok", rsp.Reply)
+
+	msg := r.Last()
+	require.Len(t, msg.ContentParts, 1)
+	require.NotNil(t, msg.ContentParts[0].File)
+	filePart := msg.ContentParts[0].File
+	require.Equal(t, "report.pdf", filePart.Name)
+	require.Empty(t, filePart.Data)
+	require.NotEmpty(t, filePart.FileID)
+
+	path, ok := uploads.PathFromHostRef(filePart.FileID)
+	require.True(t, ok)
+	require.Contains(t, path, store.Root())
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, pdfBytes, data)
+}
+
+func TestServer_ProcessMessage_IncludesRecentUploadContext(t *testing.T) {
+	t.Parallel()
+
+	store, err := uploads.NewStore(t.TempDir())
+	require.NoError(t, err)
+
+	runner := &runOptionsRunner{}
+	srv, err := New(runner, WithUploadStore(store))
+	require.NoError(t, err)
+
+	req := gwproto.MessageRequest{
+		Channel:   "telegram",
+		From:      "u1",
+		SessionID: "telegram:dm:u1",
+		ContentParts: []gwproto.ContentPart{
+			{
+				Type: gwproto.PartTypeFile,
+				File: &gwproto.FilePart{
+					Filename: "report.pdf",
+					Data:     []byte("%PDF"),
+				},
+			},
+		},
+	}
+
+	rsp, status := srv.ProcessMessage(context.Background(), req)
+	require.Equal(t, http.StatusOK, status)
+	require.Equal(t, "ok", rsp.Reply)
+
+	opts := runner.Options()
+	require.Len(t, opts.InjectedContextMessages, 1)
+	require.Contains(
+		t,
+		opts.InjectedContextMessages[0].Content,
+		"report.pdf [pdf]",
+	)
+	require.Contains(
+		t,
+		opts.InjectedContextMessages[0].Content,
+		"OPENCLAW_RECENT_UPLOADS_JSON",
+	)
+}
+
+func TestServer_ProcessMessage_DebugRecorderWritesTrace(t *testing.T) {
+	t.Parallel()
+
+	mode, err := debugrecorder.ParseMode("full")
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	rec, err := debugrecorder.New(dir, mode)
+	require.NoError(t, err)
+
+	r := &recordingRunner{}
+	srv, err := New(r, WithDebugRecorder(rec))
+	require.NoError(t, err)
+
+	data := []byte("hello")
+	req := gwproto.MessageRequest{
+		From: "u1",
+		ContentParts: []gwproto.ContentPart{
+			{
+				Type: gwproto.PartTypeFile,
+				File: &gwproto.FilePart{
+					Filename: "a.txt",
+					Data:     data,
+				},
+			},
+		},
+	}
+
+	rsp, status := srv.ProcessMessage(context.Background(), req)
+	require.Equal(t, http.StatusOK, status)
+	require.Equal(t, "ok", rsp.Reply)
+
+	matches, err := filepath.Glob(
+		filepath.Join(dir, "*", "*", debugEventsFile),
+	)
+	require.NoError(t, err)
+	require.Len(t, matches, 1)
+
+	root := filepath.Dir(matches[0])
+	_, err = os.Stat(filepath.Join(root, debugMetaFile))
+	require.NoError(t, err)
+	_, err = os.Stat(filepath.Join(root, debugResultFile))
+	require.NoError(t, err)
+
+	sum := sha256.Sum256(data)
+	shaHex := hex.EncodeToString(sum[:])
+	dst := filepath.Join(root, debugAttachmentsDir, shaHex)
+	_, err = os.Stat(dst)
+	require.NoError(t, err)
+}
+
+func TestServer_ProcessMessage_DebugRecorder_IgnoresStatus(t *testing.T) {
+	t.Parallel()
+
+	mode, err := debugrecorder.ParseMode("safe")
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	rec, err := debugrecorder.New(dir, mode)
+	require.NoError(t, err)
+
+	srv, err := New(
+		&stubRunner{},
+		WithDebugRecorder(rec),
+		WithRequireMentionInThreads(true),
+		WithMentionPatterns("@bot"),
+	)
+	require.NoError(t, err)
+
+	rsp, status := srv.ProcessMessage(
+		context.Background(),
+		gwproto.MessageRequest{
+			From:   "u1",
+			Thread: "g1",
+			Text:   "hello",
+		},
+	)
+	require.Equal(t, http.StatusOK, status)
+	require.True(t, rsp.Ignored)
+}
+
+func TestServer_ProcessMessage_DebugRecorder_MissingText(t *testing.T) {
+	t.Parallel()
+
+	mode, err := debugrecorder.ParseMode("safe")
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	rec, err := debugrecorder.New(dir, mode)
+	require.NoError(t, err)
+
+	srv, err := New(&stubRunner{}, WithDebugRecorder(rec))
+	require.NoError(t, err)
+
+	rsp, status := srv.ProcessMessage(
+		context.Background(),
+		gwproto.MessageRequest{From: "u1"},
+	)
+	require.Equal(t, http.StatusBadRequest, status)
+	require.NotNil(t, rsp.Error)
+	require.Equal(t, errTypeInvalidRequest, rsp.Error.Type)
+	require.Contains(t, rsp.Error.Message, "missing text")
+}
+
+func TestServer_ProcessMessage_DebugRecorder_Unauthorized(t *testing.T) {
+	t.Parallel()
+
+	mode, err := debugrecorder.ParseMode("safe")
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	rec, err := debugrecorder.New(dir, mode)
+	require.NoError(t, err)
+
+	srv, err := New(
+		&stubRunner{},
+		WithAllowUsers("u2"),
+		WithDebugRecorder(rec),
+	)
+	require.NoError(t, err)
+
+	rsp, status := srv.ProcessMessage(
+		context.Background(),
+		gwproto.MessageRequest{From: "u1", Text: "hello"},
+	)
+	require.Equal(t, http.StatusForbidden, status)
+	require.NotNil(t, rsp.Error)
+	require.Equal(t, errTypeUnauthorized, rsp.Error.Type)
+}
+
+func TestServer_ProcessMessage_DebugRecorder_RunError(t *testing.T) {
+	t.Parallel()
+
+	mode, err := debugrecorder.ParseMode("safe")
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	rec, err := debugrecorder.New(dir, mode)
+	require.NoError(t, err)
+
+	srv, err := New(
+		&staticRunner{err: errors.New("runner boom")},
+		WithDebugRecorder(rec),
+	)
+	require.NoError(t, err)
+
+	rsp, status := srv.ProcessMessage(
+		context.Background(),
+		gwproto.MessageRequest{From: "u1", Text: "hello"},
+	)
+	require.Equal(t, http.StatusInternalServerError, status)
+	require.NotNil(t, rsp.Error)
+	require.Equal(t, errTypeInternal, rsp.Error.Type)
+}
+
+func TestServer_ProcessMessage_MissingUserIDAndFrom(t *testing.T) {
+	t.Parallel()
+
+	srv, err := New(&stubRunner{})
+	require.NoError(t, err)
+
+	rsp, status := srv.ProcessMessage(
+		context.Background(),
+		gwproto.MessageRequest{Text: "hello"},
+	)
+	require.Equal(t, http.StatusBadRequest, status)
+	require.NotNil(t, rsp.Error)
+	require.Equal(t, errTypeInvalidRequest, rsp.Error.Type)
+	require.Contains(t, rsp.Error.Message, "missing user_id")
+}
+
+func TestServer_ProcessMessage_RequireMention_Ignores(t *testing.T) {
+	t.Parallel()
+
+	srv, err := New(
+		&stubRunner{},
+		WithRequireMentionInThreads(true),
+		WithMentionPatterns("@bot"),
+	)
+	require.NoError(t, err)
+
+	rsp, status := srv.ProcessMessage(
+		context.Background(),
+		gwproto.MessageRequest{
+			From:   "u1",
+			Thread: "g1",
+			Text:   "hello",
+		},
+	)
+	require.Equal(t, http.StatusOK, status)
+	require.True(t, rsp.Ignored)
+	require.Nil(t, rsp.Error)
+}
+
+func TestServer_ProcessMessage_SessionIDFuncError(t *testing.T) {
+	t.Parallel()
+
+	srv, err := New(
+		&stubRunner{},
+		WithSessionIDFunc(func(_ InboundMessage) (string, error) {
+			return "", errors.New("bad sid")
+		}),
+	)
+	require.NoError(t, err)
+
+	rsp, status := srv.ProcessMessage(
+		context.Background(),
+		gwproto.MessageRequest{
+			From: "u1",
+			Text: "hello",
+		},
+	)
+	require.Equal(t, http.StatusBadRequest, status)
+	require.NotNil(t, rsp.Error)
+	require.Equal(t, errTypeInvalidRequest, rsp.Error.Type)
+	require.Contains(t, rsp.Error.Message, "bad sid")
+}
+
+func TestServer_ProcessMessage_RunError(t *testing.T) {
+	t.Parallel()
+
+	r := &staticRunner{err: errors.New("runner boom")}
+	srv, err := New(r)
+	require.NoError(t, err)
+
+	rsp, status := srv.ProcessMessage(
+		context.Background(),
+		gwproto.MessageRequest{
+			From: "u1",
+			Text: "hello",
+		},
+	)
+	require.Equal(t, http.StatusInternalServerError, status)
+	require.NotNil(t, rsp.Error)
+	require.Equal(t, errTypeInternal, rsp.Error.Type)
+	require.Contains(t, rsp.Error.Message, "runner boom")
+}
+
 func TestServer_New_RequireMentionWithoutPatterns(t *testing.T) {
 	t.Parallel()
 
@@ -1259,12 +1808,12 @@ func TestServer_Messages_EmptyReply(t *testing.T) {
 	)
 	srv.Handler().ServeHTTP(rr, req)
 
-	require.Equal(t, http.StatusInternalServerError, rr.Code)
+	require.Equal(t, http.StatusOK, rr.Code)
 
 	var rsp gwproto.MessageResponse
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &rsp))
-	require.NotNil(t, rsp.Error)
-	require.Equal(t, errTypeInternal, rsp.Error.Type)
+	require.Nil(t, rsp.Error)
+	require.Equal(t, emptyReplyFallbackText, rsp.Reply)
 }
 
 func TestServer_Status_MissingRequestID(t *testing.T) {

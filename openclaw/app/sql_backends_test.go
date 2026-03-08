@@ -63,6 +63,17 @@ func TestNewClickHouseSessionBackend_MissingConfigFails(t *testing.T) {
 	require.Contains(t, err.Error(), "requires dsn or instance")
 }
 
+func TestNewSQLiteSessionBackend_MissingConfigFails(t *testing.T) {
+	t.Parallel()
+
+	_, err := newSQLiteSessionBackend(
+		registry.SessionDeps{},
+		registry.SessionBackendSpec{},
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "requires path or dsn")
+}
+
 func TestNewMySQLMemoryBackend_MissingConfigFails(t *testing.T) {
 	t.Parallel()
 

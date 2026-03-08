@@ -1351,9 +1351,18 @@ func (f *FunctionCallResponseProcessor) executeStreamableTool(
 	// Process stream chunks, handling:
 	// Case 1: Raw sub-agent event passthrough.
 	// Case 2: Plain text-like chunk. Emit partial tool.response event.
-	contents, err := f.consumeStream(ctx, invocation, toolCall, reader, eventChan)
+	contents, finalResult, err := f.consumeStream(
+		ctx,
+		invocation,
+		toolCall,
+		reader,
+		eventChan,
+	)
 	if err != nil {
 		return nil, err
+	}
+	if finalResult != nil {
+		return finalResult, nil
 	}
 	// If we forwarded inner events, still return the merged content as the tool
 	// result so it can be recorded in the tool response message for the next LLM
@@ -1370,8 +1379,9 @@ func (f *FunctionCallResponseProcessor) consumeStream(
 	toolCall model.ToolCall,
 	reader *tool.StreamReader,
 	eventChan chan<- *event.Event,
-) ([]any, error) {
+) ([]any, any, error) {
 	var contents []any
+	var finalResult any
 	for {
 		chunk, err := reader.Recv()
 		if err == io.EOF {
@@ -1389,11 +1399,19 @@ func (f *FunctionCallResponseProcessor) consumeStream(
 			break
 		}
 
-		if err := f.processStreamChunk(ctx, invocation, toolCall, chunk, eventChan, &contents); err != nil {
-			return contents, err
+		if err := f.processStreamChunk(
+			ctx,
+			invocation,
+			toolCall,
+			chunk,
+			eventChan,
+			&contents,
+			&finalResult,
+		); err != nil {
+			return contents, finalResult, err
 		}
 	}
-	return contents, nil
+	return contents, finalResult, nil
 }
 
 // appendInnerEventContent extracts textual content from an inner event and appends it.
@@ -1643,7 +1661,21 @@ func (f *FunctionCallResponseProcessor) processStreamChunk(
 	chunk tool.StreamChunk,
 	eventChan chan<- *event.Event,
 	contents *[]any,
+	finalResult *any,
 ) error {
+	switch v := chunk.Content.(type) {
+	case tool.FinalResultChunk:
+		if finalResult != nil {
+			*finalResult = v.Result
+		}
+		return nil
+	case *tool.FinalResultChunk:
+		if v != nil && finalResult != nil {
+			*finalResult = v.Result
+		}
+		return nil
+	}
+
 	// Case 1: Raw sub-agent event passthrough.
 	if ev, ok := chunk.Content.(*event.Event); ok {
 		// With random FilterKey isolation, we can safely forward all inner events

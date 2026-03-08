@@ -3109,6 +3109,37 @@ func TestConvertUserMessageContent_OmitFileContentParts(t *testing.T) {
 		"expected no content parts")
 }
 
+func TestConvertUserMessageContent_OmitFileContentParts_FileOnly(t *testing.T) {
+	m := New("test-model", WithOmitFileContentParts(true))
+	msg := model.Message{Role: model.RoleUser}
+	msg.AddFileData("report.pdf", []byte("%PDF-1.4"), "application/pdf")
+
+	content, extraFields := m.convertUserMessageContent(msg)
+	assert.Empty(t, extraFields, "expected no extra fields")
+	assert.False(t, content.OfString.Valid(), "expected non-string content")
+	require.Len(t, content.OfArrayOfContentParts, 1,
+		"expected 1 content part")
+	require.NotNil(t, content.OfArrayOfContentParts[0].OfText,
+		"expected text content part")
+	assert.Contains(t, content.OfArrayOfContentParts[0].OfText.Text,
+		"report.pdf")
+}
+
+func TestUserFileHint_EmptyContentParts(t *testing.T) {
+	m := New("test-model", WithOmitFileContentParts(true))
+	msg := model.Message{Role: model.RoleUser}
+
+	hint := m.userFileHint(msg)
+	assert.Empty(t, hint, "expected no hint for empty content parts")
+}
+
+func TestAppendFileID_NilFilePart(t *testing.T) {
+	extraFields := appendFileID(nil, model.ContentPart{
+		Type: model.ContentTypeFile,
+	})
+	assert.Nil(t, extraFields, "expected nil extra fields")
+}
+
 // TestBuildChatRequest_EdgeCases tests edge cases in buildChatRequest.
 func TestBuildChatRequest_EdgeCases(t *testing.T) {
 	m := New("gpt-3.5-turbo", WithAPIKey("test-key"))
@@ -6607,4 +6638,70 @@ func TestFileToParams_FileIDWins(t *testing.T) {
 	require.Equal(t, "file_123", p.FileID.Value)
 	require.False(t, p.FileData.Valid())
 	require.False(t, p.Filename.Valid())
+}
+
+func TestFileToParams_InternalRefUsesData(t *testing.T) {
+	f := &model.File{
+		Name:     "notes.txt",
+		Data:     []byte("hello"),
+		MimeType: "text/plain",
+		FileID:   "host:///tmp/notes.txt",
+	}
+	p, ok := fileToParamsOK(f)
+	require.True(t, ok)
+	require.False(t, p.FileID.Valid())
+	require.True(t, p.FileData.Valid())
+	require.Equal(t, "notes.txt", p.Filename.Value)
+}
+
+func TestFileToParams_InternalRefWithoutDataSkips(t *testing.T) {
+	f := &model.File{
+		Name:   "notes.txt",
+		FileID: "host:///tmp/notes.txt",
+	}
+	_, ok := fileToParamsOK(f)
+	require.False(t, ok)
+}
+
+func TestAppendFileID_SkipsInternalRefs(t *testing.T) {
+	fields := appendFileID(nil, model.ContentPart{
+		Type: model.ContentTypeFile,
+		File: &model.File{
+			FileID: "host:///tmp/notes.txt",
+		},
+	})
+	require.Nil(t, fields)
+}
+
+func TestUserFileHint_UsesSafeNameForInternalRefs(t *testing.T) {
+	m := &Model{}
+	msg := model.Message{
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					FileID: "host:///tmp/private/notes.txt",
+				},
+			},
+		},
+	}
+	got := m.userFileHint(msg)
+	require.Contains(t, got, "notes.txt")
+	require.NotContains(t, got, "host://")
+	require.NotContains(t, got, "/tmp/private")
+}
+
+func TestAppendUserContentParts_SkipsInternalFiles(t *testing.T) {
+	m := &Model{}
+	dst := []openai.ChatCompletionContentPartUnionParam{}
+	fields := m.appendUserContentParts(&dst, []model.ContentPart{
+		{
+			Type: model.ContentTypeFile,
+			File: &model.File{
+				FileID: "host:///tmp/notes.txt",
+			},
+		},
+	})
+	require.Nil(t, fields)
+	require.Empty(t, dst)
 }

@@ -186,6 +186,9 @@ type processSession struct {
 	ExitCode  *int   `json:"exitCode,omitempty"`
 }
 
+// ProcessSession is the exported view of one exec_command session.
+type ProcessSession = processSession
+
 func (s *session) snapshot() processSession {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -220,6 +221,8 @@ const (
 	attachedFilesAnnotationPrefix = "Attached files"
 	attachedFileNameFallbackFmt   = "upload_%d"
 	attachedFilesMaxPreview       = 20
+	hostRefPrefix                 = "host://"
+	ignoredAttachmentMimeType     = "application/octet-stream"
 )
 
 // NewContentRequestProcessor creates a new content request processor.
@@ -624,16 +627,77 @@ func fileNamesForAnnotation(
 		if len(names) >= attachedFilesMaxPreview {
 			continue
 		}
-		name := strings.TrimSpace(part.File.Name)
-		if name == "" {
-			name = fileNameFromArtifactRef(part.File.FileID)
-		}
-		if name == "" {
-			name = fmt.Sprintf(attachedFileNameFallbackFmt, count)
-		}
-		names = append(names, name)
+		names = append(names, fileLabelForAnnotation(part.File, count))
 	}
 	return names, count
+}
+
+func fileLabelForAnnotation(file *model.File, count int) string {
+	if file == nil {
+		return fmt.Sprintf(attachedFileNameFallbackFmt, count)
+	}
+
+	name := strings.TrimSpace(file.Name)
+	if name == "" {
+		name = fileNameFromAnnotationRef(file.FileID)
+	}
+	if name == "" {
+		name = fmt.Sprintf(attachedFileNameFallbackFmt, count)
+	}
+	if mimeType := fileMimeLabel(file); mimeType != "" {
+		name = fmt.Sprintf("%s (%s)", name, mimeType)
+	}
+
+	ref := annotationRefDisplay(file.FileID)
+	if ref == "" || ref == name {
+		return name
+	}
+	return fmt.Sprintf("%s @ %s", name, ref)
+}
+
+func fileMimeLabel(file *model.File) string {
+	if file == nil {
+		return ""
+	}
+	mimeType := strings.TrimSpace(file.MimeType)
+	if mimeType == "" || mimeType == ignoredAttachmentMimeType {
+		return ""
+	}
+	return mimeType
+}
+
+func fileNameFromAnnotationRef(fileID string) string {
+	if name := fileNameFromArtifactRef(fileID); name != "" {
+		return name
+	}
+	ref := strings.TrimSpace(fileID)
+	if strings.HasPrefix(ref, hostRefPrefix) {
+		return baseNameForAnnotation(strings.TrimPrefix(ref, hostRefPrefix))
+	}
+	if filepath.IsAbs(ref) {
+		return baseNameForAnnotation(ref)
+	}
+	return ""
+}
+
+func annotationRefDisplay(fileID string) string {
+	ref := strings.TrimSpace(fileID)
+	if ref == "" {
+		return ""
+	}
+	if strings.HasPrefix(ref, fileref.ArtifactPrefix) ||
+		strings.HasPrefix(ref, fileref.WorkspacePrefix) {
+		return ref
+	}
+	return ""
+}
+
+func baseNameForAnnotation(raw string) string {
+	base := path.Base(strings.TrimSpace(raw))
+	if base == "." || base == "/" || base == ".." {
+		return ""
+	}
+	return base
 }
 
 func fileNameFromArtifactRef(fileID string) string {

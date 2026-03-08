@@ -13,6 +13,7 @@ package telegram
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -33,8 +34,14 @@ type UpdatesClient interface {
 // MessageHandler handles one inbound Telegram message.
 type MessageHandler func(ctx context.Context, msg Message) error
 
+// MyChatMemberHandler handles one my_chat_member update.
+type MyChatMemberHandler func(ctx context.Context, ev ChatMemberEvent) error
+
+// CallbackQueryHandler handles one callback_query update.
+type CallbackQueryHandler func(ctx context.Context, q CallbackQuery) error
+
 // Poller consumes updates via getUpdates and calls the handler for
-// each text message.
+// each message with user content.
 type Poller struct {
 	client          UpdatesClient
 	timeout         time.Duration
@@ -43,6 +50,8 @@ type Poller struct {
 	offsetStore     OffsetStore
 	onError         func(error)
 	handler         MessageHandler
+	callbackQuery   CallbackQueryHandler
+	myChatMember    MyChatMemberHandler
 }
 
 // PollerOption configures a Poller.
@@ -77,6 +86,16 @@ func WithOnError(onError func(error)) PollerOption {
 // WithMessageHandler sets the message handler.
 func WithMessageHandler(h MessageHandler) PollerOption {
 	return func(p *Poller) { p.handler = h }
+}
+
+// WithMyChatMemberHandler sets the my_chat_member handler.
+func WithMyChatMemberHandler(h MyChatMemberHandler) PollerOption {
+	return func(p *Poller) { p.myChatMember = h }
+}
+
+// WithCallbackQueryHandler sets the callback_query handler.
+func WithCallbackQueryHandler(h CallbackQueryHandler) PollerOption {
+	return func(p *Poller) { p.callbackQuery = h }
 }
 
 // NewPoller creates a poller.
@@ -158,18 +177,57 @@ func (p *Poller) Run(ctx context.Context) error {
 			if upd.UpdateID >= offset {
 				nextOffset = upd.UpdateID + 1
 			}
+
+			if upd.MyChatMember != nil {
+				if p.myChatMember != nil {
+					if err := p.myChatMember(
+						ctx,
+						*upd.MyChatMember,
+					); err != nil {
+						p.onError(err)
+						if !sleepWithContext(ctx, p.backoff) {
+							return nil
+						}
+						break
+					}
+				}
+
+				offset = nextOffset
+				p.persistOffset(ctx, offset)
+				continue
+			}
+
+			if upd.CallbackQuery != nil {
+				if p.callbackQuery != nil {
+					if err := p.callbackQuery(
+						ctx,
+						*upd.CallbackQuery,
+					); err != nil {
+						p.onError(err)
+						if !sleepWithContext(ctx, p.backoff) {
+							return nil
+						}
+						break
+					}
+				}
+
+				offset = nextOffset
+				p.persistOffset(ctx, offset)
+				continue
+			}
+
 			msg := upd.Message
 			if msg == nil {
 				offset = nextOffset
 				p.persistOffset(ctx, offset)
 				continue
 			}
-			if msg.Text == "" {
+			if msg.From != nil && msg.From.IsBot {
 				offset = nextOffset
 				p.persistOffset(ctx, offset)
 				continue
 			}
-			if msg.From != nil && msg.From.IsBot {
+			if !hasUserContent(msg) {
 				offset = nextOffset
 				p.persistOffset(ctx, offset)
 				continue
@@ -185,6 +243,40 @@ func (p *Poller) Run(ctx context.Context) error {
 			p.persistOffset(ctx, offset)
 		}
 	}
+}
+
+func hasUserContent(msg *Message) bool {
+	if msg == nil {
+		return false
+	}
+	if strings.TrimSpace(msg.Text) != "" {
+		return true
+	}
+	if strings.TrimSpace(msg.Caption) != "" {
+		return true
+	}
+	if len(msg.Photo) > 0 {
+		return true
+	}
+	if msg.Document != nil {
+		return true
+	}
+	if msg.Audio != nil {
+		return true
+	}
+	if msg.Voice != nil {
+		return true
+	}
+	if msg.Video != nil {
+		return true
+	}
+	if msg.Animation != nil {
+		return true
+	}
+	if msg.VideoNote != nil {
+		return true
+	}
+	return false
 }
 
 func (p *Poller) bootstrapOffset(
