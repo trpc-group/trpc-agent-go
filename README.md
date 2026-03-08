@@ -574,7 +574,7 @@ Example: [openclaw](openclaw)
 - A minimal OpenClaw-like gateway server.
 - Stable session ids and per-session serialization.
 - Basic safety controls: allowlist + mention gating.
-- OpenClaw-like demo binary (Telegram + gateway): [openclaw](openclaw)
+- OpenClaw-like implementation (Telegram + gateway): [openclaw](openclaw)
 
 Other notable examples:
 

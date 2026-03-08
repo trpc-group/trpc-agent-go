@@ -1,7 +1,7 @@
 # Bundled OpenClaw Skills
 
 This directory vendors the upstream OpenClaw skill pack so the OpenClaw
-demo in this repo can load them out of the box.
+implementation in this repo can load them out of the box.
 
 Source:
 
@@ -15,5 +15,5 @@ License:
 
 Notes:
 
-- The demo skills `hello`, `envdump`, and `http_get` are local to this
+- The example skills `hello`, `envdump`, and `http_get` are local to this
   repo and follow the project license (Apache-2.0).
