@@ -78,7 +78,8 @@ func WithSkipSkillsFallbackOnSessionSummary(
 // message containing the loaded skill bodies/docs.
 //
 // If a session summary is present in the request and the corresponding
-// option is enabled, the fallback system message is skipped.
+// option is enabled, the fallback system message is skipped only when the
+// loaded skill content is already represented elsewhere in the prompt.
 type SkillsToolResultRequestProcessor struct {
 	repo     skill.Repository
 	loadMode string
@@ -158,7 +159,11 @@ func (p *SkillsToolResultRequestProcessor) ProcessRequest(
 		loaded,
 		materialized,
 	)
-	if p.skipFallbackOnSessionSummary && hasSessionSummary(inv) {
+	if fallbackContent == "" {
+		p.removeLoadedContextMessage(req)
+	} else if p.skipFallbackOnSessionSummary &&
+		hasSessionSummary(inv) &&
+		!hasCompactedToolResultMessages(inv) {
 		p.removeLoadedContextMessage(req)
 	} else {
 		p.upsertLoadedContextMessage(req, fallbackContent)
