@@ -1,0 +1,58 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "basketball_clutch_q4",
+  "runId": 1,
+  "invocations": [
+    {
+      "metrics": [
+        {
+          "metricName": "llm_critic",
+          "score": 1,
+          "threshold": 0.8,
+          "evalStatus": "passed",
+          "output": {
+            "assessment": "candidate 以单一 JSON 对象输出且仅含 content 字段，格式契约满足。正文准确覆盖了 Q4 剩 2:31、102:99、主队球权，以及 7-0 追分、三分回应、争抢后暂停等事件，与输入一致、未见与比赛状态冲突的编造。对比 teacher，本样本少了联盟/节次与 4:10、3:22、2:45 等时间点的显式呈现，叙述更概括，导致与参考答案的细粒度对齐不足；这更像是 Prompt 未明确要求“关键元数据+逐条带时间的 highlights”输出规则所致。",
+            "issues": [
+              {
+                "action": "在 Prompt 中增加硬性要求：正文开头必须显式写出 league、phase、clock、当前比分（含主/客队名）与 possession（主/客）。可用固定模板句式以减少遗漏。",
+                "key": "require_key_metadata",
+                "severity": "P1",
+                "summary": "Prompt 未明确要求显式呈现 league/phase/clock/主客队名/球权等关键元数据，导致本样本相对参考答案出现信息颗粒度不足与对齐度下降。"
+              },
+              {
+                "action": "在 Prompt 中规定：若输入提供 highlights[].time，则必须按输入顺序逐条输出为“time + 事件描述”，不得仅合并概述；同时允许在每条后附一句简短评价但不能新增事实。",
+                "key": "render_highlights_with_timestamps",
+                "severity": "P1",
+                "summary": "Prompt 未要求对 highlights 逐条携带 time 字段输出，导致本样本丢失 4:10/3:22/2:45 等可直接复用的细节。"
+              }
+            ],
+            "rubrics": [
+              {
+                "id": "r1",
+                "reason": "输出为单个 JSON 对象，且仅包含 content 字段，无额外文本。",
+                "verdict": "yes"
+              },
+              {
+                "id": "r3",
+                "reason": "所述比分、时间、球权及三条关键事件均可由输入 highlights/score/clock/possession 支撑，未引入冲突性新事实。",
+                "verdict": "yes"
+              }
+            ]
+          },
+          "rubricScores": [
+            {
+              "id": "r1",
+              "reason": "输出为单个 JSON 对象，且仅包含 content 字段，无额外文本。",
+              "score": 1
+            },
+            {
+              "id": "r3",
+              "reason": "所述比分、时间、球权及三条关键事件均可由输入 highlights/score/clock/possession 支撑，未引入冲突性新事实。",
+              "score": 1
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

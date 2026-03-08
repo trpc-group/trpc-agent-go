@@ -1,0 +1,70 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "basketball_clutch_q4",
+  "runId": 1,
+  "invocations": [
+    {
+      "metrics": [
+        {
+          "metricName": "llm_critic",
+          "score": 1,
+          "threshold": 0.8,
+          "evalStatus": "passed",
+          "output": {
+            "assessment": "candidate 以单一 JSON 对象输出且仅含 content 字段，格式符合契约。正文覆盖第4节剩余2:31、比分102:99及三条关键事件，均与输入的 clock/score/highlights 一致，未见编造或与输入冲突。与 teacher 相比，candidate 没有使用输入中已给出的球权信息（possession=home），且整体为单段信息罗列，缺少更明确的解说氛围与分段结构。该样本反映 Prompt 可能未明确要求“出现的关键字段必须尽量覆盖（如 possession）”以及“文风/结构模板”，从而在相似比赛状态下容易漏掉关键上下文或产出可读性偏弱的快报。",
+            "issues": [
+              {
+                "action": "Prompt 需要增加硬性要求：当 user_input 含 possession 字段时，正文必须明确球权在主队/客队，并将 home/away 映射到具体队名；若字段缺失则直接不写。",
+                "key": "require_possession_when_present",
+                "severity": "P1",
+                "summary": "Prompt 未明确要求在输入提供球权信息时必须输出，导致该样本遗漏 possession 这一关键上下文。"
+              },
+              {
+                "action": "Prompt 需要明确目标文风（如“直播解说/更有张力”或“纯客观快讯”二选一）并给出1-2句示例约束，避免同样事实在风格上与参考答案偏差过大。",
+                "key": "specify_tone_expectation",
+                "severity": "P1",
+                "summary": "Prompt 对输出语气与表达强度缺少明确指引，导致该样本相对参考答案更平铺直叙。"
+              },
+              {
+                "action": "Prompt 需要规定固定排版模板：首句包含 phase+clock+score（可含 possession），随后 highlights 按时间逐条换行；避免把所有信息挤在同一段。",
+                "key": "define_output_structure",
+                "severity": "P1",
+                "summary": "Prompt 未规定结构化呈现（分段/时间线），使该样本信息可读性不如参考答案。"
+              },
+              {
+                "action": "Prompt 需要明确 last_update 的策略：是否必须输出；若输出，规定统一格式（如 ISO 字符串原样保留）与放置位置，避免与参考答案取舍不一致。",
+                "key": "last_update_policy",
+                "severity": "P1",
+                "summary": "Prompt 未说明是否应包含 last_update，导致该样本与参考答案在信息取舍上出现差异。"
+              }
+            ],
+            "rubrics": [
+              {
+                "id": "r1",
+                "reason": "输出为单个 JSON 对象且仅包含 content 字段，没有额外文本或字段。",
+                "verdict": "yes"
+              },
+              {
+                "id": "r3",
+                "reason": "内容与输入的 phase/clock/score/highlights/last_update 一致，未添加不存在的事件或相互矛盾信息。",
+                "verdict": "yes"
+              }
+            ]
+          },
+          "rubricScores": [
+            {
+              "id": "r1",
+              "reason": "输出为单个 JSON 对象且仅包含 content 字段，没有额外文本或字段。",
+              "score": 1
+            },
+            {
+              "id": "r3",
+              "reason": "内容与输入的 phase/clock/score/highlights/last_update 一致，未添加不存在的事件或相互矛盾信息。",
+              "score": 1
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

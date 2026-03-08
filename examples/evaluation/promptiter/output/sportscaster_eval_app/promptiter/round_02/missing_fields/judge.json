@@ -1,0 +1,64 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "missing_fields",
+  "runId": 1,
+  "invocations": [
+    {
+      "metrics": [
+        {
+          "metricName": "llm_critic",
+          "score": 1,
+          "threshold": 0.8,
+          "evalStatus": "passed",
+          "output": {
+            "assessment": "本样本中，candidate 输出为仅含 content 的单一 JSON 对象，且无多余文本，满足契约要求；正文只引用了运动类型与状态，也未编造比赛事件或与输入冲突，因此 r1、r3 均可判定通过。但对照 teacher，candidate 内容明显偏“标签化/枚举值直出”，没有利用已提供的主客队信息，也未将 in_progress 转为自然语言（如“比赛进行中”）并组织成连贯中文解说，信息量与可读性不足。说明 Prompt 可能缺少：要求使用输入中可用关键字段（队名）、规定输出语言与表达风格、以及对状态字段的口语化映射与句式模板。这类缺口可能导致相似场景下输出长期过短、只复述原始值而不形成观赛向描述。",
+            "issues": [
+              {
+                "action": "Prompt 需要明确：当 user_input 提供 home_team/away_team 时，content 必须包含双方队名与对阵关系（例如“X 对阵 Y”），除非字段缺失则直接略过。",
+                "key": "require_include_teams_when_available",
+                "severity": "P1",
+                "summary": "Prompt 未明确要求使用已给出的主客队信息，导致输出信息量不足。"
+              },
+              {
+                "action": "Prompt 需要指定输出语言为中文，并要求用 1–2 句自然语言描述比赛状态（而非用分隔符/标签串联）。",
+                "key": "specify_chinese_natural_sentence",
+                "severity": "P1",
+                "summary": "Prompt 未约束语言与表达形式，导致内容呈现为“枚举值直出”的标签风格。"
+              },
+              {
+                "action": "Prompt 需要增加规则：将 status 枚举映射为对应中文短语（如 in_progress→“比赛进行中”），并在不新增事实的前提下组织为解说句式。",
+                "key": "status_to_human_readable_mapping",
+                "severity": "P1",
+                "summary": "Prompt 未要求对状态字段做可读化转换，影响可读性与与参考答案风格的一致性。"
+              }
+            ],
+            "rubrics": [
+              {
+                "id": "r1",
+                "reason": "输出为单个 JSON 对象且仅包含 content 字段，无额外文本。",
+                "verdict": "yes"
+              },
+              {
+                "id": "r3",
+                "reason": "正文仅使用输入中的 sport 与 status 信息，未编造事件或与输入矛盾；未使用的队名信息被略过也不构成冲突。",
+                "verdict": "yes"
+              }
+            ]
+          },
+          "rubricScores": [
+            {
+              "id": "r1",
+              "reason": "输出为单个 JSON 对象且仅包含 content 字段，无额外文本。",
+              "score": 1
+            },
+            {
+              "id": "r3",
+              "reason": "正文仅使用输入中的 sport 与 status 信息，未编造事件或与输入矛盾；未使用的队名信息被略过也不构成冲突。",
+              "score": 1
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

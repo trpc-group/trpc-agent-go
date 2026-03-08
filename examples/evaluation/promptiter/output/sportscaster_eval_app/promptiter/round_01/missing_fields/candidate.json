@@ -1,0 +1,18 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "missing_fields",
+  "runId": 1,
+  "invocations": [
+    {
+      "invocationId": "baf5fec6-3018-4bf7-a3a5-de765b563450",
+      "userContent": {
+        "role": "user",
+        "content": "{\"sport\":\"soccer\",\"home_team\":\"Team A\",\"away_team\":\"Team B\",\"status\":\"in_progress\"}"
+      },
+      "finalResponse": {
+        "role": "assistant",
+        "content": "{\"content\":\"比赛正在进行中，Team A 对阵 Team B。目前比分尚未更新，双方正在场上激烈拼抢，争夺控球权。Team A 在主场球迷的助威声中试图组织进攻，而 Team B 的防守阵型保持得相当稳固。让我们期待接下来的精彩对决。\"}"
+      }
+    }
+  ]
+}

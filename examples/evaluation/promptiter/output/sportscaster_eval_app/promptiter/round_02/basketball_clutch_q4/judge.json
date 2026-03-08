@@ -1,0 +1,70 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "basketball_clutch_q4",
+  "runId": 1,
+  "invocations": [
+    {
+      "metrics": [
+        {
+          "metricName": "llm_critic",
+          "score": 1,
+          "threshold": 0.8,
+          "evalStatus": "passed",
+          "output": {
+            "assessment": "candidate 以单一 JSON 对象输出且仅包含 content，满足输出契约。正文复用了输入中的节次、剩余时间、比分、球权、最后更新时间与三条 highlights，未新增比赛事件或与输入冲突，整体符合 r3。与 teacher 的中文解说体相比，candidate 使用“|”拼接并中英混杂，且将“3”改写为“III”、球权直接输出为 home 枚举值，信息虽对但呈现不够自然清晰。这暴露出 Prompt 可能缺少：输出语言/文体统一要求、对 home/away 与 status 等枚举的可读化映射规则、以及数值与关键文本的保真约束；这些缺口在相似样本中可能引发不必要的改写与可读性下降。",
+            "issues": [
+              {
+                "action": "Prompt 需要明确规定输出语言（如全中文），并约束 highlights 的翻译/保留策略（例如统一翻译为中文或统一保留原文），禁止中英与符号风格随意混用。",
+                "key": "language_and_style_consistency",
+                "severity": "P1",
+                "summary": "Prompt 缺少对输出语言与文体一致性的硬约束，导致本样本出现中英混杂与“表格化”拼接风格偏离参考答案的解说体。"
+              },
+              {
+                "action": "Prompt 需要增加“数值与比分等关键信息保持输入原样（阿拉伯数字/符号）”的约束，避免将 3 等数字改写为罗马数字或其他非必要变体。",
+                "key": "numeric_fidelity",
+                "severity": "P1",
+                "summary": "Prompt 缺少对关键数值表达的保真要求，导致出现将输入中的数字改写为不同记法（如 III）的风险。"
+              },
+              {
+                "action": "Prompt 需要明确把 possession/status 等枚举值映射为人类可读表述（如“主队球权/客队球权”“进行中”），并可选要求带上对应队名以消除歧义。",
+                "key": "enum_human_readable_mapping",
+                "severity": "P1",
+                "summary": "Prompt 未要求将 home/away、in_progress 等枚举转为可读语句，导致信息虽正确但不够直观。"
+              },
+              {
+                "action": "Prompt 可要求使用与参考类似的段落/换行结构（如开场一句+分号/换行串联 highlights），并强调“只做基于输入的描述，不添加推断性结论”，以兼顾可读性与不编造。",
+                "key": "readable_structured_narration",
+                "severity": "P1",
+                "summary": "Prompt 缺少对内容组织方式的指引，导致本样本采用“|”连缀而非更易读的中文叙述结构。"
+              }
+            ],
+            "rubrics": [
+              {
+                "id": "r1",
+                "reason": "candidate_output 为单个 JSON 对象且仅含 content 字段，无额外字段或多余文本。",
+                "verdict": "yes"
+              },
+              {
+                "id": "r3",
+                "reason": "比分、节次、时间、球权与 highlights 均与 user_input 一致，未编造新事件；个别写法（如 III）不改变事实但降低表达保真度。",
+                "verdict": "yes"
+              }
+            ]
+          },
+          "rubricScores": [
+            {
+              "id": "r1",
+              "reason": "candidate_output 为单个 JSON 对象且仅含 content 字段，无额外字段或多余文本。",
+              "score": 1
+            },
+            {
+              "id": "r3",
+              "reason": "比分、节次、时间、球权与 highlights 均与 user_input 一致，未编造新事件；个别写法（如 III）不改变事实但降低表达保真度。",
+              "score": 1
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

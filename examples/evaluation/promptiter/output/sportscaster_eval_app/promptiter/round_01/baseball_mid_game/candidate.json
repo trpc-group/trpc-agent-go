@@ -1,0 +1,18 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "baseball_mid_game",
+  "runId": 1,
+  "invocations": [
+    {
+      "invocationId": "e1475cb1-9940-4405-868b-3e9671957af4",
+      "userContent": {
+        "role": "user",
+        "content": "{\"sport\":\"baseball\",\"league\":\"MLB\",\"match_id\":\"mlb_20260223_nyy_bos\",\"home_team\":\"Boston Red Sox\",\"away_team\":\"New York Yankees\",\"status\":\"in_progress\",\"phase\":\"Top 7\",\"clock\":null,\"score\":{\"home\":2,\"away\":3},\"highlights\":[{\"time\":\"Top 5\",\"text\":\"Yankees hit a two-run home run.\"},{\"time\":\"Bottom 6\",\"text\":\"Red Sox scored on a sacrifice fly.\"}],\"last_update\":\"2026-02-23T20:18:00+08:00\"}"
+      },
+      "finalResponse": {
+        "role": "assistant",
+        "content": "{\"content\":\"比赛进入第七局上半，洋基队以3比2暂时领先红袜。洋基队在第五局凭借一支两分本垒打取得领先，红袜则在第六局下半通过牺牲高飞扳回一分。比赛进入最后阶段，双方争夺激烈。\"}"
+      }
+    }
+  ]
+}

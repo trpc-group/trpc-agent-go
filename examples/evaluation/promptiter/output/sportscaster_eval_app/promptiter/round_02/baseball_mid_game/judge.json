@@ -1,0 +1,64 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "baseball_mid_game",
+  "runId": 1,
+  "invocations": [
+    {
+      "metrics": [
+        {
+          "metricName": "llm_critic",
+          "score": 1,
+          "threshold": 0.8,
+          "evalStatus": "passed",
+          "output": {
+            "assessment": "candidate 符合输出契约：为单一 JSON 且仅含 content；内容均可在输入中逐项对应（Top 7、2-3 比分、两条 highlights、last_update），未添加新事件或与输入冲突，因此 r1/r3 表现良好。与参考答案相比，candidate 更像用“|”拼接的状态日志，保留了 in_progress 这类英文枚举，也未用“第七局上半/谁以几比几领先”进行自然语言叙述，解说感与可读性偏弱。说明 Prompt 可能缺少对中文叙述体裁、状态字段本地化、以及比分领先关系表达方式的明确要求，类似样本可能继续产出模板化且中英混杂的摘要。",
+            "issues": [
+              {
+                "action": "在 Prompt 中增加硬约束：content 必须用中文自然语言成句输出（允许适度语气但不得新增事实），避免使用“|”等日志式分隔符；建议给出一句到两句的示例结构（局数+比分+领先方+关键回合串联）。",
+                "key": "require_chinese_narrative_style",
+                "severity": "P1",
+                "summary": "Prompt 未明确要求以中文解说/叙述体输出，导致结果更偏日志拼接格式，和参考答案风格差距较大。"
+              },
+              {
+                "action": "在 Prompt 中规定对 status/phase 等枚举进行本地化转写（如 in_progress→“正在进行”，Top 7→“第七局上半/七局上”），并要求不直接输出原始英文 token。",
+                "key": "localize_enum_terms",
+                "severity": "P1",
+                "summary": "Prompt 未规定对输入中的英文状态字段做中文化处理，容易出现中英混用（如 in_progress）。"
+              },
+              {
+                "action": "在 Prompt 中加入规则：当 score 可得时，必须用“队A x:y 领先 队B/双方战平”明确领先关系（必要时结合主客队）。",
+                "key": "explicit_lead_statement",
+                "severity": "P1",
+                "summary": "Prompt 未要求明确表达“谁领先”与比分关系，导致只并列呈现比分而缺少关键语义。"
+              }
+            ],
+            "rubrics": [
+              {
+                "id": "r1",
+                "reason": "candidate_output 为单一 JSON 对象且仅包含 content 字段，无额外文本。",
+                "verdict": "yes"
+              },
+              {
+                "id": "r3",
+                "reason": "比分、局数、两条事件与更新时间均来自 user_input，未编造或与输入冲突。",
+                "verdict": "yes"
+              }
+            ]
+          },
+          "rubricScores": [
+            {
+              "id": "r1",
+              "reason": "candidate_output 为单一 JSON 对象且仅包含 content 字段，无额外文本。",
+              "score": 1
+            },
+            {
+              "id": "r3",
+              "reason": "比分、局数、两条事件与更新时间均来自 user_input，未编造或与输入冲突。",
+              "score": 1
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

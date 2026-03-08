@@ -1,0 +1,70 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "pre_game_preview",
+  "runId": 1,
+  "invocations": [
+    {
+      "metrics": [
+        {
+          "metricName": "llm_critic",
+          "score": 1,
+          "threshold": 0.8,
+          "evalStatus": "passed",
+          "output": {
+            "assessment": "本样本中，candidate 以单一 JSON 对象输出且仅含 content 字段，满足输出契约；内容提到的联盟、状态 pre_game、两队名称与 0-0 比分均与输入一致，未见编造或冲突。与 teacher 相比，文本明显更简短且偏英文，未利用输入已提供的主客场信息与 last_update，也未将 pre_game 解释为“赛前/尚未开打”等可读表达。可能是 Prompt 未明确要求输出语言与表达风格，亦未规定当输入包含时间与主客场等字段时的必选呈现项与格式，进而在类似赛前或其他阶段输出中出现信息覆盖不足、可读性不一致的问题。",
+            "issues": [
+              {
+                "action": "Prompt 明确规定 content 的语言与风格（例如中文叙述为主，可在括号保留英文状态码），并要求在不增加字段的前提下输出更自然的句式。",
+                "key": "language_and_style_constraints",
+                "severity": "P1",
+                "summary": "Prompt 未明确输出语言与文风约束，导致本样本输出偏英文且过于口号式，和参考答案的信息呈现风格不一致。"
+              },
+              {
+                "action": "Prompt 增加硬性信息覆盖规则：当 status=pre_game 且 score 为 0:0 时，需明确表达“赛前/尚未开打”，避免只输出原始状态码。",
+                "key": "pre_game_status_rendering",
+                "severity": "P1",
+                "summary": "Prompt 未定义 pre_game 等状态的呈现模板，导致仅复述状态码而缺少“赛前/未开打”的语义化描述。"
+              },
+              {
+                "action": "Prompt 规定当输入提供 last_update 时必须在 content 中输出，并给出统一的时间格式（保留时区信息）。",
+                "key": "last_update_required_when_present",
+                "severity": "P1",
+                "summary": "Prompt 未要求在输入包含 last_update 时输出更新时间，导致本样本遗漏了可用且重要的时间信息。"
+              },
+              {
+                "action": "Prompt 指定当输入提供 home_team/away_team 时，需明确主客场关系（如“X 主场迎战 Y”）或用固定顺序标注，提升可读性与一致性。",
+                "key": "home_away_context_requirement",
+                "severity": "P1",
+                "summary": "Prompt 未明确主客场信息的表达要求，导致本样本仅并列队名，缺少对阵语义与顺序约束。"
+              }
+            ],
+            "rubrics": [
+              {
+                "id": "r1",
+                "reason": "输出为单个 JSON 对象，且仅包含 content 字段，无额外文本或字段。",
+                "verdict": "yes"
+              },
+              {
+                "id": "r3",
+                "reason": "内容与输入一致：NBA、pre_game、两队名称及 0-0 比分均匹配，未编造未冲突；未写到的信息被自然略过。",
+                "verdict": "yes"
+              }
+            ]
+          },
+          "rubricScores": [
+            {
+              "id": "r1",
+              "reason": "输出为单个 JSON 对象，且仅包含 content 字段，无额外文本或字段。",
+              "score": 1
+            },
+            {
+              "id": "r3",
+              "reason": "内容与输入一致：NBA、pre_game、两队名称及 0-0 比分均匹配，未编造未冲突；未写到的信息被自然略过。",
+              "score": 1
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

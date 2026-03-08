@@ -1,0 +1,189 @@
+[
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "require_key_metadata",
+      "summary": "Prompt 未明确要求显式呈现 league/phase/clock/主客队名/球权等关键元数据，导致本样本相对参考答案出现信息颗粒度不足与对齐度下降。",
+      "action": "在 Prompt 中增加硬性要求：正文开头必须显式写出 league、phase、clock、当前比分（含主/客队名）与 possession（主/客）。可用固定模板句式以减少遗漏。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "basketball_clutch_q4",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "render_highlights_with_timestamps",
+      "summary": "Prompt 未要求对 highlights 逐条携带 time 字段输出，导致本样本丢失 4:10/3:22/2:45 等可直接复用的细节。",
+      "action": "在 Prompt 中规定：若输入提供 highlights[].time，则必须按输入顺序逐条输出为“time + 事件描述”，不得仅合并概述；同时允许在每条后附一句简短评价但不能新增事实。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "basketball_clutch_q4",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P0",
+      "key": "no_inferred_event_actor",
+      "summary": "Prompt 缺少“事件未指明主体时不得推断球队/球员归属”的明确约束，导致把黄牌错误归因到曼城。",
+      "action": "在 Prompt 中加入硬约束：凡输入的事件/高亮未提供执行者或受罚方（球队/球员），只能用中性措辞描述（如“补时阶段出现黄牌”），禁止推断归属或默认沿用上一句主语。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "soccer_final",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "avoid_subject_carryover",
+      "summary": "Prompt 未提示并列/承接句式会引入“主语延续”的隐性推断，从而产生事实归因错误。",
+      "action": "在 Prompt 中要求：多事件叙述时每条 highlight 尽量独立成句或显式写明主语切换；对主体不明的条目使用无主句/被动句，避免“X…并在…”等并列结构造成主语自动延续。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "soccer_final",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P0",
+      "key": "ban_subjective_ungrounded_claims",
+      "summary": "Prompt 缺少对“主观态势/渲染性措辞”严格禁止的硬约束，导致输出出现无法从输入验证的内容。",
+      "action": "Prompt 需要明确禁止加入输入 JSON 未包含、且无法由字段直接计算/推导的主观判断与氛围渲染（如“争夺激烈/胶着/形势大好”等），要求此类句子一律删除而非润色替换。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "baseball_mid_game",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P0",
+      "key": "require_sentence_level_grounding",
+      "summary": "Prompt 未要求输出句子与输入字段建立对应关系，容易混入不可验证的补充描述。",
+      "action": "Prompt 需要增加“逐句可追溯”规则：每句话必须能指向 user_input 的具体字段（phase/score/highlights/last_update 等）或明确允许的派生量（如分差=1），否则不得输出；并建议在生成前做一次自检删除不满足者。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "baseball_mid_game",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "avoid_generic_filler_lines",
+      "summary": "Prompt 未限制空泛套话，容易引入与输入无关或不可验证的泛化表述。",
+      "action": "Prompt 可补充“避免空泛收尾句”约束：禁止使用不携带新信息的通用结尾（如“双方争夺激烈/比赛进入白热化”），改为仅输出结构化事实或可计算信息。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "baseball_mid_game",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P0",
+      "key": "strict_grounding_only",
+      "summary": "Prompt 缺少“仅可使用输入字段信息、禁止外部事实与主观预测”的明确约束，导致编造背景与赛事解读。",
+      "action": "在 Prompt 中增加硬约束：content 只能改写/组合 user_input 已给字段（如 league、teams、status、score、last_update），禁止引入任何外部背景、评价性预测或常识性补全（如卫冕冠军、明星球员、对攻大战等）；并给出允许/不允许示例。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "pre_game_preview",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P0",
+      "key": "no_unprovided_player_mentions",
+      "summary": "Prompt 未明确禁止在输入缺少球员信息时输出球星对决与看点，易引入臆测。",
+      "action": "在 Prompt 中明确：除非 user_input 明确提供球员/阵容/伤病等字段，否则不得出现任何球员姓名或“某某对决/最大看点”等表述。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "pre_game_preview",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "avoid_time_context_guessing",
+      "summary": "Prompt 未要求避免相对时间与情境化措辞，导致在仅有时间戳时仍写“今晚”等推断。",
+      "action": "在 Prompt 中补充规则：不得使用“今晚/今早/即将开打于XX主场氛围”等相对时间与情境词，除非输入明确给出；如需时间仅可引用 last_update 的客观时间。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "pre_game_preview",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "pre_game_minimal_template",
+      "summary": "Prompt 缺少针对赛前状态的简洁模板约束，导致用泛化宣传语填充并引入不基于输入的内容。",
+      "action": "在 Prompt 中提供 pre_game 的最小输出模板：{league}—{home_team} vs {away_team}，状态 {status}，比分 {home}:{away}；其余信息缺失则不写，以减少填充性扩写。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "pre_game_preview",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P0",
+      "key": "strict_grounding_only_input",
+      "summary": "Prompt 缺少“正文仅能由输入 JSON 字段直接推出”的硬约束，导致编造比赛过程与战术细节。",
+      "action": "在 Prompt 增加硬约束：content 只能包含由输入字段（sport/home_team/away_team/status）可直接推出的信息；禁止生成任何比赛过程、战术、强度描写或评价性细节（如控球、拼抢、阵型稳固、谁在进攻等），除非这些事件在输入中以字段明确给出。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "missing_fields",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P0",
+      "key": "omit_unknown_fields_no_meta",
+      "summary": "Prompt 未明确“缺失信息直接省略且不得以‘未更新/暂无’形式提及”，导致出现比分相关元叙述。",
+      "action": "在 Prompt 明确规则：若输入未提供 score/time/venue 等信息，正文必须完全不提这些维度；禁止使用“未提供/尚未更新/暂无信息/比分未更新”等提及缺失信息的表述。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "missing_fields",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "limit_specificity_with_minimal_input",
+      "summary": "Prompt 未规定“仅给状态时需极简概括”，导致在信息稀疏场景下过度具体化。",
+      "action": "在 Prompt 补充：当输入仅含队名与 status 时，content 需保持高度概括（建议 1–2 句），只描述“比赛进行中 + 对阵双方”，避免扩展叙事性场面描写。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "missing_fields",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P0",
+      "key": "strictly_grounded_content",
+      "summary": "Prompt 缺少“仅基于输入字段、不得补写比赛过程与评价”的明确限制，导致加入未证实情节。",
+      "action": "Prompt 需要增加硬约束：content 只能改写/重述 user_input 明确给出的字段（如 league、队名、status、score、highlights.text），禁止加入任何未在输入出现的事件过程、关键回合、现场氛围、球员表现等描写或评价性结论。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "inconsistent_state",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P0",
+      "key": "no_infer_from_score_clock",
+      "summary": "Prompt 未禁止从 score/clock 进行叙事化推断，导致基于 05:00 等信息脑补比赛走势。",
+      "action": "Prompt 需要明确：不得根据比分接近、阶段(Q4)或时间(clock)去推断“最后五分钟悬念”“关键时刻发挥”等时间线/走势；若输入未直接描述比赛进程，则只输出终场与比分等确定信息。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "inconsistent_state",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "conflict_resolution_policy",
+      "summary": "Prompt 未规定输入字段自相矛盾时的取舍与规避策略，容易在描述中引入不一致细节。",
+      "action": "Prompt 需要补充冲突处理规则：当 status/highlights 与 phase/clock 等字段不一致时，优先采用能表明比赛状态的字段（如 status=finished、highlights 的结束声明），并避免引用会造成矛盾的细节（如仍剩 05:00）。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "inconsistent_state",
+    "metric_name": "llm_critic"
+  }
+]

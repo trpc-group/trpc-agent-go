@@ -1,0 +1,18 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "missing_fields",
+  "runId": 1,
+  "invocations": [
+    {
+      "invocationId": "b30f896c-9b5c-4b65-ba46-2810a10b4f6a",
+      "userContent": {
+        "role": "user",
+        "content": "{\"sport\":\"soccer\",\"home_team\":\"Team A\",\"away_team\":\"Team B\",\"status\":\"in_progress\"}"
+      },
+      "finalResponse": {
+        "role": "assistant",
+        "content": "{\"content\":\"比赛进行中！Team A 对阵 Team B——两队还在场上拉扯对抗，节奏一波接一波，局势随时可能被改写！\"}"
+      }
+    }
+  ]
+}

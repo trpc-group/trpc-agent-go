@@ -1,0 +1,18 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "basketball_clutch_q4",
+  "runId": 1,
+  "invocations": [
+    {
+      "invocationId": "55b2fb9a-8058-44b1-b272-a22c44845689",
+      "userContent": {
+        "role": "user",
+        "content": "{\"sport\":\"basketball\",\"league\":\"NBA\",\"match_id\":\"nba_20260225_bos_lal\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Los Angeles Lakers\",\"status\":\"in_progress\",\"phase\":\"Q4\",\"clock\":\"02:31\",\"score\":{\"home\":102,\"away\":99},\"possession\":\"home\",\"highlights\":[{\"time\":\"04:10\",\"text\":\"Lakers made a 7-0 run to cut the lead to 1.\"},{\"time\":\"03:22\",\"text\":\"Celtics hit a three-pointer to go up by 3.\"},{\"time\":\"02:45\",\"text\":\"Timeout called after a loose ball scramble.\"}],\"last_update\":\"2026-02-25T21:10:00+08:00\"}"
+      },
+      "finalResponse": {
+        "role": "assistant",
+        "content": "{\"content\":\"第四节（Q4）还剩 2:31！凯尔特人 102:99 领先湖人——而且球权在主队手里！\\n\\n4:10 湖人轰出一波 7:0，把分差硬生生追到只剩 1 分；3:22 凯尔特人立刻用一记三分稳住局面，把优势拉回 3 分——2:45 地板球乱战后直接暂停！最后两分多钟，一攻一守都要见真章！\"}"
+      }
+    }
+  ]
+}

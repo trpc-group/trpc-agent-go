@@ -1,0 +1,18 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "missing_fields",
+  "runId": 1,
+  "invocations": [
+    {
+      "invocationId": "66ea5f65-391f-4f33-9ba7-04af85990769",
+      "userContent": {
+        "role": "user",
+        "content": "{\"sport\":\"soccer\",\"home_team\":\"Team A\",\"away_team\":\"Team B\",\"status\":\"in_progress\"}"
+      },
+      "finalResponse": {
+        "role": "assistant",
+        "content": "{\n  \"content\": \"soccer | in_progress\"\n}"
+      }
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "missing_fields",
+  "runId": 1,
+  "invocations": [
+    {
+      "invocationId": "4ccbd3fb-b850-4375-8246-47c3d7160258",
+      "userContent": {
+        "role": "user",
+        "content": "{\"sport\":\"soccer\",\"home_team\":\"Team A\",\"away_team\":\"Team B\",\"status\":\"in_progress\"}"
+      },
+      "finalResponse": {
+        "role": "assistant",
+        "content": "{\n  \"content\": \"比赛进行中，Team A（主）对 Team B（客）。\"\n}"
+      }
+    }
+  ]
+}

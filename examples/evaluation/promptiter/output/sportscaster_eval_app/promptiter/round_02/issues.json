@@ -1,0 +1,222 @@
+[
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "language_and_style_consistency",
+      "summary": "Prompt 缺少对输出语言与文体一致性的硬约束，导致本样本出现中英混杂与“表格化”拼接风格偏离参考答案的解说体。",
+      "action": "Prompt 需要明确规定输出语言（如全中文），并约束 highlights 的翻译/保留策略（例如统一翻译为中文或统一保留原文），禁止中英与符号风格随意混用。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "basketball_clutch_q4",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "numeric_fidelity",
+      "summary": "Prompt 缺少对关键数值表达的保真要求，导致出现将输入中的数字改写为不同记法（如 III）的风险。",
+      "action": "Prompt 需要增加“数值与比分等关键信息保持输入原样（阿拉伯数字/符号）”的约束，避免将 3 等数字改写为罗马数字或其他非必要变体。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "basketball_clutch_q4",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "enum_human_readable_mapping",
+      "summary": "Prompt 未要求将 home/away、in_progress 等枚举转为可读语句，导致信息虽正确但不够直观。",
+      "action": "Prompt 需要明确把 possession/status 等枚举值映射为人类可读表述（如“主队球权/客队球权”“进行中”），并可选要求带上对应队名以消除歧义。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "basketball_clutch_q4",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "readable_structured_narration",
+      "summary": "Prompt 缺少对内容组织方式的指引，导致本样本采用“|”连缀而非更易读的中文叙述结构。",
+      "action": "Prompt 可要求使用与参考类似的段落/换行结构（如开场一句+分号/换行串联 highlights），并强调“只做基于输入的描述，不添加推断性结论”，以兼顾可读性与不编造。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "basketball_clutch_q4",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "language_and_narration_constraints",
+      "summary": "Prompt 未明确要求与参考一致的中文叙述与解说风格，导致输出偏英文列表而非中文赛况回顾。",
+      "action": "Prompt 增加硬约束：正文使用中文输出；采用解说式连贯叙述（先总述再按时间串联事件），避免仅用英文要点清单；可补充期望语气与示例句式。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "soccer_final",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "formatting_template_readability",
+      "summary": "Prompt 未规定段落结构与可读性排版模板，导致输出使用大量分隔符，结构与参考不一致。",
+      "action": "Prompt 明确排版规范：首句包含“全场结束(FT)+对阵+比分”，随后用换行/段落按时间顺序描述 highlights；限制使用“|”等分隔符堆叠以保证可读性。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "soccer_final",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "score_and_label_conventions",
+      "summary": "Prompt 未规定比分符号与结束标签的呈现规则，且未说明球队名是否允许本地化处理，导致与参考表达口径不统一。",
+      "action": "Prompt 明确一致的记分与标签写法（如比分用“2:1”或“2-1”择一、FT/全场结束的固定位置）；同时说明球队名是否必须与输入完全一致，或是否允许本地化译名/简称。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "soccer_final",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "require_chinese_narrative_style",
+      "summary": "Prompt 未明确要求以中文解说/叙述体输出，导致结果更偏日志拼接格式，和参考答案风格差距较大。",
+      "action": "在 Prompt 中增加硬约束：content 必须用中文自然语言成句输出（允许适度语气但不得新增事实），避免使用“|”等日志式分隔符；建议给出一句到两句的示例结构（局数+比分+领先方+关键回合串联）。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "baseball_mid_game",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "localize_enum_terms",
+      "summary": "Prompt 未规定对输入中的英文状态字段做中文化处理，容易出现中英混用（如 in_progress）。",
+      "action": "在 Prompt 中规定对 status/phase 等枚举进行本地化转写（如 in_progress→“正在进行”，Top 7→“第七局上半/七局上”），并要求不直接输出原始英文 token。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "baseball_mid_game",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "explicit_lead_statement",
+      "summary": "Prompt 未要求明确表达“谁领先”与比分关系，导致只并列呈现比分而缺少关键语义。",
+      "action": "在 Prompt 中加入规则：当 score 可得时，必须用“队A x:y 领先 队B/双方战平”明确领先关系（必要时结合主客队）。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "baseball_mid_game",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "language_and_style_constraints",
+      "summary": "Prompt 未明确输出语言与文风约束，导致本样本输出偏英文且过于口号式，和参考答案的信息呈现风格不一致。",
+      "action": "Prompt 明确规定 content 的语言与风格（例如中文叙述为主，可在括号保留英文状态码），并要求在不增加字段的前提下输出更自然的句式。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "pre_game_preview",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "pre_game_status_rendering",
+      "summary": "Prompt 未定义 pre_game 等状态的呈现模板，导致仅复述状态码而缺少“赛前/未开打”的语义化描述。",
+      "action": "Prompt 增加硬性信息覆盖规则：当 status=pre_game 且 score 为 0:0 时，需明确表达“赛前/尚未开打”，避免只输出原始状态码。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "pre_game_preview",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "last_update_required_when_present",
+      "summary": "Prompt 未要求在输入包含 last_update 时输出更新时间，导致本样本遗漏了可用且重要的时间信息。",
+      "action": "Prompt 规定当输入提供 last_update 时必须在 content 中输出，并给出统一的时间格式（保留时区信息）。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "pre_game_preview",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "home_away_context_requirement",
+      "summary": "Prompt 未明确主客场信息的表达要求，导致本样本仅并列队名，缺少对阵语义与顺序约束。",
+      "action": "Prompt 指定当输入提供 home_team/away_team 时，需明确主客场关系（如“X 主场迎战 Y”）或用固定顺序标注，提升可读性与一致性。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "pre_game_preview",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "require_include_teams_when_available",
+      "summary": "Prompt 未明确要求使用已给出的主客队信息，导致输出信息量不足。",
+      "action": "Prompt 需要明确：当 user_input 提供 home_team/away_team 时，content 必须包含双方队名与对阵关系（例如“X 对阵 Y”），除非字段缺失则直接略过。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "missing_fields",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "specify_chinese_natural_sentence",
+      "summary": "Prompt 未约束语言与表达形式，导致内容呈现为“枚举值直出”的标签风格。",
+      "action": "Prompt 需要指定输出语言为中文，并要求用 1–2 句自然语言描述比赛状态（而非用分隔符/标签串联）。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "missing_fields",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "status_to_human_readable_mapping",
+      "summary": "Prompt 未要求对状态字段做可读化转换，影响可读性与与参考答案风格的一致性。",
+      "action": "Prompt 需要增加规则：将 status 枚举映射为对应中文短语（如 in_progress→“比赛进行中”），并在不新增事实的前提下组织为解说句式。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "missing_fields",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P0",
+      "key": "resolve_conflicting_status_fields",
+      "summary": "Prompt 缺少对输入字段自相矛盾（已结束 vs 仍有节次/剩余时间）的处理规则，导致正文出现“finished + Q4 05:00”式矛盾表述。",
+      "action": "在 Prompt 中加入消歧硬约束：当 status/highlights 明确为 finished/Final 时，正文只输出“终场/已结束”与最终比分（可含球队名），与结束语义冲突的 clock/phase 等信息必须省略或改写为不冲突表述，禁止并列呈现造成自相矛盾。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "inconsistent_state",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "specify_language_and_narrative_style",
+      "summary": "Prompt 未明确正文应使用中文自然语言及叙述风格，导致输出呈英文分隔符拼接，和参考答案风格偏离。",
+      "action": "在 Prompt 中明确输出语言与体裁约束（例如：中文、1-2 句自然语言播报），并要求避免使用“|”等管道符拼接的表格/列表式表达，除非被明确要求。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "inconsistent_state",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "allow_winner_inference_from_score",
+      "summary": "Prompt 未说明在“已结束”场景下可由比分安全推导胜者，导致只罗列比分而缺少结果性表述（胜者/分差）。",
+      "action": "在 Prompt 中增加可选但明确的推导规则：当比赛已结束且比分不相等时，可根据 home/away 分数比较点明获胜方与分差；若比分相等则不要断言胜负。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "inconsistent_state",
+    "metric_name": "llm_critic"
+  }
+]

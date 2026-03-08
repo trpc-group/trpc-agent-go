@@ -1,0 +1,63 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "inconsistent_state",
+  "runId": 1,
+  "invocations": [
+    {
+      "metrics": [
+        {
+          "metricName": "llm_critic",
+          "score": 0.5,
+          "threshold": 0.8,
+          "evalStatus": "failed",
+          "output": {
+            "assessment": "本样本 candidate 满足 r1：输出为单一 JSON 对象且仅含 content 字段。主要问题在 r3：输入同时给出 status=finished 与 Q4/05:00 这类“进行中”信号，candidate把两者并列写入正文，导致语义自相矛盾；参考答案则选择只表达“已结束+终场比分”，避免冲突。此外，candidate采用英文与“|”拼接的列表体，和参考答案的中文叙述差异较大，且未基于比分点明胜者（可由输入推得）。这些现象通常来自 Prompt 未明确：遇到状态字段冲突时的取舍规则、以及期望的语言与表达风格。",
+            "issues": [
+              {
+                "action": "在 Prompt 中加入消歧硬约束：当 status/highlights 明确为 finished/Final 时，正文只输出“终场/已结束”与最终比分（可含球队名），与结束语义冲突的 clock/phase 等信息必须省略或改写为不冲突表述，禁止并列呈现造成自相矛盾。",
+                "key": "resolve_conflicting_status_fields",
+                "severity": "P0",
+                "summary": "Prompt 缺少对输入字段自相矛盾（已结束 vs 仍有节次/剩余时间）的处理规则，导致正文出现“finished + Q4 05:00”式矛盾表述。"
+              },
+              {
+                "action": "在 Prompt 中明确输出语言与体裁约束（例如：中文、1-2 句自然语言播报），并要求避免使用“|”等管道符拼接的表格/列表式表达，除非被明确要求。",
+                "key": "specify_language_and_narrative_style",
+                "severity": "P1",
+                "summary": "Prompt 未明确正文应使用中文自然语言及叙述风格，导致输出呈英文分隔符拼接，和参考答案风格偏离。"
+              },
+              {
+                "action": "在 Prompt 中增加可选但明确的推导规则：当比赛已结束且比分不相等时，可根据 home/away 分数比较点明获胜方与分差；若比分相等则不要断言胜负。",
+                "key": "allow_winner_inference_from_score",
+                "severity": "P1",
+                "summary": "Prompt 未说明在“已结束”场景下可由比分安全推导胜者，导致只罗列比分而缺少结果性表述（胜者/分差）。"
+              }
+            ],
+            "rubrics": [
+              {
+                "id": "r1",
+                "reason": "输出为单一 JSON 对象，且仅包含 content 字段，无额外文本或字段。",
+                "verdict": "yes"
+              },
+              {
+                "id": "r3",
+                "reason": "正文同时呈现 finished 与 Q4/05:00 等进行中信息，未在输入自相矛盾时做取舍，造成自相矛盾表达。",
+                "verdict": "no"
+              }
+            ]
+          },
+          "rubricScores": [
+            {
+              "id": "r1",
+              "reason": "输出为单一 JSON 对象，且仅包含 content 字段，无额外文本或字段。",
+              "score": 1
+            },
+            {
+              "id": "r3",
+              "reason": "正文同时呈现 finished 与 Q4/05:00 等进行中信息，未在输入自相矛盾时做取舍，造成自相矛盾表达。"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

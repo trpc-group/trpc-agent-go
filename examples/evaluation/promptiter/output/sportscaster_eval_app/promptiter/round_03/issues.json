@@ -1,0 +1,134 @@
+[
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "require_possession_when_present",
+      "summary": "Prompt 未明确要求在输入提供球权信息时必须输出，导致该样本遗漏 possession 这一关键上下文。",
+      "action": "Prompt 需要增加硬性要求：当 user_input 含 possession 字段时，正文必须明确球权在主队/客队，并将 home/away 映射到具体队名；若字段缺失则直接不写。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "basketball_clutch_q4",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "specify_tone_expectation",
+      "summary": "Prompt 对输出语气与表达强度缺少明确指引，导致该样本相对参考答案更平铺直叙。",
+      "action": "Prompt 需要明确目标文风（如“直播解说/更有张力”或“纯客观快讯”二选一）并给出1-2句示例约束，避免同样事实在风格上与参考答案偏差过大。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "basketball_clutch_q4",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "define_output_structure",
+      "summary": "Prompt 未规定结构化呈现（分段/时间线），使该样本信息可读性不如参考答案。",
+      "action": "Prompt 需要规定固定排版模板：首句包含 phase+clock+score（可含 possession），随后 highlights 按时间逐条换行；避免把所有信息挤在同一段。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "basketball_clutch_q4",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "last_update_policy",
+      "summary": "Prompt 未说明是否应包含 last_update，导致该样本与参考答案在信息取舍上出现差异。",
+      "action": "Prompt 需要明确 last_update 的策略：是否必须输出；若输出，规定统一格式（如 ISO 字符串原样保留）与放置位置，避免与参考答案取舍不一致。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "basketball_clutch_q4",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "cover_key_highlights",
+      "summary": "Prompt 未要求在 highlights 存在时覆盖全部关键事件，导致本例漏写 12' 的进球信息。",
+      "action": "Prompt 需要增加硬约束：当输入包含 highlights 时，输出必须覆盖其中所有“进球/红黄牌”等关键事件（尤其进球），不得遗漏；只允许略过非关键事件且不新增未在 highlights 中出现的事件。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "soccer_final",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "chronological_highlight_narrative",
+      "summary": "Prompt 未规定按时间顺序与比分变化来组织 highlights，导致叙事不够连贯且易出现顺序/上下文缺失。",
+      "action": "Prompt 需要明确组织规则：将 highlights 按时间先后顺序串联描述，并在每个进球节点同步更新比分（从输入推导），避免仅罗列零散片段。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "soccer_final",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "include_score_when_available",
+      "summary": "Prompt 未明确要求在存在 score 字段时（即便赛前）也输出比分，导致对输入信息的利用不充分。",
+      "action": "在 Prompt 中补充硬性规则：只要输入包含 score.home/score.away，就必须在 content 中输出“home:away”比分（即使为 0 也照写），不要因 pre_game 而省略。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "pre_game_preview",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "specify_time_format",
+      "summary": "Prompt 未规定 last_update 的展示格式，可能导致不同样本的时间表述不一致。",
+      "action": "在 Prompt 中指定 last_update 的统一呈现格式（例如保留原 ISO，或转写为 `YYYY-MM-DD HH:mm (+TZ)`），并强调只能从 last_update 转写，不得自行推断开赛时间。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "pre_game_preview",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "define_tone_and_template",
+      "summary": "Prompt 未定义期望的叙述风格与句式模板，导致与参考答案的表达风格存在偏离空间。",
+      "action": "在 Prompt 中增加可执行的文风/模板约束（如 1–2 句中文口播、可适度增强氛围），同时写明禁止新增具体事件/预测/未给出的细节，以免为追求氛围而越界。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "pre_game_preview",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "clarify_team_name_language",
+      "summary": "Prompt 未明确队名应使用输入原文还是可翻译为中文，容易造成语言风格不稳定或引入外部知识风险。",
+      "action": "在 Prompt 中明确队名语言规则：默认原样使用输入中的队名；仅当输入提供中文名字段时才使用中文名，避免依赖外部映射或常识翻译。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "pre_game_preview",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "commentary_style_requirement",
+      "summary": "Prompt 未明确要求贴近参考答案的解说化语气与适度扩写，导致输出虽合规但过于简略。",
+      "action": "Prompt 需要补充风格与信息密度要求：在仅依据 status/队名的前提下，输出 1–2 句更有解说感的中文（可用感叹号、对阵/胶着等泛化措辞），但不得添加比分、时间点、射门/犯规等具体事件。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "missing_fields",
+    "metric_name": "llm_critic"
+  },
+  {
+    "issue": {
+      "severity": "P1",
+      "key": "safe_flair_boundary",
+      "summary": "Prompt 未清晰区分可接受的泛化氛围描写与会构成编造的过程/事件描述，易引发风格与真实性权衡失控。",
+      "action": "Prompt 需要明确“渲染边界”：允许不落地到具体事实的情绪/氛围词（如“对阵正酣”），禁止看似具体的过程性断言（如“节奏一波接一波”“拉扯对抗”等）除非输入提供依据，并给出正反例以约束。"
+    },
+    "eval_set_id": "sportscaster_basic",
+    "eval_case_id": "missing_fields",
+    "metric_name": "llm_critic"
+  }
+]

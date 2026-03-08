@@ -1,0 +1,70 @@
+{
+  "evalSetId": "sportscaster_basic",
+  "evalCaseId": "pre_game_preview",
+  "runId": 1,
+  "invocations": [
+    {
+      "metrics": [
+        {
+          "metricName": "llm_critic",
+          "score": 1,
+          "threshold": 0.8,
+          "evalStatus": "passed",
+          "output": {
+            "assessment": "Candidate 符合输出契约：为单一 JSON 且仅含 content 字段，无多余文本；正文与输入一致，正确表达赛前状态、主客队与 last_update，并未虚构高光或比赛进程，满足“严格基于输入”的要求。与 teacher 相比，candidate 信息覆盖与表达更克制：未利用已给的 0:0 比分，也缺少更固定的中文口播句式与氛围感。这暴露出 Prompt 可能未明确“可用字段的必写清单（如比分）”、时间展示格式、以及期望文风模板与队名语言规则，进而在相似赛前样本中造成要素遗漏或表述风格不统一。",
+            "issues": [
+              {
+                "action": "在 Prompt 中补充硬性规则：只要输入包含 score.home/score.away，就必须在 content 中输出“home:away”比分（即使为 0 也照写），不要因 pre_game 而省略。",
+                "key": "include_score_when_available",
+                "severity": "P1",
+                "summary": "Prompt 未明确要求在存在 score 字段时（即便赛前）也输出比分，导致对输入信息的利用不充分。"
+              },
+              {
+                "action": "在 Prompt 中指定 last_update 的统一呈现格式（例如保留原 ISO，或转写为 `YYYY-MM-DD HH:mm (+TZ)`），并强调只能从 last_update 转写，不得自行推断开赛时间。",
+                "key": "specify_time_format",
+                "severity": "P1",
+                "summary": "Prompt 未规定 last_update 的展示格式，可能导致不同样本的时间表述不一致。"
+              },
+              {
+                "action": "在 Prompt 中增加可执行的文风/模板约束（如 1–2 句中文口播、可适度增强氛围），同时写明禁止新增具体事件/预测/未给出的细节，以免为追求氛围而越界。",
+                "key": "define_tone_and_template",
+                "severity": "P1",
+                "summary": "Prompt 未定义期望的叙述风格与句式模板，导致与参考答案的表达风格存在偏离空间。"
+              },
+              {
+                "action": "在 Prompt 中明确队名语言规则：默认原样使用输入中的队名；仅当输入提供中文名字段时才使用中文名，避免依赖外部映射或常识翻译。",
+                "key": "clarify_team_name_language",
+                "severity": "P1",
+                "summary": "Prompt 未明确队名应使用输入原文还是可翻译为中文，容易造成语言风格不稳定或引入外部知识风险。"
+              }
+            ],
+            "rubrics": [
+              {
+                "id": "r1",
+                "reason": "输出为单一 JSON 对象且仅包含 content 字段，没有额外文本或字段。",
+                "verdict": "yes"
+              },
+              {
+                "id": "r3",
+                "reason": "描述均可由 pre_game 状态、主客队字段与 last_update 直接支撑，未编造比赛事件/高光或与输入冲突的信息。",
+                "verdict": "yes"
+              }
+            ]
+          },
+          "rubricScores": [
+            {
+              "id": "r1",
+              "reason": "输出为单一 JSON 对象且仅包含 content 字段，没有额外文本或字段。",
+              "score": 1
+            },
+            {
+              "id": "r3",
+              "reason": "描述均可由 pre_game 状态、主客队字段与 last_update 直接支撑，未编造比赛事件/高光或与输入冲突的信息。",
+              "score": 1
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
