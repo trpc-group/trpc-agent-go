@@ -17,7 +17,7 @@ require (
 require (
 	github.com/clbanning/mxj v1.8.4 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
-	github.com/go-ego/gse v0.80.3 // indirect
+	github.com/go-ego/gse v1.0.0 // indirect
 	github.com/google/go-querystring v1.0.0 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/mozillazg/go-httpheader v0.2.1 // indirect
