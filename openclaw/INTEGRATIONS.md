@@ -104,6 +104,7 @@ Notes and limitations:
   and these flags must be off:
   - `-enable-local-exec`
   - `-enable-openclaw-tools`
+  - `-enable-parallel-tools`
   - `-refresh-toolsets-on-run`
 - `agent.add_session_summary`, `agent.max_history_runs`, and
   `agent.preload_memory` are LLM-only knobs.
@@ -157,6 +158,23 @@ skills:
   extra_dirs:
     - "/path/to/team/skills"      # optional; lowest precedence
   debug: false                   # log gating decisions when true
+
+  # Optional: restrict which bundled skills are enabled by default.
+  # Applies only to bundled skills under ./openclaw/skills.
+  allowBundled: ["gh-issues", "notion"]
+  load_mode: "turn"              # once|turn|session
+  loaded_content_in_tool_results: true
+  max_loaded_skills: 0
+  skip_fallback_on_session_summary: true
+  tooling_guidance: ""           # optional; "" disables built-in guidance
+
+  # Optional: per-skill config (by skillKey or skill name).
+  entries:
+    gh-issues:
+      enabled: true              # optional; default true
+      apiKey: "..."              # optional; injected into primaryEnv
+      env:                       # optional; injected into skill_run
+        GH_TOKEN: "..."
 ```
 
 CLI equivalents:
@@ -164,6 +182,32 @@ CLI equivalents:
 - `-skills-root <DIR>`
 - `-skills-extra-dirs <A,B,C>` (comma-separated)
 - `-skills-debug`
+- `-skills-allow-bundled <A,B,C>` (comma-separated; bundled skills only)
+- `-skills-load-mode <once|turn|session>`
+- `-skills-max-loaded <N>`
+- `-skills-loaded-content-in-tool-results`
+- `-skills-skip-fallback-on-session-summary`
+
+OpenClaw defaults to materializing loaded skill bodies and docs into tool
+result messages. The built-in guidance also allows small read-only probes,
+such as `--help` or `--version`, when a skill depends on an external CLI
+and the runtime contract needs to be verified.
+
+#### `skills.entries` and OpenClaw metadata
+
+This demo supports OpenClaw-style per-skill configuration:
+
+- `skills.entries.<key>.enabled: false` disables that skill.
+- `skills.entries.<key>.env` can satisfy `metadata.openclaw.requires.env`
+  and is injected into `skill_run` (never overrides host env).
+- `skills.entries.<key>.apiKey` is injected into
+  `metadata.openclaw.primaryEnv` when that field is present in the skill.
+
+Key resolution:
+
+- If a skill sets `metadata.openclaw.skillKey`, that value is preferred
+  for `skills.entries.<key>`.
+- Otherwise the skill `name` is used.
 
 ### Minimal `SKILL.md` template
 
@@ -202,7 +246,7 @@ Then run OpenClaw (skills are discovered automatically):
 
 ```bash
 cd openclaw
-go run ./cmd/openclaw -config ./examples/stdin_chat/openclaw.yaml
+go run ./cmd/openclaw -config ./openclaw.stdin.yaml
 ```
 
 This starts a local terminal chat (STDIN channel).
@@ -240,6 +284,8 @@ Supported fields:
 
 - `metadata.openclaw.always`
 - `metadata.openclaw.os` (`darwin`, `linux`, `win32`)
+- `metadata.openclaw.skillKey`
+- `metadata.openclaw.primaryEnv`
 - `metadata.openclaw.requires.bins`
 - `metadata.openclaw.requires.anyBins`
 - `metadata.openclaw.requires.env`
@@ -292,17 +338,21 @@ Compatibility aliases (for upstream OpenClaw skill packs):
   - `plugins.entries.<type>.enabled`
   - `plugins.entries.<type>.config.<fieldPath>`
 
-Built-in integrations:
+Telegram:
 
-- If Telegram is enabled (`telegram.token` / `-telegram-token`), this
-  demo adds:
+- If a Telegram channel is configured in `channels:`, this demo adds:
   - `channels.telegram`
   - `channels.telegram.token`
 
 Tool surface keys (optional):
 
-- If `tools.enable_openclaw_tools: true`, this demo adds:
-  - `tools.exec`, `tools.bash`, `tools.process`
+- For the default LLM agent, this demo adds:
+  - `tools.exec_command`
+  - `tools.write_stdin`
+  - `tools.kill_session`
+  - `tools.message`
+  - `tools.cron`
+- Set `tools.enable_openclaw_tools: false` to disable them.
 - If `tools.enable_local_exec: true`, this demo adds:
   - `tools.local_exec`
 
@@ -344,18 +394,22 @@ Some OpenClaw skill packs use `{baseDir}` in commands and docs to mean
 This demo replaces `{baseDir}` in loaded skill bodies/docs with the
 actual local path to keep those skill packs usable.
 
-### Skills and tool compatibility (OpenClaw-style `exec` / `process`)
+### Skills and tool compatibility (OpenClaw host tools)
 
 Some skill packs assume an OpenClaw-like tool surface, especially:
 
-- `exec` (or `bash`): execute a shell command
-- `process`: manage long-running sessions
+- `exec_command`: execute a host shell command
+- `write_stdin`: continue an interactive command
+- `message`: send to the current chat
+- `cron`: create future or recurring jobs persisted in the OpenClaw
+  state dir
 
-This demo can enable OpenClaw-compatible tools:
+This demo enables OpenClaw-compatible host tools for the default LLM
+agent. To disable them explicitly:
 
 ```yaml
 tools:
-  enable_openclaw_tools: true
+  enable_openclaw_tools: false
 ```
 
 To further reduce risk, you can restrict what `skill_run` is allowed to
@@ -392,6 +446,7 @@ Supported `session.backend` values:
 
 - `inmemory` (default)
 - `redis`
+- `sqlite`
 - `mysql`
 - `postgres`
 - `clickhouse`
@@ -422,6 +477,27 @@ Notes:
 - `url` and `instance` are two ways to specify where Redis is.
   Use `url` unless you have an internal service discovery system.
 - `key_prefix` is optional. `app_name` is still used for isolation.
+
+### Session: sqlite
+
+Good for local demos where you want persistence across restarts.
+
+If `session.config` is omitted, it defaults to:
+
+- `<state_dir>/sessions.sqlite` (where `state_dir` defaults to
+  `~/.trpc-agent-go/openclaw`)
+- `<state_dir>/debug` (when `debug_recorder.enabled: true`)
+
+Explicit path example:
+
+```yaml
+session:
+  backend: "sqlite"
+  config:
+    path: "/tmp/openclaw-sessions.sqlite"
+    skip_db_init: false
+    table_prefix: "oc_"
+```
 
 ### Session: mysql / postgres / clickhouse
 
@@ -693,6 +769,36 @@ Tool naming:
 If you set `tools.refresh_toolsets_on_run: true`, ToolSet tools are
 reloaded on each agent run (useful for MCP where tools can change).
 
+### Parallel tool execution (optional)
+
+By default, OpenClaw executes tool calls **serially**.
+
+If you enable parallel tool execution, and the model returns **multiple
+tool calls in one step**, OpenClaw runs them concurrently. This can be
+useful when:
+
+- the tool calls are independent, and
+- you want to reduce end-to-end latency (for example, multiple sub-agent
+  calls via AgentTool).
+
+YAML:
+
+```yaml
+tools:
+  enable_parallel_tools: true
+```
+
+CLI:
+
+- `-enable-parallel-tools`
+
+Important notes:
+
+- Parallel tools require each tool implementation to be safe for
+  concurrent use.
+- This only affects tool calls inside one model step. The gateway still
+  runs **one request at a time per session** (history/state safety).
+
 ## Built-in tool providers
 
 These providers are built in to the OpenClaw demo binary.
@@ -782,6 +888,39 @@ tools:
         reconnect:
           enabled: true
           max_attempts: 3
+```
+
+Example: Playwright MCP "browser use" (stdio) via `npx`:
+
+This starts the Playwright MCP server as a subprocess and exposes its browser
+tools under the `browser_` namespace prefix.
+
+It is also a practical example of **MCP image forwarding**:
+
+- Some MCP tools (for example browser screenshots) return `{type:"image", ...}`
+  items.
+- OpenClaw forwards those images back to the model as real image messages, so
+  vision models can use them.
+
+Runnable example: `openclaw/examples/playwright_mcp_browser/`.
+
+```yaml
+tools:
+  refresh_toolsets_on_run: true
+  toolsets:
+    - type: "mcp"
+      name: "browser"
+      config:
+        transport: "stdio"
+        command: "npx"
+        args:
+          - "--yes"
+          - "@playwright/mcp@latest"
+          - "--headless"
+          - "--isolated"
+          - "--caps"
+          - "vision"
+        timeout: "5m"
 ```
 
 Supported transports:

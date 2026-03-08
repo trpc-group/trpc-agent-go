@@ -74,9 +74,19 @@ func TestParse_UnsupportedScheme(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestParse_Artifact_InvalidRef(t *testing.T) {
-	_, err := fileref.Parse("artifact://x@bad")
-	require.Error(t, err)
+func TestParse_Artifact_NameContainsAt(t *testing.T) {
+	ref, err := fileref.Parse("artifact://x@bad")
+	require.NoError(t, err)
+	require.Equal(t, fileref.SchemeArtifact, ref.Scheme)
+	require.Equal(t, "x@bad", ref.ArtifactName)
+	require.Nil(t, ref.ArtifactVersion)
+
+	ref, err = fileref.Parse("artifact://x@y@12")
+	require.NoError(t, err)
+	require.Equal(t, fileref.SchemeArtifact, ref.Scheme)
+	require.Equal(t, "x@y", ref.ArtifactName)
+	require.NotNil(t, ref.ArtifactVersion)
+	require.Equal(t, 12, *ref.ArtifactVersion)
 }
 
 func TestParse_Artifact_EmptyNameAfterParse(t *testing.T) {
@@ -99,6 +109,28 @@ func TestParse_Workspace_InvalidPath(t *testing.T) {
 
 func TestWorkspaceRef(t *testing.T) {
 	require.Equal(t, "workspace://out/a.txt", fileref.WorkspaceRef("out/a.txt"))
+}
+
+func TestIsInternalFileRef(t *testing.T) {
+	t.Parallel()
+
+	require.True(t, fileref.IsInternalFileRef("artifact://a.txt"))
+	require.True(t, fileref.IsInternalFileRef("workspace://out/a.txt"))
+	require.True(t, fileref.IsInternalFileRef("host:///tmp/a.txt"))
+	require.True(t, fileref.IsInternalFileRef("file:///tmp/a.txt"))
+	require.True(t, fileref.IsInternalFileRef("/tmp/a.txt"))
+	require.False(t, fileref.IsInternalFileRef("file-123"))
+}
+
+func TestDisplayName(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, "a.txt", fileref.DisplayName("artifact://x/a.txt@2"))
+	require.Equal(t, "a.txt", fileref.DisplayName("workspace://out/a.txt"))
+	require.Equal(t, "a.txt", fileref.DisplayName("host:///tmp/a.txt"))
+	require.Equal(t, "a.txt", fileref.DisplayName("file:///tmp/a.txt"))
+	require.Equal(t, "a.txt", fileref.DisplayName("/tmp/a.txt"))
+	require.Empty(t, fileref.DisplayName("file-123"))
 }
 
 func TestTryRead_Workspace_FromCache(t *testing.T) {

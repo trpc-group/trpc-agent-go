@@ -29,19 +29,17 @@ const (
 	configKeyPluginsEnabledSuffix = ".enabled"
 	configKeyPluginsConfigPrefix  = ".config"
 
-	configKeyTelegram = "telegram"
-	configKeyToken    = "token"
-
-	configKeyExec      = "exec"
-	configKeyBash      = "bash"
-	configKeyProcess   = "process"
-	configKeyLocalExec = "local_exec"
+	configKeyExecCommand = "exec_command"
+	configKeyWriteStdin  = "write_stdin"
+	configKeyKillSession = "kill_session"
+	configKeyMessage     = "message"
+	configKeyCron        = "cron"
+	configKeyLocalExec   = "local_exec"
 )
 
 func resolveSkillConfigKeys(opts runOptions) []string {
 	set := map[string]struct{}{}
 
-	addTelegramConfigKeys(set, opts)
 	addPluginSpecsConfigKeys(set, configKeyChannelsPrefix, opts.Channels)
 	addPluginSpecsConfigKeys(
 		set,
@@ -57,23 +55,6 @@ func resolveSkillConfigKeys(opts runOptions) []string {
 	}
 	sort.Strings(out)
 	return out
-}
-
-func addTelegramConfigKeys(set map[string]struct{}, opts runOptions) {
-	if strings.TrimSpace(opts.TelegramToken) == "" {
-		return
-	}
-
-	chBase := configKeyChannelsPrefix + configKeyTelegram
-	addConfigKey(set, chBase)
-	addConfigKey(set, chBase+"."+configKeyToken)
-
-	entryBase := configKeyPluginsEntriesPrefix + configKeyTelegram
-	addConfigKey(set, entryBase+configKeyPluginsEnabledSuffix)
-
-	cfgBase := entryBase + configKeyPluginsConfigPrefix
-	addConfigKey(set, cfgBase)
-	addConfigKey(set, cfgBase+"."+configKeyToken)
 }
 
 func addPluginSpecsConfigKeys(
@@ -105,9 +86,20 @@ func addPluginSpecsConfigKeys(
 
 func addToolSurfaceKeys(set map[string]struct{}, opts runOptions) {
 	if opts.EnableOpenClawTools {
-		addConfigKey(set, configKeyToolsPrefix+configKeyExec)
-		addConfigKey(set, configKeyToolsPrefix+configKeyBash)
-		addConfigKey(set, configKeyToolsPrefix+configKeyProcess)
+		addConfigKey(
+			set,
+			configKeyToolsPrefix+configKeyExecCommand,
+		)
+		addConfigKey(
+			set,
+			configKeyToolsPrefix+configKeyWriteStdin,
+		)
+		addConfigKey(
+			set,
+			configKeyToolsPrefix+configKeyKillSession,
+		)
+		addConfigKey(set, configKeyToolsPrefix+configKeyMessage)
+		addConfigKey(set, configKeyToolsPrefix+configKeyCron)
 	}
 	if opts.EnableLocalExec {
 		addConfigKey(set, configKeyToolsPrefix+configKeyLocalExec)

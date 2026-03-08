@@ -10,7 +10,13 @@
 
 package gateway
 
-import "strings"
+import (
+	"strings"
+
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
+)
 
 // SessionIDFunc builds a session ID for the inbound message.
 type SessionIDFunc func(InboundMessage) (string, error)
@@ -23,12 +29,23 @@ type options struct {
 	healthPath   string
 
 	maxBodyBytes int64
+	maxPartBytes int64
+
+	partFetcher          partFetcher
+	allowPrivatePartURLs bool
+	allowedPartPatterns  []string
+	audioTranscriber     audioTranscriber
 
 	sessionIDFunc SessionIDFunc
 
 	allowUsers      map[string]struct{}
 	requireMention  bool
 	mentionPatterns []string
+
+	recorder *debugrecorder.Recorder
+	uploads  *uploads.Store
+
+	personaStore *persona.Store
 }
 
 // Option is a function that configures a gateway server.
@@ -42,6 +59,7 @@ func newOptions(opts ...Option) options {
 		cancelPath:     defaultCancelPath,
 		healthPath:     defaultHealthPath,
 		maxBodyBytes:   defaultMaxBodyBytes,
+		maxPartBytes:   defaultMaxContentPartBytes,
 		sessionIDFunc:  nil,
 		allowUsers:     nil,
 		requireMention: false,
@@ -66,6 +84,9 @@ func newOptions(opts ...Option) options {
 	}
 	if o.maxBodyBytes <= 0 {
 		o.maxBodyBytes = defaultMaxBodyBytes
+	}
+	if o.maxPartBytes <= 0 {
+		o.maxPartBytes = defaultMaxContentPartBytes
 	}
 	return o
 }
@@ -109,6 +130,63 @@ func WithHealthPath(path string) Option {
 func WithMaxBodyBytes(max int64) Option {
 	return func(o *options) {
 		o.maxBodyBytes = max
+	}
+}
+
+// WithMaxContentPartBytes sets the maximum bytes to fetch for one
+// content part.
+func WithMaxContentPartBytes(max int64) Option {
+	return func(o *options) {
+		o.maxPartBytes = max
+	}
+}
+
+// WithContentPartFetcher sets a custom content-part fetcher.
+func WithContentPartFetcher(fetcher partFetcher) Option {
+	return func(o *options) {
+		o.partFetcher = fetcher
+	}
+}
+
+// WithAllowPrivateContentPartURLs allows content parts to fetch URLs that
+// resolve to loopback or private network addresses.
+func WithAllowPrivateContentPartURLs(enabled bool) Option {
+	return func(o *options) {
+		o.allowPrivatePartURLs = enabled
+	}
+}
+
+// WithAllowedContentPartDomains restricts content-part URL fetches to the
+// provided domains or URL patterns.
+//
+// Each entry is either:
+//   - "example.com" (allows all paths), or
+//   - "example.com/path" (allows /path/...).
+//
+// The host match is case-insensitive and allows subdomains.
+func WithAllowedContentPartDomains(domains ...string) Option {
+	return func(o *options) {
+		if len(domains) == 0 {
+			o.allowedPartPatterns = nil
+			return
+		}
+		out := make([]string, 0, len(domains))
+		for _, domain := range domains {
+			domain = strings.TrimSpace(domain)
+			if domain == "" {
+				continue
+			}
+			out = append(out, domain)
+		}
+		o.allowedPartPatterns = out
+	}
+}
+
+// WithPersonaStore sets the preset persona store used for per-chat
+// system-message injection.
+func WithPersonaStore(store *persona.Store) Option {
+	return func(o *options) {
+		o.personaStore = store
 	}
 }
 
@@ -162,5 +240,29 @@ func WithMentionPatterns(patterns ...string) Option {
 			copied = append(copied, pattern)
 		}
 		o.mentionPatterns = copied
+	}
+}
+
+// WithDebugRecorder enables file-based debug recording for gateway requests.
+//
+// When set, the gateway creates a per-request trace when no trace is present
+// in the request context.
+func WithDebugRecorder(rec *debugrecorder.Recorder) Option {
+	return func(o *options) {
+		o.recorder = rec
+	}
+}
+
+// WithUploadStore persists inbound file parts to stable host paths.
+func WithUploadStore(store *uploads.Store) Option {
+	return func(o *options) {
+		o.uploads = store
+	}
+}
+
+// WithAudioTranscriber overrides inbound audio transcription.
+func WithAudioTranscriber(transcriber audioTranscriber) Option {
+	return func(o *options) {
+		o.audioTranscriber = transcriber
 	}
 }

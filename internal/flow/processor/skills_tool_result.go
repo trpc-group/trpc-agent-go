@@ -78,7 +78,8 @@ func WithSkipSkillsFallbackOnSessionSummary(
 // message containing the loaded skill bodies/docs.
 //
 // If a session summary is present in the request and the corresponding
-// option is enabled, the fallback system message is skipped.
+// option is enabled, the fallback system message is skipped only when the
+// loaded skill content is already represented elsewhere in the prompt.
 type SkillsToolResultRequestProcessor struct {
 	repo     skill.Repository
 	loadMode string
@@ -118,6 +119,8 @@ func (p *SkillsToolResultRequestProcessor) ProcessRequest(
 		return
 	}
 
+	maybeMigrateLegacySkillState(ctx, inv, ch)
+
 	loaded := p.getLoadedSkills(inv)
 	if len(loaded) == 0 {
 		p.removeLoadedContextMessage(req)
@@ -156,7 +159,11 @@ func (p *SkillsToolResultRequestProcessor) ProcessRequest(
 		loaded,
 		materialized,
 	)
-	if p.skipFallbackOnSessionSummary && hasSessionSummary(inv) {
+	if fallbackContent == "" {
+		p.removeLoadedContextMessage(req)
+	} else if p.skipFallbackOnSessionSummary &&
+		hasSessionSummary(inv) &&
+		!hasCompactedToolResultMessages(inv) {
 		p.removeLoadedContextMessage(req)
 	} else {
 		p.upsertLoadedContextMessage(req, fallbackContent)
@@ -184,15 +191,16 @@ func (p *SkillsToolResultRequestProcessor) getLoadedSkills(
 	if len(state) == 0 {
 		return nil
 	}
+	prefix := skill.LoadedPrefix(inv.AgentName)
 	var names []string
 	for k, v := range state {
-		if !strings.HasPrefix(k, skill.StateKeyLoadedPrefix) {
+		if !strings.HasPrefix(k, prefix) {
 			continue
 		}
 		if len(v) == 0 {
 			continue
 		}
-		name := strings.TrimPrefix(k, skill.StateKeyLoadedPrefix)
+		name := strings.TrimPrefix(k, prefix)
 		if strings.TrimSpace(name) == "" {
 			continue
 		}
@@ -347,7 +355,7 @@ func (p *SkillsToolResultRequestProcessor) getDocsSelection(
 	if inv == nil || inv.Session == nil {
 		return nil
 	}
-	key := skill.StateKeyDocsPrefix + name
+	key := skill.DocsKey(inv.AgentName, name)
 	v, ok := inv.Session.GetState(key)
 	if !ok || len(v) == 0 {
 		return nil
@@ -529,11 +537,11 @@ func (p *SkillsToolResultRequestProcessor) maybeOffloadLoadedSkills(
 	}
 	delta := make(map[string][]byte, len(loaded)*2)
 	for _, name := range loaded {
-		loadedKey := skill.StateKeyLoadedPrefix + name
+		loadedKey := skill.LoadedKey(inv.AgentName, name)
 		inv.Session.SetState(loadedKey, nil)
 		delta[loadedKey] = nil
 
-		docsKey := skill.StateKeyDocsPrefix + name
+		docsKey := skill.DocsKey(inv.AgentName, name)
 		inv.Session.SetState(docsKey, nil)
 		delta[docsKey] = nil
 	}

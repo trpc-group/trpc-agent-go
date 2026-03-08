@@ -48,10 +48,15 @@ type BeforeNodeCallback func(
 	state State,
 ) (any, error)
 
-// AfterNodeCallback is called after a node is executed.
+// AfterNodeCallback is called after a node execution finishes (both success
+// and final failure).
+//
 // Returns (customResult, error).
-// - customResult: if not nil, this result will be used instead of the actual node result.
-// - error: if not nil, this error will be returned.
+//
+//   - customResult: if not nil, it replaces the node result. When nodeErr is
+//     non-nil, returning a non-nil customResult with a nil error recovers the
+//     node and allows graph execution to continue.
+//   - error: if not nil, it replaces the node error and stops graph execution.
 type AfterNodeCallback func(
 	ctx context.Context,
 	callbackCtx *NodeCallbackContext,

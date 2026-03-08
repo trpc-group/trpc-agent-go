@@ -32,8 +32,11 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
@@ -60,7 +63,14 @@ const (
 	defaultMaxBodyBytes int64 = 1 << 20
 
 	queryRequestID = "request_id"
+
+	errEmptyReply = "gateway: empty reply"
+
+	emptyReplyFallbackText = "I didn't produce a visible " +
+		"reply. Please try again."
 )
+
+var errEmptyReplyValue = errors.New(errEmptyReply)
 
 const (
 	errTypeInvalidRequest = "invalid_request"
@@ -110,6 +120,9 @@ type Server struct {
 	healthPath   string
 
 	maxBodyBytes int64
+	maxPartBytes int64
+
+	partFetcher partFetcher
 
 	runner  runner.Runner
 	managed runner.ManagedRunner
@@ -123,6 +136,11 @@ type Server struct {
 	lanes *laneLocker
 
 	handler http.Handler
+
+	recorder         *debugrecorder.Recorder
+	uploads          *uploads.Store
+	audioTranscriber audioTranscriber
+	personaStore     *persona.Store
 }
 
 // New creates a gateway server with the provided runner.
@@ -161,20 +179,44 @@ func New(r runner.Runner, opts ...Option) (*Server, error) {
 		managed = mr
 	}
 
+	policy := partURLPolicy{
+		allowPrivate:    options.allowPrivatePartURLs,
+		allowedPatterns: options.allowedPartPatterns,
+	}
+	fetcher := options.partFetcher
+	if fetcher == nil {
+		fetcher = newURLPartFetcher(policy)
+	} else {
+		fetcher = validatingFetcher{
+			next:   fetcher,
+			policy: policy,
+		}
+	}
+	audioTranscriber := options.audioTranscriber
+	if audioTranscriber == nil {
+		audioTranscriber = newDefaultAudioTranscriber()
+	}
+
 	s := &Server{
-		basePath:        options.basePath,
-		messagesPath:    messagesPath,
-		statusPath:      statusPath,
-		cancelPath:      cancelPath,
-		healthPath:      options.healthPath,
-		maxBodyBytes:    options.maxBodyBytes,
-		runner:          r,
-		managed:         managed,
-		sessionIDFunc:   sessionIDFunc,
-		allowUsers:      options.allowUsers,
-		requireMention:  options.requireMention,
-		mentionPatterns: options.mentionPatterns,
-		lanes:           newLaneLocker(),
+		basePath:         options.basePath,
+		messagesPath:     messagesPath,
+		statusPath:       statusPath,
+		cancelPath:       cancelPath,
+		healthPath:       options.healthPath,
+		maxBodyBytes:     options.maxBodyBytes,
+		maxPartBytes:     options.maxPartBytes,
+		partFetcher:      fetcher,
+		runner:           r,
+		managed:          managed,
+		sessionIDFunc:    sessionIDFunc,
+		allowUsers:       options.allowUsers,
+		requireMention:   options.requireMention,
+		mentionPatterns:  options.mentionPatterns,
+		lanes:            newLaneLocker(),
+		recorder:         options.recorder,
+		uploads:          options.uploads,
+		audioTranscriber: audioTranscriber,
+		personaStore:     options.personaStore,
 	}
 
 	mux := http.NewServeMux()
@@ -231,47 +273,6 @@ func joinURLPath(basePath, path string) (string, error) {
 	return url.JoinPath(basePath, path)
 }
 
-type sendMessageRequest struct {
-	Channel   string `json:"channel,omitempty"`
-	From      string `json:"from,omitempty"`
-	To        string `json:"to,omitempty"`
-	Thread    string `json:"thread,omitempty"`
-	MessageID string `json:"message_id,omitempty"`
-	Text      string `json:"text,omitempty"`
-
-	UserID    string `json:"user_id,omitempty"`
-	SessionID string `json:"session_id,omitempty"`
-	RequestID string `json:"request_id,omitempty"`
-}
-
-type apiError struct {
-	Type    string `json:"type"`
-	Message string `json:"message"`
-}
-
-type sendMessageResponse struct {
-	SessionID string    `json:"session_id,omitempty"`
-	RequestID string    `json:"request_id,omitempty"`
-	Reply     string    `json:"reply,omitempty"`
-	Ignored   bool      `json:"ignored,omitempty"`
-	Error     *apiError `json:"error,omitempty"`
-}
-
-func (r sendMessageRequest) inbound() InboundMessage {
-	channel := strings.TrimSpace(r.Channel)
-	if channel == "" {
-		channel = defaultChannelName
-	}
-	return InboundMessage{
-		Channel:   channel,
-		From:      strings.TrimSpace(r.From),
-		To:        strings.TrimSpace(r.To),
-		Thread:    strings.TrimSpace(r.Thread),
-		MessageID: strings.TrimSpace(r.MessageID),
-		Text:      r.Text,
-	}
-}
-
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set(headerAllow, methodGet)
@@ -290,7 +291,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.managed == nil {
-		s.writeError(w, apiError{
+		s.writeError(w, gwproto.APIError{
 			Type:    errTypeUnsupported,
 			Message: "runner does not support status",
 		}, http.StatusNotImplemented)
@@ -299,7 +300,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	requestID := strings.TrimSpace(r.URL.Query().Get(queryRequestID))
 	if requestID == "" {
-		s.writeError(w, apiError{
+		s.writeError(w, gwproto.APIError{
 			Type:    errTypeInvalidRequest,
 			Message: "missing request_id",
 		}, http.StatusBadRequest)
@@ -328,7 +329,7 @@ func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.managed == nil {
-		s.writeError(w, apiError{
+		s.writeError(w, gwproto.APIError{
 			Type:    errTypeUnsupported,
 			Message: "runner does not support cancel",
 		}, http.StatusNotImplemented)
@@ -337,23 +338,18 @@ func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
 
 	var req cancelRequest
 	if err := s.decodeJSON(r, &req); err != nil {
-		s.writeError(w, apiError{
+		s.writeError(w, gwproto.APIError{
 			Type:    errTypeInvalidRequest,
 			Message: err.Error(),
 		}, http.StatusBadRequest)
 		return
 	}
 
-	requestID := strings.TrimSpace(req.RequestID)
-	if requestID == "" {
-		s.writeError(w, apiError{
-			Type:    errTypeInvalidRequest,
-			Message: "missing request_id",
-		}, http.StatusBadRequest)
+	canceled, apiErr, status := s.CancelRequest(r.Context(), req.RequestID)
+	if apiErr != nil {
+		s.writeError(w, *apiErr, status)
 		return
 	}
-
-	canceled := s.managed.Cancel(requestID)
 
 	w.Header().Set(headerContentType, contentTypeJSON)
 	_ = json.NewEncoder(w).Encode(map[string]bool{"canceled": canceled})
@@ -366,93 +362,17 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req sendMessageRequest
+	var req gwproto.MessageRequest
 	if err := s.decodeJSON(r, &req); err != nil {
-		s.writeError(w, apiError{
+		s.writeError(w, gwproto.APIError{
 			Type:    errTypeInvalidRequest,
 			Message: err.Error(),
 		}, http.StatusBadRequest)
 		return
 	}
 
-	msg := req.inbound()
-	msg.Text = strings.TrimSpace(msg.Text)
-	if msg.Text == "" {
-		s.writeError(w, apiError{
-			Type:    errTypeInvalidRequest,
-			Message: "missing text",
-		}, http.StatusBadRequest)
-		return
-	}
-
-	userID := strings.TrimSpace(req.UserID)
-	if userID == "" {
-		userID = msg.From
-	}
-	if userID == "" {
-		s.writeError(w, apiError{
-			Type:    errTypeInvalidRequest,
-			Message: "missing user_id or from",
-		}, http.StatusBadRequest)
-		return
-	}
-
-	if !s.isUserAllowed(userID) {
-		s.writeError(w, apiError{
-			Type:    errTypeUnauthorized,
-			Message: "user is not allowed",
-		}, http.StatusForbidden)
-		return
-	}
-
-	if s.requireMention && msg.Thread != "" {
-		if !containsAny(msg.Text, s.mentionPatterns) {
-			s.writeJSON(w, sendMessageResponse{
-				Ignored: true,
-			}, http.StatusOK)
-			return
-		}
-	}
-
-	sessionID := strings.TrimSpace(req.SessionID)
-	if sessionID == "" {
-		var err error
-		sessionID, err = s.sessionIDFunc(msg)
-		if err != nil {
-			s.writeError(w, apiError{
-				Type:    errTypeInvalidRequest,
-				Message: err.Error(),
-			}, http.StatusBadRequest)
-			return
-		}
-	}
-
-	requestID := strings.TrimSpace(req.RequestID)
-	reply, resolvedRequestID, err := s.run(
-		r.Context(),
-		userID,
-		sessionID,
-		requestID,
-		msg.Text,
-	)
-	if err != nil {
-		log.WarnfContext(
-			r.Context(),
-			"gateway: run failed: %v",
-			err,
-		)
-		s.writeError(w, apiError{
-			Type:    errTypeInternal,
-			Message: err.Error(),
-		}, http.StatusInternalServerError)
-		return
-	}
-
-	s.writeJSON(w, sendMessageResponse{
-		SessionID: sessionID,
-		RequestID: resolvedRequestID,
-		Reply:     reply,
-	}, http.StatusOK)
+	rsp, status := s.ProcessMessage(r.Context(), req)
+	s.writeJSON(w, rsp, status)
 }
 
 func (s *Server) isUserAllowed(userID string) bool {
@@ -493,8 +413,16 @@ func (s *Server) writeJSON(w http.ResponseWriter, payload any, status int) {
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
-func (s *Server) writeError(w http.ResponseWriter, err apiError, status int) {
-	s.writeJSON(w, sendMessageResponse{Error: &err}, status)
+func (s *Server) writeError(
+	w http.ResponseWriter,
+	err gwproto.APIError,
+	status int,
+) {
+	s.writeJSON(
+		w,
+		gwproto.MessageResponse{Error: &err},
+		status,
+	)
 }
 
 func (s *Server) run(
@@ -502,7 +430,7 @@ func (s *Server) run(
 	userID string,
 	sessionID string,
 	requestID string,
-	text string,
+	msg model.Message,
 ) (string, string, error) {
 	var (
 		reply    string
@@ -515,7 +443,7 @@ func (s *Server) run(
 			userID,
 			sessionID,
 			requestID,
-			text,
+			msg,
 		)
 	})
 	return reply, resolved, runErr
@@ -526,34 +454,62 @@ func (s *Server) runLocked(
 	userID string,
 	sessionID string,
 	requestID string,
-	text string,
+	msg model.Message,
 ) (string, string, error) {
+	trace := debugrecorder.TraceFromContext(ctx)
+
 	runOpts := make([]agent.RunOption, 0, 1)
 	if requestID != "" {
 		runOpts = append(runOpts, agent.WithRequestID(requestID))
 	}
-
-	events, err := s.runner.Run(
-		ctx,
+	if messages := s.injectedContextMessages(
 		userID,
 		sessionID,
-		model.NewUserMessage(text),
-		runOpts...,
-	)
+	); len(messages) > 0 {
+		runOpts = append(
+			runOpts,
+			agent.WithInjectedContextMessages(messages),
+		)
+	}
+
+	if trace != nil {
+		_ = trace.Record(
+			debugrecorder.KindGatewayRun,
+			map[string]any{
+				"user_id":    userID,
+				"session_id": sessionID,
+				"request_id": requestID,
+			},
+		)
+	}
+
+	events, err := s.runner.Run(ctx, userID, sessionID, msg, runOpts...)
 	if err != nil {
+		if trace != nil {
+			_ = trace.RecordError(err)
+		}
 		return "", "", err
 	}
 
 	result := newReplyAccumulator()
 	for evt := range events {
+		if trace != nil && evt != nil {
+			_ = trace.Record(debugrecorder.KindRunnerEvent, evt)
+		}
 		result.Consume(evt)
 	}
 
 	if result.Error != nil {
+		if trace != nil {
+			_ = trace.RecordError(result.Error)
+		}
 		return "", result.RequestID, result.Error
 	}
 	if result.Text == "" {
-		return "", result.RequestID, errors.New("gateway: empty reply")
+		if trace != nil {
+			_ = trace.RecordError(errEmptyReplyValue)
+		}
+		return "", result.RequestID, errEmptyReplyValue
 	}
 	return result.Text, result.RequestID, nil
 }

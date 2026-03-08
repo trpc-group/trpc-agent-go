@@ -131,7 +131,31 @@ func (t *SelectDocsTool) Call(
 
 // StateDelta writes the selection using the tool result JSON.
 func (t *SelectDocsTool) StateDelta(
-	_ []byte, resultJSON []byte,
+	_ string, _ []byte, resultJSON []byte,
+) map[string][]byte {
+	return t.stateDelta("", resultJSON)
+}
+
+// StateDeltaForInvocation writes agent-scoped state for the invocation.
+func (t *SelectDocsTool) StateDeltaForInvocation(
+	inv *agent.Invocation,
+	toolCallID string,
+	args []byte,
+	resultJSON []byte,
+) map[string][]byte {
+	_ = toolCallID
+	_ = args
+
+	var agentName string
+	if inv != nil {
+		agentName = inv.AgentName
+	}
+	return t.stateDelta(agentName, resultJSON)
+}
+
+func (t *SelectDocsTool) stateDelta(
+	agentName string,
+	resultJSON []byte,
 ) map[string][]byte {
 	var out selectDocsOutput
 	if err := json.Unmarshal(resultJSON, &out); err != nil {
@@ -140,7 +164,7 @@ func (t *SelectDocsTool) StateDelta(
 	if out.Skill == "" {
 		return nil
 	}
-	dk := skill.StateKeyDocsPrefix + out.Skill
+	dk := skill.DocsKey(agentName, out.Skill)
 	if out.IncludeAllDocs {
 		return map[string][]byte{dk: []byte("*")}
 	}
@@ -198,7 +222,7 @@ func (t *SelectDocsTool) previousSelection(
 	if !ok || inv == nil || inv.Session == nil {
 		return nil, false
 	}
-	key := skill.StateKeyDocsPrefix + skillName
+	key := skill.DocsKey(inv.AgentName, skillName)
 	v, found := inv.Session.GetState(key)
 	if !found || len(v) == 0 {
 		return nil, false

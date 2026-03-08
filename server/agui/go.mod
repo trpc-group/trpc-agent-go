@@ -5,7 +5,7 @@ go 1.24.4
 replace trpc.group/trpc-go/trpc-agent-go => ../../
 
 require (
-	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260201021820-c2d2db22a1c9
+	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260305114736-115a967b66a9
 	github.com/google/uuid v1.6.0
 	github.com/stretchr/testify v1.10.0
 	go.opentelemetry.io/otel/trace v1.29.0
@@ -16,6 +16,7 @@ require (
 require (
 	github.com/bmatcuk/doublestar/v4 v4.9.1 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
+	github.com/creack/pty v1.1.24 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/go-logr/logr v1.4.2 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect

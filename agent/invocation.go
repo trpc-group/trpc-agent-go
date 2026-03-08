@@ -50,6 +50,16 @@ const (
 	// appenderStateKey is the invocation state key used by internal appender
 	// attachment (see internal/state/appender).
 	appenderStateKey = "__append_event__"
+
+	// streamHubStateKey is the invocation state key used by the graph to
+	// share ephemeral streams across node invocations within the same run.
+	streamHubStateKey = "__graph_stream_hub__"
+
+	// SyncSummaryIntraRunStateKey is set on the invocation by the
+	// flow when sync intra-run summary is active.
+	// Runner checks this key to skip redundant async summary
+	// enqueue during the same run.
+	SyncSummaryIntraRunStateKey = "__sync_summary_intra_run__"
 )
 
 // TransferInfo contains information about a pending agent transfer.
@@ -75,6 +85,8 @@ type Invocation struct {
 	EndInvocation bool
 	// Session is the session that is being used for the invocation.
 	Session *session.Session
+	// SessionService is the session service used by this invocation.
+	SessionService session.Service
 	// Model is the model that is being used for the invocation.
 	Model model.Model
 	// Message is the message that is being sent to the agent.
@@ -313,6 +325,16 @@ func WithRequestID(requestID string) RunOption {
 	}
 }
 
+// WithEventFilterKey sets the invocation event filter key for this run.
+//
+// This controls the FilterKey injected into emitted events and the default
+// filter prefix used by ContentRequestProcessor when building LLM context.
+func WithEventFilterKey(filterKey string) RunOption {
+	return func(opts *RunOptions) {
+		opts.EventFilterKey = filterKey
+	}
+}
+
 // WithDetachedCancel enables running a job that ignores parent context
 // cancellation.
 //
@@ -540,6 +562,15 @@ type RunOptions struct {
 	// (e.g., room ID, user context) without modifying the agent's base initial state.
 	RuntimeState map[string]any
 
+	// EventFilterKey overrides the invocation's event filter key used for
+	// scoping session events (event.FilterKey) included in LLM context.
+	//
+	// Runner applies this value via WithInvocationEventFilterKey when it
+	// constructs the invocation. When using Runner, the value should
+	// typically start with the runner app name (e.g., "<appName>/...") so
+	// sessions hooks and summaries continue to work as expected.
+	EventFilterKey string
+
 	// KnowledgeFilter contains metadata key-value pairs for the knowledge filter
 	KnowledgeFilter map[string]any
 
@@ -722,6 +753,7 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 	newInv := &Invocation{
 		InvocationID:    uuid.NewString(),
 		Session:         inv.Session,
+		SessionService:  inv.SessionService,
 		Message:         inv.Message,
 		RunOptions:      inv.RunOptions,
 		MemoryService:   inv.MemoryService,
@@ -770,6 +802,9 @@ func (inv *Invocation) cloneState() map[string]any {
 	}
 	if holder, ok := inv.state[appenderStateKey]; ok {
 		copied[appenderStateKey] = holder
+	}
+	if hub, ok := inv.state[streamHubStateKey]; ok {
+		copied[streamHubStateKey] = hub
 	}
 	return copied
 }

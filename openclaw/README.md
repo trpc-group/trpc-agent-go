@@ -17,9 +17,7 @@ Run with a mock model (no external model credentials needed):
 
 ```bash
 cd openclaw
-go run ./cmd/openclaw \
-  -mode mock \
-  -http-addr :8080
+go run ./cmd/openclaw -config ./openclaw.stdin.yaml
 ```
 
 Note: by default, this demo uses `-mode openai` and `-model gpt-5`.
@@ -60,8 +58,60 @@ This demo supports a YAML config file to avoid a long list of CLI flags.
 
 - Pass `-config /path/to/openclaw.yaml`, or
 - set `OPENCLAW_CONFIG=/path/to/openclaw.yaml`.
+- If neither is set, OpenClaw also tries `~/.trpc-agent-go/openclaw/openclaw.yaml`
+  (only if the file exists).
 
 CLI flags always override config file values.
+
+The config file supports environment variable placeholders in the form `${NAME}`.
+Missing environment variables cause OpenClaw to fail fast with a config error.
+
+### Debug recorder (optional)
+
+When debugging multi-step flows (especially Telegram "Processing..." messages),
+it helps to have a single place that captures what happened end-to-end.
+
+OpenClaw includes an opt-in, file-based debug recorder that writes a per-request
+trace directory with:
+
+- gateway requests/responses
+- runner events
+- Telegram message + attachment metadata
+- (mode `full`) attachment bytes (to reproduce multimodal issues)
+
+Enable with CLI flags:
+
+```bash
+cd openclaw
+go run ./cmd/openclaw -debug-recorder
+```
+
+Or via YAML:
+
+```yaml
+debug_recorder:
+  enabled: true
+  mode: "full" # "full" (default) or "safe" (no attachment bytes)
+  # dir: "<state_dir>/debug" # default
+```
+
+Trace output location:
+
+- default: `<state_dir>/debug`
+- canonical layout: `<YYYYMMDD>/<HHMMSS>_<channel>_<request_id>/`
+- session index:
+  `<by-session>/<session-or-user>/<YYYYMMDD>/<HHMMSS>_<message_id>/trace.json`
+- files:
+  - `meta.json`: trace start metadata
+  - `events.jsonl`: event stream (one JSON object per line)
+  - `result.json`: trace end status + duration
+  - `attachments/<sha256>`: stored bytes (mode `full` only)
+  - `by-session/.../trace.json`: pointer to the canonical trace dir
+
+This repo ships two sample configs:
+
+- [`./openclaw.yaml`](./openclaw.yaml) for Telegram.
+- [`./openclaw.stdin.yaml`](./openclaw.stdin.yaml) for local terminal chat.
 
 Example config:
 
@@ -71,27 +121,43 @@ app_name: "openclaw"
 http:
   addr: ":8080"
 
+admin:
+  enabled: true
+  addr: "127.0.0.1:19789"
+  auto_port: true
+
 agent:
   # Short instruction text (optional).
   instruction: "You are a helpful assistant. Reply in a friendly tone."
   # Optional: load and merge multiple markdown files into the system prompt.
   # Files are read in alphabetical order.
   # system_prompt_dir: "./prompts/system"
+  # Optional: enable an outer verification loop. Unsafe because it can
+  # execute host commands.
+  # ralph_loop:
+  #   enabled: true
+  #   max_iterations: 5
+  #   verify:
+  #     command: "go test ./..."
+  #     timeout: "2m"
 
 model:
   mode: "openai"
   name: "gpt-5"
   openai_variant: "auto"
 
-gateway:
-  allow_users: ["123456789"]
-  require_mention: false
-  mention_patterns: ["@mybot"]
+tools:
+  # Optional; default is serial execution.
+  # When enabled and the model returns multiple tool calls in one step,
+  # OpenClaw executes them concurrently.
+  enable_parallel_tools: true
 
-telegram:
-  token: "<YOUR_TELEGRAM_BOT_TOKEN>"
-  streaming: "progress"
-  http_timeout: "60s"
+channels:
+  - type: "telegram"
+    config:
+      token: "${TELEGRAM_BOT_TOKEN}"
+      streaming: "progress"
+      http_timeout: "60s"
 
 session:
   backend: "inmemory"
@@ -114,12 +180,19 @@ go run ./cmd/openclaw -config ./openclaw.yaml
 Notes:
 
 - Duration fields use Go-style strings like `60s`, `10m`, `1h`.
-- For secrets (model keys, Telegram tokens), prefer environment variables
-  or CLI flags instead of committing config files.
+- For secrets (model keys, Telegram tokens), keep them out of version control.
+  Prefer environment variables when available.
+- The sample config in `./openclaw.yaml` is ready to use with
+  `go run ./cmd/openclaw -config ./openclaw.yaml`.
+- The sample config in `./openclaw.stdin.yaml` is ready to use with
+  `go run ./cmd/openclaw -config ./openclaw.stdin.yaml`.
 - Plugin sections:
-  - `channels` enables additional channel plugins and requires a custom
-    binary that imports those plugins. See `openclaw/EXTENDING.md` and
+  - `channels` configures channel plugins. This demo binary ships with the
+    `telegram` and `stdin` channel plugins; other channel types require a
+    custom binary that imports them. See `openclaw/EXTENDING.md` and
     `openclaw/examples/stdin_chat/`.
+  - `tools.enable_parallel_tools` toggles parallel tool execution for one
+    model step (optional).
   - `tools.providers` and `tools.toolsets` work out of the box for the
     built-in types shipped in this repo. Custom types still require a
     custom binary. See `openclaw/INTEGRATIONS.md` and
@@ -143,6 +216,42 @@ go run ./cmd/openclaw \
   -agent-system-prompt-dir ./examples/stdin_chat/prompts/system
 ```
 
+## Ralph Loop (optional)
+
+Ralph Loop is an outer loop that reruns the agent until a verifiable
+completion condition is met (or until the maximum number of iterations is
+reached).
+
+This demo supports it only for `agent.type: llm`, because the `claude-code`
+agent does not consume session history (so loop feedback would be ignored).
+
+Ralph Loop is considered unsafe because it can execute a host command
+after each iteration.
+
+YAML example:
+
+```yaml
+agent:
+  ralph_loop:
+    enabled: true
+    max_iterations: 5
+    verify:
+      command: "go test ./..."
+      timeout: "2m"
+      env: ["CGO_ENABLED=1"]
+```
+
+CLI example:
+
+```bash
+cd openclaw
+go run ./cmd/openclaw \
+  -mode mock \
+  -agent-ralph-loop \
+  -agent-ralph-verify-command 'go test ./...' \
+  -agent-ralph-verify-timeout 2m
+```
+
 Health check:
 
 ```bash
@@ -156,6 +265,89 @@ curl -sS 'http://127.0.0.1:8080/v1/gateway/messages' \
   -H 'Content-Type: application/json' \
   -d '{"from":"alice","text":"Hello"}'
 ```
+
+Send a multimodal message via HTTP:
+
+- Use `text` for the main text message.
+- Use `content_parts` for additional inputs (images, audio, files, links, etc.).
+
+Security note: for URL-based parts (`audio.url`, `file.url`, `video.url`),
+the gateway downloads the content. By default, it blocks URLs that resolve
+to loopback/private addresses to reduce SSRF risk. If you embed the gateway
+server in your own program, you can adjust this via gateway options (for
+example, `gateway.WithAllowPrivateContentPartURLs(true)` or
+`gateway.WithAllowedContentPartDomains(...)`).
+
+Example (text + image URL):
+
+```bash
+curl -sS 'http://127.0.0.1:8080/v1/gateway/messages' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "from": "alice",
+    "text": "What is in this image?",
+    "content_parts": [
+      {
+        "type": "image",
+        "image": {
+          "url": "https://example.com/image.png",
+          "detail": "auto"
+        }
+      }
+    ]
+  }'
+```
+
+Example (audio by URL):
+
+```bash
+curl -sS 'http://127.0.0.1:8080/v1/gateway/messages' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "from": "alice",
+    "content_parts": [
+      {
+        "type": "audio",
+        "audio": {
+          "url": "https://example.com/voice.wav"
+        }
+      }
+    ]
+  }'
+```
+
+Example (file by URL):
+
+```bash
+curl -sS 'http://127.0.0.1:8080/v1/gateway/messages' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "from": "alice",
+    "text": "Summarize this document.",
+    "content_parts": [
+      {
+        "type": "file",
+        "file": {
+          "url": "https://example.com/report.pdf"
+        }
+      }
+    ]
+  }'
+```
+
+If you send non-text inputs (`image`, `audio`, `file`, `video`), make sure
+the configured model supports those input types.
+
+Note: OpenAI Chat Completions does not support raw file inputs in the same
+way as images/audio. OpenClaw persists inbound `file` and `video` parts to
+stable host paths under the state directory, keeps those refs in session
+history, and exposes them back to tools. In practice this means later turns
+can still operate on the same upload with `exec_command`
+(`$OPENCLAW_LAST_UPLOAD_PATH`, `$OPENCLAW_LAST_UPLOAD_NAME`,
+`$OPENCLAW_LAST_UPLOAD_MIME`, `$OPENCLAW_LAST_PDF_PATH`,
+`$OPENCLAW_LAST_AUDIO_PATH`, `$OPENCLAW_LAST_VIDEO_PATH`,
+`$OPENCLAW_LAST_IMAGE_PATH`, `$OPENCLAW_SESSION_UPLOADS_DIR`) or
+`skill_run` (`host://...` inputs staged into `$WORK_DIR/inputs`).
 
 ## Run with a real model (OpenAI)
 
@@ -264,40 +456,46 @@ privacy enabled is usually fine. If you want to disable privacy, use
 
 ### 4) Run the binary
 
-Run the binary with `-telegram-token`:
+Add a Telegram channel to your config file:
+
+```yaml
+channels:
+  - type: "telegram"
+    config:
+      token: "<YOUR_TELEGRAM_BOT_TOKEN>"
+      ## Optional:
+      # streaming: "progress"
+      # proxy: "http://127.0.0.1:7890"
+      # http_timeout: "60s"
+      # max_retries: 3
+      # max_download_bytes: 20971520
+      # session_reset_idle: "24h"
+      # session_reset_daily: true
+      # on_block: "reset"
+```
+
+Run:
 
 ```bash
 cd openclaw
 go run ./cmd/openclaw \
   -mode mock \
   -http-addr :8080 \
-  -telegram-token "$TELEGRAM_BOT_TOKEN"
+  -config ./openclaw.yaml
 ```
 
 ### Telegram networking (proxy / timeout / retries)
 
-If your environment requires an HTTP proxy, set `-telegram-proxy`:
+Configure Telegram networking under the Telegram channel `config:`:
 
-```bash
-cd openclaw
-go run ./cmd/openclaw \
-  -mode mock \
-  -telegram-token "$TELEGRAM_BOT_TOKEN" \
-  -telegram-proxy "http://127.0.0.1:7890"
-```
+- `proxy`: HTTP proxy URL (optional)
+- `http_timeout`: HTTP client timeout (optional; should be > 25s long polling)
+- `max_retries`: retry count for transient failures (optional; default: 3)
+- `max_download_bytes`: per-file download limit for inbound attachments
+  (optional; default: 20971520 / 20 MiB)
 
-If you set `-telegram-http-timeout`, make sure it is larger than the
-long-polling timeout (25s by default), for example:
-
-```bash
-cd openclaw
-go run ./cmd/openclaw \
-  -mode mock \
-  -telegram-token "$TELEGRAM_BOT_TOKEN" \
-  -telegram-http-timeout 60s
-```
-
-You can also tune retries with `-telegram-max-retries` (default: 3).
+To override the Telegram API base URL (for testing), set
+`OPENCLAW_TELEGRAM_BASE_URL`.
 
 ### Telegram doctor command
 
@@ -305,13 +503,38 @@ To quickly validate your Telegram setup (token, webhook, pairing store):
 
 ```bash
 cd openclaw
-go run ./cmd/openclaw doctor \
-  -telegram-token "$TELEGRAM_BOT_TOKEN"
+go run ./cmd/openclaw doctor -config ./openclaw.yaml
 ```
 
 ### 5) Send a message
 
-Open a chat with your bot (or add it into a group) and send a text message.
+Open a chat with your bot (or add it into a group) and send:
+
+- a text message, or
+- a photo, document, audio, voice note, video, animation, or video note.
+
+Inbound attachments are downloaded from Telegram and forwarded to the gateway
+as multimodal `content_parts`. The uploaded files are also persisted under the
+OpenClaw state directory so later turns in the same chat can keep working on
+the same PDF, image, audio, or video without asking the user to upload again.
+When a Telegram voice note can be transcribed locally, OpenClaw also injects
+the transcript as the user instruction while keeping the original audio upload
+available to tools and follow-up turns.
+
+For host-side tools, OpenClaw injects stable attachment metadata such as
+`OPENCLAW_LAST_UPLOAD_PATH`, `OPENCLAW_LAST_UPLOAD_NAME`,
+`OPENCLAW_LAST_UPLOAD_MIME`, `OPENCLAW_SESSION_UPLOADS_DIR`, and
+`OPENCLAW_RECENT_UPLOADS_JSON`, plus kind-aware shortcuts like
+`OPENCLAW_LAST_PDF_PATH`, `OPENCLAW_LAST_AUDIO_PATH`,
+`OPENCLAW_LAST_VIDEO_PATH`, and `OPENCLAW_LAST_IMAGE_PATH`, so the agent can
+keep operating on the recent chat uploads without guessing local paths.
+
+When the agent generates local output files under the current working
+directory or the OpenClaw state directory, Telegram can send them back as
+documents, images, audio, or video via the `message` tool. Replies that mention
+generated files by local path are also sanitized to user-facing filenames, and
+OpenClaw will try to send those generated files back to the current chat
+automatically when it can resolve them safely.
 
 By default, DMs are **fail-closed** and require pairing.
 
@@ -322,30 +545,26 @@ To approve a user, run:
 
 ```bash
 cd openclaw
-go run ./cmd/openclaw pairing approve <CODE> \
-  -telegram-token "$TELEGRAM_BOT_TOKEN"
+go run ./cmd/openclaw pairing approve <CODE> -config ./openclaw.yaml
 ```
 
 You can also list pending pairing requests:
 
 ```bash
 cd openclaw
-go run ./cmd/openclaw pairing list \
-  -telegram-token "$TELEGRAM_BOT_TOKEN"
+go run ./cmd/openclaw pairing list -config ./openclaw.yaml
 ```
 
 After approval, the bot forwards inbound text to the gateway and sends
 the final reply back to Telegram.
 
-To disable pairing (less safe), run the gateway with:
+To disable pairing (less safe), set the Telegram channel `dm_policy` to `open`:
 
-```bash
-cd openclaw
-go run ./cmd/openclaw \
-  -mode mock \
-  -http-addr :8080 \
-  -telegram-token "$TELEGRAM_BOT_TOKEN" \
-  -telegram-dm-policy open
+```yaml
+channels:
+  - type: "telegram"
+    config:
+      dm_policy: "open"
 ```
 
 ### Telegram commands
@@ -354,26 +573,76 @@ This demo supports a few basic commands:
 
 - `/help`: show a short help message.
 - `/cancel`: cancel the current run for the same DM/thread session.
+- `/reset` and `/new`: start a new DM session (old data is kept).
+- `/forget`: permanently delete your stored sessions, memories, and debug
+  traces (DM only).
+- `/jobs`: list scheduled jobs scoped to the current chat.
+- `/jobs_clear`: remove scheduled jobs scoped to the current chat.
+  Future executions stop immediately. If a matching job is currently
+  running, OpenClaw cancels that in-flight run and suppresses any pending
+  delivery for this chat.
+- `/persona`: show the active persona preset for this chat and list the
+  available presets.
+- `/persona <id>`: switch the active persona preset for this chat.
+- `/personas`: list the available persona presets.
+
+On startup, OpenClaw also registers these commands with Telegram via
+`setMyCommands`, so supported clients can show them in the slash-command
+menu. If registration fails, the commands still work when typed manually.
+
+Built-in persona presets:
+
+- `default`: keep the normal assistant behavior.
+- `girlfriend`: warm, playful, and affectionate companion tone.
+- `concise`: direct, brief, and action-first replies.
+- `coach`: structured, pragmatic, and goal-oriented.
+- `creative`: more imaginative, vivid, and idea-rich replies.
+
+Examples:
+
+```text
+/persona
+/persona girlfriend
+/persona default
+```
+
+You can also configure automatic DM session resets:
+
+- `session_reset_idle`: rotate the active DM session after it has been idle
+  for the configured duration.
+- `session_reset_daily`: rotate the active DM session when the date changes
+  (local time).
+
+To react to privacy/lifecycle events, configure:
+
+- `on_block`: what to do when a user blocks the bot (`my_chat_member` updates).
+  Supported values: `reset` (default), `forget`, `none`.
 
 ### Telegram reply streaming (preview)
 
 This demo can optionally use `editMessageText` to show a processing preview,
 then replace it with the final answer.
 
-`-telegram-streaming` modes:
+Telegram `streaming` modes (Telegram channel config):
 
 - `off`: send the final answer as messages.
 - `block`: send one "Processing..." message, then edit once to final.
 - `progress` (default): keep editing the message while the model is running.
 
+Outbound Telegram text now uses `parse_mode: "HTML"` by default:
+
+- Markdown-ish model output is rendered into Telegram-safe HTML.
+- Raw HTML from the model is escaped before sending.
+- If Telegram rejects the formatted HTML, OpenClaw automatically retries
+  with plain text.
+
 To disable streaming:
 
-```bash
-cd openclaw
-go run ./cmd/openclaw \
-  -mode mock \
-  -telegram-token "$TELEGRAM_BOT_TOKEN" \
-  -telegram-streaming off
+```yaml
+channels:
+  - type: "telegram"
+    config:
+      streaming: "off"
 ```
 
 ### Telegram threads and topics
@@ -381,7 +650,9 @@ go run ./cmd/openclaw \
 This demo derives `session_id` based on whether the inbound message is a
 DM (direct message, i.e. a private chat) or a group message:
 
-- DMs: `thread` is empty, so the session is per-user.
+- DMs: `thread` is empty, so the session is per-user. The active DM session
+  can be rotated via `/reset` (or automatically via `session_reset_*`) and is
+  persisted under `<state_dir>/telegram/`.
 - Groups: `thread` is the chat ID, so the session is per-group.
 - Group topics: if Telegram provides `message_thread_id`, `thread` becomes
   `<chat_id>:topic:<message_thread_id>`, so each topic gets its own session.
@@ -396,7 +667,8 @@ can resume from the last processed update.
 
 On the first run (when no offset file exists), the poller drains pending
 updates by default to avoid replying to very old messages. You can
-disable this behavior with `-telegram-start-from-latest=false`.
+disable this behavior with `start_from_latest: false` in the Telegram channel
+config.
 
 ## Safety knobs
 
@@ -407,7 +679,7 @@ To only allow specific user IDs:
 ```bash
 go run ./cmd/openclaw \
   -mode mock \
-  -telegram-token "$TELEGRAM_BOT_TOKEN" \
+  -config ./openclaw.yaml \
   -allow-users "123456789,987654321"
 ```
 
@@ -436,50 +708,50 @@ To ignore group messages unless a mention pattern is present:
 ```bash
 go run ./cmd/openclaw \
   -mode mock \
-  -telegram-token "$TELEGRAM_BOT_TOKEN" \
-  -require-mention
+  -config ./openclaw.yaml \
+  -require-mention \
+  -mention "@mybot"
 ```
 
-When `-require-mention` is set and `-mention` is empty, this demo uses
-`@<bot_username>` as the default mention pattern.
+Mention patterns can also be set in config via `gateway.mention_patterns`.
 
-If Telegram is disabled (HTTP-only), you must provide `-mention` explicitly.
+If `-require-mention` (or `gateway.require_mention`) is enabled and mention
+patterns are empty, the gateway refuses to start.
 
 To override patterns:
 
 ```bash
 go run ./cmd/openclaw \
   -mode mock \
-  -telegram-token "$TELEGRAM_BOT_TOKEN" \
+  -config ./openclaw.yaml \
   -require-mention \
   -mention "@mybot,/agent"
 ```
 
 ### Telegram group policy and allowlist
 
-By default, this demo ignores all group messages (`-telegram-group-policy` is
+By default, this demo ignores all group messages (`group_policy` defaults to
 `disabled`).
 
 To enable groups (less safe), use:
 
-```bash
-cd openclaw
-go run ./cmd/openclaw \
-  -mode mock \
-  -telegram-token "$TELEGRAM_BOT_TOKEN" \
-  -telegram-group-policy open \
-  -require-mention
+```yaml
+channels:
+  - type: "telegram"
+    config:
+      group_policy: "open"
 ```
 
 To allowlist specific groups/topics, use:
 
-```bash
-cd openclaw
-go run ./cmd/openclaw \
-  -mode mock \
-  -telegram-token "$TELEGRAM_BOT_TOKEN" \
-  -telegram-group-policy allowlist \
-  -telegram-allow-threads "<chat_id>,<chat_id>:topic:<message_thread_id>"
+```yaml
+channels:
+  - type: "telegram"
+    config:
+      group_policy: "allowlist"
+      allow_threads:
+        - "<chat_id>"
+        - "<chat_id>:topic:<message_thread_id>"
 ```
 
 You can discover `chat_id` and `message_thread_id` from `getUpdates`.
@@ -495,7 +767,7 @@ It is disabled by default. To enable:
 ```bash
 go run ./cmd/openclaw \
   -mode openai \
-  -telegram-token "$TELEGRAM_BOT_TOKEN" \
+  -config ./openclaw.yaml \
   -enable-local-exec
 ```
 
@@ -511,7 +783,10 @@ borrows a few design ideas from OpenClaw:
 
 ### Bundled skills
 
-This demo includes a few simple bundled skills under `openclaw/skills/`:
+This demo vendors the upstream OpenClaw skill pack under `openclaw/skills/`
+(see `openclaw/skills/README.md` for attribution and license).
+
+It also includes a few simple demo skills:
 
 - `hello`: write a small file to `out/`.
 - `envdump`: dump environment info to `out/env.txt`.
@@ -540,8 +815,45 @@ demo can filter the skill at load time based on the local environment:
 - `metadata.openclaw.requires.bins`
 - `metadata.openclaw.requires.anyBins`
 - `metadata.openclaw.requires.env`
+- `metadata.openclaw.requires.config`
 
 Enable `-skills-debug` to log which skills are skipped and why.
+
+### OpenClaw-style skill config (`skills.entries`)
+
+Upstream OpenClaw supports providing per-skill environment variables and
+API keys via config. This demo supports the same idea in YAML:
+
+```yaml
+skills:
+  # Optional: restrict which bundled skills are enabled by default.
+  # Applies only to bundled skills under ./openclaw/skills.
+  allowBundled: ["gh-issues", "notion"]
+  load_mode: "turn" # once|turn|session
+  loaded_content_in_tool_results: true
+  max_loaded_skills: 0
+  skip_fallback_on_session_summary: true
+  # Optional: override default skills guidance text. Set to "" to disable it.
+  tooling_guidance: ""
+
+  # Optional: per-skill config (by skillKey or skill name).
+  entries:
+    gh-issues:
+      # Injected into metadata.openclaw.primaryEnv when present.
+      apiKey: "..."
+      # Injected into skill_run env (never overrides host env).
+      env:
+        GH_TOKEN: "..."
+```
+
+OpenClaw defaults to materializing loaded skill bodies/docs into tool
+result messages. This keeps the system prompt more stable while still
+letting `SkillLoadMode` control how long loaded skill state survives.
+
+The built-in skills guidance is also more runtime-oriented by default:
+the agent prefers skill-owned scripts when present and may use minimal
+read-only probes such as `--help` or `--version` to verify external CLI
+syntax before taking side effects.
 
 ### `{baseDir}` placeholder
 
@@ -562,8 +874,9 @@ go run ./cmd/openclaw \
 ```
 
 Note: OpenClaw skills often assume the OpenClaw tool surface. This demo
-can optionally enable OpenClaw-compatible `exec` / `process` tools (see
-below), but it is not a full OpenClaw replacement.
+enables the OpenClaw host tools for the default LLM agent so skills can
+use `exec_command`, `message`, and `cron`, but it is not a full
+OpenClaw replacement.
 
 In a chat, you can ask the assistant to list and run skills. For
 example:
@@ -684,6 +997,20 @@ The Redis key-space is still isolated by `app_name` and `user_id`. You
 can override `app_name` with `-app-name` (or `app_name` in YAML) to
 match your business identifier.
 
+### Local persistence (SQLite)
+
+If you want local persistence across restarts (without running Redis),
+use the `sqlite` session backend.
+
+By default, it stores data in `<state_dir>/sessions.sqlite`.
+
+```bash
+cd openclaw
+go run ./cmd/openclaw \
+  -mode mock \
+  -session-backend sqlite
+```
+
 ### SQL backends (MySQL/Postgres/ClickHouse/PGVector)
 
 This demo also supports SQL backends already implemented in
@@ -735,29 +1062,58 @@ go run ./cmd/openclaw \
   -memory-auto-messages 20
 ```
 
-## OpenClaw exec/process tools (unsafe)
+## OpenClaw host tools (unsafe)
 
-OpenClaw skills commonly rely on two tools:
+This demo exposes a code-agent-first host tool surface for the default
+LLM agent, but it is **unsafe** when exposed to untrusted inputs.
 
-- `exec` (or older skills: `bash`) to run shell commands
-- `process` to manage background sessions
+The assistant gets:
 
-This demo can provide OpenClaw-compatible tools, but they are **unsafe**
-when exposed to untrusted inputs.
+- `exec_command` for general host shell work
+- `write_stdin` and `kill_session` for interactive commands
+- `message` for sending text, PDFs, images, audio, or video to the current
+  chat or explicit targets
+- `cron` for future or recurring jobs
 
-Enable with:
+To disable these tools explicitly:
 
 ```bash
 go run ./cmd/openclaw \
   -mode openai \
   -model deepseek-chat \
-  -telegram-token "$TELEGRAM_BOT_TOKEN" \
-  -enable-openclaw-tools
+  -config ./openclaw.yaml \
+  -enable-openclaw-tools=false
 ```
 
-Once enabled, you can ask the assistant to run a command. For example:
+Once enabled, you can ask the assistant to run a command, send to the
+current chat, or create a recurring job. For example:
 
 ```
-Use the exec tool to run: echo hello
-If it runs in background, use the process tool to poll until it exits.
+Use exec_command to run: echo hello
+If it is interactive, continue with write_stdin.
+Create a cron job that reports system resources every minute to
+this Telegram chat.
 ```
+
+Cron jobs are persisted under the OpenClaw state directory, so they
+continue after gateway restarts. In Telegram, `/jobs` and `/jobs_clear`
+provide a direct way to inspect or clean up jobs for the current chat
+without going through the model.
+
+When `admin.enabled` is true (default), OpenClaw also starts a local
+admin surface on `admin.addr` (default `127.0.0.1:19789`). When
+`admin.auto_port` is true (default), OpenClaw automatically moves to a
+nearby free port if the preferred admin port is busy, and startup logs
+print the actual admin URL.
+
+The admin surface is intentionally broader than cron management. It now
+includes:
+
+- runtime and host metadata
+- gateway routes and JSON endpoints
+- scheduled job inspection plus run/remove/clear actions
+- exec session inspection
+- persisted upload browsing with direct open/download links
+- upload-session and media-kind filtered JSON views for multimodal traces
+- session-indexed debug trace browsing with direct links to
+  `meta.json`, `events.jsonl`, and `result.json`

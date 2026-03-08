@@ -25,6 +25,10 @@ func init() {
 		newRedisSessionBackend,
 	))
 	must(registry.RegisterSessionBackend(
+		sessionBackendSQLite,
+		newSQLiteSessionBackend,
+	))
+	must(registry.RegisterSessionBackend(
 		sessionBackendMySQL,
 		newMySQLSessionBackend,
 	))

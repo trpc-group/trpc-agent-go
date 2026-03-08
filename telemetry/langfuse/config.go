@@ -10,7 +10,10 @@
 // Package langfuse provides Langfuse integration with custom span transformations.
 package langfuse
 
-import "os"
+import (
+	"os"
+	"strconv"
+)
 
 // Option is a function that configures Start options.
 type Option func(*config)
@@ -53,12 +56,26 @@ func WithInsecure() Option {
 	}
 }
 
+// WithObservationLeafValueMaxBytes configures the max byte length for each leaf
+// value in Langfuse observation JSON payloads (and plain string observation values).
+//
+// If this option is not set, truncation is disabled by default.
+// If maxBytes is 0, it truncates everything.
+// If maxBytes < 0, truncation is disabled.
+func WithObservationLeafValueMaxBytes(maxBytes int) Option {
+	return func(cfg *config) {
+		v := maxBytes
+		cfg.maxObservationLeafValueBytes = &v
+	}
+}
+
 // config holds Langfuse configuration options.
 type config struct {
-	secretKey string
-	publicKey string
-	host      string
-	insecure  bool
+	secretKey                    string
+	publicKey                    string
+	host                         string
+	insecure                     bool
+	maxObservationLeafValueBytes *int
 }
 
 // newConfigFromEnv creates a Langfuse config from environment variables.
@@ -68,12 +85,15 @@ type config struct {
 //	LANGFUSE_PUBLIC_KEY: Langfuse public key
 //	LANGFUSE_HOST: Langfuse host in "hostname:port" format (e.g., "cloud.langfuse.com:443")
 //	LANGFUSE_INSECURE: Set to "true" for insecure connections (development only)
+//	LANGFUSE_OBSERVATION_LEAF_VALUE_MAX_BYTES: Optional; max byte length for each observation JSON leaf value (unset by default)
 func newConfigFromEnv() *config {
+	leafBytes := getEnvIntPtr("LANGFUSE_OBSERVATION_LEAF_VALUE_MAX_BYTES")
 	return &config{
-		secretKey: getEnv("LANGFUSE_SECRET_KEY", ""),
-		publicKey: getEnv("LANGFUSE_PUBLIC_KEY", ""),
-		host:      getEnv("LANGFUSE_HOST", ""),
-		insecure:  getEnv("LANGFUSE_INSECURE", "") == "true",
+		secretKey:                    getEnv("LANGFUSE_SECRET_KEY", ""),
+		publicKey:                    getEnv("LANGFUSE_PUBLIC_KEY", ""),
+		host:                         getEnv("LANGFUSE_HOST", ""),
+		insecure:                     getEnv("LANGFUSE_INSECURE", "") == "true",
+		maxObservationLeafValueBytes: leafBytes,
 	}
 }
 
@@ -83,4 +103,16 @@ func getEnv(key, defaultValue string) string {
 		return v
 	}
 	return defaultValue
+}
+
+func getEnvIntPtr(key string) *int {
+	v := getEnv(key, "")
+	if v == "" {
+		return nil
+	}
+	i, err := strconv.Atoi(v)
+	if err != nil {
+		return nil
+	}
+	return &i
 }

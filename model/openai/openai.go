@@ -23,6 +23,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	openai "github.com/openai/openai-go"
@@ -30,6 +31,7 @@ import (
 	"github.com/openai/openai-go/packages/respjson"
 	"github.com/openai/openai-go/packages/ssestream"
 	"github.com/openai/openai-go/shared"
+	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
@@ -240,6 +242,7 @@ type Model struct {
 
 	accumulateChunkUsage AccumulateChunkUsage
 	optimizeForCache     bool // Optimize message structure for prompt caching
+	omitFileContentParts bool
 }
 
 // New creates a new OpenAI-like model.
@@ -312,6 +315,7 @@ func New(name string, opts ...Option) *Model {
 		maxInputTokensRatio:        o.TokenTailoringConfig.MaxInputTokensRatio,
 		accumulateChunkUsage:       o.accumulateChunkUsage,
 		optimizeForCache:           o.OptimizeForCache,
+		omitFileContentParts:       o.OmitFileContentParts,
 	}
 }
 
@@ -657,7 +661,8 @@ func (m *Model) convertSystemMessageContent(msg model.Message) openai.ChatComple
 	}
 }
 
-// convertUserMessageContent converts message content to user message content union.
+// convertUserMessageContent converts a message into an OpenAI user
+// message content union.
 func (m *Model) convertUserMessageContent(
 	msg model.Message,
 ) (openai.ChatCompletionUserMessageParamContentUnion, map[string]any) {
@@ -667,44 +672,195 @@ func (m *Model) convertUserMessageContent(
 			OfString: openai.String(msg.Content),
 		}, nil
 	}
-	var (
-		contentParts []openai.ChatCompletionContentPartUnionParam
-		extraFields  = make(map[string]any)
+
+	fileHint := m.userFileHint(msg)
+	contentParts := make(
+		[]openai.ChatCompletionContentPartUnionParam,
+		0,
+		len(msg.ContentParts)+2,
 	)
-	// Add Content as a text part if present.
 	if msg.Content != "" {
-		contentParts = append(
-			contentParts,
-			openai.ChatCompletionContentPartUnionParam{
-				OfText: &openai.ChatCompletionContentPartTextParam{
-					Text: msg.Content,
-				},
-			},
-		)
+		contentParts = append(contentParts, userTextPart(msg.Content))
 	}
-	for _, part := range msg.ContentParts {
+	if fileHint != "" {
+		contentParts = append(contentParts, userTextPart(fileHint))
+	}
+	extraFields := m.appendUserContentParts(&contentParts, msg.ContentParts)
+
+	if strings.TrimSpace(msg.Content) == "" &&
+		fileHint != "" &&
+		onlyFileContentParts(msg.ContentParts) {
+		return openai.ChatCompletionUserMessageParamContentUnion{
+			OfArrayOfContentParts: contentParts,
+		}, extraFields
+	}
+
+	if content, ok := singleUserContentString(
+		msg.Content,
+		fileHint,
+		contentParts,
+		extraFields,
+	); ok {
+		return openai.ChatCompletionUserMessageParamContentUnion{
+			OfString: openai.String(content),
+		}, nil
+	}
+
+	return openai.ChatCompletionUserMessageParamContentUnion{
+		OfArrayOfContentParts: contentParts,
+	}, extraFields
+}
+
+func (m *Model) userFileHint(msg model.Message) string {
+	if strings.TrimSpace(msg.Content) != "" {
+		return ""
+	}
+	if !m.omitFileContentParts &&
+		!m.variantConfig.skipFileTypeInContent &&
+		!onlyInternalFileContentParts(msg.ContentParts) {
+		return ""
+	}
+	if !onlyFileContentParts(msg.ContentParts) {
+		return ""
+	}
+	return fileHintForContentParts(msg.ContentParts)
+}
+
+func onlyFileContentParts(parts []model.ContentPart) bool {
+	if len(parts) == 0 {
+		return false
+	}
+	for _, part := range parts {
+		if part.Type != model.ContentTypeFile {
+			return false
+		}
+	}
+	return true
+}
+
+func onlyInternalFileContentParts(parts []model.ContentPart) bool {
+	if len(parts) == 0 {
+		return false
+	}
+	for _, part := range parts {
+		if part.Type != model.ContentTypeFile || part.File == nil {
+			return false
+		}
+		if !isInternalOnlyFile(part.File) {
+			return false
+		}
+	}
+	return true
+}
+
+func userTextPart(text string) openai.ChatCompletionContentPartUnionParam {
+	return openai.ChatCompletionContentPartUnionParam{
+		OfText: &openai.ChatCompletionContentPartTextParam{
+			Text: text,
+		},
+	}
+}
+
+func (m *Model) appendUserContentParts(
+	dst *[]openai.ChatCompletionContentPartUnionParam,
+	parts []model.ContentPart,
+) map[string]any {
+	var extraFields map[string]any
+	for _, part := range parts {
+		if part.Type == model.ContentTypeFile &&
+			m.omitFileContentParts {
+			continue
+		}
+		if part.Type == model.ContentTypeFile &&
+			part.File != nil &&
+			isInternalOnlyFile(part.File) {
+			continue
+		}
+		if part.Type == model.ContentTypeFile &&
+			m.variantConfig.skipFileTypeInContent {
+			extraFields = appendFileID(extraFields, part)
+			continue
+		}
 		contentPart := m.convertContentPart(part)
 		if contentPart == nil {
 			continue
 		}
-		// Handle file content parts based on variant configuration.
-		if part.Type == model.ContentTypeFile && m.variantConfig.skipFileTypeInContent {
-			const fileIDsKey = "file_ids"
-			// Collect file IDs in extraFields under "file_ids".
-			fileIDs, ok := extraFields[fileIDsKey].([]string)
-			if !ok {
-				fileIDs = []string{}
-			}
-			fileIDs = append(fileIDs, part.File.FileID)
-			extraFields[fileIDsKey] = fileIDs
+		*dst = append(*dst, *contentPart)
+	}
+	return extraFields
+}
+
+func appendFileID(
+	extraFields map[string]any,
+	part model.ContentPart,
+) map[string]any {
+	if part.File == nil || !isProviderFileID(part.File.FileID) {
+		return extraFields
+	}
+	const fileIDsKey = "file_ids"
+	if extraFields == nil {
+		extraFields = make(map[string]any)
+	}
+	fileIDs, ok := extraFields[fileIDsKey].([]string)
+	if !ok {
+		fileIDs = []string{}
+	}
+	fileIDs = append(fileIDs, part.File.FileID)
+	extraFields[fileIDsKey] = fileIDs
+	return extraFields
+}
+
+func singleUserContentString(
+	mainText string,
+	fileHint string,
+	contentParts []openai.ChatCompletionContentPartUnionParam,
+	extraFields map[string]any,
+) (string, bool) {
+	if extraFields != nil {
+		return "", false
+	}
+	if len(contentParts) != 1 {
+		return "", false
+	}
+	if contentParts[0].OfText == nil {
+		return "", false
+	}
+
+	text := contentParts[0].OfText.Text
+	if mainText != "" && text == mainText {
+		return mainText, true
+	}
+	if mainText == "" && fileHint != "" && text == fileHint {
+		return fileHint, true
+	}
+	return "", false
+}
+
+func fileHintForContentParts(parts []model.ContentPart) string {
+	const (
+		fileHintDefaultName = "attachment"
+		fileHintSingleFmt   = "Uploaded file: %s (available to tools)."
+		fileHintMultiFmt    = "Uploaded files: %s (available to tools)."
+	)
+
+	var names []string
+	for _, part := range parts {
+		if part.Type != model.ContentTypeFile || part.File == nil {
 			continue
 		}
-		// For non-file or non-skipped file types, add to contentParts.
-		contentParts = append(contentParts, *contentPart)
+		name := safeFileHintName(part.File)
+		if name == "" {
+			name = fileHintDefaultName
+		}
+		names = append(names, name)
 	}
-	return openai.ChatCompletionUserMessageParamContentUnion{
-		OfArrayOfContentParts: contentParts,
-	}, extraFields
+	if len(names) == 0 {
+		return ""
+	}
+	if len(names) == 1 {
+		return fmt.Sprintf(fileHintSingleFmt, names[0])
+	}
+	return fmt.Sprintf(fileHintMultiFmt, strings.Join(names, ", "))
 }
 
 // convertAssistantMessageContent converts message content to assistant message content union.
@@ -776,9 +932,13 @@ func (m *Model) convertContentPart(part model.ContentPart) *openai.ChatCompletio
 		}
 	case model.ContentTypeFile:
 		if part.File != nil {
+			params, ok := fileToParamsOK(part.File)
+			if !ok {
+				return nil
+			}
 			return &openai.ChatCompletionContentPartUnionParam{
 				OfFile: &openai.ChatCompletionContentPartFileParam{
-					File: fileToParams(part.File),
+					File: params,
 				},
 			}
 		}
@@ -793,16 +953,69 @@ func imageToURLOrBase64(image *model.Image) string {
 	return "data:image/" + image.Format + ";base64," + base64.StdEncoding.EncodeToString(image.Data)
 }
 
-func fileToParams(file *model.File) openai.ChatCompletionContentPartFileFileParam {
-	if file.FileID != "" {
+func isProviderFileID(fileID string) bool {
+	id := strings.TrimSpace(fileID)
+	if id == "" {
+		return false
+	}
+	return !fileref.IsInternalFileRef(id)
+}
+
+func isInternalOnlyFile(file *model.File) bool {
+	if file == nil {
+		return false
+	}
+	return fileref.IsInternalFileRef(file.FileID) &&
+		len(file.Data) == 0
+}
+
+func safeFileHintName(file *model.File) string {
+	if file == nil {
+		return ""
+	}
+	name := strings.TrimSpace(file.Name)
+	if name != "" {
+		return name
+	}
+	if display := fileref.DisplayName(file.FileID); display != "" {
+		return display
+	}
+	if isProviderFileID(file.FileID) {
+		return strings.TrimSpace(file.FileID)
+	}
+	return ""
+}
+
+func fileToParamsOK(
+	file *model.File,
+) (openai.ChatCompletionContentPartFileFileParam, bool) {
+	if file == nil {
+		return openai.ChatCompletionContentPartFileFileParam{}, false
+	}
+	if isProviderFileID(file.FileID) {
 		return openai.ChatCompletionContentPartFileFileParam{
 			FileID: openai.String(file.FileID),
-		}
+		}, true
 	}
+	if len(file.Data) == 0 {
+		return openai.ChatCompletionContentPartFileFileParam{}, false
+	}
+	const (
+		fileDataPrefix = "data:"
+		fileDataBase64 = ";base64,"
+	)
+	encoded := base64.StdEncoding.EncodeToString(file.Data)
+	fileData := fileDataPrefix + file.MimeType + fileDataBase64 +
+		encoded
 	return openai.ChatCompletionContentPartFileFileParam{
-		FileData: openai.String("data:" + file.MimeType + ";base64," + base64.StdEncoding.EncodeToString(file.Data)),
+		FileData: openai.String(fileData),
 		Filename: openai.String(file.Name),
-	}
+	}, true
+}
+
+func fileToParams(file *model.File) openai.ChatCompletionContentPartFileFileParam {
+	params, _ := fileToParamsOK(file)
+	return params
 }
 
 func audioToBase64(audio *model.Audio) string {
@@ -1184,6 +1397,21 @@ func (m *Model) collectExtraFieldsFromChunk(
 	}
 }
 
+func applyOpenAISDKTokenDetailsAccumulationFix(
+	acc *openai.ChatCompletionAccumulator,
+	chunk openai.ChatCompletionChunk,
+) {
+	// Temporary workaround for token details accumulation.
+	// See https://github.com/trpc-group/trpc-agent-go/issues/1270.
+	// Remove this after upgrading openai-go to v3.10.0.
+	acc.Usage.CompletionTokensDetails.AcceptedPredictionTokens += chunk.Usage.CompletionTokensDetails.AcceptedPredictionTokens
+	acc.Usage.CompletionTokensDetails.AudioTokens += chunk.Usage.CompletionTokensDetails.AudioTokens
+	acc.Usage.CompletionTokensDetails.ReasoningTokens += chunk.Usage.CompletionTokensDetails.ReasoningTokens
+	acc.Usage.CompletionTokensDetails.RejectedPredictionTokens += chunk.Usage.CompletionTokensDetails.RejectedPredictionTokens
+	acc.Usage.PromptTokensDetails.AudioTokens += chunk.Usage.PromptTokensDetails.AudioTokens
+	acc.Usage.PromptTokensDetails.CachedTokens += chunk.Usage.PromptTokensDetails.CachedTokens
+}
+
 // accumulateChunk accumulates the chunk into the accumulator and reasoning buffer.
 func (m *Model) accumulateChunk(
 	chunk openai.ChatCompletionChunk,
@@ -1197,7 +1425,10 @@ func (m *Model) accumulateChunk(
 		// avoid known panics when JSON.ToolCalls is marked present but the
 		// typed ToolCalls slice is empty, especially on finish_reason chunks.
 		sanitizedChunk := sanitizeChunkForAccumulator(chunk)
-		acc.AddChunk(sanitizedChunk)
+		if acc.AddChunk(sanitizedChunk) {
+			applyOpenAISDKTokenDetailsAccumulationFix(acc, chunk)
+		}
+
 		if m.accumulateChunkUsage != nil {
 			accUsage, chunkUsage := completionUsageToModelUsage(acc.Usage), completionUsageToModelUsage(chunk.Usage)
 			usage := inverseOpenAISDKAddChunkUsage(accUsage, chunkUsage)
@@ -1997,4 +2228,47 @@ func (m *Model) GetFile(
 		return nil, fmt.Errorf("failed to get file: %w", err)
 	}
 	return fileObj, nil
+}
+
+// DownloadFile downloads the content for the given file ID.
+func (m *Model) DownloadFile(
+	ctx context.Context,
+	fileID string,
+) ([]byte, string, error) {
+	id := strings.TrimSpace(fileID)
+	if id == "" {
+		return nil, "", fmt.Errorf("file_id is required")
+	}
+	basePath := strings.TrimSpace(m.variantConfig.fileDeletionPath)
+	if basePath == "" {
+		basePath = strings.TrimSpace(m.variantConfig.fileUploadPath)
+	}
+	basePath = strings.TrimRight(basePath, "/")
+	mw := openaiopt.WithMiddleware(
+		func(r *http.Request, next openaiopt.MiddlewareNext) (
+			*http.Response, error,
+		) {
+			if basePath != "" {
+				r.URL.Path = basePath + "/" + id + "/content"
+			}
+			return next(r)
+		},
+	)
+	resp, err := m.client.Files.Content(ctx, id, mw)
+	if err != nil {
+		return nil, "", fmt.Errorf("download file: %w", err)
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", fmt.Errorf("read file: %w", err)
+	}
+	mime := strings.TrimSpace(resp.Header.Get("Content-Type"))
+	if mime == "" {
+		mime = http.DetectContentType(data)
+	}
+	if mime == "" {
+		mime = "application/octet-stream"
+	}
+	return data, mime, nil
 }

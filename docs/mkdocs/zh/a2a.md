@@ -73,13 +73,36 @@ func main() {
 	// 2. 一键转换为 A2A 服务
 	server, _ := a2aserver.New(
 		a2aserver.WithHost("localhost:8080"),
-		a2aserver.WithAgent(agent), // 传入任意 Agent
+		a2aserver.WithAgent(agent, true), // 开启 streaming
 	)
 
 	// 3. 启动服务，即可接受 A2A 请求
 	server.Start(":8080")
 }
 ```
+
+#### 流式输出事件类型（Message vs Artifact）
+
+当开启 streaming 时，A2A 允许服务端用不同的方式下发增量输出：
+
+- **TaskArtifactUpdateEvent（默认）**：ADK 风格。把增量内容作为任务的
+  artifact 更新事件（`artifact-update`）下发。
+- **Message**：轻量模式。把增量内容作为 `message` 下发，客户端可以直接渲染
+  `Message.parts`，无需把输出当作“可持久化 artifact”来处理。
+
+如果你的业务更希望把流式内容直接当作 `message` 来消费，可以这样配置：
+
+```go
+server, _ := a2aserver.New(
+	a2aserver.WithHost("localhost:8080"),
+	a2aserver.WithAgent(agent, true),
+	a2aserver.WithStreamingEventType(
+		a2aserver.StreamingEventTypeMessage,
+	),
+)
+```
+
+任务状态更新（`submitted`、`completed`）仍然会以 `TaskStatusUpdateEvent` 的形式下发。
 
 #### 直接使用 A2A 协议客户端调用
 
@@ -251,10 +274,11 @@ a2aAgent, err := a2aagent.New(
 	a2aagent.WithStreamingChannelBufSize(2048),
 
 	// 自定义协议转换
-	a2aagent.WithCustomEventConverter(curtomEventConverter),
+	a2aagent.WithCustomEventConverter(customEventConverter),
+	a2aagent.WithCustomA2AConverter(customA2AConverter),
 
-	a2aagent.WithCustomA2AConverter(cursomA2AConverter)
-
+	// 显式控制流式模式（覆盖 AgentCard 中的 capability 声明）
+	a2aagent.WithEnableStreaming(true),
 )
 ```
 
@@ -452,11 +476,10 @@ events, err := runner.Run(
    )
    ```
 
-2. **分布式追踪**：添加请求/追踪 ID
+2. **分布式追踪**：添加请求 ID（OpenTelemetry trace context 会自动通过 HTTP header 传播）
    ```go
    agent.WithA2ARequestOptions(
        client.WithRequestHeader("X-Request-ID", requestID),
-       client.WithRequestHeader("X-Trace-ID", traceID),
    )
    ```
 
@@ -483,12 +506,27 @@ server, _ := a2a.New(
 
 来自 `invocation.Session.UserID` 的 UserID 会自动通过配置的 header 发送给 A2A server。
 
+### ADK 兼容模式
+
+如果需要与 Google ADK (Agent Development Kit) Python 客户端互通，可以启用 ADK 兼容模式。
+启用后，Server 会在 metadata 中额外写入 `adk_` 前缀的 key（如 `adk_type`、`adk_thought`），
+以兼容 ADK 的 part converter 解析逻辑：
+
+```go
+server, _ := a2a.New(
+	a2a.WithHost("localhost:8888"),
+	a2a.WithAgent(agent, true),
+	a2a.WithADKCompatibility(true), // 默认关闭
+)
+```
+
 ### 自定义转换器
 
 对于特殊需求，可以自定义消息和事件转换器：
 
 ```go
-// 自定义 A2A 消息转换器
+// 自定义 A2A 消息转换器（Invocation → A2A Message）
+// 实现 a2aagent.InvocationA2AConverter 接口
 type CustomA2AConverter struct{}
 
 func (c *CustomA2AConverter) ConvertToA2AMessage(
@@ -497,33 +535,50 @@ func (c *CustomA2AConverter) ConvertToA2AMessage(
 	invocation *agent.Invocation,
 ) (*protocol.Message, error) {
 	// 自定义消息转换逻辑
-	return &protocol.Message{
-		MessageID: invocation.InvocationID,
-		Role:      protocol.MessageRoleUser,
-		Parts:     []protocol.Part{/* 自定义内容 */},
-	}, nil
+	msg := protocol.NewMessage(protocol.MessageRoleUser, []protocol.Part{
+		protocol.NewTextPart(invocation.Message.Content),
+	})
+	return &msg, nil
 }
 
-// 自定义事件转换器  
+// 自定义事件转换器（A2A Response → Event）
+// 实现 a2aagent.A2AEventConverter 接口
 type CustomEventConverter struct{}
 
-func (c *CustomEventConverter) ConvertToEvent(
+func (c *CustomEventConverter) ConvertToEvents(
 	result protocol.MessageResult,
 	agentName string,
 	invocation *agent.Invocation,
-) (*event.Event, error) {
-	// 自定义事件转换逻辑
-	return event.New(invocation.InvocationID, agentName), nil
+) ([]*event.Event, error) {
+	// 自定义非流式事件转换逻辑
+	return []*event.Event{event.New(invocation.InvocationID, agentName)}, nil
+}
+
+func (c *CustomEventConverter) ConvertStreamingToEvents(
+	result protocol.StreamingMessageEvent,
+	agentName string,
+	invocation *agent.Invocation,
+) ([]*event.Event, error) {
+	// 自定义流式事件转换逻辑
+	return []*event.Event{event.New(invocation.InvocationID, agentName)}, nil
 }
 
 // 使用自定义转换器
 a2aAgent, _ := a2aagent.New(
 	a2aagent.WithAgentCardURL("http://remote-agent:8888"),
-	a2aagent.WithA2AMessageConverter(&CustomA2AConverter{}),
-	a2aagent.WithEventConverter(&CustomEventConverter{}),
+	a2aagent.WithCustomA2AConverter(&CustomA2AConverter{}),
+	a2aagent.WithCustomEventConverter(&CustomEventConverter{}),
 )
 ```
 
+
+## 协议交互规范
+
+关于 A2A 协议中工具调用、代码执行、思考内容等事件的传递规范，以及 Metadata 字段定义、ADK 兼容模式、分布式追踪等详细说明，请参考独立文档：
+
+**[A2A 协议交互规范](a2a-interaction.md)**
+
+该文档定义了 trpc-agent-go 在 A2A 协议之上的扩展规范，是 Client 和 Server 实现的标准参考。
 
 ## 总结：A2A Server vs A2AAgent
 

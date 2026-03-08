@@ -11,13 +11,28 @@ package app
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 )
+
+func TestMain(m *testing.M) {
+	home, err := os.MkdirTemp("", "openclaw-test-home-*")
+	if err != nil {
+		panic(err)
+	}
+	_ = os.Setenv("HOME", home)
+	_ = os.Unsetenv(openClawConfigEnvName)
+	code := m.Run()
+	_ = os.RemoveAll(home)
+	os.Exit(code)
+}
 
 func TestParseRunOptions_UsesEnvConfig(t *testing.T) {
 	cfgPath := writeTempConfig(t, `
@@ -36,6 +51,52 @@ gateway:
 	require.Equal(t, "u1,u2", opts.AllowUsers)
 }
 
+func TestParseRunOptions_UsesDefaultConfigPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfgPath := filepath.Join(
+		home,
+		defaultConfigRootDir,
+		defaultConfigAppDir,
+		defaultConfigFile,
+	)
+	err := os.MkdirAll(filepath.Dir(cfgPath), 0o755)
+	require.NoError(t, err)
+	err = os.WriteFile(cfgPath, []byte("app_name: demo\n"), 0o644)
+	require.NoError(t, err)
+
+	opts, err := parseRunOptions(nil)
+	require.NoError(t, err)
+	require.Equal(t, "demo", opts.AppName)
+}
+
+func TestApplyOpenClawToolDefaults_LLMEnablesTools(t *testing.T) {
+	t.Parallel()
+
+	opts := runOptions{}
+	applyOpenClawToolDefaults(agentTypeLLM, &opts)
+	require.True(t, opts.EnableOpenClawTools)
+}
+
+func TestApplyOpenClawToolDefaults_RespectsExplicitFalse(t *testing.T) {
+	t.Parallel()
+
+	opts := runOptions{
+		enableOpenClawToolsExplicit: true,
+	}
+	applyOpenClawToolDefaults(agentTypeLLM, &opts)
+	require.False(t, opts.EnableOpenClawTools)
+}
+
+func TestApplyOpenClawToolDefaults_ClaudeCodeStaysOff(t *testing.T) {
+	t.Parallel()
+
+	opts := runOptions{}
+	applyOpenClawToolDefaults(agentTypeClaudeCode, &opts)
+	require.False(t, opts.EnableOpenClawTools)
+}
+
 func TestParseRunOptions_FlagOverridesConfig(t *testing.T) {
 	t.Parallel()
 
@@ -51,6 +112,17 @@ agent:
   system_prompt: "cfg system"
   system_prompt_files: ["cfg_sys_1.md","cfg_sys_2.md"]
   system_prompt_dir: "cfg_sys_dir"
+  ralph_loop:
+    enabled: false
+    max_iterations: 99
+    completion_promise: "cfg promise"
+    promise_tag_open: "<cfg>"
+    promise_tag_close: "</cfg>"
+    verify:
+      command: "cfg cmd"
+      work_dir: "/cfg/work"
+      timeout: "10s"
+      env: ["A=B"]
   claude_bin: "/bin/claude"
   claude_output_format: "stream-json"
   claude_extra_args: ["--permission-mode","bypassPermissions"]
@@ -67,6 +139,15 @@ agent:
 		"-agent-type", agentTypeLLM,
 		"-agent-instruction", "flag instruction",
 		"-agent-system-prompt", "flag system",
+		"-agent-ralph-loop",
+		"-agent-ralph-max-iterations", "7",
+		"-agent-ralph-completion-promise", "flag promise",
+		"-agent-ralph-promise-tag-open", "<flag>",
+		"-agent-ralph-promise-tag-close", "</flag>",
+		"-agent-ralph-verify-command", "flag cmd",
+		"-agent-ralph-verify-workdir", "/tmp/flag",
+		"-agent-ralph-verify-timeout", "30s",
+		"-agent-ralph-verify-env", "X=1",
 		"-claude-bin", "/tmp/claude",
 		"-add-session-summary",
 		"-max-history-runs", "9",
@@ -77,6 +158,15 @@ agent:
 	require.Equal(t, agentTypeLLM, opts.AgentType)
 	require.Equal(t, "flag instruction", opts.AgentInstruction)
 	require.Equal(t, "flag system", opts.AgentSystemPrompt)
+	require.True(t, opts.RalphLoopEnabled)
+	require.Equal(t, 7, opts.RalphLoopMaxIterations)
+	require.Equal(t, "flag promise", opts.RalphLoopCompletionPromise)
+	require.Equal(t, "<flag>", opts.RalphLoopPromiseTagOpen)
+	require.Equal(t, "</flag>", opts.RalphLoopPromiseTagClose)
+	require.Equal(t, "flag cmd", opts.RalphLoopVerifyCommand)
+	require.Equal(t, "/tmp/flag", opts.RalphLoopVerifyWorkDir)
+	require.Equal(t, 30*time.Second, opts.RalphLoopVerifyTimeout)
+	require.Equal(t, "X=1", opts.RalphLoopVerifyEnv)
 	require.Equal(t, "/tmp/claude", opts.ClaudeBin)
 	require.True(t, opts.AddSessionSummary)
 	require.Equal(t, 9, opts.MaxHistoryRuns)
@@ -102,8 +192,111 @@ func TestParseRunOptions_InvalidDurationFails(t *testing.T) {
 	t.Parallel()
 
 	cfgPath := writeTempConfig(t, `
-telegram:
-  http_timeout: "bad"
+memory:
+  auto:
+    enabled: true
+    time_interval: "bad"
+`)
+
+	_, err := parseRunOptions([]string{"-config", cfgPath})
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+}
+
+func TestLoadConfigFile_ExpandsEnvPlaceholders(t *testing.T) {
+	t.Setenv("TEST_OPENCLAW_APP", "demo")
+
+	cfgPath := writeTempConfig(t, `
+app_name: ${TEST_OPENCLAW_APP}
+`)
+
+	cfg, err := loadConfigFile(cfgPath)
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	require.NotNil(t, cfg.AppName)
+	require.Equal(t, "demo", *cfg.AppName)
+}
+
+func TestLoadConfigFile_MissingEnvPlaceholderFails(t *testing.T) {
+	cfgPath := writeTempConfig(t, `
+app_name: ${TEST_OPENCLAW_MISSING}
+`)
+
+	_, err := loadConfigFile(cfgPath)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "TEST_OPENCLAW_MISSING")
+}
+
+func TestExpandEnvPlaceholders_TrimsName(t *testing.T) {
+	t.Setenv("OPENCLAW_ENV_TEST", "demo")
+
+	in := []byte("app_name: ${ OPENCLAW_ENV_TEST }\n")
+	out, err := expandEnvPlaceholders(in)
+	require.NoError(t, err)
+	require.Equal(t, "app_name: demo\n", string(out))
+}
+
+func TestExpandEnvPlaceholders_InvalidNameIsPreserved(t *testing.T) {
+	in := []byte("app_name: ${1BAD}\n")
+	out, err := expandEnvPlaceholders(in)
+	require.NoError(t, err)
+	require.Equal(t, in, out)
+}
+
+func TestExpandEnvPlaceholders_MissingBraceIsPreserved(t *testing.T) {
+	in := []byte("app_name: ${OPENCLAW_ENV_TEST\n")
+	out, err := expandEnvPlaceholders(in)
+	require.NoError(t, err)
+	require.Equal(t, in, out)
+}
+
+func TestExpandEnvPlaceholders_ReplacesMultiple(t *testing.T) {
+	t.Setenv("OPENCLAW_ENV_A", "A")
+	t.Setenv("OPENCLAW_ENV_B", "B")
+
+	in := []byte("a: ${OPENCLAW_ENV_A} b: ${OPENCLAW_ENV_B}\n")
+	out, err := expandEnvPlaceholders(in)
+	require.NoError(t, err)
+	require.Equal(t, "a: A b: B\n", string(out))
+}
+
+func TestIsValidEnvName(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{in: "", want: false},
+		{in: "A", want: true},
+		{in: "_A", want: true},
+		{in: "A1", want: true},
+		{in: "1A", want: false},
+		{in: "A-B", want: false},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.in, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tc.want, isValidEnvName(tc.in))
+		})
+	}
+}
+
+func TestParseRunOptions_RalphLoopInvalidDurationFails(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+agent:
+  ralph_loop:
+    enabled: true
+    verify:
+      command: "echo ok"
+      timeout: "bad"
 `)
 
 	_, err := parseRunOptions([]string{"-config", cfgPath})
@@ -140,6 +333,17 @@ agent:
   system_prompt: "system prompt"
   system_prompt_files: ["s1.md","s2.md"]
   system_prompt_dir: "/system_prompt_dir"
+  ralph_loop:
+    enabled: true
+    max_iterations: 5
+    completion_promise: "done"
+    promise_tag_open: "<p>"
+    promise_tag_close: "</p>"
+    verify:
+      command: "echo ok"
+      work_dir: "/tmp"
+      timeout: "90s"
+      env: ["A=B"]
 
 model:
   mode: "mock"
@@ -151,26 +355,46 @@ gateway:
   require_mention: true
   mention_patterns: ["@bot"]
 
-telegram:
-  token: "t"
-  start_from_latest: false
-  proxy: "http://127.0.0.1:7890"
-  http_timeout: "60s"
-  max_retries: 5
-  streaming: "block"
-  dm_policy: "open"
-  group_policy: "allowlist"
-  allow_threads: ["1","2:topic:3"]
-  pairing_ttl: "30m"
+channels:
+  - type: "telegram"
+    config:
+      token: "t"
+      start_from_latest: false
+      proxy: "http://127.0.0.1:7890"
+      http_timeout: "60s"
+      max_retries: 5
+      streaming: "block"
+      dm_policy: "open"
+      group_policy: "allowlist"
+      allow_threads: ["1","2:topic:3"]
+      pairing_ttl: "30m"
 
 skills:
   root: "/skills"
   extra_dirs: ["/extra1","/extra2"]
   debug: true
+  allowBundled: ["gh-issues","notion"]
+  load_mode: "session"
+  max_loaded_skills: 3
+  loaded_content_in_tool_results: false
+  skip_fallback_on_session_summary: false
+  tooling_guidance: "Prefer runtime help over stale docs."
+  entries:
+    gh-issues:
+      enabled: false
+      apiKey: "k1"
+      env:
+        GH_TOKEN: "t1"
+    notion:
+      enabled: true
+      api_key: "k2"
+      env:
+        NOTION_API_KEY: "t2"
 
 tools:
   enable_local_exec: true
   enable_openclaw_tools: true
+  enable_parallel_tools: true
   refresh_toolsets_on_run: true
   providers:
     - type: "duckduckgo"
@@ -244,6 +468,15 @@ memory:
 	require.Equal(t, "system prompt", opts.AgentSystemPrompt)
 	require.Equal(t, "s1.md,s2.md", opts.AgentSystemPromptFiles)
 	require.Equal(t, "/system_prompt_dir", opts.AgentSystemPromptDir)
+	require.True(t, opts.RalphLoopEnabled)
+	require.Equal(t, 5, opts.RalphLoopMaxIterations)
+	require.Equal(t, "done", opts.RalphLoopCompletionPromise)
+	require.Equal(t, "<p>", opts.RalphLoopPromiseTagOpen)
+	require.Equal(t, "</p>", opts.RalphLoopPromiseTagClose)
+	require.Equal(t, "echo ok", opts.RalphLoopVerifyCommand)
+	require.Equal(t, "/tmp", opts.RalphLoopVerifyWorkDir)
+	require.Equal(t, 90*time.Second, opts.RalphLoopVerifyTimeout)
+	require.Equal(t, "A=B", opts.RalphLoopVerifyEnv)
 
 	require.Equal(t, modeMock, opts.ModelMode)
 	require.Equal(t, "gpt-5", opts.OpenAIModel)
@@ -253,23 +486,59 @@ memory:
 	require.True(t, opts.RequireMention)
 	require.Equal(t, "@bot", opts.Mention)
 
-	require.Equal(t, "t", opts.TelegramToken)
-	require.False(t, opts.TelegramStartFromLatest)
-	require.Equal(t, "http://127.0.0.1:7890", opts.TelegramProxy)
-	require.Equal(t, 60*time.Second, opts.TelegramHTTPTimeout)
-	require.Equal(t, 5, opts.TelegramMaxRetries)
-	require.Equal(t, "block", opts.TelegramStreaming)
-	require.Equal(t, "open", opts.TelegramDMPolicy)
-	require.Equal(t, "allowlist", opts.TelegramGroupPolicy)
-	require.Equal(t, "1,2:topic:3", opts.TelegramAllowThreads)
-	require.Equal(t, 30*time.Minute, opts.TelegramPairingTTL)
+	require.Len(t, opts.Channels, 1)
+	require.Equal(t, telegramChannelType, opts.Channels[0].Type)
+	require.Equal(t, "", opts.Channels[0].Name)
+	require.NotNil(t, opts.Channels[0].Config)
+
+	var tgCfg telegramChannelConfig
+	require.NoError(t, registry.DecodeStrict(opts.Channels[0].Config, &tgCfg))
+	require.Equal(t, "t", tgCfg.Token)
+	require.NotNil(t, tgCfg.StartFromLatest)
+	require.False(t, *tgCfg.StartFromLatest)
+	require.Equal(t, "http://127.0.0.1:7890", tgCfg.Proxy)
+	require.Equal(t, "60s", tgCfg.HTTPTimeout)
+	require.NotNil(t, tgCfg.MaxRetries)
+	require.Equal(t, 5, *tgCfg.MaxRetries)
+	require.Equal(t, "block", tgCfg.Streaming)
+	require.Equal(t, "open", tgCfg.DMPolicy)
+	require.Equal(t, "allowlist", tgCfg.GroupPolicy)
+	require.Equal(t, []string{"1", "2:topic:3"}, tgCfg.AllowThreads)
+	require.Equal(t, "30m", tgCfg.PairingTTL)
 
 	require.Equal(t, "/skills", opts.SkillsRoot)
 	require.Equal(t, "/extra1,/extra2", opts.SkillsExtraDir)
 	require.True(t, opts.SkillsDebug)
+	require.Equal(t, "gh-issues,notion", opts.SkillsAllowBundled)
+	require.Equal(t, "session", opts.SkillsLoadMode)
+	require.Equal(t, 3, opts.SkillsMaxLoaded)
+	require.False(t, opts.SkillsToolResults)
+	require.False(t, opts.SkillsSkipFallback)
+	require.NotNil(t, opts.SkillsToolingGuide)
+	require.Equal(
+		t,
+		"Prefer runtime help over stale docs.",
+		*opts.SkillsToolingGuide,
+	)
+
+	require.Len(t, opts.SkillConfigs, 2)
+	require.NotNil(t, opts.SkillConfigs["gh-issues"].Enabled)
+	require.False(t, *opts.SkillConfigs["gh-issues"].Enabled)
+	require.Equal(t, "k1", opts.SkillConfigs["gh-issues"].APIKey)
+	require.Equal(t, "t1", opts.SkillConfigs["gh-issues"].Env["GH_TOKEN"])
+
+	require.NotNil(t, opts.SkillConfigs["notion"].Enabled)
+	require.True(t, *opts.SkillConfigs["notion"].Enabled)
+	require.Equal(t, "k2", opts.SkillConfigs["notion"].APIKey)
+	require.Equal(
+		t,
+		"t2",
+		opts.SkillConfigs["notion"].Env["NOTION_API_KEY"],
+	)
 
 	require.True(t, opts.EnableLocalExec)
 	require.True(t, opts.EnableOpenClawTools)
+	require.True(t, opts.EnableParallelTools)
 	require.True(t, opts.RefreshToolSetsOnRun)
 
 	require.Len(t, opts.ToolProviders, 1)
@@ -352,6 +621,135 @@ session:
 	var exitErr *exitError
 	require.True(t, errors.As(err, &exitErr))
 	require.Equal(t, 1, exitErr.Code)
+}
+
+func TestConvertSkillConfigs_EmptyAndBlankKeys(t *testing.T) {
+	require.Nil(t, convertSkillConfigs(nil))
+	require.Nil(t, convertSkillConfigs(map[string]skillEntryConfig{}))
+
+	got := convertSkillConfigs(map[string]skillEntryConfig{
+		" ": {},
+	})
+	require.Nil(t, got)
+}
+
+func TestParseRunOptions_AllowBundledSnakeCase(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+skills:
+  allow_bundled: ["a","b"]
+`)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.Equal(t, "a,b", opts.SkillsAllowBundled)
+}
+
+func TestParseRunOptions_SkillsAllowBundledFlagOverridesConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+skills:
+  allow_bundled: ["a"]
+`)
+
+	opts, err := parseRunOptions([]string{
+		"-config", cfgPath,
+		"-skills-allow-bundled", "b,c",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "b,c", opts.SkillsAllowBundled)
+}
+
+func TestParseRunOptions_DebugRecorder_ConfigApplied(t *testing.T) {
+	t.Parallel()
+
+	outDir := t.TempDir()
+	cfgPath := writeTempConfig(t, fmt.Sprintf(`
+debug_recorder:
+  enabled: true
+  dir: %q
+  mode: safe
+`, outDir))
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.True(t, opts.DebugRecorderEnabled)
+	require.Equal(t, outDir, opts.DebugRecorderDir)
+	require.Equal(t, "safe", opts.DebugRecorderMode)
+}
+
+func TestParseRunOptions_SkillsDefaults(t *testing.T) {
+	t.Parallel()
+
+	opts, err := parseRunOptions(nil)
+	require.NoError(t, err)
+	require.Equal(t, defaultSkillsLoadMode, opts.SkillsLoadMode)
+	require.True(t, opts.SkillsToolResults)
+	require.True(t, opts.SkillsSkipFallback)
+	require.Zero(t, opts.SkillsMaxLoaded)
+	require.Nil(t, opts.SkillsToolingGuide)
+}
+
+func TestParseRunOptions_SkillsLoadMode_InvalidFails(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseRunOptions([]string{
+		"-skills-load-mode", "bad",
+	})
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 2, exitErr.Code)
+}
+
+func TestParseRunOptions_AdminDefaults(t *testing.T) {
+	t.Parallel()
+
+	opts, err := parseRunOptions(nil)
+	require.NoError(t, err)
+	require.True(t, opts.AdminEnabled)
+	require.Equal(t, defaultAdminAddr, opts.AdminAddr)
+	require.True(t, opts.AdminAutoPort)
+}
+
+func TestParseRunOptions_AdminConfigApplied(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+admin:
+  enabled: true
+  addr: "127.0.0.1:21000"
+  auto_port: false
+`)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.True(t, opts.AdminEnabled)
+	require.Equal(t, "127.0.0.1:21000", opts.AdminAddr)
+	require.False(t, opts.AdminAutoPort)
+}
+
+func TestParseRunOptions_AdminFlagOverridesConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+admin:
+  enabled: true
+  addr: "127.0.0.1:21000"
+  auto_port: false
+`)
+
+	opts, err := parseRunOptions([]string{
+		"-config", cfgPath,
+		"-admin-addr", "127.0.0.1:22000",
+		"-admin-auto-port=true",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "127.0.0.1:22000", opts.AdminAddr)
+	require.True(t, opts.AdminAutoPort)
 }
 
 func writeTempConfig(t *testing.T, body string) string {

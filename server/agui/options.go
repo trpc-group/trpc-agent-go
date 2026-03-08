@@ -149,6 +149,13 @@ func WithGraphNodeInterruptActivityTopLevelOnly(enabled bool) Option {
 	}
 }
 
+// WithReasoningContentEnabled controls whether the AG-UI server emits reasoning content events.
+func WithReasoningContentEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithReasoningContentEnabled(enabled))
+	}
+}
+
 // WithMessagesSnapshotPath sets the HTTP path for the messages snapshot handler, "/history" in default.
 func WithMessagesSnapshotPath(p string) Option {
 	return func(o *options) {

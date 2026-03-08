@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"hash/crc64"
 	"io"
@@ -197,6 +198,63 @@ func createMockService() (*Service, *MockTransport) {
 	service, _ := NewService("cos-service", "", WithClient(mockCosClient))
 
 	return service, mockTransport
+}
+
+type stubClient struct {
+	getBucketFn    func(context.Context, string) (*cos.BucketGetResult, error)
+	putObjectFn    func(context.Context, string, io.Reader, cos.ObjectPutOptions) error
+	getObjectFn    func(context.Context, string) (io.ReadCloser, http.Header, error)
+	deleteObjectFn func(context.Context, string) error
+}
+
+func (c *stubClient) GetBucket(
+	ctx context.Context,
+	prefix string,
+) (*cos.BucketGetResult, error) {
+	if c.getBucketFn == nil {
+		return nil, nil
+	}
+	return c.getBucketFn(ctx, prefix)
+}
+
+func (c *stubClient) PutObject(
+	ctx context.Context,
+	name string,
+	content io.Reader,
+	opt cos.ObjectPutOptions,
+) error {
+	if c.putObjectFn == nil {
+		return nil
+	}
+	return c.putObjectFn(ctx, name, content, opt)
+}
+
+func (c *stubClient) GetObject(
+	ctx context.Context,
+	name string,
+) (io.ReadCloser, http.Header, error) {
+	if c.getObjectFn == nil {
+		return nil, nil, nil
+	}
+	return c.getObjectFn(ctx, name)
+}
+
+func (c *stubClient) DeleteObject(
+	ctx context.Context,
+	name string,
+) error {
+	if c.deleteObjectFn == nil {
+		return nil
+	}
+	return c.deleteObjectFn(ctx, name)
+}
+
+func newNotFoundError() error {
+	return &cos.ErrorResponse{
+		Response: &http.Response{
+			StatusCode: http.StatusNotFound,
+		},
+	}
 }
 
 func TestArtifact_SessionScope(t *testing.T) {
@@ -390,6 +448,460 @@ func TestMixedScopeArtifacts(t *testing.T) {
 	loadedUser, err := s.LoadArtifact(ctx, sessionInfo, "user:profile.txt", nil)
 	require.NoError(t, err)
 	assert.Equal(t, userArtifact.Data, loadedUser.Data)
+}
+
+func TestListArtifactKeys_PreservesNestedFilenames(t *testing.T) {
+	s, _ := createMockService()
+	ctx := context.Background()
+
+	sessionInfo := artifact.SessionInfo{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session456",
+	}
+
+	_, err := s.SaveArtifact(ctx, sessionInfo, "out/a.txt", &artifact.Artifact{
+		Data:     []byte("a"),
+		MimeType: "text/plain",
+		Name:     "out/a.txt",
+	})
+	require.NoError(t, err)
+
+	_, err = s.SaveArtifact(
+		ctx,
+		sessionInfo,
+		"user:out/b.txt",
+		&artifact.Artifact{
+			Data:     []byte("b"),
+			MimeType: "text/plain",
+			Name:     "user:out/b.txt",
+		},
+	)
+	require.NoError(t, err)
+
+	keys, err := s.ListArtifactKeys(ctx, sessionInfo)
+	require.NoError(t, err)
+	assert.ElementsMatch(
+		t,
+		[]string{"out/a.txt", "user:out/b.txt"},
+		keys,
+	)
+}
+
+func TestService_LegacyObjectKeysAreSupported(t *testing.T) {
+	s, transport := createMockService()
+	ctx := context.Background()
+
+	sessionInfo := artifact.SessionInfo{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session456",
+	}
+
+	sessionFilename := "out/a.txt"
+	userFilename := "user:out/b.txt"
+
+	_, legacyV0 := buildObjectNameCandidates(
+		sessionInfo,
+		sessionFilename,
+		0,
+	)
+	_, legacyV1 := buildObjectNameCandidates(
+		sessionInfo,
+		sessionFilename,
+		1,
+	)
+	transport.objects[legacyV0] = []byte("v0")
+	transport.objects[legacyV1] = []byte("v1")
+	transport.headers[legacyV0] = map[string]string{
+		"Content-Type": "text/plain",
+	}
+	transport.headers[legacyV1] = map[string]string{
+		"Content-Type": "text/plain",
+	}
+
+	_, legacyUserV0 := buildObjectNameCandidates(
+		sessionInfo,
+		userFilename,
+		0,
+	)
+	transport.objects[legacyUserV0] = []byte("u0")
+	transport.headers[legacyUserV0] = map[string]string{
+		"Content-Type": "text/plain",
+	}
+
+	keys, err := s.ListArtifactKeys(ctx, sessionInfo)
+	require.NoError(t, err)
+	assert.ElementsMatch(
+		t,
+		[]string{sessionFilename, userFilename},
+		keys,
+	)
+
+	got, err := s.LoadArtifact(ctx, sessionInfo, sessionFilename, nil)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, []byte("v1"), got.Data)
+	assert.Equal(t, "text/plain", got.MimeType)
+
+	version := 0
+	got, err = s.LoadArtifact(ctx, sessionInfo, userFilename, &version)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, []byte("u0"), got.Data)
+	assert.Equal(t, "text/plain", got.MimeType)
+
+	err = s.DeleteArtifact(ctx, sessionInfo, sessionFilename)
+	require.NoError(t, err)
+	err = s.DeleteArtifact(ctx, sessionInfo, userFilename)
+	require.NoError(t, err)
+
+	keys, err = s.ListArtifactKeys(ctx, sessionInfo)
+	require.NoError(t, err)
+	require.Empty(t, keys)
+}
+
+func TestSaveArtifact_UsesMaxVersionAcrossLayouts(t *testing.T) {
+	s, transport := createMockService()
+	ctx := context.Background()
+
+	sessionInfo := artifact.SessionInfo{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session456",
+	}
+	filename := "out/a.txt"
+
+	_, legacyV0 := buildObjectNameCandidates(sessionInfo, filename, 0)
+	_, legacyV1 := buildObjectNameCandidates(sessionInfo, filename, 1)
+	transport.objects[legacyV0] = []byte("legacy0")
+	transport.objects[legacyV1] = []byte("legacy1")
+
+	gotVersion, err := s.SaveArtifact(
+		ctx,
+		sessionInfo,
+		filename,
+		&artifact.Artifact{
+			Data:     []byte("new2"),
+			MimeType: "text/plain",
+			Name:     filename,
+		},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 2, gotVersion)
+
+	newV2, _ := buildObjectNameCandidates(sessionInfo, filename, 2)
+	_, ok := transport.objects[newV2]
+	require.True(t, ok)
+
+	latest, err := s.LoadArtifact(ctx, sessionInfo, filename, nil)
+	require.NoError(t, err)
+	require.NotNil(t, latest)
+	assert.Equal(t, []byte("new2"), latest.Data)
+}
+
+func TestLoadArtifact_UnexpectedGetObjectError(t *testing.T) {
+	s := &Service{
+		cosClient: &stubClient{
+			getObjectFn: func(
+				ctx context.Context,
+				name string,
+			) (io.ReadCloser, http.Header, error) {
+				return nil, nil, errors.New("boom")
+			},
+		},
+	}
+
+	sessionInfo := artifact.SessionInfo{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session456",
+	}
+	filename := "out/a.txt"
+	version := 0
+
+	_, err := s.LoadArtifact(
+		context.Background(),
+		sessionInfo,
+		filename,
+		&version,
+	)
+	require.Error(t, err)
+}
+
+func TestListArtifactKeys_SkipsNilResults(t *testing.T) {
+	s := &Service{
+		cosClient: &stubClient{
+			getBucketFn: func(
+				ctx context.Context,
+				prefix string,
+			) (*cos.BucketGetResult, error) {
+				return nil, nil
+			},
+		},
+	}
+
+	keys, err := s.ListArtifactKeys(
+		context.Background(),
+		artifact.SessionInfo{
+			AppName:   "testapp",
+			UserID:    "user123",
+			SessionID: "session456",
+		},
+	)
+	require.NoError(t, err)
+	require.Empty(t, keys)
+}
+
+func TestListArtifactKeys_SessionGetBucketError(t *testing.T) {
+	s := &Service{
+		cosClient: &stubClient{
+			getBucketFn: func(
+				ctx context.Context,
+				prefix string,
+			) (*cos.BucketGetResult, error) {
+				return nil, errors.New("boom")
+			},
+		},
+	}
+
+	_, err := s.ListArtifactKeys(
+		context.Background(),
+		artifact.SessionInfo{
+			AppName:   "testapp",
+			UserID:    "user123",
+			SessionID: "session456",
+		},
+	)
+	require.Error(t, err)
+}
+
+func TestListArtifactKeys_UserGetBucketError(t *testing.T) {
+	s := &Service{
+		cosClient: &stubClient{
+			getBucketFn: func(
+				ctx context.Context,
+				prefix string,
+			) (*cos.BucketGetResult, error) {
+				if strings.HasSuffix(prefix, objectKeySep+"user"+objectKeySep) {
+					return nil, errors.New("boom")
+				}
+				return &cos.BucketGetResult{}, nil
+			},
+		},
+	}
+
+	_, err := s.ListArtifactKeys(
+		context.Background(),
+		artifact.SessionInfo{
+			AppName:   "testapp",
+			UserID:    "user123",
+			SessionID: "session456",
+		},
+	)
+	require.Error(t, err)
+}
+
+func TestListVersions_ReturnsEmptyOnNotFound(t *testing.T) {
+	s := &Service{
+		cosClient: &stubClient{
+			getBucketFn: func(
+				ctx context.Context,
+				prefix string,
+			) (*cos.BucketGetResult, error) {
+				return nil, newNotFoundError()
+			},
+		},
+	}
+
+	versions, err := s.ListVersions(
+		context.Background(),
+		artifact.SessionInfo{
+			AppName:   "testapp",
+			UserID:    "user123",
+			SessionID: "session456",
+		},
+		"out/a.txt",
+	)
+	require.NoError(t, err)
+	require.Empty(t, versions)
+}
+
+func TestListVersions_UnexpectedGetBucketError(t *testing.T) {
+	s := &Service{
+		cosClient: &stubClient{
+			getBucketFn: func(
+				ctx context.Context,
+				prefix string,
+			) (*cos.BucketGetResult, error) {
+				return nil, errors.New("boom")
+			},
+		},
+	}
+
+	_, err := s.ListVersions(
+		context.Background(),
+		artifact.SessionInfo{
+			AppName:   "testapp",
+			UserID:    "user123",
+			SessionID: "session456",
+		},
+		"out/a.txt",
+	)
+	require.Error(t, err)
+}
+
+func TestDeleteArtifact_UnexpectedDeleteError(t *testing.T) {
+	callCount := 0
+	s := &Service{
+		cosClient: &stubClient{
+			getBucketFn: func(
+				ctx context.Context,
+				prefix string,
+			) (*cos.BucketGetResult, error) {
+				return &cos.BucketGetResult{
+					Contents: []cos.Object{
+						{Key: prefix + "out/a.txt/0"},
+					},
+				}, nil
+			},
+			deleteObjectFn: func(
+				ctx context.Context,
+				name string,
+			) error {
+				callCount++
+				if callCount == 1 {
+					return errors.New("boom")
+				}
+				return nil
+			},
+		},
+	}
+
+	err := s.DeleteArtifact(
+		context.Background(),
+		artifact.SessionInfo{
+			AppName:   "testapp",
+			UserID:    "user123",
+			SessionID: "session456",
+		},
+		"out/a.txt",
+	)
+	require.Error(t, err)
+}
+
+func TestSaveArtifact_ValidatesInputs(t *testing.T) {
+	s, _ := createMockService()
+	ctx := context.Background()
+
+	_, err := s.SaveArtifact(
+		ctx,
+		artifact.SessionInfo{},
+		"test.txt",
+		&artifact.Artifact{Data: []byte("x")},
+	)
+	require.ErrorIs(t, err, ErrEmptySessionInfo)
+
+	sessionInfo := artifact.SessionInfo{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session456",
+	}
+	_, err = s.SaveArtifact(ctx, sessionInfo, "", &artifact.Artifact{})
+	require.ErrorIs(t, err, ErrEmptyFilename)
+
+	_, err = s.SaveArtifact(ctx, sessionInfo, "a\x00b", &artifact.Artifact{})
+	require.ErrorIs(t, err, ErrInvalidFilename)
+
+	_, err = s.SaveArtifact(ctx, sessionInfo, "test.txt", nil)
+	require.ErrorIs(t, err, ErrNilArtifact)
+}
+
+func TestService_ValidatesInputs(t *testing.T) {
+	s, _ := createMockService()
+	ctx := context.Background()
+
+	_, err := s.ListArtifactKeys(ctx, artifact.SessionInfo{})
+	require.ErrorIs(t, err, ErrEmptySessionInfo)
+
+	_, err = s.LoadArtifact(ctx, artifact.SessionInfo{}, "x", nil)
+	require.ErrorIs(t, err, ErrEmptySessionInfo)
+
+	err = s.DeleteArtifact(ctx, artifact.SessionInfo{}, "x")
+	require.ErrorIs(t, err, ErrEmptySessionInfo)
+
+	_, err = s.ListVersions(ctx, artifact.SessionInfo{}, "x")
+	require.ErrorIs(t, err, ErrEmptySessionInfo)
+
+	sessionInfo := artifact.SessionInfo{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session456",
+	}
+
+	_, err = s.LoadArtifact(ctx, sessionInfo, "", nil)
+	require.ErrorIs(t, err, ErrEmptyFilename)
+
+	err = s.DeleteArtifact(ctx, sessionInfo, "")
+	require.ErrorIs(t, err, ErrEmptyFilename)
+
+	_, err = s.ListVersions(ctx, sessionInfo, "")
+	require.ErrorIs(t, err, ErrEmptyFilename)
+
+	const invalidName = "a\x00b"
+
+	_, err = s.LoadArtifact(ctx, sessionInfo, invalidName, nil)
+	require.ErrorIs(t, err, ErrInvalidFilename)
+
+	err = s.DeleteArtifact(ctx, sessionInfo, invalidName)
+	require.ErrorIs(t, err, ErrInvalidFilename)
+
+	_, err = s.ListVersions(ctx, sessionInfo, invalidName)
+	require.ErrorIs(t, err, ErrInvalidFilename)
+}
+
+func TestValidateSessionInfo(t *testing.T) {
+	require.ErrorIs(t, validateSessionInfo(artifact.SessionInfo{}),
+		ErrEmptySessionInfo)
+
+	info := artifact.SessionInfo{
+		UserID:    "u",
+		SessionID: "s",
+	}
+	require.ErrorIs(t, validateSessionInfo(info), ErrEmptySessionInfo)
+
+	info = artifact.SessionInfo{
+		AppName:   "a",
+		SessionID: "s",
+	}
+	require.ErrorIs(t, validateSessionInfo(info), ErrEmptySessionInfo)
+
+	info = artifact.SessionInfo{
+		AppName: "a",
+		UserID:  "u",
+	}
+	require.ErrorIs(t, validateSessionInfo(info), ErrEmptySessionInfo)
+
+	info = artifact.SessionInfo{
+		AppName:   "a",
+		UserID:    "u",
+		SessionID: "s",
+	}
+	require.NoError(t, validateSessionInfo(info))
+}
+
+func TestExtractFilenameFromObjectKey(t *testing.T) {
+	const prefix = "p/"
+
+	assert.Empty(t, extractFilenameFromObjectKey("x/out/0", prefix))
+	assert.Empty(t, extractFilenameFromObjectKey(prefix, prefix))
+	assert.Empty(t, extractFilenameFromObjectKey(prefix+"file", prefix))
+
+	got := extractFilenameFromObjectKey(prefix+"out/a.txt/0", prefix)
+	assert.Equal(t, "out/a.txt", got)
+
+	got = extractFilenameFromObjectKey(prefix+" out/a.txt /0", prefix)
+	assert.Equal(t, "out/a.txt", got)
 }
 
 func TestLoadNonexistentArtifact(t *testing.T) {

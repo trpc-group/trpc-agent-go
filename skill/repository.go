@@ -10,8 +10,11 @@
 //
 
 // Package skill provides a model-agnostic Agent Skills repository.
-// A skill is a folder containing a SKILL.md file with YAML front
-// matter and a Markdown body, plus optional doc files.
+// A skill is a folder containing a SKILL.md file with an optional YAML front
+// matter block and a Markdown body, plus optional doc files.
+//
+// If the front matter is missing or does not specify `name`, the skill name
+// falls back to the folder name.
 package skill
 
 import (
@@ -128,12 +131,19 @@ func (r *FSRepository) scan() error {
 				return nil
 			}
 			sum, err3 := parseSummary(sf)
-			if err3 != nil || sum.Name == "" {
+			if err3 != nil {
+				return nil
+			}
+			name := strings.TrimSpace(sum.Name)
+			if name == "" {
+				name = filepath.Base(p)
+			}
+			if strings.TrimSpace(name) == "" {
 				return nil
 			}
 			// Record first occurrence; later ones ignored.
-			if _, ok := r.index[sum.Name]; !ok {
-				r.index[sum.Name] = p
+			if _, ok := r.index[name]; !ok {
+				r.index[name] = p
 			}
 			return nil
 		})
@@ -214,16 +224,11 @@ func (r *FSRepository) readDocs(dir string) []Doc {
 
 // parseSummary returns front matter name/description only.
 func parseSummary(path string) (Summary, error) {
-	f, err := os.Open(path)
+	b, err := os.ReadFile(path)
 	if err != nil {
 		return Summary{}, err
 	}
-	defer f.Close()
-	rd := bufio.NewReader(f)
-	fm, _, err := readFrontMatter(rd)
-	if err != nil {
-		return Summary{}, err
-	}
+	fm, _ := splitFrontMatter(string(b))
 	s := Summary{
 		Name:        fm["name"],
 		Description: fm["description"],
@@ -335,8 +340,19 @@ func isDocFile(name string) bool {
 	return strings.HasSuffix(n, ".md") || strings.HasSuffix(n, ".txt")
 }
 
-// State key prefixes used for skills.
+// State keys used for skills.
 const (
 	StateKeyLoadedPrefix = "temp:skill:loaded:"
 	StateKeyDocsPrefix   = "temp:skill:docs:"
+	// StateKeyLoadedByAgentPrefix scopes skill-loaded markers by agent name.
+	// This prevents a sub-agent's skill_load from leaking into a parent agent's
+	// prompt in multi-agent runs that share a Session.
+	StateKeyLoadedByAgentPrefix = "temp:skill:loaded_by_agent:"
+	// StateKeyDocsByAgentPrefix scopes doc selections by agent name.
+	StateKeyDocsByAgentPrefix = "temp:skill:docs_by_agent:"
+	// StateKeyArtifacts stores per-tool-call artifact refs for replay. The value
+	// is a JSON object like:
+	// {"tool_call_id":"...","artifacts":[{"name":"...","version":3,
+	// "ref":"artifact://...@3"}]}
+	StateKeyArtifacts = "temp:skill:artifacts"
 )

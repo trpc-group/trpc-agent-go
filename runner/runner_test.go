@@ -166,12 +166,56 @@ func TestRunner_SessionIntegration(t *testing.T) {
 	// Verify user event.
 	userEvent := sess.Events[0]
 	assert.Equal(t, authorUser, userEvent.Author)
+	assert.Equal(t, "test-app", userEvent.FilterKey)
 	assert.Equal(t, "Hello, world!", userEvent.Response.Choices[0].Message.Content)
 
 	// Verify agent event.
 	agentEvent := sess.Events[1]
 	assert.Equal(t, "test-agent", agentEvent.Author)
 	assert.Contains(t, agentEvent.Response.Choices[0].Message.Content, "Hello, world!")
+}
+
+func TestRunner_Run_WithEventFilterKey(t *testing.T) {
+	sessionService := sessioninmemory.NewSessionService()
+	mockAgent := &mockAgent{name: "test-agent"}
+	runner := NewRunner(
+		"test-app",
+		mockAgent,
+		WithSessionService(sessionService),
+	)
+
+	ctx := context.Background()
+	userID := "test-user"
+	sessionID := "test-session"
+	message := model.NewUserMessage("Hello, world!")
+	const filterKey = "test-app/role/admin"
+
+	eventCh, err := runner.Run(
+		ctx,
+		userID,
+		sessionID,
+		message,
+		agent.WithEventFilterKey(filterKey),
+	)
+	require.NoError(t, err)
+
+	// Drain all events to ensure persistence is complete.
+	for range eventCh {
+	}
+
+	sessionKey := session.Key{
+		AppName:   "test-app",
+		UserID:    userID,
+		SessionID: sessionID,
+	}
+	sess, err := sessionService.GetSession(ctx, sessionKey)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, sess.Events, 2)
+
+	userEvent := sess.Events[0]
+	assert.Equal(t, authorUser, userEvent.Author)
+	assert.Equal(t, filterKey, userEvent.FilterKey)
 }
 
 func TestRunner_SessionIntegration_MultimodalUserMessage(t *testing.T) {
@@ -1519,6 +1563,71 @@ func (m *graphDoneAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan
 	return ch, nil
 }
 
+type fallbackCompletionAgent struct {
+	name        string
+	delta       map[string][]byte
+	errType     string
+	errMessage  string
+	successText string
+}
+
+func (m *fallbackCompletionAgent) Info() agent.Info {
+	return agent.Info{Name: m.name}
+}
+
+func (m *fallbackCompletionAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+func (m *fallbackCompletionAgent) FindSubAgent(name string) agent.Agent {
+	return nil
+}
+
+func (m *fallbackCompletionAgent) Tools() []tool.Tool {
+	return nil
+}
+
+func (m *fallbackCompletionAgent) Run(
+	ctx context.Context,
+	inv *agent.Invocation,
+) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 3)
+	if len(m.delta) > 0 {
+		ch <- event.New(
+			inv.InvocationID,
+			m.name,
+			event.WithStateDelta(m.delta),
+		)
+	}
+	if m.errMessage != "" {
+		ch <- event.NewErrorEvent(
+			inv.InvocationID,
+			m.name,
+			m.errType,
+			m.errMessage,
+		)
+	}
+	if m.successText != "" {
+		ch <- event.NewResponseEvent(
+			inv.InvocationID,
+			m.name,
+			&model.Response{
+				ID:   "fallback-success",
+				Done: true,
+				Choices: []model.Choice{{
+					Index: 0,
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: m.successText,
+					},
+				}},
+			},
+		)
+	}
+	close(ch)
+	return ch, nil
+}
+
 func TestNewRunner_DefaultSessionService(t *testing.T) {
 	// No WithSessionService option -> should default to inmemory session service.
 	r := NewRunner("app", &noOpAgent{name: "a"})
@@ -1600,6 +1709,167 @@ func TestEmitRunnerCompletion_AppendErrorStillEmits(t *testing.T) {
 	require.True(t, last.Done)
 	require.Equal(t, model.ObjectTypeRunnerCompletion, last.Object)
 	// Even though append failed internally, the completion event is still emitted.
+}
+
+func TestRunner_CompletionIncludesFallbackBusinessState(t *testing.T) {
+	const (
+		stateKey   = "_node_error_"
+		stateValue = "fatal callback"
+		errType    = model.ErrorTypeFlowError
+		errMessage = "execution failed"
+	)
+
+	svc := sessioninmemory.NewSessionService()
+	ag := &fallbackCompletionAgent{
+		name: "fallback",
+		delta: map[string][]byte{
+			stateKey:              []byte(stateValue),
+			graph.MetadataKeyNode: []byte(`{"node_id":"n1"}`),
+			graph.MetadataKeyTool: []byte(`{"tool_id":"t1"}`),
+		},
+		errType:    errType,
+		errMessage: errMessage,
+	}
+	r := NewRunner("app", ag, WithSessionService(svc))
+
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage(""),
+	)
+	require.NoError(t, err)
+
+	var completion *event.Event
+	for e := range ch {
+		if e.IsRunnerCompletion() {
+			completion = e
+		}
+	}
+	require.NotNil(t, completion)
+	require.NotNil(t, completion.Response)
+	require.Nil(t, completion.Response.Error)
+	require.Equal(t, stateValue,
+		string(completion.StateDelta[stateKey]))
+	require.NotContains(t, completion.StateDelta, graph.MetadataKeyNode)
+	require.NotContains(t, completion.StateDelta, graph.MetadataKeyTool)
+}
+
+func TestRunner_CompletionSkipsFallbackAfterRecovery(t *testing.T) {
+	const (
+		stateKey   = "_node_error_"
+		stateValue = "fatal callback"
+		errMessage = "execution failed"
+		successMsg = "recovered"
+	)
+
+	svc := sessioninmemory.NewSessionService()
+	ag := &fallbackCompletionAgent{
+		name:        "fallback",
+		delta:       map[string][]byte{stateKey: []byte(stateValue)},
+		errType:     model.ErrorTypeFlowError,
+		errMessage:  errMessage,
+		successText: successMsg,
+	}
+	r := NewRunner("app", ag, WithSessionService(svc))
+
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage(""),
+	)
+	require.NoError(t, err)
+
+	var completion *event.Event
+	for e := range ch {
+		if e.IsRunnerCompletion() {
+			completion = e
+		}
+	}
+	require.NotNil(t, completion)
+	require.NotNil(t, completion.Response)
+	require.Nil(t, completion.Response.Error)
+	require.Empty(t, completion.StateDelta)
+}
+
+func TestCaptureCompletionFallback_IgnoresPartialError(t *testing.T) {
+	loop := &eventLoopContext{}
+	r := &runner{}
+
+	r.captureCompletionFallback(loop, &event.Event{
+		Response: &model.Response{
+			IsPartial: true,
+			Error:     &model.ResponseError{Message: "boom"},
+		},
+	})
+
+	require.Nil(t, loop.finalError)
+}
+
+func TestMergeCompletionFallbackStateDelta(t *testing.T) {
+	t.Run("empty src", func(t *testing.T) {
+		dst := map[string][]byte{"keep": []byte("v")}
+
+		got := mergeCompletionFallbackStateDelta(dst, nil)
+
+		require.Equal(t, dst, got)
+		require.Equal(t, "v", string(got["keep"]))
+	})
+
+	t.Run("filters metadata and copies business keys", func(t *testing.T) {
+		const (
+			stateKey   = "node_error"
+			nilState   = "nil_state"
+			stateValue = "fatal"
+		)
+
+		srcValue := []byte(stateValue)
+		got := mergeCompletionFallbackStateDelta(nil, map[string][]byte{
+			stateKey:              srcValue,
+			nilState:              nil,
+			graph.MetadataKeyNode: []byte(`{"node_id":"n1"}`),
+			graph.MetadataKeyTool: []byte(`{"tool_id":"t1"}`),
+		})
+
+		require.Equal(t, stateValue, string(got[stateKey]))
+		require.Contains(t, got, nilState)
+		require.Nil(t, got[nilState])
+		require.NotContains(t, got, graph.MetadataKeyNode)
+		require.NotContains(t, got, graph.MetadataKeyTool)
+
+		srcValue[0] = 'F'
+		require.Equal(t, stateValue, string(got[stateKey]))
+	})
+}
+
+func TestCloneResponseError(t *testing.T) {
+	t.Run("nil", func(t *testing.T) {
+		require.Nil(t, cloneResponseError(nil))
+	})
+
+	t.Run("deep copy", func(t *testing.T) {
+		param := "p"
+		code := "c"
+		in := &model.ResponseError{
+			Type:    model.ErrorTypeFlowError,
+			Message: "boom",
+			Param:   &param,
+			Code:    &code,
+		}
+
+		got := cloneResponseError(in)
+
+		require.NotNil(t, got)
+		require.NotSame(t, in, got)
+		require.NotSame(t, in.Param, got.Param)
+		require.NotSame(t, in.Code, got.Code)
+
+		*in.Param = "mutated-param"
+		*in.Code = "mutated-code"
+		require.Equal(t, "p", *got.Param)
+		require.Equal(t, "c", *got.Code)
+	})
 }
 
 func TestGraphCompletionNotPersistedAsMessage(t *testing.T) {

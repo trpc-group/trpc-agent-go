@@ -20,6 +20,9 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
 )
 
 const (
@@ -56,23 +59,10 @@ func New(
 }
 
 // MessageRequest matches the gateway /messages JSON payload.
-type MessageRequest struct {
-	Channel   string `json:"channel,omitempty"`
-	From      string `json:"from,omitempty"`
-	Thread    string `json:"thread,omitempty"`
-	MessageID string `json:"message_id,omitempty"`
-	Text      string `json:"text,omitempty"`
-
-	UserID    string `json:"user_id,omitempty"`
-	SessionID string `json:"session_id,omitempty"`
-	RequestID string `json:"request_id,omitempty"`
-}
+type MessageRequest = gwproto.MessageRequest
 
 // APIError matches gateway error payloads.
-type APIError struct {
-	Type    string `json:"type"`
-	Message string `json:"message"`
-}
+type APIError = gwproto.APIError
 
 // MessageResponse matches the gateway /messages response JSON.
 type MessageResponse struct {
@@ -83,6 +73,17 @@ type MessageResponse struct {
 	Error     *APIError `json:"error,omitempty"`
 
 	StatusCode int `json:"-"`
+}
+
+// ScheduledJobSummary is a transport-safe view of one scheduled job.
+type ScheduledJobSummary struct {
+	ID         string     `json:"id,omitempty"`
+	Name       string     `json:"name,omitempty"`
+	Enabled    bool       `json:"enabled"`
+	Schedule   string     `json:"schedule,omitempty"`
+	NextRunAt  *time.Time `json:"next_run_at,omitempty"`
+	LastStatus string     `json:"last_status,omitempty"`
+	LastError  string     `json:"last_error,omitempty"`
 }
 
 // SendMessage sends one message to the gateway handler.

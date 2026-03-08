@@ -157,23 +157,35 @@ func (c *defaultA2AMessageToAgentMessage) ConvertToAgentMessage(
 
 // defaultEventToA2AMessage is the default implementation of EventToA2AMessageConverter.
 type defaultEventToA2AMessage struct {
-	adkCompatibility bool // Enable ADK-compatible metadata keys (e.g., "adk_type" instead of "type")
+	// Enable ADK-compatible metadata keys (for example, "adk_type" instead
+	// of "type").
+	adkCompatibility   bool
+	streamingEventType StreamingEventType
 }
 
-// getMetadataTypeKey returns the appropriate metadata type key based on ADK compatibility setting
-func (c *defaultEventToA2AMessage) getMetadataTypeKey() string {
+// setMetadata writes value under the standard key, and additionally under the
+// ADK-prefixed key when ADK compatibility is enabled.
+func (c *defaultEventToA2AMessage) setMetadata(m map[string]any, key string, value any) {
+	m[key] = value
 	if c.adkCompatibility {
-		return ia2a.GetADKMetadataKey(ia2a.DataPartMetadataTypeKey)
+		m[ia2a.GetADKMetadataKey(key)] = value
 	}
-	return ia2a.DataPartMetadataTypeKey
 }
 
-// getThoughtMetadataKey returns the appropriate thought metadata key based on ADK compatibility setting
-func (c *defaultEventToA2AMessage) getThoughtMetadataKey() string {
-	if c.adkCompatibility {
-		return ia2a.GetADKMetadataKey(ia2a.TextPartMetadataThoughtKey)
+// setPartTypeMetadata sets the DataPart type metadata.
+func (c *defaultEventToA2AMessage) setPartTypeMetadata(dataPart *protocol.DataPart, typeValue string) {
+	if dataPart.Metadata == nil {
+		dataPart.Metadata = make(map[string]any)
 	}
-	return ia2a.TextPartMetadataThoughtKey
+	c.setMetadata(dataPart.Metadata, ia2a.DataPartMetadataTypeKey, typeValue)
+}
+
+// setThoughtMetadata sets the thought metadata on a TextPart.
+func (c *defaultEventToA2AMessage) setThoughtMetadata(textPart *protocol.TextPart) {
+	if textPart.Metadata == nil {
+		textPart.Metadata = make(map[string]any)
+	}
+	c.setMetadata(textPart.Metadata, ia2a.TextPartMetadataThoughtKey, true)
 }
 
 // ConvertToA2AMessage converts an Agent event to an A2A protocol message.
@@ -235,51 +247,31 @@ func (c *defaultEventToA2AMessage) convertCodeExecutionToA2AMessage(
 		return nil, nil
 	}
 
-	var parts []protocol.Part
 	var dataPart protocol.DataPart
-	metadataTypeKey := c.getMetadataTypeKey()
 
 	if evt.ContainsTag(event.CodeExecutionResultTag) {
-		// Code execution result event
-		if c.adkCompatibility {
-			dataPart = protocol.NewDataPart(map[string]any{
-				ia2a.CodeExecutionFieldOutcome: "",
-				ia2a.CodeExecutionFieldOutput:  choice.Message.Content,
-			})
-		} else {
-			dataPart = protocol.NewDataPart(map[string]any{
-				ia2a.CodeExecutionFieldContent: choice.Message.Content,
-			})
-		}
-		// set metadata type key
-		dataPart.Metadata = map[string]any{
-			metadataTypeKey: ia2a.DataPartMetadataTypeCodeExecutionResult,
-		}
+		dataPart = protocol.NewDataPart(map[string]any{
+			ia2a.CodeExecutionFieldOutput:  choice.Message.Content,
+			ia2a.CodeExecutionFieldOutcome: "",
+		})
+		c.setPartTypeMetadata(&dataPart, ia2a.DataPartMetadataTypeCodeExecutionResult)
 	} else if evt.ContainsTag(event.CodeExecutionTag) {
-		// Code execution event
-		if c.adkCompatibility {
-			dataPart = protocol.NewDataPart(map[string]any{
-				ia2a.CodeExecutionFieldCode:     choice.Message.Content,
-				ia2a.CodeExecutionFieldLanguage: "unknown",
-			})
-		} else {
-			dataPart = protocol.NewDataPart(map[string]any{
-				ia2a.CodeExecutionFieldContent: choice.Message.Content,
-			})
-		}
-		// set metadata type key
-		dataPart.Metadata = map[string]any{
-			metadataTypeKey: ia2a.DataPartMetadataTypeExecutableCode,
-		}
+		dataPart = protocol.NewDataPart(map[string]any{
+			ia2a.CodeExecutionFieldCode:     choice.Message.Content,
+			ia2a.CodeExecutionFieldLanguage: "unknown",
+		})
+		c.setPartTypeMetadata(&dataPart, ia2a.DataPartMetadataTypeExecutableCode)
+	} else {
+		return nil, nil
 	}
 
-	parts = append(parts, &dataPart)
+	parts := []protocol.Part{&dataPart}
 	msg := protocol.NewMessage(protocol.MessageRoleAgent, parts)
 
-	// Pass Tag field to A2A metadata for client to restore event tag
 	msg.Metadata = map[string]any{
 		ia2a.MessageMetadataObjectTypeKey: evt.Response.Object,
 		ia2a.MessageMetadataTagKey:        evt.Tag,
+		ia2a.MessageMetadataResponseIDKey: evt.Response.ID,
 	}
 	return &msg, nil
 }
@@ -298,9 +290,7 @@ func (c *defaultEventToA2AMessage) convertContentToA2AMessage(
 	// Following ADK pattern: thought content is stored in TextPart metadata
 	if choice.Message.ReasoningContent != "" {
 		reasoningPart := protocol.NewTextPart(choice.Message.ReasoningContent)
-		reasoningPart.Metadata = map[string]any{
-			c.getThoughtMetadataKey(): true,
-		}
+		c.setThoughtMetadata(&reasoningPart)
 		parts = append(parts, reasoningPart)
 	}
 
@@ -314,6 +304,7 @@ func (c *defaultEventToA2AMessage) convertContentToA2AMessage(
 		msg.Metadata = map[string]any{
 			ia2a.MessageMetadataObjectTypeKey: event.Response.Object,
 			ia2a.MessageMetadataTagKey:        event.Tag,
+			ia2a.MessageMetadataResponseIDKey: event.Response.ID,
 		}
 		return &msg, nil
 	}
@@ -326,8 +317,12 @@ func (c *defaultEventToA2AMessage) convertContentToA2AMessage(
 	return nil, nil
 }
 
-// ConvertStreamingToA2AMessage converts an Agent event to an A2A protocol message for streaming.
-// For streaming responses, it returns delta content as task artifact updates and converts tool calls.
+// ConvertStreamingToA2AMessage converts an Agent event to an A2A protocol
+// message for streaming.
+//
+// For streaming responses, it converts delta content, tool calls, and code
+// execution events into A2A streaming results. The concrete A2A type can be
+// configured via WithStreamingEventType.
 func (c *defaultEventToA2AMessage) ConvertStreamingToA2AMessage(
 	ctx context.Context,
 	evt *event.Event,
@@ -368,8 +363,54 @@ func (c *defaultEventToA2AMessage) ConvertStreamingToA2AMessage(
 	return c.convertDeltaContentToA2AStreamingMessage(ctx, evt, options)
 }
 
-// convertDeltaContentToA2AStreamingMessage converts delta content to A2A streaming message.
-// It creates a task artifact update event for incremental content updates.
+func (c *defaultEventToA2AMessage) convertPartsToA2AStreamingResult(
+	evt *event.Event,
+	options EventToA2AStreamingOptions,
+	parts []protocol.Part,
+) protocol.StreamingMessageResult {
+	if evt == nil || evt.Response == nil || len(parts) == 0 {
+		return nil
+	}
+
+	if c.streamingEventType == StreamingEventTypeMessage {
+		ctxID := options.CtxID
+		taskID := options.TaskID
+		msg := protocol.NewMessageWithContext(
+			protocol.MessageRoleAgent,
+			parts,
+			&taskID,
+			&ctxID,
+		)
+		if evt.Response.ID != "" {
+			msg.MessageID = evt.Response.ID
+		}
+		msg.Metadata = map[string]any{
+			ia2a.MessageMetadataObjectTypeKey: evt.Response.Object,
+			ia2a.MessageMetadataTagKey:        evt.Tag,
+			ia2a.MessageMetadataResponseIDKey: evt.Response.ID,
+		}
+		return &msg
+	}
+
+	taskArtifact := protocol.NewTaskArtifactUpdateEvent(
+		options.TaskID,
+		options.CtxID,
+		protocol.Artifact{
+			ArtifactID: evt.Response.ID,
+			Parts:      parts,
+		},
+		false,
+	)
+	taskArtifact.Metadata = map[string]any{
+		ia2a.MessageMetadataObjectTypeKey: evt.Response.Object,
+		ia2a.MessageMetadataTagKey:        evt.Tag,
+		ia2a.MessageMetadataResponseIDKey: evt.Response.ID,
+	}
+	return &taskArtifact
+}
+
+// convertDeltaContentToA2AStreamingMessage converts delta content to an A2A
+// streaming result.
 func (c *defaultEventToA2AMessage) convertDeltaContentToA2AStreamingMessage(
 	ctx context.Context,
 	event *event.Event,
@@ -382,9 +423,7 @@ func (c *defaultEventToA2AMessage) convertDeltaContentToA2AStreamingMessage(
 	// Add reasoning content as a separate TextPart with thought metadata
 	if choice.Delta.ReasoningContent != "" {
 		reasoningPart := protocol.NewTextPart(choice.Delta.ReasoningContent)
-		reasoningPart.Metadata = map[string]any{
-			c.getThoughtMetadataKey(): true,
-		}
+		c.setThoughtMetadata(&reasoningPart)
 		parts = append(parts, reasoningPart)
 	}
 
@@ -394,22 +433,7 @@ func (c *defaultEventToA2AMessage) convertDeltaContentToA2AStreamingMessage(
 	}
 
 	if len(parts) > 0 {
-		// Send as task artifact update (not status update) for incremental content
-		// This follows ADK pattern: artifacts for content, status for state changes
-		taskArtifact := protocol.NewTaskArtifactUpdateEvent(
-			options.TaskID,
-			options.CtxID,
-			protocol.Artifact{
-				ArtifactID: event.Response.ID,
-				Parts:      parts,
-			},
-			false,
-		)
-		taskArtifact.Metadata = map[string]any{
-			ia2a.MessageMetadataObjectTypeKey: event.Response.Object,
-			ia2a.MessageMetadataTagKey:        event.Tag,
-		}
-		return &taskArtifact, nil
+		return c.convertPartsToA2AStreamingResult(event, options, parts), nil
 	}
 
 	log.DebugfContext(
@@ -479,12 +503,8 @@ func (c *defaultEventToA2AMessage) convertToolCallToA2AMessage(
 				ia2a.ToolCallFieldArgs: string(toolCall.Function.Arguments),
 			}
 
-			// Create DataPart with metadata indicating this is a function call
 			dataPart := protocol.NewDataPart(toolCallData)
-
-			dataPart.Metadata = map[string]any{
-				c.getMetadataTypeKey(): ia2a.DataPartMetadataTypeFunctionCall,
-			}
+			c.setPartTypeMetadata(&dataPart, ia2a.DataPartMetadataTypeFunctionCall)
 			parts = append(parts, dataPart)
 		}
 	}
@@ -505,12 +525,8 @@ func (c *defaultEventToA2AMessage) convertToolCallToA2AMessage(
 				toolResponseData[ia2a.ToolCallFieldResponse] = choice.Message.Content
 			}
 
-			// Create DataPart with metadata indicating this is a function response
 			dataPart := protocol.NewDataPart(toolResponseData)
-
-			dataPart.Metadata = map[string]any{
-				c.getMetadataTypeKey(): ia2a.DataPartMetadataTypeFunctionResp,
-			}
+			c.setPartTypeMetadata(&dataPart, ia2a.DataPartMetadataTypeFunctionResp)
 			parts = append(parts, dataPart)
 		}
 	}
@@ -523,17 +539,16 @@ func (c *defaultEventToA2AMessage) convertToolCallToA2AMessage(
 	msg.Metadata = map[string]any{
 		ia2a.MessageMetadataObjectTypeKey: event.Response.Object,
 		ia2a.MessageMetadataTagKey:        event.Tag,
+		ia2a.MessageMetadataResponseIDKey: event.Response.ID,
 	}
 	return &msg, nil
 }
 
 // convertToolCallToA2AStreamingMessage converts tool call events to A2A streaming messages.
-// For streaming mode, tool calls are sent as TaskArtifactUpdateEvent.
 func (c *defaultEventToA2AMessage) convertToolCallToA2AStreamingMessage(
 	event *event.Event,
 	options EventToA2AStreamingOptions,
 ) (protocol.StreamingMessageResult, error) {
-	// For streaming, we convert tool calls to task artifact updates
 	// First get the message parts using the unary converter
 	unaryResult, err := c.convertToolCallToA2AMessage(event)
 	if err != nil || unaryResult == nil {
@@ -545,30 +560,18 @@ func (c *defaultEventToA2AMessage) convertToolCallToA2AStreamingMessage(
 		return nil, nil
 	}
 
-	// Create a task artifact update with the tool call parts
-	taskArtifact := protocol.NewTaskArtifactUpdateEvent(
-		options.TaskID,
-		options.CtxID,
-		protocol.Artifact{
-			ArtifactID: event.Response.ID,
-			Parts:      msg.Parts,
-		},
-		false, // append=false for tool calls (complete events, not incremental)
-	)
-	taskArtifact.Metadata = map[string]any{
-		ia2a.MessageMetadataObjectTypeKey: event.Response.Object,
-		ia2a.MessageMetadataTagKey:        event.Tag,
-	}
-	return &taskArtifact, nil
+	return c.convertPartsToA2AStreamingResult(
+		event,
+		options,
+		msg.Parts,
+	), nil
 }
 
 // convertCodeExecutionToA2AStreamingMessage converts code execution events to A2A streaming messages.
-// For streaming mode, code execution events are sent as TaskArtifactUpdateEvent.
 func (c *defaultEventToA2AMessage) convertCodeExecutionToA2AStreamingMessage(
 	evt *event.Event,
 	options EventToA2AStreamingOptions,
 ) (protocol.StreamingMessageResult, error) {
-	// For streaming, we convert code execution to task artifact updates
 	// First get the message parts using the unary converter
 	unaryResult, err := c.convertCodeExecutionToA2AMessage(evt)
 	if err != nil || unaryResult == nil {
@@ -580,19 +583,9 @@ func (c *defaultEventToA2AMessage) convertCodeExecutionToA2AStreamingMessage(
 		return nil, nil
 	}
 
-	// Create a task artifact update with the code execution parts
-	taskArtifact := protocol.NewTaskArtifactUpdateEvent(
-		options.TaskID,
-		options.CtxID,
-		protocol.Artifact{
-			ArtifactID: evt.Response.ID,
-			Parts:      msg.Parts,
-		},
-		false, // append=false for code execution (complete events, not incremental)
-	)
-	taskArtifact.Metadata = map[string]any{
-		ia2a.MessageMetadataObjectTypeKey: evt.Response.Object,
-		ia2a.MessageMetadataTagKey:        evt.Tag,
-	}
-	return &taskArtifact, nil
+	return c.convertPartsToA2AStreamingResult(
+		evt,
+		options,
+		msg.Parts,
+	), nil
 }

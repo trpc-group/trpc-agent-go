@@ -395,14 +395,18 @@ func TestInvocation_cloneState(t *testing.T) {
 			state: map[string]any{
 				flusherStateKey: "flush-holder",
 				barrierStateKey: "barrier-holder",
-				"other":         "skip",
+				streamHubStateKey: &StreamHub{
+					streams: make(map[string]*stream),
+				},
+				"other": "skip",
 			},
 		}
 		cloned := inv.cloneState()
 		require.NotNil(t, cloned)
-		require.Len(t, cloned, 2)
+		require.Len(t, cloned, 3)
 		require.Equal(t, "flush-holder", cloned[flusherStateKey])
 		require.Equal(t, "barrier-holder", cloned[barrierStateKey])
+		require.NotNil(t, cloned[streamHubStateKey])
 		assert.NotContains(t, cloned, "other")
 	})
 }

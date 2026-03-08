@@ -15,6 +15,9 @@ import (
 	"os"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/app"
+
+	_ "trpc.group/trpc-go/trpc-agent-go/openclaw/plugins/stdin"
+	_ "trpc.group/trpc-go/trpc-agent-go/openclaw/plugins/telegram"
 )
 
 func main() {

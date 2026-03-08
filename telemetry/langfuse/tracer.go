@@ -36,6 +36,9 @@ func Start(ctx context.Context, opts ...Option) (clean func(context.Context) err
 		opt(config)
 	}
 
+	// Apply truncation config early so callers can rely on it even if Start returns an error.
+	setObservationMaxBytes(config.maxObservationLeafValueBytes)
+
 	if config.secretKey == "" || config.publicKey == "" || config.host == "" {
 		return nil, fmt.Errorf("langfuse: secret key, public key and host must be provided. Host should be in 'hostname:port' format (e.g., 'cloud.langfuse.com:443')")
 	}

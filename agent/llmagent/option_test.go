@@ -54,6 +54,15 @@ func TestWithChannelBufferSize(t *testing.T) {
 	}
 }
 
+func TestWithSyncSummaryIntraRun(t *testing.T) {
+	opts := &Options{}
+	WithSyncSummaryIntraRun(true)(opts)
+	require.True(t, opts.SyncSummaryIntraRun)
+
+	WithSyncSummaryIntraRun(false)(opts)
+	require.False(t, opts.SyncSummaryIntraRun)
+}
+
 func TestWithMessageFilterMode(t *testing.T) {
 	tests := []struct {
 		name                   string
@@ -160,6 +169,22 @@ func TestWithSkillLoadMode(t *testing.T) {
 	require.Equal(t, SkillLoadModeSession, b.option.SkillLoadMode)
 }
 
+func TestWithMaxLoadedSkills(t *testing.T) {
+	const (
+		agentName = "test-agent"
+		maxSkills = 3
+	)
+
+	a := New(agentName)
+	require.Equal(t, 0, a.option.MaxLoadedSkills)
+
+	b := New(agentName, WithMaxLoadedSkills(maxSkills))
+	require.Equal(t, maxSkills, b.option.MaxLoadedSkills)
+
+	c := New(agentName, WithMaxLoadedSkills(0))
+	require.Equal(t, 0, c.option.MaxLoadedSkills)
+}
+
 func TestWithSkillsLoadedContentInToolResults(t *testing.T) {
 	a := New("test-agent")
 	require.False(t, a.option.SkillsLoadedContentInToolResults)
@@ -247,6 +272,24 @@ func TestWithSkillRunDeniedCommands_CopiesSlice(t *testing.T) {
 
 	in[0] = "rm"
 	require.Equal(t, []string{"echo", "ls"}, opts.skillRunDeniedCommands)
+}
+
+func TestWithSkillRunForceSaveArtifacts(t *testing.T) {
+	opts := &Options{}
+	WithSkillRunForceSaveArtifacts(true)(opts)
+	require.True(t, opts.skillRunForceSaveArtifacts)
+
+	WithSkillRunForceSaveArtifacts(false)(opts)
+	require.False(t, opts.skillRunForceSaveArtifacts)
+}
+
+func TestWithSkillRunRequireSkillLoaded(t *testing.T) {
+	opts := &Options{}
+	WithSkillRunRequireSkillLoaded(true)(opts)
+	require.True(t, opts.skillRunRequireSkillLoaded)
+
+	WithSkillRunRequireSkillLoaded(false)(opts)
+	require.False(t, opts.skillRunRequireSkillLoaded)
 }
 
 func TestWithSummaryFormatter(t *testing.T) {

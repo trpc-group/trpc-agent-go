@@ -134,28 +134,6 @@ func (s *datePrefixMemoryService) withDatePrefix(mem string) string {
 	return fmt.Sprintf(agenticDatePrefixFormat, date) + mem
 }
 
-// agenticQAInstruction is a strict instruction for the QA agent
-// to produce concise answers using memory_search tool.
-const agenticQAInstruction = `You are a memory retrieval assistant. Your ONLY job is to search memories and output a short factual answer.
-
-WORKFLOW:
-1. Call memory_search with the question as query.
-2. Read the returned memories. Prefer facts that include an explicit date prefix like "[DATE: ...]".
-3. Output ONLY the answer - no explanations, no context, no questions.
-
-RULES:
-- Your answer MUST be 1-8 words maximum.
-- For time questions, use the absolute date/year that appears in the memory text (e.g. "[DATE: 7 May 2023]" or "2022").
-- Do NOT use memory database timestamps (CreatedAt/UpdatedAt) or the current system date.
-- If a memory uses a relative phrase (like "last year"), resolve it ONLY using explicit dates found in the memories (e.g. the session date).
-- If memories contradict each other, prefer the one with the latest "[DATE: ...]".
-- If no relevant memory is found, output "` + fallbackAnswer + `" exactly.
-- Do NOT ask follow-up questions. Do NOT say "Could you provide more context".
-- Do NOT explain your reasoning. Do NOT add any prefix like "The answer is" or "Based on".
-- Output the bare answer only.
-
-EXAMPLES of good answers: "Paris", "2021", "7 May 2023", "Toyota Camry", "` + fallbackAnswer + `"`
-
 // AgenticEvaluator evaluates using an agent that can explicitly
 // call memory tools (add/search/etc.).
 type AgenticEvaluator struct {
@@ -224,7 +202,11 @@ func (e *AgenticEvaluator) Evaluate(
 	memSvc := baseMemSvc
 
 	// Phase 2: Answer questions via agent with memory_search.
-	qaAgent := newAgenticQAAgent(e.model, memSvc.Tools())
+	qaAgent := newAgenticQAAgent(
+		e.model,
+		memSvc.Tools(),
+		e.config.QASearchPasses,
+	)
 	qaRunner := runner.NewRunner(
 		agenticAppName,
 		qaAgent,
@@ -242,7 +224,7 @@ func (e *AgenticEvaluator) Evaluate(
 		sample, e.config.QAHistoryTurns,
 	)
 
-	for _, qa := range sample.QA {
+	for i, qa := range sample.QA {
 		qaResult, err := e.evaluateQA(
 			ctx, qaRunner, userKey, qa, historyMsgs,
 		)
@@ -254,6 +236,22 @@ func (e *AgenticEvaluator) Evaluate(
 				)
 			}
 			qaResult = qaResultFromError(qa, err)
+		}
+		if e.config.Verbose {
+			log.Printf("  [QA %d/%d] %s (%s)",
+				i+1, len(sample.QA),
+				qa.QuestionID, qa.Category,
+			)
+			if qaResult.Steps != nil {
+				logQATrace(
+					qa.QuestionID, qa.Question,
+					qa.Answer, qaResult.Predicted,
+					qaResult.Metrics, collectResult{
+						steps: qaResult.Steps,
+					},
+					qaResult.LatencyMs,
+				)
+			}
 		}
 		result.QAResults = append(result.QAResults, qaResult)
 		catAgg.Add(qa.Category, qaResult.Metrics)
@@ -285,7 +283,9 @@ func newAgenticAgent(m model.Model, tools []tool.Tool) agent.Agent {
 }
 
 func newAgenticQAAgent(
-	m model.Model, tools []tool.Tool,
+	m model.Model,
+	tools []tool.Tool,
+	searchPasses int,
 ) agent.Agent {
 	genConfig := model.GenerationConfig{
 		Stream:      false,
@@ -295,7 +295,9 @@ func newAgenticQAAgent(
 	return llmagent.New(
 		defaultAgentName,
 		llmagent.WithModel(m),
-		llmagent.WithInstruction(agenticQAInstruction),
+		llmagent.WithInstruction(
+			qaMemorySearchInstruction(searchPasses),
+		),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithTools(tools),
 		llmagent.WithMaxToolIterations(
@@ -414,5 +416,6 @@ func (e *AgenticEvaluator) evaluateQA(
 		Metrics:    m,
 		LatencyMs:  time.Since(start).Milliseconds(),
 		TokenUsage: &tu,
+		Steps:      res.steps,
 	}, nil
 }

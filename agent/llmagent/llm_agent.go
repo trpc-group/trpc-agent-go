@@ -172,8 +172,9 @@ func New(name string, opts ...Option) *LLMAgent {
 
 	// Create flow with the provided processors and options.
 	flowOpts := llmflow.Options{
-		ChannelBufferSize: options.ChannelBufferSize,
-		ModelCallbacks:    options.ModelCallbacks,
+		ChannelBufferSize:   options.ChannelBufferSize,
+		ModelCallbacks:      options.ModelCallbacks,
+		SyncSummaryIntraRun: options.SyncSummaryIntraRun,
 	}
 
 	a.flow = llmflow.New(
@@ -259,6 +260,14 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 			skillsOpts,
 			processor.WithSkillLoadMode(options.SkillLoadMode),
 		)
+		if options.MaxLoadedSkills > 0 {
+			skillsOpts = append(
+				skillsOpts,
+				processor.WithMaxLoadedSkills(
+					options.MaxLoadedSkills,
+				),
+			)
+		}
 		if options.SkillsLoadedContentInToolResults {
 			skillsOpts = append(
 				skillsOpts,
@@ -507,9 +516,30 @@ func registerTools(options *Options) ([]tool.Tool, map[string]bool) {
 				),
 			)
 		}
-		allTools = append(allTools, toolskill.NewRunTool(
-			options.skillsRepository, exec, runOpts...,
-		))
+		if options.skillRunForceSaveArtifacts {
+			runOpts = append(runOpts,
+				toolskill.WithForceSaveArtifacts(true),
+			)
+		}
+		if options.skillRunRequireSkillLoaded {
+			runOpts = append(runOpts,
+				toolskill.WithRequireSkillLoaded(true),
+			)
+		}
+		runTool := toolskill.NewRunTool(
+			options.skillsRepository,
+			exec,
+			runOpts...,
+		)
+		execTool := toolskill.NewExecTool(runTool)
+		allTools = append(
+			allTools,
+			runTool,
+			execTool,
+			toolskill.NewWriteStdinTool(execTool),
+			toolskill.NewPollSessionTool(execTool),
+			toolskill.NewKillSessionTool(execTool),
+		)
 	}
 
 	return allTools, userToolNames

@@ -46,6 +46,12 @@ type Config struct {
 	// Only applies to agentic and auto scenarios.
 	QAHistoryTurns int
 
+	// QASearchPasses controls how many memory_search calls
+	// the QA agent MUST perform before answering. 1 means
+	// a single search (default).
+	// Only applies to agentic and auto scenarios.
+	QASearchPasses int
+
 	// Debug options (primarily for benchmark diagnosis).
 	DebugDumpMemories bool
 	DebugMemLimit     int
@@ -60,6 +66,7 @@ func DefaultConfig() Config {
 		EnableLLMJudge:    false,
 		Verbose:           false,
 		SessionEventLimit: 1000,
+		QASearchPasses:    1,
 		DebugDumpMemories: false,
 		DebugMemLimit:     0,
 		DebugQALimit:      0,
@@ -77,6 +84,7 @@ type QAResult struct {
 	LatencyMs  int64             `json:"latency_ms"`
 	TokensUsed int               `json:"tokens_used,omitempty"`
 	TokenUsage *TokenUsage       `json:"token_usage,omitempty"`
+	Steps      []StepTrace       `json:"steps,omitempty"`
 }
 
 // SampleResult holds evaluation results for a single sample.

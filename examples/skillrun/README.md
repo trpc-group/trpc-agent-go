@@ -10,6 +10,8 @@ tool calls and tool responses, and executes skill scripts via the
 - Interactive chat with streaming or non-streaming modes
 - Agent Skills repository injection and overview
 - `skill_load` to load SKILL.md/doc content on demand
+- Automatic staging of user-uploaded file inputs into `work/inputs/`
+  when `skill_run` executes
 - `skill_run` to execute commands safely in a workspace, returning
   stdout/stderr and output files
   (and optionally saving files as artifacts)
@@ -148,11 +150,29 @@ In chat:
   hand-crafting JSON arguments in chat:
   `-artifacts -omit-inline -artifact-prefix user:`
 
+### Use with OpenClaw skills
+
+This repo vendors the upstream OpenClaw skill pack under `openclaw/skills/`.
+You can point this example at it:
+
+```bash
+cd examples/skillrun
+export SKILLS_ROOT="../../openclaw/skills"
+go run .
+```
+
 List and download saved artifacts:
 
 - `/artifacts` lists all artifact keys saved in this session.
 - `/pull <artifact_files.name> [version]` downloads a file to the
   `downloads/` directory.
+- `/upload <path>` attaches a local file as inline bytes.
+- `/upload_id <path>` uploads a file and attaches it by `file_id`.
+- `/upload_artifact <path>` uploads a file to the artifact service and
+  attaches it by `artifact://...` `file_id`.
+- By default, this example omits file content parts from requests sent to
+  the model provider (for compatibility). Use `-send-file-inputs` to pass
+  them through if your provider supports file inputs.
 
 ### Examples
 
@@ -173,7 +193,7 @@ go run . -executor container
 ### User File Processing Example (`user-file-ops`)
 
 This example shows how to let the assistant summarize a text file that
-you already have on your machine, using the `user-file-ops` skill.
+you upload into the conversation, using the `user-file-ops` skill.
 
 1. Create a small sample file on your host:
 
@@ -189,12 +209,30 @@ you already have on your machine, using the `user-file-ops` skill.
    go run .
    ```
 
-3. In the chat, tell the assistant where your file is and what you want:
+3. Upload the file into the conversation:
 
    ```text
-   👤 You: I have a text file at /tmp/skillrun-notes.txt.
-   Please use the user-file-ops skill to summarize it, mapping it to
-   work/inputs/user-notes.txt and writing the summary to
+   👤 You: /upload_artifact /tmp/skillrun-notes.txt
+   ```
+
+   If you want to attach inline bytes, use:
+
+   ```text
+   👤 You: /upload /tmp/skillrun-notes.txt
+   ```
+
+   If your model provider supports file uploads and you want to attach by
+   provider `file_id`, use:
+
+   ```text
+   👤 You: /upload_id /tmp/skillrun-notes.txt
+   ```
+
+4. Ask the assistant to summarize it:
+
+   ```text
+   👤 You: Please use the user-file-ops skill to summarize
+   work/inputs/skillrun-notes.txt and write the summary to
    out/user-notes-summary.txt.
    ```
 
@@ -205,7 +243,7 @@ you already have on your machine, using the `user-file-ops` skill.
 
      ```bash
      bash scripts/summarize_file.sh \
-       work/inputs/user-notes.txt \
+       work/inputs/skillrun-notes.txt \
        out/user-notes-summary.txt
      ```
 

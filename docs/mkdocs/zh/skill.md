@@ -20,6 +20,7 @@ Agent Skills 把可复用的任务封装为“技能目录”，用 `SKILL.md`
 - 📚 `skill_select_docs` 增/改/清除文档选择
 - 🧾 `skill_list_docs` 列出可用文档
 - 🏃 `skill_run` 在工作区执行命令，返回 stdout/stderr 与输出文件
+- ⌨️ `skill_exec` 与 session 工具处理交互式 stdin/TTY 流程
 - 🗂️ 按通配符收集输出文件并回传内容与 MIME 类型
 - 🧩 可选择本地或容器工作区执行器（默认本地）
 - 🧱 支持声明式 `inputs`/`outputs`：映射输入、
@@ -74,9 +75,10 @@ system message，确保模型仍能看到已加载内容。
 
 Session summary 提醒：如果你启用了会话摘要注入
 （`WithAddSessionSummary(true)`），并且本次请求里确实插入了摘要，
-框架默认会**跳过**这条回退 system message，避免把“已被 summary 掉的
-内容”又塞回提示词里。在这种配置下，如果 tool result 被摘要覆盖掉，
-模型需要再次调用 `skill_load` 才能看到完整正文/文档。
+框架会尽量**跳过**这条回退 system message，避免把“已被 summary 掉的
+内容”又塞回提示词里。如果对应的 tool result 仍在提示词里，回退会继续
+保持关闭；如果 same-turn summary compaction 已经把这些 tool result
+裁掉，回退会重新开启，保证模型仍能看到完整正文/文档。
 
 启用方式：`llmagent.WithSkillsLoadedContentInToolResults(true)`。
 如果你希望在 summary 场景恢复旧的回退行为：
@@ -91,7 +93,8 @@ Session summary 提醒：如果你启用了会话摘要注入
   里多次调用模型的场景（一次用户消息触发多个 tool call）。
 - 如果你希望跨**多轮对话**继续复用“已加载技能的正文/文档”，需要把
   `SkillLoadMode` 设为 `session`。默认 `turn` 会在下一轮开始前清空
-  `temp:skill:loaded:*` / `temp:skill:docs:*`，因此即使 history 里仍然
+  该 agent 的 skill state key（`temp:skill:loaded_by_agent:<agent>/<name>` /
+  `temp:skill:docs_by_agent:<agent>/<name>`），因此即使 history 里仍然
   有上一轮的 `skill_load` tool result（通常是 `loaded: <name>` 这种短
   stub），框架也不会再把正文/文档物化进去。
 
@@ -120,7 +123,9 @@ Session summary 提醒：如果你启用了会话摘要注入
   运行时配置拼出来。
 
 `skill_load` 只会把“已加载/已选文档”的**小状态**写入 Session（例如
-`temp:skill:loaded:*`、`temp:skill:docs:*`）。随后由请求处理器在
+`temp:skill:loaded_by_agent:<agent>/<name>`、
+`temp:skill:docs_by_agent:<agent>/<name>`；旧版 key 也仍被支持）。
+随后由请求处理器在
 **下一次模型请求**里，把对应的 `SKILL.md` 正文/已选 docs **物化**
 进去。
 
@@ -265,6 +270,9 @@ GAIA 基准示例（技能 + 文件工具）：
 SkillLoadMode 演示（无需 API key）：
 [examples/skillloadmode/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillloadmode/README.md)
 
+子代理 skill 隔离演示（AgentTool + Skills）：
+[examples/skillisolation/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillisolation/README.md)
+
 快速开始（下载数据集 JSON 到 `examples/skill/data/`）：
 
 ```bash
@@ -333,13 +341,354 @@ https://github.com/anthropics/skills
 - `include_all_docs`（可选）：为 true 时包含所有文档
 
 行为：
-- 写入会话临时键（生命周期由 `SkillLoadMode` 控制）：
-  - `temp:skill:loaded:<name>` = "1"
-  - `temp:skill:docs:<name>` = "*" 或 JSON 字符串数组
+- 写入会话临时键（按 agent 隔离，生命周期由 `SkillLoadMode` 控制）：
+  - `temp:skill:loaded_by_agent:<agent>/<name>` = "1"
+  - `temp:skill:docs_by_agent:<agent>/<name>` = "*" 或 JSON 字符串数组
+  - 旧版 key（`temp:skill:loaded:<name>`、`temp:skill:docs:<name>`）仍被支持，
+    并在读到时自动迁移。
+- 多代理提示：transfer 调用子代理时通常共享同一个 Session。key 按 agent
+  隔离后，子代理的 `skill_load` 不会自动把技能正文/文档“塞进”主代理的提示词。
+  如果主代理确实需要该技能正文/文档，请让主代理自己调用一次 `skill_load`。
 - 请求处理器读取这些键，把 `SKILL.md` 正文与文档物化到下一次模型请求中：
   - 默认：追加到系统消息（兼容旧行为）
   - 可选：追加到对应 tool result 消息
     (`llmagent.WithSkillsLoadedContentInToolResults(true)`)
+
+#### 在每次模型请求前获取“已加载技能列表”
+
+如果你希望在**每次模型请求前**拿到当前 `llmagent` 已加载的 skill 列表
+（包括一次 `Runner.Run` 内的 tool loop 里每一步），推荐使用
+`ModelCallbacks` 的 `BeforeModel`，并通过 `context` 取出当前
+`Invocation`。
+
+从最基本的机制出发理解：
+
+- `skill_load` 并不会把完整的 `SKILL.md` 正文写进 session 的事件记录里。
+- 它只会往 session state 写入一些很小的“标记键”（按 agent 隔离）：
+  - Loaded 标记：前缀为 `skill.LoadedPrefix(inv.AgentName)` 的 key
+  - Docs 选择：前缀为 `skill.DocsPrefix(inv.AgentName)` 的 key
+- Skills 的请求处理器会读取这些键，把正文/文档物化到**下一次**
+  outbound 模型请求里。
+
+因此，如果你只是想拿到“当前哪些 skills 已加载”，只需要读 session
+state 即可：
+
+下面的代码片段中，`m` 表示你的模型实例，`repo` 表示 skills 仓库。
+
+```go
+import (
+    "context"
+    "fmt"
+    "sort"
+    "strings"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/skill"
+)
+
+func loadedSkillNames(inv *agent.Invocation) []string {
+    if inv == nil || inv.Session == nil {
+        return nil
+    }
+    state := inv.Session.SnapshotState()
+    if len(state) == 0 {
+        return nil
+    }
+
+    prefix := skill.LoadedPrefix(inv.AgentName)
+
+    var out []string
+    for k, v := range state {
+        if !strings.HasPrefix(k, prefix) {
+            continue
+        }
+        if len(v) == 0 {
+            continue
+        }
+        name := strings.TrimPrefix(k, prefix)
+        if strings.TrimSpace(name) == "" {
+            continue
+        }
+        out = append(out, name)
+    }
+    sort.Strings(out)
+    return out
+}
+
+modelCallbacks := model.NewCallbacks().
+    RegisterBeforeModel(func(
+        ctx context.Context,
+        args *model.BeforeModelArgs,
+    ) (*model.BeforeModelResult, error) {
+        _ = args
+        inv, ok := agent.InvocationFromContext(ctx)
+        if !ok {
+            return nil, nil
+        }
+        fmt.Printf("loaded skills: %v\n", loadedSkillNames(inv))
+        return nil, nil
+    })
+
+agt := llmagent.New(
+    "skills-assistant",
+    llmagent.WithModel(m),
+    llmagent.WithSkills(repo),
+    llmagent.WithModelCallbacks(modelCallbacks),
+)
+_ = agt
+```
+
+注意：
+
+- 默认 `SkillLoadModeTurn` 会在**下一轮** `Runner.Run` 开始前清空这些
+  该 agent 的 `temp:skill:loaded_by_agent:*` /
+  `temp:skill:docs_by_agent:*` state key，所以“已加载列表”通常只在当前这轮
+  tool loop 里非空。
+- `SkillLoadModeSession` 会跨轮保留这些 key，所以“已加载列表”会一直
+  非空，直到你手动清空（或会话过期）。
+
+#### 内置选项：限制已加载技能数量（TopK）
+
+如果你的需求只是“最多保留最近 N 个已加载 skills”，可以直接使用内置
+option：
+
+- `llmagent.WithMaxLoadedSkills(N)`
+
+它会在**每次模型请求前**检查当前 loaded skills，并根据 session 中最近
+的 `skill_load` / `skill_select_docs` tool result，清空更老的
+`temp:skill:*` state key，从而把 loaded skills 数量控制在 N 以内。
+
+示例：
+
+```go
+agt := llmagent.New(
+    "skills-assistant",
+    llmagent.WithModel(m),
+    llmagent.WithSkills(repo),
+    llmagent.WithMaxLoadedSkills(3),
+)
+_ = agt
+```
+
+#### 自定义策略：限制已加载技能数量（比如最多保留最近 3 个）
+
+`SkillLoadMode` 解决的是“驻留多久”（once/turn/session），不解决
+“最多加载多少个”。如果你需要在 `llmagent.WithMaxLoadedSkills` 之外
+做更细粒度的手动控制（比如自定义淘汰策略），推荐在 session service
+上加 `AppendEventHook`，去修改 `skill_load` 写入的 state delta。
+
+核心思路：
+
+1) 识别“加载 skill”的事件（state delta 里包含
+   该 agent 的 loaded key，即 key 前缀为 `skill.LoadedPrefix(ev.Author)`）。
+2) 计算“应用该 delta 后”会有哪些 skills 处于 loaded 状态。
+3) 如果数量超过阈值，在同一个 `StateDelta` 里把要淘汰的 skills 对应
+   key 置为 `nil`（清空）。
+
+示例（inmemory session service，最多保留最近 3 个 loaded skills）：
+
+```go
+import (
+    "encoding/json"
+    "sort"
+    "strings"
+
+    "trpc.group/trpc-go/trpc-agent-go/event"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/session"
+    "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+    "trpc.group/trpc-go/trpc-agent-go/skill"
+)
+
+const (
+    maxLoadedSkills = 3
+    toolSkillLoad   = "skill_load"
+)
+
+type skillLoadArgs struct {
+    Skill string `json:"skill"`
+}
+
+func loadedSkillsFromState(
+    state session.StateMap,
+    agentName string,
+) []string {
+    if len(state) == 0 {
+        return nil
+    }
+    prefix := skill.LoadedPrefix(agentName)
+    var out []string
+    for k, v := range state {
+        if !strings.HasPrefix(k, prefix) {
+            continue
+        }
+        if len(v) == 0 {
+            continue
+        }
+        name := strings.TrimPrefix(k, prefix)
+        if strings.TrimSpace(name) == "" {
+            continue
+        }
+        out = append(out, name)
+    }
+    sort.Strings(out)
+    return out
+}
+
+func capLoadedSkills(
+    sess *session.Session,
+    ev *event.Event,
+    max int,
+) {
+    if sess == nil || ev == nil || max <= 0 {
+        return
+    }
+    if len(ev.StateDelta) == 0 {
+        return
+    }
+
+    agentName := strings.TrimSpace(ev.Author)
+    if agentName == "" {
+        return
+    }
+    loadedPrefix := skill.LoadedPrefix(agentName)
+
+    // Only enforce when this event loads a skill.
+    var newlyLoaded []string
+    for k, v := range ev.StateDelta {
+        if !strings.HasPrefix(k, loadedPrefix) {
+            continue
+        }
+        if len(v) == 0 {
+            continue
+        }
+        name := strings.TrimPrefix(k, loadedPrefix)
+        if strings.TrimSpace(name) == "" {
+            continue
+        }
+        newlyLoaded = append(newlyLoaded, name)
+    }
+    if len(newlyLoaded) == 0 {
+        return
+    }
+
+    // Predict the "post-append" state by applying delta to a copy.
+    nextState := sess.SnapshotState()
+    for k, v := range ev.StateDelta {
+        nextState[k] = v
+    }
+
+    loaded := loadedSkillsFromState(nextState, agentName)
+    if len(loaded) <= max {
+        return
+    }
+
+    loadedSet := make(map[string]struct{}, len(loaded))
+    for _, name := range loaded {
+        loadedSet[name] = struct{}{}
+    }
+
+    // Keep the most recent loaded skills by scanning recent events.
+    keep := make([]string, 0, max)
+    keepSet := make(map[string]struct{}, max)
+
+    // 1) Always keep the skill(s) loaded by this delta.
+    sort.Strings(newlyLoaded)
+    for _, name := range newlyLoaded {
+        if _, ok := loadedSet[name]; !ok {
+            continue
+        }
+        if _, ok := keepSet[name]; ok {
+            continue
+        }
+        keep = append(keep, name)
+        keepSet[name] = struct{}{}
+        if len(keep) >= max {
+            break
+        }
+    }
+
+    // 2) Fill from newest skill_load calls in the transcript.
+    events := sess.GetEvents()
+    for i := len(events) - 1; i >= 0 && len(keep) < max; i-- {
+        if strings.TrimSpace(events[i].Author) != agentName {
+            continue
+        }
+        rsp := events[i].Response
+        if rsp == nil || len(rsp.Choices) == 0 {
+            continue
+        }
+        msg := rsp.Choices[0].Message
+        if msg.Role != model.RoleAssistant {
+            continue
+        }
+        for _, tc := range msg.ToolCalls {
+            if tc.Function.Name != toolSkillLoad {
+                continue
+            }
+            var in skillLoadArgs
+            if err := json.Unmarshal(
+                []byte(tc.Function.Arguments),
+                &in,
+            ); err != nil {
+                continue
+            }
+            name := strings.TrimSpace(in.Skill)
+            if name == "" {
+                continue
+            }
+            if _, ok := loadedSet[name]; !ok {
+                continue
+            }
+            if _, ok := keepSet[name]; ok {
+                continue
+            }
+            keep = append(keep, name)
+            keepSet[name] = struct{}{}
+            if len(keep) >= max {
+                break
+            }
+        }
+    }
+
+    // 3) Fallback: fill deterministically from the loaded list.
+    for _, name := range loaded {
+        if len(keep) >= max {
+            break
+        }
+        if _, ok := keepSet[name]; ok {
+            continue
+        }
+        keep = append(keep, name)
+        keepSet[name] = struct{}{}
+    }
+
+    // Evict everything else by clearing the same state keys.
+    for _, name := range loaded {
+        if _, ok := keepSet[name]; ok {
+            continue
+        }
+        ev.StateDelta[skill.LoadedKey(agentName, name)] = nil
+        ev.StateDelta[skill.DocsKey(agentName, name)] = nil
+    }
+}
+
+svc := inmemory.NewSessionService(
+    inmemory.WithAppendEventHook(func(
+        ctx *session.AppendEventContext,
+        next func() error,
+    ) error {
+        capLoadedSkills(ctx.Session, ctx.Event, maxLoadedSkills)
+        return next()
+    }),
+)
+_ = svc
+```
+
+`AppendEventHook` 的接口说明见 `docs/mkdocs/zh/session.md`，也可以参考
+可运行示例 `examples/session/hook`。
 
 说明：
 - 建议采用“渐进式披露”：默认只传 `skill` 加载正文；需要文档时先
@@ -480,7 +829,9 @@ agent := llmagent.New(
 - `mode`（可选字符串）：`add` | `replace` | `clear`
 
 行为：
-- 更新 `temp:skill:docs:<name>`：`*` 表示全选；数组表示显式列表
+- 更新当前 agent 的 doc 选择 state key：
+  - `temp:skill:docs_by_agent:<agent>/<name>`：`*` 表示全选；数组表示显式列表
+  - 旧版 key `temp:skill:docs:<name>` 仍被支持，并在读到时自动迁移
 
 ### `skill_list_docs`
 
@@ -504,6 +855,8 @@ agent := llmagent.New(
 - `command`（必填）：Shell 命令（默认通过 `bash -c` 执行）
 - `cwd`（可选）：相对技能根目录的工作路径
 - `env`（可选）：环境变量映射
+- `stdin`（可选）：一次性写入命令的标准输入文本
+- `editor_text`（可选）：用于会拉起 `$EDITOR` 的 CLI 的文本内容
 - `output_files`（可选，传统收集方式）：通配符列表
   （如 `out/*.txt`）。通配符以工作区根目录为准，也支持
   `$OUTPUT_DIR/*.txt` 这类写法，会自动归一化为 `out/*.txt`。
@@ -516,10 +869,26 @@ agent := llmagent.New(
     - `workspace://rel/path` 从当前工作区相对路径复制/链接
     - `skill://<name>/rel/path` 从已缓存的技能目录复制/链接
   - `to`：目的路径（相对工作区）。未指定时默认写到
-    `WORK_DIR/inputs/<basename>`。
+    `WORK_DIR/inputs/<basename>`。为了方便，`skill_run` 也支持
+    `to` 以 `inputs/` 开头的写法，会被视为 `work/inputs/`
+    （因为技能根目录下 `inputs/` 是指向 `work/inputs/` 的软链）。
   - `mode`：`copy`（默认）或 `link`（在可行时建立符号链接）。
   - `pin`：当 `from=artifact://name` 未指定 `@version` 时，
     尝试复用同一 `to` 路径第一次解析到的版本（best effort）。
+
+- 会话文件输入（自动 stage）：
+  - 如果当前会话的用户消息中包含文件输入（`content_parts` 中
+    `type=file` 的条目），`skill_run` 会在执行命令前自动把它们
+    写入 `work/inputs/`（也会出现在 `inputs/`）。
+  - 文件名会清洗为安全的 basename，并在重名时追加数字后缀。
+  - 若文件输入未提供文件名且 `file_id` 为 `artifact://...` 引用，
+    框架会从制品名推断 basename；否则回退为 `upload_N`。
+  - 若文件输入包含原始字节（`data`），会直接写入工作区。
+  - 若文件输入仅包含 `file_id`：
+    - 当 `file_id` 以 `artifact://` 开头时，`skill_run` 会通过制品
+      服务拉取对应内容并写入工作区（适用于用户上传文件已先保存
+      为制品，仅在消息中写入引用的场景）。
+    - 否则，框架会在模型支持下载时拉取内容并写入工作区。
 
 - `outputs`（可选，声明式输出）：使用清单（manifest）收集输出。
   字段：
@@ -569,8 +938,15 @@ agent := llmagent.New(
     执行黑名单中的命令名
 - 代码侧也可通过 `llmagent.WithSkillRunDeniedCommands(...)` 配置。
 
+可选行为（强制保存到制品）：
+- 代码侧可配置强制让 `skill_run` 尽量把收集到的输出保存到制品服务，
+  即便模型未显式设置 `save_as_artifacts` / `outputs.save`：
+  - `llmagent.WithSkillRunForceSaveArtifacts(true)`
+
 输出：
 - `stdout`、`stderr`、`exit_code`、`timed_out`、`duration_ms`
+- `staged_inputs`（可选）：本次执行前从对话自动 stage 进
+  `work/inputs/` 的文件列表
 - `primary_output`（可选）：包含 `name`、`ref`、`content`、`mime_type`、
   `size_bytes`、`truncated`
   - 便捷字段：指向“最合适的”小型文本输出文件（若存在）。当只有一个主要输出时
@@ -583,6 +959,8 @@ agent := llmagent.New(
     `ref` 配合 `read_file` 按需读取文本内容。
   - `size_bytes` 表示磁盘上的文件大小；`truncated=true` 表示收集内容触发了
     内部上限（例如 4 MiB/文件）。
+  - 当命令失败或超时时，会省略 0 字节的收集结果，避免 shell 重定向先创建
+    空文件而造成误导。
 - `warnings`（可选）：非致命提示（例如制品保存被跳过）
 - `artifact_files`：制品引用（`name`、`version`）。两种途径：
   - 传统路径：设置了 `save_as_artifacts` 时由工具保存并返回
@@ -590,10 +968,49 @@ agent := llmagent.New(
 
 典型流程：
 1) 模型先调用 `skill_load` 注入正文/文档
+   - 当使用 `llmagent.LLMAgent` 时，这一步默认是必需的：
+     `skill_run` 会拒绝执行尚未通过 `skill_load` 加载过的技能。
+     如需关闭，可用：
+     `llmagent.WithSkillRunRequireSkillLoaded(false)`。
 2) 随后调用 `skill_run` 执行命令并收集输出文件：
    - 传统：用 `output_files` 指定通配符
    - 声明式：用 `outputs` 统一控制收集/内联/保存
    - 如需把上游文件带入，可用 `inputs` 先行映射
+
+### 交互式 Skill 会话
+
+声明：
+- [tool/skill/exec.go](https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/exec.go)
+
+工具：
+- `skill_exec`：在 Skill 工作区里启动一个可持续交互的命令
+- `skill_write_stdin`：向运行中的会话追加 stdin
+- `skill_poll_session`：继续拉取终端输出或最终结果
+- `skill_kill_session`：终止并移除会话
+
+建议：
+- 一次性命令优先用 `skill_run`
+- 如果命令会等待输入、展示编号选择，或需要跨多次工具调用继续交互，
+  优先用 `skill_exec`
+- 对 `$EDITOR` 型流程，优先在 `skill_run` / `skill_exec` 上传
+  `editor_text`，不要试图通过 stdin 驱动全屏编辑器
+
+`skill_exec` 复用 `skill_run` 的同一套工作区、`inputs`、`outputs`、
+`save_as_artifacts`、`omit_inline_content`、`artifact_prefix`、
+`stdin` 与 `editor_text` 语义，但会额外返回会话状态：
+- `status`：`running` 或 `exited`
+- `session_id`：后续继续交互使用的稳定 id
+- `output`：本次调用观察到的最新终端输出
+- `interaction`：best effort 的输入提示（例如 prompt / selection）
+- `result`：当会话退出后，返回与 `skill_run` 风格一致的最终结果
+
+典型交互流程：
+1) 先调用 `skill_exec`
+2) 查看 `output` / `interaction`
+3) 持续调用 `skill_write_stdin` 或 `skill_poll_session`，直到
+   `status=exited`
+4) 读取 `result` 与收集到的输出；若需要中止，则调用
+   `skill_kill_session`
 
 示例：
 

@@ -428,6 +428,66 @@ for e := range eventChan {
 
 这样应用层可以始终“看最后一条事件”来判断流程结束并读取最终结果，避免因为提前退出而错过 `output` 等后续节点。
 
+#### 图完成前就致命退出时，如何只看最后一条事件拿到错误信息
+
+有些运行不会走到最终的 `graph.execution` 完成事件，就已经因为致命错误提前结束。一个很常见的场景是：
+
+- 某个节点回调先发出一条自定义 `StateDelta`，里面带了致命错误详情
+- 随后流程直接中止，图本身来不及产出正常的最终快照
+
+这时 Runner 仍然会发出最后那条 `runner.completion` 事件。对于这种真正的致命错误
+（不包括 `stop_agent_error` 这种受控停止），Runner 现在会把“可安全兜底”的业务状态
+带到这条最后事件上：
+
+- `StateDelta`：错误路径上累计出来的状态增量
+
+这里有两个细节要注意：
+
+- `Response.Error` 仍然只保留在原始致命错误事件上，这样下游翻译层依然可以把
+  `runner.completion` 当作正常的结束信号处理。
+- `graph.MetadataKeyNode`、`graph.MetadataKeyTool` 这类图元数据键会在兜底复制时被过滤掉，
+  避免 AGUI 这类消费者把节点/工具生命周期事件重复翻译一遍。
+
+这样业务代码就可以继续保持同一个规则：优先看最后一条事件里的业务错误详情，而不是为了拿错误信息去遍历整条事件流。
+
+示例：
+
+```go
+import (
+    "encoding/json"
+    "fmt"
+
+    "trpc.group/trpc-go/trpc-agent-go/event"
+)
+
+const stateKeyNodeFatal = "node_fatal_error"
+
+func readLastEvent(eventChan <-chan *event.Event) error {
+    for e := range eventChan {
+        if !e.IsRunnerCompletion() {
+            continue
+        }
+
+        if b, ok := e.StateDelta[stateKeyNodeFatal]; ok {
+            var detail map[string]any
+            if err := json.Unmarshal(b, &detail); err == nil {
+                fmt.Printf("fatal detail: %+v\n", detail)
+            }
+        }
+        return nil
+    }
+    return nil
+}
+```
+
+建议按下面这个心智模型理解：
+
+- 正常成功且图产出了完成事件：从 completion event 的 `StateDelta` 里读取最终输出
+  （例如 `graph.StateKeyLastResponse`）
+- 图完成前就致命退出：从同一条 completion event 的自定义 fatal key 里读取错误信息；
+  如果还需要结构化的 `Response.Error`，它仍然保留在原始致命错误事件上
+- `stop_agent_error`：仍然被视为“受控停止”信号，不会再重复镜像到 completion event
+
 #### 🔁 开关：让 Graph 的 LLM 节点输出最终响应事件
 
 在 GraphAgent 里，一次 `Run` 可能会在多个节点里多次调用 LLM。当开启流式输出时，

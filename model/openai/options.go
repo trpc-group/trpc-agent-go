@@ -108,6 +108,13 @@ type options struct {
 	// but message ordering affects cache effectiveness.
 	OptimizeForCache    bool
 	optimizeForCacheSet bool
+
+	// OmitFileContentParts controls whether file content parts are removed
+	// from requests sent to the model provider.
+	//
+	// This can be useful when a provider rejects file inputs in chat messages,
+	// while still keeping the file parts in-memory for downstream tools.
+	OmitFileContentParts bool
 }
 
 var (
@@ -254,6 +261,14 @@ func WithExtraFields(extraFields map[string]any) Option {
 func WithVariant(variant Variant) Option {
 	return func(opts *options) {
 		opts.Variant = variant
+	}
+}
+
+// WithOmitFileContentParts controls whether file content parts are removed
+// from requests sent to the model provider.
+func WithOmitFileContentParts(omit bool) Option {
+	return func(opts *options) {
+		opts.OmitFileContentParts = omit
 	}
 }
 
