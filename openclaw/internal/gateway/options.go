@@ -10,7 +10,13 @@
 
 package gateway
 
-import "strings"
+import (
+	"strings"
+
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
+)
 
 // SessionIDFunc builds a session ID for the inbound message.
 type SessionIDFunc func(InboundMessage) (string, error)
@@ -28,12 +34,18 @@ type options struct {
 	partFetcher          partFetcher
 	allowPrivatePartURLs bool
 	allowedPartPatterns  []string
+	audioTranscriber     audioTranscriber
 
 	sessionIDFunc SessionIDFunc
 
 	allowUsers      map[string]struct{}
 	requireMention  bool
 	mentionPatterns []string
+
+	recorder *debugrecorder.Recorder
+	uploads  *uploads.Store
+
+	personaStore *persona.Store
 }
 
 // Option is a function that configures a gateway server.
@@ -170,6 +182,14 @@ func WithAllowedContentPartDomains(domains ...string) Option {
 	}
 }
 
+// WithPersonaStore sets the preset persona store used for per-chat
+// system-message injection.
+func WithPersonaStore(store *persona.Store) Option {
+	return func(o *options) {
+		o.personaStore = store
+	}
+}
+
 // WithSessionIDFunc sets a custom session ID function.
 func WithSessionIDFunc(fn SessionIDFunc) Option {
 	return func(o *options) {
@@ -220,5 +240,29 @@ func WithMentionPatterns(patterns ...string) Option {
 			copied = append(copied, pattern)
 		}
 		o.mentionPatterns = copied
+	}
+}
+
+// WithDebugRecorder enables file-based debug recording for gateway requests.
+//
+// When set, the gateway creates a per-request trace when no trace is present
+// in the request context.
+func WithDebugRecorder(rec *debugrecorder.Recorder) Option {
+	return func(o *options) {
+		o.recorder = rec
+	}
+}
+
+// WithUploadStore persists inbound file parts to stable host paths.
+func WithUploadStore(store *uploads.Store) Option {
+	return func(o *options) {
+		o.uploads = store
+	}
+}
+
+// WithAudioTranscriber overrides inbound audio transcription.
+func WithAudioTranscriber(transcriber audioTranscriber) Option {
+	return func(o *options) {
+		o.audioTranscriber = transcriber
 	}
 }
