@@ -26,6 +26,10 @@ replace trpc.group/trpc-go/trpc-agent-go/memory/postgres => ../memory/postgres
 
 replace trpc.group/trpc-go/trpc-agent-go/memory/redis => ../memory/redis
 
+replace trpc.group/trpc-go/trpc-agent-go/memory/sqlite => ../memory/sqlite
+
+replace trpc.group/trpc-go/trpc-agent-go/memory/sqlitevec => ../memory/sqlitevec
+
 replace trpc.group/trpc-go/trpc-agent-go/session/clickhouse => ../session/clickhouse
 
 replace trpc.group/trpc-go/trpc-agent-go/session/mysql => ../session/mysql
@@ -59,6 +63,8 @@ require (
 	trpc.group/trpc-go/trpc-agent-go/memory/pgvector v0.0.0-20260226120000-4e084c8c87d8
 	trpc.group/trpc-go/trpc-agent-go/memory/postgres v1.5.0
 	trpc.group/trpc-go/trpc-agent-go/memory/redis v0.2.0
+	trpc.group/trpc-go/trpc-agent-go/memory/sqlite v1.5.0
+	trpc.group/trpc-go/trpc-agent-go/memory/sqlitevec v1.5.0
 	trpc.group/trpc-go/trpc-agent-go/session/clickhouse v1.5.0
 	trpc.group/trpc-go/trpc-agent-go/session/mysql v1.5.0
 	trpc.group/trpc-go/trpc-agent-go/session/postgres v1.5.0
@@ -86,6 +92,7 @@ require (
 	github.com/JohannesKaufmann/dom v0.2.0 // indirect
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.0 // indirect
 	github.com/andybalholm/brotli v1.1.0 // indirect
+	github.com/asg017/sqlite-vec-go-bindings v0.1.6 // indirect
 	github.com/bmatcuk/doublestar/v4 v4.9.1 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -122,6 +129,8 @@ require (
 	github.com/mailru/easyjson v0.9.0 // indirect
 	github.com/mattn/go-runewidth v0.0.19 // indirect
 	github.com/mohae/deepcopy v0.0.0-20170929034955-c48cc78d4826 // indirect
+	github.com/ncruces/go-sqlite3 v0.17.1 // indirect
+	github.com/ncruces/julianday v1.0.0 // indirect
 	github.com/oasdiff/yaml v0.0.0-20250309154309-f31be36b4037 // indirect
 	github.com/oasdiff/yaml3 v0.0.0-20250309153720-d2182401db90 // indirect
 	github.com/openai/openai-go v1.12.0 // indirect
@@ -136,6 +145,7 @@ require (
 	github.com/redis/go-redis/v9 v9.11.0 // indirect
 	github.com/segmentio/asm v1.2.0 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
+	github.com/tetratelabs/wazero v1.7.3 // indirect
 	github.com/tidwall/gjson v1.14.4 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
