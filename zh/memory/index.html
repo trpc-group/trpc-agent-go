@@ -5769,6 +5769,7 @@
 </span><span id="__span-44-11"><a id="__codelineno-44-11" name="__codelineno-44-11"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>启用预加载后，记忆会自动注入到系统提示词中，让 Agent 无需显式工具调用就能获得用户上下文。</p>
+<p><strong>注入机制</strong>：预加载的记忆会<strong>合并</strong>到现有的系统提示词中，而不是作为独立的 system message 插入。这确保了请求中始终只有一个 system message，兼容某些对多个 system message 支持不完善的模型（如 Qwen3.5 系列可能会返回 "System message must be at the beginning" 错误）。</p>
 <p><strong>⚠️ 重要提示</strong>：配置为 <code>-1</code> 会加载所有记忆，这可能会显著增加<strong>Token 使用量</strong>和<strong>API 成本</strong>。默认情况下预加载是禁用的（<code>0</code>），推荐使用正数限制（如 <code>10-50</code>）来平衡性能和成本。</p>
 <h3 id="_42">混合方案</h3>
 <p>你可以结合两种方式：</p>
@@ -5828,7 +5829,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年2月28日 03:22:13 UTC">2026-02-28 03:22:13</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年3月9日 04:26:50 UTC">2026-03-09 04:26:50</span>
   </span>
 
     

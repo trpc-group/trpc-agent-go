@@ -3630,7 +3630,8 @@
 </span></code></pre></div></td></tr></table></div>
 <p><strong>How it works</strong>:</p>
 <ul>
-<li>Session summary is inserted as a standalone system message after the first existing system message</li>
+<li>Session summary is <strong>merged into the existing system message</strong> if one exists, or prepended as a new system message if none exists</li>
+<li>This ensures compatibility with models that require a single system message at the beginning (e.g., Qwen3.5 series)</li>
 <li>Includes <strong>all incremental events</strong> after the summary point (no truncation)</li>
 <li>Guarantees complete context: compressed history + full new conversation</li>
 <li><strong><code>WithMaxHistoryRuns</code> parameter is ignored</strong></li>
@@ -3645,19 +3646,24 @@
 <span class="normal"><a href="#__codelineno-16-7"> 7</a></span>
 <span class="normal"><a href="#__codelineno-16-8"> 8</a></span>
 <span class="normal"><a href="#__codelineno-16-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-16-10">10</a></span>
-<span class="normal"><a href="#__codelineno-16-11">11</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1"></a>┌─────────────────────────────────────────┐
+<span class="normal"><a href="#__codelineno-16-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1"></a>┌─────────────────────────────────────────┐
 </span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2"></a>│ System Prompt                           │
-</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3"></a>├─────────────────────────────────────────┤
-</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4"></a>│ Session Summary (system message)        │ ← Compressed history
-</span><span id="__span-16-5"><a id="__codelineno-16-5" name="__codelineno-16-5"></a>├─────────────────────────────────────────┤
-</span><span id="__span-16-6"><a id="__codelineno-16-6" name="__codelineno-16-6"></a>│ Event 1 (after summary)                 │ ┐
-</span><span id="__span-16-7"><a id="__codelineno-16-7" name="__codelineno-16-7"></a>│ Event 2                                 │ │
-</span><span id="__span-16-8"><a id="__codelineno-16-8" name="__codelineno-16-8"></a>│ Event 3                                 │ │ New events after summary
-</span><span id="__span-16-9"><a id="__codelineno-16-9" name="__codelineno-16-9"></a>│ ...                                     │ │ (fully retained)
-</span><span id="__span-16-10"><a id="__codelineno-16-10" name="__codelineno-16-10"></a>│ Event N (current message)               │ ┘
-</span><span id="__span-16-11"><a id="__codelineno-16-11" name="__codelineno-16-11"></a>└─────────────────────────────────────────┘
+</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3"></a>│ (merged with Session Summary)           │ ← System prompt + compressed history
+</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4"></a>├─────────────────────────────────────────┤
+</span><span id="__span-16-5"><a id="__codelineno-16-5" name="__codelineno-16-5"></a>│ Event 1 (after summary)                 │ ┐
+</span><span id="__span-16-6"><a id="__codelineno-16-6" name="__codelineno-16-6"></a>│ Event 2                                 │ │
+</span><span id="__span-16-7"><a id="__codelineno-16-7" name="__codelineno-16-7"></a>│ Event 3                                 │ │ New events after summary
+</span><span id="__span-16-8"><a id="__codelineno-16-8" name="__codelineno-16-8"></a>│ ...                                     │ │ (fully retained)
+</span><span id="__span-16-9"><a id="__codelineno-16-9" name="__codelineno-16-9"></a>│ Event N (current message)               │ ┘
+</span><span id="__span-16-10"><a id="__codelineno-16-10" name="__codelineno-16-10"></a>└─────────────────────────────────────────┘
 </span></code></pre></div></td></tr></table></div>
+<p><strong>Model Compatibility</strong>:</p>
+<p>Some LLM providers have strict requirements for system message placement and count:</p>
+<ul>
+<li><strong>Qwen3.5 series</strong> and similar models require the system message to be at the beginning and do not support multiple system messages</li>
+<li>The default merging behavior prevents errors like <code>System message must be at the beginning</code></li>
+<li>Preloaded memory content is also merged into the system message using the same mechanism</li>
+</ul>
 <h3 id="mode-2-without-summary">Mode 2: Without Summary</h3>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-17-1">1</a></span>
 <span class="normal"><a href="#__codelineno-17-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1"></a><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithAddSessionSummary</span><span class="p">(</span><span class="kc">false</span><span class="p">)</span>
@@ -4028,7 +4034,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="March 5, 2026 07:26:33 UTC">2026-03-05 07:26:33</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="March 9, 2026 04:26:50 UTC">2026-03-09 04:26:50</span>
   </span>
 
     
