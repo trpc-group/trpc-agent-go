@@ -39,7 +39,7 @@ CrewAI）和十个外部记忆系统（Mem0、Zep 等）进行对比。
 | 场景 | F1 | BLEU | LLM Score | Tokens/QA | 调用/QA | 延迟 | 总耗时 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Long-Context | **0.474** | **0.431** | **0.527** | 18,776 | 1.0 | 3,063ms | 1h41m |
-| Auto pgvector (优化版) | 0.458 | 0.422 | 0.513 | 7,356 | 2.0 | 8,601ms | 4h44m |
+| Auto pgvector (优化版) | 0.458 | 0.422 | 0.513 | 16,641 | 3.0 | 8,601ms | 4h44m |
 | Auto pgvector (原版) | 0.363 | 0.339 | 0.373 | 1,988 | 2.0 | 5,234ms | 2h53m |
 
 > 优化版 F1 从 0.363 提升至 **0.458**（+26.2%），已达到
@@ -213,71 +213,86 @@ Long-Context 将完整对话历史放入单次 LLM 调用，在单 session 内
 
 ### 4.2 各框架记忆方案详解
 
-以下按记忆存储、检索、QA 调用流程三个维度，对比六个框架的具体
+以下按记忆存储、检索、QA 调用流程三个维度，对比五个框架的具体
 实现方案。所有框架的 benchmark 代码均使用相同的 system prompt
 策略（五类 QA 分策略回答）和相同的评估流水线。
 
 **trpc-agent-go（优化版）— Auto 提取 + pgvector 混合检索：**
 
 - **存储**：对话 turn 经 LLM 自动提取为结构化 fact/episode（包含
-  content、metadata、event_time 字段），写入 pgvector
+  content、metadata、event_time 字段），写入 pgvector。
+- **存储消息角色**：后台提取器的 `ExtractionContext.Messages`
+  **同时包含 user 和 assistant 两种角色的消息**（不含 tool call），
+  因此对话双方的内容均可用于 LLM 记忆提取
 - **检索**：Agent 通过 `memory_search` 工具调用发起 pgvector
-  混合检索（向量相似度 + 关键词匹配），返回 top-15 条结构化记忆
-- **QA 流程**：2 次 LLM 调用（Step 1 生成 tool call → Step 2
-  读取检索结果后回答）
+  混合检索（向量相似度 + 关键词匹配），返回 top-30 条结构化记忆
+- **QA 流程**：3 次 LLM 调用（Step 1 生成搜索 #1 的 tool call →
+  Step 2 生成搜索 #2 的 tool call → Step 3 读取全部检索结果后回答）
 - **优势**：提取后的记忆更精准、信息密度高；混合检索兼顾语义和
   关键词匹配
-- **问题**：tool-call 模式导致 Step 2 需重读 Step 1 全部上下文，
-  prompt 膨胀至 ~7,356 tokens/QA；结构化 JSON 格式增加序列化
+- **问题**：tool-call 模式导致每一步都需重读前序全部上下文，
+  prompt 膨胀至 ~16,641 tokens/QA；结构化 JSON 格式增加序列化
   开销
 
 **AutoGen — ChromaDB 原始 turn 存储 + 单次 LLM 调用：**
 
 - **存储**：原始对话 turn 以 `[SessionDate: ...] Speaker: text`
-  格式直接存入 ChromaDB，仅做 embedding，不做 LLM 提取
+  格式直接存入 ChromaDB，仅做 embedding，不做 LLM 提取。
+- **存储消息角色**：框架不自动存储——`ChromaDBVectorMemory.add()`
+  是纯手动 API，由调用方决定存储内容。本评测中我们手动逐条
+  `add()`，不区分 role
 - **检索**：`AssistantAgent.run()` 前，`ChromaDBVectorMemory.
   update_context()` 自动以 question 为 query 检索 top-30 结果
   （score ≥ 0.3），作为 `SystemMessage` 注入 model context
 - **QA 流程**：**1 次 LLM 调用**——检索结果在调用前已预注入，
   无需 tool call
 - **优势**：调用次数最少（1 call/QA），token 效率最高
-  （1,943 tokens/QA）；not-available 率仅 9.5%
+  （1,943 tokens/QA）
 - **问题**：adversarial F1 仅 0.272（所有框架最低），对抗鲁棒性
   严重不足；依赖 ChromaDB 纯向量搜索，缺少关键词/BM25 补充
 
 **CrewAI — ShortTermMemory + Crew 两步调用：**
 
 - **存储**：原始对话 turn 存入 CrewAI 内置
-  `ShortTermMemory`（底层为 ChromaDB 向量库），不做 LLM 提取
+  `ShortTermMemory`（底层为 ChromaDB 向量库），不做 LLM 提取。
+- **存储消息角色**：框架存储的是**任务级执行摘要**（task
+  description + agent role + expected output + 最终结果文本），
+  而非逐条消息。本评测中我们绕过了框架的自动存储，手动逐条
+  `stm.save()` 存入
 - **检索**：通过 monkey-patch `ContextualMemory._fetch_stm_context`
   扩大检索窗口至 top-30（默认仅 top-5），格式化为
   `- [content]` 列表注入 agent 上下文
 - **QA 流程**：2 次 LLM 调用——Call 1 为 Crew 内部
   formatting/planning，Call 2 带记忆上下文回答
 - **优势**：存储简单（无 LLM 提取成本），检索结果格式紧凑
-- **问题**：**22.7% 的 QA 返回"记忆不可用"**，表明向量检索
-  召回不足；Crew 的 Call 1（planning 步骤）是纯框架开销，
-  贡献了 ~140 completion tokens/QA 但无 F1 收益；adversarial
-  和 temporal 类别丢失率分别达 44.6% 和 39.6%
+- **问题**：向量检索召回不足；Crew 的 Call 1（planning 步骤）
+  是纯框架开销，贡献了 ~140 completion tokens/QA 但无 F1
+  收益；adversarial 和 temporal 类别丢失率分别达 44.6% 和 39.6%
 
 **ADK — InMemoryMemoryService + LoadMemoryTool 全量加载：**
 
 - **存储**：对话 turn 作为 `Event` 存入 ADK
-  `InMemoryMemoryService`（纯内存，无持久化）
+  `InMemoryMemoryService`（纯内存，无持久化）。
+- **存储消息角色**：`add_session_to_memory()` 存储**所有**含
+  `content.parts` 的 event，不按 author 过滤——**user、model、
+  tool 等全类型 event 均被存储**
 - **检索**：Agent 通过 `LoadMemoryTool` 工具调用加载记忆——
   **不做任何选择性检索，将全部记忆无差别注入上下文**
 - **QA 流程**：2 次 LLM 调用（Step 1 调用 LoadMemoryTool →
   Step 2 读取全部记忆后回答）
-- **优势**：不丢失任何记忆信息（not-available 率仅 9.1%）
+- **优势**：不丢失任何记忆信息
 - **问题**：**token 消耗灾难性膨胀**（49,224 tokens/QA，
-  是优化版的 6.7 倍）；9 个 QA 超过 128K tokens 导致上下文
+  是优化版的 3.0 倍）；9 个 QA 超过 128K tokens 导致上下文
   溢出；10 个 QA 返回空预测；最大单 QA 达 252,849 tokens
 
 **Agno — LLM 事实提取 + SQLite 全量注入：**
 
 - **存储**：每个对话 turn 经 `MemoryManager` 调用 LLM 提取
   事实/偏好，存入 SQLite 数据库（有 LLM 提取成本，但不计入
-  QA token 统计）
+  QA token 统计）。
+- **存储消息角色**：`make_memories()` **仅处理 user message**，
+  不含 assistant 或 tool 消息。`create_or_update_memories()` 内部
+  也显式过滤 `m.role == 'user'`
 - **检索**：`add_memories_to_context=True` 将**所有**已存储记忆
   无差别注入 system prompt 的
   `<memories_from_previous_interactions>` 标签中，不做向量搜索或
@@ -285,19 +300,20 @@ Long-Context 将完整对话历史放入单次 LLM 调用，在单 session 内
 - **QA 流程**：1 次 LLM 调用（记忆已在 system prompt 中）
 - **优势**：LLM 提取保留了关键事实
 - **问题**：**全量注入导致 10,436 tokens/QA**；延迟最高
-  （14,127ms/QA，总耗时 7h47m）；not-available 率最高
-  （25.5%）；底层 DB 预留的 `limit`/`topics` 过滤参数从未
+  （14,127ms/QA，总耗时 7h47m）；底层 DB 预留的
+  `limit`/`topics` 过滤参数从未
   被 `MemoryManager` 使用，是设计缺陷
 
 **方案对比总结：**
 
 | 维度 | trpc (优化版) | AutoGen | CrewAI | ADK | Agno |
 | --- | --- | --- | --- | --- | --- |
+| 存储消息角色 | user + assistant | 不自动存储（手动 API） | 任务级摘要（输入+输出） | 全部 event（user+model+tool） | 仅 user（assistant 被排除） |
+| 评测 turn 映射 | Speaker[0]→user, [1]→assistant | 逐条 turn 手动 add() | 逐条 turn 手动 save() | 逐条 turn→Event, 整 session 写入 | 逐条 turn→create_user_memories() |
 | 存储方式 | LLM 提取结构化 | 原始 turn | 原始 turn | 原始 turn | LLM 提取事实 |
 | 检索方式 | 向量+关键词 hybrid | 纯向量 top-30 | 纯向量 top-30 | **全量加载** | **全量注入** |
-| LLM 调用/QA | 2（tool call） | **1**（预注入） | 2（Crew 内部） | 2（tool call） | 1（预注入） |
-| Tokens/QA | 7,356 | **1,943** | 2,839 | 49,224 | 10,436 |
-| NA 率 | — | 9.5% | 22.7% | 9.1% | 25.5% |
+| LLM 调用/QA | 3（tool call） | **1**（预注入） | 2（Crew 内部） | 2（tool call） | 1（预注入） |
+| Tokens/QA | 16,641 | **1,943** | 2,839 | 49,224 | 10,436 |
 
 > 核心发现：**检索策略是区分效果的关键**。全量加载（ADK/Agno）
 > 浪费 token 且效果不佳；选择性检索（AutoGen/CrewAI/trpc）的
@@ -311,7 +327,7 @@ Long-Context 将完整对话历史放入单次 LLM 调用，在单 session 内
 
 | 框架 | F1 | BLEU | LLM Score | Tokens/QA | 调用/QA | 延迟 | 总耗时 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| **trpc-agent-go (优化版)** | **0.458** | **0.422** | 0.513 | 7,356 | 2.0 | 8,601ms | 4h44m |
+| **trpc-agent-go (优化版)** | **0.458** | **0.422** | 0.513 | 16,641 | 3.0 | 8,601ms | 4h44m |
 | AutoGen | 0.457 | 0.414 | 0.540 | 1,943 | 1.0 | 3,816ms | 2h06m |
 | CrewAI | 0.427 | 0.385 | 0.479 | 2,839 | 2.0 | 8,081ms | 4h27m |
 | trpc-agent-go (原版) | 0.363 | 0.339 | 0.373 | 1,988 | 2.0 | 5,234ms | 2h53m |
@@ -367,15 +383,16 @@ Agno                   |==============================            | 0.332
 | AutoGen | 0.457 | 3,859,412 | 1,943 | 118.4 |
 | trpc-agent-go (原版) | 0.363 | 3,948,128 | 1,988 | 91.9 |
 | CrewAI | 0.427 | 5,639,085 | 2,839 | 75.7 |
-| trpc-agent-go (优化版) | **0.458** | 14,608,286 | 7,356 | 31.4 |
+| trpc-agent-go (优化版) | **0.458** | 33,049,494 | 16,641 | 13.9 |
 | Agno | 0.332 | 20,725,728 | 10,436 | 16.0 |
 | ADK | 0.362 | 97,759,453 | 49,224 | 3.7 |
 
 > AutoGen 的 token 效率最高（118.4 F1/百万 Tokens），以极低的
 > token 消耗获得了 0.457 的 F1。CrewAI 效率排第三（75.7），以
-> 2,839 tokens/QA 达到 0.427 的 F1。优化版以 7,356 tokens/QA
-> 获得最高的 F1（0.458），效率为 31.4 F1/百万 Tokens。ADK 效率
-> 最低——49,224 tokens/QA 仅获得 0.362 的 F1。
+> 2,839 tokens/QA 达到 0.427 的 F1。优化版以 16,641 tokens/QA
+> 的更高 token 成本换取了最高的 F1（0.458），效率为
+> 13.9 F1/百万 Tokens。ADK 效率最低——49,224 tokens/QA 仅获得
+> 0.362 的 F1。
 
 ```
 Total Evaluation Time (memory scenario, 1986 QA)
@@ -392,26 +409,31 @@ Agno            |===============================          | 7h47m
 
 **优化版耗时更长的原因分析（4h44m vs 2h53m）：**
 
-优化版消耗 3.7 倍的 tokens/QA（7,356 vs 1,988），单 QA 延迟增长
-1.71 倍（7,064ms vs 4,129ms）。根因在于两步 Agent 工作流：
+优化版消耗 8.4 倍的 tokens/QA（16,641 vs 1,988），单 QA 延迟增长
+1.71 倍（7,064ms vs 4,129ms）。根因在于三步 Agent 工作流：
 
-1. **Step 1 — 工具调用**（~1,650 prompt tokens）：LLM 读取系统指令
-   和问题后，发出 `memory_search` 工具调用。这会产生一次 LLM 往返
-   加一次 pgvector 混合搜索（向量 + 关键词），包含 embedding 生成。
+1. **Step 1 — 工具调用 #1**（~1,650 prompt tokens）：LLM 读取系统
+   指令和问题后，发出第一次 `memory_search` 工具调用。这会产生一次
+   LLM 往返加一次 pgvector 混合搜索（向量 + 关键词），包含 embedding
+   生成。
 
-2. **Step 2 — 带检索结果回答**（~5,469 prompt tokens）：LLM 重新
-   读取完整上下文（系统 prompt + 问题 + 工具调用 + 工具返回结果），
-   生成最终答案。memory_search 平均注入 ~3,819 tokens 的检索记忆
-   内容（pgvector 返回最多 15 条结果）。
+2. **Step 2 — 工具调用 #2**（~5,900 prompt tokens）：LLM 重新读取
+   所有前序上下文（系统 prompt + 问题 + 第一次工具调用 + 第一次工具
+   结果），然后发出第二次 `memory_search` 工具调用以细化检索。
 
-核心开销在于**上下文重读**：Step 2 需要重新处理 Step 1 的全部内容
-外加搜索结果。相比之下，原版虽然也是 2 次调用的 Agent 模式，但每次
-检索到的记忆条目更少更短（两步总计 ~1,988 tokens），因为原版存储
-的是原始对话 turn，而非提取后的结构化 fact/episode。
+3. **Step 3 — 最终回答**（~10,000 prompt tokens）：LLM 重新读取完整
+   对话历史（所有前序上下文 + 第二次工具调用 + 第二次工具结果），生成
+   最终答案。
 
-尽管 token 成本更高，优化版的 F1/成本权衡显著更优：以 **3.7 倍
-token 成本**换取 **+26.2% F1 提升**（0.363→0.458），在重视回答
-质量的生产场景中是值得的。
+核心开销在于**累积上下文重读**：每一步都要重新处理所有前序步骤的内容。
+仅 Step 3 就消耗了 ~10,000 prompt tokens。相比之下，原版使用 2 次调用
+的 Agent 模式，但每次检索到的记忆条目更少更短（两步总计 ~1,988
+tokens），因为原版存储的是原始对话 turn，而非提取后的结构化
+fact/episode。
+
+尽管 token 成本更高，优化版的 F1/成本权衡显著更优：以 **8.4 倍 token
+成本**换取 **+26.2% F1 提升**（0.363→0.458），在重视回答质量的生产
+场景中是值得的。
 
 ### 4.6 ADK 失败分析
 
@@ -576,7 +598,7 @@ Agno                |====================                      | 0.267
 4. **其他 Python 框架的局限性。**
 
    - **ADK**：token 消耗最为严重（49,224 tokens/QA），是优化版的
-     **6.7 倍**，但 F1 仅 0.362。其 `LoadMemoryTool` 将全部记忆
+     **3.0 倍**，但 F1 仅 0.362。其 `LoadMemoryTool` 将全部记忆
      无差别加载到上下文中，导致长对话场景下严重的 token 浪费和
      上下文溢出（9 个 QA 超过 128K tokens），架构上缺乏选择性
      检索能力
@@ -586,9 +608,8 @@ Agno                |====================                      | 0.267
      `<memories_from_previous_interactions>` 标签中，不支持向量检索
      或相似度搜索。虽然底层 DB 接口预留了 `limit`、`topics` 等
      过滤参数，但 `MemoryManager` 在实际运行中从未使用这些能力
-   - **CrewAI**：22.7% 的 QA 返回"记忆不可用"响应，表明其
-     短期记忆后端存在记忆丢失问题，尤其在 adversarial（44.6%）
-     和 temporal（39.6%）类别上丢失比例最高
+  - **CrewAI**：其短期记忆后端存在记忆丢失问题，尤其在
+    adversarial（44.6%）和 temporal（39.6%）类别上丢失比例最高
    - **AutoGen**：4 类加权 F1 达到 0.511，但其高分主要依赖
      open-domain 单一类别的突出表现（0.594）；在 adversarial 上
      仅 0.272，为所有框架最低，对抗鲁棒性严重不足
@@ -638,7 +659,7 @@ Agno                |====================                      | 0.267
 | 场景 | Prompt Tokens | Completion Tokens | Total Tokens | LLM 调用 | 调用/QA |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Long-Context | 37,272,167 | 15,997 | 37,288,164 | 1,986 | 1.0 |
-| Auto pgvec (优化版) | 14,511,751 | 96,535 | 14,608,286 | 4,012 | 2.0 |
+| Auto pgvec (优化版) | 32,933,287 | 116,207 | 33,049,494 | 5,998 | 3.0 |
 | Auto pgvec (原版) | 3,890,627 | 57,501 | 3,948,128 | 4,000 | 2.0 |
 | AutoGen | 3,842,576 | 16,836 | 3,859,412 | 1,986 | 1.0 |
 | CrewAI | 5,360,840 | 278,245 | 5,639,085 | 3,972 | 2.0 |
