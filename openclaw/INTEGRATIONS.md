@@ -1,4 +1,4 @@
-# OpenClaw Demo Integrations (Backends and Tools)
+# OpenClaw Integrations (Backends and Tools)
 
 This document is a practical cookbook for:
 
@@ -12,7 +12,7 @@ It is written for absolute beginners and includes copy-paste examples.
 
 ## Mental model (from first principles)
 
-OpenClaw (in this repo) is a small runnable demo built on top of
+OpenClaw (in this repo) is a small runnable implementation built on top of
 `trpc-agent-go`.
 
 When you send a message (Telegram or HTTP), OpenClaw:
@@ -147,7 +147,7 @@ OpenClaw searches multiple skill roots (highest precedence first):
 Duplicate names:
 
 - If two skills have the same `name`, the higher-precedence one wins.
-- This demo is **fail-closed**: if the winning skill is gated off (see
+- OpenClaw is **fail-closed**: if the winning skill is gated off (see
   below), OpenClaw does not fall back to a lower-precedence copy.
 
 ### Configure skills in YAML
@@ -195,7 +195,7 @@ and the runtime contract needs to be verified.
 
 #### `skills.entries` and OpenClaw metadata
 
-This demo supports OpenClaw-style per-skill configuration:
+OpenClaw supports OpenClaw-style per-skill configuration:
 
 - `skills.entries.<key>.enabled: false` disables that skill.
 - `skills.entries.<key>.env` can satisfy `metadata.openclaw.requires.env`
@@ -297,7 +297,7 @@ Some skill packs want to be visible only when a certain integration is
 enabled in your OpenClaw config. For example, a Discord skill should not
 show up unless the Discord channel is configured.
 
-To support that, this demo builds a set of **config keys** at startup
+To support that, OpenClaw builds a set of **config keys** at startup
 based on your YAML config and enabled plugins. A skill can then require
 one or more keys:
 
@@ -334,26 +334,26 @@ Truthy values:
 
 Compatibility aliases (for upstream OpenClaw skill packs):
 
-- For every configured plugin `type`, this demo also adds:
+- For every configured plugin `type`, OpenClaw also adds:
   - `plugins.entries.<type>.enabled`
   - `plugins.entries.<type>.config.<fieldPath>`
 
 Telegram:
 
-- If a Telegram channel is configured in `channels:`, this demo adds:
+- If a Telegram channel is configured in `channels:`, OpenClaw adds:
   - `channels.telegram`
   - `channels.telegram.token`
 
 Tool surface keys (optional):
 
-- For the default LLM agent, this demo adds:
+- For the default LLM agent, OpenClaw adds:
   - `tools.exec_command`
   - `tools.write_stdin`
   - `tools.kill_session`
   - `tools.message`
   - `tools.cron`
 - Set `tools.enable_openclaw_tools: false` to disable them.
-- If `tools.enable_local_exec: true`, this demo adds:
+- If `tools.enable_local_exec: true`, OpenClaw adds:
   - `tools.local_exec`
 
 To inspect the derived config keys for your current settings, run:
@@ -391,7 +391,7 @@ To understand why a skill is missing, enable debug logs:
 Some OpenClaw skill packs use `{baseDir}` in commands and docs to mean
 "the directory that contains this skill".
 
-This demo replaces `{baseDir}` in loaded skill bodies/docs with the
+OpenClaw replaces `{baseDir}` in loaded skill bodies/docs with the
 actual local path to keep those skill packs usable.
 
 ### Skills and tool compatibility (OpenClaw host tools)
@@ -404,7 +404,7 @@ Some skill packs assume an OpenClaw-like tool surface, especially:
 - `cron`: create future or recurring jobs persisted in the OpenClaw
   state dir
 
-This demo enables OpenClaw-compatible host tools for the default LLM
+OpenClaw enables OpenClaw-compatible host tools for the default LLM
 agent. To disable them explicitly:
 
 ```yaml
@@ -453,7 +453,7 @@ Supported `session.backend` values:
 
 ### Session: inmemory (default)
 
-Good for local demos. Data is lost when the process exits.
+Good for local testing. Data is lost when the process exits.
 
 ```yaml
 session:
@@ -480,7 +480,7 @@ Notes:
 
 ### Session: sqlite
 
-Good for local demos where you want persistence across restarts.
+Good for local use where you want persistence across restarts.
 
 If `session.config` is omitted, it defaults to:
 
@@ -559,7 +559,7 @@ Supported `memory.backend` values:
 
 ### Memory: inmemory (default)
 
-Good for local demos. Data is lost when the process exits.
+Good for local testing. Data is lost when the process exits.
 
 ```yaml
 memory:
@@ -627,7 +627,7 @@ memory:
 `pgvector` uses Postgres + the `pgvector` extension, and an **embedder**
 to convert text into vectors.
 
-The OpenClaw demo currently supports an OpenAI-compatible embedder:
+OpenClaw currently supports an OpenAI-compatible embedder:
 
 - by default it uses environment variables (recommended), or
 - you can configure `memory.config.embedder` explicitly.
@@ -801,7 +801,7 @@ Important notes:
 
 ## Built-in tool providers
 
-These providers are built in to the OpenClaw demo binary.
+These providers are built in to the OpenClaw binary.
 
 ### Provider: duckduckgo
 

@@ -311,9 +311,19 @@ func (m *Manager) startBackground(
 	m.mu.Unlock()
 
 	go func() {
-		err := cmd.Wait()
+		// Use cmd.Process.Wait() instead of cmd.Wait() because
+		// cmd.Wait() closes the pipe read ends returned by StdoutPipe
+		// and StderrPipe, which races with readFrom goroutines still
+		// reading from those pipes.  See the exec.StdoutPipe docs:
+		// "It is thus incorrect to call Wait before all reads from the
+		// pipe have completed."
+		ps, _ := cmd.Process.Wait()
 		waitDone(sess.ioDone, defaultIODrain)
-		sess.markDone(exitCode(err))
+		code := -1
+		if ps != nil {
+			code = ps.ExitCode()
+		}
+		sess.markDone(code)
 		cancel()
 		_ = sess.closeIO()
 	}()
