@@ -295,13 +295,29 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 		return err
 	}
 
-	log.TracefContext(ctx, "[EmitEventWithTimeout]queue monitoring: RequestID: %s, channel capacity: %d, current length: %d, branch: %s",
-		e.RequestID, cap(ch), len(ch), e.Branch)
+	traceEnabled := log.IsTraceEnabled()
+	if traceEnabled {
+		log.TracefContext(ctx, "[EmitEventWithTimeout]queue monitoring: RequestID: %s, channel capacity: %d, current length: %d, branch: %s",
+			e.RequestID, cap(ch), len(ch), e.Branch)
+	}
 
 	if timeout == EmitWithoutTimeout {
+		// Avoid selecting on ctx.Done() when the channel has capacity.
 		select {
 		case ch <- e:
-			log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %+v", *e)
+			if traceEnabled {
+				log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %+v", *e)
+			}
+			return nil
+		default:
+		}
+		// If we couldn't send immediately, fall back to a blocking send that
+		// respects cancellation.
+		select {
+		case ch <- e:
+			if traceEnabled {
+				log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %+v", *e)
+			}
 		case <-ctx.Done():
 			err := ctx.Err()
 			log.WarnfContext(
@@ -315,11 +331,23 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 		return nil
 	}
 
+	// Avoid allocating a timer when the channel has capacity.
+	select {
+	case ch <- e:
+		if traceEnabled {
+			log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %+v", *e)
+		}
+		return nil
+	default:
+	}
+
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
 	case ch <- e:
-		log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %+v", *e)
+		if traceEnabled {
+			log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %+v", *e)
+		}
 	case <-ctx.Done():
 		err := ctx.Err()
 		log.WarnfContext(

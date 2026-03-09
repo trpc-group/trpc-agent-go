@@ -268,3 +268,8 @@ var TracefContext = func(
 func SetTraceEnabled(enabled bool) {
 	traceEnabled = enabled
 }
+
+// IsTraceEnabled reports whether trace logging is enabled.
+func IsTraceEnabled() bool {
+	return traceEnabled
+}
