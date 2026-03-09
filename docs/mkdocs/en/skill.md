@@ -269,8 +269,8 @@ Key points:
 Interactive demo:
 [examples/skillrun/main.go](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillrun/main.go)
 
-This demo and the related skill-focused examples (`skilldynamicschema`,
-`skillisolation`, and `structuredoutputskills`) explicitly set
+This demo and the related skill-focused examples (`skilldynamicschema` and
+`structuredoutputskills`) explicitly set
 `llmagent.WithEnableCodeExecutionResponseProcessor(false)` so fenced code
 blocks in assistant text do not auto-execute while `skill_run` is enabled.
 

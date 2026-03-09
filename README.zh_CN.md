@@ -541,8 +541,8 @@ sg.SetFinishPoint("A").SetFinishPoint("B")
 - 如果 `LLMAgent` 配置 `WithCodeExecutor(...)` 的目的只是支持
   `skill_run`，建议关闭响应阶段的代码执行处理器：
   `llmagent.WithEnableCodeExecutionResponseProcessor(false)`。当前
-  `examples/skillrun`、`examples/skilldynamicschema`、
-  `examples/skillisolation` 与 `examples/structuredoutputskills`
+  `examples/skill`、`examples/skillrun`、`examples/skilldynamicschema` 与
+  `examples/structuredoutputskills`
   都采用了这种配置，避免自动执行 assistant 文本里的围栏代码块。
 
 ### 12. Artifacts

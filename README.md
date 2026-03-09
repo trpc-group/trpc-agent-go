@@ -561,9 +561,10 @@ Example: [examples/skillrun](examples/skillrun)
 - When `LLMAgent` uses `WithCodeExecutor(...)` only to support `skill_run`,
   disable the response code execution processor with
   `llmagent.WithEnableCodeExecutionResponseProcessor(false)`. The
-  skill-focused examples (`examples/skillrun`, `examples/skilldynamicschema`,
-  `examples/skillisolation`, and `examples/structuredoutputskills`) follow
-  this pattern so fenced code blocks in assistant text do not auto-execute.
+  skill-focused examples (`examples/skill`, `examples/skillrun`,
+  `examples/skilldynamicschema`, and
+  `examples/structuredoutputskills`) follow this pattern so fenced code
+  blocks in assistant text do not auto-execute.
 
 ### 12. Artifacts
 

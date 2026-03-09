@@ -254,7 +254,7 @@ agent := llmagent.New(
 [examples/skillrun/main.go](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillrun/main.go)
 
 这个 demo 以及其他以 skill 为中心的示例
-（`skilldynamicschema`、`skillisolation`、`structuredoutputskills`）
+（`skill`、`skilldynamicschema`、`structuredoutputskills`）
 都显式设置了 `llmagent.WithEnableCodeExecutionResponseProcessor(false)`，
 避免在启用 `skill_run` 时自动执行 assistant 文本里的围栏代码块。
 
