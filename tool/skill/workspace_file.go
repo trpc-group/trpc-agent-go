@@ -27,18 +27,22 @@ const (
 	maxReadLinesDefault = 4000
 )
 
+// WorkspaceReadFileTool reads UTF-8 text files from a skill workspace.
 type WorkspaceReadFileTool struct {
 	run *RunTool
 }
 
+// WorkspaceWriteFileTool writes UTF-8 text files in a skill workspace.
 type WorkspaceWriteFileTool struct {
 	run *RunTool
 }
 
+// WorkspaceReplaceContentTool replaces text content in workspace files.
 type WorkspaceReplaceContentTool struct {
 	run *RunTool
 }
 
+// WorkspaceListDirTool lists files and folders in a workspace directory.
 type WorkspaceListDirTool struct {
 	run *RunTool
 }
@@ -99,24 +103,29 @@ type workspaceListDirOutput struct {
 	Folders []string `json:"folders"`
 }
 
+// NewWorkspaceReadFileTool creates a workspace read-file tool.
 func NewWorkspaceReadFileTool(run *RunTool) *WorkspaceReadFileTool {
 	return &WorkspaceReadFileTool{run: run}
 }
 
+// NewWorkspaceWriteFileTool creates a workspace write-file tool.
 func NewWorkspaceWriteFileTool(run *RunTool) *WorkspaceWriteFileTool {
 	return &WorkspaceWriteFileTool{run: run}
 }
 
+// NewWorkspaceReplaceContentTool creates a workspace replace-content tool.
 func NewWorkspaceReplaceContentTool(
 	run *RunTool,
 ) *WorkspaceReplaceContentTool {
 	return &WorkspaceReplaceContentTool{run: run}
 }
 
+// NewWorkspaceListDirTool creates a workspace list-dir tool.
 func NewWorkspaceListDirTool(run *RunTool) *WorkspaceListDirTool {
 	return &WorkspaceListDirTool{run: run}
 }
 
+// Declaration implements tool.Tool for skill_ws_read_file.
 func (t *WorkspaceReadFileTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name: "skill_ws_read_file",
@@ -146,6 +155,7 @@ func (t *WorkspaceReadFileTool) Declaration() *tool.Declaration {
 	}
 }
 
+// Declaration implements tool.Tool for skill_ws_write_file.
 func (t *WorkspaceWriteFileTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name: "skill_ws_write_file",
@@ -174,6 +184,7 @@ func (t *WorkspaceWriteFileTool) Declaration() *tool.Declaration {
 	}
 }
 
+// Declaration implements tool.Tool for skill_ws_replace_content.
 func (t *WorkspaceReplaceContentTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name: "skill_ws_replace_content",
@@ -214,6 +225,7 @@ func (t *WorkspaceReplaceContentTool) Declaration() *tool.Declaration {
 	}
 }
 
+// Declaration implements tool.Tool for skill_ws_list_dir.
 func (t *WorkspaceListDirTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name: "skill_ws_list_dir",
@@ -239,6 +251,7 @@ func (t *WorkspaceListDirTool) Declaration() *tool.Declaration {
 	}
 }
 
+// Call implements tool.CallableTool for skill_ws_read_file.
 func (t *WorkspaceReadFileTool) Call(
 	ctx context.Context,
 	args []byte,
@@ -280,6 +293,7 @@ func (t *WorkspaceReadFileTool) Call(
 	}, nil
 }
 
+// Call implements tool.CallableTool for skill_ws_write_file.
 func (t *WorkspaceWriteFileTool) Call(
 	ctx context.Context,
 	args []byte,
@@ -315,6 +329,7 @@ func (t *WorkspaceWriteFileTool) Call(
 	}, nil
 }
 
+// Call implements tool.CallableTool for skill_ws_replace_content.
 func (t *WorkspaceReplaceContentTool) Call(
 	ctx context.Context,
 	args []byte,
@@ -349,6 +364,7 @@ func (t *WorkspaceReplaceContentTool) Call(
 	return out, nil
 }
 
+// Call implements tool.CallableTool for skill_ws_list_dir.
 func (t *WorkspaceListDirTool) Call(
 	ctx context.Context,
 	args []byte,
