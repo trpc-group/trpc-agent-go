@@ -13,6 +13,7 @@ package redis
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 
 	"github.com/google/uuid"
@@ -467,6 +468,11 @@ func (s *Service) ListSessions(
 	for _, s1 := range zsetMap {
 		sessions = append(sessions, s1)
 	}
+
+	// Sort by UpdatedAt descending to match SQL-based implementations.
+	slices.SortFunc(sessions, func(a, b *session.Session) int {
+		return b.UpdatedAt.Compare(a.UpdatedAt)
+	})
 
 	return sessions, nil
 }

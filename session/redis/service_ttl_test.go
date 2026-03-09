@@ -60,7 +60,7 @@ func TestService_SessionTTL(t *testing.T) {
 			},
 		},
 		{
-			name: "session_ttl_refreshed_on_get",
+			name: "session_ttl_not_refreshed_on_get",
 			setup: func(t *testing.T, service *Service) session.Key {
 				sessionKey := session.Key{AppName: "testapp", UserID: "user123", SessionID: "session456"}
 				sess, err := service.CreateSession(context.Background(), sessionKey, session.StateMap{"key": []byte("value")})
@@ -73,22 +73,28 @@ func TestService_SessionTTL(t *testing.T) {
 				err = service.AppendEvent(context.Background(), sess, testEvent)
 				require.NoError(t, err)
 
-				time.Sleep(2 * time.Second)
+				// Wait for async persist to complete.
+				time.Sleep(1 * time.Second)
+
+				// Manually set a known shorter TTL on sessionMeta key.
+				// This ensures we have a deterministic baseline.
+				client := buildRedisClient(t, service.opts.url)
+				sessionMetaKey := hashidx.GetSessionMetaKey("", sessionKey)
+				err = client.Expire(context.Background(), sessionMetaKey, 2*time.Second).Err()
+				require.NoError(t, err)
 
 				_, err = service.GetSession(context.Background(), sessionKey)
 				require.NoError(t, err)
 				return sessionKey
 			},
 			validate: func(t *testing.T, client *redis.Client, sessionKey session.Key) {
+				// GetSession (read path) should NOT refresh TTL.
+				// We manually set TTL to 2s, so after GetSession it should still be <= 2s.
 				sessionMetaKey := hashidx.GetSessionMetaKey("", sessionKey)
 				ttl := client.TTL(context.Background(), sessionMetaKey)
 				require.NoError(t, ttl.Err())
-				assert.True(t, ttl.Val() > 3*time.Second)
-
-				eventKey := hashidx.GetEventTimeIndexKey("", sessionKey)
-				ttl = client.TTL(context.Background(), eventKey)
-				require.NoError(t, ttl.Err())
-				assert.True(t, ttl.Val() > 3*time.Second)
+				assert.True(t, ttl.Val() > 0 && ttl.Val() <= 2*time.Second,
+					"expected TTL to NOT be refreshed back to 5s, got %v", ttl.Val())
 			},
 		},
 	}
@@ -137,9 +143,10 @@ func TestService_getSessionSummaryTTL(t *testing.T) {
 	_, err = service.GetSession(ctx, key)
 	require.NoError(t, err)
 
+	// GetSession (read path) should NOT refresh TTL.
+	// The summaryKey was set without TTL, so it should remain without TTL.
 	ttlVal := client.TTL(ctx, summaryKey).Val()
-	assert.Greater(t, ttlVal, time.Duration(0))
-	assert.LessOrEqual(t, ttlVal, ttl)
+	assert.Equal(t, time.Duration(-1), ttlVal, "expected no TTL on summaryKey after GetSession (read path should not refresh TTL)")
 }
 
 func TestService_AppStateTTL(t *testing.T) {

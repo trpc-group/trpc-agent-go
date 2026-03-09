@@ -80,11 +80,6 @@ func (c *Client) GetTrackEvents(
 		return make(map[session.Track][]session.TrackEvent), nil
 	}
 
-	ttlSeconds := int64(0)
-	if c.cfg.SessionTTL > 0 {
-		ttlSeconds = int64(c.cfg.SessionTTL.Seconds())
-	}
-
 	minScore := "-inf"
 	if !afterTime.IsZero() {
 		minScore = fmt.Sprintf("%d", afterTime.UnixNano())
@@ -93,7 +88,7 @@ func (c *Client) GetTrackEvents(
 
 	results := make(map[session.Track][]session.TrackEvent)
 	for _, track := range tracks {
-		events, err := c.loadTrackEventsViaLua(ctx, key, track, minScore, maxScore, limit, ttlSeconds)
+		events, err := c.loadTrackEventsViaLua(ctx, key, track, minScore, maxScore, limit)
 		if err != nil {
 			return nil, err
 		}
@@ -111,14 +106,13 @@ func (c *Client) loadTrackEventsViaLua(
 	track session.Track,
 	minScore, maxScore string,
 	limit int,
-	ttlSeconds int64,
 ) ([]session.TrackEvent, error) {
 	rawEvents, err := luaLoadTrackEvents.Run(ctx, c.client,
 		[]string{
 			c.keys.TrackDataKey(key, track),
 			c.keys.TrackTimeIndexKey(key, track),
 		},
-		minScore, maxScore, limit, ttlSeconds,
+		minScore, maxScore, limit,
 	).StringSlice()
 	if err != nil {
 		if err == redis.Nil {

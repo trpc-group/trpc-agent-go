@@ -253,10 +253,6 @@ func (c *Client) ListSessions(
 		return nil, err
 	}
 
-	slices.SortFunc(sessStates, func(a, b *SessionState) int {
-		return b.UpdatedAt.Compare(a.UpdatedAt)
-	})
-
 	appState, err := util.ProcessStateCmd(appStateCmd)
 	if err != nil {
 		return nil, err
@@ -454,8 +450,6 @@ func (c *Client) fetchSessionMeta(
 	sessCmd := pipe.HGet(ctx, sessKey, key.SessionID)
 	summariesCmd := pipe.HGet(ctx, sessSummaryKey, key.SessionID)
 
-	c.appendSessionTTL(ctx, pipe, key, sessKey, sessSummaryKey, appStateKey, userStateKey)
-
 	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
 		return nil, nil, nil, nil, fmt.Errorf("get session state failed: %w", err)
 	}
@@ -585,9 +579,6 @@ func (c *Client) getTrackEvents(
 				zrangeBy.Count = int64(limit)
 			}
 			cmd := dataPipe.ZRevRangeByScore(ctx, trackKey, zrangeBy)
-			if c.cfg.SessionTTL > 0 {
-				dataPipe.Expire(ctx, trackKey, c.cfg.SessionTTL)
-			}
 			queries = append(queries, &trackQuery{
 				sessionIdx: i,
 				track:      track,

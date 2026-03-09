@@ -13,7 +13,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"slices"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -133,9 +132,9 @@ func (c *Client) GetSession(
 //
 // Uses 3 Redis round-trips:
 //
-//	RT1: luaLoadSessionData — events + userState + summary + TTL refresh (same {userID} slot)
-//	RT2: pipeline ZRANGE + EXPIRE for each track (same {userID} slot)
-//	RT3: pipeline HGETALL + EXPIRE for appState (different {appName} slot)
+//	RT1: luaLoadSessionData — events + userState + summary (same {userID} slot)
+//	RT2: pipeline ZRANGE for each track (same {userID} slot)
+//	RT3: pipeline HGETALL for appState (different {appName} slot)
 func (c *Client) loadSessionComplete(
 	ctx context.Context,
 	key session.Key,
@@ -237,19 +236,7 @@ func (c *Client) loadSessionDataViaLua(
 		c.keys.UserStateKey(key.AppName, key.UserID),
 	}
 
-	sessionTTL := int64(0)
-	if c.cfg.SessionTTL > 0 {
-		sessionTTL = int64(c.cfg.SessionTTL.Seconds())
-	}
-	userStateTTL := int64(0)
-	if c.cfg.UserStateTTL > 0 {
-		userStateTTL = int64(c.cfg.UserStateTTL.Seconds())
-	}
-
-	raw, err := luaLoadSessionData.Run(ctx, c.client, keys,
-		sessionTTL,
-		userStateTTL,
-	).Text()
+	raw, err := luaLoadSessionData.Run(ctx, c.client, keys).Text()
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +248,7 @@ func (c *Client) loadSessionDataViaLua(
 	return &result, nil
 }
 
-// loadAndMergeAppState loads and merges app state, and refreshes TTL.
+// loadAndMergeAppState loads and merges app state.
 // This is a separate round-trip because appState uses {appName} hash tag.
 func (c *Client) loadAndMergeAppState(ctx context.Context, key session.Key, sess *session.Session) {
 	if sess == nil {
@@ -269,9 +256,6 @@ func (c *Client) loadAndMergeAppState(ctx context.Context, key session.Key, sess
 	}
 	pipe := c.client.Pipeline()
 	appStateCmd := pipe.HGetAll(ctx, c.keys.AppStateKey(key.AppName))
-	if c.cfg.AppStateTTL > 0 {
-		pipe.Expire(ctx, c.keys.AppStateKey(key.AppName), c.cfg.AppStateTTL)
-	}
 	_, _ = pipe.Exec(ctx)
 
 	if res, err := appStateCmd.Result(); err == nil {
@@ -486,11 +470,6 @@ func (c *Client) ListSessions(ctx context.Context, userKey session.UserKey, limi
 		return nil, err
 	}
 
-	// Sort by UpdatedAt descending to match zset/SQL-based implementations.
-	slices.SortFunc(sessions, func(a, b *session.Session) int {
-		return b.UpdatedAt.Compare(a.UpdatedAt)
-	})
-
 	// Post-process: batch load shared app/user state and track events
 	// This is more efficient than loading per-session
 	if len(sessions) > 0 {
@@ -539,19 +518,12 @@ func (c *Client) loadSessionBasic(
 	sess.CreatedAt = meta.CreatedAt
 	sess.UpdatedAt = meta.UpdatedAt
 
-	// Load events
-	ttlSeconds := int64(0)
-	if c.cfg.SessionTTL > 0 {
-		ttlSeconds = int64(c.cfg.SessionTTL.Seconds())
-	}
-
 	result, err := luaLoadEvents.Run(ctx, c.client,
 		[]string{
 			c.keys.EventDataKey(key),
 			c.keys.EventTimeIndexKey(key),
-			c.keys.SessionMetaKey(key),
 		},
-		0, int64(-1), ttlSeconds, 0,
+		0, int64(-1), 0,
 	).StringSlice()
 	if err != nil && err != redis.Nil {
 		return nil, fmt.Errorf("load events: %w", err)

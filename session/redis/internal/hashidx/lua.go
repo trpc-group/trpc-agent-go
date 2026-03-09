@@ -64,17 +64,15 @@ end
 return 1
 `)
 
-// luaLoadEvents loads events by time range and refreshes TTL.
-// KEYS[1] = evtdata key, KEYS[2] = evtidx:time key, KEYS[3] = sessionMeta key
-// ARGV[1] = offset, ARGV[2] = limit, ARGV[3] = TTL, ARGV[4] = reverse (1=latest first, 0=oldest first)
+// luaLoadEvents loads events by time range.
+// KEYS[1] = evtdata key, KEYS[2] = evtidx:time key
+// ARGV[1] = offset, ARGV[2] = limit, ARGV[3] = reverse (1=latest first, 0=oldest first)
 var luaLoadEvents = redis.NewScript(`
 local evtDataKey = KEYS[1]
 local evtTimeKey = KEYS[2]
-local sessionMetaKey = KEYS[3]
 local offset = tonumber(ARGV[1])
 local limit = tonumber(ARGV[2])
-local ttl = tonumber(ARGV[3])
-local reverse = tonumber(ARGV[4]) == 1
+local reverse = tonumber(ARGV[3]) == 1
 
 local endIdx = limit < 0 and -1 or offset + limit - 1
 local eventIDs
@@ -90,13 +88,6 @@ if #eventIDs > 0 then
     for _, data in ipairs(dataList) do
         if data then table.insert(result, data) end
     end
-end
-
--- Refresh TTL
-if ttl > 0 then
-    redis.call('EXPIRE', sessionMetaKey, ttl)
-    redis.call('EXPIRE', evtDataKey, ttl)
-    redis.call('EXPIRE', evtTimeKey, ttl)
 end
 
 return result
@@ -154,11 +145,6 @@ return 0
 //	KEYS[4] = summaryKey (STRING, JSON map of filterKey -> Summary)
 //	KEYS[5] = userStateKey (HASH)
 //
-// ARGV layout:
-//
-//	ARGV[1] = sessionTTL (seconds, 0 = no TTL)
-//	ARGV[2] = userStateTTL (seconds, 0 = no TTL)
-//
 // Returns: cjson-encoded table:
 //
 //	{
@@ -172,9 +158,6 @@ local evtTimeKey = KEYS[2]
 local sessionMetaKey = KEYS[3]
 local summaryKey = KEYS[4]
 local userStateKey = KEYS[5]
-
-local sessionTTL = tonumber(ARGV[1])
-local userStateTTL = tonumber(ARGV[2])
 
 local result = {}
 
@@ -203,17 +186,6 @@ if #userState > 0 then
         us[userState[i]] = userState[i + 1]
     end
     result['userState'] = us
-end
-
--- 4. Refresh TTLs for session-scoped keys
-if sessionTTL > 0 then
-    redis.call('EXPIRE', sessionMetaKey, sessionTTL)
-    redis.call('EXPIRE', evtDataKey, sessionTTL)
-    redis.call('EXPIRE', evtTimeKey, sessionTTL)
-    redis.call('EXPIRE', summaryKey, sessionTTL)
-end
-if userStateTTL > 0 then
-    redis.call('EXPIRE', userStateKey, userStateTTL)
 end
 
 return cjson.encode(result)
@@ -350,7 +322,6 @@ return id
 // ARGV[1] = minScore (afterTime UnixNano, use "-inf" for no lower bound)
 // ARGV[2] = maxScore (use "+inf" for no upper bound)
 // ARGV[3] = limit (0 = no limit)
-// ARGV[4] = TTL (seconds, 0 = no TTL)
 // Returns: list of TrackEvent JSON strings in chronological order.
 var luaLoadTrackEvents = redis.NewScript(`
 local dataKey = KEYS[1]
@@ -359,7 +330,6 @@ local idxKey = KEYS[2]
 local minScore = ARGV[1]
 local maxScore = ARGV[2]
 local limit = tonumber(ARGV[3])
-local ttl = tonumber(ARGV[4])
 
 -- Get event IDs in chronological order (ascending score)
 local eventIDs
@@ -384,12 +354,6 @@ if #eventIDs > 0 then
             table.insert(result, data)
         end
     end
-end
-
--- Refresh TTL
-if ttl > 0 then
-    redis.call('EXPIRE', dataKey, ttl)
-    redis.call('EXPIRE', idxKey, ttl)
 end
 
 return result

@@ -423,9 +423,15 @@ func TestListSessions(t *testing.T) {
 		sessions, err := c.ListSessions(ctx, userKey, 0, time.Time{})
 		require.NoError(t, err)
 		require.Len(t, sessions, 3)
-		assert.Equal(t, "s2", sessions[0].ID)
-		assert.Equal(t, "s1", sessions[1].ID)
-		assert.Equal(t, "s0", sessions[2].ID)
+		// Sorting is done at the service layer, not internally.
+		// Just verify all sessions are returned.
+		ids := make(map[string]bool)
+		for _, s := range sessions {
+			ids[s.ID] = true
+		}
+		assert.True(t, ids["s0"])
+		assert.True(t, ids["s1"])
+		assert.True(t, ids["s2"])
 	})
 }
 
