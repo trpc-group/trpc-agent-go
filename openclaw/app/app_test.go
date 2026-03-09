@@ -13,6 +13,7 @@ package app
 import (
 	"context"
 	"errors"
+	"flag"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -650,7 +651,15 @@ func TestNewRuntime_ErrorPathsExitCode(t *testing.T) {
 func TestMain_HelpReturnsUsageCode(t *testing.T) {
 	t.Parallel()
 
-	require.Equal(t, 2, Main([]string{"-h"}))
+	require.Equal(t, 0, Main([]string{"-h"}))
+}
+
+func TestMain_HelpSkipsErrorLog(t *testing.T) {
+	t.Parallel()
+
+	require.False(t, shouldLogExitError(flag.ErrHelp))
+	require.True(t, shouldLogExitError(errors.New("boom")))
+	require.False(t, shouldLogExitError(nil))
 }
 
 func TestMain_InspectDispatches(t *testing.T) {
@@ -1716,6 +1725,58 @@ func TestRuntimeAdminHelpers(t *testing.T) {
 		"/tmp/state",
 	)
 	require.NotEmpty(t, instanceID)
+}
+
+func TestGatewayStartupLines(t *testing.T) {
+	t.Parallel()
+
+	gwSrv, err := gateway.New(&stubRunner{})
+	require.NoError(t, err)
+
+	require.Equal(t,
+		[]startupLogLine{
+			{text: "Gateway listening on 127.0.0.1:18080"},
+			{text: "Health:   GET  /healthz"},
+			{text: "Messages: POST /v1/gateway/messages"},
+			{text: "Status:   GET  /v1/gateway/status?request_id=..."},
+			{text: "Cancel:   POST /v1/gateway/cancel"},
+		},
+		gatewayStartupLines("127.0.0.1:18080", gwSrv),
+	)
+}
+
+func TestAdminStartupLines(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t,
+		[]startupLogLine{
+			{text: "Admin UI listening on 127.0.0.1:19789"},
+			{text: "Admin UI: http://127.0.0.1:19789"},
+		},
+		adminStartupLines("127.0.0.1:19789", &adminBinding{
+			addr: "127.0.0.1:19789",
+			url:  "http://127.0.0.1:19789",
+		}),
+	)
+
+	require.Equal(t,
+		[]startupLogLine{
+			{
+				warn: true,
+				text: "Admin UI preferred address 127.0.0.1:19789 " +
+					"was busy; using 127.0.0.1:19790 instead",
+			},
+			{text: "Admin UI listening on 127.0.0.1:19790"},
+			{text: "Admin UI: http://127.0.0.1:19790"},
+		},
+		adminStartupLines("127.0.0.1:19789", &adminBinding{
+			addr:      "127.0.0.1:19790",
+			url:       "http://127.0.0.1:19790",
+			relocated: true,
+		}),
+	)
+
+	require.Nil(t, adminStartupLines("127.0.0.1:19789", nil))
 }
 
 type toolProviderCfg struct {

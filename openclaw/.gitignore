@@ -1,0 +1,4 @@
+.openclaw-state/
+linux/
+memories.sqlite
+sessions.sqlite

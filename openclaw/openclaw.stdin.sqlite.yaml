@@ -1,0 +1,43 @@
+app_name: "openclaw-stdin-sqlite"
+state_dir: "./.openclaw-state/stdin-sqlite"
+
+http:
+  addr: "127.0.0.1:18080"
+
+admin:
+  enabled: false
+
+agent:
+  instruction: "You are a helpful assistant for terminal chat."
+
+# Real model mode. Load credentials in shell before starting:
+#   source ~/.zshrc
+#   gpt52
+model:
+  mode: "openai"
+  name: "gpt-5.2"
+  openai_variant: "auto"
+
+# Mock mode example for local smoke tests:
+# model:
+#   mode: "mock"
+
+channels:
+  - type: "stdin"
+    name: "terminal"
+    config:
+      from: "alice"
+      show_prompt: true
+      show_role_labels: true
+
+session:
+  backend: "sqlite"
+  config:
+    path: "./sessions.sqlite"
+    skip_db_init: false
+
+memory:
+  backend: "sqlite"
+  config:
+    path: "./memories.sqlite"
+    skip_db_init: false

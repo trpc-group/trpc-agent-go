@@ -41,11 +41,13 @@ const (
 	sessionBackendPostgres   = "postgres"
 	sessionBackendClickHouse = "clickhouse"
 
-	memoryBackendInMemory = "inmemory"
-	memoryBackendRedis    = "redis"
-	memoryBackendMySQL    = "mysql"
-	memoryBackendPostgres = "postgres"
-	memoryBackendPGVector = "pgvector"
+	memoryBackendInMemory  = "inmemory"
+	memoryBackendRedis     = "redis"
+	memoryBackendSQLite    = "sqlite"
+	memoryBackendSQLiteVec = "sqlitevec"
+	memoryBackendMySQL     = "mysql"
+	memoryBackendPostgres  = "postgres"
+	memoryBackendPGVector  = "pgvector"
 
 	summaryPolicyAny = "any"
 	summaryPolicyAll = "all"
@@ -547,7 +549,9 @@ func parseRunOptions(args []string) (runOptions, error) {
 		&opts.MemoryBackend,
 		"memory-backend",
 		memoryBackendInMemory,
-		"Memory backend: inmemory|redis|mysql|postgres|pgvector",
+		"Memory backend: inmemory|redis|sqlite|"+
+			"sqlitevec(requires openclaw_sqlitevec build tag)|"+
+			"mysql|postgres|pgvector",
 	)
 	fs.StringVar(
 		&opts.MemoryRedisURL,

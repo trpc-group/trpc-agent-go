@@ -188,6 +188,8 @@ Notes:
   `go run ./cmd/openclaw -config ./openclaw.yaml`.
 - The sample config in `./openclaw.stdin.yaml` is ready to use with
   `go run ./cmd/openclaw -config ./openclaw.stdin.yaml`.
+- The sample config in `./openclaw.stdin.sqlite.yaml` is ready to use
+  with `go run ./cmd/openclaw -config ./openclaw.stdin.sqlite.yaml`.
 - Plugin sections:
   - `channels` configures channel plugins. The default binary ships with the
     `telegram` and `stdin` channel plugins; other channel types require a
@@ -1002,16 +1004,35 @@ match your business identifier.
 ### Local persistence (SQLite)
 
 If you want local persistence across restarts (without running Redis),
-use the `sqlite` session backend.
+use the SQLite-backed backends.
 
-By default, it stores data in `<state_dir>/sessions.sqlite`.
+By default, they store data in:
+
+- Session `sqlite`: `<state_dir>/sessions.sqlite`
+- Memory `sqlite`: `<state_dir>/memories.sqlite`
+- Memory `sqlitevec`: `<state_dir>/memories_vec.sqlite`
+
+Example using session + memory SQLite:
 
 ```bash
 cd openclaw
 go run ./cmd/openclaw \
   -mode mock \
-  -session-backend sqlite
+  -session-backend sqlite \
+  -memory-backend sqlite
 ```
+
+The bundled sample config `./openclaw.stdin.sqlite.yaml` also uses
+SQLite for both session and memory.
+
+`memory.backend=sqlitevec` is also supported for vector search. It uses
+an OpenAI-compatible embedder and requires embedding credentials at
+runtime.
+
+SQLite-backed memory backends require a CGO-enabled build.
+`sqlitevec` is additionally compiled behind the
+`openclaw_sqlitevec` build tag so the default `go build ./cmd/openclaw`
+path does not require the extra `sqlite-vec` header dependency.
 
 ### SQL backends (MySQL/Postgres/ClickHouse/PGVector)
 

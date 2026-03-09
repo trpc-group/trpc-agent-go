@@ -553,6 +553,8 @@ Supported `memory.backend` values:
 
 - `inmemory` (default)
 - `redis`
+- `sqlite`
+- `sqlitevec`
 - `mysql`
 - `postgres`
 - `pgvector`
@@ -578,6 +580,30 @@ memory:
     key_prefix: "openclaw"
   limit: 200
 ```
+
+### Memory: sqlite
+
+Good for local demos where you want persistence across restarts without
+running Redis or Postgres.
+
+If `memory.config` is omitted, it defaults to:
+
+- `<state_dir>/memories.sqlite`
+
+Example with an explicit path:
+
+```yaml
+memory:
+  backend: "sqlite"
+  limit: 500
+  config:
+    path: "/tmp/openclaw-memories.sqlite"
+    skip_db_init: false
+    table_name: "memories"
+    soft_delete: true
+```
+
+This backend requires a CGO-enabled build.
 
 ### Memory: mysql / postgres
 
@@ -621,6 +647,60 @@ memory:
     table_name: "memories"
     soft_delete: true
 ```
+
+### Memory: sqlitevec (vector search on SQLite)
+
+`sqlitevec` uses SQLite + the `sqlite-vec` extension, and an
+**embedder** to convert text into vectors.
+
+OpenClaw only includes `sqlitevec` when built with the
+`openclaw_sqlitevec` build tag. This keeps the default
+`go build ./cmd/openclaw` path free from the extra `sqlite-vec`
+header dependency.
+
+If `memory.config` is omitted, it defaults to:
+
+- `<state_dir>/memories_vec.sqlite`
+
+Minimal example (embedder reads environment variables):
+
+```yaml
+memory:
+  backend: "sqlitevec"
+  limit: 500
+  config:
+    path: "/tmp/openclaw-memories-vec.sqlite"
+    table_name: "memories"
+    index_dimension: 1536
+    max_results: 8
+```
+
+Explicit embedder example:
+
+```yaml
+memory:
+  backend: "sqlitevec"
+  config:
+    path: "/tmp/openclaw-memories-vec.sqlite"
+    embedder:
+      type: "openai"
+      model: "text-embedding-3-small"
+      dimensions: 1536
+      api_key: "<YOUR_API_KEY>"
+      base_url: "https://api.openai.com/v1"
+```
+
+Security note: treat `api_key` as a secret. Prefer environment variables
+over committing config files.
+
+Build requirement: `sqlitevec` needs both CGO and the
+`openclaw_sqlitevec` build tag, for example:
+
+```bash
+go build -tags openclaw_sqlitevec ./cmd/openclaw
+```
+
+This backend requires a CGO-enabled build.
 
 ### Memory: pgvector (vector search on Postgres)
 
