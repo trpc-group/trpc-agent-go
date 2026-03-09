@@ -50,6 +50,14 @@ func init() {
 		newRedisMemoryBackend,
 	))
 	must(registry.RegisterMemoryBackend(
+		memoryBackendSQLite,
+		newSQLiteMemoryBackend,
+	))
+	must(registry.RegisterMemoryBackend(
+		memoryBackendSQLiteVec,
+		newSQLiteVecMemoryBackend,
+	))
+	must(registry.RegisterMemoryBackend(
 		memoryBackendMySQL,
 		newMySQLMemoryBackend,
 	))

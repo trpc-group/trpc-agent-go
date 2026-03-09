@@ -107,6 +107,28 @@ func TestNewPGVectorMemoryBackend_MissingConfigFails(t *testing.T) {
 	require.Contains(t, err.Error(), "requires dsn or instance")
 }
 
+func TestNewSQLiteMemoryBackend_MissingConfigFails(t *testing.T) {
+	t.Parallel()
+
+	_, err := newSQLiteMemoryBackend(
+		registry.MemoryDeps{},
+		registry.MemoryBackendSpec{},
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "requires path or dsn")
+}
+
+func TestNewSQLiteVecMemoryBackend_MissingConfigFails(t *testing.T) {
+	t.Parallel()
+
+	_, err := newSQLiteVecMemoryBackend(
+		registry.MemoryDeps{},
+		registry.MemoryBackendSpec{},
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "requires path or dsn")
+}
+
 func TestNewPGVectorMemoryBackend_EmbedderTypeFails(t *testing.T) {
 	t.Parallel()
 
