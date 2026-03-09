@@ -557,7 +557,8 @@ llmagent.WithAddSessionSummary(true)
 
 **工作方式**：
 
-- 会话摘要作为独立的系统消息插入到第一个现有系统消息之后
+- 会话摘要**合并到已有的系统消息中**（如果存在），否则作为新的系统消息插入到开头
+- 这确保了与要求单条系统消息位于开头的模型兼容（如 Qwen3.5 系列）
 - 包含摘要时间点之后的**所有增量事件**（不截断）
 - 保证完整上下文：浓缩历史 + 完整新对话
 - **`WithMaxHistoryRuns` 参数被忽略**
@@ -567,16 +568,23 @@ llmagent.WithAddSessionSummary(true)
 ```
 ┌─────────────────────────────────────────┐
 │ System Prompt                           │
-├─────────────────────────────────────────┤
-│ Session Summary (system message)        │ ← Compressed history
+│ (merged with Session Summary)           │ ← 系统提示 + 浓缩历史
 ├─────────────────────────────────────────┤
 │ Event 1 (after summary)                 │ ┐
 │ Event 2                                 │ │
-│ Event 3                                 │ │ New events after summary
-│ ...                                     │ │ (fully retained)
+│ Event 3                                 │ │ 摘要后的新事件
+│ ...                                     │ │ (完整保留)
 │ Event N (current message)               │ ┘
 └─────────────────────────────────────────┘
 ```
+
+**模型兼容性**：
+
+部分 LLM 提供商对系统消息的位置和数量有严格要求：
+
+- **Qwen3.5 系列**等模型要求系统消息必须位于对话开头，且不支持多条系统消息
+- 默认的合并行为可避免 `System message must be at the beginning` 等错误
+- 预加载的内存内容也会通过相同机制合并到系统消息中
 
 ### 模式 2：不使用摘要
 
