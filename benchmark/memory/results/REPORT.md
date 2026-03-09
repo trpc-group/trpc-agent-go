@@ -222,7 +222,117 @@ the same 10 samples (1,986 QA), and LLM-as-Judge evaluation.
 | **ADK** | In-memory | Agent tool call (LoadMemoryTool) | Internal |
 | **CrewAI** | Built-in vector | Auto-retrieve by Crew | Internal |
 
-### 4.2 Overall Results
+### 4.2 Framework Memory Approaches
+
+Below is a detailed breakdown of each framework's memory storage,
+retrieval, and QA call flow. All benchmark implementations share
+the same system prompt strategy (five-category QA answering rules)
+and evaluation pipeline.
+
+**trpc-agent-go (optimized) — Auto extraction + pgvector hybrid:**
+
+- **Storage**: Conversation turns are processed by an LLM extractor
+  into structured facts/episodes (content + metadata + event_time),
+  stored in pgvector.
+- **Retrieval**: The agent issues a `memory_search` tool call that
+  triggers pgvector hybrid search (vector similarity + keyword
+  matching), returning up to 15 structured memory entries.
+- **QA flow**: 2 LLM calls (Step 1 emits tool call → Step 2 reads
+  search results and answers).
+- **Strengths**: Extracted memories are precise, high information
+  density; hybrid search covers both semantic and keyword matches.
+- **Issues**: Tool-call pattern forces Step 2 to re-read all of
+  Step 1's context, inflating prompts to ~7,356 tokens/QA;
+  structured JSON format adds serialization overhead.
+
+**AutoGen — Raw turns in ChromaDB + single LLM call:**
+
+- **Storage**: Raw conversation turns stored as
+  `[SessionDate: ...] Speaker: text` in ChromaDB; embedding only,
+  no LLM extraction.
+- **Retrieval**: Before `AssistantAgent.run()`, the
+  `ChromaDBVectorMemory.update_context()` method queries ChromaDB
+  with the question, retrieves top-30 results (score ≥ 0.3), and
+  injects them as a `SystemMessage` into the model context.
+- **QA flow**: **1 LLM call** — retrieval results are pre-injected
+  before the call; no tool call needed.
+- **Strengths**: Fewest calls (1/QA), highest token efficiency
+  (1,943 tokens/QA); not-available rate only 9.5%.
+- **Issues**: Adversarial F1 only 0.272 (lowest among all
+  frameworks), severe adversarial robustness deficiency; relies on
+  pure vector search with no keyword/BM25 supplement.
+
+**CrewAI — ShortTermMemory + Crew two-step call:**
+
+- **Storage**: Raw conversation turns stored in CrewAI's built-in
+  `ShortTermMemory` (ChromaDB-based vector store); no LLM
+  extraction.
+- **Retrieval**: Monkey-patched `ContextualMemory._fetch_stm_context`
+  widens the search window to top-30 (default is only top-5);
+  results formatted as `- [content]` list injected into agent
+  context.
+- **QA flow**: 2 LLM calls — Call 1 is Crew's internal
+  formatting/planning step, Call 2 answers with memory context.
+- **Strengths**: Simple storage (no LLM extraction cost), compact
+  retrieval format.
+- **Issues**: **22.7% of QA returned "memory not available"**,
+  indicating insufficient vector retrieval recall; Crew's Call 1
+  (planning step) is pure framework overhead contributing ~140
+  completion tokens/QA with no F1 benefit; adversarial and temporal
+  categories show 44.6% and 39.6% loss rates respectively.
+
+**ADK — InMemoryMemoryService + LoadMemoryTool full load:**
+
+- **Storage**: Conversation turns stored as `Event` objects in ADK's
+  `InMemoryMemoryService` (pure in-memory, no persistence).
+- **Retrieval**: The agent calls `LoadMemoryTool` which loads
+  **all memories indiscriminately into context** — no selective
+  retrieval whatsoever.
+- **QA flow**: 2 LLM calls (Step 1 calls LoadMemoryTool → Step 2
+  reads all memories and answers).
+- **Strengths**: No memory loss (not-available rate only 9.1%).
+- **Issues**: **Catastrophic token inflation** (49,224 tokens/QA,
+  6.7x the optimized version); 9 QA exceeded 128K tokens causing
+  context overflow; 10 QA returned empty predictions; single QA
+  peak at 252,849 tokens.
+
+**Agno — LLM fact extraction + SQLite full injection:**
+
+- **Storage**: Each conversation turn is processed by
+  `MemoryManager` which calls an LLM to extract facts/preferences,
+  stored in SQLite (LLM extraction cost excluded from QA token
+  counts).
+- **Retrieval**: With `add_memories_to_context=True`, **all**
+  stored memories are injected into the system prompt under
+  `<memories_from_previous_interactions>` — no vector search or
+  similarity filtering.
+- **QA flow**: 1 LLM call (memories already in system prompt).
+- **Strengths**: LLM extraction preserves key facts.
+- **Issues**: **Full injection inflates to 10,436 tokens/QA**;
+  highest latency (14,127ms/QA, 7h47m total); highest
+  not-available rate (25.5%); the underlying DB interface's
+  `limit`/`topics` filtering parameters are never used by
+  `MemoryManager` — a design gap.
+
+**Approach comparison summary:**
+
+| Dimension | trpc (opt) | AutoGen | CrewAI | ADK | Agno |
+| --- | --- | --- | --- | --- | --- |
+| Storage | LLM-extracted structured | Raw turns | Raw turns | Raw turns | LLM-extracted facts |
+| Retrieval | Vector+keyword hybrid | Vector top-30 | Vector top-30 | **Full load** | **Full injection** |
+| LLM calls/QA | 2 (tool call) | **1** (pre-inject) | 2 (Crew internal) | 2 (tool call) | 1 (pre-inject) |
+| Tokens/QA | 7,356 | **1,943** | 2,839 | 49,224 | 10,436 |
+| NA rate | — | 9.5% | 22.7% | 9.1% | 25.5% |
+
+> Key insight: **retrieval strategy is the primary differentiator**.
+> Full-load approaches (ADK/Agno) waste tokens with poor results;
+> selective retrieval (AutoGen/CrewAI/trpc) performs significantly
+> better. Within selective retrieval, AutoGen's "pre-inject +
+> single call" is the most token-efficient pattern, while trpc's
+> "tool call + structured memory" achieves the highest F1 at
+> greater token cost.
+
+### 4.3 Overall Results
 
 **Table 7: Memory Scenario — Overall Metrics**
 
@@ -255,7 +365,7 @@ Agno                   |==============================            | 0.332
                        0.0      0.1      0.2      0.3      0.4   0.5
 ```
 
-### 4.3 Category-Level F1
+### 4.4 Category-Level F1
 
 **Table 8: F1 by Category**
 
@@ -278,7 +388,7 @@ Agno                   |==============================            | 0.332
 > on par with AutoGen (0.457). 4-category weighted 0.420 is
 > below AutoGen (0.511), with a gap of 0.091.
 
-### 4.4 Token Efficiency and Latency
+### 4.5 Token Efficiency and Latency
 
 **Table 10: Token Efficiency Comparison**
 
@@ -340,7 +450,7 @@ significantly better F1/cost trade-off: **+26.2% F1** (0.363→0.458)
 for only **3.7x token cost**, making it worthwhile for production
 use where answer quality matters more than token budget.
 
-### 4.5 ADK Failure Analysis
+### 4.6 ADK Failure Analysis
 
 ADK (Google Agent Development Kit) uses an in-memory backend with
 agent tool calls (`LoadMemoryTool`) for memory retrieval. In this
@@ -373,7 +483,7 @@ evaluation, ADK encountered context overflow issues on some samples:
 - Average 49,224 tokens/QA (highest among all frameworks) for
   only 0.362 F1
 
-### 4.6 Per-Sample F1
+### 4.7 Per-Sample F1
 
 **Table 12: Per-Sample F1 Comparison**
 
@@ -401,6 +511,16 @@ Source: Mem0 Table 1 (Chhikara et al., 2025, arXiv:2504.19413).
 All systems use GPT-4o-mini. Adversarial category excluded for
 cross-system comparability (Mem0 paper does not include it).
 
+> **About "LoCoMo (paper baseline)" in the table.** LoCoMo is
+> both the dataset used in this report and a memory system
+> proposed in the LoCoMo paper (Maharana et al., 2024). That
+> system extracts events and summaries from conversations via
+> LLM and retrieves them at query time using BM25 + semantic
+> search. The Mem0 paper reproduced this approach on the same
+> dataset and reported the F1 scores shown here. The table entry
+> "LoCoMo (paper baseline)" thus refers to the memory system's
+> performance, not the dataset itself.
+
 **Table 13: F1 by Category (Excluding Adversarial)**
 
 | Method | Single-Hop | Multi-Hop | Open-Domain | Temporal | 4-cat Weighted | Source |
@@ -417,7 +537,7 @@ cross-system comparability (Mem0 paper does not include it).
 | A-Mem | 0.270 | 0.121 | 0.447 | 0.459 | 0.347 | Mem0 paper |
 | OpenAI Memory | 0.343 | 0.201 | 0.393 | 0.140 | 0.328 | Mem0 paper |
 | MemGPT | 0.267 | 0.092 | 0.410 | 0.255 | 0.308 | Mem0 paper |
-| LoCoMo | 0.250 | 0.120 | 0.404 | 0.184 | 0.303 | Mem0 paper |
+| LoCoMo (paper baseline) | 0.250 | 0.120 | 0.404 | 0.184 | 0.303 | Mem0 paper |
 | trpc-agent (original) | 0.246 | 0.092 | 0.324 | 0.063 | 0.245 | This work |
 | Agno | 0.240 | 0.283 | 0.292 | 0.076 | 0.267 | This work |
 | ReadAgent | 0.092 | 0.053 | 0.097 | 0.126 | 0.089 | Mem0 paper |
@@ -438,7 +558,7 @@ LangMem             |=============================             | 0.362
 A-Mem               |===========================               | 0.347
 OpenAI Memory       |==========================                | 0.328
 MemGPT              |========================                  | 0.308
-LoCoMo              |========================                  | 0.303
+LoCoMo (baseline)   |========================                  | 0.303
 trpc-agent (origi)  |==================                        | 0.245
 Agno                |====================                      | 0.267
                     +------------------------------------------+
