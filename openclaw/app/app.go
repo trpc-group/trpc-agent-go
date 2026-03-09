@@ -19,6 +19,7 @@ package app
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"hash/crc32"
 	"net"
@@ -207,8 +208,13 @@ func Main(args []string) int {
 	if err := run(ctx, args); err != nil {
 		var exitErr *exitError
 		if errors.As(err, &exitErr) {
-			log.Errorf("%v", exitErr.Err)
-			return exitErr.Code
+			if errors.Is(exitErr.Err, flag.ErrHelp) {
+				return 0
+			}
+			if shouldLogExitError(exitErr.Err) {
+				log.Errorf("%v", exitErr.Err)
+			}
+			return exitErr.ExitCode()
 		}
 		log.Errorf("%v", err)
 		return 1
@@ -219,6 +225,11 @@ func Main(args []string) int {
 type exitError struct {
 	Code int
 	Err  error
+}
+
+type startupLogLine struct {
+	warn bool
+	text string
 }
 
 func applyOpenClawToolDefaults(
@@ -249,6 +260,71 @@ func (e *exitError) ExitCode() int {
 		return 1
 	}
 	return e.Code
+}
+
+func shouldLogExitError(err error) bool {
+	return err != nil && !errors.Is(err, flag.ErrHelp)
+}
+
+func logStartupLines(lines []startupLogLine) {
+	for _, line := range lines {
+		if line.warn {
+			log.Warn(line.text)
+			continue
+		}
+		log.Info(line.text)
+	}
+}
+
+func gatewayStartupLines(
+	httpAddr string,
+	gwSrv *gateway.Server,
+) []startupLogLine {
+	return []startupLogLine{
+		{text: fmt.Sprintf("Gateway listening on %s", httpAddr)},
+		{text: fmt.Sprintf("Health:   GET  %s", gwSrv.HealthPath())},
+		{text: fmt.Sprintf("Messages: POST %s", gwSrv.MessagesPath())},
+		{text: fmt.Sprintf(
+			"Status:   GET  %s?request_id=...",
+			gwSrv.StatusPath(),
+		)},
+		{text: fmt.Sprintf("Cancel:   POST %s", gwSrv.CancelPath())},
+	}
+}
+
+func adminStartupLines(
+	preferredAddr string,
+	binding *adminBinding,
+) []startupLogLine {
+	if binding == nil {
+		return nil
+	}
+
+	lines := make([]startupLogLine, 0, 3)
+	if binding.relocated {
+		lines = append(lines, startupLogLine{
+			warn: true,
+			text: fmt.Sprintf(
+				"Admin UI preferred address %s was busy; using %s "+
+					"instead",
+				preferredAddr,
+				binding.addr,
+			),
+		})
+	}
+
+	lines = append(lines,
+		startupLogLine{
+			text: fmt.Sprintf(
+				"Admin UI listening on %s",
+				binding.addr,
+			),
+		},
+		startupLogLine{
+			text: fmt.Sprintf("Admin UI: %s", binding.url),
+		},
+	)
+	return lines
 }
 
 // Runtime wires OpenClaw components without owning the HTTP listener.
@@ -982,28 +1058,15 @@ func run(ctx context.Context, args []string) error {
 	}
 	errCh := make(chan error, workerCount)
 
+	logStartupLines(gatewayStartupLines(httpSrv.Addr, gwSrv))
 	go func() {
-		log.Infof("Gateway listening on %s", httpSrv.Addr)
-		log.Infof("Health:   GET  %s", gwSrv.HealthPath())
-		log.Infof("Messages: POST %s", gwSrv.MessagesPath())
-		log.Infof("Status:   GET  %s?request_id=...", gwSrv.StatusPath())
-		log.Infof("Cancel:   POST %s", gwSrv.CancelPath())
 		//nolint:gosec
 		errCh <- httpSrv.ListenAndServe()
 	}()
 
 	if adminSrv != nil {
+		logStartupLines(adminStartupLines(opts.AdminAddr, adminBinding))
 		go func() {
-			if adminBinding.relocated {
-				log.Warnf(
-					"Admin UI preferred address %s was busy; "+
-						"using %s instead",
-					opts.AdminAddr,
-					adminBinding.addr,
-				)
-			}
-			log.Infof("Admin UI listening on %s", adminBinding.addr)
-			log.Infof("Admin UI: %s", adminBinding.url)
 			//nolint:gosec
 			errCh <- adminSrv.Serve(adminBinding.listener)
 		}()

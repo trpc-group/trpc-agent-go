@@ -31,7 +31,9 @@ import (
 const (
 	pluginType = "stdin"
 
-	defaultFrom = "local"
+	defaultFrom           = "local"
+	defaultUserLabel      = "User"
+	defaultAssistantLabel = "Assistant"
 
 	exitCmd1 = "/exit"
 	exitCmd2 = "/quit"
@@ -47,9 +49,13 @@ func init() {
 }
 
 type channelCfg struct {
-	From         string `yaml:"from"`
-	Thread       string `yaml:"thread"`
-	MaxLineBytes int    `yaml:"max_line_bytes"`
+	From           string `yaml:"from"`
+	Thread         string `yaml:"thread"`
+	MaxLineBytes   int    `yaml:"max_line_bytes"`
+	ShowPrompt     bool   `yaml:"show_prompt,omitempty"`
+	ShowRoleLabels bool   `yaml:"show_role_labels,omitempty"`
+	UserLabel      string `yaml:"user_label,omitempty"`
+	AssistantLabel string `yaml:"assistant_label,omitempty"`
 }
 
 func newChannel(
@@ -85,12 +91,19 @@ func newChannel(
 	}
 
 	return &channel{
-		id:           id,
-		gw:           deps.Gateway,
-		from:         from,
-		thread:       strings.TrimSpace(cfg.Thread),
-		bufBytes:     bufBytes,
-		maxLineBytes: maxLineBytes,
+		id:             id,
+		gw:             deps.Gateway,
+		from:           from,
+		thread:         strings.TrimSpace(cfg.Thread),
+		bufBytes:       bufBytes,
+		maxLineBytes:   maxLineBytes,
+		showPrompt:     cfg.ShowPrompt,
+		showRoleLabels: cfg.ShowRoleLabels,
+		userLabel:      defaultLabel(cfg.UserLabel, defaultUserLabel),
+		assistantLabel: defaultLabel(
+			cfg.AssistantLabel,
+			defaultAssistantLabel,
+		),
 	}, nil
 }
 
@@ -99,6 +112,11 @@ type channel struct {
 	gw     registry.GatewayClient
 	from   string
 	thread string
+
+	showPrompt     bool
+	showRoleLabels bool
+	userLabel      string
+	assistantLabel string
 
 	bufBytes     int
 	maxLineBytes int
@@ -117,7 +135,9 @@ func (c *channel) Run(ctx context.Context) error {
 			return nil
 		}
 
+		c.printPrompt()
 		if !in.Scan() {
+			c.printPromptTerminator()
 			if err := in.Err(); err != nil {
 				return err
 			}
@@ -144,9 +164,44 @@ func (c *channel) Run(ctx context.Context) error {
 			continue
 		}
 		if rsp.Ignored {
-			fmt.Fprintln(os.Stdout, "(ignored)")
+			c.printReply("(ignored)")
 			continue
 		}
-		fmt.Fprintln(os.Stdout, rsp.Reply)
+		c.printReply(rsp.Reply)
 	}
+}
+
+func defaultLabel(raw string, fallback string) string {
+	label := strings.TrimSpace(raw)
+	if label == "" {
+		return fallback
+	}
+	return label
+}
+
+func (c *channel) printPrompt() {
+	if !c.showPrompt {
+		return
+	}
+	fmt.Fprintf(os.Stdout, "%s: ", c.userLabel)
+}
+
+func (c *channel) printPromptTerminator() {
+	if !c.showPrompt {
+		return
+	}
+	fmt.Fprintln(os.Stdout)
+}
+
+func (c *channel) printReply(reply string) {
+	if c.showRoleLabels {
+		fmt.Fprintf(
+			os.Stdout,
+			"%s: %s\n",
+			c.assistantLabel,
+			reply,
+		)
+		return
+	}
+	fmt.Fprintln(os.Stdout, reply)
 }
