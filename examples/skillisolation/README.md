@@ -12,6 +12,9 @@ body/docs into its own prompt.
 
 trpc-agent-go now scopes skill state keys by agent name, so a sub-agent’s
 `skill_load` does **not** automatically inflate the coordinator’s prompt.
+This demo also sets `llmagent.WithEnableCodeExecutionResponseProcessor(false)`
+on both agents so fenced code blocks in assistant text do not auto-execute
+while `skill_run` remains available.
 
 ## Prerequisites
 
