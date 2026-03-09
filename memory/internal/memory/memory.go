@@ -413,14 +413,21 @@ func ScoreMemoryEntry(entry *memory.Entry, query string) float64 {
 	return float64(matched) / float64(len(tokens))
 }
 
-const (
-	minSearchScore          = 0.3
-	defaultMaxSearchResults = 10
-)
+// SearchOptions controls score filtering and result truncation for
+// keyword-based memory search.
+type SearchOptions struct {
+	MinScore   float64
+	MaxResults int
+}
 
 // SearchMemoryEntries ranks keyword-search matches using shared scoring
-// semantics and returns the top results in deterministic order.
-func SearchMemoryEntries(entries []*memory.Entry, query string) []*memory.Entry {
+// and sorting semantics, while leaving backend-specific thresholds and
+// truncation to the caller.
+func SearchMemoryEntries(
+	entries []*memory.Entry,
+	query string,
+	opts SearchOptions,
+) []*memory.Entry {
 	type scoredEntry struct {
 		entry *memory.Entry
 		score float64
@@ -428,9 +435,11 @@ func SearchMemoryEntries(entries []*memory.Entry, query string) []*memory.Entry 
 
 	candidates := make([]scoredEntry, 0, len(entries))
 	for _, entry := range entries {
-		if score := ScoreMemoryEntry(entry, query); score >= minSearchScore {
-			candidates = append(candidates, scoredEntry{entry: entry, score: score})
+		score := ScoreMemoryEntry(entry, query)
+		if !passesMinScore(score, opts.MinScore) {
+			continue
 		}
+		candidates = append(candidates, scoredEntry{entry: entry, score: score})
 	}
 
 	sort.Slice(candidates, func(i, j int) bool {
@@ -446,8 +455,8 @@ func SearchMemoryEntries(entries []*memory.Entry, query string) []*memory.Entry 
 		return candidates[i].entry.ID < candidates[j].entry.ID
 	})
 
-	if len(candidates) > defaultMaxSearchResults {
-		candidates = candidates[:defaultMaxSearchResults]
+	if opts.MaxResults > 0 && len(candidates) > opts.MaxResults {
+		candidates = candidates[:opts.MaxResults]
 	}
 
 	results := make([]*memory.Entry, 0, len(candidates))
@@ -455,4 +464,11 @@ func SearchMemoryEntries(entries []*memory.Entry, query string) []*memory.Entry 
 		results = append(results, candidate.entry)
 	}
 	return results
+}
+
+func passesMinScore(score float64, minScore float64) bool {
+	if minScore > 0 {
+		return score >= minScore
+	}
+	return score > 0
 }

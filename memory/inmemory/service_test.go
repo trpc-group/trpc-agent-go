@@ -172,7 +172,7 @@ func TestMemoryService_SearchMemories(t *testing.T) {
 	assert.Len(t, results, 0, "Expected 0 results for 'nonexistent' search")
 }
 
-func TestMemoryService_SearchMemories_RanksAndLimits(t *testing.T) {
+func TestMemoryService_SearchMemories_RanksWithoutTruncation(t *testing.T) {
 	service := NewMemoryService()
 	ctx := context.Background()
 	userKey := memory.UserKey{
@@ -214,10 +214,10 @@ func TestMemoryService_SearchMemories_RanksAndLimits(t *testing.T) {
 
 	results, err := service.SearchMemories(ctx, userKey, "coffee tea")
 	require.NoError(t, err, "SearchMemories failed")
-	require.Len(t, results, 10)
+	require.Len(t, results, 11)
 	assert.Equal(t, "best", results[0].ID)
 	assert.Equal(t, "partial-09", results[1].ID)
-	assert.Equal(t, "partial-01", results[9].ID)
+	assert.Equal(t, "partial-00", results[10].ID)
 }
 
 func TestMemoryService_ReadMemoriesWithLimit(t *testing.T) {

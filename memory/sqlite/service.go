@@ -502,7 +502,7 @@ WHERE app_name = ? AND user_id = ?`
 		return nil, fmt.Errorf("iterate memories: %w", err)
 	}
 
-	return imemory.SearchMemoryEntries(entries, queryStr), nil
+	return imemory.SearchMemoryEntries(entries, queryStr, imemory.SearchOptions{}), nil
 }
 
 // Tools returns the list of available memory tools.

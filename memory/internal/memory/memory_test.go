@@ -988,7 +988,10 @@ func TestSearchMemoryEntries_RanksByScoreThenRecency(t *testing.T) {
 		),
 	}
 
-	results := SearchMemoryEntries(entries, "coffee tea")
+	results := SearchMemoryEntries(entries, "coffee tea", SearchOptions{
+		MinScore:   0.3,
+		MaxResults: 10,
+	})
 	require.Len(t, results, 3)
 	assert.Equal(t, "best-older", results[0].ID)
 	assert.Equal(t, "partial-topic-newest", results[1].ID)
@@ -1007,15 +1010,40 @@ func TestSearchMemoryEntries_LimitsAndBreaksTiesByID(t *testing.T) {
 		entries = append(entries, newSearchTestEntry(id, "coffee", nil, ts, ts))
 	}
 
-	results := SearchMemoryEntries(entries, "coffee")
+	results := SearchMemoryEntries(entries, "coffee", SearchOptions{
+		MinScore:   0.3,
+		MaxResults: 10,
+	})
 	require.Len(t, results, 10)
 	assert.Equal(t, "extra-09", results[0].ID)
 	assert.Equal(t, "extra-00", results[9].ID)
 
-	tieOnly := SearchMemoryEntries(entries[:2], "coffee")
+	tieOnly := SearchMemoryEntries(entries[:2], "coffee", SearchOptions{
+		MinScore:   0.3,
+		MaxResults: 10,
+	})
 	require.Len(t, tieOnly, 2)
 	assert.Equal(t, "a", tieOnly[0].ID)
 	assert.Equal(t, "b", tieOnly[1].ID)
+}
+
+func TestSearchMemoryEntries_ZeroValueOptionsPreservePositiveMatches(t *testing.T) {
+	now := time.Now().UTC()
+	entries := []*memory.Entry{
+		newSearchTestEntry("best", "User likes coffee and tea", nil, now, now),
+		newSearchTestEntry("filtered", "User likes running", nil, now, now),
+	}
+	for i := 0; i < 10; i++ {
+		id := fmt.Sprintf("partial-%02d", i)
+		ts := now.Add(time.Duration(i+1) * time.Minute)
+		entries = append(entries, newSearchTestEntry(id, "User likes coffee", nil, ts, ts))
+	}
+
+	results := SearchMemoryEntries(entries, "coffee tea", SearchOptions{})
+	require.Len(t, results, 11)
+	assert.Equal(t, "best", results[0].ID)
+	assert.Equal(t, "partial-09", results[1].ID)
+	assert.Equal(t, "partial-00", results[10].ID)
 }
 
 func TestIsPunctToken(t *testing.T) {

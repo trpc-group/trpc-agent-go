@@ -427,7 +427,7 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 		return nil, fmt.Errorf("search memories failed: %w", err)
 	}
 
-	return imemory.SearchMemoryEntries(entries, query), nil
+	return imemory.SearchMemoryEntries(entries, query, imemory.SearchOptions{}), nil
 }
 
 // Tools returns the list of available memory tools.
