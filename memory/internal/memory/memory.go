@@ -420,6 +420,13 @@ type SearchOptions struct {
 	MaxResults int
 }
 
+const (
+	// DefaultSearchMinScore is the default minimum keyword-search score.
+	DefaultSearchMinScore = 0.3
+	// DefaultMaxSearchResults is the default maximum number of keyword-search results.
+	DefaultMaxSearchResults = 10
+)
+
 // SearchMemoryEntries ranks keyword-search matches using shared scoring
 // and sorting semantics, while leaving backend-specific thresholds and
 // truncation to the caller.

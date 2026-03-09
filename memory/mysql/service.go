@@ -27,11 +27,6 @@ import (
 
 var _ memory.Service = (*Service)(nil)
 
-const (
-	minSearchScore          = 0.3
-	defaultMaxSearchResults = 10
-)
-
 // Service is the mysql memory service.
 // Storage structure:
 //
@@ -369,8 +364,8 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 	}
 
 	return imemory.SearchMemoryEntries(entries, query, imemory.SearchOptions{
-		MinScore:   minSearchScore,
-		MaxResults: defaultMaxSearchResults,
+		MinScore:   s.opts.searchMinScore,
+		MaxResults: s.opts.maxSearchResults,
 	}), nil
 }
 

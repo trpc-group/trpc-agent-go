@@ -275,7 +275,10 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 		}
 		entries = append(entries, e)
 	}
-	return imemory.SearchMemoryEntries(entries, query, imemory.SearchOptions{}), nil
+	return imemory.SearchMemoryEntries(entries, query, imemory.SearchOptions{
+		MinScore:   s.opts.searchMinScore,
+		MaxResults: s.opts.maxSearchResults,
+	}), nil
 }
 
 // Tools returns the list of available memory tools.
