@@ -81,7 +81,8 @@ func (p *PostToolRequestProcessor) ProcessRequest(
 		return
 	}
 
-	if !hasToolResultMessages(req.Messages) {
+	if !hasToolResultMessages(req.Messages) &&
+		!hasCompactedToolResultMessages(invocation) {
 		return
 	}
 
@@ -110,4 +111,16 @@ func hasToolResultMessages(msgs []model.Message) bool {
 		}
 	}
 	return false
+}
+
+func hasCompactedToolResultMessages(inv *agent.Invocation) bool {
+	if inv == nil {
+		return false
+	}
+	raw, ok := inv.GetState(contentHasCompactedToolResultsStateKey)
+	if !ok {
+		return false
+	}
+	v, ok := raw.(bool)
+	return ok && v
 }

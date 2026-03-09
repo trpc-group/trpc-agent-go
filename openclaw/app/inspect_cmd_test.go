@@ -75,9 +75,11 @@ func TestRunInspect_ConfigKeys(t *testing.T) {
 		"plugins.entries.telegram.config",
 		"plugins.entries.telegram.config.token",
 		"plugins.entries.telegram.enabled",
-		"tools.bash",
-		"tools.exec",
-		"tools.process",
+		"tools.cron",
+		"tools.exec_command",
+		"tools.kill_session",
+		"tools.message",
+		"tools.write_stdin",
 	}
 	require.Equal(t, want, got)
 }
@@ -168,7 +170,11 @@ emptyseq: []
 	require.Contains(t, keys, "tools.toolsets.toolset")
 	require.Contains(t, keys, "plugins.entries.toolset.enabled")
 
-	require.Contains(t, keys, "tools.exec")
+	require.Contains(t, keys, "tools.exec_command")
+	require.Contains(t, keys, "tools.write_stdin")
+	require.Contains(t, keys, "tools.kill_session")
+	require.Contains(t, keys, "tools.message")
+	require.Contains(t, keys, "tools.cron")
 	require.Contains(t, keys, "tools.local_exec")
 }
 

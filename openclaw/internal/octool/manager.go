@@ -88,10 +88,12 @@ type execParams struct {
 }
 
 type execResult struct {
-	Status    string `json:"status"`
-	Output    string `json:"output,omitempty"`
-	ExitCode  int    `json:"exitCode,omitempty"`
-	SessionID string `json:"sessionId,omitempty"`
+	Status     string   `json:"status"`
+	Output     string   `json:"output,omitempty"`
+	ExitCode   int      `json:"exitCode,omitempty"`
+	SessionID  string   `json:"sessionId,omitempty"`
+	MediaFiles []string `json:"media_files,omitempty"`
+	MediaDirs  []string `json:"media_dirs,omitempty"`
 }
 
 func (m *Manager) Exec(
@@ -309,9 +311,19 @@ func (m *Manager) startBackground(
 	m.mu.Unlock()
 
 	go func() {
-		err := cmd.Wait()
+		// Use cmd.Process.Wait() instead of cmd.Wait() because
+		// cmd.Wait() closes the pipe read ends returned by StdoutPipe
+		// and StderrPipe, which races with readFrom goroutines still
+		// reading from those pipes.  See the exec.StdoutPipe docs:
+		// "It is thus incorrect to call Wait before all reads from the
+		// pipe have completed."
+		ps, _ := cmd.Process.Wait()
 		waitDone(sess.ioDone, defaultIODrain)
-		sess.markDone(exitCode(err))
+		code := -1
+		if ps != nil {
+			code = ps.ExitCode()
+		}
+		sess.markDone(code)
 		cancel()
 		_ = sess.closeIO()
 	}()
@@ -364,6 +376,11 @@ func (m *Manager) list() []processSession {
 	}
 	sortSessions(out)
 	return out
+}
+
+// ListSessions returns the current exec_command session snapshots.
+func (m *Manager) ListSessions() []ProcessSession {
+	return m.list()
 }
 
 func (m *Manager) poll(id string, limit *int) (processPoll, error) {

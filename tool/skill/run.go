@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -106,6 +107,8 @@ const (
 const (
 	envPath       = "PATH"
 	envVirtualEnv = "VIRTUAL_ENV"
+	envEditor     = "EDITOR"
+	envVisual     = "VISUAL"
 )
 
 const (
@@ -120,6 +123,13 @@ const (
 const workspaceMetadataFileMode uint32 = 0o600
 
 const workspaceMetadataTmpFile = ".metadata.tmp"
+
+const (
+	editorHelperDir     = ".trpc_agent"
+	editorContentFile   = "editor_input.txt"
+	editorScriptFile    = "editor_write.sh"
+	editorScriptMissing = "editor wrapper: missing target file"
+)
 
 // WithAllowedCommands restricts skill_run to a single program execution
 // whose command name is in the allowlist.
@@ -246,6 +256,8 @@ type runInput struct {
 	Command        string            `json:"command"`
 	Cwd            string            `json:"cwd,omitempty"`
 	Env            map[string]string `json:"env,omitempty"`
+	Stdin          string            `json:"stdin,omitempty"`
+	EditorText     string            `json:"editor_text,omitempty"`
 	OutputFiles    []string          `json:"output_files,omitempty"`
 	Timeout        int               `json:"timeout,omitempty"`
 	SaveArtifacts  bool              `json:"save_as_artifacts,omitempty"`
@@ -305,6 +317,8 @@ func (t *RunTool) Declaration() *tool.Declaration {
 		"docs (not for generic shell tasks). " +
 		"User-uploaded file inputs are staged under " +
 		"$WORK_DIR/inputs (also visible as inputs/). " +
+		"For declarative inputs, to paths starting with " +
+		"inputs/ are treated as work/inputs/. " +
 		"Returns stdout/stderr, a primary_output " +
 		"(best small text file), and collected output_files " +
 		"(text inline by default, with workspace:// refs). " +
@@ -339,6 +353,18 @@ func (t *RunTool) Declaration() *tool.Declaration {
 				"cwd":     {Type: "string", Description: "Working dir"},
 				"env": {Type: "object", Description: "Env vars",
 					AdditionalProperties: &tool.Schema{Type: "string"}},
+				"stdin": {
+					Type: "string",
+					Description: "Optional one-shot stdin text " +
+						"passed to the command",
+				},
+				"editor_text": {
+					Type: "string",
+					Description: "Optional text used to satisfy " +
+						"CLIs that launch $EDITOR. When set, " +
+						"skill_run stages a temporary editor " +
+						"wrapper and points EDITOR/VISUAL to it.",
+				},
 				"output_files": {Type: "array",
 					Items: &tool.Schema{Type: "string"},
 					Description: "Workspace-relative paths/globs to " +
@@ -361,8 +387,7 @@ func (t *RunTool) Declaration() *tool.Declaration {
 				"outputs": outputSpecSchema(),
 			},
 		},
-		OutputSchema: &tool.Schema{Type: "object",
-			Description: "Run result with output files"},
+		OutputSchema: skillRunOutputSchema(),
 	}
 }
 
@@ -426,6 +451,9 @@ func (t *RunTool) Call(
 	if err != nil {
 		return nil, err
 	}
+	filteredOutputs := filterFailedEmptyOutputs(rr, files, manifest)
+	files = filteredOutputs.files
+	manifest = filteredOutputs.manifest
 	out, err := t.buildRunOutput(
 		ctx,
 		rr,
@@ -439,9 +467,18 @@ func (t *RunTool) Call(
 	if err != nil {
 		return nil, err
 	}
+	if len(filteredOutputs.warnings) > 0 {
+		out.Warnings = append(out.Warnings, filteredOutputs.warnings...)
+	}
 	out.StagedInputs = staged
 	if len(stageWarn) > 0 {
 		out.Warnings = append(out.Warnings, stageWarn...)
+	}
+	if len(filteredOutputs.omittedNames) > 0 {
+		toolcache.DeleteSkillRunOutputFilesFromContext(
+			ctx,
+			filteredOutputs.omittedNames,
+		)
 	}
 	toolcache.StoreSkillRunOutputFilesFromContext(ctx, files)
 	return out, nil
@@ -455,7 +492,7 @@ func isSkillLoadedInContext(ctx context.Context, name string) bool {
 	if !ok || inv == nil || inv.Session == nil {
 		return true
 	}
-	key := skill.StateKeyLoadedPrefix + strings.TrimSpace(name)
+	key := skill.LoadedKey(inv.AgentName, strings.TrimSpace(name))
 	v, ok := inv.Session.GetState(key)
 	return ok && len(v) > 0
 }
@@ -612,6 +649,7 @@ const (
 
 	userFileInputKeyFileIDPrefix = "file_id/"
 	userFileInputKeySHA256Prefix = "sha256/"
+	userFileInputHostPrefix      = "host://"
 
 	userFileInputWarnPrefix     = "user file input:"
 	userFileInputWarnMissingRef = userFileInputWarnPrefix +
@@ -899,6 +937,9 @@ func userFileInputBytes(
 	if strings.HasPrefix(fileID, fileref.ArtifactPrefix) {
 		return userFileInputArtifactBytes(ctx, fileID)
 	}
+	if hostPath, ok := userFileInputHostPath(fileID); ok {
+		return userFileInputHostBytes(hostPath, f)
+	}
 	dl, ok := mdl.(model.FileDownloader)
 	if !ok || dl == nil {
 		return nil, "", userFileInputWarnNoDownloader
@@ -912,6 +953,42 @@ func userFileInputBytes(
 		)
 	}
 	return data, mime, ""
+}
+
+func userFileInputHostPath(fileID string) (string, bool) {
+	trimmed := strings.TrimSpace(fileID)
+	if trimmed == "" {
+		return "", false
+	}
+	if strings.HasPrefix(trimmed, userFileInputHostPrefix) {
+		hostPath := strings.TrimPrefix(
+			trimmed,
+			userFileInputHostPrefix,
+		)
+		if filepath.IsAbs(hostPath) {
+			return hostPath, true
+		}
+		return "", false
+	}
+	if filepath.IsAbs(trimmed) {
+		return trimmed, true
+	}
+	return "", false
+}
+
+func userFileInputHostBytes(
+	hostPath string,
+	f model.File,
+) ([]byte, string, string) {
+	data, err := os.ReadFile(hostPath)
+	if err != nil {
+		return nil, "", fmt.Sprintf(
+			"user file input: read host path %s: %v",
+			hostPath,
+			err,
+		)
+	}
+	return data, strings.TrimSpace(f.MimeType), ""
 }
 
 func userFileInputArtifactBytes(
@@ -984,7 +1061,40 @@ func (t *RunTool) parseRunArgs(args []byte) (runInput, error) {
 	if t.exec == nil {
 		return runInput{}, fmt.Errorf("executor is not configured")
 	}
+	normalizeRunInput(&in)
 	return in, nil
+}
+
+func normalizeRunInput(in *runInput) {
+	if in == nil || len(in.Inputs) == 0 {
+		return
+	}
+	for i := range in.Inputs {
+		in.Inputs[i].To = normalizeInputTo(in.Inputs[i].To)
+	}
+}
+
+func normalizeInputTo(to string) string {
+	s := strings.TrimSpace(to)
+	s = strings.ReplaceAll(s, "\\", "/")
+	if s == "" {
+		return ""
+	}
+	cleaned := path.Clean(s)
+	if cleaned == "." {
+		return ""
+	}
+	if cleaned == skillDirInputs {
+		return ""
+	}
+	prefix := skillDirInputs + "/"
+	if strings.HasPrefix(cleaned, prefix) {
+		rest := strings.TrimPrefix(cleaned, prefix)
+		return path.Join(
+			codeexecutor.DirWork, skillDirInputs, rest,
+		)
+	}
+	return cleaned
 }
 
 // ensureEngine gets engine from executor or builds a local one.
@@ -1450,17 +1560,31 @@ func (t *RunTool) runProgram(
 	cwd string,
 	in runInput,
 ) (codeexecutor.RunResult, error) {
+	spec, err := t.buildRunProgramSpec(ctx, eng, ws, cwd, in)
+	if err != nil {
+		return codeexecutor.RunResult{}, err
+	}
+	return eng.Runner().RunProgram(ctx, ws, spec)
+}
+
+func (t *RunTool) buildRunProgramSpec(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	ws codeexecutor.Workspace,
+	cwd string,
+	in runInput,
+) (codeexecutor.RunProgramSpec, error) {
 	timeout := time.Duration(in.Timeout) * time.Second
 	if in.Timeout <= 0 {
 		timeout = defaultSkillRunTimeout
 	}
-	env := in.Env
-	if env == nil {
-		env = map[string]string{}
-	}
+	env := cloneStringMap(in.Env)
 	t.maybeInjectSkillEnv(ctx, in.Skill, env)
 	if _, ok := env[codeexecutor.EnvSkillName]; !ok {
 		env[codeexecutor.EnvSkillName] = in.Skill
+	}
+	if err := t.prepareEditorEnv(ctx, eng, ws, env, in.EditorText); err != nil {
+		return codeexecutor.RunProgramSpec{}, err
 	}
 
 	venvRel, venvBinRel := venvRelPaths(cwd, in.Skill)
@@ -1469,42 +1593,40 @@ func (t *RunTool) runProgram(
 		injectVenvEnv(env, venvRel, venvBinRel)
 		argv, err := splitCommandLine(in.Command)
 		if err != nil {
-			return codeexecutor.RunResult{}, err
+			return codeexecutor.RunProgramSpec{}, err
 		}
 		cmd := argv[0]
 		if len(t.allowedCmds) > 0 && !cmdInList(t.allowedCmds, cmd) {
-			return codeexecutor.RunResult{}, fmt.Errorf(
+			return codeexecutor.RunProgramSpec{}, fmt.Errorf(
 				"skill_run: command %q is not allowed by allowed_commands",
 				cmd,
 			)
 		}
 		if cmdInList(t.deniedCmds, cmd) {
-			return codeexecutor.RunResult{}, fmt.Errorf(
+			return codeexecutor.RunProgramSpec{}, fmt.Errorf(
 				"skill_run: command %q is denied by denied_commands",
 				cmd,
 			)
 		}
-		return eng.Runner().RunProgram(
-			ctx, ws, codeexecutor.RunProgramSpec{
-				Cmd:     cmd,
-				Args:    argv[1:],
-				Env:     env,
-				Cwd:     cwd,
-				Timeout: timeout,
-			},
-		)
+		return codeexecutor.RunProgramSpec{
+			Cmd:     cmd,
+			Args:    argv[1:],
+			Env:     env,
+			Cwd:     cwd,
+			Stdin:   in.Stdin,
+			Timeout: timeout,
+		}, nil
 	}
 
 	cmd := wrapWithVenvPrefix(in.Command, venvRel, venvBinRel)
-	return eng.Runner().RunProgram(
-		ctx, ws, codeexecutor.RunProgramSpec{
-			Cmd:     "bash",
-			Args:    []string{"-c", cmd},
-			Env:     env,
-			Cwd:     cwd,
-			Timeout: timeout,
-		},
-	)
+	return codeexecutor.RunProgramSpec{
+		Cmd:     "bash",
+		Args:    []string{"-c", cmd},
+		Env:     env,
+		Cwd:     cwd,
+		Stdin:   in.Stdin,
+		Timeout: timeout,
+	}, nil
 }
 
 func venvRelPaths(cwd string, skillName string) (string, string) {
@@ -1652,6 +1774,91 @@ func injectVenvEnv(env map[string]string, venv string, venvBin string) {
 		return
 	}
 	env[envPath] = venvBin + sep + basePATH
+}
+
+func cloneStringMap(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return map[string]string{}
+	}
+	out := make(map[string]string, len(src))
+	for k, v := range src {
+		out[k] = v
+	}
+	return out
+}
+
+func (t *RunTool) prepareEditorEnv(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	ws codeexecutor.Workspace,
+	env map[string]string,
+	editorText string,
+) error {
+	if editorText == "" {
+		return nil
+	}
+	if _, ok := env[envEditor]; ok {
+		return fmt.Errorf(
+			"editor_text cannot be combined with env.%s",
+			envEditor,
+		)
+	}
+	if _, ok := env[envVisual]; ok {
+		return fmt.Errorf(
+			"editor_text cannot be combined with env.%s",
+			envVisual,
+		)
+	}
+
+	contentRel := path.Join(
+		codeexecutor.DirWork,
+		editorHelperDir,
+		editorContentFile,
+	)
+	scriptRel := path.Join(
+		codeexecutor.DirWork,
+		editorHelperDir,
+		editorScriptFile,
+	)
+	contentPath := path.Join(ws.Path, contentRel)
+	scriptPath := path.Join(ws.Path, scriptRel)
+
+	script := buildEditorWrapperScript(contentPath)
+	files := []codeexecutor.PutFile{
+		{
+			Path:    contentRel,
+			Content: []byte(editorText),
+			Mode:    codeexecutor.DefaultScriptFileMode,
+		},
+		{
+			Path:    scriptRel,
+			Content: []byte(script),
+			Mode:    codeexecutor.DefaultExecFileMode,
+		},
+	}
+	if err := eng.FS().PutFiles(ctx, ws, files); err != nil {
+		return err
+	}
+	env[envEditor] = scriptPath
+	env[envVisual] = scriptPath
+	return nil
+}
+
+func buildEditorWrapperScript(contentPath string) string {
+	var sb strings.Builder
+	sb.WriteString("#!/bin/sh\n")
+	sb.WriteString("set -eu\n")
+	sb.WriteString("for last do target=\"$last\"; done\n")
+	sb.WriteString("if [ -z \"${target:-}\" ]; then\n")
+	sb.WriteString("  echo ")
+	sb.WriteString(shellQuote(editorScriptMissing))
+	sb.WriteString(" >&2\n")
+	sb.WriteString("  exit 1\n")
+	sb.WriteString("fi\n")
+	sb.WriteString("cat ")
+	sb.WriteString(shellQuote(contentPath))
+	sb.WriteString(" > \"$target\"\n")
+	return sb.String()
 }
 
 func wrapWithVenvPrefix(cmd string, venv string, venvBin string) string {
@@ -1840,6 +2047,119 @@ func buildRunOutput(
 	}
 }
 
+type failedOutputFilterResult struct {
+	files        []codeexecutor.File
+	manifest     *codeexecutor.OutputManifest
+	omittedNames []string
+	warnings     []string
+}
+
+func filterFailedEmptyOutputs(
+	rr codeexecutor.RunResult,
+	files []codeexecutor.File,
+	manifest *codeexecutor.OutputManifest,
+) failedOutputFilterResult {
+	result := failedOutputFilterResult{
+		files:    files,
+		manifest: manifest,
+	}
+	if !failedRunResult(rr) {
+		return result
+	}
+
+	seen := make(map[string]struct{})
+	if len(files) > 0 {
+		filtered := make([]codeexecutor.File, 0, len(files))
+		for _, f := range files {
+			if emptyCollectedFile(f) {
+				result.omittedNames = appendFilteredFileName(
+					result.omittedNames,
+					seen,
+					f.Name,
+				)
+				continue
+			}
+			filtered = append(filtered, f)
+		}
+		if len(filtered) != len(files) {
+			result.files = filtered
+		}
+	}
+	result.manifest = filterFailedEmptyManifestFiles(
+		manifest,
+		seen,
+		&result.omittedNames,
+	)
+	if len(result.omittedNames) > 0 {
+		result.warnings = []string{warnFailedRunEmptyOutputFiles}
+	}
+	return result
+}
+
+func failedRunResult(rr codeexecutor.RunResult) bool {
+	return rr.ExitCode != 0 || rr.TimedOut
+}
+
+func emptyCollectedFile(f codeexecutor.File) bool {
+	return f.SizeBytes == 0 && f.Content == ""
+}
+
+func emptyCollectedFileRef(f codeexecutor.FileRef) bool {
+	return f.SizeBytes == 0 && f.Content == ""
+}
+
+func appendFilteredFileName(
+	names []string,
+	seen map[string]struct{},
+	name string,
+) []string {
+	n := strings.TrimSpace(name)
+	if n == "" {
+		return names
+	}
+	if _, ok := seen[n]; ok {
+		return names
+	}
+	seen[n] = struct{}{}
+	return append(names, n)
+}
+
+func filterFailedEmptyManifestFiles(
+	manifest *codeexecutor.OutputManifest,
+	seen map[string]struct{},
+	omittedNames *[]string,
+) *codeexecutor.OutputManifest {
+	if manifest == nil || len(manifest.Files) == 0 {
+		return manifest
+	}
+
+	filtered := make([]codeexecutor.FileRef, 0, len(manifest.Files))
+	omitted := false
+	for _, f := range manifest.Files {
+		name := strings.TrimSpace(f.Name)
+		if _, ok := seen[name]; ok {
+			omitted = true
+			continue
+		}
+		if emptyCollectedFileRef(f) {
+			*omittedNames = appendFilteredFileName(
+				*omittedNames,
+				seen,
+				name,
+			)
+			omitted = true
+			continue
+		}
+		filtered = append(filtered, f)
+	}
+	if !omitted {
+		return manifest
+	}
+	cloned := *manifest
+	cloned.Files = filtered
+	return &cloned
+}
+
 const (
 	maxOutputChars = 16 * 1024
 )
@@ -1849,8 +2169,11 @@ const (
 )
 
 const (
-	warnStdoutTruncated = "stdout truncated"
-	warnStderrTruncated = "stderr truncated"
+	warnStdoutTruncated           = "stdout truncated"
+	warnStderrTruncated           = "stderr truncated"
+	warnFailedRunEmptyOutputFiles = "empty output_files omitted " +
+		"because command failed; shell redirections can create " +
+		"empty files before execution fails"
 )
 
 func truncateOutput(s string) (string, bool) {
@@ -2073,6 +2396,165 @@ func applyOmitInlineContent(
 func hasOmitInlineFallback(ctx context.Context) bool {
 	inv, ok := agent.InvocationFromContext(ctx)
 	return ok && inv != nil
+}
+
+func skillRunOutputSchema() *tool.Schema {
+	return &tool.Schema{
+		Type: "object",
+		Description: "Structured result of skill_run. " +
+			"Important: the tool can return this object even when the " +
+			"command fails; treat exit_code != 0 or timed_out == true as " +
+			"primary failure signals, and inspect stderr/warnings for " +
+			"diagnostics. " +
+			"Tool-level failures (invalid args, missing skill_load, " +
+			"workspace setup errors) return an error instead of this object.",
+		Required: []string{
+			"output_files",
+			"stdout",
+			"stderr",
+			"exit_code",
+			"timed_out",
+			"duration_ms",
+		},
+		Properties: map[string]*tool.Schema{
+			"staged_inputs": {
+				Type: "array",
+				Description: "Inputs staged into the workspace " +
+					"(e.g. user uploads or declarative inputs). " +
+					"Paths are workspace-relative and typically " +
+					"live under work/inputs/.",
+				Items: stagedInputSchema(),
+			},
+			"output_files": {
+				Type: "array",
+				Description: "Collected output files. " +
+					"Text files may be inlined via content. " +
+					"Binary outputs omit inline content and " +
+					"should be accessed via ref (workspace://...).",
+				Items: runFileSchema("Output file"),
+			},
+			"primary_output": runFileSchema(
+				"Convenience: best small text output file (if any)",
+			),
+			"stdout": {
+				Type:        "string",
+				Description: "Standard output (may be truncated; see warnings)",
+			},
+			"stderr": {
+				Type: "string",
+				Description: "Standard error (may be truncated; see warnings). " +
+					"Non-empty stderr often indicates the command failed, " +
+					"but some commands may write warnings there even when " +
+					"exit_code == 0.",
+			},
+			"exit_code": {
+				Type: "integer",
+				Description: "Process exit code. " +
+					"0 typically means success; non-zero indicates failure.",
+			},
+			"timed_out": {
+				Type:        "boolean",
+				Description: "True if the command timed out",
+			},
+			"duration_ms": {
+				Type:        "integer",
+				Description: "Execution duration in milliseconds",
+			},
+			"artifact_files": {
+				Type: "array",
+				Description: "Artifact references for saved outputs when " +
+					"save_as_artifacts or outputs.save is enabled and the " +
+					"Artifact service is configured.",
+				Items: artifactRefSchema(),
+			},
+			"warnings": {
+				Type:        "array",
+				Items:       &tool.Schema{Type: "string"},
+				Description: "Non-fatal warnings/hints about truncation or persistence",
+			},
+		},
+	}
+}
+
+func stagedInputSchema() *tool.Schema {
+	return &tool.Schema{
+		Type:     "object",
+		Required: []string{"name"},
+		Properties: map[string]*tool.Schema{
+			"name": {
+				Type:        "string",
+				Description: "Workspace-relative path where the input was staged",
+			},
+			"original_name": {
+				Type:        "string",
+				Description: "Original filename (if available)",
+			},
+			"mime_type": {
+				Type:        "string",
+				Description: "Detected MIME type (if available)",
+			},
+			"size_bytes": {
+				Type:        "integer",
+				Description: "Size in bytes (if available)",
+			},
+		},
+	}
+}
+
+func runFileSchema(desc string) *tool.Schema {
+	if desc == "" {
+		desc = "File"
+	}
+	return &tool.Schema{
+		Type:        "object",
+		Description: desc,
+		Required:    []string{"name", "mime_type"},
+		Properties: map[string]*tool.Schema{
+			"name": {
+				Type:        "string",
+				Description: "Workspace-relative path",
+			},
+			"content": {
+				Type: "string",
+				Description: "Inline content for small text outputs. " +
+					"Omitted/empty for binary outputs or when omit_inline_content is true.",
+			},
+			"mime_type": {
+				Type:        "string",
+				Description: "Detected MIME type",
+			},
+			"size_bytes": {
+				Type:        "integer",
+				Description: "File size in bytes (may be omitted)",
+			},
+			"truncated": {
+				Type:        "boolean",
+				Description: "True if content was truncated to configured limits",
+			},
+			"ref": {
+				Type: "string",
+				Description: "Stable reference to the file in the workspace " +
+					"(workspace://...). Use this when passing a file to other tools.",
+			},
+		},
+	}
+}
+
+func artifactRefSchema() *tool.Schema {
+	return &tool.Schema{
+		Type:     "object",
+		Required: []string{"name", "version"},
+		Properties: map[string]*tool.Schema{
+			"name": {
+				Type:        "string",
+				Description: "Artifact name",
+			},
+			"version": {
+				Type:        "integer",
+				Description: "Artifact version",
+			},
+		},
+	}
 }
 
 func inputSpecsSchema() *tool.Schema {

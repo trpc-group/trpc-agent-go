@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -213,13 +214,17 @@ const (
 	mergedUserSeparator = "\n\n"
 	contextPrefix       = "For context:"
 
-	contentHasSessionSummaryStateKey = "processor:content:has_session_summary"
+	contentHasSessionSummaryStateKey       = "processor:content:has_session_summary"
+	contentHasCompactedToolResultsStateKey = "processor:content:has_compacted_tool_results"
+	compactedToolResultPlaceholder         = "Tool result omitted from raw history; details are captured in the session summary above."
 )
 
 const (
 	attachedFilesAnnotationPrefix = "Attached files"
 	attachedFileNameFallbackFmt   = "upload_%d"
 	attachedFilesMaxPreview       = 20
+	hostRefPrefix                 = "host://"
+	ignoredAttachmentMimeType     = "application/octet-stream"
 )
 
 // NewContentRequestProcessor creates a new content request processor.
@@ -265,6 +270,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	if invocation == nil {
 		return
 	}
+	invocation.DeleteState(contentHasCompactedToolResultsStateKey)
 
 	// Honor per-invocation include_contents flag from runtime state when
 	// present. This allows callers (including GraphAgent subgraphs) to
@@ -293,42 +299,20 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		if !skipHistory && p.AddSessionSummary && p.TimelineFilterMode == TimelineFilterAll {
 			// Fetch session summary early so we can insert it after other
 			// semi-stable system blocks (for example, preloaded memories).
-			summaryMsg, summaryUpdatedAt =
-				p.getSessionSummaryMessage(invocation)
+			summaryMsg, summaryUpdatedAt = p.getSessionSummaryMessage(invocation)
 		}
 
 		// Preload memories into system prompt if configured.
 		// PreloadMemory: 0 = disabled, -1 = all, N > 0 = most recent N.
 		if p.PreloadMemory != 0 && invocation.MemoryService != nil {
 			if memMsg := p.getPreloadMemoryMessage(ctx, invocation); memMsg != nil {
-				// Insert memory as a system message after the last system
-				// message to keep stable instructions cacheable.
-				systemMsgIndex := findLastSystemMessageIndex(
-					req.Messages,
-				)
-				if systemMsgIndex >= 0 {
-					req.Messages = append(req.Messages[:systemMsgIndex+1],
-						append([]model.Message{*memMsg}, req.Messages[systemMsgIndex+1:]...)...)
-				} else {
-					req.Messages = append([]model.Message{*memMsg}, req.Messages...)
-				}
+				p.injectSystemContextMessage(req, *memMsg)
 			}
 		}
 
 		if summaryMsg != nil {
-			invocation.SetState(
-				contentHasSessionSummaryStateKey,
-				true,
-			)
-			// Insert summary as a separate system message after the last
-			// system message to keep stable instructions cacheable.
-			systemMsgIndex := findLastSystemMessageIndex(req.Messages)
-			if systemMsgIndex >= 0 {
-				req.Messages = append(req.Messages[:systemMsgIndex+1],
-					append([]model.Message{*summaryMsg}, req.Messages[systemMsgIndex+1:]...)...)
-			} else {
-				req.Messages = append([]model.Message{*summaryMsg}, req.Messages...)
-			}
+			invocation.SetState(contentHasSessionSummaryStateKey, true)
+			p.injectSystemContextMessage(req, *summaryMsg)
 		}
 
 		if skipHistory {
@@ -339,6 +323,15 @@ func (p *ContentRequestProcessor) ProcessRequest(
 			messages = p.getCurrentInvocationMessages(invocation)
 		} else {
 			messages = p.getIncrementMessages(invocation, summaryUpdatedAt)
+			if p.hasCompactedCurrentInvocationToolResults(
+				invocation,
+				summaryUpdatedAt,
+			) {
+				invocation.SetState(
+					contentHasCompactedToolResultsStateKey,
+					true,
+				)
+			}
 		}
 		req.Messages = append(req.Messages, messages...)
 		needToAddInvocationMessage = len(messages) == 0
@@ -361,6 +354,28 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		invocation.AgentName,
 		event.WithObject(model.ObjectTypePreprocessingContent),
 	))
+}
+
+// injectSystemContextMessage injects summary or memory context into request.
+// It merges the content into an existing system message if one exists,
+// or prepends as a new system message if none exists.
+func (p *ContentRequestProcessor) injectSystemContextMessage(
+	req *model.Request,
+	msg model.Message,
+) {
+	if msg.Role != model.RoleSystem {
+		return
+	}
+	systemMsgIndex := findSystemMessageIndex(req.Messages)
+	if systemMsgIndex >= 0 {
+		if req.Messages[systemMsgIndex].Content == "" {
+			req.Messages[systemMsgIndex].Content = msg.Content
+			return
+		}
+		req.Messages[systemMsgIndex].Content += "\n\n" + msg.Content
+		return
+	}
+	req.Messages = append([]model.Message{msg}, req.Messages...)
 }
 
 // injectInjectedContextMessages inserts per-run context messages into the request
@@ -476,6 +491,16 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 	var events []event.Event
 	inv.Session.EventMu.RLock()
 	for _, evt := range inv.Session.Events {
+		if compactedEvt, ok := p.compactCurrentInvocationEvent(
+			evt,
+			inv,
+			filter,
+			isZeroTime,
+			since,
+		); ok {
+			events = append(events, compactedEvt)
+			continue
+		}
 		shouldInclude, isInvocationMessage := p.shouldIncludeEvent(evt, inv, filter, isZeroTime, since)
 		if !shouldInclude {
 			continue
@@ -533,6 +558,82 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 	}
 	messages = annotateUserMessagesWithAttachedFiles(messages)
 	return messages
+}
+
+// compactCurrentInvocationEvent preserves the minimum structured state needed
+// for same-turn tool loops after a summary has already absorbed earlier
+// invocation history. Assistant tool-call messages are kept intact, while tool
+// results are replaced with a small placeholder that points the model at the
+// summary for details.
+func (p *ContentRequestProcessor) compactCurrentInvocationEvent(
+	evt event.Event,
+	inv *agent.Invocation,
+	filter string,
+	isZeroTime bool,
+	since time.Time,
+) (event.Event, bool) {
+	if isZeroTime || inv == nil {
+		return event.Event{}, false
+	}
+	if evt.RequestID != inv.RunOptions.RequestID ||
+		evt.InvocationID != inv.InvocationID {
+		return event.Event{}, false
+	}
+	if evt.Timestamp.After(since) {
+		return event.Event{}, false
+	}
+	if !isEventEligibleForInclusion(evt) {
+		return event.Event{}, false
+	}
+	if !p.passTimelineFilter(evt, inv) || !p.passBranchFilter(evt, filter) {
+		return event.Event{}, false
+	}
+
+	var compactedChoices []model.Choice
+	for _, choice := range evt.Choices {
+		msg, ok := compactedCurrentInvocationMessage(choice.Message)
+		if !ok {
+			continue
+		}
+		compactedChoices = append(compactedChoices, model.Choice{
+			Index:   choice.Index,
+			Message: msg,
+		})
+	}
+	if len(compactedChoices) == 0 {
+		return event.Event{}, false
+	}
+
+	compacted := evt
+	compacted.Response = &model.Response{
+		Done:    evt.Response.Done,
+		Object:  evt.Response.Object,
+		Choices: compactedChoices,
+	}
+	return compacted, true
+}
+
+func compactedCurrentInvocationMessage(
+	msg model.Message,
+) (model.Message, bool) {
+	switch {
+	case len(msg.ToolCalls) > 0:
+		return model.Message{
+			Role:         msg.Role,
+			Content:      msg.Content,
+			ContentParts: msg.ContentParts,
+			ToolCalls:    msg.ToolCalls,
+		}, true
+	case msg.Role == model.RoleTool && msg.ToolID != "":
+		return model.Message{
+			Role:     msg.Role,
+			Content:  compactedToolResultPlaceholder,
+			ToolID:   msg.ToolID,
+			ToolName: msg.ToolName,
+		}, true
+	default:
+		return model.Message{}, false
+	}
 }
 
 func annotateUserMessagesWithAttachedFiles(
@@ -624,16 +725,77 @@ func fileNamesForAnnotation(
 		if len(names) >= attachedFilesMaxPreview {
 			continue
 		}
-		name := strings.TrimSpace(part.File.Name)
-		if name == "" {
-			name = fileNameFromArtifactRef(part.File.FileID)
-		}
-		if name == "" {
-			name = fmt.Sprintf(attachedFileNameFallbackFmt, count)
-		}
-		names = append(names, name)
+		names = append(names, fileLabelForAnnotation(part.File, count))
 	}
 	return names, count
+}
+
+func fileLabelForAnnotation(file *model.File, count int) string {
+	if file == nil {
+		return fmt.Sprintf(attachedFileNameFallbackFmt, count)
+	}
+
+	name := strings.TrimSpace(file.Name)
+	if name == "" {
+		name = fileNameFromAnnotationRef(file.FileID)
+	}
+	if name == "" {
+		name = fmt.Sprintf(attachedFileNameFallbackFmt, count)
+	}
+	if mimeType := fileMimeLabel(file); mimeType != "" {
+		name = fmt.Sprintf("%s (%s)", name, mimeType)
+	}
+
+	ref := annotationRefDisplay(file.FileID)
+	if ref == "" || ref == name {
+		return name
+	}
+	return fmt.Sprintf("%s @ %s", name, ref)
+}
+
+func fileMimeLabel(file *model.File) string {
+	if file == nil {
+		return ""
+	}
+	mimeType := strings.TrimSpace(file.MimeType)
+	if mimeType == "" || mimeType == ignoredAttachmentMimeType {
+		return ""
+	}
+	return mimeType
+}
+
+func fileNameFromAnnotationRef(fileID string) string {
+	if name := fileNameFromArtifactRef(fileID); name != "" {
+		return name
+	}
+	ref := strings.TrimSpace(fileID)
+	if strings.HasPrefix(ref, hostRefPrefix) {
+		return baseNameForAnnotation(strings.TrimPrefix(ref, hostRefPrefix))
+	}
+	if filepath.IsAbs(ref) {
+		return baseNameForAnnotation(ref)
+	}
+	return ""
+}
+
+func annotationRefDisplay(fileID string) string {
+	ref := strings.TrimSpace(fileID)
+	if ref == "" {
+		return ""
+	}
+	if strings.HasPrefix(ref, fileref.ArtifactPrefix) ||
+		strings.HasPrefix(ref, fileref.WorkspacePrefix) {
+		return ref
+	}
+	return ""
+}
+
+func baseNameForAnnotation(raw string) string {
+	base := path.Base(strings.TrimSpace(raw))
+	if base == "." || base == "/" || base == ".." {
+		return ""
+	}
+	return base
 }
 
 func fileNameFromArtifactRef(fileID string) string {
@@ -891,7 +1053,7 @@ func (p *ContentRequestProcessor) mergeUserMessages(
 // request and whether that event should be treated as the invocation message.
 //
 // The second return value (isInvocationMessage) is intentionally strict: only
-// exact invocation-message matches return true. Current-invocation event
+// exact invocation-message matches return true. Mid-turn user-message
 // protection may still include an event, but returns false for this flag to
 // avoid conflating inclusion with strict message equality.
 func (p *ContentRequestProcessor) shouldIncludeEvent(evt event.Event, inv *agent.Invocation, filter string,
@@ -904,13 +1066,11 @@ func (p *ContentRequestProcessor) shouldIncludeEvent(evt event.Event, inv *agent
 	if isStrictInvocationMessage(evt, inv) {
 		return true, true
 	}
-	// When a summary exists (!isZeroTime), it may exclude events that belong
-	// to the current invocation by timestamp. Protect all events from the
-	// current invocation so the model retains tool-call context across
-	// intra-run iterations and keeps the original user message during
-	// mid-turn async summary. This guard runs only when a summary is active;
-	// otherwise normal timeline/branch filtering applies unmodified.
-	if !isZeroTime && isCurrentInvocationEvent(evt, inv) {
+	// Keep the current invocation user message even when summary UpdatedAt
+	// would otherwise exclude it. This preserves the original request while
+	// still allowing same-turn tool/assistant history already covered by the
+	// summary to be compacted out of the next prompt.
+	if isCurrentInvocationUserMessage(evt, inv) {
 		return true, false
 	}
 	// Use strict After so events stamped exactly at summary UpdatedAt are
@@ -941,24 +1101,58 @@ func isStrictInvocationMessage(evt event.Event, inv *agent.Invocation) bool {
 		invocationMessageEqual(inv.Message, evt.Choices[0].Message)
 }
 
-// isCurrentInvocationEvent keeps events that belong to the current
-// invocation even when summary UpdatedAt would exclude them by timestamp.
+// isCurrentInvocationUserMessage keeps the current invocation's user message
+// even when summary UpdatedAt would exclude it by timestamp.
 //
-// This protects two scenarios:
-//  1. Async mid-turn summary: the user message is preserved so the model
-//     always sees the original request.
-//  2. Intra-run synchronous summary: assistant and tool-result messages
-//     produced in earlier iterations of the same run are preserved so the
-//     model retains tool-call context across iterations.
-//
-// RequestID + InvocationID matching avoids preserving unrelated events
+// RequestID + InvocationID matching avoids preserving unrelated user messages
 // from other invocations that may share the same request scope.
-func isCurrentInvocationEvent(evt event.Event, inv *agent.Invocation) bool {
+func isCurrentInvocationUserMessage(evt event.Event, inv *agent.Invocation) bool {
 	return inv.RunOptions.RequestID != "" &&
 		inv.RunOptions.RequestID == evt.RequestID &&
 		inv.InvocationID != "" &&
 		inv.InvocationID == evt.InvocationID &&
-		len(evt.Choices) > 0
+		len(evt.Choices) > 0 &&
+		evt.Choices[0].Message.Role == model.RoleUser
+}
+
+// hasCompactedCurrentInvocationToolResults reports whether same-invocation tool
+// result events exist before the active summary cutoff and were therefore
+// compacted out of the raw prompt history.
+func (p *ContentRequestProcessor) hasCompactedCurrentInvocationToolResults(
+	inv *agent.Invocation,
+	since time.Time,
+) bool {
+	if inv == nil || inv.Session == nil || since.IsZero() {
+		return false
+	}
+	if inv.RunOptions.RequestID == "" || inv.InvocationID == "" {
+		return false
+	}
+
+	filter := inv.GetEventFilterKey()
+
+	inv.Session.EventMu.RLock()
+	defer inv.Session.EventMu.RUnlock()
+
+	for _, evt := range inv.Session.Events {
+		if evt.RequestID != inv.RunOptions.RequestID ||
+			evt.InvocationID != inv.InvocationID {
+			continue
+		}
+		if evt.Timestamp.After(since) {
+			continue
+		}
+		if !isEventEligibleForInclusion(evt) ||
+			len(evt.Choices) == 0 ||
+			evt.Choices[0].Message.Role != model.RoleTool {
+			continue
+		}
+		if !p.passBranchFilter(evt, filter) {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // passTimelineFilter applies request/invocation timeline constraints.

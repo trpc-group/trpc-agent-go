@@ -766,6 +766,168 @@ Common approaches:
   when you see a non-partial response that carries `choice.Message.Content`
   (or when the workflow finishes).
 
+Tip: node-to-node streaming inside the graph
+
+Why this exists
+
+- Graph state (for example, `last_response` and `node_responses[nodeID]`) is
+  committed only after a node finishes.
+- Edges are triggered only when a node finishes. So a strictly serial edge
+  like `llm -> parse` always means the downstream node gets the full output.
+
+If you need a downstream node to react while an upstream LLM (or Agent node)
+is still streaming, use the StreamHub APIs.
+
+Recipe (fan-out + join)
+
+1) Pick a stream name (unique within a single invocation).
+
+2) Make the producer publish streaming output:
+
+- LLM / Agent node: `graph.WithStreamOutput(streamName)`
+- Function node: `w, _ := graph.OpenStreamWriter(ctx, streamName)`
+
+3) Run the consumer node in parallel (same step), then join afterwards:
+
+- Connect a common upstream node to both `producer` and `consumer`.
+- Use `AddJoinEdge([]string{producer, consumer}, finish)` to converge.
+
+Example A: LLM node produces, function node consumes
+
+```go
+const streamName = "llm:deltas"
+
+sg.AddLLMNode(
+	"llm",
+	llm,
+	instruction,
+	nil,
+	graph.WithStreamOutput(streamName),
+)
+
+sg.AddNode("consume", func(ctx context.Context, state graph.State) (any, error) {
+	r, err := graph.OpenStreamReader(ctx, streamName)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+
+	const maxLineBytes = 1024 * 1024
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(nil, maxLineBytes)
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		// Parse / handle line here.
+	}
+	return graph.State{}, scanner.Err()
+})
+
+sg.AddEdge("setup", "llm")
+sg.AddEdge("setup", "consume")
+sg.AddJoinEdge([]string{"llm", "consume"}, "finish")
+```
+
+Example B: Agent node produces, function node consumes
+
+An Agent node invokes a sub-agent by name. In `StateGraph`, the node ID must
+match the sub-agent name registered on the parent `GraphAgent`.
+
+```go
+const streamName = "writer:deltas"
+
+// Producer: stream sub-agent deltas into StreamHub.
+sg.AddAgentNode(
+	"writer",
+	graph.WithStreamOutput(streamName),
+)
+
+// Consumer: read the bytes incrementally.
+sg.AddNode("consume", func(ctx context.Context, state graph.State) (any, error) {
+	r, err := graph.OpenStreamReader(ctx, streamName)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+	_, err = io.Copy(io.Discard, r)
+	return graph.State{}, err
+})
+
+sg.AddEdge("setup", "writer")
+sg.AddEdge("setup", "consume")
+sg.AddJoinEdge([]string{"writer", "consume"}, "finish")
+```
+
+When you construct the `GraphAgent`, register the sub-agent:
+
+```go
+sub := llmagent.New(
+	"writer",
+	llmagent.WithModel(llm),
+)
+
+ga, _ := graphagent.New(
+	"workflow",
+	g,
+	graphagent.WithSubAgents([]agent.Agent{sub}),
+)
+```
+
+Note: To get true incremental deltas, the sub-agent must run with streaming
+enabled (for example, `agent.WithStream(true)`). Otherwise the StreamHub stream
+only receives the final message at the end.
+
+Example C: Function node produces, function node consumes
+
+```go
+const streamName = "produce:lines"
+
+sg.AddNode("produce", func(ctx context.Context, state graph.State) (any, error) {
+	w, err := graph.OpenStreamWriter(ctx, streamName)
+	if err != nil {
+		return nil, err
+	}
+	defer w.Close()
+
+	lines := []string{"a\n", "b\n"}
+	for _, line := range lines {
+		if _, err := io.WriteString(w, line); err != nil {
+			return nil, err
+		}
+	}
+	return graph.State{}, nil
+})
+
+sg.AddNode("consume", func(ctx context.Context, state graph.State) (any, error) {
+	r, err := graph.OpenStreamReader(ctx, streamName)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+
+	b, err := io.ReadAll(r)
+	if err != nil {
+		return nil, err
+	}
+	_ = string(b) // parse it
+	return graph.State{}, nil
+})
+
+sg.AddEdge("setup", "produce")
+sg.AddEdge("setup", "consume")
+sg.AddJoinEdge([]string{"produce", "consume"}, "finish")
+```
+
+Notes
+
+- StreamHub streams are in-memory and are not checkpointed.
+- Only one reader and one writer may be opened per stream name.
+- The stream is bytes. For text, pick a framing (lines, NDJSON, etc).
+- See `examples/graph/streaming_node_consumer` for a runnable demo.
+
 #### Three input paradigms
 
 - OneShot (`StateKeyOneShotMessages`):
@@ -4193,6 +4355,170 @@ Recommendations:
 - Emit only necessary keys to control bandwidth and avoid leaking sensitive data.
 - Internal/volatile keys are filtered from final snapshots and should not be emitted (see [graph/internal_keys.go:16](https://github.com/trpc-group/trpc-agent-go/blob/main/graph/internal_keys.go#L16)).
 - For textual intermediate outputs, prefer existing model streaming events (`choice.Delta.Content`).
+
+#### Recover from non-fatal node errors
+
+By default, if a node returns a non‑nil `error`, graph execution stops and the
+Executor emits an error event.
+
+Sometimes you want a *non‑fatal* error:
+
+- Record the error (for debugging/monitoring or to show in the final output)
+- Keep running the rest of the graph
+
+You can implement this with an After‑node callback (`WithPostNodeCallback` or
+graph‑wide `WithNodeCallbacks`).
+
+How it works:
+
+- Your callback receives `nodeErr error`.
+  - `nodeErr == nil`: the node succeeded
+  - `nodeErr != nil`: the node failed (possibly after retries)
+- If you decide the error is **non‑fatal**, return a **non‑nil** replacement
+  result and `nil` error.
+  - The replacement result is handled like a normal node result: it can be
+    `graph.State`, `*graph.Command`, or `[]*graph.Command`.
+  - Returning `graph.State{...}` is a common way to both recover and record the
+    error in state.
+- If you return `nil, nil` on a failure, the original node error is preserved
+  and the graph still fails.
+
+Example: collect non‑fatal errors into `stateKeyNodeErrors` while continuing:
+
+```go
+import (
+    "context"
+    "errors"
+    "reflect"
+
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+const (
+    stateKeyNodeErrors = "node_errors"
+)
+
+var errNonFatal = errors.New("non-fatal error")
+
+func failingNode(ctx context.Context, st graph.State) (any, error) {
+    return nil, errNonFatal
+}
+
+func buildGraph() (*graph.Graph, error) {
+    schema := graph.MessagesStateSchema()
+    schema.AddField(stateKeyNodeErrors, graph.StateField{
+        Type:    reflect.TypeOf([]string{}),
+        Reducer: graph.StringSliceReducer,
+        Default: func() any { return []string{} },
+    })
+
+    sg := graph.NewStateGraph(schema)
+    sg.AddNode("N", failingNode)
+
+    cbs := graph.NewNodeCallbacks().RegisterAfterNode(func(
+        ctx context.Context,
+        cb *graph.NodeCallbackContext,
+        st graph.State,
+        result any,
+        nodeErr error,
+    ) (any, error) {
+        if nodeErr == nil {
+            return nil, nil
+        }
+        // Decide whether it's fatal.
+        if !errors.Is(nodeErr, errNonFatal) {
+            return nil, nil // keep it fatal
+        }
+        // Non-fatal: record it and keep running.
+        return graph.State{
+            stateKeyNodeErrors: []string{
+                cb.NodeID + ": " + nodeErr.Error(),
+            },
+        }, nil
+    })
+    sg.WithNodeCallbacks(cbs)
+
+    sg.SetEntryPoint("N")
+    sg.SetFinishPoint("N")
+    return sg.Compile()
+}
+```
+
+#### Fatal errors: where to read them (and how to branch by code)
+
+If a node failure is *not* recovered by an After‑node callback (or the Executor
+itself fails / panics), the graph stops with a **fatal error**.
+
+That fatal error is **not** returned via `Runner.Run(...)` (the run is streamed);
+instead, it is emitted on the event stream.
+
+In practice you will usually see two kinds of error‑related events (both satisfy
+`Response.Error != nil`):
+
+- **Graph‑level fatal error (recommended as the “final failure reason”)**:
+  `Author = graph.AuthorGraphPregel` and
+  `Object = graph.ObjectTypeGraphPregelStep`.
+  The `_pregel_metadata.stepNumber` is typically `-1`, meaning the Executor is
+  reporting the run’s final failure reason from outside any specific node.
+- **Node‑level error (best for pinpointing the failing node)**:
+  `Author = <nodeID>` and `Response.Error != nil`.
+  `_node_metadata` includes node ID, step, attempt/retry info, etc.
+
+Notes:
+
+- Runner always emits a final `runner.completion` event as the true end marker.
+  Keep consuming until completion.
+- If you keep the error “fatal” (your After‑node callback returns `nil, nil` or
+  returns a non‑nil error), there will be no final `graph.execution` state
+  snapshot. Prefer consuming the event stream for fatal errors (or emit a
+  custom event in a callback; see “Carry business values in node callbacks”).
+
+**Branch by error code**
+
+`Response.Error` supports an optional `Code` field. You can branch logic based
+on `Code` while consuming events:
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/graph"
+
+for ev := range eventCh {
+    if ev.Response == nil || ev.Response.Error == nil {
+        continue
+    }
+
+    // Graph-level fatal error for the whole run.
+    if ev.Author != graph.AuthorGraphPregel ||
+        ev.Object != graph.ObjectTypeGraphPregelStep {
+        continue
+    }
+
+    if ev.Response.Error.Code == nil {
+        // No code provided.
+        continue
+    }
+
+    switch *ev.Response.Error.Code {
+    case "-1":
+        // Handle your business error code here.
+    default:
+        // Fallback.
+    }
+}
+```
+
+**How to attach a code to a fatal error**
+
+When emitting error events, the framework tries to populate `Response.Error.Code`
+when your node returns an error (including wrapped / joined error chains) that
+matches any of the following forms:
+
+- `ErrorCode() string`
+- `Code() string`
+- `Code() int` / `Code() int32` / `Code() int64`
+- Or return `*model.ResponseError` directly (it implements the `error` interface)
+
+When present, that code is available as `Response.Error.Code` on the error
+events.
 
 You can also configure agent‑level callbacks:
 

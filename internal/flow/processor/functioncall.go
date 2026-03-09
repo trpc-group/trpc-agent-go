@@ -386,7 +386,13 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequential(
 		if tl, ok := tools[toolCall.Function.Name]; ok {
 			// Use the first choice as the canonical tool result for state
 			// delta.
-			p.attachStateDelta(tl, modifiedArgs, &choices[0], toolEvent)
+			p.attachStateDelta(
+				invocation,
+				tl,
+				modifiedArgs,
+				&choices[0],
+				toolEvent,
+			)
 		}
 	}
 
@@ -586,7 +592,11 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	if tl, ok := tools[tc.Function.Name]; ok {
 		// Use the first choice as the canonical tool result for state delta.
 		p.attachStateDelta(
-			tl, modifiedArgs, &choices[0], toolCallResponseEvent,
+			invocation,
+			tl,
+			modifiedArgs,
+			&choices[0],
+			toolCallResponseEvent,
 		)
 	}
 	itelemetry.TraceToolCall(span, sess, decl, modifiedArgs, toolCallResponseEvent, err)
@@ -607,7 +617,11 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 
 // attachStateDelta copies tool-provided state delta to the event.
 func (p *FunctionCallResponseProcessor) attachStateDelta(
-	tl tool.Tool, args []byte, choice *model.Choice, ev *event.Event,
+	inv *agent.Invocation,
+	tl tool.Tool,
+	args []byte,
+	choice *model.Choice,
+	ev *event.Event,
 ) {
 	if tl == nil || choice == nil || ev == nil {
 		return
@@ -622,11 +636,21 @@ func (p *FunctionCallResponseProcessor) attachStateDelta(
 	type stateDeltaProvider interface {
 		StateDelta(string, []byte, []byte) map[string][]byte
 	}
-	sdp, ok := original.(stateDeltaProvider)
-	if !ok {
-		return
+	type invocationStateDeltaProvider interface {
+		StateDeltaForInvocation(
+			*agent.Invocation,
+			string,
+			[]byte,
+			[]byte,
+		) map[string][]byte
 	}
-	delta := sdp.StateDelta(toolCallID, args, b)
+
+	var delta map[string][]byte
+	if isdp, ok := original.(invocationStateDeltaProvider); ok {
+		delta = isdp.StateDeltaForInvocation(inv, toolCallID, args, b)
+	} else if sdp, ok := original.(stateDeltaProvider); ok {
+		delta = sdp.StateDelta(toolCallID, args, b)
+	}
 	if len(delta) == 0 {
 		return
 	}
@@ -1327,9 +1351,18 @@ func (f *FunctionCallResponseProcessor) executeStreamableTool(
 	// Process stream chunks, handling:
 	// Case 1: Raw sub-agent event passthrough.
 	// Case 2: Plain text-like chunk. Emit partial tool.response event.
-	contents, err := f.consumeStream(ctx, invocation, toolCall, reader, eventChan)
+	contents, finalResult, err := f.consumeStream(
+		ctx,
+		invocation,
+		toolCall,
+		reader,
+		eventChan,
+	)
 	if err != nil {
 		return nil, err
+	}
+	if finalResult != nil {
+		return finalResult, nil
 	}
 	// If we forwarded inner events, still return the merged content as the tool
 	// result so it can be recorded in the tool response message for the next LLM
@@ -1346,8 +1379,9 @@ func (f *FunctionCallResponseProcessor) consumeStream(
 	toolCall model.ToolCall,
 	reader *tool.StreamReader,
 	eventChan chan<- *event.Event,
-) ([]any, error) {
+) ([]any, any, error) {
 	var contents []any
+	var finalResult any
 	for {
 		chunk, err := reader.Recv()
 		if err == io.EOF {
@@ -1365,11 +1399,19 @@ func (f *FunctionCallResponseProcessor) consumeStream(
 			break
 		}
 
-		if err := f.processStreamChunk(ctx, invocation, toolCall, chunk, eventChan, &contents); err != nil {
-			return contents, err
+		if err := f.processStreamChunk(
+			ctx,
+			invocation,
+			toolCall,
+			chunk,
+			eventChan,
+			&contents,
+			&finalResult,
+		); err != nil {
+			return contents, finalResult, err
 		}
 	}
-	return contents, nil
+	return contents, finalResult, nil
 }
 
 // appendInnerEventContent extracts textual content from an inner event and appends it.
@@ -1619,7 +1661,21 @@ func (f *FunctionCallResponseProcessor) processStreamChunk(
 	chunk tool.StreamChunk,
 	eventChan chan<- *event.Event,
 	contents *[]any,
+	finalResult *any,
 ) error {
+	switch v := chunk.Content.(type) {
+	case tool.FinalResultChunk:
+		if finalResult != nil {
+			*finalResult = v.Result
+		}
+		return nil
+	case *tool.FinalResultChunk:
+		if v != nil && finalResult != nil {
+			*finalResult = v.Result
+		}
+		return nil
+	}
+
 	// Case 1: Raw sub-agent event passthrough.
 	if ev, ok := chunk.Content.(*event.Event); ok {
 		// With random FilterKey isolation, we can safely forward all inner events

@@ -567,6 +567,82 @@ func TestSessionSummarizer_ExtractConversationText_WithToolCalls(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, text, "[tool returned: done]")
 	})
+
+	t.Run("handles multiple tool results in separate choices", func(t *testing.T) {
+		// When model returns multiple tool calls, results may be distributed
+		// across different choices (len(e.Response.Choices) > 1).
+		sess := &session.Session{
+			ID: "test-multi-choices",
+			Events: []event.Event{
+				{
+					Author: "user",
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "Check weather in multiple cities"},
+					}}},
+				},
+				{
+					Author: "assistant",
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{
+							ToolCalls: []model.ToolCall{
+								{
+									ID:   "call_beijing",
+									Type: "function",
+									Function: model.FunctionDefinitionParam{
+										Name:      "get_weather",
+										Arguments: []byte(`{"city":"Beijing"}`),
+									},
+								},
+								{
+									ID:   "call_shanghai",
+									Type: "function",
+									Function: model.FunctionDefinitionParam{
+										Name:      "get_weather",
+										Arguments: []byte(`{"city":"Shanghai"}`),
+									},
+								},
+							},
+						},
+					}}},
+				},
+				{
+					Author: "tool",
+					Response: &model.Response{Choices: []model.Choice{
+						{
+							Message: model.Message{
+								ToolID:   "call_beijing",
+								ToolName: "get_weather",
+								Content:  `{"temperature": 25, "weather": "sunny"}`,
+							},
+						},
+						{
+							Message: model.Message{
+								ToolID:   "call_shanghai",
+								ToolName: "get_weather",
+								Content:  `{"temperature": 22, "weather": "cloudy"}`,
+							},
+						},
+					}},
+				},
+				{
+					Author: "assistant",
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "Beijing is sunny, Shanghai is cloudy."},
+					}}},
+				},
+			},
+		}
+
+		text, err := s.Summarize(context.Background(), sess)
+		require.NoError(t, err)
+		// Both tool calls should be extracted.
+		assert.Contains(t, text, "[Called tool: get_weather")
+		assert.Contains(t, text, "Beijing")
+		assert.Contains(t, text, "Shanghai")
+		// Both tool results should be extracted.
+		assert.Contains(t, text, "sunny")
+		assert.Contains(t, text, "cloudy")
+	})
 }
 
 func TestSessionSummarizer_CustomToolFormatters(t *testing.T) {

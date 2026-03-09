@@ -349,6 +349,26 @@ server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithTranslat
 
 完整的代码示例可以参考 [examples/agui/server/react](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/react)。
 
+### 思考内容
+
+AG-UI 通过`REASONING_*` 事件承载模型思考内容，便于前端在正文回复之前展示思考过程，详细可参考 [AG-UI Reasoning](https://docs.ag-ui.com/concepts/reasoning)。典型事件序列如下：
+
+```text
+REASONING_START
+  → REASONING_MESSAGE_START
+  → REASONING_MESSAGE_CONTENT
+  → REASONING_MESSAGE_END
+REASONING_END
+```
+
+默认情况下会屏蔽思考内容，可以通过 `agui.WithReasoningContentEnabled` 在创建 Server 时开启思考内容：
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/server/agui"
+
+server, err := agui.New(runner, agui.WithReasoningContentEnabled(true))
+```
+
 ### 自定义 `UserIDResolver`
 
 默认所有请求都会归到固定的 `"user"` 用户 ID，可以通过自定义 `UserIDResolver` 从 `RunAgentInput` 中提取 `UserID`：
@@ -610,7 +630,7 @@ server, err := agui.New(
 
 为了解决上述问题，框架会先对事件进行聚合，再写入会话。此外，默认每秒定时刷新一次，每次刷新将当前的聚合结果写入会话。
 
-- `aggregator.WithEnabled(true)` 用于控制是否开启事件聚合，默认为开启状态。开启后，会将连续且具有相同 `messageId` 的文本事件进行聚合；关闭时则不对 AG-UI 事件做聚合。
+- `aggregator.WithEnabled(true)` 用于控制是否开启事件聚合，默认为开启状态。开启后，会将连续且具有相同 `messageId` 的 `TEXT_MESSAGE_CONTENT` 与 `REASONING_MESSAGE_CONTENT` 事件进行聚合；关闭时则不对 AG-UI 事件做聚合。
 - `aguirunner.WithFlushInterval(time.Second)` 用于控制事件聚合结果的定时刷新间隔，默认为 1 秒。设置为 0 时表示不开启定时刷新功能。
 
 ```go
@@ -641,116 +661,6 @@ server, err := agui.New(
 ```
 
 如果需要更复杂的聚合策略，可以实现 `aggregator.Aggregator` 并通过自定义工厂注入。需要注意的是，虽然每个会话都会单独创建一个聚合器，省去了跨会话的状态维护和并发处理，但聚合方法本身仍有可能被并发调用，因此仍需妥善处理并发。
-
-例如，在兼容默认文本聚合的同时，将类型为 `"think"` 的自定义事件内容累计后再落库。
-
-完整示例代码可见 [examples/agui/server/thinkaggregator](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/thinkaggregator)
-
-```go
-import (
-	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
-	"trpc.group/trpc-go/trpc-agent-go/runner"
-	"trpc.group/trpc-go/trpc-agent-go/server/agui"
-	"trpc.group/trpc-go/trpc-agent-go/server/agui/aggregator"
-	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
-	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
-)
-
-type thinkAggregator struct {
-	mu    sync.Mutex
-	inner aggregator.Aggregator
-	think strings.Builder
-}
-
-func newAggregator(ctx context.Context, opt ...aggregator.Option) aggregator.Aggregator {
-	return &thinkAggregator{inner: aggregator.New(ctx, opt...)}
-}
-
-
-func (c *thinkAggregator) Append(ctx context.Context, event aguievents.Event) ([]aguievents.Event, error) {
-	// 通过互斥锁保证内部聚合器和 think 缓冲区的并发安全，避免多个事件并发追加时出现竞态条件。
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// 针对自定义的 "think" 事件类型，采取“只累计不立刻下发”的策略：
-	// 1. 先强制刷新 inner，将之前累积的普通事件完整输出；
-	// 2. 当前的 think 内容只累加到缓冲区，不立即返回；
-	// 这样可以保证 think 片段之间不会被普通事件打断，且之前的普通事件先于新的思考内容输出。
-	if custom, ok := event.(*aguievents.CustomEvent); ok && custom.Name == string(thinkEventTypeContent) {
-		flushed, err := c.inner.Flush(ctx)
-		if err != nil {
-			return nil, err
-		}
-		// 仅在值为字符串时参与累积，避免不符合预期类型的数据污染缓冲区。
-		if v, ok := custom.Value.(string); ok {
-			c.think.WriteString(v)
-		}
-		// 当前 think 事件只参与内部累积，不立刻对外可见，返回的是之前 inner 已有的聚合结果。
-		return flushed, nil
-	}
-
-	// 非 think 事件走默认的 inner 聚合逻辑，保证原有文本聚合行为不被破坏。
-	events, err := c.inner.Append(ctx, event)
-	if err != nil {
-		return nil, err
-	}
-
-	// 若尚无累积的 think 内容，直接返回 inner 的聚合结果，无需额外封装。
-	if c.think.Len() == 0 {
-		return events, nil
-	}
-
-	// 若存在已累积的 think 内容，则在当前批次事件前插入一个聚合后的 think 事件：
-	// 1. 将缓冲区内容打包成一个整体的 CustomEvent；
-	// 2. 清空缓冲区，避免重复下发；
-	// 3. 将该 think 事件放在当前 events 之前，保持时间顺序：先输出完整思考，再输出后续事件。
-	think := aguievents.NewCustomEvent(string(thinkEventTypeContent), aguievents.WithValue(c.think.String()))
-	c.think.Reset()
-
-	out := make([]aguievents.Event, 0, len(events)+1)
-	out = append(out, think)
-	out = append(out, events...)
-	return out, nil
-}
-
-func (c *thinkAggregator) Flush(ctx context.Context) ([]aguievents.Event, error) {
-	// Flush 同样需要保证内聚合器与 think 缓冲的并发安全。
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// 先刷新 inner，确保所有普通事件按照其自身的聚合策略输出。
-	events, err := c.inner.Flush(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	// 若 think 缓冲区中仍有未输出的内容，
-	// 则将其封装为一个聚合后的 think 事件并插入当前批次的最前面，
-	// 保证聚合后的思考内容不会被后续刷新产生的事件打乱顺序。
-	if c.think.Len() > 0 {
-		think := aguievents.NewCustomEvent(string(thinkEventTypeContent), aguievents.WithValue(c.think.String()))
-		c.think.Reset()
-		events = append([]aguievents.Event{think}, events...)
-	}
-	return events, nil
-}
-
-runner := runner.NewRunner(agent.Info().Name, agent)
-sessionService := inmemory.NewSessionService()
-
-server, err := agui.New(
-    runner,
-    agui.WithPath("/agui"),
-    agui.WithMessagesSnapshotPath("/history"),
-    agui.WithMessagesSnapshotEnabled(true),
-    agui.WithAppName(appName),
-    agui.WithSessionService(sessionService),
-    agui.WithAGUIRunnerOptions(
-        aguirunner.WithUserIDResolver(userIDResolver),
-        aguirunner.WithAggregatorFactory(newAggregator),
-    ),
-)
-```
 
 ### 消息快照续传
 

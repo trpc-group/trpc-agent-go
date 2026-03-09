@@ -2255,7 +2255,7 @@ func TestGetSession_WithEventLimit(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestGetSession_WithTTLRefresh(t *testing.T) {
+func TestGetSession_WithTTL(t *testing.T) {
 	s, mock, db := setupMockService(t, nil)
 	defer db.Close()
 
@@ -2298,11 +2298,6 @@ func TestGetSession_WithTTLRefresh(t *testing.T) {
 	mock.ExpectQuery("SELECT session_id, event FROM session_events").
 		WithArgs("test-app", "test-user", "{test-session}").
 		WillReturnRows(eventRows)
-
-	// Mock TTL refresh UPDATE - this should be called after successful GetSession
-	mock.ExpectExec("UPDATE session_states").
-		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "test-app", "test-user", "test-session").
-		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	sess, err := s.GetSession(context.Background(), key)
 	require.NoError(t, err)

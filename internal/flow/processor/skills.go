@@ -119,9 +119,9 @@ func WithMaxLoadedSkills(max int) SkillsRequestProcessorOption {
 //   - Loaded skills: inject full SKILL.md body.
 //   - Docs: inject doc texts selected via state keys.
 //
-// State keys used (per turn, ephemeral):
-//   - skill.StateKeyLoadedPrefix+name -> "1"
-//   - skill.StateKeyDocsPrefix+name ->
+// State keys used (per agent, ephemeral):
+//   - skill.LoadedKey(agentName, skillName) -> "1"
+//   - skill.DocsKey(agentName, skillName) ->
 //     "*" or JSON array of file names.
 type SkillsRequestProcessor struct {
 	repo            skill.Repository
@@ -178,6 +178,8 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 	if req == nil || inv == nil || inv.Session == nil || p.repo == nil {
 		return
 	}
+
+	maybeMigrateLegacySkillState(ctx, inv, ch)
 
 	p.maybeClearSkillStateForTurn(ctx, inv, ch)
 
@@ -283,11 +285,11 @@ func (p *SkillsRequestProcessor) maybeCapLoadedSkills(
 			kept = append(kept, name)
 			continue
 		}
-		loadedKey := skill.StateKeyLoadedPrefix + name
+		loadedKey := skill.LoadedKey(inv.AgentName, name)
 		inv.Session.SetState(loadedKey, nil)
 		delta[loadedKey] = nil
 
-		docsKey := skill.StateKeyDocsPrefix + name
+		docsKey := skill.DocsKey(inv.AgentName, name)
 		inv.Session.SetState(docsKey, nil)
 		delta[docsKey] = nil
 	}
@@ -318,6 +320,7 @@ func keepMostRecentSkills(
 
 	keep, seen := mostRecentSkillsFromEvents(
 		inv.Session.GetEvents(),
+		inv.AgentName,
 		loadedSet,
 		max,
 	)
@@ -341,6 +344,7 @@ func loadedSkillSet(loaded []string) map[string]struct{} {
 
 func mostRecentSkillsFromEvents(
 	events []event.Event,
+	agentName string,
 	loadedSet map[string]struct{},
 	max int,
 ) ([]string, map[string]struct{}) {
@@ -349,6 +353,7 @@ func mostRecentSkillsFromEvents(
 	for i := len(events) - 1; i >= 0 && len(keep) < max; i-- {
 		keep = appendSkillsFromToolResponseEvent(
 			events[i],
+			agentName,
 			loadedSet,
 			seen,
 			keep,
@@ -360,11 +365,15 @@ func mostRecentSkillsFromEvents(
 
 func appendSkillsFromToolResponseEvent(
 	ev event.Event,
+	agentName string,
 	loadedSet map[string]struct{},
 	seen map[string]struct{},
 	keep []string,
 	max int,
 ) []string {
+	if agentName != "" && ev.Author != agentName {
+		return keep
+	}
 	if ev.Response == nil {
 		return keep
 	}
@@ -474,9 +483,11 @@ func clearSkillState(inv *agent.Invocation) map[string][]byte {
 		return nil
 	}
 	delta := make(map[string][]byte)
+	loadedPrefix := skill.LoadedPrefix(inv.AgentName)
+	docsPrefix := skill.DocsPrefix(inv.AgentName)
 	for k, v := range state {
-		if !strings.HasPrefix(k, skill.StateKeyLoadedPrefix) &&
-			!strings.HasPrefix(k, skill.StateKeyDocsPrefix) {
+		if !strings.HasPrefix(k, loadedPrefix) &&
+			!strings.HasPrefix(k, docsPrefix) {
 			continue
 		}
 		if len(v) == 0 {
@@ -502,11 +513,11 @@ func (p *SkillsRequestProcessor) maybeOffloadLoadedSkills(
 	}
 	delta := make(map[string][]byte, len(loaded)*2)
 	for _, name := range loaded {
-		loadedKey := skill.StateKeyLoadedPrefix + name
+		loadedKey := skill.LoadedKey(inv.AgentName, name)
 		inv.Session.SetState(loadedKey, nil)
 		delta[loadedKey] = nil
 
-		docsKey := skill.StateKeyDocsPrefix + name
+		docsKey := skill.DocsKey(inv.AgentName, name)
 		inv.Session.SetState(docsKey, nil)
 		delta[docsKey] = nil
 	}
@@ -621,16 +632,79 @@ func defaultToolingAndWorkspaceGuidance() string {
 	b.WriteString("results from $OUTPUT_DIR (or a skill's out/ ")
 	b.WriteString("directory) instead of copying them back into ")
 	b.WriteString("inputs directories.\n")
+	b.WriteString("- Treat loaded skill docs as guidance, not perfect ")
+	b.WriteString("truth; when runtime help or stderr disagrees, trust ")
+	b.WriteString("observed runtime behavior.\n")
+	b.WriteString("- Prefer commands or scripts bundled inside the ")
+	b.WriteString("skill workspace when they exist; they are more ")
+	b.WriteString("stable than ad hoc shell built around external ")
+	b.WriteString("CLIs.\n")
 	b.WriteString("- Progressive disclosure: call skill_load with only ")
 	b.WriteString("skill first.\n")
 	b.WriteString("- For docs, prefer skill_list_docs + ")
 	b.WriteString("skill_select_docs to load only what you need.\n")
 	b.WriteString("- Avoid include_all_docs unless you need every doc ")
 	b.WriteString("or the user asks.\n")
-	b.WriteString("- Use skill_run only for commands required by the ")
-	b.WriteString("skill docs. \n")
+	b.WriteString("- Use skill_run primarily for commands required by ")
+	b.WriteString("the skill docs or bundled scripts, plus the minimal ")
+	b.WriteString("read-only probe commands needed to verify external ")
+	b.WriteString("CLI behavior.\n")
+	b.WriteString("- Use skill_exec when a command may stay running, ")
+	b.WriteString("prompt for input, or require incremental stdin/TTY ")
+	b.WriteString("interaction. Then use skill_write_stdin or ")
+	b.WriteString("skill_poll_session until it exits, and ")
+	b.WriteString("skill_kill_session to stop it if needed.\n")
+	b.WriteString("- For CLIs that launch $EDITOR, prefer editor_text ")
+	b.WriteString("on skill_run or skill_exec instead of trying to ")
+	b.WriteString("drive a full-screen editor through stdin.\n")
+	b.WriteString("- Safe probe commands include patterns such as ")
+	b.WriteString("`--help`, `-h`, `--version`, or `<subcommand> ")
+	b.WriteString("--help` when exact syntax is uncertain or a command ")
+	b.WriteString("fails.\n")
+	b.WriteString("- Keep probes targeted and bounded; avoid broad ")
+	b.WriteString("shell exploration when a small help query can ")
+	b.WriteString("verify the contract.\n")
+	b.WriteString("- Do not invent subcommands, flags, or positional ")
+	b.WriteString("arguments that do not appear in the loaded skill ")
+	b.WriteString("docs, bundled scripts, observed help text, or a ")
+	b.WriteString("prior successful command.\n")
+	b.WriteString("- skill_run is a command runner inside the skill ")
+	b.WriteString("workspace, not a magic capability. It does not ")
+	b.WriteString("automatically add the skill directory to PATH or ")
+	b.WriteString("install dependencies; invoke scripts via an explicit ")
+	b.WriteString("interpreter and path (e.g., python3 scripts/foo.py).\n")
+	b.WriteString("- Read the skill_run tool description each time: if ")
+	b.WriteString("it mentions allowed_commands/denied_commands (or ")
+	b.WriteString("previews Allowed commands), then shell syntax is ")
+	b.WriteString("disabled and the command must be a single executable ")
+	b.WriteString("+ args only (no pipes/redirects/chaining, no bash ")
+	b.WriteString("-c). Use env/cwd fields and split multi-step ")
+	b.WriteString("workflows into multiple skill_run calls.\n")
+	b.WriteString("- Before executing, avoid guessing command names, ")
+	b.WriteString("script paths, or dependencies. If the exact ")
+	b.WriteString("executable/path is not explicitly given by the ")
+	b.WriteString("loaded SKILL.md/docs, first do a small, targeted ")
+	b.WriteString("check to confirm it exists (e.g., list the relevant ")
+	b.WriteString("directory, check file existence, or verify the ")
+	b.WriteString("executable is on PATH). Under command restrictions, ")
+	b.WriteString("use only allowed commands for these checks.\n")
+	b.WriteString("- When skill_run fails, do not stop early. If the ")
+	b.WriteString("tool returns an error (no structured result), read ")
+	b.WriteString("it and adjust (often restriction violation or ")
+	b.WriteString("missing skill_load). If it returns a structured ")
+	b.WriteString("result, treat non-zero exit_code or timed_out as ")
+	b.WriteString("failure; inspect stderr/warnings, verify assumptions ")
+	b.WriteString("(files, PATH, deps), consult SKILL.md/docs, and ")
+	b.WriteString("retry with an adjusted command. Avoid repeating the ")
+	b.WriteString("exact same failing command; after a couple attempts, ")
+	b.WriteString("explain what you checked and ask for missing ")
+	b.WriteString("information.\n")
 	b.WriteString("- When the body and needed docs are present, call ")
-	b.WriteString("skill_run to execute those commands.\n")
+	b.WriteString("skill_run to execute or validate those commands.\n")
+	b.WriteString("- If a CLI appears interactive-only and you cannot ")
+	b.WriteString("confirm a non-interactive path, do not claim ")
+	b.WriteString("success; explain the limitation and give the best ")
+	b.WriteString("fallback.\n")
 	return b.String()
 }
 
@@ -651,15 +725,16 @@ func (p *SkillsRequestProcessor) getLoadedSkills(
 	inv *agent.Invocation,
 ) []string {
 	var names []string
+	prefix := skill.LoadedPrefix(inv.AgentName)
 	state := inv.Session.SnapshotState()
 	for k, v := range state {
-		if !strings.HasPrefix(k, skill.StateKeyLoadedPrefix) {
+		if !strings.HasPrefix(k, prefix) {
 			continue
 		}
 		if len(v) == 0 {
 			continue
 		}
-		name := strings.TrimPrefix(k, skill.StateKeyLoadedPrefix)
+		name := strings.TrimPrefix(k, prefix)
 		names = append(names, name)
 	}
 	return names
@@ -668,7 +743,7 @@ func (p *SkillsRequestProcessor) getLoadedSkills(
 func (p *SkillsRequestProcessor) getDocsSelection(
 	inv *agent.Invocation, name string,
 ) []string {
-	key := skill.StateKeyDocsPrefix + name
+	key := skill.DocsKey(inv.AgentName, name)
 	v, ok := inv.Session.GetState(key)
 	if !ok || len(v) == 0 {
 		return nil
