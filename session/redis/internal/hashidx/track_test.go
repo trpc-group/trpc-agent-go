@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -208,4 +209,92 @@ func TestClient_GetTrackEvents_Error(t *testing.T) {
 
 	_, err = c.GetTrackEvents(ctx, key, []session.Track{"alpha"}, 0, time.Time{})
 	require.Error(t, err)
+}
+
+func TestAppendTrackEvent_LuaError(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "atk-lua-err"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	mr.Close()
+
+	te := &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"p"`),
+		Timestamp: time.Now(),
+	}
+	err = c.AppendTrackEvent(ctx, key, te, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "append track event")
+}
+
+func TestLoadTrackEventsViaLua_BadEventJSON(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "trk-bad-json"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	tracksJSON, _ := json.Marshal([]string{"alpha"})
+	te := &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"good"`),
+		Timestamp: time.Now(),
+	}
+	require.NoError(t, c.AppendTrackEvent(ctx, key, te, tracksJSON))
+
+	// Write malformed JSON directly to the track data hash for a new event ID
+	trackDataKey := c.keys.TrackDataKey(key, "alpha")
+	trackTimeIndexKey := c.keys.TrackTimeIndexKey(key, "alpha")
+	badID := "bad-trk-id"
+	require.NoError(t, rdb.HSet(ctx, trackDataKey, badID, "not valid json").Err())
+	require.NoError(t, rdb.ZAdd(ctx, trackTimeIndexKey, redis.Z{
+		Score:  float64(time.Now().Add(time.Second).UnixNano()),
+		Member: badID,
+	}).Err())
+
+	// loadTrackEventsViaLua should skip bad JSON via continue, returning only valid events
+	result, err := c.GetTrackEvents(ctx, key, []session.Track{"alpha"}, 0, time.Time{})
+	require.NoError(t, err)
+	assert.Len(t, result["alpha"], 1)
+}
+
+func TestListTracksForSession_ConnectionError(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "ltk-conn-err"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	mr.Close()
+
+	_, err = c.ListTracksForSession(ctx, key)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "get session meta")
+}
+
+func TestListTracksForSession_UnmarshalError(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "ltk-unmarshal"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	// Overwrite meta with invalid JSON
+	err = rdb.Set(ctx, c.keys.SessionMetaKey(key), "bad json", 0).Err()
+	require.NoError(t, err)
+
+	_, err = c.ListTracksForSession(ctx, key)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unmarshal session meta")
 }

@@ -865,3 +865,140 @@ func TestCov_CreateSession_NilStateValue(t *testing.T) {
 	assert.Equal(t, []byte("value"), sess.State["normal"])
 	assert.Nil(t, sess.State["nilkey"])
 }
+
+// ============================================================================
+// TrimConversations: corrupt event JSON in ZSet triggers unmarshal error
+// ============================================================================
+
+func TestCov_TrimConversations_CorruptEventJSON(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "trim-corrupt"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	// Inject malformed JSON directly into the event ZSet
+	eventKey := c.eventKey(key)
+	err = rdb.ZAdd(ctx, eventKey, redis.Z{
+		Score:  float64(time.Now().UnixNano()),
+		Member: "not valid json at all",
+	}).Err()
+	require.NoError(t, err)
+
+	// TrimConversations should return error when event JSON can't be parsed
+	_, err = c.TrimConversations(ctx, key, 1)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "trim events: unmarshal event")
+}
+
+// ============================================================================
+// ListSessions: getTrackEvents pipeline error path
+// ============================================================================
+
+func TestCov_ListSessions_TrackEventsPipelineError(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "tkpipeerr"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	// Append a track event so session state has tracks populated
+	te := &session.TrackEvent{
+		Track:     "mytrack",
+		Payload:   json.RawMessage(`"data"`),
+		Timestamp: time.Now(),
+	}
+	err = c.AppendTrackEvent(ctx, key, te)
+	require.NoError(t, err)
+
+	// Corrupt the track ZSet key type so ZRevRangeByScore fails in pipeline
+	trackKey := c.trackKey(key, "mytrack")
+	err = rdb.Del(ctx, trackKey).Err()
+	require.NoError(t, err)
+	// Set as string type instead of ZSet to cause WRONGTYPE error
+	err = rdb.Set(ctx, trackKey, "not-a-zset", 0).Err()
+	require.NoError(t, err)
+
+	_, err = c.ListSessions(ctx, session.UserKey{AppName: "app", UserID: "u1"}, 0, time.Time{})
+	require.Error(t, err)
+}
+
+// ============================================================================
+// ListSessions: with limit > 0 covers the getTrackEvents limit logic
+// ============================================================================
+
+func TestCov_ListSessions_WithTrackLimit(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "tracklimit"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	// Append two track events
+	for i := 0; i < 3; i++ {
+		te := &session.TrackEvent{
+			Track:     "mytrack",
+			Payload:   json.RawMessage(`"data"`),
+			Timestamp: time.Now().Add(time.Duration(i) * time.Second),
+		}
+		err = c.AppendTrackEvent(ctx, key, te)
+		require.NoError(t, err)
+	}
+
+	// ListSessions with limit=2 exercises the limit > 0 branch in getTrackEvents
+	sessions, err := c.ListSessions(ctx, session.UserKey{AppName: "app", UserID: "u1"}, 2, time.Time{})
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+}
+
+// ============================================================================
+// ListAppStates and ListUserStates: connection error paths
+// ============================================================================
+
+func TestCov_ListAppStates_ConnectionError(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+
+	mr.Close()
+
+	_, err := c.ListAppStates(ctx, "myapp")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "list app states")
+}
+
+func TestCov_ListUserStates_ConnectionError(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+
+	mr.Close()
+
+	_, err := c.ListUserStates(ctx, session.UserKey{AppName: "myapp", UserID: "u1"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "list user states")
+}
+
+// ============================================================================
+// CreateSummary: lua error when Redis is unavailable
+// ============================================================================
+
+func TestCov_CreateSummary_ExpireTTLWithConnection(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "sum-expire"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	// CreateSummary with TTL > 0 exercises the Expire branch
+	err = c.CreateSummary(ctx, key, "fk1", &session.Summary{Summary: "hello", UpdatedAt: time.Now()}, time.Hour)
+	require.NoError(t, err)
+}

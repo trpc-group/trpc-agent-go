@@ -703,3 +703,192 @@ func TestClient_Exists_Error(t *testing.T) {
 	_, err = c.Exists(ctx, key)
 	require.Error(t, err)
 }
+
+// ============================================================================
+// Coverage tests for error paths in session.go
+// ============================================================================
+
+func TestCreateSession_RedisError(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "cov-create-err"}
+
+	mr.Close()
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "create session")
+}
+
+func TestGetSession_MetaRedisError(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "cov-get-err"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	mr.Close()
+
+	_, err = c.GetSession(ctx, key, 0, time.Time{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "get session meta")
+}
+
+func TestLoadSessionComplete_UnmarshalMetaError(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "cov-unmarshal"}
+
+	_, err := c.loadSessionComplete(ctx, key, []byte("not valid json"), 0, time.Time{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unmarshal session meta")
+}
+
+func TestLoadSessionComplete_LuaError(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "cov-lua-err"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	// Fetch valid metaJSON before closing Redis
+	metaJSON, err := rdb.Get(ctx, c.keys.SessionMetaKey(key)).Bytes()
+	require.NoError(t, err)
+
+	// Close Redis so Lua script fails in loadSessionComplete
+	mr.Close()
+
+	_, err = c.loadSessionComplete(ctx, key, metaJSON, 0, time.Time{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "load session data")
+}
+
+func TestGetSession_WithUserState(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "cov-user-state"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	// Set user state directly into the user state key that Lua reads
+	userStateKey := c.keys.UserStateKey(key.AppName, key.UserID)
+	err = rdb.HSet(ctx, userStateKey, "pref", "dark").Err()
+	require.NoError(t, err)
+
+	sess, err := c.GetSession(ctx, key, 0, time.Time{})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	// user state should be merged into session state with "user:" prefix
+	assert.Equal(t, []byte("dark"), sess.State[session.StateUserPrefix+"pref"])
+}
+
+func TestAppendEvent_LuaError(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "cov-append-err"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	mr.Close()
+
+	evt := makeTestEvent("e1", time.Now())
+	err = c.AppendEvent(ctx, key, evt)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "append event")
+}
+
+func TestDeleteSession_LuaError(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "cov-del-err"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	mr.Close()
+
+	err = c.DeleteSession(ctx, key)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "delete session")
+}
+
+func TestTrimConversations_LuaError(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "cov-trim-err"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	mr.Close()
+
+	_, err = c.TrimConversations(ctx, key, 1)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "trim conversations")
+}
+
+func TestLoadSessionBasic_LuaError(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "cov-basic-lua"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	// Fetch valid metaJSON before closing Redis
+	metaJSON, err := rdb.Get(ctx, c.keys.SessionMetaKey(key)).Bytes()
+	require.NoError(t, err)
+
+	// Close Redis so loadSessionBasic's Lua call fails
+	mr.Close()
+
+	_, err = c.loadSessionBasic(ctx, key, metaJSON, 0, time.Time{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "load events")
+}
+
+func TestLoadSessionBasic_BadEventJSON(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "cov-basic-bad"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	// Add a valid event
+	require.NoError(t, c.AppendEvent(ctx, key, makeTestEvent("e1", time.Now().Add(-time.Hour))))
+
+	// Add bad JSON to event data + time index
+	eventDataKey := c.keys.EventDataKey(key)
+	eventTimeIndexKey := c.keys.EventTimeIndexKey(key)
+	badID := "cov-bad-id"
+	require.NoError(t, rdb.HSet(ctx, eventDataKey, badID, "invalid event json").Err())
+	require.NoError(t, rdb.ZAdd(ctx, eventTimeIndexKey, redis.Z{
+		Score:  float64(time.Now().UnixNano()),
+		Member: badID,
+	}).Err())
+
+	metaJSON, err := rdb.Get(ctx, c.keys.SessionMetaKey(key)).Bytes()
+	require.NoError(t, err)
+
+	// loadSessionBasic should succeed but skip the bad JSON event via continue
+	sess, err := c.loadSessionBasic(ctx, key, metaJSON, 0, time.Time{})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	// Only the valid event should be returned (bad one skipped)
+	assert.Len(t, sess.Events, 1)
+}

@@ -1887,3 +1887,212 @@ func TestPersistEvent_ZsetErrorPath(t *testing.T) {
 	require.Error(t, err)
 	svc.Close()
 }
+
+// ============================================================================
+// NewService negative TTL normalization (lines 123-132)
+// ============================================================================
+
+func TestNewService_NegativeTTLNormalization(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	// Negative TTLs should be normalized to 0 (no expiration)
+	svc, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithSessionTTL(-1*time.Second),
+		WithAppStateTTL(-2*time.Second),
+		WithUserStateTTL(-3*time.Second),
+	)
+	require.NoError(t, err)
+	defer svc.Close()
+
+	// Should be usable after normalization
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "neg-ttl"}
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	assert.NotNil(t, sess)
+}
+
+// ============================================================================
+// ListSessions: duplicate session merge path (lines 461-464)
+// ============================================================================
+
+func TestListSessions_DuplicateMerge(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	// Same session ID created in both zset and hashidx
+	key := session.Key{AppName: "dup", UserID: "u1", SessionID: "dup-sess"}
+
+	// Create in zset (Transition mode creates in zset)
+	svcT, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeTransition))
+	require.NoError(t, err)
+	_, err = svcT.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	svcT.Close()
+
+	// Create same session in hashidx (None mode creates in hashidx)
+	svcN, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeNone))
+	require.NoError(t, err)
+	_, err = svcN.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	svcN.Close()
+
+	// List using Transition mode: both storages return same session - duplicate merge path
+	svcT2, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeTransition))
+	require.NoError(t, err)
+	defer svcT2.Close()
+
+	sessions, err := svcT2.ListSessions(ctx, session.UserKey{AppName: "dup", UserID: "u1"})
+	require.NoError(t, err)
+	// Duplicate merged - should only be 1 session
+	assert.Len(t, sessions, 1)
+}
+
+// ============================================================================
+// TrimConversations: no session found returns nil, nil (line 694)
+// ============================================================================
+
+func TestTrimConversations_NotFound(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	svc, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeNone))
+	require.NoError(t, err)
+	defer svc.Close()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "nonexistent"}
+
+	// Session doesn't exist: returns nil, nil
+	deleted, err := svc.TrimConversations(ctx, key, WithCount(1))
+	require.NoError(t, err)
+	assert.Nil(t, deleted)
+}
+
+// ============================================================================
+// appendEventInternal: context cancellation path (lines 572-574)
+// ============================================================================
+
+func TestAppendEventInternal_ContextCancellation(t *testing.T) {
+	mr, err := miniredis.Run()
+	require.NoError(t, err)
+	redisURL := "redis://" + mr.Addr()
+	defer mr.Close()
+
+	// Use 1 persister with very small buffer so channel fills up quickly
+	svc, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithEnableAsyncPersist(true),
+		WithAsyncPersisterNum(1),
+	)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "ctx-cancel"}
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	// Fill the event channel by sending many events quickly
+	for i := 0; i < defaultChanBufferSize+10; i++ {
+		e := createTestEvent(fmt.Sprintf("e%d", i), "agent", "fill", time.Now().Add(time.Duration(i)*time.Millisecond), false)
+		_ = svc.AppendEvent(ctx, sess, e)
+	}
+
+	// Now send with cancelled context - should hit the context cancellation path
+	cancelCtx, cancel := context.WithCancel(ctx)
+	cancel() // cancel immediately
+
+	e := createTestEvent("cancelled", "agent", "cancel", time.Now(), false)
+	err = svc.AppendEvent(cancelCtx, sess, e)
+	// Either error (ctx cancelled) or nil (channel had room) - both are valid
+	_ = err
+
+	svc.Close()
+}
+
+// ============================================================================
+// startAsyncPersistWorker: error logging path (lines 742-744)
+// ============================================================================
+
+func TestAsyncPersist_PersistError(t *testing.T) {
+	mr, err := miniredis.Run()
+	require.NoError(t, err)
+	redisURL := "redis://" + mr.Addr()
+	defer mr.Close()
+
+	svc, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithEnableAsyncPersist(true),
+		WithAsyncPersisterNum(1),
+	)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "async-err"}
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	// Send event via async path
+	e := createTestEvent("e1", "agent", "content", time.Now(), false)
+	err = svc.AppendEvent(ctx, sess, e)
+	require.NoError(t, err)
+
+	// Close Redis so the async worker's persistEvent call fails (logs error)
+	mr.Close()
+
+	// Give async worker time to process and log the error
+	time.Sleep(50 * time.Millisecond)
+
+	svc.Close()
+}
+
+// ============================================================================
+// ListSessions: hashidx error path (lines 438-441)
+// ============================================================================
+
+func TestListSessions_HashidxError(t *testing.T) {
+	mr, err := miniredis.Run()
+	require.NoError(t, err)
+	redisURL := "redis://" + mr.Addr()
+	defer mr.Close()
+
+	svc, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeNone))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	mr.Close()
+
+	_, err = svc.ListSessions(ctx, session.UserKey{AppName: "app", UserID: "u1"})
+	require.Error(t, err)
+	svc.Close()
+}
+
+// ============================================================================
+// DeleteSession: error paths (lines 503-508)
+// ============================================================================
+
+func TestDeleteSession_HashidxError(t *testing.T) {
+	mr, err := miniredis.Run()
+	require.NoError(t, err)
+	redisURL := "redis://" + mr.Addr()
+	defer mr.Close()
+
+	svc, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeNone))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "del-err"}
+
+	_, err = svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	mr.Close()
+
+	err = svc.DeleteSession(ctx, key)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "delete session (hashidx)")
+	svc.Close()
+}

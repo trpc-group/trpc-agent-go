@@ -230,3 +230,45 @@ func TestClient_UpdateSessionState_ConnectionError(t *testing.T) {
 	err = c.UpdateSessionState(ctx, key, session.StateMap{"k": []byte("v")})
 	require.Error(t, err)
 }
+
+func TestClient_UpdateSessionState_UnmarshalError(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "uss-unmarshal"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	// Overwrite the meta key with invalid JSON
+	err = rdb.Set(ctx, c.keys.SessionMetaKey(key), "not valid json", 0).Err()
+	require.NoError(t, err)
+
+	err = c.UpdateSessionState(ctx, key, session.StateMap{"k": []byte("v")})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unmarshal session meta")
+}
+
+func TestClient_UpdateSessionState_NilState(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "uss-nilstate"}
+
+	// Create session with no state (State field will be empty but not nil after deepCopyState)
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	// Manually fetch and overwrite meta with State=null to trigger nil State branch
+	metaJSON := `{"id":"uss-nilstate","appName":"app","userID":"u1","state":null,"createdAt":"2025-01-01T00:00:00Z","updatedAt":"2025-01-01T00:00:00Z"}`
+	err = rdb.Set(ctx, c.keys.SessionMetaKey(key), metaJSON, 0).Err()
+	require.NoError(t, err)
+
+	// UpdateSessionState should initialize nil State to empty map and merge
+	err = c.UpdateSessionState(ctx, key, session.StateMap{"newkey": []byte("newval")})
+	require.NoError(t, err)
+
+	sess, err := c.GetSession(ctx, key, 0, time.Time{})
+	require.NoError(t, err)
+	assert.Equal(t, []byte("newval"), sess.State["newkey"])
+}
