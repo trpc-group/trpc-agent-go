@@ -450,6 +450,7 @@ type StepTrace struct {
 	PromptTokens     int             `json:"prompt_tokens"`
 	CompletionTokens int             `json:"completion_tokens"`
 	TotalTokens      int             `json:"total_tokens"`
+	CachedTokens     int             `json:"cached_tokens,omitempty"`
 	ToolCalls        []ToolCallTrace `json:"tool_calls,omitempty"`
 }
 
@@ -491,6 +492,8 @@ func collectFinalTextAndUsage(
 							ev.Response.Usage.CompletionTokens
 						st.TotalTokens =
 							ev.Response.Usage.TotalTokens
+						st.CachedTokens =
+							ev.Response.Usage.PromptTokensDetails.CachedTokens
 					}
 					pendingCalls = make(
 						[]ToolCallTrace, 0, len(msg.ToolCalls),
@@ -541,6 +544,8 @@ func collectFinalTextAndUsage(
 					ev.Response.Usage.CompletionTokens
 				res.usage.TotalTokens +=
 					ev.Response.Usage.TotalTokens
+				res.usage.CachedTokens +=
+					ev.Response.Usage.PromptTokensDetails.CachedTokens
 				res.usage.LLMCalls++
 			}
 		}
@@ -580,11 +585,22 @@ func logQATrace(
 	log.Printf("    📋 Question: %s", question)
 	log.Printf("    🎯 Expected: %s", expected)
 	for _, st := range res.steps {
-		log.Printf(
-			"    🔹 Step %d | Tokens: %d (in:%d out:%d)",
-			st.Step, st.TotalTokens,
-			st.PromptTokens, st.CompletionTokens,
-		)
+		if st.CachedTokens > 0 {
+			log.Printf(
+				"    🔹 Step %d | Tokens: %d"+
+					" (in:%d cached:%d out:%d)",
+				st.Step, st.TotalTokens,
+				st.PromptTokens, st.CachedTokens,
+				st.CompletionTokens,
+			)
+		} else {
+			log.Printf(
+				"    🔹 Step %d | Tokens: %d"+
+					" (in:%d out:%d)",
+				st.Step, st.TotalTokens,
+				st.PromptTokens, st.CompletionTokens,
+			)
+		}
 		if len(st.ToolCalls) > 0 {
 			log.Printf(
 				"    🔧 Tool Calls: %d", len(st.ToolCalls),
