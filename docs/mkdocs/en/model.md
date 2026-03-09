@@ -152,7 +152,20 @@ type Model interface {
 type Info struct {
     Name string // Model name.
 }
+
+// IterModel is an optional extension of Model that reduces channel overhead for streaming.
+type IterModel interface {
+    Model
+    GenerateContentIter(ctx context.Context, request *Request) (Seq[*Response], error)
+}
+
+// Seq is a callback-based sequence type that yields one value on demand.
+type Seq[T any] func(yield func(T) bool)
 ```
+
+Channel-based streaming typically requires a dedicated goroutine and incurs channel synchronization on each chunk. In high-frequency streaming, this overhead can become a measurable cost. `IterModel` is an optional iterator-style API that streams responses synchronously in the caller goroutine to reduce this overhead. 
+
+When a model implements `IterModel`, the framework uses `GenerateContentIter`; otherwise it uses `GenerateContent`. Implementations must call `yield` sequentially and stop when it returns `false`.
 
 ### Request Structure
 
