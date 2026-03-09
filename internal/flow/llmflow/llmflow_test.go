@@ -121,16 +121,16 @@ func TestProcessStreamingResponses_RepairsToolCallArgumentsWhenEnabled(t *testin
 			},
 		},
 	}
-	responseChan := make(chan *model.Response, 1)
-	responseChan <- response
-	close(responseChan)
+	responseSeq := func(yield func(*model.Response) bool) {
+		yield(response)
+	}
 
 	eventChan := make(chan *event.Event, 10)
 	tracer := oteltrace.NewNoopTracerProvider().Tracer("t")
 	ctx, span := tracer.Start(context.Background(), "s")
 	defer span.End()
 
-	lastEvent, err := f.processStreamingResponses(ctx, inv, req, responseChan, eventChan, span)
+	lastEvent, err := f.processStreamingResponses(ctx, inv, req, responseSeq, eventChan, span)
 	require.NoError(t, err)
 	require.NotNil(t, lastEvent)
 	require.Equal(t, "{\"a\":2}", string(response.Choices[0].Message.ToolCalls[0].Function.Arguments))
@@ -233,6 +233,43 @@ func (m *mockModel) GenerateContent(ctx context.Context, req *model.Request) (<-
 	return respChan, nil
 }
 
+type mockIterModel struct {
+	IterSeq model.Seq[*model.Response]
+	IterErr error
+
+	GenerateContentCalled     bool
+	GenerateContentIterCalled bool
+}
+
+func (m *mockIterModel) Info() model.Info {
+	return model.Info{Name: "mock-iter"}
+}
+
+func (m *mockIterModel) GenerateContent(ctx context.Context, req *model.Request) (<-chan *model.Response, error) {
+	m.GenerateContentCalled = true
+	ch := make(chan *model.Response)
+	close(ch)
+	return ch, nil
+}
+
+func (m *mockIterModel) GenerateContentIter(ctx context.Context, req *model.Request) (model.Seq[*model.Response], error) {
+	m.GenerateContentIterCalled = true
+	if m.IterErr != nil {
+		return nil, m.IterErr
+	}
+	return m.IterSeq, nil
+}
+
+type stubPluginManager struct{}
+
+func (stubPluginManager) AgentCallbacks() *agent.Callbacks { return nil }
+func (stubPluginManager) ModelCallbacks() *model.Callbacks { return nil }
+func (stubPluginManager) ToolCallbacks() *tool.Callbacks   { return nil }
+func (stubPluginManager) OnEvent(context.Context, *agent.Invocation, *event.Event) (*event.Event, error) {
+	return nil, nil
+}
+func (stubPluginManager) Close(context.Context) error { return nil }
+
 // mockRequestProcessor implements flow.RequestProcessor
 type mockRequestProcessor struct{}
 
@@ -279,6 +316,20 @@ func (m *mockResponseProcessor) ProcessResponse(
 	case ch <- evt:
 	default:
 	}
+}
+
+type cancelResponseProcessor struct {
+	cancel context.CancelFunc
+}
+
+func (c *cancelResponseProcessor) ProcessResponse(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	req *model.Request,
+	resp *model.Response,
+	ch chan<- *event.Event,
+) {
+	c.cancel()
 }
 
 func TestFlow_Interface(t *testing.T) {
@@ -612,6 +663,90 @@ func TestModelCallbacks_AfterError(t *testing.T) {
 	require.Equal(t, "after error", events[1].Error.Message)
 }
 
+func TestFlow_RunBeforeModelCallbacks_NoModelCallbacks(t *testing.T) {
+	f := New(nil, nil, Options{})
+	inv := agent.NewInvocation()
+	inv.Plugins = stubPluginManager{}
+
+	ctx := context.Background()
+	gotCtx, resp, err := f.runBeforeModelCallbacks(ctx, inv, &model.Request{})
+	require.NoError(t, err)
+	require.Equal(t, ctx, gotCtx)
+	require.Nil(t, resp)
+}
+
+func TestFlow_GenerateContentSeq_UsesIterModel(t *testing.T) {
+	f := New(nil, nil, Options{})
+	iterModel := &mockIterModel{
+		IterSeq: func(yield func(*model.Response) bool) {
+			yield(&model.Response{ID: "iter"})
+		},
+	}
+	inv := agent.NewInvocation(agent.WithInvocationModel(iterModel))
+
+	seq, err := f.generateContentSeq(context.Background(), inv, &model.Request{})
+	require.NoError(t, err)
+	require.True(t, iterModel.GenerateContentIterCalled)
+	require.False(t, iterModel.GenerateContentCalled)
+
+	var responses []*model.Response
+	seq(func(resp *model.Response) bool {
+		responses = append(responses, resp)
+		return true
+	})
+	require.Len(t, responses, 1)
+	require.Equal(t, "iter", responses[0].ID)
+}
+
+func TestFlow_GenerateContentSeq_IterModelError(t *testing.T) {
+	f := New(nil, nil, Options{})
+	iterModel := &mockIterModel{
+		IterErr: errors.New("iter error"),
+	}
+	inv := agent.NewInvocation(agent.WithInvocationModel(iterModel))
+
+	seq, err := f.generateContentSeq(context.Background(), inv, &model.Request{})
+	require.Error(t, err)
+	require.Nil(t, seq)
+	require.True(t, iterModel.GenerateContentIterCalled)
+}
+
+func TestFlow_CallLLM_MaxLLMCallsExceeded(t *testing.T) {
+	f := New(nil, nil, Options{})
+	inv := agent.NewInvocation(
+		agent.WithInvocationModel(&mockModel{
+			responses: []*model.Response{{ID: "ok"}},
+		}),
+	)
+	inv.MaxLLMCalls = 1
+
+	_, _, err := f.callLLM(context.Background(), inv, &model.Request{})
+	require.NoError(t, err)
+
+	_, _, err = f.callLLM(context.Background(), inv, &model.Request{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "max LLM calls (1) exceeded")
+}
+
+func TestProcessStreamingResponses_ContextCancelledAfterPostprocess(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	f := New(nil, []flow.ResponseProcessor{&cancelResponseProcessor{cancel: cancel}}, Options{})
+
+	inv := agent.NewInvocation()
+	req := &model.Request{}
+	responseSeq := func(yield func(*model.Response) bool) {
+		yield(&model.Response{ID: "resp", Done: true})
+	}
+
+	eventChan := make(chan *event.Event, 10)
+	tracer := oteltrace.NewNoopTracerProvider().Tracer("t")
+	_, span := tracer.Start(ctx, "s")
+	defer span.End()
+
+	_, err := f.processStreamingResponses(ctx, inv, req, responseSeq, eventChan, span)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
 // noResponseModel returns a closed channel without emitting any responses.
 type noResponseModel struct{}
 
@@ -844,8 +979,7 @@ func TestFlow_CallLLM_PluginBeforeModelCanShortCircuit(t *testing.T) {
 
 	_, ch, err := flow.callLLM(context.Background(), inv, &model.Request{})
 	require.NoError(t, err)
-	for range ch {
-	}
+	ch(func(_ *model.Response) bool { return true })
 	require.True(t, plugCalled)
 	require.False(t, localCalled)
 	require.False(t, m.called)
@@ -933,8 +1067,7 @@ func TestFlow_CallLLM_PluginBeforeModelContextPropagates(t *testing.T) {
 
 	_, ch, err := flow.callLLM(context.Background(), inv, &model.Request{})
 	require.NoError(t, err)
-	for range ch {
-	}
+	ch(func(_ *model.Response) bool { return true })
 	require.True(t, plugCalled)
 	require.Equal(t, "v", localSaw)
 

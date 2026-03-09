@@ -193,6 +193,126 @@ func TestModel_GenContent_CustomBaseURL(t *testing.T) {
 	}
 }
 
+func TestModel_GenerateContentIter_NonStreaming(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"id": "iter-non-stream",
+			"object": "chat.completion",
+			"created": 1699200000,
+			"model": "gpt-3.5-turbo",
+			"choices": [
+				{
+					"index": 0,
+					"message": {
+						"role": "assistant",
+						"content": "ok"
+					},
+					"finish_reason": "stop"
+				}
+			]
+		}`)
+	}))
+	defer server.Close()
+
+	m := New("gpt-3.5-turbo",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+	)
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewUserMessage("hi"),
+		},
+		GenerationConfig: model.GenerationConfig{
+			Stream: false,
+		},
+	}
+
+	seq, err := m.GenerateContentIter(context.Background(), req)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	seq(func(resp *model.Response) bool {
+		responses = append(responses, resp)
+		return true
+	})
+
+	require.NotEmpty(t, responses)
+	require.True(t, responses[len(responses)-1].Done)
+	require.Equal(t, "iter-non-stream", responses[len(responses)-1].ID)
+	require.NotEmpty(t, responses[len(responses)-1].Choices)
+	require.Equal(t, "ok", responses[len(responses)-1].Choices[0].Message.Content)
+}
+
+func TestModel_GenerateContentIter_Streaming(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+
+		chunks := []string{
+			`data: {"id":"iter-stream","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"role":"assistant","content":"hello"},"finish_reason":null}]}`,
+			`data: {"id":"iter-stream","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"content":""},"finish_reason":"stop"}]}`,
+			`data: [DONE]`,
+		}
+		for _, chunk := range chunks {
+			fmt.Fprintf(w, "%s\n\n", chunk)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}))
+	defer server.Close()
+
+	m := New("gpt-3.5-turbo",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+	)
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewUserMessage("hi"),
+		},
+		GenerationConfig: model.GenerationConfig{
+			Stream: true,
+		},
+	}
+
+	seq, err := m.GenerateContentIter(context.Background(), req)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	seq(func(resp *model.Response) bool {
+		responses = append(responses, resp)
+		return true
+	})
+
+	require.NotEmpty(t, responses)
+	require.True(t, responses[len(responses)-1].Done)
+
+	var sawHello bool
+	for _, resp := range responses {
+		if len(resp.Choices) == 0 {
+			continue
+		}
+		if strings.Contains(resp.Choices[0].Message.Content, "hello") {
+			sawHello = true
+			break
+		}
+	}
+	require.True(t, sawHello)
+}
+
 func TestOptions_Validation(t *testing.T) {
 	tests := []struct {
 		name string

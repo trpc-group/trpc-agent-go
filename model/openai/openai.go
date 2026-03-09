@@ -326,42 +326,73 @@ func (m *Model) Info() model.Info {
 	}
 }
 
+// prepareChatRequest validates and mutates the request in-place before sending it to the provider.
+func (m *Model) prepareChatRequest(
+	ctx context.Context,
+	request *model.Request,
+) (*openai.ChatCompletionNewParams, []openaiopt.RequestOption, error) {
+	if request == nil {
+		return nil, nil, errors.New("request cannot be nil")
+	}
+	// Optimize message structure for cache if enabled.
+	if m.optimizeForCache {
+		request.Messages = m.optimizeMessagesForCache(request.Messages)
+	}
+	// Apply token tailoring if configured.
+	m.applyTokenTailoring(ctx, request)
+	chatRequest, opts := m.buildChatRequest(request)
+	return chatRequest, opts, nil
+}
+
 // GenerateContent implements the model.Model interface.
 func (m *Model) GenerateContent(
 	ctx context.Context,
 	request *model.Request,
 ) (<-chan *model.Response, error) {
-	if request == nil {
-		return nil, errors.New("request cannot be nil")
+	chatRequest, opts, err := m.prepareChatRequest(ctx, request)
+	if err != nil {
+		return nil, err
 	}
-
-	// Optimize message structure for cache if enabled
-	if m.optimizeForCache {
-		request.Messages = m.optimizeMessagesForCache(request.Messages)
-	}
-
-	// Apply token tailoring if configured.
-	m.applyTokenTailoring(ctx, request)
-
 	responseChan := make(chan *model.Response, m.channelBufferSize)
-
-	chatRequest, opts := m.buildChatRequest(request)
-
 	go func() {
 		defer close(responseChan)
-
 		if m.chatRequestCallback != nil {
-			m.chatRequestCallback(ctx, &chatRequest)
+			m.chatRequestCallback(ctx, chatRequest)
 		}
-
 		if request.Stream {
-			m.handleStreamingResponse(ctx, chatRequest, responseChan, opts...)
+			m.handleStreamingResponse(ctx, *chatRequest, responseChan, opts...)
 		} else {
-			m.handleNonStreamingResponse(ctx, chatRequest, responseChan, opts...)
+			m.handleNonStreamingResponse(ctx, *chatRequest, responseChan, opts...)
 		}
 	}()
-
 	return responseChan, nil
+}
+
+// GenerateContentIter implements the model.IterModel interface.
+func (m *Model) GenerateContentIter(
+	ctx context.Context,
+	request *model.Request,
+) (model.Seq[*model.Response], error) {
+	chatRequest, opts, err := m.prepareChatRequest(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	return func(yield func(*model.Response) bool) {
+		if m.chatRequestCallback != nil {
+			m.chatRequestCallback(ctx, chatRequest)
+		}
+		emit := func(resp *model.Response) bool {
+			if ctx.Err() != nil {
+				return false
+			}
+			return yield(resp)
+		}
+		if request.Stream {
+			m.handleStreamingResponseWithEmitter(ctx, *chatRequest, emit, opts...)
+			return
+		}
+		m.handleNonStreamingResponseWithEmitter(ctx, *chatRequest, emit, opts...)
+	}, nil
 }
 
 // optimizeMessagesForCache reorders messages to improve cache hit rates.
@@ -484,8 +515,8 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 }
 
 // buildChatRequest converts our Request to OpenAI request params and options.
-func (m *Model) buildChatRequest(request *model.Request) (openai.ChatCompletionNewParams, []openaiopt.RequestOption) {
-	chatRequest := openai.ChatCompletionNewParams{
+func (m *Model) buildChatRequest(request *model.Request) (*openai.ChatCompletionNewParams, []openaiopt.RequestOption) {
+	chatRequest := &openai.ChatCompletionNewParams{
 		Model:    shared.ChatModel(m.name),
 		Messages: m.convertMessages(request.Messages),
 		Tools:    m.convertTools(request.Tools),
@@ -1106,8 +1137,29 @@ func (m *Model) handleStreamingResponse(
 	responseChan chan<- *model.Response,
 	opts ...openaiopt.RequestOption,
 ) {
-	stream := m.client.Chat.Completions.NewStreaming(
-		ctx, chatRequest, opts...)
+	emitter := func(resp *model.Response) bool {
+		select {
+		case responseChan <- resp:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+	m.handleStreamingResponseWithEmitter(ctx, chatRequest, emitter, opts...)
+}
+
+// responseEmitter emits a response and returns false to stop streaming.
+type responseEmitter func(*model.Response) bool
+
+// handleStreamingResponseWithEmitter handles streaming chat completion responses.
+// It returns early when emit returns false.
+func (m *Model) handleStreamingResponseWithEmitter(
+	ctx context.Context,
+	chatRequest openai.ChatCompletionNewParams,
+	emit responseEmitter,
+	opts ...openaiopt.RequestOption,
+) {
+	stream := m.client.Chat.Completions.NewStreaming(ctx, chatRequest, opts...)
 	defer stream.Close()
 
 	acc := openai.ChatCompletionAccumulator{}
@@ -1155,15 +1207,14 @@ func (m *Model) handleStreamingResponse(
 			m.chatChunkCallback(ctx, &chatRequest, &chunk)
 		}
 
-		if err := m.sendPartialResponse(ctx, chunk, responseChan); err != nil {
+		if !emit(m.createPartialResponse(chunk)) {
 			return
 		}
 	}
 
-	// Send final response with usage information if available.
-	m.sendFinalResponse(ctx, stream, acc, idToIndexMap, extraFieldsMap, reasoningBuf.String(), responseChan)
+	m.emitStreamingFinalResponse(ctx, stream, acc, idToIndexMap, extraFieldsMap, reasoningBuf.String(), emit)
 
-	// Call the stream complete callback after final response is sent.
+	// Call the stream complete callback after final response is emitted.
 	m.handleStreamCompleteCallback(ctx, chatRequest, acc, stream.Err())
 }
 
@@ -1683,15 +1734,15 @@ func (m *Model) createPartialResponse(chunk openai.ChatCompletionChunk) *model.R
 	return response
 }
 
-// sendFinalResponse sends the final response with accumulated data.
-func (m *Model) sendFinalResponse(
+// emitStreamingFinalResponse emits the final response with accumulated data.
+func (m *Model) emitStreamingFinalResponse(
 	ctx context.Context,
 	stream *ssestream.Stream[openai.ChatCompletionChunk],
 	acc openai.ChatCompletionAccumulator,
 	idToIndexMap map[string]int,
 	extraFieldsMap map[string]map[string]any,
 	aggregatedReasoning string,
-	responseChan chan<- *model.Response,
+	emit responseEmitter,
 ) {
 	if stream.Err() == nil {
 		// Check accumulated tool calls (batch processing after streaming is complete).
@@ -1705,7 +1756,7 @@ func (m *Model) sendFinalResponse(
 
 		// If accumulator is empty but we have aggregated reasoning, create a response with it.
 		if len(acc.Choices) == 0 && aggregatedReasoning != "" {
-			finalResponse := &model.Response{
+			emit(&model.Response{
 				Object:    model.ObjectTypeChatCompletion,
 				ID:        acc.ID,
 				Created:   acc.Created,
@@ -1722,36 +1773,21 @@ func (m *Model) sendFinalResponse(
 						},
 					},
 				},
-			}
-			select {
-			case responseChan <- finalResponse:
-			case <-ctx.Done():
-			}
+			})
 			return
 		}
-
-		finalResponse := m.createFinalResponse(acc, hasToolCall, accumulatedToolCalls, aggregatedReasoning)
-
-		select {
-		case responseChan <- finalResponse:
-		case <-ctx.Done():
-		}
-	} else {
-		// Send error response.
-		errorResponse := &model.Response{
-			Error: &model.ResponseError{
-				Message: stream.Err().Error(),
-				Type:    model.ErrorTypeStreamError,
-			},
-			Timestamp: time.Now(),
-			Done:      true,
-		}
-
-		select {
-		case responseChan <- errorResponse:
-		case <-ctx.Done():
-		}
+		emit(m.createFinalResponse(acc, hasToolCall, accumulatedToolCalls, aggregatedReasoning))
+		return
 	}
+	// Send error response.
+	emit(&model.Response{
+		Error: &model.ResponseError{
+			Message: stream.Err().Error(),
+			Type:    model.ErrorTypeStreamError,
+		},
+		Timestamp: time.Now(),
+		Done:      true,
+	})
 }
 
 // processAccumulatedToolCalls processes accumulated tool calls.
@@ -1868,29 +1904,48 @@ func (m *Model) handleNonStreamingResponse(
 	responseChan chan<- *model.Response,
 	opts ...openaiopt.RequestOption,
 ) {
-	chatCompletion, err := m.client.Chat.Completions.New(
-		ctx, chatRequest, opts...)
+	m.handleNonStreamingResponseWithEmitter(ctx, chatRequest, func(resp *model.Response) bool {
+		select {
+		case responseChan <- resp:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}, opts...)
+}
+
+// handleNonStreamingResponseWithEmitter handles non-streaming chat completion responses.
+// It returns early when emit returns false.
+func (m *Model) handleNonStreamingResponseWithEmitter(
+	ctx context.Context,
+	chatRequest openai.ChatCompletionNewParams,
+	emit responseEmitter,
+	opts ...openaiopt.RequestOption,
+) {
+	chatCompletion, err := m.client.Chat.Completions.New(ctx, chatRequest, opts...)
 	if err != nil {
-		errorResponse := &model.Response{
+		if ctx.Err() != nil {
+			return
+		}
+		emit(&model.Response{
 			Error: &model.ResponseError{
 				Message: err.Error(),
 				Type:    model.ErrorTypeAPIError,
 			},
 			Timestamp: time.Now(),
 			Done:      true,
-		}
-
-		select {
-		case responseChan <- errorResponse:
-		case <-ctx.Done():
-		}
+		})
 		return
 	}
 	// Call response callback on successful completion.
 	if m.chatResponseCallback != nil {
 		m.chatResponseCallback(ctx, &chatRequest, chatCompletion)
 	}
+	emit(m.createResponseFromCompletion(chatCompletion))
+}
 
+// createResponseFromCompletion converts a provider response into a model.Response.
+func (m *Model) createResponseFromCompletion(chatCompletion *openai.ChatCompletion) *model.Response {
 	response := &model.Response{
 		ID:        chatCompletion.ID,
 		Object:    string(chatCompletion.Object), // Convert constant to string
@@ -1953,10 +2008,7 @@ func (m *Model) handleNonStreamingResponse(
 		response.SystemFingerprint = &chatCompletion.SystemFingerprint
 	}
 
-	select {
-	case responseChan <- response:
-	case <-ctx.Done():
-	}
+	return response
 }
 
 // FileOptions is the options for file operations.
