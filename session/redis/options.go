@@ -42,16 +42,15 @@ const (
 	CompatModeNone CompatMode = iota
 
 	// CompatModeLegacy enables zset read fallback only (no dual-write).
-	// - Read: hashidx first, fallback to zset if not found
+	// - Read: zset first if data exists, fallback to hashidx
 	// - Write: hashidx only
 	// Use this after all instances are upgraded but zset data still exists.
 	CompatModeLegacy
 
-	// CompatModeTransition forces all operations to use zset storage only.
-	// - Read: zset only
-	// - Write: zset only
+	// CompatModeTransition forces new session creation to use zset storage only.
+	// - Read: zset first if data exists, fallback to hashidx
+	// - Write: zset only (new sessions created in zset)
 	// Use this during rolling upgrades when old zset-only instances are still running.
-	// New instances behave identically to old instances, ensuring full compatibility.
 	// After all instances are upgraded, switch to CompatModeLegacy to start using hashidx.
 	CompatModeTransition
 )
@@ -139,7 +138,8 @@ func WithExtraOptions(extraOptions ...any) ServiceOpt {
 }
 
 // WithSessionTTL sets the TTL for session state and event list.
-// If not set, session will expire in 30 min, set 0 will not expire.
+// Default is 0 (no expiration). TTL is refreshed on write operations
+// (CreateSession, AppendEvent) but not on reads (GetSession).
 func WithSessionTTL(ttl time.Duration) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.sessionTTL = ttl
