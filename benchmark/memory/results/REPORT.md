@@ -42,7 +42,7 @@ Both versions are compared against four Python agent frameworks
 | Scenario | F1 | BLEU | LLM Score | Tokens/QA | Calls/QA | Latency | Total Time |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Long-Context | **0.474** | **0.431** | **0.527** | 18,776 | 1.0 | 3,063ms | 1h41m |
-| Auto pgvector (optimized) | 0.458 | 0.422 | 0.513 | 7,356 | 2.0 | 8,601ms | 4h44m |
+| Auto pgvector (optimized) | 0.458 | 0.422 | 0.513 | 16,641 | 3.0 | 8,601ms | 4h44m |
 | Auto pgvector (original) | 0.363 | 0.339 | 0.373 | 1,988 | 2.0 | 5,234ms | 2h53m |
 
 > The optimized version's F1 improved from 0.363 to **0.458**
@@ -234,15 +234,20 @@ and evaluation pipeline.
 - **Storage**: Conversation turns are processed by an LLM extractor
   into structured facts/episodes (content + metadata + event_time),
   stored in pgvector.
+- **Stored message roles**: The extractor's
+  `ExtractionContext.Messages` includes **both user and assistant
+  messages** (excluding tool calls), so both sides of the conversation
+  are available for LLM memory extraction.
 - **Retrieval**: The agent issues a `memory_search` tool call that
   triggers pgvector hybrid search (vector similarity + keyword
-  matching), returning up to 15 structured memory entries.
-- **QA flow**: 2 LLM calls (Step 1 emits tool call → Step 2 reads
-  search results and answers).
+  matching), returning up to 30 structured memory entries.
+- **QA flow**: 3 LLM calls (Step 1 emits tool call for search #1 →
+  Step 2 emits tool call for search #2 → Step 3 reads all results
+  and answers).
 - **Strengths**: Extracted memories are precise, high information
   density; hybrid search covers both semantic and keyword matches.
-- **Issues**: Tool-call pattern forces Step 2 to re-read all of
-  Step 1's context, inflating prompts to ~7,356 tokens/QA;
+- **Issues**: Tool-call pattern forces each step to re-read all
+  prior context, inflating prompts to ~16,641 tokens/QA;
   structured JSON format adds serialization overhead.
 
 **AutoGen — Raw turns in ChromaDB + single LLM call:**
@@ -250,6 +255,10 @@ and evaluation pipeline.
 - **Storage**: Raw conversation turns stored as
   `[SessionDate: ...] Speaker: text` in ChromaDB; embedding only,
   no LLM extraction.
+- **Stored message roles**: No auto-storage — `ChromaDBVectorMemory.
+  add()` is a purely manual API; the caller decides what to store.
+  In our benchmark, we manually `add()` each turn without role
+  distinction.
 - **Retrieval**: Before `AssistantAgent.run()`, the
   `ChromaDBVectorMemory.update_context()` method queries ChromaDB
   with the question, retrieves top-30 results (score ≥ 0.3), and
@@ -257,7 +266,7 @@ and evaluation pipeline.
 - **QA flow**: **1 LLM call** — retrieval results are pre-injected
   before the call; no tool call needed.
 - **Strengths**: Fewest calls (1/QA), highest token efficiency
-  (1,943 tokens/QA); not-available rate only 9.5%.
+  (1,943 tokens/QA).
 - **Issues**: Adversarial F1 only 0.272 (lowest among all
   frameworks), severe adversarial robustness deficiency; relies on
   pure vector search with no keyword/BM25 supplement.
@@ -267,6 +276,10 @@ and evaluation pipeline.
 - **Storage**: Raw conversation turns stored in CrewAI's built-in
   `ShortTermMemory` (ChromaDB-based vector store); no LLM
   extraction.
+- **Stored message roles**: The framework stores **task-level
+  execution summaries** (task description + agent role + expected
+  output + final result), not individual messages. In our benchmark,
+  we bypass this and manually `stm.save()` each turn.
 - **Retrieval**: Monkey-patched `ContextualMemory._fetch_stm_context`
   widens the search window to top-30 (default is only top-5);
   results formatted as `- [content]` list injected into agent
@@ -275,8 +288,7 @@ and evaluation pipeline.
   formatting/planning step, Call 2 answers with memory context.
 - **Strengths**: Simple storage (no LLM extraction cost), compact
   retrieval format.
-- **Issues**: **22.7% of QA returned "memory not available"**,
-  indicating insufficient vector retrieval recall; Crew's Call 1
+- **Issues**: Insufficient vector retrieval recall; Crew's Call 1
   (planning step) is pure framework overhead contributing ~140
   completion tokens/QA with no F1 benefit; adversarial and temporal
   categories show 44.6% and 39.6% loss rates respectively.
@@ -285,14 +297,17 @@ and evaluation pipeline.
 
 - **Storage**: Conversation turns stored as `Event` objects in ADK's
   `InMemoryMemoryService` (pure in-memory, no persistence).
+- **Stored message roles**: `add_session_to_memory()` stores **all**
+  events with `content.parts` — **user, model, and tool events are
+  all included** without filtering by author.
 - **Retrieval**: The agent calls `LoadMemoryTool` which loads
   **all memories indiscriminately into context** — no selective
   retrieval whatsoever.
 - **QA flow**: 2 LLM calls (Step 1 calls LoadMemoryTool → Step 2
   reads all memories and answers).
-- **Strengths**: No memory loss (not-available rate only 9.1%).
+- **Strengths**: No memory loss.
 - **Issues**: **Catastrophic token inflation** (49,224 tokens/QA,
-  6.7x the optimized version); 9 QA exceeded 128K tokens causing
+  3.0x the optimized version); 9 QA exceeded 128K tokens causing
   context overflow; 10 QA returned empty predictions; single QA
   peak at 252,849 tokens.
 
@@ -302,6 +317,10 @@ and evaluation pipeline.
   `MemoryManager` which calls an LLM to extract facts/preferences,
   stored in SQLite (LLM extraction cost excluded from QA token
   counts).
+- **Stored message roles**: `make_memories()` processes **only user
+  messages** — assistant and tool messages are excluded.
+  `create_or_update_memories()` also filters `m.role == 'user'`
+  explicitly.
 - **Retrieval**: With `add_memories_to_context=True`, **all**
   stored memories are injected into the system prompt under
   `<memories_from_previous_interactions>` — no vector search or
@@ -309,20 +328,20 @@ and evaluation pipeline.
 - **QA flow**: 1 LLM call (memories already in system prompt).
 - **Strengths**: LLM extraction preserves key facts.
 - **Issues**: **Full injection inflates to 10,436 tokens/QA**;
-  highest latency (14,127ms/QA, 7h47m total); highest
-  not-available rate (25.5%); the underlying DB interface's
-  `limit`/`topics` filtering parameters are never used by
-  `MemoryManager` — a design gap.
+  highest latency (14,127ms/QA, 7h47m total); the underlying
+  DB interface's `limit`/`topics` filtering parameters are
+  never used by `MemoryManager` — a design gap.
 
 **Approach comparison summary:**
 
 | Dimension | trpc (opt) | AutoGen | CrewAI | ADK | Agno |
 | --- | --- | --- | --- | --- | --- |
+| Stored message roles | user + assistant | No auto-storage (manual API) | Task-level summary (input + output) | All events (user + model + tool) | User only (assistant excluded) |
+| Benchmark turn mapping | Speaker[0]→user, [1]→assistant | Per-turn manual add() | Per-turn manual save() | Per-turn→Event, whole session write | Per-turn→create_user_memories() |
 | Storage | LLM-extracted structured | Raw turns | Raw turns | Raw turns | LLM-extracted facts |
 | Retrieval | Vector+keyword hybrid | Vector top-30 | Vector top-30 | **Full load** | **Full injection** |
-| LLM calls/QA | 2 (tool call) | **1** (pre-inject) | 2 (Crew internal) | 2 (tool call) | 1 (pre-inject) |
-| Tokens/QA | 7,356 | **1,943** | 2,839 | 49,224 | 10,436 |
-| NA rate | — | 9.5% | 22.7% | 9.1% | 25.5% |
+| LLM calls/QA | 3 (tool call) | **1** (pre-inject) | 2 (Crew internal) | 2 (tool call) | 1 (pre-inject) |
+| Tokens/QA | 16,641 | **1,943** | 2,839 | 49,224 | 10,436 |
 
 > Key insight: **retrieval strategy is the primary differentiator**.
 > Full-load approaches (ADK/Agno) waste tokens with poor results;
@@ -338,7 +357,7 @@ and evaluation pipeline.
 
 | Framework | F1 | BLEU | LLM Score | Tokens/QA | Calls/QA | Latency | Total Time |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| **trpc-agent-go (optimized)** | **0.458** | **0.422** | 0.513 | 7,356 | 2.0 | 8,601ms | 4h44m |
+| **trpc-agent-go (optimized)** | **0.458** | **0.422** | 0.513 | 16,641 | 3.0 | 8,601ms | 4h44m |
 | AutoGen | 0.457 | 0.414 | 0.540 | 1,943 | 1.0 | 3,816ms | 2h06m |
 | CrewAI | 0.427 | 0.385 | 0.479 | 2,839 | 2.0 | 8,081ms | 4h27m |
 | trpc-agent-go (original) | 0.363 | 0.339 | 0.373 | 1,988 | 2.0 | 5,234ms | 2h53m |
@@ -397,15 +416,15 @@ Agno                   |==============================            | 0.332
 | AutoGen | 0.457 | 3,859,412 | 1,943 | 118.4 |
 | trpc-agent-go (original) | 0.363 | 3,948,128 | 1,988 | 91.9 |
 | CrewAI | 0.427 | 5,639,085 | 2,839 | 75.7 |
-| trpc-agent-go (optimized) | **0.458** | 14,608,286 | 7,356 | 31.4 |
+| trpc-agent-go (optimized) | **0.458** | 33,049,494 | 16,641 | 13.9 |
 | Agno | 0.332 | 20,725,728 | 10,436 | 16.0 |
 | ADK | 0.362 | 97,759,453 | 49,224 | 3.7 |
 
 > AutoGen has the best token efficiency (118.4 F1/million tokens),
 > achieving 0.457 F1 with minimal token consumption. CrewAI ranks
 > third (75.7), reaching 0.427 F1 with only 2,839 tokens/QA.
-> The optimized version achieves the highest F1 (0.458) with
-> 7,356 tokens/QA (31.4 F1/million tokens). ADK has the worst
+> The optimized version trades more tokens (16,641/QA) for the
+> highest F1 (0.458), at 13.9 F1/million tokens. ADK has the worst
 > efficiency — 49,224 tokens/QA for only 0.362 F1.
 
 ```
@@ -423,32 +442,36 @@ Agno            |===============================          | 7h47m
 
 **Why the optimized version is slower (4h44m vs 2h53m):**
 
-The optimized version consumes 3.7x more tokens/QA (7,356 vs 1,988)
+The optimized version consumes 8.4x more tokens/QA (16,641 vs 1,988)
 and takes 1.71x longer per QA (7,064ms vs 4,129ms). The root cause
-is the two-step agentic workflow:
+is the three-step agentic workflow:
 
-1. **Step 1 — Tool call** (~1,650 prompt tokens): The LLM reads the
-   system instruction + question, then emits a `memory_search` tool
-   call. This incurs one LLM round-trip plus a pgvector hybrid search
-   (vector + keyword) with embedding generation.
+1. **Step 1 — Tool call #1** (~1,650 prompt tokens): The LLM reads
+   the system instruction + question, then emits the first
+   `memory_search` tool call. This incurs one LLM round-trip plus a
+   pgvector hybrid search (vector + keyword) with embedding generation.
 
-2. **Step 2 — Answer with results** (~5,469 prompt tokens): The LLM
-   re-reads the full conversation (system prompt + question + tool
-   call + tool results) and generates the final answer. The memory
-   search injects ~3,819 tokens of retrieved memory content (up to
-   15 entries from pgvector) into the context.
+2. **Step 2 — Tool call #2** (~5,900 prompt tokens): The LLM
+   re-reads all prior context (system prompt + question + first tool
+   call + first tool results), then emits a second `memory_search`
+   tool call to refine the search.
 
-The key overhead is **context re-reading**: Step 2 re-processes
-everything from Step 1 plus the search results. In contrast, the
-original version uses the same 2-call agentic pattern but retrieves
-far fewer/shorter memory entries (~1,988 tokens total for both
-steps), because its memories are stored as raw conversation turns
-rather than extracted structured facts/episodes.
+3. **Step 3 — Final answer** (~10,000 prompt tokens): The LLM
+   re-reads the entire conversation (all prior context + second tool
+   call + second tool results) and generates the final answer.
+
+The key overhead is **cumulative context re-reading**: each step
+re-processes everything from all prior steps. Step 3 alone accounts
+for ~10,000 prompt tokens. In contrast, the original version uses a
+2-call agentic pattern with far fewer/shorter memory entries (~1,988
+tokens total for both steps), because its memories are stored as
+raw conversation turns rather than extracted structured
+facts/episodes.
 
 Despite the higher token cost, the optimized version achieves a
 significantly better F1/cost trade-off: **+26.2% F1** (0.363→0.458)
-for only **3.7x token cost**, making it worthwhile for production
-use where answer quality matters more than token budget.
+for **8.4x token cost**, making it worthwhile for production use
+where answer quality matters more than token budget.
 
 ### 4.6 ADK Failure Analysis
 
@@ -625,7 +648,7 @@ Agno                |====================                      | 0.267
 
 4. **Limitations of other Python frameworks.**
 
-   - **ADK**: Highest token consumption (49,224 tokens/QA) — **6.7x**
+   - **ADK**: Highest token consumption (49,224 tokens/QA) — **3.0x**
      that of the optimized version — yet only achieves 0.362 F1. Its
      `LoadMemoryTool` loads all memories indiscriminately into
      context, causing severe token waste and context overflow (9 QA
@@ -639,10 +662,9 @@ Agno                |====================                      | 0.267
      search or similarity retrieval. Although the underlying DB
      interface exposes `limit`, `topics`, and other filtering
      parameters, the `MemoryManager` never utilizes them at runtime
-   - **CrewAI**: 22.7% of QA returned "memory not available"
-     responses, indicating memory loss in its short-term memory
-     backend — particularly severe in adversarial (44.6%) and
-     temporal (39.6%) categories
+  - **CrewAI**: Memory loss in its short-term memory
+    backend — particularly severe in adversarial (44.6%) and
+    temporal (39.6%) categories
    - **AutoGen**: While achieving 0.511 in 4-category weighted F1,
      this is largely driven by a single outstanding category
      (open-domain at 0.594); its adversarial score of 0.272 is the
@@ -696,7 +718,7 @@ Agno                |====================                      | 0.267
 | Scenario | Prompt Tokens | Completion Tokens | Total Tokens | LLM Calls | Calls/QA |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Long-Context | 37,272,167 | 15,997 | 37,288,164 | 1,986 | 1.0 |
-| Auto pgvec (optimized) | 14,511,751 | 96,535 | 14,608,286 | 4,012 | 2.0 |
+| Auto pgvec (optimized) | 32,933,287 | 116,207 | 33,049,494 | 5,998 | 3.0 |
 | Auto pgvec (original) | 3,890,627 | 57,501 | 3,948,128 | 4,000 | 2.0 |
 | AutoGen | 3,842,576 | 16,836 | 3,859,412 | 1,986 | 1.0 |
 | CrewAI | 5,360,840 | 278,245 | 5,639,085 | 3,972 | 2.0 |
