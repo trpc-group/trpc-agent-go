@@ -201,10 +201,15 @@ type EvalSummary struct {
 	TotalPromptTokens     int     `json:"total_prompt_tokens"`
 	TotalCompletionTokens int     `json:"total_completion_tokens"`
 	TotalTokens           int     `json:"total_tokens"`
+	TotalCachedTokens     int     `json:"total_cached_tokens,omitempty"`
 	TotalLLMCalls         int     `json:"total_llm_calls"`
 	AvgPromptTokensPerQA  float64 `json:"avg_prompt_tokens_per_qa"`
 	AvgCompletionPerQA    float64 `json:"avg_completion_tokens_per_qa"`
+	AvgCachedTokensPerQA  float64 `json:"avg_cached_tokens_per_qa,omitempty"`
 	AvgLLMCallsPerQA      float64 `json:"avg_llm_calls_per_qa"`
+	// CacheHitRate is the fraction of prompt tokens served
+	// from the provider's prompt cache (0.0–1.0).
+	CacheHitRate float64 `json:"cache_hit_rate,omitempty"`
 }
 
 func main() {
@@ -758,12 +763,24 @@ func runEvaluation(
 			result.Overall.BLEU)
 		if result.TokenUsage != nil &&
 			result.TokenUsage.LLMCalls > 0 {
-			log.Printf(
-				"  Tokens: prompt=%d completion=%d calls=%d",
-				result.TokenUsage.PromptTokens,
-				result.TokenUsage.CompletionTokens,
-				result.TokenUsage.LLMCalls,
-			)
+			if result.TokenUsage.CachedTokens > 0 {
+				log.Printf(
+					"  Tokens: prompt=%d cached=%d"+
+						" completion=%d calls=%d",
+					result.TokenUsage.PromptTokens,
+					result.TokenUsage.CachedTokens,
+					result.TokenUsage.CompletionTokens,
+					result.TokenUsage.LLMCalls,
+				)
+			} else {
+				log.Printf(
+					"  Tokens: prompt=%d"+
+						" completion=%d calls=%d",
+					result.TokenUsage.PromptTokens,
+					result.TokenUsage.CompletionTokens,
+					result.TokenUsage.LLMCalls,
+				)
+			}
 		}
 
 		// Log per-sample category breakdown.
@@ -819,6 +836,11 @@ func buildEvaluationResult(
 	totalTime := time.Since(startTime)
 	overall := catAgg.GetOverall()
 	qCount := max(totalQuestions, 1)
+	var cacheHitRate float64
+	if totalUsage.PromptTokens > 0 {
+		cacheHitRate = float64(totalUsage.CachedTokens) /
+			float64(totalUsage.PromptTokens)
+	}
 	return &EvaluationResult{
 		Metadata: &EvalMetadata{
 			Framework:      "trpc-agent-go",
@@ -844,10 +866,13 @@ func buildEvaluationResult(
 			TotalPromptTokens:     totalUsage.PromptTokens,
 			TotalCompletionTokens: totalUsage.CompletionTokens,
 			TotalTokens:           totalUsage.TotalTokens,
+			TotalCachedTokens:     totalUsage.CachedTokens,
 			TotalLLMCalls:         totalUsage.LLMCalls,
 			AvgPromptTokensPerQA:  float64(totalUsage.PromptTokens) / float64(qCount),
 			AvgCompletionPerQA:    float64(totalUsage.CompletionTokens) / float64(qCount),
+			AvgCachedTokensPerQA:  float64(totalUsage.CachedTokens) / float64(qCount),
 			AvgLLMCallsPerQA:      float64(totalUsage.LLMCalls) / float64(qCount),
+			CacheHitRate:          cacheHitRate,
 		},
 		ByCategory:    catAgg.GetCategoryMetrics(),
 		SampleResults: sampleResults,
