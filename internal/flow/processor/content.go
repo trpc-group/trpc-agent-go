@@ -299,42 +299,20 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		if !skipHistory && p.AddSessionSummary && p.TimelineFilterMode == TimelineFilterAll {
 			// Fetch session summary early so we can insert it after other
 			// semi-stable system blocks (for example, preloaded memories).
-			summaryMsg, summaryUpdatedAt =
-				p.getSessionSummaryMessage(invocation)
+			summaryMsg, summaryUpdatedAt = p.getSessionSummaryMessage(invocation)
 		}
 
 		// Preload memories into system prompt if configured.
 		// PreloadMemory: 0 = disabled, -1 = all, N > 0 = most recent N.
 		if p.PreloadMemory != 0 && invocation.MemoryService != nil {
 			if memMsg := p.getPreloadMemoryMessage(ctx, invocation); memMsg != nil {
-				// Insert memory as a system message after the last system
-				// message to keep stable instructions cacheable.
-				systemMsgIndex := findLastSystemMessageIndex(
-					req.Messages,
-				)
-				if systemMsgIndex >= 0 {
-					req.Messages = append(req.Messages[:systemMsgIndex+1],
-						append([]model.Message{*memMsg}, req.Messages[systemMsgIndex+1:]...)...)
-				} else {
-					req.Messages = append([]model.Message{*memMsg}, req.Messages...)
-				}
+				p.injectSystemContextMessage(req, *memMsg)
 			}
 		}
 
 		if summaryMsg != nil {
-			invocation.SetState(
-				contentHasSessionSummaryStateKey,
-				true,
-			)
-			// Insert summary as a separate system message after the last
-			// system message to keep stable instructions cacheable.
-			systemMsgIndex := findLastSystemMessageIndex(req.Messages)
-			if systemMsgIndex >= 0 {
-				req.Messages = append(req.Messages[:systemMsgIndex+1],
-					append([]model.Message{*summaryMsg}, req.Messages[systemMsgIndex+1:]...)...)
-			} else {
-				req.Messages = append([]model.Message{*summaryMsg}, req.Messages...)
-			}
+			invocation.SetState(contentHasSessionSummaryStateKey, true)
+			p.injectSystemContextMessage(req, *summaryMsg)
 		}
 
 		if skipHistory {
@@ -376,6 +354,28 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		invocation.AgentName,
 		event.WithObject(model.ObjectTypePreprocessingContent),
 	))
+}
+
+// injectSystemContextMessage injects summary or memory context into request.
+// It merges the content into an existing system message if one exists,
+// or prepends as a new system message if none exists.
+func (p *ContentRequestProcessor) injectSystemContextMessage(
+	req *model.Request,
+	msg model.Message,
+) {
+	if msg.Role != model.RoleSystem {
+		return
+	}
+	systemMsgIndex := findSystemMessageIndex(req.Messages)
+	if systemMsgIndex >= 0 {
+		if req.Messages[systemMsgIndex].Content == "" {
+			req.Messages[systemMsgIndex].Content = msg.Content
+			return
+		}
+		req.Messages[systemMsgIndex].Content += "\n\n" + msg.Content
+		return
+	}
+	req.Messages = append([]model.Message{msg}, req.Messages...)
 }
 
 // injectInjectedContextMessages inserts per-run context messages into the request

@@ -11,7 +11,6 @@ package processor
 
 import (
 	"context"
-	"strings"
 	"testing"
 	"time"
 
@@ -430,7 +429,7 @@ func TestProcessRequest_WithPreloadMemory(t *testing.T) {
 		assert.False(t, mockSvc.readCalled)
 	})
 
-	t.Run("preload enabled inserts memory message", func(t *testing.T) {
+	t.Run("preload enabled merges memory into system message", func(t *testing.T) {
 		p := NewContentRequestProcessor(
 			WithPreloadMemory(-1),
 			WithAddSessionSummary(true),
@@ -455,18 +454,12 @@ func TestProcessRequest_WithPreloadMemory(t *testing.T) {
 		}
 		p.ProcessRequest(context.Background(), inv, req, nil)
 		assert.True(t, mockSvc.readCalled)
-		// Memory message should be inserted after system message.
-		assert.GreaterOrEqual(t, len(req.Messages), 3)
-		// Find the memory message.
-		foundMemory := false
-		for _, msg := range req.Messages {
-			if msg.Role == model.RoleSystem && strings.Contains(msg.Content, "User Memories") {
-				foundMemory = true
-				assert.Contains(t, msg.Content, "User prefers dark mode")
-				break
-			}
-		}
-		assert.True(t, foundMemory, "Memory message should be in request")
+		// Memory should be merged into the system message.
+		assert.Equal(t, 2, len(req.Messages))
+		assert.Equal(t, model.RoleSystem, req.Messages[0].Role)
+		assert.Contains(t, req.Messages[0].Content, "You are a helpful assistant.")
+		assert.Contains(t, req.Messages[0].Content, "User Memories")
+		assert.Contains(t, req.Messages[0].Content, "User prefers dark mode")
 	})
 
 	t.Run("preload with no system message prepends memory", func(t *testing.T) {
@@ -498,4 +491,77 @@ func TestProcessRequest_WithPreloadMemory(t *testing.T) {
 		assert.Equal(t, model.RoleSystem, req.Messages[0].Role)
 		assert.Contains(t, req.Messages[0].Content, "User Memories")
 	})
+}
+
+func TestProcessRequest_MergesPreloadMemory(t *testing.T) {
+	p := NewContentRequestProcessor(
+		WithPreloadMemory(-1),
+	)
+	mockSvc := &mockMemoryService{
+		memories: []*memory.Entry{
+			{ID: "mem-1", Memory: &memory.Memory{Memory: "User likes tea"}},
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{
+			AppName: "app",
+			UserID:  "user",
+		}),
+	)
+	inv.MemoryService = mockSvc
+	req := &model.Request{
+		Messages: []model.Message{
+			{Role: model.RoleSystem, Content: "Base system prompt"},
+			{Role: model.RoleUser, Content: "hello"},
+		},
+	}
+
+	p.ProcessRequest(context.Background(), inv, req, nil)
+	assert.True(t, mockSvc.readCalled)
+
+	systemCount := 0
+	for _, msg := range req.Messages {
+		if msg.Role == model.RoleSystem {
+			systemCount++
+			assert.Contains(t, msg.Content, "Base system prompt")
+			assert.Contains(t, msg.Content, "User Memories")
+			assert.Contains(t, msg.Content, "User likes tea")
+		}
+	}
+	assert.Equal(t, 1, systemCount)
+}
+
+func TestProcessRequest_MergesSummary(t *testing.T) {
+	p := NewContentRequestProcessor(
+		WithAddSessionSummary(true),
+	)
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{
+			Summaries: map[string]*session.Summary{
+				"": {
+					Summary: "summary text",
+				},
+			},
+		}),
+	)
+	req := &model.Request{
+		Messages: []model.Message{
+			{Role: model.RoleSystem, Content: "Base system prompt"},
+			{Role: model.RoleUser, Content: "hello"},
+		},
+	}
+
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	systemCount := 0
+	for _, msg := range req.Messages {
+		if msg.Role == model.RoleSystem {
+			systemCount++
+			assert.Contains(t, msg.Content, "Base system prompt")
+			assert.Contains(t, msg.Content, "summary text")
+			assert.Contains(t, msg.Content,
+				"summary_of_previous_interactions")
+		}
+	}
+	assert.Equal(t, 1, systemCount)
 }

@@ -291,6 +291,73 @@ func TestContentRequestProcessor_WithAddSessionSummary_Option(t *testing.T) {
 	assert.True(t, p.AddSessionSummary)
 }
 
+func TestContentRequestProcessor_InjectSystemContextMessage(t *testing.T) {
+	tests := []struct {
+		name             string
+		existingMessages []model.Message
+		summaryContent   string
+		wantMessagesLen  int
+		wantFirstContent string
+	}{
+		{
+			name: "merges into existing non-empty system message",
+			existingMessages: []model.Message{
+				{Role: model.RoleSystem, Content: "You are a helpful assistant."},
+				{Role: model.RoleUser, Content: "Hello"},
+			},
+			summaryContent:   "Previous conversation summary",
+			wantMessagesLen:  2,
+			wantFirstContent: "You are a helpful assistant.\n\nPrevious conversation summary",
+		},
+		{
+			name: "merges into existing empty system message",
+			existingMessages: []model.Message{
+				{Role: model.RoleSystem, Content: ""},
+				{Role: model.RoleUser, Content: "Hello"},
+			},
+			summaryContent:   "Previous conversation summary",
+			wantMessagesLen:  2,
+			wantFirstContent: "Previous conversation summary",
+		},
+		{
+			name: "creates new system message when none exists",
+			existingMessages: []model.Message{
+				{Role: model.RoleUser, Content: "Hello"},
+			},
+			summaryContent:   "Previous conversation summary",
+			wantMessagesLen:  2,
+			wantFirstContent: "Previous conversation summary",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewContentRequestProcessor()
+			req := &model.Request{Messages: tt.existingMessages}
+			summaryMsg := model.Message{Role: model.RoleSystem, Content: tt.summaryContent}
+
+			p.injectSystemContextMessage(req, summaryMsg)
+
+			assert.Len(t, req.Messages, tt.wantMessagesLen)
+			assert.Equal(t, tt.wantFirstContent, req.Messages[0].Content)
+		})
+	}
+}
+
+func TestContentRequestProcessor_InjectSystemContextMessage_NonSystemMessage(t *testing.T) {
+	p := NewContentRequestProcessor()
+	req := &model.Request{Messages: []model.Message{
+		{Role: model.RoleUser, Content: "Hello"},
+	}}
+	userMsg := model.Message{Role: model.RoleUser, Content: "Not a system message"}
+
+	p.injectSystemContextMessage(req, userMsg)
+
+	// Non-system messages should be ignored.
+	assert.Len(t, req.Messages, 1)
+	assert.Equal(t, "Hello", req.Messages[0].Content)
+}
+
 func TestContentRequestProcessor_getSessionSummaryMessageWithTime(t *testing.T) {
 	tests := []struct {
 		name            string
