@@ -539,6 +539,10 @@ func registerTools(options *Options) ([]tool.Tool, map[string]bool) {
 			toolskill.NewWriteStdinTool(execTool),
 			toolskill.NewPollSessionTool(execTool),
 			toolskill.NewKillSessionTool(execTool),
+			toolskill.NewWorkspaceReadFileTool(runTool),
+			toolskill.NewWorkspaceWriteFileTool(runTool),
+			toolskill.NewWorkspaceReplaceContentTool(runTool),
+			toolskill.NewWorkspaceListDirTool(runTool),
 		)
 	}
 

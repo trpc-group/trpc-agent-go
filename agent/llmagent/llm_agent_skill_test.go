@@ -77,6 +77,10 @@ func TestLLMAgent_SkillRunToolRegistered(t *testing.T) {
 	require.True(t, names["skill_write_stdin"])
 	require.True(t, names["skill_poll_session"])
 	require.True(t, names["skill_kill_session"])
+	require.True(t, names["skill_ws_read_file"])
+	require.True(t, names["skill_ws_write_file"])
+	require.True(t, names["skill_ws_replace_content"])
+	require.True(t, names["skill_ws_list_dir"])
 }
 
 func TestLLMAgent_SkillRunToolExecutes(t *testing.T) {
