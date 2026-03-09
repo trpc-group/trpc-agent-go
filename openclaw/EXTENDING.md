@@ -1,6 +1,6 @@
-# Extending OpenClaw Demo (Plugins and Internal Distributions)
+# Extending OpenClaw (Plugins and Internal Distributions)
 
-This document explains how to extend the OpenClaw demo in a Go-idiomatic
+This document explains how to extend OpenClaw in a Go-idiomatic
 way, from first principles.
 
 You will learn how to:
@@ -657,7 +657,7 @@ bash {baseDir}/scripts/setup.sh
 `{baseDir}` is a placeholder for "the local directory that contains this
 skill".
 
-This demo replaces `{baseDir}` in loaded skill bodies and docs with the
+OpenClaw replaces `{baseDir}` in loaded skill bodies and docs with the
 actual skill directory path, so those skill packs remain usable.
 
 ### Distributing internal skill packs (without code changes)
