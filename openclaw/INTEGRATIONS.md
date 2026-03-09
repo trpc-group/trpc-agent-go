@@ -653,6 +653,11 @@ memory:
 `sqlitevec` uses SQLite + the `sqlite-vec` extension, and an
 **embedder** to convert text into vectors.
 
+OpenClaw only includes `sqlitevec` when built with the
+`openclaw_sqlitevec` build tag. This keeps the default
+`go build ./cmd/openclaw` path free from the extra `sqlite-vec`
+header dependency.
+
 If `memory.config` is omitted, it defaults to:
 
 - `<state_dir>/memories_vec.sqlite`
@@ -687,6 +692,13 @@ memory:
 
 Security note: treat `api_key` as a secret. Prefer environment variables
 over committing config files.
+
+Build requirement: `sqlitevec` needs both CGO and the
+`openclaw_sqlitevec` build tag, for example:
+
+```bash
+go build -tags openclaw_sqlitevec ./cmd/openclaw
+```
 
 This backend requires a CGO-enabled build.
 

@@ -137,6 +137,7 @@ func (c *channel) Run(ctx context.Context) error {
 
 		c.printPrompt()
 		if !in.Scan() {
+			c.printPromptTerminator()
 			if err := in.Err(); err != nil {
 				return err
 			}
@@ -183,6 +184,13 @@ func (c *channel) printPrompt() {
 		return
 	}
 	fmt.Fprintf(os.Stdout, "%s: ", c.userLabel)
+}
+
+func (c *channel) printPromptTerminator() {
+	if !c.showPrompt {
+		return
+	}
+	fmt.Fprintln(os.Stdout)
 }
 
 func (c *channel) printReply(reply string) {

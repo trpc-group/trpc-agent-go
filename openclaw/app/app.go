@@ -211,7 +211,7 @@ func Main(args []string) int {
 			if errors.Is(exitErr.Err, flag.ErrHelp) {
 				return 0
 			}
-			if shouldLogExitError(exitErr) {
+			if shouldLogExitError(exitErr.Err) {
 				log.Errorf("%v", exitErr.Err)
 			}
 			return exitErr.ExitCode()
@@ -262,8 +262,8 @@ func (e *exitError) ExitCode() int {
 	return e.Code
 }
 
-func shouldLogExitError(e *exitError) bool {
-	return e == nil || e.ExitCode() != 2
+func shouldLogExitError(err error) bool {
+	return err != nil && !errors.Is(err, flag.ErrHelp)
 }
 
 func logStartupLines(lines []startupLogLine) {

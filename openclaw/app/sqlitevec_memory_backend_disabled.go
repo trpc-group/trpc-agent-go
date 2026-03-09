@@ -1,4 +1,4 @@
-//go:build !cgo
+//go:build !openclaw_sqlitevec
 
 //
 // Tencent is pleased to support the open source community by making
@@ -18,11 +18,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 )
 
-func newSQLiteMemoryBackend(
+const sqliteVecMemoryBackendEnabled = false
+
+func newSQLiteVecMemoryBackend(
 	_ registry.MemoryDeps,
 	spec registry.MemoryBackendSpec,
 ) (memory.Service, error) {
-	var cfg sqliteMemoryConfig
+	var cfg sqliteVecMemoryConfig
 	if err := registry.DecodeStrict(spec.Config, &cfg); err != nil {
 		return nil, err
 	}
@@ -30,10 +32,10 @@ func newSQLiteMemoryBackend(
 	_, _, err := resolveSQLiteDSN(
 		cfg.Path,
 		cfg.DSN,
-		sqliteMemoryConfigErrMissingPath,
+		sqliteVecMemoryConfigErrMissingPath,
 	)
 	if err != nil {
 		return nil, err
 	}
-	return nil, errors.New(sqliteMemoryBackendErrCgoRequired)
+	return nil, errors.New(sqliteVecMemoryBackendErrBuildTagRequired)
 }

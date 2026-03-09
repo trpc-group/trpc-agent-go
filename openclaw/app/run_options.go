@@ -549,8 +549,9 @@ func parseRunOptions(args []string) (runOptions, error) {
 		&opts.MemoryBackend,
 		"memory-backend",
 		memoryBackendInMemory,
-		"Memory backend: inmemory|redis|sqlite|sqlitevec|mysql|"+
-			"postgres|pgvector",
+		"Memory backend: inmemory|redis|sqlite|"+
+			"sqlitevec(requires openclaw_sqlitevec build tag)|"+
+			"mysql|postgres|pgvector",
 	)
 	fs.StringVar(
 		&opts.MemoryRedisURL,

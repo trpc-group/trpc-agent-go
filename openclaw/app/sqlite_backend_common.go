@@ -10,6 +10,7 @@
 package app
 
 import (
+	"errors"
 	"path/filepath"
 	"strings"
 
@@ -31,11 +32,16 @@ const (
 	sqliteMemoryConfigErrMissingPath = "memory sqlite backend requires " +
 		"path or dsn"
 
-	sqliteVecMemoryConfigErrMissingPath = "memory sqlitevec backend requires path or dsn"
+	sqliteVecMemoryConfigErrMissingPath = "memory sqlitevec backend " +
+		"requires path or dsn"
 
 	sqliteMemoryBackendErrCgoRequired = "memory sqlite backend requires cgo"
 
-	sqliteVecMemoryBackendErrCgoRequired = "memory sqlitevec backend requires cgo"
+	sqliteVecMemoryBackendErrBuildTagRequired = "memory sqlitevec backend " +
+		"requires build tag openclaw_sqlitevec"
+
+	sqliteVecMemoryBackendErrCgoRequired = "memory sqlitevec backend " +
+		"requires cgo"
 
 	sqliteDriverName          = "sqlite3"
 	defaultSQLiteMaxOpenConns = 1
@@ -64,6 +70,22 @@ type sqliteVecMemoryConfig struct {
 	MaxResults     int `yaml:"max_results,omitempty"`
 
 	Embedder *openAIEmbedderConfig `yaml:"embedder,omitempty"`
+}
+
+func resolveSQLiteDSN(
+	path string,
+	dsn string,
+	missingPathErr string,
+) (string, string, error) {
+	resolvedPath := strings.TrimSpace(path)
+	resolvedDSN := strings.TrimSpace(dsn)
+	if resolvedDSN == "" {
+		resolvedDSN = resolvedPath
+	}
+	if resolvedDSN == "" {
+		return "", "", errors.New(missingPathErr)
+	}
+	return resolvedPath, resolvedDSN, nil
 }
 
 func defaultSQLiteSessionConfigNode(

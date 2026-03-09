@@ -133,6 +133,31 @@ func TestNewChannel_OverridesLabelsAndPrompt(t *testing.T) {
 	require.Equal(t, "Bot", got.assistantLabel)
 }
 
+func TestNewChannel_DefaultLabelsAndTrimmedOverrides(t *testing.T) {
+	t.Parallel()
+
+	gw := &stubGateway{}
+
+	var node yaml.Node
+	require.NoError(t, yaml.Unmarshal([]byte(
+		"user_label: \"   \"\n"+
+			"assistant_label: \"  Bot  \"\n",
+	), &node))
+
+	ch, err := newChannel(
+		registry.ChannelDeps{Gateway: gw},
+		registry.PluginSpec{Config: &node},
+	)
+	require.NoError(t, err)
+
+	got, ok := ch.(*channel)
+	require.True(t, ok)
+	require.False(t, got.showPrompt)
+	require.False(t, got.showRoleLabels)
+	require.Equal(t, defaultUserLabel, got.userLabel)
+	require.Equal(t, "Bot", got.assistantLabel)
+}
+
 func TestChannel_Run_SendsMessagesAndPrintsReply(t *testing.T) {
 	gw := &stubGateway{}
 	c := &channel{
@@ -306,6 +331,60 @@ func TestChannel_Run_PrintsPromptAndRoleLabels(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(out), "You: ")
 	require.Contains(t, string(out), "Assistant: ok")
+
+	errOut, err := io.ReadAll(errR)
+	require.NoError(t, err)
+	require.Empty(t, string(errOut))
+}
+
+func TestChannel_Run_ClearsPromptOnEOF(t *testing.T) {
+	gw := &stubGateway{}
+	c := &channel{
+		id:           "x",
+		gw:           gw,
+		from:         "u",
+		thread:       "t",
+		showPrompt:   true,
+		userLabel:    defaultUserLabel,
+		bufBytes:     defaultScannerBufBytes,
+		maxLineBytes: defaultScannerMaxBytes,
+	}
+
+	stdin := os.Stdin
+	stdout := os.Stdout
+	stderr := os.Stderr
+
+	inR, inW, err := os.Pipe()
+	require.NoError(t, err)
+	outR, outW, err := os.Pipe()
+	require.NoError(t, err)
+	errR, errW, err := os.Pipe()
+	require.NoError(t, err)
+
+	os.Stdin = inR
+	os.Stdout = outW
+	os.Stderr = errW
+	t.Cleanup(func() {
+		os.Stdin = stdin
+		os.Stdout = stdout
+		os.Stderr = stderr
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- c.Run(ctx) }()
+
+	require.NoError(t, inW.Close())
+	require.NoError(t, <-done)
+
+	require.NoError(t, outW.Close())
+	require.NoError(t, errW.Close())
+
+	out, err := io.ReadAll(outR)
+	require.NoError(t, err)
+	require.Contains(t, string(out), defaultUserLabel+": \n")
 
 	errOut, err := io.ReadAll(errR)
 	require.NoError(t, err)

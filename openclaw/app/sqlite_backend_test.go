@@ -366,31 +366,23 @@ func TestNewSQLiteMemoryBackend_CreatesDir(t *testing.T) {
 	require.True(t, st.IsDir())
 }
 
-func TestNewSQLiteVecMemoryBackend_WithPathSucceeds(t *testing.T) {
+func TestNewSQLiteMemoryBackend_WithDSNSucceeds(t *testing.T) {
 	t.Parallel()
 
-	dbPath := filepath.Join(t.TempDir(), "memories_vec.sqlite")
+	const sqliteMemoryDSN = ":memory:"
 	var node yaml.Node
 	require.NoError(t, yaml.Unmarshal([]byte(fmt.Sprintf(
-		"path: %q\n"+
+		"dsn: %q\n"+
 			"table_name: %q\n"+
-			"skip_db_init: true\n"+
-			"soft_delete: false\n"+
-			"max_results: 5\n"+
-			"index_dimension: 1536\n"+
-			"embedder:\n"+
-			"  type: %q\n"+
-			"  model: %q\n",
-		dbPath,
+			"soft_delete: true\n",
+		sqliteMemoryDSN,
 		"memories",
-		"openai",
-		"text-embedding-3-small",
 	)), &node))
 
-	svc, err := newSQLiteVecMemoryBackend(
+	svc, err := newSQLiteMemoryBackend(
 		registry.MemoryDeps{Extractor: &stubExtractor{}},
 		registry.MemoryBackendSpec{
-			Limit:  3,
+			Limit:  7,
 			Config: &node,
 		},
 	)
@@ -417,22 +409,49 @@ func TestNewMemoryService_SQLiteUsesDefaultPath(t *testing.T) {
 	require.False(t, st.IsDir())
 }
 
-func TestNewMemoryService_SQLiteVecUsesDefaultPath(t *testing.T) {
+func TestNewSQLiteVecMemoryBackend_RequiresBuildTag(t *testing.T) {
 	t.Parallel()
+	if sqliteVecMemoryBackendEnabled {
+		t.Skip("sqlitevec backend is enabled in this build")
+	}
 
-	stateDir := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "memories_vec.sqlite")
+	var node yaml.Node
+	require.NoError(t, yaml.Unmarshal([]byte(fmt.Sprintf(
+		"path: %q\n"+
+			"embedder:\n"+
+			"  type: %q\n"+
+			"  model: %q\n",
+		dbPath,
+		"openai",
+		"text-embedding-3-small",
+	)), &node))
+
+	svc, err := newSQLiteVecMemoryBackend(
+		registry.MemoryDeps{Extractor: &stubExtractor{}},
+		registry.MemoryBackendSpec{Config: &node},
+	)
+	require.Error(t, err)
+	require.Nil(t, svc)
+	require.Contains(t, err.Error(),
+		sqliteVecMemoryBackendErrBuildTagRequired)
+}
+
+func TestNewMemoryService_SQLiteVecRequiresBuildTag(t *testing.T) {
+	t.Parallel()
+	if sqliteVecMemoryBackendEnabled {
+		t.Skip("sqlitevec backend is enabled in this build")
+	}
+
 	svc, err := newMemoryService(nil, runOptions{
 		AppName:       "demo",
-		StateDir:      stateDir,
+		StateDir:      t.TempDir(),
 		MemoryBackend: memoryBackendSQLiteVec,
 	})
-	require.NoError(t, err)
-	require.NotNil(t, svc)
-	require.NoError(t, svc.Close())
-
-	st, err := os.Stat(filepath.Join(stateDir, defaultSQLiteVecDBFile))
-	require.NoError(t, err)
-	require.False(t, st.IsDir())
+	require.Error(t, err)
+	require.Nil(t, svc)
+	require.Contains(t, err.Error(),
+		sqliteVecMemoryBackendErrBuildTagRequired)
 }
 
 func TestEnsureSQLiteDir_SpecialCases(t *testing.T) {

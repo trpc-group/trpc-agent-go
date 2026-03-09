@@ -1030,6 +1030,9 @@ an OpenAI-compatible embedder and requires embedding credentials at
 runtime.
 
 SQLite-backed memory backends require a CGO-enabled build.
+`sqlitevec` is additionally compiled behind the
+`openclaw_sqlitevec` build tag so the default `go build ./cmd/openclaw`
+path does not require the extra `sqlite-vec` header dependency.
 
 ### SQL backends (MySQL/Postgres/ClickHouse/PGVector)
 

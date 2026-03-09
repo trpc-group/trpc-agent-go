@@ -13,6 +13,7 @@ package app
 import (
 	"context"
 	"errors"
+	"flag"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -656,9 +657,9 @@ func TestMain_HelpReturnsUsageCode(t *testing.T) {
 func TestMain_HelpSkipsErrorLog(t *testing.T) {
 	t.Parallel()
 
-	require.False(t, shouldLogExitError(&exitError{Code: 2}))
-	require.True(t, shouldLogExitError(&exitError{Code: 1}))
-	require.True(t, shouldLogExitError(nil))
+	require.False(t, shouldLogExitError(flag.ErrHelp))
+	require.True(t, shouldLogExitError(errors.New("boom")))
+	require.False(t, shouldLogExitError(nil))
 }
 
 func TestMain_InspectDispatches(t *testing.T) {
