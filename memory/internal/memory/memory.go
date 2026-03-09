@@ -14,6 +14,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"unicode"
@@ -349,7 +350,7 @@ func isStopword(s string) bool {
 
 // MatchMemoryEntry checks if a memory entry matches the given query.
 // Kept for backward compatibility; returns true when the relevance
-// score is above the minimum threshold.
+// score is greater than zero.
 func MatchMemoryEntry(entry *memory.Entry, query string) bool {
 	return ScoreMemoryEntry(entry, query) > 0
 }
@@ -410,4 +411,48 @@ func ScoreMemoryEntry(entry *memory.Entry, query string) float64 {
 	}
 
 	return float64(matched) / float64(len(tokens))
+}
+
+const (
+	minSearchScore          = 0.3
+	defaultMaxSearchResults = 10
+)
+
+// SearchMemoryEntries ranks keyword-search matches using shared scoring
+// semantics and returns the top results in deterministic order.
+func SearchMemoryEntries(entries []*memory.Entry, query string) []*memory.Entry {
+	type scoredEntry struct {
+		entry *memory.Entry
+		score float64
+	}
+
+	candidates := make([]scoredEntry, 0, len(entries))
+	for _, entry := range entries {
+		if score := ScoreMemoryEntry(entry, query); score >= minSearchScore {
+			candidates = append(candidates, scoredEntry{entry: entry, score: score})
+		}
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].score != candidates[j].score {
+			return candidates[i].score > candidates[j].score
+		}
+		if !candidates[i].entry.UpdatedAt.Equal(candidates[j].entry.UpdatedAt) {
+			return candidates[i].entry.UpdatedAt.After(candidates[j].entry.UpdatedAt)
+		}
+		if !candidates[i].entry.CreatedAt.Equal(candidates[j].entry.CreatedAt) {
+			return candidates[i].entry.CreatedAt.After(candidates[j].entry.CreatedAt)
+		}
+		return candidates[i].entry.ID < candidates[j].entry.ID
+	})
+
+	if len(candidates) > defaultMaxSearchResults {
+		candidates = candidates[:defaultMaxSearchResults]
+	}
+
+	results := make([]*memory.Entry, 0, len(candidates))
+	for _, candidate := range candidates {
+		results = append(results, candidate.entry)
+	}
+	return results
 }
