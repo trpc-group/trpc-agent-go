@@ -24,11 +24,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
 )
 
-const (
-	headerEventPrefix = "event:"
-	headerDataPrefix  = "data:"
-)
-
 // StreamMessage sends one message to the streaming gateway handler.
 func (c *Client) StreamMessage(
 	ctx context.Context,
@@ -69,6 +64,18 @@ func (c *Client) StreamMessage(
 	if rr.Code() != http.StatusOK {
 		<-done
 		return nil, streamStatusError(rr.Code(), rr.BodyBytes())
+	}
+	if contentType := rr.Header().Get(headerContentType); !strings.HasPrefix(
+		contentType,
+		gwproto.SSEContentType,
+	) {
+		rr.closeReader()
+		<-done
+		return nil, fmt.Errorf(
+			"gwclient: unexpected stream Content-Type %q, want %q",
+			contentType,
+			gwproto.SSEContentType,
+		)
 	}
 
 	out := make(chan StreamEvent, 16)
@@ -153,17 +160,17 @@ func parseSSEStream(
 			}
 			continue
 		}
-		if strings.HasPrefix(line, headerEventPrefix) {
+		if strings.HasPrefix(line, gwproto.SSEEventPrefix) {
 			eventType = strings.TrimSpace(
-				strings.TrimPrefix(line, headerEventPrefix),
+				strings.TrimPrefix(line, gwproto.SSEEventPrefix),
 			)
 			continue
 		}
-		if strings.HasPrefix(line, headerDataPrefix) {
+		if strings.HasPrefix(line, gwproto.SSEDataPrefix) {
 			dataLines = append(
 				dataLines,
 				strings.TrimSpace(
-					strings.TrimPrefix(line, headerDataPrefix),
+					strings.TrimPrefix(line, gwproto.SSEDataPrefix),
 				),
 			)
 		}
@@ -235,6 +242,10 @@ func (r *streamResponseRecorder) BodyBytes() []byte {
 
 func (r *streamResponseRecorder) reader() io.Reader {
 	return r.pipeReader
+}
+
+func (r *streamResponseRecorder) closeReader() {
+	_ = r.pipeReader.Close()
 }
 
 func (r *streamResponseRecorder) waitHeader(ctx context.Context) error {

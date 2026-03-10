@@ -17,7 +17,6 @@ import (
 	"strings"
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -161,7 +160,7 @@ func (s *Server) handleMessagesStream(
 		return
 	}
 
-	w.Header().Set(headerContentType, contentTypeEventStream)
+	w.Header().Set(headerContentType, gwproto.SSEContentType)
 	w.Header().Set(headerCacheCtrl, cacheControlNoCache)
 	w.Header().Set(headerConnection, connectionKeepAlive)
 	w.WriteHeader(http.StatusOK)
@@ -188,11 +187,11 @@ func writeSSEEvent(
 	if _, err := fmt.Fprintf(
 		w,
 		"%s%s\n%s%s%s",
-		sseEventPrefix,
+		gwproto.SSEEventLinePrefix,
 		evt.Type,
-		sseDataPrefix,
+		gwproto.SSEDataLinePrefix,
 		data,
-		sseLineEnding,
+		gwproto.SSELineEnding,
 	); err != nil {
 		return false
 	}
@@ -352,27 +351,6 @@ func (s *Server) streamLocked(
 		}
 	}
 	return streamOutcome{status: traceStatusOK}
-}
-
-func (s *Server) runOptions(
-	userID string,
-	sessionID string,
-	requestID string,
-) []agent.RunOption {
-	runOpts := make([]agent.RunOption, 0, 1)
-	if requestID != "" {
-		runOpts = append(runOpts, agent.WithRequestID(requestID))
-	}
-	if messages := s.injectedContextMessages(
-		userID,
-		sessionID,
-	); len(messages) > 0 {
-		runOpts = append(
-			runOpts,
-			agent.WithInjectedContextMessages(messages),
-		)
-	}
-	return runOpts
 }
 
 func sendStreamEvent(

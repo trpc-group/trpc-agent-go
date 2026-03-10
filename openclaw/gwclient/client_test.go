@@ -364,6 +364,41 @@ func TestClient_StreamMessage_StatusError(t *testing.T) {
 	require.Contains(t, err.Error(), "unauthorized")
 }
 
+type streamContentTypeHandler struct {
+	contentType string
+	body        string
+}
+
+func (h *streamContentTypeHandler) ServeHTTP(
+	w http.ResponseWriter,
+	_ *http.Request,
+) {
+	w.Header().Set(headerContentType, h.contentType)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(h.body))
+}
+
+func TestClient_StreamMessage_ContentTypeError(t *testing.T) {
+	t.Parallel()
+
+	cli, err := New(
+		&streamContentTypeHandler{
+			contentType: contentTypeJSON,
+			body:        "{}",
+		},
+		"/v1/gateway/messages",
+		"/v1/gateway/cancel",
+	)
+	require.NoError(t, err)
+
+	_, err = cli.StreamMessage(context.Background(), MessageRequest{
+		From: "u1",
+		Text: "hello",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), contentTypeJSON)
+}
+
 type managedRunnerStub struct {
 	stubRunner
 }

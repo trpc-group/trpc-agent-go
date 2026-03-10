@@ -30,6 +30,7 @@ import (
 	"strings"
 	"sync"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
@@ -57,14 +58,9 @@ const (
 	headerCacheCtrl   = "Cache-Control"
 	headerConnection  = "Connection"
 
-	contentTypeJSON        = "application/json"
-	contentTypeEventStream = "text/event-stream"
-	cacheControlNoCache    = "no-cache"
-	connectionKeepAlive    = "keep-alive"
-
-	sseDataPrefix  = "data: "
-	sseEventPrefix = "event: "
-	sseLineEnding  = "\n\n"
+	contentTypeJSON     = "application/json"
+	cacheControlNoCache = "no-cache"
+	connectionKeepAlive = "keep-alive"
 
 	methodPost = "POST"
 	methodGet  = "GET"
@@ -527,6 +523,27 @@ func (s *Server) runLocked(
 		return "", result.RequestID, errEmptyReplyValue
 	}
 	return result.Text, result.RequestID, nil
+}
+
+func (s *Server) runOptions(
+	userID string,
+	sessionID string,
+	requestID string,
+) []agent.RunOption {
+	runOpts := make([]agent.RunOption, 0, 1)
+	if requestID != "" {
+		runOpts = append(runOpts, agent.WithRequestID(requestID))
+	}
+	if messages := s.injectedContextMessages(
+		userID,
+		sessionID,
+	); len(messages) > 0 {
+		runOpts = append(
+			runOpts,
+			agent.WithInjectedContextMessages(messages),
+		)
+	}
+	return runOpts
 }
 
 type replyAccumulator struct {

@@ -52,6 +52,19 @@ type MessageResponse struct {
 type StreamEventType string
 
 const (
+	// SSEContentType is the HTTP Content-Type for gateway event streams.
+	SSEContentType = "text/event-stream"
+	// SSEEventPrefix is the raw SSE prefix for event lines.
+	SSEEventPrefix = "event:"
+	// SSEDataPrefix is the raw SSE prefix for data lines.
+	SSEDataPrefix = "data:"
+	// SSEEventLinePrefix is the emitted SSE event line prefix.
+	SSEEventLinePrefix = SSEEventPrefix + " "
+	// SSEDataLinePrefix is the emitted SSE data line prefix.
+	SSEDataLinePrefix = SSEDataPrefix + " "
+	// SSELineEnding terminates one SSE event.
+	SSELineEnding = "\n\n"
+
 	// StreamEventTypeRunStarted marks the start of one gateway run.
 	StreamEventTypeRunStarted StreamEventType = "run.started"
 	// StreamEventTypeRunIgnored marks a request ignored by policy.

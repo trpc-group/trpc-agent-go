@@ -2172,7 +2172,7 @@ func TestServer_HandleMessagesStream_Success(t *testing.T) {
 	require.Equal(t, http.StatusOK, rr.Code)
 	require.Equal(
 		t,
-		contentTypeEventStream,
+		gwproto.SSEContentType,
 		rr.Header().Get(headerContentType),
 	)
 	require.Contains(t, rr.Body.String(), "event: message.delta")

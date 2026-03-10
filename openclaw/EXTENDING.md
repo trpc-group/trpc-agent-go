@@ -216,7 +216,7 @@ func (c *channel) Run(ctx context.Context) error {
 	// 3) Prefer deps.Gateway.(registry.StreamingGatewayClient)
 	//    and StreamMessage(...) when your channel supports incremental
 	//    replies.
-	// 4) Fallback to deps.Gateway.SendMessage(...) when you only need
+	// 4) Fall back to deps.Gateway.SendMessage(...) when you only need
 	//    one final reply.
 	// 5) Deliver the reply back to WeCom.
 	return nil
