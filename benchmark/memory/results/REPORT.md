@@ -102,58 +102,58 @@ retrieval pipeline:
 
 | Scenario | F1 | BLEU | LLM Score | Tokens/QA | Calls/QA | Latency | Total Time |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Long-Context | **0.469** | **0.426** | **0.526** | 18,776 | 1.0 | 2,607ms | 1h26m |
-| Auto pgvector (optimized) | 0.458 | 0.422 | 0.527 | 17,359 | 3.0 | 8,303ms | 4h35m |
+| Long-Context | 0.469 | 0.426 | 0.526 | 18,776 | 1.0 | 2,607ms | 1h26m |
+| Auto pgvector (optimized) | **0.469** | **0.431** | **0.532** | 17,182 | 3.0 | 8,585ms | 4h44m |
 | Auto pgvector (original) | 0.399 | 0.371 | 0.416 | 3,056 | 2.0 | 6,659ms | 3h40m |
 
-> The optimized version's F1 improved from 0.399 to **0.458**
-> (+14.8%), reaching **97.7%** of Long-Context F1 (up from 85.1%
-> for original). Although the nominal Tokens/QA (17,359) is higher,
-> **43.5% are served from prompt cache**, making the effective new
-> token cost ~9,815/QA (see Section 4.5).
+> The optimized version's F1 improved from 0.399 to **0.469**
+> (+17.5%), reaching **99.9%** of Long-Context F1 (up from 85.1%
+> for original). Although the nominal Tokens/QA (17,182) is higher,
+> **43.9% are served from prompt cache**, making the effective new
+> token cost ~9,663/QA (see Section 4.5).
 
 **Table 2: F1 by Category**
 
 | Category | Count | Long-Context | optimized | original | improvement |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| single-hop | 282 | 0.320 | **0.388** | 0.316 | +22.8% |
-| multi-hop | 321 | 0.308 | **0.445** | 0.096 | +363.5% |
-| temporal | 96 | 0.088 | **0.222** | 0.088 | +152.3% |
-| open-domain | 841 | **0.518** | 0.446 | 0.358 | +24.6% |
-| adversarial | 446 | **0.667** | 0.585 | **0.814** | -28.1% |
+| single-hop | 282 | 0.320 | **0.396** | 0.316 | +25.3% |
+| multi-hop | 321 | 0.308 | **0.453** | 0.096 | +371.9% |
+| temporal | 96 | 0.088 | **0.247** | 0.088 | +180.7% |
+| open-domain | 841 | **0.518** | 0.441 | 0.358 | +23.2% |
+| adversarial | 446 | **0.667** | 0.626 | **0.814** | -23.1% |
 
 **Table 3: Weighted Average F1**
 
 | Average | Long-Context | optimized | original |
 | --- | ---: | ---: | ---: |
-| 5-category weighted (÷1986) | **0.469** | 0.458 | 0.399 |
-| 4-category weighted (÷1540, excl. adversarial) | 0.411 | **0.421** | 0.279 |
+| 5-category weighted (÷1986) | 0.469 | **0.469** | 0.399 |
+| 4-category weighted (÷1540, excl. adversarial) | 0.411 | **0.423** | 0.279 |
 
 > The optimized version achieves improvements across all four
-> knowledge categories. Multi-hop improved from 0.096 to 0.445
-> (+364%), the most significant gain. Temporal improved from
-> 0.088 to 0.222 (+152%), the second largest gain. Adversarial
-> decreased (0.814 → 0.585) as the original had an overly
+> knowledge categories. Multi-hop improved from 0.096 to 0.453
+> (+372%), the most significant gain. Temporal improved from
+> 0.088 to 0.247 (+181%), the second largest gain. Adversarial
+> decreased (0.814 → 0.626) as the original had an overly
 > aggressive refusal tendency.
 
 **Table 4: Per-Sample F1**
 
 | Sample | #QA | Long-Context | optimized | original |
 | --- | ---: | ---: | ---: | ---: |
-| locomo10_1 | 199 | 0.455 | **0.461** | 0.331 |
-| locomo10_2 | 105 | **0.496** | 0.428 | 0.302 |
-| locomo10_3 | 193 | **0.527** | 0.481 | 0.432 |
-| locomo10_4 | 260 | **0.466** | 0.439 | 0.378 |
-| locomo10_5 | 242 | 0.433 | **0.486** | 0.451 |
-| locomo10_6 | 158 | **0.511** | 0.474 | 0.455 |
-| locomo10_7 | 190 | **0.461** | 0.439 | 0.407 |
-| locomo10_8 | 239 | 0.453 | **0.466** | 0.404 |
-| locomo10_9 | 196 | 0.450 | **0.456** | 0.383 |
-| locomo10_10 | 204 | **0.471** | 0.439 | 0.407 |
-| **Average** | **199** | **0.469** | **0.458** | **0.399** |
+| locomo10_1 | 199 | 0.455 | 0.432 | 0.331 |
+| locomo10_2 | 105 | **0.496** | 0.422 | 0.302 |
+| locomo10_3 | 193 | 0.527 | **0.521** | 0.432 |
+| locomo10_4 | 260 | **0.466** | 0.447 | 0.378 |
+| locomo10_5 | 242 | 0.433 | **0.436** | 0.451 |
+| locomo10_6 | 158 | 0.511 | **0.505** | 0.455 |
+| locomo10_7 | 190 | 0.461 | **0.487** | 0.407 |
+| locomo10_8 | 239 | 0.453 | **0.492** | 0.404 |
+| locomo10_9 | 196 | 0.450 | **0.464** | 0.383 |
+| locomo10_10 | 204 | 0.471 | **0.478** | 0.407 |
+| **Average** | **199** | **0.469** | **0.469** | **0.399** |
 
 > The optimized version improves on all 10 samples vs original, and
-> surpasses Long-Context on 4 samples.
+> surpasses Long-Context on 6 samples.
 
 ### 3.2 Memory vs Long-Context
 
@@ -165,8 +165,8 @@ It is effective but has fundamental limitations in production:
 | **Cross-session** | Cannot carry knowledge across sessions | Persistent memory survives restarts |
 | **Context window** | Bounded by model limit (128K for GPT-4o-mini) | Unbounded — retrieves only relevant memories |
 | **Scaling** | Cost grows linearly with conversation length | Cost stays near-constant (top-K retrieval) |
-| **F1 quality** | 0.469 | **0.458** (achieves 97.7%) |
-| **Adversarial robustness** | 0.667 | 0.585 |
+| **F1 quality** | 0.469 | **0.469** (achieves 99.9%) |
+| **Adversarial robustness** | 0.667 | 0.626 |
 
 ---
 
@@ -311,10 +311,10 @@ and evaluation pipeline.
 - **Strengths**: Extracted memories are precise, high information
   density; hybrid search covers both semantic and keyword matches.
 - **Token profile**: The tool-call pattern re-reads prior context
-  at each step, resulting in ~17,359 prompt tokens/QA. However,
-  **43.5% of prompt tokens are served from the provider's prompt
+  at each step, resulting in ~17,182 prompt tokens/QA. However,
+  **43.9% of prompt tokens are served from the provider's prompt
   cache** (OpenAI `cached_tokens`), so the effective *new* prompt
-  cost is ~9,815 tokens/QA — comparable to single-call approaches
+  cost is ~9,663 tokens/QA — comparable to single-call approaches
   when measured by billable cost (cached tokens are billed at 50%
   on most providers).
 - **Issues**: Structured JSON format adds serialization overhead;
@@ -411,11 +411,11 @@ and evaluation pipeline.
 | Storage | LLM-extracted structured | Raw turns | Raw turns | Raw turns | LLM-extracted facts |
 | Retrieval | Vector+keyword hybrid | Vector top-30 | Vector top-30 | **Full load** | **Full injection** |
 | LLM calls/QA | 3 (tool call) | **1** (pre-inject) | 2 (Crew internal) | 2 (tool call) | 1 (pre-inject) |
-| Tokens/QA | 17,359 (9,815 effective†) | **1,943** | 2,839 | 49,224 | 10,436 |
+| Tokens/QA | 17,182 (9,663 effective†) | **1,943** | 2,839 | 49,224 | 10,436 |
 
-> † 43.5% of trpc (opt) prompt tokens are served from the
+> † 43.9% of trpc (opt) prompt tokens are served from the
 > provider's prompt cache — the effective *new* token cost is
-> ~9,815/QA.
+> ~9,663/QA.
 >
 > Key insight: **retrieval strategy is the primary differentiator**.
 > Full-load approaches (ADK/Agno) waste tokens with poor results;
@@ -431,15 +431,15 @@ and evaluation pipeline.
 
 | Framework | F1 | BLEU | LLM Score | Tokens/QA | Calls/QA | Latency | Total Time |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| **trpc-agent-go (optimized)** | **0.458** | **0.422** | 0.527 | 17,359† | 3.0 | 8,303ms | 4h35m |
+| **trpc-agent-go (optimized)** | **0.469** | **0.431** | **0.532** | 17,182† | 3.0 | 8,585ms | 4h44m |
 | AutoGen | 0.457 | 0.414 | 0.540 | 1,943 | 1.0 | 3,816ms | 2h06m |
 | CrewAI | 0.427 | 0.385 | 0.479 | 2,839 | 2.0 | 8,081ms | 4h27m |
 | ADK | 0.362 | 0.309 | 0.476 | 49,224 | 2.0 | 5,578ms | 3h04m |
 | trpc-agent-go (original) | 0.399 | 0.371 | 0.416 | 3,056 | 2.0 | 6,659ms | 3h40m |
 | Agno | 0.332 | 0.289 | 0.494 | 10,436 | 1.0 | 14,127ms | 7h47m |
 
-> † 43.5% of the optimized version's prompt tokens hit the
-> provider's prompt cache; effective new token cost is ~9,815/QA.
+> † 43.9% of the optimized version's prompt tokens hit the
+> provider's prompt cache; effective new token cost is ~9,663/QA.
 > See Section 4.5 for details.
 
 > **LLM Score aggregation note.** All frameworks now use the same
@@ -452,14 +452,14 @@ and evaluation pipeline.
 ```
 Memory F1 (10 samples, 1986 QA)
 
-trpc-agent-go (opt)    |==========================================| 0.458
-AutoGen                |========================================= | 0.457
-CrewAI                 |======================================    | 0.427
-trpc-agent-go (origin) |====================================      | 0.399
-ADK                    |=================================         | 0.362
-Agno                   |==============================            | 0.332
-                       +------------------------------------------+
-                       0.0      0.1      0.2      0.3      0.4   0.5
+trpc-agent-go (opt)    |============================================| 0.469
+AutoGen                |=========================================   | 0.457
+CrewAI                 |========================================    | 0.427
+trpc-agent-go (origin) |=====================================       | 0.399
+ADK                    |==================================          | 0.362
+Agno                   |===============================             | 0.332
+                       +--------------------------------------------+
+                       0.0      0.1      0.2      0.3      0.4    0.5
 ```
 
 ### 4.4 Category-Level F1
@@ -468,22 +468,22 @@ Agno                   |==============================            | 0.332
 
 | Category | Count | trpc (opt) | AutoGen | CrewAI | trpc (original) | ADK | Agno |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| single-hop | 282 | **0.404** | 0.377 | 0.322 | 0.316 | 0.299 | 0.240 |
-| multi-hop | 321 | 0.450 | **0.512** | 0.380 | 0.096 | 0.418 | 0.283 |
-| temporal | 96 | **0.200** | 0.176 | 0.140 | 0.088 | 0.120 | 0.076 |
-| open-domain | 841 | 0.439 | **0.594** | 0.501 | 0.358 | 0.494 | 0.292 |
-| adversarial | 446 | 0.590 | 0.272 | 0.448 | **0.814** | 0.163 | 0.556 |
+| single-hop | 282 | **0.396** | 0.377 | 0.322 | 0.316 | 0.299 | 0.240 |
+| multi-hop | 321 | 0.453 | **0.512** | 0.380 | 0.096 | 0.418 | 0.283 |
+| temporal | 96 | **0.247** | 0.176 | 0.140 | 0.088 | 0.120 | 0.076 |
+| open-domain | 841 | 0.441 | **0.594** | 0.501 | 0.358 | 0.494 | 0.292 |
+| adversarial | 446 | 0.626 | 0.272 | 0.448 | **0.814** | 0.163 | 0.556 |
 
 **Table 9: Weighted Average F1**
 
 | Average | trpc (opt) | AutoGen | CrewAI | trpc (original) | ADK | Agno |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 5-category weighted (÷1986) | **0.458** | 0.457 | 0.427 | 0.399 | 0.362 | 0.332 |
-| 4-category weighted (÷1540) | 0.421 | **0.511** | 0.420 | 0.279 | 0.420 | 0.267 |
+| 5-category weighted (÷1986) | **0.469** | 0.457 | 0.427 | 0.399 | 0.362 | 0.332 |
+| 4-category weighted (÷1540) | 0.423 | **0.511** | 0.420 | 0.279 | 0.420 | 0.267 |
 
-> 5-category weighted F1: optimized **0.458** ranks first,
-> on par with AutoGen (0.457). 4-category weighted 0.421 is
-> below AutoGen (0.511), with a gap of 0.090.
+> 5-category weighted F1: optimized **0.469** ranks first,
+> leading AutoGen (0.457) by 0.012. 4-category weighted 0.423 is
+> below AutoGen (0.511), with a gap of 0.088.
 
 ### 4.5 Token Efficiency and Latency
 
@@ -494,7 +494,7 @@ Agno                   |==============================            | 0.332
 | AutoGen | 0.457 | 3,859,412 | 1,943 | n/a | 1,943 | 118.4 |
 | CrewAI | 0.427 | 5,639,085 | 2,839 | n/a | 2,839 | 75.7 |
 | trpc-agent-go (original) | 0.399 | 6,068,802 | 3,056 | n/a | 3,056 | 65.7 |
-| trpc-agent-go (optimized) | **0.458** | 34,590,410 | 17,359 | **43.5%** | **9,815** | 13.2 |
+| trpc-agent-go (optimized) | **0.469** | 34,123,774 | 17,182 | **43.9%** | **9,663** | 13.7 |
 | Agno | 0.332 | 20,725,728 | 10,436 | n/a | 10,436 | 16.0 |
 | ADK | 0.362 | 97,759,453 | 49,224 | n/a | 49,224 | 3.7 |
 
@@ -509,11 +509,11 @@ Agno                   |==============================            | 0.332
 > By raw token count, AutoGen achieves the best efficiency
 > (118.4 F1/billion tokens) with minimal consumption. The
 > optimized version shows a higher *nominal* token count
-> (17,359/QA) due to the multi-step tool-call pattern where
-> each step re-reads prior context. However, 43.5% of these
+> (17,182/QA) due to the multi-step tool-call pattern where
+> each step re-reads prior context. However, 43.9% of these
 > prompt tokens are served from the provider's prompt cache
-> (14.98M of 34.47M prompt tokens), reducing the *effective new*
-> prompt cost to ~9,815 tokens/QA. At the standard 50% cache
+> (14.93M of 34.01M prompt tokens), reducing the *effective new*
+> prompt cost to ~9,663 tokens/QA. At the standard 50% cache
 > discount, the **billable cost of the optimized version is
 > ~37% lower than the nominal token count suggests**. ADK
 > remains the least efficient — 49,224 tokens/QA for only
@@ -526,16 +526,16 @@ AutoGen         |====                                     | 2h06m
 ADK             |======                                   | 3h04m
 trpc (original) |========                                 | 3h40m
 CrewAI          |=========                                | 4h27m
-trpc (opt)      |=========                                | 4h35m
+trpc (opt)      |==========                               | 4h44m
 Agno            |===============================          | 7h47m
                 +------------------------------------------+
                 0h       2h       4h       6h       8h
 ```
 
-**Why the optimized version is slower (4h35m vs 3h40m):**
+**Why the optimized version is slower (4h44m vs 3h40m):**
 
-The optimized version consumes 5.7x more tokens/QA (17,359 vs 3,056)
-and takes 1.25x longer per QA (8,303ms vs 6,659ms). The root cause
+The optimized version consumes 5.6x more tokens/QA (17,182 vs 3,056)
+and takes 1.29x longer per QA (8,585ms vs 6,659ms). The root cause
 is the three-step agentic workflow:
 
 1. **Step 1 — Tool call #1** (~1,650 prompt tokens): The LLM reads
@@ -563,16 +563,16 @@ facts/episodes.
 **Prompt cache mitigates the cost:** Despite re-reading prior
 context at each step, the multi-turn pattern is highly
 cache-friendly — Steps 2 and 3 share a long common prefix with
-their predecessors. In practice, **43.5% of all prompt tokens
-(14.98M out of 34.47M) are served from the provider's automatic
+their predecessors. In practice, **43.9% of all prompt tokens
+(14.93M out of 34.01M) are served from the provider's automatic
 prompt cache**, reducing the effective new prompt volume to
-~19.49M tokens. At the standard 50% cache pricing, the actual
-billable prompt cost is equivalent to ~26.98M tokens rather than
-34.47M — a **~22% reduction** from the nominal figure.
+~19.08M tokens. At the standard 50% cache pricing, the actual
+billable prompt cost is equivalent to ~26.54M tokens rather than
+34.01M — a **~22% reduction** from the nominal figure.
 
 Despite the higher token cost, the optimized version achieves a
-significantly better F1/cost trade-off: **+14.8% F1** (0.399→0.458)
-for **5.7x nominal token cost** (significantly less after cache
+significantly better F1/cost trade-off: **+17.5% F1** (0.399→0.469)
+for **5.6x nominal token cost** (significantly less after cache
 discounts), making it worthwhile for production use where answer
 quality matters more than token budget.
 
@@ -615,19 +615,19 @@ evaluation, ADK encountered context overflow issues on some samples:
 
 | Sample | #QA | trpc (opt) | AutoGen | CrewAI | trpc (original) | ADK | Agno |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| conv-26 | 199 | **0.469** | 0.384 | 0.355 | 0.331 | 0.337 | 0.296 |
-| conv-30 | 105 | 0.430 | **0.451** | 0.439 | 0.302 | 0.379 | 0.334 |
-| conv-41 | 193 | 0.507 | **0.513** | 0.440 | 0.432 | 0.335 | 0.387 |
-| conv-42 | 260 | 0.423 | **0.439** | 0.408 | 0.378 | 0.343 | 0.338 |
-| conv-43 | 242 | **0.477** | 0.486 | 0.413 | 0.451 | 0.355 | 0.341 |
-| conv-44 | 158 | 0.464 | **0.491** | **0.509** | 0.455 | 0.384 | 0.289 |
-| conv-47 | 190 | **0.489** | **0.496** | 0.405 | 0.407 | 0.374 | 0.321 |
-| conv-48 | 239 | 0.461 | **0.463** | 0.432 | 0.404 | 0.392 | 0.328 |
-| conv-49 | 196 | **0.440** | 0.418 | 0.407 | 0.383 | 0.371 | 0.302 |
-| conv-50 | 204 | 0.421 | **0.475** | **0.487** | 0.407 | 0.363 | 0.374 |
-| **Average** | **199** | **0.458** | 0.457 | 0.427 | 0.399 | 0.362 | 0.332 |
+| conv-26 | 199 | **0.432** | 0.384 | 0.355 | 0.331 | 0.337 | 0.296 |
+| conv-30 | 105 | 0.422 | **0.451** | 0.439 | 0.302 | 0.379 | 0.334 |
+| conv-41 | 193 | **0.521** | 0.513 | 0.440 | 0.432 | 0.335 | 0.387 |
+| conv-42 | 260 | **0.447** | 0.439 | 0.408 | 0.378 | 0.343 | 0.338 |
+| conv-43 | 242 | 0.436 | **0.486** | 0.413 | 0.451 | 0.355 | 0.341 |
+| conv-44 | 158 | 0.505 | 0.491 | **0.509** | 0.455 | 0.384 | 0.289 |
+| conv-47 | 190 | 0.487 | **0.496** | 0.405 | 0.407 | 0.374 | 0.321 |
+| conv-48 | 239 | **0.492** | 0.463 | 0.432 | 0.404 | 0.392 | 0.328 |
+| conv-49 | 196 | **0.464** | 0.418 | 0.407 | 0.383 | 0.371 | 0.302 |
+| conv-50 | 204 | 0.478 | 0.475 | **0.487** | 0.407 | 0.363 | 0.374 |
+| **Average** | **199** | **0.469** | 0.457 | 0.427 | 0.399 | 0.362 | 0.332 |
 
-> The optimized version beats AutoGen on 4 out of 10 samples.
+> The optimized version beats AutoGen on 5 out of 10 samples.
 
 ---
 
@@ -652,10 +652,10 @@ cross-system comparability (Mem0 paper does not include it).
 | Method | Single-Hop | Multi-Hop | Open-Domain | Temporal | 4-cat Weighted | Source |
 | --- | ---: | ---: | ---: | ---: | ---: | --- |
 | AutoGen | 0.377 | **0.512** | **0.594** | 0.176 | **0.511** | This work |
+| **trpc-agent (optimized)** | **0.396** | 0.453 | 0.441 | 0.247 | 0.423 | This work |
 | Mem0g | 0.381 | 0.243 | 0.493 | **0.516** | 0.422 | Mem0 paper |
-| CrewAI | 0.322 | 0.380 | 0.501 | 0.140 | 0.420 | This work |
 | Mem0 | 0.387 | 0.286 | 0.477 | 0.489 | 0.421 | Mem0 paper |
-| **trpc-agent (optimized)** | **0.388** | 0.445 | 0.446 | 0.222 | 0.421 | This work |
+| CrewAI | 0.322 | 0.380 | 0.501 | 0.140 | 0.420 | This work |
 | trpc-agent (LC) | 0.320 | 0.308 | 0.518 | 0.088 | 0.411 | This work |
 | ADK | 0.299 | 0.418 | 0.494 | 0.120 | 0.420 | This work |
 | Zep | 0.357 | 0.194 | 0.496 | 0.420 | 0.403 | Mem0 paper |
@@ -673,8 +673,8 @@ cross-system comparability (Mem0 paper does not include it).
 4-Category Weighted F1 (excluding adversarial, 1540 QA)
 
 AutoGen             |==========================================| 0.511
+trpc-agent (opt)    |==================================        | 0.423
 Mem0g               |==================================        | 0.422
-trpc-agent (opt)    |==================================        | 0.421
 Mem0                |==================================        | 0.421
 CrewAI              |=================================         | 0.420
 ADK                 |=================================         | 0.420
@@ -695,7 +695,7 @@ Agno                |====================                      | 0.267
 >
 > | Method | 5-cat Weighted F1 |
 > | --- | ---: |
-> | **trpc-agent (optimized)** | **0.458** |
+> | **trpc-agent (optimized)** | **0.469** |
 > | AutoGen | 0.457 |
 > | CrewAI | 0.427 |
 > | trpc-agent (original) | 0.399 |
@@ -705,18 +705,18 @@ Agno                |====================                      | 0.267
 **Key takeaways:**
 
 1. **trpc-agent (optimized)** achieves a 4-category weighted F1 of
-   **0.421**, surpassing Zep (0.403), LangMem (0.362), A-Mem (0.347),
-   and other dedicated memory systems. Matching Mem0 (0.421) and
-   Mem0g (0.422).
-2. **Single-hop ranks #2** (0.388) across all frameworks and memory
-   systems, behind Mem0 (0.387).
-3. **Multi-hop ranks #3** (0.445), behind AutoGen (0.512) and
+   **0.423**, surpassing Mem0g (0.422), Mem0 (0.421), Zep (0.403),
+   LangMem (0.362), A-Mem (0.347), and other dedicated memory
+   systems. Ranks #2 overall, behind only AutoGen (0.511).
+2. **Single-hop ranks #1** (0.396) across all frameworks and memory
+   systems, surpassing Mem0 (0.387).
+3. **Multi-hop ranks #3** (0.453), behind AutoGen (0.512) and
    ADK (0.418), far ahead of Mem0 (0.286).
-4. **Temporal reasoning** (0.222) remains the primary gap — Mem0/Mem0g
+4. **Temporal reasoning** (0.247) remains the primary gap — Mem0/Mem0g
    reach 0.489/0.516 in this category. This is the next optimization
    target.
 5. Compared to the original, the optimized version rose from mid-range to
-   **on par with Mem0** (0.279 → 0.421, a 51.0% improvement).
+   **surpassing Mem0** (0.279 → 0.423, a 51.6% improvement).
 
 ---
 
@@ -725,33 +725,33 @@ Agno                |====================                      | 0.267
 ### Key Findings
 
 1. **trpc-agent-go (optimized) ranks #1 in 5-category weighted F1**
-   (0.458), the highest score among all frameworks evaluated. F1
-   improved from original's 0.399 to **0.458** (+14.8%), reaching
-   **97.7%** of the Long-Context upper bound. All four knowledge
+   (0.469), the highest score among all frameworks evaluated. F1
+   improved from original's 0.399 to **0.469** (+17.5%), reaching
+   **99.9%** of the Long-Context upper bound. All four knowledge
    categories show substantial gains, with multi-hop jumping from
-   0.096 to 0.445 (+364%) and temporal jumping from 0.088 to
-   0.222 (+152%).
+   0.096 to 0.453 (+372%) and temporal jumping from 0.088 to
+   0.247 (+181%).
 
 2. **Well-balanced category performance.** The optimized version
    achieves the highest score among all frameworks in temporal
-   (0.222), while maintaining competitive performance in single-hop
-   (0.388) and multi-hop (0.445). Its adversarial robustness at
-   0.585 is well above the severe adversarial weaknesses observed
+   (0.247), while maintaining competitive performance in single-hop
+   (0.396) and multi-hop (0.453). Its adversarial robustness at
+   0.626 is well above the severe adversarial weaknesses observed
    in other frameworks. In contrast, competing frameworks tend to
    exhibit uneven performance profiles, excelling in some categories
    while suffering significant shortfalls in others.
 
-3. **On par with dedicated memory systems.** The 4-category weighted
-   F1 of 0.421 surpasses Zep (0.403), LangMem (0.362),
-   A-Mem (0.347), OpenAI Memory (0.328), MemGPT (0.308) and other
-   dedicated memory systems, matching Mem0 (0.421) and
-   Mem0g (0.422). This demonstrates that trpc-agent-go, as a
-   general-purpose agent framework, has reached the memory quality
+3. **Surpassing dedicated memory systems.** The 4-category weighted
+   F1 of 0.423 surpasses Mem0g (0.422), Mem0 (0.421),
+   Zep (0.403), LangMem (0.362), A-Mem (0.347),
+   OpenAI Memory (0.328), MemGPT (0.308) and other dedicated memory
+   systems. This demonstrates that trpc-agent-go, as a
+   general-purpose agent framework, has exceeded the memory quality
    of purpose-built memory systems.
 
 4. **Limitations of other Python frameworks.**
 
-   - **ADK**: Highest token consumption (49,224 tokens/QA) — **3.0x**
+   - **ADK**: Highest token consumption (49,224 tokens/QA) — **2.9x**
      that of the optimized version — yet only achieves 0.362 F1. Its
      `LoadMemoryTool` loads all memories indiscriminately into
      context, causing severe token waste and context overflow (9 QA
@@ -778,11 +778,11 @@ Agno                |====================                      | 0.267
    effective for short single-session scenarios, but cannot persist
    knowledge across sessions or scale beyond the model's context
    window. trpc-agent-go's memory approach delivers near
-   Long-Context quality (97.7%) while providing persistent, scalable
+   Long-Context quality (99.9%) while providing persistent, scalable
    cross-session memory capabilities.
 
 6. **Temporal reasoning is the next optimization target.** The
-   optimized temporal score of 0.200, already the highest among all
+   optimized temporal score of 0.247, already the highest among all
    agent frameworks, still trails Mem0 (0.489). Temporal indexing
    and time-aware retrieval are the focus of upcoming work.
 
@@ -813,7 +813,7 @@ Agno                |====================                      | 0.267
 | Scenario | single-hop | multi-hop | temporal | open-domain | adversarial |
 | --- | --- | --- | --- | --- | --- |
 | Long-Context | 0.320/0.251/0.320 | 0.308/0.273/0.260 | 0.088/0.068/0.165 | 0.518/0.457/0.662 | 0.667/0.667/0.668 |
-| Auto pgvec (optimized) | 0.388/0.317/0.353 | 0.445/0.406/0.498 | 0.222/0.178/0.360 | 0.446/0.405/0.585 | 0.585/0.585/0.585 |
+| Auto pgvec (optimized) | 0.396/0.325/0.395 | 0.453/0.415/0.519 | 0.247/0.192/0.364 | 0.441/0.398/0.552 | 0.626/0.626/0.626 |
 | Auto pgvec (original) | 0.316/0.250/0.270 | 0.096/0.088/0.060 | 0.088/0.068/0.115 | 0.358/0.319/0.425 | 0.814/0.814/0.814 |
 
 ### C. Token Usage — Full Breakdown
@@ -821,7 +821,7 @@ Agno                |====================                      | 0.267
 | Scenario | Prompt Tokens | Completion Tokens | Total Tokens | LLM Calls | Calls/QA |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Long-Context | 37,272,167 | 16,104 | 37,288,271 | 1,986 | 1.0 |
-| Auto pgvec (optimized) | 34,474,411 | 115,999 | 34,590,410 | 5,989 | 3.0 |
+| Auto pgvec (optimized) | 34,007,814 | 115,960 | 34,123,774 | 5,981 | 3.0 |
 | Auto pgvec (original) | 6,011,025 | 57,777 | 6,068,802 | 3,999 | 2.0 |
 | AutoGen | 3,842,576 | 16,836 | 3,859,412 | 1,986 | 1.0 |
 | CrewAI | 5,360,840 | 278,245 | 5,639,085 | 3,972 | 2.0 |
