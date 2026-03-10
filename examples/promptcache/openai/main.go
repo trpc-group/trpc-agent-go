@@ -15,6 +15,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log"
 	"math"
 	"os"
 	"strings"
@@ -25,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/langfuse"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
@@ -300,6 +302,19 @@ func (u *UsageStats) Print() {
 }
 
 func main() {
+
+	// Start trace with Langfuse integration using environment variables
+	clean, err := langfuse.Start(context.Background())
+	if err != nil {
+		log.Fatalf("Failed to start trace telemetry: %v", err)
+	}
+	defer func() {
+		time.Sleep(time.Second)
+		if err := clean(context.Background()); err != nil {
+			log.Printf("Failed to clean up trace telemetry: %v", err)
+		}
+	}()
+
 	modelName := flag.String("model", "gpt-4o", "Model name to use (e.g. gpt-4o)")
 	flag.Parse()
 
