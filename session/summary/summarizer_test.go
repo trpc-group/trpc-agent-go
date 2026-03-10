@@ -998,6 +998,50 @@ func TestSessionSummarizer_FilterEventsForSummary(t *testing.T) {
 		assert.Len(t, filtered, 3)
 	})
 
+	t.Run("drops prepended summary when remaining tool calls are formatter-excluded", func(t *testing.T) {
+		s := &sessionSummarizer{
+			skipRecentFunc: func(_ []event.Event) int { return 1 },
+			toolCallFormatter: func(model.ToolCall) string {
+				return ""
+			},
+		}
+		now := time.Now().UTC()
+		events := []event.Event{
+			{
+				Author:    authorSystem,
+				Timestamp: now,
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Content: "previous summary"},
+				}}},
+			},
+			{
+				Author:    "assistant",
+				Timestamp: now.Add(-time.Minute),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{
+						Role: model.RoleAssistant,
+						ToolCalls: []model.ToolCall{{
+							Function: model.FunctionDefinitionParam{
+								Name:      "lookup_weather",
+								Arguments: []byte(`{"city":"Shanghai"}`),
+							},
+						}},
+					},
+				}}},
+			},
+			{
+				Author:    "assistant",
+				Timestamp: now.Add(time.Minute),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Role: model.RoleAssistant, Content: "recent response"},
+				}}},
+			},
+		}
+
+		filtered := s.filterEventsForSummary(events)
+		assert.Empty(t, filtered)
+	})
+
 	t.Run("returns empty slice when no user message in filtered events", func(t *testing.T) {
 		s := &sessionSummarizer{skipRecentFunc: func(_ []event.Event) int { return 1 }}
 		events := []event.Event{

@@ -330,6 +330,48 @@ func eventHasTextContent(e event.Event) bool {
 	return false
 }
 
+func eventHasSummarizableContent(
+	e event.Event,
+	toolCallFmt ToolCallFormatter,
+	toolResultFmt ToolResultFormatter,
+) bool {
+	if e.Response == nil || len(e.Response.Choices) == 0 {
+		return false
+	}
+	for _, choice := range e.Response.Choices {
+		msg := choice.Message
+		if strings.TrimSpace(msg.Content) != "" {
+			return true
+		}
+		for _, tc := range msg.ToolCalls {
+			if toolCallFmt(tc) != "" {
+				return true
+			}
+		}
+		if msg.ToolID != "" && toolResultFmt(msg) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *sessionSummarizer) hasSummarizableContent(events []event.Event) bool {
+	toolCallFmt := s.toolCallFormatter
+	if toolCallFmt == nil {
+		toolCallFmt = defaultToolCallFormatter
+	}
+	toolResultFmt := s.toolResultFormatter
+	if toolResultFmt == nil {
+		toolResultFmt = defaultToolResultFormatter
+	}
+	for _, e := range events {
+		if eventHasSummarizableContent(e, toolCallFmt, toolResultFmt) {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *sessionSummarizer) hasPrependedSummaryContext(events []event.Event) bool {
 	if len(events) < 2 {
 		return false
@@ -343,7 +385,7 @@ func (s *sessionSummarizer) hasPrependedSummaryContext(events []event.Event) boo
 	if first.Timestamp.Before(events[1].Timestamp) {
 		return false
 	}
-	return s.extractConversationText(events[1:]) != ""
+	return s.hasSummarizableContent(events[1:])
 }
 
 // SetPrompt updates the summarizer's prompt dynamically.
