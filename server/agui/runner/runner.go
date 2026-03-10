@@ -192,12 +192,9 @@ func inputMessageFromRunAgentInput(input *adapter.RunAgentInput) (*model.Message
 }
 
 func resolveRunOptions(runOption []agent.RunOption) agent.RunOptions {
-	opts := agent.RunOptions{RequestID: uuid.NewString()}
+	var opts agent.RunOptions
 	for _, opt := range runOption {
 		opt(&opts)
-	}
-	if opts.RequestID == "" {
-		opts.RequestID = uuid.NewString()
 	}
 	return opts
 }
@@ -205,7 +202,85 @@ func resolveRunOptions(runOption []agent.RunOption) agent.RunOptions {
 func resolvedRunOption(runOptions agent.RunOptions) agent.RunOption {
 	snapshot := runOptions
 	return func(opts *agent.RunOptions) {
-		*opts = snapshot
+		if snapshot.RuntimeState != nil {
+			opts.RuntimeState = snapshot.RuntimeState
+		}
+		if snapshot.EventFilterKey != "" {
+			opts.EventFilterKey = snapshot.EventFilterKey
+		}
+		if snapshot.KnowledgeFilter != nil {
+			opts.KnowledgeFilter = snapshot.KnowledgeFilter
+		}
+		if snapshot.KnowledgeConditionedFilter != nil {
+			opts.KnowledgeConditionedFilter = snapshot.KnowledgeConditionedFilter
+		}
+		if snapshot.Messages != nil {
+			opts.Messages = snapshot.Messages
+		}
+		if snapshot.InjectedContextMessages != nil {
+			opts.InjectedContextMessages = snapshot.InjectedContextMessages
+		}
+		if snapshot.Resume {
+			opts.Resume = true
+		}
+		if snapshot.GraphEmitFinalModelResponses {
+			opts.GraphEmitFinalModelResponses = true
+		}
+		if snapshot.StreamModeEnabled {
+			opts.StreamModeEnabled = true
+			opts.StreamModes = snapshot.StreamModes
+		}
+		if snapshot.DisableEventInjection {
+			opts.DisableEventInjection = true
+		}
+		if snapshot.RequestID != "" {
+			opts.RequestID = snapshot.RequestID
+		}
+		if snapshot.DetachedCancel {
+			opts.DetachedCancel = true
+		}
+		if snapshot.MaxRunDuration > 0 {
+			opts.MaxRunDuration = snapshot.MaxRunDuration
+		}
+		if snapshot.SpanAttributes != nil {
+			opts.SpanAttributes = snapshot.SpanAttributes
+		}
+		if snapshot.A2ARequestOptions != nil {
+			opts.A2ARequestOptions = snapshot.A2ARequestOptions
+		}
+		if snapshot.CustomAgentConfigs != nil {
+			opts.CustomAgentConfigs = snapshot.CustomAgentConfigs
+		}
+		if snapshot.Agent != nil {
+			opts.Agent = snapshot.Agent
+		}
+		if snapshot.AgentByName != "" {
+			opts.AgentByName = snapshot.AgentByName
+		}
+		if snapshot.Model != nil {
+			opts.Model = snapshot.Model
+		}
+		if snapshot.ModelName != "" {
+			opts.ModelName = snapshot.ModelName
+		}
+		if snapshot.Stream != nil {
+			opts.Stream = snapshot.Stream
+		}
+		if snapshot.Instruction != "" {
+			opts.Instruction = snapshot.Instruction
+		}
+		if snapshot.GlobalInstruction != "" {
+			opts.GlobalInstruction = snapshot.GlobalInstruction
+		}
+		if snapshot.ToolFilter != nil {
+			opts.ToolFilter = snapshot.ToolFilter
+		}
+		if snapshot.ToolExecutionFilter != nil {
+			opts.ToolExecutionFilter = snapshot.ToolExecutionFilter
+		}
+		if snapshot.ToolCallArgumentsJSONRepairEnabled != nil {
+			opts.ToolCallArgumentsJSONRepairEnabled = snapshot.ToolCallArgumentsJSONRepairEnabled
+		}
 	}
 }
 

@@ -1289,7 +1289,7 @@ func TestRunRunOptionResolverOptions(t *testing.T) {
 		message model.Message,
 		opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
 		assert.Equal(t, "user-123", userID)
-		var runOpts agent.RunOptions
+		runOpts := agent.RunOptions{RequestID: "runner-default-request-id"}
 		for _, opt := range opts {
 			opt(&runOpts)
 		}
@@ -1341,11 +1341,12 @@ func TestRunRunOptionResolverDisableEventInjectionIsPassedThrough(t *testing.T) 
 		userID, sessionID string,
 		message model.Message,
 		opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
-		var runOpts agent.RunOptions
+		runOpts := agent.RunOptions{RequestID: "runner-default-request-id"}
 		for _, opt := range opts {
 			opt(&runOpts)
 		}
 		assert.True(t, runOpts.DisableEventInjection)
+		assert.Equal(t, "runner-default-request-id", runOpts.RequestID)
 		ch := make(chan *agentevent.Event)
 		go func() {
 			close(ch)
