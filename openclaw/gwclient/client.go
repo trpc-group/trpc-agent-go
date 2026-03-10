@@ -30,8 +30,6 @@ const (
 	contentTypeJSON   = "application/json"
 
 	methodPost = "POST"
-
-	messagesStreamSuffix = ":stream"
 )
 
 // Client invokes the gateway handler without a network hop.
@@ -48,16 +46,34 @@ func New(
 	messagesPath string,
 	cancelPath string,
 ) (*Client, error) {
+	return NewWithStreamPath(
+		handler,
+		messagesPath,
+		messagesPath+gwproto.MessagesStreamSuffix,
+		cancelPath,
+	)
+}
+
+// NewWithStreamPath creates a client with an explicit stream path.
+func NewWithStreamPath(
+	handler http.Handler,
+	messagesPath string,
+	streamPath string,
+	cancelPath string,
+) (*Client, error) {
 	if handler == nil {
 		return nil, errors.New("gwclient: nil handler")
 	}
 	if messagesPath == "" {
 		return nil, errors.New("gwclient: empty messages path")
 	}
+	if streamPath == "" {
+		return nil, errors.New("gwclient: empty stream path")
+	}
 	return &Client{
 		handler:      handler,
 		messagesPath: messagesPath,
-		streamPath:   messagesPath + messagesStreamSuffix,
+		streamPath:   streamPath,
 		cancelPath:   cancelPath,
 	}, nil
 }

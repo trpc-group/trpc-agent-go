@@ -13,6 +13,7 @@ package gateway
 import (
 	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
@@ -22,12 +23,13 @@ import (
 type SessionIDFunc func(InboundMessage) (string, error)
 
 type options struct {
-	basePath     string
-	messagesPath string
-	streamPath   string
-	statusPath   string
-	cancelPath   string
-	healthPath   string
+	basePath      string
+	messagesPath  string
+	streamPath    string
+	streamPathSet bool
+	statusPath    string
+	cancelPath    string
+	healthPath    string
 
 	maxBodyBytes int64
 	maxPartBytes int64
@@ -56,7 +58,6 @@ func newOptions(opts ...Option) options {
 	o := options{
 		basePath:       defaultBasePath,
 		messagesPath:   defaultMessagesPath,
-		streamPath:     defaultMessagesStreamPath,
 		statusPath:     defaultStatusPath,
 		cancelPath:     defaultCancelPath,
 		healthPath:     defaultHealthPath,
@@ -75,8 +76,12 @@ func newOptions(opts ...Option) options {
 	if strings.TrimSpace(o.messagesPath) == "" {
 		o.messagesPath = defaultMessagesPath
 	}
-	if strings.TrimSpace(o.streamPath) == "" {
-		o.streamPath = defaultMessagesStreamPath
+	if o.streamPathSet {
+		if strings.TrimSpace(o.streamPath) == "" {
+			o.streamPath = defaultMessagesStreamPath
+		}
+	} else {
+		o.streamPath = o.messagesPath + gwproto.MessagesStreamSuffix
 	}
 	if strings.TrimSpace(o.statusPath) == "" {
 		o.statusPath = defaultStatusPath
@@ -115,6 +120,7 @@ func WithMessagesPath(path string) Option {
 func WithMessagesStreamPath(path string) Option {
 	return func(o *options) {
 		o.streamPath = path
+		o.streamPathSet = true
 	}
 }
 

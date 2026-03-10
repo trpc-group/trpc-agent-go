@@ -212,6 +212,57 @@ func TestNew_ValidationErrors(t *testing.T) {
 
 	_, err = New(http.NewServeMux(), "", "/v1/gateway/cancel")
 	require.Error(t, err)
+
+	_, err = NewWithStreamPath(
+		http.NewServeMux(),
+		"/v1/gateway/messages",
+		"",
+		"/v1/gateway/cancel",
+	)
+	require.Error(t, err)
+}
+
+func TestNewWithStreamPath_UsesExplicitPath(t *testing.T) {
+	t.Parallel()
+
+	handler := http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		require.Equal(t, "/custom/stream", r.URL.Path)
+		w.Header().Set(headerContentType, gwproto.SSEContentType)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(
+			gwproto.SSEEventLinePrefix +
+				string(gwproto.StreamEventTypeRunCompleted) +
+				"\n" +
+				gwproto.SSEDataLinePrefix +
+				"{\"type\":\"run.completed\"}" +
+				gwproto.SSELineEnding,
+		))
+	})
+
+	cli, err := NewWithStreamPath(
+		handler,
+		"/v1/gateway/messages",
+		"/custom/stream",
+		"/v1/gateway/cancel",
+	)
+	require.NoError(t, err)
+
+	stream, err := cli.StreamMessage(context.Background(), MessageRequest{
+		From: "u1",
+		Text: "hello",
+	})
+	require.NoError(t, err)
+
+	events := collectClientStreamEvents(t, stream)
+	require.Len(t, events, 1)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunCompleted,
+		events[0].Type,
+	)
 }
 
 type statusHandler struct {

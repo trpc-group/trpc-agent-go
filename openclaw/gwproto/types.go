@@ -52,6 +52,8 @@ type MessageResponse struct {
 type StreamEventType string
 
 const (
+	// MessagesStreamSuffix is the default suffix for stream routes.
+	MessagesStreamSuffix = ":stream"
 	// SSEContentType is the HTTP Content-Type for gateway event streams.
 	SSEContentType = "text/event-stream"
 	// SSEEventPrefix is the raw SSE prefix for event lines.

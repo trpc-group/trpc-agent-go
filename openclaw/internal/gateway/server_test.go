@@ -2246,6 +2246,7 @@ func TestNewOptions_DefaultsAndNormalization(t *testing.T) {
 
 	require.Equal(t, defaultBasePath, o.basePath)
 	require.Equal(t, defaultMessagesPath, o.messagesPath)
+	require.Equal(t, defaultMessagesStreamPath, o.streamPath)
 	require.Equal(t, defaultStatusPath, o.statusPath)
 	require.Equal(t, defaultCancelPath, o.cancelPath)
 	require.Equal(t, defaultHealthPath, o.healthPath)
@@ -2266,6 +2267,19 @@ func TestNewOptions_DefaultsAndNormalization(t *testing.T) {
 
 	require.True(t, o.requireMention)
 	require.Equal(t, []string{"@bot", "/agent"}, o.mentionPatterns)
+}
+
+func TestNewOptions_DerivesStreamPathFromMessagesPath(t *testing.T) {
+	t.Parallel()
+
+	o := newOptions(WithMessagesPath("/custom/messages"))
+
+	require.Equal(t, "/custom/messages", o.messagesPath)
+	require.Equal(
+		t,
+		"/custom/messages"+gwproto.MessagesStreamSuffix,
+		o.streamPath,
+	)
 }
 
 func TestWithMentionPatterns_EmptyResets(t *testing.T) {

@@ -44,10 +44,11 @@ const (
 	defaultBasePath = "/v1"
 
 	defaultMessagesPath       = "/gateway/messages"
-	defaultMessagesStreamPath = "/gateway/messages:stream"
-	defaultStatusPath         = "/gateway/status"
-	defaultCancelPath         = "/gateway/cancel"
-	defaultHealthPath         = "/healthz"
+	defaultMessagesStreamPath = defaultMessagesPath +
+		gwproto.MessagesStreamSuffix
+	defaultStatusPath = "/gateway/status"
+	defaultCancelPath = "/gateway/cancel"
+	defaultHealthPath = "/healthz"
 
 	defaultChannelName = "http"
 	threadKindDM       = "dm"
