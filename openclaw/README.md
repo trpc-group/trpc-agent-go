@@ -539,6 +539,49 @@ cd openclaw
 go run ./cmd/openclaw doctor -config ./openclaw.yaml
 ```
 
+### Dependency inspection and bootstrap
+
+OpenClaw can inspect common host-side file tooling requirements and can
+prepare a managed Python environment under the state directory for Python
+packages used by host tooling.
+
+Inspect the default file-tool profiles:
+
+```bash
+cd openclaw
+go run ./cmd/openclaw inspect deps
+```
+
+Inspect specific profiles or skill metadata:
+
+```bash
+cd openclaw
+go run ./cmd/openclaw inspect deps \
+  -profile pdf,office \
+  -skill nano-pdf
+```
+
+Preview the install plan:
+
+```bash
+cd openclaw
+go run ./cmd/openclaw bootstrap deps \
+  -profile common-file-tools
+```
+
+Apply the plan:
+
+```bash
+cd openclaw
+go run ./cmd/openclaw bootstrap deps \
+  -profile common-file-tools \
+  -apply
+```
+
+The bootstrap command never runs automatically on startup. Startup logs may
+print a suggested `bootstrap deps` command when optional file tools are
+missing, but installation is always explicit.
+
 ### 5) Send a message
 
 Open a chat with your bot (or add it into a group) and send:
@@ -1126,6 +1169,11 @@ The assistant gets:
 - `message` for sending text, PDFs, images, audio, or video to the current
   chat or explicit targets
 - `cron` for future or recurring jobs
+
+When OpenClaw finds a managed Python environment under
+`<state_dir>/toolchain/python`, `exec_command` automatically prepends that
+environment to `PATH` so host commands can use the installed Python packages
+without changing prompts or shell commands.
 
 To disable these tools explicitly:
 

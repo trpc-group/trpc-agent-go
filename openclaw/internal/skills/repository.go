@@ -23,6 +23,8 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
+
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/deps"
 )
 
 type SkillConfig struct {
@@ -236,6 +238,58 @@ func (r *Repository) SkillRunEnv(
 		}
 		if _, ok := out[primaryEnv]; !ok {
 			out[primaryEnv] = apiKey
+		}
+	}
+	return out, nil
+}
+
+func (r *Repository) DependencySources(
+	names []string,
+) ([]deps.Source, error) {
+	if r == nil || r.base == nil {
+		return nil, nil
+	}
+
+	selected := normalizeSkillNames(names)
+	summaries := r.base.Summaries()
+	descriptions := make(map[string]string, len(summaries))
+	for _, summary := range summaries {
+		name := strings.TrimSpace(summary.Name)
+		if name == "" {
+			continue
+		}
+		descriptions[name] = strings.TrimSpace(summary.Description)
+	}
+
+	wantAll := len(selected) == 0
+	out := make([]deps.Source, 0, len(descriptions))
+	for name, meta := range r.metas {
+		if meta == nil {
+			continue
+		}
+		if !wantAll && !containsString(selected, name) {
+			continue
+		}
+		out = append(out, deps.Source{
+			Name:        name,
+			Description: descriptions[name],
+			Requires:    meta.Requires,
+			Install:     meta.Install,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Name < out[j].Name
+	})
+
+	if wantAll {
+		return out, nil
+	}
+	if len(out) != len(selected) {
+		for _, name := range selected {
+			if containsSource(out, name) {
+				continue
+			}
+			return nil, fmt.Errorf("unknown skill: %s", name)
 		}
 	}
 	return out, nil
@@ -646,6 +700,43 @@ func copySkillEnv(env map[string]string) map[string]string {
 			continue
 		}
 		out[key] = val
+	}
+	return out
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsSource(sources []deps.Source, want string) bool {
+	for _, source := range sources {
+		if source.Name == want {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeSkillNames(names []string) []string {
+	out := make([]string, 0, len(names))
+	seen := map[string]struct{}{}
+	for _, raw := range names {
+		for _, part := range strings.Split(raw, ",") {
+			name := strings.TrimSpace(part)
+			if name == "" {
+				continue
+			}
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			seen[name] = struct{}{}
+			out = append(out, name)
+		}
 	}
 	return out
 }

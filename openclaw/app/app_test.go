@@ -668,6 +668,12 @@ func TestMain_InspectDispatches(t *testing.T) {
 	require.Equal(t, 0, Main([]string{subcmdInspect}))
 }
 
+func TestMain_BootstrapDispatches(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, 2, Main([]string{subcmdBootstrap}))
+}
+
 func TestRun_TelegramProxyErrorExitCode(t *testing.T) {
 	t.Parallel()
 

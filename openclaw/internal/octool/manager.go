@@ -39,6 +39,7 @@ type Manager struct {
 
 	maxLines int
 	jobTTL   time.Duration
+	baseEnv  map[string]string
 
 	clock func() time.Time
 }
@@ -58,6 +59,15 @@ func WithJobTTL(d time.Duration) Option {
 		if d > 0 {
 			m.jobTTL = d
 		}
+	}
+}
+
+func WithBaseEnv(env map[string]string) Option {
+	return func(m *Manager) {
+		if len(env) == 0 {
+			return
+		}
+		m.baseEnv = copyEnvMap(env)
 	}
 }
 
@@ -122,7 +132,12 @@ func (m *Manager) Exec(
 	timeout := time.Duration(timeoutS) * time.Second
 
 	if !params.Background && yieldMs == 0 && !params.Pty {
-		out, code, err := runForeground(ctx, params, timeout)
+		out, code, err := runForeground(
+			ctx,
+			params,
+			timeout,
+			m.baseEnv,
+		)
 		if err != nil {
 			return execResult{}, err
 		}
@@ -191,13 +206,14 @@ func runForeground(
 	ctx context.Context,
 	params execParams,
 	timeout time.Duration,
+	baseEnv map[string]string,
 ) (string, int, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	cmd := shellCmd(ctx, params.Command)
 	cmd.Dir = params.Workdir
-	cmd.Env = mergedEnv(params.Env)
+	cmd.Env = mergedEnv(baseEnv, params.Env)
 
 	out, err := cmd.CombinedOutput()
 	code := exitCode(err)
@@ -210,14 +226,20 @@ func shellCmd(ctx context.Context, command string) *exec.Cmd {
 	return exec.CommandContext(ctx, shell, flag, command)
 }
 
-func mergedEnv(extra map[string]string) []string {
-	if len(extra) == 0 {
+func mergedEnv(
+	baseEnv map[string]string,
+	extra map[string]string,
+) []string {
+	if len(baseEnv) == 0 && len(extra) == 0 {
 		return nil
 	}
-	base := os.Environ()
-	out := make([]string, 0, len(base)+len(extra))
-	out = append(out, base...)
+	env := os.Environ()
+	out := make([]string, 0, len(env)+len(baseEnv)+len(extra))
+	out = append(out, env...)
 
+	for k, v := range baseEnv {
+		out = setEnv(out, k, v)
+	}
 	for k, v := range extra {
 		out = setEnv(out, k, v)
 	}
@@ -253,7 +275,7 @@ func (m *Manager) startBackground(
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	cmd := shellCmd(ctx, params.Command)
 	cmd.Dir = params.Workdir
-	cmd.Env = mergedEnv(params.Env)
+	cmd.Env = mergedEnv(m.baseEnv, params.Env)
 
 	sess := newSession(newSessionID(), params.Command, m.maxLines)
 	sess.cancel = cancel
@@ -329,6 +351,20 @@ func (m *Manager) startBackground(
 	}()
 
 	return sess, nil
+}
+
+func copyEnvMap(env map[string]string) map[string]string {
+	if len(env) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(env))
+	for key, value := range env {
+		if strings.TrimSpace(key) == "" {
+			continue
+		}
+		out[key] = value
+	}
+	return out
 }
 
 func waitDone(done <-chan struct{}, timeout time.Duration) {

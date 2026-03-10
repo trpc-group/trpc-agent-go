@@ -47,6 +47,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/admin"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/cron"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/deps"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/octool"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
@@ -195,6 +196,8 @@ func Main(args []string) int {
 			return runDoctor(args[1:])
 		case subcmdInspect:
 			return runInspect(args[1:])
+		case subcmdBootstrap:
+			return runBootstrap(args[1:])
 		}
 	}
 
@@ -1063,6 +1066,7 @@ func run(ctx context.Context, args []string) error {
 	errCh := make(chan error, workerCount)
 
 	logStartupLines(gatewayStartupLines(httpSrv.Addr, gwSrv))
+	logStartupLines(toolDepsStartupLines(openClawTools.deps))
 	go func() {
 		//nolint:gosec
 		errCh <- httpSrv.ListenAndServe()
@@ -1774,6 +1778,7 @@ type openClawToolsBundle struct {
 	execMgr  *octool.Manager
 	router   *outbound.Router
 	cronTool *cron.Tool
+	deps     *deps.Report
 }
 
 func buildOpenClawTools(
@@ -1784,12 +1789,22 @@ func buildOpenClawTools(
 		return openClawToolsBundle{}
 	}
 
-	mgr := octool.NewManager()
+	mgr := octool.NewManager(
+		octool.WithBaseEnv(deps.ToolEnv(stateDir)),
+	)
 	router := outbound.NewRouter()
 	cronTool := cron.NewTool(nil)
 	var uploadStore *uploads.Store
 	if store, err := uploads.NewStore(stateDir); err == nil {
 		uploadStore = store
+	}
+	var depsReport *deps.Report
+	if sources, err := deps.SourcesForProfiles(deps.DefaultProfiles()); err ==
+		nil {
+		report, err := deps.InspectStartup(stateDir, sources)
+		if err == nil {
+			depsReport = &report
+		}
 	}
 
 	tools := []tool.Tool{
@@ -1804,6 +1819,7 @@ func buildOpenClawTools(
 		execMgr:  mgr,
 		router:   router,
 		cronTool: cronTool,
+		deps:     depsReport,
 	}
 }
 

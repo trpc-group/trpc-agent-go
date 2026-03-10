@@ -65,6 +65,28 @@ func TestExecTool_Foreground(t *testing.T) {
 	require.Equal(t, 0, res.ExitCode)
 }
 
+func TestExecTool_UsesManagerBaseEnv(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	mgr := NewManager(WithBaseEnv(map[string]string{
+		"OPENCLAW_TEST_ENV": "ok",
+	}))
+	tool := newExecCommandTool(mgr)
+
+	args := mustJSON(t, map[string]any{
+		"command": "printf %s \"$OPENCLAW_TEST_ENV\"",
+		"yieldMs": 0,
+	})
+	out, err := tool.Call(context.Background(), args)
+	require.NoError(t, err)
+
+	res := out.(execResult)
+	require.Equal(t, "exited", res.Status)
+	require.Contains(t, strings.TrimSpace(res.Output), "ok")
+}
+
 func TestAnnotateExecResult_ParsesMediaMarkers(t *testing.T) {
 	t.Parallel()
 
@@ -316,7 +338,7 @@ func TestManager_MergedEnvAndExitCode(t *testing.T) {
 		t.Skip("bash is not available")
 	}
 
-	env := mergedEnv(map[string]string{
+	env := mergedEnv(nil, map[string]string{
 		"FOO":  "bar",
 		"PATH": "testpath",
 	})

@@ -64,6 +64,52 @@ metadata: '{"openclaw":{"requires":{"anyBins":["codex"]}}}'
 	require.Equal(t, []string{"codex"}, meta.Requires.AnyBins)
 }
 
+func TestParseFrontMatter_OpenClawMetadata_InstallEntries(t *testing.T) {
+	content := `---
+name: coding-agent
+description: "Test skill"
+metadata:
+  {
+    "openclaw":
+      {
+        "requires":
+          {
+            "python":
+              [
+                {
+                  "module": "pypdf",
+                  "package": "pypdf",
+                },
+              ],
+          },
+        "install":
+          [
+            {
+              "id": "brew",
+              "kind": "brew",
+              "formula": "poppler",
+              "bins": ["pdftotext"],
+            },
+          ],
+      },
+  }
+---
+
+# Body
+`
+	fm, err := parseFrontMatter(content)
+	require.NoError(t, err)
+
+	meta, ok, err := parseOpenClawMetadata(fm)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, meta.Requires.Python, 1)
+	require.Equal(t, "pypdf", meta.Requires.Python[0].Module)
+	require.Len(t, meta.Install, 1)
+	require.Equal(t, "brew", meta.Install[0].Kind)
+	require.Equal(t, "poppler", meta.Install[0].Formula)
+}
+
 func TestParseFrontMatter_NoFrontMatter(t *testing.T) {
 	_, err := parseFrontMatter("hello\n")
 	require.True(t, errors.Is(err, errNoFrontMatter))
@@ -969,6 +1015,45 @@ metadata:
 	require.Equal(t, "pin", metaonly.Emoji)
 	require.Equal(t, "https://example.com", metaonly.Homepage)
 	require.Nil(t, metaonly.Requires)
+}
+
+func TestRepository_DependencySources(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeSkill(t, root, "doc", `---
+name: doc
+description: doc
+metadata:
+  {
+    "openclaw":
+      {
+        "requires":
+          {
+            "python":
+              [
+                {
+                  "module": "pypdf",
+                  "package": "pypdf",
+                },
+              ],
+          },
+      },
+  }
+---
+
+# doc
+`)
+
+	repo, err := NewRepository([]string{root})
+	require.NoError(t, err)
+
+	sources, err := repo.DependencySources([]string{"doc"})
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	require.Equal(t, "doc", sources[0].Name)
+	require.Len(t, sources[0].Requires.Python, 1)
+	require.Equal(t, "pypdf", sources[0].Requires.Python[0].Module)
 }
 
 func TestBundledSkills_ParseFrontMatterAndMetadata(t *testing.T) {

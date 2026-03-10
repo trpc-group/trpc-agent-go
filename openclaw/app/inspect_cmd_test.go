@@ -84,6 +84,94 @@ func TestRunInspect_ConfigKeys(t *testing.T) {
 	require.Equal(t, want, got)
 }
 
+func TestRunInspect_Deps_WithSkill(t *testing.T) {
+	root := t.TempDir()
+	writeDepsSkill(t, root, "depskill", `---
+name: depskill
+description: deps skill
+metadata:
+  {
+    "openclaw":
+      {
+        "requires":
+          {
+            "bins": ["definitely_missing_bin"],
+            "python":
+              [
+                {
+                  "module": "definitely_missing_python_module",
+                  "package": "definitely-missing-python-package",
+                },
+              ],
+          },
+      },
+  }
+---
+
+# depskill
+`)
+
+	stdout, stderr := captureInspectOutput(t, func() {
+		require.Equal(t, 0, runInspect([]string{
+			inspectCmdDeps,
+			"-state-dir",
+			t.TempDir(),
+			"-skills-root",
+			root,
+			"-skill",
+			"depskill",
+		}))
+	})
+
+	require.Empty(t, stderr)
+	require.Contains(t, stdout, "depskill")
+	require.Contains(t, stdout, "definitely_missing_bin")
+	require.Contains(t, stdout, "definitely_missing_python_module")
+}
+
+func TestRunBootstrapDeps_DryRun(t *testing.T) {
+	root := t.TempDir()
+	writeDepsSkill(t, root, "depskill", `---
+name: depskill
+description: deps skill
+metadata:
+  {
+    "openclaw":
+      {
+        "requires":
+          {
+            "python":
+              [
+                {
+                  "module": "definitely_missing_python_module",
+                  "package": "definitely-missing-python-package",
+                },
+              ],
+          },
+      },
+  }
+---
+
+# depskill
+`)
+
+	stdout, stderr := captureInspectOutput(t, func() {
+		require.Equal(t, 0, runBootstrap([]string{
+			bootstrapCmdDeps,
+			"-state-dir",
+			t.TempDir(),
+			"-skills-root",
+			root,
+			"-skill",
+			"depskill",
+		}))
+	})
+
+	require.Empty(t, stderr)
+	require.Contains(t, stdout, "Install Python packages")
+	require.Contains(t, stdout, "definitely-missing-python-package")
+}
+
 func captureInspectOutput(
 	t *testing.T,
 	fn func(),
@@ -116,6 +204,23 @@ func captureInspectOutput(
 	require.NoError(t, err)
 
 	return string(out), string(errOut)
+}
+
+func writeDepsSkill(
+	t *testing.T,
+	root string,
+	name string,
+	body string,
+) {
+	t.Helper()
+
+	dir := filepath.Join(root, name)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "SKILL.md"),
+		[]byte(body),
+		0o644,
+	))
 }
 
 func TestResolveSkillConfigKeys_IncludesPluginAndYAMLKeys(t *testing.T) {
