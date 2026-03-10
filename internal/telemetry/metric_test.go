@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/metric/histogram"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/metrics"
+	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 )
 
 // mockModel implements model.Model interface for testing.
@@ -59,16 +60,16 @@ func TestChatAttributes_toAttributes(t *testing.T) {
 				Error:             errors.New("test error"),
 			},
 			expected: []attribute.KeyValue{
-				attribute.String(KeyGenAIOperationName, OperationChat),
-				attribute.String(KeyGenAISystem, "gpt-4"),
-				attribute.String(KeyGenAIRequestModel, "gpt-4"),
+				attribute.String(semconvtrace.KeyGenAIOperationName, OperationChat),
+				attribute.String(semconvtrace.KeyGenAISystem, "gpt-4"),
+				attribute.String(semconvtrace.KeyGenAIRequestModel, "gpt-4"),
 				attribute.Bool(metrics.KeyTRPCAgentGoStream, true),
-				attribute.String(KeyGenAIResponseModel, "gpt-4-0613"),
-				attribute.String(KeyTRPCAgentGoAppName, "test-app"),
-				attribute.String(KeyTRPCAgentGoUserID, "user-123"),
-				attribute.String(KeyGenAIConversationID, "session-456"),
-				attribute.String(KeyErrorType, "rate_limit"),
-				attribute.String(KeyGenAIAgentName, "test-agent"),
+				attribute.String(semconvtrace.KeyGenAIResponseModel, "gpt-4-0613"),
+				attribute.String(semconvtrace.KeyTRPCAgentGoAppName, "test-app"),
+				attribute.String(semconvtrace.KeyTRPCAgentGoUserID, "user-123"),
+				attribute.String(semconvtrace.KeyGenAIConversationID, "session-456"),
+				attribute.String(semconvtrace.KeyErrorType, "rate_limit"),
+				attribute.String(semconvtrace.KeyGenAIAgentName, "test-agent"),
 			},
 		},
 		{
@@ -78,9 +79,9 @@ func TestChatAttributes_toAttributes(t *testing.T) {
 				Stream:           false,
 			},
 			expected: []attribute.KeyValue{
-				attribute.String(KeyGenAIOperationName, OperationChat),
-				attribute.String(KeyGenAISystem, "gpt-3.5"),
-				attribute.String(KeyGenAIRequestModel, "gpt-3.5"),
+				attribute.String(semconvtrace.KeyGenAIOperationName, OperationChat),
+				attribute.String(semconvtrace.KeyGenAISystem, "gpt-3.5"),
+				attribute.String(semconvtrace.KeyGenAIRequestModel, "gpt-3.5"),
 				attribute.Bool(metrics.KeyTRPCAgentGoStream, false),
 			},
 		},
@@ -93,12 +94,12 @@ func TestChatAttributes_toAttributes(t *testing.T) {
 				TaskType:         "summarize demo",
 			},
 			expected: []attribute.KeyValue{
-				attribute.String(KeyGenAIOperationName, OperationChat),
-				attribute.String(KeyGenAISystem, "gpt-4"),
-				attribute.String(KeyGenAIRequestModel, "gpt-4"),
+				attribute.String(semconvtrace.KeyGenAIOperationName, OperationChat),
+				attribute.String(semconvtrace.KeyGenAISystem, "gpt-4"),
+				attribute.String(semconvtrace.KeyGenAIRequestModel, "gpt-4"),
 				attribute.Bool(metrics.KeyTRPCAgentGoStream, false),
-				attribute.String(KeyGenAIConversationID, "session-1"),
-				attribute.String(KeyGenAITaskType, "summarize demo"),
+				attribute.String(semconvtrace.KeyGenAIConversationID, "session-1"),
+				attribute.String(semconvtrace.KeyGenAITaskType, "summarize demo"),
 			},
 		},
 		{
@@ -108,11 +109,11 @@ func TestChatAttributes_toAttributes(t *testing.T) {
 				Error:            errors.New("some error"),
 			},
 			expected: []attribute.KeyValue{
-				attribute.String(KeyGenAIOperationName, OperationChat),
-				attribute.String(KeyGenAISystem, "gpt-4"),
-				attribute.String(KeyGenAIRequestModel, "gpt-4"),
+				attribute.String(semconvtrace.KeyGenAIOperationName, OperationChat),
+				attribute.String(semconvtrace.KeyGenAISystem, "gpt-4"),
+				attribute.String(semconvtrace.KeyGenAIRequestModel, "gpt-4"),
 				attribute.Bool(metrics.KeyTRPCAgentGoStream, false),
-				attribute.String(KeyErrorType, ValueDefaultErrorType),
+				attribute.String(semconvtrace.KeyErrorType, semconvtrace.ValueDefaultErrorType),
 			},
 		},
 		{
@@ -127,9 +128,9 @@ func TestChatAttributes_toAttributes(t *testing.T) {
 				AgentName:         "",
 			},
 			expected: []attribute.KeyValue{
-				attribute.String(KeyGenAIOperationName, OperationChat),
-				attribute.String(KeyGenAISystem, "claude-3"),
-				attribute.String(KeyGenAIRequestModel, "claude-3"),
+				attribute.String(semconvtrace.KeyGenAIOperationName, OperationChat),
+				attribute.String(semconvtrace.KeyGenAISystem, "claude-3"),
+				attribute.String(semconvtrace.KeyGenAIRequestModel, "claude-3"),
 				attribute.Bool(metrics.KeyTRPCAgentGoStream, false),
 			},
 		},
@@ -196,6 +197,13 @@ func TestChatMetricsTracker_TrackResponse(t *testing.T) {
 
 	// First response
 	response1 := &model.Response{
+		Choices: []model.Choice{
+			{
+				Delta: model.Message{
+					Content: "Hello",
+				},
+			},
+		},
 		Usage: &model.Usage{
 			PromptTokens:     10,
 			CompletionTokens: 5,
@@ -277,6 +285,13 @@ func TestChatMetricsTracker_TrackResponse_NilUsage(t *testing.T) {
 	tracker := NewChatMetricsTracker(ctx, nil, nil, timingInfo, nil, nil)
 
 	response := &model.Response{
+		Choices: []model.Choice{
+			{
+				Delta: model.Message{
+					Content: "Hello",
+				},
+			},
+		},
 		Usage: nil,
 	}
 
@@ -333,7 +348,15 @@ func TestChatMetricsTracker_FirstTokenTimeDuration(t *testing.T) {
 	}
 
 	time.Sleep(10 * time.Millisecond)
-	tracker.TrackResponse(&model.Response{})
+	tracker.TrackResponse(&model.Response{
+		Choices: []model.Choice{
+			{
+				Delta: model.Message{
+					Content: "Hello",
+				},
+			},
+		},
+	})
 
 	if tracker.FirstTokenTimeDuration() == 0 {
 		t.Error("FirstTokenTimeDuration should be non-zero after tracking response")
@@ -542,6 +565,13 @@ func TestChatMetricsTracker_RecordMetrics(t *testing.T) {
 	// Simulate some responses
 	time.Sleep(10 * time.Millisecond)
 	tracker.TrackResponse(&model.Response{
+		Choices: []model.Choice{
+			{
+				Delta: model.Message{
+					Content: "Hello",
+				},
+			},
+		},
 		Usage: &model.Usage{
 			PromptTokens:     10,
 			CompletionTokens: 2,
@@ -677,14 +707,14 @@ func TestExecuteToolAttributes_toAttributes(t *testing.T) {
 				Error:            errors.New("test error"),
 			},
 			expected: []attribute.KeyValue{
-				attribute.String(KeyGenAIOperationName, OperationExecuteTool),
-				attribute.String(KeyGenAISystem, "gpt-4"),
-				attribute.String(KeyGenAIToolName, "calculator"),
-				attribute.String(KeyTRPCAgentGoAppName, "test-app"),
-				attribute.String(KeyTRPCAgentGoUserID, "user-123"),
-				attribute.String(KeyGenAIConversationID, "session-456"),
-				attribute.String(KeyGenAIAgentName, "test-agent"),
-				attribute.String(KeyErrorType, "timeout"),
+				attribute.String(semconvtrace.KeyGenAIOperationName, OperationExecuteTool),
+				attribute.String(semconvtrace.KeyGenAISystem, "gpt-4"),
+				attribute.String(semconvtrace.KeyGenAIToolName, "calculator"),
+				attribute.String(semconvtrace.KeyTRPCAgentGoAppName, "test-app"),
+				attribute.String(semconvtrace.KeyTRPCAgentGoUserID, "user-123"),
+				attribute.String(semconvtrace.KeyGenAIConversationID, "session-456"),
+				attribute.String(semconvtrace.KeyGenAIAgentName, "test-agent"),
+				attribute.String(semconvtrace.KeyErrorType, "timeout"),
 			},
 		},
 		{
@@ -694,9 +724,9 @@ func TestExecuteToolAttributes_toAttributes(t *testing.T) {
 				ToolName:         "search",
 			},
 			expected: []attribute.KeyValue{
-				attribute.String(KeyGenAIOperationName, OperationExecuteTool),
-				attribute.String(KeyGenAISystem, "gpt-3.5"),
-				attribute.String(KeyGenAIToolName, "search"),
+				attribute.String(semconvtrace.KeyGenAIOperationName, OperationExecuteTool),
+				attribute.String(semconvtrace.KeyGenAISystem, "gpt-3.5"),
+				attribute.String(semconvtrace.KeyGenAIToolName, "search"),
 			},
 		},
 		{
@@ -707,10 +737,10 @@ func TestExecuteToolAttributes_toAttributes(t *testing.T) {
 				Error:            errors.New("some error"),
 			},
 			expected: []attribute.KeyValue{
-				attribute.String(KeyGenAIOperationName, OperationExecuteTool),
-				attribute.String(KeyGenAISystem, "gpt-4"),
-				attribute.String(KeyGenAIToolName, "tool1"),
-				attribute.String(KeyErrorType, ValueDefaultErrorType),
+				attribute.String(semconvtrace.KeyGenAIOperationName, OperationExecuteTool),
+				attribute.String(semconvtrace.KeyGenAISystem, "gpt-4"),
+				attribute.String(semconvtrace.KeyGenAIToolName, "tool1"),
+				attribute.String(semconvtrace.KeyErrorType, semconvtrace.ValueDefaultErrorType),
 			},
 		},
 	}

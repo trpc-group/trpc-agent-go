@@ -19,6 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/metric/histogram"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/metrics"
+	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 )
 
 var (
@@ -49,23 +50,23 @@ type invokeAgentAttributes struct {
 
 func (a invokeAgentAttributes) toAttributes() []attribute.KeyValue {
 	attrs := []attribute.KeyValue{
-		attribute.String(KeyGenAIOperationName, OperationInvokeAgent),
+		attribute.String(semconvtrace.KeyGenAIOperationName, OperationInvokeAgent),
 		attribute.Bool(metrics.KeyTRPCAgentGoStream, a.Stream),
-		attribute.String(KeyGenAISystem, a.System),
+		attribute.String(semconvtrace.KeyGenAISystem, a.System),
 	}
 	if a.AppName != "" {
-		attrs = append(attrs, attribute.String(KeyTRPCAgentGoAppName, a.AppName))
+		attrs = append(attrs, attribute.String(semconvtrace.KeyTRPCAgentGoAppName, a.AppName))
 	}
 	if a.UserID != "" {
-		attrs = append(attrs, attribute.String(KeyTRPCAgentGoUserID, a.UserID))
+		attrs = append(attrs, attribute.String(semconvtrace.KeyTRPCAgentGoUserID, a.UserID))
 	}
 	if a.AgentName != "" {
-		attrs = append(attrs, attribute.String(KeyGenAIAgentName, a.AgentName))
+		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIAgentName, a.AgentName))
 	}
 	if a.ErrorType != "" {
-		attrs = append(attrs, attribute.String(KeyErrorType, a.ErrorType))
+		attrs = append(attrs, attribute.String(semconvtrace.KeyErrorType, a.ErrorType))
 	} else if a.Error != nil {
-		attrs = append(attrs, attribute.String(KeyErrorType, ToErrorType(a.Error, ValueDefaultErrorType)))
+		attrs = append(attrs, attribute.String(semconvtrace.KeyErrorType, ToErrorType(a.Error, semconvtrace.ValueDefaultErrorType)))
 	}
 
 	return attrs
@@ -152,8 +153,8 @@ func (t *InvokeAgentTracker) RecordMetrics() func() {
 			InvokeAgentMetricGenAIClientOperationDuration.Record(t.ctx, requestDuration.Seconds(), metric.WithAttributes(otelAttrs...))
 		}
 
-		// Record time to first token
-		if InvokeAgentMetricGenAIClientTimeToFirstToken != nil {
+		// Record time to first token only when a meaningful payload was observed.
+		if t.firstTokenTimeDuration > 0 && InvokeAgentMetricGenAIClientTimeToFirstToken != nil {
 			InvokeAgentMetricGenAIClientTimeToFirstToken.Record(t.ctx, t.firstTokenTimeDuration.Seconds(),
 				metric.WithAttributes(otelAttrs...))
 		}
@@ -161,13 +162,13 @@ func (t *InvokeAgentTracker) RecordMetrics() func() {
 		// Record input token usage
 		if InvokeAgentMetricGenAIClientTokenUsage != nil {
 			InvokeAgentMetricGenAIClientTokenUsage.Record(t.ctx, int64(t.totalPromptTokens),
-				metric.WithAttributes(append(otelAttrs, attribute.String(KeyGenAITokenType, metrics.KeyTRPCAgentGoInputTokenType))...))
+				metric.WithAttributes(append(otelAttrs, attribute.String(semconvtrace.KeyGenAITokenType, metrics.KeyTRPCAgentGoInputTokenType))...))
 		}
 
 		// Record output token usage
 		if InvokeAgentMetricGenAIClientTokenUsage != nil {
 			InvokeAgentMetricGenAIClientTokenUsage.Record(t.ctx, int64(t.totalCompletionTokens),
-				metric.WithAttributes(append(otelAttrs, attribute.String(KeyGenAITokenType, metrics.KeyTRPCAgentGoOutputTokenType))...))
+				metric.WithAttributes(append(otelAttrs, attribute.String(semconvtrace.KeyGenAITokenType, metrics.KeyTRPCAgentGoOutputTokenType))...))
 		}
 
 	}

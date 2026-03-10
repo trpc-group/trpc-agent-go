@@ -137,7 +137,7 @@ func TestTraceWorkflow(t *testing.T) {
 
 		TraceWorkflow(span, wf)
 
-		if !hasAttr(span.attrs, KeyGenAIOperationName, OperationWorkflow) {
+		if !hasAttr(span.attrs, semconvtrace.KeyGenAIOperationName, OperationWorkflow) {
 			t.Fatalf("missing operation name attribute")
 		}
 		if !hasAttr(span.attrs, KeyGenAIWorkflowName, "myflow") {
@@ -162,8 +162,8 @@ func TestTraceWorkflow(t *testing.T) {
 
 		TraceWorkflow(span, wf)
 
-		require.True(t, hasAttr(span.attrs, KeyGenAIWorkflowRequest, `{"a":"req"}`))
-		require.True(t, hasAttr(span.attrs, KeyGenAIWorkflowResponse, `{"a":"rsp"}`))
+		require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIWorkflowRequest, `{"a":"req"}`))
+		require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIWorkflowResponse, `{"a":"rsp"}`))
 		require.NotEqual(t, codes.Error, span.status, "did not expect error status")
 	})
 
@@ -180,10 +180,10 @@ func TestTraceWorkflow(t *testing.T) {
 
 		var gotReq, gotRsp string
 		for _, kv := range span.attrs {
-			if string(kv.Key) == KeyGenAIWorkflowRequest {
+			if string(kv.Key) == semconvtrace.KeyGenAIWorkflowRequest {
 				gotReq = kv.Value.AsString()
 			}
-			if string(kv.Key) == KeyGenAIWorkflowResponse {
+			if string(kv.Key) == semconvtrace.KeyGenAIWorkflowResponse {
 				gotRsp = kv.Value.AsString()
 			}
 		}
@@ -200,7 +200,7 @@ func TestTraceWorkflow(t *testing.T) {
 
 		TraceWorkflow(span, wf)
 
-		require.True(t, hasAttr(span.attrs, KeyErrorType, ValueDefaultErrorType))
+		require.True(t, hasAttr(span.attrs, semconvtrace.KeyErrorType, semconvtrace.ValueDefaultErrorType))
 		require.Equal(t, codes.Error, span.status)
 		require.Equal(t, "boom", span.statusDesc)
 		require.Len(t, span.recordedErrors, 1)
@@ -265,7 +265,7 @@ func TestTraceBeforeAfter_Tool_Merged_Chat_Embedding(t *testing.T) {
 	inv := &agent.Invocation{AgentName: "alpha", InvocationID: "inv-1", Session: &session.Session{ID: "sess-1", UserID: "u-1"}}
 	s := newRecordingSpan()
 	TraceBeforeInvokeAgent(s, inv, "desc", "inst", gc)
-	if !hasAttr(s.attrs, KeyGenAIAgentName, "alpha") {
+	if !hasAttr(s.attrs, semconvtrace.KeyGenAIAgentName, "alpha") {
 		t.Fatalf("missing agent name")
 	}
 
@@ -286,12 +286,12 @@ func TestTraceBeforeAfter_Tool_Merged_Chat_Embedding(t *testing.T) {
 	evt2 := event.New("eid2", "a", event.WithResponse(rsp2))
 	s3 := newRecordingSpan()
 	TraceToolCall(s3, nil, decl, args, evt2, nil)
-	if !hasAttr(s3.attrs, KeyGenAIToolCallID, "c1") {
+	if !hasAttr(s3.attrs, semconvtrace.KeyGenAIToolCallID, "c1") {
 		t.Fatalf("missing call id")
 	}
 	s4 := newRecordingSpan()
 	TraceMergedToolCalls(s4, evt2)
-	if !hasAttr(s4.attrs, KeyGenAIToolName, ToolNameMergedTools) {
+	if !hasAttr(s4.attrs, semconvtrace.KeyGenAIToolName, ToolNameMergedTools) {
 		t.Fatalf("missing merged tool name")
 	}
 
@@ -306,7 +306,7 @@ func TestTraceBeforeAfter_Tool_Merged_Chat_Embedding(t *testing.T) {
 		EventID:          "e1",
 		TimeToFirstToken: 0,
 	})
-	if !hasAttr(s5.attrs, KeyInvocationID, "i1") {
+	if !hasAttr(s5.attrs, semconvtrace.KeyInvocationID, "i1") {
 		t.Fatalf("missing invocation id")
 	}
 
@@ -327,7 +327,7 @@ func TestTraceBeforeAfter_Tool_Merged_Chat_Embedding(t *testing.T) {
 		ServerAddress:         &srvAddr,
 		ServerPort:            &srvPort,
 	})
-	if !hasAttr(s6.attrs, KeyGenAIRequestModel, "text-emb") {
+	if !hasAttr(s6.attrs, semconvtrace.KeyGenAIRequestModel, "text-emb") {
 		t.Fatalf("missing model")
 	}
 	if !hasAttr(s6.attrs, semconvtrace.KeyGenAIRequestEncodingFormats, []string{"floats"}) {
@@ -360,13 +360,13 @@ func TestTraceBeforeAfter_Tool_Merged_Chat_Embedding(t *testing.T) {
 	if s7.status != codes.Error {
 		t.Fatalf("embedding expected error status")
 	}
-	if !hasAttr(s7.attrs, KeyGenAIUsageInputTokens, tok) {
+	if !hasAttr(s7.attrs, semconvtrace.KeyGenAIUsageInputTokens, tok) {
 		t.Fatalf("missing input token")
 	}
-	if !hasAttr(s7.attrs, KeyErrorType, ValueDefaultErrorType) {
+	if !hasAttr(s7.attrs, semconvtrace.KeyErrorType, semconvtrace.ValueDefaultErrorType) {
 		t.Fatalf("missing error type")
 	}
-	if !hasAttr(s7.attrs, KeyErrorMessage, "bad") {
+	if !hasAttr(s7.attrs, semconvtrace.KeyErrorMessage, "bad") {
 		t.Fatalf("missing error message")
 	}
 }
@@ -507,9 +507,9 @@ func TestTraceToolCall_NilPaths(t *testing.T) {
 			TraceToolCall(span, tt.sess, decl, args, tt.rspEvent, tt.err)
 
 			// Verify basic attributes are always set
-			require.True(t, hasAttr(span.attrs, KeyGenAISystem, SystemTRPCGoAgent))
-			require.True(t, hasAttr(span.attrs, KeyGenAIOperationName, OperationExecuteTool))
-			require.True(t, hasAttr(span.attrs, KeyGenAIToolName, "test_tool"))
+			require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAISystem, semconvtrace.SystemTRPCGoAgent))
+			require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIOperationName, OperationExecuteTool))
+			require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIToolName, "test_tool"))
 
 			// Verify error status when err is provided
 			if tt.err != nil && tt.rspEvent != nil && tt.rspEvent.Response != nil && tt.rspEvent.Response.Error == nil {
@@ -540,8 +540,8 @@ func TestTraceMergedToolCalls_NilPaths(t *testing.T) {
 			TraceMergedToolCalls(span, tt.rspEvent)
 
 			// Verify basic attributes are always set
-			require.True(t, hasAttr(span.attrs, KeyGenAISystem, SystemTRPCGoAgent))
-			require.True(t, hasAttr(span.attrs, KeyGenAIToolName, ToolNameMergedTools))
+			require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAISystem, semconvtrace.SystemTRPCGoAgent))
+			require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIToolName, ToolNameMergedTools))
 		})
 	}
 }
@@ -577,8 +577,8 @@ func TestTraceBeforeInvokeAgent_NilPaths(t *testing.T) {
 			span := newRecordingSpan()
 			TraceBeforeInvokeAgent(span, tt.invoke, "desc", "instructions", tt.genConfig)
 
-			require.True(t, hasAttr(span.attrs, KeyGenAIAgentName, "test-agent"))
-			require.True(t, hasAttr(span.attrs, KeyInvocationID, "inv1"))
+			require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIAgentName, "test-agent"))
+			require.True(t, hasAttr(span.attrs, semconvtrace.KeyInvocationID, "inv1"))
 		})
 	}
 }
@@ -620,8 +620,8 @@ func TestTraceAfterInvokeAgent_NilPaths(t *testing.T) {
 			TraceAfterInvokeAgent(span, tt.rspEvent, tt.tokenUsage, 0)
 
 			if tt.tokenUsage != nil && tt.rspEvent != nil && tt.rspEvent.Response != nil {
-				require.True(t, hasAttr(span.attrs, KeyGenAIUsageInputTokens, int64(tt.tokenUsage.PromptTokens)))
-				require.True(t, hasAttr(span.attrs, KeyGenAIUsageOutputTokens, int64(tt.tokenUsage.CompletionTokens)))
+				require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIUsageInputTokens, int64(tt.tokenUsage.PromptTokens)))
+				require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIUsageOutputTokens, int64(tt.tokenUsage.CompletionTokens)))
 			}
 		})
 	}
@@ -651,7 +651,7 @@ func TestTraceChat_WithTimeToFirstToken(t *testing.T) {
 		TimeToFirstToken: 100 * time.Millisecond,
 	})
 
-	require.True(t, hasAttr(span.attrs, KeyTRPCAgentGoClientTimeToFirstToken, 0.1))
+	require.True(t, hasAttr(span.attrs, semconvtrace.KeyTRPCAgentGoClientTimeToFirstToken, 0.1))
 }
 
 func TestTraceChat_WithTaskType(t *testing.T) {
@@ -792,7 +792,7 @@ func TestBuildRequestAttributes_ToolDefinitions(t *testing.T) {
 
 	var toolAttr *attribute.KeyValue
 	for i := range attrs {
-		if string(attrs[i].Key) == KeyGenAIRequestToolDefinitions {
+		if string(attrs[i].Key) == semconvtrace.KeyGenAIRequestToolDefinitions {
 			toolAttr = &attrs[i]
 			break
 		}
@@ -877,19 +877,19 @@ func TestBuildResponseAttributes(t *testing.T) {
 			} else {
 				require.NotNil(t, attrs)
 				// Verify basic attributes
-				require.True(t, hasAttr(attrs, KeyGenAIResponseModel, tt.rsp.Model))
-				require.True(t, hasAttr(attrs, KeyGenAIResponseID, tt.rsp.ID))
+				require.True(t, hasAttr(attrs, semconvtrace.KeyGenAIResponseModel, tt.rsp.Model))
+				require.True(t, hasAttr(attrs, semconvtrace.KeyGenAIResponseID, tt.rsp.ID))
 
 				// Verify cached prompt tokens attribute when provided
 				if tt.rsp.Usage != nil {
 					if tt.rsp.Usage.PromptTokensDetails.CachedTokens != 0 {
-						require.True(t, hasAttr(attrs, KeyGenAIUsageInputTokensCached, int64(tt.rsp.Usage.PromptTokensDetails.CachedTokens)))
+						require.True(t, hasAttr(attrs, semconvtrace.KeyGenAIUsageInputTokensCached, int64(tt.rsp.Usage.PromptTokensDetails.CachedTokens)))
 					}
 					if tt.rsp.Usage.PromptTokensDetails.CacheReadTokens != 0 {
-						require.True(t, hasAttr(attrs, KeyGenAIUsageInputTokensCacheRead, int64(tt.rsp.Usage.PromptTokensDetails.CacheReadTokens)))
+						require.True(t, hasAttr(attrs, semconvtrace.KeyGenAIUsageInputTokensCacheRead, int64(tt.rsp.Usage.PromptTokensDetails.CacheReadTokens)))
 					}
 					if tt.rsp.Usage.PromptTokensDetails.CacheCreationTokens != 0 {
-						require.True(t, hasAttr(attrs, KeyGenAIUsageInputTokensCacheCreation, int64(tt.rsp.Usage.PromptTokensDetails.CacheCreationTokens)))
+						require.True(t, hasAttr(attrs, semconvtrace.KeyGenAIUsageInputTokensCacheCreation, int64(tt.rsp.Usage.PromptTokensDetails.CacheCreationTokens)))
 					}
 				}
 			}
@@ -959,7 +959,7 @@ func TestTraceToolCall_EmptyToolCallIDs(t *testing.T) {
 
 	TraceToolCall(span, nil, decl, args, evt, nil)
 
-	require.True(t, hasAttr(span.attrs, KeyGenAIToolName, "test_tool"))
+	require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIToolName, "test_tool"))
 }
 
 func TestTraceMergedToolCalls_WithError(t *testing.T) {
@@ -978,7 +978,7 @@ func TestTraceMergedToolCalls_WithError(t *testing.T) {
 	TraceMergedToolCalls(span, evt)
 
 	require.Equal(t, codes.Error, span.status)
-	require.True(t, hasAttr(span.attrs, KeyGenAIToolCallID, "call1"))
+	require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIToolCallID, "call1"))
 }
 
 func TestTraceBeforeInvokeAgent_JSONMarshalError(t *testing.T) {
@@ -993,7 +993,7 @@ func TestTraceBeforeInvokeAgent_JSONMarshalError(t *testing.T) {
 
 	TraceBeforeInvokeAgent(span, inv, "desc", "instructions", nil)
 
-	require.True(t, hasAttr(span.attrs, KeyGenAIAgentName, "test-agent"))
+	require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIAgentName, "test-agent"))
 }
 
 func TestBuildRequestAttributes_JSONMarshalPaths(t *testing.T) {
@@ -1007,7 +1007,7 @@ func TestBuildRequestAttributes_JSONMarshalPaths(t *testing.T) {
 	// Verify LLM request attribute is set
 	found := false
 	for _, attr := range attrs {
-		if string(attr.Key) == KeyLLMRequest {
+		if string(attr.Key) == semconvtrace.KeyLLMRequest {
 			found = true
 			break
 		}
@@ -1028,7 +1028,7 @@ func TestBuildResponseAttributes_JSONMarshalPaths(t *testing.T) {
 	// Verify LLM response attribute is set
 	found := false
 	for _, attr := range attrs {
-		if string(attr.Key) == KeyLLMResponse {
+		if string(attr.Key) == semconvtrace.KeyLLMResponse {
 			found = true
 			break
 		}
@@ -1151,7 +1151,7 @@ func TestBuildRequestAttributes_StreamAttribute(t *testing.T) {
 
 			found := false
 			for _, attr := range attrs {
-				if string(attr.Key) == KeyGenAIRequestIsStream {
+				if string(attr.Key) == semconvtrace.KeyGenAIRequestIsStream {
 					found = true
 					require.Equal(t, tt.expectStream, attr.Value.AsBool())
 					break
