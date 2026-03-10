@@ -7,8 +7,10 @@ This report evaluates the long-term conversational memory of
 2024). It covers two versions:
 
 - **trpc-agent-go (original)**: Baseline version (Auto extraction + pgvector)
-- **trpc-agent-go (optimized)**: After multiple rounds of memory
-  extraction and retrieval optimization
+- **trpc-agent-go (optimized)**: After multiple rounds of optimization
+  including contextualized memory extraction, episodic memory
+  classification, hybrid search, and multi-pass retrieval
+  (see Section 2.3 for details)
 
 Both versions are compared against four Python agent frameworks
 (AutoGen, Agno, ADK, CrewAI) and ten external memory systems
@@ -33,6 +35,65 @@ Both versions are compared against four Python agent frameworks
 | **Auto + pgvector (original)** | Background extractor writes memories; vector retrieval at query time (baseline) |
 | **Auto + pgvector (optimized)** | Optimized memory extraction strategy and multi-pass retrieval |
 
+### 2.3 Optimizations: Original → Optimized
+
+The optimized version builds on the original baseline with a series
+of targeted improvements across the memory extraction, storage, and
+retrieval pipeline:
+
+1. **Contextualized Memory Extraction** — The original extractor
+   produces flat, unstructured memory strings. The optimized version
+   uses a comprehensive extraction prompt that enforces **atomicity**
+   (one fact per memory), **completeness** (all speakers, all
+   details), and **specificity** (exact names, dates, quantities).
+   This significantly improves information density and recall.
+
+2. **Episodic Memory Classification** — Each extracted memory is
+   classified as either a **Fact** (stable attributes, preferences,
+   relationships) or an **Episode** (time-anchored events with
+   `event_time`, `participants`, and `location` metadata). This
+   structured schema enables temporal filtering and event-time
+   ordering during retrieval, which is critical for multi-hop and
+   temporal questions.
+
+3. **Absolute Date Resolution** — Relative time expressions in
+   conversations ("yesterday", "last month") are resolved to
+   absolute ISO 8601 dates using the session's reference date
+   before being stored. This prevents temporal drift and enables
+   accurate date-based queries.
+
+4. **Topic Tagging** — Each memory is tagged with descriptive
+   topics (e.g., `["hiking", "Mt. Fuji", "travel"]`), and the
+   extractor is instructed to reuse existing topic names rather
+   than inventing synonyms. Topics improve retrieval relevance
+   and enable future topic-based filtering.
+
+5. **Hybrid Search (Vector + Keyword)** — The original uses
+   pure vector similarity search. The optimized version adds
+   **hybrid search** that combines vector cosine similarity with
+   PostgreSQL full-text search (`tsvector/tsquery`), merged via
+   **Reciprocal Rank Fusion (RRF)**. This improves recall for
+   queries containing specific entity names, book titles, or
+   exact-match terms that vector embeddings alone may not rank
+   highly.
+
+6. **Multi-Pass Retrieval** — Instead of a single search, the
+   QA agent performs **2–3 search passes** with different query
+   strategies (e.g., keyword-style query, entity-focused query,
+   broad name query). Each pass uses different angles to maximize
+   recall before the final answer.
+
+7. **Kind Fallback** — When a kind-filtered search (e.g.,
+   episodes only) returns too few results (< 3), the system
+   automatically falls back to an unfiltered search and merges
+   both result sets, prioritizing the requested kind. This
+   prevents missed results when kind classification is uncertain.
+
+8. **Content Deduplication** — Near-duplicate memories (> 80%
+   word-level Jaccard similarity) are deduplicated, keeping only
+   the highest-scored version. This reduces redundant context
+   in the retrieval results.
+
 ## 3. Results
 
 ### 3.1 Internal Scenario Comparison
@@ -41,56 +102,56 @@ Both versions are compared against four Python agent frameworks
 
 | Scenario | F1 | BLEU | LLM Score | Tokens/QA | Calls/QA | Latency | Total Time |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Long-Context | **0.469** | **0.426** | **0.526** | 18,767 | 1.0 | 2,607ms | 1h26m |
+| Long-Context | **0.469** | **0.426** | **0.526** | 18,776 | 1.0 | 2,607ms | 1h26m |
 | Auto pgvector (optimized) | 0.458 | 0.422 | 0.527 | 17,359 | 3.0 | 8,303ms | 4h35m |
-| Auto pgvector (original) | 0.351 | 0.326 | 0.384 | 3,842 | 2.0 | 5,587ms | 3h05m |
+| Auto pgvector (original) | 0.399 | 0.371 | 0.416 | 3,056 | 2.0 | 6,659ms | 3h40m |
 
-> The optimized version's F1 improved from 0.351 to **0.458**
-> (+30.6%), reaching **97.7%** of Long-Context F1 (up from 74.8%
+> The optimized version's F1 improved from 0.399 to **0.458**
+> (+14.8%), reaching **97.7%** of Long-Context F1 (up from 85.1%
 > for original).
 
 **Table 2: F1 by Category**
 
 | Category | Count | Long-Context | optimized | original | improvement |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| single-hop | 282 | 0.320 | **0.388** | 0.276 | +40.6% |
-| multi-hop | 321 | 0.308 | **0.445** | 0.108 | +312.0% |
-| temporal | 96 | 0.088 | **0.222** | 0.098 | +126.5% |
-| open-domain | 841 | **0.518** | 0.446 | 0.310 | +43.9% |
-| adversarial | 446 | **0.667** | 0.585 | 0.704 | -16.9% |
+| single-hop | 282 | 0.320 | **0.388** | 0.316 | +22.8% |
+| multi-hop | 321 | 0.308 | **0.445** | 0.096 | +363.5% |
+| temporal | 96 | 0.088 | **0.222** | 0.088 | +152.3% |
+| open-domain | 841 | **0.518** | 0.446 | 0.358 | +24.6% |
+| adversarial | 446 | **0.667** | 0.585 | **0.814** | -28.1% |
 
 **Table 3: Weighted Average F1**
 
 | Average | Long-Context | optimized | original |
 | --- | ---: | ---: | ---: |
-| 5-category weighted (÷1986) | **0.469** | 0.458 | 0.351 |
-| 4-category weighted (÷1540, excl. adversarial) | 0.411 | **0.421** | 0.249 |
+| 5-category weighted (÷1986) | **0.469** | 0.458 | 0.399 |
+| 4-category weighted (÷1540, excl. adversarial) | 0.411 | **0.421** | 0.279 |
 
 > The optimized version achieves improvements across all four
-> knowledge categories. Multi-hop improved from 0.108 to 0.445
-> (+312%), the most significant gain. Temporal improved from
-> 0.098 to 0.222 (+127%), the second largest gain. Adversarial
-> decreased (0.704 → 0.585) as the original had an overly
+> knowledge categories. Multi-hop improved from 0.096 to 0.445
+> (+364%), the most significant gain. Temporal improved from
+> 0.088 to 0.222 (+152%), the second largest gain. Adversarial
+> decreased (0.814 → 0.585) as the original had an overly
 > aggressive refusal tendency.
 
 **Table 4: Per-Sample F1**
 
 | Sample | #QA | Long-Context | optimized | original |
 | --- | ---: | ---: | ---: | ---: |
-| locomo10_1 | 199 | 0.455 | **0.461** | 0.358 |
-| locomo10_2 | 105 | **0.496** | 0.428 | 0.299 |
-| locomo10_3 | 193 | **0.527** | 0.481 | 0.401 |
-| locomo10_4 | 260 | **0.466** | 0.439 | 0.341 |
-| locomo10_5 | 242 | 0.433 | **0.486** | 0.324 |
-| locomo10_6 | 158 | **0.511** | 0.474 | 0.248 |
-| locomo10_7 | 190 | **0.461** | 0.439 | 0.375 |
-| locomo10_8 | 239 | 0.453 | **0.466** | 0.350 |
-| locomo10_9 | 196 | 0.450 | **0.456** | 0.384 |
-| locomo10_10 | 204 | **0.471** | 0.439 | 0.394 |
-| **Average** | **199** | **0.469** | **0.458** | **0.351** |
+| locomo10_1 | 199 | 0.455 | **0.461** | 0.331 |
+| locomo10_2 | 105 | **0.496** | 0.428 | 0.302 |
+| locomo10_3 | 193 | **0.527** | 0.481 | 0.432 |
+| locomo10_4 | 260 | **0.466** | 0.439 | 0.378 |
+| locomo10_5 | 242 | 0.433 | **0.486** | 0.451 |
+| locomo10_6 | 158 | **0.511** | 0.474 | 0.455 |
+| locomo10_7 | 190 | **0.461** | 0.439 | 0.407 |
+| locomo10_8 | 239 | 0.453 | **0.466** | 0.404 |
+| locomo10_9 | 196 | 0.450 | **0.456** | 0.383 |
+| locomo10_10 | 204 | **0.471** | 0.439 | 0.407 |
+| **Average** | **199** | **0.469** | **0.458** | **0.399** |
 
 > The optimized version improves on all 10 samples vs original, and
-> surpasses Long-Context on 3 samples.
+> surpasses Long-Context on 4 samples.
 
 ### 3.2 Memory vs Long-Context
 
@@ -103,7 +164,7 @@ It is effective but has fundamental limitations in production:
 | **Context window** | Bounded by model limit (128K for GPT-4o-mini) | Unbounded — retrieves only relevant memories |
 | **Scaling** | Cost grows linearly with conversation length | Cost stays near-constant (top-K retrieval) |
 | **F1 quality** | 0.469 | **0.458** (achieves 97.7%) |
-| **Adversarial robustness** | 0.667 | 0.590 |
+| **Adversarial robustness** | 0.667 | 0.585 |
 
 ---
 
@@ -362,7 +423,7 @@ and evaluation pipeline.
 | AutoGen | 0.457 | 0.414 | 0.540 | 1,943 | 1.0 | 3,816ms | 2h06m |
 | CrewAI | 0.427 | 0.385 | 0.479 | 2,839 | 2.0 | 8,081ms | 4h27m |
 | ADK | 0.362 | 0.309 | 0.476 | 49,224 | 2.0 | 5,578ms | 3h04m |
-| trpc-agent-go (original) | 0.351 | 0.326 | 0.384 | 3,842 | 2.0 | 5,587ms | 3h05m |
+| trpc-agent-go (original) | 0.399 | 0.371 | 0.416 | 3,056 | 2.0 | 6,659ms | 3h40m |
 | Agno | 0.332 | 0.289 | 0.494 | 10,436 | 1.0 | 14,127ms | 7h47m |
 
 > **LLM Score aggregation note.** All frameworks now use the same
@@ -378,8 +439,8 @@ Memory F1 (10 samples, 1986 QA)
 trpc-agent-go (opt)    |==========================================| 0.458
 AutoGen                |========================================= | 0.457
 CrewAI                 |======================================    | 0.427
+trpc-agent-go (origin) |====================================      | 0.399
 ADK                    |=================================         | 0.362
-trpc-agent-go (origin) |================================          | 0.351
 Agno                   |==============================            | 0.332
                        +------------------------------------------+
                        0.0      0.1      0.2      0.3      0.4   0.5
@@ -391,18 +452,18 @@ Agno                   |==============================            | 0.332
 
 | Category | Count | trpc (opt) | AutoGen | CrewAI | trpc (original) | ADK | Agno |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| single-hop | 282 | **0.404** | 0.377 | 0.322 | 0.276 | 0.299 | 0.240 |
-| multi-hop | 321 | 0.450 | **0.512** | 0.380 | 0.108 | 0.418 | 0.283 |
-| temporal | 96 | **0.200** | 0.176 | 0.140 | 0.098 | 0.120 | 0.076 |
-| open-domain | 841 | 0.439 | **0.594** | 0.501 | 0.310 | 0.494 | 0.292 |
-| adversarial | 446 | 0.590 | 0.272 | 0.448 | **0.704** | 0.163 | 0.556 |
+| single-hop | 282 | **0.404** | 0.377 | 0.322 | 0.316 | 0.299 | 0.240 |
+| multi-hop | 321 | 0.450 | **0.512** | 0.380 | 0.096 | 0.418 | 0.283 |
+| temporal | 96 | **0.200** | 0.176 | 0.140 | 0.088 | 0.120 | 0.076 |
+| open-domain | 841 | 0.439 | **0.594** | 0.501 | 0.358 | 0.494 | 0.292 |
+| adversarial | 446 | 0.590 | 0.272 | 0.448 | **0.814** | 0.163 | 0.556 |
 
 **Table 9: Weighted Average F1**
 
 | Average | trpc (opt) | AutoGen | CrewAI | trpc (original) | ADK | Agno |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 5-category weighted (÷1986) | **0.458** | 0.457 | 0.427 | 0.351 | 0.362 | 0.332 |
-| 4-category weighted (÷1540) | 0.421 | **0.511** | 0.420 | 0.249 | 0.420 | 0.267 |
+| 5-category weighted (÷1986) | **0.458** | 0.457 | 0.427 | 0.399 | 0.362 | 0.332 |
+| 4-category weighted (÷1540) | 0.421 | **0.511** | 0.420 | 0.279 | 0.420 | 0.267 |
 
 > 5-category weighted F1: optimized **0.458** ranks first,
 > on par with AutoGen (0.457). 4-category weighted 0.421 is
@@ -416,24 +477,26 @@ Agno                   |==============================            | 0.332
 | --- | ---: | ---: | ---: | ---: |
 | AutoGen | 0.457 | 3,859,412 | 1,943 | 118.4 |
 | CrewAI | 0.427 | 5,639,085 | 2,839 | 75.7 |
-| trpc-agent-go (original) | 0.351 | 7,687,973 | 3,842 | 45.7 |
+| trpc-agent-go (original) | 0.399 | 6,068,802 | 3,056 | 65.7 |
 | trpc-agent-go (optimized) | **0.458** | 34,590,410 | 17,359 | 13.2 |
 | Agno | 0.332 | 20,725,728 | 10,436 | 16.0 |
 | ADK | 0.362 | 97,759,453 | 49,224 | 3.7 |
 
 > AutoGen has the best token efficiency (118.4 F1/billion tokens),
 > achieving 0.457 F1 with minimal token consumption. CrewAI ranks
-> second (75.7), reaching 0.427 F1 with only 2,839 tokens/QA.
-> The optimized version trades more tokens (17,359/QA) for the
-> highest F1 (0.458), at 13.2 F1/billion tokens. ADK has the worst
-> efficiency — 49,224 tokens/QA for only 0.362 F1.
+> second (75.7), reaching 0.427 F1 with only 2,839 tokens/QA. The
+> original version ranks third (65.7), achieving 0.399 F1 with
+> 3,056 tokens/QA. The optimized version trades more tokens
+> (17,359/QA) for the highest F1 (0.458), at 13.2 F1/billion
+> tokens. ADK has the worst efficiency — 49,224 tokens/QA for only
+> 0.362 F1.
 
 ```
 Total Evaluation Time (memory scenario, 1986 QA)
 
 AutoGen         |====                                     | 2h06m
 ADK             |======                                   | 3h04m
-trpc (original) |======                                   | 3h05m
+trpc (original) |========                                 | 3h40m
 CrewAI          |=========                                | 4h27m
 trpc (opt)      |=========                                | 4h35m
 Agno            |===============================          | 7h47m
@@ -441,10 +504,10 @@ Agno            |===============================          | 7h47m
                 0h       2h       4h       6h       8h
 ```
 
-**Why the optimized version is slower (4h35m vs 3h05m):**
+**Why the optimized version is slower (4h35m vs 3h40m):**
 
-The optimized version consumes 4.5x more tokens/QA (17,359 vs 3,842)
-and takes 1.49x longer per QA (8,303ms vs 5,587ms). The root cause
+The optimized version consumes 5.7x more tokens/QA (17,359 vs 3,056)
+and takes 1.25x longer per QA (8,303ms vs 6,659ms). The root cause
 is the three-step agentic workflow:
 
 1. **Step 1 — Tool call #1** (~1,650 prompt tokens): The LLM reads
@@ -464,14 +527,14 @@ is the three-step agentic workflow:
 The key overhead is **cumulative context re-reading**: each step
 re-processes everything from all prior steps. Step 3 alone accounts
 for ~10,000 prompt tokens. In contrast, the original version uses a
-2-call agentic pattern with far fewer/shorter memory entries (~3,842
+2-call agentic pattern with far fewer/shorter memory entries (~3,056
 tokens total for both steps), because its memories are stored as
 raw conversation turns rather than extracted structured
 facts/episodes.
 
 Despite the higher token cost, the optimized version achieves a
-significantly better F1/cost trade-off: **+30.6% F1** (0.351→0.458)
-for **4.5x token cost**, making it worthwhile for production use
+significantly better F1/cost trade-off: **+14.8% F1** (0.399→0.458)
+for **5.7x token cost**, making it worthwhile for production use
 where answer quality matters more than token budget.
 
 ### 4.6 ADK Failure Analysis
@@ -513,17 +576,17 @@ evaluation, ADK encountered context overflow issues on some samples:
 
 | Sample | #QA | trpc (opt) | AutoGen | CrewAI | trpc (original) | ADK | Agno |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| conv-26 | 199 | **0.469** | 0.384 | 0.355 | 0.358 | 0.337 | 0.296 |
-| conv-30 | 105 | 0.430 | **0.451** | 0.439 | 0.299 | 0.379 | 0.334 |
-| conv-41 | 193 | 0.507 | **0.513** | 0.440 | 0.401 | 0.335 | 0.387 |
-| conv-42 | 260 | 0.423 | **0.439** | 0.408 | 0.341 | 0.343 | 0.338 |
-| conv-43 | 242 | **0.477** | 0.486 | 0.413 | 0.324 | 0.355 | 0.341 |
-| conv-44 | 158 | 0.464 | **0.491** | **0.509** | 0.248 | 0.384 | 0.289 |
-| conv-47 | 190 | **0.489** | **0.496** | 0.405 | 0.375 | 0.374 | 0.321 |
-| conv-48 | 239 | 0.461 | **0.463** | 0.432 | 0.350 | 0.392 | 0.328 |
-| conv-49 | 196 | **0.440** | 0.418 | 0.407 | 0.384 | 0.371 | 0.302 |
-| conv-50 | 204 | 0.421 | **0.475** | **0.487** | 0.394 | 0.363 | 0.374 |
-| **Average** | **199** | **0.458** | 0.457 | 0.427 | 0.351 | 0.362 | 0.332 |
+| conv-26 | 199 | **0.469** | 0.384 | 0.355 | 0.331 | 0.337 | 0.296 |
+| conv-30 | 105 | 0.430 | **0.451** | 0.439 | 0.302 | 0.379 | 0.334 |
+| conv-41 | 193 | 0.507 | **0.513** | 0.440 | 0.432 | 0.335 | 0.387 |
+| conv-42 | 260 | 0.423 | **0.439** | 0.408 | 0.378 | 0.343 | 0.338 |
+| conv-43 | 242 | **0.477** | 0.486 | 0.413 | 0.451 | 0.355 | 0.341 |
+| conv-44 | 158 | 0.464 | **0.491** | **0.509** | 0.455 | 0.384 | 0.289 |
+| conv-47 | 190 | **0.489** | **0.496** | 0.405 | 0.407 | 0.374 | 0.321 |
+| conv-48 | 239 | 0.461 | **0.463** | 0.432 | 0.404 | 0.392 | 0.328 |
+| conv-49 | 196 | **0.440** | 0.418 | 0.407 | 0.383 | 0.371 | 0.302 |
+| conv-50 | 204 | 0.421 | **0.475** | **0.487** | 0.407 | 0.363 | 0.374 |
+| **Average** | **199** | **0.458** | 0.457 | 0.427 | 0.399 | 0.362 | 0.332 |
 
 > The optimized version beats AutoGen on 4 out of 10 samples.
 
@@ -562,7 +625,7 @@ cross-system comparability (Mem0 paper does not include it).
 | OpenAI Memory | 0.343 | 0.201 | 0.393 | 0.140 | 0.328 | Mem0 paper |
 | MemGPT | 0.267 | 0.092 | 0.410 | 0.255 | 0.308 | Mem0 paper |
 | LoCoMo (paper baseline) | 0.250 | 0.120 | 0.404 | 0.184 | 0.303 | Mem0 paper |
-| trpc-agent (original) | 0.276 | 0.108 | 0.310 | 0.098 | 0.249 | This work |
+| trpc-agent (original) | 0.316 | 0.096 | 0.358 | 0.088 | 0.279 | This work |
 | Agno | 0.240 | 0.283 | 0.292 | 0.076 | 0.267 | This work |
 | ReadAgent | 0.092 | 0.053 | 0.097 | 0.126 | 0.089 | Mem0 paper |
 | MemoryBank | 0.050 | 0.056 | 0.066 | 0.097 | 0.063 | Mem0 paper |
@@ -583,8 +646,8 @@ A-Mem               |===========================               | 0.347
 OpenAI Memory       |==========================                | 0.328
 MemGPT              |========================                  | 0.308
 LoCoMo (baseline)   |========================                  | 0.303
+trpc-agent (origin) |======================                    | 0.279
 Agno                |====================                      | 0.267
-trpc-agent (origi)  |==================                        | 0.249
                     +------------------------------------------+
                     0.0      0.1      0.2      0.3      0.4   0.5
 ```
@@ -596,8 +659,8 @@ trpc-agent (origi)  |==================                        | 0.249
 > | **trpc-agent (optimized)** | **0.458** |
 > | AutoGen | 0.457 |
 > | CrewAI | 0.427 |
+> | trpc-agent (original) | 0.399 |
 > | ADK | 0.362 |
-> | trpc-agent (original) | 0.351 |
 > | Agno | 0.332 |
 
 **Key takeaways:**
@@ -613,8 +676,8 @@ trpc-agent (origi)  |==================                        | 0.249
 4. **Temporal reasoning** (0.222) remains the primary gap — Mem0/Mem0g
    reach 0.489/0.516 in this category. This is the next optimization
    target.
-5. Compared to the original, the optimized version rose from near-bottom to
-   **on par with Mem0** (0.249 → 0.421, a 69.1% improvement).
+5. Compared to the original, the optimized version rose from mid-range to
+   **on par with Mem0** (0.279 → 0.421, a 51.0% improvement).
 
 ---
 
@@ -624,11 +687,11 @@ trpc-agent (origi)  |==================                        | 0.249
 
 1. **trpc-agent-go (optimized) ranks #1 in 5-category weighted F1**
    (0.458), the highest score among all frameworks evaluated. F1
-   improved from original's 0.351 to **0.458** (+30.6%), reaching
+   improved from original's 0.399 to **0.458** (+14.8%), reaching
    **97.7%** of the Long-Context upper bound. All four knowledge
    categories show substantial gains, with multi-hop jumping from
-   0.108 to 0.445 (+312%) and temporal jumping from 0.098 to
-   0.222 (+127%).
+   0.096 to 0.445 (+364%) and temporal jumping from 0.088 to
+   0.222 (+152%).
 
 2. **Well-balanced category performance.** The optimized version
    achieves the highest score among all frameworks in temporal
@@ -712,7 +775,7 @@ trpc-agent (origi)  |==================                        | 0.249
 | --- | --- | --- | --- | --- | --- |
 | Long-Context | 0.320/0.251/0.320 | 0.308/0.273/0.260 | 0.088/0.068/0.165 | 0.518/0.457/0.662 | 0.667/0.667/0.668 |
 | Auto pgvec (optimized) | 0.388/0.317/0.353 | 0.445/0.406/0.498 | 0.222/0.178/0.360 | 0.446/0.405/0.585 | 0.585/0.585/0.585 |
-| Auto pgvec (original) | 0.276/0.220/0.256 | 0.108/0.092/0.100 | 0.098/0.067/0.215 | 0.310/0.280/0.384 | 0.704/0.704/0.704 |
+| Auto pgvec (original) | 0.316/0.250/0.270 | 0.096/0.088/0.060 | 0.088/0.068/0.115 | 0.358/0.319/0.425 | 0.814/0.814/0.814 |
 
 ### C. Token Usage — Full Breakdown
 
@@ -720,7 +783,7 @@ trpc-agent (origi)  |==================                        | 0.249
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Long-Context | 37,272,167 | 16,104 | 37,288,271 | 1,986 | 1.0 |
 | Auto pgvec (optimized) | 34,474,411 | 115,999 | 34,590,410 | 5,989 | 3.0 |
-| Auto pgvec (original) | 7,630,808 | 57,165 | 7,687,973 | 4,017 | 2.0 |
+| Auto pgvec (original) | 6,011,025 | 57,777 | 6,068,802 | 3,999 | 2.0 |
 | AutoGen | 3,842,576 | 16,836 | 3,859,412 | 1,986 | 1.0 |
 | CrewAI | 5,360,840 | 278,245 | 5,639,085 | 3,972 | 2.0 |
 | Agno | 20,694,534 | 31,194 | 20,725,728 | 1,986 | 1.0 |
