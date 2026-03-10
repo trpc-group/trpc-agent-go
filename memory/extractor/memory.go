@@ -267,8 +267,8 @@ func (e *memoryExtractor) buildSystemPrompt(
 	sb.WriteString(e.availableActionsBlock())
 	sb.WriteString("</available_actions>\n")
 
-	// Append existing memories with episodic metadata so the LLM can
-	// properly deduplicate and avoid re-creating the same episodes.
+	// Append existing memories with topics and episodic metadata so the
+	// LLM can reuse consistent topic names and avoid re-creating episodes.
 	if len(existing) > 0 {
 		sb.WriteString("\n<existing_memories>\n")
 		for _, entry := range existing {
@@ -291,7 +291,8 @@ var toolActionDescriptions = map[string]string{
 		"with new or corrected information. " +
 		"Prefer updating over adding a near-duplicate.",
 	memory.DeleteToolName: "Delete a memory " +
-		"when the user explicitly asks to forget something.",
+		"when the user asks to forget something, or when it is " +
+		"clearly outdated or contradicted by newer information.",
 	memory.ClearToolName: "Clear all memories " +
 		"only when the user explicitly asks to forget everything.",
 }
@@ -407,21 +408,35 @@ func (e *memoryExtractor) runAfterModelCallbacks(
 func formatExistingMemory(entry *memory.Entry) string {
 	m := entry.Memory
 	base := fmt.Sprintf("- [%s] %s", entry.ID, m.Memory)
-	if m.Kind == "" || m.Kind == memory.MemoryKindFact {
+	var meta []string
+	if len(m.Topics) > 0 {
+		meta = append(meta,
+			fmt.Sprintf("topics: %s",
+				strings.Join(m.Topics, ", ")))
+	}
+	if m.Kind != "" && m.Kind != memory.MemoryKindFact {
+		meta = append(meta,
+			fmt.Sprintf("kind=%s", m.Kind))
+		if m.EventTime != nil {
+			meta = append(meta,
+				fmt.Sprintf("event_time=%s",
+					m.EventTime.Format("2006-01-02")))
+		}
+		if len(m.Participants) > 0 {
+			meta = append(meta,
+				fmt.Sprintf("participants=%s",
+					strings.Join(m.Participants, ",")))
+		}
+		if m.Location != "" {
+			meta = append(meta,
+				fmt.Sprintf("location=%s", m.Location))
+		}
+	}
+	if len(meta) == 0 {
 		return base + "\n"
 	}
-	var meta []string
-	meta = append(meta, fmt.Sprintf("kind=%s", m.Kind))
-	if m.EventTime != nil {
-		meta = append(meta, fmt.Sprintf("event_time=%s", m.EventTime.Format("2006-01-02")))
-	}
-	if len(m.Participants) > 0 {
-		meta = append(meta, fmt.Sprintf("participants=%s", strings.Join(m.Participants, ",")))
-	}
-	if m.Location != "" {
-		meta = append(meta, fmt.Sprintf("location=%s", m.Location))
-	}
-	return fmt.Sprintf("%s (%s)\n", base, strings.Join(meta, "; "))
+	return fmt.Sprintf("%s (%s)\n",
+		base, strings.Join(meta, "; "))
 }
 
 // defaultPrompt is the default system prompt for memory extraction.
@@ -458,6 +473,14 @@ Today's date is {current_date}. You MUST use this date to resolve ALL relative t
   For example, if a user says "I went to Paris with Alice and we ate at
   Le Cinq, then visited the Louvre", create SEPARATE memories for:
   the dinner at Le Cinq, the Louvre visit, and that Alice traveled with User.
+- **NO SUBJECT PREFIX**: Create memories as brief, concise statements that
+  directly describe attributes or facts WITHOUT a subject prefix. Omit
+  "User", "The user", or any equivalent pronoun/noun at the start, because
+  each memory is already bound to a specific user. Examples:
+    Good: "Enjoys hiking on weekends"
+    Good: "Works as a backend engineer at Tencent"
+    Bad:  "User enjoys hiking on weekends"
+    Bad:  "The user works at Tencent"
 - **ALL SPEAKERS**: Extract information about EVERY person in the
   conversation, not just the primary speaker. If two people are talking,
   capture facts, preferences, events, and actions of BOTH speakers.
@@ -495,11 +518,17 @@ Today's date is {current_date}. You MUST use this date to resolve ALL relative t
 - **TOPICS**: Assign specific, descriptive topics. Use concrete nouns over
   abstract ones. Good: ["hiking", "Mt. Fuji", "travel"]. Bad: ["activity"].
   Include NAMES of people, places, and organizations as topics.
-- Create memories as brief, third-person statements.
+  When assigning topics, prefer reusing topic names that already appear
+  in existing memories rather than inventing synonyms. For example, if
+  existing memories use "work", do not use "job" or "career" for the
+  same concept.
 - When a fact has genuinely CHANGED (e.g., user got a new job), update
   the existing memory. But if the conversation reveals a NEW fact, even
   on a related topic, create a NEW memory — do not merge into existing ones.
-- Only use delete when the user explicitly asks to forget something.
+- Use delete when the user explicitly asks to forget something, or when
+  an existing memory is clearly outdated or contradicted by newer
+  information in the conversation (e.g., the user changed jobs, moved
+  to a new city, or reversed a preference).
 - Only use clear when the user explicitly asks to forget everything.
 - Write memory content and topics in the same language as the user's input.
 - Do not create memories for transient requests ("What time is it?") or

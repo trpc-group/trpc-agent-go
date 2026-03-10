@@ -135,6 +135,11 @@ tools := []tool.Tool{
 `NewFSRepository` 也支持传入 HTTP(S) URL（例如 `.zip` / `.tar.gz` 压缩包），
 会自动下载并缓存到本地（可通过 `SKILLS_CACHE_DIR` 覆盖缓存目录）。
 
+如果你通过 `LLMAgent` 配置 Skills，并使用
+`llmagent.WithCodeExecutor(...)` 只是为了给 `skill_run` 提供运行时，
+建议同时设置 `llmagent.WithEnableCodeExecutionResponseProcessor(false)`，
+避免在启用 `skill_run` 时自动执行 assistant 文本里的 Markdown 围栏代码块。
+
 </td>
 <td valign="top">
 
@@ -533,6 +538,12 @@ sg.SetFinishPoint("A").SetFinishPoint("B")
 - Skill 是一个包含 `SKILL.md` 规范的文件夹，可附带 docs/scripts。
 - 内置工具：`skill_load`、`skill_list_docs`、`skill_select_docs`、`skill_run`（在隔离工作空间里执行命令）。
 - 建议 `skill_run` 尽量只用于执行所选 Skill 文档里要求的命令，而不是用于通用的 Shell 探查。
+- 如果 `LLMAgent` 配置 `WithCodeExecutor(...)` 的目的只是支持
+  `skill_run`，建议关闭响应阶段的代码执行处理器：
+  `llmagent.WithEnableCodeExecutionResponseProcessor(false)`。当前
+  `examples/skill`、`examples/skillrun`、`examples/skilldynamicschema` 与
+  `examples/structuredoutputskills`
+  都采用了这种配置，避免自动执行 assistant 文本里的围栏代码块。
 
 ### 12. Artifacts
 
@@ -555,7 +566,7 @@ sg.SetFinishPoint("A").SetFinishPoint("B")
 - 一个最小的 OpenClaw-like gateway 服务。
 - 稳定的 session id，以及同一 session 串行执行。
 - 基础安全控制：allowlist + mention gating。
-- OpenClaw-like demo binary（Telegram + gateway）：[openclaw](openclaw)
+- OpenClaw-like 实现（Telegram + gateway）：[openclaw](openclaw)
 
 其他值得关注的示例：
 

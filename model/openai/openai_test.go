@@ -193,6 +193,126 @@ func TestModel_GenContent_CustomBaseURL(t *testing.T) {
 	}
 }
 
+func TestModel_GenerateContentIter_NonStreaming(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"id": "iter-non-stream",
+			"object": "chat.completion",
+			"created": 1699200000,
+			"model": "gpt-3.5-turbo",
+			"choices": [
+				{
+					"index": 0,
+					"message": {
+						"role": "assistant",
+						"content": "ok"
+					},
+					"finish_reason": "stop"
+				}
+			]
+		}`)
+	}))
+	defer server.Close()
+
+	m := New("gpt-3.5-turbo",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+	)
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewUserMessage("hi"),
+		},
+		GenerationConfig: model.GenerationConfig{
+			Stream: false,
+		},
+	}
+
+	seq, err := m.GenerateContentIter(context.Background(), req)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	seq(func(resp *model.Response) bool {
+		responses = append(responses, resp)
+		return true
+	})
+
+	require.NotEmpty(t, responses)
+	require.True(t, responses[len(responses)-1].Done)
+	require.Equal(t, "iter-non-stream", responses[len(responses)-1].ID)
+	require.NotEmpty(t, responses[len(responses)-1].Choices)
+	require.Equal(t, "ok", responses[len(responses)-1].Choices[0].Message.Content)
+}
+
+func TestModel_GenerateContentIter_Streaming(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+
+		chunks := []string{
+			`data: {"id":"iter-stream","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"role":"assistant","content":"hello"},"finish_reason":null}]}`,
+			`data: {"id":"iter-stream","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"content":""},"finish_reason":"stop"}]}`,
+			`data: [DONE]`,
+		}
+		for _, chunk := range chunks {
+			fmt.Fprintf(w, "%s\n\n", chunk)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}))
+	defer server.Close()
+
+	m := New("gpt-3.5-turbo",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+	)
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewUserMessage("hi"),
+		},
+		GenerationConfig: model.GenerationConfig{
+			Stream: true,
+		},
+	}
+
+	seq, err := m.GenerateContentIter(context.Background(), req)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	seq(func(resp *model.Response) bool {
+		responses = append(responses, resp)
+		return true
+	})
+
+	require.NotEmpty(t, responses)
+	require.True(t, responses[len(responses)-1].Done)
+
+	var sawHello bool
+	for _, resp := range responses {
+		if len(resp.Choices) == 0 {
+			continue
+		}
+		if strings.Contains(resp.Choices[0].Message.Content, "hello") {
+			sawHello = true
+			break
+		}
+	}
+	require.True(t, sawHello)
+}
+
 func TestOptions_Validation(t *testing.T) {
 	tests := []struct {
 		name string
@@ -3107,6 +3227,37 @@ func TestConvertUserMessageContent_OmitFileContentParts(t *testing.T) {
 	assert.Equal(t, message.Content, content.OfString.Value)
 	assert.Empty(t, content.OfArrayOfContentParts,
 		"expected no content parts")
+}
+
+func TestConvertUserMessageContent_OmitFileContentParts_FileOnly(t *testing.T) {
+	m := New("test-model", WithOmitFileContentParts(true))
+	msg := model.Message{Role: model.RoleUser}
+	msg.AddFileData("report.pdf", []byte("%PDF-1.4"), "application/pdf")
+
+	content, extraFields := m.convertUserMessageContent(msg)
+	assert.Empty(t, extraFields, "expected no extra fields")
+	assert.False(t, content.OfString.Valid(), "expected non-string content")
+	require.Len(t, content.OfArrayOfContentParts, 1,
+		"expected 1 content part")
+	require.NotNil(t, content.OfArrayOfContentParts[0].OfText,
+		"expected text content part")
+	assert.Contains(t, content.OfArrayOfContentParts[0].OfText.Text,
+		"report.pdf")
+}
+
+func TestUserFileHint_EmptyContentParts(t *testing.T) {
+	m := New("test-model", WithOmitFileContentParts(true))
+	msg := model.Message{Role: model.RoleUser}
+
+	hint := m.userFileHint(msg)
+	assert.Empty(t, hint, "expected no hint for empty content parts")
+}
+
+func TestAppendFileID_NilFilePart(t *testing.T) {
+	extraFields := appendFileID(nil, model.ContentPart{
+		Type: model.ContentTypeFile,
+	})
+	assert.Nil(t, extraFields, "expected nil extra fields")
 }
 
 // TestBuildChatRequest_EdgeCases tests edge cases in buildChatRequest.
@@ -6607,4 +6758,70 @@ func TestFileToParams_FileIDWins(t *testing.T) {
 	require.Equal(t, "file_123", p.FileID.Value)
 	require.False(t, p.FileData.Valid())
 	require.False(t, p.Filename.Valid())
+}
+
+func TestFileToParams_InternalRefUsesData(t *testing.T) {
+	f := &model.File{
+		Name:     "notes.txt",
+		Data:     []byte("hello"),
+		MimeType: "text/plain",
+		FileID:   "host:///tmp/notes.txt",
+	}
+	p, ok := fileToParamsOK(f)
+	require.True(t, ok)
+	require.False(t, p.FileID.Valid())
+	require.True(t, p.FileData.Valid())
+	require.Equal(t, "notes.txt", p.Filename.Value)
+}
+
+func TestFileToParams_InternalRefWithoutDataSkips(t *testing.T) {
+	f := &model.File{
+		Name:   "notes.txt",
+		FileID: "host:///tmp/notes.txt",
+	}
+	_, ok := fileToParamsOK(f)
+	require.False(t, ok)
+}
+
+func TestAppendFileID_SkipsInternalRefs(t *testing.T) {
+	fields := appendFileID(nil, model.ContentPart{
+		Type: model.ContentTypeFile,
+		File: &model.File{
+			FileID: "host:///tmp/notes.txt",
+		},
+	})
+	require.Nil(t, fields)
+}
+
+func TestUserFileHint_UsesSafeNameForInternalRefs(t *testing.T) {
+	m := &Model{}
+	msg := model.Message{
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					FileID: "host:///tmp/private/notes.txt",
+				},
+			},
+		},
+	}
+	got := m.userFileHint(msg)
+	require.Contains(t, got, "notes.txt")
+	require.NotContains(t, got, "host://")
+	require.NotContains(t, got, "/tmp/private")
+}
+
+func TestAppendUserContentParts_SkipsInternalFiles(t *testing.T) {
+	m := &Model{}
+	dst := []openai.ChatCompletionContentPartUnionParam{}
+	fields := m.appendUserContentParts(&dst, []model.ContentPart{
+		{
+			Type: model.ContentTypeFile,
+			File: &model.File{
+				FileID: "host:///tmp/notes.txt",
+			},
+		},
+	})
+	require.Nil(t, fields)
+	require.Empty(t, dst)
 }

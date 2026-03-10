@@ -20,6 +20,7 @@ Agent Skills 把可复用的任务封装为“技能目录”，用 `SKILL.md`
 - 📚 `skill_select_docs` 增/改/清除文档选择
 - 🧾 `skill_list_docs` 列出可用文档
 - 🏃 `skill_run` 在工作区执行命令，返回 stdout/stderr 与输出文件
+- ⌨️ `skill_exec` 与 session 工具处理交互式 stdin/TTY 流程
 - 🗂️ 按通配符收集输出文件并回传内容与 MIME 类型
 - 🧩 可选择本地或容器工作区执行器（默认本地）
 - 🧱 支持声明式 `inputs`/`outputs`：映射输入、
@@ -74,9 +75,10 @@ system message，确保模型仍能看到已加载内容。
 
 Session summary 提醒：如果你启用了会话摘要注入
 （`WithAddSessionSummary(true)`），并且本次请求里确实插入了摘要，
-框架默认会**跳过**这条回退 system message，避免把“已被 summary 掉的
-内容”又塞回提示词里。在这种配置下，如果 tool result 被摘要覆盖掉，
-模型需要再次调用 `skill_load` 才能看到完整正文/文档。
+框架会尽量**跳过**这条回退 system message，避免把“已被 summary 掉的
+内容”又塞回提示词里。如果对应的 tool result 仍在提示词里，回退会继续
+保持关闭；如果 same-turn summary compaction 已经把这些 tool result
+裁掉，回退会重新开启，保证模型仍能看到完整正文/文档。
 
 启用方式：`llmagent.WithSkillsLoadedContentInToolResults(true)`。
 如果你希望在 summary 场景恢复旧的回退行为：
@@ -220,6 +222,7 @@ agent := llmagent.New(
     "skills-assistant",
     llmagent.WithSkills(repo),
     llmagent.WithCodeExecutor(exec),
+    llmagent.WithEnableCodeExecutionResponseProcessor(false),
     // Optional: keep the system prompt stable for prompt caching.
     llmagent.WithSkillsLoadedContentInToolResults(true),
 )
@@ -249,6 +252,11 @@ agent := llmagent.New(
 
 交互式技能对话示例：
 [examples/skillrun/main.go](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillrun/main.go)
+
+这个 demo 以及其他以 skill 为中心的示例
+（`skill`、`skilldynamicschema`、`structuredoutputskills`）
+都显式设置了 `llmagent.WithEnableCodeExecutionResponseProcessor(false)`，
+避免在启用 `skill_run` 时自动执行 assistant 文本里的围栏代码块。
 
 ```bash
 cd examples/skillrun
@@ -853,6 +861,8 @@ agent := llmagent.New(
 - `command`（必填）：Shell 命令（默认通过 `bash -c` 执行）
 - `cwd`（可选）：相对技能根目录的工作路径
 - `env`（可选）：环境变量映射
+- `stdin`（可选）：一次性写入命令的标准输入文本
+- `editor_text`（可选）：用于会拉起 `$EDITOR` 的 CLI 的文本内容
 - `output_files`（可选，传统收集方式）：通配符列表
   （如 `out/*.txt`）。通配符以工作区根目录为准，也支持
   `$OUTPUT_DIR/*.txt` 这类写法，会自动归一化为 `out/*.txt`。
@@ -972,6 +982,41 @@ agent := llmagent.New(
    - 传统：用 `output_files` 指定通配符
    - 声明式：用 `outputs` 统一控制收集/内联/保存
    - 如需把上游文件带入，可用 `inputs` 先行映射
+
+### 交互式 Skill 会话
+
+声明：
+- [tool/skill/exec.go](https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/exec.go)
+
+工具：
+- `skill_exec`：在 Skill 工作区里启动一个可持续交互的命令
+- `skill_write_stdin`：向运行中的会话追加 stdin
+- `skill_poll_session`：继续拉取终端输出或最终结果
+- `skill_kill_session`：终止并移除会话
+
+建议：
+- 一次性命令优先用 `skill_run`
+- 如果命令会等待输入、展示编号选择，或需要跨多次工具调用继续交互，
+  优先用 `skill_exec`
+- 对 `$EDITOR` 型流程，优先在 `skill_run` / `skill_exec` 上传
+  `editor_text`，不要试图通过 stdin 驱动全屏编辑器
+
+`skill_exec` 复用 `skill_run` 的同一套工作区、`inputs`、`outputs`、
+`save_as_artifacts`、`omit_inline_content`、`artifact_prefix`、
+`stdin` 与 `editor_text` 语义，但会额外返回会话状态：
+- `status`：`running` 或 `exited`
+- `session_id`：后续继续交互使用的稳定 id
+- `output`：本次调用观察到的最新终端输出
+- `interaction`：best effort 的输入提示（例如 prompt / selection）
+- `result`：当会话退出后，返回与 `skill_run` 风格一致的最终结果
+
+典型交互流程：
+1) 先调用 `skill_exec`
+2) 查看 `output` / `interaction`
+3) 持续调用 `skill_write_stdin` 或 `skill_poll_session`，直到
+   `status=exited`
+4) 读取 `result` 与收集到的输出；若需要中止，则调用
+   `skill_kill_session`
 
 示例：
 

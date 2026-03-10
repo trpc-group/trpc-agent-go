@@ -137,6 +137,12 @@ tools := []tool.Tool{
 `.tar.gz` archive). The payload is downloaded and cached locally (set
 `SKILLS_CACHE_DIR` to override the cache location).
 
+If you wire Skills through `LLMAgent` with `llmagent.WithCodeExecutor(...)`,
+consider also setting
+`llmagent.WithEnableCodeExecutionResponseProcessor(false)` so Markdown fenced
+code blocks in assistant text do not auto-execute while `skill_run` is
+enabled.
+
 </td>
 <td valign="top">
 
@@ -544,9 +550,21 @@ Example: [examples/skillrun](examples/skillrun)
 
 - Skills are folders with a `SKILL.md` spec + optional docs/scripts.
 - Built-in tools: `skill_load`, `skill_list_docs`, `skill_select_docs`,
-  `skill_run` (runs commands in an isolated workspace).
+  `skill_run`, `skill_exec`, `skill_write_stdin`,
+  `skill_poll_session`, `skill_kill_session`.
+- `skill_run` is the default one-shot command runner in an isolated
+  workspace.
+- `skill_exec` and the session tools cover interactive stdin/TTY flows
+  without inlining full scripts into the prompt.
 - Prefer using `skill_run` only for commands required by the selected skill
   docs, not for generic shell exploration.
+- When `LLMAgent` uses `WithCodeExecutor(...)` only to support `skill_run`,
+  disable the response code execution processor with
+  `llmagent.WithEnableCodeExecutionResponseProcessor(false)`. The
+  skill-focused examples (`examples/skill`, `examples/skillrun`,
+  `examples/skilldynamicschema`, and
+  `examples/structuredoutputskills`) follow this pattern so fenced code
+  blocks in assistant text do not auto-execute.
 
 ### 12. Artifacts
 
@@ -569,7 +587,7 @@ Example: [openclaw](openclaw)
 - A minimal OpenClaw-like gateway server.
 - Stable session ids and per-session serialization.
 - Basic safety controls: allowlist + mention gating.
-- OpenClaw-like demo binary (Telegram + gateway): [openclaw](openclaw)
+- OpenClaw-like implementation (Telegram + gateway): [openclaw](openclaw)
 
 Other notable examples:
 

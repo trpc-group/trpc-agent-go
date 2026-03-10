@@ -594,16 +594,15 @@ func TestMemoryTool_SearchMemory_MissingQuery(t *testing.T) {
 	tool := NewSearchTool()
 	ctx := createMockContext("test-app", "test-user", service)
 
-	// Test searching without query.
+	// Test searching without query returns empty results.
 	args := map[string]any{}
 
 	jsonArgs, err := json.Marshal(args)
 	require.NoError(t, err, "Failed to marshal args")
 
 	result, err := tool.Call(ctx, jsonArgs)
-	require.Error(t, err, "Expected error for missing query")
-	assert.Nil(t, result, "Expected nil result on error")
-	assert.Contains(t, err.Error(), "query is required", "Expected specific error message")
+	require.NoError(t, err, "Missing query should return empty results, not error")
+	assert.NotNil(t, result, "Expected non-nil result")
 }
 
 func TestMemoryTool_LoadMemory_DefaultLimit(t *testing.T) {

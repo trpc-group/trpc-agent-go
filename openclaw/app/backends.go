@@ -60,7 +60,11 @@ func newSessionService(
 				Instance:  opts.SessionRedisInstance,
 				KeyPrefix: opts.SessionRedisKeyPref,
 			},
-			Config: opts.SessionConfig,
+			Config: defaultSQLiteSessionConfigNode(
+				backend,
+				opts.StateDir,
+				opts.SessionConfig,
+			),
 		},
 	)
 }
@@ -152,8 +156,12 @@ func newMemoryService(
 				Instance:  opts.MemoryRedisInstance,
 				KeyPrefix: opts.MemoryRedisKeyPref,
 			},
-			Limit:  opts.MemoryLimit,
-			Config: opts.MemoryConfig,
+			Limit: opts.MemoryLimit,
+			Config: defaultSQLiteMemoryConfigNode(
+				backend,
+				opts.StateDir,
+				opts.MemoryConfig,
+			),
 		},
 	)
 }

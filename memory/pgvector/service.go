@@ -238,6 +238,25 @@ func (s *Service) AddMemoryWithEpisodic(
 		if s.opts.softDelete {
 			deletedFilter = " AND deleted_at IS NULL"
 		}
+		// Build evict CTE: when at capacity and inserting a new memory,
+		// remove the least-recently-updated entry to make room.
+		var evictAction string
+		if s.opts.softDelete {
+			evictAction = fmt.Sprintf("UPDATE %s SET deleted_at = $11", s.tableName)
+		} else {
+			evictAction = fmt.Sprintf("DELETE FROM %s", s.tableName)
+		}
+		evictCTE := fmt.Sprintf(
+			", evict AS (%s "+
+				"WHERE memory_id = ("+
+				"SELECT memory_id FROM %s "+
+				"WHERE app_name = $2 AND user_id = $3%s "+
+				"ORDER BY updated_at ASC LIMIT 1) "+
+				"AND NOT EXISTS (SELECT 1 FROM existing) "+
+				"AND (SELECT c FROM cnt) >= $13 "+
+				"RETURNING memory_id)",
+			evictAction, s.tableName, deletedFilter,
+		)
 		insertQuery = fmt.Sprintf(
 			"WITH existing AS ("+
 				"SELECT 1 FROM %s "+
@@ -245,13 +264,14 @@ func (s *Service) AddMemoryWithEpisodic(
 				"), cnt AS ("+
 				"SELECT COUNT(*) AS c FROM %s "+
 				"WHERE app_name = $2 AND user_id = $3%s"+
-				") "+
+				")%s "+
 				"INSERT INTO %s (memory_id, app_name, user_id, memory_content, topics, "+
 				"embedding, memory_kind, event_time, participants, location, "+
 				"created_at, updated_at) "+
 				"SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12 "+
 				"WHERE (EXISTS (SELECT 1 FROM existing) OR "+
-				"(SELECT c FROM cnt) < $13) "+
+				"(SELECT c FROM cnt) < $13 OR "+
+				"EXISTS (SELECT 1 FROM evict)) "+
 				"ON CONFLICT (memory_id) DO UPDATE SET "+
 				"memory_content = EXCLUDED.memory_content, "+
 				"topics = EXCLUDED.topics, "+
@@ -266,6 +286,7 @@ func (s *Service) AddMemoryWithEpisodic(
 			deletedFilter,
 			s.tableName,
 			deletedFilter,
+			evictCTE,
 			s.tableName,
 		)
 		args = append(args, s.opts.memoryLimit)
@@ -299,7 +320,7 @@ func (s *Service) AddMemoryWithEpisodic(
 			return fmt.Errorf("store memory entry rows affected failed: %w", err)
 		}
 		if affected == 0 {
-			return fmt.Errorf("memory limit exceeded for user %s, limit: %d",
+			return fmt.Errorf("memory eviction failed for user %s, limit: %d",
 				userKey.UserID, s.opts.memoryLimit)
 		}
 	}

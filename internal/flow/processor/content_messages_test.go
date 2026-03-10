@@ -532,9 +532,8 @@ func newSessionEvent(author string, msg model.Message) event.Event {
 	}
 }
 
-// Test that session summary is inserted as a separate system message after the
-// last system message.
-func TestProcessRequest_SessionSummary_InsertAsSeparateSystemMessage(t *testing.T) {
+// Test that session summary is merged into existing system message.
+func TestProcessRequest_SessionSummary_MergesIntoSystemMessage(t *testing.T) {
 	// Create session with summary
 	sess := &session.Session{
 		Summaries: map[string]*session.Summary{
@@ -566,16 +565,15 @@ func TestProcessRequest_SessionSummary_InsertAsSeparateSystemMessage(t *testing.
 	require.True(t, ok)
 	require.Equal(t, true, raw)
 
-	// Should have 4 messages: system, summary system, user, current request
-	require.Equal(t, 4, len(req1.Messages))
+	// Should have 3 messages: system (merged), user, current request
+	require.Equal(t, 3, len(req1.Messages))
 	require.Equal(t, model.RoleSystem, req1.Messages[0].Role)
-	require.Equal(t, "existing system prompt", req1.Messages[0].Content)
-	require.Equal(t, model.RoleSystem, req1.Messages[1].Role)
-	require.Equal(t, NewContentRequestProcessor().formatSummary("Session summary content"), req1.Messages[1].Content)
+	require.Contains(t, req1.Messages[0].Content, "existing system prompt")
+	require.Contains(t, req1.Messages[0].Content, "Session summary content")
+	require.Equal(t, model.RoleUser, req1.Messages[1].Role)
+	require.Equal(t, "user question", req1.Messages[1].Content)
 	require.Equal(t, model.RoleUser, req1.Messages[2].Role)
-	require.Equal(t, "user question", req1.Messages[2].Content)
-	require.Equal(t, model.RoleUser, req1.Messages[3].Role)
-	require.Equal(t, "current request", req1.Messages[3].Content)
+	require.Equal(t, "current request", req1.Messages[2].Content)
 
 	// Test case 2: Request has only user message (no system message)
 	req2 := &model.Request{
@@ -606,7 +604,7 @@ func TestProcessRequest_SessionSummary_InsertAsSeparateSystemMessage(t *testing.
 	require.Equal(t, model.RoleUser, req2.Messages[2].Role)
 	require.Equal(t, "current request", req2.Messages[2].Content)
 
-	// Test case 3: Request has multiple system messages
+	// Test case 3: Request has multiple system messages (only first one gets merged)
 	req3 := &model.Request{
 		Messages: []model.Message{
 			model.NewSystemMessage("system 1"),
@@ -628,25 +626,250 @@ func TestProcessRequest_SessionSummary_InsertAsSeparateSystemMessage(t *testing.
 	require.True(t, ok)
 	require.Equal(t, true, raw)
 
-	// Should have 5 messages: system1, system2, summary system, user, current
-	// request.
-	require.Equal(t, 5, len(req3.Messages))
+	// Should have 4 messages: system1 (merged with summary), system2, user, current
+	// request. Summary merges into first system message.
+	require.Equal(t, 4, len(req3.Messages))
 	require.Equal(t, model.RoleSystem, req3.Messages[0].Role)
-	require.Equal(t, "system 1", req3.Messages[0].Content)
+	require.Contains(t, req3.Messages[0].Content, "system 1")
+	require.Contains(t, req3.Messages[0].Content, "Session summary content")
 	require.Equal(t, model.RoleSystem, req3.Messages[1].Role)
 	require.Equal(t, "system 2", req3.Messages[1].Content)
-	require.Equal(t, model.RoleSystem, req3.Messages[2].Role)
-	require.Equal(
-		t,
-		NewContentRequestProcessor().formatSummary(
-			"Session summary content",
-		),
-		req3.Messages[2].Content,
-	)
+	require.Equal(t, model.RoleUser, req3.Messages[2].Role)
+	require.Equal(t, "user question", req3.Messages[2].Content)
 	require.Equal(t, model.RoleUser, req3.Messages[3].Role)
-	require.Equal(t, "user question", req3.Messages[3].Content)
-	require.Equal(t, model.RoleUser, req3.Messages[4].Role)
-	require.Equal(t, "current request", req3.Messages[4].Content)
+	require.Equal(t, "current request", req3.Messages[3].Content)
+}
+
+func TestProcessRequest_SessionSummary_CompactsSameTurnToolHistory(t *testing.T) {
+	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	userMsg := model.NewUserMessage("run the task")
+	toolCallMsg := model.Message{
+		Role:    model.RoleAssistant,
+		Content: "Starting with step 1.",
+		ToolCalls: []model.ToolCall{{
+			Type: "function",
+			ID:   "call_1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "step_worker",
+				Arguments: []byte(`{"step":1}`),
+			},
+		}},
+	}
+	toolResultMsg := model.Message{
+		Role:     model.RoleTool,
+		ToolID:   "call_1",
+		ToolName: "step_worker",
+		Content:  strings.Repeat("large-result;", 16),
+	}
+	sess := &session.Session{
+		Summaries: map[string]*session.Summary{
+			"test-agent": {
+				Summary:   "step 1 completed successfully",
+				UpdatedAt: baseTime.Add(2 * time.Second),
+			},
+		},
+		Events: []event.Event{
+			{
+				Author:       "user",
+				RequestID:    "req1",
+				InvocationID: "inv1",
+				Timestamp:    baseTime,
+				Version:      event.CurrentVersion,
+				Response: &model.Response{
+					Done:    true,
+					Choices: []model.Choice{{Index: 0, Message: userMsg}},
+				},
+			},
+			{
+				Author:       "test-agent",
+				RequestID:    "req1",
+				InvocationID: "inv1",
+				Timestamp:    baseTime.Add(time.Second),
+				Version:      event.CurrentVersion,
+				Response: &model.Response{
+					Done:    true,
+					Choices: []model.Choice{{Index: 0, Message: toolCallMsg}},
+				},
+			},
+			{
+				Author:       "test-agent",
+				RequestID:    "req1",
+				InvocationID: "inv1",
+				Timestamp:    baseTime.Add(2 * time.Second),
+				Version:      event.CurrentVersion,
+				Response: &model.Response{
+					Done:    true,
+					Object:  model.ObjectTypeToolResponse,
+					Choices: []model.Choice{{Index: 0, Message: toolResultMsg}},
+				},
+			},
+		},
+	}
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationID("inv1"),
+		agent.WithInvocationEventFilterKey("test-agent"),
+		agent.WithInvocationMessage(userMsg),
+		agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req1"}),
+	)
+	inv.AgentName = "test-agent"
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("system prompt"),
+		},
+	}
+	p := NewContentRequestProcessor(WithAddSessionSummary(true))
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	raw, ok := inv.GetState(contentHasCompactedToolResultsStateKey)
+	require.True(t, ok)
+	require.Equal(t, true, raw)
+
+	require.Len(t, req.Messages, 4)
+	require.Equal(t, model.RoleSystem, req.Messages[0].Role)
+	require.Contains(t, req.Messages[0].Content, "system prompt")
+	require.Contains(t, req.Messages[0].Content,
+		"step 1 completed successfully")
+	require.True(t, model.MessagesEqual(userMsg, req.Messages[1]))
+	require.Equal(t, model.RoleAssistant, req.Messages[2].Role)
+	require.Equal(t, "Starting with step 1.", req.Messages[2].Content)
+	require.Len(t, req.Messages[2].ToolCalls, 1)
+	require.Equal(t, "call_1", req.Messages[2].ToolCalls[0].ID)
+	require.Equal(t, model.RoleTool, req.Messages[3].Role)
+	require.Equal(t, "call_1", req.Messages[3].ToolID)
+	require.Equal(t, "step_worker", req.Messages[3].ToolName)
+	require.Equal(t, compactedToolResultPlaceholder,
+		req.Messages[3].Content)
+	require.NotContains(t, req.Messages[3].Content, "large-result;")
+}
+
+func TestContentRequestProcessor_HasCompactedCurrentInvocationToolResults(t *testing.T) {
+	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	since := baseTime.Add(2 * time.Second)
+
+	t.Run("nil invocation", func(t *testing.T) {
+		p := NewContentRequestProcessor()
+		require.False(t, p.hasCompactedCurrentInvocationToolResults(nil, since))
+	})
+
+	t.Run("missing request metadata", func(t *testing.T) {
+		p := NewContentRequestProcessor()
+		inv := &agent.Invocation{
+			Session: &session.Session{},
+		}
+		require.False(t, p.hasCompactedCurrentInvocationToolResults(inv, since))
+	})
+
+	t.Run("ignores non matching and non tool events", func(t *testing.T) {
+		p := NewContentRequestProcessor()
+		inv := agent.NewInvocation(
+			agent.WithInvocationID("inv1"),
+			agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req1"}),
+			agent.WithInvocationSession(&session.Session{
+				Events: []event.Event{
+					{
+						RequestID:    "req2",
+						InvocationID: "inv1",
+						Timestamp:    baseTime,
+						Version:      event.CurrentVersion,
+						Response: &model.Response{
+							Done: true,
+							Choices: []model.Choice{{Index: 0, Message: model.NewToolMessage(
+								"call_1",
+								"worker",
+								"result",
+							)}},
+						},
+					},
+					{
+						RequestID:    "req1",
+						InvocationID: "inv1",
+						Timestamp:    baseTime,
+						Version:      event.CurrentVersion,
+						Response: &model.Response{
+							Done: true,
+							Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage(
+								"not a tool result",
+							)}},
+						},
+					},
+					{
+						RequestID:    "req1",
+						InvocationID: "inv1",
+						Timestamp:    since.Add(time.Second),
+						Version:      event.CurrentVersion,
+						Response: &model.Response{
+							Done: true,
+							Choices: []model.Choice{{Index: 0, Message: model.NewToolMessage(
+								"call_2",
+								"worker",
+								"after cutoff",
+							)}},
+						},
+					},
+				},
+			}),
+		)
+		require.False(t, p.hasCompactedCurrentInvocationToolResults(inv, since))
+	})
+
+	t.Run("respects branch filter", func(t *testing.T) {
+		p := NewContentRequestProcessor(WithBranchFilterMode(BranchFilterModeExact))
+		inv := agent.NewInvocation(
+			agent.WithInvocationID("inv1"),
+			agent.WithInvocationEventFilterKey("wanted"),
+			agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req1"}),
+			agent.WithInvocationSession(&session.Session{
+				Events: []event.Event{
+					{
+						RequestID:    "req1",
+						InvocationID: "inv1",
+						FilterKey:    "other",
+						Timestamp:    baseTime,
+						Version:      event.CurrentVersion,
+						Response: &model.Response{
+							Done: true,
+							Choices: []model.Choice{{Index: 0, Message: model.NewToolMessage(
+								"call_1",
+								"worker",
+								"result",
+							)}},
+						},
+					},
+				},
+			}),
+		)
+		require.False(t, p.hasCompactedCurrentInvocationToolResults(inv, since))
+	})
+
+	t.Run("detects compacted tool result", func(t *testing.T) {
+		p := NewContentRequestProcessor()
+		inv := agent.NewInvocation(
+			agent.WithInvocationID("inv1"),
+			agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req1"}),
+			agent.WithInvocationSession(&session.Session{
+				Events: []event.Event{
+					{
+						RequestID:    "req1",
+						InvocationID: "inv1",
+						Timestamp:    baseTime,
+						Version:      event.CurrentVersion,
+						Response: &model.Response{
+							Done: true,
+							Choices: []model.Choice{{Index: 0, Message: model.NewToolMessage(
+								"call_1",
+								"worker",
+								"result",
+							)}},
+						},
+					},
+				},
+			}),
+		)
+		require.True(t, p.hasCompactedCurrentInvocationToolResults(inv, since))
+	})
 }
 
 // Test additional edge cases for session summary insertion.
@@ -706,14 +929,13 @@ func TestProcessRequest_SessionSummary_EdgeCases(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, true, raw)
 
-	// Should have 3 messages: system, summary system, current request
-	require.Equal(t, 3, len(req2.Messages))
+	// Should have 2 messages: system (merged with summary), current request
+	require.Equal(t, 2, len(req2.Messages))
 	require.Equal(t, model.RoleSystem, req2.Messages[0].Role)
-	require.Equal(t, "system prompt", req2.Messages[0].Content)
-	require.Equal(t, model.RoleSystem, req2.Messages[1].Role)
-	require.Equal(t, NewContentRequestProcessor().formatSummary("Session summary content"), req2.Messages[1].Content)
-	require.Equal(t, model.RoleUser, req2.Messages[2].Role)
-	require.Equal(t, "current request", req2.Messages[2].Content)
+	require.Contains(t, req2.Messages[0].Content, "system prompt")
+	require.Contains(t, req2.Messages[0].Content, "Session summary content")
+	require.Equal(t, model.RoleUser, req2.Messages[1].Role)
+	require.Equal(t, "current request", req2.Messages[1].Content)
 }
 
 func TestContentRequestProcessor_AggregatePrefixSummaries_Sorted(
@@ -836,43 +1058,18 @@ func TestPromptCachePrefixStability_DynamicSystemTail(t *testing.T) {
 	prefixRun1 := firstRunes(render(reqRun1.Messages), cachePrefixRunes)
 	prefixRun2 := firstRunes(render(reqRun2.Messages), cachePrefixRunes)
 
-	// New behavior: summary is appended after all stable system messages, so
-	// the cacheable prefix stays stable across runs.
-	require.Equal(t, prefixRun1, prefixRun2)
-	require.NotContains(t, prefixRun1, summaryRun1)
-	require.NotContains(t, prefixRun2, summaryRun2)
+	// New behavior: summary is merged into the first system message.
+	// This means the first system message's content changes across runs,
+	// so the cacheable prefix does NOT stay stable.
+	// The summary content is merged into sysA, changing its content.
+	require.NotEqual(t, prefixRun1, prefixRun2)
+	// The first message contains both sysA content and the summary.
+	require.Contains(t, reqRun1.Messages[0].Content, summaryRun1)
+	require.Contains(t, reqRun2.Messages[0].Content, summaryRun2)
 
-	legacyMessages := func(summaryText string) []model.Message {
-		msgs := []model.Message{
-			model.NewSystemMessage(sysA),
-			model.NewSystemMessage(sysB),
-			model.NewUserMessage("hi"),
-		}
-		idx := findSystemMessageIndex(msgs)
-		summaryMsg := model.NewSystemMessage(summaryText)
-		if idx < 0 {
-			return append([]model.Message{summaryMsg}, msgs...)
-		}
-		out := append([]model.Message{}, msgs[:idx+1]...)
-		out = append(out, summaryMsg)
-		out = append(out, msgs[idx+1:]...)
-		return out
-	}
-
-	legacyPrefix1 := firstRunes(
-		render(legacyMessages(summaryRun1)),
-		cachePrefixRunes,
-	)
-	legacyPrefix2 := firstRunes(
-		render(legacyMessages(summaryRun2)),
-		cachePrefixRunes,
-	)
-
-	// Old behavior: summary inserted after the first system message, likely
-	// landing in the first ~1024 tokens and invalidating the cache prefix.
-	require.NotEqual(t, legacyPrefix1, legacyPrefix2)
-	require.Contains(t, legacyPrefix1, summaryRun1)
-	require.Contains(t, legacyPrefix2, summaryRun2)
+	// Verify that sysB (second system message) stays stable.
+	require.Equal(t, sysB, reqRun1.Messages[1].Content)
+	require.Equal(t, sysB, reqRun2.Messages[1].Content)
 }
 
 func newSessionEventWithBranch(author, filterKey, branch string, msg model.Message) event.Event {

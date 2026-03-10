@@ -1,0 +1,85 @@
+# This file defines code owners for the repository.
+# Each line is a file pattern followed by one or more owners.
+# Order matters — later rules take precedence over earlier ones.
+# See: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owner for the entire repository
+* @sandyskies
+
+# agent
+/agent/ @sandyskies @WineChord
+
+# artifact
+/artifact/ @sandyskies @liuzengh
+
+# benchmark
+/benchmark/ @sandyskies @Flash-LHR
+
+# codeexecutor
+/codeexecutor/ @sandyskies @liuzengh
+
+# docs
+/docs/ @sandyskies @WineChord @Flash-LHR
+
+# evaluation
+/evaluation/ @sandyskies @Flash-LHR
+
+# event
+/event/ @sandyskies @WineChord
+
+# examples
+/examples/ @sandyskies @WineChord
+
+# graph
+/graph/ @sandyskies @WineChord
+
+# internal
+/internal/ @sandyskies @WineChord @liuzengh @Flash-LHR @Rememorio @hyprh
+
+# knowledge
+/knowledge/ @sandyskies @hyprh
+
+# log
+/log/ @sandyskies @WineChord
+
+# memory
+/memory/ @sandyskies @Rememorio @hyprh
+
+# model
+/model/ @sandyskies @WineChord
+
+# openclaw
+/openclaw/ @sandyskies @WineChord
+
+# planner
+/planner/ @sandyskies @WineChord
+
+# plugin
+/plugin/ @sandyskies @WineChord
+
+# runner
+/runner/ @sandyskies @WineChord
+
+# server
+/server/ @sandyskies @WineChord @Flash-LHR
+
+# session
+/session/ @sandyskies @Rememorio @hyprh
+
+# skill
+/skill/ @sandyskies @WineChord
+
+# storage
+/storage/ @sandyskies @Rememorio @hyprh
+
+# team
+/team/ @sandyskies @WineChord
+
+# telemetry
+/telemetry/ @sandyskies @liuzengh
+
+# test
+/test/ @sandyskies @WineChord @Flash-LHR
+
+# tool
+/tool/ @sandyskies @liuzengh
