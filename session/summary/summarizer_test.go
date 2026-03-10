@@ -946,6 +946,58 @@ func TestSessionSummarizer_FilterEventsForSummary(t *testing.T) {
 		assert.Len(t, filtered, 4)
 	})
 
+	t.Run("keeps prepended summary context for assistant tool chain", func(t *testing.T) {
+		s := &sessionSummarizer{skipRecentFunc: func(_ []event.Event) int { return 1 }}
+		now := time.Now().UTC()
+		events := []event.Event{
+			{
+				Author:    authorSystem,
+				Timestamp: now,
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Content: "previous summary"},
+				}}},
+			},
+			{
+				Author:    "assistant",
+				Timestamp: now.Add(-2 * time.Minute),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{
+						Role: model.RoleAssistant,
+						ToolCalls: []model.ToolCall{{
+							Function: model.FunctionDefinitionParam{
+								Name:      "lookup_weather",
+								Arguments: []byte(`{"city":"Shanghai"}`),
+							},
+						}},
+					},
+				}}},
+			},
+			{
+				Author:    "tool",
+				Timestamp: now.Add(-time.Minute),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{
+						ToolID:   "call-1",
+						ToolName: "lookup_weather",
+						Content:  "sunny",
+					},
+				}}},
+			},
+			{
+				Author:    "assistant",
+				Timestamp: now.Add(time.Minute),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Role: model.RoleAssistant, Content: "recent response"},
+				}}},
+			},
+		}
+
+		filtered := s.filterEventsForSummary(events)
+		expected := events[:3]
+		assert.Equal(t, expected, filtered)
+		assert.Len(t, filtered, 3)
+	})
+
 	t.Run("returns empty slice when no user message in filtered events", func(t *testing.T) {
 		s := &sessionSummarizer{skipRecentFunc: func(_ []event.Event) int { return 1 }}
 		events := []event.Event{
@@ -1022,6 +1074,73 @@ func TestSessionSummarizer_SummarizeWithSkipRecent(t *testing.T) {
 		assert.Contains(t, text, "I'm fine")
 		assert.NotContains(t, text, "recent message")
 		assert.NotContains(t, text, "recent response")
+	})
+
+	t.Run("summarizes assistant tool chain when previous summary provides context", func(t *testing.T) {
+		s := NewSummarizer(&fakeModel{}, WithSkipRecent(func(_ []event.Event) int { return 1 }))
+
+		summaryTs := time.Now().UTC()
+		toolCallTs := summaryTs.Add(-2 * time.Minute)
+		toolResultTs := summaryTs.Add(-time.Minute)
+		sess := &session.Session{
+			ID: "tool-chain-session",
+			Events: []event.Event{
+				{
+					Author:    authorSystem,
+					Timestamp: summaryTs,
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "previous summary"},
+					}}},
+				},
+				{
+					Author:    "assistant",
+					Timestamp: toolCallTs,
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{
+							Role: model.RoleAssistant,
+							ToolCalls: []model.ToolCall{{
+								Function: model.FunctionDefinitionParam{
+									Name:      "lookup_weather",
+									Arguments: []byte(`{"city":"Shanghai"}`),
+								},
+							}},
+						},
+					}}},
+				},
+				{
+					Author:    "tool",
+					Timestamp: toolResultTs,
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{
+							ToolID:   "call-1",
+							ToolName: "lookup_weather",
+							Content:  "sunny",
+						},
+					}}},
+				},
+				{
+					Author:    "assistant",
+					Timestamp: summaryTs.Add(time.Minute),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Role: model.RoleAssistant, Content: "recent response"},
+					}}},
+				},
+			},
+		}
+
+		text, err := s.Summarize(context.Background(), sess)
+		require.NoError(t, err)
+		assert.Contains(t, text, "previous summary")
+		assert.Contains(t, text, "Called tool: lookup_weather")
+		assert.Contains(t, text, "lookup_weather returned: sunny")
+		assert.NotContains(t, text, "recent response")
+
+		raw := sess.State[lastIncludedTsKey]
+		require.NotEmpty(t, raw)
+
+		got, err := time.Parse(time.RFC3339Nano, string(raw))
+		require.NoError(t, err)
+		assert.True(t, got.Equal(toolResultTs))
 	})
 
 	t.Run("errors when filtered events have no user message", func(t *testing.T) {
