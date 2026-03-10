@@ -38,6 +38,10 @@ type mockAgent struct {
 	name string
 }
 
+type emittingMockAgent struct {
+	name string
+}
+
 func (m *mockAgent) Info() agent.Info {
 	return agent.Info{
 		Name:        m.name,
@@ -88,6 +92,52 @@ func (m *mockAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-ch
 
 func (m *mockAgent) Tools() []tool.Tool {
 	return []tool.Tool{}
+}
+
+func (m *emittingMockAgent) Info() agent.Info {
+	return agent.Info{
+		Name:        m.name,
+		Description: "Mock emitting agent for testing",
+	}
+}
+
+func (m *emittingMockAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+func (m *emittingMockAgent) FindSubAgent(name string) agent.Agent {
+	return nil
+}
+
+func (m *emittingMockAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+	eventCh := make(chan *event.Event, 1)
+	runCtx := agent.CloneContext(ctx)
+	go func() {
+		defer close(eventCh)
+		rsp := &model.Response{
+			ID:    "emitting-response",
+			Model: "test-model",
+			Done:  true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "Hello from emitting agent: " + invocation.Message.Content,
+				},
+			}},
+		}
+		_ = agent.EmitEvent(
+			runCtx,
+			invocation,
+			eventCh,
+			event.NewResponseEvent(invocation.InvocationID, m.name, rsp),
+		)
+	}()
+	return eventCh, nil
+}
+
+func (m *emittingMockAgent) Tools() []tool.Tool {
+	return nil
 }
 
 type staticModel struct {
@@ -216,6 +266,62 @@ func TestRunner_Run_WithEventFilterKey(t *testing.T) {
 	userEvent := sess.Events[0]
 	assert.Equal(t, authorUser, userEvent.Author)
 	assert.Equal(t, filterKey, userEvent.FilterKey)
+}
+
+func TestRunner_Run_WithDisableEventInjectionPreservesPersistedMetadata(t *testing.T) {
+	sessionService := sessioninmemory.NewSessionService()
+	runner := NewRunner(
+		"test-app",
+		&emittingMockAgent{name: "test-agent"},
+		WithSessionService(sessionService),
+	)
+	ctx := context.Background()
+	userID := "test-user"
+	sessionID := "test-session"
+	message := model.NewUserMessage("Hello, world!")
+	const requestID = "req-disable-output"
+	const filterKey = "test-app/disable-output"
+	eventCh, err := runner.Run(
+		ctx,
+		userID,
+		sessionID,
+		message,
+		agent.WithRequestID(requestID),
+		agent.WithEventFilterKey(filterKey),
+		agent.WithDisableEventInjection(true),
+	)
+	require.NoError(t, err)
+	var events []*event.Event
+	for evt := range eventCh {
+		events = append(events, evt)
+	}
+	require.Len(t, events, 2)
+	for _, evt := range events {
+		require.NotNil(t, evt)
+		require.Empty(t, evt.InvocationID)
+		require.Empty(t, evt.ParentInvocationID)
+		require.Empty(t, evt.Branch)
+		require.Empty(t, evt.FilterKey)
+		require.Empty(t, evt.RequestID)
+	}
+	sessionKey := session.Key{
+		AppName:   "test-app",
+		UserID:    userID,
+		SessionID: sessionID,
+	}
+	sess, err := sessionService.GetSession(ctx, sessionKey)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, sess.Events, 2)
+	userEvent := sess.Events[0]
+	require.Equal(t, requestID, userEvent.RequestID)
+	require.Equal(t, filterKey, userEvent.FilterKey)
+	require.NotEmpty(t, userEvent.InvocationID)
+	agentEvent := sess.Events[1]
+	require.Equal(t, requestID, agentEvent.RequestID)
+	require.Equal(t, filterKey, agentEvent.FilterKey)
+	require.NotEmpty(t, agentEvent.InvocationID)
+	require.NotEmpty(t, agentEvent.Branch)
 }
 
 func TestRunner_SessionIntegration_MultimodalUserMessage(t *testing.T) {

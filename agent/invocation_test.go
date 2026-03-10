@@ -37,6 +37,12 @@ func TestNewInvocation(t *testing.T) {
 	require.Equal(t, "Hello", inv.Message.Content)
 }
 
+func TestNewInvocation_ExplicitEmptyInvocationIDPreserved(t *testing.T) {
+	inv := NewInvocation(WithInvocationID(""))
+	require.NotNil(t, inv)
+	require.Empty(t, inv.InvocationID)
+}
+
 type mockAgent struct {
 	name string
 }
@@ -92,6 +98,13 @@ func TestInvocation_Clone(t *testing.T) {
 	require.Equal(t, "Hello", subInv.Message.Content)
 	require.Equal(t, inv.noticeChannels, subInv.noticeChannels)
 	require.Equal(t, inv.noticeMu, subInv.noticeMu)
+}
+
+func TestInvocation_Clone_ExplicitEmptyInvocationIDPreserved(t *testing.T) {
+	inv := NewInvocation(WithInvocationID("test-invocation"))
+	cloned := inv.Clone(WithInvocationID(""))
+	require.NotNil(t, cloned)
+	require.Empty(t, cloned.InvocationID)
 }
 
 func TestInvocation_Clone_RawInvocationPreservesNoticeContract(t *testing.T) {
@@ -590,7 +603,7 @@ func TestInjectIntoEvent(t *testing.T) {
 			},
 		},
 		{
-			name: "disable event injection",
+			name: "internal injection ignores output disable flag",
 			inv: NewInvocation(
 				WithInvocationID("test-inv-id"),
 				WithInvocationBranch("test-branch"),
@@ -608,11 +621,11 @@ func TestInjectIntoEvent(t *testing.T) {
 				RequestID:          "preset-request-id",
 			},
 			validate: func(t *testing.T, e *event.Event) {
-				require.Equal(t, "preset-inv-id", e.InvocationID)
+				require.Equal(t, "test-inv-id", e.InvocationID)
 				require.Equal(t, "preset-parent-id", e.ParentInvocationID)
-				require.Equal(t, "preset-branch", e.Branch)
-				require.Equal(t, "preset-filter", e.FilterKey)
-				require.Equal(t, "preset-request-id", e.RequestID)
+				require.Equal(t, "test-branch", e.Branch)
+				require.Equal(t, "test-filter", e.FilterKey)
+				require.Equal(t, "test-request-id", e.RequestID)
 			},
 		},
 	}
@@ -676,15 +689,20 @@ func TestEmitEvent(t *testing.T) {
 	}
 }
 
-func TestEmitEvent_DisableEventInjectionFastPath(t *testing.T) {
+func TestEmitEvent_DisableEventInjectionPreservesInternalEmission(t *testing.T) {
 	log.SetTraceEnabled(false)
 	t.Cleanup(func() {
 		log.SetTraceEnabled(false)
 	})
-
-	inv := NewInvocation(
+	parent := NewInvocation(WithInvocationID("parent-fast-path"))
+	inv := parent.Clone(
 		WithInvocationID("inv-fast-path"),
-		WithInvocationRunOptions(RunOptions{DisableEventInjection: true}),
+		WithInvocationBranch("branch-fast-path"),
+		WithInvocationEventFilterKey("filter-fast-path"),
+		WithInvocationRunOptions(RunOptions{
+			RequestID:             "req-fast-path",
+			DisableEventInjection: true,
+		}),
 	)
 	ch := make(chan *event.Event, 1)
 	evt := &event.Event{ID: "event-fast-path"}
@@ -694,8 +712,11 @@ func TestEmitEvent_DisableEventInjectionFastPath(t *testing.T) {
 
 	sent := <-ch
 	require.Equal(t, "event-fast-path", sent.ID)
-	require.Empty(t, sent.InvocationID)
-	require.Empty(t, sent.ParentInvocationID)
+	require.Equal(t, inv.InvocationID, sent.InvocationID)
+	require.Equal(t, parent.InvocationID, sent.ParentInvocationID)
+	require.Equal(t, inv.Branch, sent.Branch)
+	require.Equal(t, inv.GetEventFilterKey(), sent.FilterKey)
+	require.Equal(t, inv.RunOptions.RequestID, sent.RequestID)
 }
 
 func TestEmitEvent_TraceLogging(t *testing.T) {
@@ -717,7 +738,7 @@ func TestEmitEvent_TraceLogging(t *testing.T) {
 	require.Greater(t, stub.debugfCalls, 0)
 }
 
-func TestEmitEvent_DisableEventInjectionWithTrace(t *testing.T) {
+func TestEmitOutputEvent_DisableEventInjectionWithTrace(t *testing.T) {
 	stub := &traceCaptureLogger{}
 	original := log.Default
 	log.Default = stub
@@ -726,19 +747,70 @@ func TestEmitEvent_DisableEventInjectionWithTrace(t *testing.T) {
 		log.Default = original
 		log.SetTraceEnabled(false)
 	})
-	inv := NewInvocation(
+	parent := NewInvocation(WithInvocationID("parent-trace-disabled"))
+	inv := parent.Clone(
 		WithInvocationID("inv-trace-disabled"),
-		WithInvocationRunOptions(RunOptions{DisableEventInjection: true}),
+		WithInvocationBranch("branch-trace-disabled"),
+		WithInvocationEventFilterKey("filter-trace-disabled"),
+		WithInvocationRunOptions(RunOptions{
+			RequestID:             "req-trace-disabled",
+			DisableEventInjection: true,
+		}),
 	)
 	ch := make(chan *event.Event, 1)
-	evt := &event.Event{ID: "trace-disabled"}
-	err := EmitEvent(context.Background(), inv, ch, evt)
+	evt := &event.Event{
+		ID:                 "trace-disabled",
+		InvocationID:       inv.InvocationID,
+		ParentInvocationID: parent.InvocationID,
+		Branch:             inv.Branch,
+		FilterKey:          inv.GetEventFilterKey(),
+		RequestID:          inv.RunOptions.RequestID,
+	}
+	err := EmitOutputEvent(context.Background(), inv, ch, evt)
 	require.NoError(t, err)
 	require.Greater(t, stub.debugfCalls, 0)
 	sent := <-ch
 	require.Equal(t, "trace-disabled", sent.ID)
 	require.Empty(t, sent.InvocationID)
 	require.Empty(t, sent.ParentInvocationID)
+	require.Empty(t, sent.Branch)
+	require.Empty(t, sent.FilterKey)
+	require.Empty(t, sent.RequestID)
+}
+
+func TestEmitOutputEvent_DisableEventInjectionFastPath(t *testing.T) {
+	log.SetTraceEnabled(false)
+	t.Cleanup(func() {
+		log.SetTraceEnabled(false)
+	})
+	parent := NewInvocation(WithInvocationID("parent-output-fast-path"))
+	inv := parent.Clone(
+		WithInvocationID("inv-output-fast-path"),
+		WithInvocationBranch("branch-output-fast-path"),
+		WithInvocationEventFilterKey("filter-output-fast-path"),
+		WithInvocationRunOptions(RunOptions{
+			RequestID:             "req-output-fast-path",
+			DisableEventInjection: true,
+		}),
+	)
+	ch := make(chan *event.Event, 1)
+	evt := &event.Event{
+		ID:                 "event-output-fast-path",
+		InvocationID:       inv.InvocationID,
+		ParentInvocationID: parent.InvocationID,
+		Branch:             inv.Branch,
+		FilterKey:          inv.GetEventFilterKey(),
+		RequestID:          inv.RunOptions.RequestID,
+	}
+	err := EmitOutputEvent(context.Background(), inv, ch, evt)
+	require.NoError(t, err)
+	sent := <-ch
+	require.Equal(t, "event-output-fast-path", sent.ID)
+	require.Empty(t, sent.InvocationID)
+	require.Empty(t, sent.ParentInvocationID)
+	require.Empty(t, sent.Branch)
+	require.Empty(t, sent.FilterKey)
+	require.Empty(t, sent.RequestID)
 }
 
 func TestGetAppendEventNoticeKey(t *testing.T) {

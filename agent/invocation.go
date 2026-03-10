@@ -318,7 +318,7 @@ func WithStreamMode(modes ...StreamMode) RunOption {
 	}
 }
 
-// WithDisableEventInjection disables injecting invocation metadata into emitted events.
+// WithDisableEventInjection disables invocation metadata on emitted output events.
 func WithDisableEventInjection(disable bool) RunOption {
 	return func(opts *RunOptions) {
 		opts.DisableEventInjection = disable
@@ -627,7 +627,8 @@ type RunOptions struct {
 	// filtering and preserve the existing behavior.
 	StreamModes []StreamMode
 
-	// DisableEventInjection disables injecting invocation metadata into emitted events.
+	// DisableEventInjection disables invocation metadata on emitted output events.
+	// Internal event handling and session persistence still retain invocation fields.
 	DisableEventInjection bool
 
 	// RequestID is the request id of the request.
@@ -744,10 +745,6 @@ func NewInvocation(invocationOpts ...InvocationOptions) *Invocation {
 		opt(inv)
 	}
 
-	if inv.InvocationID == "" {
-		inv.InvocationID = uuid.NewString()
-	}
-
 	if inv.Branch == "" {
 		inv.Branch = inv.AgentName
 	}
@@ -782,10 +779,6 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 
 	for _, opt := range invocationOpts {
 		opt(newInv)
-	}
-
-	if newInv.InvocationID == "" {
-		newInv.InvocationID = uuid.NewString()
 	}
 
 	if newInv.Branch != "" {
@@ -845,10 +838,9 @@ func (inv *Invocation) GetParentInvocation() *Invocation {
 
 // InjectIntoEvent inject invocation information into event.
 func InjectIntoEvent(inv *Invocation, e *event.Event) {
-	if e == nil || inv == nil || inv.RunOptions.DisableEventInjection {
+	if e == nil || inv == nil {
 		return
 	}
-
 	e.RequestID = inv.RunOptions.RequestID
 	if inv.parent != nil {
 		e.ParentInvocationID = inv.parent.InvocationID
@@ -858,21 +850,25 @@ func InjectIntoEvent(inv *Invocation, e *event.Event) {
 	e.FilterKey = inv.GetEventFilterKey()
 }
 
-// EmitEvent inject invocation information into event and emit it to channel.
-func EmitEvent(ctx context.Context, inv *Invocation, ch chan<- *event.Event,
-	e *event.Event) error {
+func stripInvocationOutputFields(inv *Invocation, e *event.Event) {
+	if inv == nil || e == nil || !inv.RunOptions.DisableEventInjection {
+		return
+	}
+	e.RequestID = ""
+	e.ParentInvocationID = ""
+	e.InvocationID = ""
+	e.Branch = ""
+	e.FilterKey = ""
+}
+
+func emitPreparedEvent(ctx context.Context, inv *Invocation, ch chan<- *event.Event, e *event.Event) error {
 	if ch == nil || e == nil {
 		return nil
 	}
 	traceEnabled := log.IsTraceEnabled()
-	// Hot-path: when event injection is disabled and trace logging is off, we can
-	// forward directly to the event package to avoid extra bookkeeping.
-	if inv != nil &&
-		inv.RunOptions.DisableEventInjection &&
-		!traceEnabled {
+	if !traceEnabled {
 		return event.EmitEvent(ctx, ch, e)
 	}
-	InjectIntoEvent(inv, e)
 	var agentName, requestID string
 	if inv != nil {
 		agentName = inv.AgentName
@@ -890,6 +886,18 @@ func EmitEvent(ctx context.Context, inv *Invocation, ch chan<- *event.Event,
 		)
 	}
 	return event.EmitEvent(ctx, ch, e)
+}
+
+// EmitOutputEvent applies output-only event projection and emits the event to channel.
+func EmitOutputEvent(ctx context.Context, inv *Invocation, ch chan<- *event.Event, e *event.Event) error {
+	stripInvocationOutputFields(inv, e)
+	return emitPreparedEvent(ctx, inv, ch, e)
+}
+
+// EmitEvent injects invocation information for internal handling and emits the event to channel.
+func EmitEvent(ctx context.Context, inv *Invocation, ch chan<- *event.Event, e *event.Event) error {
+	InjectIntoEvent(inv, e)
+	return emitPreparedEvent(ctx, inv, ch, e)
 }
 
 // GetAppendEventNoticeKey get append event notice key.

@@ -760,36 +760,28 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 		log.Errorf("agentEvent is nil")
 		return nil
 	}
-
 	agentEvent = r.applyEventPlugins(ctx, loop.invocation, agentEvent)
-
 	r.recordEmittedAssistantResponseID(loop, agentEvent)
-
 	// Append qualifying events to session and trigger summarization.
 	r.handleEventPersistence(ctx, loop.invocation, loop.sess, agentEvent)
-
 	// Capture graph-level completion snapshot for final event.
 	if isGraphCompletionEvent(agentEvent) {
 		loop.finalStateDelta, loop.finalChoices = r.captureGraphCompletion(agentEvent)
 	}
 	r.captureCompletionFallback(loop, agentEvent)
-
 	// Notify completion if required.
 	if agentEvent.RequiresCompletion {
 		completionID := agent.GetAppendEventNoticeKey(agentEvent.ID)
 		loop.invocation.NotifyCompletion(ctx, completionID)
 	}
-
 	r.recordRunEvent(loop)
 	if !loop.streamFilter.Allows(agentEvent) {
 		return nil
 	}
-
 	// Emit event to output channel.
-	if err := event.EmitEvent(ctx, loop.processedEventCh, agentEvent); err != nil {
+	if err := agent.EmitOutputEvent(ctx, loop.invocation, loop.processedEventCh, agentEvent); err != nil {
 		return fmt.Errorf("emit event to output channel: %w", err)
 	}
-
 	return nil
 }
 
@@ -1181,7 +1173,7 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 	}
 
 	// Send the runner completion event to output channel.
-	agent.EmitEvent(ctx, loop.invocation, loop.processedEventCh, runnerCompletionEvent)
+	agent.EmitOutputEvent(ctx, loop.invocation, loop.processedEventCh, runnerCompletionEvent)
 
 	// Enqueue auto memory extraction job if memory service is configured.
 	r.enqueueAutoMemoryJob(ctx, loop.sess)
