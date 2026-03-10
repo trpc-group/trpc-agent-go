@@ -219,6 +219,8 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 	if runtimeState != nil {
 		runOption = append(runOption, agent.WithRuntimeState(runtimeState))
 	}
+	// Preserve invocation topology for AG-UI translation regardless of caller-supplied run options.
+	runOption = append(runOption, agent.WithDisableEventInjection(false))
 	ctx, span, err := r.startSpan(ctx, runAgentInput)
 	if err != nil {
 		return nil, fmt.Errorf("start span: %w", err)

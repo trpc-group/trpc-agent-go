@@ -1289,12 +1289,12 @@ func TestRunRunOptionResolverOptions(t *testing.T) {
 		message model.Message,
 		opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
 		assert.Equal(t, "user-123", userID)
-		assert.Len(t, opts, 1)
 		var runOpts agent.RunOptions
 		for _, opt := range opts {
 			opt(&runOpts)
 		}
 		assert.Equal(t, "resolver-request-id", runOpts.RequestID)
+		assert.False(t, runOpts.DisableEventInjection)
 		optionsApplied = true
 		ch := make(chan *agentevent.Event)
 		go func() {
@@ -1330,6 +1330,49 @@ func TestRunRunOptionResolverOptions(t *testing.T) {
 	assert.NotEmpty(t, evts)
 	assert.True(t, resolverCalled)
 	assert.True(t, optionsApplied)
+	assert.Equal(t, 1, underlying.calls)
+}
+
+func TestRunRunOptionResolverDisableEventInjectionIsOverridden(t *testing.T) {
+	fakeTrans := &fakeTranslator{}
+	underlying := &fakeRunner{}
+	underlying.run = func(ctx context.Context,
+		userID, sessionID string,
+		message model.Message,
+		opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
+		var runOpts agent.RunOptions
+		for _, opt := range opts {
+			opt(&runOpts)
+		}
+		assert.False(t, runOpts.DisableEventInjection)
+		ch := make(chan *agentevent.Event)
+		go func() {
+			close(ch)
+		}()
+		return ch, nil
+	}
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	r := &runner{
+		runner: underlying,
+		translatorFactory: func(_ context.Context, _ *adapter.RunAgentInput, _ ...translator.Option) (translator.Translator, error) {
+			return fakeTrans, nil
+		},
+		userIDResolver: defaultUserIDResolver,
+		stateResolver:  defaultStateResolver,
+		runOptionResolver: func(context.Context, *adapter.RunAgentInput) ([]agent.RunOption, error) {
+			return []agent.RunOption{agent.WithDisableEventInjection(true)}, nil
+		},
+		startSpan: defaultStartSpan,
+	}
+
+	eventsCh, err := r.Run(context.Background(), input)
+	assert.NoError(t, err)
+	evts := collectEvents(t, eventsCh)
+	assert.NotEmpty(t, evts)
 	assert.Equal(t, 1, underlying.calls)
 }
 
