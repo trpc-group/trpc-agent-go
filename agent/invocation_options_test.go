@@ -455,3 +455,13 @@ func (m *mockArtifactService) DeleteArtifact(ctx context.Context, info artifact.
 func (m *mockArtifactService) ListVersions(ctx context.Context, info artifact.SessionInfo, filename string) ([]int, error) {
 	return nil, nil
 }
+
+func TestWithDisableEventInjection(t *testing.T) {
+	opts := &RunOptions{}
+
+	WithDisableEventInjection(true)(opts)
+	require.True(t, opts.DisableEventInjection)
+
+	WithDisableEventInjection(false)(opts)
+	require.False(t, opts.DisableEventInjection)
+}

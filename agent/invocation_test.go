@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -39,6 +40,21 @@ func TestNewInvocation(t *testing.T) {
 type mockAgent struct {
 	name string
 }
+
+type traceCaptureLogger struct {
+	debugfCalls int
+}
+
+func (*traceCaptureLogger) Debug(args ...any)                   {}
+func (l *traceCaptureLogger) Debugf(format string, args ...any) { l.debugfCalls++ }
+func (*traceCaptureLogger) Info(args ...any)                    {}
+func (*traceCaptureLogger) Infof(format string, args ...any)    {}
+func (*traceCaptureLogger) Warn(args ...any)                    {}
+func (*traceCaptureLogger) Warnf(format string, args ...any)    {}
+func (*traceCaptureLogger) Error(args ...any)                   {}
+func (*traceCaptureLogger) Errorf(format string, args ...any)   {}
+func (*traceCaptureLogger) Fatal(args ...any)                   {}
+func (*traceCaptureLogger) Fatalf(format string, args ...any)   {}
 
 func (a *mockAgent) Run(ctx context.Context, invocation *Invocation) (<-chan *event.Event, error) {
 	return nil, nil
@@ -76,6 +92,40 @@ func TestInvocation_Clone(t *testing.T) {
 	require.Equal(t, "Hello", subInv.Message.Content)
 	require.Equal(t, inv.noticeChannels, subInv.noticeChannels)
 	require.Equal(t, inv.noticeMu, subInv.noticeMu)
+}
+
+func TestInvocation_Clone_DefersNoticeAllocationToParent(t *testing.T) {
+	parent := NewInvocation(WithInvocationID("parent"))
+	child := parent.Clone(WithInvocationID("child"))
+
+	require.Same(t, noticeStateSentinel, child.notice)
+
+	notice := child.ensureNotice()
+	require.NotNil(t, notice)
+	require.Same(t, parent.notice, child.notice)
+	require.Same(t, parent.notice, notice)
+	require.NotSame(t, noticeStateSentinel, parent.notice)
+	require.NotNil(t, child.noticeMu)
+}
+
+func TestInvocation_NoticeHelperCoverage(t *testing.T) {
+	var nilInv *Invocation
+	require.Nil(t, nilInv.ensureNotice())
+
+	inv := &Invocation{}
+	inv.syncNoticeCompat(nil)
+	require.Nil(t, inv.noticeMu)
+
+	child := &Invocation{
+		notice: noticeStateSentinel,
+		parent: &Invocation{},
+	}
+	require.Nil(t, child.ensureNotice())
+}
+
+func TestInvocation_Clone_SetsNoticeSentinelForRawInvocation(t *testing.T) {
+	cloned := (&Invocation{}).Clone()
+	require.Same(t, noticeStateSentinel, cloned.notice)
 }
 
 func TestInvocation_AddNoticeChannel(t *testing.T) {
@@ -324,6 +374,14 @@ func TestInvocation_AddNoticeChannel_Panic(t *testing.T) {
 
 func TestInvocation_NotifyCompletion_Panic(t *testing.T) {
 	inv := &Invocation{}
+
+	err := inv.NotifyCompletion(context.Background(), "test-key")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "noticeMu is uninitialized")
+}
+
+func TestInvocation_NotifyCompletion_NilReceiver(t *testing.T) {
+	var inv *Invocation
 
 	err := inv.NotifyCompletion(context.Background(), "test-key")
 	require.Error(t, err)
@@ -593,6 +651,47 @@ func TestEmitEvent(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEmitEvent_DisableEventInjectionFastPath(t *testing.T) {
+	log.SetTraceEnabled(false)
+	t.Cleanup(func() {
+		log.SetTraceEnabled(false)
+	})
+
+	inv := NewInvocation(
+		WithInvocationID("inv-fast-path"),
+		WithInvocationRunOptions(RunOptions{DisableEventInjection: true}),
+	)
+	ch := make(chan *event.Event, 1)
+	evt := &event.Event{ID: "event-fast-path"}
+
+	err := EmitEvent(context.Background(), inv, ch, evt)
+	require.NoError(t, err)
+
+	sent := <-ch
+	require.Equal(t, "event-fast-path", sent.ID)
+	require.Empty(t, sent.InvocationID)
+	require.Empty(t, sent.ParentInvocationID)
+}
+
+func TestEmitEvent_TraceLogging(t *testing.T) {
+	stub := &traceCaptureLogger{}
+	original := log.Default
+	log.Default = stub
+	log.SetTraceEnabled(true)
+	t.Cleanup(func() {
+		log.Default = original
+		log.SetTraceEnabled(false)
+	})
+
+	inv := NewInvocation(WithInvocationID("inv-trace"))
+	inv.AgentName = "trace-agent"
+
+	ch := make(chan *event.Event, 1)
+	err := EmitEvent(context.Background(), inv, ch, &event.Event{Branch: "trace"})
+	require.NoError(t, err)
+	require.Greater(t, stub.debugfCalls, 0)
 }
 
 func TestGetAppendEventNoticeKey(t *testing.T) {

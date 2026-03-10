@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -256,6 +257,24 @@ func TestEmitEventWithTimeout(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEmitEventWithTimeout_TraceEnabled(t *testing.T) {
+	log.SetTraceEnabled(true)
+	t.Cleanup(func() {
+		log.SetTraceEnabled(false)
+	})
+
+	ctx := context.Background()
+	evt := New("invocationID", "author")
+
+	buffered := make(chan *Event, 1)
+	require.NoError(t, EmitEventWithTimeout(ctx, buffered, evt, EmitWithoutTimeout))
+	require.Same(t, evt, <-buffered)
+
+	buffered = make(chan *Event, 1)
+	require.NoError(t, EmitEventWithTimeout(ctx, buffered, evt, time.Second))
+	require.Same(t, evt, <-buffered)
 }
 
 func TestEmitEventTimeoutError_Error_And_As(t *testing.T) {

@@ -254,6 +254,14 @@ func TestTracefContext_Disabled(t *testing.T) {
 	assert.Equal(t, 0, stub.debugfCalls, "TracefContext should not call Debugf when trace is disabled")
 }
 
+func TestIsTraceEnabled(t *testing.T) {
+	log.SetTraceEnabled(true)
+	assert.True(t, log.IsTraceEnabled())
+
+	log.SetTraceEnabled(false)
+	assert.False(t, log.IsTraceEnabled())
+}
+
 func wrapLoggerWithObserver(t *testing.T, logger log.Logger) (*observer.ObservedLogs, log.Logger) {
 	t.Helper()
 	sugar, ok := logger.(*zap.SugaredLogger)
