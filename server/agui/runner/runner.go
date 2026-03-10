@@ -191,15 +191,29 @@ func inputMessageFromRunAgentInput(input *adapter.RunAgentInput) (*model.Message
 	return &inputMessage, lastMessage.ID, &userMessage, nil
 }
 
-func (r *runner) validateRunOptions(runOption []agent.RunOption) error {
-	if !r.graphNodeInterruptActivityEnabled || !r.graphNodeInterruptActivityTopLevelOnly {
-		return nil
-	}
-	var opts agent.RunOptions
+func resolveRunOptions(runOption []agent.RunOption) agent.RunOptions {
+	opts := agent.RunOptions{RequestID: uuid.NewString()}
 	for _, opt := range runOption {
 		opt(&opts)
 	}
-	if !opts.DisableEventInjection {
+	if opts.RequestID == "" {
+		opts.RequestID = uuid.NewString()
+	}
+	return opts
+}
+
+func resolvedRunOption(runOptions agent.RunOptions) agent.RunOption {
+	snapshot := runOptions
+	return func(opts *agent.RunOptions) {
+		*opts = snapshot
+	}
+}
+
+func (r *runner) validateRunOptions(runOptions *agent.RunOptions) error {
+	if !r.graphNodeInterruptActivityEnabled || !r.graphNodeInterruptActivityTopLevelOnly {
+		return nil
+	}
+	if runOptions == nil || !runOptions.DisableEventInjection {
 		return nil
 	}
 	return ErrDisableEventInjectionUnsupported
@@ -238,7 +252,8 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 	if runtimeState != nil {
 		runOption = append(runOption, agent.WithRuntimeState(runtimeState))
 	}
-	if err := r.validateRunOptions(runOption); err != nil {
+	resolvedRunOptions := resolveRunOptions(runOption)
+	if err := r.validateRunOptions(&resolvedRunOptions); err != nil {
 		return nil, err
 	}
 	ctx, span, err := r.startSpan(ctx, runAgentInput)
@@ -269,11 +284,11 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 		inputMessage:   inputMessage,
 		inputMessageID: inputMessageID,
 		userMessage:    userMessage,
-		runOption:      runOption,
+		runOption:      []agent.RunOption{resolvedRunOption(resolvedRunOptions)},
 		translator:     trans,
 		enableTrack:    r.tracker != nil,
 		span:           span,
-		resume:         parseResumeInfo(runOption),
+		resume:         parseResumeInfo(&resolvedRunOptions),
 	}
 	events := make(chan aguievents.Event)
 	ctx, cancel := r.newExecutionContext(ctx, r.timeout)
@@ -361,13 +376,9 @@ func (r *runner) run(ctx context.Context, cancel context.CancelFunc, key session
 	}
 }
 
-func parseResumeInfo(opt []agent.RunOption) *resumeInfo {
-	if len(opt) == 0 {
+func parseResumeInfo(opts *agent.RunOptions) *resumeInfo {
+	if opts == nil {
 		return nil
-	}
-	opts := &agent.RunOptions{}
-	for _, o := range opt {
-		o(opts)
 	}
 	state := opts.RuntimeState
 	if len(state) == 0 {

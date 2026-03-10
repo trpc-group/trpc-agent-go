@@ -1336,6 +1336,7 @@ func TestRunRunOptionResolverOptions(t *testing.T) {
 func TestRunRunOptionResolverDisableEventInjectionIsPassedThrough(t *testing.T) {
 	fakeTrans := &fakeTranslator{}
 	underlying := &fakeRunner{}
+	sideEffectCalls := 0
 	underlying.run = func(ctx context.Context,
 		userID, sessionID string,
 		message model.Message,
@@ -1364,7 +1365,10 @@ func TestRunRunOptionResolverDisableEventInjectionIsPassedThrough(t *testing.T) 
 		userIDResolver: defaultUserIDResolver,
 		stateResolver:  defaultStateResolver,
 		runOptionResolver: func(context.Context, *adapter.RunAgentInput) ([]agent.RunOption, error) {
-			return []agent.RunOption{agent.WithDisableEventInjection(true)}, nil
+			return []agent.RunOption{func(opts *agent.RunOptions) {
+				sideEffectCalls++
+				opts.DisableEventInjection = true
+			}}, nil
 		},
 		startSpan: defaultStartSpan,
 	}
@@ -1373,6 +1377,7 @@ func TestRunRunOptionResolverDisableEventInjectionIsPassedThrough(t *testing.T) 
 	assert.NoError(t, err)
 	evts := collectEvents(t, eventsCh)
 	assert.NotEmpty(t, evts)
+	assert.Equal(t, 1, sideEffectCalls)
 	assert.Equal(t, 1, underlying.calls)
 }
 
