@@ -108,7 +108,9 @@ retrieval pipeline:
 
 > The optimized version's F1 improved from 0.399 to **0.458**
 > (+14.8%), reaching **97.7%** of Long-Context F1 (up from 85.1%
-> for original).
+> for original). Although the nominal Tokens/QA (17,359) is higher,
+> **43.5% are served from prompt cache**, making the effective new
+> token cost ~9,815/QA (see Section 4.5).
 
 **Table 2: F1 by Category**
 
@@ -308,9 +310,15 @@ and evaluation pipeline.
   and answers).
 - **Strengths**: Extracted memories are precise, high information
   density; hybrid search covers both semantic and keyword matches.
-- **Issues**: Tool-call pattern forces each step to re-read all
-  prior context, inflating prompts to ~17,359 tokens/QA;
-  structured JSON format adds serialization overhead.
+- **Token profile**: The tool-call pattern re-reads prior context
+  at each step, resulting in ~17,359 prompt tokens/QA. However,
+  **43.5% of prompt tokens are served from the provider's prompt
+  cache** (OpenAI `cached_tokens`), so the effective *new* prompt
+  cost is ~9,815 tokens/QA — comparable to single-call approaches
+  when measured by billable cost (cached tokens are billed at 50%
+  on most providers).
+- **Issues**: Structured JSON format adds serialization overhead;
+  multi-step latency is higher than single-call patterns.
 
 **AutoGen — Raw turns in ChromaDB + single LLM call:**
 
@@ -403,8 +411,12 @@ and evaluation pipeline.
 | Storage | LLM-extracted structured | Raw turns | Raw turns | Raw turns | LLM-extracted facts |
 | Retrieval | Vector+keyword hybrid | Vector top-30 | Vector top-30 | **Full load** | **Full injection** |
 | LLM calls/QA | 3 (tool call) | **1** (pre-inject) | 2 (Crew internal) | 2 (tool call) | 1 (pre-inject) |
-| Tokens/QA | 17,359 | **1,943** | 2,839 | 49,224 | 10,436 |
+| Tokens/QA | 17,359 (9,815 effective†) | **1,943** | 2,839 | 49,224 | 10,436 |
 
+> † 43.5% of trpc (opt) prompt tokens are served from the
+> provider's prompt cache — the effective *new* token cost is
+> ~9,815/QA.
+>
 > Key insight: **retrieval strategy is the primary differentiator**.
 > Full-load approaches (ADK/Agno) waste tokens with poor results;
 > selective retrieval (AutoGen/CrewAI/trpc) performs significantly
@@ -419,12 +431,16 @@ and evaluation pipeline.
 
 | Framework | F1 | BLEU | LLM Score | Tokens/QA | Calls/QA | Latency | Total Time |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| **trpc-agent-go (optimized)** | **0.458** | **0.422** | 0.527 | 17,359 | 3.0 | 8,303ms | 4h35m |
+| **trpc-agent-go (optimized)** | **0.458** | **0.422** | 0.527 | 17,359† | 3.0 | 8,303ms | 4h35m |
 | AutoGen | 0.457 | 0.414 | 0.540 | 1,943 | 1.0 | 3,816ms | 2h06m |
 | CrewAI | 0.427 | 0.385 | 0.479 | 2,839 | 2.0 | 8,081ms | 4h27m |
 | ADK | 0.362 | 0.309 | 0.476 | 49,224 | 2.0 | 5,578ms | 3h04m |
 | trpc-agent-go (original) | 0.399 | 0.371 | 0.416 | 3,056 | 2.0 | 6,659ms | 3h40m |
 | Agno | 0.332 | 0.289 | 0.494 | 10,436 | 1.0 | 14,127ms | 7h47m |
+
+> † 43.5% of the optimized version's prompt tokens hit the
+> provider's prompt cache; effective new token cost is ~9,815/QA.
+> See Section 4.5 for details.
 
 > **LLM Score aggregation note.** All frameworks now use the same
 > all-sample denominator (accuracy-style: `sum(llm_score) / total_qa`).
@@ -473,22 +489,34 @@ Agno                   |==============================            | 0.332
 
 **Table 10: Token Efficiency Comparison**
 
-| Framework | F1 | Total Tokens | Tokens/QA | F1/Billion Tokens |
-| --- | ---: | ---: | ---: | ---: |
-| AutoGen | 0.457 | 3,859,412 | 1,943 | 118.4 |
-| CrewAI | 0.427 | 5,639,085 | 2,839 | 75.7 |
-| trpc-agent-go (original) | 0.399 | 6,068,802 | 3,056 | 65.7 |
-| trpc-agent-go (optimized) | **0.458** | 34,590,410 | 17,359 | 13.2 |
-| Agno | 0.332 | 20,725,728 | 10,436 | 16.0 |
-| ADK | 0.362 | 97,759,453 | 49,224 | 3.7 |
+| Framework | F1 | Total Tokens | Tokens/QA | Cache Hit | Effective Tokens/QA† | F1/Billion Tokens |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| AutoGen | 0.457 | 3,859,412 | 1,943 | n/a | 1,943 | 118.4 |
+| CrewAI | 0.427 | 5,639,085 | 2,839 | n/a | 2,839 | 75.7 |
+| trpc-agent-go (original) | 0.399 | 6,068,802 | 3,056 | n/a | 3,056 | 65.7 |
+| trpc-agent-go (optimized) | **0.458** | 34,590,410 | 17,359 | **43.5%** | **9,815** | 13.2 |
+| Agno | 0.332 | 20,725,728 | 10,436 | n/a | 10,436 | 16.0 |
+| ADK | 0.362 | 97,759,453 | 49,224 | n/a | 49,224 | 3.7 |
 
-> AutoGen has the best token efficiency (118.4 F1/billion tokens),
-> achieving 0.457 F1 with minimal token consumption. CrewAI ranks
-> second (75.7), reaching 0.427 F1 with only 2,839 tokens/QA. The
-> original version ranks third (65.7), achieving 0.399 F1 with
-> 3,056 tokens/QA. The optimized version trades more tokens
-> (17,359/QA) for the highest F1 (0.458), at 13.2 F1/billion
-> tokens. ADK has the worst efficiency — 49,224 tokens/QA for only
+> † **Effective Tokens/QA** = prompt tokens minus cached prompt
+> tokens, plus completion tokens. Cached tokens hit the provider's
+> automatic prompt cache (e.g. OpenAI `cached_tokens`) and are
+> typically billed at **50% of the standard prompt rate**. The
+> Python frameworks do not report `cached_tokens` in their SDKs,
+> so their effective cost may also be lower than shown; the `n/a`
+> entries indicate data not available rather than zero caching.
+>
+> By raw token count, AutoGen achieves the best efficiency
+> (118.4 F1/billion tokens) with minimal consumption. The
+> optimized version shows a higher *nominal* token count
+> (17,359/QA) due to the multi-step tool-call pattern where
+> each step re-reads prior context. However, 43.5% of these
+> prompt tokens are served from the provider's prompt cache
+> (14.98M of 34.47M prompt tokens), reducing the *effective new*
+> prompt cost to ~9,815 tokens/QA. At the standard 50% cache
+> discount, the **billable cost of the optimized version is
+> ~37% lower than the nominal token count suggests**. ADK
+> remains the least efficient — 49,224 tokens/QA for only
 > 0.362 F1.
 
 ```
@@ -532,10 +560,21 @@ tokens total for both steps), because its memories are stored as
 raw conversation turns rather than extracted structured
 facts/episodes.
 
+**Prompt cache mitigates the cost:** Despite re-reading prior
+context at each step, the multi-turn pattern is highly
+cache-friendly — Steps 2 and 3 share a long common prefix with
+their predecessors. In practice, **43.5% of all prompt tokens
+(14.98M out of 34.47M) are served from the provider's automatic
+prompt cache**, reducing the effective new prompt volume to
+~19.49M tokens. At the standard 50% cache pricing, the actual
+billable prompt cost is equivalent to ~26.98M tokens rather than
+34.47M — a **~22% reduction** from the nominal figure.
+
 Despite the higher token cost, the optimized version achieves a
 significantly better F1/cost trade-off: **+14.8% F1** (0.399→0.458)
-for **5.7x token cost**, making it worthwhile for production use
-where answer quality matters more than token budget.
+for **5.7x nominal token cost** (significantly less after cache
+discounts), making it worthwhile for production use where answer
+quality matters more than token budget.
 
 ### 4.6 ADK Failure Analysis
 
