@@ -218,7 +218,7 @@ func resolvedRunOption(runOptions agent.RunOptions) agent.RunOption {
 			opts.Messages = snapshot.Messages
 		}
 		if snapshot.InjectedContextMessages != nil {
-			opts.InjectedContextMessages = snapshot.InjectedContextMessages
+			opts.InjectedContextMessages = append(opts.InjectedContextMessages, snapshot.InjectedContextMessages...)
 		}
 		if snapshot.Resume {
 			opts.Resume = true
@@ -246,7 +246,7 @@ func resolvedRunOption(runOptions agent.RunOptions) agent.RunOption {
 			opts.SpanAttributes = snapshot.SpanAttributes
 		}
 		if snapshot.A2ARequestOptions != nil {
-			opts.A2ARequestOptions = snapshot.A2ARequestOptions
+			opts.A2ARequestOptions = append(opts.A2ARequestOptions, snapshot.A2ARequestOptions...)
 		}
 		if snapshot.CustomAgentConfigs != nil {
 			opts.CustomAgentConfigs = snapshot.CustomAgentConfigs
