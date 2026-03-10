@@ -13,7 +13,6 @@ import (
 	"context"
 	"errors"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -999,18 +998,12 @@ func TestShouldIncludeAutoMemoryTool(t *testing.T) {
 }
 
 func TestGetSegmenter_ErrorPath(t *testing.T) {
-	// Save original state.
-	origOnce := segOnce
-	origErr := segErr
+	// Reset segmenter state and restore after test.
+	resetSegmenter()
+	defer resetSegmenter()
 
-	// Restore after test.
-	defer func() {
-		segOnce = origOnce
-		segErr = origErr
-	}()
-
-	// Simulate a failed LoadDict by setting segErr and marking Once as done.
-	segOnce = sync.Once{}
+	// Simulate a failed LoadDict by marking Once as done
+	// with an error.
 	segOnce.Do(func() {
 		segErr = errors.New("mock dict load failure")
 	})
@@ -1018,26 +1011,22 @@ func TestGetSegmenter_ErrorPath(t *testing.T) {
 	s, err := getSegmenter()
 	assert.Nil(t, s)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "load segmenter dict failed")
+	assert.Contains(t,
+		err.Error(), "load segmenter dict failed")
 }
 
 func TestBuildSearchTokens_SegmenterError(t *testing.T) {
-	// Save original state.
-	origOnce := segOnce
-	origErr := segErr
-
-	defer func() {
-		segOnce = origOnce
-		segErr = origErr
-	}()
+	// Reset segmenter state and restore after test.
+	resetSegmenter()
+	defer resetSegmenter()
 
 	// Simulate segmenter error.
-	segOnce = sync.Once{}
 	segOnce.Do(func() {
 		segErr = errors.New("mock error")
 	})
 
-	// CJK query triggers getSegmenter, which returns error -> nil result.
+	// CJK query triggers getSegmenter, which returns error
+	// -> nil result.
 	result := BuildSearchTokens("中文测试")
 	assert.Nil(t, result)
 }

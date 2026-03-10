@@ -41,7 +41,7 @@ func newMockMemoryService() *mockMemoryService {
 	}
 }
 
-func (m *mockMemoryService) AddMemory(ctx context.Context, userKey memory.UserKey, memoryStr string, topics []string) error {
+func (m *mockMemoryService) AddMemory(ctx context.Context, userKey memory.UserKey, memoryStr string, topics []string, opts ...memory.AddOption) error {
 	m.counter++
 	memoryID := fmt.Sprintf("memory-%d", m.counter)
 	key := userKey.AppName + ":" + userKey.UserID + ":" + memoryID
@@ -56,10 +56,10 @@ func (m *mockMemoryService) AddMemory(ctx context.Context, userKey memory.UserKe
 	return nil
 }
 
-func (m *mockMemoryService) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory string, topics []string) error {
+func (m *mockMemoryService) UpdateMemory(ctx context.Context, memoryKey memory.Key, mem string, topics []string, opts ...memory.UpdateOption) error {
 	key := memoryKey.AppName + ":" + memoryKey.UserID + ":" + memoryKey.MemoryID
 	if entry, exists := m.memories[key]; exists {
-		entry.Memory.Memory = memory
+		entry.Memory.Memory = mem
 		entry.Memory.Topics = topics
 		entry.UpdatedAt = time.Now()
 		return nil
@@ -101,7 +101,7 @@ func (m *mockMemoryService) ReadMemories(ctx context.Context, userKey memory.Use
 	return results, nil
 }
 
-func (m *mockMemoryService) SearchMemories(ctx context.Context, userKey memory.UserKey, query string) ([]*memory.Entry, error) {
+func (m *mockMemoryService) SearchMemories(ctx context.Context, userKey memory.UserKey, query string, opts ...memory.SearchOption) ([]*memory.Entry, error) {
 	var results []*memory.Entry
 	prefix := userKey.AppName + ":" + userKey.UserID + ":"
 
@@ -129,21 +129,6 @@ func (m *mockMemoryService) EnqueueAutoMemoryJob(ctx context.Context, sess *sess
 
 func (m *mockMemoryService) Close() error {
 	return nil
-}
-
-func (m *mockMemoryService) AddMemoryWithEpisodic(ctx context.Context, userKey memory.UserKey,
-	memoryStr string, topics []string, _ *memory.EpisodicFields) error {
-	return m.AddMemory(ctx, userKey, memoryStr, topics)
-}
-
-func (m *mockMemoryService) UpdateMemoryWithEpisodic(ctx context.Context, memoryKey memory.Key,
-	memoryStr string, topics []string, _ *memory.EpisodicFields) error {
-	return m.UpdateMemory(ctx, memoryKey, memoryStr, topics)
-}
-
-func (m *mockMemoryService) SearchMemoriesWithOptions(ctx context.Context, userKey memory.UserKey,
-	opts memory.SearchOptions) ([]*memory.Entry, error) {
-	return m.SearchMemories(ctx, userKey, opts.Query)
 }
 
 func (m *mockMemoryService) BuildInstruction(enabledTools []string, defaultPrompt string) (string, bool) {
@@ -1038,11 +1023,11 @@ func TestMemoryTool_LoadMemory_ServiceError(t *testing.T) {
 // mockMemoryServiceWithError is a mock that returns errors
 type mockMemoryServiceWithError struct{}
 
-func (m *mockMemoryServiceWithError) AddMemory(ctx context.Context, userKey memory.UserKey, memoryStr string, topics []string) error {
+func (m *mockMemoryServiceWithError) AddMemory(ctx context.Context, userKey memory.UserKey, memoryStr string, topics []string, opts ...memory.AddOption) error {
 	return fmt.Errorf("mock add error")
 }
 
-func (m *mockMemoryServiceWithError) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory string, topics []string) error {
+func (m *mockMemoryServiceWithError) UpdateMemory(ctx context.Context, memoryKey memory.Key, mem string, topics []string, opts ...memory.UpdateOption) error {
 	return fmt.Errorf("mock update error")
 }
 
@@ -1058,7 +1043,7 @@ func (m *mockMemoryServiceWithError) ReadMemories(ctx context.Context, userKey m
 	return nil, fmt.Errorf("mock read error")
 }
 
-func (m *mockMemoryServiceWithError) SearchMemories(ctx context.Context, userKey memory.UserKey, query string) ([]*memory.Entry, error) {
+func (m *mockMemoryServiceWithError) SearchMemories(ctx context.Context, userKey memory.UserKey, query string, opts ...memory.SearchOption) ([]*memory.Entry, error) {
 	return nil, fmt.Errorf("mock search error")
 }
 
@@ -1072,21 +1057,6 @@ func (m *mockMemoryServiceWithError) EnqueueAutoMemoryJob(ctx context.Context, s
 
 func (m *mockMemoryServiceWithError) Close() error {
 	return fmt.Errorf("mock close error")
-}
-
-func (m *mockMemoryServiceWithError) AddMemoryWithEpisodic(ctx context.Context, userKey memory.UserKey,
-	memoryStr string, topics []string, _ *memory.EpisodicFields) error {
-	return m.AddMemory(ctx, userKey, memoryStr, topics)
-}
-
-func (m *mockMemoryServiceWithError) UpdateMemoryWithEpisodic(ctx context.Context, memoryKey memory.Key,
-	memoryStr string, topics []string, _ *memory.EpisodicFields) error {
-	return m.UpdateMemory(ctx, memoryKey, memoryStr, topics)
-}
-
-func (m *mockMemoryServiceWithError) SearchMemoriesWithOptions(ctx context.Context, userKey memory.UserKey,
-	opts memory.SearchOptions) ([]*memory.Entry, error) {
-	return m.SearchMemories(ctx, userKey, opts.Query)
 }
 
 func (m *mockMemoryServiceWithError) BuildInstruction(enabledTools []string, defaultPrompt string) (string, bool) {
@@ -1166,7 +1136,7 @@ func TestEndOfPeriod(t *testing.T) {
 	}
 }
 
-func TestBuildEpisodicFields(t *testing.T) {
+func TestBuildMetadata(t *testing.T) {
 	tests := []struct {
 		name         string
 		kind         string
@@ -1213,7 +1183,7 @@ func TestBuildEpisodicFields(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := buildEpisodicFields(tt.kind, tt.eventTimeStr, tt.participants, tt.location)
+			got := buildMetadata(tt.kind, tt.eventTimeStr, tt.participants, tt.location)
 			if tt.wantNil {
 				assert.Nil(t, got)
 				return

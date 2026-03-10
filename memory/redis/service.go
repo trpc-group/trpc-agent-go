@@ -120,13 +120,86 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 }
 
 // AddMemory adds or updates a memory for a user (idempotent).
-func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryStr string, topics []string) error {
-	return s.AddMemoryWithEpisodic(ctx, userKey, memoryStr, topics, nil)
+func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryStr string,
+	topics []string, opts ...memory.AddOption) error {
+	if err := userKey.CheckUserKey(); err != nil {
+		return err
+	}
+	key := s.getUserMemKey(userKey)
+
+	if s.opts.memoryLimit > 0 {
+		count, err := s.redisClient.HLen(ctx, key).Result()
+		if err != nil && err != redis.Nil {
+			return fmt.Errorf("redis memory service check memory count failed: %w", err)
+		}
+		if int(count) >= s.opts.memoryLimit {
+			return fmt.Errorf("memory limit exceeded for user %s, limit: %d, current: %d",
+				userKey.UserID, s.opts.memoryLimit, count)
+		}
+	}
+
+	now := time.Now()
+	mem := &memory.Memory{
+		Memory:      memoryStr,
+		Topics:      topics,
+		LastUpdated: &now,
+	}
+	ep := memory.ResolveAddOptions(opts)
+	imemory.ApplyMetadata(mem, ep)
+	entry := &memory.Entry{
+		ID:        imemory.GenerateMemoryID(mem, userKey.AppName, userKey.UserID),
+		AppName:   userKey.AppName,
+		Memory:    mem,
+		UserID:    userKey.UserID,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	bytes, err := json.Marshal(entry)
+	if err != nil {
+		return fmt.Errorf("marshal memory entry failed: %w", err)
+	}
+	if err := s.redisClient.HSet(ctx, key, entry.ID, bytes).Err(); err != nil {
+		return fmt.Errorf("store memory entry failed: %w", err)
+	}
+	return nil
 }
 
 // UpdateMemory updates an existing memory for a user.
-func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key, memoryStr string, topics []string) error {
-	return s.UpdateMemoryWithEpisodic(ctx, memoryKey, memoryStr, topics, nil)
+func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key, memoryStr string,
+	topics []string, opts ...memory.UpdateOption) error {
+	if err := memoryKey.CheckMemoryKey(); err != nil {
+		return err
+	}
+	key := s.getUserMemKey(memory.UserKey{
+		AppName: memoryKey.AppName,
+		UserID:  memoryKey.UserID,
+	})
+
+	bytes, err := s.redisClient.HGet(ctx, key, memoryKey.MemoryID).Bytes()
+	if err != nil {
+		return fmt.Errorf("get memory entry failed: %w", err)
+	}
+
+	entry := &memory.Entry{}
+	if err := json.Unmarshal(bytes, entry); err != nil {
+		return fmt.Errorf("unmarshal memory entry failed: %w", err)
+	}
+	now := time.Now()
+	entry.Memory.Memory = memoryStr
+	entry.Memory.Topics = topics
+	entry.Memory.LastUpdated = &now
+	ep := memory.ResolveUpdateOptions(opts)
+	imemory.ApplyMetadata(entry.Memory, ep)
+	entry.UpdatedAt = now
+
+	updated, err := json.Marshal(entry)
+	if err != nil {
+		return fmt.Errorf("marshal updated memory entry failed: %w", err)
+	}
+	if err := s.redisClient.HSet(ctx, key, entry.ID, updated).Err(); err != nil {
+		return fmt.Errorf("update memory entry failed: %w", err)
+	}
+	return nil
 }
 
 // DeleteMemory deletes a memory for a user.
@@ -189,7 +262,8 @@ func (s *Service) ReadMemories(ctx context.Context, userKey memory.UserKey, limi
 }
 
 // SearchMemories searches memories for a user.
-func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, query string) ([]*memory.Entry, error) {
+func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey,
+	query string, opts ...memory.SearchOption) ([]*memory.Entry, error) {
 	if err := userKey.CheckUserKey(); err != nil {
 		return nil, err
 	}
@@ -250,90 +324,6 @@ func (s *Service) Close() error {
 		return s.redisClient.Close()
 	}
 	return nil
-}
-
-// AddMemoryWithEpisodic adds a memory with optional episodic fields.
-func (s *Service) AddMemoryWithEpisodic(ctx context.Context, userKey memory.UserKey,
-	memoryStr string, topics []string, ep *memory.EpisodicFields) error {
-	if err := userKey.CheckUserKey(); err != nil {
-		return err
-	}
-	key := s.getUserMemKey(userKey)
-
-	if s.opts.memoryLimit > 0 {
-		count, err := s.redisClient.HLen(ctx, key).Result()
-		if err != nil && err != redis.Nil {
-			return fmt.Errorf("redis memory service check memory count failed: %w", err)
-		}
-		if int(count) >= s.opts.memoryLimit {
-			return fmt.Errorf("memory limit exceeded for user %s, limit: %d, current: %d",
-				userKey.UserID, s.opts.memoryLimit, count)
-		}
-	}
-
-	now := time.Now()
-	mem := &memory.Memory{
-		Memory:      memoryStr,
-		Topics:      topics,
-		LastUpdated: &now,
-	}
-	imemory.ApplyEpisodicFields(mem, ep)
-	entry := &memory.Entry{
-		ID:        imemory.GenerateMemoryID(mem, userKey.AppName, userKey.UserID),
-		AppName:   userKey.AppName,
-		Memory:    mem,
-		UserID:    userKey.UserID,
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
-	bytes, err := json.Marshal(entry)
-	if err != nil {
-		return fmt.Errorf("marshal memory entry failed: %w", err)
-	}
-	if err := s.redisClient.HSet(ctx, key, entry.ID, bytes).Err(); err != nil {
-		return fmt.Errorf("store memory entry failed: %w", err)
-	}
-	return nil
-}
-
-// UpdateMemoryWithEpisodic updates an existing memory with optional episodic fields.
-func (s *Service) UpdateMemoryWithEpisodic(ctx context.Context, memoryKey memory.Key,
-	memoryStr string, topics []string, ep *memory.EpisodicFields) error {
-	if err := memoryKey.CheckMemoryKey(); err != nil {
-		return err
-	}
-	key := s.getUserMemKey(memory.UserKey{AppName: memoryKey.AppName, UserID: memoryKey.UserID})
-
-	bytes, err := s.redisClient.HGet(ctx, key, memoryKey.MemoryID).Bytes()
-	if err != nil {
-		return fmt.Errorf("get memory entry failed: %w", err)
-	}
-
-	entry := &memory.Entry{}
-	if err := json.Unmarshal(bytes, entry); err != nil {
-		return fmt.Errorf("unmarshal memory entry failed: %w", err)
-	}
-	now := time.Now()
-	entry.Memory.Memory = memoryStr
-	entry.Memory.Topics = topics
-	entry.Memory.LastUpdated = &now
-	imemory.ApplyEpisodicFields(entry.Memory, ep)
-	entry.UpdatedAt = now
-
-	updated, err := json.Marshal(entry)
-	if err != nil {
-		return fmt.Errorf("marshal updated memory entry failed: %w", err)
-	}
-	if err := s.redisClient.HSet(ctx, key, entry.ID, updated).Err(); err != nil {
-		return fmt.Errorf("update memory entry failed: %w", err)
-	}
-	return nil
-}
-
-// SearchMemoriesWithOptions delegates to SearchMemories (advanced filtering ignored for redis backend).
-func (s *Service) SearchMemoriesWithOptions(ctx context.Context, userKey memory.UserKey,
-	opts memory.SearchOptions) ([]*memory.Entry, error) {
-	return s.SearchMemories(ctx, userKey, opts.Query)
 }
 
 // prefixedKey adds the configured key prefix to the given base key.

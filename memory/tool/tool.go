@@ -51,8 +51,12 @@ func NewAddTool() tool.CallableTool {
 		}
 
 		userKey := memory.UserKey{AppName: appName, UserID: userID}
-		ep := buildEpisodicFields(req.MemoryKind, req.EventTime, req.Participants, req.Location)
-		err = memoryService.AddMemoryWithEpisodic(ctx, userKey, req.Memory, req.Topics, ep)
+		ep := buildMetadata(req.MemoryKind, req.EventTime, req.Participants, req.Location)
+		var opts []memory.AddOption
+		if ep != nil {
+			opts = append(opts, memory.WithMetadata(ep))
+		}
+		err = memoryService.AddMemory(ctx, userKey, req.Memory, req.Topics, opts...)
 		if err != nil {
 			return nil, fmt.Errorf("failed to add memory: %v", err)
 		}
@@ -102,8 +106,12 @@ func NewUpdateTool() tool.CallableTool {
 		}
 
 		memoryKey := memory.Key{AppName: appName, UserID: userID, MemoryID: req.MemoryID}
-		ep := buildEpisodicFields(req.MemoryKind, req.EventTime, req.Participants, req.Location)
-		err = memoryService.UpdateMemoryWithEpisodic(ctx, memoryKey, req.Memory, req.Topics, ep)
+		ep := buildMetadata(req.MemoryKind, req.EventTime, req.Participants, req.Location)
+		var opts []memory.UpdateOption
+		if ep != nil {
+			opts = append(opts, memory.WithUpdateMetadata(ep))
+		}
+		err = memoryService.UpdateMemory(ctx, memoryKey, req.Memory, req.Topics, opts...)
 		if err != nil {
 			return nil, fmt.Errorf("failed to update memory: %v", err)
 		}
@@ -224,7 +232,8 @@ func NewSearchTool() tool.CallableTool {
 
 		userKey := memory.UserKey{AppName: appName, UserID: userID}
 		opts := buildSearchOptions(req)
-		memories, err := memoryService.SearchMemoriesWithOptions(ctx, userKey, opts)
+		memories, err := memoryService.SearchMemories(ctx, userKey,
+			opts.Query, memory.WithSearchOptions(opts))
 		if err != nil {
 			return nil, fmt.Errorf("failed to search memories: %v", err)
 		}
@@ -355,13 +364,14 @@ func GetAppAndUserFromContext(ctx context.Context) (string, string, error) {
 		invocation.Session.AppName, invocation.Session.UserID)
 }
 
-// buildEpisodicFields constructs EpisodicFields from tool request strings.
-// Returns nil if no episodic data is provided (backward compatible).
-func buildEpisodicFields(kind, eventTimeStr string, participants []string, location string) *memory.EpisodicFields {
+// buildMetadata constructs MemoryMetadata from tool
+// request strings. Returns nil if no episodic data is
+// provided (backward compatible).
+func buildMetadata(kind, eventTimeStr string, participants []string, location string) *memory.Metadata {
 	if kind == "" && eventTimeStr == "" && len(participants) == 0 && location == "" {
 		return nil
 	}
-	ep := &memory.EpisodicFields{
+	ep := &memory.Metadata{
 		Kind:         memory.MemoryKind(kind),
 		Participants: participants,
 		Location:     location,

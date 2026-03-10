@@ -115,6 +115,7 @@ func (m *mockOperator) SearchMemories(
 	ctx context.Context,
 	userKey memory.UserKey,
 	query string,
+	opts ...memory.SearchOption,
 ) ([]*memory.Entry, error) {
 	if m.searchErr != nil {
 		return nil, m.searchErr
@@ -127,6 +128,7 @@ func (m *mockOperator) AddMemory(
 	userKey memory.UserKey,
 	memoryStr string,
 	topics []string,
+	opts ...memory.AddOption,
 ) error {
 	if m.addErr != nil {
 		return m.addErr
@@ -142,6 +144,7 @@ func (m *mockOperator) UpdateMemory(
 	memoryKey memory.Key,
 	memoryStr string,
 	topics []string,
+	opts ...memory.UpdateOption,
 ) error {
 	if m.updateErr != nil {
 		return m.updateErr
@@ -152,7 +155,10 @@ func (m *mockOperator) UpdateMemory(
 	return nil
 }
 
-func (m *mockOperator) DeleteMemory(ctx context.Context, memoryKey memory.Key) error {
+func (m *mockOperator) DeleteMemory(
+	ctx context.Context,
+	memoryKey memory.Key,
+) error {
 	if m.deleteErr != nil {
 		return m.deleteErr
 	}
@@ -162,7 +168,10 @@ func (m *mockOperator) DeleteMemory(ctx context.Context, memoryKey memory.Key) e
 	return nil
 }
 
-func (m *mockOperator) ClearMemories(ctx context.Context, userKey memory.UserKey) error {
+func (m *mockOperator) ClearMemories(
+	ctx context.Context,
+	userKey memory.UserKey,
+) error {
 	if m.clearErr != nil {
 		return m.clearErr
 	}
@@ -170,26 +179,6 @@ func (m *mockOperator) ClearMemories(ctx context.Context, userKey memory.UserKey
 	defer m.mu.Unlock()
 	m.clearCalls++
 	return nil
-}
-
-func (m *mockOperator) AddMemoryWithEpisodic(
-	ctx context.Context,
-	userKey memory.UserKey,
-	memoryStr string,
-	topics []string,
-	_ *memory.EpisodicFields,
-) error {
-	return m.AddMemory(ctx, userKey, memoryStr, topics)
-}
-
-func (m *mockOperator) UpdateMemoryWithEpisodic(
-	ctx context.Context,
-	memoryKey memory.Key,
-	memoryStr string,
-	topics []string,
-	_ *memory.EpisodicFields,
-) error {
-	return m.UpdateMemory(ctx, memoryKey, memoryStr, topics)
 }
 
 func TestNewAutoMemoryWorker(t *testing.T) {
@@ -1663,10 +1652,10 @@ func TestAutoMemoryWorker_ExecuteOperation_UpdateNotFound_AddEnabled(t *testing.
 	assert.Equal(t, 1, op.addCalls)
 }
 
-func TestOpToEpisodicFields(t *testing.T) {
+func TestOpToMetadata(t *testing.T) {
 	t.Run("all empty returns fact default", func(t *testing.T) {
 		op := &extractor.Operation{}
-		got := opToEpisodicFields(op)
+		got := opToMetadata(op)
 		require.NotNil(t, got)
 		assert.Equal(t, memory.MemoryKindFact, got.Kind)
 	})
@@ -1675,7 +1664,7 @@ func TestOpToEpisodicFields(t *testing.T) {
 		op := &extractor.Operation{
 			MemoryKind: memory.MemoryKindFact,
 		}
-		got := opToEpisodicFields(op)
+		got := opToMetadata(op)
 		require.NotNil(t, got)
 		assert.Equal(t, memory.MemoryKindFact, got.Kind)
 	})
@@ -1686,7 +1675,7 @@ func TestOpToEpisodicFields(t *testing.T) {
 			MemoryKind: memory.MemoryKindEpisode,
 			EventTime:  &eventTime,
 		}
-		got := opToEpisodicFields(op)
+		got := opToMetadata(op)
 		require.NotNil(t, got)
 		assert.Equal(t, memory.MemoryKindEpisode, got.Kind)
 		assert.Equal(t, &eventTime, got.EventTime)
@@ -1697,7 +1686,7 @@ func TestOpToEpisodicFields(t *testing.T) {
 			MemoryKind:   memory.MemoryKindEpisode,
 			Participants: []string{"Alice"},
 		}
-		got := opToEpisodicFields(op)
+		got := opToMetadata(op)
 		require.NotNil(t, got)
 		assert.Equal(t, memory.MemoryKindEpisode, got.Kind, "episode without event_time should remain episode")
 		assert.Nil(t, got.EventTime)

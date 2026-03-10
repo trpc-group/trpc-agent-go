@@ -45,30 +45,103 @@ var (
 	ErrMemoryIDRequired = errors.New("memoryID is required")
 )
 
-// EpisodicFields holds optional episodic memory metadata.
-// When Kind is empty or MemoryKindFact, episodic fields are ignored.
-type EpisodicFields struct {
+// Metadata holds optional episodic memory metadata.
+// When Kind is empty or MemoryKindFact, episodic fields
+// are ignored.
+type Metadata struct {
 	Kind         MemoryKind // Memory kind: "fact" or "episode".
 	EventTime    *time.Time // When the event occurred (required for episodes).
 	Participants []string   // People involved in the event.
 	Location     string     // Where the event took place.
 }
 
+// AddOption configures optional parameters for AddMemory.
+type AddOption func(*addOptions)
+
+type addOptions struct {
+	metadata *Metadata
+}
+
+// WithMetadata attaches episodic metadata to an AddMemory call.
+func WithMetadata(m *Metadata) AddOption {
+	return func(o *addOptions) { o.metadata = m }
+}
+
+// ResolveAddOptions applies AddOption funcs and returns the
+// aggregated metadata pointer (may be nil).
+func ResolveAddOptions(opts []AddOption) *Metadata {
+	if len(opts) == 0 {
+		return nil
+	}
+	var o addOptions
+	for _, fn := range opts {
+		fn(&o)
+	}
+	return o.metadata
+}
+
+// UpdateOption configures optional parameters for UpdateMemory.
+type UpdateOption func(*updateOptions)
+
+type updateOptions struct {
+	metadata *Metadata
+}
+
+// WithUpdateMetadata attaches episodic metadata to an
+// UpdateMemory call.
+func WithUpdateMetadata(m *Metadata) UpdateOption {
+	return func(o *updateOptions) { o.metadata = m }
+}
+
+// ResolveUpdateOptions applies UpdateOption funcs and
+// returns the aggregated metadata pointer (may be nil).
+func ResolveUpdateOptions(
+	opts []UpdateOption,
+) *Metadata {
+	if len(opts) == 0 {
+		return nil
+	}
+	var o updateOptions
+	for _, fn := range opts {
+		fn(&o)
+	}
+	return o.metadata
+}
+
+// SearchOption configures optional parameters for SearchMemory.
+type SearchOption func(*SearchOptions)
+
+// WithSearchOptions overrides the SearchOptions wholesale. This
+// is a convenience for callers that already have a fully
+// populated SearchOptions value.
+func WithSearchOptions(s SearchOptions) SearchOption {
+	return func(o *SearchOptions) { *o = s }
+}
+
+// ResolveSearchOptions applies SearchOption funcs on top of a
+// base SearchOptions that already contains the query string.
+func ResolveSearchOptions(
+	query string, opts []SearchOption,
+) SearchOptions {
+	o := SearchOptions{Query: query}
+	for _, fn := range opts {
+		fn(&o)
+	}
+	return o
+}
+
 // Service defines the interface for memory service operations.
 type Service interface {
 	// AddMemory adds or updates a memory for a user (idempotent).
-	AddMemory(ctx context.Context, userKey UserKey, memory string, topics []string) error
-
-	// AddMemoryWithEpisodic adds a memory with optional episodic fields.
-	AddMemoryWithEpisodic(ctx context.Context, userKey UserKey, memory string,
-		topics []string, ep *EpisodicFields) error
+	// Options may include WithMetadata for episodic metadata.
+	AddMemory(ctx context.Context, userKey UserKey, memory string,
+		topics []string, opts ...AddOption) error
 
 	// UpdateMemory updates an existing memory for a user.
-	UpdateMemory(ctx context.Context, memoryKey Key, memory string, topics []string) error
-
-	// UpdateMemoryWithEpisodic updates an existing memory with optional episodic fields.
-	UpdateMemoryWithEpisodic(ctx context.Context, memoryKey Key, memory string,
-		topics []string, ep *EpisodicFields) error
+	// Options may include WithUpdateMetadata for episodic
+	// metadata.
+	UpdateMemory(ctx context.Context, memoryKey Key, memory string,
+		topics []string, opts ...UpdateOption) error
 
 	// DeleteMemory deletes a memory for a user.
 	DeleteMemory(ctx context.Context, memoryKey Key) error
@@ -77,22 +150,23 @@ type Service interface {
 	ClearMemories(ctx context.Context, userKey UserKey) error
 
 	// ReadMemories reads memories for a user.
-	ReadMemories(ctx context.Context, userKey UserKey, limit int) ([]*Entry, error)
+	ReadMemories(ctx context.Context, userKey UserKey,
+		limit int) ([]*Entry, error)
 
 	// SearchMemories searches memories for a user.
-	SearchMemories(ctx context.Context, userKey UserKey, query string) ([]*Entry, error)
-
-	// SearchMemoriesWithOptions searches memories with advanced filtering.
-	SearchMemoriesWithOptions(ctx context.Context, userKey UserKey,
-		opts SearchOptions) ([]*Entry, error)
+	// Options may include WithSearchOptions for advanced
+	// filtering (kind, time range, hybrid search, etc.).
+	SearchMemories(ctx context.Context, userKey UserKey,
+		query string, opts ...SearchOption) ([]*Entry, error)
 
 	// Tools returns the list of available memory tools.
 	Tools() []tool.Tool
 
-	// EnqueueAutoMemoryJob enqueues an auto memory extraction job for async
-	// processing. The session contains the full transcript and state for
-	// incremental extraction.
-	EnqueueAutoMemoryJob(ctx context.Context, sess *session.Session) error
+	// EnqueueAutoMemoryJob enqueues an auto memory extraction
+	// job for async processing. The session contains the full
+	// transcript and state for incremental extraction.
+	EnqueueAutoMemoryJob(ctx context.Context,
+		sess *session.Session) error
 
 	// Close closes the service and releases resources.
 	// This includes stopping async memory workers if configured.

@@ -36,9 +36,20 @@ func getSegmenter() (*gse.Segmenter, error) {
 		segErr = seg.LoadDict()
 	})
 	if segErr != nil {
-		return nil, fmt.Errorf("load segmenter dict failed: %w", segErr)
+		return nil, fmt.Errorf(
+			"load segmenter dict failed: %w", segErr,
+		)
 	}
 	return &seg, nil
+}
+
+// resetSegmenter resets the segmenter state so that the next
+// getSegmenter call re-initialises. This is only intended for
+// testing error paths.
+func resetSegmenter() {
+	segOnce = sync.Once{}
+	segErr = nil
+	seg = gse.Segmenter{}
 }
 
 const (
@@ -347,12 +358,13 @@ func isStopword(s string) bool {
 	}
 }
 
-// ApplyEpisodicFields populates episodic metadata on a Memory object.
-// This is used by JSON-based backends (mysql, postgres, sqlite, etc.)
-// where the Memory struct is serialized as JSON and the episodic fields
-// are already part of the struct definition.
+// ApplyMetadata populates episodic metadata on a Memory
+// object. This is used by JSON-based backends (mysql,
+// postgres, sqlite, etc.) where the Memory struct is
+// serialized as JSON and the episodic fields are already
+// part of the struct definition.
 // If ep is nil, no fields are modified.
-func ApplyEpisodicFields(mem *memory.Memory, ep *memory.EpisodicFields) {
+func ApplyMetadata(mem *memory.Memory, ep *memory.Metadata) {
 	if ep == nil || mem == nil {
 		return
 	}

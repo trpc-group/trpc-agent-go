@@ -173,23 +173,15 @@ func buildConnString(opts ServiceOpts) string {
 }
 
 // AddMemory adds or updates a memory for a user (idempotent).
+// Options may include WithMetadata for episodic metadata.
 func (s *Service) AddMemory(
 	ctx context.Context,
 	userKey memory.UserKey,
 	memoryStr string,
 	topics []string,
+	opts ...memory.AddOption,
 ) error {
-	return s.AddMemoryWithEpisodic(ctx, userKey, memoryStr, topics, nil)
-}
-
-// AddMemoryWithEpisodic adds or updates a memory with optional episodic fields.
-func (s *Service) AddMemoryWithEpisodic(
-	ctx context.Context,
-	userKey memory.UserKey,
-	memoryStr string,
-	topics []string,
-	ep *memory.EpisodicFields,
-) error {
+	ep := memory.ResolveAddOptions(opts)
 	if err := userKey.CheckUserKey(); err != nil {
 		return err
 	}
@@ -215,8 +207,8 @@ func (s *Service) AddMemoryWithEpisodic(
 	// Convert embedding to pgvector format.
 	vector := pgvector.NewVector(convertToFloat32(embedding))
 
-	// Resolve episodic fields for SQL parameters.
-	ef := resolveEpisodicFields(ep)
+	// Resolve metadata for SQL parameters.
+	ef := resolveMetadata(ep)
 
 	var insertQuery string
 	args := []any{
@@ -329,23 +321,15 @@ func (s *Service) AddMemoryWithEpisodic(
 }
 
 // UpdateMemory updates an existing memory for a user.
+// Options may include WithUpdateMetadata for episodic metadata.
 func (s *Service) UpdateMemory(
 	ctx context.Context,
 	memoryKey memory.Key,
 	memoryStr string,
 	topics []string,
+	opts ...memory.UpdateOption,
 ) error {
-	return s.UpdateMemoryWithEpisodic(ctx, memoryKey, memoryStr, topics, nil)
-}
-
-// UpdateMemoryWithEpisodic updates an existing memory with optional episodic fields.
-func (s *Service) UpdateMemoryWithEpisodic(
-	ctx context.Context,
-	memoryKey memory.Key,
-	memoryStr string,
-	topics []string,
-	ep *memory.EpisodicFields,
-) error {
+	ep := memory.ResolveUpdateOptions(opts)
 	if err := memoryKey.CheckMemoryKey(); err != nil {
 		return err
 	}
@@ -363,8 +347,8 @@ func (s *Service) UpdateMemoryWithEpisodic(
 	now := time.Now()
 	vector := pgvector.NewVector(convertToFloat32(embedding))
 
-	// Resolve episodic fields for SQL parameters.
-	ef := resolveEpisodicFields(ep)
+	// Resolve metadata for SQL parameters.
+	ef := resolveMetadata(ep)
 
 	var updateQuery strings.Builder
 	fmt.Fprintf(&updateQuery,
@@ -501,32 +485,25 @@ func (s *Service) ReadMemories(
 	return entries, nil
 }
 
-// SearchMemories searches memories for a user using vector similarity.
-func (s *Service) SearchMemories(
-	ctx context.Context,
-	userKey memory.UserKey,
-	query string,
-) ([]*memory.Entry, error) {
-	return s.SearchMemoriesWithOptions(ctx, userKey, memory.SearchOptions{
-		Query: query,
-	})
-}
-
 // minKindFallbackResults is the threshold below which a kind-filtered
 // search triggers a fallback unfiltered search when KindFallback is enabled.
 const minKindFallbackResults = 3
 
-// SearchMemoriesWithOptions searches memories with advanced filtering.
-func (s *Service) SearchMemoriesWithOptions(
+// SearchMemories searches memories for a user using vector similarity.
+// Options may include WithSearchOptions for advanced filtering
+// (kind, time range, hybrid search, etc.).
+func (s *Service) SearchMemories(
 	ctx context.Context,
 	userKey memory.UserKey,
-	opts memory.SearchOptions,
+	query string,
+	searchOpts ...memory.SearchOption,
 ) ([]*memory.Entry, error) {
+	opts := memory.ResolveSearchOptions(query, searchOpts)
 	if err := userKey.CheckUserKey(); err != nil {
 		return nil, err
 	}
 
-	query := strings.TrimSpace(opts.Query)
+	query = strings.TrimSpace(opts.Query)
 	if query == "" {
 		return []*memory.Entry{}, nil
 	}
@@ -1044,18 +1021,20 @@ func convertToFloat32(embedding []float64) []float32 {
 	return result
 }
 
-// episodicSQLFields holds episodic field values resolved for SQL parameters.
-type episodicSQLFields struct {
+// metadataSQLFields holds metadata field values resolved
+// for SQL parameters.
+type metadataSQLFields struct {
 	kind         string
 	eventTime    *time.Time
 	participants []string
 	location     *string
 }
 
-// resolveEpisodicFields converts EpisodicFields to SQL-ready values.
-// Returns default (fact, nil, empty, nil) when ep is nil.
-func resolveEpisodicFields(ep *memory.EpisodicFields) episodicSQLFields {
-	f := episodicSQLFields{
+// resolveMetadata converts MemoryMetadata to SQL-ready
+// values. Returns default (fact, nil, empty, nil) when
+// ep is nil.
+func resolveMetadata(ep *memory.Metadata) metadataSQLFields {
+	f := metadataSQLFields{
 		kind:         string(memory.MemoryKindFact),
 		participants: []string{},
 	}

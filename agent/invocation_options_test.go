@@ -398,11 +398,11 @@ func (m *mockModel) GenerateContent(ctx context.Context, request *model.Request)
 
 type mockMemoryService struct{}
 
-func (m *mockMemoryService) AddMemory(ctx context.Context, userKey memory.UserKey, mem string, topics []string) error {
+func (m *mockMemoryService) AddMemory(ctx context.Context, userKey memory.UserKey, mem string, topics []string, _ ...memory.AddOption) error {
 	return nil
 }
 
-func (m *mockMemoryService) UpdateMemory(ctx context.Context, memoryKey memory.Key, mem string, topics []string) error {
+func (m *mockMemoryService) UpdateMemory(ctx context.Context, memoryKey memory.Key, mem string, topics []string, _ ...memory.UpdateOption) error {
 	return nil
 }
 
@@ -418,7 +418,7 @@ func (m *mockMemoryService) ReadMemories(ctx context.Context, userKey memory.Use
 	return nil, nil
 }
 
-func (m *mockMemoryService) SearchMemories(ctx context.Context, userKey memory.UserKey, query string) ([]*memory.Entry, error) {
+func (m *mockMemoryService) SearchMemories(ctx context.Context, userKey memory.UserKey, query string, _ ...memory.SearchOption) ([]*memory.Entry, error) {
 	return nil, nil
 }
 
@@ -432,21 +432,6 @@ func (m *mockMemoryService) EnqueueAutoMemoryJob(ctx context.Context, sess *sess
 
 func (m *mockMemoryService) Close() error {
 	return nil
-}
-
-func (m *mockMemoryService) AddMemoryWithEpisodic(ctx context.Context, userKey memory.UserKey,
-	memoryStr string, topics []string, _ *memory.EpisodicFields) error {
-	return m.AddMemory(ctx, userKey, memoryStr, topics)
-}
-
-func (m *mockMemoryService) UpdateMemoryWithEpisodic(ctx context.Context, memoryKey memory.Key,
-	memoryStr string, topics []string, _ *memory.EpisodicFields) error {
-	return m.UpdateMemory(ctx, memoryKey, memoryStr, topics)
-}
-
-func (m *mockMemoryService) SearchMemoriesWithOptions(ctx context.Context, userKey memory.UserKey,
-	opts memory.SearchOptions) ([]*memory.Entry, error) {
-	return m.SearchMemories(ctx, userKey, opts.Query)
 }
 
 type mockArtifactService struct{}

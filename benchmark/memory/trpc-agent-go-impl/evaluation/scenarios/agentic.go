@@ -61,8 +61,10 @@ func (s *datePrefixMemoryService) AddMemory(
 	userKey memory.UserKey,
 	mem string,
 	topics []string,
+	opts ...memory.AddMemoryOption,
 ) error {
-	return s.inner.AddMemory(ctx, userKey, s.withDatePrefix(mem), topics)
+	return s.inner.AddMemory(
+		ctx, userKey, s.withDatePrefix(mem), topics, opts...)
 }
 
 func (s *datePrefixMemoryService) UpdateMemory(
@@ -70,8 +72,10 @@ func (s *datePrefixMemoryService) UpdateMemory(
 	memoryKey memory.Key,
 	mem string,
 	topics []string,
+	opts ...memory.UpdateMemoryOption,
 ) error {
-	return s.inner.UpdateMemory(ctx, memoryKey, s.withDatePrefix(mem), topics)
+	return s.inner.UpdateMemory(
+		ctx, memoryKey, s.withDatePrefix(mem), topics, opts...)
 }
 
 func (s *datePrefixMemoryService) DeleteMemory(
@@ -100,8 +104,9 @@ func (s *datePrefixMemoryService) SearchMemories(
 	ctx context.Context,
 	userKey memory.UserKey,
 	query string,
+	opts ...memory.SearchOption,
 ) ([]*memory.Entry, error) {
-	return s.inner.SearchMemories(ctx, userKey, query)
+	return s.inner.SearchMemories(ctx, userKey, query, opts...)
 }
 
 func (s *datePrefixMemoryService) Tools() []tool.Tool {
@@ -117,34 +122,6 @@ func (s *datePrefixMemoryService) EnqueueAutoMemoryJob(
 
 func (s *datePrefixMemoryService) Close() error {
 	return s.inner.Close()
-}
-
-func (s *datePrefixMemoryService) AddMemoryWithEpisodic(
-	ctx context.Context,
-	userKey memory.UserKey,
-	mem string,
-	topics []string,
-	ep *memory.EpisodicFields,
-) error {
-	return s.inner.AddMemoryWithEpisodic(ctx, userKey, s.withDatePrefix(mem), topics, ep)
-}
-
-func (s *datePrefixMemoryService) UpdateMemoryWithEpisodic(
-	ctx context.Context,
-	memoryKey memory.Key,
-	mem string,
-	topics []string,
-	ep *memory.EpisodicFields,
-) error {
-	return s.inner.UpdateMemoryWithEpisodic(ctx, memoryKey, s.withDatePrefix(mem), topics, ep)
-}
-
-func (s *datePrefixMemoryService) SearchMemoriesWithOptions(
-	ctx context.Context,
-	userKey memory.UserKey,
-	opts memory.SearchOptions,
-) ([]*memory.Entry, error) {
-	return s.inner.SearchMemoriesWithOptions(ctx, userKey, opts)
 }
 
 func (s *datePrefixMemoryService) withDatePrefix(mem string) string {
