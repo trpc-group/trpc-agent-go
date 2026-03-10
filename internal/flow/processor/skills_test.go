@@ -19,6 +19,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
@@ -87,6 +88,7 @@ func TestSkillsRequestProcessor_ProcessRequest_OverviewAndDocs(
 	require.Equal(t, model.RoleSystem, req.Messages[idx].Role)
 	sys := req.Messages[idx].Content
 	require.Contains(t, sys, skillsOverviewHeader)
+	require.NotContains(t, sys, skillsCapabilityHeader)
 	require.Contains(t, sys, "- calc: math ops")
 	require.Contains(t, sys, skillsToolingGuidanceHeader)
 	require.Contains(t, sys, ".venv/")
@@ -144,6 +146,56 @@ func TestSkillsRequestProcessor_ToolingGuidance_Disabled(t *testing.T) {
 	require.Equal(t, model.RoleSystem, req.Messages[0].Role)
 	sys := req.Messages[0].Content
 	require.Contains(t, sys, skillsOverviewHeader)
+	require.NotContains(t, sys, skillsCapabilityHeader)
+	require.NotContains(t, sys, skillsToolingGuidanceHeader)
+}
+
+func TestSkillsRequestProcessor_KnowledgeOnlyGuidance(t *testing.T) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "x", Description: "d"}},
+		full: map[string]*skill.Skill{},
+	}
+	inv := &agent.Invocation{Session: &session.Session{}}
+	req := &model.Request{Messages: nil}
+	p := NewSkillsRequestProcessor(
+		repo,
+		WithSkillToolProfile(skillprofile.KnowledgeOnly),
+	)
+	ch := make(chan *event.Event, 1)
+	p.ProcessRequest(context.Background(), inv, req, ch)
+
+	require.NotEmpty(t, req.Messages)
+	sys := req.Messages[0].Content
+	require.Contains(t, sys, skillsOverviewHeader)
+	require.Contains(t, sys, skillsCapabilityHeader)
+	require.Contains(t, sys, "skill discovery and knowledge loading only")
+	require.Contains(t, sys, "Execution-oriented skill tools are unavailable")
+	require.Contains(t, sys, skillsToolingGuidanceHeader)
+	require.NotContains(t, sys, "skill_run runs with CWD")
+	require.NotContains(t, sys, ".venv/")
+	require.Contains(t, sys, "progressive disclosure only")
+	require.Contains(t, sys, "inspect only the documentation needed")
+}
+
+func TestSkillsRequestProcessor_KnowledgeOnlyGuidance_Disabled(t *testing.T) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "x", Description: "d"}},
+		full: map[string]*skill.Skill{},
+	}
+	inv := &agent.Invocation{Session: &session.Session{}}
+	req := &model.Request{Messages: nil}
+	p := NewSkillsRequestProcessor(
+		repo,
+		WithSkillToolProfile(skillprofile.KnowledgeOnly),
+		WithSkillsToolingGuidance(""),
+	)
+	ch := make(chan *event.Event, 1)
+	p.ProcessRequest(context.Background(), inv, req, ch)
+
+	require.NotEmpty(t, req.Messages)
+	sys := req.Messages[0].Content
+	require.Contains(t, sys, skillsOverviewHeader)
+	require.NotContains(t, sys, skillsCapabilityHeader)
 	require.NotContains(t, sys, skillsToolingGuidanceHeader)
 }
 
