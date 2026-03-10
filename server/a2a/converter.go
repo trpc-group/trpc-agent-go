@@ -11,7 +11,9 @@ package a2a
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -89,45 +91,10 @@ func (c *defaultA2AMessageToAgentMessage) ConvertToAgentMessage(
 			} else {
 				continue
 			}
-			// Convert FilePart to model.ContentPart
-			switch fileData := filePart.File.(type) {
-			case *protocol.FileWithBytes:
-				// Handle file with bytes data
-				fileName := ""
-				mimeType := ""
-				if fileData.Name != nil {
-					fileName = *fileData.Name
-				}
-				if fileData.MimeType != nil {
-					mimeType = *fileData.MimeType
-				}
-				contentParts = append(contentParts, model.ContentPart{
-					Type: model.ContentTypeFile,
-					File: &model.File{
-						Name:     fileName,
-						Data:     []byte(fileData.Bytes),
-						MimeType: mimeType,
-					},
-				})
-			case *protocol.FileWithURI:
-				// Handle file with URI
-				fileName := ""
-				mimeType := ""
-				if fileData.Name != nil {
-					fileName = *fileData.Name
-				}
-				if fileData.MimeType != nil {
-					mimeType = *fileData.MimeType
-				}
-				contentParts = append(contentParts, model.ContentPart{
-					Type: model.ContentTypeFile,
-					File: &model.File{
-						Name:     fileName,
-						FileID:   fileData.URI,
-						MimeType: mimeType,
-					},
-				})
-			}
+			// Convert FilePart to model.ContentPart.
+			// The "name" field is used by the client to encode the original content type
+			// ("image", "audio", or a real filename for generic files).
+			contentParts = append(contentParts, convertFilePart(filePart)...)
 		case protocol.KindData:
 			var dataPart *protocol.DataPart
 			if d, ok := part.(*protocol.DataPart); ok {
@@ -588,4 +555,146 @@ func (c *defaultEventToA2AMessage) convertCodeExecutionToA2AStreamingMessage(
 		options,
 		msg.Parts,
 	), nil
+}
+
+// convertFilePart converts a protocol.FilePart to one or more model.ContentPart values.
+//
+// Content type resolution order (highest to lowest priority):
+//  1. FilePart.Metadata["content_type"] — set explicitly by trpc-agent-go clients
+//  2. MimeType prefix — "image/*" → ContentTypeImage, "audio/*" → ContentTypeAudio
+//  3. FilePart.Name — legacy fallback for older clients that used name="image"/"audio"
+//
+// FileWithBytes.Bytes is a base64-encoded string per the A2A spec; it is decoded here.
+func convertFilePart(filePart *protocol.FilePart) []model.ContentPart {
+	// Resolve content type using metadata > mimeType > name (legacy).
+	contentType := resolveFilePartContentType(filePart)
+
+	switch fileData := filePart.File.(type) {
+	case *protocol.FileWithBytes:
+		name := ""
+		mimeType := ""
+		if fileData.Name != nil {
+			name = *fileData.Name
+		}
+		if fileData.MimeType != nil {
+			mimeType = *fileData.MimeType
+		}
+		// Decode base64-encoded bytes per the A2A spec.
+		data, err := base64.StdEncoding.DecodeString(fileData.Bytes)
+		if err != nil {
+			// Non-base64 content (e.g. plain text in tests): use raw bytes.
+			log.Warnf("convertFilePart: base64 decode failed for file %q, using raw bytes: %v", name, err)
+			data = []byte(fileData.Bytes)
+		}
+		switch contentType {
+		case ia2a.FilePartMetadataContentTypeImage:
+			return []model.ContentPart{{
+				Type: model.ContentTypeImage,
+				Image: &model.Image{
+					Format: mimeType,
+					Data:   data,
+				},
+			}}
+		case ia2a.FilePartMetadataContentTypeAudio:
+			return []model.ContentPart{{
+				Type: model.ContentTypeAudio,
+				Audio: &model.Audio{
+					Format: mimeType,
+					Data:   data,
+				},
+			}}
+		default:
+			return []model.ContentPart{{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name:     name,
+					Data:     data,
+					MimeType: mimeType,
+				},
+			}}
+		}
+	case *protocol.FileWithURI:
+		name := ""
+		mimeType := ""
+		if fileData.Name != nil {
+			name = *fileData.Name
+		}
+		if fileData.MimeType != nil {
+			mimeType = *fileData.MimeType
+		}
+		switch contentType {
+		case ia2a.FilePartMetadataContentTypeImage:
+			return []model.ContentPart{{
+				Type: model.ContentTypeImage,
+				Image: &model.Image{
+					Format: mimeType,
+					URL:    fileData.URI,
+				},
+			}}
+		default:
+			// Audio with URI and other file types all use ContentTypeFile with FileID.
+			return []model.ContentPart{{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name:     name,
+					FileID:   fileData.URI,
+					MimeType: mimeType,
+				},
+			}}
+		}
+	}
+	return nil
+}
+
+// resolveFilePartContentType determines the logical content type of a FilePart.
+//
+// Priority:
+//  1. Metadata["content_type"] (set by trpc-agent-go clients, unambiguous)
+//  2. MimeType prefix ("image/*", "audio/*")
+//  3. Name field (legacy: older clients used name="image"/"audio" as a type hint)
+func resolveFilePartContentType(filePart *protocol.FilePart) string {
+	// 1. Explicit metadata (highest priority, set by current client)
+	if filePart.Metadata != nil {
+		if ct, ok := filePart.Metadata[ia2a.FilePartMetadataContentTypeKey].(string); ok && ct != "" {
+			return ct
+		}
+	}
+
+	// 2. Infer from MimeType prefix
+	var mimeType string
+	switch fd := filePart.File.(type) {
+	case *protocol.FileWithBytes:
+		if fd.MimeType != nil {
+			mimeType = *fd.MimeType
+		}
+	case *protocol.FileWithURI:
+		if fd.MimeType != nil {
+			mimeType = *fd.MimeType
+		}
+	}
+	if strings.HasPrefix(mimeType, "image/") {
+		return ia2a.FilePartMetadataContentTypeImage
+	}
+	if strings.HasPrefix(mimeType, "audio/") {
+		return ia2a.FilePartMetadataContentTypeAudio
+	}
+
+	// 3. Legacy name-based fallback (older clients that used name="image"/"audio")
+	var name string
+	switch fd := filePart.File.(type) {
+	case *protocol.FileWithBytes:
+		if fd.Name != nil {
+			name = *fd.Name
+		}
+	case *protocol.FileWithURI:
+		if fd.Name != nil {
+			name = *fd.Name
+		}
+	}
+	switch name {
+	case ia2a.FilePartMetadataContentTypeImage, ia2a.FilePartMetadataContentTypeAudio:
+		return name
+	}
+
+	return ia2a.FilePartMetadataContentTypeFile
 }

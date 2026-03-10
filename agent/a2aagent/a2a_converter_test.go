@@ -466,8 +466,8 @@ func TestDefaultEventA2AConverter_ConvertToA2AMessage(t *testing.T) {
 				if len(msg.Parts) != 1 {
 					t.Errorf("expected 1 part, got %d", len(msg.Parts))
 				}
-				if _, ok := msg.Parts[0].(protocol.FilePart); !ok {
-					t.Error("expected FilePart")
+				if _, ok := msg.Parts[0].(*protocol.FilePart); !ok {
+					t.Error("expected *FilePart")
 				}
 			},
 		},
@@ -496,8 +496,8 @@ func TestDefaultEventA2AConverter_ConvertToA2AMessage(t *testing.T) {
 				if len(msg.Parts) != 1 {
 					t.Errorf("expected 1 part, got %d", len(msg.Parts))
 				}
-				if _, ok := msg.Parts[0].(protocol.FilePart); !ok {
-					t.Error("expected FilePart")
+				if _, ok := msg.Parts[0].(*protocol.FilePart); !ok {
+					t.Error("expected *FilePart")
 				}
 			},
 		},
@@ -526,8 +526,8 @@ func TestDefaultEventA2AConverter_ConvertToA2AMessage(t *testing.T) {
 				if len(msg.Parts) != 1 {
 					t.Errorf("expected 1 part, got %d", len(msg.Parts))
 				}
-				if _, ok := msg.Parts[0].(protocol.FilePart); !ok {
-					t.Error("expected FilePart")
+				if _, ok := msg.Parts[0].(*protocol.FilePart); !ok {
+					t.Error("expected *FilePart")
 				}
 			},
 		},
@@ -557,8 +557,8 @@ func TestDefaultEventA2AConverter_ConvertToA2AMessage(t *testing.T) {
 				if len(msg.Parts) != 1 {
 					t.Errorf("expected 1 part, got %d", len(msg.Parts))
 				}
-				if _, ok := msg.Parts[0].(protocol.FilePart); !ok {
-					t.Error("expected FilePart")
+				if _, ok := msg.Parts[0].(*protocol.FilePart); !ok {
+					t.Error("expected *FilePart")
 				}
 			},
 		},

@@ -136,3 +136,20 @@ func GetDataPartType(metadata map[string]any) string {
 
 	return ""
 }
+
+const (
+	// FilePartMetadataContentTypeKey is the metadata key for original content type in FilePart.
+	// The client sets this to preserve the original ContentPart type ("image", "audio", "file")
+	// across A2A transport, since the A2A protocol does not natively distinguish image/audio
+	// from generic files within a FilePart.
+	FilePartMetadataContentTypeKey = "content_type"
+
+	// FilePartMetadataContentTypeImage marks a FilePart as originally ContentTypeImage.
+	FilePartMetadataContentTypeImage = "image"
+
+	// FilePartMetadataContentTypeAudio marks a FilePart as originally ContentTypeAudio.
+	FilePartMetadataContentTypeAudio = "audio"
+
+	// FilePartMetadataContentTypeFile marks a FilePart as originally ContentTypeFile.
+	FilePartMetadataContentTypeFile = "file"
+)
