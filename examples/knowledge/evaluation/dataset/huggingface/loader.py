@@ -28,7 +28,7 @@ class HuggingFaceDocDataset(BaseDataset):
         self._qa_dataset: Any = None
         self._tmp_dir: Optional[str] = None
 
-    def load_documents(self, force_reload: bool = True) -> str:
+    def load_documents(self, force_reload: bool = True, **kwargs) -> str:
         """
         Load markdown documents from huggingface_doc dataset to a temporary directory.
 
@@ -69,15 +69,12 @@ class HuggingFaceDocDataset(BaseDataset):
 
         return self._tmp_dir
 
-    def load_qa_items(self, max_items: Optional[int] = None) -> List[QAItem]:
+    def load_qa_items(self) -> List[QAItem]:
         """
         Load QA items from huggingface_doc_qa_eval dataset.
 
         Only includes QA items whose source document is a markdown file,
         consistent with the documents loaded by load_documents().
-
-        Args:
-            max_items: Maximum number of QA items to load. None for all.
 
         Returns:
             List of QAItem objects.
@@ -102,9 +99,6 @@ class HuggingFaceDocDataset(BaseDataset):
                     source_doc=source_doc,
                 )
             )
-
-            if max_items is not None and len(items) >= max_items:
-                break
 
         return items
 

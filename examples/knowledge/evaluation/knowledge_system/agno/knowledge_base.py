@@ -208,7 +208,25 @@ class AgnoKnowledgeBase(KnowledgeBase):
 
         # Get answer from agent
         response = agent.run(question)
-        answer = response.content if hasattr(response, 'content') else str(response)
+
+        # Agno's response.content concatenates ALL intermediate assistant texts
+        # (e.g. "I'll search for..." + "Based on the search results...") into one
+        # string. To get only the final answer, extract the last assistant message
+        # from response.messages that has content but no tool_calls.
+        answer = ""
+        if hasattr(response, 'messages') and response.messages:
+            for msg in reversed(response.messages):
+                if getattr(msg, 'role', None) == 'assistant' and not getattr(msg, 'tool_calls', None):
+                    answer = msg.get_content_string() if hasattr(msg, 'get_content_string') else str(msg.content or "")
+                    if answer.strip():
+                        break
+        if not answer:
+            answer = response.content if hasattr(response, 'content') else str(response)
+
+        # Strip LLM EOS tokens (e.g. deepseek's <｜end▁of▁sentence｜>)
+        eos_markers = ["<｜end▁of▁sentence｜>", "<|end_of_sentence|>", "<|endoftext|>"]
+        for marker in eos_markers:
+            answer = answer.replace(marker, "").strip()
 
         # Extract search results from agent's actual references
         self._last_search_results = []

@@ -2,8 +2,9 @@
 RGB (Retrieval-Augmented Generation Benchmark) Dataset Loader.
 
 Loads the RGB dataset from https://github.com/chen700564/RGB
-for RAG evaluation. The dataset provides queries with positive
-and negative passages, supporting noise-rate controlled evaluation.
+for RAG evaluation. All passage types (positive, negative,
+positive_wrong) are loaded into the knowledge base to simulate
+real-world conditions with noisy / misleading content.
 
 Data format (JSONL, each line is a JSON object):
     {
@@ -11,12 +12,12 @@ Data format (JSONL, each line is a JSON object):
         "query": str,
         "answer": str | list,
         "positive": [str, ...],
-        "negative": [str, ...]
+        "negative": [str, ...],
+        "positive_wrong": [str, ...]   // en_fact only
     }
 """
 
 import json
-import math
 import os
 import shutil
 import sys
@@ -91,11 +92,6 @@ class RGBDataset(BaseDataset):
     subset : str
         Which subset to use.  One of ``en``, ``zh``, ``en_int``,
         ``zh_int``, ``en_fact``, ``zh_fact``.  Defaults to ``en``.
-    noise_rate : float
-        Fraction of retrieved passages that are negative (noisy).
-        0.0 means all positive, 1.0 means all negative.
-    passage_num : int
-        Total number of passages to include per query.
     data_dir : str or None
         Override the directory where raw data files are cached.
         Defaults to ``dataset/rgb/rgb_data/`` next to this file.
@@ -104,8 +100,6 @@ class RGBDataset(BaseDataset):
     def __init__(
         self,
         subset: str = "en",
-        noise_rate: float = 0.0,
-        passage_num: int = 5,
         data_dir: Optional[str] = None,
     ):
         if subset not in _AVAILABLE_SUBSETS:
@@ -113,13 +107,7 @@ class RGBDataset(BaseDataset):
                 f"Unknown RGB subset '{subset}'. "
                 f"Choose from: {list(_AVAILABLE_SUBSETS.keys())}"
             )
-        if not 0.0 <= noise_rate <= 1.0:
-            raise ValueError(
-                f"noise_rate must be between 0.0 and 1.0, got {noise_rate}"
-            )
         self.subset = subset
-        self.noise_rate = noise_rate
-        self.passage_num = passage_num
 
         self._data_dir = data_dir or os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "rgb_data"
@@ -150,11 +138,13 @@ class RGBDataset(BaseDataset):
         self._instances = instances
         return instances
 
-    def load_documents(self, force_reload: bool = True) -> str:
-        """Export positive passages as individual text files for the KB.
+    def load_documents(self, force_reload: bool = True, **kwargs) -> str:
+        """Export all passages (positive + negative + positive_wrong) as
+        individual text files for the KB.
 
-        Each unique positive passage across all instances is written as a
-        separate file so that the knowledge-base can ingest them.
+        All passage types are loaded to simulate real-world conditions
+        where the knowledge base contains both relevant and irrelevant
+        (or even misleading) content.
         """
         self._doc_dir = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "rgb_docs"
@@ -176,26 +166,47 @@ class RGBDataset(BaseDataset):
 
         doc_idx = 0
         seen_texts: set = set()
-        for inst in instances:
-            passages = _flatten_passages(inst.get("positive", []))
+
+        def _write_passages(passages: List[str]) -> int:
+            nonlocal doc_idx
+            count = 0
             for text in passages:
                 if text in seen_texts:
                     continue
                 seen_texts.add(text)
-
                 filepath = os.path.join(self._doc_dir, f"rgb_doc_{doc_idx:06d}.txt")
                 with open(filepath, "w", encoding="utf-8") as f:
                     f.write(text)
                 doc_idx += 1
+                count += 1
+            return count
 
-        print(f"   Exported {doc_idx} unique positive passages as documents")
+        pos_count = neg_count = pw_count = 0
+        for inst in instances:
+            pos_count += _write_passages(
+                _flatten_passages(inst.get("positive", []))
+            )
+            neg_count += _write_passages(
+                _flatten_passages(inst.get("negative", []))
+            )
+            pw_count += _write_passages(
+                _flatten_passages(inst.get("positive_wrong", []))
+            )
+
+        parts = [f"{pos_count} positive"]
+        if neg_count:
+            parts.append(f"{neg_count} negative")
+        if pw_count:
+            parts.append(f"{pw_count} positive_wrong")
+        print(f"   Exported {doc_idx} unique passages as documents ({', '.join(parts)})")
         return self._doc_dir
 
-    def load_qa_items(self, max_items: Optional[int] = None) -> List[QAItem]:
+    def load_qa_items(self) -> List[QAItem]:
         """Build QA items from the RGB dataset.
 
-        For each instance we assemble a context string from positive passages
-        (and optionally negative passages controlled by ``noise_rate``).
+        The context field uses positive passages only (up to passage_num).
+        In end-to-end RAG evaluation this field is not used directly --
+        the actual context comes from the framework's retrieval pipeline.
         """
         instances = self._ensure_data()
 
@@ -205,22 +216,7 @@ class RGBDataset(BaseDataset):
             answer = _flatten_answer(inst["answer"])
 
             positives = _flatten_passages(inst.get("positive", []))
-            negatives = _flatten_passages(inst.get("negative", []))
-
-            neg_num = math.ceil(self.passage_num * self.noise_rate)
-            pos_num = self.passage_num - neg_num
-
-            if pos_num > len(positives):
-                pos_num = len(positives)
-                neg_num = self.passage_num - pos_num
-            if neg_num > len(negatives):
-                neg_num = len(negatives)
-
-            selected_pos = positives[:pos_num]
-            selected_neg = negatives[:neg_num]
-            docs = selected_pos + selected_neg
-
-            context = "\n\n".join(docs)
+            context = "\n\n".join(positives)
 
             items.append(
                 QAItem(
@@ -230,9 +226,6 @@ class RGBDataset(BaseDataset):
                     source_doc=f"rgb_{self.subset}_{inst.get('id', 'unknown')}",
                 )
             )
-
-            if max_items is not None and len(items) >= max_items:
-                break
 
         print(f"   Loaded {len(items)} QA items from RGB/{self.subset}")
         return items

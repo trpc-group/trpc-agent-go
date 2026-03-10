@@ -3,7 +3,7 @@ Base Dataset Interface for RAG Evaluation.
 """
 
 from abc import ABC, abstractmethod
-from typing import List, Optional
+from typing import List
 from dataclasses import dataclass
 
 
@@ -21,12 +21,13 @@ class BaseDataset(ABC):
     """Abstract base class for RAG evaluation datasets."""
 
     @abstractmethod
-    def load_documents(self, force_reload: bool = False) -> str:
+    def load_documents(self, force_reload: bool = False, **kwargs) -> str:
         """
         Load all documents to a temporary directory.
 
         Args:
             force_reload: If True, clear and reload documents. If False, reuse existing if present.
+            **kwargs: Dataset-specific options (e.g. include_noise for RGB).
 
         Returns:
             Path to the temporary directory containing documents.
@@ -34,12 +35,9 @@ class BaseDataset(ABC):
         pass
 
     @abstractmethod
-    def load_qa_items(self, max_items: Optional[int] = None) -> List[QAItem]:
+    def load_qa_items(self) -> List[QAItem]:
         """
         Load QA items for evaluation.
-
-        Args:
-            max_items: Maximum number of QA items to load. None for all.
 
         Returns:
             List of QAItem objects.

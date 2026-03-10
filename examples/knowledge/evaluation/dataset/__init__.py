@@ -25,8 +25,6 @@ def create_dataset(name: str, **kwargs: Any) -> BaseDataset:
 
         RGB accepts:
             subset (str): language/task subset (``en``, ``zh``, ``en_int``, etc.).
-            noise_rate (float): fraction of negative passages mixed in (0.0 - 1.0).
-            passage_num (int): total passages per query.
 
         MultiHop-RAG accepts:
             question_types (list[str] or None): filter by question type.

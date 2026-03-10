@@ -105,10 +105,8 @@ def build_run_manifest(
     kb_name: str,
     evaluator_name: str,
     dataset_name: str,
-    max_qa_items: Optional[int],
     retrieval_k: int,
     skip_load: bool,
-    force_reload: bool,
 ) -> Dict[str, Any]:
     """Build a manifest capturing all key configuration for reproducibility."""
     from util import get_config
@@ -124,9 +122,7 @@ def build_run_manifest(
         "eval_model_name": config.get("eval_model_name", ""),
         "embedding_model": config.get("embedding_model", ""),
         "retrieval_k": retrieval_k,
-        "max_qa_items": max_qa_items,
         "skip_load": skip_load,
-        "force_reload": force_reload,
     }
 
 
@@ -134,12 +130,10 @@ def run_evaluation(
     kb: KnowledgeBase,
     dataset: BaseDataset,
     evaluator: Evaluator,
-    max_qa_items: Optional[int] = 10,
     retrieval_k: int = 4,
     skip_load: bool = False,
-    full_log: bool = False,
+    full_log: bool = True,
     output_file: Optional[str] = None,
-    force_reload: bool = True,
     kb_name: str = "unknown",
     evaluator_name: str = "unknown",
     dataset_name: str = "unknown",
@@ -151,12 +145,10 @@ def run_evaluation(
         kb: Knowledge base instance implementing KnowledgeBase interface.
         dataset: Dataset instance implementing BaseDataset interface.
         evaluator: Evaluator instance implementing Evaluator interface.
-        max_qa_items: Maximum QA items for evaluation.
         retrieval_k: Number of documents to retrieve per query.
         skip_load: If True, skip loading documents into knowledge base.
         full_log: If True, print full answer results for each question.
         output_file: Optional path to save evaluation results as JSON.
-        force_reload: If True (default), force reload documents even if already cached.
         kb_name: Name of the knowledge base implementation (for manifest).
         evaluator_name: Name of the evaluator (for manifest).
         dataset_name: Name of the dataset (for manifest).
@@ -170,10 +162,8 @@ def run_evaluation(
         kb_name=kb_name,
         evaluator_name=evaluator_name,
         dataset_name=dataset_name,
-        max_qa_items=max_qa_items,
         retrieval_k=retrieval_k,
         skip_load=skip_load,
-        force_reload=force_reload,
     )
     print("📋 Run Manifest:")
     for k, v in manifest.items():
@@ -182,7 +172,7 @@ def run_evaluation(
 
     # Step 1: Load QA items
     print("1. Loading QA items...")
-    qa_items = dataset.load_qa_items(max_qa_items)
+    qa_items = dataset.load_qa_items()
     print(f"   Loaded {len(qa_items)} QA items.\n")
 
     # Step 2: Load documents if needed
@@ -190,7 +180,7 @@ def run_evaluation(
         print("2. Skipping document loading (--skip-load enabled)...\n")
     else:
         print("2. Loading documents...")
-        doc_dir = dataset.load_documents(force_reload=force_reload)
+        doc_dir = dataset.load_documents(force_reload=True)
 
         file_paths = []
         for filename in sorted(os.listdir(doc_dir)):
@@ -368,12 +358,6 @@ def main():
         help="Knowledge base implementation to use (default: langchain)",
     )
     parser.add_argument(
-        "--max-qa",
-        type=int,
-        default=None,
-        help="Maximum QA items for evaluation (default: all QA items)",
-    )
-    parser.add_argument(
         "--k",
         type=int,
         default=4,
@@ -389,11 +373,6 @@ def main():
         "--load",
         action="store_true",
         help="Force loading documents into knowledge base",
-    )
-    parser.add_argument(
-        "--full-log",
-        action="store_true",
-        help="Print full answer results for each question",
     )
     parser.add_argument(
         "--output",
@@ -412,24 +391,6 @@ def main():
         choices=["en", "zh", "en_int", "zh_int", "en_fact", "zh_fact"],
         default="en",
         help="RGB dataset subset (default: en). Only used when --dataset=rgb",
-    )
-    parser.add_argument(
-        "--rgb-noise-rate",
-        type=float,
-        default=0.0,
-        help="RGB noise rate: fraction of negative passages (0.0-1.0, default: 0.0). "
-             "Only used when --dataset=rgb",
-    )
-    parser.add_argument(
-        "--rgb-passage-num",
-        type=int,
-        default=5,
-        help="RGB passage count per query (default: 5). Only used when --dataset=rgb",
-    )
-    parser.add_argument(
-        "--cache-document",
-        action="store_true",
-        help="Reuse cached documents if available (default: always re-pull)",
     )
     parser.add_argument(
         "--timeout",
@@ -451,8 +412,6 @@ def main():
     if args.dataset == "rgb":
         dataset_kwargs = {
             "subset": args.rgb_subset,
-            "noise_rate": args.rgb_noise_rate,
-            "passage_num": args.rgb_passage_num,
         }
     dataset = create_dataset(args.dataset, **dataset_kwargs)
     print(f"Using dataset: {args.dataset}")
@@ -494,12 +453,10 @@ def main():
         kb=kb,
         dataset=dataset,
         evaluator=evaluator,
-        max_qa_items=args.max_qa,
         retrieval_k=args.k,
         skip_load=skip_load,
-        full_log=args.full_log,
+        full_log=True,
         output_file=args.output,
-        force_reload=not args.cache_document,
         kb_name=args.kb,
         evaluator_name=args.evaluator,
         dataset_name=args.dataset,

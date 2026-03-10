@@ -95,7 +95,7 @@ class MultiHopRAGDataset(BaseDataset):
         print(f"   Loaded {len(self._qa_data)} QA entries from MultiHop-RAG")
         return self._qa_data
 
-    def load_documents(self, force_reload: bool = True) -> str:
+    def load_documents(self, force_reload: bool = True, **kwargs) -> str:
         """Export corpus articles as individual text files for the KB.
 
         Each corpus article is written as a ``.txt`` file whose content
@@ -143,42 +143,56 @@ class MultiHopRAGDataset(BaseDataset):
         print(f"   Exported {count} corpus articles as documents")
         return self._doc_dir
 
-    def load_qa_items(self, max_items: Optional[int] = None) -> List[QAItem]:
+    def load_qa_items(
+        self,
+        per_type_limit: int = 150,
+    ) -> List[QAItem]:
         """Build QA items from MultiHop-RAG queries.
 
         The ``context`` field is assembled from the evidence_list facts,
         which represent the gold evidence passages for each query.
+
+        Parameters
+        ----------
+        per_type_limit : int
+            Take at most this many items per ``question_type``.
+            Defaults to 150.
         """
+        from collections import defaultdict
+
         qa_data = self._load_qa()
 
-        items: List[QAItem] = []
+        groups: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
         for entry in qa_data:
             qtype = entry.get("question_type", "")
             if qtype == "null_query":
                 continue
             if self.question_types and qtype not in self.question_types:
                 continue
+            groups[qtype].append(entry)
 
-            query = entry["query"]
-            answer = entry["answer"]
+        items: List[QAItem] = []
+        for qtype, entries in sorted(groups.items()):
+            selected = entries[:per_type_limit]
+            for entry in selected:
+                query = entry["query"]
+                answer = entry["answer"]
 
-            evidence_list = entry.get("evidence_list", [])
-            facts = [
-                ev["fact"] for ev in evidence_list if isinstance(ev, dict) and "fact" in ev
-            ]
-            context = "\n\n".join(facts) if facts else ""
+                evidence_list = entry.get("evidence_list", [])
+                facts = [
+                    ev["fact"] for ev in evidence_list if isinstance(ev, dict) and "fact" in ev
+                ]
+                context = "\n\n".join(facts) if facts else ""
 
-            items.append(
-                QAItem(
-                    question=query,
-                    answer=str(answer),
-                    context=context,
-                    source_doc=f"multihop_rag_{qtype}",
+                items.append(
+                    QAItem(
+                        question=query,
+                        answer=str(answer),
+                        context=context,
+                        source_doc=f"multihop_rag_{qtype}",
+                    )
                 )
-            )
-
-            if max_items is not None and len(items) >= max_items:
-                break
+            print(f"   {qtype}: {len(selected)}/{len(entries)} items")
 
         print(f"   Loaded {len(items)} QA items from MultiHop-RAG")
         return items
