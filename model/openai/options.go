@@ -115,6 +115,14 @@ type options struct {
 	// This can be useful when a provider rejects file inputs in chat messages,
 	// while still keeping the file parts in-memory for downstream tools.
 	OmitFileContentParts bool
+
+	// SkipReasoningContentInHistory controls whether reasoning_content is stripped
+	// from assistant messages when building multi-turn message history.
+	// Some providers (e.g. Taiji) reject assistant messages that include
+	// reasoning_content and return 400 errors. When true, reasoning_content is
+	// omitted from historical assistant messages, and content is set to an empty
+	// string when it would otherwise be nil or empty (required by those providers).
+	SkipReasoningContentInHistory bool
 }
 
 var (
@@ -457,5 +465,30 @@ func WithOptimizeForCache(optimize bool) Option {
 	return func(opts *options) {
 		opts.OptimizeForCache = optimize
 		opts.optimizeForCacheSet = true
+	}
+}
+
+// WithSkipReasoningContentInHistory controls whether reasoning_content is stripped
+// from assistant messages in multi-turn message history.
+//
+// Some providers (e.g. Taiji) do not accept reasoning_content in historical assistant
+// messages and return HTTP 400 "extra inputs are not permitted" errors. When this option
+// is enabled, reasoning_content is omitted when building the conversation history, and
+// an empty string is used for content when it would otherwise be nil (required by those providers).
+//
+// Enable this for:
+//   - Providers that reject reasoning_content in history (e.g. Taiji)
+//   - Thinking-mode + tool-call scenarios where the second-turn request fails with 400
+//
+// Example:
+//
+//	model := taiji.NewOpenAI("DeepSeek-V3-Online-64K",
+//	    taiji.WithOpenAIInfer(true),
+//	    taiji.WithThinking(true),
+//	    openai.WithSkipReasoningContentInHistory(true),
+//	)
+func WithSkipReasoningContentInHistory(skip bool) Option {
+	return func(opts *options) {
+		opts.SkipReasoningContentInHistory = skip
 	}
 }

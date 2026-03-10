@@ -113,6 +113,13 @@ type variantConfig struct {
 	// defaultOptimizeForCache controls the default value for cache optimization
 	// when WithOptimizeForCache is not explicitly set.
 	defaultOptimizeForCache bool
+
+	// skipReasoningContentInHistory controls whether reasoning_content is omitted
+	// when building multi-turn message history. Some providers (e.g. Taiji) do not
+	// accept reasoning_content in historical assistant messages and return 400 errors.
+	// When true, reasoning_content is stripped from assistant messages in history,
+	// and an empty string is used for content when it is otherwise nil/empty.
+	skipReasoningContentInHistory bool
 }
 type fileDeletionBodyConvertor func(body []byte, fileID string) []byte
 
@@ -299,7 +306,13 @@ func New(name string, opts ...Option) *Model {
 		chatStreamCompleteCallback: o.ChatStreamCompleteCallback,
 		extraFields:                o.ExtraFields,
 		variant:                    o.Variant,
-		variantConfig:              variantConfigs[o.Variant],
+		variantConfig: func() variantConfig {
+			cfg := variantConfigs[o.Variant]
+			if o.SkipReasoningContentInHistory {
+				cfg.skipReasoningContentInHistory = true
+			}
+			return cfg
+		}(),
 		batchCompletionWindow:      o.BatchCompletionWindow,
 		batchMetadata:              o.BatchMetadata,
 		batchBaseURL:               o.BatchBaseURL,
@@ -633,13 +646,24 @@ func (m *Model) convertMessages(messages []model.Message) []openai.ChatCompletio
 				},
 			}
 		case model.RoleAssistant:
+			assistantContent := m.convertAssistantMessageContent(msg)
+			// Some providers (e.g. Taiji) reject assistant messages with a nil/empty
+			// content field when tool_calls are present. Ensure content is never empty.
+			if m.variantConfig.skipReasoningContentInHistory &&
+				!assistantContent.OfString.Valid() && len(assistantContent.OfArrayOfContentParts) == 0 {
+				assistantContent = openai.ChatCompletionAssistantMessageParamContentUnion{
+					OfString: openai.String(""),
+				}
+			}
 			assistantMsg := &openai.ChatCompletionAssistantMessageParam{
-				Content:   m.convertAssistantMessageContent(msg),
+				Content:   assistantContent,
 				ToolCalls: m.convertToolCalls(msg.ToolCalls),
 			}
 			// Pass reasoning_content to API if present (required by DeepSeek for
 			// tool call scenarios within the same request turn).
-			if msg.ReasoningContent != "" {
+			// Skip when the provider does not accept reasoning_content in history
+			// (e.g. Taiji returns 400 "extra inputs are not permitted").
+			if msg.ReasoningContent != "" && !m.variantConfig.skipReasoningContentInHistory {
 				assistantMsg.SetExtraFields(map[string]any{
 					model.ReasoningContentKey: msg.ReasoningContent,
 				})
