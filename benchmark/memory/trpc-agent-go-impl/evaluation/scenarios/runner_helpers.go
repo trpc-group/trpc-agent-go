@@ -87,8 +87,9 @@ func (s *noAutoMemoryService) AddMemory(
 	userKey memory.UserKey,
 	mem string,
 	topics []string,
+	opts ...memory.AddMemoryOption,
 ) error {
-	return s.inner.AddMemory(ctx, userKey, mem, topics)
+	return s.inner.AddMemory(ctx, userKey, mem, topics, opts...)
 }
 
 func (s *noAutoMemoryService) UpdateMemory(
@@ -96,8 +97,9 @@ func (s *noAutoMemoryService) UpdateMemory(
 	memoryKey memory.Key,
 	mem string,
 	topics []string,
+	opts ...memory.UpdateMemoryOption,
 ) error {
-	return s.inner.UpdateMemory(ctx, memoryKey, mem, topics)
+	return s.inner.UpdateMemory(ctx, memoryKey, mem, topics, opts...)
 }
 
 func (s *noAutoMemoryService) DeleteMemory(
@@ -126,8 +128,9 @@ func (s *noAutoMemoryService) SearchMemories(
 	ctx context.Context,
 	userKey memory.UserKey,
 	query string,
+	opts ...memory.SearchOption,
 ) ([]*memory.Entry, error) {
-	return s.inner.SearchMemories(ctx, userKey, query)
+	return s.inner.SearchMemories(ctx, userKey, query, opts...)
 }
 
 func (s *noAutoMemoryService) Tools() []tool.Tool {
@@ -143,34 +146,6 @@ func (s *noAutoMemoryService) EnqueueAutoMemoryJob(
 
 func (s *noAutoMemoryService) Close() error {
 	return s.inner.Close()
-}
-
-func (s *noAutoMemoryService) AddMemoryWithEpisodic(
-	ctx context.Context,
-	userKey memory.UserKey,
-	mem string,
-	topics []string,
-	ep *memory.EpisodicFields,
-) error {
-	return s.inner.AddMemoryWithEpisodic(ctx, userKey, mem, topics, ep)
-}
-
-func (s *noAutoMemoryService) UpdateMemoryWithEpisodic(
-	ctx context.Context,
-	memoryKey memory.Key,
-	mem string,
-	topics []string,
-	ep *memory.EpisodicFields,
-) error {
-	return s.inner.UpdateMemoryWithEpisodic(ctx, memoryKey, mem, topics, ep)
-}
-
-func (s *noAutoMemoryService) SearchMemoriesWithOptions(
-	ctx context.Context,
-	userKey memory.UserKey,
-	opts memory.SearchOptions,
-) ([]*memory.Entry, error) {
-	return s.inner.SearchMemoriesWithOptions(ctx, userKey, opts)
 }
 
 // seedAgent is a minimal agent used to trigger Runner's auto memory enqueue.

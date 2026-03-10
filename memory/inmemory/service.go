@@ -145,7 +145,8 @@ func createMemoryEntry(appName, userID, memoryStr string, topics []string) *memo
 }
 
 // AddMemory adds or updates a memory for a user (idempotent).
-func (s *MemoryService) AddMemory(ctx context.Context, userKey memory.UserKey, memoryStr string, topics []string) error {
+func (s *MemoryService) AddMemory(ctx context.Context, userKey memory.UserKey, memoryStr string,
+	topics []string, opts ...memory.AddOption) error {
 	if err := userKey.CheckUserKey(); err != nil {
 		return err
 	}
@@ -154,6 +155,8 @@ func (s *MemoryService) AddMemory(ctx context.Context, userKey memory.UserKey, m
 
 	// Create memory entry with provided topics.
 	memoryEntry := createMemoryEntry(userKey.AppName, userKey.UserID, memoryStr, topics)
+	ep := memory.ResolveAddOptions(opts)
+	imemory.ApplyMetadata(memoryEntry.Memory, ep)
 
 	app.mu.Lock()
 	defer app.mu.Unlock()
@@ -174,33 +177,31 @@ func (s *MemoryService) AddMemory(ctx context.Context, userKey memory.UserKey, m
 }
 
 // UpdateMemory updates an existing memory for a user.
-func (s *MemoryService) UpdateMemory(ctx context.Context, memoryKey memory.Key, memoryStr string, topics []string) error {
+func (s *MemoryService) UpdateMemory(ctx context.Context, memoryKey memory.Key, memoryStr string,
+	topics []string, opts ...memory.UpdateOption) error {
 	if err := memoryKey.CheckMemoryKey(); err != nil {
 		return err
 	}
 
 	app := s.getAppMemories(memoryKey.AppName)
-
 	app.mu.Lock()
 	defer app.mu.Unlock()
 
-	// Check if user exists.
 	if app.memories[memoryKey.UserID] == nil {
 		return fmt.Errorf("user %s not found", memoryKey.UserID)
 	}
-
 	memoryEntry, exists := app.memories[memoryKey.UserID][memoryKey.MemoryID]
 	if !exists {
 		return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
 	}
 
-	// Update memory data.
 	now := time.Now()
 	memoryEntry.Memory.Memory = memoryStr
 	memoryEntry.Memory.Topics = topics
 	memoryEntry.Memory.LastUpdated = &now
+	ep := memory.ResolveUpdateOptions(opts)
+	imemory.ApplyMetadata(memoryEntry.Memory, ep)
 	memoryEntry.UpdatedAt = now
-
 	app.memories[memoryKey.UserID][memoryKey.MemoryID] = memoryEntry
 	return nil
 }
@@ -283,7 +284,8 @@ func (s *MemoryService) ReadMemories(ctx context.Context, userKey memory.UserKey
 }
 
 // SearchMemories searches memories for a user.
-func (s *MemoryService) SearchMemories(ctx context.Context, userKey memory.UserKey, query string) ([]*memory.Entry, error) {
+func (s *MemoryService) SearchMemories(ctx context.Context, userKey memory.UserKey,
+	query string, opts ...memory.SearchOption) ([]*memory.Entry, error) {
 	if err := userKey.CheckUserKey(); err != nil {
 		return nil, err
 	}
@@ -306,7 +308,8 @@ func (s *MemoryService) SearchMemories(ctx context.Context, userKey memory.UserK
 		}
 	}
 
-	// Sort results by updated time (newest first), tie-breaker by created time.
+	// Sort results by updated time (newest first),
+	// tie-breaker by created time.
 	sort.Slice(results, func(i, j int) bool {
 		if results[i].UpdatedAt.Equal(results[j].UpdatedAt) {
 			return results[i].CreatedAt.After(results[j].CreatedAt)
@@ -341,64 +344,4 @@ func (s *MemoryService) Close() error {
 		s.autoMemoryWorker.Stop()
 	}
 	return nil
-}
-
-// AddMemoryWithEpisodic adds a memory with optional episodic fields.
-func (s *MemoryService) AddMemoryWithEpisodic(ctx context.Context, userKey memory.UserKey,
-	memoryStr string, topics []string, ep *memory.EpisodicFields) error {
-	if err := userKey.CheckUserKey(); err != nil {
-		return err
-	}
-
-	app := s.getAppMemories(userKey.AppName)
-	memoryEntry := createMemoryEntry(userKey.AppName, userKey.UserID, memoryStr, topics)
-	imemory.ApplyEpisodicFields(memoryEntry.Memory, ep)
-
-	app.mu.Lock()
-	defer app.mu.Unlock()
-
-	if len(app.memories[userKey.UserID]) >= s.opts.memoryLimit {
-		return fmt.Errorf("memory limit exceeded for user %s, limit: %d, current: %d",
-			userKey.UserID, s.opts.memoryLimit, len(app.memories[userKey.UserID]))
-	}
-	if app.memories[userKey.UserID] == nil {
-		app.memories[userKey.UserID] = make(map[string]*memory.Entry)
-	}
-	app.memories[userKey.UserID][memoryEntry.ID] = memoryEntry
-	return nil
-}
-
-// UpdateMemoryWithEpisodic updates an existing memory with optional episodic fields.
-func (s *MemoryService) UpdateMemoryWithEpisodic(ctx context.Context, memoryKey memory.Key,
-	memoryStr string, topics []string, ep *memory.EpisodicFields) error {
-	if err := memoryKey.CheckMemoryKey(); err != nil {
-		return err
-	}
-
-	app := s.getAppMemories(memoryKey.AppName)
-	app.mu.Lock()
-	defer app.mu.Unlock()
-
-	if app.memories[memoryKey.UserID] == nil {
-		return fmt.Errorf("user %s not found", memoryKey.UserID)
-	}
-	memoryEntry, exists := app.memories[memoryKey.UserID][memoryKey.MemoryID]
-	if !exists {
-		return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
-	}
-
-	now := time.Now()
-	memoryEntry.Memory.Memory = memoryStr
-	memoryEntry.Memory.Topics = topics
-	memoryEntry.Memory.LastUpdated = &now
-	imemory.ApplyEpisodicFields(memoryEntry.Memory, ep)
-	memoryEntry.UpdatedAt = now
-	app.memories[memoryKey.UserID][memoryKey.MemoryID] = memoryEntry
-	return nil
-}
-
-// SearchMemoriesWithOptions delegates to SearchMemories (advanced filtering ignored for inmemory backend).
-func (s *MemoryService) SearchMemoriesWithOptions(ctx context.Context, userKey memory.UserKey,
-	opts memory.SearchOptions) ([]*memory.Entry, error) {
-	return s.SearchMemories(ctx, userKey, opts.Query)
 }

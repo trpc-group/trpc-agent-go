@@ -133,10 +133,16 @@ func (s *Service) AddMemory(
 	userKey memory.UserKey,
 	memoryStr string,
 	topics []string,
+	opts ...memory.AddOption,
 ) error {
 	if err := userKey.CheckUserKey(); err != nil {
 		return err
 	}
+
+	// TODO: persist episodic metadata once the vec0 virtual
+	// table schema supports episodic columns (kind, event_time,
+	// participants, location).
+	_ = memory.ResolveAddOptions(opts)
 
 	embedding, err := s.opts.embedder.GetEmbedding(ctx, memoryStr)
 	if err != nil {
@@ -333,10 +339,15 @@ func (s *Service) UpdateMemory(
 	memoryKey memory.Key,
 	memoryStr string,
 	topics []string,
+	opts ...memory.UpdateOption,
 ) error {
 	if err := memoryKey.CheckMemoryKey(); err != nil {
 		return err
 	}
+
+	// TODO: persist episodic metadata once the vec0 virtual
+	// table schema supports episodic columns.
+	_ = memory.ResolveUpdateOptions(opts)
 
 	embedding, err := s.opts.embedder.GetEmbedding(ctx, memoryStr)
 	if err != nil {
@@ -526,6 +537,7 @@ func (s *Service) SearchMemories(
 	ctx context.Context,
 	userKey memory.UserKey,
 	queryStr string,
+	opts ...memory.SearchOption,
 ) ([]*memory.Entry, error) {
 	if err := userKey.CheckUserKey(); err != nil {
 		return nil, err
@@ -671,27 +683,4 @@ func (s *Service) Close() error {
 		return s.db.Close()
 	}
 	return nil
-}
-
-// AddMemoryWithEpisodic delegates to AddMemory.
-// The sqlitevec backend stores memory_content and topics as separate columns
-// (not a JSON blob), so episodic fields require schema migration to persist.
-// Episodic fields are currently not stored but will be preserved if the
-// backend is migrated in the future.
-func (s *Service) AddMemoryWithEpisodic(ctx context.Context, userKey memory.UserKey,
-	memoryStr string, topics []string, _ *memory.EpisodicFields) error {
-	return s.AddMemory(ctx, userKey, memoryStr, topics)
-}
-
-// UpdateMemoryWithEpisodic delegates to UpdateMemory.
-// See AddMemoryWithEpisodic for details on episodic field support.
-func (s *Service) UpdateMemoryWithEpisodic(ctx context.Context, memoryKey memory.Key,
-	memoryStr string, topics []string, _ *memory.EpisodicFields) error {
-	return s.UpdateMemory(ctx, memoryKey, memoryStr, topics)
-}
-
-// SearchMemoriesWithOptions delegates to SearchMemories (advanced filtering ignored for sqlitevec backend).
-func (s *Service) SearchMemoriesWithOptions(ctx context.Context, userKey memory.UserKey,
-	opts memory.SearchOptions) ([]*memory.Entry, error) {
-	return s.SearchMemories(ctx, userKey, opts.Query)
 }

@@ -107,8 +107,73 @@ func (s *Service) AddMemory(
 	userKey memory.UserKey,
 	memoryStr string,
 	topics []string,
+	opts ...memory.AddOption,
 ) error {
-	return s.AddMemoryWithEpisodic(ctx, userKey, memoryStr, topics, nil)
+	if err := userKey.CheckUserKey(); err != nil {
+		return err
+	}
+
+	ep := memory.ResolveAddOptions(opts)
+
+	now := time.Now()
+	mem := &memory.Memory{
+		Memory:      memoryStr,
+		Topics:      topics,
+		LastUpdated: &now,
+	}
+	imemory.ApplyMetadata(mem, ep)
+	memoryID := imemory.GenerateMemoryID(mem, userKey.AppName, userKey.UserID)
+
+	if s.opts.memoryLimit > 0 {
+		deletedAt, exists, err := s.getDeletedAt(ctx, userKey, memoryID)
+		if err != nil {
+			return err
+		}
+		needLimit := !exists
+		if exists && s.opts.softDelete && deletedAt.Valid {
+			needLimit = true
+		}
+		if needLimit {
+			if err := s.enforceMemoryLimit(ctx, userKey); err != nil {
+				return err
+			}
+		}
+	}
+
+	entry := &memory.Entry{
+		ID:        memoryID,
+		AppName:   userKey.AppName,
+		Memory:    mem,
+		UserID:    userKey.UserID,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	memoryData, err := json.Marshal(entry)
+	if err != nil {
+		return fmt.Errorf("marshal memory entry: %w", err)
+	}
+
+	const insertSQL = `
+INSERT INTO %s (
+  memory_id, app_name, user_id, memory_data, created_at, updated_at,
+  deleted_at
+) VALUES (?, ?, ?, ?, ?, ?, NULL)
+ON CONFLICT(memory_id) DO UPDATE SET
+  memory_data = excluded.memory_data,
+  updated_at = excluded.updated_at,
+  deleted_at = NULL;`
+
+	query := fmt.Sprintf(insertSQL, s.tableName)
+	_, err = s.db.ExecContext(
+		ctx, query,
+		entry.ID, userKey.AppName, userKey.UserID, memoryData,
+		now.UTC().UnixNano(), now.UTC().UnixNano(),
+	)
+	if err != nil {
+		return fmt.Errorf("store memory entry: %w", err)
+	}
+	return nil
 }
 
 func (s *Service) getDeletedAt(
@@ -180,8 +245,48 @@ func (s *Service) UpdateMemory(
 	memoryKey memory.Key,
 	memoryStr string,
 	topics []string,
+	opts ...memory.UpdateOption,
 ) error {
-	return s.UpdateMemoryWithEpisodic(ctx, memoryKey, memoryStr, topics, nil)
+	if err := memoryKey.CheckMemoryKey(); err != nil {
+		return err
+	}
+
+	ep := memory.ResolveUpdateOptions(opts)
+
+	entry, err := s.getEntry(ctx, memoryKey)
+	if err != nil {
+		return err
+	}
+
+	now := time.Now()
+	entry.Memory.Memory = memoryStr
+	entry.Memory.Topics = topics
+	entry.Memory.LastUpdated = &now
+	imemory.ApplyMetadata(entry.Memory, ep)
+	entry.UpdatedAt = now
+
+	updated, err := json.Marshal(entry)
+	if err != nil {
+		return fmt.Errorf("marshal updated memory entry: %w", err)
+	}
+
+	const updateSQL = `UPDATE %s
+SET memory_data = ?, updated_at = ?
+WHERE app_name = ? AND user_id = ? AND memory_id = ?`
+	query := fmt.Sprintf(updateSQL, s.tableName)
+	args := []any{
+		updated, now.UTC().UnixNano(),
+		memoryKey.AppName, memoryKey.UserID, memoryKey.MemoryID,
+	}
+	if s.opts.softDelete {
+		query += " AND deleted_at IS NULL"
+	}
+
+	_, err = s.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("update memory entry: %w", err)
+	}
+	return nil
 }
 
 func (s *Service) getEntry(
@@ -354,6 +459,7 @@ func (s *Service) SearchMemories(
 	ctx context.Context,
 	userKey memory.UserKey,
 	queryStr string,
+	opts ...memory.SearchOption,
 ) ([]*memory.Entry, error) {
 	if err := userKey.CheckUserKey(); err != nil {
 		return nil, err
@@ -429,123 +535,4 @@ func (s *Service) Close() error {
 		return s.db.Close()
 	}
 	return nil
-}
-
-// AddMemoryWithEpisodic adds a memory with optional episodic fields.
-func (s *Service) AddMemoryWithEpisodic(ctx context.Context, userKey memory.UserKey,
-	memoryStr string, topics []string, ep *memory.EpisodicFields) error {
-	if err := userKey.CheckUserKey(); err != nil {
-		return err
-	}
-
-	now := time.Now()
-	mem := &memory.Memory{
-		Memory:      memoryStr,
-		Topics:      topics,
-		LastUpdated: &now,
-	}
-	imemory.ApplyEpisodicFields(mem, ep)
-	memoryID := imemory.GenerateMemoryID(mem, userKey.AppName, userKey.UserID)
-
-	if s.opts.memoryLimit > 0 {
-		deletedAt, exists, err := s.getDeletedAt(ctx, userKey, memoryID)
-		if err != nil {
-			return err
-		}
-		needLimit := !exists
-		if exists && s.opts.softDelete && deletedAt.Valid {
-			needLimit = true
-		}
-		if needLimit {
-			if err := s.enforceMemoryLimit(ctx, userKey); err != nil {
-				return err
-			}
-		}
-	}
-
-	entry := &memory.Entry{
-		ID:        memoryID,
-		AppName:   userKey.AppName,
-		Memory:    mem,
-		UserID:    userKey.UserID,
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
-
-	memoryData, err := json.Marshal(entry)
-	if err != nil {
-		return fmt.Errorf("marshal memory entry: %w", err)
-	}
-
-	const insertSQL = `
-INSERT INTO %s (
-  memory_id, app_name, user_id, memory_data, created_at, updated_at,
-  deleted_at
-) VALUES (?, ?, ?, ?, ?, ?, NULL)
-ON CONFLICT(memory_id) DO UPDATE SET
-  memory_data = excluded.memory_data,
-  updated_at = excluded.updated_at,
-  deleted_at = NULL;`
-
-	query := fmt.Sprintf(insertSQL, s.tableName)
-	_, err = s.db.ExecContext(
-		ctx, query,
-		entry.ID, userKey.AppName, userKey.UserID, memoryData,
-		now.UTC().UnixNano(), now.UTC().UnixNano(),
-	)
-	if err != nil {
-		return fmt.Errorf("store memory entry: %w", err)
-	}
-
-	return nil
-}
-
-// UpdateMemoryWithEpisodic updates an existing memory with optional episodic fields.
-func (s *Service) UpdateMemoryWithEpisodic(ctx context.Context, memoryKey memory.Key,
-	memoryStr string, topics []string, ep *memory.EpisodicFields) error {
-	if err := memoryKey.CheckMemoryKey(); err != nil {
-		return err
-	}
-
-	entry, err := s.getEntry(ctx, memoryKey)
-	if err != nil {
-		return err
-	}
-
-	now := time.Now()
-	entry.Memory.Memory = memoryStr
-	entry.Memory.Topics = topics
-	entry.Memory.LastUpdated = &now
-	imemory.ApplyEpisodicFields(entry.Memory, ep)
-	entry.UpdatedAt = now
-
-	updated, err := json.Marshal(entry)
-	if err != nil {
-		return fmt.Errorf("marshal updated memory entry: %w", err)
-	}
-
-	const updateSQL = `UPDATE %s
-SET memory_data = ?, updated_at = ?
-WHERE app_name = ? AND user_id = ? AND memory_id = ?`
-	query := fmt.Sprintf(updateSQL, s.tableName)
-	args := []any{
-		updated, now.UTC().UnixNano(),
-		memoryKey.AppName, memoryKey.UserID, memoryKey.MemoryID,
-	}
-	if s.opts.softDelete {
-		query += " AND deleted_at IS NULL"
-	}
-
-	_, err = s.db.ExecContext(ctx, query, args...)
-	if err != nil {
-		return fmt.Errorf("update memory entry: %w", err)
-	}
-
-	return nil
-}
-
-// SearchMemoriesWithOptions delegates to SearchMemories (advanced filtering ignored for sqlite backend).
-func (s *Service) SearchMemoriesWithOptions(ctx context.Context, userKey memory.UserKey,
-	opts memory.SearchOptions) ([]*memory.Entry, error) {
-	return s.SearchMemories(ctx, userKey, opts.Query)
 }
