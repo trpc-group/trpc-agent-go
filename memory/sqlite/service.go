@@ -18,7 +18,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"sort"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -485,7 +484,7 @@ WHERE app_name = ? AND user_id = ?`
 	}
 	defer rows.Close()
 
-	results := make([]*memory.Entry, 0)
+	entries := make([]*memory.Entry, 0)
 	for rows.Next() {
 		var memoryData []byte
 		if err := rows.Scan(&memoryData); err != nil {
@@ -496,24 +495,17 @@ WHERE app_name = ? AND user_id = ?`
 		if err := json.Unmarshal(memoryData, e); err != nil {
 			return nil, fmt.Errorf("unmarshal memory entry: %w", err)
 		}
-
-		if imemory.MatchMemoryEntry(e, queryStr) {
-			results = append(results, e)
-		}
+		entries = append(entries, e)
 	}
 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate memories: %w", err)
 	}
 
-	sort.Slice(results, func(i, j int) bool {
-		if results[i].UpdatedAt.Equal(results[j].UpdatedAt) {
-			return results[i].CreatedAt.After(results[j].CreatedAt)
-		}
-		return results[i].UpdatedAt.After(results[j].UpdatedAt)
-	})
-
-	return results, nil
+	return imemory.SearchMemoryEntries(entries, queryStr, imemory.SearchOptions{
+		MinScore:   s.opts.searchMinScore,
+		MaxResults: s.opts.maxSearchResults,
+	}), nil
 }
 
 // Tools returns the list of available memory tools.

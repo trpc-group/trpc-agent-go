@@ -267,24 +267,18 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 		return nil, fmt.Errorf("search memories failed: %w", err)
 	}
 
-	results := make([]*memory.Entry, 0)
+	entries := make([]*memory.Entry, 0, len(all))
 	for _, v := range all {
 		e := &memory.Entry{}
 		if err := json.Unmarshal([]byte(v), e); err != nil {
 			return nil, fmt.Errorf("unmarshal memory entry failed: %w", err)
 		}
-		if imemory.MatchMemoryEntry(e, query) {
-			results = append(results, e)
-		}
+		entries = append(entries, e)
 	}
-	// Stable sort by updated time desc.
-	sort.Slice(results, func(i, j int) bool {
-		if results[i].UpdatedAt.Equal(results[j].UpdatedAt) {
-			return results[i].CreatedAt.After(results[j].CreatedAt)
-		}
-		return results[i].UpdatedAt.After(results[j].UpdatedAt)
-	})
-	return results, nil
+	return imemory.SearchMemoryEntries(entries, query, imemory.SearchOptions{
+		MinScore:   s.opts.searchMinScore,
+		MaxResults: s.opts.maxSearchResults,
+	}), nil
 }
 
 // Tools returns the list of available memory tools.
