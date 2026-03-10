@@ -2125,7 +2125,7 @@ func TestResolveMetadata(t *testing.T) {
 
 	t.Run("nil metadata uses fact defaults", func(t *testing.T) {
 		got := resolveMetadata(nil)
-		assert.Equal(t, string(memory.MemoryKindFact), got.kind)
+		assert.Equal(t, string(memory.KindFact), got.kind)
 		assert.Nil(t, got.eventTime)
 		assert.Empty(t, got.participants)
 		assert.Nil(t, got.location)
@@ -2133,13 +2133,13 @@ func TestResolveMetadata(t *testing.T) {
 
 	t.Run("episodic metadata is converted for SQL", func(t *testing.T) {
 		got := resolveMetadata(&memory.Metadata{
-			Kind:         memory.MemoryKindEpisode,
+			Kind:         memory.KindEpisode,
 			EventTime:    &now,
 			Participants: []string{"Alice", "Bob"},
 			Location:     "Kyoto",
 		})
 
-		assert.Equal(t, string(memory.MemoryKindEpisode), got.kind)
+		assert.Equal(t, string(memory.KindEpisode), got.kind)
 		require.NotNil(t, got.eventTime)
 		assert.Equal(t, now, *got.eventTime)
 		assert.Equal(t, []string{"Alice", "Bob"}, got.participants)
@@ -2159,7 +2159,7 @@ func TestBuildEntry_PopulatesEpisodicFields(t *testing.T) {
 		"u1",
 		"Alice hiked in Kyoto",
 		pq.StringArray([]string{"travel"}),
-		string(memory.MemoryKindEpisode),
+		string(memory.KindEpisode),
 		sql.NullTime{Time: eventTime, Valid: true},
 		pq.StringArray([]string{"Alice", "Bob"}),
 		sql.NullString{String: "Kyoto", Valid: true},
@@ -2172,7 +2172,7 @@ func TestBuildEntry_PopulatesEpisodicFields(t *testing.T) {
 	assert.Equal(t, "u1", entry.UserID)
 	assert.Equal(t, "Alice hiked in Kyoto", entry.Memory.Memory)
 	assert.Equal(t, []string{"travel"}, entry.Memory.Topics)
-	assert.Equal(t, memory.MemoryKindEpisode, entry.Memory.Kind)
+	assert.Equal(t, memory.KindEpisode, entry.Memory.Kind)
 	require.NotNil(t, entry.Memory.EventTime)
 	assert.Equal(t, eventTime, *entry.Memory.EventTime)
 	assert.Equal(t, []string{"Alice", "Bob"}, entry.Memory.Participants)
@@ -2211,7 +2211,7 @@ func TestExecuteVectorSearch_WithAdvancedOptions(t *testing.T) {
 		context.Background(),
 		memory.UserKey{AppName: "test-app", UserID: "u1"},
 		memory.SearchOptions{
-			Kind:             memory.MemoryKindEpisode,
+			Kind:             memory.KindEpisode,
 			TimeAfter:        &after,
 			TimeBefore:       &before,
 			OrderByEventTime: true,
@@ -2221,7 +2221,7 @@ func TestExecuteVectorSearch_WithAdvancedOptions(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Len(t, results, 1)
-	assert.Equal(t, memory.MemoryKindEpisode, results[0].Memory.Kind)
+	assert.Equal(t, memory.KindEpisode, results[0].Memory.Kind)
 	require.NotNil(t, results[0].Memory.EventTime)
 	assert.Equal(t, now, *results[0].Memory.EventTime)
 	assert.Equal(t, []string{"Alice"}, results[0].Memory.Participants)
@@ -2292,15 +2292,15 @@ func TestMergeHybridResults(t *testing.T) {
 
 func TestMergeSearchResults(t *testing.T) {
 	primary := []*memory.Entry{
-		{ID: "mem-1", Memory: &memory.Memory{Memory: "episode one", Kind: memory.MemoryKindEpisode}},
+		{ID: "mem-1", Memory: &memory.Memory{Memory: "episode one", Kind: memory.KindEpisode}},
 	}
 	fallback := []*memory.Entry{
-		{ID: "mem-1", Memory: &memory.Memory{Memory: "duplicate", Kind: memory.MemoryKindEpisode}},
-		{ID: "mem-2", Memory: &memory.Memory{Memory: "episode two", Kind: memory.MemoryKindEpisode}},
-		{ID: "mem-3", Memory: &memory.Memory{Memory: "fact", Kind: memory.MemoryKindFact}},
+		{ID: "mem-1", Memory: &memory.Memory{Memory: "duplicate", Kind: memory.KindEpisode}},
+		{ID: "mem-2", Memory: &memory.Memory{Memory: "episode two", Kind: memory.KindEpisode}},
+		{ID: "mem-3", Memory: &memory.Memory{Memory: "fact", Kind: memory.KindFact}},
 	}
 
-	results := mergeSearchResults(primary, fallback, memory.MemoryKindEpisode, 3)
+	results := mergeSearchResults(primary, fallback, memory.KindEpisode, 3)
 
 	require.Len(t, results, 3)
 	assert.Equal(t, "mem-1", results[0].ID)
@@ -2405,7 +2405,7 @@ func TestService_SearchMemories_KindFallbackAndHybridSearch(t *testing.T) {
 		"Kyoto",
 		memory.WithSearchOptions(memory.SearchOptions{
 			Query:        "Kyoto",
-			Kind:         memory.MemoryKindEpisode,
+			Kind:         memory.KindEpisode,
 			KindFallback: true,
 			HybridSearch: true,
 			MaxResults:   4,

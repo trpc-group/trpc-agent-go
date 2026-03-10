@@ -1144,7 +1144,7 @@ func TestBuildMetadata(t *testing.T) {
 		participants []string
 		location     string
 		wantNil      bool
-		wantKind     memory.MemoryKind
+		wantKind     memory.Kind
 	}{
 		{
 			name:    "all empty returns nil",
@@ -1153,24 +1153,24 @@ func TestBuildMetadata(t *testing.T) {
 		{
 			name:     "fact with no time",
 			kind:     "fact",
-			wantKind: memory.MemoryKindFact,
+			wantKind: memory.KindFact,
 		},
 		{
 			name:         "episode with time",
 			kind:         "episode",
 			eventTimeStr: "2024-05-07",
-			wantKind:     memory.MemoryKindEpisode,
+			wantKind:     memory.KindEpisode,
 		},
 		{
 			name:     "episode without time remains episode",
 			kind:     "episode",
-			wantKind: memory.MemoryKindEpisode,
+			wantKind: memory.KindEpisode,
 		},
 		{
 			name:         "episode with unparsable time remains episode",
 			kind:         "episode",
 			eventTimeStr: "sometime last year",
-			wantKind:     memory.MemoryKindEpisode,
+			wantKind:     memory.KindEpisode,
 		},
 		{
 			name:         "episode with valid time and metadata",
@@ -1178,7 +1178,7 @@ func TestBuildMetadata(t *testing.T) {
 			eventTimeStr: "2024-05-07",
 			participants: []string{"Alice"},
 			location:     "Tokyo",
-			wantKind:     memory.MemoryKindEpisode,
+			wantKind:     memory.KindEpisode,
 		},
 	}
 	for _, tt := range tests {
@@ -1206,7 +1206,7 @@ func TestBuildSearchOptions(t *testing.T) {
 	got := buildSearchOptions(req)
 
 	assert.Equal(t, "Alice hiking", got.Query)
-	assert.Equal(t, memory.MemoryKindEpisode, got.Kind)
+	assert.Equal(t, memory.KindEpisode, got.Kind)
 	assert.True(t, got.Deduplicate)
 	assert.True(t, got.HybridSearch)
 	assert.True(t, got.KindFallback)
@@ -1227,7 +1227,7 @@ func TestEntryToResult(t *testing.T) {
 		Memory: &memory.Memory{
 			Memory:       "Alice hiked in Kyoto",
 			Topics:       []string{"travel"},
-			Kind:         memory.MemoryKindEpisode,
+			Kind:         memory.KindEpisode,
 			EventTime:    &eventTime,
 			Participants: []string{"Alice", "Bob"},
 			Location:     "Kyoto",

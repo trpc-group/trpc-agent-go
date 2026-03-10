@@ -414,7 +414,7 @@ func formatExistingMemory(entry *memory.Entry) string {
 			fmt.Sprintf("topics: %s",
 				strings.Join(m.Topics, ", ")))
 	}
-	if m.Kind != "" && m.Kind != memory.MemoryKindFact {
+	if m.Kind != "" && m.Kind != memory.KindFact {
 		meta = append(meta,
 			fmt.Sprintf("kind=%s", m.Kind))
 		if m.EventTime != nil {

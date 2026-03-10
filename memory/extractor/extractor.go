@@ -61,10 +61,10 @@ type Operation struct {
 	Topics []string
 
 	// Episodic memory fields.
-	MemoryKind   memory.MemoryKind // "fact" or "episode".
-	EventTime    *time.Time        // When the event occurred.
-	Participants []string          // People involved in the event.
-	Location     string            // Where the event took place.
+	MemoryKind   memory.Kind // "fact" or "episode".
+	EventTime    *time.Time  // When the event occurred.
+	Participants []string    // People involved in the event.
+	Location     string      // Where the event took place.
 }
 
 // OperationType defines the type of memory operation.

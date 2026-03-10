@@ -111,7 +111,7 @@ func TestFormatMemoriesForPrompt(t *testing.T) {
 					Memory: &memory.Memory{
 						Memory:       "User hiked in Kyoto",
 						Topics:       []string{"travel", "hiking"},
-						Kind:         memory.MemoryKindEpisode,
+						Kind:         memory.KindEpisode,
 						EventTime:    func() *time.Time { t := time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC); return &t }(),
 						Participants: []string{"Alice", "Bob"},
 						Location:     "Kyoto",
