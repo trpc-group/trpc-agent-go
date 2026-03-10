@@ -476,145 +476,184 @@ func initializeModels(options *Options) (model.Model, map[string]model.Model) {
 }
 
 func registerTools(options *Options) ([]tool.Tool, map[string]bool) {
-	// Track user-registered tool names from WithTools and WithToolSets.
-	// These are tools explicitly registered by the user and can be subject to filtering.
-	userToolNames := make(map[string]bool)
-
-	// Tools from WithTools are user tools.
-	for _, t := range options.Tools {
-		userToolNames[t.Declaration().Name] = true
-	}
-
-	// Start with direct tools.
-	allTools := make([]tool.Tool, 0, len(options.Tools))
-	allTools = append(allTools, options.Tools...)
-
-	// Add tools from each toolset with automatic namespacing when using
-	// static ToolSets. Tools from WithToolSets are also user tools
-	// (user explicitly added them). When RefreshToolSetsOnRun is true,
-	// ToolSets are resolved on each Tools() call instead of here.
-	if !options.RefreshToolSetsOnRun {
-		ctx := context.Background()
-		for _, toolSet := range options.ToolSets {
-			// Create named toolset wrapper to avoid name conflicts.
-			namedToolSet := itool.NewNamedToolSet(toolSet)
-			setTools := namedToolSet.Tools(ctx)
-			for _, t := range setTools {
-				allTools = append(allTools, t)
-				// Mark toolset tools as user tools.
-				userToolNames[t.Declaration().Name] = true
-			}
-		}
-	}
-
-	// Add knowledge search tool if knowledge base is provided.
-	// This is a FRAMEWORK tool (auto-added by framework), NOT a user tool.
-	// It should never be filtered out by user tool filters.
-	if options.Knowledge != nil {
-		toolOpts := []knowledgetool.Option{
-			knowledgetool.WithFilter(options.KnowledgeFilter),
-		}
-		if options.KnowledgeConditionedFilter != nil {
-			toolOpts = append(toolOpts, knowledgetool.WithConditionedFilter(options.KnowledgeConditionedFilter))
-		}
-
-		if options.EnableKnowledgeAgenticFilter {
-			agenticKnowledge := knowledgetool.NewAgenticFilterSearchTool(
-				options.Knowledge, options.AgenticFilterInfo, toolOpts...,
-			)
-			allTools = append(allTools, agenticKnowledge)
-			// Do NOT add to userToolNames - this is a framework tool.
-		} else {
-			knowledgeTool := knowledgetool.NewKnowledgeSearchTool(
-				options.Knowledge, toolOpts...,
-			)
-			allTools = append(allTools, knowledgeTool)
-			// Do NOT add to userToolNames - this is a framework tool.
-		}
-	}
-
-	// Add skill tools when skills are enabled.
-	if options.skillsRepository != nil {
-		skillFlags := resolveSkillToolFlags(options.skillToolProfile)
-		if skillFlags.load {
-			allTools = append(allTools,
-				toolskill.NewLoadTool(options.skillsRepository))
-		}
-		if skillFlags.selectDocs {
-			allTools = append(allTools,
-				toolskill.NewSelectDocsTool(options.skillsRepository))
-		}
-		if skillFlags.listDocs {
-			allTools = append(allTools,
-				toolskill.NewListDocsTool(options.skillsRepository))
-		}
-		if skillFlags.run || skillFlags.exec ||
-			skillFlags.writeStdin || skillFlags.pollSession ||
-			skillFlags.killSession {
-			// Provide executor to skill tools that execute commands,
-			// fallback to local only when execution is enabled.
-			exec := options.codeExecutor
-			if exec == nil {
-				exec = defaultCodeExecutor()
-			}
-			runOpts := make(
-				[]func(*toolskill.RunTool), 0, 2,
-			)
-			if len(options.skillRunAllowedCommands) > 0 {
-				runOpts = append(runOpts,
-					toolskill.WithAllowedCommands(
-						options.skillRunAllowedCommands...,
-					),
-				)
-			}
-			if len(options.skillRunDeniedCommands) > 0 {
-				runOpts = append(runOpts,
-					toolskill.WithDeniedCommands(
-						options.skillRunDeniedCommands...,
-					),
-				)
-			}
-			if options.skillRunForceSaveArtifacts {
-				runOpts = append(runOpts,
-					toolskill.WithForceSaveArtifacts(true),
-				)
-			}
-			if options.skillRunRequireSkillLoaded {
-				runOpts = append(runOpts,
-					toolskill.WithRequireSkillLoaded(true),
-				)
-			}
-			runTool := toolskill.NewRunTool(
-				options.skillsRepository,
-				exec,
-				runOpts...,
-			)
-			if skillFlags.run {
-				allTools = append(allTools, runTool)
-			}
-			if skillFlags.exec || skillFlags.writeStdin ||
-				skillFlags.pollSession || skillFlags.killSession {
-				execTool := toolskill.NewExecTool(runTool)
-				if skillFlags.exec {
-					allTools = append(allTools, execTool)
-				}
-				if skillFlags.writeStdin {
-					allTools = append(allTools,
-						toolskill.NewWriteStdinTool(execTool))
-				}
-				if skillFlags.pollSession {
-					allTools = append(allTools,
-						toolskill.NewPollSessionTool(execTool))
-				}
-				if skillFlags.killSession {
-					allTools = append(allTools,
-						toolskill.NewKillSessionTool(execTool))
-				}
-			}
-		}
-	}
-
+	userToolNames := collectUserToolNames(options.Tools)
+	allTools := append([]tool.Tool(nil), options.Tools...)
+	allTools, userToolNames = appendStaticToolSetTools(
+		allTools, userToolNames, options,
+	)
+	allTools = appendKnowledgeTools(allTools, options)
+	allTools = appendSkillTools(allTools, options)
 	return allTools, userToolNames
+}
+
+func collectUserToolNames(tools []tool.Tool) map[string]bool {
+	names := make(map[string]bool, len(tools))
+	for _, t := range tools {
+		names[t.Declaration().Name] = true
+	}
+	return names
+}
+
+func appendStaticToolSetTools(
+	allTools []tool.Tool,
+	userToolNames map[string]bool,
+	options *Options,
+) ([]tool.Tool, map[string]bool) {
+	if options.RefreshToolSetsOnRun {
+		return allTools, userToolNames
+	}
+
+	ctx := context.Background()
+	for _, toolSet := range options.ToolSets {
+		namedToolSet := itool.NewNamedToolSet(toolSet)
+		for _, t := range namedToolSet.Tools(ctx) {
+			allTools = append(allTools, t)
+			userToolNames[t.Declaration().Name] = true
+		}
+	}
+	return allTools, userToolNames
+}
+
+func appendKnowledgeTools(
+	allTools []tool.Tool,
+	options *Options,
+) []tool.Tool {
+	if options.Knowledge == nil {
+		return allTools
+	}
+
+	toolOpts := []knowledgetool.Option{
+		knowledgetool.WithFilter(options.KnowledgeFilter),
+	}
+	if options.KnowledgeConditionedFilter != nil {
+		toolOpts = append(
+			toolOpts,
+			knowledgetool.WithConditionedFilter(
+				options.KnowledgeConditionedFilter,
+			),
+		)
+	}
+
+	if options.EnableKnowledgeAgenticFilter {
+		return append(allTools, knowledgetool.NewAgenticFilterSearchTool(
+			options.Knowledge, options.AgenticFilterInfo, toolOpts...,
+		))
+	}
+	return append(allTools, knowledgetool.NewKnowledgeSearchTool(
+		options.Knowledge, toolOpts...,
+	))
+}
+
+func appendSkillTools(
+	allTools []tool.Tool,
+	options *Options,
+) []tool.Tool {
+	if options.skillsRepository == nil {
+		return allTools
+	}
+
+	skillFlags := resolveSkillToolFlags(options.skillToolProfile)
+	if skillFlags.load {
+		allTools = append(
+			allTools,
+			toolskill.NewLoadTool(options.skillsRepository),
+		)
+	}
+	if skillFlags.selectDocs {
+		allTools = append(
+			allTools,
+			toolskill.NewSelectDocsTool(options.skillsRepository),
+		)
+	}
+	if skillFlags.listDocs {
+		allTools = append(
+			allTools,
+			toolskill.NewListDocsTool(options.skillsRepository),
+		)
+	}
+	if !skillFlags.requiresExecutionTools() {
+		return allTools
+	}
+
+	runTool := buildSkillRunTool(options)
+	if skillFlags.run {
+		allTools = append(allTools, runTool)
+	}
+	if !skillFlags.requiresExecSessionTools() {
+		return allTools
+	}
+
+	execTool := toolskill.NewExecTool(runTool)
+	if skillFlags.exec {
+		allTools = append(allTools, execTool)
+	}
+	if skillFlags.writeStdin {
+		allTools = append(
+			allTools,
+			toolskill.NewWriteStdinTool(execTool),
+		)
+	}
+	if skillFlags.pollSession {
+		allTools = append(
+			allTools,
+			toolskill.NewPollSessionTool(execTool),
+		)
+	}
+	if skillFlags.killSession {
+		allTools = append(
+			allTools,
+			toolskill.NewKillSessionTool(execTool),
+		)
+	}
+	return allTools
+}
+
+func buildSkillRunTool(options *Options) *toolskill.RunTool {
+	exec := options.codeExecutor
+	if exec == nil {
+		exec = defaultCodeExecutor()
+	}
+
+	runOpts := make([]func(*toolskill.RunTool), 0, 4)
+	if len(options.skillRunAllowedCommands) > 0 {
+		runOpts = append(
+			runOpts,
+			toolskill.WithAllowedCommands(
+				options.skillRunAllowedCommands...,
+			),
+		)
+	}
+	if len(options.skillRunDeniedCommands) > 0 {
+		runOpts = append(
+			runOpts,
+			toolskill.WithDeniedCommands(
+				options.skillRunDeniedCommands...,
+			),
+		)
+	}
+	if options.skillRunForceSaveArtifacts {
+		runOpts = append(runOpts, toolskill.WithForceSaveArtifacts(true))
+	}
+	if options.skillRunRequireSkillLoaded {
+		runOpts = append(
+			runOpts,
+			toolskill.WithRequireSkillLoaded(true),
+		)
+	}
+
+	return toolskill.NewRunTool(
+		options.skillsRepository,
+		exec,
+		runOpts...,
+	)
+}
+
+func (f skillToolFlags) requiresExecutionTools() bool {
+	return f.run || f.exec || f.writeStdin || f.pollSession || f.killSession
+}
+
+func (f skillToolFlags) requiresExecSessionTools() bool {
+	return f.exec || f.writeStdin || f.pollSession || f.killSession
 }
 
 // Run implements the agent.Agent interface.
