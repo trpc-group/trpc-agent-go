@@ -580,7 +580,9 @@ go run ./cmd/openclaw bootstrap deps \
 
 The bootstrap command never runs automatically on startup. Startup logs may
 print a suggested `bootstrap deps` command when optional file tools are
-missing, but installation is always explicit.
+missing, but installation is always explicit. The managed Python environment
+is created with access to the current system site-packages, so existing
+packages such as `pandas` remain visible after bootstrap.
 
 ### 5) Send a message
 

@@ -25,6 +25,8 @@ const (
 	stepKindSystem = "system"
 	stepKindPython = "python"
 	stepKindVenv   = "venv"
+
+	venvFlagSystemSitePackages = "--system-site-packages"
 )
 
 type Step struct {
@@ -83,11 +85,6 @@ func BuildPlanForSources(
 	}
 
 	manager := report.Platform.PackageManager
-	systemPkgs := collectSystemPackages(manager, sources, report.Missing)
-	if len(systemPkgs) > 0 {
-		plan.Steps = append(plan.Steps, newSystemStep(manager, systemPkgs))
-	}
-
 	pythonPkgs := collectPythonPackages(report.Missing.Python)
 	if len(pythonPkgs) > 0 {
 		steps, err := pythonSteps(report.Toolchain, pythonPkgs)
@@ -95,6 +92,11 @@ func BuildPlanForSources(
 			return Plan{}, err
 		}
 		plan.Steps = append(plan.Steps, steps...)
+	}
+
+	systemPkgs := collectSystemPackages(manager, sources, report.Missing)
+	if len(systemPkgs) > 0 {
+		plan.Steps = append(plan.Steps, newSystemStep(manager, systemPkgs))
 	}
 
 	plan.Unresolved = unresolvedMissing(
@@ -239,12 +241,14 @@ func pythonSteps(
 				bootstrap,
 				"-m",
 				"venv",
+				venvFlagSystemSitePackages,
 				venvRoot,
 			},
 			CommandLine: shellQuote(
 				bootstrap,
 				"-m",
 				"venv",
+				venvFlagSystemSitePackages,
 				venvRoot,
 			),
 		})

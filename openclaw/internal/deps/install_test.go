@@ -37,6 +37,11 @@ func TestBuildPlanForSources_PythonPackages(t *testing.T) {
 	require.Equal(t, stepKindPython, plan.Steps[1].Kind)
 	require.Contains(
 		t,
+		plan.Steps[0].CommandLine,
+		venvFlagSystemSitePackages,
+	)
+	require.Contains(
+		t,
 		plan.Steps[1].CommandLine,
 		"definitely-missing-python-package",
 	)
@@ -68,6 +73,14 @@ func TestBuildPlanForSources_SystemPackages(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.NotEmpty(t, plan.Steps)
-	require.Equal(t, stepKindSystem, plan.Steps[0].Kind)
-	require.Contains(t, plan.Steps[0].CommandLine, "tool-pkg")
+	require.Equal(
+		t,
+		stepKindSystem,
+		plan.Steps[len(plan.Steps)-1].Kind,
+	)
+	require.Contains(
+		t,
+		plan.Steps[len(plan.Steps)-1].CommandLine,
+		"tool-pkg",
+	)
 }
