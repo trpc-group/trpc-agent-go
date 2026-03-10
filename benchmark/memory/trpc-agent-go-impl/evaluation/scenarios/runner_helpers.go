@@ -87,7 +87,7 @@ func (s *noAutoMemoryService) AddMemory(
 	userKey memory.UserKey,
 	mem string,
 	topics []string,
-	opts ...memory.AddMemoryOption,
+	opts ...memory.AddOption,
 ) error {
 	return s.inner.AddMemory(ctx, userKey, mem, topics, opts...)
 }
@@ -97,7 +97,7 @@ func (s *noAutoMemoryService) UpdateMemory(
 	memoryKey memory.Key,
 	mem string,
 	topics []string,
-	opts ...memory.UpdateMemoryOption,
+	opts ...memory.UpdateOption,
 ) error {
 	return s.inner.UpdateMemory(ctx, memoryKey, mem, topics, opts...)
 }
