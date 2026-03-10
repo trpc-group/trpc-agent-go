@@ -20,6 +20,7 @@ import (
 	"go.opentelemetry.io/otel/trace/noop"
 
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
@@ -79,9 +80,9 @@ func start(ctx context.Context, opts ...otlptracehttp.Option) (clean func(contex
 	if provider == nil {
 		res, err := resource.New(ctx,
 			resource.WithAttributes(
-				semconv.ServiceNamespace(itelemetry.ResourceServiceNamespace),
-				semconv.ServiceName(itelemetry.ResourceServiceName),
-				semconv.ServiceVersion(itelemetry.ResourceServiceVersion),
+				semconv.ServiceNamespace(semconvtrace.ResourceServiceNamespace),
+				semconv.ServiceName(semconvtrace.ResourceServiceName),
+				semconv.ServiceVersion(semconvtrace.ResourceServiceVersion),
 			),
 		)
 		if err != nil {

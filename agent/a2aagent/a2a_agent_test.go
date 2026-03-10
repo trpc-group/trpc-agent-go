@@ -33,6 +33,7 @@ import (
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -428,10 +429,10 @@ func TestWrapEventChannelWithTelemetry_AccumulatesTokenUsage(t *testing.T) {
 	}
 
 	attrs := spans[0].Attributes()
-	if !hasAttr(attrs, attribute.Int(itelemetry.KeyGenAIUsageInputTokens, finalEvent.Response.Usage.PromptTokens)) {
+	if !hasAttr(attrs, attribute.Int(semconvtrace.KeyGenAIUsageInputTokens, finalEvent.Response.Usage.PromptTokens)) {
 		t.Fatalf("expected input token usage to be recorded, attrs=%v", attrs)
 	}
-	if !hasAttr(attrs, attribute.Int(itelemetry.KeyGenAIUsageOutputTokens, finalEvent.Response.Usage.CompletionTokens)) {
+	if !hasAttr(attrs, attribute.Int(semconvtrace.KeyGenAIUsageOutputTokens, finalEvent.Response.Usage.CompletionTokens)) {
 		t.Fatalf("expected output token usage to be recorded, attrs=%v", attrs)
 	}
 }

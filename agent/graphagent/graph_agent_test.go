@@ -29,11 +29,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
-	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/session/summary"
+	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -1875,7 +1875,7 @@ func TestGraphAgent_RunWithBarrier_EmitEventError(t *testing.T) {
 	attrs := agentSpan.getAttributes()
 	var errorTypeAttr *attribute.KeyValue
 	for i := range attrs {
-		if string(attrs[i].Key) == string(itelemetry.KeyErrorType) {
+		if string(attrs[i].Key) == string(semconvtrace.KeyErrorType) {
 			errorTypeAttr = &attrs[i]
 			break
 		}

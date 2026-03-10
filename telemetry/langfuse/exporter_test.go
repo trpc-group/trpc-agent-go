@@ -25,6 +25,7 @@ import (
 
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -157,7 +158,7 @@ func TestTransformSpan(t *testing.T) {
 				Name: "test-span",
 				Attributes: []*commonpb.KeyValue{
 					{
-						Key: itelemetry.KeyGenAIOperationName,
+						Key: semconvtrace.KeyGenAIOperationName,
 						Value: &commonpb.AnyValue{
 							Value: &commonpb.AnyValue_StringValue{StringValue: itelemetry.OperationChat},
 						},
@@ -173,7 +174,7 @@ func TestTransformSpan(t *testing.T) {
 				Name: "test-span",
 				Attributes: []*commonpb.KeyValue{
 					{
-						Key: itelemetry.KeyGenAIOperationName,
+						Key: semconvtrace.KeyGenAIOperationName,
 						Value: &commonpb.AnyValue{
 							Value: &commonpb.AnyValue_StringValue{StringValue: itelemetry.OperationExecuteTool},
 						},
@@ -189,7 +190,7 @@ func TestTransformSpan(t *testing.T) {
 				Name: "test-span",
 				Attributes: []*commonpb.KeyValue{
 					{
-						Key: itelemetry.KeyGenAIOperationName,
+						Key: semconvtrace.KeyGenAIOperationName,
 						Value: &commonpb.AnyValue{
 							Value: &commonpb.AnyValue_StringValue{StringValue: itelemetry.OperationWorkflow},
 						},
@@ -251,25 +252,25 @@ func TestTransformInvokeAgent(t *testing.T) {
 		Name: "agent-span",
 		Attributes: []*commonpb.KeyValue{
 			{
-				Key: itelemetry.KeyGenAIInputMessages,
+				Key: semconvtrace.KeyGenAIInputMessages,
 				Value: &commonpb.AnyValue{
 					Value: &commonpb.AnyValue_StringValue{StringValue: `[{"role":"user","content":"hi"}]`},
 				},
 			},
 			{
-				Key: itelemetry.KeyGenAIOutputMessages,
+				Key: semconvtrace.KeyGenAIOutputMessages,
 				Value: &commonpb.AnyValue{
 					Value: &commonpb.AnyValue_StringValue{StringValue: `[{"role":"assistant","content":"hello"}]`},
 				},
 			},
 			{
-				Key: itelemetry.KeyGenAIUsageInputTokens,
+				Key: semconvtrace.KeyGenAIUsageInputTokens,
 				Value: &commonpb.AnyValue{
 					Value: &commonpb.AnyValue_IntValue{IntValue: 123},
 				},
 			},
 			{
-				Key: itelemetry.KeyGenAIUsageOutputTokens,
+				Key: semconvtrace.KeyGenAIUsageOutputTokens,
 				Value: &commonpb.AnyValue{
 					Value: &commonpb.AnyValue_IntValue{IntValue: 456},
 				},
@@ -299,8 +300,8 @@ func TestTransformInvokeAgent(t *testing.T) {
 
 	// Token usage attributes should be filtered out for InvokeAgent observations.
 	for _, attr := range span.Attributes {
-		assert.NotEqual(t, itelemetry.KeyGenAIUsageInputTokens, attr.Key)
-		assert.NotEqual(t, itelemetry.KeyGenAIUsageOutputTokens, attr.Key)
+		assert.NotEqual(t, semconvtrace.KeyGenAIUsageInputTokens, attr.Key)
+		assert.NotEqual(t, semconvtrace.KeyGenAIUsageOutputTokens, attr.Key)
 	}
 }
 
@@ -316,13 +317,13 @@ func TestTransformCallLLM(t *testing.T) {
 				Name: "llm-call",
 				Attributes: []*commonpb.KeyValue{
 					{
-						Key: itelemetry.KeyLLMRequest,
+						Key: semconvtrace.KeyLLMRequest,
 						Value: &commonpb.AnyValue{
 							Value: &commonpb.AnyValue_StringValue{StringValue: `{"prompt": "Hello", "generation_config": {"temperature": 0.7}}`},
 						},
 					},
 					{
-						Key: itelemetry.KeyLLMResponse,
+						Key: semconvtrace.KeyLLMResponse,
 						Value: &commonpb.AnyValue{
 							Value: &commonpb.AnyValue_StringValue{StringValue: `{"text": "Hello! How can I help you?"}`},
 						},
@@ -349,11 +350,11 @@ func TestTransformCallLLM(t *testing.T) {
 				Name: "llm-call",
 				Attributes: []*commonpb.KeyValue{
 					{
-						Key:   itelemetry.KeyLLMRequest,
+						Key:   semconvtrace.KeyLLMRequest,
 						Value: nil,
 					},
 					{
-						Key: itelemetry.KeyLLMResponse,
+						Key: semconvtrace.KeyLLMResponse,
 						Value: &commonpb.AnyValue{
 							Value: &commonpb.AnyValue_StringValue{StringValue: "response"},
 						},
@@ -372,13 +373,13 @@ func TestTransformCallLLM(t *testing.T) {
 				Name: "llm-call",
 				Attributes: []*commonpb.KeyValue{
 					{
-						Key: itelemetry.KeyLLMRequest,
+						Key: semconvtrace.KeyLLMRequest,
 						Value: &commonpb.AnyValue{
 							Value: &commonpb.AnyValue_StringValue{StringValue: "request"},
 						},
 					},
 					{
-						Key:   itelemetry.KeyLLMResponse,
+						Key:   semconvtrace.KeyLLMResponse,
 						Value: nil,
 					},
 				},
@@ -409,8 +410,8 @@ func TestTransformCallLLM(t *testing.T) {
 
 			// Check that LLM-specific attributes are removed
 			for _, attr := range tt.input.Attributes {
-				assert.NotEqual(t, itelemetry.KeyLLMRequest, attr.Key, "LLM request attribute should be removed")
-				assert.NotEqual(t, itelemetry.KeyLLMResponse, attr.Key, "LLM response attribute should be removed")
+				assert.NotEqual(t, semconvtrace.KeyLLMRequest, attr.Key, "LLM request attribute should be removed")
+				assert.NotEqual(t, semconvtrace.KeyLLMResponse, attr.Key, "LLM response attribute should be removed")
 			}
 		})
 	}
@@ -436,19 +437,19 @@ func TestTransformCallLLM_PromptWithTools(t *testing.T) {
 		Name: "llm-call",
 		Attributes: []*commonpb.KeyValue{
 			{
-				Key: itelemetry.KeyLLMRequest,
+				Key: semconvtrace.KeyLLMRequest,
 				Value: &commonpb.AnyValue{
 					Value: &commonpb.AnyValue_StringValue{StringValue: `{"generation_config": {"temperature": 0.7}}`},
 				},
 			},
 			{
-				Key: itelemetry.KeyGenAIInputMessages,
+				Key: semconvtrace.KeyGenAIInputMessages,
 				Value: &commonpb.AnyValue{
 					Value: &commonpb.AnyValue_StringValue{StringValue: `[{"role":"user","content":"hi"}]`},
 				},
 			},
 			{
-				Key: itelemetry.KeyGenAIRequestToolDefinitions,
+				Key: semconvtrace.KeyGenAIRequestToolDefinitions,
 				Value: &commonpb.AnyValue{
 					Value: &commonpb.AnyValue_StringValue{StringValue: string(defsJSON)},
 				},
@@ -461,8 +462,8 @@ func TestTransformCallLLM_PromptWithTools(t *testing.T) {
 	attrMap := make(map[string]string)
 	for _, attr := range span.Attributes {
 		attrMap[attr.Key] = attr.Value.GetStringValue()
-		assert.NotEqual(t, itelemetry.KeyGenAIInputMessages, attr.Key, "input messages should be folded into observation.input")
-		assert.NotEqual(t, itelemetry.KeyGenAIRequestToolDefinitions, attr.Key, "tool definitions should be folded into observation.input")
+		assert.NotEqual(t, semconvtrace.KeyGenAIInputMessages, attr.Key, "input messages should be folded into observation.input")
+		assert.NotEqual(t, semconvtrace.KeyGenAIRequestToolDefinitions, attr.Key, "tool definitions should be folded into observation.input")
 	}
 
 	inputStr := attrMap[observationInput]
@@ -551,13 +552,13 @@ func TestTransformCallLLM_UsageDetails(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			attrs := []*commonpb.KeyValue{
 				{
-					Key: itelemetry.KeyLLMRequest,
+					Key: semconvtrace.KeyLLMRequest,
 					Value: &commonpb.AnyValue{
 						Value: &commonpb.AnyValue_StringValue{StringValue: `{"prompt":"hello"}`},
 					},
 				},
 				{
-					Key: itelemetry.KeyLLMResponse,
+					Key: semconvtrace.KeyLLMResponse,
 					Value: &commonpb.AnyValue{
 						Value: &commonpb.AnyValue_StringValue{StringValue: `{"text":"world"}`},
 					},
@@ -566,31 +567,31 @@ func TestTransformCallLLM_UsageDetails(t *testing.T) {
 			// Add token usage attributes (only non-zero values, matching how buildResponseAttributes works)
 			if tt.inputTokens != 0 {
 				attrs = append(attrs, &commonpb.KeyValue{
-					Key:   itelemetry.KeyGenAIUsageInputTokens,
+					Key:   semconvtrace.KeyGenAIUsageInputTokens,
 					Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: tt.inputTokens}},
 				})
 			}
 			if tt.outputTokens != 0 {
 				attrs = append(attrs, &commonpb.KeyValue{
-					Key:   itelemetry.KeyGenAIUsageOutputTokens,
+					Key:   semconvtrace.KeyGenAIUsageOutputTokens,
 					Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: tt.outputTokens}},
 				})
 			}
 			if tt.cachedTokens != 0 {
 				attrs = append(attrs, &commonpb.KeyValue{
-					Key:   itelemetry.KeyGenAIUsageInputTokensCached,
+					Key:   semconvtrace.KeyGenAIUsageInputTokensCached,
 					Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: tt.cachedTokens}},
 				})
 			}
 			if tt.cacheReadTokens != 0 {
 				attrs = append(attrs, &commonpb.KeyValue{
-					Key:   itelemetry.KeyGenAIUsageInputTokensCacheRead,
+					Key:   semconvtrace.KeyGenAIUsageInputTokensCacheRead,
 					Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: tt.cacheReadTokens}},
 				})
 			}
 			if tt.cacheCreationTokens != 0 {
 				attrs = append(attrs, &commonpb.KeyValue{
-					Key:   itelemetry.KeyGenAIUsageInputTokensCacheCreation,
+					Key:   semconvtrace.KeyGenAIUsageInputTokensCacheCreation,
 					Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: tt.cacheCreationTokens}},
 				})
 			}
@@ -600,11 +601,11 @@ func TestTransformCallLLM_UsageDetails(t *testing.T) {
 
 			// Verify original gen_ai.usage.* attributes are removed
 			for _, attr := range span.Attributes {
-				assert.NotEqual(t, itelemetry.KeyGenAIUsageInputTokens, attr.Key)
-				assert.NotEqual(t, itelemetry.KeyGenAIUsageOutputTokens, attr.Key)
-				assert.NotEqual(t, itelemetry.KeyGenAIUsageInputTokensCached, attr.Key)
-				assert.NotEqual(t, itelemetry.KeyGenAIUsageInputTokensCacheRead, attr.Key)
-				assert.NotEqual(t, itelemetry.KeyGenAIUsageInputTokensCacheCreation, attr.Key)
+				assert.NotEqual(t, semconvtrace.KeyGenAIUsageInputTokens, attr.Key)
+				assert.NotEqual(t, semconvtrace.KeyGenAIUsageOutputTokens, attr.Key)
+				assert.NotEqual(t, semconvtrace.KeyGenAIUsageInputTokensCached, attr.Key)
+				assert.NotEqual(t, semconvtrace.KeyGenAIUsageInputTokensCacheRead, attr.Key)
+				assert.NotEqual(t, semconvtrace.KeyGenAIUsageInputTokensCacheCreation, attr.Key)
 			}
 
 			// Check usage_details attribute
@@ -633,35 +634,35 @@ func TestTransformInvokeAgent_CacheTokensFiltered(t *testing.T) {
 		Name: "agent-span",
 		Attributes: []*commonpb.KeyValue{
 			{
-				Key: itelemetry.KeyGenAIInputMessages,
+				Key: semconvtrace.KeyGenAIInputMessages,
 				Value: &commonpb.AnyValue{
 					Value: &commonpb.AnyValue_StringValue{StringValue: `[{"role":"user","content":"hi"}]`},
 				},
 			},
 			{
-				Key: itelemetry.KeyGenAIOutputMessages,
+				Key: semconvtrace.KeyGenAIOutputMessages,
 				Value: &commonpb.AnyValue{
 					Value: &commonpb.AnyValue_StringValue{StringValue: `[{"role":"assistant","content":"hello"}]`},
 				},
 			},
 			{
-				Key:   itelemetry.KeyGenAIUsageInputTokens,
+				Key:   semconvtrace.KeyGenAIUsageInputTokens,
 				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: 100}},
 			},
 			{
-				Key:   itelemetry.KeyGenAIUsageOutputTokens,
+				Key:   semconvtrace.KeyGenAIUsageOutputTokens,
 				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: 50}},
 			},
 			{
-				Key:   itelemetry.KeyGenAIUsageInputTokensCached,
+				Key:   semconvtrace.KeyGenAIUsageInputTokensCached,
 				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: 30}},
 			},
 			{
-				Key:   itelemetry.KeyGenAIUsageInputTokensCacheRead,
+				Key:   semconvtrace.KeyGenAIUsageInputTokensCacheRead,
 				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: 20}},
 			},
 			{
-				Key:   itelemetry.KeyGenAIUsageInputTokensCacheCreation,
+				Key:   semconvtrace.KeyGenAIUsageInputTokensCacheCreation,
 				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: 10}},
 			},
 		},
@@ -671,11 +672,11 @@ func TestTransformInvokeAgent_CacheTokensFiltered(t *testing.T) {
 
 	// All token usage attributes (including cache ones) should be filtered out
 	for _, attr := range span.Attributes {
-		assert.NotEqual(t, itelemetry.KeyGenAIUsageInputTokens, attr.Key)
-		assert.NotEqual(t, itelemetry.KeyGenAIUsageOutputTokens, attr.Key)
-		assert.NotEqual(t, itelemetry.KeyGenAIUsageInputTokensCached, attr.Key)
-		assert.NotEqual(t, itelemetry.KeyGenAIUsageInputTokensCacheRead, attr.Key)
-		assert.NotEqual(t, itelemetry.KeyGenAIUsageInputTokensCacheCreation, attr.Key)
+		assert.NotEqual(t, semconvtrace.KeyGenAIUsageInputTokens, attr.Key)
+		assert.NotEqual(t, semconvtrace.KeyGenAIUsageOutputTokens, attr.Key)
+		assert.NotEqual(t, semconvtrace.KeyGenAIUsageInputTokensCached, attr.Key)
+		assert.NotEqual(t, semconvtrace.KeyGenAIUsageInputTokensCacheRead, attr.Key)
+		assert.NotEqual(t, semconvtrace.KeyGenAIUsageInputTokensCacheCreation, attr.Key)
 	}
 }
 
@@ -691,13 +692,13 @@ func TestTransformExecuteTool(t *testing.T) {
 				Name: "tool-call",
 				Attributes: []*commonpb.KeyValue{
 					{
-						Key: itelemetry.KeyGenAIToolCallArguments,
+						Key: semconvtrace.KeyGenAIToolCallArguments,
 						Value: &commonpb.AnyValue{
 							Value: &commonpb.AnyValue_StringValue{StringValue: `{"arg1": "value1"}`},
 						},
 					},
 					{
-						Key: itelemetry.KeyGenAIToolCallResult,
+						Key: semconvtrace.KeyGenAIToolCallResult,
 						Value: &commonpb.AnyValue{
 							Value: &commonpb.AnyValue_StringValue{StringValue: `{"result": "success"}`},
 						},
@@ -723,11 +724,11 @@ func TestTransformExecuteTool(t *testing.T) {
 				Name: "tool-call",
 				Attributes: []*commonpb.KeyValue{
 					{
-						Key:   itelemetry.KeyGenAIToolCallArguments,
+						Key:   semconvtrace.KeyGenAIToolCallArguments,
 						Value: nil,
 					},
 					{
-						Key: itelemetry.KeyGenAIToolCallResult,
+						Key: semconvtrace.KeyGenAIToolCallResult,
 						Value: &commonpb.AnyValue{
 							Value: &commonpb.AnyValue_StringValue{StringValue: "response"},
 						},
@@ -760,8 +761,8 @@ func TestTransformExecuteTool(t *testing.T) {
 
 			// Check that tool-specific attributes are removed
 			for _, attr := range tt.input.Attributes {
-				assert.NotEqual(t, itelemetry.KeyGenAIToolCallArguments, attr.Key, "tool args attribute should be removed")
-				assert.NotEqual(t, itelemetry.KeyGenAIToolCallResult, attr.Key, "tool response attribute should be removed")
+				assert.NotEqual(t, semconvtrace.KeyGenAIToolCallArguments, attr.Key, "tool args attribute should be removed")
+				assert.NotEqual(t, semconvtrace.KeyGenAIToolCallResult, attr.Key, "tool response attribute should be removed")
 			}
 		})
 	}
@@ -772,25 +773,25 @@ func TestTransformWorkflow(t *testing.T) {
 		Name: "workflow-span",
 		Attributes: []*commonpb.KeyValue{
 			{
-				Key: itelemetry.KeyRunnerSessionID,
+				Key: semconvtrace.KeyRunnerSessionID,
 				Value: &commonpb.AnyValue{
 					Value: &commonpb.AnyValue_StringValue{StringValue: "sess-1"},
 				},
 			},
 			{
-				Key: itelemetry.KeyRunnerUserID,
+				Key: semconvtrace.KeyRunnerUserID,
 				Value: &commonpb.AnyValue{
 					Value: &commonpb.AnyValue_StringValue{StringValue: "user-1"},
 				},
 			},
 			{
-				Key: itelemetry.KeyGenAIWorkflowRequest,
+				Key: semconvtrace.KeyGenAIWorkflowRequest,
 				Value: &commonpb.AnyValue{
 					Value: &commonpb.AnyValue_StringValue{StringValue: `{"req":true}`},
 				},
 			},
 			{
-				Key: itelemetry.KeyGenAIWorkflowResponse,
+				Key: semconvtrace.KeyGenAIWorkflowResponse,
 				Value: &commonpb.AnyValue{
 					Value: &commonpb.AnyValue_StringValue{StringValue: `{"ok":true}`},
 				},
@@ -821,10 +822,10 @@ func TestTransformWorkflow(t *testing.T) {
 	assert.Equal(t, "keep-this", attrMap["other.attribute"])
 
 	for _, attr := range span.Attributes {
-		assert.NotEqual(t, itelemetry.KeyGenAIWorkflowRequest, attr.Key)
-		assert.NotEqual(t, itelemetry.KeyGenAIWorkflowResponse, attr.Key)
-		assert.NotEqual(t, itelemetry.KeyRunnerSessionID, attr.Key)
-		assert.NotEqual(t, itelemetry.KeyRunnerUserID, attr.Key)
+		assert.NotEqual(t, semconvtrace.KeyGenAIWorkflowRequest, attr.Key)
+		assert.NotEqual(t, semconvtrace.KeyGenAIWorkflowResponse, attr.Key)
+		assert.NotEqual(t, semconvtrace.KeyRunnerSessionID, attr.Key)
+		assert.NotEqual(t, semconvtrace.KeyRunnerUserID, attr.Key)
 	}
 }
 
@@ -833,23 +834,23 @@ func TestTransformWorkflow_NilRequestResponse(t *testing.T) {
 		Name: "workflow-span-nil",
 		Attributes: []*commonpb.KeyValue{
 			{
-				Key: itelemetry.KeyRunnerSessionID,
+				Key: semconvtrace.KeyRunnerSessionID,
 				Value: &commonpb.AnyValue{
 					Value: &commonpb.AnyValue_StringValue{StringValue: "sess-2"},
 				},
 			},
 			{
-				Key: itelemetry.KeyRunnerUserID,
+				Key: semconvtrace.KeyRunnerUserID,
 				Value: &commonpb.AnyValue{
 					Value: &commonpb.AnyValue_StringValue{StringValue: "user-2"},
 				},
 			},
 			{
-				Key:   itelemetry.KeyGenAIWorkflowRequest,
+				Key:   semconvtrace.KeyGenAIWorkflowRequest,
 				Value: nil,
 			},
 			{
-				Key:   itelemetry.KeyGenAIWorkflowResponse,
+				Key:   semconvtrace.KeyGenAIWorkflowResponse,
 				Value: nil,
 			},
 		},
@@ -871,10 +872,10 @@ func TestTransformWorkflow_NilRequestResponse(t *testing.T) {
 	assert.Equal(t, "sess-2", attrMap[traceSessionID])
 
 	for _, attr := range span.Attributes {
-		assert.NotEqual(t, itelemetry.KeyGenAIWorkflowRequest, attr.Key)
-		assert.NotEqual(t, itelemetry.KeyGenAIWorkflowResponse, attr.Key)
-		assert.NotEqual(t, itelemetry.KeyRunnerSessionID, attr.Key)
-		assert.NotEqual(t, itelemetry.KeyRunnerUserID, attr.Key)
+		assert.NotEqual(t, semconvtrace.KeyGenAIWorkflowRequest, attr.Key)
+		assert.NotEqual(t, semconvtrace.KeyGenAIWorkflowResponse, attr.Key)
+		assert.NotEqual(t, semconvtrace.KeyRunnerSessionID, attr.Key)
+		assert.NotEqual(t, semconvtrace.KeyRunnerUserID, attr.Key)
 	}
 }
 
@@ -1006,19 +1007,19 @@ func TestTransformationPipeline(t *testing.T) {
 							Name:    "test-llm-span",
 							Attributes: []*commonpb.KeyValue{
 								{
-									Key: itelemetry.KeyGenAIOperationName,
+									Key: semconvtrace.KeyGenAIOperationName,
 									Value: &commonpb.AnyValue{
 										Value: &commonpb.AnyValue_StringValue{StringValue: itelemetry.OperationChat},
 									},
 								},
 								{
-									Key: itelemetry.KeyLLMRequest,
+									Key: semconvtrace.KeyLLMRequest,
 									Value: &commonpb.AnyValue{
 										Value: &commonpb.AnyValue_StringValue{StringValue: `{"prompt": "test"}`},
 									},
 								},
 								{
-									Key: itelemetry.KeyLLMResponse,
+									Key: semconvtrace.KeyLLMResponse,
 									Value: &commonpb.AnyValue{
 										Value: &commonpb.AnyValue_StringValue{StringValue: `{"text": "response"}`},
 									},
@@ -1061,9 +1062,9 @@ func TestTransformationPipeline(t *testing.T) {
 		case observationType:
 			foundObservationType = true
 			assert.Equal(t, "generation", attr.Value.GetStringValue())
-		case itelemetry.KeyLLMRequest:
+		case semconvtrace.KeyLLMRequest:
 			hasLLMRequest = true
-		case itelemetry.KeyLLMResponse:
+		case semconvtrace.KeyLLMResponse:
 			hasLLMResponse = true
 		case observationInput:
 			hasObservationInput = true
@@ -1140,11 +1141,11 @@ func TestTransformInvokeAgent_TruncatesObservationInputOutput(t *testing.T) {
 		Name: "agent-span",
 		Attributes: []*commonpb.KeyValue{
 			{
-				Key:   itelemetry.KeyGenAIInputMessages,
+				Key:   semconvtrace.KeyGenAIInputMessages,
 				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: bigIn}},
 			},
 			{
-				Key:   itelemetry.KeyGenAIOutputMessages,
+				Key:   semconvtrace.KeyGenAIOutputMessages,
 				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: bigOut}},
 			},
 		},
@@ -1205,11 +1206,11 @@ func TestTransformInvokeAgent_TruncateUsesTypedMessages(t *testing.T) {
 		Name: "agent-span-typed",
 		Attributes: []*commonpb.KeyValue{
 			{
-				Key:   itelemetry.KeyGenAIInputMessages,
+				Key:   semconvtrace.KeyGenAIInputMessages,
 				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: string(inputJSON)}},
 			},
 			{
-				Key:   itelemetry.KeyGenAIOutputMessages,
+				Key:   semconvtrace.KeyGenAIOutputMessages,
 				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: string(outputJSON)}},
 			},
 		},
@@ -1254,15 +1255,15 @@ func TestTransformCallLLM_TruncatesObservationInputOutput(t *testing.T) {
 		Name: "llm-call",
 		Attributes: []*commonpb.KeyValue{
 			{
-				Key:   itelemetry.KeyGenAIOperationName,
+				Key:   semconvtrace.KeyGenAIOperationName,
 				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: itelemetry.OperationChat}},
 			},
 			{
-				Key:   itelemetry.KeyLLMRequest,
+				Key:   semconvtrace.KeyLLMRequest,
 				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: bigReq}},
 			},
 			{
-				Key:   itelemetry.KeyLLMResponse,
+				Key:   semconvtrace.KeyLLMResponse,
 				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: bigResp}},
 			},
 		},
@@ -1294,11 +1295,11 @@ func TestTransformExecuteTool_TruncatesObservationInputOutput(t *testing.T) {
 		Name: "tool-call",
 		Attributes: []*commonpb.KeyValue{
 			{
-				Key:   itelemetry.KeyGenAIToolCallArguments,
+				Key:   semconvtrace.KeyGenAIToolCallArguments,
 				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: bigArgs}},
 			},
 			{
-				Key:   itelemetry.KeyGenAIToolCallResult,
+				Key:   semconvtrace.KeyGenAIToolCallResult,
 				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: bigRes}},
 			},
 		},
@@ -1330,11 +1331,11 @@ func TestTransformWorkflow_TruncatesObservationInputOutput(t *testing.T) {
 		Name: "workflow-span",
 		Attributes: []*commonpb.KeyValue{
 			{
-				Key:   itelemetry.KeyGenAIWorkflowRequest,
+				Key:   semconvtrace.KeyGenAIWorkflowRequest,
 				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: bigReq}},
 			},
 			{
-				Key:   itelemetry.KeyGenAIWorkflowResponse,
+				Key:   semconvtrace.KeyGenAIWorkflowResponse,
 				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: bigResp}},
 			},
 		},
@@ -1369,19 +1370,19 @@ func BenchmarkTransform(b *testing.B) {
 							Name:    "test-span",
 							Attributes: []*commonpb.KeyValue{
 								{
-									Key: itelemetry.KeyGenAIOperationName,
+									Key: semconvtrace.KeyGenAIOperationName,
 									Value: &commonpb.AnyValue{
 										Value: &commonpb.AnyValue_StringValue{StringValue: itelemetry.OperationChat},
 									},
 								},
 								{
-									Key: itelemetry.KeyLLMRequest,
+									Key: semconvtrace.KeyLLMRequest,
 									Value: &commonpb.AnyValue{
 										Value: &commonpb.AnyValue_StringValue{StringValue: `{"prompt": "test"}`},
 									},
 								},
 								{
-									Key: itelemetry.KeyLLMResponse,
+									Key: semconvtrace.KeyLLMResponse,
 									Value: &commonpb.AnyValue{
 										Value: &commonpb.AnyValue_StringValue{StringValue: `{"text": "response"}`},
 									},
