@@ -40,6 +40,11 @@ var (
 	ErrRunAlreadyExists = errors.New("agui: run already exists")
 	// ErrRunNotFound is returned when a run key cannot be found.
 	ErrRunNotFound = errors.New("agui: run not found")
+	// ErrDisableEventInjectionUnsupported is returned when top-level graph interrupt
+	// filtering requires invocation topology but caller disabled output injection.
+	ErrDisableEventInjectionUnsupported = errors.New(
+		"agui: disable event injection is incompatible with top-level graph interrupt activity filtering",
+	)
 )
 
 // Runner executes AG-UI runs and emits AG-UI events.
@@ -141,6 +146,11 @@ type resumeInfo struct {
 	resumeValue  any
 }
 
+type inspectedRunOptions struct {
+	resume                *resumeInfo
+	disableEventInjection bool
+}
+
 func inputMessageFromRunAgentInput(input *adapter.RunAgentInput) (*model.Message, string, *types.Message, error) {
 	if len(input.Messages) == 0 {
 		return nil, "", nil, errors.New("no messages provided")
@@ -219,6 +229,12 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 	if runtimeState != nil {
 		runOption = append(runOption, agent.WithRuntimeState(runtimeState))
 	}
+	inspected := inspectRunOptions(runOption)
+	if r.graphNodeInterruptActivityEnabled &&
+		r.graphNodeInterruptActivityTopLevelOnly &&
+		inspected.disableEventInjection {
+		return nil, ErrDisableEventInjectionUnsupported
+	}
 	ctx, span, err := r.startSpan(ctx, runAgentInput)
 	if err != nil {
 		return nil, fmt.Errorf("start span: %w", err)
@@ -251,7 +267,7 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 		translator:     trans,
 		enableTrack:    r.tracker != nil,
 		span:           span,
-		resume:         parseResumeInfo(runOption),
+		resume:         inspected.resume,
 	}
 	events := make(chan aguievents.Event)
 	ctx, cancel := r.newExecutionContext(ctx, r.timeout)
@@ -339,13 +355,23 @@ func (r *runner) run(ctx context.Context, cancel context.CancelFunc, key session
 	}
 }
 
-func parseResumeInfo(opt []agent.RunOption) *resumeInfo {
+func inspectRunOptions(opt []agent.RunOption) inspectedRunOptions {
+	var inspected inspectedRunOptions
 	if len(opt) == 0 {
-		return nil
+		return inspected
 	}
 	opts := &agent.RunOptions{}
 	for _, o := range opt {
 		o(opts)
+	}
+	inspected.disableEventInjection = opts.DisableEventInjection
+	inspected.resume = parseResumeInfo(opts)
+	return inspected
+}
+
+func parseResumeInfo(opts *agent.RunOptions) *resumeInfo {
+	if opts == nil {
+		return nil
 	}
 	state := opts.RuntimeState
 	if len(state) == 0 {

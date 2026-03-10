@@ -1376,6 +1376,40 @@ func TestRunRunOptionResolverDisableEventInjectionIsPassedThrough(t *testing.T) 
 	assert.Equal(t, 1, underlying.calls)
 }
 
+func TestRunRejectsDisableEventInjectionForTopLevelInterruptFiltering(t *testing.T) {
+	fakeTrans := &fakeTranslator{}
+	underlying := &fakeRunner{}
+	startSpanCalled := false
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	r := &runner{
+		runner: underlying,
+		translatorFactory: func(_ context.Context, _ *adapter.RunAgentInput, _ ...translator.Option) (translator.Translator, error) {
+			return fakeTrans, nil
+		},
+		userIDResolver: defaultUserIDResolver,
+		stateResolver:  defaultStateResolver,
+		runOptionResolver: func(context.Context, *adapter.RunAgentInput) ([]agent.RunOption, error) {
+			return []agent.RunOption{agent.WithDisableEventInjection(true)}, nil
+		},
+		graphNodeInterruptActivityEnabled:      true,
+		graphNodeInterruptActivityTopLevelOnly: true,
+		startSpan: func(ctx context.Context, in *adapter.RunAgentInput) (context.Context, trace.Span, error) {
+			assert.Same(t, input, in)
+			startSpanCalled = true
+			return ctx, trace.SpanFromContext(ctx), nil
+		},
+	}
+	eventsCh, err := r.Run(context.Background(), input)
+	assert.Nil(t, eventsCh)
+	assert.ErrorIs(t, err, ErrDisableEventInjectionUnsupported)
+	assert.False(t, startSpanCalled)
+	assert.Equal(t, 0, underlying.calls)
+}
+
 func TestRunStateResolverOverridesRuntimeState(t *testing.T) {
 	var runOpts agent.RunOptions
 	underlying := &fakeRunner{
