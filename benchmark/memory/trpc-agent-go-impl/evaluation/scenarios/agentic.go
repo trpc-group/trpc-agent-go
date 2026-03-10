@@ -61,7 +61,7 @@ func (s *datePrefixMemoryService) AddMemory(
 	userKey memory.UserKey,
 	mem string,
 	topics []string,
-	opts ...memory.AddMemoryOption,
+	opts ...memory.AddOption,
 ) error {
 	return s.inner.AddMemory(
 		ctx, userKey, s.withDatePrefix(mem), topics, opts...)
@@ -72,7 +72,7 @@ func (s *datePrefixMemoryService) UpdateMemory(
 	memoryKey memory.Key,
 	mem string,
 	topics []string,
-	opts ...memory.UpdateMemoryOption,
+	opts ...memory.UpdateOption,
 ) error {
 	return s.inner.UpdateMemory(
 		ctx, memoryKey, s.withDatePrefix(mem), topics, opts...)
