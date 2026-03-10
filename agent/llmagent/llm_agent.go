@@ -45,6 +45,50 @@ func defaultCodeExecutor() codeexecutor.CodeExecutor {
 	return localexec.New()
 }
 
+type skillToolFlags struct {
+	load        bool
+	selectDocs  bool
+	listDocs    bool
+	run         bool
+	exec        bool
+	writeStdin  bool
+	pollSession bool
+	killSession bool
+}
+
+func normalizeSkillToolProfile(profile string) string {
+	switch SkillToolProfile(profile) {
+	case SkillToolProfileKnowledgeOnly:
+		return string(SkillToolProfileKnowledgeOnly)
+	case SkillToolProfileFull, "":
+		return string(SkillToolProfileFull)
+	default:
+		return string(SkillToolProfileFull)
+	}
+}
+
+func resolveSkillToolFlags(profile string) skillToolFlags {
+	switch normalizeSkillToolProfile(profile) {
+	case string(SkillToolProfileKnowledgeOnly):
+		return skillToolFlags{
+			load:       true,
+			selectDocs: true,
+			listDocs:   true,
+		}
+	default:
+		return skillToolFlags{
+			load:        true,
+			selectDocs:  true,
+			listDocs:    true,
+			run:         true,
+			exec:        true,
+			writeStdin:  true,
+			pollSession: true,
+			killSession: true,
+		}
+	}
+}
+
 // LLMAgent is an agent that uses an LLM to generate responses.
 type LLMAgent struct {
 	name                    string
@@ -259,6 +303,9 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		skillsOpts = append(
 			skillsOpts,
 			processor.WithSkillLoadMode(options.SkillLoadMode),
+			processor.WithSkillToolProfile(
+				normalizeSkillToolProfile(options.skillToolProfile),
+			),
 		)
 		if options.MaxLoadedSkills > 0 {
 			skillsOpts = append(
@@ -487,59 +534,83 @@ func registerTools(options *Options) ([]tool.Tool, map[string]bool) {
 
 	// Add skill tools when skills are enabled.
 	if options.skillsRepository != nil {
-		allTools = append(allTools,
-			toolskill.NewLoadTool(options.skillsRepository))
-		// Specialized doc tools for clarity and control.
-		allTools = append(allTools,
-			toolskill.NewSelectDocsTool(options.skillsRepository))
-		allTools = append(allTools,
-			toolskill.NewListDocsTool(options.skillsRepository))
-		// Provide executor to skill_run, fallback to local.
-		exec := options.codeExecutor
-		if exec == nil {
-			exec = defaultCodeExecutor()
+		skillFlags := resolveSkillToolFlags(options.skillToolProfile)
+		if skillFlags.load {
+			allTools = append(allTools,
+				toolskill.NewLoadTool(options.skillsRepository))
 		}
-		runOpts := make(
-			[]func(*toolskill.RunTool), 0, 2,
-		)
-		if len(options.skillRunAllowedCommands) > 0 {
-			runOpts = append(runOpts,
-				toolskill.WithAllowedCommands(
-					options.skillRunAllowedCommands...,
-				),
+		if skillFlags.selectDocs {
+			allTools = append(allTools,
+				toolskill.NewSelectDocsTool(options.skillsRepository))
+		}
+		if skillFlags.listDocs {
+			allTools = append(allTools,
+				toolskill.NewListDocsTool(options.skillsRepository))
+		}
+		if skillFlags.run || skillFlags.exec ||
+			skillFlags.writeStdin || skillFlags.pollSession ||
+			skillFlags.killSession {
+			// Provide executor to skill tools that execute commands,
+			// fallback to local only when execution is enabled.
+			exec := options.codeExecutor
+			if exec == nil {
+				exec = defaultCodeExecutor()
+			}
+			runOpts := make(
+				[]func(*toolskill.RunTool), 0, 2,
 			)
-		}
-		if len(options.skillRunDeniedCommands) > 0 {
-			runOpts = append(runOpts,
-				toolskill.WithDeniedCommands(
-					options.skillRunDeniedCommands...,
-				),
+			if len(options.skillRunAllowedCommands) > 0 {
+				runOpts = append(runOpts,
+					toolskill.WithAllowedCommands(
+						options.skillRunAllowedCommands...,
+					),
+				)
+			}
+			if len(options.skillRunDeniedCommands) > 0 {
+				runOpts = append(runOpts,
+					toolskill.WithDeniedCommands(
+						options.skillRunDeniedCommands...,
+					),
+				)
+			}
+			if options.skillRunForceSaveArtifacts {
+				runOpts = append(runOpts,
+					toolskill.WithForceSaveArtifacts(true),
+				)
+			}
+			if options.skillRunRequireSkillLoaded {
+				runOpts = append(runOpts,
+					toolskill.WithRequireSkillLoaded(true),
+				)
+			}
+			runTool := toolskill.NewRunTool(
+				options.skillsRepository,
+				exec,
+				runOpts...,
 			)
+			if skillFlags.run {
+				allTools = append(allTools, runTool)
+			}
+			if skillFlags.exec || skillFlags.writeStdin ||
+				skillFlags.pollSession || skillFlags.killSession {
+				execTool := toolskill.NewExecTool(runTool)
+				if skillFlags.exec {
+					allTools = append(allTools, execTool)
+				}
+				if skillFlags.writeStdin {
+					allTools = append(allTools,
+						toolskill.NewWriteStdinTool(execTool))
+				}
+				if skillFlags.pollSession {
+					allTools = append(allTools,
+						toolskill.NewPollSessionTool(execTool))
+				}
+				if skillFlags.killSession {
+					allTools = append(allTools,
+						toolskill.NewKillSessionTool(execTool))
+				}
+			}
 		}
-		if options.skillRunForceSaveArtifacts {
-			runOpts = append(runOpts,
-				toolskill.WithForceSaveArtifacts(true),
-			)
-		}
-		if options.skillRunRequireSkillLoaded {
-			runOpts = append(runOpts,
-				toolskill.WithRequireSkillLoaded(true),
-			)
-		}
-		runTool := toolskill.NewRunTool(
-			options.skillsRepository,
-			exec,
-			runOpts...,
-		)
-		execTool := toolskill.NewExecTool(runTool)
-		allTools = append(
-			allTools,
-			runTool,
-			execTool,
-			toolskill.NewWriteStdinTool(execTool),
-			toolskill.NewPollSessionTool(execTool),
-			toolskill.NewKillSessionTool(execTool),
-		)
 	}
 
 	return allTools, userToolNames

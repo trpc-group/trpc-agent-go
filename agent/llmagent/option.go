@@ -302,6 +302,8 @@ type Options struct {
 
 	// skillsRepository enables agent skills when non-nil.
 	skillsRepository skill.Repository
+	// skillToolProfile controls which built-in skill tools are registered.
+	skillToolProfile string
 	// skillsToolingGuidance overrides the built-in skills guidance block.
 	skillsToolingGuidance *string
 	// skillRunAllowedCommands restricts skill_run to allowlisted commands.
@@ -347,6 +349,18 @@ type Options struct {
 	// model after tool calls.
 	PostToolPrompt string
 }
+
+// SkillToolProfile controls which framework-provided skill tools are enabled.
+type SkillToolProfile string
+
+const (
+	// SkillToolProfileFull keeps the existing behavior and registers the full
+	// built-in skill tool suite, including execution tools.
+	SkillToolProfileFull SkillToolProfile = "full"
+	// SkillToolProfileKnowledgeOnly registers only progressive-disclosure skill
+	// tools used for knowledge injection. No execution tools are exposed.
+	SkillToolProfileKnowledgeOnly SkillToolProfile = "knowledge_only"
+)
 
 // WithModel sets the model to use.
 func WithModel(model model.Model) Option {
@@ -487,6 +501,18 @@ func WithRefreshToolSetsOnRun(refresh bool) Option {
 func WithSkills(repo skill.Repository) Option {
 	return func(opts *Options) {
 		opts.skillsRepository = repo
+	}
+}
+
+// WithSkillToolProfile selects which built-in skill tools are registered when
+// skills are enabled via WithSkills.
+//
+// Supported profiles:
+//   - SkillToolProfileFull (default)
+//   - SkillToolProfileKnowledgeOnly
+func WithSkillToolProfile(profile SkillToolProfile) Option {
+	return func(opts *Options) {
+		opts.skillToolProfile = string(profile)
 	}
 }
 

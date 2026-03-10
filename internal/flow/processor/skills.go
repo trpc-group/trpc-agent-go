@@ -27,6 +27,8 @@ import (
 const (
 	skillsOverviewHeader = "Available skills:"
 
+	skillsCapabilityHeader = "Skill tool availability:"
+
 	skillsToolingGuidanceHeader = "Tooling and workspace guidance:"
 
 	// SkillLoadModeOnce injects loaded skill content for the next model
@@ -41,6 +43,9 @@ const (
 	SkillLoadModeSession = "session"
 
 	defaultSkillLoadMode = SkillLoadModeTurn
+
+	skillToolProfileFull          = "full"
+	skillToolProfileKnowledgeOnly = "knowledge_only"
 )
 
 type skillsRequestProcessorOptions struct {
@@ -48,6 +53,7 @@ type skillsRequestProcessorOptions struct {
 	loadMode        string
 	toolResultMode  bool
 	maxLoadedSkills int
+	toolProfile     string
 }
 
 // SkillsRequestProcessorOption configures SkillsRequestProcessor.
@@ -98,6 +104,14 @@ func WithSkillsLoadedContentInToolResults(
 	}
 }
 
+// WithSkillToolProfile configures the registered skill tool profile so the
+// processor can emit mode-appropriate guidance.
+func WithSkillToolProfile(profile string) SkillsRequestProcessorOption {
+	return func(o *skillsRequestProcessorOptions) {
+		o.toolProfile = profile
+	}
+}
+
 // WithMaxLoadedSkills caps how many skills remain "loaded" in session
 // state.
 //
@@ -129,6 +143,7 @@ type SkillsRequestProcessor struct {
 	loadMode        string
 	toolResultMode  bool
 	maxLoadedSkills int
+	toolProfile     string
 }
 
 const (
@@ -153,6 +168,18 @@ func NewSkillsRequestProcessor(
 		loadMode:        normalizeSkillLoadMode(options.loadMode),
 		toolResultMode:  options.toolResultMode,
 		maxLoadedSkills: options.maxLoadedSkills,
+		toolProfile:     normalizeSkillToolProfile(options.toolProfile),
+	}
+}
+
+func normalizeSkillToolProfile(profile string) string {
+	switch strings.ToLower(strings.TrimSpace(profile)) {
+	case skillToolProfileKnowledgeOnly:
+		return skillToolProfileKnowledgeOnly
+	case "", skillToolProfileFull:
+		return skillToolProfileFull
+	default:
+		return skillToolProfileFull
 	}
 }
 
@@ -541,6 +568,9 @@ func (p *SkillsRequestProcessor) injectOverview(req *model.Request) {
 		line := fmt.Sprintf("- %s: %s\n", s.Name, s.Description)
 		b.WriteString(line)
 	}
+	if capability := p.capabilityGuidanceText(); capability != "" {
+		b.WriteString(capability)
+	}
 	if guidance := p.toolingGuidanceText(); guidance != "" {
 		b.WriteString(guidance)
 	}
@@ -565,12 +595,63 @@ func (p *SkillsRequestProcessor) injectOverview(req *model.Request) {
 
 func (p *SkillsRequestProcessor) toolingGuidanceText() string {
 	if p.toolingGuidance == nil {
-		return defaultToolingAndWorkspaceGuidance()
+		return defaultToolingAndWorkspaceGuidance(p.toolProfile)
 	}
 	return normalizeGuidance(*p.toolingGuidance)
 }
 
-func defaultToolingAndWorkspaceGuidance() string {
+func (p *SkillsRequestProcessor) capabilityGuidanceText() string {
+	if p.toolProfile != skillToolProfileKnowledgeOnly {
+		return ""
+	}
+	if p.toolingGuidance != nil && *p.toolingGuidance == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(skillsCapabilityHeader)
+	b.WriteString("\n")
+	b.WriteString("- Registered skill tools: ")
+	b.WriteString("skill_load, skill_list_docs, skill_select_docs.\n")
+	b.WriteString("- Unavailable skill tools: ")
+	b.WriteString("skill_run, skill_exec, skill_write_stdin, ")
+	b.WriteString("skill_poll_session, skill_kill_session.\n")
+	b.WriteString("- If a loaded skill describes scripts, shell commands, ")
+	b.WriteString("workspace paths, generated files, or interactive flows, ")
+	b.WriteString("treat that content as reference only. Use other ")
+	b.WriteString("registered tools for real actions, or explain that ")
+	b.WriteString("execution is unavailable in the current mode.\n")
+	return b.String()
+}
+
+func defaultToolingAndWorkspaceGuidance(profile string) string {
+	if profile == skillToolProfileKnowledgeOnly {
+		return defaultKnowledgeOnlyGuidance()
+	}
+	return defaultFullToolingAndWorkspaceGuidance()
+}
+
+func defaultKnowledgeOnlyGuidance() string {
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(skillsToolingGuidanceHeader)
+	b.WriteString("\n")
+	b.WriteString("- Use skills for progressive disclosure only: load ")
+	b.WriteString("SKILL.md first, then list/select docs as needed.\n")
+	b.WriteString("- Prefer skill_list_docs + skill_select_docs to load ")
+	b.WriteString("only the docs needed for the current task.\n")
+	b.WriteString("- Avoid include_all_docs unless the user asks or the ")
+	b.WriteString("task genuinely needs the full doc set.\n")
+	b.WriteString("- Treat loaded skill content as domain guidance. Do ")
+	b.WriteString("not claim you executed scripts, shell commands, or ")
+	b.WriteString("interactive flows described by the skill.\n")
+	b.WriteString("- If a skill depends on execution to complete the ")
+	b.WriteString("task, switch to other registered tools (for example, ")
+	b.WriteString("MCP tools) or explain the limitation clearly.\n")
+	return b.String()
+}
+
+func defaultFullToolingAndWorkspaceGuidance() string {
 	var b strings.Builder
 	b.WriteString("\n")
 	b.WriteString(skillsToolingGuidanceHeader)
