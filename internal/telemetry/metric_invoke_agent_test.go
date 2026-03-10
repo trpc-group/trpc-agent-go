@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -651,4 +652,6 @@ func TestInvokeAgentTracker_RecordMetrics_NoTokens(t *testing.T) {
 	if len(rm.ScopeMetrics) == 0 {
 		t.Error("expected metrics to be recorded even without tokens")
 	}
+	metricNames := collectMetricNames(rm)
+	require.NotContains(t, metricNames, metrics.MetricTRPCAgentGoClientTimeToFirstToken)
 }

@@ -197,6 +197,13 @@ func TestChatMetricsTracker_TrackResponse(t *testing.T) {
 
 	// First response
 	response1 := &model.Response{
+		Choices: []model.Choice{
+			{
+				Delta: model.Message{
+					Content: "Hello",
+				},
+			},
+		},
 		Usage: &model.Usage{
 			PromptTokens:     10,
 			CompletionTokens: 5,
@@ -278,6 +285,13 @@ func TestChatMetricsTracker_TrackResponse_NilUsage(t *testing.T) {
 	tracker := NewChatMetricsTracker(ctx, nil, nil, timingInfo, nil, nil)
 
 	response := &model.Response{
+		Choices: []model.Choice{
+			{
+				Delta: model.Message{
+					Content: "Hello",
+				},
+			},
+		},
 		Usage: nil,
 	}
 
@@ -334,7 +348,15 @@ func TestChatMetricsTracker_FirstTokenTimeDuration(t *testing.T) {
 	}
 
 	time.Sleep(10 * time.Millisecond)
-	tracker.TrackResponse(&model.Response{})
+	tracker.TrackResponse(&model.Response{
+		Choices: []model.Choice{
+			{
+				Delta: model.Message{
+					Content: "Hello",
+				},
+			},
+		},
+	})
 
 	if tracker.FirstTokenTimeDuration() == 0 {
 		t.Error("FirstTokenTimeDuration should be non-zero after tracking response")
@@ -543,6 +565,13 @@ func TestChatMetricsTracker_RecordMetrics(t *testing.T) {
 	// Simulate some responses
 	time.Sleep(10 * time.Millisecond)
 	tracker.TrackResponse(&model.Response{
+		Choices: []model.Choice{
+			{
+				Delta: model.Message{
+					Content: "Hello",
+				},
+			},
+		},
 		Usage: &model.Usage{
 			PromptTokens:     10,
 			CompletionTokens: 2,

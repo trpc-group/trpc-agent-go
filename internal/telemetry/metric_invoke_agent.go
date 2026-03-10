@@ -153,8 +153,8 @@ func (t *InvokeAgentTracker) RecordMetrics() func() {
 			InvokeAgentMetricGenAIClientOperationDuration.Record(t.ctx, requestDuration.Seconds(), metric.WithAttributes(otelAttrs...))
 		}
 
-		// Record time to first token
-		if InvokeAgentMetricGenAIClientTimeToFirstToken != nil {
+		// Record time to first token only when a meaningful payload was observed.
+		if t.firstTokenTimeDuration > 0 && InvokeAgentMetricGenAIClientTimeToFirstToken != nil {
 			InvokeAgentMetricGenAIClientTimeToFirstToken.Record(t.ctx, t.firstTokenTimeDuration.Seconds(),
 				metric.WithAttributes(otelAttrs...))
 		}
