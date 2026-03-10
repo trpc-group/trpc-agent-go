@@ -19,9 +19,12 @@ const (
 	roleGroupAssistant
 )
 
-// HasPayload reports whether the message has non-empty Content or ContentParts.
+// HasPayload reports whether the message has non-empty Content, ContentParts,
+// or ReasoningContent.
 func HasPayload(msg Message) bool {
-	return msg.Content != "" || len(msg.ContentParts) > 0
+	return msg.Content != "" ||
+		len(msg.ContentParts) > 0 ||
+		msg.ReasoningContent != ""
 }
 
 func roleGroupOf(role Role) roleGroupKind {

@@ -641,6 +641,28 @@ func TestResponse_IsValidContent(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "valid reasoning content in message",
+			rsp: &Response{
+				Choices: []Choice{{
+					Message: Message{
+						ReasoningContent: "let me think",
+					},
+				}},
+			},
+			want: true,
+		},
+		{
+			name: "valid reasoning content in delta",
+			rsp: &Response{
+				Choices: []Choice{{
+					Delta: Message{
+						ReasoningContent: "streaming thought",
+					},
+				}},
+			},
+			want: true,
+		},
+		{
 			name: "no valid content",
 			rsp: &Response{
 				Choices: []Choice{{
