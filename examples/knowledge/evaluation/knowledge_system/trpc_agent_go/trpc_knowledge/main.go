@@ -28,6 +28,7 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -44,6 +45,7 @@ var (
 	hybridVectorWeight = flag.Float64("hybrid-vector-weight", 0.99999, "Hybrid search vector weight (0.0-1.0)")
 	hybridTextWeight   = flag.Float64("hybrid-text-weight", 0.00001, "Hybrid search text weight (0.0-1.0)")
 	pgTable            = flag.String("pg-table", "", "PGVector table name (overrides PGVECTOR_TABLE env var)")
+	useRRF             = flag.Bool("use-rrf", false, "Use Reciprocal Rank Fusion instead of weighted score fusion")
 )
 
 // Global knowledge service
@@ -95,10 +97,21 @@ func main() {
 	fmt.Printf("Model: %s\n", modelName)
 	fmt.Printf("Vector Store: %s\n", *vectorStoreArg)
 	fmt.Printf("Search Mode: %s (%d)\n", searchModeNames[*searchModeArg], *searchModeArg)
-	fmt.Printf("Hybrid Weights: vector=%.5f text=%.5f\n", *hybridVectorWeight, *hybridTextWeight)
+	fmt.Printf("Use RRF: %v\n", *useRRF)
+	if !*useRRF {
+		fmt.Printf("Hybrid Weights: vector=%.5f text=%.5f\n", *hybridVectorWeight, *hybridTextWeight)
+	}
 	if *pgTable != "" {
 		fmt.Printf("PG Table: %s (override)\n", *pgTable)
 	}
+	fmt.Printf("PG Host: %s:%s\n", getEnvOrDefault("PGVECTOR_HOST", "127.0.0.1"), getEnvOrDefault("PGVECTOR_PORT", "5432"))
+	fmt.Printf("PG Database: %s (User: %s)\n", getEnvOrDefault("PGVECTOR_DATABASE", "rgb"), getEnvOrDefault("PGVECTOR_USER", "root"))
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	if len(apiKey) > 8 {
+		apiKey = apiKey[:4] + "****" + apiKey[len(apiKey)-4:]
+	}
+	fmt.Printf("OPENAI_API_KEY: %s\n", apiKey)
+	fmt.Printf("OPENAI_BASE_URL: %s\n", os.Getenv("OPENAI_BASE_URL"))
 	fmt.Println(strings.Repeat("=", 50))
 
 	svcConfig := &ServiceConfig{
@@ -108,6 +121,7 @@ func main() {
 		HybridVectorWeight: *hybridVectorWeight,
 		HybridTextWeight:   *hybridTextWeight,
 		PGTable:            *pgTable,
+		UseRRF:             *useRRF,
 	}
 
 	var err error
@@ -147,6 +161,13 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 
 func handleConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+
+	// Collect PG connection info from environment (masking password)
+	host := getEnvOrDefault("PGVECTOR_HOST", "127.0.0.1")
+	portStr := getEnvOrDefault("PGVECTOR_PORT", "5432")
+	user := getEnvOrDefault("PGVECTOR_USER", "root")
+	database := getEnvOrDefault("PGVECTOR_DATABASE", "rgb")
+
 	cfg := map[string]any{
 		"model_name":           knowledgeSvc.modelName,
 		"vectorstore":          string(knowledgeSvc.storeType),
@@ -154,6 +175,13 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 		"hybrid_vector_weight": knowledgeSvc.config.HybridVectorWeight,
 		"hybrid_text_weight":   knowledgeSvc.config.HybridTextWeight,
 		"pg_table":             knowledgeSvc.config.PGTable,
+		"pg_connection": map[string]string{
+			"host":     host,
+			"port":     portStr,
+			"user":     user,
+			"database": database,
+			// Password intentionally omitted for security
+		},
 	}
 	json.NewEncoder(w).Encode(cfg)
 }

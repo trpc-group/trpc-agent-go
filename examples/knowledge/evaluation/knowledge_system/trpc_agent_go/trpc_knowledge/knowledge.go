@@ -67,6 +67,7 @@ type ServiceConfig struct {
 	HybridVectorWeight float64
 	HybridTextWeight   float64
 	PGTable            string // overrides PGVECTOR_TABLE env var if non-empty
+	UseRRF             bool   // whether to use Reciprocal Rank Fusion instead of weighted fusion
 }
 
 // KnowledgeService manages knowledge base operations.
@@ -161,12 +162,27 @@ func (s *KnowledgeService) newPGVectorStore() (vectorstore.VectorStore, error) {
 	dsn := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable",
 		encodedUser, encodedPassword, host, port, database)
 
-	return pgvector.New(
+	opts := []pgvector.Option{
 		pgvector.WithPGVectorClientDSN(dsn),
 		pgvector.WithTable(table),
 		pgvector.WithIndexDimension(1024),
-		pgvector.WithHybridSearchWeights(vectorWeight, textWeight),
-	)
+	}
+
+	if s.config != nil && s.config.UseRRF {
+		// Use Reciprocal Rank Fusion instead of weighted score fusion
+		opts = append(opts,
+			pgvector.WithHybridFusionMode(pgvector.HybridFusionRRF),
+			pgvector.WithRRFParams(&pgvector.RRFParams{
+				K:              60,
+				CandidateRatio: 3,
+			}),
+		)
+	} else {
+		// Default weighted score fusion
+		opts = append(opts, pgvector.WithHybridSearchWeights(vectorWeight, textWeight))
+	}
+
+	return pgvector.New(opts...)
 }
 
 // Load loads documents from file paths into the knowledge base.
@@ -187,7 +203,7 @@ func (s *KnowledgeService) Load(ctx context.Context, filePaths []string) error {
 
 	// Load documents
 	log.Infof("[Load] Starting document loading from %d file(s)...", len(filePaths))
-	if err := s.kb.Load(ctx, knowledge.WithShowProgress(true), knowledge.WithDocConcurrency(30), knowledge.WithDocConcurrency(12)); err != nil {
+	if err := s.kb.Load(ctx, knowledge.WithShowProgress(true), knowledge.WithDocConcurrency(30)); err != nil {
 		return fmt.Errorf("failed to load documents: %w", err)
 	}
 

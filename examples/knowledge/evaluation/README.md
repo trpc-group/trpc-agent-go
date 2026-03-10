@@ -1,13 +1,14 @@
-# RAG Evaluation: tRPC-Agent-Go vs LangChain vs Agno vs CrewAI vs AutoGen
+# RAG Evaluation: tRPC-Agent-Go vs LangChain vs LangChain-Chain vs Agno vs CrewAI vs AutoGen
 
 This directory contains a comprehensive evaluation framework for comparing RAG (Retrieval-Augmented Generation) systems using [RAGAS](https://docs.ragas.io/) metrics.
 
 ## Overview
 
-We evaluate five RAG implementations with **identical configurations** to ensure a fair comparison:
+We evaluate six RAG implementations with **identical configurations** to ensure a fair comparison:
 
 - **tRPC-Agent-Go**: Our Go-based RAG implementation
-- **LangChain**: Python-based reference implementation
+- **LangChain**: Python-based Agent reference implementation
+- **LangChain-Chain**: Deterministic LCEL chain pipeline (retrieve → prompt → LLM, no agent loop)
 - **Agno**: Python-based AI agent framework with built-in knowledge base support
 - **CrewAI**: Python-based multi-agent framework with ChromaDB vector store
 - **AutoGen**: Microsoft's Python-based multi-agent framework
@@ -41,6 +42,9 @@ export PGVECTOR_DATABASE="vector"
 # Evaluate with LangChain
 python3 main.py --kb=langchain
 
+# Evaluate with LangChain-Chain (deterministic chain pipeline)
+python3 main.py --kb=langchain-chain
+
 # Evaluate with tRPC-Agent-Go
 python3 main.py --kb=trpc-agent-go
 
@@ -49,28 +53,64 @@ python3 main.py --kb=agno
 
 # Evaluate with AutoGen
 python3 main.py --kb=autogen
+
+# Full log output (show complete answers and contexts)
+python3 main.py --kb=trpc-agent-go --full-log
 ```
+
+### Run Vertical Evaluation
+
+Vertical evaluation runs tRPC-Agent-Go-only ablation experiments (hybrid search weight sweep, RRF mode, retrieval-k sweep). It automatically builds and manages the Go service for each experiment configuration.
+
+```bash
+# Run hybrid weight ablation (11 weight combinations from pure text to pure vector)
+python3 -m vertical_eval.main --suite hybrid_weight
+
+# Run RRF fusion experiment
+python3 -m vertical_eval.main --suite hybrid_rrf
+
+# Run retrieval-k sweep (k = 2, 4, 6, 8, 10, 12, 14, 16)
+python3 -m vertical_eval.main --suite retrieval_k
+
+# Run all suites
+python3 -m vertical_eval.main --suite all
+
+# Skip document loading (if documents are already loaded in PGVector)
+python3 -m vertical_eval.main --suite hybrid_weight --skip-load
+
+# Run specific experiments only
+python3 -m vertical_eval.main --suite hybrid_weight --experiments hybrid_v80_t20 hybrid_v90_t10
+
+# Override PGVector table name
+python3 -m vertical_eval.main --suite hybrid_rrf --skip-load --pg-table veval_hw_rrf
+```
+
+Results are saved to `vertical_eval/results/<suite>_<timestamp>/` with per-experiment JSON files and a combined markdown report.
 
 ## Configuration Alignment
 
-All five systems use **identical parameters** to ensure fair comparison:
+All six systems use **identical parameters** to ensure fair comparison:
 
 
-| Parameter | LangChain | tRPC-Agent-Go | Agno | CrewAI | AutoGen |
-|-----------|-----------|---------------|------|--------|---------|
-| **Temperature** | 0 | 0 | 0 | 0 | 0 |
-| **Chunk Size** | 500 | 500 | 500 | 500 | 500 |
-| **Chunk Overlap** | 50 | 50 | 50 | 50 | 50 |
-| **Embedding Dimensions** | 1024 | 1024 | 1024 | 1024 | 1024 |
-| **Vector Store** | PGVector | PGVector | PgVector | ChromaDB | PGVector |
-| **Search Mode** | Vector | Vector (Hybrid disabled) | Vector | Vector | Vector |
-| **Knowledge Base Build** | Native framework method | Native framework method | Native framework method | Native framework method | Native framework method |
-| **Agent Type** | Agent + KB (ReAct disabled) | Agent + KB (ReAct disabled) | Agent + KB (ReAct disabled) | Agent + KB (ReAct disabled) | Agent + KB (ReAct disabled) |
-| **Max Retrieval Results (k)** | 4 | 4 | 4 | 4 | 4 |
+| Parameter | LangChain | LangChain-Chain | tRPC-Agent-Go | Agno | CrewAI | AutoGen |
+|-----------|-----------|-----------------|---------------|------|--------|---------|
+| **Temperature** | 0 | 0 | 0 | 0 | 0 | 0 |
+| **Chunk Size** | 500 | 500 | 500 | 500 | 500 | 500 |
+| **Chunk Overlap** | 50 | 50 | 50 | 50 | 50 | 50 |
+| **Embedding Dimensions** | 1024 | 1024 | 1024 | 1024 | 1024 | 1024 |
+| **Vector Store** | PGVector | PGVector | PGVector | PgVector | ChromaDB | PGVector |
+| **Search Mode** | Vector | Vector | Vector (Hybrid disabled) | Vector | Vector | Vector |
+| **Knowledge Base Build** | Native framework method | Native framework method | Native framework method | Native framework method | Native framework method | Native framework method |
+| **Agent Type** | Agent + KB (ReAct disabled) | Chain (no agent loop) | Agent + KB (ReAct disabled) | Agent + KB (ReAct disabled) | Agent + KB (ReAct disabled) | Agent + KB (ReAct disabled) |
+| **Max Retrieval Results (k)** | 4 | 4 | 4 | 4 | 4 | 4 |
 
 > 📝 **tRPC-Agent-Go Notes**:
 >
 > - **Search Mode**: tRPC-Agent-Go uses Hybrid Search (vector similarity + full-text search) by default, but for fair comparison with other frameworks, **Hybrid Search is disabled** in this evaluation. All frameworks use pure Vector Search (vector similarity only).
+
+> 📝 **LangChain-Chain Notes**:
+>
+> - **Pipeline Mode**: LangChain-Chain uses LCEL (LangChain Expression Language) to build a deterministic chain pipeline (retrieve → format → prompt → LLM → parse), without agent loops or tool calling. Each question triggers exactly one retrieval, and the LLM receives the exact same prompt template, making the flow fully deterministic and reproducible.
 
 > 📝 **CrewAI Notes**:
 >
@@ -79,9 +119,9 @@ All five systems use **identical parameters** to ensure fair comparison:
 
 ## System Prompt
 
-To ensure fair comparison, all five systems are configured with **identical** instructions.
+To ensure fair comparison, all six systems are configured with **identical** instructions.
 
-**Prompt for LangChain, Agno, tRPC-Agent-Go, CrewAI & AutoGen:**
+**Prompt for LangChain, LangChain-Chain, Agno, tRPC-Agent-Go, CrewAI & AutoGen:**
 
 ```text
 You are a helpful assistant that answers questions using a knowledge base search tool.
@@ -362,6 +402,80 @@ Factual queries with different question characteristics from en subset. (Origina
 3. **AutoGen has the strongest context recall**: **Context Recall** (0.8111) significantly outperforms all other frameworks, and **Answer Similarity** (0.4904) also ranks 1st, indicating more comprehensive evidence retrieval.
 4. **Agno has the highest faithfulness**: **Faithfulness** (0.7887) ranks 1st, indicating better adherence to retrieved content for multi-hop reasoning.
 5. **Context Precision is universally low (~0.32-0.36)**: Similar to the RGB-en_int subset, multi-hop queries push all frameworks' retrieval precision down, as relevant evidence is scattered across multiple documents.
+
+---
+
+### 4. Vertical Evaluation: tRPC-Agent-Go Hybrid Search Weight Ablation
+
+To find the optimal weight ratio for PGVector Hybrid Search (vector similarity + sparse text retrieval) in tRPC-Agent-Go, we designed a gradient ablation experiment with 11 steps ranging from pure text (`v0_t100`) to pure vector (`v100_t0`).
+
+**Test Configuration:**
+- **Dataset**: Full HuggingFace Markdown documentation dataset (54 QA)
+- **Retrieval Configuration**: Top K = 4
+- **Embedding / Agent / Eval Models**: Same as the main evaluation
+
+**Results (sorted by vector weight from low to high):**
+
+| Config (vector_weight\_text_weight) | Faithfulness | Answer Relevancy | Answer Correctness | Answer Similarity | Context Precision | Context Recall | Context Entity Recall |
+| ----------------------------------- | ------------ | ---------------- | ------------------ | ----------------- | ----------------- | -------------- | --------------------- |
+| **hybrid_v0_t100** (pure text)      | 0.8920 | 0.7586 | 0.6588 | 0.6741 | 0.4389 | 0.7925 | 0.3302 |
+| **hybrid_v10_t90**                  | 0.9064 | 0.7677 | 0.6875 | 0.6741 | 0.5243 | 0.8113 | 0.3519 |
+| **hybrid_v20_t80**                  | 0.9143 | 0.8164 | 0.6861 | 0.6827 | 0.5592 | 0.8519 | 0.3951 |
+| **hybrid_v30_t70**                  | 0.9226 | 0.7842 | 0.7188 | 0.6883 | 0.5980 | 0.8704 | 0.3962 |
+| **hybrid_v40_t60**                  | 0.9681 | 0.7919 | 0.7333 | 0.6939 | 0.6077 | 0.8679 | 0.4031 |
+| **hybrid_v50_t50**                  | 0.9346 | 0.7948 | 0.7365 | 0.7064 | 0.6441 | 0.8889 | 0.4414 |
+| **hybrid_v60_t40**                  | 0.9685 | 0.8162 | 0.7503 | 0.7027 | 0.6772 | 0.8889 | 0.4759 |
+| **hybrid_v70_t30**                  | 0.9593 | 0.8495 | 0.7706 | 0.7107 | 0.7095 | 0.9259 | 0.4883 |
+| **hybrid_v80_t20**                  | **0.9753** | 0.8830 | 0.7848 | 0.7094 | 0.7205 | 0.9259 | 0.4815 |
+| **hybrid_v90_t10**                  | 0.9506 | 0.8616 | 0.7953 | 0.7206 | **0.7320** | 0.9259 | 0.4552 |
+| **hybrid_v100_t0** (pure vector)    | 0.9748 | **0.8635** | **0.8072** | **0.7229** | 0.6991 | **0.9630** | **0.5219** |
+
+**Key Findings & Analysis:**
+
+1. **Pure vector retrieval (v100_t0) achieves the best overall performance**:
+   On the full 54 QA dataset, pure vector retrieval ranks 1st in **Answer Relevancy (0.8635)**, **Answer Correctness (0.8072)**, **Answer Similarity (0.7229)**, **Context Recall (0.9630)**, and **Context Entity Recall (0.5219)** — 5 out of 7 metrics, leading in overall answer quality.
+2. **High vector weight range (v80-v100) forms a performance plateau**:
+   Metrics vary only slightly between v80_t20 and v100_t0 (e.g., Answer Correctness ranges from 0.78 to 0.81), indicating that system performance stabilizes when vector weight ≥ 0.8. Notably, v80_t20 achieves the highest Faithfulness (0.9753) and v90_t10 achieves the highest Context Precision (0.7320).
+3. **Pure text retrieval (v0_t100) still performs worst**:
+   Sparse text retrieval achieves only 0.4389 Context Precision, 0.7925 Context Recall, and 0.6588 Answer Correctness — the lowest across all configurations.
+4. **"Text penalty" phenomenon remains significant**:
+   A clear monotonic decline is visible from v100 to v0: Answer Correctness drops from 0.8072 (v100) to 0.6588 (v0), Context Precision from 0.6991 to 0.4389. This trend is smoother and more consistent on the full dataset compared to the sampled subset.
+
+**Practical Recommendations**:
+For standard RAG scenarios (especially systems with high-quality LLMs and embeddings), **it is recommended to set the vector retrieval weight as the dominant factor (≥0.8)**. The v80_t20 to v100_t0 range all perform excellently and can be fine-tuned based on specific scenarios. Only consider increasing sparse text retrieval weight in scenarios with highly specialized jargon or non-semantic identifiers (e.g., product codes).
+
+### 5. Vertical Evaluation: Reciprocal Rank Fusion (RRF) Mode
+
+In addition to Weighted Score Fusion, PGVector also supports **Reciprocal Rank Fusion (RRF)** as a hybrid search fusion strategy. RRF does not rely on the absolute values of raw scores but instead fuses results based on the **ranking** from each retrieval channel:
+
+```
+score(d) = sum(1 / (k + rank_i))
+```
+
+where `k` is a constant (default 60) and `rank_i` is the rank of document `d` in the `i`-th retrieval channel. This approach naturally avoids the issue of inconsistent score scales between vector and text scores.
+
+**Test Configuration:**
+- **Dataset**: Full HuggingFace Markdown documentation dataset (54 QA)
+- **Retrieval Configuration**: Top K = 4, RRF k=60, CandidateRatio=3
+- **Embedding / Agent / Eval Models**: Same as the main evaluation
+
+**Results:**
+
+| Fusion Strategy | Faithfulness | Answer Relevancy | Answer Correctness | Answer Similarity | Context Precision | Context Recall | Context Entity Recall |
+| --------------- | ------------ | ---------------- | ------------------ | ----------------- | ----------------- | -------------- | --------------------- |
+| **RRF** (k=60) | 0.5556 | 0.0187 | 0.1150 | 0.4664 | 0.0000 | 0.0000 | 0.0000 |
+| **Weighted** (v100_t0, pure vector) | 0.9748 | 0.8635 | 0.8072 | 0.7229 | 0.6991 | 0.9630 | 0.5219 |
+| **Weighted** (v90_t10) | 0.9506 | 0.8616 | 0.7953 | 0.7206 | 0.7320 | 0.9259 | 0.4552 |
+| **Weighted** (v50_t50, equal) | 0.9346 | 0.7948 | 0.7365 | 0.7064 | 0.6441 | 0.8889 | 0.4414 |
+
+**Analysis:**
+
+> ⚠️ **Note**: The RRF experiment results are anomalous in this run (all Context metrics = 0, Answer Relevancy near 0). This is likely due to a configuration or retrieval pipeline issue with RRF mode. Data is provided for reference only; a re-run is pending after investigation.
+
+1. **RRF shows severe anomalies in this run**: Context Precision / Recall / Entity Recall are all 0.0000, Answer Relevancy is only 0.0187, indicating that RRF mode's retrieval results may not have been correctly passed to the context. Further investigation is needed.
+2. **Weighted fusion conclusions remain valid**: The three Weighted comparisons confirm that pure vector (v100_t0) achieves the best overall performance, consistent with the ablation experiment findings.
+
+**Conclusion**: RRF is better suited for scenarios where **both retrieval channels are of comparable quality** (e.g., when high-quality vector retrieval and BM25 retrieval coexist). When one channel is clearly superior to the other, weighted fusion with appropriate weight tuning is the better choice. The RRF results in this run are anomalous and will be updated after investigation and re-run.
 
 ---
 

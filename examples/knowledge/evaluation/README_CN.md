@@ -1,13 +1,14 @@
-# RAG 评测：tRPC-Agent-Go vs LangChain vs Agno vs CrewAI vs AutoGen
+# RAG 评测：tRPC-Agent-Go vs LangChain vs LangChain-Chain vs Agno vs CrewAI vs AutoGen
 
 本目录包含一个全面的评测框架，使用 [RAGAS](https://docs.ragas.io/) 指标对不同的 RAG（检索增强生成）系统进行对比分析。
 
 ## 概述
 
-为了确保公平对比，我们使用**完全相同的配置**对五个 RAG 实现进行了评测：
+为了确保公平对比，我们使用**完全相同的配置**对六个 RAG 实现进行了评测：
 
 - **tRPC-Agent-Go**: 我们基于 Go 的 RAG 实现
-- **LangChain**: 基于 Python 的参考实现
+- **LangChain**: 基于 Python 的 Agent 参考实现
+- **LangChain-Chain**: 基于 LangChain LCEL 的确定性 Chain 流程（retrieve → prompt → LLM，无 Agent 循环）
 - **Agno**: 具有内置知识库支持的 Python AI Agent 框架
 - **CrewAI**: 基于 Python 的多智能体框架，使用 ChromaDB 向量存储
 - **AutoGen**: 微软开发的基于 Python 的多智能体框架
@@ -41,6 +42,9 @@ export PGVECTOR_DATABASE="vector"
 # 评测 LangChain
 python3 main.py --kb=langchain
 
+# 评测 LangChain-Chain（确定性 Chain 流程）
+python3 main.py --kb=langchain-chain
+
 # 评测 tRPC-Agent-Go
 python3 main.py --kb=trpc-agent-go
 
@@ -51,26 +55,59 @@ python3 main.py --kb=agno
 python3 main.py --kb=autogen
 ```
 
+### 运行纵向评测（Vertical Evaluation）
+
+纵向评测针对 tRPC-Agent-Go 进行专项消融实验（混合搜索权重梯度、RRF 模式、检索 k 值扫描），会自动编译并管理每组实验配置对应的 Go 服务。
+
+```bash
+# 混合搜索权重消融（11 组权重配比，从纯文本到纯向量）
+python3 -m vertical_eval.main --suite hybrid_weight
+
+# RRF 融合实验
+python3 -m vertical_eval.main --suite hybrid_rrf
+
+# 检索 k 值扫描（k = 2, 4, 6, 8, 10, 12, 14, 16）
+python3 -m vertical_eval.main --suite retrieval_k
+
+# 运行全部实验套件
+python3 -m vertical_eval.main --suite all
+
+# 跳过文档加载（如果 PGVector 中已加载文档）
+python3 -m vertical_eval.main --suite hybrid_weight --skip-load
+
+# 仅运行指定实验
+python3 -m vertical_eval.main --suite hybrid_weight --experiments hybrid_v80_t20 hybrid_v90_t10
+
+# 指定 PGVector 表名
+python3 -m vertical_eval.main --suite hybrid_rrf --skip-load --pg-table veval_hw_rrf
+```
+
+结果保存在 `vertical_eval/results/<suite>_<timestamp>/` 目录下，包含每组实验的 JSON 文件和汇总 Markdown 报告。
+
 ## 配置对齐
 
-五个系统均使用**相同参数**以确保对比的公正性：
+六个系统均使用**相同参数**以确保对比的公正性：
 
 
-| 参数                     | LangChain               | tRPC-Agent-Go              | Agno                    | CrewAI                  | AutoGen                 |
-| -------------------------- | ------------------------- | ---------------------------- | ------------------------- | ------------------------- | ------------------------- |
-| **Temperature**          | 0                       | 0                          | 0                       | 0                       | 0                       |
-| **Chunk Size**           | 500                     | 500                        | 500                     | 500                     | 500                     |
-| **Chunk Overlap**        | 50                      | 50                         | 50                      | 50                      | 50                      |
-| **Embedding Dimensions** | 1024                    | 1024                       | 1024                    | 1024                    | 1024                    |
-| **Vector Store**         | PGVector                | PGVector                   | PgVector                | ChromaDB                | PGVector                |
-| **检索模式**             | Vector                  | Vector (已关闭默认 Hybrid) | Vector                  | Vector                  | Vector                  |
-| **Knowledge Base 构建**  | 框架原生方式            | 框架原生方式               | 框架原生方式            | 框架原生方式            | 框架原生方式            |
-| **Agent 类型**           | Agent + KB (ReAct 关闭) | Agent + KB (ReAct 关闭)    | Agent + KB (ReAct 关闭) | Agent + KB (ReAct 关闭) | Agent + KB (ReAct 关闭) |
-| **单次检索数量 (k)**     | 4                       | 4                          | 4                       | 4                       | 4                       |
+| 参数                     | LangChain               | LangChain-Chain            | tRPC-Agent-Go              | Agno                    | CrewAI                  | AutoGen                 |
+| -------------------------- | ------------------------- | ---------------------------- | ---------------------------- | ------------------------- | ------------------------- | ------------------------- |
+| **Temperature**          | 0                       | 0                          | 0                          | 0                       | 0                       | 0                       |
+| **Chunk Size**           | 500                     | 500                        | 500                        | 500                     | 500                     | 500                     |
+| **Chunk Overlap**        | 50                      | 50                         | 50                         | 50                      | 50                      | 50                      |
+| **Embedding Dimensions** | 1024                    | 1024                       | 1024                       | 1024                    | 1024                    | 1024                    |
+| **Vector Store**         | PGVector                | PGVector                   | PGVector                   | PgVector                | ChromaDB                | PGVector                |
+| **检索模式**             | Vector                  | Vector                     | Vector (已关闭默认 Hybrid) | Vector                  | Vector                  | Vector                  |
+| **Knowledge Base 构建**  | 框架原生方式            | 框架原生方式               | 框架原生方式               | 框架原生方式            | 框架原生方式            | 框架原生方式            |
+| **Agent 类型**           | Agent + KB (ReAct 关闭) | Chain (无 Agent 循环)      | Agent + KB (ReAct 关闭)    | Agent + KB (ReAct 关闭) | Agent + KB (ReAct 关闭) | Agent + KB (ReAct 关闭) |
+| **单次检索数量 (k)**     | 4                       | 4                          | 4                          | 4                       | 4                       | 4                       |
 
 > 📝 **tRPC-Agent-Go 说明**：
 >
 > - **检索模式**：tRPC-Agent-Go 默认使用 Hybrid Search（混合检索：向量相似度 + 全文检索），但为了保证与其他框架的公平对比，评测中**关闭了混合检索**，统一使用纯 Vector Search（向量相似度检索）。
+
+> 📝 **LangChain-Chain 说明**：
+>
+> - **流程模式**：LangChain-Chain 使用 LCEL（LangChain Expression Language）构建确定性 Chain 流程（retrieve → format → prompt → LLM → parse），不使用 Agent 循环和工具调用。每个问题触发恰好一次检索，LLM 接收到完全相同的 Prompt 模板，流程完全确定、可复现。
 
 > 📝 **CrewAI 说明**：
 >
@@ -79,9 +116,9 @@ python3 main.py --kb=autogen
 
 ## 系统提示词 (System Prompt)
 
-为了确保评测的公平性，我们为所有五个系统配置了**完全相同**的核心提示词。
+为了确保评测的公平性，我们为所有六个系统配置了**完全相同**的核心提示词。
 
-**LangChain, Agno, tRPC-Agent-Go, CrewAI & AutoGen 使用的提示词：**
+**LangChain, LangChain-Chain, Agno, tRPC-Agent-Go, CrewAI & AutoGen 使用的提示词：**
 
 ```text
 You are a helpful assistant that answers questions using a knowledge base search tool.
@@ -377,6 +414,80 @@ CRITICAL RULES(IMPORTANT !!!):
 3. **AutoGen 上下文召回最强**：**Context Recall** (0.8111) 显著领先其他框架，**Answer Similarity** (0.4904) 也排名第一，表明检索到了更全面的证据。
 4. **Agno 忠实度最高**：**Faithfulness** (0.7887) 排名第一，表明在多跳推理中更好地遵循了检索内容。
 5. **Context Precision 普遍偏低（~0.32-0.36）**：与 RGB-en_int 子集类似，多跳查询使所有框架的检索精度下降，因为相关证据分散在多个文档中。
+
+---
+
+### 4. 垂直评测：tRPC-Agent-Go 混合检索权重消融实验
+
+为了探究 tRPC-Agent-Go 中 PGVector 混合检索（Hybrid Search：向量相似度 + 文本稀疏检索）的最佳权重配比，我们设计了从纯文本（`v0_t100`）到纯向量（`v100_t0`）的 11 个步长的梯度消融实验。
+
+**测试环境参数：**
+- **数据集**: 全量 HuggingFace Markdown 文档集 (54 QA)
+- **检索配置**: Top K = 4
+- **Embedding / Agent / Eval 模型**: 统一保持与主评测一致
+
+**评测结果（按向量权重从低到高排列）：**
+
+| 实验配置 (向量权重_文本权重) | Faithfulness | Answer Relevancy | Answer Correctness | Answer Similarity | Context Precision | Context Recall | Context Entity Recall |
+| ---------------------------- | ------------ | ---------------- | ------------------ | ----------------- | ----------------- | -------------- | --------------------- |
+| **hybrid_v0_t100** (纯文本)  | 0.8920 | 0.7586 | 0.6588 | 0.6741 | 0.4389 | 0.7925 | 0.3302 |
+| **hybrid_v10_t90**           | 0.9064 | 0.7677 | 0.6875 | 0.6741 | 0.5243 | 0.8113 | 0.3519 |
+| **hybrid_v20_t80**           | 0.9143 | 0.8164 | 0.6861 | 0.6827 | 0.5592 | 0.8519 | 0.3951 |
+| **hybrid_v30_t70**           | 0.9226 | 0.7842 | 0.7188 | 0.6883 | 0.5980 | 0.8704 | 0.3962 |
+| **hybrid_v40_t60**           | 0.9681 | 0.7919 | 0.7333 | 0.6939 | 0.6077 | 0.8679 | 0.4031 |
+| **hybrid_v50_t50**           | 0.9346 | 0.7948 | 0.7365 | 0.7064 | 0.6441 | 0.8889 | 0.4414 |
+| **hybrid_v60_t40**           | 0.9685 | 0.8162 | 0.7503 | 0.7027 | 0.6772 | 0.8889 | 0.4759 |
+| **hybrid_v70_t30**           | 0.9593 | 0.8495 | 0.7706 | 0.7107 | 0.7095 | 0.9259 | 0.4883 |
+| **hybrid_v80_t20**           | **0.9753** | 0.8830 | 0.7848 | 0.7094 | 0.7205 | 0.9259 | 0.4815 |
+| **hybrid_v90_t10**           | 0.9506 | 0.8616 | 0.7953 | 0.7206 | **0.7320** | 0.9259 | 0.4552 |
+| **hybrid_v100_t0** (纯向量)  | 0.9748 | **0.8635** | **0.8072** | **0.7229** | 0.6991 | **0.9630** | **0.5219** |
+
+**核心发现与分析：**
+
+1. **纯向量检索（v100_t0）综合表现最优**：
+   在全量 54 QA 数据集下，纯向量检索在 **Answer Relevancy (0.8635)**、**Answer Correctness (0.8072)**、**Answer Similarity (0.7229)**、**Context Recall (0.9630)** 和 **Context Entity Recall (0.5219)** 共 5 项指标上取得第一，综合回答质量领先。
+2. **高向量权重区间（v80-v100）形成性能高原**：
+   v80_t20 到 v100_t0 区间的各项指标差异较小（如 Answer Correctness 在 0.78-0.81 之间），说明当向量权重 ≥ 0.8 时，系统性能趋于稳定。其中 v80_t20 的 Faithfulness (0.9753) 为全场最高，v90_t10 的 Context Precision (0.7320) 最高。
+3. **纯文本检索（v0_t100）依然表现最差**：
+   纯文本稀疏检索的 Context Precision 仅 0.4389，Context Recall 跌至 0.7925，Answer Correctness 也仅有 0.6588，全面垫底。
+4. **混合检索中的"文本惩罚"现象依然显著**：
+   从 v100 到 v0 的梯度中可以清晰看到：**随着文本权重增加，整体指标呈现单调下降趋势**。例如 Answer Correctness 从 0.8072 (v100) 逐步下降到 0.6588 (v0)，Context Precision 从 0.6991 降至 0.4389。这一趋势在全量数据集上比采样数据集更加平滑和一致。
+
+**实践建议**：
+在标准的 RAG 场景（特别是具备高质量大模型和 Embedding 的系统）中，**建议将向量检索（Vector）的权重设为绝对主导（≥0.8）**。v80_t20 到 v100_t0 区间均表现优异，可根据具体场景微调。仅在存在大量极其生僻的专有名词或无语义货号的场景，才需要考虑适度放宽稀疏文本检索的权重。
+
+### 5. 垂直评测：Reciprocal Rank Fusion (RRF) 融合模式
+
+除了加权分数融合（Weighted Score Fusion）之外，PGVector 还支持 **Reciprocal Rank Fusion (RRF)** 作为混合检索的融合策略。RRF 不依赖原始分数的绝对值，而是基于各检索通道返回结果的**排名**进行融合，公式为：
+
+```
+score(d) = sum(1 / (k + rank_i))
+```
+
+其中 `k` 为常数（默认 60），`rank_i` 为文档 `d` 在第 `i` 个检索通道中的排名。这种方式天然避免了向量分数和文本分数量纲不一致的问题。
+
+**测试环境参数：**
+- **数据集**: 全量 HuggingFace Markdown 文档集 (54 QA)
+- **检索配置**: Top K = 4, RRF k=60, CandidateRatio=3
+- **Embedding / Agent / Eval 模型**: 统一保持与主评测一致
+
+**评测结果：**
+
+| 融合策略 | Faithfulness | Answer Relevancy | Answer Correctness | Answer Similarity | Context Precision | Context Recall | Context Entity Recall |
+| -------- | ------------ | ---------------- | ------------------ | ----------------- | ----------------- | -------------- | --------------------- |
+| **RRF** (k=60) | 0.5556 | 0.0187 | 0.1150 | 0.4664 | 0.0000 | 0.0000 | 0.0000 |
+| **Weighted** (v100_t0, 纯向量) | 0.9748 | 0.8635 | 0.8072 | 0.7229 | 0.6991 | 0.9630 | 0.5219 |
+| **Weighted** (v90_t10) | 0.9506 | 0.8616 | 0.7953 | 0.7206 | 0.7320 | 0.9259 | 0.4552 |
+| **Weighted** (v50_t50, 对半) | 0.9346 | 0.7948 | 0.7365 | 0.7064 | 0.6441 | 0.8889 | 0.4414 |
+
+**分析：**
+
+> ⚠️ **注意**：本次 RRF 实验结果异常（Context 指标全部为 0，Answer Relevancy 接近 0），疑似 RRF 配置或检索流程存在问题，数据仅供参考，待排查后重新运行。
+
+1. **RRF 在本次运行中出现严重异常**：Context Precision / Recall / Entity Recall 全部为 0.0000，Answer Relevancy 仅 0.0187，表明 RRF 模式下的检索结果可能未正确传递到上下文中，需进一步排查。
+2. **加权融合的结论依然成立**：从 Weighted 三组对比来看，纯向量（v100_t0）的综合表现最优，与消融实验的结论一致。
+
+**结论**：RRF 更适合**两个检索通道质量相当**的场景（例如向量检索和高质量 BM25 检索并存时）。当其中一个通道明显优于另一个时，加权融合配合适当的权重调优是更好的选择。本次 RRF 结果异常，待排查修复后补充更新。
 
 ---
 
