@@ -771,7 +771,7 @@ func TestEmitOutputEvent_DisableEventInjectionWithTrace(t *testing.T) {
 	require.Greater(t, stub.debugfCalls, 0)
 	sent := <-ch
 	require.Equal(t, "trace-disabled", sent.ID)
-	require.Empty(t, sent.InvocationID)
+	require.Equal(t, inv.InvocationID, sent.InvocationID)
 	require.Empty(t, sent.ParentInvocationID)
 	require.Empty(t, sent.Branch)
 	require.Empty(t, sent.FilterKey)
@@ -806,7 +806,7 @@ func TestEmitOutputEvent_DisableEventInjectionFastPath(t *testing.T) {
 	require.NoError(t, err)
 	sent := <-ch
 	require.Equal(t, "event-output-fast-path", sent.ID)
-	require.Empty(t, sent.InvocationID)
+	require.Equal(t, inv.InvocationID, sent.InvocationID)
 	require.Empty(t, sent.ParentInvocationID)
 	require.Empty(t, sent.Branch)
 	require.Empty(t, sent.FilterKey)
@@ -841,7 +841,7 @@ func TestEmitOutputEvent_DisableEventInjectionDoesNotMutateInput(t *testing.T) {
 	require.NoError(t, err)
 	sent := <-ch
 	require.NotSame(t, evt, sent)
-	require.Empty(t, sent.InvocationID)
+	require.Equal(t, inv.InvocationID, sent.InvocationID)
 	require.Empty(t, sent.ParentInvocationID)
 	require.Empty(t, sent.Branch)
 	require.Empty(t, sent.FilterKey)

@@ -1333,7 +1333,7 @@ func TestRunRunOptionResolverOptions(t *testing.T) {
 	assert.Equal(t, 1, underlying.calls)
 }
 
-func TestRunRunOptionResolverDisableEventInjectionIsOverridden(t *testing.T) {
+func TestRunRunOptionResolverDisableEventInjectionIsPassedThrough(t *testing.T) {
 	fakeTrans := &fakeTranslator{}
 	underlying := &fakeRunner{}
 	underlying.run = func(ctx context.Context,
@@ -1344,7 +1344,7 @@ func TestRunRunOptionResolverDisableEventInjectionIsOverridden(t *testing.T) {
 		for _, opt := range opts {
 			opt(&runOpts)
 		}
-		assert.False(t, runOpts.DisableEventInjection)
+		assert.True(t, runOpts.DisableEventInjection)
 		ch := make(chan *agentevent.Event)
 		go func() {
 			close(ch)

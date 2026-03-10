@@ -325,7 +325,7 @@ func TestRunner_Run_WithDisableEventInjectionPreservesPersistedMetadata(t *testi
 	require.Len(t, events, 2)
 	for _, evt := range events {
 		require.NotNil(t, evt)
-		require.Empty(t, evt.InvocationID)
+		require.NotEmpty(t, evt.InvocationID)
 		require.Empty(t, evt.ParentInvocationID)
 		require.Empty(t, evt.Branch)
 		require.Empty(t, evt.FilterKey)
@@ -2868,13 +2868,14 @@ func TestRunner_ManagedRunner_DisableEventInjectionPreservesGeneratedRequestID(t
 	}
 	require.NotNil(t, first)
 	require.NotEmpty(t, first.RequestID)
-	require.Empty(t, first.InvocationID)
+	require.NotEmpty(t, first.InvocationID)
 	require.Empty(t, first.ParentInvocationID)
 	require.Empty(t, first.Branch)
 	require.Empty(t, first.FilterKey)
 	status, ok := mr.RunStatus(first.RequestID)
 	require.True(t, ok)
 	require.Equal(t, first.RequestID, status.RequestID)
+	require.Equal(t, first.InvocationID, status.InvocationID)
 	require.NotEmpty(t, status.InvocationID)
 	require.True(t, mr.Cancel(first.RequestID))
 	select {
