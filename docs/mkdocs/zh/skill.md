@@ -15,12 +15,13 @@ Agent Skills 把可复用的任务封装为“技能目录”，用 `SKILL.md`
 
 ### 🎯 能力一览
 
+- 🧭 内置两种工具档位：`full`（默认）与 `knowledge_only`
 - 🔎 自动注入技能“概览”（名称与描述），引导模型选择
 - 📥 `skill_load` 按需注入 `SKILL.md` 正文与选定文档
 - 📚 `skill_select_docs` 增/改/清除文档选择
 - 🧾 `skill_list_docs` 列出可用文档
-- 🏃 `skill_run` 在工作区执行命令，返回 stdout/stderr 与输出文件
-- ⌨️ `skill_exec` 与 session 工具处理交互式 stdin/TTY 流程
+- 🏃 `skill_run` 在 `full` 档位下于工作区执行命令，返回 stdout/stderr 与输出文件
+- ⌨️ `skill_exec` 与 session 工具在 `full` 档位下处理交互式 stdin/TTY 流程
 - 🗂️ 按通配符收集输出文件并回传内容与 MIME 类型
 - 🧩 可选择本地或容器工作区执行器（默认本地）
 - 🧱 支持声明式 `inputs`/`outputs`：映射输入、
@@ -205,8 +206,7 @@ export SKILLS_ROOT=/path/to/skills
 
 ### 2) 启用 Skills
 
-在 `LLMAgent` 里提供技能仓库与执行器。未显式指定时，默认使用
-本地执行器（更易于本机开发）。
+在 `LLMAgent` 里提供技能仓库即可。
 
 ```go
 import (
@@ -228,13 +228,31 @@ agent := llmagent.New(
 )
 ```
 
+仅知识注入模式：
+
+```go
+agent := llmagent.New(
+    "skills-assistant",
+    llmagent.WithSkills(repo),
+    llmagent.WithSkillToolProfile(
+        llmagent.SkillToolProfileKnowledgeOnly,
+    ),
+)
+```
+
 要点：
 - 请求处理器注入概览与按需内容：
   [internal/flow/processor/skills.go]
   (https://github.com/trpc-group/trpc-agent-go/blob/main/internal/flow/processor/skills.go)
-- 工具自动注册：开启 `WithSkills` 后，`skill_load`、
-  `skill_select_docs`、`skill_list_docs` 与 `skill_run`
-  会自动出现在工具列表中，无需手动添加。
+- `WithSkills` 会自动注册内置 skill 工具，无需手动添加。
+  - 默认 `full` 档位：`skill_load`、`skill_select_docs`、
+    `skill_list_docs`、`skill_run`、`skill_exec`、
+    `skill_write_stdin`、`skill_poll_session`、`skill_kill_session`。
+  - `knowledge_only` 档位：只注册 `skill_load`、
+    `skill_select_docs` 与 `skill_list_docs`。
+  - 执行器是否需要，也取决于档位：
+    `full` 通常还需要 `WithCodeExecutor(...)`；
+    `knowledge_only` 则不需要。
 - 注意：当你同时设置了 `WithCodeExecutor` 时，LLMAgent 默认会尝试执行
   模型回复里的 Markdown 围栏代码块。如果你只是为了给 `skill_run` 提供运行时，
   不希望自动执行代码块，可以加上
@@ -243,8 +261,7 @@ agent := llmagent.New(
   `Tooling and workspace guidance:` 指引文本。
   - 关闭该指引（减少提示词占用）：`llmagent.WithSkillsToolingGuidance("")`。
   - 或用自定义文本替换：`llmagent.WithSkillsToolingGuidance("...")`。
-  - 如果你关闭它，请在自己的指令里说明何时使用 `skill_load`、
-    `skill_select_docs` 和 `skill_run`。
+  - 如果你关闭它，请在自己的指令里明确当前档位下哪些 skill 工具可用。
   - 加载器： [tool/skill/load.go](https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/load.go)
   - 运行器： [tool/skill/run.go](https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/run.go)
 
@@ -276,6 +293,9 @@ GAIA 基准示例（技能 + 文件工具）：
 SkillLoadMode 演示（无需 API key）：
 [examples/skillloadmode/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillloadmode/README.md)
 
+SkillToolProfile 演示（无需 API key）：
+[examples/skilltoolprofile/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skilltoolprofile/README.md)
+
 子代理 skill 隔离演示（AgentTool + Skills）：
 [examples/skillisolation/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillisolation/README.md)
 
@@ -300,6 +320,8 @@ python3 examples/skill/scripts/download_gaia_2023_level1_validation.py --with-fi
 - 直接说明你要做什么；模型会根据概览判断是否需要某个技能。
 - 当需要时，模型会先调用 `skill_load` 注入正文/文档，再调用
   `skill_run` 执行命令并回传输出文件。
+- 在 `knowledge_only` 档位下，模型仍可加载 skill 正文/文档，但只能将其
+  作为知识与操作指引，不能执行 skill 脚本。
 
 ## `SKILL.md` 结构与示例
 
@@ -1173,7 +1195,7 @@ agent := llmagent.New(
 - 背景：
   - 工程博客：
     https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills
-  - 开源库： https://github.com/anthropics/skills
+  - 开源库：https://github.com/anthropics/skills
 - 业界实践：
   - OpenClaw：在 prompt 中要求模型用工具读取所选 skill 的 `SKILL.md`：
     https://github.com/openclaw/openclaw/blob/0cf93b8fa74566258131f9e8ca30f313aac89d26/src/agents/system-prompt.ts

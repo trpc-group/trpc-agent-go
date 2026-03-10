@@ -24,6 +24,7 @@ import (
 
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/tracetransform"
 )
 
@@ -96,7 +97,7 @@ func transformSpan(span *tracepb.Span) {
 	// Find the operation name
 	var operationName string
 	for _, attr := range span.Attributes {
-		if attr.Key == itelemetry.KeyGenAIOperationName {
+		if attr.Key == semconvtrace.KeyGenAIOperationName {
 			if attr.Value != nil && attr.Value.GetStringValue() != "" {
 				operationName = attr.Value.GetStringValue()
 				break
@@ -129,7 +130,7 @@ func transformInvokeAgent(span *tracepb.Span) {
 
 	for _, attr := range span.Attributes {
 		switch attr.Key {
-		case itelemetry.KeyGenAIInputMessages:
+		case semconvtrace.KeyGenAIInputMessages:
 			if attr.Value != nil {
 				newAttributes = append(newAttributes, &commonpb.KeyValue{
 					Key: observationInput,
@@ -139,7 +140,7 @@ func transformInvokeAgent(span *tracepb.Span) {
 				})
 			}
 			// Skip this attribute (delete it)
-		case itelemetry.KeyGenAIOutputMessages:
+		case semconvtrace.KeyGenAIOutputMessages:
 			if attr.Value != nil {
 				newAttributes = append(newAttributes, &commonpb.KeyValue{
 					Key: observationOutput,
@@ -155,9 +156,9 @@ func transformInvokeAgent(span *tracepb.Span) {
 			// InvokeAgent spans (to support Galileo); previously only Chat spans had token usage.
 			// Keeping token attributes on InvokeAgent would make Langfuse double count tokens
 			// compared to the old behavior (Chat-only token accounting).
-		case itelemetry.KeyGenAIUsageInputTokens, itelemetry.KeyGenAIUsageOutputTokens,
-			itelemetry.KeyGenAIUsageInputTokensCached, itelemetry.KeyGenAIUsageInputTokensCacheRead,
-			itelemetry.KeyGenAIUsageInputTokensCacheCreation:
+		case semconvtrace.KeyGenAIUsageInputTokens, semconvtrace.KeyGenAIUsageOutputTokens,
+			semconvtrace.KeyGenAIUsageInputTokensCached, semconvtrace.KeyGenAIUsageInputTokensCacheRead,
+			semconvtrace.KeyGenAIUsageInputTokensCacheCreation:
 		default:
 			newAttributes = append(newAttributes, attr)
 		}
@@ -214,27 +215,27 @@ func collectLLMSpanAttributes(attrs []*commonpb.KeyValue) llmSpanCollected {
 	var c llmSpanCollected
 	for _, attr := range attrs {
 		switch attr.Key {
-		case itelemetry.KeyGenAIConversationID, itelemetry.KeyRunnerSessionID, traceSessionID:
+		case semconvtrace.KeyGenAIConversationID, semconvtrace.KeyRunnerSessionID, traceSessionID:
 			c.sessionID = attr.Value
-		case itelemetry.KeyRunnerUserID:
+		case semconvtrace.KeyRunnerUserID:
 			c.attrs = append(c.attrs, &commonpb.KeyValue{Key: traceUserID, Value: attr.Value})
-		case itelemetry.KeyLLMRequest:
+		case semconvtrace.KeyLLMRequest:
 			c.llmRequest = getStringPtr(attr.Value)
-		case itelemetry.KeyGenAIInputMessages:
+		case semconvtrace.KeyGenAIInputMessages:
 			c.inputMessages = getStringPtr(attr.Value)
-		case itelemetry.KeyGenAIRequestToolDefinitions:
+		case semconvtrace.KeyGenAIRequestToolDefinitions:
 			c.toolDefinitions = getStringPtr(attr.Value)
-		case itelemetry.KeyLLMResponse:
+		case semconvtrace.KeyLLMResponse:
 			c.attrs = append(c.attrs, stringKV(observationOutput, truncateObservationLLMResponse(stringValueOrNA(attr.Value))))
-		case itelemetry.KeyGenAIUsageInputTokens:
+		case semconvtrace.KeyGenAIUsageInputTokens:
 			c.usage.Input = attr.Value.GetIntValue()
-		case itelemetry.KeyGenAIUsageOutputTokens:
+		case semconvtrace.KeyGenAIUsageOutputTokens:
 			c.usage.Output = attr.Value.GetIntValue()
-		case itelemetry.KeyGenAIUsageInputTokensCached:
+		case semconvtrace.KeyGenAIUsageInputTokensCached:
 			c.usage.InputCached = attr.Value.GetIntValue()
-		case itelemetry.KeyGenAIUsageInputTokensCacheRead:
+		case semconvtrace.KeyGenAIUsageInputTokensCacheRead:
 			c.usage.InputCacheRead = attr.Value.GetIntValue()
-		case itelemetry.KeyGenAIUsageInputTokensCacheCreation:
+		case semconvtrace.KeyGenAIUsageInputTokensCacheCreation:
 			c.usage.InputCacheCreation = attr.Value.GetIntValue()
 		default:
 			c.attrs = append(c.attrs, attr)
@@ -563,11 +564,11 @@ func transformExecuteTool(span *tracepb.Span) {
 	var llmSessionID *commonpb.AnyValue
 	for _, attr := range span.Attributes {
 		switch attr.Key {
-		case itelemetry.KeyGenAIConversationID, itelemetry.KeyRunnerSessionID, traceSessionID:
+		case semconvtrace.KeyGenAIConversationID, semconvtrace.KeyRunnerSessionID, traceSessionID:
 			llmSessionID = attr.Value
-		case itelemetry.KeyRunnerUserID:
+		case semconvtrace.KeyRunnerUserID:
 			newAttributes = append(newAttributes, &commonpb.KeyValue{Key: traceUserID, Value: attr.Value})
-		case itelemetry.KeyGenAIToolCallArguments:
+		case semconvtrace.KeyGenAIToolCallArguments:
 			if attr.Value != nil {
 				newAttributes = append(newAttributes, &commonpb.KeyValue{
 					Key: observationInput,
@@ -584,7 +585,7 @@ func transformExecuteTool(span *tracepb.Span) {
 				})
 			}
 			// Skip this attribute (delete it)
-		case itelemetry.KeyGenAIToolCallResult:
+		case semconvtrace.KeyGenAIToolCallResult:
 			if attr.Value != nil {
 				newAttributes = append(newAttributes, &commonpb.KeyValue{
 					Key: observationOutput,
@@ -630,11 +631,11 @@ func transformWorkflow(span *tracepb.Span) {
 	var llmSessionID *commonpb.AnyValue
 	for _, attr := range span.Attributes {
 		switch attr.Key {
-		case itelemetry.KeyGenAIConversationID, itelemetry.KeyRunnerSessionID, traceSessionID:
+		case semconvtrace.KeyGenAIConversationID, semconvtrace.KeyRunnerSessionID, traceSessionID:
 			llmSessionID = attr.Value
-		case itelemetry.KeyRunnerUserID:
+		case semconvtrace.KeyRunnerUserID:
 			newAttributes = append(newAttributes, &commonpb.KeyValue{Key: traceUserID, Value: attr.Value})
-		case itelemetry.KeyGenAIWorkflowRequest:
+		case semconvtrace.KeyGenAIWorkflowRequest:
 			if attr.Value != nil {
 				newAttributes = append(newAttributes, &commonpb.KeyValue{
 					Key: observationInput,
@@ -651,7 +652,7 @@ func transformWorkflow(span *tracepb.Span) {
 				})
 			}
 			// Skip this attribute (delete it)
-		case itelemetry.KeyGenAIWorkflowResponse:
+		case semconvtrace.KeyGenAIWorkflowResponse:
 			if attr.Value != nil {
 				newAttributes = append(newAttributes, &commonpb.KeyValue{
 					Key: observationOutput,
