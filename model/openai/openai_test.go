@@ -537,6 +537,102 @@ func TestModel_convertMessages_ReasoningContent(t *testing.T) {
 	})
 }
 
+// TestModel_convertMessages_SkipReasoningContentInHistory verifies that when
+// WithSkipReasoningContentInHistory is enabled, reasoning_content is stripped
+// from historical assistant messages and content is non-null alongside tool_calls.
+func TestModel_convertMessages_SkipReasoningContentInHistory(t *testing.T) {
+	const testReasoningContent = "step-by-step reasoning"
+
+	t.Run("skip strips reasoning_content from assistant message", func(t *testing.T) {
+		m := New("dummy-model", WithSkipReasoningContentInHistory(true))
+		msgs := []model.Message{
+			{
+				Role:             model.RoleAssistant,
+				Content:          "The answer is 42.",
+				ReasoningContent: testReasoningContent,
+			},
+		}
+
+		converted := m.convertMessages(msgs)
+		require.Len(t, converted, 1)
+
+		data, err := json.Marshal(converted[0].OfAssistant)
+		require.NoError(t, err)
+
+		var parsed map[string]any
+		err = json.Unmarshal(data, &parsed)
+		require.NoError(t, err)
+
+		_, ok := parsed[model.ReasoningContentKey]
+		assert.False(t, ok, "reasoning_content should be stripped when SkipReasoningContentInHistory=true")
+	})
+
+	t.Run("skip fills empty content alongside tool_calls", func(t *testing.T) {
+		m := New("dummy-model", WithSkipReasoningContentInHistory(true))
+		msgs := []model.Message{
+			{
+				Role:             model.RoleAssistant,
+				Content:          "",
+				ReasoningContent: testReasoningContent,
+				ToolCalls: []model.ToolCall{
+					{
+						ID:   "call-1",
+						Type: "function",
+						Function: model.FunctionDefinitionParam{
+							Name:      "calc",
+							Arguments: []byte(`{"x":1}`),
+						},
+					},
+				},
+			},
+		}
+
+		converted := m.convertMessages(msgs)
+		require.Len(t, converted, 1)
+
+		data, err := json.Marshal(converted[0].OfAssistant)
+		require.NoError(t, err)
+
+		var parsed map[string]any
+		err = json.Unmarshal(data, &parsed)
+		require.NoError(t, err)
+
+		// reasoning_content should be stripped
+		_, ok := parsed[model.ReasoningContentKey]
+		assert.False(t, ok, "reasoning_content should be stripped")
+
+		// content should be empty string (not null) alongside tool_calls
+		contentVal, exists := parsed["content"]
+		assert.True(t, exists, "content field should exist")
+		assert.Equal(t, "", contentVal, "content should be empty string, not null")
+	})
+
+	t.Run("disabled: reasoning_content is preserved", func(t *testing.T) {
+		m := New("dummy-model", WithSkipReasoningContentInHistory(false))
+		msgs := []model.Message{
+			{
+				Role:             model.RoleAssistant,
+				Content:          "answer",
+				ReasoningContent: testReasoningContent,
+			},
+		}
+
+		converted := m.convertMessages(msgs)
+		require.Len(t, converted, 1)
+
+		data, err := json.Marshal(converted[0].OfAssistant)
+		require.NoError(t, err)
+
+		var parsed map[string]any
+		err = json.Unmarshal(data, &parsed)
+		require.NoError(t, err)
+
+		reasoningVal, ok := parsed[model.ReasoningContentKey]
+		require.True(t, ok, "reasoning_content should be present when skip=false")
+		assert.Equal(t, testReasoningContent, reasoningVal)
+	})
+}
+
 // TestModel_convertTools ensures that tool declarations are mapped to the
 // expected OpenAI function definitions.
 func TestModel_convertTools(t *testing.T) {
