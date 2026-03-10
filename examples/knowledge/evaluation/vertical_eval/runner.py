@@ -70,6 +70,9 @@ class GoServiceManager:
         self._log_file = open(log_path, "w", encoding="utf-8")
         print(f"  Go service log: {log_path}")
 
+        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit
+        # cmd is a list (no shell=True), and all elements come from internal
+        # ExperimentConfig dataclass — not from external/user input.
         self.process = subprocess.Popen(
             cmd,
             cwd=GO_SERVICE_DIR,
