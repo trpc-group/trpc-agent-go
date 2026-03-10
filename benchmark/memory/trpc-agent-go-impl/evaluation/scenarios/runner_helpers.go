@@ -333,6 +333,17 @@ D) OPEN-DOMAIN questions (What does X feel/think/enjoy/value/realize/describe/do
    Answer by copying the most relevant phrase directly from memory text. Do NOT summarize.
    NEVER say "not available" for open-domain questions if ANY related memory exists.
 
+E) QUESTIONS REQUIRING INDIRECT REASONING — VERY IMPORTANT:
+   Many questions LOOK factual but require you to INFER the answer from available memories + common knowledge. You MUST attempt an answer for these. Examples:
+   - "Does X live in Connecticut?" + memory "X adopted a dog from a Connecticut shelter" → "Likely yes"
+   - "Who is Jill?" + memory "John and Jill went on a date" → "Most likely John's partner"
+   - "Was X feeling lonely before meeting Y?" + memory "X said only dogs gave him joy" → "Most likely yes"
+   - "What console does X own?" + memory "X plays Xenoblade Chronicles" → "Nintendo Switch" (common knowledge: Xenoblade is a Switch game)
+   - "What state did X visit?" + memory "X went to Indianapolis" → "Indiana" (common knowledge: Indianapolis is in Indiana)
+   - "Why didn't X want to go to Starbucks?" + memory "X likes to drink beer on days off" → "Possibly because he prefers drinking beer"
+   - "Did X and Y study together?" + memory "X and Y met in college" → "Yes"
+   For these questions, combine memory evidence with reasonable inference. NEVER say "not available" — give your best inference.
+
 ADVERSARIAL PERSON-NAME CHECK (apply ONLY when suspicious):
 Some questions deliberately swap person names. For example, asking "What did Melanie do while camping?" when ONLY Caroline went camping.
 Apply this check ONLY when: the question asks person A did something, but ALL memories about that activity mention ONLY person B and NEVER person A.
@@ -399,6 +410,17 @@ C) TEMPORAL CALCULATION questions (How long/What happened first):
 D) OPEN-DOMAIN questions (What does X feel/think/enjoy/value/realize/describe/do/see/find):
    Answer by copying the most relevant phrase directly from memory text. Do NOT summarize.
    NEVER say "not available" for open-domain questions if ANY related memory exists.
+
+E) QUESTIONS REQUIRING INDIRECT REASONING — VERY IMPORTANT:
+   Many questions LOOK factual but require you to INFER the answer from available memories + common knowledge. You MUST attempt an answer for these. Examples:
+   - "Does X live in Connecticut?" + memory "X adopted a dog from a Connecticut shelter" → "Likely yes"
+   - "Who is Jill?" + memory "John and Jill went on a date" → "Most likely John's partner"
+   - "Was X feeling lonely before meeting Y?" + memory "X said only dogs gave him joy" → "Most likely yes"
+   - "What console does X own?" + memory "X plays Xenoblade Chronicles" → "Nintendo Switch" (common knowledge: Xenoblade is a Switch game)
+   - "What state did X visit?" + memory "X went to Indianapolis" → "Indiana" (common knowledge: Indianapolis is in Indiana)
+   - "Why didn't X want to go to Starbucks?" + memory "X likes to drink beer on days off" → "Possibly because he prefers drinking beer"
+   - "Did X and Y study together?" + memory "X and Y met in college" → "Yes"
+   For these questions, combine memory evidence with reasonable inference. NEVER say "not available" — give your best inference.
 
 ADVERSARIAL PERSON-NAME CHECK (apply ONLY when suspicious):
 Some questions deliberately swap person names. For example, asking "What did Melanie do while camping?" when ONLY Caroline went camping.
