@@ -1374,6 +1374,7 @@ func createGAIAAgent() agent.Agent {
 		llmagent.WithGenerationConfig(generationConfig),
 		llmagent.WithInstruction(SystemPrompt),
 		llmagent.WithPlanner(react.New()),
+		llmagent.WithEnableCodeExecutionResponseProcessor(false),
 	}
 	if os.Getenv(envGAIADebugModel) != "" {
 		agentOpts = append(

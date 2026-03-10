@@ -120,6 +120,7 @@ func run() error {
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithSkills(repo),
 		llmagent.WithCodeExecutor(exec),
+		llmagent.WithEnableCodeExecutionResponseProcessor(false),
 		llmagent.WithTools([]tool.Tool{&setOutputSchemaTool{}}),
 		// Key point: install OutputResponseProcessor without a static schema.
 		llmagent.WithOutputKey(outputKey),

@@ -329,6 +329,7 @@ func buildAgentOptions(
 		llmagent.WithGenerationConfig(gen),
 		llmagent.WithSkills(repo),
 		llmagent.WithCodeExecutor(exec),
+		llmagent.WithEnableCodeExecutionResponseProcessor(false),
 		llmagent.WithToolCallbacks(buildToolCallbacks()),
 	}
 	if !*flagSkillsGuidance {

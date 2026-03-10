@@ -73,6 +73,7 @@ func main() {
 		childAgentName,
 		llmagent.WithModel(mdl),
 		llmagent.WithSkills(repo),
+		llmagent.WithEnableCodeExecutionResponseProcessor(false),
 		llmagent.WithInstruction(childInstruction()),
 		llmagent.WithInputSchema(agentToolInputSchema()),
 		llmagent.WithGenerationConfig(model.GenerationConfig{
@@ -85,6 +86,7 @@ func main() {
 		coordinatorAgentName,
 		llmagent.WithModel(mdl),
 		llmagent.WithSkills(repo),
+		llmagent.WithEnableCodeExecutionResponseProcessor(false),
 		llmagent.WithTools([]tool.Tool{childTool}),
 		llmagent.WithInstruction(coordinatorInstruction()),
 		llmagent.WithInputSchema(agentToolInputSchema()),
