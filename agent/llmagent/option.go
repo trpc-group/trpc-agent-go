@@ -17,6 +17,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent/internal/jsonschema"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -356,10 +357,10 @@ type SkillToolProfile string
 const (
 	// SkillToolProfileFull keeps the existing behavior and registers the full
 	// built-in skill tool suite, including execution tools.
-	SkillToolProfileFull SkillToolProfile = "full"
+	SkillToolProfileFull SkillToolProfile = skillprofile.Full
 	// SkillToolProfileKnowledgeOnly registers only progressive-disclosure skill
 	// tools used for knowledge injection. No execution tools are exposed.
-	SkillToolProfileKnowledgeOnly SkillToolProfile = "knowledge_only"
+	SkillToolProfileKnowledgeOnly SkillToolProfile = skillprofile.KnowledgeOnly
 )
 
 // WithModel sets the model to use.

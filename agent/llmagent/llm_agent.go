@@ -15,7 +15,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"strings"
 	"sync"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -29,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
@@ -44,50 +44,6 @@ import (
 // no explicit executor is provided.
 func defaultCodeExecutor() codeexecutor.CodeExecutor {
 	return localexec.New()
-}
-
-type skillToolFlags struct {
-	load        bool
-	selectDocs  bool
-	listDocs    bool
-	run         bool
-	exec        bool
-	writeStdin  bool
-	pollSession bool
-	killSession bool
-}
-
-func normalizeSkillToolProfile(profile string) string {
-	switch SkillToolProfile(strings.ToLower(strings.TrimSpace(profile))) {
-	case SkillToolProfileKnowledgeOnly:
-		return string(SkillToolProfileKnowledgeOnly)
-	case SkillToolProfileFull, "":
-		return string(SkillToolProfileFull)
-	default:
-		return string(SkillToolProfileFull)
-	}
-}
-
-func resolveSkillToolFlags(profile string) skillToolFlags {
-	switch normalizeSkillToolProfile(profile) {
-	case string(SkillToolProfileKnowledgeOnly):
-		return skillToolFlags{
-			load:       true,
-			selectDocs: true,
-			listDocs:   true,
-		}
-	default:
-		return skillToolFlags{
-			load:        true,
-			selectDocs:  true,
-			listDocs:    true,
-			run:         true,
-			exec:        true,
-			writeStdin:  true,
-			pollSession: true,
-			killSession: true,
-		}
-	}
 }
 
 // LLMAgent is an agent that uses an LLM to generate responses.
@@ -305,7 +261,7 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 			skillsOpts,
 			processor.WithSkillLoadMode(options.SkillLoadMode),
 			processor.WithSkillToolProfile(
-				normalizeSkillToolProfile(options.skillToolProfile),
+				skillprofile.Normalize(options.skillToolProfile),
 			),
 		)
 		if options.MaxLoadedSkills > 0 {
@@ -552,54 +508,54 @@ func appendSkillTools(
 		return allTools
 	}
 
-	skillFlags := resolveSkillToolFlags(options.skillToolProfile)
-	if skillFlags.load {
+	skillFlags := skillprofile.ResolveFlags(options.skillToolProfile)
+	if skillFlags.Load {
 		allTools = append(
 			allTools,
 			toolskill.NewLoadTool(options.skillsRepository),
 		)
 	}
-	if skillFlags.selectDocs {
+	if skillFlags.SelectDocs {
 		allTools = append(
 			allTools,
 			toolskill.NewSelectDocsTool(options.skillsRepository),
 		)
 	}
-	if skillFlags.listDocs {
+	if skillFlags.ListDocs {
 		allTools = append(
 			allTools,
 			toolskill.NewListDocsTool(options.skillsRepository),
 		)
 	}
-	if !skillFlags.requiresExecutionTools() {
+	if !skillFlags.RequiresExecutionTools() {
 		return allTools
 	}
 
 	runTool := buildSkillRunTool(options)
-	if skillFlags.run {
+	if skillFlags.Run {
 		allTools = append(allTools, runTool)
 	}
-	if !skillFlags.requiresExecSessionTools() {
+	if !skillFlags.RequiresExecSessionTools() {
 		return allTools
 	}
 
 	execTool := toolskill.NewExecTool(runTool)
-	if skillFlags.exec {
+	if skillFlags.Exec {
 		allTools = append(allTools, execTool)
 	}
-	if skillFlags.writeStdin {
+	if skillFlags.WriteStdin {
 		allTools = append(
 			allTools,
 			toolskill.NewWriteStdinTool(execTool),
 		)
 	}
-	if skillFlags.pollSession {
+	if skillFlags.PollSession {
 		allTools = append(
 			allTools,
 			toolskill.NewPollSessionTool(execTool),
 		)
 	}
-	if skillFlags.killSession {
+	if skillFlags.KillSession {
 		allTools = append(
 			allTools,
 			toolskill.NewKillSessionTool(execTool),
@@ -646,14 +602,6 @@ func buildSkillRunTool(options *Options) *toolskill.RunTool {
 		exec,
 		runOpts...,
 	)
-}
-
-func (f skillToolFlags) requiresExecutionTools() bool {
-	return f.run || f.exec || f.writeStdin || f.pollSession || f.killSession
-}
-
-func (f skillToolFlags) requiresExecSessionTools() bool {
-	return f.exec || f.writeStdin || f.pollSession || f.killSession
 }
 
 // Run implements the agent.Agent interface.

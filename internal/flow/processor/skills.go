@@ -19,6 +19,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
@@ -43,9 +44,6 @@ const (
 	SkillLoadModeSession = "session"
 
 	defaultSkillLoadMode = SkillLoadModeTurn
-
-	skillToolProfileFull          = "full"
-	skillToolProfileKnowledgeOnly = "knowledge_only"
 )
 
 type skillsRequestProcessorOptions struct {
@@ -168,18 +166,7 @@ func NewSkillsRequestProcessor(
 		loadMode:        normalizeSkillLoadMode(options.loadMode),
 		toolResultMode:  options.toolResultMode,
 		maxLoadedSkills: options.maxLoadedSkills,
-		toolProfile:     normalizeSkillToolProfile(options.toolProfile),
-	}
-}
-
-func normalizeSkillToolProfile(profile string) string {
-	switch strings.ToLower(strings.TrimSpace(profile)) {
-	case skillToolProfileKnowledgeOnly:
-		return skillToolProfileKnowledgeOnly
-	case "", skillToolProfileFull:
-		return skillToolProfileFull
-	default:
-		return skillToolProfileFull
+		toolProfile:     skillprofile.Normalize(options.toolProfile),
 	}
 }
 
@@ -601,7 +588,7 @@ func (p *SkillsRequestProcessor) toolingGuidanceText() string {
 }
 
 func (p *SkillsRequestProcessor) capabilityGuidanceText() string {
-	if p.toolProfile != skillToolProfileKnowledgeOnly {
+	if !skillprofile.IsKnowledgeOnly(p.toolProfile) {
 		return ""
 	}
 	if p.toolingGuidance != nil && *p.toolingGuidance == "" {
@@ -611,11 +598,10 @@ func (p *SkillsRequestProcessor) capabilityGuidanceText() string {
 	b.WriteString("\n")
 	b.WriteString(skillsCapabilityHeader)
 	b.WriteString("\n")
-	b.WriteString("- Registered skill tools: ")
-	b.WriteString("skill_load, skill_list_docs, skill_select_docs.\n")
-	b.WriteString("- Unavailable skill tools: ")
-	b.WriteString("skill_run, skill_exec, skill_write_stdin, ")
-	b.WriteString("skill_poll_session, skill_kill_session.\n")
+	b.WriteString("- This profile supports skill discovery and knowledge ")
+	b.WriteString("loading only.\n")
+	b.WriteString("- Execution-oriented skill tools are unavailable in ")
+	b.WriteString("the current mode.\n")
 	b.WriteString("- If a loaded skill describes scripts, shell commands, ")
 	b.WriteString("workspace paths, generated files, or interactive flows, ")
 	b.WriteString("treat that content as reference only. Use other ")
@@ -625,7 +611,7 @@ func (p *SkillsRequestProcessor) capabilityGuidanceText() string {
 }
 
 func defaultToolingAndWorkspaceGuidance(profile string) string {
-	if profile == skillToolProfileKnowledgeOnly {
+	if skillprofile.IsKnowledgeOnly(profile) {
 		return defaultKnowledgeOnlyGuidance()
 	}
 	return defaultFullToolingAndWorkspaceGuidance()
@@ -637,9 +623,8 @@ func defaultKnowledgeOnlyGuidance() string {
 	b.WriteString(skillsToolingGuidanceHeader)
 	b.WriteString("\n")
 	b.WriteString("- Use skills for progressive disclosure only: load ")
-	b.WriteString("SKILL.md first, then list/select docs as needed.\n")
-	b.WriteString("- Prefer skill_list_docs + skill_select_docs to load ")
-	b.WriteString("only the docs needed for the current task.\n")
+	b.WriteString("SKILL.md first, then inspect only the documentation ")
+	b.WriteString("needed for the current task.\n")
 	b.WriteString("- Avoid include_all_docs unless the user asks or the ")
 	b.WriteString("task genuinely needs the full doc set.\n")
 	b.WriteString("- Treat loaded skill content as domain guidance. Do ")

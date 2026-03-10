@@ -353,8 +353,8 @@ func TestLLMAgent_WithSkillToolProfile_KnowledgeOnly_WiresPrompt(
 	}
 	require.NotEmpty(t, sys)
 	require.Contains(t, sys, skillsCapabilityHeader)
-	require.Contains(t, sys, "skill_load, skill_list_docs, skill_select_docs")
-	require.Contains(t, sys, "skill_run, skill_exec")
+	require.Contains(t, sys, "skill discovery and knowledge loading only")
+	require.Contains(t, sys, "Execution-oriented skill tools are unavailable")
 	require.Contains(t, sys, skillsToolingGuidanceHeader)
 	require.NotContains(t, sys, "skill_run runs with CWD")
 }
