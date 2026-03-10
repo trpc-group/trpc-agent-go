@@ -3,6 +3,9 @@
 This example demonstrates:
 
 - Using Agent Skills (`skill_load` / `skill_run`)
+- Setting `llmagent.WithEnableCodeExecutionResponseProcessor(false)` so
+  fenced code blocks in assistant text do not auto-execute while
+  `skill_run` is enabled
 - Returning a **typed** final answer via `WithStructuredOutputJSON`
 
 The key idea is:
