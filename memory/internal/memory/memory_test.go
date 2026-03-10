@@ -178,6 +178,60 @@ func TestBuildSearchTokens_Performance(t *testing.T) {
 	}
 }
 
+func TestApplyMetadata(t *testing.T) {
+	now := time.Date(2024, 5, 7, 9, 0, 0, 0, time.UTC)
+
+	t.Run("nil inputs are ignored", func(t *testing.T) {
+		mem := &memory.Memory{
+			Memory: "keep me unchanged",
+			Kind:   memory.MemoryKindFact,
+		}
+
+		ApplyMetadata(nil, &memory.Metadata{Kind: memory.MemoryKindEpisode})
+		ApplyMetadata(mem, nil)
+
+		assert.Equal(t, memory.MemoryKindFact, mem.Kind)
+		assert.Nil(t, mem.EventTime)
+		assert.Empty(t, mem.Participants)
+		assert.Empty(t, mem.Location)
+	})
+
+	t.Run("episode metadata is applied", func(t *testing.T) {
+		mem := &memory.Memory{Memory: "trip"}
+		meta := &memory.Metadata{
+			Kind:         memory.MemoryKindEpisode,
+			EventTime:    &now,
+			Participants: []string{"Alice", "Bob"},
+			Location:     "Kyoto",
+		}
+
+		ApplyMetadata(mem, meta)
+
+		assert.Equal(t, memory.MemoryKindEpisode, mem.Kind)
+		require.NotNil(t, mem.EventTime)
+		assert.Equal(t, now, *mem.EventTime)
+		assert.Equal(t, []string{"Alice", "Bob"}, mem.Participants)
+		assert.Equal(t, "Kyoto", mem.Location)
+	})
+
+	t.Run("empty kind keeps the original kind", func(t *testing.T) {
+		mem := &memory.Memory{Memory: "profile", Kind: memory.MemoryKindFact}
+		meta := &memory.Metadata{
+			EventTime:    &now,
+			Participants: []string{"Alice"},
+			Location:     "Tokyo",
+		}
+
+		ApplyMetadata(mem, meta)
+
+		assert.Equal(t, memory.MemoryKindFact, mem.Kind)
+		require.NotNil(t, mem.EventTime)
+		assert.Equal(t, now, *mem.EventTime)
+		assert.Equal(t, []string{"Alice"}, mem.Participants)
+		assert.Equal(t, "Tokyo", mem.Location)
+	})
+}
+
 func TestMatchMemoryEntry(t *testing.T) {
 	now := time.Now()
 	entry := &memory.Entry{

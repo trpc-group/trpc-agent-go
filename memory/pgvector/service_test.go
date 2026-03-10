@@ -18,6 +18,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/lib/pq"
+	pg "github.com/pgvector/pgvector-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -440,6 +441,22 @@ func TestWithMemoryJobTimeout(t *testing.T) {
 	timeout := 5 * time.Minute
 	WithMemoryJobTimeout(timeout)(&opts)
 	assert.Equal(t, timeout, opts.memoryJobTimeout)
+}
+
+func TestWithSimilarityThreshold(t *testing.T) {
+	opts := ServiceOpts{}
+
+	WithSimilarityThreshold(0.42)(&opts)
+	assert.InDelta(t, 0.42, opts.similarityThreshold, 0.0001)
+
+	WithSimilarityThreshold(-0.1)(&opts)
+	assert.InDelta(t, 0.42, opts.similarityThreshold, 0.0001)
+
+	WithSimilarityThreshold(1.1)(&opts)
+	assert.InDelta(t, 0.42, opts.similarityThreshold, 0.0001)
+
+	WithSimilarityThreshold(0)(&opts)
+	assert.Zero(t, opts.similarityThreshold)
 }
 
 // NewService tests.
@@ -1471,6 +1488,114 @@ func TestService_InitDB_HNSWIndexError(t *testing.T) {
 	assert.Contains(t, err.Error(), "create HNSW index")
 }
 
+func TestService_InitDB_Success(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	mock.ExpectExec("CREATE EXTENSION IF NOT EXISTS vector").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery("SELECT has_schema_privilege").
+		WithArgs("public").
+		WillReturnRows(sqlmock.NewRows([]string{"has_schema_privilege"}).AddRow(true))
+	mock.ExpectExec("CREATE TABLE IF NOT EXISTS").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	for i := 0; i < 4; i++ {
+		mock.ExpectExec("ALTER TABLE").
+			WillReturnResult(sqlmock.NewResult(0, 0))
+	}
+	for i := 0; i < 6; i++ {
+		mock.ExpectExec("CREATE INDEX IF NOT EXISTS").
+			WillReturnResult(sqlmock.NewResult(0, 0))
+	}
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("ALTER TABLE .* ADD COLUMN IF NOT EXISTS search_vector").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE OR REPLACE FUNCTION .*_search_vector_update\\(\\) RETURNS trigger AS").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("DROP TRIGGER IF EXISTS tsvector_update ON .*").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("UPDATE .* SET search_vector = to_tsvector").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectClose()
+
+	originalBuilder := storage.GetClientBuilder()
+	client := &testClient{db: db}
+	storage.SetClientBuilder(
+		func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+			return client, nil
+		},
+	)
+	t.Cleanup(func() {
+		storage.SetClientBuilder(originalBuilder)
+	})
+
+	svc, err := NewService(
+		WithHost("localhost"),
+		WithEmbedder(newMockEmbedder(1536)),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, svc)
+	require.NoError(t, svc.Close())
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_InitDB_BackfillSearchVectorErrorIsNonFatal(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	mock.ExpectExec("CREATE EXTENSION IF NOT EXISTS vector").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery("SELECT has_schema_privilege").
+		WithArgs("public").
+		WillReturnRows(sqlmock.NewRows([]string{"has_schema_privilege"}).AddRow(true))
+	mock.ExpectExec("CREATE TABLE IF NOT EXISTS").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	for i := 0; i < 4; i++ {
+		mock.ExpectExec("ALTER TABLE").
+			WillReturnResult(sqlmock.NewResult(0, 0))
+	}
+	for i := 0; i < 6; i++ {
+		mock.ExpectExec("CREATE INDEX IF NOT EXISTS").
+			WillReturnResult(sqlmock.NewResult(0, 0))
+	}
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("ALTER TABLE .* ADD COLUMN IF NOT EXISTS search_vector").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE OR REPLACE FUNCTION .*_search_vector_update\\(\\) RETURNS trigger AS").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("DROP TRIGGER IF EXISTS tsvector_update ON .*").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("UPDATE .* SET search_vector = to_tsvector").
+		WillReturnError(fmt.Errorf("backfill failed"))
+	mock.ExpectClose()
+
+	originalBuilder := storage.GetClientBuilder()
+	client := &testClient{db: db}
+	storage.SetClientBuilder(
+		func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+			return client, nil
+		},
+	)
+	t.Cleanup(func() {
+		storage.SetClientBuilder(originalBuilder)
+	})
+
+	svc, err := NewService(
+		WithHost("localhost"),
+		WithEmbedder(newMockEmbedder(1536)),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, svc)
+	require.NoError(t, svc.Close())
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestService_UpdateMemory_EmbeddingError(t *testing.T) {
 	db, mock := setupMockDB(t)
 	defer db.Close()
@@ -1993,4 +2118,304 @@ func TestService_CheckDDLPrivilege_NoRows(t *testing.T) {
 
 	// Service should be created (no rows means no privilege, skips DDL).
 	assert.NotNil(t, svc)
+}
+
+func TestResolveMetadata(t *testing.T) {
+	now := time.Date(2024, 5, 7, 10, 0, 0, 0, time.UTC)
+
+	t.Run("nil metadata uses fact defaults", func(t *testing.T) {
+		got := resolveMetadata(nil)
+		assert.Equal(t, string(memory.MemoryKindFact), got.kind)
+		assert.Nil(t, got.eventTime)
+		assert.Empty(t, got.participants)
+		assert.Nil(t, got.location)
+	})
+
+	t.Run("episodic metadata is converted for SQL", func(t *testing.T) {
+		got := resolveMetadata(&memory.Metadata{
+			Kind:         memory.MemoryKindEpisode,
+			EventTime:    &now,
+			Participants: []string{"Alice", "Bob"},
+			Location:     "Kyoto",
+		})
+
+		assert.Equal(t, string(memory.MemoryKindEpisode), got.kind)
+		require.NotNil(t, got.eventTime)
+		assert.Equal(t, now, *got.eventTime)
+		assert.Equal(t, []string{"Alice", "Bob"}, got.participants)
+		require.NotNil(t, got.location)
+		assert.Equal(t, "Kyoto", *got.location)
+	})
+}
+
+func TestBuildEntry_PopulatesEpisodicFields(t *testing.T) {
+	createdAt := time.Date(2024, 5, 1, 0, 0, 0, 0, time.UTC)
+	updatedAt := time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC)
+	eventTime := time.Date(2024, 4, 30, 18, 0, 0, 0, time.UTC)
+
+	entry := buildEntry(
+		"mem-1",
+		"test-app",
+		"u1",
+		"Alice hiked in Kyoto",
+		pq.StringArray([]string{"travel"}),
+		string(memory.MemoryKindEpisode),
+		sql.NullTime{Time: eventTime, Valid: true},
+		pq.StringArray([]string{"Alice", "Bob"}),
+		sql.NullString{String: "Kyoto", Valid: true},
+		createdAt,
+		updatedAt,
+	)
+
+	assert.Equal(t, "mem-1", entry.ID)
+	assert.Equal(t, "test-app", entry.AppName)
+	assert.Equal(t, "u1", entry.UserID)
+	assert.Equal(t, "Alice hiked in Kyoto", entry.Memory.Memory)
+	assert.Equal(t, []string{"travel"}, entry.Memory.Topics)
+	assert.Equal(t, memory.MemoryKindEpisode, entry.Memory.Kind)
+	require.NotNil(t, entry.Memory.EventTime)
+	assert.Equal(t, eventTime, *entry.Memory.EventTime)
+	assert.Equal(t, []string{"Alice", "Bob"}, entry.Memory.Participants)
+	assert.Equal(t, "Kyoto", entry.Memory.Location)
+	require.NotNil(t, entry.Memory.LastUpdated)
+	assert.Equal(t, updatedAt, *entry.Memory.LastUpdated)
+	assert.Equal(t, createdAt, entry.CreatedAt)
+	assert.Equal(t, updatedAt, entry.UpdatedAt)
+}
+
+func TestExecuteVectorSearch_WithAdvancedOptions(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock,
+		WithSkipDBInit(true),
+		WithSoftDelete(true),
+	)
+	defer svc.Close()
+
+	now := time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC)
+	after := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	before := time.Date(2024, 12, 31, 0, 0, 0, 0, time.UTC)
+
+	mock.ExpectQuery("SELECT memory_id, app_name, user_id, memory_content, topics").
+		WillReturnRows(sqlmock.NewRows(
+			[]string{"memory_id", "app_name", "user_id", "memory_content", "topics",
+				"memory_kind", "event_time", "participants", "location",
+				"created_at", "updated_at", "similarity"},
+		).AddRow(
+			"mem-1", "test-app", "u1", "Alice hiked in Kyoto", pq.Array([]string{"travel"}),
+			"episode", now, pq.Array([]string{"Alice"}), "Kyoto", now, now, 0.93,
+		))
+
+	results, err := svc.executeVectorSearch(
+		context.Background(),
+		memory.UserKey{AppName: "test-app", UserID: "u1"},
+		memory.SearchOptions{
+			Kind:             memory.MemoryKindEpisode,
+			TimeAfter:        &after,
+			TimeBefore:       &before,
+			OrderByEventTime: true,
+		},
+		pg.NewVector([]float32{0.1, 0.2}),
+		5,
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, memory.MemoryKindEpisode, results[0].Memory.Kind)
+	require.NotNil(t, results[0].Memory.EventTime)
+	assert.Equal(t, now, *results[0].Memory.EventTime)
+	assert.Equal(t, []string{"Alice"}, results[0].Memory.Participants)
+	assert.Equal(t, "Kyoto", results[0].Memory.Location)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestExecuteKeywordSearch(t *testing.T) {
+	t.Run("empty query returns empty", func(t *testing.T) {
+		db, mock := setupMockDB(t)
+		defer db.Close()
+
+		svc := setupMockService(t, db, mock, WithSkipDBInit(true))
+		defer svc.Close()
+
+		results, err := svc.executeKeywordSearch(
+			context.Background(),
+			memory.UserKey{AppName: "test-app", UserID: "u1"},
+			memory.SearchOptions{Query: "   "},
+			5,
+		)
+		require.NoError(t, err)
+		assert.Empty(t, results)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("query errors are non-fatal", func(t *testing.T) {
+		db, mock := setupMockDB(t)
+		defer db.Close()
+
+		svc := setupMockService(t, db, mock, WithSkipDBInit(true))
+		defer svc.Close()
+
+		mock.ExpectQuery("SELECT memory_id, app_name, user_id, memory_content, topics").
+			WillReturnError(fmt.Errorf("tsvector search failed"))
+
+		results, err := svc.executeKeywordSearch(
+			context.Background(),
+			memory.UserKey{AppName: "test-app", UserID: "u1"},
+			memory.SearchOptions{Query: "Kyoto", HybridSearch: true},
+			5,
+		)
+		require.NoError(t, err)
+		assert.Empty(t, results)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
+func TestMergeHybridResults(t *testing.T) {
+	entry := func(id string) *memory.Entry {
+		return &memory.Entry{
+			ID:     id,
+			Memory: &memory.Memory{Memory: id},
+		}
+	}
+
+	results := mergeHybridResults(
+		[]*memory.Entry{entry("mem-1"), entry("mem-2")},
+		[]*memory.Entry{entry("mem-2"), entry("mem-3")},
+		0,
+		2,
+	)
+
+	require.Len(t, results, 2)
+	assert.Equal(t, "mem-2", results[0].ID)
+	assert.Greater(t, results[0].Score, results[1].Score)
+}
+
+func TestMergeSearchResults(t *testing.T) {
+	primary := []*memory.Entry{
+		{ID: "mem-1", Memory: &memory.Memory{Memory: "episode one", Kind: memory.MemoryKindEpisode}},
+	}
+	fallback := []*memory.Entry{
+		{ID: "mem-1", Memory: &memory.Memory{Memory: "duplicate", Kind: memory.MemoryKindEpisode}},
+		{ID: "mem-2", Memory: &memory.Memory{Memory: "episode two", Kind: memory.MemoryKindEpisode}},
+		{ID: "mem-3", Memory: &memory.Memory{Memory: "fact", Kind: memory.MemoryKindFact}},
+	}
+
+	results := mergeSearchResults(primary, fallback, memory.MemoryKindEpisode, 3)
+
+	require.Len(t, results, 3)
+	assert.Equal(t, "mem-1", results[0].ID)
+	assert.Equal(t, "mem-2", results[1].ID)
+	assert.Equal(t, "mem-3", results[2].ID)
+}
+
+func TestDeduplicateResults(t *testing.T) {
+	results := deduplicateResults([]*memory.Entry{
+		{ID: "mem-1", Score: 0.95, Memory: &memory.Memory{Memory: "Alice hiking in Kyoto"}},
+		{ID: "mem-2", Score: 0.90, Memory: &memory.Memory{Memory: "Alice hiking in Kyoto"}},
+		{ID: "mem-3", Score: 0.80, Memory: &memory.Memory{Memory: "Alice studying in Tokyo"}},
+	})
+
+	require.Len(t, results, 2)
+	assert.Equal(t, "mem-1", results[0].ID)
+	assert.Equal(t, "mem-3", results[1].ID)
+}
+
+func TestJaccardSimilarity(t *testing.T) {
+	assert.Equal(t, 1.0, jaccardSimilarity(map[string]struct{}{}, map[string]struct{}{}))
+	assert.InDelta(t, 0.333333, jaccardSimilarity(
+		map[string]struct{}{"alice": {}, "kyoto": {}},
+		map[string]struct{}{"alice": {}, "tokyo": {}},
+	), 0.0001)
+}
+
+func TestService_SearchMemories_ThresholdAndDeduplicate(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock, WithSkipDBInit(true))
+	defer svc.Close()
+
+	now := time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC)
+	mock.ExpectQuery("SELECT memory_id, app_name, user_id, memory_content, topics").
+		WillReturnRows(sqlmock.NewRows(
+			[]string{"memory_id", "app_name", "user_id", "memory_content", "topics",
+				"memory_kind", "event_time", "participants", "location",
+				"created_at", "updated_at", "similarity"},
+		).
+			AddRow("mem-1", "test-app", "u1", "Alice hiking in Kyoto", pq.Array([]string{"travel"}),
+				"episode", now, pq.Array([]string{"Alice"}), "Kyoto", now, now, 0.95).
+			AddRow("mem-2", "test-app", "u1", "Alice hiking in Kyoto", pq.Array([]string{"travel"}),
+				"episode", now, pq.Array([]string{"Alice"}), "Kyoto", now, now, 0.92).
+			AddRow("mem-3", "test-app", "u1", "Low relevance result", pq.Array([]string{"misc"}),
+				"fact", nil, pq.Array([]string{}), nil, now, now, 0.20))
+
+	results, err := svc.SearchMemories(
+		context.Background(),
+		memory.UserKey{AppName: "test-app", UserID: "u1"},
+		"Kyoto",
+		memory.WithSearchOptions(memory.SearchOptions{
+			Query:               "Kyoto",
+			HybridSearch:        false,
+			Deduplicate:         true,
+			SimilarityThreshold: 0.90,
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "mem-1", results[0].ID)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_SearchMemories_KindFallbackAndHybridSearch(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock, WithSkipDBInit(true))
+	defer svc.Close()
+
+	now := time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC)
+	rows := func() *sqlmock.Rows {
+		return sqlmock.NewRows(
+			[]string{"memory_id", "app_name", "user_id", "memory_content", "topics",
+				"memory_kind", "event_time", "participants", "location",
+				"created_at", "updated_at", "similarity"},
+		)
+	}
+
+	mock.ExpectQuery("SELECT memory_id, app_name, user_id, memory_content, topics").
+		WillReturnRows(rows().AddRow(
+			"mem-1", "test-app", "u1", "Alice hiked in Kyoto", pq.Array([]string{"travel"}),
+			"episode", now, pq.Array([]string{"Alice"}), "Kyoto", now, now, 0.95,
+		))
+	mock.ExpectQuery("SELECT memory_id, app_name, user_id, memory_content, topics").
+		WillReturnRows(rows().
+			AddRow("mem-2", "test-app", "u1", "Alice planned a Kyoto trip", pq.Array([]string{"travel"}),
+				"episode", now, pq.Array([]string{"Alice"}), "Kyoto", now, now, 0.89).
+			AddRow("mem-3", "test-app", "u1", "Alice likes coffee", pq.Array([]string{"profile"}),
+				"fact", nil, pq.Array([]string{}), nil, now, now, 0.88))
+	mock.ExpectQuery("SELECT memory_id, app_name, user_id, memory_content, topics").
+		WillReturnRows(rows().AddRow(
+			"mem-1", "test-app", "u1", "Alice hiked in Kyoto", pq.Array([]string{"travel"}),
+			"episode", now, pq.Array([]string{"Alice"}), "Kyoto", now, now, 0.50,
+		))
+
+	results, err := svc.SearchMemories(
+		context.Background(),
+		memory.UserKey{AppName: "test-app", UserID: "u1"},
+		"Kyoto",
+		memory.WithSearchOptions(memory.SearchOptions{
+			Query:        "Kyoto",
+			Kind:         memory.MemoryKindEpisode,
+			KindFallback: true,
+			HybridSearch: true,
+			MaxResults:   4,
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 3)
+	assert.Equal(t, "mem-1", results[0].ID)
+	assert.ElementsMatch(t, []string{"mem-1", "mem-2", "mem-3"}, []string{
+		results[0].ID, results[1].ID, results[2].ID,
+	})
+	require.NoError(t, mock.ExpectationsWereMet())
 }
