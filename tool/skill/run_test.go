@@ -125,6 +125,82 @@ func TestRunTool_ExecutesAndCollectsOutputFiles(t *testing.T) {
 	require.Contains(t, out.PrimaryOutput.Content, contentHi)
 }
 
+func TestRunTool_Stdin(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	rt := NewRunTool(repo, localexec.New())
+	args := runInput{
+		Skill:   testSkillName,
+		Command: "cat",
+		Stdin:   "stdin-value",
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Equal(t, "stdin-value", strings.TrimSpace(out.Stdout))
+}
+
+func TestRunTool_EditorText(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	rt := NewRunTool(repo, localexec.New())
+	args := runInput{
+		Skill: testSkillName,
+		Command: "mkdir -p out; $EDITOR out/note.txt; " +
+			"cat out/note.txt",
+		EditorText: "memo body",
+		Timeout:    timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Equal(t, "memo body", strings.TrimSpace(out.Stdout))
+}
+
+func TestRunTool_EditorText_ConflictsWithEditorEnv(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	rt := NewRunTool(repo, localexec.New())
+	args := runInput{
+		Skill:      testSkillName,
+		Command:    echoOK,
+		EditorText: "memo body",
+		Env: map[string]string{
+			envEditor: "/usr/bin/vi",
+		},
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	_, err = rt.Call(context.Background(), enc)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), envEditor)
+}
+
 func TestRunTool_FailedRun_OmitsEmptyOutputFiles(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, testSkillName)
@@ -2771,6 +2847,53 @@ func TestRunTool_StagesUserFileInputs_NoDownloader_Warn(t *testing.T) {
 	require.Contains(t, out.Warnings, userFileInputWarnNoDownloader)
 }
 
+func TestRunTool_StagesUserFileInputs_HostRef_OK(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	rt := NewRunTool(repo, localexec.New())
+
+	hostDir := t.TempDir()
+	hostPath := filepath.Join(hostDir, uploadNotesTxt)
+	require.NoError(t, os.WriteFile(
+		hostPath,
+		[]byte(contentHi),
+		0o600,
+	))
+
+	user := model.NewUserMessage("upload")
+	user.AddFileIDWithName(
+		userFileInputHostPrefix+hostPath,
+		uploadNotesTxt,
+	)
+	inv := agent.NewInvocation(agent.WithInvocationMessage(user))
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args := runInput{
+		Skill: testSkillName,
+		Command: "mkdir -p out; cat work/inputs/" +
+			uploadNotesTxt + " > " + outATxt,
+		OutputFiles: []string{outATxt},
+		Timeout:     timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(ctx, enc)
+	require.NoError(t, err)
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Len(t, out.StagedInputs, 1)
+	require.Equal(t, "work/inputs/"+uploadNotesTxt,
+		out.StagedInputs[0].Name)
+	require.Equal(t, uploadNotesTxt, out.StagedInputs[0].OriginalName)
+	require.Equal(t, int64(len(contentHi)),
+		out.StagedInputs[0].SizeBytes)
+	require.Len(t, out.OutputFiles, 1)
+	require.Contains(t, out.OutputFiles[0].Content, contentHi)
+}
+
 func TestRunTool_StagesUserFileInputs_ArtifactRef_OK(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, testSkillName)
@@ -3368,6 +3491,61 @@ func TestUserFileInputBytes(t *testing.T) {
 			f,
 		)
 		require.Equal(t, userFileInputWarnArtifactNoService, warn)
+	})
+
+	t.Run("host-ref-ok", func(t *testing.T) {
+		hostPath := filepath.Join(t.TempDir(), uploadNotesTxt)
+		require.NoError(t, os.WriteFile(
+			hostPath,
+			[]byte(contentHi),
+			0o600,
+		))
+		f := model.File{
+			FileID:   userFileInputHostPrefix + hostPath,
+			MimeType: "text/plain",
+		}
+		got, mime, warn := userFileInputBytes(
+			context.Background(),
+			nil,
+			f,
+		)
+		require.Equal(t, []byte(contentHi), got)
+		require.Equal(t, "text/plain", mime)
+		require.Empty(t, warn)
+	})
+
+	t.Run("absolute-path-ok", func(t *testing.T) {
+		hostPath := filepath.Join(t.TempDir(), uploadNotesTxt)
+		require.NoError(t, os.WriteFile(
+			hostPath,
+			[]byte(contentHi),
+			0o600,
+		))
+		f := model.File{
+			FileID:   hostPath,
+			MimeType: "text/plain",
+		}
+		got, mime, warn := userFileInputBytes(
+			context.Background(),
+			nil,
+			f,
+		)
+		require.Equal(t, []byte(contentHi), got)
+		require.Equal(t, "text/plain", mime)
+		require.Empty(t, warn)
+	})
+
+	t.Run("host-ref-read-error", func(t *testing.T) {
+		hostPath := filepath.Join(t.TempDir(), uploadNotesTxt)
+		f := model.File{
+			FileID: userFileInputHostPrefix + hostPath,
+		}
+		_, _, warn := userFileInputBytes(
+			context.Background(),
+			nil,
+			f,
+		)
+		require.Contains(t, warn, "read host path")
 	})
 
 	t.Run("artifact-invalid-ref", func(t *testing.T) {

@@ -1,0 +1,21 @@
+app_name: "openclaw-stdin"
+
+http:
+  addr: ":8080"
+
+admin:
+  enabled: true
+  addr: "127.0.0.1:19789"
+  auto_port: true
+
+agent:
+  instruction: "You are a helpful assistant for terminal chat."
+
+model:
+  mode: "mock"
+
+channels:
+  - type: "stdin"
+    name: "terminal"
+    config:
+      from: "alice"

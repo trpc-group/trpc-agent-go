@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -39,6 +40,13 @@ const (
 	ArtifactPrefix = SchemeArtifact + schemeSep
 	// WorkspacePrefix is the "workspace://" prefix.
 	WorkspacePrefix = SchemeWorkspace + schemeSep
+
+	// SchemeHost is the host:// file ref scheme used by local runtimes.
+	SchemeHost = "host"
+	// HostPrefix is the "host://" prefix.
+	HostPrefix = SchemeHost + schemeSep
+
+	filePrefix = "file://"
 )
 
 const errArtifactNameEmpty = "artifact name is empty"
@@ -112,6 +120,61 @@ func Parse(raw string) (Ref, error) {
 		)
 	}
 	return Ref{Path: s, Raw: raw}, nil
+}
+
+// IsInternalFileRef reports whether raw is an internal or local-only file ref
+// that should not be forwarded to model providers as a provider file_id.
+func IsInternalFileRef(raw string) bool {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return false
+	}
+	return strings.HasPrefix(s, ArtifactPrefix) ||
+		strings.HasPrefix(s, WorkspacePrefix) ||
+		strings.HasPrefix(s, HostPrefix) ||
+		strings.HasPrefix(s, filePrefix) ||
+		filepath.IsAbs(s)
+}
+
+// DisplayName returns a safe basename for a supported internal file ref.
+func DisplayName(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+
+	switch {
+	case strings.HasPrefix(s, ArtifactPrefix):
+		ref, err := Parse(s)
+		if err != nil {
+			return ""
+		}
+		return refBaseName(ref.ArtifactName)
+	case strings.HasPrefix(s, WorkspacePrefix):
+		ref, err := Parse(s)
+		if err != nil {
+			return ""
+		}
+		return refBaseName(ref.Path)
+	case strings.HasPrefix(s, HostPrefix):
+		return refBaseName(strings.TrimPrefix(s, HostPrefix))
+	case strings.HasPrefix(s, filePrefix):
+		return refBaseName(strings.TrimPrefix(s, filePrefix))
+	case filepath.IsAbs(s):
+		return refBaseName(s)
+	default:
+		return ""
+	}
+}
+
+func refBaseName(raw string) string {
+	base := path.Base(strings.TrimSpace(raw))
+	switch base {
+	case "", ".", "/", "..":
+		return ""
+	default:
+		return base
+	}
 }
 
 func cleanRelPath(p string) (string, error) {

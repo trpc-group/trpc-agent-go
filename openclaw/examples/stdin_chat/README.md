@@ -1,6 +1,9 @@
 # STDIN Chat (Custom OpenClaw Distribution)
 
-This example shows the *intended extension workflow* for OpenClaw in Go:
+This example shows the *intended extension workflow* for OpenClaw in Go.
+The standard `cmd/openclaw` binary now already bundles the `stdin` channel for
+local terminal chat, but this example remains useful because it also shows how
+to ship extra plugins such as `echotool` in a custom distribution.
 
 - The GitHub repo provides the reusable runtime: `openclaw/app`.
 - A downstream repo (for example, an internal distribution) builds its own

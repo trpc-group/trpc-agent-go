@@ -35,6 +35,11 @@ const (
 
 	maxReplyRunes = 4000
 
+	tgChatTypePrivate = "private"
+
+	tgChatMemberStatusKicked = "kicked"
+	tgChatMemberStatusLeft   = "left"
+
 	defaultStateRootDir = ".trpc-agent-go"
 	defaultStateAppName = "openclaw"
 
@@ -62,8 +67,22 @@ const (
 	defaultDMPolicy    = dmPolicyPairing
 	defaultGroupPolicy = groupPolicyDisabled
 
+	dmBlockCleanupNone   = "none"
+	dmBlockCleanupReset  = "reset"
+	dmBlockCleanupForget = "forget"
+
+	defaultDMBlockCleanup = dmBlockCleanupReset
+
 	defaultPairingTTL = time.Hour
+
+	defaultRegisterCommands = true
+
+	defaultMaxDownloadMiB         = 20
+	defaultMaxDownloadBytes int64 = defaultMaxDownloadMiB << 20
 )
+
+// ChannelName is the stable channel identifier used across OpenClaw.
+const ChannelName = channelID
 
 const (
 	notAllowedMessage = "You are not allowed to use this bot."
@@ -74,6 +93,8 @@ Code: %s
 
 Ask the operator to approve:
 openclaw pairing approve %s -config <CONFIG>`
+
+	errNonPositiveMaxDownloadBytes = "telegram: non-positive max download bytes"
 )
 
 type gatewayClient interface {
@@ -97,6 +118,36 @@ type botAPI interface {
 		params tgapi.SendMessageParams,
 	) (tgapi.Message, error)
 
+	AnswerCallbackQuery(
+		ctx context.Context,
+		params tgapi.AnswerCallbackQueryParams,
+	) error
+
+	SendDocument(
+		ctx context.Context,
+		params tgapi.SendFileParams,
+	) (tgapi.Message, error)
+
+	SendPhoto(
+		ctx context.Context,
+		params tgapi.SendFileParams,
+	) (tgapi.Message, error)
+
+	SendAudio(
+		ctx context.Context,
+		params tgapi.SendFileParams,
+	) (tgapi.Message, error)
+
+	SendVoice(
+		ctx context.Context,
+		params tgapi.SendFileParams,
+	) (tgapi.Message, error)
+
+	SendVideo(
+		ctx context.Context,
+		params tgapi.SendFileParams,
+	) (tgapi.Message, error)
+
 	EditMessageText(
 		ctx context.Context,
 		params tgapi.EditMessageTextParams,
@@ -106,6 +157,17 @@ type botAPI interface {
 		ctx context.Context,
 		params tgapi.SendChatActionParams,
 	) error
+
+	SetMyCommands(
+		ctx context.Context,
+		params tgapi.SetMyCommandsParams,
+	) error
+
+	DownloadFileByID(
+		ctx context.Context,
+		fileID string,
+		maxBytes int64,
+	) (tgapi.File, []byte, error)
 }
 
 // BotInfo represents Telegram bot metadata used by the channel.
@@ -164,7 +226,15 @@ type config struct {
 
 	apiOptions []tgapi.Option
 
+	maxDownloadBytes int64
+
 	streamingMode string
+
+	dmResetPolicy dmSessionResetPolicy
+
+	dmBlockCleanup string
+
+	registerCommands bool
 }
 
 // Option configures the Telegram channel.
@@ -257,9 +327,43 @@ func WithAPIOptions(opts ...tgapi.Option) Option {
 	return func(c *config) { c.apiOptions = append(c.apiOptions, opts...) }
 }
 
+// WithMaxDownloadBytes sets the per-file download limit for Telegram
+// attachments.
+func WithMaxDownloadBytes(maxBytes int64) Option {
+	return func(c *config) { c.maxDownloadBytes = maxBytes }
+}
+
 // WithStreamingMode controls how replies are delivered to Telegram.
 func WithStreamingMode(mode string) Option {
 	return func(c *config) { c.streamingMode = mode }
+}
+
+// WithDMSessionIdleReset configures an automatic reset when a DM
+// stays idle longer than the given duration.
+func WithDMSessionIdleReset(idle time.Duration) Option {
+	return func(c *config) { c.dmResetPolicy.Idle = idle }
+}
+
+// WithDMSessionDailyReset configures an automatic reset when the date
+// changes (local time).
+func WithDMSessionDailyReset(enabled bool) Option {
+	return func(c *config) { c.dmResetPolicy.Daily = enabled }
+}
+
+// WithDMBlockCleanup configures what happens when the bot is blocked.
+//
+// Supported values:
+//   - "none":  keep server state intact
+//   - "reset": rotate to a new active session
+//   - "forget": delete sessions, memories, and debug traces
+func WithDMBlockCleanup(action string) Option {
+	return func(c *config) { c.dmBlockCleanup = action }
+}
+
+// WithRegisterCommands controls whether the bot registers slash commands
+// with Telegram on startup.
+func WithRegisterCommands(enabled bool) Option {
+	return func(c *config) { c.registerCommands = enabled }
 }
 
 type pairingStore interface {
@@ -276,6 +380,15 @@ type Channel struct {
 	info  BotInfo
 	gw    gatewayClient
 	store tgapi.OffsetStore
+	state string
+
+	sentFiles *sentFileTracker
+
+	audioInputConverter audioInputConverter
+
+	dmSessions     *dmSessionStore
+	dmResetPolicy  dmSessionResetPolicy
+	dmBlockCleanup string
 
 	startFromLatest bool
 	pollTimeout     time.Duration
@@ -289,7 +402,11 @@ type Channel struct {
 
 	pairing pairingStore
 
+	maxDownloadBytes int64
+
 	streamingMode string
+
+	registerCommands bool
 
 	lanes    *laneLocker
 	inflight *inflightRequests
@@ -311,13 +428,16 @@ func New(
 	}
 
 	cfg := config{
-		startFromLatest: true,
-		pollTimeout:     25 * time.Second,
-		errorBackoff:    1 * time.Second,
-		dmPolicy:        defaultDMPolicy,
-		groupPolicy:     defaultGroupPolicy,
-		pairingTTL:      defaultPairingTTL,
-		streamingMode:   defaultStreamingMode,
+		startFromLatest:  true,
+		pollTimeout:      25 * time.Second,
+		errorBackoff:     1 * time.Second,
+		dmPolicy:         defaultDMPolicy,
+		groupPolicy:      defaultGroupPolicy,
+		pairingTTL:       defaultPairingTTL,
+		registerCommands: defaultRegisterCommands,
+		maxDownloadBytes: defaultMaxDownloadBytes,
+		streamingMode:    defaultStreamingMode,
+		dmBlockCleanup:   defaultDMBlockCleanup,
 	}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -339,8 +459,20 @@ func New(
 	if cfg.pairingTTL <= 0 {
 		return nil, errors.New("telegram: non-positive pairing ttl")
 	}
+	if cfg.maxDownloadBytes <= 0 {
+		return nil, errors.New(errNonPositiveMaxDownloadBytes)
+	}
+
+	if cfg.dmResetPolicy.Idle < 0 {
+		return nil, errors.New("telegram: negative dm reset idle")
+	}
 
 	streamingMode, err := parseStreamingMode(cfg.streamingMode)
+	if err != nil {
+		return nil, err
+	}
+
+	dmBlockCleanup, err := parseDMBlockCleanup(cfg.dmBlockCleanup)
 	if err != nil {
 		return nil, err
 	}
@@ -351,6 +483,15 @@ func New(
 	}
 
 	store, err := newOffsetStore(stateDir, bot)
+	if err != nil {
+		return nil, err
+	}
+
+	sessionsPath, err := dmSessionStorePath(stateDir, bot)
+	if err != nil {
+		return nil, err
+	}
+	dmSessions, err := newDMSessionStore(sessionsPath)
 	if err != nil {
 		return nil, err
 	}
@@ -371,21 +512,29 @@ func New(
 	}
 
 	return &Channel{
-		bot:             api,
-		info:            bot,
-		gw:              gw,
-		store:           store,
-		startFromLatest: cfg.startFromLatest,
-		pollTimeout:     cfg.pollTimeout,
-		errorBackoff:    cfg.errorBackoff,
-		dmPolicy:        dmPolicy,
-		groupPolicy:     groupPolicy,
-		allowUsers:      cfg.allowUsers,
-		allowThreads:    cfg.allowThreads,
-		pairing:         dmPairing,
-		streamingMode:   streamingMode,
-		lanes:           newLaneLocker(),
-		inflight:        newInflightRequests(),
+		bot:                 api,
+		info:                bot,
+		gw:                  gw,
+		store:               store,
+		state:               stateDir,
+		sentFiles:           newSentFileTracker(),
+		audioInputConverter: defaultAudioInputConverter,
+		dmSessions:          dmSessions,
+		dmResetPolicy:       cfg.dmResetPolicy,
+		dmBlockCleanup:      dmBlockCleanup,
+		startFromLatest:     cfg.startFromLatest,
+		pollTimeout:         cfg.pollTimeout,
+		errorBackoff:        cfg.errorBackoff,
+		dmPolicy:            dmPolicy,
+		groupPolicy:         groupPolicy,
+		allowUsers:          cfg.allowUsers,
+		allowThreads:        cfg.allowThreads,
+		pairing:             dmPairing,
+		maxDownloadBytes:    cfg.maxDownloadBytes,
+		streamingMode:       streamingMode,
+		registerCommands:    cfg.registerCommands,
+		lanes:               newLaneLocker(),
+		inflight:            newInflightRequests(),
 	}, nil
 }
 
@@ -396,6 +545,17 @@ func (c *Channel) ID() string { return channelID }
 func (c *Channel) Run(ctx context.Context) error {
 	if c == nil {
 		return errors.New("telegram: nil channel")
+	}
+
+	if err := c.registerBotCommands(ctx); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		log.WarnfContext(
+			ctx,
+			"telegram: register commands: %v",
+			err,
+		)
 	}
 
 	poller, err := tgapi.NewPoller(
@@ -422,11 +582,53 @@ func (c *Channel) Run(ctx context.Context) error {
 			}()
 			return nil
 		}),
+		tgapi.WithCallbackQueryHandler(func(
+			ctx context.Context,
+			q tgapi.CallbackQuery,
+		) error {
+			go func() {
+				if err := c.handleCallbackQuery(ctx, q); err != nil {
+					log.WarnfContext(
+						ctx,
+						"telegram: handle callback query: %v",
+						err,
+					)
+				}
+			}()
+			return nil
+		}),
+		tgapi.WithMyChatMemberHandler(func(
+			ctx context.Context,
+			ev tgapi.ChatMemberEvent,
+		) error {
+			go func() {
+				if err := c.handleMyChatMember(ctx, ev); err != nil {
+					log.WarnfContext(
+						ctx,
+						"telegram: handle my_chat_member: %v",
+						err,
+					)
+				}
+			}()
+			return nil
+		}),
 	)
 	if err != nil {
 		return err
 	}
 	return poller.Run(ctx)
+}
+
+func (c *Channel) registerBotCommands(ctx context.Context) error {
+	if c == nil || !c.registerCommands || c.bot == nil {
+		return nil
+	}
+	return c.bot.SetMyCommands(
+		ctx,
+		tgapi.SetMyCommandsParams{
+			Commands: defaultBotCommands(),
+		},
+	)
 }
 
 func (c *Channel) handleMessage(
@@ -474,11 +676,28 @@ func (c *Channel) handleMessage(
 	}
 
 	requestID := buildRequestID(chatID, messageThreadID, msg.MessageID)
-	sessionID := buildSessionID(fromID, thread)
+	laneKey := buildLaneKey(fromID, thread)
 
-	cmd := parseCommand(msg.Text, c.info)
-	if cmd != "" {
-		switch cmd {
+	sessionID := laneKey
+	if !isGroup && c.dmSessions != nil {
+		resolved, _, err := c.dmSessions.EnsureActiveSession(
+			ctx,
+			fromID,
+			laneKey,
+			c.dmResetPolicy,
+		)
+		if err != nil {
+			return err
+		}
+		sessionID = resolved
+	}
+
+	cmd := parseCommandCall(
+		joinMessageText(msg.Text, msg.Caption),
+		c.info,
+	)
+	if cmd.Name != "" {
+		switch cmd.Name {
 		case commandHelp:
 			c.reply(ctx, chatID, messageThreadID, msg.MessageID, helpMessage)
 			return nil
@@ -488,7 +707,64 @@ func (c *Channel) handleMessage(
 				chatID,
 				messageThreadID,
 				msg.MessageID,
-				sessionID,
+				laneKey,
+			)
+		case commandReset, commandNew:
+			if isGroup {
+				return nil
+			}
+			return c.handleResetCommand(
+				ctx,
+				chatID,
+				messageThreadID,
+				msg.MessageID,
+				laneKey,
+				fromID,
+			)
+		case commandForget:
+			if isGroup {
+				return nil
+			}
+			return c.handleForgetCommand(
+				ctx,
+				chatID,
+				messageThreadID,
+				msg.MessageID,
+				laneKey,
+				fromID,
+			)
+		case commandJobs:
+			return c.handleJobsCommand(
+				ctx,
+				chatID,
+				messageThreadID,
+				msg.MessageID,
+				fromID,
+			)
+		case commandJobsClear:
+			return c.handleJobsClearCommand(
+				ctx,
+				chatID,
+				messageThreadID,
+				msg.MessageID,
+				fromID,
+			)
+		case commandPersona:
+			return c.handlePersonaCommand(
+				ctx,
+				chatID,
+				messageThreadID,
+				msg.MessageID,
+				laneKey,
+				cmd.Args,
+			)
+		case commandPersonas:
+			return c.handlePersonasCommand(
+				ctx,
+				chatID,
+				messageThreadID,
+				msg.MessageID,
+				laneKey,
 			)
 		default:
 			if !isGroup {
@@ -504,9 +780,9 @@ func (c *Channel) handleMessage(
 		}
 	}
 
-	return c.lanes.withLockErr(sessionID, func() error {
-		c.inflight.Set(sessionID, requestID)
-		defer c.inflight.Clear(sessionID, requestID)
+	return c.lanes.withLockErr(laneKey, func() error {
+		c.inflight.Set(laneKey, requestID)
+		defer c.inflight.Clear(laneKey, requestID)
 
 		return c.callGatewayAndReply(
 			ctx,
@@ -515,11 +791,127 @@ func (c *Channel) handleMessage(
 			msg.MessageID,
 			fromID,
 			thread,
+			sessionID,
 			requestID,
-			msg.MessageID,
-			msg.Text,
+			msg,
 		)
 	})
+}
+
+func (c *Channel) handleMyChatMember(
+	ctx context.Context,
+	ev tgapi.ChatMemberEvent,
+) error {
+	if ev.Chat == nil {
+		return nil
+	}
+	if strings.TrimSpace(ev.Chat.Type) != tgChatTypePrivate {
+		return nil
+	}
+
+	status := ""
+	if ev.NewChatMember != nil {
+		status = strings.ToLower(strings.TrimSpace(ev.NewChatMember.Status))
+	}
+	if status != tgChatMemberStatusKicked &&
+		status != tgChatMemberStatusLeft {
+		return nil
+	}
+
+	userID := strconv.FormatInt(ev.Chat.ID, 10)
+	laneKey := buildLaneKey(userID, "")
+	c.cancelInflight(ctx, laneKey)
+
+	switch strings.ToLower(strings.TrimSpace(c.dmBlockCleanup)) {
+	case dmBlockCleanupNone:
+		return nil
+	case dmBlockCleanupReset:
+		if c.dmSessions == nil {
+			return nil
+		}
+		_, err := c.dmSessions.Rotate(ctx, userID, laneKey)
+		return err
+	case dmBlockCleanupForget:
+		if f, ok := c.gw.(userForgetter); ok {
+			if err := f.ForgetUser(ctx, channelID, userID); err != nil {
+				return err
+			}
+		}
+		if c.dmSessions != nil {
+			_, err := c.dmSessions.ForgetUser(ctx, userID)
+			return err
+		}
+		return nil
+	default:
+		return nil
+	}
+}
+
+func (c *Channel) handleCallbackQuery(
+	ctx context.Context,
+	q tgapi.CallbackQuery,
+) error {
+	if q.Message == nil || q.Message.Chat == nil || q.From == nil {
+		return c.answerCallbackQuery(ctx, q.ID, "", false)
+	}
+
+	data := strings.TrimSpace(q.Data)
+	if data == "" {
+		return c.answerCallbackQuery(ctx, q.ID, "", false)
+	}
+
+	chatID := q.Message.Chat.ID
+	fromID := strconv.FormatInt(q.From.ID, 10)
+	isGroup := tgapi.IsGroupChat(strings.TrimSpace(q.Message.Chat.Type))
+
+	if !c.isUserAllowed(fromID) {
+		return c.answerCallbackQuery(
+			ctx,
+			q.ID,
+			notAllowedMessage,
+			true,
+		)
+	}
+
+	thread := ""
+	messageThreadID := 0
+	if isGroup {
+		thread = strconv.FormatInt(chatID, 10)
+		if q.Message.MessageThreadID != 0 {
+			thread = fmt.Sprintf(
+				"%s%s%d",
+				thread,
+				threadTopicSep,
+				q.Message.MessageThreadID,
+			)
+			messageThreadID = q.Message.MessageThreadID
+		}
+	}
+
+	if !c.isChatAllowed(isGroup, thread) {
+		return c.answerCallbackQuery(ctx, q.ID, "", false)
+	}
+	if !isGroup {
+		ok, err := c.isDMAllowed(ctx, chatID, fromID)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return c.answerCallbackQuery(ctx, q.ID, "", false)
+		}
+	}
+
+	switch {
+	case isPersonaCallbackData(data):
+		return c.handlePersonaCallbackQuery(
+			ctx,
+			q,
+			buildLaneKey(fromID, thread),
+			messageThreadID,
+		)
+	default:
+		return c.answerCallbackQuery(ctx, q.ID, "", false)
+	}
 }
 
 func (c *Channel) sendDM(
@@ -527,13 +919,35 @@ func (c *Channel) sendDM(
 	chatID int64,
 	text string,
 ) {
-	_, err := c.bot.SendMessage(ctx, tgapi.SendMessageParams{
+	_, err := c.sendTextMessage(ctx, tgapi.SendMessageParams{
 		ChatID: chatID,
 		Text:   text,
 	})
 	if err != nil {
 		log.WarnfContext(ctx, "telegram: send message: %v", err)
 	}
+}
+
+func (c *Channel) answerCallbackQuery(
+	ctx context.Context,
+	callbackID string,
+	text string,
+	showAlert bool,
+) error {
+	if c == nil || c.bot == nil {
+		return nil
+	}
+	if strings.TrimSpace(callbackID) == "" {
+		return nil
+	}
+	return c.bot.AnswerCallbackQuery(
+		ctx,
+		tgapi.AnswerCallbackQueryParams{
+			CallbackQueryID: callbackID,
+			Text:            text,
+			ShowAlert:       showAlert,
+		},
+	)
 }
 
 func (c *Channel) isUserAllowed(userID string) bool {

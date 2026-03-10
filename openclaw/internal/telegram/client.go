@@ -17,6 +17,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -38,13 +40,44 @@ const (
 	methodGet  = "GET"
 	methodPost = "POST"
 
+	pathAnswerCallback  = "answerCallbackQuery"
 	pathEditMessageText = "editMessageText"
+	pathGetFile         = "getFile"
 	pathGetMe           = "getMe"
+	pathSetMyCommands   = "setMyCommands"
 	pathGetUpdate       = "getUpdates"
 	pathGetWebhookInfo  = "getWebhookInfo"
 	pathSendChatAction  = "sendChatAction"
 	pathSendMsg         = "sendMessage"
+	pathSendDocument    = "sendDocument"
+	pathSendPhoto       = "sendPhoto"
+	pathSendAudio       = "sendAudio"
+	pathSendVoice       = "sendVoice"
+	pathSendVideo       = "sendVideo"
 )
+
+const ParseModeHTML = "HTML"
+
+const queryFileID = "file_id"
+
+const (
+	errEmptyFileID     = "telegram: empty file id"
+	errEmptyFilePath   = "telegram: empty file path"
+	errInvalidMaxBytes = "telegram: non-positive max bytes"
+	errFileTooLarge    = "telegram: file too large"
+)
+
+const (
+	parseErrContainsEntities = "parse entities"
+	parseErrContainsEnd      = "find end of the entity"
+	errMessageNotModified    = "message is not modified"
+)
+
+// ErrFileTooLarge is returned when a downloaded file exceeds the configured
+// maximum size.
+var ErrFileTooLarge = errors.New(errFileTooLarge)
+
+const maxErrorBodyBytes int64 = 4 << 10
 
 type redactedError struct {
 	msg string
@@ -113,13 +146,28 @@ type SendMessageParams struct {
 	MessageThreadID  int
 	ReplyToMessageID int
 	Text             string
+	ParseMode        string
+	ReplyMarkup      *InlineKeyboardMarkup
+}
+
+// SendFileParams contains parameters for Telegram media uploads.
+type SendFileParams struct {
+	ChatID           int64
+	MessageThreadID  int
+	ReplyToMessageID int
+	Caption          string
+	ParseMode        string
+	FileName         string
+	Data             []byte
 }
 
 // EditMessageTextParams contains parameters for EditMessageText.
 type EditMessageTextParams struct {
-	ChatID    int64
-	MessageID int
-	Text      string
+	ChatID      int64
+	MessageID   int
+	Text        string
+	ParseMode   string
+	ReplyMarkup *InlineKeyboardMarkup
 }
 
 // SendChatActionParams contains parameters for SendChatAction.
@@ -127,6 +175,18 @@ type SendChatActionParams struct {
 	ChatID          int64
 	MessageThreadID int
 	Action          string
+}
+
+// AnswerCallbackQueryParams contains parameters for AnswerCallbackQuery.
+type AnswerCallbackQueryParams struct {
+	CallbackQueryID string
+	Text            string
+	ShowAlert       bool
+}
+
+// SetMyCommandsParams contains parameters for SetMyCommands.
+type SetMyCommandsParams struct {
+	Commands []BotCommand
 }
 
 // Option configures the Telegram client.
@@ -259,11 +319,13 @@ func (c *Client) SendMessage(
 	params SendMessageParams,
 ) (Message, error) {
 	req := sendMessageRequest{
-		ChatID:             params.ChatID,
-		Text:               params.Text,
-		MessageThreadID:    params.MessageThreadID,
-		ReplyToMessageID:   params.ReplyToMessageID,
-		DisableWebPagePrev: true,
+		ChatID:   params.ChatID,
+		Text:     params.Text,
+		ThreadID: params.MessageThreadID,
+		ReplyID:  params.ReplyToMessageID,
+		Mode:     params.ParseMode,
+		NoPrev:   true,
+		Markup:   params.ReplyMarkup,
 	}
 
 	body, err := json.Marshal(req)
@@ -292,16 +354,58 @@ func (c *Client) SendMessage(
 	return rsp.Result, nil
 }
 
+// SendDocument uploads a document to a chat.
+func (c *Client) SendDocument(
+	ctx context.Context,
+	params SendFileParams,
+) (Message, error) {
+	return c.sendMedia(ctx, pathSendDocument, "document", params)
+}
+
+// SendPhoto uploads a photo to a chat.
+func (c *Client) SendPhoto(
+	ctx context.Context,
+	params SendFileParams,
+) (Message, error) {
+	return c.sendMedia(ctx, pathSendPhoto, "photo", params)
+}
+
+// SendAudio uploads an audio file to a chat.
+func (c *Client) SendAudio(
+	ctx context.Context,
+	params SendFileParams,
+) (Message, error) {
+	return c.sendMedia(ctx, pathSendAudio, "audio", params)
+}
+
+// SendVoice uploads a voice note to a chat.
+func (c *Client) SendVoice(
+	ctx context.Context,
+	params SendFileParams,
+) (Message, error) {
+	return c.sendMedia(ctx, pathSendVoice, "voice", params)
+}
+
+// SendVideo uploads a video to a chat.
+func (c *Client) SendVideo(
+	ctx context.Context,
+	params SendFileParams,
+) (Message, error) {
+	return c.sendMedia(ctx, pathSendVideo, "video", params)
+}
+
 // EditMessageText edits an existing message.
 func (c *Client) EditMessageText(
 	ctx context.Context,
 	params EditMessageTextParams,
 ) (Message, error) {
 	req := editMessageTextRequest{
-		ChatID:             params.ChatID,
-		MessageID:          params.MessageID,
-		Text:               params.Text,
-		DisableWebPagePrev: true,
+		ChatID: params.ChatID,
+		MsgID:  params.MessageID,
+		Text:   params.Text,
+		Mode:   params.ParseMode,
+		NoPrev: true,
+		Markup: params.ReplyMarkup,
 	}
 
 	body, err := json.Marshal(req)
@@ -328,6 +432,39 @@ func (c *Client) EditMessageText(
 		return Message{}, err
 	}
 	return rsp.Result, nil
+}
+
+// AnswerCallbackQuery answers one callback query to stop the client spinner.
+func (c *Client) AnswerCallbackQuery(
+	ctx context.Context,
+	params AnswerCallbackQueryParams,
+) error {
+	req := answerCallbackQueryRequest{
+		CallbackQueryID: params.CallbackQueryID,
+		Text:            params.Text,
+		ShowAlert:       params.ShowAlert,
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("telegram: marshal request: %w", err)
+	}
+
+	var rsp apiResponse[bool]
+	return c.doWithRetry(ctx, func(ctx context.Context) error {
+		status, err := c.doOnce(
+			ctx,
+			methodPost,
+			pathAnswerCallback,
+			nil,
+			body,
+			&rsp,
+		)
+		if err != nil {
+			return err
+		}
+		return validateResponse(status, rsp)
+	})
 }
 
 // SendChatAction sends a chat action (for example "typing").
@@ -363,6 +500,274 @@ func (c *Client) SendChatAction(
 	})
 }
 
+// SetMyCommands registers the bot command menu shown by Telegram clients.
+func (c *Client) SetMyCommands(
+	ctx context.Context,
+	params SetMyCommandsParams,
+) error {
+	req := setMyCommandsRequest{
+		Commands: params.Commands,
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("telegram: marshal request: %w", err)
+	}
+
+	var rsp apiResponse[bool]
+	return c.doWithRetry(ctx, func(ctx context.Context) error {
+		status, err := c.doOnce(
+			ctx,
+			methodPost,
+			pathSetMyCommands,
+			nil,
+			body,
+			&rsp,
+		)
+		if err != nil {
+			return err
+		}
+		return validateResponse(status, rsp)
+	})
+}
+
+func (c *Client) sendMedia(
+	ctx context.Context,
+	path string,
+	field string,
+	params SendFileParams,
+) (Message, error) {
+	body, contentType, err := buildMultipartPayload(field, params)
+	if err != nil {
+		return Message{}, err
+	}
+
+	var rsp apiResponse[Message]
+	err = c.doWithRetry(ctx, func(ctx context.Context) error {
+		status, err := c.doMultipartOnce(
+			ctx,
+			path,
+			contentType,
+			body,
+			&rsp,
+		)
+		if err != nil {
+			return err
+		}
+		return validateResponse(status, rsp)
+	})
+	if err != nil {
+		return Message{}, err
+	}
+	return rsp.Result, nil
+}
+
+func buildMultipartPayload(
+	field string,
+	params SendFileParams,
+) ([]byte, string, error) {
+	if strings.TrimSpace(field) == "" {
+		return nil, "", errors.New("telegram: empty media field")
+	}
+	if params.ChatID == 0 {
+		return nil, "", errors.New("telegram: empty chat id")
+	}
+	if strings.TrimSpace(params.FileName) == "" {
+		return nil, "", errors.New("telegram: empty file name")
+	}
+	if len(params.Data) == 0 {
+		return nil, "", errors.New("telegram: empty file data")
+	}
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+
+	if err := writeMultipartField(
+		writer,
+		"chat_id",
+		strconv.FormatInt(params.ChatID, 10),
+	); err != nil {
+		return nil, "", err
+	}
+	if params.MessageThreadID > 0 {
+		if err := writeMultipartField(
+			writer,
+			"message_thread_id",
+			strconv.Itoa(params.MessageThreadID),
+		); err != nil {
+			return nil, "", err
+		}
+	}
+	if params.ReplyToMessageID > 0 {
+		if err := writeMultipartField(
+			writer,
+			"reply_to_message_id",
+			strconv.Itoa(params.ReplyToMessageID),
+		); err != nil {
+			return nil, "", err
+		}
+	}
+	caption := strings.TrimSpace(params.Caption)
+	if caption != "" {
+		if err := writeMultipartField(
+			writer,
+			"caption",
+			caption,
+		); err != nil {
+			return nil, "", err
+		}
+	}
+	parseMode := strings.TrimSpace(params.ParseMode)
+	if parseMode != "" {
+		if err := writeMultipartField(
+			writer,
+			"parse_mode",
+			parseMode,
+		); err != nil {
+			return nil, "", err
+		}
+	}
+	part, err := writer.CreateFormFile(field, params.FileName)
+	if err != nil {
+		return nil, "", fmt.Errorf(
+			"telegram: create multipart file: %w",
+			err,
+		)
+	}
+	if _, err := part.Write(params.Data); err != nil {
+		return nil, "", fmt.Errorf(
+			"telegram: write multipart file: %w",
+			err,
+		)
+	}
+	if err := writer.Close(); err != nil {
+		return nil, "", fmt.Errorf(
+			"telegram: close multipart body: %w",
+			err,
+		)
+	}
+	return body.Bytes(), writer.FormDataContentType(), nil
+}
+
+func writeMultipartField(
+	writer *multipart.Writer,
+	key string,
+	value string,
+) error {
+	if writer == nil {
+		return errors.New("telegram: nil multipart writer")
+	}
+	if err := writer.WriteField(key, value); err != nil {
+		return fmt.Errorf("telegram: write multipart field: %w", err)
+	}
+	return nil
+}
+
+// GetFile resolves a file ID into a downloadable file path.
+func (c *Client) GetFile(ctx context.Context, fileID string) (File, error) {
+	fileID = strings.TrimSpace(fileID)
+	if fileID == "" {
+		return File{}, errors.New(errEmptyFileID)
+	}
+
+	values := url.Values{}
+	values.Set(queryFileID, fileID)
+
+	var rsp apiResponse[File]
+	err := c.doWithRetry(ctx, func(ctx context.Context) error {
+		status, err := c.doOnce(
+			ctx,
+			methodGet,
+			pathGetFile,
+			values,
+			nil,
+			&rsp,
+		)
+		if err != nil {
+			return err
+		}
+		return validateResponse(status, rsp)
+	})
+	if err != nil {
+		return File{}, err
+	}
+	return rsp.Result, nil
+}
+
+// DownloadFile downloads the file content by its Telegram file path.
+func (c *Client) DownloadFile(
+	ctx context.Context,
+	filePath string,
+	maxBytes int64,
+) ([]byte, error) {
+	filePath = strings.TrimSpace(filePath)
+	if filePath == "" {
+		return nil, errors.New(errEmptyFilePath)
+	}
+	if maxBytes <= 0 {
+		return nil, errors.New(errInvalidMaxBytes)
+	}
+
+	u, err := url.Parse(c.baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("telegram: parse base url: %w", err)
+	}
+
+	filePath = strings.TrimPrefix(filePath, "/")
+	u = u.JoinPath("file", "bot"+c.token, filePath)
+
+	req, err := http.NewRequestWithContext(ctx, methodGet, u.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("telegram: new request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, c.redactErr(fmt.Errorf("telegram: request: %w", err))
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		raw, err := io.ReadAll(
+			io.LimitReader(resp.Body, maxErrorBodyBytes),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("telegram: read response: %w", err)
+		}
+		return nil, statusError{
+			status: resp.StatusCode,
+			body:   strings.TrimSpace(string(raw)),
+		}
+	}
+
+	if resp.ContentLength > maxBytes && resp.ContentLength > 0 {
+		return nil, ErrFileTooLarge
+	}
+	return readLimited(resp.Body, maxBytes)
+}
+
+// DownloadFileByID resolves the file ID and downloads its content.
+func (c *Client) DownloadFileByID(
+	ctx context.Context,
+	fileID string,
+	maxBytes int64,
+) (File, []byte, error) {
+	f, err := c.GetFile(ctx, fileID)
+	if err != nil {
+		return File{}, nil, err
+	}
+
+	filePath := strings.TrimSpace(f.FilePath)
+	if filePath == "" {
+		return File{}, nil, errors.New(errEmptyFilePath)
+	}
+	data, err := c.DownloadFile(ctx, filePath, maxBytes)
+	if err != nil {
+		return File{}, nil, err
+	}
+	return f, data, nil
+}
+
 type apiResponse[T any] struct {
 	OK          bool           `json:"ok"`
 	Result      T              `json:"result,omitempty"`
@@ -372,24 +777,38 @@ type apiResponse[T any] struct {
 }
 
 type sendMessageRequest struct {
-	ChatID             int64  `json:"chat_id"`
-	Text               string `json:"text"`
-	MessageThreadID    int    `json:"message_thread_id,omitempty"`
-	ReplyToMessageID   int    `json:"reply_to_message_id,omitempty"`
-	DisableWebPagePrev bool   `json:"disable_web_page_preview,omitempty"`
+	ChatID   int64                 `json:"chat_id"`
+	Text     string                `json:"text"`
+	ThreadID int                   `json:"message_thread_id,omitempty"`
+	ReplyID  int                   `json:"reply_to_message_id,omitempty"`
+	Mode     string                `json:"parse_mode,omitempty"`
+	NoPrev   bool                  `json:"disable_web_page_preview,omitempty"`
+	Markup   *InlineKeyboardMarkup `json:"reply_markup,omitempty"`
 }
 
 type editMessageTextRequest struct {
-	ChatID             int64  `json:"chat_id"`
-	MessageID          int    `json:"message_id"`
-	Text               string `json:"text"`
-	DisableWebPagePrev bool   `json:"disable_web_page_preview,omitempty"`
+	ChatID int64                 `json:"chat_id"`
+	MsgID  int                   `json:"message_id"`
+	Text   string                `json:"text"`
+	Mode   string                `json:"parse_mode,omitempty"`
+	NoPrev bool                  `json:"disable_web_page_preview,omitempty"`
+	Markup *InlineKeyboardMarkup `json:"reply_markup,omitempty"`
+}
+
+type answerCallbackQueryRequest struct {
+	CallbackQueryID string `json:"callback_query_id"`
+	Text            string `json:"text,omitempty"`
+	ShowAlert       bool   `json:"show_alert,omitempty"`
 }
 
 type sendChatActionRequest struct {
 	ChatID          int64  `json:"chat_id"`
 	MessageThreadID int    `json:"message_thread_id,omitempty"`
 	Action          string `json:"action"`
+}
+
+type setMyCommandsRequest struct {
+	Commands []BotCommand `json:"commands"`
 }
 
 // WebhookInfo describes the currently configured Telegram webhook.
@@ -488,6 +907,91 @@ func (c *Client) doOnce(
 		}
 	}
 	return resp.StatusCode, nil
+}
+
+func (c *Client) doMultipartOnce(
+	ctx context.Context,
+	path string,
+	contentType string,
+	body []byte,
+	out any,
+) (int, error) {
+	if out == nil {
+		return 0, errors.New("telegram: nil response target")
+	}
+
+	u, err := url.Parse(c.baseURL)
+	if err != nil {
+		return 0, fmt.Errorf("telegram: parse base url: %w", err)
+	}
+	u = u.JoinPath("bot"+c.token, path)
+
+	req, err := http.NewRequestWithContext(
+		ctx,
+		methodPost,
+		u.String(),
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("telegram: new request: %w", err)
+	}
+	req.Header.Set("Content-Type", contentType)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return 0, c.redactErr(fmt.Errorf("telegram: request: %w", err))
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return resp.StatusCode, fmt.Errorf(
+			"telegram: read response: %w",
+			err,
+		)
+	}
+	if err := json.Unmarshal(raw, out); err != nil {
+		if resp.StatusCode < http.StatusOK ||
+			resp.StatusCode >= http.StatusMultipleChoices {
+			return resp.StatusCode, statusError{
+				status: resp.StatusCode,
+				body:   strings.TrimSpace(string(raw)),
+			}
+		}
+		return resp.StatusCode, fmt.Errorf(
+			"telegram: decode json: %w",
+			err,
+		)
+	}
+	if resp.StatusCode < http.StatusOK ||
+		resp.StatusCode >= http.StatusMultipleChoices {
+		return resp.StatusCode, statusError{
+			status: resp.StatusCode,
+			body:   strings.TrimSpace(string(raw)),
+		}
+	}
+	return resp.StatusCode, nil
+}
+
+func readLimited(r io.Reader, maxBytes int64) ([]byte, error) {
+	if maxBytes <= 0 {
+		return nil, errors.New(errInvalidMaxBytes)
+	}
+
+	limit := maxBytes
+	if maxBytes < math.MaxInt64 {
+		limit = maxBytes + 1
+	}
+
+	lr := &io.LimitedReader{R: r, N: limit}
+	data, err := io.ReadAll(lr)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, ErrFileTooLarge
+	}
+	return data, nil
 }
 
 func (c *Client) redactErr(err error) error {
@@ -611,6 +1115,29 @@ func (c *Client) retryDelay(attempt int, err error) time.Duration {
 		return c.retryMaxDelay
 	}
 	return delay
+}
+
+// IsEntityParseError reports whether Telegram rejected formatted text due to
+// invalid entity markup.
+func IsEntityParseError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, parseErrContainsEntities) ||
+		strings.Contains(msg, parseErrContainsEnd)
+}
+
+// IsMessageNotModifiedError reports whether Telegram rejected an edit
+// because the message content already matched the requested update.
+func IsMessageNotModifiedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(
+		strings.ToLower(err.Error()),
+		errMessageNotModified,
+	)
 }
 
 func sleep(ctx context.Context, d time.Duration) bool {

@@ -1500,6 +1500,12 @@ When preloading is enabled, memories are automatically injected into the
 system prompt, giving the Agent context about the user without explicit
 tool calls.
 
+**Injection Mechanism**: Preloaded memories are **merged** into the existing
+system prompt rather than inserted as a separate system message. This ensures
+the request always contains a single system message, maintaining compatibility
+with models that have limited support for multiple system messages (e.g.,
+Qwen3.5 series may return "System message must be at the beginning" error).
+
 **⚠️ Important Note**: Setting the configuration to `-1` loads all memories,
 which may significantly increase **Token Usage** and **API Costs**. By default,
 preloading is disabled (`0`), and we recommend using positive limits (e.g., `10-50`)

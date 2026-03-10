@@ -91,7 +91,8 @@ func TestSkillsRequestProcessor_ProcessRequest_OverviewAndDocs(
 	require.Contains(t, sys, skillsToolingGuidanceHeader)
 	require.Contains(t, sys, ".venv/")
 	require.Contains(t, sys, "Avoid include_all_docs")
-	require.Contains(t, sys, "Use skill_run only for commands required")
+	require.Contains(t, sys, "Treat loaded skill docs as guidance")
+	require.Contains(t, sys, "Do not invent subcommands, flags")
 	require.Contains(t, sys, "[Loaded] calc")
 	require.Contains(t, sys, "Calc body")
 	require.Contains(t, sys, "[Doc] USAGE.md")
@@ -860,7 +861,7 @@ func TestAppendSkillsFromToolResponseEvent_EarlyReturns(t *testing.T) {
 	require.Nil(t, keep)
 }
 
-func TestAppendSkillsFromToolResponseEvent_SkipsInvalidMessages(t *testing.T) {
+func TestAppendSkillsFromToolResp_SkipsInvalidMessages(t *testing.T) {
 	loadedSet := map[string]struct{}{
 		"a": {},
 		"b": {},
@@ -1086,7 +1087,7 @@ func TestSkillsToolResultRequestProcessor_FallbackSystemMessageAdded(
 	}
 }
 
-func TestSkillsToolResultRequestProcessor_SessionSummary_DisablesFallback(
+func TestSkillsToolResultRequestProcessor_SessionSummary_DisablesFallbackWithoutCompactionSignal(
 	t *testing.T,
 ) {
 	repo := &mockRepo{
@@ -1126,6 +1127,120 @@ func TestSkillsToolResultRequestProcessor_SessionSummary_DisablesFallback(
 		}
 		require.NotContains(t, m.Content, skillsLoadedContextHeader)
 	}
+}
+
+func TestSkillsToolResultRequestProcessor_SessionSummary_SkipsFallbackWhenMaterialized(
+	t *testing.T,
+) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "calc", Description: "math"}},
+		full: map[string]*skill.Skill{
+			"calc": {Summary: skill.Summary{Name: "calc"}, Body: "B"},
+		},
+	}
+
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.LoadedKey("tester", "calc"): []byte("1"),
+			},
+		},
+	}
+	inv.SetState(contentHasSessionSummaryStateKey, true)
+
+	args, err := json.Marshal(skillNameInput{Skill: "calc"})
+	require.NoError(t, err)
+	const toolCallID = "tc1"
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("sys"),
+			{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					Type: "function",
+					ID:   toolCallID,
+					Function: model.FunctionDefinitionParam{
+						Name:      skillToolLoad,
+						Arguments: args,
+					},
+				}},
+			},
+			{
+				Role:     model.RoleTool,
+				ToolName: skillToolLoad,
+				ToolID:   toolCallID,
+				Content:  loadedPrefix + " calc",
+			},
+		},
+	}
+
+	p := NewSkillsToolResultRequestProcessor(
+		repo,
+		WithSkillsToolResultLoadMode(SkillLoadModeSession),
+	)
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	require.Contains(t, req.Messages[2].Content, "[Loaded] calc")
+	require.Contains(t, req.Messages[2].Content, "B")
+
+	for _, m := range req.Messages {
+		if m.Role != model.RoleSystem {
+			continue
+		}
+		require.NotContains(t, m.Content, skillsLoadedContextHeader)
+	}
+}
+
+func TestSkillsToolResultRequestProcessor_SessionSummary_ReenablesFallbackWhenToolHistoryMissing(
+	t *testing.T,
+) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "calc", Description: "math"}},
+		full: map[string]*skill.Skill{
+			"calc": {Summary: skill.Summary{Name: "calc"}, Body: "B"},
+		},
+	}
+
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.LoadedKey("tester", "calc"): []byte("1"),
+			},
+		},
+	}
+	inv.SetState(contentHasSessionSummaryStateKey, true)
+	inv.SetState(contentHasCompactedToolResultsStateKey, true)
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("sys"),
+			model.NewUserMessage("u"),
+		},
+	}
+
+	p := NewSkillsToolResultRequestProcessor(
+		repo,
+		WithSkillsToolResultLoadMode(SkillLoadModeSession),
+	)
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	var matchCount int
+	for _, m := range req.Messages {
+		if m.Role != model.RoleSystem {
+			continue
+		}
+		if strings.Contains(m.Content, skillsLoadedContextHeader) {
+			matchCount++
+			require.Contains(t, m.Content, "[Loaded] calc")
+			require.Contains(t, m.Content, "B")
+		}
+	}
+	require.Equal(t, 1, matchCount)
 }
 
 func TestSkillsToolResultRequestProcessor_SessionSummary_AllowsFallback(
