@@ -8,6 +8,8 @@
 //
 //
 
+// Package skillprofile centralizes built-in skill tool profile
+// normalization and tool-flag resolution.
 package skillprofile
 
 import "strings"
