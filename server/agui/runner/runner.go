@@ -40,6 +40,11 @@ var (
 	ErrRunAlreadyExists = errors.New("agui: run already exists")
 	// ErrRunNotFound is returned when a run key cannot be found.
 	ErrRunNotFound = errors.New("agui: run not found")
+	// ErrDisableEventInjectionUnsupported is returned when AG-UI interrupt filtering
+	// requires invocation topology but caller disabled output event injection.
+	ErrDisableEventInjectionUnsupported = errors.New(
+		"agui: disable event injection is incompatible with top-level graph interrupt activity filtering",
+	)
 )
 
 // Runner executes AG-UI runs and emits AG-UI events.
@@ -186,6 +191,20 @@ func inputMessageFromRunAgentInput(input *adapter.RunAgentInput) (*model.Message
 	return &inputMessage, lastMessage.ID, &userMessage, nil
 }
 
+func (r *runner) validateRunOptions(runOption []agent.RunOption) error {
+	if !r.graphNodeInterruptActivityEnabled || !r.graphNodeInterruptActivityTopLevelOnly {
+		return nil
+	}
+	var opts agent.RunOptions
+	for _, opt := range runOption {
+		opt(&opts)
+	}
+	if !opts.DisableEventInjection {
+		return nil
+	}
+	return ErrDisableEventInjectionUnsupported
+}
+
 // Run starts processing one AG-UI run request and returns a channel of AG-UI events.
 func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) (<-chan aguievents.Event, error) {
 	if r.runner == nil {
@@ -218,6 +237,9 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 	}
 	if runtimeState != nil {
 		runOption = append(runOption, agent.WithRuntimeState(runtimeState))
+	}
+	if err := r.validateRunOptions(runOption); err != nil {
+		return nil, err
 	}
 	ctx, span, err := r.startSpan(ctx, runAgentInput)
 	if err != nil {
