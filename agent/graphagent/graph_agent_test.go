@@ -1751,6 +1751,10 @@ func (s *recordingSpanForEmitError) SetAttributes(kv ...attribute.KeyValue) {
 	s.Span.SetAttributes(kv...)
 }
 
+func (s *recordingSpanForEmitError) IsRecording() bool {
+	return true
+}
+
 func (s *recordingSpanForEmitError) getStatus() (codes.Code, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1883,4 +1887,56 @@ func TestGraphAgent_RunWithBarrier_EmitEventError(t *testing.T) {
 	require.NotNil(t, errorTypeAttr, "expected error type attribute to be set")
 	errorTypeValue := errorTypeAttr.Value.AsString()
 	require.Equal(t, model.ErrorTypeFlowError, errorTypeValue, "expected error type to be FlowError")
+}
+
+func TestGraphAgent_Run_TraceAfterInvokeAgent(t *testing.T) {
+	originalTracer := trace.Tracer
+	defer func() {
+		trace.Tracer = originalTracer
+	}()
+
+	recordingTracer := newRecordingTracerForEmitError()
+	trace.Tracer = recordingTracer
+
+	g := buildTrivialGraph(t)
+	callbacks := agent.NewCallbacks().
+		RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
+			return &model.Response{
+				Choices: []model.Choice{{
+					Message: model.NewAssistantMessage("graph result"),
+				}},
+			}, nil
+		})
+
+	ga, err := New("trace-after-test", g, WithAgentCallbacks(callbacks))
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	eventChan, err := ga.Run(ctx, &agent.Invocation{
+		InvocationID: "inv-trace-after",
+		Message:      model.NewUserMessage("test"),
+	})
+	require.NoError(t, err)
+
+	for range eventChan {
+	}
+
+	recordingTracer.mu.Lock()
+	spans := recordingTracer.spans
+	recordingTracer.mu.Unlock()
+
+	require.NotEmpty(t, spans, "expected at least one span to be created")
+
+	attrs := spans[0].getAttributes()
+	var outputMessages string
+	for _, attr := range attrs {
+		if string(attr.Key) == string(semconvtrace.KeyGenAIOutputMessages) {
+			outputMessages = attr.Value.AsString()
+			break
+		}
+	}
+	require.NotEmpty(t, outputMessages, "expected output messages attribute to be set")
+	require.Contains(t, outputMessages, "graph result")
 }
