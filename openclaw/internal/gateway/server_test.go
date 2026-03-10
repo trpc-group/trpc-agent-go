@@ -2034,7 +2034,7 @@ func TestServer_StreamMessage_Success(t *testing.T) {
 					Object: model.ObjectTypeChatCompletionChunk,
 					Choices: []model.Choice{
 						{
-							Delta: model.Message{Content: "hel"},
+							Delta: model.Message{Content: "help"},
 						},
 					},
 				},
@@ -2045,7 +2045,7 @@ func TestServer_StreamMessage_Success(t *testing.T) {
 					Object: model.ObjectTypeChatCompletionChunk,
 					Choices: []model.Choice{
 						{
-							Delta: model.Message{Content: "lo"},
+							Delta: model.Message{Content: " me"},
 						},
 					},
 				},
@@ -2079,19 +2079,19 @@ func TestServer_StreamMessage_Success(t *testing.T) {
 		gwproto.StreamEventTypeMessageDelta,
 		events[1].Type,
 	)
-	require.Equal(t, "hel", events[1].Delta)
+	require.Equal(t, "help", events[1].Delta)
 	require.Equal(
 		t,
 		gwproto.StreamEventTypeMessageDelta,
 		events[2].Type,
 	)
-	require.Equal(t, "lo", events[2].Delta)
+	require.Equal(t, " me", events[2].Delta)
 	require.Equal(
 		t,
 		gwproto.StreamEventTypeMessageCompleted,
 		events[3].Type,
 	)
-	require.Equal(t, "hello", events[3].Reply)
+	require.Equal(t, "help me", events[3].Reply)
 	require.Equal(
 		t,
 		gwproto.StreamEventTypeRunCompleted,
