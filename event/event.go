@@ -274,6 +274,28 @@ func EmitEvent(ctx context.Context, ch chan<- *Event, e *Event) error {
 	return EmitEventWithTimeout(ctx, ch, e, EmitWithoutTimeout)
 }
 
+func tryEmitReadyEvent(ctx context.Context, ch chan<- *Event, e *Event,
+	traceEnabled bool) (bool, error) {
+	select {
+	case ch <- e:
+		if traceEnabled {
+			log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %+v", *e)
+		}
+		return true, nil
+	case <-ctx.Done():
+		err := ctx.Err()
+		log.WarnfContext(
+			ctx,
+			"EmitEventWithTimeout: context error: %v, event: %+v",
+			err,
+			*e,
+		)
+		return true, err
+	default:
+		return false, nil
+	}
+}
+
 // EmitEventWithTimeout sends an event to the channel with optional timeout.
 func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 	e *Event, timeout time.Duration) error {
@@ -302,17 +324,10 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 	}
 
 	if timeout == EmitWithoutTimeout {
-		// Avoid selecting on ctx.Done() when the channel has capacity.
-		select {
-		case ch <- e:
-			if traceEnabled {
-				log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %+v", *e)
-			}
-			return nil
-		default:
+		if handled, err := tryEmitReadyEvent(ctx, ch, e, traceEnabled); handled {
+			return err
 		}
-		// If we couldn't send immediately, fall back to a blocking send that
-		// respects cancellation.
+		// Fall back to a blocking send when the fast path cannot make progress.
 		select {
 		case ch <- e:
 			if traceEnabled {
@@ -331,14 +346,8 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 		return nil
 	}
 
-	// Avoid allocating a timer when the channel has capacity.
-	select {
-	case ch <- e:
-		if traceEnabled {
-			log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %+v", *e)
-		}
-		return nil
-	default:
+	if handled, err := tryEmitReadyEvent(ctx, ch, e, traceEnabled); handled {
+		return err
 	}
 
 	timer := time.NewTimer(timeout)

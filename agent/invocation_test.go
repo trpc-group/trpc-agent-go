@@ -589,6 +589,32 @@ func TestInjectIntoEvent(t *testing.T) {
 				require.Equal(t, "parent-id", e.ParentInvocationID)
 			},
 		},
+		{
+			name: "disable event injection",
+			inv: NewInvocation(
+				WithInvocationID("test-inv-id"),
+				WithInvocationBranch("test-branch"),
+				WithInvocationEventFilterKey("test-filter"),
+				WithInvocationRunOptions(RunOptions{
+					RequestID:             "test-request-id",
+					DisableEventInjection: true,
+				}),
+			),
+			event: &event.Event{
+				InvocationID:       "preset-inv-id",
+				ParentInvocationID: "preset-parent-id",
+				Branch:             "preset-branch",
+				FilterKey:          "preset-filter",
+				RequestID:          "preset-request-id",
+			},
+			validate: func(t *testing.T, e *event.Event) {
+				require.Equal(t, "preset-inv-id", e.InvocationID)
+				require.Equal(t, "preset-parent-id", e.ParentInvocationID)
+				require.Equal(t, "preset-branch", e.Branch)
+				require.Equal(t, "preset-filter", e.FilterKey)
+				require.Equal(t, "preset-request-id", e.RequestID)
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -689,6 +715,30 @@ func TestEmitEvent_TraceLogging(t *testing.T) {
 	err := EmitEvent(context.Background(), inv, ch, &event.Event{Branch: "trace"})
 	require.NoError(t, err)
 	require.Greater(t, stub.debugfCalls, 0)
+}
+
+func TestEmitEvent_DisableEventInjectionWithTrace(t *testing.T) {
+	stub := &traceCaptureLogger{}
+	original := log.Default
+	log.Default = stub
+	log.SetTraceEnabled(true)
+	t.Cleanup(func() {
+		log.Default = original
+		log.SetTraceEnabled(false)
+	})
+	inv := NewInvocation(
+		WithInvocationID("inv-trace-disabled"),
+		WithInvocationRunOptions(RunOptions{DisableEventInjection: true}),
+	)
+	ch := make(chan *event.Event, 1)
+	evt := &event.Event{ID: "trace-disabled"}
+	err := EmitEvent(context.Background(), inv, ch, evt)
+	require.NoError(t, err)
+	require.Greater(t, stub.debugfCalls, 0)
+	sent := <-ch
+	require.Equal(t, "trace-disabled", sent.ID)
+	require.Empty(t, sent.InvocationID)
+	require.Empty(t, sent.ParentInvocationID)
 }
 
 func TestGetAppendEventNoticeKey(t *testing.T) {

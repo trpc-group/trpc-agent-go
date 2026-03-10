@@ -845,7 +845,7 @@ func (inv *Invocation) GetParentInvocation() *Invocation {
 
 // InjectIntoEvent inject invocation information into event.
 func InjectIntoEvent(inv *Invocation, e *event.Event) {
-	if e == nil || inv == nil {
+	if e == nil || inv == nil || inv.RunOptions.DisableEventInjection {
 		return
 	}
 
@@ -872,10 +872,7 @@ func EmitEvent(ctx context.Context, inv *Invocation, ch chan<- *event.Event,
 		!traceEnabled {
 		return event.EmitEvent(ctx, ch, e)
 	}
-	injectionDisabled := inv != nil && inv.RunOptions.DisableEventInjection
-	if !injectionDisabled {
-		InjectIntoEvent(inv, e)
-	}
+	InjectIntoEvent(inv, e)
 	var agentName, requestID string
 	if inv != nil {
 		agentName = inv.AgentName

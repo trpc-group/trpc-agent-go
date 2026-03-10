@@ -1,0 +1,55 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
+package event
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/log"
+)
+
+func BenchmarkEmitEventWithTimeoutBufferedNoTimeout(b *testing.B) {
+	log.SetTraceEnabled(false)
+	b.Cleanup(func() {
+		log.SetTraceEnabled(false)
+	})
+	ctx := context.Background()
+	ch := make(chan *Event, 1)
+	evt := New("benchmark-invocation", "benchmark-author")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := EmitEventWithTimeout(ctx, ch, evt, EmitWithoutTimeout); err != nil {
+			b.Fatal(err)
+		}
+		<-ch
+	}
+}
+
+func BenchmarkEmitEventWithTimeoutBufferedTimeout(b *testing.B) {
+	log.SetTraceEnabled(false)
+	b.Cleanup(func() {
+		log.SetTraceEnabled(false)
+	})
+	ctx := context.Background()
+	ch := make(chan *Event, 1)
+	evt := New("benchmark-invocation", "benchmark-author")
+	timeout := time.Second
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := EmitEventWithTimeout(ctx, ch, evt, timeout); err != nil {
+			b.Fatal(err)
+		}
+		<-ch
+	}
+}
