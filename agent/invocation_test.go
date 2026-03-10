@@ -94,38 +94,35 @@ func TestInvocation_Clone(t *testing.T) {
 	require.Equal(t, inv.noticeMu, subInv.noticeMu)
 }
 
-func TestInvocation_Clone_DefersNoticeAllocationToParent(t *testing.T) {
-	parent := NewInvocation(WithInvocationID("parent"))
-	child := parent.Clone(WithInvocationID("child"))
-
-	require.Same(t, noticeStateSentinel, child.notice)
-
-	notice := child.ensureNotice()
-	require.NotNil(t, notice)
-	require.Same(t, parent.notice, child.notice)
-	require.Same(t, parent.notice, notice)
-	require.NotSame(t, noticeStateSentinel, parent.notice)
-	require.NotNil(t, child.noticeMu)
-}
-
-func TestInvocation_NoticeHelperCoverage(t *testing.T) {
-	var nilInv *Invocation
-	require.Nil(t, nilInv.ensureNotice())
-
-	inv := &Invocation{}
-	inv.syncNoticeCompat(nil)
-	require.Nil(t, inv.noticeMu)
-
-	child := &Invocation{
-		notice: noticeStateSentinel,
-		parent: &Invocation{},
-	}
-	require.Nil(t, child.ensureNotice())
-}
-
-func TestInvocation_Clone_SetsNoticeSentinelForRawInvocation(t *testing.T) {
+func TestInvocation_Clone_RawInvocationPreservesNoticeContract(t *testing.T) {
 	cloned := (&Invocation{}).Clone()
-	require.Same(t, noticeStateSentinel, cloned.notice)
+	require.Nil(t, cloned.noticeMu)
+	require.Nil(t, cloned.noticeChannels)
+}
+
+func TestInvocation_NoticeFirstAccessConcurrent(t *testing.T) {
+	inv := NewInvocation()
+	defer inv.CleanupNotice(context.Background())
+	start := make(chan struct{})
+	errCh := make(chan error, 2)
+	go func() {
+		<-start
+		errCh <- inv.AddNoticeChannelAndWait(
+			context.Background(),
+			"test-channel-concurrent",
+			time.Second,
+		)
+	}()
+	go func() {
+		<-start
+		errCh <- inv.NotifyCompletion(
+			context.Background(),
+			"test-channel-concurrent",
+		)
+	}()
+	close(start)
+	require.NoError(t, <-errCh)
+	require.NoError(t, <-errCh)
 }
 
 func TestInvocation_AddNoticeChannel(t *testing.T) {

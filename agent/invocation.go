@@ -109,10 +109,7 @@ type Invocation struct {
 	// ArtifactService is the service for managing artifacts.
 	ArtifactService artifact.Service
 
-	// notice is used to signal when events are written to the session.
-	notice *noticeState
-	// Deprecated compatibility fields kept in sync with notice for tests and
-	// package-internal callers that still reference the legacy members.
+	// noticeChannels is used to signal when events are written to the session.
 	noticeChannels map[string]chan any
 	noticeMu       *sync.Mutex
 
@@ -160,63 +157,6 @@ type Invocation struct {
 	// in this invocation. This is used together with MaxToolIterations
 	// to guard against unbounded tool_call -> LLM -> tool_call loops.
 	toolIterationCount int
-}
-
-type noticeState struct {
-	mu       sync.Mutex
-	channels map[string]chan any
-}
-
-// noticeStateSentinel marks an invocation as properly initialized (created via
-// NewInvocation/Clone) without allocating a per-invocation noticeState unless
-// it's actually used.
-var noticeStateSentinel = &noticeState{}
-
-func (inv *Invocation) syncNoticeCompat(notice *noticeState) {
-	if inv == nil || notice == nil {
-		return
-	}
-	inv.noticeMu = &notice.mu
-	inv.noticeChannels = notice.channels
-}
-
-func (inv *Invocation) ensureNotice() *noticeState {
-	if inv == nil {
-		return nil
-	}
-	// Preserve the previous contract: invocations that are not created via
-	// NewInvocation/Clone have a nil notice state and notice operations should
-	// fail loudly to surface misuse.
-	if inv.notice == nil {
-		return nil
-	}
-	if inv.notice != noticeStateSentinel {
-		return inv.notice
-	}
-
-	// Preserve Clone semantics: clones share the same notice state.
-	if inv.parent != nil {
-		ns := inv.parent.ensureNotice()
-		if ns == nil {
-			return nil
-		}
-		inv.stateMu.Lock()
-		if inv.notice == noticeStateSentinel {
-			inv.notice = ns
-		}
-		inv.stateMu.Unlock()
-		inv.syncNoticeCompat(ns)
-		return ns
-	}
-
-	inv.stateMu.Lock()
-	if inv.notice == noticeStateSentinel {
-		inv.notice = &noticeState{}
-	}
-	ns := inv.notice
-	inv.stateMu.Unlock()
-	inv.syncNoticeCompat(ns)
-	return ns
 }
 
 // DefaultWaitNoticeTimeoutErr is the default error returned when a wait notice times out.
@@ -794,7 +734,11 @@ type RunOptions struct {
 
 // NewInvocation create a new invocation
 func NewInvocation(invocationOpts ...InvocationOptions) *Invocation {
-	inv := &Invocation{}
+	inv := &Invocation{
+		InvocationID:   uuid.NewString(),
+		noticeMu:       &sync.Mutex{},
+		noticeChannels: make(map[string]chan any),
+	}
 
 	for _, opt := range invocationOpts {
 		opt(inv)
@@ -802,9 +746,6 @@ func NewInvocation(invocationOpts ...InvocationOptions) *Invocation {
 
 	if inv.InvocationID == "" {
 		inv.InvocationID = uuid.NewString()
-	}
-	if inv.notice == nil {
-		inv.notice = noticeStateSentinel
 	}
 
 	if inv.Branch == "" {
@@ -824,6 +765,7 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 		return nil
 	}
 	newInv := &Invocation{
+		InvocationID:    uuid.NewString(),
 		Session:         inv.Session,
 		SessionService:  inv.SessionService,
 		Message:         inv.Message,
@@ -831,7 +773,6 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 		MemoryService:   inv.MemoryService,
 		ArtifactService: inv.ArtifactService,
 		Plugins:         inv.Plugins,
-		notice:          inv.notice,
 		noticeChannels:  inv.noticeChannels,
 		noticeMu:        inv.noticeMu,
 		eventFilterKey:  inv.eventFilterKey,
@@ -845,9 +786,6 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 
 	if newInv.InvocationID == "" {
 		newInv.InvocationID = uuid.NewString()
-	}
-	if newInv.notice == nil {
-		newInv.notice = noticeStateSentinel
 	}
 
 	if newInv.Branch != "" {
@@ -1152,7 +1090,7 @@ func (inv *Invocation) AddNoticeChannelAndWait(ctx context.Context, key string, 
 
 // AddNoticeChannel add a new notice channel
 func (inv *Invocation) AddNoticeChannel(ctx context.Context, key string) chan any {
-	if inv == nil {
+	if inv == nil || inv.noticeMu == nil {
 		log.ErrorContext(
 			ctx,
 			"noticeMu is uninitialized, please use agent.NewInvocation or "+
@@ -1160,35 +1098,25 @@ func (inv *Invocation) AddNoticeChannel(ctx context.Context, key string) chan an
 		)
 		return nil
 	}
-	notice := inv.ensureNotice()
-	if notice == nil {
-		log.ErrorContext(
-			ctx,
-			"noticeMu is uninitialized, please use agent.NewInvocation or "+
-				"Clone method to create Invocation",
-		)
-		return nil
-	}
-	notice.mu.Lock()
-	defer notice.mu.Unlock()
+	inv.noticeMu.Lock()
+	defer inv.noticeMu.Unlock()
 
-	if ch, ok := notice.channels[key]; ok {
+	if ch, ok := inv.noticeChannels[key]; ok {
 		return ch
 	}
 
 	ch := make(chan any)
-	if notice.channels == nil {
-		notice.channels = make(map[string]chan any)
+	if inv.noticeChannels == nil {
+		inv.noticeChannels = make(map[string]chan any)
 	}
-	notice.channels[key] = ch
-	inv.syncNoticeCompat(notice)
+	inv.noticeChannels[key] = ch
 
 	return ch
 }
 
 // NotifyCompletion notify completion signal to waiting task
 func (inv *Invocation) NotifyCompletion(ctx context.Context, key string) error {
-	if inv == nil {
+	if inv == nil || inv.noticeMu == nil {
 		log.ErrorContext(
 			ctx,
 			"noticeMu is uninitialized, please use agent.NewInvocation or "+
@@ -1200,32 +1128,18 @@ func (inv *Invocation) NotifyCompletion(ctx context.Context, key string) error {
 			key,
 		)
 	}
-	notice := inv.ensureNotice()
-	if notice == nil {
-		log.ErrorContext(
-			ctx,
-			"noticeMu is uninitialized, please use agent.NewInvocation or "+
-				"Clone method to create Invocation",
-		)
-		return fmt.Errorf(
-			"noticeMu is uninitialized, please use agent.NewInvocation or "+
-				"Clone method to create Invocation key:%s",
-			key,
-		)
-	}
-	notice.mu.Lock()
-	defer notice.mu.Unlock()
+	inv.noticeMu.Lock()
+	defer inv.noticeMu.Unlock()
 
-	ch, ok := notice.channels[key]
+	ch, ok := inv.noticeChannels[key]
 	// channel not found, create a new one and close it.
 	// May involve notification followed by waiting.
 	if !ok {
 		ch = make(chan any)
-		if notice.channels == nil {
-			notice.channels = make(map[string]chan any)
+		if inv.noticeChannels == nil {
+			inv.noticeChannels = make(map[string]chan any)
 		}
-		notice.channels[key] = ch
-		inv.syncNoticeCompat(notice)
+		inv.noticeChannels[key] = ch
 		close(ch)
 		return nil
 	}
@@ -1247,7 +1161,7 @@ func (inv *Invocation) NotifyCompletion(ctx context.Context, key string) error {
 // The 'Invocation' instance created via the NewInvocation method ​​should be disposed​​
 // upon completion to prevent resource leaks.
 func (inv *Invocation) CleanupNotice(ctx context.Context) {
-	if inv == nil {
+	if inv == nil || inv.noticeMu == nil {
 		log.ErrorContext(
 			ctx,
 			"noticeMu is uninitialized, please use agent.NewInvocation or "+
@@ -1255,19 +1169,10 @@ func (inv *Invocation) CleanupNotice(ctx context.Context) {
 		)
 		return
 	}
-	notice := inv.ensureNotice()
-	if notice == nil {
-		log.ErrorContext(
-			ctx,
-			"noticeMu is uninitialized, please use agent.NewInvocation or "+
-				"Clone method to create Invocation",
-		)
-		return
-	}
-	notice.mu.Lock()
-	defer notice.mu.Unlock()
+	inv.noticeMu.Lock()
+	defer inv.noticeMu.Unlock()
 
-	for _, ch := range notice.channels {
+	for _, ch := range inv.noticeChannels {
 		select {
 		case _, isOpen := <-ch:
 			if isOpen {
@@ -1277,8 +1182,7 @@ func (inv *Invocation) CleanupNotice(ctx context.Context) {
 			close(ch)
 		}
 	}
-	notice.channels = nil
-	inv.syncNoticeCompat(notice)
+	inv.noticeChannels = nil
 }
 
 // GetCustomAgentConfig retrieves configuration for a specific custom agent type.
