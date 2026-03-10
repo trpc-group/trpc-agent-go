@@ -91,6 +91,45 @@ func TestEnsureNonEmptyContent_PreservesNonEmpty(t *testing.T) {
 	require.Equal(t, "q", out[0].Content)
 }
 
+func TestHasPayload(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  Message
+		want bool
+	}{
+		{
+			name: "content",
+			msg:  Message{Content: "hello"},
+			want: true,
+		},
+		{
+			name: "content parts",
+			msg: Message{
+				ContentParts: []ContentPart{{Type: ContentTypeText}},
+			},
+			want: true,
+		},
+		{
+			name: "reasoning content",
+			msg: Message{
+				ReasoningContent: "thinking",
+			},
+			want: true,
+		},
+		{
+			name: "empty message",
+			msg:  Message{},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, HasPayload(tt.msg))
+		})
+	}
+}
+
 func TestValidateAndFixMessageSequence_DropsOrphanPrefix(t *testing.T) {
 	messages := []Message{
 		NewAssistantMessage("orphan"),
