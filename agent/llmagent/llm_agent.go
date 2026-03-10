@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -57,7 +58,7 @@ type skillToolFlags struct {
 }
 
 func normalizeSkillToolProfile(profile string) string {
-	switch SkillToolProfile(profile) {
+	switch SkillToolProfile(strings.ToLower(strings.TrimSpace(profile))) {
 	case SkillToolProfileKnowledgeOnly:
 		return string(SkillToolProfileKnowledgeOnly)
 	case SkillToolProfileFull, "":

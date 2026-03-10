@@ -20,15 +20,15 @@ The example prints:
 From the `examples` module root:
 
 ```bash
-cd trpc-agent-go4/examples
+cd examples
 go run ./skilltoolprofile -profile full
 go run ./skilltoolprofile -profile knowledge_only
 ```
 
-Or from this directory:
+Or from the example directory:
 
 ```bash
-cd trpc-agent-go4/examples/skilltoolprofile
+cd examples/skilltoolprofile
 go run . -profile full
 go run . -profile knowledge_only
 ```
