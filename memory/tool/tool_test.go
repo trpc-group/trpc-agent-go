@@ -1193,3 +1193,56 @@ func TestBuildMetadata(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildSearchOptions(t *testing.T) {
+	req := &SearchMemoryRequest{
+		Query:            "Alice hiking",
+		Kind:             "episode",
+		TimeAfter:        "2024-05-01",
+		TimeBefore:       "May 2024",
+		OrderByEventTime: true,
+	}
+
+	got := buildSearchOptions(req)
+
+	assert.Equal(t, "Alice hiking", got.Query)
+	assert.Equal(t, memory.MemoryKindEpisode, got.Kind)
+	assert.True(t, got.Deduplicate)
+	assert.True(t, got.HybridSearch)
+	assert.True(t, got.KindFallback)
+	assert.True(t, got.OrderByEventTime)
+	require.NotNil(t, got.TimeAfter)
+	assert.Equal(t, "2024-05-01", got.TimeAfter.Format("2006-01-02"))
+	require.NotNil(t, got.TimeBefore)
+	assert.Equal(t, time.Date(2024, 5, 31, 23, 59, 59, 0, time.UTC), *got.TimeBefore)
+}
+
+func TestEntryToResult(t *testing.T) {
+	now := time.Date(2024, 5, 7, 9, 0, 0, 0, time.UTC)
+	eventTime := time.Date(2024, 5, 1, 18, 30, 0, 0, time.UTC)
+	entry := &memory.Entry{
+		ID:        "mem-1",
+		CreatedAt: now,
+		Score:     0.91,
+		Memory: &memory.Memory{
+			Memory:       "Alice hiked in Kyoto",
+			Topics:       []string{"travel"},
+			Kind:         memory.MemoryKindEpisode,
+			EventTime:    &eventTime,
+			Participants: []string{"Alice", "Bob"},
+			Location:     "Kyoto",
+		},
+	}
+
+	got := entryToResult(entry)
+
+	assert.Equal(t, "mem-1", got.ID)
+	assert.Equal(t, "Alice hiked in Kyoto", got.Memory)
+	assert.Equal(t, []string{"travel"}, got.Topics)
+	assert.Equal(t, now, got.Created)
+	assert.Equal(t, "episode", got.Kind)
+	assert.Equal(t, eventTime.Format(time.RFC3339), got.EventTime)
+	assert.Equal(t, []string{"Alice", "Bob"}, got.Participants)
+	assert.Equal(t, "Kyoto", got.Location)
+	assert.Equal(t, 0.91, got.Score)
+}

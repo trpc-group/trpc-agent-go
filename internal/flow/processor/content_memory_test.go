@@ -102,6 +102,33 @@ func TestFormatMemoriesForPrompt(t *testing.T) {
 			},
 		},
 		{
+			name: "episodic metadata is rendered inline",
+			memories: []*memory.Entry{
+				{
+					ID:      "mem-episode",
+					AppName: "app",
+					UserID:  "user",
+					Memory: &memory.Memory{
+						Memory:       "User hiked in Kyoto",
+						Topics:       []string{"travel", "hiking"},
+						Kind:         memory.MemoryKindEpisode,
+						EventTime:    func() *time.Time { t := time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC); return &t }(),
+						Participants: []string{"Alice", "Bob"},
+						Location:     "Kyoto",
+					},
+				},
+			},
+			contains: []string{
+				"The following are stored memories about the user.",
+				"[mem-episode] User hiked in Kyoto",
+				"kind=episode",
+				"date=2024-05-07",
+				"with=Alice, Bob",
+				"at=Kyoto",
+				"topics=travel, hiking",
+			},
+		},
+		{
 			name: "nil entry is skipped",
 			memories: []*memory.Entry{
 				{
