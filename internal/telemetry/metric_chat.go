@@ -35,7 +35,7 @@ var (
 	// ChatMetricGenAIClientOperationDuration records the distribution of total chat operation durations in seconds.
 	ChatMetricGenAIClientOperationDuration *histogram.DynamicFloat64Histogram
 	// ChatMetricGenAIServerTimeToFirstToken records the distribution of time to first token latency in seconds.
-	// This measures the time from request start until the first token is received.
+	// This measures the time from request start until the first meaningful response payload is received.
 	ChatMetricGenAIServerTimeToFirstToken *histogram.DynamicFloat64Histogram
 	// ChatMetricTRPCAgentGoClientTimeToFirstToken records the distribution of time to first token latency in seconds.
 	// Note: This metric is reported alongside ChatMetricGenAIServerTimeToFirstToken with the same value.
@@ -158,17 +158,16 @@ func (t *ChatMetricsTracker) TrackResponse(response *model.Response) {
 	}
 	var now time.Time
 	// Track first token timing (for both metrics and timing info)
-	if t.isFirstToken {
+	if t.isFirstToken && response.IsValidContent() {
 		if now.IsZero() {
 			now = time.Now()
 		}
-		// Always record firstTokenTimeDuration for metrics (even if no content)
+		// Record TTFT only when the first meaningful response payload arrives.
 		t.firstTokenTimeDuration = now.Sub(t.start)
 		t.isFirstToken = false
 
-		// Update FirstTokenDuration in TimingInfo only if not already recorded (first LLM call only)
-		// Meaningful content = reasoning content, regular content, or tool calls
-		if t.timingInfo != nil && t.timingInfo.FirstTokenDuration == 0 && len(response.Choices) > 0 {
+		// Update FirstTokenDuration in TimingInfo only if not already recorded (first LLM call only).
+		if t.timingInfo != nil && t.timingInfo.FirstTokenDuration == 0 {
 			t.timingInfo.FirstTokenDuration = now.Sub(t.start)
 		}
 
@@ -259,14 +258,16 @@ func (t *ChatMetricsTracker) RecordMetrics() func() {
 			ChatMetricGenAIClientOperationDuration.Record(t.ctx, requestDuration.Seconds(), metric.WithAttributes(otelAttrs...))
 		}
 
-		// Record time to first token (report both metrics with the same value)
-		if ChatMetricGenAIServerTimeToFirstToken != nil {
-			ChatMetricGenAIServerTimeToFirstToken.Record(t.ctx, t.firstTokenTimeDuration.Seconds(),
-				metric.WithAttributes(otelAttrs...))
-		}
-		if ChatMetricTRPCAgentGoClientTimeToFirstToken != nil {
-			ChatMetricTRPCAgentGoClientTimeToFirstToken.Record(t.ctx, t.firstTokenTimeDuration.Seconds(),
-				metric.WithAttributes(otelAttrs...))
+		// Record time to first token only when a meaningful payload was observed.
+		if t.firstTokenTimeDuration > 0 {
+			if ChatMetricGenAIServerTimeToFirstToken != nil {
+				ChatMetricGenAIServerTimeToFirstToken.Record(t.ctx, t.firstTokenTimeDuration.Seconds(),
+					metric.WithAttributes(otelAttrs...))
+			}
+			if ChatMetricTRPCAgentGoClientTimeToFirstToken != nil {
+				ChatMetricTRPCAgentGoClientTimeToFirstToken.Record(t.ctx, t.firstTokenTimeDuration.Seconds(),
+					metric.WithAttributes(otelAttrs...))
+			}
 		}
 
 		// Record input token usage
