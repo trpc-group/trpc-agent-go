@@ -850,15 +850,17 @@ func InjectIntoEvent(inv *Invocation, e *event.Event) {
 	e.FilterKey = inv.GetEventFilterKey()
 }
 
-func stripInvocationOutputFields(inv *Invocation, e *event.Event) {
+func projectInvocationOutputEvent(inv *Invocation, e *event.Event) *event.Event {
 	if inv == nil || e == nil || !inv.RunOptions.DisableEventInjection {
-		return
+		return e
 	}
-	e.RequestID = ""
-	e.ParentInvocationID = ""
-	e.InvocationID = ""
-	e.Branch = ""
-	e.FilterKey = ""
+	copied := *e
+	copied.RequestID = ""
+	copied.ParentInvocationID = ""
+	copied.InvocationID = ""
+	copied.Branch = ""
+	copied.FilterKey = ""
+	return &copied
 }
 
 func emitPreparedEvent(ctx context.Context, inv *Invocation, ch chan<- *event.Event, e *event.Event) error {
@@ -890,8 +892,7 @@ func emitPreparedEvent(ctx context.Context, inv *Invocation, ch chan<- *event.Ev
 
 // EmitOutputEvent applies output-only event projection and emits the event to channel.
 func EmitOutputEvent(ctx context.Context, inv *Invocation, ch chan<- *event.Event, e *event.Event) error {
-	stripInvocationOutputFields(inv, e)
-	return emitPreparedEvent(ctx, inv, ch, e)
+	return emitPreparedEvent(ctx, inv, ch, projectInvocationOutputEvent(inv, e))
 }
 
 // EmitEvent injects invocation information for internal handling and emits the event to channel.

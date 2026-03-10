@@ -813,6 +813,46 @@ func TestEmitOutputEvent_DisableEventInjectionFastPath(t *testing.T) {
 	require.Empty(t, sent.RequestID)
 }
 
+func TestEmitOutputEvent_DisableEventInjectionDoesNotMutateInput(t *testing.T) {
+	log.SetTraceEnabled(false)
+	t.Cleanup(func() {
+		log.SetTraceEnabled(false)
+	})
+	parent := NewInvocation(WithInvocationID("parent-output-copy"))
+	inv := parent.Clone(
+		WithInvocationID("inv-output-copy"),
+		WithInvocationBranch("branch-output-copy"),
+		WithInvocationEventFilterKey("filter-output-copy"),
+		WithInvocationRunOptions(RunOptions{
+			RequestID:             "req-output-copy",
+			DisableEventInjection: true,
+		}),
+	)
+	ch := make(chan *event.Event, 1)
+	evt := &event.Event{
+		ID:                 "event-output-copy",
+		InvocationID:       inv.InvocationID,
+		ParentInvocationID: parent.InvocationID,
+		Branch:             inv.Branch,
+		FilterKey:          inv.GetEventFilterKey(),
+		RequestID:          inv.RunOptions.RequestID,
+	}
+	err := EmitOutputEvent(context.Background(), inv, ch, evt)
+	require.NoError(t, err)
+	sent := <-ch
+	require.NotSame(t, evt, sent)
+	require.Empty(t, sent.InvocationID)
+	require.Empty(t, sent.ParentInvocationID)
+	require.Empty(t, sent.Branch)
+	require.Empty(t, sent.FilterKey)
+	require.Empty(t, sent.RequestID)
+	require.Equal(t, inv.InvocationID, evt.InvocationID)
+	require.Equal(t, parent.InvocationID, evt.ParentInvocationID)
+	require.Equal(t, inv.Branch, evt.Branch)
+	require.Equal(t, inv.GetEventFilterKey(), evt.FilterKey)
+	require.Equal(t, inv.RunOptions.RequestID, evt.RequestID)
+}
+
 func TestGetAppendEventNoticeKey(t *testing.T) {
 	tests := []struct {
 		name     string

@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -138,6 +139,32 @@ func (m *emittingMockAgent) Run(ctx context.Context, invocation *agent.Invocatio
 
 func (m *emittingMockAgent) Tools() []tool.Tool {
 	return nil
+}
+
+type capturingSessionService struct {
+	session.Service
+	mu       sync.Mutex
+	appended []*event.Event
+}
+
+func (s *capturingSessionService) AppendEvent(
+	ctx context.Context,
+	sess *session.Session,
+	evt *event.Event,
+	opts ...session.Option,
+) error {
+	s.mu.Lock()
+	s.appended = append(s.appended, evt)
+	s.mu.Unlock()
+	return s.Service.AppendEvent(ctx, sess, evt, opts...)
+}
+
+func (s *capturingSessionService) AppendedEvents() []*event.Event {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	copied := make([]*event.Event, len(s.appended))
+	copy(copied, s.appended)
+	return copied
 }
 
 type staticModel struct {
@@ -322,6 +349,39 @@ func TestRunner_Run_WithDisableEventInjectionPreservesPersistedMetadata(t *testi
 	require.Equal(t, filterKey, agentEvent.FilterKey)
 	require.NotEmpty(t, agentEvent.InvocationID)
 	require.NotEmpty(t, agentEvent.Branch)
+}
+
+func TestRunner_Run_WithDisableEventInjectionDoesNotMutateCapturedAppendEvents(t *testing.T) {
+	sessionService := &capturingSessionService{
+		Service: sessioninmemory.NewSessionService(),
+	}
+	runner := NewRunner(
+		"test-app",
+		&emittingMockAgent{name: "test-agent"},
+		WithSessionService(sessionService),
+	)
+	ctx := context.Background()
+	eventCh, err := runner.Run(
+		ctx,
+		"test-user",
+		"test-session",
+		model.NewUserMessage("Hello, world!"),
+		agent.WithRequestID("req-captured-events"),
+		agent.WithEventFilterKey("test-app/captured-events"),
+		agent.WithDisableEventInjection(true),
+	)
+	require.NoError(t, err)
+	for range eventCh {
+	}
+	appended := sessionService.AppendedEvents()
+	require.Len(t, appended, 3)
+	for _, evt := range appended {
+		require.NotNil(t, evt)
+		require.NotEmpty(t, evt.InvocationID)
+		require.NotEmpty(t, evt.Branch)
+		require.NotEmpty(t, evt.FilterKey)
+		require.NotEmpty(t, evt.RequestID)
+	}
 }
 
 func TestRunner_SessionIntegration_MultimodalUserMessage(t *testing.T) {
