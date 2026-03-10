@@ -6,6 +6,9 @@ Key ideas:
 
 - The agent starts with **no static structured output schema**.
 - The model uses Skills (`skill_load` / `skill_run`) like normal tools.
+- The demo sets `llmagent.WithEnableCodeExecutionResponseProcessor(false)` so
+  fenced code blocks in assistant text do not auto-execute while
+  `skill_run` is available.
 - The model extracts a JSON schema from the chosen Skill and calls a custom tool: `set_output_schema`.
 - `set_output_schema` updates `invocation.StructuredOutput`, which affects **subsequent** model calls in the same invocation.
 - The example sets `WithOutputKey(...)` so `OutputResponseProcessor` is installed and `event.StructuredOutput` is produced (without framework changes).

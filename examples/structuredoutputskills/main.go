@@ -109,6 +109,7 @@ func run() error {
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithSkills(repo),
 		llmagent.WithCodeExecutor(exec),
+		llmagent.WithEnableCodeExecutionResponseProcessor(false),
 		llmagent.WithStructuredOutputJSON(
 			new(helloResult),
 			true,

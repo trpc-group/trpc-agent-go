@@ -15,6 +15,9 @@ tool calls and tool responses, and executes skill scripts via the
 - `skill_run` to execute commands safely in a workspace, returning
   stdout/stderr and output files
   (and optionally saving files as artifacts)
+- This demo sets `llmagent.WithEnableCodeExecutionResponseProcessor(false)`
+  so fenced code blocks in assistant text do not auto-execute; command
+  execution should go through `skill_run`
 - Clear visualization of tool calls and tool responses
 - Example `user-file-ops` skill to summarize user-provided text files
 
