@@ -40,11 +40,6 @@ var (
 	ErrRunAlreadyExists = errors.New("agui: run already exists")
 	// ErrRunNotFound is returned when a run key cannot be found.
 	ErrRunNotFound = errors.New("agui: run not found")
-	// ErrDisableEventInjectionUnsupported is returned when AG-UI interrupt filtering
-	// requires invocation topology but caller disabled output event injection.
-	ErrDisableEventInjectionUnsupported = errors.New(
-		"agui: disable event injection is incompatible with top-level graph interrupt activity filtering",
-	)
 )
 
 // Runner executes AG-UI runs and emits AG-UI events.
@@ -191,109 +186,6 @@ func inputMessageFromRunAgentInput(input *adapter.RunAgentInput) (*model.Message
 	return &inputMessage, lastMessage.ID, &userMessage, nil
 }
 
-func resolveRunOptions(runOption []agent.RunOption) agent.RunOptions {
-	var opts agent.RunOptions
-	for _, opt := range runOption {
-		opt(&opts)
-	}
-	return opts
-}
-
-func resolvedRunOption(runOptions agent.RunOptions) agent.RunOption {
-	snapshot := runOptions
-	return func(opts *agent.RunOptions) {
-		if snapshot.RuntimeState != nil {
-			opts.RuntimeState = snapshot.RuntimeState
-		}
-		if snapshot.EventFilterKey != "" {
-			opts.EventFilterKey = snapshot.EventFilterKey
-		}
-		if snapshot.KnowledgeFilter != nil {
-			opts.KnowledgeFilter = snapshot.KnowledgeFilter
-		}
-		if snapshot.KnowledgeConditionedFilter != nil {
-			opts.KnowledgeConditionedFilter = snapshot.KnowledgeConditionedFilter
-		}
-		if snapshot.Messages != nil {
-			opts.Messages = snapshot.Messages
-		}
-		if snapshot.InjectedContextMessages != nil {
-			opts.InjectedContextMessages = append(opts.InjectedContextMessages, snapshot.InjectedContextMessages...)
-		}
-		if snapshot.Resume {
-			opts.Resume = true
-		}
-		if snapshot.GraphEmitFinalModelResponses {
-			opts.GraphEmitFinalModelResponses = true
-		}
-		if snapshot.StreamModeEnabled {
-			opts.StreamModeEnabled = true
-			opts.StreamModes = snapshot.StreamModes
-		}
-		if snapshot.DisableEventInjection {
-			opts.DisableEventInjection = true
-		}
-		if snapshot.RequestID != "" {
-			opts.RequestID = snapshot.RequestID
-		}
-		if snapshot.DetachedCancel {
-			opts.DetachedCancel = true
-		}
-		if snapshot.MaxRunDuration > 0 {
-			opts.MaxRunDuration = snapshot.MaxRunDuration
-		}
-		if snapshot.SpanAttributes != nil {
-			opts.SpanAttributes = snapshot.SpanAttributes
-		}
-		if snapshot.A2ARequestOptions != nil {
-			opts.A2ARequestOptions = append(opts.A2ARequestOptions, snapshot.A2ARequestOptions...)
-		}
-		if snapshot.CustomAgentConfigs != nil {
-			opts.CustomAgentConfigs = snapshot.CustomAgentConfigs
-		}
-		if snapshot.Agent != nil {
-			opts.Agent = snapshot.Agent
-		}
-		if snapshot.AgentByName != "" {
-			opts.AgentByName = snapshot.AgentByName
-		}
-		if snapshot.Model != nil {
-			opts.Model = snapshot.Model
-		}
-		if snapshot.ModelName != "" {
-			opts.ModelName = snapshot.ModelName
-		}
-		if snapshot.Stream != nil {
-			opts.Stream = snapshot.Stream
-		}
-		if snapshot.Instruction != "" {
-			opts.Instruction = snapshot.Instruction
-		}
-		if snapshot.GlobalInstruction != "" {
-			opts.GlobalInstruction = snapshot.GlobalInstruction
-		}
-		if snapshot.ToolFilter != nil {
-			opts.ToolFilter = snapshot.ToolFilter
-		}
-		if snapshot.ToolExecutionFilter != nil {
-			opts.ToolExecutionFilter = snapshot.ToolExecutionFilter
-		}
-		if snapshot.ToolCallArgumentsJSONRepairEnabled != nil {
-			opts.ToolCallArgumentsJSONRepairEnabled = snapshot.ToolCallArgumentsJSONRepairEnabled
-		}
-	}
-}
-
-func (r *runner) validateRunOptions(runOptions *agent.RunOptions) error {
-	if !r.graphNodeInterruptActivityEnabled || !r.graphNodeInterruptActivityTopLevelOnly {
-		return nil
-	}
-	if runOptions == nil || !runOptions.DisableEventInjection {
-		return nil
-	}
-	return ErrDisableEventInjectionUnsupported
-}
-
 // Run starts processing one AG-UI run request and returns a channel of AG-UI events.
 func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) (<-chan aguievents.Event, error) {
 	if r.runner == nil {
@@ -327,10 +219,6 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 	if runtimeState != nil {
 		runOption = append(runOption, agent.WithRuntimeState(runtimeState))
 	}
-	resolvedRunOptions := resolveRunOptions(runOption)
-	if err := r.validateRunOptions(&resolvedRunOptions); err != nil {
-		return nil, err
-	}
 	ctx, span, err := r.startSpan(ctx, runAgentInput)
 	if err != nil {
 		return nil, fmt.Errorf("start span: %w", err)
@@ -359,11 +247,11 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 		inputMessage:   inputMessage,
 		inputMessageID: inputMessageID,
 		userMessage:    userMessage,
-		runOption:      []agent.RunOption{resolvedRunOption(resolvedRunOptions)},
+		runOption:      runOption,
 		translator:     trans,
 		enableTrack:    r.tracker != nil,
 		span:           span,
-		resume:         parseResumeInfo(&resolvedRunOptions),
+		resume:         parseResumeInfo(runOption),
 	}
 	events := make(chan aguievents.Event)
 	ctx, cancel := r.newExecutionContext(ctx, r.timeout)
@@ -451,9 +339,13 @@ func (r *runner) run(ctx context.Context, cancel context.CancelFunc, key session
 	}
 }
 
-func parseResumeInfo(opts *agent.RunOptions) *resumeInfo {
-	if opts == nil {
+func parseResumeInfo(opt []agent.RunOption) *resumeInfo {
+	if len(opt) == 0 {
 		return nil
+	}
+	opts := &agent.RunOptions{}
+	for _, o := range opt {
+		o(opts)
 	}
 	state := opts.RuntimeState
 	if len(state) == 0 {

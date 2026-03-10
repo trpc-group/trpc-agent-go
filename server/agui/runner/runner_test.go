@@ -1336,107 +1336,21 @@ func TestRunRunOptionResolverOptions(t *testing.T) {
 func TestRunRunOptionResolverDisableEventInjectionIsPassedThrough(t *testing.T) {
 	fakeTrans := &fakeTranslator{}
 	underlying := &fakeRunner{}
-	sideEffectCalls := 0
 	underlying.run = func(ctx context.Context,
 		userID, sessionID string,
 		message model.Message,
 		opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
-		runOpts := agent.RunOptions{RequestID: "runner-default-request-id"}
+		var runOpts agent.RunOptions
 		for _, opt := range opts {
 			opt(&runOpts)
 		}
 		assert.True(t, runOpts.DisableEventInjection)
-		assert.Equal(t, "runner-default-request-id", runOpts.RequestID)
 		ch := make(chan *agentevent.Event)
 		go func() {
 			close(ch)
 		}()
 		return ch, nil
 	}
-	input := &adapter.RunAgentInput{
-		ThreadID: "thread",
-		RunID:    "run",
-		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
-	}
-	r := &runner{
-		runner: underlying,
-		translatorFactory: func(_ context.Context, _ *adapter.RunAgentInput, _ ...translator.Option) (translator.Translator, error) {
-			return fakeTrans, nil
-		},
-		userIDResolver: defaultUserIDResolver,
-		stateResolver:  defaultStateResolver,
-		runOptionResolver: func(context.Context, *adapter.RunAgentInput) ([]agent.RunOption, error) {
-			return []agent.RunOption{func(opts *agent.RunOptions) {
-				sideEffectCalls++
-				opts.DisableEventInjection = true
-			}}, nil
-		},
-		startSpan: defaultStartSpan,
-	}
-
-	eventsCh, err := r.Run(context.Background(), input)
-	assert.NoError(t, err)
-	evts := collectEvents(t, eventsCh)
-	assert.NotEmpty(t, evts)
-	assert.Equal(t, 1, sideEffectCalls)
-	assert.Equal(t, 1, underlying.calls)
-}
-
-func TestRunRunOptionResolverPreservesAppendSemanticsForDefaultSlices(t *testing.T) {
-	fakeTrans := &fakeTranslator{}
-	defaultContext := model.NewSystemMessage("default")
-	addedContext := model.NewSystemMessage("added")
-	underlying := &fakeRunner{}
-	underlying.run = func(ctx context.Context,
-		userID, sessionID string,
-		message model.Message,
-		opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
-		runOpts := agent.RunOptions{
-			InjectedContextMessages: []model.Message{defaultContext},
-			A2ARequestOptions:       []any{"default-opt"},
-		}
-		for _, opt := range opts {
-			opt(&runOpts)
-		}
-		assert.Equal(t, []model.Message{defaultContext, addedContext}, runOpts.InjectedContextMessages)
-		assert.Equal(t, []any{"default-opt", "added-opt"}, runOpts.A2ARequestOptions)
-		ch := make(chan *agentevent.Event)
-		go func() {
-			close(ch)
-		}()
-		return ch, nil
-	}
-	input := &adapter.RunAgentInput{
-		ThreadID: "thread",
-		RunID:    "run",
-		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
-	}
-	r := &runner{
-		runner: underlying,
-		translatorFactory: func(_ context.Context, _ *adapter.RunAgentInput, _ ...translator.Option) (translator.Translator, error) {
-			return fakeTrans, nil
-		},
-		userIDResolver: defaultUserIDResolver,
-		stateResolver:  defaultStateResolver,
-		runOptionResolver: func(context.Context, *adapter.RunAgentInput) ([]agent.RunOption, error) {
-			return []agent.RunOption{
-				agent.WithInjectedContextMessages([]model.Message{addedContext}),
-				agent.WithA2ARequestOptions("added-opt"),
-			}, nil
-		},
-		startSpan: defaultStartSpan,
-	}
-	eventsCh, err := r.Run(context.Background(), input)
-	assert.NoError(t, err)
-	evts := collectEvents(t, eventsCh)
-	assert.NotEmpty(t, evts)
-	assert.Equal(t, 1, underlying.calls)
-}
-
-func TestRunRejectsDisableEventInjectionForTopLevelInterruptFiltering(t *testing.T) {
-	fakeTrans := &fakeTranslator{}
-	underlying := &fakeRunner{}
-	startSpanCalled := false
 	input := &adapter.RunAgentInput{
 		ThreadID: "thread",
 		RunID:    "run",
@@ -1452,19 +1366,14 @@ func TestRunRejectsDisableEventInjectionForTopLevelInterruptFiltering(t *testing
 		runOptionResolver: func(context.Context, *adapter.RunAgentInput) ([]agent.RunOption, error) {
 			return []agent.RunOption{agent.WithDisableEventInjection(true)}, nil
 		},
-		graphNodeInterruptActivityEnabled:      true,
-		graphNodeInterruptActivityTopLevelOnly: true,
-		startSpan: func(ctx context.Context, in *adapter.RunAgentInput) (context.Context, trace.Span, error) {
-			assert.Same(t, input, in)
-			startSpanCalled = true
-			return ctx, trace.SpanFromContext(ctx), nil
-		},
+		startSpan: defaultStartSpan,
 	}
+
 	eventsCh, err := r.Run(context.Background(), input)
-	assert.Nil(t, eventsCh)
-	assert.ErrorIs(t, err, ErrDisableEventInjectionUnsupported)
-	assert.False(t, startSpanCalled)
-	assert.Equal(t, 0, underlying.calls)
+	assert.NoError(t, err)
+	evts := collectEvents(t, eventsCh)
+	assert.NotEmpty(t, evts)
+	assert.Equal(t, 1, underlying.calls)
 }
 
 func TestRunStateResolverOverridesRuntimeState(t *testing.T) {
