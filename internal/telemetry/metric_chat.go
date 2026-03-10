@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/metric/histogram"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/metrics"
+	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 )
 
 var (
@@ -65,33 +66,33 @@ type chatAttributes struct {
 
 func (a chatAttributes) toAttributes() []attribute.KeyValue {
 	attrs := []attribute.KeyValue{
-		attribute.String(KeyGenAIOperationName, OperationChat),
-		attribute.String(KeyGenAISystem, a.RequestModelName),
-		attribute.String(KeyGenAIRequestModel, a.RequestModelName),
+		attribute.String(semconvtrace.KeyGenAIOperationName, OperationChat),
+		attribute.String(semconvtrace.KeyGenAISystem, a.RequestModelName),
+		attribute.String(semconvtrace.KeyGenAIRequestModel, a.RequestModelName),
 		attribute.Bool(metrics.KeyTRPCAgentGoStream, a.Stream),
 	}
 	if a.ResponseModelName != "" {
-		attrs = append(attrs, attribute.String(KeyGenAIResponseModel, a.ResponseModelName))
+		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIResponseModel, a.ResponseModelName))
 	}
 	if a.AppName != "" {
-		attrs = append(attrs, attribute.String(KeyTRPCAgentGoAppName, a.AppName))
+		attrs = append(attrs, attribute.String(semconvtrace.KeyTRPCAgentGoAppName, a.AppName))
 	}
 	if a.UserID != "" {
-		attrs = append(attrs, attribute.String(KeyTRPCAgentGoUserID, a.UserID))
+		attrs = append(attrs, attribute.String(semconvtrace.KeyTRPCAgentGoUserID, a.UserID))
 	}
 	if a.SessionID != "" {
-		attrs = append(attrs, attribute.String(KeyGenAIConversationID, a.SessionID))
+		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIConversationID, a.SessionID))
 	}
 	if a.TaskType != "" {
-		attrs = append(attrs, attribute.String(KeyGenAITaskType, a.TaskType))
+		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAITaskType, a.TaskType))
 	}
 	if a.ErrorType != "" {
-		attrs = append(attrs, attribute.String(KeyErrorType, a.ErrorType))
+		attrs = append(attrs, attribute.String(semconvtrace.KeyErrorType, a.ErrorType))
 	} else if a.Error != nil {
-		attrs = append(attrs, attribute.String(KeyErrorType, ToErrorType(a.Error, ValueDefaultErrorType)))
+		attrs = append(attrs, attribute.String(semconvtrace.KeyErrorType, ToErrorType(a.Error, semconvtrace.ValueDefaultErrorType)))
 	}
 	if a.AgentName != "" {
-		attrs = append(attrs, attribute.String(KeyGenAIAgentName, a.AgentName))
+		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIAgentName, a.AgentName))
 	}
 
 	return attrs
@@ -271,28 +272,28 @@ func (t *ChatMetricsTracker) RecordMetrics() func() {
 		// Record input token usage
 		if ChatMetricGenAIClientTokenUsage != nil {
 			ChatMetricGenAIClientTokenUsage.Record(t.ctx, int64(t.totalPromptTokens),
-				metric.WithAttributes(append(otelAttrs, attribute.String(KeyGenAITokenType, metrics.KeyTRPCAgentGoInputTokenType))...))
+				metric.WithAttributes(append(otelAttrs, attribute.String(semconvtrace.KeyGenAITokenType, metrics.KeyTRPCAgentGoInputTokenType))...))
 		}
 		// Record cached prompt token usage (subset of input tokens)
 		if ChatMetricGenAIClientTokenUsage != nil {
 			ChatMetricGenAIClientTokenUsage.Record(t.ctx, int64(t.totalPromptCachedTokens),
-				metric.WithAttributes(append(otelAttrs, attribute.String(KeyGenAITokenType, metrics.KeyTRPCAgentGoInputCachedTokenType))...))
+				metric.WithAttributes(append(otelAttrs, attribute.String(semconvtrace.KeyGenAITokenType, metrics.KeyTRPCAgentGoInputCachedTokenType))...))
 		}
 		// Record tokens read from prompt cache (Anthropic)
 		if ChatMetricGenAIClientTokenUsage != nil {
 			ChatMetricGenAIClientTokenUsage.Record(t.ctx, int64(t.totalPromptCacheReadTokens),
-				metric.WithAttributes(append(otelAttrs, attribute.String(KeyGenAITokenType, metrics.KeyTRPCAgentGoInputCacheReadTokenType))...))
+				metric.WithAttributes(append(otelAttrs, attribute.String(semconvtrace.KeyGenAITokenType, metrics.KeyTRPCAgentGoInputCacheReadTokenType))...))
 		}
 		// Record tokens used to create prompt cache (Anthropic)
 		if ChatMetricGenAIClientTokenUsage != nil {
 			ChatMetricGenAIClientTokenUsage.Record(t.ctx, int64(t.totalPromptCacheCreationTokens),
-				metric.WithAttributes(append(otelAttrs, attribute.String(KeyGenAITokenType, metrics.KeyTRPCAgentGoInputCacheCreationTokenType))...))
+				metric.WithAttributes(append(otelAttrs, attribute.String(semconvtrace.KeyGenAITokenType, metrics.KeyTRPCAgentGoInputCacheCreationTokenType))...))
 		}
 
 		// Record output token usage
 		if ChatMetricGenAIClientTokenUsage != nil {
 			ChatMetricGenAIClientTokenUsage.Record(t.ctx, int64(t.totalCompletionTokens),
-				metric.WithAttributes(append(otelAttrs, attribute.String(KeyGenAITokenType, metrics.KeyTRPCAgentGoOutputTokenType))...))
+				metric.WithAttributes(append(otelAttrs, attribute.String(semconvtrace.KeyGenAITokenType, metrics.KeyTRPCAgentGoOutputTokenType))...))
 		}
 
 		// Calculate and record derived metrics

@@ -40,6 +40,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -1970,8 +1971,8 @@ func finalizeInvokeAgentSpan(span oteltrace.Span, errp *error) {
 	err := *errp
 	span.SetStatus(codes.Error, err.Error())
 	span.SetAttributes(attribute.String(
-		itelemetry.KeyErrorType,
-		itelemetry.ToErrorType(err, itelemetry.ValueDefaultErrorType),
+		semconvtrace.KeyErrorType,
+		itelemetry.ToErrorType(err, semconvtrace.ValueDefaultErrorType),
 	))
 	span.End()
 }
@@ -2271,7 +2272,7 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 			emitAgentErrorEvent(ctx, eventChan, invocationID, nodeID, startTime, endTime, err)
 			span.RecordError(err)
 			span.SetStatus(codes.Error, err.Error())
-			tracker.SetResponseErrorType(itelemetry.ValueDefaultErrorType)
+			tracker.SetResponseErrorType(semconvtrace.ValueDefaultErrorType)
 			return nil, fmt.Errorf("failed to run agent %s: %w", agentName, err)
 		}
 
