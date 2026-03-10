@@ -492,14 +492,13 @@ func (w *AutoMemoryWorker) executeOperation(
 }
 
 // opToMetadata converts extractor.Operation episodic
-// fields to memory.MemoryMetadata. Always returns a non-nil
-// value; defaults to Kind=MemoryKindFact when no episodic
-// data is present so that backends do not need nil-guard
-// logic.
+// fields to memory.Metadata. Always returns a non-nil
+// value; defaults to Kind=KindFact when no episodic data
+// is present so that backends do not need nil-guard logic.
 func opToMetadata(op *extractor.Operation) *memory.Metadata {
 	kind := op.MemoryKind
 	if kind == "" {
-		kind = memory.MemoryKindFact
+		kind = memory.KindFact
 	}
 	return &memory.Metadata{
 		Kind:         kind,

@@ -46,10 +46,10 @@ var (
 )
 
 // Metadata holds optional episodic memory metadata.
-// When Kind is empty or MemoryKindFact, episodic fields
-// are ignored.
+// When Kind is empty or KindFact, episodic fields are
+// ignored.
 type Metadata struct {
-	Kind         MemoryKind // Memory kind: "fact" or "episode".
+	Kind         Kind       // Memory kind: "fact" or "episode".
 	EventTime    *time.Time // When the event occurred (required for episodes).
 	Participants []string   // People involved in the event.
 	Location     string     // Where the event took place.
@@ -177,16 +177,16 @@ type Service interface {
 // This type can be shared by different implementations.
 type ToolCreator func() tool.Tool
 
-// MemoryKind distinguishes between semantic facts and episodic memories.
-type MemoryKind string
+// Kind distinguishes between semantic facts and episodic memories.
+type Kind string
 
 const (
-	// MemoryKindFact represents stable personal attributes, preferences, or background.
+	// KindFact represents stable personal attributes, preferences, or background.
 	// Example: "User is a software engineer."
-	MemoryKindFact MemoryKind = "fact"
-	// MemoryKindEpisode represents a specific event that happened at a particular time.
+	KindFact Kind = "fact"
+	// KindEpisode represents a specific event that happened at a particular time.
 	// Example: "On 2024-05-07, User went hiking at Mt. Fuji with Alice."
-	MemoryKindEpisode MemoryKind = "episode"
+	KindEpisode Kind = "episode"
 )
 
 // Memory represents a memory entry with content and metadata.
@@ -196,7 +196,7 @@ type Memory struct {
 	LastUpdated *time.Time `json:"last_updated,omitempty"` // Last update time.
 
 	// Episodic memory fields.
-	Kind         MemoryKind `json:"kind,omitempty"`         // Memory kind: "fact" or "episode".
+	Kind         Kind       `json:"kind,omitempty"`         // Memory kind: "fact" or "episode".
 	EventTime    *time.Time `json:"event_time,omitempty"`   // When the event occurred.
 	Participants []string   `json:"participants,omitempty"` // People involved in the event.
 	Location     string     `json:"location,omitempty"`     // Where the event took place.
@@ -244,7 +244,7 @@ func (u *UserKey) CheckUserKey() error {
 // SearchOptions provides advanced filtering for memory search.
 type SearchOptions struct {
 	Query      string     // Semantic search query (required).
-	Kind       MemoryKind // Filter by memory kind ("fact" or "episode"). Empty means all.
+	Kind       Kind       // Filter by memory kind ("fact" or "episode"). Empty means all.
 	TimeAfter  *time.Time // Filter episodes with event_time >= TimeAfter.
 	TimeBefore *time.Time // Filter episodes with event_time <= TimeBefore.
 	MaxResults int        // Override default max results. 0 means use default.

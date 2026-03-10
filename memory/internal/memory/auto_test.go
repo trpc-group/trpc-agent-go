@@ -1657,38 +1657,38 @@ func TestOpToMetadata(t *testing.T) {
 		op := &extractor.Operation{}
 		got := opToMetadata(op)
 		require.NotNil(t, got)
-		assert.Equal(t, memory.MemoryKindFact, got.Kind)
+		assert.Equal(t, memory.KindFact, got.Kind)
 	})
 
 	t.Run("fact kind", func(t *testing.T) {
 		op := &extractor.Operation{
-			MemoryKind: memory.MemoryKindFact,
+			MemoryKind: memory.KindFact,
 		}
 		got := opToMetadata(op)
 		require.NotNil(t, got)
-		assert.Equal(t, memory.MemoryKindFact, got.Kind)
+		assert.Equal(t, memory.KindFact, got.Kind)
 	})
 
 	t.Run("episode with time", func(t *testing.T) {
 		eventTime := time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC)
 		op := &extractor.Operation{
-			MemoryKind: memory.MemoryKindEpisode,
+			MemoryKind: memory.KindEpisode,
 			EventTime:  &eventTime,
 		}
 		got := opToMetadata(op)
 		require.NotNil(t, got)
-		assert.Equal(t, memory.MemoryKindEpisode, got.Kind)
+		assert.Equal(t, memory.KindEpisode, got.Kind)
 		assert.Equal(t, &eventTime, got.EventTime)
 	})
 
 	t.Run("episode without time remains episode", func(t *testing.T) {
 		op := &extractor.Operation{
-			MemoryKind:   memory.MemoryKindEpisode,
+			MemoryKind:   memory.KindEpisode,
 			Participants: []string{"Alice"},
 		}
 		got := opToMetadata(op)
 		require.NotNil(t, got)
-		assert.Equal(t, memory.MemoryKindEpisode, got.Kind, "episode without event_time should remain episode")
+		assert.Equal(t, memory.KindEpisode, got.Kind, "episode without event_time should remain episode")
 		assert.Nil(t, got.EventTime)
 		assert.Equal(t, []string{"Alice"}, got.Participants)
 	})

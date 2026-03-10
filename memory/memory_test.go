@@ -316,7 +316,7 @@ func TestToolCreator(t *testing.T) {
 func TestResolveAddOptions(t *testing.T) {
 	now := time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC)
 	meta := &Metadata{
-		Kind:         MemoryKindEpisode,
+		Kind:         KindEpisode,
 		EventTime:    &now,
 		Participants: []string{"Alice"},
 		Location:     "Kyoto",
@@ -332,7 +332,7 @@ func TestResolveAddOptions(t *testing.T) {
 
 func TestResolveUpdateOptions(t *testing.T) {
 	meta := &Metadata{
-		Kind:     MemoryKindFact,
+		Kind:     KindFact,
 		Location: "Tokyo",
 	}
 
@@ -355,7 +355,7 @@ func TestResolveSearchOptions(t *testing.T) {
 	t.Run("search options can override the base query", func(t *testing.T) {
 		expected := SearchOptions{
 			Query:               "tea",
-			Kind:                MemoryKindEpisode,
+			Kind:                KindEpisode,
 			MaxResults:          5,
 			SimilarityThreshold: 0.8,
 			OrderByEventTime:    true,

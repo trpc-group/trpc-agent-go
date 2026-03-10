@@ -127,10 +127,10 @@ func parseToolCallArgs(toolName string, args map[string]any) *Operation {
 
 // parseEpisodicArgs extracts episodic memory fields from tool call arguments.
 func parseEpisodicArgs(op *Operation, args map[string]any) {
-	if kind, _ := args[argKeyMemoryKind].(string); kind == string(memory.MemoryKindEpisode) {
-		op.MemoryKind = memory.MemoryKindEpisode
+	if kind, _ := args[argKeyMemoryKind].(string); kind == string(memory.KindEpisode) {
+		op.MemoryKind = memory.KindEpisode
 	} else {
-		op.MemoryKind = memory.MemoryKindFact
+		op.MemoryKind = memory.KindFact
 	}
 
 	if t, _ := args[argKeyEventTime].(string); t != "" {

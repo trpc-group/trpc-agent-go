@@ -184,13 +184,13 @@ func TestApplyMetadata(t *testing.T) {
 	t.Run("nil inputs are ignored", func(t *testing.T) {
 		mem := &memory.Memory{
 			Memory: "keep me unchanged",
-			Kind:   memory.MemoryKindFact,
+			Kind:   memory.KindFact,
 		}
 
-		ApplyMetadata(nil, &memory.Metadata{Kind: memory.MemoryKindEpisode})
+		ApplyMetadata(nil, &memory.Metadata{Kind: memory.KindEpisode})
 		ApplyMetadata(mem, nil)
 
-		assert.Equal(t, memory.MemoryKindFact, mem.Kind)
+		assert.Equal(t, memory.KindFact, mem.Kind)
 		assert.Nil(t, mem.EventTime)
 		assert.Empty(t, mem.Participants)
 		assert.Empty(t, mem.Location)
@@ -199,7 +199,7 @@ func TestApplyMetadata(t *testing.T) {
 	t.Run("episode metadata is applied", func(t *testing.T) {
 		mem := &memory.Memory{Memory: "trip"}
 		meta := &memory.Metadata{
-			Kind:         memory.MemoryKindEpisode,
+			Kind:         memory.KindEpisode,
 			EventTime:    &now,
 			Participants: []string{"Alice", "Bob"},
 			Location:     "Kyoto",
@@ -207,7 +207,7 @@ func TestApplyMetadata(t *testing.T) {
 
 		ApplyMetadata(mem, meta)
 
-		assert.Equal(t, memory.MemoryKindEpisode, mem.Kind)
+		assert.Equal(t, memory.KindEpisode, mem.Kind)
 		require.NotNil(t, mem.EventTime)
 		assert.Equal(t, now, *mem.EventTime)
 		assert.Equal(t, []string{"Alice", "Bob"}, mem.Participants)
@@ -215,7 +215,7 @@ func TestApplyMetadata(t *testing.T) {
 	})
 
 	t.Run("empty kind keeps the original kind", func(t *testing.T) {
-		mem := &memory.Memory{Memory: "profile", Kind: memory.MemoryKindFact}
+		mem := &memory.Memory{Memory: "profile", Kind: memory.KindFact}
 		meta := &memory.Metadata{
 			EventTime:    &now,
 			Participants: []string{"Alice"},
@@ -224,7 +224,7 @@ func TestApplyMetadata(t *testing.T) {
 
 		ApplyMetadata(mem, meta)
 
-		assert.Equal(t, memory.MemoryKindFact, mem.Kind)
+		assert.Equal(t, memory.KindFact, mem.Kind)
 		require.NotNil(t, mem.EventTime)
 		assert.Equal(t, now, *mem.EventTime)
 		assert.Equal(t, []string{"Alice"}, mem.Participants)

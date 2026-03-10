@@ -782,7 +782,7 @@ func mergeHybridResults(
 // removed by memory ID.
 func mergeSearchResults(
 	primary, fallback []*memory.Entry,
-	preferredKind memory.MemoryKind,
+	preferredKind memory.Kind,
 	maxResults int,
 ) []*memory.Entry {
 	seen := make(map[string]bool, len(primary))
@@ -990,7 +990,7 @@ func buildEntry(
 		Memory:      memoryContent,
 		Topics:      []string(topics),
 		LastUpdated: &updatedAt,
-		Kind:        memory.MemoryKind(memoryKind),
+		Kind:        memory.Kind(memoryKind),
 	}
 	if eventTime.Valid {
 		mem.EventTime = &eventTime.Time
@@ -1035,7 +1035,7 @@ type metadataSQLFields struct {
 // ep is nil.
 func resolveMetadata(ep *memory.Metadata) metadataSQLFields {
 	f := metadataSQLFields{
-		kind:         string(memory.MemoryKindFact),
+		kind:         string(memory.KindFact),
 		participants: []string{},
 	}
 	if ep == nil {

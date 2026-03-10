@@ -59,7 +59,7 @@ func TestParseToolCallArgs_Add(t *testing.T) {
 				Type:         OperationAdd,
 				Memory:       "User likes coffee.",
 				Topics:       []string{"preferences", "food"},
-				MemoryKind:   memory.MemoryKindFact,
+				MemoryKind:   memory.KindFact,
 				Participants: []string{},
 			},
 		},
@@ -72,7 +72,7 @@ func TestParseToolCallArgs_Add(t *testing.T) {
 				Type:         OperationAdd,
 				Memory:       "User likes tea.",
 				Topics:       []string{},
-				MemoryKind:   memory.MemoryKindFact,
+				MemoryKind:   memory.KindFact,
 				Participants: []string{},
 			},
 		},
@@ -116,7 +116,7 @@ func TestParseToolCallArgs_Update(t *testing.T) {
 				MemoryID:     "mem-123",
 				Memory:       "User now prefers tea.",
 				Topics:       []string{"preferences"},
-				MemoryKind:   memory.MemoryKindFact,
+				MemoryKind:   memory.KindFact,
 				Participants: []string{},
 			},
 		},
@@ -223,7 +223,7 @@ func TestParseEpisodicArgs_EpisodeWithTime(t *testing.T) {
 	}
 	parseEpisodicArgs(op, args)
 
-	assert.Equal(t, memory.MemoryKindEpisode, op.MemoryKind)
+	assert.Equal(t, memory.KindEpisode, op.MemoryKind)
 	require.NotNil(t, op.EventTime)
 	assert.Equal(t, time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC), *op.EventTime)
 	assert.Equal(t, []string{"Alice", "Bob"}, op.Participants)
@@ -239,7 +239,7 @@ func TestParseEpisodicArgs_EpisodeWithoutTime_RemainsEpisode(t *testing.T) {
 	parseEpisodicArgs(op, args)
 
 	// episode without event_time should remain episode.
-	assert.Equal(t, memory.MemoryKindEpisode, op.MemoryKind)
+	assert.Equal(t, memory.KindEpisode, op.MemoryKind)
 	assert.Nil(t, op.EventTime)
 	assert.Equal(t, []string{"Alice"}, op.Participants)
 }
@@ -252,7 +252,7 @@ func TestParseEpisodicArgs_EpisodeWithUnparsableTime_RemainsEpisode(t *testing.T
 	}
 	parseEpisodicArgs(op, args)
 
-	assert.Equal(t, memory.MemoryKindEpisode, op.MemoryKind)
+	assert.Equal(t, memory.KindEpisode, op.MemoryKind)
 	assert.Nil(t, op.EventTime)
 }
 
@@ -261,7 +261,7 @@ func TestParseEpisodicArgs_FactDefault(t *testing.T) {
 	args := map[string]any{}
 	parseEpisodicArgs(op, args)
 
-	assert.Equal(t, memory.MemoryKindFact, op.MemoryKind)
+	assert.Equal(t, memory.KindFact, op.MemoryKind)
 	assert.Nil(t, op.EventTime)
 	assert.Equal(t, []string{}, op.Participants)
 	assert.Empty(t, op.Location)

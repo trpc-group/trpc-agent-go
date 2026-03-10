@@ -372,7 +372,7 @@ func buildMetadata(kind, eventTimeStr string, participants []string, location st
 		return nil
 	}
 	ep := &memory.Metadata{
-		Kind:         memory.MemoryKind(kind),
+		Kind:         memory.Kind(kind),
 		Participants: participants,
 		Location:     location,
 	}
@@ -386,7 +386,7 @@ func buildMetadata(kind, eventTimeStr string, participants []string, location st
 func buildSearchOptions(req *SearchMemoryRequest) memory.SearchOptions {
 	opts := memory.SearchOptions{
 		Query:        req.Query,
-		Kind:         memory.MemoryKind(req.Kind),
+		Kind:         memory.Kind(req.Kind),
 		Deduplicate:  true,
 		HybridSearch: true,
 	}
