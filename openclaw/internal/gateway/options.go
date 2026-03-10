@@ -24,6 +24,7 @@ type SessionIDFunc func(InboundMessage) (string, error)
 type options struct {
 	basePath     string
 	messagesPath string
+	streamPath   string
 	statusPath   string
 	cancelPath   string
 	healthPath   string
@@ -55,6 +56,7 @@ func newOptions(opts ...Option) options {
 	o := options{
 		basePath:       defaultBasePath,
 		messagesPath:   defaultMessagesPath,
+		streamPath:     defaultMessagesStreamPath,
 		statusPath:     defaultStatusPath,
 		cancelPath:     defaultCancelPath,
 		healthPath:     defaultHealthPath,
@@ -72,6 +74,9 @@ func newOptions(opts ...Option) options {
 	}
 	if strings.TrimSpace(o.messagesPath) == "" {
 		o.messagesPath = defaultMessagesPath
+	}
+	if strings.TrimSpace(o.streamPath) == "" {
+		o.streamPath = defaultMessagesStreamPath
 	}
 	if strings.TrimSpace(o.statusPath) == "" {
 		o.statusPath = defaultStatusPath
@@ -102,6 +107,14 @@ func WithBasePath(basePath string) Option {
 func WithMessagesPath(path string) Option {
 	return func(o *options) {
 		o.messagesPath = path
+	}
+}
+
+// WithMessagesStreamPath sets the relative path for the streaming
+// messages endpoint.
+func WithMessagesStreamPath(path string) Option {
+	return func(o *options) {
+		o.streamPath = path
 	}
 }
 

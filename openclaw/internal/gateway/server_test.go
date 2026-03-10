@@ -2024,6 +2024,161 @@ func TestReplyAccumulator_IgnoresNilAndUnsupported(t *testing.T) {
 	acc.consumeDelta(nil)
 }
 
+func TestServer_StreamMessage_Success(t *testing.T) {
+	t.Parallel()
+
+	srv, err := New(&staticRunner{
+		events: []*event.Event{
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletionChunk,
+					Choices: []model.Choice{
+						{
+							Delta: model.Message{Content: "hel"},
+						},
+					},
+				},
+				RequestID: "req-1",
+			},
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletionChunk,
+					Choices: []model.Choice{
+						{
+							Delta: model.Message{Content: "lo"},
+						},
+					},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		testTimeout,
+	)
+	defer cancel()
+
+	stream, apiErr, status := srv.StreamMessage(ctx, gwproto.MessageRequest{
+		From: "u1",
+		Text: "hello",
+	})
+	require.Nil(t, apiErr)
+	require.Equal(t, http.StatusOK, status)
+
+	events := collectGatewayStreamEvents(t, stream)
+	require.Len(t, events, 5)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunStarted,
+		events[0].Type,
+	)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeMessageDelta,
+		events[1].Type,
+	)
+	require.Equal(t, "hel", events[1].Delta)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeMessageDelta,
+		events[2].Type,
+	)
+	require.Equal(t, "lo", events[2].Delta)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeMessageCompleted,
+		events[3].Type,
+	)
+	require.Equal(t, "hello", events[3].Reply)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunCompleted,
+		events[4].Type,
+	)
+	require.Equal(t, "req-1", events[4].RequestID)
+}
+
+func TestServer_StreamMessage_RunError(t *testing.T) {
+	t.Parallel()
+
+	srv, err := New(&staticRunner{err: errors.New("boom")})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		testTimeout,
+	)
+	defer cancel()
+
+	stream, apiErr, status := srv.StreamMessage(ctx, gwproto.MessageRequest{
+		From: "u1",
+		Text: "hello",
+	})
+	require.Nil(t, apiErr)
+	require.Equal(t, http.StatusOK, status)
+
+	events := collectGatewayStreamEvents(t, stream)
+	require.Len(t, events, 2)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunStarted,
+		events[0].Type,
+	)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunError,
+		events[1].Type,
+	)
+	require.NotNil(t, events[1].Error)
+	require.Equal(t, "boom", events[1].Error.Message)
+}
+
+func TestServer_HandleMessagesStream_Success(t *testing.T) {
+	t.Parallel()
+
+	srv, err := New(&staticRunner{
+		events: []*event.Event{
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletionChunk,
+					Choices: []model.Choice{
+						{
+							Delta: model.Message{Content: "ok"},
+						},
+					},
+				},
+				RequestID: "req-1",
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	reqBody, err := json.Marshal(gwproto.MessageRequest{
+		From: "u1",
+		Text: "hello",
+	})
+	require.NoError(t, err)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodPost,
+		srv.MessagesStreamPath(),
+		bytes.NewReader(reqBody),
+	)
+	srv.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(
+		t,
+		contentTypeEventStream,
+		rr.Header().Get(headerContentType),
+	)
+	require.Contains(t, rr.Body.String(), "event: message.delta")
+	require.Contains(t, rr.Body.String(), `"reply":"ok"`)
+}
+
 func TestLaneLocker_ReclaimsEntries(t *testing.T) {
 	t.Parallel()
 
@@ -2038,6 +2193,29 @@ func TestLaneLocker_ReclaimsEntries(t *testing.T) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	require.Empty(t, l.lanes)
+}
+
+func collectGatewayStreamEvents(
+	t *testing.T,
+	stream <-chan gwproto.StreamEvent,
+) []gwproto.StreamEvent {
+	t.Helper()
+
+	timer := time.NewTimer(testTimeout)
+	defer timer.Stop()
+
+	var events []gwproto.StreamEvent
+	for {
+		select {
+		case evt, ok := <-stream:
+			if !ok {
+				return events
+			}
+			events = append(events, evt)
+		case <-timer.C:
+			t.Fatal("timeout waiting for gateway stream")
+		}
+	}
 }
 
 func TestNewOptions_DefaultsAndNormalization(t *testing.T) {

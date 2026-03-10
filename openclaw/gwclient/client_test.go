@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -24,12 +25,18 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
 )
 
 type stubRunner struct {
 	mu        sync.Mutex
 	callCount int
+}
+
+type staticRunner struct {
+	events []*event.Event
+	err    error
 }
 
 func (r *stubRunner) Run(
@@ -59,6 +66,28 @@ func (r *stubRunner) Run(
 }
 
 func (r *stubRunner) Close() error {
+	return nil
+}
+
+func (r *staticRunner) Run(
+	_ context.Context,
+	_ string,
+	_ string,
+	_ model.Message,
+	_ ...agent.RunOption,
+) (<-chan *event.Event, error) {
+	if r.err != nil {
+		return nil, r.err
+	}
+	ch := make(chan *event.Event, len(r.events))
+	for _, evt := range r.events {
+		ch <- evt
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (r *staticRunner) Close() error {
 	return nil
 }
 
@@ -253,6 +282,88 @@ func TestClient_SendMessage_NewRequestError(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestClient_StreamMessage_Success(t *testing.T) {
+	t.Parallel()
+
+	srv, err := gateway.New(&staticRunner{
+		events: []*event.Event{
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletionChunk,
+					Choices: []model.Choice{
+						{
+							Delta: model.Message{Content: "hi"},
+						},
+					},
+				},
+				RequestID: "req-1",
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	cli, err := New(srv.Handler(), srv.MessagesPath(), srv.CancelPath())
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		time.Second,
+	)
+	defer cancel()
+
+	stream, err := cli.StreamMessage(ctx, MessageRequest{
+		From: "u1",
+		Text: "hello",
+	})
+	require.NoError(t, err)
+
+	events := collectClientStreamEvents(t, stream)
+	require.Len(t, events, 4)
+	require.Equal(t, StreamEvent{
+		Type:      gwproto.StreamEventTypeRunStarted,
+		SessionID: "http:dm:u1",
+	}, events[0])
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeMessageDelta,
+		events[1].Type,
+	)
+	require.Equal(t, "hi", events[1].Delta)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeMessageCompleted,
+		events[2].Type,
+	)
+	require.Equal(t, "hi", events[2].Reply)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunCompleted,
+		events[3].Type,
+	)
+	require.Equal(t, "req-1", events[3].RequestID)
+}
+
+func TestClient_StreamMessage_StatusError(t *testing.T) {
+	t.Parallel()
+
+	cli, err := New(
+		&statusHandler{
+			code: http.StatusForbidden,
+			body: "{\"error\":{\"type\":\"unauthorized\",\"message\":\"no\"}}",
+		},
+		"/v1/gateway/messages",
+		"/v1/gateway/cancel",
+	)
+	require.NoError(t, err)
+
+	_, err = cli.StreamMessage(context.Background(), MessageRequest{
+		From: "u1",
+		Text: "hello",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unauthorized")
+}
+
 type managedRunnerStub struct {
 	stubRunner
 }
@@ -306,4 +417,27 @@ func TestClient_Cancel_ValidationErrors(t *testing.T) {
 
 	_, err = cli.Cancel(context.Background(), "")
 	require.Error(t, err)
+}
+
+func collectClientStreamEvents(
+	t *testing.T,
+	stream <-chan StreamEvent,
+) []StreamEvent {
+	t.Helper()
+
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+
+	var events []StreamEvent
+	for {
+		select {
+		case evt, ok := <-stream:
+			if !ok {
+				return events
+			}
+			events = append(events, evt)
+		case <-timer.C:
+			t.Fatal("timeout waiting for client stream")
+		}
+	}
 }

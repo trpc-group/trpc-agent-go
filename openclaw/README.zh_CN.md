@@ -260,6 +260,35 @@ curl -sS 'http://127.0.0.1:8080/v1/gateway/messages' \
   -d '{"from":"alice","text":"Hello"}'
 ```
 
+通过 HTTP SSE 流式发送一条消息：
+
+```bash
+curl -N 'http://127.0.0.1:8080/v1/gateway/messages:stream' \
+  -H 'Content-Type: application/json' \
+  -d '{"from":"alice","text":"Hello"}'
+```
+
+该接口会输出按行分隔的 SSE 事件。每个 `data:` 载荷都是一个带稳定
+`type` 字段的 JSON `StreamEvent`：
+
+- `run.started`
+- `run.ignored`
+- `message.delta`
+- `message.completed`
+- `run.completed`
+- `run.error`
+
+典型成功流程：
+
+1. `run.started`
+2. 零个或多个 `message.delta`
+3. `message.completed`
+4. `run.completed`
+
+对于进程内集成，如果 `deps.Gateway` 同时实现了
+`registry.StreamingGatewayClient`，channel 插件可以优先调用
+`StreamMessage(...)`。
+
 发送多模态消息：
 
 - 使用 `text` 作为主要文本消息。

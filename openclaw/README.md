@@ -270,6 +270,35 @@ curl -sS 'http://127.0.0.1:8080/v1/gateway/messages' \
   -d '{"from":"alice","text":"Hello"}'
 ```
 
+Stream one message via HTTP SSE:
+
+```bash
+curl -N 'http://127.0.0.1:8080/v1/gateway/messages:stream' \
+  -H 'Content-Type: application/json' \
+  -d '{"from":"alice","text":"Hello"}'
+```
+
+The stream emits newline-delimited SSE events. Each `data:` payload is a
+JSON `StreamEvent` with a stable `type` field:
+
+- `run.started`
+- `run.ignored`
+- `message.delta`
+- `message.completed`
+- `run.completed`
+- `run.error`
+
+Typical successful flow:
+
+1. `run.started`
+2. zero or more `message.delta`
+3. `message.completed`
+4. `run.completed`
+
+For in-process integrations, channel plugins can prefer
+`StreamMessage(...)` when `deps.Gateway` also implements
+`registry.StreamingGatewayClient`.
+
 Send a multimodal message via HTTP:
 
 - Use `text` for the main text message.

@@ -48,6 +48,37 @@ type MessageResponse struct {
 	Error     *APIError `json:"error,omitempty"`
 }
 
+// StreamEventType identifies one streaming gateway event.
+type StreamEventType string
+
+const (
+	// StreamEventTypeRunStarted marks the start of one gateway run.
+	StreamEventTypeRunStarted StreamEventType = "run.started"
+	// StreamEventTypeRunIgnored marks a request ignored by policy.
+	StreamEventTypeRunIgnored StreamEventType = "run.ignored"
+	// StreamEventTypeMessageDelta carries an incremental text delta.
+	StreamEventTypeMessageDelta StreamEventType = "message.delta"
+	// StreamEventTypeMessageCompleted carries the final reply text.
+	StreamEventTypeMessageCompleted StreamEventType = "message.completed"
+	// StreamEventTypeRunCompleted marks successful stream completion.
+	StreamEventTypeRunCompleted StreamEventType = "run.completed"
+	// StreamEventTypeRunError marks a terminal stream error.
+	StreamEventTypeRunError StreamEventType = "run.error"
+)
+
+// StreamEvent is one gateway streaming event payload.
+type StreamEvent struct {
+	Type StreamEventType `json:"type"`
+
+	SessionID string `json:"session_id,omitempty"`
+	RequestID string `json:"request_id,omitempty"`
+
+	Delta   string    `json:"delta,omitempty"`
+	Reply   string    `json:"reply,omitempty"`
+	Ignored bool      `json:"ignored,omitempty"`
+	Error   *APIError `json:"error,omitempty"`
+}
+
 // ContentPartType is the type discriminator for ContentPart.
 type ContentPartType string
 

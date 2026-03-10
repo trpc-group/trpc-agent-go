@@ -30,12 +30,15 @@ const (
 	contentTypeJSON   = "application/json"
 
 	methodPost = "POST"
+
+	messagesStreamSuffix = ":stream"
 )
 
 // Client invokes the gateway handler without a network hop.
 type Client struct {
 	handler      http.Handler
 	messagesPath string
+	streamPath   string
 	cancelPath   string
 }
 
@@ -54,12 +57,16 @@ func New(
 	return &Client{
 		handler:      handler,
 		messagesPath: messagesPath,
+		streamPath:   messagesPath + messagesStreamSuffix,
 		cancelPath:   cancelPath,
 	}, nil
 }
 
 // MessageRequest matches the gateway /messages JSON payload.
 type MessageRequest = gwproto.MessageRequest
+
+// StreamEvent matches the gateway streaming event payload.
+type StreamEvent = gwproto.StreamEvent
 
 // APIError matches gateway error payloads.
 type APIError = gwproto.APIError

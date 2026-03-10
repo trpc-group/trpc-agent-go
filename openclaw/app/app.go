@@ -285,6 +285,10 @@ func gatewayStartupLines(
 		{text: fmt.Sprintf("Health:   GET  %s", gwSrv.HealthPath())},
 		{text: fmt.Sprintf("Messages: POST %s", gwSrv.MessagesPath())},
 		{text: fmt.Sprintf(
+			"Stream:   POST %s",
+			gwSrv.MessagesStreamPath(),
+		)},
+		{text: fmt.Sprintf(
 			"Status:   GET  %s?request_id=...",
 			gwSrv.StatusPath(),
 		)},

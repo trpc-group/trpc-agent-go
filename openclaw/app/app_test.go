@@ -1738,6 +1738,7 @@ func TestGatewayStartupLines(t *testing.T) {
 			{text: "Gateway listening on 127.0.0.1:18080"},
 			{text: "Health:   GET  /healthz"},
 			{text: "Messages: POST /v1/gateway/messages"},
+			{text: "Stream:   POST /v1/gateway/messages:stream"},
 			{text: "Status:   GET  /v1/gateway/status?request_id=..."},
 			{text: "Cancel:   POST /v1/gateway/cancel"},
 		},
