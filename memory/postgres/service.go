@@ -16,7 +16,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
-	"sort"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
@@ -406,7 +405,7 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 		selectQuery += " AND deleted_at IS NULL"
 	}
 
-	results := make([]*memory.Entry, 0)
+	entries := make([]*memory.Entry, 0)
 	err := s.db.Query(ctx, func(rows *sql.Rows) error {
 		for rows.Next() {
 			var memoryData []byte
@@ -419,9 +418,7 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 				return fmt.Errorf("unmarshal memory entry failed: %w", err)
 			}
 
-			if imemory.MatchMemoryEntry(e, query) {
-				results = append(results, e)
-			}
+			entries = append(entries, e)
 		}
 		return nil
 	}, selectQuery, userKey.AppName, userKey.UserID)
@@ -430,15 +427,10 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 		return nil, fmt.Errorf("search memories failed: %w", err)
 	}
 
-	// Stable sort by updated time desc.
-	sort.Slice(results, func(i, j int) bool {
-		if results[i].UpdatedAt.Equal(results[j].UpdatedAt) {
-			return results[i].CreatedAt.After(results[j].CreatedAt)
-		}
-		return results[i].UpdatedAt.After(results[j].UpdatedAt)
-	})
-
-	return results, nil
+	return imemory.SearchMemoryEntries(entries, query, imemory.SearchOptions{
+		MinScore:   s.opts.searchMinScore,
+		MaxResults: s.opts.maxSearchResults,
+	}), nil
 }
 
 // Tools returns the list of available memory tools.

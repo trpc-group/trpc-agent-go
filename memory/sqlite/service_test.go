@@ -49,6 +49,18 @@ func TestNewService_NilDB(t *testing.T) {
 	require.Nil(t, svc)
 }
 
+func TestServiceOpts_SearchOptions(t *testing.T) {
+	opts := ServiceOpts{}
+
+	WithMinSearchScore(0.6)(&opts)
+	WithMaxResults(25)(&opts)
+	WithMinSearchScore(-1)(&opts)
+	WithMaxResults(-1)(&opts)
+
+	require.Equal(t, 0.6, opts.searchMinScore)
+	require.Equal(t, 25, opts.maxSearchResults)
+}
+
 func TestService_CRUD_HardDelete(t *testing.T) {
 	db, cleanup := openTempSQLiteDB(t)
 	defer cleanup()

@@ -50,16 +50,30 @@ func setupMockDB(t *testing.T) (*sql.DB, sqlmock.Sqlmock) {
 func setupMockService(_ *testing.T, db *sql.DB) *Service {
 	return &Service{
 		opts: ServiceOpts{
-			memoryLimit:  100,
-			toolCreators: make(map[string]memory.ToolCreator),
-			enabledTools: make(map[string]struct{}),
-			tableName:    "memories",
-			softDelete:   true,
+			memoryLimit:      100,
+			searchMinScore:   imemory.DefaultSearchMinScore,
+			maxSearchResults: imemory.DefaultMaxSearchResults,
+			toolCreators:     make(map[string]memory.ToolCreator),
+			enabledTools:     make(map[string]struct{}),
+			tableName:        "memories",
+			softDelete:       true,
 		},
 		db:          storage.WrapSQLDB(db),
 		tableName:   "memories",
 		cachedTools: make(map[string]tool.Tool),
 	}
+}
+
+func TestServiceOpts_SearchOptions(t *testing.T) {
+	opts := ServiceOpts{}
+
+	WithMinSearchScore(0.6)(&opts)
+	WithMaxResults(25)(&opts)
+	WithMinSearchScore(-1)(&opts)
+	WithMaxResults(-1)(&opts)
+
+	assert.Equal(t, 0.6, opts.searchMinScore)
+	assert.Equal(t, 25, opts.maxSearchResults)
 }
 
 // mockTool is a mock implementation of tool.Tool for testing.

@@ -293,27 +293,20 @@ func (s *MemoryService) SearchMemories(ctx context.Context, userKey memory.UserK
 	app.mu.RLock()
 	defer app.mu.RUnlock()
 
-	var results []*memory.Entry
-
 	userMemories := app.memories[userKey.UserID]
+	entries := make([]*memory.Entry, 0, len(userMemories))
 	if userMemories == nil {
-		return results, nil
+		return entries, nil
 	}
 
 	for _, memoryEntry := range userMemories {
-		if imemory.MatchMemoryEntry(memoryEntry, query) {
-			results = append(results, memoryEntry)
-		}
+		entries = append(entries, memoryEntry)
 	}
 
-	// Sort results by updated time (newest first), tie-breaker by created time.
-	sort.Slice(results, func(i, j int) bool {
-		if results[i].UpdatedAt.Equal(results[j].UpdatedAt) {
-			return results[i].CreatedAt.After(results[j].CreatedAt)
-		}
-		return results[i].UpdatedAt.After(results[j].UpdatedAt)
-	})
-	return results, nil
+	return imemory.SearchMemoryEntries(entries, query, imemory.SearchOptions{
+		MinScore:   s.opts.searchMinScore,
+		MaxResults: s.opts.maxSearchResults,
+	}), nil
 }
 
 // Tools returns the list of available memory tools.

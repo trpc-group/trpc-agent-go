@@ -27,6 +27,8 @@ const defaultDBInitTimeout = 30 * time.Second
 var defaultOptions = ServiceOpts{
 	tableName:        defaultTableName,
 	memoryLimit:      imemory.DefaultMemoryLimit,
+	searchMinScore:   imemory.DefaultSearchMinScore,
+	maxSearchResults: imemory.DefaultMaxSearchResults,
 	toolCreators:     imemory.AllToolCreators,
 	enabledTools:     imemory.DefaultEnabledTools,
 	asyncMemoryNum:   imemory.DefaultAsyncMemoryNum,
@@ -39,6 +41,9 @@ type ServiceOpts struct {
 	tableName   string
 	memoryLimit int
 	softDelete  bool
+	// keyword-search settings.
+	searchMinScore   float64
+	maxSearchResults int
 
 	// Tool related settings.
 	toolCreators      map[string]memory.ToolCreator
@@ -95,6 +100,28 @@ func WithTableName(tableName string) ServiceOpt {
 func WithMemoryLimit(limit int) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.memoryLimit = limit
+	}
+}
+
+// WithMinSearchScore sets the minimum keyword-search score. Scores below
+// this value are filtered out. Default is 0.3.
+func WithMinSearchScore(score float64) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		if score < 0 {
+			return
+		}
+		opts.searchMinScore = score
+	}
+}
+
+// WithMaxResults sets the maximum number of keyword-search results.
+// Default is 10. Use 0 to disable truncation.
+func WithMaxResults(maxResults int) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		if maxResults < 0 {
+			return
+		}
+		opts.maxSearchResults = maxResults
 	}
 }
 

@@ -52,6 +52,18 @@ func TestServiceOpts_WithMemoryLimit(t *testing.T) {
 	assert.Equal(t, limit, opts.memoryLimit)
 }
 
+func TestServiceOpts_SearchOptions(t *testing.T) {
+	opts := ServiceOpts{}
+
+	WithMinSearchScore(0.6)(&opts)
+	WithMaxResults(25)(&opts)
+	WithMinSearchScore(-1)(&opts)
+	WithMaxResults(-1)(&opts)
+
+	assert.Equal(t, 0.6, opts.searchMinScore)
+	assert.Equal(t, 25, opts.maxSearchResults)
+}
+
 func TestServiceOpts_WithHost(t *testing.T) {
 	opts := ServiceOpts{}
 	host := "localhost"

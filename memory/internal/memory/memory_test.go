@@ -12,6 +12,7 @@ package memory
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -954,6 +955,97 @@ func TestScoreMemoryEntry_TopicOnlyMatch(t *testing.T) {
 	assert.Equal(t, 0.5, score)
 }
 
+func TestSearchMemoryEntries_RanksByScoreThenRecency(t *testing.T) {
+	now := time.Now().UTC()
+	entries := []*memory.Entry{
+		newSearchTestEntry(
+			"partial-newer",
+			"User likes coffee",
+			nil,
+			now.Add(-1*time.Minute),
+			now.Add(-1*time.Minute),
+		),
+		newSearchTestEntry(
+			"best-older",
+			"User likes coffee and tea",
+			nil,
+			now.Add(-2*time.Minute),
+			now.Add(-2*time.Minute),
+		),
+		newSearchTestEntry(
+			"partial-topic-newest",
+			"User likes hiking",
+			[]string{"tea"},
+			now,
+			now,
+		),
+		newSearchTestEntry(
+			"no-match",
+			"User likes running",
+			nil,
+			now.Add(1*time.Minute),
+			now.Add(1*time.Minute),
+		),
+	}
+
+	results := SearchMemoryEntries(entries, "coffee tea", SearchOptions{
+		MinScore:   0.3,
+		MaxResults: 10,
+	})
+	require.Len(t, results, 3)
+	assert.Equal(t, "best-older", results[0].ID)
+	assert.Equal(t, "partial-topic-newest", results[1].ID)
+	assert.Equal(t, "partial-newer", results[2].ID)
+}
+
+func TestSearchMemoryEntries_LimitsAndBreaksTiesByID(t *testing.T) {
+	now := time.Now().UTC()
+	entries := []*memory.Entry{
+		newSearchTestEntry("b", "coffee", nil, now, now),
+		newSearchTestEntry("a", "coffee", nil, now, now),
+	}
+	for i := 0; i < 10; i++ {
+		id := fmt.Sprintf("extra-%02d", i)
+		ts := now.Add(time.Duration(i+1) * time.Minute)
+		entries = append(entries, newSearchTestEntry(id, "coffee", nil, ts, ts))
+	}
+
+	results := SearchMemoryEntries(entries, "coffee", SearchOptions{
+		MinScore:   0.3,
+		MaxResults: 10,
+	})
+	require.Len(t, results, 10)
+	assert.Equal(t, "extra-09", results[0].ID)
+	assert.Equal(t, "extra-00", results[9].ID)
+
+	tieOnly := SearchMemoryEntries(entries[:2], "coffee", SearchOptions{
+		MinScore:   0.3,
+		MaxResults: 10,
+	})
+	require.Len(t, tieOnly, 2)
+	assert.Equal(t, "a", tieOnly[0].ID)
+	assert.Equal(t, "b", tieOnly[1].ID)
+}
+
+func TestSearchMemoryEntries_ZeroValueOptionsPreservePositiveMatches(t *testing.T) {
+	now := time.Now().UTC()
+	entries := []*memory.Entry{
+		newSearchTestEntry("best", "User likes coffee and tea", nil, now, now),
+		newSearchTestEntry("filtered", "User likes running", nil, now, now),
+	}
+	for i := 0; i < 10; i++ {
+		id := fmt.Sprintf("partial-%02d", i)
+		ts := now.Add(time.Duration(i+1) * time.Minute)
+		entries = append(entries, newSearchTestEntry(id, "User likes coffee", nil, ts, ts))
+	}
+
+	results := SearchMemoryEntries(entries, "coffee tea", SearchOptions{})
+	require.Len(t, results, 11)
+	assert.Equal(t, "best", results[0].ID)
+	assert.Equal(t, "partial-09", results[1].ID)
+	assert.Equal(t, "partial-00", results[10].ID)
+}
+
 func TestIsPunctToken(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -1046,4 +1138,25 @@ func TestBuildSearchTokens_CJKAllStopwords(t *testing.T) {
 	// CJK input where all tokens are stopwords -> toks is empty -> returns nil.
 	result := BuildSearchTokens("的了是在")
 	assert.Nil(t, result)
+}
+
+func newSearchTestEntry(
+	id string,
+	content string,
+	topics []string,
+	createdAt time.Time,
+	updatedAt time.Time,
+) *memory.Entry {
+	return &memory.Entry{
+		ID:        id,
+		AppName:   "app",
+		UserID:    "user",
+		CreatedAt: createdAt,
+		UpdatedAt: updatedAt,
+		Memory: &memory.Memory{
+			Memory:      content,
+			Topics:      topics,
+			LastUpdated: &updatedAt,
+		},
+	}
 }

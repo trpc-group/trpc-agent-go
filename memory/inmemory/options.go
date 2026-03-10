@@ -21,10 +21,12 @@ import (
 
 var (
 	defaultOptions = serviceOpts{
-		memoryLimit:    imemory.DefaultMemoryLimit,
-		toolCreators:   imemory.AllToolCreators,
-		enabledTools:   imemory.DefaultEnabledTools,
-		asyncMemoryNum: imemory.DefaultAsyncMemoryNum,
+		memoryLimit:      imemory.DefaultMemoryLimit,
+		searchMinScore:   imemory.DefaultSearchMinScore,
+		maxSearchResults: imemory.DefaultMaxSearchResults,
+		toolCreators:     imemory.AllToolCreators,
+		enabledTools:     imemory.DefaultEnabledTools,
+		asyncMemoryNum:   imemory.DefaultAsyncMemoryNum,
 	}
 )
 
@@ -32,6 +34,10 @@ var (
 type serviceOpts struct {
 	// memoryLimit is the limit of memories per user.
 	memoryLimit int
+	// searchMinScore is the minimum keyword-search score.
+	searchMinScore float64
+	// maxSearchResults limits keyword-search results. Zero disables the cap.
+	maxSearchResults int
 	// toolCreators are functions to build tools after service creation.
 	toolCreators map[string]memory.ToolCreator
 	// enabledTools are the names of tools to enable.
@@ -72,6 +78,28 @@ type ServiceOpt func(*serviceOpts)
 func WithMemoryLimit(limit int) ServiceOpt {
 	return func(opts *serviceOpts) {
 		opts.memoryLimit = limit
+	}
+}
+
+// WithMinSearchScore sets the minimum keyword-search score. Scores below
+// this value are filtered out. Default is 0.3.
+func WithMinSearchScore(score float64) ServiceOpt {
+	return func(opts *serviceOpts) {
+		if score < 0 {
+			return
+		}
+		opts.searchMinScore = score
+	}
+}
+
+// WithMaxResults sets the maximum number of keyword-search results.
+// Default is 10. Use 0 to disable truncation.
+func WithMaxResults(maxResults int) ServiceOpt {
+	return func(opts *serviceOpts) {
+		if maxResults < 0 {
+			return
+		}
+		opts.maxSearchResults = maxResults
 	}
 }
 
