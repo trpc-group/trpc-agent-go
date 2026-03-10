@@ -318,7 +318,7 @@ func WithStreamMode(modes ...StreamMode) RunOption {
 	}
 }
 
-// WithDisableEventInjection disables invocation metadata on emitted output events.
+// WithDisableEventInjection disables invocation metadata on Runner-facing output events.
 func WithDisableEventInjection(disable bool) RunOption {
 	return func(opts *RunOptions) {
 		opts.DisableEventInjection = disable
@@ -627,8 +627,8 @@ type RunOptions struct {
 	// filtering and preserve the existing behavior.
 	StreamModes []StreamMode
 
-	// DisableEventInjection disables invocation metadata on emitted output events.
-	// Internal event handling and session persistence still retain invocation fields.
+	// DisableEventInjection disables invocation metadata on Runner-facing output events.
+	// Internal event handling, direct Agent.Run callers, and session persistence still retain invocation fields.
 	DisableEventInjection bool
 
 	// RequestID is the request id of the request.
