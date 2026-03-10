@@ -340,15 +340,18 @@ func eventHasSummarizableContent(
 	}
 	for _, choice := range e.Response.Choices {
 		msg := choice.Message
-		if strings.TrimSpace(msg.Content) != "" {
-			return true
-		}
 		for _, tc := range msg.ToolCalls {
 			if toolCallFmt(tc) != "" {
 				return true
 			}
 		}
-		if msg.ToolID != "" && toolResultFmt(msg) != "" {
+		if msg.ToolID != "" {
+			if toolResultFmt(msg) != "" {
+				return true
+			}
+			continue
+		}
+		if strings.TrimSpace(msg.Content) != "" {
 			return true
 		}
 	}
