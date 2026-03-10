@@ -538,6 +538,9 @@ func appendSkillTools(
 	if !skillFlags.RequiresExecSessionTools() {
 		return allTools
 	}
+	if !executorSupportsInteractive(options) {
+		return allTools
+	}
 
 	execTool := toolskill.NewExecTool(runTool)
 	if skillFlags.Exec {
@@ -602,6 +605,28 @@ func buildSkillRunTool(options *Options) *toolskill.RunTool {
 		exec,
 		runOpts...,
 	)
+}
+
+// executorSupportsInteractive reports whether the configured code
+// executor implements codeexecutor.InteractiveProgramRunner, which is
+// required by skill_exec and its companion session tools.  When the
+// executor does not support interactive sessions, those tools are
+// silently omitted so the model never sees tools it cannot use.
+func executorSupportsInteractive(options *Options) bool {
+	exec := options.codeExecutor
+	if exec == nil {
+		exec = defaultCodeExecutor()
+	}
+	ep, ok := exec.(codeexecutor.EngineProvider)
+	if !ok {
+		return false
+	}
+	eng := ep.Engine()
+	if eng == nil {
+		return false
+	}
+	_, interactive := eng.Runner().(codeexecutor.InteractiveProgramRunner)
+	return interactive
 }
 
 // Run implements the agent.Agent interface.
