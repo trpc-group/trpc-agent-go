@@ -855,7 +855,6 @@ func projectInvocationOutputEvent(inv *Invocation, e *event.Event) *event.Event 
 		return e
 	}
 	copied := *e
-	copied.RequestID = ""
 	copied.ParentInvocationID = ""
 	copied.InvocationID = ""
 	copied.Branch = ""

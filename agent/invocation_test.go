@@ -775,7 +775,7 @@ func TestEmitOutputEvent_DisableEventInjectionWithTrace(t *testing.T) {
 	require.Empty(t, sent.ParentInvocationID)
 	require.Empty(t, sent.Branch)
 	require.Empty(t, sent.FilterKey)
-	require.Empty(t, sent.RequestID)
+	require.Equal(t, inv.RunOptions.RequestID, sent.RequestID)
 }
 
 func TestEmitOutputEvent_DisableEventInjectionFastPath(t *testing.T) {
@@ -810,7 +810,7 @@ func TestEmitOutputEvent_DisableEventInjectionFastPath(t *testing.T) {
 	require.Empty(t, sent.ParentInvocationID)
 	require.Empty(t, sent.Branch)
 	require.Empty(t, sent.FilterKey)
-	require.Empty(t, sent.RequestID)
+	require.Equal(t, inv.RunOptions.RequestID, sent.RequestID)
 }
 
 func TestEmitOutputEvent_DisableEventInjectionDoesNotMutateInput(t *testing.T) {
@@ -845,7 +845,7 @@ func TestEmitOutputEvent_DisableEventInjectionDoesNotMutateInput(t *testing.T) {
 	require.Empty(t, sent.ParentInvocationID)
 	require.Empty(t, sent.Branch)
 	require.Empty(t, sent.FilterKey)
-	require.Empty(t, sent.RequestID)
+	require.Equal(t, inv.RunOptions.RequestID, sent.RequestID)
 	require.Equal(t, inv.InvocationID, evt.InvocationID)
 	require.Equal(t, parent.InvocationID, evt.ParentInvocationID)
 	require.Equal(t, inv.Branch, evt.Branch)

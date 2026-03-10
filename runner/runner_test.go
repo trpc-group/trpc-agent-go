@@ -329,7 +329,7 @@ func TestRunner_Run_WithDisableEventInjectionPreservesPersistedMetadata(t *testi
 		require.Empty(t, evt.ParentInvocationID)
 		require.Empty(t, evt.Branch)
 		require.Empty(t, evt.FilterKey)
-		require.Empty(t, evt.RequestID)
+		require.Equal(t, requestID, evt.RequestID)
 	}
 	sessionKey := session.Key{
 		AppName:   "test-app",
@@ -2647,6 +2647,57 @@ func (m *tickCtxAgent) Run(
 	return ch, nil
 }
 
+type emittingTickCtxAgent struct {
+	name     string
+	interval time.Duration
+}
+
+func (m *emittingTickCtxAgent) Info() agent.Info { return agent.Info{Name: m.name} }
+
+func (m *emittingTickCtxAgent) SubAgents() []agent.Agent { return nil }
+
+func (m *emittingTickCtxAgent) FindSubAgent(name string) agent.Agent { return nil }
+
+func (m *emittingTickCtxAgent) Tools() []tool.Tool { return nil }
+
+func (m *emittingTickCtxAgent) Run(
+	ctx context.Context,
+	inv *agent.Invocation,
+) (<-chan *event.Event, error) {
+	const tickContent = "tick"
+	ch := make(chan *event.Event, 1)
+	runCtx := agent.CloneContext(ctx)
+	go func() {
+		defer close(ch)
+		ticker := time.NewTicker(m.interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				evt := event.NewResponseEvent(
+					inv.InvocationID,
+					m.name,
+					&model.Response{
+						Done: false,
+						Choices: []model.Choice{{
+							Index: 0,
+							Message: model.NewAssistantMessage(
+								tickContent,
+							),
+						}},
+					},
+				)
+				if err := agent.EmitEvent(runCtx, inv, ch, evt); err != nil {
+					return
+				}
+			}
+		}
+	}()
+	return ch, nil
+}
+
 func TestProcessAgentEvents_EmitEventContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel before running; EmitEvent should take ctx.Done() branch
@@ -2785,6 +2836,54 @@ func TestRunner_ManagedRunner_CancelAndStatus(t *testing.T) {
 	_, ok = mr.RunStatus(requestID)
 	require.False(t, ok)
 	require.False(t, mr.Cancel(requestID))
+}
+
+func TestRunner_ManagedRunner_DisableEventInjectionPreservesGeneratedRequestID(t *testing.T) {
+	const (
+		maxWait  = 500 * time.Millisecond
+		interval = 10 * time.Millisecond
+	)
+	r := NewRunner(
+		"app",
+		&emittingTickCtxAgent{name: "t", interval: interval},
+		WithSessionService(sessioninmemory.NewSessionService()),
+	)
+	mr, ok := r.(ManagedRunner)
+	require.True(t, ok)
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage(""),
+		agent.WithDetachedCancel(true),
+		agent.WithDisableEventInjection(true),
+	)
+	require.NoError(t, err)
+	var first *event.Event
+	select {
+	case <-time.After(maxWait):
+		require.FailNow(t, "did not receive first event")
+	case first, ok = <-ch:
+		require.True(t, ok)
+	}
+	require.NotNil(t, first)
+	require.NotEmpty(t, first.RequestID)
+	require.Empty(t, first.InvocationID)
+	require.Empty(t, first.ParentInvocationID)
+	require.Empty(t, first.Branch)
+	require.Empty(t, first.FilterKey)
+	status, ok := mr.RunStatus(first.RequestID)
+	require.True(t, ok)
+	require.Equal(t, first.RequestID, status.RequestID)
+	require.NotEmpty(t, status.InvocationID)
+	require.True(t, mr.Cancel(first.RequestID))
+	select {
+	case <-time.After(maxWait):
+		require.FailNow(t, "run did not finish after cancel")
+	case <-drainChannel(ch):
+	}
+	_, ok = mr.RunStatus(first.RequestID)
+	require.False(t, ok)
 }
 
 func TestRunner_Close_CancelsRunningRuns(t *testing.T) {
