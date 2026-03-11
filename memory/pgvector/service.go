@@ -202,13 +202,14 @@ func (s *Service) AddMemory(
 		Topics:      topics,
 		LastUpdated: &now,
 	}
+	imemory.ApplyMetadata(mem, ep)
 	memoryID := imemory.GenerateMemoryID(mem, userKey.AppName, userKey.UserID)
 
 	// Convert embedding to pgvector format.
 	vector := pgvector.NewVector(convertToFloat32(embedding))
 
-	// Resolve metadata for SQL parameters.
-	ef := resolveMetadata(ep)
+	// Resolve metadata for SQL parameters from the normalized memory.
+	ef := resolveMetadata(mem)
 
 	var insertQuery string
 	args := []any{
@@ -347,23 +348,57 @@ func (s *Service) UpdateMemory(
 	now := time.Now()
 	vector := pgvector.NewVector(convertToFloat32(embedding))
 
-	// Resolve metadata for SQL parameters.
-	ef := resolveMetadata(ep)
+	patch := &memory.Memory{}
+	imemory.ApplyMetadataPatch(patch, ep)
+
+	assignments := []string{
+		"memory_content = $1",
+		"topics = $2",
+		"embedding = $3",
+		"updated_at = $4",
+	}
+	args := []any{
+		memoryStr,
+		pq.Array(topics),
+		vector,
+		now,
+	}
+	argIdx := 5
+	if patch.Kind != "" {
+		assignments = append(assignments, fmt.Sprintf("memory_kind = $%d", argIdx))
+		args = append(args, string(patch.Kind))
+		argIdx++
+	}
+	if patch.EventTime != nil {
+		assignments = append(assignments, fmt.Sprintf("event_time = $%d", argIdx))
+		args = append(args, *patch.EventTime)
+		argIdx++
+	}
+	if len(patch.Participants) > 0 {
+		assignments = append(assignments, fmt.Sprintf("participants = $%d", argIdx))
+		args = append(args, pq.Array(patch.Participants))
+		argIdx++
+	}
+	if patch.Location != "" {
+		assignments = append(assignments, fmt.Sprintf("location = $%d", argIdx))
+		args = append(args, patch.Location)
+		argIdx++
+	}
 
 	var updateQuery strings.Builder
 	fmt.Fprintf(&updateQuery,
-		"UPDATE %s SET memory_content = $1, topics = $2, embedding = $3, "+
-			"memory_kind = $4, event_time = $5, participants = $6, location = $7, "+
-			"updated_at = $8 WHERE memory_id = $9 AND app_name = $10 AND user_id = $11",
+		"UPDATE %s SET %s WHERE memory_id = $%d AND app_name = $%d AND user_id = $%d",
 		s.tableName,
+		strings.Join(assignments, ", "),
+		argIdx,
+		argIdx+1,
+		argIdx+2,
 	)
 	if s.opts.softDelete {
 		updateQuery.WriteString(" AND deleted_at IS NULL")
 	}
-	res, err := s.db.ExecContext(ctx, updateQuery.String(),
-		memoryStr, pq.Array(topics), vector,
-		ef.kind, ef.eventTime, pq.Array(ef.participants), ef.location, now,
-		memoryKey.MemoryID, memoryKey.AppName, memoryKey.UserID)
+	args = append(args, memoryKey.MemoryID, memoryKey.AppName, memoryKey.UserID)
+	res, err := s.db.ExecContext(ctx, updateQuery.String(), args...)
 	if err != nil {
 		return fmt.Errorf("update memory entry failed: %w", err)
 	}
@@ -1030,26 +1065,24 @@ type metadataSQLFields struct {
 	location     *string
 }
 
-// resolveMetadata converts MemoryMetadata to SQL-ready
-// values. Returns default (fact, nil, empty, nil) when
-// ep is nil.
-func resolveMetadata(ep *memory.Metadata) metadataSQLFields {
+// resolveMetadata converts a stored memory object to SQL-ready metadata values.
+func resolveMetadata(mem *memory.Memory) metadataSQLFields {
 	f := metadataSQLFields{
-		kind:         string(memory.KindFact),
 		participants: []string{},
 	}
-	if ep == nil {
+	if mem == nil {
 		return f
 	}
-	if ep.Kind != "" {
-		f.kind = string(ep.Kind)
+	if mem.Kind != "" {
+		f.kind = string(mem.Kind)
 	}
-	f.eventTime = ep.EventTime
-	if len(ep.Participants) > 0 {
-		f.participants = ep.Participants
+	f.eventTime = mem.EventTime
+	if len(mem.Participants) > 0 {
+		f.participants = mem.Participants
 	}
-	if ep.Location != "" {
-		f.location = &ep.Location
+	if mem.Location != "" {
+		location := mem.Location
+		f.location = &location
 	}
 	return f
 }

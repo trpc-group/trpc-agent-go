@@ -45,9 +45,8 @@ var (
 	ErrMemoryIDRequired = errors.New("memoryID is required")
 )
 
-// Metadata holds optional episodic memory metadata.
-// When Kind is empty or KindFact, episodic fields are
-// ignored.
+// Metadata holds optional memory metadata.
+// Facts may also carry event_time when the time context matters.
 type Metadata struct {
 	Kind         Kind       // Memory kind: "fact" or "episode".
 	EventTime    *time.Time // When the event occurred (required for episodes).

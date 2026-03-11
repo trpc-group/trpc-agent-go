@@ -124,7 +124,11 @@ func (s *MemoryService) getAppMemories(appName string) *appMemories {
 }
 
 // createMemoryEntry creates a new MemoryEntry from memory data.
-func createMemoryEntry(appName, userID, memoryStr string, topics []string) *memory.Entry {
+func createMemoryEntry(
+	appName, userID, memoryStr string,
+	topics []string,
+	ep *memory.Metadata,
+) *memory.Entry {
 	now := time.Now()
 
 	// Create Memory object.
@@ -133,6 +137,7 @@ func createMemoryEntry(appName, userID, memoryStr string, topics []string) *memo
 		Topics:      topics,
 		LastUpdated: &now,
 	}
+	imemory.ApplyMetadata(memoryObj, ep)
 
 	return &memory.Entry{
 		ID:        imemory.GenerateMemoryID(memoryObj, appName, userID), // Generate ID.
@@ -153,10 +158,11 @@ func (s *MemoryService) AddMemory(ctx context.Context, userKey memory.UserKey, m
 
 	app := s.getAppMemories(userKey.AppName)
 
-	// Create memory entry with provided topics.
-	memoryEntry := createMemoryEntry(userKey.AppName, userKey.UserID, memoryStr, topics)
 	ep := memory.ResolveAddOptions(opts)
-	imemory.ApplyMetadata(memoryEntry.Memory, ep)
+	// Create memory entry with provided topics.
+	memoryEntry := createMemoryEntry(
+		userKey.AppName, userKey.UserID, memoryStr, topics, ep,
+	)
 
 	app.mu.Lock()
 	defer app.mu.Unlock()
@@ -200,7 +206,7 @@ func (s *MemoryService) UpdateMemory(ctx context.Context, memoryKey memory.Key, 
 	memoryEntry.Memory.Topics = topics
 	memoryEntry.Memory.LastUpdated = &now
 	ep := memory.ResolveUpdateOptions(opts)
-	imemory.ApplyMetadata(memoryEntry.Memory, ep)
+	imemory.ApplyMetadataPatch(memoryEntry.Memory, ep)
 	memoryEntry.UpdatedAt = now
 	app.memories[memoryKey.UserID][memoryKey.MemoryID] = memoryEntry
 	return nil
@@ -305,10 +311,12 @@ func (s *MemoryService) SearchMemories(ctx context.Context, userKey memory.UserK
 		entries = append(entries, memoryEntry)
 	}
 
-	return imemory.SearchMemoryEntries(entries, query, imemory.SearchOptions{
-		MinScore:   s.opts.searchMinScore,
-		MaxResults: s.opts.maxSearchResults,
-	}), nil
+	return imemory.SearchEntries(
+		entries,
+		memory.ResolveSearchOptions(query, opts),
+		s.opts.searchMinScore,
+		s.opts.maxSearchResults,
+	), nil
 }
 
 // Tools returns the list of available memory tools.

@@ -230,6 +230,52 @@ func TestApplyMetadata(t *testing.T) {
 		assert.Equal(t, []string{"Alice"}, mem.Participants)
 		assert.Equal(t, "Tokyo", mem.Location)
 	})
+
+	t.Run("missing kind defaults to fact when metadata is present", func(t *testing.T) {
+		mem := &memory.Memory{Memory: "profile"}
+		meta := &memory.Metadata{
+			EventTime:    &now,
+			Participants: []string{"Alice", "Alice", "Bob"},
+			Location:     " Tokyo ",
+		}
+
+		ApplyMetadata(mem, meta)
+
+		assert.Equal(t, memory.KindFact, mem.Kind)
+		require.NotNil(t, mem.EventTime)
+		assert.Equal(t, now, *mem.EventTime)
+		assert.Equal(t, []string{"Alice", "Bob"}, mem.Participants)
+		assert.Equal(t, "Tokyo", mem.Location)
+	})
+}
+
+func TestApplyMetadataPatch(t *testing.T) {
+	now := time.Date(2024, 5, 7, 9, 0, 0, 0, time.UTC)
+	later := now.Add(24 * time.Hour)
+
+	mem := &memory.Memory{
+		Memory:       "trip",
+		Kind:         memory.KindEpisode,
+		EventTime:    &now,
+		Participants: []string{"Alice", "Bob"},
+		Location:     "Kyoto",
+	}
+
+	ApplyMetadataPatch(mem, &memory.Metadata{EventTime: &later})
+	require.NotNil(t, mem.EventTime)
+	assert.Equal(t, later, *mem.EventTime)
+	assert.Equal(t, memory.KindEpisode, mem.Kind)
+	assert.Equal(t, []string{"Alice", "Bob"}, mem.Participants)
+	assert.Equal(t, "Kyoto", mem.Location)
+
+	ApplyMetadataPatch(mem, &memory.Metadata{
+		Participants: []string{"Bob", "Bob", "Charlie"},
+	})
+	assert.Equal(t, []string{"Bob", "Charlie"}, mem.Participants)
+	assert.Equal(t, memory.KindEpisode, mem.Kind)
+	require.NotNil(t, mem.EventTime)
+	assert.Equal(t, later, *mem.EventTime)
+	assert.Equal(t, "Kyoto", mem.Location)
 }
 
 func TestMatchMemoryEntry(t *testing.T) {
@@ -745,6 +791,47 @@ func TestGenerateMemoryID(t *testing.T) {
 		assert.Equal(t, id1, id2)
 	})
 
+	t.Run("different episodic metadata produce different IDs", func(t *testing.T) {
+		at1 := time.Date(2024, 5, 1, 0, 0, 0, 0, time.UTC)
+		at2 := time.Date(2024, 5, 2, 0, 0, 0, 0, time.UTC)
+		mem1 := &memory.Memory{
+			Memory:       "User met Alice",
+			Kind:         memory.KindEpisode,
+			EventTime:    &at1,
+			Location:     "Kyoto",
+			Participants: []string{"Alice"},
+		}
+		mem2 := &memory.Memory{
+			Memory:       "User met Alice",
+			Kind:         memory.KindEpisode,
+			EventTime:    &at2,
+			Location:     "Kyoto",
+			Participants: []string{"Alice"},
+		}
+		id1 := GenerateMemoryID(mem1, testAppName, testUserID)
+		id2 := GenerateMemoryID(mem2, testAppName, testUserID)
+		assert.NotEqual(t, id1, id2)
+	})
+
+	t.Run("participant order does not affect episodic ID", func(t *testing.T) {
+		at := time.Date(2024, 5, 1, 0, 0, 0, 0, time.UTC)
+		mem1 := &memory.Memory{
+			Memory:       "User met friends",
+			Kind:         memory.KindEpisode,
+			EventTime:    &at,
+			Participants: []string{"Alice", "Bob"},
+		}
+		mem2 := &memory.Memory{
+			Memory:       "User met friends",
+			Kind:         memory.KindEpisode,
+			EventTime:    &at,
+			Participants: []string{"Bob", " Alice ", "Bob"},
+		}
+		id1 := GenerateMemoryID(mem1, testAppName, testUserID)
+		id2 := GenerateMemoryID(mem2, testAppName, testUserID)
+		assert.Equal(t, id1, id2)
+	})
+
 	t.Run("different users produce different IDs", func(t *testing.T) {
 		mem := &memory.Memory{Memory: "User likes coffee"}
 		id1 := GenerateMemoryID(mem, "app1", "user1")
@@ -1097,6 +1184,63 @@ func TestSearchMemoryEntries_ZeroValueOptionsPreservePositiveMatches(t *testing.
 	assert.Equal(t, "best", results[0].ID)
 	assert.Equal(t, "partial-09", results[1].ID)
 	assert.Equal(t, "partial-00", results[10].ID)
+}
+
+func TestSearchEntries_HonorsKindTimeAndOrdering(t *testing.T) {
+	base := time.Date(2024, 5, 1, 0, 0, 0, 0, time.UTC)
+	early := base.Add(24 * time.Hour)
+	late := base.Add(72 * time.Hour)
+	after := base.Add(12 * time.Hour)
+
+	entries := []*memory.Entry{
+		newSearchTestEntry("fact", "coffee timeline", nil, base, base),
+		newSearchTestEntry("episode-late", "coffee timeline", nil, base, base),
+		newSearchTestEntry("episode-early", "coffee timeline", nil, base, base),
+	}
+	entries[0].Memory.Kind = memory.KindFact
+	entries[1].Memory.Kind = memory.KindEpisode
+	entries[1].Memory.EventTime = &late
+	entries[2].Memory.Kind = memory.KindEpisode
+	entries[2].Memory.EventTime = &early
+
+	results := SearchEntries(entries, memory.SearchOptions{
+		Query:            "coffee timeline",
+		Kind:             memory.KindEpisode,
+		TimeAfter:        &after,
+		OrderByEventTime: true,
+		MaxResults:       10,
+	}, 0.3, 10)
+
+	require.Len(t, results, 2)
+	assert.Equal(t, "episode-early", results[0].ID)
+	assert.Equal(t, "episode-late", results[1].ID)
+}
+
+func TestSearchEntries_KindFallbackMergesResults(t *testing.T) {
+	now := time.Now().UTC()
+	entries := []*memory.Entry{
+		newSearchTestEntry("episode", "coffee hiking", nil, now, now),
+		newSearchTestEntry("fact-1", "coffee hiking", nil, now.Add(time.Minute), now.Add(time.Minute)),
+		newSearchTestEntry("fact-2", "coffee hiking", nil, now.Add(2*time.Minute), now.Add(2*time.Minute)),
+		newSearchTestEntry("fact-3", "coffee hiking", nil, now.Add(3*time.Minute), now.Add(3*time.Minute)),
+	}
+	entries[0].Memory.Kind = memory.KindEpisode
+	for i := 1; i < len(entries); i++ {
+		entries[i].Memory.Kind = memory.KindFact
+	}
+
+	results := SearchEntries(entries, memory.SearchOptions{
+		Query:        "coffee hiking",
+		Kind:         memory.KindEpisode,
+		KindFallback: true,
+		MaxResults:   10,
+	}, 0.3, 10)
+
+	require.Len(t, results, 4)
+	assert.Equal(t, "episode", results[0].ID)
+	assert.Equal(t, "fact-3", results[1].ID)
+	assert.Equal(t, "fact-2", results[2].ID)
+	assert.Equal(t, "fact-1", results[3].ID)
 }
 
 func TestIsPunctToken(t *testing.T) {

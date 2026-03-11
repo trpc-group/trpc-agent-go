@@ -212,7 +212,7 @@ func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key,
 	entry.Memory.Memory = memoryStr
 	entry.Memory.Topics = topics
 	entry.Memory.LastUpdated = &now
-	imemory.ApplyMetadata(entry.Memory, ep)
+	imemory.ApplyMetadataPatch(entry.Memory, ep)
 	entry.UpdatedAt = now
 
 	updated, err := json.Marshal(entry)
@@ -339,7 +339,7 @@ func (s *Service) ReadMemories(ctx context.Context, userKey memory.UserKey, limi
 // matched) and only the top entries above the minimum threshold are
 // returned.
 func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey,
-	query string, _ ...memory.SearchOption) ([]*memory.Entry, error) {
+	query string, opts ...memory.SearchOption) ([]*memory.Entry, error) {
 	if err := userKey.CheckUserKey(); err != nil {
 		return nil, err
 	}
@@ -372,10 +372,12 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey,
 		return nil, fmt.Errorf("search memories failed: %w", err)
 	}
 
-	return imemory.SearchMemoryEntries(entries, query, imemory.SearchOptions{
-		MinScore:   s.opts.searchMinScore,
-		MaxResults: s.opts.maxSearchResults,
-	}), nil
+	return imemory.SearchEntries(
+		entries,
+		memory.ResolveSearchOptions(query, opts),
+		s.opts.searchMinScore,
+		s.opts.maxSearchResults,
+	), nil
 }
 
 // Tools returns the list of available memory tools.

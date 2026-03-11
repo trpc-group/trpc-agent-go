@@ -280,7 +280,7 @@ func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory
 	entry.Memory.Topics = topics
 	entry.Memory.LastUpdated = &now
 	ep := memory.ResolveUpdateOptions(opts)
-	imemory.ApplyMetadata(entry.Memory, ep)
+	imemory.ApplyMetadataPatch(entry.Memory, ep)
 	entry.UpdatedAt = now
 
 	updated, err := json.Marshal(entry)
@@ -449,10 +449,12 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey,
 		return nil, fmt.Errorf("search memories failed: %w", err)
 	}
 
-	return imemory.SearchMemoryEntries(entries, query, imemory.SearchOptions{
-		MinScore:   s.opts.searchMinScore,
-		MaxResults: s.opts.maxSearchResults,
-	}), nil
+	return imemory.SearchEntries(
+		entries,
+		memory.ResolveSearchOptions(query, opts),
+		s.opts.searchMinScore,
+		s.opts.maxSearchResults,
+	), nil
 }
 
 // Tools returns the list of available memory tools.

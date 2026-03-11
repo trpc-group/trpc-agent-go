@@ -753,6 +753,70 @@ func TestService_UpdateMemory(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestService_UpdateMemory_WithoutMetadataDoesNotOverwriteMetadataColumns(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock, WithSkipDBInit(true))
+	defer svc.Close()
+
+	ctx := context.Background()
+	memKey := memory.Key{AppName: "test-app", UserID: "u1", MemoryID: "mem-123"}
+
+	mock.ExpectExec(`UPDATE .* SET memory_content = \$1, topics = \$2, embedding = \$3, updated_at = \$4 WHERE memory_id = \$5 AND app_name = \$6 AND user_id = \$7`).
+		WithArgs(
+			"updated memory",
+			pq.Array([]string{"new-topic"}),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			memKey.MemoryID,
+			memKey.AppName,
+			memKey.UserID,
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	err := svc.UpdateMemory(ctx, memKey, "updated memory", []string{"new-topic"})
+	require.NoError(t, err)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_UpdateMemory_PartialMetadataPatchOnlyUpdatesProvidedColumns(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock, WithSkipDBInit(true))
+	defer svc.Close()
+
+	ctx := context.Background()
+	memKey := memory.Key{AppName: "test-app", UserID: "u1", MemoryID: "mem-123"}
+	eventTime := time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC)
+
+	mock.ExpectExec(`UPDATE .* SET memory_content = \$1, topics = \$2, embedding = \$3, updated_at = \$4, event_time = \$5 WHERE memory_id = \$6 AND app_name = \$7 AND user_id = \$8`).
+		WithArgs(
+			"updated memory",
+			pq.Array([]string{"new-topic"}),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			eventTime,
+			memKey.MemoryID,
+			memKey.AppName,
+			memKey.UserID,
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	err := svc.UpdateMemory(
+		ctx,
+		memKey,
+		"updated memory",
+		[]string{"new-topic"},
+		memory.WithUpdateMetadata(&memory.Metadata{EventTime: &eventTime}),
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestService_UpdateMemory_NotFound(t *testing.T) {
 	db, mock := setupMockDB(t)
 	defer db.Close()
@@ -2123,16 +2187,16 @@ func TestService_CheckDDLPrivilege_NoRows(t *testing.T) {
 func TestResolveMetadata(t *testing.T) {
 	now := time.Date(2024, 5, 7, 10, 0, 0, 0, time.UTC)
 
-	t.Run("nil metadata uses fact defaults", func(t *testing.T) {
+	t.Run("nil memory uses empty defaults", func(t *testing.T) {
 		got := resolveMetadata(nil)
-		assert.Equal(t, string(memory.KindFact), got.kind)
+		assert.Empty(t, got.kind)
 		assert.Nil(t, got.eventTime)
 		assert.Empty(t, got.participants)
 		assert.Nil(t, got.location)
 	})
 
-	t.Run("episodic metadata is converted for SQL", func(t *testing.T) {
-		got := resolveMetadata(&memory.Metadata{
+	t.Run("memory metadata is converted for SQL", func(t *testing.T) {
+		got := resolveMetadata(&memory.Memory{
 			Kind:         memory.KindEpisode,
 			EventTime:    &now,
 			Participants: []string{"Alice", "Bob"},

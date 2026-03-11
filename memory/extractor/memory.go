@@ -414,23 +414,23 @@ func formatExistingMemory(entry *memory.Entry) string {
 			fmt.Sprintf("topics: %s",
 				strings.Join(m.Topics, ", ")))
 	}
-	if m.Kind != "" && m.Kind != memory.KindFact {
+	if m.Kind != "" {
 		meta = append(meta,
 			fmt.Sprintf("kind=%s", m.Kind))
-		if m.EventTime != nil {
-			meta = append(meta,
-				fmt.Sprintf("event_time=%s",
-					m.EventTime.Format("2006-01-02")))
-		}
-		if len(m.Participants) > 0 {
-			meta = append(meta,
-				fmt.Sprintf("participants=%s",
-					strings.Join(m.Participants, ",")))
-		}
-		if m.Location != "" {
-			meta = append(meta,
-				fmt.Sprintf("location=%s", m.Location))
-		}
+	}
+	if m.EventTime != nil {
+		meta = append(meta,
+			fmt.Sprintf("event_time=%s",
+				m.EventTime.Format("2006-01-02")))
+	}
+	if len(m.Participants) > 0 {
+		meta = append(meta,
+			fmt.Sprintf("participants=%s",
+				strings.Join(m.Participants, ",")))
+	}
+	if m.Location != "" {
+		meta = append(meta,
+			fmt.Sprintf("location=%s", m.Location))
 	}
 	if len(meta) == 0 {
 		return base + "\n"
