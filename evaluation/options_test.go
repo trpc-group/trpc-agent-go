@@ -19,6 +19,7 @@ import (
 	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
 	metricinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/inmemory"
+	metricregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
 )
 
@@ -44,6 +45,7 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.NotNil(t, opts.evalResultManager)
 	assert.NotNil(t, opts.metricManager)
 	assert.NotNil(t, opts.registry)
+	assert.NotNil(t, opts.metricRegistry)
 	assert.Nil(t, opts.evalService)
 	assert.Nil(t, opts.callbacks)
 	assert.Nil(t, opts.evalCaseParallelism)
@@ -77,6 +79,13 @@ func TestWithRegistry(t *testing.T) {
 	opts := newOptions(WithRegistry(custom))
 
 	assert.Equal(t, custom, opts.registry)
+}
+
+func TestWithMetricRegistry(t *testing.T) {
+	custom := metricregistry.New()
+	opts := newOptions(WithMetricRegistry(custom))
+
+	assert.Equal(t, custom, opts.metricRegistry)
 }
 
 func TestWithEvaluationService(t *testing.T) {
@@ -154,6 +163,16 @@ func TestOptionsValidateRejectsNilRegistry(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "registry is nil")
+}
+
+func TestOptionsValidateRejectsNilMetricRegistry(t *testing.T) {
+	opts := newOptions()
+	opts.metricRegistry = nil
+
+	err := opts.validate(false)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "metric registry is nil")
 }
 
 func TestOptionsValidateRejectsNilEvalServiceWhenRequired(t *testing.T) {

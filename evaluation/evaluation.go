@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
 	metricllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
+	metricregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service/local"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
@@ -57,6 +58,7 @@ func New(appName string, runner runner.Runner, opt ...Option) (AgentEvaluator, e
 		evalResultManager:                 opts.evalResultManager,
 		metricManager:                     opts.metricManager,
 		registry:                          opts.registry,
+		metricRegistry:                    opts.metricRegistry,
 		evalService:                       opts.evalService,
 		callbacks:                         opts.callbacks,
 		numRuns:                           opts.numRuns,
@@ -70,6 +72,7 @@ func New(appName string, runner runner.Runner, opt ...Option) (AgentEvaluator, e
 			service.WithEvalSetManager(a.evalSetManager),
 			service.WithEvalResultManager(a.evalResultManager),
 			service.WithRegistry(a.registry),
+			service.WithMetricRegistry(a.metricRegistry),
 		}
 		if opts.callbacks != nil {
 			serviceOpts = append(serviceOpts, service.WithCallbacks(opts.callbacks))
@@ -104,6 +107,7 @@ type agentEvaluator struct {
 	evalResultManager                 evalresult.Manager
 	metricManager                     metric.Manager
 	registry                          registry.Registry
+	metricRegistry                    metricregistry.Registry
 	evalService                       service.Service
 	callbacks                         *service.Callbacks
 	numRuns                           int
@@ -168,6 +172,7 @@ func (a *agentEvaluator) mergeCallOptions(opt ...Option) (*options, error) {
 		evalResultManager:                 a.evalResultManager,
 		metricManager:                     a.metricManager,
 		registry:                          a.registry,
+		metricRegistry:                    a.metricRegistry,
 		evalService:                       a.evalService,
 		callbacks:                         a.callbacks,
 		numRuns:                           a.numRuns,
@@ -314,6 +319,7 @@ func (a *agentEvaluator) runEvaluation(ctx context.Context, evalSetID string, op
 		evaluateOpts := []service.Option{
 			service.WithEvalSetManager(opts.evalSetManager),
 			service.WithRegistry(opts.registry),
+			service.WithMetricRegistry(opts.metricRegistry),
 		}
 		if opts.callbacks != nil {
 			evaluateOpts = append(evaluateOpts, service.WithCallbacks(opts.callbacks))
