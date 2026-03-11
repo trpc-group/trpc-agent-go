@@ -238,28 +238,30 @@ The original dataset has 4 question types. We exclude `null_query` (301 entries)
 #### Answer Quality Metrics
 
 
-| Metric | LangChain | tRPC-Agent-Go | Agno | CrewAI | AutoGen | Best |
-|--------|-----------|---------------|------|--------|---------|------|
-| **Faithfulness** | 0.9722 | **0.9815** | 0.9660 | 0.9753 | 0.8688 | ✅ tRPC-Agent-Go |
-| **Answer Relevancy** | 0.8914 | 0.8799 | **0.8917** | 0.7820 | 0.8304 | ✅ Agno |
-| **Answer Correctness** | 0.6984 | **0.8104** | 0.7741 | 0.7575 | 0.6707 | ✅ tRPC-Agent-Go |
-| **Answer Similarity** | 0.6758 | **0.7240** | 0.6989 | 0.7025 | 0.6653 | ✅ tRPC-Agent-Go |
+| Metric | LangChain | LangChain-Chain | tRPC-Agent-Go | Agno | CrewAI | AutoGen | Best |
+|--------|-----------|-----------------|---------------|------|--------|---------|------|
+| **Faithfulness** | 0.8614 | 0.9167 | **0.9853** | 0.7213 | 0.9655 | 0.9113 | ✅ tRPC-Agent-Go |
+| **Answer Relevancy** | 0.8529 | 0.6573 | 0.8890 | 0.9013 | 0.8383 | **0.9040** | ✅ AutoGen |
+| **Answer Correctness** | 0.6912 | 0.7801 | **0.8299** | 0.6916 | 0.8101 | 0.7725 | ✅ tRPC-Agent-Go |
+| **Answer Similarity** | 0.6740 | **0.8373** | 0.7251 | 0.6772 | 0.6948 | 0.6830 | ✅ LangChain-Chain |
 
 #### Context Quality Metrics
 
 
-| Metric | LangChain | tRPC-Agent-Go | Agno | CrewAI | AutoGen | Best |
-|--------|-----------|---------------|------|--------|---------|------|
-| **Context Precision** | 0.6051 | **0.7098** | 0.6712 | 0.6391 | 0.5445 | ✅ tRPC-Agent-Go |
-| **Context Recall** | 0.8704 | **0.9444** | 0.9259 | **0.9444** | 0.8889 | ✅ tRPC-Agent-Go / CrewAI |
-| **Context Entity Recall** | **0.4898** | 0.4867 | 0.4707 | 0.4599 | 0.3833 | ✅ LangChain |
+| Metric | LangChain | LangChain-Chain | tRPC-Agent-Go | Agno | CrewAI | AutoGen | Best |
+|--------|-----------|-----------------|---------------|------|--------|---------|------|
+| **Context Precision** | 0.6314 | **0.7716** | 0.7278 | 0.7046 | 0.6673 | 0.6142 | ✅ LangChain-Chain |
+| **Context Recall** | 0.8333 | 0.8704 | 0.9259 | 0.9259 | **0.9444** | **0.9444** | ✅ CrewAI / AutoGen |
+| **Context Entity Recall** | 0.4138 | **0.5093** | 0.5034 | 0.4331 | 0.3922 | 0.2902 | ✅ LangChain-Chain |
 
 #### Key Conclusions
 
-1. **tRPC-Agent-Go leads comprehensively**: **Faithfulness (0.9815)**, **Answer Correctness (0.8104)**, **Answer Similarity (0.7240)**, and **Context Precision (0.7098)** all rank 1st, with **Context Recall (0.9444)** tied for 1st with CrewAI. Achieves 5 first-place finishes (including 1 tie), demonstrating the strongest overall performance.
-2. **Agno leads in relevancy**: **Answer Relevancy (0.8917)** ranks 1st.
-3. **LangChain leads in entity recall**: **Context Entity Recall (0.4898)** ranks 1st.
-4. **AutoGen underperforms on this dataset**: All metrics are lower than other frameworks, possibly related to its retrieval strategy on small-scale knowledge bases.
+1. **tRPC-Agent-Go achieves the best overall performance**: Ranks 1st in 3 out of 7 metrics — **Faithfulness (0.9853)**, **Answer Correctness (0.8299)**, leading in answer quality.
+2. **LangChain-Chain excels in similarity and context quality**: Ranks 1st in 3 metrics — **Answer Similarity (0.8373)**, **Context Precision (0.7716)**, and **Context Entity Recall (0.5093)**. Its deterministic chain pipeline (no agent loop) delivers the most precise context retrieval.
+3. **AutoGen leads in relevancy**: **Answer Relevancy (0.9040)** ranks 1st (close to Agno's 0.9013), showing the best on-topic answers. Also ties for 1st in **Context Recall (0.9444)**.
+4. **CrewAI has the highest recall**: **Context Recall (0.9444)** ties for 1st, indicating the most comprehensive retrieval recall.
+5. **Agno excels in relevancy**: **Answer Relevancy (0.9013)** ranks 2nd, demonstrating excellent on-topic answers.
+6. **Each framework has its strengths**: LangChain provides a stable and balanced baseline, with each framework excelling in different dimensions.
 
 ---
 

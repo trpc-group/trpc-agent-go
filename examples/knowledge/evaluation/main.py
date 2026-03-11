@@ -172,7 +172,7 @@ def run_evaluation(
 
     # Step 1: Load QA items
     print("1. Loading QA items...")
-    qa_items = dataset.load_qa_items()
+    qa_items = dataset.load_qa_items(max_qa_items)
     print(f"   Loaded {len(qa_items)} QA items.\n")
 
     # Step 2: Load documents if needed
@@ -180,7 +180,7 @@ def run_evaluation(
         print("2. Skipping document loading (--skip-load enabled)...\n")
     else:
         print("2. Loading documents...")
-        doc_dir = dataset.load_documents(force_reload=True)
+        doc_dir = dataset.load_documents(force_reload=force_reload)
 
         file_paths = []
         for filename in sorted(os.listdir(doc_dir)):
@@ -353,7 +353,7 @@ def main():
     )
     parser.add_argument(
         "--kb",
-        choices=["langchain", "trpc-agent-go", "agno", "crewai", "autogen"],
+        choices=["langchain", "langchain_chain", "trpc-agent-go", "agno", "crewai", "autogen"],
         default="langchain",
         help="Knowledge base implementation to use (default: langchain)",
     )
@@ -433,6 +433,10 @@ def main():
         from knowledge_system.autogen.knowledge_base import AutoGenKnowledgeBase
         kb = AutoGenKnowledgeBase(max_results=args.k)
         print("Using AutoGen knowledge base")
+    elif args.kb == "langchain_chain":
+        from knowledge_system.langchain_chain.knowledge_base import LangChainChainKnowledgeBase
+        kb = LangChainChainKnowledgeBase()
+        print("Using LangChain Chain knowledge base")
     else:
         from knowledge_system.langchain.knowledge_base import LangChainKnowledgeBase
         kb = LangChainKnowledgeBase()

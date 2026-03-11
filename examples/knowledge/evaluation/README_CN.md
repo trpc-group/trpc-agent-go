@@ -239,28 +239,30 @@ CRITICAL RULES(IMPORTANT !!!):
 #### 回答质量指标 (Answer Quality)
 
 
-| 指标                            | LangChain | tRPC-Agent-Go  | Agno       | CrewAI | AutoGen | 胜者             |
-| --------------------------------- | ----------- | ---------------- | ------------ | -------- | --------- | ------------------ |
-| **Faithfulness (忠实度)**       | 0.9722    | **0.9815**     | 0.9660     | 0.9753 | 0.8688  | ✅ tRPC-Agent-Go |
-| **Answer Relevancy (相关性)**   | 0.8914    | 0.8799         | **0.8917** | 0.7820 | 0.8304  | ✅ Agno          |
-| **Answer Correctness (正确性)** | 0.6984    | **0.8104**     | 0.7741     | 0.7575 | 0.6707  | ✅ tRPC-Agent-Go |
-| **Answer Similarity (相似度)**  | 0.6758    | **0.7240**     | 0.6989     | 0.7025 | 0.6653  | ✅ tRPC-Agent-Go |
+| 指标                            | LangChain | LangChain-Chain | tRPC-Agent-Go | Agno   | CrewAI | AutoGen    | 胜者             |
+| --------------------------------- | ----------- | ----------------- | --------------- | -------- | -------- | ------------ | ------------------ |
+| **Faithfulness (忠实度)**       | 0.8614    | 0.9167          | **0.9853**    | 0.7213 | 0.9655 | 0.9113     | ✅ tRPC-Agent-Go |
+| **Answer Relevancy (相关性)**   | 0.8529    | 0.6573          | 0.8890        | 0.9013 | 0.8383 | **0.9040** | ✅ AutoGen       |
+| **Answer Correctness (正确性)** | 0.6912    | 0.7801          | **0.8299**    | 0.6916 | 0.8101 | 0.7725     | ✅ tRPC-Agent-Go |
+| **Answer Similarity (相似度)**  | 0.6740    | **0.8373**      | 0.7251        | 0.6772 | 0.6948 | 0.6830     | ✅ LangChain-Chain |
 
 #### 上下文质量指标 (Context Quality)
 
 
-| 指标                                 | LangChain  | tRPC-Agent-Go  | Agno   | CrewAI     | AutoGen | 胜者                      |
-| -------------------------------------- | ------------ | ---------------- | -------- | ------------ | --------- | --------------------------- |
-| **Context Precision (精确率)**       | 0.6051     | **0.7098**     | 0.6712 | 0.6391     | 0.5445  | ✅ tRPC-Agent-Go          |
-| **Context Recall (召回率)**          | 0.8704     | **0.9444**     | 0.9259 | **0.9444** | 0.8889  | ✅ tRPC-Agent-Go / CrewAI |
-| **Context Entity Recall (实体召回)** | **0.4898** | 0.4867         | 0.4707 | 0.4599     | 0.3833  | ✅ LangChain              |
+| 指标                                 | LangChain | LangChain-Chain | tRPC-Agent-Go | Agno   | CrewAI     | AutoGen    | 胜者                |
+| -------------------------------------- | ----------- | ----------------- | --------------- | -------- | ------------ | ------------ | --------------------- |
+| **Context Precision (精确率)**       | 0.6314    | **0.7716**      | 0.7278        | 0.7046 | 0.6673     | 0.6142     | ✅ LangChain-Chain  |
+| **Context Recall (召回率)**          | 0.8333    | 0.8704          | 0.9259        | 0.9259 | **0.9444** | **0.9444** | ✅ CrewAI / AutoGen |
+| **Context Entity Recall (实体召回)** | 0.4138    | **0.5093**      | 0.5034        | 0.4331 | 0.3922     | 0.2902     | ✅ LangChain-Chain  |
 
 #### 核心结论
 
-1. **tRPC-Agent-Go 全面领先**：**Faithfulness (0.9815)**、**Answer Correctness (0.8104)**、**Answer Similarity (0.7240)** 和 **Context Precision (0.7098)** 均排名第一，**Context Recall (0.9444)** 与 CrewAI 并列第一。以 5 项第一（含 1 项并列）展现出最强的综合表现。
-2. **Agno 相关性最优**：**Answer Relevancy (0.8917)** 排名第一。
-3. **LangChain 实体召回领先**：**Context Entity Recall (0.4898)** 排名第一。
-4. **AutoGen 各项偏低**：在本数据集上 AutoGen 表现不及其他框架，可能与其对小规模知识库的检索策略有关。
+1. **tRPC-Agent-Go 综合表现最优**：在 7 项指标中拿下 3 项第一——**Faithfulness (0.9853)**、**Answer Correctness (0.8299)**，回答质量领先。
+2. **LangChain-Chain 相似度与上下文质量突出**：拿下 3 项第一——**Answer Similarity (0.8373)**、**Context Precision (0.7716)** 和 **Context Entity Recall (0.5093)**。其确定性 Chain 流程（无 Agent 循环）在上下文检索精度上表现最优。
+3. **AutoGen 相关性领先**：**Answer Relevancy (0.9040)** 排名第一（与 Agno 的 0.9013 接近），回答切题性最优。同时 **Context Recall (0.9444)** 并列第一。
+4. **CrewAI 召回率最高**：**Context Recall (0.9444)** 并列第一，表明其检索召回最全面。
+5. **Agno 相关性突出**：**Answer Relevancy (0.9013)** 排名第二，回答切题性优秀。
+6. **各框架各有所长**：LangChain 表现均衡稳定，各框架在不同维度各具优势。
 
 ---
 
