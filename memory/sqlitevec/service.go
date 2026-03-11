@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -138,11 +139,7 @@ func (s *Service) AddMemory(
 	if err := userKey.CheckUserKey(); err != nil {
 		return err
 	}
-
-	// TODO: persist episodic metadata once the vec0 virtual
-	// table schema supports episodic columns (kind, event_time,
-	// participants, location).
-	_ = memory.ResolveAddOptions(opts)
+	ep := memory.ResolveAddOptions(opts)
 
 	embedding, err := s.opts.embedder.GetEmbedding(ctx, memoryStr)
 	if err != nil {
@@ -167,12 +164,19 @@ func (s *Service) AddMemory(
 		Topics:      topics,
 		LastUpdated: &now,
 	}
+	imemory.ApplyMetadata(mem, ep)
 	memoryID := imemory.GenerateMemoryID(mem, userKey.AppName, userKey.UserID)
 
 	topicsJSON, err := json.Marshal(topics)
 	if err != nil {
 		return fmt.Errorf("marshal topics: %w", err)
 	}
+	participantsJSON, err := marshalStringSlice(mem.Participants)
+	if err != nil {
+		return fmt.Errorf("marshal participants: %w", err)
+	}
+	eventTimeNs := metadataEventTimeNS(mem.EventTime)
+	location := metadataLocationValue(mem.Location)
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -209,7 +213,8 @@ func (s *Service) AddMemory(
 		const updateSQL = `UPDATE %s SET
 embedding = ` + sqlVectorFromBlob + `,
 updated_at = ?, deleted_at = ?,
-memory_content = ?, topics = ?
+memory_content = ?, topics = ?,
+memory_kind = ?, event_time = ?, participants = ?, location = ?
 WHERE app_name = ? AND user_id = ? AND memory_id = ?`
 		query := fmt.Sprintf(updateSQL, s.tableName)
 		res, err := tx.ExecContext(
@@ -220,6 +225,10 @@ WHERE app_name = ? AND user_id = ? AND memory_id = ?`
 			notDeletedAtNs,
 			memoryStr,
 			string(topicsJSON),
+			string(mem.Kind),
+			eventTimeNs,
+			participantsJSON,
+			location,
 			userKey.AppName,
 			userKey.UserID,
 			memoryID,
@@ -241,8 +250,9 @@ WHERE app_name = ? AND user_id = ? AND memory_id = ?`
 	const insertSQL = `INSERT INTO %s (
 memory_id, embedding, app_name, user_id,
 created_at, updated_at, deleted_at,
-memory_content, topics
-) VALUES (?, ` + sqlVectorFromBlob + `, ?, ?, ?, ?, ?, ?, ?)`
+memory_content, topics, memory_kind, event_time,
+participants, location
+) VALUES (?, ` + sqlVectorFromBlob + `, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	query := fmt.Sprintf(insertSQL, s.tableName)
 	_, err = tx.ExecContext(
 		ctx,
@@ -256,6 +266,10 @@ memory_content, topics
 		notDeletedAtNs,
 		memoryStr,
 		string(topicsJSON),
+		string(mem.Kind),
+		eventTimeNs,
+		participantsJSON,
+		location,
 	)
 	if err != nil {
 		return fmt.Errorf("insert memory: %w", err)
@@ -344,10 +358,7 @@ func (s *Service) UpdateMemory(
 	if err := memoryKey.CheckMemoryKey(); err != nil {
 		return err
 	}
-
-	// TODO: persist episodic metadata once the vec0 virtual
-	// table schema supports episodic columns.
-	_ = memory.ResolveUpdateOptions(opts)
+	ep := memory.ResolveUpdateOptions(opts)
 
 	embedding, err := s.opts.embedder.GetEmbedding(ctx, memoryStr)
 	if err != nil {
@@ -373,22 +384,48 @@ func (s *Service) UpdateMemory(
 
 	now := time.Now()
 	updatedAtNs := now.UTC().UnixNano()
+	patch := &memory.Memory{}
+	imemory.ApplyMetadataPatch(patch, ep)
 
-	const updateSQL = `UPDATE %s SET
-embedding = ` + sqlVectorFromBlob + `,
-updated_at = ?, memory_content = ?, topics = ?
-WHERE app_name = ? AND user_id = ? AND memory_id = ?`
-
-	query := fmt.Sprintf(updateSQL, s.tableName)
+	assignments := []string{
+		"embedding = " + sqlVectorFromBlob,
+		"updated_at = ?",
+		"memory_content = ?",
+		"topics = ?",
+	}
 	args := []any{
 		blob,
 		updatedAtNs,
 		memoryStr,
 		string(topicsJSON),
-		memoryKey.AppName,
-		memoryKey.UserID,
-		memoryKey.MemoryID,
 	}
+	if patch.Kind != "" {
+		assignments = append(assignments, "memory_kind = ?")
+		args = append(args, string(patch.Kind))
+	}
+	if patch.EventTime != nil {
+		assignments = append(assignments, "event_time = ?")
+		args = append(args, metadataEventTimeNS(patch.EventTime))
+	}
+	if len(patch.Participants) > 0 {
+		participantsJSON, err := marshalStringSlice(patch.Participants)
+		if err != nil {
+			return fmt.Errorf("marshal participants: %w", err)
+		}
+		assignments = append(assignments, "participants = ?")
+		args = append(args, participantsJSON)
+	}
+	if patch.Location != "" {
+		assignments = append(assignments, "location = ?")
+		args = append(args, metadataLocationValue(patch.Location))
+	}
+
+	query := fmt.Sprintf(
+		"UPDATE %s SET %s WHERE app_name = ? AND user_id = ? AND memory_id = ?",
+		s.tableName,
+		strings.Join(assignments, ", "),
+	)
+	args = append(args, memoryKey.AppName, memoryKey.UserID, memoryKey.MemoryID)
 	if s.opts.softDelete {
 		query += fmt.Sprintf(" AND deleted_at = %d", notDeletedAtNs)
 	}
@@ -499,7 +536,8 @@ func (s *Service) ReadMemories(
 	}
 
 	const selectSQL = `SELECT
-memory_id, memory_content, topics, created_at, updated_at
+memory_id, memory_content, topics, memory_kind, event_time,
+participants, location, created_at, updated_at
 FROM %s WHERE app_name = ? AND user_id = ?`
 	query := fmt.Sprintf(selectSQL, s.tableName)
 	args := []any{userKey.AppName, userKey.UserID}
@@ -565,8 +603,226 @@ func (s *Service) SearchMemories(
 		return nil, fmt.Errorf("serialize query embedding: %w", err)
 	}
 
+	searchOpts := memory.ResolveSearchOptions(queryStr, opts)
+	candidates, err := s.searchWithOptions(ctx, userKey, searchOpts, blob)
+	if err != nil {
+		return nil, err
+	}
+
+	limit := resolveSearchLimit(s.opts.maxResults, searchOpts.MaxResults)
+	results := applySearchFilters(candidates, searchOpts)
+	if searchOpts.Kind != "" &&
+		searchOpts.KindFallback &&
+		len(results) < imemory.MinKindFallbackResults {
+		fallbackOpts := searchOpts
+		fallbackOpts.Kind = ""
+		fallbackOpts.KindFallback = false
+		fallbackResults := applySearchFilters(candidates, fallbackOpts)
+		if len(fallbackResults) > 0 {
+			results = imemory.MergeSearchResults(
+				results, fallbackResults, searchOpts.Kind, limit,
+			)
+		}
+	}
+	if searchOpts.Deduplicate && len(results) > 1 {
+		results = imemory.DeduplicateResults(results)
+	}
+	if searchOpts.OrderByEventTime {
+		sort.SliceStable(results, func(i, j int) bool {
+			ti := results[i].Memory.EventTime
+			tj := results[j].Memory.EventTime
+			switch {
+			case ti == nil && tj != nil:
+				return false
+			case ti != nil && tj == nil:
+				return true
+			case ti != nil && tj != nil && !ti.Equal(*tj):
+				return ti.Before(*tj)
+			default:
+				return false
+			}
+		})
+	}
+	if limit > 0 && len(results) > limit {
+		results = results[:limit]
+	}
+	return results, nil
+}
+
+func scanEntry(
+	rows *sql.Rows,
+	appName string,
+	userID string,
+) (*memory.Entry, error) {
+	var (
+		memoryID      string
+		memoryContent string
+		topicsJSON    string
+		memoryKind    sql.NullString
+		eventTimeNs   sql.NullInt64
+		participants  sql.NullString
+		location      sql.NullString
+		createdAtNs   int64
+		updatedAtNs   int64
+	)
+	if err := rows.Scan(
+		&memoryID,
+		&memoryContent,
+		&topicsJSON,
+		&memoryKind,
+		&eventTimeNs,
+		&participants,
+		&location,
+		&createdAtNs,
+		&updatedAtNs,
+	); err != nil {
+		return nil, fmt.Errorf("scan memory entry: %w", err)
+	}
+
+	topics, err := parseTopics(topicsJSON)
+	if err != nil {
+		return nil, err
+	}
+	participantList, err := parseStringSlice(participants.String)
+	if err != nil {
+		return nil, err
+	}
+
+	createdAt := time.Unix(0, createdAtNs).UTC()
+	updatedAt := time.Unix(0, updatedAtNs).UTC()
+	var eventTime *time.Time
+	if eventTimeNs.Valid {
+		t := time.Unix(0, eventTimeNs.Int64).UTC()
+		eventTime = &t
+	}
+
+	return &memory.Entry{
+		ID:      memoryID,
+		AppName: appName,
+		UserID:  userID,
+		Memory: &memory.Memory{
+			Memory:       memoryContent,
+			Topics:       topics,
+			Kind:         memory.Kind(memoryKind.String),
+			EventTime:    eventTime,
+			Participants: participantList,
+			Location:     location.String,
+			LastUpdated:  &updatedAt,
+		},
+		CreatedAt: createdAt,
+		UpdatedAt: updatedAt,
+	}, nil
+}
+
+func parseTopics(in string) ([]string, error) {
+	return parseStringSlice(in)
+}
+
+func parseStringSlice(in string) ([]string, error) {
+	if in == "" {
+		return nil, nil
+	}
+	var values []string
+	if err := json.Unmarshal([]byte(in), &values); err != nil {
+		return nil, fmt.Errorf("unmarshal string slice: %w", err)
+	}
+	return values, nil
+}
+
+func marshalStringSlice(values []string) (string, error) {
+	if len(values) == 0 {
+		return "", nil
+	}
+	data, err := json.Marshal(values)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func metadataEventTimeNS(t *time.Time) any {
+	if t == nil {
+		return nil
+	}
+	return t.UTC().UnixNano()
+}
+
+func metadataLocationValue(location string) any {
+	location = strings.TrimSpace(location)
+	if location == "" {
+		return nil
+	}
+	return location
+}
+
+func resolveSearchLimit(defaultMax, override int) int {
+	if override > 0 {
+		return override
+	}
+	return defaultMax
+}
+
+func resolveSearchCandidateLimit(
+	defaultMax int,
+	override int,
+	memoryLimit int,
+	opts memory.SearchOptions,
+) int {
+	limit := resolveSearchLimit(defaultMax, override)
+	if opts.Kind != "" || opts.TimeAfter != nil || opts.TimeBefore != nil ||
+		opts.OrderByEventTime || opts.KindFallback || opts.Deduplicate {
+		if memoryLimit > limit {
+			return memoryLimit
+		}
+	}
+	return limit
+}
+
+func applySearchFilters(
+	results []*memory.Entry,
+	opts memory.SearchOptions,
+) []*memory.Entry {
+	filtered := make([]*memory.Entry, 0, len(results))
+	for _, entry := range results {
+		if entry == nil || entry.Memory == nil {
+			continue
+		}
+		if opts.Kind != "" && entry.Memory.Kind != opts.Kind {
+			continue
+		}
+		if opts.TimeAfter != nil &&
+			entry.Memory.EventTime != nil &&
+			entry.Memory.EventTime.Before(*opts.TimeAfter) {
+			continue
+		}
+		if opts.TimeBefore != nil &&
+			entry.Memory.EventTime != nil &&
+			entry.Memory.EventTime.After(*opts.TimeBefore) {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	return filtered
+}
+
+func (s *Service) searchWithOptions(
+	ctx context.Context,
+	userKey memory.UserKey,
+	searchOpts memory.SearchOptions,
+	blob []byte,
+) ([]*memory.Entry, error) {
+	candidateLimit, err := s.resolveSearchCandidateLimit(
+		ctx,
+		userKey,
+		searchOpts,
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	const searchSQL = `SELECT
-memory_id, memory_content, topics, created_at, updated_at
+memory_id, memory_content, topics, memory_kind, event_time,
+participants, location, created_at, updated_at
 FROM %s
 WHERE embedding MATCH ` + sqlVectorFromBlob + `
 AND k = ?
@@ -574,7 +830,7 @@ AND app_name = ? AND user_id = ?`
 	query := fmt.Sprintf(searchSQL, s.tableName)
 	args := []any{
 		blob,
-		s.opts.maxResults,
+		candidateLimit,
 		userKey.AppName,
 		userKey.UserID,
 	}
@@ -599,63 +855,53 @@ AND app_name = ? AND user_id = ?`
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate memories: %w", err)
 	}
-
 	return results, nil
 }
 
-func scanEntry(
-	rows *sql.Rows,
-	appName string,
-	userID string,
-) (*memory.Entry, error) {
-	var (
-		memoryID      string
-		memoryContent string
-		topicsJSON    string
-		createdAtNs   int64
-		updatedAtNs   int64
+func (s *Service) resolveSearchCandidateLimit(
+	ctx context.Context,
+	userKey memory.UserKey,
+	searchOpts memory.SearchOptions,
+) (int, error) {
+	limit := resolveSearchCandidateLimit(
+		s.opts.maxResults,
+		searchOpts.MaxResults,
+		s.opts.memoryLimit,
+		searchOpts,
 	)
-	if err := rows.Scan(
-		&memoryID,
-		&memoryContent,
-		&topicsJSON,
-		&createdAtNs,
-		&updatedAtNs,
-	); err != nil {
-		return nil, fmt.Errorf("scan memory entry: %w", err)
+	if !(searchOpts.Kind != "" || searchOpts.TimeAfter != nil ||
+		searchOpts.TimeBefore != nil || searchOpts.OrderByEventTime ||
+		searchOpts.KindFallback || searchOpts.Deduplicate) {
+		return limit, nil
 	}
 
-	topics, err := parseTopics(topicsJSON)
+	count, err := s.countMemories(ctx, userKey)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
-
-	createdAt := time.Unix(0, createdAtNs).UTC()
-	updatedAt := time.Unix(0, updatedAtNs).UTC()
-
-	return &memory.Entry{
-		ID:      memoryID,
-		AppName: appName,
-		UserID:  userID,
-		Memory: &memory.Memory{
-			Memory:      memoryContent,
-			Topics:      topics,
-			LastUpdated: &updatedAt,
-		},
-		CreatedAt: createdAt,
-		UpdatedAt: updatedAt,
-	}, nil
+	if count > limit {
+		return count, nil
+	}
+	return limit, nil
 }
 
-func parseTopics(in string) ([]string, error) {
-	if in == "" {
-		return nil, nil
+func (s *Service) countMemories(
+	ctx context.Context,
+	userKey memory.UserKey,
+) (int, error) {
+	const countSQL = `SELECT COUNT(*) FROM %s WHERE app_name = ? AND user_id = ?`
+	query := fmt.Sprintf(countSQL, s.tableName)
+	args := []any{userKey.AppName, userKey.UserID}
+	if s.opts.softDelete {
+		query += fmt.Sprintf(" AND deleted_at = %d", notDeletedAtNs)
 	}
-	var topics []string
-	if err := json.Unmarshal([]byte(in), &topics); err != nil {
-		return nil, fmt.Errorf("unmarshal topics: %w", err)
+
+	var count int
+	row := s.db.QueryRowContext(ctx, query, args...)
+	if err := row.Scan(&count); err != nil {
+		return 0, fmt.Errorf("count memories: %w", err)
 	}
-	return topics, nil
+	return count, nil
 }
 
 // Tools returns the list of available memory tools.

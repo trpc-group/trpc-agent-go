@@ -160,6 +160,169 @@ func TestService_CRUD_HardDelete(t *testing.T) {
 	require.Len(t, got, 1)
 }
 
+func TestService_EpisodicMetadataRoundTrip(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mockEmbedder{dimension: 2}),
+		WithIndexDimension(2),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "u1"}
+	eventTime := time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC)
+
+	require.NoError(t, svc.AddMemory(
+		ctx,
+		userKey,
+		"alpha",
+		[]string{"travel"},
+		memory.WithMetadata(&memory.Metadata{
+			Kind:         memory.KindEpisode,
+			EventTime:    &eventTime,
+			Participants: []string{"Alice", "Bob"},
+			Location:     "Kyoto",
+		}),
+	))
+
+	got, err := svc.ReadMemories(ctx, userKey, 1)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.NotNil(t, got[0].Memory)
+	require.NotNil(t, got[0].Memory.EventTime)
+	require.Equal(t, memory.KindEpisode, got[0].Memory.Kind)
+	require.Equal(t, eventTime, *got[0].Memory.EventTime)
+	require.Equal(t, []string{"Alice", "Bob"}, got[0].Memory.Participants)
+	require.Equal(t, "Kyoto", got[0].Memory.Location)
+}
+
+func TestService_UpdateMemory_PreservesMetadataWhenNotProvided(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mockEmbedder{dimension: 2}),
+		WithIndexDimension(2),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "u1"}
+	eventTime := time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC)
+
+	require.NoError(t, svc.AddMemory(
+		ctx,
+		userKey,
+		"alpha",
+		nil,
+		memory.WithMetadata(&memory.Metadata{
+			Kind:         memory.KindEpisode,
+			EventTime:    &eventTime,
+			Participants: []string{"Alice"},
+			Location:     "Kyoto",
+		}),
+	))
+
+	got, err := svc.ReadMemories(ctx, userKey, 1)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+
+	memKey := memory.Key{
+		AppName:  userKey.AppName,
+		UserID:   userKey.UserID,
+		MemoryID: got[0].ID,
+	}
+	require.NoError(t, svc.UpdateMemory(ctx, memKey, "alpha", []string{"updated"}))
+
+	got, err = svc.ReadMemories(ctx, userKey, 1)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, memory.KindEpisode, got[0].Memory.Kind)
+	require.NotNil(t, got[0].Memory.EventTime)
+	require.Equal(t, eventTime, *got[0].Memory.EventTime)
+	require.Equal(t, []string{"Alice"}, got[0].Memory.Participants)
+	require.Equal(t, "Kyoto", got[0].Memory.Location)
+	require.Equal(t, []string{"updated"}, got[0].Memory.Topics)
+}
+
+func TestService_Search_WithEpisodicOptions(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mockEmbedder{dimension: 2}),
+		WithIndexDimension(2),
+		WithMaxResults(10),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "u1"}
+	day1 := time.Date(2024, 5, 1, 0, 0, 0, 0, time.UTC)
+	day2 := time.Date(2024, 5, 2, 0, 0, 0, 0, time.UTC)
+
+	require.NoError(t, svc.AddMemory(
+		ctx,
+		userKey,
+		"alpha",
+		nil,
+		memory.WithMetadata(&memory.Metadata{
+			Kind:      memory.KindEpisode,
+			EventTime: &day2,
+		}),
+	))
+	require.NoError(t, svc.AddMemory(
+		ctx,
+		userKey,
+		"alpha older",
+		nil,
+		memory.WithMetadata(&memory.Metadata{
+			Kind:      memory.KindEpisode,
+			EventTime: &day1,
+		}),
+	))
+	require.NoError(t, svc.AddMemory(
+		ctx,
+		userKey,
+		"alpha fact",
+		nil,
+		memory.WithMetadata(&memory.Metadata{
+			Kind: memory.KindFact,
+		}),
+	))
+
+	results, err := svc.SearchMemories(
+		ctx,
+		userKey,
+		"alpha",
+		memory.WithSearchOptions(memory.SearchOptions{
+			Query:            "alpha",
+			Kind:             memory.KindEpisode,
+			TimeAfter:        &day1,
+			OrderByEventTime: true,
+			KindFallback:     true,
+			MaxResults:       10,
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 3)
+	require.Equal(t, memory.KindEpisode, results[0].Memory.Kind)
+	require.NotNil(t, results[0].Memory.EventTime)
+	require.Equal(t, day1, *results[0].Memory.EventTime)
+	require.Equal(t, memory.KindEpisode, results[1].Memory.Kind)
+	require.NotNil(t, results[1].Memory.EventTime)
+	require.Equal(t, day2, *results[1].Memory.EventTime)
+	require.Equal(t, memory.KindFact, results[2].Memory.Kind)
+}
+
 func TestService_SoftDelete_ResurrectOnAdd(t *testing.T) {
 	db, cleanup := openTempSQLiteDB(t)
 	defer cleanup()
