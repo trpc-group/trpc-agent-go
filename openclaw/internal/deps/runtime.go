@@ -12,6 +12,7 @@ package deps
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -323,7 +324,10 @@ func CheckPythonPackages(
 		string(rawMods),
 	)
 	if err != nil {
-		return out, nil
+		return out, fmt.Errorf(
+			"build python package check command: %w",
+			err,
+		)
 	}
 	outBytes, err := cmd.CombinedOutput()
 	if err != nil {

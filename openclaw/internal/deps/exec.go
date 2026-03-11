@@ -16,13 +16,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
-)
-
-const (
-	pythonCommand    = "python"
-	python3Command   = "python3"
-	pythonExeCommand = "python.exe"
 )
 
 type executableSpec struct {
@@ -110,32 +105,20 @@ func combinedOutputContext(
 }
 
 func pythonCommandSpec(command string) (executableSpec, error) {
-	name := commandBase(command)
-	switch {
-	case name == pythonCommand:
-		return resolveExecutable(command, pythonCommand)
-	case name == python3Command:
-		return resolveExecutable(command, python3Command)
-	case strings.EqualFold(name, pythonExeCommand):
-		return resolveExecutable(command, pythonExeCommand)
-	default:
-		return executableSpec{}, fmt.Errorf(
-			"unsupported python executable %q",
-			command,
-		)
-	}
+	return resolveExecutable(command, "")
 }
 
 func systemCommandSpec(manager string) (executableSpec, error) {
-	switch strings.ToLower(commandBase(manager)) {
+	name := strings.ToLower(commandBase(manager))
+	switch name {
 	case InstallKindAPT:
-		return resolveExecutable("", InstallKindAPT)
+		return resolveExecutable(manager, name)
 	case InstallKindBrew:
-		return resolveExecutable("", InstallKindBrew)
+		return resolveExecutable(manager, name)
 	case InstallKindDNF:
-		return resolveExecutable("", InstallKindDNF)
+		return resolveExecutable(manager, name)
 	case InstallKindYUM:
-		return resolveExecutable("", InstallKindYUM)
+		return resolveExecutable(manager, name)
 	default:
 		return executableSpec{}, fmt.Errorf(
 			"unsupported package manager %q",
@@ -148,18 +131,39 @@ func resolveExecutable(
 	command string,
 	fallback string,
 ) (executableSpec, error) {
-	command = strings.TrimSpace(command)
-	if command != "" && commandDir(command) != "" {
-		path, err := filepath.Abs(filepath.Clean(command))
+	name := strings.TrimSpace(command)
+	if name == "" {
+		name = strings.TrimSpace(fallback)
+	}
+	if name == "" {
+		return executableSpec{}, fmt.Errorf("empty executable name")
+	}
+
+	if commandDir(name) != "" {
+		path, err := filepath.Abs(filepath.Clean(name))
 		if err != nil {
 			return executableSpec{}, err
 		}
-		return executableSpec{path: path}, nil
+		return validateExecutablePath(path)
 	}
 
-	path, err := exec.LookPath(fallback)
+	path, err := exec.LookPath(name)
 	if err != nil {
 		return executableSpec{}, err
+	}
+	return validateExecutablePath(path)
+}
+
+func validateExecutablePath(path string) (executableSpec, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return executableSpec{}, err
+	}
+	if info.IsDir() {
+		return executableSpec{}, fmt.Errorf("%q is a directory", path)
+	}
+	if runtime.GOOS != "windows" && info.Mode()&0o111 == 0 {
+		return executableSpec{}, fmt.Errorf("%q is not executable", path)
 	}
 	return executableSpec{path: path}, nil
 }
