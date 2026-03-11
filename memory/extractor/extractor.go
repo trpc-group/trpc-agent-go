@@ -12,6 +12,7 @@ package extractor
 
 import (
 	"context"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -58,6 +59,12 @@ type Operation struct {
 	MemoryID string
 	// Topics are optional topics for the memory.
 	Topics []string
+
+	// Episodic memory fields.
+	MemoryKind   memory.Kind // "fact" or "episode".
+	EventTime    *time.Time  // When the event occurred.
+	Participants []string    // People involved in the event.
+	Location     string      // Where the event took place.
 }
 
 // OperationType defines the type of memory operation.
@@ -70,3 +77,29 @@ const (
 	OperationDelete OperationType = "delete"
 	OperationClear  OperationType = "clear"
 )
+
+// contextKey is an unexported type for context keys in this package.
+type contextKey struct{}
+
+// referenceDateKey is the context key for the reference date.
+var referenceDateKey = contextKey{}
+
+// WithReferenceDate returns a copy of ctx with the reference date set.
+// The extractor uses this date to resolve relative time expressions
+// (e.g. "yesterday", "last week") in conversation messages.
+// When not set, the extractor falls back to time.Now().UTC().
+func WithReferenceDate(
+	ctx context.Context, t time.Time,
+) context.Context {
+	return context.WithValue(ctx, referenceDateKey, t)
+}
+
+// ReferenceDateFromContext extracts the reference date from ctx.
+// Returns the reference date and true if set, or zero time and
+// false otherwise.
+func ReferenceDateFromContext(
+	ctx context.Context,
+) (time.Time, bool) {
+	t, ok := ctx.Value(referenceDateKey).(time.Time)
+	return t, ok
+}
