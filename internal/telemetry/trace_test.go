@@ -261,12 +261,15 @@ func TestTraceFunctions_NonRecordingSpan_ReturnsEarly(t *testing.T) {
 func TestTraceBeforeAfter_Tool_Merged_Chat_Embedding(t *testing.T) {
 	// Before invoke
 	fp, mt, pp, tp, topP := 0.5, 128, 0.25, 0.7, 0.9
-	gc := &model.GenerationConfig{Stop: []string{"END"}, FrequencyPenalty: &fp, MaxTokens: &mt, PresencePenalty: &pp, Temperature: &tp, TopP: &topP}
+	gc := &model.GenerationConfig{Stop: []string{"END"}, FrequencyPenalty: &fp, MaxTokens: &mt, PresencePenalty: &pp, Temperature: &tp, TopP: &topP, Stream: true}
 	inv := &agent.Invocation{AgentName: "alpha", InvocationID: "inv-1", Session: &session.Session{ID: "sess-1", UserID: "u-1"}}
 	s := newRecordingSpan()
 	TraceBeforeInvokeAgent(s, inv, "desc", "inst", gc)
 	if !hasAttr(s.attrs, semconvtrace.KeyGenAIAgentName, "alpha") {
 		t.Fatalf("missing agent name")
+	}
+	if !hasAttr(s.attrs, semconvtrace.KeyGenAIRequestIsStream, true) {
+		t.Fatalf("missing request stream attribute")
 	}
 
 	// After invoke with error and choices
