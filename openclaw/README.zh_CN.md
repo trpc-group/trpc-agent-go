@@ -11,6 +11,10 @@
 
 本项目旨在作为添加更多通道（企业微信、Slack 等）和强化运维控制的起点。
 
+详细指南：
+[OpenClaw Runtime Guide (English)](../docs/mkdocs/en/openclaw-runtime.md)
+| [OpenClaw Runtime 指南（中文）](../docs/mkdocs/zh/openclaw-runtime.md)
+
 ## 快速开始
 
 使用 mock 模型运行（无需外部模型凭据）：
@@ -260,6 +264,47 @@ curl -sS 'http://127.0.0.1:8080/v1/gateway/messages' \
   -d '{"from":"alice","text":"Hello"}'
 ```
 
+通过 HTTP SSE 流式发送一条消息：
+
+```bash
+curl -N 'http://127.0.0.1:8080/v1/gateway/messages:stream' \
+  -H 'Content-Type: application/json' \
+  -d '{"from":"alice","text":"Hello"}'
+```
+
+该接口会输出按行分隔的 SSE 事件。每个 `data:` 载荷都是一个带稳定
+`type` 字段的 JSON `StreamEvent`：
+
+- `run.started`
+- `run.ignored`
+- `run.progress`
+- `message.delta`
+- `message.completed`
+- `run.completed`
+- `run.error`
+
+典型成功流程：
+
+1. `run.started`
+2. 零个或多个 `run.progress`
+3. 零个或多个 `message.delta`
+4. `message.completed`
+5. `run.completed`
+
+`run.progress` 是低频、系统生成的阶段状态更新，适合下游通道在没有
+正文之前展示一条简短的“仍在处理中”提示，而不是去猜测半截文本。
+首版使用的稳定阶段包括：
+
+- `preparing`
+- `reading_document`
+- `reading_spreadsheet`
+- `running_tool`
+- `summarizing`
+
+对于进程内集成，如果 `deps.Gateway` 同时实现了
+`registry.StreamingGatewayClient`，channel 插件可以优先调用
+`StreamMessage(...)`。
+
 发送多模态消息：
 
 - 使用 `text` 作为主要文本消息。
@@ -334,12 +379,21 @@ curl -sS 'http://127.0.0.1:8080/v1/gateway/messages' \
 注意：OpenAI Chat Completions 不支持像图片/音频那样的原始文件输入。
 OpenClaw 会将入站的 `file` 和 `video` 部分持久化到 state 目录下的
 稳定宿主机路径，在 session 历史中保留这些引用，并将它们暴露给 tools。
-实际上，这意味着后续轮次仍然可以通过 `exec_command`
+实际上，这意味着后续轮次仍然可以通过 `read_document`、
+`read_spreadsheet` 或 `exec_command`
 （`$OPENCLAW_LAST_UPLOAD_PATH`、`$OPENCLAW_LAST_UPLOAD_NAME`、
 `$OPENCLAW_LAST_UPLOAD_MIME`、`$OPENCLAW_LAST_PDF_PATH`、
 `$OPENCLAW_LAST_AUDIO_PATH`、`$OPENCLAW_LAST_VIDEO_PATH`、
 `$OPENCLAW_LAST_IMAGE_PATH`、`$OPENCLAW_SESSION_UPLOADS_DIR`）或
 `skill_run`（`host://...` 输入暂存到 `$WORK_DIR/inputs`）操作同一个上传文件。
+
+对于常见文件读取任务，优先使用内置的一方工具：
+
+- `read_document`：稳定读取 PDF、DOCX 和文本类上传文件。
+- `read_spreadsheet`：稳定读取 XLSX 和 CSV 上传文件。
+
+`exec_command` 继续保留为兜底工具，用于转换、复杂脚本和这些文件工具
+无法覆盖的宿主机任务。
 
 ## 使用真实模型运行（OpenAI）
 

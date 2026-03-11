@@ -13,6 +13,10 @@ OpenClaw-like shape on top of `trpc-agent-go`:
 It is intended as a starting point for adding more channels
 (Enterprise WeChat, Slack, etc.) and hardening operational controls.
 
+Detailed guide:
+[OpenClaw Runtime guide (English)](../docs/mkdocs/en/openclaw-runtime.md)
+| [OpenClaw Runtime 指南（中文）](../docs/mkdocs/zh/openclaw-runtime.md)
+
 ## Quick start
 
 Run with a mock model (no external model credentials needed):
@@ -270,6 +274,47 @@ curl -sS 'http://127.0.0.1:8080/v1/gateway/messages' \
   -d '{"from":"alice","text":"Hello"}'
 ```
 
+Stream one message via HTTP SSE:
+
+```bash
+curl -N 'http://127.0.0.1:8080/v1/gateway/messages:stream' \
+  -H 'Content-Type: application/json' \
+  -d '{"from":"alice","text":"Hello"}'
+```
+
+The stream emits newline-delimited SSE events. Each `data:` payload is a
+JSON `StreamEvent` with a stable `type` field:
+
+- `run.started`
+- `run.ignored`
+- `run.progress`
+- `message.delta`
+- `message.completed`
+- `run.completed`
+- `run.error`
+
+Typical successful flow:
+
+1. `run.started`
+2. zero or more `run.progress`
+3. zero or more `message.delta`
+4. `message.completed`
+5. `run.completed`
+
+`run.progress` is a low-frequency, system-generated status update. It is
+meant for channels that want a short "still working" summary without
+guessing from partial text. The first release uses stable stages such as:
+
+- `preparing`
+- `reading_document`
+- `reading_spreadsheet`
+- `running_tool`
+- `summarizing`
+
+For in-process integrations, channel plugins can prefer
+`StreamMessage(...)` when `deps.Gateway` also implements
+`registry.StreamingGatewayClient`.
+
 Send a multimodal message via HTTP:
 
 - Use `text` for the main text message.
@@ -346,12 +391,21 @@ Note: OpenAI Chat Completions does not support raw file inputs in the same
 way as images/audio. OpenClaw persists inbound `file` and `video` parts to
 stable host paths under the state directory, keeps those refs in session
 history, and exposes them back to tools. In practice this means later turns
-can still operate on the same upload with `exec_command`
+can still operate on the same upload with `read_document`,
+`read_spreadsheet`, or `exec_command`
 (`$OPENCLAW_LAST_UPLOAD_PATH`, `$OPENCLAW_LAST_UPLOAD_NAME`,
 `$OPENCLAW_LAST_UPLOAD_MIME`, `$OPENCLAW_LAST_PDF_PATH`,
 `$OPENCLAW_LAST_AUDIO_PATH`, `$OPENCLAW_LAST_VIDEO_PATH`,
 `$OPENCLAW_LAST_IMAGE_PATH`, `$OPENCLAW_SESSION_UPLOADS_DIR`) or
 `skill_run` (`host://...` inputs staged into `$WORK_DIR/inputs`).
+
+For common file-reading tasks, prefer the first-party tools:
+
+- `read_document`: stable reads for PDF, DOCX, and text-like uploads.
+- `read_spreadsheet`: stable reads for XLSX and CSV uploads.
+
+Use `exec_command` as the fallback for conversions, custom scripts, and
+other host-side work that those file tools cannot satisfy.
 
 ## Run with a real model (OpenAI)
 
@@ -509,6 +563,51 @@ To quickly validate your Telegram setup (token, webhook, pairing store):
 cd openclaw
 go run ./cmd/openclaw doctor -config ./openclaw.yaml
 ```
+
+### Dependency inspection and bootstrap
+
+OpenClaw can inspect common host-side file tooling requirements and can
+prepare a managed Python environment under the state directory for Python
+packages used by host tooling.
+
+Inspect the default file-tool profiles:
+
+```bash
+cd openclaw
+go run ./cmd/openclaw inspect deps
+```
+
+Inspect specific profiles or skill metadata:
+
+```bash
+cd openclaw
+go run ./cmd/openclaw inspect deps \
+  -profile pdf,office \
+  -skill nano-pdf
+```
+
+Preview the install plan:
+
+```bash
+cd openclaw
+go run ./cmd/openclaw bootstrap deps \
+  -profile common-file-tools
+```
+
+Apply the plan:
+
+```bash
+cd openclaw
+go run ./cmd/openclaw bootstrap deps \
+  -profile common-file-tools \
+  -apply
+```
+
+The bootstrap command never runs automatically on startup. Startup logs may
+print a suggested `bootstrap deps` command when optional file tools are
+missing, but installation is always explicit. The managed Python environment
+is created with access to the current system site-packages, so existing
+packages such as `pandas` remain visible after bootstrap.
 
 ### 5) Send a message
 
@@ -1097,6 +1196,11 @@ The assistant gets:
 - `message` for sending text, PDFs, images, audio, or video to the current
   chat or explicit targets
 - `cron` for future or recurring jobs
+
+When OpenClaw finds a managed Python environment under
+`<state_dir>/toolchain/python`, `exec_command` automatically prepends that
+environment to `PATH` so host commands can use the installed Python packages
+without changing prompts or shell commands.
 
 To disable these tools explicitly:
 

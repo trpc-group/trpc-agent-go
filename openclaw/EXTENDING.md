@@ -213,8 +213,12 @@ func (c *channel) ID() string { return typeName }
 func (c *channel) Run(ctx context.Context) error {
 	// 1) Receive inbound messages from WeCom.
 	// 2) Convert each message into a gwclient.MessageRequest.
-	// 3) Call deps.Gateway.SendMessage(...) to get a reply.
-	// 4) Deliver the reply back to WeCom.
+	// 3) Prefer deps.Gateway.(registry.StreamingGatewayClient)
+	//    and StreamMessage(...) when your channel supports incremental
+	//    replies.
+	// 4) Fall back to deps.Gateway.SendMessage(...) when you only need
+	//    one final reply.
+	// 5) Deliver the reply back to WeCom.
 	return nil
 }
 
@@ -226,6 +230,11 @@ func toGatewayRequest(text string) gwclient.MessageRequest {
 	}
 }
 ```
+
+If your channel can send partial replies (for example SSE, WebSocket, or a
+platform-specific stream API), first check whether `deps.Gateway`
+implements `registry.StreamingGatewayClient`. That keeps the gateway generic
+while letting channel adapters handle their own transport details.
 
 Enable it in YAML:
 
