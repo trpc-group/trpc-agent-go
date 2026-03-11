@@ -20,6 +20,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory/internal/kuhn"
 )
 
+// CompareFunc defines custom tool trajectory comparison logic.
+type CompareFunc func(actual, expected *evalset.Invocation) (bool, error)
+
 // New creates a ToolTrajectoryCriterion with the provided options.
 func New(opt ...Option) *ToolTrajectoryCriterion {
 	opts := newOptions(opt...)
@@ -28,6 +31,7 @@ func New(opt ...Option) *ToolTrajectoryCriterion {
 		ToolStrategy:    opts.toolStrategy,
 		OrderSensitive:  opts.orderSensitive,
 		SubsetMatching:  opts.subsetMatching,
+		CompareName:     opts.compareName,
 		Compare:         opts.compare,
 	}
 }
@@ -42,8 +46,10 @@ type ToolTrajectoryCriterion struct {
 	OrderSensitive bool `json:"orderSensitive,omitempty"`
 	// SubsetMatching allows expected tool list to be a subset of actual list.
 	SubsetMatching bool `json:"subsetMatching,omitempty"`
+	// CompareName selects a registered comparison implementation by name.
+	CompareName string `json:"compareName,omitempty"`
 	// Compare allows custom comparison override.
-	Compare func(actual, expected *evalset.Invocation) (bool, error) `json:"-"`
+	Compare CompareFunc `json:"-"`
 }
 
 // ToolTrajectoryStrategy defines comparison strategies for a single tool.
