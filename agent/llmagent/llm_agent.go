@@ -205,10 +205,10 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	}
 
 	// 3. Instruction processor - adds instruction content and system prompt.
-	if options.Instruction != "" || options.GlobalInstruction != "" ||
-		len(options.ModelInstructions) > 0 ||
-		len(options.ModelGlobalInstructions) > 0 ||
-		(options.StructuredOutput != nil && options.StructuredOutput.JSONSchema != nil) {
+	// Always register the instruction processor so that run-time options
+	// (e.g. agent.WithInstruction passed to runner.Run) are honoured even
+	// when no static instruction was set at construction time.
+	{
 		instructionOpts := []processor.InstructionRequestProcessorOption{
 			processor.WithOutputSchema(options.OutputSchema),
 		}
