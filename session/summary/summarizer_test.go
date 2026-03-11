@@ -946,6 +946,142 @@ func TestSessionSummarizer_FilterEventsForSummary(t *testing.T) {
 		assert.Len(t, filtered, 4)
 	})
 
+	t.Run("keeps prepended summary context for assistant tool chain", func(t *testing.T) {
+		s := &sessionSummarizer{skipRecentFunc: func(_ []event.Event) int { return 1 }}
+		now := time.Now().UTC()
+		events := []event.Event{
+			{
+				Author:    authorSystem,
+				Timestamp: now,
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Content: "previous summary"},
+				}}},
+			},
+			{
+				Author:    "assistant",
+				Timestamp: now.Add(-2 * time.Minute),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{
+						Role: model.RoleAssistant,
+						ToolCalls: []model.ToolCall{{
+							Function: model.FunctionDefinitionParam{
+								Name:      "lookup_weather",
+								Arguments: []byte(`{"city":"Shanghai"}`),
+							},
+						}},
+					},
+				}}},
+			},
+			{
+				Author:    "tool",
+				Timestamp: now.Add(-time.Minute),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{
+						ToolID:   "call-1",
+						ToolName: "lookup_weather",
+						Content:  "sunny",
+					},
+				}}},
+			},
+			{
+				Author:    "assistant",
+				Timestamp: now.Add(time.Minute),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Role: model.RoleAssistant, Content: "recent response"},
+				}}},
+			},
+		}
+
+		filtered := s.filterEventsForSummary(events)
+		expected := events[:3]
+		assert.Equal(t, expected, filtered)
+		assert.Len(t, filtered, 3)
+	})
+
+	t.Run("drops prepended summary when remaining tool calls are formatter-excluded", func(t *testing.T) {
+		s := &sessionSummarizer{
+			skipRecentFunc: func(_ []event.Event) int { return 1 },
+			toolCallFormatter: func(model.ToolCall) string {
+				return ""
+			},
+		}
+		now := time.Now().UTC()
+		events := []event.Event{
+			{
+				Author:    authorSystem,
+				Timestamp: now,
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Content: "previous summary"},
+				}}},
+			},
+			{
+				Author:    "assistant",
+				Timestamp: now.Add(-time.Minute),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{
+						Role: model.RoleAssistant,
+						ToolCalls: []model.ToolCall{{
+							Function: model.FunctionDefinitionParam{
+								Name:      "lookup_weather",
+								Arguments: []byte(`{"city":"Shanghai"}`),
+							},
+						}},
+					},
+				}}},
+			},
+			{
+				Author:    "assistant",
+				Timestamp: now.Add(time.Minute),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Role: model.RoleAssistant, Content: "recent response"},
+				}}},
+			},
+		}
+
+		filtered := s.filterEventsForSummary(events)
+		assert.Empty(t, filtered)
+	})
+
+	t.Run("drops prepended summary when remaining tool results are formatter-excluded", func(t *testing.T) {
+		s := &sessionSummarizer{
+			skipRecentFunc: func(_ []event.Event) int { return 1 },
+			toolResultFormatter: func(model.Message) string {
+				return ""
+			},
+		}
+		now := time.Now().UTC()
+		events := []event.Event{
+			{
+				Author:    authorSystem,
+				Timestamp: now,
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Content: "previous summary"},
+				}}},
+			},
+			{
+				Author:    "tool",
+				Timestamp: now.Add(-time.Minute),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{
+						ToolID:   "call-1",
+						ToolName: "lookup_weather",
+						Content:  "sunny",
+					},
+				}}},
+			},
+			{
+				Author:    "assistant",
+				Timestamp: now.Add(time.Minute),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Role: model.RoleAssistant, Content: "recent response"},
+				}}},
+			},
+		}
+
+		filtered := s.filterEventsForSummary(events)
+		assert.Empty(t, filtered)
+	})
+
 	t.Run("returns empty slice when no user message in filtered events", func(t *testing.T) {
 		s := &sessionSummarizer{skipRecentFunc: func(_ []event.Event) int { return 1 }}
 		events := []event.Event{
@@ -975,6 +1111,207 @@ func TestSessionSummarizer_FilterEventsForSummary(t *testing.T) {
 		assert.Len(t, filtered, 5)
 	})
 
+}
+
+func TestSummaryEventHelpers(t *testing.T) {
+	t.Run("eventHasTextContent", func(t *testing.T) {
+		t.Run("returns false for nil response", func(t *testing.T) {
+			assert.False(t, eventHasTextContent(event.Event{}))
+		})
+
+		t.Run("returns false for whitespace-only content", func(t *testing.T) {
+			e := event.Event{
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Content: "   "},
+				}}},
+			}
+			assert.False(t, eventHasTextContent(e))
+		})
+
+		t.Run("returns true when any choice has text", func(t *testing.T) {
+			e := event.Event{
+				Response: &model.Response{Choices: []model.Choice{
+					{Message: model.Message{Content: "   "}},
+					{Message: model.Message{Content: "hello"}},
+				}},
+			}
+			assert.True(t, eventHasTextContent(e))
+		})
+	})
+
+	t.Run("eventHasSummarizableContent", func(t *testing.T) {
+		defaultToolCallFmt := func(tc model.ToolCall) string {
+			return tc.Function.Name
+		}
+		defaultToolResultFmt := func(msg model.Message) string {
+			return msg.Content
+		}
+
+		t.Run("returns false for nil response", func(t *testing.T) {
+			assert.False(t, eventHasSummarizableContent(
+				event.Event{},
+				defaultToolCallFmt,
+				defaultToolResultFmt,
+			))
+		})
+
+		t.Run("returns true for included tool calls", func(t *testing.T) {
+			e := event.Event{
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{
+						ToolCalls: []model.ToolCall{{
+							Function: model.FunctionDefinitionParam{Name: "lookup_weather"},
+						}},
+					},
+				}}},
+			}
+			assert.True(t, eventHasSummarizableContent(
+				e,
+				defaultToolCallFmt,
+				defaultToolResultFmt,
+			))
+		})
+
+		t.Run("returns false for formatter-excluded tool calls", func(t *testing.T) {
+			e := event.Event{
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{
+						ToolCalls: []model.ToolCall{{
+							Function: model.FunctionDefinitionParam{Name: "lookup_weather"},
+						}},
+					},
+				}}},
+			}
+			assert.False(t, eventHasSummarizableContent(
+				e,
+				func(model.ToolCall) string { return "" },
+				defaultToolResultFmt,
+			))
+		})
+
+		t.Run("returns true for included tool results", func(t *testing.T) {
+			e := event.Event{
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{
+						ToolID:   "call-1",
+						ToolName: "lookup_weather",
+						Content:  "sunny",
+					},
+				}}},
+			}
+			assert.True(t, eventHasSummarizableContent(
+				e,
+				defaultToolCallFmt,
+				defaultToolResultFmt,
+			))
+		})
+
+		t.Run("returns false for formatter-excluded tool results", func(t *testing.T) {
+			e := event.Event{
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{
+						ToolID:   "call-1",
+						ToolName: "lookup_weather",
+						Content:  "sunny",
+					},
+				}}},
+			}
+			assert.False(t, eventHasSummarizableContent(
+				e,
+				defaultToolCallFmt,
+				func(model.Message) string { return "" },
+			))
+		})
+
+		t.Run("returns true for regular content", func(t *testing.T) {
+			e := event.Event{
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Content: "assistant reply"},
+				}}},
+			}
+			assert.True(t, eventHasSummarizableContent(
+				e,
+				defaultToolCallFmt,
+				defaultToolResultFmt,
+			))
+		})
+	})
+
+	t.Run("hasPrependedSummaryContext", func(t *testing.T) {
+		s := &sessionSummarizer{}
+		now := time.Now().UTC()
+
+		t.Run("returns false when fewer than two events", func(t *testing.T) {
+			events := []event.Event{{
+				Author:    authorSystem,
+				Timestamp: now,
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Content: "previous summary"},
+				}}},
+			}}
+			assert.False(t, s.hasPrependedSummaryContext(events))
+		})
+
+		t.Run("returns false when first event is not a system summary", func(t *testing.T) {
+			events := []event.Event{
+				{
+					Author:    "assistant",
+					Timestamp: now,
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "assistant"},
+					}}},
+				},
+				{
+					Author:    "assistant",
+					Timestamp: now.Add(-time.Minute),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "reply"},
+					}}},
+				},
+			}
+			assert.False(t, s.hasPrependedSummaryContext(events))
+		})
+
+		t.Run("returns false when summary timestamp is older than next event", func(t *testing.T) {
+			events := []event.Event{
+				{
+					Author:    authorSystem,
+					Timestamp: now.Add(-2 * time.Minute),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "previous summary"},
+					}}},
+				},
+				{
+					Author:    "assistant",
+					Timestamp: now.Add(-time.Minute),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "reply"},
+					}}},
+				},
+			}
+			assert.False(t, s.hasPrependedSummaryContext(events))
+		})
+
+		t.Run("returns true when later events have summarizable content", func(t *testing.T) {
+			events := []event.Event{
+				{
+					Author:    authorSystem,
+					Timestamp: now,
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "previous summary"},
+					}}},
+				},
+				{
+					Author:    "assistant",
+					Timestamp: now.Add(-time.Minute),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "reply"},
+					}}},
+				},
+			}
+			assert.True(t, s.hasPrependedSummaryContext(events))
+		})
+	})
 }
 
 func TestSessionSummarizer_SummarizeWithSkipRecent(t *testing.T) {
@@ -1022,6 +1359,73 @@ func TestSessionSummarizer_SummarizeWithSkipRecent(t *testing.T) {
 		assert.Contains(t, text, "I'm fine")
 		assert.NotContains(t, text, "recent message")
 		assert.NotContains(t, text, "recent response")
+	})
+
+	t.Run("summarizes assistant tool chain when previous summary provides context", func(t *testing.T) {
+		s := NewSummarizer(&fakeModel{}, WithSkipRecent(func(_ []event.Event) int { return 1 }))
+
+		summaryTs := time.Now().UTC()
+		toolCallTs := summaryTs.Add(-2 * time.Minute)
+		toolResultTs := summaryTs.Add(-time.Minute)
+		sess := &session.Session{
+			ID: "tool-chain-session",
+			Events: []event.Event{
+				{
+					Author:    authorSystem,
+					Timestamp: summaryTs,
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "previous summary"},
+					}}},
+				},
+				{
+					Author:    "assistant",
+					Timestamp: toolCallTs,
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{
+							Role: model.RoleAssistant,
+							ToolCalls: []model.ToolCall{{
+								Function: model.FunctionDefinitionParam{
+									Name:      "lookup_weather",
+									Arguments: []byte(`{"city":"Shanghai"}`),
+								},
+							}},
+						},
+					}}},
+				},
+				{
+					Author:    "tool",
+					Timestamp: toolResultTs,
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{
+							ToolID:   "call-1",
+							ToolName: "lookup_weather",
+							Content:  "sunny",
+						},
+					}}},
+				},
+				{
+					Author:    "assistant",
+					Timestamp: summaryTs.Add(time.Minute),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Role: model.RoleAssistant, Content: "recent response"},
+					}}},
+				},
+			},
+		}
+
+		text, err := s.Summarize(context.Background(), sess)
+		require.NoError(t, err)
+		assert.Contains(t, text, "previous summary")
+		assert.Contains(t, text, "Called tool: lookup_weather")
+		assert.Contains(t, text, "lookup_weather returned: sunny")
+		assert.NotContains(t, text, "recent response")
+
+		raw := sess.State[lastIncludedTsKey]
+		require.NotEmpty(t, raw)
+
+		got, err := time.Parse(time.RFC3339Nano, string(raw))
+		require.NoError(t, err)
+		assert.True(t, got.Equal(toolResultTs))
 	})
 
 	t.Run("errors when filtered events have no user message", func(t *testing.T) {
