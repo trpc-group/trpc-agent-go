@@ -1,8 +1,8 @@
-module trpc.group/trpc-go/trpc-agent-go/examples/knowledge/evaluation/knowledge_system/trpc-agent-go
+module trpc.group/trpc-go/trpc-agent-go/benchmark/knowledge/knowledge_system/trpc-agent-go
 
 go 1.24.6
 
-replace trpc.group/trpc-go/trpc-agent-go => ../../../../../../
+replace trpc.group/trpc-go/trpc-agent-go => ../../../../../
 
 require (
 	trpc.group/trpc-go/trpc-agent-go v1.2.1-0.20260123134909-0db8688a12ca
@@ -52,4 +52,4 @@ require (
 	trpc.group/trpc-go/trpc-agent-go/storage/postgres v1.2.1-0.20260123134909-0db8688a12ca // indirect
 )
 
-replace trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector => ../../../../../../knowledge/vectorstore/pgvector
+replace trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector => ../../../../../knowledge/vectorstore/pgvector
