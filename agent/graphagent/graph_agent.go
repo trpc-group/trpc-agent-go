@@ -116,7 +116,8 @@ func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-
 // pipeline and forwards all events to the provided output channel.
 func (ga *GraphAgent) runWithBarrier(ctx context.Context, invocation *agent.Invocation, out chan<- *event.Event) {
 	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, invocation.AgentName))
-	itelemetry.TraceBeforeInvokeAgent(span, invocation, ga.description, "", nil)
+	stream := invocation != nil && invocation.RunOptions.Stream != nil && *invocation.RunOptions.Stream
+	itelemetry.TraceBeforeInvokeAgent(span, invocation, ga.description, "", &model.GenerationConfig{Stream: stream})
 	defer span.End()
 	defer close(out)
 	// Emit a barrier event and wait for completion in a dedicated goroutine so that the runner can append all prior

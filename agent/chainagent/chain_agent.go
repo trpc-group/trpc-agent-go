@@ -85,9 +85,10 @@ func (a *ChainAgent) executeChainRun(
 	eventChan chan<- *event.Event,
 ) {
 	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, a.name))
-	itelemetry.TraceBeforeInvokeAgent(span, invocation, "chain-agent", "", nil)
+	stream := invocation != nil && invocation.RunOptions.Stream != nil && *invocation.RunOptions.Stream
+	itelemetry.TraceBeforeInvokeAgent(span, invocation, "chain-agent", "", &model.GenerationConfig{Stream: stream})
 	var trackerErr error
-	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, false, &trackerErr)
+	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, stream, &trackerErr)
 	defer func() {
 		tracker.RecordMetrics()()
 		span.End()
