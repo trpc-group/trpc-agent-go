@@ -146,9 +146,16 @@ func (w *AsyncSummaryWorker) EnqueueJob(
 		return nil
 	}
 
-	// Fall back to synchronous processing.
+	// Fall back to synchronous processing using the same detached context that
+	// async workers would consume.
 	log.DebugfContext(ctx, "summary job queue full, processing synchronously")
-	return CreateSessionSummaryWithCascade(ctx, sess, filterKey, force, w.config.CreateSummaryFunc)
+	return CreateSessionSummaryWithCascade(
+		job.ctx,
+		sess,
+		filterKey,
+		force,
+		w.config.CreateSummaryFunc,
+	)
 }
 
 // tryEnqueueJob attempts to enqueue a summary job.
