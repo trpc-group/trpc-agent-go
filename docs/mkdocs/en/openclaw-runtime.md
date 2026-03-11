@@ -266,27 +266,27 @@ produce the output, and send the result back as a file.
 For example, after a PDF is uploaded, the system can extract requested
 content directly:
 
-<img src="../../assets/img/openclaw-runtime/pdf-text-extraction-en.png" alt="Extracting text from a PDF" style="display: block; margin: 20px auto; max-width: 100%; max-height: 700px;" />
+<img src="../assets/img/openclaw-runtime/pdf-text-extraction-en.png" alt="Extracting text from a PDF" style="display: block; margin: 20px auto; max-width: 100%; max-height: 700px;" />
 
 It can also split a PDF into multiple pages and send a new file back:
 
-<img src="../../assets/img/openclaw-runtime/pdf-splitting-en.png" alt="Splitting a PDF into multiple files or pages" style="display: block; margin: 20px auto; max-width: 100%; max-height: 760px;" />
+<img src="../assets/img/openclaw-runtime/pdf-splitting-en.png" alt="Splitting a PDF into multiple files or pages" style="display: block; margin: 20px auto; max-width: 100%; max-height: 760px;" />
 
 Voice input can drive document processing as well. In the next example,
 the user asks by voice to merge selected pages into a single PDF:
 
-<img src="../../assets/img/openclaw-runtime/voice-pdf-merge-en.png" alt="Merging PDF pages via voice input" style="display: block; margin: 20px auto; max-width: 100%; max-height: 720px;" />
+<img src="../assets/img/openclaw-runtime/voice-pdf-merge-en.png" alt="Merging PDF pages via voice input" style="display: block; margin: 20px auto; max-width: 100%; max-height: 720px;" />
 
 The system can also generate a Word document for reporting directly
 from the input materials:
 
-<img src="../../assets/img/openclaw-runtime/voice-word-generation-en.png" alt="Generating a Word document from voice instructions" style="display: block; margin: 20px auto; max-width: 100%; max-height: 760px;" />
+<img src="../assets/img/openclaw-runtime/voice-word-generation-en.png" alt="Generating a Word document from voice instructions" style="display: block; margin: 20px auto; max-width: 100%; max-height: 760px;" />
 
 Excel processing follows the same end-to-end path. In the example
 below, the user asks by voice to keep the first row and delete the
 rest, and the processed spreadsheet is returned directly:
 
-<img src="../../assets/img/openclaw-runtime/voice-excel-edit-en.png" alt="Editing an Excel sheet via voice input" style="display: block; margin: 20px auto; max-width: 100%; max-height: 820px;" />
+<img src="../assets/img/openclaw-runtime/voice-excel-edit-en.png" alt="Editing an Excel sheet via voice input" style="display: block; margin: 20px auto; max-width: 100%; max-height: 820px;" />
 
 What these examples show is that one runtime can accept files, process
 multimodal input, execute tools, and return files without requiring a
@@ -297,23 +297,23 @@ separate workflow for each file type.
 In image-understanding scenarios, a picture can go directly into the
 model as multimodal input:
 
-<img src="../../assets/img/openclaw-runtime/image-understanding-en.png" alt="Image understanding and recognition" style="display: block; margin: 20px auto; max-width: 100%; max-height: 620px;" />
+<img src="../assets/img/openclaw-runtime/image-understanding-en.png" alt="Image understanding and recognition" style="display: block; margin: 20px auto; max-width: 100%; max-height: 620px;" />
 
 Video scenarios usually go through a "process the media first, then
 hand it to the model" path. In the example below, the user asks for
 the first frame of a video to be extracted and sent back as an image:
 
-<img src="../../assets/img/openclaw-runtime/video-frame-extraction-en.png" alt="Processing video and returning a frame" style="display: block; margin: 20px auto; max-width: 100%; max-height: 820px;" />
+<img src="../assets/img/openclaw-runtime/video-frame-extraction-en.png" alt="Processing video and returning a frame" style="display: block; margin: 20px auto; max-width: 100%; max-height: 820px;" />
 
 In video OCR scenarios, the system can first identify the target frame
 and then continue with text extraction. This example first extracts the
 last frame:
 
-<img src="../../assets/img/openclaw-runtime/video-ocr-step-1-en.png" alt="Extracting a frame for video OCR, step 1" style="display: block; margin: 20px auto; max-width: 100%; max-height: 820px;" />
+<img src="../assets/img/openclaw-runtime/video-ocr-step-1-en.png" alt="Extracting a frame for video OCR, step 1" style="display: block; margin: 20px auto; max-width: 100%; max-height: 820px;" />
 
 After confirming the target frame, it returns the recognized text:
 
-<img src="../../assets/img/openclaw-runtime/video-ocr-step-2-en.png" alt="Returning recognized text from video OCR, step 2" style="display: block; margin: 20px auto; max-width: 100%; max-height: 820px;" />
+<img src="../assets/img/openclaw-runtime/video-ocr-step-2-en.png" alt="Returning recognized text from video OCR, step 2" style="display: block; margin: 20px auto; max-width: 100%; max-height: 820px;" />
 
 The point here is not any single tool in isolation. The point is that
 multimodal input can enter Gateway and still flow through one unified
@@ -328,19 +328,19 @@ systems.
 In the next example, the system first performs a weather query and then
 writes the current conversation into Apple Notes:
 
-<img src="../../assets/img/openclaw-runtime/skill-and-apple-notes-en.png" alt="Using a Skill and creating a new Apple Note" style="display: block; margin: 20px auto; max-width: 100%; max-height: 620px;" />
+<img src="../assets/img/openclaw-runtime/skill-and-apple-notes-en.png" alt="Using a Skill and creating a new Apple Note" style="display: block; margin: 20px auto; max-width: 100%; max-height: 620px;" />
 
 The resulting note looks like this:
 
-<img src="../../assets/img/openclaw-runtime/apple-notes-result-en.png" alt="Apple Note created successfully" style="display: block; margin: 20px auto; max-width: 100%; max-height: 240px;" />
+<img src="../assets/img/openclaw-runtime/apple-notes-result-en.png" alt="Apple Note created successfully" style="display: block; margin: 20px auto; max-width: 100%; max-height: 240px;" />
 
 Likewise, reminders can be created directly from the conversation:
 
-<img src="../../assets/img/openclaw-runtime/create-reminder-en.png" alt="Creating a reminder from the chat" style="display: block; margin: 20px auto; max-width: 100%; max-height: 360px;" />
+<img src="../assets/img/openclaw-runtime/create-reminder-en.png" alt="Creating a reminder from the chat" style="display: block; margin: 20px auto; max-width: 100%; max-height: 360px;" />
 
 And the result looks like this:
 
-<img src="../../assets/img/openclaw-runtime/reminder-result-en.png" alt="Reminder created successfully" style="display: block; margin: 20px auto; max-width: 100%; max-height: 320px;" />
+<img src="../assets/img/openclaw-runtime/reminder-result-en.png" alt="Reminder created successfully" style="display: block; margin: 20px auto; max-width: 100%; max-height: 320px;" />
 
 These examples show that the "action" of the runtime does not have to
 stop at text output. The Agent can organize tools and system
@@ -353,13 +353,13 @@ plan rather than immediately. In the example below, the user first
 checks and clears existing jobs, then asks the system to report local
 CPU usage every minute:
 
-<img src="../../assets/img/openclaw-runtime/scheduled-tasks-en.png" alt="Managing scheduled tasks" style="display: block; margin: 20px auto; max-width: 100%; max-height: 720px;" />
+<img src="../assets/img/openclaw-runtime/scheduled-tasks-en.png" alt="Managing scheduled tasks" style="display: block; margin: 20px auto; max-width: 100%; max-height: 720px;" />
 
 Besides in-chat commands, the current implementation also provides a
 local Admin UI for viewing instance information, Gateway routes, jobs,
 execution sessions, uploaded files, and debug traces:
 
-<img src="../../assets/img/openclaw-runtime/admin-ui-en.png" alt="Admin UI for runtime inspection and debugging" style="display: block; margin: 20px auto; max-width: 100%; max-height: 520px;" />
+<img src="../assets/img/openclaw-runtime/admin-ui-en.png" alt="Admin UI for runtime inspection and debugging" style="display: block; margin: 20px auto; max-width: 100%; max-height: 520px;" />
 
 This is the runtime support layer. It does not directly determine
 whether the model is clever, but it directly determines whether the
