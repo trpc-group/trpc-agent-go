@@ -39,6 +39,11 @@ var (
 	vectorStoreArg = flag.String("vectorstore", "pgvector", "Vector store type: inmemory|pgvector")
 	searchModeArg  = flag.Int("search-mode", 0, "Search mode: 0=hybrid (default), 1=vector, 2=keyword, 3=filter")
 	modelName      = getEnvOrDefault("MODEL_NAME", "deepseek-v3.2")
+
+	// Tunable parameters for vertical evaluation
+	hybridVectorWeight = flag.Float64("hybrid-vector-weight", 0.99999, "Hybrid search vector weight (0.0-1.0)")
+	hybridTextWeight   = flag.Float64("hybrid-text-weight", 0.00001, "Hybrid search text weight (0.0-1.0)")
+	pgTable            = flag.String("pg-table", "", "PGVector table name (overrides PGVECTOR_TABLE env var)")
 )
 
 // Global knowledge service
@@ -86,14 +91,27 @@ func main() {
 	flag.Parse()
 
 	searchModeNames := map[int]string{0: "hybrid", 1: "vector", 2: "keyword", 3: "filter"}
-	fmt.Println("🚀 Knowledge Base HTTP Service")
+	fmt.Println("Knowledge Base HTTP Service")
 	fmt.Printf("Model: %s\n", modelName)
 	fmt.Printf("Vector Store: %s\n", *vectorStoreArg)
 	fmt.Printf("Search Mode: %s (%d)\n", searchModeNames[*searchModeArg], *searchModeArg)
+	fmt.Printf("Hybrid Weights: vector=%.5f text=%.5f\n", *hybridVectorWeight, *hybridTextWeight)
+	if *pgTable != "" {
+		fmt.Printf("PG Table: %s (override)\n", *pgTable)
+	}
 	fmt.Println(strings.Repeat("=", 50))
 
+	svcConfig := &ServiceConfig{
+		StoreType:          VectorStoreType(*vectorStoreArg),
+		ModelName:          modelName,
+		SearchMode:         *searchModeArg,
+		HybridVectorWeight: *hybridVectorWeight,
+		HybridTextWeight:   *hybridTextWeight,
+		PGTable:            *pgTable,
+	}
+
 	var err error
-	knowledgeSvc, err = NewKnowledgeService(VectorStoreType(*vectorStoreArg), modelName, *searchModeArg)
+	knowledgeSvc, err = NewKnowledgeServiceWithConfig(svcConfig)
 	if err != nil {
 		log.Fatalf("Failed to initialize knowledge service: %v", err)
 	}
@@ -102,14 +120,16 @@ func main() {
 	http.HandleFunc("/search", handleSearch)
 	http.HandleFunc("/answer", handleAnswer)
 	http.HandleFunc("/health", handleHealth)
+	http.HandleFunc("/config", handleConfig)
 
 	addr := fmt.Sprintf(":%d", *port)
-	fmt.Printf("🌐 Server listening on http://localhost%s\n", addr)
+	fmt.Printf("Server listening on http://localhost%s\n", addr)
 	fmt.Println("\nEndpoints:")
 	fmt.Println("  POST /load   - Load documents into knowledge base")
 	fmt.Println("  POST /search - Search for relevant documents")
 	fmt.Println("  POST /answer - Answer a question using RAG")
 	fmt.Println("  GET  /health - Health check")
+	fmt.Println("  GET  /config - Current service configuration")
 
 	if err := http.ListenAndServe(addr, nil); err != nil {
 		log.Fatalf("Server failed: %v", err)
@@ -123,6 +143,19 @@ func waitForIndexRefresh() {
 func handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+func handleConfig(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	cfg := map[string]any{
+		"model_name":           knowledgeSvc.modelName,
+		"vectorstore":          string(knowledgeSvc.storeType),
+		"search_mode":          knowledgeSvc.searchMode,
+		"hybrid_vector_weight": knowledgeSvc.config.HybridVectorWeight,
+		"hybrid_text_weight":   knowledgeSvc.config.HybridTextWeight,
+		"pg_table":             knowledgeSvc.config.PGTable,
+	}
+	json.NewEncoder(w).Encode(cfg)
 }
 
 func handleLoad(w http.ResponseWriter, r *http.Request) {
