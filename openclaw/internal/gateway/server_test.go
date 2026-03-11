@@ -225,6 +225,59 @@ type managedRunnerStub struct {
 	status   runner.RunStatus
 }
 
+type nonFlushingRecorder struct {
+	header http.Header
+	code   int
+	body   bytes.Buffer
+}
+
+type failingFlusherRecorder struct {
+	header http.Header
+	code   int
+	err    error
+}
+
+func (r *nonFlushingRecorder) Header() http.Header {
+	if r.header == nil {
+		r.header = make(http.Header)
+	}
+	return r.header
+}
+
+func (r *nonFlushingRecorder) WriteHeader(code int) {
+	r.code = code
+}
+
+func (r *nonFlushingRecorder) Write(b []byte) (int, error) {
+	if r.code == 0 {
+		r.code = http.StatusOK
+	}
+	return r.body.Write(b)
+}
+
+func (r *failingFlusherRecorder) Header() http.Header {
+	if r.header == nil {
+		r.header = make(http.Header)
+	}
+	return r.header
+}
+
+func (r *failingFlusherRecorder) WriteHeader(code int) {
+	r.code = code
+}
+
+func (r *failingFlusherRecorder) Write(b []byte) (int, error) {
+	if r.code == 0 {
+		r.code = http.StatusOK
+	}
+	if r.err == nil {
+		r.err = errors.New("write failed")
+	}
+	return 0, r.err
+}
+
+func (r *failingFlusherRecorder) Flush() {}
+
 func (m *managedRunnerStub) Cancel(requestID string) bool {
 	m.cancelMu.Lock()
 	defer m.cancelMu.Unlock()
@@ -2024,6 +2077,955 @@ func TestReplyAccumulator_IgnoresNilAndUnsupported(t *testing.T) {
 	acc.consumeDelta(nil)
 }
 
+func TestServer_StreamMessage_Success(t *testing.T) {
+	t.Parallel()
+
+	srv, err := New(&staticRunner{
+		events: []*event.Event{
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletionChunk,
+					Choices: []model.Choice{
+						{
+							Delta: model.Message{Content: "help"},
+						},
+					},
+				},
+				RequestID: "req-1",
+			},
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletionChunk,
+					Choices: []model.Choice{
+						{
+							Delta: model.Message{Content: " me"},
+						},
+					},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		testTimeout,
+	)
+	defer cancel()
+
+	stream, apiErr, status := srv.StreamMessage(ctx, gwproto.MessageRequest{
+		From: "u1",
+		Text: "hello",
+	})
+	require.Nil(t, apiErr)
+	require.Equal(t, http.StatusOK, status)
+
+	events := collectGatewayStreamEvents(t, stream)
+	require.Len(t, events, 6)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunStarted,
+		events[0].Type,
+	)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunProgress,
+		events[1].Type,
+	)
+	require.Equal(
+		t,
+		gwproto.StreamProgressStagePreparing,
+		events[1].Stage,
+	)
+	require.Equal(t, progressSummaryPrepare, events[1].Summary)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeMessageDelta,
+		events[2].Type,
+	)
+	require.Equal(t, "help", events[2].Delta)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeMessageDelta,
+		events[3].Type,
+	)
+	require.Equal(t, " me", events[3].Delta)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeMessageCompleted,
+		events[4].Type,
+	)
+	require.Equal(t, "help me", events[4].Reply)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunCompleted,
+		events[5].Type,
+	)
+	require.Equal(t, "req-1", events[5].RequestID)
+}
+
+func TestServer_StreamMessage_RunError(t *testing.T) {
+	t.Parallel()
+
+	srv, err := New(&staticRunner{err: errors.New("boom")})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		testTimeout,
+	)
+	defer cancel()
+
+	stream, apiErr, status := srv.StreamMessage(ctx, gwproto.MessageRequest{
+		From: "u1",
+		Text: "hello",
+	})
+	require.Nil(t, apiErr)
+	require.Equal(t, http.StatusOK, status)
+
+	events := collectGatewayStreamEvents(t, stream)
+	require.Len(t, events, 3)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunStarted,
+		events[0].Type,
+	)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunProgress,
+		events[1].Type,
+	)
+	require.Equal(
+		t,
+		gwproto.StreamProgressStagePreparing,
+		events[1].Stage,
+	)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunError,
+		events[2].Type,
+	)
+	require.NotNil(t, events[2].Error)
+	require.Equal(t, "boom", events[2].Error.Message)
+}
+
+func TestServer_StreamMessage_EarlyResponses(t *testing.T) {
+	t.Parallel()
+
+	var nilSrv *Server
+	stream, apiErr, status := nilSrv.StreamMessage(
+		nil,
+		gwproto.MessageRequest{},
+	)
+	require.Nil(t, stream)
+	require.NotNil(t, apiErr)
+	require.Equal(t, http.StatusInternalServerError, status)
+	require.Equal(t, "nil server", apiErr.Message)
+
+	srv, err := New(
+		&staticRunner{},
+		WithRequireMentionInThreads(true),
+		WithMentionPatterns("@bot"),
+	)
+	require.NoError(t, err)
+
+	stream, apiErr, status = srv.StreamMessage(
+		context.Background(),
+		gwproto.MessageRequest{
+			From:   "u1",
+			Thread: "thread-1",
+			Text:   "hello",
+		},
+	)
+	require.Nil(t, apiErr)
+	require.Equal(t, http.StatusOK, status)
+	require.Equal(
+		t,
+		[]gwproto.StreamEvent{
+			{
+				Type:    gwproto.StreamEventTypeRunIgnored,
+				Ignored: true,
+			},
+			{
+				Type: gwproto.StreamEventTypeRunCompleted,
+			},
+		},
+		collectGatewayStreamEvents(t, stream),
+	)
+
+	stream, apiErr, status = srv.StreamMessage(
+		context.Background(),
+		gwproto.MessageRequest{Text: "hello"},
+	)
+	require.Nil(t, stream)
+	require.NotNil(t, apiErr)
+	require.Equal(t, http.StatusBadRequest, status)
+	require.Contains(t, apiErr.Message, "from")
+}
+
+func TestServer_StreamMessage_ProgressStages(t *testing.T) {
+	t.Parallel()
+
+	srv, err := New(&staticRunner{
+		events: []*event.Event{
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletion,
+					Choices: []model.Choice{{
+						Message: model.Message{
+							ToolCalls: []model.ToolCall{{
+								Type: "function",
+								Function: model.FunctionDefinitionParam{
+									Name: "read_document",
+									Arguments: []byte(
+										`{"page":2}`,
+									),
+								},
+							}},
+						},
+					}},
+				},
+			},
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeToolResponse,
+				},
+			},
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletion,
+					Choices: []model.Choice{
+						{
+							Message: model.NewAssistantMessage(
+								"done",
+							),
+						},
+					},
+					Done: true,
+				},
+				RequestID: "req-1",
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		testTimeout,
+	)
+	defer cancel()
+
+	stream, apiErr, status := srv.StreamMessage(ctx, gwproto.MessageRequest{
+		From: "u1",
+		Text: "hello",
+	})
+	require.Nil(t, apiErr)
+	require.Equal(t, http.StatusOK, status)
+
+	events := collectGatewayStreamEvents(t, stream)
+	require.Len(t, events, 7)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunProgress,
+		events[1].Type,
+	)
+	require.Equal(
+		t,
+		gwproto.StreamProgressStagePreparing,
+		events[1].Stage,
+	)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunProgress,
+		events[2].Type,
+	)
+	require.Equal(
+		t,
+		gwproto.StreamProgressStageReadingDocument,
+		events[2].Stage,
+	)
+	require.Equal(t, "Reading document page 2", events[2].Summary)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunProgress,
+		events[3].Type,
+	)
+	require.Equal(
+		t,
+		gwproto.StreamProgressStageSummarizing,
+		events[3].Stage,
+	)
+	require.Equal(t, progressSummaryAnswering, events[3].Summary)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeMessageDelta,
+		events[4].Type,
+	)
+	require.Equal(t, "done", events[4].Delta)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeMessageCompleted,
+		events[5].Type,
+	)
+	require.Equal(t, "done", events[5].Reply)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunCompleted,
+		events[6].Type,
+	)
+}
+
+func TestStreamProgressHelpers(t *testing.T) {
+	t.Parallel()
+
+	update, ok := progressUpdateFromRunnerEvent(nil)
+	require.False(t, ok)
+	require.Equal(t, progressUpdate{}, update)
+
+	update, ok = progressUpdateFromRunnerEvent(&event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					ToolCalls: []model.ToolCall{{
+						Function: model.FunctionDefinitionParam{
+							Name:      streamToolReadDocument,
+							Arguments: []byte(`{"page":2}`),
+						},
+					}},
+				},
+			}},
+		},
+	})
+	require.True(t, ok)
+	require.Equal(
+		t,
+		gwproto.StreamProgressStageReadingDocument,
+		update.stage,
+	)
+	require.Equal(t, "Reading document page 2", update.summary)
+
+	update, ok = progressUpdateFromRunnerEvent(&event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeToolResponse,
+		},
+	})
+	require.True(t, ok)
+	require.Equal(
+		t,
+		gwproto.StreamProgressStageSummarizing,
+		update.stage,
+	)
+	require.Equal(t, progressSummaryAnswering, update.summary)
+}
+
+func TestToolCallProgressSummaries(t *testing.T) {
+	t.Parallel()
+
+	update, ok := progressFromToolCall(model.ToolCall{
+		Function: model.FunctionDefinitionParam{
+			Name:      streamToolReadSheet,
+			Arguments: []byte(`{"start_row":2,"end_row":4}`),
+		},
+	})
+	require.True(t, ok)
+	require.Equal(
+		t,
+		gwproto.StreamProgressStageReadingSpreadsheet,
+		update.stage,
+	)
+	require.Equal(t, "Reading spreadsheet rows 2-4", update.summary)
+
+	update, ok = progressFromToolCall(model.ToolCall{
+		Function: model.FunctionDefinitionParam{
+			Name:      streamToolExecCommand,
+			Arguments: []byte(`{}`),
+		},
+	})
+	require.True(t, ok)
+	require.Equal(
+		t,
+		gwproto.StreamProgressStageRunningTool,
+		update.stage,
+	)
+	require.Equal(t, progressSummaryTool, update.summary)
+
+	update, ok = progressFromToolCall(model.ToolCall{
+		Function: model.FunctionDefinitionParam{
+			Name: "custom_tool",
+		},
+	})
+	require.True(t, ok)
+	require.Equal(t, "Running custom_tool", update.summary)
+
+	_, ok = progressFromToolCall(model.ToolCall{})
+	require.False(t, ok)
+
+	require.Equal(
+		t,
+		progressSummaryDoc,
+		readDocumentProgressSummary(model.ToolCall{
+			Function: model.FunctionDefinitionParam{
+				Arguments: []byte("{"),
+			},
+		}),
+	)
+	require.Equal(
+		t,
+		"Reading spreadsheet sheet Data",
+		readSpreadsheetProgressSummary(model.ToolCall{
+			Function: model.FunctionDefinitionParam{
+				Arguments: []byte(`{"sheet":"Data"}`),
+			},
+		}),
+	)
+}
+
+func TestSendProgressUpdateAndHelpers(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	out := make(chan gwproto.StreamEvent, 4)
+	state := &progressState{startedAt: time.Now()}
+	run := preparedMessageRun{
+		sessionID: "s1",
+		requestID: "r1",
+	}
+
+	require.True(t, sendProgressUpdate(
+		ctx,
+		out,
+		run,
+		state,
+		gwproto.StreamProgressStagePreparing,
+		progressSummaryPrepare,
+	))
+	require.True(t, sendProgressUpdate(
+		ctx,
+		out,
+		run,
+		state,
+		gwproto.StreamProgressStagePreparing,
+		progressSummaryPrepare,
+	))
+	require.Len(t, out, 1)
+	evt := <-out
+	require.Equal(t, gwproto.StreamEventTypeRunProgress, evt.Type)
+	require.Equal(t, progressSummaryPrepare, evt.Summary)
+
+	canceledCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	require.False(t, sendStreamEvent(
+		canceledCtx,
+		make(chan gwproto.StreamEvent),
+		gwproto.StreamEvent{},
+	))
+	require.False(t, sendProgressUpdate(
+		canceledCtx,
+		make(chan gwproto.StreamEvent),
+		run,
+		&progressState{startedAt: time.Now()},
+		gwproto.StreamProgressStagePreparing,
+		progressSummaryPrepare,
+	))
+
+	collected := collectGatewayStreamEvents(
+		t,
+		singleStreamEvents(
+			gwproto.StreamEvent{Type: gwproto.StreamEventTypeRunStarted},
+			gwproto.StreamEvent{Type: gwproto.StreamEventTypeRunCompleted},
+		),
+	)
+	require.Len(t, collected, 2)
+	require.Equal(t, "stream canceled", contextErrMessage(nil))
+	require.Equal(
+		t,
+		context.Canceled.Error(),
+		contextErrMessage(canceledCtx),
+	)
+	require.Equal(t, "req", resolvedStreamRequestID(" req ", "fb"))
+	require.Equal(t, "fb", resolvedStreamRequestID(" ", " fb "))
+}
+
+func TestStreamResponseHelpers(t *testing.T) {
+	t.Parallel()
+
+	require.Nil(t, apiErrorFromEvent(nil))
+	require.Nil(t, apiErrorFromEvent(&event.Event{
+		Response: &model.Response{},
+	}))
+
+	apiErr := apiErrorFromEvent(&event.Event{
+		Response: &model.Response{
+			Error: &model.ResponseError{Message: "boom"},
+		},
+	})
+	require.NotNil(t, apiErr)
+	require.Equal(t, errTypeInternal, apiErr.Type)
+	require.Equal(t, "boom", apiErr.Message)
+
+	deltaEvt := &event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletionChunk,
+			Choices: []model.Choice{
+				{Delta: model.Message{Content: "a"}},
+				{Delta: model.Message{Content: "b"}},
+			},
+		},
+	}
+	require.Equal(t, "ab", streamDeltaText(deltaEvt, false))
+
+	fullEvt := &event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{
+				{Message: model.NewAssistantMessage("full")},
+			},
+		},
+	}
+	require.Equal(t, "full", streamDeltaText(fullEvt, false))
+	require.Empty(t, streamDeltaText(fullEvt, true))
+	require.Empty(t, streamDeltaText(nil, false))
+
+	require.Equal(
+		t,
+		model.ToolCall{
+			Function: model.FunctionDefinitionParam{
+				Name: "from-delta",
+			},
+		},
+		func() model.ToolCall {
+			call, ok := firstToolCall(&model.Response{
+				Choices: []model.Choice{{
+					Delta: model.Message{
+						ToolCalls: []model.ToolCall{{
+							Function: model.FunctionDefinitionParam{
+								Name: "from-delta",
+							},
+						}},
+					},
+				}},
+			})
+			require.True(t, ok)
+			return call
+		}(),
+	)
+	call, ok := firstToolCall(&model.Response{})
+	require.False(t, ok)
+	require.Equal(t, model.ToolCall{}, call)
+
+	require.Empty(t, fullTextFromResponse(&model.Response{}))
+	require.Equal(t, "x", fullTextFromResponse(&model.Response{
+		Choices: []model.Choice{
+			{Message: model.NewAssistantMessage("x")},
+		},
+	}))
+	require.Empty(t, deltaTextFromResponse(nil))
+}
+
+func TestServer_HandleMessagesStream_Success(t *testing.T) {
+	t.Parallel()
+
+	srv, err := New(&staticRunner{
+		events: []*event.Event{
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletionChunk,
+					Choices: []model.Choice{
+						{
+							Delta: model.Message{Content: "ok"},
+						},
+					},
+				},
+				RequestID: "req-1",
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	reqBody, err := json.Marshal(gwproto.MessageRequest{
+		From: "u1",
+		Text: "hello",
+	})
+	require.NoError(t, err)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodPost,
+		srv.MessagesStreamPath(),
+		bytes.NewReader(reqBody),
+	)
+	srv.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(
+		t,
+		gwproto.SSEContentType,
+		rr.Header().Get(headerContentType),
+	)
+	require.Contains(t, rr.Body.String(), "event: message.delta")
+	require.Contains(t, rr.Body.String(), `"reply":"ok"`)
+}
+
+func TestServer_HandleMessagesStream_ErrorPaths(t *testing.T) {
+	t.Parallel()
+
+	srv, err := New(
+		&staticRunner{},
+		WithAllowUsers("telegram:u1"),
+	)
+	require.NoError(t, err)
+
+	methodRR := httptest.NewRecorder()
+	methodReq := httptest.NewRequest(
+		http.MethodGet,
+		srv.MessagesStreamPath(),
+		nil,
+	)
+	srv.Handler().ServeHTTP(methodRR, methodReq)
+	require.Equal(t, http.StatusMethodNotAllowed, methodRR.Code)
+
+	invalidRR := httptest.NewRecorder()
+	invalidReq := httptest.NewRequest(
+		http.MethodPost,
+		srv.MessagesStreamPath(),
+		bytes.NewBufferString("{"),
+	)
+	srv.Handler().ServeHTTP(invalidRR, invalidReq)
+	require.Equal(t, http.StatusBadRequest, invalidRR.Code)
+	require.Contains(t, invalidRR.Body.String(), errTypeInvalidRequest)
+
+	noFlush := &nonFlushingRecorder{}
+	srv.handleMessagesStream(
+		noFlush,
+		httptest.NewRequest(
+			http.MethodPost,
+			srv.MessagesStreamPath(),
+			bytes.NewBufferString(`{"from":"u1","text":"hi"}`),
+		),
+	)
+	require.Equal(t, http.StatusInternalServerError, noFlush.code)
+	require.Contains(t, noFlush.body.String(), "streaming not supported")
+
+	authRR := httptest.NewRecorder()
+	authReq := httptest.NewRequest(
+		http.MethodPost,
+		srv.MessagesStreamPath(),
+		bytes.NewBufferString(
+			`{"from":"u1","user_id":"telegram:u2","text":"hi"}`,
+		),
+	)
+	srv.Handler().ServeHTTP(authRR, authReq)
+	require.Equal(t, http.StatusForbidden, authRR.Code)
+	require.Contains(t, authRR.Body.String(), errTypeUnauthorized)
+}
+
+func TestServer_StreamMessage_EmptyReplyFallback(t *testing.T) {
+	t.Parallel()
+
+	srv, err := New(&staticRunner{})
+	require.NoError(t, err)
+
+	stream, apiErr, status := srv.StreamMessage(
+		context.Background(),
+		gwproto.MessageRequest{
+			From: "u1",
+			Text: "hello",
+		},
+	)
+	require.Nil(t, apiErr)
+	require.Equal(t, http.StatusOK, status)
+
+	events := collectGatewayStreamEvents(t, stream)
+	require.Len(t, events, 4)
+	require.Equal(t, emptyReplyFallbackText, events[2].Reply)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunCompleted,
+		events[3].Type,
+	)
+}
+
+func TestServer_StreamMessage_DebugRecorderPaths(t *testing.T) {
+	t.Parallel()
+
+	mode, err := debugrecorder.ParseMode("safe")
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	rec, err := debugrecorder.New(dir, mode)
+	require.NoError(t, err)
+
+	srv, err := New(
+		&staticRunner{
+			events: []*event.Event{{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletionChunk,
+					Choices: []model.Choice{{
+						Delta: model.Message{Content: "ok"},
+					}},
+				},
+				RequestID: "req-1",
+			}},
+		},
+		WithDebugRecorder(rec),
+	)
+	require.NoError(t, err)
+
+	stream, apiErr, status := srv.StreamMessage(
+		context.Background(),
+		gwproto.MessageRequest{From: "u1", Text: "hello"},
+	)
+	require.Nil(t, apiErr)
+	require.Equal(t, http.StatusOK, status)
+	require.Len(t, collectGatewayStreamEvents(t, stream), 5)
+
+	matches, err := filepath.Glob(
+		filepath.Join(dir, "*", "*", debugEventsFile),
+	)
+	require.NoError(t, err)
+	require.Len(t, matches, 1)
+
+	dir = t.TempDir()
+	rec, err = debugrecorder.New(dir, mode)
+	require.NoError(t, err)
+
+	srv, err = New(
+		&staticRunner{},
+		WithDebugRecorder(rec),
+		WithRequireMentionInThreads(true),
+		WithMentionPatterns("@bot"),
+	)
+	require.NoError(t, err)
+
+	stream, apiErr, status = srv.StreamMessage(
+		context.Background(),
+		gwproto.MessageRequest{
+			From:   "u1",
+			Thread: "thread-1",
+			Text:   "hello",
+		},
+	)
+	require.Nil(t, apiErr)
+	require.Equal(t, http.StatusOK, status)
+	require.Len(t, collectGatewayStreamEvents(t, stream), 2)
+
+	matches, err = filepath.Glob(
+		filepath.Join(dir, "*", "*", debugEventsFile),
+	)
+	require.NoError(t, err)
+	require.Len(t, matches, 1)
+}
+
+func TestServer_StreamMessage_APIErrorEvent(t *testing.T) {
+	t.Parallel()
+
+	srv, err := New(&staticRunner{
+		events: []*event.Event{{
+			Response: &model.Response{
+				Error: &model.ResponseError{
+					Type:    errTypeUnauthorized,
+					Message: "no access",
+				},
+			},
+			RequestID: "req-1",
+		}},
+	})
+	require.NoError(t, err)
+
+	stream, apiErr, status := srv.StreamMessage(
+		context.Background(),
+		gwproto.MessageRequest{From: "u1", Text: "hello"},
+	)
+	require.Nil(t, apiErr)
+	require.Equal(t, http.StatusOK, status)
+
+	events := collectGatewayStreamEvents(t, stream)
+	require.Len(t, events, 3)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunError,
+		events[2].Type,
+	)
+	require.NotNil(t, events[2].Error)
+	require.Equal(t, errTypeUnauthorized, events[2].Error.Type)
+	require.Equal(t, "no access", events[2].Error.Message)
+}
+
+func TestServer_StreamLocked_SendFailures(t *testing.T) {
+	t.Parallel()
+
+	run := preparedMessageRun{
+		userID:    "u1",
+		sessionID: "s1",
+		requestID: "r1",
+		userMsg:   model.NewUserMessage("hello"),
+	}
+
+	t.Run("run started", func(t *testing.T) {
+		t.Parallel()
+
+		srv, err := New(&staticRunner{})
+		require.NoError(t, err)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		outcome := srv.streamLocked(
+			ctx,
+			run,
+			nil,
+			make(chan gwproto.StreamEvent),
+		)
+		require.Equal(t, traceStatusError, outcome.status)
+		require.Equal(t, context.Canceled.Error(), outcome.errMsg)
+	})
+
+	t.Run("preparing progress", func(t *testing.T) {
+		t.Parallel()
+
+		srv, err := New(&staticRunner{})
+		require.NoError(t, err)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		out := make(chan gwproto.StreamEvent, 1)
+		cancelWhenChannelLen(t, out, 1, cancel)
+
+		outcome := srv.streamLocked(ctx, run, nil, out)
+		require.Equal(t, traceStatusError, outcome.status)
+		require.Equal(t, context.Canceled.Error(), outcome.errMsg)
+	})
+
+	t.Run("tool progress", func(t *testing.T) {
+		t.Parallel()
+
+		srv, err := New(&staticRunner{
+			events: []*event.Event{{
+				Response: &model.Response{
+					Choices: []model.Choice{{
+						Message: model.Message{
+							ToolCalls: []model.ToolCall{{
+								Function: model.FunctionDefinitionParam{
+									Name: streamToolReadDocument,
+									Arguments: []byte(
+										`{"page":1}`,
+									),
+								},
+							}},
+						},
+					}},
+				},
+			}},
+		})
+		require.NoError(t, err)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		out := make(chan gwproto.StreamEvent, 2)
+		cancelWhenChannelLen(t, out, 2, cancel)
+
+		outcome := srv.streamLocked(ctx, run, nil, out)
+		require.Equal(t, traceStatusError, outcome.status)
+		require.Equal(t, context.Canceled.Error(), outcome.errMsg)
+	})
+
+	t.Run("message delta", func(t *testing.T) {
+		t.Parallel()
+
+		srv, err := New(&staticRunner{
+			events: []*event.Event{{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletionChunk,
+					Choices: []model.Choice{{
+						Delta: model.Message{Content: "ok"},
+					}},
+				},
+			}},
+		})
+		require.NoError(t, err)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		out := make(chan gwproto.StreamEvent, 2)
+		cancelWhenChannelLen(t, out, 2, cancel)
+
+		outcome := srv.streamLocked(ctx, run, nil, out)
+		require.Equal(t, traceStatusError, outcome.status)
+		require.Equal(t, context.Canceled.Error(), outcome.errMsg)
+	})
+
+	t.Run("message completed", func(t *testing.T) {
+		t.Parallel()
+
+		srv, err := New(&staticRunner{
+			events: []*event.Event{{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletion,
+					Choices: []model.Choice{{
+						Message: model.NewAssistantMessage("ok"),
+					}},
+				},
+			}},
+		})
+		require.NoError(t, err)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		out := make(chan gwproto.StreamEvent, 3)
+		cancelWhenChannelLen(t, out, 3, cancel)
+
+		outcome := srv.streamLocked(ctx, run, nil, out)
+		require.Equal(t, traceStatusError, outcome.status)
+		require.Equal(t, context.Canceled.Error(), outcome.errMsg)
+	})
+
+	t.Run("run completed", func(t *testing.T) {
+		t.Parallel()
+
+		srv, err := New(&staticRunner{
+			events: []*event.Event{{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletion,
+					Choices: []model.Choice{{
+						Message: model.NewAssistantMessage("ok"),
+					}},
+				},
+			}},
+		})
+		require.NoError(t, err)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		out := make(chan gwproto.StreamEvent, 4)
+		cancelWhenChannelLen(t, out, 4, cancel)
+
+		outcome := srv.streamLocked(ctx, run, nil, out)
+		require.Equal(t, traceStatusError, outcome.status)
+		require.Equal(t, context.Canceled.Error(), outcome.errMsg)
+	})
+}
+
+func TestServer_HandleMessagesStream_WriteError(t *testing.T) {
+	t.Parallel()
+
+	srv, err := New(&staticRunner{
+		events: []*event.Event{{
+			Response: &model.Response{
+				Object: model.ObjectTypeChatCompletionChunk,
+				Choices: []model.Choice{{
+					Delta: model.Message{Content: "ok"},
+				}},
+			},
+		}},
+	})
+	require.NoError(t, err)
+
+	rr := &failingFlusherRecorder{}
+	req := httptest.NewRequest(
+		http.MethodPost,
+		srv.MessagesStreamPath(),
+		bytes.NewBufferString(`{"from":"u1","text":"hi"}`),
+	)
+
+	srv.handleMessagesStream(rr, req)
+	require.Equal(t, http.StatusOK, rr.code)
+}
+
 func TestLaneLocker_ReclaimsEntries(t *testing.T) {
 	t.Parallel()
 
@@ -2038,6 +3040,59 @@ func TestLaneLocker_ReclaimsEntries(t *testing.T) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	require.Empty(t, l.lanes)
+}
+
+func collectGatewayStreamEvents(
+	t *testing.T,
+	stream <-chan gwproto.StreamEvent,
+) []gwproto.StreamEvent {
+	t.Helper()
+
+	timer := time.NewTimer(testTimeout)
+	defer timer.Stop()
+
+	var events []gwproto.StreamEvent
+	for {
+		select {
+		case evt, ok := <-stream:
+			if !ok {
+				return events
+			}
+			events = append(events, evt)
+		case <-timer.C:
+			t.Fatal("timeout waiting for gateway stream")
+		}
+	}
+}
+
+func cancelWhenChannelLen(
+	t *testing.T,
+	ch chan gwproto.StreamEvent,
+	want int,
+	cancel context.CancelFunc,
+) {
+	t.Helper()
+
+	go func() {
+		timer := time.NewTimer(testTimeout)
+		defer timer.Stop()
+
+		tick := time.NewTicker(time.Millisecond)
+		defer tick.Stop()
+
+		for {
+			select {
+			case <-timer.C:
+				cancel()
+				return
+			case <-tick.C:
+				if len(ch) >= want {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
 }
 
 func TestNewOptions_DefaultsAndNormalization(t *testing.T) {
@@ -2068,6 +3123,7 @@ func TestNewOptions_DefaultsAndNormalization(t *testing.T) {
 
 	require.Equal(t, defaultBasePath, o.basePath)
 	require.Equal(t, defaultMessagesPath, o.messagesPath)
+	require.Equal(t, defaultMessagesStreamPath, o.streamPath)
 	require.Equal(t, defaultStatusPath, o.statusPath)
 	require.Equal(t, defaultCancelPath, o.cancelPath)
 	require.Equal(t, defaultHealthPath, o.healthPath)
@@ -2088,6 +3144,36 @@ func TestNewOptions_DefaultsAndNormalization(t *testing.T) {
 
 	require.True(t, o.requireMention)
 	require.Equal(t, []string{"@bot", "/agent"}, o.mentionPatterns)
+}
+
+func TestNewOptions_DerivesStreamPathFromMessagesPath(t *testing.T) {
+	t.Parallel()
+
+	o := newOptions(WithMessagesPath("/custom/messages"))
+
+	require.Equal(t, "/custom/messages", o.messagesPath)
+	require.Equal(
+		t,
+		"/custom/messages"+gwproto.MessagesStreamSuffix,
+		o.streamPath,
+	)
+}
+
+func TestNewOptions_ExplicitStreamAndStores(t *testing.T) {
+	t.Parallel()
+
+	store := &persona.Store{}
+	transcriber := &stubAudioTranscriber{}
+
+	o := newOptions(
+		WithMessagesStreamPath(" /custom/stream "),
+		WithPersonaStore(store),
+		WithAudioTranscriber(transcriber),
+	)
+
+	require.Equal(t, " /custom/stream ", o.streamPath)
+	require.Same(t, store, o.personaStore)
+	require.Same(t, transcriber, o.audioTranscriber)
 }
 
 func TestWithMentionPatterns_EmptyResets(t *testing.T) {
