@@ -43,7 +43,7 @@ export PGVECTOR_DATABASE="vector"
 python3 main.py --kb=langchain
 
 # Evaluate with LangChain-Chain (deterministic chain pipeline)
-python3 main.py --kb=langchain-chain
+python3 main.py --kb=langchain_chain
 
 # Evaluate with tRPC-Agent-Go
 python3 main.py --kb=trpc-agent-go

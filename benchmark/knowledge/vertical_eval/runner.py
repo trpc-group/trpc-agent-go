@@ -81,7 +81,7 @@ class GoServiceManager:
         # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit
         # cmd is a list (no shell=True), and all elements come from internal
         # ExperimentConfig dataclass — not from external/user input.
-        self.process = subprocess.Popen(
+        self.process = subprocess.Popen(  # nosec B603
             cmd,
             cwd=GO_SERVICE_DIR,
             stdout=self._log_file,

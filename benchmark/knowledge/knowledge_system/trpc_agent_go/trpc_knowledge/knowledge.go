@@ -153,8 +153,13 @@ func (s *KnowledgeService) newPGVectorStore() (vectorstore.VectorStore, error) {
 	vectorWeight := 0.99999
 	textWeight := 0.00001
 	if s.config != nil {
-		vectorWeight = s.config.HybridVectorWeight
-		textWeight = s.config.HybridTextWeight
+		vw := s.config.HybridVectorWeight
+		tw := s.config.HybridTextWeight
+		if vw < 0 || vw > 1 || tw < 0 || tw > 1 {
+			return nil, fmt.Errorf("hybrid weights must be in [0, 1], got vector=%.5f text=%.5f", vw, tw)
+		}
+		vectorWeight = vw
+		textWeight = tw
 	}
 
 	encodedUser := url.QueryEscape(user)

@@ -43,7 +43,7 @@ export PGVECTOR_DATABASE="vector"
 python3 main.py --kb=langchain
 
 # 评测 LangChain-Chain（确定性 Chain 流程）
-python3 main.py --kb=langchain-chain
+python3 main.py --kb=langchain_chain
 
 # 评测 tRPC-Agent-Go
 python3 main.py --kb=trpc-agent-go

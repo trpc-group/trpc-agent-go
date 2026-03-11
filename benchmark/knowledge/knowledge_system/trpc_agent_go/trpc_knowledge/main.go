@@ -107,10 +107,15 @@ func main() {
 	fmt.Printf("PG Host: %s:%s\n", getEnvOrDefault("PGVECTOR_HOST", "127.0.0.1"), getEnvOrDefault("PGVECTOR_PORT", "5432"))
 	fmt.Printf("PG Database: %s (User: %s)\n", getEnvOrDefault("PGVECTOR_DATABASE", "rgb"), getEnvOrDefault("PGVECTOR_USER", "root"))
 	apiKey := os.Getenv("OPENAI_API_KEY")
-	if len(apiKey) > 8 {
-		apiKey = apiKey[:4] + "****" + apiKey[len(apiKey)-4:]
+	var maskedKey string
+	if len(apiKey) == 0 {
+		maskedKey = "(not set)"
+	} else if len(apiKey) > 8 {
+		maskedKey = apiKey[:4] + "****" + apiKey[len(apiKey)-4:]
+	} else {
+		maskedKey = "****"
 	}
-	fmt.Printf("OPENAI_API_KEY: %s\n", apiKey)
+	fmt.Printf("OPENAI_API_KEY: %s\n", maskedKey)
 	fmt.Printf("OPENAI_BASE_URL: %s\n", os.Getenv("OPENAI_BASE_URL"))
 	fmt.Println(strings.Repeat("=", 50))
 
@@ -168,13 +173,20 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 	user := getEnvOrDefault("PGVECTOR_USER", "root")
 	database := getEnvOrDefault("PGVECTOR_DATABASE", "rgb")
 
+	// Resolve the effective table name: command-line flag overrides env var.
+	effectiveTable := getEnvOrDefault("PGVECTOR_TABLE", "trpc_agent_go_eval")
+	if knowledgeSvc.config.PGTable != "" {
+		effectiveTable = knowledgeSvc.config.PGTable
+	}
+
 	cfg := map[string]any{
 		"model_name":           knowledgeSvc.modelName,
 		"vectorstore":          string(knowledgeSvc.storeType),
 		"search_mode":          knowledgeSvc.searchMode,
+		"use_rrf":              knowledgeSvc.config.UseRRF,
 		"hybrid_vector_weight": knowledgeSvc.config.HybridVectorWeight,
 		"hybrid_text_weight":   knowledgeSvc.config.HybridTextWeight,
-		"pg_table":             knowledgeSvc.config.PGTable,
+		"pg_table":             effectiveTable,
 		"pg_connection": map[string]string{
 			"host":     host,
 			"port":     portStr,

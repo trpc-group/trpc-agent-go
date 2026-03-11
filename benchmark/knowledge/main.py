@@ -140,6 +140,7 @@ def run_evaluation(
     evaluator: Evaluator,
     retrieval_k: int = 4,
     skip_load: bool = False,
+    force_reload: bool = False,
     full_log: bool = True,
     output_file: Optional[str] = None,
     kb_name: str = "unknown",
@@ -180,7 +181,7 @@ def run_evaluation(
 
     # Step 1: Load QA items
     print("1. Loading QA items...")
-    qa_items = dataset.load_qa_items(max_qa_items)
+    qa_items = dataset.load_qa_items()
     print(f"   Loaded {len(qa_items)} QA items.\n")
 
     # Step 2: Load documents if needed
@@ -403,8 +404,14 @@ def main():
     parser.add_argument(
         "--timeout",
         type=int,
-        default=60000000000,
+        default=600,
         help="Timeout in seconds for evaluation (default: 600)",
+    )
+    parser.add_argument(
+        "--force-reload",
+        action="store_true",
+        default=False,
+        help="Force re-downloading documents even if already cached (default: False)",
     )
     parser.add_argument(
         "--workers",
@@ -467,6 +474,7 @@ def main():
         evaluator=evaluator,
         retrieval_k=args.k,
         skip_load=skip_load,
+        force_reload=args.force_reload,
         full_log=True,
         output_file=args.output,
         kb_name=args.kb,
