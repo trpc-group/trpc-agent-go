@@ -14,7 +14,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -177,6 +176,254 @@ func TestBuildSearchTokens_Performance(t *testing.T) {
 		assert.Contains(t, result, "hello")
 		assert.Contains(t, result, "world")
 	}
+}
+
+func TestApplyMetadata(t *testing.T) {
+	now := time.Date(2024, 5, 7, 9, 0, 0, 0, time.UTC)
+
+	t.Run("nil inputs are ignored", func(t *testing.T) {
+		mem := &memory.Memory{
+			Memory: "keep me unchanged",
+			Kind:   memory.KindFact,
+		}
+
+		ApplyMetadata(nil, &memory.Metadata{Kind: memory.KindEpisode})
+		ApplyMetadata(mem, nil)
+
+		assert.Equal(t, memory.KindFact, mem.Kind)
+		assert.Nil(t, mem.EventTime)
+		assert.Empty(t, mem.Participants)
+		assert.Empty(t, mem.Location)
+	})
+
+	t.Run("missing metadata defaults kind to fact", func(t *testing.T) {
+		mem := &memory.Memory{Memory: "profile"}
+
+		ApplyMetadata(mem, nil)
+
+		assert.Equal(t, memory.KindFact, mem.Kind)
+		assert.Nil(t, mem.EventTime)
+		assert.Empty(t, mem.Participants)
+		assert.Empty(t, mem.Location)
+	})
+
+	t.Run("episode metadata is applied", func(t *testing.T) {
+		mem := &memory.Memory{Memory: "trip"}
+		meta := &memory.Metadata{
+			Kind:         memory.KindEpisode,
+			EventTime:    &now,
+			Participants: []string{"Alice", "Bob"},
+			Location:     "Kyoto",
+		}
+
+		ApplyMetadata(mem, meta)
+
+		assert.Equal(t, memory.KindEpisode, mem.Kind)
+		require.NotNil(t, mem.EventTime)
+		assert.Equal(t, now, *mem.EventTime)
+		assert.Equal(t, []string{"Alice", "Bob"}, mem.Participants)
+		assert.Equal(t, "Kyoto", mem.Location)
+	})
+
+	t.Run("empty kind keeps the original kind", func(t *testing.T) {
+		mem := &memory.Memory{Memory: "profile", Kind: memory.KindFact}
+		meta := &memory.Metadata{
+			EventTime:    &now,
+			Participants: []string{"Alice"},
+			Location:     "Tokyo",
+		}
+
+		ApplyMetadata(mem, meta)
+
+		assert.Equal(t, memory.KindFact, mem.Kind)
+		require.NotNil(t, mem.EventTime)
+		assert.Equal(t, now, *mem.EventTime)
+		assert.Equal(t, []string{"Alice"}, mem.Participants)
+		assert.Equal(t, "Tokyo", mem.Location)
+	})
+
+	t.Run("missing kind defaults to fact when metadata is present", func(t *testing.T) {
+		mem := &memory.Memory{Memory: "profile"}
+		meta := &memory.Metadata{
+			EventTime:    &now,
+			Participants: []string{"Alice", "Alice", "Bob"},
+			Location:     " Tokyo ",
+		}
+
+		ApplyMetadata(mem, meta)
+
+		assert.Equal(t, memory.KindFact, mem.Kind)
+		require.NotNil(t, mem.EventTime)
+		assert.Equal(t, now, *mem.EventTime)
+		assert.Equal(t, []string{"Alice", "Bob"}, mem.Participants)
+		assert.Equal(t, "Tokyo", mem.Location)
+	})
+}
+
+func TestApplyMetadataPatch(t *testing.T) {
+	now := time.Date(2024, 5, 7, 9, 0, 0, 0, time.UTC)
+	later := now.Add(24 * time.Hour)
+
+	mem := &memory.Memory{
+		Memory:       "trip",
+		Kind:         memory.KindEpisode,
+		EventTime:    &now,
+		Participants: []string{"Alice", "Bob"},
+		Location:     "Kyoto",
+	}
+
+	ApplyMetadataPatch(mem, &memory.Metadata{EventTime: &later})
+	require.NotNil(t, mem.EventTime)
+	assert.Equal(t, later, *mem.EventTime)
+	assert.Equal(t, memory.KindEpisode, mem.Kind)
+	assert.Equal(t, []string{"Alice", "Bob"}, mem.Participants)
+	assert.Equal(t, "Kyoto", mem.Location)
+
+	ApplyMetadataPatch(mem, &memory.Metadata{
+		Participants: []string{"Bob", "Bob", "Charlie"},
+	})
+	assert.Equal(t, []string{"Bob", "Charlie"}, mem.Participants)
+	assert.Equal(t, memory.KindEpisode, mem.Kind)
+	require.NotNil(t, mem.EventTime)
+	assert.Equal(t, later, *mem.EventTime)
+	assert.Equal(t, "Kyoto", mem.Location)
+}
+
+func TestMetadataIdentityAndNormalizationHelpers(t *testing.T) {
+	now := time.Date(2024, 5, 7, 9, 0, 0, 0, time.UTC)
+
+	t.Run("metadata identity kind covers fact and episode variants", func(t *testing.T) {
+		assert.Equal(t, memory.Kind(""), metadataIdentityKind(nil))
+		assert.Equal(t, memory.KindEpisode, metadataIdentityKind(&memory.Memory{
+			Kind: memory.KindEpisode,
+		}))
+		assert.Equal(t, memory.Kind(""), metadataIdentityKind(&memory.Memory{
+			Kind: memory.KindFact,
+		}))
+		assert.Equal(t, memory.KindFact, metadataIdentityKind(&memory.Memory{
+			EventTime: &now,
+		}))
+		assert.Equal(t, memory.KindFact, metadataIdentityKind(&memory.Memory{
+			Kind:     memory.KindFact,
+			Location: " Kyoto ",
+		}))
+	})
+
+	t.Run("effective kind treats legacy blank kind as fact", func(t *testing.T) {
+		assert.Equal(t, memory.Kind(""), EffectiveKind(nil))
+		assert.Equal(t, memory.KindFact, EffectiveKind(&memory.Memory{}))
+		assert.Equal(t, memory.KindEpisode, EffectiveKind(&memory.Memory{
+			Kind: memory.KindEpisode,
+		}))
+	})
+
+	t.Run("normalize memory and entry canonicalize metadata", func(t *testing.T) {
+		mem := &memory.Memory{
+			Participants: []string{" Bob ", "alice", "Alice", "", "bob"},
+			Location:     " Kyoto ",
+		}
+		NormalizeMemory(mem)
+		assert.Equal(t, memory.KindFact, mem.Kind)
+		assert.Equal(t, []string{"Alice", "Bob"}, mem.Participants)
+		assert.Equal(t, "Kyoto", mem.Location)
+
+		entry := &memory.Entry{
+			Memory: &memory.Memory{
+				Participants: []string{" Charlie ", "charlie"},
+				Location:     " Osaka ",
+			},
+		}
+		NormalizeEntry(entry)
+		assert.Equal(t, memory.KindFact, entry.Memory.Kind)
+		assert.Equal(t, []string{"Charlie"}, entry.Memory.Participants)
+		assert.Equal(t, "Osaka", entry.Memory.Location)
+
+		NormalizeEntry(nil)
+	})
+
+	t.Run("metadata identity location trims whitespace", func(t *testing.T) {
+		assert.Equal(t, "", metadataIdentityLocation(nil))
+		assert.Equal(t, "Kyoto", metadataIdentityLocation(&memory.Memory{
+			Location: " Kyoto ",
+		}))
+	})
+}
+
+func TestApplyMetadataPatch_NormalizesWithoutExplicitPatch(t *testing.T) {
+	mem := &memory.Memory{
+		Participants: []string{" Bob ", "bob"},
+		Location:     " Tokyo ",
+	}
+
+	ApplyMetadataPatch(mem, nil)
+
+	assert.Equal(t, memory.KindFact, mem.Kind)
+	assert.Equal(t, []string{"Bob"}, mem.Participants)
+	assert.Equal(t, "Tokyo", mem.Location)
+}
+
+func TestApplyMemoryUpdate(t *testing.T) {
+	now := time.Date(2024, 5, 7, 9, 0, 0, 0, time.UTC)
+	entry := &memory.Entry{
+		ID:      GenerateMemoryID(&memory.Memory{Memory: "old memory"}, "app", "user"),
+		AppName: "app",
+		UserID:  "user",
+		Memory: &memory.Memory{
+			Memory: "old memory",
+			Topics: []string{"old"},
+		},
+		CreatedAt: now.Add(-time.Hour),
+		UpdatedAt: now.Add(-time.Hour),
+	}
+
+	newID := ApplyMemoryUpdate(
+		entry,
+		"app",
+		"user",
+		"new memory",
+		[]string{"new"},
+		nil,
+		now,
+	)
+
+	assert.NotEmpty(t, newID)
+	assert.NotEqual(t, entry.CreatedAt, entry.UpdatedAt)
+	assert.Equal(t, newID, entry.ID)
+	assert.Equal(t, memory.KindFact, entry.Memory.Kind)
+	assert.Equal(t, "new memory", entry.Memory.Memory)
+	assert.Equal(t, []string{"new"}, entry.Memory.Topics)
+}
+
+func TestApplyMemoryUpdate_InitializesNilMemoryAndMetadata(t *testing.T) {
+	now := time.Date(2024, 5, 7, 9, 0, 0, 0, time.UTC)
+	entry := &memory.Entry{}
+
+	newID := ApplyMemoryUpdate(
+		entry,
+		"app",
+		"user",
+		"trip memory",
+		[]string{"travel"},
+		&memory.Metadata{
+			EventTime:    &now,
+			Participants: []string{" Alice ", "alice"},
+			Location:     " Kyoto ",
+		},
+		now,
+	)
+
+	require.NotNil(t, entry.Memory)
+	assert.Equal(t, "app", entry.AppName)
+	assert.Equal(t, "user", entry.UserID)
+	assert.Equal(t, newID, entry.ID)
+	assert.Equal(t, memory.KindFact, entry.Memory.Kind)
+	require.NotNil(t, entry.Memory.EventTime)
+	assert.Equal(t, now, *entry.Memory.EventTime)
+	assert.Equal(t, []string{"Alice"}, entry.Memory.Participants)
+	assert.Equal(t, "Kyoto", entry.Memory.Location)
+	require.NotNil(t, entry.Memory.LastUpdated)
+	assert.Equal(t, now, *entry.Memory.LastUpdated)
+	assert.Equal(t, now, entry.UpdatedAt)
 }
 
 func TestMatchMemoryEntry(t *testing.T) {
@@ -477,6 +724,47 @@ func TestMatchMemoryEntry_TokensWithTopics(t *testing.T) {
 	assert.False(t, result)
 }
 
+func TestSearchResultDeduplicationHelpers(t *testing.T) {
+	t.Run("deduplicate keeps highest scored near-duplicate", func(t *testing.T) {
+		results := []*memory.Entry{
+			{
+				ID:    "low",
+				Score: 0.3,
+				Memory: &memory.Memory{
+					Memory: "John went to the library with his kids on Saturday",
+				},
+			},
+			{
+				ID:    "high",
+				Score: 0.9,
+				Memory: &memory.Memory{
+					Memory: "John went to the library with his kids on Saturday",
+				},
+			},
+			{
+				ID:    "other",
+				Score: 0.4,
+				Memory: &memory.Memory{
+					Memory: "Mary visited the museum on Sunday",
+				},
+			},
+		}
+
+		deduped := DeduplicateResults(results)
+		require.Len(t, deduped, 2)
+		assert.Equal(t, "high", deduped[0].ID)
+		assert.Equal(t, "other", deduped[1].ID)
+	})
+
+	t.Run("jaccard similarity handles empty and overlapping sets", func(t *testing.T) {
+		assert.Equal(t, 1.0, jaccardSimilarity(nil, nil))
+		assert.InDelta(t, 1.0/3.0, jaccardSimilarity(
+			map[string]struct{}{"john": {}, "library": {}},
+			map[string]struct{}{"john": {}, "museum": {}},
+		), 1e-9)
+	})
+}
+
 func TestMatchMemoryEntry_FallbackNoTokens(t *testing.T) {
 	entry := &memory.Entry{
 		Memory: &memory.Memory{
@@ -692,6 +980,47 @@ func TestGenerateMemoryID(t *testing.T) {
 		assert.Equal(t, id1, id2)
 	})
 
+	t.Run("different episodic metadata produce different IDs", func(t *testing.T) {
+		at1 := time.Date(2024, 5, 1, 0, 0, 0, 0, time.UTC)
+		at2 := time.Date(2024, 5, 2, 0, 0, 0, 0, time.UTC)
+		mem1 := &memory.Memory{
+			Memory:       "User met Alice",
+			Kind:         memory.KindEpisode,
+			EventTime:    &at1,
+			Location:     "Kyoto",
+			Participants: []string{"Alice"},
+		}
+		mem2 := &memory.Memory{
+			Memory:       "User met Alice",
+			Kind:         memory.KindEpisode,
+			EventTime:    &at2,
+			Location:     "Kyoto",
+			Participants: []string{"Alice"},
+		}
+		id1 := GenerateMemoryID(mem1, testAppName, testUserID)
+		id2 := GenerateMemoryID(mem2, testAppName, testUserID)
+		assert.NotEqual(t, id1, id2)
+	})
+
+	t.Run("participant order does not affect episodic ID", func(t *testing.T) {
+		at := time.Date(2024, 5, 1, 0, 0, 0, 0, time.UTC)
+		mem1 := &memory.Memory{
+			Memory:       "User met friends",
+			Kind:         memory.KindEpisode,
+			EventTime:    &at,
+			Participants: []string{"Alice", "Bob"},
+		}
+		mem2 := &memory.Memory{
+			Memory:       "User met friends",
+			Kind:         memory.KindEpisode,
+			EventTime:    &at,
+			Participants: []string{"Bob", " Alice ", "Bob"},
+		}
+		id1 := GenerateMemoryID(mem1, testAppName, testUserID)
+		id2 := GenerateMemoryID(mem2, testAppName, testUserID)
+		assert.Equal(t, id1, id2)
+	})
+
 	t.Run("different users produce different IDs", func(t *testing.T) {
 		mem := &memory.Memory{Memory: "User likes coffee"}
 		id1 := GenerateMemoryID(mem, "app1", "user1")
@@ -700,6 +1029,14 @@ func TestGenerateMemoryID(t *testing.T) {
 		assert.NotEqual(t, id1, id2)
 		assert.NotEqual(t, id1, id3)
 		assert.NotEqual(t, id2, id3)
+	})
+
+	t.Run("explicit fact without episodic metadata keeps legacy identity", func(t *testing.T) {
+		mem1 := &memory.Memory{Memory: "User likes coffee"}
+		mem2 := &memory.Memory{Memory: "User likes coffee", Kind: memory.KindFact}
+		id1 := GenerateMemoryID(mem1, testAppName, testUserID)
+		id2 := GenerateMemoryID(mem2, testAppName, testUserID)
+		assert.Equal(t, id1, id2)
 	})
 }
 
@@ -1046,6 +1383,63 @@ func TestSearchMemoryEntries_ZeroValueOptionsPreservePositiveMatches(t *testing.
 	assert.Equal(t, "partial-00", results[10].ID)
 }
 
+func TestSearchEntries_HonorsKindTimeAndOrdering(t *testing.T) {
+	base := time.Date(2024, 5, 1, 0, 0, 0, 0, time.UTC)
+	early := base.Add(24 * time.Hour)
+	late := base.Add(72 * time.Hour)
+	after := base.Add(12 * time.Hour)
+
+	entries := []*memory.Entry{
+		newSearchTestEntry("fact", "coffee timeline", nil, base, base),
+		newSearchTestEntry("episode-late", "coffee timeline", nil, base, base),
+		newSearchTestEntry("episode-early", "coffee timeline", nil, base, base),
+	}
+	entries[0].Memory.Kind = memory.KindFact
+	entries[1].Memory.Kind = memory.KindEpisode
+	entries[1].Memory.EventTime = &late
+	entries[2].Memory.Kind = memory.KindEpisode
+	entries[2].Memory.EventTime = &early
+
+	results := SearchEntries(entries, memory.SearchOptions{
+		Query:            "coffee timeline",
+		Kind:             memory.KindEpisode,
+		TimeAfter:        &after,
+		OrderByEventTime: true,
+		MaxResults:       10,
+	}, 0.3, 10)
+
+	require.Len(t, results, 2)
+	assert.Equal(t, "episode-early", results[0].ID)
+	assert.Equal(t, "episode-late", results[1].ID)
+}
+
+func TestSearchEntries_KindFallbackMergesResults(t *testing.T) {
+	now := time.Now().UTC()
+	entries := []*memory.Entry{
+		newSearchTestEntry("episode", "coffee hiking", nil, now, now),
+		newSearchTestEntry("fact-1", "coffee hiking", nil, now.Add(time.Minute), now.Add(time.Minute)),
+		newSearchTestEntry("fact-2", "coffee hiking", nil, now.Add(2*time.Minute), now.Add(2*time.Minute)),
+		newSearchTestEntry("fact-3", "coffee hiking", nil, now.Add(3*time.Minute), now.Add(3*time.Minute)),
+	}
+	entries[0].Memory.Kind = memory.KindEpisode
+	for i := 1; i < len(entries); i++ {
+		entries[i].Memory.Kind = memory.KindFact
+	}
+
+	results := SearchEntries(entries, memory.SearchOptions{
+		Query:        "coffee hiking",
+		Kind:         memory.KindEpisode,
+		KindFallback: true,
+		MaxResults:   10,
+	}, 0.3, 10)
+
+	require.Len(t, results, 4)
+	assert.Equal(t, "episode", results[0].ID)
+	assert.Equal(t, "fact-3", results[1].ID)
+	assert.Equal(t, "fact-2", results[2].ID)
+	assert.Equal(t, "fact-1", results[3].ID)
+}
+
 func TestIsPunctToken(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -1091,18 +1485,12 @@ func TestShouldIncludeAutoMemoryTool(t *testing.T) {
 }
 
 func TestGetSegmenter_ErrorPath(t *testing.T) {
-	// Save original state.
-	origOnce := segOnce
-	origErr := segErr
+	// Reset segmenter state and restore after test.
+	resetSegmenter()
+	defer resetSegmenter()
 
-	// Restore after test.
-	defer func() {
-		segOnce = origOnce
-		segErr = origErr
-	}()
-
-	// Simulate a failed LoadDict by setting segErr and marking Once as done.
-	segOnce = sync.Once{}
+	// Simulate a failed LoadDict by marking Once as done
+	// with an error.
 	segOnce.Do(func() {
 		segErr = errors.New("mock dict load failure")
 	})
@@ -1110,26 +1498,22 @@ func TestGetSegmenter_ErrorPath(t *testing.T) {
 	s, err := getSegmenter()
 	assert.Nil(t, s)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "load segmenter dict failed")
+	assert.Contains(t,
+		err.Error(), "load segmenter dict failed")
 }
 
 func TestBuildSearchTokens_SegmenterError(t *testing.T) {
-	// Save original state.
-	origOnce := segOnce
-	origErr := segErr
-
-	defer func() {
-		segOnce = origOnce
-		segErr = origErr
-	}()
+	// Reset segmenter state and restore after test.
+	resetSegmenter()
+	defer resetSegmenter()
 
 	// Simulate segmenter error.
-	segOnce = sync.Once{}
 	segOnce.Do(func() {
 		segErr = errors.New("mock error")
 	})
 
-	// CJK query triggers getSegmenter, which returns error -> nil result.
+	// CJK query triggers getSegmenter, which returns error
+	// -> nil result.
 	result := BuildSearchTokens("中文测试")
 	assert.Nil(t, result)
 }

@@ -29,11 +29,11 @@ type mockMemoryServiceForAutoMemory struct {
 	sess          *session.Session
 }
 
-func (m *mockMemoryServiceForAutoMemory) AddMemory(ctx context.Context, userKey memory.UserKey, memoryStr string, topics []string) error {
+func (m *mockMemoryServiceForAutoMemory) AddMemory(ctx context.Context, userKey memory.UserKey, memoryStr string, topics []string, _ ...memory.AddOption) error {
 	return nil
 }
 
-func (m *mockMemoryServiceForAutoMemory) UpdateMemory(ctx context.Context, memoryKey memory.Key, memoryStr string, topics []string) error {
+func (m *mockMemoryServiceForAutoMemory) UpdateMemory(ctx context.Context, memoryKey memory.Key, memoryStr string, topics []string, _ ...memory.UpdateOption) error {
 	return nil
 }
 
@@ -49,7 +49,7 @@ func (m *mockMemoryServiceForAutoMemory) ReadMemories(ctx context.Context, userK
 	return nil, nil
 }
 
-func (m *mockMemoryServiceForAutoMemory) SearchMemories(ctx context.Context, userKey memory.UserKey, query string) ([]*memory.Entry, error) {
+func (m *mockMemoryServiceForAutoMemory) SearchMemories(ctx context.Context, userKey memory.UserKey, query string, _ ...memory.SearchOption) ([]*memory.Entry, error) {
 	return nil, nil
 }
 

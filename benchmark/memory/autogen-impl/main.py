@@ -72,9 +72,7 @@ logging.getLogger("chromadb").setLevel(logging.WARNING)
 # ---------------------------------------------------------------------------
 # Constants.
 # ---------------------------------------------------------------------------
-NOT_AVAILABLE = (
-    "The information is not available in my memory."
-)
+NOT_AVAILABLE = "The information is not available."
 
 # Number of top-k results for vector search.
 _MEMORY_TOP_K = 30
@@ -142,17 +140,46 @@ Answer:"""
 
 # QA instructions for the memory-backed agent.
 _QA_INSTRUCTIONS = """\
-You are a memory assistant. You have memories from previous \
-conversations that have been automatically retrieved and \
-provided to you as context. Use those memories to answer \
-questions accurately and concisely.
+You are a memory retrieval assistant. Use the retrieved \
+memory context to output a short factual answer.
+
+ANSWERING PRIORITY - ALWAYS try to answer first:
+If ANY memory is topically related to the question, you \
+MUST provide an answer.
+Only say "{not_available}" when ZERO memories relate to \
+the question topic.
+When in doubt between answering and saying "not \
+available", ALWAYS answer.
+
+ANSWER STRATEGY:
+
+A) FACTUAL questions (Who/What/Where/When/How many):
+   Answer using the exact words from a relevant memory.
+   For "When" questions, look for dates in the memory.
+   For "How many" questions, output the NUMBER.
+
+B) HYPOTHETICAL/INFERENCE questions \
+(Would/Could/Is it likely/What might):
+   MUST reason and infer from available evidence. \
+NEVER say "not available" for these.
+
+C) TEMPORAL CALCULATION questions \
+(How long/What happened first):
+   Combine dates from multiple memories to calculate.
+
+D) OPEN-DOMAIN questions \
+(What does X feel/think/enjoy/value):
+   Copy the most relevant phrase from memory text.
+   NEVER say "not available" if ANY related memory exists.
 
 RULES:
 1. Rely on the retrieved memory context to answer.
 2. Convert relative time references to ABSOLUTE dates.
-3. Answer in 5 words or fewer.
-4. If the information is not in your memory, reply with \
-"{not_available}" exactly.
+3. Maximum 1-8 words. Output ONLY the answer fragment.
+4. For "When" questions: natural language date format \
+like "7 May 2023". NEVER use ISO format.
+5. Do NOT rephrase. Use exact words from memory.
+6. NEVER start answer with a person's name or pronoun.
 """
 
 
@@ -275,11 +302,19 @@ def evaluate_baseline(
                 judge_resp,
             )
 
+        pred_short = prediction[:120].replace("\n", " ")
         log.info(
-            "    %s: prompt=%d comp=%d total=%d calls=%d",
-            qa.question_id, usage.prompt_tokens,
-            usage.completion_tokens, usage.total_tokens,
-            usage.llm_calls,
+            "    %s: F1=%.3f BLEU=%.3f LLM=%.1f "
+            "pt=%d ct=%d",
+            qa.question_id, m.f1, bleu, llm_score,
+            usage.prompt_tokens,
+            usage.completion_tokens,
+        )
+        log.info(
+            "      pred: %s", pred_short,
+        )
+        log.info(
+            "      ref:  %s", qa.answer[:120],
         )
         qa_results.append(QAResult(
             question_id=qa.question_id,
@@ -493,11 +528,27 @@ async def evaluate_memory(
                 judge_resp,
             )
 
+        # Truncate prediction for logging; flag suspicious
+        # outputs (system prompt leakage, too long, etc.).
+        pred_short = prediction[:120].replace("\n", " ")
+        flag = ""
+        if len(prediction) > 200:
+            flag = " [WARN:long]"
+        elif "memory assistant" in prediction.lower():
+            flag = " [WARN:prompt-leak]"
+
         log.info(
-            "    %s: prompt=%d comp=%d total=%d calls=%d",
-            qa.question_id, qa_usage.prompt_tokens,
-            qa_usage.completion_tokens,
-            qa_usage.total_tokens, qa_usage.llm_calls,
+            "    %s: F1=%.3f BLEU=%.3f LLM=%.1f "
+            "pt=%d ct=%d%s",
+            qa.question_id, m.f1, bleu, llm_score,
+            qa_usage.prompt_tokens,
+            qa_usage.completion_tokens, flag,
+        )
+        log.info(
+            "      pred: %s", pred_short,
+        )
+        log.info(
+            "      ref:  %s", qa.answer[:120],
         )
         qa_results.append(QAResult(
             question_id=qa.question_id,
@@ -798,7 +849,17 @@ def get_scenarios(scenario_str: str) -> list[str]:
 async def main_async() -> None:
     args = parse_args()
     if args.verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
+        # Only set our own logger to DEBUG; leave third-party
+        # loggers at WARNING to avoid flooding the log.
+        log.setLevel(logging.DEBUG)
+        for noisy in (
+            "httpx", "httpcore", "openai",
+            "chromadb", "autogen", "autogen_agentchat",
+            "autogen_core", "autogen_ext", "urllib3",
+        ):
+            logging.getLogger(noisy).setLevel(
+                logging.WARNING
+            )
 
     openai_client = None
     try:

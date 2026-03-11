@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -473,6 +474,7 @@ func TestExtractor_BuildSystemPrompt_WithExistingMemories(t *testing.T) {
 	e := NewExtractor(m)
 	extractor := e.(*memoryExtractor)
 
+	refDate := time.Date(2023, 5, 8, 0, 0, 0, 0, time.UTC)
 	existing := []*memory.Entry{
 		{
 			ID:     "mem-1",
@@ -484,12 +486,16 @@ func TestExtractor_BuildSystemPrompt_WithExistingMemories(t *testing.T) {
 		},
 	}
 
-	prompt := extractor.buildSystemPrompt(existing)
+	prompt := extractor.buildSystemPrompt(refDate, existing)
 
-	assert.Contains(t, prompt, defaultPrompt)
+	assert.Contains(t, prompt, "You are a Memory Manager")
+	assert.NotContains(t, prompt, currentDatePlaceholder)
+	assert.Contains(t, prompt, "Today's date is 2023-05-08.")
 	assert.Contains(t, prompt, "<existing_memories>")
-	assert.Contains(t, prompt, "[mem-1] User likes coffee.")
-	assert.Contains(t, prompt, "[mem-2] User is 30 years old.")
+	assert.Contains(t, prompt,
+		"[mem-1] User likes coffee.")
+	assert.Contains(t, prompt,
+		"[mem-2] User is 30 years old.")
 	assert.Contains(t, prompt, "</existing_memories>")
 }
 
@@ -498,10 +504,13 @@ func TestExtractor_BuildSystemPrompt_EmptyExisting(t *testing.T) {
 	e := NewExtractor(m)
 	extractor := e.(*memoryExtractor)
 
-	prompt := extractor.buildSystemPrompt(nil)
+	refDate := time.Date(2023, 5, 8, 0, 0, 0, 0, time.UTC)
+	prompt := extractor.buildSystemPrompt(refDate, nil)
 
 	// Prompt always includes available_actions now.
-	assert.Contains(t, prompt, defaultPrompt)
+	assert.Contains(t, prompt, "You are a Memory Manager")
+	assert.Contains(t, prompt, "Today's date is 2023-05-08.")
+	assert.NotContains(t, prompt, currentDatePlaceholder)
 	assert.Contains(t, prompt, "<available_actions>")
 	assert.Contains(t, prompt, "</available_actions>")
 	assert.NotContains(t, prompt, "<existing_memories>")
@@ -512,6 +521,7 @@ func TestExtractor_BuildSystemPrompt_NilMemory(t *testing.T) {
 	e := NewExtractor(m)
 	extractor := e.(*memoryExtractor)
 
+	refDate := time.Date(2023, 5, 8, 0, 0, 0, 0, time.UTC)
 	existing := []*memory.Entry{
 		{
 			ID:     "mem-1",
@@ -523,9 +533,10 @@ func TestExtractor_BuildSystemPrompt_NilMemory(t *testing.T) {
 		},
 	}
 
-	prompt := extractor.buildSystemPrompt(existing)
+	prompt := extractor.buildSystemPrompt(refDate, existing)
 
-	assert.Contains(t, prompt, "[mem-2] Valid memory.")
+	assert.Contains(t, prompt,
+		"[mem-2] Valid memory.")
 	assert.NotContains(t, prompt, "[mem-1]")
 }
 
@@ -753,6 +764,29 @@ func TestExtractor_EnabledToolsConfigurer(t *testing.T) {
 	assert.True(t, hasAdd)
 }
 
+func TestInferReferenceDate(t *testing.T) {
+	t.Run("uses context reference date", func(t *testing.T) {
+		refDate := time.Date(
+			2023, 5, 8, 0, 0, 0, 0, time.UTC,
+		)
+		ctx := WithReferenceDate(
+			context.Background(), refDate,
+		)
+		d := referenceDate(ctx)
+		assert.Equal(t, 2023, d.Year())
+		assert.Equal(t, time.May, d.Month())
+		assert.Equal(t, 8, d.Day())
+	})
+
+	t.Run("falls back to now without context", func(t *testing.T) {
+		d := referenceDate(context.Background())
+		assert.InDelta(t,
+			float64(time.Now().UTC().Unix()),
+			float64(d.Unix()), 5,
+		)
+	})
+}
+
 func TestExtractor_BuildSystemPrompt_WithTopics(t *testing.T) {
 	m := &mockModel{name: "test-model"}
 	e := NewExtractor(m)
@@ -775,7 +809,7 @@ func TestExtractor_BuildSystemPrompt_WithTopics(t *testing.T) {
 		},
 	}
 
-	prompt := ext.buildSystemPrompt(existing)
+	prompt := ext.buildSystemPrompt(time.Now(), existing)
 
 	// mem-1 should have topics displayed.
 	assert.Contains(t, prompt, "[mem-1] Likes coffee. (topics: preferences, food)")

@@ -16,16 +16,25 @@ import (
 
 // Result represents a single memory result.
 type Result struct {
-	ID      string    `json:"id"`      // ID is the memory ID.
-	Memory  string    `json:"memory"`  // Memory is the memory content.
-	Topics  []string  `json:"topics"`  // Topics is the memory topics.
-	Created time.Time `json:"created"` // Created is the creation time.
+	ID           string    `json:"id"`                     // ID is the memory ID.
+	Memory       string    `json:"memory"`                 // Memory is the memory content.
+	Topics       []string  `json:"topics"`                 // Topics is the memory topics.
+	Created      time.Time `json:"created"`                // Created is the creation time.
+	Kind         string    `json:"kind,omitempty"`         // Kind is the memory kind (fact/episode).
+	EventTime    string    `json:"event_time,omitempty"`   // EventTime is when the event occurred.
+	Participants []string  `json:"participants,omitempty"` // Participants involved in the event.
+	Location     string    `json:"location,omitempty"`     // Location where the event took place.
+	Score        float64   `json:"score,omitempty"`        // Score is the similarity score from vector search (0-1).
 }
 
 // AddMemoryRequest represents the input for the add memory tool.
 type AddMemoryRequest struct {
-	Memory string   `json:"memory" jsonschema:"description=The memory content to store. Should be a brief. third-person statement that captures key information about the user"`
-	Topics []string `json:"topics,omitempty" jsonschema:"description=Optional topics for categorizing the memory"`
+	Memory       string   `json:"memory" jsonschema:"description=The memory content to store. Should be a brief. third-person statement that captures key information about the user"`
+	Topics       []string `json:"topics,omitempty" jsonschema:"description=Optional topics for categorizing the memory"`
+	MemoryKind   string   `json:"memory_kind,omitempty" jsonschema:"description=Memory type: 'fact' for stable personal attributes or 'episode' for specific events. Defaults to 'fact',enum=fact,enum=episode"`
+	EventTime    string   `json:"event_time,omitempty" jsonschema:"description=When the event occurred (ISO 8601: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS). Required for episodes. Must be an absolute date - never use relative time words."`
+	Participants []string `json:"participants,omitempty" jsonschema:"description=People involved in the event. Used for episodes."`
+	Location     string   `json:"location,omitempty" jsonschema:"description=Where the event took place. Used for episodes."`
 }
 
 // AddMemoryResponse represents the response from memory_add tool.
@@ -37,9 +46,13 @@ type AddMemoryResponse struct {
 
 // UpdateMemoryRequest represents the input for the update memory tool.
 type UpdateMemoryRequest struct {
-	MemoryID string   `json:"memory_id" jsonschema:"description=The ID of the memory to update"`
-	Memory   string   `json:"memory" jsonschema:"description=The updated memory content"`
-	Topics   []string `json:"topics,omitempty" jsonschema:"description=Optional topics for categorizing the memory"`
+	MemoryID     string   `json:"memory_id" jsonschema:"description=The ID of the memory to update"`
+	Memory       string   `json:"memory" jsonschema:"description=The updated memory content"`
+	Topics       []string `json:"topics,omitempty" jsonschema:"description=Optional topics for categorizing the memory"`
+	MemoryKind   string   `json:"memory_kind,omitempty" jsonschema:"description=Memory type: 'fact' or 'episode',enum=fact,enum=episode"`
+	EventTime    string   `json:"event_time,omitempty" jsonschema:"description=When the event occurred (ISO 8601). Required for episodes."`
+	Participants []string `json:"participants,omitempty" jsonschema:"description=People involved in the event."`
+	Location     string   `json:"location,omitempty" jsonschema:"description=Where the event took place."`
 }
 
 // UpdateMemoryResponse represents the response from memory_update tool.
@@ -75,7 +88,11 @@ type ClearMemoryResponse struct {
 
 // SearchMemoryRequest represents the input for the search memory tool.
 type SearchMemoryRequest struct {
-	Query string `json:"query" jsonschema:"description=The search query to find relevant memories"`
+	Query            string `json:"query" jsonschema:"description=The search query to find relevant memories"`
+	Kind             string `json:"kind,omitempty" jsonschema:"description=Filter by memory kind: 'fact' or 'episode'. Empty means all.,enum=fact,enum=episode"`
+	TimeAfter        string `json:"time_after,omitempty" jsonschema:"description=Filter episodes with event_time on or after this date (ISO 8601: YYYY-MM-DD)"`
+	TimeBefore       string `json:"time_before,omitempty" jsonschema:"description=Filter episodes with event_time on or before this date (ISO 8601: YYYY-MM-DD)"`
+	OrderByEventTime bool   `json:"order_by_event_time,omitempty" jsonschema:"description=When true, order results by event_time ascending instead of relevance. Useful for temporal sequence questions (what happened first/next/after)."`
 }
 
 // SearchMemoryResponse represents the response from memory_search tool.

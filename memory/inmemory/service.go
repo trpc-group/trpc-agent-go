@@ -124,7 +124,11 @@ func (s *MemoryService) getAppMemories(appName string) *appMemories {
 }
 
 // createMemoryEntry creates a new MemoryEntry from memory data.
-func createMemoryEntry(appName, userID, memoryStr string, topics []string) *memory.Entry {
+func createMemoryEntry(
+	appName, userID, memoryStr string,
+	topics []string,
+	ep *memory.Metadata,
+) *memory.Entry {
 	now := time.Now()
 
 	// Create Memory object.
@@ -133,6 +137,7 @@ func createMemoryEntry(appName, userID, memoryStr string, topics []string) *memo
 		Topics:      topics,
 		LastUpdated: &now,
 	}
+	imemory.ApplyMetadata(memoryObj, ep)
 
 	return &memory.Entry{
 		ID:        imemory.GenerateMemoryID(memoryObj, appName, userID), // Generate ID.
@@ -145,15 +150,19 @@ func createMemoryEntry(appName, userID, memoryStr string, topics []string) *memo
 }
 
 // AddMemory adds or updates a memory for a user (idempotent).
-func (s *MemoryService) AddMemory(ctx context.Context, userKey memory.UserKey, memoryStr string, topics []string) error {
+func (s *MemoryService) AddMemory(ctx context.Context, userKey memory.UserKey, memoryStr string,
+	topics []string, opts ...memory.AddOption) error {
 	if err := userKey.CheckUserKey(); err != nil {
 		return err
 	}
 
 	app := s.getAppMemories(userKey.AppName)
 
+	ep := memory.ResolveAddOptions(opts)
 	// Create memory entry with provided topics.
-	memoryEntry := createMemoryEntry(userKey.AppName, userKey.UserID, memoryStr, topics)
+	memoryEntry := createMemoryEntry(
+		userKey.AppName, userKey.UserID, memoryStr, topics, ep,
+	)
 
 	app.mu.Lock()
 	defer app.mu.Unlock()
@@ -174,34 +183,46 @@ func (s *MemoryService) AddMemory(ctx context.Context, userKey memory.UserKey, m
 }
 
 // UpdateMemory updates an existing memory for a user.
-func (s *MemoryService) UpdateMemory(ctx context.Context, memoryKey memory.Key, memoryStr string, topics []string) error {
+func (s *MemoryService) UpdateMemory(ctx context.Context, memoryKey memory.Key, memoryStr string,
+	topics []string, opts ...memory.UpdateOption) error {
 	if err := memoryKey.CheckMemoryKey(); err != nil {
 		return err
 	}
 
 	app := s.getAppMemories(memoryKey.AppName)
-
 	app.mu.Lock()
 	defer app.mu.Unlock()
 
-	// Check if user exists.
 	if app.memories[memoryKey.UserID] == nil {
 		return fmt.Errorf("user %s not found", memoryKey.UserID)
 	}
-
-	memoryEntry, exists := app.memories[memoryKey.UserID][memoryKey.MemoryID]
+	userMemories := app.memories[memoryKey.UserID]
+	memoryEntry, exists := userMemories[memoryKey.MemoryID]
 	if !exists {
 		return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
 	}
 
-	// Update memory data.
 	now := time.Now()
-	memoryEntry.Memory.Memory = memoryStr
-	memoryEntry.Memory.Topics = topics
-	memoryEntry.Memory.LastUpdated = &now
-	memoryEntry.UpdatedAt = now
-
-	app.memories[memoryKey.UserID][memoryKey.MemoryID] = memoryEntry
+	ep := memory.ResolveUpdateOptions(opts)
+	newID := imemory.ApplyMemoryUpdate(
+		memoryEntry,
+		memoryKey.AppName,
+		memoryKey.UserID,
+		memoryStr,
+		topics,
+		ep,
+		now,
+	)
+	if newID != memoryKey.MemoryID {
+		if _, conflict := userMemories[newID]; conflict {
+			return fmt.Errorf("memory with id %s already exists", newID)
+		}
+		delete(userMemories, memoryKey.MemoryID)
+	}
+	userMemories[newID] = memoryEntry
+	if result := memory.ResolveUpdateResult(opts); result != nil {
+		result.MemoryID = newID
+	}
 	return nil
 }
 
@@ -283,7 +304,8 @@ func (s *MemoryService) ReadMemories(ctx context.Context, userKey memory.UserKey
 }
 
 // SearchMemories searches memories for a user.
-func (s *MemoryService) SearchMemories(ctx context.Context, userKey memory.UserKey, query string) ([]*memory.Entry, error) {
+func (s *MemoryService) SearchMemories(ctx context.Context, userKey memory.UserKey,
+	query string, opts ...memory.SearchOption) ([]*memory.Entry, error) {
 	if err := userKey.CheckUserKey(); err != nil {
 		return nil, err
 	}
@@ -303,10 +325,12 @@ func (s *MemoryService) SearchMemories(ctx context.Context, userKey memory.UserK
 		entries = append(entries, memoryEntry)
 	}
 
-	return imemory.SearchMemoryEntries(entries, query, imemory.SearchOptions{
-		MinScore:   s.opts.searchMinScore,
-		MaxResults: s.opts.maxSearchResults,
-	}), nil
+	return imemory.SearchEntries(
+		entries,
+		memory.ResolveSearchOptions(query, opts),
+		s.opts.searchMinScore,
+		s.opts.maxSearchResults,
+	), nil
 }
 
 // Tools returns the list of available memory tools.

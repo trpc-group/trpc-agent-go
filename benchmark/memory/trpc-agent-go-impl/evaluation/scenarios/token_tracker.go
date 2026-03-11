@@ -21,6 +21,9 @@ type TokenUsage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
+	// CachedTokens is the number of prompt tokens served from
+	// the provider's prompt cache (e.g. OpenAI cached_tokens).
+	CachedTokens int `json:"cached_tokens,omitempty"`
 	// LLMCalls is the number of model invocations
 	// (may be >1 for tool-calling agents).
 	LLMCalls int `json:"llm_calls"`
@@ -31,6 +34,7 @@ func (u *TokenUsage) Add(other TokenUsage) {
 	u.PromptTokens += other.PromptTokens
 	u.CompletionTokens += other.CompletionTokens
 	u.TotalTokens += other.TotalTokens
+	u.CachedTokens += other.CachedTokens
 	u.LLMCalls += other.LLMCalls
 }
 
@@ -58,6 +62,7 @@ func (t *TokenTracker) Record(u *model.Usage) {
 	t.usage.PromptTokens += u.PromptTokens
 	t.usage.CompletionTokens += u.CompletionTokens
 	t.usage.TotalTokens += u.TotalTokens
+	t.usage.CachedTokens += u.PromptTokensDetails.CachedTokens
 	t.usage.LLMCalls++
 }
 

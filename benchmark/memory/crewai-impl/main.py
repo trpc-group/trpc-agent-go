@@ -39,6 +39,9 @@ from crewai import Agent, Crew, Process, Task
 from crewai.memory.short_term.short_term_memory import (
     ShortTermMemory,
 )
+from crewai.memory.contextual.contextual_memory import (
+    ContextualMemory,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -57,9 +60,7 @@ warnings.filterwarnings(
 # ---------------------------------------------------------------------------
 # Constants.
 # ---------------------------------------------------------------------------
-NOT_AVAILABLE = (
-    "The information is not available in my memory."
-)
+NOT_AVAILABLE = "The information is not available."
 
 # Long-context prompt (aligned with Go implementation).
 _LONG_CONTEXT_PROMPT = """\
@@ -120,16 +121,57 @@ _AGENT_GOAL = (
     "of previous conversations."
 )
 _AGENT_BACKSTORY = """\
-You are a memory assistant with access to stored memories \
-from previous conversations. When asked a question, you \
-rely on your memories to answer concisely.
+You are a memory retrieval assistant. Your ONLY job is \
+to read the memory context provided and output a short \
+factual answer.
+
+ANSWERING PRIORITY - ALWAYS try to answer first:
+If ANY memory is topically related to the question, you \
+MUST provide an answer.
+Only say "{not_available}" when ZERO memories relate to \
+the question topic.
+When in doubt between answering and saying "not \
+available", ALWAYS answer.
+
+ANSWER STRATEGY:
+
+A) FACTUAL questions (Who/What/Where/When/How many):
+   Answer using the exact words from a relevant memory.
+   For "When" questions, look for dates in the memory text.
+   For "How many" questions, output the NUMBER.
+   If the question asks about person A but memories ONLY \
+mention person B doing that exact thing, say \
+"{not_available}".
+
+B) HYPOTHETICAL/INFERENCE questions \
+(Would/Could/Is it likely/What might):
+   You MUST reason and infer from available evidence. \
+NEVER say "not available" for these.
+   e.g. "Would X enjoy Vivaldi?" + memory "X enjoys \
+classical music" -> "Yes"
+
+C) TEMPORAL CALCULATION questions \
+(How long/What happened first):
+   Combine dates from multiple memories to calculate \
+durations or order. Give a direct answer.
+
+D) OPEN-DOMAIN questions \
+(What does X feel/think/enjoy/value):
+   Answer by copying the most relevant phrase directly \
+from memory text.
+   NEVER say "not available" if ANY related memory exists.
 
 RULES:
 1. Always rely on the memory context provided.
-2. Convert relative time references to ABSOLUTE dates.
-3. Answer in 5 words or fewer.
-4. If the information is not in your memory, reply with \
-"{not_available}" exactly.
+2. Convert relative time references to ABSOLUTE dates \
+(e.g. "last year" -> "2022", not "Last year").
+3. Maximum 1-8 words. Output ONLY the answer fragment.
+4. For "When" questions: output date in natural language \
+format like "7 May 2023". NEVER use ISO format.
+5. Do NOT rephrase. If memory says "Sweden", say \
+"Sweden", NOT "her home country".
+6. NEVER start your answer with a person's name or \
+"She/He/They".
 """
 
 # Number of top search results for memory retrieval.
@@ -137,6 +179,104 @@ _MEMORY_SEARCH_LIMIT = 30
 
 # Similarity score threshold.
 _MEMORY_SCORE_THRESHOLD = 0.3
+
+# -------------------------------------------------------------------
+# Monkey-patch: ContextualMemory._fetch_stm_context.
+# The default search parameters (limit=5, score_threshold=0.6)
+# retrieve too few memories. Override to use our constants.
+# -------------------------------------------------------------------
+_orig_fetch_stm = ContextualMemory._fetch_stm_context
+
+def _patched_fetch_stm(self: ContextualMemory,
+                        query: str) -> str:
+    """Fetch STM context with wider search window."""
+    if self.stm is None:
+        return ""
+    results = self.stm.search(
+        query,
+        limit=_MEMORY_SEARCH_LIMIT,
+        score_threshold=_MEMORY_SCORE_THRESHOLD,
+    )
+    formatted = "\n".join(
+        f"- {r['content']}" for r in results
+    )
+    return (
+        f"Recent Insights:\n{formatted}"
+        if results else ""
+    )
+
+ContextualMemory._fetch_stm_context = _patched_fetch_stm
+
+# -------------------------------------------------------------------
+# Thread-safe global token tracker.
+# CrewAI 1.9+ uses its own OpenAI client (OpenAICompletion)
+# and does NOT go through litellm at all, so neither
+# litellm.success_callback nor litellm.callbacks works.
+#
+# Instead we monkey-patch BaseLLM._track_token_usage_internal
+# which CrewAI calls after every OpenAI API response. This
+# feeds a global accumulator that the benchmark reads via
+# snapshot() before/after each QA kickoff.
+# -------------------------------------------------------------------
+import threading as _threading
+
+from crewai.llms.base_llm import BaseLLM as _BaseLLM
+
+_orig_track = _BaseLLM._track_token_usage_internal
+
+
+class _GlobalTokenTracker:
+    """Accumulates token usage across all LLM instances."""
+
+    def __init__(self) -> None:
+        self._lock = _threading.Lock()
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.total_tokens = 0
+        self.successful_requests = 0
+
+    def snapshot(self) -> tuple[int, int, int, int]:
+        with self._lock:
+            return (
+                self.prompt_tokens,
+                self.completion_tokens,
+                self.total_tokens,
+                self.successful_requests,
+            )
+
+    def accumulate(self, usage_data: dict) -> None:
+        """Called from the patched method."""
+        pt = (
+            usage_data.get("prompt_tokens")
+            or usage_data.get("prompt_token_count")
+            or usage_data.get("input_tokens")
+            or 0
+        )
+        ct = (
+            usage_data.get("completion_tokens")
+            or usage_data.get("candidates_token_count")
+            or usage_data.get("output_tokens")
+            or 0
+        )
+        with self._lock:
+            self.prompt_tokens += pt
+            self.completion_tokens += ct
+            self.total_tokens += pt + ct
+            self.successful_requests += 1
+
+
+_token_tracker = _GlobalTokenTracker()
+
+
+def _patched_track_token_usage(self, usage_data):
+    """Patched version that also feeds the global tracker."""
+    _orig_track(self, usage_data)
+    _token_tracker.accumulate(usage_data)
+
+
+_BaseLLM._track_token_usage_internal = (
+    _patched_track_token_usage
+)
 
 
 # ---------------------------------------------------------------------------
@@ -254,11 +394,18 @@ def evaluate_baseline(
                 judge_resp,
             )
 
+        pred_short = prediction[:120].replace("\n", " ")
         log.info(
-            "    %s: prompt=%d comp=%d total=%d calls=%d",
-            qa.question_id, usage.prompt_tokens,
-            usage.completion_tokens, usage.total_tokens,
-            usage.llm_calls,
+            "    %s: F1=%.3f BLEU=%.3f LLM=%.1f "
+            "pt=%d ct=%d",
+            qa.question_id, m.f1, bleu, llm_score,
+            usage.prompt_tokens, usage.completion_tokens,
+        )
+        log.info(
+            "      pred: %s", pred_short,
+        )
+        log.info(
+            "      ref:  %s", qa.answer[:120],
         )
         qa_results.append(QAResult(
             question_id=qa.question_id,
@@ -350,46 +497,46 @@ def evaluate_memory(
     qa_results: list[QAResult] = []
     total_usage = TokenUsage()
 
-    agent = Agent(
-        role=_AGENT_ROLE,
-        goal=_AGENT_GOAL,
-        backstory=_AGENT_BACKSTORY.format(
-            not_available=NOT_AVAILABLE,
-        ),
-        llm=model_name,
-        max_iter=1,
-        verbose=False,
-    )
-
     for qa in sample.qa:
         prediction = ""
         qa_usage = TokenUsage()
         try:
-            # Snapshot cumulative counters before kickoff so
-            # we can compute the incremental delta afterwards.
-            # CrewAI's TokenProcess is cumulative and never
-            # resets, so result.token_usage returns the running
-            # total since agent creation, not the per-call cost.
-            prev_pt = prev_ct = prev_tt = prev_req = 0
-            tp = getattr(agent, "_token_process", None)
-            if tp is not None:
-                prev_pt = tp.prompt_tokens
-                prev_ct = tp.completion_tokens
-                prev_tt = tp.total_tokens
-                prev_req = tp.successful_requests
+            # Create a fresh agent for each QA to avoid
+            # chat history accumulation. CrewAI agents
+            # retain internal message history across
+            # kickoff() calls, causing context pollution
+            # and garbled predictions.
+            agent = Agent(
+                role=_AGENT_ROLE,
+                goal=_AGENT_GOAL,
+                backstory=_AGENT_BACKSTORY.format(
+                    not_available=NOT_AVAILABLE,
+                ),
+                llm=model_name,
+                max_iter=1,
+                verbose=False,
+            )
+
+            # Snapshot our litellm tracker before kickoff.
+            lt_prev = _token_tracker.snapshot()
 
             task = Task(
                 description=(
                     f"Answer the following question based on "
                     f"your memories:\n\n"
                     f"Question: {qa.question}\n\n"
-                    f"Provide ONLY the answer in 5 words or "
-                    f"fewer. If the information is not in your "
-                    f"memory, reply with "
-                    f'"{NOT_AVAILABLE}" exactly.'
+                    f"Read ALL provided memories carefully. "
+                    f"If ANY memory is topically related, you "
+                    f"MUST answer. When in doubt, ALWAYS "
+                    f"answer.\n"
+                    f"Output ONLY the bare answer in 1-8 "
+                    f"words. No explanations.\n"
+                    f"Only say \"{NOT_AVAILABLE}\" when ZERO "
+                    f"memories relate to the question."
                 ),
                 expected_output=(
-                    "A concise answer in 5 words or fewer."
+                    "A concise answer in 1-8 words, "
+                    "no explanations."
                 ),
                 agent=agent,
             )
@@ -405,31 +552,21 @@ def evaluate_memory(
             result = crew.kickoff()
             prediction = (result.raw or "").strip()
 
-            # Compute incremental token usage as the delta
-            # between current and previous cumulative totals.
-            if tp is not None:
-                qa_usage.prompt_tokens = (
-                    tp.prompt_tokens - prev_pt
-                )
-                qa_usage.completion_tokens = (
-                    tp.completion_tokens - prev_ct
-                )
-                qa_usage.total_tokens = (
-                    tp.total_tokens - prev_tt
-                )
-                qa_usage.llm_calls = (
-                    tp.successful_requests - prev_req
-                )
-            elif result.token_usage:
-                tu = result.token_usage
-                qa_usage.prompt_tokens = tu.prompt_tokens
-                qa_usage.completion_tokens = (
-                    tu.completion_tokens
-                )
-                qa_usage.total_tokens = tu.total_tokens
-                qa_usage.llm_calls = (
-                    tu.successful_requests
-                )
+            # Compute incremental token usage from our
+            # litellm callback tracker.
+            lt_cur = _token_tracker.snapshot()
+            qa_usage.prompt_tokens = (
+                lt_cur[0] - lt_prev[0]
+            )
+            qa_usage.completion_tokens = (
+                lt_cur[1] - lt_prev[1]
+            )
+            qa_usage.total_tokens = (
+                lt_cur[2] - lt_prev[2]
+            )
+            qa_usage.llm_calls = (
+                lt_cur[3] - lt_prev[3]
+            )
         except Exception as e:
             log.warning(
                 "Error evaluating QA %s: %s",
@@ -465,11 +602,27 @@ def evaluate_memory(
                 judge_resp,
             )
 
+        # Truncate prediction for logging; flag suspicious
+        # outputs (system prompt leakage, too long, etc.).
+        pred_short = prediction[:120].replace("\n", " ")
+        flag = ""
+        if len(prediction) > 200:
+            flag = " [WARN:long]"
+        elif "memory assistant" in prediction.lower():
+            flag = " [WARN:prompt-leak]"
+
         log.info(
-            "    %s: prompt=%d comp=%d total=%d calls=%d",
-            qa.question_id, qa_usage.prompt_tokens,
-            qa_usage.completion_tokens,
-            qa_usage.total_tokens, qa_usage.llm_calls,
+            "    %s: F1=%.3f BLEU=%.3f LLM=%.1f "
+            "pt=%d ct=%d%s",
+            qa.question_id, m.f1, bleu, llm_score,
+            qa_usage.prompt_tokens,
+            qa_usage.completion_tokens, flag,
+        )
+        log.info(
+            "      pred: %s", pred_short,
+        )
+        log.info(
+            "      ref:  %s", qa.answer[:120],
         )
         qa_results.append(QAResult(
             question_id=qa.question_id,
@@ -754,7 +907,18 @@ def get_scenarios(scenario_str: str) -> list[str]:
 def main() -> None:
     args = parse_args()
     if args.verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
+        # Only set our own logger to DEBUG; leave third-party
+        # loggers (httpx, openai, litellm, chromadb, etc.)
+        # at WARNING to avoid flooding the log.
+        log.setLevel(logging.DEBUG)
+        for noisy in (
+            "httpx", "httpcore", "openai", "litellm",
+            "chromadb", "urllib3", "crewai",
+            "crewai.utilities", "crewai.agents",
+        ):
+            logging.getLogger(noisy).setLevel(
+                logging.WARNING
+            )
 
     openai_client = None
     try:
