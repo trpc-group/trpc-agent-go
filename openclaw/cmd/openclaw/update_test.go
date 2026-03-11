@@ -118,15 +118,21 @@ func TestVersionPart(t *testing.T) {
 }
 
 func TestParseUpgradePaths(t *testing.T) {
-	t.Parallel()
-
 	home := t.TempDir()
+	binDir := t.TempDir()
 	oldHomeFunc := userHomeDirFunc
 	userHomeDirFunc = func() (string, error) {
 		return home, nil
 	}
 	t.Cleanup(func() {
 		userHomeDirFunc = oldHomeFunc
+	})
+	oldExecutable := executablePathFunc
+	executablePathFunc = func() (string, error) {
+		return filepath.Join(binDir, "openclaw"), nil
+	}
+	t.Cleanup(func() {
+		executablePathFunc = oldExecutable
 	})
 
 	paths, err := parseUpgradePaths([]string{
@@ -160,6 +166,84 @@ func TestParseUpgradePaths(t *testing.T) {
 	)
 }
 
+func TestParseUpgradePathsUsesInstallMetadata(t *testing.T) {
+	home := t.TempDir()
+	binDir := t.TempDir()
+	metadata := "bin_dir=" + binDir + "\n" +
+		"config_dir=/tmp/custom-config\n" +
+		"state_dir=/tmp/custom-state\n"
+	err := os.WriteFile(
+		filepath.Join(binDir, installMetadataFileName),
+		[]byte(metadata),
+		0o644,
+	)
+	require.NoError(t, err)
+
+	oldHomeFunc := userHomeDirFunc
+	userHomeDirFunc = func() (string, error) {
+		return home, nil
+	}
+	t.Cleanup(func() {
+		userHomeDirFunc = oldHomeFunc
+	})
+	oldExecutable := executablePathFunc
+	executablePathFunc = func() (string, error) {
+		return filepath.Join(binDir, "openclaw"), nil
+	}
+	t.Cleanup(func() {
+		executablePathFunc = oldExecutable
+	})
+
+	paths, err := parseUpgradePaths(nil)
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		filepath.Clean("/tmp/custom-config/openclaw.yaml"),
+		filepath.Clean(paths.ConfigPath),
+	)
+	require.Equal(
+		t,
+		filepath.Clean("/tmp/custom-state"),
+		filepath.Clean(paths.StateDir),
+	)
+}
+
+func TestParseUpgradePathsExplicitFlagsOverrideMetadata(t *testing.T) {
+	binDir := t.TempDir()
+	metadata := "config_dir=/tmp/custom-config\n" +
+		"state_dir=/tmp/custom-state\n"
+	err := os.WriteFile(
+		filepath.Join(binDir, installMetadataFileName),
+		[]byte(metadata),
+		0o644,
+	)
+	require.NoError(t, err)
+
+	oldExecutable := executablePathFunc
+	executablePathFunc = func() (string, error) {
+		return filepath.Join(binDir, "openclaw"), nil
+	}
+	t.Cleanup(func() {
+		executablePathFunc = oldExecutable
+	})
+
+	paths, err := parseUpgradePaths([]string{
+		"--config", "/tmp/override.yaml",
+		"--state-dir", "/tmp/override-state",
+	})
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		filepath.Clean("/tmp/override.yaml"),
+		filepath.Clean(paths.ConfigPath),
+	)
+	require.Equal(
+		t,
+		filepath.Clean("/tmp/override-state"),
+		filepath.Clean(paths.StateDir),
+	)
+}
+
 func TestParseUpgradePathsRejectsUnknownArg(t *testing.T) {
 	t.Parallel()
 
@@ -180,7 +264,7 @@ func TestParseUpgradePathsRejectsMissingValue(t *testing.T) {
 func TestResolveUpgradeConfigPathUsesEnv(t *testing.T) {
 	t.Setenv(openClawConfigEnvName, "./custom.yaml")
 
-	got, err := resolveUpgradeConfigPath("")
+	got, err := resolveUpgradeConfigPath("", installMetadata{})
 	require.NoError(t, err)
 	require.Equal(t, filepath.Clean("custom.yaml"), filepath.Base(got))
 }
@@ -194,7 +278,7 @@ func TestResolveUpgradeConfigPathHomeError(t *testing.T) {
 		userHomeDirFunc = old
 	})
 
-	_, err := resolveUpgradeConfigPath("")
+	_, err := resolveUpgradeConfigPath("", installMetadata{})
 	require.Error(t, err)
 }
 
@@ -207,7 +291,77 @@ func TestResolveUpgradeStateDirHomeError(t *testing.T) {
 		userHomeDirFunc = old
 	})
 
-	_, err := resolveUpgradeStateDir("")
+	_, err := resolveUpgradeStateDir(
+		"",
+		"",
+		installMetadata{},
+	)
+	require.Error(t, err)
+}
+
+func TestResolveUpgradeStateDirUsesConfigStateDir(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "openclaw.yaml")
+	err := os.WriteFile(
+		configPath,
+		[]byte("state_dir: /tmp/from-config\n"),
+		0o644,
+	)
+	require.NoError(t, err)
+
+	stateDir, err := resolveUpgradeStateDir(
+		"",
+		configPath,
+		installMetadata{},
+	)
+	require.NoError(t, err)
+	require.Equal(t, filepath.Clean("/tmp/from-config"), stateDir)
+}
+
+func TestResolveUpgradeStateDirIgnoresRelativeConfigStateDir(t *testing.T) {
+	home := t.TempDir()
+	configPath := filepath.Join(t.TempDir(), "openclaw.yaml")
+	err := os.WriteFile(
+		configPath,
+		[]byte("state_dir: ./.openclaw-state\n"),
+		0o644,
+	)
+	require.NoError(t, err)
+
+	oldHomeFunc := userHomeDirFunc
+	userHomeDirFunc = func() (string, error) {
+		return home, nil
+	}
+	t.Cleanup(func() {
+		userHomeDirFunc = oldHomeFunc
+	})
+
+	stateDir, err := resolveUpgradeStateDir(
+		"",
+		configPath,
+		installMetadata{},
+	)
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		filepath.Join(home, ".trpc-agent-go", "openclaw"),
+		stateDir,
+	)
+}
+
+func TestReadInstallMetadataRejectsInvalidLine(t *testing.T) {
+	t.Parallel()
+
+	binDir := t.TempDir()
+	err := os.WriteFile(
+		filepath.Join(binDir, installMetadataFileName),
+		[]byte("bad-line\n"),
+		0o644,
+	)
+	require.NoError(t, err)
+
+	_, err = readInstallMetadata(binDir)
 	require.Error(t, err)
 }
 
@@ -464,7 +618,9 @@ func TestRunUpgradeCommand(t *testing.T) {
 
 func TestInstallRelease(t *testing.T) {
 	argsFile := filepath.Join(t.TempDir(), "args.txt")
-	script := "#!/usr/bin/env bash\nset -e\nprintf '%s\\n' \"$@\" > \"$ARGS_FILE\"\n"
+	script := "#!/usr/bin/env bash\n" +
+		"set -e\n" +
+		"printf '%s\\n' \"$@\" > \"$ARGS_FILE\"\n"
 
 	server := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {

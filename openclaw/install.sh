@@ -13,6 +13,7 @@ readonly DEFAULT_STATE_SUBDIR=".trpc-agent-go/openclaw"
 readonly PROFILE_DIR_NAME="profiles"
 readonly BUNDLED_SKILLS_DIR_NAME="bundled-skills"
 readonly MANAGED_SKILLS_DIR_NAME="skills"
+readonly INSTALL_METADATA_FILE_NAME=".openclaw-install.env"
 
 readonly PACKAGE_ROOT_NAME="openclaw"
 readonly BINARY_NAME="openclaw"
@@ -60,6 +61,16 @@ die() {
 
 warn() {
   printf 'warning: %s\n' "$*" >&2
+}
+
+resolve_dir_path() {
+  local dir="$1"
+
+  mkdir -p "$dir"
+  (
+    cd "$dir"
+    pwd -P
+  )
 }
 
 require_cmd() {
@@ -295,6 +306,23 @@ install_bundled_skills() {
   mv "$tmp_dir" "$target_dir"
 }
 
+write_install_metadata() {
+  local bin_dir="$1"
+  local config_dir="$2"
+  local state_dir="$3"
+  local target_file tmp_file
+
+  target_file="${bin_dir}/${INSTALL_METADATA_FILE_NAME}"
+  tmp_file="${target_file}.tmp"
+  cat > "$tmp_file" <<EOF
+bin_dir=${bin_dir}
+config_dir=${config_dir}
+state_dir=${state_dir}
+EOF
+  chmod 0644 "$tmp_file"
+  mv "$tmp_file" "$target_file"
+}
+
 main() {
   local version=""
   local profile="$DEFAULT_PROFILE"
@@ -398,6 +426,10 @@ main() {
   mkdir -p "$bin_dir"
   mkdir -p "$config_dir/${PROFILE_DIR_NAME}"
   mkdir -p "$state_dir"
+  bin_dir="$(resolve_dir_path "$bin_dir")"
+  config_dir="$(resolve_dir_path "$config_dir")"
+  state_dir="$(resolve_dir_path "$state_dir")"
+  mkdir -p "$config_dir/${PROFILE_DIR_NAME}"
 
   install -m 0755 \
     "${package_root}/bin/${BINARY_NAME}" \
@@ -419,6 +451,7 @@ main() {
   fi
 
   install_bundled_skills "${package_root}/skills" "$state_dir"
+  write_install_metadata "$bin_dir" "$config_dir" "$state_dir"
 
   metadata_file="${package_root}/metadata.env"
   package_version="$resolved_version"

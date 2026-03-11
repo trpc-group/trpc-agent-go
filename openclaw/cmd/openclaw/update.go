@@ -10,6 +10,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -21,6 +22,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -34,6 +37,11 @@ const (
 	defaultConfigRootDir = ".trpc-agent-go"
 	defaultConfigAppDir  = "openclaw"
 	defaultConfigFile    = "openclaw.yaml"
+
+	installMetadataFileName = ".openclaw-install.env"
+	installMetadataKeyBin   = "bin_dir"
+	installMetadataKeyCfg   = "config_dir"
+	installMetadataKeyState = "state_dir"
 
 	defaultGitHubAPIBaseURL = "https://api.github.com"
 	defaultReleaseRepo      = "trpc-group/trpc-agent-go"
@@ -62,8 +70,23 @@ type upgradePaths struct {
 	StateDir   string
 }
 
+type upgradePathInputs struct {
+	ConfigPath string
+	StateDir   string
+}
+
+type installMetadata struct {
+	BinDir    string
+	ConfigDir string
+	StateDir  string
+}
+
 type githubRelease struct {
 	TagName string `json:"tag_name"`
+}
+
+type upgradeConfigFile struct {
+	StateDir *string `yaml:"state_dir,omitempty"`
 }
 
 func isTopLevelVersionRequest(args []string) bool {
@@ -123,7 +146,20 @@ func printUpgradeUsage(w io.Writer) {
 }
 
 func parseUpgradePaths(args []string) (upgradePaths, error) {
-	paths := upgradePaths{}
+	inputs, err := parseUpgradePathInputs(args)
+	if err != nil {
+		return upgradePaths{}, err
+	}
+
+	binDir, err := currentBinaryDir()
+	if err != nil {
+		return upgradePaths{}, err
+	}
+	return resolveUpgradePaths(binDir, inputs)
+}
+
+func parseUpgradePathInputs(args []string) (upgradePathInputs, error) {
+	inputs := upgradePathInputs{}
 
 	for i := 0; i < len(args); i++ {
 		raw := strings.TrimSpace(args[i])
@@ -134,7 +170,7 @@ func parseUpgradePaths(args []string) (upgradePaths, error) {
 		if value, ok := matchFlagValue(raw, flagConfig); ok {
 			if value == "" && isSeparateFlagToken(raw, flagConfig) {
 				if i+1 >= len(args) {
-					return upgradePaths{}, fmt.Errorf(
+					return upgradePathInputs{}, fmt.Errorf(
 						"flag %q requires a value",
 						flagConfig,
 					)
@@ -142,14 +178,14 @@ func parseUpgradePaths(args []string) (upgradePaths, error) {
 				i++
 				value = strings.TrimSpace(args[i])
 			}
-			paths.ConfigPath = value
+			inputs.ConfigPath = value
 			continue
 		}
 
 		if value, ok := matchFlagValue(raw, flagStateDir); ok {
 			if value == "" && isSeparateFlagToken(raw, flagStateDir) {
 				if i+1 >= len(args) {
-					return upgradePaths{}, fmt.Errorf(
+					return upgradePathInputs{}, fmt.Errorf(
 						"flag %q requires a value",
 						flagStateDir,
 					)
@@ -157,21 +193,40 @@ func parseUpgradePaths(args []string) (upgradePaths, error) {
 				i++
 				value = strings.TrimSpace(args[i])
 			}
-			paths.StateDir = value
+			inputs.StateDir = value
 			continue
 		}
 
-		return upgradePaths{}, fmt.Errorf(
+		return upgradePathInputs{}, fmt.Errorf(
 			"upgrade does not support argument %q",
 			raw,
 		)
 	}
 
-	configPath, err := resolveUpgradeConfigPath(paths.ConfigPath)
+	return inputs, nil
+}
+
+func resolveUpgradePaths(
+	binDir string,
+	inputs upgradePathInputs,
+) (upgradePaths, error) {
+	metadata, err := readInstallMetadata(binDir)
 	if err != nil {
 		return upgradePaths{}, err
 	}
-	stateDir, err := resolveUpgradeStateDir(paths.StateDir)
+
+	configPath, err := resolveUpgradeConfigPath(
+		inputs.ConfigPath,
+		metadata,
+	)
+	if err != nil {
+		return upgradePaths{}, err
+	}
+	stateDir, err := resolveUpgradeStateDir(
+		inputs.StateDir,
+		configPath,
+		metadata,
+	)
 	if err != nil {
 		return upgradePaths{}, err
 	}
@@ -219,7 +274,10 @@ func isHelpRequest(raw string) bool {
 	}
 }
 
-func resolveUpgradeConfigPath(raw string) (string, error) {
+func resolveUpgradeConfigPath(
+	raw string,
+	metadata installMetadata,
+) (string, error) {
 	configPath := strings.TrimSpace(raw)
 	if configPath == "" {
 		configPath = strings.TrimSpace(
@@ -228,6 +286,13 @@ func resolveUpgradeConfigPath(raw string) (string, error) {
 	}
 	if configPath != "" {
 		return filepath.Abs(configPath)
+	}
+
+	configDir := strings.TrimSpace(metadata.ConfigDir)
+	if configDir != "" {
+		return filepath.Abs(
+			filepath.Join(configDir, defaultConfigFile),
+		)
 	}
 
 	home, err := userHomeDirFunc()
@@ -242,8 +307,22 @@ func resolveUpgradeConfigPath(raw string) (string, error) {
 	), nil
 }
 
-func resolveUpgradeStateDir(raw string) (string, error) {
+func resolveUpgradeStateDir(
+	raw string,
+	configPath string,
+	metadata installMetadata,
+) (string, error) {
 	stateDir := strings.TrimSpace(raw)
+	if stateDir != "" {
+		return filepath.Abs(stateDir)
+	}
+
+	stateDir = strings.TrimSpace(metadata.StateDir)
+	if stateDir != "" {
+		return filepath.Abs(stateDir)
+	}
+
+	stateDir = configuredUpgradeStateDir(configPath)
 	if stateDir != "" {
 		return filepath.Abs(stateDir)
 	}
@@ -257,6 +336,81 @@ func resolveUpgradeStateDir(raw string) (string, error) {
 		defaultConfigRootDir,
 		defaultConfigAppDir,
 	), nil
+}
+
+func configuredUpgradeStateDir(configPath string) string {
+	path := strings.TrimSpace(configPath)
+	if path == "" {
+		return ""
+	}
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+
+	var cfg upgradeConfigFile
+	if err := yaml.Unmarshal(body, &cfg); err != nil {
+		return ""
+	}
+	if cfg.StateDir == nil {
+		return ""
+	}
+
+	stateDir := strings.TrimSpace(*cfg.StateDir)
+	if !filepath.IsAbs(stateDir) {
+		return ""
+	}
+	return stateDir
+}
+
+func readInstallMetadata(binDir string) (installMetadata, error) {
+	path := filepath.Join(binDir, installMetadataFileName)
+	body, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return installMetadata{}, nil
+		}
+		return installMetadata{}, fmt.Errorf(
+			"read install metadata: %w",
+			err,
+		)
+	}
+
+	var metadata installMetadata
+	scanner := bufio.NewScanner(strings.NewReader(string(body)))
+	lineNumber := 0
+	for scanner.Scan() {
+		lineNumber++
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			return installMetadata{}, fmt.Errorf(
+				"parse install metadata line %d",
+				lineNumber,
+			)
+		}
+
+		switch strings.TrimSpace(key) {
+		case installMetadataKeyBin:
+			metadata.BinDir = strings.TrimSpace(value)
+		case installMetadataKeyCfg:
+			metadata.ConfigDir = strings.TrimSpace(value)
+		case installMetadataKeyState:
+			metadata.StateDir = strings.TrimSpace(value)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return installMetadata{}, fmt.Errorf(
+			"scan install metadata: %w",
+			err,
+		)
+	}
+	return metadata, nil
 }
 
 func upgradeToLatest(

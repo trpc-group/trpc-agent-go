@@ -20,7 +20,7 @@ openclaw
 当前支持的 profile：
 
 - `stdin`：本地终端聊天，使用 mock 模型。
-- `stdin-sqlite`：本地终端聊天，session 和 memory 使用 sqlite。
+- `stdin-sqlite`：本地终端聊天，session 和 memory 使用 SQLite。
 - `telegram`：本仓库里的 Telegram 渠道示例。
 
 示例：

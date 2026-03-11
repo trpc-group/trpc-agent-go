@@ -21,7 +21,7 @@ openclaw
 Supported profiles:
 
 - `stdin`: local terminal chat with the mock model.
-- `stdin-sqlite`: local terminal chat with sqlite-backed session and
+- `stdin-sqlite`: local terminal chat with SQLite-backed session and
   memory storage.
 - `telegram`: Telegram channel example from this repo.
 
