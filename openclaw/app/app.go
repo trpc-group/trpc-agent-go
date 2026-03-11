@@ -79,6 +79,14 @@ const (
 		"Keep replies concise."
 
 	openClawToolingGuidance = "For general local shell work, use " +
+		"read_document or read_spreadsheet first for common PDF, " +
+		"DOCX, text, CSV, and spreadsheet uploads already in the " +
+		"chat. Only fall back to " +
+		"exec_command when those tools cannot satisfy the task. " +
+		"Do not call exec_command just to print OPENCLAW_* upload " +
+		"vars or inspect recent upload metadata when a matching " +
+		"chat file is already available. For general local shell " +
+		"work, use " +
 		"exec_command. For interactive follow-up input, use " +
 		"write_stdin and kill_session when needed. Use message " +
 		"to send to the current chat or an explicit target. " +
@@ -1808,6 +1816,8 @@ func buildOpenClawTools(
 	}
 
 	tools := []tool.Tool{
+		octool.NewReadDocumentTool(uploadStore),
+		octool.NewReadSpreadsheetTool(uploadStore),
 		octool.NewExecCommandTool(mgr, uploadStore),
 		octool.NewWriteStdinTool(mgr),
 		octool.NewKillSessionTool(mgr),

@@ -283,6 +283,7 @@ JSON `StreamEvent` with a stable `type` field:
 
 - `run.started`
 - `run.ignored`
+- `run.progress`
 - `message.delta`
 - `message.completed`
 - `run.completed`
@@ -291,9 +292,20 @@ JSON `StreamEvent` with a stable `type` field:
 Typical successful flow:
 
 1. `run.started`
-2. zero or more `message.delta`
-3. `message.completed`
-4. `run.completed`
+2. zero or more `run.progress`
+3. zero or more `message.delta`
+4. `message.completed`
+5. `run.completed`
+
+`run.progress` is a low-frequency, system-generated status update. It is
+meant for channels that want a short "still working" summary without
+guessing from partial text. The first release uses stable stages such as:
+
+- `preparing`
+- `reading_document`
+- `reading_spreadsheet`
+- `running_tool`
+- `summarizing`
 
 For in-process integrations, channel plugins can prefer
 `StreamMessage(...)` when `deps.Gateway` also implements
@@ -375,12 +387,21 @@ Note: OpenAI Chat Completions does not support raw file inputs in the same
 way as images/audio. OpenClaw persists inbound `file` and `video` parts to
 stable host paths under the state directory, keeps those refs in session
 history, and exposes them back to tools. In practice this means later turns
-can still operate on the same upload with `exec_command`
+can still operate on the same upload with `read_document`,
+`read_spreadsheet`, or `exec_command`
 (`$OPENCLAW_LAST_UPLOAD_PATH`, `$OPENCLAW_LAST_UPLOAD_NAME`,
 `$OPENCLAW_LAST_UPLOAD_MIME`, `$OPENCLAW_LAST_PDF_PATH`,
 `$OPENCLAW_LAST_AUDIO_PATH`, `$OPENCLAW_LAST_VIDEO_PATH`,
 `$OPENCLAW_LAST_IMAGE_PATH`, `$OPENCLAW_SESSION_UPLOADS_DIR`) or
 `skill_run` (`host://...` inputs staged into `$WORK_DIR/inputs`).
+
+For common file-reading tasks, prefer the first-party tools:
+
+- `read_document`: stable reads for PDF, DOCX, and text-like uploads.
+- `read_spreadsheet`: stable reads for XLSX and CSV uploads.
+
+Use `exec_command` as the fallback for conversions, custom scripts, and
+other host-side work that those file tools cannot satisfy.
 
 ## Run with a real model (OpenAI)
 

@@ -717,7 +717,7 @@ func TestUploadEnvFromContext(t *testing.T) {
 	)
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 
-	env := (&execTool{}).uploadEnvFromContext(ctx)
+	env := uploadEnvFromContext(ctx, nil)
 	require.Equal(t, videoPath, env[envLastUploadPath])
 	require.Equal(t, uploads.HostRef(videoPath), env[envLastUploadHostRef])
 	require.Equal(t, dir, env[envSessionUploadsDir])
@@ -799,7 +799,7 @@ func TestUploadEnvFromContext_UsesUploadStore(t *testing.T) {
 	)
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 
-	env := (&execTool{uploads: store}).uploadEnvFromContext(ctx)
+	env := uploadEnvFromContext(ctx, store)
 	require.Equal(t, derived.Path, env[envLastUploadPath])
 	require.Equal(t, derived.HostRef, env[envLastUploadHostRef])
 	require.Equal(t, derived.Path, env[envLastPDFPath])
@@ -847,7 +847,7 @@ func TestUploadEnvFromContext_RewritesGeneratedUploadNames(t *testing.T) {
 	)
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 
-	env := (&execTool{}).uploadEnvFromContext(ctx)
+	env := uploadEnvFromContext(ctx, nil)
 	require.Equal(t, "video.mp4", env[envLastUploadName])
 	require.Equal(t, "video.mp4", env[envLastVideoName])
 
@@ -880,7 +880,7 @@ func TestUploadEnvFromContext_UsesSessionDirWithoutRecentUploads(
 	)
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 
-	env := (&execTool{uploads: store}).uploadEnvFromContext(ctx)
+	env := uploadEnvFromContext(ctx, store)
 	require.Equal(
 		t,
 		store.ScopeDir(uploads.Scope{

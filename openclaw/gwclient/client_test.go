@@ -29,6 +29,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
 )
 
+const progressSummaryPrepare = "Preparing request"
+
 type stubRunner struct {
 	mu        sync.Mutex
 	callCount int
@@ -369,29 +371,40 @@ func TestClient_StreamMessage_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	events := collectClientStreamEvents(t, stream)
-	require.Len(t, events, 4)
+	require.Len(t, events, 5)
 	require.Equal(t, StreamEvent{
 		Type:      gwproto.StreamEventTypeRunStarted,
 		SessionID: "http:dm:u1",
 	}, events[0])
 	require.Equal(
 		t,
-		gwproto.StreamEventTypeMessageDelta,
+		gwproto.StreamEventTypeRunProgress,
 		events[1].Type,
 	)
-	require.Equal(t, "hi", events[1].Delta)
+	require.Equal(
+		t,
+		gwproto.StreamProgressStagePreparing,
+		events[1].Stage,
+	)
+	require.Equal(t, progressSummaryPrepare, events[1].Summary)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeMessageDelta,
+		events[2].Type,
+	)
+	require.Equal(t, "hi", events[2].Delta)
 	require.Equal(
 		t,
 		gwproto.StreamEventTypeMessageCompleted,
-		events[2].Type,
+		events[3].Type,
 	)
-	require.Equal(t, "hi", events[2].Reply)
+	require.Equal(t, "hi", events[3].Reply)
 	require.Equal(
 		t,
 		gwproto.StreamEventTypeRunCompleted,
-		events[3].Type,
+		events[4].Type,
 	)
-	require.Equal(t, "req-1", events[3].RequestID)
+	require.Equal(t, "req-1", events[4].RequestID)
 }
 
 func TestClient_StreamMessage_StatusError(t *testing.T) {

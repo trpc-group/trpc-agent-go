@@ -51,6 +51,9 @@ type MessageResponse struct {
 // StreamEventType identifies one streaming gateway event.
 type StreamEventType string
 
+// StreamProgressStage identifies one high-level run progress stage.
+type StreamProgressStage string
+
 const (
 	// MessagesStreamSuffix is the default suffix for stream routes.
 	MessagesStreamSuffix = ":stream"
@@ -75,10 +78,23 @@ const (
 	StreamEventTypeMessageDelta StreamEventType = "message.delta"
 	// StreamEventTypeMessageCompleted carries the final reply text.
 	StreamEventTypeMessageCompleted StreamEventType = "message.completed"
+	// StreamEventTypeRunProgress carries a high-level run status update.
+	StreamEventTypeRunProgress StreamEventType = "run.progress"
 	// StreamEventTypeRunCompleted marks successful stream completion.
 	StreamEventTypeRunCompleted StreamEventType = "run.completed"
 	// StreamEventTypeRunError marks a terminal stream error.
 	StreamEventTypeRunError StreamEventType = "run.error"
+
+	// StreamProgressStagePreparing marks pre-tool request setup.
+	StreamProgressStagePreparing StreamProgressStage = "preparing"
+	// StreamProgressStageReadingDocument marks document extraction.
+	StreamProgressStageReadingDocument StreamProgressStage = "reading_document"
+	// StreamProgressStageReadingSpreadsheet marks tabular extraction.
+	StreamProgressStageReadingSpreadsheet StreamProgressStage = "reading_spreadsheet"
+	// StreamProgressStageRunningTool marks a generic tool run.
+	StreamProgressStageRunningTool StreamProgressStage = "running_tool"
+	// StreamProgressStageSummarizing marks post-tool answer generation.
+	StreamProgressStageSummarizing StreamProgressStage = "summarizing"
 )
 
 // StreamEvent is one gateway streaming event payload.
@@ -88,10 +104,13 @@ type StreamEvent struct {
 	SessionID string `json:"session_id,omitempty"`
 	RequestID string `json:"request_id,omitempty"`
 
-	Delta   string    `json:"delta,omitempty"`
-	Reply   string    `json:"reply,omitempty"`
-	Ignored bool      `json:"ignored,omitempty"`
-	Error   *APIError `json:"error,omitempty"`
+	Delta     string              `json:"delta,omitempty"`
+	Reply     string              `json:"reply,omitempty"`
+	Stage     StreamProgressStage `json:"stage,omitempty"`
+	Summary   string              `json:"summary,omitempty"`
+	ElapsedMS int64               `json:"elapsed_ms,omitempty"`
+	Ignored   bool                `json:"ignored,omitempty"`
+	Error     *APIError           `json:"error,omitempty"`
 }
 
 // ContentPartType is the type discriminator for ContentPart.

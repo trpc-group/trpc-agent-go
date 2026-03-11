@@ -28,11 +28,26 @@ const (
 	traceStatusOK      = "ok"
 	traceStatusIgnored = "ignored"
 	traceStatusError   = "error"
+
+	streamToolExecCommand    = "exec_command"
+	streamToolReadDocument   = "read_document"
+	streamToolReadSheet      = "read_spreadsheet"
+	progressSummaryPrepare   = "Preparing request"
+	progressSummaryDoc       = "Reading document"
+	progressSummarySheet     = "Reading spreadsheet"
+	progressSummaryTool      = "Running local tool"
+	progressSummaryAnswering = "Preparing final answer"
 )
 
 type streamOutcome struct {
 	status string
 	errMsg string
+}
+
+type progressState struct {
+	startedAt time.Time
+	stage     gwproto.StreamProgressStage
+	summary   string
 }
 
 // StreamMessage processes a request and returns a stream of gateway
@@ -227,6 +242,20 @@ func (s *Server) streamLocked(
 			errMsg: contextErrMessage(ctx),
 		}
 	}
+	progress := progressState{startedAt: time.Now()}
+	if !sendProgressUpdate(
+		ctx,
+		out,
+		run,
+		&progress,
+		gwproto.StreamProgressStagePreparing,
+		progressSummaryPrepare,
+	) {
+		return streamOutcome{
+			status: traceStatusError,
+			errMsg: contextErrMessage(ctx),
+		}
+	}
 
 	events, err := s.runner.Run(
 		ctx,
@@ -260,6 +289,24 @@ func (s *Server) streamLocked(
 		}
 		if evt == nil {
 			continue
+		}
+
+		if !sentText {
+			if update, ok := progressUpdateFromRunnerEvent(evt); ok {
+				if !sendProgressUpdate(
+					ctx,
+					out,
+					run,
+					&progress,
+					update.stage,
+					update.summary,
+				) {
+					return streamOutcome{
+						status: traceStatusError,
+						errMsg: contextErrMessage(ctx),
+					}
+				}
+			}
 		}
 
 		if apiErr := apiErrorFromEvent(evt); apiErr != nil {
@@ -364,6 +411,154 @@ func sendStreamEvent(
 	case <-ctx.Done():
 		return false
 	}
+}
+
+type progressUpdate struct {
+	stage   gwproto.StreamProgressStage
+	summary string
+}
+
+func progressUpdateFromRunnerEvent(
+	evt *event.Event,
+) (progressUpdate, bool) {
+	if evt == nil || evt.Response == nil {
+		return progressUpdate{}, false
+	}
+	if evt.Response.IsToolCallResponse() {
+		toolCall, ok := firstToolCall(evt.Response)
+		if !ok {
+			return progressUpdate{}, false
+		}
+		return progressFromToolCall(toolCall)
+	}
+	if evt.Object == model.ObjectTypeToolResponse {
+		return progressUpdate{
+			stage:   gwproto.StreamProgressStageSummarizing,
+			summary: progressSummaryAnswering,
+		}, true
+	}
+	return progressUpdate{}, false
+}
+
+func firstToolCall(rsp *model.Response) (model.ToolCall, bool) {
+	if rsp == nil {
+		return model.ToolCall{}, false
+	}
+	for _, choice := range rsp.Choices {
+		if len(choice.Message.ToolCalls) > 0 {
+			return choice.Message.ToolCalls[0], true
+		}
+		if len(choice.Delta.ToolCalls) > 0 {
+			return choice.Delta.ToolCalls[0], true
+		}
+	}
+	return model.ToolCall{}, false
+}
+
+func progressFromToolCall(
+	toolCall model.ToolCall,
+) (progressUpdate, bool) {
+	name := strings.TrimSpace(toolCall.Function.Name)
+	switch name {
+	case streamToolReadDocument:
+		return progressUpdate{
+			stage:   gwproto.StreamProgressStageReadingDocument,
+			summary: readDocumentProgressSummary(toolCall),
+		}, true
+	case streamToolReadSheet:
+		return progressUpdate{
+			stage:   gwproto.StreamProgressStageReadingSpreadsheet,
+			summary: readSpreadsheetProgressSummary(toolCall),
+		}, true
+	case streamToolExecCommand:
+		return progressUpdate{
+			stage:   gwproto.StreamProgressStageRunningTool,
+			summary: progressSummaryTool,
+		}, true
+	default:
+		if name == "" {
+			return progressUpdate{}, false
+		}
+		return progressUpdate{
+			stage:   gwproto.StreamProgressStageRunningTool,
+			summary: "Running " + name,
+		}, true
+	}
+}
+
+func readDocumentProgressSummary(toolCall model.ToolCall) string {
+	const defaultSummary = progressSummaryDoc
+
+	var args struct {
+		Page *int `json:"page,omitempty"`
+	}
+	if err := json.Unmarshal(toolCall.Function.Arguments, &args); err != nil {
+		return defaultSummary
+	}
+	if args.Page == nil || *args.Page <= 0 {
+		return defaultSummary
+	}
+	return fmt.Sprintf("%s page %d", defaultSummary, *args.Page)
+}
+
+func readSpreadsheetProgressSummary(toolCall model.ToolCall) string {
+	const defaultSummary = progressSummarySheet
+
+	var args struct {
+		Row      *int   `json:"row,omitempty"`
+		StartRow *int   `json:"start_row,omitempty"`
+		EndRow   *int   `json:"end_row,omitempty"`
+		Sheet    string `json:"sheet,omitempty"`
+	}
+	if err := json.Unmarshal(toolCall.Function.Arguments, &args); err != nil {
+		return defaultSummary
+	}
+	if args.Row != nil && *args.Row > 0 {
+		return fmt.Sprintf("%s row %d", defaultSummary, *args.Row)
+	}
+	if args.StartRow != nil && *args.StartRow > 0 {
+		if args.EndRow != nil && *args.EndRow >= *args.StartRow {
+			return fmt.Sprintf(
+				"%s rows %d-%d",
+				defaultSummary,
+				*args.StartRow,
+				*args.EndRow,
+			)
+		}
+		return fmt.Sprintf("%s from row %d", defaultSummary,
+			*args.StartRow)
+	}
+	if strings.TrimSpace(args.Sheet) != "" {
+		return fmt.Sprintf("%s sheet %s", defaultSummary,
+			strings.TrimSpace(args.Sheet))
+	}
+	return defaultSummary
+}
+
+func sendProgressUpdate(
+	ctx context.Context,
+	out chan<- gwproto.StreamEvent,
+	run preparedMessageRun,
+	state *progressState,
+	stage gwproto.StreamProgressStage,
+	summary string,
+) bool {
+	if state == nil || stage == "" {
+		return true
+	}
+	if state.stage == stage && state.summary == summary {
+		return true
+	}
+	state.stage = stage
+	state.summary = summary
+	return sendStreamEvent(ctx, out, gwproto.StreamEvent{
+		Type:      gwproto.StreamEventTypeRunProgress,
+		SessionID: run.sessionID,
+		RequestID: run.requestID,
+		Stage:     stage,
+		Summary:   summary,
+		ElapsedMS: time.Since(state.startedAt).Milliseconds(),
+	})
 }
 
 func singleStreamEvents(

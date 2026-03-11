@@ -2068,7 +2068,7 @@ func TestServer_StreamMessage_Success(t *testing.T) {
 	require.Equal(t, http.StatusOK, status)
 
 	events := collectGatewayStreamEvents(t, stream)
-	require.Len(t, events, 5)
+	require.Len(t, events, 6)
 	require.Equal(
 		t,
 		gwproto.StreamEventTypeRunStarted,
@@ -2076,28 +2076,39 @@ func TestServer_StreamMessage_Success(t *testing.T) {
 	)
 	require.Equal(
 		t,
-		gwproto.StreamEventTypeMessageDelta,
+		gwproto.StreamEventTypeRunProgress,
 		events[1].Type,
 	)
-	require.Equal(t, "help", events[1].Delta)
+	require.Equal(
+		t,
+		gwproto.StreamProgressStagePreparing,
+		events[1].Stage,
+	)
+	require.Equal(t, progressSummaryPrepare, events[1].Summary)
 	require.Equal(
 		t,
 		gwproto.StreamEventTypeMessageDelta,
 		events[2].Type,
 	)
-	require.Equal(t, " me", events[2].Delta)
+	require.Equal(t, "help", events[2].Delta)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeMessageDelta,
+		events[3].Type,
+	)
+	require.Equal(t, " me", events[3].Delta)
 	require.Equal(
 		t,
 		gwproto.StreamEventTypeMessageCompleted,
-		events[3].Type,
+		events[4].Type,
 	)
-	require.Equal(t, "help me", events[3].Reply)
+	require.Equal(t, "help me", events[4].Reply)
 	require.Equal(
 		t,
 		gwproto.StreamEventTypeRunCompleted,
-		events[4].Type,
+		events[5].Type,
 	)
-	require.Equal(t, "req-1", events[4].RequestID)
+	require.Equal(t, "req-1", events[5].RequestID)
 }
 
 func TestServer_StreamMessage_RunError(t *testing.T) {
@@ -2120,7 +2131,7 @@ func TestServer_StreamMessage_RunError(t *testing.T) {
 	require.Equal(t, http.StatusOK, status)
 
 	events := collectGatewayStreamEvents(t, stream)
-	require.Len(t, events, 2)
+	require.Len(t, events, 3)
 	require.Equal(
 		t,
 		gwproto.StreamEventTypeRunStarted,
@@ -2128,11 +2139,133 @@ func TestServer_StreamMessage_RunError(t *testing.T) {
 	)
 	require.Equal(
 		t,
-		gwproto.StreamEventTypeRunError,
+		gwproto.StreamEventTypeRunProgress,
 		events[1].Type,
 	)
-	require.NotNil(t, events[1].Error)
-	require.Equal(t, "boom", events[1].Error.Message)
+	require.Equal(
+		t,
+		gwproto.StreamProgressStagePreparing,
+		events[1].Stage,
+	)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunError,
+		events[2].Type,
+	)
+	require.NotNil(t, events[2].Error)
+	require.Equal(t, "boom", events[2].Error.Message)
+}
+
+func TestServer_StreamMessage_ProgressStages(t *testing.T) {
+	t.Parallel()
+
+	srv, err := New(&staticRunner{
+		events: []*event.Event{
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletion,
+					Choices: []model.Choice{{
+						Message: model.Message{
+							ToolCalls: []model.ToolCall{{
+								Type: "function",
+								Function: model.FunctionDefinitionParam{
+									Name: "read_document",
+									Arguments: []byte(
+										`{"page":2}`,
+									),
+								},
+							}},
+						},
+					}},
+				},
+			},
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeToolResponse,
+				},
+			},
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletion,
+					Choices: []model.Choice{
+						{
+							Message: model.NewAssistantMessage(
+								"done",
+							),
+						},
+					},
+					Done: true,
+				},
+				RequestID: "req-1",
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		testTimeout,
+	)
+	defer cancel()
+
+	stream, apiErr, status := srv.StreamMessage(ctx, gwproto.MessageRequest{
+		From: "u1",
+		Text: "hello",
+	})
+	require.Nil(t, apiErr)
+	require.Equal(t, http.StatusOK, status)
+
+	events := collectGatewayStreamEvents(t, stream)
+	require.Len(t, events, 7)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunProgress,
+		events[1].Type,
+	)
+	require.Equal(
+		t,
+		gwproto.StreamProgressStagePreparing,
+		events[1].Stage,
+	)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunProgress,
+		events[2].Type,
+	)
+	require.Equal(
+		t,
+		gwproto.StreamProgressStageReadingDocument,
+		events[2].Stage,
+	)
+	require.Equal(t, "Reading document page 2", events[2].Summary)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunProgress,
+		events[3].Type,
+	)
+	require.Equal(
+		t,
+		gwproto.StreamProgressStageSummarizing,
+		events[3].Stage,
+	)
+	require.Equal(t, progressSummaryAnswering, events[3].Summary)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeMessageDelta,
+		events[4].Type,
+	)
+	require.Equal(t, "done", events[4].Delta)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeMessageCompleted,
+		events[5].Type,
+	)
+	require.Equal(t, "done", events[5].Reply)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunCompleted,
+		events[6].Type,
+	)
 }
 
 func TestServer_HandleMessagesStream_Success(t *testing.T) {
