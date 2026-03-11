@@ -27,6 +27,10 @@ const (
 	recentUploadContextFooter = "Use OPENCLAW_LAST_UPLOAD_* " +
 		"for the newest file. For multiple recent files in " +
 		"exec_command, use OPENCLAW_RECENT_UPLOADS_JSON. " +
+		"For common file-reading tasks, prefer read_document " +
+		"or read_spreadsheet before exec_command. If a single " +
+		"matching upload is already present, call those tools " +
+		"directly instead of printing OPENCLAW_* variables. " +
 		"When calling message to send an existing upload back " +
 		"to the user, prefer the stable host_ref from that " +
 		"JSON or OPENCLAW_LAST_UPLOAD_HOST_REF instead of " +
