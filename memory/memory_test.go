@@ -344,6 +344,18 @@ func TestResolveUpdateOptions(t *testing.T) {
 	}))
 }
 
+func TestResolveUpdateResult(t *testing.T) {
+	result := &UpdateResult{MemoryID: "rotated"}
+
+	assert.Nil(t, ResolveUpdateResult(nil))
+	assert.Nil(t, ResolveUpdateResult([]UpdateOption{}))
+	assert.Same(t, result, ResolveUpdateResult([]UpdateOption{
+		WithUpdateMetadata(&Metadata{Kind: KindEpisode}),
+		WithUpdateResult(nil),
+		WithUpdateResult(result),
+	}))
+}
+
 func TestResolveSearchOptions(t *testing.T) {
 	t.Run("default query is preserved", func(t *testing.T) {
 		got := ResolveSearchOptions("coffee", nil)

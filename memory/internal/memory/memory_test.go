@@ -289,6 +289,79 @@ func TestApplyMetadataPatch(t *testing.T) {
 	assert.Equal(t, "Kyoto", mem.Location)
 }
 
+func TestMetadataIdentityAndNormalizationHelpers(t *testing.T) {
+	now := time.Date(2024, 5, 7, 9, 0, 0, 0, time.UTC)
+
+	t.Run("metadata identity kind covers fact and episode variants", func(t *testing.T) {
+		assert.Equal(t, memory.Kind(""), metadataIdentityKind(nil))
+		assert.Equal(t, memory.KindEpisode, metadataIdentityKind(&memory.Memory{
+			Kind: memory.KindEpisode,
+		}))
+		assert.Equal(t, memory.Kind(""), metadataIdentityKind(&memory.Memory{
+			Kind: memory.KindFact,
+		}))
+		assert.Equal(t, memory.KindFact, metadataIdentityKind(&memory.Memory{
+			EventTime: &now,
+		}))
+		assert.Equal(t, memory.KindFact, metadataIdentityKind(&memory.Memory{
+			Kind:     memory.KindFact,
+			Location: " Kyoto ",
+		}))
+	})
+
+	t.Run("effective kind treats legacy blank kind as fact", func(t *testing.T) {
+		assert.Equal(t, memory.Kind(""), EffectiveKind(nil))
+		assert.Equal(t, memory.KindFact, EffectiveKind(&memory.Memory{}))
+		assert.Equal(t, memory.KindEpisode, EffectiveKind(&memory.Memory{
+			Kind: memory.KindEpisode,
+		}))
+	})
+
+	t.Run("normalize memory and entry canonicalize metadata", func(t *testing.T) {
+		mem := &memory.Memory{
+			Participants: []string{" Bob ", "alice", "Alice", "", "bob"},
+			Location:     " Kyoto ",
+		}
+		NormalizeMemory(mem)
+		assert.Equal(t, memory.KindFact, mem.Kind)
+		assert.Equal(t, []string{"Alice", "Bob"}, mem.Participants)
+		assert.Equal(t, "Kyoto", mem.Location)
+
+		entry := &memory.Entry{
+			Memory: &memory.Memory{
+				Participants: []string{" Charlie ", "charlie"},
+				Location:     " Osaka ",
+			},
+		}
+		NormalizeEntry(entry)
+		assert.Equal(t, memory.KindFact, entry.Memory.Kind)
+		assert.Equal(t, []string{"Charlie"}, entry.Memory.Participants)
+		assert.Equal(t, "Osaka", entry.Memory.Location)
+
+		NormalizeEntry(nil)
+	})
+
+	t.Run("metadata identity location trims whitespace", func(t *testing.T) {
+		assert.Equal(t, "", metadataIdentityLocation(nil))
+		assert.Equal(t, "Kyoto", metadataIdentityLocation(&memory.Memory{
+			Location: " Kyoto ",
+		}))
+	})
+}
+
+func TestApplyMetadataPatch_NormalizesWithoutExplicitPatch(t *testing.T) {
+	mem := &memory.Memory{
+		Participants: []string{" Bob ", "bob"},
+		Location:     " Tokyo ",
+	}
+
+	ApplyMetadataPatch(mem, nil)
+
+	assert.Equal(t, memory.KindFact, mem.Kind)
+	assert.Equal(t, []string{"Bob"}, mem.Participants)
+	assert.Equal(t, "Tokyo", mem.Location)
+}
+
 func TestApplyMemoryUpdate(t *testing.T) {
 	now := time.Date(2024, 5, 7, 9, 0, 0, 0, time.UTC)
 	entry := &memory.Entry{
@@ -319,6 +392,38 @@ func TestApplyMemoryUpdate(t *testing.T) {
 	assert.Equal(t, memory.KindFact, entry.Memory.Kind)
 	assert.Equal(t, "new memory", entry.Memory.Memory)
 	assert.Equal(t, []string{"new"}, entry.Memory.Topics)
+}
+
+func TestApplyMemoryUpdate_InitializesNilMemoryAndMetadata(t *testing.T) {
+	now := time.Date(2024, 5, 7, 9, 0, 0, 0, time.UTC)
+	entry := &memory.Entry{}
+
+	newID := ApplyMemoryUpdate(
+		entry,
+		"app",
+		"user",
+		"trip memory",
+		[]string{"travel"},
+		&memory.Metadata{
+			EventTime:    &now,
+			Participants: []string{" Alice ", "alice"},
+			Location:     " Kyoto ",
+		},
+		now,
+	)
+
+	require.NotNil(t, entry.Memory)
+	assert.Equal(t, "app", entry.AppName)
+	assert.Equal(t, "user", entry.UserID)
+	assert.Equal(t, newID, entry.ID)
+	assert.Equal(t, memory.KindFact, entry.Memory.Kind)
+	require.NotNil(t, entry.Memory.EventTime)
+	assert.Equal(t, now, *entry.Memory.EventTime)
+	assert.Equal(t, []string{"Alice"}, entry.Memory.Participants)
+	assert.Equal(t, "Kyoto", entry.Memory.Location)
+	require.NotNil(t, entry.Memory.LastUpdated)
+	assert.Equal(t, now, *entry.Memory.LastUpdated)
+	assert.Equal(t, now, entry.UpdatedAt)
 }
 
 func TestMatchMemoryEntry(t *testing.T) {
@@ -617,6 +722,47 @@ func TestMatchMemoryEntry_TokensWithTopics(t *testing.T) {
 	// Test non-matching token.
 	result = MatchMemoryEntry(entry, "complex")
 	assert.False(t, result)
+}
+
+func TestSearchResultDeduplicationHelpers(t *testing.T) {
+	t.Run("deduplicate keeps highest scored near-duplicate", func(t *testing.T) {
+		results := []*memory.Entry{
+			{
+				ID:    "low",
+				Score: 0.3,
+				Memory: &memory.Memory{
+					Memory: "John went to the library with his kids on Saturday",
+				},
+			},
+			{
+				ID:    "high",
+				Score: 0.9,
+				Memory: &memory.Memory{
+					Memory: "John went to the library with his kids on Saturday",
+				},
+			},
+			{
+				ID:    "other",
+				Score: 0.4,
+				Memory: &memory.Memory{
+					Memory: "Mary visited the museum on Sunday",
+				},
+			},
+		}
+
+		deduped := DeduplicateResults(results)
+		require.Len(t, deduped, 2)
+		assert.Equal(t, "high", deduped[0].ID)
+		assert.Equal(t, "other", deduped[1].ID)
+	})
+
+	t.Run("jaccard similarity handles empty and overlapping sets", func(t *testing.T) {
+		assert.Equal(t, 1.0, jaccardSimilarity(nil, nil))
+		assert.InDelta(t, 1.0/3.0, jaccardSimilarity(
+			map[string]struct{}{"john": {}, "library": {}},
+			map[string]struct{}{"john": {}, "museum": {}},
+		), 1e-9)
+	})
 }
 
 func TestMatchMemoryEntry_FallbackNoTokens(t *testing.T) {
