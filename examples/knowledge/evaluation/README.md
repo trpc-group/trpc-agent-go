@@ -193,34 +193,33 @@ The original dataset has 4 question types. We exclude `null_query` (301 entries)
 - **Dataset**: Full HuggingFace Markdown documentation dataset (54 QA)
 - **Embedding Model**: `BGE-M3` (1024 dimensions)
 - **Agent Model**: `DeepSeek-V3.2`
-- **Evaluation Model**: `Gemini 3 Flash` *(will be re-evaluated with `Qwen3.5-397B-A17B` for consistency)*
+- **Evaluation Model**: `Qwen3.5-397B-A17B`
 
 #### Answer Quality Metrics
 
 
 | Metric | LangChain | tRPC-Agent-Go | Agno | CrewAI | AutoGen | Best |
 |--------|-----------|---------------|------|--------|---------|------|
-| **Faithfulness** | 0.8614 | **0.9853** | 0.7213 | 0.9655 | 0.9113 | ✅ tRPC-Agent-Go |
-| **Answer Relevancy** | 0.8529 | 0.8890 | 0.9013 | 0.8383 | **0.9040** | ✅ AutoGen |
-| **Answer Correctness** | 0.6912 | **0.8299** | 0.6916 | 0.8101 | 0.7725 | ✅ tRPC-Agent-Go |
-| **Answer Similarity** | 0.6740 | **0.7251** | 0.6772 | 0.6948 | 0.6830 | ✅ tRPC-Agent-Go |
+| **Faithfulness** | 0.9722 | **0.9815** | 0.9660 | 0.9753 | 0.8688 | ✅ tRPC-Agent-Go |
+| **Answer Relevancy** | 0.8914 | 0.8799 | **0.8917** | 0.7820 | 0.8304 | ✅ Agno |
+| **Answer Correctness** | 0.6984 | **0.8104** | 0.7741 | 0.7575 | 0.6707 | ✅ tRPC-Agent-Go |
+| **Answer Similarity** | 0.6758 | **0.7240** | 0.6989 | 0.7025 | 0.6653 | ✅ tRPC-Agent-Go |
 
 #### Context Quality Metrics
 
 
 | Metric | LangChain | tRPC-Agent-Go | Agno | CrewAI | AutoGen | Best |
 |--------|-----------|---------------|------|--------|---------|------|
-| **Context Precision** | 0.6314 | **0.7278** | 0.7046 | 0.6673 | 0.6142 | ✅ tRPC-Agent-Go |
-| **Context Recall** | 0.8333 | 0.9259 | 0.9259 | **0.9444** | **0.9444** | ✅ CrewAI / AutoGen |
-| **Context Entity Recall** | 0.4138 | **0.5034** | 0.4331 | 0.3922 | 0.2902 | ✅ tRPC-Agent-Go |
+| **Context Precision** | 0.6051 | **0.7098** | 0.6712 | 0.6391 | 0.5445 | ✅ tRPC-Agent-Go |
+| **Context Recall** | 0.8704 | **0.9444** | 0.9259 | **0.9444** | 0.8889 | ✅ tRPC-Agent-Go / CrewAI |
+| **Context Entity Recall** | **0.4898** | 0.4867 | 0.4707 | 0.4599 | 0.3833 | ✅ LangChain |
 
 #### Key Conclusions
 
-1. **tRPC-Agent-Go achieves the best overall performance**: Ranks 1st in 5 out of 7 metrics — **Faithfulness (0.9853)**, **Answer Correctness (0.8299)**, **Answer Similarity (0.7251)**, **Context Precision (0.7278)**, and **Context Entity Recall (0.5034)**, leading in both answer quality and retrieval precision.
-2. **AutoGen leads in relevancy**: **Answer Relevancy (0.9040)** ranks 1st (close to Agno's 0.9013), showing the best on-topic answers. Also ties for 1st in **Context Recall (0.9444)**.
-3. **CrewAI has the highest recall**: **Context Recall (0.9444)** ties for 1st, indicating the most comprehensive retrieval recall.
-4. **Agno excels in relevancy**: **Answer Relevancy (0.9013)** ranks 2nd, demonstrating excellent on-topic answers.
-5. **Each framework has its strengths**: LangChain provides a stable and balanced baseline, with each framework excelling in different dimensions.
+1. **tRPC-Agent-Go leads comprehensively**: **Faithfulness (0.9815)**, **Answer Correctness (0.8104)**, **Answer Similarity (0.7240)**, and **Context Precision (0.7098)** all rank 1st, with **Context Recall (0.9444)** tied for 1st with CrewAI. Achieves 5 first-place finishes (including 1 tie), demonstrating the strongest overall performance.
+2. **Agno leads in relevancy**: **Answer Relevancy (0.8917)** ranks 1st.
+3. **LangChain leads in entity recall**: **Context Entity Recall (0.4898)** ranks 1st.
+4. **AutoGen underperforms on this dataset**: All metrics are lower than other frameworks, possibly related to its retrieval strategy on small-scale knowledge bases.
 
 ---
 
@@ -339,32 +338,30 @@ Factual queries with different question characteristics from en subset. (Origina
 - **Agent Model**: `DeepSeek-V3.2`
 - **Evaluation Model**: `Qwen3.5-397B-A17B`
 
-> **Note:** CrewAI and AutoGen evaluations are still running. Results will be updated once completed.
-
 **Answer Quality:**
 
 | Metric | LangChain | tRPC-Agent-Go | Agno | CrewAI | AutoGen | Best |
 |--------|-----------|---------------|------|--------|---------|------|
-| **Faithfulness** | 0.7639 | 0.7060 | **0.7887** | - | - | ✅ Agno |
-| **Answer Relevancy** | 0.5955 | **0.6424** | 0.5638 | - | - | ✅ tRPC-Agent-Go |
-| **Answer Correctness** | 0.4243 | **0.4984** | 0.4524 | - | - | ✅ tRPC-Agent-Go |
-| **Answer Similarity** | 0.4376 | 0.4699 | **0.4715** | - | - | ✅ Agno |
+| **Faithfulness** | 0.7639 | 0.7060 | **0.7887** | 0.7460 | 0.7468 | ✅ Agno |
+| **Answer Relevancy** | 0.5955 | **0.6424** | 0.5638 | 0.5639 | 0.5342 | ✅ tRPC-Agent-Go |
+| **Answer Correctness** | 0.4243 | **0.4984** | 0.4524 | 0.4371 | 0.4495 | ✅ tRPC-Agent-Go |
+| **Answer Similarity** | 0.4376 | 0.4699 | 0.4715 | 0.4615 | **0.4904** | ✅ AutoGen |
 
 **Context Quality:**
 
 | Metric | LangChain | tRPC-Agent-Go | Agno | CrewAI | AutoGen | Best |
 |--------|-----------|---------------|------|--------|---------|------|
-| **Context Precision** | 0.3209 | **0.3574** | 0.3526 | - | - | ✅ tRPC-Agent-Go |
-| **Context Recall** | 0.7416 | 0.7733 | **0.7756** | - | - | ✅ Agno |
-| **Context Entity Recall** | **0.2711** | 0.2667 | 0.2622 | - | - | ✅ LangChain |
+| **Context Precision** | 0.3209 | **0.3574** | 0.3526 | 0.3409 | 0.3520 | ✅ tRPC-Agent-Go |
+| **Context Recall** | 0.7416 | 0.7733 | 0.7756 | 0.7523 | **0.8111** | ✅ AutoGen |
+| **Context Entity Recall** | **0.2711** | 0.2667 | 0.2622 | 0.2599 | 0.2556 | ✅ LangChain |
 
-**Preliminary Observations (3 of 5 frameworks):**
+**Observations:**
 
 1. **Multi-hop queries are significantly harder than single-hop**: All metrics drop substantially compared to RGB and HuggingFace datasets, reflecting the inherent difficulty of reasoning across multiple documents.
-2. **Answer Correctness / Similarity are universally low due to dataset characteristics**: 59.6% of MultiHop-RAG ground truth answers are a single "Yes" or "No" (comparison_query: 95.9%, temporal_query: 89.5%), and the remaining inference_query answers are short entity names (e.g., "Sam Bankman-Fried", "Google"). Agents typically generate longer responses with reasoning steps and contextual explanations, causing RAGAS to penalize them on text similarity and correctness metrics due to the length mismatch. This is a **scoring bias from dataset characteristics, not a true reflection of answer quality**.
-3. **tRPC-Agent-Go leads in answer quality**: Ranks 1st in **Answer Relevancy** (0.6424) and **Answer Correctness** (0.4984), continuing its advantage in generating accurate answers.
-4. **Agno shows strong faithfulness and recall**: Highest **Faithfulness** (0.7887), **Answer Similarity** (0.4715), and **Context Recall** (0.7756), indicating better adherence to retrieved content for multi-hop reasoning.
-4. **Context Precision is universally low (~0.32-0.36)**: Similar to the RGB-en_int subset, multi-hop queries push all frameworks' retrieval precision down, as relevant evidence is scattered across multiple documents.
+2. **tRPC-Agent-Go leads in answer quality**: Ranks 1st in **Answer Relevancy** (0.6424) and **Answer Correctness** (0.4984), continuing its advantage in generating accurate answers.
+3. **AutoGen has the strongest context recall**: **Context Recall** (0.8111) significantly outperforms all other frameworks, and **Answer Similarity** (0.4904) also ranks 1st, indicating more comprehensive evidence retrieval.
+4. **Agno has the highest faithfulness**: **Faithfulness** (0.7887) ranks 1st, indicating better adherence to retrieved content for multi-hop reasoning.
+5. **Context Precision is universally low (~0.32-0.36)**: Similar to the RGB-en_int subset, multi-hop queries push all frameworks' retrieval precision down, as relevant evidence is scattered across multiple documents.
 
 ---
 
